@@ -93,7 +93,7 @@
 # Preflight (issue #2273): install / machine install refuse (exit 6, nothing
 # moved) a login whose credential proxy is off or not running, whose live
 # sessions do not all talk to it yet, or that has an EPIC batch running —
-# moving the credentials first is what took m4's subscription away on
+# moving the credentials first is what took mac-a's subscription away on
 # 2026-10-07. --force skips it. A step that fails halfway puts every login it
 # took from nothing back, from the store's meta.json (exit 1; 5 = the way back
 # failed too, the steps to do by hand printed).

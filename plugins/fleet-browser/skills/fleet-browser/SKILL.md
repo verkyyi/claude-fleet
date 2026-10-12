@@ -5,7 +5,7 @@ description: Open web pages and finish OAuth on the person's own computer from a
 
 # fleet-browser — 远程会话里授权像本地一样完成
 
-会话跑在一台机器上（比如 macmini），人的浏览器在另一台电脑上。需要回调到
+会话跑在一台机器上（比如 mac-c），人的浏览器在另一台电脑上。需要回调到
 `localhost:<端口>` 的授权（MCP 授权、`/login`、本地开发服务器预览），回调会落到
 人自己电脑的 localhost，连不上会话。
 

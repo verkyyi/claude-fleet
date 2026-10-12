@@ -89,14 +89,14 @@ func TestSSHRelayTwoReplicas(t *testing.T) {
 	ha.srv.SSHRelayRateBPS, hb.srv.SSHRelayRateBPS = -1, -1
 
 	// No link anywhere: A refuses on its own, nothing proxied.
-	if _, code := sshRelayDial(t, ha, "m4", asOperator, nil); code != "NODE_OFFLINE" {
+	if _, code := sshRelayDial(t, ha, "mac-c", asOperator, nil); code != "NODE_OFFLINE" {
 		t.Fatalf("relay to a machine no replica holds: %s, want NODE_OFFLINE", code)
 	}
 	if n := ha.srv.forwarded.Load(); n != 0 {
 		t.Fatalf("A proxied %d request(s) with no holder anywhere", n)
 	}
 
-	host := startSSHRelayAgentAt(t, hb, hb, hb.http.URL, "m4", testSSHD(t))
+	host := startSSHRelayAgentAt(t, hb, hb, hb.http.URL, "mac-c", testSSHD(t))
 	if ha.srv.sshRelayLocal(host) {
 		t.Fatal("A holds no link, yet says it can relay itself")
 	}
@@ -113,7 +113,7 @@ func TestSSHRelayTwoReplicas(t *testing.T) {
 	}
 	waitFor(t, 5*time.Second, "relay audited as closed", func() bool {
 		rows, _ := ha.srv.Store.SSHRelays(10)
-		return len(rows) == 1 && rows[0].EndedAt != nil && rows[0].Outcome == "closed" && rows[0].EndpointID == "ep_m4"
+		return len(rows) == 1 && rows[0].EndedAt != nil && rows[0].Outcome == "closed" && rows[0].EndpointID == "ep_mac-c"
 	})
 
 	// Asked of B directly, it is B's own relay: no proxy either way.
@@ -144,7 +144,7 @@ func TestSSHRelayDataHalfOnOtherReplica(t *testing.T) {
 	}))
 	t.Cleanup(front.Close)
 
-	host := startSSHRelayAgentAt(t, hb, hb, front.URL, "m4", testSSHD(t))
+	host := startSSHRelayAgentAt(t, hb, hb, front.URL, "mac-c", testSSHD(t))
 	for _, h := range []*harness{ha, hb} {
 		relayDigest(t, h, host, 256<<10)
 	}
@@ -162,10 +162,10 @@ func TestSSHRelayDataHalfOnOtherReplica(t *testing.T) {
 func TestSSHRelayReplicaSingleNeverProxies(t *testing.T) {
 	h := newFleetHarness(t)
 	h.srv.SSHRelayRateBPS = -1
-	if _, code := sshRelayDial(t, h, "m5", asOperator, nil); code != "NODE_OFFLINE" {
+	if _, code := sshRelayDial(t, h, "mac-d", asOperator, nil); code != "NODE_OFFLINE" {
 		t.Fatalf("relay to an absent machine: %s, want NODE_OFFLINE", code)
 	}
-	host, _ := startSSHRelayAgent(t, h, "m4", testSSHD(t))
+	host, _ := startSSHRelayAgent(t, h, "mac-c", testSSHD(t))
 	conn, code := sshRelayDial(t, h, host, asOperator, nil)
 	if conn == nil {
 		t.Fatalf("relay refused: %s", code)
@@ -173,7 +173,7 @@ func TestSSHRelayReplicaSingleNeverProxies(t *testing.T) {
 	cl := sshOver(t, conn)
 	mustSession(t, cl).Close()
 	cl.Close()
-	if !h.srv.sshRelayReadiness()(host) || h.srv.sshRelayReadiness()("m5") {
+	if !h.srv.sshRelayReadiness()(host) || h.srv.sshRelayReadiness()("mac-d") {
 		t.Fatal("connect page relay flags wrong on a single hub")
 	}
 	if n := h.srv.forwarded.Load(); n != 0 {

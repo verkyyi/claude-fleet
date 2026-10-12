@@ -24,7 +24,7 @@ import (
 //     (default 2, claude-fleet#3501) — and never more than
 //     fleet.node_user_cap.<machine> (default 10) − the logins already handed
 //     out there. A spare runs no session and holds no subscription; measured
-//     on m5 (2026-10-08, idle fleet logins zx / vincent / victor) one costs
+//     on mac-b (2026-10-08, idle fleet logins zx / vincent / erin) one costs
 //     about 9 processes, 60–75 MB resident and 0.25–0.9 GB of disk.
 //   - Refill rides the admin node's heartbeat (at most once per
 //     spareScanEvery), and only on a fit machine: online (not 维护中, not

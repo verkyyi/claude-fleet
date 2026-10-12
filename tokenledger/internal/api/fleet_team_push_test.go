@@ -71,8 +71,8 @@ func TestTeamPushOnPutBeatAndReconnect(t *testing.T) {
 
 	a := teamNode(t, h, tokA, control.CapRead, control.CapTeam)
 	b := teamNode(t, h, tokB, control.CapRead) // an older agent: no CapTeam
-	beat(t, a, control.Proto, hb("m5"))
-	beat(t, b, control.Proto, hb("m4"))
+	beat(t, a, control.Proto, hb("mac-d"))
+	beat(t, b, control.Proto, hb("mac-c"))
 
 	// The PUT reaches the connected node at once — no beat needed.
 	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, teamV1, ""); code != 200 {
@@ -81,8 +81,8 @@ func TestTeamPushOnPutBeatAndReconnect(t *testing.T) {
 	nextTeam(t, a, 1, "after PUT v1")
 
 	// Beats on a link that already heard v1 push nothing; the next message is v2.
-	beat(t, a, control.Proto, hb("m5"))
-	beat(t, a, control.Proto, hb("m5"))
+	beat(t, a, control.Proto, hb("mac-d"))
+	beat(t, a, control.Proto, hb("mac-d"))
 	time.Sleep(200 * time.Millisecond)
 	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, map[string]any{"restore": 1}, ""); code != 200 {
 		t.Fatalf("PUT v2: HTTP %d %s", code, raw)
@@ -92,7 +92,7 @@ func TestTeamPushOnPutBeatAndReconnect(t *testing.T) {
 	// A machine that was offline hears the current version on its first beat back.
 	a.CloseNow()
 	a2 := teamNode(t, h, tokA, control.CapRead, control.CapTeam)
-	beat(t, a2, control.Proto, hb("m5"))
+	beat(t, a2, control.Proto, hb("mac-d"))
 	nextTeam(t, a2, 2, "reconnect")
 
 	// The node without the capability was never sent one.

@@ -63,7 +63,7 @@ env['PATH'] = str(shim) + os.pathsep + env['PATH']
 conf = work / 'conf/fleets/ft/conf'
 conf.parent.mkdir(parents=True)
 conf.write_text('FLEET_SIDEBAR=1\nCCQUOTA_FLEET=1\n')
-# The hub's rows: a parent on m4 with one child, and a row with none.
+# The hub's rows: a parent on mac-a with one child, and a row with none.
 G = work / '.claude-dash/global'
 G.mkdir(parents=True)
 F = '11111111-2222-3333-4444-555555555555'
@@ -72,11 +72,11 @@ now = int(time.time())
 
 
 def remote(key, issue, state, name, origin):
-    return '\x1f'.join(['wid:%s/%s' % (F, key), 'm4', 'online', issue, 'acme/app', state,
+    return '\x1f'.join(['wid:%s/%s' % (F, key), 'mac-a', 'online', issue, 'acme/app', state,
                         'claude', name, origin, '', '', '', 'hub']) + '\n'
 
 
-(G / 'remote_ft').write_text('#ts\x1f%d\n#me\x1fm5\n#node\x1fm4\x1fonline\x1f3\x1f%d\n' % (now, now)
+(G / 'remote_ft').write_text('#ts\x1f%d\n#me\x1fmac-b\n#node\x1fmac-a\x1fonline\x1f3\x1f%d\n' % (now, now)
                              + remote('acme-app:scratch-5', '', 'looping', 'PARENTX', '')
                              + remote('acme-app:issue-10', '10', 'working', 'KIDX', PARENT)
                              + remote('acme-app:issue-20', '20', 'done', 'LONER', ''))

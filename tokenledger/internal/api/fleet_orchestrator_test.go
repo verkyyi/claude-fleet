@@ -31,8 +31,8 @@ func TestNoOrchestratorEndpoint(t *testing.T) {
 	for _, c := range []struct {
 		machine, method string
 		body            []byte
-	}{{"m5", http.MethodGet, nil}, {"m4", http.MethodGet, nil},
-		{"m5", http.MethodPost, []byte(`{"eligible":true}`)}, {"m4", http.MethodPost, []byte(`{"eligible":false}`)}} {
+	}{{"mac-d", http.MethodGet, nil}, {"mac-c", http.MethodGet, nil},
+		{"mac-d", http.MethodPost, []byte(`{"eligible":true}`)}, {"mac-c", http.MethodPost, []byte(`{"eligible":false}`)}} {
 		st, out := ask(c.machine, c.method, c.body)
 		if st != 200 || out.Machine != "" || out.Here || out.Rule != "none" || !strings.Contains(out.Reason, "没有编排") {
 			t.Fatalf("%s %s: HTTP %d %+v; want 200 no machine, rule none, 没有编排", c.method, c.machine, st, out)
@@ -41,7 +41,7 @@ func TestNoOrchestratorEndpoint(t *testing.T) {
 	if st, _ := ask("", http.MethodGet, nil); st != 401 {
 		t.Fatalf("no token: HTTP %d; want 401", st)
 	}
-	if st, _ := ask("m5", http.MethodDelete, nil); st != 405 {
+	if st, _ := ask("mac-d", http.MethodDelete, nil); st != 405 {
 		t.Fatalf("DELETE: HTTP %d; want 405", st)
 	}
 }

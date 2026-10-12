@@ -25,7 +25,7 @@
 #                    route; --probe-direct answers 0 while the banner server is
 #                    up, 1 once it is gone or for an unknown machine;
 #                    FLEET_CONNECT_RETEST=1 skips the remembered route
-#   D. bar         — tmux-status.sh draws 客户端在 m5 上运行 for THAT tty only,
+#   D. bar         — tmux-status.sh draws 客户端在 mac-b 上运行 for THAT tty only,
 #                    at 54 columns too; no `cr=` → byte for byte
 #   E. upgrade     — fleet-remote-view.sh `run --shell` in an isolated tmux, a fake
 #                    ssh whose first connect says relay: the window gets
@@ -84,8 +84,8 @@ import json, os, sys
 with open(os.path.join("$WORK", "connect.log"), "a") as f:
     f.write(" ".join(sys.argv[1:]) + "\\n")
 if "--pick" in sys.argv:
-    print(json.dumps({"machine": "m5", "hostname": "macmini", "reason": "last", "login": "verk",
-                      "machines": [{"alias": "m5", "hostname": "macmini"}]}))
+    print(json.dumps({"machine": "mac-b", "hostname": "mac-c", "reason": "last", "login": "bob",
+                      "machines": [{"alias": "mac-b", "hostname": "mac-c"}]}))
 sys.exit(0)
 EOF
 chmod +x "$SB/fleet-connect.py"
@@ -111,9 +111,9 @@ rm -f "$SB/fleet-shell.sh"
 printf '#!/bin/sh\necho "shell $*" >> "%s/shell.log"; exit 0\n' "$WORK" > "$SB/fleet-shell.sh"; chmod +x "$SB/fleet-shell.sh"
 fake_tmux 3.4 0
 : > "$WORK/connect.log"
-PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" m5 >/dev/null 2>&1; rc=$?
+PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" mac-b >/dev/null 2>&1; rc=$?
 eq 'A: the client opens → exit 0' 0 "$rc"
-has 'A: the client ran for m5' "$(cat "$WORK/shell.log" 2>/dev/null)" 'shell m5'
+has 'A: the client ran for mac-b' "$(cat "$WORK/shell.log" 2>/dev/null)" 'shell mac-b'
 eq 'A: connect never ran' '' "$(cat "$WORK/connect.log")"
 rm -f "$SB/fleet-shell.sh"; ln -s "$BIN/fleet-shell.sh" "$SB/fleet-shell.sh"
 fake_tmux 3.4 1                                   # new-session fails: the client cannot start
@@ -142,15 +142,15 @@ TTYBIN="$WORK/ttybin"; mkdir -p "$TTYBIN"
 tty_is() { printf '#!/bin/sh\necho %s\n' "$1" > "$TTYBIN/tty"; chmod +x "$TTYBIN/tty"; }
 mark() { "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" show-options -gqv @fleet_client_remote 2>/dev/null; }
 tty_is /dev/ttys901
-PATH="$TTYBIN:$PATH" SSH_CONNECTION='10.0.0.9 50000 10.0.0.5 22' FLEET_CLIENT=shell FLEET_NODE_ALIASES="$(hostname -s | cut -d. -f1)=m5" \
+PATH="$TTYBIN:$PATH" SSH_CONNECTION='10.0.0.9 50000 10.0.0.5 22' FLEET_CLIENT=shell FLEET_NODE_ALIASES="$(hostname -s | cut -d. -f1)=mac-b" \
   FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet" >/dev/null 2>"$WORK/b.err"; rc=$?
 eq 'B: over ssh the client starts here (exit 0)' 0 "$rc"
 CHECKS=$((CHECKS + 1)); "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" has-session -t "=$FLEET_SHELL_SESSION" 2>/dev/null \
   || fail 'B: its own -L server is up' "$(cat "$WORK/b.err")"
-eq 'B: the mark names this tty and this machine' '/dev/ttys901|m5' "$(mark)"
+eq 'B: the mark names this tty and this machine' '/dev/ttys901|mac-b' "$(mark)"
 tty_is /dev/ttys902
 PATH="$TTYBIN:$PATH" FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet-shell.sh" >/dev/null 2>&1 </dev/null
-eq 'B: a local start on ANOTHER tty leaves it' '/dev/ttys901|m5' "$(mark)"
+eq 'B: a local start on ANOTHER tty leaves it' '/dev/ttys901|mac-b' "$(mark)"
 tty_is /dev/ttys901
 PATH="$TTYBIN:$PATH" FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet-shell.sh" >/dev/null 2>&1 </dev/null
 eq 'B: a local start on THAT tty clears it' '' "$(mark)"
@@ -177,37 +177,37 @@ mkdir -p "$XDG_CACHE_HOME/claude-fleet"
 python3 - "$XDG_CACHE_HOME/claude-fleet/connect.json" "$PORT" <<'EOF'
 import json, sys, time
 r = {"name": "lan", "kind": "direct", "host": "127.0.0.1", "port": int(sys.argv[2])}
-json.dump({"last": "m5", "machines": {"m5": {"at": time.time(), "hub": "", "label": "m5", "login": "verk",
-          "machine": {"alias": "m5", "hostname": "macmini"}, "route": r, "routes": [r]}}}, open(sys.argv[1], "w"))
+json.dump({"last": "mac-b", "machines": {"mac-b": {"at": time.time(), "hub": "", "label": "mac-b", "login": "bob",
+          "machine": {"alias": "mac-b", "hostname": "mac-c"}, "route": r, "routes": [r]}}}, open(sys.argv[1], "w"))
 EOF
 FAKESSH="$WORK/fakessh"; mkdir -p "$FAKESSH"
 printf '#!/bin/sh\necho "SSH-RAN ARGS=$*"\n' > "$FAKESSH/ssh"; chmod +x "$FAKESSH/ssh"
 out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_ROUTE_FILE="$WORK/route.json" \
-      python3 "$BIN/fleet-connect.py" m5 2>&1); rc=$?
+      python3 "$BIN/fleet-connect.py" mac-b 2>&1); rc=$?
 eq 'C: connect → ssh ran, exit 0' 0 "$rc"
 has 'C: … over the remembered line' "$out" 'SSH-RAN'
 hasnt 'C: no fallback words, ever' "$out" '直连'
 has 'C: the route file' "$(cat "$WORK/route.json" 2>/dev/null)" '"kind": "direct"'
-python3 "$BIN/fleet-connect.py" --probe-direct m5 >/dev/null 2>&1; rc=$?
+python3 "$BIN/fleet-connect.py" --probe-direct mac-b >/dev/null 2>&1; rc=$?
 eq 'C: --probe-direct with the line up → 0' 0 "$rc"
 python3 "$BIN/fleet-connect.py" --probe-direct m9 >/dev/null 2>&1; rc=$?
 eq 'C: --probe-direct for an unknown machine → 1' 1 "$rc"
-out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_RETEST=1 python3 "$BIN/fleet-connect.py" m5 2>&1); rc=$?
+out=$(PATH="$FAKESSH:$PATH" FLEET_CONNECT_RETEST=1 python3 "$BIN/fleet-connect.py" mac-b 2>&1); rc=$?
 hasnt 'C: FLEET_CONNECT_RETEST=1 skips the remembered line' "$out" 'SSH-RAN'
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
-FLEET_CONNECT_PROBE_TIMEOUT=1 python3 "$BIN/fleet-connect.py" --probe-direct m5 >/dev/null 2>&1; rc=$?
+FLEET_CONNECT_PROBE_TIMEOUT=1 python3 "$BIN/fleet-connect.py" --probe-direct mac-b >/dev/null 2>&1; rc=$?
 eq 'C: --probe-direct with the line down → 1' 1 "$rc"
 
 # ================================================================================
-# D. the bar — 客户端在 m5 上运行, for that tty only
+# D. the bar — 客户端在 mac-b 上运行, for that tty only
 # ================================================================================
 st() { ( cd "$SB" && TMPDIR="$WORK/st" bash "$SB/tmux-status.sh" sess=x win=@1 remote= acct= wsf= wscf= wsaved= rl5= rl7= "$@" 2>/dev/null ); }
 mkdir -p "$WORK/st"
 base=$(st cw=120 rr= cr=)
 eq 'D: no cr= → the bar byte for byte' "$(st cw=120)" "$base"
-has 'D: the line for that tty' "$(st cw=120 rr= 'cr=/dev/ttys901:/dev/ttys901|m5')" '客户端在 m5 上运行'
-has 'D: at 54 columns too' "$(st cw=54 rr= 'cr=/dev/ttys901:/dev/ttys901|m5')" '客户端在 m5 上运行'
-eq 'D: another client (tty) → nothing' "$base" "$(st cw=120 rr= 'cr=/dev/ttys902:/dev/ttys901|m5')"
+has 'D: the line for that tty' "$(st cw=120 rr= 'cr=/dev/ttys901:/dev/ttys901|mac-b')" '客户端在 mac-b 上运行'
+has 'D: at 54 columns too' "$(st cw=54 rr= 'cr=/dev/ttys901:/dev/ttys901|mac-b')" '客户端在 mac-b 上运行'
+eq 'D: another client (tty) → nothing' "$base" "$(st cw=120 rr= 'cr=/dev/ttys902:/dev/ttys901|mac-b')"
 "$REAL_TMUX" -L "$SOCK" -f /dev/null new-session -d -s "$SOCK" -x 120 -y 30 'sleep 600' || fail 'E: isolated tmux'
 
 # ================================================================================
@@ -240,7 +240,7 @@ case "\$*" in
     echo "\$n retest=\${FLEET_CONNECT_RETEST:-} \$(date +%s)" >> "$WORK/connect-e.log"
     # as fleet-connect.py would: the first connect is over the relay, later ones direct
     if [ "\$n" = 1 ]; then k=relay; else k=direct; fi
-    [ -n "\${FLEET_CONNECT_ROUTE_FILE:-}" ] && printf '{"machine": "m5", "kind": "%s", "name": "x"}\n' "\$k" > "\$FLEET_CONNECT_ROUTE_FILE"
+    [ -n "\${FLEET_CONNECT_ROUTE_FILE:-}" ] && printf '{"machine": "mac-b", "kind": "%s", "name": "x"}\n' "\$k" > "\$FLEET_CONNECT_ROUTE_FILE"
     python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
     echo \$! > "\$ctl.mpid"; echo \$! >> "$WORK/master.pids"
     wait; exit 255 ;;
@@ -251,7 +251,7 @@ EOF
 chmod +x "$ESSH/ssh"
 printf '#!/bin/sh\n[ -f "%s/direct.up" ]\n' "$WORK" > "$WORK/probe"; chmod +x "$WORK/probe"
 "$REAL_TMUX" -L "$SOCK" new-window -d -n E -P -F '#{window_id}' \
-  "env FLEET_REMOTE_SSH_CMD=$ESSH/ssh FLEET_CONNECT_PROBE_CMD=$WORK/probe FLEET_CONNECT_UPGRADE_SECS=1 FLEET_REMOTE_IDLE_SECS=0 FLEET_REMOTE_BIN=$BIN FLEET_REMOTE_VIA_HUB=0 TMPDIR=$WORK bash $BIN/fleet-remote-view.sh run --shell m5 -" \
+  "env FLEET_REMOTE_SSH_CMD=$ESSH/ssh FLEET_CONNECT_PROBE_CMD=$WORK/probe FLEET_CONNECT_UPGRADE_SECS=1 FLEET_REMOTE_IDLE_SECS=0 FLEET_REMOTE_BIN=$BIN FLEET_REMOTE_VIA_HUB=0 TMPDIR=$WORK bash $BIN/fleet-remote-view.sh run --shell mac-b -" \
   > "$WORK/ewin"
 EW=$(cat "$WORK/ewin")
 route_opt() { "$REAL_TMUX" -L "$SOCK" show-options -wqv -t "$EW" @remote_route 2>/dev/null; }
@@ -279,11 +279,11 @@ eq 'E: on the direct line no further switch' 2 "$(cat "$WORK/connects")"
 FSSH="$WORK/fssh"; mkdir -p "$FSSH"
 sed -e 's|connect-e.log|connect-f.log|; s|/connects"|/fconnects"|g' \
     -e 's|if \[ "\$n" = 1 \]; then k=relay; else k=direct; fi|k=relay|' \
-    -e 's|{"machine": "m5", "kind": "%s", "name": "x"}|{"machine": "m5", "kind": "%s", "name": "relay", "source": "manual", "pin": "relay"}|' \
+    -e 's|{"machine": "mac-b", "kind": "%s", "name": "x"}|{"machine": "mac-b", "kind": "%s", "name": "relay", "source": "manual", "pin": "relay"}|' \
     "$ESSH/ssh" > "$FSSH/ssh"; chmod +x "$FSSH/ssh"
 printf '#!/bin/sh\necho relay\n' > "$WORK/getpin"; chmod +x "$WORK/getpin"
 "$REAL_TMUX" -L "$SOCK" new-window -d -n F -P -F '#{window_id}' \
-  "env FLEET_REMOTE_SSH_CMD=$FSSH/ssh FLEET_ROUTE_GET_CMD=$WORK/getpin FLEET_CONNECT_PROBE_CMD=$WORK/probe FLEET_CONNECT_UPGRADE_SECS=1 FLEET_REMOTE_IDLE_SECS=0 FLEET_REMOTE_BIN=$BIN FLEET_REMOTE_VIA_HUB=0 TMPDIR=$WORK/f bash $BIN/fleet-remote-view.sh run --shell m5 -" \
+  "env FLEET_REMOTE_SSH_CMD=$FSSH/ssh FLEET_ROUTE_GET_CMD=$WORK/getpin FLEET_CONNECT_PROBE_CMD=$WORK/probe FLEET_CONNECT_UPGRADE_SECS=1 FLEET_REMOTE_IDLE_SECS=0 FLEET_REMOTE_BIN=$BIN FLEET_REMOTE_VIA_HUB=0 TMPDIR=$WORK/f bash $BIN/fleet-remote-view.sh run --shell mac-b -" \
   > "$WORK/fwin"
 mkdir -p "$WORK/f"
 FW=$(cat "$WORK/fwin")

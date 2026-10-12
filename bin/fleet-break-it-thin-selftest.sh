@@ -11,7 +11,7 @@
 #                          spool — OSC 7502 open with the 看台's token on its own
 #                          terminal (issue #3538: the escape reached no one)
 #   open-via-home-lost     bin/fleet-open.sh (issue #3538): the person watches this
-#                          machine's session through ANOTHER machine's 看台 (经 mini2);
+#                          machine's session through ANOTHER machine's 看台 (经 mac-d);
 #                          the open goes to that home (--from-peer, FLEET_OPEN_RELAY_CMD
 #                          standing in for the peer link), whose 看台's loop gets the
 #                          home's port and answers — `opened`, never a silent escape

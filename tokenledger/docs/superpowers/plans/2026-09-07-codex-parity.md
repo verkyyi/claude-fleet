@@ -134,18 +134,18 @@ App Server 通知仅用于能访问的现有会话连接；启动一个新 app-s
 
 费用按 2026-09-07 当前 API 标价折算历史用量，明确标出缺失档位的 Standard 假设，不声称恢复当时账单。GPT-5.4/5.5 的会话整体调价信息未恢复；旧模型 Fast 费率、Spark 和未知服务商保留未计价。
 
-实际只读联调：MacBook 0.153.4、mini 的 24haowan 用户 0.149.0 返回套餐、通用窗口及 145 个每日桶，原登录文件哈希不变。mini 的 verkyyi、verkydev 凭据已过期；vincent、zx 没有 Codex 目录。服务端总量和本地明细的时区、范围、延迟尚不能证明一致，页面分别展示，不生成误导性的差额或云用量结论。
+实际只读联调：MacBook 0.153.4、mini 的 acme 用户 0.149.0 返回套餐、通用窗口及 145 个每日桶，原登录文件哈希不变。mini 的 dave、verkydev 凭据已过期；vincent、zx 没有 Codex 目录。服务端总量和本地明细的时区、范围、延迟尚不能证明一致，页面分别展示，不生成误导性的差额或云用量结论。
 
 ## 7. 生产部署与验收
 
-最终发布：`7db2bda-codex-parity.3db23eba8cf4`。mini hub、mini 上 verkyyi / 24haowan / verkydev / vincent / zx 五个 agent，以及 MacBook 的 verkyyi agent 均已更新到该版本。
+最终发布：`7db2bda-codex-parity.3db23eba8cf4`。mini hub、mini 上 dave / acme / verkydev / vincent / zx 五个 agent，以及 MacBook 的 dave agent 均已更新到该版本。
 
-- [Now：Codex](https://macmini.tail435588.ts.net/#/now?source=codex) 已显示真实账户、3 个额度窗口、最近活动、token/min、上下文和每来源采集状态。多个有效采集端共享同一账户的查询租约，不叠加额度百分比。
-- [Review：Codex](https://macmini.tail435588.ts.net/#/review?source=codex) 已显示费用折算、缓存写入覆盖、来源筛选、会话和额度历史。未计价明细显示 `—`，部分计价显示已知费用下限；推理 token 不重复计入组成图。
+- [Now：Codex](https://mac-c.example.ts.net/#/now?source=codex) 已显示真实账户、3 个额度窗口、最近活动、token/min、上下文和每来源采集状态。多个有效采集端共享同一账户的查询租约，不叠加额度百分比。
+- [Review：Codex](https://mac-c.example.ts.net/#/review?source=codex) 已显示费用折算、缓存写入覆盖、来源筛选、会话和额度历史。未计价明细显示 `—`，部分计价显示已知费用下限；推理 token 不重复计入组成图。
 - 2026-09-07 22:43 UTC 验收快照：14,325 个 Codex 请求中 13,792 个可计价，覆盖率 96.28%。统计随持续采集增长；费用是按当前公开 API 标价折算，不是实际账单。
 - 6 个 endpoint 版本一致，12 个 Claude/Codex 来源状态均已上报，所有传输队列为空。服务端账户观测已收到 145 个每日桶；`budget --source codex` 和 20 个 MCP 工具验证通过。
 - 生产副本迁移前后，旧明细和小时汇总的逐行哈希一致。历史费用回算后再次验证：旧 token、事件标识与账户归属不变，Claude 费用不变，旧小时汇总没有丢失或减少。
 - 回算完成后恢复原有 90 天明细保留策略。已裁剪的 13,034 个 Codex 请求、1,508,412,910 token 仍保留在历史小时汇总中；解析器升级没有重新插入已裁剪明细。
 - Go 全量测试、相关并发检查、19 个前端测试及真实浏览器 Now / Review / 来源切换 / 会话详情检查通过。生产验收发现并修正了 0.153.4 结构化 `context_window` 元数据兼容问题，并以本机 5 个近期会话复验。
 
-发布包、源码快照和验收记录位于 `/Users/verkyyi/.ccquota/releases/7db2bda-codex-parity.3db23eba8cf4/`，主记录为 `deployment.json`。程序、配置和数据库备份位于 mini 与 MacBook 各自的 `/Users/verkyyi/.ccquota/backups/` 下相应版本目录。当前文档的部署记录是在发布后追加的；构建时源码由发布包中的 `source.tar.gz` 固定保存。
+发布包、源码快照和验收记录位于 `/Users/dave/.ccquota/releases/7db2bda-codex-parity.3db23eba8cf4/`，主记录为 `deployment.json`。程序、配置和数据库备份位于 mini 与 MacBook 各自的 `/Users/dave/.ccquota/backups/` 下相应版本目录。当前文档的部署记录是在发布后追加的；构建时源码由发布包中的 `source.tar.gz` 固定保存。

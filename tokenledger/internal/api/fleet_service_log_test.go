@@ -13,7 +13,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
-// svcLogRig is m4 as one machine link carrying alpha (alice's) and beta (not
+// svcLogRig is mac-c as one machine link carrying alpha (alice's) and beta (not
 // hers), each lane saying CapServiceLog, an entry each in the register; bob
 // is an admin person.
 func svcLogRig(t *testing.T) (*harness, *machNode) {
@@ -30,7 +30,7 @@ func svcLogRig(t *testing.T) (*harness, *machNode) {
 	logins := []string{"alpha", "beta"}
 	for _, l := range logins {
 		h.enroll(t, l)
-		identify(t, h, l, "m4", l)
+		identify(t, h, l, "mac-c", l)
 	}
 	n := dialMachine(t, h, h.tokens["mach"])
 	var svcs []control.ServiceStatus
@@ -38,16 +38,16 @@ func svcLogRig(t *testing.T) (*harness, *machNode) {
 		if r := n.login(l, h.tokens[l], false, control.CapRead, control.CapServiceLog); r.Type != control.TypeWelcome {
 			t.Fatalf("%s's hello answered %+v", l, r)
 		}
-		n.beat(l, control.Heartbeat{Hostname: "m4", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
+		n.beat(l, control.Heartbeat{Hostname: "mac-c", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
 		svcs = append(svcs, control.ServiceStatus{Name: l + "-svc", Kind: "service", Login: l, State: "running"})
 	}
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(), Services: svcs})
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "m4", Login: "alpha"}); code != 200 {
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(), Services: svcs})
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "mac-c", Login: "alpha"}); code != 200 {
 		t.Fatalf("adopt alice: HTTP %d", code)
 	}
-	waitFor(t, 3*time.Second, "m4's register", func() bool {
+	waitFor(t, 3*time.Second, "mac-c's register", func() bool {
 		for _, m := range roster(t, h).Machines {
-			if m.Hostname == "m4" && len(m.Services) == 2 {
+			if m.Hostname == "mac-c" && len(m.Services) == 2 {
 				return true
 			}
 		}
@@ -118,7 +118,7 @@ func nextLaneMsg(t *testing.T, n *machNode, login, typ string, d time.Duration) 
 }
 
 func svcLogPath(login, name string) string {
-	return "/v1/nodes/m4/" + ServiceLogSegment + "/" + login + "/" + name + "/log"
+	return "/v1/nodes/mac-c/" + ServiceLogSegment + "/" + login + "/" + name + "/log"
 }
 
 // claude-fleet#2797's 完成判据 + BREAK-IT service-log-cross-login: a user who
@@ -127,7 +127,7 @@ func svcLogPath(login, name string) string {
 func TestServiceLogCrossLoginIs403(t *testing.T) {
 	h, n := svcLogRig(t)
 	for _, path := range []string{svcLogPath("beta", "beta-svc"), svcLogPath("beta", "nosuch"),
-		svcLogPath("gamma", "x"), "/v1/nodes/m5/services/alpha/alpha-svc/log"} {
+		svcLogPath("gamma", "x"), "/v1/nodes/mac-d/services/alpha/alpha-svc/log"} {
 		resp := svcLogReq(t, h, context.Background(), path, pAlice)
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -333,10 +333,10 @@ func TestRedactLogLine(t *testing.T) {
 }
 
 func TestParseServiceLogPath(t *testing.T) {
-	if h, l, n, ok := parseServiceLogPath("m4/services/alpha/sms-watch/log"); !ok || h != "m4" || l != "alpha" || n != "sms-watch" {
+	if h, l, n, ok := parseServiceLogPath("mac-c/services/alpha/sms-watch/log"); !ok || h != "mac-c" || l != "alpha" || n != "sms-watch" {
 		t.Fatalf("parse = %q %q %q %v", h, l, n, ok)
 	}
-	for _, p := range []string{"m4", "m4/extra", "m4/services/alpha/log", "m4/services/alpha/x/y", "m4/svc/alpha/x/log", "/services/a/b/log"} {
+	for _, p := range []string{"mac-c", "mac-c/extra", "mac-c/services/alpha/log", "mac-c/services/alpha/x/y", "mac-c/svc/alpha/x/log", "/services/a/b/log"} {
 		if _, _, _, ok := parseServiceLogPath(p); ok {
 			t.Errorf("%q parsed as a log path", p)
 		}

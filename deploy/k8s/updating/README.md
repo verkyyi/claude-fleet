@@ -22,7 +22,7 @@ pod** 时接手，正好是发布那几十秒。**为什么不是 server-snippet
 
 ## 安装（人做，一次）
 
-部署 job（`hub-deploy`）**不碰这里**：它的 Role（24haowan-monorepo#11751）只管入口自己的
+部署 job（`hub-deploy`）**不碰这里**：它的 Role（acme-monorepo#11751）只管入口自己的
 对象，不能创建新的 Deployment / Service / ConfigMap；prod 的配置也受 `lock-prod-config`
 准入策略（prod-config-lockdown #955）约束——走 monorepo 的配置发布（config-deploy）或
 break-glass：
@@ -41,8 +41,8 @@ warning——Ingress 永远不会指向一个不存在的后端。
 发布期间（从「Apply」到健康检查通过的那几十秒）：
 
 ```sh
-curl -s -H 'Accept: text/html' https://claudefleet.24haowan.com/ | grep 正在更新
-curl -s -o /dev/null -w '%{http_code}\n' -D - https://claudefleet.24haowan.com/v1/me | grep -i -E '^503|retry-after'
+curl -s -H 'Accept: text/html' https://hub.example.com/ | grep 正在更新
+curl -s -o /dev/null -w '%{http_code}\n' -D - https://hub.example.com/v1/me | grep -i -E '^503|retry-after'
 ```
 
 改文案 / 规则：改 `base/` 里的文件再 apply 一次——ConfigMap 名字带内容哈希，pod 会滚动换新。

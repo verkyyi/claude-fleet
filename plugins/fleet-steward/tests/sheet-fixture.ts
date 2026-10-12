@@ -70,7 +70,7 @@ export const SHEET_STATE = {
      "asked": "2026-10-09T09:30:00+08:00",
      "id": "r11958",
      "item": "小程序试点选哪家商户？",
-     "url": "https://github.com/24haowan/24haowan-monorepo/issues/11958#issuecomment-7"
+     "url": "https://github.com/acme/acme-monorepo/issues/11958#issuecomment-7"
     }
    ],
    "by": "",
@@ -86,10 +86,10 @@ export const SHEET_STATE = {
    "item": "小程序试点选哪家商户？",
    "kind": "normal",
    "never": false,
-   "src": "gh:24haowan/24haowan-monorepo#11958",
+   "src": "gh:acme/acme-monorepo#11958",
    "state": "open",
    "suggest": "",
-   "url": "https://github.com/24haowan/24haowan-monorepo/issues/11958#issuecomment-7"
+   "url": "https://github.com/acme/acme-monorepo/issues/11958#issuecomment-7"
   },
   {
    "answer": "不开",
@@ -158,10 +158,10 @@ export const SHEET_STATE = {
    "id": "r11958",
    "item": "小程序试点选哪家商户？",
    "kind": "normal",
-   "src": "gh:24haowan/24haowan-monorepo#11958",
+   "src": "gh:acme/acme-monorepo#11958",
    "state": "open",
    "suggest": "",
-   "url": "https://github.com/24haowan/24haowan-monorepo/issues/11958#issuecomment-7",
+   "url": "https://github.com/acme/acme-monorepo/issues/11958#issuecomment-7",
    "v": "0"
   },
   "r2139-0": {

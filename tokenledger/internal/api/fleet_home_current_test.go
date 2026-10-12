@@ -38,53 +38,53 @@ func homeAsk(extra map[string]any) map[string]any {
 // third opens a new one; --new opens another beside a live one; a session the
 // inventory no longer lists (read after it started) is no current.
 func TestClientPlaceHomeResumesTheCurrent(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	lease, key := clientLeaseFor(t, h)
 	wid1 := f4.FleetID + "/scratch-1"
-	homeStarts(m4, wid1)
+	homeStarts(macC, wid1)
 
 	st, out := clientPlace(t, h, lease, key, homeAsk(map[string]any{"idempotency_key": "h-1"}))
-	if st != 200 || out.State != "done" || out.WorkerID != wid1 || m4.count() != 1 {
-		t.Fatalf("first = %d %+v (m4 writes %d); want one start, done", st, out, m4.count())
+	if st != 200 || out.State != "done" || out.WorkerID != wid1 || macC.count() != 1 {
+		t.Fatalf("first = %d %+v (mac-c writes %d); want one start, done", st, out, macC.count())
 	}
 	// Its node's next heartbeat lists it, idle.
 	homeInventory(t, h, f4.FleetID, time.Now().Add(2*time.Second),
 		map[string]any{"worker_id": wid1, "state": "idle"})
 
 	st, out = clientPlace(t, h, lease, key, homeAsk(map[string]any{"idempotency_key": "h-2"}))
-	if st != 200 || out.Exit != 0 || out.State != "resume" || out.WorkerID != wid1 || out.Machine != "m4" {
-		t.Fatalf("second = %d %+v; want RESUME of %s on m4", st, out, wid1)
+	if st != 200 || out.Exit != 0 || out.State != "resume" || out.WorkerID != wid1 || out.Machine != "mac-c" {
+		t.Fatalf("second = %d %+v; want RESUME of %s on mac-c", st, out, wid1)
 	}
-	if want := "RESUME m4 " + wid1 + "\t"; !strings.HasPrefix(out.Line, want) {
+	if want := "RESUME mac-c " + wid1 + "\t"; !strings.HasPrefix(out.Line, want) {
 		t.Fatalf("line = %q; want %q…", out.Line, want)
 	}
-	if m4.count() != 1 {
-		t.Fatalf("a RESUME sent a start (m4 writes %d)", m4.count())
+	if macC.count() != 1 {
+		t.Fatalf("a RESUME sent a start (mac-c writes %d)", macC.count())
 	}
 	// The other agent is another current: a codex ask opens its own.
-	homeStarts(m4, f4.FleetID+"/scratch-9")
+	homeStarts(macC, f4.FleetID+"/scratch-9")
 	if _, out := clientPlace(t, h, lease, key, homeAsk(map[string]any{"agent": "codex", "idempotency_key": "h-c"})); out.State != "done" {
 		t.Fatalf("codex = %+v; want a start of its own", out)
 	}
-	if m4.count() != 2 {
-		t.Fatalf("m4 writes %d; want 2", m4.count())
+	if macC.count() != 2 {
+		t.Fatalf("mac-c writes %d; want 2", macC.count())
 	}
 
 	// /exit: the wrapper's recovery page, @claude_state=exited.
 	homeInventory(t, h, f4.FleetID, time.Now().Add(2*time.Second),
 		map[string]any{"worker_id": wid1, "state": "exited"})
 	wid2 := f4.FleetID + "/scratch-2"
-	homeStarts(m4, wid2)
+	homeStarts(macC, wid2)
 	st, out = clientPlace(t, h, lease, key, homeAsk(map[string]any{"idempotency_key": "h-3"}))
-	if st != 200 || out.State != "done" || out.WorkerID != wid2 || m4.count() != 3 {
-		t.Fatalf("after /exit = %d %+v (m4 writes %d); want a new start", st, out, m4.count())
+	if st != 200 || out.State != "done" || out.WorkerID != wid2 || macC.count() != 3 {
+		t.Fatalf("after /exit = %d %+v (mac-c writes %d); want a new start", st, out, macC.count())
 	}
 
 	// --new beside a live current: another start, and it is the current now.
 	homeInventory(t, h, f4.FleetID, time.Now().Add(2*time.Second),
 		map[string]any{"worker_id": wid2, "state": "working"})
 	wid3 := f4.FleetID + "/scratch-3"
-	homeStarts(m4, wid3)
+	homeStarts(macC, wid3)
 	if _, out := clientPlace(t, h, lease, key, homeAsk(map[string]any{"new": true, "idempotency_key": "h-4"})); out.State != "done" || out.WorkerID != wid3 {
 		t.Fatalf("--new = %+v; want a start of %s", out, wid3)
 	}
@@ -98,19 +98,19 @@ func TestClientPlaceHomeResumesTheCurrent(t *testing.T) {
 	// closed): no current, a new start.
 	homeInventory(t, h, f4.FleetID, time.Now().Add(2*time.Second),
 		map[string]any{"worker_id": wid2, "state": "working"})
-	homeStarts(m4, f4.FleetID+"/scratch-4")
-	if _, out := clientPlace(t, h, lease, key, homeAsk(map[string]any{"idempotency_key": "h-6"})); out.State != "done" || m4.count() != 5 {
-		t.Fatalf("gone = %+v (m4 writes %d); want a new start", out, m4.count())
+	homeStarts(macC, f4.FleetID+"/scratch-4")
+	if _, out := clientPlace(t, h, lease, key, homeAsk(map[string]any{"idempotency_key": "h-6"})); out.State != "done" || macC.count() != 5 {
+		t.Fatalf("gone = %+v (mac-c writes %d); want a new start", out, macC.count())
 	}
 }
 
 // A second device of the same person resumes the first's session and is told
 // the first one has it open; a test identity never sees the person's current.
 func TestClientPlaceHomeAnotherDevice(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	lease, key := clientLeaseFor(t, h)
 	wid := f4.FleetID + "/scratch-1"
-	homeStarts(m4, wid)
+	homeStarts(macC, wid)
 	if _, out := clientPlace(t, h, lease, key, homeAsk(map[string]any{"idempotency_key": "d-1"})); out.State != "done" {
 		t.Fatalf("first = %+v", out)
 	}
@@ -127,14 +127,14 @@ func TestClientPlaceHomeAnotherDevice(t *testing.T) {
 	if len(out.AlsoOpen) != 1 || out.AlsoOpen[0] != "MacBook" {
 		t.Fatalf("also_open = %v; want [MacBook]", out.AlsoOpen)
 	}
-	if m4.count() != 1 {
-		t.Fatalf("m4 writes %d; want 1", m4.count())
+	if macC.count() != 1 {
+		t.Fatalf("mac-c writes %d; want 1", macC.count())
 	}
 }
 
 // home is a no-repo scratch only; new goes with home.
 func TestClientPlaceHomeShape(t *testing.T) {
-	h, _, m4, _, _ := twoNodes(t)
+	h, _, macC, _, _ := twoNodes(t)
 	lease, key := clientLeaseFor(t, h)
 	for _, bad := range []map[string]any{
 		{"repo": writeRepo, "kind": "scratch", "home": true},
@@ -145,7 +145,7 @@ func TestClientPlaceHomeShape(t *testing.T) {
 			t.Fatalf("%v = %d; want 400", bad, st)
 		}
 	}
-	if m4.count() != 0 {
-		t.Fatalf("a refused call sent a write (m4 writes %d)", m4.count())
+	if macC.count() != 0 {
+		t.Fatalf("a refused call sent a write (mac-c writes %d)", macC.count())
 	}
 }

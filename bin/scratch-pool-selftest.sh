@@ -516,7 +516,7 @@ ok "X claim fast-forwards the worktree to origin/<base>; a diverged one is retir
 
 # Y: a warm entry that never opens gives its admission back (issue #2502). The
 # fake tmux opens nothing, so every tick's spawn fails after it was admitted; on
-# mini2 each such tick left a reservation for the settle time and three slots
+# mac-d each such tick left a reservation for the settle time and three slots
 # kept "room for 0" on a machine at 54 % free. Five ticks: no reservation left,
 # and the machine's count of admitted-not-yet-counted stays 0.
 reset_state; mkfleet; printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"

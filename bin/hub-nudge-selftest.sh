@@ -158,8 +158,8 @@ cat > "$WORK/hub.py" <<'PY'
 import json, os, sys, http.server
 work = sys.argv[1]
 def body(state):
-    return json.dumps({"machines": ["mini2"], "count": 1, "sessions": [{
-        "worker_id": "ffffffff-ffff-4fff-8fff-ffffffffffff/issue-7", "machine_name": "mini2.local",
+    return json.dumps({"machines": ["mac-d"], "count": 1, "sessions": [{
+        "worker_id": "ffffffff-ffff-4fff-8fff-ffffffffffff/issue-7", "machine_name": "mac-d.local",
         "os_user": "someone", "fleet_id": "ffffffff-ffff-4fff-8fff-ffffffffffff", "fleet_name": "far",
         "availability": "online", "observed_at": "2026-10-04T00:00:00Z", "age_sec": 1,
         "worker": {"key": "issue-7", "issue": 7, "repo": "acme/app", "state": state, "name": "faraway"}}]}).encode()

@@ -40,10 +40,10 @@ ME=$(id -un)
 NOW=1791529500   # 2026-10-09T07:05:00Z
 
 cat > "$WORK/hub.json" <<'EOF'
-{"ts": 1791529440, "machines": [{"hostname": "mini2.tail.ts.net", "label": "mini2", "services_at": "2026-10-09T07:04:00Z", "services": [
- {"name": "sms-watch", "kind": "service", "login": "verky", "state": "running", "started_at": "2026-10-09T06:05:00.123456789Z", "last_run": "2026-10-09T06:05:00Z", "last_log_line": "sent 3 texts"},
- {"name": "daily-report", "kind": "task", "login": "verky", "state": "failed", "last_run": "2026-10-09T07:00:00Z", "next_run": "2026-10-10T07:00:00Z", "last_rc": 1, "last_log_line": "give up: skill not found"}]}],
- "alerts": [{"kind": "service_failed", "subject": "mini2.tail.ts.net/verky/daily-report", "raised_at": "2026-10-09T07:01:00Z"}]}
+{"ts": 1791529440, "machines": [{"hostname": "mac-d.example.ts.net", "label": "mac-d", "services_at": "2026-10-09T07:04:00Z", "services": [
+ {"name": "sms-watch", "kind": "service", "login": "carol", "state": "running", "started_at": "2026-10-09T06:05:00.123456789Z", "last_run": "2026-10-09T06:05:00Z", "last_log_line": "sent 3 texts"},
+ {"name": "daily-report", "kind": "task", "login": "carol", "state": "failed", "last_run": "2026-10-09T07:00:00Z", "next_run": "2026-10-10T07:00:00Z", "last_rc": 1, "last_log_line": "give up: skill not found"}]}],
+ "alerts": [{"kind": "service_failed", "subject": "mac-d.example.ts.net/carol/daily-report", "raised_at": "2026-10-09T07:01:00Z"}]}
 EOF
 printf 'boot\nlistening on 127.0.0.1:8080\n\n' > "$WORK/web.log"
 ln -s "$WORK/web.log" "$WORK/link.log"
@@ -75,19 +75,19 @@ has "A: a retrying task (#2529): its last error, not failed yet" "重试中：wi
 has "A: …its next run is its next try" "2 分钟后" "$(printf '%s\n' "$t" | grep nightly)"
 hasnt "A: another login's entry is not this login's" "theirs" "$t"
 eq "A: --json marks the failed ones" "daily-report web" "$(svc --json | python3 -c 'import json,sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin) if r["failed"])))')"
-eq "A: --json names the machine" "box mini2" "$(svc --json | python3 -c 'import json,sys; print(" ".join(sorted({r["machine"] for r in json.load(sys.stdin)})))')"
+eq "A: --json names the machine" "box mac-d" "$(svc --json | python3 -c 'import json,sys; print(" ".join(sorted({r["machine"] for r in json.load(sys.stdin)})))')"
 hasnt "A: a fresh hub reading says no age" "入口读数" "$t"
 has "A: a stale hub reading says how old" "（入口读数是 1 小时前的）" "$(FLEET_SERVICES_CACHE="$WORK/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_NOW=$((NOW + 3600)) python3 "$BIN/fleet-services.py")"
 
 # ------------------------------------------------------------------------- B ----
-t=$(HOST=mini2 svc)
+t=$(HOST=mac-d svc)
 hasnt "B: the daemon is not read for a machine the hub speaks for" " web " "$t"
-eq "B: …so mini2's rows are the hub's two" 2 "$(HOST=mini2 svc --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+eq "B: …so mac-d's rows are the hub's two" 2 "$(HOST=mac-d svc --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
 
 # ------------------------------------------------------------------------- C ----
 d=$(svc --doctor)
 has "C: a failed entry is FAIL (a retrying task is not one)" "FAIL 2/5 failed:" "$d"
-has "C: …naming it and its last line" "verky/daily-report@mini2 失败「give up: skill not found」" "$d"
+has "C: …naming it and its last line" "carol/daily-report@mac-d 失败「give up: skill not found」" "$d"
 has "C: …and the daemon's" "$ME/web@box 已退出·待重启（rc=2）" "$d"
 d=$(STATE='' CACHE="$WORK/none.json" svc --doctor)
 eq "C: nothing registered is INFO 无登记" "INFO 无登记 — no background service or scheduled task registered (fleet service add)" "$d"
@@ -101,21 +101,21 @@ d["alerts"] = []
 json.dump(d, open(sys.argv[2], "w"))
 PY
 d=$(STATE='' CACHE="$WORK/ok.json" svc --doctor)
-has "C: all running is PASS" "PASS 2 registered, none failed: verky/daily-report@mini2 运行中, verky/sms-watch@mini2 运行中" "$d"
+has "C: all running is PASS" "PASS 2 registered, none failed: carol/daily-report@mac-d 运行中, carol/sms-watch@mac-d 运行中" "$d"
 
 # ------------------------------------------------------------------------- D ----
 a=$(svc --alerts)
 eq "D: one line per failed entry" 2 "$(printf '%s\n' "$a" | grep -c .)"
-eq "D: the hub's: since = its raised_at" "service-mini2-verky-daily-report	daily-report@mini2 失败	1791529260	give up: skill not found" \
+eq "D: the hub's: since = its raised_at" "service-mac-d-carol-daily-report	daily-report@mac-d 失败	1791529260	give up: skill not found" \
    "$(printf '%s\n' "$a" | grep daily-report)"
 has "D: the daemon's: since unknown (0)" "service-box-$ME-web	web@box 已退出·待重启	0	listening on" "$a"
 
 # ------------------------------------------------------------------------- E ----
-cli() { FLEET_SERVICES_CACHE="$WORK/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_HOST=mini2 FLEET_SERVICES_NOW=$NOW \
+cli() { FLEET_SERVICES_CACHE="$WORK/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_HOST=mac-d FLEET_SERVICES_NOW=$NOW \
         FLEET_SHELL='' FLEET_SESSION_CLI_ROWS='' python3 "$BIN/fleet-session-cli.py" ls "$@"; }
-eq "E: fleet ls --services is that table" "$(STATE='' HOST=mini2 svc)" "$(cli --services)"
-eq "E: --services --json too" "$(STATE='' HOST=mini2 svc --json)" "$(cli --services --json)"
-eq "E: …in either order" "$(STATE='' HOST=mini2 svc --json)" "$(cli --json --services)"
+eq "E: fleet ls --services is that table" "$(STATE='' HOST=mac-d svc)" "$(cli --services)"
+eq "E: --services --json too" "$(STATE='' HOST=mac-d svc --json)" "$(cli --services --json)"
+eq "E: …in either order" "$(STATE='' HOST=mac-d svc --json)" "$(cli --json --services)"
 cli --services --bogus >/dev/null 2>&1; eq "E: a stray argument is usage" 2 "$?"
 has "E: the usage names --services" "fleet ls --services [--json]" "$(cli --services --bogus 2>&1)"
 e=$(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE='' FLEET_SHELL='' python3 "$BIN/fleet-session-cli.py" ls --services 2>&1); rc=$?
@@ -125,9 +125,9 @@ has "E: …and says how to register one" "没有登记的后台服务或定时�
 # ------------------------------------------------------------------------- F ----
 H="$WORK/hubs"; mkdir -p "$H/tmp" "$H/conf"
 cat > "$H/nodes.json" <<'EOF'
-{"machines":[{"hostname":"mini2.x","status":"online","ncpu":4,"services_at":"2026-10-09T07:00:00Z","services":[{"name":"daily-report","kind":"task","login":"verky","state":"failed","last_log_line":"give up"}]},
-             {"hostname":"m4","status":"online","ncpu":4}],
- "alerts":[{"kind":"service_failed","subject":"mini2.x/verky/daily-report","raised_at":"2026-10-09T07:01:00Z"},{"kind":"node_lost","subject":"x"}]}
+{"machines":[{"hostname":"mac-d.x","status":"online","ncpu":4,"services_at":"2026-10-09T07:00:00Z","services":[{"name":"daily-report","kind":"task","login":"carol","state":"failed","last_log_line":"give up"}]},
+             {"hostname":"mac-a","status":"online","ncpu":4}],
+ "alerts":[{"kind":"service_failed","subject":"mac-d.x/carol/daily-report","raised_at":"2026-10-09T07:01:00Z"},{"kind":"node_lost","subject":"x"}]}
 EOF
 printf '{"sessions":[]}\n' > "$H/s.json"; printf '{"per_account":[]}\n' > "$H/l.json"
 TMPDIR="$H/tmp/" FLEET_CONF_DIR="$H/conf" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CLIENT=fleet-shell \
@@ -136,11 +136,11 @@ TMPDIR="$H/tmp/" FLEET_CONF_DIR="$H/conf" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CLI
   fail "F: --refresh failed" "$(cat "$H/err")"
 HS="$H/tmp/.claude-dash/global/hub_services"
 [ -s "$HS" ] || fail "F: no hub_services written" "$(ls "$H/tmp/.claude-dash/global")"; ok
-eq "F: the machine with a register, labelled; the one without is not listed" "mini2 daily-report" \
+eq "F: the machine with a register, labelled; the one without is not listed" "mac-d daily-report" \
    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join(m["label"]+" "+s["name"] for m in d["machines"] for s in m["services"]))' "$HS")"
 eq "F: the service_failed alerts only" "service_failed" \
    "$(python3 -c 'import json,sys; print(" ".join(a["kind"] for a in json.load(open(sys.argv[1]))["alerts"]))' "$HS")"
-eq "F: …which the reader then reads" "daily-report@mini2 失败" \
+eq "F: …which the reader then reads" "daily-report@mac-d 失败" \
    "$(FLEET_STATUS_G="${HS%/*}" FLEET_SERVICES_STATE='' python3 "$BIN/fleet-services.py" --alerts | cut -f2)"
 
 # ------------------------------------------------------------------------- G ----
@@ -153,9 +153,9 @@ cp "$WORK/hub.json" "$G/hub_services"
 fa write
 eq "G: a failed entry is one more alarm" "$(( ${base%% *} + 1 ))" "$(fa counts | cut -d' ' -f1)"
 r=$(fa list --plain 2>/dev/null | grep 'service ·')
-has "G: ✖ service · failed · <name>@<machine>" "service · failed · daily-report@mini2 失败" "$r"
+has "G: ✖ service · failed · <name>@<machine>" "service · failed · daily-report@mac-d 失败" "$r"
 has "G: …its action" "see services" "$r"
-grep -q '"id":"service-mini2-verky-daily-report","severity":"alarm"' "$G/alerts.ndjson" || fail "G: the row's id/severity" "$(cat "$G/alerts.ndjson")"; ok
+grep -q '"id":"service-mac-d-carol-daily-report","severity":"alarm"' "$G/alerts.ndjson" || fail "G: the row's id/severity" "$(cat "$G/alerts.ndjson")"; ok
 grep -q '"since":1791529260,' "$G/alerts.ndjson" || fail "G: since is the hub's raised_at" "$(grep service "$G/alerts.ndjson")"; ok
 cp "$WORK/ok.json" "$G/hub_services"
 fa write

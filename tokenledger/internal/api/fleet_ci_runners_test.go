@@ -15,7 +15,7 @@ import (
 // speak for it, and a machine with none is not listed.
 func TestCIRunnersFromTheMachineLink(t *testing.T) {
 	h, n := machineRig(t)
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now(),
 		CIRunner: &control.CIRunnerStatus{State: "idle"}})
 	waitFor(t, 3*time.Second, "alpha online", func() bool {
 		for _, v := range roster(t, h).Nodes {
@@ -29,21 +29,21 @@ func TestCIRunnersFromTheMachineLink(t *testing.T) {
 	if got, _ := h.srv.ciRunners(time.Now()); len(got.Runners) != 0 {
 		t.Fatalf("a login's beat spoke for the runner: %+v", got)
 	}
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
 		CIRunner: &control.CIRunnerStatus{State: "paused", Why: "load: 0.92/core > 0.75", Runs: 3, Failed: 1}})
-	waitFor(t, 3*time.Second, "m4's runner listed", func() bool {
+	waitFor(t, 3*time.Second, "mac-c's runner listed", func() bool {
 		got, _ := h.srv.ciRunners(time.Now())
 		return len(got.Runners) == 1
 	})
 	got, _ := h.srv.ciRunners(time.Now())
 	r := got.Runners[0]
-	if r.Machine != "m4" || !r.Online || r.Runner.State != "paused" || r.Runner.Why == "" || r.Runner.Runs != 3 ||
+	if r.Machine != "mac-c" || !r.Online || r.Runner.State != "paused" || r.Runner.Why == "" || r.Runner.Runs != 3 ||
 		got.Online != 1 || got.Idle != 0 {
-		t.Fatalf("m4's runner = %+v (%+v)", r, got)
+		t.Fatalf("mac-c's runner = %+v (%+v)", r, got)
 	}
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
 		CIRunner: &control.CIRunnerStatus{State: "idle"}})
-	waitFor(t, 3*time.Second, "m4 idle", func() bool {
+	waitFor(t, 3*time.Second, "mac-c idle", func() bool {
 		got, _ := h.srv.ciRunners(time.Now())
 		return got.Idle == 1
 	})
@@ -60,8 +60,8 @@ func TestCIRunnersFromTheMachineLink(t *testing.T) {
 		t.Fatalf("GET %s = %d %s", CIRunnersPath, rec.Code, rec.Body)
 	}
 	// no ci.env any more: the beat carries none, the list is empty
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
-	waitFor(t, 3*time.Second, "m4's runner gone", func() bool {
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "mac-c's runner gone", func() bool {
 		got, _ := h.srv.ciRunners(time.Now())
 		return len(got.Runners) == 0
 	})

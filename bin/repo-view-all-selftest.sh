@@ -224,7 +224,7 @@ mv "$WORK/repos.off" "$FLEET_CONF_DIR/fleets/alpha/repos"
 
 # --- F. short tags ------------------------------------------------------------
 eq    "F: short of claude-fleet" "$(fleet_repo_short o/claude-fleet)" "cf"
-eq    "F: short of 24haowan-monorepo" "$(fleet_repo_short o/24haowan-monorepo)" "2m"
+eq    "F: short of 24acme-monorepo" "$(fleet_repo_short o/24acme-monorepo)" "2m"
 eq    "F: short of one word"     "$(fleet_repo_short o/tokenledger)" "to"
 eq    "F: override wins"         "$(fleet_repo_short o/tokenledger tl)" "tl"
 eq    "F: short_of reads the overlay" "$(fleet_repo_short_of alpha o/tokenledger)" "tl"

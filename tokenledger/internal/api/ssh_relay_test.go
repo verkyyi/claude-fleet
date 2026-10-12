@@ -206,7 +206,7 @@ func sshOver(t *testing.T, conn net.Conn) *ssh.Client {
 func TestRelaySSHTenMegabytes(t *testing.T) {
 	h := newFleetHarness(t)
 	h.srv.SSHRelayRateBPS = -1
-	host, _ := startSSHRelayAgent(t, h, "m4", testSSHD(t))
+	host, _ := startSSHRelayAgent(t, h, "mac-c", testSSHD(t))
 
 	conn, code := sshRelayDial(t, h, host, asOperator, nil)
 	if conn == nil {
@@ -242,7 +242,7 @@ func TestRelaySSHTenMegabytes(t *testing.T) {
 		}
 		return false
 	})
-	if r.Actor != "operator" || r.Hostname != host || r.EndpointID != "ep_m4" || r.OSUser == "" || r.Outcome != "closed" {
+	if r.Actor != "operator" || r.Hostname != host || r.EndpointID != "ep_mac-c" || r.OSUser == "" || r.Outcome != "closed" {
 		t.Fatalf("audit row = %+v", r)
 	}
 	if r.BytesUp < 10<<20 || r.BytesDown == 0 {
@@ -258,7 +258,7 @@ func TestRelaySSHTenMegabytes(t *testing.T) {
 func TestRelayOnlyYourOwnMachines(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice, pBob)
-	host, _ := startSSHRelayAgent(t, h, "m4", testSSHD(t))
+	host, _ := startSSHRelayAgent(t, h, "mac-c", testSSHD(t))
 
 	if _, code := sshRelayDial(t, h, host, nil, nil); code != "HTTP 401" {
 		t.Fatalf("no credential: %s, want HTTP 401", code)
@@ -318,7 +318,7 @@ func mustSession(t *testing.T, cl *ssh.Client) *ssh.Session {
 // end promptly, instead of a session that hangs on a link nobody carries.
 func TestRelayClosesWhenAgentDrops(t *testing.T) {
 	h := newFleetHarness(t)
-	host, stop := startSSHRelayAgent(t, h, "m4", testSSHD(t))
+	host, stop := startSSHRelayAgent(t, h, "mac-c", testSSHD(t))
 	conn, code := sshRelayDial(t, h, host, asOperator, nil)
 	if conn == nil {
 		t.Fatalf("relay refused: %s", code)
@@ -343,7 +343,7 @@ func TestRelayClosesWhenAgentDrops(t *testing.T) {
 // timing out.
 func TestRelayNodeOffline(t *testing.T) {
 	h := newFleetHarness(t)
-	if _, code := sshRelayDial(t, h, "m4", asOperator, nil); code != "NODE_OFFLINE" {
+	if _, code := sshRelayDial(t, h, "mac-c", asOperator, nil); code != "NODE_OFFLINE" {
 		t.Fatalf("relay to a machine with no agent: %s, want NODE_OFFLINE", code)
 	}
 }
@@ -404,7 +404,7 @@ func TestRelayCertificate(t *testing.T) {
 	h.srv.ViewerToken = viewerToken
 	k := newCertKit(t)
 	h.srv.SSHRelayCA = []ssh.PublicKey{k.ca.PublicKey()}
-	host, _ := startSSHRelayAgent(t, h, "m4", testSSHD(t))
+	host, _ := startSSHRelayAgent(t, h, "mac-c", testSSHD(t))
 	p, _ := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	h.srv.Store.AdoptAccount(p, host, time.Now())
 

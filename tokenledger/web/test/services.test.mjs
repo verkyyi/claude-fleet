@@ -12,12 +12,12 @@ import { zhCN } from '../dist/lib/i18n/zh-CN.js';
 const NOW = Date.parse('2026-10-09T07:05:00Z');
 const SNAP = {
   machines: [
-    { hostname: 'mini2.tail.ts.net', alias: 'mini2', services_at: '2026-10-09T07:04:30Z', services: [
-      { name: 'sms-watch', kind: 'service', login: 'verky', state: 'running', started_at: '2026-10-09T06:05:00Z', last_log_line: 'sent 3 texts' },
-      { name: 'daily-report', kind: 'task', login: 'verky', state: 'failed', last_run: '2026-10-09T07:00:00Z', next_run: '2026-10-10T07:00:00Z', last_rc: 1, last_log_line: 'give up: skill <b>not</b> found' },
-      { name: 'flappy', kind: 'service', login: 'verky', state: 'down', last_rc: 2, next_run: '2026-10-09T07:05:30Z', restarts: 4 },
+    { hostname: 'mac-d.example.ts.net', alias: 'mac-d', services_at: '2026-10-09T07:04:30Z', services: [
+      { name: 'sms-watch', kind: 'service', login: 'carol', state: 'running', started_at: '2026-10-09T06:05:00Z', last_log_line: 'sent 3 texts' },
+      { name: 'daily-report', kind: 'task', login: 'carol', state: 'failed', last_run: '2026-10-09T07:00:00Z', next_run: '2026-10-10T07:00:00Z', last_rc: 1, last_log_line: 'give up: skill <b>not</b> found' },
+      { name: 'flappy', kind: 'service', login: 'carol', state: 'down', last_rc: 2, next_run: '2026-10-09T07:05:30Z', restarts: 4 },
     ] },
-    { hostname: 'm4', status: 'online' },
+    { hostname: 'mac-a', status: 'online' },
   ],
 };
 
@@ -25,7 +25,7 @@ test('rows: every entry, the failed set, the machine label', () => {
   assert.deepEqual(FAILED, ['down', 'failed', 'invalid', 'no_login']);
   const rows = serviceRows(SNAP);
   assert.deepEqual(rows.map((r) => [r.machine, r.name, r.kind, r.failed]), [
-    ['mini2', 'daily-report', 'task', true], ['mini2', 'flappy', 'service', true], ['mini2', 'sms-watch', 'service', false]]);
+    ['mac-d', 'daily-report', 'task', true], ['mac-d', 'flappy', 'service', true], ['mac-d', 'sms-watch', 'service', false]]);
   assert.equal(rows[2].lastRun, '2026-10-09T06:05:00Z', 'a service last ran when it started');
   assert.deepEqual(serviceRows({ machines: [{ hostname: 'x' }] }), []);
   assert.deepEqual(serviceRows(null), []);
@@ -61,7 +61,7 @@ test('drawer: the row, its last line, the command for the whole log', () => {
   const f = logDrawer(rows[1], NOW);
   assert.match(f, /fleet service logs flappy -n 200/);
   assert.match(f, /重启次数<\/dt><dd>4</);
-  assert.match(d, /在 mini2 上运行/);
+  assert.match(d, /在 mac-d 上运行/);
   assert.match(logDrawer(rows[1], NOW), /还没有输出/);
   let opened = null;
   const ctx = { drawer: (h) => { opened = h; } };
@@ -107,7 +107,7 @@ test('buttons: which ones a row gets, what each posts, what it says', async () =
 
   const req = svcRequest(rows[0], 'run_now');
   assert.deepEqual({ ...req, idempotency_key: 'k' },
-    { machine: 'mini2.tail.ts.net', login: 'verky', name: 'daily-report', action: 'run_now', idempotency_key: 'k' });
+    { machine: 'mac-d.example.ts.net', login: 'carol', name: 'daily-report', action: 'run_now', idempotency_key: 'k' });
   assert.match(req.idempotency_key, /^[A-Za-z0-9_.:-]{1,128}$/, 'the hub\'s idempotency key shape');
 
   const posted = [], said = [];

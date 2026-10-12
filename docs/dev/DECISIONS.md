@@ -86,7 +86,7 @@ fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]  
 | # | 事项 | 建议 | 不答按 | 截止 | 来源 |
 |---|---|---|---|---|---|
 | 1 | 试水名单先发 20 家还是 50 家？ | 20 家 | 20 家 | 10-09 18:05 | [gh:verkyyi/claude-fleet#2701](…) |
-| 2 | 要不要开一台云机器跑抓取？ | 不开，用 mini2 | 等你（永不默认：花钱） | — | [gh:verkyyi/claude-fleet#2702](…) |
+| 2 | 要不要开一台云机器跑抓取？ | 不开，用 mac-d | 等你（永不默认：花钱） | — | [gh:verkyyi/claude-fleet#2702](…) |
 
 <!-- fleet:decision v=1 id=<uuid> -->
 ```

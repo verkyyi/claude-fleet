@@ -33,10 +33,10 @@ func TestMachineRole(t *testing.T) {
 func TestRosterMachineRole(t *testing.T) {
 	h, _, _, _, _ := personalM4(t)
 	machines, _ := nodeStatuses(t, h)
-	if r := machines["m4"]["role"]; r != MachineRoleClient {
-		t.Fatalf("personal m4 role = %v, want client: %v", r, machines["m4"])
+	if r := machines["mac-c"]["role"]; r != MachineRoleClient {
+		t.Fatalf("personal mac-c role = %v, want client: %v", r, machines["mac-c"])
 	}
-	if r := machines["m5"]["role"]; r != MachineRoleHost {
-		t.Fatalf("m5 role = %v, want host: %v", r, machines["m5"])
+	if r := machines["mac-d"]["role"]; r != MachineRoleHost {
+		t.Fatalf("mac-d role = %v, want host: %v", r, machines["mac-d"])
 	}
 }

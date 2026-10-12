@@ -21,7 +21,7 @@ func TestTicketNumbersConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tk, err := s.CreateFleetTicket(FleetTicket{Repo: "Verk/Notes", Owner: "gh:1", Title: "x"}, 0, time.Now())
+			tk, err := s.CreateFleetTicket(FleetTicket{Repo: "Dave/Notes", Owner: "gh:1", Title: "x"}, 0, time.Now())
 			if err != nil {
 				t.Error(err)
 				return
@@ -41,23 +41,23 @@ func TestTicketNumbersConcurrent(t *testing.T) {
 	if len(seen) != k {
 		t.Fatalf("%d numbers, want %d", len(seen), k)
 	}
-	other, err := s.CreateFleetTicket(FleetTicket{Repo: "verk/other", Owner: "gh:1", Title: "y"}, 0, time.Now())
-	if err != nil || other.Number != 1 || other.ID != "hub:verk/other#1" {
+	other, err := s.CreateFleetTicket(FleetTicket{Repo: "dave/other", Owner: "gh:1", Title: "y"}, 0, time.Now())
+	if err != nil || other.Number != 1 || other.ID != "hub:dave/other#1" {
 		t.Fatalf("another repo: %+v %v", other, err)
 	}
 	// an import takes its own number, refuses a taken one, and the repo
 	// carries on past the highest
-	imp, err := s.CreateFleetTicket(FleetTicket{Repo: "verk/notes", Owner: "gh:1", Title: "z"}, 40, time.Now())
+	imp, err := s.CreateFleetTicket(FleetTicket{Repo: "dave/notes", Owner: "gh:1", Title: "z"}, 40, time.Now())
 	if err != nil || imp.Number != 40 {
 		t.Fatalf("import 40: %+v %v", imp, err)
 	}
-	if _, err := s.CreateFleetTicket(FleetTicket{Repo: "verk/notes", Owner: "gh:1", Title: "z"}, 40, time.Now()); !errors.Is(err, ErrTicketTaken) {
+	if _, err := s.CreateFleetTicket(FleetTicket{Repo: "dave/notes", Owner: "gh:1", Title: "z"}, 40, time.Now()); !errors.Is(err, ErrTicketTaken) {
 		t.Fatalf("import 40 again: %v", err)
 	}
-	if low, err := s.CreateFleetTicket(FleetTicket{Repo: "verk/notes", Owner: "gh:1", Title: "z"}, 30, time.Now()); err != nil || low.Number != 30 {
+	if low, err := s.CreateFleetTicket(FleetTicket{Repo: "dave/notes", Owner: "gh:1", Title: "z"}, 30, time.Now()); err != nil || low.Number != 30 {
 		t.Fatalf("import 30 below the sequence: %+v %v", low, err)
 	}
-	if next, err := s.CreateFleetTicket(FleetTicket{Repo: "verk/notes", Owner: "gh:1", Title: "z"}, 0, time.Now()); err != nil || next.Number != 41 {
+	if next, err := s.CreateFleetTicket(FleetTicket{Repo: "dave/notes", Owner: "gh:1", Title: "z"}, 0, time.Now()); err != nil || next.Number != 41 {
 		t.Fatalf("after the import: %+v %v, want 41", next, err)
 	}
 }
@@ -73,7 +73,7 @@ func TestTicketIndexCarriedOver(t *testing.T) {
 	if _, err := s.write.Exec(`INSERT INTO fleet_ticket_index (id, owner, title, state, backend, url, origin,
 		endpoint_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"gh:Verkyyi/claude-fleet#2700", "gh:1005", "写设计页", "open", "gh",
-		"https://github.com/verkyyi/claude-fleet/issues/2700", "orchestrator", "ep_m5", ts, ts); err != nil {
+		"https://github.com/verkyyi/claude-fleet/issues/2700", "orchestrator", "ep_mac-b", ts, ts); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {

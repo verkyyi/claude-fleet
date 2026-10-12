@@ -1,5 +1,5 @@
-# claudefleet.24haowan.com is the address; ccquota.24haowan.com stays until
-# every client has moved to the new one (EPIC #1982). The `24haowan.com` TLS
+# hub.example.com is the address; ccquota.example.com stays until
+# every client has moved to the new one (EPIC #1982). The `example.com` TLS
 # secret is the domain's wildcard certificate.
 apiVersion: networking.k8s.io/v1
 kind: Ingress

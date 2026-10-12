@@ -16,7 +16,7 @@ import (
 // machine that is always on:
 //
 //   - it is no candidate for a start asked from ANYWHERE ELSE — auto or named.
-//     m5's dispatch daemon, a worker on m4 spawning a child, a rebalance: none
+//     mac-b's dispatch daemon, a worker on mac-a spawning a child, a rebalance: none
 //     of them ever lands on the MacBook, which can close its lid at any time;
 //   - a start asked FROM it is placed as before: its own fleet asking
 //     (/v1/node/place, a session or the client attached there), or its

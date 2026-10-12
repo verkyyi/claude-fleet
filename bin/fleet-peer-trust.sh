@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-peer-trust.sh — the standing machine-to-machine trust this login still keeps
 # (issue #1626, EPIC #1615 C9): the lines of ~/.ssh/authorized_keys whose key
-# comment names ANOTHER fleet machine (`verkyyi@macmini`, `verkyyi@m4`).
+# comment names ANOTHER fleet machine (`dave@mac-c`, `dave@mac-a`).
 #
 #   fleet-peer-trust.sh [<authorized_keys>]
 #
@@ -10,8 +10,8 @@
 # forever, and the hub never hears of it. fleet-doctor's `trust` row reads this.
 #
 # Which names are fleet machines — whatever this login already knows, never a
-# network call: FLEET_NODE_ALIASES (`macmini=m5`, both sides), FLEET_REMOTE_SSH
-# (`m4=m4-lan`, both sides), the Host names of ~/.ssh/fleet-ssh-config, the hub's
+# network call: FLEET_NODE_ALIASES (`mac-c=mac-b`, both sides), FLEET_REMOTE_SSH
+# (`mac-a=m4-lan`, both sides), the Host names of ~/.ssh/fleet-ssh-config, the hub's
 # roster cache (global/hub_nodes), and FLEET_TRUST_MACHINES (extra names, space
 # separated). This machine's own names are not "another machine".
 #

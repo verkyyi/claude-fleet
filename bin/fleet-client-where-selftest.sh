@@ -77,12 +77,12 @@ EOF
 chmod +x "$WORK/fakebin/tailscale"
 export PATH="$WORK/fakebin:$PATH"
 cat > "$WORK/whois-100.101.2.3.json" <<'EOF'
-{"Node":{"Name":"verkyyi-iphone.tail435588.ts.net.","ComputedName":"verkyyi-iphone","Hostinfo":{"OS":"iOS","Hostname":"localhost"}}}
+{"Node":{"Name":"dave-iphone.example.ts.net.","ComputedName":"dave-iphone","Hostinfo":{"OS":"iOS","Hostname":"localhost"}}}
 EOF
 cat > "$WORK/status.json" <<'EOF'
-{"Self":{"HostName":"macmini","DNSName":"macmini.tail.ts.net.","OS":"macOS","Addrs":["192.168.1.10:41641"]},
- "Peer":{"k1":{"HostName":"MacBook","DNSName":"macbook.tail.ts.net.","OS":"macOS","Addrs":["192.168.1.20:41641","203.0.113.7:41641"],"CurAddr":""},
-         "k2":{"HostName":"ipad","DNSName":"ipad.tail.ts.net.","OS":"iOS","Addrs":["[fe80::5]:41641"]}}}
+{"Self":{"HostName":"mac-c","DNSName":"mac-c.example.ts.net.","OS":"macOS","Addrs":["192.168.1.10:41641"]},
+ "Peer":{"k1":{"HostName":"MacBook","DNSName":"macbook.example.ts.net.","OS":"macOS","Addrs":["192.168.1.20:41641","203.0.113.7:41641"],"CurAddr":""},
+         "k2":{"HostName":"ipad","DNSName":"ipad.example.ts.net.","OS":"iOS","Addrs":["[fe80::5]:41641"]}}}
 EOF
 
 dev() { python3 "$BIN/fleet-client-lease.py" device --save "$WORK/w.json" >/dev/null 2>&1; cat "$WORK/w.json" 2>/dev/null; }
@@ -91,13 +91,13 @@ ME=$(python3 -c 'import platform; print(platform.node().split(".",1)[0])')
 
 # --- A. tailnet --------------------------------------------------------------------
 SSH_CONNECTION="100.101.2.3 50000 100.64.0.9 22" dev >/dev/null
-eq "A tailnet device" "verkyyi-iphone" "$(field device)"
+eq "A tailnet device" "dave-iphone" "$(field device)"
 eq "A tailnet os" "iOS" "$(field os)"
 eq "A via" "tailnet" "$(field via)"
 eq "A caps" "link" "$(field caps)"
 eq "A host = this machine" "$ME" "$(field host)"
-SSH_CONNECTION="100.101.2.3 50000 100.64.0.9 22" FLEET_NODE_ALIASES="$ME=m5" dev >/dev/null
-eq "A host through FLEET_NODE_ALIASES" "m5" "$(field host)"
+SSH_CONNECTION="100.101.2.3 50000 100.64.0.9 22" FLEET_NODE_ALIASES="$ME=mac-b" dev >/dev/null
+eq "A host through FLEET_NODE_ALIASES" "mac-b" "$(field host)"
 
 # --- B. lan --------------------------------------------------------------------------
 SSH_CONNECTION="192.168.1.20 50000 192.168.1.10 22" dev >/dev/null
@@ -197,19 +197,19 @@ mx >/dev/null; mx --max-age 0 >/dev/null
 eq "F3 no flag / --max-age 0: afresh" "4" "$(reads)"
 # the phone takes over: the very next call follows (nothing cached)
 cat > "$WORK/lease.json" <<'EOF'
-{"state":"active","lease":{"id":"L2","device":"verkyyi-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"m5","caps":["link"],"since":"2026-10-05T12:05:00Z"}}
+{"state":"active","lease":{"id":"L2","device":"dave-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"mac-b","caps":["link"],"since":"2026-10-05T12:05:00Z"}}
 EOF
-eq "F takeover followed" "verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接" "$(bash "$BIN/fleet-client-where.sh")"
+eq "F takeover followed" "dave-iphone · iOS · Termius（客户端在 mac-b 上运行）· 能：给链接" "$(bash "$BIN/fleet-client-where.sh")"
 # F2. several clients (#1932): the primary is the lease, the others named
 mac='{"id":"L1","device":"MacBook","os":"macOS","terminal":"iTerm2 3.6","via":"local","host":"MacBook","caps":["open_url"]}'
-ph='{"id":"L2","device":"verkyyi-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"m5","caps":["link"]}'
+ph='{"id":"L2","device":"dave-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"mac-b","caps":["link"]}'
 printf '{"state":"active","lease":%s,"clients":[%s,%s],"primary":"L2"}\n' "$ph" "$ph" "$mac" > "$WORK/lease.json"
-eq "F2 iPhone typed last" "verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接 · 也开着：MacBook" "$(bash "$BIN/fleet-client-where.sh")"
+eq "F2 iPhone typed last" "dave-iphone · iOS · Termius（客户端在 mac-b 上运行）· 能：给链接 · 也开着：MacBook" "$(bash "$BIN/fleet-client-where.sh")"
 j=$(bash "$BIN/fleet-client-where.sh" --json)
 eq "F2 json primary" "L2" "$(jf primary)"
 eq "F2 json two clients" "2" "$(printf '%s' "$j" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["clients"]))')"
 printf '{"state":"active","lease":%s,"clients":[%s,%s],"primary":"L1"}\n' "$mac" "$mac" "$ph" > "$WORK/lease.json"
-eq "F2 MacBook typed last" "MacBook · macOS · iTerm2 3.6 · 能：打开网页 · 也开着：verkyyi-iphone" "$(bash "$BIN/fleet-client-where.sh")"
+eq "F2 MacBook typed last" "MacBook · macOS · iTerm2 3.6 · 能：打开网页 · 也开着：dave-iphone" "$(bash "$BIN/fleet-client-where.sh")"
 printf '{"state":"active","lease":%s,"clients":[%s],"primary":"L1"}\n' "$mac" "$mac" > "$WORK/lease.json"
 eq "F2 one client: as before" "MacBook · macOS · iTerm2 3.6 · 能：打开网页" "$(bash "$BIN/fleet-client-where.sh")"
 printf '{"state":"none","lease":null}\n' > "$WORK/lease.json"

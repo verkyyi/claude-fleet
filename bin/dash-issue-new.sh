@@ -54,7 +54,7 @@ for _a in "$@"; do
     --spawn)        spawn=1 ;;
     --title-file=*) title_file="${_a#--title-file=}" ;;
     --selection=*)  sel="${_a#--selection=}" ;;
-    # --node=<machine> (issue #1487 ④, the row menu's «new task on m4…»): the
+    # --node=<machine> (issue #1487 ④, the row menu's «new task on mac-a…»): the
     # worker opens THERE — handed to dash-issue-session.sh --node (#1475) with the
     # spawn. A machine name is one token; anything else is dropped, never typed.
     --node=*)       node="${_a#--node=}"; case "$node" in *[!A-Za-z0-9._-]*) node='' ;; esac ;;
@@ -176,8 +176,8 @@ hdr="$verb in $REPO — type a title · Enter = file · ^S = scratch session${no
 # no double-echo (issue #422), Esc is instant (no 1s wait — issue #419), and a multi-line
 # paste folds into the single-line query.
 # --expect=ctrl-s (issue #1541): ⌃s in this popup opens a SCRATCH session instead
-# of filing — the sidebar's ⌃s (#1532) by another road, so «新建到 m4…» can open
-# a scratch on m4 too. fzf then prints the key as the SECOND line (after the
+# of filing — the sidebar's ⌃s (#1532) by another road, so «新建到 mac-a…» can open
+# a scratch on mac-a too. fzf then prints the key as the SECOND line (after the
 # query); Enter prints an empty one.
 title=$(fzf --print-query --expect=ctrl-s --no-multi --layout=reverse --no-info --no-separator \
             --height=100% --border=none --prompt="$title_prefix" --header="$hdr" \

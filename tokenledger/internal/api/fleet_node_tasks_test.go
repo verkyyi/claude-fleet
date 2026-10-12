@@ -39,7 +39,7 @@ func nodeTaskCall(t *testing.T, h *harness, tok, method, path string, body any) 
 // malformed write is refused before anything is stored.
 func TestNodeTaskRecordRoad(t *testing.T) {
 	h, _, n := peerHarness(t)
-	h.srv.FleetAdmins = []string{"verk"} // bob is pBob's, alice her endpoint's
+	h.srv.FleetAdmins = []string{"frank"} // bob is pBob's, alice her endpoint's
 	bob, alice := n["bob4"].token, n["alice4"].token
 
 	st, rec := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath, map[string]any{

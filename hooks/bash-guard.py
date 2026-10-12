@@ -1232,7 +1232,7 @@ def check_direct(script, tool, masked_cmd, cwd):
 #
 # A session that starts a REAL client — `fleet` / `fleet <machine>` / `fleet shell`
 # / fleet-shell.sh, here or through `ssh <host> …` — as the person takes the
-# person's one client lease: on 2026-10-06 a drill (#1901) did exactly that from m4
+# person's one client lease: on 2026-10-06 a drill (#1901) did exactly that from mac-a
 # and the operator's MacBook dropped to its standby screen again and again. Inside
 # a session the client asks as the test identity by default (fleet-client-lease.py),
 # but the `fleet` on PATH may be an older install that does not, and over ssh the

@@ -1,5 +1,5 @@
 // Package dns is the hub's one writer of address records (claude-fleet#3073,
-// EPIC #3067 C7 and 共同约定 6): every person's <name>.cf.24haowan.com points
+// EPIC #3067 C7 and 共同约定 6): every person's <name>.cf.example.com points
 // at their home machine's reachable address, and only the hub writes it.
 //
 // A Provider is the zone's records as the hub may touch them: List answers
@@ -26,7 +26,7 @@ const Marker = "fleet"
 const TTL = 600
 
 // Record is one address record. Name is the host relative to the zone
-// ("verky.cf" under 24haowan.com); Type is A or AAAA — or TXT on "*.cf",
+// ("carol.cf" under example.com); Type is A or AAAA — or TXT on "*.cf",
 // the unclaimed-name guard (claude-fleet#3337).
 type Record struct {
 	ID    string `json:"id,omitempty"`
@@ -51,7 +51,7 @@ type Provider interface {
 // the hub's environment:
 //
 //	CCQUOTA_DNS_DP_ID / CCQUOTA_DNS_DP_KEY   the DNSPod token (both, or off)
-//	CCQUOTA_DNS_DOMAIN                       the zone (24haowan.com)
+//	CCQUOTA_DNS_DOMAIN                       the zone (example.com)
 //	CCQUOTA_DNS_SUBDOMAIN                    the label every address sits under (cf)
 //	CCQUOTA_DNS_CONTACT                      the contact DNSPod's User-Agent names
 //	                                         (an e-mail; unset: none — issue #3577)
@@ -78,11 +78,11 @@ func FromEnv() (Config, bool) {
 	return c, c.ID != "" && c.Key != "" && c.Domain != "" && c.Subdomain != ""
 }
 
-// Host is name's record host under sub: "verky" + "cf" → "verky.cf".
+// Host is name's record host under sub: "carol" + "cf" → "carol.cf".
 func Host(name, sub string) string { return name + "." + sub }
 
 // NameOf is the address name a host under sub carries, "" when the host is
-// not one ("verky.cf" → "verky"; "www" → "").
+// not one ("carol.cf" → "carol"; "www" → "").
 func NameOf(host, sub string) string {
 	n, ok := strings.CutSuffix(strings.ToLower(host), "."+sub)
 	if !ok || n == "" || strings.Contains(n, ".") {

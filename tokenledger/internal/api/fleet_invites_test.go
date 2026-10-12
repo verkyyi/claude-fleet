@@ -412,8 +412,8 @@ func TestInviteOpensTheLoginWithAutoAssignOff(t *testing.T) {
 	const plain, invited = "gh:6001", "gh:6002"
 	listPerson(t, h, plain, "plainy")
 	h.srv.onPrincipalSignIn(plain, "plainy")
-	if got, ok := readMsg(nodes["m5"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
-		t.Fatalf("auto_assign none, no invite, yet m5 was sent %+v", got)
+	if got, ok := readMsg(nodes["mac-d"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("auto_assign none, no invite, yet mac-d was sent %+v", got)
 	}
 
 	if err := h.srv.Store.CreateInvite(store.Invite{ID: "inv_x", CodeHash: inviteHash("codecodecodecodecode"),
@@ -425,8 +425,8 @@ func TestInviteOpensTheLoginWithAutoAssignOff(t *testing.T) {
 	}
 	listPerson(t, h, invited, "invy")
 	h.srv.onPrincipalSignIn(invited, "invy")
-	_, op := expectAccountOp(t, nodes["m5"].tnode)
+	_, op := expectAccountOp(t, nodes["mac-d"].tnode)
 	if op.Op != control.AccountCreate || op.Login != "invy" {
-		t.Fatalf("op = %+v; want a create of invy on m5", op)
+		t.Fatalf("op = %+v; want a create of invy on mac-d", op)
 	}
 }

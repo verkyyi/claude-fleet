@@ -3,7 +3,7 @@
 #   — how far is THIS machine's live install behind the trunk? (issue #635)
 #
 # `/fleet-sync-install` is per-machine AND manual, so the second machine goes
-# stale silently. Measured 2026-09-14: macmini's live install sat 28 commits
+# stale silently. Measured 2026-09-14: mac-c's live install sat 28 commits
 # behind master — missing #603's base-branch fix, #617's quota ranking, #608's
 # capability matrix — while `fleet-doctor.sh` was green on BOTH machines. Nothing
 # anywhere said one of them was old. One person with two machines already hit it;

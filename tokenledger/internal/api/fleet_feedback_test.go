@@ -21,7 +21,7 @@ import (
 // the team layer's value shape) and nobody's.
 const fakeGHToken = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 
-// feedbackHarness is sessHarness (m5's login is gh:1005's, m4's nobody's)
+// feedbackHarness is sessHarness (mac-d's login is gh:1005's, mac-c's nobody's)
 // with the feedback desk on, its clock in the test's hand.
 func feedbackHarness(t *testing.T) (h *harness, tok5, tok4 string, clock *time.Time) {
 	t.Helper()

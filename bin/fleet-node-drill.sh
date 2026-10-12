@@ -6,7 +6,7 @@
 #   fleet-node-drill.sh count            the five numbers, now (no root needed)
 #   sudo fleet-node-drill.sh unblock     take a leftover GitHub block out of /etc/hosts
 #
-# Run ON the machine being drilled (m4 first — 共同约定 6). Every step that
+# Run ON the machine being drilled (mac-a first — 共同约定 6). Every step that
 # touches the machine asks first (y = do it · n = skip, recorded SKIP · q = stop);
 # --yes answers y to all (sandbox only). Each step is timed and marked 人 (a
 # person does it) or 自动 (the fleet does it); the run ends with two tables —

@@ -39,7 +39,7 @@ func TestTailscaleCert_IssuesLoadsAndServes(t *testing.T) {
 	dir := t.TempDir()
 	calls := 0
 	tc := &tailscaleCert{
-		host: "macmini.example.ts.net", dir: dir,
+		host: "mac-c.example.ts.net", dir: dir,
 		issue: func(host, certFile, keyFile string) error {
 			calls++
 			writeSelfSigned(t, host, certFile, keyFile, time.Now().Add(20*24*time.Hour))
@@ -53,14 +53,14 @@ func TestTailscaleCert_IssuesLoadsAndServes(t *testing.T) {
 	if err != nil || c == nil || c.Leaf == nil {
 		t.Fatalf("no certificate served: %v", err)
 	}
-	if c.Leaf.Subject.CommonName != "macmini.example.ts.net" {
+	if c.Leaf.Subject.CommonName != "mac-c.example.ts.net" {
 		t.Errorf("served CN=%q", c.Leaf.Subject.CommonName)
 	}
 	if calls != 1 {
 		t.Errorf("issue called %d times, want 1", calls)
 	}
 	// The key must not be world-readable.
-	st, _ := os.Stat(filepath.Join(dir, "macmini.example.ts.net.key"))
+	st, _ := os.Stat(filepath.Join(dir, "mac-c.example.ts.net.key"))
 	if st.Mode().Perm()&0o077 != 0 {
 		t.Errorf("key file is %v; it must be owner-only", st.Mode().Perm())
 	}
@@ -72,7 +72,7 @@ func TestTailscaleCert_IssuesLoadsAndServes(t *testing.T) {
 func TestTailscaleCert_KeepsOldCertWhenRenewalFails(t *testing.T) {
 	dir := t.TempDir()
 	fail := false
-	tc := &tailscaleCert{host: "h.ts.net", dir: dir,
+	tc := &tailscaleCert{host: "h.example.ts.net", dir: dir,
 		issue: func(host, cf, kf string) error {
 			if fail {
 				return errors.New("tailscaled is down")
@@ -93,7 +93,7 @@ func TestTailscaleCert_KeepsOldCertWhenRenewalFails(t *testing.T) {
 }
 
 func TestTailscaleCert_FirstIssueFailureIsFatal(t *testing.T) {
-	tc := &tailscaleCert{host: "h.ts.net", dir: t.TempDir(),
+	tc := &tailscaleCert{host: "h.example.ts.net", dir: t.TempDir(),
 		issue: func(string, string, string) error { return errors.New("no https on this tailnet") }}
 	if err := tc.refresh(); err == nil {
 		t.Error("starting with no certificate at all must fail loudly, not serve nothing")
@@ -101,13 +101,13 @@ func TestTailscaleCert_FirstIssueFailureIsFatal(t *testing.T) {
 }
 
 func TestMagicDNSName(t *testing.T) {
-	name, err := magicDNSName([]byte(`{"Self":{"DNSName":"macmini.tail435588.ts.net."},"CertDomains":["macmini.tail435588.ts.net"]}`))
-	if err != nil || name != "macmini.tail435588.ts.net" {
+	name, err := magicDNSName([]byte(`{"Self":{"DNSName":"mac-c.example.ts.net."},"CertDomains":["mac-c.example.ts.net"]}`))
+	if err != nil || name != "mac-c.example.ts.net" {
 		t.Errorf("got %q, %v", name, err)
 	}
 	// No CertDomains means HTTPS is not enabled on the tailnet; say so rather
 	// than trying and failing later with a worse message.
-	if _, err := magicDNSName([]byte(`{"Self":{"DNSName":"x.ts.net."}}`)); err == nil {
+	if _, err := magicDNSName([]byte(`{"Self":{"DNSName":"x.example.ts.net."}}`)); err == nil {
 		t.Error("a tailnet without HTTPS enabled was accepted")
 	}
 }

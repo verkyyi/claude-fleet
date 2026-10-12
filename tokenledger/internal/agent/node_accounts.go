@@ -605,7 +605,7 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 			log.Printf("control channel: account op %s %s: ok=%v exit=%d", op.Op, op.Login, res.OK, res.Exit)
 		} else {
 			// What the script last said (claude-fleet#2953): 18 failed removes on
-			// mini2 left only «exit=1» here, and the why was on the hub alone.
+			// mac-d left only «exit=1» here, and the why was on the hub alone.
 			log.Printf("control channel: account op %s %s: ok=%v exit=%d: %s", op.Op, op.Login, res.OK, res.Exit, accountWhy(res.Detail))
 		}
 		a.acct.deliver(out)

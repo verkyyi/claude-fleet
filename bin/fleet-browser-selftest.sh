@@ -143,7 +143,7 @@ if not f.gone(kp): bad.append("gone: accept-and-close reads alive")
 said, closed = [], []
 fw = f.Forwards(os.path.join(sys.argv[2], "fwd.log"), say=said.append)
 f.GRACE, f.EVERY = 0, 0
-fw.add(port, "macmini", "issue-1", lambda: closed.append(port), callback=True)
+fw.add(port, "mac-c", "issue-1", lambda: closed.append(port), callback=True)
 if not said or "localhost:%d" % port not in said[0] or "issue-1" not in said[0] or "10 分钟" not in said[0]:
     bad.append("notice: %r" % said)
 fw.tick()
@@ -158,7 +158,7 @@ time.sleep(0.2)
 fw.tick()
 if closed != [port]: bad.append("tick did not close a forward whose server is gone: %r" % closed)
 if not said or "已关闭" not in said[-1] or "回调完成" not in said[-1]: bad.append("close line: %r" % said)
-fw.add(kp, "macmini", "issue-2", lambda: closed.append(kp), callback=True, ttl=0.01)
+fw.add(kp, "mac-c", "issue-2", lambda: closed.append(kp), callback=True, ttl=0.01)
 time.sleep(0.05); fw.tick()
 if closed[-1] != kp or "到时" not in said[-1]: bad.append("deadline: %r %r" % (closed, said[-1]))
 log = open(os.path.join(sys.argv[2], "fwd.log")).read().splitlines()
@@ -210,7 +210,7 @@ t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
 work = sys.argv[2]
 bad = []
 th = t.Thin.__new__(t.Thin)
-th.home, th.base, th.fwd, th.said = "macmini", {"argv": ["ssh", "macmini"], "host": 1}, None, []
+th.home, th.base, th.fwd, th.said = "mac-c", {"argv": ["ssh", "mac-c"], "host": 1}, None, []
 th.said_lock = threading.Lock()
 fw = th.forwards()
 fw.mod.GRACE, fw.mod.EVERY = 0, 0
@@ -261,7 +261,7 @@ if fw.held(cport): bad.append("cport: forward still held after the callback serv
 time.sleep(0.3)
 if not fw.mod.free(cport): bad.append("cport: port %d still bound after close" % cport)
 log = open(os.path.join(work, "thinlog", "forwards.log")).read()
-if "\topen\t%d\tmacmini\tissue-3236\t" % cport not in log or "\tclose\t%d\t" % cport not in log:
+if "\topen\t%d\tmac-c\tissue-3236\t" % cport not in log or "\tclose\t%d\t" % cport not in log:
     bad.append("cport: forwards.log %r" % log)
 # busy here → said, nothing opened
 busy = socket.socket(); busy.bind(("127.0.0.1", 0)); busy.listen(1); bp = busy.getsockname()[1]
@@ -322,8 +322,8 @@ EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/where" "$WORK/bin/open-url"
 RV="$HOME/.config/claude-fleet/remote-views"; mkdir -p "$RV"
 dev=$(printf '{"device":"MacBook"}' | base64 | tr -d '\n')
-printf '/dev/ttys901\tfleet-x\tthin\t1\t1\tcur=x\troute=lan\tdevice=%s\ttoken=tok123\tfuid=u\tnode=macmini\n' "$dev" > "$RV/v1"
-printf '/dev/ttys902\tfleet-x\tthin\t1\t1\tcur=x\troute=lan\tdevice=%s\ttoken=tokvia\tfuid=u\tnode=m4\n' "$dev" > "$RV/v2-via-m4"
+printf '/dev/ttys901\tfleet-x\tthin\t1\t1\tcur=x\troute=lan\tdevice=%s\ttoken=tok123\tfuid=u\tnode=mac-c\n' "$dev" > "$RV/v1"
+printf '/dev/ttys902\tfleet-x\tthin\t1\t1\tcur=x\troute=lan\tdevice=%s\ttoken=tokvia\tfuid=u\tnode=mac-a\n' "$dev" > "$RV/v2-via-mac-a"
 printf '100\t/dev/ttys901\n' > "$STATE/clients"
 road() {  # [--browser] — fleet-open.sh on the thin road
   PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1" FLEET_OPEN_WHERE_CMD="$WORK/bin/where" \

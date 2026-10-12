@@ -72,8 +72,8 @@ drill_train_own_runners_gone() {
   grep -q 'fleet-train-macos.sh pick' "$wf" && grep -q 'runs_on: ${{ needs.board.outputs.macos_runs_on }}' "$wf" \
     || { WHY="release-train.yml does not take the macOS runner from board's pick"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-pick.XXXXXX"); t0=$(now)
-  printf '%s' '{"runners":[{"machine":"macmini","online":true,"runner":{"state":"idle"}},{"machine":"mini2","online":true,"runner":{"state":"busy"}}]}' > "$d/up.json"
-  printf '%s' '{"runners":[{"machine":"macmini","online":true,"runner":{"state":"paused","why":"load"}},{"machine":"mini2","online":false,"runner":{"state":"idle"}}]}' > "$d/down.json"
+  printf '%s' '{"runners":[{"machine":"mac-c","online":true,"runner":{"state":"idle"}},{"machine":"mac-d","online":true,"runner":{"state":"busy"}}]}' > "$d/up.json"
+  printf '%s' '{"runners":[{"machine":"mac-c","online":true,"runner":{"state":"paused","why":"load"}},{"machine":"mac-d","online":false,"runner":{"state":"idle"}}]}' > "$d/down.json"
   pick() { GITHUB_OUTPUT="$d/out" bash "$BIN/fleet-train-macos.sh" pick "$@" 2>/dev/null; }
   out=$(pick --runners-file "$d/up.json")
   case "$out" in *'macos_runs_on=["self-hosted","macOS","fleet-ci"]'*'macos_shards=[1, 2]'*) ;;
@@ -118,10 +118,10 @@ G
   [ "$rc" = 0 ] && [ ! -f "$d/cancelled" ] || { WHY="GitHub's queue was judged (exit $rc, cancel $(cat "$d/cancelled" 2>/dev/null))"; rm -rf "$d"; return 1; }
   # started: each shard's runner and queue time on the summary
   rm -f "$d/sum"
-  printf '%s' '{"jobs":[{"name":"macOS / shard 1","status":"in_progress","created_at":"2026-10-11T01:00:00Z","started_at":"2026-10-11T01:01:30Z","runner_name":"fleet-ci-macmini-1"},{"name":"macOS / shard 2","status":"completed","conclusion":"success","created_at":"2026-10-11T01:00:00Z","started_at":"2026-10-11T01:00:20Z","runner_name":"fleet-ci-mini2-1"}]}' > "$d/jobs.json"
+  printf '%s' '{"jobs":[{"name":"macOS / shard 1","status":"in_progress","created_at":"2026-10-11T01:00:00Z","started_at":"2026-10-11T01:01:30Z","runner_name":"fleet-ci-mac-c-1"},{"name":"macOS / shard 2","status":"completed","conclusion":"success","created_at":"2026-10-11T01:00:00Z","started_at":"2026-10-11T01:00:20Z","runner_name":"fleet-ci-mac-d-1"}]}' > "$d/jobs.json"
   out=$(FAKE_DIR=$d FLEET_TRAIN_GH="$d/gh" GITHUB_STEP_SUMMARY="$d/sum" \
     bash "$BIN/fleet-train-macos.sh" watch --repo o/r --run 77 --where fleet-ci --deadline 5 --every 1 2>&1); rc=$?
-  [ "$rc" = 0 ] && grep -q 'fleet-ci-macmini-1 | 1m30s' "$d/sum" && grep -q 'fleet-ci-mini2-1 | 0m20s' "$d/sum" \
+  [ "$rc" = 0 ] && grep -q 'fleet-ci-mac-c-1 | 1m30s' "$d/sum" && grep -q 'fleet-ci-mac-d-1 | 0m20s' "$d/sum" \
     || { WHY="started shards: exit $rc, summary $(cat "$d/sum" 2>/dev/null)"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="自家测试机报 idle 却不接：到点这趟红、摘要写「自家测试机没接」、整趟取消；接了就记每片的机器和排队时间"

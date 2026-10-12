@@ -3,13 +3,13 @@
 # A count only goes DOWN: a PR that removes hits (C7 / C8) lowers its line, written
 # by `bin/oss-scan.sh --baseline > conf/oss-scan.baseline`. Allowed (oss-scan.allow)
 # and exempt (`# oss-ok: <理由>`) lines are not counted here.
-tailnet	14
-ts-net	105
-corp-domain	322
-cloud	63
-machine	5011
-user-home	20
-person	666
-gh-owner	592
-private-ipv4	156
-public-ip	57
+tailnet	0
+ts-net	0
+corp-domain	33
+cloud	46
+machine	9
+user-home	0
+person	0
+gh-owner	2
+private-ipv4	5
+public-ip	0

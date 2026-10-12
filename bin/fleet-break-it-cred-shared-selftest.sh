@@ -211,7 +211,7 @@ drill_cred_own_to_shared() {
     printf '%s\n' "$!" >> "$WORK/cred-pids"
     until_ok 30 sh -c '[ -s "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null && [ -S "$1/ctl.sock" ]' _ "$sb/run/alpha"
   }
-  # alpha: separated on its own proxy, the way m4's credsep.fleetu2 / credsep.verky are
+  # alpha: separated on its own proxy, the way mac-a's credsep.fleetu2 / credsep.carol are
   bash "$BIN/fleet-credsep.sh" install --login alpha >"$sb/install-alpha.out" 2>&1 \
     || { WHY="install alpha: $(tail -2 "$sb/install-alpha.out" | tr '\n' ' ')"; own_down; return 1; }
   svc=''
@@ -287,7 +287,7 @@ drill_cred_own_to_shared() {
 # drops the hold in meta.json at the end — but the running proxy kept the hold
 # it read at start, so every renewal went on writing accounts/<label>.hub while
 # the pool held the same token for the other login: two copies of one token
-# (2026-10-10 macmini · mini2, four pool accounts). Now the proxy re-reads a
+# (2026-10-10 mac-c · mac-d, four pool accounts). Now the proxy re-reads a
 # held tenant's meta.json, folds a leftover own copy into the pool on the next
 # store or read, and `machine pooldup` (the machine doctor's credpool row) names
 # a token held twice.

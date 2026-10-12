@@ -34,14 +34,14 @@ func certHarness(t *testing.T) (*harness, *sshca.CA) {
 	ca := sshca.New(signer)
 	h.srv.SSHCA = ca
 	routes, err := ParseFleetRoutes(`[
-	  {"hostname":"macmini-m4","alias":"m4","routes":[{"name":"public","host":"203.0.113.4","port":22023},{"name":"tailnet","host":"m4.tail.ts.net"}]},
-	  {"hostname":"macmini","alias":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
+	  {"hostname":"mac-e-mac-c","alias":"mac-c","routes":[{"name":"public","host":"203.0.113.4","port":22023},{"name":"tailnet","host":"mac-c.example.ts.net"}]},
+	  {"hostname":"mac-e","alias":"mac-d","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
 	  {"hostname":"spare","routes":[{"name":"lan","host":"10.0.0.9"}]}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.srv.FleetRoutes = routes
-	for _, host := range []string{"macmini-m4", "macmini"} {
+	for _, host := range []string{"mac-e-mac-c", "mac-e"} {
 		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: host, Login: "alice"}); code != 200 {
 			t.Fatalf("adopt on %s: HTTP %d", host, code)
 		}
@@ -174,8 +174,8 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	if want, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(key)); string(c.Key.Marshal()) != string(want.Marshal()) {
 		t.Fatal("certificate is for a different key than the one the client sent")
 	}
-	for _, want := range []string{"# " + FleetSSHConfigVersion, "Host m4 fleet-m4 fleet-m4-public\n  HostName 203.0.113.4\n  Port 22023\n  User alice",
-		"Host fleet-m4-tailnet\n  HostName m4.tail.ts.net\n  User alice", "Host m5 fleet-m5 fleet-m5-public",
+	for _, want := range []string{"# " + FleetSSHConfigVersion, "Host mac-c fleet-mac-c fleet-mac-c-public\n  HostName 203.0.113.4\n  Port 22023\n  User alice",
+		"Host fleet-mac-c-tailnet\n  HostName mac-c.example.ts.net\n  User alice", "Host mac-d fleet-mac-d fleet-mac-d-public",
 		"IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub"} {
 		if !strings.Contains(cr.SSHConfig, want) {
 			t.Fatalf("ssh config lacks %q:\n%s", want, cr.SSHConfig)
@@ -186,7 +186,7 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	}
 	// The machine list beside it (claude-fleet#1719): the same machines,
 	// hostname and alias, for the peer-certificate Match blocks.
-	if got, _ := json.Marshal(cr.Machines); !bytes.Contains(got, []byte(`"alias":"m4"`)) || !bytes.Contains(got, []byte(`"alias":"m5"`)) || bytes.Contains(got, []byte("spare")) {
+	if got, _ := json.Marshal(cr.Machines); !bytes.Contains(got, []byte(`"alias":"mac-c"`)) || !bytes.Contains(got, []byte(`"alias":"mac-d"`)) || bytes.Contains(got, []byte("spare")) {
 		t.Fatalf("machines = %s", got)
 	}
 
@@ -266,7 +266,7 @@ func TestFleetCertNeedsAnActiveLogin(t *testing.T) {
 		t.Fatalf("operator token /v1/fleet/cert: %d, want 403", resp.StatusCode)
 	}
 	// A pending (not yet active) account does not count.
-	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "gh:1004", Hostname: "macmini-m4"})
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "gh:1004", Hostname: "mac-e-mac-c"})
 	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", "gh:1004", req); code != http.StatusConflict {
 		t.Fatalf("Dave (pending only): %d, want 409", code)
 	}
@@ -403,9 +403,9 @@ func TestFleetLoginQRInAWebView(t *testing.T) {
 // the roster; a non-admin login is never sent it.
 func TestFleetAdminNodeGetsTheCA(t *testing.T) {
 	h, ca := certHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "macmini-m4", "verkyyi", true)
-	other := connectNode(t, h, "m4-alice", "macmini-m4", "alice", false)
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-e-mac-c", "ivan", true)
+	other := connectNode(t, h, "mac-c-alice", "mac-e-mac-c", "alice", false)
 
 	m, ok := readMsg(admin.tnode, 5*time.Second)
 	if !ok || m.Type != control.TypeSSHCA {
@@ -425,7 +425,7 @@ func TestFleetAdminNodeGetsTheCA(t *testing.T) {
 	writeMsg(t, admin.tnode, res)
 	waitFor(t, 3*time.Second, "ssh_ca status on the roster", func() bool {
 		for _, n := range roster(t, h).Nodes {
-			if n.OSUser == "verkyyi" && strings.HasPrefix(n.SSHCA, "trusted") {
+			if n.OSUser == "ivan" && strings.HasPrefix(n.SSHCA, "trusted") {
 				return true
 			}
 		}
@@ -441,8 +441,8 @@ func TestFleetCertsOffWithoutCA(t *testing.T) {
 	if code, _ := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)}); code != http.StatusNotFound {
 		t.Fatalf("start without a CA: %d, want 404", code)
 	}
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
 	if m, ok := readMsg(admin.tnode, 300*time.Millisecond); ok {
 		t.Fatalf("admin node was sent %+v with no CA configured", m)
 	}
@@ -450,10 +450,10 @@ func TestFleetCertsOffWithoutCA(t *testing.T) {
 
 func TestParseFleetRoutesRefusesConfigInjection(t *testing.T) {
 	for _, bad := range []string{
-		`[{"hostname":"m4\nProxyCommand sh","routes":[]}]`,
-		`[{"hostname":"m4","routes":[{"name":"x","host":"a b"}]}]`,
-		`[{"hostname":"m4","routes":[{"name":"x","host":"-oProxyCommand=sh"}]}]`,
-		`[{"hostname":"m4","routes":[{"name":"x","host":"h","port":70000}]}]`,
+		`[{"hostname":"mac-c\nProxyCommand sh","routes":[]}]`,
+		`[{"hostname":"mac-c","routes":[{"name":"x","host":"a b"}]}]`,
+		`[{"hostname":"mac-c","routes":[{"name":"x","host":"-oProxyCommand=sh"}]}]`,
+		`[{"hostname":"mac-c","routes":[{"name":"x","host":"h","port":70000}]}]`,
 		`not json`,
 	} {
 		if _, err := ParseFleetRoutes(bad); err == nil {

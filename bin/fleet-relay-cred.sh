@@ -39,9 +39,9 @@
 #   10  fetch / check with the hub module off (CCQUOTA_FLEET≠1): nothing asked
 #
 # Output, one line on stdout:
-#   relay: ISSUED m4/alice → <path>    relay: KEPT m4 (passes)
-#   relay: OK m4                       relay: REFUSED <why>
-#   relay: REVOKED m4                  relay: m4 alice bob
+#   relay: ISSUED mac-a/alice → <path>    relay: KEPT mac-a (passes)
+#   relay: OK mac-a                       relay: REFUSED <why>
+#   relay: REVOKED mac-a                  relay: mac-a alice bob
 #
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport, for the selftest.
 set -uo pipefail

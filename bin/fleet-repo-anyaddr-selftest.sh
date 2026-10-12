@@ -4,7 +4,7 @@
 #   A. names — fleet_repo_name_of / fleet_forge_of over every address shape:
 #      GitHub (bare, https, git@, ssh://) answers owner/name + github; any other
 #      host the path's last two parts + none; a one-part or home (`~`) path takes
-#      the host's first label (`ssh://macmini/~/repos/demo.git` → macmini/demo),
+#      the host's first label (`ssh://mac-c/~/repos/demo.git` → mac-c/demo),
 #      a local one `local`.
 #   B. five addresses, each added once through fleet-repo.sh add (fleet_repo_register):
 #      GitHub https, GitHub ssh, GitLab https, an ssh bare repo, file:// — the remote
@@ -54,7 +54,7 @@ bare() {
   rm -rf "$WORK/seed.$$"
 }
 bare "$WORK/srv/acme/widgets.git" develop      # GitLab https
-bare "$WORK/srv/repos/demo.git"   trunk        # an ssh bare repo on "macmini"
+bare "$WORK/srv/repos/demo.git"   trunk        # an ssh bare repo on "mac-c"
 bare "$WORK/srv/local.git"        main         # file://
 bare "$WORK/srv/gh/o/hs.git"      master       # GitHub https
 bare "$WORK/srv/gh/o/ss.git"      master       # GitHub ssh
@@ -64,7 +64,7 @@ cat > "$GIT_CONFIG_GLOBAL" <<EOF
 [url "file://$WORK/srv/acme/"]
 	insteadOf = https://gitlab.com/acme/
 [url "file://$WORK/srv/repos/"]
-	insteadOf = ssh://macmini/~/repos/
+	insteadOf = ssh://mac-c/~/repos/
 [url "file://$WORK/srv/gh/o/"]
 	insteadOf = https://github.com/o/
 	insteadOf = git@github.com:o/
@@ -85,8 +85,8 @@ https://gitlab.com/acme/widgets.git|none|acme/widgets
 https://gitlab.com/g/sub/p.git|none|sub/p
 git@gitlab.com:g/p.git|none|g/p
 https://gitee.com/demo.git|none|gitee/demo
-ssh://macmini/~/repos/demo.git|none|macmini/demo
-macmini.tail.ts.net:~/demo.git|none|macmini/demo
+ssh://mac-c/~/repos/demo.git|none|mac-c/demo
+mac-c.example.ts.net:~/demo.git|none|mac-c/demo
 ssh://git@host:2222/a/b.git|none|a/b
 file:///srv/git/demo.git|none|git/demo
 file:///demo.git|none|local/demo
@@ -113,7 +113,7 @@ add() {   # add <address> [args…] → the token; gh calls counted around it
 conf_of() { cat "$FLEET_CONF_DIR/fleets/$S/repos/$(fleet_slug "$1").conf" 2>/dev/null; }
 
 for row in "https://gitlab.com/acme/widgets.git|acme/widgets|develop" \
-           "ssh://macmini/~/repos/demo.git|macmini/demo|trunk" \
+           "ssh://mac-c/~/repos/demo.git|mac-c/demo|trunk" \
            "file://$WORK/srv/local.git|srv/local|main"; do
   addr=${row%%|*}; rest=${row#*|}; name=${rest%%|*}; base=${rest#*|}
   before=$(snap "$(fleet_slug "$name")"); order0=$(cat "$FLEET_CONF_DIR/fleets/$S/repos/.order")
@@ -153,7 +153,7 @@ eq "C: its conf is the pre-#3600 shape" "$(conf_of p/plain | grep -v '^#')" "$(p
 eq "C: the old repo's conf byte for byte" "$(cksum < "$OLDCONF")" "$old_sum"
 eq "C: the old repo's key" "$(fleet_slug "$(fleet_norm_repo o/old)")" "$old_key"
 eq "C: an old conf reads github" "$(fleet_repo_forge o/old "$S")" github
-eq "C: fleet_repos lists every repo, old first" "$(fleet_repos "$S" | tr '\n' ' ')" "o/old acme/widgets macmini/demo srv/local o/hs o/ss p/plain "
+eq "C: fleet_repos lists every repo, old first" "$(fleet_repos "$S" | tr '\n' ' ')" "o/old acme/widgets mac-c/demo srv/local o/hs o/ss p/plain "
 
 # ---- D. a taken name -----------------------------------------------------------
 mkdir -p "$WORK/other/srv"; bare "$WORK/other/srv/local.git" main
@@ -170,15 +170,15 @@ S2=fe
 export FLEET_CONF_DIR="$WORK/conf2"
 mkdir -p "$FLEET_CONF_DIR/fleets/$S2"
 printf 'FLEET_SESSION=%s\n' "$S2" > "$FLEET_CONF_DIR/fleets/$S2/conf"
-tok=$(bash "$BIN/fleet-repo.sh" add --session "$S2" "ssh://macmini/~/repos/demo.git" "$WORK/home/projects/demo-e" 2>/dev/null)
-eq "E: add for the doctor" "$tok" "added:macmini-demo"
+tok=$(bash "$BIN/fleet-repo.sh" add --session "$S2" "ssh://mac-c/~/repos/demo.git" "$WORK/home/projects/demo-e" 2>/dev/null)
+eq "E: add for the doctor" "$tok" "added:mac-c-demo"
 : > "$WORK/gh.calls"
 doc=$(FLEET_DOCTOR_FAST=1 sh "$BIN/fleet-doctor.sh" 2>&1)
 hasnt "E: no gh row" "$doc" '^[[:space:]]*[A-Z]+[[:space:]]+gh[[:space:]]'
 hasnt "E: no github row" "$doc" '^[[:space:]]*[A-Z]+[[:space:]]+github[[:space:]]'
 hasnt "E: no labels row" "$doc" '^[[:space:]]*[A-Z]+[[:space:]]+labels[[:space:]]'
-has "E: main passes off FLEET_REMOTE" "$doc" "macmini/demo: $WORK/home/projects/demo-e (origin matches)"
-has "E: base is the remote's HEAD" "$doc" 'macmini/demo: base "trunk" is the repo default'
+has "E: main passes off FLEET_REMOTE" "$doc" "mac-c/demo: $WORK/home/projects/demo-e (origin matches)"
+has "E: base is the remote's HEAD" "$doc" 'mac-c/demo: base "trunk" is the repo default'
 hasnt "E: the repo block asked gh nothing" "$(cat "$WORK/gh.calls")" 'repo view|label list'
 
 if [ "$FAILS" -gt 0 ]; then printf 'selftest FAIL: %d of %d checks\n' "$FAILS" "$CHECKS" >&2; exit 1; fi

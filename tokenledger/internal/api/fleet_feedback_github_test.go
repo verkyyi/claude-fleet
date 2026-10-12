@@ -211,8 +211,8 @@ func TestFeedbackFiledPublicFieldsOnly(t *testing.T) {
 		}
 	}
 	// unknown kinds and agents are 未知, never echoed; a version not a sha too
-	b := feedbackIssueBody(store.Feedback{ID: 7, Text: "x", Ctx: `{"machine_kind":"m5-of-verky","agent":"bob","fleet_version":"verky's"}`})
-	if !strings.Contains(b, "- 版本：未知\n- 机器：未知\n- 会话：未知\n") || strings.Contains(b, "verky") || strings.Contains(b, "m5") {
+	b := feedbackIssueBody(store.Feedback{ID: 7, Text: "x", Ctx: `{"machine_kind":"mac-d-of-heidi","agent":"bob","fleet_version":"heidi's"}`})
+	if !strings.Contains(b, "- 版本：未知\n- 机器：未知\n- 会话：未知\n") || strings.Contains(b, "heidi") || strings.Contains(b, "mac-d") {
 		t.Fatalf("unknown ctx: %q", b)
 	}
 	// no credential in any log line

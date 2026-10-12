@@ -32,7 +32,7 @@ ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6
 CapabilityBoundingSet=
 # The program refuses a host that resolves private; the kernel refuses it too.
-# 172.26.0.2 is the Lightsail VPC resolver (/etc/resolv.conf) — check it after a rebuild.
+# 172.26.0.2 is the Lightsail VPC resolver (/etc/resolv.conf) — check it after a rebuild.  # oss-ok: AWS 定的 VPC 解析地址
 IPAddressAllow=172.26.0.2/32
 IPAddressDeny=127.0.0.0/8 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/3 ::1/128 fc00::/7 fe80::/10 ff00::/8
 

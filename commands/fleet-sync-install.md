@@ -32,7 +32,7 @@ then run `/fleet-sync-install` **once** to make the live install match master.
 **Do I need to run it?** `sh ~/.claude/fleet/bin/fleet-install-version.sh` answers
 that in one line — `CURRENT`, or `BEHIND` with the commit count (issue #635). It
 is the same check `fleet-doctor.sh`'s `install` line prints, and it exists because
-this command is **per-machine and manual**: on 2026-09-14 macmini's live install
+this command is **per-machine and manual**: on 2026-09-14 mac-c's live install
 sat 28 commits behind master while doctor was green on both machines. Run it on
 the machine you have not synced lately, not only the one you are typing on.
 

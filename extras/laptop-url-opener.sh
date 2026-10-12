@@ -3,7 +3,7 @@
 # Listens on localhost:2226; every line it receives is opened in your default
 # browser. Pair with this in your laptop's ~/.ssh/config:
 #
-#   Host macmini            # or whatever host you ssh to
+#   Host mac-c            # or whatever host you ssh to
 #     RemoteForward 2226 127.0.0.1:2226
 #
 # Then anything on the remote host can `printf '%s\n' "$url" | nc 127.0.0.1 2226`

@@ -14,16 +14,16 @@ const mach = (hostname, role, extra = {}) => ({ hostname, role, status: 'online'
 const node = (hostname, os_user, extra = {}) => ({ endpoint_id: `ep_${hostname}_${os_user}`, hostname, os_user, status: 'online', ncpu: 8, load1: 1, sessions: 0, ...extra });
 // Two managed machines, three client devices.
 const SNAP = {
-  machines: [mach('macmini.local', 'host'), mach('mini2.local', 'host'), mach('m4.local', 'client'), mach('m5.local', 'client'), mach('ipad', 'client', { alias: 'iPad' })],
+  machines: [mach('mac-c.local', 'host'), mach('mac-d.local', 'host'), mach('mac-a.local', 'client'), mach('mac-b.local', 'client'), mach('ipad', 'client', { alias: 'iPad' })],
   nodes: [
-    node('macmini.local', 'root', { machine_link: true }), node('macmini.local', 'verky'), node('mini2.local', 'verky'),
-    node('m4.local', 'verky', { personal: true, compute_off: true }), node('m5.local', 'verky', { personal: true }), node('ipad', 'verky', { personal: true }),
+    node('mac-c.local', 'root', { machine_link: true }), node('mac-c.local', 'carol'), node('mac-d.local', 'carol'),
+    node('mac-a.local', 'carol', { personal: true, compute_off: true }), node('mac-b.local', 'carol', { personal: true }), node('ipad', 'carol', { personal: true }),
   ],
 };
 
 test('the Machines page draws the 2 hosts, not the 3 client devices', () => {
   const cards = machineCards(SNAP);
-  assert.deepEqual(cards.map((c) => c.name), ['macmini', 'mini2']);
+  assert.deepEqual(cards.map((c) => c.name), ['mac-c', 'mac-d']);
   assert.equal(clientMachines(SNAP).length, 3);
   assert.equal(isClient(SNAP.machines[2]), true);
   assert.equal(isClient(SNAP.machines[0]), false);
@@ -37,21 +37,21 @@ test('an older hub says no role: every machine is still a card', () => {
 });
 
 test('我的机器 lists the hosts only', () => {
-  assert.deepEqual(myMachines(SNAP, null).map((r) => r.hostname), ['macmini.local', 'mini2.local']);
+  assert.deepEqual(myMachines(SNAP, null).map((r) => r.hostname), ['mac-c.local', 'mac-d.local']);
 });
 
 test('the client devices join the device list once each', () => {
-  // m4 is already a registered device by name: not listed again.
-  const devs = [{ fingerprint: 'SHA256:a', name: 'M4', registered_at: '2026-10-01T00:00:00Z', last_used_at: '2026-10-09T09:00:00Z' }];
+  // mac-a is already a registered device by name: not listed again.
+  const devs = [{ fingerprint: 'SHA256:a', name: 'MAC-A', registered_at: '2026-10-01T00:00:00Z', last_used_at: '2026-10-09T09:00:00Z' }];
   const ms = deviceMachines(SNAP, devs);
-  assert.deepEqual(ms.map((m) => m.label), ['iPad', 'm5']);
-  assert.equal(ms[1].logins, 'verky');
+  assert.deepEqual(ms.map((m) => m.label), ['iPad', 'mac-b']);
+  assert.equal(ms[1].logins, 'carol');
   useLocale('en', en);
   const html = devicesPanel({ devices: devs }, false, SNAP);
   assert.equal((html.match(/data-client=/g) || []).length, 2);
   assert.equal((html.match(/data-revoke=/g) || []).length, 1);
   assert.match(html, /3 active/);
-  for (const h of ['m4.local', 'm5.local', 'ipad']) assert.ok(html.includes('>M4<') || html.includes(h), h);
+  for (const h of ['mac-a.local', 'mac-b.local', 'ipad']) assert.ok(html.includes('>MAC-A<') || html.includes(h), h);
   // No /v1/nodes (an older page, a failed read): the list as it was.
   assert.equal((devicesPanel({ devices: devs }, false).match(/data-client=/g) || []).length, 0);
 });

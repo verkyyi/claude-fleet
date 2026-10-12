@@ -37,7 +37,7 @@
 #                  account_id + id_token; the hub account label IS the profile.
 #                  A name ccquota has registered (`ccquota codex add`, issue
 #                  #1666) resolves through `ccquota codex list --json` first:
-#                  a profile living in ~/.codex (m5's `personal`) imports under
+#                  a profile living in ~/.codex (mac-b's `personal`) imports under
 #                  the hub label `default` — the label the node agent leases
 #                  back INTO ~/.codex — and the mapping is printed.
 #                  Default profile: `default`. A home whose refresh_token is
@@ -60,7 +60,7 @@
 #
 # Afterwards nothing on THIS machine changes: the files stay as they are until
 # this login's ccquota agent runs with CCQUOTA_FLEET_CREDS=1, leases them back
-# and replaces each pool file with the hub marker (m4 first; m5 in its own
+# and replaces each pool file with the hub marker (mac-a first; mac-b in its own
 # window, issue #1463 step 5). A Codex home is likewise left alone until the
 # lease rewrites its auth.json with the short-lived half — and because a Codex
 # refresh token is single-use, log THIS machine's Codex out of that account

@@ -103,7 +103,7 @@ func newCPRig(t *testing.T) *cpRig {
 	return r
 }
 
-// issue a pass for session fid on m5.
+// issue a pass for session fid on mac-d.
 func (r *cpRig) issue(t *testing.T, fid string) (cred, workerID string) {
 	t.Helper()
 	c := assertClaims(r.f5, time.Now())
@@ -269,7 +269,7 @@ func TestCredProxyBindAndRebind(t *testing.T) {
 		map[string]any{"worker_id": widA, "provider": "claude", "account": "someone-elses"}); st != http.StatusNotFound {
 		t.Fatalf("bind to an unknown account → %d", st)
 	}
-	tok4 := r.h.tokens["m4"]
+	tok4 := r.h.tokens["mac-c"]
 	if st, _ := sessDo(t, r.h, http.MethodPut, "/v1/fleet/session-cred/bind", tok4, "",
 		map[string]any{"worker_id": widA, "provider": "claude", "account": "acct1"}); st != http.StatusNotFound {
 		t.Fatalf("another node's rebind → %d", st)

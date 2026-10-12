@@ -28,10 +28,10 @@ while [ $# -gt 0 ]; do
 done
 { printf 'REQ %s %s\nHDR %s\nBODY %s\nARGV %s\n' "$m" "$url" "$hdr" "$body" "$argv"; } >> "$CURL_LOG"
 case "${CURL_ANSWER:-ok}" in
-  ok)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"macmini-m4","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T14:00:00Z"}' > "$out"; printf 200 ;;
+  ok)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"mac-c-mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T14:00:00Z"}' > "$out"; printf 200 ;;
   403) printf '{"error":"only an admin can invite a drill person"}' > "$out"; printf 403 ;;
-  ns)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"m4","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T05:47:35.272044642Z"}' > "$out"; printf 200 ;;
-  junk) printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"m4","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"next tuesday"}' > "$out"; printf 200 ;;
+  ns)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T05:47:35.272044642Z"}' > "$out"; printf 200 ;;
+  junk) printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"next tuesday"}' > "$out"; printf 200 ;;
 esac
 EOF
 chmod +x "$T/shim/curl"
@@ -52,27 +52,27 @@ run() {
 run 2 'fleet drill invite'   'no subcommand'               --
 run 2 'unknown argument'     'an unknown option'           -- invite --frob
 run 2 '--ttl'                'a bad --ttl'                 -- invite --ttl soon
-run 2 '--login: drill'       'a login that is not a drill' -- invite --login verkyyi
-run 2 'no live connection'   'no cert and no token'        -- invite --host m4
+run 2 '--login: drill'       'a login that is not a drill' -- invite --login dave
+run 2 'no live connection'   'no cert and no token'        -- invite --host mac-a
 if grep -q REQ "$T/curl.log"; then bad 'a refusal still called the hub'; else ok 'no refusal called the hub'; fi
 
 # the operator-token door: Bearer on stdin, the fields in the body, the output
 run 0 'fleet-onboard-drill.sh --login drill10071200 --invite fd_abcdefghijklmnopqrstuvwxyz' \
-  'the token door prints the next command' CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host macmini-m4 --ttl 90m
+  'the token door prints the next command' CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host mac-c-mac-a --ttl 90m
 grep -q '^REQ POST https://hub.example/v1/admin/drill' "$T/curl.log" && ok 'POST /v1/admin/drill' || bad "no POST: $(cat "$T/curl.log")"
 grep -q '^HDR Authorization: Bearer tok-secret' "$T/curl.log" && ok 'the token rides a header on stdin' || bad 'no Bearer header'
 if grep '^ARGV' "$T/curl.log" | grep -q tok-secret; then bad 'the token reached an argv'; else ok 'the token never reached an argv'; fi
-grep -q '^BODY .*"host": "macmini-m4".*"ttl_seconds": 5400' "$T/curl.log" && ok '--ttl 90m → 5400 s, the host in the body' || bad "body: $(grep ^BODY "$T/curl.log")"
-run 1 'only an admin'        'the hub refusing is exit 1'  CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=403 -- invite --host m4
-run 0 '"approve_code"'       '--json prints the raw answer' CCQUOTA_VIEWER_TOKEN=tok -- invite --host m4 --json
+grep -q '^BODY .*"host": "mac-c-mac-a".*"ttl_seconds": 5400' "$T/curl.log" && ok '--ttl 90m → 5400 s, the host in the body' || bad "body: $(grep ^BODY "$T/curl.log")"
+run 1 'only an admin'        'the hub refusing is exit 1'  CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=403 -- invite --host mac-a
+run 0 '"approve_code"'       '--json prints the raw answer' CCQUOTA_VIEWER_TOKEN=tok -- invite --host mac-a --json
 # the hub's nanosecond time (issue #2024): read on any python3, and an expiry
 # that will not parse never costs the code — it prints first, the time raw
-run 0 '到期 +10-07 05:47'      'a nanosecond …Z expiry formats' TZ=UTC CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host m4
+run 0 '到期 +10-07 05:47'      'a nanosecond …Z expiry formats' TZ=UTC CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host mac-a
 if [ -x /usr/bin/python3 ]; then
-  run 0 '到期 +10-07 05:47'    'and with /usr/bin/python3 first on PATH' PATH="$T/shim:/usr/bin:/bin" TZ=UTC CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host m4
+  run 0 '到期 +10-07 05:47'    'and with /usr/bin/python3 first on PATH' PATH="$T/shim:/usr/bin:/bin" TZ=UTC CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host mac-a
 fi
-run 0 '^确认码 +fd_abcdefghijklmnopqrstuvwxyz' 'the code line prints' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host m4
-run 0 '到期 +next tuesday'     'an unreadable expiry prints raw, the code kept' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=junk -- invite --host m4
+run 0 '^确认码 +fd_abcdefghijklmnopqrstuvwxyz' 'the code line prints' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host mac-a
+run 0 '到期 +next tuesday'     'an unreadable expiry prints raw, the code kept' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=junk -- invite --host mac-a
 
 # the certificate door: a live cert → signed, no token sent
 printf 'k\n' > "$T/home/.ssh/fleet-cert"; printf 'ssh-ed25519-cert-v01@openssh.com AAAA cert\n' > "$T/home/.ssh/fleet-cert-cert.pub"
@@ -84,21 +84,21 @@ case "$1" in
 esac
 EOF
 chmod +x "$T/shim/ssh-keygen"
-run 0 'fleet-onboard-drill.sh' 'the cert door' SIGNED="$T/signed" CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host m4 --login drillx1
-if grep -Eq '^fleet-drill [0-9]+ invite m4 drillx1 0$' "$T/signed" 2>/dev/null; then ok 'it signs "fleet-drill <ts> invite <host> <login> <ttl>"'
+run 0 'fleet-onboard-drill.sh' 'the cert door' SIGNED="$T/signed" CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host mac-a --login drillx1
+if grep -Eq '^fleet-drill [0-9]+ invite mac-a drillx1 0$' "$T/signed" 2>/dev/null; then ok 'it signs "fleet-drill <ts> invite <host> <login> <ttl>"'
 else bad "signed: $(cat "$T/signed" 2>/dev/null)"; fi
 if grep -q '^HDR Authorization' "$T/curl.log"; then bad 'a live cert still sent the token'; else ok 'a live cert sends no token'; fi
 grep -q '^BODY .*"cert": "ssh-ed25519-cert-v01@openssh.com AAAA cert"' "$T/curl.log" && ok 'the cert rides the body' || bad "body: $(grep ^BODY "$T/curl.log")"
 # --home (issue #3432): the drill names the machine its login is opened on —
 # signed after the rest, in the body; none signs the old message byte for byte
-run 0 'fleet-onboard-drill.sh' 'the cert door with --home' SIGNED="$T/signed" -- invite --host m4 --login drillx1 --home fleet-linux-0
-if grep -Eq '^fleet-drill [0-9]+ invite m4 drillx1 0 fleet-linux-0$' "$T/signed" 2>/dev/null; then ok 'a home is signed after the rest'
+run 0 'fleet-onboard-drill.sh' 'the cert door with --home' SIGNED="$T/signed" -- invite --host mac-a --login drillx1 --home linux-a
+if grep -Eq '^fleet-drill [0-9]+ invite mac-a drillx1 0 linux-a$' "$T/signed" 2>/dev/null; then ok 'a home is signed after the rest'
 else bad "signed with --home: $(cat "$T/signed" 2>/dev/null)"; fi
-grep -q '^BODY .*"home": "fleet-linux-0"' "$T/curl.log" && ok 'the home rides the body' || bad "body: $(grep ^BODY "$T/curl.log")"
-run 0 'fleet-onboard-drill.sh' 'the token door with --home' CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host macmini-m4 --home mini2
-grep -q '^BODY .*"home": "mini2"' "$T/curl.log" && ok 'the token door sends the home' || bad "body: $(grep ^BODY "$T/curl.log")"
-run 2 '--home: a machine name' 'a bad --home' CCQUOTA_VIEWER_TOKEN=tok -- invite --host m4 --home 'a b'
-run 0 'fleet-onboard-drill.sh' 'no --home sends none' CCQUOTA_VIEWER_TOKEN=tok -- invite --host m4
+grep -q '^BODY .*"home": "linux-a"' "$T/curl.log" && ok 'the home rides the body' || bad "body: $(grep ^BODY "$T/curl.log")"
+run 0 'fleet-onboard-drill.sh' 'the token door with --home' CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host mac-c-mac-a --home mac-d
+grep -q '^BODY .*"home": "mac-d"' "$T/curl.log" && ok 'the token door sends the home' || bad "body: $(grep ^BODY "$T/curl.log")"
+run 2 '--home: a machine name' 'a bad --home' CCQUOTA_VIEWER_TOKEN=tok -- invite --host mac-a --home 'a b'
+run 0 'fleet-onboard-drill.sh' 'no --home sends none' CCQUOTA_VIEWER_TOKEN=tok -- invite --host mac-a
 if grep -q '^BODY .*"home"' "$T/curl.log"; then bad 'no --home still sent a home'; else ok 'no --home: no home in the body'; fi
 
 # approve: the drill's scan — the code (from the environment) is the only

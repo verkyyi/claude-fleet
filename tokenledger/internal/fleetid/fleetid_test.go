@@ -16,8 +16,8 @@ const testMachine = "3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f"
 // live cross-check below re-derives them from the Python on every run that has
 // it.
 var fleetGolden = []struct{ session, repo, checkout, want string }{
-	{"fleet-claude-fleet", "verkyyi/claude-fleet", "/Users/verkyyi/projects/claude-fleet", "df89feac-6efa-5b59-86ea-9c60779fc731"},
-	{"fleet-24haowan-monorepo", "", "", "f936a944-068f-5d71-bd22-9d24fa14e676"},
+	{"fleet-claude-fleet", "verkyyi/claude-fleet", "/Users/dave/projects/claude-fleet", "713a4f67-7f76-5559-b5ab-58de0de06cb0"},
+	{"fleet-acme-monorepo", "", "", "63fe1bde-9e04-5c97-b13f-4e19b826365d"},
 	{"名字", "owner/仓库", "/home/张三/x", "92f76867-bb33-55c1-990c-a55ea1ea8134"},
 	// Every byte encoding/json would have spelled differently.
 	{"s", "a<b>&c", "q\"uote\\back\nnl\ttab\x01\x7f ", "471d5063-d36f-507f-b6ef-7518c90397d6"},
@@ -94,10 +94,10 @@ func TestParseWorkerID(t *testing.T) {
 // a worker_id; a worker_id is never an operator sender.
 func TestParseOperatorSender(t *testing.T) {
 	f := fleetGolden[0].want
-	if fid, login, ok := ParseOperatorSender(f + "/operator@verkyyi"); !ok || fid != f || login != "verkyyi" {
+	if fid, login, ok := ParseOperatorSender(f + "/operator@dave"); !ok || fid != f || login != "dave" {
 		t.Fatalf("ParseOperatorSender = %q %q %v", fid, login, ok)
 	}
-	if _, _, err := ParseWorkerID(f + "/operator@verkyyi"); err == nil {
+	if _, _, err := ParseWorkerID(f + "/operator@dave"); err == nil {
 		t.Error("an operator sender parsed as a worker_id")
 	}
 	for _, bad := range []string{"", f + "/issue-1", f + "/operator@", f + "/operator@a b", f + "/operator@x/y",

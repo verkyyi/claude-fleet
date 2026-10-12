@@ -176,12 +176,12 @@ and it is not a repository identity:
   all, in any column, from either source.
 
 Measured: four repository checkouts on this machine use `issue-<N>` branches
-(24haowan-monorepo 129,605 events; claude-fleet 9,674; tokenledger 1,318;
+(acme-monorepo 129,605 events; claude-fleet 9,674; tokenledger 1,318;
 ccquota 1,103). Across 714 distinct issue numbers, **zero** collide between
 them today — but that is arithmetic luck, not a property. The monorepo is past
 #7,600, the fleet past #690, this repo is at #70, and every one of them started
 at #1. Meanwhile the hub itself currently holds exactly **one** repository
-(`list_repos`: `GuangZhouShanyouGame/24haowan-monorepo`, 3,097 issues), so a
+(`list_repos`: `acme-org/acme-monorepo`, 3,097 issues), so a
 number-only join is correct today and silently wrong the day a second shipper
 enrolls.
 

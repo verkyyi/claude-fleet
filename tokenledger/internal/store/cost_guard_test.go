@@ -51,7 +51,7 @@ func seedThreeSources(t *testing.T, s *Store) {
 			Source: source, AccountUUID: "acct-a", EndpointID: "ep-a1",
 			MessageUUID: uuid, SessionID: session, TS: guardBase,
 			Model: "m-" + source, OutputTokens: 100, CostUSD: &c,
-			CWD: "/w", GitBranch: "main", OSUser: "verkyyi", Effort: "high", Entrypoint: "cli",
+			CWD: "/w", GitBranch: "main", OSUser: "frank", Effort: "high", Entrypoint: "cli",
 		}
 	}
 	evs := []model.UsageEvent{
@@ -190,13 +190,13 @@ func TestNoCostAggregateCrossesSources(t *testing.T) {
 	checkSplit(t, "HourlyByModel", hourly)
 
 	// The per-user page.
-	us, err := s.UserSummary("verkyyi", nil, f.Start, f.End)
+	us, err := s.UserSummary("frank", nil, f.Start, f.End)
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkSplit(t, "UserSummary", us.Cost)
 
-	ub, err := s.UsageByUser("verkyyi", nil, ByProject, f.Start, f.End, 50)
+	ub, err := s.UsageByUser("frank", nil, ByProject, f.Start, f.End, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestUnknownSourceIsInNeitherFold(t *testing.T) {
 	if _, _, err := s.InsertEvents([]model.UsageEvent{{
 		Source: "some-future-thing", AccountUUID: "acct-a", EndpointID: "ep-a1",
 		MessageUUID: "f1", SessionID: "s-future", TS: guardBase, Model: "m-future",
-		OutputTokens: 10, CostUSD: &c, CWD: "/w", OSUser: "verkyyi",
+		OutputTokens: 10, CostUSD: &c, CWD: "/w", OSUser: "frank",
 	}}); err != nil {
 		t.Fatal(err)
 	}

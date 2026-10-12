@@ -343,7 +343,7 @@ func TestUpstreamRejectedAccessIsReplaced(t *testing.T) {
 	if a, _ := v.Lease(context.Background(), "p1", Codex, "work"); a.AccessToken != "AT-1" || r.n.Load() != 1 {
 		t.Fatalf("cached lease %+v refreshes=%d", a, r.n.Load())
 	}
-	dropped, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "alice@m4")
+	dropped, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "alice@mac-a")
 	if err != nil || !dropped {
 		t.Fatalf("reject: dropped=%v err=%v", dropped, err)
 	}
@@ -365,7 +365,7 @@ func TestUpstreamRejectedAccessIsReplaced(t *testing.T) {
 			rows = append(rows, x.Detail)
 		}
 	}
-	if len(rows) != 1 || !strings.Contains(rows[0], "token_revoked") || !strings.Contains(rows[0], "alice@m4") {
+	if len(rows) != 1 || !strings.Contains(rows[0], "token_revoked") || !strings.Contains(rows[0], "alice@mac-a") {
 		t.Fatalf("upstream_rejected audit rows = %q", rows)
 	}
 }
@@ -379,7 +379,7 @@ func TestUpstreamRevokedRefreshRefusedNeedsReauth(t *testing.T) {
 	}
 	// The whole grant was revoked: the refresh token is dead too.
 	r.code.Store("refresh_token_invalidated")
-	if _, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "alice@m4"); err != nil {
+	if _, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "alice@mac-a"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := v.Lease(context.Background(), "p1", Codex, "work")
@@ -450,7 +450,7 @@ func TestSetupTokenRevokedUpstreamNeedsReauth(t *testing.T) {
 	if dropped, _ := v.RejectUpstream("p1", Claude, "main", AccessFingerprint("other"), "401", ""); dropped {
 		t.Fatal("a report about another token marked the setup token")
 	}
-	if dropped, err := v.RejectUpstream("p1", Claude, "main", AccessFingerprint(tok), "token_revoked", "alice@m4"); err != nil || !dropped {
+	if dropped, err := v.RejectUpstream("p1", Claude, "main", AccessFingerprint(tok), "token_revoked", "alice@mac-a"); err != nil || !dropped {
 		t.Fatalf("reject: %v %v", dropped, err)
 	}
 	if _, err := v.Lease(context.Background(), "p1", Claude, "main"); !errors.Is(err, ErrReauthRequired) {

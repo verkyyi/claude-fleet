@@ -3,8 +3,8 @@
 # table, each judged against stable (issue #2692; `fleet doctor --installs`).
 #
 # A machine carries three kinds of install, and until this nothing listed them
-# side by side (2026-10-09: mini2's runtime at stable while every login sat
-# behind it, macmini's doctor answering "unknown" for both machines):
+# side by side (2026-10-09: mac-d's runtime at stable while every login sat
+# behind it, mac-c's doctor answering "unknown" for both machines):
 #   machine runtime  <root>/current → <root>/<sha> — the managed machine's root
 #                    runtime (fleet-node-update.py). None on a machine that is
 #                    not managed.

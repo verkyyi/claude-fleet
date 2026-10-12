@@ -103,7 +103,7 @@ export TMUX="$ISOCK,$$,0" TMUX_PANE
 TMUX_PANE=$(T list-panes -t ev -F '#{pane_id}' | head -1)
 # the hub on: the sidebar's cache names this machine, so titles are their longest
 mkdir -p "$TMPDIR/.claude-dash/global"
-printf '#ts\0371\n#me\037m5\n' > "$TMPDIR/.claude-dash/global/remote_ev"
+printf '#ts\0371\n#me\037mac-b\n' > "$TMPDIR/.claude-dash/global/remote_ev"
 
 shot() { "$REAL_TMUX" -S "$OSOCK" capture-pane -p -t o; }
 # open <title-key> <size> <body…>: draw it, wait for its border, leave the frame in $SHOT
@@ -123,7 +123,7 @@ open_popup() {
 }
 hold="while [ ! -e '$WORK/close' ]; do sleep 0.1; done"
 for spec in popup_backlog:L popup_config:L popup_usage:M popup_alerts:M popup_keys:L; do
-  key=${spec%:*}; title="$(fleet_ui_t "$key") · m5"
+  key=${spec%:*}; title="$(fleet_ui_t "$key") · mac-b"
   WANT_LAST='' open_popup "$key" "${spec#*:}" sh -c "$hold"
   top=$(printf '%s\n' "$SHOT" | grep -m1 '╭')
   [ -n "$top" ] || fail "54: $key drew no rounded border: $(printf '%s' "$SHOT" | head -3)"

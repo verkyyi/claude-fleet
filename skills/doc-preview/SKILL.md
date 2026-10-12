@@ -110,7 +110,7 @@ commit or a log.
 **The `READY` URL is the LOOPBACK one** (`http://127.0.0.1:<port>/d/<code>/`, issue #3538)
 in every mode but `tunnel`: it opens with no Tailscale on the operator's computer, because
 `fleet-open` (`mcp__fleet__open`, or `share.sh --open`) forwards it over the operator's own
-ssh — even through a home machine (`经 mini2`). **Open it with `fleet-open`; never paste a
+ssh — even through a home machine (`经 mac-d`). **Open it with `fleet-open`; never paste a
 loopback URL to the operator as a link.** The tailnet URL of the same doc follows as a
 `TAILNET <url>` line — give that one only to someone you know is on the tailnet.
 `DOC_PREVIEW_PRIMARY=tailnet` restores the old order.

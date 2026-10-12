@@ -102,28 +102,28 @@ pl_ssh() { python3 "$BIN/fleet-peerlink-fake-ssh.py" "$@"; }
 drill_peerlink_wrong_login() {
   CAP=6   # a stray on the path: checked, closed, rebuilt as the right login — a beat or two
   local t0 stray sock got
-  pl_box wl m4:bob
-  sock="$B/conf/peerlink/m4@bob.sock"; mkdir -p "$B/conf/peerlink"; chmod 700 "$B/conf/peerlink"
+  pl_box wl mac-a:bob
+  sock="$B/conf/peerlink/mac-a@bob.sock"; mkdir -p "$B/conf/peerlink"; chmod 700 "$B/conf/peerlink"
   # yesterday's way (#2987): a master on the path logged in as the DEFAULT login
   printf '%s\n' "$(python3 -c 'import time; print(time.time() + 300)')" > "$B/stray-cert"
-  pl_ssh -M -N -S "$sock" -l alice -o "CertificateFile=$B/stray-cert" m4 2>/dev/null & stray=$!
+  pl_ssh -M -N -S "$sock" -l alice -o "CertificateFile=$B/stray-cert" mac-a 2>/dev/null & stray=$!
   printf '%s\n' "$stray" >> "$WORK/cred-pids"
   until_ok 5 test -S "$sock" || { WHY="the stray master never came up"; return 1; }
-  [ "$(pl_ssh -S "$sock" m4 id -un)" = alice ] || { WHY="the stray does not answer as alice"; return 1; }
+  [ "$(pl_ssh -S "$sock" mac-a id -un)" = alice ] || { WHY="the stray does not answer as alice"; return 1; }
   t0=$(now); pl_start
-  until_ok 8 pl_up m4@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; return 1; }
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; return 1; }
   SECS=$(since "$t0")
-  got=$(pl_ssh -S "$sock" m4 id -un)
+  got=$(pl_ssh -S "$sock" mac-a id -un)
   [ "$got" = bob ] || { WHY="the link answers as [$got], not bob"; pl_stop; return 1; }
   kill -0 "$stray" 2>/dev/null && { WHY="the wrong-login master was left running"; pl_stop; return 1; }
   python3 "$PL" status | grep -q '登录不符' || { WHY="the doctor's reading has no 登录不符 record: $(python3 "$PL" status)"; pl_stop; return 1; }
   # a far end that keeps answering as someone else: never up, the doctor WARNs
-  printf 'alice\n' > "$B/fs/login/m4"; rm -f "$sock"
+  printf 'alice\n' > "$B/fs/login/mac-a"; rm -f "$sock"
   until_ok 6 sh -c 'out=$(python3 "$1" status --check); [ $? = 1 ] && printf %s "$out" | grep -q 登录不符' _ "$PL" \
     || { WHY="a persistent wrong login did not WARN: $(python3 "$PL" status --check)"; pl_stop; return 1; }
-  pl_up m4@bob && { WHY="a wrong-login master counted as up"; pl_stop; return 1; }
-  rm -f "$B/fs/login/m4"
-  until_ok 8 pl_up m4@bob || { WHY="the link did not come back once the login was right"; pl_stop; return 1; }
+  pl_up mac-a@bob && { WHY="a wrong-login master counted as up"; pl_stop; return 1; }
+  rm -f "$B/fs/login/mac-a"
+  until_ok 8 pl_up mac-a@bob || { WHY="the link did not come back once the login was right"; pl_stop; return 1; }
   pl_stop
   WHAT="路径上有一条用错登录（alice）的主连接：管理者核对 id -un 不符就关掉、按 bob 重建；对方一直答错登录时不算连上、doctor 报 登录不符"
 }
@@ -131,19 +131,19 @@ drill_peerlink_wrong_login() {
 drill_peerlink_sock_deleted() {
   CAP=4   # ≤ one 2 s beat to see it + the rebuild
   local t0 old new sock
-  pl_box sd m4:bob
-  sock="$B/conf/peerlink/m4@bob.sock"
+  pl_box sd mac-a:bob
+  sock="$B/conf/peerlink/mac-a@bob.sock"
   pl_start
-  until_ok 8 pl_up m4@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; return 1; }
-  old=$(pl_pid m4@bob)
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; return 1; }
+  old=$(pl_pid mac-a@bob)
   rm -f "$sock"; t0=$(now)
-  until_ok 6 sh -c 'test -S "$1" && [ "$(python3 "$2" sock m4 bob)" = "$1" ] && [ "$3" != "$(python3 -c "import json,sys; print([l[\"pid\"] for l in json.load(open(sys.argv[1]))[\"links\"]][0])" "$4")" ]' \
+  until_ok 6 sh -c 'test -S "$1" && [ "$(python3 "$2" sock mac-a bob)" = "$1" ] && [ "$3" != "$(python3 -c "import json,sys; print([l[\"pid\"] for l in json.load(open(sys.argv[1]))[\"links\"]][0])" "$4")" ]' \
     _ "$sock" "$PL" "$old" "$B/conf/peerlink/state.json" \
     || { WHY="not rebuilt: $(python3 "$PL" status)"; pl_stop; return 1; }
   SECS=$(since "$t0")
-  new=$(pl_pid m4@bob)
+  new=$(pl_pid mac-a@bob)
   kill -0 "$old" 2>/dev/null && { WHY="the old master ($old) still runs with its file gone — the very state the drill forbids"; pl_stop; return 1; }
-  [ "$(pl_ssh -S "$sock" m4 id -un)" = bob ] || { WHY="the rebuilt link does not answer"; pl_stop; return 1; }
+  [ "$(pl_ssh -S "$sock" mac-a id -un)" = bob ] || { WHY="the rebuilt link does not answer"; pl_stop; return 1; }
   python3 "$PL" status | grep -q '重建：控制文件没了' || { WHY="no rebuild record in the reading"; pl_stop; return 1; }
   pl_stop
   WHAT="主连接活着、控制文件被删：一拍内发现，旧主进程被杀（不留「文件没了连接还在」），按同一路径重建（pid $old → ${new}），state.json 记一条 重建：控制文件没了"
@@ -152,9 +152,9 @@ drill_peerlink_sock_deleted() {
 drill_peerlink_two_keepers() {
   CAP=5
   local t0 k1 k2 rc n
-  pl_box tk m4:bob
+  pl_box tk mac-a:bob
   pl_start; k1=$KP
-  until_ok 8 pl_up m4@bob || { WHY="the link never came up"; pl_stop; return 1; }
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up"; pl_stop; return 1; }
   python3 "$PL" run 2>"$B/second.err"; rc=$?
   [ "$rc" = 3 ] && grep -q 'another keeper' "$B/second.err" || { WHY="a second keeper did not refuse (rc $rc)"; pl_stop; return 1; }
   # the lock file deleted under the first: a third starts on a new file — the
@@ -164,7 +164,7 @@ drill_peerlink_two_keepers() {
   until_ok 6 sh -c '! kill -0 "$1" 2>/dev/null' _ "$k1" || { WHY="two keepers both alive (pids $k1 $k2)"; KP=$k1; pl_stop; KP=$k2; pl_stop; return 1; }
   SECS=$(since "$t0")
   kill -0 "$k2" 2>/dev/null || { WHY="the new keeper died too"; pl_stop; return 1; }
-  until_ok 6 pl_up m4@bob || { WHY="the new keeper did not hold the link"; pl_stop; return 1; }
+  until_ok 6 pl_up mac-a@bob || { WHY="the new keeper did not hold the link"; pl_stop; return 1; }
   n=$(awk '$1 == "master"' "$B/fs/log" | wc -l | tr -d ' ')
   [ "$n" = 1 ] || { WHY="the link was rebuilt ($n masters) instead of adopted"; pl_stop; return 1; }
   sleep 0.5
@@ -177,19 +177,19 @@ drill_peerlink_cert_expiry() {
   CAP=4
   local t0 pid sock
   export PL_CERT_SECS=1
-  pl_box ce m4:bob
-  sock="$B/conf/peerlink/m4@bob.sock"
+  pl_box ce mac-a:bob
+  sock="$B/conf/peerlink/mac-a@bob.sock"
   pl_start
-  until_ok 8 pl_up m4@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; unset PL_CERT_SECS; return 1; }
-  pid=$(pl_pid m4@bob); t0=$(now)
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; unset PL_CERT_SECS; return 1; }
+  pid=$(pl_pid mac-a@bob); t0=$(now)
   sleep 2.3   # two certificate lives
-  pl_ssh -M -N -S "$B/probe.sock" -o "CertificateFile=$B/cert-m4" -l bob m4 2>/dev/null \
+  pl_ssh -M -N -S "$B/probe.sock" -o "CertificateFile=$B/cert-mac-a" -l bob mac-a 2>/dev/null \
     && { WHY="the certificate did not expire (a new handshake was let in)"; pl_stop; unset PL_CERT_SECS; return 1; }
-  [ "$(python3 "$PL" sock m4 bob)" = "$sock" ] || { WHY="the link is not healthy after the certificate expired"; pl_stop; unset PL_CERT_SECS; return 1; }
-  [ "$(pl_ssh -S "$sock" -o ControlMaster=no m4 echo still)" = "ran echo still" ] \
+  [ "$(python3 "$PL" sock mac-a bob)" = "$sock" ] || { WHY="the link is not healthy after the certificate expired"; pl_stop; unset PL_CERT_SECS; return 1; }
+  [ "$(pl_ssh -S "$sock" -o ControlMaster=no mac-a echo still)" = "ran echo still" ] \
     || { WHY="a new channel did not open on the link"; pl_stop; unset PL_CERT_SECS; return 1; }
   SECS=$(python3 -c 'import sys,time; print("%.1f" % (time.time() - float(sys.argv[1]) - 2.3))' "$t0")
-  [ "$(pl_pid m4@bob)" = "$pid" ] || { WHY="the master was rebuilt across the expiry"; pl_stop; unset PL_CERT_SECS; return 1; }
+  [ "$(pl_pid mac-a@bob)" = "$pid" ] || { WHY="the master was rebuilt across the expiry"; pl_stop; unset PL_CERT_SECS; return 1; }
   pl_stop; unset PL_CERT_SECS
   WHAT="证书 1 秒有效、过了两次：新握手被拒，但常开连接还是同一条（pid ${pid}），其上照样开新通道 —— 证书只在建立时看"
 }
@@ -197,24 +197,24 @@ drill_peerlink_cert_expiry() {
 drill_peerlink_hub_down() {
   CAP=4
   local t0 pid
-  pl_box hd m4:bob
+  pl_box hd mac-a:bob
   pl_start
-  until_ok 8 pl_up m4@bob || { WHY="the link never came up"; pl_stop; return 1; }
-  pid=$(pl_pid m4@bob)
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up"; pl_stop; return 1; }
+  pid=$(pl_pid mac-a@bob)
   touch "$B/hubdown"
-  pl_row m5:bob   # a new machine shows up while the hub is away
-  until_ok 6 sh -c 'python3 "$1" status --check | grep -q "m5@bob 开不了新连接：入口"' _ "$PL" \
-    || { WHY="the doctor does not say why m5 is not opened: $(python3 "$PL" status --check)"; pl_stop; return 1; }
+  pl_row mac-b:bob   # a new machine shows up while the hub is away
+  until_ok 6 sh -c 'python3 "$1" status --check | grep -q "mac-b@bob 开不了新连接：入口"' _ "$PL" \
+    || { WHY="the doctor does not say why mac-b is not opened: $(python3 "$PL" status --check)"; pl_stop; return 1; }
   python3 "$PL" status --check >/dev/null && { WHY="hub down with a link wanted read OK"; pl_stop; return 1; }
-  awk '$1 == "master" && $2 == "m5"' "$B/fs/log" | grep -q . && { WHY="a master to m5 was opened without a certificate (a standing key)"; pl_stop; return 1; }
-  pl_up m4@bob && [ "$(pl_pid m4@bob)" = "$pid" ] || { WHY="the link already up was dropped"; pl_stop; return 1; }
-  pl_ssh -S "$B/conf/peerlink/m4@bob.sock" m4 true >/dev/null || { WHY="m4's link does not carry a channel"; pl_stop; return 1; }
+  awk '$1 == "master" && $2 == "mac-b"' "$B/fs/log" | grep -q . && { WHY="a master to mac-b was opened without a certificate (a standing key)"; pl_stop; return 1; }
+  pl_up mac-a@bob && [ "$(pl_pid mac-a@bob)" = "$pid" ] || { WHY="the link already up was dropped"; pl_stop; return 1; }
+  pl_ssh -S "$B/conf/peerlink/mac-a@bob.sock" mac-a true >/dev/null || { WHY="mac-a's link does not carry a channel"; pl_stop; return 1; }
   rm -f "$B/hubdown"; t0=$(now)
-  until_ok 6 pl_up m5@bob || { WHY="m5 was not opened once the hub came back"; pl_stop; return 1; }
+  until_ok 6 pl_up mac-b@bob || { WHY="mac-b was not opened once the hub came back"; pl_stop; return 1; }
   SECS=$(since "$t0")
   python3 "$PL" status --check >/dev/null || { WHY="still WARN after the hub came back: $(python3 "$PL" status --check)"; pl_stop; return 1; }
   pl_stop
-  WHAT="入口不在：已有的 m4 照用（同一 pid），新来的 m5 不开、不退回长期钥匙，doctor 写明 入口不在；入口回来后退避内开好 m5"
+  WHAT="入口不在：已有的 mac-a 照用（同一 pid），新来的 mac-b 不开、不退回长期钥匙，doctor 写明 入口不在；入口回来后退避内开好 mac-b"
 }
 
 drill_peerlink_name_unresolved() {
@@ -231,35 +231,35 @@ drill_peerlink_name_unresolved() {
     || { WHY="a name that does not resolve did not WARN with its reason: $(python3 "$PL" status --check)"; unset FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
   # the hub lists its ways in: a tailnet name (no tailnet here) and the entry port
   t0=$(now)
-  printf '{"peers":[{"hostname":"lx0","login":"bob","routes":[{"name":"tailnet","host":"lx0.tail.ts.net"},{"name":"entry","host":"120.24.204.160","port":22022}]}]}\n' > "$B/peers.json"
+  printf '{"peers":[{"hostname":"lx0","login":"bob","routes":[{"name":"tailnet","host":"lx0.example.ts.net"},{"name":"entry","host":"203.0.113.212","port":22022}]}]}\n' > "$B/peers.json"
   until_ok 10 pl_up lx0@bob || { WHY="the link never came up over the entry port: $(python3 "$PL" status --check)"; unset FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
   SECS=$(since "$t0")
   unset FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN
-  grep -q '^master 120.24.204.160 bob [0-9]* 22022$' "$B/fs/log" || { WHY="not dialled at the entry port: $(cat "$B/fs/log")"; pl_stop; return 1; }
-  grep -q '^master lx0.tail.ts.net ' "$B/fs/log" && { WHY="the tailnet name was dialled with no tailnet here"; pl_stop; return 1; }
+  grep -q '^master 203.0.113.212 bob [0-9]* 22022$' "$B/fs/log" || { WHY="not dialled at the entry port: $(cat "$B/fs/log")"; pl_stop; return 1; }
+  grep -q '^master lx0.example.ts.net ' "$B/fs/log" && { WHY="the tailnet name was dialled with no tailnet here"; pl_stop; return 1; }
   out=$(python3 "$PL" status --check) || { WHY="still WARN once up: $out"; pl_stop; return 1; }
-  case "$out" in *"lx0@bob 已连上 · 路线 entry 120.24.204.160:22022"*) ;; *) WHY="the doctor does not name the route: $out"; pl_stop; return 1 ;; esac
+  case "$out" in *"lx0@bob 已连上 · 路线 entry 203.0.113.212:22022"*) ;; *) WHY="the doctor does not name the route: $out"; pl_stop; return 1 ;; esac
   pl_ssh -S "$B/conf/peerlink/lx0@bob.sock" lx0 true >/dev/null || { WHY="the link carries no channel"; pl_stop; return 1; }
   pl_stop
-  WHAT="对端机器名在这里解析不了（不在 tailnet）：doctor 报 连不上 + Could not resolve hostname；入口给出路线后，跳过本机没有的 tailnet，下一拍按门（120.24.204.160:22022）连上，doctor 写 已连上 · 路线 entry"
+  WHAT="对端机器名在这里解析不了（不在 tailnet）：doctor 报 连不上 + Could not resolve hostname；入口给出路线后，跳过本机没有的 tailnet，下一拍按门（203.0.113.212:22022）连上，doctor 写 已连上 · 路线 entry"
 }
 
 drill_peerlink_reaped() {
   CAP=1   # nothing to wait for: the link must simply still be the same one
   local t0 pid
   export FLEET_PEERLINK_LINGER=1
-  pl_box rp m4:bob
+  pl_box rp mac-a:bob
   pl_start
-  until_ok 8 pl_up m4@bob || { WHY="the link never came up"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
-  pid=$(pl_pid m4@bob)
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  pid=$(pl_pid mac-a@bob)
   # yesterday's way (#3482): the last thin view goes, and the link closed 「没人要了」
   # FLEET_PEERLINK_LINGER later — the next switch to that machine built it again
   rm -f "$B/conf/remote-views/a"
   sleep 4
   t0=$(now)
-  pl_up m4@bob || { WHY="the link was closed with no view: $(tail -3 "$B/run.err" | tr '\n' ' ')"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
-  [ "$(pl_pid m4@bob)" = "$pid" ] || { WHY="the master was rebuilt (pid $pid → $(pl_pid m4@bob))"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
-  pl_ssh -S "$B/conf/peerlink/m4@bob.sock" -O check m4 2>/dev/null || { WHY="ssh -O check does not answer"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  pl_up mac-a@bob || { WHY="the link was closed with no view: $(tail -3 "$B/run.err" | tr '\n' ' ')"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  [ "$(pl_pid mac-a@bob)" = "$pid" ] || { WHY="the master was rebuilt (pid $pid → $(pl_pid mac-a@bob))"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  pl_ssh -S "$B/conf/peerlink/mac-a@bob.sock" -O check mac-a 2>/dev/null || { WHY="ssh -O check does not answer"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
   grep -q '没人要了' "$B/run.err" && { WHY="a close for want of use was recorded"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
   SECS=$(since "$t0")
   unset FLEET_PEERLINK_LINGER
@@ -280,18 +280,18 @@ hk_body() {
   me=$(id -un)
   # a short root: ssh's control socket (+ its 17-byte temp suffix) must fit AF_UNIX's 104 bytes
   WORK=$(mktemp -d /tmp/hk.XXXXXX) || { WORK=$W0; WHY="no /tmp dir"; return 1; }
-  pl_box hk "m4:$me"; cat "$WORK/cred-pids" >> "$W0/cred-pids"; WORK=$W0
-  sock="$B/conf/peerlink/m4@$me.sock"
-  # this login: a hub node whose own known_hosts never heard of m4
+  pl_box hk "mac-a:$me"; cat "$WORK/cred-pids" >> "$W0/cred-pids"; WORK=$W0
+  sock="$B/conf/peerlink/mac-a@$me.sock"
+  # this login: a hub node whose own known_hosts never heard of mac-a
   export HOME="$B/home"; mkdir -p "$HOME/.ssh"; : > "$B/empty"; : > "$B/hub-keys"
   printf 'CCQUOTA_TOKEN=node-secret\nCCQUOTA_HUB_URL=https://hub.example\n' > "$B/conf/node.env"
   ssh-keygen -q -t ed25519 -N '' -f "$B/host" </dev/null >/dev/null 2>&1 \
     && ssh-keygen -q -t ed25519 -N '' -f "$B/other" </dev/null >/dev/null 2>&1 || { WHY="ssh-keygen failed"; return 1; }
   # the hub: a certificate (not a real one — sshd admits the plain peer key) and
-  # whatever host keys it knows for m4 ($B/hub-keys); ttl 31 s = the cache lasts 1 s
+  # whatever host keys it knows for mac-a ($B/hub-keys); ttl 31 s = the cache lasts 1 s
   cat > "$B/curl" <<EOF
 #!/bin/bash
-python3 -c 'import json, sys; print(json.dumps({"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "login": sys.argv[1], "target": "m4", "ttl_sec": 31, "alias": "m4", "host_keys": [l.strip() for l in open(sys.argv[2]) if l.strip()]}))' "$me" "$B/hub-keys"
+python3 -c 'import json, sys; print(json.dumps({"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "login": sys.argv[1], "target": "mac-a", "ttl_sec": 31, "alias": "mac-a", "host_keys": [l.strip() for l in open(sys.argv[2]) if l.strip()]}))' "$me" "$B/hub-keys"
 printf '200'
 EOF
   chmod +x "$B/curl"
@@ -306,9 +306,9 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 AuthorizedKeysFile $HOME/.ssh/fleet-peer.pub
 EOF
-  # m4 is reached the way a route is: a plain name; the person's known_hosts is $B/empty
+  # mac-a is reached the way a route is: a plain name; the person's known_hosts is $B/empty
   cat > "$B/ssh_config" <<EOF
-Host m4
+Host mac-a
   ProxyCommand /usr/sbin/sshd -i -f $B/sshd_config
   GlobalKnownHostsFile /dev/null
   UserKnownHostsFile $B/empty
@@ -320,51 +320,51 @@ EOF
   hostpub() { awk '{ print $1, $2 }' "$1.pub"; }
   # hk_past <login> — the link is up, or its last try failed on something after the host key
   hk_past() {
-    pl_up "m4@$1" && return 0
-    grep -q . "$B/conf/peerlink/m4@$1.err" 2>/dev/null && ! grep -q "Host key verification failed" "$B/conf/peerlink/m4@$1.err"
+    pl_up "mac-a@$1" && return 0
+    grep -q . "$B/conf/peerlink/mac-a@$1.err" 2>/dev/null && ! grep -q "Host key verification failed" "$B/conf/peerlink/mac-a@$1.err"
   }
   if [ "$mode" = sshd ]; then
     # the break: the hub lists no key — BatchMode turns «unknown host» into a refusal
     pl_start
-    until_ok 8 pl_link "m4@$me" '"Host key verification failed" in (l.get("err") or "")' >/dev/null \
+    until_ok 8 pl_link "mac-a@$me" '"Host key verification failed" in (l.get("err") or "")' >/dev/null \
       || { WHY="the break did not reproduce: $(python3 "$PL" status | tr '\n' ' ')"; pl_stop; return 1; }
-    pl_up "m4@$me" && { WHY="a link came up to a host nobody vouched for"; pl_stop; return 1; }
-    # the fix: the hub knows m4's key → written under fleet-m4, the next try gets
+    pl_up "mac-a@$me" && { WHY="a link came up to a host nobody vouched for"; pl_stop; return 1; }
+    # the fix: the hub knows mac-a's key → written under fleet-mac-a, the next try gets
     # past the host-key check (up where an unprivileged sshd can open a session —
     # macOS's dies on its BSM audit session right after authenticating)
     hostpub "$B/host" > "$B/hub-keys"; t0=$(now)
     until_ok 10 hk_past "$me" || { WHY="still refused with the hub's key: $(python3 "$PL" status | tr '\n' ' ')"; pl_stop; return 1; }
     SECS=$(since "$t0")
-    ssh -F "$B/ssh_config" -S "$sock" -O exit m4 >/dev/null 2>&1
+    ssh -F "$B/ssh_config" -S "$sock" -O exit mac-a >/dev/null 2>&1
     pl_stop
   fi
-  grep -qxF "fleet-m4 $(hostpub "$B/host")" "$B/conf/peer/known_hosts" 2>/dev/null \
+  grep -qxF "fleet-mac-a $(hostpub "$B/host")" "$B/conf/peer/known_hosts" 2>/dev/null \
     || { [ "$mode" = sshd ] && { WHY="peer/known_hosts: $(cat "$B/conf/peer/known_hosts" 2>&1)"; return 1; }; }
   # one more ask, by hand: the options say HostKeyAlias + only that file
   hostpub "$B/host" > "$B/hub-keys"; sleep 1.1; t0=$(now)
-  out=$(bash "$BIN/fleet-peer-cert.sh" m4 view 2>&1) || { WHY="fleet-peer-cert: $out"; return 1; }
+  out=$(bash "$BIN/fleet-peer-cert.sh" mac-a view 2>&1) || { WHY="fleet-peer-cert: $out"; return 1; }
   opts=(); while IFS= read -r o; do [ -n "$o" ] && opts+=("$o"); done <<EOF_O
 $out
 EOF_O
-  case "$out" in *"HostKeyAlias=fleet-m4"*"UserKnownHostsFile=$B/conf/peer/known_hosts"*) ;; *) WHY="options: $out"; return 1 ;; esac
-  ssh-keygen -F fleet-m4 -f "$B/conf/peer/known_hosts" >/dev/null 2>&1 || { WHY="ssh-keygen cannot find fleet-m4 in peer/known_hosts"; return 1; }
-  ssh -F "$B/ssh_config" -G ${opts[@]+"${opts[@]}"} m4 2>/dev/null | grep -qi "^hostkeyalias fleet-m4$" || { WHY="ssh -G does not take the alias"; return 1; }
+  case "$out" in *"HostKeyAlias=fleet-mac-a"*"UserKnownHostsFile=$B/conf/peer/known_hosts"*) ;; *) WHY="options: $out"; return 1 ;; esac
+  ssh-keygen -F fleet-mac-a -f "$B/conf/peer/known_hosts" >/dev/null 2>&1 || { WHY="ssh-keygen cannot find fleet-mac-a in peer/known_hosts"; return 1; }
+  ssh -F "$B/ssh_config" -G ${opts[@]+"${opts[@]}"} mac-a 2>/dev/null | grep -qi "^hostkeyalias fleet-mac-a$" || { WHY="ssh -G does not take the alias"; return 1; }
   [ "$mode" = sshd ] || SECS=$(since "$t0")
   if [ "$mode" = sshd ]; then
-    out=$(ssh -v -F "$B/ssh_config" ${opts[@]+"${opts[@]}"} -o BatchMode=yes m4 true 2>&1)
+    out=$(ssh -v -F "$B/ssh_config" ${opts[@]+"${opts[@]}"} -o BatchMode=yes mac-a true 2>&1)
     case "$out" in *"is known and matches"*"Authenticated to"*) ;; *) WHY="the hub's key did not match on a real ssh: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1 ;; esac
     # a key the hub does NOT list is still refused — the hub's word, not TOFU
     hostpub "$B/other" > "$B/hub-keys"; sleep 1.1
-    out=$(bash "$BIN/fleet-peer-cert.sh" m4 view 2>&1) || { WHY="fleet-peer-cert: $out"; return 1; }
+    out=$(bash "$BIN/fleet-peer-cert.sh" mac-a view 2>&1) || { WHY="fleet-peer-cert: $out"; return 1; }
     opts=(); while IFS= read -r o; do [ -n "$o" ] && opts+=("$o"); done <<EOF_O
 $out
 EOF_O
-    out=$(ssh -F "$B/ssh_config" ${opts[@]+"${opts[@]}"} -o BatchMode=yes m4 true 2>&1) && { WHY="a host key the hub did not list was let in"; return 1; }
+    out=$(ssh -F "$B/ssh_config" ${opts[@]+"${opts[@]}"} -o BatchMode=yes mac-a true 2>&1) && { WHY="a host key the hub did not list was let in"; return 1; }
     case "$out" in *"Host key verification failed"*) ;; *) WHY="an unlisted key was not refused by the host-key check: $out"; return 1 ;; esac
-    grep -q "fleet-m4 $(hostpub "$B/host")" "$B/conf/peer/known_hosts" && { WHY="the old key stayed beside the new one"; return 1; }
-    WHAT="别的机器的 host key 不在任何 known_hosts：入口没给 key 时真 ssh（BatchMode）照旧 Host key verification failed、常开连接不起；入口给了 key → 写进 peer/known_hosts 的 fleet-m4，下一次重试过了 host key 这关（真 sshd -i：key 对上、认证通过）；入口没列的 key 仍被拒"
+    grep -q "fleet-mac-a $(hostpub "$B/host")" "$B/conf/peer/known_hosts" && { WHY="the old key stayed beside the new one"; return 1; }
+    WHAT="别的机器的 host key 不在任何 known_hosts：入口没给 key 时真 ssh（BatchMode）照旧 Host key verification failed、常开连接不起；入口给了 key → 写进 peer/known_hosts 的 fleet-mac-a，下一次重试过了 host key 这关（真 sshd -i：key 对上、认证通过）；入口没列的 key 仍被拒"
   else
-    WHAT="（这里跑不了非特权 sshd，只核对选项）入口给的 host key 写进 peer/known_hosts 的 fleet-m4，选项带 HostKeyAlias + UserKnownHostsFile，ssh -G 认这个别名"
+    WHAT="（这里跑不了非特权 sshd，只核对选项）入口给的 host key 写进 peer/known_hosts 的 fleet-mac-a，选项带 HostKeyAlias + UserKnownHostsFile，ssh -G 认这个别名"
   fi
   rm -rf "$B"
 }

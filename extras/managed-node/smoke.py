@@ -65,7 +65,7 @@ class Hub(BaseHTTPRequestHandler):
 
 def multi_login(d, state, runtime, hub, first, s, m, made):
     """EPIC #3208 C1 for real: open · restart · remove · open again."""
-    for name in ('24haowan', 'drill2', 'drill3', 'drill4'):
+    for name in ('acme', 'drill2', 'drill3', 'drill4'):
         try:
             pwd.getpwnam(name)
             raise SystemExit('fixture login %s already exists' % name)
@@ -90,13 +90,13 @@ def multi_login(d, state, runtime, hub, first, s, m, made):
     assert json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid'] == 31022, 'legacy not migrated'
     assert (state / 'linux-tenant.json.bak').is_file() and not (state / 'linux-tenant.json').exists()
     login('open', '1234', rc=2)      # fleet-login-new.sh's codes (#3210): 2 bad argument
-    a, b = opened('24haowan'), opened('drill2')
+    a, b = opened('acme'), opened('drill2')
     assert len({a.pw_uid, b.pw_uid, 31022}) == 3, 'two logins share a number'
-    before = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in (first, '24haowan', 'drill2')}
+    before = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in (first, 'acme', 'drill2')}
     # Another login cannot enter a home.
     denied = subprocess.run(['ls', b.pw_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            preexec_fn=s.demote('24haowan', a.pw_uid, a.pw_gid, a.pw_dir))
-    assert denied.returncode != 0, '24haowan can list drill2\'s home'
+                            preexec_fn=s.demote('acme', a.pw_uid, a.pw_gid, a.pw_dir))
+    assert denied.returncode != 0, 'acme can list drill2\'s home'
     # A container restart: the image's passwd comes back without them.
     for n in before:
         subprocess.run(['userdel', n], check=True)
@@ -105,7 +105,7 @@ def multi_login(d, state, runtime, hub, first, s, m, made):
     after = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in before}
     assert after == before, 'restart changed a number or a home owner: %r → %r' % (before, after)
     print(login('list'), end='')
-    print(subprocess.run(['id', '24haowan'], capture_output=True, text=True).stdout, end='')
+    print(subprocess.run(['id', 'acme'], capture_output=True, text=True).stdout, end='')
     # A running process of drill2's is gone with it.
     sleeper = subprocess.Popen(['sleep', '300'], preexec_fn=s.demote('drill2', b.pw_uid, b.pw_gid, b.pw_dir))
     out = login('remove', 'drill2', '--keep-home')
@@ -332,7 +332,7 @@ def main():
         (state / 'linux-tenant.json').write_text(json.dumps(
             {'login': login, 'uid': 31022, 'gid': 31022, 'home': str(d / 'homes' / login)}))
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
-                                  join_file=str(code), relay='https://fleet-relay.24hw.cn')
+                                  join_file=str(code), relay='https://relay.example.com')
         try:
             install = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
                        '--join-file', str(code), '--login', login, '--login-join-file', str(code),
@@ -407,7 +407,7 @@ def main():
                 raise AssertionError('changed tenant UID accepted on existing PVC')
             print('PASS Linux installer/SSH CA; one machine + one tenant join across retry; fixed UID; separated store; shared proxy; mint')
             multi_login(d, state, runtime, args.hub, login, s, m, made)
-            print('PASS several logins: legacy declaration migrated; 24haowan + drill2 opened; numbers and homes '
+            print('PASS several logins: legacy declaration migrated; acme + drill2 opened; numbers and homes '
                   'kept across a passwd wipe; drill2 removed whole; drill3 got a fresh number')
             pod_login(d, runtime, args.hub, made)
             print('PASS a person\'s pod as its login (#3757): install + login open with no capability, no root '

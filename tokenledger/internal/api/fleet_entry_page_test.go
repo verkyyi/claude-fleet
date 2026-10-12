@@ -226,9 +226,9 @@ func TestEntryPageNoDomain(t *testing.T) {
 	}
 	// The deploy's DNS zone is the default (claude-fleet#3199) …
 	h.srv.EntryDNS = NewEntryDNS(dns.NewFake(), "cf")
-	h.srv.EntryDNS.Zone = "cf.24haowan.com"
+	h.srv.EntryDNS.Zone = "cf.example.com"
 	_, body, _ = keysPage(t, h, pAlice, "?step=4", nil)
-	if strings.Contains(body, "地址还没配好") || !strings.Contains(body, "alice.cf.24haowan.com") {
+	if strings.Contains(body, "地址还没配好") || !strings.Contains(body, "alice.cf.example.com") {
 		t.Fatalf("the deploy's zone:\n%s", body)
 	}
 	// … and a stored one wins.
@@ -253,9 +253,9 @@ func TestEntryPageMoveOnlyLiveFleets(t *testing.T) {
 	if !ok {
 		t.Fatalf("Alice has no home after her first visit")
 	}
-	other := "m4"
-	if home.Machine == "macmini-m4" {
-		other = "m5"
+	other := "mac-c"
+	if home.Machine == "mac-e-mac-c" {
+		other = "mac-d"
 	}
 	i := strings.Index(body, `id="home"`)
 	if i < 0 {
@@ -272,9 +272,9 @@ func TestEntryPageMoveOnlyLiveFleets(t *testing.T) {
 	if code != http.StatusUnprocessableEntity || !strings.Contains(body, "只能换到") {
 		t.Fatalf("move to spare: HTTP %d\n%s", code, body)
 	}
-	target := "macmini"
-	if other == "m4" {
-		target = "macmini-m4"
+	target := "mac-e"
+	if other == "mac-c" {
+		target = "mac-e-mac-c"
 	}
 	_, body, _ = keysPage(t, h, pAlice, "?move="+target+"&login=alice", nil)
 	if !strings.Contains(body, "主机钥匙变了") || !strings.Contains(body, `value="`+target+`"`) {

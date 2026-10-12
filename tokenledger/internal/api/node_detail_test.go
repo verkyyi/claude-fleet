@@ -11,10 +11,10 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// detailRig is m4 as one machine link carrying alpha, beta and gamma — the
-// issue's macmini with its three logins — each with a session, and a
-// register entry per login; plus m5, one login of the operator's. alice
-// holds alpha on m4 and nothing on m5.
+// detailRig is mac-c as one machine link carrying alpha, beta and gamma — the
+// issue's mac-e with its three logins — each with a session, and a
+// register entry per login; plus mac-d, one login of the operator's. alice
+// holds alpha on mac-c and nothing on mac-d.
 func detailRig(t *testing.T) *harness {
 	t.Helper()
 	h := newFleetHarness(t)
@@ -24,15 +24,15 @@ func detailRig(t *testing.T) *harness {
 	logins := []string{"alpha", "beta", "gamma"}
 	for _, l := range logins {
 		h.enroll(t, l)
-		identify(t, h, l, "m4", l)
+		identify(t, h, l, "mac-c", l)
 	}
 	n := dialMachine(t, h, h.tokens["mach"])
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
 	for _, l := range logins {
 		if r := n.login(l, h.tokens[l], l == "alpha", control.CapRead); r.Type != control.TypeWelcome {
 			t.Fatalf("%s's hello answered %+v", l, r)
 		}
-		n.beat(l, control.Heartbeat{Hostname: "m4", OSUser: l, NCPU: 10, Load1: 5, MemTotalBytes: 16 << 30, MemFreeBytes: 4 << 30, ObservedAt: time.Now()})
+		n.beat(l, control.Heartbeat{Hostname: "mac-c", OSUser: l, NCPU: 10, Load1: 5, MemTotalBytes: 16 << 30, MemFreeBytes: 4 << 30, ObservedAt: time.Now()})
 	}
 	started := time.Now().Add(-time.Hour).UTC()
 	var svcs []control.ServiceStatus
@@ -42,15 +42,15 @@ func detailRig(t *testing.T) *harness {
 	// The machine link reads the same kernel as its logins: the same load and
 	// memory. foldSys takes the newest row whole, so a link row without memory
 	// would blank it whenever its beat lands last (claude-fleet#2824).
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, Load1: 5, MemTotalBytes: 16 << 30, MemFreeBytes: 4 << 30, ObservedAt: time.Now(), Services: svcs})
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "m4", Login: "alpha"}); code != 200 {
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, Load1: 5, MemTotalBytes: 16 << 30, MemFreeBytes: 4 << 30, ObservedAt: time.Now(), Services: svcs})
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "mac-c", Login: "alpha"}); code != 200 {
 		t.Fatalf("adopt alice: HTTP %d", code)
 	}
-	connectNode(t, h, "m5-op", "m5", "verkyyi", false)
-	waitFor(t, 3*time.Second, "m4's logins, register and m5", func() bool {
+	connectNode(t, h, "mac-d-op", "mac-d", "ivan", false)
+	waitFor(t, 3*time.Second, "mac-c's logins, register and mac-d", func() bool {
 		snap := roster(t, h)
 		for _, m := range snap.Machines {
-			if m.Hostname == "m4" && (m.Online != 3 || len(m.Services) != 3) {
+			if m.Hostname == "mac-c" && (m.Online != 3 || len(m.Services) != 3) {
 				return false
 			}
 		}
@@ -60,7 +60,7 @@ func detailRig(t *testing.T) *harness {
 	for i, l := range logins {
 		fid := []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"}[i]
 		w, _ := json.Marshal([]map[string]any{{"key": "issue-" + l, "state": "working", "worker_id": fid + "/w"}})
-		if _, err := h.srv.Store.RecordFleetSnapshot("ep_"+l, "m4", l, "mach-m4-"+l, []store.FleetReport{{FleetID: fid,
+		if _, err := h.srv.Store.RecordFleetSnapshot("ep_"+l, "mac-c", l, "mach-mac-c-"+l, []store.FleetReport{{FleetID: fid,
 			Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(w)}}, now); err != nil {
 			t.Fatal(err)
 		}
@@ -91,26 +91,26 @@ func getDetail(t *testing.T, h *harness, path, principal string) (int, NodeDetai
 	return code, d
 }
 
-// claude-fleet#2796's 完成判据: the admin sees m4's three logins; a user sees
+// claude-fleet#2796's 完成判据: the admin sees mac-c's three logins; a user sees
 // their own row + 「另有 2 个登录」, only their own services and sessions; a
 // machine with none of their logins is 404, like one that does not exist.
 func TestNodeDetailIsCutLikeTheRoster(t *testing.T) {
 	h := detailRig(t)
 
-	code, d := getDetail(t, h, "/v1/nodes/m4", "")
+	code, d := getDetail(t, h, "/v1/nodes/mac-c", "")
 	if code != 200 {
-		t.Fatalf("operator /v1/nodes/m4: HTTP %d", code)
+		t.Fatalf("operator /v1/nodes/mac-c: HTTP %d", code)
 	}
 	if len(d.Logins) != 3 || d.OtherLogins != 0 || len(d.Services) != 3 || len(d.Sessions) != 3 {
-		t.Fatalf("operator's m4 = logins %d (+%d), services %d, sessions %d", len(d.Logins), d.OtherLogins, len(d.Services), len(d.Sessions))
+		t.Fatalf("operator's mac-c = logins %d (+%d), services %d, sessions %d", len(d.Logins), d.OtherLogins, len(d.Services), len(d.Sessions))
 	}
 	for _, l := range d.Logins {
 		if l.MachineLink {
 			t.Fatalf("the machine link is listed as a login: %+v", l)
 		}
 	}
-	if d.Machine.Hostname != "m4" || d.Load.NCPU != 10 || d.Load.Now != 5 || d.Mem.Total != 16<<30 || d.Mem.Used != 12<<30 {
-		t.Fatalf("operator's m4 machine/load/mem = %+v %+v %+v", d.Machine.Hostname, d.Load, d.Mem)
+	if d.Machine.Hostname != "mac-c" || d.Load.NCPU != 10 || d.Load.Now != 5 || d.Mem.Total != 16<<30 || d.Mem.Used != 12<<30 {
+		t.Fatalf("operator's mac-c machine/load/mem = %+v %+v %+v", d.Machine.Hostname, d.Load, d.Mem)
 	}
 	if d.Mem.Pressure == nil || *d.Mem.Pressure != 0.75 {
 		t.Fatalf("memory pressure = %v, want 0.75", d.Mem.Pressure)
@@ -126,12 +126,12 @@ func TestNodeDetailIsCutLikeTheRoster(t *testing.T) {
 		t.Fatalf("load/mem time invented: %v %v", d.Load.At, d.Mem.At)
 	}
 
-	code, d = getDetail(t, h, "/v1/nodes/m4", pAlice)
+	code, d = getDetail(t, h, "/v1/nodes/mac-c", pAlice)
 	if code != 200 {
-		t.Fatalf("alice /v1/nodes/m4: HTTP %d", code)
+		t.Fatalf("alice /v1/nodes/mac-c: HTTP %d", code)
 	}
 	if len(d.Logins) != 1 || d.Logins[0].OSUser != "alpha" || d.OtherLogins != 2 {
-		t.Fatalf("alice's m4 logins = %+v (+%d); want alpha only + 2 others", d.Logins, d.OtherLogins)
+		t.Fatalf("alice's mac-c logins = %+v (+%d); want alpha only + 2 others", d.Logins, d.OtherLogins)
 	}
 	if len(d.Services) != 1 || d.Services[0].Login != "alpha" {
 		t.Fatalf("alice sees services %+v", d.Services)
@@ -146,18 +146,18 @@ func TestNodeDetailIsCutLikeTheRoster(t *testing.T) {
 		}
 	}
 
-	for _, path := range []string{"/v1/nodes/m5", "/v1/nodes/nosuch"} {
+	for _, path := range []string{"/v1/nodes/mac-d", "/v1/nodes/nosuch"} {
 		if code, _ := getDetail(t, h, path, pAlice); code != http.StatusNotFound {
 			t.Fatalf("alice %s: HTTP %d, want 404", path, code)
 		}
 	}
-	// carol has no login anywhere: m4 is 404 for her too.
-	if code, _ := getDetail(t, h, "/v1/nodes/m4", pCarol); code != http.StatusNotFound {
-		t.Fatalf("carol /v1/nodes/m4: HTTP %d, want 404", code)
+	// carol has no login anywhere: mac-c is 404 for her too.
+	if code, _ := getDetail(t, h, "/v1/nodes/mac-c", pCarol); code != http.StatusNotFound {
+		t.Fatalf("carol /v1/nodes/mac-c: HTTP %d, want 404", code)
 	}
-	// The operator opens m5; the name is matched case aside.
-	if code, d := getDetail(t, h, "/v1/nodes/M5", ""); code != 200 || d.Machine.Hostname != "m5" {
-		t.Fatalf("operator /v1/nodes/M5: HTTP %d %+v", code, d.Machine)
+	// The operator opens mac-d; the name is matched case aside.
+	if code, d := getDetail(t, h, "/v1/nodes/MAC-D", ""); code != 200 || d.Machine.Hostname != "mac-d" {
+		t.Fatalf("operator /v1/nodes/MAC-D: HTTP %d %+v", code, d.Machine)
 	}
 }
 
@@ -165,8 +165,8 @@ func TestNodeDetailIsCutLikeTheRoster(t *testing.T) {
 // under /v1/nodes/ is no machine.
 func TestNodeDetailRoutes(t *testing.T) {
 	h := detailRig(t)
-	if code, _ := getDetail(t, h, "/v1/nodes/m4/extra", ""); code != http.StatusNotFound {
-		t.Fatalf("/v1/nodes/m4/extra: HTTP %d, want 404", code)
+	if code, _ := getDetail(t, h, "/v1/nodes/mac-c/extra", ""); code != http.StatusNotFound {
+		t.Fatalf("/v1/nodes/mac-c/extra: HTTP %d, want 404", code)
 	}
 	if code, _ := getDetail(t, h, "/v1/nodes/", ""); code != http.StatusNotFound {
 		t.Fatalf("/v1/nodes/: HTTP %d, want 404", code)
@@ -179,13 +179,13 @@ func TestNodeDetailRoutes(t *testing.T) {
 
 // machineMatches: the hostname, its first label, its alias — case aside.
 func TestMachineMatches(t *testing.T) {
-	m := MachineView{Hostname: "macmini.tail435588.ts.net", Alias: "mini"}
-	for _, n := range []string{"macmini.tail435588.ts.net", "macmini", "MacMini", "mini"} {
+	m := MachineView{Hostname: "mac-e.example.ts.net", Alias: "mini"}
+	for _, n := range []string{"mac-e.example.ts.net", "mac-e", "Mac-e", "mini"} {
 		if !machineMatches(m, n) {
 			t.Fatalf("%q does not match %+v", n, m)
 		}
 	}
-	for _, n := range []string{"mac", "m4", ""} {
+	for _, n := range []string{"mac", "mac-c", ""} {
 		if machineMatches(m, n) {
 			t.Fatalf("%q matches %+v", n, m)
 		}

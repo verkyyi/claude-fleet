@@ -12,7 +12,7 @@ import (
 // Principals and their per-machine OS logins (claude-fleet#1411).
 //
 // A principal is one person, keyed by gh:<their GitHub ID> (claude-fleet#1984). Each principal has ONE login name, generated
-// here once and used on every machine — so "alice on m4" and "alice on m5" are
+// here once and used on every machine — so "alice on mac-a" and "alice on mac-b" are
 // the same person and a client can ssh to either without a lookup. An account
 // row is (principal, machine): the hub's record of whether that login exists
 // there yet.

@@ -59,9 +59,9 @@ func TestRelayDeliverExitCodes(t *testing.T) {
 func TestRelayWorkersWritesTheCache(t *testing.T) {
 	p := fakeHubNodeScript(t, "exit 0")
 	w := control.Workers{Rows: []control.WorkerLoc{
-		{WorkerID: "a/issue-1", Node: "m4", OriginWID: "b/issue-2"},
-		{WorkerID: "a/issue-3", Node: "m4:lost"},
-		{WorkerID: "bad\tid", Node: "m4"},
+		{WorkerID: "a/issue-1", Node: "mac-a", OriginWID: "b/issue-2"},
+		{WorkerID: "a/issue-3", Node: "mac-a:lost"},
+		{WorkerID: "bad\tid", Node: "mac-a"},
 	}}
 	raw, _ := json.Marshal(w)
 	if err := relayWorkers(p, control.Message{Payload: raw}); err != nil {
@@ -71,7 +71,7 @@ func TestRelayWorkersWritesTheCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "a/issue-1\tm4\tb/issue-2\na/issue-3\tm4:lost\t\n"; string(b) != want {
+	if want := "a/issue-1\tmac-a\tb/issue-2\na/issue-3\tmac-a:lost\t\n"; string(b) != want {
 		t.Fatalf("cache = %q; want %q", b, want)
 	}
 }

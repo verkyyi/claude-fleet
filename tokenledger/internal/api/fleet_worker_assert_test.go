@@ -21,7 +21,7 @@ const assertFid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 func assertClaims(fleet string, now time.Time) workerClaims {
 	return workerClaims{V: 1, WorkerID: fleetid.WorkerID(fleet, assertFid), FleetUUID: fleet, Fid: assertFid,
-		Key: "issue-1", Repo: writeRepo, Issue: "1", Node: "m5", Iat: now.Unix(), Exp: now.Add(5 * time.Minute).Unix()}
+		Key: "issue-1", Repo: writeRepo, Issue: "1", Node: "mac-d", Iat: now.Unix(), Exp: now.Add(5 * time.Minute).Unix()}
 }
 
 func placeAs(t *testing.T, h *harness, token, assertion string, body map[string]any) (int, map[string]any) {
@@ -61,34 +61,34 @@ func placeAudits(t *testing.T, h *harness) []auditRow {
 	return out
 }
 
-// The completion check: m5's session issue-1 asks for #7, the hub places it on
-// m4 with that session as the parent, and the audit + journal name it.
+// The completion check: mac-d's session issue-1 asks for #7, the hub places it on
+// mac-c with that session as the parent, and the audit + journal name it.
 func TestWorkerAssertionPlaceAudited(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
 	now := time.Now()
 	c := assertClaims(f5.FleetID, now)
-	tok5 := h.tokens["m5"]
+	tok5 := h.tokens["mac-d"]
 	st, out := placeAs(t, h, tok5, signWorkerAssertion(c, HashToken(tok5)),
 		map[string]any{"repo": writeRepo, "issue": 7, "worker_id": issueWID(f5.FleetID, 7)})
 	if st != 200 || out["local"] != false {
 		t.Fatalf("place = %d %v; want a remote placement", st, out)
 	}
-	if m5.count() != 0 || m4.count() != 1 {
-		t.Fatalf("writes: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
-	if p := m4.writes[0]["params"].(map[string]any); p["origin_wid"] != c.WorkerID {
-		t.Fatalf("m4 was sent origin_wid %v; want the asserting session %s", p["origin_wid"], c.WorkerID)
+	if p := macC.writes[0]["params"].(map[string]any); p["origin_wid"] != c.WorkerID {
+		t.Fatalf("mac-c was sent origin_wid %v; want the asserting session %s", p["origin_wid"], c.WorkerID)
 	}
 	a := placeAudits(t, h)
-	if len(a) != 1 || a[0].actor != "node:verk@m5" || a[0].worker != c.WorkerID || a[0].key != "issue-1" ||
-		!strings.HasPrefix(a[0].outcome, "REMOTE m4 ") {
-		t.Fatalf("audit = %+v; want node:verk@m5 for %s (issue-1) → REMOTE m4", a, c.WorkerID)
+	if len(a) != 1 || a[0].actor != "node:frank@mac-d" || a[0].worker != c.WorkerID || a[0].key != "issue-1" ||
+		!strings.HasPrefix(a[0].outcome, "REMOTE mac-c ") {
+		t.Fatalf("audit = %+v; want node:frank@mac-d for %s (issue-1) → REMOTE mac-c", a, c.WorkerID)
 	}
 	t.Logf("audit: actor=%s worker_id=%s worker_key=%s action=place outcome=%s", a[0].actor, a[0].worker, a[0].key, a[0].outcome)
 	op, err := h.srv.Store.FleetOperation(out["operation"].(map[string]any)["operation_id"].(string))
 	if err != nil || op.WorkerID != c.WorkerID || op.FleetID != f4.FleetID {
-		t.Fatalf("journal = %+v %v; want worker_id %s on m4's fleet", op, err, c.WorkerID)
+		t.Fatalf("journal = %+v %v; want worker_id %s on mac-c's fleet", op, err, c.WorkerID)
 	}
 }
 
@@ -96,9 +96,9 @@ func TestWorkerAssertionPlaceAudited(t *testing.T) {
 // this node's token), tampered, expired, malformed — never read as the node's
 // own call.
 func TestWorkerAssertionForgedRefused(t *testing.T) {
-	h, m5, m4, f5, _ := twoNodes(t)
+	h, macD, macC, f5, _ := twoNodes(t)
 	now := time.Now()
-	tok5 := h.tokens["m5"]
+	tok5 := h.tokens["mac-d"]
 	c := assertClaims(f5.FleetID, now)
 	good := signWorkerAssertion(c, HashToken(tok5))
 	old := c
@@ -106,7 +106,7 @@ func TestWorkerAssertionForgedRefused(t *testing.T) {
 	long := c
 	long.Exp = now.Add(48 * time.Hour).Unix()
 	cases := map[string]string{
-		"another node's key": signWorkerAssertion(c, HashToken(h.tokens["m4"])),
+		"another node's key": signWorkerAssertion(c, HashToken(h.tokens["mac-c"])),
 		"tampered":           good[:len(good)-2] + "xx",
 		"expired":            signWorkerAssertion(old, HashToken(tok5)),
 		"over 24h":           signWorkerAssertion(long, HashToken(tok5)),
@@ -118,7 +118,7 @@ func TestWorkerAssertionForgedRefused(t *testing.T) {
 			t.Errorf("%s: %d %v; want 401 UNAUTHENTICATED", name, st, out)
 		}
 	}
-	if m5.count()+m4.count() != 0 {
+	if macD.count()+macC.count() != 0 {
 		t.Fatal("a refused assertion sent a write")
 	}
 	for _, a := range placeAudits(t, h) {
@@ -131,10 +131,10 @@ func TestWorkerAssertionForgedRefused(t *testing.T) {
 // Out of scope is NOT_FOUND: a session of a fleet this node does not run, or
 // a start whose parent is someone other than the asserting session.
 func TestWorkerAssertionOutOfScope(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
+	h, macD, macC, f5, f4 := twoNodes(t)
 	now := time.Now()
-	tok5 := h.tokens["m5"]
-	other := signWorkerAssertion(assertClaims(f4.FleetID, now), HashToken(tok5)) // m4's fleet, signed by m5
+	tok5 := h.tokens["mac-d"]
+	other := signWorkerAssertion(assertClaims(f4.FleetID, now), HashToken(tok5)) // mac-c's fleet, signed by mac-d
 	st, out := placeAs(t, h, tok5, other, map[string]any{"repo": writeRepo, "issue": 9, "worker_id": issueWID(f5.FleetID, 9)})
 	if e, _ := out["error"].(map[string]any); st != 404 || e["code"] != "NOT_FOUND" {
 		t.Fatalf("another fleet's session: %d %v; want 404 NOT_FOUND", st, out)
@@ -145,7 +145,7 @@ func TestWorkerAssertionOutOfScope(t *testing.T) {
 	if e, _ := out["error"].(map[string]any); st != 404 || e["code"] != "NOT_FOUND" {
 		t.Fatalf("a start for another parent: %d %v; want 404 NOT_FOUND", st, out)
 	}
-	if m5.count()+m4.count() != 0 {
+	if macD.count()+macC.count() != 0 {
 		t.Fatal("an out-of-scope assertion sent a write")
 	}
 	// Its own key as the parent (the alias, claude-fleet#1646) is itself.
@@ -160,8 +160,8 @@ func TestWorkerAssertionRelay(t *testing.T) {
 	h := newFleetHarness(t)
 	fa := fakeFleet(t, machineA, "fleet-a", writeRepo, "/u/a/repo", 1)
 	fb := fakeFleet(t, machineB, "fleet-b", writeRepo, "/u/b/repo", 2)
-	connectFakeNode(t, h, "a", false).beat("m5", "op", machineA, fa)
-	connectFakeNode(t, h, "b", false).beat("m4", "op", machineB, fb)
+	connectFakeNode(t, h, "a", false).beat("mac-d", "op", machineA, fa)
+	connectFakeNode(t, h, "b", false).beat("mac-c", "op", machineB, fb)
 	waitFor(t, 5*time.Second, "fleets registered", func() bool {
 		_, ea := h.srv.Store.Fleet(fa.FleetID)
 		_, eb := h.srv.Store.Fleet(fb.FleetID)

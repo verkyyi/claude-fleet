@@ -5,14 +5,14 @@
 # retarget, fleet-hub-sessions.sh's client mode, tmux-status.sh's bar in the shell.
 #
 # Nothing real is reached: the hub is FLEET_HUB_SESSIONS_CMD (a fleet_sessions
-# JSON with two machines, m5 and m4), `fleet-connect.py` is a FAKE beside a
+# JSON with two machines, mac-b and mac-a), `fleet-connect.py` is a FAKE beside a
 # mirrored bin/ (it records its argv and prints a --pick answer), ssh is a shim
 # (FLEET_REMOTE_SSH_CMD) that records the remote command instead of running it,
 # and the shell's tmux server is its own isolated socket (`-L <session>`), killed
 # at the end. The shell starts with FLEET_SHELL_NO_ATTACH=1 (no terminal here).
 #   A. degenerate  — the client is the only way in (#1628): no tmux on PATH → ONE
 #                    hint line, exit 1, fleet-connect.py never run; no terminal →
-#                    exit 2, no server; `fleet m5 --print` → exit 2 naming `fleet
+#                    exit 2, no server; `fleet mac-b --print` → exit 2 naming `fleet
 #                    connect`, never run; fleet-hub-sessions.sh without
 #                    FLEET_HUB_SESSIONS_CLIENT lists the conf dir's fleets, not a
 #                    pseudo-fleet
@@ -27,23 +27,23 @@
 #                    `home`, the environment set on both servers, the conf-free
 #                    mirror in place
 #   C. data        — the client-mode loop writes remote_<sess> with EVERY row remote
-#                    (local=0, #me empty, a #node line per machine, m5 included),
+#                    (local=0, #me empty, a #node line per machine, mac-b included),
 #                    hub_ok fresh; the row producer in the shell's environment lists
 #                    the hub's rows and none of the shell's own windows
-#   D. same machine— `open` on an m5 row: its own stage window (`attach --shell
-#                    <wid>`), the wait note gives way; `open` on the other m5 row
+#   D. same machine— `open` on an mac-b row: its own stage window (`attach --shell
+#                    <wid>`), the wait note gives way; `open` on the other mac-b row
 #                    with the pane's control socket answering: `select <wid>` goes
-#                    over it, the stage window is retargeted (`@remote=m5:<wid>`),
+#                    over it, the stage window is retargeted (`@remote=mac-b:<wid>`),
 #                    NO respawn, the list pane's id unchanged
-#   E. other machine— `open` on an m4 row: a second STAGE window `<name> · @m4` (no ⇄,
+#   E. other machine— `open` on an mac-a row: a second STAGE window `<name> · @mac-a` (no ⇄,
 #                    #1621), current there; `jump` leaves the list where it is — the
-#                    shell's server still holds one window, the same two panes; m5's
+#                    shell's server still holds one window, the same two panes; mac-b's
 #                    stage window stays (shell-switch-repaint-selftest.sh measures
 #                    that the switch repaints only the right pane)
-#   F. bar         — tmux-status.sh with the shell's env and the m4 window's args
-#                    renders hub mode: the m4 chip (online, off the #node line —
+#   F. bar         — tmux-status.sh with the shell's env and the mac-a window's args
+#                    renders hub mode: the mac-a chip (online, off the #node line —
 #                    no hub_nodes), ● 入口; the window list is blanked; `rr=relay`
-#                    (the window on the hub relay, #1628) → `m4 · 中转`; the
+#                    (the window on the hub relay, #1628) → `mac-a · 中转`; the
 #                    stage's title (`part=title`, #1759) says only what follows
 #                    the machine's name: nothing when all is well, ` · 中转`
 #   G. lost        — hub_ok aged past FLEET_HUB_SESSIONS_STALE: the rows are still
@@ -58,8 +58,8 @@
 #                    (worker_id = <fleet UUID>/<key>, the fleet's repo, this host)
 #   J. node source — (issue #1488) hub_ok aged and the hub failing: the loop asks
 #                    each machine the shell holds a live connection to for its
-#                    sessions over that connection; m5 answers → its rows are the
-#                    node's, via=node, never `!` (a dim ⇄ for the view: `m5~`); m4
+#                    sessions over that connection; mac-b answers → its rows are the
+#                    node's, via=node, never `!` (a dim ⇄ for the view: `mac-b~`); mac-a
 #                    does not → its last hub rows stand, via=hub, 失联; hub_ok is
 #                    untouched, the ETag dropped; the hub's next answer takes the
 #                    cache back (via=hub everywhere). A NODE (no client knob) never
@@ -92,7 +92,7 @@ export FLEET_HUB_SESSIONS_LOOP_SECS=8 FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSI
 export FLEET_SHELL_WARM=0   # the warm connections (#1631) have their own test: fleet-shell-warm-selftest.sh
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_SHELL FLEET_HUB_SESSIONS_CLIENT FLEET_SIDEBAR_SOURCE
 unset FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_REMOTE_SSH_CMD
-# the client's own machine for the @本机 mark (#1780): never m5/m4, whatever box runs this
+# the client's own machine for the @本机 mark (#1780): never mac-b/mac-a, whatever box runs this
 export FLEET_SIDEBAR_HOST=selftest-host
 # A hub address (the fake connect and FLEET_HUB_SESSIONS_CMD stand in for the
 # hub itself): legs A–J are the hub client. Leg K takes it away (#1712).
@@ -140,9 +140,9 @@ if "--pick" in sys.argv:
     if not os.path.exists(os.path.join("$WORK", "hub.ok")):
         sys.stderr.write("fleet connect: no hub URL: run the installer (curl -fsSL <入口>/install | sh)\\n"); sys.exit(2)
     want = [a for a in sys.argv[1:] if not a.startswith("-")]
-    m = want[0] if want else "m5"
-    print(json.dumps({"machine": m, "hostname": {"m5": "macmini", "m4": "mini2"}.get(m, m), "reason": "last",
-                      "login": "verk", "machines": [{"alias": "m5", "hostname": "macmini"}, {"alias": "m4", "hostname": "mini2"}]}))
+    m = want[0] if want else "mac-b"
+    print(json.dumps({"machine": m, "hostname": {"mac-b": "mac-c", "mac-a": "mac-d"}.get(m, m), "reason": "last",
+                      "login": "bob", "machines": [{"alias": "mac-b", "hostname": "mac-c"}, {"alias": "mac-a", "hostname": "mac-d"}]}))
     sys.exit(0)
 if "--enter" in sys.argv:
     sys.stderr.write("fake-connect: enter " + " ".join(sys.argv[1:]) + "\\n")
@@ -188,13 +188,13 @@ export FLEET_REMOTE_SSH_CMD="$SHIM/ssh"
 # --- the hub: fleet_sessions for two machines, this login's rows only --------------
 cat > "$WORK/sessions.json" <<'EOF'
 {"sessions": [
-  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "macmini", "os_user": "verk",
+  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "mac-c", "os_user": "bob",
    "availability": "online", "observed_at": "2026-10-04T10:00:00Z",
    "worker": {"issue": 7, "repo": "acme/app", "state": "working", "agent": "claude", "name": "issue-7", "needs": ""}},
-  {"worker_id": "11111111-1111-4111-8111-111111111111/scratch-3", "machine_name": "macmini", "os_user": "verk",
+  {"worker_id": "11111111-1111-4111-8111-111111111111/scratch-3", "machine_name": "mac-c", "os_user": "bob",
    "availability": "online", "observed_at": "2026-10-04T10:00:00Z",
    "worker": {"issue": 0, "repo": "", "state": "idle", "agent": "claude", "name": "notes", "needs": ""}},
-  {"worker_id": "22222222-2222-4222-8222-222222222222/issue-9", "machine_name": "mini2", "os_user": "verk",
+  {"worker_id": "22222222-2222-4222-8222-222222222222/issue-9", "machine_name": "mac-d", "os_user": "bob",
    "availability": "online", "observed_at": "2026-10-04T10:00:00Z",
    "worker": {"issue": 9, "repo": "acme/app", "state": "needs", "agent": "claude", "name": "issue-9", "needs": "ask"}},
   {"worker_id": "33333333-3333-4333-8333-333333333333/issue-1", "machine_name": "other", "os_user": "someone",
@@ -202,12 +202,12 @@ cat > "$WORK/sessions.json" <<'EOF'
    "worker": {"issue": 1, "repo": "x/y", "state": "working", "agent": "claude", "name": "issue-1", "needs": ""}}
  ],
  "nodes": [
-  {"machine_name": "macmini", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:00:00Z"},
-  {"machine_name": "mini2", "availability": "online", "sessions": 1, "observed_at": "2026-10-04T10:00:00Z"}
+  {"machine_name": "mac-c", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:00:00Z"},
+  {"machine_name": "mac-d", "availability": "online", "sessions": 1, "observed_at": "2026-10-04T10:00:00Z"}
  ]}
 EOF
 export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json"
-export FLEET_HUB_SESSIONS_USER=verk
+export FLEET_HUB_SESSIONS_USER=bob
 
 # ================================================================================
 # A. degenerate
@@ -230,10 +230,10 @@ eq 'A: no terminal → fleet-connect.py never ran' '' "$(cat "$WORK/connect.argv
 CHECKS=$((CHECKS + 1)); ts has-session -t "=$SESS" 2>/dev/null && fail 'A: no terminal must not start the shell server'
 # more words than a machine: the client only — connect's options are `fleet connect`'s
 : > "$WORK/connect.argv"
-out=$("$SB/fleet" m5 --print 2>&1); rc=$?
-eq 'A: fleet m5 --print → exit 2' 2 "$rc"
-has 'A: … naming fleet connect' "$out" 'fleet connect m5 --print'
-eq 'A: fleet m5 --print ran no connect' '' "$(cat "$WORK/connect.argv")"
+out=$("$SB/fleet" mac-b --print 2>&1); rc=$?
+eq 'A: fleet mac-b --print → exit 2' 2 "$rc"
+has 'A: … naming fleet connect' "$out" 'fleet connect mac-b --print'
+eq 'A: fleet mac-b --print ran no connect' '' "$(cat "$WORK/connect.argv")"
 # fleet-hub-sessions.sh without the client knob: the conf dir's fleets, byte for byte
 mkdir -p "$WORK/degen-conf/fleets/plainfleet"; printf 'FLEET_REPO=acme/app\n' > "$WORK/degen-conf/fleets/plainfleet/conf"
 ( export TMPDIR="$WORK/degen" FLEET_CONF_DIR="$WORK/degen-conf"; mkdir -p "$TMPDIR"; CCQUOTA_FLEET=1 bash "$SB/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
@@ -292,7 +292,7 @@ has 'B: a tap on the top line goes to its click (#1904)' "$(cat "$WORK/cache/tmu
 has 'B: server env client mode' "$env_g" "FLEET_HUB_SESSIONS_CLIENT=$SESS"
 has 'B: server env hub source' "$env_g" 'FLEET_SIDEBAR_SOURCE=hub'
 has 'B: server env TMPDIR under the cache' "$env_g" "TMPDIR=$WORK/cache/tmp"
-has 'B: server env aliases from the pick' "$env_g" 'FLEET_NODE_ALIASES=macmini=m5 mini2=m4'
+has 'B: server env aliases from the pick' "$env_g" 'FLEET_NODE_ALIASES=mac-c=mac-b mac-d=mac-a'
 CHECKS=$((CHECKS + 1)); [ -L "$WORK/cache/bin/fleet-sidebar.py" ] || fail 'B: the conf-free mirror has the scripts'
 CHECKS=$((CHECKS + 1)); [ -e "$WORK/cache/fleet.conf" ] && fail 'B: the mirror must have no sibling fleet.conf'
 has 'B: tmux.conf names the mirror' "$(cat "$WORK/cache/tmux.conf")" "$WORK/cache/bin/tmux-status.sh"
@@ -316,10 +316,10 @@ CHECKS=$((CHECKS + 1)); waitfor 15 test -s "$G/remote_$SESS" || fail 'C: the kee
 cache=$(tr '\037' '|' < "$G/remote_$SESS" 2>/dev/null)
 has 'C: #me is empty in client mode' "$cache" '#me|'
 hasnt 'C: #me names no host' "$cache" "#me|$(hostname -s | cut -d. -f1)"
-has 'C: a #node line for m5' "$cache" '#node|m5|online|2|'
-has 'C: a #node line for m4' "$cache" '#node|m4|online|1|'
-has 'C: the m5 worker row is REMOTE (local=0)' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|m5|online|7|acme/app|working|claude|issue-7|||0|'
-has 'C: the m4 row with its need' "$cache" 'wid:22222222-2222-4222-8222-222222222222/issue-9|m4|online|9|acme/app|needs|claude|issue-9||ask|0|'
+has 'C: a #node line for mac-b' "$cache" '#node|mac-b|online|2|'
+has 'C: a #node line for mac-a' "$cache" '#node|mac-a|online|1|'
+has 'C: the mac-b worker row is REMOTE (local=0)' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|mac-b|online|7|acme/app|working|claude|issue-7|||0|'
+has 'C: the mac-a row with its need' "$cache" 'wid:22222222-2222-4222-8222-222222222222/issue-9|mac-a|online|9|acme/app|needs|claude|issue-9||ask|0|'
 hasnt 'C: another login is not a row' "$cache" 'someone'
 hasnt 'C: another login is not a row (wid)' "$cache" '33333333'
 CHECKS=$((CHECKS + 1)); waitfor 5 test -s "$G/hub_ok" || fail 'C: hub_ok written'   # same round as the cache, a beat later
@@ -328,14 +328,14 @@ CHECKS=$((CHECKS + 1)); [ -e "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && fail
 rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$wh" \
         FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
         bash "$WORK/cache/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
-has 'C: the producer lists the m5 worker' "$rows" 'issue-7'
-has 'C: the producer lists the m4 worker' "$rows" 'issue-9'
+has 'C: the producer lists the mac-b worker' "$rows" 'issue-7'
+has 'C: the producer lists the mac-a worker' "$rows" 'issue-9'
 has 'C: the producer lists the scratch row' "$rows" 'notes'
-eq 'C: the shell window itself is not a row' '' "$(printf '%s\n' "$rows" | awk -F'|' -v w="$wh" '$1 == w || $4 == "m5" || $4 == "home"')"
-hasnt 'C: no row is tagged lost while the hub answers' "$rows" 'm5!'
+eq 'C: the shell window itself is not a row' '' "$(printf '%s\n' "$rows" | awk -F'|' -v w="$wh" '$1 == w || $4 == "mac-b" || $4 == "home"')"
+hasnt 'C: no row is tagged lost while the hub answers' "$rows" 'mac-b!'
 
 # ================================================================================
-# D. same machine — open an m5 row: select over the control socket, no respawn
+# D. same machine — open an mac-b row: select over the control socket, no respawn
 # ================================================================================
 # what the list's own pane runs `open` with: the shell's server environment
 openrow() {
@@ -345,8 +345,8 @@ openrow() {
 : > "$WORK/ssh.log"
 w1=$(openrow 'wid:11111111-1111-4111-8111-111111111111/issue-7')
 CHECKS=$((CHECKS + 1)); case "$w1" in @*) ;; *) fail 'D: open printed a window id' "$w1" ;; esac
-eq 'D: @remote = m5:<wid>' 'm5:11111111-1111-4111-8111-111111111111/issue-7' "$(tsg show-options -wqv -t "$w1" @remote)"
-CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "attach --shell '11111111-1111-4111-8111-111111111111/issue-7'" "$WORK/ssh.log" || fail 'D: the far end m5 was asked to attach the row' "$(cat "$WORK/ssh.log")"
+eq 'D: @remote = mac-b:<wid>' 'mac-b:11111111-1111-4111-8111-111111111111/issue-7' "$(tsg show-options -wqv -t "$w1" @remote)"
+CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "attach --shell '11111111-1111-4111-8111-111111111111/issue-7'" "$WORK/ssh.log" || fail 'D: the far end mac-b was asked to attach the row' "$(cat "$WORK/ssh.log")"
 CHECKS=$((CHECKS + 1)); waitfor 5 test -S "$(tsg show-options -wqv -t "$w1" @remote_ctl)" || fail 'D: run stashed a live @remote_ctl on its window' "$(tsg show-options -wqv -t "$w1" @remote_ctl)"
 onestage() { [ "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)" = 1 ]; }
 CHECKS=$((CHECKS + 1)); waitfor 5 onestage || fail 'D: the wait note gave way to the row' "$(tsg list-windows -t "=$SESS-stage" -F '#{window_id} #{@remote}')"
@@ -354,8 +354,8 @@ pane_pid=$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)
 : > "$WORK/ssh.log"
 out=$(openrow 'wid:11111111-1111-4111-8111-111111111111/scratch-3')
 eq 'D: open printed the SAME (stage) window' "$w1" "$out"
-eq 'D: @remote retargeted to the worker' 'm5:11111111-1111-4111-8111-111111111111/scratch-3' "$(tsg show-options -wqv -t "$w1" @remote)"
-eq 'D: the window is renamed after the row' 'notes · @m5' "$(tsg display-message -p -t "$w1" '#{window_name}')"
+eq 'D: @remote retargeted to the worker' 'mac-b:11111111-1111-4111-8111-111111111111/scratch-3' "$(tsg show-options -wqv -t "$w1" @remote)"
+eq 'D: the window is renamed after the row' 'notes · @mac-b' "$(tsg display-message -p -t "$w1" '#{window_name}')"
 has 'D: select went over the connection' "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '11111111-1111-4111-8111-111111111111/scratch-3'"
 hasnt 'D: no second attach (no respawn)' "$(cat "$WORK/ssh.log")" 'attach'
 eq 'D: the ssh pane was NOT respawned (same pid)' "$pane_pid" "$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)"
@@ -364,19 +364,19 @@ eq 'D: still one stage window' 1 "$(tsg list-windows -t "=$SESS-stage" -F x | gr
 eq 'D: still one shell window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
 
 # ================================================================================
-# E. other machine — open an m4 row: a second window, the list pane follows
+# E. other machine — open an mac-a row: a second window, the list pane follows
 # ================================================================================
 : > "$WORK/ssh.log"
 w2=$(openrow 'wid:22222222-2222-4222-8222-222222222222/issue-9')
-CHECKS=$((CHECKS + 1)); case "$w2" in @*) [ "$w2" != "$w1" ] || fail 'E: a NEW window for m4' "$w2" ;; *) fail 'E: open printed a window id' "$w2" ;; esac
+CHECKS=$((CHECKS + 1)); case "$w2" in @*) [ "$w2" != "$w1" ] || fail 'E: a NEW window for mac-a' "$w2" ;; *) fail 'E: open printed a window id' "$w2" ;; esac
 eq 'E: two stage windows now' 2 "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)"
-eq 'E: the m4 window is current on the stage' "$w2" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
-eq 'E: titled <name> · @m4 (#1780), no prefix, no ⇄ (#1621)' 'issue-9 · @m4' "$(tsg display-message -p -t "$w2" '#{window_name}')"
-eq 'E: @remote = m4:<wid>' 'm4:22222222-2222-4222-8222-222222222222/issue-9' "$(tsg show-options -wqv -t "$w2" @remote)"
+eq 'E: the mac-a window is current on the stage' "$w2" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
+eq 'E: titled <name> · @mac-a (#1780), no prefix, no ⇄ (#1621)' 'issue-9 · @mac-a' "$(tsg display-message -p -t "$w2" '#{window_name}')"
+eq 'E: @remote = mac-a:<wid>' 'mac-a:22222222-2222-4222-8222-222222222222/issue-9' "$(tsg show-options -wqv -t "$w2" @remote)"
 eq 'E: the shell still holds ONE window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
-CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "^m4	.*run\|^m4	" "$WORK/ssh.log" || fail 'E: the far end m4 was asked to attach' "$(cat "$WORK/ssh.log")"
-has 'E: run --shell → attach --shell on m4' "$(cat "$WORK/ssh.log")" "attach --shell '22222222-2222-4222-8222-222222222222/issue-9'"
-# fleet-sidebar.py jump (what Enter does) on an m5 row: the stage switches back,
+CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "^mac-a	.*run\|^mac-a	" "$WORK/ssh.log" || fail 'E: the far end mac-a was asked to attach' "$(cat "$WORK/ssh.log")"
+has 'E: run --shell → attach --shell on mac-a' "$(cat "$WORK/ssh.log")" "attach --shell '22222222-2222-4222-8222-222222222222/issue-9'"
+# fleet-sidebar.py jump (what Enter does) on an mac-b row: the stage switches back,
 # the list stays — no pane moved, no window made on the shell's server
 ( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SHELL_STAGE="$SESS-stage" FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" \
   python3 - "$SESS" 'wid:11111111-1111-4111-8111-111111111111/issue-7' "$view" "$WORK/cache/lock" <<'PY'
@@ -385,43 +385,43 @@ spec = importlib.util.spec_from_file_location("sb", "fleet-sidebar.py"); m = imp
 m.jump(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
 PY
 )
-eq 'E: jump: the m5 window is current on the stage again' "$w1" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
+eq 'E: jump: the mac-b window is current on the stage again' "$w1" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
 eq 'E: jump: the list pane did not move' "$view" "$(view_of "$wh")"
 eq 'E: jump: home still has its two panes, no slot' 2 "$(ts list-panes -t "$wh" -F x | grep -c x)"
 eq 'E: jump: still one shell window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
-eq 'E: the m4 window is still there' 'issue-9 · @m4' "$(tsg display-message -p -t "$w2" '#{window_name}')"
+eq 'E: the mac-a window is still there' 'issue-9 · @mac-a' "$(tsg display-message -p -t "$w2" '#{window_name}')"
 
 # ================================================================================
-# F. the bar — tmux-status.sh in the shell's environment, for the m4 window
+# F. the bar — tmux-status.sh in the shell's environment, for the mac-a window
 # ================================================================================
 bar() {  # <window> [k=v…] — the bar as the conf's status-right runs it
   local w=$1; shift
-  ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='macmini=m5 mini2=m4' \
+  ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='mac-c=mac-b mac-d=mac-a' \
     TMUX="$(ts display-message -p '#{socket_path}'),0,0" HOSTNAME=laptop \
     bash "$WORK/cache/bin/tmux-status.sh" "sess=$SESS" "win=$w" "remote=$(tsg show-options -wqv -t "$w" @remote)" acct= wsf=x wscf=y wsaved= "$@" 2>/dev/null )
 }
 title() {  # <window> [k=v…] — the stage's title words, as its status-left runs them (#1759)
   local w=$1; shift
-  ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='macmini=m5 mini2=m4' \
+  ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='mac-c=mac-b mac-d=mac-a' \
     HOSTNAME=laptop bash "$WORK/cache/bin/tmux-status.sh" part=title "sess=$SESS" "remote=$(tsg show-options -wqv -t "$w" @remote)" "$@" 2>/dev/null )
 }
 b=$(bar "$w2")
-has 'F: the bar names m4 (the right pane machine)' "$b" 'm4 '
-hasnt 'F: m4 online off the #node line (no hub_nodes) → its name, no 失联' "$b" '失联'
+has 'F: the bar names mac-a (the right pane machine)' "$b" 'mac-a '
+hasnt 'F: mac-a online off the #node line (no hub_nodes) → its name, no 失联' "$b" '失联'
 hasnt 'F: no `?` for a machine the hub lists' "$b" '?'
 hasnt 'F: a healthy hub draws no ● 入口 (issue #1616: only what wants a hand)' "$b" '入口'
 hasnt 'F: no local 负载 for a remote window' "$b" '负载'
 hasnt 'F: a direct line (rr= empty) draws no 中转' "$b" '中转'
 # issue #1628: the window's connection on the hub relay (@remote_route relay, which
 # fleet-remote-view.sh stamps) → the machine chip says so; empty → byte for byte
-has 'F: rr=relay → m4 · 中转' "$(bar "$w2" rr=relay)" 'm4 · 中转'
+has 'F: rr=relay → mac-a · 中转' "$(bar "$w2" rr=relay)" 'mac-a · 中转'
 eq 'F: rr= / cr= empty → the bar byte for byte as without them' "$b" "$(bar "$w2" rr= cr=)"
 b5=$(bar "$w1")
-has 'F: the m5 window says m5' "$b5" 'm5 '
+has 'F: the mac-b window says mac-b' "$b5" 'mac-b '
 eq 'F: the window list was blanked (hub mode)' '1' "$(ts show-options -gqv @status_wlist_saved)"
 # the client's conf runs it `part=quiet` since issue #2365: the same work, nothing drawn
 eq 'F: part=quiet → nothing drawn' '' "$(bar "$w2" part=quiet)"
-eq 'F: title: m4 online → nothing after its name' '' "$(title "$w2")"
+eq 'F: title: mac-a online → nothing after its name' '' "$(title "$w2")"
 eq 'F: title: rr=relay → · 中转' ' · 中转' "$(title "$w2" rr=relay)"
 
 # ================================================================================
@@ -433,9 +433,9 @@ old=$(( $(date +%s) - 400 )); printf '%s\n' "$old" > "$G/hub_ok"
 rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$w2" \
         FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
         bash "$WORK/cache/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
-has 'G: the m4 row is still listed' "$rows" 'issue-9'
-has 'G: the m5 row is still listed' "$rows" 'issue-7'
-has 'G: rows are marked lost' "$rows" 'm4!'
+has 'G: the mac-a row is still listed' "$rows" 'issue-9'
+has 'G: the mac-b row is still listed' "$rows" 'issue-7'
+has 'G: rows are marked lost' "$rows" 'mac-a!'
 b=$(bar "$w2")
 has 'G: the bar says ○ 入口 <age>' "$b" '○ #[fg=#7aa2f7]入口 #[fg=#f7768e]6m'
 printf '%s\n' "$(date +%s)" > "$G/hub_ok"
@@ -446,66 +446,66 @@ printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 # ================================================================================
 old=$(( $(date +%s) - 400 )); printf '%s\n' "$old" > "$G/hub_ok"
 printf 'etag-of-the-last-hub-body\n' > "$G/hubsess.etag"
-# what m5 says of itself (fleet-remote-view.sh sessions): a different login name
+# what mac-b says of itself (fleet-remote-view.sh sessions): a different login name
 # (the node's), one row the hub knew — now needs/ask — one it never had, and the
-# scratch row gone; m4 has no staged answer, so its connection "fails"
-cat > "$WORK/node-m5.json" <<'EOF'
+# scratch row gone; mac-a has no staged answer, so its connection "fails"
+cat > "$WORK/node-mac-b.json" <<'EOF'
 {"sessions": [
-  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "macmini", "os_user": "verkyyi-on-the-node",
+  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "mac-c", "os_user": "dave-on-the-node",
    "availability": "online", "observed_at": "2026-10-04T10:30:00Z",
    "worker": {"issue": 7, "repo": "acme/app", "state": "needs", "agent": "claude", "name": "issue-7", "needs": "ask"}},
-  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-12", "machine_name": "macmini", "os_user": "verkyyi-on-the-node",
+  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-12", "machine_name": "mac-c", "os_user": "dave-on-the-node",
    "availability": "online", "observed_at": "2026-10-04T10:30:00Z",
    "worker": {"issue": 12, "repo": "acme/app", "state": "working", "agent": "claude", "name": "issue-12", "needs": ""}}
  ],
- "nodes": [{"machine_name": "macmini", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:30:00Z"}]}
+ "nodes": [{"machine_name": "mac-c", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:30:00Z"}]}
 EOF
 : > "$WORK/ssh.log"
 # the loop as the keeper runs it: the server's environment (aliases from the pick)
-( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD=false FLEET_NODE_ALIASES='macmini=m5 mini2=m4'
+( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD=false FLEET_NODE_ALIASES='mac-c=mac-b mac-d=mac-a'
   bash "$WORK/cache/bin/fleet-hub-sessions.sh" --refresh 2>"$WORK/node.err" ); rc=$?
 eq 'J: the refresh stood on the node rows (exit 0)' 0 "$rc"
-has 'J: m5 was asked for its sessions over its connection' "$(cat "$WORK/ssh.log")" "m5	bash $BIN/fleet-remote-view.sh sessions"
-has 'J: m4 was asked too (its connection is live)' "$(cat "$WORK/ssh.log")" "m4	bash $BIN/fleet-remote-view.sh sessions"
+has 'J: mac-b was asked for its sessions over its connection' "$(cat "$WORK/ssh.log")" "mac-b	bash $BIN/fleet-remote-view.sh sessions"
+has 'J: mac-a was asked too (its connection is live)' "$(cat "$WORK/ssh.log")" "mac-a	bash $BIN/fleet-remote-view.sh sessions"
 hasnt 'J: nothing was asked to attach or select' "$(cat "$WORK/ssh.log")" 'attach'
 cache=$(tr '\037' '|' < "$G/remote_$SESS")
-has 'J: an m5 row the hub never had, via=node' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-12|m5|online|12|acme/app|working|claude|issue-12|||0||node'
-has 'J: the m5 row the hub knew is REFRESHED from the node (needs/ask now), via=node' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|m5|online|7|acme/app|needs|claude|issue-7||ask|0||node'
-hasnt 'J: the m5 scratch row the node no longer has is gone' "$cache" 'scratch-3'
-has 'J: the m4 row is KEPT from the last hub answer, via=hub' "$cache" 'wid:22222222-2222-4222-8222-222222222222/issue-9|m4|online|9|acme/app|needs|claude|issue-9||ask|0||hub'
+has 'J: an mac-b row the hub never had, via=node' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-12|mac-b|online|12|acme/app|working|claude|issue-12|||0||node'
+has 'J: the mac-b row the hub knew is REFRESHED from the node (needs/ask now), via=node' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|mac-b|online|7|acme/app|needs|claude|issue-7||ask|0||node'
+hasnt 'J: the mac-b scratch row the node no longer has is gone' "$cache" 'scratch-3'
+has 'J: the mac-a row is KEPT from the last hub answer, via=hub' "$cache" 'wid:22222222-2222-4222-8222-222222222222/issue-9|mac-a|online|9|acme/app|needs|claude|issue-9||ask|0||hub'
 nodeline() { printf '%s\n' "$cache" | awk -F'|' -v n="$2" '$1 == "#node" && $2 == n { print $3, $4, $6; exit }'; }
-eq 'J: the m5 #node line is the node'"'"'s: online, its count, via=node' 'online 2 node' "$(nodeline "$cache" m5)"
-eq 'J: the m4 #node line is kept: online as the hub last said, via=hub' 'online 1 hub' "$(nodeline "$cache" m4)"
+eq 'J: the mac-b #node line is the node'"'"'s: online, its count, via=node' 'online 2 node' "$(nodeline "$cache" mac-b)"
+eq 'J: the mac-a #node line is kept: online as the hub last said, via=hub' 'online 1 hub' "$(nodeline "$cache" mac-a)"
 eq 'J: every #node line precedes every row' '' "$(printf '%s\n' "$cache" | awk -F'|' 'seen && $1 == "#node" { print NR } $1 ~ /^wid:/ { seen = 1 }')"
 eq 'J: hub_ok is NOT touched (the hub IS silent)' "$old" "$(cat "$G/hub_ok")"
 CHECKS=$((CHECKS + 1)); [ -e "$G/hubsess.etag" ] && fail 'J: the ETag must be dropped so the hub'"'"'s next answer is a full body'
-has 'J: the loop said which machine answered' "$(cat "$WORK/node.err")" 'm5'
-has 'J: …and which did not' "$(cat "$WORK/node.err")" 'm4 did not answer'
-# the producer: m5's rows are live (never `!`) and marked `~`; m4's read 失联
+has 'J: the loop said which machine answered' "$(cat "$WORK/node.err")" 'mac-b'
+has 'J: …and which did not' "$(cat "$WORK/node.err")" 'mac-a did not answer'
+# the producer: mac-b's rows are live (never `!`) and marked `~`; mac-a's read 失联
 rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$w2" \
         FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
         bash "$WORK/cache/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
 has 'J: the producer lists the node row' "$rows" 'issue-12'
-has 'J: …marked as heard over the connection (m5~)' "$rows" '|m5~'
-hasnt 'J: …never lost' "$rows" 'm5!'
-has 'J: the m4 row still reads lost' "$rows" 'm4!'
-# the view: a `~` row's machine is `@m5~` (issue #1780; a name, never a ⇄,
+has 'J: …marked as heard over the connection (mac-b~)' "$rows" '|mac-b~'
+hasnt 'J: …never lost' "$rows" 'mac-b!'
+has 'J: the mac-a row still reads lost' "$rows" 'mac-a!'
+# the view: a `~` row's machine is `@mac-b~` (issue #1780; a name, never a ⇄,
 # #1621) — named in the bar (issue #2305), so the row asks no cells for it
 CHECKS=$((CHECKS + 1)); ( cd "$WORK/cache/bin" && python3 - <<'PY'
 import importlib.util
 spec = importlib.util.spec_from_file_location("sb", "fleet-sidebar.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-plain = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "m5")))
-via = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "m5~")))
-assert (m.machine_tag("m5~"), m.machine_tag("m5"), m.machine_tag("m4!")) == ("@m5~", "@m5", "@m4!"), m.machine_tag("m5~")
+plain = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "mac-b")))
+via = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "mac-b~")))
+assert (m.machine_tag("mac-b~"), m.machine_tag("mac-b"), m.machine_tag("mac-a!")) == ("@mac-b~", "@mac-b", "@mac-a!"), m.machine_tag("mac-b~")
 assert m.row_need(via) == m.row_need(plain), (m.row_need(via), m.row_need(plain))
-assert m.detail_line(via) == "issue-12 · @m5~", m.detail_line(via)
+assert m.detail_line(via) == "issue-12 · @mac-b~", m.detail_line(via)
 PY
-) || fail 'J: a ~ row names @m5~ in the bar and asks the row no cells for it'
+) || fail 'J: a ~ row names @mac-b~ in the bar and asks the row no cells for it'
 # the hub answers again: its rows take the cache back, via=hub everywhere
-( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_NODE_ALIASES='macmini=m5 mini2=m4'
+( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_NODE_ALIASES='mac-c=mac-b mac-d=mac-a'
   bash "$WORK/cache/bin/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
 cache=$(tr '\037' '|' < "$G/remote_$SESS")
-has 'J: back on the hub: the m5 row is the hub'"'"'s again, via=hub' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|m5|online|7|acme/app|working|claude|issue-7|||0||hub'
+has 'J: back on the hub: the mac-b row is the hub'"'"'s again, via=hub' "$cache" 'wid:11111111-1111-4111-8111-111111111111/issue-7|mac-b|online|7|acme/app|working|claude|issue-7|||0||hub'
 hasnt 'J: back on the hub: no via=node line remains' "$cache" '|node'
 has 'J: back on the hub: the scratch row is back' "$cache" 'scratch-3'
 hasnt 'J: back on the hub: the node-only row is gone' "$cache" 'issue-12'
@@ -525,24 +525,24 @@ hasnt 'J: …and carries no via=node line' "$(tr '\037' '|' < "$WORK/degen/.clau
 # ================================================================================
 : > "$WORK/connect.argv"
 out=$( PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -tt -o ServerAliveInterval=5 -o ControlMaster=yes -o "ControlPath=$WORK/x.ctl" -o ControlPersist=no \
-       -o "ProxyCommand=fleet connect --proxy m4" m4 "bash .claude/fleet/bin/fleet-remote-view.sh attach --shell 'w' 'v'" 2>&1 )
+       -o "ProxyCommand=fleet connect --proxy mac-a" mac-a "bash .claude/fleet/bin/fleet-remote-view.sh attach --shell 'w' 'v'" 2>&1 )
 argv=$(cat "$WORK/connect.argv")
-has 'H: a master goes to fleet-connect.py --enter m4' "$argv" '--enter m4'
+has 'H: a master goes to fleet-connect.py --enter mac-a' "$argv" '--enter mac-a'
 has 'H: control options kept' "$argv" "-o ControlPath=$WORK/x.ctl"
 has 'H: keepalive kept' "$argv" '-o ServerAliveInterval=5'
 has 'H: -tt → RequestTTY=force' "$argv" '-o RequestTTY=force'
 hasnt 'H: ProxyCommand dropped (fleet connect decides the route)' "$argv" 'ProxyCommand'
 has 'H: the remote command after --' "$argv" "-- bash .claude/fleet/bin/fleet-remote-view.sh attach --shell 'w' 'v'"
 : > "$WORK/ssh.log"
-PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -S "$WORK/x.ctl" m4 "bash .claude/fleet/bin/fleet-remote-view.sh select 'w'" >/dev/null 2>&1
-has 'H: a slave (-S) is plain ssh over the socket' "$(cat "$WORK/ssh.log")" "m4	bash .claude/fleet/bin/fleet-remote-view.sh select 'w'"
+PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -S "$WORK/x.ctl" mac-a "bash .claude/fleet/bin/fleet-remote-view.sh select 'w'" >/dev/null 2>&1
+has 'H: a slave (-S) is plain ssh over the socket' "$(cat "$WORK/ssh.log")" "mac-a	bash .claude/fleet/bin/fleet-remote-view.sh select 'w'"
 eq 'H: a slave never asks fleet connect' 0 "$(grep -c select "$WORK/connect.argv")"
 # issue #1775: a session on a master never re-asks the config's static forwards
 # (a second `RemoteForward 2226` is refused, and a refused mux client never
 # attaches); fleet-open's `-O forward -L` bridge keeps its own -L
 has 'H: a slave (-S) clears the config forwards' "$(grep select "$WORK/ssh.argv")" '-o ClearAllForwardings=yes'
 : > "$WORK/ssh.argv"
-PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -S "$WORK/x.ctl" -O forward -L 127.0.0.1:1:127.0.0.1:2 m4 >/dev/null 2>&1
+PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -S "$WORK/x.ctl" -O forward -L 127.0.0.1:1:127.0.0.1:2 mac-a >/dev/null 2>&1
 hasnt 'H: …an -O forward does not' "$(cat "$WORK/ssh.argv")" 'ClearAllForwardings'
 has 'H: …and keeps its -L' "$(cat "$WORK/ssh.argv")" '-L 127.0.0.1:1:127.0.0.1:2'
 me=$(hostname -s | cut -d. -f1)

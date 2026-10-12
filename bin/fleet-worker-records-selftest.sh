@@ -23,11 +23,11 @@
 #                   evidence is written under remote/<slug>/<issue>/ and printed
 #                   as a row; history rows print with their machine
 #   D. evidence     list --epic: a member with local captures is untouched; a
-#                   `none` member fills from the hub (`[@m4]` note, the cached
+#                   `none` member fills from the hub (`[@mac-a]` note, the cached
 #                   path); one the hub saw run elsewhere without a capture reads
-#                   「在 m4 上跑过，没拍」; hub down → 「别机未查（入口不可达）」;
+#                   「在 mac-a 上跑过，没拍」; hub down → 「别机未查（入口不可达）」;
 #                   export copies the remote file beside the page
-#   E. history      list merges another machine's row (summary `@m4 …`), skips a
+#   E. history      list merges another machine's row (summary `@mac-a …`), skips a
 #                   session this ledger already has; --local leaves it out
 #   F. old hub      404 → exit 3, nothing printed
 #   G. wiring       fleet_reap_record pushes after recording; fleet-report-parent
@@ -166,11 +166,11 @@ ROW9=$(printf '2026-10-05T02:00:00Z\t9\tno shots\t90\tfff0000\t/wt/issue-9\t/t\t
 ROWDUP=$(printf '2026-10-05T01:00:00Z\t7\tthe title\t70\tabc1234\t/wt/issue-7\t/t\tsid-local\t-\tlanded\tissue-5')
 cat > "$WORK/get.json" <<EOF
 {"records":[
- {"fleet_id":"$OWN","node":"m5","repo":"o/r","issue":7,"kind":"evidence","name":"after-x-own.txt","stage":"after","ts":"T0","content":"$(b64 own)"},
- {"fleet_id":"$OTHER","node":"m4","repo":"o/r","issue":8,"kind":"evidence","name":"after-20261005T030000Z-shot.png","stage":"after","ts":"20261005T030000Z","note":"the after","content":"$(b64 PNGBYTES)"},
- {"fleet_id":"$OTHER","node":"m4","repo":"o/r","issue":8,"kind":"history","name":"ledger","stage":"landed","content":"$(b64 "$ROW8")"},
- {"fleet_id":"$OTHER","node":"m4","repo":"o/r","issue":9,"kind":"history","name":"ledger","stage":"landed","content":"$(b64 "$ROW9")"},
- {"fleet_id":"$OTHER","node":"m4","repo":"o/r","issue":7,"kind":"history","name":"ledger","stage":"landed","content":"$(b64 "$ROWDUP")"}
+ {"fleet_id":"$OWN","node":"mac-b","repo":"o/r","issue":7,"kind":"evidence","name":"after-x-own.txt","stage":"after","ts":"T0","content":"$(b64 own)"},
+ {"fleet_id":"$OTHER","node":"mac-a","repo":"o/r","issue":8,"kind":"evidence","name":"after-20261005T030000Z-shot.png","stage":"after","ts":"20261005T030000Z","note":"the after","content":"$(b64 PNGBYTES)"},
+ {"fleet_id":"$OTHER","node":"mac-a","repo":"o/r","issue":8,"kind":"history","name":"ledger","stage":"landed","content":"$(b64 "$ROW8")"},
+ {"fleet_id":"$OTHER","node":"mac-a","repo":"o/r","issue":9,"kind":"history","name":"ledger","stage":"landed","content":"$(b64 "$ROW9")"},
+ {"fleet_id":"$OTHER","node":"mac-a","repo":"o/r","issue":7,"kind":"history","name":"ledger","stage":"landed","content":"$(b64 "$ROWDUP")"}
 ]}
 EOF
 reset; export FAKE_GET="$WORK/get.json"
@@ -178,17 +178,17 @@ out=$(bash "$SUT" fetch --session wrsess --repo o/r --epic 5 2>"$WORK/err"); rc=
 [ "$rc" -eq 0 ] || fail "C: fetch exit $rc: $(cat "$WORK/err")"; ok
 hasnt "C: this fleet's own upload is skipped" "$out" "own"
 RP="$FLEET_CONF_DIR/fleets/wrsess/remote/o-r/8/after-20261005T030000Z-shot.png"
-has "C: the evidence row" "$out" "$(printf 'evidence\t8\tafter\t20261005T030000Z\t%s\tthe after\tm4' "$RP")"
+has "C: the evidence row" "$out" "$(printf 'evidence\t8\tafter\t20261005T030000Z\t%s\tthe after\tmac-a' "$RP")"
 [ "$(cat "$RP" 2>/dev/null)" = PNGBYTES ] || fail "C: the remote file was not written"; ok
-has "C: a history row" "$out" "$(printf 'history\t9\tm4\t%s' "$ROW9")"
+has "C: a history row" "$out" "$(printf 'history\t9\tmac-a\t%s' "$ROW9")"
 has "C: asks by epic" "$(cat "$STUB_LOG")" "worker-records?repo=o/r&epic=5"
 
 # ---- D. evidence list / export -----------------------------------------------
 reset; export FAKE_GET="$WORK/get.json"
 out=$(GH_SUBS='7\n8\n9\n10\n' bash "$EV" list --session wrsess --epic 5 2>&1)
 has "D: member 7 keeps its local rows" "$out" "$(printf '7\tbefore\t')"
-has "D: member 8 filled from the hub" "$out" "$(printf '8\tafter\t20261005T030000Z\t%s\t[@m4] the after' "$RP")"
-has "D: member 9 ran elsewhere, no shot" "$out" "$(printf '9\tnone\t\t\t在 m4 上跑过，没拍')"
+has "D: member 8 filled from the hub" "$out" "$(printf '8\tafter\t20261005T030000Z\t%s\t[@mac-a] the after' "$RP")"
+has "D: member 9 ran elsewhere, no shot" "$out" "$(printf '9\tnone\t\t\t在 mac-a 上跑过，没拍')"
 has "D: member 10 plain none" "$out" "$(printf '10\tnone\t\t\t\n')"
 out=$(FAKE_RC=7 GH_SUBS='7\n8\n9\n10\n' bash "$EV" list --session wrsess --epic 5 2>&1)
 has "D: hub down" "$out" "$(printf '9\tnone\t\t\t别机未查（入口不可达）')"
@@ -196,12 +196,12 @@ mkdir -p "$WORK/page"
 out=$(GH_SUBS='7\n8\n9\n' bash "$EV" export --session wrsess --epic 5 "$WORK/page" 2>&1)
 has "D: export prints the relative path" "$out" "$(printf '8\tafter\t20261005T030000Z\tevidence/8/after-20261005T030000Z-shot.png')"
 [ "$(cat "$WORK/page/evidence/8/after-20261005T030000Z-shot.png" 2>/dev/null)" = PNGBYTES ] || fail "D: export did not copy the remote file"; ok
-has "D: export keeps the none note" "$out" "在 m4 上跑过，没拍"
+has "D: export keeps the none note" "$out" "在 mac-a 上跑过，没拍"
 
 # ---- E. history list ---------------------------------------------------------
 reset; export FAKE_GET="$WORK/get.json"
 out=$(bash "$HI" list --repo o/r 2>&1)
-has "E: the remote row, marked" "$out" "@m4"
+has "E: the remote row, marked" "$out" "@mac-a"
 has "E: the remote title" "$out" "remote title"
 n=$(printf '%s\n' "$out" | grep -c 'the title')
 [ "$n" -eq 1 ] || fail "E: a session the ledger has is listed $n times" "$out"; ok

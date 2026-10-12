@@ -28,12 +28,12 @@ func seedReviewHarness(t *testing.T, h *harness) {
 		}
 		e := model.UsageEvent{AccountUUID: "acct-a", EndpointID: "ep_mac", SessionID: session, MessageUUID: uuid,
 			TS: base.Add(time.Duration(min) * time.Minute), Model: m, OutputTokens: out, CacheRead: 900,
-			CWD: cwd, OSUser: "verkyyi"}
+			CWD: cwd, OSUser: "ivan"}
 		return e
 	}
 	batch := model.Batch{Identity: model.Identity{
 		AccountUUID: "acct-a", Email: "acct-a@example.com", Hostname: "mac",
-		OS: "darwin", Arch: "arm64", SubscriptionType: "max", OSUser: "verkyyi",
+		OS: "darwin", Arch: "arm64", SubscriptionType: "max", OSUser: "ivan",
 	}, AccountOrigin: model.OriginLogin, Events: []model.UsageEvent{
 		mk("1", "s-big", "/p/alpha", 0, 100, true), mk("2", "s-big", "/p/alpha", 30, 100, true),
 		mk("3", "s-small", "/p/beta", 130, 20, false)}}

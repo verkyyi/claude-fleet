@@ -344,7 +344,7 @@ conf 'FLEET_CLEANUP_MAX_PER_TICK=2'
 run s1
 [ "$(reaped_list)" = "101 102" ] || fail 'the PR pass takes the cap first'
 [ ! -s "$WORK/idle-calls" ] || fail 'no slot left: the idle pass must not run'
-# issue #3352: macmini's idle pass timed out (rc=124) every tick and the tick
+# issue #3352: mac-c's idle pass timed out (rc=124) every tick and the tick
 # ended there — not one merged worker was reaped for over half an hour.
 touch "$WORK/idle-timeout"
 reset

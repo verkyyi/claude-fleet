@@ -192,20 +192,20 @@ func asPerson(t *testing.T, h *harness, method, path, principal string, body []b
 	return resp.StatusCode, b
 }
 
-// Hub side of "only see your own": two people with a login each on m4; each
+// Hub side of "only see your own": two people with a login each on mac-c; each
 // one's roster shows their own login and never the other's, and neither can
 // assign themselves anything.
 func TestFleetPrincipalSeesOnlyOwnNodes(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice, pBob, pCarol)
 	for _, p := range [][2]string{{pAlice, "alice"}, {pBob, "bob"}} {
-		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: p[0], Hostname: "m4", Login: p[1]}); code != 200 {
+		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: p[0], Hostname: "mac-c", Login: p[1]}); code != 200 {
 			t.Fatalf("adopt %s: HTTP %d", p[0], code)
 		}
 	}
-	connectNode(t, h, "m4-alice", "m4", "alice", false)
-	connectNode(t, h, "m4-bob", "m4", "bob", false)
-	connectNode(t, h, "m4-op", "m4", "verkyyi", false)
+	connectNode(t, h, "mac-c-alice", "mac-c", "alice", false)
+	connectNode(t, h, "mac-c-bob", "mac-c", "bob", false)
+	connectNode(t, h, "mac-c-op", "mac-c", "ivan", false)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
 
 	for sub, want := range map[string]string{pAlice: "alice", pBob: "bob"} {
@@ -229,7 +229,7 @@ func TestFleetPrincipalSeesOnlyOwnNodes(t *testing.T) {
 			t.Fatalf("%s /v1/fleet/me = %d %s", sub, code, body)
 		}
 
-		req, _ := json.Marshal(FleetAccountRequest{Action: "adopt", PrincipalID: sub, Hostname: "m5", Login: want})
+		req, _ := json.Marshal(FleetAccountRequest{Action: "adopt", PrincipalID: sub, Hostname: "mac-d", Login: want})
 		if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/accounts", sub, req); code != http.StatusForbidden {
 			t.Fatalf("%s changed accounts with a GitHub session: HTTP %d, want 403", sub, code)
 		}
@@ -255,12 +255,12 @@ func TestFleetPrincipalSeesOnlyOwnNodes(t *testing.T) {
 // and its result makes the account active.
 func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	impostor := connectNode(t, h, "m4-mallory", "m4", "mallory", true)
-	other := connectNode(t, h, "m5-op", "m5", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	impostor := connectNode(t, h, "mac-c-mallory", "mac-c", "mallory", true)
+	other := connectNode(t, h, "mac-d-op", "mac-d", "ivan", true)
 
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-c"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	m, op := expectAccountOp(t, admin.tnode)
@@ -272,7 +272,7 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 			t.Fatalf("%s node received %+v", name, got)
 		}
 	}
-	if a := accountState(t, h, "WangXiaoMing", "m4"); a.State != store.AccountCreating || a.OpID != m.OpID {
+	if a := accountState(t, h, "WangXiaoMing", "mac-c"); a.State != store.AccountCreating || a.OpID != m.OpID {
 		t.Fatalf("after send: %+v", a)
 	}
 
@@ -281,7 +281,7 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 	if r, ok := readMsg(impostor.tnode, 3*time.Second); !ok || r.Type != control.TypeError || r.Error.Code != control.CodeNotAdmin {
 		t.Fatalf("impostor's result answered with %+v", r)
 	}
-	if a := accountState(t, h, "WangXiaoMing", "m4"); a.State != store.AccountCreating {
+	if a := accountState(t, h, "WangXiaoMing", "mac-c"); a.State != store.AccountCreating {
 		t.Fatalf("impostor's result moved the account: %+v", a)
 	}
 
@@ -289,23 +289,23 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 	if ack, ok := readMsg(admin.tnode, 3*time.Second); !ok || ack.Type != control.TypeAck || ack.OpID != m.OpID {
 		t.Fatalf("result answered with %+v", ack)
 	}
-	waitState(t, h, "WangXiaoMing", "m4", store.AccountActive)
+	waitState(t, h, "WangXiaoMing", "mac-c", store.AccountActive)
 
 	// The roster says which node is the admin.
 	for _, n := range roster(t, h).Nodes {
-		if want := n.OSUser == "verkyyi"; n.Admin != want {
+		if want := n.OSUser == "ivan"; n.Admin != want {
 			t.Fatalf("node %s@%s admin=%v, want %v", n.OSUser, n.Hostname, n.Admin, want)
 		}
 	}
 
 	// Assigning again never re-runs a creation that worked.
-	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"})
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-c"})
 	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok {
 		t.Fatalf("a second assign re-sent %+v", got)
 	}
 
 	// Removal is the other fixed op.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: "WangXiaoMing", Hostname: "mac-c"}); code != 200 {
 		t.Fatalf("remove: HTTP %d", code)
 	}
 	m, op = expectAccountOp(t, admin.tnode)
@@ -313,7 +313,7 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 		t.Fatalf("remove op = %+v", op)
 	}
 	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, OK: true})
-	waitState(t, h, "WangXiaoMing", "m4", store.AccountRemoved)
+	waitState(t, h, "WangXiaoMing", "mac-c", store.AccountRemoved)
 }
 
 // The success criterion's path: a person's first GitHub sign-in queues their
@@ -325,9 +325,9 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	h := newFleetHarness(t)
 	const pZhang = "gh:2001" // their login is their GitHub username, user2001 (claude-fleet#2069)
 	enablePeople(t, h, pZhang)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	setHubSetting(t, h.srv, AutoAssignKey, "m4")
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-c")
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
 
 	// What the GitHub callback runs once the person is through.
 	enter := func() { h.srv.onPrincipalSignIn(pZhang, "zhangsan") }
@@ -338,25 +338,25 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	}
 
 	admin.c.Close(websocket.StatusGoingAway, "link lost")
-	a := waitState(t, h, pZhang, "m4", store.AccountUnknown)
+	a := waitState(t, h, pZhang, "mac-c", store.AccountUnknown)
 	if a.OpID != m.OpID {
 		t.Fatalf("unknown row lost its op_id: %+v", a)
 	}
 
 	// Back: the hub asks again, once, under the same op_id...
 	c := dialAdmin(t, h, admin.token, true)
-	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verkyyi"})
+	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "ivan"})
 	m2, op2 := expectAccountOp(t, c)
 	if m2.OpID != m.OpID || op2.Op != control.AccountCreate || op2.Login != op.Login {
 		t.Fatalf("asked again with %s %+v; want op %s, the same create", m2.OpID, op2, m.OpID)
 	}
-	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verkyyi"})
+	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "ivan"})
 	if got, ok := readMsg(c, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("asked again on every beat: %+v", got)
 	}
 	// ...and the node's answer settles it.
 	sendResult(t, c.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, pZhang, "m4", store.AccountActive)
+	waitState(t, h, pZhang, "mac-c", store.AccountActive)
 
 	// A second sign-in queues nothing.
 	enter()
@@ -372,18 +372,18 @@ func TestFleetUnknownOpFailsAfterGiveUp(t *testing.T) {
 	h := newFleetHarness(t)
 	const pZhang = "gh:2001"
 	enablePeople(t, h, pZhang)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	setHubSetting(t, h.srv, AutoAssignKey, "m4")
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-c")
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
 	h.srv.onPrincipalSignIn(pZhang, "zhangsan")
 	expectAccountOp(t, admin.tnode)
-	a := waitState(t, h, pZhang, "m4", store.AccountCreating)
+	a := waitState(t, h, pZhang, "mac-c", store.AccountCreating)
 	if err := h.srv.Store.LoseAccountOps(a.EndpointID, time.Now().Add(-accountUnknownGiveUp-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	h.srv.dispatchAccounts()
-	a = waitState(t, h, pZhang, "m4", store.AccountFailed)
-	if !strings.Contains(a.Detail, "no answer from m4 in 30 min") || !strings.Contains(a.Detail, "control channel closed") {
+	a = waitState(t, h, pZhang, "mac-c", store.AccountFailed)
+	if !strings.Contains(a.Detail, "no answer from mac-c in 30 min") || !strings.Contains(a.Detail, "control channel closed") {
 		t.Fatalf("detail = %q; want why it failed", a.Detail)
 	}
 	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
@@ -398,16 +398,16 @@ func TestFleetAutoAssignedLoginIsTheirScope(t *testing.T) {
 	h := newFleetHarness(t)
 	const p = "gh:2001"
 	enablePeople(t, h, p)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	setHubSetting(t, h.srv, AutoAssignKey, "m4")
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-c")
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
 	if got, err := h.srv.machineLoginOf(p); err != nil || got != "" {
 		t.Fatalf("before any sign-in: machineLoginOf = %q, %v; want \"\"", got, err)
 	}
 	h.srv.onPrincipalSignIn(p, "zhangsan")
 	m, op := expectAccountOp(t, admin.tnode)
 	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, p, "m4", store.AccountActive)
+	waitState(t, h, p, "mac-c", store.AccountActive)
 	_, certLogins, _, err := h.srv.fleetLoginsOf(p)
 	if err != nil || len(certLogins) != 1 {
 		t.Fatalf("fleetLoginsOf = %v, %v", certLogins, err)
@@ -433,14 +433,14 @@ func TestFleetAutoAssignedLoginIsTheirScope(t *testing.T) {
 // The operator retries or adopts.
 func TestFleetExistingLoginIsFailedNotActive(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "m4"})
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "mac-c"})
 	m, op := expectAccountOp(t, admin.tnode)
 	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 3, Exists: true})
-	waitState(t, h, "lisi", "m4", store.AccountFailed)
+	waitState(t, h, "lisi", "mac-c", store.AccountFailed)
 
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "retry", PrincipalID: "lisi", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "retry", PrincipalID: "lisi", Hostname: "mac-c"}); code != 200 {
 		t.Fatalf("retry: HTTP %d", code)
 	}
 	m2, _ := expectAccountOp(t, admin.tnode)
@@ -452,16 +452,16 @@ func TestFleetExistingLoginIsFailedNotActive(t *testing.T) {
 // A node that refuses an op (not an admin on its own side) fails it.
 func TestFleetNodeRefusalFailsTheOp(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "m4"})
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "mac-c"})
 	m, _ := expectAccountOp(t, admin.tnode)
 	refusal := control.Message{Type: control.TypeError, OpID: m.OpID, Proto: control.Proto,
 		Error: &control.Error{Code: control.CodeNotAdmin, Message: "not started as admin"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	wsjson.Write(ctx, admin.c, refusal)
-	a := waitState(t, h, "lisi", "m4", store.AccountFailed)
+	a := waitState(t, h, "lisi", "mac-c", store.AccountFailed)
 	if a.Detail == "" {
 		t.Fatal("a refusal left no reason")
 	}
@@ -512,80 +512,80 @@ func TestPrincipalLoginsAreUnique(t *testing.T) {
 	}
 }
 
-// An adopted digit-leading login (`24haowan`) can be opened on a second machine:
+// An adopted digit-leading login (`24globex`) can be opened on a second machine:
 // assign queues it marked existing, and the node gets the same login. With no
 // active copy elsewhere the assign is a 400 on the spot and leaves no row
 // (claude-fleet#2105).
 func TestFleetAssignExistingDigitLogin(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	m5 := connectNode(t, h, "m5-op", "m5", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	macD := connectNode(t, h, "mac-d-op", "mac-d", "ivan", true)
 	const pCao = "gh:2987262"
 
 	// Adopted nowhere yet: nothing to copy.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCao, Hostname: "m4", Login: "24haowan"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCao, Hostname: "mac-c", Login: "24globex"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: pCao, Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: pCao, Hostname: "mac-c"}); code != 200 {
 		t.Fatalf("remove: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pCao, Hostname: "m5"}); code != http.StatusBadRequest {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pCao, Hostname: "mac-d"}); code != http.StatusBadRequest {
 		t.Fatalf("assign with no active copy: HTTP %d, want 400", code)
 	}
-	if as, _ := h.srv.Store.FleetAccounts(pCao); len(as) != 1 || as[0].Hostname != "m4" {
+	if as, _ := h.srv.Store.FleetAccounts(pCao); len(as) != 1 || as[0].Hostname != "mac-c" {
 		t.Fatalf("a refused assign left rows: %+v", as)
 	}
-	if got, ok := readMsg(m5.tnode, 300*time.Millisecond); ok {
+	if got, ok := readMsg(macD.tnode, 300*time.Millisecond); ok {
 		t.Fatalf("a refused assign sent %+v", got)
 	}
 
-	// Active on m4: m5 gets a create of the same login, marked existing.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCao, Hostname: "m4", Login: "24haowan"}); code != 200 {
+	// Active on mac-c: mac-d gets a create of the same login, marked existing.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCao, Hostname: "mac-c", Login: "24globex"}); code != 200 {
 		t.Fatalf("re-adopt: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pCao, Hostname: "m5"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pCao, Hostname: "mac-d"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
-	m, op := expectAccountOp(t, m5.tnode)
-	if op.Op != control.AccountCreate || op.Login != "24haowan" || !op.Existing {
-		t.Fatalf("op = %+v; want create 24haowan existing", op)
+	m, op := expectAccountOp(t, macD.tnode)
+	if op.Op != control.AccountCreate || op.Login != "24globex" || !op.Existing {
+		t.Fatalf("op = %+v; want create 24globex existing", op)
 	}
-	sendResult(t, m5.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, pCao, "m5", store.AccountActive)
+	sendResult(t, macD.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, pCao, "mac-d", store.AccountActive)
 }
 
 // A minted login is never marked existing.
 func TestFleetAssignMintedLoginNotExisting(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "m4"})
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "mac-c"})
 	if _, op := expectAccountOp(t, admin.tnode); op.Existing {
 		t.Fatalf("minted login marked existing: %+v", op)
 	}
 }
 
 // claude-fleet#2210: the operator's own login on a machine is the admin one
-// (verkyyi, passwordless sudo). relogin moves their row there to a fresh
+// (ivan, passwordless sudo). relogin moves their row there to a fresh
 // standard login and queues its create on the admin node — never a remove of
 // the old one — and adopt of the old login undoes it without running anything.
 func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m5-op", "m5", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-d-op", "mac-d", "ivan", true)
 	const pid = "gh:2718137"
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "mac-d", Login: "ivan"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m4", Login: "verkyyi"}); code != 200 {
-		t.Fatalf("adopt m4: HTTP %d", code)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "mac-c", Login: "ivan"}); code != 200 {
+		t.Fatalf("adopt mac-c: HTTP %d", code)
 	}
 
 	// Refused: an admin login, an invalid name, the same name, a machine with no row.
 	for name, req := range map[string]FleetAccountRequest{
-		"admin login": {Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"},
-		"bad name":    {Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "9dev"},
-		"reserved":    {Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "admin"},
+		"admin login": {Action: "relogin", PrincipalID: pid, Hostname: "mac-d", Login: "ivan"},
+		"bad name":    {Action: "relogin", PrincipalID: pid, Hostname: "mac-d", Login: "9dev"},
+		"reserved":    {Action: "relogin", PrincipalID: pid, Hostname: "mac-d", Login: "admin"},
 		"no row":      {Action: "relogin", PrincipalID: pid, Hostname: "m9", Login: "verkydev"},
 		"no host":     {Action: "relogin", PrincipalID: pid, Login: "verkydev"},
 	} {
@@ -597,7 +597,7 @@ func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
 		t.Fatalf("a refused relogin sent %+v", got)
 	}
 
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "verkydev"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "mac-d", Login: "verkydev"}); code != 200 {
 		t.Fatalf("relogin: HTTP %d", code)
 	}
 	m, op := expectAccountOp(t, admin.tnode)
@@ -605,19 +605,19 @@ func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
 		t.Fatalf("relogin op = %+v", op)
 	}
 	// While in flight a second relogin refuses.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "verkyabc"}); code != http.StatusConflict {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "mac-d", Login: "verkyabc"}); code != http.StatusConflict {
 		t.Fatalf("relogin in flight: HTTP %d, want 409", code)
 	}
 	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	a := waitState(t, h, pid, "m5", store.AccountActive)
+	a := waitState(t, h, pid, "mac-d", store.AccountActive)
 	if a.Login != "verkydev" {
-		t.Fatalf("after relogin m5 = %+v", a)
+		t.Fatalf("after relogin mac-d = %+v", a)
 	}
 	// The other machine and the person's record are untouched.
-	if b := accountState(t, h, pid, "m4"); b.Login != "verkyyi" || b.State != store.AccountActive {
-		t.Fatalf("m4 moved: %+v", b)
+	if b := accountState(t, h, pid, "mac-c"); b.Login != "ivan" || b.State != store.AccountActive {
+		t.Fatalf("mac-c moved: %+v", b)
 	}
-	if p, err := h.srv.Store.Principal(pid); err != nil || p.Login != "verkyyi" {
+	if p, err := h.srv.Store.Principal(pid); err != nil || p.Login != "ivan" {
 		t.Fatalf("principal = %+v, %v", p, err)
 	}
 	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
@@ -627,32 +627,32 @@ func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
 	// A relogin whose create failed late (claude-fleet#2210: the admin then
 	// finished it by hand) is settled by adopting the row's own new login;
 	// a name the row does not carry refuses.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "m4", Login: "verky"}); code != 200 {
-		t.Fatalf("relogin m4: HTTP %d", code)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "mac-c", Login: "heidi"}); code != 200 {
+		t.Fatalf("relogin mac-c: HTTP %d", code)
 	}
-	m4 := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	m, op = expectAccountOp(t, m4.tnode)
-	sendResult(t, m4.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: false, Exit: 1, Detail: "FAILED at step 7b"})
-	waitState(t, h, pid, "m4", store.AccountFailed)
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m4", Login: "verkyx"}); code == 200 {
+	macC := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	m, op = expectAccountOp(t, macC.tnode)
+	sendResult(t, macC.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: false, Exit: 1, Detail: "FAILED at step 7b"})
+	waitState(t, h, pid, "mac-c", store.AccountFailed)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "mac-c", Login: "verkyx"}); code == 200 {
 		t.Fatalf("adopt of a login the row does not carry accepted")
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m4", Login: "verky"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "mac-c", Login: "heidi"}); code != 200 {
 		t.Fatalf("adopt the relogin: HTTP %d", code)
 	}
-	if b := accountState(t, h, pid, "m4"); b.Login != "verky" || b.State != store.AccountActive {
-		t.Fatalf("after adopting the relogin m4 = %+v", b)
+	if b := accountState(t, h, pid, "mac-c"); b.Login != "heidi" || b.State != store.AccountActive {
+		t.Fatalf("after adopting the relogin mac-c = %+v", b)
 	}
-	if p, err := h.srv.Store.Principal(pid); err != nil || p.Login != "verkyyi" {
+	if p, err := h.srv.Store.Principal(pid); err != nil || p.Login != "ivan" {
 		t.Fatalf("principal moved: %+v, %v", p, err)
 	}
 
 	// Undo: adopt the old login back, nothing run.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "mac-d", Login: "ivan"}); code != 200 {
 		t.Fatalf("undo adopt: HTTP %d", code)
 	}
-	if a := accountState(t, h, pid, "m5"); a.Login != "verkyyi" || a.State != store.AccountActive {
-		t.Fatalf("after undo m5 = %+v", a)
+	if a := accountState(t, h, pid, "mac-d"); a.Login != "ivan" || a.State != store.AccountActive {
+		t.Fatalf("after undo mac-d = %+v", a)
 	}
 	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("undo sent %+v", got)

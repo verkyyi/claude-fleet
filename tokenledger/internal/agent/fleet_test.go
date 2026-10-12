@@ -40,7 +40,7 @@ func fakeFleet(t *testing.T, stdout string, code int) (home string, runs *atomic
 	return home, runs
 }
 
-const behindJSON = `{"dir":"/Users/x/.claude/fleet","host":"macmini","head":"0164208","branch":"master",` +
+const behindJSON = `{"dir":"/Users/x/.claude/fleet","host":"mac-c","head":"0164208","branch":"master",` +
 	`"upstream":"origin/master","behind":12,"ahead":0,"dirty":false,"fetched":false,"verdict":"BEHIND",` +
 	`"error":"","logins":null,"follow":"on · no-daemon · … [STUCK]","follow_verdict":"STUCK"}`
 

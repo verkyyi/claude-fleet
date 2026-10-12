@@ -19,16 +19,16 @@
 #                 CCQUOTA_FLEET_ADMIN; the agent checked in; the output says
 #                 随登录登记 + 不可信 · 只协调
 #   B. ssh        ~/.ssh/fleet-ssh-config carries a Match per OTHER machine
-#                 (m4 = mini2 on the hub, s9 = spare9; never this one) that runs the INSTALLED
+#                 (mac-a = mac-d on the hub, s9 = spare9; never this one) that runs the INSTALLED
 #                 fleet-peer-cert.sh with the hub's hostname; peer/machines lists
-#                 them; ~/.ssh/config Includes it once; the hand-written m5 block
-#                 (`Match originalhost m4,m4-*,mini2 exec "…fleet-peer-cert.sh…"`)
+#                 them; ~/.ssh/config Includes it once; the hand-written mac-b block
+#                 (`Match originalhost mac-a,mac-a-*,mac-d exec "…fleet-peer-cert.sh…"`)
 #                 is gone from ~/.ssh/config with its comment, kept in a
 #                 .fleet-bak-*, and everything else in the file is untouched;
-#                 `ssh -G` parses the snippet and, for m4-lan, picks the peer key
-#                 and mini2's certificate
-#   C. one cert   the installed fleet-peer-cert.sh, for m4 / m4-lan / mini2:
-#                 the hub asked ONCE, for mini2; every name the same file
+#                 `ssh -G` parses the snippet and, for mac-a-lan, picks the peer key
+#                 and mac-d's certificate
+#   C. one cert   the installed fleet-peer-cert.sh, for mac-a / mac-a-lan / mac-d:
+#                 the hub asked ONCE, for mac-d; every name the same file
 #   D. again      a second install: 「入口: 这台已登记在 …」, no new scan, node.env
 #                 unchanged
 #   E. no node    --no-node: no scan, no node.env (the degenerate case)
@@ -118,9 +118,9 @@ class H(BaseHTTPRequestHandler):
             dc = body["device_code"]; st = state["codes"][dc]
             res = {"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "serial": "1", "key_id": "gh:Alice",
                    "principals": ["alice"], "valid_after": "2026-10-05T00:00:00Z", "valid_before": "2026-10-05T12:00:00Z",
-                   "ssh_config": "# fleet-ssh-config v1\n\nHost m4 fleet-m4 fleet-m4-public\n  HostName 127.0.0.1\n  User alice\n"
+                   "ssh_config": "# fleet-ssh-config v1\n\nHost mac-a fleet-mac-a fleet-mac-a-public\n  HostName 127.0.0.1\n  User alice\n"
                                  "\nHost s9 fleet-s9 fleet-s9-public\n  HostName 127.0.0.2\n  User alice\n",
-                   "machines": [{"hostname": "mini2", "alias": "m4"}, {"hostname": "spare9", "alias": "s9"},
+                   "machines": [{"hostname": "mac-d", "alias": "mac-a"}, {"hostname": "spare9", "alias": "s9"},
                                 {"hostname": ME, "alias": "self7"}], "hub": "x"}
             if st.get("purpose") == "node":
                 res["node"] = {"endpoint_id": "ep_1", "label": st["device_name"] + "-" + st["os_user"], "token": TOKEN,
@@ -196,15 +196,15 @@ install_in() {
   echo $? >"$WORK/rc"
 }
 
-# The hand-written block m5 carried before #1719, with what surrounds it.
+# The hand-written block mac-b carried before #1719, with what surrounds it.
 H1="$WORK/h1"
 mkdir -p "$H1/.ssh"
 cat >"$H1/.ssh/config" <<'EOF'
-# claude-fleet: reach m4 with a hub-signed 5-minute certificate (personal m5<->m4
+# claude-fleet: reach mac-a with a hub-signed 5-minute certificate (personal mac-b<->mac-a
 # trust removed 2026-10-05, EPIC verkyyi/claude-fleet#1615 C9).
-Match originalhost m4,m4-*,mini2 exec "$HOME/.claude/fleet/bin/fleet-peer-cert.sh mini2 view >/dev/null 2>&1"
+Match originalhost mac-a,mac-a-*,mac-d exec "$HOME/.claude/fleet/bin/fleet-peer-cert.sh mac-d view >/dev/null 2>&1"
   IdentityFile ~/.ssh/fleet-peer
-  CertificateFile ~/.config/claude-fleet/peer/mini2.view-cert.pub
+  CertificateFile ~/.config/claude-fleet/peer/mac-d.view-cert.pub
 
 Include ~/.ssh/config.d/*.conf
 
@@ -252,41 +252,41 @@ grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && bad "A the token was
 # ── B. ssh ──────────────────────────────────────────────────────────────────
 SNIP="$H1/.ssh/fleet-ssh-config"
 PC="$(cd "$ROOT/bin" && pwd -P)/fleet-peer-cert.sh"   # `fleet` runs its siblings by their physical path
-if grep -qF "Match originalhost m4,m4-*,mini2,mini2-*,fleet-m4,fleet-m4-* exec \"'$PC' mini2 view >/dev/null 2>&1\"" "$SNIP" \
+if grep -qF "Match originalhost mac-a,mac-a-*,mac-d,mac-d-*,fleet-mac-a,fleet-mac-a-* exec \"'$PC' mac-d view >/dev/null 2>&1\"" "$SNIP" \
    && grep -qF "Match originalhost s9,s9-*,spare9,spare9-*,fleet-s9,fleet-s9-* exec \"'$PC' spare9 view >/dev/null 2>&1\"" "$SNIP" \
    && ! grep -q 'self7' "$SNIP" \
-   && grep -qF 'CertificateFile "~/.config/claude-fleet/peer/mini2.view-cert.pub"' "$SNIP" && grep -q '^Host m4 fleet-m4' "$SNIP"; then
+   && grep -qF 'CertificateFile "~/.config/claude-fleet/peer/mac-d.view-cert.pub"' "$SNIP" && grep -q '^Host mac-a fleet-mac-a' "$SNIP"; then
   ok "B the snippet: a Match per OTHER machine (not this one) through the installed fleet-peer-cert.sh, keyed on the hub's hostname"
 else bad "B snippet: $(cat "$SNIP" 2>/dev/null)"; fi
-[ "$(cat "$CONF/peer/machines" 2>/dev/null)" = "$(printf 'mini2 m4\nspare9 s9\n%s self7' "$ME")" ] && ok "B peer/machines lists the hub's machines" \
+[ "$(cat "$CONF/peer/machines" 2>/dev/null)" = "$(printf 'mac-d mac-a\nspare9 s9\n%s self7' "$ME")" ] && ok "B peer/machines lists the hub's machines" \
   || bad "B peer/machines: $(cat "$CONF/peer/machines" 2>/dev/null)"
 [ "$(grep -c '^Include ~/.ssh/fleet-ssh-config$' "$H1/.ssh/config")" = 1 ] && ok "B ~/.ssh/config Includes the snippet once" \
   || bad "B config: $(cat "$H1/.ssh/config")"
 bak=$(ls "$H1/.ssh/"config.fleet-bak-* 2>/dev/null | head -n 1)
-if ! grep -q 'fleet-peer-cert' "$H1/.ssh/config" && ! grep -q 'personal m5<->m4' "$H1/.ssh/config" \
+if ! grep -q 'fleet-peer-cert' "$H1/.ssh/config" && ! grep -q 'personal mac-b<->mac-a' "$H1/.ssh/config" \
    && grep -q '^Include ~/.ssh/config.d/\*.conf$' "$H1/.ssh/config" && grep -q '^Host macbook$' "$H1/.ssh/config" \
    && grep -q '^# macbook over Tailscale$' "$H1/.ssh/config" && [ -n "$bak" ] && cmp -s "$bak" "$WORK/config.orig"; then
   ok "B the hand-written block is taken over (comment too), the rest kept, the original backed up"
 else bad "B takeover: config=$(cat "$H1/.ssh/config") bak=$bak"; fi
 grep -q '接管' "$WORK/out" && ok "B the takeover is said" || bad "B no takeover line: $(cat "$WORK/out")"
-G=$(HOME="$H1" FLEET_CONF_DIR="$CONF" ssh -G -F "$SNIP" m4-lan 2>&1)
+G=$(HOME="$H1" FLEET_CONF_DIR="$CONF" ssh -G -F "$SNIP" mac-a-lan 2>&1)
 case "$G" in
-  *"identityfile ~/.ssh/fleet-peer"*mini2.view-cert.pub*|*"/.ssh/fleet-peer"*"mini2.view-cert.pub"*)
-    ok "B ssh -G m4-lan: the Match applies — the peer key and mini2's certificate" ;;
-  *) bad "B ssh -G m4-lan: $(printf '%s\n' "$G" | grep -Ei 'identityfile|certificatefile|error|bad|line')" ;;
+  *"identityfile ~/.ssh/fleet-peer"*mac-d.view-cert.pub*|*"/.ssh/fleet-peer"*"mac-d.view-cert.pub"*)
+    ok "B ssh -G mac-a-lan: the Match applies — the peer key and mac-d's certificate" ;;
+  *) bad "B ssh -G mac-a-lan: $(printf '%s\n' "$G" | grep -Ei 'identityfile|certificatefile|error|bad|line')" ;;
 esac
 
 # ── C. one cert ─────────────────────────────────────────────────────────────
 certs=""
-for n in m4 m4-lan mini2; do
+for n in mac-a mac-a-lan mac-d; do
   o=$(HOME="$H1" FLEET_CONF_DIR="$CONF" bash "$PC" "$n" view 2>"$WORK/err") || { bad "C $n: exit $?: $(cat "$WORK/err")"; continue; }
   certs="$certs $(printf '%s\n' "$o" | sed -n 's/^CertificateFile=//p')"
 done
 # ssh -G above may already have asked once; the three names add nothing
 peer=$(hubstate peer)
 set -- $certs
-if [ "$#" = 3 ] && [ "$1" = "$CONF/peer/mini2.view-cert.pub" ] && [ "$1" = "$2" ] && [ "$2" = "$3" ] && [ "$peer" = "['mini2']" ]; then
-  ok "C m4 / m4-lan / mini2: one ask, for mini2 — the same certificate"
+if [ "$#" = 3 ] && [ "$1" = "$CONF/peer/mac-d.view-cert.pub" ] && [ "$1" = "$2" ] && [ "$2" = "$3" ] && [ "$peer" = "['mac-d']" ]; then
+  ok "C mac-a / mac-a-lan / mac-d: one ask, for mac-d — the same certificate"
 else bad "C certs=$certs hub asked for $peer"; fi
 
 # ── D. again ────────────────────────────────────────────────────────────────

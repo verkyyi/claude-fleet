@@ -402,7 +402,7 @@ func (s *Store) SourcePoolBinding(source string) (string, error) {
 // subscription count is one too many. The agent knows one more thing — the
 // label the operator imported the token under ("icloud", "ly297") — and that
 // label names its account the way the operator wrote it: the e-mail, its local
-// part, its domain ("gmail" ↔ verky.yi@gmail.com) or the display name.
+// part, its domain ("gmail" ↔ carol.yi@gmail.com) or the display name.
 //
 // Exact keys first, then the domain; each tier must fit exactly ONE account of
 // the same source, never a fingerprint or a pool — two candidates is a guess,

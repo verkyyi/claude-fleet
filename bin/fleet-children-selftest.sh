@@ -337,7 +337,7 @@ printf '%s' '{"child":"issue-1317","state":"MERGED","pr":"1333"}' \
   | python3 "$BIN/fleet-children.py" append --file "$JB" >/dev/null
 has "join: a bare child appended to a qualified book is written qualified" '"child": "r-a:issue-1317"' "$(sed -n 2p "$JB")"
 python3 "$BIN/fleet-children.py" dispatch --file "$JD/r-a:scratch-5.dispatch" --child r-a:issue-1317 \
-  --state 'done' --node m4 --op op-1 --window @9 >/dev/null
+  --state 'done' --node mac-a --op op-1 --window @9 >/dev/null
 FID1=11111111-2222-3333-4444-555555555555
 printf '%s\n' "{\"seq\": 3, \"ts\": \"2026-10-05T00:00:00Z\", \"child\": \"r-a:scratch-9\", \"state\": \"WAITING\", \"fid\": \"$FID1\"}" >> "$JB"
 JOUT=$(printf '%s\n' \
@@ -352,7 +352,7 @@ kids = {k["child"]: k for k in d["children"]}
 assert sorted(kids) == ["r-a:issue-1317", "r-a:issue-1400", "r-b:issue-1317"], sorted(kids)
 a = kids["r-a:issue-1317"]
 assert a["live"] and a["window"] == "@1" and a["last"]["state"] == "MERGED" and a["pr"] == "1333", a
-assert a["dispatch"]["node"] == "m4", a
+assert a["dispatch"]["node"] == "mac-a", a
 assert kids["r-b:issue-1317"]["last"] is None, kids["r-b:issue-1317"]
 assert kids["r-a:issue-1400"]["last"]["state"] == "WAITING", kids["r-a:issue-1400"]
 assert d["summary"]["total"] == 3 and d["summary"]["needs"] == 0, d["summary"]
@@ -378,37 +378,37 @@ PY
 CHECKS=$((CHECKS + 1))
 
 # --- 5. A CHILD ON ANOTHER MACHINE READS ITS OWN STATE (issue #1607) -------------
-# `gone · m4` / `m4 remote` said nothing about whether it is still at work. With the
+# `gone · mac-a` / `mac-a remote` said nothing about whether it is still at work. With the
 # hub's session table (--hub-cache, global/remote_<sess>) the row carries what the
 # machine says — its `busy` word first, `lost` for a machine the hub lost — and
-# the text shows `m4 bg`. A cache past FLEET_HUB_RETAIN_SECS is no answer; no
+# the text shows `mac-a bg`. A cache past FLEET_HUB_RETAIN_SECS is no answer; no
 # --hub-cache is the one-machine view, byte for byte.
 RD="$WORK/remote"; mkdir -p "$RD/g"
 US=$(printf '\037'); now=$(date +%s)
-rrow() { local IFS="$US"; printf '%s\n' "wid:u/issue-$1${US}m4${US}${4:-online}${US}$1${US}o/r${US}$2${US}claude${US}n${US}${US}${US}0${US}${US}hub${US}$3"; }
+rrow() { local IFS="$US"; printf '%s\n' "wid:u/issue-$1${US}mac-a${US}${4:-online}${US}$1${US}o/r${US}$2${US}claude${US}n${US}${US}${US}0${US}${US}hub${US}$3"; }
 { printf '#ts%s%s\n' "$US" "$now"; rrow 501 'done' bg; rrow 502 'done' ''; rrow 504 idle '' lost; } > "$RD/g/remote_s"
 printf '%s\n' "$now" > "$RD/g/hub_ok"
-printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-501", "state": "WAITING", "node": "m4", "pr": "9"}' \
-  '{"seq": 2, "ts": "2026-10-05T00:00:00Z", "child": "issue-502", "state": "WAITING", "node": "m4"}' \
-  '{"seq": 3, "ts": "2026-10-05T00:00:00Z", "child": "issue-503", "state": "WAITING", "node": "m4"}' \
-  '{"seq": 4, "ts": "2026-10-05T00:00:00Z", "child": "issue-504", "state": "WAITING", "node": "m4"}' > "$RD/scratch-5.ndjson"
-ROUT=$(printf '%s\n' "m4|remote||issue-502|scratch-5||" \
+printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-501", "state": "WAITING", "node": "mac-a", "pr": "9"}' \
+  '{"seq": 2, "ts": "2026-10-05T00:00:00Z", "child": "issue-502", "state": "WAITING", "node": "mac-a"}' \
+  '{"seq": 3, "ts": "2026-10-05T00:00:00Z", "child": "issue-503", "state": "WAITING", "node": "mac-a"}' \
+  '{"seq": 4, "ts": "2026-10-05T00:00:00Z", "child": "issue-504", "state": "WAITING", "node": "mac-a"}' > "$RD/scratch-5.ndjson"
+ROUT=$(printf '%s\n' "mac-a|remote||issue-502|scratch-5||" \
   | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s" --json)
 python3 - "$ROUT" <<'PY2' || fail "remote: a child on another machine must carry that machine's word (see above)" "$ROUT"
 import json, sys
 k = {c["child"]: c for c in json.loads(sys.argv[1])["children"]}
-assert (k["issue-501"]["remote_state"], k["issue-501"]["remote_node"]) == ("bg", "m4"), k["issue-501"]
+assert (k["issue-501"]["remote_state"], k["issue-501"]["remote_node"]) == ("bg", "mac-a"), k["issue-501"]
 assert k["issue-502"]["remote_state"] == "done" and k["issue-502"]["state"] == "remote", k["issue-502"]
 assert "remote_state" not in k["issue-503"], k["issue-503"]
 assert k["issue-504"]["remote_state"] == "lost", k["issue-504"]
 PY2
 CHECKS=$((CHECKS + 1))
 RTXT=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s")
-has "remote: the text shows the machine's word, not \`gone · m4\`" 'm4 bg' "$RTXT"
-has "remote: a child the hub has no row for still reads gone · m4" 'gone · m4' "$(printf '%s\n' "$RTXT" | grep issue-503)"
+has "remote: the text shows the machine's word, not \`gone · mac-a\`" 'mac-a bg' "$RTXT"
+has "remote: a child the hub has no row for still reads gone · mac-a" 'gone · mac-a' "$(printf '%s\n' "$RTXT" | grep issue-503)"
 printf '%s\n' "$((now - 1000))" > "$RD/g/hub_ok"
 RTXT=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5 --hub-cache "$RD/g/remote_s")
-eq "remote: a hub silent past FLEET_HUB_RETAIN_SECS is no answer" 4 "$(printf '%s\n' "$RTXT" | grep -c 'gone · m4')"
+eq "remote: a hub silent past FLEET_HUB_RETAIN_SECS is no answer" 4 "$(printf '%s\n' "$RTXT" | grep -c 'gone · mac-a')"
 eq "remote: degenerate — no --hub-cache, the view is unchanged" \
   "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5)" "$RTXT"
 
@@ -422,12 +422,12 @@ SD="$WORK/stale"; mkdir -p "$SD/g"
 old_ts=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
 new_ts=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))')
 printf '%s\n' \
-  "{\"seq\": 1, \"ts\": \"$old_ts\", \"child\": \"issue-601\", \"node\": \"mini2\", \"op\": \"o1\", \"state\": \"unknown\"}" \
-  "{\"seq\": 2, \"ts\": \"$old_ts\", \"child\": \"issue-602\", \"node\": \"m4\", \"op\": \"o2\", \"state\": \"unknown\"}" \
-  "{\"seq\": 3, \"ts\": \"$new_ts\", \"child\": \"issue-603\", \"node\": \"m4\", \"op\": \"o3\", \"state\": \"unknown\"}" \
-  "{\"seq\": 4, \"ts\": \"$old_ts\", \"child\": \"issue-604\", \"node\": \"mini2\", \"op\": \"o4\", \"state\": \"refused\", \"exit\": 1}" \
-  "{\"seq\": 5, \"ts\": \"$old_ts\", \"child\": \"issue-604\", \"node\": \"m4\", \"op\": \"o5\", \"state\": \"done\", \"window\": \"@7\"}" \
-  "{\"seq\": 6, \"ts\": \"$old_ts\", \"child\": \"issue-605\", \"node\": \"m4\", \"op\": \"o6\", \"state\": \"accepted\"}" \
+  "{\"seq\": 1, \"ts\": \"$old_ts\", \"child\": \"issue-601\", \"node\": \"mac-d\", \"op\": \"o1\", \"state\": \"unknown\"}" \
+  "{\"seq\": 2, \"ts\": \"$old_ts\", \"child\": \"issue-602\", \"node\": \"mac-a\", \"op\": \"o2\", \"state\": \"unknown\"}" \
+  "{\"seq\": 3, \"ts\": \"$new_ts\", \"child\": \"issue-603\", \"node\": \"mac-a\", \"op\": \"o3\", \"state\": \"unknown\"}" \
+  "{\"seq\": 4, \"ts\": \"$old_ts\", \"child\": \"issue-604\", \"node\": \"mac-d\", \"op\": \"o4\", \"state\": \"refused\", \"exit\": 1}" \
+  "{\"seq\": 5, \"ts\": \"$old_ts\", \"child\": \"issue-604\", \"node\": \"mac-a\", \"op\": \"o5\", \"state\": \"done\", \"window\": \"@7\"}" \
+  "{\"seq\": 6, \"ts\": \"$old_ts\", \"child\": \"issue-605\", \"node\": \"mac-a\", \"op\": \"o6\", \"state\": \"accepted\"}" \
   > "$SD/scratch-8.dispatch"
 { printf '#ts%s%s\n' "$US" "$now"; rrow 602 working ''; } > "$SD/g/remote_s"
 printf '%s\n' "$now" > "$SD/g/hub_ok"
@@ -440,10 +440,10 @@ k = {c["child"]: c for c in d["children"]}
 assert k["issue-601"].get("claim") == "stale", k["issue-601"]
 assert "claim" not in k["issue-602"], k["issue-602"]          # the hub shows it working
 assert "claim" not in k["issue-603"], k["issue-603"]          # too young
-assert "claim" not in k["issue-604"] and k["issue-604"]["dispatch"]["node"] == "m4", k["issue-604"]
+assert "claim" not in k["issue-604"] and k["issue-604"]["dispatch"]["node"] == "mac-a", k["issue-604"]
 assert "claim" not in k["issue-605"], k["issue-605"]          # a window here holds it
 assert k["issue-601"]["progress"] == "unknown", k["issue-601"]  # fields only added
-assert [x["node"] for x in d["dispatches"] if x["child"] == "issue-604"] == ["m4"], d["dispatches"]
+assert [x["node"] for x in d["dispatches"] if x["child"] == "issue-604"] == ["mac-a"], d["dispatches"]
 PY3
 CHECKS=$((CHECKS + 1))
 has "stale: the text says stale-claim" 'stale-claim (unknown' "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --hub-cache "$SD/g/remote_s" | grep issue-601)"

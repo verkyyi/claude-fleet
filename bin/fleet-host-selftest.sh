@@ -12,7 +12,7 @@
 #                   puts node.env aside — processes and config as before `on`;
 #                   `on` again reuses the pass (no new join token) and the
 #                   agent runs again
-#   C. a node       m5: node.env + compute on + FLEET_HOST=1: `on` does nothing;
+#   C. a node       mac-b: node.env + compute on + FLEET_HOST=1: `on` does nothing;
 #                   `off` = compute off, the agent and node.env untouched (it
 #                   was not `on` that joined)
 #   D. refused      the probe says no: `on` exits 1 and FLEET_HOST stays 0
@@ -125,7 +125,7 @@ is "B: FLEET_HOST=1 again" "$(hostv)" 1
 # ---------------------------------------------------------------------------- C
 mkbox c
 run bash "$INS/bin/fleet-conf.sh" set-hub https://hub.test --host
-printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=m5\nCCQUOTA_FLEET_COMPUTE=1\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=mac-b\nCCQUOTA_FLEET_COMPUTE=1\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
 mkdir -p "$H/.ccquota"; sleep 300 >/dev/null 2>&1 & pc=$!; AGENTS="$AGENTS $pc"; echo "$pc" > "$H/.ccquota/agent.pid"
 out=$(host on --yes)
 has "C: a host already: nothing to do" "$out" "承载 已开 — 什么都不用做"
@@ -134,7 +134,7 @@ out=$(host off); rc=$?
 is "C: off → 0" "$rc" 0
 is "C: off ran compute off only" "$(calls)" "compute off|"
 alive "$pc" && ok || bad "C: off stopped an agent it did not start"
-has "C: node.env kept" "$(cat "$CD/node.env" 2>/dev/null)" "CCQUOTA_TOKEN=m5"
+has "C: node.env kept" "$(cat "$CD/node.env" 2>/dev/null)" "CCQUOTA_TOKEN=mac-b"
 is "C: FLEET_HOST=0" "$(hostv)" 0
 out=$(host status)
 has "C: status says the hub's word" "$out" "入口: "

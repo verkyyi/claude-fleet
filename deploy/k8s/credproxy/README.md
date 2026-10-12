@@ -48,7 +48,7 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
    ```
 
 4. **验**：
-   - `curl -s https://claudefleet.24haowan.com/v1/proxy/anthropic/v1/messages -d '{}'`
+   - `curl -s https://hub.example.com/v1/proxy/anthropic/v1/messages -d '{}'`
      → `403 {"type":"error","error":{"type":"permission_error",…"fcp-h1."…}}`（来自中心代理，
      不是入口的 404）。
    - 在一台标为不可信的登录上（`fleet-node-trust.sh set <m> untrusted`，`FLEET_CRED_PROXY=1`）：

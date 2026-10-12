@@ -57,8 +57,8 @@ func TestGitHubAuthFromEnv(t *testing.T) {
 		t.Errorf("unset = %v, %v; want off", g, err)
 	}
 	g, err := githubAuthFromEnv(env(map[string]string{"CCQUOTA_GITHUB_CLIENT_ID": "Iv1.x",
-		"CCQUOTA_GITHUB_CLIENT_SECRET": "s", "CCQUOTA_GITHUB_ADMINS": " verkyyi , alice,"}))
-	if err != nil || g == nil || g.ClientID != "Iv1.x" || len(g.Admins) != 2 || g.Admins[0] != "verkyyi" {
+		"CCQUOTA_GITHUB_CLIENT_SECRET": "s", "CCQUOTA_GITHUB_ADMINS": " erin , alice,"}))
+	if err != nil || g == nil || g.ClientID != "Iv1.x" || len(g.Admins) != 2 || g.Admins[0] != "erin" {
 		t.Errorf("set = %+v, %v", g, err)
 	}
 	for _, half := range []map[string]string{{"CCQUOTA_GITHUB_CLIENT_ID": "Iv1.x"}, {"CCQUOTA_GITHUB_CLIENT_SECRET": "s"}} {

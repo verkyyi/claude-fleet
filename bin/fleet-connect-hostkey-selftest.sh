@@ -36,21 +36,21 @@ import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
 hk, other = sys.argv[2], sys.argv[3]
 path = fc.known_hosts_path()
-open(path, "w").write("fleet-m9 %s\nfleet-m4 %s\n" % (other, other))
-m = {"hostname": "mini", "alias": "m4", "host_keys": [hk, "ssh-ed25519 AAAA\nfleet-m9 x", "nope", 7]}
+open(path, "w").write("fleet-m9 %s\nfleet-mac-a %s\n" % (other, other))
+m = {"hostname": "mini", "alias": "mac-a", "host_keys": [hk, "ssh-ed25519 AAAA\nfleet-m9 x", "nope", 7]}
 print(fc.write_known_hosts(m), open(path).read().replace("\n", "|"))
-print(fc.write_known_hosts({"hostname": "m5"}), fc.write_known_hosts({"alias": "m5", "host_keys": []}))
+print(fc.write_known_hosts({"hostname": "mac-b"}), fc.write_known_hosts({"alias": "mac-b", "host_keys": []}))
 route = {"kind": "direct", "name": "tailnet", "host": "127.0.0.1", "port": 22}
 print(" ".join(fc.ssh_command(m, route, "alice", "", known_hosts=True)))
 print(" ".join(fc.ssh_command(m, route, "alice", "")))
 EOF
 )
-[ "$(sed -n 1p <<<"$out")" = "True fleet-m9 $OTHERPUB|fleet-m4 $HOSTPUB|" ] \
+[ "$(sed -n 1p <<<"$out")" = "True fleet-m9 $OTHERPUB|fleet-mac-a $HOSTPUB|" ] \
   && ok "write_known_hosts: this machine's lines replaced, another's kept, a bad key dropped" \
   || bad "write_known_hosts: $(sed -n 1p <<<"$out")"
 [ "$(sed -n 2p <<<"$out")" = "False False" ] && ok "write_known_hosts: no listed key → nothing written" \
   || bad "no keys: $(sed -n 2p <<<"$out")"
-[[ "$(sed -n 3p <<<"$out")" == *"HostKeyAlias=fleet-m4 "*"UserKnownHostsFile=$FLEET_KNOWN_HOSTS ~/.ssh/known_hosts"* ]] \
+[[ "$(sed -n 3p <<<"$out")" == *"HostKeyAlias=fleet-mac-a "*"UserKnownHostsFile=$FLEET_KNOWN_HOSTS ~/.ssh/known_hosts"* ]] \
   && ok "ssh_command: the fleet's known_hosts first, then the person's own" || bad "ssh_command: $(sed -n 3p <<<"$out")"
 [[ "$(sed -n 4p <<<"$out")" != *UserKnownHostsFile* ]] && ok "ssh_command: no keys → ssh's own known_hosts, as before" \
   || bad "ssh_command without keys: $(sed -n 4p <<<"$out")"
@@ -74,7 +74,7 @@ EOF
   if ! "$SSHD" -t -f "$WORK/sshd_config" >"$WORK/sshd-t" 2>&1; then
     echo "skip real sshd legs: this sshd will not run unprivileged here: $(head -1 "$WORK/sshd-t")"
   else
-    # try <keys…>: fleet connect's own ssh command for m4, run for real
+    # try <keys…>: fleet connect's own ssh command for mac-a, run for real
     try() {
       python3 - "$BIN/fleet-connect.py" "$WORK" "$(id -un)" "$@" <<'EOF'
 import importlib.util, os, subprocess, sys

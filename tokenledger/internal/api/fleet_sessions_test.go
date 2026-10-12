@@ -60,17 +60,17 @@ func TestFleetSessionsByCertificate(t *testing.T) {
 	h := newFleetHarness(t)
 	k := newCertKit(t)
 	h.srv.SSHCA = sshca.New(k.ca)
-	a := connectFakeNode(t, h, "m5", false)
-	b := connectFakeNode(t, h, "m4", false)
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
 	fa := fakeFleet(t, machineA, "alice-fleet", "", "", 1, 2)
 	fb := fakeFleet(t, machineB, "bob-fleet", "", "", 7)
-	a.beat("m5", "alice", machineA, fa)
-	b.beat("m4", "bob", machineB, fb)
+	a.beat("mac-d", "alice", machineA, fa)
+	b.beat("mac-c", "bob", machineB, fb)
 	waitFor(t, 3*time.Second, "registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", time.Now())
-	h.srv.Store.AdoptAccount(p, "m5", time.Now())
+	h.srv.Store.AdoptAccount(p, "mac-d", time.Now())
 
 	now := time.Now()
 	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
@@ -84,17 +84,17 @@ func TestFleetSessionsByCertificate(t *testing.T) {
 		t.Fatalf("a valid certificate: HTTP %d %s", code, raw)
 	}
 	if out["count"].(float64) != 2 {
-		t.Fatalf("alice's sessions = %v, want her two on m5", out["count"])
+		t.Fatalf("alice's sessions = %v, want her two on mac-d", out["count"])
 	}
-	if ms := out["machines"].([]any); len(ms) != 1 || ms[0] != "m5" {
-		t.Fatalf("alice's machines = %v, want [m5]", ms)
+	if ms := out["machines"].([]any); len(ms) != 1 || ms[0] != "mac-d" {
+		t.Fatalf("alice's machines = %v, want [mac-d]", ms)
 	}
 	nodes := nodeRows(out)
-	if len(nodes) != 1 || nodes["m5"] == nil || nodes["m5"]["availability"] != "online" || nodes["m5"]["sessions"].(float64) != 2 {
-		t.Fatalf("alice's nodes = %v, want m5 online with 2 sessions", out["nodes"])
+	if len(nodes) != 1 || nodes["mac-d"] == nil || nodes["mac-d"]["availability"] != "online" || nodes["mac-d"]["sessions"].(float64) != 2 {
+		t.Fatalf("alice's nodes = %v, want mac-d online with 2 sessions", out["nodes"])
 	}
-	if age, ok := nodes["m5"]["age_sec"].(float64); !ok || age < 0 {
-		t.Fatalf("node m5: want a non-negative age_sec, got %v", nodes["m5"])
+	if age, ok := nodes["mac-d"]["age_sec"].(float64); !ok || age < 0 {
+		t.Fatalf("node mac-d: want a non-negative age_sec, got %v", nodes["mac-d"])
 	}
 
 	for name, req := range map[string]SessionsRequest{
@@ -124,18 +124,18 @@ func TestFleetSessionsByCertificate(t *testing.T) {
 		t.Fatalf("operator: HTTP %d %s, want every session", code, raw)
 	}
 	nodes = nodeRows(out)
-	if len(nodes) != 2 || nodes["m4"]["sessions"].(float64) != 1 || nodes["m5"]["sessions"].(float64) != 2 {
-		t.Fatalf("operator's nodes = %v, want m4 (1) and m5 (2)", out["nodes"])
+	if len(nodes) != 2 || nodes["mac-c"]["sessions"].(float64) != 1 || nodes["mac-d"]["sessions"].(float64) != 2 {
+		t.Fatalf("operator's nodes = %v, want mac-c (1) and mac-d (2)", out["nodes"])
 	}
 
 	// A fleet the hub lost is still a node — lost, with its last observation.
-	if err := h.srv.Store.NodeHeartbeat("ep_m4", "m4", "bob", machineB, control.Proto, `{"hostname":"m4"}`,
+	if err := h.srv.Store.NodeHeartbeat("ep_mac-c", "mac-c", "bob", machineB, control.Proto, `{"hostname":"mac-c"}`,
 		time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	_, out, _ = postSessions(t, h, asOperator, nil)
-	if n := nodeRows(out)["m4"]; n == nil || n["availability"] != "lost" {
-		t.Fatalf("m4 after an hour of silence = %v, want lost", out["nodes"])
+	if n := nodeRows(out)["mac-c"]; n == nil || n["availability"] != "lost" {
+		t.Fatalf("mac-c after an hour of silence = %v, want lost", out["nodes"])
 	}
 }
 
@@ -174,19 +174,19 @@ func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("alice's device: HTTP %d %s", code, raw)
 	}
-	// verk on m5 (issue 1) + verk on m4 (issue 2): hers; carol's issue 9 is not.
+	// frank on mac-d (issue 1) + frank on mac-c (issue 2): hers; carol's issue 9 is not.
 	if out["count"].(float64) != 2 {
-		t.Fatalf("alice's device sees %v sessions %s, want her 2 (verk on m5 and m4)", out["count"], raw)
+		t.Fatalf("alice's device sees %v sessions %s, want her 2 (frank on mac-d and mac-c)", out["count"], raw)
 	}
 	for _, s := range out["sessions"].([]any) {
 		row := s.(map[string]any)
-		if row["os_user"] != "verk" {
+		if row["os_user"] != "frank" {
 			t.Fatalf("alice's device sees %v's session: %v", row["os_user"], row)
 		}
 	}
 	nodes := nodeRows(out)
-	if len(nodes) != 2 || nodes["m5"] == nil || nodes["m4"] == nil {
-		t.Fatalf("alice's nodes = %v, want m5 and m4", out["nodes"])
+	if len(nodes) != 2 || nodes["mac-d"] == nil || nodes["mac-c"] == nil {
+		t.Fatalf("alice's nodes = %v, want mac-d and mac-c", out["nodes"])
 	}
 	if nodes["m6"] != nil {
 		t.Fatalf("alice's nodes list carol's machine: %v", out["nodes"])
@@ -197,7 +197,7 @@ func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
 	}
 
 	// Bob, carol's person (a device scan needs an active login somewhere): his
-	// device sees carol's one session on m6 and nothing of verk's.
+	// device sees carol's one session on m6 and nothing of frank's.
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "m6", Login: "carol"}); code != 200 {
 		t.Fatalf("adopt bob as carol: HTTP %d", code)
 	}
@@ -232,31 +232,31 @@ func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
 }
 
 // A node token reads its login's PERSON's sessions — every login they hold,
-// on every machine (claude-fleet#3001): a person with a daily login on m5 and
-// an admin login on m4 sees both from either machine, never another person's.
+// on every machine (claude-fleet#3001): a person with a daily login on mac-d and
+// an admin login on mac-c sees both from either machine, never another person's.
 // A login no person holds is refused as it always was (the node falls back to
 // its other credentials and keeps `id -un`'s rows), so nothing changes there.
 func TestFleetSessionsNodeTokenReadsPersonsLogins(t *testing.T) {
 	h := newFleetHarness(t)
 	const machineC = "33333333-3333-4333-8333-333333333333"
-	a := connectFakeNode(t, h, "m5", false)
-	b := connectFakeNode(t, h, "m4", false)
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
 	c := connectFakeNode(t, h, "m6", false)
-	a.beat("m5", "alice", machineA, fakeFleet(t, machineA, "fleet", "", "", 1, 2))
-	b.beat("m4", "aliceadm", machineB, fakeFleet(t, machineB, "fleet", "", "", 7))
+	a.beat("mac-d", "alice", machineA, fakeFleet(t, machineA, "fleet", "", "", 1, 2))
+	b.beat("mac-c", "aliceadm", machineB, fakeFleet(t, machineB, "fleet", "", "", 7))
 	c.beat("m6", "carol", machineC, fakeFleet(t, machineC, "fleet", "", "", 9))
 	waitFor(t, 3*time.Second, "registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 3
 	})
 	now := time.Now()
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	h.srv.Store.AdoptAccount(p, "m5", now)
-	// one login per machine per person: the admin one is on m4
-	if err := h.srv.Store.AdoptAccount(&store.Principal{ID: p.ID, Login: "aliceadm"}, "m4", now); err != nil {
+	h.srv.Store.AdoptAccount(p, "mac-d", now)
+	// one login per machine per person: the admin one is on mac-c
+	if err := h.srv.Store.AdoptAccount(&store.Principal{ID: p.ID, Login: "aliceadm"}, "mac-c", now); err != nil {
 		t.Fatal(err)
 	}
-	daily := connectNode(t, h, "m5-alice", "m5", "alice", false)
-	admin := connectNode(t, h, "m4-admin", "m4", "aliceadm", false)
+	daily := connectNode(t, h, "mac-d-alice", "mac-d", "alice", false)
+	admin := connectNode(t, h, "mac-c-admin", "mac-c", "aliceadm", false)
 	carol := connectNode(t, h, "m6-carol", "m6", "carol", false)
 	asNode := func(tok string) func(http.Header) {
 		return func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+tok) }
@@ -275,8 +275,8 @@ func TestFleetSessionsNodeTokenReadsPersonsLogins(t *testing.T) {
 	}
 	for name, tok := range map[string]string{"daily login": daily.token, "admin login": admin.token} {
 		got := logins(tok)
-		if len(got) != 2 || got["m5/alice"] != 2 || got["m4/aliceadm"] != 1 {
-			t.Fatalf("%s's node token reads %v, want m5/alice ×2 and m4/aliceadm ×1 — never m6/carol", name, got)
+		if len(got) != 2 || got["mac-d/alice"] != 2 || got["mac-c/aliceadm"] != 1 {
+			t.Fatalf("%s's node token reads %v, want mac-d/alice ×2 and mac-c/aliceadm ×1 — never m6/carol", name, got)
 		}
 	}
 

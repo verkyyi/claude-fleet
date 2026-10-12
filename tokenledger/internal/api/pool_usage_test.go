@@ -69,7 +69,7 @@ func TestPoolUsageOneRowPerRequestWithItsLease(t *testing.T) {
 	cred, wid := r.issue(t, fidA)
 	now := time.Now()
 	if ok, _, _, err := r.h.srv.Store.AcquireLease(store.LeaseClaim{Repo: "verkyyi/claude-fleet", Issue: 3226, WorkerID: wid,
-		FleetID: r.f5, EndpointID: "ep-m5", Hostname: "m5", OSUser: "verk"}, time.Hour, now); err != nil || !ok {
+		FleetID: r.f5, EndpointID: "ep-mac-d", Hostname: "mac-d", OSUser: "frank"}, time.Hour, now); err != nil || !ok {
 		t.Fatalf("lease: %v %v", ok, err)
 	}
 	for i := 1; i <= 2; i++ {
@@ -145,26 +145,26 @@ func TestPoolUsageNodeReportAndNoOwnerless(t *testing.T) {
 		t.Fatalf("an ownerless row: %v; want ErrPoolUsageNoPrincipal", err)
 	}
 	open, err := h.srv.Store.OpenFleetAlertSubjects(store.AlertPoolUsageUnowned, "")
-	if err != nil || len(open) != 1 || !strings.HasSuffix(open[0], "/verk") {
-		t.Fatalf("open %s = %v %v; want one, on m4's login", store.AlertPoolUsageUnowned, open, err)
+	if err != nil || len(open) != 1 || !strings.HasSuffix(open[0], "/frank") {
+		t.Fatalf("open %s = %v %v; want one, on mac-c's login", store.AlertPoolUsageUnowned, open, err)
 	}
 	// a login with a person never raises it; a just-asking GET with no usage neither
 	if st, _ := sessDo(t, h, http.MethodGet, "/v1/node/usage", tok4, "", nil); st != 200 {
 		t.Fatalf("nobody's login, GET: %d", st)
 	}
 	if open, _ := h.srv.Store.OpenFleetAlertSubjects(store.AlertPoolUsageUnowned, ""); len(open) != 1 {
-		t.Fatalf("open after the person's report and a GET = %v; want m4's alone", open)
+		t.Fatalf("open after the person's report and a GET = %v; want mac-c's alone", open)
 	}
-	// m4's login is mapped to the person: the next report files and clears it
+	// mac-c's login is mapped to the person: the next report files and clears it
 	p, err := h.srv.Store.Principal("gh:1005")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if st, out := sessDo(t, h, http.MethodPost, "/v1/node/usage", tok4, "", rep); st != 200 || out["principal"] != "gh:1005" {
-		t.Fatalf("m4 mapped: %d %v", st, out)
+		t.Fatalf("mac-c mapped: %d %v", st, out)
 	}
 	if open, _ := h.srv.Store.OpenFleetAlertSubjects(store.AlertPoolUsageUnowned, ""); len(open) != 0 {
 		t.Fatalf("still open once the login has a person: %v", open)
@@ -181,7 +181,7 @@ func TestPoolUsageNodeReportPerSession(t *testing.T) {
 	widA, widB := fleetid.WorkerID(f5, fidA), fleetid.WorkerID(f5, fidB)
 	now := time.Now()
 	if ok, _, _, err := h.srv.Store.AcquireLease(store.LeaseClaim{Repo: "verkyyi/claude-fleet", Issue: 3376, WorkerID: widA,
-		FleetID: f5, EndpointID: "ep-m5", Hostname: "m5", OSUser: "verk"}, time.Hour, now); err != nil || !ok {
+		FleetID: f5, EndpointID: "ep-mac-d", Hostname: "mac-d", OSUser: "frank"}, time.Hour, now); err != nil || !ok {
 		t.Fatalf("lease: %v %v", ok, err)
 	}
 	rep := map[string]any{"usage": []map[string]any{

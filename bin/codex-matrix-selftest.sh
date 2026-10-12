@@ -123,11 +123,11 @@ printf '%s\n' "$emitted" | grep -q '^SessionStart	.*fleet-where-hook.sh' \
   || fail "matrix claims Codex knows where you are at start, but fleet-where-hook.sh is not in the codex SessionStart" "$emitted"
 WH="$(mktemp -d "${TMPDIR:-/tmp}/codex-where.XXXXXX")" || fail "mktemp"
 cp "$BIN/fleet-where-hook.sh" "$WH/"
-printf '#!/bin/sh\necho "Verky Mac · macOS · iTerm2 3.7.3 · 能：打开网页"\nexit 0\n' > "$WH/fleet-client-where.sh"
+printf '#!/bin/sh\necho "Carol Mac · macOS · iTerm2 3.7.3 · 能：打开网页"\nexit 0\n' > "$WH/fleet-client-where.sh"
 out=$(FLEET_CODEX_LAUNCHER_PID=4242 bash "$WH/fleet-where-hook.sh" </dev/null)
 ctx=$(printf '%s' "$out" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; assert o["hookEventName"]=="SessionStart"; print(o["additionalContext"])' 2>/dev/null) \
   || { rm -rf "$WH"; fail "the where hook in a Codex pane must print SessionStart additionalContext" "$out"; }
-printf '%s\n' "$ctx" | grep -qx '操作者此刻在：Verky Mac · macOS · iTerm2 3.7.3 · 能：打开网页' \
+printf '%s\n' "$ctx" | grep -qx '操作者此刻在：Carol Mac · macOS · iTerm2 3.7.3 · 能：打开网页' \
   || { rm -rf "$WH"; fail "the where hook must carry fleet-client-where.sh's line as where.ts does" "$ctx"; }
 # the same words as the mod's section (mod/fleet/hooks/where.ts whereSection)
 tailw='（fleet 客户端租约；换设备接管后这一行会跟着变。要最新的或要字段，运行 '

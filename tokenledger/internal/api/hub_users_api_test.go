@@ -131,10 +131,10 @@ func TestFleetUsers_DeployAdminReadOnly(t *testing.T) {
 	if _, sess := h.signIn(t, ghAdmin); sess == nil {
 		t.Fatal("admin could not sign in")
 	}
-	if code, body := h.call(t, http.MethodDelete, "/v1/fleet/users?login=verkyyi", "", nil); code != http.StatusForbidden {
+	if code, body := h.call(t, http.MethodDelete, "/v1/fleet/users?login=ivan", "", nil); code != http.StatusForbidden {
 		t.Fatalf("remove deploy admin = %d %v", code, body)
 	}
-	if code, body := h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"VerkyYi"}`, nil); code != http.StatusConflict {
+	if code, body := h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"Ivan"}`, nil); code != http.StatusConflict {
 		t.Fatalf("add deploy admin = %d %v", code, body)
 	}
 	if role, _ := h.srv.personRole(githubPrincipal(ghAdmin.ID)); role != roleAdmin {
@@ -145,7 +145,7 @@ func TestFleetUsers_DeployAdminReadOnly(t *testing.T) {
 	if code != http.StatusOK || len(users) != 1 || users[0].(map[string]any)["deploy"] != true {
 		t.Fatalf("list = %d %v", code, body)
 	}
-	if !h.auditHas(t, "user.remove", "refused", "verkyyi") {
+	if !h.auditHas(t, "user.remove", "refused", "ivan") {
 		t.Fatalf("audit = %+v", h.audit(t))
 	}
 }
@@ -229,17 +229,17 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{PoolMoveFullKey, "on", http.StatusOK, "on"},
 		{PoolMoveFullKey, "maybe", http.StatusBadRequest, "on"},
 		{AutoAssignKey, " Least-Busy ", http.StatusOK, "least-busy"}, // claude-fleet#2069
-		{AutoAssignKey, "m4, macmini", http.StatusOK, "m4,macmini"},
-		{AutoAssignKey, "bad host!", http.StatusBadRequest, "m4,macmini"},
+		{AutoAssignKey, "mac-c, mac-e", http.StatusOK, "mac-c,mac-e"},
+		{AutoAssignKey, "bad host!", http.StatusBadRequest, "mac-c,mac-e"},
 		{SpotKey, "on", http.StatusOK, "on"},
 		{PublicBadgesKey, "on", http.StatusOK, "on"},
 		{MeterKey, "off", http.StatusOK, "off"},
 		{RoutesExtraKey, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`, http.StatusOK, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
 		{RoutesExtraKey, `[{"hostname":"bad host"}]`, http.StatusBadRequest, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
-		{MachineNamesKey, " mini2=m4, MacMini.local=m5 ", http.StatusOK, "macmini=m5,mini2=m4"}, // claude-fleet#1706
-		{MachineNamesKey, "macmini=m5,mini2=m5", http.StatusBadRequest, "macmini=m5,mini2=m4"},
-		{MachineNamesKey, "macmini", http.StatusBadRequest, "macmini=m5,mini2=m4"},
-		{MachineNamesKey, "macmini=bad name", http.StatusBadRequest, "macmini=m5,mini2=m4"},
+		{MachineNamesKey, " mac-f=mac-c, Mac-e.local=mac-d ", http.StatusOK, "mac-e=mac-d,mac-f=mac-c"}, // claude-fleet#1706
+		{MachineNamesKey, "mac-e=mac-d,mac-f=mac-d", http.StatusBadRequest, "mac-e=mac-d,mac-f=mac-c"},
+		{MachineNamesKey, "mac-e", http.StatusBadRequest, "mac-e=mac-d,mac-f=mac-c"},
+		{MachineNamesKey, "mac-e=bad name", http.StatusBadRequest, "mac-e=mac-d,mac-f=mac-c"},
 		{PoolSkipPctKey, "", http.StatusOK, "85"},
 	}
 	for _, c := range cases {
@@ -265,7 +265,7 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		t.Errorf("setting audit rows = %d, want 10", n)
 	}
 	// The readers follow at once.
-	if got := h.srv.autoAssign(); strings.Join(got, ",") != "m4,macmini" {
+	if got := h.srv.autoAssign(); strings.Join(got, ",") != "mac-c,mac-e" {
 		t.Errorf("autoAssign = %v", got)
 	}
 	if !h.srv.publicBadges() {
@@ -285,10 +285,10 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		t.Errorf("pool = %v", p)
 	}
 	// Any other key a settings PUT stores is audited too.
-	if code, _ := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"fleet.node_cap.m4","value":"3"}`, nil); code != http.StatusOK {
+	if code, _ := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"fleet.node_cap.mac-c","value":"3"}`, nil); code != http.StatusOK {
 		t.Fatalf("node cap = %d", code)
 	}
-	if !h.auditHas(t, "setting", "ok", "fleet.node_cap.m4") {
+	if !h.auditHas(t, "setting", "ok", "fleet.node_cap.mac-c") {
 		t.Errorf("node cap change not audited")
 	}
 }
@@ -365,12 +365,12 @@ func TestMachineLoginSetting(t *testing.T) {
 	}
 	s := &Server{Store: st}
 	now := time.Now()
-	for pid, login := range map[string]string{"caojian": "old24", "yilianghui": "verkyyi"} {
+	for pid, login := range map[string]string{"caojian": "old24", "yilianghui": "ivan"} {
 		if code, why := s.putHubSetting("operator", "user."+pid+".machine_login", login, now); code != http.StatusOK {
 			t.Fatalf("%s = %d %s", pid, code, why)
 		}
 	}
-	if code, why := s.putHubSetting("operator", "user.caojian.machine_login", "verkyyi", now); code != http.StatusBadRequest {
+	if code, why := s.putHubSetting("operator", "user.caojian.machine_login", "ivan", now); code != http.StatusBadRequest {
 		t.Fatalf("another person's login = %d %s", code, why)
 	}
 	if code, why := s.putHubSetting("operator", "user.CaoJian.machine_login", "cao24", now); code != http.StatusOK {
@@ -388,12 +388,12 @@ func TestMachineLoginSetting(t *testing.T) {
 	if login, ok := s.mappedLoginFor("yilianghui"); ok {
 		t.Fatalf("yilianghui still mapped to %q", login)
 	}
-	if s.mappedLogin("verkyyi") {
-		t.Fatal("verkyyi still someone's")
+	if s.mappedLogin("ivan") {
+		t.Fatal("ivan still someone's")
 	}
 }
 
-// The case that filed claude-fleet#2087: an old principal held 24haowan;
+// The case that filed claude-fleet#2087: an old principal held globex;
 // a GitHub person added to the list takes it. Nothing outside the database
 // can still claim it, and the old identity's map entry gives way at once —
 // no clearing by hand first (claude-fleet#2108).
@@ -403,20 +403,20 @@ func TestHubSettings_ReleasedMachineLoginGoesToAGitHubPerson(t *testing.T) {
 	put := func(key, v string) (int, any) {
 		return h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"`+key+`","value":"`+v+`"}`, nil)
 	}
-	if code, body := put("user.caojian.machine_login", "24haowan"); code != http.StatusOK {
+	if code, body := put("user.caojian.machine_login", "globex"); code != http.StatusOK {
 		t.Fatalf("caojian = %d %v", code, body)
 	}
-	if code, body := put("user.200.machine_login", "24haowan"); code != http.StatusOK {
+	if code, body := put("user.200.machine_login", "globex"); code != http.StatusOK {
 		t.Fatalf("alice over caojian's old entry = %d %v", code, body)
 	}
-	if u, _ := h.srv.Store.HubUserByID(200); u == nil || u.MachineLogin != "24haowan" {
+	if u, _ := h.srv.Store.HubUserByID(200); u == nil || u.MachineLogin != "globex" {
 		t.Fatalf("alice = %+v", u)
 	}
 	if set, _ := h.srv.Store.FleetSettings(); set["user.caojian.machine_login"] != "" {
 		t.Fatalf("caojian's entry is still there: %v", set)
 	}
 	// Now a GitHub person's: the old identity cannot have it back.
-	if code, _ := put("user.caojian.machine_login", "24haowan"); code != http.StatusBadRequest {
+	if code, _ := put("user.caojian.machine_login", "globex"); code != http.StatusBadRequest {
 		t.Fatalf("caojian took alice's login back: %d", code)
 	}
 }

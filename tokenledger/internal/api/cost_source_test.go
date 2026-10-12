@@ -23,7 +23,7 @@ func seedCodex(t *testing.T, h *harness) {
 		Source: model.SourceCodex, AccountUUID: "acct-a", EndpointID: "ep_mac",
 		SessionID: "s-cx", MessageUUID: "cx1",
 		TS:    time.Date(2026, 8, 31, 12, 30, 0, 0, time.UTC),
-		Model: "gpt-5", OutputTokens: 50, CostUSD: &c, CWD: "/p/alpha", OSUser: "verkyyi",
+		Model: "gpt-5", OutputTokens: 50, CostUSD: &c, CWD: "/p/alpha", OSUser: "ivan",
 	}}); err != nil {
 		t.Fatal(err)
 	}

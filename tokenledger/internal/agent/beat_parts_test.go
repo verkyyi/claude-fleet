@@ -50,7 +50,7 @@ func TestHeartbeatGoesOutWhileTheFleetProbeHangs(t *testing.T) {
 	old := fleetControlCommand
 	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
 		if hang.Load() {
-			// m5's probe (#1797): stuck until it is let go or its own deadline.
+			// mac-b's probe (#1797): stuck until it is let go or its own deadline.
 			select {
 			case <-release:
 			case <-ctx.Done():
@@ -125,13 +125,13 @@ func TestHeartbeatGoesOutWhileTheFleetProbeHangs(t *testing.T) {
 // added, each optional, and an old beat decodes with them absent.
 func TestHeartbeatNewFieldsAreOptional(t *testing.T) {
 	var old control.Heartbeat
-	if err := json.Unmarshal([]byte(`{"hostname":"m5","load1":0.5,"ncpu":8,"sessions":1,"observed_at":"2026-10-09T00:00:00Z"}`), &old); err != nil {
+	if err := json.Unmarshal([]byte(`{"hostname":"mac-b","load1":0.5,"ncpu":8,"sessions":1,"observed_at":"2026-10-09T00:00:00Z"}`), &old); err != nil {
 		t.Fatal(err)
 	}
 	if old.SysAt != nil || old.FleetAt != nil || old.Versions != nil || old.VersionsAt != nil || old.SysUnread != nil {
 		t.Fatalf("an old beat decoded with new fields: %+v", old)
 	}
-	b, _ := json.Marshal(control.Heartbeat{Hostname: "m5"})
+	b, _ := json.Marshal(control.Heartbeat{Hostname: "mac-b"})
 	for _, k := range []string{"sys_at", "fleet_at", "versions", "versions_at", "sys_unread"} {
 		if strings.Contains(string(b), `"`+k+`"`) {
 			t.Fatalf("an empty %s is on the wire: %s", k, b)

@@ -1,63 +1,63 @@
-# 多机运维手册：m5 下线，m4 接得住
+# 多机运维手册：mac-b 下线，mac-a 接得住
 
 > issue #1427（EPIC #1419 C8）。给运营者和 5 位同事（6 个登录）看的。
-> 目标只有一个：**m5 计划下线时，10 分钟内大家从入口连到 m4 继续工作；m5 回来后自动回到正常状态。**
+> 目标只有一个：**mac-b 计划下线时，10 分钟内大家从入口连到 mac-a 继续工作；mac-b 回来后自动回到正常状态。**
 > 第一次按这份手册真的演练之后，把时间线贴回 #1427，并据实修订这里。
 
 ## 0. 一页纸
 
 | 场景 | 谁 | 做什么 |
 |---|---|---|
-| **计划下线** m5 | 运营者，在 m5 的任意一个 fleet 窗格 | ① `fleet-node-maintenance.sh enter --reason '升级'` ② 每个登录 `fleet-spot-evacuate.sh` ③ 看 `/nodes`：m5 会话数降到 0 或只剩「工作中」 ④ 关机 |
-| 期间 | 每位同事，在自己电脑 | `fleet` ——入口自动选 m4；`fleet m4` 指名也行 |
-| **恢复** | 运营者，在 m5 | 开机 → agent 自己回连，`/nodes` 上 m5 从「失联」回到「维护中」→ 确认 `fleet-doctor` 全绿 → `fleet-node-maintenance.sh leave` |
-| **意外下线** m5 | 每位同事 | 什么都不用做：`fleet` 会落到 m4；m5 上的会话入口标「失联」，30 分钟后它们的认领释放，**不自动重派**——你在 m4 上 `fleet-history`/重新 `/fleet-claim` 把要紧的接着做 |
-| 意外下线后 m5 回来 | 运营者 | 先 `fleet-node-maintenance.sh enter`（别让入口立刻往上派活）→ 检查 → `leave` |
+| **计划下线** mac-b | 运营者，在 mac-b 的任意一个 fleet 窗格 | ① `fleet-node-maintenance.sh enter --reason '升级'` ② 每个登录 `fleet-spot-evacuate.sh` ③ 看 `/nodes`：mac-b 会话数降到 0 或只剩「工作中」 ④ 关机 |
+| 期间 | 每位同事，在自己电脑 | `fleet` ——入口自动选 mac-a；`fleet mac-a` 指名也行 |
+| **恢复** | 运营者，在 mac-b | 开机 → agent 自己回连，`/nodes` 上 mac-b 从「失联」回到「维护中」→ 确认 `fleet-doctor` 全绿 → `fleet-node-maintenance.sh leave` |
+| **意外下线** mac-b | 每位同事 | 什么都不用做：`fleet` 会落到 mac-a；mac-b 上的会话入口标「失联」，30 分钟后它们的认领释放，**不自动重派**——你在 mac-a 上 `fleet-history`/重新 `/fleet-claim` 把要紧的接着做 |
+| 意外下线后 mac-b 回来 | 运营者 | 先 `fleet-node-maintenance.sh enter`（别让入口立刻往上派活）→ 检查 → `leave` |
 
 三条命令都在 `~/.claude/fleet/bin/`，都要在 fleet 窗格（或 `CCQUOTA_FLEET=1` 的 shell）里跑；入口模块没开（单机 fleet）时它们什么都不做，退出码 10。
 
 ## 1. 名词：入口怎么看一台机器
 
-- **入口**（hub）在云上，不在 m5 上。m5 下线不影响入口本身，影响的是 m5 上的算力、会话，以及 `fleet connect` 默认把人送到哪台机器。
+- **入口**（hub）在云上，不在 mac-b 上。mac-b 下线不影响入口本身，影响的是 mac-b 上的算力、会话，以及 `fleet connect` 默认把人送到哪台机器。
 - 每台机器的每个登录都有一个 ccquota agent 向入口报到（几秒一次）。入口据此给机器三种状态：
 
 | 状态 | 是什么 | 谁决定 | 入口怎么对待它 |
 |---|---|---|---|
 | **在线** online | 报到正常 | 心跳 | 一切照常 |
-| **维护中** maintenance | 报到正常，但运营者标了「要下线」 | 运营者（`fleet-node-maintenance.sh enter`，或 `/nodes` 页卡片上的按钮） | **不再往它派新会话**——`--node auto` 不选它，指名 `--node m5` 也拒；`fleet-move.sh --rebalance` 问「这个会话该在哪」时，答案总是别的机器；`fleet connect` 优先去别台。它上面已有的会话照跑，侧边栏行不变灰、不进「失联」组。标记写在入口的设置表里，机器重启、入口重启都不丢，直到 `leave`。 |
-| **失联** lost | 连续 3 次没报到（≈15 秒） | 心跳 | 只标记。会话行原地变灰、行尾 `@m5!`（不挪位置、不另起一组，#1882）；它持有的 issue 认领（租约）**30 分钟后释放，不自动重派**（EPIC #1419 发起人拍板 2）。再响起心跳就回到在线/维护中。 |
+| **维护中** maintenance | 报到正常，但运营者标了「要下线」 | 运营者（`fleet-node-maintenance.sh enter`，或 `/nodes` 页卡片上的按钮） | **不再往它派新会话**——`--node auto` 不选它，指名 `--node mac-b` 也拒；`fleet-move.sh --rebalance` 问「这个会话该在哪」时，答案总是别的机器；`fleet connect` 优先去别台。它上面已有的会话照跑，侧边栏行不变灰、不进「失联」组。标记写在入口的设置表里，机器重启、入口重启都不丢，直到 `leave`。 |
+| **失联** lost | 连续 3 次没报到（≈15 秒） | 心跳 | 只标记。会话行原地变灰、行尾 `@mac-b!`（不挪位置、不另起一组，#1882）；它持有的 issue 认领（租约）**30 分钟后释放，不自动重派**（EPIC #1419 发起人拍板 2）。再响起心跳就回到在线/维护中。 |
 
 「失联」永远压过「维护中」：一台标了维护中又停了心跳的机器就是失联，租约照 30 分钟释放。维护中只改变入口**往它发什么**，不改变入口**对它的判断**。
 
 在哪里看：
 - `/nodes` 页（入口网页 → 机器节点）：机器卡片的徽章 在线 / **维护中**（带原因、从何时、谁标的）/ 失联；运营者看到「进入维护 / 结束维护」按钮。
-- 侧边栏顶行：`● m5 22 · ◐ m4 3 维护中 · ○ m9 0 · 5 分钟没联系`——`●` 在线、`◐` 维护中、`○` 失联。
+- 侧边栏顶行：`● mac-b 22 · ◐ mac-a 3 维护中 · ○ m9 0 · 5 分钟没联系`——`●` 在线、`◐` 维护中、`○` 失联。
 - 手机版「我的会话」：机器标题旁的「维护中」/「失联」胶囊。
-- 命令行：`fleet-node-maintenance.sh status` → `maintenance: m5 maintenance · 升级 · since … · by node:verkyyi@m5`。
+- 命令行：`fleet-node-maintenance.sh status` → `maintenance: mac-b maintenance · 升级 · since … · by node:dave@mac-b`。
 
 ## 2. 计划下线（升级、搬机、换硬件）
 
-前提：**和运营者约好时间**（周末晚上低峰，提前一天在群里说），m5 上没有谁的会话正在跑要紧的事。下面每一步都是手动执行，没有任何一步会自动触发下线。
+前提：**和运营者约好时间**（周末晚上低峰，提前一天在群里说），mac-b 上没有谁的会话正在跑要紧的事。下面每一步都是手动执行，没有任何一步会自动触发下线。
 
 ### T-24h：通知
 
-- 群里发：时间、预计多久、这期间请用 `fleet`（会自动落到 m4）；手头在 m5 上「工作中」的会话请在下线前让它收尾（合 PR，或 `/fleet-handoff`）。
-- 确认 m4 接得住：`/nodes` 页「各登录」表里，**每个要迁的登录在 m4 上都有一行、在线**（登录不在 m4 上的人，他们的会话搬不过去——先按 `docs/SHARED-MACHINE.md` 加登录）。看 m4 的负载/内存/每人会话上限（`fleet.node_cap.m4`，默认不设，只按负载判定）够不够。
+- 群里发：时间、预计多久、这期间请用 `fleet`（会自动落到 mac-a）；手头在 mac-b 上「工作中」的会话请在下线前让它收尾（合 PR，或 `/fleet-handoff`）。
+- 确认 mac-a 接得住：`/nodes` 页「各登录」表里，**每个要迁的登录在 mac-a 上都有一行、在线**（登录不在 mac-a 上的人，他们的会话搬不过去——先按 `docs/SHARED-MACHINE.md` 加登录）。看 mac-a 的负载/内存/每人会话上限（`fleet.node_cap.mac-a`，默认不设，只按负载判定）够不够。
 
 ### T-0：标维护中
 
-在 m5 的任意一个 fleet 窗格（哪个登录都行，入口标的是整台机器）：
+在 mac-b 的任意一个 fleet 窗格（哪个登录都行，入口标的是整台机器）：
 
 ```sh
 ~/.claude/fleet/bin/fleet-node-maintenance.sh enter --reason '升级 macOS，预计 40 分钟'
-# maintenance: ENTERED m5 · 升级 macOS，预计 40 分钟 · since 2026-10-05T12:00:00Z · by node:verkyyi@m5
+# maintenance: ENTERED mac-b · 升级 macOS，预计 40 分钟 · since 2026-10-05T12:00:00Z · by node:dave@mac-b
 ```
 
-从这一刻起入口不往 m5 派新会话。核对：`/nodes` 上 m5 的徽章变「维护中」；m4 的侧边栏顶行出现 `◐ m5 N 维护中`；`fleet-node-maintenance.sh status` 说 maintenance。
+从这一刻起入口不往 mac-b 派新会话。核对：`/nodes` 上 mac-b 的徽章变「维护中」；mac-a 的侧边栏顶行出现 `◐ mac-b N 维护中`；`fleet-node-maintenance.sh status` 说 maintenance。
 
 > 入口是旧版本（没有 `/v1/node/maintenance`）时命令退出 4 并说明「predates issue #1427」——先重新部署入口（合并 ≠ 上线，见 `tokenledger/` 的部署说明），再做下线。
 
-### T+1min：把空闲会话搬到 m4
+### T+1min：把空闲会话搬到 mac-a
 
 **每个登录各自跑一次**（它只搬本登录的 fleet；运营者可以 `sudo -u <login>` 逐个代跑，或各人自己在自己的 fleet 窗格里跑）：
 
@@ -67,80 +67,80 @@
 # evacuate: moved 7, left 2
 ```
 
-规则（都是 `fleet-move.sh` 的，不是这里新定的）：只搬 `done`/空闲的会话，**正在工作的一个都不碰**；工作树不干净的不搬（它会说 dirty）；搬过去的会话在 m4 以同一个 session id 续上，窗口名、`@issue`、父子关系都在。
-`left N` 就是还留在 m5 上的：看侧边栏/`/nodes` 它们是谁，等它们完成或让它们的主人 `/fleet-handoff`，再跑一次 evacuate。
+规则（都是 `fleet-move.sh` 的，不是这里新定的）：只搬 `done`/空闲的会话，**正在工作的一个都不碰**；工作树不干净的不搬（它会说 dirty）；搬过去的会话在 mac-a 以同一个 session id 续上，窗口名、`@issue`、父子关系都在。
+`left N` 就是还留在 mac-b 上的：看侧边栏/`/nodes` 它们是谁，等它们完成或让它们的主人 `/fleet-handoff`，再跑一次 evacuate。
 
 2026-10-04 演练学到的三件事（修掉之前照这里绕）：
 - ~~**`--rebalance` 遇到第一个无处可去的会话就整体停**~~（#1513，已修）：现在无处可去的会话（`REFUSED NO_ELIGIBLE_NODE` 等）各打一行 `↷ <窗口名> (<wid>): <原因>` 跳过，接着搬下一个；只有「本机就是最佳」(`LOCAL`) 和入口问不通才停。汇总行是 `fleet-move: rebalance moved N · skipped M · left K`——`K` 是还留在本机的空闲会话（跳过 + 失败 + 没轮到的），evacuate 的 `left` 就从它来。
-- **入口只认 fleet 的主仓库**（#1512）：一台机器只能接它的 fleet 以 `FLEET_REPO` 登记的那个仓库的会话，叠层仓库（`repos/*.conf`）对入口不可见。m5 主仓库是 monorepo、m4 主仓库是 claude-fleet 的今天，monorepo 的会话搬不到 m4，claude-fleet 的会话在 m5 本来就不是候选。**下线前先看 `/nodes` 各登录表里两台机器的 fleet 仓库**，心里有数哪些会话搬得走。
-- **live install 落后的机器看不懂「维护中」**：没有 #1505 的侧边栏把 maintenance 当失联画（`○ m5 … 没联系`、行变灰进失联组），没有 #1491 的 `dash-issue-session.sh` 连入口的租约/派单都打不通（`hub unreachable (ccquota exit 1)`，#1507）。演练或下线前把两台机器都同步到 ≥ df4daf9。
+- **入口只认 fleet 的主仓库**（#1512）：一台机器只能接它的 fleet 以 `FLEET_REPO` 登记的那个仓库的会话，叠层仓库（`repos/*.conf`）对入口不可见。mac-b 主仓库是 monorepo、mac-a 主仓库是 claude-fleet 的今天，monorepo 的会话搬不到 mac-a，claude-fleet 的会话在 mac-b 本来就不是候选。**下线前先看 `/nodes` 各登录表里两台机器的 fleet 仓库**，心里有数哪些会话搬得走。
+- **live install 落后的机器看不懂「维护中」**：没有 #1505 的侧边栏把 maintenance 当失联画（`○ mac-b … 没联系`、行变灰进失联组），没有 #1491 的 `dash-issue-session.sh` 连入口的租约/派单都打不通（`hub unreachable (ccquota exit 1)`，#1507）。演练或下线前把两台机器都同步到 ≥ df4daf9。
 
 ### T+5~10min：确认，然后下线
 
-- `/nodes`：m5 会话数为 0（或只剩你们决定「让它随机器一起断」的那几个）。
-- 这些会话随 m5 断掉后的后果只有：入口标失联、30 分钟后它们的认领释放、**不会有人替它们重开**。要紧的别留。
+- `/nodes`：mac-b 会话数为 0（或只剩你们决定「让它随机器一起断」的那几个）。
+- 这些会话随 mac-b 断掉后的后果只有：入口标失联、30 分钟后它们的认领释放、**不会有人替它们重开**。要紧的别留。
 - 关机 / 升级 / 断电。**这一步永远是人做的。**
 
 ### 恢复
 
-1. 开机。各登录的 ccquota agent 是 LaunchAgent，自己回连；`/nodes` 上 m5 从「失联」回到**「维护中」**（标记还在，入口仍不派活），侧边栏顶行回到 `◐ m5`。
-2. 在 m5 任一 fleet 窗格检查：`~/.claude/fleet/bin/fleet-doctor.sh` 全绿（`node` 行有 node.env、`machine` 行负载正常、`listen` 行没有 LAN 监听）；fleet 的 tmux 服务器由 `fleet-restore` 拉回来（`docs/HOST.md`「An unattended Mac」）。
-3. 想把搬走的会话搬回来：在 m4 上对应登录跑 `fleet-move.sh <window> --via hub --to m5`（一个个搬），或者不搬——m4 继续跑也没问题。
+1. 开机。各登录的 ccquota agent 是 LaunchAgent，自己回连；`/nodes` 上 mac-b 从「失联」回到**「维护中」**（标记还在，入口仍不派活），侧边栏顶行回到 `◐ mac-b`。
+2. 在 mac-b 任一 fleet 窗格检查：`~/.claude/fleet/bin/fleet-doctor.sh` 全绿（`node` 行有 node.env、`machine` 行负载正常、`listen` 行没有 LAN 监听）；fleet 的 tmux 服务器由 `fleet-restore` 拉回来（`docs/HOST.md`「An unattended Mac」）。
+3. 想把搬走的会话搬回来：在 mac-a 上对应登录跑 `fleet-move.sh <window> --via hub --to mac-b`（一个个搬），或者不搬——mac-a 继续跑也没问题。
 4. 结束维护：
 
 ```sh
 ~/.claude/fleet/bin/fleet-node-maintenance.sh leave
-# maintenance: LEFT m5
+# maintenance: LEFT mac-b
 ```
 
-入口随即恢复往 m5 派会话；`fleet connect` 的默认机器照旧按「上次用的 / 有你的会话 / 负载最低」选。
+入口随即恢复往 mac-b 派会话；`fleet connect` 的默认机器照旧按「上次用的 / 有你的会话 / 负载最低」选。
 
 ### 温和版：只让入口当它下线（演练 / 验证入口用）
 
 机器一点不动——不关机、不重启 agent、不杀 fleet、不碰 working 会话——只走「标维护中 → 验证入口拒派 → 搬一个空闲会话 → 解除」。2026-10-04 第一次演练就是这个版本（记录在 #1427）：
 
 1. `fleet-node-maintenance.sh enter --reason '演练'`（T0）→ `status` 读回 maintenance。
-2. 验证入口拒派：对 m5 上任一 **主仓库** 的空闲会话 `fleet-move.sh --rebalance --max 1 --dry-run`，输出里该会话一行 `↷ <窗口名> (<wid>): NO_ELIGIBLE_NODE — … macmini: maintenance: …`（这是「维护中排除了 m5」的直接证据；解除后同一条命令应变成 `this machine is the best place`——A/B 对照）。
+2. 验证入口拒派：对 mac-b 上任一 **主仓库** 的空闲会话 `fleet-move.sh --rebalance --max 1 --dry-run`，输出里该会话一行 `↷ <窗口名> (<wid>): NO_ELIGIBLE_NODE — … mac-c: maintenance: …`（这是「维护中排除了 mac-b」的直接证据；解除后同一条命令应变成 `this machine is the best place`——A/B 对照）。
 3. 新会话落别台：在能搬的仓库上开一张占位小单，`dash-issue-session.sh <N> --repo <repo>`（`FLEET_SPAWN_NODE=auto`），看另一台 20 秒内开出窗口。
-4. 搬一个空闲会话：`fleet-move.sh <窗口> --via hub --to m4 --dry-run`，再去掉 `--dry-run`；到 m4 上 `tmux -L fleet capture-pane -t fleet:<idx>` 看到 Claude 提示符即「能继续」。
+4. 搬一个空闲会话：`fleet-move.sh <窗口> --via hub --to mac-a --dry-run`，再去掉 `--dry-run`；到 mac-a 上 `tmux -L fleet capture-pane -t fleet:<idx>` 看到 Claude 提示符即「能继续」。
 5. `fleet-node-maintenance.sh leave` → `status` 回 online → 第 2 步的对照。
 6. 收尾：占位会话 `fleet-worker-stop.sh fleet <repo>:issue-<N>` 优雅停、占位单关掉；临时改过的 conf 从备份恢复。
 
-读数口径同全量演练：T0 → 最后一项在 m4 上恢复操作的时刻。2026-10-04：**8 分 09 秒**（22:24:19 → 22:32:28），期间无人受影响。
+读数口径同全量演练：T0 → 最后一项在 mac-a 上恢复操作的时刻。2026-10-04：**8 分 09 秒**（22:24:19 → 22:32:28），期间无人受影响。
 
 ## 3. 意外下线（断电、死机、网断）
 
-**现象**（15 秒内）：`/nodes` 上 m5「失联」；每个人的侧边栏顶行 `○ m5 N · N 分钟没联系`，m5 上的行原地变灰（行尾 `@m5!`，#1882）；m4 上 `fleet-children.sh` 把在 m5 上的子任务标 lost；`fleet connect` 自动落到 m4（m5 不在线就不会选它）。
+**现象**（15 秒内）：`/nodes` 上 mac-b「失联」；每个人的侧边栏顶行 `○ mac-b N · N 分钟没联系`，mac-b 上的行原地变灰（行尾 `@mac-b!`，#1882）；mac-a 上 `fleet-children.sh` 把在 mac-b 上的子任务标 lost；`fleet connect` 自动落到 mac-a（mac-b 不在线就不会选它）。
 
 **每位同事**：
 
-1. `fleet`（或 `fleet m4`）进 m4。你在 m4 上原有的会话都在。
-2. 你在 m5 上的会话：现在动不了。看侧边栏的失联组知道它们是谁、最后状态是什么（那是最后一次报到时的，不是实时）。
-3. 要紧的事：在 m4 上重新开——`/fleet-history` 能看到它们的最后一条记录；issue 的认领 **30 分钟后自动释放**，之后 m4 上 `dash-issue-session.sh <N>`（或侧边栏回车）就能接着领；等不及 30 分钟可以 `ccquota lease acquire --force`（会记审计，写明挤掉了谁）。工作树和分支在 m5 的磁盘上，PR 已推的部分在 GitHub 上——从分支继续，别从头做。
-4. **没有任何东西会替你重派**：这是 EPIC #1419 的约定（只释放、等你决定），防的是 m5 一回来两台机器各跑一份。
+1. `fleet`（或 `fleet mac-a`）进 mac-a。你在 mac-a 上原有的会话都在。
+2. 你在 mac-b 上的会话：现在动不了。看侧边栏的失联组知道它们是谁、最后状态是什么（那是最后一次报到时的，不是实时）。
+3. 要紧的事：在 mac-a 上重新开——`/fleet-history` 能看到它们的最后一条记录；issue 的认领 **30 分钟后自动释放**，之后 mac-a 上 `dash-issue-session.sh <N>`（或侧边栏回车）就能接着领；等不及 30 分钟可以 `ccquota lease acquire --force`（会记审计，写明挤掉了谁）。工作树和分支在 mac-b 的磁盘上，PR 已推的部分在 GitHub 上——从分支继续，别从头做。
+4. **没有任何东西会替你重派**：这是 EPIC #1419 的约定（只释放、等你决定），防的是 mac-b 一回来两台机器各跑一份。
 
 **运营者**：
 
 1. 判断是真下线还是只是网断（能 ping / 能 ssh 进 LAN 口吗）。网断：会话其实还在跑，别动，等网回来，一切自动复原（租约在 30 分钟内续上就不释放）。
 2. 真下线：群里一句话。不用做别的——该释放的 30 分钟后自己释放，该搬的本来也搬不了（机器不在）。
-3. m5 回来后：**先** `fleet-node-maintenance.sh enter --reason '意外下线后检查'`——它一报到入口就会往它派活，先拦住；按第 2 节「恢复」检查；注意 m5 上那些会话会以「我还活着」的状态回来，而同一个 issue 可能已经有人在 m4 上重开了——`/nodes`「我的会话」里同一个编号出现两处就是这种情况，留 m4 的，关 m5 的（`fleet-worker-stop.sh`），然后 `leave`。
+3. mac-b 回来后：**先** `fleet-node-maintenance.sh enter --reason '意外下线后检查'`——它一报到入口就会往它派活，先拦住；按第 2 节「恢复」检查；注意 mac-b 上那些会话会以「我还活着」的状态回来，而同一个 issue 可能已经有人在 mac-a 上重开了——`/nodes`「我的会话」里同一个编号出现两处就是这种情况，留 mac-a 的，关 mac-b 的（`fleet-worker-stop.sh`），然后 `leave`。
 
 ## 4. 恢复后检查清单
 
-- [ ] `/nodes`：m5 在线（不是维护中、不是失联），各登录全部有行
-- [ ] 侧边栏顶行：`● m5 … · ● m4 …`，没有 `○`、没有失联组
+- [ ] `/nodes`：mac-b 在线（不是维护中、不是失联），各登录全部有行
+- [ ] 侧边栏顶行：`● mac-b … · ● mac-a …`，没有 `○`、没有失联组
 - [ ] `fleet-doctor.sh`：`node`、`machine`、`listen`、`hub` 行无 WARN
-- [ ] `fleet-node-maintenance.sh status` → `m5 online`
+- [ ] `fleet-node-maintenance.sh status` → `mac-b online`
 - [ ] 入口审计（`fleet_audit`，`node_maintenance` 行）：ENTER 和 LEAVE 各一条、时间对得上——这就是演练记录的两个端点
 - [ ] 同一 issue 没有两台机器各一个会话（`/nodes`「我的会话」按编号看）
 
 ## 5. 演练方案（批后、运营者确认时间后执行）
 
-**红线（运营者 2026-10-04 决定）**：演练必须先与运营者确认时间；任何会让 m5 下线或重启 agent 的步骤都不得自动进行。本手册里没有自动化这些步骤的脚本，也不要写。
+**红线（运营者 2026-10-04 决定）**：演练必须先与运营者确认时间；任何会让 mac-b 下线或重启 agent 的步骤都不得自动进行。本手册里没有自动化这些步骤的脚本，也不要写。
 
-**时间**：周末晚上低峰，提前一天通知；m5 上无「工作中」的要紧会话。
+**时间**：周末晚上低峰，提前一天通知；mac-b 上无「工作中」的要紧会话。
 **参与者**：运营者 + 至少 2 位同事（各自从自己电脑进来）。
-**读数口径**（EPIC #1419）：`m5 下线时刻 → 最后一位参与者在 m4 上恢复操作的时刻`，目标 ≤ 10 分钟。
+**读数口径**（EPIC #1419）：`mac-b 下线时刻 → 最后一位参与者在 mac-a 上恢复操作的时刻`，目标 ≤ 10 分钟。
 
 步骤 = 第 2 节逐条做；每做一步记时间。贴回 #1427 的表格：
 
@@ -150,11 +150,11 @@
 | | `enter` 标维护中 | 运营者 | `/nodes` 变色用了 __ 秒 | |
 | | `evacuate` 第 1 轮 | 各登录 | moved __, left __ | left 的是谁、为什么 |
 | | `evacuate` 第 2 轮 | | | |
-| | **m5 关机**（下线时刻 T0） | 运营者 | | |
-| | 同事 A `fleet` 进 m4 | A | T0+__ | |
-| | 同事 B `fleet` 进 m4 | B | T0+__ | |
+| | **mac-b 关机**（下线时刻 T0） | 运营者 | | |
+| | 同事 A `fleet` 进 mac-a | A | T0+__ | |
+| | 同事 B `fleet` 进 mac-a | B | T0+__ | |
 | | 最后一位恢复操作 | | **T0+__ 分钟** ← 读数 | |
-| | m5 开机、agent 回连 | 运营者 | `/nodes` 回到维护中 | |
+| | mac-b 开机、agent 回连 | 运营者 | `/nodes` 回到维护中 | |
 | | 检查清单 | 运营者 | | |
 | | `leave` | 运营者 | | |
 | | 搬回（可选） | | | |
@@ -184,8 +184,8 @@
 - 审计：`GET /v1/fleet/peer-certs`（运营者），每次跨机一行；目标 sshd 日志里也有 key id。
 - 本机的 peer 钥匙：`~/.ssh/fleet-peer`（只用来被签，不放进任何 authorized_keys）。
 
-**删除旧互信**（运营者 2026-10-04 已同意）：入口部署后，在 m5 上打开一个 m4 会话
-（选路行出现「入口证书 5 分钟」）、`fleet-node-upgrade.sh --host m4 --status` 照常，
+**删除旧互信**（运营者 2026-10-04 已同意）：入口部署后，在 mac-b 上打开一个 mac-a 会话
+（选路行出现「入口证书 5 分钟」）、`fleet-node-upgrade.sh --host mac-a --status` 照常，
 `/v1/fleet/peer-certs` 有两条；然后在每台机器上：
 
 ```sh
@@ -200,7 +200,7 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh | grep sshtrust   # WARN 列出其它 f
 连同它的每条路线（tailnet 名、局域网地址、入口探到的门 `entry` 及端口）。对每个登录保持一条主连接，
 不看有没有看台、不按「没人要了」回收，断了按退避重连；拨号按 FLEET_REMOTE_SSH → tailnet（本机在 tailnet
 上才试）→ 同网段局域网 → 门 → 其它直连，一条不通当拍换下一条——所以 ACK 集群里只有门的机器（如
-fleet-linux-0）也连得上，认证仍是上面那张五分钟证书。fleet.conf 写 `FLEET_PEERLINK_MODE=demand`
+linux-a）也连得上，认证仍是上面那张五分钟证书。fleet.conf 写 `FLEET_PEERLINK_MODE=demand`
 退回按需（只在有看台时连、看台走后 10 分钟关）。`fleet doctor` 的 `peerlink` 行逐台写 已连上 /
 重连中 / 连不上（原因），连不上报 WARN。
 
@@ -212,9 +212,9 @@ fleet-linux-0）也连得上，认证仍是上面那张五分钟证书。fleet.c
 
 | 谁 | 看到什么 | 能做什么 |
 |---|---|---|
-| m5 / m4 上的会话 | 什么都不变 | 照跑；认领在本机，入口回来再对账 |
+| mac-b / mac-a 上的会话 | 什么都不变 | 照跑；认领在本机，入口回来再对账 |
 | 你的本地壳（MacBook） | 列表保留最后一次的样子，60 秒后变灰（失联）；断开 5 分钟闪**一次**「入口失联」 | 右边直连照常——靠你那张 12 小时的客户端证书，不经入口 |
-| 机器之间（打开别机会话、`fleet-node-upgrade.sh --host`、`fleet-move.sh`） | 1 秒内拒：「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 | 自己 `fleet m4` 进去；**不**退回长期互信 |
+| 机器之间（打开别机会话、`fleet-node-upgrade.sh --host`、`fleet-move.sh`） | 1 秒内拒：「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 | 自己 `fleet mac-a` 进去；**不**退回长期互信 |
 
 **重连**（节点程序 `ccquota agent`，参数只在 `tokenledger/internal/agent/node.go` 一处）：
 
@@ -232,21 +232,21 @@ fleet-linux-0）也连得上，认证仍是上面那张五分钟证书。fleet.c
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" "$HUB/v1/fleet/fleet_alerts" | python3 -m json.tool
 # {"open": 1, "alerts": [{"kind": "lease_conflict", "subject": "verkyyi/claude-fleet#7",
-#   "detail": {"holder": {"node": "verkyyi@m5", …}, "reporter": {"node": "verkyyi@m4", …}}, …}]}
+#   "detail": {"holder": {"node": "dave@mac-b", …}, "reporter": {"node": "dave@mac-a", …}}, …}]}
 ```
 
 **演练：停入口 3 分钟**（运营者定时间；只停入口，不碰节点）
 
 1. 记 T0，停入口（k8s：`kubectl scale deploy/<hub> --replicas=0`）。
-2. 断开期间核对上表三行：m5 / m4 会话照跑；MacBook 列表变灰、右边可用；在 m5 上 `fleet-node-upgrade.sh --host m4 --status` 1 秒内被拒且有说明。
-3. T0+3 分钟恢复入口，记 T1；`/nodes` 上 m5、m4 回到在线的时刻取较大者 − T1 = 读数（目标 ≤ 30 秒）。
+2. 断开期间核对上表三行：mac-b / mac-a 会话照跑；MacBook 列表变灰、右边可用；在 mac-b 上 `fleet-node-upgrade.sh --host mac-a --status` 1 秒内被拒且有说明。
+3. T0+3 分钟恢复入口，记 T1；`/nodes` 上 mac-b、mac-a 回到在线的时刻取较大者 − T1 = 读数（目标 ≤ 30 秒）。
 4. `GET /v1/fleet/fleet_alerts`：断开超过 2 分钟的机器各一条 `node_lost`——注意入口停着的时候没人记，所以这次演练里**它们不会出现**（入口从自己启动时起算）；要看 `node_lost`，改为断某台机器的网 3 分钟，入口照常。贴出 `raised_at` / `cleared_at`。
 
 ## 5⅞. Codex 凭证只由入口一处刷新（#1666）
 
 Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就换一张新的，旧的作废。
 两方拿着同一张抢刷，后刷的那方被拒，登录状态变成 `reauth_required`——2026-10-04
-就是这样：13:11Z 入口导入并（经 m4 转发）刷新了一次，23:46Z m5 本机 ccquota 的
+就是这样：13:11Z 入口导入并（经 mac-a 转发）刷新了一次，23:46Z mac-b 本机 ccquota 的
 自动刷新拿着旧的那张去刷，被拒；第二天切换撞上才发现，重登一次才恢复。
 
 **所以一个账号只有一个刷新方**，`ccquota codex list --json` 里 `login.source` 就是它：
@@ -259,7 +259,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 **把一台机器切为入口托管**（批后、你点头后，**一台一台**；入口已部署含本单的版本）：
 
 1. 入口保险箱里已有这个账号？`GET /v1/fleet/credentials` 看 `provider=codex` 的行
-   （今天：`pool/codex/default`，就是 m5 的 `personal` 那个账号，m4 已在用它）。
+   （今天：`pool/codex/default`，就是 mac-b 的 `personal` 那个账号，mac-a 已在用它）。
    没有才导入：`bin/fleet-creds-import.sh --codex personal`——`personal` 住在 `~/.codex`，
    所以入口标签是 `default`（节点程序按标签把租约写回 `~/.codex`），命令会把映射打出来，
    并在导入后提醒**这台机器现在必须停止自己刷新**（第 2 步就是）。
@@ -279,7 +279,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 
 ## 5⅞⅞. 一台机器上同一个人有两个 login（#2430）
 
-迁移期间（#2210：管理员账号 verkyyi → 普通账号 verky）同一台机器上会有两个 login，
+迁移期间（#2210：管理员账号 dave → 普通账号 carol）同一台机器上会有两个 login，
 各有一个 fleet，都登记在同一个人名下。
 
 - **放到哪就连到哪**：入口的放置答复带 `login`；客户端把每个 fleet 跑在哪个 login
@@ -291,7 +291,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 - **只让一个 login 接新会话**（运营者决定）：
 
   ```
-  PUT /v1/fleet/settings {"key":"fleet.node_login.m5","value":"verky"}
+  PUT /v1/fleet/settings {"key":"fleet.node_login.mac-b","value":"carol"}
   ```
 
   其他 login 在这台机器上不再接新会话（自动放置和点名都不行，指名它的 fleet 也拒），
@@ -305,7 +305,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 ## 5⅞⅞⅞. 从外面连进来：你的地址、入口端口、换家（EPIC #3067）
 
 手机（Termius）和没装 Tailscale 的电脑从外面连 fleet，走的是**你的地址**
-`<名字>.cf.24haowan.com` → 家里路由器的转发 → **家机器的入口端口**（第二个 sshd，
+`<名字>.cf.example.com` → 家里路由器的转发 → **家机器的入口端口**（第二个 sshd，
 `FLEET_ENTRY_PORT` 22022，只认钥匙页登记过的钥匙，`docs/MANAGED-NODE.md` §16）。
 机器原有的 22 端口不上公网；机器之间照旧走 Tailscale。
 
@@ -313,7 +313,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 
 1. `/var/db/fleet-node/machine.env` 加 `FLEET_ENTRY=1`（`sudo fleet node install` 会收敛它），
    路由器转发的外部端口不是 22022 时，节点路线 `CCQUOTA_FLEET_NODE_ROUTES` 加 `entry=<主机>:<外部端口>`
-   （今天：macmini `entry=ssh.minihaowan.com:22122`、mini2 `entry=ssh.minihaowan.com:22123`）；
+   （今天：mac-c `entry=ssh.minihaowan.com:22122`、mac-d `entry=ssh.minihaowan.com:22123`）；
    `launchctl kickstart -k system/com.claude-fleet.node` 让它生效。
 2. 路由器上把外部端口转发到这台的内网地址:22022。转发哪个端口给哪个地址，体检 `public` 行写着；
    自动开端口（NAT-PMP / UPnP）成了就不用手做。
@@ -365,11 +365,11 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 | 要做的事 | 命令 / 接口 |
 |---|---|
 | 标 / 撤 / 看本机维护中 | `fleet-node-maintenance.sh enter [--reason …]` · `leave` · `status`（本机 node 令牌，`POST/GET /v1/node/maintenance`） |
-| 运营者标任意机器 | `/nodes` 页卡片按钮；或 `PUT /v1/fleet/settings {"key":"fleet.node_maintenance.m5","value":"原因"}`，`value:""` 撤 |
+| 运营者标任意机器 | `/nodes` 页卡片按钮；或 `PUT /v1/fleet/settings {"key":"fleet.node_maintenance.mac-b","value":"原因"}`，`value:""` 撤 |
 | 搬空闲会话到别台 | `fleet-spot-evacuate.sh [--dry-run]`（每个登录一次）= `fleet-move.sh --rebalance --max all` |
-| 搬一个指定会话 | `fleet-move.sh <window> --via hub --to m4` |
+| 搬一个指定会话 | `fleet-move.sh <window> --via hub --to mac-a` |
 | 从外面（手机 / 没 Tailscale）连 | 钥匙页 `<入口>/fleet/keys` · Termius 四样 · 体检 `entry` / `public` 行 · 第 5⅞⅞⅞ 节 |
-| 进某台机器 | `fleet`（入口选）· `fleet m4`（指名）· `fleet connect --print` 看选了哪条线 |
+| 进某台机器 | `fleet`（入口选）· `fleet mac-a`（指名）· `fleet connect --print` 看选了哪条线 |
 | 认领释放 / 强取 | 自动：失联 30 分钟 · 手动：`ccquota lease acquire --force <repo> <N> <wid>` |
 | 这台机器的 Codex 谁在刷新 | `ccquota codex list --json` → `login.source`：`hub` 入口托管（本机刷新被拒）· `local` 本机自管；切换见 5⅞ |
 | 本机健康 | `fleet-doctor.sh` |

@@ -25,9 +25,9 @@ func TestFleetCertAcceptsAReloginLogin(t *testing.T) {
 	k := newCertKit(t)
 	h.srv.SSHCA = sshca.New(k.ca)
 	h.srv.FleetRoutes = []FleetMachine{
-		{Hostname: "mini", Alias: "m4", Routes: []FleetRoute{{Name: "public", Host: "gw", Port: 22023}}},
+		{Hostname: "mini", Alias: "mac-c", Routes: []FleetRoute{{Name: "public", Host: "gw", Port: 22023}}},
 	}
-	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.ts.net"}})
+	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.example.ts.net"}})
 
 	now := time.Now()
 	p, err := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
@@ -72,8 +72,8 @@ func TestFleetCertAcceptsAReloginLogin(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("a certificate for the relogin'd login: HTTP %d %s, want 200", code, raw)
 	}
-	if len(out.Machines) != 1 || out.Machines[0].Alias != "m4" {
-		t.Fatalf("machines = %+v, want m4", out.Machines)
+	if len(out.Machines) != 1 || out.Machines[0].Alias != "mac-c" {
+		t.Fatalf("machines = %+v, want mac-c", out.Machines)
 	}
 
 	// The snippet names THIS machine's login, not the person record's.

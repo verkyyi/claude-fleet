@@ -33,13 +33,13 @@ func TestParseNodeRoutes(t *testing.T) {
 func TestNodeRoutesTailnet(t *testing.T) {
 	calls := 0
 	old := tailnetSelfName
-	tailnetSelfName = func(context.Context) string { calls++; return "mini.tail1.ts.net" }
+	tailnetSelfName = func(context.Context) string { calls++; return "mini.example.ts.net" }
 	t.Cleanup(func() { tailnetSelfName = old })
 
 	a := &Agent{cfg: Config{FleetTailnetRoute: true,
 		FleetRoutes: []control.NodeRoute{{Name: "public", Host: "gw", Port: 22023}}}}
 	got := a.nodeRoutes(context.Background())
-	if len(got) != 2 || got[1] != (control.NodeRoute{Name: "tailnet", Host: "mini.tail1.ts.net"}) {
+	if len(got) != 2 || got[1] != (control.NodeRoute{Name: "tailnet", Host: "mini.example.ts.net"}) {
 		t.Fatalf("routes = %+v", got)
 	}
 	a.nodeRoutes(context.Background())

@@ -327,7 +327,7 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		}
 		// Placement's own CPU gate and its admission verdict rank first
 		// (claude-fleet#3426): C9's 27th drill opened the newcomer on
-		// fleet-linux-0 at load 39 on 4 cores over mini2 at 2.4 on 10 with
+		// linux-a at load 39 on 4 cores over mac-d at 2.4 on 10 with
 		// admit=true, the tiers above the score having decided it.
 		excluded, eq := cpuVerdict(m.CPUBusy, m.MaxCPUBusy, perCore)
 		c.room = excluded == "" && hostAdmits(snap, m.Hostname)
@@ -589,8 +589,8 @@ func (s *Server) mappedLogin(login string) bool {
 
 // adoptMappedLogins records, for every mapped person the hub already knows,
 // their login as ACTIVE on each roster machine where an agent runs as that
-// login. The roster is the evidence: an agent connecting as `verkyyi` on
-// `macmini` proves the login exists there, and the operator's map says whose
+// login. The roster is the evidence: an agent connecting as `dave` on
+// `mac-c` proves the login exists there, and the operator's map says whose
 // it is. Nothing runs on a node. Called at a mapped sign-in and at every
 // node hello (a machine that joins after the person signed in), so the two
 // orders converge on the same rows. A row whose op is in flight, or that is
@@ -1160,7 +1160,7 @@ func (s *Server) renameAccount(w http.ResponseWriter, r *http.Request, req Fleet
 // creatableLogin is the node's create rule (control.ValidCreateLogin), judged
 // before an op is queued, so an assign the node would refuse is a 400 here
 // and never a failed row (claude-fleet#2105). A login the hub minted passes;
-// an adopted digit-leading one (`24haowan`) passes only as a second machine's
+// an adopted digit-leading one (`acme`) passes only as a second machine's
 // copy of a login the person already holds active elsewhere.
 func (s *Server) creatableLogin(p *store.Principal, hostname string) error {
 	if control.ValidLogin(p.Login) {

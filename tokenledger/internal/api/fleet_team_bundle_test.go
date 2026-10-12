@@ -55,7 +55,7 @@ var teamV1 = map[string]any{"bundle": map[string]any{
 func TestTeamBundlePutOperatorOnlyVersionsRollback(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice, pBob, pCarol)
-	node := h.enroll(t, "m5")
+	node := h.enroll(t, "mac-d")
 
 	// nothing yet: version 0, an empty layer, for every reader
 	for name, auth := range map[string]func(http.Header){"operator": asOperator, "person": asSession(pAlice), "node": asNode(node)} {

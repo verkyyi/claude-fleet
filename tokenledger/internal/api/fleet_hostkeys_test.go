@@ -49,13 +49,13 @@ func beatHostKeys(t *testing.T, h *harness, label, host string, at time.Time, ke
 func TestFleetMachinesHostKeys(t *testing.T) {
 	h := newFleetHarness(t)
 	static, old, cur := hostKeyLine(t), hostKeyLine(t), hostKeyLine(t)
-	h.srv.FleetRoutes = []FleetMachine{{Hostname: "mini", Alias: "m4", HostKeys: []string{static + " operator@desk"},
+	h.srv.FleetRoutes = []FleetMachine{{Hostname: "mini", Alias: "mac-c", HostKeys: []string{static + " operator@desk"},
 		Routes: []FleetRoute{{Name: "public", Host: "gw.static", Port: 22022}}}}
 	now := time.Now()
-	tail := []control.NodeRoute{{Name: "tailnet", Host: "mini.tail.ts.net"}}
+	tail := []control.NodeRoute{{Name: "tailnet", Host: "mini.example.ts.net"}}
 	beatHostKeys(t, h, "a", "mini", now.Add(-time.Hour), []string{old}, tail)
-	beatHostKeys(t, h, "b", "mini", now, []string{cur + " root@mini", "garbage", cur + "\nmini2 " + old, "ssh-ed25519-cert-v01@openssh.com AAAA"}, nil)
-	beatHostKeys(t, h, "c", "m9", now, nil, []control.NodeRoute{{Name: "tailnet", Host: "m9.tail.ts.net"}})
+	beatHostKeys(t, h, "b", "mini", now, []string{cur + " root@mini", "garbage", cur + "\nmac-f " + old, "ssh-ed25519-cert-v01@openssh.com AAAA"}, nil)
+	beatHostKeys(t, h, "c", "m9", now, nil, []control.NodeRoute{{Name: "tailnet", Host: "m9.example.ts.net"}})
 
 	ms := h.srv.fleetMachines()
 	if len(ms) != 2 {

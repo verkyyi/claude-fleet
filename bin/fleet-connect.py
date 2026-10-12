@@ -800,7 +800,7 @@ def route_class(r):
 # Its interface addresses (which LAN routes are worth a handshake, whether
 # there is a tailnet here at all) and its network's key (default gateway +
 # that network) — what the remembered route is filed under. Seams for tests:
-# FLEET_CONNECT_LOCAL_ADDRS ("192.168.1.235/24,100.101.2.3/32"),
+# FLEET_CONNECT_LOCAL_ADDRS ("192.168.1.20/24,100.64.0.5/32"),  # oss-ok: 编的示例地址
 # FLEET_CONNECT_NET_KEY.
 
 TAILNET_NETS = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")

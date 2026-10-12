@@ -58,35 +58,35 @@ func computeFindings(t *testing.T, h *harness) []findings.Finding {
 // named — the roster says why, and the compute_region finding raises the
 // alert. Back in a supported region it runs again and the alert clears.
 func TestComputeRegionClosesAndAlerts(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	waitLoad(t, h, "m5", 5)
-	m4.beatProbe("m4", "verk", machineB, nil, false, probe("CN", control.ProbeUnsupportedRegion), f4)
-	waitProbe(t, h, "ep_m4", control.ProbeUnsupportedRegion, false)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	waitLoad(t, h, "mac-d", 5)
+	macC.beatProbe("mac-c", "frank", machineB, nil, false, probe("CN", control.ProbeUnsupportedRegion), f4)
+	waitProbe(t, h, "ep_mac-c", control.ProbeUnsupportedRegion, false)
 
 	pl, err := h.srv.PickNode("", writeRepo)
-	if err != nil || pl.Machine != "m5" || !strings.Contains(pl.Reason, "m4 excluded: compute off (出口地区 CN") {
-		t.Fatalf("auto placement = %q %q %v; want m5, m4 excluded by region", pl.Machine, pl.Reason, err)
+	if err != nil || pl.Machine != "mac-d" || !strings.Contains(pl.Reason, "mac-c excluded: compute off (出口地区 CN") {
+		t.Fatalf("auto placement = %q %q %v; want mac-d, mac-c excluded by region", pl.Machine, pl.Reason, err)
 	}
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 41,
-		"worker_id": issueWID(f5.FleetID, 41), "node": "m4"})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 41,
+		"worker_id": issueWID(f5.FleetID, 41), "node": "mac-c"})
 	if e, _ := out["error"].(map[string]any); st != 503 || e["code"] != "NO_ELIGIBLE_NODE" {
-		t.Fatalf("named place on m4 = %d %v; want NO_ELIGIBLE_NODE", st, out)
+		t.Fatalf("named place on mac-c = %d %v; want NO_ELIGIBLE_NODE", st, out)
 	}
 	_, nodes := nodeStatuses(t, h)
-	if nodes["m4"]["compute_off"] != true || nodes["m4"]["compute_closed"] != true ||
-		!strings.Contains(nodes["m4"]["compute_why"].(string), "CN") {
-		t.Fatalf("roster m4 = %v; want compute_off + compute_closed naming CN", nodes["m4"])
+	if nodes["mac-c"]["compute_off"] != true || nodes["mac-c"]["compute_closed"] != true ||
+		!strings.Contains(nodes["mac-c"]["compute_why"].(string), "CN") {
+		t.Fatalf("roster mac-c = %v; want compute_off + compute_closed naming CN", nodes["mac-c"])
 	}
 	fs := computeFindings(t, h)
-	if len(fs) != 1 || fs[0].Severity != "warning" || !strings.Contains(fs[0].Title, "verk@m4") || !strings.Contains(fs[0].Title, "CN") {
-		t.Fatalf("compute_region findings = %+v; want one warning naming verk@m4 and CN", fs)
+	if len(fs) != 1 || fs[0].Severity != "warning" || !strings.Contains(fs[0].Title, "frank@mac-c") || !strings.Contains(fs[0].Title, "CN") {
+		t.Fatalf("compute_region findings = %+v; want one warning naming frank@mac-c and CN", fs)
 	}
 
-	m4.beatProbe("m4", "verk", machineB, nil, false, probe("US", control.ProbeOK), f4)
-	waitProbe(t, h, "ep_m4", control.ProbeOK, false)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("back in a supported region: %q %v; want m4", pl.Machine, err)
+	macC.beatProbe("mac-c", "frank", machineB, nil, false, probe("US", control.ProbeOK), f4)
+	waitProbe(t, h, "ep_mac-c", control.ProbeOK, false)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("back in a supported region: %q %v; want mac-c", pl.Machine, err)
 	}
 	if fs := computeFindings(t, h); len(fs) != 0 {
 		t.Fatalf("alert after the region came back: %+v", fs)
@@ -96,13 +96,13 @@ func TestComputeRegionClosesAndAlerts(t *testing.T) {
 // 支持地区 + 可达, compute off, policy off → only a hint, never opened; the
 // policy on opens it; a stale probe or an unreachable one does not.
 func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	waitLoad(t, h, "m5", 5)
-	m4.beatProbe("m4", "verk", machineB, computeOff(), false, probe("US", control.ProbeOK), f4)
-	waitProbe(t, h, "ep_m4", control.ProbeOK, false)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("policy off: %q %v; want m5 (an ok probe only hints)", pl.Machine, err)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	waitLoad(t, h, "mac-d", 5)
+	macC.beatProbe("mac-c", "frank", machineB, computeOff(), false, probe("US", control.ProbeOK), f4)
+	waitProbe(t, h, "ep_mac-c", control.ProbeOK, false)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("policy off: %q %v; want mac-d (an ok probe only hints)", pl.Machine, err)
 	}
 	if fs := computeFindings(t, h); len(fs) != 0 {
 		t.Fatalf("a coordinate-only node is no alert: %+v", fs)
@@ -110,34 +110,34 @@ func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
 
 	putSetting(t, h, ComputeAutoKey, "maybe", 400)
 	putSetting(t, h, ComputeAutoKey, "on", 200)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("compute_auto=on: %q %v; want m4 opened by policy", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("compute_auto=on: %q %v; want mac-c opened by policy", pl.Machine, err)
 	}
-	if _, nodes := nodeStatuses(t, h); nodes["m4"]["compute_auto"] != true {
-		t.Fatalf("roster m4 = %v; want compute_auto", nodes["m4"])
+	if _, nodes := nodeStatuses(t, h); nodes["mac-c"]["compute_auto"] != true {
+		t.Fatalf("roster mac-c = %v; want compute_auto", nodes["mac-c"])
 	}
 
 	stale := probe("US", control.ProbeOK)
 	stale.TS = time.Now().Add(-3 * 24 * time.Hour)
-	m4.beatProbe("m4", "verk", machineB, computeOff(), false, stale, f4)
+	macC.beatProbe("mac-c", "frank", machineB, computeOff(), false, stale, f4)
 	waitFor(t, 3*time.Second, "stale probe", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return hb.Probe != nil && time.Since(hb.Probe.TS) > probeFreshFor
 	})
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("stale probe: %q %v; want m5", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("stale probe: %q %v; want mac-d", pl.Machine, err)
 	}
-	m4.beatProbe("m4", "verk", machineB, computeOff(), false, probe("US", control.ProbeUnreachable), f4)
-	waitProbe(t, h, "ep_m4", control.ProbeUnreachable, false)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("unreachable probe: %q %v; want m5", pl.Machine, err)
+	macC.beatProbe("mac-c", "frank", machineB, computeOff(), false, probe("US", control.ProbeUnreachable), f4)
+	waitProbe(t, h, "ep_mac-c", control.ProbeUnreachable, false)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("unreachable probe: %q %v; want mac-d", pl.Machine, err)
 	}
 	// Policy on never opens a login in an unsupported region, and that
 	// login asked for nothing, so it is no alert either.
-	m4.beatProbe("m4", "verk", machineB, computeOff(), false, probe("CN", control.ProbeUnsupportedRegion), f4)
-	waitProbe(t, h, "ep_m4", control.ProbeUnsupportedRegion, false)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("region + policy: %q %v; want m5", pl.Machine, err)
+	macC.beatProbe("mac-c", "frank", machineB, computeOff(), false, probe("CN", control.ProbeUnsupportedRegion), f4)
+	waitProbe(t, h, "ep_mac-c", control.ProbeUnsupportedRegion, false)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("region + policy: %q %v; want mac-d", pl.Machine, err)
 	}
 	if fs := computeFindings(t, h); len(fs) != 0 {
 		t.Fatalf("a coordinate-only node in CN is no alert: %+v", fs)
@@ -148,21 +148,21 @@ func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
 // rule; --force keeps a login open over its region and lands in fleet_audit
 // once per link.
 func TestComputeUnreachableAndForce(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	waitLoad(t, h, "m5", 5)
-	m4.beatProbe("m4", "verk", machineB, computeOn(), false, probe("US", control.ProbeUnreachable), f4)
-	waitProbe(t, h, "ep_m4", control.ProbeUnreachable, false)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("unreachable, compute on: %q %v; want m4 kept", pl.Machine, err)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	waitLoad(t, h, "mac-d", 5)
+	macC.beatProbe("mac-c", "frank", machineB, computeOn(), false, probe("US", control.ProbeUnreachable), f4)
+	waitProbe(t, h, "ep_mac-c", control.ProbeUnreachable, false)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("unreachable, compute on: %q %v; want mac-c kept", pl.Machine, err)
 	}
 
 	for i := 0; i < 2; i++ {
-		m4.beatProbe("m4", "verk", machineB, computeOn(), true, probe("CN", control.ProbeUnsupportedRegion), f4)
+		macC.beatProbe("mac-c", "frank", machineB, computeOn(), true, probe("CN", control.ProbeUnsupportedRegion), f4)
 	}
-	waitProbe(t, h, "ep_m4", control.ProbeUnsupportedRegion, true)
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("forced: %q %v; want m4", pl.Machine, err)
+	waitProbe(t, h, "ep_mac-c", control.ProbeUnsupportedRegion, true)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("forced: %q %v; want mac-c", pl.Machine, err)
 	}
 	if fs := computeFindings(t, h); len(fs) != 0 {
 		t.Fatalf("a forced login is no alert: %+v", fs)
@@ -177,27 +177,27 @@ func TestComputeUnreachableAndForce(t *testing.T) {
 // says compute=true opens the login.
 func TestComputeBeatOverridesHello(t *testing.T) {
 	h := newFleetHarness(t)
-	m5 := connectWriteNode(t, h, "m5")
-	m4 := connectWriteNodeHello(t, h, "m4", control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
+	macD := connectWriteNode(t, h, "mac-d")
+	macC := connectWriteNodeHello(t, h, "mac-c", control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
 		Capabilities: []string{control.CapRead, control.CapWrite}, Compute: computeOff()})
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	waitLoad(t, h, "m5", 5)
-	m4.beatProbe("m4", "verk", machineB, computeOff(), false, nil, f4)
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	waitLoad(t, h, "mac-d", 5)
+	macC.beatProbe("mac-c", "frank", machineB, computeOff(), false, nil, f4)
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("hello off: %q %v; want m5", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("hello off: %q %v; want mac-d", pl.Machine, err)
 	}
-	m4.beatProbe("m4", "verk", machineB, computeOn(), false, nil, f4)
-	waitFor(t, 3*time.Second, "m4 says compute on", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+	macC.beatProbe("mac-c", "frank", machineB, computeOn(), false, nil, f4)
+	waitFor(t, 3*time.Second, "mac-c says compute on", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return hb.Compute != nil && *hb.Compute
 	})
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("beat said on: %q %v; want m4", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("beat said on: %q %v; want mac-c", pl.Machine, err)
 	}
 }
 

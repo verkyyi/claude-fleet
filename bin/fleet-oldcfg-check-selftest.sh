@@ -166,7 +166,7 @@ WL=$(mk w-loop looping OLD "$WORK/stale.json" 12)
 WN=$(mk w-noman done OLD '' 13)
 WO=$(mk w-ok done NEW "$WORK/tool.json" 14)       # current: its manifest is never judged
 WP=$(mk w-panel done OLD "$WORK/tool.json" 15); T set-option -w -t "$WP" @fleet_role panel
-WR=$(mk w-remote done OLD "$WORK/tool.json" 16); T set-option -w -t "$WR" @remote m4
+WR=$(mk w-remote done OLD "$WORK/tool.json" 16); T set-option -w -t "$WR" @remote mac-a
 WS=$(mk w-stale done OLD "$WORK/stale.json" 17)
 sweep() { OUT=$(bash "$SUT" --sweep "$@" --new-dir "$NEW" -- "$S" 2>&1); RC=$?; }
 sweep --list
@@ -246,7 +246,7 @@ rm -f "$BROKEN"
 # ============================================================================
 # E. the sidebar view (fleet-sidebar.py)
 # ============================================================================
-out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
+out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
   python3 - "$BIN/fleet-sidebar.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -258,12 +258,12 @@ assert m.PAIRS[m.PAIR_BROKEN + m.SEL_GLYPH] == ("PAL_RED", "PAL_SEL")
 assert len(m.PAIRS) == len(set(m.PAIRS)), "a pair number collides"
 # issue #2305: a broken row's state glyph is its own (`✗`, painted red) — the
 # word is the bar's; stale / ok rows keep the producer's glyph
-row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
+row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
 assert m.row_glyph(row + ["broken"]) == ("✗", "broken"), m.row_glyph(row + ["broken"])
 assert m.row_glyph(row + ["stale"]) == ("✓", "") and m.row_glyph(row + ["ok"]) == ("✓", "")
 assert m.row_glyph(["@1", "needs", "?"] + row[3:] + ["broken"]) == ("?", ""), "a question keeps its red ?"
-assert m.row_glyph(row[:8] + ["m4!"] + row[9:] + ["broken"])[1] == "lost", "a lost machine wins"
-assert m.detail_line(row + ["broken"]) == "worker-one · @m4 · 会坏·需重开", m.detail_line(row + ["broken"])
+assert m.row_glyph(row[:8] + ["mac-a!"] + row[9:] + ["broken"])[1] == "lost", "a lost machine wins"
+assert m.detail_line(row + ["broken"]) == "worker-one · @mac-a · 会坏·需重开", m.detail_line(row + ["broken"])
 assert m.row_need(row + ["broken"]) == m.row_need(row) and w("✗") == w("✓")
 print("E-ok")
 PY

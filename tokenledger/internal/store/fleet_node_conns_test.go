@@ -43,36 +43,36 @@ func TestFleetNodeConnsOwnership(t *testing.T) {
 		return c.Replica + "/" + c.Epoch
 	}
 
-	claim("ep_m4", "a", "e1", "read", "write")
-	c, _, _ := s.NodeConnOf("ep_m4")
+	claim("ep_mac-a", "a", "e1", "read", "write")
+	c, _, _ := s.NodeConnOf("ep_mac-a")
 	if !c.Admin || !c.HasCap("write") || c.HasCap("move") || c.URL != "http://a:8787" {
 		t.Fatalf("row read back as %+v", c)
 	}
-	// m4 reconnects to b before a notices its old link die.
-	claim("ep_m4", "b", "e2")
-	if err := s.ReleaseNodeConn("ep_m4", "a", "e1"); err != nil {
+	// mac-a reconnects to b before a notices its old link die.
+	claim("ep_mac-a", "b", "e2")
+	if err := s.ReleaseNodeConn("ep_mac-a", "a", "e1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := owner("ep_m4"); got != "b/e2" {
+	if got := owner("ep_mac-a"); got != "b/e2" {
 		t.Fatalf("a late drop on a deleted b's row: owner %q", got)
 	}
-	if c, _, _ := s.NodeConnOf("ep_m4"); len(c.Caps) != 0 || c.Admin {
+	if c, _, _ := s.NodeConnOf("ep_mac-a"); len(c.Caps) != 0 || c.Admin {
 		t.Fatalf("the newer hello's caps did not replace the old: %+v", c)
 	}
-	if err := s.ReleaseNodeConn("ep_m4", "b", "e2"); err != nil {
+	if err := s.ReleaseNodeConn("ep_mac-a", "b", "e2"); err != nil {
 		t.Fatal(err)
 	}
-	if got := owner("ep_m4"); got != "" {
+	if got := owner("ep_mac-a"); got != "" {
 		t.Fatalf("own drop left %q", got)
 	}
 
-	claim("ep_m4", "a", "e3")
-	claim("ep_m5", "b", "e4")
+	claim("ep_mac-a", "a", "e3")
+	claim("ep_mac-b", "b", "e4")
 	if n, err := s.ReleaseReplicaConns("a"); err != nil || n != 1 {
 		t.Fatalf("ReleaseReplicaConns(a) = %d, %v; want 1", n, err)
 	}
 	rows, _ := s.NodeConns()
-	if len(rows) != 1 || rows[0].EndpointID != "ep_m5" {
-		t.Fatalf("after a's start: %+v; want only b's ep_m5", rows)
+	if len(rows) != 1 || rows[0].EndpointID != "ep_mac-b" {
+		t.Fatalf("after a's start: %+v; want only b's ep_mac-b", rows)
 	}
 }

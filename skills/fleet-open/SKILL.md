@@ -41,7 +41,7 @@ seconds (`FLEET_OPEN_ACK_WAIT`, 12) for the far side to say how it went.
 
 | result | meaning | what to tell the operator |
 |---|---|---|
-| `opened` | the far side said it opened it: their client through the hub (#1717), their `fleet` thin client's loop (here, or through the home machine they watch this one from — 「经 mini2」), or this very screen | "opened on your <device>" (stderr names it) |
+| `opened` | the far side said it opened it: their client through the hub (#1717), their `fleet` thin client's loop (here, or through the home machine they watch this one from — 「经 mac-d」), or this very screen | "opened on your <device>" (stderr names it) |
 | `failed:<why>` (exit 4) | the far side said it could not (no browser, a port busy, the forward refused, no thin client on the home) | say why, and give them the link |
 | `unconfirmed` | handed over, but no receipt within the wait — or a road that has none yet: the iTerm2 escape (#3540), a proxy window, open-url.sh's tunnel / clipboard; a phone's link on its bottom bar | "I sent it but cannot confirm it opened — the link is …" (stderr gives it) |
 | `failed:…` (exit 2) | a file fleet-show could not send (`PATH …` line above it) | give them the path |

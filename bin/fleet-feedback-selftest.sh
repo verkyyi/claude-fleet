@@ -74,7 +74,7 @@ S_TEXT="ghp_FAKEtext$$aaaaaaaaaaaa"
 S_LOG="sk-ant-api03-FAKElog$$bbbbbbbb"
 S_SCREEN="glpat-FAKEscreen$$cccccccc"
 for s in github anthropic gitlab; do grep -q "^$s	" "$ROOT/conf/secret-shapes.list" || fail "the shapes table lost its $s row"; done; ok
-printf 'connect m5 relay %s\n' "$S_LOG" > "$XDG_CACHE_HOME/claude-fleet/shell/logs/connect.log"
+printf 'connect mac-b relay %s\n' "$S_LOG" > "$XDG_CACHE_HOME/claude-fleet/shell/logs/connect.log"
 printf 'old place line\n' > "$XDG_CACHE_HOME/claude-fleet/shell/logs/place.log"
 touch -t 202001010000 "$XDG_CACHE_HOME/claude-fleet/shell/logs/place.log"   # older than 30 minutes
 export FLEET_FEEDBACK_SCREEN_CMD="printf 'prompt> export X=%s\n' '$S_SCREEN'"

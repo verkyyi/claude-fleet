@@ -351,7 +351,7 @@ EOF_FORGE
   # Detection is cache-only: the prmap pr-refresh already writes (ZERO extra gh).
   # The PR pass runs FIRST (issue #3352): a merged PR is the surest reap there is,
   # and before this an idle pass that timed out (`rc=124`) ended the tick ahead of
-  # it — on 2026-10-11 macmini's idle pass timed out every tick from 06:47 and not
+  # it — on 2026-10-11 mac-c's idle pass timed out every tick from 06:47 and not
   # one merged worker (#3302, #3143, #3321) was looked at for over half an hour.
   # One pass per hosted repo (issue #791), sharing this fleet's per-tick cap.
   while IFS= read -r r; do

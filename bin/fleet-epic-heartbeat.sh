@@ -53,7 +53,7 @@
 # ONLY A BATCH WITH WORK HOLDS THE INSTALL (issue #2247). An idle batch — no
 # member session running, no member PR in flight, the loop only waiting on the
 # operator's answer — still stamps every tick, and on 2026-10-07 EPIC #2140 held
-# m4 at an old version for hours that way. So the stamp carries --live (member
+# mac-a at an old version for hours that way. So the stamp carries --live (member
 # sessions alive this tick) and --inflight (member PRs open and not yet merged),
 # and fleet_epic_holding (bin/fleet-lib.sh) reads a fresh mark with live 0 AND
 # inflight 0 as `idle`: install-sync switches under it. A mark without the two

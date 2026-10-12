@@ -162,7 +162,7 @@ func TestMigrate_AddsFleetColumnsToAnOlderDatabase(t *testing.T) {
 	}
 	if _, err := old.Exec(
 		`INSERT INTO endpoints (endpoint_id, token_hash, label, enrolled_at)
-		 VALUES ('ep-old', 'hash-old', 'macmini', '2026-01-01T00:00:00Z')`); err != nil {
+		 VALUES ('ep-old', 'hash-old', 'mac-c', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := old.Close(); err != nil {

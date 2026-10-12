@@ -81,11 +81,11 @@ func TestJoinCodeRedeemsOnce(t *testing.T) {
 		t.Fatalf("command %q does not carry the hub, the code and the script", v.Command)
 	}
 
-	code, out := joinWith(t, h, v.Code, "spot-1.local", "verkyyi")
+	code, out := joinWith(t, h, v.Code, "spot-1.local", "ivan")
 	if code != 200 || !strings.HasPrefix(out.Token, "ccq_") || out.EndpointID == "" {
 		t.Fatalf("join: HTTP %d %+v", code, out)
 	}
-	if out.Label != "spot-1-verkyyi" {
+	if out.Label != "spot-1-ivan" {
 		t.Fatalf("label %q; want the reported host + login", out.Label)
 	}
 	if kind, _ := h.srv.Store.EndpointKind(out.EndpointID); kind != "agent" {
@@ -96,7 +96,7 @@ func TestJoinCodeRedeemsOnce(t *testing.T) {
 		t.Fatalf("self before connecting: HTTP %d %s", resp.StatusCode, body)
 	}
 
-	if code, _ := joinWith(t, h, v.Code, "spot-2", "verkyyi"); code != http.StatusUnauthorized {
+	if code, _ := joinWith(t, h, v.Code, "spot-2", "ivan"); code != http.StatusUnauthorized {
 		t.Fatalf("second redemption: HTTP %d; want 401", code)
 	}
 	if code, _ := joinWith(t, h, "fj_aaaaaaaaaaaaaaaaaaaaaaaaaa", "x", "y"); code != http.StatusUnauthorized {
@@ -123,11 +123,11 @@ func TestJoinCodeExpires(t *testing.T) {
 	onTime := mintJoinCode(t, h, "m6")
 
 	now = t0.Add(JoinCodeTTL + time.Second)
-	if code, _ := joinWith(t, h, late.Code, "m5", "verkyyi"); code != http.StatusUnauthorized {
+	if code, _ := joinWith(t, h, late.Code, "mac-d", "ivan"); code != http.StatusUnauthorized {
 		t.Fatalf("expired code: HTTP %d; want 401", code)
 	}
 	now = t0.Add(JoinCodeTTL - time.Second)
-	code, out := joinWith(t, h, onTime.Code, "m5", "verkyyi")
+	code, out := joinWith(t, h, onTime.Code, "mac-d", "ivan")
 	if code != 200 || out.Label != "m6" {
 		t.Fatalf("code with a label: HTTP %d label %q; want 200 m6", code, out.Label)
 	}
@@ -163,8 +163,8 @@ func TestJoinCodesOperatorOnly(t *testing.T) {
 // The admin flag in the answer is the hub's list, not the machine's claim.
 func TestJoinReportsAdminFromHubList(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	if _, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "verkyyi"); !out.Admin {
+	h.srv.FleetAdmins = []string{"ivan"}
+	if _, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "ivan"); !out.Admin {
 		t.Fatalf("operator login joined without admin: %+v", out)
 	}
 	if _, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "alice"); out.Admin {
@@ -181,7 +181,7 @@ func TestNodeDistServesBinaryToEnrolledNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.srv.FleetDistDir = dir
-	_, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "verkyyi")
+	_, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "ivan")
 	if len(out.Dist) != 1 || out.Dist[0] != "linux-amd64" {
 		t.Fatalf("dist %v; want [linux-amd64]", out.Dist)
 	}
@@ -204,10 +204,10 @@ func TestNodeDistServesBinaryToEnrolledNode(t *testing.T) {
 // the signal the join script waits for.
 func TestNodeSelfOnlineAfterConnect(t *testing.T) {
 	h := newFleetHarness(t)
-	_, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "verkyyi")
+	_, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "ivan")
 	c := dialNode(t, h, out.Token)
 	hello(t, c, control.Proto, 1000)
-	beat(t, c, control.Proto, control.Heartbeat{Hostname: "m6", OSUser: "verkyyi"})
+	beat(t, c, control.Proto, control.Heartbeat{Hostname: "m6", OSUser: "ivan"})
 	waitFor(t, 3*time.Second, "self online", func() bool {
 		_, body := getWithToken(t, h, "/v1/node/self", out.Token)
 		var v NodeView
@@ -238,10 +238,10 @@ func TestJoinRoutesOffWithoutFleet(t *testing.T) {
 // a usage report (and the SSH CA is not held back until some reconnect).
 func TestJoinedAgentIsAdminOnFirstConnect(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	_, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "verkyyi")
+	h.srv.FleetAdmins = []string{"ivan"}
+	_, out := joinWith(t, h, mintJoinCode(t, h, "").Code, "m6", "ivan")
 	n := dialAdmin(t, h, out.Token, true)
-	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: "m6", OSUser: "verkyyi"})
+	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: "m6", OSUser: "ivan"})
 	waitFor(t, 3*time.Second, "joined node is admin", func() bool {
 		for _, v := range roster(t, h).Nodes {
 			if v.EndpointID == out.EndpointID {

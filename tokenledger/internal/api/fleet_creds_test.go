@@ -41,7 +41,7 @@ func (r *stubRefresher) Refresh(_ context.Context, provider string, s credvault.
 }
 
 // newVaultHarness is a fleet hub with the vault on, one person ("alice")
-// whose active account is login alice on m4, and a node enrolled as that
+// whose active account is login alice on mac-c, and a node enrolled as that
 // login. It returns the harness, the node's token and the refresher.
 func newVaultHarness(t *testing.T) (*harness, string, *stubRefresher) {
 	t.Helper()
@@ -52,12 +52,12 @@ func newVaultHarness(t *testing.T) (*harness, string, *stubRefresher) {
 	}
 	ref := &stubRefresher{}
 	h.srv.Vault = &credvault.Vault{Store: h.srv.Store, Sealer: sealer, Refresher: ref}
-	tok := enrollAs(t, h, "alice-m4", "m4", "alice")
+	tok := enrollAs(t, h, "alice-mac-c", "mac-c", "alice")
 	p, err := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return h, tok, ref
@@ -154,7 +154,7 @@ func TestNodeLeaseGetsOnlyShortLivedHalf(t *testing.T) {
 	for _, a := range audit {
 		if a.Action == store.CredIssue {
 			issues++
-			if a.Hostname != "m4" || a.OSUser != "alice" || a.EndpointID != "ep_alice-m4" {
+			if a.Hostname != "mac-c" || a.OSUser != "alice" || a.EndpointID != "ep_alice-mac-c" {
 				t.Fatalf("issue audit row lacks the node: %+v", a)
 			}
 		}
@@ -168,14 +168,14 @@ func TestNodeLeaseOnlyForOwnLogin(t *testing.T) {
 	h, _, _ := newVaultHarness(t)
 	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt"})
 	// bob's login on the same machine, with no fleet account: refused.
-	bob := enrollAs(t, h, "bob-m4", "m4", "bob")
+	bob := enrollAs(t, h, "bob-mac-c", "mac-c", "bob")
 	if code, _, refusal := lease(t, h, bob); code != http.StatusForbidden || refusal["error"] != LeaseNoPrincipal {
 		t.Fatalf("bob: %d %v", code, refusal)
 	}
 	// alice's login name on a machine she was never assigned: refused too.
-	elsewhere := enrollAs(t, h, "alice-m5", "m5", "alice")
+	elsewhere := enrollAs(t, h, "alice-mac-d", "mac-d", "alice")
 	if code, _, refusal := lease(t, h, elsewhere); code != http.StatusForbidden || refusal["error"] != LeaseNoPrincipal {
-		t.Fatalf("alice on m5: %d %v", code, refusal)
+		t.Fatalf("alice on mac-d: %d %v", code, refusal)
 	}
 	if code, _, _ := lease(t, h, "not-a-token"); code != http.StatusUnauthorized {
 		t.Fatalf("bad token: %d", code)
@@ -188,7 +188,7 @@ func TestRevokedNodeCannotLease(t *testing.T) {
 	if code, _, _ := lease(t, h, tok); code != http.StatusOK {
 		t.Fatalf("before revoke: %d", code)
 	}
-	for _, rev := range []FleetRevokeRequest{{Hostname: "m4"}, {PrincipalID: pAlice}, {Hostname: "m4", PrincipalID: pAlice}} {
+	for _, rev := range []FleetRevokeRequest{{Hostname: "mac-c"}, {PrincipalID: pAlice}, {Hostname: "mac-c", PrincipalID: pAlice}} {
 		rev.Reason = "laptop lost"
 		if code, out := h.post(t, "/v1/fleet/credentials/revoke", rev); code != http.StatusOK {
 			t.Fatalf("revoke %+v: %d %v", rev, code, out)
@@ -243,7 +243,7 @@ func TestCredentialRoutesAreOperatorOnlyAndVaultGated(t *testing.T) {
 // Off is today's hub: no lease route answers, and no vault table exists.
 func TestFleetOffHasNoCredentialRoutes(t *testing.T) {
 	h := newHarness(t)
-	tok := h.enroll(t, "m5")
+	tok := h.enroll(t, "mac-d")
 	code, ok, _ := lease(t, h, tok)
 	if code == http.StatusOK || ok.Credentials != nil {
 		t.Fatalf("fleet off: /v1/node/credentials answered %d %+v", code, ok)
@@ -368,7 +368,7 @@ func TestLockedVaultRefusesAndAlerts(t *testing.T) {
 	if code != http.StatusServiceUnavailable || out["error"] != LeaseVaultLocked {
 		t.Fatalf("locked put: %d %v", code, out)
 	}
-	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4"}); code != http.StatusOK {
+	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-c"}); code != http.StatusOK {
 		t.Fatalf("revoke while locked: %d %v", code, out)
 	}
 
@@ -381,7 +381,7 @@ func TestLockedVaultRefusesAndAlerts(t *testing.T) {
 	// Unlocked again: the finding clears and leases flow (the revocation
 	// above aside — lift it).
 	h.srv.Vault.Unlock(key)
-	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4", Lift: true}); code != http.StatusOK {
+	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-c", Lift: true}); code != http.StatusOK {
 		t.Fatal("lift")
 	}
 	h.getJSON(t, "/v1/findings?account=all&view=now", &now)
@@ -427,7 +427,7 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 	}
 
 	// Nobody / revoked: the pool is not a back door.
-	bob := enrollAs(t, h, "bob-m4", "m4", "bob")
+	bob := enrollAs(t, h, "bob-mac-c", "mac-c", "bob")
 	if code, _, refusal := lease(t, h, bob); code != http.StatusForbidden || refusal["error"] != LeaseNoPrincipal {
 		t.Fatalf("bob: %d %v", code, refusal)
 	}
@@ -462,7 +462,7 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 	for _, a := range audit {
 		if a.Action == store.CredIssue && a.Account == "icloud" {
 			issued++
-			if a.PrincipalID != pAlice || a.Detail != "pool" || a.Hostname != "m4" {
+			if a.PrincipalID != pAlice || a.Detail != "pool" || a.Hostname != "mac-c" {
 				t.Fatalf("pool issue audit = %+v", a)
 			}
 		}

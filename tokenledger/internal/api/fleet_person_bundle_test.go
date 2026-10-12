@@ -49,12 +49,12 @@ var personV1 = map[string]any{"bundle": map[string]any{
 // literal token is 422; a stale base is 409; a restore is a new version; a
 // login bound to no one has no layer.
 func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
-	h, _, n := peerHarness(t) // Alice: alice on macmini + macmini-m4; Bob: bob on macmini-m4; verk: no one
+	h, _, n := peerHarness(t) // Alice: alice on mac-e + mac-e-mac-c; Bob: bob on mac-e-mac-c; frank: no one
 
 	// nothing yet: version 0, an empty layer
 	code, out, raw, _ := personCall(t, h, http.MethodGet, asNode(n["alice5"].token), nil, "")
 	if code != 200 || out.Version != 0 || string(out.Bundle) != "{}" {
-		t.Fatalf("alice@m5 before any PUT: HTTP %d %s, want version 0 and {}", code, raw)
+		t.Fatalf("alice@mac-d before any PUT: HTTP %d %s, want version 0 and {}", code, raw)
 	}
 
 	// A writes once, from a session
@@ -81,7 +81,7 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 
 	// B's layer is B's: empty, and B cannot touch A's
 	if code, got, raw, _ := personCall(t, h, http.MethodGet, asNode(n["bob4"].token), nil, ""); code != 200 || got.Version != 0 {
-		t.Fatalf("bob@m4 reads his own: HTTP %d %s, want version 0", code, raw)
+		t.Fatalf("bob@mac-c reads his own: HTTP %d %s, want version 0", code, raw)
 	}
 	for name, auth := range map[string]func(http.Header){"Bob's session": asSession(pBob), "Bob's node": asNode(n["bob4"].token)} {
 		if code, _, raw, _ := personCall(t, h, http.MethodPut, auth, map[string]any{"bundle": map[string]any{}}, "?principal="+pAlice); code != http.StatusForbidden {
@@ -95,7 +95,7 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 	// A's own node writes A's layer; a stale base never overwrites
 	code, v2, raw, _ := personCall(t, h, http.MethodPut, asNode(n["alice4"].token), map[string]any{"base": 1, "bundle": map[string]any{"skills": map[string]any{"my-notes": "# notes\n"}}}, "")
 	if code != 200 || v2.Version != 2 || v2.Prev != 1 || !strings.HasPrefix(v2.Actor, "node:alice@") {
-		t.Fatalf("alice@m4 PUT base 1: HTTP %d %s, want version 2 by her node", code, raw)
+		t.Fatalf("alice@mac-c PUT base 1: HTTP %d %s, want version 2 by her node", code, raw)
 	}
 	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"base": 1, "bundle": map[string]any{}}, ""); code != http.StatusConflict {
 		t.Fatalf("stale base: HTTP %d %s, want 409", code, raw)
@@ -140,7 +140,7 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 	// a login bound to no person has no personal layer
 	for _, m := range []string{http.MethodGet, http.MethodPut} {
 		if code, _, raw, _ := personCall(t, h, m, asNode(n["verk5"].token), personV1, ""); code != http.StatusNotFound || !strings.Contains(raw, "no person for this login") {
-			t.Fatalf("verk@m5 %s: HTTP %d %s, want 404 no person for this login", m, code, raw)
+			t.Fatalf("frank@mac-d %s: HTTP %d %s, want 404 no person for this login", m, code, raw)
 		}
 	}
 	if code, _, _, _ := personCall(t, h, http.MethodGet, nil, nil, ""); code != http.StatusUnauthorized {

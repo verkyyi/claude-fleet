@@ -112,13 +112,13 @@ opened, _ = sidebar.fold_now(shut, 'hdr:o/a', 'expand', '@2', fcache)
 assert ids(opened) == ids(frows) and opened[0][3] == 'a (4)', opened
 assert sidebar.fold_now(frows, '@5', 'collapse', '@9', fcache)[1] is None
 assert sidebar.fold_now(frows, '@1', 'expand', '@9', fcache)[1] is None
-assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
+assert sidebar.fold_now(frows, 'wid:mac-a/x', 'collapse', '@9', fcache)[1] is None
 # A row is state · name · (an EPIC's) N/N and nothing else (issue #2305); the
 # producer's fields 9-15 — machine · issue · PR · ctx% · cfg · reap — are the
 # bar's, for the highlighted row (detail_line → @fleet_hint_name).
-r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'm4', '#1532', '#1552✓', '45%', '', '', 'merged']))
+r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'mac-a', '#1532', '#1552✓', '45%', '', '', 'merged']))
 assert len(r12) == sidebar.ROW_FIELDS == 19 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902) · 17-18: ask (#2538) · 19: ctx (#2717, #2963)
-want = 'issue-1532 · #1532 · @m4 · #1552✓ · 合并后回收 · 45%'
+want = 'issue-1532 · #1532 · @mac-a · #1552✓ · 合并后回收 · 45%'
 assert sidebar.detail_line(r12) == want, repr(sidebar.detail_line(r12))
 assert sidebar.bar_hint([r12], '@1', '@1', 30)[1] == want.replace('#', '##'), 'the bar: # doubled for tmux'
 assert sidebar.bar_hint([['hdr', 'o/a', '', 'a (1)', ' '], r12], 'hdr:o/a', '@1', 30)[1] == '', 'a heading: no detail'
@@ -126,7 +126,7 @@ assert sidebar.detail_line(['@3', 'idle', '·', 'notes', ' ', '', '0', '', '', '
 for w in (24, 30, 44):
     for badge in ('', '2/3'):
         line = sidebar.row_text('▶', '·', ' ', 'issue-1532 一个很长很长的名字', badge, w)
-        assert sidebar.width_of(line) <= w and not re.search(r'#1532|@m4|45%|合并', line), repr(line)
+        assert sidebar.width_of(line) <= w and not re.search(r'#1532|@mac-a|45%|合并', line), repr(line)
         assert not badge or line.endswith('· ' + badge), 'the N/N stays whole: %r' % line
 assert sidebar.row_need(r12) == sidebar.row_need(r12[:10] + [''] * 6), 'row_need asks nothing for the moved fields'
 # The row ends in its issue number, whole and right-aligned at any width (issue
@@ -148,7 +148,7 @@ _g, _stage = os.environ.get('FLEET_STATUS_G'), sidebar.STAGE
 os.environ['FLEET_STATUS_G'] = tempfile.mkdtemp()
 sidebar.STAGE = 'fleet-shell'
 with open(os.path.join(os.environ['FLEET_STATUS_G'], 'orch_x'), 'w', encoding='utf-8') as f:
-    f.write('\x1f'.join(['f/o', 'm4', 'online', 'needs', '', '', '2', 'decide=3', 'todo=1', 'park=2']) + '\n')
+    f.write('\x1f'.join(['f/o', 'mac-a', 'online', 'needs', '', '', '2', 'decide=3', 'todo=1', 'park=2']) + '\n')
 assert sidebar.with_portal([r12], None, 'x') == [r12], sidebar.with_portal([r12], None, 'x')
 placing = {'verb': 'compose', 'state': 'placing', 'title': '一件事'}
 top = sidebar.with_portal([r12], placing, 'x')
@@ -165,7 +165,7 @@ assert sidebar.detail_line(titled).startswith('托管机器上旧版 fleet host 
 # red ✗, a lost machine ⊘; a question keeps its red ? / ! (STATE_PAIR needs).
 broken = r12[:12] + ['broken'] + r12[13:]
 assert sidebar.row_glyph(broken) == ('✗', 'broken') and sidebar.row_glyph(r12) == ('·', '')
-assert sidebar.row_glyph(r12[:8] + ['m4!'] + r12[9:]) == ('⊘', 'lost')
+assert sidebar.row_glyph(r12[:8] + ['mac-a!'] + r12[9:]) == ('⊘', 'lost')
 assert sidebar.detail_line(broken).endswith('· 会坏·需重开'), sidebar.detail_line(broken)
 # A warm start whose issue never got filed (issue #2235): field 16 `failed` — a red
 # ∅ in the glyph's cell, 单子没建上 on the bar; a broken configuration still wins.
@@ -190,8 +190,8 @@ assert sidebar.acts('landed:1548') == '' and sidebar.tap('landed:7', 'landed:7')
 # ↵ reopens the driver seeded `/fleet-epic-run <N> --repo <repo>`: on this
 # machine through dash-raw-session.sh, from the shell / for another machine's row
 # through fleet-client-place.sh (the seed as its body, the row's machine).
-ek, ekr = 'epicstale:acme/app#1949', 'epicstale:acme/tool#77@m4'
-assert sidebar.epic_stale_ref(ek) == ('acme/app', '1949', '') and sidebar.epic_stale_ref(ekr) == ('acme/tool', '77', 'm4')
+ek, ekr = 'epicstale:acme/app#1949', 'epicstale:acme/tool#77@mac-a'
+assert sidebar.epic_stale_ref(ek) == ('acme/app', '1949', '') and sidebar.epic_stale_ref(ekr) == ('acme/tool', '77', 'mac-a')
 assert sidebar.epic_stale_ref('epicstale:x;y#1') is None and sidebar.epic_stale_ref('@1') is None
 assert sidebar.tap(ek, '@1') == 'select' and sidebar.tap(ek, ek) == 'epic', 'two taps: select, then ask'
 assert sidebar.acts(ek) == '' and sidebar.folds(ek) == '' and ek in sidebar.selectable([[ek, 'epicstale']])
@@ -210,7 +210,7 @@ try:
     assert got[-1][0][1:] == [str(real_bin / 'dash-raw-session.sh'), '--origin', 'hub', '--name', 'EPIC 1949',
                               '--prompt', '/fleet-epic-run 1949 --repo acme/app', '--repo', 'acme/app'], got[-1][0]
     assert got[-1][1].get('FLEET_SPAWN_FOCUS') == '1'
-    for shell, key, node in ((False, ekr, 'm4'), (True, ek, 'auto')):
+    for shell, key, node in ((False, ekr, 'mac-a'), (True, ek, 'auto')):
         sidebar.SHELL = shell
         sidebar.reopen_epic(key, {})
         a = got[-1][0]
@@ -227,8 +227,8 @@ finally:
 # to mark it read; ↵ marks this machine's row on the node's cursor
 # (fleet-orphan-reports.py read), another machine's / the shell's in this
 # computer's orphanrep_read.
-ok_, okr = 'orphanrep:0123456789ab', 'orphanrep:0123456789ab@m4'
-assert sidebar.orphan_ref(ok_) == ('0123456789ab', '') and sidebar.orphan_ref(okr) == ('0123456789ab', 'm4')
+ok_, okr = 'orphanrep:0123456789ab', 'orphanrep:0123456789ab@mac-a'
+assert sidebar.orphan_ref(ok_) == ('0123456789ab', '') and sidebar.orphan_ref(okr) == ('0123456789ab', 'mac-a')
 assert sidebar.orphan_ref('orphanrep:XYZ') is None and sidebar.orphan_ref('@1') is None
 assert sidebar.tap(ok_, '@1') == 'select' and sidebar.tap(ok_, ok_) == 'epic', 'two taps: select, then ask'
 assert sidebar.acts(ok_) == '' and sidebar.folds(ok_) == '' and ok_ in sidebar.selectable([[ok_, 'orphanrep']])
@@ -248,7 +248,7 @@ try:
     assert sidebar.read_orphan(okr) is True
     sidebar.SHELL = True
     assert sidebar.read_orphan(ok_) is True
-    assert open(os.path.join(sd, 'orphanrep_read')).read() == 'm4/0123456789ab\n/0123456789ab\n'
+    assert open(os.path.join(sd, 'orphanrep_read')).read() == 'mac-a/0123456789ab\n/0123456789ab\n'
     sidebar.SHELL = False
     cd = tempfile.mkdtemp()
     real_cd = os.environ.get('FLEET_CONF_DIR')
@@ -311,8 +311,8 @@ q = sidebar.Ask('rename', '改名› ', arg='@1', text='旧名').spec()
 assert (q['prompt'], q['text'], q['hint']) == ('改名›', '旧名', '↵ 确定 · esc 取消'), q
 q = sidebar.Ask('restore', 'y / r› ', hint='PR 已关', keys='yYrR').spec()
 assert (q['keys'], q['hint']) == ('yYrR', 'PR 已关'), q
-q = sidebar.Ask('place-where', '开在哪', menu=[('m4', 'm4', '', True), ('m5', 'm5', 'idle', False)]).spec()
-assert q['menu'][1] == ['m5', 'm5', 'idle', False] and q['at'] == 1 and q['hint'] == '', q
+q = sidebar.Ask('place-where', '开在哪', menu=[('mac-a', 'mac-a', '', True), ('mac-b', 'mac-b', 'idle', False)]).spec()
+assert q['menu'][1] == ['mac-b', 'mac-b', 'idle', False] and q['at'] == 1 and q['hint'] == '', q
 nq = sidebar.Ask('new', '新任务› ')
 nq.choices, nq.at, nq.repo = [('o/a', 'o/a'), ('o/b', 'o/b')], 0, 'o/a'
 q = nq.spec()
@@ -320,8 +320,8 @@ assert [c[0] for c in q['choices']] == ['o/a', 'o/b'] and 'b' in q['choices'][1]
 sq = sidebar.Ask('sub', '切到› ', arg='@1'); sq.choices = [('acct1', 'acct1 · 5h 10%')]
 assert sidebar.Ask('sub', '').spec().get('choices') is None and sq.spec()['fill'] and sq.spec()['at'] == -1
 q = fask.Question(sq.spec()); q.step(); assert q.line.text == 'acct1' and q.answer() == {'text': 'acct1', 'choice': 'acct1'}
-q = fask.Question(sidebar.Ask('place-where', '', menu=[('m4', 'm4', '', True), ('m5', 'm5', '', False)]).spec())
-q.move(1); assert q.answer() == {'choice': 'm5'}, 'a greyed item is never picked'
+q = fask.Question(sidebar.Ask('place-where', '', menu=[('mac-a', 'mac-a', '', True), ('mac-b', 'mac-b', '', False)]).spec())
+q.move(1); assert q.answer() == {'choice': 'mac-b'}, 'a greyed item is never picked'
 # A tap on a row's caret folds it (issue #1950: the mouse's ←/→) — on a session
 # row anywhere left of its name (issue #2167: ▸ / ▾, the gap after it, the glyph,
 # the marker), a heading's first two cells; a row with no block never.
@@ -1597,10 +1597,10 @@ try:
     now = str(int(time.time()))
     US = '\x1f'
     (cache / 'remote_fleet-test').write_text(
-        '#ts' + US + now + '\n#me' + US + 'm5\n#node' + US + 'm4' + US + 'online' + US + '1' + US + now + '\n' +
-        US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'working', 'claude',
+        '#ts' + US + now + '\n#me' + US + 'mac-b\n#node' + US + 'mac-a' + US + 'online' + US + '1' + US + now + '\n' +
+        US.join(('wid:' + F + '/issue-1423', 'mac-a', 'online', '1423', 'acme/app', 'working', 'claude',
                  '侧边栏', '', '', '0', '')) + '\n' +
-        US.join(('wid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/issue-1', 'm5', 'online', '1', '', 'working',
+        US.join(('wid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/issue-1', 'mac-b', 'online', '1', '', 'working',
                  'claude', 'worker-one', '', '', '1', w1)) + '\n')
     saved_conf = conf.read_text()
     conf.write_text(saved_conf + 'CCQUOTA_FLEET=1\nFLEET_SIDEBAR_SOURCE=hub\n')
@@ -1648,7 +1648,7 @@ try:
     # one way out is fleet-hub-write.sh (stubbed here through FLEET_HUB_WRITE_CMD,
     # which records the tool + its JSON); the local row's menu names neither
     # script. The answer item is greyed unless the row needs its person (col 10 =
-    # ask / perm, or state needs). Both menus list «new task on m4…» for the one
+    # ask / perm, or state needs). Both menus list «new task on mac-a…» for the one
     # online machine in the cache; without the cache (the hub off) neither does.
     remote_wid = 'wid:' + F + '/issue-1423'
     remote_items = menu_items(remote_wid)
@@ -1681,17 +1681,17 @@ try:
           and 'switch-client' not in remote_cmds['m'],
           'remote m does not ask on the question line: %r' % remote_cmds['m'])
     check(remote_items['a'].startswith('-'), 'a remote row that needs nothing greyed nothing: %r' % remote_items['a'])
-    check('confirm-before' in remote_cmds['x'] and 'm4' in remote_cmds['x'], 'the remote reap does not confirm first, naming the machine: %r' % remote_cmds['x'])
-    check(remote_items['1'] == '新建到 m4…' and '@sidebar_ask' in remote_cmds['1'] and 'new m4' in remote_cmds['1'],
-          'the remote menu does not offer «new task on m4» with --node=m4: %r %r' % (remote_items.get('1'), remote_cmds.get('1')))
+    check('confirm-before' in remote_cmds['x'] and 'mac-a' in remote_cmds['x'], 'the remote reap does not confirm first, naming the machine: %r' % remote_cmds['x'])
+    check(remote_items['1'] == '新建到 mac-a…' and '@sidebar_ask' in remote_cmds['1'] and 'new mac-a' in remote_cmds['1'],
+          'the remote menu does not offer «new task on mac-a» with --node=mac-a: %r %r' % (remote_items.get('1'), remote_cmds.get('1')))
     t1, _ = menu_shape(w1)
-    check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
+    check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · mac-b',
           'with the hub on the local menu title does not name this machine: %r' % t1)
     _, rshape = menu_shape(remote_wid)
     check(rshape == 'e|ma|rtsqclx|n1og|E',   # t 置顶 (#3517)
           'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
     # In the SHELL (issue #1518) the row-less group is gone — new task, new on
-    # m4, restore, add repo run scripts its computer does not have — and the
+    # mac-a, restore, add repo run scripts its computer does not have — and the
     # frame closes cleanly (no rule left dangling). Unset, the shape above is
     # the golden: the machine's menu is byte for byte what it was.
     sh_out = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', remote_wid, '--print'],
@@ -1711,15 +1711,15 @@ try:
           'the shell `?` sheet does not drop exactly the row-less items (已落地 o stays, #1952): %r' % sh_keys)
     local_items = menu_items(w1)
     local_cmds = menu_commands(w1)
-    check(local_items.get('1') == '新建到 m4…' and 'new m4' in local_cmds['1'],
-          'the local menu does not offer «new task on m4» while the hub is on: %r' % local_items.get('1'))
+    check(local_items.get('1') == '新建到 mac-a…' and 'new mac-a' in local_cmds['1'],
+          'the local menu does not offer «new task on mac-a» while the hub is on: %r' % local_items.get('1'))
     check(not any('fleet-sidebar-remote.sh' in c or 'fleet-hub-write.sh' in c for c in local_cmds.values()),
           'a local row item goes through the hub write client: %r' % local_cmds)
     # a remote row that is asking offers the answer item
     text = (cache / 'remote_fleet-test').read_text()
     (cache / 'remote_fleet-test').write_text(text.replace(
-        US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'working', 'claude', '侧边栏', '', '', '0', '')),
-        US.join(('wid:' + F + '/issue-1423', 'm4', 'online', '1423', 'acme/app', 'needs', 'claude', '侧边栏', '', 'perm', '0', ''))))
+        US.join(('wid:' + F + '/issue-1423', 'mac-a', 'online', '1423', 'acme/app', 'working', 'claude', '侧边栏', '', '', '0', '')),
+        US.join(('wid:' + F + '/issue-1423', 'mac-a', 'online', '1423', 'acme/app', 'needs', 'claude', '侧边栏', '', 'perm', '0', ''))))
     asking = menu_items(remote_wid)
     check(not asking['a'].startswith('-') and 'answer ' + remote_wid + ' perm' in menu_commands(remote_wid)['a'],
           'a remote row waiting on a permission prompt did not offer the answer item: %r' % asking['a'])
@@ -1802,7 +1802,7 @@ try:
     # FLEET_HUB_SESSIONS_STALE — the one word the rows and the bar read too — and
     # no action is sent: the popups say 入口失联 on stderr before asking anything,
     # the detached ones toast it (tmux's display-message, not asserted), the menu
-    # title carries it, «新建到 m4…» is greyed with the reason, the actions stay
+    # title carries it, «新建到 mac-a…» is greyed with the reason, the actions stay
     # listed. A fresh hub_ok brings everything back — nothing restarted.
     (cache / 'hub_ok').write_text('%d\n' % (int(time.time()) - 300))
     n_writes = len(writes.read_text().splitlines())
@@ -1819,16 +1819,16 @@ try:
     printed = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', remote_wid, '--print']).stdout
     title = next((l.split('\t', 1)[1] for l in printed.splitlines() if l.startswith('title\t')), '')
     # 「名称 · 机器 · 状态」 (issue #1535): the row still waits on a permission
-    check(title == '侧边栏 · m4 · 等授权 · 入口失联 5m', 'the remote menu title does not say the hub is silent: %r' % title)
+    check(title == '侧边栏 · mac-a · 等授权 · 入口失联 5m', 'the remote menu title does not say the hub is silent: %r' % title)
     lost_items, lost_cmds = menu_items(remote_wid), menu_commands(remote_wid)
-    check(lost_items.get('1') == '-新建到 m4… · 入口失联 5m' and lost_cmds.get('1') == '',
-          '«new task on m4» is not greyed with the reason while the hub is silent: %r %r' % (lost_items.get('1'), lost_cmds.get('1')))
+    check(lost_items.get('1') == '-新建到 mac-a… · 入口失联 5m' and lost_cmds.get('1') == '',
+          '«new task on mac-a» is not greyed with the reason while the hub is silent: %r %r' % (lost_items.get('1'), lost_cmds.get('1')))
     check({'m', 'a', 'r', 'q', 'c', 'x'} <= set(lost_items) and all('fleet-sidebar-remote.sh' in lost_cmds[k] for k in 'qcx')
           and all('@sidebar_ask' in lost_cmds[k] for k in 'mar'),
           'the remote row actions left the menu while the hub is silent: %r' % lost_items)
-    check(menu_items(w1).get('1') == '-新建到 m4… · 入口失联 5m', 'the local menu still offers «new task on m4» while the hub is silent: %r' % menu_items(w1).get('1'))
+    check(menu_items(w1).get('1') == '-新建到 mac-a… · 入口失联 5m', 'the local menu still offers «new task on mac-a» while the hub is silent: %r' % menu_items(w1).get('1'))
     (cache / 'hub_ok').write_text('%d\n' % int(time.time()))
-    check(menu_items(remote_wid).get('1') == '新建到 m4…', '«new task on m4» did not come back with a fresh hub_ok: %r' % menu_items(remote_wid).get('1'))
+    check(menu_items(remote_wid).get('1') == '新建到 mac-a…', '«new task on mac-a» did not come back with a fresh hub_ok: %r' % menu_items(remote_wid).get('1'))
     r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'stop', 'fleet-test', remote_wid],
                        env=env_w, text=True, capture_output=True, timeout=30)
     check(r.returncode == 0 and len(writes.read_text().splitlines()) == n_writes + 1, 'a write did not go out once hub_ok is fresh again: %s' % r.stderr)

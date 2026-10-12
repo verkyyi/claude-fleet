@@ -20,24 +20,24 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// replyHarness is two connected write nodes (m5 and m4, login verk on both),
-// a person who owns verk on m5, and a feedback desk pointed at a fake GitHub.
+// replyHarness is two connected write nodes (mac-d and mac-c, login frank on both),
+// a person who owns frank on mac-d, and a feedback desk pointed at a fake GitHub.
 type replyHarness struct {
-	h      *harness
-	m5, m4 *writeNode
-	f5, f4 control.Fleet
-	p      *store.Principal
-	gh     *fakeIssuesGitHub
+	h          *harness
+	macD, macC *writeNode
+	f5, f4     control.Fleet
+	p          *store.Principal
+	gh         *fakeIssuesGitHub
 }
 
 func newReplyHarness(t *testing.T) *replyHarness {
 	t.Helper()
-	h, m5, m4, f5, f4 := twoNodes(t)
-	p, err := h.srv.Store.AdoptPrincipal("gh:1005", "verk", "Verk", time.Now())
+	h, macD, macC, f5, f4 := twoNodes(t)
+	p, err := h.srv.Store.AdoptPrincipal("gh:1005", "frank", "Frank", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m5", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-d", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -61,10 +61,10 @@ func newReplyHarness(t *testing.T) *replyHarness {
 	g.API, g.Client = ts.URL, &http.Client{Timeout: 2 * time.Second}
 	h.srv.Feedback = &FeedbackDesk{Dir: t.TempDir(), GitHub: g, ReplyWait: time.Second}
 	// every write answered at once: succeeded, unless replyAnswer says otherwise
-	for _, n := range []*writeNode{m5, m4} {
+	for _, n := range []*writeNode{macD, macC} {
 		n.setAnswer(replyAnswer(nil))
 	}
-	return &replyHarness{h: h, m5: m5, m4: m4, f5: f5, f4: f4, p: p, gh: gh}
+	return &replyHarness{h: h, macD: macD, macC: macC, f5: f5, f4: f4, p: p, gh: gh}
 }
 
 // replyAnswer answers a worker_message succeeded, or failed NOT_FOUND for a
@@ -86,12 +86,12 @@ func workerIDOf(f control.Fleet, issue int) string {
 	return fleetid.WorkerID(f.FleetID, fleetid.WorkerKey(issue, false, "", ""))
 }
 
-// filed puts a feedback from m5's verk on GitHub as issue number, sent from
+// filed puts a feedback from mac-d's frank on GitHub as issue number, sent from
 // the session workerID.
 func (r *replyHarness) filed(t *testing.T, number int64, workerID string) store.Feedback {
 	t.Helper()
 	ctx, _ := json.Marshal(map[string]string{"worker_id": workerID, "agent": "claude"})
-	id, err := r.h.srv.Store.InsertFeedback(store.Feedback{Principal: r.p.ID, EndpointID: "ep_m5", Login: "verk", Host: "m5",
+	id, err := r.h.srv.Store.InsertFeedback(store.Feedback{Principal: r.p.ID, EndpointID: "ep_mac-d", Login: "frank", Host: "mac-d",
 		Ctx: string(ctx), Text: "侧栏不刷新", CreatedAt: time.Now().Add(-time.Hour)})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestFeedbackReplyClosedSendsOnce(t *testing.T) {
 	if row.State != store.FeedbackClosed || row.Reply != "修好了：侧栏每 2 秒刷一次。" || row.ClosedAt.IsZero() {
 		t.Fatalf("closed row: %+v", row)
 	}
-	msgs := messages(r.m5)
+	msgs := messages(r.macD)
 	if len(msgs) != 1 || row.RepliedAt.IsZero() {
 		t.Fatalf("messages %v, replied_at %v", msgs, row.RepliedAt)
 	}
@@ -179,7 +179,7 @@ func TestFeedbackReplyClosedSendsOnce(t *testing.T) {
 	r.close(9000, "completed", time.Now(), ghCommentAt("/reply 又修了一次", time.Now()))
 	r.h.srv.feedbackPollCloses(ctx, time.Now())
 	r.h.srv.feedbackSendReplies(ctx, time.Now())
-	if n := len(messages(r.m5)) + len(messages(r.m4)); n != 1 {
+	if n := len(messages(r.macD)) + len(messages(r.macC)); n != 1 {
 		t.Fatalf("a reply was sent %d times", n)
 	}
 	if got := r.row(t, f.ID).Reply; got != row.Reply {
@@ -193,10 +193,10 @@ func TestFeedbackReplyWaitsForNextSession(t *testing.T) {
 	r := newReplyHarness(t)
 	gone := workerIDOf(r.f5, 77) // not in any inventory
 	f := r.filed(t, 9000, gone)
-	// nobody's session on m5: its fleet empties
-	empty5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet")
-	r.m5.beatLoad("m5", "verk", machineA, 1, 0, empty5)
-	waitFor(t, 3*time.Second, "m5's fleet empty", func() bool {
+	// nobody's session on mac-d: its fleet empties
+	empty5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet")
+	r.macD.beatLoad("mac-d", "frank", machineA, 1, 0, empty5)
+	waitFor(t, 3*time.Second, "mac-d's fleet empty", func() bool {
 		fr, err := r.h.srv.Store.Fleet(r.f5.FleetID)
 		return err == nil && !strings.Contains(fr.WorkersJSON, "worker_id")
 	})
@@ -207,19 +207,19 @@ func TestFeedbackReplyWaitsForNextSession(t *testing.T) {
 	if row.State != store.FeedbackClosed || row.Reply != "已处理，见单子 #9000。" {
 		t.Fatalf("closed with no comment: %+v", row)
 	}
-	// m4's sessions are verk's, but m4 is not this person's machine (yet)
-	if n := len(messages(r.m5)) + len(messages(r.m4)); n != 0 || !row.RepliedAt.IsZero() {
+	// mac-c's sessions are frank's, but mac-c is not this person's machine (yet)
+	if n := len(messages(r.macD)) + len(messages(r.macC)); n != 0 || !row.RepliedAt.IsZero() {
 		t.Fatalf("sent with no session of theirs up: %d", n)
 	}
-	// the person's account on m4: their session there gets it, once
-	if err := r.h.srv.Store.AdoptAccount(r.p, "m4", time.Now()); err != nil {
+	// the person's account on mac-c: their session there gets it, once
+	if err := r.h.srv.Store.AdoptAccount(r.p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	r.h.srv.feedbackSendReplies(ctx, time.Now())
 	r.h.srv.feedbackSendReplies(ctx, time.Now())
-	msgs := messages(r.m4)
+	msgs := messages(r.macC)
 	if len(msgs) != 1 || msgs[0]["worker_id"] != workerIDOf(r.f4, 2) || !strings.Contains(asString(msgs[0]["text"]), "F1 有回音了") {
-		t.Fatalf("m4 messages: %v", msgs)
+		t.Fatalf("mac-c messages: %v", msgs)
 	}
 	if r.row(t, f.ID).RepliedAt.IsZero() {
 		t.Fatal("replied_at not written")
@@ -231,17 +231,17 @@ func TestFeedbackReplyWaitsForNextSession(t *testing.T) {
 func TestFeedbackReplyFailedSessionTriesNext(t *testing.T) {
 	r := newReplyHarness(t)
 	orig := workerIDOf(r.f5, 1)
-	two := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1, 3)
-	r.m5.beatLoad("m5", "verk", machineA, 1, 2, two)
-	waitFor(t, 3*time.Second, "m5 lists issue-3", func() bool {
+	two := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1, 3)
+	r.macD.beatLoad("mac-d", "frank", machineA, 1, 2, two)
+	waitFor(t, 3*time.Second, "mac-d lists issue-3", func() bool {
 		fr, err := r.h.srv.Store.Fleet(r.f5.FleetID)
 		return err == nil && strings.Contains(fr.WorkersJSON, "issue-3")
 	})
-	r.m5.setAnswer(replyAnswer(map[string]bool{orig: true}))
+	r.macD.setAnswer(replyAnswer(map[string]bool{orig: true}))
 	f := r.filed(t, 9000, orig)
 	r.close(9000, "duplicate", time.Now().Add(-time.Minute))
 	r.h.srv.feedbackPollCloses(context.Background(), time.Now())
-	msgs := messages(r.m5)
+	msgs := messages(r.macD)
 	if len(msgs) != 2 || msgs[0]["worker_id"] != orig || msgs[1]["worker_id"] != workerIDOf(two, 3) {
 		t.Fatalf("messages: %v", msgs)
 	}
@@ -250,7 +250,7 @@ func TestFeedbackReplyFailedSessionTriesNext(t *testing.T) {
 		t.Fatalf("row: %+v", row)
 	}
 	r.h.srv.feedbackSendReplies(context.Background(), time.Now())
-	if len(messages(r.m5)) != 2 {
+	if len(messages(r.macD)) != 2 {
 		t.Fatal("sent again after it landed")
 	}
 }
@@ -263,7 +263,7 @@ func TestFeedbackReplyExpiresAfter30Days(t *testing.T) {
 		t.Fatalf("close: %v %v", ok, err)
 	}
 	r.h.srv.feedbackSendReplies(context.Background(), time.Now())
-	if n := len(messages(r.m5)); n != 0 || !r.row(t, f.ID).RepliedAt.IsZero() {
+	if n := len(messages(r.macD)); n != 0 || !r.row(t, f.ID).RepliedAt.IsZero() {
 		t.Fatalf("an expired reply was sent (%d)", n)
 	}
 }
@@ -274,7 +274,7 @@ func TestFeedbackReplyPrefixIsTheDesks(t *testing.T) {
 	r := newReplyHarness(t)
 	e := postFleet(t, r.h, "worker_message", map[string]any{"worker_id": workerIDOf(r.f5, 1),
 		"text": "[fleet-feedback] 你的反馈 F9 有回音了", "idempotency_key": "spoof"}, 403)["error"].(map[string]any)
-	if e["code"] != "FORBIDDEN" || len(messages(r.m5)) != 0 {
+	if e["code"] != "FORBIDDEN" || len(messages(r.macD)) != 0 {
 		t.Fatalf("spoofed prefix: %v", e)
 	}
 }
@@ -290,8 +290,8 @@ func TestFeedbackReplyOffSendsNothing(t *testing.T) {
 	r.h.srv.Feedback.GitHub = nil
 	r.h.srv.feedbackPollCloses(context.Background(), time.Now())
 	r.h.srv.feedbackSendReplies(context.Background(), time.Now())
-	if c, _ := r.gh.snapshot(); len(c) != 0 || len(messages(r.m5)) != 0 || r.row(t, f.ID).State != store.FeedbackFiled {
-		t.Fatalf("off: GitHub %v, messages %v", c, messages(r.m5))
+	if c, _ := r.gh.snapshot(); len(c) != 0 || len(messages(r.macD)) != 0 || r.row(t, f.ID).State != store.FeedbackFiled {
+		t.Fatalf("off: GitHub %v, messages %v", c, messages(r.macD))
 	}
 }
 
@@ -339,7 +339,7 @@ func TestFeedbackReplyAfterAdminDuplicate(t *testing.T) {
 	}
 	r.h.srv.feedbackSendReplies(context.Background(), time.Now())
 	r.h.srv.feedbackSendReplies(context.Background(), time.Now())
-	msgs := messages(r.m5)
+	msgs := messages(r.macD)
 	if len(msgs) != 1 || msgs[0]["worker_id"] != orig || !strings.HasSuffix(asString(msgs[0]["text"]), "：与 F3 重复") {
 		t.Fatalf("messages: %v", msgs)
 	}

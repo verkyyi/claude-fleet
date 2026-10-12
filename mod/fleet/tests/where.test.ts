@@ -65,13 +65,13 @@ test('a takeover reaches the context within one poll; a failed read keeps the la
   resetWhere()
   const { where, clock } = engine(on)
   await $.session.start(START)
-  where.stdout = 'verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接\n'
+  where.stdout = 'dave-iphone · iOS · Termius（客户端在 mac-b 上运行）· 能：给链接\n'
   await clock.advance(WHERE_POLL_MS)
-  expect(whereText((await $.prompt.compose(COMPOSE)).sections)).toContain('verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）')
+  expect(whereText((await $.prompt.compose(COMPOSE)).sections)).toContain('dave-iphone · iOS · Termius（客户端在 mac-b 上运行）')
   where.exitCode = 1
   where.stdout = ''
   await clock.advance(WHERE_POLL_MS)
-  expect(whereText((await $.prompt.compose(COMPOSE)).sections)).toContain('verkyyi-iphone')
+  expect(whereText((await $.prompt.compose(COMPOSE)).sections)).toContain('dave-iphone')
   expect(where.runs).toBe(3)
 })
 

@@ -61,7 +61,7 @@
 #   --identity  WHO this login asks the hub as (issue #1475), one line, no network:
 #               `cert <cert path> <valid until>` / `token <where it came from>` /
 #               `none <why>` — exit 0 for the first two, 1 for none. fleet-doctor
-#               reads it; so does a person wondering why the sidebar shows no m4.
+#               reads it; so does a person wondering why the sidebar shows no mac-a.
 #
 # OFF unless CCQUOTA_FLEET=1: every mode is then a silent no-op that writes nothing,
 # and the dash never looks for the cache — a one-machine fleet is byte for byte
@@ -117,7 +117,7 @@
 # (FLEET_SIDEBAR_SOURCE=hub) can still paint and enter them as local windows. A
 # dash on the default source ignores them: nothing it draws changes. The machine
 # label is the hostname's first label, renamed through FLEET_NODE_ALIASES
-# (`macmini=m5 mini2=m4`).
+# (`mac-c=mac-b mac-d=mac-a`).
 #
 # Cache (US-separated — \x1f, as the dash's own WFMT: a TAB is IFS whitespace,
 # so `read` would collapse the empty fields). Header lines first:
@@ -234,7 +234,7 @@ PIDF="$G/hubsess.pid"
 WANTF="$G/hubsess.want"
 # The code the running loop loaded (its MAPCODE), written at its start: an
 # --ensure of other code replaces the loop (issue #3164). The loop is kept alive
-# by every --ensure, so before this a version switch never reached it — macmini's
+# by every --ensure, so before this a version switch never reached it — mac-c's
 # loop ran the code from before #3107's broker for hours after the switch and
 # kept the two-hour-old list on screen.
 LOOPCODEF="$G/hubsess.loopcode"

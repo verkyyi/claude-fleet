@@ -29,7 +29,7 @@
 #   J  plan: every login under the homes dir, the ONE sudo line per login
 #      carries --login, a `sudo -u` line carries that login's HOME
 #   K  a login name may start with a digit (issue #2257): `machine install
-#      --dry-run --logins 24haowan` passes; `Bad Name` / `-x` are still exit 2
+#      --dry-run --logins 24acme` passes; `Bad Name` / `-x` are still exit 2
 #   L  root's settings (issue #2290): an upstream URL / FLEET_HUB_URL in the
 #      login's fleet.conf is ignored (said on stderr + ignored.<login>), the
 #      request goes to root's upstream; install --adopt takes only an https URL
@@ -437,12 +437,12 @@ if [ "$rc" = 0 ] && printf '%s' "$out" | grep -qF "sudo bash $SB/homes/ann/.clau
 else fail "J plan rc=$rc: $out"; fi
 
 # ── K: a login name may start with a digit (issue #2257) ───────────────────────
-mkdir -p "$SB/homes/24haowan/.config/claude-fleet"
-printf '24haowan:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$SB/homes/24haowan" > "$SB/pw"
-out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run --logins 24haowan 2>&1); rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^== 24haowan' && [ ! -e "$SB/db/24haowan" ]; then
-  pass "K machine install --dry-run accepts 24haowan"
-else fail "K 24haowan rc=$rc: $out"; fi
+mkdir -p "$SB/homes/24acme/.config/claude-fleet"
+printf '24acme:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$SB/homes/24acme" > "$SB/pw"
+out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run --logins 24acme 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^== 24acme' && [ ! -e "$SB/db/24acme" ]; then
+  pass "K machine install --dry-run accepts 24acme"
+else fail "K 24acme rc=$rc: $out"; fi
 for bad in 'Bad Name' '-x' 'a/b'; do
   out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run "--logins=$bad" 2>&1); rc=$?
   case "$rc:$out" in 2:*"bad login"*) pass "K '$bad' still refused (exit 2)" ;; *) fail "K '$bad' rc=$rc: $out" ;; esac
@@ -473,9 +473,10 @@ grep -q "ignored FLEET_CRED_ANTHROPIC_URL from $C/fleet.conf" "$SB/launch.err" &
   || fail "L ignored note: $(cat "$SB/launch.err" "$SB/run/$ME/ignored.$ME" 2>&1)"
 cp "$SB/node.env.keep" "$R/node.env"
 # install --adopt: root takes the login's values — an https URL to an allowed host only
-printf 'FLEET_HUB_URL=https://ccquota.24haowan.com\nFLEET_CRED_RELAY_URL=https://evil.example/relay\nFLEET_CRED_ALLOW_HOSTS=evil.example\n' > "$C/fleet.conf"
+OLDHUB=https://ccquota.24haowan.com  # oss-ok: fleet_compat.py 一版兼容的旧主机，随它删（#3577）
+printf 'FLEET_HUB_URL=%s\nFLEET_CRED_RELAY_URL=https://evil.example/relay\nFLEET_CRED_ALLOW_HOSTS=evil.example\n' "$OLDHUB" > "$C/fleet.conf"
 out=$(bash "$BIN/fleet-credsep.sh" install --adopt 2>&1); rc=$?
-if [ "$rc" = 0 ] && grep -qx 'FLEET_HUB_URL=https://ccquota.24haowan.com' "$SB/lib/$ME.conf" \
+if [ "$rc" = 0 ] && grep -qx "FLEET_HUB_URL=$OLDHUB" "$SB/lib/$ME.conf" \
    && ! grep -q evil "$SB/lib/$ME.conf" && grep -q "^FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:$FP\$" "$SB/lib/$ME.conf"; then
   pass "L install --adopt: the allowed hub taken, evil.example and ALLOW_HOSTS refused, root's other lines kept"
 else fail "L adopt rc=$rc: $out · $(cat "$SB/lib/$ME.conf")"; fi

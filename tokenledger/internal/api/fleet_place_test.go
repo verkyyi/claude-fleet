@@ -56,19 +56,19 @@ func issueWID(fleet string, issue int) string {
 	return fleetid.WorkerID(fleet, fleetid.WorkerKey(issue, false, "", ""))
 }
 
-// The issue's acceptance check: m5 above 0.8 load per core takes the lease,
-// asks where to open #7, and the session goes to m4 — with the parent's
-// worker_id, the placement on the journal, and the lease now m4's.
+// The issue's acceptance check: mac-d above 0.8 load per core takes the lease,
+// asks where to open #7, and the session goes to mac-c — with the parent's
+// worker_id, the placement on the journal, and the lease now mac-c's.
 func TestNodePlaceBusyNodeHandsStartToIdleOne(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	tok5, tok4 := h.tokens["m5"], h.tokens["m4"]
+	h, macD, macC, f5, f4 := twoNodes(t)
+	tok5, tok4 := h.tokens["mac-d"], h.tokens["mac-c"]
 	wid5, parent := issueWID(f5.FleetID, 7), issueWID(f5.FleetID, 1)
 	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 7, "worker_id": wid5}); st != 200 {
-		t.Fatalf("m5's lease: %d %v", st, out)
+		t.Fatalf("mac-d's lease: %d %v", st, out)
 	}
-	// m4 opens it (a start it never runs fails and hands the lease back,
+	// mac-c opens it (a start it never runs fails and hands the lease back,
 	// claude-fleet#1606 — TestNodePlaceSwallowedStartFails).
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
 
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 7, "worker_id": wid5,
 		"origin_wid": parent, "idempotency_key": "place-7"})
@@ -76,89 +76,89 @@ func TestNodePlaceBusyNodeHandsStartToIdleOne(t *testing.T) {
 		t.Fatalf("place = %d %v; want a remote placement", st, out)
 	}
 	pl := out["placement"].(map[string]any)
-	if pl["machine"] != "m4" || !strings.Contains(pl["reason"].(string), "m5 excluded: load 1.00/core > 0.8") {
-		t.Fatalf("placement = %v; want m4, with m5's load as the reason", pl)
+	if pl["machine"] != "mac-c" || !strings.Contains(pl["reason"].(string), "mac-d excluded: load 1.00/core > 0.8") {
+		t.Fatalf("placement = %v; want mac-c, with mac-d's load as the reason", pl)
 	}
 	op := out["operation"].(map[string]any)
 	if op["status"] != "succeeded" || op["fleet_id"] != f4.FleetID {
-		t.Fatalf("operation = %v; want succeeded on m4's fleet", op)
+		t.Fatalf("operation = %v; want succeeded on mac-c's fleet", op)
 	}
-	if m5.count() != 0 || m4.count() != 1 {
-		t.Fatalf("writes: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
-	params := m4.writes[0]["params"].(map[string]any)
+	params := macC.writes[0]["params"].(map[string]any)
 	if params["issue"].(float64) != 7 || params["origin_wid"] != parent || params["repo"] != writeRepo {
-		t.Fatalf("m4 was sent %v; want issue 7 with the parent's worker_id", params)
+		t.Fatalf("mac-c was sent %v; want issue 7 with the parent's worker_id", params)
 	}
-	if m4.writes[0]["actor"] != "node:verk@m5" {
-		t.Fatalf("actor = %v; want the asking node", m4.writes[0]["actor"])
+	if macC.writes[0]["actor"] != "node:frank@mac-d" {
+		t.Fatalf("actor = %v; want the asking node", macC.writes[0]["actor"])
 	}
 	// The journal keeps the choice: the metric reads worker_start placements.
 	got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+op["operation_id"].(string), 200)
-	if got["placement"].(map[string]any)["machine"] != "m4" {
+	if got["placement"].(map[string]any)["machine"] != "mac-c" {
 		t.Fatalf("operation_get lost the placement: %v", got)
 	}
 
-	// The lease went with the start: m4's spawn takes it up, m5 no longer can.
+	// The lease went with the start: mac-c's spawn takes it up, mac-d no longer can.
 	if st, out := leaseCall(t, h, tok4, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 7,
 		"worker_id": issueWID(f4.FleetID, 7)}); st != 200 {
-		t.Fatalf("m4's spawn could not take the handed-over lease: %d %v", st, out)
+		t.Fatalf("mac-c's spawn could not take the handed-over lease: %d %v", st, out)
 	}
 	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 7,
-		"worker_id": wid5}); st != 409 || holderNode(out) != "m4" {
-		t.Fatalf("m5 re-acquire = %d %v; want HELD by m4", st, out)
+		"worker_id": wid5}); st != 409 || holderNode(out) != "mac-c" {
+		t.Fatalf("mac-d re-acquire = %d %v; want HELD by mac-c", st, out)
 	}
 
 	// The same key again: the same operation, no second start.
 	if st, again := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 7, "worker_id": wid5,
-		"origin_wid": parent, "idempotency_key": "place-7"}); st != 200 && st != 409 || m4.count() != 1 {
-		t.Fatalf("repeat = %d %v (m4 writes %d); want no second start", st, again, m4.count())
+		"origin_wid": parent, "idempotency_key": "place-7"}); st != 200 && st != 409 || macC.count() != 1 {
+		t.Fatalf("repeat = %d %v (mac-c writes %d); want no second start", st, again, macC.count())
 	}
 }
 
 // An idle asker keeps its own session: LOCAL, nothing sent, the lease stays.
 func TestNodePlaceIdleNodeStaysLocal(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m5.beatLoad("m5", "verk", machineA, 0.5, 3, f5) // 0.05/core
-	m4.beatLoad("m4", "verk", machineB, 6, 1, f4)   // 0.60/core
-	waitLoad(t, h, "m4", 6)
-	waitFor(t, 3*time.Second, "m5 cooled down", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatLoad("mac-d", "frank", machineA, 0.5, 3, f5) // 0.05/core
+	macC.beatLoad("mac-c", "frank", machineB, 6, 1, f4)   // 0.60/core
+	waitLoad(t, h, "mac-c", 6)
+	waitFor(t, 3*time.Second, "mac-d cooled down", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-d", time.Now())
 		return hb.Load1 == 0.5
 	})
 	wid5 := issueWID(f5.FleetID, 9)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 9, "worker_id": wid5})
-	if st != 200 || out["local"] != true || out["placement"].(map[string]any)["machine"] != "m5" {
-		t.Fatalf("place = %d %v; want LOCAL m5", st, out)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 9, "worker_id": wid5})
+	if st != 200 || out["local"] != true || out["placement"].(map[string]any)["machine"] != "mac-d" {
+		t.Fatalf("place = %d %v; want LOCAL mac-d", st, out)
 	}
-	if m5.count()+m4.count() != 0 {
+	if macD.count()+macC.count() != 0 {
 		t.Fatal("a local placement sent a write")
 	}
 }
 
 // A machine named explicitly is honoured or refused, never swapped.
 func TestNodePlaceNamedNode(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
+	h, _, macC, f5, _ := twoNodes(t)
 	wid5 := issueWID(f5.FleetID, 11)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 11, "worker_id": wid5, "node": "m5"})
-	if e, _ := out["error"].(map[string]any); st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || m4.count() != 0 {
-		t.Fatalf("node=m5 while m5 is busy = %d %v; want NO_ELIGIBLE_NODE and nothing sent", st, out)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 11, "worker_id": wid5, "node": "mac-d"})
+	if e, _ := out["error"].(map[string]any); st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || macC.count() != 0 {
+		t.Fatalf("node=mac-d while mac-d is busy = %d %v; want NO_ELIGIBLE_NODE and nothing sent", st, out)
 	}
-	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 11, "worker_id": wid5, "node": "m4"}); st != 200 || out["local"] != false {
-		t.Fatalf("node=m4 = %d %v; want the start sent to m4", st, out)
+	if st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 11, "worker_id": wid5, "node": "mac-c"}); st != 200 || out["local"] != false {
+		t.Fatalf("node=mac-c = %d %v; want the start sent to mac-c", st, out)
 	}
 }
 
 // The chosen machine refuses: the lease comes back to the asker, so its
 // fallback can open the issue itself.
 func TestNodePlaceRefusalGivesLeaseBack(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
-	tok5 := h.tokens["m5"]
+	h, _, macC, f5, _ := twoNodes(t)
+	tok5 := h.tokens["mac-d"]
 	wid5 := issueWID(f5.FleetID, 13)
 	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 13, "worker_id": wid5}); st != 200 {
-		t.Fatal("m5's lease")
+		t.Fatal("mac-d's lease")
 	}
-	m4.setAnswer(func(map[string]any) (any, *control.Error) {
+	macC.setAnswer(func(map[string]any) (any, *control.Error) {
 		return nil, &control.Error{Code: "NOT_FOUND", Message: "Fleet is not configured"}
 	})
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 13, "worker_id": wid5})
@@ -173,10 +173,10 @@ func TestNodePlaceRefusalGivesLeaseBack(t *testing.T) {
 
 // Only a fleet this endpoint registered may ask.
 func TestNodePlaceRefusesAnotherNodesFleet(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
-	st, _ := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 3, "worker_id": issueWID(f4.FleetID, 3)})
-	if st != 403 || m4.count() != 0 {
-		t.Fatalf("m5 placing as m4's fleet = %d; want 403", st)
+	h, _, macC, _, f4 := twoNodes(t)
+	st, _ := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 3, "worker_id": issueWID(f4.FleetID, 3)})
+	if st != 403 || macC.count() != 0 {
+		t.Fatalf("mac-d placing as mac-c's fleet = %d; want 403", st)
 	}
 	if st, _ := placeCall(t, h, "nope", map[string]any{"repo": writeRepo, "issue": 3, "worker_id": issueWID(f4.FleetID, 3)}); st != 401 {
 		t.Fatalf("bad token = %d; want 401", st)
@@ -187,24 +187,24 @@ func TestNodePlaceRefusesAnotherNodesFleet(t *testing.T) {
 // credential, a checkout missing) is never auto's pick, with the reason on the
 // refusal; a start that names it still goes there.
 func TestNodePlaceSkipsNotReadyNodeOnAuto(t *testing.T) {
-	h, _, m4, f5, f4 := twoNodes(t)
+	h, _, macC, f5, f4 := twoNodes(t)
 	no := false
-	beat(t, m4.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+	beat(t, macC.conn, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "frank", MachineID: machineB,
 		Load1: 1, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
-		Fleets: []control.Fleet{f4}, Ready: &no, NotReady: "gh, checkout:fleet-m4", ObservedAt: time.Now()})
-	waitFor(t, 3*time.Second, "m4 reported not ready", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+		Fleets: []control.Fleet{f4}, Ready: &no, NotReady: "gh, checkout:fleet-mac-c", ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "mac-c reported not ready", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return hb.Ready != nil && !*hb.Ready
 	})
 	wid5 := issueWID(f5.FleetID, 15)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5})
 	e, _ := out["error"].(map[string]any)
 	msg, _ := e["message"].(string)
-	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(msg, "m4: not ready: gh, checkout:fleet-m4") || m4.count() != 0 {
-		t.Fatalf("auto with m4 not ready = %d %v; want NO_ELIGIBLE_NODE naming m4's reason, nothing sent", st, out)
+	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(msg, "mac-c: not ready: gh, checkout:fleet-mac-c") || macC.count() != 0 {
+		t.Fatalf("auto with mac-c not ready = %d %v; want NO_ELIGIBLE_NODE naming mac-c's reason, nothing sent", st, out)
 	}
-	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5, "node": "m4"}); st != 200 || out["local"] != false {
-		t.Fatalf("node=m4 while not ready = %d %v; want the start sent there anyway", st, out)
+	if st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 15, "worker_id": wid5, "node": "mac-c"}); st != 200 || out["local"] != false {
+		t.Fatalf("node=mac-c while not ready = %d %v; want the start sent there anyway", st, out)
 	}
 }
 
@@ -212,63 +212,63 @@ func TestNodePlaceSkipsNotReadyNodeOnAuto(t *testing.T) {
 // for a home session but not for an issue: auto passes it over for a start
 // that names a repo, with gh on the refusal; naming it still goes there.
 func TestNodePlaceSkipsRepoNotReadyNodeOnAuto(t *testing.T) {
-	h, _, m4, f5, f4 := twoNodes(t)
+	h, _, macC, f5, f4 := twoNodes(t)
 	yes := true
-	beat(t, m4.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+	beat(t, macC.conn, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "frank", MachineID: machineB,
 		Load1: 1, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
 		Fleets: []control.Fleet{f4}, Ready: &yes, RepoNotReady: "gh", ObservedAt: time.Now()})
-	waitFor(t, 3*time.Second, "m4 reported repo not ready", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+	waitFor(t, 3*time.Second, "mac-c reported repo not ready", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return hb.RepoNotReady == "gh"
 	})
 	wid5 := issueWID(f5.FleetID, 16)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 16, "worker_id": wid5})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 16, "worker_id": wid5})
 	e, _ := out["error"].(map[string]any)
 	msg, _ := e["message"].(string)
-	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(msg, "m4: not ready: gh") || m4.count() != 0 {
-		t.Fatalf("auto issue start with m4 repo-not-ready = %d %v; want NO_ELIGIBLE_NODE naming gh, nothing sent", st, out)
+	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(msg, "mac-c: not ready: gh") || macC.count() != 0 {
+		t.Fatalf("auto issue start with mac-c repo-not-ready = %d %v; want NO_ELIGIBLE_NODE naming gh, nothing sent", st, out)
 	}
-	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 16, "worker_id": wid5, "node": "m4"}); st != 200 || out["local"] != false {
-		t.Fatalf("node=m4 while repo-not-ready = %d %v; want the start sent there anyway", st, out)
+	if st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 16, "worker_id": wid5, "node": "mac-c"}); st != 200 || out["local"] != false {
+		t.Fatalf("node=mac-c while repo-not-ready = %d %v; want the start sent there anyway", st, out)
 	}
 }
 
 // claude-fleet#1586: the asker hears what became of a REMOTE start, not just
 // that it was accepted. A window opened there: done, exit 0, its window id.
 func TestNodePlaceWaitsForTheWindow(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
-	tok5 := h.tokens["m5"]
+	h, _, macC, f5, _ := twoNodes(t)
+	tok5 := h.tokens["mac-d"]
 	wid5 := issueWID(f5.FleetID, 21)
 	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 21, "worker_id": wid5}); st != 200 {
-		t.Fatal("m5's lease")
+		t.Fatal("mac-d's lease")
 	}
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@42",
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@42",
 		"workers": []any{map[string]any{"window_id": "@42", "issue": 21}}}))
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5})
 	oc := placeOutcomeOf(t, out)
-	if st != 200 || oc["state"] != "done" || oc["exit"] != 0.0 || oc["window"] != "@42" || oc["node"] != "m4" {
-		t.Fatalf("place = %d %v; want done on m4 with window @42", st, out)
+	if st != 200 || oc["state"] != "done" || oc["exit"] != 0.0 || oc["window"] != "@42" || oc["node"] != "mac-c" {
+		t.Fatalf("place = %d %v; want done on mac-c with window @42", st, out)
 	}
 	if out["operation"].(map[string]any)["status"] != "succeeded" {
 		t.Fatalf("operation = %v; want the reconciled succeeded", out["operation"])
 	}
 	ls, _ := h.srv.Store.Leases(time.Now())
 	if len(ls) != 1 || ls[0].FleetID == f5.FleetID {
-		t.Fatalf("leases = %+v; want #21 m4's", ls)
+		t.Fatalf("leases = %+v; want #21 mac-c's", ls)
 	}
 }
 
 // The target was full: refused with the spawn's own exit code and line, and
 // the lease is the asker's again — its exit releases it, no --force next time.
 func TestNodePlaceRemoteRefusalComesBack(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
-	tok5 := h.tokens["m5"]
+	h, _, macC, f5, _ := twoNodes(t)
+	tok5 := h.tokens["mac-d"]
 	wid5 := issueWID(f5.FleetID, 22)
 	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 22, "worker_id": wid5}); st != 200 {
-		t.Fatal("m5's lease")
+		t.Fatal("mac-d's lease")
 	}
-	why := "dash-issue-session: at capacity: 6/6 sessions on m4"
-	m4.setOpGet(finished("failed", map[string]any{"error": map[string]any{"code": "AT_CAPACITY",
+	why := "dash-issue-session: at capacity: 6/6 sessions on mac-c"
+	macC.setOpGet(finished("failed", map[string]any{"error": map[string]any{"code": "AT_CAPACITY",
 		"message": "Fleet refused to start the worker: " + why, "exit": 2, "stderr1": why}}))
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 22, "worker_id": wid5})
 	oc := placeOutcomeOf(t, out)
@@ -293,11 +293,11 @@ func TestNodePlaceRemoteRefusalComesBack(t *testing.T) {
 // lease outlives a start nobody saw open. The GitHub claim stays the second
 // guard should that machine open it after all.
 func TestNodePlaceNoFinalStateIsUnknown(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
+	h, _, macC, f5, _ := twoNodes(t)
 	wid5 := issueWID(f5.FleetID, 23)
-	m4.setOpGet(finished("running", nil))
+	macC.setOpGet(finished("running", nil))
 	start := time.Now()
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": wid5})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": wid5})
 	oc := placeOutcomeOf(t, out)
 	if st != 200 || oc["state"] != "unknown" || oc["exit"] != nil || !strings.Contains(oc["stderr1"].(string), "no final state") {
 		t.Fatalf("place = %d %v; want unknown with a reason and no exit", st, out)
@@ -312,23 +312,23 @@ func TestNodePlaceNoFinalStateIsUnknown(t *testing.T) {
 }
 
 // claude-fleet#1606: the target journalled the start (accepted) but never ran
-// it — the 3/17 m4 swallowed. That is a failure, not a hope: failed, exit 1,
+// it — the 3/17 mac-c swallowed. That is a failure, not a hope: failed, exit 1,
 // a line naming the machine and the operation, the lease back with the asker,
 // and the next send needs no --force.
 func TestNodePlaceSwallowedStartFails(t *testing.T) {
 	h, _, _, f5, _ := twoNodes(t)
-	tok5 := h.tokens["m5"]
+	tok5 := h.tokens["mac-d"]
 	wid5 := issueWID(f5.FleetID, 25)
 	if st, _ := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 25, "worker_id": wid5}); st != 200 {
-		t.Fatal("m5's lease")
+		t.Fatal("mac-d's lease")
 	}
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 25, "worker_id": wid5})
 	oc := placeOutcomeOf(t, out)
 	op := asString(out["operation"].(map[string]any)["operation_id"])
 	why, _ := oc["stderr1"].(string)
-	if st != 200 || oc["state"] != "failed" || oc["exit"] != 1.0 || !strings.Contains(why, "m4") ||
+	if st != 200 || oc["state"] != "failed" || oc["exit"] != 1.0 || !strings.Contains(why, "mac-c") ||
 		!strings.Contains(why, "never started") || !strings.Contains(why, op) {
-		t.Fatalf("place = %d %v; want failed, exit 1, a line naming m4 and %s", st, out, op)
+		t.Fatalf("place = %d %v; want failed, exit 1, a line naming mac-c and %s", st, out, op)
 	}
 	ls, _ := h.srv.Store.Leases(time.Now())
 	if len(ls) != 1 || ls[0].WorkerID != wid5 {
@@ -345,21 +345,21 @@ func TestNodePlaceSwallowedStartFails(t *testing.T) {
 // claude-fleet#1606: the start never reached the target (no acknowledgement,
 // and the node has no record of it): failed, not unknown, and the lease back.
 func TestNodePlaceStartThatNeverArrivedFails(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
+	h, _, macC, f5, _ := twoNodes(t)
 	old := fleetWriteWait
 	fleetWriteWait = 100 * time.Millisecond
 	t.Cleanup(func() { fleetWriteWait = old })
-	tok5 := h.tokens["m5"]
+	tok5 := h.tokens["mac-d"]
 	wid5 := issueWID(f5.FleetID, 26)
-	m4.setAnswer(func(map[string]any) (any, *control.Error) { return nil, nil }) // the frame is lost
-	m4.setOpGet(func(map[string]any) (any, *control.Error) {
+	macC.setAnswer(func(map[string]any) (any, *control.Error) { return nil, nil }) // the frame is lost
+	macC.setOpGet(func(map[string]any) (any, *control.Error) {
 		return nil, &control.Error{Code: "NOT_FOUND", Message: "Operation has not been accepted by this machine"}
 	})
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 26, "worker_id": wid5})
 	oc := placeOutcomeOf(t, out)
 	why, _ := oc["stderr1"].(string)
-	if st != 200 || oc["state"] != "failed" || oc["exit"] != 1.0 || !strings.Contains(why, "never reached m4") {
-		t.Fatalf("place = %d %v; want failed, exit 1, never reached m4", st, out)
+	if st != 200 || oc["state"] != "failed" || oc["exit"] != 1.0 || !strings.Contains(why, "never reached mac-c") {
+		t.Fatalf("place = %d %v; want failed, exit 1, never reached mac-c", st, out)
 	}
 	ls, _ := h.srv.Store.Leases(time.Now())
 	if len(ls) != 1 || ls[0].WorkerID != wid5 {
@@ -369,9 +369,9 @@ func TestNodePlaceStartThatNeverArrivedFails(t *testing.T) {
 
 // wait 0 is the asynchronous ask: the answer on acceptance, as before.
 func TestNodePlaceWaitZeroAnswersOnAcceptance(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
-	m4.setOpGet(finished("succeeded", map[string]any{"window": "@1"}))
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 24,
+	h, _, macC, f5, _ := twoNodes(t)
+	macC.setOpGet(finished("succeeded", map[string]any{"window": "@1"}))
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 24,
 		"worker_id": issueWID(f5.FleetID, 24), "wait": 0})
 	if _, has := out["outcome"]; st != 200 || has || out["operation"].(map[string]any)["status"] != "accepted" {
 		t.Fatalf("place wait=0 = %d %v; want accepted and no outcome", st, out)
@@ -383,7 +383,7 @@ func TestNodePlaceWaitZeroAnswersOnAcceptance(t *testing.T) {
 // plentiful, so the score follows CPU load (claude-fleet#1994).
 func beatCap(t *testing.T, h *harness, n *writeNode, host, machine string, load1 float64, used, max int, f control.Fleet) {
 	t.Helper()
-	hb := control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine, Load1: load1, NCPU: 10,
+	hb := control.Heartbeat{Hostname: host, OSUser: "frank", MachineID: machine, Load1: load1, NCPU: 10,
 		MemFreeBytes: 15 << 30, MemTotalBytes: 16 << 30, Sessions: used, Fleets: []control.Fleet{f}, ObservedAt: time.Now()}
 	if max > 0 {
 		hb.MaxSessions, hb.CapSessions = max, &used
@@ -395,61 +395,61 @@ func beatCap(t *testing.T, h *harness, n *writeNode, host, machine string, load1
 	})
 }
 
-// claude-fleet#1587: a login at its own cap is no candidate. m4 is the idle
-// one and would win on score, but it runs 5 of its 5: the start stays on m5.
+// claude-fleet#1587: a login at its own cap is no candidate. mac-c is the idle
+// one and would win on score, but it runs 5 of its 5: the start stays on mac-d.
 func TestNodePlaceSkipsFullNode(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatCap(t, h, m5, "m5", machineA, 3, 2, 8, f5) // 0.30/core, 2/8
-	beatCap(t, h, m4, "m4", machineB, 1, 5, 5, f4) // 0.10/core, 5/5
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatCap(t, h, macD, "mac-d", machineA, 3, 2, 8, f5) // 0.30/core, 2/8
+	beatCap(t, h, macC, "mac-c", machineB, 1, 5, 5, f4) // 0.10/core, 5/5
 	wid5 := issueWID(f5.FleetID, 21)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5})
 	pl, _ := out["placement"].(map[string]any)
-	if st != 200 || out["local"] != true || pl["machine"] != "m5" ||
-		!strings.Contains(pl["reason"].(string), "m4 excluded: full (5/5 sessions, the login's own cap)") {
-		t.Fatalf("place with m4 full = %d %v; want LOCAL m5, m4 excluded as full", st, out)
+	if st != 200 || out["local"] != true || pl["machine"] != "mac-d" ||
+		!strings.Contains(pl["reason"].(string), "mac-c excluded: full (5/5 sessions, the login's own cap)") {
+		t.Fatalf("place with mac-c full = %d %v; want LOCAL mac-d, mac-c excluded as full", st, out)
 	}
-	if m4.count() != 0 {
+	if macC.count() != 0 {
 		t.Fatal("a start was sent to the full machine")
 	}
 	// The roster shows both numbers.
 	for _, c := range pl["candidates"].([]any) {
-		if c := c.(map[string]any); c["machine"] == "m4" && (c["max_sessions"] != 5.0 || c["cap_sessions"] != 5.0) {
-			t.Fatalf("m4's candidate = %v; want max_sessions 5, cap_sessions 5", c)
+		if c := c.(map[string]any); c["machine"] == "mac-c" && (c["max_sessions"] != 5.0 || c["cap_sessions"] != 5.0) {
+			t.Fatalf("mac-c's candidate = %v; want max_sessions 5, cap_sessions 5", c)
 		}
 	}
 	// Named, it is refused the same way: its own spawn gate would say no.
-	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5, "node": "m4"}); st != 429 || m4.count() != 0 {
-		t.Fatalf("node=m4 while full = %d %v; want AT_CAPACITY, nothing sent", st, out)
+	if st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid5, "node": "mac-c"}); st != 429 || macC.count() != 0 {
+		t.Fatalf("node=mac-c while full = %d %v; want AT_CAPACITY, nothing sent", st, out)
 	}
 }
 
 // Every candidate full: the asker hears all-full, as AT_CAPACITY — not "no
 // machine", and nothing is sent anywhere.
 func TestNodePlaceAllFullRefuses(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatCap(t, h, m5, "m5", machineA, 3, 8, 8, f5)
-	beatCap(t, h, m4, "m4", machineB, 1, 5, 5, f4)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 22, "worker_id": issueWID(f5.FleetID, 22)})
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatCap(t, h, macD, "mac-d", machineA, 3, 8, 8, f5)
+	beatCap(t, h, macC, "mac-c", machineB, 1, 5, 5, f4)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 22, "worker_id": issueWID(f5.FleetID, 22)})
 	e, _ := out["error"].(map[string]any)
 	msg, _ := e["message"].(string)
 	if st != 429 || e["code"] != "AT_CAPACITY" || !strings.HasPrefix(msg, "all-full:") ||
-		!strings.Contains(msg, "m5: full (8/8") || !strings.Contains(msg, "m4: full (5/5") {
+		!strings.Contains(msg, "mac-d: full (8/8") || !strings.Contains(msg, "mac-c: full (5/5") {
 		t.Fatalf("all full = %d %v; want 429 AT_CAPACITY all-full naming both", st, out)
 	}
-	if m5.count()+m4.count() != 0 {
+	if macD.count()+macC.count() != 0 {
 		t.Fatal("an all-full placement sent a start")
 	}
 }
 
 // A beat without the fields (an older agent or claude-fleet) filters nothing:
-// m4 is chosen on score, as before #1587.
+// mac-c is chosen on score, as before #1587.
 func TestNodePlaceWithoutCapFieldsFiltersNothing(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatCap(t, h, m5, "m5", machineA, 3, 2, 0, f5)
-	beatCap(t, h, m4, "m4", machineB, 1, 5, 0, f4)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": issueWID(f5.FleetID, 23)})
-	if pl, _ := out["placement"].(map[string]any); st != 200 || out["local"] != false || pl["machine"] != "m4" {
-		t.Fatalf("place without cap fields = %d %v; want m4 on score", st, out)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatCap(t, h, macD, "mac-d", machineA, 3, 2, 0, f5)
+	beatCap(t, h, macC, "mac-c", machineB, 1, 5, 0, f4)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 23, "worker_id": issueWID(f5.FleetID, 23)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || out["local"] != false || pl["machine"] != "mac-c" {
+		t.Fatalf("place without cap fields = %d %v; want mac-c on score", st, out)
 	}
 }
 
@@ -459,7 +459,7 @@ func TestNodePlaceWithoutCapFieldsFiltersNothing(t *testing.T) {
 // plentiful and CPU idle, so on score alone the machine would win.
 func beatAdmit(t *testing.T, h *harness, n *writeNode, host, machine string, load1 float64, admit *bool, why string, room int, f control.Fleet) {
 	t.Helper()
-	hb := control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine, Load1: load1, NCPU: 10,
+	hb := control.Heartbeat{Hostname: host, OSUser: "frank", MachineID: machine, Load1: load1, NCPU: 10,
 		MemFreeBytes: 15 << 30, MemTotalBytes: 16 << 30, Sessions: 2, Fleets: []control.Fleet{f}, ObservedAt: time.Now(),
 		Admit: admit, AdmitWhy: why}
 	if room >= 0 {
@@ -476,71 +476,71 @@ func boolp(b bool) *bool { return &b }
 
 // claude-fleet#1836: a login whose own gate is holding new sessions is no
 // candidate, however idle it looks and whatever its count cap (0 = unlimited)
-// says. m4 would win on score; it says admit false 内存紧张, so the start
-// stays on m5 and the reason names it 机器暂停接新：内存紧张. Then m4 says
+// says. mac-c would win on score; it says admit false 内存紧张, so the start
+// stays on mac-d and the reason names it 机器暂停接新：内存紧张. Then mac-c says
 // admit true but room 0 — held the same way, on the room. Named, it is refused
 // AT_CAPACITY: its own gate would say no on arrival.
 func TestNodePlaceSkipsPausedNode(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatAdmit(t, h, m5, "m5", machineA, 3, boolp(true), "", 4, f5) // 0.30/core, room 4
-	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(false), "内存紧张", 0, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatAdmit(t, h, macD, "mac-d", machineA, 3, boolp(true), "", 4, f5) // 0.30/core, room 4
+	beatAdmit(t, h, macC, "mac-c", machineB, 1, boolp(false), "内存紧张", 0, f4)
 	wid5 := issueWID(f5.FleetID, 41)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 41, "worker_id": wid5})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 41, "worker_id": wid5})
 	pl, _ := out["placement"].(map[string]any)
-	if st != 200 || out["local"] != true || pl["machine"] != "m5" ||
-		!strings.Contains(pl["reason"].(string), "m4 excluded: 机器暂停接新：内存紧张") {
-		t.Fatalf("place with m4 paused = %d %v; want LOCAL m5, m4 excluded as 机器暂停接新：内存紧张", st, out)
+	if st != 200 || out["local"] != true || pl["machine"] != "mac-d" ||
+		!strings.Contains(pl["reason"].(string), "mac-c excluded: 机器暂停接新：内存紧张") {
+		t.Fatalf("place with mac-c paused = %d %v; want LOCAL mac-d, mac-c excluded as 机器暂停接新：内存紧张", st, out)
 	}
-	if m4.count() != 0 {
+	if macC.count() != 0 {
 		t.Fatal("a start was sent to the paused machine")
 	}
 	// The roster shows the verdict.
 	for _, c := range pl["candidates"].([]any) {
 		c := c.(map[string]any)
 		switch c["machine"] {
-		case "m4":
+		case "mac-c":
 			if c["admit"] != false || c["admit_why"] != "内存紧张" || c["room"] != 0.0 || c["eligible"] != false {
-				t.Fatalf("m4's candidate = %v; want admit false, admit_why 内存紧张, room 0, ineligible", c)
+				t.Fatalf("mac-c's candidate = %v; want admit false, admit_why 内存紧张, room 0, ineligible", c)
 			}
-		case "m5":
+		case "mac-d":
 			if c["admit"] != true || c["room"] != 4.0 || c["eligible"] != true {
-				t.Fatalf("m5's candidate = %v; want admit true, room 4, eligible", c)
+				t.Fatalf("mac-d's candidate = %v; want admit true, room 4, eligible", c)
 			}
 		}
 	}
 	// Named, it is refused the same way a full one is (AT_CAPACITY).
-	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 41, "worker_id": wid5, "node": "m4"}); st != 429 || m4.count() != 0 {
-		t.Fatalf("node=m4 while paused = %d %v; want AT_CAPACITY, nothing sent", st, out)
+	if st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 41, "worker_id": wid5, "node": "mac-c"}); st != 429 || macC.count() != 0 {
+		t.Fatalf("node=mac-c while paused = %d %v; want AT_CAPACITY, nothing sent", st, out)
 	}
 	// admit true with no room for one more holds the same way, on the room.
-	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(true), "", 0, f4)
-	st, out = placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 42, "worker_id": issueWID(f5.FleetID, 42)})
-	if pl, _ := out["placement"].(map[string]any); st != 200 || pl["machine"] != "m5" ||
-		!strings.Contains(pl["reason"].(string), "m4 excluded: 机器暂停接新：内存余量不够再开一个（room 0）") {
-		t.Fatalf("place with m4 at room 0 = %d %v; want m5, m4 excluded on its room", st, out)
+	beatAdmit(t, h, macC, "mac-c", machineB, 1, boolp(true), "", 0, f4)
+	st, out = placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 42, "worker_id": issueWID(f5.FleetID, 42)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || pl["machine"] != "mac-d" ||
+		!strings.Contains(pl["reason"].(string), "mac-c excluded: 机器暂停接新：内存余量不够再开一个（room 0）") {
+		t.Fatalf("place with mac-c at room 0 = %d %v; want mac-d, mac-c excluded on its room", st, out)
 	}
-	// Recovered: admit true, room 3 — m4 wins on score again.
-	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(true), "", 3, f4)
-	st, out = placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 43, "worker_id": issueWID(f5.FleetID, 43)})
-	if pl, _ := out["placement"].(map[string]any); st != 200 || out["local"] != false || pl["machine"] != "m4" {
-		t.Fatalf("place after m4 recovered = %d %v; want m4 on score", st, out)
+	// Recovered: admit true, room 3 — mac-c wins on score again.
+	beatAdmit(t, h, macC, "mac-c", machineB, 1, boolp(true), "", 3, f4)
+	st, out = placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 43, "worker_id": issueWID(f5.FleetID, 43)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || out["local"] != false || pl["machine"] != "mac-c" {
+		t.Fatalf("place after mac-c recovered = %d %v; want mac-c on score", st, out)
 	}
 }
 
 // Every candidate holding (or full): AT_CAPACITY all-full, naming each
 // machine's reason in the gate's own words, and nothing is sent anywhere.
 func TestNodePlaceAllPausedRefuses(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatAdmit(t, h, m5, "m5", machineA, 3, boolp(false), "负载过高", 5, f5)
-	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(false), "内存紧张", 0, f4)
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 44, "worker_id": issueWID(f5.FleetID, 44)})
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatAdmit(t, h, macD, "mac-d", machineA, 3, boolp(false), "负载过高", 5, f5)
+	beatAdmit(t, h, macC, "mac-c", machineB, 1, boolp(false), "内存紧张", 0, f4)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 44, "worker_id": issueWID(f5.FleetID, 44)})
 	e, _ := out["error"].(map[string]any)
 	msg, _ := e["message"].(string)
 	if st != 429 || e["code"] != "AT_CAPACITY" || !strings.HasPrefix(msg, "all-full: every machine is at its session cap or pausing new sessions — ") ||
-		!strings.Contains(msg, "m5: 机器暂停接新：负载过高") || !strings.Contains(msg, "m4: 机器暂停接新：内存紧张") {
+		!strings.Contains(msg, "mac-d: 机器暂停接新：负载过高") || !strings.Contains(msg, "mac-c: 机器暂停接新：内存紧张") {
 		t.Fatalf("all paused = %d %v; want 429 AT_CAPACITY all-full naming both reasons", st, out)
 	}
-	if m5.count()+m4.count() != 0 {
+	if macD.count()+macC.count() != 0 {
 		t.Fatal("an all-paused placement sent a start")
 	}
 }
@@ -549,38 +549,38 @@ func TestNodePlaceAllPausedRefuses(t *testing.T) {
 // local / pool reach the target's worker_start, any adds nothing, and anything
 // else is refused before any placement.
 func TestNodePlaceCarriesAccountClass(t *testing.T) {
-	h, _, m4, f5, _ := twoNodes(t)
-	tok5 := h.tokens["m5"]
+	h, _, macC, f5, _ := twoNodes(t)
+	tok5 := h.tokens["mac-d"]
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 7, "worker_id": issueWID(f5.FleetID, 7),
 		"account_class": "local", "idempotency_key": "place-7-local"})
-	if st != 200 || out["local"] != false || m4.count() != 1 {
-		t.Fatalf("place(local) = %d %v (m4 writes %d); want a remote placement", st, out, m4.count())
+	if st != 200 || out["local"] != false || macC.count() != 1 {
+		t.Fatalf("place(local) = %d %v (mac-c writes %d); want a remote placement", st, out, macC.count())
 	}
-	if params := m4.writes[0]["params"].(map[string]any); params["account_class"] != "local" || params["issue"].(float64) != 7 {
-		t.Fatalf("m4 was sent %v; want issue 7 with account_class local", params)
+	if params := macC.writes[0]["params"].(map[string]any); params["account_class"] != "local" || params["issue"].(float64) != 7 {
+		t.Fatalf("mac-c was sent %v; want issue 7 with account_class local", params)
 	}
 	st, out = placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 8, "worker_id": issueWID(f5.FleetID, 8),
 		"account_class": "any", "idempotency_key": "place-8-any"})
-	if st != 200 || m4.count() != 2 {
-		t.Fatalf("place(any) = %d %v (m4 writes %d); want a remote placement", st, out, m4.count())
+	if st != 200 || macC.count() != 2 {
+		t.Fatalf("place(any) = %d %v (mac-c writes %d); want a remote placement", st, out, macC.count())
 	}
-	if params := m4.writes[1]["params"].(map[string]any); params["account_class"] != nil {
-		t.Fatalf("any must add nothing: m4 was sent %v", params)
+	if params := macC.writes[1]["params"].(map[string]any); params["account_class"] != nil {
+		t.Fatalf("any must add nothing: mac-c was sent %v", params)
 	}
 	if st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "issue": 9, "worker_id": issueWID(f5.FleetID, 9),
-		"account_class": "mine", "idempotency_key": "place-9-bad"}); st != 400 || m4.count() != 2 {
-		t.Fatalf("place(mine) = %d %v (m4 writes %d); want 400 and nothing sent", st, out, m4.count())
+		"account_class": "mine", "idempotency_key": "place-9-bad"}); st != 400 || macC.count() != 2 {
+		t.Fatalf("place(mine) = %d %v (mac-c writes %d); want 400 and nothing sent", st, out, macC.count())
 	}
 }
 
-// A scratch session can be placed too (claude-fleet#1541): m5 busy, no issue,
-// no lease — the hub sends m4 a worker_start of kind scratch carrying the name
+// A scratch session can be placed too (claude-fleet#1541): mac-d busy, no issue,
+// no lease — the hub sends mac-c a worker_start of kind scratch carrying the name
 // and the parent, reserves nothing, and reads the window back as for an issue.
 func TestNodePlaceScratchHandsStartWithoutLease(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	tok5 := h.tokens["m5"]
+	h, macD, macC, f5, f4 := twoNodes(t)
+	tok5 := h.tokens["mac-d"]
 	parent := issueWID(f5.FleetID, 1)
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@43",
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@43",
 		"workers": []any{map[string]any{"window_id": "@43", "scratch": true}}}))
 
 	st, out := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID,
@@ -588,25 +588,25 @@ func TestNodePlaceScratchHandsStartWithoutLease(t *testing.T) {
 	if st != 200 || out["local"] != false {
 		t.Fatalf("place = %d %v; want a remote placement", st, out)
 	}
-	if pl := out["placement"].(map[string]any); pl["machine"] != "m4" || !strings.Contains(pl["reason"].(string), "m5 excluded") {
-		t.Fatalf("placement = %v; want m4 with m5's load as the reason", pl)
+	if pl := out["placement"].(map[string]any); pl["machine"] != "mac-c" || !strings.Contains(pl["reason"].(string), "mac-d excluded") {
+		t.Fatalf("placement = %v; want mac-c with mac-d's load as the reason", pl)
 	}
-	if m5.count() != 0 || m4.count() != 1 {
-		t.Fatalf("writes: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
-	params := m4.writes[0]["params"].(map[string]any)
+	params := macC.writes[0]["params"].(map[string]any)
 	if params["kind"] != "scratch" || params["name"] != "试一下 侧边栏" || params["origin_wid"] != parent || params["repo"] != writeRepo {
-		t.Fatalf("m4 was sent %v; want a scratch start with its name and parent", params)
+		t.Fatalf("mac-c was sent %v; want a scratch start with its name and parent", params)
 	}
 	if _, has := params["issue"]; has {
 		t.Fatalf("a scratch start carried an issue: %v", params)
 	}
-	if m4.writes[0]["fleet_id"] != f4.FleetID {
-		t.Fatalf("sent to fleet %v; want m4's %s", m4.writes[0]["fleet_id"], f4.FleetID)
+	if macC.writes[0]["fleet_id"] != f4.FleetID {
+		t.Fatalf("sent to fleet %v; want mac-c's %s", macC.writes[0]["fleet_id"], f4.FleetID)
 	}
 	oc := placeOutcomeOf(t, out)
-	if oc["state"] != "done" || oc["window"] != "@43" || oc["node"] != "m4" {
-		t.Fatalf("outcome = %v; want done on m4 with window @43", oc)
+	if oc["state"] != "done" || oc["window"] != "@43" || oc["node"] != "mac-c" {
+		t.Fatalf("outcome = %v; want done on mac-c with window @43", oc)
 	}
 	// Nothing was reserved: a scratch has no issue to lease.
 	if ls, _ := h.srv.Store.Leases(time.Now()); len(ls) != 0 {
@@ -627,30 +627,30 @@ func TestNodePlaceScratchHandsStartWithoutLease(t *testing.T) {
 			t.Fatalf("%v = %d %v; want 400", bad, st, out)
 		}
 	}
-	if m4.count() != 1 {
-		t.Fatalf("a refused request sent a start: m4 writes %d", m4.count())
+	if macC.count() != 1 {
+		t.Fatalf("a refused request sent a start: mac-c writes %d", macC.count())
 	}
 	// Another node's fleet is still refused by name.
 	if st, _ := placeCall(t, h, tok5, map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f4.FleetID}); st != 403 {
-		t.Fatalf("m5 placing in m4's fleet's name = %d; want 403", st)
+		t.Fatalf("mac-d placing in mac-c's fleet's name = %d; want 403", st)
 	}
 }
 
 // An idle asker keeps its scratch: LOCAL, nothing sent.
 func TestNodePlaceScratchIdleNodeStaysLocal(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m5.beatLoad("m5", "verk", machineA, 0.5, 3, f5)
-	m4.beatLoad("m4", "verk", machineB, 6, 1, f4)
-	waitLoad(t, h, "m4", 6)
-	waitFor(t, 3*time.Second, "m5 cooled down", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatLoad("mac-d", "frank", machineA, 0.5, 3, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 6, 1, f4)
+	waitLoad(t, h, "mac-c", 6)
+	waitFor(t, 3*time.Second, "mac-d cooled down", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-d", time.Now())
 		return hb.Load1 == 0.5
 	})
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID})
-	if st != 200 || out["local"] != true || out["placement"].(map[string]any)["machine"] != "m5" {
-		t.Fatalf("place = %d %v; want LOCAL m5", st, out)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID})
+	if st != 200 || out["local"] != true || out["placement"].(map[string]any)["machine"] != "mac-d" {
+		t.Fatalf("place = %d %v; want LOCAL mac-d", st, out)
 	}
-	if m5.count()+m4.count() != 0 {
+	if macD.count()+macC.count() != 0 {
 		t.Fatal("a local scratch placement sent a write")
 	}
 }
@@ -662,11 +662,11 @@ func TestOutcomeOfWarmWindow(t *testing.T) {
 		return map[string]any{"status": "succeeded", "result": json.RawMessage(result)}
 	}
 	oc := outcomeOf(op(`{"window":"@4","window_id":"@4","key":"scratch-3","filed":"pending",`+
-		`"workers":[{"window_id":"@4","worker_id":"U/F"}]}`), "m5")
+		`"workers":[{"window_id":"@4","worker_id":"U/F"}]}`), "mac-d")
 	if oc.WindowID != "@4" || oc.Key != "scratch-3" || oc.Filed != "pending" || oc.WorkerID != "U/F" {
 		t.Fatalf("warm fields not passed on: %+v", oc)
 	}
-	raw, _ := json.Marshal(outcomeOf(op(`{"window":"@4"}`), "m5"))
+	raw, _ := json.Marshal(outcomeOf(op(`{"window":"@4"}`), "mac-d"))
 	for _, k := range []string{"window_id", `"key"`, "filed"} {
 		if strings.Contains(string(raw), k) {
 			t.Fatalf("an older node's answer names %s: %s", k, raw)
@@ -680,15 +680,15 @@ func TestOutcomeOfTiming(t *testing.T) {
 	op := func(result string) map[string]any {
 		return map[string]any{"status": "succeeded", "result": json.RawMessage(result)}
 	}
-	oc := outcomeOf(op(`{"window":"@4","timing":{"t_accepted":1000,"t_window":2500}}`), "m5")
+	oc := outcomeOf(op(`{"window":"@4","timing":{"t_accepted":1000,"t_window":2500}}`), "mac-d")
 	if oc.State != "done" || string(oc.Timing) != `{"t_accepted":1000,"t_window":2500}` {
 		t.Fatalf("timing not passed on: %+v %s", oc, oc.Timing)
 	}
 	for _, old := range []string{`{"window":"@4"}`, `{"window":"@4","timing":"x"}`} {
-		if oc := outcomeOf(op(old), "m5"); oc.Timing != nil {
+		if oc := outcomeOf(op(old), "mac-d"); oc.Timing != nil {
 			t.Fatalf("%s: timing %s, want none", old, oc.Timing)
 		}
-		raw, _ := json.Marshal(outcomeOf(op(old), "m5"))
+		raw, _ := json.Marshal(outcomeOf(op(old), "mac-d"))
 		if strings.Contains(string(raw), "timing") {
 			t.Fatalf("%s: answer names timing: %s", old, raw)
 		}

@@ -163,7 +163,7 @@ before install and after uninstall.
 
 ## One proxy for the whole machine (issue #2217)
 
-On a **managed node** (m4 mini2, m5 macmini) the per-login wiring above meant one
+On a **managed node** (mac-a mac-d, mac-b mac-c) the per-login wiring above meant one
 LaunchDaemon and one sudo per login, credentials separated login by login, and
 every login on its own proxy version. There the machine runs **one** shared
 proxy instead; laptops and client-only computers keep a proxy per login.
@@ -271,11 +271,11 @@ is about to take from nothing, as that login: `fleet cred-proxy status` must be
 `on`, its route not `down`, and `sessions n/n` — every live session already on
 the proxy — and no fresh EPIC batch mark (`fleet_epic_running_fresh`). Any miss
 is listed, nothing moves, exit 6; `--force` goes on anyway. (Password-less sudo
-on an admin login is meant for the agent — #2197; m4 broke on the ORDER: the
+on an admin login is meant for the agent — #2197; mac-a broke on the ORDER: the
 files moved before the proxy was on.)
 
 `install` and `machine install` are all-or-nothing for a login that had
-nothing in the store: when a step fails — on 2026-10-07 m4's agent bootstrap
+nothing in the store: when a step fails — on 2026-10-07 mac-a's agent bootstrap
 came 4 ms after `bootout` while the old agent was still exiting, and launchd
 refused it (`37: Operation already in progress`, printed `Bootstrap failed: 5`)
 — every such login is put back from the store's `meta.json` (credentials,
@@ -308,7 +308,7 @@ printed `printf 'KEY=value\n' | sudo bash …/fleet-credsep.sh setenv --login <X
 BREAK-IT rows `cred-sep-rejoin-plain`, `cred-sep-compute-unlinks`.
 
 **A plain node.env back in the home** (issue #2649): a writer from before #2316
-(macmini's `fleet host on --shared` on 2026-10-08) replaced the link with a plain
+(mac-c's `fleet host on --shared` on 2026-10-08) replaced the link with a plain
 file. The agent then takes its token from the store (read at its start) but its
 compute / personal switches live from that plain file, the store's copy is the
 older one, and every later `setenv` refuses the home (exit 5, `--check` too —
@@ -352,8 +352,8 @@ proxy that reads it).
 
 The proxy checks once more in separated mode: every upstream — the four URLs
 and the hub the node token goes to — must be https to `api.anthropic.com`,
-`chatgpt.com`, `api.openai.com`, `auth.openai.com`, `fleet-relay.24hw.cn`,
-`ccquota.24haowan.com` or `claudefleet.24haowan.com` (+ root's
+`chatgpt.com`, `api.openai.com`, `auth.openai.com`, `relay.example.com`,
+`ccquota.example.com` or `hub.example.com` (+ root's
 `FLEET_CRED_ALLOW_HOSTS`, space- or comma-separated); plain http on loopback only
 in the selftest's sandbox (`FLEET_CREDSEP_TEST=1`). A login's own unseparated
 proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row

@@ -47,7 +47,7 @@ strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
 
-Q='要把演练放在 m5 还是只在 m4？'
+Q='要把演练放在 mac-b 还是只在 mac-a？'
 B64=$(printf '%s' "$Q" | base64 | tr -d '\n')
 
 # ============================================================================
@@ -128,7 +128,7 @@ path, f, me = sys.argv[1:4]
 def s(key, **w):
     w.setdefault("key", key); w.setdefault("state", "working"); w.setdefault("lifecycle", "awake")
     w.setdefault("agent", "claude"); w.setdefault("repo", "acme/app")
-    return dict(worker_id=f + "/" + key, machine_name="mini2.local", os_user=me, fleet_id=f,
+    return dict(worker_id=f + "/" + key, machine_name="mac-d.local", os_user=me, fleet_id=f,
                 fleet_name="x", availability="online", worker=w, observed_at="2026-10-06T10:00:00Z")
 sessions = [s("issue-31", issue=31, name="RQ", state="needs", needs="ask", detail="hook 的话",
               status_kind="question", status_msg="程序自报的话"),
@@ -136,10 +136,10 @@ sessions = [s("issue-31", issue=31, name="RQ", state="needs", needs="ask", detai
             s("issue-33", issue=33, name="RW", state="working", status_msg="Running tests"),
             s("issue-34", issue=34, name="RC", state="needs", needs="ask", detail="哪一个？",
               ctx_left=40, ctx_band="ok", ctx_ts=1800000000, model="Opus 5.5", effort="high")]
-nodes = [dict(machine_name="mini2.local", availability="online", sessions=4, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
+nodes = [dict(machine_name="mac-d.local", availability="online", sessions=4, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
-export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4"
+export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mac-d=mac-a"
 bash "$HUBS" --refresh 2>"$WORK/err" || fail "C: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $21 "|" $27 "|" $28 }'; }

@@ -11,8 +11,8 @@
 #   OFF    CCQUOTA_FLEET unset → the lease command never runs, and the spawn's
 #          stderr / gh / tmux / git traffic is byte-identical to a run with no
 #          lease command configured at all (the degenerate case is sacred).
-#   HELD   lease held by m5 → exit 3, stderr 「已被 m5 认领」, no GitHub claim, no spawn.
-#   ALIAS  the holder's hostname goes through FLEET_NODE_ALIASES (macmini=m5).
+#   HELD   lease held by mac-b → exit 3, stderr 「已被 mac-b 认领」, no GitHub claim, no spawn.
+#   ALIAS  the holder's hostname goes through FLEET_NODE_ALIASES (mac_c=mac-b).
 #   GRANT  lease granted → acquire names <fleet UUID>/issue-<N>, then the GitHub
 #          claim + spawn run as today, and the lease is NOT released.
 #   BACK   lease granted, then the GitHub check refuses → the lease is given back.
@@ -135,8 +135,8 @@ printf '%s\n' "\$*" >> "$WORK/ccq.log"
 printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/ccq.env"
 case "\${1:-} \${2:-}" in
   'lease release') echo RELEASED; exit 0 ;;
-  'lease acquire') echo 'GRANTED m5'; exit 0 ;;
-  'move '*)        printf 'LOCAL m5\tnothing to move\n'; exit 0 ;;
+  'lease acquire') echo 'GRANTED mac-b'; exit 0 ;;
+  'move '*)        printf 'LOCAL mac-b\tnothing to move\n'; exit 0 ;;
 esac
 exit 2
 CCQFAKE
@@ -193,34 +193,34 @@ ok "OFF CCQUOTA_FLEET unset → no lease call, byte-identical spawn"
 
 # ===== HELD: another node holds it ⇒ exit 3, names the holder, no claim/spawn ====
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
-  LEASE_RC=3 LEASE_ANSWER="HELD m5 $UUID/acme-widgets:issue-258 2026-10-03T12:00:00Z" run_spawn 258
+  LEASE_RC=3 LEASE_ANSWER="HELD mac-b $UUID/acme-widgets:issue-258 2026-10-03T12:00:00Z" run_spawn 258
 [ "$(rc)" = 3 ]                                  || fail "HELD exits 3 (the claimed class)" "rc=$(rc)"
-err_has '已被 m5 认领'                            || fail "HELD stderr must say 已被 m5 认领"
+err_has '已被 mac-b 认领'                            || fail "HELD stderr must say 已被 mac-b 认领"
 lease_has "acquire acme/widgets 258 $UUID/acme-widgets:issue-258" || fail "HELD acquire must name the repo, issue and worker_id"
 gh_has '--add-assignee'                          && fail "HELD the lease is checked BEFORE the GitHub claim — no assign"
 gh_has 'assignees,state'                         && fail "HELD must not even read the GitHub claim"
 tmux_has 'new-window'                            && fail "HELD must not spawn"
-ok "HELD lease on m5 → exit 3, 已被 m5 认领, no GitHub claim, no spawn"
+ok "HELD lease on mac-b → exit 3, 已被 mac-b 认领, no GitHub claim, no spawn"
 
-# The hub names a machine by its hostname; the operator's FLEET_NODE_ALIASES names it m5.
-CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
-  LEASE_RC=3 LEASE_ANSWER="HELD macmini $UUID/acme-widgets:issue-258 2026-10-03T12:00:00Z" run_spawn 258
-[ "$(rc)" = 3 ] && err_has '已被 m5 认领'          || fail "ALIAS the holder must be named through FLEET_NODE_ALIASES"
-ok "ALIAS HELD by macmini + FLEET_NODE_ALIASES=macmini=m5 → 已被 m5 认领"
+# The hub names a machine by its hostname; the operator's FLEET_NODE_ALIASES names it mac-b.
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
+  LEASE_RC=3 LEASE_ANSWER="HELD mac-c $UUID/acme-widgets:issue-258 2026-10-03T12:00:00Z" run_spawn 258
+[ "$(rc)" = 3 ] && err_has '已被 mac-b 认领'          || fail "ALIAS the holder must be named through FLEET_NODE_ALIASES"
+ok "ALIAS HELD by mac-c + FLEET_NODE_ALIASES=mac-c=mac-b → 已被 mac-b 认领"
 
 # ===== GRANT: lease granted ⇒ today's claim + spawn, lease kept ==================
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
-  LEASE_ANSWER="GRANTED m4" run_spawn 258
+  LEASE_ANSWER="GRANTED mac-a" run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "GRANT spawns" "$(cat "$WORK/spawn.err")"
 gh_has '--add-assignee'                          || fail "GRANT the GitHub claim still runs as the second guard"
 tmux_has 'new-window'                            || fail "GRANT spawns the window"
 lease_has release                                && fail "GRANT a spawned session keeps its lease"
-[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m4)" ] || fail "GRANT a clean spawn prints only 「租约已拿到」 on stderr" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (mac-a)" ] || fail "GRANT a clean spawn prints only 「租约已拿到」 on stderr" "$(cat "$WORK/spawn.err")"
 ok "GRANT lease granted → GitHub claim + spawn, lease kept"
 
 # ===== BACK: granted, then GitHub refuses ⇒ lease given back =====================
 CLAIM_STATE=$'1\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
-  LEASE_ANSWER="GRANTED m4" run_spawn 258
+  LEASE_ANSWER="GRANTED mac-a" run_spawn 258
 [ "$(rc)" = 3 ]                                  || fail "BACK the GitHub refusal still exits 3" "rc=$(rc)"
 lease_has "release acme/widgets 258 $UUID/acme-widgets:issue-258" || fail "BACK a refused spawn must release the lease it took"
 ok "BACK granted then GitHub-refused → lease released"
@@ -264,33 +264,33 @@ ok "NOUUID no fleet UUID → stderr note, today's path"
 
 # ===== FORCE: --force ⇒ acquire --force, takeover announced ======================
 CLAIM_STATE=$'1\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
-  LEASE_ANSWER="FORCED m4 m5 $UUID/acme-widgets:issue-258" run_spawn 258 --force
+  LEASE_ANSWER="FORCED mac-a mac-b $UUID/acme-widgets:issue-258" run_spawn 258 --force
 [ "$(rc)" = 0 ]                                  || fail "FORCE spawns" "$(cat "$WORK/spawn.err")"
 lease_has "acquire --force acme/widgets 258"     || fail "FORCE the acquire must carry --force"
-err_has '强制从 m5 收回'                          || fail "FORCE must announce whom the lease was taken from"
+err_has '强制从 mac-b 收回'                          || fail "FORCE must announce whom the lease was taken from"
 tmux_has 'new-window'                            || fail "FORCE spawns"
 ok "FORCE --force → acquire --force, takeover announced, spawn"
 
 # ===== MULTI: a 2-repo fleet keys the lease <slug>:issue-<N> =====================
 out=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" \
-  CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m4" bash -c '
+  CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED mac-a" bash -c '
     . "$1/fleet-lib.sh"
     fleet_slug() { printf "wd"; }
     : > "$2"; fleet_hub_lease acquire testsess acme/widgets 12' _ "$BIN" "$LEASE_LOG")
 lease_has "acquire acme/widgets 12 $UUID/wd:issue-12" || fail "MULTI a multi-repo lease must use the <slug>:issue-<N> key"
-[ "$out" = "GRANTED m4" ]                        || fail "MULTI fleet_hub_lease prints the command's line" "$out"
+[ "$out" = "GRANTED mac-a" ]                        || fail "MULTI fleet_hub_lease prints the command's line" "$out"
 ok "MULTI multi-repo fleet → <slug>:issue-<N> worker_id"
 
 # ===== TOKEN: node.env's token reaches the lease command and NOTHING else (#1491) ==
 NODE_ENV="$WORK/conf/node.env"
 printf 'CCQUOTA_HUB_URL=http://hub.test\nCCQUOTA_TOKEN=tok-node\n' > "$NODE_ENV"; chmod 600 "$NODE_ENV"
-CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m5" run_spawn 258
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED mac-b" run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "TOKEN spawns" "$(cat "$WORK/spawn.err")"
 [ "$(cat "$WORK/lease.env" 2>/dev/null)" = tok-node ] || fail "TOKEN the lease command must see node.env's CCQUOTA_TOKEN" "lease saw: $(cat "$WORK/lease.env" 2>/dev/null)"
 [ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "TOKEN the spawned window must NOT inherit the node token" "tmux saw: $(cat "$WORK/tmux.env" 2>/dev/null)"
-[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m5)" ] || fail "TOKEN a token from node.env is the normal path: only the grant on stderr" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (mac-b)" ] || fail "TOKEN a token from node.env is the normal path: only the grant on stderr" "$(cat "$WORK/spawn.err")"
 # an exported token wins; node.env only fills the gap
-CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m5" CCQUOTA_TOKEN=tok-env run_spawn 258
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED mac-b" CCQUOTA_TOKEN=tok-env run_spawn 258
 [ "$(cat "$WORK/lease.env" 2>/dev/null)" = tok-env ] || fail "TOKEN CCQUOTA_TOKEN in the environment wins over node.env" "lease saw: $(cat "$WORK/lease.env" 2>/dev/null)"
 ok "TOKEN node.env's token reaches the lease command only; the pane and its window never hold it"
 
@@ -316,18 +316,18 @@ PATH="$WORK/ccqbin:$PATH" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 run_spawn 258
 grep -qF "lease acquire acme/widgets 258 $UUID/acme-widgets:issue-258" "$WORK/ccq.log" 2>/dev/null || fail "NOTOKEN+node.env the default ccquota lease must run" "$(cat "$WORK/ccq.log" 2>/dev/null)"
 [ "$(cat "$WORK/ccq.env" 2>/dev/null)" = tok-node ] || fail "NOTOKEN+node.env ccquota must see node.env's token" "ccquota saw: $(cat "$WORK/ccq.env" 2>/dev/null)"
 [ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "NOTOKEN+node.env the window still never inherits it"
-[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m5)" ] || fail "NOTOKEN+node.env prints only the grant on stderr" "$(cat "$WORK/spawn.err")"
+[ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (mac-b)" ] || fail "NOTOKEN+node.env prints only the grant on stderr" "$(cat "$WORK/spawn.err")"
 ok "NOTOKEN default ccquota without a token → 「no node token」 + fix, no ccquota run; with node.env it runs with the token"
 
 # ===== MOVE: fleet_hub_move shares the plumbing ==================================
 cat > "$WORK/fakebin/fake-move" <<MOVEFAKE
 #!/bin/bash
-printf 'LOCAL m5\t%s\n' "\${CCQUOTA_TOKEN:-<unset>}"
+printf 'LOCAL mac-b\t%s\n' "\${CCQUOTA_TOKEN:-<unset>}"
 MOVEFAKE
 chmod +x "$WORK/fakebin/fake-move"
 out=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" CCQUOTA_FLEET=1 FLEET_HUB_MOVE_CMD="$WORK/fakebin/fake-move" \
   bash -c '. "$1/fleet-lib.sh"; fleet_hub_move plan --node auto acme/widgets x/issue-1' _ "$BIN")
-[ "$out" = $'LOCAL m5\ttok-node' ]               || fail "MOVE the move command must see node.env's token" "$out"
+[ "$out" = $'LOCAL mac-b\ttok-node' ]               || fail "MOVE the move command must see node.env's token" "$out"
 rm -f "$NODE_ENV"
 err=$(cd "$WORK" && PATH="$WORK/ccqbin:$PATH" FLEET_CONF_DIR="$WORK/conf" CCQUOTA_FLEET=1 \
   bash -c '. "$1/fleet-lib.sh"; fleet_hub_move plan --node auto acme/widgets x/issue-1; echo "rc=$?"' _ "$BIN" 2>&1)

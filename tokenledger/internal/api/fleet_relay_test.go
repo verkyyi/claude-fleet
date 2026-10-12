@@ -122,8 +122,8 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	h := newFleetHarness(t)
 	const every = 150 * time.Millisecond
 	parentHome, childHome := t.TempDir(), t.TempDir()
-	installFakeFleetControl(t, py, bin, parentHome, "fleet-m5", "verkyyi/claude-fleet")
-	installFakeFleetControl(t, py, bin, childHome, "fleet-m4", "verkyyi/claude-fleet")
+	installFakeFleetControl(t, py, bin, parentHome, "fleet-mac-d", "verkyyi/claude-fleet")
+	installFakeFleetControl(t, py, bin, childHome, "fleet-mac-c", "verkyyi/claude-fleet")
 	// The child's machine: its issue-42 window carries the parent's worker_id
 	// as @origin_wid (inventory column 11, issue #1423; column 12 is
 	// @claude_needs, #1475) once we know it, and its lifelong identity as
@@ -140,18 +140,18 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	installFakeHubNode(t, parentHome)
 	installFakeHubNode(t, childHome)
 
-	parentTok, childTok := h.enroll(t, "m5"), h.enroll(t, "m4")
-	stopParent := startRelayAgent(t, h, "m5", parentHome, parentTok, every)
-	startRelayAgent(t, h, "m4", childHome, childTok, every)
+	parentTok, childTok := h.enroll(t, "mac-d"), h.enroll(t, "mac-c")
+	stopParent := startRelayAgent(t, h, "mac-d", parentHome, parentTok, every)
+	startRelayAgent(t, h, "mac-c", childHome, childTok, every)
 
 	var parentFleet, childFleet string
 	waitFor(t, 10*time.Second, "both fleets registered", func() bool {
 		for _, f := range getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any) {
 			f := f.(map[string]any)
 			switch f["endpoint_id"] {
-			case "ep_m5":
+			case "ep_mac-d":
 				parentFleet = f["fleet_id"].(string)
-			case "ep_m4":
+			case "ep_mac-c":
 				childFleet = f["fleet_id"].(string)
 			}
 		}
@@ -226,10 +226,10 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 		r, err := h.srv.Store.FleetRelay(report2.ID)
 		return gone(f3) && err == nil && r.Status == store.RelayPending
 	})
-	startRelayAgent(t, h, "m5-again", parentHome, parentTok, every)
+	startRelayAgent(t, h, "mac-d-again", parentHome, parentTok, every)
 	waitFor(t, 10*time.Second, "the waiting report delivered on reconnect", func() bool { return len(lines(delivered)) == 2 })
 
-	// A node speaks only for workers it hosts: m4 cannot forge m5's.
+	// A node speaks only for workers it hosts: mac-c cannot forge mac-d's.
 	forged := control.Relay{ID: parentWID + "#1", Kind: control.RelayMessage, From: parentWID, To: childWID,
 		Payload: json.RawMessage(`{"text":"hi"}`)}
 	f4 := dropRelay(t, childOutbox, "20260101T000003Z-1-d.json", forged)
@@ -271,8 +271,8 @@ func TestRelayRetryAndRefusal(t *testing.T) {
 		return &fakeNode{t: t, conn: c}
 	}
 	pn, cn := connect("a"), connect("b")
-	pn.beat("m5", "op", machineA, parent)
-	cn.beat("m4", "op", machineB, child)
+	pn.beat("mac-d", "op", machineA, parent)
+	cn.beat("mac-c", "op", machineB, child)
 	var pfid, cfid string
 	waitFor(t, 5*time.Second, "fleets registered", func() bool {
 		rows, _ := h.srv.Store.Fleets()
@@ -346,7 +346,7 @@ func TestRelayRetryAndRefusal(t *testing.T) {
 	m := next(answers, "the first push")
 	answer(m, control.RelayResult{ID: id, Retry: true, Detail: "busy"})
 	time.Sleep(100 * time.Millisecond)
-	pn.beat("m5", "op", machineA, parent) // a beat is what re-pushes a stale one
+	pn.beat("mac-d", "op", machineA, parent) // a beat is what re-pushes a stale one
 	m = next(answers, "the push after a retry")
 	if m.OpID != id {
 		t.Fatalf("re-pushed %s; want %s", m.OpID, id)
@@ -381,9 +381,9 @@ func TestRelayRetryAndRefusal(t *testing.T) {
 func TestRelayOwnerBoundary(t *testing.T) {
 	h := newFleetHarness(t)
 	h.srv.FleetAdmins = []string{"op"}
-	op := store.FleetRow{EndpointID: "e1", Hostname: "m5", OSUser: "op"}
-	op2 := store.FleetRow{EndpointID: "e2", Hostname: "m4", OSUser: "op"}
-	colleague := store.FleetRow{EndpointID: "e3", Hostname: "m4", OSUser: "zhang"}
+	op := store.FleetRow{EndpointID: "e1", Hostname: "mac-d", OSUser: "op"}
+	op2 := store.FleetRow{EndpointID: "e2", Hostname: "mac-c", OSUser: "op"}
+	colleague := store.FleetRow{EndpointID: "e3", Hostname: "mac-c", OSUser: "zhang"}
 	o := func(r store.FleetRow) string { return h.srv.relayOwner(r.EndpointID, r.Hostname, r.OSUser, nil) }
 	if o(op) != o(op2) {
 		t.Fatalf("the operator's two logins are different owners: %s vs %s", o(op), o(op2))
@@ -391,12 +391,12 @@ func TestRelayOwnerBoundary(t *testing.T) {
 	if o(op) == o(colleague) {
 		t.Fatal("a colleague's login shares the operator's owner")
 	}
-	accts := []store.FleetAccount{{PrincipalID: "p1", Hostname: "m4", Login: "zhang", State: store.AccountActive},
-		{PrincipalID: "p1", Hostname: "m5", Login: "zhang2", State: store.AccountActive}}
-	if a, b := h.srv.relayOwner("e3", "m4", "zhang", accts), h.srv.relayOwner("e4", "m5", "zhang2", accts); a != b || a != "person:p1" {
+	accts := []store.FleetAccount{{PrincipalID: "p1", Hostname: "mac-c", Login: "zhang", State: store.AccountActive},
+		{PrincipalID: "p1", Hostname: "mac-d", Login: "zhang2", State: store.AccountActive}}
+	if a, b := h.srv.relayOwner("e3", "mac-c", "zhang", accts), h.srv.relayOwner("e4", "mac-d", "zhang2", accts); a != b || a != "person:p1" {
 		t.Fatalf("one person's two logins = %s / %s; want both person:p1", a, b)
 	}
-	if h.srv.relayOwner("e5", "m5", "lee", accts) != "endpoint:e5" {
+	if h.srv.relayOwner("e5", "mac-d", "lee", accts) != "endpoint:e5" {
 		t.Fatal("an unassigned login must be its own owner")
 	}
 	// No admins named: a one-operator hub, every login the operator's.
@@ -413,15 +413,15 @@ func TestRelayOwnerBoundary(t *testing.T) {
 // colleague's login stays out.
 func TestRelayOwnerAdminIsAlsoAPerson(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verky"}
+	h.srv.FleetAdmins = []string{"heidi"}
 	accts := []store.FleetAccount{
-		{PrincipalID: "p1", Hostname: "macmini", Login: "verky", State: store.AccountActive},
-		{PrincipalID: "p1", Hostname: "fleet-linux-0", Login: "verky2", State: store.AccountActive},
-		{PrincipalID: "p2", Hostname: "fleet-linux-0", Login: "zhang", State: store.AccountActive},
+		{PrincipalID: "p1", Hostname: "mac-e", Login: "heidi", State: store.AccountActive},
+		{PrincipalID: "p1", Hostname: "linux-b", Login: "verky2", State: store.AccountActive},
+		{PrincipalID: "p2", Hostname: "linux-b", Login: "zhang", State: store.AccountActive},
 	}
-	orch := h.srv.relayOwners("e1", "macmini", "verky", accts)
-	worker := h.srv.relayOwners("e2", "fleet-linux-0", "verky2", accts)
-	colleague := h.srv.relayOwners("e3", "fleet-linux-0", "zhang", accts)
+	orch := h.srv.relayOwners("e1", "mac-e", "heidi", accts)
+	worker := h.srv.relayOwners("e2", "linux-b", "verky2", accts)
+	colleague := h.srv.relayOwners("e3", "linux-b", "zhang", accts)
 	if !sameRelayOwner(orch, worker) {
 		t.Fatalf("the person's admin login %v and their Linux login %v are different owners", orch, worker)
 	}
@@ -429,7 +429,7 @@ func TestRelayOwnerAdminIsAlsoAPerson(t *testing.T) {
 		t.Fatalf("a colleague's login %v shares an owner with %v / %v", colleague, orch, worker)
 	}
 	// Another admin login with no account stays the operator's.
-	if !sameRelayOwner(orch, h.srv.relayOwners("e4", "mini2", "verky", accts)) {
+	if !sameRelayOwner(orch, h.srv.relayOwners("e4", "mac-f", "heidi", accts)) {
 		t.Fatal("the operator's two admin logins are different owners")
 	}
 }
@@ -473,8 +473,8 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 		return &fakeNode{t: t, conn: c}
 	}
 	pn, cn := connect("a"), connect("b")
-	pn.beat("m5", "op", machineA, parent)
-	cn.beat("m4", "op", machineB, child)
+	pn.beat("mac-d", "op", machineA, parent)
+	cn.beat("mac-c", "op", machineB, child)
 	waitFor(t, 5*time.Second, "fleets registered", func() bool {
 		_, e1 := h.srv.Store.Fleet(parent.FleetID)
 		_, e2 := h.srv.Store.Fleet(child.FleetID)
@@ -548,7 +548,7 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 	answer(pn, next(pushes, "the first push"), control.RelayResult{ID: id, Retry: true, Detail: "parent not live here"})
 	time.Sleep(100 * time.Millisecond)
 	for i := 0; i < 3; i++ {
-		pn.beat("m5", "op", machineA, parent) // no worker with that identity yet
+		pn.beat("mac-d", "op", machineA, parent) // no worker with that identity yet
 	}
 	none(pushes, "re-pushed while the recipient is not in the inventory")
 	if r, _ := h.srv.Store.FleetRelay(id); r.Status != store.RelayPending || r.Attempts != 1 {
@@ -556,7 +556,7 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 	}
 	none(receipts, "a receipt for a relay still pending")
 
-	pn.beat("m5", "op", machineA, withIdentity) // the recipient is live, by identity
+	pn.beat("mac-d", "op", machineA, withIdentity) // the recipient is live, by identity
 	m := next(pushes, "the push once the recipient is live")
 	if m.OpID != id {
 		t.Fatalf("pushed %s; want %s", m.OpID, id)
@@ -566,7 +566,7 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 		r, err := h.srv.Store.FleetRelay(id)
 		return err == nil && r.Status == store.RelayDelivered && r.Receipt == store.ReceiptDue
 	})
-	cn.beat("m4", "op", machineB, child)
+	cn.beat("mac-c", "op", machineB, child)
 	rc := next(receipts, "the sender's receipt")
 	var rel control.Relay
 	var body control.RelayReceiptBody
@@ -580,7 +580,7 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 		r, _ := h.srv.Store.FleetRelay(id)
 		return r.Receipt == store.ReceiptDone
 	})
-	cn.beat("m4", "op", machineB, child)
+	cn.beat("mac-c", "op", machineB, child)
 	none(receipts, "a settled receipt pushed again")
 
 	// Nobody ever takes it: expired after the TTL, and the sender is told.
@@ -590,7 +590,7 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	relayTTL.Set(10 * time.Millisecond)
 	h.srv.relayExpiredAt.Store(0)
-	cn.beat("m4", "op", machineB, child)
+	cn.beat("mac-c", "op", machineB, child)
 	rc = next(receipts, "the expiry receipt")
 	if json.Unmarshal(rc.Payload, &rel) != nil || json.Unmarshal(rel.Payload, &body) != nil ||
 		body.RID != id2 || body.Status != store.RelayExpired {
@@ -607,8 +607,8 @@ func TestRelayOperatorSender(t *testing.T) {
 	h := newFleetHarness(t)
 	fa := fakeFleet(t, machineA, "fleet-a", "verkyyi/claude-fleet", "/a", 1)
 	fb := fakeFleet(t, machineB, "fleet-b", "verkyyi/claude-fleet", "/b", 2)
-	connectFakeNode(t, h, "a", false).beat("m5", "op", machineA, fa)
-	connectFakeNode(t, h, "b", false).beat("m4", "op", machineB, fb)
+	connectFakeNode(t, h, "a", false).beat("mac-d", "op", machineA, fa)
+	connectFakeNode(t, h, "b", false).beat("mac-c", "op", machineB, fb)
 	var afid, bfid string
 	waitFor(t, 5*time.Second, "fleets registered", func() bool {
 		rows, _ := h.srv.Store.Fleets()

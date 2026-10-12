@@ -385,7 +385,7 @@ func TestCredCycleWithdrawsForbiddenAccounts(t *testing.T) {
 	mk(ownCx, `{"tokens":{"access_token":"a","refresh_token":"rt-own"}}`)
 
 	body := `{"principal_id":"p","credentials":[],"recheck_secs":900,"withdrawn":[
-	 {"provider":"claude","account":"gone","error":"not in machine m4's allowlist"},
+	 {"provider":"claude","account":"gone","error":"not in machine mac-a's allowlist"},
 	 {"provider":"claude","account":"mine","error":"x"},
 	 {"provider":"codex","account":"work","error":"x"},
 	 {"provider":"codex","account":"default","error":"x"},

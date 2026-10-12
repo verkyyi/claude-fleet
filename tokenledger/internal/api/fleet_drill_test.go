@@ -52,22 +52,22 @@ func drillKey(t *testing.T) (string, ssh.Signer) {
 }
 
 // drillHarness: certHarness (Alice signed in, an active login on two
-// machines) with macmini-m4 on the node roster, and one drill person invited
+// machines) with mac-e-mac-c on the node roster, and one drill person invited
 // by the operator's token.
 func drillHarness(t *testing.T) (*harness, DrillInviteResponse) {
 	t.Helper()
 	h, _ := certHarness(t)
-	enrollAs(t, h, "m4", "macmini-m4", "verkyyi")
-	if err := h.srv.Store.NodeConnected("ep_m4", "macmini-m4", "verkyyi", "test", 1, 1000, time.Now()); err != nil {
+	enrollAs(t, h, "mac-c", "mac-e-mac-c", "ivan")
+	if err := h.srv.Store.NodeConnected("ep_mac-c", "mac-e-mac-c", "ivan", "test", 1, 1000, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "macmini-m4.local"})
+	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "mac-e-mac-c.local"})
 	if code != 200 {
 		t.Fatalf("invite: %d %s", code, body)
 	}
 	var inv DrillInviteResponse
 	json.Unmarshal(body, &inv)
-	if inv.Kind != "drill" || inv.Host != "macmini-m4" || !strings.HasPrefix(inv.Login, "drill") ||
+	if inv.Kind != "drill" || inv.Host != "mac-e-mac-c" || !strings.HasPrefix(inv.Login, "drill") ||
 		!strings.HasPrefix(inv.ApproveCode, "fd_") || !strings.HasPrefix(inv.PersonID, "drill-") {
 		t.Fatalf("invite = %s", body)
 	}
@@ -107,18 +107,18 @@ func pollCert(t *testing.T, h *harness, st DeviceStart) CertResponse {
 // token is not. The life is bounded and the host must be on the roster.
 func TestDrillInviteIsAdminOnly(t *testing.T) {
 	h, _ := drillHarness(t)
-	if code, _ := asPerson(t, h, http.MethodPost, DrillPath, pAlice, []byte(`{"host":"macmini-m4"}`)); code != http.StatusForbidden {
+	if code, _ := asPerson(t, h, http.MethodPost, DrillPath, pAlice, []byte(`{"host":"mac-e-mac-c"}`)); code != http.StatusForbidden {
 		t.Fatalf("a colleague invited a drill person: %d, want 403", code)
 	}
-	if code, _ := drillReq(t, h, http.MethodPost, DrillPath, "", map[string]any{"host": "macmini-m4"}); code != http.StatusUnauthorized && code != http.StatusForbidden {
+	if code, _ := drillReq(t, h, http.MethodPost, DrillPath, "", map[string]any{"host": "mac-e-mac-c"}); code != http.StatusUnauthorized && code != http.StatusForbidden {
 		t.Fatalf("no credential: %d", code)
 	}
 	for _, bad := range []map[string]any{
 		{"host": "nowhere"},
-		{"host": "macmini-m4", "ttl_seconds": 60},
-		{"host": "macmini-m4", "ttl_seconds": 3 * 86400},
-		{"host": "macmini-m4", "login": "verkyyi"},
-		{"host": "macmini-m4", "login": "drill-x"},
+		{"host": "mac-e-mac-c", "ttl_seconds": 60},
+		{"host": "mac-e-mac-c", "ttl_seconds": 3 * 86400},
+		{"host": "mac-e-mac-c", "login": "ivan"},
+		{"host": "mac-e-mac-c", "login": "drill-x"},
 	} {
 		if code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", bad); code != http.StatusBadRequest {
 			t.Fatalf("invite %v: %d %s, want 400", bad, code, body)
@@ -272,11 +272,11 @@ func TestDrillLeasesLikeANewcomer(t *testing.T) {
 	}
 	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "sk-ant-ort01-ALICE"})
 	now := time.Now()
-	if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: "drill-x", Login: "drillx", Hostname: "m4",
+	if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: "drill-x", Login: "drillx", Hostname: "mac-c",
 		CodeHash: HashToken("fd_x"), CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	dtok := enrollAs(t, h, "drillx-m4", "m4", "drillx")
+	dtok := enrollAs(t, h, "drillx-mac-c", "mac-c", "drillx")
 	code, got, body := lease(t, h, dtok)
 	if code != http.StatusOK {
 		t.Fatalf("drill lease: %d %v, want 200 like a newcomer", code, body)
@@ -325,7 +325,7 @@ func TestDrillInviteByCertificate(t *testing.T) {
 		return drillReq(t, h, http.MethodPost, DrillPath, "", drillInviteRequest{Host: host, Login: login, TTLSeconds: ttl,
 			Cert: cr.Certificate, TS: ts, Sig: sshsig(t, signer, DrillSigNamespace, []byte(DrillInviteMessage(ts, signedHost, login, ttl, "")))})
 	}
-	if code, body := ask("macmini-m4", "drillcert1", 600, "macmini-m4"); code != http.StatusForbidden {
+	if code, body := ask("mac-e-mac-c", "drillcert1", 600, "mac-e-mac-c"); code != http.StatusForbidden {
 		t.Fatalf("a non-admin's certificate invited: %d %s", code, body)
 	}
 	// Alice becomes an admin: CCQUOTA_GITHUB_ADMINS names her, pinned to her ID.
@@ -333,10 +333,10 @@ func TestDrillInviteByCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.srv.GitHub.Admins = []string{"alice-gh"}
-	if code, body := ask("macmini-m4", "drillcert1", 600, "macmini-m4"); code != 200 || !bytes.Contains(body, []byte(`"login":"drillcert1"`)) {
+	if code, body := ask("mac-e-mac-c", "drillcert1", 600, "mac-e-mac-c"); code != 200 || !bytes.Contains(body, []byte(`"login":"drillcert1"`)) {
 		t.Fatalf("the admin's certificate: %d %s", code, body)
 	}
-	if code, _ := ask("macmini-m4", "drillcert2", 600, "elsewhere"); code != http.StatusUnauthorized {
+	if code, _ := ask("mac-e-mac-c", "drillcert2", 600, "elsewhere"); code != http.StatusUnauthorized {
 		t.Fatalf("a signature over another host: %d, want 401", code)
 	}
 }
@@ -354,7 +354,7 @@ func TestDrillSeesOnlyItsOwn(t *testing.T) {
 	if !visible(inv.Host, inv.Login) {
 		t.Fatal("the drill person cannot see its own login")
 	}
-	if visible("macmini-m4", "alice") || visible("macmini", "alice") {
+	if visible("mac-e-mac-c", "alice") || visible("mac-e", "alice") {
 		t.Fatal("the drill person sees Alice's sessions")
 	}
 	if h.srv.principalIsAdmin(inv.PersonID) {
@@ -362,9 +362,9 @@ func TestDrillSeesOnlyItsOwn(t *testing.T) {
 	}
 }
 
-// drillOnFleet (claude-fleet#2549): leastBusyFleet (m4 busy, m5 quiet, m6
+// drillOnFleet (claude-fleet#2549): leastBusyFleet (mac-c busy, mac-d quiet, m6
 // 维护中, m7 no admin) with a certificate authority, and a drill person whose
-// own computer is the quiet machine m5 — its scan confirmed by its code.
+// own computer is the quiet machine mac-d — its scan confirmed by its code.
 func drillOnFleet(t *testing.T) (*harness, map[string]*fleetNode, DrillInviteResponse) {
 	t.Helper()
 	h := newFleetHarness(t)
@@ -374,7 +374,7 @@ func drillOnFleet(t *testing.T) (*harness, map[string]*fleetNode, DrillInviteRes
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	signer, _ := ssh.NewSignerFromKey(priv)
 	h.srv.SSHCA = sshca.New(signer)
-	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "m5"})
+	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "mac-d"})
 	if code != 200 {
 		t.Fatalf("invite: %d %s", code, body)
 	}
@@ -395,24 +395,24 @@ func drillOnFleet(t *testing.T) (*harness, map[string]*fleetNode, DrillInviteRes
 // active the person reads as anyone with a login.
 func TestDrillFirstSessionGetsAMachine(t *testing.T) {
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 	if op.Op != control.AccountCreate || op.Login != inv.Login {
-		t.Fatalf("op = %+v; want a create of %s on m4", op, inv.Login)
+		t.Fatalf("op = %+v; want a create of %s on mac-c", op, inv.Login)
 	}
-	if got, ok := readMsg(nodes["m5"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
-		t.Fatalf("the drill's own computer m5 was sent %+v", got)
+	if got, ok := readMsg(nodes["mac-d"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("the drill's own computer mac-d was sent %+v", got)
 	}
-	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.State != "opening" || st.Machine != "m4" {
-		t.Fatalf("account = %+v; want opening on m4", st)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.State != "opening" || st.Machine != "mac-c" {
+		t.Fatalf("account = %+v; want opening on mac-c", st)
 	}
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
-	loginReportsFleet(t, h, "m4", op.Login, machineA) // #2941: placeable once its fleet reports
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
+	loginReportsFleet(t, h, "mac-c", op.Login, machineA) // #2941: placeable once its fleet reports
 	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st != nil {
 		t.Fatalf("an active drill still gets account = %+v", st)
 	}
 	// Looking again opens nothing more.
-	if got, ok := readMsg(nodes["m4"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+	if got, ok := readMsg(nodes["mac-c"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("a second op: %+v", got)
 	}
 }
@@ -426,20 +426,20 @@ func TestDrillGoesOnlyAfterItsLoginIsRemoved(t *testing.T) {
 	drillCloseGiveUp = 48 * time.Hour // the sweep below runs a day ahead
 	t.Cleanup(func() { drillCloseGiveUp = old })
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 	// #2652: the create carries the login's own join code, so it can enroll
 	// and bring its fleet up — the hub sees a login's fleet only through it.
 	if !joinCodeRE.MatchString(op.JoinCode) {
 		t.Fatalf("create op join_code = %q; want a fresh fj_ code", op.JoinCode)
 	}
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
 
 	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
-	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
-		t.Fatalf("self-delete with a login open: %d %s; want 202 naming %s@m4", code, body, inv.Login)
+	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@mac-c") {
+		t.Fatalf("self-delete with a login open: %d %s; want 202 naming %s@mac-c", code, body, inv.Login)
 	}
-	m, op = expectAccountOp(t, nodes["m4"].tnode)
+	m, op = expectAccountOp(t, nodes["mac-c"].tnode)
 	if op.Op != control.AccountRemove || op.Login != inv.Login || !op.DropHome {
 		t.Fatalf("op = %+v; want a remove of %s with drop_home (#2652: no archive of a throwaway login)", op, inv.Login)
 	}
@@ -447,8 +447,8 @@ func TestDrillGoesOnlyAfterItsLoginIsRemoved(t *testing.T) {
 	if _, err := h.srv.Store.Principal(inv.PersonID); err != nil {
 		t.Fatal("the drill went before its login was removed")
 	}
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountRemoved)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountRemoved)
 	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != 200 {
 		t.Fatalf("self-delete after the removal: %d %s", code, body)
 	}
@@ -480,24 +480,24 @@ func TestDrillFailedCreateIsRemovedBeforeItGoes(t *testing.T) {
 	drillRemoveRetry = 0
 	t.Cleanup(func() { drillRemoveRetry = old })
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 1, Detail: "step 7: clone failed"})
-	waitState(t, h, inv.PersonID, "m4", store.AccountFailed)
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 1, Detail: "step 7: clone failed"})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountFailed)
 	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.State != "failed" || !strings.Contains(st.Why, "clone failed") {
 		t.Fatalf("account = %+v; want failed saying why", st)
 	}
 
 	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
-	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
-		t.Fatalf("self-delete after a failed create: %d %s; want 202 naming %s@m4", code, body, inv.Login)
+	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@mac-c") {
+		t.Fatalf("self-delete after a failed create: %d %s; want 202 naming %s@mac-c", code, body, inv.Login)
 	}
-	m, op = expectAccountOp(t, nodes["m4"].tnode)
+	m, op = expectAccountOp(t, nodes["mac-c"].tnode)
 	if op.Op != control.AccountRemove || op.Login != inv.Login || !op.DropHome {
 		t.Fatalf("op = %+v; want a remove of %s with drop_home", op, inv.Login)
 	}
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login,
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login,
 		Exit: control.RemoveExitNoLogin, Detail: "fleet-login-remove: no login " + op.Login + " on this machine: nothing to remove"})
-	waitState(t, h, inv.PersonID, "m4", store.AccountRemoved)
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountRemoved)
 	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != 200 {
 		t.Fatalf("self-delete after the removal: %d %s", code, body)
 	}
@@ -514,28 +514,28 @@ func TestDrillFailedRemoveIsRetriedExistingIsLeft(t *testing.T) {
 	drillRemoveRetry = 0
 	t.Cleanup(func() { drillRemoveRetry = old })
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
 	drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
-	m, op = expectAccountOp(t, nodes["m4"].tnode)
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, Exit: 6, Detail: "services not moved"})
-	waitState(t, h, inv.PersonID, "m4", store.AccountFailed)
+	m, op = expectAccountOp(t, nodes["mac-c"].tnode)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, Exit: 6, Detail: "services not moved"})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountFailed)
 	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != http.StatusAccepted {
 		t.Fatalf("self-delete after a failed remove: %d %s; want 202 (the login is still there)", code, body)
 	}
-	if _, op = expectAccountOp(t, nodes["m4"].tnode); op.Op != control.AccountRemove {
+	if _, op = expectAccountOp(t, nodes["mac-c"].tnode); op.Op != control.AccountRemove {
 		t.Fatalf("op = %+v; want the remove again", op)
 	}
 
 	h2, nodes2, inv2 := drillOnFleet(t)
-	m, op = expectAccountOp(t, nodes2["m4"].tnode)
-	sendResult(t, nodes2["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 3, Exists: true})
-	waitState(t, h2, inv2.PersonID, "m4", store.AccountFailed)
+	m, op = expectAccountOp(t, nodes2["mac-c"].tnode)
+	sendResult(t, nodes2["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 3, Exists: true})
+	waitState(t, h2, inv2.PersonID, "mac-c", store.AccountFailed)
 	if code, body := drillReq(t, h2, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv2.ApproveCode}); code != 200 {
 		t.Fatalf("self-delete after a create met an existing login: %d %s; want 200 (left for the operator)", code, body)
 	}
-	if got, ok := readMsg(nodes2["m4"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+	if got, ok := readMsg(nodes2["mac-c"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("someone else's login was sent %+v", got)
 	}
 }
@@ -545,25 +545,25 @@ func TestDrillFailedRemoveIsRetriedExistingIsLeft(t *testing.T) {
 // after drillCloseGiveUp is handed to the operator, never dropped in silence:
 // the person goes, but its account row (and so its person row) stays for
 // `fleet hub accounts`, and the 200 names it (claude-fleet#2728: before, the
-// person went at once with every row, and drill10092046 stayed on macmini
+// person went at once with every row, and drill10092046 stayed on mac-e
 // with nobody to close it).
 func TestDrillUnknownCreateIsWaitedThenHanded(t *testing.T) {
 	h, nodes, inv := drillOnFleet(t)
-	expectAccountOp(t, nodes["m4"].tnode)
-	a := waitState(t, h, inv.PersonID, "m4", store.AccountCreating)
+	expectAccountOp(t, nodes["mac-c"].tnode)
+	a := waitState(t, h, inv.PersonID, "mac-c", store.AccountCreating)
 	if err := h.srv.Store.LoseAccountOps(a.EndpointID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	waitState(t, h, inv.PersonID, "m4", store.AccountUnknown)
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountUnknown)
 
 	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
-	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
-		t.Fatalf("self-delete with a create unanswered: %d %s; want 202 naming %s@m4 (wait for the node)", code, body, inv.Login)
+	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@mac-c") {
+		t.Fatalf("self-delete with a create unanswered: %d %s; want 202 naming %s@mac-c (wait for the node)", code, body, inv.Login)
 	}
 	// the hub may ask the node about the create again (claude-fleet#2918) —
 	// never remove it on a guess
 	for {
-		got, ok := readMsg(nodes["m4"].tnode, 300*time.Millisecond)
+		got, ok := readMsg(nodes["mac-c"].tnode, 300*time.Millisecond)
 		if !ok {
 			break
 		}
@@ -579,12 +579,12 @@ func TestDrillUnknownCreateIsWaitedThenHanded(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	code, body = drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
 	var out store.DrillDeleted
-	if code != 200 || json.Unmarshal(body, &out) != nil || len(out.LeftForOperator) != 1 || out.LeftForOperator[0] != inv.Login+"@m4" {
-		t.Fatalf("self-delete past the give-up: %d %s; want 200 with left_for_operator [%s@m4]", code, body, inv.Login)
+	if code != 200 || json.Unmarshal(body, &out) != nil || len(out.LeftForOperator) != 1 || out.LeftForOperator[0] != inv.Login+"@mac-c" {
+		t.Fatalf("self-delete past the give-up: %d %s; want 200 with left_for_operator [%s@mac-c]", code, body, inv.Login)
 	}
 	accts, err := h.srv.Store.FleetAccounts(inv.PersonID)
-	if err != nil || len(accts) != 1 || accts[0].Hostname != "m4" || !strings.Contains(accts[0].Detail, "left for the operator") {
-		t.Fatalf("accounts after the person went = %+v, %v; want the m4 row kept for the operator", accts, err)
+	if err != nil || len(accts) != 1 || accts[0].Hostname != "mac-c" || !strings.Contains(accts[0].Detail, "left for the operator") {
+		t.Fatalf("accounts after the person went = %+v, %v; want the mac-c row kept for the operator", accts, err)
 	}
 	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != http.StatusUnauthorized {
 		t.Fatalf("the drill person can still delete itself: %d %s; want 401 (gone)", code, body)
@@ -592,8 +592,8 @@ func TestDrillUnknownCreateIsWaitedThenHanded(t *testing.T) {
 }
 
 // A drill that names its machine (claude-fleet#3432, `fleet drill invite
-// --home`): its scan opens the login THERE — m4, the busy one — never
-// placement's pick (m5, the quiet one); its own computer (m7) is never a
+// --home`): its scan opens the login THERE — mac-c, the busy one — never
+// placement's pick (mac-d, the quiet one); its own computer (m7) is never a
 // home, and a home off the roster is refused before anything is minted.
 func TestDrillHomeOpensItsLoginThere(t *testing.T) {
 	h := newFleetHarness(t)
@@ -612,31 +612,31 @@ func TestDrillHomeOpensItsLoginThere(t *testing.T) {
 			t.Fatalf("home %q on host %q: %d %s; want 400 naming %q", bad.home, bad.host, code, body, bad.want)
 		}
 	}
-	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "m7", "home": "m4.local"})
+	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "m7", "home": "mac-c.local"})
 	if code != 200 {
 		t.Fatalf("invite: %d %s", code, body)
 	}
 	var inv DrillInviteResponse
 	json.Unmarshal(body, &inv)
-	if inv.Home != "m4" {
-		t.Fatalf("invite home = %q; want the roster's m4 (%s)", inv.Home, body)
+	if inv.Home != "mac-c" {
+		t.Fatalf("invite home = %q; want the roster's mac-c (%s)", inv.Home, body)
 	}
 	key, _ := drillKey(t)
 	st := startLogin(t, h, key, nil)
 	if code, body := drillReq(t, h, http.MethodPost, LoginApprovePath, "", approveRequest{Code: st.UserCode, ApproveCode: inv.ApproveCode}); code != 200 {
 		t.Fatalf("approve: %d %s", code, body)
 	}
-	_, op := expectAccountOp(t, nodes["m4"].tnode)
+	_, op := expectAccountOp(t, nodes["mac-c"].tnode)
 	if op.Op != control.AccountCreate || op.Login != inv.Login {
-		t.Fatalf("op = %+v; want a create of %s on its home m4", op, inv.Login)
+		t.Fatalf("op = %+v; want a create of %s on its home mac-c", op, inv.Login)
 	}
-	for _, host := range []string{"m5", "m7"} {
+	for _, host := range []string{"mac-d", "m7"} {
 		if got, ok := readMsg(nodes[host].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
-			t.Fatalf("%s was sent %+v; the drill named m4", host, got)
+			t.Fatalf("%s was sent %+v; the drill named mac-c", host, got)
 		}
 	}
-	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.Machine != "m4" {
-		t.Fatalf("account = %+v; want opening on m4", st)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.Machine != "mac-c" {
+		t.Fatalf("account = %+v; want opening on mac-c", st)
 	}
 	// A real newcomer never has a home: placement as before.
 	if got := h.srv.drillHome("gh:4004"); got != "" {
@@ -647,10 +647,10 @@ func TestDrillHomeOpensItsLoginThere(t *testing.T) {
 // The signed invite: with no home the message an older client signs, byte
 // for byte; a home is signed after the rest.
 func TestDrillInviteMessageHome(t *testing.T) {
-	if got := DrillInviteMessage(7, "m4", "drillx", 600, ""); got != "fleet-drill 7 invite m4 drillx 600" {
+	if got := DrillInviteMessage(7, "mac-c", "drillx", 600, ""); got != "fleet-drill 7 invite mac-c drillx 600" {
 		t.Fatalf("no home: %q", got)
 	}
-	if got := DrillInviteMessage(7, "m4", "drillx", 600, "m5"); got != "fleet-drill 7 invite m4 drillx 600 m5" {
+	if got := DrillInviteMessage(7, "mac-c", "drillx", 600, "mac-d"); got != "fleet-drill 7 invite mac-c drillx 600 mac-d" {
 		t.Fatalf("home: %q", got)
 	}
 }

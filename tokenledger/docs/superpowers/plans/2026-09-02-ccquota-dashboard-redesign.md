@@ -460,7 +460,7 @@ func dumpRollup(t *testing.T, s *Store) string {
 }
 ```
 
-Add `"fmt"` and `"github.com/verkyyi/ccquota/internal/model"` to the imports (check the module path with `head -1 go.mod`). If `store_test.go` already defines a temp-open helper under another name, use that name instead of adding `openTemp`.
+Add `"fmt"` and `"github.com/dave/ccquota/internal/model"` to the imports (check the module path with `head -1 go.mod`). If `store_test.go` already defines a temp-open helper under another name, use that name instead of adding `openTemp`.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -478,7 +478,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 // rollupVersion is stamped into rollup_meta. Bump it when the rollup's key or
@@ -708,7 +708,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 // seedReview builds two sessions on two projects across three hours.
@@ -721,7 +721,7 @@ func seedReview(t *testing.T, s *Store) {
 		e.SessionID, e.CWD, e.Model = session, cwd, model
 		e.TS = base.Add(time.Duration(min) * time.Minute)
 		e.CacheRead, e.InputTokens, e.IsSidechain = cacheRead, input, side
-		e.OSUser, e.Effort, e.Entrypoint = "verkyyi", "xhigh", "cli"
+		e.OSUser, e.Effort, e.Entrypoint = "dave", "xhigh", "cli"
 		if !priced {
 			e.CostUSD = nil
 		}
@@ -869,7 +869,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 const hourlyTokens = `(input_tokens + output_tokens + cache_create_5m_tokens + cache_create_1h_tokens + cache_read_tokens)`
@@ -1304,7 +1304,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 // The rollup must agree with the raw events for every filter and every
@@ -1456,7 +1456,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 func TestScopeParsesChipsAndAlignsHours(t *testing.T) {
@@ -1494,7 +1494,7 @@ package api
 import (
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 func hr(hour, model string, tokens int64) store.HourRow {
@@ -1559,7 +1559,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 // scope resolves the subscription, the range and the drill-down chips of a
@@ -1618,7 +1618,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 // Series is one bucket of a time series, optionally stacked by model.
@@ -1867,7 +1867,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 func lp(min int, pct float64) store.LimitPoint {
@@ -1923,7 +1923,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 // seedReviewHarness pushes two sessions through the real ingest path.
@@ -1935,7 +1935,7 @@ func seedReviewHarness(t *testing.T, h *harness) {
 	mk := func(uuid, session, cwd string, min int, out int64, priced bool) model.UsageEvent {
 		e := model.UsageEvent{AccountUUID: "acct-a", EndpointID: "ep_mac", SessionID: session, MessageUUID: uuid,
 			TS: base.Add(time.Duration(min) * time.Minute), Model: "claude-opus-5", OutputTokens: out, CacheRead: 900,
-			CWD: cwd, OSUser: "verkyyi"}
+			CWD: cwd, OSUser: "dave"}
 		if priced {
 			e.CostUSD = &c
 		}
@@ -2062,7 +2062,7 @@ package api
 import (
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 const criticalPct = 90.0
@@ -2152,7 +2152,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/store"
 )
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -2508,7 +2508,7 @@ func TestNowFindings(t *testing.T) {
 	old := now.Add(-2 * time.Hour)
 	in := NowInputs{Now: now,
 		Windows:   []WindowStat{{Label: "a@x", FiveHourPct: 82}, {Label: "b@x", FiveHourPct: 95}, {Label: "c@x", FiveHourPct: 10}},
-		Endpoints: []EndpointSeen{{Label: "macmini-zx", LastSeen: &old}, {Label: "fresh", LastSeen: &now}, {Label: "never"}},
+		Endpoints: []EndpointSeen{{Label: "mac-c-zx", LastSeen: &old}, {Label: "fresh", LastSeen: &now}, {Label: "never"}},
 		Live:      []LiveStat{{SessionID: "s1", CWD: "/p", Tokens: 250_000_000}, {SessionID: "s2", Tokens: 1000}}}
 	fs := Now(in)
 	if kinds(fs) != "window_high,window_high,stale_agent,stale_agent,live_runaway" {
@@ -2900,7 +2900,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 func TestFindingsReviewAndNow(t *testing.T) {
@@ -2941,8 +2941,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/findings"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/dave/ccquota/internal/findings"
+	"github.com/dave/ccquota/internal/store"
 )
 
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
@@ -3974,7 +3974,7 @@ git commit -m "feat(web): session detail overlay with per-turn bars"
 - [ ] **Step 1: Copy the mini DB** (read-only snapshot; the hub on the mini keeps running):
 
 ```bash
-ssh macmini 'sqlite3 ~/.ccquota/ccquota.db ".backup /tmp/ccq-snapshot.db"' && scp macmini:/tmp/ccq-snapshot.db /tmp/ccq-preview.db
+ssh mac-c 'sqlite3 ~/.ccquota/ccquota.db ".backup /tmp/ccq-snapshot.db"' && scp mac-c:/tmp/ccq-snapshot.db /tmp/ccq-preview.db
 ```
 
 - [ ] **Step 2: Build and run locally**

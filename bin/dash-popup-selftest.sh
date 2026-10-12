@@ -230,9 +230,9 @@ grep -qxF -- '#[align=centre] Free text ' "$FLOG" || fail "frame: free-text Engl
 # names this one (`#me`). Hub off (no cache, above) ⇒ 「动作 · 对象」 only.
 tmux new-session -d -s fr -x 80 -y 20 </dev/null >/dev/null 2>&1
 mkdir -p "$FTMP/.claude-dash/global"
-printf '#ts\0371\n#me\037m5\n' > "$FTMP/.claude-dash/global/remote_fr"
+printf '#ts\0371\n#me\037mac-b\n' > "$FTMP/.claude-dash/global/remote_fr"
 TMUX_PANE=$(tmux list-panes -t fr -F '#{pane_id}' | head -1) frame --size L --title popup_keys -- true
-grep -qxF -- '#[align=centre] 快捷键 · m5 ' "$FLOG" \
+grep -qxF -- '#[align=centre] 快捷键 · mac-b ' "$FLOG" \
   || fail "frame: the hub-on title does not name this machine: $(tr '\n' ' ' < "$FLOG")"
 # --no-inline: a refused popup is never run in the caller (a bind has no pane) —
 # it toasts why on that client and exits 3, and strands nothing

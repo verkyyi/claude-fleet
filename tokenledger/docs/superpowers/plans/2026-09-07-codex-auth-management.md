@@ -21,10 +21,10 @@
 - 浏览器模块测试包含 13,792 / 14,325 = 96.28% 的请求数口径、空数据和未知费用。
 - 进程级假 App Server 测试覆盖刷新写回、两个进程竞争、共享会话锁、撤销/暂时故障、旧 CLI 的空账户响应、刷新错误脱敏，以及账号目录隔离。
 - 注册发现测试确认命名已有目录不会更换游标或重放历史。
-- mini `24haowan` 通过官方 CLI 0.149.0 实际续期成功：2026-09-08 00:50 UTC 刷新，access token 到期为 2026-09-18 00:50 UTC。
-- mini `verkyyi` 与 `verkydev` 的旧刷新凭据已被拒绝。0.149.0 与 0.153.4 均确认不能继续刷新，需要分别完成官方登录；不会通过复制其他机器凭据恢复。
+- mini `acme` 通过官方 CLI 0.149.0 实际续期成功：2026-09-08 00:50 UTC 刷新，access token 到期为 2026-09-18 00:50 UTC。
+- mini `dave` 与 `verkydev` 的旧刷新凭据已被拒绝。0.149.0 与 0.153.4 均确认不能继续刷新，需要分别完成官方登录；不会通过复制其他机器凭据恢复。
 - 当前环境的浏览器与原生 UI 控制不可用，无法代为完成两份旧登录的交互授权。已有有效登录继续提供该账户的额度数据。
-- 已将 MacBook `verkyyi` 及 mini 上上述三个现有登录目录注册为 `personal`，保留原始目录和账号归属。
+- 已将 MacBook `dave` 及 mini 上上述三个现有登录目录注册为 `personal`，保留原始目录和账号归属。
 
 ## 使用
 
@@ -42,7 +42,7 @@ ccquota codex run
 登录启动器使用所选账号目录作为工作目录，避免 `sudo -H` 保留 SSH 用户的目录后误读该用户的项目配置；普通 `run` 仍使用当前项目目录。例如：
 
 ```sh
-ssh -t macmini 'sudo -H -u verkydev /usr/local/bin/ccquota codex login personal --device-auth'
+ssh -t mac-c 'sudo -H -u verkydev /usr/local/bin/ccquota codex login personal --device-auth'
 ```
 
 ## 来源

@@ -58,16 +58,16 @@ func relayCheck(t *testing.T, h *harness, pass, uri string) (int, string) {
 }
 
 func TestRelayCredIssueAndCheck(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
-	tok := mustMintRelay(t, h, m4)
+	h, macC, _ := newVaultHarness(t)
+	tok := mustMintRelay(t, h, macC)
 	for _, uri := range []string{"/anthropic/v1/messages", "/chatgpt/codex/responses", "/openai-auth/oauth/token", ""} {
-		if code, who := relayCheck(t, h, tok, uri); code != http.StatusOK || who != "m4" {
+		if code, who := relayCheck(t, h, tok, uri); code != http.StatusOK || who != "mac-c" {
 			t.Fatalf("live pass on %q: %d who=%q", uri, code, who)
 		}
 	}
 	// Only the hash is kept, and not even that leaves through the settings.
 	s, _ := h.srv.Store.FleetSettings()
-	if v := s[NodeRelayPrefix+"m4"]; v != "alice:"+HashToken(tok) {
+	if v := s[NodeRelayPrefix+"mac-c"]; v != "alice:"+HashToken(tok) {
 		t.Fatalf("stored relay setting = %q", v)
 	}
 	res, body := h.get(t, "/v1/fleet/settings")
@@ -77,7 +77,7 @@ func TestRelayCredIssueAndCheck(t *testing.T) {
 	if strings.Contains(string(body), HashToken(tok)) || strings.Contains(string(body), tok) {
 		t.Fatalf("settings carry the relay credential: %s", body)
 	}
-	if !strings.Contains(string(body), `"`+NodeRelayPrefix+`m4":"alice"`) {
+	if !strings.Contains(string(body), `"`+NodeRelayPrefix+`mac-c":"alice"`) {
 		t.Fatalf("settings do not show who holds one: %s", body)
 	}
 	var issued int
@@ -88,13 +88,13 @@ func TestRelayCredIssueAndCheck(t *testing.T) {
 }
 
 func TestRelayCheckRefusesForged(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
-	tok := mustMintRelay(t, h, m4)
+	h, macC, _ := newVaultHarness(t)
+	tok := mustMintRelay(t, h, macC)
 	for name, pass := range map[string]string{
 		"none":          "",
 		"forged":        relayTokenPrefix + strings.Repeat("A", 43),
 		"tampered":      tok[:len(tok)-1] + map[bool]string{true: "B", false: "A"}[tok[len(tok)-1] == 'A'],
-		"node token":    m4,
+		"node token":    macC,
 		"viewer token":  viewerToken,
 		"session pass":  hubPassPrefix + "anything", // passes off here, and forged
 		"no prefix":     strings.TrimPrefix(tok, relayTokenPrefix),
@@ -132,15 +132,15 @@ func TestRelayCheckRefusesForged(t *testing.T) {
 }
 
 func TestRelayCredRevoked(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
-	tok := mustMintRelay(t, h, m4)
+	h, macC, _ := newVaultHarness(t)
+	tok := mustMintRelay(t, h, macC)
 	if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusOK {
 		t.Fatalf("before: %d", code)
 	}
 	// The operator can only drop it, never write a hash by hand.
-	putSetting(t, h, NodeRelayPrefix+"m4", "alice:"+HashToken("frl1.mine"), 400)
+	putSetting(t, h, NodeRelayPrefix+"mac-c", "alice:"+HashToken("frl1.mine"), 400)
 	// Dropped: refused at once, even with a verdict cached a moment ago.
-	putSetting(t, h, NodeRelayPrefix+"m4.local", "", 200)
+	putSetting(t, h, NodeRelayPrefix+"mac-c.local", "", 200)
 	if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusForbidden {
 		t.Fatalf("revoked pass: %d, want 403", code)
 	}
@@ -150,7 +150,7 @@ func TestRelayCredRevoked(t *testing.T) {
 		t.Fatalf("revoke audit rows = %d", revoked)
 	}
 	// A new one works; the old one stays dead.
-	tok2 := mustMintRelay(t, h, m4)
+	tok2 := mustMintRelay(t, h, macC)
 	if code, _ := relayCheck(t, h, tok2, "/chatgpt/codex/responses"); code != http.StatusOK {
 		t.Fatalf("re-minted: %d", code)
 	}
@@ -158,28 +158,28 @@ func TestRelayCredRevoked(t *testing.T) {
 		t.Fatalf("old pass after re-mint: %d", code)
 	}
 	// A credential revocation of the machine stops the pass too.
-	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4", Reason: "lost"}); code != http.StatusOK {
-		t.Fatalf("revoke m4: %d %v", code, out)
+	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-c", Reason: "lost"}); code != http.StatusOK {
+		t.Fatalf("revoke mac-c: %d %v", code, out)
 	}
 	if code, _ := relayCheck(t, h, tok2, "/anthropic/v1/messages"); code != http.StatusForbidden {
 		t.Fatalf("pass of a revoked machine: %d, want 403", code)
 	}
-	if code, out := mintRelay(t, h, m4); code != http.StatusForbidden || out["error"] != LeaseRevoked {
+	if code, out := mintRelay(t, h, macC); code != http.StatusForbidden || out["error"] != LeaseRevoked {
 		t.Fatalf("mint on a revoked machine: %d %v", code, out)
 	}
 }
 
 func TestRelayCredUntrusted(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
-	tok := mustMintRelay(t, h, m4)
-	putSetting(t, h, NodeTrustPrefix+"m4", TrustUntrusted, 200)
+	h, macC, _ := newVaultHarness(t)
+	tok := mustMintRelay(t, h, macC)
+	putSetting(t, h, NodeTrustPrefix+"mac-c", TrustUntrusted, 200)
 	if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusForbidden {
 		t.Fatalf("pass of an untrusted machine: %d, want 403", code)
 	}
-	if code, out := mintRelay(t, h, m4); code != http.StatusForbidden || out["error"] != LeaseUntrusted {
+	if code, out := mintRelay(t, h, macC); code != http.StatusForbidden || out["error"] != LeaseUntrusted {
 		t.Fatalf("mint on an untrusted machine: %d %v", code, out)
 	}
-	putSetting(t, h, NodeTrustPrefix+"m4", TrustTrusted, 200)
+	putSetting(t, h, NodeTrustPrefix+"mac-c", TrustTrusted, 200)
 	if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusOK {
 		t.Fatalf("trusted again: %d", code)
 	}
@@ -206,18 +206,18 @@ func TestRelayCredUntrusted(t *testing.T) {
 // Two logins on one machine each hold their own; re-minting one replaces only
 // that login's.
 func TestRelayCredPerLogin(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
+	h, macC, _ := newVaultHarness(t)
 	p, err := h.srv.Store.AdoptPrincipal("gh:1006", "bob", "Bob", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	bob := enrollAs(t, h, "bob-m4", "m4", "bob")
-	a1 := mustMintRelay(t, h, m4)
+	bob := enrollAs(t, h, "bob-mac-c", "mac-c", "bob")
+	a1 := mustMintRelay(t, h, macC)
 	b1 := mustMintRelay(t, h, bob)
-	a2 := mustMintRelay(t, h, m4)
+	a2 := mustMintRelay(t, h, macC)
 	for name, want := range map[string]int{"alice old": 403, "bob": 200, "alice new": 200} {
 		tok := map[string]string{"alice old": a1, "bob": b1, "alice new": a2}[name]
 		if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != want {
@@ -225,7 +225,7 @@ func TestRelayCredPerLogin(t *testing.T) {
 		}
 	}
 	// Revoking the machine drops both.
-	putSetting(t, h, NodeRelayPrefix+"m4", "", 200)
+	putSetting(t, h, NodeRelayPrefix+"mac-c", "", 200)
 	for _, tok := range []string{a2, b1} {
 		if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusForbidden {
 			t.Fatalf("after machine revoke: %d", code)
@@ -260,7 +260,7 @@ func TestRelayCheckSessionPass(t *testing.T) {
 	h, tok5, _, f5, _ := sessHarness(t)
 	out := sessIssue(t, h, tok5, f5, map[string]any{"providers": []string{"claude"}})
 	cred, id := out["cred"].(string), out["id"].(string)
-	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "gh:1005@m5" {
+	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "gh:1005@mac-d" {
 		t.Fatalf("session pass on /anthropic/: %d who=%q", code, who)
 	}
 	for _, uri := range []string{"/chatgpt/codex/responses", "/openai-auth/oauth/token", "/v1/fleet/settings"} {

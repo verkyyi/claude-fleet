@@ -24,7 +24,7 @@ const (
 	uuidCodex  = "codex:account:0123456789abcdef0123456789abcdef"
 )
 
-// policyRig: alice and bob both log in on m4; the pool holds gmail, icloud
+// policyRig: alice and bob both log in on mac-c; the pool holds gmail, icloud
 // (Claude, with account UUIDs), legacy (Claude, no UUID — an old import) and
 // a Codex default; alice also has her own Claude "own".
 func policyRig(t *testing.T) (h *harness, alice, bob string) {
@@ -34,10 +34,10 @@ func policyRig(t *testing.T) (h *harness, alice, bob string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	bob = enrollAs(t, h, "bob-m4", "m4", "bob")
+	bob = enrollAs(t, h, "bob-mac-c", "mac-c", "bob")
 	exp := time.Now().Add(365 * 24 * time.Hour).UTC().Truncate(time.Second)
 	for _, c := range []struct{ who, provider, account, uuid string }{
 		{store.PoolPrincipal, credvault.Claude, "gmail", uuidGmail},
@@ -108,8 +108,8 @@ func TestCredPolicyOffAddsNothing(t *testing.T) {
 func TestCredPolicyNodeUserIntersection(t *testing.T) {
 	h, alice, bob := policyRig(t)
 
-	// node only: m4 may use gmail + the Codex account (and alice's own).
-	setPolicy(t, h, "node", "m4.local", []string{uuidGmail, uuidCodex, uuidOwn})
+	// node only: mac-c may use gmail + the Codex account (and alice's own).
+	setPolicy(t, h, "node", "mac-c.local", []string{uuidGmail, uuidCodex, uuidOwn})
 	got, wd, resp := leased(t, h, alice)
 	if !eq(got, "claude/gmail", "claude/own", "codex/default") || !eq(wd, "claude/icloud", "claude/legacy") {
 		t.Fatalf("node only: %v withdrawn %v", got, wd)
@@ -121,14 +121,14 @@ func TestCredPolicyNodeUserIntersection(t *testing.T) {
 		if c.Account == "legacy" && !strings.Contains(c.Error, "no account UUID") {
 			t.Fatalf("legacy's reason: %q", c.Error)
 		}
-		if c.Account == "icloud" && !strings.Contains(c.Error, "not in machine m4's allowlist") {
+		if c.Account == "icloud" && !strings.Contains(c.Error, "not in machine mac-c's allowlist") {
 			t.Fatalf("icloud's reason: %q", c.Error)
 		}
 	}
 	// The manifest is the machine's: node scope.
 	_, man, _ := getPool(t, h, bob)
 	if len(man.Pool) != 1 || man.Pool[0].Account != "gmail" {
-		t.Fatalf("manifest under m4's list: %+v", man.Pool)
+		t.Fatalf("manifest under mac-c's list: %+v", man.Pool)
 	}
 
 	// user on top, partial overlap: alice may use icloud + Codex → only Codex.
@@ -136,9 +136,9 @@ func TestCredPolicyNodeUserIntersection(t *testing.T) {
 	if got, wd, _ := leased(t, h, alice); !eq(got, "codex/default") || len(wd) != 4 {
 		t.Fatalf("intersection: %v withdrawn %v", got, wd)
 	}
-	// bob shares the machine and has no list of his own: m4's alone.
+	// bob shares the machine and has no list of his own: mac-c's alone.
 	if got, _, _ := leased(t, h, bob); !eq(got, "claude/gmail", "codex/default") {
-		t.Fatalf("bob on m4: %v", got)
+		t.Fatalf("bob on mac-c: %v", got)
 	}
 	// disjoint: nothing.
 	setPolicy(t, h, "user", pAlice, []string{uuidICloud})
@@ -146,7 +146,7 @@ func TestCredPolicyNodeUserIntersection(t *testing.T) {
 		t.Fatalf("disjoint: %v", got)
 	}
 	// node cleared: the person's list alone (case-insensitive UUIDs).
-	setPolicy(t, h, "node", "m4", nil)
+	setPolicy(t, h, "node", "mac-c", nil)
 	if got, _, _ := leased(t, h, alice); !eq(got, "claude/icloud") {
 		t.Fatalf("user only: %v", got)
 	}
@@ -198,14 +198,14 @@ func TestCredPolicyMalformedFailsClosed(t *testing.T) {
 		{"scope": "user", "id": "gh:999999", "allow": []string{}},
 		{"scope": "user", "id": store.PoolPrincipal, "allow": []string{}},
 		{"scope": "login", "id": "alice", "allow": []string{}},
-		{"scope": "node", "id": "../m4", "allow": []string{}},
+		{"scope": "node", "id": "../mac-c", "allow": []string{}},
 	} {
 		if code, _ := h.post(t, CredPolicyPath, body); code != http.StatusBadRequest {
 			t.Fatalf("%v → %d", body, code)
 		}
 	}
 	// Nor can the generic settings PUT write one.
-	if code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": credNodeKey("m4"), "value": "[]"}); code == http.StatusOK {
+	if code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": credNodeKey("mac-c"), "value": "[]"}); code == http.StatusOK {
 		t.Fatal("the generic settings PUT wrote an allowlist")
 	}
 }
@@ -224,21 +224,21 @@ func TestCredPolicyUnknownMachineFailsClosed(t *testing.T) {
 	}
 	// A machine is its enrolled name, not what it reports now.
 	h, alice, _ := policyRig(t)
-	setPolicy(t, h, "node", "m4", []string{})
+	setPolicy(t, h, "node", "mac-c", []string{})
 	ep, err := h.srv.Store.EndpointByTokenHash(HashToken(alice))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := h.srv.policyMachine(ep.ID); m != "m4" {
+	if m := h.srv.policyMachine(ep.ID); m != "mac-c" {
 		t.Fatalf("policy machine %q", m)
 	}
 }
 
 func TestCredPolicyEffectiveView(t *testing.T) {
 	h, _, _ := policyRig(t)
-	setPolicy(t, h, "node", "m4", []string{uuidGmail, uuidOwn})
+	setPolicy(t, h, "node", "mac-c", []string{uuidGmail, uuidOwn})
 	setPolicy(t, h, "user", pAlice, []string{uuidOwn, uuidICloud})
-	res, body := h.get(t, CredPolicyPath+"?machine=m4&principal="+pAlice)
+	res, body := h.get(t, CredPolicyPath+"?machine=mac-c&principal="+pAlice)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("%d %s", res.StatusCode, body)
 	}
@@ -262,9 +262,9 @@ func TestCredPolicyEffectiveView(t *testing.T) {
 			t.Fatalf("own: %+v", e)
 		}
 	}
-	if len(out.Nodes) != 1 || out.Nodes[0].ID != "m4" || !out.Effective.Restricted ||
+	if len(out.Nodes) != 1 || out.Nodes[0].ID != "mac-c" || !out.Effective.Restricted ||
 		allowed["own"] != "" || !strings.Contains(allowed["gmail"], "person "+pAlice) ||
-		!strings.Contains(allowed["icloud"], "machine m4") || strings.Contains(string(body), "sk-ant-") {
+		!strings.Contains(allowed["icloud"], "machine mac-c") || strings.Contains(string(body), "sk-ant-") {
 		t.Fatalf("view: %s", body)
 	}
 }
@@ -301,7 +301,7 @@ func TestCredPolicySessionBind(t *testing.T) {
 		t.Fatalf("after narrowing → %q; want acct1", r.lastAuth())
 	}
 	// The machine allows nothing: no account at all, never a fallback.
-	setPolicy(t, h, "node", "m5", []string{})
+	setPolicy(t, h, "node", "mac-d", []string{})
 	r.pastCache()
 	if st, body := r.call(t, credvault.Claude, cred); st == http.StatusOK || r.lastAuth() != a1 {
 		t.Fatalf("deny-all machine: %d %s", st, body)
@@ -324,7 +324,7 @@ func passID(h *harness, cred string) string {
 // credential under an old label does not inherit it.
 func TestCredPolicyRenameReplace(t *testing.T) {
 	h, alice, _ := policyRig(t)
-	setPolicy(t, h, "node", "m4", []string{uuidGmail})
+	setPolicy(t, h, "node", "mac-c", []string{uuidGmail})
 	exp := time.Now().Add(24 * time.Hour).UTC()
 	if err := h.srv.Store.DeleteCredential(store.PoolPrincipal, credvault.Claude, "gmail"); err != nil {
 		t.Fatal(err)
@@ -352,7 +352,7 @@ func TestCredPolicyStrictRequiresBothScopes(t *testing.T) {
 	if got, _, _ := leased(t, h, alice); len(got) != 0 {
 		t.Fatalf("missing machine grant: %v", got)
 	}
-	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": "node", "id": "m4", "all": true}); code != 200 {
+	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": "node", "id": "mac-c", "all": true}); code != 200 {
 		t.Fatalf("all: %d %v", code, out)
 	}
 	if got, _, _ := leased(t, h, alice); !eq(got, "claude/gmail") {
@@ -370,7 +370,7 @@ func TestCredPolicyStrictRequiresBothScopes(t *testing.T) {
 	if got, _, _ := leased(t, h, alice); len(got) != 0 {
 		t.Fatalf("cleared grants must deny: %v", got)
 	}
-	p := credPolicyOf(map[string]string{credNodeKey("m4"): `"*"`, credUserKey(pAlice): `"*"`}, "m4", pAlice)
+	p := credPolicyOf(map[string]string{credNodeKey("mac-c"): `"*"`, credUserKey(pAlice): `"*"`}, "mac-c", pAlice)
 	if p.check(credvault.Claude, uuidOwn) != "" || p.check(credvault.Claude, "") != "" {
 		t.Fatal("explicit all must include future and old unidentified subscriptions")
 	}
@@ -393,7 +393,7 @@ func TestCredPolicyMigrationReview(t *testing.T) {
 	if got, _, _ := leased(t, h, alice); len(got) != 5 {
 		t.Fatal("review changed access")
 	}
-	req := map[string]any{"action": "activate", "revision": view.Migration.Revision, "retain": []string{credNodeKey("m4"), credUserKey(pAlice)}}
+	req := map[string]any{"action": "activate", "revision": view.Migration.Revision, "retain": []string{credNodeKey("mac-c"), credUserKey(pAlice)}}
 	setPolicy(t, h, "user", pBob, []string{})
 	if code, _ := h.post(t, CredPolicyPath, req); code != 409 {
 		t.Fatalf("stale review: %d", code)
@@ -410,7 +410,7 @@ func TestCredPolicyMigrationReview(t *testing.T) {
 		t.Fatalf("existing deny was overwritten: %v", got)
 	}
 	settings, _ := h.srv.Store.FleetSettings()
-	if settings[CredPolicyModeKey] != "strict" || settings[credNodeKey("m4")] != `"*"` {
+	if settings[CredPolicyModeKey] != "strict" || settings[credNodeKey("mac-c")] != `"*"` {
 		t.Fatalf("settings: %v", settings)
 	}
 	if p := credPolicyOf(settings, "new-machine", "gh:999"); p.check(credvault.Claude, uuidGmail) == "" {
@@ -479,7 +479,7 @@ func TestCredPolicyStrictSessionChoices(t *testing.T) {
 			t.Fatalf("grant: %d %v", code, out)
 		}
 	}
-	grantAll("node", "m4")
+	grantAll("node", "mac-c")
 	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 0 {
 		t.Fatalf("missing user: %v %v", choices, err)
 	}
@@ -490,7 +490,7 @@ func TestCredPolicyStrictSessionChoices(t *testing.T) {
 	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 4 {
 		t.Fatalf("all grants: %v %v", choices, err)
 	}
-	setPolicy(t, h, "node", "m4", nil)
+	setPolicy(t, h, "node", "mac-c", nil)
 	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 0 {
 		t.Fatalf("missing machine: %v %v", choices, err)
 	}
@@ -506,7 +506,7 @@ func TestCredPolicyLegacyUpgradePreservesLeases(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h, alice, bob := policyRig(t)
 			if restricted {
-				setPolicy(t, h, "node", "m4", []string{uuidGmail, uuidCodex, uuidOwn})
+				setPolicy(t, h, "node", "mac-c", []string{uuidGmail, uuidCodex, uuidOwn})
 				setPolicy(t, h, "user", pAlice, []string{uuidCodex})
 			}
 			type result struct {
@@ -594,7 +594,7 @@ func TestCredPolicyMigrationSkipsClients(t *testing.T) {
 		return out
 	}
 	review := read()
-	want := map[string]bool{credNodeKey("m4"): true, credNodeKey("mixed"): true, credNodeKey("offline"): true, credUserKey(pAlice): true, credUserKey(pBob): true}
+	want := map[string]bool{credNodeKey("mac-c"): true, credNodeKey("mixed"): true, credNodeKey("offline"): true, credUserKey(pAlice): true, credUserKey(pBob): true}
 	if got := keys(review); !reflect.DeepEqual(got, want) {
 		t.Fatalf("migration objects: %v; want users and hosts only: %v", got, want)
 	}
@@ -608,7 +608,7 @@ func TestCredPolicyMigrationSkipsClients(t *testing.T) {
 	if err := h.srv.Store.NodeHeartbeat("ep_laptop", "laptop.local", "viewer", "", control.Proto, string(hb), now); err != nil {
 		t.Fatal(err)
 	}
-	req["retain"] = []string{credNodeKey("m4"), credUserKey(pAlice)}
+	req["retain"] = []string{credNodeKey("mac-c"), credUserKey(pAlice)}
 	if code, _ := h.post(t, CredPolicyPath, req); code != 409 {
 		t.Fatalf("stale role review accepted: %d", code)
 	}
@@ -646,17 +646,17 @@ func TestCredPolicyStrictDrillUsesCreatorsList(t *testing.T) {
 	if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "strict", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": "node", "id": "m4", "all": true}); code != 200 {
+	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": "node", "id": "mac-c", "all": true}); code != 200 {
 		t.Fatalf("node all: %d %v", code, out)
 	}
 	now := time.Now()
 	drill := func(pid, login, by string) string {
 		t.Helper()
-		if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: pid, Login: login, Hostname: "m4",
+		if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: pid, Login: login, Hostname: "mac-c",
 			CodeHash: HashToken("fd_" + pid), CreatedBy: by, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
 			t.Fatal(err)
 		}
-		return enrollAs(t, h, login+"-m4", "m4", login)
+		return enrollAs(t, h, login+"-mac-c", "mac-c", login)
 	}
 	// Minted by alice, who may use gmail only: the drill gets gmail — and
 	// never alice's own account.
@@ -679,7 +679,7 @@ func TestCredPolicyStrictDrillUsesCreatorsList(t *testing.T) {
 		t.Fatalf("drill's own list: %v", got)
 	}
 	// The machine's list still narrows it.
-	setPolicy(t, h, "node", "m4", []string{uuidICloud})
+	setPolicy(t, h, "node", "mac-c", []string{uuidICloud})
 	if got, _, _ := leased(t, h, drill("drill-o2", "drillp", "operator")); !eq(got, "claude/icloud") {
 		t.Fatalf("machine list: %v", got)
 	}

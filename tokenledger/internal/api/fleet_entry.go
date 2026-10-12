@@ -59,7 +59,7 @@ import (
 const EntryKey = "fleet.entry"
 
 // EntryDomainKey is the hub setting naming the zone every address lives
-// under (cf.24haowan.com: an address is <name>.cf.24haowan.com). Unset, the
+// under (cf.example.com: an address is <name>.cf.example.com). Unset, the
 // keys page says the address is not set up yet (claude-fleet#3069).
 const EntryDomainKey = "fleet.entry_domain"
 

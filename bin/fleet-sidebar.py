@@ -82,7 +82,7 @@ STALL_SECS = 5
 # retried after LOCK_RETRY.
 LOCK_WAIT = 0.5
 LOCK_RETRY = 0.25
-# What the list has to say — a refusal, 「正在 m5 上开…」 — is on the bar this
+# What the list has to say — a refusal, 「正在 mac-d 上开…」 — is on the bar this
 # long (issue #1950: it was the input line's, for 4s).
 TOAST_SECS = 10
 # How long a ↵ waits for the login the hub is opening for a newcomer (issue
@@ -1585,7 +1585,7 @@ def open_menu(session, wid, env):
     Not waited on: a tmux display-menu can hold its caller until it closes, and
     this view keeps painting meanwhile."""
     # A row on another machine (`wid:…`) has one too (issue #1475): its title
-    # names the machine (`<name> · 在 m4`), as the row's own @ mark does (#1780).
+    # names the machine (`<name> · 在 mac-c`), as the row's own @ mark does (#1780).
     if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid):
         subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -1924,7 +1924,7 @@ def publish_refreshing(window, lit, last):
 
 def say(session, text, secs=None):
     """What the list has to say, on the BAR of every client looking at it (issue
-    #1950): a refusal's reason, 「正在 m5 上开…」 — tmux's display-message, so
+    #1950): a refusal's reason, 「正在 mac-d 上开…」 — tmux's display-message, so
     the whole window shows it and the list keeps every row. A literal: `#`
     would start a format."""
     if not text:

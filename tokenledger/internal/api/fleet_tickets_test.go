@@ -35,10 +35,10 @@ func TestFleetTicketRegister(t *testing.T) {
 		t.Fatalf("re-register: %d %v", st, out)
 	}
 	list, err := h.srv.Store.FleetTickets(store.TicketFilter{Owner: "gh:1005"})
-	if err != nil || len(list) != 1 || list[0].State != "closed" || list[0].EndpointID != "ep_m5" || list[0].Backend != store.TicketGitHub {
+	if err != nil || len(list) != 1 || list[0].State != "closed" || list[0].EndpointID != "ep_mac-d" || list[0].Backend != store.TicketGitHub {
 		t.Fatalf("the person's list: %v %v", list, err)
 	}
-	// m4's login is nobody's: registered with no owner — and it cannot take m5's id
+	// mac-c's login is nobody's: registered with no owner — and it cannot take mac-d's id
 	if st, out = reg(tok4, row); st != http.StatusConflict {
 		t.Fatalf("another person's id: %d %v", st, out)
 	}
@@ -93,19 +93,19 @@ func ticketCall(t *testing.T, h *harness, auth func(http.Header), method, path s
 	return res.StatusCode, out
 }
 
-// ticketHarness: Alice on macmini + macmini-m4, Bob on macmini-m4, verk the
+// ticketHarness: Alice on mac-e + mac-e-mac-c, Bob on mac-e-mac-c, frank the
 // operator's admin login; each node with the caps given.
 func ticketHarness(t *testing.T, caps ...string) (*harness, map[string]*fleetNode) {
 	t.Helper()
 	h, _ := certHarness(t)
-	h.srv.FleetAdmins = []string{"verk"}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "macmini-m4", Login: "bob"}); code != 200 {
+	h.srv.FleetAdmins = []string{"frank"}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "mac-e-mac-c", Login: "bob"}); code != 200 {
 		t.Fatalf("adopt bob: HTTP %d", code)
 	}
 	return h, map[string]*fleetNode{
-		"alice5": personNode(t, h, "alice5", "macmini", "alice", caps...),
-		"alice4": personNode(t, h, "alice4", "macmini-m4", "alice"), // never says CapTicket
-		"bob4":   personNode(t, h, "bob4", "macmini-m4", "bob", caps...),
+		"alice5": personNode(t, h, "alice5", "mac-e", "alice", caps...),
+		"alice4": personNode(t, h, "alice4", "mac-e-mac-c", "alice"), // never says CapTicket
+		"bob4":   personNode(t, h, "bob4", "mac-e-mac-c", "bob", caps...),
 	}
 }
 
@@ -115,10 +115,10 @@ func ticketHarness(t *testing.T, caps ...string) (*harness, map[string]*fleetNod
 func TestTicketRoad(t *testing.T) {
 	h, n := ticketHarness(t)
 	bob, alice := asNode(n["bob4"].token), asNode(n["alice4"].token)
-	const repo = "verkyyi/notes"
+	const repo = "ivan/notes"
 	path := FleetTicketsPath + "/" + repo + "/1"
 
-	st, tk := ticketCall(t, h, bob, http.MethodPost, FleetTicketsPath, map[string]any{"repo": "Verkyyi/Notes",
+	st, tk := ticketCall(t, h, bob, http.MethodPost, FleetTicketsPath, map[string]any{"repo": "Ivan/Notes",
 		"title": "续费域名", "body": "到期前一周续。", "labels": []string{"ops", "ops", "钱"}, "priority": "p1", "origin": "scratch-4"})
 	if st != 201 || tk["id"] != "hub:"+repo+"#1" || tk["owner"] != pBob || tk["state"] != "open" || tk["body"] != "到期前一周续。" ||
 		len(tk["labels"].([]any)) != 2 || tk["priority"] != "p1" || tk["backend"] != "hub" {
@@ -147,7 +147,7 @@ func TestTicketRoad(t *testing.T) {
 
 	// comments: a session names itself, the page writes as the person
 	if st, c := ticketCall(t, h, bob, http.MethodPost, path+"/comments", map[string]any{"body": "已提醒", "author": "issue-9",
-		"source": "fleet", "marker": "<!-- fleet:x -->"}); st != 201 || c["source"] != "fleet" || c["author"] != "issue-9 (node:bob@macmini-m4)" {
+		"source": "fleet", "marker": "<!-- fleet:x -->"}); st != 201 || c["source"] != "fleet" || c["author"] != "issue-9 (node:bob@mac-e-mac-c)" {
 		t.Fatalf("a node's comment: %d %v", st, c)
 	}
 	if st, c := ticketCall(t, h, asSession(pBob), http.MethodPost, path+"/comments", map[string]any{"body": "好", "source": "fleet"}); st != 201 || c["author"] != pBob || c["source"] != "hub" {
@@ -255,20 +255,20 @@ func noTicket(t *testing.T, n *fleetNode, what string) {
 func TestTicketPushOwnerOnly(t *testing.T) {
 	h, n := ticketHarness(t, control.CapTicket)
 	bob := asNode(n["bob4"].token)
-	if st, out := ticketCall(t, h, bob, http.MethodPost, FleetTicketsPath, map[string]any{"repo": "verkyyi/notes", "title": "x"}); st != 201 {
+	if st, out := ticketCall(t, h, bob, http.MethodPost, FleetTicketsPath, map[string]any{"repo": "ivan/notes", "title": "x"}); st != 201 {
 		t.Fatalf("open: %d %v", st, out)
 	}
 	noTicket(t, n["bob4"], "opening is not a change to push")
-	st, c := ticketCall(t, h, asSession(pBob), http.MethodPost, FleetTicketsPath+"/verkyyi/notes/1/comments", map[string]any{"body": "秘密的话"})
+	st, c := ticketCall(t, h, asSession(pBob), http.MethodPost, FleetTicketsPath+"/ivan/notes/1/comments", map[string]any{"body": "秘密的话"})
 	if st != 201 {
 		t.Fatalf("comment: %d %v", st, c)
 	}
 	ev := nextTicket(t, n["bob4"], "Bob's machine")
-	if ev.Repo != "verkyyi/notes" || ev.Number != 1 || ev.Kind != "comment" || ev.CommentID != int64(c["id"].(float64)) {
+	if ev.Repo != "ivan/notes" || ev.Number != 1 || ev.Kind != "comment" || ev.CommentID != int64(c["id"].(float64)) {
 		t.Fatalf("event %+v", ev)
 	}
 	noTicket(t, n["alice5"], "Alice's machine after Bob's comment")
-	if st, _ := ticketCall(t, h, bob, http.MethodPatch, FleetTicketsPath+"/verkyyi/notes/1", map[string]any{"state": "closed"}); st != 200 {
+	if st, _ := ticketCall(t, h, bob, http.MethodPatch, FleetTicketsPath+"/ivan/notes/1", map[string]any{"state": "closed"}); st != 200 {
 		t.Fatalf("close: %d", st)
 	}
 	if ev := nextTicket(t, n["bob4"], "close"); ev.Kind != "state" {
@@ -294,7 +294,7 @@ func TestTicketPushOwnerOnly(t *testing.T) {
 // handed out, no message to any node, and the list answers empty.
 func TestTicketsOffAddsNothing(t *testing.T) {
 	h, n := ticketHarness(t, control.CapTicket)
-	beat(t, n["bob4"].c, control.Proto, control.Heartbeat{Hostname: "macmini-m4", OSUser: "bob"})
+	beat(t, n["bob4"].c, control.Proto, control.Heartbeat{Hostname: "mac-e-mac-c", OSUser: "bob"})
 	for k, node := range n {
 		noTicket(t, node, k+" with no ticket anywhere")
 	}

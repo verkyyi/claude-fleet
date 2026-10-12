@@ -137,7 +137,7 @@ case "$ERR" in *'no issue bound'*) : ;; *) fail "must fail loudly with 'no issue
 ok "RAIL no @issue + non-worktree cwd → FAIL 'no issue bound', exit 4"
 
 # ===== BINDING: @issue WINS over the issue-<N> worktree in cwd ==================
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
 [ "$RC" = 0 ] || fail "the happy path must exit 0 (got $RC)" "$OUT$ERR"
 has 'issue=77' || fail "@issue (77) must win over the worktree (12)" "$OUT"
 has '@issue=77 worktree=12' || fail "the brief should show BOTH candidates it resolved from" "$OUT"
@@ -159,7 +159,7 @@ ok "BINDING an explicit --issue overrides @issue and the worktree"
 
 # ===== ONE GH: the whole preamble costs exactly one gh invocation ===============
 : > "$WORK/gh.calls"
-GH_CALLS="$WORK/gh.calls" GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
+GH_CALLS="$WORK/gh.calls" GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
 n=$(wc -l < "$WORK/gh.calls" | tr -d ' ')
 [ "$n" = 1 ] || fail "the brief must make exactly ONE gh call (made $n)" "$(cat "$WORK/gh.calls")"
 grep -q -- '--json' "$WORK/gh.calls" || fail "the one read must be the structured --json read" "$(cat "$WORK/gh.calls")"
@@ -176,15 +176,15 @@ ok "ONE GH the brief carries title + body + comments (no re-fetch needed)"
 
 # --no-comments still costs one call and keeps the body.
 : > "$WORK/gh.calls"
-GH_CALLS="$WORK/gh.calls" GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12" --no-comments
+GH_CALLS="$WORK/gh.calls" GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12" --no-comments
 [ "$(wc -l < "$WORK/gh.calls" | tr -d ' ')" = 1 ] || fail "--no-comments must still be one gh call"
 has BODY-MARKER    || fail "--no-comments must keep the issue body" "$OUT"
 has COMMENT-MARKER && fail "--no-comments must drop the comment thread" "$OUT"
 ok "ONE GH --no-comments is still a single read, body kept, thread dropped"
 
 # ===== CLAIM: read-only — held vs unclaimed, and the exact assign on the miss ===
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
-has 'claim: HELD by verkyyi' || fail "an assigned issue must read as already claimed" "$OUT"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
+has 'claim: HELD by dave' || fail "an assigned issue must read as already claimed" "$OUT"
 has 'Do NOT re-assign'       || fail "a held claim must tell the worker not to re-assign" "$OUT"
 has '--add-assignee'         && fail "a held claim must NOT offer the assign command" "$OUT"
 ok "CLAIM an assigned issue reads HELD (the spawn pre-claim) — no write, no re-assign"
@@ -199,14 +199,14 @@ ok "CLAIM an unassigned issue reads UNCLAIMED + prints the assign the caller run
 # The brief is where a child first learns it HAS a parent — without this line the
 # only way to know would be a separate tmux read the worker has no reason to make,
 # and the ship step's report-back would never fire.
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=issue-483 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=issue-483 run "$WORK/widgets-issue-12"
 has 'origin: issue-483' || fail "a worker-spawned child must be told its parent key" "$OUT"
 has 'issue #483'        || fail "the origin line should name the parent in issue form" "$OUT"
 has 'fleet-report-parent.sh' \
   || fail "the origin line must point at the report-back command" "$OUT"
 ok "ORIGIN a worker parent is named, with the report-back command"
 
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-7 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-7 run "$WORK/widgets-issue-12"
 has 'origin: scratch-7' || fail "a scratch parent must be named too" "$OUT"
 has 'scratch session ~7' || fail "a scratch parent renders in the ~N grammar" "$OUT"
 ok "ORIGIN a scratch parent is named in the dash's own ~N grammar"
@@ -215,7 +215,7 @@ ok "ORIGIN a scratch parent is named in the dash's own ~N grammar"
 # is a window key too (issue #1511). The brief used to strip its `:` and then call
 # the result "not a live-window key", so a monorepo child was told nobody was
 # waiting on it while its parent sat two windows away in the same fleet.
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=acme-widgets:issue-483 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=acme-widgets:issue-483 run "$WORK/widgets-issue-12"
 has 'origin: acme-widgets:issue-483' || fail "a repo-qualified parent key must print intact, ':' included" "$OUT"
 has 'issue #483'             || fail "the qualified origin line should name the parent in issue form" "$OUT"
 has 'of acme-widgets'        || fail "the qualified origin line should name the parent's repo" "$OUT"
@@ -223,7 +223,7 @@ has 'fleet-report-parent.sh' || fail "the qualified origin line must point at th
 if has 'not a live-window key'; then fail "a repo-qualified key IS a window key — never 'not a live-window key'" "$OUT"; fi
 ok "ORIGIN a repo-qualified issue parent is named, with the report-back command"
 
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=acme-widgets:scratch-7 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=acme-widgets:scratch-7 run "$WORK/widgets-issue-12"
 has 'origin: acme-widgets:scratch-7' || fail "a repo-qualified scratch key must print intact" "$OUT"
 has 'scratch session ~7'    || fail "a qualified scratch parent renders in the ~N grammar" "$OUT"
 if has 'not a live-window key'; then fail "a repo-qualified scratch key IS a window key" "$OUT"; fi
@@ -231,13 +231,13 @@ ok "ORIGIN a repo-qualified scratch parent is named in the ~N grammar"
 
 # No parent: SAY so. A silent omission would read as "the step was skipped" — the
 # exact #454 failure the atomic brief exists to make impossible.
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN='' run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN='' run "$WORK/widgets-issue-12"
 has 'origin: none' || fail "a hub-spawned worker must be told it has NO parent" "$OUT"
 has 'hub-spawned'  || fail "the no-parent case must state why (hub-spawned)" "$OUT"
 ok "ORIGIN hub-spawned reads 'origin: none', never a silent omission"
 
 # A daemon / cross-fleet origin is not an address — say that, don't imply a parent.
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=autofill run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=autofill run "$WORK/widgets-issue-12"
 has 'origin: autofill'    || fail "a daemon origin must still be shown" "$OUT"
 has 'not a live-window key' || fail "a non-key origin must be stated as un-addressable" "$OUT"
 ok "ORIGIN a daemon/cross-fleet origin is shown but marked un-addressable"
@@ -246,21 +246,21 @@ ok "ORIGIN a daemon/cross-fleet origin is shown but marked un-addressable"
 # here) is an address — through the hub — never "nothing to report back to"; nor is
 # the session holding the orchestrator role, nor a parent named by its identity.
 PFID=0dbf19b9-1111-4222-8333-444455556666
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID FAKE_AT_OWID=99999999-aaaa-4bbb-8ccc-dddddddddddd/$PFID run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID FAKE_AT_OWID=99999999-aaaa-4bbb-8ccc-dddddddddddd/$PFID run "$WORK/widgets-issue-12"
 has "on another machine" || fail "a remote parent must be named as reachable through the hub" "$OUT"
 if has 'not a live-window key'; then fail "a remote parent is not un-addressable" "$OUT"; fi
 ok "ORIGIN a parent on another machine reads as reachable through the hub (#3439)"
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=orchestrator run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=orchestrator run "$WORK/widgets-issue-12"
 has 'origin: orchestrator (spawned by the session holding' || fail "the orchestrator is a parent to report to" "$OUT"
 ok "ORIGIN orchestrator reads as a parent to report to (#3439)"
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID run "$WORK/widgets-issue-12"
 if has 'not a live-window key'; then fail "an identity origin is an address" "$OUT"; fi
 ok "ORIGIN an identity origin is an address (#3439)"
 
 # ===== ATOMIC: charter layers + per-fleet directive on EVERY run ================
 # No file layers and the tap-first flag off ⇒ the brief still says so explicitly,
 # so "charter missing" can never be confused with "step skipped" (the #454 gap).
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
 has '===== charter'   || fail "the charter section must always be printed" "$OUT"
 has 'built-in contract' || fail "no file layers must be stated, not silently omitted" "$OUT"
 has 'DIRECTIVE-MARKER for 77' \
@@ -286,7 +286,7 @@ ok "LANGUAGE the seed language rule is printed, and printed last (#620)"
 
 # With an overlay charter present it is printed, in the charter section.
 printf 'OVERLAY-ORDERS: keep PRs small\n' > "$CONF/fleets/$SESS/worker.md"
-GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
+GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12"
 has 'OVERLAY-ORDERS' || fail "the fleet overlay charter layer must reach the worker" "$OUT"
 ch_at=$(printf '%s\n' "$OUT" | grep -n '===== charter'  | head -1 | cut -d: -f1)
 ov_at=$(printf '%s\n' "$OUT" | grep -n 'OVERLAY-ORDERS' | head -1 | cut -d: -f1)

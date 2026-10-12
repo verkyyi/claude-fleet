@@ -19,7 +19,7 @@ session, else free text) rather than guessing. Missing a window → ask which on
 (the current window is never assumed; a move is deliberate, always named).
 
 **Through the hub** (issue #1426): `to <machine>` with no `@` — e.g.
-`/fleet-move b3 to m4` — or `/fleet-move rebalance`, when this login runs with
+`/fleet-move b3 to mac-a` — or `/fleet-move rebalance`, when this login runs with
 the hub module on (`CCQUOTA_FLEET=1`). The two machines never talk to each
 other: the transcript, the issue's lease and the start all travel through the
 hub. See § 5.
@@ -104,7 +104,7 @@ the one true copy.
 
 ## 5. Through the hub — `--via hub` / `--rebalance`
 
-When the operator names a machine (`m4`) rather than `<user>@<host>`, or asks to
+When the operator names a machine (`mac-a`) rather than `<user>@<host>`, or asks to
 rebalance, and `CCQUOTA_FLEET=1`:
 
 ```sh

@@ -17,26 +17,26 @@ import (
 // says credsep=separated; an admin's login leases as before; an agent that
 // does not report the field counts as not separated for a user.
 
-// credsepHarness: the vault harness plus a GitHub admin (verkyyi, id 100)
-// and a listed user (carol, id 400), each with an active login on m4, and a
+// credsepHarness: the vault harness plus a GitHub admin (ivan, id 100)
+// and a listed user (carol, id 400), each with an active login on mac-c, and a
 // pool credential every lease carries.
 func credsepHarness(t *testing.T) (h *harness, user, admin string) {
 	t.Helper()
 	h, _, _ = newVaultHarness(t)
-	h.srv.GitHub = &GitHubAuth{Admins: []string{"verkyyi"}}
+	h.srv.GitHub = &GitHubAuth{Admins: []string{"ivan"}}
 	now := time.Now()
-	if _, err := h.srv.Store.PinLogin("verkyyi", 100, now); err != nil {
+	if _, err := h.srv.Store.PinLogin("ivan", 100, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.srv.Store.UpsertHubUser(store.HubUser{GitHubID: 400, Login: "carol", Role: store.RoleUser, AddedBy: "gh:100"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []struct{ id, login string }{{githubPrincipal(400), "carol"}, {githubPrincipal(100), "verkyyi"}} {
+	for _, p := range []struct{ id, login string }{{githubPrincipal(400), "carol"}, {githubPrincipal(100), "ivan"}} {
 		pr, err := h.srv.Store.AdoptPrincipal(p.id, p.login, p.login, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.srv.Store.AdoptAccount(pr, "m4", now); err != nil {
+		if err := h.srv.Store.AdoptAccount(pr, "mac-c", now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,7 +45,7 @@ func credsepHarness(t *testing.T) (h *harness, user, admin string) {
 	if code != http.StatusOK {
 		t.Fatalf("put pool: %d %v", code, out)
 	}
-	return h, enrollAs(t, h, "carol-m4", "m4", "carol"), enrollAs(t, h, "verkyyi-m4", "m4", "verkyyi")
+	return h, enrollAs(t, h, "carol-mac-c", "mac-c", "carol"), enrollAs(t, h, "ivan-mac-c", "mac-c", "ivan")
 }
 
 // credsepBeat records a hello and a heartbeat for tok's node; credsep "" is
@@ -57,11 +57,11 @@ func credsepBeat(t *testing.T, h *harness, tok, osUser, credsep string) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if err := h.srv.Store.NodeConnected(ep.ID, "m4", osUser, "test", control.Proto, 60000, now); err != nil {
+	if err := h.srv.Store.NodeConnected(ep.ID, "mac-c", osUser, "test", control.Proto, 60000, now); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(control.Heartbeat{Hostname: "m4", OSUser: osUser, Credsep: credsep, ObservedAt: now})
-	if err := h.srv.Store.NodeHeartbeat(ep.ID, "m4", osUser, "", control.Proto, string(raw), now); err != nil {
+	raw, _ := json.Marshal(control.Heartbeat{Hostname: "mac-c", OSUser: osUser, Credsep: credsep, ObservedAt: now})
+	if err := h.srv.Store.NodeHeartbeat(ep.ID, "mac-c", osUser, "", control.Proto, string(raw), now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -76,8 +76,8 @@ func TestLeaseCredsepGate(t *testing.T) {
 		{"user, not separated", "carol", user, control.CredsepNot, http.StatusForbidden},
 		{"user, unknown", "carol", user, control.CredsepUnknown, http.StatusForbidden},
 		{"user, separated", "carol", user, control.CredsepSeparated, http.StatusOK},
-		{"admin, not separated", "verkyyi", admin, control.CredsepNot, http.StatusOK},
-		{"admin, old agent", "verkyyi", admin, "", http.StatusOK},
+		{"admin, not separated", "ivan", admin, control.CredsepNot, http.StatusOK},
+		{"admin, old agent", "ivan", admin, "", http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestNodeSelfCarriesCredsepGate(t *testing.T) {
 		return v
 	}
 	credsepBeat(t, h, user, "carol", control.CredsepNot)
-	credsepBeat(t, h, admin, "verkyyi", control.CredsepNot)
+	credsepBeat(t, h, admin, "ivan", control.CredsepNot)
 	if v := self(user); v.CredsepGate != LeaseNotSeparated || v.Credsep != control.CredsepNot || v.Trust != TrustTrusted {
 		t.Fatalf("user not separated: gate=%q credsep=%q trust=%q", v.CredsepGate, v.Credsep, v.Trust)
 	}

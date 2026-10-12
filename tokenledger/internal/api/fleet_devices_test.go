@@ -96,30 +96,30 @@ func (d *device) routes(t *testing.T, h *harness) int {
 	return code
 }
 
-// homeHarness: twoNodes' rig (m5 at 1.0 load/core with 3 sessions, m4 idle
+// homeHarness: twoNodes' rig (mac-d at 1.0 load/core with 3 sessions, mac-c idle
 // with 1), GitHub sign-in, a CA, routes for both machines, and Alice adopted as
-// login "verk" — the login the fleets there run as — on both.
+// login "frank" — the login the fleets there run as — on both.
 func homeHarness(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
 	t.Helper()
-	h, m5, m4, f5, f4 := twoNodes(t)
+	h, macD, macC, f5, f4 := twoNodes(t)
 	h.srv.ViewerToken = viewerToken
 	enablePeople(t, h, pAlice, pBob, pCarol)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	signer, _ := ssh.NewSignerFromKey(priv)
 	h.srv.SSHCA = sshca.New(signer)
 	routes, err := ParseFleetRoutes(`[
-	  {"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
-	  {"hostname":"m4","routes":[{"name":"public","host":"203.0.113.4","port":22023},{"name":"tailnet","host":"m4.tail.ts.net"}]}]`)
+	  {"hostname":"mac-d","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
+	  {"hostname":"mac-c","routes":[{"name":"public","host":"203.0.113.4","port":22023},{"name":"tailnet","host":"mac-c.example.ts.net"}]}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.srv.FleetRoutes = routes
-	for _, host := range []string{"m5", "m4"} {
-		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: host, Login: "verk"}); code != 200 {
+	for _, host := range []string{"mac-d", "mac-c"} {
+		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: host, Login: "frank"}); code != 200 {
 			t.Fatalf("adopt on %s: HTTP %d", host, code)
 		}
 	}
-	return h, m5, m4, f5, f4
+	return h, macD, macC, f5, f4
 }
 
 func devicesAs(t *testing.T, h *harness, sub string) DevicesResponse {
@@ -173,7 +173,7 @@ func TestDeviceScanRegistersAndRenews(t *testing.T) {
 		t.Fatalf("renew: %d %v", code, out)
 	}
 	c := parseCert(t, out["certificate"].(string))
-	if strings.Join(c.ValidPrincipals, ",") != "verk" || c.KeyId != "person:"+pAlice {
+	if strings.Join(c.ValidPrincipals, ",") != "frank" || c.KeyId != "person:"+pAlice {
 		t.Fatalf("renewed certificate says %v %q", c.ValidPrincipals, c.KeyId)
 	}
 	if want, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(a.pub)); !bytes.Equal(c.Key.Marshal(), want.Marshal()) {
@@ -299,11 +299,11 @@ func TestDeviceIdleAndRevoke(t *testing.T) {
 // used last while it is online — and when it is not, the next rule; none
 // online: a 503 that says so, with the candidates.
 func TestFleetHomePicks(t *testing.T) {
-	h, m5, m4, _, _ := homeHarness(t)
-	empty5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet")
-	empty4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet")
-	busy5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1, 2, 3)
-	one4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
+	h, macD, macC, _, _ := homeHarness(t)
+	empty5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet")
+	empty4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet")
+	busy5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1, 2, 3)
+	one4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
 	settle := func(what string, cond func() bool) { waitFor(t, 3*time.Second, what, cond) }
 	count := func(host string) int {
 		_, rows, _ := h.srv.visibleFleets(fleetPrincipal{}, time.Now())
@@ -316,64 +316,64 @@ func TestFleetHomePicks(t *testing.T) {
 		return n
 	}
 
-	// 1 — no sessions anywhere: load decides. m5 runs 1.0/core, m4 0.1/core.
-	m5.beatLoad("m5", "verk", machineA, 10, 0, empty5)
-	m4.beatLoad("m4", "verk", machineB, 1, 0, empty4)
-	settle("both fleets empty", func() bool { return count("m5") == 0 && count("m4") == 0 })
+	// 1 — no sessions anywhere: load decides. mac-d runs 1.0/core, mac-c 0.1/core.
+	macD.beatLoad("mac-d", "frank", machineA, 10, 0, empty5)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 0, empty4)
+	settle("both fleets empty", func() bool { return count("mac-d") == 0 && count("mac-c") == 0 })
 	a := newDevice(t)
 	a.scan(t, h, pAlice, "laptop-a")
 	code, out := a.home(t, h, "")
-	if code != 200 || out["rule"] != "load" || out["machine"].(map[string]any)["hostname"] != "m4" {
-		t.Fatalf("no sessions: %d %v; want m4 by load", code, out)
+	if code != 200 || out["rule"] != "load" || out["machine"].(map[string]any)["hostname"] != "mac-c" {
+		t.Fatalf("no sessions: %d %v; want mac-c by load", code, out)
 	}
-	if out["login"] != "verk" || len(out["machines"].([]any)) != 2 || out["online"].(float64) != 2 {
+	if out["login"] != "frank" || len(out["machines"].([]any)) != 2 || out["online"].(float64) != 2 {
 		t.Fatalf("home answer lacks the route list / login: %v", out)
 	}
 	if rs := out["machine"].(map[string]any)["routes"].([]any); len(rs) != 2 {
-		t.Fatalf("m4's routes in the answer: %v", rs)
+		t.Fatalf("mac-c's routes in the answer: %v", rs)
 	}
 
-	// 2 — Alice's sessions: three on m5, one on m4 → m5, load notwithstanding.
-	m5.beatLoad("m5", "verk", machineA, 10, 3, busy5)
-	m4.beatLoad("m4", "verk", machineB, 1, 1, one4)
-	settle("sessions registered", func() bool { return count("m5") == 3 && count("m4") == 1 })
+	// 2 — Alice's sessions: three on mac-d, one on mac-c → mac-d, load notwithstanding.
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, busy5)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, one4)
+	settle("sessions registered", func() bool { return count("mac-d") == 3 && count("mac-c") == 1 })
 	b := newDevice(t)
 	b.scan(t, h, pAlice, "laptop-b")
-	if code, out := b.home(t, h, ""); code != 200 || out["rule"] != "sessions" || out["machine"].(map[string]any)["hostname"] != "m5" {
-		t.Fatalf("with sessions: %d %v; want m5 by sessions", code, out)
+	if code, out := b.home(t, h, ""); code != 200 || out["rule"] != "sessions" || out["machine"].(map[string]any)["hostname"] != "mac-d" {
+		t.Fatalf("with sessions: %d %v; want mac-d by sessions", code, out)
 	}
-	// Device A's own last machine is m4 (step 1); it is online, so A keeps it.
-	if code, out := a.home(t, h, ""); code != 200 || out["rule"] != "last" || out["machine"].(map[string]any)["hostname"] != "m4" {
-		t.Fatalf("device A, last m4 online: %d %v; want m4 by last", code, out)
+	// Device A's own last machine is mac-c (step 1); it is online, so A keeps it.
+	if code, out := a.home(t, h, ""); code != 200 || out["rule"] != "last" || out["machine"].(map[string]any)["hostname"] != "mac-c" {
+		t.Fatalf("device A, last mac-c online: %d %v; want mac-c by last", code, out)
 	}
 	// The client's own hint wins over the device record.
-	if code, out := a.home(t, h, "m5"); code != 200 || out["rule"] != "last" || out["machine"].(map[string]any)["hostname"] != "m5" {
-		t.Fatalf("hint m5: %d %v", code, out)
+	if code, out := a.home(t, h, "mac-d"); code != 200 || out["rule"] != "last" || out["machine"].(map[string]any)["hostname"] != "mac-d" {
+		t.Fatalf("hint mac-d: %d %v", code, out)
 	}
 	dev, _ := h.srv.Store.Device(a.fp)
-	if dev.LastMachine != "m5" {
-		t.Fatalf("device A last_machine = %q, want m5", dev.LastMachine)
+	if dev.LastMachine != "mac-d" {
+		t.Fatalf("device A last_machine = %q, want mac-d", dev.LastMachine)
 	}
 
-	// 3 — m5 goes offline: the device that last used m5 lands on m4.
-	hb5, _ := json.Marshal(control.Heartbeat{Hostname: "m5", OSUser: "verk", MachineID: machineA, Load1: 10, NCPU: 10, Sessions: 3})
-	if err := h.srv.Store.NodeHeartbeat("ep_m5", "m5", "verk", machineA, control.Proto, string(hb5), time.Now().Add(-time.Hour)); err != nil {
+	// 3 — mac-d goes offline: the device that last used mac-d lands on mac-c.
+	hb5, _ := json.Marshal(control.Heartbeat{Hostname: "mac-d", OSUser: "frank", MachineID: machineA, Load1: 10, NCPU: 10, Sessions: 3})
+	if err := h.srv.Store.NodeHeartbeat("ep_mac-d", "mac-d", "frank", machineA, control.Proto, string(hb5), time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	code, out = a.home(t, h, "")
-	if code != 200 || out["rule"] != "sessions" || out["machine"].(map[string]any)["hostname"] != "m4" || out["online"].(float64) != 1 {
-		t.Fatalf("m5 offline: %d %v; want m4", code, out)
+	if code != 200 || out["rule"] != "sessions" || out["machine"].(map[string]any)["hostname"] != "mac-c" || out["online"].(float64) != 1 {
+		t.Fatalf("mac-d offline: %d %v; want mac-c", code, out)
 	}
 	for _, c := range out["candidates"].([]any) {
 		cm := c.(map[string]any)
-		if cm["machine"] == "m5" && (cm["online"] != false || cm["last"] != true) {
-			t.Fatalf("m5 candidate = %v; want offline and marked last", cm)
+		if cm["machine"] == "mac-d" && (cm["online"] != false || cm["last"] != true) {
+			t.Fatalf("mac-d candidate = %v; want offline and marked last", cm)
 		}
 	}
 
 	// 4 — both offline: nothing to enter, said plainly.
-	hb4, _ := json.Marshal(control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB, Load1: 1, NCPU: 10, Sessions: 1})
-	if err := h.srv.Store.NodeHeartbeat("ep_m4", "m4", "verk", machineB, control.Proto, string(hb4), time.Now().Add(-time.Hour)); err != nil {
+	hb4, _ := json.Marshal(control.Heartbeat{Hostname: "mac-c", OSUser: "frank", MachineID: machineB, Load1: 1, NCPU: 10, Sessions: 1})
+	if err := h.srv.Store.NodeHeartbeat("ep_mac-c", "mac-c", "frank", machineB, control.Proto, string(hb4), time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	code, out = a.home(t, h, "")
@@ -397,7 +397,7 @@ func TestFleetHomePicks(t *testing.T) {
 	}
 
 	// The operator's door asks too (a token, GET): every machine, no login.
-	r, _ := http.NewRequest(http.MethodGet, h.http.URL+control.HomePath+"?last=m4", nil)
+	r, _ := http.NewRequest(http.MethodGet, h.http.URL+control.HomePath+"?last=mac-c", nil)
 	r.Header.Set("Authorization", "Bearer "+viewerToken)
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
@@ -571,7 +571,7 @@ func TestFleetClientMatchesBin(t *testing.T) {
 func TestDevicesMarkHostingMachines(t *testing.T) {
 	h, _, _, _, _ := homeHarness(t)
 	newDevice(t).scan(t, h, pAlice, "alices-mbp")
-	newDevice(t).scan(t, h, pAlice, "m4")
+	newDevice(t).scan(t, h, pAlice, "mac-c")
 	waitFor(t, 3*time.Second, "both machines on the roster", func() bool {
 		return len(h.srv.hostingMachines()) == 2
 	})
@@ -579,7 +579,7 @@ func TestDevicesMarkHostingMachines(t *testing.T) {
 	for _, d := range devicesAs(t, h, pAlice).Devices {
 		host[d.Name] = d.Host
 	}
-	if len(host) != 2 || host["alices-mbp"] || !host["m4"] {
-		t.Fatalf("host marks = %v; want m4 only", host)
+	if len(host) != 2 || host["alices-mbp"] || !host["mac-c"] {
+		t.Fatalf("host marks = %v; want mac-c only", host)
 	}
 }

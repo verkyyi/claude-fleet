@@ -67,28 +67,28 @@ func wrUpload(note string) map[string]any {
 // cannot speak for a fleet it does not report; a second upload replaces.
 func TestWorkerRecordsUploadReadOwnerOnly(t *testing.T) {
 	h, _, n := peerHarness(t)
-	h.srv.FleetAdmins = []string{"verk"}
+	h.srv.FleetAdmins = []string{"frank"}
 	now := time.Now()
-	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice4"].id, "macmini-m4", "alice", "mach-alice4",
+	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice4"].id, "mac-e-mac-c", "alice", "mach-alice4",
 		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "verkyyi/claude-fleet", Checkout: "/c"}}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice5"].id, "macmini", "alice", "mach-alice5",
+	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice5"].id, "mac-e", "alice", "mach-alice5",
 		[]store.FleetReport{{FleetID: wrFleetM5, Name: "fleet", Repo: "verkyyi/claude-fleet", Checkout: "/c"}}, now); err != nil {
 		t.Fatal(err)
 	}
 
 	if st, _, raw := workerRecordsDo(t, h, n["alice4"].token, http.MethodPost, "", wrUpload("v1")); st != 200 {
-		t.Fatalf("alice@m4 upload: HTTP %d %s", st, raw)
+		t.Fatalf("alice@mac-c upload: HTTP %d %s", st, raw)
 	}
 	// Idempotent: the ship report, then the reap — the same names replace.
 	if st, _, raw := workerRecordsDo(t, h, n["alice4"].token, http.MethodPost, "", wrUpload("v2")); st != 200 {
-		t.Fatalf("alice@m4 re-upload: HTTP %d %s", st, raw)
+		t.Fatalf("alice@mac-c re-upload: HTTP %d %s", st, raw)
 	}
 
 	st, recs, raw := workerRecordsDo(t, h, n["alice5"].token, http.MethodGet, "?repo=verkyyi/claude-fleet&epic=1645", nil)
 	if st != 200 || len(recs) != 2 {
-		t.Fatalf("alice@m5 read by epic: HTTP %d, %d records %s", st, len(recs), raw)
+		t.Fatalf("alice@mac-d read by epic: HTTP %d, %d records %s", st, len(recs), raw)
 	}
 	var ev *store.FleetWorkerRecord
 	for i := range recs {
@@ -96,7 +96,7 @@ func TestWorkerRecordsUploadReadOwnerOnly(t *testing.T) {
 			ev = &recs[i]
 		}
 	}
-	if ev == nil || string(ev.Content) != "\x89PNG fake" || ev.Note != "v2" || ev.Node != "macmini-m4" ||
+	if ev == nil || string(ev.Content) != "\x89PNG fake" || ev.Note != "v2" || ev.Node != "mac-e-mac-c" ||
 		ev.Issue != 1609 || ev.Stage != "after" || ev.WorkerID != wrFleetM4+"/"+wrFid {
 		t.Fatalf("evidence record %+v", ev)
 	}
@@ -115,7 +115,7 @@ func TestWorkerRecordsUploadReadOwnerOnly(t *testing.T) {
 	}
 	// A node speaks only for its own fleets.
 	if st, _, raw := workerRecordsDo(t, h, n["alice5"].token, http.MethodPost, "", wrUpload("forged")); st != http.StatusForbidden {
-		t.Fatalf("alice@m5 uploading for m4's fleet: HTTP %d %s; want 403", st, raw)
+		t.Fatalf("alice@mac-d uploading for mac-c's fleet: HTTP %d %s; want 403", st, raw)
 	}
 	// No token, no answer.
 	if st, _, _ := workerRecordsDo(t, h, "", http.MethodGet, "?repo=verkyyi/claude-fleet", nil); st != http.StatusUnauthorized {

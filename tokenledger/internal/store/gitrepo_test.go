@@ -30,14 +30,14 @@ func TestInsertStoresTheDeclaredRepo(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acc", "ep")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "issue-57", "verkyyi/tokenledger"),
+		evIn("acc", "ep", "u1", "issue-57", "frank/tokenledger"),
 		evIn("acc", "ep", "u2", "issue-99", "verkyyi/claude-fleet"),
 		evIn("acc", "ep", "u3", "main", ""),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"usage_events", "usage_hourly"} {
-		if got := repoOf(t, s, table, "issue-57"); got != "verkyyi/tokenledger" {
+		if got := repoOf(t, s, table, "issue-57"); got != "frank/tokenledger" {
 			t.Errorf("%s: issue-57 declared %q", table, got)
 		}
 		if got := repoOf(t, s, table, "issue-99"); got != "verkyyi/claude-fleet" {
@@ -54,12 +54,12 @@ func TestInsertStoresTheDeclaredRepo(t *testing.T) {
 // shipped progress for — so it is stored as ” instead, which says so.
 func TestDeclaredRepoKeepsOnlyJoinableNames(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"verkyyi/tokenledger", "verkyyi/tokenledger"},
+		{"frank/tokenledger", "frank/tokenledger"},
 		{"", ""},
 		{"tokenledger", ""},
 		{"group/sub/app", ""},
-		{" verkyyi/tokenledger", ""},
-		{"verkyyi/", ""},
+		{" frank/tokenledger", ""},
+		{"frank/", ""},
 		{"/tokenledger", ""},
 	} {
 		if got := declaredRepo(tc.in); got != tc.want {
@@ -81,13 +81,13 @@ func TestHourlyKeepsTheDeclarationAcrossAnUpgrade(t *testing.T) {
 
 	// The old agent reports first, then the upgraded one, then the old one
 	// again — a fleet mid-rollout, or a queued spool draining out of order.
-	for i, repo := range []string{"", "verkyyi/tokenledger", ""} {
+	for i, repo := range []string{"", "frank/tokenledger", ""} {
 		e := evIn("acc", "ep", "u"+string(rune('1'+i)), "issue-57", repo)
 		if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := repoOf(t, s, "usage_hourly", "issue-57"); got != "verkyyi/tokenledger" {
+	if got := repoOf(t, s, "usage_hourly", "issue-57"); got != "frank/tokenledger" {
 		t.Fatalf("usage_hourly.git_repo = %q; a later '' erased the declaration", got)
 	}
 	// And the three turns are still one hourly row: the column adds no grain.
@@ -109,7 +109,7 @@ func TestRebuildRollupKeepsTheDeclaration(t *testing.T) {
 	seedAccount(t, s, "acc", "ep")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
 		evIn("acc", "ep", "u1", "issue-57", ""),
-		evIn("acc", "ep", "u2", "issue-57", "verkyyi/tokenledger"),
+		evIn("acc", "ep", "u2", "issue-57", "frank/tokenledger"),
 		evIn("acc", "ep", "u3", "main", ""),
 	}); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestRebuildRollupKeepsTheDeclaration(t *testing.T) {
 	if before != after {
 		t.Errorf("rebuild changed the rollup row count %d -> %d; git_repo added grain", before, after)
 	}
-	if got := repoOf(t, s, "usage_hourly", "issue-57"); got != "verkyyi/tokenledger" {
+	if got := repoOf(t, s, "usage_hourly", "issue-57"); got != "frank/tokenledger" {
 		t.Errorf("rebuild lost the declaration: git_repo = %q", got)
 	}
 	if got := repoOf(t, s, "usage_hourly", "main"); got != "" {
@@ -148,7 +148,7 @@ func TestOpenUpgradesDatabaseWithoutTheRepoColumn(t *testing.T) {
 	}
 	seedAccount(t, s, "acc", "ep")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "issue-57", "verkyyi/tokenledger"),
+		evIn("acc", "ep", "u1", "issue-57", "frank/tokenledger"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestAnyRepoDeclared(t *testing.T) {
 		t.Fatalf("AnyRepoDeclared = %v, %v; want false with only undeclared spend", declared, err)
 	}
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u2", "issue-57", "verkyyi/tokenledger"),
+		evIn("acc", "ep", "u2", "issue-57", "frank/tokenledger"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -213,8 +213,8 @@ func TestRepoDeclaration_PartsSumToTheTotal(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acc", "ep")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "issue-57", "verkyyi/tokenledger"),
-		evIn("acc", "ep", "u2", "issue-58", "verkyyi/tokenledger"),
+		evIn("acc", "ep", "u1", "issue-57", "frank/tokenledger"),
+		evIn("acc", "ep", "u2", "issue-58", "frank/tokenledger"),
 		evIn("acc", "ep", "u3", "issue-9", "verkyyi/claude-fleet"),
 		evIn("acc", "ep", "u4", "main", ""),
 		evIn("acc", "ep", "u5", "HEAD", ""),
@@ -222,7 +222,7 @@ func TestRepoDeclaration_PartsSumToTheTotal(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := spendWindow()
-	d, err := s.RepoDeclaration(f, "verkyyi/tokenledger")
+	d, err := s.RepoDeclaration(f, "frank/tokenledger")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,8 +243,8 @@ func TestRepoDeclaration_PartsSumToTheTotal(t *testing.T) {
 	}
 	// Repo is ignored on the incoming filter, on purpose: the whole job is to
 	// measure what scoping WOULD leave out, so it cannot start out scoped.
-	f.Repo = "verkyyi/tokenledger"
-	scoped, err := s.RepoDeclaration(f, "verkyyi/tokenledger")
+	f.Repo = "frank/tokenledger"
+	scoped, err := s.RepoDeclaration(f, "frank/tokenledger")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,13 +260,13 @@ func TestFilterRepoExcludesTheUndeclared(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acc", "ep")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "issue-57", "verkyyi/tokenledger"),
+		evIn("acc", "ep", "u1", "issue-57", "frank/tokenledger"),
 		evIn("acc", "ep", "u2", "issue-57-b", ""),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	f := spendWindow()
-	f.Repo = "verkyyi/tokenledger"
+	f.Repo = "frank/tokenledger"
 	page, err := s.SpendByIssue(f, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +279,7 @@ func TestFilterRepoExcludesTheUndeclared(t *testing.T) {
 	}
 
 	// Lifetime takes the same scope, and needs it more: it spans all history.
-	life, err := s.IssueLifetimeSpend(AllAccounts, "verkyyi/tokenledger", []int64{57})
+	life, err := s.IssueLifetimeSpend(AllAccounts, "frank/tokenledger", []int64{57})
 	if err != nil {
 		t.Fatal(err)
 	}

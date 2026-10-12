@@ -28,14 +28,14 @@ mkdir -p "$FLEET_CONF_DIR/control"
 LOG="$WORK/compose.ndjson"
 cat > "$LOG" <<'EOF'
 {"ev":"sent","id":"a","ts":1759800000,"how":"issue","repo":"acme/web","t_enter":1000000}
-{"ev":"placed","id":"a","rc":0,"result":"REMOTE","machine":"m5","op":"op-a","t_accepted":1000400,"timing":{"t_accepted":1000400,"t_window":1005400}}
+{"ev":"placed","id":"a","rc":0,"result":"REMOTE","machine":"mac-b","op":"op-a","t_accepted":1000400,"timing":{"t_accepted":1000400,"t_window":1005400}}
 {"ev":"started","id":"a","session":"U/issue-1","state":"working"}
 {"ev":"ready","id":"a","session":"U/issue-1","state":"done","t_ready":1006000}
 {"ev":"sent","id":"b","ts":1759800100,"how":"scratch","repo":"acme/web","t_enter":2000000}
-{"ev":"placed","id":"b","rc":0,"result":"REMOTE","machine":"m5","op":"op-b","t_accepted":2000200,"timing":{"t_accepted":2000200,"t_window":2002200}}
+{"ev":"placed","id":"b","rc":0,"result":"REMOTE","machine":"mac-b","op":"op-b","t_accepted":2000200,"timing":{"t_accepted":2000200,"t_window":2002200}}
 {"ev":"sent","id":"o","ts":1759800150,"how":"orchestrate","t_enter":2500000}
 {"ev":"sent","id":"c","ts":1759800200,"how":"issue","repo":"acme/app"}
-{"ev":"placed","id":"c","rc":0,"result":"REMOTE","machine":"m4","op":"op-c"}
+{"ev":"placed","id":"c","rc":0,"result":"REMOTE","machine":"mac-a","op":"op-c"}
 not json
 EOF
 # the node's half: op-b's ready and first sentence came after the place answered;
@@ -62,22 +62,22 @@ eq 'A: the node fills 第一句' '窗口 → 第一句送进去 0.50s 0.50s 1/3'
 eq 'A: 窗口 → 能打字 (client 0.6 s wins over node 3.6 s)' '窗口 → 能打字 0.60s 1.00s 2/3' "$(row "$out" '窗口 → 能打字')"
 eq 'A: ↵ → 能打字 total' '↵ → 能打字（总） 3.20s 6.00s 2/3' "$(row "$out" '能打字（总）')"
 eq 'A: 单子 not recorded is —' '↵ → 单子建好 — — 0/3' "$(row "$out" '单子建好')"
-has 'A: the slowest send named' "$(row "$out" '最慢一次')" 'm5 issue a ↵ → 能打字 6.00s'
+has 'A: the slowest send named' "$(row "$out" '最慢一次')" 'mac-b issue a ↵ → 能打字 6.00s'
 
 # B. no node db, an old node + old client: — and no error
-out=$(FLEET_CONF_DIR="$WORK/none" bash "$BIN/fleet-compose-latency.sh" --log "$LOG" --node m4 2>&1); rc=$?
+out=$(FLEET_CONF_DIR="$WORK/none" bash "$BIN/fleet-compose-latency.sh" --log "$LOG" --node mac-a 2>&1); rc=$?
 eq 'B: exit 0' 0 "$rc"
 eq 'B: old node: 受理 —' '↵ → 入口受理 — — 0/1' "$(row "$out" '入口受理')"
 eq 'B: total —' '↵ → 能打字（总） — — 0/1' "$(row "$out" '能打字（总）')"
 has 'B: no slowest yet' "$out" '最慢一次：—'
-has 'B: no Traceback' "${out:-x}" '最近 1 次发任务 · m4'
+has 'B: no Traceback' "${out:-x}" '最近 1 次发任务 · mac-a'
 
-# C. --node m5 / --last 1
-out=$(bash "$BIN/fleet-compose-latency.sh" --log "$LOG" --node m5)
-has 'C: --node m5 keeps two' "$out" '最近 2 次发任务 · m5'
+# C. --node mac-b / --last 1
+out=$(bash "$BIN/fleet-compose-latency.sh" --log "$LOG" --node mac-b)
+has 'C: --node mac-b keeps two' "$out" '最近 2 次发任务 · mac-b'
 out=$(bash "$BIN/fleet-compose-latency.sh" --log "$LOG" --last 1)
 has 'C: --last 1 is the newest' "$out" '最近 1 次发任务'
-eq 'C: …which is c (m4, no timing)' '↵ → 入口受理 — — 0/1' "$(row "$out" '入口受理')"
+eq 'C: …which is c (mac-a, no timing)' '↵ → 入口受理 — — 0/1' "$(row "$out" '入口受理')"
 
 # D. --summary; no log at all
 eq 'D: summary' 'n=3 ready=2 p50=3200 max=6000' "$(bash "$BIN/fleet-compose-latency.sh" --log "$LOG" --summary)"

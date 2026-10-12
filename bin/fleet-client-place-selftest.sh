@@ -107,8 +107,8 @@ class H(BaseHTTPRequestHandler):
             if op == "op14":   # the machine tried second (issue #1610): its own line, no tail
                 return self.answer(200, {"line": "REMOTE m3 op14 done %s/issue-14\tchose m3" % UUID, "exit": 0, "state": "done"})
             if op == "op7":
-                return self.answer(200, {"line": "REMOTE m5 op7 done %s/issue-7\tm4 excluded: full" % UUID, "exit": 0, "state": "done"})
-            return self.answer(200, {"line": "UNKNOWN m5 %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
+                return self.answer(200, {"line": "REMOTE mac-b op7 done %s/issue-7\tmac-a excluded: full" % UUID, "exit": 0, "state": "done"})
+            return self.answer(200, {"line": "UNKNOWN mac-b %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
         if p.get("action") == "task_issue":   # leg T (issue #3325)
             if p.get("task_ref") != "T218":
                 return self.answer(200, {"line": "REFUSED NOT_FOUND\tno task %s of yours" % p.get("task_ref"), "exit": 4, "state": "refused"})
@@ -116,52 +116,52 @@ class H(BaseHTTPRequestHandler):
                                      "filed": "acme/web#3312"})
         kind, issue = p.get("kind"), p.get("issue")
         if p.get("task"):   # leg T: the hub wrote the record first (issue #3325)
-            return self.answer(200, {"line": "REMOTE m4 op30 done %s/scratch-9\tchose m4" % UUID, "exit": 0, "state": "done",
-                                     "worker_id": "%s/scratch-9" % UUID, "machine": "m4", "task": "T218"})
+            return self.answer(200, {"line": "REMOTE mac-a op30 done %s/scratch-9\tchose mac-a" % UUID, "exit": 0, "state": "done",
+                                     "worker_id": "%s/scratch-9" % UUID, "machine": "mac-a", "task": "T218"})
         if kind == "new":   # leg G: an older hub answers no `attached`
-            out = {"line": "REMOTE m4 op20 done %s/issue-20\tchose m4" % UUID, "exit": 0, "state": "done"}
+            out = {"line": "REMOTE mac-a op20 done %s/issue-20\tchose mac-a" % UUID, "exit": 0, "state": "done"}
             if p.get("title") != "old hub":
                 out["attached"] = len(p.get("attachments") or [])
             return self.answer(200, out)
         if kind == "scratch" and p.get("home") and not p.get("new") and p.get("agent") == "claude":
             # leg H: the person's current home session (issue #2564)
-            return self.answer(200, {"line": "RESUME m4 %s/scratch-1\t回到你上一次的会话（m4）" % UUID, "exit": 0, "state": "resume",
-                                     "machine": "m4", "worker_id": "%s/scratch-1" % UUID, "login": "verky",
+            return self.answer(200, {"line": "RESUME mac-a %s/scratch-1\t回到你上一次的会话（mac-a）" % UUID, "exit": 0, "state": "resume",
+                                     "machine": "mac-a", "worker_id": "%s/scratch-1" % UUID, "login": "erin",
                                      "also_open": ["MacBook"]})
         if kind == "scratch":
             # an older hub (no `login`): the chosen candidate's os_user says it (#2430)
-            return self.answer(200, {"line": "REMOTE m5 op1 done %s/scratch-3\tm4 excluded: load 1.00/core > 0.8" % UUID, "exit": 0, "state": "done",
-                                     "placement": {"fleet_id": UUID, "candidates": [{"fleet_id": "other", "os_user": "verkyyi"},
-                                                                                   {"fleet_id": UUID, "os_user": "verky"}]}})
+            return self.answer(200, {"line": "REMOTE mac-b op1 done %s/scratch-3\tmac-a excluded: load 1.00/core > 0.8" % UUID, "exit": 0, "state": "done",
+                                     "placement": {"fleet_id": UUID, "candidates": [{"fleet_id": "other", "os_user": "frank"},
+                                                                                   {"fleet_id": UUID, "os_user": "erin"}]}})
         if kind == "restore":
-            return self.answer(200, {"line": "REMOTE m4 op3 done %s/%s\tits /fleet-history row is on m4" % (UUID, p["key"]), "exit": 0, "state": "done",
+            return self.answer(200, {"line": "REMOTE mac-a op3 done %s/%s\tits /fleet-history row is on mac-a" % (UUID, p["key"]), "exit": 0, "state": "done",
                                      "login": "bob", "worker_id": "%s/%s" % (UUID, p["key"])})
         table = {
-            7: {"line": "UNKNOWN m5 op7\tstarting", "exit": 6, "state": "pending", "operation_id": "op7"},
-            9: {"line": "HELD m4\t#9 is leased to m4", "exit": 3, "state": "held"},
-            11: {"line": "REFUSED AT_CAPACITY\tall-full: every machine is at its session cap — m5: at cap 8/8; m4: at cap 4/4", "exit": 4, "state": "refused"},
-            12: {"line": "DECLINED m4 op12 2\tfleet-m4 is full", "exit": 5, "state": "refused"},
-            13: {"line": "UNKNOWN m5 op13\tstarting", "exit": 6, "state": "pending", "operation_id": "op13"},
-            14: {"line": "UNKNOWN m3 op14\tstarting\tafter mini2:op140:1", "exit": 6, "state": "pending", "operation_id": "op14",
-                 "attempts": [{"machine": "mini2", "operation_id": "op140", "state": "failed", "exit": 1,
+            7: {"line": "UNKNOWN mac-b op7\tstarting", "exit": 6, "state": "pending", "operation_id": "op7"},
+            9: {"line": "HELD mac-a\t#9 is leased to mac-a", "exit": 3, "state": "held"},
+            11: {"line": "REFUSED AT_CAPACITY\tall-full: every machine is at its session cap — mac-b: at cap 8/8; mac-a: at cap 4/4", "exit": 4, "state": "refused"},
+            12: {"line": "DECLINED mac-a op12 2\tfleet-mac-a is full", "exit": 5, "state": "refused"},
+            13: {"line": "UNKNOWN mac-b op13\tstarting", "exit": 6, "state": "pending", "operation_id": "op13"},
+            14: {"line": "UNKNOWN m3 op14\tstarting\tafter mac-d:op140:1", "exit": 6, "state": "pending", "operation_id": "op14",
+                 "attempts": [{"machine": "mac-d", "operation_id": "op140", "state": "failed", "exit": 1,
                                "why": "fleet discover: fork/exec fleet-control.py: invalid argument"}]},
-            15: {"line": "REFUSED ALL_DECLINED\tevery machine that could take it said no — mini2: declined: fork; m3: declined: full\tafter mini2:op150:1,m3:op151:2",
+            15: {"line": "REFUSED ALL_DECLINED\tevery machine that could take it said no — mac-d: declined: fork; m3: declined: full\tafter mac-d:op150:1,m3:op151:2",
                  "exit": 4, "state": "refused",
-                 "attempts": [{"machine": "mini2", "operation_id": "op150", "exit": 1, "why": "fork"},
+                 "attempts": [{"machine": "mac-d", "operation_id": "op150", "exit": 1, "why": "fork"},
                               {"machine": "m3", "operation_id": "op151", "exit": 2, "why": "full"}]},
             # issue #2480: THIS computer only coordinates, its other login's fleet is down
-            16: {"line": "DECLINED m4 op16 1\tfleet discover: INTERNAL: Local controller failed", "exit": 5, "state": "failed",
-                 "placement": {"machine": "m4", "reason": "chose m4 (score 0.556); %s excluded: compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)" % SELF,
-                               "candidates": [{"machine": "m4", "os_user": "bob", "eligible": True},
-                                              {"machine": SELF, "os_user": "verky", "eligible": False,
+            16: {"line": "DECLINED mac-a op16 1\tfleet discover: INTERNAL: Local controller failed", "exit": 5, "state": "failed",
+                 "placement": {"machine": "mac-a", "reason": "chose mac-a (score 0.556); %s excluded: compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)" % SELF,
+                               "candidates": [{"machine": "mac-a", "os_user": "bob", "eligible": True},
+                                              {"machine": SELF, "os_user": "erin", "eligible": False,
                                                "excluded": "compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)"},
-                                              {"machine": SELF, "os_user": "verky", "eligible": False, "excluded": "tmux 服务没在跑"},
+                                              {"machine": SELF, "os_user": "erin", "eligible": False, "excluded": "tmux 服务没在跑"},
                                               {"machine": SELF.upper() + ".local", "os_user": "alice", "eligible": False,
                                                "excluded": "compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)"}]}},
             # ... and one whose candidates do not hold this computer at all
-            17: {"line": "REFUSED NO_ELIGIBLE_NODE\tm4 excluded: full", "exit": 4, "state": "refused",
-                 "placement": {"reason": "m4 excluded: full",
-                               "candidates": [{"machine": "m4", "os_user": "bob", "eligible": False, "excluded": "full"}]}},
+            17: {"line": "REFUSED NO_ELIGIBLE_NODE\tmac-a excluded: full", "exit": 4, "state": "refused",
+                 "placement": {"reason": "mac-a excluded: full",
+                               "candidates": [{"machine": "mac-a", "os_user": "bob", "eligible": False, "excluded": "full"}]}},
         }
         return self.answer(200, table[issue])
 
@@ -194,7 +194,7 @@ printf '%s\n' "$*" >> "$WORK/lease.log"
 [ "$1" = acquire ] || { printf 'released\t%s\t\t\t\n' "$3"; exit 0; }
 [ -s "$WORK/next" ] || exit 1
 printf '%s\n' "$FAKE_KEY" > "$FLEET_CLIENT_KEY_FILE"
-printf 'active\t%s\tm4\t\t\n' "$(cat "$WORK/next")"
+printf 'active\t%s\tmac-a\t\t\n' "$(cat "$WORK/next")"
 SH
 chmod +x "$WORK/lease"
 export WORK FAKE_KEY="$KEY" FLEET_CLIENT_LEASE_CMD="$WORK/lease"
@@ -218,13 +218,13 @@ export FLEET_HUB_URL=$HUB FLEET_HUB_TOKEN=tok
 # --- A. the three kinds ---------------------------------------------------------------
 run "$P" verkyyi/claude-fleet scratch --node auto --title '看看日志'
 eq "A: scratch exit" 0 "$RC"
-eq "A: scratch line" "REMOTE m5 op1 done $UUID/scratch-3	m4 excluded: load 1.00/core > 0.8" "$OUT"
+eq "A: scratch line" "REMOTE mac-b op1 done $UUID/scratch-3	mac-a excluded: load 1.00/core > 0.8" "$OUT"
 has "A: scratch payload kind" "$(lastreq)" '"kind": "scratch"'
 has "A: scratch payload node" "$(lastreq)" '"node": "auto"'
 has "A: scratch payload title" "$(lastreq)" '"title": "看看日志"'
 has "A: scratch payload repo" "$(lastreq)" '"repo": "verkyyi/claude-fleet"'
 # issue #2430: the login it landed under is remembered against its fleet
-eq "A: scratch login remembered (candidate os_user)" "$UUID	verky" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
+eq "A: scratch login remembered (candidate os_user)" "$UUID	erin" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # `fleet codex` (issue #2403): a HOME session carries its agent to the hub
 run "$P" - home --agent codex
@@ -237,67 +237,67 @@ has "H: home payload home" "$(lastreq)" '"home": true'
 case "$(lastreq)" in *'"new"'*) fail "H: a plain home carried new" "$(lastreq)" ;; esac
 FLEET_PLACE_RESULT="$WORK/res.json" run "$P" - home --agent claude
 eq "H: RESUME exit" 0 "$RC"
-eq "H: RESUME line" "RESUME m4 $UUID/scratch-1	回到你上一次的会话（m4）" "$OUT"
-eq "H: RESUME result" "{\"machine\": \"m4\", \"worker_id\": \"$UUID/scratch-1\", \"resume\": true, \"also_open\": [\"MacBook\"]}" \
+eq "H: RESUME line" "RESUME mac-a $UUID/scratch-1	回到你上一次的会话（mac-a）" "$OUT"
+eq "H: RESUME result" "{\"machine\": \"mac-a\", \"worker_id\": \"$UUID/scratch-1\", \"resume\": true, \"also_open\": [\"MacBook\"]}" \
   "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k: d[k] for k in ("machine","worker_id","resume","also_open")}, ensure_ascii=False))' "$WORK/res.json" 2>/dev/null)"
 run "$P" - home --agent claude --new
 eq "H: --new exit (a new one)" 0 "$RC"
-has "H: --new line" "$OUT" "REMOTE m5 op1 done"
+has "H: --new line" "$OUT" "REMOTE mac-b op1 done"
 has "H: --new payload" "$(lastreq)" '"new": true'
 run "$P" - scratch --new
 eq "H: --new on a scratch: exit 2" 2 "$RC"
 
-run "$P" verkyyi/claude-fleet 7 --node m5 --agent codex
+run "$P" verkyyi/claude-fleet 7 --node mac-b --agent codex
 eq "A: issue exit (after one status poll)" 0 "$RC"
-eq "A: issue line" "REMOTE m5 op7 done $UUID/issue-7	m4 excluded: full" "$OUT"
+eq "A: issue line" "REMOTE mac-b op7 done $UUID/issue-7	mac-a excluded: full" "$OUT"
 has "A: issue polled its operation" "$(lastreq)" '"operation_id": "op7"'
 has "A: issue payload" "$(tail -n2 "$WORK/log" | head -n1)" '"issue": 7'
-has "A: issue payload node" "$(tail -n2 "$WORK/log" | head -n1)" '"node": "m5"'
+has "A: issue payload node" "$(tail -n2 "$WORK/log" | head -n1)" '"node": "mac-b"'
 has "A: issue payload agent" "$(tail -n2 "$WORK/log" | head -n1)" '"agent": "codex"'
 
 run "$P" verkyyi/claude-fleet restore:issue-21
 eq "A: restore exit" 0 "$RC"
-eq "A: restore line" "REMOTE m4 op3 done $UUID/issue-21	its /fleet-history row is on m4" "$OUT"
+eq "A: restore line" "REMOTE mac-a op3 done $UUID/issue-21	its /fleet-history row is on mac-a" "$OUT"
 has "A: restore payload" "$(lastreq)" '"key": "issue-21"'
 has "A: restore payload kind" "$(lastreq)" '"kind": "restore"'
 eq "A: restore login remembered (the hub's login)" "$UUID	bob" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # --- B. refusals keep their codes -----------------------------------------------------
 run "$P" verkyyi/claude-fleet issue-9
-eq "B: held exit" 3 "$RC"; eq "B: held line" "HELD m4	#9 is leased to m4" "$OUT"
+eq "B: held exit" 3 "$RC"; eq "B: held line" "HELD mac-a	#9 is leased to mac-a" "$OUT"
 run "$P" verkyyi/claude-fleet 11
 eq "B: all full exit" 4 "$RC"
-has "B: all full reasons as the hub said" "$OUT" "m5: at cap 8/8; m4: at cap 4/4"
+has "B: all full reasons as the hub said" "$OUT" "mac-b: at cap 8/8; mac-a: at cap 4/4"
 run "$P" verkyyi/claude-fleet 12
-eq "B: declined exit" 5 "$RC"; eq "B: declined line" "DECLINED m4 op12 2	fleet-m4 is full" "$OUT"
+eq "B: declined exit" 5 "$RC"; eq "B: declined line" "DECLINED mac-a op12 2	fleet-mac-a is full" "$OUT"
 FLEET_CLIENT_PLACE_WAIT=2 run "$P" verkyyi/claude-fleet 13
-eq "B: unknown exit" 6 "$RC"; has "B: unknown line" "$OUT" "UNKNOWN m5 op13"
+eq "B: unknown exit" 6 "$RC"; has "B: unknown line" "$OUT" "UNKNOWN mac-b op13"
 
 # issue #1610: the hub tried the next machine — each decline on stderr, the
 # first answer's `after …` field kept on the line a status poll ends with
 run "$P" verkyyi/claude-fleet 14
 eq "B: next machine exit" 0 "$RC"
-eq "B: next machine line keeps who declined first" "REMOTE m3 op14 done $UUID/issue-14	chose m3	after mini2:op140:1" "$OUT"
-has "B: next machine stderr names the decline" "$ERR" "mini2 declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument"
+eq "B: next machine line keeps who declined first" "REMOTE m3 op14 done $UUID/issue-14	chose m3	after mac-d:op140:1" "$OUT"
+has "B: next machine stderr names the decline" "$ERR" "mac-d declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument"
 run "$P" verkyyi/claude-fleet 15
 eq "B: all declined exit" 4 "$RC"
-has "B: all declined line" "$OUT" "REFUSED ALL_DECLINED	every machine that could take it said no — mini2: declined: fork; m3: declined: full	after mini2:op150:1,m3:op151:2"
+has "B: all declined line" "$OUT" "REFUSED ALL_DECLINED	every machine that could take it said no — mac-d: declined: fork; m3: declined: full	after mac-d:op150:1,m3:op151:2"
 has "B: all declined stderr, one per machine" "$ERR" "m3 declined (exit 2): full"
 
 # issue #2480: why THIS computer was not chosen — after the line, in a person's words
-USER=verky run "$P" verkyyi/claude-fleet 16
+USER=erin run "$P" verkyyi/claude-fleet 16
 eq "B: self declined exit" 5 "$RC"
-eq "B: self declined line as it was" "DECLINED m4 op16 1	fleet discover: INTERNAL: Local controller failed" "$OUT"
-has "B: self — this login's compute off, and how to open it" "$ERR" "fleet-client-place: 你这台（${SELF}/verky）没被选：compute off（只协调）——在这台运行 fleet host on 打开"
+eq "B: self declined line as it was" "DECLINED mac-a op16 1	fleet discover: INTERNAL: Local controller failed" "$OUT"
+has "B: self — this login's compute off, and how to open it" "$ERR" "fleet-client-place: 你这台（${SELF}/erin）没被选：compute off（只协调）——在这台运行 fleet host on 打开"
 has "B: self — the policy named too" "$ERR" "fleet.compute_auto"
 has "B: self — both reasons of this login on one line" "$ERR" "；这台 fleet 的 tmux 服务没在跑——在这台运行 fleet up 拉起"
 has "B: self — another login here, by its name" "$ERR" "这台的另一个登录（${SELF}/alice）没被选：compute off"
 has "B: self — another login's fix is run as that login" "$ERR" "以 alice 登录在这台运行 fleet host on"
-case "$ERR" in *m4*没被选*) fail "B: self — a hint about another machine" "$ERR" ;; esac
+case "$ERR" in *mac-a*没被选*) fail "B: self — a hint about another machine" "$ERR" ;; esac
 WHY="$WORK/why"; : > "$WHY"
-USER=verky FLEET_PLACE_WHY="$WHY" run "$P" verkyyi/claude-fleet 16
+USER=erin FLEET_PLACE_WHY="$WHY" run "$P" verkyyi/claude-fleet 16
 case "$ERR" in *没被选*) fail "B: self — on stderr though FLEET_PLACE_WHY was set" "$ERR" ;; esac
-has "B: self — written to FLEET_PLACE_WHY" "$(head -n1 "$WHY")" "你这台（${SELF}/verky）没被选：compute off"
+has "B: self — written to FLEET_PLACE_WHY" "$(head -n1 "$WHY")" "你这台（${SELF}/erin）没被选：compute off"
 eq "B: self — one line per login" 2 "$(wc -l < "$WHY" | tr -d ' ')"
 run "$P" verkyyi/claude-fleet 17
 eq "B: self absent exit" 4 "$RC"
@@ -328,7 +328,7 @@ printf '%s\n' "$NEW" > "$WORK/curlease"; printf '%s\n' "$NEW" > "$WORK/next"; : 
 printf '{"device": "iPhone"}\n' > "$FLEET_CLIENT_DIR/client.where.json"
 run "$P" verkyyi/claude-fleet scratch
 eq "F: re-acquired exit" 0 "$RC"
-has "F: re-acquired line" "$OUT" "REMOTE m5 op1 done $UUID/scratch-3"
+has "F: re-acquired line" "$OUT" "REMOTE mac-b op1 done $UUID/scratch-3"
 has "F: re-acquired said" "$ERR" "fleet-client-place: lease re-acquired once"
 has "F: the old lease released" "$(cat "$WORK/lease.log")" "release --lease $LEASE"
 has "F: acquired on the same device" "$(tail -n1 "$WORK/lease.log")" "acquire --where-file $FLEET_CLIENT_DIR/client.where.json"

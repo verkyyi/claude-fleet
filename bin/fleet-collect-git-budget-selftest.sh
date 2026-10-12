@@ -3,7 +3,7 @@
 # a wall-clock budget, and round-robin fairness (issue #552).
 #
 # Background (#552): the git phase ran one un-timeboxed `git status --porcelain`
-# per live worktree. On a 24haowan-monorepo worktree that single call was measured
+# per live worktree. On a globex-monorepo worktree that single call was measured
 # at 4m42s, and with ~15 such worktrees live the phase alone took minutes — which
 # pushed the whole tick past its own 60s StartInterval. launchd does not overlap a
 # StartInterval job, so the collector's real cadence degraded to "one tick's

@@ -233,7 +233,7 @@ case "$QUOTA_STALE_OK" in ''|*[!0-9]*) QUOTA_STALE_OK=1800 ;; esac
 # does not spend evaporates at its reset and can never be recovered — while 7d
 # capacity just sits there. So an account at `5h 0% · 7d 80%` scored 20 and an
 # account at `5h 77% · 7d 51%` scored 23, and every spawn kept piling onto the
-# second one. Live on 2026-09-13 that is exactly what happened: verky@24helpful
+# second one. Live on 2026-09-13 that is exactly what happened: carol@24helpful
 # went 8% → 77% of its 5h window in four hours while ly297's 5h window sat at 0%
 # for the whole window and then reset — a full window of a paid subscription
 # thrown away, silently, with the fleet's own rotation logic doing the throwing.

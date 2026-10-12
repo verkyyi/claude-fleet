@@ -20,7 +20,7 @@
 # least-busy OTHER machine for its sessions (the client says 「正在为你开机器」),
 # and its self-delete / expiry removes that login before the person goes
 # (claude-fleet#2549). --home <machine> (claude-fleet#3432) names that machine
-# instead — a drill run on mini2 or fleet-linux-0, no placement asked; only a
+# instead — a drill run on mac-d or linux-a, no placement asked; only a
 # drill person can, a real newcomer is always placed. It must be on the hub's
 # roster and not --host (the login there IS the drill's own).
 #

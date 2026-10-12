@@ -326,7 +326,7 @@ class C_Sweep(Sandbox):
         local user — is not looked at: neither half names them, handwritten plists
         included."""
         users = os.path.join(self.d, "Users")
-        for login in ("alice", "bob", "carol", "verkyyi"):
+        for login in ("alice", "bob", "carol", "heidi"):
             os.makedirs(os.path.join(users, login, "Library", "LaunchAgents"), exist_ok=True)
         os.makedirs(os.path.join(users, "alice", ".cache", "claude-fleet", "shell", "bin"))
         with open(os.path.join(users, "bob", ".zshrc"), "w") as f:
@@ -336,11 +336,11 @@ class C_Sweep(Sandbox):
         with open(os.path.join(users, "carol", ".zshrc"), "w") as f:      # no hook
             f.write('export PATH="$HOME/.local/bin:$PATH"  # claude-fleet: x\n'
                     "# source ~/.claude/fleet/shell/fleet-login.zsh\n")
-        # verkyyi: an admin, never taken over — a shell, a hook, a hand-written agent
-        os.makedirs(os.path.join(users, "verkyyi", ".cache", "claude-fleet", "shell"))
-        with open(os.path.join(users, "verkyyi", ".zshrc"), "w") as f:
+        # heidi: an admin, never taken over — a shell, a hook, a hand-written agent
+        os.makedirs(os.path.join(users, "heidi", ".cache", "claude-fleet", "shell"))
+        with open(os.path.join(users, "heidi", ".zshrc"), "w") as f:
             f.write("source ~/.claude/fleet/shell/cw.zsh\n")
-        for login in ("verkyyi", "alice"):
+        for login in ("heidi", "alice"):
             with open(os.path.join(users, login, "Library", "LaunchAgents", "com.%s.ddns.plist" % login), "wb") as f:
                 plistlib.dump({"Label": "com.%s.ddns" % login,
                                "ProgramArguments": [os.path.join(users, login, "bin", "ddns")]}, f)
@@ -358,12 +358,12 @@ class C_Sweep(Sandbox):
         self.assertIn("fleet-node-shell-retire.sh' --login bob", r.stdout)
         self.assertIn("runs as alice", r.stdout)
         self.assertNotIn("carol", r.stdout)
-        self.assertNotIn("verkyyi", r.stdout)
+        self.assertNotIn("heidi", r.stdout)
         self.assertEqual(sorted(c["login"] for c in self.state()["sweep"]["clientshell"]), ["alice", "bob"])
         self.assertEqual([h["login"] for h in self.state()["sweep"]["handwritten"]], ["alice"])
         st = self.run_sup("status").stdout
         self.assertIn("clientshell alice", st)
-        self.assertNotIn("verkyyi", st)
+        self.assertNotIn("heidi", st)
         self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))   # named, not touched
         # status reads the homes NOW (issue #2991): retired by hand since the sweep,
         # the record still names them, status does not
@@ -555,7 +555,7 @@ class O_SweepRemoves(Sandbox):
                     "env FOO=1 bash -x /a/%s" % n, "bash -- /a/%s" % n):
             self.assertTrue(fns.runs_script(cmd, n), cmd)
         for cmd in ("ssh mini %s --help" % n, "pgrep -f onboard-drill", "bash -c %s --help" % n,
-                    "zsh -lc /a/%s" % n, "grep %s x" % n, "-zsh", "sshd: verkyyi@ttys001 %s" % n,
+                    "zsh -lc /a/%s" % n, "grep %s x" % n, "-zsh", "sshd: heidi@ttys001 %s" % n,
                     "/bin/bash /a/other.sh %s" % n):
             self.assertFalse(fns.runs_script(cmd, n), cmd)
 
@@ -1042,7 +1042,7 @@ class H_Accounts(Sandbox):
         self.assertNotIn("alice", json.load(open(os.path.join(self.d, "db", "accounts.json"))))
 
     def test_slow_unload_is_waited_for(self):
-        # m4 (issue #2336): a KeepAlive daemon is still loaded right after its bootout
+        # mac-a (issue #2336): a KeepAlive daemon is still loaded right after its bootout
         dd = self.env["FLEET_NODE_DAEMON_DIR"]
         for u in ("collect", "webhook"):
             self.plist(os.path.join(dd, "com.claude-fleet.alice.%s.plist" % u), "com.claude-fleet.alice.%s" % u)
@@ -1264,7 +1264,7 @@ class H_Accounts(Sandbox):
         self.assertNotIn("CCQUOTA_FLEET_CREDS", self.login_env("carol")[0])
 
     def test_credsep_store_owned_by_the_role_account(self):
-        # m4 (issue #2336): the store's node.env is _fleetcred's, not root's —
+        # mac-a (issue #2336): the store's node.env is _fleetcred's, not root's —
         # the owner check (forced on here) must take the role account
         import getpass
         cred = os.path.join(self.d, "cred")
@@ -1381,7 +1381,7 @@ class H_Accounts(Sandbox):
         # opened that same second never got its node — until the agent exited.
         lg = os.path.join(self.d, "db", "logins")
         os.makedirs(lg)
-        with open(os.path.join(lg, "verky.env"), "w") as f:
+        with open(os.path.join(lg, "grace.env"), "w") as f:
             f.write("CCQUOTA_TOKEN=x\n")
         # a plain argv: adopt matches the live process's command line to the one recorded
         self.table(children=[{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
@@ -1408,10 +1408,10 @@ class H_Accounts(Sandbox):
         # While a tenant's book names an op running (by a live pid) the reload
         # waits; once it is done the agent starts again on the new logins/.
         lg = os.path.join(self.d, "db", "logins")
-        ag = os.path.join(self.d, "db", "agent", "verky")
+        ag = os.path.join(self.d, "db", "agent", "grace")
         os.makedirs(lg)
         os.makedirs(ag)
-        with open(os.path.join(lg, "verky.env"), "w") as f:
+        with open(os.path.join(lg, "grace.env"), "w") as f:
             f.write("CCQUOTA_TOKEN=x\n")
         book = os.path.join(ag, "account-ops.json")
         holder = subprocess.Popen(["/bin/sleep", "300"])
@@ -1444,7 +1444,7 @@ class H_Accounts(Sandbox):
         # account script running under the node agent holds the reload too.
         lg = os.path.join(self.d, "db", "logins")
         os.makedirs(lg)
-        with open(os.path.join(lg, "verky.env"), "w") as f:
+        with open(os.path.join(lg, "grace.env"), "w") as f:
             f.write("CCQUOTA_TOKEN=x\n")
         flag = os.path.join(self.d, "op-done")
         login_new = self.script("fleet-login-new.sh", "while [ ! -e %s ]; do sleep 0.1; done\n" % flag)
@@ -1470,10 +1470,10 @@ class H_Accounts(Sandbox):
         # a book from a dead process holds nothing; a live one at most
         # FLEET_NODE_RELOAD_HOLD seconds
         lg = os.path.join(self.d, "db", "logins")
-        ag = os.path.join(self.d, "db", "agent", "verky")
+        ag = os.path.join(self.d, "db", "agent", "grace")
         os.makedirs(lg)
         os.makedirs(ag)
-        with open(os.path.join(lg, "verky.env"), "w") as f:
+        with open(os.path.join(lg, "grace.env"), "w") as f:
             f.write("CCQUOTA_TOKEN=x\n")
         holder = subprocess.Popen(["/bin/sleep", "300"])
         self.addCleanup(holder.kill)
@@ -1676,13 +1676,13 @@ class I_Services(Sandbox):
 class J_ServiceMove(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
-        self.ha = os.path.join(self.d, "Users", "verkyyi")
-        self.hb = os.path.join(self.d, "Users", "verky")
+        self.ha = os.path.join(self.d, "Users", "heidi")
+        self.hb = os.path.join(self.d, "Users", "grace")
         for h in (self.ha, self.hb):
             os.makedirs(h)
         with open(os.path.join(self.d, "passwd.json"), "w") as f:
-            json.dump({"verkyyi": {"uid": os.getuid(), "gid": os.getgid(), "home": self.ha},
-                       "verky": {"uid": os.getuid(), "gid": os.getgid(), "home": self.hb}}, f)
+            json.dump({"heidi": {"uid": os.getuid(), "gid": os.getgid(), "home": self.ha},
+                       "grace": {"uid": os.getuid(), "gid": os.getgid(), "home": self.hb}}, f)
         self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
         self.table()
         # the daily-report case: a working dir with its script + logs, a skill dir
@@ -1697,10 +1697,10 @@ class J_ServiceMove(Sandbox):
             f.write('#!/bin/bash\necho "up home=$HOME user=$USER tok=${BARK_KEY:-none} out=$OUT"\n'
                     'echo run >> "$OUT/run.log"\nexec sleep 300\n')
         os.chmod(self.run_sh, 0o755)
-        r = subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "verkyyi", "--name",
+        r = subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "heidi", "--name",
                             "BARK_KEY"], env=self.env, input="k3y\n", capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        r = self.run_sup("service", "add", "--login", "verkyyi", "--name", "daily-report", "--cred", "BARK_KEY",
+        r = self.run_sup("service", "add", "--login", "heidi", "--name", "daily-report", "--cred", "BARK_KEY",
                          "--env", "OUT=%s/logs" % self.work, "--path", self.work, "--path", self.skill,
                          "--", "/bin/bash", self.run_sh)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1719,24 +1719,24 @@ class J_ServiceMove(Sandbox):
 
     def test_move_carries_everything_and_runs_as_the_new_login(self):
         self.start()
-        pa = until(10, lambda: self.child("svc:verkyyi/daily-report").get("pid"))
+        pa = until(10, lambda: self.child("svc:heidi/daily-report").get("pid"))
         self.assertTrue(pa, "never ran as the old login")
-        self.assertTrue(until(5, lambda: "home=%s" % self.ha in self.read(self.svclog("verkyyi"))))
-        r = self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report", "--to", "verky")
+        self.assertTrue(until(5, lambda: "home=%s" % self.ha in self.read(self.svclog("heidi"))))
+        r = self.run_sup("service", "move", "--login", "heidi", "--name", "daily-report", "--to", "grace")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("moved verkyyi/daily-report → verky/daily-report", r.stdout)
+        self.assertIn("moved heidi/daily-report → grace/daily-report", r.stdout)
         self.assertFalse(fns.pid_alive(pa), "the old copy still runs")
         # the entry
-        self.assertFalse(os.path.exists(self.reg("verkyyi")), "the old entry is left")
-        ent = json.load(open(self.reg("verky")))
-        self.assertEqual(os.stat(self.reg("verky")).st_mode & 0o777, 0o600)
+        self.assertFalse(os.path.exists(self.reg("heidi")), "the old entry is left")
+        ent = json.load(open(self.reg("grace")))
+        self.assertEqual(os.stat(self.reg("grace")).st_mode & 0o777, 0o600)
         nwork = os.path.join(self.hb, "daily-report")
         nskill = os.path.join(self.hb, ".claude", "skills", "daily-report")
-        self.assertEqual((ent["login"], ent["state"]), ("verky", "enabled"))
+        self.assertEqual((ent["login"], ent["state"]), ("grace", "enabled"))
         self.assertEqual(ent["exec"], ["/bin/bash", os.path.join(nwork, "run.sh")])
         self.assertEqual(ent["paths"], [nwork, nskill])
         self.assertEqual(ent["env"]["OUT"], os.path.join(nwork, "logs"))
-        self.assertEqual(ent["moved_from"]["login"], "verkyyi")
+        self.assertEqual(ent["moved_from"]["login"], "heidi")
         # the directories
         self.assertTrue(os.path.isfile(os.path.join(nwork, "run.sh")))
         self.assertTrue(os.path.isfile(os.path.join(nskill, "SKILL.md")))
@@ -1744,62 +1744,62 @@ class J_ServiceMove(Sandbox):
         self.assertFalse(os.path.exists(self.work), "the working dir is left in the old home")
         self.assertFalse(os.path.exists(self.skill), "the skill dir is left in the old home")
         # the log and the credential
-        self.assertFalse(os.path.exists(self.svclog("verkyyi")), "the log is left under the old login")
-        self.assertIn("home=%s" % self.ha, self.read(self.svclog("verky")), "the log's history did not move")
+        self.assertFalse(os.path.exists(self.svclog("heidi")), "the log is left under the old login")
+        self.assertIn("home=%s" % self.ha, self.read(self.svclog("grace")), "the log's history did not move")
         creds = os.path.join(self.d, "db", "logins")
-        self.assertFalse(os.path.exists(os.path.join(creds, "verkyyi", "creds", "BARK_KEY")))
-        self.assertEqual(self.read(os.path.join(creds, "verky", "creds", "BARK_KEY")), "k3y\n")
+        self.assertFalse(os.path.exists(os.path.join(creds, "heidi", "creds", "BARK_KEY")))
+        self.assertEqual(self.read(os.path.join(creds, "grace", "creds", "BARK_KEY")), "k3y\n")
         # and it runs as the new login
-        pb = until(10, lambda: self.child("svc:verky/daily-report").get("pid"))
+        pb = until(10, lambda: self.child("svc:grace/daily-report").get("pid"))
         self.assertTrue(pb, "it did not start under the new login")
-        self.assertTrue(until(5, lambda: "up home=%s user=verky tok=k3y out=%s/logs" % (self.hb, nwork)
-                              in self.read(self.svclog("verky"))), self.read(self.svclog("verky")))
-        self.assertTrue(until(10, lambda: "svc:verkyyi/daily-report" not in (self.state().get("children") or {})))
+        self.assertTrue(until(5, lambda: "up home=%s user=grace tok=k3y out=%s/logs" % (self.hb, nwork)
+                              in self.read(self.svclog("grace"))), self.read(self.svclog("grace")))
+        self.assertTrue(until(10, lambda: "svc:heidi/daily-report" not in (self.state().get("children") or {})))
         rows = json.loads(self.run_sup("service", "ls", "--json").stdout)
-        self.assertEqual([(x["login"], x["name"]) for x in rows], [("verky", "daily-report")])
+        self.assertEqual([(x["login"], x["name"]) for x in rows], [("grace", "daily-report")])
         # nothing left to stop a release / a removal of the old login
-        self.assertEqual(os.listdir(os.path.dirname(self.reg("verkyyi"))), [])
+        self.assertEqual(os.listdir(os.path.dirname(self.reg("heidi"))), [])
 
     def test_move_refuses_onto_an_existing_path(self):
         os.makedirs(os.path.join(self.hb, ".claude", "skills", "daily-report"))
-        r = self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report", "--to", "verky")
+        r = self.run_sup("service", "move", "--login", "heidi", "--name", "daily-report", "--to", "grace")
         self.assertEqual(r.returncode, 1)
         self.assertIn("already exists", r.stderr)
-        self.assertTrue(os.path.exists(self.reg("verkyyi")) and not os.path.exists(self.reg("verky")))
-        self.assertEqual(json.load(open(self.reg("verkyyi")))["state"], "enabled")
+        self.assertTrue(os.path.exists(self.reg("heidi")) and not os.path.exists(self.reg("grace")))
+        self.assertEqual(json.load(open(self.reg("heidi")))["state"], "enabled")
         self.assertTrue(os.path.isdir(self.work) and os.path.isdir(self.skill))
-        self.assertEqual(self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report",
-                                      "--to", "verkyyi").returncode, 2)
-        self.assertEqual(self.run_sup("service", "move", "--login", "verkyyi", "--name", "nope",
-                                      "--to", "verky").returncode, 1)
+        self.assertEqual(self.run_sup("service", "move", "--login", "heidi", "--name", "daily-report",
+                                      "--to", "heidi").returncode, 2)
+        self.assertEqual(self.run_sup("service", "move", "--login", "heidi", "--name", "nope",
+                                      "--to", "grace").returncode, 1)
 
     def test_a_stopped_entry_moves_stopped(self):
-        self.assertEqual(self.run_sup("service", "stop", "--login", "verkyyi", "--name", "daily-report").returncode, 0)
-        r = self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report", "--to", "verky")
+        self.assertEqual(self.run_sup("service", "stop", "--login", "heidi", "--name", "daily-report").returncode, 0)
+        r = self.run_sup("service", "move", "--login", "heidi", "--name", "daily-report", "--to", "grace")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.load(open(self.reg("verky")))["state"], "stopped")
+        self.assertEqual(json.load(open(self.reg("grace")))["state"], "stopped")
 
     def test_release_refuses_while_entries_are_left(self):
         with open(os.path.join(self.d, "db", "accounts.json"), "w") as f:
-            json.dump({"verkyyi": {"managed": True, "since": 1}}, f)
-        r = self.run_sup("account", "release", "verkyyi")
+            json.dump({"heidi": {"managed": True, "since": 1}}, f)
+        r = self.run_sup("account", "release", "heidi")
         self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
-        self.assertIn("service move --login verkyyi --name daily-report --to", r.stderr)
-        self.assertTrue(json.load(open(os.path.join(self.d, "db", "accounts.json")))["verkyyi"]["managed"],
+        self.assertIn("service move --login heidi --name daily-report --to", r.stderr)
+        self.assertTrue(json.load(open(os.path.join(self.d, "db", "accounts.json")))["heidi"]["managed"],
                         "a refused release changed the account")
         os.makedirs(os.path.join(self.d, "db", "attic"))
-        r = self.run_sup("account", "release", "verkyyi", "--force")
+        r = self.run_sup("account", "release", "heidi", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_front_moves_your_own(self):
-        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="verkyyi")
+        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="heidi")
         front = os.path.join(BIN, "fleet-service.sh")
         r = subprocess.run(["bash", front, "move", "daily-report"], env=fe, capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
-        r = subprocess.run(["bash", front, "move", "daily-report", "--to", "verky"], env=fe,
+        r = subprocess.run(["bash", front, "move", "daily-report", "--to", "grace"], env=fe,
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(os.path.exists(self.reg("verky")))
+        self.assertTrue(os.path.exists(self.reg("grace")))
 class K_AgentTasks(Sandbox):
     DAY = "2026-10-10"
 
@@ -2146,7 +2146,7 @@ class N_FullDiskAccess(Sandbox):
 
 
 class P_Watchdog(Sandbox):
-    """A loop that stops coming round (issues #3079, #3086: mini2's wedged in an
+    """A loop that stops coming round (issues #3079, #3086: mac-d's wedged in an
     open() of TCC.db, every task with it) says where, records it, and exits for
     launchd to restart; status reads WEDGED meanwhile; a blocking path is gone."""
 
@@ -2195,7 +2195,7 @@ class P_Watchdog(Sandbox):
         self.assertIsNone(p.poll(), "a loop coming round every tick was ended by the watchdog")
 
     def test_tcc_open_that_never_returns_stalls_nothing(self):
-        """mini2 2026-10-11: the TCC database's open() never returned. The probe
+        """mac-d 2026-10-11: the TCC database's open() never returned. The probe
         is a child now: the loop runs on, the probe is killed and reads unknown."""
         sh = self.script("ok.sh", "exit 0\n")
         self.table(tasks=[{"name": "ok", "every": 0.1, "cmd": ["/bin/bash", sh]}])
@@ -2212,7 +2212,7 @@ class P_Watchdog(Sandbox):
         self.assertIn("did not return in 1s", open(os.path.join(self.d, "sup.err")).read())
 
     def test_tcc_stuck_is_a_machine_failure(self):
-        """mini2 2026-10-11 (issue #3167): an unanswered TCC dialog wedged sandboxd and
+        """mac-d 2026-10-11 (issue #3167): an unanswered TCC dialog wedged sandboxd and
         every user delete failed. Probe timeouts in a row count up; at
         FLEET_NODE_TCC_STUCK the check says so (exit 6) with the way out; an answer resets it."""
         self.table(tasks=[])
@@ -2427,12 +2427,12 @@ class R_Entry(Sandbox):
                 "Failed publickey for alice from 6.6.6.6 port 7 ssh2: ED25519 SHA256:bad\n"
                 "Invalid user mallory from 6.6.6.6 port 8\n"
                 "User bob from 6.6.6.6 not allowed because not listed in AllowUsers\n")
-        out = fns.entry_audit_lines(text, book, "mini2", 100, 0)
+        out = fns.entry_audit_lines(text, book, "mac-d", 100, 0)
         self.assertEqual([(d["login"], d["source_ip"], d["fp"], d["result"]) for d in out], [
             ("alice", "1.2.3.4", "SHA256:abc", "ok"), ("alice", "6.6.6.6", "SHA256:bad", "denied: key"),
             ("mallory", "6.6.6.6", "", "denied: no such login"), ("bob", "6.6.6.6", "", "denied: not on the entry")])
         self.assertEqual(out[0]["person"], "gh:1")
-        self.assertEqual(out[0]["machine"], "mini2")
+        self.assertEqual(out[0]["machine"], "mac-d")
         ids = [d["id"] for d in out]
         self.assertEqual(len(set(ids)), 4, "each line its own id (its byte offset)")
         self.assertEqual(ids[0], str(100 + len(text.splitlines(True)[0])))
@@ -2473,8 +2473,8 @@ class S_EntryReach(Sandbox):
         self.hub_port = self.hub.server_address[1]
         self.write_env()
         with open(os.path.join(db, "entry", "ssh_host_ed25519_key.pub"), "w") as f:
-            f.write("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk root@mini2\n")
-        fns.write_json(os.path.join(db, "entry", "state.json"), {"on": True, "allow": ["verky"], "version": 3})
+            f.write("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk root@mac-d\n")
+        fns.write_json(os.path.join(db, "entry", "state.json"), {"on": True, "allow": ["grace"], "version": 3})
         self.sshd = subprocess.Popen(["/bin/sleep", "300"])     # stands in for the entry sshd
         self.procs.append(self.sshd)
         fns.write_json(os.path.join(db, "state.json"), {"children": {"entry": {"pid": self.sshd.pid}}})
@@ -2550,13 +2550,13 @@ class S_EntryReach(Sandbox):
 
     def test_entry_route_port(self):
         """The router forwards a public port of its own to the entry (the login's
-        entry= route, mini2's :22123); public= is the system sshd's and is not read."""
+        entry= route, mac-d's :22123); public= is the system sshd's and is not read."""
         os.makedirs(os.path.join(self.d, "db", "logins"))
-        with open(os.path.join(self.d, "db", "logins", "verky.env"), "w") as f:
+        with open(os.path.join(self.d, "db", "logins", "grace.env"), "w") as f:
             f.write("CCQUOTA_TOKEN=x\nCCQUOTA_FLEET_NODE_ROUTES=public=ssh.minihaowan.com:22023,"
                     "entry=ssh.minihaowan.com:22123,lan=192.168.1.249\n")
-        self.answer["body"] = {"checked_at": "x", "source": "23.119.126.213", "addrs": [
-            {"addr": "23.119.126.213", "family": "ipv4", "port": 22123, "via": "source",
+        self.answer["body"] = {"checked_at": "x", "source": "198.51.100.213", "addrs": [
+            {"addr": "198.51.100.213", "family": "ipv4", "port": 22123, "via": "source",
              "reachable": False, "reason": "refused"}]}
         self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
         b = self.posts[0]["body"]
@@ -2564,7 +2564,7 @@ class S_EntryReach(Sandbox):
         self.assertNotIn("public_port", b)
         c = self.run_sup("entry", "reach", "--check")
         self.assertEqual(c.returncode, 1, c.stdout)
-        for w in ("23.119.126.213:22123 被拒", "在路由器上把公网 TCP 22123 转发到 192.168.1.249:22022"):
+        for w in ("198.51.100.213:22123 被拒", "在路由器上把公网 TCP 22123 转发到 192.168.1.249:22022"):
             self.assertIn(w, c.stdout)
 
     def test_public_route_alone_is_not_the_entry(self):

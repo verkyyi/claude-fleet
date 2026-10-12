@@ -441,7 +441,7 @@ case "$1 ${2:-}" in
 esac
 EOF
 chmod +x "$FS/bin/fleet-up.sh" "$FS/bin/fleet-login-bootstrap.sh" "$FS/bin/fleet-node.sh"
-GB="$WORK/gitbase/verkyyi"; mkdir -p "$GB"
+GB="$WORK/gitbase/verkyyi"; mkdir -p "$GB"  # oss-ok: 仓库自己的 owner（克隆 verkyyi/claude-fleet 的路径）
 ( cd "$FS" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm stable && git tag stable \
   && git clone -q --bare "$FS" "$GB/claude-fleet.git" ) || bad "H the fake stable repo"
 # a tmux the host step finds (≥ 3.2), and nothing else faked

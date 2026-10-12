@@ -296,7 +296,7 @@ MACHINE_UNITS = ("memguard", "node", "cred-proxy-shared")
 # The locale every child is started in (issue #3514): macOS always has
 # en_US.UTF-8, a slim Linux image only C.UTF-8 — there en_US.UTF-8 named a locale
 # that does not exist, perl warned on every call and python's setlocale raised,
-# so the 看台's ⌘P table was never built on fleet-linux-0.
+# so the 看台's ⌘P table was never built on linux-a.
 NODE_LANG = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
 ACCOUNT_ENV_DROP = ("UserName", "GroupName")
 
@@ -1005,7 +1005,7 @@ def fda_reading():
     return fda_probe_result(rc)
 
 
-# The probe runs in a CHILD (issue #3086): on mini2 2026-10-11 tccd stopped
+# The probe runs in a CHILD (issue #3086): on mac-f 2026-10-11 tccd stopped
 # answering — even `ls` of the TCC directory came back EINTR — and the daemon's
 # own open() of TCC.db never returned: its main loop stopped for good, every task
 # with it, and every restart wedged again (the probe is due at once). A child
@@ -3100,7 +3100,7 @@ class Supervisor(object):
         # The watchdog (issue #3079): a loop that has not come round in
         # FLEET_NODE_WATCHDOG_SECS (900) dumps every thread's stack to this log and
         # exits, and launchd's KeepAlive starts it again — the children adopted, the
-        # tasks marked interrupted. On 2026-10-10 mini2's loop stopped mid-tick for
+        # tasks marked interrupted. On 2026-10-10 mac-f's loop stopped mid-tick for
         # good: every account task (the collector first) stopped with it and nothing
         # said so. 0 = off.
         #
@@ -3189,7 +3189,7 @@ class Supervisor(object):
         hang = env("FLEET_NODE_TEST_HANG", "") if env("FLEET_NODE_TEST", "") == "1" else ""
         if hang and hang.split(":", 1)[0] == phase and os.path.exists(hang.split(":", 1)[1]):
             # The drills' seam (issue #3086): this phase blocks in an open() that
-            # never returns — a FIFO nobody writes — as mini2's TCC.db open did.
+            # never returns — a FIFO nobody writes — as mac-f's TCC.db open did.
             os.close(os.open(hang.split(":", 1)[1], os.O_RDONLY))
 
     def watchdog(self):
@@ -3891,7 +3891,7 @@ def account_agent(paths, login, uid, home):
         if isinstance(meta, dict) and meta.get("login") == login:
             ne_path = os.path.join(cbase, login, "node.env")
             # the store is the role account's (fleet-credsep.py: _fleetcred 0700),
-            # under a root-owned base — m4 (issue #2336) had every token there
+            # under a root-owned base — mac-c (issue #2336) had every token there
             ne = _env_file(ne_path, 0, _role_uids())
             run = env("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred")
             store = os.path.join(run, ".shared", "ctl.sock") if meta.get("mode") == "shared" \
@@ -4448,7 +4448,7 @@ def health(paths, state):
     hb = sv.get("heartbeat") or 0
     if not pid_alive(sv.get("pid")):
         # a daemon launchd restarted that never wrote state.json is not DOWN: it
-        # is alive and silent (issue #3100 — mini2 read «DOWN» 78 min while
+        # is alive and silent (issue #3100 — mac-f read «DOWN» 78 min while
         # pid 28277 ran no task)
         live = [q for q in live_daemons(paths) if q != os.getpid()]
         if live and now() - hb > env_num("FLEET_NODE_HEARTBEAT_STALE", 120):
@@ -7200,7 +7200,7 @@ def service_ensure(paths, login, name, tries):
 
 # --------------------------------------------------------------- service move ---
 # A login hands its register to another (issue #2528, EPIC #2524 C4): the
-# 2026-10-08 verkyyi → verky move left the daily push under the old name, failing
+# 2026-10-08 erin → dave move left the daily push under the old name, failing
 # every half hour until it was carried over by hand. `service move` carries ONE
 # entry whole: the daemon stops it first (no two copies ever run), every path the
 # entry declares (`paths[]` — its working directory, its skill directory) moves

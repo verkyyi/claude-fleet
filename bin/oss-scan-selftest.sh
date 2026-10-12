@@ -3,7 +3,8 @@
 # #3571, EPIC #3569 C1), on throwaway git repos with a stub gitleaks.
 #
 #   A  a fake private address in a sandbox repo is reported with its rule id, rc 1
-#   B  a kept word (the repo's own name, a placeholder) is no hit; a clean repo rc 0
+#   B  a kept word (the repo's own name, a placeholder) is no hit; a clean repo rc 0;
+#      a `*.`-kept suffix keeps any name under it (issue #3578), never the bare suffix's look-alike
 #   C  conf/oss-scan.allow drops a file:rule; --all shows it as class allow
 #   D  the class: a test / a doc / a comment → placeholder, running code → config
 #   E  --summary's file count == --files' lines; --inventory has one row a file
@@ -33,6 +34,7 @@ private-ipv4${T}(^|[^0-9.])(10\.[0-9]+|192\.168)\.[0-9]+\.[0-9]+${T}test rule
 machine${T}(^|[^A-Za-z0-9_-])(${M})([^A-Za-z0-9_-]|$)${T}test rule
 ts-net${T}[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net${T}test rule
 #@keep${T}example.ts.net
+#@keep${T}*.example.ts.net
 EOF
 : > "$WORK/allow"
 
@@ -56,9 +58,12 @@ else bad "A rc=$rc out=$out"; fi
 # ---- B ----
 mkrepo
 printf 'see http://example.ts.net/ and 1.10.0.1.2 is a version\n' > "$WORK/repo/README.md"
+printf 'ssh mac-a.example.ts.net, then box.example.ts.net.\n' > "$WORK/repo/hosts.md"
+printf 'not ours: box.notexample.%s\n' ts.net > "$WORK/repo/other.md"
 commit
 out=$(scan); rc=$?
-if [ "$rc" = 0 ] && [ -z "$out" ]; then ok B; else bad "B rc=$rc out=$out"; fi
+if [ "$rc" = 1 ] && [ "$out" = "other.md:1:ts-net:placeholder" ]; then ok B; else bad "B rc=$rc out=$out"; fi
+rm "$WORK/repo/other.md"; commit
 
 # ---- C ----
 mkrepo

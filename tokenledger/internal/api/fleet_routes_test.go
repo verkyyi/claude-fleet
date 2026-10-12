@@ -42,24 +42,24 @@ func routeNames(m FleetMachine) []string {
 // route that is not a plain token never reaches an ssh config.
 func TestFleetMachinesMergesHeartbeatRoutes(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetRoutes = []FleetMachine{{Hostname: "mini", Alias: "m4",
+	h.srv.FleetRoutes = []FleetMachine{{Hostname: "mini", Alias: "mac-c",
 		Routes: []FleetRoute{{Name: "public", Host: "gw.static", Port: 22022}}}}
 	beatRoutes(t, h, "a", "mini", []control.NodeRoute{
 		{Name: "public", Host: "gw.node", Port: 22023},
-		{Name: "tailnet", Host: "mini.tail.ts.net"},
+		{Name: "tailnet", Host: "mini.example.ts.net"},
 		{Name: "bad name", Host: "x"},
 		{Name: "evil", Host: "x\n  ProxyCommand sh"},
 	})
-	beatRoutes(t, h, "b", "m9", []control.NodeRoute{{Name: "tailnet", Host: "m9.tail.ts.net"}})
+	beatRoutes(t, h, "b", "m9", []control.NodeRoute{{Name: "tailnet", Host: "m9.example.ts.net"}})
 
 	ms := h.srv.fleetMachines()
 	if len(ms) != 2 || ms[0].Hostname != "mini" || ms[1].Hostname != "m9" {
 		t.Fatalf("machines = %+v", ms)
 	}
-	if got := routeNames(ms[0]); len(got) != 2 || got[0] != "public=gw.static" || got[1] != "tailnet=mini.tail.ts.net" {
+	if got := routeNames(ms[0]); len(got) != 2 || got[0] != "public=gw.static" || got[1] != "tailnet=mini.example.ts.net" {
 		t.Fatalf("mini routes = %v", got)
 	}
-	if got := routeNames(ms[1]); len(got) != 1 || got[0] != "tailnet=m9.tail.ts.net" {
+	if got := routeNames(ms[1]); len(got) != 1 || got[0] != "tailnet=m9.example.ts.net" {
 		t.Fatalf("m9 routes = %v", got)
 	}
 	// The static list itself is never written through.
@@ -67,7 +67,7 @@ func TestFleetMachinesMergesHeartbeatRoutes(t *testing.T) {
 		t.Fatalf("static routes mutated: %+v", h.srv.FleetRoutes)
 	}
 	// The ssh config `fleet login` writes carries the advertised routes too.
-	if cfg := h.srv.sshConfigFor("alice", nil, nil); !bytes.Contains([]byte(cfg), []byte("HostName mini.tail.ts.net")) {
+	if cfg := h.srv.sshConfigFor("alice", nil, nil); !bytes.Contains([]byte(cfg), []byte("HostName mini.example.ts.net")) {
 		t.Fatalf("ssh config lacks the heartbeat's route:\n%s", cfg)
 	}
 }
@@ -76,18 +76,18 @@ func TestFleetMachinesMergesHeartbeatRoutes(t *testing.T) {
 // (claude-fleet#3074); a route without one (an older node) has none.
 func TestFleetMachinesLANPrefix(t *testing.T) {
 	h := newFleetHarness(t)
-	beatRoutes(t, h, "a", "mini2", []control.NodeRoute{
+	beatRoutes(t, h, "a", "mac-f", []control.NodeRoute{
 		{Name: "lan", Host: "192.168.1.249", Prefix: 24},
 		{Name: "lan-2", Host: "fd12:3456::7", Prefix: 64},
 		{Name: "odd", Host: "10.0.0.1", Prefix: 999},
-		{Name: "tailnet", Host: "mini2.tail.ts.net"},
+		{Name: "tailnet", Host: "mac-f.example.ts.net"},
 	})
 	ms := h.srv.fleetMachines()
 	if len(ms) != 1 || len(ms[0].Routes) != 4 {
 		t.Fatalf("machines = %+v", ms)
 	}
 	want := []FleetRoute{{Name: "lan", Host: "192.168.1.249", Prefix: 24}, {Name: "lan-2", Host: "fd12:3456::7", Prefix: 64},
-		{Name: "odd", Host: "10.0.0.1"}, {Name: "tailnet", Host: "mini2.tail.ts.net"}}
+		{Name: "odd", Host: "10.0.0.1"}, {Name: "tailnet", Host: "mac-f.example.ts.net"}}
 	for i := range want {
 		if ms[0].Routes[i] != want[i] {
 			t.Fatalf("route %d = %+v, want %+v", i, ms[0].Routes[i], want[i])
@@ -107,8 +107,8 @@ func TestFleetMachinesNamesFromSetting(t *testing.T) {
 	h := newFleetHarness(t)
 	h.srv.FleetRoutes = []FleetMachine{{Hostname: "mini", Alias: "old",
 		Routes: []FleetRoute{{Name: "public", Host: "gw.static", Port: 22022}}}}
-	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.tail.ts.net"}})
-	beatRoutes(t, h, "b", "macmini.local", []control.NodeRoute{{Name: "tailnet", Host: "macmini.tail.ts.net"}})
+	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.example.ts.net"}})
+	beatRoutes(t, h, "b", "mac-e.local", []control.NodeRoute{{Name: "tailnet", Host: "mac-e.example.ts.net"}})
 
 	aliases := func() map[string]string {
 		out := map[string]string{}
@@ -117,13 +117,13 @@ func TestFleetMachinesNamesFromSetting(t *testing.T) {
 		}
 		return out
 	}
-	if got := aliases(); got["mini"] != "old" || got["macmini.local"] != "" {
+	if got := aliases(); got["mini"] != "old" || got["mac-e.local"] != "" {
 		t.Fatalf("unset: aliases = %v", got)
 	}
-	if err := h.srv.Store.SetFleetSetting(MachineNamesKey, "macmini=m5,mini=m4", time.Now()); err != nil {
+	if err := h.srv.Store.SetFleetSetting(MachineNamesKey, "mac-e=mac-d,mini=mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got := aliases(); got["mini"] != "m4" || got["macmini.local"] != "m5" {
+	if got := aliases(); got["mini"] != "mac-c" || got["mac-e.local"] != "mac-d" {
 		t.Fatalf("set: aliases = %v", got)
 	}
 	snap, err := h.srv.nodesWhere(time.Now(), nil)
@@ -134,7 +134,7 @@ func TestFleetMachinesNamesFromSetting(t *testing.T) {
 	for _, m := range snap.Machines {
 		got[m.Hostname] = m.Alias
 	}
-	if got["mini"] != "m4" || got["macmini.local"] != "m5" {
+	if got["mini"] != "mac-c" || got["mac-e.local"] != "mac-d" {
 		t.Fatalf("/v1/nodes machines = %+v", snap.Machines)
 	}
 }
@@ -172,10 +172,10 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 	k := newCertKit(t)
 	h.srv.SSHCA = sshca.New(k.ca)
 	h.srv.FleetRoutes = []FleetMachine{
-		{Hostname: "mini", Alias: "m4", Routes: []FleetRoute{{Name: "public", Host: "gw", Port: 22023}}},
-		{Hostname: "macmini", Alias: "m5", Routes: []FleetRoute{{Name: "public", Host: "gw", Port: 22022}}},
+		{Hostname: "mini", Alias: "mac-c", Routes: []FleetRoute{{Name: "public", Host: "gw", Port: 22023}}},
+		{Hostname: "mac-e", Alias: "mac-d", Routes: []FleetRoute{{Name: "public", Host: "gw", Port: 22022}}},
 	}
-	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.ts.net"}})
+	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.example.ts.net"}})
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", time.Now())
 	h.srv.Store.AdoptAccount(p, "mini", time.Now())
 
@@ -190,11 +190,11 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("a valid certificate: HTTP %d %s", code, raw)
 	}
-	if out.Login != "alice" || len(out.Machines) != 1 || out.Machines[0].Alias != "m4" {
-		t.Fatalf("alice sees %+v, want only m4 as alice", out)
+	if out.Login != "alice" || len(out.Machines) != 1 || out.Machines[0].Alias != "mac-c" {
+		t.Fatalf("alice sees %+v, want only mac-c as alice", out)
 	}
-	if got := routeNames(out.Machines[0].FleetMachine); len(got) != 2 || got[1] != "tailnet=mini.ts.net" {
-		t.Fatalf("m4 routes = %v", got)
+	if got := routeNames(out.Machines[0].FleetMachine); len(got) != 2 || got[1] != "tailnet=mini.example.ts.net" {
+		t.Fatalf("mac-c routes = %v", got)
 	}
 	if out.Machines[0].Relay {
 		t.Fatal("relay offered with no agent connected")
@@ -230,7 +230,7 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 // The relay flag follows a connected agent that can carry one.
 func TestFleetRoutesRelayFlag(t *testing.T) {
 	h := newFleetHarness(t)
-	host, stop := startSSHRelayAgent(t, h, "m4", testSSHD(t))
+	host, stop := startSSHRelayAgent(t, h, "mac-c", testSSHD(t))
 	h.srv.FleetRoutes = []FleetMachine{{Hostname: host, Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.2"}}}}
 	_, out, _ := postRoutes(t, h, asOperator, nil)
 	if len(out.Machines) != 1 || !out.Machines[0].Relay {

@@ -46,7 +46,7 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 	// Pause it, put a machine into maintenance, turn SPOT on, change a setting.
 	for _, kv := range [][2]string{
 		{PoolPausedPrefix + "icloud", "on"},
-		{NodeMaintenancePrefix + "m4", "upgrade"},
+		{NodeMaintenancePrefix + "mac-c", "upgrade"},
 		{SpotKey, "on"},
 		{PoolSkipPctKey, "90"},
 	} {
@@ -100,7 +100,7 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 	for _, want := range []struct{ kind, action, target string }{
 		{auditSubs, store.CredPut, "icloud"},
 		{auditSubs, "setting", PoolPausedPrefix + "icloud"},
-		{auditMachines, "node_maintenance", "m4"},
+		{auditMachines, "node_maintenance", "mac-c"},
 		{auditMachines, "setting", SpotKey},
 		{auditSubs, "setting", PoolSkipPctKey},
 		{auditSubs, store.CredDelete, "icloud"},
@@ -158,7 +158,7 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 
 func TestAdminAudit_CSV(t *testing.T) {
 	h, _, _ := newVaultHarness(t)
-	if code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": NodeMaintenancePrefix + "m4", "value": "upgrade"}); code != http.StatusOK {
+	if code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": NodeMaintenancePrefix + "mac-c", "value": "upgrade"}); code != http.StatusOK {
 		t.Fatal("maintenance")
 	}
 	resp, body := h.get(t, AuditPath+"?format=csv")
@@ -172,7 +172,7 @@ func TestAdminAudit_CSV(t *testing.T) {
 	if lines[0] != "at,kind,source,actor,action,target,outcome,detail" || len(lines) < 2 {
 		t.Fatalf("csv = %q", body)
 	}
-	if !strings.Contains(string(body), ",node_maintenance,machine:m4,") {
+	if !strings.Contains(string(body), ",node_maintenance,machine:mac-c,") {
 		t.Errorf("no maintenance row in %s", body)
 	}
 	// A cell an actor typed never starts a formula.
@@ -215,7 +215,7 @@ func TestAuditKinds(t *testing.T) {
 			t.Errorf("hub %s %s = %s; want %s", c.action, c.target, got, c.want)
 		}
 	}
-	if a := credActor("left · by verkyyi (gh:100)"); a != "verkyyi (gh:100)" {
+	if a := credActor("left · by ivan (gh:100)"); a != "ivan (gh:100)" {
 		t.Errorf("credActor = %q", a)
 	}
 }
@@ -321,14 +321,14 @@ func TestAdminPages_FilesUnderAdminPrefix(t *testing.T) {
 func TestLoadHistory(t *testing.T) {
 	var lh loadHistory
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
-	if s := lh.series("m4", now); s == nil || len(s) != 0 {
+	if s := lh.series("mac-c", now); s == nil || len(s) != 0 {
 		t.Fatalf("empty series = %v", s)
 	}
-	lh.add("m4.tail.ts.net", 4, 8, now.Add(-20*time.Minute))
-	lh.add("m4", 2, 8, now.Add(-10*time.Minute))
-	lh.add("m4", 8, 8, now)
-	lh.add("m4", 1, 0, now.Add(-5*time.Hour)) // too old: dropped
-	got := lh.series("m4.tail.ts.net", now)
+	lh.add("mac-c.example.ts.net", 4, 8, now.Add(-20*time.Minute))
+	lh.add("mac-c", 2, 8, now.Add(-10*time.Minute))
+	lh.add("mac-c", 8, 8, now)
+	lh.add("mac-c", 1, 0, now.Add(-5*time.Hour)) // too old: dropped
+	got := lh.series("mac-c.example.ts.net", now)
 	want := []float64{0.5, 0.5, 0.25, 0.25, 1}
 	if len(got) != len(want) {
 		t.Fatalf("series = %v; want %v", got, want)
@@ -338,7 +338,7 @@ func TestLoadHistory(t *testing.T) {
 			t.Fatalf("series = %v; want %v", got, want)
 		}
 	}
-	if len(lh.series("m4", now.Add(3*time.Hour))) != 0 {
+	if len(lh.series("mac-c", now.Add(3*time.Hour))) != 0 {
 		// Everything is older than two hours: the window is empty again.
 		t.Fatal("stale series not empty")
 	}

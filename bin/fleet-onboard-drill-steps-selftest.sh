@@ -221,7 +221,7 @@ RH="$T/remote/$LOGIN"; node "$RH"
 cat > "$T/invite.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" > "$T/invite.args"
-printf '{"person_id":"drill-ab","kind":"drill","login":"%s","host":"m4","home":"remotebox","approve_code":"fd_abcdefghijklmnopqrstuvwxyz"}\n' "$LOGIN"
+printf '{"person_id":"drill-ab","kind":"drill","login":"%s","host":"mac-a","home":"remotebox","approve_code":"fd_abcdefghijklmnopqrstuvwxyz"}\n' "$LOGIN"
 EOF
 cat > "$T/thin.py" <<EOF
 #!/usr/bin/env python3
@@ -267,7 +267,7 @@ grep -q '^restore: ' "$RH/restore.log" 2>/dev/null && ok 'O: the home was restar
 rm -f "$T/ls.own"
 
 # --- N: the home helper on a node-install login (issue #3499) -------------------
-# Drill 39 ran ON its --home (macmini = mini2): the login had the node install
+# Drill 39 ran ON its --home (mac-c = mac-d): the login had the node install
 # only (~/.claude/fleet/bin), no client one, and the drill's hard-wired
 # ~/.local/share/claude-fleet/bin/fleet-thin.py made step 10 «can't open file»
 # and hid onboard-guide as 240s of «no answer». No FLEET_DRILL_THIN here: the
@@ -301,8 +301,8 @@ rm -f "$RH/.config/claude-fleet/global/onboarded"
 
 # --- C: --home elsewhere, placed on remotebox: step 8 says so -------------------
 start_client "$RH" remotebox
-out=$(drill bash "$DRILL" --login "$LOGIN" --invite fd_abcdefghijklmnopqrstuvwxyz --home mini2 --name first 2>&1); rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +scratch +--home mini2: the session first runs on remotebox'; then ok 'C: a session off --home is a FAIL naming both (exit 1)'
+out=$(drill bash "$DRILL" --login "$LOGIN" --invite fd_abcdefghijklmnopqrstuvwxyz --home mac-d --name first 2>&1); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +scratch +--home mac-d: the session first runs on remotebox'; then ok 'C: a session off --home is a FAIL naming both (exit 1)'
 else bad "C: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL)' | head -n 3)"; fi
 printf '%s\n' "$out" | grep -Eq '^(PASS|FAIL) +attach' && bad 'C: step 9 ran after a misplaced 8' || ok 'C: nothing past step 8'
 
@@ -312,7 +312,7 @@ chmod +x "$T/invite-no.sh"
 out=$(drill env FLEET_DRILL_INVITE_SH="$T/invite-no.sh" bash "$DRILL" --login "$LOGIN" --home nowhere 2>&1); rc=$?
 if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q 'did not mint a drill person for nowhere'; then ok 'D: a refused mint is exit 2, nothing run'
 else bad "D: exit $rc: $(printf '%s' "$out" | head -n 3)"; fi
-out=$(drill bash "$DRILL" --login drill-x1 --home m5 2>&1); rc=$?
+out=$(drill bash "$DRILL" --login drill-x1 --home mac-b 2>&1); rc=$?
 [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q 'mints a drill person' && ok 'D: --home with no --invite needs a drill<x> login' || bad "D: login: exit $rc: $out"
 
 # --- E/F: the thin client's road, the real fleet-thin.py key path ---------------

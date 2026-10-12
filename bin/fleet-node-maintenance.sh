@@ -35,9 +35,9 @@
 #       single-machine fleet has no hub to tell, and no other machine to spare
 #
 # Output, one line on stdout:
-#   maintenance: ENTERED m5 · 升级 macOS · since 2026-10-05T12:00:00Z · by node:verkyyi@m5
-#   maintenance: LEFT m5
-#   maintenance: m5 online | maintenance · <reason> · since … | lost
+#   maintenance: ENTERED mac-b · 升级 macOS · since 2026-10-05T12:00:00Z · by node:dave@mac-b
+#   maintenance: LEFT mac-b
+#   maintenance: mac-b online | maintenance · <reason> · since … | lost
 #
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport, for the selftest;
 # FLEET_CONF_DIR/node.env is where the token comes from (fleet_node_env_file).

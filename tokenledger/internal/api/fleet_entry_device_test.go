@@ -117,16 +117,16 @@ func TestEntryRoutesFromReach(t *testing.T) {
 		}
 		h.srv.FleetRoutes = routes
 	}
-	setRoutes(`[{"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
-	  {"hostname":"m4","routes":[{"name":"public","host":"203.0.113.4","port":22023}]}]`)
+	setRoutes(`[{"hostname":"mac-d","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
+	  {"hostname":"mac-c","routes":[{"name":"public","host":"203.0.113.4","port":22023}]}]`)
 	if err := h.srv.Store.SetFleetSetting(EntryKey, "on", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
 	for m, rows := range map[string][]store.EntryReach{
-		"m5": {{Addr: "2001:db8::5", Port: 22122, Family: "ipv6", Reachable: true, CheckedAt: now},
+		"mac-d": {{Addr: "2001:db8::5", Port: 22122, Family: "ipv6", Reachable: true, CheckedAt: now},
 			{Addr: "203.0.113.5", Port: 22122, Family: "ipv4", Reachable: true, CheckedAt: now}},
-		"m4": {{Addr: "203.0.113.4", Port: 22123, Family: "ipv4", Reachable: false, Reason: "timeout", CheckedAt: now},
+		"mac-c": {{Addr: "203.0.113.4", Port: 22123, Family: "ipv4", Reachable: false, Reason: "timeout", CheckedAt: now},
 			{Addr: "198.51.100.4", Port: 22123, Family: "ipv4", Reachable: true, CheckedAt: now.Add(-time.Hour)}},
 	} {
 		if _, err := h.srv.Store.SetEntryReach(m, rows); err != nil {
@@ -158,8 +158,8 @@ func TestEntryRoutesFromReach(t *testing.T) {
 		return got
 	}
 	want := map[string]string{
-		"m5": "public=203.0.113.5:22022,entry=203.0.113.5:22122,entry-2=2001:db8::5:22122",
-		"m4": "public=203.0.113.4:22023", // unreachable, and a reach an hour old
+		"mac-d": "public=203.0.113.5:22022,entry=203.0.113.5:22122,entry-2=2001:db8::5:22122",
+		"mac-c": "public=203.0.113.4:22023", // unreachable, and a reach an hour old
 	}
 	got := list()
 	for m, w := range want {
@@ -168,16 +168,16 @@ func TestEntryRoutesFromReach(t *testing.T) {
 		}
 	}
 	// The node names its own entry=: that one alone.
-	setRoutes(`[{"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022},{"name":"entry","host":"ssh.example.com","port":22122}]}]`)
-	if g := list()["m5"]; g != "public=203.0.113.5:22022,entry=ssh.example.com:22122" {
-		t.Fatalf("m5 with entry=: %s", g)
+	setRoutes(`[{"hostname":"mac-d","routes":[{"name":"public","host":"203.0.113.5","port":22022},{"name":"entry","host":"ssh.example.com","port":22122}]}]`)
+	if g := list()["mac-d"]; g != "public=203.0.113.5:22022,entry=ssh.example.com:22122" {
+		t.Fatalf("mac-d with entry=: %s", g)
 	}
 	// The door off: as before.
 	if err := h.srv.Store.SetFleetSetting(EntryKey, "off", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	setRoutes(`[{"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022}]}]`)
-	if g := list()["m5"]; g != "public=203.0.113.5:22022" {
+	setRoutes(`[{"hostname":"mac-d","routes":[{"name":"public","host":"203.0.113.5","port":22022}]}]`)
+	if g := list()["mac-d"]; g != "public=203.0.113.5:22022" {
 		t.Fatalf("door off: %s", g)
 	}
 }

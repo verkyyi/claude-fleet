@@ -1161,7 +1161,7 @@ func ValidLogin(s string) bool {
 
 // ValidCreateLogin is the shape of login a create op may make. A login the
 // hub mints is ValidLogin. One it already holds as the person's active login
-// elsewhere (existing — a hand-made `24haowan` adopted on the first machine,
+// elsewhere (existing — a hand-made `acme` adopted on the first machine,
 // claude-fleet#2105) may be opened under the same name on another machine:
 // ValidExistingLogin, and never all digits (a numeric name reads as a uid).
 func ValidCreateLogin(s string, existing bool) bool {
@@ -1184,7 +1184,7 @@ func ValidCreateLogin(s string, existing bool) bool {
 // (user.<id>.machine_login) or put on a certificate — as opposed to
 // one the hub would create. The same alphabet as ValidLogin, so it still
 // cannot be an option or a path, but a leading digit is allowed: macOS
-// permits it, and `24haowan` is a real login (claude-fleet#1458). The hub
+// permits it, and `acme` is a real login (claude-fleet#1458). The hub
 // never MINTS a login of this shape; a create op makes one only as a second
 // machine's copy of a login the hub already holds (ValidCreateLogin).
 func ValidExistingLogin(s string) bool {
@@ -1253,7 +1253,7 @@ type SSHCAResult struct {
 // exists — the node's own outbound link. The hub never decrypts it; it only
 // pairs two WebSockets and copies bytes.
 //
-//	client ──wss SSHRelayPath?node=m4──▶ hub ──TypeSSHRelayOpen on the control channel──▶ agent
+//	client ──wss SSHRelayPath?node=mac-a──▶ hub ──TypeSSHRelayOpen on the control channel──▶ agent
 //	agent  ──wss SSHRelayDataPath?id=…──▶ hub        agent ──tcp──▶ 127.0.0.1:22
 //
 // The data stream is a SECOND connection the agent dials, not frames on the

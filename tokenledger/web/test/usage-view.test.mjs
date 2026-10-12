@@ -12,14 +12,14 @@ import { limitTiles, kpis, dayChart, modelBars, workRows, workTable, workList, w
 
 const WORK = {
   issue: [
-    { kind: 'issue', title: '合并额度与用量页', repo: 'verkyyi/claude-fleet', issue: 3188, epic: 'verkyyi/claude-fleet#3139', epic_title: '发布列车', tokens: 4200000, models: [['Opus 5.5', 3900000], ['Haiku 5.5', 300000]], sessions: ['issue-3188'], node: 'macmini', login: 'verky' },
-    { kind: 'issue', title: '', repo: 'verkyyi/futu-bot', issue: 412, tokens: 2000000, models: [['GPT-5.4 Codex', 2000000]], sessions: ['issue-412'], node: 'fleet-linux-0', login: 'fleet' },
+    { kind: 'issue', title: '合并额度与用量页', repo: 'verkyyi/claude-fleet', issue: 3188, epic: 'verkyyi/claude-fleet#3139', epic_title: '发布列车', tokens: 4200000, models: [['Opus 5.5', 3900000], ['Haiku 5.5', 300000]], sessions: ['issue-3188'], node: 'mac-c', login: 'carol' },
+    { kind: 'issue', title: '', repo: 'dave/futu-bot', issue: 412, tokens: 2000000, models: [['GPT-5.4 Codex', 2000000]], sessions: ['issue-412'], node: 'linux-a', login: 'fleet' },
     { kind: 'orch', title: '', tokens: 1800000, sessions: ['orchestrator', 'steward'] },
     { kind: 'none', title: '', tokens: 2000000, sessions: ['scratch-24'] },
   ],
   repo: [
     { kind: 'repo', title: 'verkyyi/claude-fleet', repo: 'verkyyi/claude-fleet', tokens: 4200000 },
-    { kind: 'repo', title: 'verkyyi/futu-bot', repo: 'verkyyi/futu-bot', tokens: 2000000 },
+    { kind: 'repo', title: 'dave/futu-bot', repo: 'dave/futu-bot', tokens: 2000000 },
     { kind: 'none', title: '', tokens: 3800000 },
   ],
   epic: [
@@ -131,12 +131,12 @@ test('where it went: three ways, each summing to the range; orch and none named 
 
 test('a task\'s drawer: sessions, models, where it ran, whose; a repo\'s lists its tasks', () => zh(() => {
   const rows = workRows(WORK, 'issue');
-  const d = workDrawer(rows[0], 'issue', { work: WORK, me: 'verkyyi', rangeKey: 'ui.use.r.7d' });
+  const d = workDrawer(rows[0], 'issue', { work: WORK, me: 'dave', rangeKey: 'ui.use.r.7d' });
   assert.match(d, /data-shell="close"/);
   assert.match(d, /issue-3188/);
   assert.match(d, /Opus 5.5 <span class="mono" style="color:var\(--muted\)">390 万/);
-  assert.match(d, /服务节点 <b>macmini<\/b> · 登录 <span class="mono">verky<\/span>/);
-  assert.match(d, /记在谁名下<\/dt><dd>verkyyi/);
+  assert.match(d, /服务节点 <b>mac-c<\/b> · 登录 <span class="mono">carol<\/span>/);
+  assert.match(d, /记在谁名下<\/dt><dd>dave/);
   assert.match(d, /7 天 420 万/);
   assert.match(workDrawer(rows[2], 'issue', { work: WORK }), /orchestrator<br>steward/);
   const repo = workDrawer(workRows(WORK, 'repo')[2], 'repo', { work: WORK });

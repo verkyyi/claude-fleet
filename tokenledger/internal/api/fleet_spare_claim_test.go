@@ -45,69 +45,69 @@ func TestSpareHandedToARecordedPerson(t *testing.T) {
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
 	sparesOn(t, h, "1")
-	m4 := openSpares(t, nodes["m4"], 1, control.CredsepSeparated)
-	m5 := openSpares(t, nodes["m5"], 1, control.CredsepSeparated)
-	readySpares(t, h, "m4", 1)
-	readySpares(t, h, "m5", 1)
+	macC := openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
+	macD := openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
+	readySpares(t, h, "mac-c", 1)
+	readySpares(t, h, "mac-d", 1)
 	if _, err := h.srv.Store.AdoptPrincipal(p, "lisi", "LiSi", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
 	t0 := time.Now()
-	a := assignAccount(t, h, FleetAccountRequest{PrincipalID: p, Hostname: "m5"})
+	a := assignAccount(t, h, FleetAccountRequest{PrincipalID: p, Hostname: "mac-d"})
 	if took := time.Since(t0); took > 3*time.Second {
 		t.Fatalf("assign took %v; want ≤ 3s", took)
 	}
-	if a.State != store.AccountActive || a.Login != m5[0] {
-		t.Fatalf("account on m5 = %+v; want active under the spare's %s in the same request", a, m5[0])
+	if a.State != store.AccountActive || a.Login != macD[0] {
+		t.Fatalf("account on mac-d = %+v; want active under the spare's %s in the same request", a, macD[0])
 	}
-	// Nothing for the person is sent: m5's next op is the refill's.
-	if _, op := expectAccountOp(t, nodes["m5"].tnode); op.Op != control.AccountCreate ||
-		!strings.HasPrefix(op.Login, "fleetu") || op.Login == m5[0] || op.FullName != store.SpareFullName {
-		t.Fatalf("m5 op = %+v; want only the refill's spare create", op)
+	// Nothing for the person is sent: mac-d's next op is the refill's.
+	if _, op := expectAccountOp(t, nodes["mac-d"].tnode); op.Op != control.AccountCreate ||
+		!strings.HasPrefix(op.Login, "fleetu") || op.Login == macD[0] || op.FullName != store.SpareFullName {
+		t.Fatalf("mac-d op = %+v; want only the refill's spare create", op)
 	}
 	// Their own name is unchanged; the spare's principal is gone.
 	if pr, err := h.srv.Store.Principal(p); err != nil || pr.Login != "lisi" {
 		t.Fatalf("principal = %+v, %v; want login lisi kept", pr, err)
 	}
-	if pr, err := h.srv.Store.PrincipalByLogin(m5[0]); err != nil || pr.ID != p {
-		t.Fatalf("PrincipalByLogin(%s) = %+v, %v; want %s", m5[0], pr, err, p)
+	if pr, err := h.srv.Store.PrincipalByLogin(macD[0]); err != nil || pr.ID != p {
+		t.Fatalf("PrincipalByLogin(%s) = %+v, %v; want %s", macD[0], pr, err, p)
 	}
 	for _, sp := range mustSpares(t, h) {
-		if sp.Login == m5[0] {
+		if sp.Login == macD[0] {
 			t.Fatalf("the claimed spare is still a spare: %+v", sp)
 		}
 	}
 
 	// A second machine: another spare, another name.
-	b := assignAccount(t, h, FleetAccountRequest{PrincipalID: p, Hostname: "m4"})
-	if b.State != store.AccountActive || b.Login != m4[0] || b.Login == a.Login {
-		t.Fatalf("account on m4 = %+v; want active under %s", b, m4[0])
+	b := assignAccount(t, h, FleetAccountRequest{PrincipalID: p, Hostname: "mac-c"})
+	if b.State != store.AccountActive || b.Login != macC[0] || b.Login == a.Login {
+		t.Fatalf("account on mac-c = %+v; want active under %s", b, macC[0])
 	}
 	// Every 「person → login there」 reads the account rows.
-	for host, login := range map[string]string{"m5": m5[0], "m4": m4[0]} {
+	for host, login := range map[string]string{"mac-d": macD[0], "mac-c": macC[0]} {
 		if who, err := h.srv.Store.PrincipalForLogin(host, login); err != nil || who != p {
 			t.Fatalf("PrincipalForLogin(%s, %s) = %q, %v; want %s", host, login, who, err, p)
 		}
 	}
 	_, logins, _, err := h.srv.fleetLoginsOf(p)
-	if err != nil || strings.Join(logins, ",") != strings.Join(sortedPair(m4[0], m5[0]), ",") {
+	if err != nil || strings.Join(logins, ",") != strings.Join(sortedPair(macC[0], macD[0]), ",") {
 		t.Fatalf("certificate logins = %v, %v; want both spares' names", logins, err)
 	}
 	loginOn, err := h.srv.homeLogins(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l, _ := loginOn("m5"); l != m5[0] {
-		t.Fatalf("home login on m5 = %q; want %s", l, m5[0])
+	if l, _ := loginOn("mac-d"); l != macD[0] {
+		t.Fatalf("home login on mac-d = %q; want %s", l, macD[0])
 	}
-	if l, _ := loginOn("m4"); l != m4[0] {
-		t.Fatalf("home login on m4 = %q; want %s", l, m4[0])
+	if l, _ := loginOn("mac-c"); l != macC[0] {
+		t.Fatalf("home login on mac-c = %q; want %s", l, macC[0])
 	}
 
 	// A login of theirs already there is left alone: no second spare.
-	if c := assignAccount(t, h, FleetAccountRequest{PrincipalID: p, Hostname: "m5"}); c.Login != m5[0] {
-		t.Fatalf("second assign on m5 = %+v", c)
+	if c := assignAccount(t, h, FleetAccountRequest{PrincipalID: p, Hostname: "mac-d"}); c.Login != macD[0] {
+		t.Fatalf("second assign on mac-d = %+v", c)
 	}
 }
 
@@ -134,34 +134,34 @@ func TestSpareOwnNameAndNoneReady(t *testing.T) {
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
 	sparesOn(t, h, "1")
-	openSpares(t, nodes["m4"], 1, control.CredsepSeparated)
-	openSpares(t, nodes["m5"], 1, control.CredsepSeparated)
-	readySpares(t, h, "m5", 1)
+	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
+	openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
+	readySpares(t, h, "mac-d", 1)
 	if _, err := h.srv.Store.AdoptPrincipal("gh:6102", "wangwu", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	a := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6102", Hostname: "m5", OwnName: true})
+	a := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6102", Hostname: "mac-d", OwnName: true})
 	if a.Login != "wangwu" || a.State == store.AccountActive {
 		t.Fatalf("own_name account = %+v; want wangwu queued", a)
 	}
-	if _, op := expectAccountOp(t, nodes["m5"].tnode); op.Op != control.AccountCreate || op.Login != "wangwu" {
+	if _, op := expectAccountOp(t, nodes["mac-d"].tnode); op.Op != control.AccountCreate || op.Login != "wangwu" {
 		t.Fatalf("op = %+v; want wangwu's own create", op)
 	}
-	if r := h.srv.spareReadyHosts(); r["m5"] != 1 {
-		t.Fatalf("m5 ready spares = %d; own_name must leave it", r["m5"])
+	if r := h.srv.spareReadyHosts(); r["mac-d"] != 1 {
+		t.Fatalf("mac-d ready spares = %d; own_name must leave it", r["mac-d"])
 	}
 
-	// m4's one spare taken, none left: the next person gets their own name.
+	// mac-c's one spare taken, none left: the next person gets their own name.
 	if _, err := h.srv.Store.AdoptPrincipal("gh:6103", "zhaoliu", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.srv.Store.AdoptPrincipal("gh:6104", "qianqi", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if a := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6103", Hostname: "m4"}); a.State != store.AccountActive {
-		t.Fatalf("first assign on m4 = %+v; want the spare", a)
+	if a := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6103", Hostname: "mac-c"}); a.State != store.AccountActive {
+		t.Fatalf("first assign on mac-c = %+v; want the spare", a)
 	}
-	b := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6104", Hostname: "m4"})
+	b := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6104", Hostname: "mac-c"})
 	if b.Login != "qianqi" || b.State == store.AccountActive {
 		t.Fatalf("assign with no spare ready = %+v; want qianqi queued", b)
 	}
@@ -188,29 +188,29 @@ func TestSpareTargetFollowsDesiredState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if target("m4") != 2 || target("m5") != 2 {
-		t.Fatalf("default target = %d / %d; want 2", target("m4"), target("m5"))
+	if target("mac-c") != 2 || target("mac-d") != 2 {
+		t.Fatalf("default target = %d / %d; want 2", target("mac-c"), target("mac-d"))
 	}
 	for _, n := range []int{1, 3, 0} {
 		b, _ := json.Marshal(DesiredBody{Spares: &n})
-		put("ep_m4-op", string(b))
-		if got := target("m4"); got != n {
+		put("ep_mac-c-op", string(b))
+		if got := target("mac-c"); got != n {
 			t.Fatalf("desired spare_accounts %d (%s): target %d", n, b, got)
 		}
-		if got := target("m5"); got != 2 {
-			t.Fatalf("m5 (no desired state) target %d; want the default 2", got)
+		if got := target("mac-d"); got != 2 {
+			t.Fatalf("mac-d (no desired state) target %d; want the default 2", got)
 		}
 	}
 	// A desired state that does not name the key keeps the setting.
-	put("ep_m4-op", `{"release":"abc123"}`)
+	put("ep_mac-c-op", `{"release":"abc123"}`)
 	setHubSetting(t, h.srv, SpareMaxKey, "4")
-	if target("m4") != 4 || target("m5") != 4 {
-		t.Fatalf("fleet.spare_max 4: %d / %d", target("m4"), target("m5"))
+	if target("mac-c") != 4 || target("mac-d") != 4 {
+		t.Fatalf("fleet.spare_max 4: %d / %d", target("mac-c"), target("mac-d"))
 	}
 	// The cap still bounds it.
-	put("ep_m4-op", `{"spare_accounts":9}`)
-	setHubSetting(t, h.srv, NodeUserCapPrefix+"m4", "3")
-	if got := target("m4"); got != 3 {
+	put("ep_mac-c-op", `{"spare_accounts":9}`)
+	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "3")
+	if got := target("mac-c"); got != 3 {
 		t.Fatalf("desired 9 under a cap of 3: target %d", got)
 	}
 }
@@ -222,20 +222,20 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
 	sparesOn(t, h, "3")
-	openSpares(t, nodes["m5"], 3, control.CredsepSeparated)
+	openSpares(t, nodes["mac-d"], 3, control.CredsepSeparated)
 	for i := 0; i < 3; i++ {
-		m, op := expectAccountOp(t, nodes["m4"].tnode)
+		m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 		word := control.CredsepSeparated
 		if i == 0 {
 			word = "" // not separated: failed
 		}
-		sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true, Credsep: word})
+		sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true, Credsep: word})
 	}
-	readySpares(t, h, "m5", 3)
-	readySpares(t, h, "m4", 2)
+	readySpares(t, h, "mac-d", 3)
+	readySpares(t, h, "mac-c", 2)
 	for _, sp := range mustSpares(t, h) {
-		if sp.Hostname == "m5" {
-			if ok, err := h.srv.Store.MarkAccountSent(sp.PrincipalID, "m5", store.AccountActive, store.AccountResetting, "op-reset", "", time.Now()); err != nil || !ok {
+		if sp.Hostname == "mac-d" {
+			if ok, err := h.srv.Store.MarkAccountSent(sp.PrincipalID, "mac-d", store.AccountActive, store.AccountResetting, "op-reset", "", time.Now()); err != nil || !ok {
 				t.Fatalf("mark resetting: %v %v", ok, err)
 			}
 			break
@@ -243,7 +243,7 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 	}
 	var snap NodesSnapshot
 	h.getJSON(t, "/v1/nodes", &snap)
-	want := map[string][3]int{"m4": {2, 0, 1}, "m5": {2, 1, 0}}
+	want := map[string][3]int{"mac-c": {2, 0, 1}, "mac-d": {2, 1, 0}}
 	for _, m := range snap.Machines {
 		w, ok := want[m.Hostname]
 		if !ok {
@@ -260,7 +260,7 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 	}
 	h.srv.replenishSpares(time.Now(), true)
 	h.srv.dispatchAccounts()
-	noOp(t, nodes, "m4", "m5")
+	noOp(t, nodes, "mac-c", "mac-d")
 }
 
 // A cluster stands on the roster as one place: its spares (a pod each, made
@@ -268,10 +268,10 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 func TestSpareClusterPlaceClaimAndRefill(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetAdmins = []string{"ivan"}
 	const place = "fleet-workers"
-	n := connectCaps(t, h, "cluster-op", place, "verkyyi", true, control.CapCredsep)
-	beatCount(t, n, place, "verkyyi", 0)
+	n := connectCaps(t, h, "cluster-op", place, "ivan", true, control.CapCredsep)
+	beatCount(t, n, place, "ivan", 0)
 	waitFor(t, 3*time.Second, "the cluster to be a fit place", func() bool {
 		for _, fit := range h.srv.spareFitMachines(time.Now()) {
 			if fit == place {
@@ -286,7 +286,7 @@ func TestSpareClusterPlaceClaimAndRefill(t *testing.T) {
 	pods := openSpares(t, n, 2, control.CredsepSeparated)
 	readySpares(t, h, place, 2)
 
-	if _, err := h.srv.Store.AdoptPrincipal("gh:6201", "arvin", "", time.Now()); err != nil {
+	if _, err := h.srv.Store.AdoptPrincipal("gh:6201", "erin", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	a := assignAccount(t, h, FleetAccountRequest{PrincipalID: "gh:6201", Hostname: place})

@@ -59,8 +59,8 @@ x//y
 a b/c
 café/x
 ümlaut
-/Users/v/p q/24haowan-monorepo
-GuangZhouShanyouGame/24haowan-monorepo
+/Users/v/p q/acme-monorepo
+acme-org/acme-monorepo
 o/r+1
 EOF
 nl_in="a/b

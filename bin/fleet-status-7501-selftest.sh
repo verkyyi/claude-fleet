@@ -142,8 +142,8 @@ say "state=working:id=sub1:app=claude-code"
 say "state=clear"
 sleep 0.5
 eq "C: a sub-task's report and clear keep the window's state" 'needs|perm|Bash: git push origin issue-1' "$(cs)"
-say "state=blocked:app=claude-code:kind=question 演练放在 m5 还是只在 m4？"
-want='needs|ask|演练放在 m5 还是只在 m4？'; waitfor C cs || true
+say "state=blocked:app=claude-code:kind=question 演练放在 mac-b 还是只在 mac-a？"
+want='needs|ask|演练放在 mac-b 还是只在 mac-a？'; waitfor C cs || true
 eq "C: blocked/question → needs · ask · its words" "$want" "$got"
 say "state=done:app=claude-code"
 want='done||'; waitfor C cs || true

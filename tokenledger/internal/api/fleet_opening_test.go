@@ -22,18 +22,18 @@ func beatCount(t *testing.T, n *fleetNode, host, osUser string, sessions int) {
 	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: host, OSUser: osUser, Sessions: sessions, NCPU: 8})
 }
 
-// leastBusyFleet is three admin machines and a non-admin one: m4 busy, m5
+// leastBusyFleet is three admin machines and a non-admin one: mac-c busy, mac-d
 // quiet, m6 idle but 维护中, m7 idle with no admin node to open a login.
 func leastBusyFleet(t *testing.T, h *harness) map[string]*fleetNode {
 	t.Helper()
-	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetAdmins = []string{"ivan"}
 	nodes := map[string]*fleetNode{}
 	for _, m := range []struct {
 		host     string
 		admin    bool
 		sessions int
-	}{{"m4", true, 5}, {"m5", true, 1}, {"m6", true, 0}, {"m7", false, 0}} {
-		user := "verkyyi"
+	}{{"mac-c", true, 5}, {"mac-d", true, 1}, {"m6", true, 0}, {"m7", false, 0}} {
+		user := "ivan"
 		if !m.admin {
 			user = "someone"
 		}
@@ -45,7 +45,7 @@ func leastBusyFleet(t *testing.T, h *harness) map[string]*fleetNode {
 		t.Fatal(err)
 	}
 	waitFor(t, 3*time.Second, "the roster to carry every beat", func() bool {
-		return h.srv.leastBusyMachine(time.Now()) == "m5"
+		return h.srv.leastBusyMachine(time.Now()) == "mac-d"
 	})
 	return nodes
 }
@@ -59,16 +59,16 @@ func TestAutoAssignLeastBusyPicksTheQuietMachine(t *testing.T) {
 
 	listPerson(t, h, p, "LiSi")
 	h.srv.onPrincipalSignIn(p, "LiSi")
-	_, op := expectAccountOp(t, nodes["m5"].tnode)
+	_, op := expectAccountOp(t, nodes["mac-d"].tnode)
 	if op.Op != control.AccountCreate || op.Login != "lisi" {
-		t.Fatalf("op = %+v; want a create of lisi (the GitHub username) on m5", op)
+		t.Fatalf("op = %+v; want a create of lisi (the GitHub username) on mac-d", op)
 	}
-	for _, host := range []string{"m4", "m6"} {
+	for _, host := range []string{"mac-c", "m6"} {
 		if got, ok := readMsg(nodes[host].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 			t.Fatalf("%s was sent %+v", host, got)
 		}
 	}
-	if a := accountState(t, h, p, "m5"); a.Login != "lisi" {
+	if a := accountState(t, h, p, "mac-d"); a.Login != "lisi" {
 		t.Fatalf("account = %+v", a)
 	}
 }
@@ -79,7 +79,7 @@ func TestAutoAssignLeastBusyNoneFit(t *testing.T) {
 	h := newFleetHarness(t)
 	const p = "gh:4005"
 	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetAdmins = []string{"ivan"}
 	n := connectNode(t, h, "m7-op", "m7", "someone", false)
 	beatCount(t, n, "m7", "someone", 0)
 	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
@@ -89,8 +89,8 @@ func TestAutoAssignLeastBusyNoneFit(t *testing.T) {
 		t.Fatal("a principal row was minted with nowhere to open it")
 	}
 	st := h.srv.accountStateOf(p, time.Now())
-	if st == nil || st.State != "none" || st.Ask != "verkyyi" {
-		t.Fatalf("account state = %+v; want none, ask verkyyi", st)
+	if st == nil || st.State != "none" || st.Ask != "ivan" {
+		t.Fatalf("account state = %+v; want none, ask ivan", st)
 	}
 	// No machine has an admin node online (claude-fleet#2997: the sweep had
 	// booted the admin login's own agent out): said, never a bare none.
@@ -108,16 +108,16 @@ func TestAutoAssignLeastBusyNoneFit(t *testing.T) {
 func TestAutoAssignUsernameFallsBack(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	connectNode(t, h, "m4-wang", "m4", "wangwu", false)
-	setHubSetting(t, h.srv, AutoAssignKey, "m4")
+	h.srv.FleetAdmins = []string{"ivan"}
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	connectNode(t, h, "mac-c-wang", "mac-c", "wangwu", false)
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-c")
 	if _, err := h.srv.Store.AdoptPrincipal("CaoJian", "caojian", "曹健", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	for i, c := range []struct{ username, want string }{
 		{"wangwu", "gh5001"},                // an OS login a machine already has
-		{"verkyyi", "gh5002"},               // the admin's own
+		{"ivan", "gh5002"},                  // the admin's own
 		{"caojian", "gh5003"},               // another principal's login
 		{"root", "gh5004"},                  // a system name
 		{"li-si", "gh5005"},                 // not a login a node makes
@@ -144,7 +144,7 @@ func TestAccountOpeningOnEveryDoor(t *testing.T) {
 	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
 
 	// The first look at /v1/nodes runs the placement itself (no sign-in
-	// callback needed): the person is opening on m5 at once.
+	// callback needed): the person is opening on mac-d at once.
 	code, body := asUID(t, h, http.MethodGet, "/v1/nodes", p, "", nil)
 	if code != http.StatusOK {
 		t.Fatalf("/v1/nodes: HTTP %d %s", code, body)
@@ -153,10 +153,10 @@ func TestAccountOpeningOnEveryDoor(t *testing.T) {
 	if err := json.Unmarshal(body, &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.Account == nil || snap.Account.State != "opening" || snap.Account.Machine != "m5" || snap.Account.EtaS < 5 {
+	if snap.Account == nil || snap.Account.State != "opening" || snap.Account.Machine != "mac-d" || snap.Account.EtaS < 5 {
 		t.Fatalf("/v1/nodes account = %+v", snap.Account)
 	}
-	m, op := expectAccountOp(t, nodes["m5"].tnode)
+	m, op := expectAccountOp(t, nodes["mac-d"].tnode)
 
 	code, body = asUID(t, h, http.MethodGet, control.HomePath, p, "", nil)
 	var home map[string]any
@@ -168,14 +168,14 @@ func TestAccountOpeningOnEveryDoor(t *testing.T) {
 		t.Fatalf("home eta_s = %v", home["eta_s"])
 	}
 
-	sendResult(t, nodes["m5"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, p, "m5", store.AccountActive)
+	sendResult(t, nodes["mac-d"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, p, "mac-d", store.AccountActive)
 	// Opened is not yet placeable (claude-fleet#2941): until the login's own
 	// node reports its fleet the doors still say opening.
-	if st := h.srv.accountStateOf(p, time.Now()); st == nil || st.State != "opening" || st.Stage != "fleet" || st.Machine != "m5" {
-		t.Fatalf("opened, no fleet yet: account = %+v; want opening (stage fleet) on m5", st)
+	if st := h.srv.accountStateOf(p, time.Now()); st == nil || st.State != "opening" || st.Stage != "fleet" || st.Machine != "mac-d" {
+		t.Fatalf("opened, no fleet yet: account = %+v; want opening (stage fleet) on mac-d", st)
 	}
-	loginReportsFleet(t, h, "m5", op.Login, machineA)
+	loginReportsFleet(t, h, "mac-d", op.Login, machineA)
 	code, body = asUID(t, h, http.MethodGet, "/v1/nodes", p, "", nil)
 	snap = NodesSnapshot{}
 	if err := json.Unmarshal(body, &snap); err != nil || code != http.StatusOK {
@@ -201,10 +201,10 @@ func TestAccountStateWithAutoAssignOff(t *testing.T) {
 	if err := json.Unmarshal(body, &snap); err != nil || code != http.StatusOK {
 		t.Fatalf("/v1/nodes: HTTP %d %v", code, err)
 	}
-	if snap.Account == nil || snap.Account.State != "none" || snap.Account.Ask != "verkyyi" {
-		t.Fatalf("account = %+v; want none, ask verkyyi", snap.Account)
+	if snap.Account == nil || snap.Account.State != "none" || snap.Account.Ask != "ivan" {
+		t.Fatalf("account = %+v; want none, ask ivan", snap.Account)
 	}
-	if got, ok := readMsg(nodes["m5"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+	if got, ok := readMsg(nodes["mac-d"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("a placement ran with auto-assign off: %+v", got)
 	}
 }
@@ -215,8 +215,8 @@ func TestAccountStateWithAutoAssignOff(t *testing.T) {
 // admin node of its machine connected — reads failed, saying why.
 func TestOpeningHasAnHonestETAAndAnEnd(t *testing.T) {
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
-	if got := h.srv.openingETAFor("m4"); got != openingETA {
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
+	if got := h.srv.openingETAFor("mac-c"); got != openingETA {
 		t.Fatalf("eta with no history = %d; want %d", got, openingETA)
 	}
 	now := time.Now()
@@ -228,12 +228,12 @@ func TestOpeningHasAnHonestETAAndAnEnd(t *testing.T) {
 		t.Fatalf("late account = %+v; want opening with the time left until it gives up, never 5 s", st)
 	}
 	st := h.srv.accountStateOf(inv.PersonID, now.Add(openingGiveUp+time.Minute))
-	if st == nil || st.State != "failed" || !strings.Contains(st.Why, "no answer from m4") || st.Ask == "" {
-		t.Fatalf("stuck account = %+v; want failed: no answer from m4, and who to ask", st)
+	if st == nil || st.State != "failed" || !strings.Contains(st.Why, "no answer from mac-c") || st.Ask == "" {
+		t.Fatalf("stuck account = %+v; want failed: no answer from mac-c, and who to ask", st)
 	}
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
-	if got := h.srv.openingETAFor("m4"); got != 60 {
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
+	if got := h.srv.openingETAFor("mac-c"); got != 60 {
 		t.Fatalf("eta after a fast create = %d; want the 60 s floor", got)
 	}
 
@@ -294,16 +294,16 @@ func loginReportsFleet(t *testing.T, h *harness, host, login, machine string) {
 }
 
 // A login the node opened but whose fleet never reports (claude-fleet#2941,
-// the 10th C9 drill: mini2 said create ok, its fleet ran, the hub went on
-// saying 「mini2: 没有你的登录」 and the client waited for nothing): the
+// the 10th C9 drill: mac-f said create ok, its fleet ran, the hub went on
+// saying 「mac-f: 没有你的登录」 and the client waited for nothing): the
 // doors say opening (stage fleet) for openingSettle, then failed naming the
 // missing step; a refused placement names the login instead of 没有你的登录;
 // once its fleet reports the person reads as anyone with a login.
 func TestOpenedLoginWithoutFleetIsNotDone(t *testing.T) {
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
 
 	now := time.Now()
 	st := h.srv.accountStateOf(inv.PersonID, now)
@@ -311,8 +311,8 @@ func TestOpenedLoginWithoutFleetIsNotDone(t *testing.T) {
 		t.Fatalf("opened, no fleet: account = %+v; want opening, stage fleet, eta ≤ %d", st, openingSettleETA)
 	}
 	notes := h.srv.openingNotes(inv.PersonID)
-	if !strings.Contains(notes["m4"], op.Login) || !strings.Contains(notes["m4"], "fleet 还没报上来") {
-		t.Fatalf("placement note for m4 = %q; want the opened login named", notes["m4"])
+	if !strings.Contains(notes["mac-c"], op.Login) || !strings.Contains(notes["mac-c"], "fleet 还没报上来") {
+		t.Fatalf("placement note for mac-c = %q; want the opened login named", notes["mac-c"])
 	}
 	st = h.srv.accountStateOf(inv.PersonID, now.Add(openingSettle+time.Minute))
 	if st == nil || st.State != "failed" || !strings.Contains(st.Why, "never connected") || st.Ask == "" {
@@ -320,19 +320,19 @@ func TestOpenedLoginWithoutFleetIsNotDone(t *testing.T) {
 	}
 
 	// Its node connects but cannot read its fleet: the why says so.
-	n := connectNode(t, h, "m4-"+op.Login+"-first", "m4", op.Login, false)
-	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: op.Login, FleetError: "fleet-control: no fleet.conf", ObservedAt: time.Now()})
+	n := connectNode(t, h, "mac-c-"+op.Login+"-first", "mac-c", op.Login, false)
+	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: op.Login, FleetError: "fleet-control: no fleet.conf", ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, "the login's beat to land", func() bool {
 		st := h.srv.accountStateOf(inv.PersonID, time.Now().Add(openingSettle+time.Minute))
 		return st != nil && strings.Contains(st.Why, "no fleet.conf")
 	})
 
-	loginReportsFleet(t, h, "m4", op.Login, machineB)
+	loginReportsFleet(t, h, "mac-c", op.Login, machineB)
 	if st := h.srv.accountStateOf(inv.PersonID, time.Now().Add(openingSettle+time.Minute)); st != nil {
 		t.Fatalf("its fleet reported, yet account = %+v", st)
 	}
-	if notes := h.srv.openingNotes(inv.PersonID); notes["m4"] != "" {
-		t.Fatalf("its fleet reported, yet the placement note = %q", notes["m4"])
+	if notes := h.srv.openingNotes(inv.PersonID); notes["mac-c"] != "" {
+		t.Fatalf("its fleet reported, yet the placement note = %q", notes["mac-c"])
 	}
 }
 
@@ -354,14 +354,14 @@ func TestOpeningPastItsOwnETAFails(t *testing.T) {
 	}
 
 	h, nodes, inv := drillOnFleet(t)
-	m, op := expectAccountOp(t, nodes["m4"].tnode)
-	// m4 has opened one before, in a minute: its median is the 60 s floor.
-	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
-	if got := h.srv.openingETAFor("m4"); got != 60 {
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
+	// mac-c has opened one before, in a minute: its median is the 60 s floor.
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
+	if got := h.srv.openingETAFor("mac-c"); got != 60 {
 		t.Fatalf("eta = %d; want 60", got)
 	}
-	slow := store.FleetAccount{Hostname: "m4", Login: "slow", State: store.AccountCreating, RequestedAt: time.Now().Add(-openingOverFloor - time.Minute)}
+	slow := store.FleetAccount{Hostname: "mac-c", Login: "slow", State: store.AccountCreating, RequestedAt: time.Now().Add(-openingOverFloor - time.Minute)}
 	if why := h.srv.openingStuck(slow, time.Now()); !strings.Contains(why, "usually takes about 1 min") {
 		t.Fatalf("a create past 3 × its machine's median: why = %q", why)
 	}

@@ -246,10 +246,10 @@ S1="$WORK/one"
 "$TMUX_BIN" -S "$S1" set -g allow-passthrough "$NODE_V"
 "$TMUX_BIN" -S "$S1" new-window -d -t one: -n b "exec sleep 600"
 "$TMUX_BIN" -S "$S1" set -w -t one:a @agent_status \
-  '{"state":"blocked","kind":"question","msg":"演练放在 m5 还是只在 m4？","app":"claude-code","ts":1}'
+  '{"state":"blocked","kind":"question","msg":"演练放在 mac-b 还是只在 mac-a？","app":"claude-code","ts":1}'
 printf '%s\n' "$HOOKS" | sed "s#~/.claude/fleet/bin/#$BIN/#g" > "$WORK/hooks.conf"
 "$TMUX_BIN" -S "$S1" source-file "$WORK/hooks.conf"
-Q="state=blocked:app=claude-code:kind=question:msg=$(printf '演练放在 m5 还是只在 m4？' | base64)"
+Q="state=blocked:app=claude-code:kind=question:msg=$(printf '演练放在 mac-b 还是只在 mac-a？' | base64)"
 steps='{"chain":["one"],"steps":[["set",[["one","set","-g","@agent_replay","3"],["one","select-window","-t","one:b"],["one","select-window","-t","one:a"]]],["to-b",[["one","select-window","-t","one:b"]]],["to-a",[["one","select-window","-t","one:a"]]]]}'
 # first without @agent_replay: attach + switches write nothing
 J0=$(python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" one one '{"chain":["one"],"steps":[["to-b",[["one","select-window","-t","one:b"]]],["to-a",[["one","select-window","-t","one:a"]]]]}')

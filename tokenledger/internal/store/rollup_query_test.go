@@ -18,7 +18,7 @@ func seedReview(t *testing.T, s *Store) {
 		e.SessionID, e.CWD, e.Model = session, cwd, model
 		e.TS = base.Add(time.Duration(min) * time.Minute)
 		e.CacheRead, e.InputTokens, e.IsSidechain = cacheRead, input, side
-		e.OSUser, e.Effort, e.Entrypoint = "verkyyi", "xhigh", "cli"
+		e.OSUser, e.Effort, e.Entrypoint = "frank", "xhigh", "cli"
 		if !priced {
 			e.CostUSD = nil
 		}

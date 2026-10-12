@@ -5,7 +5,7 @@
 #   A  the degenerate case: hub off (no CCQUOTA_FLEET, a worker map on disk all
 #      the same) → dash-reap.sh on a key no window here holds answers exactly as
 #      before (refused:target, exit 4) and the hub is never written to.
-#   B  hub on, the key on m4 (the worker map), --yes → ONE worker_reap write
+#   B  hub on, the key on mac-a (the worker map), --yes → ONE worker_reap write
 #      naming the map's full worker_id; the node's terminal fields come back as a
 #      local reap's answer: reaped:full → 0 · reaped:keep → 0 · skip:live → 3 with
 #      the node's reason (stderr1) on stderr · refused:* → 4 · an older node that
@@ -46,9 +46,9 @@ w7=$(tf new-window -d -P -F '#{window_id}' -n issue-7 'while :; do sleep 300; do
 tf set-window-option -t "$w7" @issue 7
 SP=$(tf display-message -p '#{socket_path}')
 
-# The worker map: issue-9 lives on m4 (another machine's fleet UUID).
-M4=11111111-2222-4333-8444-555555555555
-printf '%s/issue-9\tm4\t\n%s/issue-7\tm4\t\n' "$M4" "$M4" > "$FLEET_CONF_DIR/control/hub-workers.tsv"
+# The worker map: issue-9 lives on mac-a (another machine's fleet UUID).
+MAC_A=11111111-2222-4333-8444-555555555555
+printf '%s/issue-9\tmac-a\t\n%s/issue-7\tmac-a\t\n' "$MAC_A" "$MAC_A" > "$FLEET_CONF_DIR/control/hub-workers.tsv"
 
 # The write client's seam: log the call, answer with $FLEET_CONF_DIR/answer.
 WRITES="$WORK/writes"
@@ -72,7 +72,7 @@ export CCQUOTA_FLEET=1
 # --- C: no --yes → skip:needs-confirm, nothing sent --------------------------------
 reap issue-9
 ok; [ "$OUT" = skip:needs-confirm ] && [ "$RC" = 3 ] || fail "C: no --yes → skip:needs-confirm 3" "$OUT rc=$RC"
-ok; case "$ERR" in *m4*--yes*) ;; *) fail "C: the reason names the machine and --yes" "$ERR" ;; esac
+ok; case "$ERR" in *mac-a*--yes*) ;; *) fail "C: the reason names the machine and --yes" "$ERR" ;; esac
 ok; [ "$(nwrites)" = 0 ] || fail "C: no --yes must send nothing"
 
 # --- B: the node's terminal fields → a local reap's answer --------------------------
@@ -82,12 +82,12 @@ ok; [ "$OUT" = reaped:full ] && [ "$RC" = 0 ] || fail "B: succeeded → reaped:f
 ok; [ "$(nwrites)" = 1 ] || fail "B: exactly one hub write" "$(cat "$WRITES" 2>/dev/null)"
 ok; [ "$(cut -f1 "$WRITES")" = worker_reap ] || fail "B: the write is worker_reap" "$(cat "$WRITES")"
 ok; python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["worker_id"]==sys.argv[2] and d.get("idempotency_key") else 1)' \
-      "$(cut -f2 "$WRITES")" "$M4/issue-9" || fail "B: names the map's full worker_id + an idempotency key" "$(cut -f2 "$WRITES")"
-ok; case "$ERR" in *"lives on m4"*) ;; *) fail "B: stderr says where it was reaped" "$ERR" ;; esac
+      "$(cut -f2 "$WRITES")" "$MAC_A/issue-9" || fail "B: names the map's full worker_id + an idempotency key" "$(cut -f2 "$WRITES")"
+ok; case "$ERR" in *"lives on mac-a"*) ;; *) fail "B: stderr says where it was reaped" "$ERR" ;; esac
 # the repo-qualified spelling (a 2+ repo fleet) resolves through wid: the same way
-printf '%s/acme-app:issue-11\tm4\t\n' "$M4" >> "$FLEET_CONF_DIR/control/hub-workers.tsv"
+printf '%s/acme-app:issue-11\tmac-a\t\n' "$MAC_A" >> "$FLEET_CONF_DIR/control/hub-workers.tsv"
 reap acme-app:issue-11 --yes
-ok; [ "$OUT" = reaped:full ] && tail -1 "$WRITES" | grep -q "$M4/acme-app:issue-11" \
+ok; [ "$OUT" = reaped:full ] && tail -1 "$WRITES" | grep -q "$MAC_A/acme-app:issue-11" \
   || fail "B: <slug>:issue-N goes to the hub as its worker_id" "$OUT $(tail -1 "$WRITES")"
 
 answer '{'"$OP"',"status":"succeeded","result":{"how":"reaped:keep","token":"reaped:keep","exit":0}}'
@@ -143,11 +143,11 @@ ok; [ "$OUT" = reaped:full ] && [ "$(nwrites)" = $((n + 1)) ] || fail "D: the fl
 # --- E: the sidebar's remote 回收 --------------------------------------------------
 # the sidebar's own cache lives under $TMPDIR (FLEET_C): a sandbox one
 SBT="$WORK/tmp"; G="$SBT/.claude-dash/global"; mkdir -p "$G"
-printf '#ts\037%s\nwid:%s/issue-9\037m4\037\037\037\037\037\037issue-9\037\037\n' "$(date +%s)" "$M4" > "$G/remote_$L"
+printf '#ts\037%s\nwid:%s/issue-9\037mac-a\037\037\037\037\037\037issue-9\037\037\n' "$(date +%s)" "$MAC_A" > "$G/remote_$L"
 date +%s > "$G/hub_ok"
 n=$(nwrites)
 TMPDIR="$SBT" TMUX="$SP,0,0" FLEET_HUB_WRITE_CMD="$STUB" CCQUOTA_FLEET=1 \
-  bash "$BIN/fleet-sidebar-remote.sh" reap "$L" "wid:$M4/issue-9" >/dev/null 2>"$WORK/err"; RC=$?
+  bash "$BIN/fleet-sidebar-remote.sh" reap "$L" "wid:$MAC_A/issue-9" >/dev/null 2>"$WORK/err"; RC=$?
 ok; [ "$RC" = 0 ] && [ "$(nwrites)" = $((n + 1)) ] && [ "$(tail -1 "$WRITES" | cut -f1)" = worker_reap ] \
   || fail "E: the sidebar's 回收 is one worker_reap write" "rc=$RC $(cat "$WORK/err")"
 

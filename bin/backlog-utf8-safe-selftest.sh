@@ -1,7 +1,7 @@
 #!/bin/bash
 # backlog-utf8-safe-selftest.sh — the "byte-safe backlog render" rail (issue #382).
 #
-# A stray non-UTF-8 byte in an issue title/milestone (surfaced in the 24haowan
+# A stray non-UTF-8 byte in an issue title/milestone (surfaced in the acme
 # monorepo fleet) made bin/tmux-issues-rows.sh abort the WHOLE panel with
 # "Illegal byte sequence": under a UTF-8 locale its byte-shuffle ops validate
 # UTF-8 and bail on a bad byte — `cut -f1 | grep -vxF | sort -Vu` (milestone rank)

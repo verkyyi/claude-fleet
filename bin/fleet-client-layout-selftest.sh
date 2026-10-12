@@ -46,7 +46,7 @@ def has(what, text, part, yes=True):
         errs.append("%s: %r %s %r" % (what, text, "lacks" if yes else "has", part))
 rec = {"i": 3, "n": 8, "state": "working", "kind": "", "key": "#1894",
        "title": "机器上一直有会话在忙，也照样更新", "pr": "#1885✓", "repo": "claude-fleet",
-       "slug": "verkyyi/claude-fleet", "node": "m5", "lost": False, "direct": False, "ask": 1,
+       "slug": "verkyyi/claude-fleet", "node": "mac-b", "lost": False, "direct": False, "ask": 1,
        "ctx_left": 62, "ctx_band": "ok", "ctx_ts": 1000, "model": "Opus 5.5", "effort": "high"}
 os.environ["FLEET_UI_LANG"] = "zh"
 # the design's three widths (issue #3194): 45 · 80 · 140, the ⌘P panel's glyphs
@@ -58,7 +58,7 @@ for cols in (140, 80, 45):
     eq("%d: no colour while all is well" % cols, bg, None)
     for part in ("»", "#1894", "62%", "机器上"):
         has("%d: never dropped" % cols, text, part)
-    for gone in ("‹", "›", "@m5", "m5", "●", "working"):
+    for gone in ("‹", "›", "@mac-b", "mac-b", "●", "working"):
         has("%d: no %s (#3194)" % (cols, gone), text, gone, False)
 eq("140: all of it", w[140].split(), ["»", "在干活", "·", "#1894", rec["title"], "·", "claude-fleet",
                                       "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5", "·", "high",
@@ -86,18 +86,18 @@ t, _ = at(state="sleeping"); has("asleep: ∙ 空闲", t, " ∙ 空闲 · ")
 for s in ("looping", "preparing", "waking"):
     has("%s: » 在干活" % s, at(state=s)[0], " » 在干活 · ")
 t, bg = at(lost=True)
-eq("lost: grey", bg, tb.BG_DOWN); has("lost: ?, no word", t, " ? #1894 "); has("lost: the machine", t, "· m5 连不上")
-t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% m5 连不上", t, "62% m5 连不上")
+eq("lost: grey", bg, tb.BG_DOWN); has("lost: ?, no word", t, " ? #1894 "); has("lost: the machine", t, "· mac-b 连不上")
+t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% mac-b 连不上", t, "62% mac-b 连不上")
 eq("lost 45: still the width", tb.cells(t), 45)
 t, bg = tb.fit(rec, 80, down="1000", now=1004)
-eq("reconnecting: grey", bg, tb.BG_DOWN); has("reconnecting: 连不上", t, "m5 连不上")
+eq("reconnecting: grey", bg, tb.BG_DOWN); has("reconnecting: 连不上", t, "mac-b 连不上")
 t, bg = tb.fit(rec, 80, route="relay", now=1060)
-eq("relay: grey", bg, tb.BG_DOWN); has("relay: ? · 经中转", t, "· m5 经中转"); has("relay: ?", t, " ? #1894")
-t, bg = tb.fit(rec, 80, via="auto 中转", now=1060); has("auto relay: 经中转", t, "m5 经中转")
+eq("relay: grey", bg, tb.BG_DOWN); has("relay: ? · 经中转", t, "· mac-b 经中转"); has("relay: ?", t, " ? #1894")
+t, bg = tb.fit(rec, 80, via="auto 中转", now=1060); has("auto relay: 经中转", t, "mac-b 经中转")
 t, bg = tb.fit(rec, 80, via="manual Tailscale", now=1060); eq("Tailscale: all well", bg, None)
-has("Tailscale: no machine", t, "m5", False)
+has("Tailscale: no machine", t, "mac-b", False)
 t, bg = tb.fit(rec, 80, down="1000", pin="relay", tries="3", now=1004)
-has("pinned, reconnecting: 第 N 次", t, "m5 连不上 · 第 3 次重连")
+has("pinned, reconnecting: 第 N 次", t, "mac-b 连不上 · 第 3 次重连")
 eq("grey: the ? stays yellow", [p[1] for p in tb.layout(rec, 80, route="relay", now=1060)[0] if p[2] == "sym"],
    ["colour3"])
 eq("lost wins over asking: grey", tb.fit(dict(rec, state="needs", kind="ask", lost=True), 80, now=1060)[1], tb.BG_DOWN)
@@ -119,9 +119,9 @@ eq("» and ∙ are one cell, as the panel counts", (tb.cells("»"), tb.cells("�
 os.environ["FLEET_SHELL"] = "1"
 sb = load("sb", "fleet-sidebar.py")
 rows = [["hdr", "verkyyi/claude-fleet", "", "claude-fleet", ""],
-        ["@1", "working", "●", "one", "", "", "0", "", "m5", "#1", "—", "", ""],
-        ["@2", "needs", "!", "two", "", "", "0", sb.tr("needs_perm"), "m4!", "#2", "#9✓", "", ""],
-        ["hdr", "verkyyi/other", "", "other", ""],
+        ["@1", "working", "●", "one", "", "", "0", "", "mac-b", "#1", "—", "", ""],
+        ["@2", "needs", "!", "two", "", "", "0", sb.tr("needs_perm"), "mac-a!", "#2", "#9✓", "", ""],
+        ["hdr", "dave/other", "", "other", ""],
         ["@3", "done", "✓", "three", "", "", "0", "", "", "—", "", "", ""]]
 r = sb.bar_record(rows, "@2")
 eq("record: place", (r["i"], r["n"]), (2, 3)); eq("record: perm", r["kind"], "perm")
@@ -129,7 +129,7 @@ eq("record: what it asks (#3194)", sb.bar_record([rows[2][:13] + ["", "", "", ""
    "Bash: git push")
 eq("record: nothing asked, no words", sb.bar_record(rows, "@1")["q"], "")
 eq("record: key / pr", (r["key"], r["pr"]), ("#2", "#9✓")); eq("record: lost", r["lost"], True)
-eq("record: machine", r["node"], "m4"); eq("record: repo in a fleet of two", r["repo"], "claude-fleet")
+eq("record: machine", r["node"], "mac-a"); eq("record: repo in a fleet of two", r["repo"], "claude-fleet")
 eq("record: slug", r["slug"], "verkyyi/claude-fleet"); eq("record: waiting rows", r["ask"], 1)
 eq("record: a local row carries no wid", r["wid"], "")
 eq("record: a remote row's wid (#1932)", sb.bar_record([["wid:f/w9"] + rows[1][1:]], "wid:f/w9")["wid"], "f/w9")
@@ -188,8 +188,8 @@ tb._WORDS.clear(); tb.FV._WORDS.clear()
 t, _ = tb.fit(dict(rec, state="done", pr="merged"), 140, now=1060)
 has("en: done", t, " ✓ done · #1894"); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
 has("en: PR closed", tb.fit(dict(rec, pr="closed"), 140, now=1060)[0], "PR closed")
-has("en: unreachable", tb.fit(rec, 80, down="1", now=1060, pin="direct", tries="3")[0], "m5 unreachable · retry 3")
-has("en: via relay", tb.fit(rec, 80, route="relay", now=1060)[0], "m5 via relay")
+has("en: unreachable", tb.fit(rec, 80, down="1", now=1060, pin="direct", tries="3")[0], "mac-b unreachable · retry 3")
+has("en: via relay", tb.fit(rec, 80, route="relay", now=1060)[0], "mac-b via relay")
 has("en: N min ago", "".join(p[0] for p in tb.ctx_parts(rec, 140, 1420)), " · 7 min ago")
 src = open(os.path.join(sys.argv[1], "fleet-topbar.py"), encoding="utf-8").read()
 tree = ast.parse(src)
@@ -308,10 +308,10 @@ try:
     # the stage: one window standing for a machine's session, the record the list writes
     (work / 'stage.conf').write_text(fill('tmux-shell-stage.conf'))
     tm('-f', str(work / 'stage.conf'), 'new-session', '-d', '-s', 'fc-stage', '-x', '160', '-y', '29',
-       '-n', 'm4 x', 'cat -v', s=stage)
+       '-n', 'mac-a x', 'cat -v', s=stage)
     (state / 'switch-bar.json').write_text(json.dumps(
         {"i": 3, "n": 8, "state": "working", "kind": "", "key": "#1894", "title": "TitleOfTheSession",
-         "pr": "", "repo": "", "slug": "", "node": "m4", "lost": False, "direct": False, "ask": 0,
+         "pr": "", "repo": "", "slug": "", "node": "mac-a", "lost": False, "direct": False, "ask": 0,
          # issue #2717: the `%` must survive the stage's status-left as drawn
          "ctx_left": 62, "ctx_band": "ok", "ctx_ts": int(time.time()), "model": "Opus 5.5", "effort": "high"}))
     tm('set-option', '-t', 'fc-stage', '@fleet_bar_gen', '1', s=stage)
@@ -349,7 +349,7 @@ try:
     check(wait(lambda: '62% ' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
           'the top line draws no 剩余 %% · model (#2717): %r' % tm('capture-pane', '-p', '-t', right).split('\n')[0])
     top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
-    check('#1894' in top and 'TitleOfTheSession' in top and '@m4' not in top, 'the top line: %r (stage cw=%s, pane %s)' % (top, tm('list-clients', '-F', '#{client_width}', s=stage), tm('display-message', '-p', '-t', right, '#{pane_width}')))
+    check('#1894' in top and 'TitleOfTheSession' in top and '@mac-a' not in top, 'the top line: %r (stage cw=%s, pane %s)' % (top, tm('list-clients', '-F', '#{client_width}', s=stage), tm('display-message', '-p', '-t', right, '#{pane_width}')))
     print('B: 160 columns — the list beside the session; the top line: %s' % top.strip())
     os.write(master, b'\x1bOR')   # F3, xterm's
     check(wait(lambda: '^[OR' in tm('capture-pane', '-p', '-t', 'fc-stage:', s=stage), 4),

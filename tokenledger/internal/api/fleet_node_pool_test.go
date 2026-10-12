@@ -38,7 +38,7 @@ func TestNodePoolManifest(t *testing.T) {
 		t.Fatalf("no token: %d", code)
 	}
 	// Any enrollment token, one with no person behind it too (as a machine's is).
-	machine := enrollAs(t, h, "bob-m4", "m4", "bob") // no fleet account is bob
+	machine := enrollAs(t, h, "bob-mac-c", "mac-c", "bob") // no fleet account is bob
 	if code, got, body := getPool(t, h, machine); code != http.StatusOK || len(got.Pool) != 0 {
 		t.Fatalf("empty pool: %d %s", code, body)
 	}

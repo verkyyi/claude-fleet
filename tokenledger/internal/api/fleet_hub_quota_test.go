@@ -163,12 +163,12 @@ func TestHubQuotaReadsThroughRelay(t *testing.T) {
 	putPool(t, h, credvault.Claude, "gmail", credvault.Secret{SetupToken: "sk-ant-oat01-GMAILSECRET", ExpiresAt: &exp})
 	putPool(t, h, credvault.Claude, "nobody", credvault.Secret{SetupToken: "sk-ant-oat01-NOBODYSECRET", ExpiresAt: &exp})
 	putPool(t, h, credvault.Claude, "paused", credvault.Secret{SetupToken: "sk-ant-oat01-PAUSEDSECRET", ExpiresAt: &exp, AccountUUID: gmailUUID})
-	putPool(t, h, credvault.Codex, "verky", credvault.Secret{RefreshToken: "rt-CODEXSECRET", AccountID: "acct-1", IDToken: quotaIDToken("acct-1", "user-1")})
+	putPool(t, h, credvault.Codex, "heidi", credvault.Secret{RefreshToken: "rt-CODEXSECRET", AccountID: "acct-1", IDToken: quotaIDToken("acct-1", "user-1")})
 	if err := h.srv.Store.SetFleetSetting(PoolPausedPrefix+"paused", "on", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	// The gmail label names exactly one account; nobody names none.
-	if err := h.srv.Store.UpsertAccount(model.Identity{AccountUUID: gmailUUID, Email: "verky.yi@gmail.com"}, "max", ""); err != nil {
+	if err := h.srv.Store.UpsertAccount(model.Identity{AccountUUID: gmailUUID, Email: "heidi.yi@gmail.com"}, "max", ""); err != nil {
 		t.Fatal(err)
 	}
 	// An older node reading of icloud, the 95% of October 5.

@@ -56,8 +56,8 @@ func debugReportHarness(t *testing.T) (*harness, *debugClock, *debugStarts) {
 	starts := &debugStarts{}
 	h.srv.Debug.ShapesFile = filepath.Join("..", "..", "..", "conf", "secret-shapes.list")
 	h.srv.Debug.Start = starts.start
-	h.srv.Debug.Notify = "macmini/verky"
-	for label, who := range map[string][2]string{"dbg": {"macmini", "fleetdebug"}, "orch": {"macmini", "verky"}} {
+	h.srv.Debug.Notify = "mac-e/heidi"
+	for label, who := range map[string][2]string{"dbg": {"mac-e", "fleetdebug"}, "orch": {"mac-e", "heidi"}} {
 		h.enroll(t, label)
 		ident := model.Identity{AccountUUID: "acct-" + label, Hostname: who[0], OSUser: who[1]}
 		if err := h.srv.Store.UpsertAccount(ident, "max", ""); err != nil {
@@ -114,7 +114,7 @@ func debugBundleTGZ(t *testing.T, files map[string]string, tamper, extra map[str
 var debugGoodFiles = map[string]string{
 	"doctor.txt":       "  FAIL  tls  CERTIFICATE_VERIFY_FAILED (python.org python3 has no CA bundle)\n",
 	"route.txt":        "hub: dns ok · tls: <redacted:authorization>\n",
-	"logs/connect.log": "2026-10-10T06:00:00Z connect m5 via relay: closed by client after 1s\n",
+	"logs/connect.log": "2026-10-10T06:00:00Z connect mac-d via relay: closed by client after 1s\n",
 	"system.txt":       "macOS 15.1 · arm64\n",
 	"tools.txt":        "python3 /Library/Frameworks/Python.framework/Versions/3.13/bin/python3\n",
 }
@@ -214,7 +214,7 @@ func TestDebugBundleToPage(t *testing.T) {
 	auth := map[string]string{"Authorization": "FleetDebug " + tok, "X-Fleet-FP": fpA}
 	bundle := debugBundleTGZ(t, debugGoodFiles, nil, nil)
 
-	code, out, raw := debugUpload(t, h, tok, fpA, bundle, "登不进去，卡在正在连接 m5")
+	code, out, raw := debugUpload(t, h, tok, fpA, bundle, "登不进去，卡在正在连接 mac-d")
 	if code != 200 {
 		t.Fatalf("upload = %d %s", code, raw)
 	}
@@ -232,10 +232,10 @@ func TestDebugBundleToPage(t *testing.T) {
 	}
 	seed := starts.seeds[0]
 	first := strings.SplitN(seed, "\n", 2)[0]
-	if !strings.Contains(first, "/s/"+id) || !strings.Contains(first, "dt_") || strings.Contains(first, "m5") {
+	if !strings.Contains(first, "/s/"+id) || !strings.Contains(first, "dt_") || strings.Contains(first, "mac-d") {
 		t.Fatalf("the seed's first line (the desk ticket's) must carry the ticket and link only: %q", first)
 	}
-	if !strings.Contains(seed, "「登不进去，卡在正在连接 m5」") || !strings.Contains(seed, "debug_bundle") {
+	if !strings.Contains(seed, "「登不进去，卡在正在连接 mac-d」") || !strings.Contains(seed, "debug_bundle") {
 		t.Fatalf("seed = %q", seed)
 	}
 	dir := filepath.Join(h.srv.Debug.Dir, id)
@@ -457,7 +457,7 @@ func TestDebugTickUnfinishedAndPrune(t *testing.T) {
 	}
 
 	// a debugger that cannot be opened: unfinished at once, why said
-	starts.err = fmt.Errorf("macmini/fleetdebug 上没有在线的 fleet")
+	starts.err = fmt.Errorf("mac-e/fleetdebug 上没有在线的 fleet")
 	_, out2, _ := debugUpload(t, h, tok, fpA, debugBundleTGZ(t, map[string]string{"doctor.txt": "other\n"}, nil, nil), "")
 	rep2 := waitDebugState(t, h, out2["id"].(string), store.DebugUnfinished)
 	if !strings.Contains(rep2.Why, "没能开诊断会话") {

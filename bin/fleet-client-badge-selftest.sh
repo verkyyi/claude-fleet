@@ -34,13 +34,13 @@ EOF
 chmod +x "$WORK/hubread"
 export FLEET_CLIENT_WHERE_CMD="$WORK/hubread" FLEET_SHELL_SESSION="badge-st-none-$$" FLEET_SHELL_CACHE="$WORK/shell" \
   FLEET_CLIENT_BADGE_CACHE="$WORK/cache" FLEET_CLIENT_BADGE_LOGIN=octocat \
-  FLEET_NODE_ALIASES="macmini=m5 mini2=m4 MacBookPro=MacBook" FLEET_UI_LANG=zh
+  FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a MacBookPro=MacBook" FLEET_UI_LANG=zh
 badge() { FLEET_CLIENT_BADGE_TTL="${TTL:-0}" bash "$BIN/fleet-client-badge.sh" "cw=${CW:-120}"; }
 
 # --- A. the login --------------------------------------------------------------------
-printf '%s\n' '{"state":"active","lease":{"id":"L1","device":"Verky Mac","os":"macOS","terminal":"iTerm2 3.7.3","via":"local","host":"MacBookPro","caps":["open_url","iterm2"]}}' > "$WORK/lease.json"
+printf '%s\n' '{"state":"active","lease":{"id":"L1","device":"Carol Mac","os":"macOS","terminal":"iTerm2 3.7.3","via":"local","host":"MacBookPro","caps":["open_url","iterm2"]}}' > "$WORK/lease.json"
 eq "A local iTerm2 → the login alone" "$OK octocat $TAIL" "$(badge)"
-printf '%s\n' '{"state":"active","lease":{"id":"L2","device":"iPhone","os":"iOS","terminal":"Termius","via":"tailnet","host":"macmini","caps":["link"]}}' > "$WORK/lease.json"
+printf '%s\n' '{"state":"active","lease":{"id":"L2","device":"iPhone","os":"iOS","terminal":"Termius","via":"tailnet","host":"mac-c","caps":["link"]}}' > "$WORK/lease.json"
 eq "A ssh from an iPhone → the same: no machine, no terminal" "$OK octocat $TAIL" "$(badge)"
 printf '%s\n' '{"state":"none","lease":null}' > "$WORK/lease.json"
 eq "A no lease → the login, orange" "$WARN octocat $TAIL" "$(badge)"
@@ -90,7 +90,7 @@ case "$(cat "$ROOT/conf/tmux-shell.conf")" in
 esac
 
 # --- C. narrow -----------------------------------------------------------------------
-printf '%s\n' '{"state":"active","lease":{"device":"iPhone","terminal":"Termius","via":"tailnet","host":"m5"}}' > "$WORK/lease.json"
+printf '%s\n' '{"state":"active","lease":{"device":"iPhone","terminal":"Termius","via":"tailnet","host":"mac-b"}}' > "$WORK/lease.json"
 eq "C narrow (59) → the login" "$OK octocat $TAIL" "$(CW=59 badge)"
 eq "C narrow + hub down → orange login" "$WARN octocat $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
 

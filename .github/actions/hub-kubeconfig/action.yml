@@ -5,7 +5,7 @@ description: >
   KUBECONFIG. The job must declare `environment: prod` and
   `permissions: id-token: write`.
 
-# EPIC #1982 C1 (issue #1983). Ported from 24haowan-monorepo's prod-kubeconfig
+# EPIC #1982 C1 (issue #1983). Ported from acme-monorepo's prod-kubeconfig
 # action, with the role fixed. No long-lived credential exists anywhere: the
 # role trusts only sub = repo:verkyyi/claude-fleet:environment:prod, and the
 # prod environment admits master only (no reviewer since #2013). In the

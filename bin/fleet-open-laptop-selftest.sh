@@ -94,7 +94,7 @@ chmod +x "$WORK/shim/ssh" "$WORK/shim/defaults"
 H="$WORK/home"
 fresh_home() {
   rm -rf "$H"; mkdir -p "$H/.ssh" "$H/Library/Application Support/iTerm2/iterm2env-3.12"
-  printf 'Host *\n  ServerAliveInterval 30\n\nHost macmini\n  HostName mini.local\n  User op\n' > "$H/.ssh/config"
+  printf 'Host *\n  ServerAliveInterval 30\n\nHost mac-c\n  HostName mini.local\n  User op\n' > "$H/.ssh/config"
 }
 inst() {   # inst [install.sh args…] → $WORK/out, exit code in $RC
   env HOME="$H" PATH="$WORK/shim:$PATH" FLEET_OPEN_ITERM_APP="$WORK/iTerm.app" \
@@ -110,29 +110,29 @@ C="$H/.config/fleet-open"
 
 # a. dry run on a fresh laptop
 fresh_home; before="$(snap)"
-inst --mini macmini --dry-run
+inst --mini mac-c --dry-run
 [ "$RC" = 0 ] || fail "dry-run exit $RC"
 [ "$(snap)" = "$before" ] || fail "dry-run changed files"
 [ -e "$C" ] && fail "dry-run created $C"
 for w in 'would  install fleet_open.py v' 'would  install secret' 'would  install host alias' \
-         'would  install default allow-list' 'would  add ControlMaster ControlPath ControlPersist to Host macmini'; do
+         'would  install default allow-list' 'would  add ControlMaster ControlPath ControlPersist to Host mac-c'; do
   grep -qF "$w" "$WORK/out" || fail "dry-run lacks: $w"
 done
 grep -q '^changes: [1-9]' "$WORK/out" || fail "dry-run did not count its changes"
 ok
 
 # b. install
-inst --mini macmini
+inst --mini mac-c
 [ "$RC" = 0 ] || fail "install exit $RC"
 cmp -s "$AL" "$EX/fleet_open.py" || fail "AutoLaunch script differs from the source"
 [ "$(cat "$C/secret")" = s3cr3t-token ] || fail "secret content"
 [ -n "$(find "$C/secret" -prune -perm 600)" ] || fail "secret not 0600"
-[ "$(cat "$C/host")" = macmini ] || fail "host file"
+[ "$(cat "$C/host")" = mac-c ] || fail "host file"
 grep -qx 'github.com' "$C/allow" && grep -qx 'claude.ai' "$C/allow" || fail "default allow-list"
 ls "$H/.ssh/config.bak-"* >/dev/null 2>&1 || fail "no ssh config backup"
-awk '/^Host macmini/{f=1;next} /^Host /{f=0} f' "$H/.ssh/config" > "$WORK/blk"
+awk '/^Host mac-c/{f=1;next} /^Host /{f=0} f' "$H/.ssh/config" > "$WORK/blk"
 for k in 'ControlMaster auto' 'ControlPath ~/.ssh/cm-%C' 'ControlPersist 10m' 'HostName mini.local'; do
-  grep -qF "$k" "$WORK/blk" || fail "Host macmini block lacks: $k"
+  grep -qF "$k" "$WORK/blk" || fail "Host mac-c block lacks: $k"
 done
 [ "$(grep -c '^Host ' "$H/.ssh/config")" = 2 ] || fail "a Host block was added/lost"
 grep -q '^changes: [1-9]' "$WORK/out" || fail "install reported no changes"
@@ -140,7 +140,7 @@ ok
 
 # c. idempotent
 before="$(snap)"
-inst --mini macmini
+inst --mini mac-c
 [ "$RC" = 0 ] && grep -q '^changes: 0' "$WORK/out" || fail "second install not a no-op"
 [ "$(snap)" = "$before" ] || fail "second install changed files"
 inst --dry-run       # alias now comes from ~/.config/fleet-open/host
@@ -151,37 +151,37 @@ ok
 
 # d. partial ssh config, no Host block, kept allow-list
 fresh_home
-printf 'Host macmini\n  ControlMaster auto\n' > "$H/.ssh/config"
+printf 'Host mac-c\n  ControlMaster auto\n' > "$H/.ssh/config"
 mkdir -p "$C"; printf 'example.org\n' > "$C/allow"
-inst --mini macmini
+inst --mini mac-c
 [ "$RC" = 0 ] || fail "partial install exit $RC"
 [ "$(grep -c ControlMaster "$H/.ssh/config")" = 1 ] || fail "ControlMaster duplicated"
-grep -q 'add ControlPath ControlPersist to Host macmini' "$WORK/out" || fail "should add only the two missing keys"
+grep -q 'add ControlPath ControlPersist to Host mac-c' "$WORK/out" || fail "should add only the two missing keys"
 [ "$(cat "$C/allow")" = example.org ] || fail "existing allow-list overwritten"
 fresh_home; printf 'Host other\n  User x\n' > "$H/.ssh/config"
-inst --mini macmini
-grep -q '^Host macmini$' "$H/.ssh/config" && grep -q '^Host other$' "$H/.ssh/config" || fail "Host block not appended"
-inst --mini macmini; grep -q '^changes: 0' "$WORK/out" || fail "appended block not idempotent"
+inst --mini mac-c
+grep -q '^Host mac-c$' "$H/.ssh/config" && grep -q '^Host other$' "$H/.ssh/config" || fail "Host block not appended"
+inst --mini mac-c; grep -q '^changes: 0' "$WORK/out" || fail "appended block not idempotent"
 fresh_home; rm -f "$H/.ssh/config"
-inst --mini macmini
-[ "$RC" = 0 ] && grep -q '^Host macmini$' "$H/.ssh/config" || fail "no ~/.ssh/config: not created"
+inst --mini mac-c
+[ "$RC" = 0 ] && grep -q '^Host mac-c$' "$H/.ssh/config" || fail "no ~/.ssh/config: not created"
 ok
 
 # e. API off → warn, never flipped
 fresh_home; rm -f "$WORK/defaults.log"
-SHIM_API=0 inst --mini macmini
+SHIM_API=0 inst --mini mac-c
 [ "$RC" = 0 ] || fail "API-off install should still exit 0"
 grep -q 'WARN.*Python API is OFF' "$WORK/out" || fail "no API-off warning"
 [ -e "$WORK/defaults.log" ] && fail "install.sh ran defaults write"
-SHIM_API=x inst --mini macmini; grep -q 'Python API is OFF' "$WORK/out" || fail "unset key not read as off"
+SHIM_API=x inst --mini mac-c; grep -q 'Python API is OFF' "$WORK/out" || fail "unset key not read as off"
 ok
 
 # f. old iTerm2
 fresh_home
-SHIM_ITERM_VER=3.4.19 inst --mini macmini
+SHIM_ITERM_VER=3.4.19 inst --mini mac-c
 [ "$RC" = 1 ] && grep -q 'too old' "$WORK/out" || fail "iTerm2 3.4 not refused (rc=$RC)"
 [ -e "$AL" ] && fail "installed despite old iTerm2"
-SHIM_ITERM_VER=3.10.0 inst --mini macmini
+SHIM_ITERM_VER=3.10.0 inst --mini mac-c
 [ "$RC" = 0 ] || fail "3.10 compared as older than 3.5"
 ok
 
@@ -189,14 +189,14 @@ ok
 # --dry-run first: still reaches the closing `changes:` line, writes nothing
 fresh_home; before="$(snap)"
 (cd "$WORK" && env HOME="$H" PATH="$WORK/shim:$PATH" FLEET_OPEN_ITERM_APP="$WORK/iTerm.app" \
-  SHIM_MINI_HOME="$WORK/mini" "$SH" -s -- --mini macmini --dry-run < "$EX/install.sh" >"$WORK/out" 2>&1) \
+  SHIM_MINI_HOME="$WORK/mini" "$SH" -s -- --mini mac-c --dry-run < "$EX/install.sh" >"$WORK/out" 2>&1) \
   || fail "bash -s --dry-run failed"
 grep -q '^changes: [1-9]' "$WORK/out" || fail "bash -s --dry-run never reached its changes: line (#1405)"
 [ "$(snap)" = "$before" ] || fail "bash -s --dry-run changed files"
 (cd "$WORK" && env HOME="$H" PATH="$WORK/shim:$PATH" FLEET_OPEN_ITERM_APP="$WORK/iTerm.app" \
-  SHIM_MINI_HOME="$WORK/mini" "$SH" -s -- --mini macmini < "$EX/install.sh" >"$WORK/out" 2>&1) \
+  SHIM_MINI_HOME="$WORK/mini" "$SH" -s -- --mini mac-c < "$EX/install.sh" >"$WORK/out" 2>&1) \
   || fail "bash -s install failed"
-grep -q 'script source: macmini:' "$WORK/out" || fail "bash -s did not fetch the script from the mini"
+grep -q 'script source: mac-c:' "$WORK/out" || fail "bash -s did not fetch the script from the mini"
 grep -q '^changes: [1-9]' "$WORK/out" || fail "bash -s stopped before the end (an ssh ate stdin = the script, #1405)"
 cmp -s "$AL" "$EX/fleet_open.py" || fail "fetched script differs"
 [ -s "$C/secret" ] && [ -f "$C/host" ] || fail "bash -s left secret/host uninstalled"

@@ -118,8 +118,8 @@ fa FLEET_CLIENT=shell -- ; me=$(hostname -s); me=${me%%.*}
 eq "A fleet → rc 0" "$rc" 0
 eq "A … one line: the client runs on this machine" "$out" "fleet · 客户端在 $me 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。"
 eq "A … the runtime's fleet-shell.sh, hosted, the temp cache — no update asked" "$calls" "runtime fleet-shell.sh |hosted=1|cache=$NHC"
-fa -- m4
-eq "A fleet m4 → the runtime's, with the machine" "$calls" "runtime fleet-shell.sh m4|hosted=1|cache=$NHC"
+fa -- mac-a
+eq "A fleet mac-a → the runtime's, with the machine" "$calls" "runtime fleet-shell.sh mac-a|hosted=1|cache=$NHC"
 fa -- quit
 eq "A fleet quit → the runtime's quit, the same cache" "$calls" "runtime fleet-shell.sh quit|hosted=1|cache=$NHC"
 fa -- status
@@ -154,8 +154,8 @@ fa SSH_CONNECTION="$SSHC" --
 eq "A over ssh: the runtime's thin loop, --local, no update" "$calls" "fakert fleet-thin.py --local|hosted=1"
 fa SSH_CONNECTION="$SSHC" FLEET_CLIENT=shell --
 eq "A over ssh, FLEET_CLIENT=shell: the old client" "$calls" "runtime fleet-shell.sh |hosted=1|cache=$NHC"
-fa SSH_CONNECTION="$SSHC" -- m4
-eq "A over ssh, fleet m4: the old client's machine road" "$calls" "runtime fleet-shell.sh m4|hosted=1|cache=$NHC"
+fa SSH_CONNECTION="$SSHC" -- mac-a
+eq "A over ssh, fleet mac-a: the old client's machine road" "$calls" "runtime fleet-shell.sh mac-a|hosted=1|cache=$NHC"
 fa SSH_CONNECTION="$SSHC" FLEET_NODE_STATE="$W/nowhere" --
 eq "A over ssh, an unmanaged machine: the install's thin loop, the hub's pick" "$calls" "inst fleet-client-update.sh start|hosted=|cache=
 inst fleet-thin.py |hosted="

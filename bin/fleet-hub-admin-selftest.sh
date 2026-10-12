@@ -17,12 +17,12 @@
 #      (claude-fleet#2261); --list / --revoke <id>
 #   M  fleet hub machines → GET /v1/nodes; 备用 N · 已用 M / 上限 K while spares are
 #      on, a hint while off; fleet hub accounts lists spares apart (claude-fleet#2263)
-#   N  fleet hub accounts assign zx --host fleet-linux-0 --login zx → POST {assign};
+#   N  fleet hub accounts assign zx --host linux-b --login zx → POST {assign};
 #      prints `login · host · state · credsep`; a --login that is not theirs →
 #      exit 2, nothing sent; remove → POST {remove}, --delete adds delete: true
 #      (claude-fleet#3504); the list carries
 #      host:state:separated (claude-fleet#3210)
-#   T  fleet hub debug-ticket @arvin --hours 48 → POST {github_login, hours}; prints
+#   T  fleet hub debug-ticket @bob --hours 48 → POST {github_login, hours}; prints
 #      the one `fleet-debug ticket …` line once; --list → one row per ticket
 #      (claude-fleet#2891)
 set -u
@@ -58,15 +58,15 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps({"method": self.command, "path": u.path, "query": u.query, "body": body,
                                 "auth": self.headers.get("Authorization", ""),
                                 "cookie": self.headers.get("Cookie", "")}) + "\n")
-        users = {"users": [{"github_id": 100, "login": "verkyyi", "role": "admin", "deploy": True}], "admins": []}
+        users = {"users": [{"github_id": 100, "login": "erin", "role": "admin", "deploy": True}], "admins": []}
         if u.path == "/v1/fleet/users":
             if self.command == "POST":
                 b = json.loads(body)
                 if b["login"] == "ghost":
                     return self.answer(400, {"error": "GitHub has no user named ghost — nobody was added"})
-                if b.get("machine_login") == "24haowan":
+                if b.get("machine_login") == "acme":
                     return self.answer(200, dict(users, added=b["login"], github_id=300, created=False,
-                                                 moved_login={"login": "24haowan", "hosts": ["macmini"],
+                                                 moved_login={"login": "acme", "hosts": ["mac-c"],
                                                               "from": "CaoJian", "to": "gh:300"}))
                 return self.answer(201, dict(users, added=b["login"], github_id=200, created=True))
             if self.command == "DELETE":
@@ -77,38 +77,38 @@ class H(BaseHTTPRequestHandler):
                 b = json.loads(body)
                 if b.get("action") == "rekey":
                     return self.answer(200, {"from": b["principal_id"], "to": "gh:" + b["to_principal_id"].replace("gh:", ""),
-                                             "login": "zx", "hosts": ["macmini", "mini2"], "moved": {}})
+                                             "login": "zx", "hosts": ["mac-c", "mac-d"], "moved": {}})
                 if b.get("action") in ("assign", "remove"):
                     st = "pending" if b["action"] == "assign" else "remove_pending"
                     return self.answer(200, {"accounts": [{"principal_id": b["principal_id"], "hostname": b["hostname"],
                                                            "login": "zx", "state": st}]})
                 if b.get("action") == "rename":
-                    return self.answer(200, {"principal_id": b["principal_id"], "from": "verkyyi", "login": "verky", "changed": True})
+                    return self.answer(200, {"principal_id": b["principal_id"], "from": "erin", "login": "dave", "changed": True})
                 return self.answer(200, {"accounts": []})
             # claude-fleet#3302: one person, two machines, two login names;
             # `old` is a hub from before `logins` (rows only).
             return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""},
                                                     {"principal_id": "old", "login": "old", "display_name": "Old"}],
-                                     "accounts": [{"principal_id": "zx", "hostname": "macmini", "login": "zx", "state": "active"},
-                                                  {"principal_id": "zx", "hostname": "fleet-linux-0", "login": "zxw", "state": "active",
+                                     "accounts": [{"principal_id": "zx", "hostname": "mac-c", "login": "zx", "state": "active"},
+                                                  {"principal_id": "zx", "hostname": "linux-b", "login": "zxw", "state": "active",
                                                    "detail": "prepared tenant zxw\ncredsep: separated\n"}],
-                                     "logins": {"zx": [{"hostname": "fleet-linux-0", "login": "zxw", "state": "active", "home": True, "kind": "node"},
-                                                       {"hostname": "macmini", "login": "zx", "state": "active", "kind": "node"},
+                                     "logins": {"zx": [{"hostname": "linux-b", "login": "zxw", "state": "active", "home": True, "kind": "node"},
+                                                       {"hostname": "mac-c", "login": "zx", "state": "active", "kind": "node"},
                                                        {"hostname": "zx-mac", "login": "zhangxu", "state": "pending", "kind": "client"}]},
-                                     "spares": [{"principal_id": "spare:macmini:abcd1234", "login": "flk2m9qa",
-                                                 "hostname": "macmini", "state": "active"}]})
+                                     "spares": [{"principal_id": "spare:mac-c:abcd1234", "login": "flk2m9qa",
+                                                 "hostname": "mac-c", "state": "active"}]})
         if u.path == "/v1/nodes":
             spare = settings.get("fleet.spares") == "on"
-            ms = [{"hostname": "macmini", "alias": "m5", "status": "online", "sessions": 4, "load1": 2.0, "ncpu": 8,
+            ms = [{"hostname": "mac-c", "alias": "mac-b", "status": "online", "sessions": 4, "load1": 2.0, "ncpu": 8,
                    "links": 1},
-                  {"hostname": "mini2", "status": "maintenance", "sessions": None, "load1": 0, "ncpu": 0}]
+                  {"hostname": "mac-d", "status": "maintenance", "sessions": None, "load1": 0, "ncpu": 0}]
             if spare:
                 ms[0].update(spare=1, logins_used=2, login_cap=10)
                 ms[1].update(spare=0, logins_used=9, login_cap=9, spare_resetting=1, spare_failed=2)
-            # m5 behind one machine link carrying two logins (claude-fleet#2333)
-            ns = [{"hostname": "macmini", "os_user": "root", "machine_link": True},
-                  {"hostname": "macmini", "os_user": "zx", "via": "ep_mach"},
-                  {"hostname": "macmini", "os_user": "verkyyi", "via": "ep_mach"}]
+            # mac-b behind one machine link carrying two logins (claude-fleet#2333)
+            ns = [{"hostname": "mac-c", "os_user": "root", "machine_link": True},
+                  {"hostname": "mac-c", "os_user": "zx", "via": "ep_mach"},
+                  {"hostname": "mac-c", "os_user": "erin", "via": "ep_mach"}]
             return self.answer(200, {"machines": ms, "nodes": ns})
         if u.path == "/v1/fleet/invites":
             if self.command == "POST":
@@ -120,16 +120,16 @@ class H(BaseHTTPRequestHandler):
             if self.command == "DELETE":
                 return self.answer(200, {"id": parse_qs(u.query)["id"][0], "state": "revoked"})
             return self.answer(200, {"invites": [{"id": "inv_abc", "state": "used", "github_login": "",
-                                                  "expires_at": "2026-10-14T00:00:00Z", "created_by": "verkyyi",
+                                                  "expires_at": "2026-10-14T00:00:00Z", "created_by": "erin",
                                                   "used_by": "gh:300"}]})
         if u.path == "/v1/fleet/debug/tickets":
             if self.command == "POST":
                 b = json.loads(body or "{}")
-                return self.answer(201, {"id": "dt_abc", "owner": b.get("github_login", ""), "by": "admin:verkyyi",
+                return self.answer(201, {"id": "dt_abc", "owner": b.get("github_login", ""), "by": "admin:erin",
                                          "expires_at": "2026-10-12T06:00:00Z", "ticket": "fdt1.p.s",
                                          "command": "fleet-debug ticket fdt1.p.s"})
-            return self.answer(200, {"tickets": [{"id": "dt_abc", "state": "active", "owner": "arvin",
-                                                  "by": "admin:verkyyi", "expires_at": "2026-10-12T06:00:00Z",
+            return self.answer(200, {"tickets": [{"id": "dt_abc", "state": "active", "owner": "bob",
+                                                  "by": "admin:erin", "expires_at": "2026-10-12T06:00:00Z",
                                                   "uses_today": {"upload": 2}}]})
         if u.path == "/v1/fleet/settings":
             if self.command == "PUT":
@@ -184,7 +184,7 @@ r=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/users ] \
    && [ "$(field "$r" auth)" = "Bearer tok" ] \
    && [ "$(field "$r" body)" = '{"login": "alice", "machine_login": "alice2"}' ] \
-   && grep -q 'added alice (GitHub ID 200)' "$WORK/out" && grep -q 'verkyyi' "$WORK/out"; then
+   && grep -q 'added alice (GitHub ID 200)' "$WORK/out" && grep -q 'erin' "$WORK/out"; then
   ok "B fleet users add → POST {login, machine_login} with the token; prints the list"
 else bad "B rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
@@ -228,8 +228,8 @@ if [ "$rc" = 3 ] && grep -q 'no hub configured' "$WORK/err"; then ok "H no hub �
 else bad "H rc=$rc err=$(cat "$WORK/err")"; fi
 
 # I — add onto a login an old identity held (claude-fleet#2094): the move is printed
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users add cjilyy --machine-login 24haowan >"$WORK/out" 2>"$WORK/err"; rc=$?
-if [ "$rc" = 0 ] && grep -q '已把 24haowan（macmini）从旧身份 CaoJian 转给 cjilyy' "$WORK/out"; then
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users add cjilyy --machine-login acme >"$WORK/out" 2>"$WORK/err"; rc=$?
+if [ "$rc" = 0 ] && grep -q '已把 acme（mac-c）从旧身份 CaoJian 转给 cjilyy' "$WORK/out"; then
   ok "I users add onto an old identity's login → the move is printed"
 else bad "I rc=$rc out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
@@ -239,9 +239,9 @@ r=$(last)
 l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts 2>&1)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
    && [ "$(field "$r" body)" = '{"action": "rekey", "principal_id": "zx", "to_principal_id": "4001"}' ] \
-   && grep -q '已把 zx（macmini、mini2）从旧身份 zx 转给 gh:4001' "$WORK/out" \
-   && printf '%s\n' "$l" | grep -q '^zx  *-  *fleet-linux-0 · zxw (active, 家, 服务节点, separated)$' \
-   && printf '%s\n' "$l" | grep -q '^  *macmini · zx (active, 服务节点)$' \
+   && grep -q '已把 zx（mac-c、mac-d）从旧身份 zx 转给 gh:4001' "$WORK/out" \
+   && printf '%s\n' "$l" | grep -q '^zx  *-  *linux-b · zxw (active, 家, 服务节点, separated)$' \
+   && printf '%s\n' "$l" | grep -q '^  *mac-c · zx (active, 服务节点)$' \
    && printf '%s\n' "$l" | grep -q '^  *zx-mac · zhangxu (pending, 客户端)$' \
    && printf '%s\n' "$l" | grep -q '^old  *Old  *-$' \
    && ! printf '%s\n' "$l" | grep -q 'principal  *login'; then
@@ -249,37 +249,37 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
 else bad "J rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
 # K — fleet hub accounts relogin (claude-fleet#2210): one POST, the machine and the new login
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts relogin gh:2718137 macmini verkydev >"$WORK/out" 2>"$WORK/err"; rc=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts relogin gh:2718137 mac-c verkydev >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
-   && [ "$(field "$r" body)" = '{"action": "relogin", "principal_id": "gh:2718137", "hostname": "macmini", "login": "verkydev"}' ] \
-   && grep -q 'relogin gh:2718137 on macmini → verkydev: create queued' "$WORK/out"; then
+   && [ "$(field "$r" body)" = '{"action": "relogin", "principal_id": "gh:2718137", "hostname": "mac-c", "login": "verkydev"}' ] \
+   && grep -q 'relogin gh:2718137 on mac-c → verkydev: create queued' "$WORK/out"; then
   ok "K fleet hub accounts relogin → POST {action: relogin, hostname, login}"
 else bad "K rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # K2 — fleet hub accounts rename (claude-fleet#2456): one POST, the machine whose login the record takes
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts rename gh:2718137 macmini >"$WORK/out" 2>"$WORK/err"; rc=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts rename gh:2718137 mac-c >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
-   && [ "$(field "$r" body)" = '{"action": "rename", "principal_id": "gh:2718137", "hostname": "macmini"}' ] \
-   && grep -q 'rename gh:2718137: login verkyyi → verky (as on macmini)' "$WORK/out"; then
+   && [ "$(field "$r" body)" = '{"action": "rename", "principal_id": "gh:2718137", "hostname": "mac-c"}' ] \
+   && grep -q 'rename gh:2718137: login erin → dave (as on mac-c)' "$WORK/out"; then
   ok "K2 fleet hub accounts rename → POST {action: rename, hostname}"
 else bad "K2 rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # N — fleet hub accounts assign / remove on a Linux managed machine (claude-fleet#3210)
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host fleet-linux-0 --login zx >"$WORK/out" 2>"$WORK/err"; rc=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host linux-b --login zx >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 n1=$(wc -l <"$LOG")
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host fleet-linux-0 --login 24haowan >"$WORK/out2" 2>"$WORK/err2"; rc2=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host linux-b --login acme >"$WORK/out2" 2>"$WORK/err2"; rc2=$?
 n2=$(wc -l <"$LOG")
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 >"$WORK/out3" 2>&1; rc3=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host linux-b >"$WORK/out3" 2>&1; rc3=$?
 r3=$(last)
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host linux-a --delete >"$WORK/out4" 2>&1; rc4=$?
 r4=$(last)
-if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "fleet-linux-0", "own_name": true}' ] \
-   && grep -q '^zx · fleet-linux-0 · pending · -$' "$WORK/out" \
+if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "linux-b", "own_name": true}' ] \
+   && grep -q '^zx · linux-b · pending · -$' "$WORK/out" \
    && [ "$rc2" = 2 ] && [ "$((n2 - n1))" = 1 ] && grep -q 'relogin' "$WORK/err2" \
-   && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0"}' ] \
+   && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-b"}' ] \
    && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-a", "delete": true}' ]; then
   ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare; remove --delete ⇒ delete: never recycled, #3504); a --login not theirs is refused before the POST"
 else bad "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
@@ -290,18 +290,18 @@ r=$(last)
 l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite --list 2>&1)
 v=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite --revoke inv_abc 2>&1)
 rv=$(last)
-if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/invites ]    && [ "$(field "$r" body)" = '{"github_login": "alice"}' ]    && grep -q 'GitHub 用户 alice' "$WORK/out" && grep -qF 'curl -fsSL http://h/i/secretcodesecretcode | sh' "$WORK/out"    && printf '%s\n' "$l" | grep -q '^inv_abc .*used .*anyone.*verkyyi → gh:300$'    && [ "$v" = 'revoked inv_abc' ] && [ "$(field "$rv" query)" = id=inv_abc ]; then
+if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/invites ]    && [ "$(field "$r" body)" = '{"github_login": "alice"}' ]    && grep -q 'GitHub 用户 alice' "$WORK/out" && grep -qF 'curl -fsSL http://h/i/secretcodesecretcode | sh' "$WORK/out"    && printf '%s\n' "$l" | grep -q '^inv_abc .*used .*anyone.*erin → gh:300$'    && [ "$v" = 'revoked inv_abc' ] && [ "$(field "$rv" query)" = id=inv_abc ]; then
   ok "L fleet hub invite → POST {github_login}, the command printed; --list; --revoke"
 else bad "L rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l revoke=$v"; fi
 
 # T — fleet hub debug-ticket (claude-fleet#2891): re-issue, list
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub debug-ticket @arvin --hours 48 >"$WORK/out" 2>"$WORK/err"; rc=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub debug-ticket @bob --hours 48 >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub debug-ticket --list 2>&1)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/debug/tickets ] \
-   && [ "$(field "$r" body)" = '{"github_login": "arvin", "hours": 48.0}' ] \
-   && [ "$(grep -c '^  fleet-debug ticket fdt1.p.s$' "$WORK/out")" = 1 ] && grep -q '发给 arvin' "$WORK/out" \
-   && printf '%s\n' "$l" | grep -q '^dt_abc .*active .*arvin .*admin:verkyyi .*2026-10-12 06:00 *upload 2$'; then
+   && [ "$(field "$r" body)" = '{"github_login": "bob", "hours": 48.0}' ] \
+   && [ "$(grep -c '^  fleet-debug ticket fdt1.p.s$' "$WORK/out")" = 1 ] && grep -q '发给 bob' "$WORK/out" \
+   && printf '%s\n' "$l" | grep -q '^dt_abc .*active .*bob .*admin:erin .*2026-10-12 06:00 *upload 2$'; then
   ok "T fleet hub debug-ticket → POST {github_login, hours}, the paste line printed once; --list"
 else bad "T rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
@@ -313,10 +313,10 @@ on=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub machines
 acc=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts 2>&1)
 if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ "$(field "$r" method)" = GET ] && [ "$(field "$r" path)" = /v1/nodes ] \
    && printf '%s\n' "$off" | grep -q '备用账号没开' && ! printf '%s\n' "$off" | grep -q '备用 [0-9]' \
-   && printf '%s\n' "$on" | grep -q '^m5 (macmini) .*online .*4 .*0\.25 *1 *verkyyi、zx · 备用 1 · 已用 2 / 上限 10$' \
-   && printf '%s\n' "$off" | grep -q '^m5 (macmini) .*0\.25 *1 *verkyyi、zx$' && ! printf '%s\n' "$off" | grep -q 'root' \
-   && printf '%s\n' "$on" | grep -q '^mini2 .*maintenance .*? .*备用 0 · 已用 9 / 上限 9 · 回收中 1 · 坏了 2$' \
-   && printf '%s\n' "$acc" | grep -q '^spare:macmini:abcd1234 .*macmini · flk2m9qa (active)$'; then
+   && printf '%s\n' "$on" | grep -q '^mac-b (mac-c) .*online .*4 .*0\.25 *1 *erin、zx · 备用 1 · 已用 2 / 上限 10$' \
+   && printf '%s\n' "$off" | grep -q '^mac-b (mac-c) .*0\.25 *1 *erin、zx$' && ! printf '%s\n' "$off" | grep -q 'root' \
+   && printf '%s\n' "$on" | grep -q '^mac-d .*maintenance .*? .*备用 0 · 已用 9 / 上限 9 · 回收中 1 · 坏了 2$' \
+   && printf '%s\n' "$acc" | grep -q '^spare:mac-c:abcd1234 .*mac-c · flk2m9qa (active)$'; then
   ok "M fleet hub machines → GET /v1/nodes, 连接 N + its logins (not the link) per machine, 备用 N (hint while off); accounts lists spares apart"
 else bad "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi
 

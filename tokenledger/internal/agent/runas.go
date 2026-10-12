@@ -66,7 +66,7 @@ var errNoLogin = errors.New("machine agent: no login to run this command as (ref
 //
 // The root agent's own FLEET_CONF_DIR and TMPDIR are the node supervisor's
 // (/var/db/fleet-node/conf, …/tmp — root 0700) and never travel to the login
-// (claude-fleet#2471): with them every fleet-control.py on m4 died opening its
+// (claude-fleet#2471): with them every fleet-control.py on mac-a died opening its
 // store under root's conf dir, and the hub read only «INTERNAL: Local
 // controller failed». A value the caller put on cmd.Env itself is kept.
 //
@@ -132,7 +132,7 @@ func (ra *RunAs) confDir() string {
 
 // startWhy turns a command that never started as ctx's login into a reason a
 // person can read (claude-fleet#2451): on 2026-10-08 the hub's only answer from
-// m4 was «fork/exec …/fleet-control.py: invalid argument» — a login in more
+// mac-a was «fork/exec …/fleet-control.py: invalid argument» — a login in more
 // groups than setgroups(2) takes, but it could as well have been a missing
 // login or a home the login cannot reach. What the agent can see as root is
 // appended to the error; one that did start (an exit status), or a plain

@@ -134,7 +134,7 @@ for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.access_' || :);
 done
 # The login's own share group (issue #3471): `sysadminctl -addUser` makes a
 # com.apple.sharepoint.group.N for its Public Folder, its ONLY member the login,
-# and deleteUser leaves it — mini2 kept 48 of them, one per drill login. Only a
+# and deleteUser leaves it — mac-d kept 48 of them, one per drill login. Only a
 # group whose members are this login alone (by name, by GUID) is the login's;
 # one that lists anyone else is a share someone made and stays. Its share point
 # (/SharePoints, sharepoint_group_id = the group's GeneratedUID) goes with it.
@@ -157,7 +157,7 @@ step() { printf '\n[%s] %s\n' "$1" "$2"; }
 
 # quiesce: no process of the login, and none coming back (issue #2866). launchd's
 # per-user domain relaunches what `pkill -U` takes — /usr/sbin/distnoted came
-# back seconds after the kill (drill10092046, drill10100326 on macmini), and
+# back seconds after the kill (drill10092046, drill10100326 on mac-c), and
 # sysadminctl -deleteUser then hung for minutes a try. So the login's domains
 # go first: `bootout user/<uid>`, and `gui/<uid>` when it has one; then TERM,
 # KILL, and a watch of FLEET_LOGIN_REMOVE_SETTLE seconds that nothing returns.
@@ -302,7 +302,7 @@ fi
 
 # A login the machine daemon took over (`account adopt`, #2332) has its tasks
 # and children run by root's supervisor, demoted to it: step 4 kills them and
-# the daemon starts them again, three rounds, exit 1 (drill10092351 on mini2,
+# the daemon starts them again, three rounds, exit 1 (drill10092351 on mac-d,
 # issue #2924). So the daemon lets go of it first — `account forget`: its tasks
 # stop, its accounts.json entry and logins/<login>.env go, its old services stay
 # in the attic, never loaded back for a login about to be gone. Idempotent: a
@@ -449,14 +449,14 @@ if [ "$APPLY" = 1 ] && [ "$VIA" = direct ]; then
     # Not the end (issue #2953): from the node program (root's daemon, no Full
     # Disk Access) macOS privacy protection (TCC) keeps sysadminctl out of the
     # home's ~/Desktop · ~/Documents …, so it fails EVERY time there, while the
-    # same command over ssh passes — 33 of 33 hub-sent removes on mini2 ended
+    # same command over ssh passes — 33 of 33 hub-sent removes on mac-d ended
     # exit 1 and each needed a person. What it did is read below, as for a
     # timeout: the record goes with dscl, a home left behind is moved aside.
     printf '%s: WARN sysadminctl -deleteUser %s failed (exit %s) — checking what it left\n' "$PROG" "$LOGIN" "$rc" >&2
   fi
 fi
 # sysadminctl can take the home and leave the record, exiting 0 all the same
-# (drill10092046 on macmini, issue #2728): a "done" here made the hub read
+# (drill10092046 on mac-c, issue #2728): a "done" here made the hub read
 # removed and the OS login nobody's. Read the record again; delete it with
 # dscl; still there ⇒ exit 1, so the hub keeps it failed and asks again.
 if [ "$APPLY" = 1 ] && dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; then

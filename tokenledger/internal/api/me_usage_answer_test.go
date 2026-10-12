@@ -34,7 +34,7 @@ const (
 // a scratch and an issue worker. now is a fixed Wednesday noon.
 func meUsageHarness(t *testing.T) (h *ghHarness, bob, carol, admin *http.Cookie, now time.Time) {
 	t.Helper()
-	h = newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h = newGitHubHarnessWith(t, fullServer, "ivan")
 	now = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	h.srv.budgetNow = func() time.Time { return now }
 	h.srv.IssueMeta = fakeIssueMeta{
@@ -53,7 +53,7 @@ func meUsageHarness(t *testing.T) (h *ghHarness, bob, carol, admin *http.Cookie,
 		{"worker_id": meWScr, "key": "scratch-7"},
 		{"worker_id": meWIss, "key": "issue-12"},
 	})
-	if _, err := st.RecordFleetSnapshot("ep_bob", "macmini", "bob", "mach-macmini", []store.FleetReport{{FleetID: meFleet,
+	if _, err := st.RecordFleetSnapshot("ep_bob", "mac-e", "bob", "mach-mac-e", []store.FleetReport{{FleetID: meFleet,
 		Name: "fleet", Repo: "o/app", Checkout: "/c", WorkerCount: 3, WorkersJSON: string(w)}}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func meUsageHarness(t *testing.T) (h *ghHarness, bob, carol, admin *http.Cookie,
 	pool(ghCarol, "", "claude", "claude-opus-5-5", 9999, 0, now.Add(-time.Hour), "o/secret", 99)
 
 	// What the page reads: the scan, filed under a person by endpoint → login.
-	bobEP := meEndpoint(t, h, "ep_bob", "macmini")
+	bobEP := meEndpoint(t, h, "ep_bob", "mac-e")
 	carolEP := meEndpoint(t, h, "ep_carol", "carolbox")
 	bobEP("claude", "bob",
 		meEvent("claude-opus-5-5", 1000, 200, now.Add(-time.Hour), "issue-12", "o/app"), // today, a batch member
@@ -86,7 +86,7 @@ func meUsageHarness(t *testing.T) (h *ghHarness, bob, carol, admin *http.Cookie,
 		meEvent("claude-opus-5-5", 7000, 0, now.Add(-10*24*time.Hour), "issue-12", "o/app")) // last week only
 	bobEP("codex", "bob", meEvent("gpt-5.4-codex", 500, 0, now.Add(-26*time.Hour), "issue-13", "o/app"))         // yesterday
 	carolEP("claude", "carol", meEvent("claude-opus-5-5", 9999, 0, now.Add(-time.Hour), "issue-99", "o/secret")) // never bob's
-	for who, l := range map[fakeGHUser][3]string{ghBob: {"macmini", "bob", "ep_bob"}, ghCarol: {"carolbox", "carol", "ep_carol"}} {
+	for who, l := range map[fakeGHUser][3]string{ghBob: {"mac-e", "bob", "ep_bob"}, ghCarol: {"carolbox", "carol", "ep_carol"}} {
 		p, err := st.Principal(githubPrincipal(who.ID))
 		if err != nil {
 			t.Fatal(err)
@@ -262,7 +262,7 @@ func TestMeUsage_SinceFirst(t *testing.T) {
 			t.Errorf("since_first = %v; want %v (the oldest row, anyone's): %s", u.SinceFirst, want, raw)
 		}
 	}
-	h2 := newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h2 := newGitHubHarnessWith(t, fullServer, "ivan")
 	h2.addUser(t, ghBob)
 	_, c := h2.signIn(t, ghBob)
 	if _, raw := readMeUsage(t, h2, c, ""); strings.Contains(raw, "since_first") {
@@ -353,7 +353,7 @@ func TestMeUsage_WhereItWent(t *testing.T) {
 		by[it.Kind+":"+it.Repo+"#"+itoa(it.Issue)] = it
 	}
 	if it := by["issue:o/app#12"]; it.Tokens != 1300 || it.Title != "合并额度与用量页" || it.Epic != "o/app#10" ||
-		it.EpicTitle != "EPIC: 用量" || len(it.Sessions) != 1 || it.Sessions[0] != "issue-12" || it.Node != "macmini" ||
+		it.EpicTitle != "EPIC: 用量" || len(it.Sessions) != 1 || it.Sessions[0] != "issue-12" || it.Node != "mac-e" ||
 		len(it.Models) != 2 || it.Models[0][0] != "Opus 5.5" {
 		t.Errorf("task #12 = %+v", it)
 	}
@@ -365,8 +365,8 @@ func TestMeUsage_WhereItWent(t *testing.T) {
 	if _, ok := by["orch:#0"]; ok {
 		t.Errorf("an orch row off the scan, which names no worker: %s", raw)
 	}
-	if it := by["none:#0"]; it.Tokens != 340 || len(it.Sessions) != 1 || it.Sessions[0] != "scratch-7" || it.Node != "macmini" {
-		t.Errorf("the none row = %+v; want 340 with the scratch named, on macmini", it)
+	if it := by["none:#0"]; it.Tokens != 340 || len(it.Sessions) != 1 || it.Sessions[0] != "scratch-7" || it.Node != "mac-e" {
+		t.Errorf("the none row = %+v; want 340 with the scratch named, on mac-e", it)
 	}
 	if u.Work.Issue[0].Issue != 12 || u.Work.Issue[len(u.Work.Issue)-1].Kind != workNone {
 		t.Errorf("order: tasks largest first, then none: %+v", u.Work.Issue)
@@ -444,7 +444,7 @@ func TestModelHumanName(t *testing.T) {
 // machine that is no one's, and his login NAME on a machine that is not his,
 // are nobody's — counted as unattributed on the overview, in no person's row.
 func TestMeUsage_FromScan_TwoLogins(t *testing.T) {
-	h := newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h := newGitHubHarnessWith(t, fullServer, "ivan")
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	h.srv.budgetNow = func() time.Time { return now }
 	st := h.srv.Store

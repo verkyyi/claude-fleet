@@ -3,7 +3,7 @@
 ## Issue titles：从用户视角起（issue #2545）
 
 An issue title is one sentence of what is wrong or wanted, **as the person sees it** —
-「每日推送没跑成」「mini2 开不了会话」, not 「托管机器上旧版 fleet host on 以登录身份重登记」.
+「每日推送没跑成」「mac-d 开不了会话」, not 「托管机器上旧版 fleet host on 以登录身份重登记」.
 At most 20 汉字 (40 columns); no script name, `--flag` or `snake_name`; the mechanism,
 the script and the error line go in the body. A worker's window and its sidebar row
 are named after the title (`fleet_issue_plain_name`: the part before the first

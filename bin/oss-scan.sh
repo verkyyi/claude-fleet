@@ -214,6 +214,12 @@ function glob2re(g,   r, i, c) {
     }
     return r "$"
 }
+# a kept word, or a name under a `*.`-kept suffix (`*.example.ts.net` keeps mac-a.example.ts.net)
+function kept(w,   x) {
+    if (w in keep) return 1
+    for (x in ksuf) if (length(w) > length(x) && substr(w, length(w) - length(x) + 1) == x) return 1
+    return 0
+}
 function trim(s) { sub(/^[^A-Za-z0-9]+/, "", s); sub(/[^A-Za-z0-9]+$/, "", s); return s }
 function testfile(p) {
     return p ~ /(^|\/)[^\/]*selftest[^\/]*$/ || p ~ /_test\.go$/ || p ~ /\.test\.[a-z]+$/ ||
@@ -224,7 +230,11 @@ function comment(t) { sub(/^[ \t]+/, "", t); return t ~ /^(#|\/\/|\*|\/\*|--|<!-
 BEGIN {
     FS = "\t"
     while ((getline line < rules) > 0) {
-        if (line ~ /^#@keep\t/) { split(line, f, "\t"); keep[f[2]] = 1; continue }
+        if (line ~ /^#@keep\t/) {
+            split(line, f, "\t")
+            if (substr(f[2], 1, 2) == "*.") ksuf[substr(f[2], 2)] = 1; else keep[f[2]] = 1
+            continue
+        }
         if (line ~ /^#/ || line == "") continue
         split(line, f, "\t"); if (f[2] != "") ere[f[1]] = f[2]
     }
@@ -243,7 +253,7 @@ BEGIN {
     t = text; real = 0
     while (match(t, ere[id])) {
         m = substr(t, RSTART, RLENGTH)
-        if (!(trim(m) in keep)) { real = 1; break }
+        if (!kept(trim(m))) { real = 1; break }
         t = substr(t, RSTART + (RLENGTH > 0 ? RLENGTH : 1))
     }
     if (!real) next

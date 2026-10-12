@@ -67,7 +67,7 @@ EOF
 cat > "$WORK/bin/tailscale" <<EOF
 #!/bin/sh
 case "\$1" in
-  status) echo '{"Self":{"DNSName":"box.tail0.ts.net.","TailscaleIPs":["100.64.0.7"]}}' ;;
+  status) echo '{"Self":{"DNSName":"box.example.ts.net.","TailscaleIPs":["100.64.0.7"]}}' ;;
   serve)  cat "$STATE/serve.json" 2>/dev/null || echo '{}' ;;
 esac
 EOF
@@ -104,24 +104,24 @@ chk '127.0.0.1 https' 'https://127.0.0.1/x'        '{"v":1,"kind":"forward","rpo
 chk '[::1] no scheme' '[::1]:8080/'                '{"v":1,"kind":"forward","rport":8080,"path":"/","scheme":"http","host":""}'
 chk 'host:port no scheme' 'localhost:9000/p'      '{"v":1,"kind":"forward","rport":9000,"path":"/p","scheme":"http","host":""}'
 cat > "$STATE/serve.json" <<'J'
-{"Web":{"box.tail0.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}},
-        "box.tail0.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"},"/api":{"Proxy":"http://localhost:7000/v1"}}},
-        "box.tail0.ts.net:10000":{"Handlers":{"/":{"Proxy":"https://example.com"}}}}}
+{"Web":{"box.example.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}},
+        "box.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9000"},"/api":{"Proxy":"http://localhost:7000/v1"}}},
+        "box.example.ts.net:10000":{"Handlers":{"/":{"Proxy":"https://example.com"}}}}}
 J
-chk 'tailnet via serve' 'https://box.tail0.ts.net:8446/d/abc/' '{"v":1,"kind":"forward","rport":8765,"path":"/d/abc/","scheme":"http","host":""}'
-chk 'tailnet longest mount' 'https://box.tail0.ts.net/api/users?x=1' '{"v":1,"kind":"forward","rport":7000,"path":"/v1/users?x=1","scheme":"http","host":""}'
+chk 'tailnet via serve' 'https://box.example.ts.net:8446/d/abc/' '{"v":1,"kind":"forward","rport":8765,"path":"/d/abc/","scheme":"http","host":""}'
+chk 'tailnet longest mount' 'https://box.example.ts.net/api/users?x=1' '{"v":1,"kind":"forward","rport":7000,"path":"/v1/users?x=1","scheme":"http","host":""}'
 chk 'tailnet short name' 'https://box/z'          '{"v":1,"kind":"forward","rport":9000,"path":"/z","scheme":"http","host":""}'
 chk 'tailnet IP'      'https://100.64.0.7:8446/'  '{"v":1,"kind":"forward","rport":8765,"path":"/","scheme":"http","host":""}'
-chk 'tailnet, proxy not loopback → url' 'https://box.tail0.ts.net:10000/' '{"v":1,"kind":"url","url":"https://box.tail0.ts.net:10000/","host":""}'
+chk 'tailnet, proxy not loopback → url' 'https://box.example.ts.net:10000/' '{"v":1,"kind":"url","url":"https://box.example.ts.net:10000/","host":""}'
 echo '{}' > "$STATE/serve.json"; mkdir -p "$WORK/docprev"
 echo https > "$WORK/docprev/mode"; echo 8447 > "$WORK/docprev/https.port"; echo 8800 > "$WORK/docprev/server.port"
-chk 'tailnet via doc-preview record' 'https://box.tail0.ts.net:8447/d/q/' '{"v":1,"kind":"forward","rport":8800,"path":"/d/q/","scheme":"http","host":""}'
-chk 'tailnet, nothing serves it → url' 'https://box.tail0.ts.net:9999/' '{"v":1,"kind":"url","url":"https://box.tail0.ts.net:9999/","host":""}'
+chk 'tailnet via doc-preview record' 'https://box.example.ts.net:8447/d/q/' '{"v":1,"kind":"forward","rport":8800,"path":"/d/q/","scheme":"http","host":""}'
+chk 'tailnet, nothing serves it → url' 'https://box.example.ts.net:9999/' '{"v":1,"kind":"url","url":"https://box.example.ts.net:9999/","host":""}'
 chk 'external URL'    'https://github.com/o/r/pull/1' '{"v":1,"kind":"url","url":"https://github.com/o/r/pull/1","host":""}'
 chk 'external, no scheme' 'github.com/o/r'       '{"v":1,"kind":"url","url":"https://github.com/o/r","host":""}'
 chk 'mailto'          'mailto:a@b.c'              '{"v":1,"kind":"url","url":"mailto:a@b.c","host":""}'
-got=$(FLEET_OPEN_SSH_HOST=macmini pr ':1/')
-[ "$got" = "$(want '{"v":1,"kind":"forward","rport":1,"path":"/","scheme":"http","host":"macmini"}')" ] \
+got=$(FLEET_OPEN_SSH_HOST=mac-c pr ':1/')
+[ "$got" = "$(want '{"v":1,"kind":"forward","rport":1,"path":"/","scheme":"http","host":"mac-c"}')" ] \
   && ok "REWRITE host = FLEET_OPEN_SSH_HOST" || bad "REWRITE host hint: $got"
 "$OPEN" --print ':99999' >/dev/null 2>&1; [ $? = 1 ] && ok "REWRITE port out of range → exit 1" || bad "REWRITE bad port rc"
 "$OPEN" --print 'two words' >/dev/null 2>&1; [ $? = 1 ] && ok "REWRITE junk → exit 1" || bad "REWRITE junk rc"
@@ -181,8 +181,8 @@ fb 'active client not iTerm2' unconfirmed 'http://127.0.0.1:8765/d/x/' "$OPEN" '
 grep -q 'ssh -L 8765:127.0.0.1:8765' "$WORK/err" && ok "FALLBACK names the ssh -L a loopback page needs" || bad "FALLBACK hint: $(cat "$WORK/err")"
 grep -q 'ttyPHONE 是 xterm-256color' "$WORK/err" && ok "FALLBACK says why (fleet-show's words)" || bad "FALLBACK why"
 fb 'tunnel took it' unconfirmed 'https://github.com/x' env FAKE_OPENURL_SAYS=sent:tunnel "$OPEN" 'https://github.com/x'
-echo '{"Web":{"box.tail0.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
-fb 'tailnet page keeps its tailnet URL' unconfirmed 'https://box.tail0.ts.net:8446/d/a/' "$OPEN" 'https://box.tail0.ts.net:8446/d/a/'
+echo '{"Web":{"box.example.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
+fb 'tailnet page keeps its tailnet URL' unconfirmed 'https://box.example.ts.net:8446/d/a/' "$OPEN" 'https://box.example.ts.net:8446/d/a/'
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
 fb 'FLEET_OPEN=0' unconfirmed 'https://github.com/x' env FLEET_OPEN=0 "$OPEN" 'https://github.com/x'
 fb 'no tmux' unconfirmed 'https://github.com/x' env -u TMUX "$OPEN" 'https://github.com/x'
@@ -276,10 +276,10 @@ echo 'fleet-open: (the home) chatter' >&2
 echo "\${FAKE_RELAY_SAYS:-opened}"
 RELAY
 chmod +x "$WORK/bin/relay"
-echo '{"Web":{"box.tail0.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
+echo '{"Web":{"box.example.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
 rm -f "$OUT"
 RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_RELAY_CMD="$WORK/bin/relay" \
-      "$OPEN" 'https://box.tail0.ts.net:8446/d/a/' 2>"$WORK/err"); RC=$?
+      "$OPEN" 'https://box.example.ts.net:8446/d/a/' 2>"$WORK/err"); RC=$?
 [ "$RC" = 0 ] && [ "$RES" = opened ] && [ ! -s "$OUT" ] && ok "VIA relayed to the home, its result is ours" || bad "VIA ($RC): $RES / $(cat "$WORK/err")"
 case "$(cat "$STATE/relay.argv")" in
   "home2 bash .claude/fleet/bin/fleet-open.sh --from-peer box:$(id -un) -- http://127.0.0.1:8765/d/a/")
@@ -300,19 +300,19 @@ clients '300|/dev/ttyTHIN|tmux'
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/fwd.argv"\necho 41234\n' "$STATE" > "$WORK/bin/fwd"; chmod +x "$WORK/bin/fwd"
 rm -f "$WORK/thin.out"; loop ok
 RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_FWD_CMD="$WORK/bin/fwd" FLEET_THIN_OPEN_OUT="$WORK/thin.out" \
-      FLEET_OPEN_ACK_WAIT=3 "$OPEN" --from-peer macmini:verky -- 'http://127.0.0.1:8765/d/a/' 2>"$WORK/err"); RC=$?; wait
+      FLEET_OPEN_ACK_WAIT=3 "$OPEN" --from-peer mac-c:carol -- 'http://127.0.0.1:8765/d/a/' 2>"$WORK/err"); RC=$?; wait
 [ "$RC" = 0 ] && [ "$RES" = opened ] && ok "PEER the home's 看台 loop opened it" || bad "PEER ($RC): $RES / $(cat "$WORK/err")"
-[ "$(cat "$STATE/fwd.argv" 2>/dev/null)" = "macmini verky 8765" ] && ok "PEER forwards the peer's port over the link" || bad "PEER fwd argv: $(cat "$STATE/fwd.argv" 2>/dev/null)"
-payload 'd["rport"] == 41234 and d["path"] == "/d/a/" and d["node"] == "macmini"' \
+[ "$(cat "$STATE/fwd.argv" 2>/dev/null)" = "mac-c carol 8765" ] && ok "PEER forwards the peer's port over the link" || bad "PEER fwd argv: $(cat "$STATE/fwd.argv" 2>/dev/null)"
+payload 'd["rport"] == 41234 and d["path"] == "/d/a/" and d["node"] == "mac-c"' \
   && ok "PEER the loop is handed the HOME's port" || bad "PEER payload"
-RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_FWD_CMD=false "$OPEN" --from-peer macmini:verky -- ':8765/' 2>/dev/null); RC=$?
+RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_FWD_CMD=false "$OPEN" --from-peer mac-c:carol -- ':8765/' 2>/dev/null); RC=$?
 [ "$RC" = 4 ] && case "$RES" in failed:*) true ;; *) false ;; esac && ok "PEER no link to the peer → failed" || bad "PEER no link ($RC): $RES"
 rm -f "$RV/Mac-1"
 
 # ---- DOCPREV http-direct: the tailnet URL is the loopback port too ------------------------
 echo '{}' > "$STATE/serve.json"; rm -f "$WORK/docprev/https.port"
 echo http-direct > "$WORK/docprev/mode"; echo 8801 > "$WORK/docprev/server.port"
-chk 'tailnet via doc-preview http-direct' 'http://box.tail0.ts.net:8801/d/q/' '{"v":1,"kind":"forward","rport":8801,"path":"/d/q/","scheme":"http","host":""}'
+chk 'tailnet via doc-preview http-direct' 'http://box.example.ts.net:8801/d/q/' '{"v":1,"kind":"forward","rport":8801,"path":"/d/q/","scheme":"http","host":""}'
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
 
 # ---- DOCTOR's open line ---------------------------------------------------------------

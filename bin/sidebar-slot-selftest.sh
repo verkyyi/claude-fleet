@@ -71,7 +71,7 @@ if not L.startswith("@"):
           % (t("-V") or "tmux -V failed", NS.stderr.strip())); sys.exit(1)
 t("set-option", "-w", "-t", L, "@issue", "1")
 P = {}
-for node in ("m4", "m5"):
+for node in ("mac-a", "mac-b"):
     w = t("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "f:", "-n", node, HOLD)
     t("set-option", "-w", "-t", w, "@remote", node + ":x/issue-" + node)
     P[node] = w
@@ -79,7 +79,7 @@ for node in ("m4", "m5"):
 # the GLOBAL window-size is manual (see fleet-sidebar-selftest.sh).
 for w in (L, *P.values()):
     t("resize-window", "-t", w, "-x", "152", "-y", "26")
-P1, P2 = P["m4"], P["m5"]
+P1, P2 = P["mac-a"], P["mac-b"]
 app = {w: t("display-message", "-p", "-t", w, "#{pane_id}") for w in (L, P1, P2)}
 def mkview(w):
     """A view pane beside w's app pane, as sync would have made it."""

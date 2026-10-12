@@ -45,9 +45,9 @@ func recentOf(pl map[string]any) map[string]float64 {
 // were just placed on each, and a first pick with nothing in flight carries no
 // `recent` at all (the degenerate case, byte for byte).
 func TestPlacementBurstSpreads(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
-	beatMem(t, h, m4, "m4", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
+	beatMem(t, h, macC, "mac-c", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
 	got := map[string]int{}
 	var first, last map[string]any
 	for i := 0; i < 4; i++ {
@@ -58,8 +58,8 @@ func TestPlacementBurstSpreads(t *testing.T) {
 		}
 		last = pl
 	}
-	if got["m5"] != 2 || got["m4"] != 2 {
-		t.Fatalf("4 starts landed m5=%d m4=%d; want 2 and 2 (last placement: %v)", got["m5"], got["m4"], last["reason"])
+	if got["mac-d"] != 2 || got["mac-c"] != 2 {
+		t.Fatalf("4 starts landed mac-d=%d mac-c=%d; want 2 and 2 (last placement: %v)", got["mac-d"], got["mac-c"], last["reason"])
 	}
 	for m, r := range recentOf(first) {
 		if r != 0 {
@@ -73,14 +73,14 @@ func TestPlacementBurstSpreads(t *testing.T) {
 	// pick went to the one with one.
 	chosen := last["machine"].(string)
 	rec := recentOf(last)
-	if rec[chosen] != 1 || rec["m5"]+rec["m4"] != 3 {
+	if rec[chosen] != 1 || rec["mac-d"]+rec["mac-c"] != 3 {
 		t.Fatalf("4th placement recent = %v (chose %s); want 1 on the chosen, 2 on the other", rec, chosen)
 	}
 	if r := last["reason"].(string); !strings.Contains(r, "1 just placed") {
 		t.Fatalf("reason %q does not say how many were just placed", r)
 	}
-	if m5.count()+m4.count() != 4 {
-		t.Fatalf("writes sent: m5=%d m4=%d; want 4 in all", m5.count(), m4.count())
+	if macD.count()+macC.count() != 4 {
+		t.Fatalf("writes sent: mac-d=%d mac-c=%d; want 4 in all", macD.count(), macC.count())
 	}
 }
 
@@ -143,7 +143,7 @@ func TestPlacementRecentReflectedByBeat(t *testing.T) {
 // count — and waits for that count to land, which is all that changes.
 func beatSessions(t *testing.T, h *harness, n *writeNode, host, machine string, sessions int, f control.Fleet) {
 	t.Helper()
-	beat(t, n.conn, control.Proto, control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine,
+	beat(t, n.conn, control.Proto, control.Heartbeat{Hostname: host, OSUser: "frank", MachineID: machine,
 		Load1: 2, NCPU: 10, MemFreeBytes: 32 << 30, MemTotalBytes: 64 << 30, MemPressure: 1,
 		Sessions: sessions, Fleets: []control.Fleet{f}, ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, host+"'s session count landed", func() bool {
@@ -152,37 +152,37 @@ func beatSessions(t *testing.T, h *harness, n *writeNode, host, machine string, 
 	})
 }
 
-// Through judge: two starts sent to m4 lower its score as two more sessions
-// would (one core and 1.5 GiB each); m4's beat reporting them restores the
+// Through judge: two starts sent to mac-c lower its score as two more sessions
+// would (one core and 1.5 GiB each); mac-c's beat reporting them restores the
 // plain load score, which with nothing in flight is loadScore to the byte.
 func TestPlacementRecentScoredUntilTheBeatShowsIt(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
-	beatMem(t, h, m4, "m4", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
+	beatMem(t, h, macC, "mac-c", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
 	plain := judgeAll(t, h, nil)
-	if plain["m4"].Score != plain["m5"].Score || plain["m4"].Recent != 0 || plain["m4"].Score != 0.5 {
-		t.Fatalf("plain: m4 %+v m5 %+v; want both 0.5 with nothing in flight", plain["m4"], plain["m5"])
+	if plain["mac-c"].Score != plain["mac-d"].Score || plain["mac-c"].Recent != 0 || plain["mac-c"].Score != 0.5 {
+		t.Fatalf("plain: mac-c %+v mac-d %+v; want both 0.5 with nothing in flight", plain["mac-c"], plain["mac-d"])
 	}
 	now := time.Now()
-	h.srv.recent.note("ep_m4", intp(3), now)
-	h.srv.recent.note("ep_m4", intp(3), now)
+	h.srv.recent.note("ep_mac-c", intp(3), now)
+	h.srv.recent.note("ep_mac-c", intp(3), now)
 	c := judgeAll(t, h, nil)
 	// load 0.2/core + 2/10 cores = 0.4/core → cpu idle 0.5; 32 − 3 GiB of 64 → 0.453
-	if c["m4"].Recent != 2 || c["m4"].Score != 0.453 || c["m5"].Score != 0.5 || c["m5"].Recent != 0 {
-		t.Fatalf("two in flight on m4: m4 %+v m5 %+v; want m4 recent 2 scored 0.453, m5 untouched", c["m4"], c["m5"])
+	if c["mac-c"].Recent != 2 || c["mac-c"].Score != 0.453 || c["mac-d"].Score != 0.5 || c["mac-d"].Recent != 0 {
+		t.Fatalf("two in flight on mac-c: mac-c %+v mac-d %+v; want mac-c recent 2 scored 0.453, mac-d untouched", c["mac-c"], c["mac-d"])
 	}
-	if !better(c["m5"], c["m4"]) {
-		t.Fatal("m5 should now win over m4")
+	if !better(c["mac-d"], c["mac-c"]) {
+		t.Fatal("mac-d should now win over mac-c")
 	}
-	beatSessions(t, h, m4, "m4", machineB, 4, f4) // one of them is in the count
+	beatSessions(t, h, macC, "mac-c", machineB, 4, f4) // one of them is in the count
 	c = judgeAll(t, h, nil)
-	if c["m4"].Recent != 1 || c["m4"].Score != 0.477 {
-		t.Fatalf("beat says 4: m4 %+v; want recent 1 scored 0.477", c["m4"])
+	if c["mac-c"].Recent != 1 || c["mac-c"].Score != 0.477 {
+		t.Fatalf("beat says 4: mac-c %+v; want recent 1 scored 0.477", c["mac-c"])
 	}
-	beatSessions(t, h, m4, "m4", machineB, 5, f4) // both are
+	beatSessions(t, h, macC, "mac-c", machineB, 5, f4) // both are
 	c = judgeAll(t, h, nil)
-	if c["m4"].Recent != 0 || c["m4"].Score != 0.5 {
-		t.Fatalf("beat says 5: m4 %+v; want nothing in flight, score 0.5 again", c["m4"])
+	if c["mac-c"].Recent != 0 || c["mac-c"].Score != 0.5 {
+		t.Fatalf("beat says 5: mac-c %+v; want nothing in flight, score 0.5 again", c["mac-c"])
 	}
 }
 
@@ -216,23 +216,23 @@ func TestRecentScore(t *testing.T) {
 // with one in flight is held as paused (the C5 verdict, with the count), and
 // with nothing in flight it is a candidate as before.
 func TestPlacementRecentTakesTheRoom(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatAdmit(t, h, m5, "m5", machineA, 2, boolp(true), "", 5, f5)
-	beatAdmit(t, h, m4, "m4", machineB, 2, boolp(true), "", 1, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatAdmit(t, h, macD, "mac-d", machineA, 2, boolp(true), "", 5, f5)
+	beatAdmit(t, h, macC, "mac-c", machineB, 2, boolp(true), "", 1, f4)
 	c := judgeAll(t, h, nil)
-	if !c["m4"].Eligible || !c["m5"].Eligible {
-		t.Fatalf("nothing in flight: m4 %+v m5 %+v; want both eligible", c["m4"], c["m5"])
+	if !c["mac-c"].Eligible || !c["mac-d"].Eligible {
+		t.Fatalf("nothing in flight: mac-c %+v mac-d %+v; want both eligible", c["mac-c"], c["mac-d"])
 	}
-	h.srv.recent.note("ep_m4", intp(2), time.Now())
-	h.srv.recent.note("ep_m5", intp(2), time.Now())
+	h.srv.recent.note("ep_mac-c", intp(2), time.Now())
+	h.srv.recent.note("ep_mac-d", intp(2), time.Now())
 	c = judgeAll(t, h, nil)
-	if c["m4"].Eligible || !strings.HasPrefix(c["m4"].Excluded, excludedPaused) || !strings.Contains(c["m4"].Excluded, "room 1") || !strings.Contains(c["m4"].Excluded, "刚派出 1 个") {
-		t.Fatalf("room 1 with one in flight: %+v; want 机器暂停接新 naming the room and the one in flight", c["m4"])
+	if c["mac-c"].Eligible || !strings.HasPrefix(c["mac-c"].Excluded, excludedPaused) || !strings.Contains(c["mac-c"].Excluded, "room 1") || !strings.Contains(c["mac-c"].Excluded, "刚派出 1 个") {
+		t.Fatalf("room 1 with one in flight: %+v; want 机器暂停接新 naming the room and the one in flight", c["mac-c"])
 	}
-	if !c["m5"].Eligible || c["m5"].Recent != 1 {
-		t.Fatalf("room 5 with one in flight: %+v; want still a candidate", c["m5"])
+	if !c["mac-d"].Eligible || c["mac-d"].Recent != 1 {
+		t.Fatalf("room 5 with one in flight: %+v; want still a candidate", c["mac-d"])
 	}
-	if !excludedForFullness(c["m4"].Excluded) {
+	if !excludedForFullness(c["mac-c"].Excluded) {
 		t.Fatal("the held room should count as full for the all-full verdict")
 	}
 }
@@ -240,10 +240,10 @@ func TestPlacementRecentTakesTheRoom(t *testing.T) {
 // A start the node refused outright never opened: it leaves the table at once,
 // so the next pick is not steered away from a machine that took nothing.
 func TestPlacementRecentForgottenOnRefusal(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
-	beatMem(t, h, m4, "m4", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
-	m4.setAnswer(func(map[string]any) (any, *control.Error) {
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
+	beatMem(t, h, macC, "mac-c", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
+	macC.setAnswer(func(map[string]any) (any, *control.Error) {
 		return nil, &control.Error{Code: "AT_CAPACITY", Message: "the gate held it"}
 	})
 	op := postFleet(t, h, "worker_start", map[string]any{"issue": 51, "fleet_id": f4.FleetID, "idempotency_key": "named-51"}, 200)
@@ -251,15 +251,15 @@ func TestPlacementRecentForgottenOnRefusal(t *testing.T) {
 		t.Fatalf("a refused named start = %v; want failed", op)
 	}
 	c := judgeAll(t, h, nil)
-	if c["m4"].Recent != 0 || c["m4"].Score != 0.5 {
-		t.Fatalf("after a refusal m4 %+v; want nothing in flight", c["m4"])
+	if c["mac-c"].Recent != 0 || c["mac-c"].Score != 0.5 {
+		t.Fatalf("after a refusal mac-c %+v; want nothing in flight", c["mac-c"])
 	}
-	m4.setAnswer(accepted)
+	macC.setAnswer(accepted)
 	op = postFleet(t, h, "worker_start", map[string]any{"issue": 52, "fleet_id": f4.FleetID, "idempotency_key": "named-52"}, 200)
 	if op["status"] != "accepted" {
 		t.Fatalf("a named start = %v; want accepted", op)
 	}
-	if c = judgeAll(t, h, nil); c["m4"].Recent != 1 {
-		t.Fatalf("a named start counts too: m4 %+v; want recent 1", c["m4"])
+	if c = judgeAll(t, h, nil); c["mac-c"].Recent != 1 {
+		t.Fatalf("a named start counts too: mac-c %+v; want recent 1", c["mac-c"])
 	}
 }

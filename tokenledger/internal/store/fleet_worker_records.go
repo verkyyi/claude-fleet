@@ -8,7 +8,7 @@ import (
 )
 
 // What a worker on ANOTHER machine leaves behind (claude-fleet#1609, EPIC
-// #1645 C9). A member the hub placed on m4 captured its 改动前 / 改动后 there and
+// #1645 C9). A member the hub placed on mac-a captured its 改动前 / 改动后 there and
 // was reaped there, so the machine that ran the EPIC saw 无证据 and no history
 // row. Now the node that reaps a worker hands the hub what it left — each
 // evidence file (text first, images shrunk on the node) and its history ledger

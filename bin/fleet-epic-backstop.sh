@@ -50,7 +50,7 @@
 # Output, one line on stdout:
 #   exit 0   clear: <child> <why>          (… no live window (hub says gone))
 #   exit 1   backstop skipped: child busy (<child> <reason>)   ← the tick log line
-#                                          (… hub: working on m5)
+#                                          (… hub: working on mac-b)
 #   exit 2   usage mistake
 #
 #   <child-key>        the member's key as `fleet-children.sh` prints it (issue-N,

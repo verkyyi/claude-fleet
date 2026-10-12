@@ -76,7 +76,7 @@ func (e *errPeer) Error() string { return e.msg }
 
 // handleNodePeerCert serves POST /v1/node/peer-cert:
 //
-//	{"target":"m4","purpose":"view","public_key":"ssh-ed25519 …","ttl_sec":300}
+//	{"target":"mac-a","purpose":"view","public_key":"ssh-ed25519 …","ttl_sec":300}
 //
 // authenticated by the requesting node's enrollment token.
 func (s *Server) handleNodePeerCert(w http.ResponseWriter, r *http.Request) {

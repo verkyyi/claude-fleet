@@ -334,8 +334,8 @@ kind, the 执行会话 — a node's call made for one of its sessions:
 Every such call — refused ones too — writes `worker_id` and `worker_key` beside
 the node's `actor` in **`fleet_audit`**, and a placed start's journal row
 (`fleet_operations.worker_id`) names the session. So the audit line for
-「执行会话 issue-N @ m5 → 在 m4 上开会话」 reads
-`actor=node:<login>@m5 worker_key=issue-N action=place outcome=REMOTE m4 done`.
+「执行会话 issue-N @ mac-b → 在 mac-a 上开会话」 reads
+`actor=node:<login>@mac-b worker_key=issue-N action=place outcome=REMOTE mac-a done`.
 The envelope sent to the target node is unchanged (its `fields()` check is
 strict). The call log marks a call that handed one out with ` hub=asserted`.
 

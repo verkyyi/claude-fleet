@@ -36,20 +36,20 @@ func dialMachineCaps(t *testing.T, h *harness, token string, caps ...string) *ma
 	return n
 }
 
-// linuxRig is fleet-linux-0's machine link (it opens its own logins) and m9's
+// linuxRig is linux-b's machine link (it opens its own logins) and m9's
 // (a Mac: it does not). The hub's admin logins are elsewhere.
 func linuxRig(t *testing.T) (*harness, *machNode, *machNode) {
 	t.Helper()
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verky"}
+	h.srv.FleetAdmins = []string{"heidi"}
 	h.enroll(t, "linux")
 	h.enroll(t, "mac")
 	lin := dialMachineCaps(t, h, h.tokens["linux"], control.CapLoginJoin)
-	lin.beat("", control.Heartbeat{OS: "linux", Hostname: "fleet-linux-0", OSUser: "root", NCPU: 4, ObservedAt: time.Now()})
+	lin.beat("", control.Heartbeat{OS: "linux", Hostname: "linux-b", OSUser: "root", NCPU: 4, ObservedAt: time.Now()})
 	mac := dialMachineCaps(t, h, h.tokens["mac"])
 	mac.beat("", control.Heartbeat{OS: "darwin", Hostname: "m9", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, "both machine links named", func() bool {
-		_, ok := h.srv.nodes.openerFor("fleet-linux-0")
+		_, ok := h.srv.nodes.openerFor("linux-b")
 		named := false
 		h.srv.nodes.each(func(_ string, c *nodeConn) { named = named || c.hostname() == "m9" })
 		return ok && named
@@ -57,14 +57,14 @@ func linuxRig(t *testing.T) (*harness, *machNode, *machNode) {
 	return h, lin, mac
 }
 
-// 怎么算成功: assigned to fleet-linux-0, the create goes down the machine's own
+// 怎么算成功: assigned to linux-b, the create goes down the machine's own
 // lane; its answer makes the row active; a remove goes the same way.
 func TestLinuxMachineOpensItsOwnLogins(t *testing.T) {
 	h, lin, mac := linuxRig(t)
 	if id, ok := h.srv.nodes.openerFor("m9"); ok {
 		t.Fatalf("m9 (no CapLoginJoin) is an opener: %s", id)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "arvin", Hostname: "fleet-linux-0"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "erin", Hostname: "linux-b"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	m, op := expectAccountOp(t, &tnode{in: lin.inbox("")})
@@ -72,13 +72,13 @@ func TestLinuxMachineOpensItsOwnLogins(t *testing.T) {
 		t.Fatalf("op = %+v on lane %q; want a create with its join code on the machine's own lane", op, m.Login)
 	}
 	if got, ok := readMsg(&tnode{in: mac.inbox("")}, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
-		t.Fatalf("m9 received fleet-linux-0's op %+v", got)
+		t.Fatalf("m9 received linux-b's op %+v", got)
 	}
 	res, _ := control.New(control.TypeAccountResult, control.AccountResult{Op: control.AccountCreate, Login: op.Login,
 		OK: true, Credsep: control.CredsepSeparated})
 	res.OpID = m.OpID
 	lin.send("", res)
-	a := waitState(t, h, "arvin", "fleet-linux-0", store.AccountActive)
+	a := waitState(t, h, "erin", "linux-b", store.AccountActive)
 	if ack, ok := readMsg(&tnode{in: lin.inbox("")}, 3*time.Second); !ok || ack.Type != control.TypeAck || ack.OpID != m.OpID {
 		t.Fatalf("the result was not acked: %+v", ack)
 	}
@@ -89,17 +89,17 @@ func TestLinuxMachineOpensItsOwnLogins(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, n := range snap.Nodes {
-		if n.Hostname == "fleet-linux-0" && n.MachineLink {
+		if n.Hostname == "linux-b" && n.MachineLink {
 			if !n.LoginJoin || n.Admin {
-				t.Fatalf("fleet-linux-0's row: LoginJoin=%v Admin=%v; want true/false", n.LoginJoin, n.Admin)
+				t.Fatalf("linux-b's row: LoginJoin=%v Admin=%v; want true/false", n.LoginJoin, n.Admin)
 			}
 		}
 	}
-	if !adminNodesOnline(snap)["fleet-linux-0"] {
-		t.Fatal("fleet-linux-0 is not counted as a machine that can open a login")
+	if !adminNodesOnline(snap)["linux-b"] {
+		t.Fatal("linux-b is not counted as a machine that can open a login")
 	}
 
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: "arvin", Hostname: "fleet-linux-0"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: "erin", Hostname: "linux-b"}); code != 200 {
 		t.Fatalf("remove: HTTP %d", code)
 	}
 	m, op = expectAccountOp(t, &tnode{in: lin.inbox("")})
@@ -109,7 +109,7 @@ func TestLinuxMachineOpensItsOwnLogins(t *testing.T) {
 	res, _ = control.New(control.TypeAccountResult, control.AccountResult{Op: control.AccountRemove, Login: op.Login, OK: true})
 	res.OpID = m.OpID
 	lin.send("", res)
-	waitState(t, h, "arvin", "fleet-linux-0", store.AccountRemoved)
+	waitState(t, h, "erin", "linux-b", store.AccountRemoved)
 }
 
 // A machine link that opens logins is not an admin: no SSH CA is sent to it,

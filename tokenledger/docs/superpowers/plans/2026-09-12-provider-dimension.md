@@ -752,7 +752,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/dave/ccquota/internal/model"
 )
 
 // Rollup history outlives the raw events it was built from, so the migration
@@ -1434,7 +1434,7 @@ EOF
 - [ ] **Step 1: Full suite and a race check**
 
 ```bash
-cd /Users/verkyyi/projects/ccquota-scratch-1
+cd /Users/dave/projects/ccquota-scratch-1
 go build ./... && go vet ./... && go test ./... && go test -race ./internal/store/
 ```
 Expected: all green.
@@ -1560,7 +1560,7 @@ After the rollout:
 
 ```bash
 curl -s -H "Authorization: Bearer $CCQUOTA_VIEWER_TOKEN" \
-  "https://ccquota.24haowan.com/v1/usage?by=provider&source=gateway&since=90d" \
+  "https://ccquota.example.com/v1/usage?by=provider&source=gateway&since=90d" \
   | python3 -m json.tool
 ```
 

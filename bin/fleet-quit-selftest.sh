@@ -10,7 +10,7 @@
 #      lease given back (`release --lease L1`) and its files removed; a pid file
 #      naming a process that is NOT that loop kills nothing; the «machine» (a
 #      tmux server standing for the sessions) untouched; the terminal says
-#      「fleet 已退出；会话仍在 m4/m5 上运行，`fleet` 重新进入。」; `fleet status` then
+#      「fleet 已退出；会话仍在 mac-a/mac-b 上运行，`fleet` 重新进入。」; `fleet status` then
 #      says 「客户端没在运行」
 #   C  `fleet quit` again: 「fleet 客户端没在运行。」, exit 0
 #   D  from inside the client (⌘Q / prefix Q / the menus run it on its own
@@ -102,7 +102,7 @@ up() {
   printf '%s\n' "$K" > "$CL/keeper.pid"; printf '%s\n' "$H" > "$G/hubsess.pid"
   printf '%s\n' "$A" > "$CL/actions.pid"; printf '%s\n' "$OTHER" > "$CL/warm/loop.pid"   # not the warm loop
   printf 'L1\n' > "$CL/client.lease"; printf '{}\n' > "$CL/client.where.json"
-  printf '#node\037m5\nwid:F/w1\037m5\037\037\037\037working\nwid:F/w2\037m4\037\037\037\037idle\nwid:F/w3\037m5\037\037\037\037idle\n' > "$G/remote_fq"
+  printf '#node\037mac-b\nwid:F/w1\037mac-b\037\037\037\037working\nwid:F/w2\037mac-a\037\037\037\037idle\nwid:F/w3\037mac-b\037\037\037\037idle\n' > "$G/remote_fq"
   sleep 0.3
 }
 
@@ -119,7 +119,7 @@ eq "B fleet status, client up: exit 0" "$(sh "$BIN/fleet" status >/dev/null 2>&1
 has "B …in the background" "$(sh "$BIN/fleet" status 2>&1)" '客户端在后台运行（`fleet quit` 退出）'
 out=$(sh "$BIN/fleet" quit 2>&1); rc=$?
 eq "B fleet quit: exit 0" "$rc" 0
-eq "B …the terminal's line" "$out" 'fleet 已退出；会话仍在 m4/m5 上运行，`fleet` 重新进入。'
+eq "B …the terminal's line" "$out" 'fleet 已退出；会话仍在 mac-a/mac-b 上运行，`fleet` 重新进入。'
 eq "B the client's server gone" "$(T has-session -t =fq 2>/dev/null; echo $?)" 1
 eq "B its stage gone" "$(tmux -L fq-stage has-session 2>/dev/null; echo $?)" 1
 sleep 0.3
@@ -171,12 +171,12 @@ fhs() {   # in a terminal (fleet-home-session.sh wants one), to the end
   sed "s#--body-file [^ ]*#--body-file B#" "$W/stub.log" | tr -d '\n'
 }
 printf '1\n' > "$W/running"
-printf 'REMOTE m5 place done 1234-ab/fid-9\n' > "$W/hline"
+printf 'REMOTE mac-b place done 1234-ab/fid-9\n' > "$W/hline"
 eq "E no client before: its own view, then the client goes again" "$(fhs)" \
-  '[running][][home-session claude --body-file B --new --no-stage][solo m5 1234-ab/fid-9][quit --quiet --if-unattached]'
+  '[running][][home-session claude --body-file B --new --no-stage][solo mac-b 1234-ab/fid-9][quit --quiet --if-unattached]'
 printf '0\n' > "$W/running"
 eq "E a client already running: no re-attach pass on it, the view, and it stays" "$(fhs)" \
-  '[running][home-session claude --body-file B --new --no-stage][solo m5 1234-ab/fid-9]'
+  '[running][home-session claude --body-file B --new --no-stage][solo mac-b 1234-ab/fid-9]'
 printf 'LOCAL host\t@7 x\n' > "$W/hline"
 eq "E no hub (a LOCAL row): the client, as before" "$(fhs)" \
   '[running][home-session claude --body-file B --new --no-stage][]'
@@ -194,7 +194,7 @@ eq "E --if-unattached: with no terminal on it, it goes" "$(T has-session -t =fq 
 # --- G ---------------------------------------------------------------------------
 : > "$W/lease.log"
 up
-bash "$W/fake/fleet-shell.sh" solo m5 F/w1 & SV=$!
+bash "$W/fake/fleet-shell.sh" solo mac-b F/w1 & SV=$!
 bash "$W/fake/fleet-hub-sessions.sh" --loop & H2=$!
 PIDS="$PIDS $SV $H2"; disown $SV $H2 2>/dev/null
 tmux -L "fq-solo-$SV" -f /dev/null new-session -d -s "fq-solo-$SV" "sleep 600"

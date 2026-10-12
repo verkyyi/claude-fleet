@@ -14,7 +14,7 @@
 # that pane the way a far tmux client redraws after a switch.
 #
 # Steps, each measured until the terminal is quiet: idle (nothing done), SAME
-# machine (an m5 row → another m5 row) and OTHER machine (m5 → m4, both
+# machine (an mac-b row → another mac-b row) and OTHER machine (mac-b → mac-a, both
 # connections already up) — every one through fleet-sidebar.py's own `jump`, what
 # Enter on a row runs. A tiny VT parser maps every printed / erased cell onto the
 # screen: the list's column, the status row, the borders, the right pane.
@@ -22,7 +22,7 @@
 #   · the list's column, the status row and the borders: 0 cells written in
 #     either switch (the right pane only)
 #   · the other-machine switch: ≤ 1.5 × the same-machine switch's bytes
-#   · and it switched: the right pane shows m4-content afterwards
+#   · and it switched: the right pane shows mac-a-content afterwards
 # Prints the two columns (same / other: bytes, list cells, status cells, border
 # cells) — the issue's 上线证据. tmux / python3 absent → SKIP (exit 0).
 # Debugging: FSR_SHOW=1 prints the right pane and the panes; FSR_KEEP=1 keeps the
@@ -74,8 +74,8 @@ cat > "$SB/fleet-connect.py" <<EOF
 #!/usr/bin/env python3
 import json, sys
 if "--pick" in sys.argv:
-    print(json.dumps({"machine": "m5", "hostname": "macmini", "reason": "last", "login": "verk",
-                      "machines": [{"alias": "m5", "hostname": "macmini"}, {"alias": "m4", "hostname": "mini2"}]}))
+    print(json.dumps({"machine": "mac-b", "hostname": "mac-c", "reason": "last", "login": "bob",
+                      "machines": [{"alias": "mac-b", "hostname": "mac-c"}, {"alias": "mac-a", "hostname": "mac-d"}]}))
 sys.exit(0)
 EOF
 chmod +x "$SB/fleet-connect.py"
@@ -123,22 +123,22 @@ export FLEET_REMOTE_SSH_CMD="$SHIM/ssh"
 
 cat > "$WORK/sessions.json" <<'EOF'
 {"sessions": [
-  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "macmini", "os_user": "verk",
+  {"worker_id": "11111111-1111-4111-8111-111111111111/issue-7", "machine_name": "mac-c", "os_user": "bob",
    "availability": "online", "observed_at": "2026-10-04T10:00:00Z",
    "worker": {"issue": 7, "repo": "acme/app", "state": "working", "agent": "claude", "name": "issue-7", "needs": ""}},
-  {"worker_id": "11111111-1111-4111-8111-111111111111/scratch-3", "machine_name": "macmini", "os_user": "verk",
+  {"worker_id": "11111111-1111-4111-8111-111111111111/scratch-3", "machine_name": "mac-c", "os_user": "bob",
    "availability": "online", "observed_at": "2026-10-04T10:00:00Z",
    "worker": {"issue": 0, "repo": "", "state": "idle", "agent": "claude", "name": "notes", "needs": ""}},
-  {"worker_id": "22222222-2222-4222-8222-222222222222/issue-9", "machine_name": "mini2", "os_user": "verk",
+  {"worker_id": "22222222-2222-4222-8222-222222222222/issue-9", "machine_name": "mac-d", "os_user": "bob",
    "availability": "online", "observed_at": "2026-10-04T10:00:00Z",
    "worker": {"issue": 9, "repo": "acme/app", "state": "working", "agent": "claude", "name": "issue-9", "needs": ""}}
  ],
  "nodes": [
-  {"machine_name": "macmini", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:00:00Z"},
-  {"machine_name": "mini2", "availability": "online", "sessions": 1, "observed_at": "2026-10-04T10:00:00Z"}
+  {"machine_name": "mac-c", "availability": "online", "sessions": 2, "observed_at": "2026-10-04T10:00:00Z"},
+  {"machine_name": "mac-d", "availability": "online", "sessions": 1, "observed_at": "2026-10-04T10:00:00Z"}
  ]}
 EOF
-export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=verk
+export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=bob
 
 # --- the client, up -------------------------------------------------------------
 out=$("$SB/fleet" 2>"$WORK/up.err"); rc=$?
@@ -172,11 +172,11 @@ chmod +x "$WORK/jump.sh"
 
 M5A='wid:11111111-1111-4111-8111-111111111111/issue-7'
 M5B='wid:11111111-1111-4111-8111-111111111111/scratch-3'
-M4='wid:22222222-2222-4222-8222-222222222222/issue-9'
+MAC_A='wid:22222222-2222-4222-8222-222222222222/issue-9'
 
-python3 - "$REAL_TMUX" "$SESS" "$standin" "$WORK" "$M5A" "$M5B" "$M4" > "$WORK/result" 2>"$WORK/measure.err" <<'PY'
+python3 - "$REAL_TMUX" "$SESS" "$standin" "$WORK" "$M5A" "$M5B" "$MAC_A" > "$WORK/result" 2>"$WORK/measure.err" <<'PY'
 import fcntl, os, pty, select, struct, subprocess, sys, termios, time, unicodedata
-tmux, sess, standin, work, m5a, m5b, m4 = sys.argv[1:8]
+tmux, sess, standin, work, m5a, m5b, macA = sys.argv[1:8]
 W, H = 160, 45
 
 def t(*a):
@@ -319,12 +319,12 @@ def classify(hit, reg):
 
 drain(1.5, 8)
 time.sleep(0.5)
-# both connections up, settled: m4 opened once, then back on m5
-jump(m4); drain(1.0, 8)
+# both connections up, settled: mac-a opened once, then back on mac-b
+jump(macA); drain(1.0, 8)
 jump(m5a); drain(1.0, 8)
 time.sleep(1.0); drain(0.5, 3)
 rows = {}
-for name, act in (("idle", None), ("same", m5b), ("other", m4)):
+for name, act in (("idle", None), ("same", m5b), ("other", macA)):
     drain(0.5, 3)
     if act:
         jump(act)
@@ -343,7 +343,7 @@ if right:
 for name in ("idle", "same", "other"):
     b, n, c = rows[name]
     print("%s %d %d %d %d %d %d" % (name, b, n["list"], n["status"], n["border"], n["right"], c))
-print("shows_m4 %d" % (1 if "m4-content" in shown else 0))
+print("shows_m4 %d" % (1 if "mac-a-content" in shown else 0))
 os.kill(pid, 9)
 PY
 [ -s "$WORK/result" ] || { printf 'FAIL: the measurement did not run: %s\n' "$(tail -5 "$WORK/measure.err")" >&2; exit 1; }
@@ -368,7 +368,7 @@ done
 CHECKS=$((CHECKS + 1))
 s=$(val same 2); o=$(val other 2)
 [ -n "$s" ] && [ -n "$o" ] && [ $(( o * 2 )) -le $(( s * 3 )) ] || fail 'the other-machine switch costs ≤ 1.5× the same-machine one' "other $o vs same $s bytes"
-CHECKS=$((CHECKS + 1)); [ "$(val shows_m4 2)" = 1 ] || fail 'after the other-machine switch the right pane shows m4'
+CHECKS=$((CHECKS + 1)); [ "$(val shows_m4 2)" = 1 ] || fail 'after the other-machine switch the right pane shows mac-a'
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'shell-switch-repaint selftest: %d/%d checks FAILED\n' "$FAIL" "$CHECKS" >&2

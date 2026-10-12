@@ -17,7 +17,7 @@ import (
 // no account uuid or e-mail in the answer; an admin reads their own too, not
 // the pool; someone with nothing gets [].
 func TestMeQuota_OwnSubscriptionsOnly(t *testing.T) {
-	h := newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h := newGitHubHarnessWith(t, fullServer, "ivan")
 	now := time.Now()
 	reset5, reset7 := now.Add(2*time.Hour).UTC().Truncate(time.Second), now.Add(50*time.Hour).UTC().Truncate(time.Second)
 	ingest := func(ep, host, acct string) {

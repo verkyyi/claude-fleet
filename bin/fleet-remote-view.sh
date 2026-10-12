@@ -3,8 +3,8 @@
 # sidebar (issue #1424, EPIC #1419 C5).
 #
 # The sidebar already SHOWS your sessions on the other machines (#1423: rows keyed
-# `wid:<worker_id>`, each ending in its machine's `@m4` mark, #1780). Enter on
-# one opens a PROXY WINDOW here — titled `<name> · @m4` (issue #1780: the mark
+# `wid:<worker_id>`, each ending in its machine's `@mac-a` mark, #1780). Enter on
+# one opens a PROXY WINDOW here — titled `<name> · @mac-a` (issue #1780: the mark
 # the row ends in, never a machine prefix on the name), so the window list and the
 # pane header both say the keys go elsewhere — a window marked `@remote=<node>:<worker_id>` whose
 # pane is an ssh client attached to that session's tmux window on <node>. Typing
@@ -107,7 +107,7 @@
 # with that session's status line and prefix off for good. The one thing a
 # window carries for everyone is its top header (pane-border-status, a WINDOW
 # option): a window a shell/view looks at loses it ONE WAY (issue #1549 — the
-# viewer's `<name> · @m4` header is the one title line) and never gets it back, so no
+# viewer's `<name> · @mac-a` header is the one title line) and never gets it back, so no
 # client change ever resizes a pane. Never `resize-pane -Z`.
 #
 # The registry $FLEET_CONF_DIR/remote-views/<id>: one line per client,
@@ -136,7 +136,7 @@
 # so the far end registers a SHELL client (#1485) on a view session of its own.
 #
 # Knobs (env, fleet.conf or the fleet's conf):
-#   FLEET_REMOTE_SSH         `m4=m4-lan m5=macmini` — ssh host per machine label
+#   FLEET_REMOTE_SSH         `mac-a=m4-lan mac-b=mac-c` — ssh host per machine label
 #                            (default: the label itself, as ~/.ssh/config names it)
 #   FLEET_REMOTE_BIN         the fleet's bin/ on the other machine, relative to its
 #                            $HOME or absolute (default .claude/fleet/bin)
@@ -326,7 +326,7 @@ rv_route_login() {
 try: print(json.load(open(sys.argv[1])).get("login") or "")
 except Exception: pass' "$1" 2>/dev/null
 }
-# The hub's name for a machine label: FLEET_NODE_ALIASES backwards (`macmini=m5`).
+# The hub's name for a machine label: FLEET_NODE_ALIASES backwards (`mac-c=mac-b`).
 hub_node() {
   printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$1" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }'
 }
@@ -465,7 +465,7 @@ rv_peer_sweep() {
 # --- orphaned attaches (issue #1907) ---------------------------------------------
 # An attach whose line died without sshd noticing keeps its tmux client process —
 # stuck writing to a tty nobody reads — long after the server dropped that client
-# (m4, 2026-10-06: six of them, one to two days old, none in `list-clients`). Its
+# (mac-a, 2026-10-06: six of them, one to two days old, none in `list-clients`). Its
 # registry row and spool live on with it. An attach is an ORPHAN when it is older
 # than FLEET_REMOTE_ORPHAN_SECS (60) and no client of any live fleet server is its
 # child (or grandchild: a tmux shim on PATH may not exec).
@@ -601,7 +601,7 @@ rv_machine_word() {
   printf '%s' "$n"
 }
 # A window a shell/view looks at loses its own top header, ONE WAY (issues #1549,
-# #1713): the viewer's `<name> · @m4` header is the one title line, and since it never
+# #1713): the viewer's `<name> · @mac-a` header is the one title line, and since it never
 # comes back no client arriving or leaving resizes a pane on this machine.
 rv_hide_border() {   # <window-id>
   [ "$(T show-options -wqv -t "$1" pane-border-status 2>/dev/null)" = off ] ||
@@ -800,7 +800,7 @@ EOF
   else printf '@%s' "${2#@}"; fi
 }
 # rv_node_label — this machine's name as the hub's rows say it: its
-# FLEET_NODE_ALIASES name (`macmini=m5`), else the short hostname.
+# FLEET_NODE_ALIASES name (`mac-c=mac-b`), else the short hostname.
 rv_node_label() {
   local h lh a
   h=${FLEET_SIDEBAR_HOST:-$(hostname -s 2>/dev/null)}; h=${h%%.*}
@@ -1056,11 +1056,11 @@ open)
   done
   [ -n "$node" ] || { tmux display-message "fleet: $wid 不在侧边栏的远程清单里" 2>/dev/null; exit 1; }
   case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
-  # `<name> · @m4` (issue #1780): the window name is also the pane header
+  # `<name> · @mac-a` (issue #1780): the window name is also the pane header
   # (conf/tmux-attention.conf's pane-border-format; the stage's title line,
   # conf/tmux-shell-stage.conf), so the top of the pane says at a glance where
-  # the keys go — in the sidebar row's own words: `@m4`, `@本机` when that machine
-  # is this computer. No machine PREFIX on the name (#1475's `m4 <name>`), no ⇄
+  # the keys go — in the sidebar row's own words: `@mac-a`, `@本机` when that machine
+  # is this computer. No machine PREFIX on the name (#1475's `mac-a <name>`), no ⇄
   # (#1621): a proxy window is known by `@remote`, never by its name.
   title="${name:-${wid#*/}} · @$(rv_machine_word "$node")"
   shellopt=''; [ "${FLEET_SHELL:-0}" = 1 ] && shellopt=' --shell'   # the shell's panes (#1484)
@@ -1188,8 +1188,8 @@ run)
   # another loop's. No tmux, or a server that does not answer = yes. Seen on the
   # operator's MacBook (issue #2987): a loop whose stage server was replaced kept
   # running as an orphan — the new server has the same socket path and REUSES the
-  # pane ids, so `pane_gone` saw `%1` alive — and wrote its m5 line's
-  # `@remote_ctl` / `@remote_down` onto the m4 window that now had `%1`.
+  # pane ids, so `pane_gone` saw `%1` alive — and wrote its mac-b line's
+  # `@remote_ctl` / `@remote_down` onto the mac-a window that now had `%1`.
   mine() {
     [ -n "$stray" ] && return 1
     [ -n "${TMUX:-}" ] || return 0

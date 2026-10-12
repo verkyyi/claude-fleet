@@ -97,7 +97,7 @@ func TestProbeOnce(t *testing.T) {
 }
 
 // claude-fleet#2433: a login served by `ccquota agent --machine` beats the same
-// compute word and probe its own agent did. m4's logins/<login>.env names no
+// compute word and probe its own agent did. mac-a's logins/<login>.env names no
 // FLEET_CONF_DIR, so the tenant falls back to the login's own conf dir — the
 // files fleet-credsep-launch.py's agent branch read too, node.env a symlink into
 // the root-owned credential store (root follows it; the login could not).
@@ -128,7 +128,7 @@ func TestMachineTenantBeatsComputeAndProbeLikeItsOwnAgent(t *testing.T) {
 		return a
 	}
 	plain := build(nil)
-	tenant := build(&RunAs{Login: "verkyyi", UID: 501, GID: 20, Home: home})
+	tenant := build(&RunAs{Login: "grace", UID: 501, GID: 20, Home: home})
 	if tenant.cfg.FleetNodeEnvPath != filepath.Join(conf, "node.env") || tenant.cfg.FleetProbePath != filepath.Join(conf, "node-probe.json") ||
 		tenant.cfg.FleetNodeEnvPath != plain.cfg.FleetNodeEnvPath || tenant.cfg.FleetProbePath != plain.cfg.FleetProbePath {
 		t.Fatalf("tenant reads %q / %q; its own agent %q / %q", tenant.cfg.FleetNodeEnvPath, tenant.cfg.FleetProbePath,

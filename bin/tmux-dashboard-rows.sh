@@ -65,7 +65,7 @@ R="${E}0m"; US=$'\x1f'
 # every frame already makes — same value on every line, no extra fork. Both
 # passes name it so nothing lands glued to @sleep_since.
 # A PROXY window (@remote, issue #1424) prints an EMPTY name, so both passes drop
-# it like a nameless line: the machine's own `[m4]` row already stands for it.
+# it like a nameless line: the machine's own `[mac-a]` row already stands for it.
 # So does the one-session view's local shell (@solo_shell, issue #2566): a
 # window of the client's own, never a session.
 # The LAST field (issue #1750) is the window's BIRTH — @born, stamped once at
@@ -462,8 +462,8 @@ WLIST=${WLIST//\\037/$US}
 #   born       the session's birth (cache field 15, issue #1750: @born, else its
 #              window_created, as the node reported it) — the one ruler this
 #              machine's rows and the other machines' are ordered by
-#   @wid       the machine the row is on (`m4`; sidebar field 9, drawn as the
-#              row's `@m4` mark, #1780), `m4!` once that machine is lost — or the
+#   @wid       the machine the row is on (`mac-a`; sidebar field 9, drawn as the
+#              row's `@mac-a` mark, #1780), `mac-a!` once that machine is lost — or the
 #              hub itself has been silent longer than FLEET_HUB_SESSIONS_STALE
 #              (60s; global/hub_ok, #1483): the row stays, dimmed, under its
 #              machine's 失联 heading
@@ -499,9 +499,9 @@ WLIST=${WLIST//\\037/$US}
 # GROUPS: `#me` this machine's label; one `#node` per other machine — label,
 # online|lost, your session count there, the hub's last observation of it. A
 # LOST row (its machine lost, or the whole cache stale) STAYS PUT (issue #1882):
-# same group, same place, same parent — only dimmed, its `@m4!` mark and the
+# same group, same place, same parent — only dimmed, its `@mac-a!` mark and the
 # bar's 入口连不上 / machine cell saying why. It used to move to its machine's
-# own group at the foot (`─ m4 失联 ─`, #1475/#1770), so the list reshuffled the
+# own group at the foot (`─ mac-a 失联 ─`, #1475/#1770), so the list reshuffled the
 # moment a network dropped and again when it came back.
 HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
 if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remote_$FLEET_SESSION" ]; then
@@ -544,7 +544,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       r_node="$r_node!"
     elif [ "$r_via" = node ]; then
       # taken over the machine's direct connection while the hub is silent
-      # (#1488): `m5~` — the view ends the row in a dim `m5` (#1621), nothing else
+      # (#1488): `mac-b~` — the view ends the row in a dim `mac-b` (#1621), nothing else
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
@@ -1000,7 +1000,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # group 0, so a one-repo fleet sorts exactly as before.
   rgrp_v "$wrepo" "$wnorepo"; ownrgrp=$rgrp
   # A row on another machine (issues #1423/#1475): @wid carries its machine
-  # label — `m4`, `m4!` once that machine is lost, `m5~` when the row came over
+  # label — `mac-a`, `mac-a!` once that machine is lost, `mac-b~` when the row came over
   # the shell's direct connection to it (#1488). The label draws DIM at the
   # row's end; a lost row stays where it is, dimmed (issue #1882).
   rnode=''; rlost=''
@@ -1545,9 +1545,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
         *,tool,*)     [ -n "${WD_tool-}" ] || WD_tool=$(fleet_ui_t wait_tool); ndet=$WD_tool ;;   # #1880
       esac
     fi
-    # field 9 (issue #1475): the machine of a row on another machine — `m4`,
-    # `m4!` when lost, `m5~` when heard over the shell's own connection (#1488)
-    # — empty for a local row. The view ends the row in it as `@m4` (`@本机` for
+    # field 9 (issue #1475): the machine of a row on another machine — `mac-a`,
+    # `mac-a!` when lost, `mac-b~` when heard over the shell's own connection (#1488)
+    # — empty for a local row. The view ends the row in it as `@mac-a` (`@本机` for
     # the client's own computer, issue #1780); `!` dims the row too.
     # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
     # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
@@ -1622,8 +1622,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
     tagpfx+="${_cc}${_ct}${R}"; dwidth=$(( dwidth + ${#_ct} * 2 - ${#_a} ))
   fi
-  # A row on another machine ends its tags in that machine's `@m4` (issue #1780,
-  # the sidebar's mark): `@m4!` once it is lost (the row dims too), `@m5~` heard
+  # A row on another machine ends its tags in that machine's `@mac-a` (issue #1780,
+  # the sidebar's mark): `@mac-a!` once it is lost (the row dims too), `@mac-b~` heard
   # over the shell's own connection. This machine's own rows carry none.
   if [ -n "$rnode" ]; then
     [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
@@ -1817,9 +1817,9 @@ fi
 
 # --- the other machines (issues #1475, #1882) -------------------------------
 # No heading of their own: a lost machine's rows stay in their own groups,
-# dimmed (above) — a `─ m4 失联 ─` group at the foot made the whole list move
+# dimmed (above) — a `─ mac-a 失联 ─` group at the foot made the whole list move
 # when a network dropped (issue #1882). Which machine is lost, or that the hub
-# is unreachable, is the bar's machine cell and each row's `@m4!` mark.
+# is unreachable, is the bar's machine cell and each row's `@mac-a!` mark.
 
 # 要你处理 (issue #1750): in the born order a `needs` / `failed` row no longer
 # rises to the top — it stays where it was born, red — so ONE summary line above

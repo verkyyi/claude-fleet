@@ -94,7 +94,7 @@ func auditCount(t *testing.T, h *harness, where string) int {
 func TestMaintenanceOffAddsNothing(t *testing.T) {
 	h, _, _, _, _ := twoNodes(t)
 	machines, nodes := nodeStatuses(t, h)
-	for _, host := range []string{"m5", "m4"} {
+	for _, host := range []string{"mac-d", "mac-c"} {
 		if machines[host]["status"] != "online" || nodes[host]["status"] != "online" {
 			t.Fatalf("%s: machine %v node %v; want online", host, machines[host]["status"], nodes[host]["status"])
 		}
@@ -105,7 +105,7 @@ func TestMaintenanceOffAddsNothing(t *testing.T) {
 			t.Fatalf("%s node carries a maintenance key with nothing set: %v", host, nodes[host])
 		}
 	}
-	st, out := maintCall(t, h, h.tokens["m5"], http.MethodGet, nil)
+	st, out := maintCall(t, h, h.tokens["mac-d"], http.MethodGet, nil)
 	if st != 200 || out["status"] != "online" || out["maintenance"] != nil {
 		t.Fatalf("GET maintenance = %d %v; want online, null", st, out)
 	}
@@ -121,8 +121,8 @@ func TestMaintenanceOffAddsNothing(t *testing.T) {
 			t.Fatalf("effective settings carry %s with nothing set", k)
 		}
 	}
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("placement with nothing set: %q %v; want m4 (m5 is loaded)", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("placement with nothing set: %q %v; want mac-c (mac-d is loaded)", pl.Machine, err)
 	}
 }
 
@@ -130,36 +130,36 @@ func TestMaintenanceOffAddsNothing(t *testing.T) {
 // roster and the sidebar's machine line say 维护中, placement sends new work
 // elsewhere — auto AND named — and `leave` puts everything back.
 func TestNodeMaintenanceFlagsItselfAndPlacementAvoidsIt(t *testing.T) {
-	h, m5, m4, f5, _ := twoNodes(t)
-	// Make m5 the better machine, so only the flag can keep work off it.
-	m5.beatLoad("m5", "verk", machineA, 0.5, 0, f5)
-	waitFor(t, 3*time.Second, "m5 reports idle", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
+	h, macD, macC, f5, _ := twoNodes(t)
+	// Make mac-d the better machine, so only the flag can keep work off it.
+	macD.beatLoad("mac-d", "frank", machineA, 0.5, 0, f5)
+	waitFor(t, 3*time.Second, "mac-d reports idle", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-d", time.Now())
 		return hb.Load1 == 0.5
 	})
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("before the flag: %q %v; want m5", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("before the flag: %q %v; want mac-d", pl.Machine, err)
 	}
 
-	st, out := maintCall(t, h, h.tokens["m5"], http.MethodPost, map[string]any{"action": "enter", "reason": "升级 macOS"})
+	st, out := maintCall(t, h, h.tokens["mac-d"], http.MethodPost, map[string]any{"action": "enter", "reason": "升级 macOS"})
 	if st != 200 || out["status"] != "maintenance" {
 		t.Fatalf("enter = %d %v; want status maintenance", st, out)
 	}
 	rec, _ := out["maintenance"].(map[string]any)
-	if rec["reason"] != "升级 macOS" || rec["by"] != "node:verk@m5" || rec["machine"] != "m5" || rec["since"] == nil {
+	if rec["reason"] != "升级 macOS" || rec["by"] != "node:frank@mac-d" || rec["machine"] != "mac-d" || rec["since"] == nil {
 		t.Fatalf("record = %v", rec)
 	}
 	since := rec["since"]
 
 	machines, nodes := nodeStatuses(t, h)
-	if machines["m5"]["status"] != "maintenance" || nodes["m5"]["status"] != "maintenance" {
-		t.Fatalf("roster: machine %v node %v; want maintenance", machines["m5"]["status"], nodes["m5"]["status"])
+	if machines["mac-d"]["status"] != "maintenance" || nodes["mac-d"]["status"] != "maintenance" {
+		t.Fatalf("roster: machine %v node %v; want maintenance", machines["mac-d"]["status"], nodes["mac-d"]["status"])
 	}
-	if mm, _ := machines["m5"]["maintenance"].(map[string]any); mm["reason"] != "升级 macOS" {
-		t.Fatalf("machine record = %v", machines["m5"]["maintenance"])
+	if mm, _ := machines["mac-d"]["maintenance"].(map[string]any); mm["reason"] != "升级 macOS" {
+		t.Fatalf("machine record = %v", machines["mac-d"]["maintenance"])
 	}
 	// Heard, so its numbers are still there for the page.
-	if machines["m5"]["logins_online"].(float64) != 1 || machines["m4"]["status"] != "online" {
+	if machines["mac-d"]["logins_online"].(float64) != 1 || machines["mac-c"]["status"] != "online" {
 		t.Fatalf("machines = %v", machines)
 	}
 	sess := getFleet(t, h, "/v1/fleet/fleet_sessions", 200)
@@ -168,36 +168,36 @@ func TestNodeMaintenanceFlagsItselfAndPlacementAvoidsIt(t *testing.T) {
 		m := n.(map[string]any)
 		av[m["machine_name"].(string)] = m["availability"]
 	}
-	if av["m5"] != "maintenance" || av["m4"] != "online" {
+	if av["mac-d"] != "maintenance" || av["mac-c"] != "online" {
 		t.Fatalf("fleet_sessions nodes = %v", av)
 	}
 
-	// Placement: auto goes to m4 with the reason; naming m5 is refused.
+	// Placement: auto goes to mac-c with the reason; naming mac-d is refused.
 	wid := issueWID(f5.FleetID, 21)
-	st, out = placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid, "idempotency_key": "place-21"})
+	st, out = placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 21, "worker_id": wid, "idempotency_key": "place-21"})
 	if st != 200 || out["local"] != false {
 		t.Fatalf("auto place = %d %v; want remote", st, out)
 	}
 	pl := out["placement"].(map[string]any)
-	if pl["machine"] != "m4" || !strings.Contains(pl["reason"].(string), "m5 excluded: maintenance: 升级 macOS") {
+	if pl["machine"] != "mac-c" || !strings.Contains(pl["reason"].(string), "mac-d excluded: maintenance: 升级 macOS") {
 		t.Fatalf("placement = %v", pl)
 	}
-	st, out = placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 22, "worker_id": issueWID(f5.FleetID, 22), "node": "m5"})
+	st, out = placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 22, "worker_id": issueWID(f5.FleetID, 22), "node": "mac-d"})
 	e, _ := out["error"].(map[string]any)
-	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(e["message"].(string), "m5: maintenance: 升级 macOS") {
+	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(e["message"].(string), "mac-d: maintenance: 升级 macOS") {
 		t.Fatalf("named place = %d %v; want NO_ELIGIBLE_NODE naming the maintenance", st, out)
 	}
-	if m5.count() != 0 || m4.count() != 1 {
-		t.Fatalf("writes: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
 
 	// A second enter is idempotent: the clock stays, the reason may change.
-	st, out = maintCall(t, h, h.tokens["m5"], http.MethodPost, map[string]any{"action": "enter", "reason": "升级 macOS，预计 40 分钟"})
+	st, out = maintCall(t, h, h.tokens["mac-d"], http.MethodPost, map[string]any{"action": "enter", "reason": "升级 macOS，预计 40 分钟"})
 	rec, _ = out["maintenance"].(map[string]any)
 	if st != 200 || rec["since"] != since || rec["reason"] != "升级 macOS，预计 40 分钟" {
 		t.Fatalf("re-enter = %d %v; want the first clock kept", st, out)
 	}
-	if n := auditCount(t, h, `actor = 'node:verk@m5' AND fleet_id = 'machine:m5' AND outcome LIKE 'ENTER: %'`); n != 1 {
+	if n := auditCount(t, h, `actor = 'node:frank@mac-d' AND fleet_id = 'machine:mac-d' AND outcome LIKE 'ENTER: %'`); n != 1 {
 		t.Fatalf("ENTER audit rows = %d, want 1", n)
 	}
 	if n := auditCount(t, h, `outcome LIKE 'ALREADY: %'`); n != 1 {
@@ -205,21 +205,21 @@ func TestNodeMaintenanceFlagsItselfAndPlacementAvoidsIt(t *testing.T) {
 	}
 
 	// Leave: online again, placement comes back.
-	st, out = maintCall(t, h, h.tokens["m5"], http.MethodPost, map[string]any{"action": "leave"})
+	st, out = maintCall(t, h, h.tokens["mac-d"], http.MethodPost, map[string]any{"action": "leave"})
 	if st != 200 || out["status"] != "online" || out["maintenance"] != nil {
 		t.Fatalf("leave = %d %v", st, out)
 	}
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("after leave: %q %v; want m5", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("after leave: %q %v; want mac-d", pl.Machine, err)
 	}
 	if n := auditCount(t, h, `outcome = 'LEAVE'`); n != 1 {
 		t.Fatalf("LEAVE audit rows = %d, want 1", n)
 	}
-	st, out = maintCall(t, h, h.tokens["m5"], http.MethodPost, map[string]any{"action": "leave"})
+	st, out = maintCall(t, h, h.tokens["mac-d"], http.MethodPost, map[string]any{"action": "leave"})
 	if st != 200 || auditCount(t, h, `outcome = 'NOT_FLAGGED'`) != 1 {
 		t.Fatalf("second leave = %d %v; want NOT_FLAGGED audited", st, out)
 	}
-	if st, _ := maintCall(t, h, h.tokens["m5"], http.MethodPost, map[string]any{"action": "drain"}); st != 400 {
+	if st, _ := maintCall(t, h, h.tokens["mac-d"], http.MethodPost, map[string]any{"action": "drain"}); st != 400 {
 		t.Fatalf("unknown action = %d, want 400", st)
 	}
 	if st, _ := maintCall(t, h, "not-a-token", http.MethodGet, nil); st != 401 {
@@ -232,42 +232,42 @@ func TestNodeMaintenanceFlagsItselfAndPlacementAvoidsIt(t *testing.T) {
 // shows the operator as the one who set it.
 func TestMaintenanceOperatorSetsAndClears(t *testing.T) {
 	h, _, _, _, _ := twoNodes(t)
-	out := putSetting(t, h, NodeMaintenancePrefix+"m4", "换内存", 200)
+	out := putSetting(t, h, NodeMaintenancePrefix+"mac-c", "换内存", 200)
 	eff := out["effective"].(map[string]any)
-	rec, _ := eff[NodeMaintenancePrefix+"m4"].(map[string]any)
-	if rec["reason"] != "换内存" || rec["by"] != "operator" || rec["machine"] != "m4" {
+	rec, _ := eff[NodeMaintenancePrefix+"mac-c"].(map[string]any)
+	if rec["reason"] != "换内存" || rec["by"] != "operator" || rec["machine"] != "mac-c" {
 		t.Fatalf("effective record = %v", eff)
 	}
 	machines, _ := nodeStatuses(t, h)
-	if machines["m4"]["status"] != "maintenance" || machines["m5"]["status"] != "online" {
+	if machines["mac-c"]["status"] != "maintenance" || machines["mac-d"]["status"] != "online" {
 		t.Fatalf("roster after the operator's flag: %v", machines)
 	}
 	// The node on it reads its own status.
-	if st, o := maintCall(t, h, h.tokens["m4"], http.MethodGet, nil); st != 200 || o["status"] != "maintenance" {
-		t.Fatalf("m4's own read = %d %v", st, o)
+	if st, o := maintCall(t, h, h.tokens["mac-c"], http.MethodGet, nil); st != 200 || o["status"] != "maintenance" {
+		t.Fatalf("mac-c's own read = %d %v", st, o)
 	}
-	// m5 is loaded and m4 is 维护中: nothing can take new work, and the
+	// mac-d is loaded and mac-c is 维护中: nothing can take new work, and the
 	// refusal names both reasons.
-	if pl, err := h.srv.PickNode("", writeRepo); err == nil || pl.Machine != "" || !strings.Contains(err.Error(), "m4: maintenance: 换内存") {
-		t.Fatalf("both out: %q %v; want NO_ELIGIBLE_NODE naming m4's maintenance", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err == nil || pl.Machine != "" || !strings.Contains(err.Error(), "mac-c: maintenance: 换内存") {
+		t.Fatalf("both out: %q %v; want NO_ELIGIBLE_NODE naming mac-c's maintenance", pl.Machine, err)
 	}
-	putSetting(t, h, NodeMaintenancePrefix+"m4", "", 200)
+	putSetting(t, h, NodeMaintenancePrefix+"mac-c", "", 200)
 	machines, _ = nodeStatuses(t, h)
-	if machines["m4"]["status"] != "online" {
-		t.Fatalf("after clearing: %v", machines["m4"])
+	if machines["mac-c"]["status"] != "online" {
+		t.Fatalf("after clearing: %v", machines["mac-c"])
 	}
-	if n := auditCount(t, h, `actor = 'operator' AND fleet_id = 'machine:m4'`); n != 2 {
+	if n := auditCount(t, h, `actor = 'operator' AND fleet_id = 'machine:mac-c'`); n != 2 {
 		t.Fatalf("operator audit rows = %d, want ENTER + LEAVE", n)
 	}
 	putSetting(t, h, NodeMaintenancePrefix+"bad name!", "x", 400)
-	putSetting(t, h, NodeMaintenancePrefix+"m4", strings.Repeat("长", 201), 400)
+	putSetting(t, h, NodeMaintenancePrefix+"mac-c", strings.Repeat("长", 201), 400)
 }
 
 // Lost still wins: the flag says nothing about a machine the hub cannot hear.
 func TestMaintenanceLostStillLost(t *testing.T) {
 	now := time.Now()
 	fresh, stale := now.Add(-2*time.Second), now.Add(-time.Hour)
-	flag := map[string]string{NodeMaintenancePrefix + "m5": `{"since":"2026-10-04T00:00:00Z","reason":"升级"}`}
+	flag := map[string]string{NodeMaintenancePrefix + "mac-d": `{"since":"2026-10-04T00:00:00Z","reason":"升级"}`}
 	cases := []struct {
 		name     string
 		last     *time.Time
@@ -276,18 +276,18 @@ func TestMaintenanceLostStillLost(t *testing.T) {
 	}{
 		{"heard, no flag", &fresh, map[string]string{}, "online"},
 		{"heard, flagged", &fresh, flag, "maintenance"},
-		{"heard, flagged by FQDN key", &fresh, map[string]string{NodeMaintenancePrefix + "m5.local": "x"}, "maintenance"},
+		{"heard, flagged by FQDN key", &fresh, map[string]string{NodeMaintenancePrefix + "mac-d.local": "x"}, "maintenance"},
 		{"silent, flagged", &stale, flag, "lost"},
 		{"never heard, flagged", nil, flag, "lost"},
-		{"another machine flagged", &fresh, map[string]string{NodeMaintenancePrefix + "m4": "x"}, "online"},
+		{"another machine flagged", &fresh, map[string]string{NodeMaintenancePrefix + "mac-c": "x"}, "online"},
 	}
 	for _, c := range cases {
-		if got := nodeAvail("m5.local", c.last, 5000, c.settings, now); got != c.want {
+		if got := nodeAvail("mac-d.local", c.last, 5000, c.settings, now); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 	// A value set by hand is a bare reason with no clock.
-	if m := parseMaintenance("m5", "手工"); m.Reason != "手工" || !m.Since.IsZero() {
+	if m := parseMaintenance("mac-d", "手工"); m.Reason != "手工" || !m.Since.IsZero() {
 		t.Fatalf("bare value = %+v", m)
 	}
 }
@@ -297,28 +297,28 @@ func TestMaintenanceLostStillLost(t *testing.T) {
 func TestHomePickAvoidsMaintenance(t *testing.T) {
 	h, _, _, _, _ := twoNodes(t)
 	h.srv.FleetRoutes = []FleetMachine{
-		{Hostname: "m5", Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.5"}}},
-		{Hostname: "m4", Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.4"}}},
+		{Hostname: "mac-d", Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.5"}}},
+		{Hostname: "mac-c", Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.4"}}},
 	}
 	now := time.Now()
-	// Both online, m5 loaded: load rule picks m4 either way, so use "last" to
-	// steer at m5 and watch the flag override it.
-	if out, err := h.srv.homePick("", "m5", now); err != nil || out.Machine == nil || out.Machine.Hostname != "m5" || out.Rule != "last" {
-		t.Fatalf("baseline: %+v (%v); want m5 by last", out, err)
+	// Both online, mac-d loaded: load rule picks mac-c either way, so use "last" to
+	// steer at mac-d and watch the flag override it.
+	if out, err := h.srv.homePick("", "mac-d", now); err != nil || out.Machine == nil || out.Machine.Hostname != "mac-d" || out.Rule != "last" {
+		t.Fatalf("baseline: %+v (%v); want mac-d by last", out, err)
 	}
-	putSetting(t, h, NodeMaintenancePrefix+"m5", "升级", 200)
-	out, err := h.srv.homePick("", "m5", now)
-	if err != nil || out.Machine == nil || out.Machine.Hostname != "m4" {
-		t.Fatalf("m5 flagged: %+v (%v); want m4", out, err)
+	putSetting(t, h, NodeMaintenancePrefix+"mac-d", "升级", 200)
+	out, err := h.srv.homePick("", "mac-d", now)
+	if err != nil || out.Machine == nil || out.Machine.Hostname != "mac-c" {
+		t.Fatalf("mac-d flagged: %+v (%v); want mac-c", out, err)
 	}
 	for _, c := range out.Candidates {
-		if c.Machine == "m5" && (c.Maintenance != "升级" || !c.Online) {
-			t.Fatalf("m5 candidate = %+v; want online with the reason", c)
+		if c.Machine == "mac-d" && (c.Maintenance != "升级" || !c.Online) {
+			t.Fatalf("mac-d candidate = %+v; want online with the reason", c)
 		}
 	}
-	putSetting(t, h, NodeMaintenancePrefix+"m4", "也在升级", 200)
-	out, err = h.srv.homePick("", "m5", now)
-	if err != nil || out.Machine == nil || out.Machine.Hostname != "m5" || !strings.Contains(out.Reason, "维护中") {
-		t.Fatalf("both flagged: %+v (%v); want m5 (last) with the 维护中 note", out, err)
+	putSetting(t, h, NodeMaintenancePrefix+"mac-c", "也在升级", 200)
+	out, err = h.srv.homePick("", "mac-d", now)
+	if err != nil || out.Machine == nil || out.Machine.Hostname != "mac-d" || !strings.Contains(out.Reason, "维护中") {
+		t.Fatalf("both flagged: %+v (%v); want mac-d (last) with the 维护中 note", out, err)
 	}
 }

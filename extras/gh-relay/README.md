@@ -1,8 +1,8 @@
 # gh-relay — GitHub through the Singapore relay (claude-fleet#3348)
 
 The ACK cluster (Shenzhen) cannot reach `https://github.com` (timeouts); the
-relay box `ai-relay-sg` (Lightsail `ai-relay-1g`, `47.131.114.67`, the same box
-as the git-mirror's sync path and the AI relay — 24haowan-monorepo
+relay box `ai-relay-sg` (Lightsail `ai-relay-1g`, `203.0.113.211`, the same box
+as the git-mirror's sync path and the AI relay — acme-monorepo
 `infra/ci-runners/ai-relay-sg/README.md`) can. `gh-relay.py` is an HTTP CONNECT
 proxy on `:3128` that tunnels **only**:
 
@@ -19,15 +19,15 @@ Nothing is decrypted: the client's TLS runs end to end to GitHub. One JSON line
 per request in journald (`src host code up down ms why`), never a payload.
 `python3 -I gh-relay.py --selftest` runs offline.
 
-The node side is `extras/managed-node/render.py --github-proxy http://47.131.114.67:3128`
+The node side is `extras/managed-node/render.py --github-proxy http://203.0.113.211:3128`
 (docs/dev/MANAGED-LINUX.md «Dev network»).
 
 ## Install / update (on ai-relay; files scp'd to /tmp first)
 
 ```sh
 # from a machine holding the relay key (README in the monorepo: ~/.ssh/ai-relay-sg-rsa)
-scp -i ~/.ssh/ai-relay-sg-rsa extras/gh-relay/gh-relay.py extras/gh-relay/gh-relay.service admin@47.131.114.67:/tmp/
-ssh -i ~/.ssh/ai-relay-sg-rsa admin@47.131.114.67 '
+scp -i ~/.ssh/ai-relay-sg-rsa extras/gh-relay/gh-relay.py extras/gh-relay/gh-relay.service admin@203.0.113.211:/tmp/
+ssh -i ~/.ssh/ai-relay-sg-rsa admin@203.0.113.211 '
   grep ^nameserver /etc/resolv.conf     # must be 172.26.0.2 (the unit allows only that private address)
   python3 -I /tmp/gh-relay.py --selftest &&
   sudo install -d /opt/gh-relay && sudo install -m 755 /tmp/gh-relay.py /opt/gh-relay/ &&
@@ -43,11 +43,11 @@ aws lightsail get-instance-port-states --region ap-southeast-1 --instance-name a
 ## Check it
 
 ```sh
-# from the cluster (fleet-linux-0, any login): through, and only GitHub
-curl -sS -o /dev/null -w '%{http_code}\n' -x http://47.131.114.67:3128 https://github.com/       # 200
-curl -sS -o /dev/null -w '%{http_code}\n' -x http://47.131.114.67:3128 https://example.com/      # 000 (403 from the proxy)
+# from the cluster (linux-a, any login): through, and only GitHub
+curl -sS -o /dev/null -w '%{http_code}\n' -x http://203.0.113.211:3128 https://github.com/       # 200
+curl -sS -o /dev/null -w '%{http_code}\n' -x http://203.0.113.211:3128 https://example.com/      # 000 (403 from the proxy)
 # from anywhere else: no answer (firewall), and the program would close it anyway
-curl -m5 -x http://47.131.114.67:3128 https://github.com/                                         # timeout
+curl -mac-b -x http://203.0.113.211:3128 https://github.com/                                         # timeout
 # on the relay
 sudo journalctl -u gh-relay -n 20 --no-pager -o cat
 ```

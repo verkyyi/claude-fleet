@@ -183,7 +183,7 @@ func TestNowFindings(t *testing.T) {
 	old := now.Add(-2 * time.Hour)
 	in := NowInputs{Now: now,
 		Windows:   []WindowStat{{Label: "a@x", FiveHourPct: 82}, {Label: "b@x", FiveHourPct: 95}, {Label: "c@x", FiveHourPct: 10}},
-		Endpoints: []EndpointSeen{{Label: "macmini-zx", LastSeen: &old}, {Label: "fresh", LastSeen: &now}, {Label: "never"}},
+		Endpoints: []EndpointSeen{{Label: "mac-c-zx", LastSeen: &old}, {Label: "fresh", LastSeen: &now}, {Label: "never"}},
 		Live:      []LiveStat{{SessionID: "s1", CWD: "/p", Tokens: 250_000_000}, {SessionID: "s2", Tokens: 1000}}}
 	fs := Now(in)
 	if kinds(fs) != "window_high,window_high,stale_agent,stale_agent,live_runaway" {
@@ -214,15 +214,15 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 		Endpoints: []EndpointSeen{
 			// Both halves known: the stale-agent alert can finally say whose
 			// machine it is and which team owns the spend.
-			{Label: "macmini-zx", LastSeen: &old, OSUser: "verky", Team: "infra"},
+			{Label: "mac-c-zx", LastSeen: &old, OSUser: "carol", Team: "infra"},
 			// Enrolled but never allocated to a team. Half-known is still worth
-			// carrying -- "go find verky" beats "go find somebody".
+			// carrying -- "go find carol" beats "go find somebody".
 			{Label: "never-allocated", OSUser: "ci"},
 			// An endpoint the hub holds no attribution for at all. It must still
 			// produce its finding, with no owner rather than no alert.
 			{Label: "anonymous"},
 		},
-		Live: []LiveStat{{SessionID: "s1", CWD: "/p", Tokens: 250_000_000, OSUser: "verky", Team: "infra"}},
+		Live: []LiveStat{{SessionID: "s1", CWD: "/p", Tokens: 250_000_000, OSUser: "carol", Team: "infra"}},
 	})
 
 	byKind := map[string][]Finding{}
@@ -234,11 +234,11 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 	}
 	stale := byKind["stale_agent"]
 	// Ordered by weight: "never reported" outranks any elapsed time, so the two
-	// never-reported endpoints lead and macmini-zx (2h) comes last.
+	// never-reported endpoints lead and mac-c-zx (2h) comes last.
 	var named, halfNamed, unnamed *Finding
 	for i := range stale {
 		switch stale[i].Args["label"] {
-		case "macmini-zx":
+		case "mac-c-zx":
 			named = &stale[i]
 		case "never-allocated":
 			halfNamed = &stale[i]
@@ -249,8 +249,8 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 	if named == nil || halfNamed == nil || unnamed == nil {
 		t.Fatalf("missing one of the three stale findings: %+v", stale)
 	}
-	if named.Owner == nil || named.Owner.User != "verky" || named.Owner.Team != "infra" {
-		t.Errorf("stale agent with a known login and team: Owner = %+v, want verky/infra", named.Owner)
+	if named.Owner == nil || named.Owner.User != "carol" || named.Owner.Team != "infra" {
+		t.Errorf("stale agent with a known login and team: Owner = %+v, want carol/infra", named.Owner)
 	}
 	if halfNamed.Owner == nil || halfNamed.Owner.User != "ci" || halfNamed.Owner.Team != "" {
 		t.Errorf("unallocated endpoint: Owner = %+v, want user ci and an empty team", halfNamed.Owner)
@@ -263,7 +263,7 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 	if w := byKind["window_high"]; len(w) != 1 || w[0].Owner != nil {
 		t.Errorf("a rate-limit window is a subscription's, not a person's: %+v", w)
 	}
-	if l := byKind["live_runaway"]; len(l) != 1 || l[0].Owner == nil || l[0].Owner.User != "verky" {
+	if l := byKind["live_runaway"]; len(l) != 1 || l[0].Owner == nil || l[0].Owner.User != "carol" {
 		t.Errorf("live runaway: %+v", l)
 	}
 
@@ -273,7 +273,7 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 		SessionTokenMedian: 1_000,
 		Sessions: []SessionStat{
 			{SessionID: "abcdef123456", CWD: "/srv/api", Model: "claude-opus-5",
-				Tokens: 400_000_000, Turns: 9, Duration: time.Hour, OSUser: "verky", Team: "infra"},
+				Tokens: 400_000_000, Turns: 9, Duration: time.Hour, OSUser: "carol", Team: "infra"},
 			{SessionID: "beefbeefbeef", CWD: "/srv/api", Model: "claude-opus-5",
 				Tokens: 300_000_000, Turns: 9, Duration: time.Hour},
 		},
@@ -291,7 +291,7 @@ func TestOwnerFilledWhenKnownAbsentWhenNot(t *testing.T) {
 	if len(runaways) != 2 {
 		t.Fatalf("want 2 runaway sessions, got %d: %s", len(runaways), kinds(review))
 	}
-	if runaways[0].Owner == nil || runaways[0].Owner.User != "verky" || runaways[0].Owner.Team != "infra" {
+	if runaways[0].Owner == nil || runaways[0].Owner.User != "carol" || runaways[0].Owner.Team != "infra" {
 		t.Errorf("runaway session with a known login: Owner = %+v", runaways[0].Owner)
 	}
 	if runaways[1].Owner != nil {
@@ -351,10 +351,10 @@ func TestSetupTokenReminder(t *testing.T) {
 // state is not a finding; a severity change keeps the Problem and moves the ID.
 func TestAccountReauth(t *testing.T) {
 	fs := Now(NowInputs{Now: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC), Logins: []LoginState{
-		{Provider: "codex", Account: "ops@example.com", Where: "m5:default, m4:work", State: "reauth_required",
+		{Provider: "codex", Account: "ops@example.com", Where: "mac-b:default, mac-a:work", State: "reauth_required",
 			Reason: "Access token expired and no refresh credential is available", Command: "codex login --device-auth"},
-		{Provider: "codex", Account: "fine@example.com", Where: "m5:fine", State: "valid"},
-		{Provider: "codex", Account: "due@example.com", Where: "m5:due", State: "refresh_due"},
+		{Provider: "codex", Account: "fine@example.com", Where: "mac-b:fine", State: "valid"},
+		{Provider: "codex", Account: "due@example.com", Where: "mac-b:due", State: "refresh_due"},
 		{Provider: "claude", Account: "pool/icloud", State: "reauth_required"},
 	}})
 	if kinds(fs) != "account_login,account_login" {
@@ -366,7 +366,7 @@ func TestAccountReauth(t *testing.T) {
 	}
 	f := by["ops@example.com"]
 	if f.Severity != "critical" || f.Template != TmplAccountReauth || f.Link != "/credentials" ||
-		f.Title != "account ops@example.com (codex · m5:default, m4:work) needs re-login — run `codex login --device-auth`" ||
+		f.Title != "account ops@example.com (codex · mac-b:default, mac-a:work) needs re-login — run `codex login --device-auth`" ||
 		f.Detail != "Access token expired and no refresh credential is available" {
 		t.Fatalf("ops: %+v", f)
 	}

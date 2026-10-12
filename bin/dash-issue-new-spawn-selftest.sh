@@ -243,17 +243,17 @@ grep -Eq -- '\$DASH_KEY_NEW:.*dash-issue-new\.sh.*--spawn' "$DASH" \
 ok "E dash ⌃n bind wires into the quick-dispatch (dash-issue-new.sh --spawn)"
 
 # ============================ I: ⌃s → a scratch instead (issue #1541) ========
-# «新建到 m4…» is this popup with --node=m4; ⌃s there opens a SCRATCH on m4: fzf's
+# «新建到 mac-a…» is this popup with --node=mac-a; ⌃s there opens a SCRATCH on mac-a: fzf's
 # --expect prints `ctrl-s` after the query, the typed text becomes the scratch's
 # name (staged in a file, never in the run-shell string), --node rides along,
 # and nothing is filed or spawned as a worker.
 wait_raw() { local n=0; while [ "$n" -lt 60 ]; do grep -Eq "$1" "$RAW_LOG" && return 0; n=$((n + 1)); sleep 0.05; done; return 1; }
 grep -q -- '--expect=ctrl-s' "$NEW"       || fail "I the popup's fzf has no --expect=ctrl-s"
-FZF_QUERY='试一下 侧边栏' FZF_KEY=ctrl-s run_new confirm --spawn --node=m4
-wait_raw '^--origin hub --name-file=.* --node=m4	name=试一下 侧边栏$'                                            || fail "I ⌃s dispatches dash-raw-session.sh with the staged name and --node=m4" "$(cat "$RAW_LOG" "$WORK/err")"
+FZF_QUERY='试一下 侧边栏' FZF_KEY=ctrl-s run_new confirm --spawn --node=mac-a
+wait_raw '^--origin hub --name-file=.* --node=mac-a	name=试一下 侧边栏$'                                            || fail "I ⌃s dispatches dash-raw-session.sh with the staged name and --node=mac-a" "$(cat "$RAW_LOG" "$WORK/err")"
 [ -s "$GH_LOG" ]    && fail "I ⌃s must not file an issue" "$(cat "$GH_LOG")"
 [ -s "$SPAWN_LOG" ] && fail "I ⌃s must not spawn a worker" "$(cat "$SPAWN_LOG")"
-grep -q -- '--header=.*\^S = scratch session on m4' "$FZF_LOG" || fail "I the header says ⌃s = scratch session on m4" "$(cat "$FZF_LOG")"
+grep -q -- '--header=.*\^S = scratch session on mac-a' "$FZF_LOG" || fail "I the header says ⌃s = scratch session on mac-a" "$(cat "$FZF_LOG")"
 FZF_QUERY='' FZF_KEY=ctrl-s run_new confirm --spawn
 wait_raw '^--origin hub	name=$'            || fail "I an empty query + ⌃s is an unnamed scratch here (no --name-file, no --node)" "$(cat "$RAW_LOG" "$WORK/err")"
 [ -s "$GH_LOG" ]    && fail "I an empty query + ⌃s must not file an issue" "$(cat "$GH_LOG")"

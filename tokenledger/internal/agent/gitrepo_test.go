@@ -19,18 +19,18 @@ func TestRepoFromRemote(t *testing.T) {
 		name, url, want string
 	}{
 		// The forms git actually emits.
-		{"scp", "git@github.com:verkyyi/tokenledger.git", "verkyyi/tokenledger"},
-		{"scp no user", "github.com:verkyyi/tokenledger.git", "verkyyi/tokenledger"},
-		{"scp no suffix", "git@github.com:verkyyi/tokenledger", "verkyyi/tokenledger"},
-		{"https", "https://github.com/verkyyi/tokenledger.git", "verkyyi/tokenledger"},
-		{"https no suffix", "https://github.com/verkyyi/tokenledger", "verkyyi/tokenledger"},
-		{"https with token user", "https://x-token@github.com/verkyyi/tokenledger.git", "verkyyi/tokenledger"},
-		{"ssh scheme with port", "ssh://git@github.com:22/verkyyi/tokenledger.git", "verkyyi/tokenledger"},
-		{"git scheme", "git://github.com/verkyyi/tokenledger.git", "verkyyi/tokenledger"},
-		{"trailing slash", "https://github.com/verkyyi/tokenledger/", "verkyyi/tokenledger"},
-		{"trailing newline", "git@github.com:verkyyi/tokenledger.git\n", "verkyyi/tokenledger"},
+		{"scp", "git@github.com:grace/tokenledger.git", "grace/tokenledger"},
+		{"scp no user", "github.com:grace/tokenledger.git", "grace/tokenledger"},
+		{"scp no suffix", "git@github.com:grace/tokenledger", "grace/tokenledger"},
+		{"https", "https://github.com/grace/tokenledger.git", "grace/tokenledger"},
+		{"https no suffix", "https://github.com/grace/tokenledger", "grace/tokenledger"},
+		{"https with token user", "https://x-token@github.com/grace/tokenledger.git", "grace/tokenledger"},
+		{"ssh scheme with port", "ssh://git@github.com:22/grace/tokenledger.git", "grace/tokenledger"},
+		{"git scheme", "git://github.com/grace/tokenledger.git", "grace/tokenledger"},
+		{"trailing slash", "https://github.com/grace/tokenledger/", "grace/tokenledger"},
+		{"trailing newline", "git@github.com:grace/tokenledger.git\n", "grace/tokenledger"},
 		{"enterprise host", "git@git.corp.example.com:platform/api.git", "platform/api"},
-		{"ssh config alias", "gh:verkyyi/tokenledger.git", "verkyyi/tokenledger"},
+		{"ssh config alias", "gh:grace/tokenledger.git", "grace/tokenledger"},
 
 		// A local remote is a real remote and names no repository. Splitting
 		// it on "/" yields something that LOOKS like owner/name, which is the
@@ -47,7 +47,7 @@ func TestRepoFromRemote(t *testing.T) {
 		{"host only", "https://github.com/", ""},
 		{"empty", "", ""},
 		{"blank", "   \n", ""},
-		{"space in name", "git@github.com:verkyyi/token ledger.git", ""},
+		{"space in name", "git@github.com:grace/token ledger.git", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := RepoFromRemote(tc.url)
@@ -69,7 +69,7 @@ func TestRepoFromRemote(t *testing.T) {
 // a reader, exactly like a repository nobody shipped progress for.
 func TestRepoFromRemote_EmitsOnlyJoinableNames(t *testing.T) {
 	for _, url := range []string{
-		"git@github.com:verkyyi/tokenledger.git",
+		"git@github.com:grace/tokenledger.git",
 		"https://github.com/a/b",
 		"ssh://git@git.corp.example.com:2222/platform/api.git",
 	} {
@@ -114,13 +114,13 @@ func fakeGit(t *testing.T, answers map[string]string) (restore func(), calls fun
 // make declaring the repository cost more than collecting the usage.
 func TestResolveAsksGitOncePerPath(t *testing.T) {
 	restore, calls := fakeGit(t, map[string]string{
-		"/w/tokenledger": "git@github.com:verkyyi/tokenledger.git\n",
+		"/w/tokenledger": "git@github.com:grace/tokenledger.git\n",
 	})
 	defer restore()
 
 	var r repoResolver
 	for i := 0; i < 5; i++ {
-		if got := r.Resolve(context.Background(), "/w/tokenledger"); got != "verkyyi/tokenledger" {
+		if got := r.Resolve(context.Background(), "/w/tokenledger"); got != "grace/tokenledger" {
 			t.Fatalf("Resolve = %q", got)
 		}
 	}
@@ -165,7 +165,7 @@ func TestResolveCachesTheRefusalToo(t *testing.T) {
 // is the fleet's own shape: a worktree per issue, several repositories at once.
 func TestStampReposDeclaresPerDirectory(t *testing.T) {
 	restore, _ := fakeGit(t, map[string]string{
-		"/w/tokenledger":  "git@github.com:verkyyi/tokenledger.git\n",
+		"/w/tokenledger":  "git@github.com:grace/tokenledger.git\n",
 		"/w/claude-fleet": "https://github.com/verkyyi/claude-fleet.git\n",
 	})
 	defer restore()
@@ -180,7 +180,7 @@ func TestStampReposDeclaresPerDirectory(t *testing.T) {
 	var r repoResolver
 	r.stampRepos(context.Background(), evs)
 
-	want := []string{"verkyyi/tokenledger", "verkyyi/claude-fleet", "", "", "someone/else"}
+	want := []string{"grace/tokenledger", "verkyyi/claude-fleet", "", "", "someone/else"}
 	for i := range evs {
 		if evs[i].GitRepo != want[i] {
 			t.Errorf("event %d (cwd %q): GitRepo = %q; want %q", i, evs[i].CWD, evs[i].GitRepo, want[i])
@@ -197,7 +197,7 @@ func TestResolveAgainstRealGit(t *testing.T) {
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-q"},
-		{"remote", "add", "origin", "git@github.com:verkyyi/tokenledger.git"},
+		{"remote", "add", "origin", "git@github.com:grace/tokenledger.git"},
 	} {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
@@ -206,8 +206,8 @@ func TestResolveAgainstRealGit(t *testing.T) {
 		}
 	}
 	var r repoResolver
-	if got := r.Resolve(context.Background(), dir); got != "verkyyi/tokenledger" {
-		t.Fatalf("Resolve(%s) = %q; want verkyyi/tokenledger", dir, got)
+	if got := r.Resolve(context.Background(), dir); got != "grace/tokenledger" {
+		t.Fatalf("Resolve(%s) = %q; want grace/tokenledger", dir, got)
 	}
 	// A directory that is not a checkout declares nothing, and does not
 	// inherit the answer from the one beside it.

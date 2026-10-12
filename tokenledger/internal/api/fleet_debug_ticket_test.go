@@ -258,7 +258,7 @@ func TestDebugTicketReissueRetiresTheOld(t *testing.T) {
 	// the admin's re-issue: unbound, binds to the first computer, retires the rest
 	reissue := func() (int, map[string]any) {
 		t.Helper()
-		b, _ := json.Marshal(map[string]any{"github_login": "@Arvin", "hours": 24})
+		b, _ := json.Marshal(map[string]any{"github_login": "@Erin", "hours": 24})
 		req, _ := http.NewRequest(http.MethodPost, h.http.URL+DebugTicketsPath, bytes.NewReader(b))
 		req.Header.Set("Authorization", "Bearer "+viewerToken)
 		resp, err := http.DefaultClient.Do(req)
@@ -271,7 +271,7 @@ func TestDebugTicketReissueRetiresTheOld(t *testing.T) {
 		return resp.StatusCode, out
 	}
 	code, out := reissue()
-	if code != http.StatusCreated || !strings.HasPrefix(fmt.Sprint(out["command"]), "fleet-debug ticket fdt1.") || out["owner"] != "arvin" {
+	if code != http.StatusCreated || !strings.HasPrefix(fmt.Sprint(out["command"]), "fleet-debug ticket fdt1.") || out["owner"] != "erin" {
 		t.Fatalf("re-issue = %d %v", code, out)
 	}
 	adm1 := fmt.Sprint(out["ticket"])

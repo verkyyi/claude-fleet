@@ -1066,7 +1066,7 @@ drill_epic_fresh_switched() {
 # epic-idle-held (issue #2247): a batch is idle — 0 member sessions, nothing in
 # flight, the loop only waiting on the operator — and still stamps every tick.
 # Before: any fresh mark held the switch, so an idle batch held the machine's
-# upgrade for as long as it waited (EPIC #2140 held m4 for hours). Now a mark
+# upgrade for as long as it waited (EPIC #2140 held mac-a for hours). Now a mark
 # stamped --live 0 --inflight 0 does not hold: the tick switches under it.
 drill_epic_idle_held() {
   CAP=20; local t0 d="$WORK/epic3" stable
@@ -1106,7 +1106,7 @@ drill_epic_hold_uncapped() {
 
 # epic-hold-rotating (issue #2843): with 3-7 batches running in parallel and
 # stable moving every hour or two, a per-batch clock (reset when a batch went
-# quiet for a tick, or when stable moved) never reached the cap — macmini sat two
+# quiet for a tick, or when stable moved) never reached the cap — mac-c sat two
 # stables behind, deferred every 5 minutes for hours. Now the clock is the
 # login's (and the machine's, in fleet-node-update.py): .since from the first
 # deferral, cleared only at stable. Here the batch holding now has a fresh clock
@@ -1131,7 +1131,7 @@ drill_epic_hold_rotating() {
 
 # epic-hold-default (issue #2934): a batch with work held every update — the
 # login's and the machine's — until it ended or the 2h cap fired, so with batches
-# running all day the fleet sat behind stable (macmini two versions behind, the
+# running all day the fleet sat behind stable (mac-c two versions behind, the
 # bar 「旧」 all day) to buy only «a batch's new workers on its old version». A
 # switch never stops a running session. Now the hold is off unless
 # FLEET_EPIC_HOLD_CAP_SECS is set: the tick switches under a live batch, the
@@ -1522,7 +1522,7 @@ drill_restore_conversation_twice() {
   # a no-repo row (column 16 `-`): it resumes in $HOME, where a shared cwd let three windows guess one id
   ct_row() { printf 'FID\t%s\nWIN\t%s\t%s\t%s\t-\tworking\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$1" "$2" "$WORK/home" "$3"; }
   { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
-    ct_row "$f1" 'fleet-linux-0 shell' "$sid"; ct_row "$f2" '@macmini' "$sid"; ct_row "$f3" '@macmini' "$sid"
+    ct_row "$f1" 'linux-a shell' "$sid"; ct_row "$f2" '@mac-c' "$sid"; ct_row "$f3" '@mac-c' "$sid"
   } > "$mf"
   : > "$WORK/claude-argv"
   t0=$(now)
@@ -1837,7 +1837,7 @@ client_env() {
   unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_SHELL FLEET_HUB_SESSIONS_CLIENT FLEET_SIDEBAR_SOURCE
   unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_SHELL_STAGE
   export FLEET_HUB_URL=https://hub.example FLEET_REMOTE_SSH_CMD="$WORK/shim/ssh"
-  export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=verk
+  export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=dave
   # every start a client with no switch history (issue #2739): one drill's opened
   # rows would make the next start a returning client's — its first screen the
   # last session or 「新任务」, not the pick's own window these drills break
@@ -1855,8 +1855,8 @@ client_setup() {
 #!/usr/bin/env python3
 import json, sys
 if "--pick" in sys.argv:
-    print(json.dumps({"machine": "m5", "hostname": "macmini", "reason": "last", "login": "verk",
-                      "machines": [{"alias": "m5", "hostname": "macmini"}]}))
+    print(json.dumps({"machine": "mac-b", "hostname": "mac-c", "reason": "last", "login": "dave",
+                      "machines": [{"alias": "mac-b", "hostname": "mac-c"}]}))
 sys.exit(0)
 EOF
   chmod +x "$SB/fleet-connect.py"
@@ -1876,7 +1876,7 @@ esac
 exit 0
 EOF
   chmod +x "$WORK/shim/ssh"
-  printf '{"sessions": [], "nodes": [{"machine_name": "macmini", "availability": "online", "sessions": 0, "observed_at": "2026-10-06T10:00:00Z"}]}\n' > "$WORK/sessions.json"
+  printf '{"sessions": [], "nodes": [{"machine_name": "mac-c", "availability": "online", "sessions": 0, "observed_at": "2026-10-06T10:00:00Z"}]}\n' > "$WORK/sessions.json"
 }
 # client_start <socket label> [VAR=val…] — `fleet`, as the person types it
 client_start() {
@@ -2106,9 +2106,9 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/v1/fleet/login/renew":
             t = tempfile.mkdtemp(dir=D)
             open(os.path.join(t, "k.pub"), "w").write(body["public_key"] + "\n")
-            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(D, "ca"), "-I", "person:gh:1", "-n", "verk",
+            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(D, "ca"), "-I", "person:gh:1", "-n", "dave",
                             "-V", "-1m:+12h", os.path.join(t, "k.pub")], check=True)
-            return self.reply(200, {"certificate": open(os.path.join(t, "k-cert.pub")).read(), "principals": ["verk"],
+            return self.reply(200, {"certificate": open(os.path.join(t, "k-cert.pub")).read(), "principals": ["dave"],
                                     "valid_before": "", "ssh_config": "# test\n"})
         if self.path.startswith("/v1/fleet/client") and os.path.exists(os.path.join(D, "orphan")):
             return self.reply(401, {"error": "connection certificate refused: its key id names no one this hub knows"})
@@ -2159,7 +2159,7 @@ drill_cert_expiry_keeper() {
   read -r port < "$sc/port"
   ( client_env; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub"
     ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
-    ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n verk -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
+    ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n dave -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
   left=$( client_env; python3 "$BIN/fleet-login.py" check )
   case "$left" in "valid "*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="the 30-minute certificate did not take: [$left]"; return 1 ;; esac
   t0=$(now)
@@ -2180,7 +2180,7 @@ drill_cert_expiry_keeper() {
   fi
   # the hub stops naming the key id: renewing will never help — the person is told
   : > "$sc/orphan"
-  ( client_env; ssh-keygen -q -s "$sc/ca" -I person:YiLiangHui -n verk -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
+  ( client_env; ssh-keygen -q -s "$sc/ca" -I person:YiLiangHui -n dave -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
   for _ in $(seq 1 $((CAP * 10))); do [ -f "$sc/cache/tmp/client.rescan" ] && break; sleep 0.1; done
   "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
   kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
@@ -2205,7 +2205,7 @@ drill_cert_expiry_no_client() {
   ( client_env; mkdir -p "$HOME/.ssh"; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub" \
       "$FLEET_CONF_DIR/cert-renew.last" "$FLEET_CONF_DIR/diskguard/cert-renew.last" "$FLEET_SHELL_CACHE/logs/login.log"
     ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
-    ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n verk -V -13h:-1h "$HOME/.ssh/fleet-cert.pub" )
+    ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n dave -V -13h:-1h "$HOME/.ssh/fleet-cert.pub" )
   cc=$( client_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
   case "$cc" in "PASS"$'\t'*已过期*用到时*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="an expired, unused certificate is not the doctor's PASS 已过期 · 用到时续: [$cc]"; return 1 ;; esac
   # the tick renews nothing any more
@@ -2236,7 +2236,7 @@ PY
 
 # The list does not move while a line is down (issue #1882): the real client on
 # its own -L socket, a fake hub serving sessions in two repos on two machines.
-# Before, a lost machine's rows moved into a `─ m4 失联 ─` group at the foot and
+# Before, a lost machine's rows moved into a `─ mac-a 失联 ─` group at the foot and
 # came back when it answered again — the list reshuffled twice. The sidebar pane
 # is captured before / during / after: during, the same lines in the same order,
 # only the lost rows' state glyph `⊘` (issue #2305; the colour is the view's, never in a capture).
@@ -2248,23 +2248,23 @@ off_hub() {   # the fake hub: `down` = unreachable, else the current answer
 import json, sys
 d = sys.argv[1]
 def s(host, key, name, repo, origin=None, state="working"):
-    f = "11111111-2222-3333-4444-55555555555" + ("4" if host == "m4" else "5")
+    f = "11111111-2222-3333-4444-55555555555" + ("4" if host == "mac-a" else "5")
     w = dict(key=key, name=name, repo=repo, state=state, lifecycle="awake", agent="claude")
     if origin:
         w["origin_wid"] = f + "/" + origin
-    return dict(worker_id=f + "/" + key, machine_name=host, os_user="verk", fleet_id=f,
+    return dict(worker_id=f + "/" + key, machine_name=host, os_user="dave", fleet_id=f,
                 fleet_name="x", availability="online", worker=w, observed_at="2026-10-06T10:00:00Z")
-rows = [s("m5", "acme-app:scratch-1", "app-root", "acme/app", state="looping"),
-        s("m4", "acme-app:issue-2", "app-kid", "acme/app", origin="acme-app:scratch-1"),
-        s("m4", "acme-app:issue-3", "app-m4", "acme/app"),
-        s("m5", "acme-tool:issue-4", "tool-m5", "acme/tool"),
-        s("m4", "acme-tool:issue-5", "tool-m4", "acme/tool", state="done"),
-        s("m4", "acme-x:scratch-6", "loose-m4", None)]
+rows = [s("mac-b", "acme-app:scratch-1", "app-root", "acme/app", state="looping"),
+        s("mac-a", "acme-app:issue-2", "app-kid", "acme/app", origin="acme-app:scratch-1"),
+        s("mac-a", "acme-app:issue-3", "app-mac-a", "acme/app"),
+        s("mac-b", "acme-tool:issue-4", "tool-mac-b", "acme/tool"),
+        s("mac-a", "acme-tool:issue-5", "tool-mac-a", "acme/tool", state="done"),
+        s("mac-a", "acme-x:scratch-6", "loose-mac-a", None)]
 def node(host, av):
     return dict(machine_name=host, availability=av, sessions=3, observed_at="2026-10-06T10:00:00Z")
-on = dict(sessions=rows, nodes=[node("m4", "online"), node("m5", "online")])
-lost = dict(sessions=[dict(r, availability="lost") if r["machine_name"] == "m4" else r for r in rows],
-            nodes=[node("m4", "lost"), node("m5", "online")])
+on = dict(sessions=rows, nodes=[node("mac-a", "online"), node("mac-b", "online")])
+lost = dict(sessions=[dict(r, availability="lost") if r["machine_name"] == "mac-a" else r for r in rows],
+            nodes=[node("mac-a", "lost"), node("mac-b", "online")])
 json.dump(on, open(d + "/on.json", "w")); json.dump(lost, open(d + "/m4lost.json", "w"))
 PY
   cp "$WORK/off/on.json" "$WORK/off/cur.json"; rm -f "$WORK/off/down" "$WORK/off/stop"
@@ -2276,7 +2276,7 @@ off_list() {   # the sidebar pane as it reads (text only), blank lines dropped
 }
 # the rows only: from the first row naming a session to the last — the footer
 # (input line, hints) is the bar's business, not the list's
-off_rows() { off_list "$1" | awk '/app-root|app-kid|app-m4|tool-m5|tool-m4|loose-m4|\([0-9]+\)$|失联/ { print }' | spin_off; }
+off_rows() { off_list "$1" | awk '/app-root|app-kid|app-mac-a|tool-mac-b|tool-mac-a|loose-mac-a|\([0-9]+\)$|失联/ { print }' | spin_off; }
 spin_off() { sed -e 's/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/*/g'; }       # the working spinner turns on its own
 # a row's state glyph is masked (`?`): a lost machine's row says so in it — `⊘`
 # (issue #2305) — and that is the one thing allowed to change in place
@@ -2318,21 +2318,21 @@ while time.time() < end and not os.path.exists(stop):
 try: os.kill(pid, signal.SIGTERM)
 except OSError: pass
 PY
-  off_wait "$s" 30 'loose-m4' || { WHY="the hub's rows never reached the list: [$(off_list "$s" | tr '\n' '|')]"; : > "$WORK/off/stop"; return 1; }
+  off_wait "$s" 30 'loose-mac-a' || { WHY="the hub's rows never reached the list: [$(off_list "$s" | tr '\n' '|')]"; : > "$WORK/off/stop"; return 1; }
   sleep 1; before=$(off_rows "$s")
-  # 1. one machine lost: the hub says m4 is lost
+  # 1. one machine lost: the hub says mac-a is lost
   cp "$WORK/off/m4lost.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '⊘ +app-m4' || { WHY="m4 lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" 20 '⊘ +app-mac-a' || { WHY="mac-a lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   sleep 1; during=$(off_rows "$s")
-  printf '%s\n' "$during" | grep -qE '⊘ +(app-root|tool-m5)' && { WHY="m4 lost dimmed m5's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1; }
+  printf '%s\n' "$during" | grep -qE '⊘ +(app-root|tool-mac-b)' && { WHY="mac-a lost dimmed mac-b's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1; }
   case "$during" in *失联*) WHY="a 失联 heading came back: $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
   [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
-    || { WHY="m4 lost moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
+    || { WHY="mac-a lost moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
   # 2. the hub unreachable: every row lost, still the same lines
   cp "$WORK/off/on.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '⊘ +app-m4' v || { WHY="m4 never came back after its loss"; return 1; }
+  off_wait "$s" 20 '⊘ +app-mac-a' v || { WHY="mac-a never came back after its loss"; return 1; }
   : > "$WORK/off/down"
-  off_wait "$s" 40 '⊘ +(app-root|tool-m5)' || { WHY="入口连不上 never dimmed the m5 rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" 40 '⊘ +(app-root|tool-mac-b)' || { WHY="入口连不上 never dimmed the mac-b rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   sleep 1; during=$(off_rows "$s")
   [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
     || { WHY="入口连不上 moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
@@ -2342,7 +2342,7 @@ PY
   [ "$(off_rows "$s")" = "$before" ] || { WHY="back online, the list differs from before: [$(off_rows "$s" | tr '\n' '|')]"; return 1; }
   SECS=$(since "$t0"); : > "$WORK/off/stop"
   "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; "$REAL_TMUX" -L "$s-stage" kill-server 2>/dev/null
-  WHAT="m4 失联 / 入口连不上：行数、顺序、分组不变，只是状态图标变 ⊘；恢复后与断开前逐行一致"
+  WHAT="mac-a 失联 / 入口连不上：行数、顺序、分组不变，只是状态图标变 ⊘；恢复后与断开前逐行一致"
 }
 
 # ================================ the orchestrator's entry (issue #2619, EPIC #2615 C4) ===
@@ -2362,15 +2362,15 @@ queue = sys.argv[4] if len(sys.argv) > 4 else ""
 f = "11111111-2222-3333-4444-555555555554"
 def s(key, name, repo, state="working", agent="claude", **extra):
     w = dict(key=key, name=name, repo=repo, state=state, lifecycle="awake", agent=agent, **extra)
-    return dict(worker_id=f + "/" + key, machine_name="m4", os_user="verk", fleet_id=f, fleet_name="x",
+    return dict(worker_id=f + "/" + key, machine_name="mac-a", os_user="dave", fleet_id=f, fleet_name="x",
                 availability="online", worker=w, observed_at="2026-10-09T10:00:00Z")
-rows = [s("acme-app:issue-3", "app-m4", "acme/app")]
+rows = [s("acme-app:issue-3", "app-mac-a", "acme/app")]
 if kind != "none":
     extra = dict(role="orchestrator")
     if queue:
         extra["orch_queue"] = int(queue)
     rows.append(s("orchestrator", "orchestrator", None, state=state, agent=kind, **extra))
-json.dump(dict(sessions=rows, nodes=[dict(machine_name="m4", availability="online", sessions=len(rows),
+json.dump(dict(sessions=rows, nodes=[dict(machine_name="mac-a", availability="online", sessions=len(rows),
                                           observed_at="2026-10-09T10:00:00Z")]), open(out, "w"))
 PY
 }
@@ -2412,7 +2412,7 @@ orch_up() {
     FLEET_HUB_SESSIONS_LOOP_SECS=2 "$@" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
   orch_term "$s" "$d"
   G="$d/cache/tmp/.claude-dash/global"     # the shell's own TMPDIR (its cache) holds the list's files
-  until_ok 30 sh -c "'$REAL_TMUX' -L '$s' list-panes -a -F '#{@sidebar} #{pane_id}' | awk '\$1 == 1 { print \$2; exit }' | xargs -I@ '$REAL_TMUX' -L '$s' capture-pane -p -t @ | grep -q app-m4" \
+  until_ok 30 sh -c "'$REAL_TMUX' -L '$s' list-panes -a -F '#{@sidebar} #{pane_id}' | awk '\$1 == 1 { print \$2; exit }' | xargs -I@ '$REAL_TMUX' -L '$s' capture-pane -p -t @ | grep -q app-mac-a" \
     || { WHY="the client's list never showed the hub's row"; return 1; }
 }
 orch_down() { : > "$2/stop"; "$REAL_TMUX" -L "$1" kill-server 2>/dev/null; "$REAL_TMUX" -L "$1-stage" kill-server 2>/dev/null; }
@@ -2706,7 +2706,7 @@ drill_reconnect_mouse() {   # its own server goes with it: a later drill's shim 
 }
 
 # A reconnect onto the SAME view id while the last connection's attach is still
-# half alive (issue #1907, m4 2026-10-06): `run` keeps its view id across
+# half alive (issue #1907, mac-a 2026-10-06): `run` keeps its view id across
 # reconnects, the far end's old attach still held `<fleet>@view-<id>`, the new
 # one's `new-session` failed and it fell back to a plain client of the fleet
 # session — the node's own status line under the stage's header, its prefix
@@ -2977,9 +2977,9 @@ drill_client_other_login_empty_list() {
   mkdir -p "$sc/bin" "$sc/home/.ssh" "$sc/conf/fleets/$S" "$sc/t/.claude-dash/global"
   printf 'FLEET_REPO=acme/app\n' > "$sc/conf/fleets/$S/conf"
   cat > "$sc/sessions.json" <<EOF
-{"sessions": [{"worker_id": "$F/issue-7", "machine_name": "m5", "os_user": "nodelogin", "availability": "online",
+{"sessions": [{"worker_id": "$F/issue-7", "machine_name": "mac-b", "os_user": "nodelogin", "availability": "online",
   "worker": {"issue": 7, "repo": "acme/app", "state": "done", "agent": "claude", "name": "cj-row", "needs": ""}}],
- "nodes": [{"machine_name": "m5", "availability": "online", "sessions": 1}]}
+ "nodes": [{"machine_name": "mac-b", "availability": "online", "sessions": 1}]}
 EOF
   # curl: 304 to If-None-Match "E1", else the body with ETag "E1"
   cat > "$sc/bin/curl" <<SHIM
@@ -3196,7 +3196,7 @@ drill_conf_keys_lost() {
 }
 
 # A session's test takes the person's client (issue #1931, EPIC #1906 C12): on
-# 2026-10-06 a drill (#1901) on m4 connected to the hub as the operator and took
+# 2026-10-06 a drill (#1901) on mac-a connected to the hub as the operator and took
 # their one client lease — the MacBook fell to its standby screen again and again.
 # A fake hub on loopback keeps the hub's rules (an acquire takes the slot over; a
 # request marked X-Fleet-Worker that asks for the person's lease is 403, with the
@@ -3205,8 +3205,8 @@ drill_conf_keys_lost() {
 # fleet-client-lease.py acquire asks at the test door, as test, marked — and the
 # person's lease and where are unchanged; FLEET_CLIENT_IDENTITY=person is refused
 # 403 with the reason; outside a session the person's acquire is unmarked; and
-# bash-guard refuses a session starting `fleet` / `fleet m4` / fleet-shell.sh /
-# `ssh m4 fleet` without --test-identity, lets `fleet --test-identity`,
+# bash-guard refuses a session starting `fleet` / `fleet mac-a` / fleet-shell.sh /
+# `ssh mac-a fleet` without --test-identity, lets `fleet --test-identity`,
 # `fleet doctor` and the hatch through.
 drill_session_takes_client() {
   # not a recovery race: the bound only catches a hang (a macOS runner starts a
@@ -3257,7 +3257,7 @@ rc, out = lease({"FLEET_CLIENT_DEVICE": "MacBook"}, "acquire")
 before = json.dumps(cur.get("person"))
 if rc or log[-1:] != ["/v1/fleet/client acquire worker=no identity="]:
     die("the person's acquire (rc %d): %s" % (rc, out))
-rc, out = lease({"FLEET_WORKER_CRED": "fwc1.x", "FLEET_CLIENT_DEVICE": "m4-drill"}, "acquire")
+rc, out = lease({"FLEET_WORKER_CRED": "fwc1.x", "FLEET_CLIENT_DEVICE": "mac-a-drill"}, "acquire")
 if rc or json.dumps(cur.get("person")) != before:
     die("a session's acquire took the person's lease (rc %d): %s → %s [%s]" % (rc, before, json.dumps(cur.get("person")), out))
 if log[-1] != "/v1/fleet/client/test acquire worker=yes identity=test":
@@ -3273,18 +3273,18 @@ PY2
   [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
   # the guard: a session's client start must say --test-identity
   h=( env -u FLEET_HUB FLEET_WORKER_CRED=fwc1.x FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" )
-  for cmd in 'fleet' 'fleet m4' 'FLEET_HUB_URL=https://hub.example fleet' "$BIN/fleet-shell.sh" 'ssh m4 fleet' 'ssh -p 22022 m4 "fleet shell"' \
-             'fleet codex hi' 'fleet claude --node m4' "$BIN/fleet-home-session.sh claude"; do
+  for cmd in 'fleet' 'fleet mac-a' 'FLEET_HUB_URL=https://hub.example fleet' "$BIN/fleet-shell.sh" 'ssh mac-a fleet' 'ssh -p 22022 mac-a "fleet shell"' \
+             'fleet codex hi' 'fleet claude --node mac-a' "$BIN/fleet-home-session.sh claude"; do
     out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 2 ] || { WHY="bash-guard let a session's [$cmd] through"; return 1; }
     case "$out" in *--test-identity*FLEET_ALLOW_PERSON_CLIENT=1*) ;; *) WHY="bash-guard gave no way out for [$cmd]: [$out]"; return 1 ;; esac
   done
-  for cmd in 'fleet --test-identity m4' 'FLEET_CLIENT_IDENTITY=test fleet' 'fleet doctor' 'ssh m4 fleet --test-identity' 'FLEET_ALLOW_PERSON_CLIENT=1 fleet' \
+  for cmd in 'fleet --test-identity mac-a' 'FLEET_CLIENT_IDENTITY=test fleet' 'fleet doctor' 'ssh mac-a fleet --test-identity' 'FLEET_ALLOW_PERSON_CLIENT=1 fleet' \
              'fleet claude --here' 'fleet --test-identity codex hi'; do
     out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 0 ] || { WHY="bash-guard refused [$cmd]: [$out]"; return 1; }
   done
-  out=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"fleet m4"}}' \
+  out=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"fleet mac-a"}}' \
         | env -u FLEET_WORKER_CRED -u FLEET_HUB FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" 2>&1)
   [ $? = 0 ] || { WHY="bash-guard refused a person's own fleet: [$out]"; return 1; }
   SECS=$(since "$t0"); WHAT="执行会话的客户端只拿测试身份：运营者租约不变，要运营者租约被拒（403 + 原因），守卫拦没写 --test-identity 的启动"
@@ -3425,7 +3425,7 @@ drill_login_browser_silent() {
 # A sandbox login that writes the REAL config (issue #2262): 2026-10-07 a
 # worker took its 上线证据 with HOME pointed at a temp dir but its session's
 # FLEET_CONF_DIR still set — `fleet login` remembered the fake hub in the
-# machine's real fleet.conf and m5 lost its hub. The real home is a seam here
+# machine's real fleet.conf and mac-b lost its hub. The real home is a seam here
 # ($d/real); the guard must keep both writes (the address, node.env's dir for
 # `fleet node ensure`) in the sandbox.
 drill_login_sandbox_real_conf() {
@@ -3770,16 +3770,16 @@ PY
   hw() { ( client_env; export FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$sc/cache"
            unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_WORKER_CRED FLEET_WORKER_ASSERT FLEET_SEAT FLEET_CLIENT_IDENTITY
            bash "$BIN/fleet-client-where.sh" 2>&1 ); }
-  if ! client_start "$s" FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_CLIENT_DEVICE="Verky's Mac" \
+  if ! client_start "$s" FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_CLIENT_DEVICE="Erin's Mac" \
        LC_TERMINAL=iTerm2 LC_TERMINAL_VERSION=3.6 FLEET_CLIENT_XTVERSION=0 FLEET_CLIENT_IDENTITY=person \
        FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
     kill "$hpid" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
   fi
   out=''
-  for _ in $(seq 1 100); do out=$(hw); case "$out" in *"Verky's Mac"*iTerm2*) break ;; esac; sleep 0.1; done
+  for _ in $(seq 1 100); do out=$(hw); case "$out" in *"Erin's Mac"*iTerm2*) break ;; esac; sleep 0.1; done
   before=$out
   printf '入口重启前：%s\n' "$out" > "$sc/where.txt"
-  case "$out" in *"Verky's Mac"*iTerm2*) ;; *)
+  case "$out" in *"Erin's Mac"*iTerm2*) ;; *)
     kill "$hpid" 2>/dev/null; "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
     WHY="before the restart where said [$out] (hub saw: $(tail -3 "$sc/log" | tr '\n' ' '))"; return 1 ;; esac
   # the hub restarts: every lease forgotten
@@ -3797,7 +3797,7 @@ PY
   sleep 0.3; kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
   case "$out" in "$before") ;; *)
     WHY="after the hub restarted and the client renewed, where said [$out] (renewal sent: $(sed -n '/^RESTART/,$p' "$sc/log" | grep -m1 '^renew '))"; return 1 ;; esac
-  WHAT="入口重启（清空租约）后，客户端下一次续租补上设备 / 终端 / 能力：where 回到 Verky's Mac · iTerm2"
+  WHAT="入口重启（清空租约）后，客户端下一次续租补上设备 / 终端 / 能力：where 回到 Erin's Mac · iTerm2"
 }
 
 drill_hub_deploy_lost_config() {
@@ -4633,7 +4633,7 @@ drill_shared_dir_foreign_write() {
 }
 
 # A new login's first Claude start asks questions nobody in a fleet pane answers —
-# on 2026-10-08 the new `verky` logins' `guide` sessions sat on 2.1.293's "Make
+# on 2026-10-08 the new `erin` logins' `guide` sessions sat on 2.1.293's "Make
 # auto mode your default permission mode?" for good (issue #2401). The fake
 # `claude` gates exactly as the measured build does: no hasCompletedOnboarding →
 # the onboarding; no hasSeenAutoDefaultNudge → that question; both → the prompt.
@@ -4709,7 +4709,7 @@ drill_guide_retry_forever() {
   WHAT="引导连开 3 次都没开口：第 4 拍不再重开，写 onboard.stuck（「会话编号被占用 · 连续 3 次没开口」），窗口挂上同一句原因"
 }
 
-# A new tenant's first entry lands in a bare shell (issue #3320, fleet-linux-0
+# A new tenant's first entry lands in a bare shell (issue #3320, linux-a
 # 2026-10-11): the guide's open took longer than the collector's 30 s guide phase
 # (a scratch checkout of the starter repo + claude's start on a loaded node), the
 # phase budget killed it every tick — no window, no try counted, no stop — and a
@@ -4724,7 +4724,7 @@ drill_guide_killed_midopen() {
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/opens"\nsleep 2\ntmux new-window -d -t gk: -n guide "exec sleep 600"\ntmux set-option -w -t gk:guide @pin 1\n' "$d" > "$d/bin/dash-raw-session.sh"
   chmod +x "$d/bin/dash-raw-session.sh"
   nt -f /dev/null new-session -d -s gk -n home -x 100 -y 20 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  # the stop the admission gate left on fleet-linux-0, written 2 h ago
+  # the stop the admission gate left on linux-a, written 2 h ago
   : > "$d/conf/global/onboard.pending"; printf '0\n' > "$d/conf/global/onboard.tries"
   printf '引导窗口没能重开 · 第 1 次 · 2026-10-11 12:38\n' > "$d/conf/global/onboard.stuck"
   printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$d/conf/global/onboard.stuck.ts"
@@ -5049,7 +5049,7 @@ drill_opening_eta_climbs() {
 
 # ---- opened-login-fleet-silent (#2941): the node said create ok, the account went
 # active, and every door went quiet while the login's own fleet never reached
-# the hub — placement said 「mini2: 没有你的登录」, the client gave up after two
+# the hub — placement said 「mac-d: 没有你的登录」, the client gave up after two
 # tries, and an opening far past its machine's ETA never failed. Now: active
 # counts once its fleet registered, else opening (stage fleet) then failed with
 # the missing step; the refusal names the login; past ETA × 3 is failed; the
@@ -5071,7 +5071,7 @@ drill_opened_login_fleet_silent() {
   SECS=$(since "$t0")
 }
 
-# ---- stale-admin-opens-login (#3032): mini2's only admin node was an old
+# ---- stale-admin-opens-login (#3032): mac-d's only admin node was an old
 # standalone agent (prod-e715029, before #2652) restored from the attic; the
 # hub sent it the create, it dropped the join code, and the login it opened
 # never came up. Now an admin says CapLoginJoin when its create hands the code
@@ -5159,7 +5159,7 @@ drill_spare_wash_resume() {
 }
 
 # ---- login-remove-record-left (#2728): sysadminctl -deleteUser took the home
-# and left the record (drill10092046 on macmini), and the script said done —
+# and left the record (drill10092046 on mac-c), and the script said done —
 # the hub read removed and the OS login was nobody's. Now step 6 reads the
 # record again: dscl -delete it, and exit 1 if even that leaves it.
 drill_login_remove_record_left() {
@@ -5175,7 +5175,7 @@ drill_login_remove_record_left() {
 
 # ---- login-remove-respawn-hang (#2866): launchd's per-user domain brought
 # distnoted back after step 4's pkill, and sysadminctl -deleteUser hung on it
-# for minutes a try (drill10100326 on macmini, 9m27s and counting). Now the
+# for minutes a try (drill10100326 on mac-c, 9m27s and counting). Now the
 # login's user/gui domains are booted out before every kill, nothing may come
 # back for a settle window, and deleteUser runs under a time limit.
 drill_login_remove_respawn_hang() {
@@ -5216,7 +5216,7 @@ drill_newcomer_login_no_gh() {
 
 # ---- login-remove-no-fda (#2953): the node program has no Full Disk Access, so
 # TCC kept sysadminctl -deleteUser out of the home's ~/Desktop and it failed every
-# hub-sent remove (33 of 33 on mini2), exit 1 with the record left. Now a failed
+# hub-sent remove (33 of 33 on mac-d), exit 1 with the record left. Now a failed
 # deleteUser is checked like a timed-out one: the record goes with dscl, the home
 # left behind is moved aside, and the node log keeps the script's last words.
 drill_login_remove_no_fda() {
@@ -5328,7 +5328,7 @@ drill_drill_login_handed_silently() {
 # ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
 # read the load, under one observed_at, and the hub folded a machine's load from
 # its login rows only — the machine link's row was skipped — so a slow probe or
-# a refused lane left m5 with no load all day. Now the load is sampled on its
+# a refused lane left mac-b with no load all day. Now the load is sampled on its
 # own clock (sys_at), the fleet half waits at most fleetBeatBudget and carries
 # the last completed read with its own fleet_at, and the machine row takes the
 # newest timed reading of any heard row, the machine link's included.
@@ -5543,7 +5543,7 @@ $(run 2>&1)"
   WHAT='issue 已关、无 PR、策略 merged 的 done 会话：满 2 小时先记账再关（cleaned:done-no-pr），1 小时的留着并说 skip:done-recent'
 }
 
-# The cleanup daemon's idle pass times out (issue #3352): on 2026-10-11 macmini's
+# The cleanup daemon's idle pass times out (issue #3352): on 2026-10-11 mac-c's
 # `fleet-cleanup-idle.sh` hit its 120 s box every tick and the daemon ended the
 # tick there — ahead of the merged-PR pass, so #3302 / #3143 / #3321 sat merged
 # and open for over half an hour, said nowhere. The real daemon on an isolated
@@ -5582,7 +5582,7 @@ drill_idle_timeout_starves_merged() {
   WHAT='闲置那一遍超时（rc=124）：同一拍里合并 PR 那一遍照样先跑、交给清理，超时照记一行'
 }
 
-# An auto send one machine declines (2026-10-08: mini2's `fleet discover:
+# An auto send one machine declines (2026-10-08: mac-d's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
 drill_place_declined_not_retried() {
@@ -5590,18 +5590,18 @@ drill_place_declined_not_retried() {
   mkdir -p "$d/g"
   t0=$(now)
   # node half: the hub's `after …` field and each declined try survive fleet_hub_place
-  printf '#!/bin/sh\nprintf "ccquota place: mini2 declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument — trying the next machine\\n" >&2\nprintf "REMOTE m4 op2 done @9\\tchose m4\\tafter mini2:op1:1\\n"\n' > "$d/place"
+  printf '#!/bin/sh\nprintf "ccquota place: mac-d declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument — trying the next machine\\n" >&2\nprintf "REMOTE mac-a op2 done @9\\tchose mac-a\\tafter mac-d:op1:1\\n"\n' > "$d/place"
   chmod +x "$d/place"
   out=$(bash -c '. "$1/fleet-lib.sh"; fleet_hub_on(){ return 0; }; fleet_uuid(){ echo 11111111-1111-4111-8111-111111111111; }
         _fleet_hub_env(){ :; }; FLEET_HUB_PLACE_CMD="$2" fleet_hub_place s o/r 7 auto' _ "$BIN" "$d/place" 2>"$d/err"); rc=$?
   err=$(cat "$d/err")
-  [ "$rc" = 0 ] && [ "$out" = "REMOTE m4 op2 done @9	chose m4	after mini2:op1:1" ] \
+  [ "$rc" = 0 ] && [ "$out" = "REMOTE mac-a op2 done @9	chose mac-a	after mac-d:op1:1" ] \
     || { WHY="fleet_hub_place lost the hub's next-machine answer (rc=$rc): $out"; return 1; }
-  case "$err" in *'mini2 declined (exit 1): fleet discover'*) ;; *) WHY="the declined try is not said on stderr: $err"; return 1 ;; esac
+  case "$err" in *'mac-d declined (exit 1): fleet discover'*) ;; *) WHY="the declined try is not said on stderr: $err"; return 1 ;; esac
   # the claim a never-seen send keeps is told apart: stale, no session anywhere
   old_ts=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
   now_s=$(date +%s)
-  printf '{"seq": 1, "ts": "%s", "child": "issue-11317", "node": "mini2", "op": "o1", "state": "unknown"}\n' "$old_ts" > "$d/scratch-3.dispatch"
+  printf '{"seq": 1, "ts": "%s", "child": "issue-11317", "node": "mac-d", "op": "o1", "state": "unknown"}\n' "$old_ts" > "$d/scratch-3.dispatch"
   printf '#ts\037%s\n' "$now_s" > "$d/g/remote_s"; printf '%s\n' "$now_s" > "$d/g/hub_ok"
   out=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$d" --parent scratch-3 --hub-cache "$d/g/remote_s" --json)
   case "$out" in *'"claim": "stale"'*) ;; *) WHY="fleet-children does not call a claim with no session stale: $out"; return 1 ;; esac
@@ -5861,7 +5861,7 @@ drill_cross_send_refused_unseen() {
   (cd "$BIN" && xs python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$c/conf") >/dev/null 2>&1
   u=$(xs bash -c '. "$1/fleet-lib.sh"; fleet_uuid xs' _ "$BIN")
   [ -n "$u" ] || { WHY="no fleet UUID could be minted"; return 1; }
-  printf '11111111-2222-3333-4444-555555555555/issue-42\tm4\t\n' > "$c/conf/control/hub-workers.tsv"
+  printf '11111111-2222-3333-4444-555555555555/issue-42\tmac-a\t\n' > "$c/conf/control/hub-workers.tsv"
   ob="$c/conf/control/hub-outbox"; mkdir -p "$ob"
   # the hub, as the agent sees it: refuse what its grammar refuses ($1=all: everything)
   hub() { ( for _ in $(seq 1 50); do
@@ -5947,7 +5947,7 @@ drill_notify_silent() {
   mkdir -p "$d/home" "$d/t" "$d/conf"
   printf '{"caps":["notify"]}\n' > "$d/t/client.where.json"
   printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$1" "$2" >> "%s/out"\n' "$d" > "$d/notifier"; chmod +x "$d/notifier"
-  nsj() { printf '{"sessions":[{"worker_id":"%s/issue-5","fleet_id":"%s","machine_name":"m4","os_user":"u","availability":"online","worker":{"issue":5,"repo":"o/r","state":"%s","needs":"%s","detail":"%s","agent":"claude"}}],"nodes":[{"machine_name":"m4","availability":"online","sessions":1}]}\n' \
+  nsj() { printf '{"sessions":[{"worker_id":"%s/issue-5","fleet_id":"%s","machine_name":"mac-a","os_user":"u","availability":"online","worker":{"issue":5,"repo":"o/r","state":"%s","needs":"%s","detail":"%s","agent":"claude"}}],"nodes":[{"machine_name":"mac-a","availability":"online","sessions":1}]}\n' \
             "$F" "$F" "$1" "${2:-}" "${3:-}" > "$d/sessions.json"; }
   nsr() { ( unset TMUX TMUX_PANE CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_LOCAL FLEET_NODE_ALIASES FLEET_HUB_URL FLEET_NOTIFY
             export HOME="$d/home" TMPDIR="$d/t" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 FLEET_UI_LANG=zh \
@@ -5960,7 +5960,7 @@ drill_notify_silent() {
   nsr
   until_ok "$CAP" test -s "$d/out" || { WHY="the session asks, no terminal is attached, and nothing rang"; return 1; }
   SECS=$(since "$t0")
-  [ "$(cat "$d/out")" = '#5 在问你|要合并 #5 吗？ · m4' ] || { WHY="the notification says [$(cat "$d/out")]"; return 1; }
+  [ "$(cat "$d/out")" = '#5 在问你|要合并 #5 吗？ · mac-a' ] || { WHY="the notification says [$(cat "$d/out")]"; return 1; }
   grep -q '"state": "ask", "sent"' "$d/notify.ndjson" 2>/dev/null || { WHY="logs/notify.ndjson has no sent line: $(cat "$d/notify.ndjson" 2>/dev/null)"; return 1; }
   nsr; sleep 0.5
   [ "$(wc -l < "$d/out" | tr -d ' ')" = 1 ] || { WHY="the same question rang again: $(cat "$d/out")"; return 1; }
@@ -5981,14 +5981,14 @@ drill_debug_bundle_leaks_secret() {
          b3BlbnNzaC1rZXktdjEFAKEdddddddddd MIIEowIBAAKCAQEAFAKEeeeeeeeeeee Zm9vOkZBS0VhdXRoaGVhZGVy \
          sid_FAKEcookieggggg FAKEurlsighhhhh FAKEenvpasswordiii FAKEhubjsontokenjjj fdt.FAKEticketkkk \
          eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJGQUtFbGxsbGxsIn0.FAKEsig NOTLISTED_cert NOTLISTED_hubjson NOTLISTED_secrets
-  { printf 'connect m5 relay token %s\nclone with %s\nkey %s\n' "$1" "$2" "$3"
+  { printf 'connect mac-b relay token %s\nclone with %s\nkey %s\n' "$1" "$2" "$3"
     printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n%s\n-----END OPENSSH PRIVATE KEY-----\n' "$4"
     printf -- '-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----\n' "$5"
     printf '> Authorization: Basic %s\n< Set-Cookie: sid=%s; Path=/\n' "$6" "$7"
     printf 'GET https://hub.example/v1/x?a=1&sig=%s\nexport DB_PASSWORD=%s\n' "$8" "$9"
     printf '{"url": "https://hub.example", "token": "%s"}\nfleet-debug ticket %s\njwt %s\n' "${10}" "${11}" "${12}"
   } > "$lg/connect.log"
-  printf 'place m5 → No machine can take it\n' > "$lg/place.log"
+  printf 'place mac-b → No machine can take it\n' > "$lg/place.log"
   printf '%s\n' "${13}" > "$d/home/.ssh/fleet-cert"
   printf '{"token": "%s"}\n' "${14}" > "$d/conf/hub.json"
   printf 'FLEET_X=%s\n' "${15}" > "$d/conf/secrets.env"
@@ -6025,7 +6025,7 @@ drill_debug_upload_no_python_ca() {
   done
   printf '#!/bin/sh\necho "No module named _ssl" >&2\nexit 1\n' > "$d/nopy/python3"; chmod +x "$d/nopy/python3"
   printf 'fdt1.eyJpZCI6ImRucCJ9.c2ln\n' > "$d/home/conf/debug-ticket"
-  printf 'relay-end\tm5\tclosed by hub\n' > "$d/home/.cache/claude-fleet/shell/logs/connect.log"
+  printf 'relay-end\tmac-b\tclosed by hub\n' > "$d/home/.cache/claude-fleet/shell/logs/connect.log"
   cat > "$d/hub.py" <<'PY'
 import http.server, json, os, sys
 d = sys.argv[1]
@@ -6165,7 +6165,7 @@ drill_linux_uid_reuse() {
   t0=$(now)
   linux_tenant_leg test_uid_reuse || { WHY="a login changed number, a retired number came back, or a foreign-owned home was chowned: $(tail -n 3 "$WORK/test_uid_reuse.out")"; return 1; }
   SECS=$(since "$t0")
-  WHAT="开 24haowan 与 drill2 → 清空 passwd 再 boot：号码不变；删 drill2 再开 drill3 / drill2：拿新号码，不给 10003；家属主不对 boot 停下、不 chown"
+  WHAT="开 globex 与 drill2 → 清空 passwd 再 boot：号码不变；删 drill2 再开 drill3 / drill2：拿新号码，不给 10003；家属主不对 boot 停下、不 chown"
 }
 
 drill_linux_removed_login_lingers() {
@@ -6473,7 +6473,7 @@ drill_report_parent_remote() {
   [ "$out" = "$PF" ] || { WHY="the parent's identity was stamped as [$out], want it whole"; return 1; }
   nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; set-option -w -t "$w" @origin "$out" \; \
      set-option -w -t "$w" @origin_wid "$F/$PF" \; set-option -w -t "$w" @origin_fid "$PF" \; set-option -w -t "$w" @claude_state 'done'
-  printf '%s/%s\tm4\t\n' "$F" "$PF" > "$d/conf/control/hub-workers.tsv"
+  printf '%s/%s\tmac-a\t\n' "$F" "$PF" > "$d/conf/control/hub-workers.tsv"
   t0=$(now)
   out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$w" --state blocked --summary 'need a decision' 2>&1); rc=$?
   SECS=$(since "$t0")
@@ -6516,12 +6516,12 @@ drill_report_parent_online_queued() {
   out=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_window_okey rpoq "$2"' _ "$BIN" "$w")
   [ "$out" = orchestrator ] || { WHY="the role holder's own key read [$out], want orchestrator"; return 1; }
   t0=$(now)
-  out=$(printf '{"id":"%s/acme-app:issue-41#1.1","kind":"child_report","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mini2","payload":{"child":"acme-app:issue-41","state":"merged","pr":"7","summary":"done","tier":"loud","msg":"[child-report] issue-41 merged"}}' \
+  out=$(printf '{"id":"%s/acme-app:issue-41#1.1","kind":"child_report","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"child":"acme-app:issue-41","state":"merged","pr":"7","summary":"done","tier":"loud","msg":"[child-report] issue-41 merged"}}' \
           "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="a child report to the online orchestrator by identity exited $rc [$out], want 0 (never «not now» for a window that is here)"; return 1; }
   [ -s "$d/conf/fleets/rpoq/children/orchestrator.ndjson" ] \
     || { WHY="the report was not booked under the role's key: $(ls "$d/conf/fleets/rpoq/children" 2>&1)"; return 1; }
-  out=$(printf '{"id":"%s/acme-app:issue-41#2.1","kind":"message","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mini2","payload":{"text":"a question"}}' \
+  out=$(printf '{"id":"%s/acme-app:issue-41#2.1","kind":"message","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"text":"a question"}}' \
           "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="a message to the online orchestrator by identity exited $rc [$out], want 0"; return 1; }

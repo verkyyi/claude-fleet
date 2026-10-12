@@ -43,10 +43,10 @@ export TMUX="$SOCK,$pid,0"
 
 now=$(date +%s)
 printf '%s\n' \
-  "@1	working		alpha task	m5	verkyyi/claude-fleet	" \
-  "@2	needs	!	beta fix	m4	verkyyi/claude-fleet	" \
-  "@3	idle		gamma notes	m5		" \
-  "wid:f/home-1	idle		home claude	m5		" > "$FLEET_SWITCH_STATE/switch-rows.tsv"
+  "@1	working		alpha task	mac-b	verkyyi/claude-fleet	" \
+  "@2	needs	!	beta fix	mac-a	verkyyi/claude-fleet	" \
+  "@3	idle		gamma notes	mac-b		" \
+  "wid:f/home-1	idle		home claude	mac-b		" > "$FLEET_SWITCH_STATE/switch-rows.tsv"
 cat > "$FLEET_SWITCH_STATE/switch-history.json" <<EOF
 {"stack": ["@3", "@2", "@1"], "at": 2, "mru": ["@1", "@2", "@3"],
  "seen": {"@1": $now, "@2": $((now - 300)), "@3": $((now - 7200))}}
@@ -188,15 +188,15 @@ assert {k: v[0] for k, v in q.ROW_KEYS.items()} == {"\x12": "rename", "\x18": "r
 assert all(v[0] in acts for v in q.ROW_KEYS.values()), q.ROW_KEYS
 # a row as the list hands it (15 fields) → switch-rows.tsv → the panel's row
 side = [["hdr", "acme/web", "", "acme/web (2)", " "],
-        ["wid:F/issue-12", "needs", "!", "登录页重做", " ", "", "0", "ask", "m4", "#12", "#75✓", "40%", "", "登录页 · 重做", "done:2h"],
-        ["wid:F/issue-13", "idle", "○", "样式", " ", "", "0", "", "m5", "#13", "—", "·", "", "", ""]]
+        ["wid:F/issue-12", "needs", "!", "登录页重做", " ", "", "0", "ask", "mac-a", "#12", "#75✓", "40%", "", "登录页 · 重做", "done:2h"],
+        ["wid:F/issue-13", "idle", "○", "样式", " ", "", "0", "", "mac-b", "#13", "—", "·", "", "", ""]]
 rows = q.parse_rows(q.rows_text(side))
 r = rows[0]
 assert (r["issue"], r["pr"], r["reap"], r["title"], r["repo"], r["group"]) == \
     ("12", "#75✓", "done:2h", "登录页 · 重做", "acme/web", "acme/web (2)"), r
 assert (rows[1]["issue"], rows[1]["pr"]) == ("13", ""), rows[1]
 # an old seven-column file still reads
-assert q.parse_rows("@1\tidle\t\tx\tm5\tg\t\n")[0]["issue"] == ""
+assert q.parse_rows("@1\tidle\t\tx\tmac-b\tg\t\n")[0]["issue"] == ""
 assert q.pr_url(r) == "https://github.com/acme/web/pull/75", q.pr_url(r)
 assert q.pr_url(rows[1]) == "https://github.com/acme/web/issues/13", q.pr_url(rows[1])
 assert q.pr_url(dict(rows[1], repo="none")) == ""

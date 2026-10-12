@@ -193,7 +193,7 @@ T="$(printf '\t')"
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/sh
 case "\$1" in list-windows) cat <<'ROWS'
-s1${T}@1${T}plan${T}-${T}needs${T}ask${T}$(( $(now) - 120 ))${T}演练放在 m5 还是只在 m4？ 两个都 要
+s1${T}@1${T}plan${T}-${T}needs${T}ask${T}$(( $(now) - 120 ))${T}演练放在 mac-b 还是只在 mac-a？ 两个都 要
 s1${T}@2${T}issue-7${T}7${T}needs${T}perm${T}$(( $(now) - 60 ))${T}Bash: git push
 s1${T}@3${T}issue-8${T}8${T}needs${T}blocked${T}0
 s1${T}@4${T}issue-9${T}9${T}failed${T}-${T}0
@@ -214,7 +214,7 @@ case "$out" in *"●  #9 · failed"*) ok ;; *) fail "7: failed" "$out" ;; esac
 case "$out" in *"●  #10 · waiting"*) ok ;; *) fail "7: undifferentiated needs → waiting" "$out" ;; esac
 case "$(cat "$G/alerts.ndjson")" in *'"target":"s1:@2"'*) ok ;; *) fail "7: jump target" "$(cat "$G/alerts.ndjson")" ;; esac
 nd=$(cat "$G/alerts.ndjson")
-case "$nd" in *'"target":"s1:@1","detail":"演练放在 m5 还是只在 m4？ 两个都 要"'*) ok ;; *) fail "7: a question's words ride in detail (#1951)" "$nd" ;; esac
+case "$nd" in *'"target":"s1:@1","detail":"演练放在 mac-b 还是只在 mac-a？ 两个都 要"'*) ok ;; *) fail "7: a question's words ride in detail (#1951)" "$nd" ;; esac
 case "$nd" in *'"target":"s1:@2","detail":"Bash: git push"'*) ok ;; *) fail "7: a permission's command rides in detail" "$nd" ;; esac
 case "$nd" in *'"target":"s1:@3","detail":""'*) ok ;; *) fail "7: no question → an empty detail (never the window name)" "$nd" ;; esac
 fa write                                                      # no $TMUX: the quota watch's view
@@ -223,12 +223,12 @@ eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 5" "$(fa counts)
 # hub cache's needs_<sess>, every machine's, whatever its own windows say.
 rm -f "$G"/alerts.*
 US7=$(printf '\037')
-printf 'F/issue-1909%s#1909%sask%sm5%s演练放在 m5 还是只在 m4？\nF/scratch-3%sscratch-3%sperm%sm4%sBash: rm -rf build\nF/issue-1909%s#1909%sask%sm5%sdup\n' \
+printf 'F/issue-1909%s#1909%sask%smac-b%s演练放在 mac-b 还是只在 mac-a？\nF/scratch-3%sscratch-3%sperm%smac-a%sBash: rm -rf build\nF/issue-1909%s#1909%sask%smac-b%sdup\n' \
   "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" > "$G/needs_s1"
 FLEET_SHELL=1 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
 eq "7: the client counts the hub's needs, not its own windows (one row per worker)" "0 0 2" "$(fa counts)"
 nd=$(cat "$G/alerts.ndjson")
-case "$nd" in *'"id":"needs-wid-F'*'issue-1909","severity":"needs","subject":"#1909","condition":"question","value":"m5"'*'"action":"jump"'*'"target":"wid:F/issue-1909","detail":"演练放在 m5 还是只在 m4？"'*) ok ;; *) fail "7: a client needs row: subject, machine, jump by worker id, the question" "$nd" ;; esac
+case "$nd" in *'"id":"needs-wid-F'*'issue-1909","severity":"needs","subject":"#1909","condition":"question","value":"mac-b"'*'"action":"jump"'*'"target":"wid:F/issue-1909","detail":"演练放在 mac-b 还是只在 mac-a？"'*) ok ;; *) fail "7: a client needs row: subject, machine, jump by worker id, the question" "$nd" ;; esac
 case "$nd" in *'"subject":"scratch-3","condition":"permission"'*'"detail":"Bash: rm -rf build"'*) ok ;; *) fail "7: the client's permission row" "$nd" ;; esac
 : > "$G/needs_s1"
 FLEET_SHELL=1 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write

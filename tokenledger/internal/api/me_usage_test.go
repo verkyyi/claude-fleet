@@ -14,7 +14,7 @@ import (
 // says; an admin still reads everyone, and their own with ?mine=1; the
 // operator's token is unchanged. The page is in both menus.
 func TestPersonUsage_UserReadsOwn(t *testing.T) {
-	h := newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h := newGitHubHarnessWith(t, fullServer, "ivan")
 	now := time.Now()
 	h.srv.budgetNow = func() time.Time { return now }
 	for _, u := range []fakeGHUser{ghBob, ghCarol} {
@@ -37,7 +37,7 @@ func TestPersonUsage_UserReadsOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, bob := h.signIn(t, ghBob)
-	_, admin := h.signIn(t, fakeGHUser{ID: 100, Login: "verkyyi"})
+	_, admin := h.signIn(t, fakeGHUser{ID: 100, Login: "ivan"})
 
 	type answer struct {
 		People []PersonBudgetState `json:"people"`

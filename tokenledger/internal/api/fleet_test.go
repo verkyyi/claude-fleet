@@ -154,12 +154,12 @@ func TestFleetRoutesAbsentWhenModuleOff(t *testing.T) {
 
 func TestFleetListFromHeartbeats(t *testing.T) {
 	h := newFleetHarness(t)
-	a := connectFakeNode(t, h, "m5", false)
-	b := connectFakeNode(t, h, "m4", false)
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
 	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
 	fb := fakeFleet(t, machineB, "fleet-b", "", "", 7)
-	a.beat("m5", "alice", machineA, fa)
-	b.beat("m4", "bob", machineB, fb)
+	a.beat("mac-d", "alice", machineA, fa)
+	b.beat("mac-c", "bob", machineB, fb)
 
 	want := []string{fa.FleetID, fb.FleetID}
 	sort.Strings(want)
@@ -179,8 +179,8 @@ func TestFleetListFromHeartbeats(t *testing.T) {
 	if s["count"].(float64) != 3 {
 		t.Fatalf("fleet_sessions count = %v, want 3: %v", s["count"], s)
 	}
-	if got := s["machines"].([]any); len(got) != 2 || got[0] != "m4" || got[1] != "m5" {
-		t.Fatalf("machines = %v, want [m4 m5]", got)
+	if got := s["machines"].([]any); len(got) != 2 || got[0] != "mac-c" || got[1] != "mac-d" {
+		t.Fatalf("machines = %v, want [mac-c mac-d]", got)
 	}
 	ids := map[string]bool{}
 	for _, row := range s["sessions"].([]any) {
@@ -200,7 +200,7 @@ func TestFleetListFromHeartbeats(t *testing.T) {
 	}
 
 	// A fleet the machine stops reporting stays listed, unregistered.
-	a.beat("m5", "alice", machineA)
+	a.beat("mac-d", "alice", machineA)
 	waitFor(t, 3*time.Second, "fleet-a unregistered", func() bool {
 		for _, f := range getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any) {
 			f := f.(map[string]any)
@@ -215,7 +215,7 @@ func TestFleetListFromHeartbeats(t *testing.T) {
 
 func TestFleetHeartbeatIdentityChecks(t *testing.T) {
 	h := newFleetHarness(t)
-	n := connectFakeNode(t, h, "m5", true)
+	n := connectFakeNode(t, h, "mac-d", true)
 	good := fakeFleet(t, machineA, "good", "o/r", "/c", 3)
 	forged := fakeFleet(t, machineA, "forged", "o/r", "/c", 4)
 	forged.FleetID = fakeFleet(t, machineA, "other", "", "", 0).FleetID
@@ -225,7 +225,7 @@ func TestFleetHeartbeatIdentityChecks(t *testing.T) {
 	ws = append(ws, map[string]any{"worker_id": forged.FleetID + "/issue-9", "key": "issue-9"})
 	good.Workers, _ = json.Marshal(ws)
 	good.Count = len(ws)
-	n.beat("m5", "alice", machineA, good, forged)
+	n.beat("mac-d", "alice", machineA, good, forged)
 
 	waitFor(t, 3*time.Second, "good registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 1
@@ -248,9 +248,9 @@ func TestFleetHeartbeatIdentityChecks(t *testing.T) {
 
 	// The same fleet UUID claimed by another machine is refused — even from
 	// an agent too old to be re-derived (no CapRead), by the registry itself.
-	other := connectFakeNode(t, h, "m4", false)
+	other := connectFakeNode(t, h, "mac-c", false)
 	steal := good
-	other.beat("m4", "bob", machineB, steal)
+	other.beat("mac-c", "bob", machineB, steal)
 	time.Sleep(200 * time.Millisecond)
 	r, err := h.srv.Store.Fleet(good.FleetID)
 	if err != nil || r.MachineID != machineA {
@@ -260,8 +260,8 @@ func TestFleetHeartbeatIdentityChecks(t *testing.T) {
 
 func TestFleetStatusLiveThenHeartbeat(t *testing.T) {
 	h := newFleetHarness(t)
-	live := connectFakeNode(t, h, "m5", true)
-	old := connectFakeNode(t, h, "m4", false)
+	live := connectFakeNode(t, h, "mac-d", true)
+	old := connectFakeNode(t, h, "mac-c", false)
 	fl := fakeFleet(t, machineA, "live", "", "", 1)
 	fo := fakeFleet(t, machineB, "old", "", "", 2)
 	live.serve(func(method string, params json.RawMessage) (any, *control.Error) {
@@ -280,8 +280,8 @@ func TestFleetStatusLiveThenHeartbeat(t *testing.T) {
 		}
 		return nil, &control.Error{Code: "INVALID_ARGUMENT", Message: "no"}
 	})
-	live.beat("m5", "alice", machineA, fl)
-	old.beat("m4", "bob", machineB, fo)
+	live.beat("mac-d", "alice", machineA, fl)
+	old.beat("mac-c", "bob", machineB, fo)
 	waitFor(t, 3*time.Second, "registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
@@ -333,7 +333,7 @@ func TestFleetStatusLiveThenHeartbeat(t *testing.T) {
 
 // The scope seam: whatever fleetScope returns decides every read. Here a
 // caller naming itself in a test header stands in for a signed-in principal whose
-// active account is alice@m5 (C4's FleetScope gives exactly this shape).
+// active account is alice@mac-d (C4's FleetScope gives exactly this shape).
 func TestFleetScopedToPrincipal(t *testing.T) {
 	h := newFleetHarness(t)
 	h.srv.fleetScopeHook = func(r *http.Request) (func(string, string) bool, error) {
@@ -341,16 +341,16 @@ func TestFleetScopedToPrincipal(t *testing.T) {
 		case "":
 			return nil, nil
 		case "alice":
-			return func(host, user string) bool { return host == "m5" && user == "alice" }, nil
+			return func(host, user string) bool { return host == "mac-d" && user == "alice" }, nil
 		}
 		return func(string, string) bool { return false }, nil
 	}
-	a := connectFakeNode(t, h, "m5", false)
-	b := connectFakeNode(t, h, "m4", false)
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
 	fa := fakeFleet(t, machineA, "alice-fleet", "", "", 1)
 	fb := fakeFleet(t, machineB, "bob-fleet", "", "", 2)
-	a.beat("m5", "alice", machineA, fa)
-	b.beat("m4", "bob", machineB, fb)
+	a.beat("mac-d", "alice", machineA, fa)
+	b.beat("mac-c", "bob", machineB, fb)
 	waitFor(t, 3*time.Second, "registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
@@ -408,15 +408,15 @@ func TestFleetScopeOperatorDoors(t *testing.T) {
 }
 
 // Through C4's real FleetScope: a signed-in principal with an ACTIVE account on
-// m5 sees m5's fleet for that login and nothing else.
+// mac-d sees mac-d's fleet for that login and nothing else.
 func TestFleetScopeSignedInPrincipal(t *testing.T) {
 	h := newFleetHarness(t)
-	a := connectFakeNode(t, h, "m5", false)
-	b := connectFakeNode(t, h, "m4", false)
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
 	fa := fakeFleet(t, machineA, "alice-fleet", "", "", 1)
-	fb := fakeFleet(t, machineB, "alice-on-m4", "", "", 2)
-	a.beat("m5", "alice", machineA, fa)
-	b.beat("m4", "alice", machineB, fb)
+	fb := fakeFleet(t, machineB, "alice-on-mac-c", "", "", 2)
+	a.beat("mac-d", "alice", machineA, fa)
+	b.beat("mac-c", "alice", machineB, fb)
 	waitFor(t, 3*time.Second, "registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
@@ -424,7 +424,7 @@ func TestFleetScopeSignedInPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m5", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-d", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	req, _ := http.NewRequest(http.MethodGet, "/", nil)
@@ -435,7 +435,7 @@ func TestFleetScopeSignedInPrincipal(t *testing.T) {
 	}
 	got := out["fleets"].([]FleetView)
 	if len(got) != 1 || got[0].FleetID != fa.FleetID {
-		t.Fatalf("wx-alice sees %+v; want only alice@m5 (no account on m4 yet)", got)
+		t.Fatalf("wx-alice sees %+v; want only alice@mac-d (no account on mac-c yet)", got)
 	}
 }
 
@@ -457,7 +457,7 @@ func TestFleetIntegrationRealFleetControl(t *testing.T) {
 	const every = 150 * time.Millisecond
 
 	type node struct{ label, host, session, repo string }
-	nodes := []node{{"m5", "m5", "fleet-alpha", "verkyyi/claude-fleet"}, {"m4", "m4", "fleet-beta", ""}}
+	nodes := []node{{"mac-d", "mac-d", "fleet-alpha", "verkyyi/claude-fleet"}, {"mac-c", "mac-c", "fleet-beta", ""}}
 	scripts := map[string]string{}
 	for _, n := range nodes {
 		home := t.TempDir()
@@ -522,8 +522,8 @@ func TestFleetIntegrationRealFleetControl(t *testing.T) {
 			t.Errorf("fleet %s does not re-derive (got %s)", fid, again)
 		}
 	}
-	if !machines["ep_m5"] || !machines["ep_m4"] {
-		t.Fatalf("endpoints = %v, want ep_m5 and ep_m4", machines)
+	if !machines["ep_mac-d"] || !machines["ep_mac-c"] {
+		t.Fatalf("endpoints = %v, want ep_mac-d and ep_mac-c", machines)
 	}
 	s := getFleet(t, h, "/v1/fleet/fleet_sessions", 200)
 	if s["count"].(float64) != 4 {
@@ -673,9 +673,9 @@ func TestFleetConfigPage(t *testing.T) {
 // moves it.
 func TestFleetSessionsETag(t *testing.T) {
 	h := newFleetHarness(t)
-	a := connectFakeNode(t, h, "m5", false)
+	a := connectFakeNode(t, h, "mac-d", false)
 	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
-	a.beat("m5", "alice", machineA, fa)
+	a.beat("mac-d", "alice", machineA, fa)
 	waitFor(t, 3*time.Second, "fleet registered", func() bool {
 		return getFleet(t, h, "/v1/fleet/fleet_sessions", 200)["count"].(float64) == 2
 	})
@@ -710,7 +710,7 @@ func TestFleetSessionsETag(t *testing.T) {
 	// A new heartbeat — a window changed state — moves the validator.
 	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs"}]`)
 	fa.Count = 1
-	a.beat("m5", "alice", machineA, fa)
+	a.beat("mac-d", "alice", machineA, fa)
 	waitFor(t, 3*time.Second, "the validator moved", func() bool {
 		st4, tag4, _ := get(tag)
 		return st4 == 200 && tag4 != tag
@@ -737,13 +737,13 @@ func TestFleetSessionsETag(t *testing.T) {
 // fleet_sessions — the session page and the client read them there.
 func TestFleetSessionsCarryStatusKindMsg(t *testing.T) {
 	h := newFleetHarness(t)
-	a := connectFakeNode(t, h, "m5", false)
+	a := connectFakeNode(t, h, "mac-d", false)
 	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
 	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs","needs":"perm",` +
 		`"status_kind":"permission","status_msg":"Bash: git push origin issue-1"},` +
 		`{"worker_id":"` + fa.FleetID + `/issue-2","key":"issue-2","issue":2,"state":"working"}]`)
 	fa.Count = 2
-	a.beat("m5", "alice", machineA, fa)
+	a.beat("mac-d", "alice", machineA, fa)
 	var got map[string]any
 	waitFor(t, 3*time.Second, "fleet registered", func() bool {
 		got = getFleet(t, h, "/v1/fleet/fleet_sessions", 200)
@@ -769,9 +769,9 @@ func TestFleetSessionsCarryStatusKindMsg(t *testing.T) {
 // 304 is the degenerate case, asserted again here.
 func TestFleetSessionsLongPoll(t *testing.T) {
 	h := newFleetHarness(t)
-	a := connectFakeNode(t, h, "m5", false)
+	a := connectFakeNode(t, h, "mac-d", false)
 	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
-	a.beat("m5", "alice", machineA, fa)
+	a.beat("mac-d", "alice", machineA, fa)
 	waitFor(t, 3*time.Second, "fleet registered", func() bool {
 		return getFleet(t, h, "/v1/fleet/fleet_sessions", 200)["count"].(float64) == 2
 	})
@@ -834,7 +834,7 @@ func TestFleetSessionsLongPoll(t *testing.T) {
 	}
 	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs"}]`)
 	fa.Count = 1
-	a.beat("m5", "alice", machineA, fa)
+	a.beat("mac-d", "alice", machineA, fa)
 	select {
 	case got := <-done:
 		fired := h.srv.sessionsChanged.lastFired()

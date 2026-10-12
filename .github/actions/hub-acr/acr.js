@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // GitHub OIDC → Aliyun STS → ACR (personal edition) temporary login (EPIC #1982 C1, issue #1983).
 //
-// Ported from 24haowan-monorepo's .github/actions/acr-credentials/acr.js, with the
+// Ported from acme-monorepo's .github/actions/acr-credentials/acr.js, with the
 // role fixed: ① this job's OIDC token; ② anonymous AssumeRoleWithOIDC as
 // gha-claudefleet-deploy (shared with ../hub-kubeconfig/oidc.js); ③ with the
 // STS, cr:GetAuthorizationToken (personal edition 2016-06-07 `GET /tokens`) for
 // `cr_temp_user` + a password that lives as long as the STS. What it may push is
-// the role's policy: 24haowan/ccquota only.
+// the role's policy: acme/ccquota only.
 //
 // Output: the auth for both registry endpoints merged into ~/.docker/config.json
 // (other entries kept; buildx reads it). Nothing is printed but masked values.

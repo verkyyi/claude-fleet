@@ -167,7 +167,7 @@ class NoLogin(ValueError):
 
 def valid_name(login):
     # control.ValidCreateLogin(login, existing=true): a digit may lead
-    # (`24haowan`), never all digits — a numeric name reads as a UID.
+    # (`acme`), never all digits — a numeric name reads as a UID.
     return (isinstance(login, str) and 2 <= len(login) <= 16 and login not in RESERVED
             and re.fullmatch(r'[a-z0-9]+', login) is not None and re.search(r'[a-z]', login) is not None)
 

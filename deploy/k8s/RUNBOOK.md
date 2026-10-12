@@ -1,6 +1,6 @@
 # ccquota-hub 运维手册
 
-> 2026-10-06 从 24haowan-monorepo `doc/k8s-yamls/ccquota/RUNBOOK.md` 搬来（EPIC #1982 C1，issue #1983）。
+> 2026-10-06 从 acme-monorepo `doc/k8s-yamls/ccquota/RUNBOOK.md` 搬来（EPIC #1982 C1，issue #1983）。
 > 发布见 [README.md](README.md)。
 
 入口有两种形态（#2125，EPIC #2119）：
@@ -79,9 +79,9 @@ kubectl uncordon <node>          # ★ 起来之后立刻解除，别把节点�
 ```bash
 kubectl -n kube-system patch ds csi-plugin --type=json -p='[
   {"op":"replace","path":"/spec/template/spec/containers/3/image",
-   "value":"registry-cn-shenzhen-vpc.ack.aliyuncs.com/acs/csi-plugin:v1.36.2"},
+   "value":"registry-region-a-vpc.ack.aliyuncs.com/acs/csi-plugin:v1.36.2"},
   {"op":"replace","path":"/spec/template/spec/initContainers/0/image",
-   "value":"registry-cn-shenzhen-vpc.ack.aliyuncs.com/acs/csi-plugin:v1.36.2-init"}
+   "value":"registry-region-a-vpc.ack.aliyuncs.com/acs/csi-plugin:v1.36.2-init"}
 ]'
 kubectl -n kube-system rollout status ds/csi-plugin
 # 回滚：kubectl -n kube-system rollout undo ds/csi-plugin
@@ -159,7 +159,7 @@ container）塞进正在跑的 hub pod，挂 `/data`，对快照的一份拷贝�
 （私有桶、IA 存储；`SHA256SUMS.txt` 第一列是解压后 `.db` 的 sha256）。一条命令，先校验再删：
 
 ```bash
-tools/ccquota-archive-backups.sh --dry-run   # 在 24haowan-monorepo 里跑；看会挪哪些
+tools/ccquota-archive-backups.sh --dry-run   # 在 acme-monorepo 里跑；看会挪哪些
 tools/ccquota-archive-backups.sh             # 挪；任一份校验不过，那一份就留在盘里、退出码 1
 ```
 
@@ -215,7 +215,7 @@ kubectl -n new-deploy logs deploy/ccquota-hub -c disk-watch --tail=5   # 平时�
      --from-literal=db-url='postgres://…?sslmode=require' \
      --from-literal=replica-token="$(openssl rand -hex 32)"
    ```
-2. 部署 Role 能管 PodDisruptionBudget（[README.md](README.md)「Who may do what」那段 yaml，24haowan-monorepo 里改）。
+2. 部署 Role 能管 PodDisruptionBudget（[README.md](README.md)「Who may do what」那段 yaml，acme-monorepo 里改）。
 3. #2190 已合并（`fleet login`、客户端租约、实时会话在两份入口之间不丢）。
 4. 准备好**切换 PR**：只删 `overlays/prod/kustomization.yaml` 里 `components:` / `  - sqlite` 两行。
    它的 hub-deploy `check` 会证明删完的渲染是完整的滚动形态（`mode=postgres`）。
@@ -314,7 +314,7 @@ kubectl -n new-deploy label secret ccquota-ssh-ca ccquota-fleet-cred-key app=ccq
 ## 发布包（#2335 代码，#2366 接上）
 
 入口按 stable 打包、签名每个发布版（`/v1/fleet/release/*`），存在 OSS 桶
-`haowan24-fleet-releases`（cn-shenzhen，private，VPC 内网地址）里，两个副本同时挂在 `/releases`。
+`haowan24-fleet-releases`（region-a，private，VPC 内网地址）里，两个副本同时挂在 `/releases`。
 
 | 东西 | 谁建 | 内容 |
 |---|---|---|
@@ -336,7 +336,7 @@ kubectl -n new-deploy get pvc ccquota-releases     # Bound 之后才合并带挂
   `<sha>/current` 指向在用的那次（单文件 rename）。ossfs 上目录 rename 是逐个对象复制再删，
   不原子，两个副本又会同时构建同一个 stable——所以不用目录 rename。
 - 关掉：删 `deployment-release.yaml` 和 kustomization 里它那一行；桶和 PV 是 Retain，留着无害。
-- 公钥：`curl -fsS https://claudefleet.24haowan.com/v1/fleet/release/key`。换钥匙 = 新 keygen、
+- 公钥：`curl -fsS https://hub.example.com/v1/fleet/release/key`。换钥匙 = 新 keygen、
   `kubectl create secret … --dry-run=client -o yaml | kubectl replace -f -`、滚一次；已装机器钉的旧公钥要跟着换。
 
 ## 远端调试（#2891 代码，#2940 接上）
@@ -360,7 +360,7 @@ kubectl -n new-deploy get pvc ccquota-debug        # Bound 之后才合并带挂
 - 桶里的 `debug/` 前缀要先有（OSS CSI 挂子目录前要求它存在）：在挂着 `/releases` 的 pod 里
   `mkdir -p /releases/debug` 一次即可，之后入口只经 `/debug` 读写它。
 - 上线后入口日志：`fleet: debug tickets on, bundles in /debug; debugger (none); feed to (none)`；
-  `curl -s -o /dev/null -w '%{http_code}' https://claudefleet.24haowan.com/v1/fleet/debug/ticket` 是 401（无票），
+  `curl -s -o /dev/null -w '%{http_code}' https://hub.example.com/v1/fleet/debug/ticket` 是 401（无票），
   不再是 404。
 - `CCQUOTA_FLEET_DEBUG_LOGIN` / `_NOTIFY`（`<machine>/<login>`）等诊断员登录建好后再配；
   不配 = 诊断单「没看完」转管理员，发票和收包照常。
@@ -410,14 +410,14 @@ kubectl -n new-deploy create secret generic ccquota-feedback-github \
 
 ```sh
 # 运维本机，仓库 master 上
-scp extras/cred-relay/fleet-relay-check.py extras/cred-relay/Caddyfile admin@fleet-relay.24hw.cn:/tmp/
+scp extras/cred-relay/fleet-relay-check.py extras/cred-relay/Caddyfile admin@relay.example.com:/tmp/
 # 转发机上
 sudo install -m 0755 /tmp/fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
 sudo systemctl restart fleet-relay-check && curl -s http://127.0.0.1:2091/healthz          # ok
 sudo install -m 0644 /tmp/Caddyfile /etc/caddy/Caddyfile
 sudo -u caddy caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://fleet-relay.24hw.cn/github-oauth/login/oauth/access_token   # 403（没通行证）
-curl -s -o /dev/null -w '%{http_code}\n' https://fleet-relay.24hw.cn/anthropic/v1/messages                           # 403（老路由照旧）
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://relay.example.com/github-oauth/login/oauth/access_token   # 403（没通行证）
+curl -s -o /dev/null -w '%{http_code}\n' https://relay.example.com/anthropic/v1/messages                           # 403（老路由照旧）
 ```
 
 发布后验证：
@@ -426,7 +426,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://fleet-relay.24hw.cn/anthropic/v
 kubectl -n new-deploy logs deploy/ccquota-hub | grep 'github sign-in: the token exchange goes through the relay'   # 开关生效
 # 有人在网页上用 GitHub 登录一次，然后：
 kubectl -n new-deploy logs deploy/ccquota-hub --since=10m | grep 'github sign-in'
-#   github sign-in: token exchanged through the relay https://fleet-relay.24hw.cn   ← 经中转成功
+#   github sign-in: token exchanged through the relay https://relay.example.com   ← 经中转成功
 #   github sign-in: relay …: … — trying github.com directly                         ← 中转没答，回落了：查转发机
 ```
 

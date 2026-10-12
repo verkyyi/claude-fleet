@@ -543,7 +543,7 @@ func seedBadgeDB(t *testing.T, path string) {
 }
 ```
 
-with imports `"github.com/verkyyi/ccquota/internal/model"` and `"github.com/verkyyi/ccquota/internal/store"`.
+with imports `"github.com/frank/ccquota/internal/model"` and `"github.com/frank/ccquota/internal/store"`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -566,8 +566,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/badge"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/frank/ccquota/internal/badge"
+	"github.com/frank/ccquota/internal/store"
 )
 
 // dayPeriod matches the only relative window a badge may carry.
@@ -873,7 +873,7 @@ func TestTouchEndpoint_CannotSetOrClearTeam(t *testing.T) {
 }
 ```
 
-Add `"github.com/verkyyi/ccquota/internal/model"` to the imports.
+Add `"github.com/frank/ccquota/internal/model"` to the imports.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1046,7 +1046,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/frank/ccquota/internal/store"
 )
 
 func TestRunTeam_AssignsAndRefusesUnknown(t *testing.T) {
@@ -1103,7 +1103,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/frank/ccquota/internal/store"
 )
 
 func runTeam(args []string) error {
@@ -1239,7 +1239,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
+	"github.com/frank/ccquota/internal/model"
 )
 
 func userEv(account, endpoint, uuid, osUser, cwd string, out int64) model.UsageEvent {
@@ -1557,8 +1557,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/model"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/frank/ccquota/internal/model"
+	"github.com/frank/ccquota/internal/store"
 )
 
 func badgeServer(t *testing.T, public bool) *Server {
@@ -1714,8 +1714,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/ccquota/internal/badge"
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/frank/ccquota/internal/badge"
+	"github.com/frank/ccquota/internal/store"
 )
 
 // Badge routes exist so an internal repo README can carry a figure served by
@@ -1869,7 +1869,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/verkyyi/ccquota/internal/store"
+	"github.com/frank/ccquota/internal/store"
 )
 
 // UserView is one person's page.

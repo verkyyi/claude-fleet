@@ -138,8 +138,8 @@ func (s *Server) leaveMaintenance(machine string, now time.Time) (bool, error) {
 		return false, err
 	}
 	_, was := maintenanceOf(machine, settings)
-	// Clear every spelling that matches, so a key set as "m5.local" and one
-	// set as "m5" cannot leave one behind.
+	// Clear every spelling that matches, so a key set as "mac-b.local" and one
+	// set as "mac-b" cannot leave one behind.
 	for k, v := range settings {
 		if strings.HasPrefix(k, NodeMaintenancePrefix) && v != "" && (sameMachine(machine, k[len(NodeMaintenancePrefix):]) || sameMachine(k[len(NodeMaintenancePrefix):], machine)) {
 			if err := s.Store.SetFleetSetting(k, "", now); err != nil {

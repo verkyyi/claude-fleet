@@ -431,7 +431,7 @@ has "$WORK/out" 'this process has no Full Disk Access' 'a dscl refused by TCC di
 has "$WORK/out" 'alice --delete-home --apply' 'the FDA line does not name the admin-ssh way out'
 
 # deleteUser fails outright — the node program has no Full Disk Access, so TCC
-# keeps ~/Desktop from it, every time (33 of 33 hub-sent removes on mini2,
+# keeps ~/Desktop from it, every time (33 of 33 hub-sent removes on mac-d,
 # #2953): no longer the end — the record goes with dscl, the home that is left
 # is moved aside out of /Users, and the run ends done.
 reset_fixture
@@ -453,7 +453,7 @@ FAKE_TCC=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
 rm -rf "$ARCH"/alice-*.left
 
 # launchd's per-user domain brings distnoted back after the pkill (drill10100326
-# on macmini, #2866): user/<uid> (and gui/<uid> when there is one) is booted
+# on mac-c, #2866): user/<uid> (and gui/<uid> when there is one) is booted
 # out BEFORE the kill — at step 4 and again before deleteUser — nothing comes
 # back, and deleteUser does not hang.
 reset_fixture

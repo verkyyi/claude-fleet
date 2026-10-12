@@ -11,11 +11,15 @@
 #
 # `#@keep<TAB><text>` — a match whose text (boundary characters trimmed) is
 # exactly <text> is not a hit: the repo's own name and the shared placeholder
-# words below are what new text is SUPPOSED to say. Where a hit may stay is
-# conf/oss-scan.allow (path-glob · rule · reason), never a pattern here.
+# words below are what new text is SUPPOSED to say; `#@keep<TAB>*.<suffix>`
+# keeps every name ending in .<suffix> (a machine on the placeholder tailnet).
+# Where a hit may stay is conf/oss-scan.allow (path-glob · rule · reason),
+# never a pattern here.
 #
 # Shared placeholders for new text (EPIC #3569 共同约定 1): mac-a mac-b linux-a ·
-# hub.example.com · relay.example.com · alice bob · example.ts.net.
+# hub.example.com · relay.example.com · alice bob · example.ts.net (and a
+# machine under it, mac-a.example.ts.net). More of the same shape when a test
+# needs more: mac-c… · linux-b… · carol dave erin… · acme (a company).
 
 tailnet	tail435588	our tailscale tailnet's name
 ts-net	[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net	a tailscale MagicDNS name (a machine on a tailnet)
@@ -24,12 +28,14 @@ cloud	aliyuncs\.com|cn-shenzhen|1720148580188583|cff10a18030a74894a0bbc765e21779
 machine	(^|[^A-Za-z0-9_-])(macmini|mini2|fleet-linux-0|m4|m5)([^A-Za-z0-9_-]|$)	our machines' names and their aliases (mini2=m4, macmini=m5)
 user-home	/(Users|home)/(verky|verkyyi|verk|victor|arvin|24haowan)([^A-Za-z0-9_.-]|$)	a real login's home directory
 person	(^|[^A-Za-z0-9_])([Vv]erky|[Vv]erk|[Vv]ictor|[Aa]rvin)([^A-Za-z0-9_]|$)	a real person's name or login
-gh-owner	verkyyi(/[A-Za-z0-9_-]+)?	the owner's GitHub handle (the repo's own name is kept below)
+gh-owner	verkyyi([/-][A-Za-z0-9_-]+)?	the owner's GitHub handle (the repo's own name and slug are kept below)
 private-ipv4	(^|[^0-9.])(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))\.[0-9]+\.[0-9]+	a private / tailnet (CGNAT) IPv4 address
 public-ip	(^|[^0-9.])(47\.106\.171\.142|47\.131\.114\.67|120\.24\.204\.160|47\.107\.245\.170|23\.119\.126\.[0-9]+)([^0-9]|$)	our own public IPv4 addresses (#3631): the cluster egress (gh-relay's source), gh-relay itself (Singapore), the entry, the website, the home line's block
 
 #@keep	verkyyi/claude-fleet
+#@keep	verkyyi-claude-fleet
 #@keep	example.ts.net
+#@keep	*.example.ts.net
 # Standard addresses, never anyone's own (issue #3577): the RFC 1918 / RFC 6598
 # block bases a network check spells (10.0.0.0/8 …), and Alibaba Cloud's
 # documented instance-metadata address — a guard has to name it to cut it.

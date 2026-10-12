@@ -69,10 +69,10 @@ func TestPersonRolesOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
 	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "macmini", Login: "alice"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "mac-e", Login: "alice"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
-	old := personNode(t, h, "alice-old", "macmini", "alice") // no CapPerson
+	old := personNode(t, h, "alice-old", "mac-e", "alice") // no CapPerson
 	raw, _ := json.Marshal(personV1["bundle"])
 	var m map[string]any
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -147,15 +147,15 @@ func noPerson(t *testing.T, n *fleetNode, what string) {
 // runs sessions on — at once, and only theirs; a machine that was away hears
 // it on its first beat back; a login bound to no one hears nothing.
 func TestPersonPushOnPutBeatAndReconnect(t *testing.T) {
-	h, _ := certHarness(t) // Alice: alice on macmini + macmini-m4
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "macmini-m4", Login: "bob"}); code != 200 {
+	h, _ := certHarness(t) // Alice: alice on mac-e + mac-e-mac-c
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "mac-e-mac-c", Login: "bob"}); code != 200 {
 		t.Fatalf("adopt bob: HTTP %d", code)
 	}
 	caps := []string{control.CapTeam, control.CapPerson}
-	a5 := personNode(t, h, "alice5", "macmini", "alice", caps...)
-	a4 := personNode(t, h, "alice4", "macmini-m4", "alice", caps...)
-	b4 := personNode(t, h, "bob4", "macmini-m4", "bob", caps...)
-	v5 := personNode(t, h, "verk5", "macmini", "verk", caps...)
+	a5 := personNode(t, h, "alice5", "mac-e", "alice", caps...)
+	a4 := personNode(t, h, "alice4", "mac-e-mac-c", "alice", caps...)
+	b4 := personNode(t, h, "bob4", "mac-e-mac-c", "bob", caps...)
+	v5 := personNode(t, h, "verk5", "mac-e", "frank", caps...)
 
 	// nobody wrote yet: nothing is sent (the degenerate case)
 	for k, n := range map[string]*fleetNode{"alice5": a5, "alice4": a4, "bob4": b4, "verk5": v5} {
@@ -165,7 +165,7 @@ func TestPersonPushOnPutBeatAndReconnect(t *testing.T) {
 	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personRolesV1, ""); code != 200 {
 		t.Fatalf("Alice PUT: HTTP %d %s", code, raw)
 	}
-	p5, p4 := nextPerson(t, a5, "alice@macmini"), nextPerson(t, a4, "alice@macmini-m4")
+	p5, p4 := nextPerson(t, a5, "alice@mac-e"), nextPerson(t, a4, "alice@mac-e-mac-c")
 	if p5.Version != 1 || p4.Version != 1 || p5.Principal == "" || p5.Principal != p4.Principal {
 		t.Fatalf("Alice's machines heard %+v and %+v, want her v1 on both", p5, p4)
 	}
@@ -176,13 +176,13 @@ func TestPersonPushOnPutBeatAndReconnect(t *testing.T) {
 	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pBob), personV1, ""); code != 200 {
 		t.Fatalf("Bob PUT: HTTP %d %s", code, raw)
 	}
-	if pb := nextPerson(t, b4, "bob@macmini-m4"); pb.Version != 1 || pb.Principal == p5.Principal {
+	if pb := nextPerson(t, b4, "bob@mac-e-mac-c"); pb.Version != 1 || pb.Principal == p5.Principal {
 		t.Fatalf("Bob heard %+v", pb)
 	}
 	noPerson(t, a4, "Alice's login after Bob's PUT")
 
 	// beats on a link that heard v1 repeat nothing
-	beat(t, a5.c, control.Proto, control.Heartbeat{Hostname: "macmini", OSUser: "alice"})
+	beat(t, a5.c, control.Proto, control.Heartbeat{Hostname: "mac-e", OSUser: "alice"})
 	noPerson(t, a5, "a beat after v1")
 
 	// a restore is a new version, pushed the same way
@@ -195,7 +195,7 @@ func TestPersonPushOnPutBeatAndReconnect(t *testing.T) {
 
 	// a machine that was away hears the current version on its first beat back
 	a4.c.CloseNow()
-	a4b := personNode(t, h, "alice4b", "macmini-m4", "alice", caps...)
+	a4b := personNode(t, h, "alice4b", "mac-e-mac-c", "alice", caps...)
 	if p := nextPerson(t, a4b, "reconnect"); p.Version != 2 {
 		t.Fatalf("reconnect: %+v, want v2", p)
 	}

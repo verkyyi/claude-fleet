@@ -53,8 +53,8 @@ func TestReleasePushOnPromoteBeatAndReconnect(t *testing.T) {
 
 	a := teamNode(t, h, tokA, control.CapRead, control.CapRelease)
 	b := teamNode(t, h, tokB, control.CapRead) // an older agent: no CapRelease
-	beat(t, a, control.Proto, hb("m5"))
-	beat(t, b, control.Proto, hb("m4"))
+	beat(t, a, control.Proto, hb("mac-d"))
+	beat(t, b, control.Proto, hb("mac-c"))
 
 	// A promote reaches the connected node at once — no beat needed.
 	setStable(t, h.srv.Releases, shaA, 1)
@@ -63,7 +63,7 @@ func TestReleasePushOnPromoteBeatAndReconnect(t *testing.T) {
 
 	// Beats and a repeat of #1 push nothing; neither does an older seq after
 	// a newer one — the next message is the next stable.
-	beat(t, a, control.Proto, hb("m5"))
+	beat(t, a, control.Proto, hb("mac-d"))
 	h.srv.BroadcastRelease(shaA, 1)
 	time.Sleep(200 * time.Millisecond)
 	setStable(t, h.srv.Releases, shaB, 2)
@@ -78,7 +78,7 @@ func TestReleasePushOnPromoteBeatAndReconnect(t *testing.T) {
 	// A machine that was offline hears the current stable on its first beat back.
 	a.CloseNow()
 	a2 := teamNode(t, h, tokA, control.CapRead, control.CapRelease)
-	beat(t, a2, control.Proto, hb("m5"))
+	beat(t, a2, control.Proto, hb("mac-d"))
 	nextRelease(t, a2, shaC, 3, "reconnect")
 	silent(t, a2, "one first beat, one message")
 
@@ -98,14 +98,14 @@ func TestReleasePushOffAddsNothing(t *testing.T) {
 
 	// No stable pointer yet, a node that would follow: nothing.
 	b := teamNode(t, h, tokB, control.CapRelease)
-	beat(t, b, control.Proto, hb("m4"))
+	beat(t, b, control.Proto, hb("mac-c"))
 	silent(t, b, "no stable")
 
 	setStable(t, h.srv.Releases, shaA, 1)
 	a := teamNode(t, h, tokA, control.CapRead, control.CapTeam)
-	beat(t, a, control.Proto, hb("m5"))
+	beat(t, a, control.Proto, hb("mac-d"))
 	h.srv.BroadcastRelease(shaA, 1)
-	beat(t, a, control.Proto, hb("m5"))
+	beat(t, a, control.Proto, hb("mac-d"))
 	silent(t, a, "no CapRelease")
 }
 

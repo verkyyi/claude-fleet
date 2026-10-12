@@ -68,7 +68,7 @@ fi
 
 wid="${3:-}"
 # A row on another machine (`wid:<fleet>/<name>`, #1423) gets a menu too (issue
-# #1475): titled `<name> · 在 m4` — the ONE place the list names the machine, now
+# #1475): titled `<name> · 在 mac-a` — the ONE place the list names the machine, now
 # that the rows look alike — with `enter` (the proxy window) and the row-less
 # items. Everything a local row's menu does needs a window here; it has none.
 remote='' rowless=''
@@ -109,7 +109,7 @@ fi
 
 # 入口通不通 (issue #1483, EPIC #1479 C4): global/hub_ok through the one rule in
 # fleet-status-lib.sh — the sidebar's rows and the bar read the same file. Lost ⇒
-# a remote row's title carries 「入口失联 3m」 and «新建到 m4…» is greyed (a spawn
+# a remote row's title carries 「入口失联 3m」 and «新建到 mac-a…» is greyed (a spawn
 # there is a hub placement); the row's actions stay listed — each refuses with a
 # toast of its own (fleet-sidebar-remote.sh), so a tap is never silent. No cache
 # (the hub off): no word, nothing here runs.
@@ -287,7 +287,7 @@ if [ -n "$remote" ]; then
   rstate="${row%%$'\037'*}"; row="${row#*$'\037'}"
   rpin="${row%%$'\037'*}"; rneeds="${row#*$'\037'}"
   [ -n "$node" ] || exit 0
-  # 「名称 · m4 · 在问你」 — the ONE place the list names the machine (#1475)
+  # 「名称 · mac-a · 在问你」 — the ONE place the list names the machine (#1475)
   title="${name:-${wid##*/}} · $node"
   # a prompt the hub saw is a needs row whatever its state field says (as the
   # answer item below reads it)

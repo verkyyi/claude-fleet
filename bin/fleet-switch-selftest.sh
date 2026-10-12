@@ -23,7 +23,7 @@
 #      them (`>pin`), and for real ⌘P `>pin` ↵ pins the row in view, the way the
 #      menu's 置顶 does.
 #   E  a lost machine's rows (issue #3164): a row whose machine mark ends `!`
-#      parses as lost, its detail says `m4 失联`, and ⌘P's rule carries how old the
+#      parses as lost, its detail says `mac-a 失联`, and ⌘P's rule carries how old the
 #      list is (off global/hub_ok); no lost row ⇒ no note.
 #   C  no iTerm2: the profile writer writes nothing, and fleet-shell.sh's attach is
 #      the bare `exec tmux … attach` it always was, byte for byte; in iTerm2 with
@@ -44,13 +44,13 @@ python3 - "$BIN" <<'PY' || exit 1
 import importlib.util, os, sys, tempfile
 spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
 q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
-W = [("@1", "working", "Nodes can't kill workers · issue-1840", "m5"),
-     ("@2", "needs", "Config migration keeps settings · issue-1887", "m5"),
-     ("@3", "working", "Operator scratch · scratch-5", "m5"),
-     ("@4", "done", "Offline list stays put · issue-1882", "m5"),
-     ("@5", "working", "Mini-program UI/UX", "m4"),
-     ("@6", "done", "Hub disk watch · issue-11641", "m4"),
-     ("@7", "working", "Codex: reap rules · issue-1832", "m4"),
+W = [("@1", "working", "Nodes can't kill workers · issue-1840", "mac-b"),
+     ("@2", "needs", "Config migration keeps settings · issue-1887", "mac-b"),
+     ("@3", "working", "Operator scratch · scratch-5", "mac-b"),
+     ("@4", "done", "Offline list stays put · issue-1882", "mac-b"),
+     ("@5", "working", "Mini-program UI/UX", "mac-a"),
+     ("@6", "done", "Hub disk watch · issue-11641", "mac-a"),
+     ("@7", "working", "Codex: reap rules · issue-1832", "mac-a"),
      ("@8", "done", "Daily report draft · scratch-7", "")]
 rows = [{"key": k, "state": s, "glyph": "", "name": n, "node": m, "group": "", "badge": ""} for k, s, n, m in W]
 def top(query, mru=(), current=""):
@@ -62,14 +62,14 @@ def eq(what, got, want):
 eq("cod first", top("cod")[:1], ["@7"])
 eq("Cod (case) first", top("Cod")[:1], ["@7"])
 eq("crr finds Codex: reap rules first", top("crr")[:1], ["@7"])
-eq("m4 lists the m4 rows", sorted(top("m4")[:3]), ["@5", "@6", "@7"])
+eq("mac-a lists the mac-a rows", sorted(top("mac-a")[:3]), ["@5", "@6", "@7"])
 eq("needs finds the row waiting", top("needs")[:1], ["@2"])
 eq("issue-1882", top("1882"), ["@4"])
 eq("two words, both must match", top("hub disk"), ["@6"])
 eq("no match, no row", top("zzzq"), [])
 # issue #2365: the rows waiting on you first, then the most recent
 eq("empty: waiting first, then recent, the one in view last", top("", ["@3", "@7", "@1"], "@3"), ["@2", "@7", "@1", "@4", "@5", "@6", "@8", "@3"])
-eq("a tie goes to the recent one", top("m5", ["@4"])[:1], ["@4"])
+eq("a tie goes to the recent one", top("mac-b", ["@4"])[:1], ["@4"])
 _, marks = q.rank(rows, "cod", [])[0]
 eq("cod marks", marks, [0, 1, 2])
 # the history
@@ -96,9 +96,9 @@ eq("stack cap", len(h["stack"]), q.STACK_MAX)
 eq("at stays on the top", h["stack"][h["at"]], "@x79")
 # rows_text: the list's rows → switch-rows.tsv, headings folded into a group
 text = q.rows_text([["hdr", "verkyyi/claude-fleet", "", "verkyyi/claude-fleet", ""],
-                    ["@9", "needs", "!", " nine", "", "b", "0", "", "m4", "", "", "", ""]])
+                    ["@9", "needs", "!", " nine", "", "b", "0", "", "mac-a", "", "", "", ""]])
 # issue #2365 appends issue · PR · reap · title · repo after the seven
-eq("rows_text", text, "@9\tneeds\t!\tnine\tm4\tverkyyi/claude-fleet\tb\t\t\t\t\tverkyyi/claude-fleet\n")
+eq("rows_text", text, "@9\tneeds\t!\tnine\tmac-a\tverkyyi/claude-fleet\tb\t\t\t\t\tverkyyi/claude-fleet\n")
 # D (the table half): COMMANDS ⇔ the menu's letter table, action for action
 table = [a for a, _ in q.COMMANDS]
 eq("COMMANDS has no action twice", len(table), len(set(table)))
@@ -440,10 +440,10 @@ os.environ["FLEET_STATUS_G"] = g
 spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
 q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
 errs = []
-rows = q.parse_rows("k1\tworking\t●\tone\tm4!\tg\t\nk2\tidle\t○\ttwo\tm5~\tg\t\nk3\tidle\t○\tthree\t\tg\t\n")
-if [r["lost"] for r in rows] != [True, False, False] or rows[0]["node"] != "m4":
+rows = q.parse_rows("k1\tworking\t●\tone\tmac-a!\tg\t\nk2\tidle\t○\ttwo\tmac-b~\tg\t\nk3\tidle\t○\tthree\t\tg\t\n")
+if [r["lost"] for r in rows] != [True, False, False] or rows[0]["node"] != "mac-a":
     errs.append("parse: %r" % [(r["node"], r["lost"]) for r in rows])
-if [q.node_say(r) for r in rows] != ["m4 失联", "m5", ""]:
+if [q.node_say(r) for r in rows] != ["mac-a 失联", "mac-b", ""]:
     errs.append("node_say: %r" % [q.node_say(r) for r in rows])
 if q.stale_note(rows[1:]):
     errs.append("a note with no lost row: %r" % q.stale_note(rows[1:]))

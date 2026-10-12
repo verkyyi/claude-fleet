@@ -91,7 +91,7 @@ func TestClientSettingsWhitelist(t *testing.T) {
 		t.Fatalf("fresh hub: settings %v keys %v", s, keys)
 	}
 	putSetting(t, h, ClientDefaultsPrefix+"FLEET_UI_LANG", "en", http.StatusOK)
-	putSetting(t, h, ClientDefaultsPrefix+"FLEET_NODE_ALIASES", "desk-mac=m5 macmini=m4", http.StatusOK)
+	putSetting(t, h, ClientDefaultsPrefix+"FLEET_NODE_ALIASES", "desk-mac=mac-d mac-e=mac-c", http.StatusOK)
 	// not on the whitelist: an address, a token, anything else
 	putSetting(t, h, ClientDefaultsPrefix+"FLEET_HUB_URL", "https://evil.example", http.StatusBadRequest)
 	putSetting(t, h, ClientDefaultsPrefix+"CCQUOTA_VIEWER_TOKEN", "x", http.StatusBadRequest)
@@ -108,7 +108,7 @@ func TestClientSettingsWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _ := getClientSettings(t, h)
-	if len(s) != 2 || s["FLEET_UI_LANG"] != "en" || s["FLEET_NODE_ALIASES"] != "desk-mac=m5 macmini=m4" {
+	if len(s) != 2 || s["FLEET_UI_LANG"] != "en" || s["FLEET_NODE_ALIASES"] != "desk-mac=mac-d mac-e=mac-c" {
 		t.Errorf("client-settings = %v", s)
 	}
 	putSetting(t, h, ClientDefaultsPrefix+"FLEET_UI_LANG", "", http.StatusOK)

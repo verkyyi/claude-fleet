@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-// m4 (claude-fleet#2336): a login in 28 groups — setgroups(2) on macOS takes 16.
+// mac-a (claude-fleet#2336): a login in 28 groups — setgroups(2) on macOS takes 16.
 func TestCapGroupsDarwin(t *testing.T) {
 	var many []uint32
 	for g := uint32(100); g < 128; g++ {
@@ -113,7 +113,7 @@ func TestStartWhyLeavesOthersAlone(t *testing.T) {
 // the login runs again once the remove is over.
 func TestHoldLoginRefusesItsCommands(t *testing.T) {
 	gone := withRunAs(context.Background(), &RunAs{Login: "drillx", UID: 1, Home: "/nonexistent"})
-	other := withRunAs(context.Background(), &RunAs{Login: "verkyyi", UID: 1, Home: "/nonexistent"})
+	other := withRunAs(context.Background(), &RunAs{Login: "grace", UID: 1, Home: "/nonexistent"})
 	release := holdLogin("drillx")
 	err := prepCmd(gone, exec.Command("/bin/true"))
 	if err == nil || !strings.Contains(err.Error(), "drillx is being removed") {

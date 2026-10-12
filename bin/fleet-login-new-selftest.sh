@@ -194,7 +194,7 @@ export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN"
        FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
 mkdir -p "$WORK/credsep/daemons"
-for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24haowan qen qix; do
+for l in frank victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24acme qen qix; do
   printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"
 done > "$FLEET_CREDSEP_PW"
 # the admin's HOME (the password file lands there) + the daemons dir (#1192)
@@ -233,7 +233,7 @@ cp "$BIN/../launchd/"com.claude-fleet.*.plist.tmpl "$FX/launchd/" 2>/dev/null
 NTMPL=$(ls "$FX/launchd" | wc -l | tr -d ' ')
 [ "$NTMPL" -gt 0 ] || fail "no launchd/*.plist.tmpl beside bin/ — the fixture needs the real templates"
 git init -q -b master "$FX" && git -C "$FX" add -A && git -C "$FX" commit -qm stable && git -C "$FX" tag stable
-GB="$WORK/gh"; mkdir -p "$GB/verkyyi"; git clone -q --bare "$FX" "$GB/verkyyi/claude-fleet.git"
+GB="$WORK/gh"; mkdir -p "$GB/erin"; git clone -q --bare "$FX" "$GB/verkyyi/claude-fleet.git"
 export FLEET_BOOTSTRAP_GIT_BASE="$GB"
 # no machine cache unless leg L builds one (issue #2297) — the operator's may be real
 export FLEET_BOOTSTRAP_CACHE=off
@@ -246,7 +246,7 @@ export FLEET_HUB_URL=''   # set-but-empty: the script asks no conf for one eithe
 DAEMONS=''; command -v plutil >/dev/null 2>&1 || DAEMONS=--no-daemons
 
 # --- inputs -----------------------------------------------------------------
-KEY="$WORK/victor.pub"; echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE victor@laptop' > "$KEY"
+KEY="$WORK/frank.pub"; echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE frank@laptop' > "$KEY"
 POOL="$WORK/pool"; mkdir -p "$POOL"
 for l in alpha beta; do echo "tok-$l" > "$POOL/$l"; echo "CCQUOTA_ACCOUNT=$l" > "$POOL/$l.conf"; done
 echo junk > "$POOL/.DS_Store"; echo old > "$POOL/alpha~"; mkdir "$POOL/subdir"
@@ -267,66 +267,66 @@ run() { : > "$LOG"; : > "$DLOG"; OUT=$("$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS
 mutations() { printf '%s\n' "$CALLS" | grep -v '^dscl ' | grep -c . ; }
 
 # --- A. dry run -------------------------------------------------------------
-run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
+run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
 eq "A dry run exit" 0 "$RC"
 contains "A banner" "$OUT" "DRY RUN"
-contains "A addUser" "$OUT" "sudo sysadminctl -addUser victor -fullName Victor\\ V -shell /usr/bin/false"
+contains "A addUser" "$OUT" "sudo sysadminctl -addUser frank -fullName Frank\\ V -shell /usr/bin/false"
 not_contains "A addUser has no password argv (#2396)" "$OUT" "-password"
-contains "A password on dscl's stdin" "$OUT" "sudo dscl .   < passwd /Users/victor <redacted: $HOME/victor-onboard/password.txt>"
-contains "A the shell back" "$OUT" "sudo dscl . -create /Users/victor UserShell /bin/zsh"
+contains "A password on dscl's stdin" "$OUT" "sudo dscl .   < passwd /Users/frank <redacted: $HOME/frank-onboard/password.txt>"
+contains "A the shell back" "$OUT" "sudo dscl . -create /Users/frank UserShell /bin/zsh"
 not_contains "A never prompts (#1192)" "$OUT" "-password -"
-contains "A would write the password" "$OUT" "would write a random password to $HOME/victor-onboard/password.txt"
-[ -e "$HOME/victor-onboard" ] && fail "A dry run wrote the password file"
-contains "A home" "$OUT" 'sudo createhomedir -c -u victor'
-contains "A home 700 right after (#2414)" "$OUT" "sudo createhomedir -c -u victor
-  \$ sudo chmod 700 $FLEET_LOGIN_HOMES/victor
+contains "A would write the password" "$OUT" "would write a random password to $HOME/frank-onboard/password.txt"
+[ -e "$HOME/frank-onboard" ] && fail "A dry run wrote the password file"
+contains "A home" "$OUT" 'sudo createhomedir -c -u frank'
+contains "A home 700 right after (#2414)" "$OUT" "sudo createhomedir -c -u frank
+  \$ sudo chmod 700 $FLEET_LOGIN_HOMES/frank
 "
-contains "A ssh group" "$OUT" 'sudo dseditgroup -o edit -a victor -t user com.apple.access_ssh'
-contains "A key" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/victor/.ssh/authorized_keys < $KEY"
-contains "A key chmod" "$OUT" "sudo chmod 600 $FLEET_LOGIN_HOMES/victor/.ssh/authorized_keys"
+contains "A ssh group" "$OUT" 'sudo dseditgroup -o edit -a frank -t user com.apple.access_ssh'
+contains "A key" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/frank/.ssh/authorized_keys < $KEY"
+contains "A key chmod" "$OUT" "sudo chmod 600 $FLEET_LOGIN_HOMES/frank/.ssh/authorized_keys"
 # separated (the default, issue #2294): the pool goes into the store, never the login's dir
 not_contains "A no pool cp into the login" "$OUT" "sudo cp -p $POOL/alpha"
-contains "A pool into the store" "$OUT" "the tokens go into victor's credential store in step 7b"
-contains "A conf switches" "$OUT" "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $FLEET_LOGIN_HOMES/victor/.config/claude-fleet/fleet.conf"
-contains "A credsep install" "$OUT" "sudo bash $BIN/fleet-credsep.sh install --login victor --fresh --install-dir $FLEET_LOGIN_HOMES/victor/.claude/fleet --pool-src $POOL"
-if [ -z "$DAEMONS" ]; then case "$OUT" in *"--fresh"*"[8] install victor"*) ;; *) fail "A 7b is not before the daemons (8)" ;; esac; fi
+contains "A pool into the store" "$OUT" "the tokens go into frank's credential store in step 7b"
+contains "A conf switches" "$OUT" "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/fleet.conf"
+contains "A credsep install" "$OUT" "sudo bash $BIN/fleet-credsep.sh install --login frank --fresh --install-dir $FLEET_LOGIN_HOMES/frank/.claude/fleet --pool-src $POOL"
+if [ -z "$DAEMONS" ]; then case "$OUT" in *"--fresh"*"[8] install frank"*) ;; *) fail "A 7b is not before the daemons (8)" ;; esac; fi
 # --no-credsep: the old layout, every token copied into the login
-run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
-contains "A pool cp" "$OUT" "sudo cp -p $POOL/alpha $POOL/alpha.conf $POOL/beta $POOL/beta.conf $FLEET_LOGIN_HOMES/victor/.config/claude-fleet/accounts/"
-contains "A pool chown" "$OUT" "sudo chown -R victor:staff $FLEET_LOGIN_HOMES/victor/.config/claude-fleet/accounts"
+run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
+contains "A pool cp" "$OUT" "sudo cp -p $POOL/alpha $POOL/alpha.conf $POOL/beta $POOL/beta.conf $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/accounts/"
+contains "A pool chown" "$OUT" "sudo chown -R frank:staff $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/accounts"
 not_contains "A --no-credsep no 7b" "$OUT" "fleet-credsep.sh install"
 contains "A --no-credsep says off" "$OUT" "credsep: off"
-run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
+run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
 not_contains "A no dotfile" "$OUT" ".DS_Store"
 not_contains "A no backup" "$OUT" "alpha~"
 not_contains "A no GUI step (#1192)" "$OUT" "ONCE in the GUI"
-contains "A manual codex" "$OUT" "1. as victor: ccquota codex login personal --device-auth"
-contains "A manual gh" "$OUT" "2. as victor: gh auth login"
-contains "A manual enroll" "$OUT" "3. on the hub: ccquota enroll --name mini-victor"
-contains "A zshrc" "$OUT" "sudo chown victor:staff $FLEET_LOGIN_HOMES/victor/.zshrc"
-contains "A installs it (8b, #2702)" "$OUT" "bring victor's fleet up now, as victor (fleet-login-bootstrap.sh"
-contains "A install as the login (one road, #2775)" "$OUT" "sudo -u victor -H env HOME=$FLEET_LOGIN_HOMES/victor FLEET_CONF_DIR=$FLEET_LOGIN_HOMES/victor/.config/claude-fleet FLEET_NODE_ROOT=$FLEET_NODE_ROOT FLEET_BOOTSTRAP_GIT_BASE=$GB bash $BIN/fleet-login-install.sh $FLEET_LOGIN_HOMES/victor/.claude/fleet"
-contains "A daemons step" "$OUT" "[8] install victor's $NTMPL background services as system LaunchDaemons (com.claude-fleet.victor.*, UserName victor — no GUI sign-in needed)"
-contains "A daemon install" "$OUT" "sudo install -m 644 <com.claude-fleet.victor.spinner.plist, rendered from launchd/com.claude-fleet.spinner.plist.tmpl> $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist"
-contains "A daemon bootstrap" "$OUT" "sudo launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist"
-contains "A password path at the end" "$OUT" "password: $HOME/victor-onboard/password.txt (mode 600"
-contains "A says it was installed" "$OUT" "claude-fleet + Claude Code were installed for victor above (step 8b)"
+contains "A manual codex" "$OUT" "1. as frank: ccquota codex login personal --device-auth"
+contains "A manual gh" "$OUT" "2. as frank: gh auth login"
+contains "A manual enroll" "$OUT" "3. on the hub: ccquota enroll --name mini-frank"
+contains "A zshrc" "$OUT" "sudo chown frank:staff $FLEET_LOGIN_HOMES/frank/.zshrc"
+contains "A installs it (8b, #2702)" "$OUT" "bring frank's fleet up now, as frank (fleet-login-bootstrap.sh"
+contains "A install as the login (one road, #2775)" "$OUT" "sudo -u frank -H env HOME=$FLEET_LOGIN_HOMES/frank FLEET_CONF_DIR=$FLEET_LOGIN_HOMES/frank/.config/claude-fleet FLEET_NODE_ROOT=$FLEET_NODE_ROOT FLEET_BOOTSTRAP_GIT_BASE=$GB bash $BIN/fleet-login-install.sh $FLEET_LOGIN_HOMES/frank/.claude/fleet"
+contains "A daemons step" "$OUT" "[8] install frank's $NTMPL background services as system LaunchDaemons (com.claude-fleet.frank.*, UserName frank — no GUI sign-in needed)"
+contains "A daemon install" "$OUT" "sudo install -m 644 <com.claude-fleet.frank.spinner.plist, rendered from launchd/com.claude-fleet.spinner.plist.tmpl> $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.frank.spinner.plist"
+contains "A daemon bootstrap" "$OUT" "sudo launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.frank.spinner.plist"
+contains "A password path at the end" "$OUT" "password: $HOME/frank-onboard/password.txt (mode 600"
+contains "A says it was installed" "$OUT" "claude-fleet + Claude Code were installed for frank above (step 8b)"
 eq "A nothing executed" 0 "$(mutations)"
 eq "A nothing created" "" "$(ls "$FLEET_LOGIN_HOMES")"
 eq "A no daemon written" "" "$(ls "$FLEET_INSTALL_DAEMON_DIR")"
 # --no-daemons: step 8 gone, the GUI sign-in is back as a human step
-run victor --full-name 'Victor V' --pubkey "$KEY" --no-daemons
+run frank --full-name 'Frank V' --pubkey "$KEY" --no-daemons
 eq "A --no-daemons exit" 0 "$RC"
 not_contains "A --no-daemons no step 8" "$OUT" "system LaunchDaemons"
-contains "A --no-daemons GUI step" "$OUT" "1. sign in as victor ONCE in the GUI"
-contains "A --no-daemons codex is 2" "$OUT" "2. as victor: ccquota codex login"
-contains "A --no-daemons: installed, daemons wait" "$OUT" "claude-fleet + Claude Code were installed for victor above (step 8b); its daemons wait for step 1"
+contains "A --no-daemons GUI step" "$OUT" "1. sign in as frank ONCE in the GUI"
+contains "A --no-daemons codex is 2" "$OUT" "2. as frank: ccquota codex login"
+contains "A --no-daemons: installed, daemons wait" "$OUT" "claude-fleet + Claude Code were installed for frank above (step 8b); its daemons wait for step 1"
 
 # --- B. apply ---------------------------------------------------------------
-run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --machine box --apply $DAEMONS
+run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --machine box --apply $DAEMONS
 BOUT=$OUT
 eq "B apply exit" 0 "$RC"
-H="$FLEET_LOGIN_HOMES/victor"
+H="$FLEET_LOGIN_HOMES/frank"
 # the home was never opened to the admin's own process (#1213): still 000, and a
 # bare read of the clone inside it fails — the script got everything via sudo
 locked "$H" || fail "B home is readable to the admin after the run (mode $(mode "$H")) — the sudo shim did not relock it"
@@ -337,37 +337,37 @@ unlock_homes
 ORDER=$(printf '%s\n' "$CALLS" | grep -Ev '^(sudo|dscl) ' | awk '{print $1}' | uniq | tr '\n' ' ')
 eq "B call order" "sysadminctl createhomedir dseditgroup chown$([ -z "$DAEMONS" ] && echo " launchctl") " "$ORDER"
 # B2. the password (#1192): generated into the admin's home, 600, on argv, never in the output
-PWF="$HOME/victor-onboard/password.txt"
+PWF="$HOME/frank-onboard/password.txt"
 [ -f "$PWF" ] || fail "B2 no password file at $PWF"
 PW=$(cat "$PWF")
 eq "B2 password length" 24 "${#PW}"
 eq "B2 password file mode" 600 "$(mode "$PWF")"
-eq "B2 onboard dir mode" 700 "$(mode "$HOME/victor-onboard")"
+eq "B2 onboard dir mode" 700 "$(mode "$HOME/frank-onboard")"
 # no argv any shim saw carries it (#2396) — addUser, dscl, sudo, chown, …
-contains "B2 addUser shell-less, no password" "$CALLS" "sysadminctl -addUser victor -fullName Victor V -shell /usr/bin/false"
+contains "B2 addUser shell-less, no password" "$CALLS" "sysadminctl -addUser frank -fullName Frank V -shell /usr/bin/false"
 not_contains "B2 no argv carries it" "$CALLS" "$PW"
 not_contains "B2 no -password argv at all" "$CALLS" "-password"
-eq "B2 dscl stdin carries it" "passwd /Users/victor $PW" "$(cat "$DLOG")"
-ORD2=$(printf '%s\n' "$CALLS" | grep -E '^(sysadminctl -addUser|dscl \.$|dscl \. -create /Users/victor UserShell /bin/zsh$|createhomedir)' | awk '{print $1 $2 $3}' | tr '\n' ' ')
-eq "B2 addUser → passwd → shell → home" "sysadminctl-addUservictor dscl. dscl.-create createhomedir-c-u " "$ORD2"
+eq "B2 dscl stdin carries it" "passwd /Users/frank $PW" "$(cat "$DLOG")"
+ORD2=$(printf '%s\n' "$CALLS" | grep -E '^(sysadminctl -addUser|dscl \.$|dscl \. -create /Users/frank UserShell /bin/zsh$|createhomedir)' | awk '{print $1 $2 $3}' | tr '\n' ' ')
+eq "B2 addUser → passwd → shell → home" "sysadminctl-addUserfrank dscl. dscl.-create createhomedir-c-u " "$ORD2"
 not_contains "B2 never printed" "$OUT" "$PW"
 contains "B2 redacted on screen" "$OUT" "<redacted: $PWF>"
 contains "B2 path at the end" "$OUT" "password: $PWF (mode 600"
-contains "B ssh group argv" "$CALLS" "dseditgroup -o edit -a victor -t user com.apple.access_ssh"
+contains "B ssh group argv" "$CALLS" "dseditgroup -o edit -a frank -t user com.apple.access_ssh"
 eq "B key content" "$(cat "$KEY")" "$(cat "$H/.ssh/authorized_keys")"
 eq "B .ssh mode" 700 "$(mode "$H/.ssh")"
 eq "B key mode" 600 "$(mode "$H/.ssh/authorized_keys")"
-contains "B .ssh chown" "$CALLS" "chown -R victor:staff $H/.ssh"
+contains "B .ssh chown" "$CALLS" "chown -R frank:staff $H/.ssh"
 D="$H/.config/claude-fleet/accounts"
 eq "B pool set" "alpha alpha.conf beta beta.conf" "$(ls -A "$D" | tr '\n' ' ' | sed 's/ $//')"
 eq "B pool: the login holds the marker" "store:beta" "$(cat "$D/beta")"
 eq "B pool: the .conf travels" "CCQUOTA_ACCOUNT=beta" "$(cat "$D/beta.conf")"
-eq "B pool: the token is in the store" "tok-beta" "$(cat "$FLEET_CREDSEP_ROOT_BASE/victor/accounts/beta" 2>/dev/null)"
-eq "B pool: store token mode" 600 "$(mode "$FLEET_CREDSEP_ROOT_BASE/victor/accounts/beta")"
+eq "B pool: the token is in the store" "tok-beta" "$(cat "$FLEET_CREDSEP_ROOT_BASE/frank/accounts/beta" 2>/dev/null)"
+eq "B pool: store token mode" 600 "$(mode "$FLEET_CREDSEP_ROOT_BASE/frank/accounts/beta")"
 eq "B pool dir mode" 700 "$(mode "$D")"
 for f in alpha alpha.conf beta beta.conf; do eq "B pool $f mode" 600 "$(mode "$D/$f")"; done
-contains "B config chown" "$CALLS" "chown victor:staff $H/.config $H/.config/claude-fleet"
-contains "B machine" "$OUT" "ccquota enroll --name box-victor"
+contains "B config chown" "$CALLS" "chown frank:staff $H/.config $H/.config/claude-fleet"
+contains "B machine" "$OUT" "ccquota enroll --name box-frank"
 eq "B only .claude + .config + .ssh + .zshrc written" ".claude .config .ssh .zshrc" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
 # B3. the clone (#1192): at stable, as the login, logs/ ready for the daemons' StandardErrorPath
 eq "B3 clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$H/.claude/fleet" rev-parse HEAD 2>/dev/null)"
@@ -375,26 +375,26 @@ eq "B3 clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$H/.claude
 eq "B3 only the clone under .claude" "fleet" "$(ls -A "$H/.claude" | tr '\n' ' ' | sed 's/ $//')"
 if [ -z "$DAEMONS" ]; then
   # B3. the daemons: every template, system shape, installed + bootstrapped
-  eq "B3 $NTMPL plists installed" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.victor.*.plist | wc -l | tr -d ' ')"
+  eq "B3 $NTMPL plists installed" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.frank.*.plist | wc -l | tr -d ' ')"
   eq "B3 $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
-  for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.victor.*.plist; do
-    u=${f##*/com.claude-fleet.victor.}; u=${u%.plist}
-    eq "B3 $u Label" "com.claude-fleet.victor.$u" "$(plutil -extract Label raw -o - "$f")"
-    eq "B3 $u UserName" victor "$(plutil -extract UserName raw -o - "$f")"
+  for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.frank.*.plist; do
+    u=${f##*/com.claude-fleet.frank.}; u=${u%.plist}
+    eq "B3 $u Label" "com.claude-fleet.frank.$u" "$(plutil -extract Label raw -o - "$f")"
+    eq "B3 $u UserName" frank "$(plutil -extract UserName raw -o - "$f")"
     eq "B3 $u mode" 644 "$(mode "$f")"
     contains "B3 $u runs the login's clone" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "$H/.claude/fleet/"
     ok_bs=$(grep -c "^launchctl bootstrap system $f$" "$LOG"); eq "B3 $u bootstrapped once" 1 "$ok_bs"
   done
   # #1213: the templates were listed + read AS THE LOGIN (the admin cannot read a
   # 700 home), rendered here, and the count printed matches what was installed
-  contains "B3 templates listed as the login" "$OUT" "sudo -u victor -H ls -1 $H/.claude/fleet/launchd"
-  contains "B3 read as the login" "$OUT" "read as victor"
+  contains "B3 templates listed as the login" "$OUT" "sudo -u frank -H ls -1 $H/.claude/fleet/launchd"
+  contains "B3 read as the login" "$OUT" "read as frank"
   eq "B3 $NTMPL templates + the apply script + its fleet-daemon-lib.sh read as the login (#1495)" "$((NTMPL + 2))" "$(grep -c '^sudo cat$' "$LOG")"
   contains "B3 installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
   not_contains "B3 never 'nothing to install'" "$OUT" "nothing to install"
   # the login's own first-login apply must find them current: same render, from its clone
-  same=$(FLEET_INSTALL_LOGIN=victor FLEET_INSTALL_HOME="$H" bash "$H/.claude/fleet/bin/fleet-install-apply.sh" --render-system spinner --root "$H/.claude/fleet" | plutil -convert xml1 -o - -)
-  eq "B3 render matches the bootstrap's" "$same" "$(plutil -convert xml1 -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist")"
+  same=$(FLEET_INSTALL_LOGIN=frank FLEET_INSTALL_HOME="$H" bash "$H/.claude/fleet/bin/fleet-install-apply.sh" --render-system spinner --root "$H/.claude/fleet" | plutil -convert xml1 -o - -)
+  eq "B3 render matches the bootstrap's" "$same" "$(plutil -convert xml1 -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.frank.spinner.plist")"
   not_contains "B3 no GUI step" "$OUT" "ONCE in the GUI"
 fi
 # ~/.zshrc (issues #1191, #2702): the ~/.local/bin PATH line ALONE — no banner,
@@ -403,7 +403,7 @@ BS="$BIN/fleet-login-bootstrap.sh"
 eq "B zshrc = the PATH line alone" "$(bash "$BS" --print-path-line)" "$(cat "$H/.zshrc")"
 not_contains "B no login block (#2702)" "$(cat "$H/.zshrc")" "claude-fleet/shell/"
 eq "B zshrc mode" 644 "$(mode "$H/.zshrc")"
-contains "B zshrc chown" "$CALLS" "chown victor:staff $H/.zshrc"
+contains "B zshrc chown" "$CALLS" "chown frank:staff $H/.zshrc"
 # B2. --password-file: its first line, nothing generated
 printf 'hunter2-from-file\nsecond line ignored\n' > "$WORK/pw.txt"
 : > "$LOG"; : > "$DLOG"; OUT=$("$BASH_BIN" "$S" pam --full-name P --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply --no-daemons 2>&1); RC=$?
@@ -417,7 +417,7 @@ contains "B2 --password-file redacted" "$OUT" "<redacted: $WORK/pw.txt>"
 contains "B2 --password-file at the end" "$OUT" "password: the first line of $WORK/pw.txt (--password-file)"
 
 # --- M. separated from the first moment (issue #2294, EPIC #2293 C1) ---------
-# victor, opened in B: nothing a session of his could read holds a credential —
+# frank, opened in B: nothing a session of his could read holds a credential —
 # no .credentials.json / auth.json / node.env, no pool token anywhere in his
 # home; status is `separated`; and a session of his reaches the subscription
 # through the proxy (the store's token on the way out).
@@ -431,7 +431,7 @@ eq "M fleet.conf mode" 600 "$(mode "$CD/fleet.conf")"
 contains "M nothing to move: a fresh login" "$BOUT" "credentials: 0 moved"
 contains "M pool into the store" "$BOUT" "pool: 2 account(s) from $POOL"
 st=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-credsep.sh" status 2>&1)
-contains "M status separated (as the login, its own clone)" "$st" "separated · $FLEET_CREDSEP_ROOT_BASE/victor"
+contains "M status separated (as the login, its own clone)" "$st" "separated · $FLEET_CREDSEP_ROOT_BASE/frank"
 contains "M the hub reads the verdict last" "$(printf '%s\n' "$BOUT" | tail -n 1)" "credsep: pending"
 # the login's account judge reads a pool label as usable (the picker names it,
 # and the proxy then mints for it) — a `hub:` marker with no lease file would not
@@ -460,11 +460,11 @@ python3 "$WORK/fake.py" "$WORK" & FPID=$!
 for _ in $(seq 1 300); do [ -s "$WORK/fake.port" ] && break; sleep 0.1; done
 FP=$(cat "$WORK/fake.port" 2>/dev/null)
 # the upstream comes from root's settings only (issue #2290), which install wrote
-[ -f "$FLEET_CREDSEP_LIB/victor.conf" ] || fail "M install wrote no root settings $FLEET_CREDSEP_LIB/victor.conf"
-printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\n' "$FP" >> "$FLEET_CREDSEP_LIB/victor.conf"
-HOME="$WORK/admin" python3 -I "$FLEET_CREDSEP_LIB/fleet-credsep-launch.py" proxy victor 2>"$WORK/launch.err" & LPID=$!
-for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/victor/port" ] && [ -S "$FLEET_CREDSEP_RUN_BASE/victor/ctl.sock" ] && break; sleep 0.1; done
-PORT=$(cat "$FLEET_CREDSEP_RUN_BASE/victor/port" 2>/dev/null)
+[ -f "$FLEET_CREDSEP_LIB/frank.conf" ] || fail "M install wrote no root settings $FLEET_CREDSEP_LIB/frank.conf"
+printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\n' "$FP" >> "$FLEET_CREDSEP_LIB/frank.conf"
+HOME="$WORK/admin" python3 -I "$FLEET_CREDSEP_LIB/fleet-credsep-launch.py" proxy frank 2>"$WORK/launch.err" & LPID=$!
+for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/frank/port" ] && [ -S "$FLEET_CREDSEP_RUN_BASE/frank/ctl.sock" ] && break; sleep 0.1; done
+PORT=$(cat "$FLEET_CREDSEP_RUN_BASE/frank/port" 2>/dev/null)
 [ -n "$PORT" ] || fail "M the proxy did not start: $(cat "$WORK/launch.err" | tr "\n" " ")"
 tok=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-cred-proxy.sh" mint --account beta --sid s1 2>&1)
 case "$tok" in fcp1.*) ;; *) fail "M mint: $tok" ;; esac
@@ -475,7 +475,7 @@ kill "$LPID" "$FPID" 2>/dev/null; wait "$LPID" "$FPID" 2>/dev/null; LPID='' FPID
 # a pool token put back at the login's path is a leak the doctor names (the
 # store made unreadable the way the role account's 0700 makes it — here the
 # role account is us)
-R="$FLEET_CREDSEP_ROOT_BASE/victor"
+R="$FLEET_CREDSEP_ROOT_BASE/frank"
 cp "$R/accounts/beta" "$CD/accounts/beta.tmp" && mv "$CD/accounts/beta.tmp" "$CD/accounts/beta"
 chmod 000 "$R"
 ck=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-credsep.sh" check 2>&1)
@@ -497,7 +497,7 @@ contains "M 7b failing stops at it" "$OUT" "FAILED at step"
 not_contains "M 7b failing: never 'separated'" "$OUT" "credsep: separated"
 
 # --- C. already exists -------------------------------------------------------
-run victor --full-name V --pubkey "$KEY"
+run frank --full-name V --pubkey "$KEY"
 eq "C home exists → 3" 3 "$RC"
 eq "C home exists nothing run" 0 "$(mutations)"
 for m in "" --apply; do
@@ -544,10 +544,10 @@ for args in "Bad!Name --full-name X --pubkey $KEY" \
   not_contains "E bash32 [$args]" "$OUT" "unbound variable"
 done
 [ -e "$FLEET_LOGIN_HOMES/eve" ] && fail "E created a home on a usage error"
-# a digit-leading login is a login (macOS allows it — issue #2105, `24haowan`)
-run 24haowan --full-name X --pubkey "$KEY"
+# a digit-leading login is a login (macOS allows it — issue #2105, `24acme`)
+run 24acme --full-name X --pubkey "$KEY"
 eq "E digit-leading dry run exit" 0 "$RC"
-contains "E digit-leading addUser" "$OUT" "sysadminctl -addUser 24haowan"
+contains "E digit-leading addUser" "$OUT" "sysadminctl -addUser 24acme"
 # an empty key is fine for a PREVIEW (the evidence run uses /dev/null) — it warns
 run eve --full-name X --pubkey /dev/null
 eq "E empty key dry run exit" 0 "$RC"
@@ -606,7 +606,7 @@ not_contains "H bash32" "$OUT" "unbound variable"
 # names the dir it read (as the login) — never "nothing to install" + exit 0
 FX2="$WORK/fx2"; mkdir -p "$FX2/bin"; cp "$BIN/fleet-install-apply.sh" "$BIN/fleet-daemon-lib.sh" "$FX2/bin/"
 git init -q -b master "$FX2" && git -C "$FX2" add -A && git -C "$FX2" commit -qm stable && git -C "$FX2" tag stable
-GB2="$WORK/gh2"; mkdir -p "$GB2/verkyyi"; git clone -q --bare "$FX2" "$GB2/verkyyi/claude-fleet.git"
+GB2="$WORK/gh2"; mkdir -p "$GB2/erin"; git clone -q --bare "$FX2" "$GB2/verkyyi/claude-fleet.git"
 if [ -z "$DAEMONS" ]; then
   : > "$LOG"; OUT=$(FLEET_BOOTSTRAP_GIT_BASE="$GB2" "$BASH_BIN" "$S" kim --full-name K --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply 2>&1); RC=$?
   CALLS=$(cat "$LOG"); unlock_homes
@@ -875,11 +875,11 @@ eq "P no-daemons: not adopted" "" "$(cat "$WORK/adopt.log")"
 contains "P no-daemons WARN" "$OUT" "linked to the runtime but not adopted"
 
 # --- N. a full name already taken (issue #2210) --------------------------------
-: > "$LOG"; OUT=$(FAKE_REALNAMES='verkyyi=verkyyi;root=System Administrator' "$BASH_BIN" "$S" pia --full-name verkyyi --pubkey "$KEY" $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+: > "$LOG"; OUT=$(FAKE_REALNAMES='erin=erin;root=System Administrator' "$BASH_BIN" "$S" pia --full-name erin --pubkey "$KEY" $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 eq "N dry exit" 0 "$RC"
-contains "N note" "$OUT" "full name verkyyi is already login verkyyi's — using verkyyi (pia)"
-contains "N alt name" "$OUT" "-fullName verkyyi\\ \\(pia\\)"
-: > "$LOG"; OUT=$(FAKE_REALNAMES='verkyyi=verkyyi;x=verkyyi (pia)' "$BASH_BIN" "$S" pia --full-name verkyyi --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+contains "N note" "$OUT" "full name erin is already login erin's — using erin (pia)"
+contains "N alt name" "$OUT" "-fullName erin\\ \\(pia\\)"
+: > "$LOG"; OUT=$(FAKE_REALNAMES='erin=erin;x=erin (pia)' "$BASH_BIN" "$S" pia --full-name erin --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 eq "N both taken exit" 3 "$RC"
 eq "N both taken: nothing run" 0 "$(mutations)"
 : > "$LOG"; OUT=$(FAKE_NOCREATE=1 "$BASH_BIN" "$S" pia --full-name Pia --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")

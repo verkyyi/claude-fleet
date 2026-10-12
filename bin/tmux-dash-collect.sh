@@ -750,7 +750,7 @@ ph_issues_over() {
 
 # --- git per live worktree (every run) — BUDGETED + round-robin (issue #552) ------
 # This phase was the tick's sinkhole. One `git status --porcelain` on a
-# 24haowan-monorepo worktree held the loop for 4m42s, and with ~15 such worktrees
+# acme-monorepo worktree held the loop for 4m42s, and with ~15 such worktrees
 # live the phase alone ran minutes. launchd does NOT overlap a StartInterval job,
 # so a tick longer than its own 60s interval degrades the collector's REAL cadence
 # to "one tick's duration" — measured at 5.3 min between runs, which is why the

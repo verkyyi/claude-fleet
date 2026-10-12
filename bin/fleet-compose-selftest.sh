@@ -24,8 +24,8 @@
 #      holds it, and the list is asked back to the row before (`jump=`)
 #   D. (issue #2231) none of 记成 issue / 发法 / 多个仓库 / 编排 on the area; the
 #      three options at their defaults — 仓库 the row in view (web), 节点 the
-#      fewest running (m4, 推荐), Agent FLEET_AGENT (codex, 默认), the greyed
-#      维护中 machine never picked; 节点 m5 + Agent claude by hand: `acme/web new …
+#      fewest running (mac-a, 推荐), Agent FLEET_AGENT (codex, 默认), the greyed
+#      维护中 machine never picked; 节点 mac-b + Agent claude by hand: `acme/web new …
 #      --node m5host --agent claude`; after the send all three are back to default
 #   E. (pure) payload: title = the first line, body = the whole text, a dropped
 #      file listed as an attachment, a forged marker defused; dash-keymap's
@@ -41,8 +41,8 @@
 #   I. a hand-picked option, then ⌘N from elsewhere: the defaults again (the last
 #      send's repo, acme/app, when the row in view names none)
 # The orchestrator (issue #1957) is no longer reached from the area — orch_fcs in
-# the status dir names one (m4, U/orch); the faked fleet-remote-view.sh opens it as
-# a stage window @remote m4:U/orch whose program logs what it is sent:
+# the status dir names one (mac-a, U/orch); the faked fleet-remote-view.sh opens it as
+# a stage window @remote mac-a:U/orch whose program logs what it is sent:
 #   J. free: the area says nothing of it; ↵ starts the work (acme/web new …); ⇧⇥
 #      carries nothing anywhere
 #   K. working, or waiting on you: the list draws no 「新任务」 row for it — no
@@ -52,7 +52,7 @@
 #      window, new process, draft kept; the same version is left alone; a SIGHUP
 #      mid-typing saves the draft first
 # How it is used (issue #1955, EPIC #1949 R2) — logs/compose.ndjson:
-#   N. B's send wrote `sent` (how issue, the repo) · `placed` (rc 0, REMOTE, m4,
+#   N. B's send wrote `sent` (how issue, the repo) · `placed` (rc 0, REMOTE, mac-a,
 #      the worker_id) · `started` (the list found its row: session, fid, secs), one id;
 #      H's is how norepo
 #   O. (pure) fleet-history.sh drafts: a scratch book generation that holds a
@@ -125,9 +125,9 @@ ln -s "$BIN/../conf" "$WORK/conf"
 ROWS="$WORK/rows"; LOG="$WORK/place.log"; BODY="$WORK/body.log"; VIEW="$WORK/view.log"
 : > "$LOG"; : > "$VIEW"
 { printf 'hdr%sacme/app%s%sapp (1)%s\n' "$US" "$US" "$US" "$US"
-  printf 'wid:U/issue-7%sworking%s*%sseven%s%s%s0%s%sm5%s7%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
+  printf 'wid:U/issue-7%sworking%s*%sseven%s%s%s0%s%smac-b%s7%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
   printf 'hdr%sacme/web%s%sweb (1)%s\n' "$US" "$US" "$US" "$US"
-  printf 'wid:U/issue-9%sidle%s·%snine%s%s%s0%s%sm4%s9%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"; } > "$ROWS"
+  printf 'wid:U/issue-9%sidle%s·%snine%s%s%s0%s%smac-a%s9%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"; } > "$ROWS"
 rm -f "$SB/tmux-dashboard-rows.sh" "$SB/fleet-client-place.sh" "$SB/fleet-remote-view.sh"
 printf '#!/bin/sh\ncat %q\n' "$ROWS" > "$SB/tmux-dashboard-rows.sh"
 cat > "$WORK/recv.py" <<'PY'
@@ -150,8 +150,8 @@ printf '%s\n' "\$*" >> "$VIEW.args"
 # the orchestrator's row (issue #1957): a stage window that reads bracketed paste
 if [ "\$2" = wid:U/orch ]; then
   T() { "$REAL_TMUX" -L fcs-stage "\$@"; }
-  w=\$(T list-windows -t fcs-stage -F '#{window_id} #{@remote}' | awk '\$2 == "m4:U/orch" { print \$1 }')
-  [ -n "\$w" ] || { w=\$(T new-window -d -P -F '#{window_id}' -t fcs-stage: "python3 '$WORK/recv.py' '$WORK/orch-in'"); T set-window-option -t "\$w" @remote m4:U/orch; }
+  w=\$(T list-windows -t fcs-stage -F '#{window_id} #{@remote}' | awk '\$2 == "mac-a:U/orch" { print \$1 }')
+  [ -n "\$w" ] || { w=\$(T new-window -d -P -F '#{window_id}' -t fcs-stage: "python3 '$WORK/recv.py' '$WORK/orch-in'"); T set-window-option -t "\$w" @remote mac-a:U/orch; }
   T select-window -t "\$w"
 fi
 exit 0
@@ -168,9 +168,9 @@ case "\$title" in 先切*|老入口*)
   k=\$((42 + n)); nm=fast-\$k; who=U/issue-\$k
   case "\$title" in 老入口*) nm=old-\$k; who=@4 ;; esac
   ( i=0; while [ ! -e "$WORK/row-go" ] && [ \$i -lt 200 ]; do sleep .1; i=\$((i + 1)); done
-    printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS" ) </dev/null >/dev/null 2>&1 &
+    printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}mac-a${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS" ) </dev/null >/dev/null 2>&1 &
   python3 -c 'import time; print(int(time.time() * 1000))' > "$WORK/t_reply"
-  printf 'REMOTE m4 op%s done %s\tm5 busier\n' "\$n" "\$who"; exit 0 ;;
+  printf 'REMOTE mac-a op%s done %s\tmac-b busier\n' "\$n" "\$who"; exit 0 ;;
 esac
 # S (issue #2240): the hub out of reach — no line, a 503 on stderr, exit 1
 case "\$title" in 入口挂了*) printf 'fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable\n' >&2; exit 1 ;; esac
@@ -180,25 +180,25 @@ case "\$1 \$2" in
        # the node's timing points (issue #2238), as a new hub hands them on; the
        # other kinds play an older node that sends none
        [ -z "\${FLEET_PLACE_TIMING:-}" ] || printf '{"t_accepted": 1000, "t_window": 4500, "x": 1}' > "\$FLEET_PLACE_TIMING"
-       printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS"
-       printf 'REMOTE m4 op%s done U/issue-%s\tm5 busier\n' "\$n" "\$k" ;;
+       printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}mac-a${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS"
+       printf 'REMOTE mac-a op%s done U/issue-%s\tmac-b busier\n' "\$n" "\$k" ;;
   '- scratch')
        printf 'hdr${US}none${US}${US}no repo (1)${US} \n' >> "$ROWS"
-       printf 'wid:U/norepo-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}${US}${US}\n' "\$n" "\$name" >> "$ROWS"
-       printf 'REMOTE m4 op%s done U/norepo-%s\t\n' "\$n" "\$n" ;;
-  *)   printf 'wid:U/scratch-%s${US}working${US}*${US}draft${US}${US}${US}0${US}${US}m4${US}${US}${US}\n' "\$n" >> "$ROWS"
-       printf 'REMOTE m4 op%s done U/scratch-%s\t\n' "\$n" "\$n" ;;
+       printf 'wid:U/norepo-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}mac-a${US}${US}${US}\n' "\$n" "\$name" >> "$ROWS"
+       printf 'REMOTE mac-a op%s done U/norepo-%s\t\n' "\$n" "\$n" ;;
+  *)   printf 'wid:U/scratch-%s${US}working${US}*${US}draft${US}${US}${US}0${US}${US}mac-a${US}${US}${US}\n' "\$n" >> "$ROWS"
+       printf 'REMOTE mac-a op%s done U/scratch-%s\t\n' "\$n" "\$n" ;;
 esac
 EOF
 chmod +x "$SB/tmux-dashboard-rows.sh" "$SB/fleet-client-place.sh" "$SB/fleet-remote-view.sh"
 date +%s > "$FLEET_STATUS_G/hub_ok"
 # the repos the hub says this person's machines host (fleet-hub-sessions.sh's cache)
 printf '#ts%s%s\nacme/app\nacme/web\n' "$US" "$(date +%s)" > "$FLEET_STATUS_G/hub_repos"
-# the machines (fleet-hub-sessions.sh's hub_nodes): m4 the fewest running, m3 维护中
+# the machines (fleet-hub-sessions.sh's hub_nodes): mac-a the fewest running, mac-c 维护中
 { printf '#ts%s%s\n' "$US" "$(date +%s)"
-  printf 'm5%sonline%s1.0%s8%s50%s3%sv%s0%s1%s2%sok%s%sm5host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
-  printf 'm4%sonline%s1.0%s8%s50%s1%sv%s0%s1%s2%sok%s%sm4host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
-  printf 'm3%sonline%s0.1%s8%s10%s0%sv%s0%s1%s2%sok%smaint%sm3host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"; } > "$FLEET_STATUS_G/hub_nodes"
+  printf 'mac-b%sonline%s1.0%s8%s50%s3%sv%s0%s1%s2%sok%s%sm5host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
+  printf 'mac-a%sonline%s1.0%s8%s50%s1%sv%s0%s1%s2%sok%s%sm4host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
+  printf 'mac-c%sonline%s0.1%s8%s10%s0%sv%s0%s1%s2%sok%smaint%sm3host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"; } > "$FLEET_STATUS_G/hub_nodes"
 export FLEET_AGENT=codex   # this fleet's default agent: Agent's default (issue #2231)
 
 # --- E. the pure parts ---------------------------------------------------------------
@@ -323,7 +323,7 @@ for l in open(sys.argv[1]):
     r = json.loads(l)
     print(" ".join("%s=%s" % (k, r[k]) for k in sys.argv[2:] if k in r))' "$FLEET_COMPOSE_LOG" "$@" 2>/dev/null; }
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -q '"started"' "$FLEET_COMPOSE_LOG" 2>/dev/null && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
-eq 'N: sent · placed · switched · started' $'ev=sent how=issue repo=acme/web\nev=placed rc=0 result=REMOTE machine=m4 session=U/issue-43\nev=switched session=U/issue-43\nev=started session=U/issue-43 state=working' \
+eq 'N: sent · placed · switched · started' $'ev=sent how=issue repo=acme/web\nev=placed rc=0 result=REMOTE machine=mac-a session=U/issue-43\nev=switched session=U/issue-43\nev=started session=U/issue-43 state=working' \
   "$(clog ev how repo rc result machine session state)"
 eq 'N: …one id' 1 "$(clog id | sort -u | grep -c .)"
 has 'N: started says the seconds since the ↵' "$(clog ev secs | tail -1)" 'secs='
@@ -345,11 +345,11 @@ eq 'C: still ONE portal window' 1 "$(portal | grep -c .)"
 eq 'C: …the same one' "$pw" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
 : > "$VIEW"
 printf '{"stack": ["wid:U/issue-9"], "at": 0, "mru": ["wid:U/issue-9"]}\n' > "$FLEET_SWITCH_STATE/switch-history.json"
-st_ send-keys -t "$pw" -l '看一下 m5 为什么慢'
+st_ send-keys -t "$pw" -l '看一下 mac-b 为什么慢'
 sleep .3
 st_ send-keys -t "$pw" Escape
 sleep 1
-eq 'C: esc keeps the draft on disk' '看一下 m5 为什么慢' "$(cat "$FLEET_SWITCH_STATE/compose-draft" 2>/dev/null)"
+eq 'C: esc keeps the draft on disk' '看一下 mac-b 为什么慢' "$(cat "$FLEET_SWITCH_STATE/compose-draft" 2>/dev/null)"
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/issue-9' "$VIEW" && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
 grep -qx 'wid:U/issue-9' "$VIEW" || fail 'C: esc goes back to the row before' "$(cat "$VIEW")"
 
@@ -358,7 +358,7 @@ st_ select-window -t "$pw"
 c=$(compose)
 for gone in '记成 issue' '发法' '多个仓库' '编排'; do hasnt "D: no $gone on the area" "$c" "$gone"; done
 has 'D: 仓库 — the row in view' "$c" '仓库  web ▾'
-has 'D: 节点 — the fewest running' "$c" '节点  m4 ▾'
+has 'D: 节点 — the fewest running' "$c" '节点  mac-a ▾'
 has 'D: Agent — FLEET_AGENT' "$c" 'Agent  codex ▾'
 has 'D: the go word' "$c" '↵ 开工'
 has 'D: one short keys line' "$c" '⇧↵ 换行 · Tab 改选项 · esc 返回'
@@ -366,14 +366,14 @@ st_ send-keys -t "$pw" Tab; st_ send-keys -t "$pw" Tab   # 「节点」
 st_ send-keys -t "$pw" Enter
 sleep .4
 c=$(compose)
-has 'D: the machines, the default marked 推荐' "$c" 'm4  推荐 · 1 个在跑'
-has 'D: …the others by their count' "$c" 'm5  3 个在跑'
-has 'D: …维护中 listed' "$c" 'm3  维护中'
-st_ send-keys -t "$pw" Down; st_ send-keys -t "$pw" Down   # m5, then m3 (greyed: skipped) → m4
-st_ send-keys -t "$pw" Down                                 # → m5
+has 'D: the machines, the default marked 推荐' "$c" 'mac-a  推荐 · 1 个在跑'
+has 'D: …the others by their count' "$c" 'mac-b  3 个在跑'
+has 'D: …维护中 listed' "$c" 'mac-c  维护中'
+st_ send-keys -t "$pw" Down; st_ send-keys -t "$pw" Down   # mac-b, then mac-c (greyed: skipped) → mac-a
+st_ send-keys -t "$pw" Down                                 # → mac-b
 st_ send-keys -t "$pw" Enter
 sleep .3
-has 'D: a greyed machine is never picked' "$(compose)" '节点  m5 ▾'
+has 'D: a greyed machine is never picked' "$(compose)" '节点  mac-b ▾'
 st_ send-keys -t "$pw" Tab                                  # 「Agent」
 st_ send-keys -t "$pw" Space
 sleep .3
@@ -390,11 +390,11 @@ sleep .2
 st_ send-keys -t "$pw" Enter
 CHECKS=$((CHECKS + 1)); n=0; while [ "$(grep -c . "$LOG")" -lt 2 ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 line=$(sed -n 2p "$LOG")
-has 'D: an issue in the repo, the whole text' "$line" 'acme/web new --title 看一下 m5 为什么慢 --body-file '
+has 'D: an issue in the repo, the whole text' "$line" 'acme/web new --title 看一下 mac-b 为什么慢 --body-file '
 has 'D: …the machine picked' "$line" ' --node m5host'
 has 'D: …the agent picked' "$line" ' --agent claude'
-eq 'D: the text travelled' '看一下 m5 为什么慢' "$(cat "$BODY" 2>/dev/null)"
-CHECKS=$((CHECKS + 1)); waitfor 3 '节点  m4 ▾' compose || fail 'D: the machine back to its default after the send' "$(compose)"
+eq 'D: the text travelled' '看一下 mac-b 为什么慢' "$(cat "$BODY" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); waitfor 3 '节点  mac-a ▾' compose || fail 'D: the machine back to its default after the send' "$(compose)"
 has 'D: …the agent too' "$(compose)" 'Agent  codex ▾'
 
 # The 「仓库」 option. Each send waits for the one before it to land.
@@ -462,7 +462,7 @@ type_ '\033[928~'
 CHECKS=$((CHECKS + 1)); waitfor 4 '仓库  web ▾' compose || fail 'I: ⌘N: the row in view again' "$(compose)"
 
 # --- the orchestrator (issue #1957): its row, not the area ---------------------------
-orch() { printf 'U/orch%sm4%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" "${2:-}" "$US" "${3:-}" > "$FLEET_STATUS_G/orch_fcs"; }
+orch() { printf 'U/orch%smac-a%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" "${2:-}" "$US" "${3:-}" > "$FLEET_STATUS_G/orch_fcs"; }
 has 'N: H'"'"'s is no repo' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=norepo'
 hasnt 'N: nothing is a scratch of a repo any more' "$(clog ev how | grep 'ev=sent')" 'how=scratch'
 
@@ -577,7 +577,7 @@ send_r '先切过去再说'
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -q . "$VIEW" && [ $n -lt 80 ]; do sleep .05; n=$((n + 1)); done
 k=$(sed -n 's#^wid:U/issue-##p' "$VIEW" | head -1)
 [ -n "$k" ] || fail 'R: the stage switched before the row showed' "$(cat "$VIEW")"
-has 'R: …on the machine the hub named, under the title' "$(cat "$VIEW.args")" "open wid:U/issue-$k --node m4 --name 先切过去再说"
+has 'R: …on the machine the hub named, under the title' "$(cat "$VIEW.args")" "open wid:U/issue-$k --node mac-a --name 先切过去再说"
 sw=$(python3 -c 'import json, sys
 for l in open(sys.argv[1]):
     r = json.loads(l)
@@ -626,7 +626,7 @@ out=$(cd "$SB" && python3 -c 'import importlib.util, sys
 spec = importlib.util.spec_from_file_location("c", "fleet-compose.py"); c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
 print(c.place_why("fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable"))
-print(c.place_why("REFUSED NO_CAPACITY\t没有机器有空\tafter m4:op1:5"))' 2>&1)
+print(c.place_why("REFUSED NO_CAPACITY\t没有机器有空\tafter mac-a:op1:5"))' 2>&1)
 eq 'S: the reason off the place: the last line, or the line'"'"'s message' \
   $'fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable\n没有机器有空' "$out"
 # T. (issue #3119) FLEET_COMPOSE off on the shell's server: ⌘N is a new session
@@ -640,7 +640,7 @@ sh_ set-environment -g FLEET_PORTAL_NEW_CMD "sh $WORK/new.sh home-session claude
 sh_ set-environment -g FLEET_HUB_WRITE_CMD "bash '$WORK/write-ok.sh' \"\$@\""
 : > "$WORK/new.log"; : > "$WORK/write.log"
 settled; orch 'done'
-st0=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@fleet_role} #{@remote}' | awk '$2 != "portal" && $3 != "m4:U/orch" { print $1; exit }')
+st0=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@fleet_role} #{@remote}' | awk '$2 != "portal" && $3 != "mac-a:U/orch" { print $1; exit }')
 st_ select-window -t "$st0"
 np=$(portal | grep -c .)
 type_ '\033[928~'
@@ -679,15 +679,15 @@ eq 'Q: an older payload (no node, no agent) → --node auto, no --agent' \
 eq 'Q: node / agent null → the same argv' \
   'acme/web new --title 看日志 --body-file B --node auto' \
   "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":null,"agent":null}')"
-eq 'Q: m4 + codex → --node m4 --agent codex' \
-  'acme/web new --title 看日志 --body-file B --node m4 --agent codex' \
-  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"m4","agent":"codex"}')"
+eq 'Q: mac-a + codex → --node mac-a --agent codex' \
+  'acme/web new --title 看日志 --body-file B --node mac-a --agent codex' \
+  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"mac-a","agent":"codex"}')"
 eq 'Q: a scratch of no repo carries them too' \
-  '- scratch --name 看日志 --body-file B --node m4 --agent codex' \
-  "$(qsend '{"title":"看日志","body":"看日志","repo_mode":"none","node":"m4","agent":"codex"}')"
+  '- scratch --name 看日志 --body-file B --node mac-a --agent codex' \
+  "$(qsend '{"title":"看日志","body":"看日志","repo_mode":"none","node":"mac-a","agent":"codex"}')"
 eq 'Q: a named --node / --agent beats the payload'"'"'s' \
-  'acme/web new --title 看日志 --body-file B --node m5 --agent claude' \
-  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"m4","agent":"codex"}' --node m5 --agent claude)"
+  'acme/web new --title 看日志 --body-file B --node mac-b --agent claude' \
+  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"mac-a","agent":"codex"}' --node mac-b --agent claude)"
 # issue #2393: the files themselves go with it — each attachment still on this
 # computer as one --attach (a vanished one is not), so the place script sends
 # its bytes to the machine that opens the session

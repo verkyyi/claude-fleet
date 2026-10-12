@@ -32,12 +32,12 @@ func TestLeaseCLIContract(t *testing.T) {
 		code       int
 		out        string
 	}{
-		{"granted", `{"granted":true,"lease":{"node":"m4","worker_id":"w"}}`, 200,
-			[]string{"acquire", "o/r", "7", wid}, 0, "GRANTED m4"},
-		{"held", `{"granted":false,"holder":{"node":"m5","worker_id":"x/issue-7","expires_at":"2026-10-03T12:00:00Z"}}`, 409,
-			[]string{"acquire", "o/r", "7", wid}, 3, "HELD m5 x/issue-7 2026-10-03T12:00:00Z"},
-		{"forced", `{"granted":true,"lease":{"node":"m4"},"displaced":{"node":"m5","worker_id":"x/issue-7"}}`, 200,
-			[]string{"acquire", "--force", "o/r", "7", wid}, 0, "FORCED m4 m5 x/issue-7"},
+		{"granted", `{"granted":true,"lease":{"node":"mac-a","worker_id":"w"}}`, 200,
+			[]string{"acquire", "o/r", "7", wid}, 0, "GRANTED mac-a"},
+		{"held", `{"granted":false,"holder":{"node":"mac-b","worker_id":"x/issue-7","expires_at":"2026-10-03T12:00:00Z"}}`, 409,
+			[]string{"acquire", "o/r", "7", wid}, 3, "HELD mac-b x/issue-7 2026-10-03T12:00:00Z"},
+		{"forced", `{"granted":true,"lease":{"node":"mac-a"},"displaced":{"node":"mac-b","worker_id":"x/issue-7"}}`, 200,
+			[]string{"acquire", "--force", "o/r", "7", wid}, 0, "FORCED mac-a mac-b x/issue-7"},
 		{"released", `{"released":true}`, 200, []string{"release", "o/r", "7", wid}, 0, "RELEASED"},
 		{"not held", `{"released":false}`, 200, []string{"release", "o/r", "7", wid}, 0, "NOT_HELD"},
 		{"hub error", `{"error":"x"}`, 403, []string{"acquire", "o/r", "7", wid}, 1, ""},

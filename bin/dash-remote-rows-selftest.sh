@@ -13,16 +13,16 @@
 #                   cache, the same bytes again
 #   B. rows       — a remote row nests under its LOCAL parent (bare-key origin) and a
 #                   remote grandchild under ITS remote parent (worker_id origin); each
-#                   carries its machine as the sidebar's 9th field (`m4`) and the hub
-#                   row's last field, NEVER drawn — no `[m4]` in the name, no tag: a
+#                   carries its machine as the sidebar's 9th field (`mac-a`) and the hub
+#                   row's last field, NEVER drawn — no `[mac-a]` in the name, no tag: a
 #                   remote row looks exactly like a local one (#1475); a local row has an
 #                   empty 9th field; the local parent's k/N counts them; the hub row keeps the
 #                   common width; its id is `wid:<worker_id>`
 #   S. status     — NO machine status line (issue #1531): the first row is the first
 #                   group, in the sidebar and the hub list alike; which machine is
-#                   online / 维护中 / lost lives in the bar and each row's @m4! only
+#                   online / 维护中 / lost lives in the bar and each row's @mac-a! only
 #   C. lost       — a lost machine's rows (the hub says lost, or the cache is older than
-#                   FLEET_HUB_SESSIONS_STALE) are `m4!` for the view and STAY PUT (#1882):
+#                   FLEET_HUB_SESSIONS_STALE) are `mac-a!` for the view and STAY PUT (#1882):
 #                   same order, same nesting, no heading of their own — the frame is the
 #                   online one line by line but for the `!`; never vanish
 #   N. needs      — a remote row that is asking its person draws the local `!` + detail
@@ -212,13 +212,13 @@ nfields(){ printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $
 
 F=11111111-2222-3333-4444-555555555555            # a fleet on another machine
 NOW=$(date +%s)
-remote_cache() {   # $1 = the #ts epoch; $2 = m4's #node line availability; $3 = its last-seen epoch
+remote_cache() {   # $1 = the #ts epoch; $2 = mac-a's #node line availability; $3 = its last-seen epoch
   { printf '#ts\037%s\n' "$1"
-    printf '#me\037m5\n'
-    printf '#node\037m4\037%s\0372\037%s\n' "${2:-online}" "${3:-$1}"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\n' "$F"
-    printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\n' "$F" "$F"
-    printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\n' "$F"
+    printf '#me\037mac-b\n'
+    printf '#node\037mac-a\037%s\0372\037%s\n' "${2:-online}" "${3:-$1}"
+    printf 'wid:%s/issue-1423\037mac-a\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\n' "$F"
+    printf 'wid:%s/issue-1500\037mac-a\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\n' "$F" "$F"
+    printf 'wid:%s/scratch-2\037mac-a\037lost\037\037\037working\037claude\037草稿\037\037\n' "$F"
   } > "$G/remote_$S"
 }
 
@@ -230,7 +230,7 @@ base_s=$(side); base_h=$(hub)
 remote_cache "$NOW"
 eq "A: hub off — a remote cache changes nothing (sidebar)" "$base_s" "$(side)"
 eq "A: hub off — a remote cache changes nothing (hub)"     "$base_h" "$(hub)"
-hasnt "A: hub off — no machine anywhere" "$(side)$(hub)" "m4"
+hasnt "A: hub off — no machine anywhere" "$(side)$(hub)" "mac-a"
 hasnt "A: hub off — no status line" "$(side)$(hub)" "●"
 mv "$G/remote_$S" "$WORK/remote.keep"
 eq "A: hub on, no cache — the same bytes (sidebar)" "$base_s" "$(CCQUOTA_FLEET=1 side)"
@@ -245,24 +245,24 @@ export CCQUOTA_FLEET=1
 # this machine's global/remote_fold_<sess>, absent ⇒ collapsed.
 s=$(side)
 eq "B: a remote parent starts folded — its done grandchild hidden" "solo;草稿;EPIC;C1;侧边栏;" "$(sorder "$s")"
-eq "B: …its caret says so" "wid:$F/issue-1423|└▸|1/1|1|m4" "$(srow "$s" '侧边栏')"
+eq "B: …its caret says so" "wid:$F/issue-1423|└▸|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
 printf '%s/issue-1423\n' "$F" > "$G/remote_fold_$S"   # opened HERE: the rows below read it open
 s=$(side)
 eq "B: mixed with the local rows, each under its real parent; the lost one where it would be online (#1882)" \
    "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$s")"
 eq "B: the local parent counts its remote descendants" "@1|▾|1/3|0|" "$(srow "$s" EPIC)"
 eq "B: a remote child under a LOCAL parent: depth 1, its own subtree, its machine in field 9" \
-   "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$s" '侧边栏')"
+   "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
 eq "B: a remote grandchild under its REMOTE parent: depth 2" \
-   "wid:$F/issue-1500|  └||2|m4" "$(srow "$s" '孙')"
+   "wid:$F/issue-1500|  └||2|mac-a" "$(srow "$s" '孙')"
 eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
 # fields 10-12 (issue #1532) are the info column's issue · PR · ctx%, after it.
 eq "B: a local row carries the 9th field too, empty" "12" "$(nfields "$s" C1)"
 eq "B: a remote row has it" "12" "$(nfields "$s" '侧边栏')"
-hasnt "B: no [m4] in any name" "$s" "[m4"
-# A remote row names its machine `@m4` (issue #1780; #1475 drew none) — in the
+hasnt "B: no [mac-a] in any name" "$s" "[mac-a"
+# A remote row names its machine `@mac-a` (issue #1780; #1475 drew none) — in the
 # bar since issue #2305: the view's own renderer lays the row out exactly as the
-# same row local, row_need asks nothing more, and detail_line says `@m4`.
+# same row local, row_need asks nothing more, and detail_line says `@mac-a`.
 printf '%s\n' "$s" > "$WORK/srows"
 drawn=$(python3 - "$BIN/fleet-sidebar.py" '侧边栏' "$WORK/srows" <<'PYR'
 import importlib.util, sys
@@ -273,16 +273,16 @@ local = r[:8] + [""] + r[9:10]   # the same row local: no machine, its #N (issue
 text = sb.row_text(" ", r[2], r[4], r[3], r[5], 34)
 print(text, "same" if text == sb.row_text(" ", local[2], local[4], local[3], local[5], 34) else "differs",
       sb.row_need(r) == sb.row_need(local), sb.machine_tag(r[8]), repr(sb.machine_tag(local[8])),
-      "@m4" in sb.detail_line(r), sep="|")
+      "@mac-a" in sb.detail_line(r), sep="|")
 PYR
 )
-has "B: the bar names a remote row's @m4 (#1780, #2305), a local row's nothing" "$drawn" "|@m4|''|True"
+has "B: the bar names a remote row's @mac-a (#1780, #2305), a local row's nothing" "$drawn" "|@mac-a|''|True"
 has "B: …and lays the name out exactly as the same row local" "$drawn" "|same|True|"
 h=$(hub)
 has "B: the hub row shows the issue" "$h" "#1423"
 hrow=$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$2 == w { print $3; exit }')
-has "B: the hub row ends its tags in @m4 too (#1780)" "$hrow" "@m4"
-hasnt "B: the hub row carries no [m4]" "$hrow" "[m4"
+has "B: the hub row ends its tags in @mac-a too (#1780)" "$hrow" "@mac-a"
+hasnt "B: the hub row carries no [mac-a]" "$hrow" "[mac-a"
 widths=$(printf '%s\n' "$h" | python3 -c 'import sys, unicodedata
 w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if l.count("\x1f") >= 2 and not l.startswith("hdr")})))')
@@ -295,7 +295,7 @@ hasnt "B: no @title_info is written for a remote row" "$(cat "$TMUX_LOG")" "wid:
 menu=$(PATH="$SHIMPATH" FLEET_UI_LANG=zh bash -c '
   BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
   . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-1423" 2>/dev/null)
-eq "M: a remote row's menu is titled with its name and machine (「名称 · 机器」, #1535)" "title	侧边栏 · m4" "$(printf '%s\n' "$menu" | head -1)"
+eq "M: a remote row's menu is titled with its name and machine (「名称 · 机器」, #1535)" "title	侧边栏 · mac-a" "$(printf '%s\n' "$menu" | head -1)"
 has "M: …and its first item opens the proxy window" "$(printf '%s\n' "$menu" | sed -n 2p | cut -f1,2)" "e	进入（代理窗口）…"
 has "M: …through fleet-remote-view.sh" "$(printf '%s\n' "$menu" | sed -n 2p)" "fleet-remote-view.sh"
 has "M: …open, on that worker_id" "$(printf '%s\n' "$menu" | sed -n 2p)" " open '\\''wid:$F/issue-1423'\\'' "
@@ -306,7 +306,7 @@ eq "M: a row the cache does not hold gets no menu" "" "$(PATH="$SHIMPATH" bash -
 # ============================================================================
 # S. no machine status line (issue #1531)
 # ============================================================================
-hasnt "S: no machine status line in the sidebar — no ● m5 / ● m4 row" "$(shdrs "$s")" "●"
+hasnt "S: no machine status line in the sidebar — no ● mac-b / ● mac-a row" "$(shdrs "$s")" "●"
 eq "S: the sidebar's first row is the first group (the pin tier's heading)" \
    "$(sfirst "$base_s")" "$(sfirst "$s")"
 hasnt "S: …nor in the hub list" "$h" "● m"
@@ -318,19 +318,19 @@ eq "S: the hub list's first row is its column header, as with the hub off" \
 # ============================================================================
 # The list does not move (issue #1882): a lost row keeps its place, its group
 # and its parent; only field 9 gains `!` (the view dims the row off it). So the
-# whole frame with every row lost is the online frame with `m4` → `m4!`.
+# whole frame with every row lost is the online frame with `mac-a` → `mac-a!`.
 online_s=$(side); online_h=$(hub)
-eq "C: a row the hub calls lost: in its place, at its depth, m4! for the view" \
-   "wid:$F/scratch-2| ||0|m4!" "$(srow "$online_s" '草稿')"
-hasnt "C: …no lost heading of its own (#1882 — no ─ m4 失联 ─ group)" "$(shdrs "$online_s")" "失联"
-unlost() { LC_ALL=C sed -e 's/m4!/m4/g'; }
+eq "C: a row the hub calls lost: in its place, at its depth, mac-a! for the view" \
+   "wid:$F/scratch-2| ||0|mac-a!" "$(srow "$online_s" '草稿')"
+hasnt "C: …no lost heading of its own (#1882 — no ─ mac-a 失联 ─ group)" "$(shdrs "$online_s")" "失联"
+unlost() { LC_ALL=C sed -e 's/mac-a!/mac-a/g'; }
 remote_cache $((NOW - 600)) online $((NOW - 600))
 s=$(side)
 eq "C: a stale cache: every remote row is lost — the SAME order as online" \
    "$(sorder "$online_s")" "$(sorder "$s")"
-eq "C: …each m4!" "m4!|m4!|m4!" \
+eq "C: …each mac-a!" "mac-a!|mac-a!|mac-a!" \
    "$(printf '%s|%s|%s' "$(srow "$s" '侧边栏' | cut -d'|' -f5)" "$(srow "$s" '孙' | cut -d'|' -f5)" "$(srow "$s" '草稿' | cut -d'|' -f5)")"
-eq "C: …still nested under its real parent" "wid:$F/issue-1423|└▾|1/1|1|m4!" "$(srow "$s" '侧边栏')"
+eq "C: …still nested under its real parent" "wid:$F/issue-1423|└▾|1/1|1|mac-a!" "$(srow "$s" '侧边栏')"
 eq "C: …the local parent still counts them" "$(srow "$online_s" EPIC)" "$(srow "$s" EPIC)"
 eq "C: …the whole sidebar frame is the online one but for the ! (line by line)" \
    "$(printf '%s\n' "$online_s" | unlost)" "$(printf '%s\n' "$s" | unlost)"
@@ -342,22 +342,22 @@ remote_cache "$NOW" lost $((NOW - 180))
 s=$(side)
 eq "C: the hub says the machine is lost: the same order" "$(sorder "$online_s")" "$(sorder "$s")"
 hasnt "C: …no heading" "$(shdrs "$s")" "失联"
-eq "C: …and every row of it is lost, whatever its own word" "m4!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
+eq "C: …and every row of it is lost, whatever its own word" "mac-a!" "$(srow "$s" '侧边栏' | cut -d'|' -f5)"
 # 维护中 (#1427): the hub's third word for a machine — heard, the operator is
 # taking it down. The bar's machine cell says so; nothing about its rows
-# changes: not lost, not dimmed (no m4!), nesting intact.
+# changes: not lost, not dimmed (no mac-a!), nesting intact.
 remote_cache "$NOW" maintenance "$NOW"
 s=$(side)
 eq "C: a 维护中 machine: no heading, the same order" "$(sorder "$online_s")" "$(sorder "$s")"
-eq "C: …its online rows are live rows (no m4!), still nested under the local parent, their own child counted" \
-   "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$s" '侧边栏')"
-eq "C: …only the row the hub itself calls lost is lost" "m4!" "$(srow "$s" '草稿' | cut -d'|' -f5)"
+eq "C: …its online rows are live rows (no mac-a!), still nested under the local parent, their own child counted" \
+   "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$s" '侧边栏')"
+eq "C: …only the row the hub itself calls lost is lost" "mac-a!" "$(srow "$s" '草稿' | cut -d'|' -f5)"
 remote_cache "$NOW"
 
 # ============================================================================
 # N. needs — a remote row asking its person
 # ============================================================================
-printf 'wid:%s/issue-1600\037m4\037online\0371600\037acme/app\037needs\037claude\037问\037\037ask\n' "$F" >> "$G/remote_$S"
+printf 'wid:%s/issue-1600\037mac-a\037online\0371600\037acme/app\037needs\037claude\037问\037\037ask\n' "$F" >> "$G/remote_$S"
 s=$(side)
 eq "N: a remote row that is asking draws the local ! and says which" "!|在问你" "$(sneed "$s" '问')"
 remote_cache "$NOW"
@@ -375,14 +375,14 @@ eq "D: the producer's code names no network tool and not the refresher" "0" \
 # ============================================================================
 L=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee            # this machine's fleet
 new_cache() {   # the #1480 shape: `local` + `wid` on every row, this machine's rows included
-  { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\0370\037\n' "$F"
-    printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\0370\037\n' "$F" "$F"
-    printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\0370\037\n' "$F"
-    printf 'wid:%s/issue-1419\037m5\037online\0371419\037acme/app\037done\037claude\037EPIC\037\037\0371\037@1\n' "$L"
-    printf 'wid:%s/issue-1420\037m5\037online\0371420\037acme/app\037done\037claude\037C1\037acme-app:issue-1419\037\0371\037@2\n' "$L"
-    printf 'wid:%s/issue-1499\037m5\037online\0371499\037acme/app\037working\037claude\037gone\037\037\0371\037@9\n' "$L"
-    printf 'wid:%s/scratch-7\037m5\037online\037\037\037working\037claude\037nowin\037\037\0371\037\n' "$L"
+  { printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0372\037%s\n' "$NOW" "$NOW"
+    printf 'wid:%s/issue-1423\037mac-a\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-1500\037mac-a\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\0370\037\n' "$F" "$F"
+    printf 'wid:%s/scratch-2\037mac-a\037lost\037\037\037working\037claude\037草稿\037\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-1419\037mac-b\037online\0371419\037acme/app\037done\037claude\037EPIC\037\037\0371\037@1\n' "$L"
+    printf 'wid:%s/issue-1420\037mac-b\037online\0371420\037acme/app\037done\037claude\037C1\037acme-app:issue-1419\037\0371\037@2\n' "$L"
+    printf 'wid:%s/issue-1499\037mac-b\037online\0371499\037acme/app\037working\037claude\037gone\037\037\0371\037@9\n' "$L"
+    printf 'wid:%s/scratch-7\037mac-b\037online\037\037\037working\037claude\037nowin\037\037\0371\037\n' "$L"
   } > "$G/remote_$S"
 }
 srow9() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$1 != "hdr" && $4 == n { print $1 "|" $2 "|" $5 "|" $6 "|" $7 "|" $9; exit }'; }
@@ -397,7 +397,7 @@ eq "H: hub source — the row set is the cache's: the local rows it names, the r
 eq "H: a local row is its tmux line: its @ id, its LIVE state (tmux says looping, the cache said done), its caret + k/N, no machine" \
    "@1|looping|▾|1/3|0|" "$(srow9 "$hs" EPIC)"
 eq "H: …its child nests under it as today" "@2|└||1|" "$(srow "$hs" C1)"
-eq "H: …and the remote child under the local parent, as today" "wid:$F/issue-1423|└▾|1/1|1|m4" "$(srow "$hs" '侧边栏')"
+eq "H: …and the remote child under the local parent, as today" "wid:$F/issue-1423|└▾|1/1|1|mac-a" "$(srow "$hs" '侧边栏')"
 hasnt "H: hub source — no machine status line either" "$(shdrs "$hs")" "●"
 eq "H: the sidebar's own window stays on its list before the hub has it" \
    "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$(FLEET_SIDEBAR_SOURCE=hub FLEET_SIDEBAR_CURRENT=@3 side)")"
@@ -446,7 +446,7 @@ eq "L: hub source, the hub silent — this machine's rows are tmux's set again (
    "solo;草稿;EPIC;C1;侧边栏;孙;" "$(sorder "$ls_")"
 eq "L: …byte for byte the local source under the same silence: one code path, not a second" "$(FLEET_SIDEBAR_SOURCE=local side)" "$ls_"
 hasnt "L: …the other machine's rows are 失联 without a heading of their own (#1882)" "$(shdrs "$ls_")" "失联"
-eq "L: …each of them m4! for the view, still nested" "wid:$F/issue-1423|└▾|1/1|1|m4!" "$(srow "$ls_" '侧边栏')"
+eq "L: …each of them mac-a! for the view, still nested" "wid:$F/issue-1423|└▾|1/1|1|mac-a!" "$(srow "$ls_" '侧边栏')"
 eq "L: …a local row is still its tmux line: its @ id, its live state" "@1|looping" "$(srow9 "$ls_" EPIC | cut -d'|' -f1,2)"
 cp "$WLIST_FILE" "$WORK/wlist.keep"
 LC_ALL=C awk -F"$US" -v OFS="$US" '$3 == "EPIC" { $5 = "working" } 1' "$WORK/wlist.keep" > "$WLIST_FILE"
@@ -473,11 +473,11 @@ remote_cache "$NOW"
 # cache (#1484): `#me` empty, every row another machine's (local=0).
 SH="shell$$"
 shell_cache() {
-  { printf '#ts\037%s\n#me\037\n#node\037m4\037online\0373\037%s\n' "$NOW" "$NOW"
-    printf 'wid:%s/issue-11\037m4\037online\03711\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$F"
-    printf 'wid:%s/issue-21\037m4\037online\03721\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$F"
-    printf 'wid:%s/issue-22\037m4\037online\03722\037acme/app\037done\037claude\037应用二\037\037\0370\037\n' "$F"
-    printf 'wid:%s/scratch-3\037m4\037online\037\037\037working\037claude\037草稿三\037\037\0370\037\n' "$F"
+  { printf '#ts\037%s\n#me\037\n#node\037mac-a\037online\0373\037%s\n' "$NOW" "$NOW"
+    printf 'wid:%s/issue-11\037mac-a\037online\03711\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-21\037mac-a\037online\03721\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-22\037mac-a\037online\03722\037acme/app\037done\037claude\037应用二\037\037\0370\037\n' "$F"
+    printf 'wid:%s/scratch-3\037mac-a\037online\037\037\037working\037claude\037草稿三\037\037\0370\037\n' "$F"
   } > "$G/remote_$SH"
 }
 shell_side() { PATH="$SHIMPATH" FLEET_SESSION=$SH FLEET_SIDEBAR_SOURCE=hub bash "$ROWS" --sidebar 2>/dev/null | strip; }
@@ -509,7 +509,7 @@ has "P: ← on a shell heading writes the fold to the shell's OWN session" "$(ca
 # 已结束 on the shell (issue #2913): a done no-issue row of the hub's goes under
 # the folded 已结束 heading, the shell's own @repo_fold `ended:open` opens it, and
 # → on the heading writes that token to the shell's own session.
-printf 'wid:%s/scratch-4\037m4\037online\037\037\037done\037claude\037完了四\037\037\0370\037\n' "$F" >> "$G/remote_$SH"
+printf 'wid:%s/scratch-4\037mac-a\037online\037\037\037done\037claude\037完了四\037\037\0370\037\n' "$F" >> "$G/remote_$SH"
 pe=$(FLEET_SHELL=1 shell_side)
 has "P: a done no-issue hub row folds under 已结束 on the shell" "$(shdrs "$pe")" "▸ 已结束 · 还开着 (1);"
 hasnt "P: …hidden while folded" "$(sorder "$pe")" "完了四"
@@ -542,28 +542,28 @@ eq "P: 1 hosted — no heading, byte for byte the frame without hub_repos (#2285
 rm -f "$G/hub_repos"
 # Issues #1770/#1882: on the client (`#me` empty) a row with a repo goes to its
 # repo's group, a no-repo row to 无仓库 — and a LOST machine's row STAYS there,
-# dimmed (`m4!`): no `─ m4 失联 ─` group at the foot, so the list does not
+# dimmed (`mac-a!`): no `─ mac-a 失联 ─` group at the foot, so the list does not
 # reshuffle when a network drops and again when it comes back (#1882). Before
 # #1770 the foot group had no heading on a client and read as 无仓库's rows.
-FP=33333333-4444-5555-6666-888888888888            # a fleet on m5
-{ printf '#ts\037%s\n#me\037\n#node\037m4\037lost\0371\037%s\n#node\037m5\037online\0373\037%s\n' "$NOW" "$((NOW - 600))" "$NOW"
-  printf 'wid:%s/acme-app:issue-41\037m5\037online\03741\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$FP"
-  printf 'wid:%s/acme-tool:issue-42\037m5\037online\03742\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$FP"
-  printf 'wid:%s/0247d1c0-6d9d-420e-88ac-d867ee7526d1\037m5\037online\037\037\037working\037claude\037无仓活\037\037\0370\037\n' "$FP"
-  printf 'wid:%s/acme-app:issue-43\037m4\037online\03743\037acme/app\037looping\037claude\037活页\037\037\0370\037\n' "$F"
+FP=33333333-4444-5555-6666-888888888888            # a fleet on mac-b
+{ printf '#ts\037%s\n#me\037\n#node\037mac-a\037lost\0371\037%s\n#node\037mac-b\037online\0373\037%s\n' "$NOW" "$((NOW - 600))" "$NOW"
+  printf 'wid:%s/acme-app:issue-41\037mac-b\037online\03741\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$FP"
+  printf 'wid:%s/acme-tool:issue-42\037mac-b\037online\03742\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$FP"
+  printf 'wid:%s/0247d1c0-6d9d-420e-88ac-d867ee7526d1\037mac-b\037online\037\037\037working\037claude\037无仓活\037\037\0370\037\n' "$FP"
+  printf 'wid:%s/acme-app:issue-43\037mac-a\037online\03743\037acme/app\037looping\037claude\037活页\037\037\0370\037\n' "$F"
 } > "$G/remote_$SH"
 lr=$(FLEET_SHELL=1 shell_side)
 eq "P: #1882 — a client's lost machine: its row stays in its repo's group, no lost heading" \
    "app (2);tool (1);无仓库 (1);" "$(shdrs "$lr")"
-eq "P: #1882 — …in its place, dimmed (m4!)" "应用活;活页;工具活;无仓活;|m4!" "$(sorder "$lr")|$(srow "$lr" '活页' | cut -d'|' -f5)"
-sed -e "s/^#node\x1fm4\x1flost/#node\x1fm4\x1fonline/" "$G/remote_$SH" > "$WORK/l" && mv "$WORK/l" "$G/remote_$SH"
+eq "P: #1882 — …in its place, dimmed (mac-a!)" "应用活;活页;工具活;无仓活;|mac-a!" "$(sorder "$lr")|$(srow "$lr" '活页' | cut -d'|' -f5)"
+sed -e "s/^#node\x1fmac-a\x1flost/#node\x1fmac-a\x1fonline/" "$G/remote_$SH" > "$WORK/l" && mv "$WORK/l" "$G/remote_$SH"
 lo=$(FLEET_SHELL=1 shell_side)
-eq "P: #1882 — m4 back online: the frame is the lost one line by line but for the !" \
-   "$(printf '%s\n' "$lr" | LC_ALL=C sed 's/m4!/m4/g')" "$lo"
+eq "P: #1882 — mac-a back online: the frame is the lost one line by line but for the !" \
+   "$(printf '%s\n' "$lr" | LC_ALL=C sed 's/mac-a!/mac-a/g')" "$lo"
 # the whole entrance silent (hub_ok stale): every row lost, still the same frame
 printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"
-eq "P: #1882 — 入口连不上: every row m4!/m5!, the frame otherwise unchanged" \
-   "$lo" "$(FLEET_SHELL=1 shell_side | LC_ALL=C sed -e 's/m4!/m4/g' -e 's/m5!/m5/g')"
+eq "P: #1882 — 入口连不上: every row mac-a!/mac-b!, the frame otherwise unchanged" \
+   "$lo" "$(FLEET_SHELL=1 shell_side | LC_ALL=C sed -e 's/mac-a!/mac-a/g' -e 's/mac-b!/mac-b/g')"
 rm -f "$G/hub_ok"
 
 # K. kinship on the shell (issue #1698): a row's key is `wid:<worker_id>`, its
@@ -575,13 +575,13 @@ rm -f "$G/hub_ok"
 # (it follows its root's group, #1031, its own repo as a ⇢ tag); a parent whose
 # machine is lost keeps its child nested (#1882 — the list does not move), and a parent
 # no row names (another login's fleet) leaves the child at the top.
-F5=33333333-4444-5555-6666-777777777777            # a fleet on a third machine, m5
-{ printf '#ts\037%s\n#me\037\n#node\037m4\037online\0373\037%s\n#node\037m5\037online\0371\037%s\n' "$NOW" "$NOW" "$NOW"
-  printf 'wid:%s/acme-app:scratch-5\037m4\037online\037\037acme/app\037looping\037claude\037父\037\037\0370\037\n' "$F"
-  printf 'wid:%s/acme-app:issue-31\037m4\037online\03731\037acme/app\037working\037claude\037同机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
-  printf 'wid:%s/acme-tool:issue-32\037m4\037online\03732\037acme/tool\037working\037claude\037跨仓子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
-  printf 'wid:%s/acme-app:issue-33\037m5\037online\03733\037acme/app\037working\037claude\037跨机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F5" "$F"
-  printf 'wid:%s/acme-app:issue-34\037m4\037online\03734\037acme/app\037working\037claude\037孤儿\037%s/acme-app:scratch-9\037\0370\037\n' "$F" "$F5"
+F5=33333333-4444-5555-6666-777777777777            # a fleet on a third machine, mac-b
+{ printf '#ts\037%s\n#me\037\n#node\037mac-a\037online\0373\037%s\n#node\037mac-b\037online\0371\037%s\n' "$NOW" "$NOW" "$NOW"
+  printf 'wid:%s/acme-app:scratch-5\037mac-a\037online\037\037acme/app\037looping\037claude\037父\037\037\0370\037\n' "$F"
+  printf 'wid:%s/acme-app:issue-31\037mac-a\037online\03731\037acme/app\037working\037claude\037同机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
+  printf 'wid:%s/acme-tool:issue-32\037mac-a\037online\03732\037acme/tool\037working\037claude\037跨仓子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
+  printf 'wid:%s/acme-app:issue-33\037mac-b\037online\03733\037acme/app\037working\037claude\037跨机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F5" "$F"
+  printf 'wid:%s/acme-app:issue-34\037mac-a\037online\03734\037acme/app\037working\037claude\037孤儿\037%s/acme-app:scratch-9\037\0370\037\n' "$F" "$F5"
 } > "$G/remote_$SH"
 # A client's list is ALL `wid:` rows (issue #1749): it folds like a node's — the
 # parent starts shut (▸, its children hidden), → opens it, ← on a child shuts it
@@ -605,9 +605,9 @@ eq "K: …a child on ANOTHER machine too (one tree across machines, by design)" 
 eq "K: …a child in another repo too, in its root's group" "└|1" "$(srow "$ks" '跨仓子 ⇢too' | cut -d'|' -f2,4)"
 eq "K: a parent no row names leaves its child at the top" " |0" "$(srow "$ks" '孤儿' | cut -d'|' -f2,4)"
 eq "K: …and the children sort right under their parent" "父;" "$(sorder "$ks" | cut -d';' -f1);"
-sed -e "s/^#node\x1fm4\x1fonline/#node\x1fm4\x1flost/" "$G/remote_$SH" > "$WORK/k" && mv "$WORK/k" "$G/remote_$SH"
+sed -e "s/^#node\x1fmac-a\x1fonline/#node\x1fmac-a\x1flost/" "$G/remote_$SH" > "$WORK/k" && mv "$WORK/k" "$G/remote_$SH"
 kl=$(FLEET_SHELL=1 shell_side)
-eq "K: the parent's machine lost — the m5 child stays nested under it (#1882)" "└|1" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
+eq "K: the parent's machine lost — the mac-b child stays nested under it (#1882)" "└|1" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
 eq "K: …the same order as online" "$(sorder "$ks")" "$(sorder "$kl")"
 rm -f "$G/remote_$SH" "$G/remote_fold_$SH" "$G/hub_ok"
 mv "$WORK/wlist.keep" "$WLIST_FILE"
@@ -634,31 +634,31 @@ def s(fleet, host, user, key, avail="online", wid=True, seen="2026-10-04T10:00:0
                 fleet_id=fleet, fleet_name="x", availability=avail, worker=w, observed_at=seen)
 sessions = [
     s(u, "elsewhere", me, "issue-1420", issue=1420, name="local-one"),           # this fleet: dropped
-    s(f, "mini2.local", me, "issue-1423", issue=1423, name="侧边栏", origin_wid=u + "/issue-1419"),
-    s(f, "mini2.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423", seen="2026-10-04T10:05:00Z"),
-    s(f, "mini2.local", me, "issue-1600", issue=1600, name="epic-kid", busy="bg"),  # sub-issue of local 1419; #1607 busy
-    s(f, "mini2.local", me, "issue-1501", issue=1501, name="remote-sub"),        # sub-issue of REMOTE 1500
-    s(f, "mini2.local", me, "issue-1700", issue=1700, name="sleeper", lifecycle="sleeping"),
-    s(f, "mini2.local", me, "issue-1800", issue=1800, name="asker", state="needs", needs="ask"),
-    s(f, "mini2.local", me, "scratch-4", avail="lost", issue=None, repo=None, name="草稿"),
-    s(f, "mini2.local", "someone-else", "issue-1900", issue=1900, name="theirs"),
-    s(f, "mini2.local", me, "issue-2000", wid=False, issue=2000, name="no-id"),
+    s(f, "mac-d.local", me, "issue-1423", issue=1423, name="侧边栏", origin_wid=u + "/issue-1419"),
+    s(f, "mac-d.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423", seen="2026-10-04T10:05:00Z"),
+    s(f, "mac-d.local", me, "issue-1600", issue=1600, name="epic-kid", busy="bg"),  # sub-issue of local 1419; #1607 busy
+    s(f, "mac-d.local", me, "issue-1501", issue=1501, name="remote-sub"),        # sub-issue of REMOTE 1500
+    s(f, "mac-d.local", me, "issue-1700", issue=1700, name="sleeper", lifecycle="sleeping"),
+    s(f, "mac-d.local", me, "issue-1800", issue=1800, name="asker", state="needs", needs="ask"),
+    s(f, "mac-d.local", me, "scratch-4", avail="lost", issue=None, repo=None, name="草稿"),
+    s(f, "mac-d.local", "someone-else", "issue-1900", issue=1900, name="theirs"),
+    s(f, "mac-d.local", me, "issue-2000", wid=False, issue=2000, name="no-id"),
 ]
-nodes = [dict(machine_name="mini2.local", availability="online", sessions=12, observed_at="2026-10-04T10:07:00Z", age_sec=3),
+nodes = [dict(machine_name="mac-d.local", availability="online", sessions=12, observed_at="2026-10-04T10:07:00Z", age_sec=3),
          dict(machine_name="box3", availability="lost", sessions=0, observed_at="2026-10-04T09:00:00Z", age_sec=4000),
          dict(machine_name="box8", availability="maintenance", sessions=2, observed_at="2026-10-04T10:06:00Z", age_sec=60)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 json.dump({"machines": [], "sessions": sessions}, open(old, "w"), ensure_ascii=False)   # a hub older than #1475
-unk = [dict(n, sessions=None) if n["machine_name"] == "mini2.local" else n for n in nodes]   # #1465: a fleet there unread
+unk = [dict(n, sessions=None) if n["machine_name"] == "mac-d.local" else n for n in nodes]   # #1465: a fleet there unread
 json.dump({"machines": [], "sessions": sessions, "nodes": unk}, open(path.replace("sessions.json", "sessions-unk.json"), "w"), ensure_ascii=False)
 # #1795: a hub that blanked the unread machine's rows — the same unknown count, none of its rows
-blank = [x for x in sessions if x["machine_name"] != "mini2.local"]
+blank = [x for x in sessions if x["machine_name"] != "mac-d.local"]
 json.dump({"machines": [], "sessions": blank, "nodes": unk}, open(path.replace("sessions.json", "sessions-blank.json"), "w"), ensure_ascii=False)
 # …and the machine read again, really empty: its rows go
-gone = [dict(n, sessions=0) if n["machine_name"] == "mini2.local" else n for n in nodes]
+gone = [dict(n, sessions=0) if n["machine_name"] == "mac-d.local" else n for n in nodes]
 json.dump({"machines": [], "sessions": blank, "nodes": gone}, open(path.replace("sessions.json", "sessions-gone.json"), "w"), ensure_ascii=False)
 PY
-export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4 box3=m9 box8=m8"
+export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mac-d=mac-a box3=mac-n box8=mac-m"
 rm -f "$G/remote_$S"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 CHECKS=$((CHECKS+1)); [ ! -e "$G/remote_$S" ] || fail "E: off — --refresh must write nothing"
@@ -674,17 +674,17 @@ has  "E: a #ts line leads the cache" "$(printf '%s\n' "$R" | head -1)" "#ts$US"
 eq   "E: #me is this machine's label" "#me$US$MYHOST" "$(printf '%s\n' "$R" | sed -n 2p)"
 ep() { python3 -c 'from datetime import datetime, timezone; import sys; print(int(datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00")).timestamp()))' "$1"; }
 eq   "E: one #node per other machine from the hub's list: YOUR session count, its observation; 维护中 (#1427) passes through as its own word" \
-     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:07:00Z)${US}hub;#node${US}m8${US}maintenance${US}0$US$(ep 2026-10-04T10:06:00Z)${US}hub;#node${US}m9${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z)${US}hub;" \
+     "#node${US}mac-a${US}online${US}7$US$(ep 2026-10-04T10:07:00Z)${US}hub;#node${US}mac-m${US}maintenance${US}0$US$(ep 2026-10-04T10:06:00Z)${US}hub;#node${US}mac-n${US}lost${US}0$US$(ep 2026-10-04T09:00:00Z)${US}hub;" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
-eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
-eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
-eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|acme-app:issue-1419|" "$(rrow issue-1600)"
+eq   "E: parent in THIS fleet → its bare key"  "mac-a|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
+eq   "E: parent elsewhere → its worker_id"     "mac-a|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
+eq   "E: no @origin_wid → the sub-issue parent (local)"  "mac-a|online|working|epic-kid|acme-app:issue-1419|" "$(rrow issue-1600)"
 eq   "E: the node's busy word rides as field 14 (#1607), empty where it has none" "bg|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v a="wid:$F/issue-1600" -v b="wid:$F/issue-1423" '$1 == a { x = $14 } $1 == b { y = $14 } END { print x "|" y }')"
-eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
-eq   "E: a sleeping lifecycle is the row's state" "m4|online|sleeping|sleeper||" "$(rrow issue-1700)"
-eq   "E: what the window needs rides along (field 10)" "m4|online|needs|asker||ask" "$(rrow issue-1800)"
-eq   "E: a lost machine's row is kept, marked lost" "m4|lost|working|草稿||" "$(rrow scratch-4)"
+eq   "E: no @origin_wid → the sub-issue parent (remote)" "mac-a|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
+eq   "E: a sleeping lifecycle is the row's state" "mac-a|online|sleeping|sleeper||" "$(rrow issue-1700)"
+eq   "E: what the window needs rides along (field 10)" "mac-a|online|needs|asker||ask" "$(rrow issue-1800)"
+eq   "E: a lost machine's row is kept, marked lost" "mac-a|lost|working|草稿||" "$(rrow scratch-4)"
 eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine's label, no window here → empty wid" \
      "local-one|1||$MYHOST|online" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
@@ -695,24 +695,24 @@ eq   "E: every row carries the six appended fields (local, wid, via, busy, born,
 eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
-has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	m4"
+has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	mac-a"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (old hub) failed"
 eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \
-     "#node${US}m4${US}online${US}7$US$(ep 2026-10-04T10:05:00Z)${US}hub;" \
+     "#node${US}mac-a${US}online${US}7$US$(ep 2026-10-04T10:05:00Z)${US}hub;" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }' "$G/remote_$S")"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-unk.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (unknown count) failed"
 eq   "E: the hub's sessions null (a fleet it could not read, #1465) → that #node's count is ?, never the rows held" \
-     "#node${US}m4${US}online${US}?$US$(ep 2026-10-04T10:07:00Z)${US}hub;" \
-     "$(LC_ALL=C awk -F"$US" '$1 == "#node" && $2 == "m4" { printf "%s;", $0 }' "$G/remote_$S")"
+     "#node${US}mac-a${US}online${US}?$US$(ep 2026-10-04T10:07:00Z)${US}hub;" \
+     "$(LC_ALL=C awk -F"$US" '$1 == "#node" && $2 == "mac-a" { printf "%s;", $0 }' "$G/remote_$S")"
 # #1795: an unread machine is "could not read", never "no windows" — a hub answer
 # that lists none of its rows keeps their last lines, so the sidebar does not
 # collapse to the row it stands on for the seconds a node's read times out
-m4rows() { LC_ALL=C awk -F"$US" '/^wid:/ && $2 == "m4" { print $1 }' "$G/remote_$S" | sort | tr '\n' ' '; }
-M4=$(m4rows)
+m4rows() { LC_ALL=C awk -F"$US" '/^wid:/ && $2 == "mac-a" { print $1 }' "$G/remote_$S" | sort | tr '\n' ' '; }
+MAC_A=$(m4rows)
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (blanked rows) failed"
-eq   "E: the hub's sessions null and none of that machine's rows (#1795) → its last rows stay, none lost" "$M4" "$(m4rows)"
+eq   "E: the hub's sessions null and none of that machine's rows (#1795) → its last rows stay, none lost" "$MAC_A" "$(m4rows)"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "E: …round after round while it stays unread" "$M4" "$(m4rows)"
+eq   "E: …round after round while it stays unread" "$MAC_A" "$(m4rows)"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-gone.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (read empty) failed"
 eq   "E: …and a read that stands with no rows takes them away" "" "$(m4rows)"
 # X. the test identity's session (issue #2505): in the cache (field 26), never a
@@ -724,7 +724,7 @@ d = json.load(open(src, encoding="utf-8"))
 tid = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 w = dict(key=None, identity=tid, state="idle", lifecycle="awake", agent="claude", repo=None, name="test-norepo",
          reap="done:10m", test=True)
-d["sessions"].append(dict(worker_id=f + "/" + tid, machine_name="mini2.local", os_user=d["sessions"][1]["os_user"],
+d["sessions"].append(dict(worker_id=f + "/" + tid, machine_name="mac-d.local", os_user=d["sessions"][1]["os_user"],
                           fleet_id=f, fleet_name="x", availability="online", worker=w,
                           observed_at="2026-10-04T10:06:00Z"))
 json.dump(d, open(dst, "w"), ensure_ascii=False)
@@ -746,14 +746,14 @@ d = json.load(open(src, encoding="utf-8"))
 oid = "0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b"
 w = dict(key=None, identity=oid, state="needs", lifecycle="awake", agent="claude", repo=None, name="编排",
          needs="ask", detail="开一个 EPIC 还是三个快任务？", role="orchestrator")
-d["sessions"].append(dict(worker_id=f + "/" + oid, machine_name="mini2.local", os_user=d["sessions"][1]["os_user"],
+d["sessions"].append(dict(worker_id=f + "/" + oid, machine_name="mac-d.local", os_user=d["sessions"][1]["os_user"],
                           fleet_id=f, fleet_name="x", availability="online", worker=w,
                           observed_at="2026-10-04T10:06:00Z"))
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY
 OID=0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
-eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "m4|编排" \
+eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "mac-a|编排" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$OID" '$1 == w { print $2 "|" $8 }' "$G/remote_$S")"
 printf 'stale\n' > "$G/orch_$S"; printf 'stale\n' > "$G/orch_multi_$S"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
@@ -970,19 +970,19 @@ eq "Q: …byte for byte the frame with no @epic field at all" "$q0" \
 cp "$WORK/wl.epic" "$WLIST_FILE"
 # another machine's driver: the cache's 19th field, its title the 17th
 FQ=44444444-5555-6666-7777-999999999999
-{ printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-  printf 'wid:%s/acme-app:scratch-9\037m4\037online\037\037acme/app\037looping\037claude\037scratch-9\037\037\0370\037\037\037\037\037\037另一批\037\037acme/app#1982:2/5\n' "$FQ"
+{ printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0372\037%s\n' "$NOW" "$NOW"
+  printf 'wid:%s/acme-app:scratch-9\037mac-a\037online\037\037acme/app\037looping\037claude\037scratch-9\037\037\0370\037\037\037\037\037\037另一批\037\037acme/app#1982:2/5\n' "$FQ"
   # issue #2544: a renamed driver whose node sent no title still reads as its batch
-  printf 'wid:%s/acme-app:scratch-10\037m4\037online\037\037acme/app\037looping\037claude\037新批·批次\037\037\0370\037\037\037\037\037\037\037\037acme/app#1984:3/7\n' "$FQ"
-  printf 'wid:%s/acme-app:issue-1983\037m4\037online\0371983\037acme/app\037working\037claude\037成员甲\037%s/acme-app:scratch-9\037\0370\037\n' "$FQ" "$FQ"
+  printf 'wid:%s/acme-app:scratch-10\037mac-a\037online\037\037acme/app\037looping\037claude\037新批·批次\037\037\0370\037\037\037\037\037\037\037\037acme/app#1984:3/7\n' "$FQ"
+  printf 'wid:%s/acme-app:issue-1983\037mac-a\037online\0371983\037acme/app\037working\037claude\037成员甲\037%s/acme-app:scratch-9\037\0370\037\n' "$FQ" "$FQ"
   # field 20 (issue #2235): a warm start whose issue was never filed
-  printf 'wid:%s/acme-app:scratch-8\037m4\037online\037\037acme/app\037working\037claude\037没建上的\037\037\0370\037\037\037\037\037\037\037\037\037failed\n' "$FQ"
+  printf 'wid:%s/acme-app:scratch-8\037mac-a\037online\037\037acme/app\037working\037claude\037没建上的\037\037\0370\037\037\037\037\037\037\037\037\037failed\n' "$FQ"
 } > "$G/remote_$QS"
 printf '%s\n' "$NOW" > "$G/hub_ok"
 printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
 qr=$(CCQUOTA_FLEET=1 qside)
-eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|m4" "$(srow "$qr" '另一批')"
-eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|m4" "$(srow "$qr" '成员甲')"
+eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|mac-a" "$(srow "$qr" '另一批')"
+eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|mac-a" "$(srow "$qr" '成员甲')"
 eq "Q: a remote renamed driver with no title (#2544) — its name, its badge" "新批·批次|3/7|#1984" \
    "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$1 ~ /scratch-10$/ { print $4 "|" $6 "|" $10; exit }')"
 eq "Q: a remote row whose issue was never filed (#2235): sidebar field 16 failed, 13-15 empty before it" "|||failed" \
@@ -994,7 +994,7 @@ src, dst, f = sys.argv[1:4]
 d = json.load(open(src, encoding="utf-8"))
 w = dict(key="acme-app:scratch-5", identity=None, state="looping", lifecycle="awake", agent="claude", repo="acme/app",
          name="scratch-5", title="第三批", epic="acme/app#1990:0/4")
-d["sessions"].append(dict(worker_id=f + "/acme-app:scratch-5", machine_name="mini2.local", os_user=d["sessions"][1]["os_user"],
+d["sessions"].append(dict(worker_id=f + "/acme-app:scratch-5", machine_name="mac-d.local", os_user=d["sessions"][1]["os_user"],
                           fleet_id=f, fleet_name="x", availability="online", worker=w, observed_at="2026-10-04T10:06:00Z"))
 w2 = dict(w, key="acme-app:scratch-6", name="scratch-6", title="", epic="acme/app#1;rm -rf")
 d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-6", worker=w2))
@@ -1071,16 +1071,16 @@ hasnt "T: the shell reads no local mark" "$(unset CCQUOTA_FLEET; FLEET_SHELL=1 t
 rm -f "$TM"
 eq "T: the mark gone — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache
-printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
+printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
 printf '%s\n' "$NOW" > "$G/hub_ok"
-printf 'acme/tool#77\037m4\037online\0373600\037工具批\0370\nacme/app#1949\037m5\037online\03760\037本机的\0371\nbad ref\037m4\037online\0371\037x\0370\n' > "$G/epicstale_$TS"
+printf 'acme/tool#77\037mac-a\037online\0373600\037工具批\0370\nacme/app#1949\037mac-b\037online\03760\037本机的\0371\nbad ref\037mac-a\037online\0371\037x\0370\n' > "$G/epicstale_$TS"
 t=$(CCQUOTA_FLEET=1 tside)
 eq "T: a remote batch nobody drives — its machine on the row, in its repo's group" \
-   "epicstale:acme/tool#77@m4| |没人在跑|0|m4" "$(srow "$t" '#77 工具批')"
+   "epicstale:acme/tool#77@mac-a| |没人在跑|0|mac-a" "$(srow "$t" '#77 工具批')"
 hasnt "T: …a local=1 line is left to this machine's own marks; junk dropped" "$t" "本机的"
 eq "T: …one grey row in all" "1" "$(printf '%s\n' "$t" | LC_ALL=C grep -c '^epicstale:')"
-printf 'acme/tool#77\037m4\037lost\0373600\037工具批\0370\n' > "$G/epicstale_$TS"
-eq "T: …a lost machine's is dimmed (m4!)" "epicstale:acme/tool#77@m4| |没人在跑|0|m4!" "$(srow "$(CCQUOTA_FLEET=1 tside)" '#77 工具批')"
+printf 'acme/tool#77\037mac-a\037lost\0373600\037工具批\0370\n' > "$G/epicstale_$TS"
+eq "T: …a lost machine's is dimmed (mac-a!)" "epicstale:acme/tool#77@mac-a| |没人在跑|0|mac-a!" "$(srow "$(CCQUOTA_FLEET=1 tside)" '#77 工具批')"
 hasnt "T: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
 rm -f "$G/epicstale_$TS" "$G/remote_$TS" "$G/hub_ok"
 # the refresher: a worker's epic_stale → epicstale_<sess>, one line per (machine, EPIC)
@@ -1134,12 +1134,12 @@ hasnt "U: read — the row is gone" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
 rm -f "$OF" "$WORK/conf/global/orphan-reports.read"
 eq "U: no report file — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache; what this computer read is skipped
-printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
+printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
 printf '%s\n' "$NOW" > "$G/hub_ok"
-printf 'aaaaaaaaaaaa\037m4\037online\037%s\037acme/tool\037issue-77\037BLOCKED\037\037要一个 token\0370\nbbbbbbbbbbbb\037m5\037online\0371\037acme/app\037issue-5\037MERGED\0373\037本机的\0371\ncccccccccccc\037m4\037online\0371\037acme/tool\037issue-78\037MERGED\0379\037已读的\0370\n' "$NOW" > "$G/orphanrep_$TS"
-printf 'm4/cccccccccccc\n' > "$G/orphanrep_read"
+printf 'aaaaaaaaaaaa\037mac-a\037online\037%s\037acme/tool\037issue-77\037BLOCKED\037\037要一个 token\0370\nbbbbbbbbbbbb\037mac-b\037online\0371\037acme/app\037issue-5\037MERGED\0373\037本机的\0371\ncccccccccccc\037mac-a\037online\0371\037acme/tool\037issue-78\037MERGED\0379\037已读的\0370\n' "$NOW" > "$G/orphanrep_$TS"
+printf 'mac-a/cccccccccccc\n' > "$G/orphanrep_read"
 t=$(CCQUOTA_FLEET=1 tside)
-eq "U: a remote report — its machine on the row" "orphanrep:aaaaaaaaaaaa@m4| |结果给你|0|m4" "$(srow "$t" 'issue-77 BLOCKED')"
+eq "U: a remote report — its machine on the row" "orphanrep:aaaaaaaaaaaa@mac-a| |结果给你|0|mac-a" "$(srow "$t" 'issue-77 BLOCKED')"
 hasnt "U: …a local=1 line is left to this machine's own file" "$t" "本机的"
 hasnt "U: …one this computer read is skipped" "$t" "issue-78"
 hasnt "U: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
@@ -1423,7 +1423,7 @@ import json, sys
 path, f, me = sys.argv[1:4]
 w = dict(key="issue-1950", issue=1950, name="钉住的", state="working", lifecycle="awake", agent="claude",
          repo="acme/app", pin=True)
-json.dump({"machines": [], "nodes": [], "sessions": [dict(worker_id=f + "/issue-1950", machine_name="mini2.local",
+json.dump({"machines": [], "nodes": [], "sessions": [dict(worker_id=f + "/issue-1950", machine_name="mac-d.local",
            os_user=me, fleet_id=f, fleet_name="x", availability="online", worker=w,
            observed_at="2026-10-04T10:00:00Z")]}, open(path, "w"), ensure_ascii=False)
 PY

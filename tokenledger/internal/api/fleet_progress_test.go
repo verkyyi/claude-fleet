@@ -53,11 +53,11 @@ func progressGet(t *testing.T, h *harness, tok, query string) (int, progressAnsw
 func TestProgressStreamPerParent(t *testing.T) {
 	h, _, n := peerHarness(t)
 	now := time.Now()
-	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice4"].id, "macmini-m4", "alice", "mach-alice4",
+	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice4"].id, "mac-e-mac-c", "alice", "mach-alice4",
 		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "verkyyi/claude-fleet", Checkout: "/c"}}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice5"].id, "macmini", "alice", "mach-alice5",
+	if _, err := h.srv.Store.RecordFleetSnapshot(n["alice5"].id, "mac-e", "alice", "mach-alice5",
 		[]store.FleetReport{{FleetID: wrFleetM5, Name: "fleet", Repo: "verkyyi/claude-fleet", Checkout: "/c"}}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestProgressStreamPerParent(t *testing.T) {
 		t.Fatalf("empty stream: HTTP %d %s", st, raw)
 	}
 
-	// A placement from the parent's fleet onto m4: accepted, then done.
+	// A placement from the parent's fleet onto mac-c: accepted, then done.
 	req, _ := json.Marshal(map[string]any{"action": "worker_start", "fleet_id": wrFleetM4, "node": "auto",
 		"params": map[string]any{"issue": float64(1648), "repo": "verkyyi/claude-fleet", "origin_wid": parent}})
 	op := store.FleetOperation{ID: "44444444-4444-4444-8444-444444444444", FleetID: wrFleetM4, Action: "worker_start",
@@ -117,10 +117,10 @@ func TestProgressStreamPerParent(t *testing.T) {
 	var done, rep map[string]any
 	_ = json.Unmarshal(got.Events[1].Event, &done)
 	_ = json.Unmarshal(got.Events[2].Event, &rep)
-	if done["window"] != "@42" || done["issue"] != "1648" || done["repo"] != "verkyyi/claude-fleet" || done["node"] != "macmini-m4" {
+	if done["window"] != "@42" || done["issue"] != "1648" || done["repo"] != "verkyyi/claude-fleet" || done["node"] != "mac-e-mac-c" {
 		t.Fatalf("dispatch event %v", done)
 	}
-	if rep["pr"] != "1700" || rep["node"] != "macmini-m4" || rep["msg"] != nil || rep["rid"] != rel.ID {
+	if rep["pr"] != "1700" || rep["node"] != "mac-e-mac-c" || rep["msg"] != nil || rep["rid"] != rel.ID {
 		t.Fatalf("report event %v", rep)
 	}
 

@@ -54,12 +54,12 @@ U=$(lib fleet_uuid "$L")
 [ -n "$U" ] || { echo 'operator-send selftest: no fleet UUID could be minted' >&2; exit 1; }
 ME=$(id -un)
 OP="$U/operator@$ME"
-F=11111111-2222-3333-4444-555555555555          # a fleet on another machine ("m4")
+F=11111111-2222-3333-4444-555555555555          # a fleet on another machine ("mac-a")
 CACHE="$FLEET_CONF_DIR/control/hub-workers.tsv"
 OUTBOX="$FLEET_CONF_DIR/control/hub-outbox"
 BOOK="$FLEET_CONF_DIR/fleets/$L/delivery.ndjson"
 mkdir -p "${CACHE%/*}"
-printf '%s/issue-42\tm4\t\n' "$F" > "$CACHE"
+printf '%s/issue-42\tmac-a\t\n' "$F" > "$CACHE"
 outbox() { ls "$OUTBOX"/*.json 2>/dev/null; }
 jget() { python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); v=r
 for k in sys.argv[2].split("."): v=v.get(k) if isinstance(v, dict) else None
@@ -74,7 +74,7 @@ ok; [ "$rc" = 1 ] && [ -z "$(outbox)" ] || fail "A: hub off ⇒ refused, nothing
 export CCQUOTA_FLEET=1
 run bash "$BIN/fleet-peer-send.sh" "wid:$F/issue-42" 'hello from a shell'
 f=$(outbox | head -1)
-ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in "queued → issue-42 on m4"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in "queued → issue-42 on mac-a"*) true ;; *) false ;; esac \
   || fail "A: no pane ⇒ queued at the hub, exit 3" "rc=$rc out=$out err=$err"
 ok; [ -n "$f" ] && [ "$(jget "$f" from)" = "$OP" ] && [ "$(jget "$f" to)" = "$F/issue-42" ] \
   && case "$(jget "$f" id)" in "$OP#"*) true ;; *) false ;; esac && [ "$(jget "$f" payload.text)" = 'hello from a shell' ] \
@@ -102,13 +102,13 @@ rm -f "$OUTBOX"/*.json
 
 # --- D: deliver from an operator sender ----------------------------------------------------
 relay() { # <id-suffix> <kind> <from> <to> <payload> [<from_node>]
-  python3 -c 'import json,sys; s,k,f,t,p,n=sys.argv[1:7]; print(json.dumps(dict(id=f+"#"+s, kind=k, **{"from": f}, to=t, payload=json.loads(p), from_node=n), ensure_ascii=False))' "$@" "${6-m4}"
+  python3 -c 'import json,sys; s,k,f,t,p,n=sys.argv[1:7]; print(json.dumps(dict(id=f+"#"+s, kind=k, **{"from": f}, to=t, payload=json.loads(p), from_node=n), ensure_ascii=False))' "$@" "${6-mac-a}"
 }
 deliver() { out=$(printf '%s' "$1" | env -u TMUX bash "$BIN/fleet-hub-node.sh" deliver 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 FOP="$F/operator@alice"
 queued_with() { grep -l -F "$1" "$FLEET_CONF_DIR/fleets/$L/peer-queue/"*.json 2>/dev/null | wc -l | tr -d ' '; }
 deliver "$(relay 1 message "$FOP" "$U/issue-7" '{"text":"from the operator"}')"
-ok; [ "$rc" = 0 ] && [ "$(queued_with 'from operator@alice on m4')" = 1 ] \
+ok; [ "$rc" = 0 ] && [ "$(queued_with 'from operator@alice on mac-a')" = 1 ] \
   || fail "D: an operator message reaches the worker, labelled operator@<login>" "rc=$rc $err"
 deliver "$(relay 2 child_report "$FOP" "$U/issue-7" '{"child":"issue-42","state":"MERGED"}')"
 ok; [ "$rc" = 1 ] || fail "D: an operator child report is refused" "rc=$rc $err"
@@ -138,7 +138,7 @@ bdeliver() { # <payload>
 P=$(hook 900001 42 bob 'please rebase')
 bdeliver "$P"
 f=$(outbox | head -1)
-ok; [ "$rc" = 0 ] && [ "$(outbox | wc -l | tr -d ' ')" = 1 ] && case "$out" in *"forwarded(#42->m4)"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 0 ] && [ "$(outbox | wc -l | tr -d ' ')" = 1 ] && case "$out" in *"forwarded(#42->mac-a)"*) true ;; *) false ;; esac \
   || fail "F: a comment for a worker elsewhere is forwarded through the hub" "rc=$rc $out"
 ok; [ -n "$f" ] && [ "$(jget "$f" id)" = "$OP#bridge-900001" ] && [ "$(jget "$f" to)" = "$F/issue-42" ] \
   && [ "$(jget "$f" payload.bridge.cid)" = 900001 ] && [ "$(jget "$f" payload.repo)" = acme/app ] \

@@ -803,7 +803,7 @@ class Updater(object):
     # (`current`, or a switch). A new stable or another batch taking over the
     # hold does not restart it — with 3-7 batches running in parallel and stable
     # moving every hour or two, a clock keyed on the target never reached the cap
-    # (macmini 2026-10-10: two stables behind, deferred every 5 minutes).
+    # (mac-d 2026-10-10: two stables behind, deferred every 5 minutes).
     # What the hold buys is small: a switch never stops a running session (each
     # sits on its own fleet.versions/<sha>); it only moves `current/` and the
     # daemons, so new workers of a batch start on the version its others run.
@@ -1407,8 +1407,8 @@ class Updater(object):
         for the sessions started from it) holds nothing by itself — a running
         process that names it is process_releases' (issue #3100)."""
         used = set()
-        # every login's, not only a managed one's (issue #3248: mini2's admin
-        # verkyyi stood on a tree into fc6b100 — pruned, and every script its
+        # every login's, not only a managed one's (issue #3248: mac-e's admin
+        # dave stood on a tree into fc6b100 — pruned, and every script its
         # agent exec'd was a dangling link)
         for login in sorted(set(fns.managed_accounts(self.p.sup)) | set(local_logins())):
             ident = fns.account_ident(login)
@@ -1684,7 +1684,7 @@ class Updater(object):
     def tick(self):
         rc = self._tick()
         # every tick at rest, not only after a switch (issue #3100: a week of
-        # releases at ~20 a day was 56 dirs, 18 GB on mini2)
+        # releases at ~20 a day was 56 dirs, 18 GB on mac-e)
         if self.st.get("phase") == "idle" and env("FLEET_NODE_UPDATE_OWNER", "hub") != "image":
             try:
                 self.prune()

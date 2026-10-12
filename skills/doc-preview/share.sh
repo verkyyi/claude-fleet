@@ -411,7 +411,7 @@ case "${1:-}" in
   --upgrade)
     # Run by fleet-install-apply.sh after the skills pass (issue #2415): a server.py
     # started before an install keeps the OLD rules until something restarts it — on
-    # m4 one from before #1153 listed every share to anyone on the machine for a day.
+    # mac-a one from before #1153 listed every share to anyone on the machine for a day.
     # Restart it on the SAME port now, and end any untracked copy, rather than wait
     # for the next share. --check: report only (exit 1 = something stale).
     if [ "${2:-}" = --check ]; then

@@ -14,8 +14,8 @@ steps, exit codes and last line; nothing else on the machine runs `useradd` /
 `userdel`:
 
 ```sh
-sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login open 24haowan \
-  --full-name 'Arvin' --join-file /private/login-code
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login open acme \
+  --full-name 'Alice' --join-file /private/login-code
 sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login list
 sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login remove drill2 --keep-home
 ```
@@ -26,7 +26,7 @@ sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login remove drill2 --kee
 - `open`: OS user → home (0700) → install → the login's own node identity
   (join code) → credential separation as a tenant of the shared proxy →
   `account adopt` → its fleet started. A name is 2–16 of `a-z0-9` with at least
-  one letter (`control.ValidCreateLogin`); a digit may lead (`24haowan` — only
+  one letter (`control.ValidCreateLogin`); a digit may lead (`acme` — only
   here is `useradd` given its bad-name flag).
 - `remove`: stop its fleet → `node leave` on the hub → `account forget` →
   `fleet-credsep.py purge` → kill its processes → archive the home to
@@ -64,9 +64,9 @@ active` (or `remove_pending → removing → removed`), the same result and last
 `credsep:` line.
 
 ```sh
-fleet hub accounts assign gh:2987262 --host fleet-linux-0 --login 24haowan
-fleet hub accounts                      # … fleet-linux-0:active:separated
-fleet hub accounts remove gh:2987262 --host fleet-linux-0
+fleet hub accounts assign gh:2987262 --host linux-a --login acme
+fleet hub accounts                      # … linux-a:active:separated
+fleet hub accounts remove gh:2987262 --host linux-a
 ```
 
 - `fleet node install` on Linux writes `FLEET_NODE_ACCOUNT_OPS=1` into
@@ -89,7 +89,7 @@ fleet hub accounts remove gh:2987262 --host fleet-linux-0
   with a control character, a malformed join code — is refused `BAD_ARGS` with
   one log line and nothing runs (BREAK-IT `linux-hub-other-root-op`). A digit
   may lead only for a name the person already holds on another machine
-  (`24haowan`). `:` and `,` in a full name become spaces (passwd's separators).
+  (`acme`). `:` and `,` in a full name become spaces (passwd's separators).
 - The op is written into the login's declaration (`"op"`): the same op again
   (a re-ask, a resume after the node program restarted) goes on where it
   stopped; a login another op or a person made answers 3 (exists — adopt it
@@ -104,7 +104,7 @@ fleet hub accounts remove gh:2987262 --host fleet-linux-0
 (issue #3526) The image used to open its own login, `fleet` (UID 10002), at
 every start (`FLEET_NODE_LOGIN=fleet`). Nothing dispatched to it — the hub
 reserves the name and never assigns it (#3417) — yet it ran a full fleet of its
-own (~54 processes and a warm pool on fleet-linux-0) beside the people's logins.
+own (~54 processes and a warm pool on linux-a) beside the people's logins.
 
 Now `FLEET_NODE_LOGIN` empty or `none` means the machine has none, and both the
 image (`Dockerfile`) and the manifest (`render.py`) say `none`. A container start
@@ -126,7 +126,7 @@ sudo python3 -I $R/fleet-node-linux.py login list                       # fleet 
 ```
 
 `login remove` takes it off the hub (`node leave`) too. Then recreate the pod
-once (`kubectl -n fleet-workers delete pod fleet-linux-0` — about a minute
+once (`kubectl -n fleet-workers delete pod linux-a` — about a minute
 offline for everyone on it, so pick a time nobody is) and check `id fleet` fails
 and `ps -u 10002` is empty: nothing brings it back.
 
@@ -179,9 +179,9 @@ the image staging step checks the pinned artifact digests again.
 bash extras/managed-node/prepare-image.sh \
   https://YOUR-HUB /private/release.pub RELEASE_COMMIT /tmp/fleet-node-image linux-amd64
 docker build --platform linux/amd64 \
-  -t registry.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node:RELEASE_COMMIT \
+  -t registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT \
   /tmp/fleet-node-image
-docker push registry.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node:RELEASE_COMMIT
+docker push registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT
 ```
 
 The image is Debian 13 (trixie, OpenSSH 10.0); its build fails unless
@@ -196,7 +196,7 @@ is recreated at each start from its declaration on the volume (`boot`).
 ## ACK resources
 
 Suggested first deployment: the existing ACK cluster hosting the hub, a separate
-`fleet-workers` namespace, `fleet-linux-0`, 1 CPU / 4 GiB requested and 2 CPU /
+`fleet-workers` namespace, `linux-a`, 1 CPU / 4 GiB requested and 2 CPU /
 8 GiB limits (what the live node runs), and 100 GiB encrypted ESSD storage. Select an existing ACK CSI
 StorageClass configured for encryption and supporting `ReadWriteOncePod`.
 The renderer deliberately does not guess a StorageClass or downgrade access
@@ -206,7 +206,7 @@ Service is the door, `fleet-linux-entry`, carrying only the entry port 22022
 
 ```sh
 python3 extras/managed-node/render.py \
-  --image registry.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node@sha256:IMAGE_DIGEST \
+  --image registry.example.com/acme/fleet-managed-node@sha256:IMAGE_DIGEST \
   --hub https://YOUR-HUB --storage-class YOUR_ENCRYPTED_ESSD_CLASS \
   --pull-secret PULL_SECRET_NAME \
   [--entry-host LB_ADDRESS] > /tmp/fleet-linux.json
@@ -305,8 +305,8 @@ with no hand step per login:
 
 | Flag | What the node does at each start (`fleet-node-linux.py`) |
 |---|---|
-| `--github-proxy http://47.131.114.67:3128` | `/etc/gitconfig`: `http.https://github.com/.proxy` — git's github.com traffic through the Singapore relay (`extras/gh-relay`, CONNECT to GitHub hosts :443 from the cluster egress only). The image's `gh` wrapper reads the same address from `/etc/fleet-devnet.env` and sets `HTTPS_PROXY` for gh alone. |
-| `--git-mirror git://git-mirror.arc-runners.svc.cluster.local/24haowan-monorepo.git=https://github.com/GuangZhouShanyouGame/24haowan-monorepo.git` (repeatable) | `/etc/gitconfig`: `url.<mirror>.insteadOf <upstream>` — fetches come from the in-cluster CI mirror — and an identity `url.<upstream>.pushInsteadOf <upstream>`, so pushes still go to GitHub through the relay. |
+| `--github-proxy http://203.0.113.211:3128` | `/etc/gitconfig`: `http.https://github.com/.proxy` — git's github.com traffic through the Singapore relay (`extras/gh-relay`, CONNECT to GitHub hosts :443 from the cluster egress only). The image's `gh` wrapper reads the same address from `/etc/fleet-devnet.env` and sets `HTTPS_PROXY` for gh alone. |
+| `--git-mirror git://git-mirror.arc-runners.svc.cluster.local/acme-monorepo.git=https://github.com/acme-org/acme-monorepo.git` (repeatable) | `/etc/gitconfig`: `url.<mirror>.insteadOf <upstream>` — fetches come from the in-cluster CI mirror — and an identity `url.<upstream>.pushInsteadOf <upstream>`, so pushes still go to GitHub through the relay. |
 | `--cluster-caches` | in place of `--cn-mirrors` in the cluster layout (#3548): `/etc/fleet-devnet.env` points npm / pnpm / yarn / corepack at `fleet-npm`, pip and uv at `fleet-pypi`, Go at `fleet-goproxy` then goproxy.cn — the namespace's package caches, «Package caches» below. render.py refuses both flags together |
 | `--cn-mirrors` | `/etc/fleet-devnet.env`: npmmirror (npm · pnpm · yarn · corepack), the node dist mirror (nvm · fnm), goproxy.cn + `sum.golang.google.cn`. Every shell exports it (`/etc/profile.d/fleet-devnet.sh`, read by zshenv and bash.bashrc); a value the login already has wins. |
 | `--egress-allow 172.21.x.y:9418` | the egress guard lets that one in-cluster tcp destination through (before the Service-range cut) — the git-mirror Service's ClusterIP. Nothing else in-cluster. |
@@ -324,7 +324,7 @@ the aliyun CLI, each fetched at build time and checked by sha256.
 ## Hub, relay, and access
 
 Use the hub HTTPS URL reachable from ACK. Allow egress to the hub and
-`https://fleet-relay.24hw.cn`, as well as the Git/package services your work
+`https://relay.example.com`, as well as the Git/package services your work
 needs. Node control connects outward to the hub.
 
 **The door** (issue #3213, EPIC #3208 C6). People reach this machine from
@@ -348,7 +348,7 @@ That route is not optional on ACK: the hub knocks on the address a reach report
 comes from, which here is the cluster's NAT egress, so without it the door is
 reported unreachable. The route rides the supervisor's environment into the
 node program's `entry reach`, which hands it to the hub as `entry_host`. The
-door's address is only the load balancer's: a `<name>.cf.24haowan.com` record is
+door's address is only the load balancer's: a `<name>.cf.example.com` record is
 written by the hub only for a person whose home this machine is (#3067's rule).
 
 The address does not exist until the CLB does, so the door goes up in two
@@ -368,8 +368,8 @@ kubectl -n fleet-workers get svc fleet-linux-entry -w      # until EXTERNAL-IP i
 python3 extras/managed-node/render.py … --entry-host LB_ADDRESS > /tmp/fleet-linux.json
 kubectl apply --dry-run=server -f /tmp/fleet-linux.json
 kubectl apply -f /tmp/fleet-linux.json
-kubectl -n fleet-workers delete pod fleet-linux-0          # never --force
-kubectl -n fleet-workers wait pod/fleet-linux-0 --for=condition=Ready --timeout=15m
+kubectl -n fleet-workers delete pod linux-a          # never --force
+kubectl -n fleet-workers wait pod/linux-a --for=condition=Ready --timeout=15m
 ```
 
 Check it: the machine's `fleet-node-supervisor.py entry reach` (or the node page)
@@ -429,7 +429,7 @@ range cuts: the two Services' ClusterIPs and the hub's address.
 
 ```sh
 kubectl -n fleet-workers get svc fleet-credproxy fleet-egress -o jsonpath='{range .items[*]}{.spec.clusterIP}{"\n"}{end}'
-dig +short claudefleet.24haowan.com            # the hub (also the NetworkPolicy's ipBlock)
+dig +short hub.example.com            # the hub (also the NetworkPolicy's ipBlock)
 python3 extras/managed-node/render.py … \
   --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local \
   --egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 --egress-closed \
@@ -438,13 +438,13 @@ python3 extras/managed-node/render.py … \
 ```
 
 The machine itself must be marked untrusted at the hub
-(`fleet-node-trust.sh set fleet-linux-0 untrusted`): the hub then refuses it any
+(`fleet-node-trust.sh set linux-a untrusted`): the hub then refuses it any
 lease, and every session's route is central (an unreachable hub is `unknown`,
 also central — closed, never open).
 
-**Switching fleet-linux-0** (the migration's first step): apply the shared layer
+**Switching linux-a** (the migration's first step): apply the shared layer
 → mark the machine untrusted → render with the flags → `kubectl apply` →
-`kubectl -n fleet-workers delete pod fleet-linux-0` (never `--force`). A session
+`kubectl -n fleet-workers delete pod linux-a` (never `--force`). A session
 that was started before the switch holds a local session credential, not a hub
 pass, and gets 403 on the central route until it is reopened (↵ on its recovery
 page resumes the same conversation); the pod replace restarts every session
@@ -840,7 +840,7 @@ For a real deployment, record:
 
 Do not label the node production-ready until those live checks pass.
 
-The real-person walk on fleet-linux-0 (a login opened from the hub, connected
+The real-person walk on linux-a (a login opened from the hub, connected
 from a computer and a phone, Claude answering, a drill login removed and checked
 gone) followed the drill sheet `MANAGED-LINUX-DRILL.md`, step by step (a one-off
 record, removed in #3576 — it is in git history).

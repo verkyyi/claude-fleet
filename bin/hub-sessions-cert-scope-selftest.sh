@@ -42,11 +42,11 @@ ME=$(id -un)
 F=11111111-1111-4111-8111-111111111111
 cat > "$WORK/sessions.json" <<EOF
 {"sessions": [
- {"worker_id": "$F/issue-7", "machine_name": "m5", "os_user": "cj", "availability": "online",
+ {"worker_id": "$F/issue-7", "machine_name": "mac-b", "os_user": "cj", "availability": "online",
   "worker": {"issue": 7, "repo": "acme/app", "state": "working", "agent": "claude", "name": "cj-new", "needs": ""}},
- {"worker_id": "$F/issue-9", "machine_name": "m5", "os_user": "$ME", "availability": "online",
+ {"worker_id": "$F/issue-9", "machine_name": "mac-b", "os_user": "$ME", "availability": "online",
   "worker": {"issue": 9, "repo": "acme/app", "state": "working", "agent": "claude", "name": "mine", "needs": ""}}],
- "nodes": [{"machine_name": "m5", "availability": "online", "sessions": 2}]}
+ "nodes": [{"machine_name": "mac-b", "availability": "online", "sessions": 2}]}
 EOF
 # curl: write the fixture to -o, print 200
 cat > "$WORK/bin/curl" <<SHIM
@@ -97,14 +97,14 @@ HERE=$(hostname 2>/dev/null); HERE=${HERE%%.*}
 G2=22222222-2222-4222-8222-222222222222
 cat > "$WORK/sessions.json" <<EOF
 {"sessions": [
- {"worker_id": "$F/issue-7", "machine_name": "m5", "os_user": "admin", "availability": "online",
-  "worker": {"issue": 7, "repo": "acme/app", "state": "working", "agent": "claude", "name": "admin-m5", "needs": ""}},
+ {"worker_id": "$F/issue-7", "machine_name": "mac-b", "os_user": "admin", "availability": "online",
+  "worker": {"issue": 7, "repo": "acme/app", "state": "working", "agent": "claude", "name": "admin-mac-b", "needs": ""}},
  {"worker_id": "$G2/issue-8", "machine_name": "$HERE", "os_user": "admin", "fleet_id": "$G2",
   "fleet_name": "$S", "availability": "online",
   "worker": {"issue": 8, "repo": "acme/app", "state": "working", "agent": "claude", "name": "admin-here", "needs": ""}},
- {"worker_id": "$F/issue-9", "machine_name": "m5", "os_user": "$ME", "availability": "online",
+ {"worker_id": "$F/issue-9", "machine_name": "mac-b", "os_user": "$ME", "availability": "online",
   "worker": {"issue": 9, "repo": "acme/app", "state": "working", "agent": "claude", "name": "mine", "needs": ""}}],
- "nodes": [{"machine_name": "m5", "availability": "online", "sessions": 2}]}
+ "nodes": [{"machine_name": "mac-b", "availability": "online", "sessions": 2}]}
 EOF
 rm -f "$G/remote_$S" "$G"/hubsess.etag* "$G/fleet_logins" "$G/hubsess.nodetok.refused"
 printf 'CCQUOTA_TOKEN=node-tok\n' > "$WORK/conf/node.env"

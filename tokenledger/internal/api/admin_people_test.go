@@ -30,18 +30,18 @@ func TestAdminPeople_OneRowPerPerson(t *testing.T) {
 			{Principal: "gh:2", In: 5, At: now},
 		},
 		Accounts: []store.FleetAccount{
-			act("gh:1", "mini", "verkyyi"), act("gh:1", "mini", "verk2"), act("gh:1", "m5", "verkyyi"),
+			act("gh:1", "mini", "ivan"), act("gh:1", "mini", "ian"), act("gh:1", "mac-d", "ivan"),
 			act("gh:2", "box", "alice"),
 			{PrincipalID: "gh:3", Hostname: "box", Login: "gone", State: "closed"},
 		},
 		Sessions: []adminSession{
-			{Host: "mini", Login: "verkyyi", Running: true},
-			{Host: "mini", Login: "verk2"},
-			{Host: "m5", Login: "verkyyi", Running: true},
+			{Host: "mini", Login: "ivan", Running: true},
+			{Host: "mini", Login: "ian"},
+			{Host: "mac-d", Login: "ivan", Running: true},
 			{Host: "box", Login: "nobody", Running: true}, // a login no person holds
 			{Host: "box", Login: "gone"},                  // a closed login
 		},
-		Names:   map[string]string{"gh:1": "verkyyi"},
+		Names:   map[string]string{"gh:1": "ivan"},
 		Budgets: map[string]PersonBudget{"gh:1": {Week: 2_000_000}},
 		Subs:    map[string][]string{"gh:2": {"icloud"}},
 	}
@@ -50,8 +50,8 @@ func TestAdminPeople_OneRowPerPerson(t *testing.T) {
 		t.Fatalf("rows = %+v; want 2 (one a person, none for a login nobody holds)", got)
 	}
 	v := got[0]
-	if v.Principal != "gh:1" || v.Name != "verkyyi" {
-		t.Fatalf("first row = %+v; want gh:1 verkyyi (most tokens first)", v)
+	if v.Principal != "gh:1" || v.Name != "ivan" {
+		t.Fatalf("first row = %+v; want gh:1 ivan (most tokens first)", v)
 	}
 	if v.Today != 170 || v.Week != 200 {
 		t.Errorf("gh:1 today/week = %d/%d; want 170/200 (cache reads and rows before the range left out)", v.Today, v.Week)
@@ -59,7 +59,7 @@ func TestAdminPeople_OneRowPerPerson(t *testing.T) {
 	if v.Sessions != 3 || v.Running != 2 {
 		t.Errorf("gh:1 sessions = %d running %d; want 3 / 2, all three logins'", v.Sessions, v.Running)
 	}
-	want := [][2]string{{"m5", "verkyyi"}, {"mini", "verk2"}, {"mini", "verkyyi"}}
+	want := [][2]string{{"mac-d", "ivan"}, {"mini", "ian"}, {"mini", "ivan"}}
 	if len(v.Logins) != 3 || v.Logins[0] != want[0] || v.Logins[1] != want[1] || v.Logins[2] != want[2] {
 		t.Errorf("gh:1 logins = %v; want %v", v.Logins, want)
 	}
@@ -95,12 +95,12 @@ func TestAdminPool_PeopleAreLivePassHolders(t *testing.T) {
 		{Principal: "gh:1", WorkerID: "w2", Binds: []store.SessionBind{bind("claude", store.PoolPrincipal, "icloud")}},
 		{Principal: "gh:2", WorkerID: "w3", Binds: []store.SessionBind{bind("claude", store.PoolPrincipal, "icloud"), bind("codex", store.PoolPrincipal, "icloud")}},
 	}
-	names := map[string]string{"gh:1": "verkyyi", "gh:2": "alice"}
+	names := map[string]string{"gh:1": "ivan", "gh:2": "alice"}
 	reading := func(c store.Credential) (string, *model.LimitsSnapshot) {
 		if c.Account != "icloud" || c.Provider != "claude" {
 			return "", nil
 		}
-		return "verky@icloud.com", &model.LimitsSnapshot{FiveHour: model.Window{Utilization: h5, ResetsAt: &reset}}
+		return "heidi@icloud.com", &model.LimitsSnapshot{FiveHour: model.Window{Utilization: h5, ResetsAt: &reset}}
 	}
 	atLimit := func(c store.Credential) string {
 		if c.Provider == "codex" {
@@ -113,10 +113,10 @@ func TestAdminPool_PeopleAreLivePassHolders(t *testing.T) {
 		t.Fatalf("pool = %+v; want one entry a vault account", got)
 	}
 	ic := got[0]
-	if len(ic.People) != 2 || ic.People[0] != "alice" || ic.People[1] != "verkyyi" || ic.Sessions != 3 || ic.State != "in_use" {
-		t.Errorf("pool icloud = %+v; want alice + verkyyi, 3 sessions, in_use", ic)
+	if len(ic.People) != 2 || ic.People[0] != "alice" || ic.People[1] != "ivan" || ic.Sessions != 3 || ic.State != "in_use" {
+		t.Errorf("pool icloud = %+v; want alice + ivan, 3 sessions, in_use", ic)
 	}
-	if ic.Label != "verky@icloud.com" || ic.Used5hPct == nil || *ic.Used5hPct != 40 || ic.Resets5h == nil {
+	if ic.Label != "heidi@icloud.com" || ic.Used5hPct == nil || *ic.Used5hPct != 40 || ic.Resets5h == nil {
 		t.Errorf("pool icloud reading = %+v", ic)
 	}
 	if g := got[1]; len(g.People) != 0 || g.Sessions != 0 || g.State != "idle" || g.Used5hPct != nil {

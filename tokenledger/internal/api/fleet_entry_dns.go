@@ -29,7 +29,7 @@ import (
 // line saying 有人手改.
 //
 // A name nobody claimed must not answer at all (claude-fleet#3337): the
-// zone's own wildcard (*.24haowan.com → the hub, TTL 3600) caught
+// zone's own wildcard (*.example.com → the hub, TTL 3600) caught
 // <unclaimed>.cf and sent a phone to the hub's port instead of anyone's
 // door. So the loop keeps one more record of its own, *.<sub> — a TXT that
 // says the name is unclaimed, and no A or AAAA: under it an unclaimed name
@@ -57,7 +57,7 @@ const entryDNSMaxWrites = 40
 type EntryDNS struct {
 	Provider  dns.Provider
 	Subdomain string // the label every address sits under: cf
-	// Zone is <Subdomain>.<the provider's domain> (cf.24haowan.com): the
+	// Zone is <Subdomain>.<the provider's domain> (cf.example.com): the
 	// default of fleet.entry_domain (claude-fleet#3199).
 	Zone string
 

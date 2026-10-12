@@ -226,7 +226,7 @@ func hasAudit(log []store.HubAuditEntry, outcome, detailPart string) bool {
 }
 
 var (
-	ghAdmin   = fakeGHUser{ID: 100, Login: "verkyyi"}
+	ghAdmin   = fakeGHUser{ID: 100, Login: "ivan"}
 	ghAlice   = fakeGHUser{ID: 200, Login: "alice"}
 	ghMallory = fakeGHUser{ID: 300, Login: "mallory"}
 	// ghNewAlice took the username "alice" after the listed alice let it go.
@@ -243,10 +243,10 @@ func TestGitHubSignIn_WhoGetsIn(t *testing.T) {
 		wantRole string // "" = refused with 403
 		audit    string // a refused sign-in's audit detail
 	}{
-		{name: "admin from the deploy", admins: []string{"VerkYYi"}, as: ghAdmin, wantRole: "admin"},
-		{name: "user on the list", admins: []string{"verkyyi"}, users: []fakeGHUser{ghAlice}, as: ghAlice, wantRole: "user"},
-		{name: "not on the list", admins: []string{"verkyyi"}, users: []fakeGHUser{ghAlice}, as: ghMallory, audit: "not on the list"},
-		{name: "listed name, different ID", admins: []string{"verkyyi"}, users: []fakeGHUser{ghAlice}, as: ghNewAlice, audit: "pinned to GitHub ID 200"},
+		{name: "admin from the deploy", admins: []string{"Ivan"}, as: ghAdmin, wantRole: "admin"},
+		{name: "user on the list", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghAlice, wantRole: "user"},
+		{name: "not on the list", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghMallory, audit: "not on the list"},
+		{name: "listed name, different ID", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghNewAlice, audit: "pinned to GitHub ID 200"},
 		{name: "empty list, the admin's own account", admins: nil, as: ghAdmin, audit: "not on the list"},
 		{name: "empty list, anyone", admins: nil, as: ghMallory, audit: "not on the list"},
 	}
@@ -294,7 +294,7 @@ func TestGitHubSignIn_WhoGetsIn(t *testing.T) {
 // The list is read on every request: removal, or losing admin in the
 // deploy, takes effect on the very next one.
 func TestGitHubSignIn_RemovalTakesEffectNextRequest(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, "ivan")
 	h.addUser(t, ghAlice)
 	_, alice := h.signIn(t, ghAlice)
 	_, admin := h.signIn(t, ghAdmin)
@@ -318,7 +318,7 @@ func TestGitHubSignIn_RemovalTakesEffectNextRequest(t *testing.T) {
 
 // adminOnly lets an admin and the operator's token through, refuses a user.
 func TestGitHubSignIn_AdminOnlyByRole(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, "ivan")
 	h.addUser(t, ghAlice)
 	_, admin := h.signIn(t, ghAdmin)
 	_, user := h.signIn(t, ghAlice)
@@ -356,7 +356,7 @@ func TestGitHubSignIn_AdminOnlyByRole(t *testing.T) {
 
 // A signed-out browser goes to /signin; an API caller keeps its 401.
 func TestGitHubSignIn_SignedOutBrowserGoesToSignin(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, "ivan")
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+AppPrefix, nil)
 	req.Header.Set("Accept", "text/html")
 	resp, err := noFollow.Do(req)
@@ -391,7 +391,7 @@ func TestGitHubSignIn_SignedOutBrowserGoesToSignin(t *testing.T) {
 
 // A callback whose state does not match the flow cookie signs no one in.
 func TestGitHubSignIn_StateMismatchRefused(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, "ivan")
 	resp, err := noFollow.Get(h.http.URL + "/auth/github/start")
 	if err != nil {
 		t.Fatal(err)
@@ -432,11 +432,11 @@ func TestGitHubSignIn_StateMismatchRefused(t *testing.T) {
 // Start-up resolution pins each admin name to the ID GitHub holds it under;
 // someone else signing in under that name later is refused.
 func TestGitHubSignIn_ResolveAdminsPins(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi", "ghost")
-	h.gh.public["verkyyi"] = ghAdmin
+	h := newGitHubHarness(t, "ivan", "ghost")
+	h.gh.public["ivan"] = ghAdmin
 	h.srv.ResolveGitHubAdmins(context.Background())
-	if id, ok, _ := h.srv.Store.PinnedID("verkyyi"); !ok || id != ghAdmin.ID {
-		t.Fatalf("verkyyi pinned = %d %v", id, ok)
+	if id, ok, _ := h.srv.Store.PinnedID("ivan"); !ok || id != ghAdmin.ID {
+		t.Fatalf("ivan pinned = %d %v", id, ok)
 	}
 	if _, ok, _ := h.srv.Store.PinnedID("ghost"); ok {
 		t.Errorf("an unresolvable admin name was pinned")
@@ -444,7 +444,7 @@ func TestGitHubSignIn_ResolveAdminsPins(t *testing.T) {
 	if u, _ := h.srv.Store.HubUserByID(ghAdmin.ID); u == nil || u.Role != store.RoleAdmin || u.AddedBy != "deploy" {
 		t.Errorf("admin row = %+v", u)
 	}
-	cb, _ := h.signIn(t, fakeGHUser{ID: 999, Login: "verkyyi"})
+	cb, _ := h.signIn(t, fakeGHUser{ID: 999, Login: "ivan"})
 	if cb.StatusCode != http.StatusForbidden {
 		t.Errorf("impostor under a pinned admin name = %d; want 403", cb.StatusCode)
 	}
@@ -456,8 +456,8 @@ func TestGitHubSignIn_ResolveAdminsPins(t *testing.T) {
 // Only a session GitHub sign-in minted is a GitHub person: one signed with
 // the right key for another subject is refused.
 func TestGitHubSignIn_OtherSubjectCannotClaimGitHubPrincipal(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
-	forged := authz.SignRole("staff", "gh:100", "verkyyi", roleAdmin, h.srv.GitHub.sessionKey(), time.Now(), time.Hour)
+	h := newGitHubHarness(t, "ivan")
+	forged := authz.SignRole("staff", "gh:100", "ivan", roleAdmin, h.srv.GitHub.sessionKey(), time.Now(), time.Hour)
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/me", nil)
 	req.Header.Set("Accept", "application/json")
 	req.AddCookie(&http.Cookie{Name: authz.CookieName, Value: forged})
