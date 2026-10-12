@@ -27,7 +27,8 @@
 #                   the same window
 #   E. reap       — past FLEET_VIEW_KEEP_SECS `prune` takes row and session; a
 #                   `--resume` then lands home (no cur= left); `--want` lands on
-#                   the worker it names
+#                   the worker it names — by its fleet_id or its key (#3463); home
+#                   is the orchestrator role's holder (@fleet_role_def) too
 #   G. language   — `--lang <locale>` (or the entry door's FLEET_CLIENT_LANG in the
 #                   environment) is recorded as the 看台's own @view_lang (issue
 #                   #3326); each 看台 its own; a resume re-records it (empty too);
@@ -296,6 +297,26 @@ waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev2):' 2>/dev/null
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev2):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
 eq "E: --want lands on the worker it names" "$W7" "$(vcur dev2)"
 tt kill-window -t "=$TL:thin4"
+# issue #3463: a worker named by its KEY (`<uuid>/issue-8` — what the list hands for
+# an issue-bound session, and so a peer window's @peer_cur its reconnect asks for)
+# lands on it, never on whatever the fleet session shows (a bare shell on the phone)
+tn select-window -t "=$RS:home"
+term thin4k "--thin --view dev4 --want $U/issue-8 --device $DEV --route lan --token t4k"
+waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev4):' 2>/dev/null" || fail "E: no 看台 for a key --want"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev4):' '#{window_id}' 2>/dev/null)\" = '$W8' ]"
+eq "E: --want <uuid>/<key> lands on that worker (#3463)" "$W8" "$(vcur dev4)"
+tt kill-window -t "=$TL:thin4k"
+# the orchestrator is whoever HOLDS the role (@fleet_role_def, issue #3114) — an old
+# seat's @fleet_role is never written again: home is that window, not ⌘N's road
+tn set-window-option -t "$OW" -u @fleet_role \; set-window-option -t "$OW" @fleet_role_def orchestrator
+: > "$WORK/first.log"
+termf thin4h "--thin --view dev5 --device $DEV --route lan --token t5k"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev5):' '#{window_id}' 2>/dev/null)\" = '$OW' ]"
+eq "E: no cur=, the role's holder is home (#3463)" "$OW" "$(vcur dev5)"
+sleep 1
+[ "$(grep -c 'dev5' "$WORK/first.log")" = 0 ] || fail "E: the holder is here, yet the first screen went to ⌘N's road"
+tt kill-window -t "=$TL:thin4h"
+tn set-window-option -t "$OW" -u @fleet_role_def \; set-window-option -t "$OW" @fleet_role orchestrator
 
 # ============================================================================
 # G. the client's language, per 看台 (issue #3326)
