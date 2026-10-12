@@ -384,7 +384,10 @@ pw_rig() {
   until_ok 10 eval '[ -n "$(pr_peer far1)" ]' || { WHY="no window onto far1"; pw_end; return 1; }
   P1=$(pr_peer far1)
   until_ok 10 pr_up_link far1 || { WHY="far1's link never came up: $(tail -2 "$PR_WORK/keeper.err")"; pw_end; return 1; }
-  pr_go "$PR_U_far1/fid-a" || { WHY="go to far1/a: $(tail -1 "$PR_WORK/m/home/conf/logs/view-switch.ndjson")"; pw_end; return 1; }
+  # a slow box: the far 看台 may still be attaching — go then says peer-wait (rc 3) and the
+  # window lands there by itself, which the next wait sees
+  pr_go "$PR_U_far1/fid-a" || { [ $? = 3 ] && tail -1 "$PR_WORK/m/home/conf/logs/view-switch.ndjson" | grep -q '"method":"peer-wait"'; } \
+    || { WHY="go to far1/a: $(tail -1 "$PR_WORK/m/home/conf/logs/view-switch.ndjson")"; pw_end; return 1; }
   until_ok 10 pw_shows "$P1" SCREEN-far1-a || { WHY="far1's window never drew far1/a"; pw_end; return 1; }
 }
 pw_end() { pr_down; rm -rf "$PR_WORK"; }

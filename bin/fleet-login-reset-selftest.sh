@@ -35,7 +35,7 @@ export FLEET_LOGIN_HOMES="$R/Users" FLEET_INSTALL_DAEMON_DIR="$R/Library/LaunchD
   FLEET_NODE_STATE="$R/var/db/fleet-node" FLEET_CREDSEP_ROOT_BASE="$R/var/db/fleet-cred" \
   FLEET_OFFBOARD_ARCHIVE_DIR="$R/Users/Shared/offboarded" \
   FLEET_LOGIN_RESET_REMOVE="$W/remove.sh" FLEET_LOGIN_RESET_NEW="$W/new.sh" \
-  RS_LOG="$W/calls.log" RS_PS="$W/ps" RS_CRON="$W/cron" RS_U="$U" RS_TPL="$R/System/Library/User Template/Non_localized"
+  RS_LOG="$W/calls.log" RS_PS="$W/ps" RS_CRON="$W/cron" RS_U="$U" RS_ADMIN_DEF="$((U + 1000))" RS_TPL="$R/System/Library/User Template/Non_localized"
 export HOME="$R/Users/admin" PATH="$W/shim:$PATH"
 H="$R/Users/$L" ARCH="$FLEET_OFFBOARD_ARCHIVE_DIR"
 S="$BIN/fleet-login-reset.sh"
@@ -44,7 +44,7 @@ mkdir -p "$W/shim"
 cat > "$W/shim/id" <<'EOF'
 #!/bin/sh
 case "$*" in
-  -u) echo "${RS_ADMIN_UID:-501}" ;;
+  -u) echo "${RS_ADMIN_UID:-$RS_ADMIN_DEF}" ;;
   -un) echo admin1 ;;
   "-u fleetu7") echo "$RS_U" ;;
   "-u boss") echo 777 ;;

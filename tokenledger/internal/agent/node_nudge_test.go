@@ -208,8 +208,12 @@ func TestNudgeDebouncesAndRateLimits(t *testing.T) {
 	k.mu.Lock()
 	ats := append([]time.Time(nil), k.beatsAt[before:]...)
 	k.mu.Unlock()
+	// ats are the HUB's receive times: a beat sent on time can still arrive late
+	// behind a -race runner's stall and close the gap to the next one (417 ms
+	// seen, claude-fleet#3703) — the count above is the cap; this only catches
+	// beats sent back to back.
 	for i := 1; i < len(ats); i++ {
-		if gap := ats[i].Sub(ats[i-1]); gap < nodeNudgeMinGap-20*time.Millisecond {
+		if gap := ats[i].Sub(ats[i-1]); gap < nodeNudgeMinGap/2 {
 			t.Fatalf("nudge beats %v apart, under the %v minimum gap", gap, nodeNudgeMinGap)
 		}
 	}

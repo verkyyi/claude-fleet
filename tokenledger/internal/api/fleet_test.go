@@ -841,8 +841,9 @@ func TestFleetSessionsLongPoll(t *testing.T) {
 		if got.status != 200 || got.tag == tag {
 			t.Fatalf("after a heartbeat: %d ETag=%q, want 200 with a new validator", got.status, got.tag)
 		}
-		if d := got.at.Sub(fired); fired.Before(t0) || d > 50*time.Millisecond {
-			t.Fatalf("answered %v after the heartbeat was recorded, want ≤ 50 ms", d)
+		// well under the 5 s recheck; 50 ms was missed by 0.1 ms on a -race Postgres runner (claude-fleet#3703)
+		if d := got.at.Sub(fired); fired.Before(t0) || d > 500*time.Millisecond {
+			t.Fatalf("answered %v after the heartbeat was recorded, want ≤ 500 ms", d)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("held request not answered within 3 s of a heartbeat")

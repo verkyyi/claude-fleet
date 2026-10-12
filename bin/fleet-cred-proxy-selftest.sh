@@ -401,8 +401,14 @@ import json, sys
 es = [json.loads(l) for l in open(sys.argv[1])]
 wa, wb = sys.argv[2], sys.argv[3]
 def one(w, p):
+    # the proxy may flush a session's answers in more than one report: sum its entries
     m = [e for e in es if e.get("worker_id", "") == w and e["provider"] == p]
-    return m[0] if len(m) == 1 else None
+    if not m or len({(e["account"], e["model"], "worker_id" in e) for e in m}) != 1:
+        return None
+    s = dict(m[0])
+    for k in ("requests", "in", "cache_write", "cache_read", "out", "tokens"):
+        s[k] = sum(e[k] for e in m)
+    return s
 a, b, n = one(wa, "claude"), one(wb, "codex"), one("", "claude")
 bad = []
 if not a or (a["account"], a["model"], a["requests"], a["in"], a["cache_write"], a["cache_read"], a["out"], a["tokens"]) != ("a1", "m-claude", 2, 200, 0, 18000, 100, 300):

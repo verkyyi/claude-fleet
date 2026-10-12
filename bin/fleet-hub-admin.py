@@ -527,7 +527,8 @@ def main(argv):
                     nargs="?", default="list")
     ac.add_argument("principal", nargs="?")
     ac.add_argument("to", nargs="?", help="rekey: the new id · relogin / rename: the machine")
-    ac.add_argument("login", nargs="?", help="relogin: the new login")
+    # its own dest: sharing --login's, Python ≥ 3.12 sets the empty positional over the flag
+    ac.add_argument("newlogin", metavar="login", nargs="?", help="relogin: the new login")
     ac.add_argument("--host", help="forget: only the record on this machine · assign / remove: the machine")
     ac.add_argument("--login", dest="login", help="assign: the login they must have (checked, never set)")
     ac.add_argument("--own-name", dest="own_name", action="store_true",
@@ -544,6 +545,8 @@ def main(argv):
     dt.add_argument("--hours", type=float, help="how long it is good for (default 24, at most 72)")
     dt.add_argument("--list", action="store_true", help="every ticket of the last 7 days")
     a = ap.parse_args(argv)
+    if getattr(a, "newlogin", None) and not getattr(a, "login", None):
+        a.login = a.newlogin
     if a.cmd in (None, "settings"):
         settings_list(a)
     elif a.cmd == "get":
