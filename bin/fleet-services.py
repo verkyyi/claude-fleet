@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parent))
 import fleet_iso  # noqa: E402 — the one ISO reader (issue #2024)
 
 FAILED = ("down", "failed", "invalid", "no_login")
-STATE_SAY = {"running": "运行中", "stopped": "已停", "down": "已退出·待重启", "failed": "失败",
+STATE_SAY = {"running": "运行中", "stopped": "已停", "idle": "空闲·打开再起", "down": "已退出·待重启", "failed": "失败",
              "invalid": "条目无效", "no_login": "登录不存在", "unknown": "未知",
              "scheduled": "待运行", "retrying": "重试中", "ok": "上次成功"}   # the last three: a task's (#2529)
 KIND_SAY = {"service": "常驻", "task": "定时"}

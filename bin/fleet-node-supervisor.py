@@ -1303,6 +1303,20 @@ SVC_ENV_DROP = ("HOME", "USER", "LOGNAME", "FLEET_SERVICE", "FLEET_NODE_ACCOUNT"
                 "FLEET_TASK_WINDOW", "FLEET_TASK_DONE_FILE", "FLEET_TASK_TIMEOUT", "FLEET_TASK_IDLE",
                 "FLEET_TASK_FLEET", "FLEET_TASK_ATTEMPT", "FLEET_TASK_SLOT", "FLEET_TASK_BARK_CRED")
 SVC_LINE_MAX = 200
+# A service that exits with SVC_IDLE_RC is done for now, not dead (issue #3647):
+# the daemon does not start it again until its entry changes — `service start` /
+# `service ensure` rewrite it — and `ls` / the beat say `idle`, never `down`.
+# (A supervisor restart that adopted the live process cannot see its rc: that one
+# is started again and goes idle again on its own clock.)
+SVC_IDLE_RC = 75
+# The services the node may register by NAME alone (issue #3647, EPIC #3642 D1):
+# `service ensure --login L --name N` builds the entry from the login's home —
+# never an argv from the hub — then starts it and waits for it to answer.
+SVC_ON_DEMAND = {
+    "webchat": {"exec": ["{home}/.claude/fleet/bin/fleet-webchat.sh", "serve"],
+                "paths": ["{home}/.config/claude-fleet/webchat"],
+                "socket": "{home}/.config/claude-fleet/webchat/chat.sock"},
+}
 
 
 def service_dir(paths, login):
@@ -1466,6 +1480,8 @@ def services_summary(paths, state, tail=False):
             row["status"] = "no such login"
         elif pid_alive(cs.get("pid")):
             row.update(status="running", pid=cs["pid"])
+        elif cs.get("idle"):
+            row["status"] = "idle"
         else:
             st = cs.get("status")
             row["status"] = st if st and st not in ("supervised", "stopped") else "down"
@@ -2057,6 +2073,11 @@ class Supervisor(object):
                     continue
                 del self.procs[name]
                 self.died(name, cs, rc, t)
+            if cs.get("idle"):
+                if c.get("reload") and cs["idle"] == reload_sig(c["reload"]):
+                    continue
+                cs.pop("idle", None)
+                self.dirty = True
             if t < (cs.get("next_start") or 0):
                 continue
             self.start_child(c, cs, t)
@@ -2065,6 +2086,13 @@ class Supervisor(object):
         up = t - (cs.get("started") or t)
         fails = 0 if up >= self.backoff_reset else (cs.get("fails") or 0) + 1
         delay = 0 if fails == 0 else min(self.backoff_max, 2 ** (fails - 1))
+        if name.startswith("svc:") and rc == SVC_IDLE_RC:
+            # idle (#3647): kept off until its entry changes (the sig it started on)
+            cs.update(pid=None, last_exit=t, last_rc=rc, fails=0, next_start=None,
+                      idle=cs.get("reload_sig") or "-")
+            self.dirty = True
+            self.log("child %s went idle after %ds; started again when its entry changes" % (name, up))
+            return
         cs.update(pid=None, last_exit=t, last_rc=rc, fails=fails, next_start=t + delay,
                   restarts=(cs.get("restarts") or 0) + 1)
         self.dirty = True
@@ -6357,6 +6385,7 @@ SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N
                  "       fleet-node-supervisor.py service rm|stop|start|restart|run --login L --name N\n"
                  "       fleet-node-supervisor.py service schedule --login L --name N (--at HH:MM | --cron '…') [--tz Z]\n"
                  "       fleet-node-supervisor.py service move --login L --name N --to L2\n"
+                 "       fleet-node-supervisor.py service ensure --login L --name webchat [--wait TRIES]\n"
                  "       fleet-node-supervisor.py service cred set|rm --login L --name C   (the value on stdin)\n"
                  "       fleet-node-supervisor.py service ls [--login L] [--kind service|task] [--json]\n"
                  "       fleet-node-supervisor.py service logs --login L --name N [-n LINES]")
@@ -6479,6 +6508,18 @@ def service_cli(paths, rest):
         os.rename(tmp, f)
         print("stored credential %s of %s (the value is never printed or logged)" % (name, login))
         return 0
+    if sub == "ensure":
+        if not login or not name:
+            print(SERVICE_USAGE, file=sys.stderr)
+            return 2
+        try:
+            tries = int(one("--wait") or 0)
+        except ValueError:
+            tries = -1
+        if not 0 <= tries <= 10:
+            print("fleet-node-supervisor: --wait takes 0..10 tries", file=sys.stderr)
+            return 2
+        return service_ensure(paths, login, name, tries)
     if sub == "move":
         if not login or not name or not one("--to"):
             print(SERVICE_USAGE, file=sys.stderr)
@@ -6610,6 +6651,88 @@ def service_cli(paths, rest):
         print("note: credential %s not stored yet — it waits until `fleet service cred set` has it"
               % ", ".join(missing))
     return 0
+
+
+# --------------------------------------------------------------- service ensure -
+# On demand (issue #3647, EPIC #3642 D1): the node opens a person's chat with
+# `service ensure --login L --name webchat --wait 3` — a fixed argv, the login the
+# lane's own. Not registered ⇒ the entry is built from SVC_ON_DEMAND and the
+# login's home; stopped or idle ⇒ enabled again (a rewrite: the daemon starts it);
+# running ⇒ untouched. --wait N then waits for its socket to answer /healthz,
+# N tries of FLEET_NODE_ENSURE_SECS (15) each, the entry rewritten (a restart)
+# between tries: rc 0 `ready`, rc 1 `not ready`.
+def _sock_healthy(sock, timeout=3):
+    import socket as _socket
+    try:
+        c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        c.settimeout(timeout)
+        c.connect(sock)
+        c.sendall(b"GET /healthz HTTP/1.0\r\nHost: webchat\r\n\r\n")
+        head = c.recv(64)
+        c.close()
+        return head.split(b" ")[1:2] == [b"200"]
+    except (OSError, IndexError):
+        return False
+
+
+def service_ensure(paths, login, name, tries):
+    tpl = SVC_ON_DEMAND.get(name)
+    if tpl is None:
+        print("fleet-node-supervisor: %s is no on-demand service (%s)" % (name, ", ".join(sorted(SVC_ON_DEMAND))),
+              file=sys.stderr)
+        return 2
+    if not _svc_root("ensure"):
+        return 1
+    ident = _svc_ident(login)
+    if ident is None:
+        return 1
+    home = ident[2]
+    fill_home = lambda x: x.replace("{home}", home)
+    d = service_dir(paths, login)
+    f = os.path.join(d, name + ".json")
+    svc = read_json(f, None) if os.path.exists(f) else None
+    if svc is None:
+        svc = {"name": name, "login": login, "kind": "service", "exec": [fill_home(x) for x in tpl["exec"]],
+               "schedule": None, "retries": None, "env": {}, "env_keys": [], "creds": [],
+               "paths": [fill_home(x) for x in tpl["paths"]], "state": "enabled", "added": now(), "changed": now()}
+        why = service_check(svc, login, name)
+        if why:
+            print("fleet-node-supervisor: %s" % why, file=sys.stderr)
+            return 1
+        _svc_mkdir(os.path.dirname(d))
+        _svc_mkdir(d)
+        write_json(f, svc, 0o600)
+        said = "registered"
+    else:
+        why = service_check(svc, login, name)
+        if why:
+            print("fleet-node-supervisor: %s/%s is not a valid entry (%s) — fix or rm it" % (login, name, why),
+                  file=sys.stderr)
+            return 1
+        key = "svc:%s/%s" % (login, name)
+        cs = (read_json(paths.state_file, {}).get("children") or {}).get(key) or {}
+        if svc.get("state", "enabled") != "enabled" or (cs.get("idle") and not pid_alive(cs.get("pid"))):
+            write_json(f, dict(svc, state="enabled", changed=now()), 0o600)
+            said = "started"
+        else:
+            said = "running"
+    sock = fill_home(tpl["socket"])
+    if tries == 0:
+        print("%s/%s %s" % (login, name, said))
+        return 0
+    per = env_num("FLEET_NODE_ENSURE_SECS", 15)
+    for i in range(tries):
+        end = now() + per
+        while now() < end:
+            if _sock_healthy(sock):
+                print("%s/%s %s · ready %s" % (login, name, said, sock))
+                return 0
+            time.sleep(0.2)
+        if i + 1 < tries:
+            svc = read_json(f, None) or svc
+            write_json(f, dict(svc, state="enabled", changed=now()), 0o600)
+    print("%s/%s %s · not ready after %d tries (%s)" % (login, name, said, tries, sock), file=sys.stderr)
+    return 1
 
 
 # --------------------------------------------------------------- service move ---

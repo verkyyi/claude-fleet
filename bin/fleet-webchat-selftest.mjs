@@ -26,12 +26,22 @@
 //      {t:"error", code:"budget", until}, never the raw API error as the assistant's
 //      words; /api/conversation says blocked until a turn goes through
 //      (BREAK-IT chat-budget-bypass)
-//   --only=socket|budget|local (comma list) runs those parts only — the drills' road.
+//   J  the home moved (issue #3647, EPIC #3642 C5): a conversation under login A, the
+//      service stopped and its state dir carried to login B's home the way
+//      `fleet service move webchat --to B` does (paths[]; ~/.claude stays behind):
+//      under B it is the same conversation — same session, its history, the next
+//      turn resumes it, the transcript back under B's projects dir with B's cwd —
+//      and nothing of the service is left under A (BREAK-IT chat-home-moved)
+//   K  idle (C5): with FLEET_WEBCHAT_IDLE_SECS it stays while a page holds a
+//      connection, exits 75 (the daemon's idle code) once nothing is open, its
+//      socket gone; started again it is the same conversation
+//   --only=socket|budget|home|idle|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, chmodSync, unlinkSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, chmodSync, unlinkSync, mkdirSync,
+  renameSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
@@ -43,12 +53,12 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,home,idle,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
 process.on("exit", () => { try { server?.kill("SIGKILL"); } catch { /* gone */ } rmSync(T, { recursive: true, force: true }); });
-setTimeout(() => { console.log("FAIL timed out"); process.exit(1); }, 60000).unref();
+setTimeout(() => { console.log("FAIL timed out"); process.exit(1); }, 90000).unref();
 const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) fails++; };
 
 // ---- the stub credential proxy: what reaches it is the pool's usage record ----
@@ -84,7 +94,7 @@ export async function* query({ prompt, options }) {
   writeFileSync(${JSON.stringify(ENVLOG)}, JSON.stringify({ base: env.ANTHROPIC_BASE_URL, token: env.CLAUDE_CODE_OAUTH_TOKEN,
     tmux: env.TMUX || "", resume: options.resume || "", model: options.model }));
   await fetch(env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", headers: { authorization: "Bearer " + env.CLAUDE_CODE_OAUTH_TOKEN } });
-  const dir = join(${JSON.stringify(CFG)}, "projects", realpathSync(options.cwd).replace(/[^A-Za-z0-9]/g, "-"));
+  const dir = join(env.CLAUDE_CONFIG_DIR || join(env.HOME, ".claude"), "projects", realpathSync(options.cwd).replace(/[^A-Za-z0-9]/g, "-"));
   mkdirSync(dir, { recursive: true });
   const tr = join(dir, SID + ".jsonl");
   appendFileSync(tr, JSON.stringify({ type: "user", message: { role: "user", content: prompt } }) + "\\n");
@@ -125,21 +135,22 @@ function start() {
 function stop() { return new Promise((r) => { if (!server || server.exitCode !== null) return r(); server.removeAllListeners("exit"); server.on("exit", r); server.kill("SIGTERM"); }); }
 
 // ---- H + I: the socket mode ---------------------------------------------------------
-const SSTATE = join(T, "sstate");
-const SOCK = join(SSTATE, "chat.sock");
+let SSTATE = join(T, "sstate");
+let SOCK = join(SSTATE, "chat.sock");
 let sserver = null;
 process.on("exit", () => { try { sserver?.kill("SIGKILL"); } catch { /* gone */ } });
 function sstart(args = ["--socket"], extra = {}) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, FLEET_WEBCHAT_STATE: SSTATE, FLEET_WEBCHAT_SDK: sdk, FLEET_WEBCHAT_SESSION_CRED: credSh,
-      FLEET_WEBCHAT_CWD: T, CLAUDE_CONFIG_DIR: CFG, FLEET_WEBCHAT_PORT: "0", ...extra };
+      FLEET_WEBCHAT_CWD: T, CLAUDE_CONFIG_DIR: CFG, FLEET_WEBCHAT_PORT: "0", FLEET_WEBCHAT_IDLE_SECS: "0", ...extra };
     delete env.FLEET_WEBCHAT_LOCAL;
+    for (const k of Object.keys(extra)) if (extra[k] === undefined) delete env[k];
     const p = spawn(process.execPath, [APP, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "";
     p.stdout.on("data", (d) => { out += d; if (/listening on/.test(out)) resolve({ p, out }); });
     p.stderr.on("data", (d) => { err += d; });
     p.on("exit", (c) => resolve({ p, code: c, out, err }));
-    setTimeout(() => reject(new Error("socket server did not start")), 10000);
+    setTimeout(() => reject(new Error("socket server did not start")), 10000).unref();
   });
 }
 function sstop(p) { return new Promise((r) => { if (!p || p.exitCode !== null) return r(); p.removeAllListeners("exit"); p.on("exit", r); p.kill("SIGTERM"); }); }
@@ -237,6 +248,68 @@ if (part("budget")) {
   const log = existsSync(join(SSTATE, "server.log")) ? readFileSync(join(SSTATE, "server.log"), "utf8") : "";
   ok(/"ev":"budget"/.test(log) && /"person":"alice@example.com"/.test(log), "I the log says budget, and whose (X-Fleet-Person, for the log only)");
   ok(!log.includes(SECRET), "I the credential is not in the socket server's log");
+}
+// ---- J: the home moved ------------------------------------------------------------
+// short paths: a unix socket path is ≤ 104 bytes, and /tmp keeps it there
+const HT = mkdtempSync("/tmp/fwh-");
+process.on("exit", () => rmSync(HT, { recursive: true, force: true }));
+const homeOf = (h) => join(HT, h), stateOf = (h) => join(HT, h, ".config", "claude-fleet", "webchat");
+const asHome = (h) => ({ HOME: homeOf(h), FLEET_WEBCHAT_CWD: undefined, CLAUDE_CONFIG_DIR: undefined });
+const mangle = (p) => realpathSync(p).replace(/[^A-Za-z0-9]/g, "-");
+if (part("home")) {
+  for (const h of ["a", "b"]) mkdirSync(homeOf(h), { recursive: true });
+  SSTATE = stateOf("a"); SOCK = join(SSTATE, "chat.sock");
+  const a = (await sstart(["--socket"], asHome("a"))).p;
+  const t1 = await sturn("记住青蛙");
+  ok(t1.lines.at(-1)?.t === "done", "J a turn under login A");
+  const ca = JSON.parse((await sreq("/api/conversation")).body);
+  ok(ca.session === SID && ca.cwd === homeOf("a"), `J the conversation runs in A's home (${ca.cwd})`);
+  ok(existsSync(join(SSTATE, "transcripts", SID + ".jsonl")), "J its transcript is copied into the state dir (what service move carries)");
+  // fleet service move webchat --to b: stopped first, then paths[] rehomed; ~/.claude stays with A
+  await sstop(a);
+  ok(a.exitCode === 0 && !existsSync(SOCK), "J stopped under A: exit 0, its socket gone");
+  mkdirSync(dirname(stateOf("b")), { recursive: true });
+  renameSync(stateOf("a"), stateOf("b"));
+  SSTATE = stateOf("b"); SOCK = join(SSTATE, "chat.sock");
+  const b = (await sstart(["--socket"], asHome("b"))).p;
+  const cb = JSON.parse((await sreq("/api/conversation")).body);
+  ok(cb.session === SID && cb.cwd === homeOf("b"), `J under B: the same session, its cwd B's home (${cb.session} ${cb.cwd})`);
+  ok(cb.items.some((i) => i.t === "user" && i.text === "记住青蛙"), "J under B: the history is on the page");
+  const trB = join(homeOf("b"), ".claude", "projects", mangle(homeOf("b")), SID + ".jsonl");
+  ok(existsSync(trB) && (statSync(trB).mode & 0o777) === 0o600, "J the transcript is back under B's projects dir (0600) — claude --resume finds it there");
+  const t2 = await sturn("还记得吗");
+  ok(t2.lines.at(-1)?.t === "done" && JSON.parse(readFileSync(ENVLOG, "utf8")).resume === SID, "J the next turn under B resumes the same session");
+  ok(!existsSync(stateOf("a")) && !existsSync(join(stateOf("a"), "chat.sock")), "J nothing of the service is left under A (no state dir, no socket)");
+  ok(/"ev":"home_moved"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "J the log says home_moved");
+  await sstop(b);
+  // the CLI's two roads go through `fleet service` (its root half: the daemon's ensure / move)
+  const svcLog = join(HT, "svc.log"), svcSh = join(HT, "svc.sh");
+  writeFileSync(svcSh, `#!/bin/bash\necho "$*" >>${JSON.stringify(svcLog)}\n`, { mode: 0o755 });
+  const wc = (...a) => spawnSync("bash", [join(BIN, "fleet-webchat.sh"), ...a], { encoding: "utf8",
+    env: { ...process.env, HOME: homeOf("b"), FLEET_CONF_DIR: join(HT, "nowhere"), FLEET_WEBCHAT_SERVICE: svcSh, FLEET_SERVICE_LOGIN: "bee" } });
+  wc("ensure"); wc("move", "--to", "cee");
+  ok(wc("move").status === 2, "J move without --to <login> is a usage error");
+  ok(readFileSync(svcLog, "utf8") === "__root ensure --login bee --name webchat --wait 3\nmove webchat --to cee\n",
+    `J fleet-webchat.sh ensure / move: the daemon's service ensure / fleet service move (${readFileSync(svcLog, "utf8").trim()})`);
+}
+// ---- K: idle -------------------------------------------------------------------------
+if (part("idle")) {
+  mkdirSync(homeOf("k"), { recursive: true });
+  SSTATE = stateOf("k"); SOCK = join(SSTATE, "chat.sock");
+  const k = (await sstart(["--socket"], { ...asHome("k"), FLEET_WEBCHAT_IDLE_SECS: "1" })).p;
+  const gone = new Promise((r) => k.on("exit", (c) => r(c)));
+  ok((await sturn("记住青蛙")).lines.at(-1)?.t === "done", "K a turn");
+  const page = net.connect(SOCK);                          // a page that is watching holds a connection
+  await new Promise((r) => page.on("connect", r));
+  await new Promise((r) => setTimeout(r, 2500));
+  ok(k.exitCode === null && existsSync(SOCK), "K a page connected: still up past the idle time");
+  page.destroy();
+  const code = await Promise.race([gone, new Promise((r) => setTimeout(() => r("timeout"), 5000))]);
+  ok(code === 75, `K nothing open: it exits 75, the daemon's idle code (${code})`);
+  ok(!existsSync(SOCK), "K its socket is gone");
+  const k2 = (await sstart(["--socket"], asHome("k"))).p;
+  ok(JSON.parse((await sreq("/api/conversation")).body).session === SID, "K started again: the same conversation");
+  await sstop(k2);
 }
 if (!part("local")) {
   proxy.close();

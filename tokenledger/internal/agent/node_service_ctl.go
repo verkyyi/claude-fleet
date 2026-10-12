@@ -28,17 +28,27 @@ import (
 // It answers at once, final: succeeded or failed, never accepted.
 
 // serviceCtlTimeout bounds one supervisor call: it rewrites one JSON file.
-const serviceCtlTimeout = 30 * time.Second
+// An ensure also waits for the service to answer (3 tries of 15 s).
+const (
+	serviceCtlTimeout    = 30 * time.Second
+	serviceEnsureTimeout = 75 * time.Second
+)
+
+// svcOnDemand is what `ensure` may name (claude-fleet#3647, EPIC #3642 D1): the
+// supervisor builds the entry from the login's home (SVC_ON_DEMAND), so the
+// hub hands a name, never an argv.
+var svcOnDemand = map[string]bool{"webchat": true}
 
 // serviceCtlPython runs the supervisor (a seam for the tests).
 var serviceCtlPython = "/usr/bin/python3"
 
 var (
-	svcNameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,47}$`)
-	svcAtRE    = regexp.MustCompile(`^([01]?[0-9]|2[0-3]):[0-5][0-9]$`)
-	svcCronRE  = regexp.MustCompile(`^[0-9*,/-]+( [0-9*,/-]+){4}$`)
-	svcTZRE    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+/-]{0,63}$`)
-	svcVerbOf  = map[string]string{"start": "start", "stop": "stop", "restart": "restart", "run_now": "run", "set_schedule": "schedule"}
+	svcNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,47}$`)
+	svcAtRE   = regexp.MustCompile(`^([01]?[0-9]|2[0-3]):[0-5][0-9]$`)
+	svcCronRE = regexp.MustCompile(`^[0-9*,/-]+( [0-9*,/-]+){4}$`)
+	svcTZRE   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+/-]{0,63}$`)
+	svcVerbOf = map[string]string{"start": "start", "stop": "stop", "restart": "restart", "run_now": "run", "set_schedule": "schedule",
+		"ensure": "ensure"}
 	errSvcArgs = errors.New("bad service_control params")
 )
 
@@ -55,9 +65,16 @@ func serviceCtlArgv(script, login string, params map[string]any) ([]string, erro
 	}
 	verb, ok := svcVerbOf[action]
 	if !ok {
-		return nil, fmt.Errorf("%w: action must be start, stop, restart, run_now or set_schedule", errSvcArgs)
+		return nil, fmt.Errorf("%w: action must be start, stop, restart, run_now, set_schedule or ensure", errSvcArgs)
 	}
 	argv := []string{"-I", script, "service", verb, "--login", login, "--name", name}
+	if action == "ensure" {
+		// register it when missing, start it when stopped or idle, wait for it to answer
+		if !svcOnDemand[name] {
+			return nil, fmt.Errorf("%w: ensure is only for an on-demand service (webchat)", errSvcArgs)
+		}
+		return append(argv, "--wait", "3"), nil
+	}
 	if action != "set_schedule" {
 		return argv, nil
 	}
@@ -142,7 +159,11 @@ func (a *Agent) serviceControlWrite(ctx context.Context, conn nodeLink, m contro
 // prepCmd, which would drop it to the login the register refuses — and turns
 // its exit into the operation's final status and result.
 func runServiceCtl(ctx context.Context, argv []string) (string, map[string]any) {
-	cctx, cancel := context.WithTimeout(ctx, serviceCtlTimeout)
+	limit := serviceCtlTimeout
+	if argv[3] == "ensure" {
+		limit = serviceEnsureTimeout
+	}
+	cctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, serviceCtlPython, argv...)
 	cmd.Dir = "/"
