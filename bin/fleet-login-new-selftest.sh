@@ -194,7 +194,7 @@ export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN"
        FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
 mkdir -p "$WORK/credsep/daemons"
-for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24haowan qen qix rex; do
+for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24haowan qen qix; do
   printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"
 done > "$FLEET_CREDSEP_PW"
 # the admin's HOME (the password file lands there) + the daemons dir (#1192)
@@ -1001,6 +1001,7 @@ not_contains "Q malformed op id: nothing ran" "$CALLS" "addUser"
 [ -e "$HOME/lou-onboard/op" ] && fail "Q a run with no op id wrote a mark"
 
 # --- R. --recycle (issue #3505): a washed login, kept — new password, no addUser --
+printf 'rex:%s:%s:%s\n' "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/rex" >> "$FLEET_CREDSEP_PW"
 RH="$FLEET_LOGIN_HOMES/rex"; mkdir -p "$RH"; chmod 000 "$RH"
 : > "$LOG"; : > "$DLOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 unlock_homes
