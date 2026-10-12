@@ -2176,6 +2176,10 @@ class Supervisor(object):
         b = entry_converge(self.p)
         if b is None:
             return
+        if not getattr(self, "rev_thread", None):
+            # the door's revocation list (issue #3560): only once the entry is on
+            self.rev_thread = threading.Thread(target=self.follow_revocations, name="revocations", daemon=True)
+            self.rev_thread.start()
         if b.get("healed") and b["healed"].get("at") == b.get("checked_at"):
             self.log("entry: keys file(s) of %s were changed outside the hub's list — put back"
                      % ", ".join(b["healed"]["logins"]))
@@ -2300,7 +2304,6 @@ class Supervisor(object):
         wd_sweep = max(wd, env_num("FLEET_NODE_WATCHDOG_SWEEP_SECS", 900))
         if wd > 0:
             threading.Thread(target=self.watchdog, name="watchdog", daemon=True).start()
-        threading.Thread(target=self.follow_revocations, name="revocations", daemon=True).start()
         while not self.stop:
             if wd > 0:
                 faulthandler.dump_traceback_later(wd_sweep + 60, exit=True, file=sys.stderr)
