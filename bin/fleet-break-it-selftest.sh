@@ -5250,7 +5250,9 @@ drill_heartbeat_sys_blocked() {
   t0=$(now)
   grep -q 'fillSys(&hb, processSys)' "$ag/node.go" \
     || { WHY="nodeHeartbeat no longer takes the sampler's load"; return 1; }
-  grep -q 'a.fleetRd.get(ctx, 0, fleetBeatBudget' "$ag/node.go" \
+  # the max age is 0, or fleetReuse() — the last read kept only while hub-nudge
+  # has not moved (issue #3544); the budget is what this guards
+  grep -qE 'a\.fleetRd\.get\(ctx, (0|a\.fleetReuse\(\)), fleetBeatBudget' "$ag/node.go" \
     || { WHY="nodeHeartbeat waits on the fleet read with no budget again"; return 1; }
   if grep -q 'readSysInfo()' "$ag/node.go" "$ag/node_machine.go"; then
     WHY="a beat reads the kernel inline again instead of the sampler"; return 1
