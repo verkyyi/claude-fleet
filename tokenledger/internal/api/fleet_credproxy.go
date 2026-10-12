@@ -66,6 +66,10 @@ type CredProxyResolve struct {
 	AccessToken string     `json:"access_token,omitempty"`
 	AccountID   string     `json:"account_id,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	// SessionPub is the key fcp-h2 passes are signed with (claude-fleet#3698):
+	// with it the proxy refuses a forged or expired pass without asking.
+	// Empty when the hub mints fcp-h1 only.
+	SessionPub string `json:"session_pub,omitempty"`
 }
 
 // handleCredProxyResolve answers the cluster credential proxy.
@@ -90,7 +94,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := readOptionalJSON(r, &req); err != nil || req.Cred == "" || !hasString(sessionCredProviders, req.Provider) {
 		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument",
-			"body must be {\"cred\": \"fcp-h1.…\", \"provider\": \"claude|codex\"}")
+			"body must be {\"cred\": \"fcp-h1.…|fcp-h2.…\", \"provider\": \"claude|codex\"}")
 		return
 	}
 	if len(s.SessionCredKey) == 0 {
@@ -103,7 +107,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	now := time.Now()
 	v, c := s.verifySessionCred(req.Cred, "", req.Provider, false, now)
 	out := CredProxyResolve{Valid: v.Valid, Reason: v.Reason, ID: v.ID, Principal: v.Principal,
-		WorkerID: v.WorkerID, Machine: v.Machine, Exp: v.Exp, Provider: req.Provider}
+		WorkerID: v.WorkerID, Machine: v.Machine, Exp: v.Exp, Provider: req.Provider, SessionPub: s.SessionPub()}
 	if !v.Valid {
 		writeJSON(w, http.StatusOK, out)
 		return

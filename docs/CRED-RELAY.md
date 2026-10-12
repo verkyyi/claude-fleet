@@ -103,7 +103,7 @@ prod 入口已开（`deploy/k8s/overlays/prod/deployment-env.yaml`）；回滚�
      `/github-oauth/login/oauth/access_token` 换 GitHub 登录令牌用（#3392）——`/github-oauth/` 只认它。
    - `frq1.…`：入口自己读额度的通行证，只开 `/anthropic/v1/messages`、`/chatgpt/wham/usage`，
      只在 `CCQUOTA_FLEET_HUB_QUOTA=relay` 时认（#2169，见上一节）。
-   - `fcp-h1.…`：入口签给不可信机器会话的通行证（C2）。中心代理（C6）出门时带它。
+   - `fcp-h1.…`：入口签给不可信机器会话的通行证（C2）。中心代理（C6）出门时带它。`fcp-h2.…` 是它可本地验签的一版（见下「会话通行证 fcp-h2」）。
      由 C2 的 `verifySessionCred` 核验，并且只放它覆盖的那家：`/anthropic/` 要 claude，
      `/chatgpt/`、`/openai-auth/` 要 codex；经 C2 的路由撤销即刻生效（不走下面的缓存）。
    - 不认：伪造的、被替换的、机器被标为不可信的、机器凭据被撤销的、放在 `Authorization` 里的。
@@ -211,6 +211,29 @@ openssl rand -base64 32    # 存进 Secret ccquota 的 relay-sign-key，重启�
 sudo install -m 0644 bin/fleet_ed25519.py /usr/local/lib/fleet-relay/fleet_ed25519.py   # 转发机，核验进程旁
 sudo install -m 0755 extras/cred-relay/fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
 sudo systemctl restart fleet-relay-check
+```
+
+### 会话通行证 fcp-h2：中转和中心代理也自己验签（issue #3698）
+
+fcp-h1 是 HMAC，钥匙只在入口，中转和中心代理只能每个请求回入口问。入口有中转签名钥匙时，节点问
+`POST /v1/fleet/session-cred {"kind":"fcp-h2", …}` 拿到的是
+
+    fcp-h2.<base64url claims>.<base64url Ed25519 签名>     claims 同 fcp-h1，v = 2
+
+用的是**同一把**中转签名钥匙（前缀在签名里，frl2 / fcp-h1 / fcp-h2 互相冒充不了），所以公钥就是名单的
+`relay_pub`，中心代理在 resolve 的回答里拿到同一把（`session_pub`，或开机给 `--session-pub` /
+`CCQUOTA_CREDPROXY_SESSION_PUB`）。
+
+- 中转核验进程：**名单开着**、有公钥时自己验签、看 exp、看这条路去的服务商在不在通行证的 providers 里
+  （`/github-oauth/` 永远不是会话的）、查名单（`fcp:<id>` 或机器 / 人范围），不问入口。没名单或没公钥 ⇒ 照旧问入口。
+- 中心代理：伪造、过期的当场 403，不问入口；好的照旧问 resolve 拿账号绑定和访问令牌（≤ 30 秒缓存）。
+- 入口 `/renew`、`/verify`、`/v1/relay/check`、resolve 两种都认；续签保持原来的种类。节点（`fleet-session-cred.sh`）
+  总是问 fcp-h2，没钥匙的入口、老入口照旧发 fcp-h1（# compat-1v）。没钥匙 ⇒ 一字不变。
+
+做完 frl2 + fcp-h2 后，中转访问日志里 `/v1/relay/check` 的调用应归零（C18 的判据）：
+
+```sh
+sudo grep -c 'GET /v1/relay/check' /var/log/caddy/access.log   # 换版后应只剩不带名单的老核验进程
 ```
 
 演练：docs/BREAK-IT.md `cred-leaked-from-session`。

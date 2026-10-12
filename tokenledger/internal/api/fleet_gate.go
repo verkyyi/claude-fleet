@@ -50,11 +50,12 @@ var (
 		// Every credential the hub hands a machine or a session. 0 = no
 		// expiry (lives until revoked). #3500 C19 (#3561) shortened them:
 		// with a relay signing key the relay pass is frl2, four hours.
-		relay := gateCred{"中转凭据 frl1", 0}
+		relay, sess := gateCred{"中转凭据 frl1", 0}, gateCred{"会话通行证 fcp-h1", SessionCredTTL}
 		if s != nil && len(s.RelaySignKey) > 0 {
 			relay = gateCred{"中转凭据 frl2", RelayPassTTL}
+			sess.name = "会话通行证 fcp-h2" // #3698: the same key signs it
 		}
-		return []gateCred{relay, {"会话通行证 fcp-h1", SessionCredTTL}}
+		return []gateCred{relay, sess}
 	}
 )
 

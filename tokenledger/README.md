@@ -1263,7 +1263,9 @@ trusted|untrusted`). No key = untrusted → `403 untrusted_node` + a deny audit
 row, checked after the principal and the revocation. Every machine with an
 active account when it shipped was marked trusted once
 (`fleet.node_trust_migrated`), so their leases are unchanged. A session on an
-untrusted machine borrows a revocable `fcp-h1.` session pass instead
+untrusted machine borrows a revocable `fcp-h1.` session pass instead — or,
+with the relay signing key and a node that asks, `fcp-h2.`, Ed25519-signed so
+the relay and the credential proxy verify it themselves (claude-fleet#3698) —
 (claude-fleet#1969, `/v1/fleet/session-cred` — issue / renew / verify / revoke;
 key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
 `CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/FLEET-HUB.md), which the

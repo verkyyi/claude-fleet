@@ -2,7 +2,7 @@
 // (claude-fleet#1973, EPIC #1967 C6).
 //
 // A session on an untrusted machine holds no subscription credential, only a
-// hub-signed session pass (fcp-h1., C2). Its machine's own proxy (C3) sends
+// hub-signed session pass (fcp-h1., C2; fcp-h2., which it verifies itself, #3698). Its machine's own proxy (C3) sends
 // its requests here, pass in Authorization; this proxy asks the hub what the
 // pass is worth — still valid? whose session? bound to which account? — and
 // gets the account's short-lived access token from the hub's vault lease. It
@@ -34,7 +34,9 @@ package credproxy
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -57,6 +59,13 @@ const (
 
 // PassPrefix marks a hub-issued session pass.
 const PassPrefix = "fcp-h1."
+
+// Pass2Prefix marks one this proxy verifies itself (claude-fleet#3698): an
+// Ed25519 signature by the hub's relay key over "fcp-h2.<claims>". A forged or
+// expired one is refused here, the hub not asked; a good one is still
+// resolved (its account binding and access token are the hub's), cached as
+// any pass.
+const Pass2Prefix = "fcp-h2."
 
 // ResolvePath is the hub route the proxy asks (api.CredProxyResolvePath).
 const ResolvePath = "/v1/fleet/credproxy/resolve"
@@ -87,6 +96,8 @@ type Resolution struct {
 	AccessToken string     `json:"access_token,omitempty"`
 	AccountID   string     `json:"account_id,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	// SessionPub is the key fcp-h2 is signed with (base64), when the hub has one.
+	SessionPub string `json:"session_pub,omitempty"`
 }
 
 // ErrHubUnavailable is a resolve the hub could not answer — the proxy rides
@@ -170,6 +181,10 @@ type Config struct {
 	// Audit receives one line per request (default: log.Print).
 	Audit func(line string)
 	Now   func() time.Time
+	// SessionPub verifies fcp-h2 here (CCQUOTA_CREDPROXY_SESSION_PUB). None
+	// given ⇒ learned from the hub's first answer that carries one; until then
+	// an fcp-h2 goes to the hub like any pass.
+	SessionPub ed25519.PublicKey
 }
 
 // Proxy is the handler.
@@ -178,6 +193,7 @@ type Proxy struct {
 
 	mu    sync.Mutex
 	cache map[string]*entry
+	pub   ed25519.PublicKey // fcp-h2's key, under mu
 }
 
 type entry struct {
@@ -228,7 +244,69 @@ func New(cfg Config) (*Proxy, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Proxy{cfg: cfg, cache: map[string]*entry{}}, nil
+	return &Proxy{cfg: cfg, cache: map[string]*entry{}, pub: cfg.SessionPub}, nil
+}
+
+// ParseSessionPub reads a base64 Ed25519 public key ("" = none).
+func ParseSessionPub(s string) (ed25519.PublicKey, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) == ed25519.PublicKeySize {
+			return ed25519.PublicKey(b), nil
+		}
+	}
+	return nil, errors.New("session pub must be a 32-byte Ed25519 public key, base64 encoded")
+}
+
+// learnPub keeps the hub's fcp-h2 key from an answer, when none is held.
+func (p *Proxy) learnPub(r Resolution) {
+	if r.SessionPub == "" {
+		return
+	}
+	k, err := ParseSessionPub(r.SessionPub)
+	if err != nil || k == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.pub == nil {
+		p.pub = k
+	}
+	p.mu.Unlock()
+}
+
+// checkPass2 is "" for an fcp-h2 that verifies here and has not run out, the
+// reason it is refused otherwise, or "-" when no key is known yet (ask the hub).
+func (p *Proxy) checkPass2(pass string, now time.Time) string {
+	p.mu.Lock()
+	pub := p.pub
+	p.mu.Unlock()
+	if len(pub) != ed25519.PublicKeySize {
+		return "-"
+	}
+	parts := strings.Split(pass, ".")
+	if len(parts) != 3 {
+		return "malformed"
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[2], "="))
+	if err != nil || !ed25519.Verify(pub, []byte(parts[0]+"."+parts[1]), sig) {
+		return "signature does not verify (not issued by this hub)"
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	var c struct {
+		V   int    `json:"v"`
+		ID  string `json:"id"`
+		Exp int64  `json:"exp"`
+	}
+	if err != nil || json.Unmarshal(raw, &c) != nil || c.V != 2 || c.ID == "" {
+		return "malformed claims"
+	}
+	if !time.Unix(c.Exp, 0).After(now) {
+		return "expired"
+	}
+	return ""
 }
 
 // Handler mounts the proxy routes and /healthz (which never asks the hub).
@@ -261,6 +339,7 @@ func (p *Proxy) resolve(ctx context.Context, pass, provider string) (res Resolut
 	}
 	r, err := p.cfg.Resolver.Resolve(ctx, pass, provider)
 	if err == nil {
+		p.learnPub(r)
 		e.res, e.at, e.ok = r, now, true
 		p.sweep(now)
 		return r, false, nil
@@ -330,10 +409,18 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	if pass == "" {
 		pass = strings.TrimSpace(r.Header.Get("X-Api-Key"))
 	}
-	if !strings.HasPrefix(pass, PassPrefix) {
+	if !strings.HasPrefix(pass, PassPrefix) && !strings.HasPrefix(pass, Pass2Prefix) {
 		a.status, a.why = refuse(w, provider, http.StatusForbidden, "permission_error",
-			"the cluster credential proxy takes a hub session pass (fcp-h1.) only")
+			"the cluster credential proxy takes a hub session pass (fcp-h1. / fcp-h2.) only")
 		return
+	}
+	if strings.HasPrefix(pass, Pass2Prefix) {
+		if why := p.checkPass2(pass, t0); why != "" && why != "-" {
+			// verified here: a forged or lapsed pass never reaches the hub
+			a.status, _ = refuse(w, provider, http.StatusForbidden, "permission_error", "session pass refused: "+why)
+			a.why = why
+			return
+		}
 	}
 	res, stale, err := p.resolve(r.Context(), pass, provider)
 	a.stale = stale

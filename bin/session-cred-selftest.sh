@@ -22,7 +22,8 @@
 #      real home; the request carries the account's real token + account id;
 #      a recorded mirror maps back to the real home on --codex-home
 #   E  central (an untrusted machine): an fcp-h1. pass from the hub (node token +
-#      the session's assertion), no account needed; revoke DELETEs the pass
+#      the session's assertion), no account needed; revoke DELETEs the pass; a hub
+#      with the relay key answers the node's ask with fcp-h2., which goes central too
 #   F  migrate_rebind on an isolated tmux server: the window's @fleet_id and pane
 #      pid unchanged, @cc_account + the proxy's binding moved; a central window and
 #      a --model move are left to the old road
@@ -83,8 +84,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/v1/fleet/session-cred" and self.command == "POST":
             if h.get("authorization") != "Bearer nodetok" or not h.get("x-fleet-worker", "").startswith("fwa1."):
                 return self.reply(401, {"error": "node token + assertion"})
-            prov = json.loads(body or b"{}").get("providers", [])
-            return self.reply(200, {"cred": "fcp-h1.PASS-%s.sig" % "-".join(prov), "id": "pass-1"})
+            req = json.loads(body or b"{}")
+            prov = req.get("providers", [])
+            # fcp-h2 only for a node that asks, and only once the hub has the key (#3698)
+            kind = "fcp-h2" if req.get("kind") == "fcp-h2" and os.path.exists(os.path.join(SB, "h2")) else "fcp-h1"
+            return self.reply(200, {"cred": "%s.PASS-%s.sig" % (kind, "-".join(prov)), "id": "pass-1"})
         if p.startswith("/v1/fleet/session-cred/") and self.command == "DELETE":
             return self.reply(200, {"revoked": True})
         if p.startswith("/direct-") or p.startswith("/central"):
@@ -251,6 +255,14 @@ check "E: scan — no real token in the session's environment" 0 "$(has_real)"
 bash "$BIN/fleet-session-cred.sh" rebind --sid sE --account a1 2>/dev/null; check "E: a central session is never rebound" 1 "$?"
 bash "$BIN/fleet-session-cred.sh" revoke --sid sE
 check "E: revoke DELETEs the pass on the hub" 1 "$(grep -c '^DELETE /v1/fleet/session-cred/pass-1$' "$SB/hits" | tr -d ' ')"
+: > "$SB/h2"
+run_claude e2 FLEET_CRED_SID=sE2 FLEET_WORKER_ASSERT=fwa1.test.sig
+OUT="$SB/out/e2"
+check "E: fcp-h2 — launch rc" 0 "$(cat "$OUT/rc")"
+check "E: fcp-h2 — the session holds the hub's fcp-h2 pass" "fcp-h2.PASS-claude.sig" "$(envv CLAUDE_CODE_OAUTH_TOKEN)"
+check "E: fcp-h2 — the request went central with it" "Bearer fcp-h2.PASS-claude.sig" "$(resp auth)"
+bash "$BIN/fleet-session-cred.sh" revoke --sid sE2
+rm -f "$SB/h2"
 echo trusted > "$SB/trust"; rm -f "$FLEET_CONF_DIR/node.env"
 bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>&1
 

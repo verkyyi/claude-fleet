@@ -31,6 +31,7 @@ import (
 //	--codex      CCQUOTA_CREDPROXY_CODEX_URL     (with --direct)
 //	--cache      CCQUOTA_CREDPROXY_CACHE      one hub answer's life (≤ 30s)
 //	--stale      CCQUOTA_CREDPROXY_STALE      how long to ride out a hub that cannot answer
+//	--session-pub CCQUOTA_CREDPROXY_SESSION_PUB fcp-h2's key (base64; default: the hub's answer)
 func runCredProxy(args []string) error {
 	fs := flag.NewFlagSet("credproxy", flag.ExitOnError)
 	env := func(k, d string) string {
@@ -55,7 +56,12 @@ func runCredProxy(args []string) error {
 	codex := fs.String("codex", env("CCQUOTA_CREDPROXY_CODEX_URL", ""), "Codex's API (with --direct)")
 	cache := fs.Duration("cache", envDur("CCQUOTA_CREDPROXY_CACHE", credproxy.MaxCacheTTL), "how long one hub answer is used (≤ 30s)")
 	stale := fs.Duration("stale", envDur("CCQUOTA_CREDPROXY_STALE", 15*time.Minute), "how long an answer outlives --cache while the hub cannot answer")
+	spub := fs.String("session-pub", env("CCQUOTA_CREDPROXY_SESSION_PUB", ""), "the key fcp-h2 passes are verified with (base64; default: learned from the hub)")
 	_ = fs.Parse(args)
+	pub, err := credproxy.ParseSessionPub(*spub)
+	if err != nil {
+		return fmt.Errorf("credproxy: --session-pub: %w", err)
+	}
 
 	tok, err := envOrFile("CCQUOTA_FLEET_CREDPROXY_TOKEN")
 	if err != nil {
@@ -76,6 +82,7 @@ func runCredProxy(args []string) error {
 		CacheTTL:     *cache,
 		StaleFor:     *stale,
 		Audit:        func(l string) { fmt.Fprintln(os.Stdout, l) },
+		SessionPub:   pub,
 	})
 	if err != nil {
 		return err

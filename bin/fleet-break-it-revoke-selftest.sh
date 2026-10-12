@@ -51,6 +51,8 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlsplit(self.path)
         if u.path == "/v1/relay/check":
+            with open(os.path.join(D, "hub-hits"), "a") as f:
+                f.write("check\n")
             allow = open(os.path.join(D, "allow")).read().split() if os.path.exists(os.path.join(D, "allow")) else []
             return self.out(200 if self.headers.get("X-Fleet-Relay", "") in allow else 403)
         if u.path not in ("/v1/relay/revocations", "/v1/node/revocations"):
@@ -261,6 +263,29 @@ c = json.loads(base64.urlsafe_b64decode(b + "=" * (-len(b) % 4))); c["login"] = 
 print("frl2." + base64.urlsafe_b64encode(json.dumps(c).encode()).decode().rstrip("=") + "." + s)' "$1" "$2"
 }
 
+# fcph2 <dir> <name> <iat offset s> <exp offset s> [providers] [key] — a signed
+# session pass (claude-fleet#3698) into <dir>/<name> (+ .id); key as frl2's
+fcph2() {
+  python3 -I - "$ROOT/bin/fleet_ed25519.py" "$@" <<'PY'
+import base64, importlib.util, json, os, sys, time
+spec = importlib.util.spec_from_file_location("ed", sys.argv[1]); ed = importlib.util.module_from_spec(spec); spec.loader.exec_module(ed)
+d, name, ia, ea = sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+prov = (sys.argv[6] if len(sys.argv) > 6 else "claude").split(",")
+key = sys.argv[7] if len(sys.argv) > 7 else "hub"
+sp = os.path.join(d, key + ".seed")
+if not os.path.exists(sp):
+    open(sp, "wb").write(os.urandom(32))
+seed = open(sp, "rb").read()
+now = int(time.time())
+c = {"v": 2, "id": "sc_" + os.urandom(8).hex(), "principal": "gh:7", "worker_id": "f/w", "machine": "host-a",
+     "providers": prov, "iat": now + ia, "exp": now + ea}
+body = "fcp-h2." + base64.urlsafe_b64encode(json.dumps(c).encode()).decode().rstrip("=")
+tok = body + "." + base64.urlsafe_b64encode(ed.sign(seed, body.encode())).decode().rstrip("=")
+open(os.path.join(d, name), "w").write(tok)
+open(os.path.join(d, name + ".id"), "w").write(c["id"])
+PY
+}
+
 drill_cred_leaked_from_session() {
   CAP=10   # the leaked pass refused once past its four hours / a forged one at once
   local d="$WORK/leak" code t0 hp pub
@@ -296,6 +321,25 @@ drill_cred_leaked_from_session() {
   rev_hub "$d" "$hp" || { WHY="the fake hub did not come back"; return 1; }
   until_ok 10 relay_is 403 "$(cat "$d/live")" || { WHY="a listed frl2 → $(relay_ask "$(cat "$d/live")")"; return 1; }
   ! grep -q 'frl2\.' "$d/check.log" || { WHY="the checker's log carries a pass"; return 1; }
+  # The session pass (fcp-h2, claude-fleet#3698): the same — verified by the
+  # relay itself with the list's key, for the provider its route goes to; the
+  # hub's /v1/relay/check is never asked about one
+  fcph2 "$d" sl -3600 10800 && fcph2 "$d" sold -18000 -1 && fcph2 "$d" sother -60 14340 claude rogue \
+    || { WHY="could not sign the test session passes"; return 1; }
+  local checks
+  checks=$(grep -c '^check$' "$d/hub-hits" 2>/dev/null || true)
+  code=$(relay_ask "$(cat "$d/sl")"); [ "$code" = 200 ] || { WHY="a live fcp-h2 → $code (the relay asked the hub instead of verifying it)"; return 1; }
+  code=$(relay_ask "$(cat "$d/sl")" /chatgpt/codex/responses); [ "$code" = 403 ] || { WHY="a claude-only fcp-h2 on /chatgpt/ → $code"; return 1; }
+  code=$(relay_ask "$(cat "$d/sold")"); [ "$code" = 403 ] || { WHY="an fcp-h2 past its exp → $code"; return 1; }
+  code=$(relay_ask "$(cat "$d/sother")"); [ "$code" = 403 ] || { WHY="an fcp-h2 signed by another key → $code"; return 1; }
+  [ "$(grep -c '^check$' "$d/hub-hits" 2>/dev/null || true)" = "$checks" ] \
+    || { WHY="an fcp-h2 reached the hub's /v1/relay/check"; return 1; }
+  rev_list "$d" 3 "{\"jti\":\"frl2:$(cat "$d/live.jti")\",\"exp\":$(exp_in 14400)}" \
+    "{\"jti\":\"fcp:$(cat "$d/sl.id")\",\"exp\":$(exp_in 14400)}"
+  python3 -c 'import json, sys; l = json.load(open(sys.argv[1])); l["relay_pub"] = sys.argv[2]; json.dump(l, open(sys.argv[1], "w"))' \
+    "$d/list.json" "$pub"
+  until_ok 10 relay_is 403 "$(cat "$d/sl")" || { WHY="a listed fcp-h2 → $(relay_ask "$(cat "$d/sl")")"; return 1; }
+  ! grep -q 'fcp-h2\.' "$d/check.log" || { WHY="the checker's log carries a session pass"; return 1; }
   # The machine's proxy renews its own pass only when it is needed — used with
   # < 20 % left, or at 80 % — never on a clock, and says why each time
   local why
@@ -334,7 +378,7 @@ print("renewal ok")
 PY
 )
   [ "$why" = "renewal ok" ] || { WHY="the proxy's renewal: $(printf '%s' "$why" | tail -3 | tr '\n' ' ')"; return 1; }
-  WHAT="会话里抄走的中转通行证（frl2）：活着时中转自己验签放行、不问入口；过了 4 小时 ${SECS}s 内被拒；改成别的登录或别的钥匙签的立刻 403；入口停着照样；吊销后立刻拒。代理只在用到时剩不到 20%、或到 80% 处请求续，日志写原因"
+  WHAT="会话里抄走的中转通行证（frl2）：活着时中转自己验签放行、不问入口；过了 4 小时 ${SECS}s 内被拒；改成别的登录或别的钥匙签的立刻 403；入口停着照样；吊销后立刻拒。会话通行证（fcp-h2）同样中转自己验签、只放它覆盖的服务商、过期 / 别的钥匙即拒、上名单即拒，/v1/relay/check 一次没问。代理只在用到时剩不到 20%、或到 80% 处请求续，日志写原因"
 }
 
 cred_run_drills "$0"
