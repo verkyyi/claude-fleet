@@ -225,12 +225,6 @@ patches:
   - path: deployment-env.yaml
   - path: ingress-hosts.yaml
   - path: release-key.yaml
-  # 数据盘的 storageclass 换成你集群里有的（kubectl get storageclass）
-  - target: {kind: PersistentVolumeClaim, name: ccquota-data}
-    patch: |-
-      - op: replace
-        path: /spec/storageClassName
-        value: <你的 storageclass>
   # 没装「正在更新」页（deploy/k8s/updating/）就去掉指向它的注解
   - target: {kind: Ingress, name: ccquota-hub}
     patch: |-
@@ -238,8 +232,9 @@ patches:
         path: /metadata/annotations/nginx.ingress.kubernetes.io~1default-backend
 ```
 
-  - 要两副本 + Postgres：删掉 `components:` 两行和 PersistentVolumeClaim 那一项；`/data/releases` 那时没有盘，给 `CCQUOTA_FLEET_RELEASE_DIR` 另挂一块小盘。
+  - 要两副本 + Postgres：删掉 `components:` 两行；`/data/releases` 那时没有盘，给 `CCQUOTA_FLEET_RELEASE_DIR` 另挂一块小盘。
   - 装了「正在更新」页（发布那几十秒里浏览器看到的提示页）就删掉最后一项。
+  - 数据盘用集群默认的 storageclass（`kubectl get storageclass` 里标 `(default)` 的那个）。要用别的，在 `patches:` 里加一项：`target: {kind: PersistentVolumeClaim, name: ccquota-data}`，JSON patch `op: add`、`path: /spec/storageClassName`、`value: <你的 storageclass>`。
 
 密钥由人建，不进任何仓库：
 
