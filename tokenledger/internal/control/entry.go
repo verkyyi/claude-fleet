@@ -133,3 +133,27 @@ type EntryReachVerdict struct {
 	// Throttled: a report inside the last check's window, answered from it.
 	Throttled bool `json:"throttled,omitempty"`
 }
+
+// EntryRoutesNodePath is GET with the door's token (claude-fleet#3549, EPIC
+// #3500 C4): the cluster's one public door reads every person whose home is
+// their own pod — the login it lets in, with that person's keys, and the pod
+// it hands them to. Version is EntryNodeList's: one counter, one push.
+const EntryRoutesNodePath = "/v1/node/entry-routes"
+
+// EntryRoute is one row of the door's table: Login is the name the door's
+// sshd lets in (only with Principal's own keys), Service the pod's Service
+// in the door's namespace (u-<nonce>) — the one place it may go.
+type EntryRoute struct {
+	Login     string `json:"login"`
+	Principal string `json:"principal"`
+	Service   string `json:"service"`
+}
+
+// EntryRouteList is EntryRoutesNodePath's answer: Routes the table, Logins
+// the same keys shape a home machine's list has (the door converges it the
+// same way).
+type EntryRouteList struct {
+	Version int                       `json:"version"`
+	Routes  []EntryRoute              `json:"routes"`
+	Logins  map[string]EntryNodeLogin `json:"logins"`
+}

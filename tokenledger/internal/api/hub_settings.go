@@ -119,6 +119,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.Join(hosts, ","), ""
 		}},
+	DoorKey: {def: "", help: "the cluster's one public door (claude-fleet#3549): its machine name(s); a person whose home is their own pod u-<nonce> is reached through it",
+		check: doorCheck},
 	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines (default on when the hub writes address records: CCQUOTA_DNS_*)",
 		check: onOff(EntryKey, "off"),
 		deploy: func(s *Server) string {

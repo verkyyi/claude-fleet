@@ -1057,7 +1057,98 @@ def primary_login(a):
     return '' if login in ('', 'none') else login
 
 
+# One person's pod (#3549, EPIC #3500 C4): its sshd takes the cluster door's key
+# alone — read at each login from the mounted Secret (so a new door key works the
+# moment the Secret changes), never ~/.ssh or the hub's CA — and every arrival is
+# bin/fleet-entry.sh, as a home's entry port. 05- sorts before every other drop-in
+# (sshd keeps the first value it reads; the CA's is 100-).
+DOOR_SSHD_CONF = '/etc/ssh/sshd_config.d/05-fleet-door.conf'
+DOOR_PUB = '/run/fleet-door/door.pub'
+
+
+def user_pod_sshd_text(runtime='/var/db/fleet-node/runtime'):
+    return ''.join(l + '\n' for l in [
+        '# claude-fleet user pod (issue #3549): only the cluster door comes in here',
+        'PubkeyAuthentication yes',
+        'AuthenticationMethods publickey',
+        'AuthorizedKeysFile none',
+        'AuthorizedKeysCommand /bin/cat ' + DOOR_PUB,
+        'AuthorizedKeysCommandUser nobody',
+        'AuthorizedPrincipalsFile none',
+        'TrustedUserCAKeys none',
+        'PermitUserRC no',
+        'PermitUserEnvironment no',
+        'ExposeAuthInfo yes',
+        'AcceptEnv LANG LC_* FLEET_DOOR_FP FLEET_DOOR_SRC FLEET_DOOR_NAME',
+        'DisableForwarding yes',
+        'PermitTunnel no',
+        'ForceCommand /bin/bash ' + runtime + '/current/bin/fleet-entry.sh',
+    ])
+
+
+def user_pod_sshd(conf=DOOR_SSHD_CONF):
+    """Written on a user pod, removed anywhere else (a node never keeps it)."""
+    if os.environ.get('FLEET_NODE_PROFILE') == 'user-pod':
+        Path(conf).write_text(user_pod_sshd_text(os.environ.get('FLEET_NODE_RUNTIME') or '/var/db/fleet-node/runtime'))
+    else:
+        try:
+            os.remove(conf)
+        except OSError:
+            pass
+
+
+def door_env(hub, secret=None, port='22022'):
+    """The door's machine.env (#3549): its hub, its token (read from the Secret,
+    never an argv or a log), the entry port in door mode."""
+    secret = secret or os.environ.get('FLEET_DOOR_SECRET', '/run/fleet-door')
+    tok = Path(secret, 'token').read_text().strip() if Path(secret, 'token').exists() else ''
+    if not hub or not re.match(r'^[A-Za-z0-9._~-]{16,512}$', tok):
+        raise ValueError('the door needs --hub and a node token in %s/token' % secret)
+    return ''.join('%s=%s\n' % kv for kv in (
+        ('CCQUOTA_HUB_URL', hub.rstrip('/')), ('CCQUOTA_TOKEN', tok),
+        ('FLEET_ENTRY', '1'), ('FLEET_ENTRY_PORT', port), ('FLEET_DOOR', '1')))
+
+
+def door_foreground(a):
+    """The cluster's one door (#3549, EPIC #3500 C4): no login, no node program,
+    no disk — the supervisor with its entry child in door mode, and its pull."""
+    state = Path(os.environ.get('FLEET_NODE_STATE', '/var/db/fleet-node'))
+    state.mkdir(parents=True, exist_ok=True)
+    env_file = state / 'machine.env'
+    tmp = state / '.machine.env.tmp'
+    tmp.write_text(door_env(a.hub, port=os.environ.get('FLEET_ENTRY_PORT', '22022')))
+    tmp.chmod(0o600)
+    tmp.rename(env_file)
+    Path('/run/sshd').mkdir(parents=True, exist_ok=True)
+    loop = Loop(Path(os.environ.get('FLEET_NODE_ROOT', str(HERE.parent.parent))))
+    loop.start()
+    stopping = False
+
+    def stop(_sig, _frame):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    ready = Path('/run/fleet-node-ready')
+    rc = 0
+    try:
+        ready.write_text(os.environ.get('FLEET_NODE_BOOT_ID', 'door'))
+        while not stopping:
+            loop.beat()
+            rc = loop.tend()
+            if rc is not None:
+                break
+            time.sleep(1)
+    finally:
+        ready.unlink(missing_ok=True)
+        loop.stop()
+    return 0 if stopping else rc or 1
+
+
 def foreground(a):
+    if os.environ.get('FLEET_NODE_PROFILE') == 'door':
+        return door_foreground(a)
     # The PVC lock covers enrollment as well as runtime. A second writer cannot
     # consume a second join code or run two agents for one endpoint.
     state = Path(os.environ.get('FLEET_NODE_STATE', '/var/db/fleet-node'))
@@ -1078,6 +1169,7 @@ def foreground(a):
         Path('/run/sshd').mkdir(parents=True, exist_ok=True)
         Path('/etc/ssh/sshd_config.d/90-fleet-container.conf').write_text(
             'HostKey ' + str(key) + '\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n')
+        user_pod_sshd()
         try:
             devnet()
         except (ValueError, OSError) as e:
@@ -1218,7 +1310,9 @@ def probe(a):
     # dead for every login here (issue #3333). Readiness is machine-wide only.
     if not Path('/run/fleet-node-ready').exists():
         return 1
-    for name in ('node-agent', 'cred-proxy-shared', 'sshd'):
+    # the door (#3549) is its entry sshd alone
+    names = ('entry',) if os.environ.get('FLEET_NODE_PROFILE') == 'door' else ('node-agent', 'cred-proxy-shared', 'sshd')
+    for name in names:
         if not s.pid_alive((st.get('children', {}).get(name) or {}).get('pid')):
             return 1
     return 0

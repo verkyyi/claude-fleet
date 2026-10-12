@@ -78,11 +78,69 @@ spec:
       fleet/role: user
   policyTypes: [Ingress]
   ingress:
-    # the door (the entry port, from outside through the load balancer) and the
-    # in-cluster sshd; never another user pod's other ports
+    # the shared node's own entry port (fleet-linux-entry, until it retires —
+    # EPIC #3500 step 6), from outside through its load balancer
     - ports:
         - {protocol: TCP, port: 22022}
+    # a user pod's sshd: from the cluster's one door alone (#3549, C4) — never
+    # another user pod
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: door
+      ports:
         - {protocol: TCP, port: 22}
+---
+# The cluster's one door (#3549, EPIC #3500 C4; render.py --door): in from
+# anyone on 22022 (its LoadBalancer, externalTrafficPolicy Local), out only to
+# the user pods' sshd, kube-dns and the hub.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: door-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: door
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 22022}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: door-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: door
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: user
+      ports:
+        - {protocol: TCP, port: 22}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # the hub's public address (its table, the record) — replaced at apply, as user-out's
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.1/32
+      ports:
+        - {protocol: TCP, port: 443}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
