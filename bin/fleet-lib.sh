@@ -982,7 +982,11 @@ fleet_bridge_rows() {
     fleet_repos "$s" | while IFS= read -r rp; do
       [ -n "$rp" ] || continue
       ( fleet_load_repo_conf "$s" "$rp" >/dev/null 2>&1 || exit 0
-        [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+        # A repo whose tickets live on the hub is bridged unless it says
+        # FLEET_ISSUE_BRIDGE=0 (issue #3597): only its person and the people added
+        # to it can comment there, so the public-repo reason for "off" is gone.
+        _bon=0; [ "${FLEET_TICKETS:-}" = hub ] && _bon=1
+        [ "${FLEET_ISSUE_BRIDGE:-$_bon}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
           "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$fl}" "${FLEET_ISSUE_BRIDGE_REVIVE:-$rv}" )
     done
   done <<EOF
@@ -993,7 +997,8 @@ EOF
 
 # fleet_bridge_covers <repo> → 0 iff the issue-bridge's poll relays <repo>'s
 # comments: the global switch with FLEET_REPO = <repo>, or a fleet hosting it with
-# the bridge on (fleet_bridge_rows). 1 = an unmarked comment there reaches no
+# the bridge on (fleet_bridge_rows; a FLEET_TICKETS=hub repo is on unless it says
+# 0 — issue #3597). 1 = an unmarked comment there reaches no
 # worker through the bridge — `fleet-comment.sh --to-worker` says so and sends it
 # over the peer channel instead (issue #2059).
 fleet_bridge_covers() {
@@ -1235,6 +1240,26 @@ fleet_ticket_view() {
 # second machine).
 fleet_ticket_claimant() {
   printf '%s' "${FLEET_TICKET_BY:-$(id -un 2>/dev/null)@$(hostname -s 2>/dev/null || hostname)}"
+}
+
+# fleet_ticket_state <repo> <N> → `STATE<TAB>REASON<TAB>label,label`, read fresh —
+# GitHub's words (OPEN / CLOSED, REOPENED / COMPLETED / …) wherever the ticket
+# lives (issue #3597). A hub-ticket repo is read through the ticket door; a GitHub
+# one with the very `gh` read the reapers always made (共同约定 4: byte for byte).
+# Nothing printed = it could not be read (no gh, the hub down, no such ticket).
+fleet_ticket_state() {
+  local repo="${1:-}" n="${2:-}" b="${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}"
+  if [ "$(fleet_ticket_home "$repo")" = hub ]; then
+    bash "$b/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$n" --json state,stateReason,labels 2>/dev/null \
+      | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+print("%s\t%s\t%s" % (d.get("state") or "", d.get("stateReason") or "",
+                      ",".join(l.get("name", "") for l in d.get("labels") or [])))' 2>/dev/null
+    return 0
+  fi
+  command -v gh >/dev/null 2>&1 || return 0
+  gh -R "$repo" issue view "$n" --json state,stateReason,labels \
+    -q '"\(.state)\t\(.stateReason // "")\t\([.labels[].name] | join(","))"' 2>/dev/null
 }
 
 # ---- the seed repo (issue #1167) --------------------------------------------

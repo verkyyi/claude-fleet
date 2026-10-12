@@ -206,6 +206,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// … and so does the person's own layer (claude-fleet#2784).
 		caps = append(caps, control.CapPerson)
 	}
+	if a.ticketCapable() {
+		// A hub ticket's comment reaches its session at once (claude-fleet#3597).
+		caps = append(caps, control.CapTicket)
+	}
 	if a.releaseCapable() {
 		// A new stable wakes install-sync at once (claude-fleet#3146).
 		caps = append(caps, control.CapRelease)
@@ -316,6 +320,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				a.handlePerson(ctx, m)
 			case control.TypeRelease:
 				a.handleRelease(ctx, m)
+			case control.TypeTicket:
+				a.handleTicket(ctx, m)
 			case control.TypeSSHRelayOpen:
 				// Bound to this session's ctx: when the control channel
 				// drops, every relay it opened is closed with it

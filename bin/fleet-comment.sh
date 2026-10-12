@@ -154,8 +154,13 @@ fi
 # posted as a record (marked: a bridge switched on later must not replay it) and
 # the text goes to the worker over the peer channel instead.
 # FLEET_COMMENT_PEER_FALLBACK=0 keeps the post and says so, without the send.
-peer_fallback=0 raw_body=''
-if [ "$relay" -eq 1 ] && ! fleet_bridge_covers "$repo"; then
+# A hub ticket (FLEET_TICKETS=hub, issue #3597) is the same case for another
+# reason: the comment this script posts there is source=fleet, which the bridge
+# never sends back into a session (its echo rule) — so the text goes over the
+# peer channel and the comment stays the record.
+peer_fallback=0 raw_body='' hubtk=0
+[ "${FLEET_TICKET_BACKEND:-}" = hub ] || [ "$(fleet_ticket_home "$repo")" = hub ] && hubtk=1
+if [ "$relay" -eq 1 ] && { [ "$hubtk" = 1 ] || ! fleet_bridge_covers "$repo"; }; then
   peer_fallback=1 relay=0 raw_body="$body"
 fi
 
@@ -215,7 +220,11 @@ fi
 # stderr only: stdout stays exactly the `gh` URL so callers parsing it are unaffected.
 comment_verdict() {
   if [ "$peer_fallback" -eq 1 ]; then
-    printf 'fleet-comment: 已发为记录 · issue-bridge 不轮询 %s，评论不会转达 #%s 的 worker\n' "$repo" "$num" >&2
+    if [ "$hubtk" = 1 ]; then
+      printf 'fleet-comment: 已发为记录 · 入口单子上 fleet 发的评论不经 bridge 回送 #%s 的 worker\n' "$num" >&2
+    else
+      printf 'fleet-comment: 已发为记录 · issue-bridge 不轮询 %s，评论不会转达 #%s 的 worker\n' "$repo" "$num" >&2
+    fi
     if [ "${FLEET_COMMENT_PEER_FALLBACK:-1}" = 0 ]; then
       printf '   要送达：fleet-peer-send.sh --repo %s issue:%s（或在该仓库的视图里开 FLEET_ISSUE_BRIDGE=1）\n' "$repo" "$num" >&2
       return 0

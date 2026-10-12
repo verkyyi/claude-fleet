@@ -169,7 +169,8 @@
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
 #   ticket-hub-down                                 bin/fleet-ticket.sh, bin/fleet_ticket.py, fleet-comment.sh,
-#                                                   fleet-issue-file.sh (fleet_ticket_home: a hub repo never asks gh)
+#                                                   fleet-issue-file.sh (fleet_ticket_home: a hub repo never asks gh),
+#                                                   fleet-issue-bridge.sh (--event + the hub backstop, #3597)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6882,7 +6883,15 @@ drill_ticket_hub_down() {
   grep -q '入口不通' "$d/err" || { WHY="no 入口不通 line: $(cat "$d/err")"; return 1; }
   [ ! -s "$d/gh.log" ] || { WHY="fell back to GitHub: $(cat "$d/gh.log")"; return 1; }
   grep -q 'the last good copy' "$d/cache/issues" || { WHY="the cache lost its last good copy"; return 1; }
-  WHAT="入口不通：开单 / 读单 / 评论 / 采集都退出 4、说入口不通，一次也不找 GitHub，缓存留着最后一份"
+  # The comments said while it was down (issue #3597, C4): the bridge's backstop
+  # holds its watermark, and once the hub is back types the missed one in, once —
+  # a real loopback hub, stopped and started (fleet-issue-bridge-hub-selftest P1).
+  local out
+  out=$(bash "$BIN/fleet-issue-bridge-hub-selftest.sh" 2>&1)
+  SECS=$(since "$t0")
+  printf '%s\n' "$out" | grep -q 'P1 hub down → held, back → backstop types it once — PASS' \
+    || { WHY="the bridge's hub-down backstop is red: $(printf '%s\n' "$out" | grep FAIL | head -2 | tr '\n' ' ')"; return 1; }
+  WHAT="入口不通：开单 / 读单 / 评论 / 采集都退出 4、说入口不通，一次也不找 GitHub，缓存留着最后一份；停着时的评论由桥的兜底在入口回来后送进会话、只送一次"
 }
 
 # ================================================================ run ====}
