@@ -1958,7 +1958,8 @@ def facts(fleet, e):
     if e.get("far"):
         # another machine's: what it asks is all the panel needs to know (a
         # permission prompt is y / n; fleet-sidebar-remote.sh reads the rest)
-        return {"needs": ("perm" if e.get("detail") == "perm" else "ask") if e.get("state") == "needs" else ""}
+        return {"needs": ("perm" if e.get("detail") == "perm" else "ask") if e.get("state") == "needs" else "",
+                "pin": e.get("group") == "pin"}
     if not t.startswith("@"):
         return {}
     rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|#{@worker_lifecycle}|#{@sleep_keep_awake}|"
@@ -2065,9 +2066,11 @@ ACTIONS = [
     {"id": "rename", "label": lambda r: say("view_act_rename"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: sh("dash-rename.sh", "--wid", r["target"], a), "far": far("rename"), "ask": "text",
      "prompt": lambda r: say("view_ask_rename"), "default": lambda r: r.get("wname") or r.get("name") or ""},
+    # another machine's row (issue #3517): a hub write — @pin on its own machine
     {"id": "pin", "label": lambda r: say("view_act_unpin" if r.get("pin") else "view_act_pin"),
-     "when": lambda r: not r.get("far") and not r.get("gone"),
-     "local": lambda r, a, f: sh("dash-pin-toggle.sh", r["target"]), "far": None, "ask": None},
+     "when": lambda r: not r.get("gone"),
+     "local": lambda r, a, f: sh("dash-pin-toggle.sh", r["target"]),
+     "far": lambda r, a, f: sh("fleet-sidebar-remote.sh", "pin", f, "wid:" + r["target"]), "ask": None},
     {"id": "reappol", "label": lambda r: say("view_act_reappol"), "when": lambda r: not r.get("gone"),
      "local": reappol_local, "far": far("reappol"), "ask": "choice", "choices": reap_choices,
      "then": {"at": ("text", lambda r: say("view_ask_at"))}},
@@ -2366,6 +2369,21 @@ def lang_row(query):
             "foot": say("view_lang_nolang_fmt", here_label({})) if lang_said_none() else say("view_lang_foot")}
 
 
+def pin_row(items, query, cur):
+    """「置顶当前会话」 / 「取消置顶当前会话」 (issue #3517) — the session in view, as
+    the list's 置顶 group has it; when there are no words, or they name it. None
+    with no session in view (or one already over)."""
+    e = next((x for x in items if x["kind"] == "sess" and cur and x.get("target") == cur), None)
+    if e is None or e.get("gone") or e.get("sec") == "ended":
+        return None
+    text = say("view_unpin_current" if e.get("group") == "pin" else "view_pin_current")
+    q = query.strip().lower()
+    if q and not all(w in (text + " pin top 置顶").lower() for w in q.split()):
+        return None
+    return {"kind": "cmd", "cmd": "pin", "act": "pin", "row": e, "text": "📌 " + text,
+            "foot": say("view_pin_foot_fmt", label_of(e))}
+
+
 # --- the panel's ⚡ and ⏻ rows (issue #3180, EPIC #3178 C2; issue #3327 ④) ---------------
 
 PANEL_WORDS = ("new", "quit", "landed")
@@ -2491,8 +2509,9 @@ def bolt_cells(st, query):
     return cells, note
 
 
-def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None):
-    """What the popup lists (issue #3327, 方案 B): the sessions (visible()), then
+def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
+    """What the popup lists (issue #3327, 方案 B): the sessions (visible()), the
+    session in view's 置顶 line (`cur`, issue #3517), then
     the ⚡ row — 「⚡ 新会话（空白）」 on no words, 「⚡ 新任务：<字>」 on words —
     with its cells under it (仓库 · Agent), then ⏻ 退出. `busy` (a ↵ under way):
     the ⚡ row is its progress. Typed words that hit no session say so as its foot."""
@@ -2501,6 +2520,9 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None):
         items = landed_first(items)
     q = query.strip()
     out = visible(items, query, opened)
+    pr = pin_row(items, query, cur) if words else None
+    if pr:
+        out.append(pr)      # under the sessions, above ⚡ (issue #3517)
     if "new" in words:
         st = bolt or bolt_new()
         if busy:
@@ -2702,7 +2724,7 @@ def popup(screen, qo, vid, client, forward=""):
     loader.start()
 
     def listing():
-        return panel_rows(items, query, opened, cmds, bolt, busy)
+        return panel_rows(items, query, opened, cmds, bolt, busy, cur)
 
     def key_of(e):
         return (e.get("kind"), e.get("cmd") or e.get("target") or e.get("sec"))
@@ -2998,6 +3020,11 @@ def popup(screen, qo, vid, client, forward=""):
                 if e["act"] == "lang":
                     run(ACTION["lang"], {}, "")     # flips it; the list redraws in it
                     continue
+                if e["act"] == "pin":
+                    # the session in view (issue #3517): its own 置顶 item
+                    if pick(ACTION["pin"], act_row(fleet, e["row"])):
+                        return 0
+                    continue
                 rc, msg, went = act_run(qo, vid, fleet, ACTION[e["act"]], e["row"], "", client)
                 if went:
                     return 0
@@ -3017,6 +3044,14 @@ def popup(screen, qo, vid, client, forward=""):
             if rc == 0:
                 return 0
             msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
+            continue
+        if ch == "\x14":
+            # ⌃T (issue #3517): 置顶 / 取消置顶 the lit session, as its Tab menu would
+            e = shown[at] if 0 <= at < len(shown) else {}
+            if e.get("kind") != "sess" or not e.get("target") or e.get("gone"):
+                continue
+            if pick(ACTION["pin"], act_row(fleet, e)):
+                return 0
             continue
         if ch == "\x1c":
             # ⌃\ (issue #3183): a shell beside the lit session, on screen or not —
@@ -3045,7 +3080,7 @@ def popup(screen, qo, vid, client, forward=""):
         # typed words: the best session hit is lit; none hit — the language row
         # when they name it (语言 · lang …, issue #3329), else ⚡
         at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
-                  next((i for i, e in enumerate(shown) if query and e.get("cmd") == "lang"),
+                  next((i for i, e in enumerate(shown) if query and e.get("cmd") in ("lang", "pin")),
                        next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
                             next((i for i, e in enumerate(shown) if pickable(e)), 0))))
         if not query:
@@ -3101,7 +3136,7 @@ def main(argv, qo):
         # the popup's lines with its ⚡ / ⏻ rows (issues #3180, #3327): kind · cmd · text
         q = " ".join(a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                      and argv[i - 1] not in ("--view", "--client"))
-        for e in panel_rows(entries(vid), q, {"ended"}, bolt=bolt_new(grid_read(vid))):
+        for e in panel_rows(entries(vid), q, {"ended"}, bolt=bolt_new(grid_read(vid)), cur=current(vid)):
             print("\t".join((e["kind"], e.get("cmd") or e.get("target") or e.get("group") or e["kind"], e.get("text") or "")))
         return 0
     if argv[:1] == ["view-gone"]:

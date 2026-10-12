@@ -517,7 +517,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext r_tok _; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext r_tok r_pin _; do
     # field 26 (issue #2505): a test identity's session — after the five
     # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
     [ "$r_test" = 1 ] && { [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue; }
@@ -554,13 +554,16 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
     # field as a sixth part — only when the hub recorded any, so a row without
     # is byte for byte as before
     case "$r_tok" in ''|*[!0-9]*) ;; *) r_ctx="${r_ctx:-||||}|$r_tok" ;; esac
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx")
+    # field 30 (issue #3517): pinned on its own machine (the node's @pin) — the
+    # row's @pin, so it joins the 置顶 group here as a local pinned row does
+    [ "$r_pin" = 1 ] || r_pin=''
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx$US$r_pin")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf r_akind r_atext r_ctx <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf r_akind r_atext r_ctx r_pin <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US${r_pin:+1}$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"

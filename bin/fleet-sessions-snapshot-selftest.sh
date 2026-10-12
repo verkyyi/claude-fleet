@@ -95,6 +95,8 @@ nt set-window-option -t oc:我的会话 @reap_policy done:15m
 NPD="$WORK/home/.claude/projects/$(printf '%s' "$WORK/home" | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$NPD"; printf '{"type":"user","message":{"content":"work"}}\n' > "$NPD/70000000-0000-4000-8000-000000000007.jsonl"
 nt set-window-option -t oc:issue-1 @reap_policy merged:48h
+# a pinned session (issue #3517): its pin comes back with it
+nt set-window-option -t oc:issue-2 @pin 1
 
 # ---- A. save ---------------------------------------------------------------
 out=$(ss save) || fail "A: save exited non-zero ($out)"
@@ -109,6 +111,9 @@ printf '%s\n' "$rows" | grep -q $'\tissue-6\t' && fail "A: an exited session was
 printf '%s\n' "$rows" | grep -q $'^oc\tissue-1\t'"$WORK/wt-issue-1"$'\tsid-1\tmerged:48h\t' \
   || fail "A: issue-1's row lacks cwd / sid / reap policy ($rows)"
 grep -q $'^WIN\tissue-2\t' "$WORK/conf/global/sessions.snapshot.d/oc.map" || fail "A: no map copy"
+grep -qx $'PIN\tf0000000-0000-4000-8000-000000000002' "$WORK/conf/global/sessions.snapshot.d/oc.map" \
+  || fail "A: the pinned session has no PIN row in the map ($(grep -v '^WIN' "$WORK/conf/global/sessions.snapshot.d/oc.map"))"
+[ "$(grep -c '^PIN' "$WORK/conf/global/sessions.snapshot.d/oc.map")" = 1 ] || fail "A: an unpinned session got a PIN row"
 
 # ---- B. kill-server → restore ------------------------------------------------
 echo 5 > "$WORK/closed"
@@ -129,6 +134,8 @@ cwd=$(nt display-message -p -t "oc:我的会话" '#{pane_current_path}' 2>/dev/n
 [ "$(nt show-window-options -v -t oc:我的会话 @fleet_id)" = f0000000-0000-4000-8000-000000000007 ] \
   || fail "B: the no-repo session came back as another session (@fleet_id)"
 [ "$(nt show-window-options -v -t oc:issue-1 @reap_policy)" = merged:48h ] || fail "B: reap policy not stamped back"
+[ "$(nt show-window-options -v -t oc:issue-2 @pin 2>/dev/null)" = 1 ] || fail "B: the pinned session came back unpinned (#3517)"
+[ -z "$(nt show-window-options -v -t oc:issue-1 @pin 2>/dev/null)" ] || fail "B: an unpinned session came back pinned"
 until_ok 15 grep -q -- '--resume sid-1' "$WORK/claude-argv" || fail "B: issue-1 not resumed on sid-1 ($(cat "$WORK/claude-argv"))"
 until_ok 15 grep -q -- '--resume sid-3' "$WORK/claude-argv" || fail "B: scratch-3 not resumed on sid-3"
 until_ok 15 grep -q -- '--resume 70000000-0000-4000-8000-000000000007' "$WORK/claude-argv" || fail "B: the no-repo session not resumed on its sid ($(cat "$WORK/claude-argv"))"

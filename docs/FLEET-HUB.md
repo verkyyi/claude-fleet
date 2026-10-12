@@ -106,7 +106,7 @@ operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
   never accepted as a target.
 
 `worker_message`, `worker_stop`, `worker_resume`, `worker_answer`,
-`worker_reap`, `worker_switch`, `worker_rename` and `worker_reap_policy` take
+`worker_reap`, `worker_switch`, `worker_rename`, `worker_reap_policy` and `worker_pin` take
 the `worker_id`. The
 node re-resolves it against the fleet's live windows at the moment it acts and
 refuses (`NOT_FOUND`, `AMBIGUOUS`) unless exactly one window holds it — a window
@@ -939,6 +939,7 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `worker_switch(worker_id, idempotency_key, account?)` | Move a session onto an available subscription (#2102): `dash-migrate.sh <window> to [<account>]` — close + `claude --resume` of the same conversation; refused with the migrate's one-line reason when the target is the source, benched or over its quota gate | `worker:stop` on the worker's Fleet |
 | `worker_rename(worker_id, name, idempotency_key)` | Change the window's display name (#2358): `rename-window` + `automatic-rename off` on the one window holding the worker's `@fleet_id` (checked at action time — a recycled window id is refused); the key, Issue, identity and reap policy are untouched. `name`: 1–64 characters, no control character | `worker:message` on the worker's Fleet |
 | `worker_reap_policy(worker_id, policy, idempotency_key)` | Change when the fleet may close the session on its own (#2368): `fleet-reap-policy.sh set <policy>` — the setter the session's own `set_reap` runs — on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); the result carries the canonical policy (an `at:HH:MM` resolved on the node). `policy`: `merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<ISO|HH:MM|epoch>` · `keep` (`bin/fleet_reap_policy.py`'s grammar, checked by the hub and again by the node) | `worker:reap` on the worker's Fleet |
+| `worker_pin(worker_id, pin, idempotency_key)` | Pin (`on`) or unpin (`off`) a session to the top of its person's lists (#3517): `@pin` set or unset on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); a set, never a toggle, so a retry lands the same way. The inventory's column 32 `pin=` carries it back to every list | `worker:message` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `service_control(machine, login, name, action, at?, cron?, tz?, idempotency_key)` | One entry of a managed machine's login-level register (#2527): `start` · `stop` · `restart`, a task's `run_now` / `set_schedule` (`at` HH:MM or a five-field `cron`, optional `tz`). No fleet: the hub checks the caller sees (machine, login) — else FORBIDDEN (403) — and that the machine link's last beat lists the entry (NOT_FOUND), then sends it down that login's lane; the machine agent runs the root runtime's `fleet-node-supervisor.py service …` with that lane's own login and answers final (succeeded / failed). docs/MANAGED-NODE.md §12 | `service:control` on that (machine, login) |
 | `orch_ensure(fleet_id?, idempotency_key)` | Retired (#3118): there is no orchestrating seat to open. Kept one version so an older client's ⌘N (#2616) gets an answer — `INVALID_STATE` (409) 「没有编排」, nothing sent to any node (`TestFleetWriteOrchEnsure`); an older hub's copy that reaches a node is refused the same way by `fleet_control.py`. Needs `worker:start`. |
@@ -1358,6 +1359,11 @@ with a code, never `unknown`:
   `@fleet_role` / `@fleet_id`, never by name. It needs `worker:message`: a
   rename is the smallest change a person who can talk to the session can make.
   EPIC rows are not renamed through it (their short name is #2355's).
+- `worker_pin` (issue #3517) is ⌘P's 「置顶当前会话」 / ⌃T and the row menu's
+  置顶 on a row on another machine. `fleet-control-read.sh pin` checks the window
+  still carries the worker's `@fleet_id`, then sets `@pin 1` or unsets it (the
+  way `dash-pin-toggle.sh` writes it); the node's inventory says `pin=1` and the
+  hub cache's field 30 puts the row in every list's 置顶 group.
 - `worker_reap_policy` (issue #2368) is the sidebar's 「改回收方式…」 (and the
   quick-open panel's ⌃E) on a row on another machine, and `fleet reap` on a
   client: every row the Fleet Shell draws is remote, so without it a client

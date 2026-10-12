@@ -354,7 +354,15 @@ ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 vp > "$W/panel.txt" || fail "P: view-panel exited non-zero"
 # 1 the empty panel: the sessions, then ⚡ 新会话（空白） with its cells (不绑仓库 · the
 # fleet's agent, codex grey with why), then ⏻ — nothing else is a command row
-[ "$(grep -c '^cmd' "$W/panel.txt")" = 3 ] || fail "P: not exactly ⚡, ◐ and ⏻ as command rows: $(cat "$W/panel.txt")"
+[ "$(grep -c '^cmd' "$W/panel.txt")" = 4 ] || fail "P: not exactly 📌, ⚡, ◐ and ⏻ as command rows: $(cat "$W/panel.txt")"
+# 置顶当前会话 (issue #3517): the session in view's own line, above ⚡; named by its
+# words, hidden by others
+grep -qx "cmd${T}pin${T}📌 置顶当前会话" "$W/panel.txt" || fail "P: no 「📌 置顶当前会话」 row: $(cat "$W/panel.txt")"
+[ "$(grep '^cmd' "$W/panel.txt" | cut -f2 | head -2 | tr '\n' ' ')" = "pin new " ] || fail "P: 📌 is not right above ⚡: $(cat "$W/panel.txt")"
+for w in 置顶 pin; do
+  vp "$w" | grep -q "^cmd${T}pin" || fail "P: typing $w does not find the 置顶 row: $(vp "$w")"
+done
+vp Gamma | grep -q "^cmd${T}pin" && fail "P: words that do not name it still list the 置顶 row"
 [ "$(tail -4 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new grid:grid cmd:lang cmd:quit " ] || fail "P: ⚡ · its cells · ◐ · ⏻ are not last: $(cat "$W/panel.txt")"
 # the language row (issue #3329): both scripts on it, found by either; other words hide it
 grep -q "^cmd${T}lang${T}◐ 语言 / Language" "$W/panel.txt" || fail "P: no 「◐ 语言 / Language」 row: $(cat "$W/panel.txt")"
@@ -374,7 +382,7 @@ vp Gamma > "$W/panel-hit.txt"
 grep -qx "cmd${T}new${T}⚡ 新任务：Gamma" "$W/panel-hit.txt" || fail "P: ⚡ does not carry the words: $(cat "$W/panel-hit.txt")"
 grep -q "^grid${T}grid${T}仓库 ‹acme/web›" "$W/panel-hit.txt" || fail "P: words, the cells are not the last send's repo: $(grep ^grid "$W/panel-hit.txt")"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && fail "P: FLEET_PANEL_COMMANDS=none still lists a command row: $(FLEET_PANEL_COMMANDS=none vp)"
-[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "new lang quit " ] \
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "pin new lang quit " ] \
   || fail "P: the retired words still make rows: $(FLEET_PANEL_COMMANDS='new shell newsess' vp)"
 # the popup: the session in view lit, the search line's hint, ↑ 到 ⚡ in the keys
 to send-keys -t o:view -H 1b 5b 39 32 37 7e

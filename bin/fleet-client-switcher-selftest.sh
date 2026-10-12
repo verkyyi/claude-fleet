@@ -147,13 +147,15 @@ ok
 
 # --- E: ⌘P is one panel of sessions and actions (issue #2365) ----------------------
 # ⌘K / prefix s open it; its `>` lists its own lines (⌘K's tail folded in) first;
-# ⌃R ⌃X ⌃A ⌃E ⌃O map onto the row menu's actions; ⌃O on a row with no 「打开 PR」
+# ⌃R ⌃X ⌃A ⌃E ⌃O ⌃T (置顶, #3517) map onto the row menu's actions; ⌃O on a row with no 「打开 PR」
 # item opens its PR's (else its issue's) page; an empty query lists the waiting
 # rows first; the list's rows carry 单号 · PR · 回收方式 (rows_text ⇄ parse_rows).
 tmux -S "$SOCK" set-option -g @fleet_layout solo
 out=$(Q panel-cmds)
-[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current route repo-add " ] \
-  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话 · 连接路线 · 添加仓库 (#3375)" "$out"; ok
+[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current pin-current route repo-add " ] \
+  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话 · 置顶当前会话 (#3517) · 连接路线 · 添加仓库 (#3375)" "$out"; ok
+# claude-fleet#3517: 置顶当前会话 — the row in view's own menu item (greyed with none)
+printf '%s\n' "$out" | grep -q '^pin-current	-\{0,1\}置顶当前会话	' || fail "E: > has no 置顶当前会话 (#3517)" "$out"; ok
 # claude-fleet#2886: 连接路线… runs `fleet route --pick`; 「/route」 is in its name
 printf '%s\n' "$out" | grep -qx 'route	连接路线…（/route）	!route' || fail "E: > has no 连接路线…（/route） (#2886)" "$out"; ok
 grep -q 'query.startswith("/")' "$BIN/fleet-quickopen.py" || fail "E: a query led by / is not a command query (#2886)"; ok
@@ -182,7 +184,7 @@ q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
 # the keys: each one is a row-menu action (COMMANDS) — never a second spelling
 acts = {a for a, _ in q.COMMANDS}
 assert {k: v[0] for k, v in q.ROW_KEYS.items()} == {"\x12": "rename", "\x18": "reap", "\x01": "answer",
-                                                   "\x05": "reappol", "\x0f": "pr"}, q.ROW_KEYS
+                                                   "\x05": "reappol", "\x0f": "pr", "\x14": "pin"}, q.ROW_KEYS
 assert all(v[0] in acts for v in q.ROW_KEYS.values()), q.ROW_KEYS
 # a row as the list hands it (15 fields) → switch-rows.tsv → the panel's row
 side = [["hdr", "acme/web", "", "acme/web (2)", " "],

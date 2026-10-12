@@ -120,6 +120,14 @@ PY
 )"
 eq "A ls --json" "wid:F/issue-12|12|#75✓|merged;wid:F/issue-13|13||done:2h;wid:F/scratch-3|||keep;" \
   "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s;" % (r["key"], r["issue"], r["pr"], r["reap"]) for r in json.load(sys.stdin)))')"
+# a 「结果给你」 row (issue #3517): the report of a reaped session is no session —
+# off the default list, still under --all
+cp "$W/rows.tsv" "$W/rows-orep.tsv"
+printf '%s\n' "orphanrep:o1@m4${T}orphanrep${T}✉${T}verkyyi-claude-fleet:issue-3076 REAPED${T}m4${T}acme/web (2)${T}结果给你${T}#3076${T}—${T}${T}${T}acme/web" >> "$W/rows-orep.tsv"
+corep() { FLEET_SESSION_CLI_ROWS="$W/rows-orep.tsv" FLEET_SESSION_CLI_CACHE="$W/remote" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
+eq "A ls: a reaped session's report row is not listed" 0 "$(corep ls | grep -c 'REAPED')"
+eq "A ls --json: …nor in --json" 0 "$(corep ls --json | grep -c 'orphanrep')"
+eq "A ls --all: …it is under --all" 1 "$(corep ls --all | grep -c 'REAPED')"
 eq "A ls --json: the bus" "Claude|62|ok|Opus 5.5|high;Codex|47|watch|gpt-6-astra|medium;Claude||||;" \
   "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s|%s;" % (r["agent"], r["ctx_left"], r["ctx_band"], r["model"], r["effort"]) for r in json.load(sys.stdin)))')"
 eq "A no cache at all: every row still listed, the bus —" 3 "$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls | grep -c '—')"

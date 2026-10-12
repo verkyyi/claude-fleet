@@ -306,6 +306,37 @@ func TestFleetWriteReapPolicyTool(t *testing.T) {
 	}
 }
 
+// worker_pin (claude-fleet#3517): 置顶 / 取消置顶 on a row on another machine. A
+// journalled write under worker:message's authority; the node gets worker_id and
+// on|off — a set, never a toggle, so a retry lands the same way.
+func TestFleetWritePinTool(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	wid := f4.FleetID + "/issue-2"
+	if !hasString(FleetTools, "worker_pin") || !fleetWriteTools["worker_pin"] || fleetScopeOf["worker_pin"] != "worker:message" || !nodeWriteTools["worker_pin"] {
+		t.Fatal("worker_pin must be a listed write tool under worker:message, open to a node token")
+	}
+	for i, p := range []string{"on", "off"} {
+		op := postFleet(t, h, "worker_pin", map[string]any{"worker_id": wid, "pin": p, "idempotency_key": fmt.Sprintf("ok-%d", i)}, 200)
+		if op["status"] != "accepted" {
+			t.Fatalf("worker_pin %q = %v; want accepted", p, op)
+		}
+	}
+	waitFor(t, 2*time.Second, "the node took both", func() bool { return m4.count() == 2 })
+	env := m4.writes[0]
+	params, _ := env["params"].(map[string]any)
+	if env["action"] != "worker_pin" || params["worker_id"] != wid || params["pin"] != "on" || len(params) != 2 {
+		t.Fatalf("the node was sent %v", env)
+	}
+	for i, bad := range []any{"", "toggle", "ON", "1", true, nil} {
+		postFleet(t, h, "worker_pin", map[string]any{"worker_id": wid, "pin": bad, "idempotency_key": fmt.Sprintf("bad-%d", i)}, 400)
+	}
+	postFleet(t, h, "worker_pin", map[string]any{"worker_id": wid, "idempotency_key": "no-pin"}, 400)
+	postFleet(t, h, "worker_pin", map[string]any{"worker_id": wid, "pin": "on", "name": "x", "idempotency_key": "extra"}, 400)
+	if m4.count() != 2 {
+		t.Fatalf("a refused pin reached the node (%d writes)", m4.count())
+	}
+}
+
 // worker_switch (claude-fleet#2102): the sidebar's 「换到可用订阅」 on a row on
 // another machine. A journalled write under worker:stop's authority (a switch is
 // a stop + resume of the same conversation); the node gets worker_id and, when
