@@ -511,7 +511,7 @@ has "P: ← on a shell heading writes the fold to the shell's OWN session" "$(ca
 # → on the heading writes that token to the shell's own session.
 printf 'wid:%s/scratch-4\037m4\037online\037\037\037done\037claude\037完了四\037\037\0370\037\n' "$F" >> "$G/remote_$SH"
 pe=$(FLEET_SHELL=1 shell_side)
-has "P: a done no-issue hub row folds under 已结束 on the shell" "$(shdrs "$pe")" "▸ 已结束 (1);"
+has "P: a done no-issue hub row folds under 已结束 on the shell" "$(shdrs "$pe")" "▸ 已结束 · 还开着 (1);"
 hasnt "P: …hidden while folded" "$(sorder "$pe")" "完了四"
 po=$(REPO_FOLD=ended:open FLEET_SHELL=1 shell_side)
 has "P: the shell's ended:open opens it" "$(sorder "$po")" "完了四"

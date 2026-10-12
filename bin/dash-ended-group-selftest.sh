@@ -83,7 +83,7 @@ fold()  { FLEET_SESSION=alpha TMUX=/fake,1,0 bash "$FOLD" "$@" 2>&1 </dev/null; 
 
 # --- A. folded by default -------------------------------------------------------
 n=$(names)
-has   "A: the foot is the folded 已结束 heading with its count" "$n" "▸ 已结束 (2)"
+has   "A: the foot is the folded 已结束 heading with its count" "$n" "▸ 已结束 · 还开着 (2)"
 hasnt "A: the done no-issue row is off the list" "$n" "donehome"
 hasnt "A: …and so is the exited one" "$n" "gone"
 has   "A: a done row WITH an issue stays" "$n" "issue-1"
@@ -98,7 +98,7 @@ before=$(names)
 eq    "B: → on the sidebar heading reloads" "$(fold expand hdr:ended)" "reload(bash $ROWS)"
 eq    "B: …and writes the open token" "$(opt)" "ended:open"
 n=$(names)
-has   "B: the heading is open" "$n" "已结束 (2) "
+has   "B: the heading is open" "$n" "已结束 · 还开着 (2) "
 hasnt "B: …no fold caret" "$n" "▸ 已结束"
 has   "B: the ended rows show under it" "$n" "donehome"
 has   "B: …both of them" "$n" "gone"
@@ -115,7 +115,7 @@ win kid @issue 7 @claude_state working @origin o-claude-fleet:scratch-9 >/dev/nu
 tmux set -wu -t "$W_DONE" @norepo; tmux set -w -t "$W_DONE" @repo o/claude-fleet; tmux set -w -t "$W_DONE" @raw 1; tmux set -w -t "$W_DONE" @worktree "$WORK/cf-scratch-9"
 n=$(names)
 has   "C: a done row with a child keeps its place" "$n" "issue-1 donehome"
-has   "C: …the heading counts only the one left" "$n" "▸ 已结束 (1)"
+has   "C: …the heading counts only the one left" "$n" "▸ 已结束 · 还开着 (1)"
 
 # --- D. nothing ended -----------------------------------------------------------
 for w in $(tmux list-windows -t alpha -F '#{window_id}'); do
@@ -133,6 +133,11 @@ has   "E: fleet ls lists the live session" "$out" '"live"'
 hasnt "E: …and hides the ended one" "$out" 'donehome'
 out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --all --json)
 has   "E: fleet ls --all lists the ended one too" "$out" 'donehome'
+# issue #3731: the table names the group the sidebar and ⌘P do
+out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --all)
+has   "E: fleet ls --all heads the ended ones 已结束 · 还开着" "$out" '已结束 · 还开着 1 个'
+has   "E: …below the live one" "$(printf '%s\n' "$out" | sed -n '/已结束 · 还开着/,$p')" 'donehome'
+hasnt "E: …the live one not under it" "$(printf '%s\n' "$out" | sed -n '/已结束 · 还开着/,$p')" 'live'
 FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --bogus >/dev/null 2>&1
 eq    "E: an unknown flag is usage (2)" "$?" "2"
 out=$(python3 - "$BIN" <<'PY'
@@ -174,7 +179,7 @@ has   "G: …so does one closed at a time its person chose" "$n" "athome"
 hasnt "G: a done:2h one still ends" "$n" "idlehome"
 hasnt "G: …so does one with no policy" "$n" "barehome"
 hasnt "G: an exited one ends whatever its policy" "$n" "keptgone"
-has   "G: the heading counts the three" "$n" "▸ 已结束 (3)"
+has   "G: the heading counts the three" "$n" "▸ 已结束 · 还开着 (3)"
 
 # --- H. a turn is not the end (issue #3496) ----------------------------------------
 for w in $(tmux list-windows -t alpha -F '#{window_id}'); do
@@ -194,7 +199,7 @@ has   "H: …and one an hour into done:2h" "$n" "longidle"
 hasnt "H: idle past the 15m default, it ends" "$n" "stale"
 hasnt "H: idle past its done:10m, it ends" "$n" "overdue"
 hasnt "H: exited ends at once" "$n" "exitnow"
-has   "H: the heading counts the three" "$n" "▸ 已结束 (3)"
+has   "H: the heading counts the three" "$n" "▸ 已结束 · 还开着 (3)"
 TSV="$WORK/rows-h.tsv"
 FLEET_SESSION=alpha FLEET_ROWS_UNFOLD=1 python3 - "$BIN" "$TSV" <<'PY'
 import importlib.util, sys
