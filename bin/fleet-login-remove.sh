@@ -1,7 +1,13 @@
 #!/bin/bash
-# fleet-login-remove.sh <login> [--keep-home|--delete-home] [--archive-dir <dir>] [--apply]
+# fleet-login-remove.sh <login> [--keep-home|--delete-home] [--archive-dir <dir>] [--recycle] [--apply]
 # Offboard one shared-machine login. Dry run by default; run as an admin login,
 # from any directory (issue #1216).
+#
+# --recycle (issue #3505, EPIC #3500 C20): the login is NOT deleted — it is
+# washed for the next person by bin/fleet-login-reset.sh (handed every other
+# argument; the hub's reset op is this argv, #3504). The wash runs this script's
+# steps 1–5 through --recycle-stop: everything up to the archive, then it stops
+# — no sysadminctl, the user record and its UID stay.
 #
 # Home policy (EPIC #1212 C5, issue #1217 — #1210 ⑤ is the diagnosis):
 #   --keep-home    default. The home is ARCHIVED first — a 600 tar.gz owned by
@@ -37,17 +43,18 @@
 # daemon's register (`fleet service` / `fleet task`, /var/db/fleet-node/logins/
 # <login>/services) is refused, exit 6, with the `service move` line for each —
 # left there they fail every run under a login that is gone (issue #2528).
-# Exit: 0 done · 1 a step failed · 2 usage · 3 refused · 4 no such login (nothing
+# Exit (--recycle: fleet-login-reset.sh's): 0 done · 1 a step failed · 2 usage · 3 refused · 4 no such login (nothing
 # to remove, #2696) · 6 services not moved yet.
 set -uo pipefail
 
 PROG=fleet-login-remove
 BIN="$(cd "$(dirname "$0")" && pwd)"
-usage() { printf 'usage: %s <login> [--keep-home|--delete-home] [--archive-dir <dir>] [--apply]\n' "$PROG" >&2; exit 2; }
+usage() { printf 'usage: %s <login> [--keep-home|--delete-home] [--archive-dir <dir>] [--recycle] [--apply]\n' "$PROG" >&2; exit 2; }
 die() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 refuse() { printf '%s: refusing %s\n' "$PROG" "$1" >&2; exit 3; }
 
-LOGIN='' APPLY=0 KEEP=1 ARCHIVE_DIR=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded}
+LOGIN='' APPLY=0 KEEP=1 ARCHIVE_DIR=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded} RECYCLE=0 STOPONLY=0
+ARGS=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep-home) KEEP=1; shift ;;
@@ -55,6 +62,8 @@ while [ $# -gt 0 ]; do
     --archive-dir) [ $# -ge 2 ] && [ -n "$2" ] || die '--archive-dir needs a directory'; ARCHIVE_DIR=$2; shift 2 ;;
     --archive-dir=*) ARCHIVE_DIR=${1#*=}; [ -n "$ARCHIVE_DIR" ] || die '--archive-dir needs a directory'; shift ;;
     --apply) APPLY=1; shift ;;
+    --recycle) RECYCLE=1; shift ;;
+    --recycle-stop) STOPONLY=1; shift ;;
     -h|--help) usage ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$LOGIN" ] || usage; LOGIN=$1; shift ;;
@@ -62,6 +71,13 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$LOGIN" ] || usage
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "bad login name '$LOGIN'"
+[ "$RECYCLE" = 0 ] || [ "$STOPONLY" = 0 ] || die '--recycle and --recycle-stop: one or the other'
+if [ "$RECYCLE" = 1 ]; then
+  # the wash (issue #3505): the same arguments, minus --recycle
+  FWD=()
+  for a in ${ARGS[@]+"${ARGS[@]}"}; do [ "$a" = --recycle ] || FWD+=("$a"); done
+  exec bash "${FLEET_LOGIN_RESET_SH:-$BIN/fleet-login-reset.sh}" ${FWD[@]+"${FWD[@]}"}
+fi
 [ "$EUID" != 0 ] || refuse 'running under sudo/root; run as the admin login'
 # No such login (issue #2696): nothing to remove — a create that never made it,
 # or one closed by hand. Its own exit, so the hub records the remove done
@@ -96,7 +112,8 @@ if [ "$KEEP" = 1 ]; then
   [ ! -e "$ARCHIVE" ] || refuse "overwriting existing archive '$ARCHIVE'"
 fi
 if [ "$APPLY" = 1 ]; then
-  for cmd in sudo launchctl sysadminctl dscl; do
+  NEED='sudo launchctl sysadminctl dscl'; [ "$STOPONLY" = 0 ] || NEED='sudo launchctl'
+  for cmd in $NEED; do
     command -v "$cmd" >/dev/null 2>&1 || die "$cmd not found; nothing changed"
   done
   [ "$KEEP" = 0 ] || command -v tar >/dev/null 2>&1 || die 'tar not found; nothing changed'
@@ -239,12 +256,18 @@ if [ -n "$SVC_LEFT" ]; then
   exit 6
 fi
 
-if [ "$APPLY" = 1 ]; then
+if [ "$APPLY" = 1 ] && [ "$STOPONLY" = 1 ]; then
+  printf '%s: stopping login %s (uid %s) for a wash — steps 1–5, the login stays\n' "$PROG" "$LOGIN" "$UID_TARGET"
+elif [ "$APPLY" = 1 ]; then
   printf '%s: removing login %s (uid %s)\n' "$PROG" "$LOGIN" "$UID_TARGET"
 else
   printf '%s: DRY RUN — no change; re-run with --apply\n' "$PROG"
 fi
-printf '  home=%s  home-policy=%s\n' "$H" "$([ "$KEEP" = 1 ] && echo "archive → $ARCHIVE, then delete" || echo delete)"
+if [ "$STOPONLY" = 1 ]; then
+  printf '  home=%s  home-policy=%s  (--recycle-stop: the login is kept)\n' "$H" "$([ "$KEEP" = 1 ] && echo "archive → $ARCHIVE" || echo 'no archive')"
+else
+  printf '  home=%s  home-policy=%s\n' "$H" "$([ "$KEEP" = 1 ] && echo "archive → $ARCHIVE, then delete" || echo delete)"
+fi
 
 # Do this under the target login so fleet-down uses that login's conf and socket.
 # fleet_sockets lists only live, configured fleet servers. Capture the list before
@@ -264,7 +287,7 @@ fi
 step 1b "take $LOGIN off the hub (fleet node leave)"
 LEAVE=(sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet")
 [ -z "${FLEET_HUB_CURL:-}" ] || LEAVE+=("FLEET_HUB_CURL=$FLEET_HUB_CURL")   # the selftest's transport
-LEAVE_ARGS=(--hub-only --reason "login $LOGIN removed")
+LEAVE_ARGS=(--hub-only --reason "login $LOGIN $([ "$STOPONLY" = 1 ] && echo recycled || echo removed)")
 show ${LEAVE[@]+"${LEAVE[@]}"} bash /tmp/fleet-node-leave.XXXXXX ${LEAVE_ARGS[@]+"${LEAVE_ARGS[@]}"}
 if [ "$APPLY" = 1 ]; then
   LCOPY=''
@@ -378,6 +401,15 @@ else
   fi
   run sudo chown "$ADMIN_UID" "$ARCHIVE"
   run sudo chmod 600 "$ARCHIVE"
+fi
+
+# --recycle-stop (issue #3505): the wash takes it from here; the login stays.
+if [ "$STOPONLY" = 1 ]; then
+  printf '\n'
+  if [ "$APPLY" = 1 ]; then printf '%s: stopped (steps 1–5); the login is kept for the wash\n' "$PROG"
+  else printf '%s: dry run complete\n' "$PROG"; fi
+  [ -z "$ARCHIVE" ] || printf '  archive=%s\n' "$ARCHIVE"
+  exit 0
 fi
 
 step 6 'delete the OS login (and its home)'

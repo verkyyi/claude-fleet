@@ -695,6 +695,35 @@ case "${FAKE_ROAD:-0}" in
   *) echo 'fleet-login-remove-ssh: Remote Login is off' >&2; exit "$FAKE_ROAD" ;;
 esac
 EOF
+# --recycle-stop (issue #3505): steps 1–5 — stopped, off its services, credsep
+# purged, quiesced, archived — and then nothing: the login, its home, its
+# groups stay for the wash. --recycle hands every other argument to the wash.
+reset_fixture
+run alice --recycle-stop --keep-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "recycle-stop: exit $RC"; }
+has "$FLEET_TEST_LOG" 'tmux -L alice-fleet kill-session -t alice-fleet' 'recycle-stop: fleet not stopped'
+has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" 'recycle-stop: services not booted out'
+has "$FLEET_TEST_LOG" 'pkill -TERM -U 602' 'recycle-stop: not quiesced'
+has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'recycle-stop: home not archived'
+not_has "$FLEET_TEST_LOG" 'sysadminctl' 'recycle-stop deleted the login'
+not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'recycle-stop edited the directory service'
+[ -d "$WORK/homes/alice" ] || fail 'recycle-stop: the home is gone'
+[ "$(archives)" = 1 ] || fail "recycle-stop: expected one archive, found $(archives)"
+has "$WORK/out" "archive=$ARCH/alice-" 'recycle-stop: the archive path is not printed'
+has "$WORK/out" 'the login is kept for the wash' 'recycle-stop: the end line is missing'
+[ ! -e "$CS/db/alice" ] || fail 'recycle-stop: credsep not purged'
+reset_fixture
+cat > "$WORK/reset-stub.sh" <<'EOF2'
+#!/bin/sh
+printf 'reset-stub %s\n' "$*" >> "$FLEET_TEST_LOG"
+EOF2
+FLEET_LOGIN_RESET_SH="$WORK/reset-stub.sh" run alice --recycle --keep-home --apply
+[ "$RC" = 0 ] || fail "recycle: exit $RC"
+has "$FLEET_TEST_LOG" 'reset-stub alice --keep-home --apply' 'recycle: the wash was not handed the other arguments'
+not_has "$FLEET_TEST_LOG" 'sudo' 'recycle: the remove script itself ran a step'
+run alice --recycle --recycle-stop --apply; [ "$RC" = 2 ] || fail 'recycle + recycle-stop together was not refused'
+reset_fixture
+
 export FLEET_LOGIN_REMOVE_SSH="$WORK/road.sh"
 # FDA here: the road is never asked
 reset_fixture; : > "$FLEET_TEST_LOG"

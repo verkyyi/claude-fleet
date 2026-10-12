@@ -1000,4 +1000,25 @@ not_contains "Q malformed op id: nothing ran" "$CALLS" "addUser"
 # no op id (a hand run): no mark
 [ -e "$HOME/lou-onboard/op" ] && fail "Q a run with no op id wrote a mark"
 
+# --- R. --recycle (issue #3505): a washed login, kept — new password, no addUser --
+printf 'rex:%s:%s:%s\n' "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/rex" >> "$FLEET_CREDSEP_PW"
+RH="$FLEET_LOGIN_HOMES/rex"; mkdir -p "$RH"; chmod 000 "$RH"
+: > "$LOG"; : > "$DLOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+unlock_homes
+eq "R exit" 0 "$RC"
+not_contains "R no addUser" "$CALLS" "sysadminctl"
+contains "R a new password on dscl's stdin" "$(cat "$DLOG")" "passwd /Users/rex "
+contains "R shell-less while it changes" "$CALLS" "dscl . -create /Users/rex UserShell /usr/bin/false"
+contains "R the shell back" "$CALLS" "dscl . -create /Users/rex UserShell /bin/zsh"
+contains "R createhomedir fills" "$CALLS" "createhomedir -c -u rex"
+contains "R its own name when none is given" "$OUT" "full-name=rex"
+eq "R the key installed" "$(cat "$KEY")" "$(cat "$RH/.ssh/authorized_keys")"
+contains "R the last line is credsep's (pending in a sandbox, as leg M)" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: pending"
+[ -s "$HOME/rex-onboard/password.txt" ] || fail "R no new password file"
+: > "$LOG"; OUT=$("$BASH_BIN" "$S" ghost --recycle --pubkey "$KEY" --apply 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "R no such login → 4" 4 "$RC"
+eq "R no such login: nothing ran" 0 "$(mutations)"
+: > "$LOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --daemons-only 2>&1); RC=$?
+eq "R with --daemons-only → 2" 2 "$RC"
+
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
