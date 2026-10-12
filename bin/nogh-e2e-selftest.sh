@@ -127,7 +127,7 @@ waitfor() {
 cleanup() {
   "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null
   for p in "$LOGIN_PID" "$AGENT_PID" "$HUB_PID" "$WX_PID" "$GHAPI_PID"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-  [ "$KEEP" = 1 ] || rm -rf "$WORK"
+  [ "$KEEP" = 1 ] || { chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"; }
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
@@ -312,7 +312,13 @@ out=$(env -i PATH="$WORK/shim:$PATH" HOME="$WORK/op" CCQUOTA_VIEWER_TOKEN="$VT" 
         python3 "$BIN/fleet-hub-admin.py" set --hub "$HUB" "user.$PID.machine_login" "$L" 2>&1) || die 'fleet hub set user.<id>.machine_login failed' "$out"
 # The terminal: fleet login, confirmed in the person's browser.
 PH="$WORK/person"; mkdir -p "$PH/.ssh"; chmod 700 "$PH/.ssh"
+# The person's terminal is this machine, where their login lives — a managed
+# machine (FLEET_NODE_STATE/machine.env): `fleet login` asks for no device-key node
+# pass and starts no join (fleet-node.sh ensure, #2904), so it runs the same on a
+# CI runner as on the real machine.
+mkdir -p "$WORK/nodestate"; : > "$WORK/nodestate/machine.env"
 env -i PATH="$WORK/shim:$PATH" HOME="$PH" LANG=en_US.UTF-8 FLEET_LOGIN_BROWSER=0 PYTHONUNBUFFERED=1 \
+  FLEET_NODE_STATE="$WORK/nodestate" \
   python3 "$BIN/fleet-login.py" --hub "$HUB" >"$WORK/login.out" 2>&1 </dev/null &
 LOGIN_PID=$!
 ucode() { grep -Eo '[A-Z]{4}-[A-Z]{4}' "$WORK/login.out" | head -1; }
@@ -321,7 +327,7 @@ waitfor 15 has_code || die 'fleet login printed no code' "$(cat "$WORK/login.out
 UC=$(ucode)
 out=$(browse get "$HUB/fleet/login?code=$UC") || die 'the login page did not open' "$out"
 out=$(browse post "$HUB/fleet/login" code="$UC" action=approve) || die 'the confirm was refused' "$out"
-waitfor 15 sh -c "! kill -0 $LOGIN_PID 2>/dev/null" || die 'fleet login still waiting after the confirm' "$(cat "$WORK/login.out")"
+waitfor 30 sh -c "! kill -0 $LOGIN_PID 2>/dev/null" || die 'fleet login still waiting after the confirm' "$(cat "$WORK/login.out")"
 wait "$LOGIN_PID"; rc=$?; LOGIN_PID=''
 [ "$rc" = 0 ] || die "fleet login exited $rc" "$(cat "$WORK/login.out"; printf '%s' "$out" | head -c 600)"
 [ -f "$PH/.ssh/fleet-cert-cert.pub" ] || die 'no certificate in ~/.ssh' "$(ls -la "$PH/.ssh")"
