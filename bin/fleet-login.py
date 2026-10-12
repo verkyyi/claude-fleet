@@ -550,9 +550,13 @@ def use_section(machines):
     fleet machine — its alias, a route, `fleet-<alias>…` — first runs
     `renew --on-use ssh`, which renews only under the margin. The exec always
     says no (`exit 1`), so the Match applies nothing: it is there for the
-    renewal alone, and its failure never stops the ssh."""
+    renewal alone, and its failure never stops the ssh. This machine is not
+    listed — as in peer_section, ssh to itself is not a fleet hop."""
+    me = self_names()
     pats = ["fleet-*"]
     for host, alias in machines:
+        if host.lower() in me or alias.lower() in me:
+            continue
         for p in (alias, alias + "-*", host):
             if p and p not in pats:
                 pats.append(p)
