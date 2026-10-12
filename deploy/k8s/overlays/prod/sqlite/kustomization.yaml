@@ -1,5 +1,7 @@
 # Production's single SQLite shape before the switch (claude-fleet#2125):
-# ../../../components/sqlite-single plus where its disk-watch sidecar posts.
+# ../../../components/sqlite-single plus where its disk-watch sidecar posts and
+# the storageclass its data disk was created with (the live claim's, byte for
+# byte — the component leaves it to the cluster default, #3747).
 # The switch (../../../RUNBOOK.md «换库», #2215) deleted the `components:` lines
 # in ../kustomization.yaml that named this directory; a rollback reverts that
 # commit, so this stays.
@@ -9,3 +11,8 @@ components:
   - ../../../components/sqlite-single
 patches:
   - path: disk-watch-env.yaml
+  - target: {kind: PersistentVolumeClaim, name: ccquota-data}
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: alicloud-disk-topology-alltype
