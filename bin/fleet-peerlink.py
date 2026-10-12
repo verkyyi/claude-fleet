@@ -503,8 +503,9 @@ class Link:
     def __init__(self, machine, login, prev=None):
         prev = prev or {}
         self.machine, self.login = machine, login
-        self.host = ssh_host(machine)
-        self.port = 0
+        # a link a keeper before us left up keeps the address it dialled
+        self.host = prev.get("host") or ssh_host(machine)
+        self.port = int(prev.get("port") or 0)
         self.route = prev.get("route") or self.host
         self.routes = []            # the hub's routes for this login (issue #3482)
         self.route_i = 0
@@ -666,7 +667,11 @@ class Keeper:
                                    "-S", l.sock, "-l", l.login, l.host]
         try:
             errf = open(l.sock[:-5] + ".err", "w")
-            l.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errf)
+            # its own session: a keeper stopped by launchd / systemd (an install switch
+            # restarts it) does not take its masters' process group with it — under
+            # `all` they outlive it and the next keeper adopts them (issue #3482)
+            l.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errf,
+                                      start_new_session=True)
             errf.close()
         except OSError as e:
             self.fail(l, "ssh did not start: %s" % e, now)
@@ -870,8 +875,15 @@ class Keeper:
             self.hub_down = ""
 
     def close_all(self):
+        """The keeper is going. `demand`: every link closes. `all` (issue #3482): an
+        up master stays for the next keeper, which adopts it after `id -un` —
+        a restart must not cost every link a rebuild; one not up yet closes."""
         now = time.time()
         for l in self.links.values():
+            if l.phase == "up" and self.mode == "all":
+                self.event(l, "交给下一个管理者")
+                l.proc = None
+                continue
             if l.phase != "down":
                 self.drop(l, "关闭：管理者退出", now)
         self.save(now)

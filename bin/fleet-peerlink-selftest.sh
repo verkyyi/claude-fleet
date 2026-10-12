@@ -25,7 +25,8 @@
 #                 attached and past the linger, same master; a dead route retried
 #                 with backoff (not every beat) and the doctor says 连不上 then
 #                 已连上; a hub that is down closes nothing; a login the hub drops
-#                 closes 「已不是你的登录」
+#                 closes 「已不是你的登录」; a keeper restart hands the masters to
+#                 the next keeper (adopted, same pid)
 #   I. switch   — FLEET_PEERLINK_MODE=demand in fleet.conf: back to #3002's rule
 #   J. list     — bin/fleet-peer-list.sh: the node token's GET /v1/node/peers — rc 0
 #                 + the JSON, rc 3 with no token / an older hub, rc 1 down or refused
@@ -264,6 +265,16 @@ printf '%s\n' "doctor all/up: $out" >> "$WORK/doctor-rows.txt"
 : > "$B/peers.down"; sleep 3
 links_is "m4@bob:up m7@bob:up" && ok || fail "H: the hub down closed links: $(links)"
 rm -f "$B/peers.down"
+# the keeper restarts (an install switch): the masters stay, the next one adopts them
+p1=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "m4"][0])' "$B/conf/peerlink/state.json")
+stop
+kill -0 "$p1" 2>/dev/null && ok || fail "H: the keeper's exit took m4's master ($p1) with it"
+grep -q 'm4@bob 交给下一个管理者' "$B/run.err" && ok || fail "H: no handover record"
+start
+until_ok 8 grep -q 'm4@bob adopted' "$B/run.err" || fail "H: the next keeper did not adopt m4: $(grep m4@bob "$B/run.err" | tail -3 | tr '\n' ' ')"
+until_ok 8 links_is "m4@bob:up m7@bob:up" || fail "H: not back up after the restart: $(links)"
+p2=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "m4"][0])' "$B/conf/peerlink/state.json")
+[ "$p1" = "$p2" ] && grep -q 'm4@bob adopted' "$B/run.err" && ok || fail "H: m4 rebuilt across the restart (pid $p1 → $p2), want adopted: $(grep m4@bob "$B/run.err" | tail -4 | tr "\n" " ")"
 # the hub no longer lists m7@bob as yours (and no session of yours is there)
 peers m4:bob:entry=203.0.113.4/22022
 until_ok 8 links_is "m4@bob:up" && ok || fail "H: a login the hub dropped is still held: $(links)"
