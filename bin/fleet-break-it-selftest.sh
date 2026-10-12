@@ -1488,6 +1488,19 @@ drill_window_killed() {
   grep -q 'sid-1.*reason=killed-window' "$led" 2>/dev/null || { WHY="/fleet-history has no reason=killed-window row: [$(cat "$led" 2>/dev/null)]"; return 1; }
   auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # a second tick: nothing doubles
   [ "$(nt list-windows -t oc -F '#{window_name}' | grep -c '^issue-1$')" = 1 ] || { WHY="a second tick opened issue-1 twice"; return 1; }
+  # The marks' sweep is one pass (issue #3544): a pile of old marks stays, the
+  # mark of a session live again (issue-1, back now) is lifted.
+  local rdir="$WORK/econf/global/retired" i
+  mkdir -p "$rdir"
+  i=0; while [ "$i" -lt 300 ]; do : > "$rdir/2f0e0000-0000-4000-8000-$(printf '%012d' "$i")"; i=$((i + 1)); done
+  : > "$rdir/$f1"
+  python3 -c 'import os, sys, time
+t = time.time() - 600
+for n in os.listdir(sys.argv[1]): os.utime(os.path.join(sys.argv[1], n), (t, t))' "$rdir"
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"
+  [ ! -e "$rdir/$f1" ] || { WHY="the mark of issue-1, live again, was not lifted"; return 1; }
+  i=$(find "$rdir" -name '2f0e0000-*' | grep -c .)
+  [ "$i" = 300 ] || { WHY="the sweep removed marks of sessions that are not live: $i of 300 left"; return 1; }
   WHAT="被删的 issue-1 下一拍以原对话回来，/fleet-history 记 reason=killed-window；fleet 自己关的 issue-2 不拉回（节拍 60s 另计）"
 }
 
@@ -5258,7 +5271,9 @@ drill_heartbeat_sys_blocked() {
   t0=$(now)
   grep -q 'fillSys(&hb, processSys)' "$ag/node.go" \
     || { WHY="nodeHeartbeat no longer takes the sampler's load"; return 1; }
-  grep -q 'a.fleetRd.get(ctx, 0, fleetBeatBudget' "$ag/node.go" \
+  # the max age is 0, or fleetReuse() — the last read kept only while hub-nudge
+  # has not moved (issue #3544); the budget is what this guards
+  grep -qE 'a\.fleetRd\.get\(ctx, (0|a\.fleetReuse\(\)), fleetBeatBudget' "$ag/node.go" \
     || { WHY="nodeHeartbeat waits on the fleet read with no budget again"; return 1; }
   if grep -q 'readSysInfo()' "$ag/node.go" "$ag/node_machine.go"; then
     WHY="a beat reads the kernel inline again instead of the sampler"; return 1

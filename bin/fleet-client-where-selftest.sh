@@ -182,6 +182,19 @@ eq "F json via" "local" "$(jf via)"
 eq "F json source" "hub" "$(jf source)"
 eq "F json hub up" "up" "$(jf hub)"
 for k in device os terminal caps since via host; do has "F json has $k" "$j" "\"$k\""; done
+# --max-age (issue #3544): every session's mod polls; one login shares an answer
+# younger than the age, anyone without the flag reads afresh.
+printf '#!/bin/bash\necho x >> "%s/hubreads"\ncat "%s/lease.json"\n' "$WORK" "$WORK" > "$WORK/hubcount"; chmod +x "$WORK/hubcount"
+mkdir -p "$WORK/mx"; rm -f "$WORK/hubreads"
+mx() { FLEET_CLIENT_WHERE_CMD="$WORK/hubcount" TMPDIR="$WORK/mx" bash "$BIN/fleet-client-where.sh" "$@"; }
+reads() { grep -c . "$WORK/hubreads" 2>/dev/null || echo 0; }
+l1=$(mx --max-age 30); r1=$?; l2=$(mx --max-age 30); r2=$?
+eq "F3 --max-age line" "$line" "$l1"; eq "F3 --max-age shared line" "$line" "$l2"; eq "F3 --max-age rc" "0 0" "$r1 $r2"
+eq "F3 two --max-age calls: one hub read" "1" "$(reads)"
+has "F3 --json --max-age keeps its own answer" "$(mx --json --max-age 30)" '"device": "MacBook"'
+eq "F3 --json is not the line's copy: a read of its own" "2" "$(reads)"
+mx >/dev/null; mx --max-age 0 >/dev/null
+eq "F3 no flag / --max-age 0: afresh" "4" "$(reads)"
 # the phone takes over: the very next call follows (nothing cached)
 cat > "$WORK/lease.json" <<'EOF'
 {"state":"active","lease":{"id":"L2","device":"verkyyi-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"m5","caps":["link"],"since":"2026-10-05T12:05:00Z"}}

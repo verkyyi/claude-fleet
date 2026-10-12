@@ -108,3 +108,39 @@ func (n *nudgeBeats) due() bool {
 	n.last = time.Now()
 	return true
 }
+
+// fleetReuseMax is how long a beat may answer with the last fleet read while
+// hub-nudge has not moved (claude-fleet#3544). Every 5 s beat ran two Python
+// starts per login (discover, fleet_status) only for fleet-control.py to answer
+// from its own heartbeat cache (READ_CACHE_TTL: workers 15 s, capacity 20 s,
+// inventory 60 s — invalidated by the same nudge), so a reuse under the
+// shortest of those changes nothing the hub sees and skips the starts. A var
+// for tests.
+var fleetReuseMax = 14 * time.Second
+
+// fleetNudgeMtime is hub-nudge's mtime as UnixNano, 0 when there is no file.
+func (a *Agent) fleetNudgeMtime() int64 {
+	if a.cfg.FleetNudgePath == "" {
+		return 0
+	}
+	st, err := os.Stat(a.cfg.FleetNudgePath)
+	if err != nil {
+		return 0
+	}
+	return st.ModTime().UnixNano()
+}
+
+// fleetReuse is the max age of a fleet read this beat may answer with:
+// fleetReuseMax while hub-nudge exists and has not moved since the kept read
+// started, else 0 (read now) — no nudge file (no hub nudges on this login) or
+// FLEET_CONTROL_READ_CACHE=0 reads every beat, as before.
+func (a *Agent) fleetReuse() time.Duration {
+	if os.Getenv("FLEET_CONTROL_READ_CACHE") == "0" {
+		return 0
+	}
+	m := a.fleetNudgeMtime()
+	if m == 0 || m != a.fleetRdNudge.Load() {
+		return 0
+	}
+	return fleetReuseMax
+}

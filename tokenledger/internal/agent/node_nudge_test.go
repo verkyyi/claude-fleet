@@ -226,3 +226,41 @@ func TestNudgeOffWatchesNothing(t *testing.T) {
 	case <-time.After(3 * nodeNudgePoll):
 	}
 }
+
+// A beat answers with the last fleet read while hub-nudge has not moved since
+// that read started (claude-fleet#3544); a nudge, no nudge file, or
+// FLEET_CONTROL_READ_CACHE=0 reads again.
+func TestFleetReuseFollowsNudge(t *testing.T) {
+	dir := t.TempDir()
+	nudge := filepath.Join(dir, "hub-nudge")
+	a := &Agent{cfg: Config{FleetNudgePath: nudge}}
+	if got := a.fleetReuse(); got != 0 {
+		t.Fatalf("no nudge file: reuse %v, want 0", got)
+	}
+	if err := os.WriteFile(nudge, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.fleetReuse(); got != 0 {
+		t.Fatalf("no read kept yet: reuse %v, want 0", got)
+	}
+	a.fleetRdNudge.Store(a.fleetNudgeMtime()) // a read started now
+	if got := a.fleetReuse(); got != fleetReuseMax {
+		t.Fatalf("nudge unchanged: reuse %v, want %v", got, fleetReuseMax)
+	}
+	t.Setenv("FLEET_CONTROL_READ_CACHE", "0")
+	if got := a.fleetReuse(); got != 0 {
+		t.Fatalf("cache off: reuse %v, want 0", got)
+	}
+	t.Setenv("FLEET_CONTROL_READ_CACHE", "")
+	later := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(nudge, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.fleetReuse(); got != 0 {
+		t.Fatalf("nudged since the read: reuse %v, want 0", got)
+	}
+	empty := &Agent{}
+	if got := empty.fleetReuse(); got != 0 {
+		t.Fatalf("no nudge path: reuse %v, want 0", got)
+	}
+}
