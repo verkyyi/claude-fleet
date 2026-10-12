@@ -1,0 +1,10 @@
+{
+  "name": "fleet-infra",
+  "version": "0.1.0",
+  "description": "claude-fleet for the people who run the machines and the hub: runbooks as skills — prepare a Mac, enroll it, open and delete logins, a cloud Linux node, an overseas relay, deploy the hub. Each says when to use it, what to check first, the steps, how to verify, how to roll back. Admins only: never installed by default, never handed out by the hub (EPIC #3569).",
+  "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "homepage": "https://github.com/verkyyi/claude-fleet",
+  "repository": "https://github.com/verkyyi/claude-fleet",
+  "license": "MIT",
+  "keywords": ["claude-fleet", "infra", "runbook", "admin"]
+}

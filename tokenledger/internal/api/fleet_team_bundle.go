@@ -67,6 +67,10 @@ var (
 		"awsAuthRefresh": true, "awsCredentialExport": true, "otelHeadersHelper": true}
 	teamCodexDenied = map[string]bool{"model": true, "mcp_servers": true, "model_providers": true}
 
+	// A plugin the hub never turns on for anyone (claude-fleet#3586): fleet-infra
+	// is the machine admins' runbook, installed by hand where one is wanted.
+	teamPluginsDenied = []string{"fleet-infra"}
+
 	// A key that names a credential: its value must be empty or a reference
 	// (${VAR} / $VAR), never the thing itself.
 	secretKeyRE = regexp.MustCompile(`(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key|authorization|(^|[_-])auth($|[_-])|cookie|session[_-]?key)`)
@@ -211,6 +215,13 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	for k := range cs {
 		if teamClaudeDenied[k] || !teamKeyRE.MatchString(k) {
 			return "", fmt.Errorf("bundle.claude_settings.%s is never handed out (model and credential helpers stay the login's; hooks go in bundle.hooks)", k)
+		}
+	}
+	if ep, ok := cs["enabledPlugins"].(map[string]any); ok {
+		for id := range ep {
+			if teamPluginDenied(id) {
+				return "", fmt.Errorf("bundle.claude_settings.enabledPlugins.%s is never handed out (fleet-infra is the admins' plugin, installed by hand — claude-fleet#3586)", id)
+			}
 		}
 	}
 	cc, err := obj("codex_config")
@@ -596,4 +607,19 @@ func (s *Server) broadcastTeam(v int) {
 			go s.pushTeam(id, c, v)
 		}
 	})
+}
+
+// teamPluginDenied: an enabledPlugins id (`<plugin>@<marketplace>`, or a bare
+// name) naming a plugin in teamPluginsDenied.
+func teamPluginDenied(id string) bool {
+	name := id
+	if i := strings.IndexByte(id, '@'); i >= 0 {
+		name = id[:i]
+	}
+	for _, d := range teamPluginsDenied {
+		if name == d {
+			return true
+		}
+	}
+	return false
 }

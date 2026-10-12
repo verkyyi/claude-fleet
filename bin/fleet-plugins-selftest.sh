@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-plugins-selftest.sh — this repo is a plugin marketplace of optional
 # plugins (issue #3112, EPIC #3111 C1): fleet-orchestrate · fleet-steward · fleet-epic,
-# and fleet-browser (issue #3236) under plugins/, beside the core `fleet` plugin (the repo root).
+# fleet-browser (issue #3236), fleet-feedback (#3360) and fleet-infra (#3586) under plugins/, beside the core `fleet` plugin (the repo root).
 #
 #   A  manifests: the marketplace lists exactly the plugins/ dirs, each entry's
 #      source is its dir and its name the dir's plugin.json name; steward and
@@ -46,6 +46,10 @@
 #      uninstalled; --dry-run runs nothing; install-apply passes --default only
 #      under fleet_node_manages; `fleet feedback on|off|status` is the switch
 #      (fleet-feedback-switch.sh) and the doctor has a never-WARN `feedback` row
+#   K  fleet-infra (issue #3586, EPIC #3569 C16): its six runbooks each carry
+#      什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚; no hooks, no MCP;
+#      oss-scan over it = 0; --default fleet-infra is refused, install-apply
+#      never defaults it, the team bundle refuses to hand it out
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -69,7 +73,7 @@ m = json.load(open(os.path.join(root, ".claude-plugin", "marketplace.json")))
 entries = {p["name"]: p for p in m["plugins"]}
 dirs = sorted(d for d in os.listdir(os.path.join(root, "plugins"))
               if os.path.isdir(os.path.join(root, "plugins", d)))
-want = ["fleet-browser", "fleet-epic", "fleet-feedback", "fleet-orchestrate", "fleet-steward"]
+want = ["fleet-browser", "fleet-epic", "fleet-feedback", "fleet-infra", "fleet-orchestrate", "fleet-steward"]
 if dirs != want:
     bad.append("A plugins/ holds %s, expected %s" % (dirs, want))
 ours = sorted(n for n, p in entries.items() if str(p.get("source", "")).startswith("./plugins/"))
@@ -168,7 +172,7 @@ missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-c
 for s in fleet-orchestrate fleet-steward epic-page; do
   hasnt "skill $s" "$missing" "C fleet-agent-defaults.py still counts $s as a default skill"
 done
-[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-feedback,fleet-orchestrate,fleet-steward" ] && ok \
+[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-feedback,fleet-infra,fleet-orchestrate,fleet-steward" ] && ok \
   || fail "C names" "$(python3 "$PL" names --root "$ROOT")"
 
 # ---- D: ensure, against a fake claude ----------------------------------------
@@ -445,6 +449,29 @@ grep -q 'pass feedback' "$BIN/fleet-doctor.sh" && grep -q 'info feedback' "$BIN/
   && ! grep -q 'warn feedback' "$BIN/fleet-doctor.sh" && ok \
   || fail "J fleet-doctor.sh: a feedback row that is PASS / INFO, never WARN"
 
+# ---- K: fleet-infra, the admins' runbooks (issue #3586, EPIC #3569 C16) ------------
+FI="$ROOT/plugins/fleet-infra"
+for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-setup hub-deploy; do
+  f="$FI/skills/$sk/SKILL.md"
+  [ -f "$f" ] && ok || fail "K fleet-infra carries no skills/$sk/SKILL.md"
+  # every runbook has the same five parts, in order
+  heads=$(grep -E '^## ' "$f" | sed 's/^## //' | paste -sd'|' -)
+  case "$heads" in
+    什么时候用\|先查什么\|步骤\|怎么验收\|怎么回滚*) ok ;;
+    *) fail "K $sk: headings are «$heads», want 什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚" ;;
+  esac
+done
+[ ! -e "$FI/hooks" ] && [ ! -e "$FI/.mcp.json" ] && ok || fail "K fleet-infra runs nothing on its own: no hooks, no MCP server"
+# no internal name or address in it — the ONE rule table (EPIC #3569 共同约定 1)
+out=$(bash "$BIN/oss-scan.sh" --root "$ROOT" -- plugins/fleet-infra 2>&1); rc=$?
+[ "$rc" = 0 ] && ok || fail "K oss-scan over plugins/fleet-infra found something (rc=$rc)" "$out"
+# never a managed default, never handed out by the hub
+: > "$ST/calls"; out=$(FLEET_CONF_DIR="$WORK/kconf" ens --gone "$WORK/gone" --default fleet-infra)
+grep -qE '^plugin (install|enable) fleet-infra' "$ST/calls" && fail "K --default fleet-infra installed it" "$(cat "$ST/calls")"; ok
+has "never a managed default" "$out" "K --default fleet-infra is refused out loud"
+grep -q 'pdef=(--default [^)]*fleet-infra' "$AP" && fail "K install-apply defaults fleet-infra"; ok
+grep -q '"fleet-infra"' "$BIN/fleet-agent-team.py" && ok || fail "K fleet-agent-team.py does not refuse fleet-infra"
+
 # ---- A (cont.) + H: the real CLI ----------------------------------------------------
 if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null 2>&1; then
   for p in "$ROOT" "$ROOT"/plugins/*; do
@@ -469,6 +496,10 @@ if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null
     ls "$H"/.claude/plugins/cache/claude-fleet/fleet-epic/*/"$f" >/dev/null 2>&1 && ok \
       || fail "H the installed fleet-epic carries $f"
   done
+  out=$(hc install fleet-infra@claude-fleet) || fail "H install fleet-infra" "$out"
+  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-infra/*/skills/mac-node-prep/SKILL.md >/dev/null 2>&1 && ok \
+    || fail "H the installed fleet-infra carries mac-node-prep"
+  hc uninstall fleet-infra@claude-fleet >/dev/null
   hc uninstall fleet-epic@claude-fleet >/dev/null; hc uninstall fleet-orchestrate@claude-fleet >/dev/null
   case " $(ids) " in *" fleet-epic@"*) fail "H uninstall fleet-epic → still listed" "$(ids)" ;; *) ok ;; esac
 fi
