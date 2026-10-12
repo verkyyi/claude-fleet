@@ -5,11 +5,13 @@ FLEET_PEERLINK_SSH at it. No network, no sshd: a master is a process serving a u
 socket at its `-S` path, and every other call talks to that socket, as ssh's own
 multiplexing does.
 
-  -M -N -S <sock> -l <login> [-o CertificateFile=<f>] <host>   a master: refuses when
+  -M -N -S <sock> -l <login> [-p <port>] [-o CertificateFile=<f>] <host>   a master:
+        cannot resolve <host> when $FAKESSH_DIR/nodns/<host> exists (issue #3482: a bare
+        machine name off the tailnet); refuses when
         $FAKESSH_DIR/down/<host> exists or the certificate file holds an epoch already
         past (checked ONCE, at the handshake — like sshd); answers `id -un` with
         $FAKESSH_DIR/login/<host> when that exists (a master logged in as someone
-        else), else <login>. Logs `master <host> <login> <pid>` to $FAKESSH_DIR/log.
+        else), else <login>. Logs `master <host> <login> <pid> <port|22>` to $FAKESSH_DIR/log.
   -S <sock> -O check|exit <host>      ssh's control commands
   -S <sock> [...] <host> <cmd...>     a channel on the master (`id -un`, `true`, anything)
 """
@@ -80,8 +82,11 @@ def talk(sock, msg):
 def master(o):
     host, sock = o.get("host", ""), o.get("S", "")
     login = o.get("l") or os.environ.get("USER", "")
+    if os.path.exists(d("nodns", host)):
+        sys.stderr.write("ssh: Could not resolve hostname %s: nodename nor servname provided, or not known\n" % host)
+        return 255
     if os.path.exists(d("down", host)):
-        sys.stderr.write("ssh: connect to host %s port 22: Connection refused\n" % host)
+        sys.stderr.write("ssh: connect to host %s port %s: Connection refused\n" % (host, o.get("p") or "22"))
         return 255
     for opt in o["opts"]:
         if opt.startswith("CertificateFile="):
@@ -103,7 +108,7 @@ def master(o):
     srv.bind(sock)
     srv.listen(16)
     ino = os.stat(sock).st_ino
-    log("master %s %s %d" % (host, login, os.getpid()))
+    log("master %s %s %d %s" % (host, login, os.getpid(), o.get("p") or "22"))
 
     def bye(*_):
         try:

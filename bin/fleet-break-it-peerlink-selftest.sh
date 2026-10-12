@@ -16,6 +16,11 @@
 #                          certificate: two certificate lives pass under a live link
 #   peerlink-hub-down      bin/fleet-peerlink.py start: the hub is down — the links up
 #                          stay, a new one is not opened and says why
+#   peerlink-name-unresolved bin/fleet-peerlink.py's routes (issue #3482): the other
+#                          machine's name resolves nowhere here (off the tailnet) —
+#                          the link rides the hub's route (the entry port) instead
+#   peerlink-reaped        bin/fleet-peerlink.py's default `all` mode (issue #3482): the
+#                          last view goes and the linger passes — the link stays
 #   peerlink-hostkey-unknown bin/fleet-peer-cert.sh (issue #3050): the other machine's
 #                          host key is in no known_hosts this login has — a REAL
 #                          BatchMode ssh to a REAL sshd (`sshd -i` as a ProxyCommand)
@@ -56,8 +61,11 @@ python3 -c 'import sys, time; print(time.time() + float(sys.argv[1]))' "\${PL_CE
 printf '%s\n' -i "$B/key" -o "CertificateFile=$B/cert-\$1" -o IdentitiesOnly=yes -l hubsays
 EOF
   chmod +x "$B/cert.sh"
+  # the hub's /v1/node/peers: $B/peers.json, none ⇒ no hub here (rc 3)
+  printf '#!/bin/bash\n[ -f "%s/peers.json" ] || exit 3\ncat "%s/peers.json"\n' "$B" "$B" > "$B/peers.sh"; chmod +x "$B/peers.sh"
   export FLEET_CONF_DIR="$B/conf" TMPDIR="$B/t" FAKESSH_DIR="$B/fs" FLEET_PEERLINK_HOME=home \
-    FLEET_PEERLINK_SSH="python3 $BIN/fleet-peerlink-fake-ssh.py" FLEET_PEERLINK_CERT_CMD="$B/cert.sh"
+    FLEET_PEERLINK_SSH="python3 $BIN/fleet-peerlink-fake-ssh.py" FLEET_PEERLINK_CERT_CMD="$B/cert.sh" \
+    FLEET_PEERLINK_PEERS_CMD="$B/peers.sh"
   unset FLEET_C
 }
 # pl_row <machine:login> — one session of yours there (its fleet UUID → that login)
@@ -207,6 +215,56 @@ drill_peerlink_hub_down() {
   python3 "$PL" status --check >/dev/null || { WHY="still WARN after the hub came back: $(python3 "$PL" status --check)"; pl_stop; return 1; }
   pl_stop
   WHAT="入口不在：已有的 m4 照用（同一 pid），新来的 m5 不开、不退回长期钥匙，doctor 写明 入口不在；入口回来后退避内开好 m5"
+}
+
+drill_peerlink_name_unresolved() {
+  CAP=8   # the name fails, the hub's routes arrive, the next attempt rides the entry port
+  local t0 out
+  pl_box nu
+  mkdir -p "$B/fs/nodns"; : > "$B/fs/nodns/lx0"
+  export FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24 FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1
+  # yesterday's way (#3482): your login on lx0 is known, its routes are not — the
+  # keeper dials the bare name, which only a tailnet resolves
+  printf '{"peers":[{"hostname":"lx0","login":"bob","routes":[]}]}\n' > "$B/peers.json"
+  pl_start
+  until_ok 8 sh -c 'out=$(python3 "$1" status --check); [ $? = 1 ] && printf %s "$out" | grep -q "lx0@bob 连不上.*Could not resolve hostname lx0"' _ "$PL" \
+    || { WHY="a name that does not resolve did not WARN with its reason: $(python3 "$PL" status --check)"; unset FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
+  # the hub lists its ways in: a tailnet name (no tailnet here) and the entry port
+  t0=$(now)
+  printf '{"peers":[{"hostname":"lx0","login":"bob","routes":[{"name":"tailnet","host":"lx0.tail.ts.net"},{"name":"entry","host":"120.24.204.160","port":22022}]}]}\n' > "$B/peers.json"
+  until_ok 10 pl_up lx0@bob || { WHY="the link never came up over the entry port: $(python3 "$PL" status --check)"; unset FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN; pl_stop; return 1; }
+  SECS=$(since "$t0")
+  unset FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN
+  grep -q '^master 120.24.204.160 bob [0-9]* 22022$' "$B/fs/log" || { WHY="not dialled at the entry port: $(cat "$B/fs/log")"; pl_stop; return 1; }
+  grep -q '^master lx0.tail.ts.net ' "$B/fs/log" && { WHY="the tailnet name was dialled with no tailnet here"; pl_stop; return 1; }
+  out=$(python3 "$PL" status --check) || { WHY="still WARN once up: $out"; pl_stop; return 1; }
+  case "$out" in *"lx0@bob 已连上 · 路线 entry 120.24.204.160:22022"*) ;; *) WHY="the doctor does not name the route: $out"; pl_stop; return 1 ;; esac
+  pl_ssh -S "$B/conf/peerlink/lx0@bob.sock" lx0 true >/dev/null || { WHY="the link carries no channel"; pl_stop; return 1; }
+  pl_stop
+  WHAT="对端机器名在这里解析不了（不在 tailnet）：doctor 报 连不上 + Could not resolve hostname；入口给出路线后，跳过本机没有的 tailnet，下一拍按门（120.24.204.160:22022）连上，doctor 写 已连上 · 路线 entry"
+}
+
+drill_peerlink_reaped() {
+  CAP=1   # nothing to wait for: the link must simply still be the same one
+  local t0 pid
+  export FLEET_PEERLINK_LINGER=1
+  pl_box rp m4:bob
+  pl_start
+  until_ok 8 pl_up m4@bob || { WHY="the link never came up"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  pid=$(pl_pid m4@bob)
+  # yesterday's way (#3482): the last thin view goes, and the link closed 「没人要了」
+  # FLEET_PEERLINK_LINGER later — the next switch to that machine built it again
+  rm -f "$B/conf/remote-views/a"
+  sleep 4
+  t0=$(now)
+  pl_up m4@bob || { WHY="the link was closed with no view: $(tail -3 "$B/run.err" | tr '\n' ' ')"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  [ "$(pl_pid m4@bob)" = "$pid" ] || { WHY="the master was rebuilt (pid $pid → $(pl_pid m4@bob))"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  pl_ssh -S "$B/conf/peerlink/m4@bob.sock" -O check m4 2>/dev/null || { WHY="ssh -O check does not answer"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  grep -q '没人要了' "$B/run.err" && { WHY="a close for want of use was recorded"; unset FLEET_PEERLINK_LINGER; pl_stop; return 1; }
+  SECS=$(since "$t0")
+  unset FLEET_PEERLINK_LINGER
+  pl_stop
+  WHAT="看台全关、过了保留期（1 s）：全连模式下常开连接不回收——同一个主进程、ssh -O check 照通、没有「没人要了」的记录"
 }
 
 drill_peerlink_hostkey_unknown() {
