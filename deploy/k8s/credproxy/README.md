@@ -77,8 +77,9 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
 **只在集群里**：没有 Ingress，不挂集群令牌，pod 带 `fleet/role: ops`。用户 pod
 （`extras/managed-node/render.py --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local`）
 的每个会话只拿入口签的通行证，经 pod 里的本机代理交给它；订阅凭据只在它和入口之间。
-它和 new-deploy 那份互不相干，各自滚动。一起起的还有统一出口和命名空间的网络规则：
-`../fleet-workers/`（一个 `kubectl apply -k` 全上，见 `../egress/README.md`）。
+它和 new-deploy 那份互不相干，各自滚动。一起起的还有统一出口、包缓存和命名空间的网络规则：
+`../fleet-workers/`（一个 `kubectl apply -k` 全上，见 `../egress/README.md`、`../caches/README.md`——
+包缓存三个镜像的 `:set-by-person` 同样在第 2 步换成 `@sha256:` 摘要）。
 
 首次上线（人做，一次）：
 

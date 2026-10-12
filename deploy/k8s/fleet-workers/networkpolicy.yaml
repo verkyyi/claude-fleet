@@ -1,7 +1,8 @@
 # fleet-workers' network rules (EPIC #3500 共同约定 6): deny by default; a user
 # pod (fleet/role=user) reaches kube-dns, the shared services (fleet/role=ops:
-# fleet-credproxy, fleet-egress) and the hub — nothing else, not another user
-# pod, not the internet. The shared services take requests from user pods only
+# fleet-credproxy, fleet-egress, the package caches fleet-npm · fleet-pypi ·
+# fleet-goproxy), the CI git mirror (arc-runners) and the hub — nothing else, not
+# another user pod, not the internet. The shared services take requests from user pods only
 # and go out on their own.
 #
 # ⚠️ ACK's flannel does not ENFORCE NetworkPolicy (docs/MANAGED-LINUX.md «Egress
@@ -47,6 +48,16 @@ spec:
       ports:
         - {protocol: TCP, port: 8788}   # fleet-credproxy
         - {protocol: TCP, port: 3128}   # fleet-egress
+        - {protocol: TCP, port: 4873}   # fleet-npm
+        - {protocol: TCP, port: 3141}   # fleet-pypi
+        - {protocol: TCP, port: 3000}   # fleet-goproxy
+    # the CI's git mirror (render.py --git-mirror): fetches only, git://
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: arc-runners
+      ports:
+        - {protocol: TCP, port: 9418}
     # the hub's public address (the node link, passes, the relay check): the
     # load balancer's IP, the same one render.py's --egress-allow names. The
     # TEST-NET placeholder allows nothing — replace it at apply (README.md).
@@ -91,6 +102,9 @@ spec:
       ports:
         - {protocol: TCP, port: 8788}
         - {protocol: TCP, port: 3128}
+        - {protocol: TCP, port: 4873}
+        - {protocol: TCP, port: 3141}
+        - {protocol: TCP, port: 3000}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
