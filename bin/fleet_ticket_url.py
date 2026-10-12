@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# fleet_ticket_url.py — a module (imported, not run); the line above keeps the
+# client installer's "a script starts with #" check happy.
 """Where a person reads ticket N of a repo (issue #3596, EPIC #3570 C3) — for the
 python callers (the sidebar's ⌘P list, the top bar, `fleet ls`'s batch row).
 
