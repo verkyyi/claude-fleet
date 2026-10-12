@@ -16,7 +16,7 @@
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n] [--rule N]
-#                     [--spawn] [--reap P] [--agent A]
+#                     [--spawn] [--reap P] [--agent A] [--draft] [--pr-note TEXT]
 #                     → the orchestrator's `task` tool: the record FIRST (`T<n>` on
 #                       stdout), then — a repo named, i.e. a development task —
 #                       fleet-issue-file.sh --task T<n> (+ --spawn: its worker,
@@ -132,7 +132,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' rule='' spawn=0 reap='' agent=''
+  title='' bodyf='' repo='' rule='' spawn=0 reap='' agent='' draft='' pr_note=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -142,11 +142,14 @@ if [ "$cmd" = dispatch ]; then
       --spawn) spawn=1 ;;
       --reap) reap="${2:-}"; shift ;;
       --agent) agent="${2:-}"; shift ;;
+      --draft) draft=--draft ;;   # issue #3715: a draft-only development task
+      --pr-note) pr_note="${2:-}"; draft=--draft; shift ;;
       *) usage ;;
     esac
     shift
   done
   [ -n "$title" ] || usage
+  [ -z "$draft" ] || [ -n "$repo" ] || die 2 "--draft needs --repo: a draft PR lives in a repo"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
   # One token per (caller, words): the orchestrator asking twice is one record.
@@ -162,7 +165,7 @@ if [ "$cmd" = dispatch ]; then
   if [ -n "$repo" ]; then   # a development task: its issue, hung on the record
     sp=''; [ "$spawn" = 1 ] && sp=--spawn
     exec bash "$BIN/fleet-issue-file.sh" --title "$title" ${body:+--body "$body"} --repo "$repo" \
-      ${rule:+--rule "$rule"} ${t:+--task "$t"} ${sp:+"$sp"}
+      ${rule:+--rule "$rule"} ${t:+--task "$t"} ${sp:+"$sp"} ${draft:+"$draft"} ${pr_note:+--pr-note "$pr_note"}
   fi
   [ "$spawn" = 1 ] || exit 0
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"

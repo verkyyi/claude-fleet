@@ -81,7 +81,13 @@
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
 #                       [--parent N] [--from ROLE] [--milestone M] [--rule N] \
 #                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage] \
-#                       [--task T<n>]
+#                       [--task T<n>] [--draft] [--pr-note TEXT]
+#   --draft (issue #3715): a DRAFT-ONLY ticket — the body carries
+#      `<!-- fleet:draft-only -->` (bin/fleet-draft.sh block): its worker opens a
+#      draft PR, reports waiting and stops; fleet-pr-merge.sh refuses it until
+#      `fleet-draft.sh approve <N>`. --pr-note TEXT (implies --draft) is what the
+#      PR body must carry (「日报回复 <日期>#<n>」, `<!-- daily-plan -->`).
+#      A --spawn of one keeps the default reap (merged): an open draft is never reaped.
 #   --task T<n> (issue #3330): the hub's task record this issue is filed FOR — the
 #      orchestrator's `task` tool opened it first; a development task then files
 #      its issue here. The body says 「hub 任务 T<n>」, the issue is hung on the
@@ -95,6 +101,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-gh-lib.sh"   # fleet_gh_write: every write below is queued (issue #1264)
 
 title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0 rule='' task=''
+draft=0 pr_note=''
 breakage='' bk_auto=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
 labels=()
 while [ "$#" -gt 0 ]; do
@@ -120,7 +127,9 @@ while [ "$#" -gt 0 ]; do
     --breakage)  breakage=1 ;;
     --no-breakage) breakage=0 ;;
     --breakage-key) shift; breakage_key="${1:-}" ;;
-    -h|--help)   sed -n '2,89p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --draft)     draft=1 ;;
+    --pr-note)   shift; pr_note="${1:-}"; draft=1 ;;
+    -h|--help)   sed -n '2,95p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-issue-file: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-issue-file: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -357,6 +366,10 @@ if [ -n "$_rule_add" ]; then
 fi
 if [ -n "$task" ]; then   # the hub's record it was filed for (issue #3330)
   if [ -n "$body" ]; then body="$body"$'\n\n'"hub 任务 $task"; else body="hub 任务 $task"; fi
+fi
+if [ "$draft" = 1 ]; then   # draft-only (issue #3715): the mark + the PR note, one source
+  _db=$(bash "$BIN/fleet-draft.sh" block --pr-note "$pr_note")
+  if [ -n "$body" ]; then body="$body"$'\n\n'"$_db"; else body="$_db"; fi
 fi
 if [ -n "$body" ]; then
   body="$body"$'\n\n'"$marker"

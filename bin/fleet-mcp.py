@@ -771,6 +771,11 @@ def tool_spawn(args):
     repo = check_repo(args)
     reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
     as_ = ["--as", args["agent"]] if args.get("agent") else []    # issue #3122
+    if args.get("draft") or args.get("pr_note"):   # issue #3715: mark the ticket draft-only first
+        mark = script([str(BIN / "fleet-draft.sh"), "mark", str(args["issue"])] + repo
+                      + (["--pr-note", args["pr_note"]] if args.get("pr_note") else []), WRITE_TIMEOUT_S)
+        if mark["exit"] != 0:
+            return mark
     return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_, SPAWN_TIMEOUT_S,
                   env=hub_env(ASSERT_TTL_S))
 
@@ -792,6 +797,20 @@ def tool_await(args):
                   t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
 
 
+def draft_argv(args):
+    """draft / pr_note (issue #3715) → the filer's --draft / --pr-note."""
+    if args.get("pr_note"):
+        return ["--pr-note", args["pr_note"]]
+    return ["--draft"] if args.get("draft") else []
+
+
+DRAFT = {"type": "boolean", "description": "Draft-only (issue #3715): its worker opens a DRAFT PR, reports "
+                                           "waiting and stops; it lands only after `fleet-draft.sh approve <N>` "
+                                           "(reject: `fleet-draft.sh reject <N> --reason …`)."}
+PR_NOTE = {"type": "string", "description": "Draft-only, plus what the PR body must carry (e.g. 「日报回复 "
+                                            "<日期>#<n>」 and <!-- daily-plan -->). Implies draft."}
+
+
 def tool_task(args):
     """The orchestrator's dispatch, record first (issue #3330): fleet-task-record.sh
     dispatch — the hub's T<n>, then a repo task's issue (+ worker), or a no-repo
@@ -809,6 +828,7 @@ def tool_task(args):
         argv += ["--reap", args["reap"]]
     if args.get("agent"):
         argv += ["--agent", args["agent"]]
+    argv += draft_argv(args)
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
     return {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
@@ -1073,6 +1093,7 @@ def tool_file_issue(args):
         argv += ["--rule", str(args["rule"])]
     if "task" in args:
         argv += ["--task", args["task"]]
+    argv += draft_argv(args)
     data = script(argv, FILE_TIMEOUT_S)
     if unspawned:   # issue #3113: filed as asked, nobody started
         data["stderr"] = (data.get("stderr") or "") + ORCH_HINT + "\n"
@@ -1273,7 +1294,8 @@ TOOLS = {
                       "description": "The agent file it starts as (issue #3122): a standard Claude Code agent "
                                      "— the repo's .claude/agents > ~/.claude/agents > a plugin; its model, "
                                      "tools and body. Default: fleet-worker when it is there. Not found = "
-                                     "refused, naming where it looked."}},
+                                     "refused, naming where it looked."},
+            "draft": DRAFT, "pr_note": PR_NOTE},
             "required": ["issue"], "additionalProperties": False}}),
     "set_reap": (tool_set_reap, {
         "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "
@@ -1316,7 +1338,8 @@ TOOLS = {
             "spawn": {"type": "boolean", "description": "Start its session now."},
             "reap": dict(REAP_POLICY, description="When the fleet may close a no-repo session on its own."),
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
-                      "description": "The agent file a no-repo session starts as (issue #3122)."}},
+                      "description": "The agent file a no-repo session starts as (issue #3122)."},
+            "draft": dict(DRAFT, description=DRAFT["description"] + " Needs repo."), "pr_note": PR_NOTE},
             "required": ["title"], "additionalProperties": False}}),
     "send": (tool_send, {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
@@ -1512,6 +1535,7 @@ TOOLS = {
                      "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
             "task": dict(TASK_REF, description="The hub task record this issue is filed FOR (issue #3330): "
                                                "hung on it, and a spawn's worker carries it."),
+            "draft": DRAFT, "pr_note": PR_NOTE,
             "repo": REPO},
             "required": ["title"], "additionalProperties": False}}),
     "gh": (tool_gh, {
