@@ -58,8 +58,9 @@ func TestSessionCredH2IssueVerifyRenew(t *testing.T) {
 	}
 	out := sessIssue(t, h, tok5, f5, map[string]any{"kind": "fcp-h2", "providers": []string{"claude"}})
 	cred, id := out["cred"].(string), out["id"].(string)
+	host, _ := out["machine"].(string) // the harness's node
 	c := h2Claims(t, cred)
-	if c.V != 2 || c.ID != id || c.Principal != "gh:1005" || c.Machine != "m5" {
+	if c.V != 2 || c.ID != id || c.Principal != "gh:1005" || host == "" || c.Machine != host {
 		t.Fatalf("claims = %+v", c)
 	}
 	i := strings.LastIndexByte(cred, '.')
@@ -70,7 +71,7 @@ func TestSessionCredH2IssueVerifyRenew(t *testing.T) {
 	if v := sessVerify(t, h, map[string]any{"cred": cred, "provider": "claude"}); v["valid"] != true || v["id"] != id {
 		t.Fatalf("verify: %v", v)
 	}
-	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "gh:1005@m5" {
+	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "gh:1005@"+host {
 		t.Fatalf("relay check: %d who=%q", code, who)
 	}
 	if code, _ := relayCheck(t, h, cred, "/chatgpt/codex/responses"); code != http.StatusForbidden {
