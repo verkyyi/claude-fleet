@@ -98,6 +98,8 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 
 入口启动时，每个没配的地址类键会打一行「未配置 &lt;键&gt;」，照着补即可。
 
+这两张表和 §1.4 的键都登记在仓库的设置总表 `conf/fleet.conf.reference` 末尾「The hub's own settings」一段（地址类在它上面一段），每键一行：用途、必填与否、是不是密钥。表与它不一致时以它为准。
+
 ### 1.4 登录方式
 
 至少配一种，配了几种登录页就给几种（顺序固定：微信、邮箱、GitHub）。**密钥类的值只放在环境变量或 Kubernetes Secret 里**。
