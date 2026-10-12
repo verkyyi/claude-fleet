@@ -996,7 +996,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   (#3670): it stages into `<state>/staging`, the core copies, fills the tools cache,
   signs ccquota and switches, its root half is `update {step}`; no core (or `FLEET_NODE_CORE=0`) ⇒ the old road,
   byte for byte. A new privileged op is a BREAK-IT row first (`root-core-*`), then a
-  line in the table. docs/MANAGED-NODE.md §20. **The daemon itself runs as
+  line in the table. docs/dev/MANAGED-NODE.md §20. **The daemon itself runs as
   `_fleetnode`** (issue #3668, C14): `FLEET_NODE_SEAT=1 fleet node install` →
   `install --seat` makes the account and moves the daemon onto it in ONE step (the
   root daemon hands its children over — `seat-handover.json` — and the seat adopts
