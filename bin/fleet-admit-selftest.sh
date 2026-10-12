@@ -25,6 +25,9 @@
 #   G. a reservation is ONE spawn's (issue #2502): void once its owner is gone
 #      without confirming a window, one per owner however often it is admitted,
 #      confirm keeps it, release drops it, the doctor names who holds them.
+#   H. the onboarding guide passes the room estimate (issue #3472): room 0 at
+#      normal pressure above the floor admits it, never an ordinary spawn;
+#      pressure, the floor, load and a standing hold still bind.
 set -uo pipefail
 unset FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE \
       FLEET_LOADGEN_LOAD_PER_CORE FLEET_MEM_PROBE_CMD FLEET_LOAD_PROBE_CMD \
@@ -241,5 +244,34 @@ for f in fleet-restore.sh fleet-handoff-cycle.sh; do
 done
 ok "E crash restore / handoff never reach the admission gate"
 
-printf '\nselftest OK: %s assertions passed (machine admission, issues #1090 #1831)\n' "$pass"
+# ===== H: the onboarding guide passes the room estimate (issue #3472) ===========
+# mini2, drill 34: pressure normal, 28 % free, floor 15 % — and «room for 0 more»
+# at ~960 MB a session refused a newcomer's FIRST window three times. Here: 16000
+# MB × 18 % = 2880 avail, floor 2400 → (2880 − 2400) / 600 = 0 room, above the floor.
+r=$(admit 'echo 1 18 5 0' 'echo 0.5')
+case "$r" in 1\|*pressure\ normal*room\ for\ 0\ more*) ;; *) fail "H room 0 at normal pressure holds an ordinary spawn (got '$r')" ;; esac
+r=$(admit 'echo 1 18 5 0' 'echo 0.5' FLEET_ADMIT_GUIDE=1); [ "$r" = "0|" ] || fail "H the guide passes room 0 at normal pressure above the floor (got '$r')"
+r=$(admit 'echo 2 18 5 0' 'echo 0.5' FLEET_ADMIT_GUIDE=1)
+case "$r" in 1\|*pressure\ warn*) ;; *) fail "H the kernel's pressure still holds the guide (got '$r')" ;; esac
+r=$(admit 'echo 1 14 5 0' 'echo 0.5' FLEET_ADMIT_GUIDE=1)
+case "$r" in 1\|*内存紧张*) ;; *) fail "H below the kept-back floor still holds the guide (got '$r')" ;; esac
+r=$(admit 'echo 1 18 5 0' 'echo 0.5' FLEET_ADMIT_GUIDE=1 FLEET_ADMIT_GUIDE_PASS=0)
+case "$r" in 1\|*room\ for\ 0\ more*) ;; *) fail "H FLEET_ADMIT_GUIDE_PASS=0 turns the waiver off (got '$r')" ;; esac
+r=$(admit 'echo 1 18 5 0' 'echo 9' FLEET_ADMIT_GUIDE=1)
+case "$r" in 1\|*负载过高*) ;; *) fail "H the load bound still holds the guide (got '$r')" ;; esac
+# a waived guide is no recovery: the hold an ordinary spawn left stays
+rm -rf "$WORK/t"; mkdir -p "$WORK/t"
+KEEP=1 admit 'echo 1 18 5 0' 'echo 0.5' >/dev/null
+[ -e "$WORK/t/.claude-dash/global/admit-held" ] || fail "H the ordinary hold writes admit-held"
+r=$(KEEP=1 admit 'echo 1 18 5 0' 'echo 0.5' FLEET_ADMIT_GUIDE=1); [ "$r" = "0|" ] || fail "H the guide passes under a hold (got '$r')"
+[ -e "$WORK/t/.claude-dash/global/admit-held" ] || fail "H the guide's waiver must not clear the hold"
+# the one place that asks for it: dash-raw-session, for the pinned guide seeded /fleet-onboard only
+grep -q '\[ "\$NAME" = guide \] && \[ "\$PIN" = 1 \] && \[ "\$PROMPT" = /fleet-onboard \] && _admit_guide=1' "$BIN/dash-raw-session.sh" \
+  && grep -q 'FLEET_ADMIT_GUIDE=\$_admit_guide fleet_session_cap_ok' "$BIN/dash-raw-session.sh" \
+  || fail "H dash-raw-session must ask the waiver for the pinned /fleet-onboard guide's admission only"
+[ "$(grep -lE '^[^#]*FLEET_ADMIT_GUIDE=' "$BIN"/*.sh | xargs -n1 basename | grep -v selftest | tr '\n' ' ')" = "dash-raw-session.sh " ] \
+  || fail "H only dash-raw-session sets FLEET_ADMIT_GUIDE"
+ok "H the onboarding guide passes room 0 at normal pressure above the floor; pressure/floor/load/hold still bind"
+
+printf '\nselftest OK: %s assertions passed (machine admission, issues #1090 #1831 #3472)\n' "$pass"
 exit 0

@@ -2460,6 +2460,10 @@ fleet_guide_tick() {
     printf '%s · 连续 %s 次没开口 · %s\n' "$(fleet_guide_why "$sock")" "$tries" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.stuck"
     printf '%s\n' "$stamp" > "$g/onboard.stuck.ts"
     fleet_guide_stuck_mark "$sock"
+    # and said, not only filed (issue #3472): a refused open leaves no window to
+    # wear the reason, so it goes out through the one exit for background news
+    local ab; ab="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-alerts.sh"
+    [ -f "$ab" ] && bash "$ab" event onboard-stuck "新手引导没开：$(head -n 1 "$g/onboard.stuck" 2>/dev/null)（fleet guide 重试）" >/dev/null 2>&1
     return 0
   fi
   printf '%s\n' "$stamp" > "$g/onboard.retry"
@@ -8375,6 +8379,22 @@ fleet_machine_headroom() {
   printf '%s %s %s %s %s %s %s %s\n' "$room" "$cost" "$avail" "$floor" "$res" "$hyst" "${med:-0}" "${agents:-0}"
 }
 
+# _fleet_admit_guide_pass <tight> <headroom line> — rc 0 when the onboarding
+# guide may take a room below 1 (issue #3472, see fleet_machine_admit): asked for
+# (FLEET_ADMIT_GUIDE=1), not switched off, pressure not already holding, and
+# available memory still above the floor.
+_fleet_admit_guide_pass() {
+  [ "${FLEET_ADMIT_GUIDE:-0}" = 1 ] && [ "${FLEET_ADMIT_GUIDE_PASS:-1}" != 0 ] || return 1
+  [ "$1" = 0 ] || return 1
+  local g_room g_cost g_avail g_floor g_more
+  read -r g_room g_cost g_avail g_floor g_more <<EOF
+$2
+EOF
+  : "${g_room:-}${g_cost:-}${g_more:-}"
+  case "$g_avail$g_floor" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$g_avail" -gt "$g_floor" ]
+}
+
 # fleet_machine_admit [--short] — may the machine take ONE MORE session right now
 # (issue #1090, EPIC #1291 C4; the only gate by default since #1831)? Exit 0 =
 # admit (prints nothing). Exit 1 = hold, and stdout says why — the full line, or
@@ -8391,6 +8411,17 @@ fleet_machine_headroom() {
 #                    2026-10-03); the old 2 meant load 30 on 15 cores, which never
 #                    fired (issue #1831).
 # An unreadable probe admits (no reading is not a reason to stop the fleet).
+# The onboarding guide passes the ROOM reading (issue #3472): a newcomer's first
+# window is the one thing the login is for, and on mini2 the per-session cost
+# (~960 MB × the reserved ones) read «room for 0 more» at 28 % free with the
+# kernel calling pressure normal — three refusals and the person never met the
+# guide. So with FLEET_ADMIT_GUIDE=1 (dash-raw-session sets it for the pinned
+# `guide` window running /fleet-onboard, and only for its own admission) a room
+# below 1 admits while the kernel's pressure is under FLEET_ADMIT_PRESSURE AND
+# memory is still above the kept-back floor — the floor and the pressure stay
+# absolute, only the one-more-session estimate is waived. It is bounded: a login
+# has one pinned guide, opened only while none runs. FLEET_ADMIT_GUIDE_PASS=0
+# turns the waiver off.
 # FLEET_ADMIT=0 switches it off. A hold is transient by design: every caller of
 # fleet_session_cap_ok already treats a refusal as "retry later" (dispatch's next
 # tick, the epic run's next refill), so spawns resume when the reading drops.
@@ -8398,7 +8429,7 @@ fleet_machine_admit() {
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local short=0 free_min="${FLEET_ADMIT_MEM_FREE_PCT:-15}" pres="${FLEET_ADMIT_PRESSURE:-warn}"
   local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-1.5}}" plim m lvl avail per pname
-  local hr='' room=1 tight=0 why
+  local hr='' room=1 tight=0 waived=0 why
   [ "${1:-}" = --short ] && short=1
   case "$free_min" in ''|*[!0-9]*) free_min=15 ;; esac
   case "$lmax" in ''|*[!0-9.]*) lmax=1.5 ;; esac
@@ -8410,7 +8441,10 @@ fleet_machine_admit() {
     [ "$plim" -gt 0 ] && [ "$lvl" -ge "$plim" ] && tight=1
     if [ -n "$avail" ]; then
       if hr=$(fleet_machine_headroom "$avail"); then
-        room=${hr%% *}; [ "$room" -lt 1 ] && tight=1
+        room=${hr%% *}
+        if [ "$room" -lt 1 ]; then
+          if _fleet_admit_guide_pass "$tight" "$hr"; then waived=1; else tight=1; fi
+        fi
       elif [ "$free_min" -gt 0 ] && [ "$avail" -lt "$free_min" ]; then
         tight=1
       fi
@@ -8442,7 +8476,8 @@ EOF
       "$per" "$lmax"
     return 1
   fi
-  [ -n "$hr" ] && rm -f "$FLEET_ADMIT_HELD_FILE" 2>/dev/null
+  # a waived guide is no recovery: the hold (and its hysteresis) stays for the rest
+  [ -n "$hr" ] && [ "$waived" = 0 ] && rm -f "$FLEET_ADMIT_HELD_FILE" 2>/dev/null
   return 0
 }
 

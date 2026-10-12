@@ -9,6 +9,8 @@
 # whose hub half runs against a curl shim — the drill person deletes ITSELF
 # (DELETE /v1/self, the approve code on stdin, never an argv), no operator
 # token in the environment, and the residue check reads the hub's 401.
+# Issue #3472 adds step 8b's judge: the home's onboarding guide — onboard.stuck
+# FAILs, onboarded or a pinned guide window PASSes, off / dismissed SKIPs.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 DRILL="$BIN/fleet-onboard-drill.sh"
@@ -300,5 +302,34 @@ else bad 'scratch: the ssh host-key question is not caught'; fi
 bad_vars=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~[:space:]]' "$DRILL" | grep -vE '^[0-9]+:[[:space:]]*#')
 if [ -z "$bad_vars" ]; then ok 'no $name directly before a non-ASCII byte (write ${name})'
 else bad "a \$name runs into a non-ASCII byte (bash 3.2 reads it as the name): $bad_vars"; fi
+# step 8b onboard-guide (issue #3472): drill 34 passed while the home's
+# onboard.stuck said the guide never opened — the probe reads the home's
+# global/ as the login, guide_state judges it, and the run reaches the step
+G="$T/guide"; mkdir -p "$G/c/global" "$G/c/fleets"
+gstate() { env HOME="$G" FLEET_CONF_DIR="$G/c" bash "$DRILL" --guide-probe 2>/dev/null | bash "$DRILL" --guide-state; }
+[ "$(gstate)" = 'skip onboarding off on the home (no onboard.pending)' ] || bad "guide: no pending marker must SKIP (got '$(gstate)')"
+: > "$G/c/global/onboard.pending"
+[ "$(gstate)" = 'wait pending' ] || bad "guide: pending must wait (got '$(gstate)')"
+printf '引导窗口没能打开：dash-raw-session: machine memory tight — 暂停开新：内存紧张 · 连续 3 次没开口 · 2026-10-11 09:00\n' > "$G/c/global/onboard.stuck"
+case "$(gstate)" in 'fail 引导窗口没能打开：dash-raw-session: machine memory tight'*'连续 3 次没开口'*) ok 'guide: onboard.stuck FAILs quoting its line' ;;
+  *) bad "guide: onboard.stuck must FAIL quoting it (got '$(gstate)')" ;; esac
+rm -f "$G/c/global/onboard.stuck"
+TMUXR=''
+for d in $(printf '%s' "$PATH" | tr ':' ' '); do case "$d" in *tmux-shim*) continue ;; esac; [ -x "$d/tmux" ] && { TMUXR="$d/tmux"; break; }; done
+if [ -n "$TMUXR" ]; then
+  GL="odguide$$"; mkdir -p "$G/c/fleets/$GL" "$G/tb"; ln -sf "$TMUXR" "$G/tb/tmux"
+  TMUX='' "$TMUXR" -L "$GL" new-session -d -s "$GL" -n home 'sleep 60' 2>/dev/null
+  TMUX='' "$TMUXR" -L "$GL" new-window -d -t "$GL" -n guide 'sleep 60' 2>/dev/null
+  TMUX='' "$TMUXR" -L "$GL" set-option -w -t "$GL:guide" @pin 1 2>/dev/null
+  r=$(env PATH="$G/tb:$PATH" HOME="$G" FLEET_CONF_DIR="$G/c" bash "$DRILL" --guide-probe 2>/dev/null | bash "$DRILL" --guide-state)
+  TMUX='' "$TMUXR" -L "$GL" kill-server >/dev/null 2>&1
+  [ "$r" = 'pass guide window up' ] && ok 'guide: a pinned guide window on the home PASSes' || bad "guide: a pinned guide window must PASS (got '$r')"
+fi
+: > "$G/c/global/onboarded"
+[ "$(gstate)" = 'pass onboarded' ] || bad "guide: onboarded must PASS (got '$(gstate)')"
+[ "$(printf 'garbage\n' | bash "$DRILL" --guide-state)" = 'wait no answer from the home: garbage ' ] || bad 'guide: an unreadable answer waits'
+if grep -q 'step_scratch && { step_answer || :; step_guide || :; step_attach' "$DRILL" \
+   && grep -q 'failstep onboard-guide "the home.s onboarding guide stopped' "$DRILL"; then ok 'guide: the run reaches step 8b, onboard.stuck is a FAIL'
+else bad 'guide: the main run does not reach step_guide'; fi
 [ "$FAILS" = 0 ] && { echo 'fleet-onboard-drill-selftest: PASS'; exit 0; }
 echo "fleet-onboard-drill-selftest: FAIL ($FAILS)"; exit 1

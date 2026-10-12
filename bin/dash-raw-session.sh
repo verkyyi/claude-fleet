@@ -355,7 +355,13 @@ PLACING=0
 # stopped by THIS machine's caps — that is exactly when it should go elsewhere —
 # so the verdict is held until placement answers, and enforced only if it opens here.
 CAP_HELD=''
-if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then
+# The onboarding guide — the pinned `guide` window seeded /fleet-onboard — is a
+# newcomer's first window: the memory room estimate is waived for it, the floor
+# and the kernel's pressure are not (issue #3472, fleet_machine_admit). Only this
+# admission sees the flag; nothing the window runs inherits it.
+_admit_guide=0
+[ "$NAME" = guide ] && [ "$PIN" = 1 ] && [ "$PROMPT" = /fleet-onboard ] && _admit_guide=1
+if ! cap_msg=$(FLEET_ADMIT_GUIDE=$_admit_guide fleet_session_cap_ok "$SESS"); then
   if [ "$PLACING" = 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then CAP_HELD=$cap_msg
   else refuse "$cap_msg"; exit 2; fi
 fi

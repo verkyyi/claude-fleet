@@ -69,6 +69,8 @@
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   pool-admit-phantoms                             fleet_session_cap_ok / fleet_admit_reserve / fleet_admit_confirm /
 #                                                   fleet_admit_release / fleet_admit_holders (fleet-lib.sh), scratch-pool.sh
+#   guide-admission-room                            fleet_machine_admit / _fleet_admit_guide_pass / fleet_guide_tick
+#                                                   (fleet-lib.sh), dash-raw-session.sh, fleet-alerts.sh event
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
 #                                                   steward's beat (bin/fleet_steward.py)
@@ -1182,6 +1184,43 @@ drill_pool_admit_phantoms() {
   [ "$out" = 1 ] || { WHY="a confirmed window's reservation must outlive its spawner (got $out)"; return 1; }
   SECS=$(since "$t0")
   WHAT="5 拍失败的预热不留预留、真放置照样有 4 个位置；在跑的 spawn 计入并列出 pid+命令；开出窗口的确认后独立计入"
+}
+
+# guide-admission-room (issue #3472): a newcomer's FIRST window — the onboarding
+# guide — refused three times by the room estimate on mini2 (pressure normal, 28 %
+# free, floor 15 %, «room for 0 more at ~960 MB»), and the stop sat in a file.
+# For real on a sandbox state dir with stubbed readings (16000 MB, 18 % free,
+# ~1200 MB a session ⇒ room 0, above the floor): an ordinary spawn is held, the
+# guide's admission (FLEET_ADMIT_GUIDE=1, what dash-raw-session asks for the pinned
+# /fleet-onboard window) passes, a warn pressure still holds it; and a guide tick
+# that stops writes onboard.stuck AND says it (an onboard-stuck alert event).
+drill_guide_admission_room() {
+  CAP=30; local t0 d="$WORK/gar" out ev
+  mkdir -p "$d/tmp" "$d/conf/global"
+  adm() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MEM_TOTAL_MB=16000 \
+            FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 409600 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD="echo ${P:-1} 18 0 0" FLEET_LOAD_PROBE_CMD='echo 0.5' \
+            FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 FLEET_MACHINE_MAX_SESSIONS=0 \
+            bash -c "source '$BIN/fleet-lib.sh'; $1" 2>&1; }
+  t0=$(now)
+  out=$(adm 'fleet_session_cap_ok fleet; echo "|rc=$?"')
+  case "$out" in *'pressure normal'*'room for 0 more'*'|rc=1') ;; *) WHY="an ordinary spawn at room 0 must be held: $out"; return 1 ;; esac
+  out=$(adm 'FLEET_ADMIT_GUIDE=1 fleet_session_cap_ok fleet; echo "|rc=$?"')
+  [ "$out" = '|rc=0' ] || { WHY="the onboarding guide was refused at normal pressure above the floor: $out"; return 1; }
+  out=$(P=2 adm 'FLEET_ADMIT_GUIDE=1 fleet_session_cap_ok fleet; echo "|rc=$?"')
+  case "$out" in *'pressure warn'*'|rc=1') ;; *) WHY="a warn pressure must still hold the guide: $out"; return 1 ;; esac
+  grep -q '\[ "\$NAME" = guide \] && \[ "\$PIN" = 1 \] && \[ "\$PROMPT" = /fleet-onboard \] && _admit_guide=1' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session does not ask the waiver for the pinned /fleet-onboard guide"; return 1; }
+  # the third try that never spoke: the stop is written and said
+  : > "$d/conf/global/onboard.pending"; printf '3\n' > "$d/conf/global/onboard.tries"; printf '0\n' > "$d/conf/global/onboard.retry"
+  printf '引导窗口没能打开：dash-raw-session: machine memory tight · x\n' > "$d/conf/global/onboard.openfail"
+  adm "fleet_guide_tick gar-nosuch-$$" >/dev/null
+  [ -s "$d/conf/global/onboard.stuck" ] || { WHY="three tries did not write onboard.stuck"; return 1; }
+  ev=$(find "$d" -name alerts.events -type f 2>/dev/null | head -n 1)
+  grep -q 'onboard-stuck.*新手引导没开：引导窗口没能打开' "${ev:-/nonexistent}" 2>/dev/null \
+    || { WHY="the stop was filed but not said (no onboard-stuck event in ${ev:-alerts.events}): $(cat "$d/conf/global/onboard.stuck")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="room 0、压力正常、在保底线之上：普通会话照拦，新手引导放行，压力 warn 仍拦；三次没开口写 onboard.stuck 并发出 onboard-stuck 事件"
 }
 
 # hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and

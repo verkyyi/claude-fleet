@@ -18,6 +18,7 @@
 #   answer_state <word>     bad · answered · up · wait — claude answering in a session
 #   answer_bad_line         the line that made it bad
 #   eta_rises               the first ETA that went UP (「a→b」), '' when none did
+#   guide_state             pass · fail · skip · wait + why — the home's onboarding guide
 
 # list_row_named <name> (a screen on stdin): a list ROW carrying the name — the left column before 「│」,
 # never the input line 「› <name>」 (the typed name is not a session; matching
@@ -208,3 +209,27 @@ opening_eta() {
 # the number went UP, as 「a→b」 — the hub's ETA only goes down (#2731, the
 # drill read 「约 313 秒」 then 「约 858 秒」); nothing when it never rose.
 eta_rises() { awk 'NR > 1 && $1 + 0 > p + 0 { print p "→" $1; exit } { p = $1 }'; }
+
+# guide_state (GUIDE_PROBE's one line on stdin — fleet-onboard-drill.sh runs it as
+# the login on the session's home): did the newcomer's onboarding guide open
+# (issue #3472)? Drill 34 passed while the home's global/onboard.stuck read
+# 「引导窗口没能打开：… 内存紧张 … 连续 3 次没开口」 — the thin client's own first
+# session went through, so nothing on the screen said the guide never came.
+#   pass <what>   onboarded, or the pinned guide window is up
+#   fail <why>    onboard.stuck — the guide stopped (its own line)
+#   skip <why>    onboarding is off on that login, or the person closed the guide
+#   wait <why>    still pending (the last failed open's line, when there is one)
+# An unreadable answer is wait: the step's own deadline turns it into a FAIL.
+guide_state() {
+  local k rest
+  IFS=$'\t' read -r k rest || k=''
+  case "$k" in
+    onboarded) printf 'pass onboarded\n' ;;
+    guide)     printf 'pass guide window up\n' ;;
+    stuck)     printf 'fail %s\n' "${rest:-onboard.stuck}" ;;
+    off)       printf 'skip onboarding off on the home (no onboard.pending)\n' ;;
+    dismissed) printf 'skip the guide window was closed (onboard.dismissed)\n' ;;
+    pending)   printf 'wait %s\n' "${rest:-pending}" ;;
+    *)         printf 'wait no answer from the home%s\n' "${k:+: $k $rest}" ;;
+  esac
+}
