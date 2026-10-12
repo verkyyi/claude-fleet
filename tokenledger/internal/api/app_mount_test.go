@@ -89,7 +89,7 @@ func TestAppIsNoindex(t *testing.T) {
 		code int
 	}{
 		{AppPrefix, admin, http.StatusOK}, {AppPrefix + "/", admin, http.StatusOK},
-		{AppPrefix + "/sessions", user, http.StatusOK}, {AppPrefix + "/machines/m4", user, http.StatusOK},
+		{AppPrefix + "/sessions", user, http.StatusOK}, {AppPrefix + "/machines/mac-a", user, http.StatusOK},
 		{AppPrefix + "/nodes", user, http.StatusForbidden}, {AppPrefix + "/signin", nil, http.StatusOK},
 		{AppPrefix + "/sessions", nil, http.StatusFound},
 		{AppPrefix + "/v1/fleet/me", admin, http.StatusNotFound}, {AppPrefix + "/install", nil, http.StatusNotFound},

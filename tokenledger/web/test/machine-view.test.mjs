@@ -24,8 +24,8 @@ test('freshness: N 秒前, yellow past a minute, grey past five, 时间未知 wi
 });
 
 test('machineHref is the short name; from the admin list it says so; back goes there', () => {
-  assert.equal(machineHref('macmini.tail435588.ts.net'), '/app/machines/macmini');
-  assert.equal(machineHref('m4', true), '/app/machines/m4?from=nodes');
+  assert.equal(machineHref('mac-a.example.ts.net'), '/app/machines/mac-a');
+  assert.equal(machineHref('mac-b', true), '/app/machines/mac-b?from=nodes');
   assert.equal(backHref('?from=nodes'), '/app/nodes');
   assert.equal(backHref(''), '/app/machines');
   assert.equal(clientRedirect(false), '/app/connect');

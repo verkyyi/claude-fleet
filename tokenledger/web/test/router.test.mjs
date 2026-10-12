@@ -26,7 +26,7 @@ test('every page in the menu is a route, and its path is its href', () => {
   // address from before the move is the hub's to forward, never a page here.
   assert.equal(routeFor('/app').id, 'overview');
   assert.equal(routeFor('/app/'), routeFor('/app'));
-  for (const p of ['/', '/sessions', '/usage', '/nodes', '/machines/m4']) assert.equal(routeFor(p), null, p);
+  for (const p of ['/', '/sessions', '/usage', '/nodes', '/machines/mac-a']) assert.equal(routeFor(p), null, p);
   for (const p of ['/app/signin', '/sessions.html', '/v1/me', '/no-such', '/admin']) assert.equal(routeFor(p), null, p);
 });
 
@@ -64,15 +64,15 @@ test('one machine is a page under /machines/; the bare path stays the list (clau
   const one = PAGES.find((p) => p.id === 'machine');
   assert.equal(routeFor('/app/machines').id, 'mymachines');
   assert.equal(routeFor('/app/machines/').id, 'mymachines', 'a trailing slash is still the list');
-  assert.equal(routeFor('/app/machines/macmini'), one);
-  assert.equal(routeFor('/app/machines/macmini/'), one);
+  assert.equal(routeFor('/app/machines/mac-a'), one);
+  assert.equal(routeFor('/app/machines/mac-a/'), one);
   assert.equal(routeFor('/app/machines/a/b'), null, 'one name, no deeper');
-  assert.equal(pathParam('/app/machines/macmini', one), 'macmini');
+  assert.equal(pathParam('/app/machines/mac-a', one), 'mac-a');
   assert.equal(pathParam('/app/machines/m%C3%A9', one), 'mé');
   assert.equal(pathParam('/app/sessions', routeFor('/app/sessions')), '');
-  const hit = intercept(click(), anchor(ORIGIN + '/app/machines/macmini?from=nodes'), ORIGIN);
+  const hit = intercept(click(), anchor(ORIGIN + '/app/machines/mac-a?from=nodes'), ORIGIN);
   assert.equal(hit.page, one);
-  assert.equal(hit.url, '/app/machines/macmini?from=nodes');
+  assert.equal(hit.url, '/app/machines/mac-a?from=nodes');
 });
 
 test('a plain click on a page link opens it in place; between every pair of pages', () => {
