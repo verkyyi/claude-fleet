@@ -24,7 +24,8 @@ import (
 // acts is bin/fleet_cluster_ticket.py; this is its Go twin, and the test pins
 // one ticket both make byte for byte.
 
-// The provisioner's ops. create-user-pod carries the pod's one-time machine
+// The provisioner's ops. create-job carries the Job's kind and its one command
+// line (claude-fleet#3552, C7). create-user-pod carries the pod's one-time machine
 // join code (the provisioner writes it into the Secret u-<nonce>-join), and
 // bind-user-pod the label-safe principal a claimed spare pod is labelled with
 // (claude-fleet#3553, EPIC #3500 C8).
@@ -64,6 +65,8 @@ type ClusterTicket struct {
 	UID       int    `json:"uid,omitempty"`
 	Repo      string `json:"repo,omitempty"`
 	Ref       string `json:"ref,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Cmd       string `json:"cmd,omitempty"`
 	Join      string `json:"join,omitempty"`
 	Principal string `json:"principal,omitempty"`
 	Nonce     string `json:"nonce"`

@@ -357,6 +357,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			case control.TypeClusterOp:
 				// One provisioner ticket, carried as it came (claude-fleet#3553).
 				go a.answerClusterOp(ctx, conn, m)
+			case control.TypeClusterJob:
+				// A throwaway Job's state and log, read back (claude-fleet#3552).
+				go a.answerClusterJob(ctx, conn, m)
 			case control.TypeError:
 				if relayOK && a.relayRefused(rp, m.OpID, m.Error) {
 					break

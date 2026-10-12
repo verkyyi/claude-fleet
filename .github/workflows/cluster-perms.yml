@@ -1,9 +1,10 @@
 name: cluster-perms
 
 # The cluster half of BREAK-IT sa-token-in-user-pod, provisioner-off-template
-# (claude-fleet#3558, EPIC #3500 C16) and root-in-user-pod (#3757: a person's pod
-# running, `ps` in both its containers): fleet-workers' accounts, fleet-ops' Role,
-# the provisioner, its Role and its admission policy on a throwaway kind
+# (claude-fleet#3558, EPIC #3500 C16), root-in-user-pod (#3757: a person's pod
+# running, `ps` in both its containers) and job-sees-keys (#3552: a throwaway Job
+# of each trust): fleet-workers' accounts, fleet-ops' Role, the provisioner, its
+# Role and its admission policy on a throwaway kind
 # cluster in this runner (deploy/k8s/provisioner/kind-drill.sh). The run's
 # summary page carries `kubectl auth can-i --list` for every account. Nothing
 # here touches a real cluster, and it needs no credential.
@@ -24,6 +25,7 @@ on:
       - 'bin/fleet_cluster_ticket.py'
       - 'bin/fleet_admin_ticket.py'
       - 'bin/fleet_ed25519.py'
+      - 'bin/fleet-job-runner.sh'
       - '.github/workflows/cluster-perms.yml'
   workflow_dispatch:
 
@@ -56,8 +58,27 @@ jobs:
         id: kind
         with:
           cluster_name: perms
-          wait: 120s
+          # no CNI yet: the nodes are Ready only once Calico is up (next step)
+          wait: 0s
           registry: true
+          config: deploy/k8s/provisioner/kind-config.yaml
 
-      - name: The drill (three rows; can-i for every account)
+      # NetworkPolicy has to be ENFORCED for the drill to mean anything (an
+      # untrusted Job's cut from the internet, claude-fleet#3552): kind's own CNI
+      # let a Job through default-deny, so Calico — its images from quay.io, not
+      # Docker Hub's anonymous limit inside the kind node.
+      - name: Calico
+        run: |
+          set -euo pipefail
+          pool=10.244.0.0/16  # oss-ok: kind's own default pod range (kind-config.yaml)
+          curl -fsSL https://raw.githubusercontent.com/projectcalico/calico/v3.29.1/manifests/calico.yaml \
+            | sed -e 's#docker.io/calico/#quay.io/calico/#' \
+                  -e 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|' \
+                  -e "s|#   value: \"[0-9./]*\"|  value: \"$pool\"|" \
+            | kubectl apply -f - >/dev/null
+          kubectl -n kube-system rollout status ds/calico-node --timeout=300s
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          kubectl -n kube-system rollout status deploy/coredns --timeout=180s
+
+      - name: The drill (every row; can-i for every account)
         run: deploy/k8s/provisioner/kind-drill.sh "${{ steps.kind.outputs.LOCAL_REGISTRY }}"

@@ -762,6 +762,73 @@ destroy (#3772). BREAK-IT `spare-pod-leaks` drills it on this machine (the
 provisioner against a stand-in API + the hub's Go test) and on kind
 (`deploy/k8s/provisioner/kind-drill.sh`).
 
+## Throwaway Jobs
+
+(issue #3552, EPIC #3500 C7) A session in a person's pod hands a full test run,
+a big build, browser automation, a load test or untrusted code to a Job that is
+deleted when it is done — so it does not slow the person's other sessions, and
+code nobody vetted never runs beside their keys:
+
+```sh
+fleet job run --kind test -- make test          # build | test | browser | load | untrusted
+fleet job run --kind untrusted --detach -- ./their-script.sh
+fleet job status job-0123456789ab
+fleet job logs job-0123456789ab [--follow]
+```
+
+The road (`bin/fleet-job.sh` → `bin/fleet_job.py`):
+
+- **Ask**: `POST /v1/node/jobs {repo, ref, kind, cmd}` with the login's own node
+  credential (`tokenledger/internal/api/fleet_jobs.go`). The hub takes the
+  caller's machine as the pod — a live `fleet_cluster_pods` row — never a pod it
+  names, signs a `create-job` ticket (pod · repo · commit · kind · one command
+  line) and carries it down the cluster's ops link like every other cluster op;
+  `job.create` audited. The commit must be on the remote (the Job fetches it from
+  the mirror): `fleet job run` defaults to HEAD and refuses one no remote branch
+  holds.
+- **Run**: the provisioner renders `render.py`'s Job for that kind
+  (`job_resources`, `JOB_KINDS`) and the template's `job` settings, and runs
+  `bin/fleet-job-runner.sh` in the managed-node image: the commit fetched from
+  `job.git_mirror`, the command by `sh -c`, npm / pip / Go from the cluster's
+  caches (`job.caches`), whatever it leaves in `$FLEET_JOB_OUT` packed at the
+  end of its log.
+- **Read back**: `GET /v1/node/jobs/<job>?offset=N` — the hub sends
+  `cluster_job {job, owner, offset}` down the ops link; fleet-ops reads the Job
+  and its pod's log with its own read-only account (Role: jobs, pods/log) and
+  answers only for a Job labelled `fleet/owner` the asking pod
+  (`internal/agent/node_cluster_job.go`, `CCQUOTA_FLEET_KUBE_API` /
+  `CCQUOTA_FLEET_KUBE_SA_DIR` override the in-cluster defaults). The client
+  prints the log as it comes and unpacks the outputs into the worktree's
+  `.fleet-job/<job>/` (in `.git/info/exclude`).
+
+| kind | CPU · memory | deadline | network |
+|---|---|---|---|
+| build · test | 2 · 4Gi | 1 h | DNS, caches, git mirror, the egress (3128) |
+| browser | 2 · 4Gi, `/dev/shm` 1Gi | 30 min | same |
+| load | 4 · 4Gi | 30 min | same |
+| untrusted | 1 · 2Gi | 15 min | DNS, caches, git mirror — **no public internet** |
+
+Every kind: `fleet-job`, no token, only emptyDirs (no home disk, no Secret),
+uid 10001, read-only root, ALL capabilities dropped, `backoffLimit 0`, deleted
+`job.ttl` seconds (600) after it ends, its log with it. An open kind carries
+`fleet/job-net: open`, which `job-out-open` lets reach the egress; untrusted has
+no such label, so `job-out` is all it gets. The template's `job` block:
+
+```json
+"job": {"image": "<managed-node image by digest>", "pull_secrets": ["acr-pull"],
+        "git_mirror": "git://<mirror>/{repo}.git", "caches": true,
+        "egress_proxy": "http://fleet-egress.fleet-workers.svc.cluster.local:3128",
+        "deadline": 3600, "ttl": 600}
+```
+
+Not yet: a commit that is only local (an uploaded snapshot), and a per-person
+cap on Jobs at once — the namespace's ResourceQuota bounds the total. A read
+landing on a hub replica without the ops link answers 503 and the client tries
+again. BREAK-IT `job-sees-keys` drills it on this machine (the provisioner
+against a stand-in API, the runner in an untrusted Job's environment, the hub's
+Go test) and on kind (a test and an untrusted Job run, find nothing, and are
+deleted).
+
 ## Upgrade and recovery
 
 The machine follows `stable` by itself, with the same updater as a Mac

@@ -533,6 +533,9 @@ func (s *Server) routes() *routeMux {
 		// record, a question or a park on one, an EPIC member's.
 		mux.HandleFunc(NodeTasksPath, s.handleNodeTasks)
 		mux.HandleFunc(NodeTasksPath+"/", s.handleNodeTasks)
+		// A throwaway Job for a session in a person's pod (claude-fleet#3552).
+		mux.HandleFunc(NodeJobsPath, s.handleNodeJobs)
+		mux.HandleFunc(NodeJobsPath+"/", s.handleNodeJobs)
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
