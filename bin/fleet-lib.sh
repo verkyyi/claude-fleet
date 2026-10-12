@@ -1224,6 +1224,18 @@ fleet_ticket_home() {
 # call it always made, byte for byte (共同约定 4).
 fleet_ticket_hub() { [ "$(fleet_ticket_home "${1:-}" "${2:-}")" = hub ]; }
 
+# fleet_ticket_hub_ready → rc 0 when this login reaches a hub its tickets could live
+# on (issue #3739): a hub address and a node token — a separated login's
+# node.pub.env address counts (its token is the broker's). The default a NEW repo
+# takes (fleet_repo_register); never a reader — a repo's home is its conf alone.
+fleet_ticket_hub_ready() {
+  if [ ! -r "$(fleet_node_env_file)" ] && _fleet_node_separated; then
+    [ -n "$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$FLEET_CONF_DIR/node.pub.env" 2>/dev/null | head -n 1)" ]
+    return
+  fi
+  ! _fleet_hub_creds_missing >/dev/null
+}
+
 # fleet_ticket_view <repo> <num> <fields> [jq-filter] → a hub ticket read through
 # the door, in gh issue view's field names; with a filter, what `gh … --jq` would
 # print (jq -r). rc = the door's (4 = the hub is not reachable).
@@ -2211,18 +2223,24 @@ fleet_repo_trust_warn() {
 # the same shape as dash-reap.sh's; everything human goes to stderr:
 #   added:<slug>              0  overlay written, daemons woken
 #   refused:invalid-repo      1  not owner/name
+#   refused:invalid-tickets   1  --tickets is neither hub nor github
 #   refused:hosted            1  the fleet already hosts it
 #   refused:origin-mismatch   1  <dir> is a checkout of another repo
 #   refused:not-a-checkout    1  <dir> exists and is not a git checkout
 #   failed:clone              1  the clone failed
 #   failed:write              1  the overlay could not be written
 # Nothing is written unless the token is added:*.
+# Where its tickets live (issue #3739): `--tickets hub|github` says it; left out, a
+# login that reaches a hub (fleet_ticket_hub_ready) writes FLEET_TICKETS="hub", one
+# that does not writes nothing (unset = github, the conf byte for byte as before).
+# A repo registered before this has no line and `fleet-conf.sh migrate` pins it.
 fleet_repo_register() {
   local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc seed=0
-  local as="" remote="" forge=github had
+  local as="" remote="" forge=github had tickets=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      --tickets) tickets="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --as) as="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --seed) seed=1; shift ;;
       *) if [ -z "$sess" ]; then sess="$1"; elif [ -z "$repo" ]; then repo="$1"
@@ -2237,6 +2255,10 @@ fleet_repo_register() {
     repo=$(fleet_repo_name_of "$remote")
   fi
   [ -n "$as" ] && repo="$as"
+  case "$tickets" in
+    ''|hub|github) : ;;
+    *) echo "fleet-repo: --tickets takes hub or github, not '$tickets'" >&2; echo "refused:invalid-tickets"; return 1 ;;
+  esac
   repo=$(fleet_norm_repo "$repo")
   case "$repo" in
     *[!A-Za-z0-9_./-]* | */*/* | /* | */) repo="" ;;
@@ -2281,6 +2303,7 @@ fleet_repo_register() {
          echo "fleet-repo: WARNING — could not read $repo's default branch from $remote; using '$base' ($base_src) — verify it is the trunk." >&2
        fi ;;
   esac
+  [ -n "$tickets" ] || { fleet_ticket_hub_ready && tickets=hub; }
   f=$(fleet_repo_conf_file "$sess" "$repo")
   if ! mkdir -p "$(dirname "$f")" 2>/dev/null || ! {
       printf "# claude-fleet: repo '%s' hosted by fleet '%s' — written by fleet-repo.sh %s\n" \
@@ -2297,6 +2320,8 @@ fleet_repo_register() {
         printf 'FLEET_REMOTE=%s\n' "$(_fleet_conf_q "$remote")"
         printf 'FLEET_FORGE="none"\nFLEET_LAND="fleet"\n'
       fi
+      # Its tickets' home (issue #3739): written only when it is the hub or was asked.
+      [ -n "$tickets" ] && printf 'FLEET_TICKETS="%s"\n' "$tickets"
       # The seed only looks (issue #1167): marked in the same write, so no daemon
       # tick ever reads it unmarked; its switches are its own, never the fleet's.
       if [ "$seed" = 1 ]; then
@@ -2307,7 +2332,7 @@ fleet_repo_register() {
   fi
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
-  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )) — $f" >&2
+  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )${tickets:+ tickets=$tickets}) — $f" >&2
   [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
