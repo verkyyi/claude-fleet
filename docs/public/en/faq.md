@@ -49,10 +49,10 @@ It is most likely waiting for your answer (pick an option, approve an action). T
 ## Self-hosting
 
 ### What is the least I need to self-host?
-One macOS or Linux computer, a Claude or ChatGPT subscription, and the `claude` or `codex` command line signed in once. One computer needs no hub; the [self-host quick start](self-host/quickstart.md) gets you to a first session in about ten minutes.
+One macOS or Linux computer, a Claude or ChatGPT subscription, and the `claude` or `codex` command line signed in once. One computer needs no hub; the [self-host quick start](self-host/quickstart.md) gets you to a first session in about ten minutes. <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
 
 ### When do I need my own hub?
-When you want to connect several machines, invite colleagues, or watch sessions from the web console or a phone. The hub is one program on one port that stores its data in SQLite or Postgres; see [Install and deploy](self-host/install.md).
+When you want to connect several machines, invite colleagues, or watch sessions from the web console or a phone. The hub is one program on one port that stores its data in SQLite or Postgres; see [Install and deploy](self-host/install.md). <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
 
 ### Does a self-hosted hub show the website?
 No. A self-hosted hub opens straight into the console; the website runs only on our own hub.
@@ -61,4 +61,4 @@ No. A self-hosted hub opens straight into the console; the website runs only on 
 Machines and clients follow the stable release: `fleet update` catches up at once, and they catch up by themselves anyway. A switch replaces the programs and background services, never a running session.
 
 ### How do I find out what is broken?
-Run `fleet doctor` first; what each line means and what to do when it is red is in [Troubleshooting](troubleshooting.md). To have someone else look, `fleet debug report` sends the diagnosis to the hub and gives you a short link.
+Run `fleet doctor` first; what each line means and what to do when it is red is in [Troubleshooting](troubleshooting.md). To have someone else look, `fleet debug report` sends the diagnosis to the hub and gives you a short link. <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
