@@ -311,9 +311,6 @@ func TestMeIdentities(t *testing.T) {
 // role, machine login, name, /v1/me, certificate and tasks — read before
 // on the old table and after on the new one, the same.
 func TestMigrationKeepsGitHubPerson(t *testing.T) {
-	if os.Getenv("CCQUOTA_DB_URL") != "" {
-		t.Skip("rebuilds a SQLite file; the Postgres shape is store's TestMigration2_HubUsersKeepEveryone")
-	}
 	path := filepath.Join(t.TempDir(), "hub.db")
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	signer, _ := ssh.NewSignerFromKey(priv)
