@@ -564,7 +564,7 @@ The reaped session still lands in `/fleet-history`: with no issue number,
   `bin/fleet-land-self.sh`, `bin/fleet-autoland.sh`, `bin/land-train.sh`,
   `bin/dash-land.sh` — deleted. `bin/fleet-land-lease.sh` is kept.
 - **Daemon**: `com.claude-fleet.land` → `com.claude-fleet.cleanup`.
-- **Docs**: `docs/AUTOLAND.md` + `docs/SELF-LAND.md` → this file.
+- **Docs**: `docs/AUTOLAND.md` + `docs/SELF-LAND.md` → this file. <!-- docs-links-ok: the old names, gone since then -->
 
 ## Resume
 

@@ -12,6 +12,8 @@
 #      (code, comments, skills, CLAUDE.md …) exists, resolved from the repo root
 #   C  docs/ itself holds only README.md, dev/ and public/
 #   D  the index docs/README.md lists every docs/dev/*.md
+#   E  nothing names the old flat layout `docs/<NAME>.md` (a selftest's or a Go
+#      test's fixture tree excepted)
 #
 # A link inside a fenced code block or inline `code` is not a link. URLs,
 # mailto: and in-page `#anchor` links are not checked. A line that must keep a
@@ -86,6 +88,25 @@ for f in files:
             checked += 1
             if not os.path.exists(t):
                 bad.append('B %s:%d: names %s, which is not there' % (f, n, t))
+
+# E — the old flat layout, named anywhere
+FLAT = re.compile(r'(?<![A-Za-z0-9_-])docs/([A-Z][A-Z0-9_-]*\.md)')
+for f in files:
+    if f == 'bin/docs-links-selftest.sh' or 'selftest' in f or f.endswith('_test.go'):
+        continue
+    try:
+        text = open(f, encoding='utf-8').read()
+    except (UnicodeDecodeError, OSError):
+        continue
+    if 'docs/' not in text:
+        continue
+    for n, line in enumerate(text.split('\n'), 1):
+        if 'docs-links-ok' in line:
+            continue
+        for m in FLAT.finditer(line):
+            checked += 1
+            if m.group(1) != 'README.md' and not os.path.exists(os.path.join(os.path.dirname(f), m.group(0))):
+                bad.append('E %s:%d: names docs/%s — the docs live in docs/dev/ now' % (f, n, m.group(1)))
 
 # C — what docs/ holds
 extra = sorted(e for e in os.listdir('docs') if e not in ('README.md', 'dev', 'public'))
