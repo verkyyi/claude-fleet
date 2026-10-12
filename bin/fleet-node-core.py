@@ -136,6 +136,13 @@ if os.path.exists(os.path.join(HERE, "fleet_node_codesign.py")):
     codesign = importlib.util.module_from_spec(_cspec)
     _cspec.loader.exec_module(codesign)
 
+# the admin seat's gate placement (issue #3696); a tree without it places nothing
+admin_seat = None
+if os.path.exists(os.path.join(HERE, "fleet_admin_seat.py")):
+    _aspec = importlib.util.spec_from_file_location("fleet_admin_seat", os.path.join(HERE, "fleet_admin_seat.py"))
+    admin_seat = importlib.util.module_from_spec(_aspec)
+    _aspec.loader.exec_module(admin_seat)
+
 # the supervisor's word, so a Linux sandbox with a fake launchctl is a Mac to both
 MAC = sup.MAC
 DARWIN = sys.platform == "darwin"   # the kernel's: which peer-credential call answers
@@ -1047,6 +1054,7 @@ class Core(object):
         if old and old != sha and os.path.isdir(self.p.rel(old)):
             swap_link(self.p.prev, self.p.rel(old))
         swap_link(self.p.current, dest)
+        self.place_admin_gate(a, dest)
         self.maybe_restart()
         return {"ok": True, "from": old, "to": sha}
 
@@ -1060,8 +1068,22 @@ class Core(object):
         swap_link(self.p.current, self.p.rel(prev))
         if cur and os.path.isdir(self.p.rel(cur)):
             swap_link(self.p.prev, self.p.rel(cur))
+        self.place_admin_gate(a, self.p.rel(prev))
         self.maybe_restart()
         return {"ok": True, "from": cur, "to": prev}
+
+    def place_admin_gate(self, a, rel):
+        """The admin seat's two sudo-able scripts follow the release (#3696): root
+        0755 copies of its verified bin/fleet-admin-gate.sh in <state>/admin/ and
+        admin.conf bin=<root>/current/bin — only on a machine whose seat was set up.
+        A failure is logged, never the switch's: the old copies refuse on their own."""
+        if admin_seat is None:
+            return
+        try:
+            for n in admin_seat.place(rel, self.p.state, self.p.root):
+                self.log(self.tl.uid, "switch", a, n)
+        except OSError as e:
+            self.log(self.tl.uid, "switch", a, "admin gate: %s" % e)
 
     def op_update(self, conn, a):
         """The seated updater's root half (#3670): <current>/bin/fleet-node-update.py

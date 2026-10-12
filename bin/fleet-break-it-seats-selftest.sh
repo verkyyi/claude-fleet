@@ -57,8 +57,8 @@ seats() {
 # admin agent — is put back under a person's login: a LaunchDaemon whose UserName
 # is that login, the machine's daemon running as it, the admin agent's unit on an
 # admin login once its role account exists. The seats row FAILs naming the login
-# and the service each time; gone again, it is green. Before C15 made _fleetadmin
-# the admin agent alone is a WARN (3), never a silent pass.
+# and the service each time; gone again, it is green. Until _fleetadmin runs its
+# own admin agent (#3696) the admin agent alone is a WARN (3), never a silent pass.
 drill_personal_account_runs_machine_service() {
   CAP=30
   local sb t0
@@ -101,14 +101,18 @@ import json, sys
 p = json.load(open(sys.argv[1])); p["_fleetadmin"] = {"uid": 452, "gid": 452, "home": "/var/empty"}
 json.dump(p, open(sys.argv[1], "w"))
 PY
+  # the account alone (the install step made it, #3696) is not the seat yet: still the WARN
+  seats "$sb"
+  [ "$RC" = 3 ] || { WHY="the admin agent under bob, _fleetadmin made but its agent not up: rc $RC (want 3): $OUT"; return 1; }
+  printf '_fleetadmin 5151 /Library/Application Support/claude-fleet/current/bin/ccquota agent\n' >> "$sb/ps.txt"
   seats "$sb"
   [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'bob: 管理员 agent（.*com.ccquota.agent.bob.plist' \
-    || { WHY="the admin agent under bob once _fleetadmin exists: rc $RC: $OUT"; return 1; }
+    || { WHY="the admin agent under bob once _fleetadmin runs its own: rc $RC: $OUT"; return 1; }
   rm "$sb/LaunchDaemons/com.ccquota.agent.bob.plist"
   seats "$sb"
   SECS=$(since "$t0")
   [ "$RC" = 0 ] || { WHY="every way closed, still red (rc $RC): $OUT"; return 1; }
-  WHAT="个人账号名下装回整机服务（UserName 是他的 LaunchDaemon、以他跑的节点守护）或管理员 agent：seats 行红、指名是谁哪个；拿掉就绿（_fleetadmin 建好前管理员 agent 只 WARN）"
+  WHAT="个人账号名下装回整机服务（UserName 是他的 LaunchDaemon、以他跑的节点守护）或管理员 agent：seats 行红、指名是谁哪个；拿掉就绿（_fleetadmin 自己的 agent 起来前管理员 agent 只 WARN）"
 }
 
 cred_run_drills "$0"

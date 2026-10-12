@@ -42,6 +42,14 @@
 #   核心      the root core (#3555): FLEET_NODE_CORE=1 on the command installs
 #             com.claude-fleet.node-core (fleet-node-core.py install), 0 removes it;
 #             neither: an installed one is kept converged, none = no line at all
+#   管理员座位 the admin role account (#3696, C15·b): FLEET_ADMIN_SEAT=1 on the
+#             command makes _fleetadmin / fleetadmin, <state>/admin/ (the gate
+#             copied under its two names, admin.conf, the hub's account key pinned
+#             once from /v1/fleet/account-key — FLEET_ADMIN_KEY_REPIN=1 replaces
+#             it) and /etc/sudoers.d/fleet-admin, exactly two lines through
+#             visudo -c (fleet_admin_seat.py ensure); 0 takes admin/ and the
+#             sudoers file away (the account stays); neither: a seat already
+#             set up is kept converged, none = no line at all
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3).
 #             FLEET_NODE_SEAT=1 on the command (with the core serving) moves it
@@ -519,6 +527,31 @@ case "${FLEET_NODE_CORE:-}" in
        else
          out="$("$PY" -I "$CORE" install 2>&1)" || fail 核心 "$(printf '%s' "$out" | tail -n 1)"
          ok 核心 "$(printf '%s' "$out" | tail -n 1)"
+       fi
+     fi ;;
+esac
+
+# ---------------------------------------------------------------- 管理员座位 ----
+# The admin role account (issue #3696, EPIC #3500 C15·b): the two sudo-able gate
+# copies, its sudoers file and the hub's account key. Opt in with FLEET_ADMIN_SEAT=1;
+# a machine never set up prints nothing, byte for byte.
+ASEAT="$CUR/bin/fleet_admin_seat.py"
+case "${FLEET_ADMIN_SEAT:-}" in
+  0) if [ -d "$STATE/admin" ]; then
+       out="$("$PY" -I "$ASEAT" remove 2>&1)" || fail 管理员座位 "$(printf '%s' "$out" | tail -n 1)"
+       ok 管理员座位 "撤了（admin/ 与 sudoers 文件拿掉，账号留着）"
+     else skip 管理员座位 "没设"; fi ;;
+  *) if [ "${FLEET_ADMIN_SEAT:-}" = 1 ] || [ -d "$STATE/admin" ]; then
+       [ -f "$ASEAT" ] || fail 管理员座位 "这个版本没有 fleet_admin_seat.py — 先让运行时跟上发布版"
+       if out="$("$PY" -I "$ASEAT" ensure --hub "$HUB" --check 2>&1)"; then
+         skip 管理员座位 "$(printf '%s' "$out" | tail -n 1)"
+       else
+         out="$("$PY" -I "$ASEAT" ensure --hub "$HUB" 2>&1)"; arc=$?
+         case "$arc" in
+           0) ok 管理员座位 "$(printf '%s' "$out" | tail -n 1)" ;;
+           3) skip 管理员座位 "$(printf '%s' "$out" | tail -n 1)" ;;
+           *) fail 管理员座位 "$(printf '%s' "$out" | tail -n 1)" ;;
+         esac
        fi
      fi ;;
 esac

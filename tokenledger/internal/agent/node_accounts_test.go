@@ -429,11 +429,11 @@ func TestAdminAgentSaysCredsep(t *testing.T) {
 // No separating script (or not the admin agent): no CapCredsep in the hello.
 func TestCredsepCapableNeedsTheScript(t *testing.T) {
 	home := t.TempDir()
-	if credsepCapable(home) {
+	if credsepCapable(filepath.Join(home, loginNewScript)) {
 		t.Fatal("no script, yet credsep capable")
 	}
 	fakeLoginScripts(t, home, "0")
-	if credsepCapable(home) {
+	if credsepCapable(filepath.Join(home, loginNewScript)) {
 		t.Fatal("a script from before #2294 counted as separating")
 	}
 	if credsepResult("x\ncredsep: separated\n\n") != control.CredsepSeparated || credsepResult("credsep: separated\nmore") != "" {

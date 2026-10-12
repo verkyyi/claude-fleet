@@ -10,7 +10,8 @@ those two scripts, and before anything runs it asks this:
 
 exit 0: the ticket is the hub's account key's, for exactly this op, login and
 machine, not past its exp — and its nonce (the op's op_id) was not spent
-before: it is spent now, in <used>/<nonce> (O_EXCL). Exit 3: refused, one
+before: it is spent now, in <used>/<nonce> (O_EXCL), and printed on stdout (the
+gate hands it to the script as FLEET_LOGIN_OP_ID, #3696). Exit 3: refused, one
 line on stderr saying why; nothing is spent. Exit 2: usage. Run as root (the
 gate under sudo), every file it trusts — the key, the nonce book, this program
 and its directory, each --trust path — must be root's and writable by no one
@@ -175,6 +176,7 @@ def main(argv):
     except Refused as e:
         print("fleet_admin_ticket: refused: %s" % e, file=sys.stderr)
         return 3
+    print(t["nonce"])
     return 0
 
 

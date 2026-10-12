@@ -75,7 +75,7 @@ sys.path.insert(0, BIN)
 import fleet_ed25519  # noqa: E402
 
 CORE_FILES = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py",
-              "fleet-node-update.py", "fleet_node_codesign.py")
+              "fleet-node-update.py", "fleet_node_codesign.py", "fleet_admin_seat.py")
 SECRET = hashlib.sha256(b"fleet-node-core-selftest").digest()
 OTHER = hashlib.sha256(b"someone else").digest()
 
@@ -352,6 +352,33 @@ class G_Switch(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(self.state, "staging", self.B)), "staging moved in")
         self.assertEqual(self.req("rollback", {}), {"ok": True, "from": self.B, "to": self.A})
         self.assertEqual(self.cur(), self.A)
+
+    def test_switch_and_rollback_place_the_admin_gate(self):
+        # the admin seat (#3696): each release's bin/fleet-admin-gate.sh becomes
+        # the two sudo-able names in <state>/admin/, admin.conf follows current
+        self.serve()
+        adir = os.path.join(self.state, "admin")
+        os.mkdir(adir)
+        make_release(os.path.join(self.state, "staging"), self.B,
+                     {"bin/x": b"new\n", "bin/fleet-admin-gate.sh": b"#!/bin/bash\n# gate B\n"})
+        self.assertTrue(self.req("switch", {"sha": self.B}).get("ok"))
+        for n in ("fleet-login-new.sh", "fleet-login-remove.sh"):
+            p = os.path.join(adir, n)
+            self.assertFalse(os.path.islink(p))
+            self.assertEqual(open(p, "rb").read(), b"#!/bin/bash\n# gate B\n")
+            self.assertEqual(stat.S_IMODE(os.lstat(p).st_mode), 0o755)
+        self.assertEqual(open(os.path.join(adir, "admin.conf")).read(),
+                         "bin=%s\n" % os.path.join(self.root, "current", "bin"))
+        # A has no gate: the rollback keeps B's copies (they refuse without its checker)
+        self.assertTrue(self.req("rollback", {}).get("ok"))
+        self.assertEqual(open(os.path.join(adir, "fleet-login-new.sh"), "rb").read(), b"#!/bin/bash\n# gate B\n")
+
+    def test_switch_without_a_seat_places_nothing(self):
+        self.serve()
+        make_release(os.path.join(self.state, "staging"), self.B,
+                     {"bin/x": b"new\n", "bin/fleet-admin-gate.sh": b"#!/bin/bash\n"})
+        self.assertTrue(self.req("switch", {"sha": self.B}).get("ok"))
+        self.assertFalse(os.path.exists(os.path.join(self.state, "admin")))
 
     def refused_switch(self, why):
         r = self.req("switch", {"sha": self.B})

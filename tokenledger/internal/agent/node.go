@@ -225,11 +225,16 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// Its create hands the join code to the script (claude-fleet#3032).
 		caps = append(caps, control.CapLoginJoin)
 	}
-	if a.cfg.FleetAdmin && credsepCapable(a.cfg.Home) {
+	if a.adminSeat() {
+		// Its ops run only through the root gate, each with the hub's
+		// signed ticket (claude-fleet#3696).
+		caps = append(caps, control.CapAdminSeat)
+	}
+	if a.cfg.FleetAdmin && credsepCapable(a.accountScript(loginNewScript)) {
 		// Every login this node's create op opens is separated (claude-fleet#2294).
 		caps = append(caps, control.CapCredsep)
 	}
-	if a.cfg.FleetAdmin && recycleCapable(a.cfg.Home) {
+	if a.cfg.FleetAdmin && recycleCapable(a.accountScript(loginRemoveScript)) {
 		// Its remove script washes a login for the next person (claude-fleet#3504).
 		caps = append(caps, control.CapRecycle)
 	}
