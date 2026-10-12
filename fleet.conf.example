@@ -69,10 +69,10 @@ FLEET_BASE_BRANCH="main"
 # takes any git address — GitHub, GitLab, Gitee, a self-hosted forge, an
 # ssh-reachable bare repo, file:// or a local path — and fills these in its repo's
 # overlay; a GitHub repo writes none of them (unset = github · pr, every repo
-# before #3600). FLEET_REMOTE is the address as given (what it was cloned from);
-# FLEET_FORGE=none means no fleet step calls gh for it (fleet_repo_forge is the one
-# reader); FLEET_LAND=fleet means the fleet lands its work itself (`none` can only
-# land that way).
+# before #3600). The address is kept as given (what it was cloned from); a forge
+# of `none` means no fleet step calls gh for it (fleet_repo_forge is the one
+# reader); landing by `fleet` means the fleet lands its work itself (forge `none`
+# can only land that way).
 # @label=Repo address @group=identity @tier=internal @scope=identity @edit=no
 #FLEET_REMOTE=""
 # @label=Repo forge (github · none) @group=identity @tier=internal @scope=identity @edit=no
