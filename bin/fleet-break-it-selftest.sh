@@ -4244,7 +4244,7 @@ drill_quarantine_pr_skips() { quarantine_leg pr-skips "不带 --quarantine 什�
 # (422 `ccquota:`): stable moved, no machine followed. Now ONE train does both for
 # one TRAIN_SHA: after its tests and precheck it deploys the hub through
 # hub-deploy.yml's own job (workflow_call, sha) — or skips it when the hub already
-# runs TRAIN_SHA's Go and deploy/k8s (bin/fleet-train-hub.sh) — then publishes
+# runs TRAIN_SHA's Go, deploy/k8s, site/ and docs/public/ (bin/fleet-train-hub.sh) — then publishes
 # TRAIN_SHA and moves stable with --train (CI / macOS gates read this run's jobs).
 # A rollback dispatched by hand still makes a split: the doctor's hub-image row
 # says so (bin/fleet-hub-image.sh `source: SPLIT`). The hub taking the train's
@@ -4288,6 +4288,8 @@ drill_train_hub_stable_split() {
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'go' && git -C "$d/seed" rev-parse HEAD > "$d/c3"
     printf 'a: 2\n' > "$d/seed/deploy/k8s/k.yaml"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'k8s' && git -C "$d/seed" rev-parse HEAD > "$d/c4"
+    mkdir -p "$d/seed/site" && printf '<p>site</p>\n' > "$d/seed/site/template.html"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'site' && git -C "$d/seed" rev-parse HEAD > "$d/c5"
     git -C "$d/seed" push -q origin HEAD:master && git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" \
       && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; return 1; }
@@ -4300,6 +4302,9 @@ drill_train_hub_stable_split() {
   [ "$(plan "$c3")" = true ] || { WHY="a train whose Go changed does not deploy the hub: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
   ver "$c3"
   [ "$(plan "$c4")" = true ] || { WHY="a train whose deploy/k8s changed does not deploy the hub: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  ver "$c4"
+  [ "$(plan "$(cat "$d/c5")")" = true ] || { WHY="a train whose website (site/) changed does not deploy the hub that carries it (#3584): $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  ver "$c3"
   printf '{"version":"prod-dev"}\n' > "$d/hub/version"
   out=$(bash "$BIN/fleet-train-hub.sh" "$c4" --dir "$d/co" --hub "file://$d/hub" 2>&1); rc=$?
   [ "$rc" != 0 ] && ! printf '%s\n' "$out" | grep -q '^deploy=true' || { WHY="a hub whose commit is unknown is deployed blind (#3319: red instead): $(printf '%s' "$out" | tr '\n' '|')"; return 1; }

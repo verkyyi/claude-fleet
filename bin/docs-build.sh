@@ -45,7 +45,8 @@
 # its colours the entry's own app.css variables.
 #
 # Output is a build input like fleetclient/pack: gitignored, rebuilt every time
-# (the directory is emptied first). Exit: 0 built · 1 a page is wrong · 2 usage.
+# (the directory is emptied first, its .gitkeep put back — the hub embeds it).
+# Exit: 0 built · 1 a page is wrong · 2 usage.
 set -uo pipefail
 real="$0"
 while [ -L "$real" ]; do
@@ -64,7 +65,7 @@ while [ $# -gt 0 ]; do
       exec python3 "$REPO/bin/fleet-doctor-rows.py" page-skeleton "$SRC/zh/troubleshooting.md" --root "$REPO" ;;
     --write) MODE="write"; shift ;;
     --check) MODE="check"; shift ;;
-    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,49p' "$0"; exit 0 ;;
     *) echo "docs-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -427,6 +428,10 @@ if MODE == 'write':
 
 if os.path.isdir(OUT):
     shutil.rmtree(OUT)
+# the hub embeds this directory (tokenledger/web/embed.go): its committed .gitkeep
+# keeps that compiling in a checkout that never built the docs (issue #3584)
+os.makedirs(OUT)
+open(os.path.join(OUT, '.gitkeep'), 'w').close()
 rows = []
 for l in LANGS:
     all_titles = {}

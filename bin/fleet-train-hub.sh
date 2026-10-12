@@ -9,7 +9,9 @@
 #   * the Go source the hub's ccquota is built from — the same digest
 #     `fleet-stable.sh move`'s gate 8 and the hub's own publish check compare
 #     (bin/fleet-src-digest.py: tokenledger/ less tests and docs), or
-#   * deploy/k8s/ (the manifests the deploy applies)
+#   * deploy/k8s/ (the manifests the deploy applies), or
+#   * site/ or docs/public/ (the website and its documentation the image carries,
+#     built by bin/site-build.sh / docs-build.sh — issue #3584)
 # changed between the commit the hub runs (its GET /version `commit`) and
 # TRAIN_SHA. When it is skipped, gate 8 of the train's move still holds the hub's
 # ccquota to TRAIN_SHA's source.
@@ -92,4 +94,7 @@ fi
 if ! git -C "$dir" diff --quiet "$live" "$train" -- deploy/k8s 2>/dev/null; then
   say true "$live" "deploy/k8s/ changed since the hub's $ver — deploying $(printf '%.7s' "$train")"
 fi
-say false "$live" "the hub's $ver already is $(printf '%.7s' "$train")'s Go source and deploy/k8s/ — no new image"
+if ! git -C "$dir" diff --quiet "$live" "$train" -- site docs/public 2>/dev/null; then
+  say true "$live" "the website or its docs changed since the hub's $ver — deploying $(printf '%.7s' "$train")"
+fi
+say false "$live" "the hub's $ver already is $(printf '%.7s' "$train")'s Go source, deploy/k8s/, site/ and docs/public/ — no new image"

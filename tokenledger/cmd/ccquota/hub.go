@@ -819,6 +819,8 @@ func runHub(args []string) error {
 		// The public site at "/" (claude-fleet#3583): only our own hub turns
 		// it on; a self-hoster's "/" is the console.
 		Site:        siteOn(os.Getenv("CCQUOTA_SITE")),
+		SiteFS:      web.Site(),
+		DocsFS:      web.Docs(),
 		FleetAdmins: splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),

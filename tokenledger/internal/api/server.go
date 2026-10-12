@@ -93,8 +93,12 @@ type Server struct {
 	// claude-fleet#3583): a stranger reads it, someone signed in is sent to
 	// the console at /app. Off — a self-hoster's default — "/" is /app.
 	Site bool
-	// SiteFS is the built public site (web/site); nil = the landing page.
+	// SiteFS is the built public site (web/site, claude-fleet#3584): / and
+	// /en/, their assets under /site/; nil = the landing page.
 	SiteFS fs.FS
+	// DocsFS is the built documentation (web/docs) served at /docs/ and
+	// /en/docs/ while Site is on; nil = none.
+	DocsFS fs.FS
 
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,

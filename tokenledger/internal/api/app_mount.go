@@ -106,6 +106,13 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 			if inner == "" || inner == "/" {
 				inner = "/"
 			}
+			if inner == "/try" {
+				// The site's 「试用」 button; until the try page has its own
+				// road (C20, claude-fleet#3590) it opens the console, whose
+				// gate asks a stranger to sign in (claude-fleet#3584).
+				http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
+				return
+			}
 			if !isAppPage(inner) {
 				http.NotFound(w, r)
 				return
@@ -117,6 +124,8 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r2)
 		case p == "/":
 			s.serveRoot(w, r)
+		case s.serveSitePath(w, r):
+			// the site's other paths: /en/, /site/, icons, /docs/ (site_serve.go)
 		case isAppPage(p) && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 			http.Redirect(w, r, withQuery(AppPrefix+p, r), http.StatusMovedPermanently)
 		default:
@@ -140,22 +149,18 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 	s.withPageLang(s.viewerOr(toApp, signedOut)).ServeHTTP(w, r)
 }
 
-// serveSite is the public site's front page: SiteFS's index.html when the
-// hub carries the built site (web/site, C14), else the landing page this hub
-// has always drawn for a stranger. Cacheable: it holds nothing of anyone's.
+// serveSite is the public site's front page: SiteFS's index.html (中文; the
+// English one is /en/, site_serve.go) when the hub carries the built site
+// (web/site, C14), else the landing page this hub has always drawn for a
+// stranger. Cacheable: it holds nothing of anyone's.
 func (s *Server) serveSite(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
 	if s.SiteFS != nil {
-		if b, err := fs.ReadFile(s.SiteFS, "index.html"); err == nil {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "public, max-age=300")
+		if _, err := fs.Stat(s.SiteFS, "index.html"); err == nil {
 			w.Header().Add("Vary", "Cookie")
-			if r.Method != http.MethodHead {
-				_, _ = w.Write(b)
-			}
-			return true
+			return s.sitePage(w, r, "index.html", "zh-CN")
 		}
 	}
 	return s.serveLanding(w, r)

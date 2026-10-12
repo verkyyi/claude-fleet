@@ -265,6 +265,13 @@ jobs:
         if: steps.tag.outputs.build == 'true'
         run: bin/fleet-client-pack.sh
 
+      # The website (/ and /en/) and its docs (/docs/) are build outputs the
+      # image embeds (issue #3584); the site reads its FAQ off docs/public itself.
+      # A RED: line (no fresh drill under 60 s) is a warning, not a failure.
+      - name: Build the website and its docs
+        if: steps.tag.outputs.build == 'true'
+        run: bin/docs-build.sh && bin/site-build.sh
+
       - name: Build and push
         if: steps.tag.outputs.build == 'true'
         uses: docker/build-push-action@v6
