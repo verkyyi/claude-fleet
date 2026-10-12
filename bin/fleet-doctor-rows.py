@@ -17,6 +17,14 @@ twice (EPIC #3569 共同约定 4).
   check     <SKILL.md> [--root R]
                                 every row is in the SKILL.md's table and every skill it
                                 names exists beside it; exit 1 + one line per gap
+  page-skeleton <page.md> [--root R]
+                                the public troubleshooting page (docs/public/zh/troubleshooting.md,
+                                issue #3582): one `#### `<row>`` section per row it still
+                                lacks, to paste under its 「体检的每一行」 part; nothing = complete
+  page-check <page.md> [--root R]
+                                every row has its `#### `<row>`` section, no section names a
+                                row the doctor no longer prints, none is still a skeleton
+                                (「待写」); exit 1 + one line per gap
 
 A label the shell reads from a variable (`warn "$rk" …`) is declared next to it
 with `# doctor-rows: <row> …` in the 30 lines above; an undeclared one is an
@@ -33,6 +41,8 @@ SH_DECL = re.compile(r"#\s*doctor-rows:\s*(.+)$")
 PY_ROW = re.compile(r"\(\s*(?:\"[A-Z]+\"(?:\s+if\s+[^,]+?\s+else\s+\"[A-Z]+\")?|lvl)\s*,\s*(\"([a-z][a-z0-9-]*)\"|tool)\s*,")
 PY_TOOLS = re.compile(r"^TOOLS\s*=\s*\(([^)]*)\)", re.M)
 TABLE_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|")
+PAGE_ROW = re.compile(r"^#{3,4}\s+`([^`]+)`\s*$")
+PAGE_TODO = "（待写）"
 
 
 def root_of(args):
@@ -115,6 +125,29 @@ def skill_lines(path):
     return got
 
 
+def page_sections(path):
+    """{row: its section text} of the troubleshooting page (heading to the next heading)."""
+    got, cur = {}, None
+    for line in open(path, encoding="utf-8"):
+        m = PAGE_ROW.match(line)
+        if m:
+            cur = m.group(1)
+            got[cur] = ""
+            continue
+        if re.match(r"^#{1,4}\s", line):
+            cur = None
+        elif cur is not None:
+            got[cur] += line
+    return got
+
+
+def page_skeleton(row, half):
+    where = {"node": "`fleet doctor`", "machine": "`fleet doctor --machine`",
+             "node · machine": "`fleet doctor` 和 `fleet doctor --machine`"}[half]
+    return ("#### `%s`\n\n来自 %s。\n\n- **是什么**：%s\n- **WARN / FAIL 怎么办**：%s\n"
+            % (row, where, PAGE_TODO, PAGE_TODO))
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.stdout.write(__doc__)
@@ -154,6 +187,22 @@ def main(argv):
                 bad.append("row `%s` is still a skeleton line (? unfilled)" % r)
         for r in sorted(set(have) - set(rows)):
             bad.append("row `%s` is in the table but the doctor no longer prints it" % r)
+        for b in bad:
+            print(b)
+        return 1 if bad else 0
+    if cmd in ("page-skeleton", "page-check"):
+        if not args or args[0].startswith("--"):
+            sys.stderr.write("usage: fleet-doctor-rows.py %s <page.md> [--root R]\n" % cmd)
+            return 2
+        have = page_sections(args[0])
+        if cmd == "page-skeleton":
+            for r in sorted(set(rows) - set(have)):
+                print(page_skeleton(r, rows[r]))
+            return 0
+        bad = ["missing section `%s` (%s) — run: fleet-doctor-rows.py page-skeleton %s" % (r, rows[r], args[0])
+               for r in sorted(set(rows) - set(have))]
+        bad += ["section `%s` is still a skeleton (%s)" % (r, PAGE_TODO) for r in sorted(have) if PAGE_TODO in have[r]]
+        bad += ["section `%s` is on the page but the doctor no longer prints it" % r for r in sorted(set(have) - set(rows))]
         for b in bad:
             print(b)
         return 1 if bad else 0

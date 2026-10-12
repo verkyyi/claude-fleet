@@ -13,6 +13,13 @@
 #   <out>/en/<reader>/<slug>.html + .md     served as /en/docs/<reader>/<slug>[.md]
 #   <out>/zh/index.html + index.md          /docs/  (same for /en/docs/)
 #   <out>/pages.tsv                         lang · path · title · state (page|pending)
+#   <out>/<lang>/faq.json                   the FAQ as data (bin/docs-faq.py json), for
+#                                           the site's FAQPage and llms.txt (issue #3582)
+#
+#   docs-build.sh --troubleshooting-skeleton
+#                                 print a `#### `<row>`` section for every `fleet doctor`
+#                                 row the troubleshooting page still lacks (nothing =
+#                                 complete; bin/fleet-doctor-rows.py page-skeleton)
 #
 # A page links to another by its relative .md path (so GitHub and
 # docs-links-selftest read the same link); the build drops the extension, and the
@@ -40,16 +47,18 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --out) [ $# -ge 2 ] || { echo "docs-build: --out needs a directory" >&2; exit 2; }; OUT="$2"; shift 2 ;;
     --src) [ $# -ge 2 ] || { echo "docs-build: --src needs a directory" >&2; exit 2; }; SRC="$2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --troubleshooting-skeleton)
+      exec python3 "$REPO/bin/fleet-doctor-rows.py" page-skeleton "$SRC/zh/troubleshooting.md" --root "$REPO" ;;
+    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "docs-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 [ -d "$SRC/zh" ] || { echo "docs-build: no $SRC/zh" >&2; exit 2; }
 
-exec python3 - "$SRC" "$OUT" <<'PY'
-import html, os, re, shutil, sys
+exec python3 - "$SRC" "$OUT" "$REPO" <<'PY'
+import html, json, os, re, shutil, subprocess, sys
 
-SRC, OUT = sys.argv[1], sys.argv[2]
+SRC, OUT, REPO = sys.argv[1], sys.argv[2], sys.argv[3]
 LANGS = ('zh', 'en')
 # The three roads, in the order the index tells them; a page outside these
 # directories is shared by all three (faq, troubleshooting, security).
@@ -323,6 +332,16 @@ for l in LANGS:
         rows.append('%s\t%s\t%s\t%s' % (l, p, all_titles[p], state))
 with open(os.path.join(OUT, 'pages.tsv'), 'w', encoding='utf-8') as fh:
     fh.write('\n'.join(rows) + '\n')
+# the FAQ as data, off the same faq.md (bin/docs-faq.py is its one reader)
+for l in LANGS:
+    if 'faq' in src[l]:
+        r = subprocess.run([sys.executable, os.path.join(REPO, 'bin', 'docs-faq.py'), 'json', '--lang', l,
+                            '--src', SRC], capture_output=True, text=True)
+        if r.returncode != 0:
+            print('docs-build: %s/faq.md: %s' % (l, r.stderr.strip()), file=sys.stderr)
+            sys.exit(1)
+        with open(os.path.join(OUT, l, 'faq.json'), 'w', encoding='utf-8') as fh:
+            fh.write(r.stdout)
 print('docs-build: %d pages (%d zh, %d en of which %d pending) → %s' % (
     len(rows), len(src['zh']), len(src['zh']), sum(r.endswith('\tpending') for r in rows), OUT))
 PY

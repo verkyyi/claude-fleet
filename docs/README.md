@@ -7,7 +7,7 @@
 | [`public/`](public/) | 用 fleet 的人：自托管团队、托管客户的管理员、成员 | 按读者分三路（[`public/zh/index.md`](public/zh/index.md)）：自托管 · 托管管理员 · 成员，各有一篇快速开始；安装部署、日常使用、管理员手册、问答、排障、安全逐篇补齐。中文先行，英文在 `public/en/`，缺的英文页构建时显示「准备中」 |
 | [`dev/`](dev/) | 开发和维护 fleet 的人 | 设计、协议、运维手册、弄坏它的方式——下表 |
 
-对外页面不链进 `dev/`；开发者文档直接看代码仓库。`bin/docs-build.sh` 把 `public/` 渲成静态 HTML（每页同时保留 `.md`），地址 `/docs/<读者>/<篇>` 与 `/en/docs/…`，`bin/docs-build-selftest.sh` 守着它。
+对外页面不链进 `dev/`；开发者文档直接看代码仓库。`bin/docs-build.sh` 把 `public/` 渲成静态 HTML（每页同时保留 `.md`），地址 `/docs/<读者>/<篇>` 与 `/en/docs/…`，`bin/docs-build-selftest.sh` 守着它。问答只写在 `public/<lang>/faq.md`（官网问答、FAQPage、llms.txt 由 `bin/docs-faq.py` 从它生成）；`public/zh/troubleshooting.md` 给 `fleet doctor` 的每一行一节，体检新加一行而页面没跟上时 `bin/docs-faq-selftest.sh` 会红，`bin/docs-build.sh --troubleshooting-skeleton` 打出缺的骨架。
 
 ## 开发文档（`dev/`）
 
