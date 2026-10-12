@@ -100,9 +100,12 @@ import subprocess
 import sys
 import time
 import unicodedata
+
 from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
+sys.path.insert(0, str(BIN))
+from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
 VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
              "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地"}
@@ -456,7 +459,7 @@ def epic_link(r):
     if not (r["name"].endswith("·批次") or re.search(r"(^|[:/])scratch-[0-9]+$", r["key"])
             or re.match(r"EPIC\s*[:：]", r.get("title") or "", re.I)):
         return ""
-    return "https://github.com/%s/issues/%s" % (repo, issue)
+    return ticket_url(repo, issue)
 
 
 def fields(r, colour=False, short=True):

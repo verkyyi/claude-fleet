@@ -536,6 +536,10 @@ func (s *Server) routes() *routeMux {
 		// back here after GitHub's.
 		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
 		mux.Handle(EntryConnPath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
+		// 我的单子 (claude-fleet#3596): the hub's tickets as pages; a browser
+		// not signed in comes back to the one it asked for.
+		mux.Handle(TicketsPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleTicketsPage))))
+		mux.Handle(TicketsPagePath+"/", s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleTicketsPage))))
 		// Its pictures, and the paths a person types for it (claude-fleet#3199).
 		mux.HandleFunc(EntryPagePath+"/", s.handleEntryPageAside)
 		mux.HandleFunc("/fleet/key", s.handleEntryPageAside)

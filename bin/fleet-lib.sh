@@ -1149,6 +1149,42 @@ fleet_repo_conf_get() {
     eval "printf '%s' \"\${$3:-}\"" )
 }
 
+# ---- where a person reads a ticket (issue #3596, EPIC #3570 C3) -------------
+# fleet_ticket_url <repo> <N> [<sess>] → the ONE answer to "which page shows ticket
+# N of <repo>": the hub's 我的单子 page (<hub>/fleet/tickets/<repo>/<N>) when the
+# repo's tickets live on the hub (its conf says FLEET_TICKETS=hub), else its GitHub
+# page — byte for byte the link every caller spelled before. <sess> defaults to
+# $FLEET_SESSION, else the fleet that answers for <repo> first. A hub repo on a
+# computer with no hub address prints nothing, rc 1 (never a GitHub page that is
+# not there); rc 2 on a bad <repo> / <N>. The sidebar, the top bar, the batch row
+# and the pane menu ask it (python: bin/fleet_ticket_url.py, which asks this).
+fleet_ticket_url() {
+  local repo="${1:-}" n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" home='' hub d
+  case "$repo" in */*) ;; *) return 2 ;; esac
+  case "$n" in ''|0*|*[!0-9]*) return 2 ;; esac
+  if [ -n "$sess" ]; then
+    home=$(fleet_repo_conf_get "$sess" "$repo" FLEET_TICKETS 2>/dev/null) || home=''
+  else
+    [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
+    for d in "$FLEET_CONF_DIR"/fleets/*/; do
+      [ -d "$d" ] || continue
+      d=${d%/}; d=${d##*/}
+      [ -f "$(fleet_repo_conf_file "$d" "$repo")" ] || continue
+      home=$(fleet_repo_conf_get "$d" "$repo" FLEET_TICKETS 2>/dev/null) || home=''
+      break
+    done
+  fi
+  if [ "$home" = hub ]; then
+    hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}"
+    [ -n "$hub" ] || hub=$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_HUB_URL=["'"'"']\{0,1\}\([^"'"'"']*\).*/\2/p' "$FLEET_CONF_DIR/fleet.conf" 2>/dev/null | head -n 1)
+    [ -n "$hub" ] || hub=$(_fleet_node_env_val CCQUOTA_HUB_URL 2>/dev/null)
+    [ -n "$hub" ] || return 1
+    printf '%s/fleet/tickets/%s/%s\n' "${hub%/}" "$repo" "$n"
+    return 0
+  fi
+  printf 'https://github.com/%s/issues/%s\n' "$repo" "$n"
+}
+
 # ---- the seed repo (issue #1167) --------------------------------------------
 # A new login's fleet comes up on claude-fleet itself (`fleet-up.sh --seed`) only so
 # the fleet works from its first minute; the login has no write access there, and

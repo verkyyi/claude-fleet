@@ -86,6 +86,8 @@ var routeAccess = map[string]string{
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,
 	EntryPagePath: accessUser, // the keys page (claude-fleet#3069)
 	EntryConnPath: accessUser, // 我的连接 (claude-fleet#3199)
+	// 我的单子 (claude-fleet#3596): a person's own tickets; the handler scopes them.
+	TicketsPagePath: accessUser, TicketsPagePath + "/": accessUser,
 	// … its pictures and the misspellings that lead to it (claude-fleet#3199).
 	EntryPagePath + "/": accessPublic, "/fleet/key": accessPublic, "/keys": accessPublic,
 	NodePoolPath: accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
