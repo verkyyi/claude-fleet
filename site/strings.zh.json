@@ -83,5 +83,16 @@
   "time_60": "60 秒",
   "time_secs": "{n} 秒",
   "time_mins": "约 {n} 分钟",
-  "offer": "免费试用；没有空位时进等候名单"
+  "offer": "免费试用；没有空位时进等候名单",
+  "llms_summary": "ClaudeFleet 让一个人或一个小团队同时跑很多个 Anthropic 官方 Claude Code（也可以是 Codex）会话：每件任务一个会话、一份独立的代码副本，所有会话在一处看见、一处回答。开源 MIT。",
+  "llms_is": "它是什么：一套把官方 Claude Code 跑在多台机器上的工具——可以用我们托管的机器（浏览器或手机打开就能用），也可以自托管，在自己的 Mac 或 Linux 上部署一套 Claude Code 集群。",
+  "llms_not": "它不是什么：不是 Anthropic 的产品，不是新的模型，也不是另写的 AI 助手——会话里跑的就是官方 Claude Code；订阅凭据不进会话。",
+  "llms_for": "给谁：想同时推进很多件事的开发者和小团队；想自己架一套 Claude Code 集群、给同事开号的管理员。",
+  "llms_docs_h": "文档",
+  "llms_site_h": "官网",
+  "llms_site_home": "官网首页",
+  "llms_other_h": "其他",
+  "llms_full": "全部对外文档拼成的一份",
+  "llms_other_lang": "English version of this file",
+  "llms_in_zh": ""
 }

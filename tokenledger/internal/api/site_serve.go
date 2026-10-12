@@ -23,6 +23,9 @@ import (
 //	/favicon.ico /favicon.svg /apple-touch-icon.png   what a browser asks the root for
 //	/docs/<p>    docs zh/<p>.html (<p>/ → <p>/index.html, <p>.md → the Markdown)
 //	/en/docs/<p> the same in English
+//	/robots.txt /sitemap.xml /llms.txt /llms-zh.txt /llms-full.txt
+//	             for search engines and AI assistants (claude-fleet#3585, C15),
+//	             each with this hub's address filled in like a page
 //
 // A page's absolute addresses (canonical, hreflang, og:url, JSON-LD) are built
 // with the placeholder siteOrigin and become this hub's address (hubURL) as
@@ -41,6 +44,15 @@ var siteTypes = map[string]string{
 	".txt":   "text/plain; charset=utf-8",
 	".md":    "text/markdown; charset=utf-8",
 	".html":  "text/html; charset=utf-8",
+	".xml":   "application/xml; charset=utf-8",
+}
+
+// siteCrawlFiles are the build's files a crawler asks the root for
+// (bin/site-build.sh writes them, claude-fleet#3585); each is answered at
+// /<name> only, never under /site/.
+var siteCrawlFiles = map[string]bool{
+	"robots.txt": true, "sitemap.xml": true,
+	"llms.txt": true, "llms-zh.txt": true, "llms-full.txt": true,
 }
 
 // serveSitePath answers the site's paths above (true), or leaves r alone
@@ -60,6 +72,8 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 		}
 	case p == "/favicon.ico" || p == "/apple-touch-icon.png":
 		s.siteAsset(w, r, strings.TrimPrefix(p, "/"))
+	case siteCrawlFiles[strings.TrimPrefix(p, "/")]:
+		s.siteCrawlFile(w, r, strings.TrimPrefix(p, "/"))
 	case p == "/favicon.svg":
 		s.siteAsset(w, r, "logo.svg")
 	case strings.HasPrefix(p, "/site/"):
@@ -95,11 +109,31 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang str
 	return true
 }
 
+// siteCrawlFile serves robots.txt, sitemap.xml or an llms file with this
+// hub's address in place of the placeholder; 404 when the build has none.
+func (s *Server) siteCrawlFile(w http.ResponseWriter, r *http.Request, name string) {
+	if s.SiteFS == nil {
+		http.NotFound(w, r)
+		return
+	}
+	b, err := fs.ReadFile(s.SiteFS, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	b = bytes.ReplaceAll(b, []byte(siteOrigin), []byte(s.hubURL(r)))
+	h := w.Header()
+	h.Set("Content-Type", siteTypes[path.Ext(name)])
+	h.Set("Cache-Control", "public, max-age=3600")
+	h.Set("X-Content-Type-Options", "nosniff")
+	writeSiteBody(w, r, b, true)
+}
+
 // siteAsset serves a file of the site that is not a page; anything else under
 // /site/ is 404.
 func (s *Server) siteAsset(w http.ResponseWriter, r *http.Request, name string) {
 	ext := path.Ext(name)
-	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || strings.HasPrefix(path.Base(name), ".") {
+	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(path.Base(name), ".") {
 		http.NotFound(w, r)
 		return
 	}
