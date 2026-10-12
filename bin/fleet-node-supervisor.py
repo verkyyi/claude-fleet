@@ -2193,6 +2193,10 @@ class Supervisor(object):
         b = entry_converge(self.p)
         if b is None:
             return
+        if not getattr(self, "rev_thread", None):
+            # the door's revocation list (issue #3560): only once the entry is on
+            self.rev_thread = threading.Thread(target=self.follow_revocations, name="revocations", daemon=True)
+            self.rev_thread.start()
         if b.get("healed") and b["healed"].get("at") == b.get("checked_at"):
             self.log("entry: keys file(s) of %s were changed outside the hub's list — put back"
                      % ", ".join(b["healed"]["logins"]))
@@ -2204,6 +2208,10 @@ class Supervisor(object):
             entry_audit(self.p)
         except Exception as e:  # the record must never take the entry pass down
             self.log("entry audit: %s" % e)
+
+    def follow_revocations(self):
+        """The door's revocation list (issue #3560), as a thread of the daemon."""
+        revocations_follow(self.p, self.log, lambda: self.stop)
 
     # -- Full Disk Access (issue #2973)
     def tend_fda(self, t):
@@ -3882,6 +3890,11 @@ class EntryPaths(object):
         self.list = os.path.join(self.dir, "list.json")
         self.lock = os.path.join(self.dir, ".lock")
         self.machine_env = os.path.join(paths.state, "machine.env")
+        # the hub's revocation list and the KRL made of it (issue #3560) — 0644,
+        # ids and serials, never a key
+        self.revs = os.path.join(self.dir, "revocations.json")
+        self.krl = os.path.join(self.dir, "revoked.krl")
+        self.rev_ca = os.path.join(self.dir, "revocations-ca.pub")
 
 
 def entry_settings(paths):
@@ -4020,6 +4033,12 @@ def entry_config(ep, port, allow, paths=None):
         "AuthorizedKeysFile %s/%%u" % ep.keys,
         "AuthorizedPrincipalsFile none",
         "TrustedUserCAKeys none",
+    ] + (
+        # the hub's revocation list as a KRL (issue #3560): sshd reads it on every
+        # authentication, so a new list needs no restart. Only once it exists — a
+        # RevokedKeys file sshd cannot read refuses every key.
+        ["RevokedKeys %s" % ep.krl] if os.path.isfile(ep.krl) else []
+    ) + [
         "HostbasedAuthentication no",
         "StrictModes yes",
         "UsePAM no",
@@ -4398,6 +4417,168 @@ def _entry_converge(paths, ep, port, lst, force):
         book["cut"] = {"at": t, "pids": cut}
     write_json(ep.book, book)
     return book
+
+
+# The door's revocation list (issue #3560, EPIC #3500 C18, 共同约定 11): the hub
+# pushes every revocation it records onto one versioned list —
+# GET /v1/node/revocations?since=<v>&wait=25 with the machine's token, answered
+# the moment the list moves — and the door keeps it locally: the list in
+# <state>/entry/revocations.json, its connection-certificate serials as an
+# OpenSSH KRL, <state>/entry/revoked.krl, which the entry sshd loads with
+# RevokedKeys and reads on every authentication. So a certificate revoked on the
+# hub stops at the door within seconds, and the hub away, the last list still
+# refuses. The follower is a thread of the daemon (`Supervisor.follow_revocations`);
+# `entry revocations pull | apply <file> | status` by hand. A hub with the list
+# off (404) or an entry that is off ⇒ nothing is written, the config byte for
+# byte as before.
+def entry_keygen():
+    return env("FLEET_ENTRY_SSH_KEYGEN", "/usr/bin/ssh-keygen")
+
+
+def revocations_apply(paths, lst, fetched_at=None):
+    """(ok, why): the list's certificate serials written as the KRL (one rename),
+    then the list itself. A list that names certificates but no CA is refused,
+    the last KRL kept."""
+    if not isinstance(lst, dict) or not isinstance(lst.get("v"), int) or not isinstance(lst.get("entries"), list):
+        return False, "not a revocation list"
+    ep = EntryPaths(paths)
+    _entry_root_dir(ep.dir, 0o755)
+    t = time.time()
+    serials = sorted(set(int(str(e["jti"])[4:]) for e in lst["entries"]
+                         if isinstance(e, dict) and str(e.get("jti") or "").startswith("ssh:")
+                         and str(e["jti"])[4:].isdigit() and isinstance(e.get("exp"), int) and e["exp"] > t))
+    ca = str(lst.get("ssh_ca") or "").strip()
+    if serials and not ca:
+        return False, "the list names %d certificate(s) but no ssh_ca" % len(serials)
+    spec = os.path.join(ep.dir, ".krl-spec.%d" % os.getpid())
+    tmp = os.path.join(ep.dir, ".revoked.krl.%d" % os.getpid())
+    cmd = [entry_keygen(), "-k", "-f", tmp]
+    try:
+        _entry_put(spec, "".join("serial: %d\n" % n for n in serials), 0o600)
+        if serials:
+            _entry_put(ep.rev_ca, ca + "\n", 0o644)
+            cmd += ["-s", ep.rev_ca]
+        r = subprocess.run(cmd + [spec], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           universal_newlines=True, timeout=30)
+        if r.returncode != 0 or not os.path.isfile(tmp):
+            return False, "ssh-keygen -k: %s" % ((r.stdout.strip().splitlines() or ["rc=%d" % r.returncode])[-1])
+        os.chmod(tmp, 0o644)
+        os.rename(tmp, ep.krl)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, "the KRL: %s" % e
+    finally:
+        for f in (spec, tmp):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+    write_json(ep.revs, {"v": lst["v"], "at": lst.get("at"), "fetched_at": fetched_at or t,
+                         "serials": len(serials), "entries": lst["entries"]})
+    return True, ""
+
+
+def revocations_pull(paths, since=None, wait=0):
+    """One ask of the hub's list: (code, why) — 0 applied · 1 the hub did not
+    answer / the list did not apply (the last one stands) · 2 unchanged (304) ·
+    3 off (the entry, or the hub's list)."""
+    on, _port, me = entry_settings(paths)
+    if not on:
+        return 3, "entry off"
+    hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
+    if not hub or not token:
+        return 1, "machine.env names no hub or no token"
+    from urllib.request import Request, urlopen
+    q = "?since=%d&wait=%d" % (since, wait) if since is not None else ""
+    try:
+        req = Request(hub + "/v1/node/revocations" + q, headers={"Authorization": "Bearer " + token,
+                                                                  "Accept": "application/json"})
+        with urlopen(req, timeout=wait + env_num("FLEET_ENTRY_PULL_SECS", 10)) as r:
+            if r.status == 304:
+                return 2, ""
+            lst = json.loads(r.read().decode("utf-8"))
+    except Exception as e:  # urllib raises many kinds; the reason is all we keep
+        code = getattr(e, "code", None)
+        if code == 304:
+            ep = EntryPaths(paths)
+            b = read_json(ep.revs, None)
+            if b is not None:
+                b["fetched_at"] = time.time()
+                write_json(ep.revs, b)
+            return 2, ""
+        if code == 404:
+            return 3, "the hub's list is off"
+        return 1, "the hub: %s" % (code or getattr(e, "reason", None) or e)
+    ok, why = revocations_apply(paths, lst)
+    return (0, "") if ok else (1, why)
+
+
+def revocations_follow(paths, say, stopped, until=None):
+    """Ask the hub with the version held, held up to FLEET_ENTRY_REV_WAIT (25 s),
+    apply what moved, repeat — reconnecting within FLEET_ENTRY_REV_BACKOFF (5 s)
+    so a hub that comes back is heard well inside the 10-second promise. Entry
+    off or the hub's list off ⇒ ask again in FLEET_ENTRY_REV_IDLE, write nothing."""
+    back, said = 1.0, None
+    ep = EntryPaths(paths)
+    while not stopped() and (until is None or time.time() < until):
+        b = read_json(ep.revs, None) or {}
+        code, why = revocations_pull(paths, b.get("v") if isinstance(b.get("v"), int) else None,
+                                     int(env_num("FLEET_ENTRY_REV_WAIT", 25)))
+        if code == 0:
+            nb = read_json(ep.revs, None) or {}
+            say("entry: revocation list v%s · %s certificate(s) in the KRL" % (nb.get("v"), nb.get("serials")))
+        if code == 1 and why != said:
+            say("entry: revocation list: %s — the last list stands" % why)
+        said = why if code == 1 else None
+        if code == 3:
+            time.sleep(env_num("FLEET_ENTRY_REV_IDLE", 300))
+        elif code == 1:
+            time.sleep(back)
+            back = min(back * 2, env_num("FLEET_ENTRY_REV_BACKOFF", 5))
+        else:
+            back = 1.0
+
+
+def revocations_cli(paths, rest):
+    sub = rest[0] if rest else "status"
+    ep = EntryPaths(paths)
+    if sub == "pull":
+        b = read_json(ep.revs, None) or {}
+        code, why = revocations_pull(paths, b.get("v") if "--since" in rest else None)
+        b = read_json(ep.revs, None) or {}
+        print("revocations v%s · %s certificate(s) in the KRL%s" % (b.get("v", "-"), b.get("serials", 0),
+                                                                     " · " + why if why else ""))
+        return 0 if code in (0, 2) else code
+    if sub == "follow":
+        secs = None
+        if "--max-seconds" in rest:
+            secs = float(rest[rest.index("--max-seconds") + 1])
+        say = lambda m: (sys.stderr.write("%s %s\n" % (iso(now()), m)), sys.stderr.flush())
+        revocations_follow(paths, say, lambda: False, time.time() + secs if secs else None)
+        return 0
+    if sub == "apply" and len(rest) > 1:
+        try:
+            lst = json.load(sys.stdin) if rest[1] == "-" else read_json(rest[1], None)
+        except ValueError:
+            lst = None
+        ok, why = revocations_apply(paths, lst)
+        if not ok:
+            print("revocations apply: %s" % why, file=sys.stderr)
+            return 1
+        b = read_json(ep.revs, {})
+        print("revocations v%s · %s certificate(s) in the KRL" % (b.get("v"), b.get("serials")))
+        return 0
+    if sub == "status":
+        b = read_json(ep.revs, None)
+        if b is None:
+            print("no revocation list here")
+            return 3
+        age = time.time() - float(b.get("fetched_at") or 0)
+        print("revocations v%s · %s certificate(s) in the KRL · fetched %ds ago%s" % (
+            b.get("v"), b.get("serials"), age, " (stale)" if age > env_num("FLEET_ENTRY_REV_STALE", 600) else ""))
+        return 1 if age > env_num("FLEET_ENTRY_REV_STALE", 600) else 0
+    print("usage: entry revocations pull [--since] | follow [--max-seconds N] | apply <file|-> | status",
+          file=sys.stderr)
+    return 2
 
 
 def entry_pull(paths, version=None):
@@ -5075,6 +5256,8 @@ def entry_cli(paths, rest):
         print("entry v%s · %d login(s) on the port%s" % (b.get("version"), len(b.get("allow") or []),
                                                          " · " + b["error"] if b.get("error") else ""))
         return 1 if b.get("error") else 0
+    if sub == "revocations":
+        return revocations_cli(paths, rest[1:])
     if sub == "ensure":
         b = entry_converge(paths)
         if b is None:

@@ -794,6 +794,16 @@ func runHub(args []string) error {
 		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}
+		// The revocation list the relay and the doors keep (claude-fleet#3560):
+		// its token admits the relay's sidecar; unset = the list is off.
+		rt, err := envOrFile("CCQUOTA_FLEET_REVOCATIONS_TOKEN")
+		if err != nil {
+			return err
+		}
+		srv.RevocationsToken = rt
+		if rt != "" {
+			log.Printf("fleet: revocation list on (%s, %s)", api.RelayRevocationsPath, api.NodeRevocationsPath)
+		}
 		// After the session pass key: the relay path signs its pass with it.
 		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err

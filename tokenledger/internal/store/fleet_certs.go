@@ -70,6 +70,16 @@ func (s *Store) FleetCerts(principalID string, limit int) ([]FleetCert, error) {
 		args = append(args, principalID)
 	}
 	q += ` ORDER BY issued_at DESC, serial LIMIT ` + strconv.Itoa(limit)
+	return s.scanFleetCerts(q, args...)
+}
+
+// fleetCertsWhere is the issuances matching where, newest first.
+func (s *Store) fleetCertsWhere(where string, args ...any) ([]FleetCert, error) {
+	return s.scanFleetCerts(`SELECT serial, principal_id, key_id, principals, key_fingerprint, via, issued_at,
+		valid_after, valid_before FROM fleet_certs WHERE `+where+` ORDER BY issued_at DESC, serial`, args...)
+}
+
+func (s *Store) scanFleetCerts(q string, args ...any) ([]FleetCert, error) {
 	rows, err := s.read.Query(q, args...)
 	if err != nil {
 		return nil, err

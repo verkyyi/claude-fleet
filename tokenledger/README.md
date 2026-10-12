@@ -1221,8 +1221,14 @@ key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
 cluster credential proxy — `ccquota credproxy`, its own Deployment
 (deploy/k8s/credproxy, claude-fleet#1973) — swaps for the bound account's
 credential via `/v1/fleet/credproxy/resolve`
-(`CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]`). The operator
-stores, lists and revokes:
+(`CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]`). With
+`CCQUOTA_FLEET_REVOCATIONS_TOKEN[_FILE]` set, every revocation also lands on a
+versioned list the Singapore relay (`GET /v1/relay/revocations`, that token)
+and the machines' doors (`GET /v1/node/revocations`, a node token) follow and
+refuse by locally — at once, and with the hub away (claude-fleet#3560;
+`POST /v1/fleet/revocations {serial}` revokes one connection certificate;
+docs/CRED-RELAY.md «吊销名单»). Unset: those routes are 404 and nothing is
+written. The operator stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub
     curl -H "Authorization: Bearer $VIEWER" -d '{"action":"put","principal_id":"gh:<GitHub ID>",

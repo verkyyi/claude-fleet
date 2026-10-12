@@ -707,6 +707,13 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **凭据**：入口环境 `CCQUOTA_DNS_DP_ID` / `CCQUOTA_DNS_DP_KEY`（`deploy/k8s/overlays/prod/deployment-env.yaml` 从 `new-deploy/acme-dnspod`
   的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=24haowan.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
   缺一样 ⇒ 循环不起、0 次调用。⚠️ 这把 token 与 ACME DNS-01 共用、管整个 DNSPod 账号（不只这一个域名）：轮换它要同时顾到 ACME。
+- **吊销名单**（#3560，EPIC #3500 C18）：守护里一个线程跟着入口的 `GET /v1/node/revocations?since=<v>&wait=25`
+  （机器令牌；入口有变化立刻回），把名单存成 `<state>/entry/revocations.json`，把其中连接证书的序号
+  （`ssh:<serial>`）按名单带的 `ssh_ca` 写成 OpenSSH KRL `<state>/entry/revoked.krl`（`ssh-keygen -k`，一次改名）。
+  KRL 在了，入口 sshd 的配置才多一行 `RevokedKeys`——sshd 每次认证都读它，换名单不用重启；读不到的 RevokedKeys
+  会拒掉所有钥匙，所以 KRL 不在就不写这行。入口停着时照用最后一份；名单关着（入口 404）或入口端口关着什么都不写。
+  手动：`fleet-node-supervisor.py entry revocations pull | follow | apply <file> | status`。C4 的门装同一份 KRL。
+  BREAK-IT：`cred-revoked-still-works`。
 - 查：`dig +short @223.5.5.5 <名字>.cf.24haowan.com`（没领的名字：空；`dig TXT` 见那句话）；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows` · `entry-name-unclaimed`。
 
 ## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
