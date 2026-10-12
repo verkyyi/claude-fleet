@@ -24,8 +24,16 @@ missing or altered file is refused.
     ed25519 signature every release always carried, verified by
     fleet-release-verify.py's RFC 8032 code — so a client needs no ccquota
     from its first run, whichever hub it meets.
-  * A new signing key is taken only when the pinned one vouches for it: the
-    manifest names another key (its `key` = KeyID), the hub's
+  * The pinned key may be the ROOT (issue #3559): a manifest signed by another
+    key carries `key_chain` — root-signed certificates (fleet-release-verify.py)
+    — and is taken only when the pinned key vouches for its signer through
+    them and no revocation names it: the manifest's own `revoked`, the hub's
+    /v1/fleet/release/revoked, or one this computer already saw
+    (<release.pub>.revoked, which only ever grows). A pinned key that vouches
+    for a ROOT re-pins to it (the old kept as release.pub.prev) — the one-time
+    move from the hub's old signing key to the offline root.
+  * Before a key_chain (#3162): a new signing key is taken only when the
+    pinned one vouches for it: the manifest names another key (its `key` = KeyID), the hub's
     /v1/fleet/release/key-endorsement holds that key's line signed by the
     pinned key (namespace claude-fleet-release-key) — then <release.pub> is
     re-pinned (the old kept as release.pub.prev) and said on stderr. No
@@ -59,6 +67,9 @@ SIG_HDR, SSHSIG_HDR = "X-Ccquota-Release-Signature", "X-Ccquota-Release-Sshsig"
 MANIFEST_MAX, TREE_MAX = 8 << 20, 512 << 20
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HERE = os.path.dirname(os.path.abspath(__file__))
+_spec = importlib.util.spec_from_file_location("fleet_release_verify", os.path.join(HERE, "fleet-release-verify.py"))
+V = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(V)
 
 
 class Refused(Exception):
@@ -134,16 +145,13 @@ def ssh_verify(raw, ns, data, armored):
 
 
 def ed25519_verify(raw, data, sig_b64):
-    """the release's legacy signature (a hub from before SSHSIG), RFC 8032"""
-    spec = importlib.util.spec_from_file_location(
-        "fleet_release_verify", os.path.join(HERE, "fleet-release-verify.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    """the release's plain Ed25519 signature (a hub from before SSHSIG, or a
+    train-signed release without its SSHSIG), RFC 8032"""
     try:
         sig = base64.b64decode(sig_b64.strip(), validate=True)
     except Exception:
         return False
-    return mod.verify(raw, data, sig)
+    return V.verify(raw, data, sig)
 
 
 class Fetch:
@@ -201,7 +209,47 @@ class Fetch:
         self.raw = new
         return new
 
+    def revocations(self):
+        """the hub's own revocation list (/revoked; issue #3559) — trusted only
+        once a root the pinned key vouches for has signed it"""
+        try:
+            d = json.loads(self.get("revoked", 64 << 10)[0])
+        except (Refused, ValueError):
+            return []
+        return [d] if isinstance(d, dict) else []
+
+    def signer(self, m, at):
+        """the key that must have signed m: the pinned one, or one it vouches
+        for through m's key_chain and no revocation names (issue #3559). Before
+        a key_chain, a key-endorsement from the hub (#3162) as before."""
+        known = V.load_revoked(self.pubkey + ".revoked")[0]
+        raw, t = V.signer_of(self.raw, m, self.revs, known)
+        if raw is None and not m.get("key_chain") and m.get("key") and m.get("key") != key_id(self.raw):
+            if self.endorsed(str(m.get("key"))) is not None:
+                raw, t = V.signer_of(self.raw, m, self.revs, known)
+        if raw is None:
+            raise Refused("release %s: %s (%s)" % (at[:12], t, self.pubkey))
+        return raw, t
+
+    def keep_trust(self, t):
+        """after a release verified: every revoked id kept, and a root the
+        pinned key vouched for becomes the pin (the old kept as .prev)"""
+        _, rev, ver, repin = t
+        if rev or ver:
+            V.save_revoked(self.pubkey + ".revoked", rev, ver)
+        if repin is not None and repin != self.raw:
+            shutil.copyfile(self.pubkey, self.pubkey + ".prev")
+            tmp = self.pubkey + ".tmp.%d" % os.getpid()
+            with open(tmp, "w") as f:
+                f.write(V.key_line(repin) + "\n")
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, self.pubkey)
+            sys.stderr.write("fleet-release: the pinned key %s vouched for the root %s — re-pinned %s "
+                             "(the old kept as %s.prev)\n" % (key_id(self.raw), key_id(repin), self.pubkey, self.pubkey))
+            self.raw = repin
+
     def manifest(self, sha):
+        self.revs = self.revocations()
         mb, hdrs = self.get(sha, MANIFEST_MAX)
         try:
             m = json.loads(mb)
@@ -210,20 +258,23 @@ class Fetch:
         at = str(m.get("sha") or "")
         if not SHA_RE.match(at):
             raise Refused("the hub's manifest names no commit")
-        how = self.checked(mb, at, hdrs, self.raw)
+        raw, t = self.signer(m, at)
+        how = self.checked(mb, at, hdrs, raw)
         if how is None:
-            # one more read: a reseal between the two reads (#2843) — then a key
-            # the pinned one vouched for, and only that
+            # one more read: a reseal between the two reads (#2843)
             mb, hdrs = self.get(sha, MANIFEST_MAX)
             m = json.loads(mb)
             at = str(m.get("sha") or "")
-            how = self.checked(mb, at, hdrs, self.raw) if SHA_RE.match(at) else None
-            if how is None and m.get("key") and m.get("key") != key_id(self.raw):
-                if self.endorsed(str(m.get("key"))) is not None:
-                    how = self.checked(mb, at, hdrs, self.raw)
+            if SHA_RE.match(at):
+                raw, t = self.signer(m, at)
+                how = self.checked(mb, at, hdrs, raw)
         if how is None:
-            raise Refused("release %s: the signature does not match the pinned key %s (%s)"
-                          % (at[:12], key_id(self.raw), self.pubkey))
+            if raw == self.raw:
+                raise Refused("release %s: the signature does not match the pinned key %s (%s)"
+                              % (at[:12], key_id(self.raw), self.pubkey))
+            raise Refused("release %s: the signature does not match the pinned key %s's chain (signer %s; %s)"
+                          % (at[:12], key_id(self.raw), key_id(raw), self.pubkey))
+        self.keep_trust(t)
         if m.get("schema") != SCHEMA:
             raise Refused("release %s: manifest schema %r, this reader knows %d"
                           % (at[:12], m.get("schema"), SCHEMA))

@@ -17,6 +17,15 @@
 #            it carried, its stages, its macOS queue (#3140's JSON). Bookkeeping
 #            only: a hub without the ledger ignores the part, and a hub with it
 #            never refuses a publish over it.
+#   signer   with FLEET_RELEASE_SIGN_KEY in the environment (issue #3559): the
+#            train's public key. A hub that holds no signing key builds the
+#            release UNSIGNED for it and answers 202 with the manifest's bytes;
+#            this script checks them against the checkout
+#            (fleet-release-sign.py check — every file, the chain, the place on
+#            the chain), signs them (Ed25519 + SSHSIG) and POSTs the two
+#            signatures; only then is it stable. The key comes from the
+#            release-sign environment's secret and is only ever read from the
+#            environment — never an argv, a file or a log line.
 # The hub hashes the archive into a git tree and the commit objects into their
 # shas, so it needs no trust in this script — only in who runs it:
 #
@@ -47,7 +56,8 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-[ -n "$dir" ] || dir="$(cd "$(dirname "$0")/.." && pwd)"
+here="$(cd "$(dirname "$0")" && pwd)"
+[ -n "$dir" ] || dir="$(cd "$here/.." && pwd)"
 [ -z "$train" ] || [ -s "$train" ] || die "--train $train is not a file"
 [ -n "$hub" ] || die "no hub — pass --hub <url> or set FLEET_HUB_URL"
 hub="${hub%/}"
@@ -114,14 +124,43 @@ run=""
 [ -z "${GITHUB_RUN_ID:-}" ] || run="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/$GITHUB_RUN_ID" # dist-ok: the run's link, for the hub's log
 set -- -F "sha=$sha" -F "prev=$prev" -F "run=$run"
 [ -z "$train" ] || set -- "$@" -F "train=@$train;type=application/json"
+signer=""
+if [ -n "${FLEET_RELEASE_SIGN_KEY:-}" ]; then
+  signer=$(python3 "$here/fleet-release-sign.py" pub env:FLEET_RELEASE_SIGN_KEY) ||
+    die "FLEET_RELEASE_SIGN_KEY is not a base64 ed25519 seed"
+  printf 'signer: %s (the release-sign key)\n' "$signer"
+  set -- "$@" -F "signer=$signer"
+fi
 code=$(curl -sS -m 900 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' "$@" \
   -F "commits=@$work/commits;type=application/octet-stream" \
   -F "tree=@$work/tree.tar.gz;type=application/gzip" \
   "$hub/v1/fleet/release/publish") || { printf 'fleet-release-publish: POST to %s failed\n' "$hub" >&2; exit 3; }
 answer=$(cat "$work/answer" 2>/dev/null)
 if [ "$code" = 200 ]; then
+  [ -z "$signer" ] || printf 'note: the hub still signs with its own key — the release-sign key was offered, not used\n'
   printf 'published: %s\n' "$answer"
   exit 0
+fi
+if [ "$code" = 202 ]; then
+  # the hub built it unsigned: look, then sign (issue #3559)
+  python3 -c 'import base64, json, sys; sys.stdout.buffer.write(base64.b64decode(json.load(open(sys.argv[1]))["manifest"]))' \
+    "$work/answer" > "$work/manifest.json" || { printf 'fleet-release-publish: the hub answered 202 without a manifest: %s\n' "$answer" >&2; exit 1; }
+  python3 "$here/fleet-release-sign.py" check --key env:FLEET_RELEASE_SIGN_KEY --dir "$dir" --sha "$sha" --prev "$prev" "$work/manifest.json" ||
+    { printf 'fleet-release-publish: NOT signed — the hub built something else than this commit\n' >&2; exit 1; }
+  python3 "$here/fleet-release-sign.py" manifest --key env:FLEET_RELEASE_SIGN_KEY "$work/manifest.json" > "$work/sigs" ||
+    { printf 'fleet-release-publish: signing failed\n' >&2; exit 1; }
+  code=$(curl -sS -m 120 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' -F "sha=$sha" \
+    -F "sig=$(sed -n 1p "$work/sigs")" -F "sshsig=$(sed -n 2p "$work/sigs")" \
+    "$hub/v1/fleet/release/publish") || { printf 'fleet-release-publish: POST of the signature to %s failed\n' "$hub" >&2; exit 3; }
+  answer=$(cat "$work/answer" 2>/dev/null)
+  if [ "$code" = 200 ]; then
+    printf 'published (signed by the train): %s\n' "$answer"
+    exit 0
+  fi
+fi
+if [ "$code" = 428 ]; then
+  printf 'fleet-release-publish: the hub holds no signing key and waits for the train'"'"'s — this run has no FLEET_RELEASE_SIGN_KEY (the release-sign environment): %s\n' "$answer" >&2
+  exit 1
 fi
 printf 'fleet-release-publish: the hub answered %s: %s\n' "$code" "$answer" >&2
 case "$code" in 5??) exit 3 ;; esac

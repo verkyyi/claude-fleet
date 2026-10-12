@@ -9,6 +9,11 @@
 # reads the drill_* names here, so a row with no drill (or a drill with no row)
 # reds there.
 #
+#   release-key-outside-train                       bin/fleet-release-key.sh scan (fleet-release-sign.py scan),
+#                                                   fleet-doctor.sh (releasekey), release-train.yml; the hub
+#                                                   half is fleet_release_sign.go (go test, when a toolchain is)
+#   release-key-revoked                             bin/fleet-release-verify.py (trust), fleet-release-fetch.py;
+#                                                   tokenledger/internal/release trust.go (go test, when a toolchain is)
 #   node-tmux-restart                               bin/fleet-sessions-snapshot.sh → fleet-restore.sh
 #   node-update-sessions                            bin/fleet-node-update.py (sessions save / restore)
 #   release-unverified                              bin/fleet-release.sh (fleet-release-selftest.sh's sandbox)
@@ -2127,6 +2132,119 @@ drill_cred_policy_empties_machine() {
   c11_go_tests fleet_cred_policy_test.go TestCredPolicyRefusesEmptyingAProvider TestCredPolicyNoBindSaysWhy || return 1
   WHAT='收空一台机器 / 一个人某个 provider 的白名单写入 409、不变；--force 照写；deny / clear 不拦；会话报错点名拒它的那张白名单（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='收空 claude / codex 的写入 409 点名、列表不变；force 照写；deny / clear 不拦；会话报错点名「not in machine … allowlist」（go test 两条）'
+  SECS=$(since "$t0")
+}
+
+# ---- release-key-outside-train (#3559, EPIC #3500 C17): the release signing
+# private key lives only in the release train. A seed of a key the pinned root
+# vouches for, planted in a sandbox conf dir (as an env file line) or set in the
+# signing variable, must be FOUND by fleet-release-key.sh scan (exit 1) and the
+# doctor's releasekey row must FAIL; removed, both are quiet. The hub half — a
+# keyless hub builds unsigned, takes only a signature the root's chain vouches
+# for, keeps no private key on its volume — is go-tested.
+drill_release_key_outside_train() {
+  CAP=120; local t0 sc="$WORK/rkot" out rc sign="$BIN/fleet-release-sign.py" tests='TestReleaseTrainSigned'
+  command -v python3 >/dev/null 2>&1 || { WHY="no python3"; return 1; }
+  t0=$(now)
+  mkdir -p "$sc/conf" "$sc/home/.ssh" "$sc/home/.config" "$sc/home/.claude/fleet/.release"
+  python3 "$sign" keygen "$sc/root.key" >/dev/null && python3 "$sign" keygen "$sc/train.key" >/dev/null || { WHY="keygen failed"; return 1; }
+  python3 "$sign" pub "$sc/root.key" > "$sc/conf/release.pub"
+  python3 "$sign" cert --by "$sc/root.key" --key "$(python3 "$sign" pub "$sc/train.key")" --role sign --add "$sc/chain.json" >/dev/null
+  printf '{"key_chain": %s}\n' "$(cat "$sc/chain.json")" > "$sc/home/.claude/fleet/.release/manifest.json"
+  scan() { env -u CCQUOTA_FLEET_RELEASE_KEY -u CCQUOTA_FLEET_RELEASE_PREV_KEY -u FLEET_RELEASE_SIGN_KEY HOME="$sc/home" FLEET_CONF_DIR="$sc/conf" "$@" bash "$BIN/fleet-release-key.sh" scan "$sc/conf" "$sc/home/.ssh" "$sc/home/.config" 2>&1; }
+  out=$(scan); rc=$?
+  [ "$rc" = 0 ] || { WHY="a clean sandbox scanned as holding a key: $out"; return 1; }
+  # the break: the train's seed copied into this login's secrets
+  printf 'SOME_TOKEN=%s\n' "$(cat "$sc/train.key")" > "$sc/conf/secrets.env"
+  out=$(scan); rc=$?
+  [ "$rc" = 1 ] && case "$out" in *FOUND*secrets.env*) :;; *) false;; esac \
+    || { WHY="the train's key in secrets.env was not found (rc $rc): $out"; return 1; }
+  out=$(env -u CCQUOTA_FLEET_RELEASE_KEY -u CCQUOTA_FLEET_RELEASE_PREV_KEY -u FLEET_RELEASE_SIGN_KEY HOME="$sc/home" FLEET_CONF_DIR="$sc/conf" bash "$BIN/fleet-doctor.sh" 2>&1 | grep releasekey)
+  case "$out" in *FAIL*releasekey*) :;; *) WHY="the doctor's releasekey row did not FAIL: $out"; return 1;; esac
+  rm -f "$sc/conf/secrets.env"
+  out=$(scan FLEET_RELEASE_SIGN_KEY="$(cat "$sc/train.key")"); rc=$?
+  [ "$rc" = 1 ] || { WHY="the signing variable set in a session was not found: $out"; return 1; }
+  out=$(scan); rc=$?
+  [ "$rc" = 0 ] || { WHY="removed, still found: $out"; return 1; }
+  grep -q 'return errTrainSigns' "$ROOT/tokenledger/internal/api/fleet_release.go" \
+    || { WHY="a keyless hub builds releases on its own again"; return 1; }
+  grep -q 'environment: release-sign' "$ROOT/.github/workflows/release-train.yml" \
+    && grep -q 'secrets.RELEASE_SIGN_KEY' "$ROOT/.github/workflows/release-train.yml" \
+    || { WHY="the release train no longer holds the key (release-sign / RELEASE_SIGN_KEY)"; return 1; }
+  grep -q '^func TestReleaseTrainSigned(' "$ROOT/tokenledger/internal/api/fleet_release_sign_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestReleaseTrainSigned is gone"; return 1; }
+  WHAT='签名私钥抄进登录的 secrets.env、或会话里设了签名变量：scan 找到（exit 1）、体检 releasekey FAIL；删掉即干净；入口无私钥只建未签清单、列车握 release-sign（测试按名核对在，Go 门跑它）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='签名私钥抄进登录的 secrets.env、或会话里设了签名变量：scan 找到、体检 releasekey FAIL，删掉即干净；入口无私钥：只建未签清单、只认根钥匙背书的签名、卷上没有私钥，旧钥匙的机器自动改认根钥匙（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- release-key-revoked (#3559, EPIC #3500 C17): a manifest signed by a key
+# the root vouched for, then revoked, must be refused by the Python check
+# (fleet-release-verify.py, what fleet-release-fetch.py uses) — from the
+# manifest's own list, and from the machine's memory (<pin>.revoked) once the
+# list is gone — while a list forged by anyone but the root counts for nothing.
+# The Go half (ccquota release fetch / verify, the hub's check) is go-tested.
+drill_release_key_revoked() {
+  CAP=120; local t0 sc="$WORK/rkr" out rc sign="$BIN/fleet-release-sign.py" ver="$BIN/fleet-release-verify.py"
+  local tests='TestTrustRevoked TestTrustChain TestTrustPythonInterop' api='TestReleaseKeyRevoked'
+  command -v python3 >/dev/null 2>&1 || { WHY="no python3"; return 1; }
+  t0=$(now)
+  mkdir -p "$sc"
+  for k in root k1 mallory; do python3 "$sign" keygen "$sc/$k.key" >/dev/null || { WHY="keygen failed"; return 1; }; done
+  python3 "$sign" pub "$sc/root.key" > "$sc/release.pub"
+  python3 "$sign" cert --by "$sc/root.key" --key "$(python3 "$sign" pub "$sc/k1.key")" --role sign --add "$sc/chain.json" >/dev/null
+  k1=$(python3 "$sign" show --anchor "$sc/release.pub" "$sc/chain.json" | awk '/^trusts/ { print $2; exit }')
+  mk() { python3 - "$sc" "$1" "$k1" <<'PY'
+import json, sys
+sc, rev, k1 = sys.argv[1:4]
+m = {"schema": 1, "sha": "a" * 40, "seq": 7, "key": k1, "key_chain": json.load(open(sc + "/chain.json")), "files": []}
+if rev != "-":
+    m["revoked"] = json.load(open(rev))
+open(sc + "/manifest.json", "w").write(json.dumps(m))
+PY
+    python3 "$sign" manifest --key "$sc/k1.key" "$sc/manifest.json" | sed -n 1p > "$sc/sig"; }
+  mk -
+  out=$(python3 "$ver" "$sc/release.pub" "$sc/manifest.json" "@$sc/sig" 2>&1) || { WHY="k1's release refused before any revocation: $out"; return 1; }
+  # a forged list — mallory in the root's name — counts for nothing
+  python3 "$sign" revoke --by "$sc/mallory.key" --version 9 --out "$sc/forged.json" "$k1" >/dev/null
+  mk "$sc/forged.json"
+  out=$(python3 "$ver" "$sc/release.pub" "$sc/manifest.json" "@$sc/sig" 2>&1) || { WHY="a forged list revoked k1: $out"; return 1; }
+  # the break: k1 leaks; the root signs a list and it rides in the release
+  python3 "$sign" revoke --by "$sc/root.key" --version 1 --out "$sc/revoked.json" "$k1" >/dev/null
+  mk "$sc/revoked.json"
+  out=$(python3 "$ver" "$sc/release.pub" "$sc/manifest.json" "@$sc/sig" 2>&1); rc=$?
+  [ "$rc" = 1 ] && case "$out" in *revoked*) :;; *) false;; esac || { WHY="k1's release taken with the root's list on board (rc $rc): $out"; return 1; }
+  # the list gone from the next release: the machine's memory still refuses
+  printf '{"version": 1, "keys": ["%s"]}\n' "$k1" > "$sc/release.pub.revoked"
+  mk -
+  out=$(python3 "$ver" "$sc/release.pub" "$sc/manifest.json" "@$sc/sig" 2>&1); rc=$?
+  [ "$rc" = 1 ] || { WHY="the machine forgot k1 was revoked: $out"; return 1; }
+  grep -q 'save_revoked(self.pubkey + ".revoked"' "$BIN/fleet-release-fetch.py" \
+    || { WHY="fleet-release-fetch.py no longer keeps the revoked ids it saw"; return 1; }
+  grep -q 'relverify.signer_of(pub, m' "$BIN/fleet-node-core.py" \
+    || { WHY="the root core's switch no longer holds the signer to the chain and the revocations"; return 1; }
+  grep -q 'f.Trust.Keep(\*pub)' "$ROOT/tokenledger/cmd/ccquota/release.go" \
+    || { WHY="ccquota release fetch no longer keeps the revoked ids it saw"; return 1; }
+  WHAT='根钥匙作废 k1：清单带作废单即拒；下一版不带了，机器记下的作废 id 照拒；伪造的作废单（非根钥匙签）不认（Go 半边测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$tests" "$api" | tr ' ' '|'))\$" ./internal/release ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='根钥匙作废 k1：Python 与 Go（ccquota 取包 / 校验目录、入口验签）都拒；下一版不带作废单，机器记下的照拒；伪造的作废单不认；两种语言读同一格式（go test + python）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
   SECS=$(since "$t0")
 }
 

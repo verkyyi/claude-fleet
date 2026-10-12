@@ -83,9 +83,15 @@ type Manifest struct {
 	// doctor holds `ccquota version`'s src line to it. "" = not checked (a
 	// release from before, or one carrying no ccquota).
 	CCQuotaSrc string `json:"ccquota_src,omitempty"`
-	Tree       Blob   `json:"tree"`
-	Files      []File `json:"files"`
-	Artifacts  []Blob `json:"artifacts"`
+	// KeyChain and Revoked are the commit's conf/release-keys/chain.json and
+	// revoked.json, carried under the signature (claude-fleet#3559): how a
+	// machine pinned to the offline root gets from it to the key that signed
+	// this manifest, and which keys it must never take again (trust.go).
+	KeyChain  []Doc  `json:"key_chain,omitempty"`
+	Revoked   *Doc   `json:"revoked,omitempty"`
+	Tree      Blob   `json:"tree"`
+	Files     []File `json:"files"`
+	Artifacts []Blob `json:"artifacts"`
 }
 
 var (
@@ -194,6 +200,12 @@ type Seal struct {
 	Prev string
 	Seq  int64
 	Src  string // Manifest.CCQuotaSrc, signed in beside the chain (claude-fleet#2930)
+	// KeyChain / Revoked: Manifest's, from the commit (claude-fleet#3559)
+	KeyChain []Doc
+	Revoked  *Doc
+	// Signer: the key that WILL sign — only for a build with no private key
+	// here (the release train signs it, claude-fleet#3559); Manifest.Key is its id
+	Signer ed25519.PublicKey
 }
 
 // Build writes a signed release for sha into dir (which must not exist yet):
@@ -203,6 +215,8 @@ func Build(dir, repo, sha string, files map[string][]byte, artifacts map[string]
 }
 
 // BuildSealed is Build with the release's place on the stable chain signed in.
+// A nil key builds it unsigned for seal.Signer (the release train signs
+// manifest.json later; no manifest.sig is written — claude-fleet#3559).
 func BuildSealed(dir, repo, sha string, files map[string][]byte, artifacts map[string]string, key ed25519.PrivateKey, now time.Time, seal Seal) (*Manifest, error) {
 	if !ValidSHA(sha) {
 		return nil, fmt.Errorf("bad sha %q", sha)
@@ -213,11 +227,19 @@ func BuildSealed(dir, repo, sha string, files map[string][]byte, artifacts map[s
 	if len(files) == 0 {
 		return nil, errors.New("no files")
 	}
+	signer := seal.Signer
+	if key != nil {
+		signer = key.Public().(ed25519.PublicKey)
+	}
+	if len(signer) != ed25519.PublicKeySize {
+		return nil, errors.New("no signing key and no signer named")
+	}
 	if err := os.MkdirAll(dir+"/"+ArtifactDir, 0o755); err != nil {
 		return nil, err
 	}
 	m := Manifest{Schema: Schema, Repo: repo, SHA: sha, Created: now.UTC().Truncate(time.Second),
-		Key: KeyID(key.Public().(ed25519.PublicKey)), Prev: seal.Prev, Seq: seal.Seq, CCQuotaSrc: seal.Src, Files: []File{}, Artifacts: []Blob{}}
+		Key: KeyID(signer), Prev: seal.Prev, Seq: seal.Seq, CCQuotaSrc: seal.Src, KeyChain: seal.KeyChain, Revoked: seal.Revoked,
+		Files: []File{}, Artifacts: []Blob{}}
 
 	names := make([]string, 0, len(files))
 	for p := range files {
@@ -275,6 +297,9 @@ func BuildSealed(dir, repo, sha string, files map[string][]byte, artifacts map[s
 	mb = append(mb, '\n')
 	if err := os.WriteFile(dir+"/"+ManifestName, mb, 0o644); err != nil {
 		return nil, err
+	}
+	if key == nil {
+		return &m, nil
 	}
 	if err := os.WriteFile(dir+"/"+SigName, []byte(Sign(key, mb)+"\n"), 0o644); err != nil {
 		return nil, err

@@ -279,7 +279,7 @@ sandbox
 run --join "$CODE1"
 check "no core asked, none here: no 核心 line" sh -c "[ $RC = 0 ] && ! printf '%s' \"\$OUT\" | grep -q 核心"
 CUR_BIN="$SB/root/current/bin"
-for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py; do cp "$BIN/$f" "$CUR_BIN/"; done
+for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-release-verify.py; do cp "$BIN/$f" "$CUR_BIN/"; done
 OUT="$(FLEET_NODE_CORE=1 ${FNI_BASH:-bash} "$INST" --hub https://hub.test 2>&1)"; RC=$?
 check "FLEET_NODE_CORE=1 → ✓ 核心, its LaunchDaemon written" \
   sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 核心' && [ -f '$SB/LaunchDaemons/com.claude-fleet.node-core.plist' ]"

@@ -61,11 +61,15 @@ bin/fleet-host-install.sh
 # `fleet host trust-release-key` is the one way to accept a new signing key by
 # hand; fleet-release-fetch.py takes a release with python3 + `ssh-keygen -Y
 # verify` — a client needs no ccquota (#3162) — and fleet-release-verify.py
-# checks an older hub's plain ed25519 signature for it
+# checks an older hub's plain ed25519 signature for it, and the root's key
+# chain and revocation list (#3559); fleet-release-sign.py is
+# `fleet-release-key.sh scan`'s look for a signing private key (and the root's
+# offline tool — a person's own computer may hold only the client)
 bin/fleet-release-lib.sh
 bin/fleet-release-key.sh
 bin/fleet-release-fetch.py
 bin/fleet-release-verify.py
+bin/fleet-release-sign.py
 # the admin's two commands (#1986): `fleet users list|add|remove` and
 # `fleet hub set|get|unset|settings` — the people list and the hub's settings,
 # through the hub's API; fleet-hub.py forwards those words to fleet-hub-admin.py

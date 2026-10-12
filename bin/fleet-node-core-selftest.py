@@ -77,7 +77,7 @@ sys.path.insert(0, BIN)
 import fleet_ed25519  # noqa: E402
 
 CORE_FILES = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py",
-              "fleet-node-update.py", "fleet_node_codesign.py", "fleet_admin_seat.py")
+              "fleet-node-update.py", "fleet_node_codesign.py", "fleet_admin_seat.py", "fleet-release-verify.py")
 SECRET = hashlib.sha256(b"fleet-node-core-selftest").digest()
 OTHER = hashlib.sha256(b"someone else").digest()
 
@@ -92,11 +92,12 @@ def until(secs, fn, step=0.05):
     return fn()
 
 
-def make_release(root, sha, files, secret=SECRET, artifacts=None):
+def make_release(root, sha, files, secret=SECRET, artifacts=None, extra=None):
     """<root>/<sha>/ — `files` {path: bytes} under the signed manifest (+ artifacts
-    {name: bytes} in .release/artifacts/), signed with `secret`."""
+    {name: bytes} in .release/artifacts/, + `extra` manifest keys), signed with `secret`."""
     d = os.path.join(root, sha)
     man = {"schema": 1, "sha": sha, "files": [], "artifacts": []}
+    man.update(extra or {})
     for p, b in sorted(files.items()):
         full = os.path.join(d, p)
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -400,6 +401,33 @@ class G_Switch(Sandbox):
         self.serve()
         make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER)
         self.assertIn("signature", self.refused_switch("another key")["why"])
+
+    def test_root_chain_and_revoked(self):
+        # issue #3559: the pin is the root; the train's key, vouched for in the
+        # manifest's key_chain, switches — until the root revokes it
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rv", os.path.join(BIN, "fleet-release-verify.py"))
+        rv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rv)
+        rk = rv.pub_of(SECRET)
+        k1 = rv.pub_of(OTHER)
+        chain = [rv.make_doc(SECRET, {"schema": 1, "kind": "release-key", "key": rv.key_line(k1), "role": "sign", "by": rv.key_id(rk)})]
+        self.serve()
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
+                     extra={"key": rv.key_id(k1), "key_chain": chain})
+        self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
+        self.assertEqual(self.req("rollback", {}), {"ok": True, "from": self.B, "to": self.A})
+        self.B = "c" * 40  # B stays on disk after the rollback; the revoked cases stage another
+        rev = rv.make_doc(SECRET, {"schema": 1, "kind": "release-revoked", "version": 1, "keys": [rv.key_id(k1)], "by": rv.key_id(rk)})
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
+                     extra={"key": rv.key_id(k1), "key_chain": chain, "revoked": rev})
+        self.assertIn("revoked", self.refused_switch("a revoked key (the manifest's list)")["why"])
+        shutil.rmtree(os.path.join(self.state, "staging", self.B), ignore_errors=True)
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
+                     extra={"key": rv.key_id(k1), "key_chain": chain})
+        with open(os.path.join(self.state, "release.pub.revoked"), "w") as f:
+            json.dump({"version": 1, "keys": [rv.key_id(k1)]}, f)
+        self.assertIn("revoked", self.refused_switch("a revoked key (the machine's memory)")["why"])
 
     def test_unlisted_file(self):
         self.serve()

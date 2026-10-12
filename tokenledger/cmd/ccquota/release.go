@@ -65,7 +65,8 @@ func releaseFetcher(hub, pubkey string) (*release.Fetcher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &release.Fetcher{Hub: hub, Key: key, Client: &http.Client{}}, nil
+	known, _ := release.LoadRevoked(pubkey)
+	return &release.Fetcher{Hub: hub, Key: key, Client: &http.Client{}, Known: known}, nil
 }
 
 func runReleaseFetch(args []string) error {
@@ -106,6 +107,17 @@ func runReleaseFetch(args []string) error {
 	if err != nil {
 		return err
 	}
+	// what the verified release taught the pin: revoked ids, a move to the
+	// root (claude-fleet#3559)
+	if f.Trust != nil {
+		said, err := f.Trust.Keep(*pub)
+		if err != nil {
+			return fmt.Errorf("release verified, but %s: %w", *pub, err)
+		}
+		if said != "" {
+			fmt.Fprintln(os.Stderr, "ccquota release: "+said)
+		}
+	}
 	fmt.Println(release.Summary(m))
 	return nil
 }
@@ -121,7 +133,8 @@ func runReleaseVerify(args []string) error {
 		if err != nil {
 			return err
 		}
-		m, err := release.VerifyDir(key, *dir)
+		known, _ := release.LoadRevoked(*pub)
+		m, err := release.VerifyDirKnown(key, *dir, known)
 		if err != nil {
 			return err
 		}

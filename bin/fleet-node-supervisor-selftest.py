@@ -2648,7 +2648,7 @@ class T_RootCore(H_Accounts):
     child only asks (`fleet-node-core.py call … --follow`), the core runs the job as
     its login; release stops it through the core. Without a core (every other case
     here) it is the old road, byte for byte."""
-    CORE = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py")
+    CORE = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-release-verify.py", "fleet-node-supervisor.py")
 
     def setUp(self):
         H_Accounts.setUp(self)
