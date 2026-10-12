@@ -34,7 +34,7 @@ func (h *ghHarness) meResp(t *testing.T, sess *http.Cookie) *http.Response {
 // a request with under 20% of it left gets a fresh day; one with more left
 // gets nothing; a day-old one is refused.
 func TestGitHubSignIn_SessionSlides(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, ghAdmin.Login)
 	h.addUser(t, ghAlice)
 	_, fresh := h.signIn(t, ghAlice)
 	if fresh == nil || fresh.MaxAge != int((24*time.Hour).Seconds()) {
@@ -86,7 +86,7 @@ func TestGitHubSignIn_SessionSlides(t *testing.T) {
 // sessions — every value signed before is refused, a new sign-in works, and
 // another person is untouched. Removing a person cuts theirs too.
 func TestGitHubSignIn_CutSessions(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, ghAdmin.Login)
 	h.addUser(t, ghAlice)
 	h.addUser(t, ghMallory)
 	_, admin := h.signIn(t, ghAdmin)
@@ -106,7 +106,7 @@ func TestGitHubSignIn_CutSessions(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	if code := cut("verkyyi", alice); code != http.StatusForbidden {
+	if code := cut(ghAdmin.Login, alice); code != http.StatusForbidden {
 		t.Fatalf("a user cutting = %d; want 403", code)
 	}
 	if code := cut("nobody", admin); code != http.StatusNotFound {

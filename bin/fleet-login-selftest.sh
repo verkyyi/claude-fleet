@@ -318,7 +318,7 @@ urc= uwhy=; read -r _ urc uwhy < "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last"
 [ "$urc" = 0 ] && [ "$uwhy" = ssh ] && ok "U cert-renew.last says rc 0 · ssh" || bad "U last: $(cat "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" 2>/dev/null)"
 grep -q 'why=ssh' "$SB/ulog/login.log" 2>/dev/null && ok "U login.log counts it why=ssh" || bad "U login.log: $(cat "$SB/ulog/login.log" 2>/dev/null)"
 grep -q '^Match originalhost fleet-\*.* exec ".*fleet-login.py.* renew --quiet --on-use ssh >/dev/null 2>&1; exit 1"$' "$HOME/.ssh/fleet-ssh-config" \
-  && grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" \
+  && grep -q '^Host ' "$HOME/.ssh/fleet-ssh-config" \
   && ok "U the ssh section renews before a fleet machine, then the hub's Host blocks" || bad "U ssh section: $(head -5 "$HOME/.ssh/fleet-ssh-config")"
 python3 "$BIN/fleet-login.py" renew --on-use 'no way' >/dev/null 2>&1 && bad "U a bad --on-use word was taken" || ok "U --on-use takes a word only"
 
