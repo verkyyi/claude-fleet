@@ -46,9 +46,10 @@
 #      uninstalled; --dry-run runs nothing; install-apply passes --default only
 #      under fleet_node_manages; `fleet feedback on|off|status` is the switch
 #      (fleet-feedback-switch.sh) and the doctor has a never-WARN `feedback` row
-#   K  fleet-infra (issue #3586, EPIC #3569 C16): its six runbooks each carry
+#   K  fleet-infra (issues #3586 / #3587, EPIC #3569 C16 / C17): its eleven runbooks each carry
 #      什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚 and an evals/<skill>-triggers
-#      case; no hooks, no MCP;
+#      case; no hooks, no MCP; every row `fleet doctor` (+ --machine) can print
+#      (bin/fleet-doctor-rows.py names) is in node-doctor's row → skill table;
 #      oss-scan over it = 0; --default fleet-infra is refused, install-apply
 #      never defaults it, the team bundle refuses to hand it out
 # Exit 0 = pass.
@@ -452,7 +453,8 @@ grep -q 'pass feedback' "$BIN/fleet-doctor.sh" && grep -q 'info feedback' "$BIN/
 
 # ---- K: fleet-infra, the admins' runbooks (issue #3586, EPIC #3569 C16) ------------
 FI="$ROOT/plugins/fleet-infra"
-for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-setup hub-deploy; do
+for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-setup hub-deploy \
+          release-rules runbook-tcc-stuck runbook-door-down runbook-train-stuck node-doctor; do
   f="$FI/skills/$sk/SKILL.md"
   [ -f "$f" ] && ok || fail "K fleet-infra carries no skills/$sk/SKILL.md"
   # every runbook has the same five parts, in order
@@ -466,6 +468,21 @@ for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-
     && grep -q "$sk" "$FI/evals/$sk-triggers/graders/skill-fired.md" && [ -s "$FI/evals/$sk-triggers/prompt.md" ] && ok \
     || fail "K $sk: no evals/$sk-triggers case (prompt.md + graders/skill-fired.md)"
 done
+[ "$(ls -d "$FI"/skills/*/ | wc -l | tr -d ' ')" = 11 ] && ok || fail "K fleet-infra carries $(ls -d "$FI"/skills/*/ | wc -l | tr -d ' ') skills, want 11"
+# the doctor's row names ⊆ node-doctor's table, generated off fleet-doctor.sh + fleet-node-update.py (C17)
+out=$(python3 "$BIN/fleet-doctor-rows.py" check "$FI/skills/node-doctor/SKILL.md" --root "$ROOT" 2>&1) && ok \
+  || fail "K node-doctor's row → skill table is not the doctor's row table" "$out"
+[ "$(python3 "$BIN/fleet-doctor-rows.py" names --root "$ROOT" | wc -l | tr -d ' ')" -ge 100 ] && ok \
+  || fail "K fleet-doctor-rows.py names reads fewer than 100 rows — the extractor lost the doctor"
+# the extractor reds on a row named by a variable with no `# doctor-rows:` beside it, and on a row the table lacks
+KD="$WORK/kdoc"; mkdir -p "$KD/bin"; cp "$ROOT/bin/fleet-node-update.py" "$KD/bin/"
+printf 'pass() { :; }\npass alpha "x"\nwarn "$v" "y"\n' > "$KD/bin/fleet-doctor.sh"
+python3 "$BIN/fleet-doctor-rows.py" names --root "$KD" >/dev/null 2>&1; [ $? = 2 ] && ok \
+  || fail "K an undeclared variable row did not exit 2"
+printf 'pass() { :; }\npass alpha "x"\n# doctor-rows: beta\nwarn "$v" "y"\n' > "$KD/bin/fleet-doctor.sh"
+out=$(python3 "$BIN/fleet-doctor-rows.py" check "$FI/skills/node-doctor/SKILL.md" --root "$KD")
+has "missing row \`alpha\`" "$out" "K check names a row the table lacks"
+has "missing row \`beta\`" "$out" "K check reads a # doctor-rows: declaration"
 [ ! -e "$FI/hooks" ] && [ ! -e "$FI/.mcp.json" ] && ok || fail "K fleet-infra runs nothing on its own: no hooks, no MCP server"
 # no internal name or address in it — the ONE rule table (EPIC #3569 共同约定 1)
 out=$(bash "$BIN/oss-scan.sh" --root "$ROOT" -- plugins/fleet-infra 2>&1); rc=$?

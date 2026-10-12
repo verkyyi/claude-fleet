@@ -39,7 +39,7 @@
     {
       "name": "fleet-infra",
       "source": "./plugins/fleet-infra",
-      "description": "For the machine and hub admins only: runbooks as skills — prepare and enroll a Mac, logins, a cloud Linux node, an overseas relay, hub deploy. Never installed by default, never handed out by the hub."
+      "description": "For the machine and hub admins only: runbooks as skills — prepare and enroll a Mac, logins, a cloud Linux node, an overseas relay, hub deploy, release rules, incident runbooks, reading the doctor. Never installed by default, never handed out by the hub."
     }
   ]
 }
