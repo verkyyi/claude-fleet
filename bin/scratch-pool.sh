@@ -191,6 +191,11 @@ EOF
         fleet_win_retire "$_w" "$SOCK"
         TM kill-window -t "$_w" 2>/dev/null
       done
+      # The cgroup CPU reading grow_hold judges by (issue #3542), sampled once here.
+      if [ "$CMD" != reap ] && [ -z "${FLEET_POOL_CPU_READING:-}" ]; then
+        FLEET_POOL_CPU_READING=$(_fleet_cgroup_cpu "${FLEET_POOL_CPU_SAMPLE_SECS:-1}")
+        export FLEET_POOL_CPU_READING="${FLEET_POOL_CPU_READING:--}"
+      fi
       _pass=''
       [ "$TICK" = 1 ] && _pass="$_pass --tick"
       [ -n "$AGENT_ARG" ] && _pass="$_pass --agent $AGENT_ARG"
@@ -576,13 +581,41 @@ pool_free_gb() {
   fi
   df -Pk "${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }'
 }
+# On Linux with a cgroup CPU limit (a pod) the host's load average says nothing
+# about this container (issue #3542): the slot is held by the cgroup's own reading
+# instead — throttled at least FLEET_POOL_CPU_THROTTLE % (10) of the periods, or
+# more than FLEET_POOL_CPU_SHARE (0.8) of the limit used — sampled once per run
+# over FLEET_POOL_CPU_SAMPLE_SECS (1) — once per fan-out, handed to each slot's pass
+# as FLEET_POOL_CPU_READING (`-` = no limit). No limit ⇒ the load rule, byte for byte.
+pool_cpu_reading() {
+  local r
+  if [ -n "${FLEET_POOL_CPU_READING:-}" ]; then r=$FLEET_POOL_CPU_READING
+  else r=$(_fleet_cgroup_cpu "${FLEET_POOL_CPU_SAMPLE_SECS:-1}"); fi
+  [ "$r" = - ] || printf '%s' "$r"
+}
 grow_hold() {
   local lim="${FLEET_POOL_LOAD_PER_CORE:-1}" per warn="${FLEET_DISK_WARN_GB:-15}" free
+  local thr used climit tmax="${FLEET_POOL_CPU_THROTTLE:-10}" smax="${FLEET_POOL_CPU_SHARE:-0.8}"
   case "$lim" in ''|*[!0-9.]*) lim=1 ;; esac
   case "$warn" in ''|*[!0-9]*) warn=15 ;; esac
-  per=$(_fleet_load_per_core)
-  if [ -n "$per" ] && awk -v p="$per" -v m="$lim" 'BEGIN{ exit !(m > 0 && p > m) }'; then
-    printf 'load %s/core > %s\n' "$per" "$lim"; return 0
+  case "$tmax" in ''|*[!0-9]*) tmax=10 ;; esac
+  case "$smax" in ''|*[!0-9.]*) smax=0.8 ;; esac
+  thr=$(pool_cpu_reading)
+  if [ -n "$thr" ]; then
+    read -r thr used climit <<EOF
+$thr
+EOF
+    if [ "${thr:-0}" -ge "$tmax" ]; then
+      printf 'cpu throttled %s%% >= %s%%\n' "$thr" "$tmax"; return 0
+    fi
+    if awk -v u="$used" -v l="$climit" -v m="$smax" 'BEGIN{ exit !(l > 0 && u / l > m) }'; then
+      printf 'cpu %s of %s cores > %s\n' "$used" "$climit" "$smax"; return 0
+    fi
+  else
+    per=$(_fleet_load_per_core)
+    if [ -n "$per" ] && awk -v p="$per" -v m="$lim" 'BEGIN{ exit !(m > 0 && p > m) }'; then
+      printf 'load %s/core > %s\n' "$per" "$lim"; return 0
+    fi
   fi
   free=$(pool_free_gb)
   case "$free" in ''|*[!0-9]*) return 1 ;; esac
