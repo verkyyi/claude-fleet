@@ -28,6 +28,11 @@ func siteFixture() (fstest.MapFS, fstest.MapFS) {
 		"og/cover-zh.png":      {Data: []byte("PNG-zh")},
 		"fonts/a-latin.woff2":  {Data: []byte("WOFF2")},
 		"fonts/OFL-a.txt":      {Data: []byte("OFL")},
+		"robots.txt":           {Data: []byte("User-agent: *\nDisallow: /app/\nSitemap: __ORIGIN__/sitemap.xml\n")},
+		"sitemap.xml":          {Data: []byte(`<?xml version="1.0"?><urlset><url><loc>__ORIGIN__/</loc></url></urlset>`)},
+		"llms.txt":             {Data: []byte("# ClaudeFleet\n- [FAQ](__ORIGIN__/en/docs/faq.md)\n")},
+		"llms-zh.txt":          {Data: []byte("# ClaudeFleet\n- [常见问题](__ORIGIN__/docs/faq.md)\n")},
+		"llms-full.txt":        {Data: []byte("# ClaudeFleet — full documentation\nSource: __ORIGIN__/docs/faq\n")},
 	}
 	docs := fstest.MapFS{
 		"zh/index.html":       {Data: []byte("DOCS-ZH")},
@@ -72,6 +77,12 @@ func TestSitePaths(t *testing.T) {
 		{"/docs/admin/", "ADMIN-ZH", "text/html; charset=utf-8"},
 		{"/en/docs/", "DOCS-EN", "text/html; charset=utf-8"},
 		{"/en/docs/faq", "FAQ-EN", "text/html; charset=utf-8"},
+		// for search engines and AI assistants (claude-fleet#3585), the address filled in
+		{"/robots.txt", "User-agent: *\nDisallow: /app/\nSitemap: https://hub.example.com/sitemap.xml", "text/plain; charset=utf-8"},
+		{"/sitemap.xml", `<?xml version="1.0"?><urlset><url><loc>https://hub.example.com/</loc>`, "application/xml; charset=utf-8"},
+		{"/llms.txt", "# ClaudeFleet\n- [FAQ](https://hub.example.com/en/docs/faq.md)", "text/plain; charset=utf-8"},
+		{"/llms-zh.txt", "# ClaudeFleet\n- [常见问题](https://hub.example.com/docs/faq.md)", "text/plain; charset=utf-8"},
+		{"/llms-full.txt", "# ClaudeFleet — full documentation\nSource: https://hub.example.com/docs/faq", "text/plain; charset=utf-8"},
 	} {
 		rec := do(http.MethodGet, c.path, nil)
 		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), c.body) || rec.Header().Get("Content-Type") != c.ctype {
@@ -116,7 +127,7 @@ func TestSitePaths(t *testing.T) {
 	}
 	for _, path := range []string{
 		"/site/index.html", "/site/en/index.html", "/site/build.json", "/site/.gitkeep", "/site/../index.html",
-		"/site/nope.png", "/docs/nope", "/docs/nope.md", "/en/docs/admin/", "/docs/a//b",
+		"/site/nope.png", "/site/robots.txt", "/site/llms.txt", "/docs/nope", "/docs/nope.md", "/en/docs/admin/", "/docs/a//b",
 	} {
 		if rec := do(http.MethodGet, path, nil); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d; want 404", path, rec.Code)
@@ -143,7 +154,8 @@ func TestSitePathsOffAddNothing(t *testing.T) {
 	bare := h.srv.logRequests(h.srv.readOnlyGate(h.srv.routes()))
 	mounted := h.srv.Handler()
 	paths := []string{"/en", "/en/", "/favicon.ico", "/favicon.svg", "/apple-touch-icon.png",
-		"/site/og/cover-zh.png", "/docs", "/docs/", "/docs/faq", "/en/docs/faq"}
+		"/site/og/cover-zh.png", "/docs", "/docs/", "/docs/faq", "/en/docs/faq",
+		"/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-zh.txt", "/llms-full.txt"}
 	for _, site := range []bool{false, true} {
 		h.srv.Site = site
 		for _, p := range paths {

@@ -83,5 +83,16 @@
   "time_60": "60 seconds",
   "time_secs": "{n} seconds",
   "time_mins": "about {n} minutes",
-  "offer": "Free to try; a waitlist when no seat is free"
+  "offer": "Free to try; a waitlist when no seat is free",
+  "llms_summary": "ClaudeFleet runs many sessions of Anthropic's official Claude Code (or Codex) side by side for one person or a small team: one session and one separate copy of the code per task, every session seen and answered in one place. MIT open source.",
+  "llms_is": "What it is: tooling that runs the official Claude Code across several machines — on machines we host (open it in a browser or on a phone), or self-hosted, as your own Claude Code cluster on your own Macs or Linux boxes.",
+  "llms_not": "What it is not: not an Anthropic product, not a new model, not a different AI assistant — each session is the official Claude Code; subscription credentials never enter a session.",
+  "llms_for": "Who it is for: developers and small teams who want many tasks moving at once; admins who want to set up their own Claude Code cluster and give colleagues accounts.",
+  "llms_docs_h": "Docs",
+  "llms_site_h": "Website",
+  "llms_site_home": "Home page",
+  "llms_other_h": "Optional",
+  "llms_full": "every public doc in one file",
+  "llms_other_lang": "本文件的中文版",
+  "llms_in_zh": " (in Chinese; the English page is being written)"
 }

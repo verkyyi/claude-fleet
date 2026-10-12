@@ -21,6 +21,14 @@
 #      elsewhere (/app…, /docs/…, /en/docs/…, /, /en/)
 #   I  the internal-name rule table finds nothing in the built pages
 #      (conf/oss-scan.rules — the hub's address is filled in when served)
+#   J  the files for search engines and AI assistants (issue #3585, C15):
+#      robots.txt opens / /en/ /docs/ and closes /app/ /v1/ (the AI crawlers
+#      named) and names the sitemap; sitemap.xml parses and lists both front
+#      pages + every doc docs-build.sh built as a page — exactly those — each
+#      address one the hub answers 200 from the build (site_serve.go's rules),
+#      zh/en pairs as xhtml:link; llms.txt / llms-zh.txt are llmstxt.org-shaped
+#      (H1 · > summary · ## lists of [links](…)), every link answered; llms-full
+#      carries every doc's title; a doc added to docs/public/ is in all of them
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$ROOT/bin/site-build.sh"
@@ -161,9 +169,133 @@ if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'not a drill result'; then ok
 else bad "G the build took an unmeasured number of seconds (rc $rc): $out"; fi
 [ ! -e "$T/g/index.html" ] || bad "G a refused build still wrote its pages"
 
+# J — robots.txt · sitemap.xml · llms.txt · llms-zh.txt · llms-full.txt
+"$ROOT/bin/docs-build.sh" --out "$T/docs" >/dev/null 2>"$T/docs.err" || bad "J docs-build failed: $(cat "$T/docs.err")"
+mkdir -p "$T/jdocs" && cp -RL "$ROOT/docs/public/." "$T/jdocs/"
+printf '# 新加的一篇\n\n这一篇只为自测而加。\n' > "$T/jdocs/zh/added-for-test.md"
+"$BUILD" --docs "$T/jdocs" --out "$T/j" --drill "$T/none.json" --now "$NOW" >/dev/null 2>"$T/j.err" || bad "J build with an added doc failed: $(cat "$T/j.err")"
+"$ROOT/bin/docs-build.sh" --src "$T/jdocs" --out "$T/jdocsout" >/dev/null 2>&1 || bad "J docs-build of the added doc failed"
+python3 - "$T/a" "$T/docs" "$T/j" "$T/jdocsout" <<'PY' || fail=1
+import os, re, sys
+import xml.etree.ElementTree as ET
+bad = []
+O = '__ORIGIN__'
+CRAWL = ('robots.txt', 'sitemap.xml', 'llms.txt', 'llms-zh.txt', 'llms-full.txt')
+
+def served(site, docs, u):
+    """The file the hub answers u from (site_serve.go), or None; 'external' off the hub."""
+    if not u.startswith(O):
+        return 'external'
+    p = u[len(O):]
+    if p in ('/', '/en/'):
+        f = os.path.join(site, {'/': 'index.html', '/en/': 'en/index.html'}[p])
+    elif p.lstrip('/') in CRAWL:
+        f = os.path.join(site, p.lstrip('/'))
+    else:
+        f = None
+        for pre, lang in (('/en/docs/', 'en'), ('/docs/', 'zh')):
+            if p.startswith(pre):
+                rest = p[len(pre):]
+                name = (rest + 'index.html' if rest == '' or rest.endswith('/')
+                        else rest if rest.endswith('.md') else rest + '.html')
+                f = os.path.join(docs, lang, name)
+                break
+    return f if f and os.path.isfile(f) else None
+
+def doc_url(l, p):
+    b = '/docs/' if l == 'zh' else '/en/docs/'
+    return O + b + (p[:-len('index')] if p == 'index' or p.endswith('/index') else p)
+
+def check(site, docs, tag):
+    pages = [l.rstrip('\n').split('\t') for l in open(os.path.join(docs, 'pages.tsv'), encoding='utf-8') if l.strip()]
+    real = [(l, p, t) for l, p, t, st in pages if st == 'page']
+    pairs = {(l, p) for l, p, _ in real}
+    # robots
+    rb = open(os.path.join(site, 'robots.txt'), encoding='utf-8').read().splitlines()
+    for need in ('User-agent: *', 'User-agent: GPTBot', 'User-agent: ClaudeBot', 'Allow: /', 'Allow: /docs/',
+                 'Allow: /en/docs/', 'Disallow: /app/', 'Disallow: /v1/', 'Disallow: /mcp', 'Disallow: /connect',
+                 'Disallow: /fleet/', 'Disallow: /embed/', 'Sitemap: %s/sitemap.xml' % O):
+        if need not in rb:
+            bad.append('J%s robots.txt lacks %r' % (tag, need))
+    for l in rb:
+        if l.startswith('Disallow:') and l.split(':', 1)[1].strip() in ('/', '/en/', '/docs/', '/en/docs/', '/site/'):
+            bad.append('J%s robots.txt closes a public path: %s' % (tag, l))
+    # sitemap
+    ns = {'s': 'http://www.sitemaps.org/schemas/sitemap/0.9', 'x': 'http://www.w3.org/1999/xhtml'}
+    try:
+        root = ET.parse(os.path.join(site, 'sitemap.xml')).getroot()
+    except Exception as e:
+        bad.append('J%s sitemap.xml does not parse: %s' % (tag, e))
+        return None
+    locs = {}
+    for u in root.findall('s:url', ns):
+        loc = u.find('s:loc', ns).text
+        lm = u.find('s:lastmod', ns)
+        if lm is not None and not re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d([+-]\d\d:\d\d|Z)$', lm.text or ''):
+            bad.append('J%s sitemap %s: lastmod %r is not W3C time' % (tag, loc, lm.text))
+        locs[loc] = {a.get('hreflang'): a.get('href') for a in u.findall('x:link', ns)}
+    want = {O + '/', O + '/en/'} | {doc_url(l, p) for l, p, _ in real}
+    if set(locs) != want:
+        bad.append('J%s sitemap differs from the built docs: missing %s, extra %s'
+                   % (tag, sorted(want - set(locs)), sorted(set(locs) - want)))
+    for loc in locs:
+        if not served(site, docs, loc):
+            bad.append('J%s sitemap lists %s, which the hub would not answer 200' % (tag, loc))
+    if locs.get(O + '/', {}).get('en') != O + '/en/':
+        bad.append('J%s sitemap: / has no en alternate' % tag)
+    for l, p, _ in real:
+        if l == 'en' and ('zh', p) in pairs and locs.get(doc_url('en', p), {}).get('zh-CN') != doc_url('zh', p):
+            bad.append('J%s sitemap: %s lacks its zh-CN pair' % (tag, doc_url('en', p)))
+    # llms.txt · llms-zh.txt (llmstxt.org: H1, > summary, ## sections of link lists)
+    ndocs = len({p for _, p, _, _ in pages})
+    for name in ('llms.txt', 'llms-zh.txt'):
+        t = open(os.path.join(site, name), encoding='utf-8').read().splitlines()
+        if not t or not re.match(r'# \S', t[0]):
+            bad.append('J%s %s: first line is not an H1' % (tag, name))
+        if not any(l.startswith('> ') for l in t[1:4]):
+            bad.append('J%s %s: no > summary right under the H1' % (tag, name))
+        secs = [i for i, l in enumerate(t) if l.startswith('## ')]
+        if not secs or any(l.startswith('# ') for l in t[1:]):
+            bad.append('J%s %s: no ## sections, or a second H1' % (tag, name))
+        links = []
+        for l in t[secs[0] if secs else len(t):]:
+            if l.startswith('## ') or not l.strip():
+                continue
+            m = re.match(r'- \[([^\]]+)\]\(([^)\s]+)\)(: .+)?$', l)
+            if m:
+                links.append(m.group(2))
+            else:
+                bad.append('J%s %s: not a link line: %r' % (tag, name, l))
+        for u in links:
+            if not served(site, docs, u):
+                bad.append('J%s %s links %s, which the hub would not answer' % (tag, name, u))
+        if len([u for u in links if u.endswith('.md')]) != ndocs:
+            bad.append('J%s %s: %d doc links for %d docs' % (tag, name, len([u for u in links if u.endswith('.md')]), ndocs))
+    # llms-full
+    full = open(os.path.join(site, 'llms-full.txt'), encoding='utf-8').read()
+    for l, p, title in real:
+        if '\n# %s\n' % title not in full:
+            bad.append('J%s llms-full.txt lacks %s/%s 「%s」' % (tag, l, p, title))
+    return locs
+
+check(sys.argv[1], sys.argv[2], '')
+locs = check(sys.argv[3], sys.argv[4], '(added)')
+if locs is not None and O + '/docs/added-for-test' not in locs:
+    bad.append('J an added doc is not in the sitemap')
+if '新加的一篇' not in open(os.path.join(sys.argv[3], 'llms-zh.txt'), encoding='utf-8').read() \
+        or '# 新加的一篇' not in open(os.path.join(sys.argv[3], 'llms-full.txt'), encoding='utf-8').read():
+    bad.append('J an added doc is not in llms-zh.txt / llms-full.txt')
+for x in bad:
+    print('FAIL ' + x)
+if not bad:
+    print('ok   J robots closes /app /v1 · sitemap = every built doc, each answered · llms.txt shaped · llms-full has every title · an added doc follows')
+sys.exit(1 if bad else 0)
+PY
+
 # I — no internal names in what the hub serves (the rule table, its #@keep words kept)
 if [ -f "$ROOT/conf/oss-scan.rules" ]; then
-  hits=$(python3 - "$ROOT/conf/oss-scan.rules" "$T/a/index.html" "$T/a/en/index.html" "$T/d/index.html" <<'PY2'
+  hits=$(python3 - "$ROOT/conf/oss-scan.rules" "$T/a/index.html" "$T/a/en/index.html" "$T/d/index.html" \
+    "$T/a/robots.txt" "$T/a/sitemap.xml" "$T/a/llms.txt" "$T/a/llms-zh.txt" "$T/a/llms-full.txt" <<'PY2'
 import re, sys
 rules, keep = [], []
 for l in open(sys.argv[1], encoding='utf-8'):
