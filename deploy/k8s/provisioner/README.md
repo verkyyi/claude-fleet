@@ -7,15 +7,18 @@ Everything else in fleet-workers runs as its own account with no token
 
 | Piece | What |
 |---|---|
-| `provisioner.yaml` | its ServiceAccount; a Role on Deployments · Jobs · Services · PVCs in fleet-workers and the nonce book (`fleet-provisioner-nonces`, get/update only); the book; the Deployment (2 replicas, non-root, read-only root) and its ClusterIP Service on 8790 |
+| `provisioner.yaml` | its ServiceAccount; a Role on Deployments · Jobs · Services · PVCs in fleet-workers, create / delete (never read) of Secrets — held by the policy to a user pod's join Secret `<pod>-join` (claude-fleet#3553) — and the nonce book (`fleet-provisioner-nonces`, get/update only); the book; the Deployment (2 replicas, non-root, read-only root) and its ClusterIP Service on 8790 |
 | `policy.yaml` | the `ValidatingAdmissionPolicy` `fleet-provisioner-template` (Kubernetes ≥ 1.30) that holds every request the account makes to render.py's template |
-| `kind-drill.sh` | the cluster half of BREAK-IT `sa-token-in-user-pod` and `provisioner-off-template` (`.github/workflows/cluster-perms.yml`) |
+| `kind-drill.sh` | the cluster half of BREAK-IT `sa-token-in-user-pod`, `provisioner-off-template` and `spare-pod-leaks` (`.github/workflows/cluster-perms.yml`) |
 
 It takes a ticket and nothing else — `POST /v1/op`, the ticket as the body, from
 fleet-ops (`fleet/role: control`) alone. A ticket is the hub's account key's
 (the admin seat's, `GET /v1/fleet/account-key`) under its own domain, for THIS
-cluster, five minutes, single-use; four typed ops: `create-user-pod` ·
-`destroy-user-pod` · `set-limits` · `create-job` (`bin/fleet_cluster_ticket.py`,
+cluster, five minutes, single-use; five typed ops: `create-user-pod` (with the
+pod's one-time machine join code, written into its join Secret) ·
+`destroy-user-pod` (the join Secret too) · `set-limits` · `create-job` ·
+`bind-user-pod` (a claimed spare pod's `fleet/principal` label — claude-fleet#3553)
+(`bin/fleet_cluster_ticket.py`,
 its Go twin `tokenledger/internal/control/cluster_ticket.go`). No manifest ever
 crosses: the provisioner renders the pod itself and checks it again
 (`off_template`) before the API server checks it a third time.

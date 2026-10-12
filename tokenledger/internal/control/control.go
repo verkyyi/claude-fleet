@@ -236,6 +236,35 @@ const CapMachine = "machine"
 // list it is byte for byte as before.
 const CapUserPod = "user_pod"
 
+// A cluster's ops link (claude-fleet#3553, EPIC #3500 C8): fleet-ops — the one
+// node in a cluster that reads it — lists CapClusterOps in its hello, its
+// hostname the cluster's name, and the hub hands it provisioner tickets
+// (ClusterTicket, signed with the account-op key) to carry, unopened, to the
+// cluster's fleet-provisioner. Only a cluster the hub's fleet.clusters names is
+// ever sent one. The answer is the provisioner's own exit and line.
+//
+//	hub ──TypeClusterOp {ticket}──▶ fleet-ops ──POST /v1/op──▶ fleet-provisioner
+//	hub ◀──TypeClusterOpResult {rc, line}── fleet-ops ◀───────────┘
+const (
+	CapClusterOps       = "cluster_ops"
+	TypeClusterOp       = "cluster_op"
+	TypeClusterOpResult = "cluster_op_result"
+)
+
+// ClusterOp is TypeClusterOp's payload.
+type ClusterOp struct {
+	Ticket string `json:"ticket"`
+}
+
+// ClusterOpResult is TypeClusterOpResult's payload: the provisioner's exit (0
+// done · 3 refused · 1 failed) and its one line; Error when fleet-ops could
+// not reach it at all.
+type ClusterOpResult struct {
+	RC    int    `json:"rc"`
+	Line  string `json:"line,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
 // CodeWrongLogin refuses a message on a machine link whose Login is not one
 // that link carries, or a login hello whose token belongs to another login or
 // another machine (claude-fleet#2333) — an op never runs as the wrong login.
@@ -256,6 +285,12 @@ type GateItem struct {
 
 // CredsepSeparated is AccountResult.Credsep for a login opened separated.
 const CredsepSeparated = "separated"
+
+// CredsepCentral is AccountResult.Credsep for a login in one person's pod that
+// keeps no credential at all — every session goes through the cluster's one
+// credential proxy (claude-fleet#3757). A spare pod's login is ready with it
+// (claude-fleet#3553).
+const CredsepCentral = "central"
 
 // Heartbeat.Credsep's other words (claude-fleet#2295): CredsepNot — the
 // login is not separated, or it is but `fleet-credsep.sh check` warns;

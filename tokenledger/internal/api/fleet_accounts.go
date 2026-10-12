@@ -186,6 +186,11 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 	}
 	queued := false
 	for _, host := range hosts {
+		if s.isCluster(host) {
+			// A pod of their own: the pool had none ready (claude-fleet#3553).
+			s.placeOnCluster(p, host, now)
+			continue
+		}
 		if err := s.creatableLogin(p, host); err != nil {
 			log.Printf("fleet: queue %s on %s: %v", p.Login, host, err)
 			continue
@@ -659,6 +664,14 @@ func (s *Server) dispatchAccounts() {
 		return
 	}
 	for _, a := range rows {
+		// A remove (or reset) of the login on a pod the hub made is the
+		// pod's destroy, through its cluster (claude-fleet#3553).
+		if a.State == store.AccountRemovePending || a.State == store.AccountResetPending {
+			if p := s.clusterPodOf(a.Hostname); p != nil {
+				s.sendClusterDestroy(a, p, time.Now())
+				continue
+			}
+		}
 		// A create goes only to an admin that hands the login its join code
 		// (claude-fleet#3032); a remove to any admin of the machine; a reset
 		// to one that can recycle (claude-fleet#3504).
@@ -862,7 +875,7 @@ func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID str
 	}
 	state, detail := store.AccountFailed, res.Detail
 	switch {
-	case res.OK && res.Op == control.AccountCreate && res.Credsep != control.CredsepSeparated && s.isSpareOp(m.OpID):
+	case res.OK && res.Op == control.AccountCreate && !spareReady(res.Credsep, nc) && s.isSpareOp(m.OpID):
 		// A spare that is not credential-separated is never handed out
 		// (claude-fleet#2263): the login exists, but it is failed here.
 		detail = "spare opened without credential separation (credsep=" + res.Credsep + "); not handed out. " + detail
@@ -1225,6 +1238,13 @@ func (s *Server) changeAccount(req FleetAccountRequest, actor string) error {
 		if err != nil {
 			return err
 		}
+		if s.clusterPoolOn() && s.isCluster(req.Hostname) {
+			// No ready spare pod: a pod of their own (claude-fleet#3553).
+			if !s.placeOnCluster(p, req.Hostname, now) {
+				return fmt.Errorf("%s already holds a pod on %s, or it could not be recorded", p.ID, req.Hostname)
+			}
+			return nil
+		}
 		if err := s.creatableLogin(p, req.Hostname); err != nil {
 			return err
 		}
@@ -1251,6 +1271,9 @@ func (s *Server) changeAccount(req FleetAccountRequest, actor string) error {
 		}
 		return s.Store.RequestAccountRemoval(req.PrincipalID, req.Hostname, now)
 	case "forget":
+		if err := s.podStillStands(req.PrincipalID, req.Hostname); err != nil {
+			return err
+		}
 		return s.Store.ForgetPrincipal(req.PrincipalID, req.Hostname)
 	default:
 		return errors.New("action must be assign, retry, remove, adopt, forget, relogin or rekey")

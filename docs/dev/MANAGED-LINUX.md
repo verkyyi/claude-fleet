@@ -655,6 +655,53 @@ and `provisioner-off-template` drill both halves — on this machine
 `kubectl auth can-i --list` on the run's summary page
 (`.github/workflows/cluster-perms.yml`).
 
+## Spare pods
+
+(issue #3553, EPIC #3500 C8) A cluster keeps pods started ahead of the people
+who will use them, so a newcomer's first sign-in only binds one: a database
+write and two pushes, not a pod start, a useradd and a credential setup. Three
+hub settings and one agent variable turn it on:
+
+| Where | What |
+|---|---|
+| hub `fleet.spares` | `on` (the same switch as a machine's spare logins) |
+| hub `fleet.clusters` | the clusters that keep spare pods, by the name their fleet-ops reports |
+| hub `fleet.spare_max.<cluster>` | how many (default `fleet.spare_max`, 2), within `fleet.node_user_cap.<cluster>` (10) − the pods people hold |
+| hub `CCQUOTA_FLEET_ACCOUNT_KEY` | the account-op key — every ticket is signed with it (C15/C16); none = no pool |
+| fleet-ops `CCQUOTA_FLEET_PROVISIONER` | the provisioner's address; the agent's hello lists `cluster_ops` and it carries tickets there unopened |
+
+What the hub does (`tokenledger/internal/api/fleet_spare_pods.go`):
+
+- **Refill**: three records — principal `spare:<cluster>:<nonce>`, its login
+  `fleetu<N>` pending on the pod `u-<nonce>`, the pod row in
+  `fleet_cluster_pods` — and one `create-user-pod` ticket carrying the pod's
+  one-time machine join code (trusted, managed, bound to `u-<nonce>`), which the
+  provisioner writes into the Secret `u-<nonce>-join` before the pod. The pod's
+  node joins with it and is sent its login's create like any machine's; **ready**
+  = that create came back `credsep: separated` (or `central` in a user pod,
+  #3757). Not ready within 15 minutes, or failed: the pod is destroyed, the row
+  stays failed, and the cluster gets no more until the operator `forget`s it.
+- **Claim**: placement (`fleet.auto_assign` naming the cluster) or the
+  operator's assign naming it hands the oldest ready pod to the person — the
+  machine spare's own claim, audited `spare.claim` — makes it their 家 (the
+  door's table and their name follow at once), and sends `bind-user-pod`
+  (`fleet/principal=<principal with : as .>`) plus `set-limits` when they have a
+  ceiling of their own. No ready pod: a pod of their own is started under their
+  own login — slower, never refused.
+- **Remove**: never a wash. The hub clears its own half of the person first
+  (node tokens and session passes, relay credential, leases, 家, unused join
+  codes — the recycle list), then `destroy-user-pod` deletes the Deployment,
+  Service, home PVC and join Secret; the login is `removed`, the pod row `gone`,
+  `spare.destroy` audited, and the pool refills with a NEW pod. A `forget` of a
+  login whose pod still stands is refused: remove it first.
+- **Off** — spares off, no `fleet.clusters`, no account key, or no ops link up —
+  nothing is created, claimed or sent (`TestSparePodsOffAddsNothing`).
+
+Not yet: the home directory is not archived to object storage before the
+destroy (#3772). BREAK-IT `spare-pod-leaks` drills it on this machine (the
+provisioner against a stand-in API + the hub's Go test) and on kind
+(`deploy/k8s/provisioner/kind-drill.sh`).
+
 ## Upgrade and recovery
 
 The machine follows `stable` by itself, with the same updater as a Mac

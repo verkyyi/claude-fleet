@@ -141,6 +141,10 @@ type nodeConn struct {
 	// userPod is a machine link that is one person's pod (CapUserPod,
 	// claude-fleet#3550).
 	userPod bool
+	// clusterOps is the hello's CapClusterOps: this link is a cluster's
+	// fleet-ops, the one that carries provisioner tickets (claude-fleet#3553).
+	// Its hostname is the cluster's name. Set once, before publish.
+	clusterOps bool
 	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
 	// one token refresh to the provider from its own network and hands the
 	// answer back (claude-fleet#1490). Set once, before the conn is published.
@@ -313,6 +317,26 @@ func (n *nodeConns) pickAdmin(hostname string, join bool) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// opsFor returns the open, write-compatible ops link of cluster: a link whose
+// hello listed CapClusterOps and whose hostname is the cluster's name
+// (claude-fleet#3553). Deterministic when two replicas are up.
+func (n *nodeConns) opsFor(cluster string) (string, *nodeConn) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		c := n.conns[id]
+		if c.clusterOps && sameMachine(c.hostname(), cluster) && control.Compatible(int(c.proto.Load())) {
+			return id, c
+		}
+	}
+	return "", nil
 }
 
 // isAdminSeat says endpointID's link is an admin seat (CapAdminSeat): its ops
@@ -546,8 +570,9 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
-		userPod: hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
-		helloAt: time.Now().UTC(), agentVersion: hp.AgentVersion}
+		userPod:    hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
+		clusterOps: hp.HasCap(control.CapClusterOps),
+		helloAt:    time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
@@ -732,6 +757,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		case control.TypeServiceLogLines:
 			// A service's log, for the viewers following it (claude-fleet#2797).
 			s.svcLogs.deliver(nc, m)
+		case control.TypeClusterOpResult:
+			// The provisioner's answer to a ticket this link carried
+			// (claude-fleet#3553) goes to its waiter.
+			nc.pending.deliver(m)
 		case control.TypeOAuthRefreshResult:
 			// A relayed token refresh's answer (claude-fleet#1490) goes to
 			// the lease that is waiting on it; nothing of it is kept here.

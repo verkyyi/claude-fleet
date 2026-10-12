@@ -217,6 +217,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
 	}
+	if a.cfg.FleetClusterOps != "" {
+		// The cluster's ops link: provisioner tickets (claude-fleet#3553).
+		caps = append(caps, control.CapClusterOps)
+	}
 	if a.serviceLogCapable() {
 		// A service's log, live (claude-fleet#2797).
 		caps = append(caps, control.CapServiceLog)
@@ -344,6 +348,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				// One token refresh posted for the hub (claude-fleet#1490),
 				// off the read loop so a slow provider never stalls it.
 				go a.answerOAuthRefresh(ctx, conn, m)
+			case control.TypeClusterOp:
+				// One provisioner ticket, carried as it came (claude-fleet#3553).
+				go a.answerClusterOp(ctx, conn, m)
 			case control.TypeError:
 				if relayOK && a.relayRefused(rp, m.OpID, m.Error) {
 					break

@@ -194,6 +194,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetSpot(); err != nil {
 		return err
 	}
+	// A cluster's pods (claude-fleet#3553).
+	if err := s.ensureFleetClusterPods(); err != nil {
+		return err
+	}
 	// Trust on the endpoint, join codes that carry it, and each machine's
 	// desired state (claude-fleet#2214) — after the join codes, too.
 	if err := s.ensureFleetIdentity(); err != nil {

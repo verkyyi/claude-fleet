@@ -2,8 +2,9 @@
 # (claude-fleet#3558, EPIC #3500 C16 · 共同约定 2). bin/fleet-provisioner.py: no
 # hub link, no other caller than fleet-ops (fleet/role: control), and nothing it
 # acts on but a ticket the hub signed (create-user-pod · destroy-user-pod ·
-# set-limits · create-job). Its Role is the four kinds a person's pod and a Job
-# are made of, in this namespace, and its nonce book; policy.yaml holds every
+# set-limits · create-job · bind-user-pod). Its Role is the four kinds a person's
+# pod and a Job are made of, in this namespace, its nonce book, and create /
+# delete of a pod's join Secret; policy.yaml holds every
 # one of its requests to render.py's template.
 #
 # The image is the managed-node image (python3 and the release tree it was built
@@ -26,6 +27,12 @@ rules:
   - apiGroups: [""]
     resources: [services, persistentvolumeclaims]
     verbs: [get, create, delete]
+  # a person's pod's join Secret (claude-fleet#3553): made with the pod,
+  # deleted with it — never read, never listed; policy.yaml holds it to
+  # <fleet/pod>-join, labelled fleet/role user, one key
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, delete]
   # the nonce book only: read it, write it (never create one, never another)
   - apiGroups: [""]
     resources: [configmaps]

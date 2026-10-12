@@ -187,6 +187,13 @@ type Config struct {
 	// against a fake provider. Unset = the providers' public endpoints.
 	OAuthTokenURLs map[string]string
 
+	// FleetClusterOps is the cluster's fleet-provisioner (its POST /v1/op
+	// URL's base, http://fleet-provisioner.fleet-workers.svc:8790): this node
+	// is the cluster's ops link (claude-fleet#3553) — its hello lists
+	// CapClusterOps and it carries the hub's provisioner tickets there,
+	// unopened. Empty (CCQUOTA_FLEET_PROVISIONER unset) = never offered.
+	FleetClusterOps string
+
 	// FleetSSHRelay lets the hub relay SSH connections to this machine
 	// (claude-fleet#1413): the agent splices a data stream it dials to the
 	// hub onto the local sshd at 127.0.0.1:22. On by default with Fleet;

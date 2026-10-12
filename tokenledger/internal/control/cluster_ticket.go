@@ -24,12 +24,16 @@ import (
 // acts is bin/fleet_cluster_ticket.py; this is its Go twin, and the test pins
 // one ticket both make byte for byte.
 
-// The provisioner's four ops.
+// The provisioner's ops. create-user-pod carries the pod's one-time machine
+// join code (the provisioner writes it into the Secret u-<nonce>-join), and
+// bind-user-pod the label-safe principal a claimed spare pod is labelled with
+// (claude-fleet#3553, EPIC #3500 C8).
 const (
 	ClusterCreateUserPod  = "create-user-pod"
 	ClusterDestroyUserPod = "destroy-user-pod"
 	ClusterSetLimits      = "set-limits"
 	ClusterCreateJob      = "create-job"
+	ClusterBindUserPod    = "bind-user-pod"
 )
 
 // ClusterTicketTTL: an op is run within seconds of its send; a re-ask signs a
@@ -44,14 +48,16 @@ const (
 // ClusterTicket is what the hub signs for one provisioner op. The field order
 // is the encoding (bin/fleet_cluster_ticket.py ORDER).
 type ClusterTicket struct {
-	Op      string `json:"op"`
-	Cluster string `json:"cluster"`
-	Pod     string `json:"pod,omitempty"`
-	Limits  string `json:"limits,omitempty"`
-	Repo    string `json:"repo,omitempty"`
-	Ref     string `json:"ref,omitempty"`
-	Nonce   string `json:"nonce"`
-	Exp     int64  `json:"exp"`
+	Op        string `json:"op"`
+	Cluster   string `json:"cluster"`
+	Pod       string `json:"pod,omitempty"`
+	Limits    string `json:"limits,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	Join      string `json:"join,omitempty"`
+	Principal string `json:"principal,omitempty"`
+	Nonce     string `json:"nonce"`
+	Exp       int64  `json:"exp"`
 }
 
 // SignClusterTicket is `c1.<payload>.<sig>`, both base64url (no padding).
@@ -60,7 +66,7 @@ func SignClusterTicket(key ed25519.PrivateKey, t ClusterTicket) (string, error) 
 		return "", errors.New("no account key")
 	}
 	switch t.Op {
-	case ClusterCreateUserPod, ClusterDestroyUserPod, ClusterSetLimits, ClusterCreateJob:
+	case ClusterCreateUserPod, ClusterDestroyUserPod, ClusterSetLimits, ClusterCreateJob, ClusterBindUserPod:
 	default:
 		return "", errors.New("not a provisioner op: " + t.Op)
 	}

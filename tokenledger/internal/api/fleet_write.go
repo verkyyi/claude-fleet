@@ -2075,6 +2075,14 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case strings.HasPrefix(body.Key, SpareMaxPrefix) && clusterNameRE.MatchString(body.Key[len(SpareMaxPrefix):]):
+			// One cluster's spare pods (claude-fleet#3553).
+			if body.Value != "" {
+				if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > spareMaxCeiling {
+					httpError(w, http.StatusBadRequest, "a cluster's spare count is an integer 0–"+strconv.Itoa(spareMaxCeiling)+", or \"\" for fleet.spare_max")
+					return
+				}
+			}
 		case strings.HasPrefix(body.Key, NodeLoginPrefix) && nodeNameRE.MatchString(body.Key[len(NodeLoginPrefix):]):
 			// The one login that takes new sessions there (claude-fleet#2430).
 			if v := strings.TrimSpace(body.Value); v != "" && !control.ValidExistingLogin(v) {
@@ -2089,7 +2097,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()

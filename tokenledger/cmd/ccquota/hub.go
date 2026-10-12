@@ -1505,6 +1505,13 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		// The relay rides the control channel, so it is on wherever that is
 		// unless explicitly refused (claude-fleet#1413).
 		FleetSSHRelay: fleet && getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
+		// fleet-ops: the cluster's provisioner it hands tickets to (claude-fleet#3553).
+		FleetClusterOps: func() string {
+			if fleet {
+				return getenv("CCQUOTA_FLEET_PROVISIONER")
+			}
+			return ""
+		}(),
 		// An admin agent carries the hub's token refreshes unless refused
 		// (claude-fleet#1490); the endpoint overrides are for a fake provider.
 		FleetOAuthRefresh: fleet && getenv("CCQUOTA_FLEET_OAUTH_REFRESH") != "0",

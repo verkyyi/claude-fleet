@@ -133,6 +133,14 @@ w("bad-pod", {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "p", "name
     "labels": {"fleet/role": "user"}}, "spec": ps(dep)})
 w("bad-secret", {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "namespace": "fleet-workers",
     "labels": {"fleet/role": "user"}}, "stringData": {"k": "v"}})
+# a user pod's join Secret (#3553): <fleet/pod>-join, labelled, one key — and the ways off it
+sec = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {"name": "u-dryrun1-join",
+       "namespace": "fleet-workers", "labels": {"fleet/role": "user", "fleet/pod": "u-dryrun1"}},
+       "data": {"machine": "ZmpfeA=="}}
+w("good-secret", sec)
+w("bad-secret-door", mut(sec, lambda o: o["metadata"].update(name="fleet-door")))
+w("bad-secret-twokeys", mut(sec, lambda o: o["data"].update(token="eA==")))
+w("bad-secret-unlabelled", mut(sec, lambda o: o["metadata"].update(labels={"fleet/pod": "u-dryrun1"})))
 EOF
 
 step "provisioner-off-template: as $PROV"
@@ -172,16 +180,18 @@ for _ in $(seq 1 50); do curl -fsS -m 2 http://127.0.0.1:18790/healthz >/dev/nul
 tk() { python3 "$ROOT/bin/fleet_cluster_ticket.py" sign "$1" "$2"; }
 post() { curl -s -m 30 -o "$tmp/resp" -w '%{http_code}' --data-binary "$1" http://127.0.0.1:18790/v1/op; }
 exp=$(( $(date +%s) + 300 ))
-good=$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')
+good=$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')
 head -c 32 /dev/urandom > "$tmp/other"
 [ "$(post 'not a ticket')" = 403 ] || fail "an unsigned body: $(cat "$tmp/resp")"
-[ "$(post "$(tk "$tmp/other" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')")" = 403 ] \
+[ "$(post "$(tk "$tmp/other" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')")" = 403 ] \
   || fail "a forged ticket: $(cat "$tmp/resp")"
 K get deploy u-drill1 >/dev/null 2>&1 && fail "a refused ticket made a pod"
 [ "$(post "$good")" = 200 ] || fail "the hub's ticket: $(cat "$tmp/resp")"
 cat "$tmp/resp"
 [ "$(post "$good")" = 403 ] && grep -q 'already used' "$tmp/resp" || fail "a replay: $(cat "$tmp/resp")"
-echo "refused: unsigned · forged · replay; the hub's create ran once"
+[ "$(K get secret u-drill1-join -o jsonpath='{.data.machine}' | base64 -d)" = fj_aaaaaaaaaaaaaaaaaaaaaaaaaa ] \
+  || fail "the create's join Secret is not the ticket's code"
+echo "refused: unsigned · forged · replay; the hub's create ran once, its join Secret with it"
 
 step "sa-token-in-user-pod: the user pod, a bare fleet-user pod, a Job"
 notoken() { # notoken <pod name>: no token volume in its spec
@@ -219,4 +229,24 @@ printf '%s' "$out" | grep -q 'token=absent' || fail "the Job found a token"
 printf '%s' "$out" | grep -q 'uid=0 ' && fail "the Job ran as root"
 printf '%s' "$out" | grep -q 'api=200' && fail "the Job used the API server"
 { echo; echo "### sa-token-in-user-pod"; echo '```'; echo "$out"; echo '```'; } | summary
-echo; echo "PASS sa-token-in-user-pod · provisioner-off-template (kind)"
+
+step "spare-pod-leaks: bind, destroy, a fresh pod"
+[ "$(post "$(tk "$tmp/key" '{"op":"bind-user-pod","cluster":"kind","pod":"u-drill1","principal":"gh.7001","nonce":"a1111111111111111111111111111111","exp":'"$exp"'}')")" = 200 ] \
+  || fail "the hub's bind: $(cat "$tmp/resp")"
+[ "$(K get deploy u-drill1 -o jsonpath='{.metadata.labels.fleet/principal}')" = gh.7001 ] || fail "the bind wrote no fleet/principal label"
+K delete job job-111111111111 --wait=false >/dev/null 2>&1 || true
+[ "$(post "$(tk "$tmp/key" '{"op":"destroy-user-pod","cluster":"kind","pod":"u-drill1","nonce":"a2222222222222222222222222222222","exp":'"$exp"'}')")" = 200 ] \
+  || fail "the hub's destroy: $(cat "$tmp/resp")"
+for _ in $(seq 1 120); do
+  left=$(for k in deploy/u-drill1 svc/u-drill1 pvc/u-drill1 secret/u-drill1-join; do K get "$k" -o name 2>/dev/null; done)
+  [ -z "$left" ] && break; sleep 1
+done
+[ -z "$left" ] || fail "the destroy left: $left"
+[ "$(post "$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill2","limits":"","join":"fj_bbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"a3333333333333333333333333333333","exp":'"$exp"'}')")" = 200 ] \
+  || fail "the next spare's create: $(cat "$tmp/resp")"
+K get pvc u-drill2 -o json | python3 -c 'import json,sys; s=json.load(sys.stdin)["spec"]; sys.exit("the new claim has a data source" if s.get("dataSource") or s.get("dataSourceRef") else 0)' \
+  || fail "u-drill2's claim"
+[ "$(K get secret u-drill2-join -o jsonpath='{.data.machine}' | base64 -d)" = fj_bbbbbbbbbbbbbbbbbbbbbbbbbb ] || fail "u-drill2's join Secret"
+echo "u-drill1 bound, destroyed (Deployment · Service · PVC · join Secret gone); u-drill2: a new empty claim, its own join code"
+{ echo; echo "### spare-pod-leaks"; echo "u-drill1: bound → destroyed, nothing left; u-drill2: new claim, new join Secret"; } | summary
+echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · spare-pod-leaks (kind)"
