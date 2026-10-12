@@ -1011,9 +1011,11 @@ step_guide() {
 # A task with a screenshot (EPIC #2482 C1, #2393): an image on the colleague's
 # computer, its path dropped into the writing area with a question about it;
 # the session — wherever the hub put it — must get the FILE (its text shows the
-# path on the session's machine, $FLEET_CONF_DIR/attachments/<id>/<name>) and
-# answer what the image shows. The image is one solid red square: 红 / red is
-# the answer, and nothing typed says it.
+# path on the session's machine, $FLEET_CONF_DIR/attachments/<id>/<name>, the
+# thin client's inbox there, or Claude Code's `[Image #N]` once it read it —
+# fleet-onboard-judge.sh ATTACH_GOT, issue #3496) and answer what the image
+# shows. The image is one solid red square: 红 / red is the answer, and nothing
+# typed says it.
 ATTACH_FILE=drill-shot.png
 ATTACH_ASK='看图 这张图是什么颜色？只回答一个颜色词'
 RESUME_NAME='' RESUME_MARK=''
@@ -1068,15 +1070,15 @@ step_attach() {
   shot attach
   case "$st" in
     answered)
-      RESUME_MARK='/attachments/'
-      row "会话里：图在会话那台机器上（…/attachments/…/${ATTACH_FILE}），回答「$(pane | attach_answer)」" "等" 否
+      RESUME_MARK=$(pane | attach_mark)
+      row "会话里：图到了会话那台机器（${RESUME_MARK}），回答「$(pane | attach_answer)」" "等" 否
       pass attach-attachment "the screenshot went with the task: the session read it on its machine and said $(pane | attach_answer) · $(elapsed)" ;;
     lost)
       said=$(pane | grep -Eo '附件没带过去[^│]*' | head -n 1 | sed 's/ *$//')
       row "提示：$said" "等" "是 — 截图没带到会话那台机器"
       failstep attach-attachment "the screenshot did not go: $said"; return 1 ;;
     path)
-      RESUME_MARK='/attachments/'
+      RESUME_MARK=$(pane | attach_mark)
       row "会话里有图的路径，但没说出图里是什么" "等" "是 — 会话没读图"
       failstep attach-attachment "the file reached the session's machine, but no answer within ${FLEET_DRILL_AGENT_SECS:-300}s:"; tail_pane; return 1 ;;
     *)

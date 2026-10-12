@@ -119,6 +119,14 @@ st=$(printf '%s\n' "$A0" '  │ …/attachments/a1/drill-shot.png' '  │ ⏺ Re
 [ "$st" = answered ] && ok 'attach: an English 「Red.」 is answered' || bad "attach: Red read '$st'"
 st=$(printf '%s\n' "$A0" '  │ ⏺ 红色' | ats)
 [ "$st" = wait ] && ok 'attach: an answer with no file on the session machine is not a pass' || bad "attach: no-path answer read '$st'"
+# the thin client's road (issue #3496): Claude Code reads the pasted inbox path
+# and shows `[Image #N]`, never the path — drill 38's own @8 screen on mini2
+st=$(printf '%s\n' '❯ 看图' '⏺ 没看到图片，这条消息里没有附件。' '❯ 看图 这张图是什么颜色？只回答一个颜色词 [Image #1]' '  ⎿  [Image #1]' '⏺ 红色' | ats)
+[ "$st" = answered ] && ok 'attach: [Image #1] then 红色 is answered (the thin road)' || bad "attach: [Image #N] answer read '$st'"
+st=$(printf '%s\n' '❯ 看图 这张图是什么颜色？只回答一个颜色词 [Image #1]' | ats)
+[ "$st" = path ] && ok 'attach: [Image #1] with no answer yet is path' || bad "attach: [Image #N] alone read '$st'"
+st=$(printf '%s\n' '  │ /Users/d/.cache/claude-fleet/inbox/5a1e-fid/20261012T052213Z-drill-shot.png' '  │ ⏺ red' | ats)
+[ "$st" = answered ] && ok "attach: the home's inbox path then red is answered" || bad "attach: inbox path read '$st'"
 st=$(printf '%s\n' "$A0" '附件没带过去：drill-shot.png（入口还不收附件）' | ats)
 [ "$st" = lost ] && ok 'attach: 「附件没带过去」 is lost' || bad "attach: lost read '$st'"
 # --- node-restart-resume: the row's key off `fleet ls --json` -------------------

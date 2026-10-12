@@ -1375,11 +1375,30 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # whose person chose another (`keep`, `at:…`, `loop-end`, `merged…`) is alive,
   # waiting on them: a no-repo home session kept with `keep` went quiet after
   # every reopen and vanished from `fleet ls` and ⌘P while it ran on.
+  # And only once its idle window has run out (issue #3496): `done` is the end
+  # of a TURN — a session that just answered its person is waiting on them, the
+  # reaper's own clock (`done:<dur>`, else fleet_reap_policy.DONE_DEFAULT 15m)
+  # has not run. Drills 35–38: a newcomer's first session went `done` after its
+  # first reply and dropped out of `fleet ls` at once. No state stamp = as before.
   repod=''; ended=0
   if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -z "$iss" ] && [ -z "$carg" ]; then
     case "$state" in
       exited) ended=1 ;;
-      done) case "$wreap" in ''|done|done:*) ended=1 ;; esac ;;
+      done) case "$wreap" in ''|done|done:*) ended=1 ;; esac
+            if [ "$ended" = 1 ]; then
+              _idle=900 _d=${wreap#done:}
+              case "$wreap" in done:*)
+                case "$_d" in
+                  *[0-9]s|*[0-9]) _idle=${_d%s} ;;
+                  *[0-9]m) _idle=$(( ${_d%m} * 60 )) ;;
+                  *[0-9]h) _idle=$(( ${_d%h} * 3600 )) ;;
+                  *[0-9]d) _idle=$(( ${_d%d} * 86400 )) ;;
+                esac ;;
+              esac
+              case "$_idle:$state_ts" in *[!0-9:]*|*:|:*) ;; *)
+                [ "$state_ts" -gt 0 ] && [ $(( NOW - state_ts )) -lt "$_idle" ] && ended=0 ;;
+              esac
+            fi ;;
     esac
   fi
   if [ "$pinned" = 0 ]; then

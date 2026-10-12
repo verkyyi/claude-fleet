@@ -9,6 +9,7 @@
 #   list_row_named <name>   the list row carrying <name>, never the input line
 #   qr_state <login>        qr · none · wait — where the installer's scan stands
 #   attach_state            lost · answered · path · wait (the attachment step)
+#   attach_answer · attach_mark  the colour it said · the file's mark on the screen
 #   ls_row <name> [<keys>]  <node> TAB <key> TAB <fleet_id> from `fleet ls --json`
 #   ls_keys                 every key in `fleet ls --json` (the before-set ls_row takes)
 #   drill_png <file>        the attach step's solid red PNG
@@ -89,20 +90,31 @@ open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(
 PY
 }
 # attach_state (a screen on stdin): lost — the client said the file did not go;
-# answered — the session's text names the file on ITS machine
-# (…/attachments/<id>/…) and an answer says the colour; path — the path only;
-# wait — neither yet. The colour is in nothing the drill types.
+# answered — the session's text shows the file reached it and an answer after
+# that says the colour; path — the file only; wait — neither yet. The colour is
+# in nothing the drill types. «The file reached it» (ATTACH_GOT, issue #3496) is
+# either road's mark: the old client's path on the session's machine
+# (…/attachments/<id>/…), the thin client's inbox there
+# (…/claude-fleet/inbox/<fleet_id>/…), or Claude Code's own `[Image #N]` — what
+# it shows for a pasted image path once it has READ the file, so the path itself
+# never reaches the screen (drills 35–38: 「红色」 answered under `[Image #1]`
+# while the judge waited for `/attachments/`).
 ATTACH_LOST='附件没带过去|did not go'
+ATTACH_GOT='/attachments/|/claude-fleet/inbox/|\[Image #[0-9]+\]'
 ATTACH_RED='红|(^|[^[:alpha:]])[Rr]ed([^[:alpha:]]|$)'
+attach_after() { awk -v re="$ATTACH_GOT" 'f || $0 ~ re { f = 1; print }'; }
 attach_state() {
   local p
   p=$(cat)
   if printf '%s\n' "$p" | grep -Eq -- "$ATTACH_LOST"; then echo lost
-  elif ! printf '%s\n' "$p" | grep -qF '/attachments/'; then echo wait
-  elif printf '%s\n' "$p" | sed -n '/\/attachments\//,$p' | grep -Eq -- "$ATTACH_RED"; then echo answered
+  elif ! printf '%s\n' "$p" | grep -Eq -- "$ATTACH_GOT"; then echo wait
+  elif printf '%s\n' "$p" | attach_after | grep -Eq -- "$ATTACH_RED"; then echo answered
   else echo path; fi
 }
-attach_answer() { sed -n '/\/attachments\//,$p' | grep -Eo -- "$ATTACH_RED" | head -n 1 | tr -d ' '; }
+attach_answer() { attach_after | grep -Eo -- "$ATTACH_RED" | head -n 1 | tr -d ' '; }
+# attach_mark (a screen on stdin): the ATTACH_GOT mark it carries, as a fixed
+# string step 10 looks for again after the restart ('' = none).
+attach_mark() { grep -Eo -- "$ATTACH_GOT" | head -n 1; }
 # ls_row <name> [<keys before>] (`fleet ls --json` on stdin): <node> TAB <key>
 # TAB <fleet_id> of the session. With <keys before> (a file, one key a line: the
 # list just before the session was asked for — issue #3464) the row is found by
