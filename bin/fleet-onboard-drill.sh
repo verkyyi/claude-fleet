@@ -680,14 +680,32 @@ thin_is() {
   if ( cd / && sudo -n test -s "$H/.cache/claude-fleet/thin.log" ) 2>/dev/null; then THINC=1; else THINC=0; fi
   [ "$THINC" = 1 ]
 }
+# login_bin <file>: the newcomer login's OWN copy of a fleet script, the one
+# place the drill resolves it (issue #3499) — its node install
+# (~/.claude/fleet/bin: a managed login, which is what the login is when the
+# drill runs ON its --home — drill 39, macmini = mini2, had no client install)
+# else its client install (~/.local/share/claude-fleet/bin). Neither: rc 1 and
+# one line naming both places, never a guess.
+login_bin() {
+  local d
+  for d in "$H/.claude/fleet/bin" "$H/.local/share/claude-fleet/bin"; do
+    ( cd / && sudo -n test -f "$d/$1" ) 2>/dev/null && { printf '%s/%s\n' "$d" "$1"; return 0; }
+  done
+  printf 'no %s for %s: neither %s nor %s has it' "$1" "$LOGIN" "$H/.claude/fleet/bin" "$H/.local/share/claude-fleet/bin"
+  return 1
+}
+# thin_bin: the login's fleet-thin.py (FLEET_DRILL_THIN is the selftest's seam)
+thin_bin() {
+  if [ -n "${FLEET_DRILL_THIN:-}" ]; then printf '%s\n' "$FLEET_DRILL_THIN"; else login_bin fleet-thin.py; fi
+}
 # panel_code: the private code the newcomer's client sends for the panel, read
 # off ITS OWN install, never guessed — the switch table's default action
 # (dash-keymap.sh --panel switch default: quickopen, ⌘P) and that action's code
 # (list's 4th column, 927): iTerm2's fleet profile turns ⌘P into ESC [ <code> ~
 # (fleet-iterm-profile.py), which the 看台 binds as User<code> (fleet_view.key_lines)
 panel_code() {
-  local km="$H/.local/share/claude-fleet/bin/dash-keymap.sh" run=as_login a
-  ( cd / && sudo -n test -f "$km" ) 2>/dev/null || { km="$BIN/dash-keymap.sh" run=''; }
+  local km run=as_login a
+  km=$(login_bin dash-keymap.sh) || { km="$BIN/dash-keymap.sh" run=''; }
   a=$($run bash "$km" --panel switch default 2>/dev/null | awk '{print $1; exit}')
   [ -n "$a" ] || return 1
   $run bash "$km" --panel switch list 2>/dev/null | awk -v a="$a" '$1 == a && $4 ~ /^[0-9]+$/ {print $4; exit}'
@@ -978,9 +996,19 @@ step_answer() {
 # client reaches it, so a refusal there (drill 34: memory admission, three times)
 # sat in a file while every screen passed. Asked of the home as the session's
 # login (locate, as step 10), polled until it says which way it went.
+# No fleet-thin.py on the login is a FAIL at once (`nohelper`, guide_state);
+# an empty answer carries its stderr's last line (`noanswer`), so the deadline's
+# FAIL says why — drill 39 waited 240s on «no answer» for a missing file.
 guide_probe() {
-  if [ -n "$SNODE" ]; then as_login python3 "$THIN" --run --home "$SNODE" -- sh -c "$GUIDE_PROBE" fleet-drill-guide 2>/dev/null
-  else as_sess /bin/sh -c "$GUIDE_PROBE" fleet-drill-guide 2>/dev/null; fi
+  local thin out err="$RUN/guide.err"
+  if [ -n "$SNODE" ]; then
+    thin=$(thin_bin) || { printf 'nohelper\t%s\n' "$thin"; return 0; }
+    out=$(as_login python3 "$thin" --run --home "$SNODE" -- sh -c "$GUIDE_PROBE" fleet-drill-guide 2>"$err")
+  else
+    out=$(as_sess /bin/sh -c "$GUIDE_PROBE" fleet-drill-guide 2>"$err")
+  fi
+  if [ -n "$out" ]; then printf '%s\n' "$out"
+  elif [ -s "$err" ]; then printf 'noanswer\t%s\n' "$(tail -n 1 "$err")"; fi
 }
 step_guide() {
   local deadline st v why secs="${FLEET_DRILL_GUIDE_SECS:-240}"
@@ -1000,7 +1028,12 @@ step_guide() {
     pass) row "入口那台机器上，新手引导窗口开了（${why}）" "等" 否
           pass onboard-guide "the home's onboarding guide: $why" ;;
     skip) skip onboard-guide "$why" ;;
-    fail) row "新手引导没开：$why" "等" "是 — 新手引导窗口没开：$why"
+    fail) case "$why" in
+            'no fleet-thin.py '*)
+              row "问不到入口那台机器：$why" "等" "是 — 演练找不到这个登录的 fleet-thin.py"
+              failstep onboard-guide "cannot ask the home: $why"; return 1 ;;
+          esac
+          row "新手引导没开：$why" "等" "是 — 新手引导窗口没开：$why"
           failstep onboard-guide "the home's onboarding guide stopped (global/onboard.stuck): $why"; return 1 ;;
     *)    row "${secs}s 内新手引导窗口没开" "等" "是 — 新手引导窗口没开"
           failstep onboard-guide "the home's onboarding guide did not open within ${secs}s: $why"; return 1 ;;
@@ -1174,9 +1207,13 @@ case $op in
   restore) exec bash "$B/fleet-sessions-snapshot.sh" restore 2>&1 ;;
 esac
 echo "unknown op $op"; exit 2'
-THIN="${FLEET_DRILL_THIN:-$H/.local/share/claude-fleet/bin/fleet-thin.py}"   # the env is the selftest's seam
-# remote <op> <arg>: REMOTE_RESTART on $SNODE as the login, its output
-remote() { as_login python3 "$THIN" --run --home "$SNODE" -- sh -c "$REMOTE_RESTART" fleet-drill-restart "$1" "$2" 2>&1; }
+# remote <op> <arg>: REMOTE_RESTART on $SNODE as the login, its output — or
+# the one line saying the login has no fleet-thin.py (login_bin)
+remote() {
+  local thin
+  thin=$(thin_bin) || { printf '%s\n' "$thin"; return 4; }
+  as_login python3 "$thin" --run --home "$SNODE" -- sh -c "$REMOTE_RESTART" fleet-drill-restart "$1" "$2" 2>&1
+}
 RESTART_DOWN='机器在重启|稍等|restarting|connection lost|连接断了|没有活着的'
 # restart_back: the client is back on the session — the old client's list row
 # and the session's text; the thin client (issue #3445: no list) the 看台 itself,
@@ -1600,7 +1637,7 @@ if [ -n "$ONLY" ]; then
   # the seam (FLEET_DRILL_ONLY=8-10): the client is up on the test's tmux server
   TMUX_UP=0 SUMMARISED=1
   if [ "$ONLY" = 8 ]; then step_scratch && { step_answer || :; }
-  else step_scratch && { step_answer || :; step_attach || :; step_restart || :; }; fi
+  else step_scratch && { step_answer || :; step_guide || :; step_attach || :; step_restart || :; }; fi
   printf '\n%s: %s  %d passed · %d failed · steps %s only (FLEET_DRILL_ONLY) · log %s\n' "$PROG" \
     "$([ "$NFAIL" = 0 ] && echo PASS || echo FAIL)" "$NPASS" "$NFAIL" "$ONLY" "$RUN"
   sed 's/^/  /' "$STEPS"
