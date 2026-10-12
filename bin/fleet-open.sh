@@ -262,14 +262,13 @@ thin_open() {
   # shellcheck source=/dev/null
   . "$BIN/fleet-client-lib.sh" || return 1
   [ -n "${FC_SESS:-}" ] || fc_session || return 1
-  local newest rows row ttyp tok
+  local rows row ttyp tok
   rows=$(awk -F '\t' -v s="$FC_SESS" '$2 == s && $3 == "thin" && FILENAME !~ /-via-[^\/]*$/ { print }' "$RV_DIR"/* 2>/dev/null)
   [ -n "$rows" ] || return 1
-  newest=$(fc_clients '#{client_activity}	#{client_tty}' | sort -t '	' -k1,1nr | cut -f2)
-  for ttyp in $newest; do
-    row=$(printf '%s\n' "$rows" | awk -F '\t' -v t="$ttyp" '$1 == t { print; exit }')
-    [ -n "$row" ] && break
-  done
+  # the client the person is at: the newest — a home's far 看台 newer than ours is
+  # via_relay's, never an older 看台 of ours
+  ttyp=$(fc_clients '#{client_activity}	#{client_tty}' | sort -t '	' -k1,1nr | head -n 1 | cut -f2)
+  row=$(printf '%s\n' "$rows" | awk -F '\t' -v t="$ttyp" '$1 == t { print; exit }')
   [ -n "$row" ] || return 1
   tok=$(printf '%s\n' "$row" | tr '\t' '\n' | sed -n 's/^token=//p' | head -n 1)
   THIN_DEV=$(printf '%s\n' "$row" | tr '\t' '\n' | sed -n 's/^device=//p' | head -n 1)
