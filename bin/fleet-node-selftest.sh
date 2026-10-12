@@ -202,7 +202,7 @@ cat >"$SB/node.want" <<'EOF'
 ✓ 已登记到入口：<HOST>-<ME>（ep_1）
 ✓ agent 已装好：<HOME>/.local/bin/ccquota
 ! agent 已在后台运行，但重启后不会自己起来（--service detached）
-✓ 入口看到它在线：<HUB>/nodes
+✓ 入口看到它在线：<HUB>/app/nodes
 ! 入口没把 <ME> 列为管理登录：这台机器不开账号、不装 SSH CA（要的话在入口的 CCQUOTA_FLEET_ADMIN_USERS 里加上它）
 ✓ 只协调：入口不往这台派会话、不借账号（本机跑会话用自己的账号）
 ✓ 已上线：<HOST>/<ME> 连着 <HUB>

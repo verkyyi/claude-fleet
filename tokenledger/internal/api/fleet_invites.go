@@ -187,7 +187,7 @@ func (s *Server) handleLoginRefused(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	if note.Exp < now.Unix() || !validUserCode(note.Code) {
-		http.Redirect(w, r, "/signin?e=expired", http.StatusFound)
+		http.Redirect(w, r, appURL("/signin")+"?e=expired", http.StatusFound)
 		return
 	}
 	loc := s.pageLocale(w, r)
@@ -338,7 +338,7 @@ func (s *Server) handleInviteInstall(w http.ResponseWriter, r *http.Request) {
 	if wantsHTML(r) {
 		if reason == "active" {
 			setInviteCookie(w, r, code)
-			http.Redirect(w, r, "/signin", http.StatusFound)
+			http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 			return
 		}
 		s.githubDeny(w, r, denyInvitePrefix+reason, "")

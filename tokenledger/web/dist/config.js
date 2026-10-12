@@ -50,7 +50,7 @@ export default Shell.mount('config', async (ctx) => {
   if (tr.status === 'fulfilled') {
     const tb = tr.value;
     team = `<div class="panel"><div class="panel-h"><div><h3>${esc(t('ui.cfg.team'))}</h3><span class="sub">${tb.version ? `v${tb.version} · ` : ''}${esc(t('ui.cfg.teamSub'))}</span></div>` +
-      (admin ? `<a class="chip" href="/admin/settings#team">${ic('lock')}${esc(t('ui.cfg.publishIn'))}</a>`
+      (admin ? `<a class="chip" href="/app/admin/settings#team">${ic('lock')}${esc(t('ui.cfg.publishIn'))}</a>`
         : `<span class="chip">${ic('lock')}${esc(t('ui.cfg.adminsPublish'))}</span>`) + '</div>' + bundleList(bundleItems(tb.bundle), 'team') + '</div>';
     if (Array.isArray(tb.history) && tb.history.length) {
       hist = `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.cfg.history'))}</h3><span class="sub">${esc(t('ui.cfg.historySub'))}</span></div><div class="panel-b"><div class="timeline">` +

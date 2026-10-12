@@ -325,7 +325,7 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 	// Already in: the page has nothing to offer.
 	if _, id, ok := s.githubSession(r); ok {
 		if role, err := s.githubRole(id); err == nil && role != "" {
-			http.Redirect(w, r, "/", http.StatusFound)
+			http.Redirect(w, r, AppPrefix, http.StatusFound)
 			return
 		}
 	}
@@ -414,19 +414,19 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, r, githubFlowCookie, githubFlowPath)
 	q := r.URL.Query()
 	if q.Get("error") != "" {
-		http.Redirect(w, r, "/signin?e=cancelled", http.StatusFound)
+		http.Redirect(w, r, appURL("/signin")+"?e=cancelled", http.StatusFound)
 		return
 	}
 	state, code := q.Get("state"), q.Get("code")
 	if flow.State == "" || flow.Exp < time.Now().Unix() || state == "" || code == "" ||
 		!constantTimeEqual(state, flow.State) {
-		http.Redirect(w, r, "/signin?e=expired", http.StatusFound)
+		http.Redirect(w, r, appURL("/signin")+"?e=expired", http.StatusFound)
 		return
 	}
 	id, login, err := s.githubWho(r.Context(), code, flow.Verifier, s.githubCallbackURL(r))
 	if err != nil {
 		log.Printf("github sign-in: %v", err)
-		http.Redirect(w, r, "/signin?e=github", http.StatusFound)
+		http.Redirect(w, r, appURL("/signin")+"?e=github", http.StatusFound)
 		return
 	}
 	now := time.Now()
@@ -463,7 +463,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// every machine that runs it.
 	s.onPrincipalSignIn(principal, login)
 	// A `fleet login` code scanned while signed out comes back to its
-	// confirmation page; everything else goes to "/".
+	// confirmation page; everything else goes to the console.
 	http.Redirect(w, r, loginReturn(w, r), http.StatusFound)
 }
 
@@ -921,6 +921,6 @@ var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Pars
 <div style="display:grid;gap:6px"><h1>{{t "deny.h1"}}</h1>
 <p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else if eq .Why "invite-expired"}}{{tb "deny.invite.expired" .Login}}{{else if eq .Why "invite-used"}}{{tb "deny.invite.used" .Login}}{{else if eq .Why "invite-revoked"}}{{tb "deny.invite.revoked" .Login}}{{else if eq .Why "invite-unknown"}}{{tb "deny.invite.unknown" .Login}}{{else if eq .Why "invite-other-user"}}{{tb "deny.invite.other-user" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p></div>
 {{if .Ask}}<p class="ask"><code>{{.Ask}}</code></p>{{end}}
-<div class="row"><a class="btn" href="/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/">{{t "deny.back"}}</a></div>
+<div class="row"><a class="btn" href="/app/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/app">{{t "deny.back"}}</a></div>
 <p class="fine">{{t "deny.fine"}}</p>
 </main></div></div></body></html>`))

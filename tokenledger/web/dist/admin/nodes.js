@@ -120,7 +120,7 @@ const clientList = (devs) => ({ ...(devs || {}), devices: ((devs && devs.devices
 function tabs(clients, nNodes, nClients) {
   const b = (on, href, icon, label, n) => `<a href="${href}"><button type="button" aria-pressed="${on}">${ic(icon)}${esc(t(label))} <span class="n">${n == null ? '?' : n}</span></button></a>`;
   return `<div><div class="seg" role="group" aria-label="${esc(t('ui.mach.tabs'))}" style="margin-bottom:14px">` +
-    b(!clients, '/nodes', 'server', 'ui.mach.tabNodes', nNodes) + b(clients, '/nodes?tab=clients', 'key', 'ui.mach.tabClients', nClients) + '</div></div>';
+    b(!clients, '/app/nodes', 'server', 'ui.mach.tabNodes', nNodes) + b(clients, '/app/nodes?tab=clients', 'key', 'ui.mach.tabClients', nClients) + '</div></div>';
 }
 
 const sub = (key) => `<p style="font-size:13px;color:var(--muted);margin:0 0 12px">${esc(t(key))}</p>`;

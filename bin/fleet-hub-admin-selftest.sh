@@ -274,13 +274,13 @@ run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assi
 n2=$(wc -l <"$LOG")
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 >"$WORK/out3" 2>&1; rc3=$?
 r3=$(last)
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 --delete >"$WORK/out4" 2>&1; rc4=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host linux-a --delete >"$WORK/out4" 2>&1; rc4=$?
 r4=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "fleet-linux-0", "own_name": true}' ] \
    && grep -q '^zx · fleet-linux-0 · pending · -$' "$WORK/out" \
    && [ "$rc2" = 2 ] && [ "$((n2 - n1))" = 1 ] && grep -q 'relogin' "$WORK/err2" \
    && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0"}' ] \
-   && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0", "delete": true}' ]; then
+   && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-a", "delete": true}' ]; then
   ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare; remove --delete ⇒ delete: never recycled, #3504); a --login not theirs is refused before the POST"
 else bad "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 

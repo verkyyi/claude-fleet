@@ -343,8 +343,8 @@ func TestFleetCertWebAndConnectInfo(t *testing.T) {
 func TestFleetLoginSurvivesSignIn(t *testing.T) {
 	h, _ := certHarness(t)
 	resp := h.raw(t, "/fleet/login?code=BCDF-GHJK", map[string]string{"Accept": "text/html"})
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" {
-		t.Fatalf("signed-out QR: %d → %q, want /signin", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
+		t.Fatalf("signed-out QR: %d → %q, want /app/signin", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	var remembered *http.Cookie
 	for _, c := range resp.Cookies() {
@@ -364,7 +364,7 @@ func TestFleetLoginSurvivesSignIn(t *testing.T) {
 		t.Fatalf("after sign-in → %q", loc)
 	}
 	// A tampered cookie lands on "/", never on a path it names.
-	if loc := back(&http.Cookie{Name: loginCookie, Value: "//evil.example"}); loc != "/" {
+	if loc := back(&http.Cookie{Name: loginCookie, Value: "//evil.example"}); loc != AppPrefix {
 		t.Fatalf("tampered cookie → %q, want /", loc)
 	}
 }
@@ -380,8 +380,8 @@ func TestFleetLoginQRInAWebView(t *testing.T) {
 			"Accept":           "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 			"X-Requested-With": pkg,
 		})
-		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" {
-			t.Fatalf("%s: %d → %q, want 302 /signin", pkg, resp.StatusCode, resp.Header.Get("Location"))
+		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
+			t.Fatalf("%s: %d → %q, want 302 /app/signin", pkg, resp.StatusCode, resp.Header.Get("Location"))
 		}
 		remembered := false
 		for _, c := range resp.Cookies() {
