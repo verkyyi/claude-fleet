@@ -84,7 +84,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `child` | machine | [mac-node-enroll] | 守护的子进程挂了：看 `fleet-node-supervisor.py status` 与它的日志，重跑 `fleet node install` |
 | `ci-runner` | node | [runbook-train-stuck] | 自家测试机：`fleet-node-supervisor.py status` 的 ci-runner 行与 ci-runner.log |
 | `claude` | node · machine | [mac-node-prep] [release-rules] | 装 Claude Code；托管机器上由 release.json 钉、更新器装 |
-| `cleanup` | node | [mac-node-enroll] | 收尾守护缺 gh：装 gh 并登录（`gh auth login`） |
+| `cleanup` | node | [mac-node-enroll] | 收尾守护没装上：重跑 `sudo fleet node install`；或它缺 gh：装 gh 并 `gh auth login` |
 | `codesign` | machine | [runbook-tcc-stuck] | 没有固定签名身份 / 没签上：下一轮补签；之后给它授权一次 |
 | `codex` | node · machine | [mac-node-prep] [release-rules] | Codex CLI 版本 / 安装：照行内修；托管机器由更新器装 |
 | `collect` | node | [node-doctor] | 采集守护卡住或超时：看 collect 日志里最慢的阶段 |
@@ -96,7 +96,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `cpu` | node | [ack-linux-node] | 容器到了 CPU 上限：调大这台 Linux 节点的 limits |
 | `cred` | node | [sg-relay-setup] [login-lifecycle] | 会话凭据走哪条路：照行内的 trust × probe 结论修中转或代理 |
 | `credpool` | machine | [login-lifecycle] | 共享凭据池：照行内修 |
-| `credsep` | node · machine | [mac-node-enroll] | 凭据隔离：代理没起或代码不是这一版的——`fleet-credsep.py machine refresh`（更新器每轮也做） |
+| `credsep` | node · machine | [mac-node-enroll] | 凭据隔离：照行内（代理没起 / 该并入整机共享代理）；整机的代码不是这一版 ⇒ `fleet-credsep.py machine refresh`（更新器每轮也做） |
 | `daemon` | machine | [mac-node-enroll] [release-rules] | 整机守护没装 / 没在跑 / 没重启到 current：重跑 `sudo fleet node install` |
 | `daemons` | node | [mac-node-enroll] | 某个守护没加载：重跑安装，或看它的 launchd 日志 |
 | `deploy` | node | [node-doctor] | 仓库配置：`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK` 写错了 |
