@@ -364,7 +364,7 @@ func TestSparePodSettings(t *testing.T) {
 	if got := h.srv.clusterSpareMax("other", set); got != defaultSpareMax {
 		t.Fatalf("another cluster = %d; want fleet.spare_max's default", got)
 	}
-	for in, want := range map[string]string{"gh:12345": "gh.12345", "arvin": "arvin", ":::": ""} {
+	for in, want := range map[string]string{"gh:12345": "gh.12345", "drill1": "drill1", ":::": ""} {
 		if got := podLabel(in); got != want {
 			t.Errorf("podLabel(%q) = %q; want %q", in, got, want)
 		}
