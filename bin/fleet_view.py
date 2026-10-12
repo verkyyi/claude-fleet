@@ -1400,21 +1400,38 @@ def go_new(qo, vid, client="", repo="", agent="", prompt=""):
     named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
     warm = os.environ.get("FLEET_START_WARM", "1") != "0" and named == ["--no-repo"]
     tries = [["--warm-only"], []] if warm else [[]]
-    rc, w = 1, ""
+    rc, w, why = 1, "", ""
+    secs = fenv("FLEET_VIEW_NEW_SECS", 60)
     for extra in tries:
         try:
             p = subprocess.run(argv + ["--origin", "hub"] + named + ["--no-desk"] + extra + ["--print", fleet],
-                               stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                               timeout=fenv("FLEET_VIEW_NEW_SECS", 60))
+                               stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+                               errors="replace", timeout=secs)
             rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
-        except (OSError, subprocess.TimeoutExpired):
-            rc, w = 1, ""
+            why = new_why(p.stderr, rc)
+        except subprocess.TimeoutExpired:
+            rc, w, why = 1, "", say("view_new_timeout_fmt", "%g" % secs)
+        except OSError as error:
+            rc, w, why = 1, "", str(error)
         if not (extra and rc == 3):
             break
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
         return go(qo, vid, w, "new", client)
-    toast(client, say("view_new_failed"))
+    # the reason travels (issue #3458): the toast, and stderr — the ⚡ row's popup
+    # shows `do new`'s last line, which was nothing, so the panel said no why
+    said = say("view_new_failed_fmt", why or say("view_new_exit_fmt", rc))
+    toast(client, said)
+    print(said, file=sys.stderr, flush=True)
     return 3
+
+
+def new_why(err, rc):
+    """dash-raw-session.sh's reason for not opening: its last stderr line (a refusal
+    is `dash-raw-session: <why>`), the prefix off; "" when it said nothing."""
+    lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
+    if rc == 0 or not lines:
+        return ""
+    return re.sub(r"^dash-raw-session:\s*", "", lines[-1])
 
 
 def quit_view(vid, client=""):

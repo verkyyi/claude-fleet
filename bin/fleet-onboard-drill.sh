@@ -705,12 +705,17 @@ thin_open() {
 # thin client: thin_open (PW_K=nopanel when its panel never came up). Sets
 # PW_K (row · no · hostkey · stuck · '' = nothing within the wait), PW_P (the last
 # screen), PW_ANSWERED, PW_OPENING (the hub's 「正在为你开机器」, if said) and
-# PW_OPENED (seconds from it first said to the end). Every ETA it read lands in
+# PW_OPENED (seconds from it first said to the end), PW_SAID (on `no`: the refusal
+# line as the screen says it — the list's, or the thin panel's 「新会话没开起来：<why>」,
+# issue #3458). Every ETA it read lands in
 # $RUN/<shot prefix>-eta.txt (<secs since first said> <eta>, one a change).
-PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
+PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_SAID=''
+# pw_said <screen>: the refusal line on it, up to the box's edge (issue #3458: the
+# panel's line is PANEL_NO's, which SCRATCH_NO never matched — the FAIL ended at «:»)
+pw_said() { printf '%s\n' "$1" | grep -Eo -- "($SCRATCH_NO|$PANEL_NO)[^│]*" | head -n 1 | sed 's/ *$//'; }
 place_wait() {
   local deadline open0='' open_end=0 eta last_eta='' v
-  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_LSERR=''
+  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_LSERR='' PW_SAID=''
   if thin_is; then
     thin_open "$1" "$3" || { PW_K=nopanel; return 0; }
   else
@@ -722,9 +727,9 @@ place_wait() {
   while [ "$SECONDS" -lt "$deadline" ]; do
     keep_sudo
     PW_P=$(pane)
-    if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no; break; fi
+    if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no PW_SAID=$(pw_said "$PW_P"); break; fi
     v=$(screen)
-    if [ "$THINC" = 1 ] && printf '%s\n' "$v" | grep -Eq -- "$PANEL_NO"; then PW_K=no PW_P=$v; break; fi
+    if [ "$THINC" = 1 ] && printf '%s\n' "$v" | grep -Eq -- "$PANEL_NO"; then PW_K=no PW_P=$v PW_SAID=$(pw_said "$v"); break; fi
     # not $(pw_row): its PW_LSERR must reach the verdict
     pw_row "$2" > "$RUN/pw-row.txt"
     if [ -s "$RUN/pw-row.txt" ]; then PW_K=row; break; fi
@@ -786,7 +791,7 @@ step_scratch() {
   eta_row scratch
   case "$k" in
     no)  shot scratch-refused
-         said=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
+         said=$PW_SAID
          if [ -n "$opening" ]; then
            # the hub said opening, then failed: a result that says why (#2908)
            row "提示：${opening}，${PW_OPENED}s 后：$said" "等" "是 — 入口开机器失败：$said"
@@ -942,7 +947,7 @@ step_attach() {
   case "$k" in
     row) : ;;
     no)  shot attach-refused
-         said=$(printf '%s\n' "$PW_P" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
+         said=$PW_SAID
          row "提示：$said" "$(attach_keys)" "是 — 带图的任务开不出会话：$said"
          failstep attach-attachment "the list refused the task with a screenshot: $said"; return 1 ;;
     *)   shot attach-none

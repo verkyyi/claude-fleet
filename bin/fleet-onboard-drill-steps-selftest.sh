@@ -35,6 +35,9 @@
 #      `fleet ls --json`; claude's 「⏺ PONG」 PASSes claude-answers
 #   F  the same, claude saying 「API Error: 403 …」: claude-answers FAILs quoting it
 #   G  answer_state / answer_bad_line on canned screens
+#   R  (issue #3458) ⚡ ↵ and the home's dash-raw-session.sh refuses (at capacity):
+#      the panel says 「新会话没开起来：<its reason>」 and step 8's FAIL quotes it —
+#      drill 32's FAIL ended at an empty colon
 #   H  (issue #3452) ⚡ opens the session but the client's `fleet ls --json` cannot
 #      be read (202937a7's spinner byte, #3444): step 8 FAILs NAMING the list, never
 #      «no question, no row» — drill 30 read that as words sent to the old session
@@ -288,6 +291,11 @@ cat > "$T/newsess.sh" <<EOF
 #!/bin/sh
 case " \$* " in *' --warm-only '*) exit 3 ;; esac
 printf '%s\\n' "\$*" >> "$T/new.argv"
+# new.mode refuse: the home's spawner says no, as the real one does (issue #3458)
+if [ "\$(cat "$T/new.mode" 2>/dev/null)" = refuse ]; then
+  echo 'dash-raw-session: fleet at capacity: 4/4 Claude sessions in this fleet — raise FLEET_MAX_SESSIONS or close one first' >&2
+  exit 2
+fi
 p= prev=
 for a; do [ "\$prev" = --prompt ] && p=\$a; prev=\$a; done
 w=\$(TMUX= "$TMUXB" -S "$IN" new-window -d -P -F '#{window_id}' -t fl -n 我的会话 "bash '$T/claude.sh'") || exit 1
@@ -393,6 +401,17 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
       *) bad "H: no new session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
     esac
   else bad 'H: the thin client did not come up'; fi
+
+  # R (issue #3458): ⚡ ↵ and the home's spawner refuses — the panel says WHY
+  # (do new's reason, not a bare 「新会话没开起来」) and the drill's FAIL quotes it
+  if start_thin ok; then
+    echo refuse > "$T/new.mode"
+    out=$(drill env FLEET_DRILL_ONLY=8 FLEET_DRILL_STEP_SECS=20 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
+    rm -f "$T/new.mode"
+    if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +scratch +.*新会话没开起来：fleet at capacity: 4/4'; then
+      ok 'R: a refused ⚡ open names its reason on the panel and in the FAIL'
+    else bad "R: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"; fi
+  else bad 'R: the thin client did not come up'; fi
 
   if start_thin apierr; then
     out=$(drill env FLEET_DRILL_ONLY=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?

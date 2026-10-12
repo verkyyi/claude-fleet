@@ -624,6 +624,13 @@ fleet_ui_t() {
     en:view_gone) printf 'that session is gone' ;;
     zh:view_new_failed) printf '新会话没开起来' ;;
     en:view_new_failed) printf 'the new session did not open' ;;
+    # …and why (issue #3458): the spawner's own line, never dropped
+    zh:view_new_failed_fmt) printf '新会话没开起来：%s' "${1:-}" ;;
+    en:view_new_failed_fmt) printf 'the new session did not open: %s' "${1:-}" ;;
+    zh:view_new_timeout_fmt) printf '%s 秒内没开出来' "${1:-}" ;;
+    en:view_new_timeout_fmt) printf 'not open within %ss' "${1:-}" ;;
+    zh:view_new_exit_fmt) printf '退出码 %s，没说原因' "${1:-}" ;;
+    en:view_new_exit_fmt) printf 'exit %s, no reason given' "${1:-}" ;;
     # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
     zh:view_search_ph) printf '搜会话，或直接写一件新任务' ;;
     en:view_search_ph) printf 'Search sessions, or type a new task' ;;
