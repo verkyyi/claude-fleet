@@ -486,7 +486,7 @@ passed
 
 # =============================================================================
 step 6 '回收: the cleanup daemon reaps the window, the worktree and the branch'
-tmux set-option -w -t "$W" @claude_state done
+tmux set-option -w -t "$W" @claude_state "done"
 tmux set-option -w -t "$W" @claude_state_ts "$(( $(date +%s) - 3600 ))"
 bash "$BIN/tmux-pr-refresh.sh" >"$WORK/out" 2>"$WORK/err" || die "the collector's PR pass failed" "$(cat "$WORK/err")"
 bash "$BIN/fleet-cleanup-daemon.sh" "$S" >"$WORK/out" 2>"$WORK/err" || die "the cleanup tick exited $?" "$(cat "$WORK/err")"
