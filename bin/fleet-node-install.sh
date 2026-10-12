@@ -30,6 +30,9 @@
 #             the release expected.json names, else the hub's stable (--target
 #             <sha> overrides). Piped from curl, the updater is taken from the
 #             signed release itself.
+#   机器钥匙  this machine's own Ed25519 key, <state>/machine.key (root 600), its
+#             public half registered with POST /v1/node/key (#3699) — a runtime or a
+#             hub older than that ⇒ 跳过
 #   角色用户  the credential role account (_fleetcred) — fleet-credsep.py role
 #   ssh CA    the hub's SSH user CA at /etc/ssh/fleet_user_ca.pub + the
 #             sshd_config.d drop-in, exactly as the admin agent writes them;
@@ -356,6 +359,40 @@ else
     *) fail 运行时 "更新器：${res:-$(tail -n 1 "$WORK/tick.out")}" ;;
   esac
   staged || fail 运行时 "更新器跑完了，$CUR 却不是一个装齐的发布版"
+fi
+
+# ---------------------------------------------------------------- 机器钥匙 ------
+# This machine's own Ed25519 key (#3699): <state>/machine.key (root 600 — the
+# seat's while the node program runs as it), its public half registered with the
+# hub, so a request can be signed (FleetSig) instead of showing machine.env's
+# token. The token still works beside it until the machine says bearer_off.
+SIG="$CUR/bin/fleet_node_sig.py"
+MKEY="$STATE/machine.key"
+if [ ! -f "$SIG" ]; then
+  skip 机器钥匙 "运行时 $(cur_sha | cut -c1-12) 还不会签名（早于 #3699）"
+else
+  if [ ! -s "$MKEY" ]; then
+    "$PY" -I "$SIG" keygen "$MKEY" >/dev/null 2>"$WORK/sig.err" || fail 机器钥匙 "生成不了 ${MKEY}：$(tail -n 1 "$WORK/sig.err")"
+  fi
+  chmod 600 "$MKEY" 2>/dev/null
+  [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$MKEY" 2>/dev/null
+  kid="$("$PY" -I "$SIG" keyid "$MKEY" 2>"$WORK/sig.err")" || fail 机器钥匙 "读不了 ${MKEY}：$(tail -n 1 "$WORK/sig.err")"
+  code=$(req GET /v1/node/key "$WORK/key.cur" "" "$TOKEN")
+  case "$code" in
+    200)
+      if grep -q "\"$kid\"" "$WORK/key.cur"; then
+        skip 机器钥匙 "已登记 ${kid}（${MKEY}）"
+      else
+        "$PY" -I "$SIG" register-body "$MKEY" >"$WORK/key.req" 2>"$WORK/sig.err" || fail 机器钥匙 "$(tail -n 1 "$WORK/sig.err")"
+        code=$(req POST /v1/node/key "$WORK/key.reg" "$WORK/key.req" "$TOKEN")
+        rm -f "$WORK/key.req"
+        [ "$code" = 200 ] || fail 机器钥匙 "入口答 HTTP ${code}：$(head -c 200 "$WORK/key.reg" 2>/dev/null)"
+        ok 机器钥匙 "$kid 登记到入口（私钥 ${MKEY}，不离开这台）"
+      fi ;;
+    404) skip 机器钥匙 "入口还不认机器钥匙（早于 #3699）" ;;
+    000) fail 机器钥匙 "连不上 $HUB" ;;
+    *) fail 机器钥匙 "入口答 HTTP ${code}：$(head -c 200 "$WORK/key.cur" 2>/dev/null)" ;;
+  esac
 fi
 
 # ---------------------------------------------------------------- 角色用户 ------
