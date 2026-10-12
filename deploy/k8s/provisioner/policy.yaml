@@ -1,0 +1,92 @@
+# What the provisioner may build, held by the API server itself
+# (claude-fleet#3558, EPIC #3500 C16): every request fleet-provisioner's account
+# makes — whatever its Role allows — must be render.py's template. Keep it in
+# step with off_template() in bin/fleet-provisioner.py, which checks the same
+# before it sends anything (BREAK-IT provisioner-off-template drills both).
+#
+#   kinds        Deployment · Job · Service · PersistentVolumeClaim, and the
+#                nonce book ConfigMap — nothing else (no Pod, no Secret)
+#   where        fleet-workers only
+#   whose        every object it creates, changes or deletes carries
+#                fleet/role user|job — before and after a change — so the door,
+#                the shared services and the provisioner itself are out of reach
+#   Service      ClusterIP, no external address
+#   a pod        no host network / PID / IPC, no hostPath or projected volume,
+#                no token, account fleet-user (Deployment) / fleet-job (Job),
+#                every image by digest, no privilege, no escalation, ALL caps
+#                dropped and only the user pod's own few added (its egress
+#                guard's NET_ADMIN / NET_RAW included); a Job adds none, runs
+#                non-root on a read-only root
+#
+# admissionregistration.k8s.io/v1: Kubernetes 1.30 or newer.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: fleet-provisioner-template
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: ["*"]
+  matchConditions:
+    - name: is-the-provisioner
+      expression: "request.userInfo.username == 'system:serviceaccount:fleet-workers:fleet-provisioner'"
+  variables:
+    - name: obj
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: book
+      expression: "request.kind.group == '' && request.kind.kind == 'ConfigMap' && request.name == 'fleet-provisioner-nonces'"
+    - name: workload
+      expression: "request.operation != 'DELETE' && ((request.kind.group == 'apps' && request.kind.kind == 'Deployment') || (request.kind.group == 'batch' && request.kind.kind == 'Job'))"
+    - name: isJob
+      expression: "request.kind.kind == 'Job'"
+    - name: pod
+      expression: "object.spec.template.spec"
+    - name: containers
+      expression: "variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"
+    - name: caps
+      expression: "['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT', 'AUDIT_WRITE', 'NET_ADMIN', 'NET_RAW']"
+  validations:
+    - expression: "variables.book || (request.kind.group == 'apps' && request.kind.kind == 'Deployment') || (request.kind.group == 'batch' && request.kind.kind == 'Job') || (request.kind.group == '' && request.kind.kind in ['Service', 'PersistentVolumeClaim'])"
+      messageExpression: "'the provisioner builds no ' + request.kind.kind"
+    - expression: "request.namespace == 'fleet-workers'"
+      messageExpression: "'the provisioner stays in fleet-workers, not ' + request.namespace"
+    - expression: "variables.book || (has(variables.obj.metadata.labels) && 'fleet/role' in variables.obj.metadata.labels && variables.obj.metadata.labels['fleet/role'] in ['user', 'job'])"
+      message: "the provisioner touches only objects labelled fleet/role user|job"
+    - expression: "variables.book || request.operation != 'UPDATE' || (has(oldObject.metadata.labels) && 'fleet/role' in oldObject.metadata.labels && oldObject.metadata.labels['fleet/role'] in ['user', 'job'])"
+      message: "the provisioner cannot relabel somebody else's object into its reach"
+    - expression: "request.operation == 'DELETE' || request.kind.kind != 'Service' || ((!has(object.spec.type) || object.spec.type == 'ClusterIP') && !has(object.spec.externalIPs) && !has(object.spec.externalName))"
+      message: "a Service the provisioner makes is ClusterIP only"
+    - expression: "request.operation == 'DELETE' || request.kind.kind != 'PersistentVolumeClaim' || (!has(object.spec.dataSource) && !has(object.spec.dataSourceRef))"
+      message: "a claim the provisioner makes starts empty"
+    - expression: "!variables.workload || (has(object.spec.template.metadata.labels) && 'fleet/role' in object.spec.template.metadata.labels && object.spec.template.metadata.labels['fleet/role'] == (variables.isJob ? 'job' : 'user'))"
+      message: "a pod the provisioner makes is labelled fleet/role user (Deployment) or job (Job)"
+    - expression: "!variables.workload || ((!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) && (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC))"
+      message: "no host network, PID or IPC"
+    - expression: "!variables.workload || (!has(variables.pod.nodeName) && !has(variables.pod.ephemeralContainers) && !has(variables.pod.hostAliases))"
+      message: "no nodeName, ephemeral containers or host aliases"
+    - expression: "!variables.workload || !has(variables.pod.volumes) || variables.pod.volumes.all(v, !has(v.hostPath) && !has(v.projected))"
+      message: "no hostPath and no projected volume"
+    - expression: "!variables.workload || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false)"
+      message: "a pod the provisioner makes mounts no service account token"
+    - expression: "!variables.workload || (has(variables.pod.serviceAccountName) && variables.pod.serviceAccountName == (variables.isJob ? 'fleet-job' : 'fleet-user'))"
+      message: "a person's pod runs as fleet-user, a Job as fleet-job"
+    - expression: "!variables.workload || variables.containers.all(c, c.image.matches('@sha256:[a-f0-9]{64}$'))"
+      message: "every image is pinned by digest"
+    - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false && (!has(c.securityContext.privileged) || !c.securityContext.privileged))"
+      message: "no privileged container, no privilege escalation"
+    - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && (!has(c.securityContext.capabilities.add) || c.securityContext.capabilities.add.all(a, !variables.isJob && a in variables.caps)))"
+      message: "every container drops ALL capabilities and adds only the template's (a Job adds none)"
+    - expression: "!variables.workload || !variables.isJob || (has(variables.pod.securityContext) && has(variables.pod.securityContext.runAsNonRoot) && variables.pod.securityContext.runAsNonRoot && has(variables.pod.securityContext.runAsUser) && variables.pod.securityContext.runAsUser != 0 && variables.containers.all(c, has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem))"
+      message: "a Job runs non-root on a read-only root"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: fleet-provisioner-template
+spec:
+  policyName: fleet-provisioner-template
+  validationActions: [Deny]

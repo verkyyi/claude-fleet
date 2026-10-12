@@ -1,0 +1,12 @@
+# fleet-provisioner (claude-fleet#3558, EPIC #3500 C16): its account, Role, nonce
+# book, Deployment, and the admission policy that holds it to render.py's
+# template. Part of ../fleet-workers; applied by a person (README.md), never
+# by hub-deploy. Namespaced objects name fleet-workers themselves — the policy
+# and its binding are cluster-wide, so no namespace transformer here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - provisioner.yaml
+  - policy.yaml
+# The image (the managed-node image: python3 + the release tree) is named
+# fleet-provisioner-image here; whoever applies swaps in theirs by digest (README.md).

@@ -185,6 +185,10 @@
 #   The thin loop on the person's own computer (issue #3007): bin/fleet-break-it-thin-client-selftest.sh.
 # Entry half — entry-* rows (issue #3070): the home machine's public entry port, a
 #   real sshd in a sandbox on 127.0.0.1, bin/fleet-break-it-entry-selftest.sh.
+# Cluster half — sa-token-in-user-pod, provisioner-off-template (issue #3558): every
+#   pod template's token and the provisioner against a stand-in API on 127.0.0.1,
+#   bin/fleet-break-it-cluster-selftest.sh; the real cluster's RBAC and admission
+#   policy on kind, deploy/k8s/provisioner/kind-drill.sh (cluster-perms.yml).
 # CI half — ci-runner-* rows (issue #3144): the machine's test runner, a fake GitHub
 #   API on 127.0.0.1 and a fake runner archive, bin/fleet-break-it-ci-selftest.sh.
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
@@ -276,7 +280,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/dev/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" "$BIN/fleet-break-it-seats-selftest.sh" "$BIN/fleet-break-it-admin-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" "$BIN/fleet-break-it-seats-selftest.sh" "$BIN/fleet-break-it-admin-selftest.sh" "$BIN/fleet-break-it-cluster-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do

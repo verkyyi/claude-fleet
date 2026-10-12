@@ -45,6 +45,8 @@ spec:
         app: fleet-npm
         fleet/role: ops
     spec:
+      # its own account, no token (#3558; ../../fleet-workers/serviceaccounts.yaml)
+      serviceAccountName: fleet-npm
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       affinity:
