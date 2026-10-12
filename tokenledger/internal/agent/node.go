@@ -636,6 +636,32 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 	return snap, nil
 }
 
+// fleetMachineID is the login's fleet-control machine_id, the identity every
+// request but discover must carry. It is a UUID kept in the login's own store,
+// so it is asked once and kept (claude-fleet#3520): before, every hub read and
+// write ran a whole discover first — the inventory and the capacity, a second
+// Python process as the login — and on a busy one-CPU machine the pair
+// outran the hub's 8 s read budget, so operation_get never brought a final
+// state back (a placement «no final state», a reap «failed:unknown») while the
+// node had done it. fresh asks again (the kept one was refused).
+func (a *Agent) fleetMachineID(ctx context.Context, script string, fresh bool) (string, error) {
+	if !fresh {
+		if p := a.fleetMID.Load(); p != nil && *p != "" {
+			return *p, nil
+		}
+	}
+	var disc struct {
+		MachineID string `json:"machine_id"`
+	}
+	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
+		return "", err
+	}
+	if disc.MachineID != "" {
+		a.fleetMID.Store(&disc.MachineID)
+	}
+	return disc.MachineID, nil
+}
+
 // fleetRPC runs one fleet-control.py request and decodes its result into out.
 func fleetRPC(ctx context.Context, script string, req map[string]any, out any) error {
 	res, _, err := fleetRPCRaw(ctx, script, req)
@@ -803,16 +829,24 @@ func (a *Agent) answerControl(ctx context.Context, conn nodeLink, m control.Mess
 	defer cancel()
 	call := map[string]any{"protocol": 1, "method": req.Method, "params": params}
 	if req.Method != "discover" {
-		var disc struct {
-			MachineID string `json:"machine_id"`
-		}
-		if err := fleetRPC(rctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
+		mid, err := a.fleetMachineID(rctx, script, false)
+		if err != nil {
 			fail("UNAVAILABLE", "fleet discover: "+err.Error())
 			return
 		}
-		call["machine_id"] = disc.MachineID
+		call["machine_id"] = mid
 	}
 	res, machineID, err := fleetRPCRaw(rctx, script, call)
+	var mf *rpcFault
+	if err != nil && req.Method != "discover" && errors.As(err, &mf) && mf.Code == "IDENTITY_MISMATCH" {
+		// The kept machine_id went stale (the login's store was made anew):
+		// the controller refuses before it journals anything, so asking
+		// again once with a fresh discover is safe for a write too.
+		if mid, derr := a.fleetMachineID(rctx, script, true); derr == nil {
+			call["machine_id"] = mid
+			res, machineID, err = fleetRPCRaw(rctx, script, call)
+		}
+	}
 	if err != nil {
 		var f *rpcFault
 		switch {

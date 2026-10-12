@@ -157,6 +157,8 @@
 #                                                   + fleet-alerts.sh event child-report)
 #   report-parent-remote                            bin/fleet-report-parent.sh (rail 1 → the hub outbox by
 #                                                   @origin_wid), fleet-lib.sh fleet_origin_canon
+#   report-parent-online-queued                     bin/fleet-hub-node.sh (deliver: an identity found here is
+#                                                   never «not now»), fleet-lib.sh fleet_window_okey (@fleet_role_def)
 #   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
@@ -6296,6 +6298,43 @@ drill_report_parent_remote() {
   [ "$rc" = 1 ] && case "$out" in "undelivered → "*) true ;; *) false ;; esac \
     || { WHY="a report with a lost parent address said [$out] rc=$rc, want undelivered → … exit 1"; return 1; }
   WHAT="另一台的父会话：报告按 @origin_wid 进 hub 发件箱（queued，exit 3）；地址丢了说 undelivered、exit 1，不再静默 exit 0"
+}
+
+# The parent is right here and online, and still every relay to it answered «not
+# now» (issue #3520): a session that TOOK the orchestrator role has no key of its
+# own, and `fleet-hub-node.sh deliver` found it by identity, asked
+# fleet_window_okey for its key, got nothing and exited 75 — the hub pushed it
+# again forever and the child read the endless retry as «its machine is offline».
+# (The hub half — an admin login and the same person's managed login are one relay
+# owner — is TestRelayOwnerAdminIsAlsoAPerson.)
+drill_report_parent_online_queued() {
+  CAP=60; local d="$WORK/rpoq" w t0 out rc U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
+  BREAK_SOCK="$WORK/sock-rpoq"
+  mkdir -p "$d/conf/fleets/rpoq" "$d/conf/control" "$d/main"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpoq/conf"
+  nt -f /dev/null new-session -d -s rpoq -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  rpoq() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+             CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD=true FLEET_PEER_RECEIPT_SECS=0 "$@"; }
+  (cd "$BIN" && rpoq python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
+  U=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpoq' _ "$BIN")
+  [ -n "$U" ] || { WHY="no fleet UUID could be minted"; return 1; }
+  # the orchestrator: took the role (issue #3114), binds no issue, its cwd no scratch
+  w=$(nt new-window -d -P -F '#{window_id}' -t rpoq -n orch -c "$WORK/home" 'exec sleep 600')
+  nt set-option -w -t "$w" @fleet_role worker \; set-option -w -t "$w" @fleet_role_def orchestrator \; \
+     set-option -w -t "$w" @fleet_id "$PF" \; set-option -w -t "$w" @claude_state 'done'
+  out=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_window_okey rpoq "$2"' _ "$BIN" "$w")
+  [ "$out" = orchestrator ] || { WHY="the role holder's own key read [$out], want orchestrator"; return 1; }
+  t0=$(now)
+  out=$(printf '{"id":"%s/acme-app:issue-41#1.1","kind":"child_report","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mini2","payload":{"child":"acme-app:issue-41","state":"merged","pr":"7","summary":"done","tier":"loud","msg":"[child-report] issue-41 merged"}}' \
+          "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="a child report to the online orchestrator by identity exited $rc [$out], want 0 (never «not now» for a window that is here)"; return 1; }
+  [ -s "$d/conf/fleets/rpoq/children/orchestrator.ndjson" ] \
+    || { WHY="the report was not booked under the role's key: $(ls "$d/conf/fleets/rpoq/children" 2>&1)"; return 1; }
+  out=$(printf '{"id":"%s/acme-app:issue-41#2.1","kind":"message","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mini2","payload":{"text":"a question"}}' \
+          "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="a message to the online orchestrator by identity exited $rc [$out], want 0"; return 1; }
+  WHAT="在线的编排（拿了角色、没有自己的键）按身份收 hub 推来的回报和消息：exit 0、记在 orchestrator 账本，不再 75「不在」让 hub 无限重推"
 }
 
 drill_cred_migration_client() {

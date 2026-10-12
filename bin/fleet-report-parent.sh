@@ -636,7 +636,13 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
           fi
           bash "$BIN/fleet-peer-queue.sh" note -L "$sess" --rid "$_rid" --state QUEUED --to "$owid" \
             --kind report --via hub --detail "$_how" 2>/dev/null || :
-          printf 'queued → %s%s（对方不在线，上线后补送 · %s）: %s\n' "${owid#*/}" "${_node:+ on ${_node%:lost}}" "$_how" "$st"
+          # Which one it is in that parent's queue (issue #3520) — the hub pushes
+          # them again the beat the parent is live, and each receipt turns its row
+          # DELIVERED in this book.
+          _qn=$(bash "$BIN/fleet-peer-queue.sh" pending -L "$sess" --to "$owid" 2>/dev/null)
+          case "$_qn" in ''|*[!0-9]*|0) _qn='' ;; esac
+          printf 'queued → %s%s（已排队%s，对方能收时自动补送 · %s）: %s\n' "${owid#*/}" "${_node:+ on ${_node%:lost}}" \
+            "${_qn:+，第 ${_qn} 条}" "$_how" "$st"
           exit 3
         fi
       fi

@@ -392,11 +392,15 @@ fkey=${FROM#*/}
 pfwin=''
 if fleet_is_fid "$pkey"; then
   pfwin=$(fleet_win_for_fid "$pkey" "$sock" 2>/dev/null) || pfwin=''
-  _pk=''; [ -n "$pfwin" ] && _pk=$(fleet_window_okey "$home" "$pfwin" 2>/dev/null)
   # Not live here (yet): the hub holds it and pushes it again the beat this
   # machine's inventory lists that identity (issue #1647).
-  [ -n "$_pk" ] || die 75 "not now: parent $pkey has no live window here"
-  pkey=$_pk
+  [ -n "$pfwin" ] || die 75 "not now: parent $pkey has no live window here"
+  # Live here. Booked under the key it answers to now; a window with no key at
+  # all (a no-repo session) is booked under its identity — never «not now» for a
+  # window that is right here (issue #3520: the hub re-pushed it forever, and the
+  # sender read the endless retry as its parent being offline).
+  _pk=$(fleet_window_okey "$home" "$pfwin" 2>/dev/null)
+  [ -n "$_pk" ] && pkey=$_pk
 fi
 
 if [ "$KIND" = message ]; then

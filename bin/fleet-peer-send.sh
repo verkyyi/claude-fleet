@@ -139,7 +139,7 @@ if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 # unless the target window works that repo (a bare `issue:<N>` matched by number).
 HUB_REPO=''
 hub_send() {
-  local full="$1" node="$2" where me='' mysess='' payload suf f how why
+  local full="$1" node="$2" where me='' mysess='' payload suf f how why qn
   where=${node%:lost}; where=${where:-another machine}
   [ -n "${TMUX:-}" ] && mysess=$(fleet_current_session 2>/dev/null)
   [ -n "${TMUX_PANE:-}" ] && [ -n "$mysess" ] && me=$(fleet_worker_id_key "$mysess" "$TMUX_PANE" 2>/dev/null)
@@ -190,7 +190,10 @@ hub_send() {
     'the hub is not reachable'*) zh='本机还没交给入口，入口可达后补送' ;;
     *) zh='对方不在线，上线后补送' ;;
   esac
-  printf 'queued → %s%s（%s · %s）\n' "${full#*/}" "${node:+ on ${node%:lost}}" "$zh" "$how"
+  # Which one it is in that recipient's queue (issue #3520).
+  qn=$(bash "$BIN/fleet-peer-queue.sh" pending -L "$mysess" --to "$full" 2>/dev/null)
+  case "$qn" in ''|*[!0-9]*|0) qn='' ;; esac
+  printf 'queued → %s%s（%s%s · %s）\n' "${full#*/}" "${node:+ on ${node%:lost}}" "$zh" "${qn:+ · 已排队第 ${qn} 条}" "$how"
   receipt_watch "$mysess" "$me#$suf" "${full#*/}"
   exit 3
 }

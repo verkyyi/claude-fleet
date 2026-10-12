@@ -9625,23 +9625,29 @@ fleet_human_hold_note() {
 # @origin carries; nothing when it has none. fleet_origin_key's rule, for any
 # window rather than only the caller's pane.
 fleet_window_okey() {
-  local sess="${1:-}" t="${2:-}" o iss owt pth k pre
+  local sess="${1:-}" t="${2:-}" o iss owt pth k pre rdef
   [ -n "$t" ] || return 0
   o=$(_fleet_tmux "$sess" display-message -p -t "$t" \
-        '#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@fleet_role_def}|#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
+  rdef=${o%%|*}; o=${o#*|}
   [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }   # issue #2129
   [ "${o%%|*}" = steward ] && { printf 'steward'; return 0; }             # issue #2670
   o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
-  pre=$(_fleet_key_prefix "$sess" "$t") || return 0
+  # A session that TOOK the role (issue #3114, `@fleet_role_def`) and has no key of
+  # its own answers to the role's name — fleet_origin_key's rule (issue #3439). Read
+  # here too (issue #3520): without it a relay to the orchestrator by identity found
+  # its window and still answered «not now», and the hub pushed it again forever.
+  case "$rdef" in orchestrator|steward) ;; *) rdef='' ;; esac
+  pre=$(_fleet_key_prefix "$sess" "$t") || { printf '%s' "$rdef"; return 0; }
   case "$iss" in
     ''|*[!0-9]*) : ;;
     *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
   esac
   k=$(fleet_scratch_key "$owt")
   [ -z "$k" ] && k=$(fleet_scratch_key "$pth")
-  [ -n "$k" ] && printf '%s%s' "$pre" "$k"
+  if [ -n "$k" ]; then printf '%s%s' "$pre" "$k"; else printf '%s' "$rdef"; fi
   return 0
 }
 
