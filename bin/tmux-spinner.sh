@@ -116,6 +116,53 @@ _lw_filter() {
          seen[id] = 1; print substr($0, i + 1) }'
 }
 
+# _lw_table <raw> — _lw_filter without a fork or a file (issue #3522): sets W_TABLE
+# to the filtered rows, one per line. Builtins only, so a frame that reads a fleet
+# forks just its tmux.
+_lw_table() {
+  W_TABLE='' _lt_seen=' ' _RS=$1
+  while _pop; do
+    case "$L" in
+      @[0-9]*:\$[0-9]*:?*' '*)
+        _lt_pre=${L%% *}; _lt_id=${_lt_pre%%:*}; _lt_s=${_lt_pre#*:}; _lt_s=${_lt_s#*:}
+        case "$_lt_s" in *@view-*) continue ;; esac
+        case "$_lt_seen" in *" $_lt_id "*) continue ;; esac
+        _lt_seen="$_lt_seen$_lt_id "
+        W_TABLE="$W_TABLE${L#* }$NL" ;;
+      *) W_TABLE="$W_TABLE$L$NL" ;;      # not a _lw_fmt row (a test shim's canned rows): untouched
+    esac
+  done
+}
+
+# No here-documents in this daemon (issue #3522). macOS's bash 3.2 — /bin/sh here —
+# writes EVERY `<<EOF` / `<<<` to a fresh /var/tmp/sh-thd-* file and unlinks it,
+# whatever $TMPDIR says; at 8 frames a second per login that was the largest single
+# source of file events on a shared machine, and fseventsd ran at 100 % matching
+# them. A string is walked with these two instead — builtins only, no file, no fork:
+#   _RS=$text; while _pop; do _rd "$L" a b c; …; done
+# _pop moves the first line of $_RS into $L (rc 1 once $_RS is empty); a loop body
+# must not start another _pop walk.
+_pop() {
+  [ -n "$_RS" ] || return 1
+  case "$_RS" in
+    *"$NL"*) L=${_RS%%"$NL"*}; _RS=${_RS#*"$NL"} ;;
+    *) L=$_RS; _RS='' ;;
+  esac
+}
+# _rd <line> <var>… — `IFS=' ' read -r <var>…` from a string: space-separated
+# fields, runs of spaces collapse, the last variable takes the rest of the line.
+_rd() {
+  _rd_l=$1; shift
+  while [ "$#" -gt 1 ]; do
+    _rd_l=${_rd_l#"${_rd_l%%[! ]*}"}
+    eval "$1=\${_rd_l%% *}"
+    case "$_rd_l" in *' '*) _rd_l=${_rd_l#* } ;; *) _rd_l='' ;; esac
+    shift
+  done
+  _rd_l=${_rd_l#"${_rd_l%%[! ]*}"}; _rd_l=${_rd_l%"${_rd_l##*[! ]}"}
+  eval "$1=\$_rd_l"
+}
+
 # Where `tmux -L <label>` puts its socket: tmux's own rule, resolved from THIS
 # process's environment exactly as the tmux client below will resolve it. Used
 # only to find the hook's dirty marker (DIRTY MARKER, below the sweeps).
@@ -302,8 +349,10 @@ stuck_check() {
   for sock in ${ANIM_SOCKS-$SOCKETS}; do
   TMUX_N=$((TMUX_N + 1))
   wl=$(tmux -L "$sock" list-windows -a -F "$(_lw_fmt '#{window_id} #{@claude_state} #{window_activity} #{@sidebar_worker}')" 2>/dev/null) || continue
-  wl=$(printf '%s\n' "$wl" | _lw_filter)
-  while read -r wid st act worker; do
+  _lw_table "$wl"; wl=$W_TABLE
+  _RS=$wl
+  while _pop; do
+    _rd "$L" wid st act worker
     [ -n "$wid" ] || continue
     [ "$st" = working ] || continue
     # A sidebar's output is window activity too. While it is present, measure
@@ -339,9 +388,7 @@ stuck_check() {
         demoted=1 ;;
       *) new="$new$skey|" ;;                         # 1st strike -> arm for next check
     esac
-  done <<EOF
-$wl
-EOF
+  done
   done
   STUCK_STRIKES="$new"
   STUCK_SCREENS="$new_screens"
@@ -528,8 +575,10 @@ needs_check() {
     # the fields parsing when an option is empty (issue #105).
     TMUX_N=$((TMUX_N + 1))
     wl=$(tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$needs_fmt")" 2>/dev/null) || continue
-    wl=$(printf '%s\n' "$wl" | _lw_filter)
-    while read -r wid st nsub ts agent; do
+    _lw_table "$wl"; wl=$W_TABLE
+    _RS=$wl
+    while _pop; do
+      _rd "$L" wid st nsub ts agent
       [ -n "$wid" ] || continue
       [ "$st" = needs ] || continue                       # ONLY red windows are candidates
       [ "$nsub" = restore ] && continue                   # crash-restore's park (#1265): no turn to read; its own next turn clears it
@@ -587,9 +636,7 @@ needs_check() {
       _hub_nudge
       printf '%s  %-24s %s\n' "$(date +%H:%M:%S)" "$sock:$wid" "$msg" >> "$NEEDS_LOG"
       touched=$((touched + 1))
-    done <<EOF
-$wl
-EOF
+    done
   done
   printf '%s %s\n' "$nows" "$new" > "$NEEDS_STRIKE_F" 2>/dev/null
   # The pass line (issue #675). `armed=` is the verbatim table just written, so the
@@ -669,22 +716,24 @@ degen_check() {
   for _dsock in ${ANIM_SOCKS-$SOCKETS}; do
     TMUX_N=$((TMUX_N + 1))
     _dwl=$(tmux -L "$_dsock" list-windows -a -F "$(_lw_fmt '#{window_id} #{@claude_state} #{?@sidebar_worker,#{@sidebar_worker},-} #{?@degenerate_ts,#{@degenerate_ts},0}')" 2>/dev/null) || continue
-    _dwl=$(printf '%s\n' "$_dwl" | _lw_filter)
+    _lw_table "$_dwl"; _dwl=$W_TABLE
     set --
-    while read -r _dwid _dst _dworker _dts; do
+    _RS=$_dwl
+    while _pop; do
+      _rd "$L" _dwid _dst _dworker _dts
       [ "$_dst" = working ] || continue
       case "$_dts" in ''|*[!0-9]*) _dts=0 ;; esac
       [ $(( _dnow - _dts )) -ge "$DEGEN_COOLDOWN" ] || continue
       _dtgt=$_dwid; [ "$_dworker" = - ] || _dtgt=$_dworker   # the AGENT pane, never the sidebar
       [ $# -gt 0 ] && set -- "$@" ';'
       set -- "$@" display-message -p -t "$_dtgt" "@@fleet-degenerate@@ $_dwid #{pane_id}" ';' capture-pane -p -t "$_dtgt"
-    done <<EOF
-$_dwl
-EOF
+    done
     [ $# -gt 0 ] || continue
     TMUX_N=$((TMUX_N + 1))
     _dhits=$(tmux -L "$_dsock" "$@" 2>/dev/null | LC_ALL=C awk -v min="$DEGEN_LINES" -f "$BIN/fleet-degenerate.awk" 2>/dev/null)
-    while read -r _dh _dwid _dpane _drows _dunit; do
+    _RS=$_dhits
+    while _pop; do
+      _rd "$L" _dh _dwid _dpane _drows _dunit
       [ "$_dh" = HIT ] || continue
       case "$_dprev" in
         *"|$_dsock:$_dwid|"*)                       # named by the last sweep too → act
@@ -692,9 +741,7 @@ EOF
             --rows "$_drows" --sample "$_dunit" >/dev/null 2>&1 ;;
         *) _dnew="$_dnew$_dsock:$_dwid|" ;;          # first strike → arm
       esac
-    done <<EOF
-$_dhits
-EOF
+    done
   done
   printf '%s %s\n' "$_dnow" "$_dnew" > "$DEGEN_STRIKE_F" 2>/dev/null
 }
@@ -741,9 +788,9 @@ step=1
 # the slot was filled for, so a reshuffled socket list invalidates exactly the slots
 # that moved. Fields: AGE (frame-equivalents since the last read), ANIM (1 = the last
 # read showed an animated window), TOK/NTOK/AGG (the tokens this socket contributed
-# to NEW / NEW_NEEDS / AGG, replayed on a frame that skips it). The window table
-# itself is a FILE, $CMDF.<label>.wins, written straight by tmux and read by `read`
-# and awk — so a cached frame forks nothing.
+# to NEW / NEW_NEEDS / AGG, replayed on a frame that skips it), WTAB (the window
+# table, kept in this shell — issue #3522: it used to be a file rewritten every
+# frame) — so a cached frame forks nothing and writes nothing.
 ANIM_SOCKS=''    # sockets whose last read showed an animated window  → stuck_check
 NEEDS_SOCKS=''   # sockets whose last read showed a `needs` window    → needs_check
 WFMT='#{session_name}:#{window_index} #{?@worker_lifecycle,#{@worker_lifecycle},#{?@claude_state,#{@claude_state},-}} #{?@claude_needs,#{@claude_needs},-} #{window_name}'
@@ -839,8 +886,6 @@ while :; do
   n=0
   for sock in $SOCKETS; do
     n=$((n + 1))
-    cmdf="$CMDF.$sock"
-    winsf="$CMDF.$sock.wins"
     eval "c_sock=\${C_SOCK_$n-} c_age=\${C_AGE_$n:-0} c_anim=\${C_ANIM_$n:-0}"
 
     # --- does this socket need tmux this frame? (issue #887) --------------------
@@ -880,20 +925,30 @@ while :; do
     # A quiet socket reads FIRST, so a window that just turned `working` starts
     # spinning this frame, not the next. An animated one already holds a table at
     # most one frame old (read by last frame's write) and reads AFTER building.
+    # The table lives in this shell (C_WTAB_<n>), never in a file (issue #3522): a
+    # file rewritten every frame was a stream of file events for fseventsd.
     if [ "$c_anim" != 1 ]; then
-      if ! tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" > "$winsf.raw" 2>/dev/null; then
+      TMUX_N=$((TMUX_N + 1))
+      if ! _raw=$(command tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" 2>/dev/null); then
         # The server is gone (or going): forget the slot, and re-probe the socket
         # list on the next frame instead of the next refresh.
         eval "C_SOCK_$n=''"; SOCK_KNOWN=' '; socc=$SOCK_EVERY
         continue
       fi
-      _lw_filter < "$winsf.raw" > "$winsf"
+      _lw_table "$_raw"
+    else
+      eval "W_TABLE=\${C_WTAB_$n-}"
     fi
 
     changed=0
     anim=0 needy=0
     tok_s='' ntok_s='' agg_s=''
-    : > "$cmdf"
+    # This frame's writes, as ONE tmux command list in "$@" (`;`-separated) — no
+    # command file (issue #3522). The needs badge's per-session counts (NM: one
+    # "<session> <count>" line per session, first-seen order) are tallied in the
+    # same walk, so the table is read once and nothing is forked for it.
+    set --
+    NM=$NL
     # Fields SPACE-separated; a '-' placeholder for an EMPTY @claude_state keeps the
     # fields parsing cleanly (issue #105) — else an empty middle field would
     # collapse the double space and shift #{window_name} into the state slot. The
@@ -904,8 +959,21 @@ while :; do
     # wname reads the trailing #{window_name} so it never bleeds into $nsub (the
     # case matches $nsub exactly); the name is used only by the awk tally below.
     # shellcheck disable=SC2034  # wname read only to keep $st clean
-    while IFS=' ' read -r win st nsub wname; do
+    _RS=$W_TABLE
+    while _pop; do
+      _rd "$L" win st nsub wname
       [ -z "$win" ] && continue
+      _nms=${win%:*}
+      case "$NM" in *"$NL$_nms "*) : ;; *) NM="$NM$_nms 0$NL" ;; esac
+      # plan(hub) + workers count into the badge; only dash/backlog (non-claude
+      # panels) are excluded (issue #368).
+      if [ "$st" = needs ]; then
+        case "$wname" in
+          dash|backlog) : ;;
+          *) _nmb=${NM#*"$NL$_nms "}; _nmc=${_nmb%%"$NL"*}
+             NM="${NM%%"$NL$_nms "*}$NL$_nms $((_nmc + 1))$NL${_nmb#*"$NL"}" ;;
+        esac
+      fi
       # wst = window-status-style (the BACKGROUND). Only 'needs' gets bold red;
       # every other state is font-color-only (no bg) — this also clears any
       # stale per-window styling left by an earlier design.
@@ -937,14 +1005,15 @@ while :; do
       case "$LAST" in
         *"|$token|"*) : ;;
         *)
-          printf 'set-window-option -t %s @spin "%s"\n' "$win" "$glyph" >> "$cmdf"
-          printf 'set-window-option -t %s @sfg "%s"\n'  "$win" "$sfg"   >> "$cmdf"
-          printf 'set-window-option -t %s @nfg "%s"\n'  "$win" "$nfg"   >> "$cmdf"
-          printf 'set-window-option -t %s window-status-style "%s"\n' "$win" "$wst" >> "$cmdf"
+          [ "$#" -gt 0 ] && set -- "$@" ';'
+          set -- "$@" set-window-option -t "$win" @spin "$glyph" ';' \
+                      set-window-option -t "$win" @sfg "$sfg" ';' \
+                      set-window-option -t "$win" @nfg "$nfg" ';' \
+                      set-window-option -t "$win" window-status-style "$wst"
           changed=1 ;;
       esac
       tok_s="$tok_s$token|"
-    done < "$winsf"
+    done
 
     # --- needs signal: one unified "● N" badge (issues #105, #166, #368) --------
     # PER SESSION: @attn_needs = count of needy windows, counting the plan
@@ -952,24 +1021,19 @@ while :; do
     # excluding only the non-claude panels dash/backlog. status-left renders it as a
     # red "● N" badge (hidden at 0, with a render-time active-window discount).
     # A needy hub now lands in this one number instead of the retired
-    # per-fleet beacon flag, so the ⌂ icon is nav-only. Reuses this socket's scan
-    # ($winsf); change-detected + batched into this socket's $cmdf so it only re-sets
-    # when it actually moves.
-    needs_map=$(awk '
-      { n = split($1, a, ":"); s = a[1]; for (k = 2; k < n; k++) s = s ":" a[k]
-        if (!(s in seen)) { seen[s] = 1; ord[++o] = s }
-        # plan(hub) + workers count into the badge; only dash/backlog (non-claude
-        # panels) are excluded (issue #368). $4 is the window name: $3 is the
-        # @claude_needs subtype added by issue #640 — keep this in step with $WFMT.
-        if ($2 == "needs" && $4 !~ /^(dash|backlog)$/) c[s]++ }
-      END { for (k = 1; k <= o; k++) { s = ord[k]; printf "%s %d\n", s, c[s] + 0 } }
-    ' "$winsf")
-    while read -r nsess ncnt; do
+    # per-fleet beacon flag, so the ⌂ icon is nav-only. Counted in the table walk
+    # above (NM); change-detected + batched into this frame's command list so it
+    # only re-sets when it actually moves.
+    needs_map=${NM#"$NL"}
+    _RS=$needs_map
+    while _pop; do
+      _rd "$L" nsess ncnt
       [ -z "$nsess" ] && continue
       ntok="$nsess=$ncnt"
       case "$LAST_NEEDS" in
         *"|$ntok|"*) : ;;
-        *) printf 'set-option -t %s @attn_needs "%s"\n' "$nsess" "$ncnt" >> "$cmdf"; changed=1 ;;
+        *) [ "$#" -gt 0 ] && set -- "$@" ';'
+           set -- "$@" set-option -t "$nsess" @attn_needs "$ncnt"; changed=1 ;;
       esac
       ntok_s="$ntok_s$ntok|"
       # Cross-fleet feed (issues #236, #368): record THIS session's needy-WINDOW
@@ -977,36 +1041,40 @@ while :; do
       # needy windows wait elsewhere — the orange cross-fleet ● shows a WINDOW count
       # (same unit as the local ● badge), not a fleet count.
       agg_s="$agg_s$nsess $sock $ncnt$NL"
-    done <<EOF
-$needs_map
-EOF
+    done
 
     # Apply. An animated socket's write carries its NEXT read on the same tmux
     # process — list FIRST, so a write that fails (a window closed mid-frame) cannot
     # cancel the read, and it is exact anyway: the write touches only
     # @spin/@sfg/@nfg/window-status-style, none of which WFMT reads.
+    # A command list stops at its first error (a source-file read on past it), so a
+    # write that failed publishes none of this socket's tokens: the next frame sends
+    # every change again, against a table that no longer has the closed window.
+    _wrc=0
     if [ "$c_anim" = 1 ]; then
+      TMUX_N=$((TMUX_N + 1))
       if [ "$changed" = 1 ]; then
-        tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" ';' source-file "$cmdf" > "$winsf.raw" 2>/dev/null
+        _raw=$(command tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" ';' "$@" 2>/dev/null) || _wrc=1
       else
-        tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" > "$winsf.raw" 2>/dev/null
+        _raw=$(command tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" 2>/dev/null)
       fi
-      _lw_filter < "$winsf.raw" > "$winsf"
-    else
-      [ "$changed" = 1 ] && tmux -L "$sock" source-file "$cmdf" 2>/dev/null
+      _lw_table "$_raw"
+    elif [ "$changed" = 1 ]; then
+      tmux -L "$sock" "$@" 2>/dev/null || _wrc=1
     fi
+    [ "$_wrc" = 0 ] || { tok_s=''; ntok_s=''; }
 
     NEW="$NEW$tok_s"; NEW_NEEDS="$NEW_NEEDS$ntok_s"; AGG="$AGG$agg_s"
     [ "$anim" = 1 ] && anim_socks="$anim_socks $sock"
     [ "$needy" = 1 ] && needs_socks="$needs_socks $sock"
     # A live server always has a window, so an EMPTY table is one that went away
     # mid-frame: forget the slot (it re-reads quiet-style) and re-probe the list.
-    if [ -s "$winsf" ]; then
+    if [ -n "$W_TABLE" ]; then
       c_sock=$sock; SOCK_KNOWN="$SOCK_KNOWN$sock "
     else
       c_sock=''; anim=0; SOCK_KNOWN=' '; socc=$SOCK_EVERY
     fi
-    eval "C_SOCK_$n=\$c_sock C_AGE_$n=0 C_ANIM_$n=\$anim C_NEEDY_$n=\$needy C_TOK_$n=\$tok_s C_NTOK_$n=\$ntok_s C_AGG_$n=\$agg_s"
+    eval "C_SOCK_$n=\$c_sock C_AGE_$n=0 C_ANIM_$n=\$anim C_NEEDY_$n=\$needy C_TOK_$n=\$tok_s C_NTOK_$n=\$ntok_s C_AGG_$n=\$agg_s C_WTAB_$n=\$W_TABLE"
   done
   LAST="$NEW"
   LAST_NEEDS="$NEW_NEEDS"
@@ -1027,15 +1095,17 @@ EOF
   NEW_OTHER='|'
   if [ -n "$AGG" ]; then
     total_windows=0
-    while read -r asess asock acnt; do
+    _RS=$AGG
+    while _pop; do
+      _rd "$L" asess asock acnt
       [ -n "$asess" ] || continue
       case "$acnt" in ''|*[!0-9]*) acnt=0 ;; esac
       total_windows=$((total_windows + acnt))
-    done <<EOF
-$AGG
-EOF
-    otouched=''
-    while read -r asess asock acnt; do
+    done
+    otouched='' opend=''
+    _RS=$AGG
+    while _pop; do
+      _rd "$L" asess asock acnt
       [ -n "$asess" ] || continue
       case "$acnt" in ''|*[!0-9]*) acnt=0 ;; esac
       oother=$((total_windows - acnt))
@@ -1043,19 +1113,23 @@ EOF
       case "$LAST_OTHER" in
         *"|$otok|"*) : ;;
         *)
-          ocmd="$CMDF.$asock.other"
-          case " $otouched " in
-            *" $asock "*) : ;;
-            *) : > "$ocmd"; otouched="$otouched $asock" ;;
-          esac
-          printf 'set-option -t %s @attn_other_windows "%s"\n' "$asess" "$oother" >> "$ocmd" ;;
+          case " $otouched " in *" $asock "*) : ;; *) otouched="$otouched $asock" ;; esac
+          opend="$opend$asock $asess $oother$NL" ;;
       esac
       NEW_OTHER="$NEW_OTHER$otok|"
-    done <<EOF
-$AGG
-EOF
+    done
+    # One command list per touched socket, in "$@" — no command file (issue #3522);
+    # a list that failed (a session gone mid-frame) re-sends everything next frame.
     for asock in $otouched; do
-      tmux -L "$asock" source-file "$CMDF.$asock.other" 2>/dev/null
+      set --
+      _RS=$opend
+      while _pop; do
+        _rd "$L" _osock _osess _oval
+        [ "$_osock" = "$asock" ] || continue
+        [ "$#" -gt 0 ] && set -- "$@" ';'
+        set -- "$@" set-option -t "$_osess" @attn_other_windows "$_oval"
+      done
+      tmux -L "$asock" "$@" 2>/dev/null || NEW_OTHER='|'
     done
   fi
   LAST_OTHER="$NEW_OTHER"
