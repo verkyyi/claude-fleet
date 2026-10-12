@@ -30,7 +30,7 @@ admin_sandbox() {
     chmod +x "$sb/admin/$s" "$sb/rel/bin/$s"
   done
   cp "$BIN/fleet_admin_ticket.py" "$BIN/fleet_ed25519.py" "$sb/rel/bin/"
-  printf 'bin=%s\nmachine=m4\n' "$sb/rel/bin" > "$sb/admin/admin.conf"
+  printf 'bin=%s\nmachine=mac-a\n' "$sb/rel/bin" > "$sb/admin/admin.conf"
   tk pub "$sb/key" > "$sb/admin/account.pub"
   : > "$sb/ran"
 }
@@ -76,19 +76,19 @@ drill_fleetadmin_forged_op() {
   sb="$WORK/admin"; admin_sandbox "$sb"
   exp=$(( $(date +%s) + 600 ))
   n=0123456789abcdef0123456789abcdef
-  good=$(tk sign "$sb/key" remove alice m4 "$n" "$exp")
+  good=$(tk sign "$sb/key" remove alice mac-a "$n" "$exp")
   t0=$(now)
   local why ticket
   while IFS='|' read -r why ticket; do
     remove "$sb" --ticket "$ticket" alice --keep-home --apply
     [ "$RC" = 3 ] && [ ! -s "$sb/ran" ] || { WHY="$why: rc $RC, ran: $(cat "$sb/ran"): $OUT"; return 1; }
   done <<EOF
-forged|$(tk sign "$sb/other" remove alice m4 "$n" "$exp")
-another login|$(tk sign "$sb/key" remove bob m4 "$n" "$exp")
-another machine|$(tk sign "$sb/key" remove alice m5 "$n" "$exp")
-a create's ticket|$(tk sign "$sb/key" create alice m4 "$n" "$exp")
-a recycle's ticket|$(tk sign "$sb/key" reset alice m4 "$n" "$exp")
-expired|$(tk sign "$sb/key" remove alice m4 "$n" "$(( $(date +%s) - 1 ))")
+forged|$(tk sign "$sb/other" remove alice mac-a "$n" "$exp")
+another login|$(tk sign "$sb/key" remove bob mac-a "$n" "$exp")
+another machine|$(tk sign "$sb/key" remove alice mac-b "$n" "$exp")
+a create's ticket|$(tk sign "$sb/key" create alice mac-a "$n" "$exp")
+a recycle's ticket|$(tk sign "$sb/key" reset alice mac-a "$n" "$exp")
+expired|$(tk sign "$sb/key" remove alice mac-a "$n" "$(( $(date +%s) - 1 ))")
 not a ticket|--pub
 EOF
   remove "$sb" alice --keep-home --apply
@@ -104,7 +104,7 @@ EOF
   [ "$RC" = 3 ] && [ ! -s "$sb/ran" ] && printf '%s' "$OUT" | grep -q 'already used' \
     || { WHY="a replay of the used ticket: rc $RC, ran: $(cat "$sb/ran"): $OUT"; return 1; }
   # the recycle mode is the same script; its own ticket says reset
-  remove "$sb" --ticket "$(tk sign "$sb/key" reset alice m4 fedcba9876543210fedcba9876543210 "$exp")" alice --recycle --keep-home --apply
+  remove "$sb" --ticket "$(tk sign "$sb/key" reset alice mac-a fedcba9876543210fedcba9876543210 "$exp")" alice --recycle --keep-home --apply
   [ "$RC" = 0 ] && grep -q -- '--recycle' "$sb/ran" || { WHY="a recycle with its own ticket: rc $RC: $OUT"; return 1; }
   # and the gate under any other name runs nothing
   : > "$sb/ran"

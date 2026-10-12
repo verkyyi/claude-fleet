@@ -36,18 +36,18 @@ func connectSeat(t *testing.T, h *harness, label, hostname, osUser string) *flee
 	return n
 }
 
-// seatRig: m4's admin login (the old agent) and its admin seat, both up.
+// seatRig: mac-a's admin login (the old agent) and its admin seat, both up.
 func seatRig(t *testing.T, key ed25519.PrivateKey) (*harness, *fleetNode, *fleetNode) {
 	t.Helper()
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi", "_fleetadmin"}
+	h.srv.FleetAdmins = []string{"bob", "_fleetadmin"}
 	h.srv.SetAccountKey(key)
-	old := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	seat := connectSeat(t, h, "m4-seat", "m4", "_fleetadmin")
-	waitFor(t, 3*time.Second, "both admin links named m4", func() bool {
+	old := connectNode(t, h, "maca-op", "mac-a", "bob", true)
+	seat := connectSeat(t, h, "maca-seat", "mac-a", "_fleetadmin")
+	waitFor(t, 3*time.Second, "both admin links named mac-a", func() bool {
 		named := 0
 		h.srv.nodes.each(func(_ string, c *nodeConn) {
-			if c.hostname() == "m4" {
+			if c.hostname() == "mac-a" {
 				named++
 			}
 		})
@@ -71,8 +71,8 @@ func TestAccountTicketSeatGetsSignedOps(t *testing.T) {
 	key := testAccountKey()
 	pub := key.Public().(ed25519.PublicKey)
 	h, old, seat := seatRig(t, key)
-	if id, _ := h.srv.nodes.openerFor("m4"); id != seat.id {
-		t.Fatalf("m4's opener is %q; want the seat %q", id, seat.id)
+	if id, _ := h.srv.nodes.openerFor("mac-a"); id != seat.id {
+		t.Fatalf("mac-a's opener is %q; want the seat %q", id, seat.id)
 	}
 	check := func(m control.Message, op control.AccountOp, kind string) {
 		t.Helper()
@@ -80,14 +80,14 @@ func TestAccountTicketSeatGetsSignedOps(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: ticket %q: %v", kind, op.Ticket, err)
 		}
-		if tk.Op != kind || tk.Login != op.Login || tk.Machine != "m4" || tk.Nonce != m.OpID {
+		if tk.Op != kind || tk.Login != op.Login || tk.Machine != "mac-a" || tk.Nonce != m.OpID {
 			t.Fatalf("%s: ticket %+v for op %+v (op_id %s)", kind, tk, op, m.OpID)
 		}
 		if exp := time.Unix(tk.Exp, 0); exp.After(time.Now().Add(control.AccountTicketTTL + time.Minute)) {
 			t.Fatalf("%s: ticket good until %v", kind, exp)
 		}
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-a"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	m, op := expectAccountOp(t, seat.tnode)
@@ -96,9 +96,9 @@ func TestAccountTicketSeatGetsSignedOps(t *testing.T) {
 		t.Fatalf("the admin login's old agent was sent %+v", got)
 	}
 	sendResult(t, seat.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, "WangXiaoMing", "m4", store.AccountActive)
+	waitState(t, h, "WangXiaoMing", "mac-a", store.AccountActive)
 
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: "WangXiaoMing", Hostname: "mac-a"}); code != 200 {
 		t.Fatalf("remove: HTTP %d", code)
 	}
 	m, op = expectAccountOp(t, seat.tnode)
@@ -110,10 +110,10 @@ func TestAccountTicketFallsBackToTheAdminLogin(t *testing.T) {
 	h, old, seat := seatRig(t, testAccountKey())
 	_ = seat.c.CloseNow()
 	waitFor(t, 3*time.Second, "the seat's link gone", func() bool {
-		id, _ := h.srv.nodes.openerFor("m4")
+		id, _ := h.srv.nodes.openerFor("mac-a")
 		return id == old.id
 	})
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-a"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	if _, op := expectAccountOp(t, old.tnode); op.Ticket != "" {
@@ -126,10 +126,10 @@ func TestAccountTicketFallsBackToTheAdminLogin(t *testing.T) {
 // the op exactly as before.
 func TestAccountTicketOffAddsNothing(t *testing.T) {
 	h, old, seat := seatRig(t, nil)
-	if id, _ := h.srv.nodes.openerFor("m4"); id != old.id {
-		t.Fatalf("m4's opener is %q with no key; want the admin login %q", id, old.id)
+	if id, _ := h.srv.nodes.openerFor("mac-a"); id != old.id {
+		t.Fatalf("mac-a's opener is %q with no key; want the admin login %q", id, old.id)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-a"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	if _, op := expectAccountOp(t, old.tnode); op.Ticket != "" {

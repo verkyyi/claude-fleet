@@ -11,7 +11,7 @@ import (
 // same key (seed 00..1f): ed25519 is deterministic and the payload bytes are
 // Go's json.Marshal of AccountTicket, so the hub and the machine's verifier
 // agree byte for byte (claude-fleet#3557).
-const pyTicket = "v1.eyJvcCI6InJlbW92ZSIsImxvZ2luIjoiYWxpY2UiLCJtYWNoaW5lIjoibTQiLCJub25jZSI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiZXhwIjo0MTAyNDQ0ODAwfQ.RafOrF222-Djsa-hAb8AtFdJw3O36lrf3iqoeGQbzHeWNnPQ-dBLkcvG1mcu952EsMRcHo5PTR8MDBuaXJYQCA"
+const pyTicket = "v1.eyJvcCI6InJlbW92ZSIsImxvZ2luIjoiYWxpY2UiLCJtYWNoaW5lIjoibWFjLWEiLCJub25jZSI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiZXhwIjo0MTAyNDQ0ODAwfQ.9qry3jCBx_1_1X2-CDhw9Gmj0_TP0-crsbCyR6XriMmH148rBKjxDodlGuKWlFS38dZNAboZVenlkjcCJcjKCQ"
 
 func ticketKey() ed25519.PrivateKey {
 	seed := make([]byte, ed25519.SeedSize)
@@ -23,7 +23,7 @@ func ticketKey() ed25519.PrivateKey {
 
 func TestAccountTicketMatchesTheMachineVerifier(t *testing.T) {
 	key := ticketKey()
-	got, err := SignAccountTicket(key, AccountTicket{Op: AccountRemove, Login: "alice", Machine: "m4",
+	got, err := SignAccountTicket(key, AccountTicket{Op: AccountRemove, Login: "alice", Machine: "mac-a",
 		Nonce: "0123456789abcdef0123456789abcdef", Exp: 4102444800})
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestAccountTicketMatchesTheMachineVerifier(t *testing.T) {
 		t.Fatalf("Go's ticket\n%s\nis not the Python verifier's\n%s", got, pyTicket)
 	}
 	tk, err := VerifyAccountTicket(key.Public().(ed25519.PublicKey), pyTicket, time.Unix(4102444799, 0))
-	if err != nil || tk.Login != "alice" || tk.Op != AccountRemove || tk.Machine != "m4" {
+	if err != nil || tk.Login != "alice" || tk.Op != AccountRemove || tk.Machine != "mac-a" {
 		t.Fatalf("verify: %+v %v", tk, err)
 	}
 }
@@ -44,7 +44,7 @@ func TestAccountTicketRefusesForgedExpiredMalformed(t *testing.T) {
 	pub := key.Public().(ed25519.PublicKey)
 	now := time.Unix(4102444799, 0)
 	_, other, _ := ed25519.GenerateKey(nil)
-	forged, _ := SignAccountTicket(other, AccountTicket{Op: AccountRemove, Login: "alice", Machine: "m4",
+	forged, _ := SignAccountTicket(other, AccountTicket{Op: AccountRemove, Login: "alice", Machine: "mac-a",
 		Nonce: "0123456789abcdef0123456789abcdef", Exp: 4102444800})
 	p64, s64, _ := strings.Cut(strings.TrimPrefix(pyTicket, "v1."), ".")
 	tampered := "v1.X" + p64[1:] + "." + s64
