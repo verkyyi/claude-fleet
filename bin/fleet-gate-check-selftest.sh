@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # rows/out/j/rc are read inside check's eval strings
 # fleet-gate-check-selftest.sh — bin/fleet-gate-check.sh (issue #3574, EPIC #3569
 # C4): every item forged passing and failing in a sandbox (FLEET_GATE_PS /
 # FLEET_GATE_ADMINS / FLEET_GATE_HUB_JSON), never this machine's own ps or hub.
