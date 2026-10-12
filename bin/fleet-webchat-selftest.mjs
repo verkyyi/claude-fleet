@@ -135,7 +135,11 @@ function start() {
 function stop() { return new Promise((r) => { if (!server || server.exitCode !== null) return r(); server.removeAllListeners("exit"); server.on("exit", r); server.kill("SIGTERM"); }); }
 
 // ---- H + I: the socket mode ---------------------------------------------------------
-let SSTATE = join(T, "sstate");
+// under /tmp, not $TMPDIR: on macOS $TMPDIR is /var/folders/…/T, whose ancestors are 0700,
+// so another uid could not even reach the socket and H's "another uid" checks proved nothing
+const HS = mkdtempSync("/tmp/fws-");
+process.on("exit", () => rmSync(HS, { recursive: true, force: true }));
+let SSTATE = join(HS, "sstate");
 let SOCK = join(SSTATE, "chat.sock");
 let sserver = null;
 process.on("exit", () => { try { sserver?.kill("SIGKILL"); } catch { /* gone */ } });
@@ -190,6 +194,13 @@ function otherUidConnects() {
   if (/CONNECTED/.test(r.stdout || "")) return true;
   return /EACCES|EPERM|ENOENT/.test(r.stdout || "") ? false : null;   // anything else: it could not even try
 }
+// every directory above HS lets another uid pass (o+x)? otherwise "cannot connect" proves nothing
+function othersReachHS() {
+  for (let d = dirname(realpathSync(HS)); ; d = dirname(d)) {
+    if (!(statSync(d).mode & 0o001)) return d;
+    if (d === dirname(d)) return null;
+  }
+}
 
 if (part("socket") || part("budget")) {
   // neither --socket nor FLEET_WEBCHAT_LOCAL=1: the local mode is off by default
@@ -214,16 +225,18 @@ if (part("socket") || part("budget")) {
   ok((await sreq("/api/turn", { method: "POST", headers: { "Content-Type": "application/json" }, body: { text: "hi" } })).status === 403, "H a POST without the page's header is still refused");
   const lk = await sreq("/api/link", { method: "POST", headers: { "X-Fleet-Webchat": "1", "X-Fleet-Webchat-Admin": "x" } });
   ok(lk.status === 404 && !/login\?c=/.test(lk.body), "H no login link on the socket");
-  const other = otherUidConnects();
-  if (other === null) console.log("note H: cannot try another uid here (no passwordless sudo, or root)");
+  const shut = othersReachHS();
+  const other = shut ? null : otherUidConnects();
+  if (shut) console.log(`note H: cannot try another uid here (${shut} is not o+x, so no other uid reaches the socket)`);
+  else if (other === null) console.log("note H: cannot try another uid here (no passwordless sudo, or root)");
   else {
     ok(other === false, "H another uid cannot connect (dir 0700)");
-    chmodSync(SSTATE, 0o711); chmodSync(T, 0o711);           // only the socket's own mode left in the way
+    chmodSync(SSTATE, 0o711); chmodSync(HS, 0o711);          // only the socket's own mode left in the way
     ok(otherUidConnects() === false, "H another uid cannot connect even through an open dir (socket 0600)");
     chmodSync(SOCK, 0o666);                                   // the break, for real: the probe is not vacuous
     ok(otherUidConnects() === true, "H (control) a 0666 socket in an open dir: another uid DOES connect");
     chmodSync(SOCK, 0o600);
-    chmodSync(SSTATE, 0o700); chmodSync(T, 0o700);
+    chmodSync(SSTATE, 0o700); chmodSync(HS, 0o700);
   }
   const second = await sstart();
   ok(second.code === 3 && mode(SOCK) === 0o600 && (await sreq("/healthz")).status === 200, "H a second server on a live socket refuses; the first keeps it");
