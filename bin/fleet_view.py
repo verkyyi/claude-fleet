@@ -1038,6 +1038,12 @@ def visible(items, query, opened):
             for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)]
 
 
+def sec_fold(opened, sec, expand):
+    """The open sections after → (`expand`) or ← on heading `sec`: → on an open
+    one and ← on a shut one change nothing (issue #3666)."""
+    return (opened | {sec}) if expand else (opened - {sec})
+
+
 def legend():
     """The one line `?` toggles on an empty query: every glyph and its word."""
     gl = glyphs()
@@ -2982,6 +2988,12 @@ def popup(screen, qo, vid, client, forward=""):
             continue
         if lit_e.get("cmd") == "new" and bolt["focus"] and ch in (curses.KEY_LEFT, curses.KEY_RIGHT):
             bolt_step(bolt, query, -1 if ch == curses.KEY_LEFT else 1)
+            shown = listing()
+            continue
+        if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and 0 <= at < len(shown) and shown[at]["kind"] == "sec":
+            # → opens a folding heading (已结束), ← shuts it — as ↵ toggles it
+            # (issue #3666: only ↵ did, the arrows fell through to nothing)
+            opened = sec_fold(opened, shown[at]["sec"], ch == curses.KEY_RIGHT)
             shown = listing()
             continue
         if ch == "\t":
