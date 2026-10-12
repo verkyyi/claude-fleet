@@ -1,0 +1,211 @@
+# .gitleaks.toml — what `gitleaks git` may report in this repo's history, and
+# nothing more (issue #3571, EPIC #3569 C1). Read by bin/oss-scan.sh --history.
+#
+# The default rule set stays on. Each [[allowlists]] below confirms ONE finding
+# by commit + path + rule (condition AND) — never a whole directory, never a
+# rule everywhere — so a new secret in the same file, or the same shape in
+# another file or commit, is still reported. The verdict per finding is written
+# in docs/dev/OSS-INVENTORY.md «历史里像密钥的 28 处» (2026-10-12, at ecae8bfa:
+# 0 real secrets, 1 real host public key — not a credential).
+#
+# A new finding is never added here to make the scan quiet: confirm it first
+# (the value's shape, never its text in a comment), and if it is real, revoke it.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "#1 github-pat · bin/client-log-selftest.sh:51 @ 02e5f79e — 测试假数据：脱敏测试的输入（AKIA+字母表 / AbCdEf 重复）"
+condition = "AND"
+targetRules = ["github-pat"]
+commits = ["02e5f79e507346572f3bd66866c7a5ed557042f2"]
+paths = ['''^bin/client\-log\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#2 aws-access-token · bin/client-log-selftest.sh:63 @ d5742450 — 测试假数据：脱敏测试的输入（AKIA+字母表 / AbCdEf 重复）"
+condition = "AND"
+targetRules = ["aws-access-token"]
+commits = ["d5742450b929d552c216ff1e4f1880e0f8af3174"]
+paths = ['''^bin/client\-log\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#3 github-pat · bin/client-log-selftest.sh:51 @ fd812984 — 测试假数据：脱敏测试的输入（AKIA+字母表 / AbCdEf 重复）"
+condition = "AND"
+targetRules = ["github-pat"]
+commits = ["fd812984730c2ed580e9eec821a63ab6f168b419"]
+paths = ['''^bin/client\-log\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#4 private-key · bin/doctor-bundle-selftest.sh:32 @ 8c94c870 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["private-key"]
+commits = ["8c94c8708bc39de2c76122fc73b198304502d039"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#5 jwt · bin/doctor-bundle-selftest.sh:43 @ 8c94c870 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["jwt"]
+commits = ["8c94c8708bc39de2c76122fc73b198304502d039"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#6 aws-access-token · bin/doctor-bundle-selftest.sh:44 @ 8c94c870 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["aws-access-token"]
+commits = ["8c94c8708bc39de2c76122fc73b198304502d039"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#7 gitlab-pat · bin/doctor-bundle-selftest.sh:44 @ 8c94c870 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["gitlab-pat"]
+commits = ["8c94c8708bc39de2c76122fc73b198304502d039"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#8 private-key · bin/doctor-bundle-selftest.sh:32 @ d5742450 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["private-key"]
+commits = ["d5742450b929d552c216ff1e4f1880e0f8af3174"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#9 jwt · bin/doctor-bundle-selftest.sh:44 @ d5742450 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["jwt"]
+commits = ["d5742450b929d552c216ff1e4f1880e0f8af3174"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#10 aws-access-token · bin/doctor-bundle-selftest.sh:45 @ d5742450 — 测试假数据：私钥体无密钥材料、jwt.io 公开示例、AKIA+字母表、glpat 含 FAKE"
+condition = "AND"
+targetRules = ["aws-access-token"]
+commits = ["d5742450b929d552c216ff1e4f1880e0f8af3174"]
+paths = ['''^bin/doctor\-bundle\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#11 private-key · bin/fleet-break-it-selftest.sh:5433 @ 8c94c870 — 测试假数据：printf 模板，参数都带 FAKE，私钥体只有 openssh 头 + FAKE"
+condition = "AND"
+targetRules = ["private-key"]
+commits = ["8c94c8708bc39de2c76122fc73b198304502d039"]
+paths = ['''^bin/fleet\-break\-it\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#12 private-key · bin/fleet-break-it-selftest.sh:5433 @ d5742450 — 测试假数据：printf 模板，参数都带 FAKE，私钥体只有 openssh 头 + FAKE"
+condition = "AND"
+targetRules = ["private-key"]
+commits = ["d5742450b929d552c216ff1e4f1880e0f8af3174"]
+paths = ['''^bin/fleet\-break\-it\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#13 generic-api-key · bin/fleet-doctor-ingress-selftest.sh:71 @ 91c7b898 — 真实主机公钥（非机密）：一台托管机器的 ssh ed25519 主机公钥，不是凭据；HEAD 里的由 EPIC #3569 C8 换成假公钥"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["91c7b8987bd49508368090d723ab19c6dbec636b"]
+paths = ['''^bin/fleet\-doctor\-ingress\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#14 generic-api-key · bin/fleet-hub-node-env-selftest.sh:53 @ 3b1dc054 — 测试假数据：值含 SECRET 与 abcdef"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["3b1dc0544d33001782faf3bfa5110a71de2198c4"]
+paths = ['''^bin/fleet\-hub\-node\-env\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#15 generic-api-key · bin/fleet-issue-bridge-selftest.sh:183 @ 32ba5a80 — 误报：环境变量名 + shell 变量（签名用测试密钥现算）"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["32ba5a80d54479365d5972308ab8c030e88f099c"]
+paths = ['''^bin/fleet\-issue\-bridge\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#16 generic-api-key · bin/fleet-issue-bridge-selftest.sh:183 @ f6b6fd32 — 误报：环境变量名 + shell 变量（签名用测试密钥现算）"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["f6b6fd32138907d12d818516821c8a981a86f025"]
+paths = ['''^bin/fleet\-issue\-bridge\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#17 generic-api-key · bin/fleet-node-join-selftest.sh:13 @ 91498a7f — 误报：注释里的环境变量名，没有值"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["91498a7fd49b3376efaf7d5156ccdc5ab5747aee"]
+paths = ['''^bin/fleet\-node\-join\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#18 generic-api-key · bin/fleet-release-publish-selftest.sh:105 @ 66603aa7 — 测试假数据：发布令牌是普通英文词组，给替身入口用"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["66603aa71e5104d30ab03b82deec2cf5078e6d73"]
+paths = ['''^bin/fleet\-release\-publish\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#19 generic-api-key · bin/fleet-release-publish-selftest.sh:115 @ 66603aa7 — 测试假数据：发布令牌是普通英文词组，给替身入口用"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["66603aa71e5104d30ab03b82deec2cf5078e6d73"]
+paths = ['''^bin/fleet\-release\-publish\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#20 generic-api-key · bin/fleet-release-publish-selftest.sh:105 @ efb05b86 — 测试假数据：发布令牌是普通英文词组，给替身入口用"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["efb05b86f77ec7b0e032961a79af781e1c0a2a6e"]
+paths = ['''^bin/fleet\-release\-publish\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#21 generic-api-key · bin/fleet-release-publish-selftest.sh:115 @ efb05b86 — 测试假数据：发布令牌是普通英文词组，给替身入口用"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["efb05b86f77ec7b0e032961a79af781e1c0a2a6e"]
+paths = ['''^bin/fleet\-release\-publish\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#22 generic-api-key · bin/fleet-role-merge-selftest.sh:162 @ 30c966d5 — 测试假数据：API_KEY 值为 abcd1234…（HEAD 已无此文件）"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["30c966d5f14824a33782fc3e70458255fdfc17ed"]
+paths = ['''^bin/fleet\-role\-merge\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#23 generic-api-key · bin/fleet-role-merge-selftest.sh:162 @ 4c21b98f — 测试假数据：API_KEY 值为 abcd1234…（HEAD 已无此文件）"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["4c21b98f6df65f73acf9e4b07189b5ac8be3986d"]
+paths = ['''^bin/fleet\-role\-merge\-selftest\.sh$''']
+
+[[allowlists]]
+description = "#24 generic-api-key · extras/managed-node/smoke.py:53 @ 4ad7c67f — 测试假数据：替身入口回的中转通行证，值里明文写着 fixture"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["4ad7c67f8424d91db823df7a5585c22915185486"]
+paths = ['''^extras/managed\-node/smoke\.py$''']
+
+[[allowlists]]
+description = "#25 generic-api-key · extras/managed-node/smoke.py:46 @ a1514dc3 — 测试假数据：替身入口回的中转通行证，值里明文写着 fixture"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["a1514dc30ac162d17ceb9682eca440c3ffa77055"]
+paths = ['''^extras/managed\-node/smoke\.py$''']
+
+[[allowlists]]
+description = "#26 aws-access-token · tokenledger/internal/api/fleet_client_settings_test.go:98 @ be6677e9 — 测试假数据：AKIA+字母表"
+condition = "AND"
+targetRules = ["aws-access-token"]
+commits = ["be6677e90e74509dc82a82f364584dddeb64e167"]
+paths = ['''^tokenledger/internal/api/fleet_client_settings_test\.go$''']
+
+[[allowlists]]
+description = "#27 curl-auth-header · tokenledger/internal/api/fleet_service_log_test.go:319 @ 7d9224e3 — 测试假数据：Bearer 值就是期望结果 abc.def-ghi"
+condition = "AND"
+targetRules = ["curl-auth-header"]
+commits = ["7d9224e3411e03b8d6e38cf049ed76dac9c996e8"]
+paths = ['''^tokenledger/internal/api/fleet_service_log_test\.go$''']
+
+[[allowlists]]
+description = "#28 curl-auth-header · tokenledger/internal/api/fleet_service_log_test.go:319 @ f7a0ede2 — 测试假数据：Bearer 值就是期望结果 abc.def-ghi"
+condition = "AND"
+targetRules = ["curl-auth-header"]
+commits = ["f7a0ede2fb3d284502be596620aaaa5d152473a7"]
+paths = ['''^tokenledger/internal/api/fleet_service_log_test\.go$''']
