@@ -12,7 +12,7 @@
 #   $CONF_DIR/    ${FLEET_CONF_DIR:-~/.config/claude-fleet}
 # A source that is not there is listed in manifest.json's `missing`, never guessed.
 #
-# The client's own logs (EPIC #2889 C7, docs/CLIENT-LOGS.md): where it connected,
+# The client's own logs (EPIC #2889 C7, docs/dev/CLIENT-LOGS.md): where it connected,
 # where it asked for a session, the keeper's renewals, each login.
 logs/connect.log	$SHELL_CACHE/logs/connect.log	200
 logs/place.log	$SHELL_CACHE/logs/place.log	200

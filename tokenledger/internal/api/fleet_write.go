@@ -25,7 +25,7 @@ import (
 //
 // The tools are bin/fleet_hub.py's — worker_start, worker_message,
 // worker_stop, worker_resume, config_set, gh_comment, plus the gh_* reads —
-// with its semantics kept to the letter (docs/FLEET-HUB.md, "Writes,
+// with its semantics kept to the letter (docs/dev/FLEET-HUB.md, "Writes,
 // concurrency and disconnected machines"):
 //
 //   - The hub journals a write BEFORE it sends it, keyed (actor,

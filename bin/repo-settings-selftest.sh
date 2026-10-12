@@ -6,7 +6,7 @@
 # so it must read the fleet's. Fleet D is the degenerate case — ONE repo (o/c), no
 # repos/ dir — and every leg asserts it reads exactly what it always did.
 #
-#   lockstep  fleet.conf.example's per-repo line == _FLEET_REPO_OVERRIDABLE
+#   lockstep  conf/fleet.conf.reference's per-repo line == _FLEET_REPO_OVERRIDABLE
 #   get       fleet_repo_conf_get / fleet-repo.sh get: overlay, else fleet value
 #   leak      a shell that applied o/b's overlay, then loads o/a or o/e, keeps
 #             none of o/b's per-repo values
@@ -121,7 +121,7 @@ FLEET_CLEANUP=0
 EOF
 
 # --- lockstep --------------------------------------------------------------------
-ex=$(sed -n 's/^#[[:space:]]*per-repo:[[:space:]]*//p' "$BIN/../fleet.conf.example")
+ex=$(sed -n 's/^#[[:space:]]*per-repo:[[:space:]]*//p' "$BIN/../conf/fleet.conf.reference")
 eq 'example per-repo line == _FLEET_REPO_OVERRIDABLE' "$ex" "$_FLEET_REPO_OVERRIDABLE"
 leg lockstep
 

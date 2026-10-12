@@ -154,7 +154,7 @@ rc=0
 tail_=$(( idle + vfy ))   # referenced by invariant 1's summary as well as invariant 2
 
 # --- invariant 1: the backstop must land before WAIT-IDLE gives up --------------
-# STUCK_SECS=0 DISABLES the backstop entirely (documented in fleet.conf.example).
+# STUCK_SECS=0 DISABLES the backstop entirely (documented in conf/fleet.conf.reference).
 # That is not "a large number" — it is NO number: a capped/crashed turn then pins
 # @claude_state=working forever and auto-handoff can never fire again on that pane.
 if [ "$stuck" -eq 0 ]; then

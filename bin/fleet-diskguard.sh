@@ -70,7 +70,7 @@
 #   FLEET_DISK_FLOOR_GB     gate refusal threshold      (default 12)
 #   FLEET_DISK_WARN_GB      watch capture threshold     (default 15)
 #   FLEET_NOTIFY_CMD        notifier run as `$CMD "<markdown>"` on an incident
-# Internal constants (no longer surfaced in fleet.conf.example / the prefix+c modal
+# Internal constants (no longer surfaced in conf/fleet.conf.reference / the prefix+c modal
 # — issue #237 — but an override in an old conf is still honored for back-compat):
 #   FLEET_DISK_TARGET       dir whose volume to measure (default $TMPDIR)
 #   FLEET_DISK_COOLDOWN     min seconds between captures (default 300)

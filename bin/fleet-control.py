@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fleet's fixed local/SSH control entry point; see docs/FLEET-HUB.md."""
+"""Fleet's fixed local/SSH control entry point; see docs/dev/FLEET-HUB.md."""
 import os
 import sys
 

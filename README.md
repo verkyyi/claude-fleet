@@ -22,10 +22,10 @@ Built from daily use on an always-on Mac mini. A local transcript audit found a
 across 25 independent worktrees**, on September 1, 2026. A separate interval
 held at least **15 concurrent task directories for 14.46 minutes**. These count
 overlapping CLI processing turns, not simultaneous server-side token generation
-or a throughput multiplier. [Evidence and counting method](docs/USAGE-EVIDENCE.md).
+or a throughput multiplier. [Evidence and counting method](docs/dev/USAGE-EVIDENCE.md).
 
-![dashboard](docs/img/dashboard.svg)
-![status bar](docs/img/statusbar.svg)
+![dashboard](docs/public/img/dashboard.svg)
+![status bar](docs/public/img/statusbar.svg)
 
 <sub>Screenshots are the real UI captured from a live tmux server, staged with
 demo repo data.</sub>
@@ -78,7 +78,7 @@ demo repo data.</sub>
   booting — the last second of which paints a `❯` box that silently swallows
   whatever you type.
 
-![backlog](docs/img/backlog.svg)
+![backlog](docs/public/img/backlog.svg)
 
 - **GitHub backlog panel** (`bin/tmux-issues.sh`; its `prefix+b` door left the node
   with #1714 — #1739 decides the client's): open issues grouped by milestone
@@ -155,12 +155,12 @@ Design rules that made it work:
 - **Every session is bound to a GitHub issue.** New work enters through the
   backlog (typed tasks auto-file an issue), so nothing runs untracked.
 
-Deeper reference: **[docs/TERMS.md](docs/TERMS.md)** defines every term (what
-the collector/hub/dash actually are), **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+Deeper reference: **[docs/dev/TERMS.md](docs/dev/TERMS.md)** defines every term (what
+the collector/hub/dash actually are), **[docs/dev/ARCHITECTURE.md](docs/dev/ARCHITECTURE.md)**
 covers the shared-vs-per-fleet split and the path to running **many fleets on
-one machine** (one tmux session per repo), and **[docs/STATE.md](docs/STATE.md)**
+one machine** (one tmux session per repo), and **[docs/dev/STATE.md](docs/dev/STATE.md)**
 traces how each window's Claude state (`working`/`done`/`needs`/`looping`) is set,
-rendered, and corrected. **[docs/EMIT.md](docs/EMIT.md)** covers the optional,
+rendered, and corrected. **[docs/dev/EMIT.md](docs/dev/EMIT.md)** covers the optional,
 off-by-default emitter that POSTs session lifecycle facts (session → issue → PR)
 so an external ledger can join what a week of agent work **cost** to what it
 **produced** — including the exact list of what does, and does not, leave the
@@ -168,7 +168,7 @@ machine.
 
 ## Install
 
-The installer is Claude itself — [`docs/INSTALL.md`](docs/INSTALL.md) is the playbook:
+The installer is Claude itself — [`docs/dev/INSTALL.md`](docs/dev/INSTALL.md) is the playbook:
 
 ```sh
 git clone https://github.com/verkyyi/claude-fleet.git
@@ -183,16 +183,16 @@ source line to `~/.tmux.conf`, merge five hook entries into
 `systemd/` user units on Linux), and verify each piece — asking before it
 touches anything.
 
-Prefer manual? Every step is in [docs/INSTALL.md](docs/INSTALL.md); the pieces are
+Prefer manual? Every step is in [docs/dev/INSTALL.md](docs/dev/INSTALL.md); the pieces are
 plain shell scripts with no hidden state.
 
 Running it on an unattended machine (a Mac mini you reach over SSH)? Read
-**[docs/HOST.md](docs/HOST.md)** — the host setup that keeps the machine busy only
-with its sessions: [turning off Spotlight](docs/HOST.md#spotlight), the
-[unattended-Mac checklist](docs/HOST.md#headless) (never sleep, no Siri, no
+**[docs/dev/HOST.md](docs/dev/HOST.md)** — the host setup that keeps the machine busy only
+with its sessions: [turning off Spotlight](docs/dev/HOST.md#spotlight), the
+[unattended-Mac checklist](docs/dev/HOST.md#headless) (never sleep, no Siri, no
 iCloud sync, no GUI apps on the console) and [how much a container VM may
-take](docs/HOST.md#containers). `fleet-doctor`'s `host` section checks each item;
-[`fleet-host-tune.sh`](docs/HOST.md#tune) plans them all (`--apply` asks per item).
+take](docs/dev/HOST.md#containers). `fleet-doctor`'s `host` section checks each item;
+[`fleet-host-tune.sh`](docs/dev/HOST.md#tune) plans them all (`--apply` asks per item).
 
 ### The Claude-Code side ships as a plugin
 
@@ -326,7 +326,8 @@ binds) are intentionally left in your `~/.tmux.conf`.
 ## Configuration
 
 One file, `~/.claude/fleet/fleet.conf` (see
-[fleet.conf.example](fleet.conf.example)):
+[fleet.conf.example](fleet.conf.example); every key with its default and help is in
+[conf/fleet.conf.reference](conf/fleet.conf.reference)):
 
 ```sh
 FLEET_REPO="you/your-repo"            # backlog + PR/CI source
@@ -348,7 +349,7 @@ dash's grouped list, never a switch between fleets. There is no fleet picker.
 **Several fleets on one machine means several logins.** Each login has its own
 `~/.config/claude-fleet/`, its own fleet and its own tmux socket, so a crash in
 one never touches another. They share one collector without clobbering each other
-(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). A repo you want isolated
+(see [docs/dev/ARCHITECTURE.md](docs/dev/ARCHITECTURE.md)). A repo you want isolated
 from the rest goes to a second login. A login that ended up with two fleets folds
 one into the other with `bin/fleet-repo.sh fold` (below).
 
@@ -368,7 +369,7 @@ login's fleet and its repo count, the `fleet` line to get in, and any machine-lo
 machine (its bar says 客户端在 <机器> 上运行) — never a direct attach to the node's
 own session (issue #1711). scp / rsync / `ssh host cmd` are never touched;
 `~/.hushfleet-attach` keeps the banner only. See
-[docs/INSTALL.md](docs/INSTALL.md) step 7 for the one `~/.zshrc` line,
+[docs/dev/INSTALL.md](docs/dev/INSTALL.md) step 7 for the one `~/.zshrc` line,
 `source ~/.claude/fleet/shell/fleet-login.zsh`.
 
 **Several repos in one fleet.** From inside the fleet, **⌃z on the dash** or the
@@ -456,7 +457,7 @@ a durable identity that survives handoffs and account migrations, limited
 configuration updates and persistent operation tracking. Nodes use a fixed SSH control entry point; existing workers
 continue if the Hub disconnects. A launchd installer runs a persistent Hub on
 macOS, with private HTTPS grant tokens or an OAuth HTTP deployment.
-See [Fleet Hub setup and authorization](docs/FLEET-HUB.md).
+See [Fleet Hub setup and authorization](docs/dev/FLEET-HUB.md).
 
 <a id="multiple-subscription-accounts-auto-failover"></a>
 
@@ -473,7 +474,7 @@ adding [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenle
 quota readings for decisions **before** a subscription is exhausted. TokenLedger
 is the product name; its executable and settings are still `ccquota` and
 `CCQUOTA_*`. Its CLI and hub are separate dependencies, covered in
-[the install playbook](docs/INSTALL.md).
+[the install playbook](docs/dev/INSTALL.md).
 
 | Capability | What happens | Requires |
 |---|---|---|
@@ -499,7 +500,7 @@ chmod 600 ~/.config/claude-fleet/accounts/work
 ```
 
 Full setup, optional account subsets and per-account fallback reset durations
-are in [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md#setup). Tokens stay outside
+are in [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md#setup). Tokens stay outside
 the repository. Account choice is per launch through `CLAUDE_CODE_OAUTH_TOKEN`;
 settings, hooks and transcripts continue to use the shared Claude configuration.
 
@@ -524,7 +525,7 @@ onto another exhausted account.
 ### Add account-wide quota readings and early rotation
 
 Configure the `ccquota` CLI, its hub and viewer credential as described in the
-[install playbook](docs/INSTALL.md), then set the hub URL in `fleet.conf` so the
+[install playbook](docs/dev/INSTALL.md), then set the hub URL in `fleet.conf` so the
 background services inherit it. The remaining values below are the defaults:
 
 ```sh
@@ -548,7 +549,7 @@ Warnings and ceiling actions are deduplicated per account/reset window. New spaw
 rank the accounts by the **weekly pace** — how far ahead of or behind an even burn
 of its 7-day budget each account is — so the pool's weeks drain together instead
 of worst-first, and the watch moves one idle session at a time off an account
-that is far ahead ([details](docs/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)). With
+that is far ahead ([details](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)). With
 no usable quota data, the proactive policy falls back to banner-based handling;
 work is not blocked just because the optional hub is unavailable.
 
@@ -600,7 +601,7 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 readings older than 600 seconds raise `✖ quota · stale`; three consecutive empty
 fetches raise `✖ quota · unreadable` even if the fetch timestamp is recent. The status
 bar and doctor expose both failures. Full policies and recovery commands:
-[docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md).
+[docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md).
 
 ## Fleet commands (`/skill`s)
 
@@ -620,7 +621,7 @@ Codex skills under `$CODEX_HOME/skills/` and invoked as `$fleet-claim`,
   round-trip — atomic, so no half of it can be skipped. Then ground in the issue +
   code and implement under a standing contract that ends by **opening a PR and
   landing it** once the gate reads green (`bin/fleet-pr-verdict.sh` → `READY`);
-  the cleanup daemon reaps afterwards (see [docs/CLEANUP.md](docs/CLEANUP.md)).
+  the cleanup daemon reaps afterwards (see [docs/dev/CLEANUP.md](docs/dev/CLEANUP.md)).
 - **`/fleet-history`** (hub) — browse & resume closed sessions (landed + unlanded,
   workers **and** `scratch-<N>` sessions) from the history ledger, reconstructing a
   reaped worktree off the recorded SHA so `claude --resume` still works.
@@ -742,7 +743,7 @@ pane or terminal, use
 repeat without `--dry-run`. The same window and worktree continue with a local
 handoff packet that tells Codex the source agent, session ID and original
 transcript path, plus a frozen copy for later lookup. Optional `--handoff` notes
-carry the exact next action. See [single-session transfer](docs/SESSION-TRANSFER.md)
+carry the exact next action. See [single-session transfer](docs/dev/SESSION-TRANSFER.md)
 for prerequisites, export-only mode and failure recovery.
 
 **Why the gaps are published.** A feature table that lists only ticks tells you
@@ -778,7 +779,7 @@ degrading to a pane-content heuristic.
 | `/fleet-handoff` + the auto-handoff nudge | ✅ | ✅ | Codex runs `fleet-transfer.sh --to codex --handoff NOTES --after-turn` directly. The same clean-Stop, typing hold, lease and source-identity checks preserve notes, exact rollout, account home and worktree before a fresh conversation. `FLEET_AUTO_HANDOFF_PCT` nudges this native path. |
 | `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused. |
 | peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery. |
-| fleet tools (`status` / `children` / `repos` / `agents` / `spawn` / `await` / `send` · `report` / `ask` / `comment` / `evidence` / `handoff` / `pr_verdict` / `pr_merge` · `brief` / `file_issue` / `gh` / `context` / `transfer` / `where` / `show` / `open`) | ✅ | ✅ | Both launchers mount the one tool service `fleet` (`bin/fleet-mcp.py`, defined once in `conf/mcp-worker.json`, issues #1807 / #1808 / #1811): the same tools for Claude and Codex, each a checked wrapper over the existing script. The worker skills name only these tools — a script path appears only under a 排障 / 运营者 heading (`bin/skill-tools-selftest.sh`). Spec: `docs/FLEET-MCP.md`. `FLEET_MCP=0` turns it off. |
+| fleet tools (`status` / `children` / `repos` / `agents` / `spawn` / `await` / `send` · `report` / `ask` / `comment` / `evidence` / `handoff` / `pr_verdict` / `pr_merge` · `brief` / `file_issue` / `gh` / `context` / `transfer` / `where` / `show` / `open`) | ✅ | ✅ | Both launchers mount the one tool service `fleet` (`bin/fleet-mcp.py`, defined once in `conf/mcp-worker.json`, issues #1807 / #1808 / #1811): the same tools for Claude and Codex, each a checked wrapper over the existing script. The worker skills name only these tools — a script path appears only under a 排障 / 运营者 heading (`bin/skill-tools-selftest.sh`). Spec: `docs/dev/FLEET-MCP.md`. `FLEET_MCP=0` turns it off. |
 | Stop classifier (haiku) | ✅ | ✅ | The shared optional helper now uses an agent-aware rubric, including Codex placeholders. Codex Stop invokes it; exact native attention and explicit worker blockers outrank screen inference. Slow verdicts cannot replace a newer launcher or hook state. |
 | `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved. |
 | multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins. |
@@ -800,7 +801,7 @@ runs in CI, so a row cannot be edited in one file and forgotten in the other.
 
 Codex context tracking, recovery/history, handoff, messaging, startup policy,
 warm pools, native account quotas and dashboard answers are implemented in
-[the Codex runtime adapter](docs/CODEX-RUNTIME.md). Account homes must be
+[the Codex runtime adapter](docs/dev/CODEX-RUNTIME.md). Account homes must be
 registered separately; quota gating and automatic idle migration are opt-in.
 The shared optional screen classifier still uses a Claude helper. Native
 attention and replies require the private worker server, enabled by default.

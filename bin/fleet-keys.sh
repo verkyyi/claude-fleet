@@ -6,7 +6,7 @@
 # Opened by a `?` bind inside the dash/backlog (a popup that closes on q/esc),
 # and read whole by /fleet-onboard. The client opens no key page (issue #2362:
 # ⌘/, prefix ? and the stage's page went — the keys are documented in
-# docs/CLIENT.md).
+# docs/dev/CLIENT.md).
 #
 # Context scoping (issue #265): no context shows the WHOLE sheet, but
 # when opened from INSIDE a panel it shows only the shortcuts that apply there —

@@ -24,7 +24,7 @@ correct on both. `FLEET_CMD_PREFIX` forces it either way.
 or it ships to copy installs and silently not to plugin installs.
 `bin/fleet-plugin-selftest.sh` fails on exactly that drift.
 
-See the install step in [`docs/INSTALL.md`](../docs/INSTALL.md).
+See the install step in [`docs/dev/INSTALL.md`](../docs/dev/INSTALL.md).
 
 > Phase 0 landed **just the contract** — this README and
 > [`_template.md`](_template.md); the functional skills (`/fleet-claim`,

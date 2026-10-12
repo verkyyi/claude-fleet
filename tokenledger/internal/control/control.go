@@ -739,7 +739,7 @@ type Heartbeat struct {
 	// Personal repeats the hello's (claude-fleet#1721), re-read every beat.
 	Personal bool `json:"personal,omitempty"`
 	// Desired is how far a managed machine converged on the desired state
-	// the hub keeps for it (claude-fleet#2214, docs/MANAGED-NODE.md). Absent
+	// the hub keeps for it (claude-fleet#2214, docs/dev/MANAGED-NODE.md). Absent
 	// from an agent that manages nothing — the roster then shows no 期望 /
 	// 实际 columns, byte for byte as before.
 	Desired *DesiredReport `json:"desired,omitempty"`

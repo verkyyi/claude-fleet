@@ -6,7 +6,7 @@
 #   fleet-node-maintenance.sh leave                       clear the flag
 #   fleet-node-maintenance.sh status                      what the hub says
 #
-# What 维护中 does (docs/MULTI-MACHINE-OPS.md is the runbook this is one step
+# What 维护中 does (docs/dev/MULTI-MACHINE-OPS.md is the runbook this is one step
 # of): the hub keeps placing nothing new on a flagged machine — not a spawn's
 # `--node auto`, not a start that names it, not a `move plan` — so
 # `fleet-spot-evacuate.sh` (= `fleet-move.sh --rebalance --max all` per fleet)

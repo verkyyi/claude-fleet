@@ -20,10 +20,10 @@
 #
 #   chain   phone-adds-key · phone-lands · hub-down-still-in · revoke-refused (×5,
 #           the median is the batch's ≤ 10 s metric) · mac-home-lan · mac-outside-entry
-#   drills  every `entry-*` / `route-lan-elsewhere` row of docs/BREAK-IT.md, by id
+#   drills  every `entry-*` / `route-lan-elsewhere` row of docs/dev/BREAK-IT.md, by id
 #
 # Ends with the batch's metric table (what this rig can read; the rest is the
-# drill on the real phone — docs/MULTI-MACHINE-OPS.md «从外面连进来»).
+# drill on the real phone — docs/dev/MULTI-MACHINE-OPS.md «从外面连进来»).
 # No sshd ≥ 9.8 / ssh / ssh-keygen → SKIP (exit 0), like the entry drills.
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
@@ -217,7 +217,7 @@ for f in "$BIN"/fleet-break-it-*-selftest.sh; do
   done
 done
 n=$(printf '%s\n' $ROWS | grep -c .)
-[ "$DRILL_ALL" -eq "$n" ] || bad drills "$n rows in docs/BREAK-IT.md, $DRILL_ALL with a drill"
+[ "$DRILL_ALL" -eq "$n" ] || bad drills "$n rows in docs/dev/BREAK-IT.md, $DRILL_ALL with a drill"
 
 # ================================================================= the metrics ==
 printf '\n指标（替身能读出的部分）\n'
@@ -232,7 +232,7 @@ case " $BAD_IDS " in *" mac-home-lan "*) tl=1 ;; *) tl=0 ;; esac
 printf '| 同一局域网时绕经 Tailscale | %s / 1 | 0 |\n' "$tl"
 printf '| 没 Tailscale 时绕入口中转的地点（家里 · 外面） | %s / 2 | 0 / 2 |\n' "$RELAYS"
 printf '| BREAK-IT 行 | %s / %s PASS | 全部 |\n' "$DRILL_PASS" "$n"
-printf '（手机步骤数、App 个数、宽带换地址的 DNS 跟上：真机演练读，见 docs/MULTI-MACHINE-OPS.md「从外面连进来」）\n'
+printf '（手机步骤数、App 个数、宽带换地址的 DNS 跟上：真机演练读，见 docs/dev/MULTI-MACHINE-OPS.md「从外面连进来」）\n'
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'entry-e2e selftest: %d FAILED, %d passed\n' "$FAIL" "$PASS" >&2

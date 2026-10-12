@@ -16,7 +16,7 @@
 # leak into tests that assert on defaults. Six tests went red on a commit that is
 # all-green from a checkout. Fake red is worse than no test: it trains people to
 # ignore the colour, and it makes "does the code on this machine actually run?"
-# unanswerable right after `docs/INSTALL.md` told a new user to check.
+# unanswerable right after `docs/dev/INSTALL.md` told a new user to check.
 #
 # Why a shadow ROOT and not an env override
 # ------------------------------------------

@@ -6,7 +6,7 @@
 #     its own tmux -L label.
 #   • TARGET: a SEPARATE $HOME (dstfleet's conf + its own base checkout of the
 #     SAME origin repo — "each login, its own local checkout" per
-#     docs/ARCHITECTURE.md), its own tmux -L label.
+#     docs/dev/ARCHITECTURE.md), its own tmux -L label.
 #   • `ssh <user>@<host>` is shimmed to route ONLY the fixed fake target host
 #     to `env HOME=<dst-home> … bash -c "$*"` — everything fleet-move.sh sends
 #     over ssh (the %q-escaped remote_cmd strings, and the tar-pipe receive)

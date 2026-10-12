@@ -20,7 +20,7 @@ per request in journald (`src host code up down ms why`), never a payload.
 `python3 -I gh-relay.py --selftest` runs offline.
 
 The node side is `extras/managed-node/render.py --github-proxy http://47.131.114.67:3128`
-(docs/MANAGED-LINUX.md «Dev network»).
+(docs/dev/MANAGED-LINUX.md «Dev network»).
 
 ## Install / update (on ai-relay; files scp'd to /tmp first)
 

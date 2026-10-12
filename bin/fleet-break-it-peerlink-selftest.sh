@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-peerlink-selftest.sh — docs/BREAK-IT.md rows peerlink-* (issue
+# fleet-break-it-peerlink-selftest.sh — docs/dev/BREAK-IT.md rows peerlink-* (issue
 # #3002, EPIC #2999 C5): the home machine's standing connections to the other
 # machines, broken the five ways a standing connection goes bad, and coming back
 # on their own. Its own file, like the node drills whose runner it sources

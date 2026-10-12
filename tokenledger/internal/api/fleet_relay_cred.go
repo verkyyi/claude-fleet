@@ -76,7 +76,7 @@ const (
 	relayCheckTTL    = 30 * time.Second
 )
 
-// relayPrefixes are the forwarder's routes (docs/CRED-RELAY.md); a check that
+// relayPrefixes are the forwarder's routes (docs/dev/CRED-RELAY.md); a check that
 // names another path is refused, so a pass opens nothing else on that host.
 var relayPrefixes = []string{"/anthropic/", "/chatgpt/", "/openai-auth/", relayGitHubPrefix}
 

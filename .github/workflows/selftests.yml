@@ -39,7 +39,7 @@ on:
       # to the guard logic re-runs the gate.
       - 'hooks/**'
       # Fixtures the selftests read from OUTSIDE bin/, kept so an edit to any of
-      # them still re-runs the gate: fleet.conf.example (tmux-config-selftest.sh)
+      # them still re-runs the gate: conf/fleet.conf.reference (tmux-config-selftest.sh)
       # and conf/tmux-attention.conf (fleet-keys-selftest.sh cross-checks the
       # cheatsheet against the shipped tmux binds).
       - 'conf/**'
@@ -61,7 +61,12 @@ on:
       - 'shell/**'
       - 'extras/**'
       - 'mod/**'
+      # The short sample is generated from conf/fleet.conf.reference
+      # (conf-surface-selftest.sh pins it); every Markdown link is read by
+      # docs-links-selftest.sh (issue #3576).
       - 'fleet.conf.example'
+      - 'docs/**'
+      - '**.md'
       - '.github/workflows/selftests.yml'
       - '.github/workflows/selftests-shards.yml'
   pull_request:
@@ -78,6 +83,8 @@ on:
       - 'extras/**'
       - 'mod/**'
       - 'fleet.conf.example'
+      - 'docs/**'
+      - '**.md'
       - '.github/workflows/selftests.yml'
       - '.github/workflows/selftests-shards.yml'
 

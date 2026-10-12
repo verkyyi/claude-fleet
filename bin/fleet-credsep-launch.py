@@ -68,7 +68,7 @@ def base(k, d):
 def env_lines(path):
     """KEY=value lines → dict. A shell file is PARSED here, never run: root
     reading what the login writes. Lines inside `if` guards count the same —
-    the keys we take are global-only (fleet.conf.example)."""
+    the keys we take are global-only (conf/fleet.conf.reference)."""
     out = {}
     try:
         with open(path) as f:

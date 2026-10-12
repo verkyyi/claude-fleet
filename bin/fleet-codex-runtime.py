@@ -19,7 +19,7 @@ import tempfile
 import time
 
 # The Codex versions whose rollout (session JSONL) shape fleet's context reader
-# is verified against (docs/CODEX-RUNTIME.md#context). The rollout is an upstream
+# is verified against (docs/dev/CODEX-RUNTIME.md#context). The rollout is an upstream
 # internal interface, so an upgrade can change it silently and the dashboard
 # would then show a wrong context% with no error anywhere (issue #1079). Each
 # entry is a version PREFIX matched on whole components: "0.154" covers 0.154.0

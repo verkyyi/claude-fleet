@@ -9,12 +9,12 @@
 #   A  the checker on fixtures: an anchor that is a heading's start or a bold
 #      lead passes; a missing anchor, a missing doc and a page the hub does not
 #      serve are each red, naming what is gone
-#   B  the real skill: every § 「…」 resolves (docs/CLIENT.md, MULTI-MACHINE-OPS.md,
+#   B  the real skill: every § 「…」 resolves (docs/dev/CLIENT.md, MULTI-MACHINE-OPS.md,
 #      MANAGED-NODE.md, STATE.md …), every <入口>/… page is a route in
 #      tokenledger/internal/api (server.go, roles.go, fleet_entry_page.go), and the
 #      index is not empty
 #   C  the skill ships: it is on the hub client's manifest (the agent bundle's
-#      skills/), and docs/CLIENT.md carries the 常见问题 section it answers from
+#      skills/), and docs/dev/CLIENT.md carries the 常见问题 section it answers from
 # Exit 0 = pass.
 set -u
 
@@ -121,7 +121,7 @@ ok "B the four hub pages are linked"
 # --- C: it ships ----------------------------------------------------------------
 MAN="$ROOT/tokenledger/internal/api/fleetclient/manifest"
 grep -qx 'skills/fleet-help/SKILL.md' "$MAN" || fail "C: skills/fleet-help/SKILL.md is not on the client manifest — run bin/fleet-client-mirror.sh"
-grep -q '^## 常见问题' "$ROOT/docs/CLIENT.md" || fail "C: docs/CLIENT.md lost its 常见问题 section"
-ok "C on the client manifest; docs/CLIENT.md has its 常见问题"
+grep -q '^## 常见问题' "$ROOT/docs/dev/CLIENT.md" || fail "C: docs/dev/CLIENT.md lost its 常见问题 section"
+ok "C on the client manifest; docs/dev/CLIENT.md has its 常见问题"
 
 echo "fleet-help selftest: $pass passed"

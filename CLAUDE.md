@@ -2,15 +2,25 @@
 
 A tmux + Claude Code setup for running many parallel Claude sessions in one
 tmux session — one window per task, each in its own git worktree, with GitHub
-issues as the backlog. See `README.md` for the pitch and `docs/ARCHITECTURE.md`
+issues as the backlog. See `README.md` for the pitch and `docs/dev/ARCHITECTURE.md`
 for the design.
 
 ## Installing / uninstalling this repo
 
 **If the user asks you to "install", "set up", or "uninstall" claude-fleet:
-Read [`docs/INSTALL.md`](docs/INSTALL.md) and follow it.** That playbook is the
+Read [`docs/dev/INSTALL.md`](docs/dev/INSTALL.md) and follow it.** That playbook is the
 full procedure — component table, install steps, daemon templating, uninstall.
 Do not install from memory: read the doc and work from it.
+
+## Where the docs live
+
+`docs/README.md` is the index. `docs/public/` is for people who USE fleet (C5 of
+EPIC #3569 fills it); `docs/dev/` is for people who build it — design, protocols,
+runbooks, BREAK-IT. A public page never links into `docs/dev/`. Research notes and
+one-off drill / audit records do not go in the repo (issue #3576).
+`bin/docs-links-selftest.sh` reads every link on every PR. Settings: every key is
+`conf/fleet.conf.reference` (the config panel's one list); the root
+`fleet.conf.example` is generated from it by `bin/fleet-conf-example.sh`.
 
 ## Conventions the code assumes
 
@@ -139,7 +149,7 @@ Do not install from memory: read the doc and work from it.
   session. It travels in the environment only — never an argv, file, config, log
   or tmux option; Codex forwards it by name (`env_vars`). No credential = the old
   marker path, logged `via=marker` in `logs/mcp-calls.log`. Spec:
-  `docs/FLEET-MCP.md` «Identity»; `fleet-mcp-selftest.sh` J pins it. **With the hub on**
+  `docs/dev/FLEET-MCP.md` «Identity»; `fleet-mcp-selftest.sh` J pins it. **With the hub on**
   (issue #1810, C8), a credentialed `spawn`/`await`/`send` also hands its script a
   node-signed worker assertion (`FLEET_WORKER_ASSERT`, HMAC keyed with the node
   token's hash) that `ccquota place` / the relay carry; the hub verifies it (401),
@@ -159,7 +169,7 @@ Do not install from memory: read the doc and work from it.
   those `fallback`, never blocks them; a forward that cannot run answers «reopen
   the session (/fleet-handoff · claude --resume), or run the script by hand».
   Never write a second copy of a tool's schema or logic in the mod. Spec:
-  `docs/FLEET-MCP.md` «How a session gets it» / «The old road».
+  `docs/dev/FLEET-MCP.md` «How a session gets it» / «The old road».
 - **A spawn's parent is a LIVE session, or the spawn refuses** (issue #1355,
   EPIC #1645 C2). `fleet_origin_gate` (`bin/fleet-lib.sh`) runs in both spawners
   after `fleet_origin_canon`, before any window: a key no window answers to
@@ -293,7 +303,7 @@ Do not install from memory: read the doc and work from it.
   `epic-fresh-switched` / `epic-idle-held` / `epic-hold-uncapped` /
   `epic-hold-rotating`).
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
-  (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
+  (issue #1786). `docs/dev/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` (+ `-2-` for its second half, #2955) does each one for real on isolated
   sockets and a sandbox HOME and prints `PASS <id> <secs>s ≤<cap>s`. One row ⇔
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
@@ -316,7 +326,7 @@ Do not install from memory: read the doc and work from it.
   title/body with a red word probes the base, and a red base the text names (the
   branch, or a red workflow / job / Go test — `fleet_breakage_pick`) is filed as
   `--breakage` all the same; `--no-breakage` (`breakage: false`) files plain. An
-  ordinary filing with no red word runs none of it, byte for byte. `docs/BREAK-IT.md`
+  ordinary filing with no red word runs none of it, byte for byte. `docs/dev/BREAK-IT.md`
   `breakage-three-filers` / `breakage-no-flag` + `fleet-issue-file-selftest.sh` O–T pin it.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
@@ -335,7 +345,7 @@ Do not install from memory: read the doc and work from it.
   through an entry the old table already calls, an MCP change as a tool.
   `fleet-oldcfg-replay-selftest.sh` J replays the repo's own table against its
   live tree on every PR, so a hook that cannot run in the sandbox is red there,
-  not at the operator's release; old == new is GREEN at once. docs/BREAK-IT.md
+  not at the operator's release; old == new is GREEN at once. docs/dev/BREAK-IT.md
   row `oldcfg-deleted-hook`.
 - **An old session is either 会坏 or merely 旧, and the fleet can tell which**
   (issue #2076, EPIC #2074 C3). Every launch writes its START down — the hook
@@ -577,8 +587,8 @@ Do not install from memory: read the doc and work from it.
   「没有编排」 for one version, never a 500, never a window — Go
   `TestNoOrchestratorEndpoint`), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
-  gone). `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh` are quiet shells (exit 0,
-  `# compat-1v`). A person who wants the role types `/fleet-orchestrate` or
+  gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
+  launchers are gone (their quiet shells left with #3576). A person who wants the role types `/fleet-orchestrate` or
   `/fleet-steward` in any session that binds no issue (take_role, above); closed is
   closed. Gone with the seat: the mod's role section, exit guard and queue count
   (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
@@ -843,7 +853,7 @@ Do not install from memory: read the doc and work from it.
   C3): with `FLEET_ENTRY=1` a managed machine's daemon runs a second sshd on
   `FLEET_ENTRY_PORT` (22022) on every interface — keys only, AllowUsers only the
   taken-over non-admin logins whose home it is, keys files root's and written only
-  from the hub's list (`fleet-node-supervisor.py entry`, docs/MANAGED-NODE.md §16,
+  from the hub's list (`fleet-node-supervisor.py entry`, docs/dev/MANAGED-NODE.md §16,
   BREAK-IT `entry-*`). Its `ForceCommand` is `bin/fleet-entry.sh` (issue #3071, C5) —
   a dispatch as the login, never a limit: no command on a terminal is the 看台, a
   command runs as on port 22. Nothing else may widen a bind.
@@ -910,7 +920,7 @@ Do not install from memory: read the doc and work from it.
   ability, never a rule in its prompt: adopt refuses an admin (5), the doctor's
   `tenants` row FAILs on a tenant that can sudo, and a script that needs root asks
   `sudo -n` («需要管理员登录（有 sudo）»), never «am I a worker»
-  (docs/MANAGED-NODE.md §15, BREAK-IT `tenant-admin-adopted`).
+  (docs/dev/MANAGED-NODE.md §15, BREAK-IT `tenant-admin-adopted`).
 - **A managed machine has ONE node program, `ccquota agent --machine`** (issue
   #2333, EPIC #2329 C5). Root, started by the supervisor's `node-agent` child once
   `/var/db/fleet-node/machine.env` + `logins/<login>.env` exist; one control link
@@ -919,7 +929,7 @@ Do not install from memory: read the doc and work from it.
   endpoint. A login is proven ONLY by `loginEndpoint` (`internal/api/node_machine.go`)
   — anything else is `WRONG_LOGIN`, on both halves — and every command a tenant
   starts goes through `prepCmd` (`internal/agent/runas.go`): dropped to the login,
-  refused rather than run as root. `docs/MANAGED-NODE.md` §6; BREAK-IT
+  refused rather than run as root. `docs/dev/MANAGED-NODE.md` §6; BREAK-IT
   `machine-agent-wrong-login`.
 - **A managed machine has ONE updater, and every part moves with the release or
   none does** (issue #2334, EPIC #2329 C6). `bin/fleet-node-update.py` is the
@@ -966,7 +976,7 @@ Do not install from memory: read the doc and work from it.
   and signs `ccquota_src` in; `fleet-stable.sh move` refuses first (`ccquota:` —
   redeploy the hub image), the node doctor's `ccquota` row FAILs on a mismatch
   (BREAK-IT `release-ccquota-stale`). The pinned
-  Claude Code is the hub's to fetch (npm, sha512 integrity), never a person's upload. `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
+  Claude Code is the hub's to fetch (npm, sha512 integrity), never a person's upload. `docs/dev/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
   `credsep-stale-after-switch`.
 - **Root is ONE small core with a fixed table** (issue #3555, EPIC #3500 C13).
   `bin/fleet-node-core.py` (`com.claude-fleet.node-core` / `fleet-node-core.service`,
@@ -1012,7 +1022,7 @@ Do not install from memory: read the doc and work from it.
   each file by one rename, a failing step putting back what it replaced. The
   runtime is the updater's own tick (C6), the daemon the supervisor's `install`
   (`install --check` = nothing to do), the role account `fleet-credsep.py role` —
-  never a second copy of any of them. `docs/MANAGED-NODE.md` §8; BREAK-IT
+  never a second copy of any of them. `docs/dev/MANAGED-NODE.md` §8; BREAK-IT
   `node-install-half`; `fleet-node-install-selftest.sh`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
@@ -1022,7 +1032,7 @@ Do not install from memory: read the doc and work from it.
   surfaced — roster, `fleet_sessions` (sidebar `◐`), placement (excluded, auto
   AND named), `move plan`, `fleet connect` home — and never computed from a
   heartbeat; lost still wins, so leases lapse on the 30-minute TTL as always.
-  `docs/MULTI-MACHINE-OPS.md` is the runbook (planned outage = flag, evacuate,
+  `docs/dev/MULTI-MACHINE-OPS.md` is the runbook (planned outage = flag, evacuate,
   wait, power off BY HAND; unexpected = nothing is re-dispatched). **No step
   that takes a machine down or restarts an agent is ever automated**, and the
   drill runs only at a time the operator confirmed. No setting ⇒ two words,
@@ -1216,7 +1226,7 @@ Do not install from memory: read the doc and work from it.
   three kinds of computer + the degenerate. **A person reads two words, fleet and
   承载** (issue #1806): `fleet host on|off|status` is the switch, the doctor's first
   rows are `fleet` / `能力` / `承载`, and the hub's protocol keeps `node`
-  (docs/TERMS.md).
+  (docs/dev/TERMS.md).
 - **Machine-to-machine ssh rides a five-minute hub certificate, never a
   standing key** (issue #1626). `fleet-remote-view.sh`, `fleet-node-upgrade.sh
   --host` and `fleet-move.sh` get their ssh options from `bin/fleet-peer-cert.sh

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-entry-selftest.sh — docs/BREAK-IT.md's entry-* rows (issue #3070,
+# fleet-break-it-entry-selftest.sh — docs/dev/BREAK-IT.md's entry-* rows (issue #3070,
 # EPIC #3067 C3): every way someone could get through the home machine's PUBLIC
 # entry port without a key the hub registered, tried for real against the real
 # entry sshd — `fleet-node-supervisor.py run` in a sandbox (its own state dir, its

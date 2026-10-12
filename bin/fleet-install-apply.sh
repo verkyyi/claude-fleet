@@ -938,7 +938,7 @@ if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/.claude-plugin/marketplace.json" ] && [ -f "
     printf '%s\n' "$GONE" > "$gonef"
     # a managed login (the machine daemon runs it) gets /fleet-feedback on by
     # default, ONCE — plugins-defaulted.json remembers, a person's off stays off
-    # (issue #3360; docs/MANAGED-NODE.md §18). Anyone else's computer: nothing.
+    # (issue #3360; docs/dev/MANAGED-NODE.md §18). Anyone else's computer: nothing.
     pdef=()
     fleet_node_manages "$LOGIN" && pdef=(--default fleet-feedback)
     if out=$(python3 "$ROOT/bin/fleet-plugins.py" ensure --root "$ROOT" --claude "$CLAUDE" \

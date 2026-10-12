@@ -119,7 +119,7 @@ LOG="$WORK/calls.log"
 DLOG="$WORK/dscl-stdin.log"   # what interactive `dscl .` read on stdin (#2396)
 mkdir -p "$WORK/shim"
 # the admin's own home is 0700: from under CALLER (their repo checkout, where
-# docs/SHARED-MACHINE.md's example is typed) "the login" cannot stand — a
+# docs/dev/SHARED-MACHINE.md's example is typed) "the login" cannot stand — a
 # `sudo -u` run from there dies the way git did on getcwd (issue #1216)
 CALLER="$WORK/admin/projects/claude-fleet"
 # root and the login can read the home; the admin's bare process cannot (#1213):
@@ -567,7 +567,7 @@ not_contains "G bash32 no pool" "$OUT" "unbound variable"
 eq "G no pool exit" 0 "$RC"
 
 # --- H. a cwd the login cannot read (issue #1216) ------------------------------
-# docs/SHARED-MACHINE.md's example, typed where the admin actually is: inside
+# docs/dev/SHARED-MACHINE.md's example, typed where the admin actually is: inside
 # their own 0700 home, with a relative `--pubkey alice.pub`. Every `sudo -u`
 # inherits that cwd, and step 7's clone died on getcwd (#1210 ④, the same
 # family as sync-logins' #1162). The script runs them from / — and resolves

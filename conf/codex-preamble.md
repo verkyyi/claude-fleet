@@ -21,7 +21,7 @@ Follow it as written, with these translations (they are the only differences):
   `send`, `context`, `open`, `show`, … — call that tool on the `fleet` server. It
   runs the same fleet script and returns its exit code and output unchanged.
   Never type the script yourself; only if the `fleet` server is missing from this
-  session, run the script docs/FLEET-MCP.md names for that tool and say so.
+  session, run the script docs/dev/FLEET-MCP.md names for that tool and say so.
 - **Claude-only tools you do not have:** the `Explore`/`Task` subagents, and the
   `Artifact` tool. `AskUserQuestion` maps to Codex's native user-input tool when
   it is available. Never wait on the operator — make the call yourself. Claude's

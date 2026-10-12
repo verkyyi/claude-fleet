@@ -395,7 +395,7 @@ def blocked_lines(reason):
     reason and where to read about it — and no button, since a press could
     only start a wake that fails before it begins."""
     return [RED + f" can't wake from here: {reason} " + RESET,
-            DIM + '  see docs/WORKER-SLEEP.md, "When a wake fails"' + RESET]
+            DIM + '  see docs/dev/WORKER-SLEEP.md, "When a wake fails"' + RESET]
 
 
 def cap_line(n, m):

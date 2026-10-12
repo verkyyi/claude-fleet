@@ -83,7 +83,7 @@ case "$listing" in
     # for a key — a read-only usage popup (issue #289 folded the old usage-popup
     # here). NB no `--summary` consumer remains, so that mode was dropped.
     render_usage_detail
-    printf '\n  %sregister accounts to switch here — see docs/MULTI-ACCOUNT.md%s\n' "$UDIM" "$UR"
+    printf '\n  %sregister accounts to switch here — see docs/dev/MULTI-ACCOUNT.md%s\n' "$UDIM" "$UR"
     printf '  %spress any key to close%s\n' "$UDIM" "$UR"
     IFS= read -rsn1 _ 2>/dev/null || true
     exit 0 ;;

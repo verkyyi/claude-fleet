@@ -45,7 +45,7 @@
 #                                FC_BREW_DIRS (where else to look for brew),
 #                                FC_LOG (the package manager's output)
 #
-# And the client's own record (issue #2896, EPIC #2889 C7; docs/CLIENT-LOGS.md):
+# And the client's own record (issue #2896, EPIC #2889 C7; docs/dev/CLIENT-LOGS.md):
 #   fleet_clientlog <kind> <event> [machine] [route] [ms] [result] [reason]
 #                              → one TSV line in <logs>/<kind>.log (connect ·
 #                                place · keeper · login), rotated to .1 past

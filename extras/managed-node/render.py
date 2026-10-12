@@ -505,7 +505,7 @@ if __name__ == '__main__':
                    help='image-pull Secret in the namespace (repeatable; default acr-pull). On ACK: '
                         'kubectl -n fleet-workers get secret | grep acr-credential')
     p.add_argument('--entry-lb-spec', default='slb.s1.small', help='CLB spec, or clcu (pay by use)')
-    # the egress guard's ranges (#3281; docs/MANAGED-LINUX.md «Egress guard»)
+    # the egress guard's ranges (#3281; docs/dev/MANAGED-LINUX.md «Egress guard»)
     p.add_argument('--egress-dns', default=EGRESS['dns'], help='kube-dns ClusterIP: the one private address allowed (53)')
     p.add_argument('--egress-metadata', default=EGRESS['metadata'], help='cloud metadata address, cut')
     p.add_argument('--egress-pod-cidr', default=EGRESS['pod_cidr'], help="the cluster's pod range, cut")
@@ -515,7 +515,7 @@ if __name__ == '__main__':
     p.add_argument('--egress-allow', action='append', default=[], metavar='IP[/n]:PORT',
                    help='an in-cluster destination the guard lets through, tcp (repeatable) - e.g. the '
                         "git-mirror Service's ClusterIP:9418")
-    # the dev network (#3348; docs/MANAGED-LINUX.md «Dev network»)
+    # the dev network (#3348; docs/dev/MANAGED-LINUX.md «Dev network»)
     p.add_argument('--github-proxy', default='', help="git's and gh's road to GitHub: http://RELAY:3128 (extras/gh-relay)")
     p.add_argument('--git-mirror', action='append', default=[], metavar='MIRROR=UPSTREAM',
                    help='fetch UPSTREAM (https://github.com/OWNER/REPO.git) from MIRROR; pushes stay on GitHub (repeatable)')
@@ -525,7 +525,7 @@ if __name__ == '__main__':
     p.add_argument('--cluster-caches', action='store_true',
                    help="every login's npm / pip / Go packages from the cluster's caches in --namespace "
                         '(fleet-npm:4873, fleet-pypi:3141, fleet-goproxy:3000 - deploy/k8s/caches)')
-    # the cluster's shared services (#3547; docs/MANAGED-LINUX.md «Shared services»)
+    # the cluster's shared services (#3547; docs/dev/MANAGED-LINUX.md «Shared services»)
     p.add_argument('--cred-central', default='', metavar='URL',
                    help='the cluster credential proxy (http://fleet-credproxy.fleet-workers.svc.cluster.local): '
                         'every session routes central, no subscription credential is leased into or kept in the pod')

@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-decision-selftest.sh — the decision format (issue #2669, EPIC #2668 C1):
-# bin/fleet_decision.py is the one reader / writer; docs/DECISIONS.md the spec.
+# bin/fleet_decision.py is the one reader / writer; docs/dev/DECISIONS.md the spec.
 #
 #   A  an ask with a suggestion → one row: item · suggest · default · due · src · kind
 #   B  `due --apply` past the deadline → ONE --to-worker answer on the worker's

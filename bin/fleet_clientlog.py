@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fleet_clientlog — the client's own record of where it went and why it stopped
-(claude-fleet#2896, EPIC #2889 C7; docs/CLIENT-LOGS.md is the contract).
+(claude-fleet#2896, EPIC #2889 C7; docs/dev/CLIENT-LOGS.md is the contract).
 
 Every connection, every session it asks a machine to open, every keeper renewal
 and every login leaves ONE line on this computer, so a «stuck at 正在连接» is

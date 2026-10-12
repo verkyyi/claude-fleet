@@ -117,7 +117,7 @@ else
 fi
 
 # --- 3. DISABLED ---------------------------------------------------------------
-# 0 disables the demoter (documented in fleet.conf.example). That is not a large
+# 0 disables the demoter (documented in conf/fleet.conf.reference). That is not a large
 # threshold — it is NO threshold, and it kills auto-handoff outright.
 f_off="$(fixture spin-off.sh 's/FLEET_STUCK_WORKING_SECS:-[0-9]*/FLEET_STUCK_WORKING_SECS:-0/' "$SPIN")"
 run_inv --conf "$NOCONF" --spinner "$f_off"

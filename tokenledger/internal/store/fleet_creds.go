@@ -82,7 +82,7 @@ const (
 
 // PoolPrincipal is the principal_id of a SHARED-POOL credential
 // (claude-fleet#1463): an account that belongs to the machine's pool rather
-// than to one person (docs/SHARED-MACHINE.md 2b). A node's lease is answered
+// than to one person (docs/dev/SHARED-MACHINE.md 2b). A node's lease is answered
 // with its own person's rows AND every pool row — still only for a login that
 // IS some active principal, and still subject to that person's / machine's
 // revocation. It is a sentinel, never a row in fleet_principals

@@ -9,7 +9,7 @@
 #     left (device, node, services) are removed.
 #
 # Each step prints PASS / FAIL / SKIP and adds a row to steps.md — 看到什么 ·
-# 按了什么 · 用时 · 要人帮吗 — the table docs/INSTALL.md's 「新同事第一次」 is
+# 按了什么 · 用时 · 要人帮吗 — the table docs/dev/INSTALL.md's 「新同事第一次」 is
 # copied from. Every screen lands as screen-NN-<step>.txt in the run's dir.
 #
 # --home <machine> (issue #3432): the newcomer's login is opened on THAT

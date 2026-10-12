@@ -7,7 +7,7 @@
 # in one key, FLEET_HOST=1 in fleet.conf (fleet-conf.sh). The hub's protocol
 # keeps its own word for it — node (node.env, /v1/node/*, `fleet node …`) — and
 # this command is the person's spelling of those internal steps
-# (docs/TERMS.md「承载 ↔ node」):
+# (docs/dev/TERMS.md「承载 ↔ node」):
 #
 #   fleet host on [--yes] [--force] [--personal|--shared]
 #       Says what will happen, asks (y/N; --yes = already asked — and shown

@@ -22,7 +22,7 @@ import (
 //
 // fleet_node_desired is the hub's copy of what a managed machine should look
 // like (release, component versions, accounts, spares). The node reads it and
-// converges; its heartbeat says which version it reached. docs/MANAGED-NODE.md
+// converges; its heartbeat says which version it reached. docs/dev/MANAGED-NODE.md
 // is the shape.
 const fleetDesiredSchema = `
 CREATE TABLE IF NOT EXISTS fleet_node_desired (
@@ -135,7 +135,7 @@ func (s *Store) SetEndpointTrust(endpointID, trust, source string) error {
 }
 
 // NodeDesired is one machine's desired state as the hub keeps it. Body is the
-// JSON object docs/MANAGED-NODE.md describes, without trust (that lives on the
+// JSON object docs/dev/MANAGED-NODE.md describes, without trust (that lives on the
 // endpoint); Version bumps on every write, 0 = never written.
 type NodeDesired struct {
 	EndpointID string

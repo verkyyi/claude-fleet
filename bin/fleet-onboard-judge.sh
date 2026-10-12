@@ -54,7 +54,7 @@ THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not 
 # (C9 run 22, issue #3276: 「‹ 2/2 › … @mini2」 on screen, 1260 s of waiting).
 # shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
 VIEW_UP='‹ ?[0-9–-]+/[0-9]+ ?›'
-# thin_first_state (the newcomer's thin.log on stdin, docs/CLIENT-LOGS.md):
+# thin_first_state (the newcomer's thin.log on stdin, docs/dev/CLIENT-LOGS.md):
 # landed — a `first` placed (rc 0) and a connection after it drew the view
 # (a `drawn` line, written while the view is up — #3155; or a `connect` with
 # first_ms set, written only when that connection ends); failed — the loop quit with no first session; placed — placed,

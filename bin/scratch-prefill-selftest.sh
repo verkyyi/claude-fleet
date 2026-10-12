@@ -85,7 +85,7 @@ calls, rc = drive(text, lambda t: frame('›\n', command='codex'), warm=True)
 assert rc == 0 and len(pastes(calls)) == 1
 print('ok Claude/Codex: both prompt glyphs, versioned process and styled ghosts')
 
-for screen in ('❯\u00a0Try "write a test for fleet.conf.example"\n', '› Ask Codex to do anything\n'):
+for screen in ('❯\u00a0Try "write a test for conf/fleet.conf.reference"\n', '› Ask Codex to do anything\n'):
     calls, rc = drive(text, lambda t: frame(screen), warm=True)
     assert rc == 0 and len(pastes(calls)) == 1
 print('ok NO_COLOR: standard startup placeholders still denote empty input')

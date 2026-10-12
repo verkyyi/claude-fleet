@@ -6,7 +6,7 @@
 #   curl -fsSL <url of this script> | sudo bash -s -- --hub <url> --join <码>
 #
 # The code comes from the hub's 「机器」 page (「添加机器」, a 托管 code: trusted,
-# role managed, one hour — docs/MANAGED-NODE.md §2), which prints the second
+# role managed, one hour — docs/dev/MANAGED-NODE.md §2), which prints the second
 # line. Every step looks first and acts only on what is missing; a step that
 # fails stops the run, says why and prints the rerun line, and leaves nothing
 # half written (each file lands by one rename, a step that cannot finish puts
@@ -55,7 +55,7 @@
 #             logins/*.env and agent/ become the seat's, its tenant commands go
 #             through the core's exec-as); =0 puts it back on root
 #             — whose `spotlight` task turns Spotlight off at its start (#3402,
-#             docs/MANAGED-NODE.md §19)
+#             docs/dev/MANAGED-NODE.md §19)
 #   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
 #             command writes the switch into machine.env (FLEET_ENTRY=0 takes it
 #             out), then `fleet-node-supervisor.py entry ensure` (not on ⇒ 跳过)
@@ -71,7 +71,7 @@
 #                              [--release-key <file>] [--join-file <file>]
 #                              [--login <login> --login-join-file <file>]
 #                              [--service systemd|foreground]
-# Env (sandbox seams, docs/BREAK-IT.md `node-install-half`): FLEET_NODE_STATE
+# Env (sandbox seams, docs/dev/BREAK-IT.md `node-install-half`): FLEET_NODE_STATE
 #   (/var/db/fleet-node) · FLEET_NODE_ROOT (/Library/Application Support/claude-fleet) ·
 #   FLEET_NODE_LOG · FLEET_NODE_DAEMON_DIR · FLEET_NODE_LAUNCHCTL · FLEET_NODE_TEST=1
 #   (no root needed) · FLEET_NODE_INSTALL_CURL (curl) · FLEET_NODE_INSTALL_OS /
@@ -177,7 +177,7 @@ case "$OS" in darwin|linux) ;; *) fail 检查 "unsupported platform: $OS" ;; esa
 if [ "$OS" = linux ]; then
   export FLEET_NODE_SERVICE="${FLEET_NODE_SERVICE:-systemd}"
   for dep in python3 curl useradd groupadd ssh-keygen; do
-    command -v "$dep" >/dev/null 2>&1 || fail 检查 "missing $dep: install the Linux prerequisites in docs/MANAGED-LINUX.md"
+    command -v "$dep" >/dev/null 2>&1 || fail 检查 "missing $dep: install the Linux prerequisites in docs/dev/MANAGED-LINUX.md"
   done
   if [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ]; then
     command -v systemctl >/dev/null 2>&1 || fail 检查 "Linux needs systemd; use --service foreground inside a container"

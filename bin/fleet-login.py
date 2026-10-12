@@ -96,7 +96,7 @@ try:  # the ONE TLS context for the hub: every CA source this computer has (clau
     fleet_tls.install()
 except ImportError:
     fleet_tls = None
-try:  # the client's own record: login.log (claude-fleet#2896, docs/CLIENT-LOGS.md)
+try:  # the client's own record: login.log (claude-fleet#2896, docs/dev/CLIENT-LOGS.md)
     import fleet_clientlog
 except ImportError:
     fleet_clientlog = None

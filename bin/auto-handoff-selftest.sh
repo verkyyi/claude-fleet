@@ -109,7 +109,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf -- '--- per-fleet conf ---\n' >&2; cat "$FCONF" >&2 2>/dev/null; exit 1; }
 
 # write_confs — materialise the two conf layers from GPCT (global) / FPCT (per-fleet).
-# Unset GPCT ⇒ the key stays COMMENTED OUT in the global conf (fleet.conf.example's
+# Unset GPCT ⇒ the key stays COMMENTED OUT in the global conf (conf/fleet.conf.reference's
 # shipped state); unset FPCT ⇒ the per-fleet conf carries no such line. Neither layer
 # is ever missing as a FILE here (see the NO-CONF leg for that), so an absent value
 # means "the operator never set it", not "the fleet isn't configured".

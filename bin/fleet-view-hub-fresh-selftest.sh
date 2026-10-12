@@ -24,7 +24,7 @@
 #      a hub that takes 6 s: the popup (a real one, on a pty) draws its list from
 #      the cache within 1.5 s, and the hub is asked right after, off the screen
 #
-# `fleet-view-hub-fresh-selftest.sh B` runs one leg (docs/BREAK-IT.md
+# `fleet-view-hub-fresh-selftest.sh B` runs one leg (docs/dev/BREAK-IT.md
 # view-far-reaped runs B). Drives bin/fleet_view.py through fleet-quickopen.py
 # view-rows, the real fleet-hub-sessions.sh and tmux-dashboard-rows.sh; the hub is
 # FLEET_HUB_SESSIONS_CMD, tmux a shim with no windows.

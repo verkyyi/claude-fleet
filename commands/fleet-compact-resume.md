@@ -13,7 +13,7 @@ and you continue from there.
 ## 1. Read where you were
 
 Call **`mcp__fleet__brief`** with `kind: resume` (the fleet's tool service — a
-Codex session reaches the same tool on its `fleet` server; docs/FLEET-MCP.md).
+Codex session reaches the same tool on its `fleet` server; docs/dev/FLEET-MCP.md).
 It prints the line for your seat (a worker's issue + ship contract, or a scratch
 session's map check), the recovery map you wrote before the compaction, and
 `git status` + the last three commits.

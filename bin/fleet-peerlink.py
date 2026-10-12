@@ -4,7 +4,7 @@ machines (issue #3002, EPIC #2999 C5; 共同约定 7).
 
 The ONE owner of every machine-to-machine ssh master on this login: only it
 builds, checks and closes them. Yesterday's three ways a standing connection went
-bad (#2987) are each ruled out by construction and drilled in docs/BREAK-IT.md:
+bad (#2987) are each ruled out by construction and drilled in docs/dev/BREAK-IT.md:
 
   - the wrong login: every link is named (machine, login), opened with `-l <login>`,
     and checked with `id -un` on the master before it counts — a master that

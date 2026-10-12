@@ -207,7 +207,7 @@ fi
 
 # --- verdict ------------------------------------------------------------------
 # The ladder's repo defaults (issue #1571): handoff 80, compact-prep 55, at most
-# 3 compactions — KEEP IN SYNC with bin/set-claude-state.sh and fleet.conf.example
+# 3 compactions — KEEP IN SYNC with bin/set-claude-state.sh and conf/fleet.conf.reference
 # (context-ladder-defaults-selftest.sh pins them). 0 = off, as in the hook.
 thr="${FLEET_AUTO_HANDOFF_PCT:-80}"
 case "$thr" in ''|*[!0-9]*) thr=0 ;; esac

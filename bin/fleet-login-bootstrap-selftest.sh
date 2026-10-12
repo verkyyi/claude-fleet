@@ -227,7 +227,7 @@ eq "E apply --to HEAD" "$(printf '%s' "$ap" | sed -n 's/.*--to \([0-9a-f]*\).*/\
 has "E apply ok names the tools" "$out" "apply: ok — installed at ${STABLE:0:7} (hooks, commands, skills, settings"
 has "E daemons WARN" "$out" "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.tester.* and no GUI session for tester"
 has "E WARN names the admin's command" "$out" "fleet-login-new.sh"
-has "E WARN names the doc" "$out" "docs/SHARED-MACHINE.md"
+has "E WARN names the doc" "$out" "docs/dev/SHARED-MACHINE.md"
 has "E WARN names the console path" "$out" "sign in once at the console"
 has "E WARN names the re-apply, ~-relative" "$out" "rm -f ~/.config/claude-fleet/global/bootstrap.applied ~/.config/claude-fleet/global/bootstrapped"
 hasnt "E no FAIL" "$out" "FAIL"

@@ -75,7 +75,7 @@ machine and this login — no ssh back to itself either). No 换家, no update o
 its own (the machine's runtime moves it).
 
 thin.log — TSV, one line per connection, fields only ever added at the end
-(docs/CLIENT-LOGS.md; C10 reads it):
+(docs/dev/CLIENT-LOGS.md; C10 reads it):
     time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
 byte back, first_ms = spawn → the first valid `cur`: the view drawn; net =

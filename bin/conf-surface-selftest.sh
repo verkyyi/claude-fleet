@@ -1,12 +1,12 @@
 #!/bin/bash
 # conf-surface-selftest.sh — the config surface cannot quietly grow back (issue #1101).
 #
-# fleet.conf.example is the ONE list of settings (and their defaults); the prefix+c
+# conf/fleet.conf.reference is the ONE list of settings (and their defaults); the prefix+c
 # modal renders it. #1101 cut the modal's face from 178 rows to ≤ 120 by tagging
 # pacing/budget/timeout knobs @tier=internal — but a list trimmed once grows back
 # one undocumented `${FLEET_X:-5}` at a time. This pins both directions:
 #
-#   A  every key in fleet.conf.example has a READER outside the example + the
+#   A  every key in conf/fleet.conf.reference has a READER outside the example + the
 #      modal plumbing (a dead key would be a row that does nothing);
 #   B  every `${FLEET_X:-…}` / `${FLEET_X-…}` / `${FLEET_X:=…}` a script in bin/ or
 #      hooks/ reads is either a key in the example (any @tier) or listed in
@@ -18,12 +18,12 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
-EX="$ROOT/fleet.conf.example"
+EX="$ROOT/conf/fleet.conf.reference"
 WL="$ROOT/conf/fleet-env-internal.list"
 pass=0
 ok()   { pass=$((pass+1)); }
 fail() { printf 'conf-surface FAIL: %s\n' "$1" >&2; exit 1; }
-[ -f "$EX" ] || fail "no fleet.conf.example at $EX"
+[ -f "$EX" ] || fail "no conf/fleet.conf.reference at $EX"
 [ -f "$WL" ] || fail "no conf/fleet-env-internal.list at $WL"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/conf-surface.XXXXXX") || exit 2
@@ -60,7 +60,7 @@ tr '\n' '\0' < "$WORK/scripts" | xargs -0 grep -ohE '\$\{FLEET_[A-Z0-9_]+:?[-=]'
 [ -s "$WORK/read" ] || fail 'scan found no ${FLEET_X:-…} reads at all — the scanner is broken'; ok
 cat "$WORK/example" "$WORK/listed.u" | sort -u > "$WORK/known"
 new=$(comm -23 "$WORK/read" "$WORK/known")
-[ -z "$new" ] || fail "read by a script but neither in fleet.conf.example nor conf/fleet-env-internal.list:
+[ -z "$new" ] || fail "read by a script but neither in conf/fleet.conf.reference nor conf/fleet-env-internal.list:
 $new
 — a setting an operator might change goes in the example (with a tag line; @tier=internal
   if it is pacing); an env handoff / test seam / path goes in the list, with a reason."
@@ -69,12 +69,15 @@ ok
 # --- A + C: every documented key and every listed name is read somewhere -----
 tr '\n' '\0' < "$WORK/readers" | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null | sort -u > "$WORK/mentioned"
 dead=$(comm -23 "$WORK/example" "$WORK/mentioned")
-[ -z "$dead" ] || fail "in fleet.conf.example but read by nothing (a dead row): $dead"; ok
+[ -z "$dead" ] || fail "in conf/fleet.conf.reference but read by nothing (a dead row): $dead"; ok
 # (a listed name may be read by the modal plumbing itself — FLEET_CONFIG_SHOW_INTERNAL)
 cat "$WORK/scripts" "$WORK/readers" | tr '\n' '\0' | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null \
   | sort -u > "$WORK/mentioned.all"
 stale=$(comm -23 "$WORK/listed.u" "$WORK/mentioned.all")
 [ -z "$stale" ] || fail "in fleet-env-internal.list but read by nothing (drop the line): $stale"; ok
+
+# --- the short sample at the root is generated from the reference (issue #3576) ---
+bash "$BIN/fleet-conf-example.sh" --check || fail "fleet.conf.example is stale — bin/fleet-conf-example.sh > fleet.conf.example"; ok
 
 # --- the face stays small ------------------------------------------------------
 n=$(bash -c '. "$1/fleet-config-lib.sh"; fcfg_table | grep -c .' _ "$BIN")

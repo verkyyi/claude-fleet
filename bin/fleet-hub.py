@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fleet Hub administrator CLI and MCP server; see docs/FLEET-HUB.md.
+"""Fleet Hub administrator CLI and MCP server; see docs/dev/FLEET-HUB.md.
 
 `fleet hub set|get|unset|settings|users|accounts|invite|machines|debug-ticket …` are the
 hub's own settings, people list (claude-fleet#1986), login records

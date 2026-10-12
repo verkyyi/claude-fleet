@@ -306,7 +306,7 @@ chk_client() {
     *) chk FAIL "$m" "the hub's client has no $w (#$i)" ;;
   esac
 }
-DEBUG_OFF_MSG='the hub has remote debugging off — CCQUOTA_FLEET_DEBUG_DIR + CCQUOTA_FLEET_DEBUG_KEY unset (docs/FLEET-HUB.md)'
+DEBUG_OFF_MSG='the hub has remote debugging off — CCQUOTA_FLEET_DEBUG_DIR + CCQUOTA_FLEET_DEBUG_KEY unset (docs/dev/FLEET-HUB.md)'
 run_check() {
   local tmp c off=0
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fleet-debug-drill-check.XXXXXX") || die2 'mktemp failed'

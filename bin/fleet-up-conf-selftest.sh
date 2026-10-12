@@ -73,7 +73,7 @@ hasnt "fresh: no stray keys" "$CONF" '^[[:space:]]*(export[[:space:]]+)?FLEET_(I
 cat > "$CONF" <<'SEED'
 # claude-fleet: fleet 'fleet-demo' — written by fleet-up.sh 2026-01-01 00:00:00
 # Overlays the global fleet.conf for this fleet's tmux session. Add any other
-# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
+# FLEET_* keys (see conf/fleet.conf.reference) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
 FLEET_REPO="acme/OLD"
 FLEET_MAIN="/old/path"
 FLEET_BASE_BRANCH="develop"
@@ -131,7 +131,7 @@ eq "export: single line" "1" "$(grep -c 'FLEET_PROTECTED_RE=' "$CONF")"
 cat > "$CONF" <<'SEED2'
 # claude-fleet: fleet 'fleet-demo' — written by fleet-up.sh 2026-01-01 00:00:00
 # Overlays the global fleet.conf for this fleet's tmux session. Add any other
-# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
+# FLEET_* keys (see conf/fleet.conf.reference) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
 FLEET_REPO="acme/OLD"
 FLEET_MAIN="/old/path"
 FLEET_BASE_BRANCH="develop"

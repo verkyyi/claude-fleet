@@ -12,7 +12,7 @@
 # conf/vendor-tmux.lock). They live under pinned/ on the same OSS bucket
 # (haowan24-fleet-releases) — prune only touches <sha>/ dirs, never pinned/.
 # Bumping a version in release.json means putting the new file here BEFORE
-# moving stable (docs/MANAGED-NODE.md §7): a release reads this dir once, when
+# moving stable (docs/dev/MANAGED-NODE.md §7): a release reads this dir once, when
 # its stable is first built, and is never rebuilt — one missing an artifact
 # leaves the managed machines on the old version (`failed`). Since #2631 both
 # ends guard it: `fleet-stable.sh move` refuses (`artifacts:`) while

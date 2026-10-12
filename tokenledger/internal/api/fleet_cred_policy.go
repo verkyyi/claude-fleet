@@ -58,7 +58,7 @@ import (
 // explicit bind, a retained binding's re-check and the 429 rebind all choose
 // from it, so neither a manual account name nor a cached binding escapes.
 //
-// Timing (docs/SHARED-MACHINE.md «订阅白名单»): the central proxy sees a change
+// Timing (docs/dev/SHARED-MACHINE.md «订阅白名单»): the central proxy sees a change
 // within its verdict cache (≤ 30 s); a node's lease answers recheck_secs while
 // any policy exists, so a narrowed account leaves the node within that
 // (an agent that predates this ignores both and keeps a copy until its

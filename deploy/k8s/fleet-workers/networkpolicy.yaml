@@ -5,7 +5,7 @@
 # another user pod, not the internet. The shared services take requests from user pods only
 # and go out on their own.
 #
-# ⚠️ ACK's flannel does not ENFORCE NetworkPolicy (docs/MANAGED-LINUX.md «Egress
+# ⚠️ ACK's flannel does not ENFORCE NetworkPolicy (docs/dev/MANAGED-LINUX.md «Egress
 # guard»). On this cluster the walls that hold are the user pod's own egress
 # guard (render.py --egress-closed) and fleet-egress's source check; these rules
 # are the same contract written for the day the CNI enforces them (Terway with

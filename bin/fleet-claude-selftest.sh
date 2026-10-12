@@ -144,7 +144,7 @@ has "$argv" "--mcp-config=$WORK/mcp.json" || fail "a file path was not passed th
 ok "a file path passes through verbatim, in the =form (the CLI takes either value shape)"
 
 # --- #1078: the shipped minimal worker set, conf/mcp-worker.json ---------------
-# fleet.conf.example + docs/INSTALL.md RECOMMEND pointing FLEET_MCP_CONFIG at this
+# conf/fleet.conf.reference + docs/dev/INSTALL.md RECOMMEND pointing FLEET_MCP_CONFIG at this
 # file, so pin both halves: the file itself (present, valid, ONLY an mcpServers
 # object — the shape bin/fleet-codex-policy.py also accepts — and containing only
 # the fleet-peer bridge), and that pointing the key at it launches strict with

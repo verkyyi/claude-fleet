@@ -13,7 +13,7 @@ import (
 
 // The repository a turn was spent in, declared at the source.
 //
-// Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md §6.
+// Design: the cost-per-issue seam design note (2026-09-19; removed in claude-fleet#3576, in git history) §6.
 //
 // §5 of that design left cost-per-issue gated behind a refusal: a spend row
 // carries an issue NUMBER and no repository, every repository starts its issues

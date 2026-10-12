@@ -11,7 +11,7 @@ import (
 // runs (claude-fleet#2334): each component's artifact name as a template.
 const ReleaseJSON = "release.json"
 
-// DefaultPlatforms: what a managed machine is (docs/MANAGED-NODE.md).
+// DefaultPlatforms: what a managed machine is (docs/dev/MANAGED-NODE.md).
 var DefaultPlatforms = []string{"darwin-arm64"}
 
 // Pinned returns every artifact name release.json pins, its {version} {os}

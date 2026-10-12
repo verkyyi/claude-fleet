@@ -2,7 +2,7 @@
 # fleet-intro.sh — the SSH login banner: this login's fleet and how to get in
 # (issues #1068, #1255). One fleet per login (#979), every repo in it equal (#788).
 #
-# Called straight from ~/.zshrc (see docs/INSTALL.md step 7), which owns the
+# Called straight from ~/.zshrc (see docs/dev/INSTALL.md step 7), which owns the
 # gating: interactive shells only, never inside tmux (worker panes source .zshrc
 # too), and ~/.hushfleet as the opt-out. This script does no gating of its own.
 #
@@ -12,7 +12,7 @@
 # running and a stopped fleet print the same banner. The way in is `fleet` alone
 # (issue #1711, EPIC #1710 C1) — `cf` is folded into it.
 #
-#   0 fleets  → "○ 未配置" + a pointer at docs/INSTALL.md
+#   0 fleets  → "○ 未配置" + a pointer at docs/dev/INSTALL.md
 #   2+ fleets → "⚠ 有 N 个，只能留一个" + `fleet-repo.sh fold` (guards #979)
 #   1 fleet   → "claude fleet · N 个仓库" (the fleet conf's repo + repos/*.conf,
 #               a repeat dropped, as fleet_repos), the `fleet` line, any intro.d
@@ -46,8 +46,8 @@ done
 if [ "$n" -eq 0 ]; then
   if zh; then printf '%sclaude fleet%s %s○ 未配置%s\n' "$b" "$r" "$y" "$r"
   else printf '%sclaude fleet%s %s○ not set up%s\n' "$b" "$r" "$y" "$r"; fi
-  if zh; then echo '见 ~/.claude/fleet/docs/INSTALL.md'
-  else echo 'see ~/.claude/fleet/docs/INSTALL.md'; fi
+  if zh; then echo '见 ~/.claude/fleet/docs/dev/INSTALL.md'
+  else echo 'see ~/.claude/fleet/docs/dev/INSTALL.md'; fi
   exit 0
 fi
 if [ "$n" -gt 1 ]; then

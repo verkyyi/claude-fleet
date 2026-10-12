@@ -1,5 +1,5 @@
 # The relay's local gate (claude-fleet#2048) — Caddy's forward_auth asks it on
-# 127.0.0.1:2091, it asks the hub. docs/CRED-RELAY.md «入口重启时» is the runbook.
+# 127.0.0.1:2091, it asks the hub. docs/dev/CRED-RELAY.md «入口重启时» is the runbook.
 # Install: /usr/local/lib/fleet-relay/fleet-relay-check.py (0755) + this file as
 # /etc/systemd/system/fleet-relay-check.service, then
 #   sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check

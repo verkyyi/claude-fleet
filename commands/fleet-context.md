@@ -15,7 +15,7 @@ or a scratch session).
 ## 1. Read the meter
 
 One call — **`mcp__fleet__context`**, the fleet's tool service (a Codex session
-reaches the same tool on its `fleet` server; docs/FLEET-MCP.md). It resolves
+reaches the same tool on its `fleet` server; docs/dev/FLEET-MCP.md). It resolves
 *this* session's transcript and this pane's statusline stamp on its own, so pass
 nothing. Outside a fleet pane it says so — then **ABORT** in one line: *"not
 inside a fleet — run this from a fleet session."* Any seat may run it (`owner:
@@ -67,7 +67,7 @@ the same `@ctx_pct` at every Stop to decide whether to fire the auto-handoff nud
 (#330), and an unstamped pane reads as `-1` — which never crosses a threshold, so
 **auto-handoff cannot fire at all**. That failure is invisible everywhere else, so
 it is reported here. The fix is install-side: point `settings.json`'s `statusLine`
-at `~/.claude/fleet/conf/statusline.sh` (see [`docs/INSTALL.md`](../docs/INSTALL.md)
+at `~/.claude/fleet/conf/statusline.sh` (see [`docs/dev/INSTALL.md`](../docs/dev/INSTALL.md)
 step 8b), or add the same stamping block to whatever statusline the machine runs.
 
 Sidechain records are excluded — a fanned-out `Explore` subagent's context is not

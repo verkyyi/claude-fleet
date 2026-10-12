@@ -270,7 +270,7 @@ func TestSpareIsInNoPeopleView(t *testing.T) {
 	}
 }
 
-// spare-login-empty (docs/BREAK-IT.md): no spare ready (the refill still
+// spare-login-empty (docs/dev/BREAK-IT.md): no spare ready (the refill still
 // running) ⇒ the newcomer's login is opened as before, and every door says
 // 「正在开」 with its ETA — never a silent wait, never a half-ready spare.
 func TestSpareEmptyFallsBackToOpening(t *testing.T) {

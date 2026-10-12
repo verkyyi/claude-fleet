@@ -288,7 +288,7 @@ release_gate() {   # release_gate <old> <new>
     _why="$(short "$2") ships bin/fleet-node-update.py but no release.json — a managed machine cannot tell what to install"
   fi
   if [ "$force" -eq 1 ]; then force_log "$1" "$2" release "$_why" "release.json"; return 0; fi
-  refuse "release: $_why — fix it (docs/MANAGED-NODE.md §7), or --force to move anyway (logged)"
+  refuse "release: $_why — fix it (docs/dev/MANAGED-NODE.md §7), or --force to move anyway (logged)"
 }
 
 # 7. Every artifact release.json pins is on the hub (issue #2631). The hub
@@ -346,7 +346,7 @@ print(" ".join(json.load(open(sys.argv[1])).get("fetchable") or []))' "$_tmp" 2>
     _why="$(short "$2")'s release.json pins $(printf '%s' "$_missing" | sed 's/ /, /g'), which the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — every managed machine would stay on the old version"
   fi
   if [ "$force" -eq 1 ]; then force_log "$1" "$2" artifacts "$_why" "the hub's artifacts"; return 0; fi
-  refuse "artifacts: $_why — put it there first (docs/MANAGED-NODE.md §7), or --force to move anyway (logged)"
+  refuse "artifacts: $_why — put it there first (docs/dev/MANAGED-NODE.md §7), or --force to move anyway (logged)"
 }
 
 # 8. The ccquota a release ships is the HUB's own build (its image's dist dir,

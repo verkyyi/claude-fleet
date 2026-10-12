@@ -67,7 +67,7 @@ die() { printf 'fleet-hub-node: %s\n' "$2" >&2; exit "$1"; }
 # fleet-node-join.sh writes it to $FLEET_CONF_DIR/node.env (0600) at join, and
 # fleet_hub_* (bin/fleet-lib.sh) read it per call. A login whose agent predates
 # that keeps the token ONLY in its launchd service's EnvironmentVariables
-# (docs/SHARED-MACHINE.md step 4), so every hub call from its fleet panes exited 1
+# (docs/dev/SHARED-MACHINE.md step 4), so every hub call from its fleet panes exited 1
 # 「no hub configured」 and fell back silently. `env` reports; `env --write` fills
 # node.env once from the service definition:
 #   ~/Library/LaunchAgents/com.ccquota.agent.plist              (gui LaunchAgent)

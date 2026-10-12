@@ -332,7 +332,7 @@ if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model
 #   <path|json>  ONLY these servers (the CLI takes a file path or inline JSON)
 #
 # Recommended: the shipped minimal worker set, ~/.claude/fleet/conf/mcp-worker.json
-# (issue #1078; docs/INSTALL.md "MCP servers on demand").
+# (issue #1078; docs/dev/INSTALL.md "MCP servers on demand").
 #
 # --strict-mcp-config is what drops the REMOTE connectors too, not just local stdio.
 # An explicit --mcp-config/--strict-mcp-config from the caller wins, same as --model.
@@ -373,7 +373,7 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
     *)
       export FLEET_MCP_BIN="$BIN" FLEET_MCP_SERVER=1
       # An allowlist that already names a `fleet` server (this file, or a copy a
-      # repo extended — docs/INSTALL.md) mounts it; a second one would collide.
+      # repo extended — docs/dev/INSTALL.md) mounts it; a second one would collide.
       case "${FLEET_MCP_CONFIG:-}" in
         ''|none) _fc_mwin='' ;;
         '{'*)    _fc_mwin="$FLEET_MCP_CONFIG" ;;

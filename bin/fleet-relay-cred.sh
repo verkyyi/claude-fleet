@@ -9,7 +9,7 @@
 #   fleet-relay-cred.sh status [<machine>]  the operator lists who holds one
 #
 # What it is: a trusted machine that cannot reach the upstream directly sends
-# its sessions through the relay (docs/CRED-RELAY.md). The relay holds no
+# its sessions through the relay (docs/dev/CRED-RELAY.md). The relay holds no
 # subscription credential; it lets a request through only when the hub's
 # GET /v1/relay/check accepts the pass in its X-Fleet-Relay header — this
 # credential (`frl1.…`, or `frl2.…` — signed, four hours — when the hub has a

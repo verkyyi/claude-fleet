@@ -1097,7 +1097,7 @@ The rest of the Fleet Hub moves in on the same switch: `worker_start`,
 `worker_message`, `worker_stop`, `worker_resume`, `config_set` and `gh_comment`
 (journalled writes), plus `gh_issue_view` / `gh_pr_view` / `gh_pr_checks`
 (live reads through the node's `fleet-gh.sh`). Same MCP endpoint, same
-arguments and codes as `bin/fleet_hub.py` (`docs/FLEET-HUB.md`); over HTTP a
+arguments and codes as `bin/fleet_hub.py` (`docs/dev/FLEET-HUB.md`); over HTTP a
 write is `POST /v1/fleet/<tool>` with a JSON body (`Content-Type:
 application/json` — a GET, or any other type, is refused).
 
@@ -1268,7 +1268,7 @@ with the relay signing key and a node that asks, `fcp-h2.`, Ed25519-signed so
 the relay and the credential proxy verify it themselves (claude-fleet#3698) —
 (claude-fleet#1969, `/v1/fleet/session-cred` — issue / renew / verify / revoke;
 key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
-`CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/FLEET-HUB.md), which the
+`CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/dev/FLEET-HUB.md), which the
 cluster credential proxy — `ccquota credproxy`, its own Deployment
 (deploy/k8s/credproxy, claude-fleet#1973) — swaps for the bound account's
 credential via `/v1/fleet/credproxy/resolve`
@@ -1363,7 +1363,7 @@ again — there is nothing the hub can renew. `expires_at` is the operator's
 word: the token endpoint does not say.
 
 **Pool accounts.** `"principal_id":"pool"` stores a credential that belongs to
-the machines' shared pool (docs/SHARED-MACHINE.md 2b), not to a person. Every
+the machines' shared pool (docs/dev/SHARED-MACHINE.md 2b), not to a person. Every
 node whose login IS some active principal gets the pool rows in its lease
 beside its own — after the same no-principal and revocation checks, so a
 revoked person or machine loses the pool too; the audit row names the person
@@ -1789,7 +1789,7 @@ lapse on the 30-minute TTL as for any lost node. Every change is a `fleet_audit`
 row (`node_maintenance`, actor `operator` or `node:<user>@<machine>`, outcome
 `ENTER: <reason>` / `LEAVE` / `ALREADY: …` / `NOT_FLAGGED`). No setting ⇒ two
 words, as before (`TestMaintenanceOffAddsNothing`). The runbook is
-claude-fleet's `docs/MULTI-MACHINE-OPS.md`.
+claude-fleet's `docs/dev/MULTI-MACHINE-OPS.md`.
 
 ### The SSH relay — SSH through the hub when nothing else reaches (claude-fleet#1413)
 
@@ -2478,7 +2478,7 @@ The dashboard is hand-written HTML/CSS/JS in `web/dist`, embedded via
 `embed.FS`. There is no npm pipeline on purpose: a Go toolchain alone produces
 the complete artifact.
 
-Design notes are in `docs/superpowers/specs/`.
+Design notes lived in `docs/superpowers/` until claude-fleet#3576 removed them; they are in git history.
 
 ### Trunk and CI
 

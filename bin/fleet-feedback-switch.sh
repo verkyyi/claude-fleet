@@ -14,7 +14,7 @@
 #   * a MANAGED login (fleet_node_manages — the machine daemon runs it): the
 #     install-apply `plugins` pass installs + enables it ONCE and writes it into
 #     $FLEET_CONF_DIR/plugins-defaulted.json; from then on it is the person's —
-#     `off` stays off through every upgrade (docs/MANAGED-NODE.md §18);
+#     `off` stays off through every upgrade (docs/dev/MANAGED-NODE.md §18);
 #   * anyone's own computer: nothing is installed; `on` turns it on.
 #
 # Exit: enabled 0 on / 1 off · on/off 0 done, 1 `claude plugin` failed · status 0 ·

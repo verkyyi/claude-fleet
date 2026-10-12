@@ -146,7 +146,7 @@ stderr). Otherwise ssh's own exit, 1 when no route answers or no machine is
 known. 2 usage / configuration.
 
 Every step leaves one line in the client's connect.log (claude-fleet#2896,
-docs/CLIENT-LOGS.md): the hub's machine answer when it is not one (`home`), the
+docs/dev/CLIENT-LOGS.md): the hub's machine answer when it is not one (`home`), the
 route measured (`pick`), ssh's start and end with its exit (`ssh-start` /
 `ssh-end` — ssh runs as a child for that, ^C / ^Z / a SIGHUP reach it as
 before), and each relay's handshake and end with who closed it and the
@@ -198,7 +198,7 @@ fleet_clientlog = _clientlog()
 
 
 def clog(event, machine="", route="", ms="", result="", reason=""):
-    """One line in the client's connect.log (docs/CLIENT-LOGS.md); never fails."""
+    """One line in the client's connect.log (docs/dev/CLIENT-LOGS.md); never fails."""
     if fleet_clientlog:
         fleet_clientlog.write("connect", event, machine, route, "" if ms == "" else str(int(ms)), result, reason)
 

@@ -104,7 +104,7 @@ hasnt "1 no seed line" "$out" "seed repo"
 hasnt "1 attaches as always (no --no-attach)" "$out" "not attaching"
 want=$(printf '%s\n' \
   "# Overlays the global fleet.conf for this fleet's tmux session. Add any other" \
-  '# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.')
+  '# FLEET_* keys (see conf/fleet.conf.reference) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.')
 eq "1 conf: the header, no repo" "$(nohdr "$C")" "$want"
 head -1 "$C" | grep -qE "^# claude-fleet: fleet 'fleet' — written by fleet-up\.sh [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8}\$" \
   || fail "1 header line: $(head -1 "$C")"

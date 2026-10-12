@@ -52,7 +52,7 @@
 # FLEET_HOST=1, `client` is the fleet itself and needs no key. `migrate` rewrites
 # an old FLEET_ROLE line in place (an existing file too), and every reader still
 # reads FLEET_ROLE where no FLEET_HOST is written — for one version. The hub's
-# protocol keeps its own word, node (node.env, /v1/node/*): docs/TERMS.md.
+# protocol keeps its own word, node (node.env, /v1/node/*): docs/dev/TERMS.md.
 #
 # Exit 0 ok (or nothing to do), 1 failed, 2 usage.
 set -uo pipefail

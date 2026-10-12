@@ -104,7 +104,7 @@ METRICS = {
     3: "能看到别人会话内容的途径",
     4: "给新人开账号时要连的境外地址",
 }
-# id → (metric, BREAK-IT row) — every row is in docs/BREAK-IT.md (the selftest lints it)
+# id → (metric, BREAK-IT row) — every row is in docs/dev/BREAK-IT.md (the selftest lints it)
 ITEMS = [
     ("credsep", 1, "lease-unseparated-user"),
     ("cred-store", 1, "new-login-unseparated"),

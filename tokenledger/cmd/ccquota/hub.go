@@ -141,7 +141,7 @@ func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
 		}
 		url := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
 		if url == "" {
-			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/dev/CRED-RELAY.md)")
 		}
 		if len(srv.SessionCredKey) == 0 {
 			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its relay pass with it")
@@ -175,7 +175,7 @@ func fleetHubQuota(srv *api.Server, vault *credvault.Vault) error {
 		}
 		url := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
 		if url == "" {
-			return errors.New("CCQUOTA_FLEET_HUB_QUOTA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+			return errors.New("CCQUOTA_FLEET_HUB_QUOTA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/dev/CRED-RELAY.md)")
 		}
 		if len(srv.SessionCredKey) == 0 {
 			return errors.New("CCQUOTA_FLEET_HUB_QUOTA=relay needs CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its quota pass with it")
@@ -1173,7 +1173,7 @@ func githubOAuthVia(srv *api.Server, getenv func(string) string) error {
 	}
 	url := strings.TrimSpace(getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
 	if url == "" {
-		return errors.New("CCQUOTA_GITHUB_OAUTH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+		return errors.New("CCQUOTA_GITHUB_OAUTH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/dev/CRED-RELAY.md)")
 	}
 	if len(srv.SessionCredKey) == 0 {
 		return errors.New("CCQUOTA_GITHUB_OAUTH_VIA=relay needs CCQUOTA_FLEET=1 and CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its relay pass with it")

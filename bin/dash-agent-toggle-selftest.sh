@@ -29,7 +29,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 PROMPT="$BIN/dash-agent-prompt.sh"; TOGGLE="$BIN/dash-agent-toggle.sh"
-for f in "$PROMPT" "$TOGGLE" "$BIN/fleet-lib.sh" "$BIN/fleet-config-lib.sh" "$BIN/../fleet.conf.example" \
+for f in "$PROMPT" "$TOGGLE" "$BIN/fleet-lib.sh" "$BIN/fleet-config-lib.sh" "$BIN/../conf/fleet.conf.reference" \
          "$BIN/tmux-dashboard.sh" "$BIN/dash-enter.sh" "$BIN/dash-esc.sh" "$BIN/fleet-keys.sh"; do
   [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }
 done
@@ -48,7 +48,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output -
 # --- sandbox --------------------------------------------------------------------
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/.claude-dash/global"
 for f in dash-agent-prompt.sh dash-agent-toggle.sh dash-keymap.sh fleet-lib.sh fleet-config-lib.sh fleet-ui-lang.sh fleet_config_write.py; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
-ln -s "$BIN/../fleet.conf.example" "$WORK/fleet.conf.example"   # fcfg_default / fcfg_validate read it off ../
+ln -s "$BIN/../conf/fleet.conf.reference" "$WORK/conf/fleet.conf.reference"   # fcfg_default / fcfg_validate read it off ../
 DISPLAY_LOG="$WORK/display"
 cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
 #!/bin/bash

@@ -8,7 +8,7 @@ import (
 
 // The repository a spend row was earned in: stored, never derived.
 //
-// Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md §6.
+// Design: the cost-per-issue seam design note (2026-09-19; removed in claude-fleet#3576, in git history) §6.
 // The resolver lives in internal/agent/gitrepo.go, on the endpoint, because
 // that is the only side standing inside the checkout. Everything here is the
 // hub keeping its half of the bargain -- it stores what it was told and infers

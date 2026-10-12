@@ -23,7 +23,7 @@ import (
 //
 // Only the operator writes; the node reads its own and reports, on every
 // heartbeat, the version it converged to (control.DesiredReport). The shape is
-// docs/MANAGED-NODE.md — C3–C6 read it, so a field added here is added there.
+// docs/dev/MANAGED-NODE.md — C3–C6 read it, so a field added here is added there.
 
 // FleetNodesPrefix is the per-machine subtree.
 const FleetNodesPrefix = "/v1/fleet/nodes/"
@@ -166,7 +166,7 @@ func (s *Server) handleFleetNodes(w http.ResponseWriter, r *http.Request) {
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			httpError(w, http.StatusBadRequest, "the body must be one desired-state object (docs/MANAGED-NODE.md): "+err.Error())
+			httpError(w, http.StatusBadRequest, "the body must be one desired-state object (docs/dev/MANAGED-NODE.md): "+err.Error())
 			return
 		}
 		if err := req.DesiredBody.validate(); err != nil {

@@ -28,7 +28,7 @@
 #  10. The switch keys (issue #1903): dash-keymap.sh --panel switch ⇄ the conf's
 #      user-keys + User<code> binds + prefix keys ⇄ the sheet ⇄ the iTerm2 profile.
 #
-#  12. The keys of a local Claude (issue #2760, EPIC #2756 C4): docs/CLIENT.md's
+#  12. The keys of a local Claude (issue #2760, EPIC #2756 C4): docs/dev/CLIENT.md's
 #      table «和本地 Claude 的键» ⇄ the three confs (conf/tmux-shell.conf,
 #      conf/tmux-shell-stage.conf, conf/tmux-attention.conf) ⇄ fleet-shell.sh's
 #      prefix ⇄ fleet-iterm-profile.py — every key typed through three real tmux
@@ -678,7 +678,7 @@ grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifes
 grep -qxF 'set -s terminal-overrides[90] "*:Cmg@:Clmg@"' "$CONF" || fail "11: the client conf does not keep the terminal's left/right margins off"
 
 # --- 12. the keys of a local Claude, the same through three servers (issue #2760) --
-# docs/CLIENT.md «和本地 Claude 的键» is the table (EPIC #2756 C4). Lint: the three
+# docs/dev/CLIENT.md «和本地 Claude 的键» is the table (EPIC #2756 C4). Lint: the three
 # confs ask for extended keys (the client's two under __PARITY__), the prefix is ⌃]
 # with the iTerm2-only ⌃B road, the iTerm2 profile's left ⌥ is Esc+ — each gone
 # under FLEET_KEYS_PARITY=0. Then for real, on isolated sockets with the three
@@ -902,7 +902,7 @@ class Term:
 
 
 def rows():
-    """the table in docs/CLIENT.md «和本地 Claude 的键»: (key, fleet, [encodings])"""
+    """the table in docs/dev/CLIENT.md «和本地 Claude 的键»: (key, fleet, [encodings])"""
     text = open(TABLE, encoding="utf-8").read()
     sec = text.split("## 和本地 Claude 的键", 1)[1].split("\n## ", 1)[0]
     out = []
@@ -978,11 +978,11 @@ PY
     done
   }
   kp_render 1 'C-]'
-  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/CLIENT.md" on 2>&1); kp_rc=$?
+  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/dev/CLIENT.md" on 2>&1); kp_rc=$?
   printf '%s\n' "$kp_out" | sed 's/^/  12 /'
   [ "$kp_rc" = 0 ] || { rm -rf "$KP"; fail "12: a key of the table does not reach the session as it would locally (above)"; }
   kp_render 0 C-b
-  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/CLIENT.md" off 2>&1); kp_rc=$?
+  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/dev/CLIENT.md" off 2>&1); kp_rc=$?
   printf '%s\n' "$kp_out" | sed 's/^/  12 /'
   [ "$kp_rc" = 0 ] || { rm -rf "$KP"; fail "12: FLEET_KEYS_PARITY=0 is not as before (above)"; }
   rm -rf "$KP"

@@ -321,7 +321,7 @@ const RelayVia = "relay"
 const RelayTokenPath = "/openai-auth/oauth/token"
 
 // RelayPassHeader carries the hub's own pass to the relay's forward_auth; the
-// relay strips it before it forwards (docs/CRED-RELAY.md).
+// relay strips it before it forwards (docs/dev/CRED-RELAY.md).
 const RelayPassHeader = "X-Fleet-Relay"
 
 // RelayRefresher posts a Codex refresh to the Singapore relay

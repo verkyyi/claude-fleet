@@ -8,7 +8,7 @@ import (
 )
 
 // The spend side's issue number: where it comes from, and what it refuses to
-// guess. Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
+// guess. Design: the cost-per-issue seam design note (2026-09-19; removed in claude-fleet#3576, in git history)
 //
 // A branch name is the only issue signal the hub already holds -- it arrives on
 // every event from both sources (internal/scan/parse.go:27,

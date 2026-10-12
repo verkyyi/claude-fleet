@@ -22,7 +22,7 @@
 # lease (every 15 min while any list exists; an older agent, and the very first
 # list ever set, within its ≤ 6 h renewal), which removes a forbidden account's
 # copy. A token already handed to a machine lives until its own expiry — an
-# allowlist cannot revoke it at the provider. docs/SHARED-MACHINE.md «订阅白名单».
+# allowlist cannot revoke it at the provider. docs/dev/SHARED-MACHINE.md «订阅白名单».
 #
 # Who may: the operator — a viewer token in CCQUOTA_VIEWER_TOKEN, read from the
 # ENVIRONMENT only, handed to curl on stdin (`-H @-`), never in an argv.

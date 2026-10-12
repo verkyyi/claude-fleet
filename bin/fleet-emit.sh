@@ -44,7 +44,7 @@
 # (the charter scrub — identity is carried by the token, not the payload), no
 # credentials. Every field is passed through a per-field charset filter before it
 # reaches the JSON, so a value can neither smuggle structure nor carry anything
-# outside its declared shape. See docs/EMIT.md.
+# outside its declared shape. See docs/dev/EMIT.md.
 #
 # NEVER BLOCKS, NEVER FAILS A SESSION
 # An emit is an append of one small file to a bounded spool, then a DETACHED drain.

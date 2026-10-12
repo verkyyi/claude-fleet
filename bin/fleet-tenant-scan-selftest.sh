@@ -7,7 +7,7 @@
 # ordinary login (EPIC #2293 convention 5).
 #
 #   0  a clean machine: all eleven items PASS, the four metrics 0, exit 0; every
-#      item names a row that is in docs/BREAK-IT.md (the table ⇔ the doc)
+#      item names a row that is in docs/dev/BREAK-IT.md (the table ⇔ the doc)
 #   1  credsep       not separated → ①
 #   2  cred-store    another login's store listable; a token-shaped public file → ①
 #   3  cred-scan     a token at accounts/*.hub → ① (and the token never printed)
@@ -147,9 +147,9 @@ for m in 1 2 3 4; do [ "$(ts_metric $m)" = 0 ] || bad "0: metric $m is not 0"; d
 [ "$(printf '%s\n' "$OUT" | grep -c '^| [a-z-]* | [①②③④] |')" = 11 ] && ok "0: eleven rows" || bad "0: not eleven rows"
 MISS=''
 for r in $(printf '%s\n' "$OUT" | sed -n 's/.*| `\([a-z0-9-]*\)` |$/\1/p' | sort -u); do
-  grep -qF -- "| \`$r\` |" "$ROOT/docs/BREAK-IT.md" || MISS="$MISS $r"
+  grep -qF -- "| \`$r\` |" "$ROOT/docs/dev/BREAK-IT.md" || MISS="$MISS $r"
 done
-[ -z "$MISS" ] && ok "0: every item names a docs/BREAK-IT.md row" || bad "0: rows not in docs/BREAK-IT.md:$MISS"
+[ -z "$MISS" ] && ok "0: every item names a docs/dev/BREAK-IT.md row" || bad "0: rows not in docs/dev/BREAK-IT.md:$MISS"
 ts_scan "$D" --only forward
 expect forward PASS "0: the #2290 drill green → forward PASS"
 

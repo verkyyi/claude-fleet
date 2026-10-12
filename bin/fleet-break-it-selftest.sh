@@ -2,7 +2,7 @@
 # fleet-break-it-selftest.sh — every known way to break the fleet, done for real
 # in a sandbox, and the fleet putting itself back (issue #1786, EPIC #1776 C10).
 #
-# docs/BREAK-IT.md is the list: one row per way (方式 · 后果 · 自愈方式 · 演练).
+# docs/dev/BREAK-IT.md is the list: one row per way (方式 · 后果 · 自愈方式 · 演练).
 # Every row's 演练 cell names a `drill_<id>` below, or says 登记：<ticket> for a
 # way fixed elsewhere (registered, never drilled). The table and the drills are
 # held in lockstep: a row with no drill, or a drill with no row, is a FAIL. A new
@@ -25,7 +25,7 @@
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   role-auto-reopen-off                            nothing reopens a seat: fleet-up.sh, fleet-diskguard.sh
 #   role-seat-migrate-early                         fleet-role-windows.sh (seats left while the live install revives)
-#                                                   home_watch, bin/fleet-orchestrator.sh / fleet-steward.sh shells
+#                                                   home_watch, the seat launchers gone (#3576)
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
@@ -193,7 +193,7 @@
 # Machine half — a sandbox Homebrew prefix under a world-traversable tmp dir:
 #   brew-keg-700                                    bin/fleet-diskguard.sh --brew-watch,
 #                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
-#   nothing-starts-by-itself                        bin/fleet-dispatch.sh (the retired shell),
+#   nothing-starts-by-itself                        bin/fleet-dispatch.sh gone (#3576),
 #                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
 #   release-push-lost                               bin/fleet-node-supervisor.py (task_due: update-now + the
 #                                                   update clock), fleet-install-sync.sh --now; the Go half is
@@ -219,7 +219,7 @@ export FLEET_SIDEBAR_FOLD=off
 [ $# -gt 0 ] && BREAK_ONLY="$*"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-DOC="$ROOT/docs/BREAK-IT.md"
+DOC="$ROOT/docs/dev/BREAK-IT.md"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-break-it: python3 absent — SKIP\n'; exit 0; }
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'fleet-break-it: tmux absent — SKIP\n'; exit 0; }
@@ -273,7 +273,7 @@ PY
 )
 LINT=0
 lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
-[ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
+[ -f "$DOC" ] || lintfail "docs/dev/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
 DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" "$BIN/fleet-break-it-seats-selftest.sh" "$BIN/fleet-break-it-admin-selftest.sh" | tr _ -)
@@ -298,11 +298,11 @@ done <<EOF
 $ROWS
 EOF
 for d in $DRILLS; do
-  case " $IDS " in *" $d "*) ;; *) lintfail "drill_${d//-/_} has no row in docs/BREAK-IT.md" ;; esac
+  case " $IDS " in *" $d "*) ;; *) lintfail "drill_${d//-/_} has no row in docs/dev/BREAK-IT.md" ;; esac
 done
 [ "$NROWS" -ge 8 ] || lintfail "the list has $NROWS rows (the issue asks for at least 8)"
 # The convention is written down where the next person will read it.
-grep -q 'BREAK-IT.md' "$ROOT/CLAUDE.md" 2>/dev/null || lintfail "CLAUDE.md does not name docs/BREAK-IT.md"
+grep -q 'BREAK-IT.md' "$ROOT/CLAUDE.md" 2>/dev/null || lintfail "CLAUDE.md does not name docs/dev/BREAK-IT.md"
 
 # ======================================================= node: the sandbox }
 
@@ -709,9 +709,8 @@ drill_disk_full() {
 # not one window comes back.
 drill_role_auto_reopen_off() {
   CAP=10; BREAK_SOCK="$WORK/sock-ra"; local t0 wins n f
-  for f in fleet-orchestrator.sh fleet-steward.sh; do
-    grep -v '^#' "$BIN/$f" | grep -qx 'exit 0' && [ "$(grep -v '^#' "$BIN/$f" | grep -c .)" = 1 ] \
-      || { WHY="$f is more than a quiet shell — it can open a window again"; return 1; }
+  for f in fleet-orchestrator.sh fleet-steward.sh; do                      # the shells left with #3576
+    [ ! -e "$BIN/$f" ] || { WHY="$f is back — a seat launcher can open a window again"; return 1; }
   done
   grep -q 'fleet-orchestrator.sh\|fleet-steward.sh' "$BIN/fleet-up.sh" \
     && { WHY="fleet-up.sh still runs a seat launcher"; return 1; }
@@ -731,8 +730,7 @@ drill_role_auto_reopen_off() {
       . "$BIN/fleet-lib.sh"
       fleet_sockets() { echo ra; }
       eval "$(sed -n '/^home_watch() {/,/^}/p' "$BIN/fleet-diskguard.sh")"
-      home_watch
-      bash "$BIN/fleet-orchestrator.sh" ensure ra; bash "$BIN/fleet-steward.sh" ensure ra ) >/dev/null 2>&1
+      home_watch ) >/dev/null 2>&1
   done
   SECS=$(since "$t0")
   wins=$(nt list-windows -t ra -F '#{window_name}' | tr '\n' ' ')
@@ -6579,8 +6577,7 @@ SH
   done
   ( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_unit_names ) | grep -qx dispatch \
     && { WHY="the daemon registry still lists dispatch"; return 1; }
-  PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_AUTOFILL=1 bash "$sb/bin/fleet-dispatch.sh" >/dev/null 2>&1
-  PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_AUTOFILL=1 bash "$sb/bin/fleet-dispatch.sh" fleet >/dev/null 2>&1
+  [ ! -e "$BIN/fleet-dispatch.sh" ] || { WHY="bin/fleet-dispatch.sh is back"; return 1; }   # its shell left with #3576
   # ④ the diskguard tick reads master's red macOS run: files + alerts, spawns nobody
   cat > "$sb/dg.sh" <<SH
 FLEET_DISKGUARD_SOURCE=1 . "$sb/bin/fleet-diskguard.sh"
@@ -7003,7 +7000,7 @@ drill_land_race() {
 
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0
-printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
+printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
 part=${BREAK_PART:-1/2}

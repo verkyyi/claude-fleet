@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-lib.sh — shared helpers for the multi-fleet model (a fleet ≡ a tmux
 # session ≡ one repo). Sourced by the collector (write side) and the read-side
-# producers (dashboard/backlog). See docs/ARCHITECTURE.md.
+# producers (dashboard/backlog). See docs/dev/ARCHITECTURE.md.
 #
 # The collector does the EXPENSIVE session→repo resolution once per cycle and
 # records it in $C/sessmap (session<TAB>slug<TAB>repo). Read-side producers use
@@ -62,7 +62,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # fleet_load_conf strips these from the per-fleet overlay so GLOBAL always wins,
 # mirroring the prefix+c config modal, which already refuses to WRITE a
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
-# in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
+# in step with the @scope=global tags in conf/fleet.conf.reference — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
 _FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_SELFTEST_REAP FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_GUIDE_STUCK_SECS FLEET_GUIDE_OPEN_SECS FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_ADMIT_GUIDE_PASS FLEET_ADMIT_ROOM FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_COMPOSE FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA"
 
@@ -1116,7 +1116,7 @@ fleet_load_repo_conf() {
 # Every key a repo overlay sets wins for THAT repo, falling back to the fleet
 # conf's value when the overlay leaves it unset (then the global fleet.conf's, then
 # the reader's own default). The keys readers DOCUMENTEDLY resolve per repo — keep
-# in step with the "per-repo settings" block in fleet.conf.example:
+# in step with the "per-repo settings" block in conf/fleet.conf.reference:
 #   identity/deploy (_FLEET_REPO_SCOPED)  FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH
 #                                         FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT
 #   launch                                FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG
@@ -2003,7 +2003,7 @@ fleet_write_conf() {
   {
     printf "# claude-fleet: fleet '%s' — written by fleet-up.sh %s\n" "$name" "$stamp"
     printf '# Overlays the global fleet.conf for this fleet'\''s tmux session. Add any other\n'
-    printf '# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.\n'
+    printf '# FLEET_* keys (see conf/fleet.conf.reference) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.\n'
     # No repo (issue #1937): the fleet conf holds the fleet only — every repo
     # lives in repos/<slug>.conf (fleet_repo_register).
     if [ -n "$repo" ]; then
@@ -5994,7 +5994,7 @@ EOF
 
 # ---- worker identity → where it lives (issue #1420, EPIC #1419 C1) -------------
 # A window id or `<sess>:<idx>` means something only on the server that minted it;
-# the durable address of a worker is its worker_id (docs/FLEET-HUB.md «Worker
+# the durable address of a worker is its worker_id (docs/dev/FLEET-HUB.md «Worker
 # identity»): `<fleet UUID>/<key>`, the key being the same `issue-<N>` /
 # `scratch-<N>` / `<slug>:issue-<N>` spelling @origin carries. These helpers answer
 # "is that worker HERE, and in which window?" — and, only when it is not and the
@@ -6400,7 +6400,7 @@ fleet_is_operator_sender() {
 }
 
 # ---- the hub switch, per fleet (issue #1539) ---------------------------------
-# CCQUOTA_FLEET=1 switches the cross-machine hub module on. docs/FLEET-HUB.md has
+# CCQUOTA_FLEET=1 switches the cross-machine hub module on. docs/dev/FLEET-HUB.md has
 # always said «in the fleet's conf», but the collector, the status bar and the
 # spawn path read it from the ENVIRONMENT — the install's fleet.conf /
 # fleet.settings — so it was machine-wide in practice. fleet_hub_on <sess> is the
@@ -6408,7 +6408,7 @@ fleet_is_operator_sender() {
 # (`=0` opts one fleet out of a login-wide 1, `=1` opts one in); a conf that does
 # not spell it — and no <sess> at all — reads the environment exactly as before
 # (the degenerate case). Pure shell, no fork: the sidebar calls it per render.
-# docs/LOCAL-AND-HUB.md is the matrix of what each mode decides.
+# docs/dev/LOCAL-AND-HUB.md is the matrix of what each mode decides.
 fleet_hub_on() {
   local sess="${1:-}" f line v='' hit=0
   if [ -n "$sess" ]; then
@@ -8597,7 +8597,7 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 #              global-only behaviour unchanged) AND the cap is a positive number.
 # On refusal, prints a human-readable reason on stdout for the caller to surface
 # (tmux display-message); prints nothing when allowed. Both ceilings count AWAKE
-# workers only — a sleeper holds no slot (issue #1058, docs/WORKER-SLEEP.md) —
+# workers only — a sleeper holds no slot (issue #1058, docs/dev/WORKER-SLEEP.md) —
 # and a sleeper's own wake reads them through fleet_cap_full below.
 # ---- scratch worktree allocation (shared by the ⌃s spawner and the warm pool) --
 # fleet_scratch_alloc <main> <base> — allocate the next free `scratch-<N>` branch

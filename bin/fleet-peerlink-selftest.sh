@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-peerlink-selftest.sh — bin/fleet-peerlink.py, the home machine's standing
 # connections (issue #3002, EPIC #2999 C5). The five ways one goes bad are
-# docs/BREAK-IT.md's peerlink-* drills (bin/fleet-break-it-peerlink-selftest.sh);
+# docs/dev/BREAK-IT.md's peerlink-* drills (bin/fleet-break-it-peerlink-selftest.sh);
 # this pins the rest:
 #
 #   A. want     — which (machine, login): your sessions' machines from every

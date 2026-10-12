@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-cred-shared-selftest.sh — docs/BREAK-IT.md row `cred-shared-down`
+# fleet-break-it-cred-shared-selftest.sh — docs/dev/BREAK-IT.md row `cred-shared-down`
 # (issue #2217): the machine's ONE shared credential proxy dies, and every
 # login's sessions come back. Split from bin/fleet-break-it-cred-selftest.sh
 # (whose helpers it sources, BREAK_CRED_LIB=1) because that run sits at the

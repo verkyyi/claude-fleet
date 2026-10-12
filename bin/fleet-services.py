@@ -283,7 +283,7 @@ def cmd_doctor():
     hand = local_handwritten()
     if hand and not any(failed(r) for _l, _h, r in rows):
         print("WARN %d 个手写启动项以本登录跑、不在登记表里: %s — fleet service|task add 登记，新的跑通一次后归档旧 plist"
-              "（docs/MANAGED-NODE.md §13）" % (len(hand), " · ".join("%s (%s)" % (h.get("label"), h.get("path"))
+              "（docs/dev/MANAGED-NODE.md §13）" % (len(hand), " · ".join("%s (%s)" % (h.get("label"), h.get("path"))
                                                                     for h in hand)))
         return 0
     if not rows:

@@ -146,7 +146,7 @@ is still running and named the pane to inspect.
 Rails: operates on THIS fleet's windows and the ONE target login named by
 `--to` — never a third fleet, and never another window than the ones named.
 The base checkout is read-only; this script never mutates it (it works only
-inside worktrees, on both ends). See `docs/ARCHITECTURE.md`'s "moving a
+inside worktrees, on both ends). See `docs/dev/ARCHITECTURE.md`'s "moving a
 session" section for how this compares to `fleet-migrate.sh` (account swap,
 one machine), `fleet-transfer.sh` (claude↔codex, one pane) and
 `/fleet-handoff` (a doc, no process ever stops).

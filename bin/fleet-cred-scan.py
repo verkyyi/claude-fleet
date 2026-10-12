@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """fleet-cred-scan.py — can a session here reach a subscription credential?
 Counts only, never a credential (issue #2136, EPIC #2133 C6; the scan of
-docs/RESEARCH-CRED-PROXY.md §9, made a tool).
+the credential-proxy research note §9, made a tool — the note left with #3576).
 
   fleet-cred-scan.py hashes
       On a machine that HOLDS the real credentials (a trusted host): one

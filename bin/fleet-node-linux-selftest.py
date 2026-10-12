@@ -701,7 +701,7 @@ class LinuxNode(unittest.TestCase):
                          [{'name': 'acr-credential-560b'}, {'name': 'y'}])
         r = subprocess.run(base + ['--pull-secret', 'Bad Name'], capture_output=True)
         self.assertNotEqual(r.returncode, 0)
-        doc = (BIN.parent / 'docs/MANAGED-LINUX.md').read_text()
+        doc = (BIN.parent / 'docs/dev/MANAGED-LINUX.md').read_text()
         self.assertIn('--pull-secret', doc)
 
     def test_egress_guard_cuts_metadata_and_cluster(self):

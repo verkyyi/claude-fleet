@@ -102,7 +102,7 @@
 # the store or node.env gets "Permission denied". Sessions reach the
 # subscription only through the proxy (FLEET_CRED_PROXY=1, C5's wiring).
 # Config: FLEET_CRED_SEPARATE in fleet.conf [common] (0 = today's files, byte
-# for byte — the default). See docs/CRED-SEPARATE.md.
+# for byte — the default). See docs/dev/CRED-SEPARATE.md.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
