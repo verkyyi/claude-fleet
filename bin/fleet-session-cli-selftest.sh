@@ -131,8 +131,15 @@ cat "$W/rows.tsv" >> "$W/rows-own.tsv"
 { printf '#ts%s%s\n#me%smini2\n' "$U" "$NOW" "$U"; cat "$W/remote"; } > "$W/remote-me"
 eq "A ls --json: an own row is named by #me, a hub row keeps its node" "@7|mini2;wid:F/issue-12|m4;wid:F/issue-13|m5;wid:F/scratch-3|m4;" \
   "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-me" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin)))')"
-eq "A ls --json: no #me (no hub) leaves an own row's node empty" "@7|;" \
-  "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+# A fresh login on its home has NO hub cache (issue #3470: the hub loop never
+# wrote one there — drill 34 read step 8's row as unnamed): an own row is still
+# named, by the name the node registers under — this host's short name through
+# FLEET_NODE_ALIASES, the rule `#me` is written with.
+HS=$(python3 -c 'import socket; print(socket.gethostname().split(".", 1)[0])')
+eq "A ls --json: no hub cache ⇒ an own row is named by this host (#3470)" "@7|$HS;" \
+  "$(env -u FLEET_NODE_ALIASES FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+eq "A ls --json: no hub cache ⇒ …through FLEET_NODE_ALIASES (#3470)" "@7|homebox;" \
+  "$(FLEET_NODE_ALIASES="other=x $HS=homebox" FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
 # ...and its hub identity (issue #3467): the cache's local=1 row for window @7 is
 # wid:F/scratch-9, so `fleet ls --json` carries worker_id + fleet_id for the own
 # row — the drill's locate finds its window by it — and a write by the own key
@@ -150,6 +157,14 @@ tmux -L "$LO" set-option -w -t "$LO:" @fleet_id fid-own-7 2>/dev/null
 sed "s/^@7/$WID/" "$W/rows-own.tsv" > "$W/rows-own-tmux.tsv"
 eq "A ls --json: no hub ⇒ an own row's fleet_id is its window's @fleet_id (#3467)" "$WID||fid-own-7;" \
   "$(FLEET_SESSION="$LO" FLEET_SESSION_CLI_ROWS="$W/rows-own-tmux.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+# …and a fresh login (no hub cache) still gets the worker_id the hub accepts
+# (issue #3470): `<fleet UUID>/<@fleet_id>`, the UUID off the fleet's frozen
+# identity file — what the inventory reports (fleet_worker_id)
+mkdir -p "$FLEET_CONF_DIR/fleets/$LO"
+printf '0123abcd-0000-4000-8000-00000000beef\n' > "$FLEET_CONF_DIR/fleets/$LO/identity"
+eq "A ls --json: no hub cache ⇒ worker_id = fleet UUID/@fleet_id (#3470)" "$WID|0123abcd-0000-4000-8000-00000000beef/fid-own-7|fid-own-7|$HS;" \
+  "$(env -u FLEET_NODE_ALIASES FLEET_SESSION="$LO" FLEET_SESSION_CLI_ROWS="$W/rows-own-tmux.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"], r["node"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+rm -rf "$FLEET_CONF_DIR/fleets/$LO"
 tmux -L "$LO" kill-server >/dev/null 2>&1
 
 # --- B. the resolver -----------------------------------------------------------------
