@@ -230,4 +230,111 @@ drill_relay_revocations_hub_down() {
   WHAT="入口停着：没吊销的通行证照常（名单旧了只记 list-stale）；入口回来带着一条吊销，${SECS}s 内中转 403；再停入口、重启核验进程，存下的名单照样拒${gohalf}"
 }
 
+# frl2 <dir> <name> <iat offset s> <exp offset s> [login] [key] — a signed relay
+# pass (claude-fleet#3561) into <dir>/<name>; the key is <dir>/<key>.seed
+frl2() {
+  python3 -I - "$ROOT/bin/fleet_ed25519.py" "$@" <<'PY'
+import base64, importlib.util, json, os, sys, time
+spec = importlib.util.spec_from_file_location("ed", sys.argv[1]); ed = importlib.util.module_from_spec(spec); spec.loader.exec_module(ed)
+d, name, ia, ea = sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+login = sys.argv[6] if len(sys.argv) > 6 else "alice"
+key = sys.argv[7] if len(sys.argv) > 7 else "hub"
+sp = os.path.join(d, key + ".seed")
+if not os.path.exists(sp):
+    open(sp, "wb").write(os.urandom(32))
+seed = open(sp, "rb").read()
+open(os.path.join(d, key + ".pub"), "w").write(base64.b64encode(ed.public_key(seed)).decode())
+now = int(time.time())
+c = {"v": 2, "jti": os.urandom(8).hex(), "machine": "m4", "login": login, "principal": "gh:7",
+     "iat": now + ia, "exp": now + ea}
+body = "frl2." + base64.urlsafe_b64encode(json.dumps(c).encode()).decode().rstrip("=")
+tok = body + "." + base64.urlsafe_b64encode(ed.sign(seed, body.encode())).decode().rstrip("=")
+open(os.path.join(d, name), "w").write(tok)
+open(os.path.join(d, name + ".jti"), "w").write(c["jti"])
+PY
+}
+# frl2_swap <pass> <login> — the same signature over claims naming another login
+frl2_swap() {
+  python3 -I -c 'import base64, json, sys
+b, s = sys.argv[1].split(".")[1], sys.argv[1].split(".")[2]
+c = json.loads(base64.urlsafe_b64decode(b + "=" * (-len(b) % 4))); c["login"] = sys.argv[2]
+print("frl2." + base64.urlsafe_b64encode(json.dumps(c).encode()).decode().rstrip("=") + "." + s)' "$1" "$2"
+}
+
+drill_cred_leaked_from_session() {
+  CAP=10   # the leaked pass refused once past its four hours / a forged one at once
+  local d="$WORK/leak" code t0 hp pub
+  mkdir -p "$d"; : > "$d/allow"   # the hub's old road says no to everything here
+  frl2 "$d" live -3600 10800 && frl2 "$d" old -18000 -1 && frl2 "$d" other -60 14340 alice rogue \
+    && frl2 "$d" soon -3600 2 || { WHY="could not sign the test passes"; return 1; }
+  pub=$(cat "$d/hub.pub")
+  python3 -c 'import json, sys; json.dump({"v": 1, "at": 0, "entries": [], "relay_pub": sys.argv[2]}, open(sys.argv[1], "w"))' \
+    "$d/list.json" "$pub"
+  rev_hub "$d" 0 || { WHY="the fake hub did not start: $(tail -2 "$d/hub.err" | tr '\n' ' ')"; return 1; }
+  hp=$(cat "$d/hub.port")
+  rev_checker "$d" RELAY_CHECK_CACHE_S=1 RELAY_CHECK_GRACE_S=600 || return 1
+  until_ok 10 grep -q ' list v=1 ' "$d/check.log" || { WHY="the checker never read the list"; return 1; }
+  # A pass copied out of a session, used from anywhere: good while it lives —
+  # verified by the relay itself, the hub's old road (which refuses all) never asked
+  code=$(relay_ask "$(cat "$d/live")"); [ "$code" = 200 ] || { WHY="a live frl2 → $code (the relay asked the hub instead of verifying it)"; return 1; }
+  # …and not one second longer: past its four hours, refused
+  code=$(relay_ask "$(cat "$d/old")"); [ "$code" = 403 ] || { WHY="an frl2 past its exp → $code"; return 1; }
+  t0=$(now)
+  until_ok 10 relay_is 403 "$(cat "$d/soon")" || { WHY="an frl2 that ran out is still let through"; return 1; }
+  SECS=$(since "$t0")
+  # bound to its machine and login: claims rewritten for another login, or a pass
+  # signed by any key but the hub's, are refused
+  code=$(relay_ask "$(frl2_swap "$(cat "$d/live")" bob)"); [ "$code" = 403 ] || { WHY="a pass rewritten for another login → $code"; return 1; }
+  code=$(relay_ask "$(cat "$d/other")"); [ "$code" = 403 ] || { WHY="a pass signed by another key → $code"; return 1; }
+  # the hub away: the live pass keeps working, the dead ones stay dead
+  kill "$RH" 2>/dev/null; wait "$RH" 2>/dev/null
+  code=$(relay_ask "$(cat "$d/live")" /chatgpt/codex/responses); [ "$code" = 200 ] || { WHY="hub down: a live frl2 → $code"; return 1; }
+  # found out: the hub lists its jti, the relay refuses it at once
+  rev_list "$d" 2 "{\"jti\":\"frl2:$(cat "$d/live.jti")\",\"exp\":$(exp_in 14400)}"
+  python3 -c 'import json, sys; l = json.load(open(sys.argv[1])); l["relay_pub"] = sys.argv[2]; json.dump(l, open(sys.argv[1], "w"))' \
+    "$d/list.json" "$pub"
+  rev_hub "$d" "$hp" || { WHY="the fake hub did not come back"; return 1; }
+  until_ok 10 relay_is 403 "$(cat "$d/live")" || { WHY="a listed frl2 → $(relay_ask "$(cat "$d/live")")"; return 1; }
+  ! grep -q 'frl2\.' "$d/check.log" || { WHY="the checker's log carries a pass"; return 1; }
+  # The machine's proxy renews its own pass only when it is needed — used with
+  # < 20 % left, or at 80 % — never on a clock, and says why each time
+  local why
+  why=$(D="$d" python3 -I - "$BIN/fleet-cred-proxy.py" 2>&1 <<'PY'
+import base64, importlib.util, json, os, sys, time, types
+spec = importlib.util.spec_from_file_location("fcp", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+d = os.environ["D"]
+def tok(ia, ea):
+    now = int(time.time())
+    c = {"v": 2, "jti": os.urandom(4).hex(), "iat": now + ia, "exp": now + ea}
+    return "frl2." + base64.urlsafe_b64encode(json.dumps(c).encode()).decode().rstrip("=") + ".sig"
+logs = []
+cfg = types.SimpleNamespace(relay_url="https://relay.invalid", relay_token="", state=d, relay_want=os.path.join(d, "relay-want"))
+k = m.RelayKeep(cfg, lambda **kv: logs.append(kv))
+def want():
+    try:
+        return open(cfg.relay_want).read().split()[0]
+    except OSError:
+        return ""
+def put(t):
+    open(os.path.join(d, "relay.token"), "w").write(t)
+    try: os.unlink(cfg.relay_want)
+    except OSError: pass
+put(tok(-3600, 10800)); k.tick(); k.used(tok(-3600, 10800))
+if want(): sys.exit("a pass at 25 % of its life was renewed (%s)" % want())
+put(tok(-12000, 2400)); k.tick()
+if want() != "80%": sys.exit("a pass past 80 %% of its life: asked %r" % want())
+t = tok(-1000, 200); put(t); k.used(t)         # carried with < 20 % left: renewed now
+if want() != "used": sys.exit("a pass used with < 20 %% left: asked %r" % want())
+os.unlink(os.path.join(d, "relay.token")); k.tick()
+if want() != "missing": sys.exit("no pass: asked %r" % want())
+if not [l for l in logs if l.get("ev") == "relay_want" and l.get("reason") == "80%"]:
+    sys.exit("the renewal's reason is not in the log")
+print("renewal ok")
+PY
+)
+  [ "$why" = "renewal ok" ] || { WHY="the proxy's renewal: $(printf '%s' "$why" | tail -3 | tr '\n' ' ')"; return 1; }
+  WHAT="会话里抄走的中转通行证（frl2）：活着时中转自己验签放行、不问入口；过了 4 小时 ${SECS}s 内被拒；改成别的登录或别的钥匙签的立刻 403；入口停着照样；吊销后立刻拒。代理只在用到时剩不到 20%、或到 80% 处请求续，日志写原因"
+}
+
 cred_run_drills "$0"

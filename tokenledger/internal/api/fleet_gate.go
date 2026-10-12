@@ -46,13 +46,15 @@ var (
 	gateGetenv        = os.Getenv
 	gateReleaseDir    = "/etc/ccquota-release"
 	gateSATokenPath   = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	gateCredLifetimes = func() []gateCred {
+	gateCredLifetimes = func(s *Server) []gateCred {
 		// Every credential the hub hands a machine or a session. 0 = no
-		// expiry (lives until revoked). #3500 C19 shortens these.
-		return []gateCred{
-			{"中转凭据 frl1", 0},
-			{"会话通行证 fcp-h1", SessionCredTTL},
+		// expiry (lives until revoked). #3500 C19 (#3561) shortened them:
+		// with a relay signing key the relay pass is frl2, four hours.
+		relay := gateCred{"中转凭据 frl1", 0}
+		if s != nil && len(s.RelaySignKey) > 0 {
+			relay = gateCred{"中转凭据 frl2", RelayPassTTL}
 		}
+		return []gateCred{relay, {"会话通行证 fcp-h1", SessionCredTTL}}
 	}
 )
 
@@ -141,9 +143,9 @@ var gateHubJudge = map[string]func(s *Server, nodes []NodeView, detail bool) (bo
 	"revocations": func(*Server, []NodeView, bool) (bool, string) {
 		return false, "入口还不发吊销名单（/v1/relay/revocations 未上线）"
 	},
-	"cred-ttl": func(_ *Server, nodes []NodeView, detail bool) (bool, string) {
+	"cred-ttl": func(s *Server, nodes []NodeView, detail bool) (bool, string) {
 		var long []string
-		for _, c := range gateCredLifetimes() {
+		for _, c := range gateCredLifetimes(s) {
 			switch {
 			case c.ttl <= 0:
 				long = append(long, c.name+" 没有有效期（直到吊销）")

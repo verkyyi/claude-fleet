@@ -116,12 +116,12 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 		t.Fatalf("issue = %v; want an fcp-h1. pass for gh:1005 / %s on m5", out, wid)
 	}
 	exp, _ := time.Parse(time.RFC3339, out["expires_at"].(string))
-	if d := time.Until(exp); d < 23*time.Hour || d > 24*time.Hour+time.Minute {
-		t.Fatalf("expires in %v; want the default 24 h", d)
+	if d := time.Until(exp); d < SessionCredTTL-time.Minute || d > SessionCredTTL+time.Minute {
+		t.Fatalf("expires in %v; want the default %v", d, SessionCredTTL)
 	}
 	renew, _ := time.Parse(time.RFC3339, out["renew_after"].(string))
-	if exp.Sub(renew) != 2*time.Hour {
-		t.Fatalf("renew_after %v is %v before exp; want 2 h", renew, exp.Sub(renew))
+	if exp.Sub(renew) != SessionCredTTL/5 {
+		t.Fatalf("renew_after %v is %v before exp; want 20 %% of its life", renew, exp.Sub(renew))
 	}
 	v := sessVerify(t, h, map[string]any{"cred": cred, "principal": "gh:1005", "provider": "claude"})
 	if v["valid"] != true || v["revoked"] != false || v["principal"] != "gh:1005" || v["worker_id"] != wid ||

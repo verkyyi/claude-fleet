@@ -1571,12 +1571,12 @@ it deletes, so the onboard drill's teardown needs no kubectl
 of a credential, a session asks `POST /v1/fleet/session-cred` (the node's
 enrollment token + the session's own `X-Fleet-Worker` assertion, #1810; body
 `{providers?, ttl_seconds?}`) for an `fcp-h1.` pass: one person, one session
-(`worker_id`), `claude`/`codex`, 24 h by default, signed with a key only the hub
+(`worker_id`), `claude`/`codex`, 4 h by default (24 h before claude-fleet#3561), signed with a key only the hub
 holds (`CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, 32 bytes base64; unset = every
 route `503 session_cred_off`). It is issued only when the assertion verifies
 under this node's token, names a fleet this node runs, and the login is an
 active, unrevoked person. `POST …/renew {cred}` (the issuing node, from
-`renew_after` = 2 h before expiry) hands back the same pass id with a new
+`renew_after` = 20 % of its life left) hands back the same pass id with a new
 expiry — a pass that lapsed unrevoked (the machine asleep through the renew
 window) is still renewed for 7 days past its newest expiry
 (`SessionCredRenewGrace`, claude-fleet#2012), though verify refuses it; `DELETE …/<id>` (the issuing node — the session wrapper at exit — or the

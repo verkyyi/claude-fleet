@@ -11,11 +11,11 @@
 #                                 when it turns on; turned off → the proxy stops.
 #                                 A proxy that dies is restarted within
 #                                 FLEET_CRED_PROXY_WATCH_SECS (2) + a 2s breath.
-#   fleet-cred-proxy.sh relay-tick  separated / shared only: one pass of the
-#                                 relay-pass keeping `run` does, then exit — what
-#                                 the node daemon runs every minute for a login on
-#                                 the machine's shared proxy instead of a resident
-#                                 `run` (issue #3524). Elsewhere a no-op.
+#   fleet-cred-proxy.sh relay-tick  separated / shared only: answer the shared
+#                                 proxy's request for a relay pass, then exit — what
+#                                 the node daemon runs for a login on the machine's
+#                                 shared proxy, only when the proxy asks (issues
+#                                 #3524, #3561). Elsewhere a no-op.
 #   fleet-cred-proxy.sh ensure    start it detached when it is on and not running
 #                                 (a computer with no daemon — a client-only one);
 #                                 prints the port. Exit 3 = switched off.
@@ -89,24 +89,24 @@ SEP_RUN=''   # separated: the role account's run dir (ctl.sock, port, pid)
 if [ -f "$CONF/credsep.json" ]; then
   SEP_RUN=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run",""))' "$CONF/credsep.json" 2>/dev/null)
 fi
-# relay_fetch — with a relay configured and no pass in the environment, keep
-# this login's minted pass alive (#1974): KEPT while the hub accepts it, a new
-# one when it does not. Best effort and quiet — an untrusted machine is refused
-# (it routes central anyway), a hub that is down leaves the old pass in place.
-#
-# Held: re-checked every FLEET_CRED_RELAY_RECHECK_SECS (1800). Not held — a
-# login opened while its account is still `creating` gets 403 (#3213) — asked
-# again on a short clock, FLEET_CRED_RELAY_RETRY_SECS (60) doubling to
-# FLEET_CRED_RELAY_RETRY_MAX_SECS (120): the pass arrives within that bound (+
-# the launcher's own $IDLE) of the account turning active — ≤ 3 minutes, with
-# no hand step (#3423). A NEW pass re-probes at once (FLEET_CRED_REPROBE_CMD,
-# default fleet-node-probe.sh --quiet): the probe taken before it said `direct`
-# from a CN egress, and that verdict is what closes compute.
-RELAY_AT=0 RELAY_HELD=1 RELAY_WAIT=0
+# The relay pass (#1974) is renewed on REQUEST, never on a clock (issue #3561,
+# EPIC #3500 C19). The proxy holds it and knows its age: it writes
+# relay-want[.<login>] in its run directory — missing (none held, asked on a
+# doubling 60 → 120 s clock: a login opened while its account is still
+# `creating` gets 403 until it turns active, #3213/#3423), used (carried with
+# < 20 % of its four hours left), 80% (that far into its life), refused (the
+# relay's gate said no). A request newer than the last one answered is answered
+# here: fleet-relay-cred.sh fetch (--force for a renewal), handed to the proxy
+# over `relay`. A NEW pass re-probes at once (FLEET_CRED_REPROBE_CMD, default
+# fleet-node-probe.sh --quiet): the probe taken before it said `direct` from a
+# CN egress, and that verdict is what closes compute. The launcher also asks
+# once at boot (`fetch` keeps a pass the hub still takes).
+RELAY_SEEN='' RELAY_WHY='' RELAY_BOOT=1
+RELAY_RUN=${SEP_RUN:-$STATE}
 # relay_configured → rc 0 when this login's proxy has a relay road. Separated
 # (credsep), the URL is root's <LIB>/<login>.conf, which only the proxy reads —
 # a Linux tenant's own fleet.conf never names it (#3423) — so ask the proxy.
-# rc 2 = the proxy did not answer (not up yet): ask again on the short clock.
+# rc 2 = the proxy did not answer (not up yet).
 relay_configured() {
   local st
   [ -n "${FLEET_CRED_RELAY_URL:-}" ] && return 0
@@ -116,27 +116,28 @@ relay_configured() {
 try: sys.exit(0 if json.load(sys.stdin).get("relay") else 1)
 except Exception: sys.exit(2)'
 }
-relay_retry() { # not held: the next ask on the doubling short clock
-  RELAY_HELD=0
-  if [ "$RELAY_WAIT" = 0 ]; then RELAY_WAIT=${FLEET_CRED_RELAY_RETRY_SECS:-60}
-  else RELAY_WAIT=$((RELAY_WAIT * 2)); fi
-  [ "$RELAY_WAIT" -le "${FLEET_CRED_RELAY_RETRY_MAX_SECS:-120}" ] || RELAY_WAIT=${FLEET_CRED_RELAY_RETRY_MAX_SECS:-120}
+# relay_due → rc 0 when the proxy asked for a pass since the last answer
+# (RELAY_WHY = its reason; the launcher's first look = boot)
+relay_due() {
+  local w='' f st
+  if [ "$RELAY_BOOT" = 1 ]; then RELAY_BOOT=0 RELAY_WHY=boot; return 0; fi
+  for f in "$RELAY_RUN/relay-want.$(id -un)" "$RELAY_RUN/relay-want"; do
+    [ -f "$f" ] && { w=$f; break; }
+  done
+  [ -n "$w" ] || return 1
+  st=$(stat -f %m "$w" 2>/dev/null || stat -c %Y "$w" 2>/dev/null) || return 1
+  [ "$st" != "$RELAY_SEEN" ] || return 1
+  RELAY_SEEN=$st
+  RELAY_WHY=$(awk '{print $1; exit}' "$w" 2>/dev/null)
+  return 0
 }
 relay_fetch() {
-  local out rc
+  local out rc force=''
   [ -z "${FLEET_CRED_RELAY_TOKEN:-}" ] || return 0
-  RELAY_AT=$(date +%s)
-  relay_configured; rc=$?
-  case "$rc" in
-    0) ;;
-    2) relay_retry; return 0 ;;
-    *) RELAY_HELD=1 RELAY_WAIT=0; return 0 ;;
-  esac
-  out=$("$BIN/fleet-relay-cred.sh" fetch 2>/dev/null); rc=$?
-  case "$rc" in
-    0|10) RELAY_HELD=1 RELAY_WAIT=0 ;;   # held, or the hub module is off here: nothing to chase
-    *) relay_retry ;;
-  esac
+  relay_configured || return 0
+  case "${RELAY_WHY:-}" in used|80%|refused) force=--force ;; esac
+  out=$("$BIN/fleet-relay-cred.sh" fetch ${force:+"$force"} 2>/dev/null)
+  printf 'relay (%s): %s\n' "${RELAY_WHY:-?}" "${out:-no pass (refused or the hub away)}"
   case "$out" in
     'relay: ISSUED'*)
       # in the background: a probe measures for up to minutes, the launcher's watch is seconds
@@ -147,11 +148,6 @@ relay_fetch() {
       fi ;;
   esac
   return 0
-}
-relay_due() {
-  local every=${FLEET_CRED_RELAY_RECHECK_SECS:-1800}
-  [ "$RELAY_HELD" = 1 ] || every=$RELAY_WAIT
-  [ $(( $(date +%s) - RELAY_AT )) -ge "$every" ]
 }
 
 switch_now() { # → 1 / 0, read fresh in a subshell (the conf may have changed under us)
@@ -188,15 +184,16 @@ if [ -n "$SEP_RUN" ]; then
         sleep "$IDLE" & wait $! 2>/dev/null
         [ -f "$CONF/credsep.json" ] || exec "$0" run "$@"
       done ;;
-    relay-tick)   # ONE pass of `run`'s relay keeping, then exit (issue #3524): a
-      # login on the machine's shared proxy has no resident launcher — the node
-      # daemon runs this every minute as the login. The clocks `run` keeps in its
-      # variables live in $STATE/relay-keep between passes.
+    relay-tick)   # ONE answer to the shared proxy's request, then exit (issues
+      # #3524, #3561): a login on the machine's shared proxy has no resident
+      # launcher — the node daemon runs this as the login when the proxy wrote
+      # relay-want.<login>. The last request answered lives in $STATE/relay-keep.
       mkdir -p "$STATE" && chmod 700 "$STATE"
-      read -r RELAY_AT RELAY_HELD RELAY_WAIT 2>/dev/null < "$STATE/relay-keep"
-      case "${RELAY_AT:-}${RELAY_HELD:-}${RELAY_WAIT:-}" in ''|*[!0-9]*) RELAY_AT=0 RELAY_HELD=1 RELAY_WAIT=0 ;; esac
+      RELAY_BOOT=0
+      read -r RELAY_SEEN 2>/dev/null < "$STATE/relay-keep"
+      case "${RELAY_SEEN:-}" in *[!0-9]*) RELAY_SEEN='' ;; esac
       [ "$(switch_now)" = 1 ] && relay_due && relay_fetch
-      printf '%s %s %s\n' "$RELAY_AT" "$RELAY_HELD" "$RELAY_WAIT" > "$STATE/relay-keep.$$" \
+      printf '%s\n' "$RELAY_SEEN" > "$STATE/relay-keep.$$" \
         && mv -f "$STATE/relay-keep.$$" "$STATE/relay-keep"
       exit 0 ;;
     ensure|port)
@@ -262,7 +259,7 @@ case "$cmd" in
     on || { echo "fleet-cred-proxy: off (FLEET_CRED_PROXY=${FLEET_CRED_PROXY:-0})" >&2; exit 3; }
     if ! live_pid >/dev/null; then
       mkdir -p "$STATE" && chmod 700 "$STATE"
-      relay_fetch
+      relay_fetch >&2
       nohup python3 -I "$PY" serve "$@" </dev/null >/dev/null 2>&1 &
       i=0
       while [ "$i" -lt "$((${FLEET_CRED_PROXY_START_SECS:-30} * 10))" ] && ! { live_pid >/dev/null && [ -S "$STATE/ctl.sock" ]; }; do sleep 0.1; i=$((i + 1)); done

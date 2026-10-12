@@ -104,6 +104,15 @@ spec:
                   name: ccquota
                   key: session-cred-key
                   optional: true
+            # frl2 relay passes (#3561, EPIC #3500 C19): the 32-byte Ed25519
+            # seed, its own key in Secret `ccquota`. Optional: missing = relay
+            # credentials stay frl1 (no end), exactly as before.
+            - name: CCQUOTA_FLEET_RELAY_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: relay-sign-key
+                  optional: true
             # The Singapore relay (#1976, docs/CRED-RELAY.md).
             - name: CCQUOTA_FLEET_CRED_RELAY_URL
               value: "https://fleet-relay.24hw.cn"

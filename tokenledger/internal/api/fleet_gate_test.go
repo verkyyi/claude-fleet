@@ -91,10 +91,10 @@ func TestGateHubJudgesBothWays(t *testing.T) {
 
 	// cred-ttl: today's lifetimes are red; short ones + separated logins pass
 	gateCredLifetimes = oldTTL
-	if ok, why := judge("cred-ttl", nil); ok || !strings.Contains(why, "frl1") || !strings.Contains(why, "24h") {
+	if ok, why := judge("cred-ttl", nil); ok || !strings.Contains(why, "frl1") {
 		t.Fatalf("cred-ttl today: %v %s", ok, why)
 	}
-	gateCredLifetimes = func() []gateCred { return []gateCred{{"会话通行证", 4 * time.Hour}} }
+	gateCredLifetimes = func(*Server) []gateCred { return []gateCred{{"会话通行证", 4 * time.Hour}} }
 	managed := []NodeView{
 		{Hostname: "mac-a", OSUser: "alice", Role: store.NodeRoleManaged, Status: "online", Credsep: control.CredsepSeparated},
 		{Hostname: "mac-a", OSUser: "bob", Role: store.NodeRoleManaged, Status: "online", Credsep: control.CredsepNot},

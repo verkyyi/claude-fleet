@@ -248,9 +248,10 @@ daemon_ensure() {
   if [ -n "${FLEET_CRED_ROLLOUT_DAEMON:-}" ]; then bash -c "$FLEET_CRED_ROLLOUT_DAEMON"; return; fi
   if nudge; then say "daemon: running — told to re-read the switch now"; return 0; fi
   # on the machine's shared proxy (issue #3524) this login keeps no launcher: the
-  # node daemon's one-minute relay-tick re-reads the switch — nothing to install
+  # node daemon's relay-tick (run when the proxy asks, #3561) re-reads the
+  # switch — nothing to install
   if grep -q '"shared": *true' "$CONF/credsep.json" 2>/dev/null; then
-    say "daemon: none here — the machine's shared proxy serves this login (its relay pass: the node daemon, every minute)"
+    say "daemon: none here — the machine's shared proxy serves this login (its relay pass: the node daemon, when the proxy asks)"
     return 0
   fi
   local root tmpl plist label shape dom brew rc

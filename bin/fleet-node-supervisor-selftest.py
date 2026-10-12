@@ -835,8 +835,9 @@ class H_Accounts(Sandbox):
 
     def test_shared_proxy_login_keeps_no_resident_launcher(self):
         # issue #3524: a login on the machine's shared proxy runs no resident
-        # `fleet-cred-proxy.sh run` — its relay pass is a one-minute task instead;
-        # a login still on its own proxy keeps the resident one
+        # `fleet-cred-proxy.sh run` — its relay pass is kept by a task instead,
+        # run only when the shared proxy asks (issue #3561: no clock); a login
+        # still on its own proxy keeps the resident one
         unit = {"name": "cred-proxy", "keepalive": True, "out": "/dev/null", "err": "/dev/null",
                 "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/fleet-cred-proxy.sh", "run"], "env": {}}
         for who, rec in (("alice", {"separated": True, "shared": True, "run": "/var/run/fleet-cred/.shared"}),
@@ -850,8 +851,22 @@ class H_Accounts(Sandbox):
                               (501, 20, self.home("alice")), "/opt/homebrew")
         self.assertNotIn("keepalive", a, "a shared-proxy login keeps no resident launcher")
         self.assertEqual(a["name"], "alice/cred-relay")
-        self.assertEqual(a["every"], 60)
+        self.assertNotIn("every", a, "cred-relay runs on request, never on a clock (#3561)")
+        self.assertEqual(a["want"], "/var/run/fleet-cred/.shared/relay-want.alice")
         self.assertEqual(a["cmd"][-1], "relay-tick")
+        # due only on a request newer than the last one run
+        want = os.path.join(self.home("alice"), "relay-want.alice")
+        a["want"] = want
+        fake = type("S", (), {"state": {"tasks": {}}})()
+        due = lambda: fns.Supervisor.task_due(fake, a, time.time())
+        self.assertFalse(due(), "no request, not due — however long it has been")
+        with open(want, "w") as f:
+            f.write("used 1\n")
+        self.assertTrue(due(), "a request is due at once")
+        fake.state["tasks"][a["name"]] = {"want_seen": fns.want_stamp(want), "last_start": 0}
+        self.assertFalse(due(), "a request already run is not run again")
+        os.utime(want, ns=(fns.want_stamp(want) + 10 ** 9, fns.want_stamp(want) + 10 ** 9))
+        self.assertTrue(due(), "a new request is due")
         self.assertEqual(unit["argv"][-1], "run", "the table's unit is not changed in place")
         b = fns.account_entry(fns.account_unit_for(unit, self.home("bob")), "bob",
                               (502, 20, self.home("bob")), "/opt/homebrew")

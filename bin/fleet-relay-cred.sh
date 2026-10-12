@@ -12,7 +12,8 @@
 # its sessions through the relay (docs/CRED-RELAY.md). The relay holds no
 # subscription credential; it lets a request through only when the hub's
 # GET /v1/relay/check accepts the pass in its X-Fleet-Relay header — this
-# credential (`frl1.…`), minted per machine and login by
+# credential (`frl1.…`, or `frl2.…` — signed, four hours — when the hub has a
+# relay signing key: issue #3561), minted per machine and login by
 # POST /v1/node/relay-credential for a TRUSTED machine only, and dropped by the
 # operator (`revoke`), by marking the machine untrusted, or by revoking the
 # machine's credentials. The hub keeps only its hash.
@@ -158,7 +159,7 @@ if [ "$ACTION" = fetch ] || [ "$ACTION" = check ]; then
     die 1 "$why"
   fi
   # One subshell: the node token enters its environment and dies with it (#1491).
-  resp=$(_fleet_hub_env; _TOK=$CCQUOTA_TOKEN _URL=${CCQUOTA_HUB_URL%/}; _call POST /v1/node/relay-credential); rc=$?
+  resp=$(_fleet_hub_env; _TOK=$CCQUOTA_TOKEN _URL=${CCQUOTA_HUB_URL%/}; _call POST /v1/node/relay-credential '{"kind":"frl2"}'); rc=$?
   [ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "hub unreachable ($_URL): curl exit $rc — nothing changed"
   code=$(printf '%s\n' "$resp" | tail -n 1)
   json=$(printf '%s\n' "$resp" | sed '$d')
@@ -176,7 +177,7 @@ if [ "$ACTION" = fetch ] || [ "$ACTION" = check ]; then
 import json, sys
 d = json.load(sys.stdin)
 tok = d.get("token") or ""
-if not tok.startswith("frl1."):
+if not tok.startswith(("frl1.", "frl2.")):
     sys.exit(4)
 with open(sys.argv[1], "w") as f:
     f.write(tok)

@@ -62,13 +62,17 @@ import (
 
 const (
 	sessionCredPrefix = "fcp-h1"
-	// SessionCredTTL is a pass's default (and longest) life.
-	SessionCredTTL = 24 * time.Hour
+	// SessionCredTTL is a pass's default (and longest) life: four hours
+	// (claude-fleet#3561, 发起人拍板 20 — a session can read its pass, so a
+	// copy taken out of it is good for hours, not a day). A pass minted
+	// longer before is renewed to this.
+	SessionCredTTL = 4 * time.Hour
 	// sessionCredMinTTL is the shortest life a caller may ask for.
 	sessionCredMinTTL = 5 * time.Minute
-	// sessionCredRenewBefore is when the machine's proxy renews: this long
-	// before exp (the answer's renew_after).
-	sessionCredRenewBefore = 2 * time.Hour
+	// sessionCredRenewLeft is when the machine's proxy renews: once less than
+	// this share of the pass's life is left (the answer's renew_after) —
+	// renewed when it is used, never on a clock of its own.
+	sessionCredRenewLeft = 5 // 1/5 = 20 %
 	// SessionCredRenewGrace is how long after its newest expiry a pass that
 	// was never revoked may still be renewed by its issuing node
 	// (claude-fleet#2012): a laptop asleep through the renew window, or its
@@ -379,10 +383,7 @@ type SessionCredResponse struct {
 
 func sessionCredAnswer(tok string, c sessionCredClaims) SessionCredResponse {
 	iat, exp := time.Unix(c.Iat, 0).UTC(), time.Unix(c.Exp, 0).UTC()
-	renew := exp.Add(-sessionCredRenewBefore)
-	if half := iat.Add(exp.Sub(iat) / 2); renew.Before(half) {
-		renew = half // a short pass renews at half-life
-	}
+	renew := exp.Add(-exp.Sub(iat) / sessionCredRenewLeft)
 	return SessionCredResponse{Cred: tok, ID: c.ID, PrincipalID: c.Principal, WorkerID: c.WorkerID,
 		Machine: c.Machine, Providers: c.Providers, IssuedAt: iat, ExpiresAt: exp, RenewAfter: renew}
 }
