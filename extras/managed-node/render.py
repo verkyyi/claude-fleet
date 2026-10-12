@@ -534,7 +534,7 @@ if __name__ == '__main__':
     p.add_argument('--egress-closed', action='store_true',
                    help='the guard rejects the public internet too: out only through --egress-allow destinations '
                         "(the egress and credproxy Services' ClusterIPs, the hub's address)")
-    # one person's pod (#3550; docs/MANAGED-LINUX.md «User pods»)
+    # one person's pod (#3550; docs/dev/MANAGED-LINUX.md «User pods»)
     p.add_argument('--user-pod', default='', metavar='u-NONCE',
                    help="render one person's pod (Deployment + Service + home disk) instead of the shared node")
     p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
