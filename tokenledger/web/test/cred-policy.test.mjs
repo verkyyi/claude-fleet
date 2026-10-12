@@ -64,6 +64,30 @@ test('changed policy or failed reads refuse to write; write errors remain visibl
   }, undefined, payload), /offline/);
 });
 
+test('a write that would empty a provider is asked about, then forced (claude-fleet#3713)', async () => {
+  const puts = [];
+  const refusal = () => Object.assign(new Error('machine mini would keep no claude subscription (it allows gmail now) — send force'), { status: 409 });
+  const api = async (_, opts) => {
+    if (!opts) return { nodes: [] };
+    puts.push(opts.json);
+    if (!opts.json.force) throw refusal();
+    return { ok: true };
+  };
+  const payload = policyPayload('node', 'mini', 'selected', [C]);
+  const asked = [];
+  await savePolicy(api, undefined, payload, (msg) => { asked.push(msg); return true; });
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /would keep no claude/);
+  assert.deepEqual(puts, [payload, { ...payload, force: true }]);
+  puts.length = 0;
+  await assert.rejects(savePolicy(api, undefined, payload, () => false), /would keep no/);
+  assert.deepEqual(puts, [payload]);
+  await assert.rejects(savePolicy(async (_, opts) => {
+    if (opts) throw Object.assign(new Error('changed'), { status: 409 });
+    return { nodes: [] };
+  }, undefined, payload, () => { throw new Error('never asked'); }), /changed/);
+});
+
 test('effective view uses the hub verdicts and escapes labels and denial reasons', () => {
   const html = effectiveHTML({ accounts: [
     { provider: 'claude', account: '<script>', account_uuid: A, allowed: false, reason: '<img onerror=x>' },

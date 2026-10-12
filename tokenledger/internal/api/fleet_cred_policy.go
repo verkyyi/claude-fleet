@@ -320,6 +320,9 @@ type CredPolicyPut struct {
 	Action   string    `json:"action"`
 	Revision string    `json:"revision"`
 	Retain   []string  `json:"retain"`
+	// Force writes a list that would take a provider's last subscription from
+	// its scope (claude-fleet#3713); without it that write is refused 409.
+	Force bool `json:"force"`
 }
 
 // CredPolicyEntry is one account in the effective view.
@@ -552,6 +555,22 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before, had := settings[key]
+	// A list that takes a provider's LAST subscription from its scope is
+	// refused unless forced (claude-fleet#3713): a Linux machine's list once lost
+	// its only Claude subscription in a narrowing meant for one account, and its
+	// person's every session failed «no claude account». `deny` / `clear` say
+	// «none» on purpose and are not judged.
+	if req.Allow != nil && len(*req.Allow) > 0 && !req.Force {
+		lost, err := s.credPolicyEmptied(req.Scope, req.ID, settings, key, value)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if lost != "" {
+			httpError(w, http.StatusConflict, lost+" — list one of each to keep it, or send force (fleet-cred-policy.sh set --force) to write it anyway")
+			return
+		}
+	}
 	now := time.Now()
 	if err := s.Store.SetFleetSetting(key, value, now); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
@@ -575,6 +594,69 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 		}
 		return json.RawMessage(orNull(value))
 	}()})
+}
+
+// permits says whether this one scope's allowance lets subscription uuid
+// through (the other scope, revocation and the gates are not its question).
+func (a credAllow) permits(uuid string) bool {
+	if !a.Set || a.All {
+		return true
+	}
+	return a.Bad == "" && uuid != "" && a.IDs[normSubID(uuid)]
+}
+
+// credPolicyEmptied names each provider whose subscriptions this scope lets
+// through now and would let none of after key becomes value — e.g. «machine
+// box7 would keep no claude subscription (it allows icloud now)» —
+// or "" when nothing is emptied. The candidates are the vault rows the scope
+// can ever see: everyone's for a machine, the person's own + the shared pool's
+// for a person.
+func (s *Server) credPolicyEmptied(scope, id string, settings map[string]string, key, value string) (string, error) {
+	var rows []store.Credential
+	if scope == "node" {
+		all, err := s.Store.Credentials("")
+		if err != nil {
+			return "", err
+		}
+		rows = all
+	} else {
+		for _, who := range []string{id, store.PoolPrincipal} {
+			rs, err := s.Store.Credentials(who)
+			if err != nil {
+				return "", err
+			}
+			rows = append(rows, rs...)
+		}
+	}
+	after := map[string]string{key: value, CredPolicyModeKey: settings[CredPolicyModeKey]}
+	oldA, newA := credAllowOf(settings, key), credAllowOf(after, key)
+	before, kept := map[string][]string{}, map[string]bool{}
+	for _, c := range rows {
+		if c.Provider == credvault.GitHub {
+			continue
+		}
+		uuid := ""
+		if s.Vault != nil {
+			uuid = s.Vault.AccountUUID(c)
+		}
+		if oldA.permits(uuid) {
+			before[c.Provider] = append(before[c.Provider], c.Account)
+		}
+		if newA.permits(uuid) {
+			kept[c.Provider] = true
+		}
+	}
+	who := "machine " + strings.ToLower(firstLabel(id))
+	if scope == "user" {
+		who = "person " + id
+	}
+	var lost []string
+	for _, p := range sessionCredProviders {
+		if len(before[p]) > 0 && !kept[p] {
+			lost = append(lost, who+" would keep no "+p+" subscription (it allows "+strings.Join(before[p], ", ")+" now)")
+		}
+	}
+	return strings.Join(lost, "; "), nil
 }
 
 func orNull(v string) string {

@@ -128,6 +128,9 @@
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
+#   cred-policy-empties-machine                     tokenledger/internal/api fleet_cred_policy.go (credPolicyEmptied,
+#                                                   force) + fleet_credproxy.go (noBindWhy); go test, when a toolchain
+#                                                   is here; bin/fleet-cred-policy.sh (exit 5, --force), the web editor
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2093,6 +2096,27 @@ drill_node_token_replayed() {
   c11_go_tests node_sig_test.go TestNodeSigOffAddsNothing TestNodeSigRegisterSignReplay TestNodeSigSessionCredNode TestNodeSigPythonVector || return 1
   WHAT='节点钥匙 600、不覆盖，签名头是入口的格式；入口一处 nodeAuth，nonce 两副本共用（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='bearer_off 之后抄走的令牌 401、也登记不了自己的钥匙；同一签名第二次 401；过期 / 未来 / 换路径 / 换方法 / 别的钥匙都拒；没钥匙的节点原样；Python 签的向量 Go 验得过（go test 四条）'
+  SECS=$(since "$t0")
+}
+
+# ---- cred-policy-empties-machine (#3713): an allowlist write narrowing one
+# account took a Linux machine's only Claude subscription with it; its person's
+# every session then failed «no claude account … that the allowlists permit»,
+# naming no list. The hub now refuses (409) a set that leaves a machine / person
+# none of a provider it had, unless forced; the CLI says so (exit 5) and the web
+# editor asks first; the session error names the list that refused each account.
+drill_cred_policy_empties_machine() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'func (s \*Server) credPolicyEmptied' "$tl/api/fleet_cred_policy.go" 2>/dev/null \
+    || { WHY="the hub no longer judges a list that empties a provider (fleet_cred_policy.go)"; return 1; }
+  grep -q '409) die 5' "$BIN/fleet-cred-policy.sh" && grep -q -- '--force' "$BIN/fleet-cred-policy.sh" \
+    || { WHY="fleet-cred-policy.sh no longer answers the refusal (exit 5) or offers --force"; return 1; }
+  grep -q 'would keep no' "$ROOT/tokenledger/web/dist/lib/cred-policy.js" 2>/dev/null \
+    || { WHY="the web editor no longer asks before forcing (lib/cred-policy.js)"; return 1; }
+  c11_go_tests fleet_cred_policy_test.go TestCredPolicyRefusesEmptyingAProvider TestCredPolicyNoBindSaysWhy || return 1
+  WHAT='收空一台机器 / 一个人某个 provider 的白名单写入 409、不变；--force 照写；deny / clear 不拦；会话报错点名拒它的那张白名单（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='收空 claude / codex 的写入 409 点名、列表不变；force 照写；deny / clear 不拦；会话报错点名「not in machine … allowlist」（go test 两条）'
   SECS=$(since "$t0")
 }
 

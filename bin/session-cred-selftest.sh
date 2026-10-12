@@ -31,6 +31,8 @@
 #      in the session's home is a reap candidate only once its session is revoked
 #   H  the ambient login (no account) on a trusted route: exit 4, launch as before;
 #      the proxy refusing → the launch refuses (never falls back to a credential)
+#   I  a separated login's Codex with FLEET_FAILOVER=1 pins no local profile (issue
+#      #3713); an unseparated one still does
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d /tmp/scs.XXXXXX)   # short: the proxy's ctl.sock must fit a unix socket path (104 bytes on macOS)
@@ -331,6 +333,19 @@ OUT="$SB/out/h2"
 check "H: the proxy will not mint → the launch refuses" 1 "$(cat "$OUT/rc")"
 check "H: … and never ran the agent" no "$([ -e "$OUT/env" ] && echo yes || echo no)"
 grep -q 'REAL-' "$SB/cred-proxy.log" && fail "rails: a real token in the proxy log" || pass "rails: no real token in the proxy log"
+
+# ── I: a separated login's Codex under FLEET_FAILOVER=1 (issue #3713) ────────
+# Its own ~/.codex holds no login (the role account does), so fleet-codex.sh must
+# not pin a local profile first — that died «no account on the login» before the
+# proxy was ever asked. The pin's own road stays for an unseparated login.
+printf '{"separated": true}\n' > "$FLEET_CONF_DIR/credsep.json"
+run_codex i FLEET_CRED_SID=sI FLEET_FAILOVER=1 FLEET_ACCOUNT_SELECTED=1 CODEX_HOME="$HOME/.codex-accounts/cx1"
+OUT="$SB/out/i"
+check "I: separated + failover — no local profile pin" 0 "$(grep -c '^fleet-account:' "$OUT/stderr" | tr -d ' ')"
+rm -f "$FLEET_CONF_DIR/credsep.json"
+run_codex i2 FLEET_CRED_SID=sI2 FLEET_FAILOVER=1 FLEET_ACCOUNT_SELECTED=1 FLEET_QUOTA_BIN=/nonexistent CODEX_HOME="$HOME/.codex-accounts/cx1"
+OUT="$SB/out/i2"
+check "I: unseparated + failover — the pin still runs (and refuses here: no ccquota)" 1 "$(cat "$OUT/rc")"
 
 [ "$FAIL" = 0 ] && { echo "session-cred selftest: OK"; exit 0; }
 echo "session-cred selftest: FAILED"; exit 1

@@ -5,7 +5,7 @@
 #   fleet-cred-policy.sh show [--json]                        every allowlist
 #   fleet-cred-policy.sh effective [--machine M] [--principal P] [--json]
 #                                                             each account: allowed, or why not
-#   fleet-cred-policy.sh set   node|user <id> <subscription-id>…   only these
+#   fleet-cred-policy.sh set   [--force] node|user <id> <subscription-id>…   only these
 #   fleet-cred-policy.sh all   node|user <id>                       explicit all, including future subscriptions
 #   fleet-cred-policy.sh deny  node|user <id>                       none at all ([])
 #   fleet-cred-policy.sh clear node|user <id>                       no list: denied in strict mode; legacy default before migration
@@ -28,9 +28,16 @@
 # ENVIRONMENT only, handed to curl on stdin (`-H @-`), never in an argv.
 # The hub: CCQUOTA_HUB_URL, else FLEET_HUB_URL (fleet.conf), else node.env's.
 #
+# A `set` that would take a provider's LAST subscription from its machine or
+# person (all its Claude, or all its Codex) is refused by the hub (exit 5,
+# nothing changed) and names what it would lose — issue #3713, where a narrowing
+# left a Linux machine with no Claude at all. `--force` writes it anyway; `deny` /
+# `clear` mean «none» on purpose and are never refused for it.
+#
 # Exit status: 0 done · 1 the hub could not be asked (no token / URL /
 # unreachable; nothing changed) · 2 usage · 4 the hub refused (not the
-# operator, a bad id, or a hub that predates #3043).
+# operator, a bad id, or a hub that predates #3043) · 5 the list would empty a
+# provider (nothing changed; --force).
 #
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport, for the selftest.
 set -uo pipefail
@@ -44,7 +51,7 @@ usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ $# -gt 0 ] || { usage >&2; die 2 'say show, effective, set, all, deny or clear'; }
 ACTION=$1; shift
-JSON='' MACHINE='' PRINCIPAL='' SCOPE='' ID=''
+JSON='' MACHINE='' PRINCIPAL='' SCOPE='' ID='' FORCE=''
 IDS=()
 case "$ACTION" in
   show)
@@ -60,6 +67,7 @@ case "$ACTION" in
     done
     [ -n "$MACHINE$PRINCIPAL" ] || die 2 'effective needs --machine and/or --principal' ;;
   set|all|deny|clear)
+    if [ "$ACTION" = set ] && [ "${1:-}" = --force ]; then FORCE=1; shift; fi
     [ $# -ge 2 ] || die 2 "$ACTION node|user <id>…"
     SCOPE=$1 ID=$2; shift 2
     case "$SCOPE" in node|user) ;; *) die 2 "scope is node or user, not '$SCOPE'" ;; esac
@@ -103,6 +111,7 @@ _answer() {
   case "$code" in
     200) printf '%s' "$json" ;;
     400) die 4 "the hub refused it (400): $(printf '%s' "$json" | head -c 300)" ;;
+    409) die 5 "the hub refused it (409): $(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error",""))' 2>/dev/null | head -c 600) — nothing changed" ;;
     401|403) die 4 "the hub says this is not the operator ($code) — CCQUOTA_VIEWER_TOKEN must be the hub's viewer token" ;;
     404|405) die 4 "the hub has no $CRED_POLICY_PATH ($code) — it predates issue #3043; redeploy it" ;;
     *) die 4 "hub answered HTTP $code: $(printf '%s' "$json" | head -c 300)" ;;
@@ -113,12 +122,13 @@ case "$ACTION" in
   set|all|deny|clear)
     body=$(python3 -c '
 import json, sys
-act, scope, ident, ids = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+act, force, scope, ident, ids = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 allow = ids if act == "set" else ([] if act == "deny" else None)
 body = {"scope": scope, "id": ident, "allow": allow}
 if act == "all": body["all"] = True
+if force: body["force"] = True
 print(json.dumps(body))
-' "$ACTION" "$SCOPE" "$ID" ${IDS[@]+"${IDS[@]}"})
+' "$ACTION" "$FORCE" "$SCOPE" "$ID" ${IDS[@]+"${IDS[@]}"})
     resp=$(_call PUT "$CRED_POLICY_PATH" "$body"); rc=$?
     json=$(_answer "$resp" "$rc") || exit $?
     printf '%s' "$json" | python3 -c '

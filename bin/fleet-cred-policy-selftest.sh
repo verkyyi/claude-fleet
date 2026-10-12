@@ -13,6 +13,8 @@
 #                the query carries machine + principal
 #   E. refused   400 → exit 4; 404 → exit 4 "predates"; curl fails → exit 1
 #   F. no leak   the viewer token is in no curl argv, only on its stdin
+#   G. emptying  409 «would keep no claude» → exit 5 naming it; set --force sends
+#                "force": true (issue #3713)
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$BIN/fleet-cred-policy.sh"
@@ -139,6 +141,19 @@ ok
 reset; fake '{"nodes":[],"users":[]}'
 "$SUT" show >/dev/null
 ! grep -q "$VIEWER" "$STUB_LOG" && grep -q "Bearer $VIEWER" "$STUB_HDR" || fail "F: the token in an argv"
+ok
+
+# G. a list that would empty a provider (issue #3713)
+reset; fake '{"error":"machine box7 would keep no claude subscription (it allows icloud now) — send force"}' 409
+"$SUT" set node box7 "$CX" >/dev/null 2>"$WORK/err"; rc=$?
+[ "$rc" -eq 5 ] && grep -q 'would keep no claude subscription (it allows icloud now)' "$WORK/err" \
+  && grep -q 'nothing changed' "$WORK/err" || fail "G 409: rc=$rc $(cat "$WORK/err")"
+! grep -qF '"force"' "$STUB_BODY" || fail "G: force sent unasked"
+ok
+reset; fake '{"ok":true,"allow":["'$CX'"]}'
+out=$("$SUT" set --force node box7 "$CX"); rc=$?
+[ "$rc" -eq 0 ] && grep -qF '"force": true' "$STUB_BODY" && [ "$out" = "cred-policy: SET node box7: $CX" ] \
+  || fail "G --force: rc=$rc $out / $(cat "$STUB_BODY")"
 ok
 
 printf 'fleet-cred-policy selftest: %d checks passed\n' "$CHECKS"

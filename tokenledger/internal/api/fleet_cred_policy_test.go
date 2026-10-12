@@ -57,9 +57,11 @@ func policyRig(t *testing.T) (h *harness, alice, bob string) {
 	return h, alice, bob
 }
 
+// setPolicy states a fixture: forced, so a list that drops a provider is
+// written (TestCredPolicyRefusesEmptyingAProvider is that guard's test).
 func setPolicy(t *testing.T, h *harness, scope, id string, allow any) {
 	t.Helper()
-	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": scope, "id": id, "allow": allow}); code != http.StatusOK {
+	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": scope, "id": id, "allow": allow, "force": true}); code != http.StatusOK {
 		t.Fatalf("policy %s %s: %d %v", scope, id, code, out)
 	}
 }
@@ -680,5 +682,77 @@ func TestCredPolicyStrictDrillUsesCreatorsList(t *testing.T) {
 	setPolicy(t, h, "node", "m4", []string{uuidICloud})
 	if got, _, _ := leased(t, h, drill("drill-o2", "drillp", "operator")); !eq(got, "claude/icloud") {
 		t.Fatalf("machine list: %v", got)
+	}
+}
+
+// A list that takes a provider's LAST subscription from its scope is refused
+// unless forced (claude-fleet#3713): a Linux machine kept only a Codex account
+// after a narrowing aimed at one Claude account, and its person's sessions all
+// failed «no claude account». deny / clear say «none» on purpose and pass.
+func TestCredPolicyRefusesEmptyingAProvider(t *testing.T) {
+	h, _, _ := policyRig(t)
+	put := func(body map[string]any) (int, string) {
+		code, out := h.post(t, CredPolicyPath, body)
+		msg, _ := out["error"].(string)
+		return code, msg
+	}
+	stored := func(key string) string {
+		set, err := h.srv.Store.FleetSettings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set[key]
+	}
+	if code, msg := put(map[string]any{"scope": "node", "id": "box7", "allow": []string{uuidGmail, uuidICloud, uuidCodex}}); code != 200 {
+		t.Fatalf("a list keeping both providers: %d %s", code, msg)
+	}
+	// Dropping one Claude account of two is fine.
+	if code, msg := put(map[string]any{"scope": "node", "id": "box7", "allow": []string{uuidGmail, uuidCodex}}); code != 200 {
+		t.Fatalf("narrowing within claude: %d %s", code, msg)
+	}
+	want := stored(credNodeKey("box7"))
+	// Dropping the last one is refused, names the machine, the provider and what it loses.
+	code, msg := put(map[string]any{"scope": "node", "id": "box7", "allow": []string{uuidCodex}})
+	if code != http.StatusConflict || !strings.Contains(msg, "machine box7 would keep no claude subscription") ||
+		!strings.Contains(msg, "gmail") || !strings.Contains(msg, "force") {
+		t.Fatalf("emptying claude on box7: %d %q", code, msg)
+	}
+	if got := stored(credNodeKey("box7")); got != want {
+		t.Fatalf("a refused write changed the list: %s → %s", want, got)
+	}
+	// Forced, it is written.
+	if code, msg := put(map[string]any{"scope": "node", "id": "box7", "allow": []string{uuidCodex}, "force": true}); code != 200 {
+		t.Fatalf("forced: %d %s", code, msg)
+	}
+	// A person's list is judged on their own + the pool's.
+	setPolicy(t, h, "user", pAlice, []string{uuidOwn, uuidCodex})
+	code, msg = put(map[string]any{"scope": "user", "id": pAlice, "allow": []string{uuidOwn}})
+	if code != http.StatusConflict || !strings.Contains(msg, "person "+pAlice+" would keep no codex subscription") {
+		t.Fatalf("emptying codex for alice: %d %q", code, msg)
+	}
+	// deny and clear are «none» on purpose: never judged.
+	if code, msg := put(map[string]any{"scope": "user", "id": pAlice, "allow": []string{}}); code != 200 {
+		t.Fatalf("deny: %d %s", code, msg)
+	}
+	if code, msg := put(map[string]any{"scope": "node", "id": "box7", "allow": nil}); code != 200 {
+		t.Fatalf("clear: %d %s", code, msg)
+	}
+}
+
+// The session error names what refused each account (claude-fleet#3713),
+// not «the allowlists».
+func TestCredPolicyNoBindSaysWhy(t *testing.T) {
+	r := newCPRig(t)
+	h := r.h
+	if err := h.srv.Vault.Put("gh:1005", credvault.Claude, "acct1", credvault.Secret{RefreshToken: "rt-acct1", AccountUUID: uuidOwn}); err != nil {
+		t.Fatal(err)
+	}
+	cred, wid := r.issue(t, fidA)
+	ep := h.srv.passEndpoint(passID(h, cred), time.Now())
+	m := h.srv.policyMachine(ep)
+	setPolicy(t, h, "node", m, []string{uuidCodex})
+	_, err := h.srv.sessionBind(wid, "gh:1005", ep, credvault.Claude, time.Now())
+	if m == "" || err == nil || !strings.Contains(err.Error(), "gh:1005/acct1 — not in machine "+m+"'s allowlist") {
+		t.Fatalf("why: %v", err)
 	}
 }

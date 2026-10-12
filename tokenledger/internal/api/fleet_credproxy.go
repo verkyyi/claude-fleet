@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
@@ -192,6 +193,40 @@ func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]s
 	return s.credPolicyFilter(out, pol), nil
 }
 
+// noBindWhy is what refused each of provider's accounts (claude-fleet#3713):
+// «: pool/icloud — not in machine box7's allowlist; …», or "" when the
+// vault holds none — so the error names the list to fix instead of «the
+// allowlists».
+func (s *Server) noBindWhy(principal, endpointID, provider string) string {
+	pol, err := s.credPolicyFor(endpointID, principal)
+	if err != nil {
+		return ""
+	}
+	var why []string
+	for _, who := range []string{principal, store.PoolPrincipal} {
+		rows, err := s.Store.Credentials(who)
+		if err != nil {
+			return ""
+		}
+		for _, c := range rows {
+			if c.Provider != provider {
+				continue
+			}
+			if _, r := s.credVerdict(c, pol); r != "" {
+				owner := c.PrincipalID
+				if owner == store.PoolPrincipal {
+					owner = "pool"
+				}
+				why = append(why, owner+"/"+c.Account+" — "+r)
+			}
+		}
+	}
+	if len(why) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(why, "; ")
+}
+
 // sessionBind is the session's binding for provider, picked (and kept) on
 // first use. A binding whose account is no longer the person's to use — the
 // row was deleted, or it is another person's — is picked again.
@@ -216,7 +251,7 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 		return b, err
 	}
 	if len(choices) == 0 {
-		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one) that this machine's and this person's subscription allowlists permit")
+		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one) that this machine's and this person's subscription allowlists permit" + s.noBindWhy(principal, endpointID, provider))
 	}
 	choices = s.byHeadroom(choices, now) // one at its limit last (claude-fleet#2115)
 	pick := store.SessionBind{WorkerID: workerID, Provider: provider, Owner: choices[0].PrincipalID,

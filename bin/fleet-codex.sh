@@ -191,7 +191,13 @@ fi
 
 # Use ccquota's shared run lock and official isolated credential environment for
 # the entire launcher/app-server/TUI lifetime. Do not change its global default.
-if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
+# A SEPARATED login (credsep.json, #1971) through its credential proxy keeps no
+# Codex login of its own — the proxy mints for it below — so the failover pin is
+# skipped, as fleet-claude.sh's _fc_sep does (issue #3713: a credsep login's warm
+# Codex died on «no account on the login»). An explicit --codex-profile still runs.
+_fx_sep=0
+[ -n "${FLEET_CRED_SID:-}" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] && _fx_sep=1
+if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ "$_fx_sep" != 1 ]; then
   _profile=$(bash "$BIN/fleet-account.sh" profile --home "${CODEX_HOME:-$HOME/.codex}") || exit 1
   FLEET_CODEX_PROFILE=$(printf '%s' "$_profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["profile"])') || exit 1
   export FLEET_CODEX_PROFILE
