@@ -60,6 +60,7 @@ history: 0 处未确认 · 0 个提交
   | `person` | 真人的名字 / 登录名 |
   | `gh-owner` | 所有者的 GitHub 名（仓库名本身除外） |
   | `private-ipv4` | 私网 / tailnet（CGNAT）IPv4 |
+  | `public-ip` | 我们自己的公网 IPv4：集群出口、gh-relay（新加坡）、入口、官网、家里那条线的网段（#3631；地址只写在规则表里） |
 
 - `conf/oss-scan.allow` —— `<path-glob>\t<rule-id|*>\t<理由>`，确需保留的才进，每行写理由：
 
