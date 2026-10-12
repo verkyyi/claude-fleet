@@ -150,7 +150,7 @@ url=$(FC fleet-issue-file.sh --repo acme/app --title '入口单' --body 'b' --la
   || fail "B the filer opens a hub ticket" "$(cat "$WORK/err")"
 [ "$url" = "http://127.0.0.1:$PORT/v1/fleet/tickets/acme/app/2" ] || fail "B the filer prints the ticket URL, number last" "$url"
 FC fleet-issue-file.sh --repo acme/app --title 'x' --label nonsense-label >/dev/null 2>&1 && fail "B the taxonomy still refuses an off-list label"
-ch=$(FC fleet-issue-file.sh --repo acme/app --title '子单' --parent 2 2>"$WORK/err") || fail "B the filer with --parent" "$(cat "$WORK/err")"
+FC fleet-issue-file.sh --repo acme/app --title '子单' --parent 2 >/dev/null 2>"$WORK/err" || fail "B the filer with --parent" "$(cat "$WORK/err")"
 grep -q 'linked #3 as a sub-issue of #2' "$WORK/err" || fail "B --parent hangs it on the hub" "$(cat "$WORK/err")"
 [ "$(T children 'hub:acme/app#2')" = "$(printf 'hub:acme/app#3\topen')" ] || fail "B children" "$(T children 'hub:acme/app#2' 2>&1)"
 j=$(T read 'hub:acme/app#2' --json state,labels,number) || fail "B read #2"
