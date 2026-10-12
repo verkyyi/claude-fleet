@@ -89,7 +89,7 @@ while [ $# -gt 0 ]; do
     --docs) [ $# -ge 2 ] || { echo "site-build: --docs needs a directory" >&2; exit 2; }; DOCS="$2"; shift 2 ;;
     --drill) [ $# -ge 2 ] || { echo "site-build: --drill needs a file" >&2; exit 2; }; DRILL="$2"; shift 2 ;;
     --now) [ $# -ge 2 ] || { echo "site-build: --now needs YYYY-MM-DD" >&2; exit 2; }; NOW="$2"; shift 2 ;;
-    -h|--help) sed -n '2,69p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,72p' "$0"; exit 0 ;;
     *) echo "site-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
