@@ -21,7 +21,7 @@
 #      action of the row menu's letter table is in it and nothing else; `>` lists
 #      the menu's own items for the row in view in the table's order, filters
 #      them (`>pin`), and for real ⌘P `>pin` ↵ pins the row in view, the way the
-#      menu's 置顶 does.
+#      menu's 置顶 does — typed in one go: a ↵ before the items load is held (#3787).
 #   E  a lost machine's rows (issue #3164): a row whose machine mark ends `!`
 #      parses as lost, its detail says `mac-a 失联`, and ⌘P's rule carries how old the
 #      list is (off global/hub_ok); no lost row ⇒ no note.
@@ -351,10 +351,11 @@ try:
     os.write(master, b'\x1b[927~')
     check(wait(lambda: tm('show-options', '-gqv', '@popup_open') not in ('', '0'), 4), '⌘P opened no popup (3)')
     time.sleep(.6)
-    os.write(master, b'>pin')
-    time.sleep(2)   # the menu's items, read once on the first `>`
-    os.write(master, b'\r')
-    check(wait(lambda: tm('show-options', '-wqv', '-t', W['five'], '@pin') == '1', 6),
+    # `>pin` ↵ in one write: the ↵ lands while the menu's items (read once, on
+    # the first `>`) are still loading — it is held and runs once they arrive,
+    # however slow the read (a fixed sleep here went red on a slow macOS runner)
+    os.write(master, b'>pin\r')
+    check(wait(lambda: tm('show-options', '-wqv', '-t', W['five'], '@pin') == '1', 15),
           '⌘P >pin ↵ did not pin the row in view')
     check(wait(lambda: tm('show-options', '-gqv', '@popup_open') in ('', '0'), 4), 'the popup did not close (3)')
     check(current() == W['five'], '>pin switched windows: on %s' % current())
@@ -375,7 +376,9 @@ bin_dir = Path(sys.argv[1])
 work = Path(tempfile.mkdtemp())
 errs = []
 # no iTerm2 here (a HOME without ~/Library/Application Support/iTerm2): nothing written
-env = dict(os.environ, HOME=str(work))
+# (no bytecode either: Apple's CommandLineTools python caches it under
+# $HOME/Library/Caches/com.apple.python, which is not the writer writing)
+env = dict(os.environ, HOME=str(work), PYTHONDONTWRITEBYTECODE="1")
 for k in ("FLEET_ITERM_DIR", "ITERM_PROFILE", "TERM_PROGRAM", "LC_TERMINAL"):
     env.pop(k, None)
 r = subprocess.run(["python3", str(bin_dir / "fleet-iterm-profile.py"), "write"], env=env)
