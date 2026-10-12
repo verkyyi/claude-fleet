@@ -198,6 +198,79 @@ class LinuxNode(unittest.TestCase):
         ia = (BIN / 'fleet-install-apply.sh').read_text()
         self.assertIn("grep -m1 ': FAILED'", ia)
 
+    def test_no_primary_login_never_grows_back(self):
+        """BREAK-IT linux-no-primary-regrows (#3526): FLEET_NODE_LOGIN=fleet made the
+        container open its own `fleet` login at every start — ~54 idle processes and
+        a warm pool nobody used. With `none` (the image's and the manifest's) a
+        recreated pod passes no --login to the install, bootstraps only the logins
+        linux-tenants/ declares, and opens nothing; one person's failed bootstrap
+        never stops the machine."""
+        m = module('fleet-node-linux')
+        for word in ('none', '', ' none '):
+            self.assertEqual(m.primary_login(Mock(login=word)), '')
+        self.assertEqual(m.primary_login(Mock(login='fleet')), 'fleet')
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('FLEET_NODE_LOGIN', None)
+            with patch.object(sys, 'argv', ['x', 'ready']), patch.object(m.os, 'geteuid', return_value=0), \
+                    patch.object(m.sys, 'platform', 'linux'), patch.object(m, 'probe', return_value=0) as pr:
+                m.main()
+            self.assertEqual(m.primary_login(pr.call_args.args[0]), '')
+        with self.assertRaises(m.Refuse):
+            m.bootstrap(Mock(login='none'))
+        with tempfile.TemporaryDirectory() as d:
+            state, run = Path(d, 'state'), Path(d, 'run')
+            run.mkdir()
+            real = m.Path
+
+            def path(*parts):
+                p = real(*parts)
+                return run / p.name if str(p).startswith('/run/') or str(p).startswith('/etc/ssh') else p
+
+            loop = Mock()
+            loop.bin.return_value = Path(d)
+            loop.tend.return_value = 0
+            booted, installs = [], []
+
+            def boot(ns):
+                booted.append(ns.login)
+                if ns.login == 'drill2':
+                    raise RuntimeError('broken home')
+
+            def run_cmd(cmd, **kw):
+                installs.append(cmd)
+                return Mock(returncode=0)
+
+            with patch.dict(os.environ, {'FLEET_NODE_STATE': str(state)}), \
+                    patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
+                    patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'), patch.object(m, 'devnet'), \
+                    patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
+                    patch.object(m, 'tenants', return_value={'24haowan': {}, 'drill2': {}}), \
+                    patch.object(m, 'bootstrap', side_effect=boot), patch.object(m, 'as_tenant'), \
+                    patch.object(m, 'login_open') as opened, patch.object(m, 'ensure_login') as ensured, \
+                    patch.object(m.subprocess, 'run', side_effect=run_cmd), patch.object(m.signal, 'signal'):
+                (state / 'ssh').mkdir(parents=True)
+                (state / 'ssh/ssh_host_ed25519_key').write_text('k')
+                m.foreground(Mock(login='none', hub='h', join_file='/run/fleet-join/login', machine_join_file=''))
+            self.assertEqual(booted, ['24haowan', 'drill2'])
+            install = [c for c in installs if any(str(x).endswith('fleet-node-install.sh') for x in c)]
+            self.assertEqual(len(install), 1)
+            self.assertNotIn('--login', install[0])
+            self.assertNotIn('--login-join-file', install[0])
+            opened.assert_not_called()
+            ensured.assert_not_called()
+            self.assertTrue(loop.tend.called)  # ready was reached, the loop ran
+        # the image and the manifest both say none
+        docker = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        self.assertIn('FLEET_NODE_LOGIN=none', docker)
+        self.assertNotIn('FLEET_NODE_LOGIN=fleet', docker)
+        raw = subprocess.check_output([sys.executable, str(BIN.parent / 'extras/managed-node/render.py'),
+                                       '--image', 'example/image@sha256:' + 'a' * 64,
+                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
+        env = {e['name']: e.get('value') for e in
+               json.loads(raw)['items'][-1]['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(env.get('FLEET_NODE_LOGIN'), 'none')
+        self.assertNotIn('FLEET_LOGIN_JOIN_FILE', env)
+
     def test_recreate_rewrites_every_logins_route(self):
         """BREAK-IT linux-recreate-route-lost (#3421): credsep's root settings
         (<LIB>/<login>.conf, the image layer) were written for a `login open`

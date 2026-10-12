@@ -6174,6 +6174,21 @@ drill_linux_recreate_route_lost() {
   WHAT="每次启动、装之前：每个已入网登录的 <LIB>/<login>.conf 写回 relay 与允许主机，其它行不动；没入网的不写；第二次一字不写"
 }
 
+# ---- linux-no-primary-regrows (#3526): the image opened its own `fleet` login at
+# every start (FLEET_NODE_LOGIN=fleet) — an idle login no hub can assign, ~54
+# processes and a warm pool on a person's machine; deleted, it came back on the
+# next recreate. With `none` nothing is opened: only linux-tenants/ is rebuilt.
+drill_linux_no_primary_regrows() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_no_primary_login_never_grows_back \
+       >"$WORK/linux-no-primary.out" 2>&1; then
+    WHY="a node with no primary login opens one again on a recreate: $(tail -n 3 "$WORK/linux-no-primary.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="FLEET_NODE_LOGIN=none（镜像与清单都是）：重建时装机不带 --login，只按 linux-tenants/ 起已登记的登录，一个也不新开；某人的家坏了机器照样就绪"
+}
+
 # ---- linux-image-local-owner (#3421): tar as root kept node's uid 1001 on
 # /usr/local; the shared proxy's launcher read `untrusted`, the pod never Ready.
 drill_linux_image_local_owner() {
