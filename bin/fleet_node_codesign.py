@@ -231,7 +231,11 @@ class Identity(object):
             return
         now_ = self._search_list()
         if now_ is not None and now_ != before:
-            _run([tool("security"), "list-keychains", "-d", "user", "-s"] + before, timeout=30)
+            if before:
+                _run([tool("security"), "list-keychains", "-d", "user", "-s"] + before, timeout=30)
+            else:
+                # `-s` with no keychain changes nothing: an empty list is the preference gone (#3703)
+                _run(["/usr/bin/defaults", "delete", "com.apple.security", "DLDBSearchList"], timeout=30)
 
     def satisfies(self, path, info=None):
         """(ok, why): does <path> carry a valid signature meeting the requirement?"""
@@ -251,9 +255,17 @@ class Identity(object):
             raise CodesignError("security unlock-keychain: %s" % _last(out, err, rc))
         tmp = "%s.sign-%d" % (path, os.getpid())
         shutil.copy2(path, tmp)
+        # macOS 26's codesign finds the identity only in a keychain on the search list,
+        # --keychain or not (#3703): add ours for the one call, then put the list back
+        before = self._search_list()
+        if before is not None and self.keychain not in before:
+            _run([tool("security"), "list-keychains", "-d", "user", "-s"] + before + [self.keychain], timeout=30)
         try:
-            rc, out, err = _run([tool("codesign"), "--force", "--sign", info["sha1"], "--keychain", self.keychain,
-                                 "--identifier", info.get("identifier") or IDENTIFIER, "--timestamp=none", tmp])
+            try:
+                rc, out, err = _run([tool("codesign"), "--force", "--sign", info["sha1"], "--keychain", self.keychain,
+                                     "--identifier", info.get("identifier") or IDENTIFIER, "--timestamp=none", tmp])
+            finally:
+                self._restore_search_list(before)
             if rc != 0:
                 raise CodesignError("codesign: %s" % _last(out, err, rc))
             ok, why = self.satisfies(tmp, info)

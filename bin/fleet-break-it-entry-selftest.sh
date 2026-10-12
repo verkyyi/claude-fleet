@@ -337,15 +337,18 @@ drill_entry_hub_down() {
   cmp -s "$E/keys.before" "$E/db/entry/keys/$ME" || { WHY="the keys file changed on a failed pull"; edown; return 1; }
   etry k1 || { WHY="the last list stopped working with the hub away: $(cat "$E/ssh.err")"; edown; return 1; }
   SECS=$(since "$t0")
-  # an hour on, the doctor's row says how far behind
-  python3 - "$E/db/entry/state.json" <<'PY'
+  # an hour on, the doctor's row says how far behind (the running daemon rewrites the
+  # same book on its beat and can put back what it read before this edit — #3703: edit, check, again)
+  behind() {
+    python3 - "$E/db/entry/state.json" <<'PY'
 import json, sys, time
 b = json.load(open(sys.argv[1])); b["hub_version_at"] = time.time() - 3700
 json.dump(b, open(sys.argv[1], "w"))
 PY
-  python3 "$SUP" entry status --check > "$E/check.out"
-  [ $? = 1 ] && grep -q '入口 v5 · 本机 v4' "$E/check.out" && grep -q '落后入口一小时以上' "$E/check.out" \
-    || { WHY="the doctor's entry row: $(cat "$E/check.out")"; edown; return 1; }
+    python3 "$SUP" entry status --check > "$E/check.out"
+    [ $? = 1 ] && grep -q '入口 v5 · 本机 v4' "$E/check.out" && grep -q '落后入口一小时以上' "$E/check.out"
+  }
+  until_ok 5 behind || { WHY="the doctor's entry row: $(cat "$E/check.out")"; edown; return 1; }
   grep -q 'entry status --check' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh has no entry row"; edown; return 1; }
   sys_same || { edown; return 1; }
   edown
