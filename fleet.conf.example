@@ -836,9 +836,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # fleet_landed (issue #3601) fetches the repo's origin/<base> before it answers, at
 # most once per FLEET_LANDED_FETCH_SECS a repo; FLEET_LANDED_FETCH=0 reads the local
 # ref as it stands (no network).
-# @label=Landing fetch interval @group=bridge @tier=internal @scope=global @edit=int @unit=s
+# @label=Landing fetch interval @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_LANDED_FETCH_SECS=60
-# @label=Landing fetch @group=bridge @tier=internal @scope=global @edit=bool
+# @label=Landing fetch @group=bridge @tier=internal @scope=fleet @edit=bool
 #FLEET_LANDED_FETCH=1
 # Seconds a CLOSED-unmerged PR's window must have been SILENT before cleanup may
 # reap it (issue #544); the other half of that gate — "it has not spoken since the
