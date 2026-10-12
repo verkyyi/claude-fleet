@@ -1179,6 +1179,7 @@ fleet_ticket_url() {
       break
     done
   fi
+  [ -z "$home" ] && [ "$(fleet_repo_forge "$repo" "$sess")" = none ] && home=hub   # no GitHub ⇒ the hub (#3605)
   if [ "$home" = hub ]; then
     hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}"
     [ -n "$hub" ] || hub=$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_HUB_URL=["'"'"']\{0,1\}\([^"'"'"']*\).*/\2/p' "$FLEET_CONF_DIR/fleet.conf" 2>/dev/null | head -n 1)
@@ -1212,6 +1213,9 @@ fleet_ticket_home() {
   # Inside a fleet only the repo's conf answers; outside any, the environment's.
   if [ -n "$sess" ]; then
     v=$(fleet_repo_conf_get "$sess" "$repo" FLEET_TICKETS 2>/dev/null) || v=''
+    # A repo with no GitHub has nowhere else to keep them (issue #3605): a conf
+    # written before FLEET_TICKETS was, says hub all the same.
+    [ -z "$v" ] && [ "$(fleet_repo_forge "$repo" "$sess")" = none ] && v=hub
   else
     v="${FLEET_TICKETS:-}"
   fi
@@ -2319,6 +2323,8 @@ fleet_repo_register() {
       if [ "$forge" != github ]; then
         printf 'FLEET_REMOTE=%s\n' "$(_fleet_conf_q "$remote")"
         printf 'FLEET_FORGE="none"\nFLEET_LAND="fleet"\n'
+        # …and its tickets can only live on the hub (issue #3605, 共同约定 1).
+        printf 'FLEET_TICKETS="hub"\n'
       fi
       # Its tickets' home (issue #3739): written only when it is the hub or was asked.
       [ -n "$tickets" ] && printf 'FLEET_TICKETS="%s"\n' "$tickets"

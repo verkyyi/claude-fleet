@@ -31,6 +31,7 @@
 #              $FLEET_CONF_DIR/landed/<slug>.ndjson (repo · branch · tip · landed ·
 #              base · check · secs · ts). The remote branch, if it was pushed, is
 #              deleted — like `--delete-branch`.
+#   7. CLOSE   an issue-<N> branch's hub ticket is closed with a 落地 comment (#3605).
 #
 # --verdict — the read (`pr_verdict`): MERGED · CONFLICT (would not rebase cleanly) ·
 #   BEHIND (the base moved past the branch's fork — pr_merge rebases it itself) ·
@@ -252,6 +253,25 @@ done
 record "$tip0" "$new"
 gitq -C "$root" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 \
   && gitq -C "$root" push -q origin --delete "$branch" >/dev/null 2>&1
+# 7. CLOSE   an issue-<N> branch is ticket N's work (one worktree, one ticket): a
+#            ticket on the hub is closed with it, as a PR's `Closes #N` closes
+#            GitHub's (issue #3605). A GitHub ticket is left alone — no gh here; a
+#            hub that does not answer leaves it open and says so, the landing stands.
+case "$branch" in
+  issue-[1-9]*)
+    n=${branch#issue-}; n=${n%%[!0-9]*}
+    if [ -n "$n" ] && fleet_ticket_hub "$repo" "$sess"; then
+      tid="hub:$repo#$n"
+      if ! tst=$(bash "$BIN/fleet-ticket.sh" read "$tid" --json state --max-age 0 2>/dev/null | jq -r '.state // empty' 2>/dev/null) \
+         || [ -z "$tst" ]; then
+        note "landed, but ticket $tid was not closed (the hub did not answer) — close it by hand"
+      elif [ "$tst" != CLOSED ]; then
+        bash "$BIN/fleet-ticket.sh" post "$tid" --body "落地：\`$branch\` 已并入 \`$base\`（${new:0:12}）。" >/dev/null 2>&1
+        bash "$BIN/fleet-ticket.sh" state "$tid" closed --reason completed >/dev/null 2>&1 \
+          || note "landed, but ticket $tid could not be closed (the hub did not answer) — close it by hand"
+      fi
+    fi ;;
+esac
 case "$CHECK" in
   none) say MERGED "$branch landed on $base at ${new:0:12} — 没跑检查 (no FLEET_CHECK_CMD)" ;;
   *)    say MERGED "$branch landed on $base at ${new:0:12} — check passed (${CHECK_SECS}s)" ;;

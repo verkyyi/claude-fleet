@@ -17,7 +17,8 @@ from pathlib import Path
 
 BIN = Path(__file__).resolve().parent
 _REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_HUB_RE = re.compile(r"""^\s*(export\s+)?FLEET_TICKETS=["']?hub["']?\s*(#.*)?$""", re.M)
+# FLEET_FORGE=none too: a repo with no GitHub keeps its tickets on the hub (#3605)
+_HUB_RE = re.compile(r"""^\s*(export\s+)?(FLEET_TICKETS=["']?hub|FLEET_FORGE=["']?none)["']?\s*(#.*)?$""", re.M)
 
 
 def _conf_dir():

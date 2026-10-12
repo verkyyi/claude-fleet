@@ -13,7 +13,9 @@ name: client-e2e
 # bin/newcomer-e2e.sh (issue #2096) then walks the road BEFORE that, holding no
 # operator credential: `fleet users add`, a clean HOME's install, `fleet login`
 # confirmed by a drill code, `fleet` on the certificate alone, the renewal and
-# the removal.
+# the removal. bin/nogh-e2e-selftest.sh (issue #3605) walks the road with no
+# GitHub at all: WeChat sign-in, a repo at an ssh address, ticket → session →
+# fleet's own landing → cleanup → report, with a `gh` that must never be called.
 #
 # ubuntu on every PR and every push to master (a merge); macOS nightly (and on
 # demand) — the BSD / bash 3.2 / Homebrew-tmux half, on its own clock so it
@@ -69,11 +71,16 @@ jobs:
         # claude-fleet#2096: the road before the client, with no operator credential
         if: success() || failure()
         run: bin/newcomer-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/newcomer-e2e.log"
+      - name: No GitHub — WeChat sign-in to the batch report, gh 0
+        # claude-fleet#3605 (EPIC #3570 C13): 「没有 GitHub 账号时走得通的步骤」 7/7
+        if: success() || failure()
+        run: bin/nogh-e2e-selftest.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/nogh-e2e.log"
       - name: Summary
         if: always()
         run: |
           { echo '### client-e2e (ubuntu)'; echo '```'; tail -n 20 "$RUNNER_TEMP/client-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           { echo '### newcomer-e2e (ubuntu)'; echo '```'; tail -n 20 "$RUNNER_TEMP/newcomer-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '### nogh-e2e (ubuntu)'; echo '```'; tail -n 20 "$RUNNER_TEMP/nogh-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   macos:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -96,8 +103,12 @@ jobs:
       - name: A newcomer — added, installed, signed in, opened, renewed, removed
         if: success() || failure()
         run: /bin/bash bin/newcomer-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/newcomer-e2e.log"
+      - name: No GitHub — WeChat sign-in to the batch report, gh 0
+        if: success() || failure()
+        run: /bin/bash bin/nogh-e2e-selftest.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/nogh-e2e.log"
       - name: Summary
         if: always()
         run: |
           { echo '### client-e2e (macOS)'; echo '```'; tail -n 20 "$RUNNER_TEMP/client-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           { echo '### newcomer-e2e (macOS)'; echo '```'; tail -n 20 "$RUNNER_TEMP/newcomer-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '### nogh-e2e (macOS)'; echo '```'; tail -n 20 "$RUNNER_TEMP/nogh-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
