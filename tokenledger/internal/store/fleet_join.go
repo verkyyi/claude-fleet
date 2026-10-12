@@ -65,6 +65,46 @@ func (s *Store) CreateJoinCode(codeHash, label string, now time.Time, ttl time.D
 	return s.CreateJoinCodeKind(codeHash, label, NodeKindFixed, now, ttl)
 }
 
+// ExpireJoinCodes ends every unredeemed join code minted under label for
+// machine (claude-fleet#3504: the codes a login's creates and resets carried,
+// `<machine>-<login>`): its expiry becomes now, so it can no longer be
+// redeemed and its row stays for the audit. It reports how many it ended.
+func (s *Store) ExpireJoinCodes(label, machine string, now time.Time) (int, error) {
+	res, err := s.write.Exec(`UPDATE fleet_join_codes SET expires_at = ?
+		WHERE label = ? AND machine = ? AND used_at IS NULL AND expires_at > ?`,
+		fmtTime(now), label, machine, fmtTime(now))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// LiveJoinCodes counts the join codes under label for machine that are still
+// redeemable and were minted before cutoff — what ExpireJoinCodes should have
+// ended (claude-fleet#3504's own check).
+func (s *Store) LiveJoinCodes(label, machine string, cutoff, now time.Time) (int, error) {
+	rows, err := s.read.Query(`SELECT created_at, expires_at FROM fleet_join_codes
+		WHERE label = ? AND machine = ? AND used_at IS NULL`, label, machine)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var c, e string
+		if err := rows.Scan(&c, &e); err != nil {
+			return 0, err
+		}
+		created, err1 := time.Parse(rfc, c)
+		expires, err2 := time.Parse(rfc, e)
+		if err1 != nil || err2 != nil || (created.Before(cutoff) && expires.After(now)) {
+			n++ // a row it cannot read is counted, never called gone
+		}
+	}
+	return n, rows.Err()
+}
+
 // RedeemJoinCode spends a code and enrolls an agent endpoint under it, in one
 // transaction. label names the endpoint when the code carries none.
 func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label, tokenHash, host, osUser string) error {

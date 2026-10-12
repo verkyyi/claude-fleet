@@ -116,7 +116,7 @@ func (s *Store) ensureFleetAccounts() error {
 	now := time.Now().UTC().Format(rfc)
 	_, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, updated_at = ?,
 		detail = 'hub restarted before the node answered'
-		WHERE state IN (?, ?)`, AccountUnknown, now, AccountCreating, AccountRemoving)
+		WHERE state IN (?, ?, ?)`, AccountUnknown, now, AccountCreating, AccountRemoving, AccountResetting)
 	return err
 }
 
@@ -707,8 +707,8 @@ func (s *Store) FinishAccountOp(opID, endpointID, state, detail string, at time.
 		return false, nil
 	}
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, detail = ?, updated_at = ?
-		WHERE op_id = ? AND endpoint_id = ? AND state IN (?, ?, ?)`,
-		state, detail, at.UTC().Format(rfc), opID, endpointID, AccountCreating, AccountRemoving, AccountUnknown)
+		WHERE op_id = ? AND endpoint_id = ? AND state IN (?, ?, ?, ?)`,
+		state, detail, at.UTC().Format(rfc), opID, endpointID, AccountCreating, AccountRemoving, AccountResetting, AccountUnknown)
 	if err != nil {
 		return false, err
 	}
@@ -720,8 +720,8 @@ func (s *Store) FinishAccountOp(opID, endpointID, state, detail string, at time.
 // is gone and nobody can say whether the op ran.
 func (s *Store) LoseAccountOps(endpointID string, at time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, detail = 'control channel closed before the node answered',
-		updated_at = ? WHERE endpoint_id = ? AND state IN (?, ?)`,
-		AccountUnknown, at.UTC().Format(rfc), endpointID, AccountCreating, AccountRemoving)
+		updated_at = ? WHERE endpoint_id = ? AND state IN (?, ?, ?)`,
+		AccountUnknown, at.UTC().Format(rfc), endpointID, AccountCreating, AccountRemoving, AccountResetting)
 	return err
 }
 
