@@ -65,6 +65,10 @@ const (
 	AccountRemovePending = "remove_pending" // remove queued, not sent
 	AccountRemoving      = "removing"       // remove sent, no result yet
 	AccountRemoved       = "removed"        // the login was closed
+	// A spare being washed for the next person (claude-fleet#3504 sends
+	// it; claude-fleet#3501 counts it apart): held, never ready.
+	AccountResetPending = "reset_pending" // reset queued, not sent
+	AccountResetting    = "resetting"     // reset sent, no result yet
 )
 
 // Principal is one person.

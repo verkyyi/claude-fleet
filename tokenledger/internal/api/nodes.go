@@ -938,6 +938,13 @@ type MachineView struct {
 	Spare      *int `json:"spare,omitempty"`
 	LoginsUsed *int `json:"logins_used,omitempty"`
 	LoginCap   *int `json:"login_cap,omitempty"`
+	// SpareResetting is how many spares are being washed for the next
+	// person and SpareFailed how many failed — neither is ready
+	// (claude-fleet#3501). SpareTarget is how many the machine should hold.
+	// Same rule as Spare: present only while fleet.spares is on.
+	SpareResetting *int `json:"spare_resetting,omitempty"`
+	SpareFailed    *int `json:"spare_failed,omitempty"`
+	SpareTarget    *int `json:"spare_target,omitempty"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.
