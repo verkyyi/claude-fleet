@@ -59,6 +59,9 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      registers it from the login's home, starts a stopped / idle one and waits for
      its socket's /healthz (`registered|started|running · ready`, or `not ready`
      after N tries); a name off the on-demand table is refused
+  V  session units (#3671): a `session` unit runs only while its login has a
+     session; a restart adopts an account unit (no second copy), an orphaned copy
+     is stopped, an earlier daemon's running task is not doubled
   S  can the outside reach the entry port (#3072): `entry reach` posts the port, its
      host key, the global IPv6 (never a tunnel's, a temporary one), the LAN IPv4 with
      the default route's interface first (wired en0, not Wi-Fi), and the router's
@@ -2813,10 +2816,130 @@ os.unlink(s); sys.exit(75)
         self.assertEqual(r.returncode, 1)
         self.assertIn("not ready after 2 tries", r.stderr)
 
-# T_RootCore runs only its own two cases; the rest of H_Accounts is the no-core road
-for _n in dir(H_Accounts):
-    if _n.startswith("test_") and _n not in T_RootCore.__dict__:
-        setattr(T_RootCore, _n, None)
+class V_SessionUnits(H_Accounts):
+    """A login with no session keeps no session-only process, and a restart never
+    doubles one (issue #3671, EPIC #3500 C14): a `session` unit runs only while the
+    login's published count is above 0 (none / stale = runs, as before); an account
+    unit an earlier daemon started is adopted after its wrapper exec'd; an orphaned
+    copy of one is stopped; an earlier daemon's still-running task is not run a
+    second time beside it."""
+
+    def setUp(self):
+        H_Accounts.setUp(self)
+        self.sd = os.path.join(self.d, "sessions")
+        os.makedirs(self.sd)
+        self.env.update({"FLEET_MACHINE_SESSIONS_DIR": self.sd, "FLEET_NODE_SESSION_HOLD": "0",
+                         "FLEET_NODE_STRAY_SECS": "0.5"})
+
+    def count(self, who, n, age=0):
+        with open(os.path.join(self.sd, who), "w") as f:
+            f.write("%d %d\n" % (n, int(time.time()) - age))
+
+    def copies(self, who, script):
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="]).decode()
+        return [l.split() for l in out.splitlines()
+                if os.path.join(self.home(who), ".claude", "fleet", "bin", script) in l and "/bin/bash" in l]
+
+    def test_session_unit_runs_only_with_a_session(self):
+        # the table's class reaches the account entry (#3671)
+        os.makedirs(os.path.join(self.d, "rt", "conf"))
+        with open(os.path.join(self.d, "rt", "conf", "node-tasks.tsv"), "w") as f:
+            f.write("spin\tunit\tsession\tx\n")
+        self.assertEqual(fns.table_session_units(os.path.join(self.d, "rt")), {"spin"})
+        loop = "while :; do sleep 1; done\n"
+        os.makedirs(os.path.join(self.home("carol"), ".claude", "fleet", "bin"))
+        os.makedirs(os.path.join(self.home("carol"), "Library", "LaunchAgents"))
+        for who in ("alice", "bob", "carol"):
+            self.acct_script(who, "spin.sh", loop)
+            self.acct_script(who, "keep.sh", loop)
+        self.acct_table(
+            {"name": "spin", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/spin.sh"], "keepalive": True,
+             "session": True},
+            {"name": "keep", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/keep.sh"], "keepalive": True})
+        with open(os.path.join(self.d, "passwd.json")) as f:
+            pw = json.load(f)
+        pw["carol"] = dict(pw["alice"], home=self.home("carol"))
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump(pw, f)
+        for who in ("alice", "bob", "carol"):
+            self.assertEqual(self.run_sup("account", "adopt", who).returncode, 0)
+        self.count("alice", 0)
+        self.count("bob", 2)
+        self.count("carol", 0, age=900)   # a stale count is no count: it runs
+        self.start()
+        self.assertTrue(until(10, lambda: self.child("alice/keep").get("pid") and self.child("bob/spin").get("pid")
+                              and self.child("carol/spin").get("pid")), self.state().get("children"))
+        self.assertTrue(until(5, lambda: self.child("alice/spin").get("status") == fns.NO_SESSION),
+                        self.child("alice/spin"))
+        self.assertFalse(self.child("alice/spin").get("pid"), "a login with no session runs its session unit")
+        self.assertEqual(self.copies("alice", "spin.sh"), [])
+        self.assertIn("account alice             2/2 ok", self.run_sup("status").stdout,
+                      "a session unit kept off is not a failure")
+        # a session opens: it starts (the count is read every 5 s); it closes: it stops
+        self.count("alice", 1)
+        self.assertTrue(until(10, lambda: self.child("alice/spin").get("pid")), "never started with a session")
+        pid = self.child("alice/spin")["pid"]
+        self.count("alice", 0)
+        self.assertTrue(until(10, lambda: not fns.pid_alive(pid)), "kept running with no session")
+        self.assertTrue(until(5, lambda: self.child("alice/spin").get("status") == fns.NO_SESSION),
+                        self.child("alice/spin"))
+        # the switch off: every one runs
+        self.procs[-1].send_signal(signal.SIGTERM)
+        self.procs[-1].wait(timeout=15)
+        self.start(FLEET_NODE_SESSION_UNITS="0")
+        self.assertTrue(until(10, lambda: self.child("alice/spin").get("pid")), "FLEET_NODE_SESSION_UNITS=0 still gates")
+
+    def test_restart_adopts_and_strays_stop(self):
+        self.acct_script("alice", "keep.sh", "while :; do sleep 1; done\n")
+        self.acct_table({"name": "keep", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/keep.sh"],
+                         "keepalive": True})
+        self.assertEqual(self.run_sup("account", "adopt", "alice").returncode, 0)
+        sup = self.start()
+        pid = until(10, lambda: self.child("alice/keep").get("pid"))
+        self.assertTrue(pid)
+        self.assertTrue(until(5, lambda: len(self.copies("alice", "keep.sh")) == 1))
+        # the daemon dies hard (a watchdog exit, kill -9): its child lives on
+        sup.kill()
+        sup.wait()
+        self.start()
+        time.sleep(2)
+        self.assertEqual(self.child("alice/keep").get("pid"), pid, "the live unit was not adopted")
+        self.assertEqual([c[0] for c in self.copies("alice", "keep.sh")], [str(pid)],
+                         "a restart started a second copy beside the first")
+        # a copy an older daemon left behind (an orphan, PPID 1) is stopped
+        script = os.path.join(self.home("alice"), ".claude", "fleet", "bin", "keep.sh")
+        subprocess.run(["/bin/bash", "-c", '"$1" "$2" </dev/null >/dev/null 2>&1 &', "_", "/bin/bash", script],
+                       start_new_session=True)
+        stray = until(5, lambda: [c for c in self.copies("alice", "keep.sh") if c[0] != str(pid)])
+        self.assertTrue(stray, "the stray never started")
+        if stray[0][1] != "1":
+            self.skipTest("orphans are not reparented to pid 1 here (a subreaper)")
+        self.assertTrue(until(10, lambda: [c[0] for c in self.copies("alice", "keep.sh")] == [str(pid)]),
+                        "the orphaned copy still runs: %s" % self.copies("alice", "keep.sh"))
+        self.assertTrue(fns.pid_alive(pid), "the sweep stopped the unit it tends")
+
+    def test_earlier_daemons_task_not_doubled(self):
+        slow = self.script("slow.sh", 'echo $$ >> "%s/runs"; sleep 4\n' % self.d)
+        self.table(tasks=[{"name": "slow", "cmd": ["/bin/bash", slow], "every": 0.2, "timeout": 30}])
+        sup = self.start()
+        self.assertTrue(until(10, lambda: os.path.exists(os.path.join(self.d, "runs"))))
+        until(5, lambda: self.task("slow").get("pid"))
+        sup.kill()
+        sup.wait()
+        self.start()
+        time.sleep(2)
+        with open(os.path.join(self.d, "runs")) as f:
+            runs = f.read().split()
+        self.assertEqual(len(runs), 1, "a second copy started beside the earlier daemon's run: %s" % runs)
+        self.assertTrue(until(10, lambda: len(open(os.path.join(self.d, "runs")).read().split()) >= 2),
+                        "once the earlier run ended the task never ran again")
+
+
+# T_RootCore / V_SessionUnits run only their own cases; the rest of H_Accounts is the no-core road
+for _cls in (T_RootCore, V_SessionUnits):
+    for _n in dir(H_Accounts):
+        if _n.startswith("test_") and _n not in _cls.__dict__:
+            setattr(_cls, _n, None)
 
 
 if __name__ == "__main__":

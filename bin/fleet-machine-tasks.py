@@ -74,8 +74,10 @@ def check(root=ROOT):
     for n, k, c, w in rows:
         if k not in ("unit", "machine"):
             out.append("%s: kind %r is not unit|machine" % (n, k))
-        if c not in ("machine", "login"):
-            out.append("%s: class %r is not machine|login" % (n, c))
+        if c not in ("machine", "login", "session"):
+            out.append("%s: class %r is not machine|login|session" % (n, c))
+        if c == "session" and k != "unit":
+            out.append("%s: only a launchd unit serves a login's sessions (class session)" % n)
         if k == "machine" and c != "machine":
             out.append("%s: a machine-table task is the machine's (class machine)" % n)
         if not w.strip():

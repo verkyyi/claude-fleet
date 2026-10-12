@@ -22,7 +22,9 @@
 #                         the wrapper handed Python's ignored SIGPIPE to the script — a
 #                         `… | head` never ended and the account create hung
 #   per-login-machine-loops bin/fleet-machine-tasks.py + conf/node-tasks.tsv (#3546): every
-#                         login probed the machine for itself; one table, one reading now
+#                         login probed the machine for itself; one table, one reading now;
+#                         + bin/fleet-node-supervisor.py (#3671): session units only with a
+#                         session, a restart adopts instead of doubling
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -1333,13 +1335,13 @@ EOF
 # red), the daemon publishes ONE reading every 15 s and a login with
 # FLEET_MACHINE_TASKS=off reads it instead of probing.
 drill_per_login_machine_loops() {
-  CAP=20; local t0
+  CAP=90; local t0
   t0=$(now)
   if ! bash "$BIN/fleet-machine-tasks-selftest.sh" >"$WORK/machine-tasks.out" 2>&1; then
     WHY="a login still probes the machine itself, or a loop has no row: $(grep FAIL "$WORK/machine-tasks.out" | head -3 | tr '\n' ' ')"; return 1
   fi
   SECS=$(since "$t0")
-  WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探"
+  WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复"
 }
 
 cred_run_drills "$0"

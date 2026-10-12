@@ -12,6 +12,11 @@
 #                     ONCE (a login reads the result: cluster/machine.json)
 #           login   — needs the login itself: its tmux server, its gh token, its
 #                     sessions, its own hub identity
+#           session — a login loop that only serves the login's live sessions
+#                     (issue #3671): the daemon runs it only while the login's
+#                     collector publishes a session count above 0
+#                     (fleet_machine_sessions_publish); a login with no session
+#                     keeps no such process. No count, or a stale one ⇒ it runs.
 #   what    one line: what it does and, for a login loop, why it cannot be the machine's
 #
 # A new loop is a new row, and its class is a decision: a machine row's answer
@@ -32,8 +37,8 @@ peerlink	unit	login	the login's links into other machines' views
 pr-refresh	unit	login	gh pr list for the login's own repos with its own token; stamps its tmux windows
 quotawatch	unit	login	the login's account quota policy and its sessions' warnings
 sleep	unit	login	hibernates the login's idle sessions
-spinner	unit	login	animates the login's tmux windows
-webhook	unit	login	the login's GitHub webhook receiver
+spinner	unit	session	animates the login's session windows: nothing to animate with no session
+webhook	unit	session	the login's GitHub webhook receiver: a freshness kick for its sessions (pollers stay the backstop)
 worktree-autoclean	unit	login	the login's stale worktrees
 cred-proxy-shared	machine	machine	the shared credential proxy, one for every login
 node-agent	machine	machine	the one node program, each login a tenant on its link
