@@ -405,7 +405,7 @@ FLEET_CTX_WINDOW=200000
 # The panel's 已关闭 group (issue #3731): the closed sessions it lists, the last
 # this many hours; the older ones are one line, 「更早的 N 个 → /fleet-history」.
 # Read at each ⌘P (the environment, else this file's line).
-# @label=Closed sessions listed @group=status @tier=advanced @scope=global @edit=int @unit=hours
+# @label=Closed sessions listed @group=status @tier=internal @scope=global @edit=int @unit=hours
 #FLEET_VIEW_CLOSED_HOURS=48
 
 # The steward plugin's beat (seconds), in the loop of the session that took the
