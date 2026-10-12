@@ -17,7 +17,9 @@
 #
 # A link inside a fenced code block or inline `code` is not a link. URLs,
 # mailto: and in-page `#anchor` links are not checked. A line that must keep a
-# dead path marks itself `docs-links-ok: <why>`.
+# dead path marks itself `docs-links-ok: <why>`. tokenledger/ is not read yet:
+# its comments move to docs/dev/ in #3659 (a PR touching it runs the 45-minute
+# Go jobs, which #3613 could not get through while master kept moving).
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
@@ -27,7 +29,7 @@ python3 - <<'PY'
 import os, re, subprocess, sys
 
 files = subprocess.run(['git', 'ls-files', '-z'], capture_output=True, text=True).stdout.split('\0')
-files = [f for f in files if f and os.path.isfile(f)]
+files = [f for f in files if f and os.path.isfile(f) and not f.startswith('tokenledger/')]  # → #3659
 bad = []
 checked = 0
 

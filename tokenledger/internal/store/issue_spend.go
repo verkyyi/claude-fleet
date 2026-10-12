@@ -3,7 +3,7 @@ package store
 
 // The issue axis, read side. #57 stamped usage_hourly.issue_number from the
 // branch name; this is the aggregate that puts money on that axis.
-// Design: the cost-per-issue seam design note (2026-09-19; removed in claude-fleet#3576, in git history)
+// Design: docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
 //
 // Two invariants live here and every caller inherits them.
 //

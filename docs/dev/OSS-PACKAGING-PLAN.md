@@ -74,7 +74,7 @@
 >   - 删（git 历史里还在）：研究笔记 `RESEARCH-CRED-PROXY.md` · `RESEARCH-TEAMCLI.md` ·
 >     `RESEARCH-TEAM-AGENT-LANDSCAPE.md` · `SUBSCRIPTION-FAILOVER-PLAN.md`、一次性的
 >     验收 / 演练 / 审计记录 `ROLES-ACCEPTANCE.md` · `MANAGED-LINUX-DRILL.md` ·
->     `DEFAULTS-AUDIT.md`、`tokenledger/docs/superpowers/`；退役程序
+>     `DEFAULTS-AUDIT.md`（`tokenledger/docs/superpowers/` 随 #3659 删）；退役程序
 >     `extras/cred-proxy/`（研究原型，从不进安装包）与过了兼容期的安静壳
 >     `bin/fleet-orchestrator.sh` · `bin/fleet-steward.sh` · `bin/fleet-dispatch.sh`；
 >     根目录误入的 `trap`、`Authorization: FleetDebug drill-check`（并进 `.gitignore`）。
