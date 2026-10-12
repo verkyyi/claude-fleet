@@ -764,8 +764,10 @@ func runHub(args []string) error {
 	}
 
 	srv := &api.Server{
-		Store:               st,
-		GitHub:              gh,
+		Store:  st,
+		GitHub: gh,
+		// CCQUOTA_ADMINS (claude-fleet#3603): admins by principal or address.
+		Admins:              splitList(os.Getenv("CCQUOTA_ADMINS")),
 		Pricing:             table,
 		ViewerToken:         *token,
 		LimitsPollIntervalS: *pollInterval,

@@ -9,6 +9,9 @@
 // locally wins. 角色与规则 (claude-fleet#2787) is the person layer's roles +
 // rule table, merged by the hub (/v1/fleet/person-bundle/roles?merged=1) and
 // edited here field by field — the same layer `fleet role` edits in a session.
+// 登录方式 (claude-fleet#3603) is the account's ways of signing in
+// (/v1/me/identities): listed, one added (GitHub by signing in with it), one
+// removed — never the last.
 import { Shell } from './app-shell.js';
 import { esc, ic, relTime } from './lib/shell.js';
 import { bundleItems, bundleList, parseImport } from './lib/pages.js';
@@ -30,8 +33,8 @@ function download(name, obj) {
 export default Shell.mount('config', async (ctx) => {
   const { me, admin } = ctx;
   // Everyone's own layer, an admin's included (claude-fleet#2515).
-  const [pr, tr, rr] = await Promise.allSettled([ctx.api('/v1/fleet/person-bundle?history=1'), ctx.api('/v1/fleet/team-bundle?history=1'),
-    ctx.api('/v1/fleet/person-bundle/roles?merged=1')]);
+  const [pr, tr, rr, ir] = await Promise.allSettled([ctx.api('/v1/fleet/person-bundle?history=1'), ctx.api('/v1/fleet/team-bundle?history=1'),
+    ctx.api('/v1/fleet/person-bundle/roles?merged=1'), me.person ? ctx.api('/v1/me/identities') : Promise.reject(new Error('no person'))]);
   const who = me.name || me.login || t('ui.me.you');
 
   let mine;
@@ -85,8 +88,12 @@ export default Shell.mount('config', async (ctx) => {
     roles = `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.roles.title'))}</h3></div>${failed(rr.reason)}</div>`;
   }
 
+  const logins = ir.status === 'fulfilled' ? loginsPanel(ir.value) : '';
+
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.cfg.lead'))}</p></div></div>` +
-    `<div class="grid g2">${mine}${team}</div>${roles}${myHist}${hist}`;
+    `${logins}<div class="grid g2">${mine}${team}</div>${roles}${myHist}${hist}`;
+
+  if (logins) wireLogins(ctx);
 
   if (roles && rr.status === 'fulfilled') wireRoles(ctx, rr.value, pr.value);
 
@@ -108,6 +115,53 @@ export default Shell.mount('config', async (ctx) => {
     };
   }
 });
+
+const KIND_LABEL = { github: 'GitHub', email: () => t('ui.door.email'), wechat: () => t('ui.door.wechat') };
+const kindLabel = (k) => { const l = KIND_LABEL[k]; return typeof l === 'function' ? l() : l || k; };
+
+// loginsPanel is 登录方式: one row per way in, the add buttons this person has.
+function loginsPanel(v) {
+  const ids = Array.isArray(v.identities) ? v.identities : [];
+  const only = ids.length <= 1;
+  const rows = ids.map((i) => `<div><b>${esc(kindLabel(i.kind))}</b> · ${esc(i.label || i.subject)} ` +
+    (only ? `<span class="chip">${esc(t('ui.logins.only'))}</span>`
+      : `<button class="btn sm ghost" data-id-kind="${esc(i.kind)}" data-id-subject="${esc(i.subject)}" data-id-label="${esc(i.label || i.subject)}">${esc(t('ui.logins.remove'))}</button>`) +
+    `<span>${esc(t('ui.logins.verified', { t: relTime(i.verified_at) }))}</span></div>`).join('');
+  const add = (v.can_add || []).map((k) => k === 'github'
+    ? `<a class="btn sm" href="/auth/github/start?link=1">${ic('plus')}${esc(t('ui.logins.addGitHub'))}</a>`
+    : k === 'email' ? `<button class="btn sm" id="add-email">${ic('plus')}${esc(t('ui.logins.addEmail'))}</button>` : '').join('');
+  const note = { taken: t('ui.logins.taken'), github: t('ui.logins.ghFail') }[new URLSearchParams(location.search).get('e')];
+  return `<div class="panel" id="logins"><div class="panel-h"><div><h3>${esc(t('ui.logins.title'))}</h3><span class="sub">${esc(t('ui.logins.sub'))}</span></div>` +
+    `<div class="toolbar">${add}</div></div>` + (note ? `<div class="ghostrow err">${ic('alert')} ${esc(note)}</div>` : '') +
+    `<div class="panel-b"><div class="timeline">${rows}</div></div></div>`;
+}
+
+function wireLogins(ctx) {
+  const ae = ctx.el.querySelector('#add-email');
+  if (ae) {
+    ae.onclick = async () => {
+      const addr = window.prompt(t('ui.logins.emailPrompt'), '');
+      if (!addr || !addr.trim()) return;
+      try {
+        await ctx.api('/v1/me/identities', { method: 'POST', json: { kind: 'email', subject: addr.trim() } });
+        ctx.toast(t('ui.logins.added', { x: addr.trim() }));
+      } catch (e) { ctx.toast(t('ui.logins.fail', { e: e.message })); }
+      await ctx.refresh();
+    };
+  }
+  ctx.el.querySelectorAll('[data-id-kind]').forEach((b) => {
+    b.onclick = () => {
+      const x = `${kindLabel(b.dataset.idKind)} ${b.dataset.idLabel}`;
+      ctx.confirm(t('ui.logins.removeQ'), esc(t('ui.logins.removeBody', { x })), t('ui.logins.remove'), async () => {
+        try {
+          await ctx.api(`/v1/me/identities?kind=${encodeURIComponent(b.dataset.idKind)}&subject=${encodeURIComponent(b.dataset.idSubject)}`, { method: 'DELETE' });
+          ctx.toast(t('ui.logins.removed', { x }));
+        } catch (e) { ctx.toast(t('ui.logins.fail', { e: e.message })); }
+        await ctx.refresh();
+      });
+    };
+  });
+}
 
 // wireRoles draws the selected role and turns every control into one PUT of
 // the person bundle at its base version (409: someone else wrote — read again).

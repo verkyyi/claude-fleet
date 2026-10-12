@@ -46,15 +46,18 @@ func InviteReason(err error) string {
 
 // Invite is one invite. The code is never here: only its hash.
 type Invite struct {
-	ID          string    `json:"id"`
-	CodeHash    string    `json:"-"`
-	GitHubLogin string    `json:"github_login,omitempty"`
-	CreatedBy   string    `json:"created_by,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	UsedAt      time.Time `json:"used_at,omitempty"`
-	UsedBy      string    `json:"used_by,omitempty"`
-	RevokedAt   time.Time `json:"revoked_at,omitempty"`
+	ID          string `json:"id"`
+	CodeHash    string `json:"-"`
+	GitHubLogin string `json:"github_login,omitempty"`
+	// Email binds the invite to one address instead (claude-fleet#3603): only
+	// a sign-in through that address may use it.
+	Email     string    `json:"email,omitempty"`
+	CreatedBy string    `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	UsedAt    time.Time `json:"used_at,omitempty"`
+	UsedBy    string    `json:"used_by,omitempty"`
+	RevokedAt time.Time `json:"revoked_at,omitempty"`
 }
 
 // State is what the invite is at now: active, used, revoked or expired.
@@ -75,18 +78,21 @@ func (s *Store) CreateInvite(inv Invite) error {
 	if inv.ID == "" || inv.CodeHash == "" || inv.ExpiresAt.IsZero() {
 		return errors.New("invite: empty field")
 	}
-	_, err := s.write.Exec(`INSERT INTO fleet_invites (id, code_hash, github_login, created_by, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, inv.ID, inv.CodeHash, strings.TrimSpace(inv.GitHubLogin), inv.CreatedBy,
-		inv.CreatedAt.Unix(), inv.ExpiresAt.Unix())
+	if inv.GitHubLogin != "" && inv.Email != "" {
+		return errors.New("invite: bound to a GitHub username or an address, not both")
+	}
+	_, err := s.write.Exec(`INSERT INTO fleet_invites (id, code_hash, github_login, email, created_by, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, inv.ID, inv.CodeHash, strings.TrimSpace(inv.GitHubLogin),
+		NormIdentitySubject(IdentityEmail, inv.Email), inv.CreatedBy, inv.CreatedAt.Unix(), inv.ExpiresAt.Unix())
 	return err
 }
 
-const inviteCols = `id, code_hash, github_login, created_by, created_at, expires_at, used_at, used_by, revoked_at`
+const inviteCols = `id, code_hash, github_login, email, created_by, created_at, expires_at, used_at, used_by, revoked_at`
 
 func scanInvite(row interface{ Scan(...any) error }) (*Invite, error) {
 	var i Invite
 	var c, e, u, r int64
-	if err := row.Scan(&i.ID, &i.CodeHash, &i.GitHubLogin, &i.CreatedBy, &c, &e, &u, &i.UsedBy, &r); err != nil {
+	if err := row.Scan(&i.ID, &i.CodeHash, &i.GitHubLogin, &i.Email, &i.CreatedBy, &c, &e, &u, &i.UsedBy, &r); err != nil {
 		return nil, err
 	}
 	i.CreatedAt, i.ExpiresAt = time.Unix(c, 0).UTC(), time.Unix(e, 0).UTC()
@@ -127,9 +133,16 @@ func (s *Store) Invites() ([]Invite, error) {
 	return out, rows.Err()
 }
 
-// CheckInvite says whether the code could be used by login at now, without
-// using it: the invite, or an *InviteError naming why not.
+// CheckInvite says whether the code could be used by the GitHub user login
+// at now, without using it: the invite, or an *InviteError naming why not.
 func (s *Store) CheckInvite(codeHash, login string, now time.Time) (*Invite, error) {
+	return s.CheckInviteAs(codeHash, IdentityGitHub, login, now)
+}
+
+// CheckInviteAs is CheckInvite for a sign-in of any kind: name is what it
+// carries — a GitHub username, an address. A bound invite admits its own
+// kind and name only (claude-fleet#3603).
+func (s *Store) CheckInviteAs(codeHash, kind, name string, now time.Time) (*Invite, error) {
 	i, err := s.InviteByHash(codeHash)
 	if err != nil {
 		return nil, err
@@ -140,10 +153,22 @@ func (s *Store) CheckInvite(codeHash, login string, now time.Time) (*Invite, err
 	if st := i.State(now); st != "active" {
 		return i, &InviteError{st}
 	}
-	if i.GitHubLogin != "" && !strings.EqualFold(i.GitHubLogin, strings.TrimSpace(login)) {
+	if !i.admits(kind, name) {
 		return i, &InviteError{InviteOtherUser}
 	}
 	return i, nil
+}
+
+// admits: an unbound invite admits anyone; a bound one, its kind and name.
+func (i Invite) admits(kind, name string) bool {
+	name = strings.TrimSpace(name)
+	switch {
+	case i.GitHubLogin != "":
+		return kind == IdentityGitHub && strings.EqualFold(i.GitHubLogin, name)
+	case i.Email != "":
+		return kind == IdentityEmail && strings.EqualFold(i.Email, name)
+	}
+	return true
 }
 
 // UseInvite spends an invite for login (usedBy is who it let in, gh:<id>):
@@ -151,19 +176,25 @@ func (s *Store) CheckInvite(codeHash, login string, now time.Time) (*Invite, err
 // any. The spend is one conditional UPDATE, so two sign-ins racing on one
 // code let exactly one person in.
 func (s *Store) UseInvite(codeHash, login, usedBy string, now time.Time) (*Invite, error) {
-	if _, err := s.CheckInvite(codeHash, login, now); err != nil {
+	return s.UseInviteAs(codeHash, IdentityGitHub, login, usedBy, now)
+}
+
+// UseInviteAs is UseInvite for a sign-in of any kind (CheckInviteAs).
+func (s *Store) UseInviteAs(codeHash, kind, name, usedBy string, now time.Time) (*Invite, error) {
+	if _, err := s.CheckInviteAs(codeHash, kind, name, now); err != nil {
 		return nil, err
 	}
+	// The check above admitted kind+name; the UPDATE re-checks only what a
+	// racing spend or revoke can change.
 	res, err := s.write.Exec(`UPDATE fleet_invites SET used_at = ?, used_by = ?
-		WHERE code_hash = ? AND used_at = 0 AND revoked_at = 0 AND expires_at > ?
-		AND (github_login = '' OR `+s.d.eqNocase("github_login")+`)`,
-		now.Unix(), usedBy, codeHash, now.Unix(), strings.TrimSpace(login))
+		WHERE code_hash = ? AND used_at = 0 AND revoked_at = 0 AND expires_at > ?`,
+		now.Unix(), usedBy, codeHash, now.Unix())
 	if err != nil {
 		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		// Lost a race since the check: read why now.
-		if _, err := s.CheckInvite(codeHash, login, now); err != nil {
+		if _, err := s.CheckInviteAs(codeHash, kind, name, now); err != nil {
 			return nil, err
 		}
 		return nil, &InviteError{InviteUsed}

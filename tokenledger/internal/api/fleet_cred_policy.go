@@ -497,13 +497,13 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.Store.Principal(req.ID); err != nil {
 			// Administrators can authorize an invited user before their first login.
 			known := false
-			if gid, ok := githubIDOf(req.ID); ok {
-				u, e := s.Store.HubUserByID(gid)
+			if isPerson(req.ID) {
+				u, e := s.personRow(req.ID)
 				if e != nil {
 					httpError(w, 500, e.Error())
 					return
 				}
-				role, e := s.githubRole(gid)
+				role, e := s.personRole(req.ID)
 				if e != nil {
 					httpError(w, 500, e.Error())
 					return

@@ -677,8 +677,8 @@ func (s *Server) debugAdmin(r *http.Request) bool {
 	if c, err := r.Cookie(viewerCookie); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
 		return true
 	}
-	if _, id, ok := s.githubSession(r); ok {
-		role, err := s.githubRole(id)
+	if _, pid, ok := s.personSession(r); ok {
+		role, err := s.personRole(pid)
 		return err == nil && role == accessAdmin
 	}
 	return false

@@ -26,7 +26,7 @@ import (
 const (
 	doorOpen   = "open"   // --no-auth: no viewer token at all
 	doorToken  = "token"  // the viewer token, as a bearer or its cookie
-	doorGitHub = "github" // a GitHub sign-in on the list (claude-fleet#1984)
+	doorGitHub = "github" // a person's sign-in on the list (claude-fleet#1984; any way since #3603)
 )
 
 // viewerCookie is where viewerOnly parks the viewer token once a browser
@@ -57,11 +57,12 @@ func sessionOf(ctx context.Context) *authz.Session {
 
 // Me is the body of /v1/me.
 type Me struct {
-	// Via is the door: open | token | github.
+	// Via is the door: open | token | how a person signed in (github,
+	// email, wechat — store.IdentityKinds).
 	Via string `json:"via"`
 	// Role is roleOf: admin | user | operator (claude-fleet#1984).
 	Role string `json:"role,omitempty"`
-	// Person is gh:<GitHub ID> behind a github session.
+	// Person is the signed-in person's principal (gh:<id> or p:<uuid>).
 	Person string `json:"person,omitempty"`
 	// Name is the person's GitHub username.
 	Name string `json:"name,omitempty"`
@@ -116,9 +117,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	switch out.Via {
 	case doorGitHub:
-		// The person is gh:<id>; the name is their GitHub username.
+		// The person's principal, the name they signed in under, and the
+		// way they signed in (claude-fleet#3603): github for a GitHub
+		// sign-in, as it always said.
 		sess := sessionOf(r.Context())
 		out.Person, out.Name, out.CanLogout = sess.Principal(), sess.Name, true
+		out.Via = sess.Sub
 	case doorToken:
 		_, err := r.Cookie(viewerCookie)
 		out.CanLogout = err == nil

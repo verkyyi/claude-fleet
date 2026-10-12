@@ -160,9 +160,9 @@ func (s *Server) noAccountReason(pid string) error {
 		return errNoAccount
 	}
 	if owner, err := s.Store.PrincipalByLogin(login); err == nil && !strings.EqualFold(owner.ID, pid) {
-		if _, gh := githubIDOf(owner.ID); gh {
-			return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but the hub has it as another GitHub person's, %s — ask the operator to fix the mapping",
-				login, s.personName(owner.ID))}
+		if isPerson(owner.ID) {
+			return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but the hub has it as another %s's, %s — ask the operator to fix the mapping",
+				login, personWord(owner.ID), s.personName(owner.ID))}
 		}
 		return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but the hub still has it under the old identity %s and could not move it to you — ask the operator to run: fleet hub accounts rekey %s %s",
 			login, s.personName(owner.ID), owner.ID, pid)}
@@ -303,10 +303,11 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 	}, nil
 }
 
-// certName is the GitHub login a certificate's holder signed in as — the
-// display name onPrincipalSignIn records for a gh: principal.
+// certName is the name a certificate's holder signed in as — the display
+// name onPrincipalSignIn records for a person (claude-fleet#3603: any way of
+// signing in, not GitHub alone).
 func certName(p *store.Principal) string {
-	if p == nil || !strings.HasPrefix(p.ID, "gh:") {
+	if p == nil || !isPerson(p.ID) {
 		return ""
 	}
 	return strings.TrimSpace(p.DisplayName)
@@ -1028,7 +1029,7 @@ func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 				}
 			})
 			if invite != "" {
-				if _, _, in := s.githubSession(r); !in {
+				if _, _, in := s.personSession(r); !in {
 					setInviteCookie(w, r, invite)
 				}
 			}
