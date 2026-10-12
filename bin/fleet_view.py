@@ -170,7 +170,10 @@ import threading
 import time
 from pathlib import Path
 
-import fleet_timing
+# a sibling, found beside this file however it was loaded (a selftest loads it by path)
+if str(Path(__file__).absolute().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).absolute().parent))
+import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
 
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
