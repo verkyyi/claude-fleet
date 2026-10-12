@@ -62,7 +62,10 @@ WITH NO CLIENT TMUX (issue #3004, EPIC #2999 C7 — the thin client, `fleet
 line a connection takes. `--home` (also what a person on a fleet machine gets
 when no client runs there) reads this machine's fleet: its session (the first
 live one), the fleet server's environment, the same row producer — so the rows
-are every machine's, as the hub's cache has them. `open` there switches the
+are every machine's, as the hub's cache has them — a cache that is missing (a
+fresh login whose hub loop never ran) or older than FLEET_HUB_SESSIONS_STALE is
+refreshed once first (issue #3478: the machine the hub picked to enter is not
+always where the sessions are), and a silent hub is said. `open` there switches the
 newest thin 看台 with a client attached (fleet_view.go — the one switch road).
 The road, in order: FLEET_SHELL=1 → here as before; the old client running (and
 FLEET_CLIENT is not `thin`) → through it, byte for byte; a fleet live on this
@@ -84,12 +87,14 @@ here it is listed with 「（测试）」 after its name, and `close --test` rea
 Seams (tests): FLEET_SESSION_CLI_ROWS (a switch-rows.tsv to read instead of the
 producer), FLEET_SESSION_CLI_CACHE (a remote_<fleet> cache to read instead of the
 client's; "" = none), FLEET_SESSION_CLI_NOW (the clock), FLEET_SESSION_CLI_WRITE (a script run in fleet-hub-write.sh's place,
-same argv) and fleet-hub-write.sh's own FLEET_HUB_WRITE_CMD (close's reap).
+same argv), FLEET_SESSION_CLI_REFRESH (a command run in `fleet-hub-sessions.sh
+--refresh`'s place on the --home road) and fleet-hub-write.sh's own FLEET_HUB_WRITE_CMD (close's reap).
 """
 import importlib.util
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -124,8 +129,53 @@ def rows():
             return own_ids(own_node(qo.parse_rows(Path(seam).read_text())))
         except OSError:
             return []
+    if HOME[0]:
+        hub_freshen()
     got = qo.full_rows(os.environ.get("FLEET_SESSION", ""), timeout=15)
     return own_ids(own_node(got if got is not None else qo.read_rows()))
+
+
+def hub_ok_age():
+    """Seconds since the hub cache last stood (global/hub_ok, written by
+    fleet-hub-sessions.sh and nowhere else) — None when it never has."""
+    path = cache_path()
+    if not path:
+        return None
+    try:
+        ok = int(Path(os.path.dirname(path), "hub_ok").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return max(0, now() - ok)
+
+
+def hub_freshen():
+    """--home (issue #3478): the list is the person's sessions on EVERY machine, as
+    the hub sees them — this fleet's hub cache, the one the sidebar reads. A thin
+    client's `fleet ls` runs on whichever machine the hub picks to enter, and there
+    the cache may never have been written (drill 35: a fresh login on m4, «the
+    machine you used last», listed nothing while the session ran on mini2) or have
+    gone stale. Then ONE round of the loop's own `fleet-hub-sessions.sh --refresh`
+    runs here before the rows are read — the same reader, no second one. The hub
+    silent ⇒ the rows this machine has, and stderr says so. No hub here ⇒ the
+    refresh is a no-op (rc 0): nothing said, byte for byte."""
+    try:
+        stale = int(os.environ.get("FLEET_HUB_SESSIONS_STALE") or 60)
+    except ValueError:
+        stale = 60
+    age = hub_ok_age()
+    if age is not None and age <= stale:
+        return
+    seam = os.environ.get("FLEET_SESSION_CLI_REFRESH")
+    cmd = shlex.split(seam) if seam else ["bash", str(BIN / "fleet-hub-sessions.sh"), "--refresh"]
+    try:
+        rc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=20).returncode
+    except (OSError, subprocess.SubprocessError):
+        rc = 1
+    if rc != 0:
+        me = me_label() or host_label() or "这台机器"
+        say("入口没答，列表只有 %s 知道的会话（%s）" % (
+            me, "入口上次的记录在 %d 分钟前" % (age // 60) if age is not None else "它还没拿到过入口的列表"))
 
 
 def own_node(rs):

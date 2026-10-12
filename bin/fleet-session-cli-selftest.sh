@@ -440,8 +440,14 @@ MH="$W/mhome" MX="$W/mtmx"
 mkdir -p "$MH/.local/share/claude-fleet-vendor/bin" "$W/mconf/fleets/fx" "$MX"
 ln -s "$REAL" "$MH/.local/share/claude-fleet-vendor/bin/tmux"
 printf 'FLEET_SESSION=fx\n' > "$W/mconf/fleets/fx/conf"
-TMUX_TMPDIR="$MX" "$REAL" -L fx -f /dev/null new-session -d -s fx -n issue-7 'sleep 300'
+# a clean environment: the server's is what --home imports (FLEET_* · CCQUOTA_* · TMPDIR)
+env -i PATH=/usr/bin:/bin HOME="$MH" TMUX_TMPDIR="$MX" "$REAL" -L fx -f /dev/null new-session -d -s fx -n issue-7 'sleep 300'
 TMUX_TMPDIR="$MX" "$REAL" -L fx set -w -t fx:issue-7 @issue 7
+# the fleet server's TMPDIR is where --home reads the hub cache: a sandbox one, never
+# the machine's own (its fresh hub_ok would stand in for this fleet's)
+NT="$W/ntmp" NG="$W/ntmp/.claude-dash/global"
+mkdir -p "$NG"
+TMUX_TMPDIR="$MX" "$REAL" -L fx set-environment -g TMPDIR "$NT"
 bare() { env -i HOME="$MH" FLEET_CONF_DIR="$1" TMUX_TMPDIR="$MX" PATH=/usr/bin:/bin FLEET_TOOL_DIRS="$W/none" \
          LANG=en_US.UTF-8 FLEET_UI_LANG=zh python3 "$BIN/fleet-session-cli.py" --home ls --json; }
 out=$(bare "$W/mconf" 2>&1); rc=$?
@@ -451,6 +457,38 @@ eq "M …lists the home's row (the vendor tmux found)" "issue-7|7" \
 out=$(bare "$W/mconf-none" 2>&1); rc=$?
 eq "M no fleet on the home → exit 1" 1 "$rc"
 has "M …named as the home, not this machine" "家机器" "$out"
+
+# --- N. --home lists EVERY machine's sessions (issue #3478) -----------------------------
+# Drill 35: the hub picked m4 («the machine you used last») to run `fleet ls`, the
+# newcomer's session ran on mini2, and m4's fleet had no hub cache (its loop never
+# ran) — the list came back without it. A missing / stale cache is refreshed once
+# (FLEET_SESSION_CLI_REFRESH stands in for fleet-hub-sessions.sh --refresh, writing
+# what a round writes); a fresh one is not asked again; a silent hub is said.
+printf 'FLEET_SESSION=fx\nCCQUOTA_FLEET=1\n' > "$W/mconf/fleets/fx/conf"
+cat > "$W/nrefresh" <<EOF
+#!/bin/bash
+echo x >> "$W/nrefreshed"
+[ "\${NREFUSE:-}" = 1 ] && exit 1
+printf '#ts\037%s\n#me\037m4\nwid:0123abcd-0000-4000-8000-00000000beef/fid-first\037mini2\037online\037\037\037working\037claude\037first\037\037\0370\037\037hub\037\037\037ok\n' "\$(date +%s)" > "$NG/remote_fx"
+date +%s > "$NG/hub_ok"
+EOF
+chmod +x "$W/nrefresh"
+nls() { env -i HOME="$MH" FLEET_CONF_DIR="$W/mconf" TMUX_TMPDIR="$MX" TMPDIR="$NT" PATH=/usr/bin:/bin FLEET_TOOL_DIRS="$W/none" \
+        FLEET_SESSION_CLI_REFRESH="$W/nrefresh" NREFUSE="${NREFUSE:-}" LANG=en_US.UTF-8 FLEET_UI_LANG=zh \
+        python3 "$BIN/fleet-session-cli.py" --home ls --json; }
+names() { python3 -c 'import json,sys; print(";".join(sorted("%s|%s" % (r["name"], r["node"]) for r in json.load(sys.stdin))))' 2>&1; }
+out=$(NREFUSE=1 nls 2>"$W/nerr"); rc=$?
+eq "N no cache, hub silent → exit 0, this machine's rows" "0 issue-7|$(hostname -s 2>/dev/null || hostname)" "$rc $(printf '%s' "$out" | names)"
+has "N …and it says the list is this machine's only" "入口没答" "$(cat "$W/nerr")"
+out=$(nls 2>"$W/nerr"); rc=$?
+eq "N no cache → refreshed once, both machines listed (the other one's row too)" "0 first|mini2;issue-7|m4" "$rc $(printf '%s' "$out" | names)"
+eq "N …nothing said" "" "$(cat "$W/nerr")"
+: > "$W/nrefreshed"
+out=$(nls 2>/dev/null)
+eq "N a fresh cache is not asked again" "0|first|mini2;issue-7|m4" "$(wc -l < "$W/nrefreshed" | tr -d ' ')|$(printf '%s' "$out" | names)"
+echo $(( $(date +%s) - 3600 )) > "$NG/hub_ok"
+out=$(nls 2>/dev/null)
+eq "N a stale cache (an hour old) is refreshed" "1" "$(wc -l < "$W/nrefreshed" | tr -d ' ')"
 TMUX_TMPDIR="$MX" "$REAL" -L fx kill-server >/dev/null 2>&1
 
 if [ "$FAIL" -gt 0 ]; then
