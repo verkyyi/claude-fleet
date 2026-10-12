@@ -5,9 +5,9 @@
 # and exempt (`# oss-ok: <理由>`) lines are not counted here.
 tailnet	15
 ts-net	106
-corp-domain	344
+corp-domain	339
 cloud	68
-machine	5074
+machine	5057
 user-home	22
 person	676
 gh-owner	595

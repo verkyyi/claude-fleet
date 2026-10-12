@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/octo-admin/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
 // claude-fleet#3504: a reset runs the remove script's --recycle mode with its

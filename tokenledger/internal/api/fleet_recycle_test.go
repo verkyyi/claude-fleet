@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/octo-admin/claude-fleet/tokenledger/internal/control"
-	"github.com/octo-admin/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // claude-fleet#3504 (EPIC #3500 C12): where spares are on and the machine's
