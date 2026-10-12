@@ -208,11 +208,11 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 		if n.Hostname != tHost || !active[n.EndpointID] || n.OSUser == "" {
 			continue
 		}
-		who, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
-		if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		mine, err := s.peerSameOwner(owner, srcUser, n)
+		if err != nil {
 			return nil, err
 		}
-		if (owner != "" && who == owner) || (owner == "" && who == "" && n.OSUser == srcUser) {
+		if mine {
 			hit = n
 			break
 		}
@@ -244,6 +244,17 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 	}
 	resp.Alias, resp.HostKeys = s.peerHostKeys(tHost)
 	return resp, nil
+}
+
+// peerSameOwner: is node n's login the same person's as the source's — the
+// owner's login (owner != ""), or, for a login no person owns, an unowned login
+// of the same name. The one rule /v1/node/peer-cert and /v1/node/peers share.
+func (s *Server) peerSameOwner(owner, srcUser string, n *store.Node) (bool, error) {
+	who, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
+	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		return false, err
+	}
+	return (owner != "" && who == owner) || (owner == "" && who == "" && n.OSUser == srcUser), nil
 }
 
 // peerHostKeys is the target's host keys as the machine list carries them

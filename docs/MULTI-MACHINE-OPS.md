@@ -195,6 +195,15 @@ bash ~/.claude/fleet/bin/fleet-doctor.sh | grep sshtrust   # WARN 列出其它 f
 
 删后再验一次跨机打开会话和升级。
 
+**常开连接：默认全连，按入口给的路线连（#3482）。** 每个登录的 `fleet-peerlink.py` 用节点令牌问入口
+`GET /v1/node/peers`（`fleet-peer-list.sh`，每 60 秒一次）：同一个人在别的机器上、active 的每个登录，
+连同它的每条路线（tailnet 名、局域网地址、入口探到的门 `entry` 及端口）。对每个登录保持一条主连接，
+不看有没有看台、不按「没人要了」回收，断了按退避重连；拨号按 FLEET_REMOTE_SSH → tailnet（本机在 tailnet
+上才试）→ 同网段局域网 → 门 → 其它直连，一条不通当拍换下一条——所以 ACK 集群里只有门的机器（如
+fleet-linux-0）也连得上，认证仍是上面那张五分钟证书。fleet.conf 写 `FLEET_PEERLINK_MODE=demand`
+退回按需（只在有看台时连、看台走后 10 分钟关）。`fleet doctor` 的 `peerlink` 行逐台写 已连上 /
+重连中 / 连不上（原因），连不上报 WARN。
+
 ## 5¾. 入口断开：照常干活，接上自动恢复（#1630）
 
 入口（hub）重启、网络抖动、某台机器断网，都**不停任何会话**：入口只是看不见，不是指挥。

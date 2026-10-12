@@ -446,6 +446,9 @@ func (s *Server) routes() *routeMux {
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
 		mux.HandleFunc("/v1/node/peer-cert", s.handleNodePeerCert)
+		// …and the same person's other logins with every way in, for the
+		// standing connections (claude-fleet#3482).
+		mux.HandleFunc("/v1/node/peers", s.handleNodePeers)
 		// Where the owner is (claude-fleet#1716): the client they are
 		// connected through right now, read by a node with its own token.
 		mux.Handle("/v1/node/client", s.stateRouteFunc(s.handleNodeClient))
