@@ -1821,6 +1821,24 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
 CERT_WARN_UNDER = 3600  # the doctor's cert row WARNs inside the certificate's last hour
 
 
+def renew_said():
+    """What the hosting login's automatic renewal last did (claude-fleet#3455):
+    fleet-diskguard.sh's cert_watch writes `<epoch> <rc>` to diskguard/cert-renew.last."""
+    conf = os.environ.get("FLEET_CONF_DIR") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "claude-fleet")
+    try:
+        with open(os.path.join(conf, "diskguard", "cert-renew.last")) as f:
+            ts, rc = f.read().split()[:2]
+        ago = max(0, int(time.time()) - int(ts)) // 60
+    except (OSError, ValueError):
+        return "没有自动续（没开客户端、这个登录也不承载）— 跑 `fleet login renew`"
+    if rc == "3":
+        return "自动续被入口拒绝（%d 分钟前）：这台设备要重新扫码 — 跑 `fleet login`" % ago
+    if rc != "0":
+        return "自动续失败（%d 分钟前，exit %s）— 跑 `fleet login renew` 看原因" % (ago, rc)
+    return "自动续在跑（上次 %d 分钟前）" % ago
+
+
 def cert_check(hub, timeout=6):
     """--cert-check: (verdict, text) for the doctor's `cert` row, or None
     when there is no certificate here."""
@@ -1849,12 +1867,17 @@ def cert_check(hub, timeout=6):
         except ValueError:
             left = None
     what = "principal %s · 有效至 %s" % (principals, until)
+    # Expired is a WARN, not a FAIL (claude-fleet#3455): the next `fleet`, an open
+    # client's keeper or a hosting login's diskguard tick renews it by the device
+    # key — no scan — unless the hub says this device must scan again (rc 3).
     if left is not None and left <= 0:
-        return "FAIL", "%s（已过期）— 跑 `fleet login renew`" % what
+        return "WARN", "%s（已过期）— %s" % (what, renew_said())
     # Inside its last hour (claude-fleet#2630): a running client's keeper renews it
-    # by now (#2112); still this close means no client renewed it.
+    # by now (#2112), and so does a hosting login's tick (#3455).
     if left is not None and left < CERT_WARN_UNDER:
-        return "WARN", "%s（剩 %d 分钟）— 开着的客户端会自动续；没开客户端就跑 `fleet login renew`" % (what, max(1, int(left // 60)))
+        return "WARN", "%s（剩 %d 分钟）— %s" % (what, max(1, int(left // 60)), renew_said())
+    if left is not None:
+        what += " · 剩 %dh%02dm" % (int(left // 3600), int(left % 3600 // 60))
     if not hub:
         return "PASS", "%s · 没有入口，未探" % what
     try:

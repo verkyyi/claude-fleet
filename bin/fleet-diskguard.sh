@@ -101,6 +101,9 @@
 #                           (memory / files / pty; default 1800) — issue #1293
 #   FLEET_BREW_PERMS        0 = no Homebrew keg-permission repair (default 1) — #2283;
 #                           FLEET_BREW_PERMS_EVERY min seconds between passes (300)
+#   FLEET_CERT_AUTORENEW    0 = no renewal of the 12-hour connection certificate
+#                           (default 1) — issue #3455; FLEET_CERT_CHECK_EVERY (300) /
+#                           FLEET_CERT_RENEW_UNDER (3600) as the client keeper
 #   FLEET_TRANSCRIPT_ARCHIVE 0 = no daily transcript archive pass (default 1) —
 #                           issue #1299; bin/fleet-transcript-archive.sh has the
 #                           rules and its own knobs (FLEET_TRANSCRIPT_KEEP_DAYS, …)
@@ -579,6 +582,32 @@ brew_watch() {
   tmo 60 env FLEET_BREW_LOG="${FLEET_BREW_LOG:-$GDIR/brew-perms.log}" "$BIN/fleet-brew-perms.sh" --fix >/dev/null 2>&1
   return 0
 }
+# The connection certificate (issue #3455): `fleet login`'s 12-hour
+# ~/.ssh/fleet-cert-cert.pub was renewed only by an OPEN client (the shell
+# keeper, #2112) or a new `fleet` connection — a login nobody opened a client on
+# for 12 hours woke to an expired certificate (the person's cross-machine ssh,
+# the doctor's cert row red). This tick runs on every hosting login whether a
+# client is open or not, so it renews the same way the keeper does: every
+# FLEET_CERT_CHECK_EVERY (300 s), `fleet-login.py renew --quiet --if-under
+# FLEET_CERT_RENEW_UNDER` (3600 s) — nothing asked while there is time left,
+# nothing at all with no certificate here. The last result is
+# `$GDIR/cert-renew.last` (`<epoch> <rc>`, rc 3 = this device must scan again),
+# which the doctor's cert row reads. FLEET_CERT_AUTORENEW=0 turns it off.
+cert_watch() {
+  [ "${FLEET_CERT_AUTORENEW:-1}" = 0 ] && return 0
+  [ -f "${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" ] || return 0
+  [ -f "$BIN/fleet-login.py" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-cert-check" last nowt rc=0
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge "${FLEET_CERT_CHECK_EVERY:-300}" ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  tmo 60 python3 "$BIN/fleet-login.py" renew --quiet --if-under "${FLEET_CERT_RENEW_UNDER:-3600}" \
+    >/dev/null 2>&1 || rc=$?
+  printf '%s %s\n' "$nowt" "$rc" > "$GDIR/cert-renew.last" 2>/dev/null
+  return 0
+}
 transcript_watch() {
   [ "${FLEET_TRANSCRIPT_ARCHIVE:-1}" = 0 ] && return 0
   [ -x "$BIN/fleet-transcript-archive.sh" ] || return 0
@@ -1006,6 +1035,9 @@ EOF2
       printf '%s\t%s\t%s\t%s\t%s\n' "$opid" "$opcpu" "${oet:-?}" "$orss" "$ocmd"
     done
     ;;
+  --cert)                                       # the certificate renewal alone (#3455; drill cert-expiry-no-client)
+    cert_watch
+    ;;
   --watch)
     cpu_watch                                     # runaway-CPU check runs every tick
     orphan_watch                                  # orphaned-runaway check (#697), likewise
@@ -1019,6 +1051,7 @@ EOF2
     home_watch                                    # a home pane left dead: respawn it (#1801)
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
+    cert_watch                                    # the 12-hour connection certificate, no client needed (#3455)
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
