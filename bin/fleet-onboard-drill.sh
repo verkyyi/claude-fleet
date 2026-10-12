@@ -1181,11 +1181,12 @@ step_restart() {
 THIS_M=$(hostname -s 2>/dev/null || hostname)
 # hub_auth <method> <path> [json]: as hub_json, with the operator's token
 hub_auth() {
-  local out code
+  local out code data=()
   out=$(mktemp "$RUN/hub.XXXXXX") || return 1
+  [ -z "${3:-}" ] || data=(--data-binary @-)
   code=$(printf '%s' "${3:-}" | curl -sS --max-time 20 -o "$out" -w '%{http_code}' -X "$1" \
          -H "Authorization: Bearer $VIEWER" -H 'Content-Type: application/json' \
-         $([ -n "${3:-}" ] && printf -- '--data-binary @-') "$HUB$2" 2>/dev/null)
+         ${data[@]+"${data[@]}"} "$HUB$2" 2>/dev/null)
   cat "$out"; rm -f "$out"
   printf '\n%s' "$code"
 }
@@ -1266,9 +1267,9 @@ EOF
 # already asked for its own), then the roster read until each is removed or
 # gone, FLEET_DRILL_REMOVE_SECS. Prints what stayed (login@host state: detail).
 close_remote() {
-  local rows t0 h st pid det body
+  local rows t0 h st pid body
   rows=$(hub_roster) || return 0
-  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r h st pid det; do
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r h st pid _; do
     [ -n "$h" ] || continue
     case "$st" in active|failed|unknown)
       body=$(python3 -c 'import json,sys; print(json.dumps({"action":"remove","principal_id":sys.argv[1],"hostname":sys.argv[2]}))' "$pid" "$h")
