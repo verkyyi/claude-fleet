@@ -48,6 +48,8 @@ var routeAccess = map[string]string{
 	// The way in, and what a signed-out machine must reach.
 	"/logout": accessPublic, "/signin": accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
+	"/auth/wechat/start": accessPublic, "/auth/wechat/callback": accessPublic, "/auth/wechat/bind": accessPublic,
+	"/auth/email/start": accessPublic, "/auth/email/link": accessPublic, "/auth/email/code": accessPublic,
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/readyz": accessPublic, "/v1/deploy-probe": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,

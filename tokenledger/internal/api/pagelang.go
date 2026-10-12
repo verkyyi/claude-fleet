@@ -73,7 +73,7 @@ func (s *Server) pageLocale(w http.ResponseWriter, r *http.Request) string {
 	var account string
 	var pid string
 	var signedIn bool
-	if s.GitHub.ready() && s.Store != nil {
+	if s.signinOn() && s.Store != nil {
 		if _, p, ok := s.personSession(r); ok {
 			pid, signedIn = p, true
 			if set, err := s.Store.FleetSettings(); err == nil {

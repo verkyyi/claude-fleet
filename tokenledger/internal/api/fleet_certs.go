@@ -715,7 +715,7 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "POST")
 		return
 	}
-	if s.SSHCA == nil || !s.GitHub.ready() {
+	if s.SSHCA == nil || !s.signinOn() {
 		http.NotFound(w, r)
 		return
 	}
@@ -1030,7 +1030,7 @@ func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 			})
 			if invite != "" {
 				if _, _, in := s.personSession(r); !in {
-					setInviteCookie(w, r, invite)
+					s.setInviteCookie(w, r, invite)
 				}
 			}
 		}

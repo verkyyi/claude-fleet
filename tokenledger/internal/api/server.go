@@ -67,6 +67,18 @@ type Server struct {
 	// GitHub. Empty: only CCQUOTA_GITHUB_ADMINS makes admins, as before.
 	Admins []string
 
+	// WeChat and Email are the two ways in that need no GitHub
+	// (claude-fleet#3604, EPIC #3570 C11): WeChat's scan and its in-WeChat
+	// authorisation, and a mail's link or six-digit code. Nil (or half
+	// configured) means that way is not offered; with neither and no GitHub
+	// there is no sign-in at all, as before.
+	WeChat *WeChatAuth
+	Email  *EmailAuth
+	// SessionSecret (CCQUOTA_SESSION_SECRET) signs the sessions of a hub
+	// with no GitHub sign-in. With GitHub on, its client secret signs them,
+	// as it always has (sessionKey).
+	SessionSecret string
+
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
 
@@ -398,6 +410,13 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/signin", s.handleSignin)
 	mux.HandleFunc("/auth/github/start", s.handleGitHubStart)
 	mux.HandleFunc("/auth/github/callback", s.handleGitHubCallback)
+	// The ways in that need no GitHub (claude-fleet#3604): each 404s when off.
+	mux.HandleFunc("/auth/wechat/start", s.handleWeChatStart)
+	mux.HandleFunc("/auth/wechat/callback", s.handleWeChatCallback)
+	mux.HandleFunc("/auth/wechat/bind", s.handleWeChatBind)
+	mux.HandleFunc("/auth/email/start", s.handleEmailStart)
+	mux.HandleFunc("/auth/email/link", s.handleEmailLink)
+	mux.HandleFunc("/auth/email/code", s.handleEmailCode)
 	// Who may sign in with GitHub (claude-fleet#1986): the admin's, with or
 	// without the fleet module.
 	mux.Handle("/v1/fleet/users", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetUsers))))
@@ -891,7 +910,7 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 		// A browser with no credential is someone who has not signed in yet;
 		// send them to GitHub's page when it is wired up. Everything else gets
 		// the honest 401.
-		if s.GitHub.ready() && wantsHTML(r) {
+		if s.signinOn() && wantsHTML(r) {
 			http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 			return
 		}
