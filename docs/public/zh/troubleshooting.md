@@ -922,6 +922,13 @@ fleet debug report
 - **是什么**：仓库里有没有 fleet 用的 issue 标签。
 - **WARN / FAIL 怎么办**：照说明里的 `fleet-labels-seed.sh --repo <仓库>` 补上。
 
+#### `tickets`
+
+来自 `fleet doctor`。
+
+- **是什么**：每个仓库的单子（issue、评论、标签）放在入口还是 GitHub；代码和 PR 不受影响。新加的仓库在连着入口的机器上默认放入口，之前就有的仓库保持 GitHub。
+- **WARN / FAIL 怎么办**：只有值写错（既不是 `hub` 也不是 `github`）才 WARN：改那个仓库设置里的 `FLEET_TICKETS`。
+
 #### `webhook`
 
 来自 `fleet doctor`。
