@@ -278,6 +278,55 @@ type ClusterOpResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// A throwaway Job's state and log (claude-fleet#3552, EPIC #3500 C7). The
+// provisioner makes the Job from a create-job ticket; fleet-ops — read-only:
+// jobs, pods and their logs — reads it back for the hub, which relays it to
+// the session that asked (`fleet job`). The hub names the Job and the user pod
+// it must belong to; fleet-ops answers only for a Job labelled fleet/owner
+// that pod.
+//
+//	hub ──TypeClusterJob {job, owner, offset}──▶ fleet-ops ──GET──▶ the API server
+//	hub ◀──TypeClusterJobResult {state, log, offset}── fleet-ops
+const (
+	TypeClusterJob       = "cluster_job"
+	TypeClusterJobResult = "cluster_job_result"
+)
+
+// The Job states a ClusterJobResult says.
+const (
+	JobPending   = "pending"
+	JobRunning   = "running"
+	JobSucceeded = "succeeded"
+	JobFailed    = "failed"
+	JobGone      = "gone" // no such Job: never made, or deleted after its TTL
+)
+
+// CodeNoSuchJob is fleet-ops refusing a Job that is not the asking pod's — or
+// not a fleet Job at all; it never says whose it is.
+const CodeNoSuchJob = "NO_SUCH_JOB"
+
+// ClusterJobChunk bounds the log one answer carries.
+const ClusterJobChunk = 256 << 10
+
+// ClusterJob is TypeClusterJob's payload: the Job, the user pod that owns it,
+// and how many bytes of its log the asker already has.
+type ClusterJob struct {
+	Job    string `json:"job"`
+	Owner  string `json:"owner"`
+	Offset int64  `json:"offset,omitempty"`
+}
+
+// ClusterJobResult is TypeClusterJobResult's payload: the Job's state, the
+// next ≤ ClusterJobChunk bytes of its log from the asked offset, and the
+// offset after them. Error when the API server could not be read.
+type ClusterJobResult struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	Log    string `json:"log,omitempty"`
+	Offset int64  `json:"offset"`
+	Error  string `json:"error,omitempty"`
+}
+
 // CodeWrongLogin refuses a message on a machine link whose Login is not one
 // that link carries, or a login hello whose token belongs to another login or
 // another machine (claude-fleet#2333) — an op never runs as the wrong login.

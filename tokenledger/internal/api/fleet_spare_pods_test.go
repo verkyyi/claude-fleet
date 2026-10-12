@@ -35,14 +35,51 @@ type fakeOps struct {
 	rc   int
 	got  chan control.ClusterTicket
 	seen []control.ClusterTicket
+	// jobs: each create-job's Job → the pod it is for (claude-fleet#3552)
+	jobs map[string]string
+}
+
+// fakeJobLog is every fake Job's log.
+const fakeJobLog = "hello\n::fleet-job:: exit 0\n"
+
+// answerJob is fleet-ops reading a Job back: gone when it never was, refused
+// when it is another pod's, else succeeded with fakeJobLog after the offset.
+func (f *fakeOps) answerJob(m control.Message) control.Message {
+	var req control.ClusterJob
+	_ = json.Unmarshal(m.Payload, &req)
+	f.mu.Lock()
+	owner, ok := f.jobs[req.Job]
+	f.mu.Unlock()
+	switch {
+	case !ok:
+		out, _ := control.New(control.TypeClusterJobResult, control.ClusterJobResult{State: control.JobGone, Offset: req.Offset})
+		return out
+	case owner != req.Owner:
+		return control.Message{Type: control.TypeError, Proto: control.Proto,
+			Error: &control.Error{Code: control.CodeNoSuchJob, Message: "no such job for that pod"}}
+	}
+	res := control.ClusterJobResult{State: control.JobSucceeded, Offset: req.Offset}
+	if req.Offset < int64(len(fakeJobLog)) {
+		res.Log, res.Offset = fakeJobLog[req.Offset:], int64(len(fakeJobLog))
+	}
+	out, _ := control.New(control.TypeClusterJobResult, res)
+	return out
 }
 
 func startFakeOps(t *testing.T, h *harness, pub ed25519.PublicKey) *fakeOps {
 	t.Helper()
 	n := connectCaps(t, h, "ops", testCluster, "fleetops", false, control.CapClusterOps)
-	f := &fakeOps{t: t, n: n, pub: pub, got: make(chan control.ClusterTicket, 32)}
+	f := &fakeOps{t: t, n: n, pub: pub, got: make(chan control.ClusterTicket, 32), jobs: map[string]string{}}
 	go func() {
 		for m := range n.in {
+			if m.Type == control.TypeClusterJob {
+				out := f.answerJob(m)
+				out.OpID = m.OpID
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = wsjson.Write(ctx, n.c, out)
+				cancel()
+				continue
+			}
 			if m.Type != control.TypeClusterOp {
 				continue
 			}
@@ -54,6 +91,9 @@ func startFakeOps(t *testing.T, h *harness, pub ed25519.PublicKey) *fakeOps {
 				f.mu.Lock()
 				res = control.ClusterOpResult{RC: f.rc, Line: tk.Op + " " + tk.Pod + ": done"}
 				f.seen = append(f.seen, tk)
+				if tk.Op == control.ClusterCreateJob && f.rc == 0 {
+					f.jobs["job-"+tk.Nonce[:12]] = tk.Pod
+				}
 				f.mu.Unlock()
 				f.got <- tk
 			}

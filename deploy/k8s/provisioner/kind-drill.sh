@@ -18,6 +18,10 @@
 #                             until a login, then root + the login; /etc/passwd
 #                             read-only; a real ssh login with the door's key
 #                             lands as the login, root's is refused (#3757)
+#   job-sees-keys             a test and an untrusted Job (#3552): no token, no
+#                             credential, nothing mounted, not root; untrusted
+#                             never reaches the public internet; both deleted
+#                             by their TTL
 #
 #   kind-drill.sh <registry host:port>      (kind-action's LOCAL_REGISTRY)
 #
@@ -78,9 +82,17 @@ cat > "$tmp/job/probe.sh" <<'EOF'
 #!/bin/sh
 t=absent; [ -e /var/run/secrets/kubernetes.io/serviceaccount/token ] && t=present
 code=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 "https://kubernetes.default.svc/api/v1/namespaces/fleet-workers/pods" || echo none)
-echo "PROBE token=$t uid=$(id -u) api=$code"
+# job-sees-keys (#3552): the public internet, credentials in the environment, a home
+net=$(curl -s -o /dev/null -w '%{http_code}' -m 5 https://www.google.com 2>/dev/null); net=${net:-000}
+keys=$(env | grep -v '^FLEET_JOB_CMD=' | grep -Eic 'token|secret|password|credential|_key=')
+homes=$(ls -A /home 2>/dev/null | wc -l | tr -d ' ')
+mounts=$(grep -Ec ' /(home|root|var/run/secrets)' /proc/mounts)
+echo "PROBE token=$t uid=$(id -u) api=$code net=$net keys=$keys homes=$homes mounts=$mounts"
 EOF
-printf 'FROM alpine:3.20\nRUN apk add --no-cache curl\nCOPY probe.sh /probe.sh\nRUN chmod 755 /probe.sh\nCMD ["/probe.sh"]\n' > "$tmp/job/Dockerfile"
+# the Job's runner where the managed-node image keeps it (render.py JOB_RUNNER)
+mkdir -p "$tmp/job/seed/bin"
+cp "$ROOT/bin/fleet-job-runner.sh" "$tmp/job/seed/bin/"
+printf 'FROM alpine:3.20\nRUN apk add --no-cache curl\nCOPY probe.sh /probe.sh\nCOPY seed/ /opt/claude-fleet/seed/current/\nRUN chmod 755 /probe.sh\nCMD ["/probe.sh"]\n' > "$tmp/job/Dockerfile"
 PROV_IMG=$(push fleet-provisioner "$tmp/prov")
 USER_IMG=$(push fleet-user-standin "$tmp/user")
 JOB_IMG=$(push fleet-job-standin "$tmp/job")
@@ -103,7 +115,7 @@ print(json.dumps({"cluster": "kind", "namespace": "fleet-workers",
     "user_pod": {"image": user, "hub": "https://hub.example.com", "storage_class": "standard",
                  "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local",
                  "egress": {"dns": dns, "service_cidr": svc, "pod_cidr": "10.244.0.0/16"}},  # oss-ok: kind's own default pod range
-    "job": {"image": job}}))
+    "job": {"image": job, "ttl": 30}}))
 EOF
 K create configmap fleet-provisioner --from-file=template.json="$tmp/template.json" --from-file=account.pub="$tmp/account.pub"
 K rollout status deploy/fleet-provisioner --timeout=180s
@@ -266,7 +278,7 @@ fi
 K run bare --image "$JOB_IMG" --restart=Never --overrides '{"spec":{"serviceAccountName":"fleet-user"}}' >/dev/null
 notoken bare || fail "a pod naming fleet-user got a token from its account"
 echo "a bare fleet-user pod: no token (the account's own automount false)"
-jobt=$(tk "$tmp/key" '{"op":"create-job","cluster":"kind","pod":"u-drill1","repo":"o/r","ref":"'"$(printf 'b%.0s' $(seq 1 40))"'","nonce":"11111111111111111111111111111111","exp":'"$exp"'}')
+jobt=$(tk "$tmp/key" '{"op":"create-job","cluster":"kind","pod":"u-drill1","repo":"o/r","ref":"'"$(printf 'b%.0s' $(seq 1 40))"'","kind":"test","cmd":"/probe.sh","nonce":"11111111111111111111111111111111","exp":'"$exp"'}')
 [ "$(post "$jobt")" = 200 ] || fail "the hub's Job: $(cat "$tmp/resp")"
 K wait --for=condition=complete job/job-111111111111 --timeout=180s >/dev/null || { K describe job job-111111111111 | tail -20; fail "the Job never completed"; }
 out=$(K logs job/job-111111111111)
@@ -275,6 +287,38 @@ printf '%s' "$out" | grep -q 'token=absent' || fail "the Job found a token"
 printf '%s' "$out" | grep -q 'uid=0 ' && fail "the Job ran as root"
 printf '%s' "$out" | grep -q 'api=200' && fail "the Job used the API server"
 { echo; echo "### sa-token-in-user-pod"; echo '```'; echo "$out"; echo '```'; } | summary
+
+step "job-sees-keys: a test Job and an untrusted Job run, find no key, and are deleted (#3552)"
+jt=$(tk "$tmp/key" '{"op":"create-job","cluster":"kind","pod":"u-drill1","repo":"o/r","ref":"'"$(printf 'b%.0s' $(seq 1 40))"'","kind":"test","cmd":"/probe.sh; echo built > $FLEET_JOB_OUT/r.txt","nonce":"22222222222222222222222222222222","exp":'"$exp"'}')
+ju=$(tk "$tmp/key" '{"op":"create-job","cluster":"kind","pod":"u-drill1","repo":"o/r","ref":"'"$(printf 'b%.0s' $(seq 1 40))"'","kind":"untrusted","cmd":"/probe.sh","nonce":"33333333333333333333333333333333","exp":'"$exp"'}')
+[ "$(post "$jt")" = 200 ] || fail "the hub's test Job: $(cat "$tmp/resp")"
+[ "$(post "$ju")" = 200 ] || fail "the hub's untrusted Job: $(cat "$tmp/resp")"
+[ "$(K get job job-333333333333 -o jsonpath='{.spec.template.metadata.labels.fleet\/job-net}')" = "" ] \
+  || fail "the untrusted Job carries an egress label"
+for j in job-222222222222 job-333333333333; do
+  K wait --for=condition=complete "job/$j" --timeout=180s >/dev/null || { K describe job "$j" | tail -20; K logs "job/$j" || true; fail "$j never completed"; }
+done
+lt=$(K logs job/job-222222222222); lu=$(K logs job/job-333333333333)
+echo "$lt"; echo "$lu"
+for l in "$lt" "$lu"; do
+  printf '%s' "$l" | grep -q 'token=absent' || fail "a Job found a token"
+  printf '%s' "$l" | grep -q 'keys=0 ' || fail "a Job found a credential in its environment"
+  printf '%s' "$l" | grep -q 'mounts=0' || fail "a Job has a home or a secret mounted"
+  printf '%s' "$l" | grep -q 'uid=0 ' && fail "a Job ran as root"
+  printf '%s' "$l" | grep -qx '::fleet-job:: exit 0' || fail "a Job did not say its exit"
+done
+printf '%s' "$lu" | grep -Eq 'net=(000|none)( |$)' || fail "the untrusted Job reached the public internet: $lu"
+printf '%s' "$lt" | grep -q '^::fleet-job:: artifacts [0-9]' || fail "the test Job's outputs never came back in its log"
+echo "both Jobs: no token, no credential, nothing mounted, not root; untrusted: no public internet; outputs in the log"
+# ttlSecondsAfterFinished (30 s here, 600 s in a cluster): the Jobs and their pods go
+for _ in $(seq 1 120); do
+  left=$(K get jobs,pods -l fleet/role=job -o name 2>/dev/null | grep -E 'job-(222222222222|333333333333)' || true)
+  [ -z "$left" ] && break; sleep 1
+done
+[ -z "$left" ] || fail "the finished Jobs were never deleted: $left"
+gone=$(K get jobs -l fleet/role=job 2>&1)
+echo "$gone"
+{ echo; echo "### job-sees-keys"; echo '```'; echo "$lt"; echo "$lu"; echo; echo '$ kubectl get jobs -l fleet/role=job'; echo "$gone"; echo '```'; } | summary
 
 step "spare-pod-leaks: bind, destroy, a fresh pod"
 [ "$(post "$(tk "$tmp/key" '{"op":"bind-user-pod","cluster":"kind","pod":"u-drill1","principal":"gh.7001","nonce":"a1111111111111111111111111111111","exp":'"$exp"'}')")" = 200 ] \
@@ -328,4 +372,4 @@ case "$asroot" in *IN) fail "root logged in over ssh" ;; esac
 out="fleet: $fid · ps fleet: $fu· ps sshd: $su· a login: $landed"
 echo "$out"
 { echo; echo "### root-in-user-pod"; echo '```'; echo "$out"; echo '```'; } | summary
-echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · spare-pod-leaks · root-in-user-pod (kind)"
+echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · job-sees-keys · spare-pod-leaks · root-in-user-pod (kind)"

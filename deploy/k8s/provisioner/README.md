@@ -36,7 +36,9 @@ cat > template.json <<EOF
               "cred_central": "http://fleet-credproxy.$NS.svc.cluster.local",
               "egress_proxy": "http://fleet-egress.$NS.svc.cluster.local:3128",
               "cluster_caches": true, "pull_secrets": ["acr-pull"]},
- "job": {"image": "$JOB_IMAGE", "pull_secrets": ["acr-pull"]}}
+ "job": {"image": "$IMAGE", "pull_secrets": ["acr-pull"],
+         "git_mirror": "git://$GIT_MIRROR/{repo}.git", "caches": true,
+         "egress_proxy": "http://fleet-egress.$NS.svc.cluster.local:3128"}}
 EOF
 curl -fsS "$HUB/v1/fleet/account-key" > account.pub
 kubectl -n $NS create configmap fleet-provisioner --from-file=template.json --from-file=account.pub

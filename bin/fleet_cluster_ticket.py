@@ -19,7 +19,9 @@ The payload is exactly {op, cluster, nonce, exp} plus the op's own fields:
                                        one-time machine join code, #3553)
   destroy-user-pod  pod                those, and the join Secret
   set-limits        pod, limits        only that pod's Deployment rolls
-  create-job        pod, repo, ref     a throwaway Job for that pod's session
+  create-job        pod, repo, ref,    a throwaway Job for that pod's session:
+                    kind, cmd          kind build|test|browser|load|untrusted,
+                                       cmd one line run by sh -c (#3552)
   bind-user-pod     pod, principal     a claimed spare pod's fleet/principal
                                        label (#3553)
 
@@ -47,11 +49,11 @@ OPS = {
     "create-user-pod": ("pod", "limits", "login", "uid", "join"),
     "destroy-user-pod": ("pod",),
     "set-limits": ("pod", "limits"),
-    "create-job": ("pod", "repo", "ref"),
+    "create-job": ("pod", "repo", "ref", "kind", "cmd"),
     "bind-user-pod": ("pod", "principal"),
 }
 # the Go struct's field order (json.Marshal): what sign() writes, so the bytes match
-ORDER = ("op", "cluster", "pod", "limits", "login", "uid", "repo", "ref", "join", "principal", "nonce", "exp")
+ORDER = ("op", "cluster", "pod", "limits", "login", "uid", "repo", "ref", "kind", "cmd", "join", "principal", "nonce", "exp")
 GRAMMAR = {
     "cluster": re.compile(r"^[a-z0-9][a-z0-9.-]{0,62}$"),
     "pod": re.compile(r"^u-[a-z0-9]{4,20}$"),
@@ -59,6 +61,9 @@ GRAMMAR = {
     "limits": re.compile(r"^[a-z]+=[0-9]+[A-Za-z]{0,2}(,[a-z]+=[0-9]+[A-Za-z]{0,2}){0,2}$|^$"),
     "repo": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$"),
     "ref": re.compile(r"^[0-9a-f]{40}$"),
+    # a Job's kind (render.py JOB_KINDS) and its one command line (#3552)
+    "kind": re.compile(r"^(build|test|browser|load|untrusted)$"),
+    "cmd": re.compile(r"^[^\x00-\x1f\x7f]{1,2000}$"),
     # the hub's MintJoinCode: fj_ + 26 of base32's lower alphabet
     "join": re.compile(r"^fj_[a-z2-7]{26}$"),
     # a Kubernetes label value (the hub writes gh:12345 as gh.12345)

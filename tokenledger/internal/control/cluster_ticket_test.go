@@ -15,6 +15,10 @@ const pyClusterTicket = "c1.eyJvcCI6ImNyZWF0ZS11c2VyLXBvZCIsImNsdXN0ZXIiOiJhY2st
 // pyBindTicket is the same for bind-user-pod (claude-fleet#3553).
 const pyBindTicket = "c1.eyJvcCI6ImJpbmQtdXNlci1wb2QiLCJjbHVzdGVyIjoiYWNrLXN6IiwicG9kIjoidS1hMWIyYzMiLCJwcmluY2lwYWwiOiJnaC4xMjM0NSIsIm5vbmNlIjoiZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTAiLCJleHAiOjQxMDI0NDQ4MDB9.j6j0ubkEdF8FHaqAUk7503wLoQPcEoZ41sDg0-wMTVepMIBTMjYqL5QrQwIVPKFY5a0zt2GoNuiIheKKAEMsCA"
 
+// pyJobTicket is the same for create-job with its kind and command
+// (claude-fleet#3552).
+const pyJobTicket = "c1.eyJvcCI6ImNyZWF0ZS1qb2IiLCJjbHVzdGVyIjoiYWNrLXN6IiwicG9kIjoidS1hMWIyYzMiLCJyZXBvIjoiby9yIiwicmVmIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImtpbmQiOiJ1bnRydXN0ZWQiLCJjbWQiOiJtYWtlIHRlc3QiLCJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwiZXhwIjo0MTAyNDQ0ODAwfQ.RIAGAEIYQuY7_ak4-CB1pExNo0dYknkp2luG0yMq_KlltkyZHzu9pZEBaAKHsMznwJRusjZhNnm8BvU4bZryAA"
+
 func TestClusterTicketMatchesTheProvisioner(t *testing.T) {
 	key := ticketKey()
 	got, err := SignClusterTicket(key, ClusterTicket{Op: ClusterCreateUserPod, Cluster: "ack-sz", Pod: "u-a1b2c3",
@@ -35,6 +39,12 @@ func TestClusterTicketMatchesTheProvisioner(t *testing.T) {
 		Principal: "gh.12345", Nonce: "fedcba9876543210fedcba9876543210", Exp: 4102444800})
 	if err != nil || bind != pyBindTicket {
 		t.Fatalf("Go's bind ticket\n%s\nis not the provisioner's\n%s (%v)", bind, pyBindTicket, err)
+	}
+	job, err := SignClusterTicket(key, ClusterTicket{Op: ClusterCreateJob, Cluster: "ack-sz", Pod: "u-a1b2c3",
+		Repo: "o/r", Ref: strings.Repeat("b", 40), Kind: "untrusted", Cmd: "make test",
+		Nonce: "00112233445566778899aabbccddeeff", Exp: 4102444800})
+	if err != nil || job != pyJobTicket {
+		t.Fatalf("Go's job ticket\n%s\nis not the provisioner's\n%s (%v)", job, pyJobTicket, err)
 	}
 }
 

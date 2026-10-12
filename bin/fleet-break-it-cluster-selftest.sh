@@ -15,6 +15,9 @@
 #   spare-pod-leaks          bin/fleet-provisioner.py + tokenledger/internal/api/fleet_spare_pods.go
 #   root-in-user-pod         extras/managed-node/render.py + bin/fleet-provisioner.py +
 #                            bin/fleet-node-linux.py pod-etc (issue #3757)
+#   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
+#                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
+#                            tokenledger/internal/api/fleet_jobs.go
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -196,8 +199,8 @@ EOF
   local up='{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"fj_abcdefghijklmnopqrstuvwxyz"}'
   local ref job_none job_good
   ref=$(printf 'b%.0s' $(seq 1 40))
-  job_none='{"op":"create-job","cluster":"drill","pod":"u-none1","repo":"o/r","ref":"'"$ref"'"}'
-  job_good='{"op":"create-job","cluster":"drill","pod":"u-drill1","repo":"o/r","ref":"'"$ref"'"}'
+  job_none='{"op":"create-job","cluster":"drill","pod":"u-none1","repo":"o/r","ref":"'"$ref"'","kind":"test","cmd":"make test"}'
+  job_good='{"op":"create-job","cluster":"drill","pod":"u-drill1","repo":"o/r","ref":"'"$ref"'","kind":"test","cmd":"make test"}'
   while IFS='|' read -r why t; do
     prov "$t"
     [ "$RC" = 3 ] && [ ! -s "$d/writes" ] || { WHY="$why: rc $RC, wrote: $(cat "$d/writes" 2>/dev/null): $OUT"; return 1; }
@@ -454,6 +457,135 @@ PY
   [ ! -e "$d/bad/passwd" ] || { WHY="a refused pod-etc left a passwd behind"; return 1; }
   SECS=$(since "$t0")
   WHAT="用户 pod 模板：fleet 容器以登录的 UID 跑（非 root、drop ALL、不加能力），sshd 只加 CHOWN SETUID SETGID SYS_CHROOT KILL，pod-etc 既不是 root 也不是登录；没给登录不渲染；执行器拒 root 的 fleet · 关掉 runAsNonRoot · fleet 加能力 · sshd 加 DAC_OVERRIDE · 多一个 root 容器；pod-etc 只加该登录一行，拒 root 名 / uid 0 / 系统号"
+}
+
+# job-sees-keys (#3552, C7): a throwaway Job — the code it runs may be anyone's —
+# looks for a key: a cluster token, a home disk, a Secret, a credential in its
+# environment, root, a way out to the public internet (untrusted). The machine
+# half: the provisioner, driven by the hub's create-job tickets against the
+# stand-in API, makes one Job per kind; each one it sent runs as fleet-job with no
+# token, no volume but emptyDirs, non-root on a read-only root, no envFrom, no
+# credential-shaped variable; untrusted carries no fleet/job-net label (so only
+# job-out's rules — no ipBlock, no egress proxy — apply to it) and no
+# HTTPS_PROXY; a kind or a command off the grammar, and a Job for a pod that is
+# no user pod, are refused with nothing written. The runner, given exactly a
+# rendered untrusted Job's environment, finds nothing either. The hub half:
+# TestJobRunsForTheCallersOwnPod (the Job is the CALLER's pod's, read back only
+# as that pod's). The kind half runs a test and an untrusted Job for real and
+# watches both deleted (deploy/k8s/provisioner/kind-drill.sh).
+drill_job_sees_keys() {
+  CAP=60
+  local d="$WORK/job" t0 api exp out gohalf rc kind
+  mkdir -p "$d/sa"; t0=$(now)
+  api=$(stub_api "$d") || { WHY="no stand-in API"; return 1; }
+  printf 'drill-token\n' > "$d/sa/token"
+  head -c 32 /dev/urandom > "$d/key"
+  python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
+  printf '{"cluster": "drill", "namespace": "fleet-workers", "user_pod": {"image": "x@sha256:%s", "hub": "https://hub.example.com", "storage_class": "csi", "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local"}, "job": {"image": "x@sha256:%s", "git_mirror": "git://git-mirror.arc-runners.svc.cluster.local/{repo}.git", "caches": true, "egress_proxy": "http://fleet-egress.fleet-workers.svc.cluster.local:3128"}}\n' \
+    "$D64" "$D64" > "$d/template.json"
+  export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
+    FLEET_PROVISIONER_API="$api" FLEET_PROVISIONER_SA_DIR="$d/sa"
+  exp=$(( $(date +%s) + 300 ))
+  tk() { python3 "$BIN/fleet_cluster_ticket.py" sign "$d/key" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(exp=int(sys.argv[2])); print(json.dumps(f))' "$1" "$exp")"; }
+  prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
+  local ref; ref=$(printf 'b%.0s' $(seq 1 40))
+  # off the grammar, or for no user pod: refused, nothing written
+  : > "$d/writes"
+  prov "$(tk '{"op":"create-job","cluster":"drill","pod":"u-job00001","repo":"o/r","ref":"'"$ref"'","kind":"test","cmd":"true","nonce":"c0000000000000000000000000000001"}')"
+  [ "$RC" = 3 ] || { WHY="a Job for no user pod: rc $RC: $OUT"; return 1; }
+  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-job00001","limits":"","login":"job1","uid":10003,"join":"fj_cccccccccccccccccccccccccc","nonce":"c0000000000000000000000000000002"}')"
+  [ "$RC" = 0 ] || { WHY="the owner pod's create: rc $RC: $OUT"; return 1; }
+  : > "$d/writes"
+  for bad in '"kind":"root","cmd":"true"' '"kind":"test","cmd":"a\nb"' '"kind":"test","cmd":""' '"kind":"test"'; do
+    prov "$(tk '{"op":"create-job","cluster":"drill","pod":"u-job00001","repo":"o/r","ref":"'"$ref"'",'"$bad"',"nonce":"c00000000000000000000000000000'"$((RANDOM % 90 + 10))"'"}')"
+    [ "$RC" = 3 ] || { WHY="an off-grammar create-job ($bad): rc $RC: $OUT"; return 1; }
+  done
+  [ ! -s "$d/writes" ] || { WHY="a refused create-job wrote: $(cat "$d/writes")"; return 1; }
+  # one Job per kind, as the hub signs it
+  local n=3
+  for kind in build test browser load untrusted; do
+    n=$((n + 1))
+    prov "$(tk '{"op":"create-job","cluster":"drill","pod":"u-job00001","repo":"o/r","ref":"'"$ref"'","kind":"'"$kind"'","cmd":"make test","nonce":"'"$n"'d000000000000000000000000000000"}')"
+    [ "$RC" = 0 ] || { WHY="the hub's $kind Job: rc $RC: $OUT"; return 1; }
+  done
+  out=$(python3 - "$api" "$d/untrusted.env" <<'PY'
+import json, re, sys, urllib.request
+CRED = re.compile(r'TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|_KEY$|^KEY|AUTH|COOKIE|SESSION', re.I)
+bad, kinds = [], {}
+for n, kind in enumerate(("build", "test", "browser", "load", "untrusted"), 4):
+    name = "job-" + ("%dd000000000000000000000000000000" % n)[:12]
+    r = urllib.request.Request(sys.argv[1] + "/apis/batch/v1/namespaces/fleet-workers/jobs/" + name,
+                               headers={"Authorization": "Bearer drill-token"})
+    j = json.load(urllib.request.urlopen(r))
+    labels, p = j["spec"]["template"]["metadata"]["labels"], j["spec"]["template"]["spec"]
+    c = p["containers"][0]
+    env = {e["name"]: e.get("value", "") for e in c.get("env", [])}
+    where = "%s (%s)" % (name, kind)
+    if labels.get("fleet/job-kind") != kind:
+        bad.append(where + ": not labelled its kind")
+    if p.get("serviceAccountName") != "fleet-job" or p.get("automountServiceAccountToken") is not False:
+        bad.append(where + ": a token, or not fleet-job")
+    for v in p.get("volumes") or []:
+        if set(v) != {"name", "emptyDir"}:
+            bad.append(where + ": volume %s is not an emptyDir" % v["name"])
+    sc, psc = c.get("securityContext") or {}, p.get("securityContext") or {}
+    if not psc.get("runAsNonRoot") or not psc.get("runAsUser") or not sc.get("readOnlyRootFilesystem") \
+       or sc.get("allowPrivilegeEscalation") is not False or "ALL" not in (sc.get("capabilities") or {}).get("drop", []):
+        bad.append(where + ": root, a writable root, escalation or a capability")
+    if c.get("envFrom") or any("valueFrom" in e for e in c.get("env", [])):
+        bad.append(where + ": env from a Secret / ConfigMap / field")
+    for k in env:
+        if CRED.search(k):
+            bad.append(where + ": a credential-shaped variable " + k)
+    if kind == "untrusted":
+        if "fleet/job-net" in labels or "FLEET_EGRESS_PROXY" in env:
+            bad.append(where + ": a way to the egress")
+    elif labels.get("fleet/job-net") != "open" or "FLEET_EGRESS_PROXY" not in env:
+        bad.append(where + ": an open kind without its egress")
+    kinds[kind] = env
+print("\n".join(bad) if bad else "ok")
+open(sys.argv[2], "w").write(json.dumps(kinds["untrusted"]))
+sys.exit(1 if bad else 0)
+PY
+) || { WHY="$out"; return 1; }
+  # job-out: no ipBlock (no public address); only job-out-open reaches 3128, for job-net open
+  out=$(awk '/^  name: job-out$/{on=1} on&&/^---/{exit} on' "$ROOT/deploy/k8s/fleet-workers/networkpolicy.yaml")
+  case "$out" in *ipBlock*|*3128*) WHY="job-out lets a Job out: $out"; return 1 ;; esac
+  awk '/^  name: job-out-open$/{on=1} on&&/^---/{exit} on' "$ROOT/deploy/k8s/fleet-workers/networkpolicy.yaml" \
+    | grep -q 'fleet/job-net: open' || { WHY="job-out-open does not select fleet/job-net open"; return 1; }
+  # the runner, given exactly the rendered untrusted Job's environment (no mirror
+  # here: nothing to fetch) and a command that looks for a key
+  out=$(python3 - "$d/untrusted.env" "$d/w" "$BIN/fleet-job-runner.sh" <<'PY' 2>&1
+import json, subprocess, sys
+env = json.load(open(sys.argv[1]))
+env.pop("FLEET_JOB_MIRROR", None)
+env.update(PATH="/usr/bin:/bin", HOME=sys.argv[2], FLEET_JOB_WORK=sys.argv[2],
+           FLEET_JOB_CMD='env | grep -v ^FLEET_JOB_CMD= | grep -Eic "token|secret|password|credential|_key=" ; '
+                         'ls -A "$HOME" | grep -vx out | grep -vx src | wc -l')
+p = subprocess.run(["sh", sys.argv[3]], env=env, capture_output=True, text=True)
+sys.stdout.write(p.stdout + p.stderr)
+PY
+)
+  printf '%s\n' "$out" | grep -qx '::fleet-job:: exit 0' \
+    && [ "$(printf '%s\n' "$out" | grep -Ev '^::fleet-job::' | tr -d ' ' | sort -u | tr '\n' ,)" = '0,' ] \
+    || { WHY="the runner in an untrusted Job's environment saw something: $out"; return 1; }
+  # the hub half
+  gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestJobRunsForTheCallersOwnPod"
+  grep -q '^func TestJobRunsForTheCallersOwnPod(' "$ROOT/tokenledger/internal/api/fleet_jobs_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestJobRunsForTheCallersOwnPod is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestJob' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 只为调用者自己的 pod 建 Job、只按它读回" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="入口签的单为五种 kind 各建一个 Job：都以 fleet-job 跑、不挂令牌、只有 emptyDir、非 root 只读根、不从 Secret 取环境、没有像凭据的变量；untrusted 不带出口标签也没有 HTTPS_PROXY（job-out 没有任何公网地址）；kind / 命令不合语法、给不是用户 pod 的建 Job 一律拒、一个请求都没发；runner 照 untrusted 的环境跑，什么钥匙都找不到；${gohalf}"
 }
 
 cred_run_drills "$0"

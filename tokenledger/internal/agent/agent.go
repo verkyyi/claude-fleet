@@ -194,6 +194,12 @@ type Config struct {
 	// unopened. Empty (CCQUOTA_FLEET_PROVISIONER unset) = never offered.
 	FleetClusterOps string
 
+	// FleetKubeAPI / FleetKubeSADir: where fleet-ops reads a throwaway Job
+	// back (claude-fleet#3552) — the API server and its own account's
+	// directory (token · ca.crt · namespace). Empty = the in-cluster defaults.
+	FleetKubeAPI   string
+	FleetKubeSADir string
+
 	// FleetSSHRelay lets the hub relay SSH connections to this machine
 	// (claude-fleet#1413): the agent splices a data stream it dials to the
 	// hub onto the local sshd at 127.0.0.1:22. On by default with Fleet;

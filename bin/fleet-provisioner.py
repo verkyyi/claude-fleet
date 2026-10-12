@@ -18,7 +18,10 @@ done. The ops are typed, never a manifest:
   destroy-user-pod pod             those three, each only if it is a user pod's,
                                    and the join Secret
   set-limits       pod limits      that pod's Deployment, nobody else's
-  create-job       pod repo ref    render.py's throwaway Job for that pod
+  create-job       pod repo ref    render.py's throwaway Job for that pod: the
+                   kind cmd        ticket's kind and command line, the template's
+                                   job.{image, git_mirror, caches, egress_proxy,
+                                   deadline, ttl} (#3552)
   bind-user-pod    pod principal   a claimed pod's fleet/principal label (#3553)
 
 Everything it would send is first held to the template here (off_template —
@@ -281,7 +284,9 @@ def act(t, conf, api, r=None):
         try:
             objs = r.job_resources(job.get('image', ''), pod, t['repo'], t['ref'], t['nonce'], ns,
                                    pull_secrets=tuple(job.get('pull_secrets') or ('acr-pull',)),
-                                   deadline=int(job.get('deadline', 3600)))
+                                   deadline=int(job.get('deadline', 3600)), kind=t['kind'], cmd=t['cmd'],
+                                   mirror=job.get('git_mirror', ''), caches=bool(job.get('caches')),
+                                   egress_proxy=job.get('egress_proxy', ''), ttl=int(job.get('ttl', 600)))
         except (ValueError, TypeError) as e:
             raise Refused('cannot render the Job: %s' % e)
         return create(api, ns, objs)

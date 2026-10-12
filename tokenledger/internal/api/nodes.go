@@ -760,9 +760,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		case control.TypeServiceLogLines:
 			// A service's log, for the viewers following it (claude-fleet#2797).
 			s.svcLogs.deliver(nc, m)
-		case control.TypeClusterOpResult:
+		case control.TypeClusterOpResult, control.TypeClusterJobResult:
 			// The provisioner's answer to a ticket this link carried
-			// (claude-fleet#3553) goes to its waiter.
+			// (claude-fleet#3553), or a Job read back (claude-fleet#3552),
+			// goes to its waiter.
 			nc.pending.deliver(m)
 		case control.TypeOAuthRefreshResult:
 			// A relayed token refresh's answer (claude-fleet#1490) goes to

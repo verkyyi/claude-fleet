@@ -606,10 +606,31 @@ JOB_SECURITY = {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001, '
                 'seccompProfile': {'type': 'RuntimeDefault'}}
 
 
+# What each kind of Job gets (#3552, C7): its ceiling, its deadline, its
+# network. open = the package caches, the git mirror and the cluster's one
+# egress (HTTPS_PROXY); closed (untrusted) = the caches and the mirror only —
+# no egress label, so job-out's rules are all it has. browser adds a /dev/shm.
+JOB_KINDS = {
+    'build': {'cpu': '2', 'memory': '4Gi', 'deadline': 3600, 'net': 'open'},
+    'test': {'cpu': '2', 'memory': '4Gi', 'deadline': 3600, 'net': 'open'},
+    'browser': {'cpu': '2', 'memory': '4Gi', 'deadline': 1800, 'net': 'open', 'shm': '1Gi'},
+    'load': {'cpu': '4', 'memory': '4Gi', 'deadline': 1800, 'net': 'open'},
+    'untrusted': {'cpu': '1', 'memory': '2Gi', 'deadline': 900, 'net': 'closed'},
+}
+JOB_CMD_RE = r'[^\x00-\x1f\x7f]{1,2000}'
+# the runner inside the image (bin/fleet-job-runner.sh in the managed-node image)
+JOB_RUNNER = '/opt/claude-fleet/seed/current/bin/fleet-job-runner.sh'
+JOB_MIRROR_RE = r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]*\{repo\}[A-Za-z0-9._/-]*'
+
+
 def job_resources(image, pod, repo, ref, nonce, namespace='fleet-workers', pull_secrets=('acr-pull',),
-                  deadline=3600):
-    """One Job: the image (by digest) runs once on one commit of one repo for the
-    session in <pod>; its writable places are two emptyDirs (/work, /tmp)."""
+                  deadline=3600, kind='test', cmd='true', mirror='', caches=False, egress_proxy='',
+                  runner=JOB_RUNNER, ttl=600):
+    """One Job: the image (by digest) runs `cmd` once on one commit of one repo
+    for the session in <pod>; its writable places are two emptyDirs (/work,
+    /tmp). `mirror` is where the commit is fetched from (a URL with {repo});
+    `caches` points npm / pip / Go at the cluster's caches; an open kind gets
+    `egress_proxy` as its HTTPS_PROXY, untrusted never does."""
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the job image by sha256 digest')
     if not re.fullmatch(USER_POD_RE, pod):
@@ -622,20 +643,49 @@ def job_resources(image, pod, repo, ref, nonce, namespace='fleet-workers', pull_
         raise ValueError('a Job is named by its ticket nonce (32 hex), not %r' % nonce)
     if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
         raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    if kind not in JOB_KINDS:
+        raise ValueError('--job-kind is one of %s, not %r' % ('|'.join(JOB_KINDS), kind))
+    if not re.fullmatch(JOB_CMD_RE, cmd):
+        raise ValueError('--job-cmd is one printable line of 1-2000 characters')
+    if mirror and not re.fullmatch(JOB_MIRROR_RE, mirror):
+        raise ValueError('--job-mirror is git|http(s)://HOST[:PORT]/…{repo}…, not %r' % mirror)
+    if egress_proxy and not re.fullmatch(r'http://[A-Za-z0-9.-]+(:[0-9]{1,5})?', egress_proxy):
+        raise ValueError('--egress-proxy is http://HOST[:PORT], not %r' % egress_proxy)
+    if not re.fullmatch(r'/[A-Za-z0-9._/-]+', runner):
+        raise ValueError('the job runner is an absolute path, not %r' % runner)
+    k = JOB_KINDS[kind]
     name = 'job-' + nonce[:12]
-    labels = {'app.kubernetes.io/name': 'fleet-job', 'fleet/role': 'job', 'fleet/owner': pod}
+    labels = {'app.kubernetes.io/name': 'fleet-job', 'fleet/role': 'job', 'fleet/owner': pod,
+              'fleet/job-kind': kind}
+    if k['net'] == 'open':
+        labels['fleet/job-net'] = 'open'
+    env = [{'name': 'FLEET_JOB_REPO', 'value': repo}, {'name': 'FLEET_JOB_REF', 'value': ref},
+           {'name': 'FLEET_JOB_OWNER', 'value': pod}, {'name': 'FLEET_JOB_KIND', 'value': kind},
+           {'name': 'FLEET_JOB_CMD', 'value': cmd}, {'name': 'HOME', 'value': '/work'}]
+    if mirror:
+        env.append({'name': 'FLEET_JOB_MIRROR', 'value': mirror.replace('{repo}', repo)})
+    if caches:
+        env.append({'name': 'FLEET_CLUSTER_CACHES', 'value': namespace})
+    if egress_proxy and k['net'] == 'open':
+        env.append({'name': 'FLEET_EGRESS_PROXY', 'value': egress_proxy})
+    mounts = [{'name': 'work', 'mountPath': '/work'}, {'name': 'tmp', 'mountPath': '/tmp'}]
+    volumes = [{'name': 'work', 'emptyDir': {'sizeLimit': '20Gi'}}, {'name': 'tmp', 'emptyDir': {'sizeLimit': '2Gi'}}]
+    if k.get('shm'):
+        mounts.append({'name': 'shm', 'mountPath': '/dev/shm'})
+        volumes.append({'name': 'shm', 'emptyDir': {'medium': 'Memory', 'sizeLimit': k['shm']}})
     container = {
-        'name': 'job', 'image': image,
-        'env': [{'name': 'FLEET_JOB_REPO', 'value': repo}, {'name': 'FLEET_JOB_REF', 'value': ref},
-                {'name': 'FLEET_JOB_OWNER', 'value': pod}, {'name': 'HOME', 'value': '/work'}],
-        'resources': {'requests': {'cpu': '250m', 'memory': '512Mi'}, 'limits': {'cpu': '2', 'memory': '4Gi'}},
+        'name': 'job', 'image': image, 'command': ['/bin/sh', runner],
+        'env': env,
+        'resources': {'requests': {'cpu': '250m', 'memory': '512Mi'},
+                      'limits': {'cpu': k['cpu'], 'memory': k['memory']}},
         'securityContext': JOB_SECURITY,
         'workingDir': '/work',
-        'volumeMounts': [{'name': 'work', 'mountPath': '/work'}, {'name': 'tmp', 'mountPath': '/tmp'}],
+        'volumeMounts': mounts,
     }
     return [{'apiVersion': 'batch/v1', 'kind': 'Job',
              'metadata': {'name': name, 'namespace': namespace, 'labels': labels},
-             'spec': {'backoffLimit': 0, 'activeDeadlineSeconds': deadline, 'ttlSecondsAfterFinished': 600,
+             'spec': {'backoffLimit': 0, 'activeDeadlineSeconds': min(int(deadline), k['deadline']),
+                      'ttlSecondsAfterFinished': int(ttl),
                       'template': {'metadata': {'labels': labels}, 'spec': {
                           'serviceAccountName': SA_JOB, 'automountServiceAccountToken': False,
                           'enableServiceLinks': False, 'restartPolicy': 'Never',
@@ -643,8 +693,7 @@ def job_resources(image, pod, repo, ref, nonce, namespace='fleet-workers', pull_
                                               'fsGroup': 10001, 'seccompProfile': {'type': 'RuntimeDefault'}},
                           'imagePullSecrets': [{'name': n} for n in pull_secrets],
                           'containers': [container],
-                          'volumes': [{'name': 'work', 'emptyDir': {'sizeLimit': '20Gi'}},
-                                      {'name': 'tmp', 'emptyDir': {'sizeLimit': '2Gi'}}]}}}}]
+                          'volumes': volumes}}}}]
 
 
 def user_pod_limits_patch(limits):
@@ -719,6 +768,9 @@ if __name__ == '__main__':
     p.add_argument('--job-repo', default='')
     p.add_argument('--job-ref', default='')
     p.add_argument('--job-nonce', default='')
+    p.add_argument('--job-kind', default='test', help='|'.join(JOB_KINDS))
+    p.add_argument('--job-cmd', default='true', help='the one command line the Job runs (sh -c)')
+    p.add_argument('--job-mirror', default='', help='where the commit is fetched from: git://HOST/…{repo}…')
     p.add_argument('--limits-patch', action='store_true',
                    help='print only the patch that moves --limits on a running pod (rolls that pod alone)')
     args = p.parse_args()
@@ -737,7 +789,9 @@ if __name__ == '__main__':
             raise SystemExit(0)
         if args.job:
             items = job_resources(args.image, args.job, args.job_repo, args.job_ref, args.job_nonce, args.namespace,
-                                  pull_secrets=args.pull_secrets or ['acr-pull'])
+                                  pull_secrets=args.pull_secrets or ['acr-pull'], kind=args.job_kind,
+                                  cmd=args.job_cmd, mirror=args.job_mirror, caches=args.cluster_caches,
+                                  egress_proxy=args.egress_proxy)
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         missing = [f for f in ('image', 'hub', 'storage_class') if not getattr(args, f)]

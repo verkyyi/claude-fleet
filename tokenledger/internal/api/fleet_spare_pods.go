@@ -139,19 +139,23 @@ func (s *Server) clusterSpareMax(cluster string, settings map[string]string) int
 var errNoOpsLink = errors.New("the cluster's ops link is not connected")
 
 // clusterOp signs t for cluster and carries it down the cluster's ops link,
-// returning the provisioner's answer. A fresh nonce every call: a re-ask is a
-// new ticket.
+// returning the provisioner's answer. A fresh nonce every call (a re-ask is a
+// new ticket) unless t brings one — a Job is named after its nonce, so its
+// caller mints it first (claude-fleet#3552).
 func (s *Server) clusterOp(ctx context.Context, cluster string, t control.ClusterTicket) (control.ClusterOpResult, error) {
 	var res control.ClusterOpResult
 	_, c := s.nodes.opsFor(cluster)
 	if c == nil {
 		return res, errNoOpsLink
 	}
-	var nb [16]byte
-	if _, err := rand.Read(nb[:]); err != nil {
-		return res, err
+	if t.Nonce == "" {
+		var nb [16]byte
+		if _, err := rand.Read(nb[:]); err != nil {
+			return res, err
+		}
+		t.Nonce = hex.EncodeToString(nb[:])
 	}
-	t.Cluster, t.Nonce, t.Exp = cluster, hex.EncodeToString(nb[:]), time.Now().Add(control.ClusterTicketTTL).Unix()
+	t.Cluster, t.Exp = cluster, time.Now().Add(control.ClusterTicketTTL).Unix()
 	tk, err := control.SignClusterTicket(s.accountKey, t)
 	if err != nil {
 		return res, err

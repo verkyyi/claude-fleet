@@ -1,0 +1,14 @@
+# The cluster-perms drill's kind cluster (.github/workflows/cluster-perms.yml):
+# no default CNI — Calico is applied after, because kind's own CNI enforced no
+# NetworkPolicy here (an untrusted Job reached the internet and the API server
+# straight through default-deny, claude-fleet#3552) — and the local registry's
+# config dir, which kind-action leaves to a config like this one.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: 10.244.0.0/16  # oss-ok: kind's own default pod range
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
