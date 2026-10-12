@@ -121,11 +121,25 @@ def rows():
     seam = os.environ.get("FLEET_SESSION_CLI_ROWS")
     if seam:
         try:
-            return qo.parse_rows(Path(seam).read_text())
+            return own_node(qo.parse_rows(Path(seam).read_text()))
         except OSError:
             return []
     got = qo.full_rows(os.environ.get("FLEET_SESSION", ""), timeout=15)
-    return got if got is not None else qo.read_rows()
+    return own_node(got if got is not None else qo.read_rows())
+
+
+def own_node(rs):
+    """A row of THIS machine's own (no `wid:` key) carries no node in the list —
+    the list draws it in this machine's group. `fleet ls` names it anyway: the
+    hub cache's `#me` (issue #3464 — a thin client's `fleet ls` runs on its home,
+    where the session it just opened is local, and the drill read its machine as
+    «-»). No hub cache ⇒ left empty, as before."""
+    me = me_label()
+    if me:
+        for r in rs:
+            if not r.get("node") and not str(r.get("key", "")).startswith("wid:"):
+                r["node"] = me
+    return rs
 
 
 # --- the measurement bus (issue #2431) ---------------------------------------------
@@ -146,16 +160,34 @@ def agent_say(agent):
     return AGENT_SAY.get(a, a)
 
 
+def cache_path():
+    """The hub's session cache this machine's list reads ('' = none)."""
+    seam = os.environ.get("FLEET_SESSION_CLI_CACHE")
+    if seam is not None:
+        return seam
+    return os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global",
+                        "remote_" + os.environ.get("FLEET_SESSION", ""))
+
+
+def me_label():
+    """This machine's label as the hub names it: the cache's `#me` line ('' = none)."""
+    path = cache_path()
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines() if path else []
+    except OSError:
+        return ""
+    for line in lines:
+        f = line.split("\x1f")
+        if f[0] == "#me":
+            return (f[1] if len(f) > 1 else "").strip()
+    return ""
+
+
 def bus_cache():
     """{row key: {agent, left, band, ts, model, effort}} off the hub's session
     cache — a `wid:` row by its key, this machine's own (local=1) by its window id
     too. Fields 21-25 are the bus; an older node's row has only its agent."""
-    seam = os.environ.get("FLEET_SESSION_CLI_CACHE")
-    if seam is not None:
-        path = seam
-    else:
-        path = os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global",
-                            "remote_" + os.environ.get("FLEET_SESSION", ""))
+    path = cache_path()
     out = {}
     try:
         lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines() if path else []

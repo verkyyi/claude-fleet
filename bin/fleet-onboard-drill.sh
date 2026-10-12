@@ -195,7 +195,8 @@ while [ $# -gt 0 ]; do
     --thin-first) thin_first_state; exit 0 ;;                       # selftest seam: thin.log on stdin
     --thin-first-says) grep -Eq -- "$THIN_FIRST|$THIN_FIRST_FAILED"; exit $? ;;   # selftest seam: a screen on stdin
     --thin-view-up) grep -Eq -- "$CLIENT_UP|$VIEW_UP"; exit $? ;;    # selftest seam: a screen on stdin
-    --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2"; exit ;;            # selftest seam: fleet ls --json on stdin
+    --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2" "${3:-}"; exit ;;   # selftest seam: fleet ls --json on stdin [keys before]
+    --ls-keys)  ls_keys; exit ;;                                     # selftest seam: fleet ls --json on stdin
     --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)          die2 "unknown argument: $1" ;;
@@ -657,7 +658,9 @@ PANEL_NOMATCH='没有会话叫这句话|no session goes by these words'
 PANEL_NO='新会话没开起来|the new session did not open'
 # pw_row <name>: the new session's row — the old client's list row on screen;
 # the thin client's (no list) the client's own `fleet ls --json`, as
-# 「<name> · <machine> · <key>」. A list that could not be READ (not JSON — on
+# 「<name> · <machine> · <key>」 — the row whose key was not in PW_BEFORE (the
+# keys just before the panel's ↵, issue #3464: a no-repo session is named
+# 「我的会话」, so by name alone an older one could answer, or none). A list that could not be READ (not JSON — on
 # 202937a7 a working row's spinner byte crashed it, #3444) leaves its last stderr
 # line in PW_LSERR: drill 30 (#3452) read that as «nothing opened» while the new
 # session was answering on screen.
@@ -674,7 +677,7 @@ pw_row() {
       PW_LSERR=${PW_LSERR:-not JSON: $(printf '%s' "$out" | head -n 1 | cut -c1-80)}
     fi
     [ "$err" = /dev/null ] || rm -f "$err"
-    r=$(printf '%s' "$out" | ls_row "$1") || return 0
+    r=$(printf '%s' "$out" | ls_row "$1" "$PW_BEFORE") || return 0
     printf '%s · %s · %s\n' "$1" "$(printf '%s' "$r" | cut -f1)" "$(printf '%s' "$r" | cut -f2)"
   else
     row_named "$1"
@@ -709,14 +712,20 @@ thin_open() {
 # line as the screen says it — the list's, or the thin panel's 「新会话没开起来：<why>」,
 # issue #3458). Every ETA it read lands in
 # $RUN/<shot prefix>-eta.txt (<secs since first said> <eta>, one a change).
-PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_SAID=''
+PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_SAID='' PW_BEFORE=''
 # pw_said <screen>: the refusal line on it, up to the box's edge (issue #3458: the
 # panel's line is PANEL_NO's, which SCRATCH_NO never matched — the FAIL ended at «:»)
 pw_said() { printf '%s\n' "$1" | grep -Eo -- "($SCRATCH_NO|$PANEL_NO)[^│]*" | head -n 1 | sed 's/ *$//'; }
 place_wait() {
   local deadline open0='' open_end=0 eta last_eta='' v
-  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_LSERR='' PW_SAID=''
+  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_LSERR='' PW_SAID='' PW_BEFORE=''
   if thin_is; then
+    # the keys before ⚡: the new session is the one that was not there (#3464);
+    # a list that cannot be read leaves PW_BEFORE empty — then by name, as before
+    PW_BEFORE=''
+    if as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_keys > "$RUN/$3-before.keys"; then
+      PW_BEFORE="$RUN/$3-before.keys"
+    fi
     thin_open "$1" "$3" || { PW_K=nopanel; return 0; }
   else
     keys C-b c
@@ -849,13 +858,19 @@ home_check() {
   [ -n "$HOME_M" ] || return 0
   deadline=$((SECONDS + STEP_SECS)); r=''
   while [ -z "$r" ] && [ "$SECONDS" -lt "$deadline" ]; do
-    r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls-home.json" | ls_row "$1")
+    r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls-home.json" | ls_row "$1" "$PW_BEFORE")
     [ -n "$r" ] || sleep "$POLL"
   done
   node=$(printf '%s' "$r" | cut -f1)
   if [ -z "$r" ]; then
     row "列表里有 $1，但 fleet ls 里没有" "等" "是 — 看不出会话开在哪台"
     failstep scratch "--home $HOME_M: no row $1 in \`fleet ls --json\` ($(head -c 160 "$RUN/ls.err")) — cannot tell where it runs"; return 1
+  fi
+  if [ "$node" = - ]; then
+    # a row of the listing machine's own carries no node unless the list names it
+    # by the hub's #me (issue #3464) — say that, never «runs on -»
+    row "列表里有 $1（$(printf '%s' "$r" | cut -f2)），但没写它在哪台机器" "等" "是 — 看不出会话开在哪台"
+    failstep scratch "--home $HOME_M: the row $1 ($(printf '%s' "$r" | cut -f2)) names no machine in \`fleet ls --json\` — the listing machine's own row, unnamed (fleet ls older than #3464?)"; return 1
   fi
   if ! same_machine "$node" "$HOME_M"; then
     row "会话开在 ${node}，不是 --home $HOME_M" "等" "是 — 演练指定的机器没用上"
