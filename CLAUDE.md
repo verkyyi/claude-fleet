@@ -408,6 +408,15 @@ Do not install from memory: read the doc and work from it.
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
+- **A draft-only ticket lands only after an approval** (issue #3715,
+  docs/DRAFT-PR.md). `<!-- fleet:draft-only -->` in the issue body (the filer's
+  `--draft` / `--pr-note`, the `file_issue` · `task` · `spawn` tools' `draft` /
+  `pr_note`, `fleet-draft.sh mark`) makes the brief print a `draft-only` section:
+  the worker opens a DRAFT PR, reports `waiting` and stops; `fleet-pr-merge.sh`
+  asks `fleet-draft.sh gate` after a READY verdict and refuses (`DRAFT-ONLY`, exit
+  1) until `fleet-draft.sh approve <N>` (ready + stamp + the worker told);
+  `reject <N> --reason` closes the PR. `bin/fleet-draft.sh` is the mark's one
+  reader / writer; no mark ⇒ byte for byte as before. `fleet-draft-selftest.sh`.
 - **A custom session is ONE standard agent file** (issue #3122, EPIC #3111 C11).
   A spawn names it — `--as <name>` on `dash-issue-session.sh` / `dash-raw-session.sh`,
   the `spawn` tool's `agent` — and `bin/fleet-agent-def.py` (the one reader) finds

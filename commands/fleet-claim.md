@@ -380,6 +380,18 @@ override them):
      landed worktree; a follow-up gets its own issue (filed, never spawned —
      the three moves above). And don't make your merge *live*: no
      `/fleet-sync-install` from a worker — next bullet.
+- **A draft-only ticket stops at the draft** (issue #3715). When the brief prints
+  a `draft-only` section with `draft: WAITING`, the finish line moves: steps 1–4
+  as above, but open the PR with `gh pr create --draft`, put the brief's
+  `pr body must carry` lines into the body verbatim (next to `Closes #<issue>`),
+  then **`mcp__fleet__report`** with `state: waiting`, `pr`, `summary` (the PR
+  link and one line on what it does) — and stop. Never `gh pr ready`, never
+  `pr_merge`: it answers `DRAFT-ONLY` until someone runs
+  `fleet-draft.sh approve <issue>`. The approval arrives as your next turn
+  (「批准（草稿单）…」): then step 5 as usual — `pr_verdict` `wait: true`,
+  `pr_merge`, `report merged`. A rejection (「拒绝（草稿单）…」) closed the PR:
+  note it and stop. Your window is not reaped while the draft is open
+  (`@reap_policy merged`).
 - **Merged is not live, and making it live is not yours** (issue #953). Never run
   `/fleet-sync-install` — nor `bin/fleet-install-apply.sh` or
   `fleet-sync-logins.sh` by hand — from a worker: not after your own merge, not to

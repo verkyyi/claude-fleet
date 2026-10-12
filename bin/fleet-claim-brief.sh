@@ -239,6 +239,29 @@ else
   fi
 fi
 
+# ------------------------------------------------------- draft-only (issue #3715)
+# A ticket whose body carries the draft-only mark changes the finish line: a DRAFT
+# PR, `report waiting`, stop. Read off the issue text already printed above — no
+# second read. Absent ⇒ nothing printed, byte for byte as before.
+_itext="${cached_body:-${body:-}}"
+case "$_itext" in
+  *'<!-- fleet:draft-only'*)
+    _dscan=$(printf '%s\n' "$_itext" | bash "$BIN/fleet-draft.sh" scan 2>/dev/null)
+    _dst=$(printf '%s\n' "$_dscan" | head -1)
+    printf '\n===== draft-only · this ticket waits for approval (issue #3715) =====\n'
+    case "$_dst" in
+      approved) printf 'draft: APPROVED — land it by the normal gate (pr_verdict → pr_merge), then report merged.\n' ;;
+      rejected) printf 'draft: REJECTED — the PR was closed; read the reason on the issue, do not reopen it.\n' ;;
+      *)        printf 'draft: WAITING — open the PR as a DRAFT (gh pr create --draft), take the after-evidence,\n'
+                printf '       then report state=waiting with the PR link, and STOP. Never gh pr ready, never merge:\n'
+                printf '       pr_merge refuses it (DRAFT-ONLY) until `fleet-draft.sh approve %s`.\n' "$issue" ;;
+    esac
+    _dnote=$(printf '%s\n' "$_dscan" | sed '1d')
+    if [ -n "$_dnote" ]; then
+      printf 'pr body must carry, verbatim:\n%s\n' "$_dnote"
+    fi ;;
+esac
+
 # ------------------------------------------------------- charter + directive
 # Both used to be their own steps, and a worker could (and did — #454) skip them.
 # Emitted here unconditionally: no separate call left to forget.
