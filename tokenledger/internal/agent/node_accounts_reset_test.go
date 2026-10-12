@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/octo-admin/claude-fleet/tokenledger/internal/control"
 )
 
 // claude-fleet#3504: a reset runs the remove script's --recycle mode with its
@@ -78,7 +78,7 @@ func TestRecycleCapableNeedsTheMode(t *testing.T) {
 	if err := validateAccountOp(control.AccountOp{Op: control.AccountRemove, Login: "alice", JoinCode: "fj_abcdefghijklmnopqrstuvwxyz"}, ""); err == nil {
 		t.Fatal("a remove with a join code was accepted")
 	}
-	if err := validateAccountOp(control.AccountOp{Op: control.AccountReset, Login: "verkyyi"}, "verkyyi"); err == nil {
+	if err := validateAccountOp(control.AccountOp{Op: control.AccountReset, Login: "octo-admin"}, "octo-admin"); err == nil {
 		t.Fatal("a reset of the agent's own login was accepted")
 	}
 	if err := validateLinuxAccountOp(control.AccountOp{Op: control.AccountReset, Login: "alice"}, "fleetsvc"); err == nil {

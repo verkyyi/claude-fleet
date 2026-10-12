@@ -17,7 +17,7 @@
 #      (claude-fleet#2261); --list / --revoke <id>
 #   M  fleet hub machines → GET /v1/nodes; 备用 N · 已用 M / 上限 K while spares are
 #      on, a hint while off; fleet hub accounts lists spares apart (claude-fleet#2263)
-#   N  fleet hub accounts assign zx --host fleet-linux-0 --login zx → POST {assign};
+#   N  fleet hub accounts assign zx --host node-x --login zx → POST {assign};
 #      prints `login · host · state · credsep`; a --login that is not theirs →
 #      exit 2, nothing sent; remove → POST {remove}, --delete adds delete: true
 #      (claude-fleet#3504); the list carries
@@ -90,9 +90,9 @@ class H(BaseHTTPRequestHandler):
             return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""},
                                                     {"principal_id": "old", "login": "old", "display_name": "Old"}],
                                      "accounts": [{"principal_id": "zx", "hostname": "macmini", "login": "zx", "state": "active"},
-                                                  {"principal_id": "zx", "hostname": "fleet-linux-0", "login": "zxw", "state": "active",
+                                                  {"principal_id": "zx", "hostname": "node-x", "login": "zxw", "state": "active",
                                                    "detail": "prepared tenant zxw\ncredsep: separated\n"}],
-                                     "logins": {"zx": [{"hostname": "fleet-linux-0", "login": "zxw", "state": "active", "home": True, "kind": "node"},
+                                     "logins": {"zx": [{"hostname": "node-x", "login": "zxw", "state": "active", "home": True, "kind": "node"},
                                                        {"hostname": "macmini", "login": "zx", "state": "active", "kind": "node"},
                                                        {"hostname": "zx-mac", "login": "zhangxu", "state": "pending", "kind": "client"}]},
                                      "spares": [{"principal_id": "spare:macmini:abcd1234", "login": "flk2m9qa",
@@ -240,7 +240,7 @@ l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
    && [ "$(field "$r" body)" = '{"action": "rekey", "principal_id": "zx", "to_principal_id": "4001"}' ] \
    && grep -q '已把 zx（macmini、mini2）从旧身份 zx 转给 gh:4001' "$WORK/out" \
-   && printf '%s\n' "$l" | grep -q '^zx  *-  *fleet-linux-0 · zxw (active, 家, 服务节点, separated)$' \
+   && printf '%s\n' "$l" | grep -q '^zx  *-  *node-x · zxw (active, 家, 服务节点, separated)$' \
    && printf '%s\n' "$l" | grep -q '^  *macmini · zx (active, 服务节点)$' \
    && printf '%s\n' "$l" | grep -q '^  *zx-mac · zhangxu (pending, 客户端)$' \
    && printf '%s\n' "$l" | grep -q '^old  *Old  *-$' \
@@ -267,20 +267,20 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
 else bad "K2 rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # N — fleet hub accounts assign / remove on a Linux managed machine (claude-fleet#3210)
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host fleet-linux-0 --login zx >"$WORK/out" 2>"$WORK/err"; rc=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host node-x --login zx >"$WORK/out" 2>"$WORK/err"; rc=$?
 r=$(last)
 n1=$(wc -l <"$LOG")
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host fleet-linux-0 --login 24haowan >"$WORK/out2" 2>"$WORK/err2"; rc2=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assign zx --host node-x --login 24haowan >"$WORK/out2" 2>"$WORK/err2"; rc2=$?
 n2=$(wc -l <"$LOG")
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 >"$WORK/out3" 2>&1; rc3=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host node-x >"$WORK/out3" 2>&1; rc3=$?
 r3=$(last)
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 --delete >"$WORK/out4" 2>&1; rc4=$?
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host node-x --delete >"$WORK/out4" 2>&1; rc4=$?
 r4=$(last)
-if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "fleet-linux-0", "own_name": true}' ] \
-   && grep -q '^zx · fleet-linux-0 · pending · -$' "$WORK/out" \
+if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "node-x", "own_name": true}' ] \
+   && grep -q '^zx · node-x · pending · -$' "$WORK/out" \
    && [ "$rc2" = 2 ] && [ "$((n2 - n1))" = 1 ] && grep -q 'relogin' "$WORK/err2" \
-   && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0"}' ] \
-   && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0", "delete": true}' ]; then
+   && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "node-x"}' ] \
+   && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "node-x", "delete": true}' ]; then
   ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare; remove --delete ⇒ delete: never recycled, #3504); a --login not theirs is refused before the POST"
 else bad "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 

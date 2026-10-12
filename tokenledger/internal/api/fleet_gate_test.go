@@ -74,7 +74,7 @@ func TestGateHubJudgesBothWays(t *testing.T) {
 	if ok, _ := judge("cloud-perms", nil); ok {
 		t.Fatal("cloud-perms outside a cluster passed")
 	}
-	env["KUBERNETES_SERVICE_HOST"] = "10.0.0.1"
+	env["KUBERNETES_SERVICE_HOST"] = "kubernetes.default.svc"
 	os.WriteFile(gateSATokenPath, []byte("t"), 0o600)
 	if ok, why := judge("cloud-perms", nil); ok || !strings.Contains(why, "服务账号令牌") {
 		t.Fatalf("cloud-perms, token mounted: %v %s", ok, why)
@@ -138,18 +138,18 @@ func TestGateNodeFold(t *testing.T) {
 func TestGateEndpoints(t *testing.T) {
 	useRepoGateTable(t)
 	h, user, _ := credsepHarness(t)
-	beat := control.Heartbeat{Hostname: "m4", OSUser: "carol", ObservedAt: time.Now(),
+	beat := control.Heartbeat{Hostname: "node-a", OSUser: "carol", ObservedAt: time.Now(),
 		Gate: []control.GateItem{{ID: "root-core", Pass: true, Why: "ok"}, {ID: "node-daemon", Pass: false, Why: "root: fleet-node-supervisor.py"}, {ID: "admin-seat", Pass: true}}}
 	ep, err := h.srv.Store.EndpointByTokenHash(HashToken(user))
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if err := h.srv.Store.NodeConnected(ep.ID, "m4", "carol", "test", control.Proto, 60000, now); err != nil {
+	if err := h.srv.Store.NodeConnected(ep.ID, "node-a", "carol", "test", control.Proto, 60000, now); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(beat)
-	if err := h.srv.Store.NodeHeartbeat(ep.ID, "m4", "carol", "", control.Proto, string(raw), now); err != nil {
+	if err := h.srv.Store.NodeHeartbeat(ep.ID, "node-a", "carol", "", control.Proto, string(raw), now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestGateEndpoints(t *testing.T) {
 	for _, it := range all.Items {
 		byID[it.ID] = it
 	}
-	if !byID["root-core"].Pass || byID["node-daemon"].Pass || !strings.Contains(byID["node-daemon"].Why, "m4") {
+	if !byID["root-core"].Pass || byID["node-daemon"].Pass || !strings.Contains(byID["node-daemon"].Why, "node-a") {
 		t.Fatalf("node items: %+v / %+v", byID["root-core"], byID["node-daemon"])
 	}
 
