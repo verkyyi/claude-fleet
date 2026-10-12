@@ -234,6 +234,15 @@ fleet-cred-policy.sh clear node fleet-linux-0   # unconfigured: denied in strict
 fleet-cred-policy.sh show
 ```
 
+A `set` that would leave its machine or person **no** subscription of a provider
+it has now (its last Claude, or its last Codex) is refused — 409, the list
+unchanged, the lost accounts named (CLI exit 5); `set --force` writes it anyway,
+and the web editor asks before it forces. `deny` / `clear` mean «none» on purpose
+and are never refused for it. A session whose every account is refused names the
+list that refused each one (`pool/icloud — not in machine <name>'s allowlist`). Issue #3713: one
+narrowing took a Linux machine's only Claude
+subscription, and its person's sessions all failed without saying which list.
+
 Administrators configure access on **Users → user detail** or **Machines →
 machine detail**. Each object has three choices: **Unauthorized**, **Selected
 subscriptions**, and **All subscriptions** (including future additions).

@@ -29,6 +29,8 @@
 #                              bin/fleet-login-new.sh 7b (issue #3155)
 #   cred-managed-unseparated   bin/fleet-credsep.py check / machine managed / --logins managed,
 #                              bin/fleet-doctor.sh credsep · credsep-all rows (issue #3700)
+#   cred-sep-codex-failover-pin  bin/fleet-codex.sh (_fx_sep: no local profile pin through the
+#                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -540,6 +542,25 @@ drill_cred_managed_unseparated() {
   [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credsep-managed: OK' \
     || { WHY="every managed login separated, yet the machine row is not OK (rc $rc): $out"; return 1; }
   WHAT="托管登录没做凭据隔离：check 与整机 credsep-managed 行都是 FAIL 并点名、给出一条修法；machine install --logins managed 之后 node.env 进了隔离库，整机行转 OK"
+}
+
+# ---- cred-sep-codex-failover-pin (#3713): a separated login's Codex keeps no
+# login of its own — the role account's proxy mints for it — but FLEET_FAILOVER=1
+# (the hub pool's default) made fleet-codex.sh pin a local profile first, and
+# every warm / new Codex of a separated login on a Linux managed machine died «Codex profile needs a
+# verified subscription login: default (no account on the login)». Leg I of
+# session-cred-selftest launches one separated under failover (no pin) and one
+# unseparated (the pin still runs).
+drill_cred_sep_codex_failover_pin() {
+  CAP=60; local t0 out
+  t0=$(now)
+  grep -q '_fx_sep' "$BIN/fleet-codex.sh" || { WHY="fleet-codex.sh no longer skips the pin for a separated login"; return 1; }
+  out=$(bash "$BIN/session-cred-selftest.sh" 2>&1)
+  printf '%s\n' "$out" | grep -q '^PASS I: separated + failover — no local profile pin$' \
+    && printf '%s\n' "$out" | grep -q '^PASS I: unseparated + failover — the pin still runs' \
+    || { WHY="session-cred-selftest leg I: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|I:' | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="隔离登录在 FLEET_FAILOVER=1 下开 Codex：不钉本地 profile、直接经代理铸凭据；未隔离的照旧钉"
 }
 
 cred_run_drills "$0"

@@ -58,14 +58,21 @@ export function policyPayload(scope, id, mode, selected) {
 }
 const fingerprint = (entry) => JSON.stringify(entry ? { all: !!entry.all, allow: [...entry.allow].sort(), error: entry.error || '' } : null);
 
-export async function savePolicy(api, before, payload) {
+export async function savePolicy(api, before, payload, ask = globalThis.confirm) {
   const latest = await api(POLICY_PATH);
   if (fingerprint(policyEntry(latest, payload.scope, payload.id)) !== fingerprint(before)) {
     throw new Error(t('ui.policy.changed'));
   }
   // The API has no revision token: this detects changes before saving, but
   // is not an atomic compare-and-set across simultaneous administrators.
-  return api(POLICY_PATH, { method: 'PUT', json: payload });
+  try {
+    return await api(POLICY_PATH, { method: 'PUT', json: payload });
+  } catch (err) {
+    // A list that takes a provider's last subscription away is refused until
+    // the administrator says so (claude-fleet#3713): ask, then write it forced.
+    if (err?.status !== 409 || !/would keep no/.test(err.message) || typeof ask !== 'function' || !ask(err.message)) throw err;
+    return api(POLICY_PATH, { method: 'PUT', json: { ...payload, force: true } });
+  }
 }
 
 export function effectiveHTML(effective) {
