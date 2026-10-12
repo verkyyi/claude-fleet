@@ -20,10 +20,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
 
 # seats_sandbox <dir> — a managed machine: the daemon's unit, two people (alice, a
-# tenant; verkyyi, an admin), the fleet's role accounts, a clean process table
+# tenant; bob, an admin), the fleet's role accounts, a clean process table
 seats_sandbox() {
   local sb="$1"
-  mkdir -p "$sb/db" "$sb/LaunchDaemons" "$sb/Users/alice" "$sb/Users/verkyyi"
+  mkdir -p "$sb/db" "$sb/LaunchDaemons" "$sb/Users/alice" "$sb/Users/bob"
   cat > "$sb/LaunchDaemons/com.claude-fleet.node.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>Label</key><string>com.claude-fleet.node</string>
@@ -32,7 +32,7 @@ seats_sandbox() {
 EOF
   cat > "$sb/passwd.json" <<EOF
 {"alice": {"uid": 501, "gid": 20, "home": "$sb/Users/alice"},
- "verkyyi": {"uid": 502, "gid": 20, "home": "$sb/Users/verkyyi", "groups": ["admin"]},
+ "bob": {"uid": 502, "gid": 20, "home": "$sb/Users/bob", "groups": ["admin"]},
  "_fleetnode": {"uid": 451, "gid": 451, "home": "/var/empty"},
  "_fleetcred": {"uid": 499, "gid": 499, "home": "/var/empty"}}
 EOF
@@ -87,14 +87,14 @@ EOF
   seats "$sb"
   [ "$RC" = 0 ] || { WHY="gone again, still red (rc $RC): $OUT"; return 1; }
   # 3. the admin agent under the admin's own login: WARN before _fleetadmin, FAIL after
-  cat > "$sb/LaunchDaemons/com.ccquota.agent.verkyyi.plist" <<'EOF'
+  cat > "$sb/LaunchDaemons/com.ccquota.agent.bob.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>Label</key><string>com.ccquota.agent.verkyyi</string>
-<key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>-I</string><string>/Library/Application Support/claude-fleet/credsep/fleet-credsep-launch.py</string><string>agent</string><string>verkyyi</string></array>
+<plist version="1.0"><dict><key>Label</key><string>com.ccquota.agent.bob</string>
+<key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>-I</string><string>/Library/Application Support/claude-fleet/credsep/fleet-credsep-launch.py</string><string>agent</string><string>bob</string></array>
 </dict></plist>
 EOF
   seats "$sb"
-  [ "$RC" = 3 ] && printf '%s' "$OUT" | grep -q 'verkyyi: 管理员 agent' \
+  [ "$RC" = 3 ] && printf '%s' "$OUT" | grep -q 'bob: 管理员 agent' \
     || { WHY="the admin agent before _fleetadmin: rc $RC (want the WARN, 3): $OUT"; return 1; }
   python3 - "$sb/passwd.json" <<'PY'
 import json, sys
@@ -102,9 +102,9 @@ p = json.load(open(sys.argv[1])); p["_fleetadmin"] = {"uid": 452, "gid": 452, "h
 json.dump(p, open(sys.argv[1], "w"))
 PY
   seats "$sb"
-  [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'verkyyi: 管理员 agent（.*com.ccquota.agent.verkyyi.plist' \
-    || { WHY="the admin agent under verkyyi once _fleetadmin exists: rc $RC: $OUT"; return 1; }
-  rm "$sb/LaunchDaemons/com.ccquota.agent.verkyyi.plist"
+  [ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'bob: 管理员 agent（.*com.ccquota.agent.bob.plist' \
+    || { WHY="the admin agent under bob once _fleetadmin exists: rc $RC: $OUT"; return 1; }
+  rm "$sb/LaunchDaemons/com.ccquota.agent.bob.plist"
   seats "$sb"
   SECS=$(since "$t0")
   [ "$RC" = 0 ] || { WHY="every way closed, still red (rc $RC): $OUT"; return 1; }
