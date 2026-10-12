@@ -511,7 +511,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   the one bookkeeping). Off = no BROWSER, no cport, byte for byte.
   `fleet-browser-selftest.sh`.
 - **A person talks to ONE conversation from a browser: `bin/fleet-webchat.sh`**
-  (issue #3567, docs/WEB-CHAT.md). `extras/web-chat/server.mjs` runs the Claude
+  (issue #3567, docs/dev/WEB-CHAT.md). `extras/web-chat/server.mjs` runs the Claude
   Agent SDK as the login — by default as the login's registered service
   (`enable` / `serve`, issue #3643) listening ONLY on `webchat/chat.sock` (0600,
   dir 0700; no TCP, no cookie, no admin.token — the node's relay is the way in;

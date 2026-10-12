@@ -5,7 +5,7 @@
 # proxy (a session credential from fleet-session-cred.sh, like any fleet session).
 #
 # The road (issue #3643, EPIC #3642): the server is a registered service of this
-# login (docs/MANAGED-NODE.md §10) listening only on the unix socket
+# login (docs/dev/MANAGED-NODE.md §10) listening only on the unix socket
 # $FLEET_CONF_DIR/webchat/chat.sock (0600, its dir 0700) — the node program's
 # relay (C2) is what reaches it. No TCP port, no login link, no admin.token.
 #
