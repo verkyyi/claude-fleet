@@ -19,5 +19,5 @@ fleet 让一个小团队用自己的 AI 订阅（Claude Code、Codex）同时推
 
 ## 其余篇目
 
-- [安装与部署](self-host/install.md) · [管理员手册](hosted/admin.md) · [日常使用](member/usage.md)
+- [安装与部署](self-host/install.md) · [管理员手册](admin/index.md) · [日常使用](member/usage.md)
 - [常见问题](faq.md) · [故障排查](troubleshooting.md) · [安全与隔离](security.md)
