@@ -50,6 +50,11 @@
 #      stays and still serves it; the narrowed login is not served it; a session
 #      the proxy had picked onto the withdrawn account moves to one still held;
 #      the file nobody names any more is gone; no token in the log
+#   V  a subscription the hub dropped stops being served (issue #3744): a 401 on the
+#      picked account runs the same request on the next one; the agent's `prune`
+#      (its whole lease) takes an account the lease no longer lists out of that
+#      login at once, its sessions move, another login keeps it; a paused one
+#      takes no new session
 #   N  a login just opened (install --fresh, fleet-login-new.sh 7b) on a machine running
 #      the shared proxy joins it as a tenant; with none it gets its own, as before (#3155)
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
@@ -89,7 +94,17 @@ class H(BaseHTTPRequestHandler):
     def any(self):
         n = int(self.headers.get("content-length") or 0)
         if n: self.rfile.read(n)
-        b = json.dumps({"auth": self.headers.get("authorization", "")}).encode()
+        auth = self.headers.get("authorization", "")
+        try:    # leg V (issue #3744): a token the provider revoked answers 401
+            dead = [x for x in open(sys.argv[2]).read().split() if x]
+        except OSError:
+            dead = []
+        if any(x in auth for x in dead):
+            b = json.dumps({"type": "error", "error": {"type": "authentication_error",
+                            "message": "OAuth token revoked"}}).encode()
+            self.send_response(401); self.send_header("content-length", str(len(b)))
+            self.end_headers(); self.wfile.write(b); return
+        b = json.dumps({"auth": auth}).encode()
         self.send_response(200); self.send_header("content-length", str(len(b)))
         # the account's windows on every answer, as Anthropic sends them (leg Q, issue #2412)
         self.send_header("anthropic-ratelimit-unified-5h-utilization", "0.1")
@@ -100,7 +115,7 @@ s = ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(sys.argv[1], "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
-python3 "$SB/fake.py" "$SB/fake.port" & echo $! > "$SB/fake.pid"
+python3 "$SB/fake.py" "$SB/fake.port" "$SB/fake.401" & echo $! > "$SB/fake.pid"
 for _ in $(seq 1 300); do [ -s "$SB/fake.port" ] && break; sleep 0.1; done
 FP=$(cat "$SB/fake.port")
 export FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$FP"
@@ -382,6 +397,54 @@ store "$CA" - claude "$X" "$XT" >/dev/null 2>&1
 store "$CB" "$BUID" claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
 FLEET_CONF_DIR="$CA" bash "$BIN/fleet-session-cred.sh" revoke --sid u1 >/dev/null 2>&1
 [ "$(pool_n claude)" = "$P0" ] && pass "U restored for the legs after" || fail "U restore: $(pool_n claude)"
+
+# ── V: a subscription the hub dropped stops being served (issue #3744) ──────────────
+# V1 the provider answers 401 for the account a session was picked onto: the same
+#    request runs on the next account the login holds — never a 401 the session can
+#    only answer with /login; V2 the agent hands the proxy its whole lease (`prune`):
+#    an account the lease no longer lists leaves this login's index at once, a
+#    session on it moves, the other login keeps it; a paused one takes no new session
+out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 FLEET_SESSION_WRAP=$$ bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid v1 2>&1)
+TV=$(printf '%s' "$out" | cut -f3); r1=$(call "$PORT" "$TV")
+case "$r1" in *sk-ant-oat01-alpha*) X=main XT=sk-ant-oat01-alpha OT=sk-ant-oat01-pool-v2 ;;
+  *sk-ant-oat01-pool-v2*) X=pool1 XT=sk-ant-oat01-pool-v2 OT=sk-ant-oat01-alpha ;; *) X='' ;; esac
+printf '%s\n' "$XT" > "$SB/fake.401"
+# (the fake reads every account 99% full, so the pick moves each request: three
+# requests are sure to land one on the refused account)
+r2=$(call "$PORT" "$TV"; call "$PORT" "$TV"; call "$PORT" "$TV")
+[ -n "$X" ] && [ "$(printf '%s' "$r2" | grep -o "$OT" | wc -l | tr -d ' ')" = 3 ] \
+  && grep -q '"ev": "acct_switch".*"why": "401"' "$SB/log/alpha.log" \
+  && pass "V1 $X answered 401: the same request ran on the other account, the session never saw the 401" \
+  || fail "V1 401 on $X: $r1 → $r2"
+: > "$SB/fake.401"
+ctl_prune() { # <peer uid> <json keep> [json paused]
+  python3 - "$SB/run/.shared/ctl.sock" "$1" "$2" "${3:-"{}"}" <<'PY'
+import json, os, socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+req = {"op": "prune", "keep": json.loads(sys.argv[3]), "paused": json.loads(sys.argv[4])}
+s.sendall((json.dumps(req) + "\n").encode()); print(s.makefile().readline().strip())
+PY
+}
+out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 FLEET_SESSION_WRAP=$$ bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid v2 2>&1)
+TV2=$(printf '%s' "$out" | cut -f3); call "$PORT" "$TV2" >/dev/null
+res=$(ctl_prune "$MYUID" '{"claude":["main"],"codex":["default"]}'); r3=$(call "$PORT" "$TV2")
+case "$res" in *'"gone": ["claude:pool1"]'*) true ;; *) false ;; esac \
+  && ! grep -qs '"claude:pool1"' "$SB/db/alpha/cred-proxy/pool.json" && grep -qs '"claude:pool1"' "$SB/db/beta/cred-proxy/pool.json" \
+  && case "$r3" in *sk-ant-oat01-alpha*) true ;; *) false ;; esac \
+  && case "$(call "$PORT" "$TP")" in *sk-ant-oat01-pool-v2*) false ;; *) true ;; esac \
+  && pass "V2 prune: pool1 (not in alpha's lease) gone from alpha at once — its sessions on main, beta keeps it ($res)" \
+  || fail "V2 prune: $res · r3=$r3 · $(cat "$SB/db/alpha/cred-proxy/pool.json" 2>/dev/null)"
+res=$(ctl_prune "$MYUID" '{"claude":["main"],"codex":["default"]}')
+case "$res" in *'"gone": []'*) pass "V2 the same lease again: nothing more goes" ;; *) fail "V2 again: $res" ;; esac
+store "$CA" - claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
+ctl_prune "$MYUID" '{"claude":["main","pool1"],"codex":["default"]}' '{"claude":["main"]}' >/dev/null
+out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 FLEET_SESSION_WRAP=$$ bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid v3 2>&1)
+r4=$(call "$PORT" "$(printf '%s' "$out" | cut -f3)")
+case "$r4" in *sk-ant-oat01-pool-v2*) pass "V2 main paused: a new session is picked onto pool1" ;; *) fail "V2 paused: $r4" ;; esac
+ctl_prune "$MYUID" '{"claude":["main","pool1"],"codex":["default"]}' >/dev/null
+for s in v1 v2 v3; do FLEET_CONF_DIR="$CA" bash "$BIN/fleet-session-cred.sh" revoke --sid "$s" >/dev/null 2>&1; done
+[ "$(pool_n claude)" = "$P0" ] && ! grep -q 'sk-ant-' "$SB/log/alpha.log" "$SB/log/shared.log" 2>/dev/null \
+  && pass "V restored for the legs after, no token in a log" || fail "V restore: $(pool_n claude)"
 
 # ── D: no login reaches another's ────────────────────────────────────────────────
 out=$(FLEET_CRED_AS=beta FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid x 2>&1); rc=$?

@@ -728,6 +728,9 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 			return http.StatusInternalServerError, err.Error()
 		}
 		s.settingAudit(actor, key, settings[key], stored, now)
+		if settings[key] != stored {
+			s.BroadcastCreds("pool pause") // no node starts a new session there (#3744)
+		}
 		return http.StatusOK, ""
 	}
 	if who, ok := langKeyPerson(key); ok {

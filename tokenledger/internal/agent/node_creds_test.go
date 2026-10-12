@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"io"
 	"io/fs"
 	"log"
@@ -453,5 +454,73 @@ func TestCredSummaryCountsAndLogsOnChange(t *testing.T) {
 	a.logCredSummary("leased claude=1 codex=0 github=0")
 	if n := strings.Count(buf.String(), "credentials: leased"); n != 2 {
 		t.Fatalf("a change is logged again:\n%s", buf.String())
+	}
+}
+
+// TestCredCyclePrunesWhatTheHubDropped (claude-fleet#3744): a subscription the
+// hub deleted is simply absent from the next lease — never in Withdrawn — and
+// its copy goes; one the hub still names but could not lease this time stays,
+// and so does a token the person stored by hand.
+func TestCredCyclePrunesWhatTheHubDropped(t *testing.T) {
+	home := t.TempDir()
+	acct := filepath.Join(home, ".config", "claude-fleet", "accounts")
+	mk := func(p, body string) {
+		t.Helper()
+		_ = os.MkdirAll(filepath.Dir(p), 0o700)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, l := range []string{"icloud", "flaky", "kept"} {
+		mk(filepath.Join(acct, l+".hub", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}`)
+		mk(filepath.Join(acct, l), "hub:"+l+"\n")
+	}
+	mk(filepath.Join(acct, "mine"), "sk-ant-oat01-HANDSTORED\n")
+	hubCx := filepath.Join(home, ".codex-accounts", "gonecx", "auth.json")
+	mk(hubCx, `{"tokens":{"access_token":"a","refresh_token":"`+CodexRefreshPlaceholder+`"}}`)
+	ownCx := filepath.Join(home, ".codex", "auth.json")
+	mk(ownCx, `{"tokens":{"access_token":"a","refresh_token":"rt-own"}}`)
+
+	exp := time.Now().Add(8 * time.Hour).UTC().Format(time.RFC3339)
+	body := `{"principal_id":"p","credentials":[
+	 {"provider":"claude","account":"kept","pool":true,"expires_at":"` + exp + `","access":{"access_token":"sk-ant-oat01-new"}},
+	 {"provider":"claude","account":"flaky","pool":true,"error":"refresh failed"}]}`
+	a := credAgent(fakeVaultHub(t, 200, body), home)
+	if _, err := a.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]bool{
+		filepath.Join(acct, "icloud.hub"): false, filepath.Join(acct, "icloud"): false,
+		filepath.Join(acct, "flaky.hub"): true, filepath.Join(acct, "flaky"): true,
+		filepath.Join(acct, "kept.hub"): true, filepath.Join(acct, "kept"): true,
+		filepath.Join(acct, "mine"): true, hubCx: false, ownCx: true,
+	} {
+		if _, err := os.Stat(p); (err == nil) != want {
+			t.Errorf("%s exists=%v, want %v", p, err == nil, want)
+		}
+	}
+}
+
+// TestCredKickCutsTheWait (claude-fleet#3744): the hub's TypeCreds ends the
+// lease loop's wait at once; a second push before the lease is the same one.
+func TestCredKickCutsTheWait(t *testing.T) {
+	a := &Agent{cfg: Config{FleetCreds: true}}
+	m, _ := control.New(control.TypeCreds, control.Creds{Why: "credential delete"})
+	a.handleCreds(m)
+	a.handleCreds(m)
+	done := make(chan bool, 1)
+	go func() { done <- a.waitCredLease(context.Background(), time.Hour) }()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("waitCredLease said the context ended")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a TypeCreds push did not cut the wait")
+	}
+	select {
+	case <-a.credKickCh():
+		t.Fatal("two pushes queued two leases")
+	default:
 	}
 }

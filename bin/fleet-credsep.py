@@ -2388,6 +2388,93 @@ def pool_sync_line(st):
     return t
 
 
+# ---- one proxy per machine (issue #3744) ----------------------------------------------
+# A machine on the shared proxy runs ONE credential proxy: every login a tenant. A
+# second one — a login's own separated proxy left from before the join, a login's
+# unseparated per-login proxy — holds its own copy of the pool and its own picks:
+# on 2026-10-12 one kept a subscription the hub had deleted, and six sessions
+# stopped at «OAuth token revoked · Please run /login». `machine proxies` reads
+# the process table (anyone may): the doctor's `credproxy` row.
+PS_SEAM = E("FLEET_CREDSEP_PS", "")      # a file holding `ps -axo pid=,user=,args=` (selftest)
+
+
+def proxy_procs():
+    """-> [{pid, user, kind: shared|own|login, login}] of every credential proxy an
+    install runs here — the root lib's, or a login's ~/.claude/fleet; a worktree's
+    or a sandbox's test copy is nobody's proxy and is not counted."""
+    if PS_SEAM:
+        text = open(PS_SEAM).read()
+    else:
+        try:
+            text = subprocess.run(["ps", "-axo", "pid=,user=,args="], capture_output=True, text=True,
+                                  timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+    runs = {}
+    for d in sorted(os.listdir(RUN_BASE)) if os.path.isdir(RUN_BASE) else []:
+        try:
+            runs[int(open(os.path.join(RUN_BASE, d, "pid")).read().strip())] = d
+        except (OSError, ValueError):
+            pass
+    lib = os.path.join(LIB, "fleet-cred-proxy.py")
+    out = []
+    for line in text.splitlines():
+        f = line.split(None, 2)
+        if len(f) < 3 or not f[0].isdigit():
+            continue
+        pid, user, args = int(f[0]), f[1], f[2]
+        if "fleet-cred-proxy.py" not in args or not re.search(r"(^|\s)serve(\s|$)", args):
+            continue
+        path = lib if lib in args else next((t for t in args.split() if t.endswith("fleet-cred-proxy.py")), "")
+        if path != lib and not re.search(r"/\.claude/fleet(\.versions/[^/]+)?/bin/fleet-cred-proxy\.py$", path):
+            continue        # a worktree's / a sandbox's copy: a test, not a proxy of this machine
+        if "--shared" in args.split():
+            out.append({"pid": pid, "user": user, "kind": "shared", "login": ".shared"})
+        elif path == lib:
+            out.append({"pid": pid, "user": user, "kind": "own", "login": runs.get(pid, "?")})
+        else:
+            out.append({"pid": pid, "user": user, "kind": "login", "login": user})
+    return out
+
+
+def machine_proxies(a):
+    """Anyone: one doctor line, credproxy: OK|FAIL|INFO — … ; exit 0 OK/INFO, 1 FAIL."""
+    procs = proxy_procs()
+    if procs is None:
+        print("credproxy: INFO — cannot read the process table")
+        return 0
+    shared = [p for p in procs if p["kind"] == "shared"]
+    extra = [p for p in procs if p["kind"] != "shared"]
+    rec = shared_rec()
+    if a.json:
+        print(json.dumps({"shared": shared, "others": extra, "managed": managed_logins()}))
+    # the shared proxy's launcher may have a child serving too: one pid tree, one proxy
+    on_shared = bool(shared or rec)
+    if not procs:
+        if not a.json:
+            print("credproxy: INFO — no credential proxy runs here" + (" (the shared one is down)" if rec else ""))
+        return 0
+    if not on_shared and not managed_logins():
+        if not a.json:
+            print("credproxy: INFO — per-login proxies (no shared proxy on this machine): %s"
+                  % ", ".join("%s (pid %d)" % (p["login"], p["pid"]) for p in procs))
+        return 0
+    if not extra:
+        if not a.json:
+            print("credproxy: OK — one proxy on this machine: the shared one (pid %s, %d login(s))"
+                  % (",".join(str(p["pid"]) for p in shared), len((rec or {}).get("logins") or [])))
+        return 0
+    if not a.json:
+        fix = "sudo bash %s/fleet-credsep.sh machine install --logins managed" % HERE
+        print("credproxy: FAIL — %d credential prox%s besides the shared one: %s — each holds its own copy of the "
+              "subscriptions (one the hub deleted stays there, and its sessions get 401). Join them to the shared "
+              "proxy (one sudo): %s"
+              % (len(extra), "y" if len(extra) == 1 else "ies",
+                 ", ".join("%s %s (pid %d, %s)" % ({"own": "own proxy of", "login": "per-login proxy of"}[p["kind"]],
+                                                    p["login"], p["pid"], p["user"]) for p in extra), fix))
+    return 1
+
+
 # ---- every login on the machine -----------------------------------------------------
 def fleet_logins():
     """-> [(login, home, its fleet-credsep.sh)] of every login with a fleet
@@ -2892,7 +2979,7 @@ def main():
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
     mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup", "pool-sync",
-                                          "managed"))
+                                          "managed", "proxies"))
     mc.add_argument("--logins", default="all")
     mc.add_argument("--dry-run", action="store_true")
     mc.add_argument("--force", action="store_true")
@@ -2937,6 +3024,8 @@ def main():
             return machine_status(a)
         if a.verb == "managed":
             return machine_managed(a)
+        if a.verb == "proxies":
+            return machine_proxies(a)
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)

@@ -294,6 +294,21 @@ cannot be revoked at the provider by a list** — it lives until its own expiry
 (a Claude setup token: up to a year). To cut that short, revoke the machine or
 person (`/v1/fleet/credentials/revoke`) or rotate the subscription.
 
+**A subscription deleted, paused or revoked reaches every machine at once**
+(issue #3744). A lease is the hub's whole answer, and a deleted subscription is
+simply absent from it — never `withdrawn` — so a node used to keep its copy for
+good. Now the hub pushes `creds` (`control.TypeCreds`) to every node whose hello
+listed `CapCreds` the moment a credential is stored or deleted, a pool account
+paused or resumed, a revocation made or lifted; the agent leases at once and,
+after every successful lease, removes what the answer no longer lists
+(`pruneCreds`: on a separated login the proxy's `prune` — that login's index
+entry, own copy, picks and pins — and the paused accounts, which take no new
+session; else the `hub:` marker and a placeholder Codex home). A token the
+provider refuses anyway (401) is out of the proxy's pick for
+`FLEET_CRED_REJECT_HOLD` (900 s) and the same request runs on the login's next
+account. One credential proxy per machine: the doctor's `credproxy` row FAILs on
+any proxy beside the shared one (`fleet-credsep.sh machine proxies`).
+
 ## 3. Enroll the login with the hub (admin, on the hub)
 
 One enrollment per login. Name it `<machine>-<login>` so the hub's endpoint

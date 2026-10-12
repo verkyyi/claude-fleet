@@ -29,6 +29,10 @@
 #                              bin/fleet-login-new.sh 7b (issue #3155)
 #   cred-managed-unseparated   bin/fleet-credsep.py check / machine managed / --logins managed,
 #                              bin/fleet-doctor.sh credsep · credsep-all rows (issue #3700)
+#   cred-pool-delete-stale-proxy  bin/fleet-cred-proxy.py (prune · a 401 runs on the next
+#                              account), tokenledger agent pruneCreds + TypeCreds (issue #3744)
+#   cred-second-proxy          bin/fleet-credsep.py machine proxies, bin/fleet-doctor.sh
+#                              credproxy row (issue #3744)
 #   cred-sep-codex-failover-pin  bin/fleet-codex.sh (_fx_sep: no local profile pin through the
 #                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
@@ -561,6 +565,71 @@ drill_cred_sep_codex_failover_pin() {
     || { WHY="session-cred-selftest leg I: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|I:' | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="隔离登录在 FLEET_FAILOVER=1 下开 Codex：不钉本地 profile、直接经代理铸凭据；未隔离的照旧钉"
+}
+
+# ---- cred-pool-delete-stale-proxy (#3744): on 2026-10-12 the hub deleted a dead
+# pool subscription, but a login's own copy stayed — a lease only ever ADDED, and a
+# deleted account is simply absent from the next lease, never in Withdrawn — so the
+# proxy kept picking it and six sessions stopped at «OAuth token revoked · Please
+# run /login». Leg V of fleet-cred-shared-selftest drives the real shared proxy: the
+# agent's `prune` (its whole lease) takes the account out of that login at once and
+# its sessions move, and a 401 on a picked account runs the same request on the next
+# one. (The agent's half — pruneCreds, the hub's TypeCreds push — is Go:
+# TestCredCyclePrunesWhatTheHubDropped, TestCredKickCutsTheWait,
+# TestCredsPushOnDeletePauseRevoke.)
+drill_cred_pool_delete_stale_proxy() {
+  CAP=90; local t0 out
+  t0=$(now)
+  grep -q '"op": "prune"\|op == "prune"' "$BIN/fleet-cred-proxy.py" || { WHY="the proxy has no prune op"; return 1; }
+  out=$(bash "$BIN/fleet-cred-shared-selftest.sh" 2>&1)
+  printf '%s\n' "$out" | grep -q '^PASS V1 .*answered 401: the same request ran on the other account' \
+    && printf '%s\n' "$out" | grep -q '^PASS V2 prune: ' \
+    && printf '%s\n' "$out" | grep -q '^PASS V2 main paused: a new session is picked onto pool1' \
+    || { WHY="fleet-cred-shared-selftest leg V: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|^PASS V' | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="hub 删掉的订阅：agent 把整份 lease 交给代理 prune，它立刻从这个登录里消失、会话换号；正在用它的会话遇到 401 同一个请求改走下一个账号，不报给会话；暂停的账号不再接新会话"
+}
+
+# ---- cred-second-proxy (#3744): beside the machine's shared proxy, mini2 still
+# ran two logins' own separated proxies (the role account's `serve` for verky and
+# fleetu2) — each with its own copy of the subscriptions, one of them the deleted
+# one — and nothing said so. `machine proxies` (the doctor's credproxy row) reads
+# the process table: a second proxy is a FAIL naming it; a worktree's / a sandbox's
+# test copy is nobody's proxy; a per-login machine (no shared proxy, unmanaged) is INFO.
+drill_cred_second_proxy() {
+  CAP=10
+  local sb="$WORK/secondproxy" t0 out rc lib env
+  mkdir -p "$sb/run/verky" "$sb/run/.shared" "$sb/db" "$sb/node"
+  lib="$sb/lib dir"
+  printf '435\n' > "$sb/run/verky/pid"
+  printf '{"shared": true, "logins": ["verkyyi"]}\n' > "$sb/db/.shared.json"
+  {
+    printf '47283 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve --shared /var/db/fleet-cred/.shared/tenants.json\n' "$lib"
+    printf '435 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve\n' "$lib"
+    printf '62916 verky /usr/bin/python3 -I /Users/verky/projects/claude-fleet-issue-3605/bin/fleet-cred-proxy.py serve\n'
+    printf '47373 verky /bin/bash /Users/verky/.claude/fleet/bin/fleet-cred-proxy.sh run\n'
+  } > "$sb/ps"
+  env="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_NODE_STATE=$sb/node FLEET_CREDSEP_PS=$sb/ps"
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the shared one: own proxy of verky (pid 435' \
+    && ! printf '%s' "$out" | grep -q 62916 \
+    || { WHY="a second proxy beside the shared one is not a FAIL naming it (rc $rc): $out"; return 1; }
+  grep -q 'machine proxies' "$BIN/fleet-doctor.sh" || { WHY="the doctor reads no credproxy row"; return 1; }
+  sed -i.bak '/^435 /d' "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine: the shared one (pid 47283' \
+    || { WHY="the shared proxy alone is not OK (rc $rc): $out"; return 1; }
+  rm -f "$sb/db/.shared.json"
+  printf '9 alice /usr/bin/python3 -I /Users/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n9 bob /usr/bin/python3 -I /Users/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: INFO — per-login proxies' \
+    || { WHY="a per-login machine (no shared proxy, unmanaged) is not INFO (rc $rc): $out"; return 1; }
+  WHAT="共享代理之外机器上还跑着登录自己的代理：credproxy 行 FAIL 并点名（pid · 登录）；只剩共享代理转 OK；工作区里的测试副本不算；没有共享代理的单登录机器只是 INFO"
 }
 
 cred_run_drills "$0"

@@ -530,6 +530,9 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 		// Who did it (claude-fleet#1990): the audit page names the admin.
 		audit.Detail += "by " + actorOf(r)
 		_ = s.Store.AddCredAudit(audit)
+		if req.Action != "bind" {
+			s.BroadcastCreds("credential " + req.Action) // every node leases now (#3744)
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})
 	default:
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
@@ -605,6 +608,8 @@ func (s *Server) handleFleetRevoke(w http.ResponseWriter, r *http.Request) {
 	audit.Detail = joinDetail(audit.Detail, "by "+actorOf(r))
 	_ = s.Store.AddCredAudit(audit)
 	s.sessCred.drop("") // a session pass of the revoked machine / person stops at once (#1969)
+	// … and every node leases again at once (#3744)
+	s.BroadcastCreds(audit.Action)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": audit.Action})
 }
 

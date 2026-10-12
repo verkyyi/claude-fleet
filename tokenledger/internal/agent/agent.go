@@ -301,6 +301,9 @@ type Agent struct {
 	// credSummary is the last lease's account count line, logged only when it
 	// changes (claude-fleet#3440: a 200 lease with no account said nothing).
 	credSummary string
+	// credKick is TypeCreds' wake-up for the lease loop (claude-fleet#3744).
+	credKick     chan struct{}
+	credKickOnce sync.Once
 
 	// lastSessions is the newest beat's session count, -1 unknown — what a
 	// sleeping personal machine tells its person (claude-fleet#1721).

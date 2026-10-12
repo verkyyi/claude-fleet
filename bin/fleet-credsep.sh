@@ -73,6 +73,9 @@
 #                                           its old port with its own key
 #   fleet-credsep.sh machine status [--json]  anyone: shared or per-login, as whom,
 #                                           which logins, the version
+#   fleet-credsep.sh machine proxies [--json] anyone: the doctor's `credproxy` row —
+#                                           ONE credential proxy per machine (issue #3744):
+#                                           FAIL naming every proxy beside the shared one
 #   fleet-credsep.sh machine managed [--json] anyone: the doctor's `credsep-managed`
 #                                           row — every login the machine daemon took
 #                                           over (accounts.json) separated on the shared
@@ -244,9 +247,9 @@ case "$cmd" in
   machine)
     verb="${1:-}"
     case "$verb" in
-      status|managed) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
+      status|managed|proxies) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
       install|uninstall|refresh|join|leave) ;;
-      *) echo "fleet-credsep: machine install|uninstall|refresh|join|leave|status|managed" >&2; exit 2 ;;
+      *) echo "fleet-credsep: machine install|uninstall|refresh|join|leave|status|managed|proxies" >&2; exit 2 ;;
     esac
     case " $* " in
       *" --dry-run "*) [ "$(id -u)" = 0 ] || { python3 -I "$BIN/fleet-credsep.py" machine "$@"; exit $?; } ;;
