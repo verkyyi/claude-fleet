@@ -8,6 +8,9 @@
 # The agent runs --service detached (never launchd/systemd from a test) and is
 # killed by its pid file; the stub also ends itself (exec sleep 20).
 #
+# The no-GitHub join (the hub's signed stable, its lib from /install/bin/) is
+# dist-no-github-selftest.sh's node-join leg (issue #2862).
+#
 # What it pins:
 #   A. join      a fresh login: exit 0, `online:` line; node.env is 0600 with
 #                the hub URL, the token, CCQUOTA_FLEET=1 and CCQUOTA_FLEET_ADMIN=1;
