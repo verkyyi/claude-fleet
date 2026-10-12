@@ -429,7 +429,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 - **空闲 · 按需**（#3647）：一个服务以退出码 75（`SVC_IDLE_RC`）退出 = 「这会儿没事」，不是挂了：守护记
   `idle`、不重起、不算失败，条目改写（`service start`）才再起。`service ensure --login L --name N [--wait K]`
   只认 `SVC_ON_DEMAND` 里的名字（`webchat`）：按登录的家目录登记、停着 / 空闲就起、等它的 socket 答 `/healthz`
-  （节点的 `service_control` `ensure`，网页对话打开时用，docs/WEB-CHAT.md）。
+  （节点的 `service_control` `ensure`，网页对话打开时用，docs/dev/WEB-CHAT.md）。
 - **退役前必须搬完**：`fleet-login-remove.sh <登录>` 在第 1 步之前（dry run 也一样）、`account release <登录>`
   在动手之前查该登录的登记表，还有条目就拒绝、**退 6**，逐项打印 `service move` 命令；`account release --force`
   照样释放（条目仍由守护以该登录身份跑）。BREAK-IT 行 `service-login-moved`；`fleet-node-supervisor-selftest.py` J。
