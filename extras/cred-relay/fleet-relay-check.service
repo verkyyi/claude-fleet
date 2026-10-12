@@ -3,7 +3,10 @@
 # Install: /usr/local/lib/fleet-relay/fleet-relay-check.py (0755) + this file as
 # /etc/systemd/system/fleet-relay-check.service, then
 #   sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check
-# Nothing here is a secret.
+# Nothing here is a secret. The revocation list (claude-fleet#3560) is on once
+# its token is a credential: put the hub's CCQUOTA_FLEET_REVOCATIONS_TOKEN in
+# /etc/fleet-relay/revocations-token (root 0600) and uncomment LoadCredential
+# (a missing file would stop the unit) — docs/CRED-RELAY.md «吊销名单».
 [Unit]
 Description=fleet relay check — forward_auth cache in front of the hub's /v1/relay/check
 After=network-online.target
@@ -15,6 +18,8 @@ Environment=FLEET_HUB_URL=https://ccquota.24haowan.com
 Environment=FLEET_RELAY_CHECK_LISTEN=127.0.0.1:2091
 Environment=RELAY_CHECK_CACHE_S=30
 Environment=RELAY_CHECK_GRACE_S=600
+StateDirectory=fleet-relay
+#LoadCredential=revocations-token:/etc/fleet-relay/revocations-token
 ExecStart=/usr/bin/python3 -I /usr/local/lib/fleet-relay/fleet-relay-check.py
 Restart=always
 RestartSec=1

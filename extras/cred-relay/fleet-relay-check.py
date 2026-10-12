@@ -16,6 +16,17 @@ The verdict, per (SHA-256 of the pass, route prefix):
 A grace pass never extends the window: only a real hub 2xx does. A pass the hub
 last refused, never saw, or saw on another prefix is not in the table.
 
+The revocation list (claude-fleet#3560, EPIC #3500 C18) comes FIRST when it is
+on (a token for it): a thread follows the hub's GET /v1/relay/revocations
+(held up to 25 s, answered the moment the list moves), keeps it in a file, and
+every check looks there before the table above — a pass on it is 403 `revoked`
+at once, whatever the cache or the grace says, and with the hub away the last
+list still refuses. A relay credential is matched by `frl1:<sha256>`, a session
+pass by `fcp:<id>` or a {machine, principal, before} scope against its own
+(unverified — a refusal only) claims. A list older than RELAY_REVOCATIONS_STALE_S
+(600) is logged `list-stale`, never a reason to refuse. Off (no token) ⇒ byte
+for byte as before.
+
 What it keeps is the pass's hash and two timestamps, in memory only — never the
 pass, never an Authorization (Caddy strips it before asking, and this process
 forwards only X-Fleet-Relay + X-Forwarded-Uri/-Method to the hub). The log has
@@ -27,9 +38,17 @@ Environment (none is a secret):
   RELAY_CHECK_CACHE_S        30    RELAY_CHECK_GRACE_S   600    RELAY_CHECK_TIMEOUT_S  5
   FLEET_RELAY_CHECK_LOG      a file to append to (default stderr → journald)
   FLEET_RELAY_CHECK_MAX_SECONDS  exit after this long (tests only)
+  FLEET_RELAY_REVOCATIONS_TOKEN_FILE   the list's token (the hub's
+      CCQUOTA_FLEET_REVOCATIONS_TOKEN); default $CREDENTIALS_DIRECTORY/revocations-token
+      (systemd LoadCredential). The one secret here — a file, never the unit.
+  FLEET_RELAY_REVOCATIONS_FILE   where the list is kept (default
+      $STATE_DIRECTORY/revocations.json; none ⇒ memory only)
+  RELAY_REVOCATIONS_WAIT_S 25    RELAY_REVOCATIONS_STALE_S 600    RELAY_REVOCATIONS_BACKOFF_S 5
 """
+import base64
 import hashlib
 import http.client
+import json
 import os
 import signal
 import sys
@@ -64,6 +83,14 @@ _log_lock = threading.Lock()
 _logf = None
 _hub_state = {"down": False}
 
+REV_WAIT_S = env_num("RELAY_REVOCATIONS_WAIT_S", 25)
+REV_STALE_S = env_num("RELAY_REVOCATIONS_STALE_S", 600)
+# reconnect within this long: a hub that comes back is heard inside the 10 s promise
+REV_BACKOFF_S = env_num("RELAY_REVOCATIONS_BACKOFF_S", 5)
+# the list as last fetched: version, when (wall clock), the jti set, the scopes
+_rev = {"on": False, "v": None, "at": 0.0, "jti": {}, "scopes": [], "file": ""}
+_rev_lock = threading.Lock()
+
 
 def log(event, **kv):
     line = "%s %s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), event,
@@ -92,6 +119,153 @@ def ask_hub(headers):
         return None, type(e).__name__
     finally:
         conn.close()
+
+
+def rev_token():
+    path = os.environ.get("FLEET_RELAY_REVOCATIONS_TOKEN_FILE", "")
+    if not path and os.environ.get("CREDENTIALS_DIRECTORY"):
+        path = os.path.join(os.environ["CREDENTIALS_DIRECTORY"], "revocations-token")
+    if not path or not os.path.exists(path):
+        return ""
+    with open(path) as f:
+        return f.read().strip()
+
+
+def rev_index(lst, fetched_at):
+    """The list as the checks read it, or None when it is not one."""
+    if not isinstance(lst, dict) or not isinstance(lst.get("v"), int) or not isinstance(lst.get("entries"), list):
+        return None
+    jti, scopes = {}, []
+    for e in lst["entries"]:
+        if not isinstance(e, dict) or not isinstance(e.get("exp"), int):
+            continue
+        if e.get("jti"):
+            jti[str(e["jti"])] = e["exp"]
+        elif e.get("machine") or e.get("principal"):
+            scopes.append((str(e.get("machine") or ""), str(e.get("principal") or ""),
+                           str(e.get("login") or ""), int(e.get("before") or 0), e["exp"]))
+    return {"v": lst["v"], "at": fetched_at, "jti": jti, "scopes": scopes}
+
+
+def rev_set(lst, fetched_at, persist=True):
+    idx = rev_index(lst, fetched_at)
+    if idx is None:
+        return False
+    with _rev_lock:
+        moved = idx["v"] != _rev["v"]
+        _rev.update(idx)
+    if moved:
+        log("list", v=idx["v"], entries=len(idx["jti"]) + len(idx["scopes"]))
+    if persist and _rev["file"]:
+        tmp = _rev["file"] + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"fetched_at": fetched_at, "list": lst}, f)
+            os.replace(tmp, _rev["file"])
+        except OSError as e:
+            log("list-keep-failed", why=type(e).__name__)
+    return True
+
+
+def machine_of(m):
+    return (m or "").strip().split(".")[0].lower()
+
+
+def pass_claims(tok):
+    """An fcp-h1 pass's claims, unverified (used only to refuse)."""
+    parts = tok.split(".")
+    if len(parts) != 3 or parts[0] != "fcp-h1":
+        return None
+    try:
+        c = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except (ValueError, TypeError):
+        return None
+    return c if isinstance(c, dict) else None
+
+
+def revoked(tok):
+    """'' when the list lets tok by, else what it matched (for the log)."""
+    with _rev_lock:
+        if not _rev["on"] or _rev["v"] is None:
+            return ""
+        jti, scopes = _rev["jti"], _rev["scopes"]
+    now = time.time()
+    if tok.startswith("frl1."):
+        exp = jti.get("frl1:" + hashlib.sha256(tok.encode()).hexdigest())
+        return "frl1" if exp is not None and exp > now else ""
+    c = pass_claims(tok)
+    if c is None:
+        return ""
+    exp = jti.get("fcp:" + str(c.get("id") or ""))
+    if c.get("id") and exp is not None and exp > now:
+        return "fcp"
+    m, p = machine_of(str(c.get("machine") or "")), str(c.get("principal") or "")
+    try:
+        iat = int(c.get("iat") or 0)
+    except (TypeError, ValueError):
+        iat = 0
+    for sm, sp, sl, before, sexp in scopes:
+        if sexp <= now or sl or (sm and sm != m) or (sp and sp != p):
+            continue   # a login scope cannot be told from a pass's claims
+        if iat < before:
+            return "scope"
+    return ""
+
+
+def rev_follow(token):
+    """The list follower: ask with the version held, wait, apply, repeat."""
+    back = 1.0
+    stale_said = 0.0
+    cls = http.client.HTTPSConnection if HUB.scheme == "https" else http.client.HTTPConnection
+    while True:
+        v = _rev["v"]
+        q = "?since=%d&wait=%d" % (v, int(REV_WAIT_S)) if v is not None else ""
+        conn = cls(HUB.hostname, HUB.port, timeout=REV_WAIT_S + 10)
+        why = ""
+        try:
+            conn.request("GET", HUB_BASE + "/v1/relay/revocations" + q,
+                         headers={"Authorization": "Bearer " + token, "Accept": "application/json"})
+            r = conn.getresponse()
+            body = r.read(8 << 20)
+            if r.status == 200:
+                if not rev_set(json.loads(body.decode("utf-8")), time.time()):
+                    why = "not-a-list"
+            elif r.status == 304:
+                with _rev_lock:
+                    _rev["at"] = time.time()
+            else:
+                why = "http-%d" % r.status
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            why = type(e).__name__
+        finally:
+            conn.close()
+        age = time.time() - (_rev["at"] or 0)
+        if age > REV_STALE_S and time.time() - stale_said >= 60:
+            stale_said = time.time()
+            log("list-stale", v=_rev["v"] if _rev["v"] is not None else "-", age="%ds" % int(age) if _rev["at"] else "never",
+                hub=why or "-")
+        if why:
+            time.sleep(back)
+            back = min(back * 2, REV_BACKOFF_S)
+        else:
+            back = 1.0
+
+
+def rev_start():
+    token = rev_token()
+    if not token:
+        return
+    st = os.environ.get("STATE_DIRECTORY", "").split(":")[0]
+    _rev["file"] = os.environ.get("FLEET_RELAY_REVOCATIONS_FILE") or (os.path.join(st, "revocations.json") if st else "")
+    _rev["on"] = True
+    if _rev["file"] and os.path.exists(_rev["file"]):
+        try:
+            with open(_rev["file"]) as f:
+                kept = json.load(f)
+            rev_set(kept.get("list"), float(kept.get("fetched_at") or 0), persist=False)
+        except (OSError, ValueError, AttributeError) as e:
+            log("list-unreadable", why=type(e).__name__)
+    threading.Thread(target=rev_follow, args=(token,), name="revocations", daemon=True).start()
 
 
 def hub_mark(down, why=""):
@@ -126,6 +300,12 @@ class H(BaseHTTPRequestHandler):
         pre = prefix_of(self.headers.get("X-Forwarded-Uri") or "")
         key = hashlib.sha256(tok.encode()).hexdigest() + "\0" + pre if tok and pre else None
         now = time.monotonic()
+        hit = revoked(tok) if tok else ""
+        if hit:
+            with _lock:
+                _ok.pop(key, None)
+            log("revoked", prefix=pre or "-", by=hit, v=_rev["v"])
+            return self.reply(403, b'{"error":"relay_refused","message":"this pass was revoked"}')
         if key is not None:
             with _lock:
                 t = _ok.get(key)
@@ -177,7 +357,9 @@ def main():
         signal.alarm(int(float(os.environ["FLEET_RELAY_CHECK_MAX_SECONDS"])))
     ThreadingHTTPServer.daemon_threads = True
     srv = ThreadingHTTPServer((host.strip("[]"), int(port)), H)
-    log("start", listen=listen, hub=HUB.hostname, cache="%gs" % CACHE_S, grace="%gs" % GRACE_S)
+    rev_start()
+    log("start", listen=listen, hub=HUB.hostname, cache="%gs" % CACHE_S, grace="%gs" % GRACE_S,
+        **({"revocations": "on"} if _rev["on"] else {}))
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     srv.serve_forever()
 
