@@ -553,7 +553,8 @@ tr_ respawn-pane -k -t "$RW8" -c "$WORK/wt8/src" 'while :; do sleep 300; done'
 cat > "$WORK/fakesh" <<'EOF'
 #!/bin/bash
 { printf 'pwd=%s\n' "$(pwd -P)"; printf 'path=%s\n' "${PATH%%:*}"
-  printf 'cred=%s\n' "${FLEET_WORKER_CRED:-}"; printf 'args=%s\n' "$*"; } > "$FAKESH_OUT"
+  printf 'cred=%s\n' "${FLEET_WORKER_CRED:-}"; printf 'win=%s\n' "${FLEET_SESSION_SHELL_WIN:-}"
+  printf 'args=%s\n' "$*"; } > "$FAKESH_OUT"
 trap 'echo hup >> "$FAKESH_OUT"; exit 0' HUP
 while :; do sleep 0.2; done
 EOF
@@ -570,7 +571,8 @@ SH=$(shwins | grep -F "|m4:$WID2|" | cut -d'|' -f1)
 fakesh_up() { grep -q '^args=' "$WORK/fakesh.out" 2>/dev/null; }
 waitfor 10 fakesh_up || fail "S: no login shell started on the session's machine" "$(tail -n 2 "$WORK/ssh.log"; tl capture-pane -p -t "$SH" | grep -v '^$')"
 eq "S: the shell sits where the session's agent is" "pwd=$(cd "$WORK/wt8/src" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
-eq "S: …a login shell, the fleet's bin/ first on its PATH" "args=-l path=$BIN" "$(grep '^args=' "$WORK/fakesh.out") $(grep '^path=' "$WORK/fakesh.out")"
+eq "S: …a login shell, the session shell's codex/claude then the fleet's bin/ first on its PATH (#3463)" "args=-l path=$BIN/session-shell" "$(grep '^args=' "$WORK/fakesh.out") $(grep '^path=' "$WORK/fakesh.out")"
+eq "S: …told which window its session is (#3463)" "win=$(tr_ display-message -p -t "$RW8" '#{window_id}')" "$(grep '^win=' "$WORK/fakesh.out")"
 eq "S: …and no worker credential in its environment" "cred=" "$(grep '^cred=' "$WORK/fakesh.out")"
 has "S: it went over ssh as shell-here <wid>" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh shell-here '$WID2'"
 tl select-window -t "$SW"

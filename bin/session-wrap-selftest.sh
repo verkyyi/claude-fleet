@@ -7,7 +7,9 @@
 #   B  fleet-session-wrap.sh on a REAL isolated tmux server (-S socket, killed at
 #      exit) with a fake launcher: the agent exits 0 / 130 / kill -9 → the window
 #      stays, @claude_state=exited, the recovery page is drawn, ↵ relaunches with
-#      `--resume <the same id>`; r starts new; a fleet exit (@wrap_quiet) and a
+#      `--resume <the same id>` (a Codex window: `resume <its id>` in its own
+#      --codex-home, even after the launcher cleared the id — issue #3463);
+#      r starts new; a fleet exit (@wrap_quiet) and a
 #      fast launch failure return the status with no page (and stamps @wrap_gone);
 #      a launch the LAUNCHER refused (@launch_refused, #2404) stops on the page
 #      even the first time, ↵ retrying it; q → session-end-hook --recycle
@@ -105,8 +107,15 @@ cat > "$WORK/fake-launch" <<'EOF'
 # for `go`, then leaves the way $CTL/mode says.
 printf '%s\n' "$*" >> "$CTL/argv"
 printf 'cred=%s\n' "${FLEET_WORKER_CRED:+set}" >> "$CTL/cred"
-tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
-tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
+if [ "$(cat "$CTL/agent" 2>/dev/null)" = codex ]; then
+  # fleet-codex.sh clears the id at launch; the session hook stamps it once up
+  tmux set-option -w -t "$TMUX_PANE" @cc_agent codex
+  tmux set-option -wu -t "$TMUX_PANE" @codex_session_id
+  [ -e "$CTL/nosid" ] || tmux set-option -w -t "$TMUX_PANE" @codex_session_id CX-9
+else
+  tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
+  tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
+fi
 [ "$(cat "$CTL/mode" 2>/dev/null)" = fast ] && exit 3
 if [ "$(cat "$CTL/mode" 2>/dev/null)" = refuse ]; then   # the launcher's own refusal (#2404)
   echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch' >&2
@@ -115,7 +124,7 @@ fi
 while [ ! -e "$CTL/go" ]; do sleep 0.05; done
 rm -f "$CTL/go"
 case "$(cat "$CTL/mode")" in
-  rc0) exit 0 ;; rc130) exit 130 ;; kill) kill -9 $$ ;;
+  rc0) exit 0 ;; rc1) exit 1 ;; rc130) exit 130 ;; kill) kill -9 $$ ;;
 esac
 EOF
 chmod +x "$WORK/wbin/session-end-hook.sh" "$WORK/fake-launch"
@@ -124,7 +133,8 @@ chmod +x "$WORK/wbin/session-end-hook.sh" "$WORK/fake-launch"
 win() {
   mkdir -p "$WORK/$1"; : > "$WORK/$1/argv"
   local cmd="env CTL='$WORK/$1' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=$2 FLEET_UI_LANG=zh ${WRAP_ENV:-FLEET_EXIT_CLOSE_SECS=0}"
-  cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude 'the seed prompt'; echo WRAP_RC=\$?; exec sleep 600"
+  local wa="--agent claude 'the seed prompt'"; [ -n "${WRAP_ARGS:-}" ] && wa=$WRAP_ARGS
+  cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' $wa; echo WRAP_RC=\$?; exec sleep 600"
   if tf has-session -t sw 2>/dev/null; then tf new-window -d -t sw: -n "$1" "$cmd"
   else tf -f /dev/null new-session -d -s sw -n "$1" -x 100 -y 30 "$cmd" || fail "cannot start the isolated tmux server"; fi
 }
@@ -169,6 +179,30 @@ waitfor "w/quiet: the wrapper returned" screen_has w 'WRAP_RC=0'
 CHECKS=$((CHECKS + 1)); [ "$(o w @claude_state)" != exited ] || fail "w/quiet: a fleet exit drew the recovery page"
 eq "w/quiet: no relaunch" "$n" "$(grep -c . "$WORK/w/argv")"
 eq "w/quiet: the marker is consumed" "" "$(o w @wrap_quiet)"
+
+# CX (issue #3463): a Codex session that dies however it dies — an error exit, a
+# kill — stops on the page, and ↵ resumes the SAME Codex conversation in the same
+# account home; the launcher clears @codex_session_id at launch, so a resume that
+# dies before its hook stamps the id again still comes back to that conversation.
+mkdir -p "$WORK/cx"; printf codex > "$WORK/cx/agent"
+WRAP_ARGS="--agent codex --codex-home /h/acct 'the seed prompt'" win cx 0
+waitfor "cx: first launch" launches cx 1
+eq "cx: the first launch carries the spawn's argv" "--agent codex --codex-home /h/acct the seed prompt" "$(sed -n 1p "$WORK/cx/argv")"
+n=1
+for leg in 'rc1:1:会话意外退出' 'kill:137:会话意外退出' 'rc0:0:会话已结束'; do
+  mode=${leg%%:*}; rest=${leg#*:}; rc=${rest%%:*}; head=${rest#*:}
+  printf '%s' "$mode" > "$WORK/cx/mode"; : > "$WORK/cx/go"
+  waitfor "cx/$mode: state exited" state_is cx exited
+  eq "cx/$mode: the exit status is on the window" "$rc" "$(o cx @wrap_exit_rc)"
+  waitfor "cx/$mode: the page says [$head]" screen_has cx "$head"
+  CHECKS=$((CHECKS + 1)); screen_has cx 'WRAP_RC=' && fail "cx/$mode: the wrapper returned to the caller's shell"
+  tf send-keys -t sw:cx Enter
+  n=$((n + 1))
+  waitfor "cx/$mode: ↵ relaunched" launches cx "$n"
+  eq "cx/$mode: ↵ resumes the SAME Codex conversation, same home" "--agent codex --codex-home /h/acct resume CX-9" "$(sed -n "${n}p" "$WORK/cx/argv")"
+  : > "$WORK/cx/nosid"                         # from here the resume dies before its hook stamps
+done
+rm -f "$WORK/cx/nosid"
 
 # A launch that fails fast (not 0/130): the caller's own failure path decides.
 win f 5; printf fast > "$WORK/f/mode"
