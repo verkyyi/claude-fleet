@@ -627,7 +627,7 @@ refresh() {
     # FLEET_HUB_SESSIONS_INV_TTL (15 s, the agent's own `workers` cache) AND
     # strictly newer than hub-nudge; a one-shot --refresh, no nudge file (no hub
     # nudges here) or 0 ⇒ read every round, byte for byte as before.
-    inv_cached "$sess" "$now" "$mf" && continue
+    inv_cached "$sess" "${now:-0}" "$mf" && continue
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
     m=1   # every key carries its repo (issue #1939) — the bit stays for an older reader
@@ -636,7 +636,7 @@ refresh() {
       | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done)
     printf '%s\n' "$inv_line"
     [ -z "$inv_rows" ] || printf '%s\n' "$inv_rows" >> "$mf"
-    inv_keep "$sess" "$now" "$inv_line" "$inv_rows"
+    inv_keep "$sess" "${now:-0}" "$inv_line" "$inv_rows"
   done > "$lf" <<EOF
 $(local_fleets)
 EOF
