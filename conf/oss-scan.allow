@@ -1,0 +1,16 @@
+# conf/oss-scan.allow — where an internal-name hit may STAY (issue #3571,
+# EPIC #3569 共同约定 1). Read by bin/oss-scan.sh and everything that runs it.
+#
+# One line per allowance: <path-glob><TAB><rule-id|*><TAB><理由>.
+#   path-glob: `*` one path segment, `**` any number of them, `?` one character
+#   rule-id:   a rule of conf/oss-scan.rules, or `*` for every rule
+# Every line says WHY (the reason column is required reading for C2's gate).
+# An allowance is per file + rule, never per directory tree of unrelated files,
+# and it only shrinks: a new one needs the same reason a reviewer would accept.
+
+conf/oss-scan.rules	*	规则表本身：它写的就是要找的名字
+conf/oss-scan.allow	*	允许清单本身
+bin/oss-scan-selftest.sh	private-ipv4	自测在沙箱仓库里放一行假的私网地址，要的就是它被报出来
+LICENSE	person	版权人署名（MIT 许可证要求写明版权人）
+.claude-plugin/*.json	gh-owner	插件市场 / 插件清单的 owner、author 字段：公开发布的署名
+plugins/*/.claude-plugin/plugin.json	gh-owner	插件清单的 author 字段：公开发布的署名
