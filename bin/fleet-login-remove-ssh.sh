@@ -111,7 +111,7 @@ forced_wash() {
   [ -d "$h" ] && [ ! -L "$h" ] || die "refusing: $h is not a plain directory" 3
   aside="$ARCHIVE/$login-$stamp.wash"
   [ ! -e "$aside" ] || die "refusing: $aside is there already" 3
-  if [ "${FLEET_REMOVE_SSH_TEST:-0}" = 1 ]; then mkdir -p -m 700 "$ARCHIVE"
+  if [ "${FLEET_REMOVE_SSH_TEST:-0}" = 1 ]; then mkdir -p "$ARCHIVE" && chmod 700 "$ARCHIVE"
   else sudo -n install -d -m 700 -o "$(id -u)" "$ARCHIVE"; fi || { say "cannot make $ARCHIVE"; exit 1; }
   sudo -n mv "$h" "$aside" || { say "mv $h $aside failed over ssh too"; exit 1; }
   sudo -n rm -rf "$aside" 2>/dev/null \
