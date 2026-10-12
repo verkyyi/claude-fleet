@@ -68,7 +68,8 @@ cl="$WORK/state/cluster"
 python3 "$MT" tick --out "$cl" || bad "C tick failed"
 mode=$(stat -c '%a' "$cl/machine.json" 2>/dev/null || stat -f '%Lp' "$cl/machine.json")
 [ "$mode" = 644 ] && ok "C machine.json 0644" || bad "C machine.json mode $mode"
-ls -a "$cl" | grep -q '^\.machine\.json\.' && bad "C a temporary file left behind" || ok "C written through one rename, nothing left"
+left=$(find "$cl" -name '.machine.json.*' | head -1)
+[ -z "$left" ] && ok "C written through one rename, nothing left" || bad "C a temporary file left behind: $left"
 live=$(FLEET_SKIP_GLOBAL_CONF=1 bash -c '. "$1"; FLEET_MACHINE_TASKS=; fleet_mem_total_mb' _ "$BIN/fleet-lib.sh")
 grep -q "^\"mem_total_mb\": \"$live\"" "$cl/machine.json" && ok "C carries fleet_mem_total_mb's own answer ($live)" || bad "C mem_total_mb: $(cat "$cl/machine.json")"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["v"]==1 and d["ts"]>0' "$cl/machine.json" && ok "C valid JSON, v 1, ts" || bad "C not the format"
