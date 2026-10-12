@@ -1028,7 +1028,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   a pin that vouches for a root re-pins to it. The root never touches a machine;
   `fleet-release-key.sh scan` / the doctor's `releasekey` row FAIL on a signing
   private key found anywhere else. Neither variable ⇒ the hub signs, byte for byte
-  as before. docs/FLEET-HUB.md «发布签名»; BREAK-IT `release-key-outside-train`,
+  as before. docs/dev/FLEET-HUB.md «发布签名»; BREAK-IT `release-key-outside-train`,
   `release-key-revoked`.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`

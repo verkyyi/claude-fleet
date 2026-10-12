@@ -71,7 +71,7 @@ case "$verb" in
       tr -d '\r' | awk -F': ' 'tolower($1) == "x-ccquota-release-signer" { print $2 }')
     case "$signer" in
       train) echo "签名的：发布列车（入口不握签名私钥，#3559）" ;;
-      hub)   echo "签名的：入口自己（签名私钥还在入口里 — docs/FLEET-HUB.md「发布签名」把它挪进列车）" ;;
+      hub)   echo "签名的：入口自己（签名私钥还在入口里 — docs/dev/FLEET-HUB.md「发布签名」把它挪进列车）" ;;
       *)     echo "签名的：入口自己（这个入口早于 #3559）" ;;
     esac
     if [ -s "$PK.revoked" ]; then

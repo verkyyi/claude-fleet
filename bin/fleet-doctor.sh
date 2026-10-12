@@ -1390,7 +1390,7 @@ if [ -s "$conf_dir/release.pub" ] || [ -n "${CCQUOTA_FLEET_RELEASE_KEY:-}${CCQUO
   _rk=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-release-key.sh" scan 2>/dev/null); _rk_rc=$?
   case "$_rk_rc" in
     0) pass releasekey "这台没有发布签名私钥 — 它只在发布列车里" ;;
-    1) fail releasekey "这台握着发布签名私钥（$(printf '%s\n' "$_rk" | grep -c '^FOUND') 处）: $(printf '%s\n' "$_rk" | sed -n 's/^FOUND //p' | head -3 | awk '{ printf "%s%s", s, $0; s = "; " }') — 签名私钥只放发布列车（release-sign），删掉它，怀疑泄露就用根钥匙作废（docs/FLEET-HUB.md「发布签名」）" ;;
+    1) fail releasekey "这台握着发布签名私钥（$(printf '%s\n' "$_rk" | grep -c '^FOUND') 处）: $(printf '%s\n' "$_rk" | sed -n 's/^FOUND //p' | head -3 | awk '{ printf "%s%s", s, $0; s = "; " }') — 签名私钥只放发布列车（release-sign），删掉它，怀疑泄露就用根钥匙作废（docs/dev/FLEET-HUB.md「发布签名」）" ;;
   esac
 fi
 

@@ -39,7 +39,7 @@ computer and in the train's job alike — never on the hub, never in a session.
 LoadPrivateKey reads) or `env:NAME` (the train's secret, never on an argv or a
 disk). Exit 0 · 1 refused / does not match (the reason on stderr) · 2 usage.
 
-docs/FLEET-HUB.md «发布签名» is the procedure: keygen the root offline, vouch
+docs/dev/FLEET-HUB.md «发布签名» is the procedure: keygen the root offline, vouch
 for the train's key, commit the chain, put the train's secret in the
 release-sign environment, revoke by committing a new list (or handing it to
 the hub's CCQUOTA_FLEET_RELEASE_REVOKED for the next fetch).

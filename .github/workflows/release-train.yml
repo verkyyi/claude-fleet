@@ -645,7 +645,7 @@ jobs:
           elif [ "$signer" = train ] && [ -z "$held" ]; then
             echo "### 发布签名：发布列车（入口只有根公钥）" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::the release signing key is in the train AND the hub still holds one (signer: ${signer:-?}; deploy names CCQUOTA_FLEET_RELEASE_KEY in: ${held:-nothing}) — finish the move: docs/FLEET-HUB.md 发布签名"
+            echo "::warning::the release signing key is in the train AND the hub still holds one (signer: ${signer:-?}; deploy names CCQUOTA_FLEET_RELEASE_KEY in: ${held:-nothing}) — finish the move: docs/dev/FLEET-HUB.md 发布签名"
             echo "### 发布签名：⚠️ 入口还握着私钥（signer ${signer:-?}；${held:-deploy 未提}）" >> "$GITHUB_STEP_SUMMARY"
           fi
 
