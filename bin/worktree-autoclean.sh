@@ -328,7 +328,13 @@ process() {
   # never called for it, and the landing the gate saw is the evidence.
   if [ -n "$inum" ] && [ "$FORGE" != none ]; then
     local ist=""
-    [ -n "$REPO" ] && ist="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
+    if [ -n "$REPO" ]; then
+      if [ "$(fleet_ticket_home "$REPO")" = hub ]; then   # the ticket door (#3597)
+        ist="$(fleet_ticket_state "$REPO" "$inum" | cut -f1)"
+      else
+        ist="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
+      fi
+    fi
     if [ "$ist" != CLOSED ]; then
       reap_detached "$dir" "$branch"   # past the liveness gate: no window, so orphans (#469)
       say "KEEP  $branch  (skip:issue-open — $merged but #$inum is ${ist:-unknown})"; kept=$((kept+1)); return

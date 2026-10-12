@@ -183,13 +183,23 @@ if [ -n "$ISSUE" ]; then
   # a `<!-- fleet:handoff -->`-marked comment on issue N. Re-confirm it is fetchable
   # (the equivalent of `-s "$DOC"` for a file). Repo: --repo → CF_REPO → this
   # fleet's cached repo → FLEET_REPO (mirrors bin/fleet-comment.sh).
-  command -v gh >/dev/null 2>&1 || refuse "comment-storage handoff needs gh on PATH"
   repo="${REPO:-${CF_REPO:-${FLEET_REPO:-}}}"
   if [ -z "$repo" ]; then
     repo="$(fleet_repo_cached "$(fleet_current_session 2>/dev/null)" 2>/dev/null)"
   fi
   [ -n "$repo" ] || refuse "comment-storage handoff: no repo resolved (pass --repo or set FLEET_REPO)"
-  gh issue view "$ISSUE" --repo "$repo" --json comments -q '.comments[].body' 2>/dev/null \
+  # A hub-ticket repo's comments come through the ticket door (issue #3597); a
+  # GitHub one's exactly as before.
+  if [ "$(fleet_ticket_home "$repo" 2>/dev/null)" = hub ]; then
+    hand_bodies() {
+      bash "$BIN/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$ISSUE" --json comments 2>/dev/null \
+        | python3 -c 'import json,sys; [print(c.get("body") or "") for c in json.load(sys.stdin).get("comments") or []]' 2>/dev/null
+    }
+  else
+    command -v gh >/dev/null 2>&1 || refuse "comment-storage handoff needs gh on PATH"
+    hand_bodies() { gh issue view "$ISSUE" --repo "$repo" --json comments -q '.comments[].body' 2>/dev/null; }
+  fi
+  hand_bodies \
     | grep -Fq "$HANDOFF_MARKER" \
     || refuse "no fleet:handoff comment on issue #$ISSUE (@ $repo) — NOT clearing (handoff not durably stored)"
   STORE="issue #$ISSUE"

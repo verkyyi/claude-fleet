@@ -249,6 +249,32 @@ webhook path.
 The webhook and the poll daemon share the same dedup state, so you can run both
 (webhook for latency, poll as the backstop if the tunnel drops).
 
+## Ingress C — a hub ticket's comment, pushed (issue #3597)
+
+A repo whose tickets live on the hub (`FLEET_TICKETS=hub`, EPIC #3570) never asks
+GitHub for its comments, and is bridged unless its view says
+`FLEET_ISSUE_BRIDGE=0` — only the ticket's person and the people added to it can
+comment there, so the public-repo reason for "off" does not apply.
+
+- **The push.** The hub sends `ticket {repo, number, kind: comment, comment_id}`
+  to every node of the ticket's person that listed `CapTicket`; the node agent
+  (`tokenledger/internal/agent/node_ticket.go`, listed only when this script
+  exists) runs `fleet-issue-bridge.sh --event <repo> <N> <comment id>`. It reads
+  the comment through the ticket door (`fleet_ticket.py relay --number`) and runs
+  the same relay core — dedup, markers, the idle / typing gates — but delivers
+  ONLY into a window on this node: every node of the person hears the same event,
+  so one without the window answers `elsewhere` and leaves it unseen.
+- **The echo rule.** A comment the fleet wrote (`source=fleet`: a worker's note,
+  a receipt, `fleet-comment.sh`) arrives as assoc `FLEET` and is never typed back.
+  So `fleet-comment.sh --to-worker` on a hub ticket posts the record and sends the
+  words over the peer channel, as it does for a repo nobody bridges.
+- **The backstop.** The poll asks the hub, not gh: `fleet_ticket.py relay
+  --since <watermark>` lists the hub tickets moved since then and their new
+  comments, and the watermark becomes the hub's newest time (`#max`). The hub
+  down ⇒ `入口不通` in the log and the watermark held; what an event missed (the
+  hub or this node away, the worker busy) is typed in on the tick after it is
+  back — `docs/BREAK-IT.md` `ticket-hub-down`, `bin/fleet-issue-bridge-hub-selftest.sh`.
+
 ## Cost
 
 There are **no GitHub fees** — the cost is **tokens**: each relayed comment is

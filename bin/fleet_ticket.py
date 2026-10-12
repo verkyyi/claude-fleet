@@ -27,6 +27,8 @@ fleet-ticket.sh and its one write throttle.
     fleet_ticket.py link <parent-id> <child-id> [--remove]
     fleet_ticket.py find --repo R --marker S            → <id>\\t<url> of an open ticket carrying S
     fleet_ticket.py cache --repo R --dir D              → the collector's issues / labels / parents
+    fleet_ticket.py relay --repo R (--since ISO | --number N [--comment C])
+                                                        → the issue-bridge's rows (hub only, #3597)
 
 Exit: 0 ok · 1 the backend failed · 2 usage · 3 claim conflict · 4 the hub is not
 reachable (no answer, or no node token).
@@ -193,6 +195,7 @@ def gh_shape(t, comments):
         'author': {'login': t.get('owner', '')},
         'comments': [{'author': {'login': c.get('author', '')}, 'body': c.get('body', ''),
                       'createdAt': c.get('created_at', ''), 'id': c.get('id'),
+                      'source': c.get('source', ''),
                       'url': f'{turl(t.get("repo", ""), t.get("number"))}#comment-{c.get("id", "")}'}
                      for c in comments or []],
         'url': turl(t.get('repo', ''), t.get('number')), 'createdAt': t.get('created_at', ''),
@@ -411,7 +414,64 @@ def hub_verb(verb, args):
             raise Fail(2, 'cache: --repo and --dir are required')
         return write_cache(repo, d)
 
+    if verb == 'relay':
+        o, _ = opts(args, ('repo', 'since', 'number', 'comment'))
+        repo = norm_repo(o.get('repo', ''))
+        if not repo or not (o.get('since') or o.get('number')):
+            raise Fail(2, 'relay: --repo and one of --since / --number')
+        return relay_rows(repo, o)
+
     raise Fail(2, f'unknown verb {verb}')
+
+
+def relay_row(t, c):
+    """One comment as fleet-issue-bridge.sh's poll row: cid · assoc · author ·
+    number · time · base64 body. A hub ticket is seen only by its person and the
+    people added to it (#2512), so a person's comment is OWNER; one the fleet
+    wrote (source=fleet — a worker's note, a receipt) is FLEET, which the bridge
+    never sends back into a session (the echo rule, #3597)."""
+    import base64
+    assoc = 'FLEET' if c.get('source') == 'fleet' else 'OWNER'
+    author = (c.get('author') or '').replace('\t', ' ').replace('\n', ' ')
+    body = base64.b64encode((c.get('body') or '').encode('utf-8')).decode()
+    return f'{c.get("id")}\t{assoc}\t{author}\t{t.get("number")}\t{c.get("created_at", "")}\t{body}'
+
+
+def _ts(v):
+    """An RFC 3339 UTC time in one fixed width, so two compare as strings: Go
+    writes nanoseconds (`…:05.123456789Z`), a watermark may have none (`…:05Z`)."""
+    m = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z?$', v or '')
+    return f'{m.group(1)}.{(m.group(2) or "").ljust(9, "0")[:9]}' if m else ''
+
+
+def relay_rows(repo, o):
+    """--number N [--comment C]: that ticket's comments (just C when given) —
+    the node agent's push. --since ISO: every hub ticket of the repo that moved
+    at or after ISO, each one's comments from ISO on, after a `#max <iso>` line
+    (the newest ticket time seen: the bridge's next watermark) — the backstop."""
+    if o.get('number'):
+        if not str(o['number']).isdigit():
+            raise Fail(2, 'relay: --number is a number')
+        d = api('GET', tpath(repo, int(o['number'])))
+        t = d.get('ticket') or {}
+        want = str(o.get('comment') or '')
+        return '\n'.join(relay_row(t, c) for c in d.get('comments') or []
+                         if not want or str(c.get('id')) == want)
+    since = o['since']
+    resp = api('GET', '', query={'repo': repo, 'since': since, 'state': '', 'limit': '200'})
+    if not _ts(since):
+        raise Fail(2, 'relay: --since is an RFC 3339 UTC time')
+    hi, rows = since, []
+    for t in sorted(resp.get('tickets') or [], key=lambda x: _ts(x.get('updated_at'))):
+        if t.get('backend', 'hub') != 'hub':
+            continue
+        if _ts(t.get('updated_at')) > _ts(hi):
+            hi = t.get('updated_at')
+        d = api('GET', tpath(repo, t.get('number')))
+        for c in d.get('comments') or []:
+            if _ts(c.get('created_at')) >= _ts(since):
+                rows.append(relay_row(d.get('ticket') or t, c))
+    return '\n'.join([f'#max {hi}'] + rows)
 
 
 def write_cache(repo, d):
@@ -448,7 +508,7 @@ def write_cache(repo, d):
 # Which argument decides the backend: an id (its prefix) or --repo (its home).
 _BY_ID = {'read': 0, 'comment': 0, 'post': 0, 'edit': 0, 'state': 0, 'close': 0, 'children': 0, 'parent': 0,
           'claim': 0, 'priority': 0, 'link': 0, 'evidence': 0}
-_BY_REPO = ('list', 'new', 'find', 'cache')
+_BY_REPO = ('list', 'new', 'find', 'cache', 'relay')
 
 
 def backend_of(verb, args, forced):
@@ -497,8 +557,8 @@ def run(argv):
             b = 'gh'
         if b == 'hub' and verb not in ('comment', 'evidence'):
             return 0, hub_verb(verb, args)
-        if verb == 'cache':
-            raise Fail(2, 'cache: only a hub repo — a GitHub repo is the collector\'s own fetch')
+        if verb in ('cache', 'relay'):
+            raise Fail(2, f'{verb}: only a hub repo — a GitHub repo is the collector\'s own fetch')
         rc, out = shell([verb] + args, capture=True)
         return rc, out.rstrip('\n')
     except Fail as e:

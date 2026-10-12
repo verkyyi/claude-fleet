@@ -119,8 +119,7 @@ transfer_holds_window() {
 # returns 0 when the issue may close; else prints why it stays open, rc 1.
 issue_done_by_merge() {  # <repo> <issue> <branch>
   local repo="$1" n="$2" br="$3" st reason labels says
-  st=$(gh -R "$repo" issue view "$n" --json state,stateReason,labels \
-    -q '"\(.state)\t\(.stateReason // "")\t\([.labels[].name] | join(","))"' 2>/dev/null)
+  st=$(fleet_ticket_state "$repo" "$n")      # through the ticket door (#3597)
   [ -n "$st" ] || { printf 'issue state unknown'; return 1; }
   reason=$(printf '%s' "$st" | cut -f2); labels=$(printf '%s' "$st" | cut -f3)
   [ "$(printf '%s' "$st" | cut -f1)" = OPEN ] || { printf 'not open'; return 1; }
@@ -327,11 +326,18 @@ if [ "${1:-}" = "--exec" ]; then
       # table), and only when that PR says it closes it and nothing since says
       # otherwise (issue #2949, issue_done_by_merge). Idempotent: a merge may have
       # closed it already.
+      # The receipt and the close: a hub-ticket repo's through the ticket door
+      # (issue #3597), a GitHub one's exactly as before.
       if [ "$verdict" = merged-pr ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
          && issue_done_by_merge "$REPO" "$iss" "$branch" >/dev/null; then
-        gh -R "$REPO" issue close "$iss" \
-          --comment "Closed on manual worker exit: merged PR reaped, worktree cleaned." \
-          >/dev/null 2>&1 || true
+        rcpt="Closed on manual worker exit: merged PR reaped, worktree cleaned."
+        if [ "$(fleet_ticket_home "$REPO")" = hub ]; then
+          tid="hub:$(fleet_norm_repo "$REPO")#$iss"
+          bash "$BIN/fleet-ticket.sh" post "$tid" --body "$rcpt" >/dev/null 2>&1 \
+            && bash "$BIN/fleet-ticket.sh" close "$tid" >/dev/null 2>&1 || true
+        else
+          gh -R "$REPO" issue close "$iss" --comment "$rcpt" >/dev/null 2>&1 || true
+        fi
       fi
       ;;
     parking) : ;;   # parked: issue OPEN, worktree + branch kept (the park book's)
@@ -348,7 +354,7 @@ if [ "${1:-}" = "--exec" ]; then
   # window still working it — neither is released.
   case "$act" in merged-pr|landed|live|parking) ;; *)
     if [ "$how" = recycle ] && [ -n "$REPO" ] && [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 \
-       && [ "$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)" = OPEN ]; then
+       && [ "$(fleet_ticket_state "$REPO" "$iss" | cut -f1)" = OPEN ]; then   # the ticket door (#3597)
       what="its work did not land"
       [ "$verdict" = dirty ] && what="$what; its dirty worktree is kept"
       [ "$verdict" = unmerged ] && [ -n "$wtdir" ] && what="$what; its worktree and branch $branch are kept"
