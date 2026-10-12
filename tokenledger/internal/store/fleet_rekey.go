@@ -216,9 +216,22 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 }
 
 // PrincipalByLogin is the person whose login this is, ErrNoPrincipal when nobody's.
+// A spare a recorded person claimed (claude-fleet#3501) has its name only on
+// their account row: when no principal row carries login, the one person
+// whose accounts do answers — two people under one name answer nobody.
 func (s *Store) PrincipalByLogin(login string) (*Principal, error) {
 	var id string
 	err := s.read.QueryRow(`SELECT principal_id FROM fleet_principals WHERE login = ?`, login).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		var n int
+		var one sql.NullString
+		err = s.read.QueryRow(`SELECT COUNT(DISTINCT principal_id), MIN(principal_id) FROM fleet_accounts
+			WHERE login = ? AND principal_id NOT LIKE ?`, login, spareLikePattern).Scan(&n, &one)
+		if err == nil && (n != 1 || !one.Valid) {
+			return nil, ErrNoPrincipal
+		}
+		id = one.String
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNoPrincipal

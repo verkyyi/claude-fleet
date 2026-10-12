@@ -461,8 +461,19 @@ func (s *Server) sshRelayAllowed(id sshRelayIdentity, host string) error {
 func (s *Server) sshRelayNode(id sshRelayIdentity, host string) (string, *nodeConn, error) {
 	var own string
 	if !id.Operator {
-		if p, err := s.Store.Principal(id.Principal); err == nil {
-			own = p.Login
+		// Their login ON host: a claimed spare's fleetu<N> differs from the
+		// person's own name elsewhere (claude-fleet#3501).
+		if _, _, byHost, err := s.managedLoginsOf(id.Principal); err == nil {
+			for h, l := range byHost {
+				if sameMachine(h, host) {
+					own = l
+				}
+			}
+		}
+		if own == "" {
+			if p, err := s.Store.Principal(id.Principal); err == nil {
+				own = p.Login
+			}
 		}
 	}
 	s.nodes.mu.Lock()

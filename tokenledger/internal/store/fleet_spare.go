@@ -76,6 +76,16 @@ func (s *Store) CreateSpare(hostname string, valid func(string) bool, at time.Ti
 		if !valid(login) {
 			continue
 		}
+		// A spare a recorded person claimed (ClaimSpareFor) keeps its name
+		// on an account row with no principal row of its own: the name is
+		// still taken, on every machine (claude-fleet#3501).
+		var held int
+		if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_accounts WHERE login = ?`, login).Scan(&held); err != nil {
+			return nil, err
+		}
+		if held > 0 {
+			continue
+		}
 		nonce, err := randomLowerAlnum(8)
 		if err != nil {
 			return nil, err
@@ -120,8 +130,9 @@ func (s *Store) SpareAccounts() ([]FleetAccount, error) {
 // ClaimSpare hands the oldest ready (active) spare on hostname to the person
 // to: its principal row becomes theirs (display name set), its account row
 // with it, and one hub_audit line says so. Record-only, in one transaction.
-// to must have no principal row yet — a person already recorded keeps their
-// login and is opened the usual way. ErrNoSpare when hostname has none ready.
+// to must have no principal row yet — a person already recorded takes a
+// spare through ClaimSpareFor (claude-fleet#3501). ErrNoSpare when hostname
+// has none ready.
 func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time) (*FleetAccount, error) {
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
@@ -174,6 +185,96 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 		return nil, err
 	}
 	as, err := s.FleetAccounts(to)
+	if err != nil {
+		return nil, err
+	}
+	for i := range as {
+		if strings.EqualFold(as[i].Hostname, hostname) {
+			return &as[i], nil
+		}
+	}
+	return nil, fmt.Errorf("claimed spare %s on %s but its row is gone", login, hostname)
+}
+
+// ClaimSpareFor hands the oldest ready spare on hostname to a person the hub
+// already records (claude-fleet#3501): the spare's account row becomes theirs
+// — its login (fleetu<N>) kept, so a person's login may differ from one
+// machine to the next and every 「this person → their login there」 reads
+// fleet_accounts, never fleet_principals.login — the spare's principal row is
+// deleted and one hub_audit line says so. Record-only, in one transaction.
+//
+// A row the person already has on hostname is replaced only when nothing of
+// it is on the machine: pending (never sent) or removed. Any other state
+// leaves it theirs and answers ErrAccountState. ErrNoPrincipal when to is
+// not recorded (ClaimSpare is that road); ErrNoSpare when hostname has none
+// ready.
+func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time) (*FleetAccount, error) {
+	to = strings.TrimSpace(to)
+	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
+		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(s.d.deferForeignKeys()); err != nil {
+		return nil, err
+	}
+	var pid string
+	switch err := tx.QueryRow(`SELECT principal_id FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), to).Scan(&pid); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, ErrNoPrincipal
+	case err != nil:
+		return nil, err
+	}
+	var held string
+	switch err := tx.QueryRow(`SELECT state FROM fleet_accounts WHERE principal_id = ? AND hostname = ?`, pid, hostname).Scan(&held); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return nil, err
+	case held == AccountPending || held == AccountRemoved:
+		if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ? AND hostname = ?`, pid, hostname); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("%w: %s already has a login on %s (%s)", ErrAccountState, pid, hostname, held)
+	}
+	var spareID, login string
+	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_accounts
+		WHERE principal_id LIKE ? AND hostname = ? AND state = ? AND op = 'create'
+		ORDER BY updated_at, principal_id LIMIT 1`, spareLikePattern, hostname, AccountActive).Scan(&spareID, &login)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoSpare
+	}
+	if err != nil {
+		return nil, err
+	}
+	ts := at.UTC().Format(rfc)
+	r, err := tx.Exec(`UPDATE fleet_accounts SET principal_id = ?, detail = ?, updated_at = ?
+		WHERE principal_id = ? AND hostname = ? AND state = ?`,
+		pid, "spare: claimed for a recorded person", ts, spareID, hostname, AccountActive)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := r.RowsAffected(); n != 1 {
+		return nil, ErrNoSpare // another claim took it first
+	}
+	if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ?`, spareID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM fleet_principals WHERE principal_id = ?`, spareID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO hub_audit (created, actor, action, target, outcome, detail)
+		VALUES (?, ?, 'spare.claim', ?, 'ok', ?)`, ts, actor, login,
+		fmt.Sprintf("%s on %s → %s", spareID, hostname, pid)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	as, err := s.FleetAccounts(pid)
 	if err != nil {
 		return nil, err
 	}

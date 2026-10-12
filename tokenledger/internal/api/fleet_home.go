@@ -136,6 +136,10 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		// The endpoint that speaks for this machine: the person's own login
 		// when it reports, else any online one — they share the box.
 		var ep *store.Node
+		mine := login
+		if lg != "" {
+			mine = lg // their login THERE (a claimed spare's, claude-fleet#3501)
+		}
 		for i := range nodes {
 			n := &nodes[i]
 			if !sameMachine(n.Hostname, m.Hostname) {
@@ -145,7 +149,7 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 			switch {
 			case ep == nil:
 				ep = n
-			case online && n.OSUser == login:
+			case online && n.OSUser == mine:
 				ep = n
 			case online && NodeStatus(ep.LastHeartbeat, ep.HeartbeatMS, now) != "online":
 				ep = n
