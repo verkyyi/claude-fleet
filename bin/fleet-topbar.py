@@ -58,6 +58,7 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 
 sys.path.insert(0, str(BIN))
+import fleet_ticket_url as FTU  # noqa: E402 — where a ticket reads (#3596)
 import fleet_view as FV   # noqa: E402 — the ⌘P panel: its glyph table is the one table (#3194)
 
 # a state the panel's sym_of reads as idle but this line calls working (the design:
@@ -574,7 +575,11 @@ def click(what, sess):
         if not (num and "/" in slug):
             note(sess, client, "%s · %s" % (rec.get("key") or rec.get("title") or "", rec.get(what) or "—"))
             return 0
-        url = "https://github.com/%s/%s/%s" % (slug, "issues" if what == "key" else "pull", num.group(0))
+        url = (FTU.ticket_url(slug, num.group(0)) if what == "key"
+               else "https://github.com/%s/pull/%s" % (slug, num.group(0)))
+        if not url:
+            note(sess, client, "%s · %s" % (rec.get("key") or rec.get("title") or "", rec.get(what) or "—"))
+            return 0
         subprocess.run(["bash", str(BIN / "fleet-open.sh"), url], env=shell_env(sess),
                        stdin=subprocess.DEVNULL, capture_output=True)
         return 0

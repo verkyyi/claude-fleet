@@ -578,8 +578,11 @@ func (s *Server) rememberEntryReturn(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.sshRelayHTTPIdentity(r); !ok && r.Method == http.MethodGet {
 			back := EntryPagePath
-			if r.URL.Path == EntryConnPath {
+			switch {
+			case r.URL.Path == EntryConnPath:
 				back = EntryConnPath
+			case ticketPageReturnRe.MatchString(r.URL.Path): // 我的单子 (claude-fleet#3596)
+				back = r.URL.Path
 			}
 			http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: back, Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r), MaxAge: int(loginCookieTTL.Seconds())})
@@ -598,6 +601,9 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: "", Path: "/", MaxAge: -1})
 	switch c.Value { // the only places it may send anyone
 	case EntryPagePath, EntryConnPath:
+		return c.Value
+	}
+	if ticketPageReturnRe.MatchString(c.Value) {
 		return c.Value
 	}
 	return ""

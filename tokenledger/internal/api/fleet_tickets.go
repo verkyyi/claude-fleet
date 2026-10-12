@@ -429,14 +429,25 @@ func (s *Server) ticketComment(w http.ResponseWriter, r *http.Request, c ticketC
 			who = author + " (" + c.actor + ")"
 		}
 	}
-	cm, err := s.Store.AddTicketComment(store.TicketComment{Repo: t.Repo, Number: t.Number, Author: who, Body: in.Body,
-		Source: src, Marker: marker}, time.Now())
+	cm, err := s.addTicketComment(t, who, in.Body, src, marker)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.pushTicket(t.Owner, control.Ticket{Repo: t.Repo, Number: t.Number, Kind: "comment", CommentID: cm.ID})
 	writeJSON(w, http.StatusCreated, cm)
+}
+
+// addTicketComment writes one comment on hub ticket t and tells the owner's
+// machines (the JSON road and the tickets page share it): the session doing
+// the ticket reads it on its next turn.
+func (s *Server) addTicketComment(t store.FleetTicket, author, body, source, marker string) (store.TicketComment, error) {
+	cm, err := s.Store.AddTicketComment(store.TicketComment{Repo: t.Repo, Number: t.Number, Author: author, Body: body,
+		Source: source, Marker: marker}, time.Now())
+	if err != nil {
+		return cm, err
+	}
+	s.pushTicket(t.Owner, control.Ticket{Repo: t.Repo, Number: t.Number, Kind: "comment", CommentID: cm.ID})
+	return cm, nil
 }
 
 func (s *Server) ticketClaim(w http.ResponseWriter, r *http.Request, c ticketCaller, t store.FleetTicket) {

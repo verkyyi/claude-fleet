@@ -110,9 +110,12 @@ import tempfile
 import threading
 import time
 import unicodedata
+
 from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
+sys.path.insert(0, str(BIN))
+from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
 
 US = "\x1f"
 STACK_MAX = 50
@@ -763,7 +766,7 @@ def pr_url(row):
     num = "".join(c for c in (row.get("pr") or "").split("✓")[0].split("✗")[0] if c.isdigit())
     if num:
         return "https://github.com/%s/pull/%s" % (repo, num)
-    return "https://github.com/%s/issues/%s" % (repo, row["issue"]) if row.get("issue") else ""
+    return ticket_url(repo, row["issue"]) if row.get("issue") else ""
 
 
 def open_url(url):
