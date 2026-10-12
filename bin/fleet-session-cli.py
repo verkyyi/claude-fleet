@@ -587,6 +587,9 @@ def cmd_ls(args):
     if "--all" not in args:
         # the list's own 已结束 group (issue #2565): over, so off the default list
         rs = [r for r in rs if not r.get("ended")]
+        # a 「结果给你」 row (issue #3517): the report of a session already gone
+        # (`<key> REAPED`), the sidebar's note to read — not a session
+        rs = [r for r in rs if not r["key"].startswith("orphanrep:")]
     rs = attach_bus(rs)
     if "--json" in args:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test",

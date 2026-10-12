@@ -1194,6 +1194,24 @@ d = json.load(sys.stdin); w = [s["worker"] for s in d["sessions"] if s["worker"]
 print(repr(w["name"]) + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' 2>&1)
   eq "G: …a row with no parent: no trailing space on its name, origin_wid None" \
      "'侧边栏 x'|None|None" "$got"
+  # 置顶 (issue #3517): the hub's worker_pin lands through the adapter — a set,
+  # checked against the window's @fleet_id — and column 32 carries it back as `pin`
+  pinw() { cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+print([x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0].get("pin", False))' "$FLEET_CONF_DIR" "$S" 2>&1; }
+  eq "P: an unpinned window: no pin" "False" "$(pinw)"
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" @fleet_id fid-pin
+  eq "P: the adapter's pin on" "pinned" "$(bash "$CREAD" pin "$S" "$wi" fid-pin on 2>&1)"
+  eq "P: …@pin is 1" "1" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
+  eq "P: …and the inventory says pin" "True" "$(pinw)"
+  bash "$CREAD" pin "$S" "$wi" fid-other off >/dev/null 2>&1; rc=$?
+  eq "P: a window that is no longer that session is refused (exit 5), the pin kept" "5|1" "$rc|$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
+  bash "$CREAD" pin "$S" "$wi" fid-pin toggle >/dev/null 2>&1; rc=$?
+  eq "P: anything but on / off is refused (exit 2)" "2" "$rc"
+  eq "P: the adapter's pin off" "unpinned" "$(bash "$CREAD" pin "$S" "$wi" fid-pin off 2>&1)"
+  eq "P: …@pin unset, never a parked 0" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wi" @pin)"
+  eq "P: …and the inventory no longer says pin" "False" "$(pinw)"
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" -u @fleet_id
   # X (issue #2505): a test identity's window here — the adapter says test, the
   # list (on this real server) draws no row for it, FLEET_ROWS_TEST=1 does
   wt5=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'test-norepo' 'while :; do sleep 300; done')
@@ -1385,5 +1403,36 @@ printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-seed/f
 eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
 touch "$WORK/gh-ok"; rm -f "$HOME/.claude/.credentials.json"
 HOME="$(cd ~ && pwd)"; export HOME
+
+# ============================================================================
+# P2. a pinned session on another machine (issue #3517)
+# ============================================================================
+# the hub's `pin: true` → the cache's field 30 → that row's @pin: the list's 置顶
+# group, here as on its own machine; inventory_row reads column 32
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+base = ["@3", "7", "", "", "acme/app", "working", "claude", "w", "x", "name", "", "", "fid"]
+tail = ["busy=", "born=", "cfg=", "title=", "reap=", "detail=", "role=", "epic=", "epicstale=", "backfill=",
+        "ctxleft=", "ctxband=", "ctxts=", "model=", "effort=", "agentstatus=", "test=", "orphanrep="]
+on = h.inventory_row(base + tail + ["pin=1"])[1]
+off = h.inventory_row(base + tail + ["pin="])[1]
+old = h.inventory_row(base + tail)[1]
+print(on.get("pin"), "pin" in off, "pin" in old, on.get("name"))')
+eq "P2: inventory_row — pin=1 → pin, pin= and an older node's row → none" "True False False name" "$got"
+python3 - "$WORK/sessions-pin.json" "$F" "$(id -un)" <<'PY'
+import json, sys
+path, f, me = sys.argv[1:4]
+w = dict(key="issue-1950", issue=1950, name="钉住的", state="working", lifecycle="awake", agent="claude",
+         repo="acme/app", pin=True)
+json.dump({"machines": [], "nodes": [], "sessions": [dict(worker_id=f + "/issue-1950", machine_name="mini2.local",
+           os_user=me, fleet_id=f, fleet_name="x", availability="online", worker=w,
+           observed_at="2026-10-04T10:00:00Z")]}, open(path, "w"), ensure_ascii=False)
+PY
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-pin.json'" CCQUOTA_FLEET=1 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null \
+  || fail "P2: --refresh (a pinned session) failed"
+eq "P2: the cache's field 30 is 1, the row 30 fields long" "1|30" \
+   "$(LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1950" '$1 == w { print $30 "|" NF }' "$G/remote_$S")"
+s=$(CCQUOTA_FLEET=1 side)
+has "P2: the list grows a 置顶 heading" "$(shdrs "$s")" "置顶 (1)"
+eq "P2: …and the pinned remote row is its first row" "钉住的" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 != "hdr" { print $4; exit }')"
 
 printf 'dash-remote-rows selftest: PASS (%d checks)\n' "$CHECKS"

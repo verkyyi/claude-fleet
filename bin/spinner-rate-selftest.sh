@@ -17,6 +17,7 @@
 #            picks the change up on its next tick, well inside the 1s re-read
 #   HB       the heartbeat keeps the bare epoch as its FIRST token (#677's readers)
 #            and appends `tmux_calls_per_s=<n.n>` (read by fleet-doctor, #889)
+#   FILES    a frame writes no file and runs no here-document (issue #3522)
 #
 # The latency bounds carry slack over the design numbers (1s re-read, 0.25s tick)
 # because a loaded CI runner stretches every sleep; the RATE bounds are what #887
@@ -183,6 +184,18 @@ if [ -n "$tc" ]; then ok "HB: publishes tmux_calls_per_s=$tc (fleet-doctor's mac
 else fail "HB: no tmux_calls_per_s= field" "got: '$hb'"; fi
 
 kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; SPIN_PID=''
+
+# --- FILES (issue #3522) ----------------------------------------------------------
+# A frame writes no file: the window table and the frame's commands stay in the
+# shell, and no here-document runs (macOS bash 3.2 puts each one in a fresh
+# /var/tmp/sh-thd-* file — at 8 frames/s per login, fseventsd's largest load).
+left=''
+for f in "$WORK/tmp"/.*"$LBL"* "$WORK/tmp"/*"$LBL"*; do [ -e "$f" ] && left="$left${f##*/} "; done
+if [ -z "$left" ]; then ok "FILES: no per-fleet table / command file under \$TMPDIR"
+else fail "FILES: the frame loop still writes per-fleet files" "found: $left"; fi
+hd=$(grep -nE '<<-?[[:space:]]*['"'"'"]?[A-Za-z_]+['"'"'"]?[[:space:]]*$|<<<' "$SPIN_SRC" | grep -vE '^[0-9]+:[[:space:]]*#')
+if [ -z "$hd" ]; then ok "FILES: the spinner runs no here-document / here-string"
+else fail "FILES: a here-document in the spinner (one /var/tmp file per run on macOS)" "$hd"; fi
 
 # --- the hook's half, with no spinner to consume it ------------------------------
 rm -f "$SOCKP.dirty"

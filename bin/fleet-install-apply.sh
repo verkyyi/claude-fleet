@@ -22,6 +22,11 @@
 #             gui/<uid> domain nor system LaunchDaemons) and reports them itself,
 #             so the hooks, commands and skills still land instead of the whole
 #             apply going PARTIAL on a `launchctl bootstrap` that cannot work.
+#             A computer that hosts no sessions (承载 off — a pure client, issue
+#             #3534) gets only fleet_daemon_client_units (install-sync): every
+#             other unit is never added, and one already installed is unloaded
+#             and set aside in $FLEET_CONF_DIR/daemons-attic/ — put back and
+#             loaded by the first apply after it hosts again.
 #   plugin    a plugin install owns commands/skills/hooks: `claude plugin update
 #             fleet` replaces the three passes below (unless a copy install sits
 #             beside it, in which case both run)
@@ -571,7 +576,7 @@ daemons_launchd() {
     { [ -z "$SUDO" ] || $SUDO true >/dev/null 2>&1; } || sudo_ok=0
   fi
   local spin=0
-  touched bin/tmux-spinner.sh && spin=1
+  touched bin/tmux-spinner.sh && [ "$CLIENT_ONLY" = 0 ] && spin=1
   if [ -z "$units" ] && [ "$spin" = 0 ]; then say 'daemons: ok — no daemon change, no reload needed'; return; fi
   if [ "$shape" = system ] && ! command -v plutil >/dev/null 2>&1; then
     fail daemons "system LaunchDaemons need plutil to render — not found"; return
@@ -589,6 +594,9 @@ daemons_launchd() {
       if run $pre rm -f "$dst"; then say "daemons: $([ "$DRY" = 1 ] && echo 'would retire' || echo retired) $u (unload + remove)"; acted=1
       else fail daemons "retire $u — could not remove $dst"; fi
       continue
+    fi
+    if [ "$CLIENT_ONLY" = 1 ] && ! fleet_daemon_for_client "$u"; then
+      say "daemons: skip $u — serves sessions, and this computer hosts none (承载 off, issue #3534)"; continue
     fi
     if [ ! -f "$dst" ] && ! is_new "launchd/com.claude-fleet.$u.plist.tmpl"; then
       say "daemons: skip $u — changed, not installed on this login"; continue
@@ -645,10 +653,14 @@ daemons_launchd() {
 daemons_systemd() {
   local units u f any_file dirty=0 acted=0 unit kind
   units=$(printf '%s\n' "$CHANGED" | sed -En 's#^systemd/claude-fleet-(.*)\.(service|timer)$#\1#p' | sort -u)
-  local spin=0; touched bin/tmux-spinner.sh && spin=1
+  local spin=0; touched bin/tmux-spinner.sh && [ "$CLIENT_ONLY" = 0 ] && spin=1
   if [ -z "$units" ] && [ "$spin" = 0 ]; then say 'daemons: ok — no daemon change, no reload needed'; return; fi
   local RESTART='' ENABLE='' DISABLE=''
   for u in $units; do
+    if [ "$CLIENT_ONLY" = 1 ] && ! fleet_daemon_for_client "$u" \
+       && { [ -f "$ROOT/systemd/claude-fleet-$u.service" ] || [ -f "$ROOT/systemd/claude-fleet-$u.timer" ]; }; then
+      say "daemons: skip $u — serves sessions, and this computer hosts none (承载 off, issue #3534)"; continue
+    fi
     any_file=0
     for kind in service timer; do [ -f "$ROOT/systemd/claude-fleet-$u.$kind" ] && any_file=1; done
     if [ "$any_file" = 0 ]; then                                  # retired
@@ -753,6 +765,127 @@ daemons_resident() {
   return 0
 }
 
+# client — a computer that hosts NO sessions (承载 off: a pure client, issue
+# #3534) keeps only fleet_daemon_client_units; every other daemon serves sessions
+# on this machine (memguard watches session processes, cleanup reaps worktrees,
+# the spinner drives a fleet's bar …) and has nothing to do here. The answer is
+# fleet-conf.sh's (the `conf` step above may just have written it): FLEET_HOST=0
+# (or the old FLEET_ROLE=client) says so; with nothing written, only a machine
+# that reads as client and nothing else (hub.json / the client …, no fleet conf,
+# no node.env) is one — a fresh login bootstrapping before its fleet-up still
+# gets every daemon. A live fleet server here always wins: never under sessions.
+# FLEET_INSTALL_HOST=1|0 is the selftests' seam.
+client_only() {
+  local hw
+  case "${FLEET_INSTALL_HOST:-}" in
+    0) ;;
+    1) return 1 ;;
+    *) [ -f "$ROOT/bin/fleet-conf.sh" ] || return 1
+       hw=$(bash "$ROOT/bin/fleet-conf.sh" host --why 2>/dev/null </dev/null)
+       case "$hw" in
+         0"	"inferred*) [ "$(bash "$ROOT/bin/fleet-conf.sh" role 2>/dev/null </dev/null)" = client ] || return 1 ;;
+         0"	"*) ;;
+         *) return 1 ;;
+       esac ;;
+  esac
+  [ -f "$ROOT/bin/fleet-lib.sh" ] || return 0
+  [ -z "$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_sockets 2>/dev/null)" ]
+}
+
+# daemons_client — the reversible half (issue #3534). On a client: every
+# installed session daemon is unloaded and its plist / unit MOVED to
+# $FLEET_CONF_DIR/daemons-attic/ (kept, never deleted), its tick stamp forgotten.
+# On a computer that hosts again: what the attic holds and this version still
+# ships goes back and is loaded. Nothing either way ⇒ silent.
+ATTIC="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/daemons-attic"
+daemons_client() {
+  local f u label dst dom pre shape gone='' back='' need_root=''
+  if [ "$PLATFORM" = launchd ]; then
+    shape=$(fleet_daemon_shape "$LOGIN"); dom=$(fleet_daemon_domain "$shape")
+    pre=''; [ "$shape" = system ] && pre="$SUDO"
+    if [ "$CLIENT_ONLY" = 1 ]; then
+      for f in "$ROOT"/launchd/com.claude-fleet.*.plist.tmpl; do
+        [ -f "$f" ] || continue
+        u=${f##*/com.claude-fleet.}; u=${u%.plist.tmpl}
+        fleet_daemon_for_client "$u" && continue
+        label=$(fleet_daemon_label "$u" "$shape" "$LOGIN"); dst=$(fleet_daemon_plist "$u" "$shape" "$LOGIN")
+        [ -f "$dst" ] || continue
+        if [ "$shape" = system ] && ! $pre true >/dev/null 2>&1; then
+          need_root="$need_root; sudo launchctl bootout system/$label; sudo mv $dst $ATTIC/"; continue
+        fi
+        if [ "$DRY" = 1 ]; then gone="$gone $u"; continue; fi
+        mkdir -p "$ATTIC" || { fail daemons "cannot create $ATTIC"; return; }
+        $pre "$LAUNCHCTL" bootout "$dom/$label" >/dev/null 2>&1
+        if $pre mv -f "$dst" "$ATTIC/$label.plist"; then gone="$gone $u"; fleet_daemon_forget "$u" "$ROOT"
+        else fail daemons "move $dst to $ATTIC"; fi
+      done
+    else
+      for f in "$ATTIC"/*.plist; do
+        [ -f "$f" ] || continue
+        label=$(basename "$f" .plist); u=${label##*.}
+        [ -f "$ROOT/launchd/com.claude-fleet.$u.plist.tmpl" ] || continue
+        [ "$(fleet_daemon_label "$u" "$shape" "$LOGIN")" = "$label" ] || continue
+        dst=$(fleet_daemon_plist "$u" "$shape" "$LOGIN")
+        [ -f "$dst" ] && continue
+        if [ "$shape" = system ] && ! $pre true >/dev/null 2>&1; then
+          need_root="$need_root; sudo mv $f $dst; sudo launchctl bootstrap system $dst"; continue
+        fi
+        if [ "$DRY" = 1 ]; then back="$back $u"; continue; fi
+        [ "$shape" = gui ] && mkdir -p "$AGENTS"
+        if $pre mv -f "$f" "$dst" && $pre "$LAUNCHCTL" bootstrap "$dom" "$dst" >/dev/null 2>&1; then back="$back $u"
+        else fail daemons "restore $u from $ATTIC"; fi
+      done
+    fi
+  elif [ "$PLATFORM" = systemd ]; then
+    local kind any
+    if [ "$CLIENT_ONLY" = 1 ]; then
+      for f in "$ROOT"/systemd/claude-fleet-*.service; do
+        [ -f "$f" ] || continue
+        u=${f##*/claude-fleet-}; u=${u%.service}
+        fleet_daemon_for_client "$u" && continue
+        any=0; for kind in service timer; do [ -f "$SDIR/claude-fleet-$u.$kind" ] && any=1; done
+        [ "$any" = 1 ] || continue
+        if [ "$DRY" = 1 ]; then gone="$gone $u"; continue; fi
+        mkdir -p "$ATTIC/systemd" || { fail daemons "cannot create $ATTIC/systemd"; return; }
+        if [ -f "$SDIR/claude-fleet-$u.timer" ]; then "$SYSTEMCTL" --user disable --now "claude-fleet-$u.timer" >/dev/null 2>&1; fi
+        "$SYSTEMCTL" --user disable --now "claude-fleet-$u.service" >/dev/null 2>&1
+        for kind in service timer; do
+          [ -f "$SDIR/claude-fleet-$u.$kind" ] && mv -f "$SDIR/claude-fleet-$u.$kind" "$ATTIC/systemd/"
+        done
+        gone="$gone $u"; fleet_daemon_forget "$u" "$ROOT"
+      done
+      [ -n "$gone" ] && [ "$DRY" = 0 ] && "$SYSTEMCTL" --user daemon-reload >/dev/null 2>&1
+    else
+      for f in "$ATTIC"/systemd/claude-fleet-*.service; do
+        [ -f "$f" ] || continue
+        u=${f##*/claude-fleet-}; u=${u%.service}
+        [ -f "$ROOT/systemd/claude-fleet-$u.service" ] || continue
+        [ -f "$SDIR/claude-fleet-$u.service" ] && continue
+        if [ "$DRY" = 1 ]; then back="$back $u"; continue; fi
+        mkdir -p "$SDIR"
+        for kind in service timer; do
+          [ -f "$ATTIC/systemd/claude-fleet-$u.$kind" ] && mv -f "$ATTIC/systemd/claude-fleet-$u.$kind" "$SDIR/"
+        done
+        back="$back $u"
+      done
+      if [ -n "$back" ] && [ "$DRY" = 0 ]; then
+        "$SYSTEMCTL" --user daemon-reload >/dev/null 2>&1
+        for u in $back; do
+          if [ -f "$SDIR/claude-fleet-$u.timer" ]; then kind=timer; else kind=service; fi
+          "$SYSTEMCTL" --user enable --now "claude-fleet-$u.$kind" >/dev/null 2>&1 || fail daemons "enable --now claude-fleet-$u.$kind"
+        done
+      fi
+    fi
+  fi
+  [ -n "$gone" ] && say "daemons: $([ "$DRY" = 1 ] && echo 'would set aside' || echo 'set aside') client-only —${gone} (this computer hosts no sessions; kept in ${ATTIC/#$HOME/~}, back when it hosts again)"
+  [ -n "$back" ] && say "daemons: $([ "$DRY" = 1 ] && echo 'would restore' || echo restored)${back} from ${ATTIC/#$HOME/~} (this computer hosts sessions again)"
+  [ -n "$need_root" ] && fail daemons "no passwordless sudo for this login's system LaunchDaemons — run as an admin:${need_root#;}"
+  return 0
+}
+
+CLIENT_ONLY=0
+if [ "$NODAEMONS" = 0 ] && client_only; then CLIENT_ONLY=1; fi
+
 RESTARTED=''
 BREW=$(brew_prefix)
 if [ "$NODAEMONS" = 0 ] && [ "$PLATFORM" = launchd ] && fleet_node_manages "$LOGIN"; then
@@ -765,8 +898,8 @@ elif [ "$NODAEMONS" = 1 ]; then
   say 'daemons: skip — --no-daemons (nothing rendered, loaded or removed; the caller reports them)'
 else
   case "$PLATFORM" in
-    launchd) daemons_launchd; daemons_resident ;;
-    systemd) daemons_systemd; daemons_resident ;;
+    launchd) daemons_launchd; daemons_client; daemons_resident ;;
+    systemd) daemons_systemd; daemons_client; daemons_resident ;;
     *) say "daemons: skip — no launchd/systemd on this platform" ;;
   esac
 fi

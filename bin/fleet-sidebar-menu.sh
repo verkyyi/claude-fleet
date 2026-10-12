@@ -280,11 +280,12 @@ fi
 if [ -n "$remote" ]; then
   # Its machine, name, state and what it needs come from the sidebar's own cache
   # (never the network), as fleet-remote-view.sh reads them.
-  row=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $2 "\037" $8 "\037" $6 "\037" $10; exit }' \
+  row=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $2 "\037" $8 "\037" $6 "\037" $30 "\037" $10; exit }' \
         "$FLEET_C/global/remote_$sess" 2>/dev/null)
   node="${row%%$'\037'*}"; row="${row#*$'\037'}"
   name="${row%%$'\037'*}"; row="${row#*$'\037'}"
-  rstate="${row%%$'\037'*}"; rneeds="${row#*$'\037'}"
+  rstate="${row%%$'\037'*}"; row="${row#*$'\037'}"
+  rpin="${row%%$'\037'*}"; rneeds="${row#*$'\037'}"
   [ -n "$node" ] || exit 0
   # 「名称 · m4 · 在问你」 — the ONE place the list names the machine (#1475)
   title="${name:-${wid##*/}} · $node"
@@ -319,6 +320,10 @@ if [ -n "$remote" ]; then
   # then a hub write (worker_rename) — the node renames the window holding the
   # row's @fleet_id; greyed (adda) only when no view is on screen to ask on.
   adda "$(t menu_rename)" "$(mk rename)" "$(ask rename "$wid")"
+  # 置顶 (issue #3517): a hub write (worker_pin) — @pin on its own machine, so
+  # every list this person opens shows it on top; the cache's field 30 says which
+  if [ "$rpin" = 1 ]; then add "$(t menu_unpin)" "$(mk pin)" "$(sh_run "$rmt pin $rargs")"
+  else add "$(t menu_pin)" "$(mk pin)" "$(sh_run "$rmt pin $rargs")"; fi
   add "$(t menu_r_stop)" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
   add "$(t menu_r_resume)" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
   # 换到可用订阅 (issue #2102): the shell's every row is remote, so this is the

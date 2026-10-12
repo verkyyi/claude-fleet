@@ -154,7 +154,7 @@ T switch-client -c "$CL" -T prefix
 eq "E: prefix pressed → the prefix keys" " / 会话与动作  c 新会话  n p 切换  d 放到后台  Q 退出 fleet" "$(hint)"
 T switch-client -c "$CL" -T root
 T set-option -g @popup_open "$(date +%s)"; T set-option -g @popup_title popup_quickopen
-eq "E: ⌘P open → the panel's keys" " ↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  > 命令  esc 关" "$(hint)"
+eq "E: ⌘P open → the panel's keys" " ↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  ⌃T 置顶  > 命令  esc 关" "$(hint)"
 eq "E: …the panel's own last line says the same" "$(hint | sed 's/^ //')" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t quickopen_keys)"
 T set-option -g @popup_title popup_keys
 eq "E: another popup → esc" " esc 关" "$(hint)"

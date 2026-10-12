@@ -497,8 +497,8 @@ fleet_ui_t() {
     en:quickopen_cmd_none)      printf 'nothing to do here' ;;
     zh:quickopen_cmd_loading)   printf '读命令…' ;;
     en:quickopen_cmd_loading)   printf 'reading commands…' ;;
-    zh:quickopen_keys)          printf '↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  > 命令  esc 关' ;;
-    en:quickopen_keys)          printf '↵ go  ⌃R rename  ⌃X close  ⌃A answer  ⌃E reap  ⌃O PR  > commands  esc close' ;;
+    zh:quickopen_keys)          printf '↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  ⌃T 置顶  > 命令  esc 关' ;;
+    en:quickopen_keys)          printf '↵ go  ⌃R rename  ⌃X close  ⌃A answer  ⌃E reap  ⌃O PR  ⌃T pin  > commands  esc close' ;;
     # a lost machine's rows (issue #3164)
     zh:quickopen_stale_fmt)     printf '远端列表 %s 没更新 · 标「失联」的行可能已不在' "${1:-}" ;;
     en:quickopen_stale_fmt)     printf "the other machines' list is %s old · rows marked lost may be gone" "${1:-}" ;;
@@ -653,6 +653,13 @@ fleet_ui_t() {
     zh:view_lang_auto_fmt) printf '已按你的系统用中文 · ⌘P → 语言 可改' ;;
     en:view_lang_auto_fmt) printf 'Using English from your system (LANG=%s) · ⌘P → Language to change' "${1:-}" ;;
     # the language row's own lines (issue #3329): ↵ flips, Tab picks, 跟系统走 clears the choice
+    # ⌘P's 置顶 line (issue #3517): the session in view; ⌃T does it on any row
+    zh:view_pin_current)   printf '置顶当前会话' ;;
+    en:view_pin_current)   printf 'Pin the session in view' ;;
+    zh:view_unpin_current) printf '取消置顶当前会话' ;;
+    en:view_unpin_current) printf 'Unpin the session in view' ;;
+    zh:view_pin_foot_fmt)  printf '%s · 任一行上按 ⌃T 也能置顶 / 取消' "${1:-}" ;;
+    en:view_pin_foot_fmt)  printf '%s · ⌃T on any row pins / unpins it too' "${1:-}" ;;
     zh:view_lang_foot) printf '↵ 换成 English · 存到你的账号，换设备也跟着 · Tab 跟系统走' ;;
     en:view_lang_foot) printf '↵ switch to 中文 · saved to your account, follows you to every device · Tab follow the system' ;;
     zh:view_lang_nolang_fmt) printf '没收到你的系统语言（Termius → Hosts → %s → Environment 加 LANG=en_US.UTF-8）· ↵ 换成 English' "${1:-}" ;;
@@ -820,6 +827,10 @@ fleet_ui_t() {
     en:popup_repo_add)          printf 'Add repo' ;;
     # ⌘P's 添加仓库… and dash-repo-add.sh's words (issue #3375): a result token
     # (fleet-repo.sh add's) is never shown bare — each has its sentence here
+    zh:panel_pin_current)       printf '置顶当前会话' ;;
+    en:panel_pin_current)       printf 'Pin the session in view' ;;
+    zh:panel_unpin_current)     printf '取消置顶当前会话' ;;
+    en:panel_unpin_current)     printf 'Unpin the session in view' ;;
     zh:panel_repo_add)          printf '添加仓库…' ;;
     en:panel_repo_add)          printf 'Add a repo…' ;;
     zh:repo_add_header_fmt)     printf '加仓库到 %s  ·  输入 owner/name，或粘贴 GitHub 链接  ·  ↵ 加入 · esc 取消 · [✕ close]' "${1:-}" ;;
@@ -903,6 +914,10 @@ fleet_ui_t() {
     en:remote_label_rename_fmt)  printf 'rename %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_reappol_fmt) printf '%s 改回收方式（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_reappol_fmt) printf 'reap policy of %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_label_pin_on_fmt)  printf '置顶 %s（在 %s）' "${1:-}" "${2:-}" ;;
+    en:remote_label_pin_on_fmt)  printf 'pin %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_label_pin_off_fmt) printf '取消置顶 %s（在 %s）' "${1:-}" "${2:-}" ;;
+    en:remote_label_pin_off_fmt) printf 'unpin %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_reappol_hint)      printf '%s' 'merged[:时长] · done[:时长] · loop-end · at:<时间> · keep' ;;
     en:remote_reappol_hint)      printf '%s' 'merged[:dur] · done[:dur] · loop-end · at:<time> · keep' ;;
     zh:remote_reappol_bad_fmt)   printf '%s：「%s」不是回收方式' "${1:-}" "${2:-}" ;;

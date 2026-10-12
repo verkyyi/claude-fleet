@@ -828,6 +828,35 @@ class H_Accounts(Sandbox):
                 e = fns.account_entry(unit, "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
                 self.assertEqual((e["env"]["LANG"], e["env"]["LC_ALL"]), (want, want), plat)
 
+    def test_shared_proxy_login_keeps_no_resident_launcher(self):
+        # issue #3524: a login on the machine's shared proxy runs no resident
+        # `fleet-cred-proxy.sh run` — its relay pass is a one-minute task instead;
+        # a login still on its own proxy keeps the resident one
+        unit = {"name": "cred-proxy", "keepalive": True, "out": "/dev/null", "err": "/dev/null",
+                "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/fleet-cred-proxy.sh", "run"], "env": {}}
+        for who, rec in (("alice", {"separated": True, "shared": True, "run": "/var/run/fleet-cred/.shared"}),
+                         ("bob", None)):
+            conf = os.path.join(self.home(who), ".config", "claude-fleet")
+            os.makedirs(conf, exist_ok=True)
+            if rec:
+                with open(os.path.join(conf, "credsep.json"), "w") as f:
+                    json.dump(rec, f)
+        a = fns.account_entry(fns.account_unit_for(unit, self.home("alice")), "alice",
+                              (501, 20, self.home("alice")), "/opt/homebrew")
+        self.assertNotIn("keepalive", a, "a shared-proxy login keeps no resident launcher")
+        self.assertEqual(a["name"], "alice/cred-relay")
+        self.assertEqual(a["every"], 60)
+        self.assertEqual(a["cmd"][-1], "relay-tick")
+        self.assertEqual(unit["argv"][-1], "run", "the table's unit is not changed in place")
+        b = fns.account_entry(fns.account_unit_for(unit, self.home("bob")), "bob",
+                              (502, 20, self.home("bob")), "/opt/homebrew")
+        self.assertTrue(b.get("keepalive"))
+        self.assertEqual((b["name"], b["cmd"][-1]), ("bob/cred-proxy", "run"))
+        # an unreadable record is not shared: the resident unit stays
+        with open(os.path.join(self.home("bob"), ".config", "claude-fleet", "credsep.json"), "w") as f:
+            f.write("{not json")
+        self.assertIs(fns.account_unit_for(unit, self.home("bob")), unit)
+
     def test_runs_as_account_and_isolated(self):
         self.acct_script("alice", "probe.sh",
                          'echo "uid=$(id -u) home=$HOME user=$USER conf=$FLEET_CONF_DIR pwd=$(pwd -P) '

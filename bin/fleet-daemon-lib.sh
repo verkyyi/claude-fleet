@@ -113,6 +113,41 @@ fleet_daemon_units() {
 # registry is named here and vice versa.
 fleet_daemon_keepalive_units() { printf '%s\n' memguard; }
 
+# fleet_daemon_client_units — the units a computer that hosts NO sessions (承载
+# off, a pure client — issue #3534) still runs; every other template serves the
+# sessions on this machine and is neither installed nor kept there
+# (fleet-install-apply.sh's `daemons` step). The reasons, one per unit, are
+# docs/INSTALL.md «纯客户端装哪些后台»:
+#   install-sync — the only thing that moves a full install's ~/.claude/fleet to
+#                  stable (an install-line client has none: `fleet` updates it at
+#                  start, fleet-client-update.sh); an interval tick, not resident,
+#                  and its node half is already off on 承载 off (#2716).
+# peerlink stays off: the standing links are the 看台's, and on a pure client the
+# 看台 runs on its home machine — `fleet` reaches it over its own ssh.
+fleet_daemon_client_units() { printf '%s\n' install-sync; }
+
+# fleet_daemon_for_client <unit> — 0 iff a pure client keeps <unit>.
+fleet_daemon_for_client() {
+  case " $(fleet_daemon_client_units | tr '\n' ' ')" in *" ${1:-} "*) return 0 ;; esac
+  return 1
+}
+
+# fleet_daemon_forget <unit> [root] — drop the unit's evidence of life (its tick
+# stamp and any heartbeat the registry names), so a unit taken off this login on
+# purpose is not read as a stalled one by the doctor or the watch.
+fleet_daemon_forget() {
+  _fdf_d=$(fleet_daemon_state_dir "${2:-}")
+  _fdf_gl="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global"
+  rm -f "$_fdf_d/${1:-unknown}.tick" 2>/dev/null
+  _fdf_src=$(fleet_daemon_field "${1:-}" 3)
+  _fdf_ifs="$IFS"; IFS=','
+  for _fdf_one in $_fdf_src; do
+    case "$_fdf_one" in hb:*) rm -f "$_fdf_gl/${_fdf_one#hb:}" 2>/dev/null ;; esac
+  done
+  IFS="$_fdf_ifs"
+  return 0
+}
+
 # fleet_daemon_unit_names — just the unit names, in registry order.
 fleet_daemon_unit_names() { fleet_daemon_units | while read -r _fdn _fdi _fds; do
   [ -n "$_fdn" ] && printf '%s\n' "$_fdn"; done; }
