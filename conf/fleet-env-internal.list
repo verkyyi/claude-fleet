@@ -19,6 +19,7 @@ FLEET_ACCOUNT_PAUSED_CMD           seam: prints the hub client-settings JSON ins
 FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
+FLEET_ADMIT_GUIDE                  handoff: dash-raw-session tells its own admission this is the pinned /fleet-onboard guide (#3472)
 FLEET_ADMIT_OWNER                  handoff: whose admission reservation this process holds (default $$; fleet_admit_*, #2502)
 FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
 FLEET_ALERTS_EVENT_DEDUP           knob: same kind + text within this many seconds is one alerts event (fleet-alerts.sh event, 60)
@@ -214,6 +215,7 @@ FLEET_CRED_RELAY_RETRY_MAX_SECS    knob: cap of that doubling — the bound on a
 FLEET_CRED_REPROBE_CMD             test seam: what a newly issued relay pass re-runs instead of fleet-node-probe.sh (#3423)
 FLEET_CRED_RELAY_TOKEN             handoff: a hand-set relay pass, read from secrets.env only — never a setting; unset = the one fleet-relay-cred.sh mints (#1970, #1974)
 FLEET_DRILL_AGENT_SECS             knob: fleet-onboard-drill.sh's wait for the session to read the screenshot (300 s, #2139)
+FLEET_DRILL_GUIDE_SECS             knob: fleet-onboard-drill.sh's wait for the home's onboarding guide to open (240 s, #3472)
 FLEET_DRILL_NODE_BIN               knob: the session login's fleet bin/ fleet-onboard-drill.sh restarts it with (default ~<login>/.claude/fleet/bin, #2139)
 FLEET_DRILL_OPENED_SECS            knob: fleet-onboard-drill.sh's wait for the row once the hub stops saying it is opening the login (300 s, #2908)
 FLEET_DRILL_OPENING_SECS           knob: fleet-onboard-drill.sh's longest wait while the hub says it is opening the login, from the first sighting (1260 s = the hub's 20 min give-up + 1, #2069, #2908)
