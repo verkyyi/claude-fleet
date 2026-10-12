@@ -1278,7 +1278,7 @@ versioned list the Singapore relay (`GET /v1/relay/revocations`, that token)
 and the machines' doors (`GET /v1/node/revocations`, a node token) follow and
 refuse by locally — at once, and with the hub away (claude-fleet#3560;
 `POST /v1/fleet/revocations {serial}` revokes one connection certificate;
-docs/CRED-RELAY.md «吊销名单»). Unset: those routes are 404 and nothing is
+docs/dev/CRED-RELAY.md «吊销名单»). Unset: those routes are 404 and nothing is
 written. With `CCQUOTA_FLEET_RELAY_SIGN_KEY[_FILE]` (a 32-byte Ed25519 seed,
 base64) a node that asks gets an `frl2.` relay pass — signed, four hours,
 bound to its machine and login — which the relay verifies itself with the

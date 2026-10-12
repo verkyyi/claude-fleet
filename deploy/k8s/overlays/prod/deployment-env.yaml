@@ -113,7 +113,7 @@ spec:
                   name: ccquota
                   key: relay-sign-key
                   optional: true
-            # The Singapore relay (#1976, docs/CRED-RELAY.md).
+            # The Singapore relay (#1976, docs/dev/CRED-RELAY.md).
             - name: CCQUOTA_FLEET_CRED_RELAY_URL
               value: "https://fleet-relay.24hw.cn"
             # Codex refreshes go through the relay above (#2137, EPIC #2133):
