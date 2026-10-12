@@ -62,7 +62,7 @@ has() { CHECKS=$((CHECKS + 1)); case "$3" in *"$2"*) printf 'ok   %s\n' "$1" ;; 
 
 W=$(mktemp -d "${TMPDIR:-/tmp}/fsess-cli.XXXXXX") || exit 1
 L="fsess-cli-$$"
-cleanup() { tmux -S "$W/s" kill-server >/dev/null 2>&1; tmux -L "$L" kill-server >/dev/null 2>&1; rm -rf "$W"; }
+cleanup() { tmux -S "$W/s" kill-server >/dev/null 2>&1; tmux -L "$L" kill-server >/dev/null 2>&1; tmux -L "$L-own" kill-server >/dev/null 2>&1; rm -rf "$W"; }
 trap cleanup EXIT
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_SWITCH_STATE="$W/state" FLEET_UI_LANG=zh
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$FLEET_SWITCH_STATE"
@@ -143,12 +143,14 @@ eq "A ls --json: an own row carries the hub's worker_id + fleet_id (#3467)" "@7|
 FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-own" FLEET_SESSION_CLI_WRITE="$W/write" \
   python3 "$BIN/fleet-session-cli.py" rename @7 看图 >/dev/null 2>&1
 eq "A rename by an own key → worker_rename by its hub worker_id (#3467)" 'worker_rename {"worker_id": "F/scratch-9", "name": "看图"}' "$(tail -1 "$W/writes" 2>/dev/null)"
-tmux -L "$L" -f /dev/null new-session -d -s "$L" -x 80 -y 20 2>/dev/null
-WID=$(tmux -L "$L" display-message -p -t "=$L" '#{window_id}' 2>/dev/null)
-tmux -L "$L" set-option -w -t "=$L" @fleet_id fid-own-7 2>/dev/null
+LO="$L-own"
+tmux -L "$LO" -f /dev/null new-session -d -s "$LO" -x 80 -y 20 2>/dev/null
+WID=$(tmux -L "$LO" display-message -p -t "$LO:" '#{window_id}' 2>/dev/null)
+tmux -L "$LO" set-option -w -t "$LO:" @fleet_id fid-own-7 2>/dev/null
 sed "s/^@7/$WID/" "$W/rows-own.tsv" > "$W/rows-own-tmux.tsv"
 eq "A ls --json: no hub ⇒ an own row's fleet_id is its window's @fleet_id (#3467)" "$WID||fid-own-7;" \
-  "$(FLEET_SESSION="$L" FLEET_SESSION_CLI_ROWS="$W/rows-own-tmux.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+  "$(FLEET_SESSION="$LO" FLEET_SESSION_CLI_ROWS="$W/rows-own-tmux.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+tmux -L "$LO" kill-server >/dev/null 2>&1
 
 # --- B. the resolver -----------------------------------------------------------------
 eq "B by key" "名称      随便聊聊" "$(cli show wid:F/scratch-3 | head -1)"
