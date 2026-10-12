@@ -45,7 +45,13 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 PR="${PR//[^0-9]/}"
-[ -z "$PR" ] && { printf 'fleet-pr-merge: a PR number is required\n' >&2; exit 2; }
+# A repo the fleet lands itself (FLEET_LAND=fleet, issue #3602) has no PR: there the
+# number is optional — bin/fleet-land.sh takes the window's branch.
+if [ -z "$PR" ]; then
+  _lr="${repo:-${CF_REPO:-}}"; [ -n "$_lr" ] || _lr=$(fleet_target_repo "$(fleet_current_session 2>/dev/null)" 2>/dev/null)
+  [ -n "$_lr" ] && [ "$(fleet_repo_land "$_lr" "$(fleet_current_session 2>/dev/null)")" = fleet ] \
+    || { printf 'fleet-pr-merge: a PR number is required\n' >&2; exit 2; }
+fi
 note() { [ "$quiet" = 1 ] || printf 'fleet-pr-merge: %s\n' "$1" >&2; }
 
 # Same resolution as fleet-pr-verdict.sh: the pane's window repo (@repo), else the
@@ -64,6 +70,11 @@ if [ -z "$repo" ]; then
   [ -n "$repo" ] || repo="${FLEET_REPO:-}"
 fi
 [ -z "$repo" ] && { printf 'fleet-pr-merge: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 2; }
+# FLEET_LAND=fleet (issue #3602, EPIC #3570 C9): the fleet lands it — rebase, the
+# repo's check, a fast-forward push — never a PR, never gh.
+if [ "$(fleet_repo_land "$repo" "$sess")" = fleet ]; then
+  exec "$BIN/fleet-land.sh" ${PR:+--issue "$PR"} $([ "$quiet" = 1 ] && echo -q) "$repo"
+fi
 if [ -z "$method" ]; then
   [ -n "$sess" ] && fleet_load_conf "$sess" >/dev/null 2>&1
   method=$(fleet_merge_method)

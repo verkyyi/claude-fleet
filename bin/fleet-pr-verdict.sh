@@ -101,7 +101,13 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 PR="${PR//[^0-9]/}"
-[ -z "$PR" ] && { printf 'fleet-pr-verdict: a PR number is required\n' >&2; exit 2; }
+# A repo the fleet lands itself (FLEET_LAND=fleet, issue #3602) has no PR: there the
+# number is optional — bin/fleet-land.sh takes the window's branch.
+if [ -z "$PR" ]; then
+  _lr="${repo:-${CF_REPO:-}}"; [ -n "$_lr" ] || _lr=$(fleet_target_repo "$(fleet_current_session 2>/dev/null)" 2>/dev/null)
+  [ -n "$_lr" ] && [ "$(fleet_repo_land "$_lr" "$(fleet_current_session 2>/dev/null)")" = fleet ] \
+    || { printf 'fleet-pr-verdict: a PR number is required\n' >&2; exit 2; }
+fi
 for _n in "$wait_timeout" "$nochecks_timeout" "$interval"; do
   case "$_n" in ''|*[!0-9]*) printf 'fleet-pr-verdict: a duration must be whole seconds (got %s)\n' "$_n" >&2; exit 2 ;; esac
 done
@@ -128,6 +134,11 @@ if [ -z "$repo" ]; then
   [ -n "$repo" ] || repo="${FLEET_REPO:-}"
 fi
 [ -z "$repo" ] && { printf 'fleet-pr-verdict: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 2; }
+# FLEET_LAND=fleet (issue #3602, EPIC #3570 C9): no PR and no gh — git's verdict,
+# same words (READY · BEHIND · CONFLICT · FAILING · BLOCKED · MERGED).
+if [ "$(fleet_repo_land "$repo" "$_sess")" = fleet ]; then
+  exec "$BIN/fleet-land.sh" --verdict ${PR:+--issue "$PR"} $([ "$quiet" = 1 ] && echo -q) "$repo"
+fi
 command -v gh >/dev/null 2>&1 || { printf 'fleet-pr-verdict: gh not on PATH\n' >&2; exit 2; }
 
 # ONE gh read → six fields, ONE PER LINE: state, mergeable, mergeStateStatus,

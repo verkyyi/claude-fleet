@@ -18,8 +18,8 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
   comment   issue + body [+ mode]   → bin/fleet-comment.sh              (记)
   evidence  action [+ file|text|pane, note] → bin/fleet-evidence.sh     (记)
   handoff   action [+ slug|doc]     → bin/fleet-handoff-file.sh         (记)
-  pr_verdict pr [+ repo, wait]      → bin/fleet-pr-verdict.sh           (合)
-  pr_merge  pr [+ repo]             → bin/fleet-pr-merge.sh             (合)
+  pr_verdict [pr, repo, wait]       → bin/fleet-pr-verdict.sh           (合)
+  pr_merge  [pr, repo]              → bin/fleet-pr-merge.sh             (合)
   brief     [kind, issue, repo]     → bin/fleet-claim-brief.sh | fleet-compact-resume.sh --brief  (issue #1811)
   file_issue title [+ body, parent, spawn|bind, …] → bin/fleet-issue-file.sh
   gh        kind + number [+ fields, max_age, repo] → bin/fleet-gh.sh
@@ -111,7 +111,7 @@ AWAIT_SLACK_S = 25
 SPAWN_TIMEOUT_S = 120
 STATUS_TIMEOUT_S = 30
 WRITE_TIMEOUT_S = 90       # a comment / a report / an evidence copy: one gh or peer round-trip
-MERGE_TIMEOUT_S = 180      # gate + merge + confirm
+LAND_TIMEOUT_S = 595       # a repo the fleet lands itself runs its check inside the call (#3602)
 VERDICT_TIMEOUT_S = 60     # the one-shot read
 BRIEF_TIMEOUT_S = 90       # one gh read of the issue + its comments
 FILE_TIMEOUT_S = 180       # gh issue create + sub-issue link + a spawn
@@ -1005,12 +1005,18 @@ def tool_handoff(args):
     return script(argv, STATUS_TIMEOUT_S)
 
 
+def pr_arg(args):
+    """The PR number, when given: a repo the fleet lands itself (FLEET_LAND=fleet, issue #3602)
+    has no PR — there it names the issue whose branch lands, and left out the window's branch."""
+    return [str(args["pr"])] if "pr" in args else []
+
+
 def tool_pr_verdict(args):
     if not args.get("wait") and ("until_merged" in args or "timeout" in args):
         raise Refused("until_merged and timeout apply with wait only")
-    argv = [str(BIN / "fleet-pr-verdict.sh"), str(args["pr"])] + check_repo(args)
+    argv = [str(BIN / "fleet-pr-verdict.sh")] + pr_arg(args) + check_repo(args)
     if not args.get("wait"):
-        return script(argv, VERDICT_TIMEOUT_S)
+        return script(argv, LAND_TIMEOUT_S)
     t = args.get("timeout", AWAIT_DEFAULT_S)
     argv += ["--wait", "--timeout", str(t)]
     if args.get("until_merged"):
@@ -1019,7 +1025,7 @@ def tool_pr_verdict(args):
 
 
 def tool_pr_merge(args):
-    return script([str(BIN / "fleet-pr-merge.sh"), str(args["pr"])] + check_repo(args), MERGE_TIMEOUT_S)
+    return script([str(BIN / "fleet-pr-merge.sh")] + pr_arg(args) + check_repo(args), LAND_TIMEOUT_S)
 
 
 # --- the rest of a worker skill (issue #1811, EPIC #1813 C9) --------------------
@@ -1206,6 +1212,9 @@ def tool_open(args):
 REAP_POLICY = {"type": "string", "maxLength": 48,
                "pattern": r"^(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$"}
 ISSUE = {"type": "integer", "minimum": 1, "description": 'The GitHub issue number (a positive integer, no "#").'}
+PR_NUM = {"type": "integer", "minimum": 1,
+          "description": "The PR number. In a repo the fleet lands itself (FLEET_LAND=fleet, issue #3602): the "
+                         "issue whose branch issue-<N> lands; left out, the window's branch."}
 REPO = {"type": "string", "pattern": r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
         "description": "owner/name of a repo THIS fleet hosts (the repos tool lists them). "
                        "Omit for the fleet's default repo."}
@@ -1440,7 +1449,7 @@ TOOLS = {
                        "while PENDING and answers the first settled verdict; TIMEOUT (exit 3) is undetermined, "
                        "never red — call again.",
         "inputSchema": {"type": "object", "properties": {
-            "pr": {"type": "integer", "minimum": 1, "description": "The PR number."},
+            "pr": PR_NUM,
             "repo": REPO,
             "wait": {"type": "boolean", "description": "Block while the verdict is PENDING."},
             "until_merged": {"type": "boolean", "description": "With wait: READY with auto-merge armed keeps "
@@ -1448,14 +1457,14 @@ TOOLS = {
             "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
                         "description": "With wait: seconds before TIMEOUT (default %d, at most %d)."
                                        % (AWAIT_DEFAULT_S, AWAIT_MAX_S)}},
-            "required": ["pr"], "additionalProperties": False}}),
+            "additionalProperties": False}}),
     "pr_merge": (tool_pr_merge, {
         "description": "合 — merge a READY PR with this fleet's method, branch deleted, then confirm "
                        "(bin/fleet-pr-merge.sh): MERGED exit 0; anything not READY is printed and refused (exit "
                        "1) — it never merges red. Falls back to REST when GraphQL is rate-limited.",
         "inputSchema": {"type": "object", "properties": {
-            "pr": {"type": "integer", "minimum": 1, "description": "The PR number."}, "repo": REPO},
-            "required": ["pr"], "additionalProperties": False}}),
+            "pr": PR_NUM, "repo": REPO},
+            "additionalProperties": False}}),
     "brief": (tool_brief, {
         "description": "The one opening read (issue #1811). kind claim (default): bin/fleet-claim-brief.sh — fleet, "
                        "seat, the bound issue with every comment, the claim, the charter layers, the directive, "

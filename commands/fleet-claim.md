@@ -249,6 +249,15 @@ override them):
      failure, and then only that one test (claude-fleet:
      `bin/run-selftests.sh <name>` — never the full gate, never `--changed`;
      CI already runs the related tests — ubuntu on the PR, macOS on master after the merge, #2286).
+     **A repo the fleet lands itself** — the brief's `land:` line says `fleet`
+     (`FLEET_LAND=fleet`: no GitHub, or its owner chose no pull requests; issue
+     #3602) — has no PR: commit everything, then `mcp__fleet__pr_verdict` and
+     `mcp__fleet__pr_merge` with no `pr` (your branch). The merge rebases onto
+     the base's newest commit, runs the repo's registered check here and
+     fast-forwards the base — the same words: `FAILING` prints the check's last
+     lines (fix, commit, merge again), `CONFLICT` = rebase on `origin/<base>` by
+     hand, `BEHIND` / `PENDING` = call `pr_merge` again. Skip steps 2–3; report
+     `merged` with no `pr`.
   2. **Push** the clean worktree: `git status --porcelain` empty (commit
      anything left), then `git push -u origin issue-<N>`.
   3. **Open (or update) the PR** with a body containing `Closes #<issue>` plus a
