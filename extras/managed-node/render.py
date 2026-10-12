@@ -540,7 +540,7 @@ if __name__ == '__main__':
     p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
                    help="the pod's ceiling: the hub's fleet.user_pod_limits.<principal> value (default %s)"
                         % ','.join('%s=%s' % kv for kv in USER_POD_LIMITS.items()))
-    # the cluster's one door (#3549; docs/MANAGED-LINUX.md «The door»)
+    # the cluster's one door (#3549; docs/dev/MANAGED-LINUX.md «The door»)
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
     p.add_argument('--door-replicas', type=int, default=2)
