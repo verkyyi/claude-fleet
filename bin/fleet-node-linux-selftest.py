@@ -490,6 +490,75 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(st['volumeClaimTemplates'][0]['spec']['accessModes'], ['ReadWriteOncePod'])
         self.assertEqual(pod['imagePullSecrets'], [{'name': 'acr-pull'}])
 
+    def test_user_pod_template(self):
+        """#3550 (EPIC #3500 C5): one person's pod — a Deployment (one replica,
+        Recreate, its stable u-<nonce> hostname), a ClusterIP Service on 22 and a
+        ReadWriteOncePod home disk; no Kubernetes token, no entry port, no
+        fleet/principal (written once ready). Moving the ceiling changes that
+        Deployment alone; a ceiling under the idle request refuses."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd', '--user-pod', 'u-drill1']
+        items = json.loads(subprocess.check_output(base))['items']
+        self.assertEqual([i['kind'] for i in items], ['PersistentVolumeClaim', 'Service', 'Deployment'])
+        pvc, svc, dep = items
+        self.assertEqual({i['metadata']['name'] for i in items}, {'u-drill1'})
+        for i in items:
+            self.assertEqual(i['metadata']['labels']['fleet/role'], 'user')
+        self.assertNotIn('fleet/principal', json.dumps(items))
+        self.assertEqual(pvc['spec']['accessModes'], ['ReadWriteOncePod'])
+        self.assertEqual(pvc['spec']['resources']['requests']['storage'], '50Gi')
+        self.assertEqual(svc['spec']['type'], 'ClusterIP')
+        self.assertEqual([x['port'] for x in svc['spec']['ports']], [22])
+        self.assertEqual(svc['spec']['selector'], {'fleet/pod': 'u-drill1'})
+        self.assertEqual(dep['spec']['replicas'], 1)
+        self.assertEqual(dep['spec']['strategy'], {'type': 'Recreate'})
+        pod = dep['spec']['template']['spec']
+        self.assertEqual(pod['hostname'], 'u-drill1')
+        self.assertFalse(pod['automountServiceAccountToken'])
+        self.assertNotIn('serviceAccountName', pod)
+        self.assertEqual(pod['volumes'][0], {'name': 'data', 'persistentVolumeClaim': {'claimName': 'u-drill1'}})
+        c = pod['containers'][0]
+        env = {e['name']: e['value'] for e in c['env']}
+        self.assertEqual((env['FLEET_NODE_PROFILE'], env['FLEET_USER_POD'], env['FLEET_ENTRY']),
+                         ('user-pod', '1', '0'))
+        self.assertEqual(env['FLEET_NODE_LOGIN'], 'none')
+        self.assertEqual([x['containerPort'] for x in c['ports']], [22])
+        self.assertEqual(c['resources'], {'requests': {'cpu': '250m', 'memory': '1536Mi'},
+                                          'limits': {'cpu': '2', 'memory': '6Gi'}})
+        self.assertNotIn('NET_ADMIN', c['securityContext']['capabilities']['add'])
+        self.assertEqual(pod['initContainers'][0]['name'], 'egress-guard')
+        # the person's ceiling: the same text as the hub's fleet.user_pod_limits.<principal>
+        moved = json.loads(subprocess.check_output(base + ['--limits', 'cpu=4,memory=8Gi']))['items']
+        self.assertEqual(moved[:2], items[:2])
+        self.assertEqual(moved[2]['spec']['template']['spec']['containers'][0]['resources']['limits'],
+                         {'cpu': '4', 'memory': '8Gi'})
+        patch_ = json.loads(subprocess.check_output([sys.executable, str(render), '--limits-patch',
+                                                     '--limits', 'cpu=4,memory=8Gi']))
+        self.assertEqual(patch_['spec']['template']['spec']['containers'],
+                         [{'name': 'fleet', 'resources': moved[2]['spec']['template']['spec']['containers'][0]['resources']}])
+        for bad in (['--limits', 'memory=1Gi'], ['--limits', 'cpu=100m'], ['--limits', 'gpu=1']):
+            self.assertNotEqual(subprocess.run(base + bad, capture_output=True).returncode, 0, bad)
+        bad_name = [x if x != 'u-drill1' else 'arvin' for x in base]
+        self.assertNotEqual(subprocess.run(bad_name, capture_output=True).returncode, 0)
+        # the shared node renders as before
+        node = json.loads(subprocess.check_output(base[:-2]))['items']
+        self.assertEqual(node[-1]['kind'], 'StatefulSet')
+        self.assertIn('User pods', (BIN.parent / 'docs/MANAGED-LINUX.md').read_text())
+
+    def test_user_pod_table_has_no_machine_loops(self):
+        """#3550: a user pod runs no machine-level loop (they are the cluster's
+        one copy); its own children stay. Off = the table as before."""
+        s = module('fleet-node-supervisor')
+        with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'hub'}):
+            before = s.default_table(s.Paths())
+            with patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod'}):
+                pod = s.default_table(s.Paths())
+                self.assertEqual(s.node_environment().get('FLEET_NODE_PROFILE'), 'user-pod')
+        self.assertEqual([t['name'] for t in pod['tasks']], ['update'])
+        self.assertEqual(pod['children'], before['children'])
+        self.assertIn('diskguard', [t['name'] for t in before['tasks']])
+
     def test_pull_secret_is_a_flag(self):
         """#3290: ACK's password-free ACR plugin names its Secret acr-credential-<hash>;
         --pull-secret (repeatable) replaces the acr-pull default, a bad name refuses."""
@@ -1391,6 +1460,21 @@ class LinuxTenants(unittest.TestCase):
             with self.assertRaises(m.Refuse) as e:
                 f.open('hand1')
             self.assertEqual(e.exception.rc, 3)
+
+    def test_user_pod_is_one_persons(self):
+        """#3550: in a user pod a second login never moves in beside the first
+        (3); the one there reopens as before. Off = any number of logins."""
+        m = self.m
+        with FakeOS(m, self.tmp.name) as f, patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod'}):
+            m.ensure_login(f.sup, f.paths, 'u1', op='ab12')
+            m.ensure_login(f.sup, f.paths, 'u1', op='ab12')
+            with self.assertRaises(m.Refuse) as e:
+                m.ensure_login(f.sup, f.paths, 'drill2', op='cd34')
+            self.assertEqual(e.exception.rc, 3)
+            self.assertNotIn('drill2', f.users)
+        with FakeOS(m, os.path.join(self.tmp.name, '2')) as f:
+            f.open('u1')
+            f.open('drill2')
 
     def test_hub_op_owns_its_login(self):
         """The hub's create (#3210): its op goes into the declaration; the same

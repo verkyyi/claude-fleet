@@ -64,6 +64,7 @@ func runAgentMachine(args []string) error {
 	entryOn := os.Getenv("FLEET_ENTRY")
 	acctOn := os.Getenv("FLEET_NODE_ACCOUNT_OPS")
 	service := os.Getenv("FLEET_NODE_LOGIN")
+	userPod := os.Getenv("FLEET_USER_POD")
 	if *machineEnv != "" {
 		env, err := readLoginEnv(*machineEnv, os.Geteuid() == 0)
 		if err != nil {
@@ -80,6 +81,9 @@ func runAgentMachine(args []string) error {
 		}
 		if service == "" {
 			service = env["FLEET_NODE_LOGIN"]
+		}
+		if userPod == "" {
+			userPod = env["FLEET_USER_POD"]
 		}
 		if *token == "" {
 			*token = env["CCQUOTA_TOKEN"]
@@ -128,6 +132,8 @@ func runAgentMachine(args []string) error {
 		AccountState:  filepath.Join(filepath.Clean(*state), "_machine"),
 		ServiceLogin:  service,
 		LinuxTenants:  filepath.Join(filepath.Dir(filepath.Clean(*state)), "linux-tenants"),
+		// …and, in one person's pod, CapUserPod (claude-fleet#3550).
+		UserPod: userPod == "1",
 	})
 }
 

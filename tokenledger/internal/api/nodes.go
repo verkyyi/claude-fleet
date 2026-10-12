@@ -129,6 +129,9 @@ type nodeConn struct {
 	// canServiceLog is the hello's CapServiceLog: this machine program's lane
 	// reads its login's service logs (claude-fleet#2797).
 	canServiceLog bool
+	// userPod is a machine link that is one person's pod (CapUserPod,
+	// claude-fleet#3550).
+	userPod bool
 	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
 	// one token refresh to the provider from its own network and hands the
 	// answer back (claude-fleet#1490). Set once, before the conn is published.
@@ -516,6 +519,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
+		userPod: hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
 		helloAt: time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
@@ -768,6 +772,9 @@ type NodeView struct {
 	// login with its own link (or none).
 	MachineLink bool   `json:"machine_link,omitempty"`
 	Via         string `json:"via,omitempty"`
+	// UserPod is a machine link that is one person's pod (claude-fleet#3550):
+	// its hostname is the pod's u-<nonce>. Absent everywhere else.
+	UserPod bool `json:"user_pod,omitempty"`
 	// SSHCA is an admin node's last answer to the SSH user CA install
 	// (claude-fleet#1412): sent | trusted… | failed….
 	SSHCA string `json:"ssh_ca,omitempty"`
@@ -1099,6 +1106,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.Connected, v.Admin = true, c.admin
 			v.LoginJoin = c.accountNode() && c.canLoginJoin
 			v.MachineLink, v.Via = c.machineLink, c.wire.machine()
+			v.UserPod = c.userPod
 			if v.MachineLink {
 				v.Via = ""
 			}
@@ -1110,6 +1118,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			// the same. The CA answer is that replica's to keep.
 			v.Connected, v.Admin = true, pc.Admin
 			v.LoginJoin = (pc.Admin || pc.HasCap(control.CapMachine)) && pc.HasCap(control.CapLoginJoin)
+			v.UserPod = pc.HasCap(control.CapMachine) && pc.HasCap(control.CapUserPod)
 		}
 		out.Nodes = append(out.Nodes, v)
 

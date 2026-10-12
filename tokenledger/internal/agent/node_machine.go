@@ -104,6 +104,9 @@ type MachineConfig struct {
 	AccountState  string
 	ServiceLogin  string
 	LinuxTenants  string
+	// UserPod is a machine that is one person's pod (claude-fleet#3550,
+	// FLEET_USER_POD=1): its hello lists CapUserPod. false = as before.
+	UserPod bool
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -299,6 +302,10 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	if ml.acct != nil {
 		// This machine opens its own logins (claude-fleet#3210).
 		caps = append(caps, control.CapLoginJoin)
+	}
+	if ml.cfg.UserPod {
+		// One person's pod (claude-fleet#3550).
+		caps = append(caps, control.CapUserPod)
 	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(ml.cfg.LiveInterval / time.Millisecond),

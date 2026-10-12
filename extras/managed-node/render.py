@@ -126,20 +126,15 @@ def entry_annotations(spec):
     return a
 
 
-def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
-              entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
-              github_proxy='', git_mirrors=(), cn_mirrors=False, cred_central='', egress_proxy='',
-              egress_closed=False, cluster_caches=False):
+def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_mirrors, cred_central,
+             egress_proxy, egress_closed, cn_mirrors=False, cluster_caches=False, namespace=''):
+    """The checks both templates share; returns the egress guard's (dns, blocked, metadata, allow)."""
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
     if not hub.startswith('https://'):
         raise ValueError('use the hub HTTPS endpoint')
     if not re.fullmatch('[a-z0-9][a-z0-9.-]*', storage_class):
         raise ValueError('select an existing ACK CSI StorageClass')
-    if entry_host and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', entry_host):
-        raise ValueError('--entry-host is the load balancer address (an IP or a DNS name)')
-    if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
-        raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
     # ACK's password-free ACR plugin names its own Secret (acr-credential-<hash>, #3290)
     for name in pull_secrets:
         if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?', name):
@@ -170,21 +165,12 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         raise ValueError('--cluster-caches needs a namespace that is a DNS label, not %r' % namespace)
     if egress_closed and not egress_proxy:
         raise ValueError('--egress-closed needs --egress-proxy: closed with no way out is no machine')
-    labels = {'app.kubernetes.io/name': 'fleet-managed-node'}
-    # the namespace's network rules know a user pod by this (deploy/k8s/fleet-workers);
-    # the template only — a StatefulSet's selector never changes
-    pod_labels = dict(labels, **{'fleet/role': 'user'})
-    volumes = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred'),
-               ('homes', '/home'), ('logs', '/var/log/fleet-node')]
-    mounts = [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in volumes]
-    env = [{'name': 'FLEET_HUB_URL', 'value': hub},
-           {'name': 'FLEET_MACHINE_JOIN_FILE', 'value': '/run/fleet-join/machine'},
-           # no primary login (#3526): every login is a person's, opened by the
-           # hub's account op and rebuilt from linux-tenants/ at each start
-           {'name': 'FLEET_NODE_LOGIN', 'value': 'none'},
-           # the entry port's sshd (keys from the hub's list only, #3070)
-           {'name': 'FLEET_ENTRY', 'value': '1'},
-           {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)}]
+    return dns, blocked, metadata, allow
+
+
+def _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches=False,
+                namespace=''):
+    env = []
     if github_proxy:
         env.append({'name': 'FLEET_GITHUB_PROXY', 'value': github_proxy})
     if git_mirrors:
@@ -198,21 +184,11 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         env.append({'name': 'FLEET_CRED_CENTRAL_URL', 'value': cred_central})
     if egress_proxy:
         env.append({'name': 'FLEET_EGRESS_PROXY', 'value': egress_proxy})
-    if entry_host:
-        # the door's address: on ACK the egress the hub sees is the NAT's, so the
-        # entry reach report must name the load balancer (fleet_entry_reach.go)
-        env.append({'name': 'CCQUOTA_FLEET_NODE_ROUTES', 'value': 'entry=%s:%d' % (entry_host, ENTRY_PORT)})
-    container = {
-        'name': 'fleet', 'image': image,
-        'env': env,
-        'resources': {'requests': {'cpu': '1', 'memory': '4Gi'}, 'limits': {'cpu': '2', 'memory': '8Gi'}},
-        # never NET_ADMIN / NET_RAW: the egress guard's rules stay put (#3281)
-        'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
-                            'capabilities': {'drop': ['ALL'], 'add': ['CHOWN', 'DAC_OVERRIDE', 'FOWNER',
-                                'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT', 'AUDIT_WRITE']},
-                            'seccompProfile': {'type': 'RuntimeDefault'}},
-        'ports': [{'name': 'ssh', 'containerPort': 22}, {'name': 'entry', 'containerPort': ENTRY_PORT}],
-        'volumeMounts': mounts + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
+    return env
+
+
+def _probes():
+    return {
         'startupProbe': {'exec': {'command': ['test', '-f', '/run/fleet-node-ready']},
                          'periodSeconds': 10, 'failureThreshold': 90},
         'readinessProbe': {'exec': {'command': ['python3', '-I', RUNTIME + '/current/bin/fleet-node-linux.py',
@@ -222,6 +198,56 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         'livenessProbe': {'exec': {'command': ['python3', '-I', '/usr/local/lib/fleet-image-stage.py', 'live']},
                           'periodSeconds': 30, 'failureThreshold': 4},
     }
+
+
+# root only for the switch into the login (and sshd's): never NET_ADMIN / NET_RAW,
+# so the egress guard's rules stay put (#3281)
+NODE_SECURITY = {'runAsUser': 0, 'allowPrivilegeEscalation': False,
+                 'capabilities': {'drop': ['ALL'], 'add': ['CHOWN', 'DAC_OVERRIDE', 'FOWNER',
+                     'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT', 'AUDIT_WRITE']},
+                 'seccompProfile': {'type': 'RuntimeDefault'}}
+VOLUMES = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred'),
+           ('homes', '/home'), ('logs', '/var/log/fleet-node')]
+
+
+def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
+              entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
+              github_proxy='', git_mirrors=(), cn_mirrors=False, cred_central='', egress_proxy='',
+              egress_closed=False, cluster_caches=False):
+    dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
+                                             git_mirrors, cred_central, egress_proxy, egress_closed,
+                                             cn_mirrors, cluster_caches, namespace)
+    if entry_host and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', entry_host):
+        raise ValueError('--entry-host is the load balancer address (an IP or a DNS name)')
+    if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
+        raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
+    labels = {'app.kubernetes.io/name': 'fleet-managed-node'}
+    # the namespace's network rules know a user pod by this (deploy/k8s/fleet-workers);
+    # the template only — a StatefulSet's selector never changes
+    pod_labels = dict(labels, **{'fleet/role': 'user'})
+    mounts = [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in VOLUMES]
+    env = [{'name': 'FLEET_HUB_URL', 'value': hub},
+           {'name': 'FLEET_MACHINE_JOIN_FILE', 'value': '/run/fleet-join/machine'},
+           # no primary login (#3526): every login is a person's, opened by the
+           # hub's account op and rebuilt from linux-tenants/ at each start
+           {'name': 'FLEET_NODE_LOGIN', 'value': 'none'},
+           # the entry port's sshd (keys from the hub's list only, #3070)
+           {'name': 'FLEET_ENTRY', 'value': '1'},
+           {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)}]
+    env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
+                       namespace)
+    if entry_host:
+        # the door's address: on ACK the egress the hub sees is the NAT's, so the
+        # entry reach report must name the load balancer (fleet_entry_reach.go)
+        env.append({'name': 'CCQUOTA_FLEET_NODE_ROUTES', 'value': 'entry=%s:%d' % (entry_host, ENTRY_PORT)})
+    container = dict({
+        'name': 'fleet', 'image': image,
+        'env': env,
+        'resources': {'requests': {'cpu': '1', 'memory': '4Gi'}, 'limits': {'cpu': '2', 'memory': '8Gi'}},
+        'securityContext': NODE_SECURITY,
+        'ports': [{'name': 'ssh', 'containerPort': 22}, {'name': 'entry', 'containerPort': ENTRY_PORT}],
+        'volumeMounts': mounts + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
+    }, **_probes())
     meta = {'name': 'fleet-linux', 'namespace': namespace}
     # The public door (#3213): the entry port alone. The system sshd's 22 stays
     # on the headless Service, inside the cluster; Local keeps the client's own
@@ -255,11 +281,127 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
     ]
 
 
+# One person's pod (#3550, EPIC #3500 C5). Its name is its stable hostname, the
+# hub's machine name for it: u-<nonce> — a generic name, never the person's.
+USER_POD_RE = r'u-[a-z0-9]{4,20}'
+# what an idle pod is promised; the ceiling is the person's (the hub's setting
+# fleet.user_pod_limits.<principal>, the same cpu=…,memory=…,disk=… text)
+USER_POD_REQUESTS = {'cpu': '250m', 'memory': '1536Mi'}
+USER_POD_LIMITS = {'cpu': '2', 'memory': '6Gi', 'disk': '50Gi'}
+_CPU_RE = r'([1-9][0-9]{0,2}|[1-9][0-9]{0,5}m)'
+_BYTES_RE = r'[1-9][0-9]{0,5}(Mi|Gi|Ti)'
+_UNIT = {'Mi': 1, 'Gi': 1024, 'Ti': 1024 * 1024}
+
+
+def _cpu_milli(q):
+    return int(q[:-1]) if q.endswith('m') else int(q) * 1000
+
+
+def _mebi(q):
+    return int(q[:-2]) * _UNIT[q[-2:]]
+
+
+def user_pod_limits(text=''):
+    """'cpu=2,memory=6Gi,disk=50Gi' (any subset; '' = the defaults) -> the dict.
+    A ceiling under what the pod is promised idle is refused."""
+    got = dict(USER_POD_LIMITS)
+    for part in [x.strip() for x in text.split(',') if x.strip()]:
+        k, _, v = part.partition('=')
+        k, v = k.strip(), v.strip()
+        if k not in got:
+            raise ValueError('--limits takes cpu=, memory=, disk=; not %r' % k)
+        if not re.fullmatch(_CPU_RE if k == 'cpu' else _BYTES_RE, v):
+            raise ValueError('--limits %s=%r: cpu is cores (2) or millicores (500m), memory/disk N{Mi,Gi,Ti}' % (k, v))
+        got[k] = v
+    if _cpu_milli(got['cpu']) < _cpu_milli(USER_POD_REQUESTS['cpu']):
+        raise ValueError('--limits cpu=%s is under the idle request %s' % (got['cpu'], USER_POD_REQUESTS['cpu']))
+    if _mebi(got['memory']) < _mebi(USER_POD_REQUESTS['memory']):
+        raise ValueError('--limits memory=%s is under the idle request %s'
+                         % (got['memory'], USER_POD_REQUESTS['memory']))
+    if _mebi(got['disk']) < 1024:
+        raise ValueError('--limits disk=%s: at least 1Gi' % got['disk'])
+    return got
+
+
+def _user_pod_container_resources(limits):
+    return {'requests': dict(USER_POD_REQUESTS),
+            'limits': {'cpu': limits['cpu'], 'memory': limits['memory']}}
+
+
+def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
+                       pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
+                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False):
+    """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
+    Service (22, reached only through the cluster's door — C4) and its home disk
+    (ReadWriteOncePod). Inside: one login (the hub's account op opens it — a
+    second is refused), tmux, the node program, sshd; the machine-level loops are
+    the cluster's (FLEET_NODE_PROFILE=user-pod). No Kubernetes credential, no
+    fleet/principal label — the provisioner writes that once the pod is ready."""
+    dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
+                                             git_mirrors, cred_central, egress_proxy, egress_closed,
+                                             cn_mirrors, cluster_caches, namespace)
+    if not re.fullmatch(USER_POD_RE, name):
+        raise ValueError('--user-pod is u-<nonce> (4-20 of a-z0-9), not %r' % name)
+    if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
+        raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    limits = limits or dict(USER_POD_LIMITS)
+    labels = {'app.kubernetes.io/name': 'fleet-user-pod', 'fleet/role': 'user', 'fleet/pod': name}
+    select = {'fleet/pod': name}
+    meta = {'name': name, 'namespace': namespace, 'labels': labels}
+    env = [{'name': 'FLEET_HUB_URL', 'value': hub},
+           {'name': 'FLEET_MACHINE_JOIN_FILE', 'value': '/run/fleet-join/machine'},
+           {'name': 'FLEET_NODE_LOGIN', 'value': 'none'},
+           # the door is the cluster's one (C4): no entry port here
+           {'name': 'FLEET_ENTRY', 'value': '0'},
+           {'name': 'FLEET_NODE_PROFILE', 'value': 'user-pod'},
+           # the machine hello says CapUserPod: the hub's machine is this pod
+           {'name': 'FLEET_USER_POD', 'value': '1'}]
+    env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
+                       namespace)
+    container = dict({
+        'name': 'fleet', 'image': image, 'env': env,
+        'resources': _user_pod_container_resources(limits),
+        'securityContext': NODE_SECURITY,
+        'ports': [{'name': 'ssh', 'containerPort': 22}],
+        'volumeMounts': [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in VOLUMES]
+                        + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
+    }, **_probes())
+    return [
+        {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': meta,
+         'spec': {'accessModes': ['ReadWriteOncePod'], 'storageClassName': storage_class,
+                  'resources': {'requests': {'storage': limits['disk']}}}},
+        {'apiVersion': 'v1', 'kind': 'Service', 'metadata': meta,
+         'spec': {'type': 'ClusterIP', 'selector': select,
+                  'ports': [{'name': 'ssh', 'protocol': 'TCP', 'port': 22, 'targetPort': 22}]}},
+        {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': meta,
+         # Recreate: the home disk is ReadWriteOncePod — the old pod lets go first
+         'spec': {'replicas': 1, 'strategy': {'type': 'Recreate'}, 'revisionHistoryLimit': 2,
+                  'selector': {'matchLabels': select},
+                  'template': {'metadata': {'labels': labels}, 'spec': {
+                      'hostname': name, 'enableServiceLinks': False,
+                      'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
+                      'imagePullSecrets': [{'name': n} for n in pull_secrets],
+                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed)],
+                      'containers': [container],
+                      'volumes': [{'name': 'data', 'persistentVolumeClaim': {'claimName': name}},
+                                  {'name': 'join', 'secret': {'secretName': name + '-join',
+                                                           'optional': True, 'defaultMode': 256}},
+                                  {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}}]}}}},
+    ]
+
+
+def user_pod_limits_patch(limits):
+    """The patch that moves one pod's ceiling (kubectl patch deploy <name>
+    --type strategic): only that Deployment rolls, nobody else's."""
+    return {'spec': {'template': {'spec': {'containers': [
+        {'name': 'fleet', 'resources': _user_pod_container_resources(limits)}]}}}}
+
+
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--image', required=True)
-    p.add_argument('--hub', required=True)
-    p.add_argument('--storage-class', required=True)
+    p.add_argument('--image', default='')
+    p.add_argument('--hub', default='')
+    p.add_argument('--storage-class', default='')
     p.add_argument('--namespace', default='fleet-workers')
     p.add_argument('--entry-host', default='',
                    help="the door's load balancer address (kubectl get svc fleet-linux-entry); "
@@ -297,18 +439,41 @@ if __name__ == '__main__':
     p.add_argument('--egress-closed', action='store_true',
                    help='the guard rejects the public internet too: out only through --egress-allow destinations '
                         "(the egress and credproxy Services' ClusterIPs, the hub's address)")
+    # one person's pod (#3550; docs/MANAGED-LINUX.md «User pods»)
+    p.add_argument('--user-pod', default='', metavar='u-NONCE',
+                   help="render one person's pod (Deployment + Service + home disk) instead of the shared node")
+    p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
+                   help="the pod's ceiling: the hub's fleet.user_pod_limits.<principal> value (default %s)"
+                        % ','.join('%s=%s' % kv for kv in USER_POD_LIMITS.items()))
+    p.add_argument('--limits-patch', action='store_true',
+                   help='print only the patch that moves --limits on a running pod (rolls that pod alone)')
     args = p.parse_args()
     egress = {'dns': args.egress_dns, 'metadata': args.egress_metadata, 'pod_cidr': args.egress_pod_cidr,
               'service_cidr': args.egress_service_cidr,
               'private': [c.strip() for c in args.egress_private.split(',') if c.strip()],
               'allow': args.egress_allow}
     try:
-        items = resources(args.image, args.hub, args.storage_class, args.namespace,
-                          entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
-                          pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
-                          git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
-                          egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
-                          cluster_caches=args.cluster_caches)
+        if args.limits_patch:
+            print(json.dumps(user_pod_limits_patch(user_pod_limits(args.limits)), indent=2))
+            raise SystemExit(0)
+        missing = [f for f in ('image', 'hub', 'storage_class') if not getattr(args, f)]
+        if missing:
+            p.error('the following arguments are required: ' + ', '.join('--' + f.replace('_', '-') for f in missing))
+        if args.user_pod:
+            items = user_pod_resources(args.image, args.hub, args.storage_class, args.user_pod, args.namespace,
+                                       limits=user_pod_limits(args.limits), egress=egress,
+                                       pull_secrets=args.pull_secrets or ['acr-pull'],
+                                       github_proxy=args.github_proxy, git_mirrors=args.git_mirror,
+                                       cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
+                                       egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
+                                       cluster_caches=args.cluster_caches)
+        else:
+            items = resources(args.image, args.hub, args.storage_class, args.namespace,
+                              entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
+                              pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
+                              git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors,
+                              cred_central=args.cred_central, egress_proxy=args.egress_proxy,
+                              egress_closed=args.egress_closed, cluster_caches=args.cluster_caches)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))

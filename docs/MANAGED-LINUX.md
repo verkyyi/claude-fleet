@@ -493,6 +493,49 @@ defaults only fill).
 Git: fetches from the CI's mirror (`--git-mirror git://git-mirror.arc-runners…`,
 «Dev network»); the network rules let a user pod reach `arc-runners` on 9418.
 
+## User pods
+
+(issue #3550, EPIC #3500 C5) Each person gets a pod of their own: their home
+disk, tmux, sessions and warm sessions, their keys, a thin node program — and a
+ceiling set per person. `render.py --user-pod u-<nonce>` renders it instead of
+the shared node:
+
+| Object | What |
+|---|---|
+| `PersistentVolumeClaim u-<nonce>` | the home disk, `ReadWriteOncePod`, sized by the ceiling's `disk` |
+| `Service u-<nonce>` | `ClusterIP`, port 22 only — reached through the cluster's one door (C4), never a load balancer of its own |
+| `Deployment u-<nonce>` | one replica, `Recreate` (the old pod lets the disk go first); the pod's `hostname` is `u-<nonce>` — the hub's machine name for it, never the person's |
+
+Inside: `FLEET_NODE_PROFILE=user-pod` — the supervisor runs no machine-level loop
+(diskguard, memguard, orphans, shared-dirs: they are the cluster's one ops copy),
+only the updater that moves the pod's own runtime; its children (node program,
+shared proxy, sshd) are its own. `FLEET_ENTRY=0`: no entry port. One login: the
+hub's account op opens it, and a second is refused (3, `this pod is one
+person's`). `FLEET_USER_POD=1`: the machine hello lists `CapUserPod`, and the
+hub's roster marks the row `user_pod`. No ServiceAccount token. Labels
+`fleet/role=user` and `fleet/pod=u-<nonce>`; `fleet/principal` is written by the
+provisioner once the pod is ready, never rendered.
+
+What an idle pod is promised: 0.25 core · 1.5 GB. The ceiling is the person's —
+the hub setting `fleet.user_pod_limits.<principal>` (`cpu=2,memory=6Gi,disk=50Gi`
+by default; the hub stores every key spelled, refuses a value under the idle
+request) — and `--limits` takes that same text:
+
+```sh
+python3 extras/managed-node/render.py --image "$IMAGE" --hub "$HUB" --storage-class "$SC" \
+  --user-pod u-k3x9q2 --limits 'cpu=2,memory=6Gi,disk=50Gi' \
+  --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local \
+  --egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 | kubectl apply -f -
+# move one person's ceiling: only that Deployment rolls
+kubectl -n fleet-workers patch deploy u-k3x9q2 --type strategic \
+  -p "$(python3 extras/managed-node/render.py --limits-patch --limits 'cpu=4,memory=8Gi')"
+```
+
+`--limits-patch` prints the cpu/memory half only, from the WHOLE value (the keys
+it omits are the defaults); a bigger `disk` is a re-render (the claim grows if
+the StorageClass allows expansion). The machine join code goes in the Secret
+`u-<nonce>-join` (key `machine`), as `fleet-linux-join` does for the shared node.
+
 ## Upgrade and recovery
 
 The machine follows `stable` by itself, with the same updater as a Mac
