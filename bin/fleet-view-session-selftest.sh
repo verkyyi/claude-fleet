@@ -147,6 +147,10 @@ eq "D: fleet_session_canon" "$S $S" "$(fleet_session_canon "$V") $(fleet_session
 raw=$(T list-windows -a -F "$(fleet_lw_fmt '#{session_name} #{window_id} #{window_name}')")
 spin=$(sed -n '/^_lw_filter() {/,/^}/p' "$BIN/tmux-spinner.sh")
 eq "D: tmux-spinner.sh's _lw_filter agrees with fleet_lw_filter on live rows" "$(printf '%s\n' "$raw" | fleet_lw_filter)" "$(printf '%s\n' "$raw" | sh -c "$spin; _lw_filter")"
+# its frame loop's forkless, fileless form (issue #3522): _lw_table + _pop
+spin_t=$(sed -n '/^NL=/,/^'"'"'/p; /^_lw_table() {/,/^}/p; /^_pop() {/,/^}/p' "$BIN/tmux-spinner.sh")
+eq "D: tmux-spinner.sh's _lw_table agrees with fleet_lw_filter on live rows" "$(printf '%s\n' "$raw" | fleet_lw_filter)" \
+   "$(sh -c "$spin_t"'; _lw_table "$1"; printf %s "$W_TABLE"' _ "$raw")"
 eq "D: fleet-alerts.sh's _fa_lw agrees with fleet_lw on live rows" "$(fleet_lw '#{session_name} #{window_id} #{window_name}' T)" \
    "$(tmux() { T "$@"; }; eval "$(sed -n '/^_fa_lw() {/,/^}/p' "$BIN/fleet-alerts.sh")"; _fa_lw '#{session_name} #{window_id} #{window_name}')"
 
