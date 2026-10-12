@@ -141,7 +141,7 @@ case "$verb" in
     if [ "$(ticket_backend "$1")" = hub ]; then
       u=$(_fleet_hub_env; printf '%s' "${CCQUOTA_HUB_URL:-}")
       [ -n "$u" ] || die "url: no hub address here (node.env)" 4
-      printf '%s/v1/fleet/tickets/%s/%s\n' "${u%/}" "${p%%	*}" "${p#*	}"
+      printf '%s/fleet/tickets/%s/%s\n' "${u%/}" "${p%%	*}" "${p#*	}"
     else
       printf 'https://github.com/%s/issues/%s\n' "${p%%	*}" "${p#*	}"
     fi ;;

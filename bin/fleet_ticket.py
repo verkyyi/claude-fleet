@@ -155,7 +155,8 @@ def tpath(repo, n, sub=''):
 
 
 def turl(repo, n):
-    return f'{creds()[0]}/v1/fleet/tickets/{repo}/{n}'
+    # The page a person reads it on (C3's 我的单子, fleet_ticket_url): the number last.
+    return f'{creds()[0]}/fleet/tickets/{repo}/{n}'
 
 
 def gh_shape(t, comments):

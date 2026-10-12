@@ -138,7 +138,7 @@ FC() { env FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 PATH="$WORK/fake
 [ "$(T home acme/lib)" = github ] || fail "A home of a repo without FLEET_TICKETS"
 [ "$(T id acme/app 5)" = 'hub:acme/app#5' ] || fail "A id mints hub:" "$(T id acme/app 5 2>&1)"
 [ "$(T id acme/lib 5)" = 'gh:acme/lib#5' ] || fail "A id mints gh:"
-[ "$(T url 'hub:acme/app#5')" = "http://127.0.0.1:$PORT/v1/fleet/tickets/acme/app/5" ] || fail "A url of a hub ticket" "$(T url 'hub:acme/app#5' 2>&1)"
+[ "$(T url 'hub:acme/app#5')" = "http://127.0.0.1:$PORT/fleet/tickets/acme/app/5" ] || fail "A url of a hub ticket" "$(T url 'hub:acme/app#5' 2>&1)"
 ok "A home · id · url by the repo's FLEET_TICKETS"
 
 # ============================ B: every verb ===================================
@@ -148,7 +148,7 @@ body=$(T read 'hub:acme/app#1' --json body,labels) || fail "B read"
 case "$body" in *'first line'*'fleet:from'*'"desk"'*'"_source": "hub"'*) ;; *) fail "B the desk ticket went through the filer (marker + desk label)" "$body" ;; esac
 url=$(FC fleet-issue-file.sh --repo acme/app --title '入口单' --body 'b' --label bug --priority p1 2>"$WORK/err") \
   || fail "B the filer opens a hub ticket" "$(cat "$WORK/err")"
-[ "$url" = "http://127.0.0.1:$PORT/v1/fleet/tickets/acme/app/2" ] || fail "B the filer prints the ticket URL, number last" "$url"
+[ "$url" = "http://127.0.0.1:$PORT/fleet/tickets/acme/app/2" ] || fail "B the filer prints the ticket URL, number last" "$url"
 FC fleet-issue-file.sh --repo acme/app --title 'x' --label nonsense-label >/dev/null 2>&1 && fail "B the taxonomy still refuses an off-list label"
 FC fleet-issue-file.sh --repo acme/app --title '子单' --parent 2 >/dev/null 2>"$WORK/err" || fail "B the filer with --parent" "$(cat "$WORK/err")"
 grep -q 'linked #3 as a sub-issue of #2' "$WORK/err" || fail "B --parent hangs it on the hub" "$(cat "$WORK/err")"
@@ -156,7 +156,7 @@ grep -q 'linked #3 as a sub-issue of #2' "$WORK/err" || fail "B --parent hangs i
 j=$(T read 'hub:acme/app#2' --json state,labels,number) || fail "B read #2"
 case "$j" in *'"state": "OPEN"'*'priority:p1'*'"number": 2'*) ;; *) fail "B read: gh field names, priority as its label" "$j" ;; esac
 c=$(FC fleet-comment.sh 2 --repo acme/app --body '进展' 2>"$WORK/err") || fail "B fleet-comment.sh on a hub repo" "$(cat "$WORK/err")"
-case "$c" in "http://127.0.0.1:$PORT/v1/fleet/tickets/acme/app/2#comment-1") ;; *) fail "B the comment URL" "$c" ;; esac
+case "$c" in "http://127.0.0.1:$PORT/fleet/tickets/acme/app/2#comment-1") ;; *) fail "B the comment URL" "$c" ;; esac
 cm=$(T read 'hub:acme/app#2' --json comments)
 case "$cm" in *'进展'*'fleet:from'*'fleet:no-relay'*) ;; *) fail "B the comment carries footer + no-relay marker" "$cm" ;; esac
 T comment 'hub:acme/app#2' --body 'via door' >/dev/null 2>&1 || fail "B comment through the door"
