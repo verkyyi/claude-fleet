@@ -660,3 +660,5 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `tokenledger/web/test/services.test.mjs` | 11 | machine 5 · person 4 · ts-net 2 | placeholder |
 | `tokenledger/web/test/svc-log.test.mjs` | 3 | machine 2 · ts-net 1 | placeholder |
 | `tokenledger/web/test/usage-view.test.mjs` | 9 | gh-owner 4 · machine 3 · person 2 | placeholder |
+
+试验行：HOST=10.20.30.40
