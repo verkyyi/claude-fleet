@@ -11,6 +11,10 @@
 #      popup (a fresh process) reads the kept dump; another language, another dump
 #   C  panel commands — FLEET_PANEL_COMMANDS read from fleet.conf with no shell:
 #      the last line wins, `none` empties, no file ⇒ the default
+#   D  a locale this machine lacks (LANG=en_US.UTF-8 on a slim image) — the
+#      server's environment on fleet-linux-0: fleet-quickopen.py and
+#      fleet-quick-dispatch.py start anyway (C.UTF-8, else C), where setlocale
+#      raised and the 看台's ⌘P table was never built
 #
 # Drives bin/fleet_view.py (produce · say · panel_commands) in python, the real
 # bin/fleet-ui-lang.sh, a producer seam for the rows.
@@ -83,5 +87,15 @@ check("C3", fv.panel_commands() == [], "none empties")
 sys.exit(1 if fails else 0)
 PY
 rc=$?
+# ---- D: a missing locale ---------------------------------------------------------
+for f in fleet-quickopen.py fleet-quick-dispatch.py; do
+  got=$(LC_ALL=xx_YY.UTF-8 LANG=xx_YY.UTF-8 python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("m", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.set_locale() or "-")' "$BIN/$f" 2>&1)
+  case "$got" in C*|en*) echo "PASS D: $f starts under a missing locale ($got)" ;;
+    *) echo "FAIL D: $f under a missing locale: $got"; rc=1 ;; esac
+done
 [ $rc = 0 ] && echo 'fleet-view-firstframe: ALL PASS' || echo 'fleet-view-firstframe: FAILED'
 exit $rc
