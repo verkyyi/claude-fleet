@@ -112,12 +112,12 @@ opget() { sed -n "s/^$1=//p" "$OPF" 2>/dev/null | tail -n 1; }
 opput() { [ "$APPLY" = 1 ] || return 0; printf '%s=%s\n' "$1" "$2" >> "$OPF" || failed "$3" "cannot write $OPF"; }
 if [ "$APPLY" = 1 ]; then
   if [ -n "$OPID" ] && [ "$(opget op)" = "$OPID" ]; then
-    [ "$(opget done)" = stop ] || [ "$(opget done)" = rejoin ] && DONE_STOP=1
-    [ "$(opget done)" = rejoin ] && DONE_REJOIN=1
+    [ "$(opget phase)" = stop ] || [ "$(opget phase)" = rejoin ] && DONE_STOP=1
+    [ "$(opget phase)" = rejoin ] && DONE_REJOIN=1
     ARCHIVE=$(opget archive); CREDSEP_LINE=$(opget credsep); [ -n "$CREDSEP_LINE" ] || CREDSEP_LINE='credsep: not reached'
     SINCE=$(opget since)
     printf '%s: op %s again — going on (stop %s, rejoin %s)\n' "$PROG" "$OPID" \
-      "$([ "$DONE_STOP" = 1 ] && echo done || echo 'to do')" "$([ "$DONE_REJOIN" = 1 ] && echo done || echo 'to do')"
+      "$([ "$DONE_STOP" = 1 ] && echo 'done' || echo 'to do')" "$([ "$DONE_REJOIN" = 1 ] && echo 'done' || echo 'to do')"
   else
     ( umask 077 && mkdir -p "$OPDIR" \
       && printf 'op=%s\npid=%s\nstarted=%s\n' "${OPID:--}" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OPF" ) \
@@ -150,7 +150,7 @@ esac
 if [ "$DONE_STOP" = 0 ]; then
   A=$(sed -n 's/^ *archive=//p' "$SOUT" | tail -n 1); [ -z "$A" ] || ARCHIVE=$A
   [ -z "$ARCHIVE" ] || opput archive "$ARCHIVE" stop
-  opput done stop stop
+  opput phase stop stop
 fi
 [ "$APPLY" = 0 ] || [ -z "$ARCHIVE" ] || printf '  archive=%s\n' "$ARCHIVE"
 
@@ -224,7 +224,7 @@ except Exception:
     [ -z "$L" ] || CREDSEP_LINE=$L
     [ "$rc" = 0 ] || failed rejoin "fleet-login-new.sh --recycle failed (exit $rc, above)"
     opput credsep "$CREDSEP_LINE" rejoin
-    opput done rejoin rejoin
+    opput phase rejoin rejoin
   fi
 else
   printf '\n[2–3] (done in this op: washed at %s, set up again)\n' "$SINCE"

@@ -173,7 +173,7 @@ lines = open(sys.argv[1]).read().splitlines()
 at = lambda s: next(i for i, l in enumerate(lines) if s in l)
 assert at('remove ') < at('createhomedir') < at('new ') < at('fleet-login-reset-check.py')
 PY
-has "$HOME/$L-reset/op" 'done=rejoin' 'B the op file records the rejoin'
+has "$HOME/$L-reset/op" 'phase=rejoin' 'B the op file records the rejoin'
 
 # ---- C: something the wash cannot take ----
 fixture
