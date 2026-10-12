@@ -655,7 +655,7 @@ EOF
 # worker busy / typing, tmux down, the lease held) — the backstop poll retries it;
 # 4 = the hub did not answer; 2 = usage / not a hub-ticket repo.
 event() {
-  local repo n cid slug lease row rc out assoc author num upd b64 body
+  local repo n cid slug lease row rc out assoc author num b64 body
   repo=$(fleet_norm_repo "${1:-}"); n="${2:-}"; cid="${3:-}"
   case "$n$cid" in ''|*[!0-9]*) printf 'fleet-issue-bridge: --event needs <repo> <N> <comment id>\n' >&2; exit 2 ;; esac
   [ -n "$repo" ] || { printf 'fleet-issue-bridge: --event: %s is not owner/name\n' "${1:-}" >&2; exit 2; }
@@ -671,7 +671,7 @@ event() {
   row=$(python3 "$BIN/fleet_ticket.py" --backend hub relay --repo "$repo" --number "$n" --comment "$cid" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || { log "event $repo#$n c$cid: ${row##*$'\n'}"; exit 4; }
   [ -n "$row" ] || { log "event $repo#$n c$cid: no such comment on the hub"; exit 0; }
-  IFS=$'\t' read -r cid assoc author num upd b64 <<<"$row"
+  IFS=$'\t' read -r cid assoc author num _ b64 <<<"$row"
   body=$(bridge_b64d "$b64")
   ASSOC_FLOOR=OWNER                   # a hub ticket's person is its owner (relay_row)
   out=$(BRIDGE_LOCAL_ONLY=1 bridge_relay "$repo" "$slug" "$n" "$cid" "$assoc" "$author" "$body"); rc=$?

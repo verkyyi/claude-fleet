@@ -22,7 +22,6 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-SRC="$BIN/fleet-issue-bridge.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — SKIP' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fibh-selftest.XXXXXX")" || exit 2
