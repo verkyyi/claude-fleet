@@ -128,7 +128,7 @@ exit 0
 FAKE
 chmod +x "$WORK/fakepath/tmux"
 g checkout -q -B issue-9 main~0 2>/dev/null; g reset -q --hard "$(g rev-parse main)"
-commit e9.txt a; commit e9.txt b; tip_e9=$(g rev-parse HEAD)
+commit e9.txt a; commit e9.txt b
 g checkout -q main; commit base.txt before-e9; g merge -q --squash issue-9 >/dev/null 2>&1; g commit -q -m 'squash (#9)'
 g push -q origin main; g fetch -q origin
 g worktree add -q "$WORK/wt-e9" issue-9 2>/dev/null
@@ -152,7 +152,7 @@ expect 'F2 an unset forge is github'       "$(fleet_repo_forge fl other/x)" gith
 : > "$GHLOG"
 expect 'F3 「已合并」 by git: squash → merged' "$(FLEET_SESSION=fl fleet_pr_merge_state o/r '' sq)" merged
 expect 'F4 「已合并」 by git: wip → open'      "$(FLEET_SESSION=fl fleet_pr_merge_state o/r '' wip)" open
-g checkout -q -B issue-11 main; commit f11.txt a; tip_11=$(g rev-parse HEAD)
+g checkout -q -B issue-11 main; commit f11.txt a
 g checkout -q main; commit base.txt before-11; g merge -q --squash issue-11 >/dev/null 2>&1; g commit -q -m 'squash 11'
 s_11=$(g rev-parse HEAD); g push -q origin main
 g worktree add -q "$WORK/wt-11" issue-11 2>/dev/null

@@ -65,6 +65,13 @@ FLEET_BASE_BRANCH="main"
 # @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_SEED=0
 
+# Where the repo lives (EPIC #3570): github (the default) or none — a repo with no
+# GitHub. none = no step of the fleet calls gh for it; whether a branch's work landed
+# is git's answer (fleet_landed, issue #3601) and the janitor cleans it by branch.
+# Written when the repo is added; readers ask fleet_repo_forge.
+# @label=Code host @group=identity @tier=internal @scope=identity @edit=no
+#FLEET_FORGE=github
+
 # --- Public SSH entry (issue #1195) ---------------------------------------
 # How a NEWCOMER reaches this machine from outside — the host and port that the
 # welcome letter fleet-login-new.sh writes (~/<login>-onboard/welcome.txt, EPIC
@@ -817,6 +824,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Values outside 0..31536000 fall back to 600. This is not an idle-time policy.
 # @label=Cleanup merged grace @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
 #FLEET_CLEANUP_MERGED_GRACE=600
+
+# fleet_landed (issue #3601) fetches the repo's origin/<base> before it answers, at
+# most once per FLEET_LANDED_FETCH_SECS a repo; FLEET_LANDED_FETCH=0 reads the local
+# ref as it stands (no network).
+# @label=Landing fetch interval @group=bridge @tier=internal @scope=global @edit=int @unit=s
+#FLEET_LANDED_FETCH_SECS=60
+# @label=Landing fetch @group=bridge @tier=internal @scope=global @edit=bool
+#FLEET_LANDED_FETCH=1
 # Seconds a CLOSED-unmerged PR's window must have been SILENT before cleanup may
 # reap it (issue #544); the other half of that gate — "it has not spoken since the
 # PR closed" — has no timeout. Also the restore picker's closed-PR cutoff. See
