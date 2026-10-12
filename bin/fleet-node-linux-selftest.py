@@ -637,6 +637,75 @@ class LinuxNode(unittest.TestCase):
             self.assertIn(tool, df)
         self.assertIn('devnet', (BIN.parent / 'extras/managed-node/prepare-image.sh').read_text())
 
+    def test_cluster_caches(self):
+        """#3548 (EPIC #3500 C3): in the cluster layout every login installs npm /
+        pip / Go packages from the namespace's read-through caches
+        (deploy/k8s/caches: fleet-npm:4873, fleet-pypi:3141, fleet-goproxy:3000)
+        instead of the CN mirrors, Go falling through to goproxy.cn; the image
+        carries the default MCP servers so a session starts them from disk."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        pod = json.loads(subprocess.check_output(base + ['--cluster-caches']))['items'][-1]['spec']['template']['spec']
+        env = {e['name']: e['value'] for e in pod['containers'][0]['env']}
+        self.assertEqual(env['FLEET_CLUSTER_CACHES'], 'fleet-workers')
+        self.assertNotIn('FLEET_CN_MIRRORS', env)
+        for bad in (['--cluster-caches', '--cn-mirrors'], ['--cluster-caches', '--namespace', 'Bad_NS']):
+            r = subprocess.run(base + bad, capture_output=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+
+        n = module('fleet-node-linux')
+        _, shell = n.devnet_settings({'FLEET_CLUSTER_CACHES': 'fleet-workers', 'FLEET_CN_MIRRORS': '1'})
+        npm = 'http://fleet-npm.fleet-workers.svc.cluster.local:4873'
+        pypi = 'http://fleet-pypi.fleet-workers.svc.cluster.local:3141/root/pypi/+simple/'
+        goproxy = 'http://fleet-goproxy.fleet-workers.svc.cluster.local:3000|https://goproxy.cn|direct'
+        for line in ('npm_config_registry=' + npm, 'COREPACK_NPM_REGISTRY=' + npm, 'PIP_INDEX_URL=' + pypi,
+                     'PIP_TRUSTED_HOST=fleet-pypi.fleet-workers.svc.cluster.local', 'UV_DEFAULT_INDEX=' + pypi,
+                     'GOPROXY=' + goproxy, 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node'):
+            self.assertIn(line + '\n', shell)
+        self.assertNotIn('registry.npmmirror.com', shell)  # the caches win over the CN mirrors
+        with self.assertRaises(ValueError):
+            n.devnet_settings({'FLEET_CLUSTER_CACHES': 'x;rm -rf /'})
+        # every shell exports the `|` list whole
+        with tempfile.TemporaryDirectory() as d:
+            ef = os.path.join(d, 'devnet.env')
+            n.devnet({'FLEET_CLUSTER_CACHES': 'fleet-workers'}, os.path.join(d, 'gitconfig'), ef)
+            prof = (BIN.parent / 'extras/managed-node/devnet/profile.sh').read_text().replace('/etc/fleet-devnet.env', ef)
+            pf = os.path.join(d, 'profile.sh')
+            Path(pf).write_text(prof)
+            out = subprocess.check_output(['sh', '-c', '. "$1"; echo "$GOPROXY"', 'sh', pf],
+                                          env={'PATH': os.environ.get('PATH', '')}, text=True)
+            self.assertEqual(out.strip(), goproxy)
+        # the caches: read-only npm, devpi re-pointed at each start, two replicas a disk apiece
+        caches = BIN.parent / 'deploy/k8s/caches'
+        verdaccio = (caches / 'base/verdaccio.yaml').read_text()
+        self.assertEqual(verdaccio.count('    publish: $nobody'), 2)
+        self.assertIn('max_users: -1', verdaccio)
+        self.assertEqual(subprocess.run(['sh', '-n', str(caches / 'base/devpi-start.sh')]).returncode, 0)
+        self.assertIn('devpi index root/pypi "mirror_url=${FLEET_PYPI_UPSTREAM}"',
+                      (caches / 'base/devpi-start.sh').read_text())
+        pol = (BIN.parent / 'deploy/k8s/fleet-workers/networkpolicy.yaml').read_text()
+        for port in ('4873', '3141', '3000', '9418'):
+            self.assertIn('port: %s}' % port, pol)
+        kubectl = subprocess.run(['sh', '-c', 'command -v kubectl'], capture_output=True, text=True).stdout.strip()
+        if kubectl:
+            out = subprocess.check_output([kubectl, 'kustomize', str(BIN.parent / 'deploy/k8s/fleet-workers')], text=True)
+            docs = [x for x in out.split('\n---\n') if x.strip()]
+            for name, port in (('fleet-npm', 4873), ('fleet-pypi', 3141), ('fleet-goproxy', 3000)):
+                sts = [x for x in docs if '\nkind: StatefulSet' in '\n' + x and '\n  name: %s\n' % name in x]
+                self.assertEqual(len(sts), 1, name)
+                for want in ('replicas: 2', 'volumeClaimTemplates:', 'fleet/role: ops',
+                             'automountServiceAccountToken: false', 'containerPort: %d' % port):
+                    self.assertIn(want, sts[0], (name, want))
+                svc = [x for x in docs if '\nkind: Service' in '\n' + x and '\n  name: %s\n' % name in x]
+                self.assertIn('sessionAffinity: ClientIP', svc[0])
+                self.assertTrue([x for x in docs if 'kind: PodDisruptionBudget' in x and '  name: %s\n' % name in x])
+        # the default MCP servers ship in the image, pinned; uv by sha256
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        for want in ('@upstash/context7-mcp@', '@playwright/mcp@', '@modelcontextprotocol/server-github@',
+                     'mcp-server-fetch==', 'UV_SHA256', 'echo "$UV_SHA256  uv.tgz" | sha256sum -c -'):
+            self.assertIn(want, df)
+
     def test_central_pod_holds_no_credential(self):
         """BREAK-IT cred-in-user-pod (#3547, EPIC #3500 C2): a user pod in the
         cluster routes every session to the cluster credential proxy

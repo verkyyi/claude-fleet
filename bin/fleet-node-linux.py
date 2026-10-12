@@ -341,7 +341,7 @@ def make_user(t, full_name=''):
 
 
 # Machine-wide dev settings for every login (#3348), from the pod's environment
-# (render.py --github-proxy / --git-mirror / --cn-mirrors), rewritten at each start:
+# (render.py --github-proxy / --git-mirror / --cn-mirrors / --cluster-caches), rewritten at each start:
 # /etc/gitconfig sends git's github.com traffic through the relay and fetches a
 # mirrored repo from the in-cluster mirror (pushes still go to GitHub: the
 # identity pushInsteadOf); /etc/fleet-devnet.env is what every shell exports
@@ -351,6 +351,11 @@ def make_user(t, full_name=''):
 # (deploy/k8s/egress) is every login's HTTPS_PROXY and git's proxy for every
 # host, the gh wrapper's road when no GitHub relay is named; the cluster and
 # loopback (the local credential proxy) stay direct.
+# FLEET_CLUSTER_CACHES (render.py --cluster-caches, #3548): the namespace whose
+# package caches (deploy/k8s/caches) every login installs from — npm, pnpm, yarn,
+# corepack through fleet-npm, pip and uv through fleet-pypi, Go through
+# fleet-goproxy with goproxy.cn after it (`|`: any error falls through), node
+# dists still npmmirror's. In place of the CN mirrors when both are set.
 DEVNET_MARK = '# written by fleet-node-linux.py at each start (#3348) - edits here are lost\n'
 CN_MIRRORS = (('npm_config_registry', 'https://registry.npmmirror.com'),
               ('YARN_REGISTRY', 'https://registry.npmmirror.com'),
@@ -360,6 +365,23 @@ CN_MIRRORS = (('npm_config_registry', 'https://registry.npmmirror.com'),
               ('FNM_NODE_DIST_MIRROR', 'https://npmmirror.com/mirrors/node'),
               ('GOPROXY', 'https://goproxy.cn,direct'),
               ('GOSUMDB', 'sum.golang.google.cn'))
+NS_RE = re.compile(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?')
+
+
+def cluster_caches(ns):
+    npm = 'http://fleet-npm.%s.svc.cluster.local:4873' % ns
+    pypi_host = 'fleet-pypi.%s.svc.cluster.local' % ns
+    pypi = 'http://%s:3141/root/pypi/+simple/' % pypi_host
+    return (('npm_config_registry', npm), ('YARN_REGISTRY', npm), ('COREPACK_NPM_REGISTRY', npm),
+            ('COREPACK_ENABLE_DOWNLOAD_PROMPT', '0'),
+            ('NVM_NODEJS_ORG_MIRROR', 'https://npmmirror.com/mirrors/node'),
+            ('FNM_NODE_DIST_MIRROR', 'https://npmmirror.com/mirrors/node'),
+            ('PIP_INDEX_URL', pypi), ('PIP_TRUSTED_HOST', pypi_host),
+            ('UV_DEFAULT_INDEX', pypi), ('UV_INSECURE_HOST', pypi_host),
+            ('GOPROXY', 'http://fleet-goproxy.%s.svc.cluster.local:3000|https://goproxy.cn|direct' % ns),
+            ('GOSUMDB', 'sum.golang.google.cn'))
+
+
 GH_PROXY_RE = re.compile(r'http://[A-Za-z0-9.-]+:[0-9]{1,5}')
 NO_PROXY = 'localhost,127.0.0.1,::1,.svc,.cluster.local'
 MIRROR_RE = re.compile(r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+')
@@ -390,7 +412,12 @@ def devnet_settings(env):
     if egress:
         pairs += [(k, egress) for k in ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy')]
         pairs += [(k, NO_PROXY) for k in ('NO_PROXY', 'no_proxy')]
-    if env.get('FLEET_CN_MIRRORS', '') == '1':
+    caches = env.get('FLEET_CLUSTER_CACHES', '').strip()
+    if caches and not NS_RE.fullmatch(caches):
+        raise ValueError('FLEET_CLUSTER_CACHES is a namespace, not %r' % caches)
+    if caches:
+        pairs += list(cluster_caches(caches))
+    elif env.get('FLEET_CN_MIRRORS', '') == '1':
         pairs += list(CN_MIRRORS)
     return ('\n'.join(git) + '\n' if git else '', ''.join('%s=%s\n' % kv for kv in pairs))
 
@@ -406,9 +433,10 @@ def devnet(env=None, gitconfig='/etc/gitconfig', envfile='/etc/fleet-devnet.env'
             os.replace(tmp, p)
         elif p.is_file() and not p.is_symlink() and p.read_text().startswith(DEVNET_MARK):
             p.unlink()
-    print('devnet: github proxy %s · git mirrors %d · cn mirrors %s · egress %s' % (
+    print('devnet: github proxy %s · git mirrors %d · packages %s · egress %s' % (
         'on' if 'FLEET_GITHUB_PROXY=' in shell else 'off', git.count('\tinsteadOf = '),
-        'on' if 'GOPROXY=' in shell else 'off', 'on' if 'HTTPS_PROXY=' in shell else 'off'))
+        'cluster' if 'PIP_INDEX_URL=' in shell else 'cn' if 'GOPROXY=' in shell else 'off',
+        'on' if 'HTTPS_PROXY=' in shell else 'off'))
 
 
 def boot(a=None):

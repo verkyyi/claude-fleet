@@ -6,12 +6,17 @@
 #   bash -lc 'exec "$HOME/.claude/fleet/bin/mcp-fetch.sh"'
 #
 # Runtime, first found wins:
+#   mcp-server-fetch on PATH      an installed tool (`uv tool install`; the managed
+#                                 Linux image ships one, #3548) — no index round trip
 #   uvx mcp-server-fetch          (`brew install uv`) — the usual one
 #   pipx run mcp-server-fetch
 #   python3 -m mcp_server_fetch   when the package is installed in that python
 # None → one stderr line naming the install step, exit 1: the server shows as
 # failed in `claude mcp list` / `codex mcp list` instead of silently missing.
 set -uo pipefail
+if command -v mcp-server-fetch >/dev/null 2>&1; then
+  exec mcp-server-fetch "$@"
+fi
 if command -v uvx >/dev/null 2>&1; then
   exec uvx mcp-server-fetch "$@"
 fi

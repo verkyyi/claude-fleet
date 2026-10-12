@@ -335,9 +335,14 @@ out=$(PATH="$SH:/usr/bin:/bin" bash "$BIN/mcp-github.sh" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no GitHub token' || fail "mcp-github.sh without a token should exit 1 and say so (rc=$rc)" "$out"
 out=$(PATH="$SH:/usr/bin:/bin" bash "$BIN/mcp-fetch.sh" --extra 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$out" = 'uvx mcp-server-fetch --extra' ] || fail "mcp-fetch.sh did not exec uvx mcp-server-fetch (rc=$rc)" "$out"
+# an installed mcp-server-fetch (the managed Linux image's uv tool, #3548) wins: no index round trip
+SH2="$WORK/shim2"; mkdir -p "$SH2"
+printf '#!/bin/bash\nprintf "installed %%s\\n" "$*"\n' > "$SH2/mcp-server-fetch"; chmod +x "$SH2/mcp-server-fetch"
+out=$(PATH="$SH2:$SH:/usr/bin:/bin" bash "$BIN/mcp-fetch.sh" --extra 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = 'installed --extra' ] || fail "mcp-fetch.sh should exec an installed mcp-server-fetch before uvx (rc=$rc)" "$out"
 out=$(PATH="/usr/bin:/bin" bash "$BIN/mcp-fetch.sh" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'brew install uv' || fail "mcp-fetch.sh with no runner should exit 1 naming the install (rc=$rc)" "$out"
-ok '12 wrappers: github execs the server with stdio + the gh token in env (exit 1 without one); fetch execs uvx, names the install when none'
+ok '12 wrappers: github execs the server with stdio + the gh token in env (exit 1 without one); fetch execs an installed mcp-server-fetch, else uvx, names the install when none'
 
 # --- 13. the no-tomllib path: macOS /usr/bin/python3 (3.9) fills the same files -----------------
 if [ -x /usr/bin/python3 ] && ! /usr/bin/python3 -c 'import tomllib' 2>/dev/null; then

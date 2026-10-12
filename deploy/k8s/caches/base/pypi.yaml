@@ -1,0 +1,137 @@
+# fleet-pypi (#3548): devpi-server, a read-through PyPI cache: root/pypi mirrors
+# the overlay's FLEET_PYPI_UPSTREAM (devpi-start.sh sets it at every start). The
+# image is ../pypi-image (devpi-server + devpi-client on python), built and pushed
+# by a person. Two replicas, each its own disk and its own root password.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-pypi
+  labels:
+    app: fleet-pypi
+spec:
+  type: ClusterIP
+  # a user pod keeps asking the same replica, so its second install is a hit
+  sessionAffinity: ClientIP
+  selector:
+    app: fleet-pypi
+  ports:
+    - name: http
+      port: 3141
+      targetPort: 3141
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fleet-pypi
+  labels:
+    app: fleet-pypi
+spec:
+  serviceName: fleet-pypi
+  replicas: 2
+  revisionHistoryLimit: 2
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Delete
+  selector:
+    matchLabels:
+      app: fleet-pypi
+  template:
+    metadata:
+      labels:
+        app: fleet-pypi
+        fleet/role: ops
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: fleet-pypi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: devpi
+          image: fleet-pypi-cache:set-by-person
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/opt/fleet-pypi/start.sh"]
+          ports:
+            - containerPort: 3141
+          env:
+            - name: HOME
+              value: /tmp
+            # set by the overlay
+            - name: FLEET_PYPI_UPSTREAM
+              value: https://pypi.org/simple/
+          readinessProbe:
+            httpGet:
+              path: /+api
+              port: 3141
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /+api
+              port: 3141
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - name: program
+              mountPath: /opt/fleet-pypi
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: program
+          configMap:
+            name: fleet-pypi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+  # each replica its own disk: a read-through cache shares nothing (the cluster's
+  # default StorageClass; ../README.md for another)
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: fleet-pypi
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fleet-pypi

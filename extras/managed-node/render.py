@@ -43,6 +43,10 @@ GIT_MIRROR_RE = r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+=h
 # inside the cluster, never a subscription credential.
 CENTRAL_RE = r'(https://[A-Za-z0-9.-]+|http://[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.svc\.cluster\.local)(:[0-9]{1,5})?'
 EGRESS_PROXY_RE = r'http://[A-Za-z0-9.-]+:[0-9]{1,5}'
+# The package caches (#3548, EPIC #3500 C3): fleet-npm:4873 · fleet-pypi:3141 ·
+# fleet-goproxy:3000 in this namespace (deploy/k8s/caches). The pod carries the
+# namespace; fleet-node-linux.py writes the three URLs into /etc/fleet-devnet.env.
+NS_RE = r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'
 
 
 def egress_allow(value):
@@ -125,7 +129,7 @@ def entry_annotations(spec):
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
               entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
               github_proxy='', git_mirrors=(), cn_mirrors=False, cred_central='', egress_proxy='',
-              egress_closed=False):
+              egress_closed=False, cluster_caches=False):
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
     if not hub.startswith('https://'):
@@ -160,6 +164,10 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
                          % cred_central)
     if egress_proxy and not re.fullmatch(EGRESS_PROXY_RE, egress_proxy):
         raise ValueError('--egress-proxy is http://HOST:PORT (deploy/k8s/egress), not %r' % egress_proxy)
+    if cluster_caches and cn_mirrors:
+        raise ValueError('--cluster-caches replaces --cn-mirrors: name one')
+    if cluster_caches and not re.fullmatch(NS_RE, namespace):
+        raise ValueError('--cluster-caches needs a namespace that is a DNS label, not %r' % namespace)
     if egress_closed and not egress_proxy:
         raise ValueError('--egress-closed needs --egress-proxy: closed with no way out is no machine')
     labels = {'app.kubernetes.io/name': 'fleet-managed-node'}
@@ -183,6 +191,8 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         env.append({'name': 'FLEET_GIT_MIRRORS', 'value': ' '.join(git_mirrors)})
     if cn_mirrors:
         env.append({'name': 'FLEET_CN_MIRRORS', 'value': '1'})
+    if cluster_caches:
+        env.append({'name': 'FLEET_CLUSTER_CACHES', 'value': namespace})
     if cred_central:
         # sessions route central; the node leases no token and keeps none (#3547)
         env.append({'name': 'FLEET_CRED_CENTRAL_URL', 'value': cred_central})
@@ -272,7 +282,12 @@ if __name__ == '__main__':
     p.add_argument('--github-proxy', default='', help="git's and gh's road to GitHub: http://RELAY:3128 (extras/gh-relay)")
     p.add_argument('--git-mirror', action='append', default=[], metavar='MIRROR=UPSTREAM',
                    help='fetch UPSTREAM (https://github.com/OWNER/REPO.git) from MIRROR; pushes stay on GitHub (repeatable)')
-    p.add_argument('--cn-mirrors', action='store_true', help='npmmirror / goproxy.cn / node dist mirror for every login')
+    p.add_argument('--cn-mirrors', action='store_true',
+                   help='npmmirror / goproxy.cn / node dist mirror for every login (a pod outside the cluster '
+                        'layout; in it, --cluster-caches)')
+    p.add_argument('--cluster-caches', action='store_true',
+                   help="every login's npm / pip / Go packages from the cluster's caches in --namespace "
+                        '(fleet-npm:4873, fleet-pypi:3141, fleet-goproxy:3000 - deploy/k8s/caches)')
     # the cluster's shared services (#3547; docs/MANAGED-LINUX.md «Shared services»)
     p.add_argument('--cred-central', default='', metavar='URL',
                    help='the cluster credential proxy (http://fleet-credproxy.fleet-workers.svc.cluster.local): '
@@ -292,7 +307,8 @@ if __name__ == '__main__':
                           entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
                           pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
                           git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
-                          egress_proxy=args.egress_proxy, egress_closed=args.egress_closed)
+                          egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
+                          cluster_caches=args.cluster_caches)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
