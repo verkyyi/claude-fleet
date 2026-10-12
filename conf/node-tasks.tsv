@@ -1,0 +1,51 @@
+# conf/node-tasks.tsv — the ONE table of a node's loops: which runs ONCE for the
+# machine and which once per login (issue #3546, EPIC #3500 C1). Every launchd
+# template (launchd/com.claude-fleet.<unit>.plist.tmpl) and every task / child of
+# the node daemon's machine table (bin/fleet-node-supervisor.py default_table) has
+# exactly one row; bin/fleet-machine-tasks.py table --check reds on a loop with no
+# row, and on a row naming nothing (BREAK-IT per-login-machine-loops).
+#
+#   name    the unit / task name
+#   kind    unit (a launchd template — the node daemon runs it for each login it
+#           manages) | machine (the daemon's machine table, run once)
+#   class   machine — the same answer for every login, so the machine computes it
+#                     ONCE (a login reads the result: cluster/machine.json)
+#           login   — needs the login itself: its tmux server, its gh token, its
+#                     sessions, its own hub identity
+#   what    one line: what it does and, for a login loop, why it cannot be the machine's
+#
+# A new loop is a new row, and its class is a decision: a machine row's answer
+# must not depend on whose it is. A login loop that also probes the machine reads
+# the machine's reading when FLEET_MACHINE_TASKS=off (fleet_machine_reading).
+#
+# name	kind	class	what
+base-sync	unit	login	git fetch of the login's own base checkouts, with its own credentials
+cleanup	unit	login	reaps the login's landed worktrees and windows (its tmux, its prmap)
+collect	unit	login	the dash collector for the login's tmux server
+cred-proxy	unit	login	the login's credential proxy (a relay to the shared one when the machine has it)
+diskguard	unit	login	the login's tick (restore, home pane, pool, cert, inbox); the orphan watchdog is the machine's
+install-sync	unit	login	follows stable for the login's install (a managed login answers off · follows the runtime)
+issue-bridge	unit	login	relays the login's issue comments into its sessions
+ledger-watch	unit	login	the login's child-report ledgers
+memguard	unit	machine	the machine's memguard template: never run per login (the machine table's memguard is the one copy)
+peerlink	unit	login	the login's links into other machines' views
+pr-refresh	unit	login	gh pr list for the login's own repos with its own token; stamps its tmux windows
+quotawatch	unit	login	the login's account quota policy and its sessions' warnings
+sleep	unit	login	hibernates the login's idle sessions
+spinner	unit	login	animates the login's tmux windows
+webhook	unit	login	the login's GitHub webhook receiver
+worktree-autoclean	unit	login	the login's stale worktrees
+cred-proxy-shared	machine	machine	the shared credential proxy, one for every login
+node-agent	machine	machine	the one node program, each login a tenant on its link
+entry	machine	machine	the entry port's sshd
+entry-revocations	machine	machine	the entry's revocation follower
+ci-runner	machine	machine	the test runner
+sshd	machine	machine	sshd on a Linux node
+diskguard	machine	machine	disk, CPU and orphan watch for the whole machine
+memguard	machine	machine	memory spike / orphan watch for every process on the machine
+orphans	machine	machine	the orphaned-runaway watchdog, every login at once
+shared-dirs	machine	machine	the shared dirs (heavy slots, session counts) kept root's
+spotlight	machine	machine	Spotlight off on a managed Mac
+update	machine	machine	the one updater
+credential-pool	machine	machine	the subscription pool sync (an image-updated node)
+machine-reading	machine	machine	memory pressure, total memory and load per core, once every 15 s → cluster/machine.json

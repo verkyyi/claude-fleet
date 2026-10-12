@@ -4950,6 +4950,40 @@ fleet_reap_worktree_listeners() {
 # watchdog (bin/fleet-memguard.sh), the doctor's memory line and the admission
 # gate all ask the same three questions through them, so they cannot disagree.
 
+# ---- the machine's ONE reading (issue #3546, EPIC #3500 C1) ---------------------
+# A node whose daemon runs the machine-level work ONCE publishes what every login
+# would otherwise probe for itself — memory pressure, total memory, load per core —
+# as cluster/machine.json, every 15 s (bin/fleet-machine-tasks.py tick, the node
+# daemon's `machine-reading` task; conf/node-tasks.tsv is the table of which loop
+# is the machine's and which a login's). A login with FLEET_MACHINE_TASKS=off
+# (install-apply writes it for a login the node daemon manages) reads it here
+# instead of probing: a copy pushed into its own $FLEET_CONF_DIR/cluster/ first,
+# else the machine's $FLEET_NODE_STATE/cluster/machine.json (root's state dir, the
+# same trust fleet_node_manages gives accounts.json there). Older than
+# FLEET_MACHINE_READING_SECS (60), an empty value, or no file ⇒ rc 1 and the probe
+# runs here as before. Switch unset ⇒ byte for byte as before. No fork with a
+# bash that has EPOCHSECONDS (one `date` on bash 3.2): never dearer than the probe
+# it stands in for. BREAK-IT per-login-machine-loops.
+fleet_machine_reading() {   # <key> → its value; rc 1 = no reading to use
+  [ "${FLEET_MACHINE_TASKS:-}" = off ] || return 1
+  local f ln ts='' v='' max now
+  f="$FLEET_CONF_DIR/cluster/machine.json"
+  [ -f "$f" ] || f="${FLEET_NODE_STATE:-/var/db/fleet-node}/cluster/machine.json"
+  [ -f "$f" ] || return 1
+  while IFS= read -r ln; do
+    case "$ln" in
+      '"ts": '*) ts="${ln#\"ts\": }"; ts="${ts%,}" ;;
+      "\"$1\": \""*) v="${ln#*: \"}"; v="${v%,}"; v="${v%\"}" ;;
+    esac
+  done < "$f"
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$v" ] || return 1
+  max="${FLEET_MACHINE_READING_SECS:-60}"; case "$max" in ''|*[!0-9]*) max=60 ;; esac
+  now="${EPOCHSECONDS:-}"; [ -n "$now" ] || now=$(date +%s)
+  [ $((now - ts)) -le "$max" ] && [ $((ts - now)) -le "$max" ] || return 1
+  printf '%s\n' "$v"
+}
+
 # fleet_mem_probe — the machine's memory pressure, ONE line, space-separated:
 #   <level> <avail_pct> <compressor_pct> <swap_used_mb>
 # level uses the kernel's own numbering (macOS kern.memorystatus_vm_pressure_level):
@@ -4960,6 +4994,7 @@ fleet_mem_probe() {
   if [ -n "${FLEET_MEM_PROBE_CMD:-}" ]; then
     sh -c "$FLEET_MEM_PROBE_CMD" 2>/dev/null | awk 'NF{print; exit}'; return 0
   fi
+  fleet_machine_reading mem_probe && return 0
   if [ -r /proc/meminfo ]; then
     awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^SwapTotal:/{st=$2} /^SwapFree:/{sf=$2}
       END { if (t <= 0) exit; p = int(a * 100 / t); l = (p < 5 ? 4 : (p < 15 ? 2 : 1))
@@ -4988,6 +5023,7 @@ fleet_mem_probe() {
 # stub, or a host that wants its percentages taken of a smaller figure).
 fleet_mem_total_mb() {
   case "${FLEET_MEM_TOTAL_MB:-}" in ''|*[!0-9]*) : ;; *) printf '%s\n' "$FLEET_MEM_TOTAL_MB"; return 0 ;; esac
+  fleet_machine_reading mem_total_mb && return 0
   if [ -r /proc/meminfo ]; then awk '/^MemTotal:/{printf "%d\n", $2/1024; exit}' /proc/meminfo; return 0; fi
   sysctl -n hw.memsize 2>/dev/null | awk 'NF{printf "%d\n", $1/1048576; exit}'
 }
@@ -5572,6 +5608,7 @@ _fleet_load_per_core() {
     case "$l" in ''|*[!0-9.]*) return 0 ;; esac
     printf '%s' "$l"; return 0
   fi
+  if l=$(fleet_machine_reading load_per_core); then printf '%s' "$l"; return 0; fi
   c=$({ sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null; } \
       | head -1 | awk '{ n=$1+0; print (n>0 ? n : 1) }')
   l=$({ sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' || awk '{print $1}' /proc/loadavg 2>/dev/null; } \

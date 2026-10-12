@@ -556,6 +556,22 @@ if [ -f "$ROOT/bin/fleet-conf.sh" ]; then
 else
   say 'conf: skip — no fleet-conf.sh in this version'
 fi
+# The machine's one reading (issue #3546, EPIC #3500 C1): a login the node daemon
+# manages reads memory / load from the daemon's machine-reading task instead of
+# probing the machine itself — FLEET_MACHINE_TASKS=off in its fleet.conf, written
+# here and taken back here when the login is released (only the line this wrote).
+# Quiet unless it changes something; nothing else on any other machine.
+if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" ]; then
+  _mt=$(bash "$ROOT/bin/fleet-conf.sh" line FLEET_MACHINE_TASKS 2>/dev/null </dev/null)
+  if fleet_node_manages "$LOGIN"; then
+    [ -n "$_mt" ] || { bash "$ROOT/bin/fleet-conf.sh" set-line FLEET_MACHINE_TASKS 'FLEET_MACHINE_TASKS=off' >/dev/null 2>&1 </dev/null \
+      && say 'conf: FLEET_MACHINE_TASKS=off — memory and load come from the machine'; }
+  elif [ "$_mt" = 'FLEET_MACHINE_TASKS=off' ]; then
+    bash "$ROOT/bin/fleet-conf.sh" drop-line FLEET_MACHINE_TASKS >/dev/null 2>&1 </dev/null \
+      && say 'conf: FLEET_MACHINE_TASKS dropped — this login probes the machine itself again'
+  fi
+  unset _mt
+fi
 
 # --- daemons ------------------------------------------------------------------
 same_plist() { # semantic equality — the installed file may be binary or reformatted

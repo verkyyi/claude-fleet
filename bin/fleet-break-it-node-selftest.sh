@@ -21,6 +21,8 @@
 #   tcc-disclaim-sigpipe  bin/fleet-tcc-disclaim.py + bin/fleet-login-new.sh gen_password (#3419):
 #                         the wrapper handed Python's ignored SIGPIPE to the script — a
 #                         `… | head` never ended and the account create hung
+#   per-login-machine-loops bin/fleet-machine-tasks.py + conf/node-tasks.tsv (#3546): every
+#                         login probed the machine for itself; one table, one reading now
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -1322,6 +1324,22 @@ EOF
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="after off the row still reads rc $rc: $out"; return 1; }
   WHAT="卷在索引、知识代理 99% 跑了 7 小时：体检 spotlight 行 WARN 写明两处；守护的 off 一次关掉卷索引、停掉代理，行回到 PASS"
+}
+
+# ---- per-login-machine-loops (#3546, EPIC #3500 C1): every login on one managed
+# machine probed the same machine for itself (memory, load — every capacity read,
+# every spawn's admission), and nothing asked whether a new loop was the machine's
+# or a login's. Now conf/node-tasks.tsv is that one table (a loop with no row is
+# red), the daemon publishes ONE reading every 15 s and a login with
+# FLEET_MACHINE_TASKS=off reads it instead of probing.
+drill_per_login_machine_loops() {
+  CAP=20; local t0
+  t0=$(now)
+  if ! bash "$BIN/fleet-machine-tasks-selftest.sh" >"$WORK/machine-tasks.out" 2>&1; then
+    WHY="a login still probes the machine itself, or a loop has no row: $(grep FAIL "$WORK/machine-tasks.out" | head -3 | tr '\n' ' ')"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探"
 }
 
 cred_run_drills "$0"

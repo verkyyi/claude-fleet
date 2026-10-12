@@ -996,3 +996,12 @@ BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
 
 BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；Go
 `internal/control/account_ticket_test.go`、`internal/api/fleet_account_ticket_test.go`。
+
+## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）
+
+一台托管机器上每个登录原来各自探一遍同一台机器：内存压力、总内存、每核负载，每次 capacity 读、每次开新会话的准入都探。
+
+- **一张表**：`conf/node-tasks.tsv` 给每个后台循环登记一行——每个 launchd 模板、节点守护表里每个任务——标 `machine`（整机一份，答案不随登录变）或 `login`（要这个登录自己：它的 tmux、它的 gh 凭据、它的会话、它在入口的身份）。`fleet-machine-tasks.py table --check` 对没登记的循环、登记了却不存在的行报红（BREAK-IT `per-login-machine-loops`）；表里标 `machine` 的模板，守护不按登录跑（`table_machine_units`）。新加一个循环就是新加一行，它属于哪类是一个决定。
+- **一份读数**：守护的 `machine-reading` 任务每 15 秒用 `fleet-lib.sh` 自己的探测算一次，写 `<state>/cluster/machine.json`（0644，一次 rename；入座的守护以 `_fleetnode` 写，目录 root 的、只有它的组能写）。用户 pod 不跑它：那是集群的一份。
+- **开关**：被守护托管的登录，install-apply 往它的 fleet.conf 写 `FLEET_MACHINE_TASKS=off`（放回时收回这一行）。这样的登录探内存 / 负载时先看自己 `$FLEET_CONF_DIR/cluster/machine.json`（以后从入口推来的那份），再看机器那份（root 的状态目录，和 accounts.json 同一个信任），60 秒内（`FLEET_MACHINE_READING_SECS`）；过期、空值、没有，就照旧自己探。没开关的机器一个字节不变。
+- 实测（云上那台 Linux 托管机器，#3515 之后）：这类重复的整机探测每登录不到 0.5 秒 CPU / 分钟；每登录的大头是要用他自己身份的循环（hub-sessions 循环、tmux 服务器、节点 agent 的 rpc、collect / pr-refresh / cleanup），归 #3544。fleet-ops Deployment、`CapClusterOps`、经入口推回各 pod 的那一半是 #3734。Linux 上 `load_per_core` 现在总是空（#3733，原有的探测问题）。

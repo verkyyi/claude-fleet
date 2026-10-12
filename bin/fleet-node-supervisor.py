@@ -666,6 +666,14 @@ def default_table(paths):
             # file planted under another login's name swept — each login its own.
             {"name": "shared-dirs", "every": 60,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-shared-dirs.py")]},
+            # The machine's ONE reading (#3546, EPIC #3500 C1): memory pressure,
+            # total memory, load per core — once every 15 s into <state>/cluster/
+            # machine.json, which a login with FLEET_MACHINE_TASKS=off reads instead
+            # of probing for itself. "seat": a seated daemon writes it as itself
+            # into the cluster/ root made for it (seat_share); no root needed.
+            {"name": "machine-reading", "every": 15, "timeout": 30, "seat": True,
+             "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-machine-tasks.py"), "tick",
+                     "--out", os.path.join(paths.state, "cluster")]},
             # Spotlight off on a managed Mac (#3402): every volume's index and each
             # person's CoreSpotlight knowledge agents — run at the daemon's start
             # (a new machine is off once it is up) and hourly (a macOS update
@@ -744,6 +752,22 @@ def brew_prefix():
     return "/opt/homebrew" if os.path.isdir("/opt/homebrew") or not os.path.isdir("/usr/local/bin") else "/usr/local"
 
 
+def table_machine_units(runtime):
+    """The launchd units conf/node-tasks.tsv marks `machine` (issue #3546): run
+    once for the machine, never once per login. No table (an older runtime) ⇒
+    none — MACHINE_UNITS alone, as before."""
+    out = set()
+    try:
+        with open(os.path.join(runtime, "conf", "node-tasks.tsv")) as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t")
+                if len(p) >= 3 and not p[0].startswith("#") and p[1] == "unit" and p[2] == "machine":
+                    out.add(p[0])
+    except OSError:
+        pass
+    return out
+
+
 def account_units(paths, table=None):
     """The ONE account task table: [{name, argv, env, every | keepalive, out, err}],
     argv/env/out/err still carrying __HOME__ (filled per account). From the table
@@ -753,10 +777,11 @@ def account_units(paths, table=None):
     if table is not None and table.get("account") is not None:
         return list(table["account"])
     out = []
+    machine_class = table_machine_units(paths.runtime)
     pat = os.path.join(paths.runtime, "launchd", "com.claude-fleet.*.plist.tmpl")
     for f in sorted(glob.glob(pat)):
         u = os.path.basename(f)[len("com.claude-fleet."):-len(".plist.tmpl")]
-        if u in MACHINE_UNITS:
+        if u in MACHINE_UNITS or u in machine_class:
             continue
         try:
             with open(f, "rb") as fh:
@@ -6213,6 +6238,9 @@ def seat_layout(paths, seat):
         os.rename(tmp, sf)
     # the seated updater's staging (#3670): the core copies a release out of it
     _seat_dir(os.path.join(paths.state, "staging"), 0, gid, 0o770)
+    # the machine's one reading (#3546): the seat writes cluster/machine.json, every
+    # login reads it — root's dir, the seat's group may write, nobody else
+    _seat_dir(os.path.join(paths.state, "cluster"), 0, gid, 0o775)
     seat_hub_url(paths)
     _seat_dir(paths.locks, 0, gid, 0o770)
     for n in os.listdir(paths.locks):
