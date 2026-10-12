@@ -173,6 +173,9 @@ printf 'ARGV %s\n' "$argv" >> "$CURL_LOG"
 n=$(grep -c '^DELETE ' "$CURL_LOG")
 if [ "$m" = DELETE ] && [ "$n" -le "${CURL_202:-0}" ]; then
   printf '{"logins":["drillx@m5"],"status":"removing"}' > "$out"; printf 202
+elif [ -n "${CURL_ACCOUNTS:-}" ] && [ "${url%/v1/fleet/accounts}" != "$url" ]; then
+  # the operator's roster (issue #3471): GET answers the fixture, POST is logged
+  if [ "$m" = GET ]; then cat "$CURL_ACCOUNTS" > "$out"; else printf '{}' > "$out"; fi; printf 200
 elif [ "$m" = DELETE ] && [ "$n" = $(( ${CURL_202:-0} + 1 )) ]; then
   printf '{"person_id":"drill-1","devices":1,"accounts":1,"nodes":["ep_9"]}' > "$out"; printf 200
 else
@@ -208,6 +211,72 @@ out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/ho
 if [ "$rc" = 0 ] && [ "$(grep -c '^DELETE ' "$T/curl.log")" = 4 ] && printf '%s\n' "$out" | grep -q 'no drill person on the hub'
 then ok 'teardown --invite: 202 removing is waited out, then the person is gone (exit 0)'
 else bad "202 removing: exit $rc, $(grep -c '^DELETE ' "$T/curl.log") DELETEs: $(printf '%s' "$out" | tail -n 4)"; fi
+# --- the home machine (issue #3471): steps 11–12 look THERE, never here alone ----
+# drill 33's login stayed on mini2 (its --home) under offboard PASS + residue
+# PASS. The seam stands in for ssh: <dir>/<machine> = what is left there, <dir>/
+# <machine>.down = unreachable, neither = the real probe run on this machine
+# (where no such login exists — a clean home)
+mkdir -p "$T/far"
+cat > "$T/shim/homessh" <<'EOF'
+#!/bin/sh
+m=$1; shift
+printf '%s %s\n' "$m" "$*" >> "$T_FAR/calls"
+[ ! -f "$T_FAR/$m.down" ] || { echo "ssh: connect to host $m port 22: Operation timed out" >&2; exit 255; }
+[ ! -f "$T_FAR/$m" ] || { cat >/dev/null; sed 's/^/left: /' "$T_FAR/$m"; echo probe-ok; exit 0; }
+exec "$@"
+EOF
+chmod +x "$T/shim/homessh"
+# far <login> [args…]: a teardown with the seams, no operator token
+far() {
+  local l=$1; shift
+  env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/homes" TMPDIR="$T" T_FAR="$T/far" \
+    CURL_LOG="$T/curl.log" FLEET_DRILL_POLL_SECS=0 FLEET_DRILL_REMOVE_SECS=0 FLEET_DRILL_LOGIN_REMOVE="$T/shim/remove" \
+    FLEET_DRILL_HOME_SSH="$T/shim/homessh" CCQUOTA_VIEWER_TOKEN="${VIEWER_T:-}" FLEET_HUB_TOKEN='' \
+    bash "$DRILL" --teardown "$l" "$@" 2>&1
+}
+mkdir -p "$T/homes/drillw"; printf 'login record (uid 506)\nhome /Users/drillw\n3 process(es) of drillw\n' > "$T/far/mini2"
+out=$(far drillw --home mini2); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*on mini2: login record' \
+   && printf '%s\n' "$out" | grep -q 'on mini2: 3 process' && ! printf '%s\n' "$out" | grep -q ': PASS '
+then ok 'teardown --home: the login still on the home machine is a residue FAIL naming it (exit 1)'
+else bad "teardown --home, login left there: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
+if grep -q '^mini2 sh -s -- drillw$' "$T/far/calls" 2>/dev/null; then ok 'the residue probe ran ON the home machine, for that login'
+else bad "no probe on mini2: $(cat "$T/far/calls" 2>/dev/null)"; fi
+r=$(ls "$T"/fleet-onboard-drill.drillw.*/residue-mini2.txt 2>/dev/null | head -n 1)
+if [ -n "$r" ] && grep -q 'login record' "$r"; then ok "the home machine's answer is kept (residue-mini2.txt)"; else bad "no residue-mini2.txt (${r:-none})"; fi
+# its local login already gone: the teardown still runs, for the home machine
+out=$(far drillq --home mini2); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*on mini2'; then ok 'teardown --home with no login here: still checks the home machine (exit 1)'
+else bad "teardown --home, nothing here: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
+# the home machine clean: PASS, and it says it looked there
+rm -f "$T/far/mini2"; mkdir -p "$T/homes/drillw"
+out=$(far drillw --home mini2); rc=$?
+if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -Eq '^PASS +residue +none on .* mini2:'; then ok 'teardown --home, the home machine clean: residue PASS names it (exit 0)'
+else bad "teardown --home, clean: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
+# unreachable: never read as clean
+mkdir -p "$T/homes/drillw"; : > "$T/far/mini2.down"
+out=$(far drillw --home mini2); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*could not read mini2'; then ok 'a home machine that cannot be read is a FAIL, never clean'
+else bad "home machine down: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
+rm -f "$T/far/mini2.down"
+# the hub's roster names the machine (no --home): asked to close it, and a login
+# the node could not remove (#3167's eDSPermissionError) is an offboard FAIL with its words
+cat > "$T/accounts.json" <<'EOF'
+{"accounts":[{"principal_id":"drill-7","hostname":"mini2.local","login":"drillr","state":"failed","op":"create","detail":"login drillr is still on this machine (eDSPermissionError)"},
+ {"principal_id":"p-other","hostname":"m4","login":"someone","state":"active","op":"create"}]}
+EOF
+mkdir -p "$T/homes/drillr"; : > "$T/curl.log"
+out=$(VIEWER_T=tok CURL_ACCOUNTS="$T/accounts.json" far drillr); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'asked the hub to close drillr@mini2.local (failed)' \
+   && printf '%s\n' "$out" | grep -Eq '^FAIL +offboard .*drillr@mini2.local still failed: .*eDSPermissionError'
+then ok "the roster's machine: the hub is asked to close it, a failed remove is an offboard FAIL with the node's words"
+else bad "roster close: exit $rc: $(printf '%s' "$out" | tail -n 5)"; fi
+if grep -q '^POST https://hub.example/v1/fleet/accounts {"action": "remove", "principal_id": "drill-7", "hostname": "mini2.local"}' "$T/curl.log"
+then ok 'the remove went to POST /v1/fleet/accounts for that row only'
+else bad "no remove POST for drill-7@mini2.local: $(grep '^POST' "$T/curl.log")"; fi
+if grep -q '^mini2.local sh -s -- drillr$' "$T/far/calls"; then ok "the residue probe reached the roster's machine with no --home"
+else bad "the roster's machine was not probed: $(cat "$T/far/calls")"; fi
+
 # --- a SIGTERM mid-run is ABORTED, never PASS (#2865) ----------------------------
 # the remove seam signals the drill while its teardown runs: the run still
 # finishes tearing down, then says ABORTED and exits 143 — no PASS line

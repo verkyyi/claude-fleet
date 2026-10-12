@@ -99,6 +99,14 @@ reset_fixture() {
   printf 'GroupMembership: admin1 bob\nGroupMembers: GUID-ADMIN1 GUID-BOB\n' > "$WORK/ds/groups/com.apple.access_screensharing"
   : > "$WORK/ds/groups/com.apple.access_disabled"
   printf 'GroupMembership: alice bob\nGroupMembers: GUID-ALICE GUID-BOB\n' > "$WORK/ds/groups/staff"
+  # the Public-Folder share groups (issue #3471): alice's (her alone), bob's, and
+  # a share alice is only one member of — only the first is hers to delete
+  printf 'GroupMembership: alice\nGroupMembers: GUID-ALICE\nGeneratedUID: SGUID-3\n' > "$WORK/ds/groups/com.apple.sharepoint.group.3"
+  printf 'GroupMembership: bob\nGroupMembers: GUID-BOB\nGeneratedUID: SGUID-4\n' > "$WORK/ds/groups/com.apple.sharepoint.group.4"
+  printf 'GroupMembership: alice bob\nGroupMembers: GUID-ALICE GUID-BOB\nGeneratedUID: SGUID-5\n' > "$WORK/ds/groups/com.apple.sharepoint.group.5"
+  rm -rf "$WORK/ds/sharepoints"; mkdir -p "$WORK/ds/sharepoints"
+  printf 'dsAttrTypeNative:sharepoint_group_id: SGUID-3\n' > "$WORK/ds/sharepoints/alice-public"
+  printf 'dsAttrTypeNative:sharepoint_group_id: SGUID-4\n' > "$WORK/ds/sharepoints/bob-public"
 }
 reset_fixture
 
@@ -181,10 +189,12 @@ cat > "$WORK/shim/dscl" <<'EOF'
 #!/bin/sh
 DS=$FLEET_TEST_DS
 case "$2" in
-  -list) ls "$DS/groups" ;;
+  -list) case "$3" in /SharePoints) ls "$DS/sharepoints" 2>/dev/null ;; *) ls "$DS/groups" ;; esac ;;
   -read)
     f="$DS/groups/${3#/Groups/}"
     case "$3" in
+      /SharePoints/*) f="$DS/sharepoints/${3#/SharePoints/}"; [ -f "$f" ] || exit 56
+                      if [ -n "${4:-}" ]; then grep "^$4: " "$f" || echo "No such key: $4"; else cat "$f"; fi ;;
       /Users/alice) [ ! -e "$DS/alice.gone" ] || exit 56
                     [ "${4:-}" != GeneratedUID ] || echo 'GeneratedUID: GUID-ALICE' ;;
       /Groups/*) [ -f "$f" ] || { echo '<dscl_cmd> DS Error: -14136 (eDSRecordNotFound)' >&2; exit 56; }
@@ -197,7 +207,10 @@ case "$2" in
     case "$3" in /Users/*)
       [ "${FAKE_USER_DELETE_FAILS:-0}" = 0 ] || { echo '<dscl_cmd> DS Error: -14120 (eDSPermissionError)' >&2; exit 1; }
       : > "$DS/${3#/Users/}.gone"; exit 0 ;;
+    /SharePoints/*) rm "$DS/sharepoints/${3#/SharePoints/}" || exit 56; exit 0 ;;
     esac
+    # a whole record: `. -delete /Groups/<g>` with no attribute
+    [ -n "${4:-}" ] || { rm "$DS/groups/${3#/Groups/}" 2>/dev/null || { echo '<dscl_cmd> DS Error: -14136 (eDSRecordNotFound)' >&2; exit 56; }; exit 0; }
     f="$DS/groups/${3#/Groups/}"
     grep "^$4: " "$f" | tr ' ' '\n' | grep -Fxq -- "$5" || { echo '<dscl_cmd> DS Error: -14009 (eDSUnknownAttribute)' >&2; exit 1; }
     awk -v a="$4:" -v v="$5" '$1 == a {o = $1; for (i = 2; i <= NF; i++) if ($i != v) o = o " " $i; print o; next} {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
@@ -287,6 +300,8 @@ not_has "$WORK/out" '/Groups/staff' 'a non-access group was touched'
 has "$WORK/out" "archive=$ARCH/alice-" 'archive path not printed last'
 has "$WORK/out" "sudo python3 -I $WORK/bin/fleet-credsep.py purge --login alice" 'credsep purge step not shown (#2418)'
 has "$WORK/out" "would remove: $CS/db/alice" 'the dry run does not list the store it would remove'
+has "$WORK/out" 'sudo dscl . -delete /Groups/com.apple.sharepoint.group.3' "the dry run does not show alice's share group going (#3471)"
+not_has "$WORK/out" 'sharepoint.group.5' 'the dry run would delete a share alice is only one member of'
 [ -d "$CS/db/alice" ] && [ -f "$CS/daemons/${PX}alice$PXS" ] || fail 'preview removed credsep files'
 [ ! -s "$FLEET_TEST_LOG" ] || fail 'preview executed a mutating command'
 [ -f "$FLEET_TEST_LIVE" ] && [ -f "$FLEET_CONF_DIR/accounts/alpha" ] || fail 'preview mutated fixture'
@@ -375,6 +390,13 @@ not_has "$WORK/out" 'archive=' 'delete-home printed an archive path'
 [ ! -e "$WORK/homes/alice" ] || fail 'delete-home: home remains'
 has "$FLEET_TEST_LOG" 'dscl . -delete /Groups/com.apple.access_ssh GroupMembership alice' 'delete-home skipped the group cleanup'
 [ "$(ssh_group)" = "$(printf 'GroupMembership: admin1 bob\nGroupMembers: GUID-ADMIN1 GUID-BOB')" ] || fail 'delete-home: ssh group still lists alice'
+# her own share group and its share point go; bob's and the shared one stay (#3471)
+has "$FLEET_TEST_LOG" 'dscl . -delete /Groups/com.apple.sharepoint.group.3' "alice's own share group was not deleted"
+has "$FLEET_TEST_LOG" 'dscl . -delete /SharePoints/alice-public' "alice's share point was not deleted"
+[ ! -e "$WORK/ds/groups/com.apple.sharepoint.group.3" ] && [ ! -e "$WORK/ds/sharepoints/alice-public" ] || fail "alice's share group or share point is still there"
+[ -f "$WORK/ds/groups/com.apple.sharepoint.group.4" ] && [ -f "$WORK/ds/sharepoints/bob-public" ] || fail "bob's share group or share point was deleted"
+[ -f "$WORK/ds/groups/com.apple.sharepoint.group.5" ] || fail 'a share alice is only one member of was deleted'
+not_has "$FLEET_TEST_LOG" 'sharepoint.group.4' "bob's share group was touched"
 
 # A macOS that leaves the home behind: say so, loudly, after the deletion.
 reset_fixture
@@ -478,7 +500,7 @@ run alice --archive-dir "$WORK/elsewhere" --apply
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'archive-dir apply failed'; }
 [ -f "$(echo "$WORK/elsewhere"/alice-*.tar.gz)" ] || fail '--archive-dir was not honoured'
 has "$WORK/out" '(no com.apple.access_* group lists alice)' 'no-group case not explained'
-not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'dscl -delete ran for a login in no access group'
+not_has "$FLEET_TEST_LOG" 'dscl . -delete /Groups/com.apple.access_' 'dscl -delete ran for a login in no access group'
 
 # The archive failing stops BEFORE the login is deleted; the home and its groups are untouched.
 reset_fixture

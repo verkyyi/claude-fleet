@@ -28,7 +28,9 @@
 # com.apple.access_* group (Remote Login's SSH allow-list, Screen Sharing, …).
 # `dseditgroup -d` cannot do that once the user record is gone ("Record was not
 # found"); only `dscl . -delete` on the attribute can — without it the name stays
-# in the SSH allow-list forever.
+# in the SSH allow-list forever. Step 7b deletes the login's own Public-Folder
+# share group (com.apple.sharepoint.group.N, the login its only member) and its
+# share point, which deleteUser leaves behind (issue #3471).
 # Step 1c lets the machine daemon go of a login it took over (#2924) before
 # anything is booted out or killed: it would start its tasks again.
 # Before step 1, in a dry run too: a login that still has entries in the machine
@@ -112,6 +114,20 @@ ACL_BY_NAME=() ACL_BY_GUID=()
 for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.access_' || :); do
   acl_values "$g" GroupMembership | grep -Fxq -- "$LOGIN" && ACL_BY_NAME+=("$g")
   [ -n "$GUID_TARGET" ] && acl_values "$g" GroupMembers | grep -Fxq -- "$GUID_TARGET" && ACL_BY_GUID+=("$g")
+done
+# The login's own share group (issue #3471): `sysadminctl -addUser` makes a
+# com.apple.sharepoint.group.N for its Public Folder, its ONLY member the login,
+# and deleteUser leaves it — mini2 kept 48 of them, one per drill login. Only a
+# group whose members are this login alone (by name, by GUID) is the login's;
+# one that lists anyone else is a share someone made and stays. Its share point
+# (/SharePoints, sharepoint_group_id = the group's GeneratedUID) goes with it.
+SHARE_GROUPS=()
+for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.sharepoint\.group\.' || :); do
+  names=$(acl_values "$g" GroupMembership) guids=$(acl_values "$g" GroupMembers)
+  [ -n "$names$guids" ] || continue
+  { [ -z "$names" ] || [ "$names" = "$LOGIN" ]; } || continue
+  { [ -z "$guids" ] || { [ -n "$GUID_TARGET" ] && [ "$guids" = "$GUID_TARGET" ]; }; } || continue
+  SHARE_GROUPS+=("$g")
 done
 
 show() { local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
@@ -452,6 +468,20 @@ done
 for g in ${ACL_BY_GUID[@]+"${ACL_BY_GUID[@]}"}; do
   acl_values "$g" GroupMembers | grep -Fxq -- "$GUID_TARGET" || { printf '  (%s no longer lists %s)\n' "$g" "$GUID_TARGET"; continue; }
   run_post sudo dscl . -delete "/Groups/$g" GroupMembers "$GUID_TARGET"
+done
+
+step 7b "remove $LOGIN's own share group (its Public Folder)"
+[ "${#SHARE_GROUPS[@]}" -gt 0 ] || printf '  (no com.apple.sharepoint.group.* is %s'"'"'s alone)\n' "$LOGIN"
+for g in ${SHARE_GROUPS[@]+"${SHARE_GROUPS[@]}"}; do
+  gid=$(acl_values "$g" GeneratedUID | head -n 1)
+  if [ -n "$gid" ]; then
+    while IFS= read -r sp; do
+      [ -n "$sp" ] || continue
+      dscl . -read "/SharePoints/$sp" dsAttrTypeNative:sharepoint_group_id 2>/dev/null | grep -Fq -- "$gid" \
+        && run_post sudo dscl . -delete "/SharePoints/$sp"
+    done < <(dscl . -list /SharePoints 2>/dev/null || :)
+  fi
+  run_post sudo dscl . -delete "/Groups/$g"
 done
 
 printf '\n'
