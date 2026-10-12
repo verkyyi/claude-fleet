@@ -27,6 +27,9 @@
 #                       ends green saying superseded, not red on the 409 (#3143)
 #   train-hub-backwards     the hub was deployed by hand past TRAIN_SHA: the train's
 #                       hub plan skips the deploy (superseded), never rolls it back (#3319)
+#   oss-internal-name-committed  a PR adds a line holding a private address: the
+#                       oss-scan gate (the REAL rule table) reds it; `# oss-ok:` greens
+#                       it; .github/workflows/oss-scan.yml runs it on every PR (#3572)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -412,6 +415,39 @@ drill_train_hub_backwards() {
   [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="a hub commit the checkout cannot place still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded、这步绿；入口落后照常部署；读不到 /version 或认不出提交：红，不盲部署"
+}
+
+# The repo is public (EPIC #3569): a PR that adds an internal address used to merge
+# like any other line. bin/oss-scan.sh --gate (issue #3572) reds it, read off the
+# REAL conf/oss-scan.rules + conf/oss-scan.allow, on every PR (oss-scan.yml, no paths).
+drill_oss_internal_name_committed() {
+  CAP=60
+  local t0 d out rc wf ip
+  wf="$BIN/../.github/workflows/oss-scan.yml"
+  grep -q 'bin/oss-scan.sh --gate "origin/${{ github.base_ref }}"' "$wf" 2>/dev/null \
+    && ! grep -q '^ *paths:' "$wf" \
+    || { WHY="oss-scan.yml does not run the gate on every PR"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/oss-gate.XXXXXX"); t0=$(now)
+  ip="10.$((20)).30.40"   # spelled so this file never holds one
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q "$d/r" && git -C "$d/r" symbolic-ref HEAD refs/heads/master
+    printf 'PORT = 80\n' > "$d/r/net.py"; git -C "$d/r" add -A && git -C "$d/r" commit -qm base
+    git -C "$d/r" checkout -qb pr
+    printf 'PORT = 80\nHOST = "%s"\n' "$ip" > "$d/r/net.py"; git -C "$d/r" commit -qam 'add a host'
+  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  bash "$BIN/oss-scan.sh" --root "$d/r" --baseline > "$d/base"
+  gate() { out=$(bash "$BIN/oss-scan.sh" --root "$d/r" --baseline-file "$d/base" --gate master 2>&1); rc=$?; }
+  gate
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '^net.py:2 private-ipv4 — ' \
+    || { WHY="a PR adding a private address was not red ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  printf 'PORT = 80\nHOST = "%s"  # oss-ok: 演练用的假地址\n' "$ip" > "$d/r/net.py"
+  ( GIT_CONFIG_GLOBAL=/dev/null git -C "$d/r" -c user.name=t -c user.email=t@t commit -qam exempt )
+  gate
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '豁免 1 处' \
+    || { WHY="the same line with # oss-ok: was not green ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="PR 新增一行私网地址：门禁红，报 文件:行 规则；同一行写上 # oss-ok: <理由> 转绿并计入豁免；oss-scan.yml 每个 PR 都跑、不设路径过滤"
 }
 
 cred_run_drills "$0"
