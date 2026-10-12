@@ -385,21 +385,21 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `docs/dev/CRED-RELAY.md` | 10 | corp-domain 10 | placeholder |
 | `docs/dev/CRED-SEPARATE.md` | 6 | corp-domain 2 · machine 4 | placeholder |
 | `docs/dev/DECISIONS.md` | 1 | machine 1 | placeholder |
-| `docs/DEFAULTS-AUDIT.md` | 12 | gh-owner 2 · machine 8 · person 2 | placeholder |
+| `docs/DEFAULTS-AUDIT.md` | 12 | gh-owner 2 · machine 8 · person 2 | placeholder | <!-- docs-links-ok: removed by #3576 after this snapshot -->
 | `docs/dev/EMIT.md` | 1 | gh-owner 1 | placeholder |
 | `docs/dev/FLEET-HUB.md` | 26 | machine 25 · ts-net 1 | placeholder |
 | `docs/dev/FLEET-MCP.md` | 2 | machine 2 | placeholder |
 | `docs/dev/INSTALL.md` | 8 | gh-owner 2 · machine 6 | placeholder |
 | `docs/dev/LOCAL-AND-HUB.md` | 3 | machine 3 | placeholder |
-| `docs/MANAGED-LINUX-DRILL.md` | 59 | corp-domain 15 · gh-owner 2 · machine 25 · person 15 · private-ipv4 1 · user-home 1 | placeholder |
+| `docs/MANAGED-LINUX-DRILL.md` | 59 | corp-domain 15 · gh-owner 2 · machine 25 · person 15 · private-ipv4 1 · user-home 1 | placeholder | <!-- docs-links-ok: removed by #3576 after this snapshot -->
 | `docs/dev/MANAGED-LINUX.md` | 29 | cloud 3 · corp-domain 10 · machine 9 · person 1 · private-ipv4 6 | placeholder |
 | `docs/dev/MANAGED-NODE.md` | 24 | corp-domain 6 · gh-owner 6 · machine 9 · person 3 | placeholder |
 | `docs/dev/MULTI-ACCOUNT.md` | 1 | person 1 | placeholder |
 | `docs/dev/MULTI-MACHINE-OPS.md` | 71 | corp-domain 1 · gh-owner 4 · machine 64 · person 2 | placeholder |
 | `docs/dev/OSS-PACKAGING-PLAN.md` | 18 | corp-domain 2 · gh-owner 6 · machine 2 · person 8 | placeholder |
 | `docs/dev/PHONE-MCP.md` | 44 | gh-owner 17 · machine 13 · person 7 · tailnet 3 · ts-net 3 · user-home 1 | placeholder |
-| `docs/RESEARCH-CRED-PROXY.md` | 2 | gh-owner 2 | placeholder |
-| `docs/ROLES-ACCEPTANCE.md` | 10 | machine 10 | placeholder |
+| `docs/RESEARCH-CRED-PROXY.md` | 2 | gh-owner 2 | placeholder | <!-- docs-links-ok: removed by #3576 after this snapshot -->
+| `docs/ROLES-ACCEPTANCE.md` | 10 | machine 10 | placeholder | <!-- docs-links-ok: removed by #3576 after this snapshot -->
 | `docs/dev/SHARED-MACHINE.md` | 4 | machine 4 | placeholder |
 | `extras/cred-relay/Caddyfile` | 2 | corp-domain 2 | config + placeholder |
 | `extras/cred-relay/fleet-relay-check.py` | 1 | corp-domain 1 | config |
