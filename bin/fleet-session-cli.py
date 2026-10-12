@@ -133,8 +133,10 @@ def own_node(rs):
     the list draws it in this machine's group. `fleet ls` names it anyway: the
     hub cache's `#me` (issue #3464 — a thin client's `fleet ls` runs on its home,
     where the session it just opened is local, and the drill read its machine as
-    «-»). No hub cache ⇒ left empty, as before."""
-    me = me_label()
+    «-»). No hub cache — a fresh login on its home, whose cache the hub loop never
+    wrote (issue #3470) — ⇒ the name the node registers under: this host's short
+    name through FLEET_NODE_ALIASES (host_label), the hub's machine_name rule."""
+    me = me_label() or host_label()
     if me:
         for r in rs:
             if not r.get("node") and not str(r.get("key", "")).startswith("wid:"):
@@ -158,6 +160,13 @@ def own_ids(rs):
     for r in rs:
         k = str(r.get("key", ""))
         wid = k[4:] if k.startswith("wid:") else local.get(k, "")
+        if not wid and k.startswith("@"):
+            # no hub cache row (a fresh login, issue #3470): the id the inventory
+            # sends the hub — `<fleet UUID>/<@fleet_id>` (fleet_worker_id)
+            if fids is None:
+                fids = window_fids()
+            if fids.get(k) and fleet_uuid():
+                wid = fleet_uuid() + "/" + fids[k]
         if wid:
             r["worker_id"] = wid
             r["fleet_id"] = wid.split("/", 1)[1] if "/" in wid else ""
@@ -166,6 +175,44 @@ def own_ids(rs):
                 fids = window_fids()
             r["fleet_id"] = fids.get(k, "")
     return rs
+
+
+FLEET_UUID = []
+
+
+def fleet_uuid():
+    """This machine's fleet UUID, the one its inventory reports to the hub ('' =
+    none): the fleet's frozen identity file, else fleet-lib's fleet_uuid."""
+    if not FLEET_UUID:
+        sess = os.environ.get("FLEET_SESSION", "")
+        u = ""
+        if sess:
+            d = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
+            try:
+                u = Path(d, "fleets", sess, "identity").read_text().split("\n", 1)[0].strip().lower()
+            except OSError:
+                u = ""
+            if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", u):
+                u = sh_lib('fleet_uuid "$2"', sess).lower() if not os.environ.get("FLEET_SESSION_CLI_ROWS") else ""
+                if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", u):
+                    u = ""
+        FLEET_UUID.append(u)
+    return FLEET_UUID[0]
+
+
+def host_label():
+    """This machine as the hub names it with no cache to ask (issue #3470): the
+    host's short name, renamed through FLEET_NODE_ALIASES (`mini2=m4`) — the rule
+    the hub loop writes `#me` with (fleet-hub-sessions.sh label) and the node
+    registers under (its hostname). ('' = no hostname)."""
+    h = socket.gethostname().split(".", 1)[0]
+    if not h:
+        return ""
+    al = os.environ.get("FLEET_NODE_ALIASES")
+    if al is None and not os.environ.get("FLEET_SESSION_CLI_ROWS"):
+        al = sh_lib('printf "%s" "${FLEET_NODE_ALIASES:-}"')
+    alias = dict(a.split("=", 1) for a in (al or "").split() if "=" in a)
+    return alias.get(socket.gethostname()) or alias.get(h) or h
 
 
 def window_fids():
@@ -692,11 +739,12 @@ def usage():
 HOME = [False]
 
 
-def sh_lib(snippet):
-    """One line out of fleet-lib.sh (the fleet's conf first, as its scripts do)."""
+def sh_lib(snippet, *args):
+    """One line out of fleet-lib.sh (the fleet's conf first, as its scripts do);
+    `args` are the snippet's $2…"""
     try:
         return subprocess.run(["bash", "-c", '[ -f "$1/../fleet.conf" ] && . "$1/../fleet.conf"; . "$1/fleet-lib.sh" && ' + snippet,
-                               "fleet-session-cli", str(BIN)], stdin=subprocess.DEVNULL, capture_output=True,
+                               "fleet-session-cli", str(BIN)] + list(args), stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=15).stdout.strip().split("\n")[0].strip()
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -747,6 +795,15 @@ def road():
     return "here" if fleet_here() else "home"
 
 
+def tmux_live(sess):
+    """Is the fleet server `-L <sess>` up for this login, holding its session?"""
+    try:
+        return subprocess.run(["tmux", "-L", sess, "has-session", "-t", "=" + sess], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def home_setup(asked=False):
     """--home (`asked`: by name — the thin client's `--run`): this machine's fleet — FLEET_SESSION, the fleet server's environment
     (its TMPDIR is where the hub's cache lives) and TMUX at its socket."""
@@ -754,7 +811,14 @@ def home_setup(asked=False):
     if os.environ.get("FLEET_SESSION_CLI_ROWS"):
         return True
     tools_on_path()
-    sess = os.environ.get("FLEET_SESSION") or fleet_here()
+    sess = os.environ.get("FLEET_SESSION") or ""
+    if sess and not tmux_live(sess):
+        # an inherited FLEET_SESSION this login runs no server for (issue #3470:
+        # `sudo -u <login>` from a fleet pane carried the caller's — `ls` read an
+        # empty `[]` while the thin client's `--run` listed the session): this
+        # machine's own fleet instead, so both roads read the same rows
+        sess = ""
+    sess = sess or fleet_here()
     if not sess:
         # asked over --run, this machine is the person's home, not where they type
         say("家机器 %s 上没有在跑的 fleet，你还没有会话" % socket.gethostname().split(".")[0] if asked
