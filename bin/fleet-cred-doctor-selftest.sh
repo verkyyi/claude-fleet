@@ -114,7 +114,7 @@ expect "D untrusted" 0 PASS "不可信（hub: untrusted）" "Claude 走 central 
 
 # ── E: a renewal the hub refuses with a 500 ──────────────────────────────────
 pass_due=$(python3 -c 'import base64, json, time; n = int(time.time())
-c = json.dumps({"v": 1, "id": "p-due", "iat": n - 100, "exp": n + 60}).encode()
+c = json.dumps({"v": 1, "id": "p-due", "iat": n - 1000, "exp": n + 60}).encode()
 print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")')
 curl -s -m 20 -o /dev/null -X POST -H "Authorization: Bearer $pass_due" -d '{}' "http://127.0.0.1:$PORT/v1/messages"
 expect "E renewal failing" 0 WARN "通行证续签失败 1 次" "hub answered 500"
