@@ -36,7 +36,7 @@ export default Shell.mount('overview', async (ctx) => {
     { text: fleet.status === 'fulfilled' ? t('ui.ov.open', { n: rows.length }) : t('ui.unavailable'), muted: true });
 
   const chart = !u ? failed(use)
-    : daily.some((x) => x) ? areaChart(stack(claude, codex), keys) + `<p style="margin-top:10px;font-size:13px"><a href="/usage">${esc(t('ui.ov.whereTo'))}</a></p>`
+    : daily.some((x) => x) ? areaChart(stack(claude, codex), keys) + `<p style="margin-top:10px;font-size:13px"><a href="/app/usage">${esc(t('ui.ov.whereTo'))}</a></p>`
       : `<div class="empty">${ic('list')}<b>${esc(t('ui.ov.noTokens'))}</b><span>${esc(t('ui.ov.noTokensSub'))}</span></div>`;
 
   const att = fleet.status === 'fulfilled' ? attention(rows, [], false).concat(orphanAttention(fleet.value)) : null;
@@ -48,7 +48,7 @@ export default Shell.mount('overview', async (ctx) => {
 
   ctx.el.innerHTML =
     `<div class="pagehead"><div><h2 style="font:600 1.35rem var(--f-ui)">${esc(greeting(new Date().getHours(), name))}</h2><p>${esc(t('ui.ov.subUser'))}</p></div>` +
-    `<div class="acts"><a class="btn" href="/fleet/keys">${ic('phone')}${esc(t('ui.ov.phone'))}</a><a class="btn" href="/usage">${ic('scroll')}${esc(t('ui.nav.usage'))}</a></div></div>` +
+    `<div class="acts"><a class="btn" href="/fleet/keys">${ic('phone')}${esc(t('ui.ov.phone'))}</a><a class="btn" href="/app/usage">${ic('scroll')}${esc(t('ui.nav.usage'))}</a></div></div>` +
     `<div class="grid g3">${k1}${k2}${k3}</div>` +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.days14'))}</h3><div class="legend"><span><i style="background:var(--brand)"></i>Claude</span><span><i style="background:var(--codex)"></i>Codex</span></div></div><div class="panel-b">${chart}</div></div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.attention'))}</h3></div>${attHTML}</div></div>`;

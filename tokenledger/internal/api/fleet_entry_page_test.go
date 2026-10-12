@@ -296,7 +296,7 @@ func TestEntryPageDoors(t *testing.T) {
 		t.Fatalf("the operator's token:\n%s", body)
 	}
 	code, body, loc := keysPage(t, h, "", "", nil)
-	if code != http.StatusFound || loc != "/signin" {
+	if code != http.StatusFound || loc != "/app/signin" {
 		t.Fatalf("not signed in: HTTP %d → %q", code, loc)
 	}
 	r := httptest.NewRequest(http.MethodGet, "/auth/github/callback", nil)
@@ -306,8 +306,8 @@ func TestEntryPageDoors(t *testing.T) {
 	}
 	r = httptest.NewRequest(http.MethodGet, "/auth/github/callback", nil)
 	r.AddCookie(&http.Cookie{Name: entryReturnCookie, Value: "https://evil.example/"})
-	if got := loginReturn(httptest.NewRecorder(), r); got != "/" {
-		t.Fatalf("a forged return: %q, want /", got)
+	if got := loginReturn(httptest.NewRecorder(), r); got != AppPrefix {
+		t.Fatalf("a forged return: %q, want /app", got)
 	}
 	// Off, the page says so — never a bare 404 (claude-fleet#3199); a user
 	// asks an admin, an admin opens it with one press.

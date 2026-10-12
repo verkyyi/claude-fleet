@@ -269,8 +269,8 @@ func TestGitHubSignIn_WhoGetsIn(t *testing.T) {
 				}
 				return
 			}
-			if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != "/" {
-				t.Fatalf("callback = %d → %q; want 302 → /", cb.StatusCode, cb.Header.Get("Location"))
+			if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != AppPrefix {
+				t.Fatalf("callback = %d → %q; want 302 → /app", cb.StatusCode, cb.Header.Get("Location"))
 			}
 			if sess == nil || !sess.HttpOnly || sess.Domain != "" {
 				t.Fatalf("session cookie = %+v", sess)
@@ -357,15 +357,15 @@ func TestGitHubSignIn_AdminOnlyByRole(t *testing.T) {
 // A signed-out browser goes to /signin; an API caller keeps its 401.
 func TestGitHubSignIn_SignedOutBrowserGoesToSignin(t *testing.T) {
 	h := newGitHubHarness(t, "verkyyi")
-	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/", nil)
+	req, _ := http.NewRequest(http.MethodGet, h.http.URL+AppPrefix, nil)
 	req.Header.Set("Accept", "text/html")
 	resp, err := noFollow.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" {
-		t.Errorf("browser / = %d → %q; want 302 → /signin", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
+		t.Errorf("browser / = %d → %q; want 302 → /app/signin", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	resp, err = http.Get(h.http.URL + "/v1/me")
 	if err != nil {
@@ -416,7 +416,7 @@ func TestGitHubSignIn_StateMismatchRefused(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.Body.Close()
-			if r.StatusCode != http.StatusFound || r.Header.Get("Location") != "/signin?e=expired" {
+			if r.StatusCode != http.StatusFound || r.Header.Get("Location") != "/app/signin?e=expired" {
 				t.Errorf("= %d → %q", r.StatusCode, r.Header.Get("Location"))
 			}
 			if c := cookieNamed(r, authz.CookieName); c != nil && c.MaxAge >= 0 {
@@ -474,7 +474,7 @@ func TestGitHubSignIn_OtherSubjectCannotClaimGitHubPrincipal(t *testing.T) {
 // Not configured: the routes 404, so their existence says nothing.
 func TestGitHubSignIn_OffIs404(t *testing.T) {
 	h := newHarness(t)
-	for _, p := range []string{"/signin", "/auth/github/start", "/auth/github/callback"} {
+	for _, p := range []string{"/app/signin", "/auth/github/start", "/auth/github/callback"} {
 		resp, err := noFollow.Get(h.http.URL + p)
 		if err != nil {
 			t.Fatal(err)

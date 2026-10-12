@@ -16,6 +16,11 @@ spec:
               value: "https://claudefleet.24haowan.com"
             - name: CCQUOTA_PUBLIC_URL
               value: "https://claudefleet.24haowan.com"
+            # The public site at "/" (claude-fleet#3583): a stranger reads it,
+            # someone signed in goes on to the console at /app. Unset (a
+            # self-hoster's hub) "/" is the console.
+            - name: CCQUOTA_SITE
+              value: "on"
             - name: CCQUOTA_FLEET_ADMIN_USERS
               value: "verkyyi"
             # GitHub sign-in (#1984, wired by #2002). The client pair comes from

@@ -20,9 +20,14 @@ test('every page in the menu is a route, and its path is its href', () => {
     assert.ok(p.module && p.module.startsWith('/') && p.module.endsWith('.js'), `${p.id} names its module`);
     assert.equal(routeFor(pathOf(p)), p, pathOf(p));
   }
-  assert.equal(routeFor('/sessions/'), routeFor('/sessions'), 'a trailing slash is the same page');
+  assert.equal(routeFor('/app/sessions/'), routeFor('/app/sessions'), 'a trailing slash is the same page');
   assert.equal(routeFor(''), routeFor('/'));
-  for (const p of ['/signin', '/sessions.html', '/v1/me', '/no-such', '/admin']) assert.equal(routeFor(p), null, p);
+  // The console is under /app (claude-fleet#3583): /app is the overview, and an
+  // address from before the move is the hub's to forward, never a page here.
+  assert.equal(routeFor('/app').id, 'overview');
+  assert.equal(routeFor('/app/'), routeFor('/app'));
+  for (const p of ['/', '/sessions', '/usage', '/nodes', '/machines/m4']) assert.equal(routeFor(p), null, p);
+  for (const p of ['/app/signin', '/sessions.html', '/v1/me', '/no-such', '/admin']) assert.equal(routeFor(p), null, p);
 });
 
 test('从手机连 is the hub\'s page: in the menu, never opened in place (claude-fleet#3199)', () => {
@@ -37,37 +42,37 @@ test('从手机连 is the hub\'s page: in the menu, never opened in place (claud
 });
 
 test('an old address opens where it moved, never nothing (claude-fleet#3232)', () => {
-  assert.equal(movedTo('/admin/devices'), '/nodes?tab=clients');
-  assert.equal(movedTo('/admin/devices/'), '/nodes?tab=clients', 'a trailing slash too');
-  assert.equal(movedTo('/admin/devices', '?tab=nodes&x=1', '#h'), '/nodes?tab=clients&x=1#h', 'the new tab wins, the rest is kept');
+  assert.equal(movedTo('/app/admin/devices'), '/app/nodes?tab=clients');
+  assert.equal(movedTo('/app/admin/devices/'), '/app/nodes?tab=clients', 'a trailing slash too');
+  assert.equal(movedTo('/app/admin/devices', '?tab=nodes&x=1', '#h'), '/app/nodes?tab=clients&x=1#h', 'the new tab wins, the rest is kept');
   // 我的额度 is 我的用量 now (claude-fleet#3229).
-  assert.equal(movedTo('/quota'), '/usage');
-  assert.equal(movedTo('/quota/', '?range=30d'), '/usage?range=30d');
-  assert.equal(routeFor('/quota'), null, 'no page draws /quota itself');
-  assert.equal(movedTo('/nodes'), '');
-  assert.equal(movedTo('/sessions'), '');
+  assert.equal(movedTo('/app/quota'), '/app/usage');
+  assert.equal(movedTo('/app/quota/', '?range=30d'), '/app/usage?range=30d');
+  assert.equal(routeFor('/app/quota'), null, 'no page draws /quota itself');
+  assert.equal(movedTo('/app/nodes'), '');
+  assert.equal(movedTo('/app/sessions'), '');
   for (const [from, to] of Object.entries(MOVED)) {
     assert.equal(routeFor(from), null, `${from} is no page of its own`);
     assert.ok(routeFor(new URL(to, ORIGIN).pathname), `${to} is a page`);
   }
-  const hit = intercept(click(), anchor(ORIGIN + '/admin/devices'), ORIGIN);
+  const hit = intercept(click(), anchor(ORIGIN + '/app/admin/devices'), ORIGIN);
   assert.equal(hit.page.id, 'machines');
-  assert.equal(hit.url, '/nodes?tab=clients');
+  assert.equal(hit.url, '/app/nodes?tab=clients');
 });
 
 test('one machine is a page under /machines/; the bare path stays the list (claude-fleet#2796)', () => {
   const one = PAGES.find((p) => p.id === 'machine');
-  assert.equal(routeFor('/machines').id, 'mymachines');
-  assert.equal(routeFor('/machines/').id, 'mymachines', 'a trailing slash is still the list');
-  assert.equal(routeFor('/machines/macmini'), one);
-  assert.equal(routeFor('/machines/macmini/'), one);
-  assert.equal(routeFor('/machines/a/b'), null, 'one name, no deeper');
-  assert.equal(pathParam('/machines/macmini', one), 'macmini');
-  assert.equal(pathParam('/machines/m%C3%A9', one), 'mé');
-  assert.equal(pathParam('/sessions', routeFor('/sessions')), '');
-  const hit = intercept(click(), anchor(ORIGIN + '/machines/macmini?from=nodes'), ORIGIN);
+  assert.equal(routeFor('/app/machines').id, 'mymachines');
+  assert.equal(routeFor('/app/machines/').id, 'mymachines', 'a trailing slash is still the list');
+  assert.equal(routeFor('/app/machines/macmini'), one);
+  assert.equal(routeFor('/app/machines/macmini/'), one);
+  assert.equal(routeFor('/app/machines/a/b'), null, 'one name, no deeper');
+  assert.equal(pathParam('/app/machines/macmini', one), 'macmini');
+  assert.equal(pathParam('/app/machines/m%C3%A9', one), 'mé');
+  assert.equal(pathParam('/app/sessions', routeFor('/app/sessions')), '');
+  const hit = intercept(click(), anchor(ORIGIN + '/app/machines/macmini?from=nodes'), ORIGIN);
   assert.equal(hit.page, one);
-  assert.equal(hit.url, '/machines/macmini?from=nodes');
+  assert.equal(hit.url, '/app/machines/macmini?from=nodes');
 });
 
 test('a plain click on a page link opens it in place; between every pair of pages', () => {
@@ -81,19 +86,19 @@ test('a plain click on a page link opens it in place; between every pair of page
     }
   }
   // The query rides along (Audit's ?kind=).
-  assert.equal(intercept(click(), anchor(ORIGIN + '/admin/audit?kind=fleet'), ORIGIN).url, '/admin/audit?kind=fleet');
+  assert.equal(intercept(click(), anchor(ORIGIN + '/app/admin/audit?kind=fleet'), ORIGIN).url, '/app/admin/audit?kind=fleet');
 });
 
 test('the browser keeps ⌘/⌃/⇧/⌥-clicks, middle clicks, new tabs, downloads, other origins and non-pages', () => {
-  const a = anchor(ORIGIN + '/sessions');
+  const a = anchor(ORIGIN + '/app/sessions');
   for (const m of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) assert.equal(intercept(click({ [m]: true }), a, ORIGIN), null, m);
   assert.equal(intercept(click({ button: 1 }), a, ORIGIN), null, 'middle click');
   assert.equal(intercept(click({ defaultPrevented: true }), a, ORIGIN), null, 'a page handled it');
-  assert.equal(intercept(click(), anchor(ORIGIN + '/sessions', { target: '_blank' }), ORIGIN), null, 'new tab');
-  assert.equal(intercept(click(), anchor(ORIGIN + '/sessions', { download: '' }), ORIGIN), null, 'download');
+  assert.equal(intercept(click(), anchor(ORIGIN + '/app/sessions', { target: '_blank' }), ORIGIN), null, 'new tab');
+  assert.equal(intercept(click(), anchor(ORIGIN + '/app/sessions', { download: '' }), ORIGIN), null, 'download');
   assert.equal(intercept(click(), anchor('https://github.com/sessions'), ORIGIN), null, 'another origin');
   assert.equal(intercept(click(), anchor(ORIGIN + '/v1/admin/audit?format=csv'), ORIGIN), null, 'not a page');
-  assert.equal(intercept(click(), anchor(ORIGIN + '/signin'), ORIGIN), null, 'not a page');
+  assert.equal(intercept(click(), anchor(ORIGIN + '/app/signin'), ORIGIN), null, 'not a page');
   assert.equal(intercept(click(), null, ORIGIN), null, 'not a link');
 });
 
@@ -185,7 +190,7 @@ test('the shell reads /v1/me once per document and swaps only the content', () =
 });
 
 test('object detail routes inherit only their administrator menu access', () => {
-  for (const [path,id,parent] of [['/admin/users/gh%3A1','person','people'],['/subscriptions/uuid','subscription','subscriptions'],['/subscriptions/settings','subscription-settings','subscriptions']]) {
+  for (const [path,id,parent] of [['/app/admin/users/gh%3A1','person','people'],['/app/subscriptions/uuid','subscription','subscriptions'],['/app/subscriptions/settings','subscription-settings','subscriptions']]) {
     const route=routeFor(path);assert.equal(route.id,id);assert.deepEqual(route.within,[parent]);
   }
 });

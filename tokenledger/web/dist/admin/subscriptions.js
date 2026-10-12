@@ -46,7 +46,7 @@ function poolTable(rows, skip) {
     return `<tr><td><div class="status"><span class="prov ${r.prov}" style="width:22px;height:22px;font-size:11px">${r.prov === 'codex' ? 'X' : 'C'}</span><b>${esc(r.label)}</b></div></td>` +
       left(r.used5, skip) + left(r.used7, skip) + `<td>${r.reset ? esc(fmtDate(r.reset)) : '—'}</td><td>${who}</td><td class="mono r">${r.sessions}</td>` +
       `<td><span class="chip ${tone}">${esc(t(key))}</span></td>` +
-      `<td class="r">${r.id ? `<a class="btn sm" href="/subscriptions/${encodeURIComponent(r.id)}">${esc(t('ui.policy.details'))} ${ic('arrow')}</a>` : ''}</td></tr>`;
+      `<td class="r">${r.id ? `<a class="btn sm" href="/app/subscriptions/${encodeURIComponent(r.id)}">${esc(t('ui.policy.details'))} ${ic('arrow')}</a>` : ''}</td></tr>`;
   }).join('') : `<tr><td colspan="8"><div class="empty"><span>${esc(t('ui.pool.empty'))}</span></div></td></tr>`;
   return `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.pool.title'))}</h3></div><div class="tw"><table class="t quota"><thead><tr>` +
     `<th>${esc(t('ui.pool.th.sub'))}</th><th>${esc(t('ui.pool.th.h5'))}</th><th>${esc(t('ui.pool.th.h7'))}</th><th>${esc(t('ui.pool.th.reset'))}</th>` +
@@ -59,7 +59,7 @@ function card(s, skip, detail = false) {
     : st === 'full' ? `<span class="chip warn">${esc(t('ui.sub.full'))}</span>`
       : `<span class="chip ok"><span class="dot ok"></span>${esc(t('ui.sub.active'))}</span>`;
   const cs = credState(s.cred);
-  const acts = !detail && s.cred ? `<div class="sub-acts"><a class="btn" href="/subscriptions/${encodeURIComponent(s.id)}">${esc(t('ui.policy.details'))} ${ic('arrow')}</a></div>` : s.cred
+  const acts = !detail && s.cred ? `<div class="sub-acts"><a class="btn" href="/app/subscriptions/${encodeURIComponent(s.id)}">${esc(t('ui.policy.details'))} ${ic('arrow')}</a></div>` : s.cred
     ? `<div class="sub-acts"><button class="btn sm" data-act="pause" data-id="${esc(s.id)}">${s.paused ? ic('play') + esc(t('ui.sub.resume')) : ic('pause') + esc(t('ui.sub.pause'))}</button>` +
       `<button class="btn sm danger" data-act="remove" data-id="${esc(s.id)}">${ic('trash')}${esc(t('ui.sub.remove'))}</button></div>`
     : `<div class="sub-acts"><span class="chip" title="${esc(t('ui.sub.notPoolHint'))}">${esc(t('ui.sub.notPool'))}</span></div>`;
@@ -134,7 +134,7 @@ export async function renderSubscriptions(ctx) {
   // Only what the vault holds is the hub's to count and manage (claude-fleet#2127);
   // the rest of the reported accounts wait, collapsed, under 未纳管.
   const all = subscriptions({ limits: val(lim), accounts: val(acc), creds: val(cr), live: val(live) });
-  const detailID = location.pathname.startsWith('/subscriptions/') ? decodeURIComponent(location.pathname.slice('/subscriptions/'.length)) : '';
+  const detailID = location.pathname.startsWith('/app/subscriptions/') ? decodeURIComponent(location.pathname.slice('/app/subscriptions/'.length)) : '';
   const detail = detailID ? all.find((s) => s.id === detailID && s.managed) : null;
   if (detailID && !detail) throw new Error(t('ui.policy.notFound'));
   const cards = all.filter((c) => c.managed), other = all.filter((c) => !c.managed);
@@ -180,13 +180,13 @@ export async function renderSubscriptions(ctx) {
     ? '<div class="attn">' + sws.map((x) => `<div><span class="ic ok">${ic('refresh')}</span><div><b>${esc(x.from)} → ${esc(x.to)}</b><span>${esc(relTime(x.at))}${x.where ? ' · ' + esc(x.where) : ''}</span></div></div>`).join('') + '</div>'
     : sw.status === 'rejected' ? failed(sw.reason) : `<div class="empty"><span>${esc(t('ui.sub.noSwitches'))}</span></div>`;
 
-  ctx.el.innerHTML = `<div class="pagehead"><div><p title="${esc(t('ui.sub.lead', { skip }))}">${esc(t('ui.pool.lead'))}</p></div><div class="acts"><a class="btn" href="/subscriptions/settings">${esc(t('ui.policy.global'))}</a><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
+  ctx.el.innerHTML = `<div class="pagehead"><div><p title="${esc(t('ui.sub.lead', { skip }))}">${esc(t('ui.pool.lead'))}</p></div><div class="acts"><a class="btn" href="/app/subscriptions/settings">${esc(t('ui.policy.global'))}</a><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
     vaultNote + kpis + grid + unmanaged +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.who'))}</h3><span class="sub">${esc(t('ui.sub.live'))}</span></div>${leases}</div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.switches'))}</h3></div>${switches}</div></div>`;
 
   if (detail) {
-    ctx.el.innerHTML = `<div class="pagehead"><div><a class="sub" href="/subscriptions">← ${esc(t('ui.nav.subscriptions'))}</a><h2>${esc(detail.label)}</h2><p>${esc(t('ui.policy.subscriptionHint'))}</p></div></div>` +
+    ctx.el.innerHTML = `<div class="pagehead"><div><a class="sub" href="/app/subscriptions">← ${esc(t('ui.nav.subscriptions'))}</a><h2>${esc(detail.label)}</h2><p>${esc(t('ui.policy.subscriptionHint'))}</p></div></div>` +
       `<div class="grid g21"><div>${card(detail, skip, true)}</div><div class="panel"><div class="panel-h"><h3>${esc(t('ui.policy.identity'))}</h3></div><dl class="kv panel-b"><dt>${esc(t('ui.policy.subscription'))}</dt><dd>${esc(detail.cred.provider)}</dd><dt>ID</dt><dd class="mono" style="overflow-wrap:anywhere">${esc(detail.cred.account_uuid || '—')}</dd><dt>${esc(t('ui.sub.sessionsNow'))}</dt><dd>${detail.sessions}</dd></dl></div></div><section class="panel" id="subscription-access"></section>`;
     void mountSubscriptionAccess(ctx,ctx.el.querySelector('#subscription-access'),detail.cred.account_uuid);
   }
@@ -215,7 +215,7 @@ export async function renderSubscriptions(ctx) {
           await ctx.api('/v1/fleet/credentials', { json: { action: 'delete', principal_id: 'pool', provider: s.cred.provider, account: s.cred.account } });
           if (s.paused) await ctx.api('/v1/fleet/settings', { method: 'PUT', json: { key: 'pool.paused.' + s.cred.account, value: '' } }).catch(() => {});
           ctx.toast(t('ui.sub.removed', { label: s.label }));
-          if (detail) await ctx.navigate('/subscriptions'); else await ctx.refresh();
+          if (detail) await ctx.navigate('/app/subscriptions'); else await ctx.refresh();
         } catch (err) { ctx.toast(t('ui.err.action', { e: err.message })); }
       });
     }

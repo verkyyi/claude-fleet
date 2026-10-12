@@ -6,14 +6,15 @@
 //
 // The route table is PAGES (lib/shell.js): a page's `href` is its path and its
 // `module` the script that draws it — there is no second table.
-import { PAGES } from './shell.js';
+import { APP, PAGES } from './shell.js';
 
 /** CACHE_TTL is how long a page's reads are good for a revisit (ms). */
 export const CACHE_TTL = 30000;
 
 /** MOVED are the old paths that now open another page's address — a link
- *  or a bookmark never lands on nothing (EPIC #3225 共同约定 8). */
-export const MOVED = Object.freeze({ '/admin/devices': '/nodes?tab=clients', '/quota': '/usage' });
+ *  or a bookmark never lands on nothing (EPIC #3225 共同约定 8). Under APP:
+ *  the hub sends a pre-/app address there first (claude-fleet#3583). */
+export const MOVED = Object.freeze({ [APP + '/admin/devices']: APP + '/nodes?tab=clients', [APP + '/quota']: APP + '/usage' });
 
 /** movedTo is the address an old path opens (keeping a query of its own
  *  the new one does not set, and the hash), or '' when the path has not moved. */

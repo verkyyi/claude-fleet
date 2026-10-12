@@ -235,7 +235,7 @@ func TestAdminPages_UserRefusedWhole(t *testing.T) {
 	h.srv.UI = ui
 	get := func(sess *http.Cookie, bearerTok, path, accept string) (int, string) {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, h.http.URL+path, nil)
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+pagePath(path), nil)
 		req.Header.Set("Accept", accept)
 		if sess != nil {
 			req.AddCookie(sess)
