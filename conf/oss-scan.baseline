@@ -4,11 +4,11 @@
 # by `bin/oss-scan.sh --baseline > conf/oss-scan.baseline`. Allowed (oss-scan.allow)
 # and exempt (`# oss-ok: <理由>`) lines are not counted here.
 tailnet	15
-ts-net	105
-corp-domain	340
-cloud	64
-machine	5014
+ts-net	106
+corp-domain	344
+cloud	68
+machine	5084
 user-home	22
-person	666
-gh-owner	587
+person	676
+gh-owner	595
 private-ipv4	185
