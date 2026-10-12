@@ -403,7 +403,7 @@ case "$verb" in
     [ -n "$cur" ] && pargs+=(--remove-label "$cur")
     [ "$want" != none ] && pargs+=(--add-label "priority:$want")
     if [ "${#pargs[@]}" -gt 0 ]; then
-      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" "${pargs[@]}" >/dev/null || die "could not set the priority"
+      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" ${pargs[@]+"${pargs[@]}"} >/dev/null || die "could not set the priority"
     fi
     printf '%s\n' "$want" ;;
 
