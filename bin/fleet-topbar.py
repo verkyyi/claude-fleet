@@ -477,8 +477,50 @@ def render_node(kv, cols):
         return 0
     rec, down, rr, via = node_record(kv)
     parts, bg = layout(rec, cols, down, rr, None, via)
-    print(paint(parts, bg))
+    print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0
+
+
+# --- the line belongs to ONE window (issue #3532) ----------------------------------
+# tmux keeps one `#()` job per client for the 看台's status line and draws its LAST
+# output until a new run finishes (format.c format_job_get): on a window switch — a
+# close moving the 看台 to another window, a go, a select — the first redraw showed
+# the window just left, for as long as python took (0.1 s idle, seconds on a busy
+# machine). So the output says which window it was made for: tmux expands it again
+# at every redraw in the client's CURRENT window, and a line made for another
+# window gives way at once to quick_fmt() — tmux's own format off the new window's
+# stamps (glyph · #N · name), no process — until this run's line lands. No hook, no
+# option written, no extra redraw: idle costs exactly what it did.
+
+def branch_text(fmt):
+    """A tmux format made safe as a #{?…} branch: `,` and `}` escaped (`#,` `#}` —
+    expanded back once, styles' commas included); `##` stays the literal `#`."""
+    return fmt.replace(",", "#,").replace("}", "#}")
+
+
+def quick_fmt():
+    """The stand-in line, pure tmux format: the window's own @claude_state as the
+    panel's glyph (sym_of's classes), its #N (@issue) else T<n> (@task), its name."""
+    g, color = FV.glyphs(), FV.color_on()
+
+    def glyph(sym):
+        return ("#[fg=colour%d]%s#[default]" % (FV.GLYPH_COLORS[sym], g[sym]) if color else g[sym])
+    sym = glyph("idle")
+    for state, cls in (("done", "done"), ("landed", "done"), ("working", "work"), ("looping", "work"),
+                       ("preparing", "work"), ("waking", "work"), ("failed", "fail"), ("exited", "fail"),
+                       ("error", "fail"), ("needs", "needs")):
+        sym = "#{?#{==:#{@claude_state},%s},%s,%s}" % (state, branch_text(glyph(cls)), sym)
+    key = ("#{?#{m/r:^[0-9]+$,#{@issue}},#[fg=%s#,bold]###{@issue}#[nobold] ,"
+           "#{?#{m/r:^T[1-9][0-9]*$,#{@task}},#[fg=%s#,bold]#{@task}#[nobold] ,}}" % (HL, HL))
+    # a #{?…} branch itself (own_window's last): its own top-level commas escaped too
+    return " %s %s#[fg=%s#,bold]#{=/64/…:window_name}#[default]" % (sym, key, FG)
+
+
+def own_window(win, line):
+    """`line` for window `win` only: #{?<the client's window is win>,line,quick}."""
+    if not re.fullmatch(r"@[0-9]+", win or ""):
+        return line
+    return "#{?#{==:#{window_id},%s},%s,%s}" % (win, branch_text(line), quick_fmt())
 
 
 # --- a tap on the line -------------------------------------------------------------
@@ -550,14 +592,26 @@ _WORDS = {}
 
 def say(key, *args):
     """A string off fleet-ui-lang.sh, the one table — read once per process
-    (`dump`, as fleet_view.py and fleet-sidebar.py do); a key it lacks prints itself."""
+    (`dump`, as fleet_view.py and fleet-sidebar.py do); a key it lacks prints itself.
+    The dump is a shell run (~70 ms, seconds on a busy box) a 看台's line paid on
+    every render — each 2 s and each window switch (issue #3532): kept per
+    FV.words_key(), as the panel's own (#3514)."""
     if not _WORDS:
+        kept = FV.dash_global() / ("topbar-words-" + FV.words_key())
         try:
-            raw = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "topbar_", "sidebar_portal", "solo_"],
-                                 capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                 timeout=5).stdout.split("\0")
-        except (OSError, subprocess.TimeoutExpired):
+            raw = kept.read_text(encoding="utf-8").split("\0")
+        except (OSError, ValueError):
             raw = []
+        if len(raw) < 2:
+            try:
+                out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "topbar_", "sidebar_portal", "solo_"],
+                                     capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                     timeout=5).stdout
+            except (OSError, subprocess.TimeoutExpired):
+                out = ""
+            raw = out.split("\0")
+            if out:
+                FV.atomic_write(kept, out)
         _WORDS.update({k: v.replace("\1", "%s") for k, v in zip(raw[0::2], raw[1::2])})
         _WORDS.setdefault("_", "")
     text = _WORDS.get(key, key)
