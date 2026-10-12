@@ -2346,6 +2346,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ADMIT_RESERVE_MB=2048        # never hand out the last this-many MB (the % floor above wins when larger)
 # @label=Admission recovery MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
 #FLEET_ADMIT_HYST_MB=1024           # after a hold, this much more must free up before it reopens
+# The onboarding guide (a newcomer's first window, issue #3472) passes the room
+# estimate above: room < 1 still admits it while pressure is under the limit and
+# memory is above the floor. 0 = the guide waits like any other session.
+# @label=Guide passes room estimate @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_ADMIT_GUIDE_PASS=1
 # @label=Session cost MB (pinned) @group=disk @tier=internal @scope=global @edit=int @unit=MB
 #FLEET_ADMIT_SESSION_MB=0           # pin one session's cost; 0 = measure it
 # @label=Session cost floor MB @group=disk @tier=internal @scope=global @edit=int @unit=MB

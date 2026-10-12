@@ -83,6 +83,13 @@
 #               within FLEET_DRILL_AGENT_SECS. 「API Error」 / 「Please run /login」
 #               / an invalid key / a 403 on an error line is a FAIL quoting the
 #               line. The old client: SKIP (its list holds the keys).
+#  8b onboard-guide  (issue #3472) the HOME's onboarding guide opened: as the
+#               login that runs the session (found as step 10 finds it), the
+#               home's $FLEET_CONF_DIR/global must read onboarded or carry a
+#               pinned `guide` window within FLEET_DRILL_GUIDE_SECS (240) — an
+#               onboard.stuck is a FAIL quoting its line (drill 34: 「引导窗口没能
+#               打开：… 内存紧张 …」 while every screen passed). Onboarding off /
+#               dismissed there: SKIP.
 #   9 attach-attachment  (EPIC #2482 C1) a solid red PNG in the login's home,
 #               its path typed into the writing area after 「看图 这张图是什么颜色？…」,
 #               Enter; the session — on whatever machine the hub put it — must
@@ -175,6 +182,20 @@ die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 # the macOS login half (sysadminctl, Remote Login, fleet-login-remove).
 # shellcheck source=fleet-onboard-judge.sh
 . "$BIN/fleet-onboard-judge.sh"
+# GUIDE_PROBE (step 8b, issue #3472): ONE line, run as the session's login on its
+# home, saying where that login's onboarding guide stands — guide_state judges it.
+# A presence test in a login shell with no fleet-lib, so a bare list-windows.
+GUIDE_PROBE='C="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; g="$C/global"
+PATH="$HOME/.claude/fleet/tools/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH
+if [ -s "$g/onboard.stuck" ]; then printf "stuck\t%s\n" "$(head -n 1 "$g/onboard.stuck")"; exit 0; fi
+[ -e "$g/onboarded" ] && { echo onboarded; exit 0; }
+for d in "$C"/fleets/*/; do
+  [ -d "$d" ] || continue
+  tmux -L "$(basename "$d")" list-windows -a -F "#{window_name} #{@pin}" 2>/dev/null | grep -qx "guide 1" && { echo guide; exit 0; }  # view-ok: a presence test as the login (no fleet-lib), a view session duplicate row is harmless
+done
+[ -e "$g/onboard.dismissed" ] && { echo dismissed; exit 0; }
+[ -e "$g/onboard.pending" ] || { echo off; exit 0; }
+printf "pending\t%s\n" "$(head -n 1 "$g/onboard.openfail" 2>/dev/null)"'
 
 # --runs N (issue #2267, EPIC #2259 C8): the 60-second standard — a sandbox per
 # run, timed from the paste to the first key the agent takes, every known pit
@@ -213,6 +234,8 @@ while [ $# -gt 0 ]; do
     --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2" "${3:-}"; exit ;;   # selftest seam: fleet ls --json on stdin [keys before]
     --ls-keys)  ls_keys; exit ;;                                     # selftest seam: fleet ls --json on stdin
     --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
+    --guide-state) guide_state; exit 0 ;;                            # selftest seam: GUIDE_PROBE's line on stdin
+    --guide-probe) /bin/sh -c "$GUIDE_PROBE" guide; exit ;;          # selftest seam: the probe on this login's conf
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)          die2 "unknown argument: $1" ;;
   esac
@@ -947,6 +970,40 @@ step_answer() {
   esac
 }
 
+# --- 8b onboard-guide (issue #3472) ---------------------------------------------
+# The newcomer's onboarding guide opens on the home by itself — no key on the
+# client reaches it, so a refusal there (drill 34: memory admission, three times)
+# sat in a file while every screen passed. Asked of the home as the session's
+# login (locate, as step 10), polled until it says which way it went.
+guide_probe() {
+  if [ -n "$SNODE" ]; then as_login python3 "$THIN" --run --home "$SNODE" -- sh -c "$GUIDE_PROBE" fleet-drill-guide 2>/dev/null
+  else as_sess /bin/sh -c "$GUIDE_PROBE" fleet-drill-guide 2>/dev/null; fi
+}
+step_guide() {
+  local deadline st v why secs="${FLEET_DRILL_GUIDE_SECS:-240}"
+  if [ -z "$SL" ] && [ -z "$SNODE" ]; then
+    locate "$NAME" > "$RUN/locate-guide.txt" || { failstep onboard-guide "$(cat "$RUN/locate-guide.txt")"; return 1; }
+  fi
+  deadline=$((SECONDS + secs))
+  while :; do
+    keep_sudo
+    st=$(guide_probe | tee "$RUN/guide.txt" | head -n 1 | guide_state)
+    v=${st%% *} why=${st#* }
+    case "$v" in pass|fail|skip) break ;; esac
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep "$POLL"
+  done
+  case "$v" in
+    pass) row "入口那台机器上，新手引导窗口开了（${why}）" "等" 否
+          pass onboard-guide "the home's onboarding guide: $why" ;;
+    skip) skip onboard-guide "$why" ;;
+    fail) row "新手引导没开：$why" "等" "是 — 新手引导窗口没开：$why"
+          failstep onboard-guide "the home's onboarding guide stopped (global/onboard.stuck): $why"; return 1 ;;
+    *)    row "${secs}s 内新手引导窗口没开" "等" "是 — 新手引导窗口没开"
+          failstep onboard-guide "the home's onboarding guide did not open within ${secs}s: $why"; return 1 ;;
+  esac
+}
+
 # --- 9 attach-attachment ---------------------------------------------------------------
 # A task with a screenshot (EPIC #2482 C1, #2393): an image on the colleague's
 # computer, its path dropped into the writing area with a question about it;
@@ -1535,5 +1592,5 @@ step_ssh || finish
 step_install || finish
 step_scan || finish
 step_client || finish
-step_scratch && { step_answer || :; step_attach || :; step_restart || :; }
+step_scratch && { step_answer || :; step_guide || :; step_attach || :; step_restart || :; }
 finish

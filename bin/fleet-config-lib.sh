@@ -436,6 +436,7 @@ fcfg_label_i18n() {
     FLEET_ADMIT_SESSION_MB_MIN) printf '单会话内存估计下限 MB' ;;
     FLEET_ADMIT_SESSION_GROWTH) printf '单会话内存增长系数' ;;
     FLEET_ADMIT_SETTLE_SECS) printf '新会话内存计入前的预留秒数' ;;
+    FLEET_ADMIT_GUIDE_PASS) printf '新手引导不受会话估算阻挡' ;;
     FLEET_MEM_PROC_HARD_PCT) printf '单进程内存上限 %%' ;;
     FLEET_MEM_EXEMPT_RE) printf '内存守护豁免规则' ;;
     FLEET_MEM_ORPHAN_MB) printf '遗留进程内存 MB' ;;
