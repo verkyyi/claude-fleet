@@ -133,6 +133,21 @@ LSO='[{"key":"@7","name":"我的会话 · first","title":"first","node":"mini2",
 r=$(printf '%s' "$LSO" | bash "$DRILL" --ls-row first)
 [ "$r" = "$(printf 'mini2\t@7\tf7')" ] && ok 'restart: an own row of the home gives its @fleet_id (#3467)' || bad "restart: own row got '$r'"
 if printf '%s' "$LS" | bash "$DRILL" --ls-row nope >/dev/null; then bad 'restart: ls_row found a row that is not there'; else ok 'restart: no such row is rc 1'; fi
+# found again by IDENTITY (issue #3489): once its agent answered, the session's
+# name and title are no longer the words it was opened with — drill 37 lost
+# 「first」 and 「看图」 that way. The row kept at step 8 / 9 answers by @fleet_id
+# (the list's field or a wid: key's tail), else by key; never by name.
+LSR='[{"key":"@7","name":"我的会话 · 颜色问答","title":"颜色问答","node":"mini2","fleet_id":"f7"},{"key":"wid:U/f9","name":"first","node":"m5"}]'
+r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id @7 f7)
+[ "$r" = "$(printf 'mini2\t@7\tf7')" ] && ok 'identity: a retitled own row is found by its @fleet_id' || bad "identity: own row got '$r'"
+r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id @3 f7)
+[ "$(printf '%s' "$r" | cut -f2)" = @7 ] && ok 'identity: a new window id (a restart) still finds it by @fleet_id' || bad "identity: restarted got '$r'"
+r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id wid:U/f9 f9)
+[ "$r" = "$(printf 'm5\twid:U/f9\tf9')" ] && ok 'identity: a hub row by its wid: tail' || bad "identity: wid row got '$r'"
+r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id wid:U/f9 -)
+[ "$(printf '%s' "$r" | cut -f2)" = wid:U/f9 ] && ok 'identity: no @fleet_id known — by key' || bad "identity: by key got '$r'"
+if printf '%s' "$LSR" | bash "$DRILL" --ls-row-id @8 f8 >/dev/null; then bad 'identity: a session that is gone was found'; else ok 'identity: gone is rc 1, never another row by name'; fi
+if printf '%s' "$LSR" | bash "$DRILL" --ls-row first >/dev/null && ! printf '%s' "$LSR" | bash "$DRILL" --ls-row 颜色问答x >/dev/null; then ok 'identity: (by name, 「first」 would be the OTHER session — why identity)'; else bad 'identity: name lookup changed'; fi
 # step 8 by IDENTITY (issue #3464): the thin client's ⚡ session is 「我的会话」, its
 # words the title — the new row is the key that was not in the list before ↵, never
 # an older session sharing the words; its node is the home's (#me), never «-»
@@ -312,7 +327,7 @@ done
 printf '%s\n' 'drill@m5 ~ % ' | bash "$DRILL" --thin-first-says && bad 'client: a bare prompt read as the thin road' \
   || ok 'client: a bare prompt is not the thin road'
 # the 看台 on screen is the landing too (issue #3276, C9 run 22: the view drawn,
-# thin.log never said so — no home sends the OSC 7502 cur its `drawn` waits for)
+# thin.log never said so — no home sent the OSC 7502 cur its `drawn` waits for before #3489)
 printf '%s\n' ' ‹ 2/2 ›  ● 在干活  scratch-1  first session …… @mini2' | bash "$DRILL" --thin-view-up \
   && ok 'client: the drawn 看台 (‹ 2/2 › … @mini2) reads as up' || bad 'client: the drawn 看台 not recognised'
 printf '%s\n' 'fleet · 第一个会话开在 mini2' 'drill@m5 ~ % ' | bash "$DRILL" --thin-view-up \

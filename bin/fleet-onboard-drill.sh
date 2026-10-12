@@ -232,6 +232,7 @@ while [ $# -gt 0 ]; do
     --thin-first-says) grep -Eq -- "$THIN_FIRST|$THIN_FIRST_FAILED"; exit $? ;;   # selftest seam: a screen on stdin
     --thin-view-up) grep -Eq -- "$CLIENT_UP|$VIEW_UP"; exit $? ;;    # selftest seam: a screen on stdin
     --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2" "${3:-}"; exit ;;   # selftest seam: fleet ls --json on stdin [keys before]
+    --ls-row-id) [ $# -ge 3 ] || usage; ls_row_id "$2" "$3"; exit ;;  # selftest seam: fleet ls --json on stdin, <key> <fleet_id>
     --ls-keys)  ls_keys; exit ;;                                     # selftest seam: fleet ls --json on stdin
     --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
     --guide-state) guide_state; exit 0 ;;                            # selftest seam: GUIDE_PROBE's line on stdin
@@ -619,7 +620,7 @@ step_client() {
 # Not 「back at the prompt」: wait for it, up to OPENING_CAP, by its own book
 # (thin.log: placed, then a connection that drew the view), or the screen
 # showing the 看台 itself (VIEW_UP: its top line's ‹ i/n ›, #3276 — the log's
-# `drawn` needs the home's OSC 7502 cur, which no home sends yet).
+# `drawn` needs the home's OSC 7502 cur, which no home sent before #3489).
 client_thin() {
   local deadline st log="$H/.cache/claude-fleet/thin.log"
   deadline=$((SECONDS + OPENING_CAP))
@@ -718,6 +719,7 @@ pw_row() {
     fi
     [ "$err" = /dev/null ] || rm -f "$err"
     r=$(printf '%s' "$out" | ls_row "$1" "$PW_BEFORE") || return 0
+    printf '%s\n' "$r" > "$RUN/pw-row.tsv"
     printf '%s · %s · %s\n' "$1" "$(printf '%s' "$r" | cut -f1)" "$(printf '%s' "$r" | cut -f2)"
   else
     row_named "$1"
@@ -780,8 +782,9 @@ place_wait() {
     v=$(screen)
     if [ "$THINC" = 1 ] && printf '%s\n' "$v" | grep -Eq -- "$PANEL_NO"; then PW_K=no PW_P=$v PW_SAID=$(pw_said "$v"); break; fi
     # not $(pw_row): its PW_LSERR must reach the verdict
+    rm -f "$RUN/pw-row.tsv"
     pw_row "$2" > "$RUN/pw-row.txt"
-    if [ -s "$RUN/pw-row.txt" ]; then PW_K=row; break; fi
+    if [ -s "$RUN/pw-row.txt" ]; then PW_K=row; row_id_keep "$2"; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_HOSTKEY"; then PW_K=hostkey; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_OPENING"; then
       if [ -z "$open0" ]; then
@@ -1099,13 +1102,27 @@ as_sess() {
       /bin/sh -c 'TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || TMPDIR="/tmp/claude-fleet-$(id -u)"; export TMPDIR; exec "$@"' \
       fleet-sessions "$@" )
 }
+# row_id_keep <row name> / row_id_file <row name> (issue #3489): the row the
+# thin client's list gave for <name> when it was first found — by identity, the
+# key that was not there before ↵ (#3464) — kept as `node TAB key TAB fleet_id`,
+# so the steps after find THAT session again (ls_row_id), not whatever the words
+# match by then: drill 37's guide and step 10 looked 「first」 / 「看图」 up by name
+# after the agent had answered and the session had been retitled.
+row_id_file() { printf '%s/rowid.%s' "$RUN" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
+row_id_keep() { [ -s "$RUN/pw-row.tsv" ] && cp -f "$RUN/pw-row.tsv" "$(row_id_file "$1")"; return 0; }
 # locate <row name>: SKEY off the client's own list (`fleet ls --json`); SL ·
 # SLH · SFLEET = the login of this machine, and its fleet, whose tmux holds the
 # window with that row's @fleet_id (never a guess by name)
 locate() {
-  local r fid d s
-  r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls.json" | ls_row "$1")
-  [ -n "$r" ] || { printf 'no row %s in `fleet ls --json` (%s)' "$1" "$(head -c 160 "$RUN/ls.err")"; return 1; }
+  local r fid d s idf id=''
+  idf=$(row_id_file "$1")
+  if [ -s "$idf" ]; then
+    id=" (key $(cut -f2 "$idf"), @fleet_id $(cut -f3 "$idf"))"
+    r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls.json" | ls_row_id "$(cut -f2 "$idf")" "$(cut -f3 "$idf")")
+  else
+    r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls.json" | ls_row "$1")
+  fi
+  [ -n "$r" ] || { printf 'no row %s%s in `fleet ls --json` (%s)' "$1" "$id" "$(head -c 160 "$RUN/ls.err")"; return 1; }
   SKEY=$(printf '%s' "$r" | cut -f2) fid=$(printf '%s' "$r" | cut -f3); SFID_K=$fid
   # an own row of the home (`@7`, issue #3467) is as good as a wid: key — only a
   # row with no @fleet_id at all (a fleet ls older than #3467) cannot be found
@@ -1221,7 +1238,7 @@ step_restart() {
   fi
   # the same session = the same @fleet_id: an own row's key is a window id, which
   # a restored server hands out afresh (issue #3467)
-  if ! as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row "$RESUME_NAME" | cut -f3 | grep -qxF -- "$SFID_K"; then
+  if ! as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row_id "$SKEY" "$SFID_K" | cut -f3 | grep -qxF -- "$SFID_K"; then
     row "机器 tmux 重启后：列表里 $RESUME_NAME 换了一个" "等" "是 — 回来的不是同一个会话"
     failstep node-restart-resume "$RESUME_NAME came back as another session (was $SKEY, @fleet_id $SFID_K)"; return 1
   fi

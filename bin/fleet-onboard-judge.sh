@@ -49,7 +49,7 @@ THIN_FIRST='你还没有 fleet 会话|no fleet session of yours yet|等它的 fl
 THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not open'
 # The 看台 drawn: its top line's ‹ i/n › (fleet-topbar.py) — the screen's own proof
 # the view is up. thin.log's `drawn` / a `connect` with first_ms need the home's
-# OSC 7502 cur, which no home sends yet, so the log alone never said landed
+# OSC 7502 cur, which no home sent before issue #3489, so the log alone never said landed
 # (C9 run 22, issue #3276: 「‹ 2/2 › … @mini2」 on screen, 1260 s of waiting).
 # shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
 VIEW_UP='‹ ?[0-9–-]+/[0-9]+ ?›'
@@ -136,6 +136,32 @@ if not named:
 k = str(named[0].get("key", ""))
 fid = str(named[0].get("fleet_id") or "") or (k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-")
 print("%s\t%s\t%s" % (named[0].get("node", "") or "-", k, fid or "-"))' "$1" "${2:-}"
+}
+# ls_row_id <key> <fleet_id> (`fleet ls --json` on stdin): the row ls_row found
+# once, found AGAIN by identity (issue #3489) — the same @fleet_id (the list's
+# fleet_id field, or a wid: key's tail), else, with no fleet_id known (-), the
+# same key. Never by name: once its agent answered, a session's name and title
+# are no longer the words it was opened with (drill 37: 「first」 and 「看图」 were
+# gone from the list minutes after step 8 / 9 had found them). Prints what ls_row
+# prints; rc 1 when it is not there.
+ls_row_id() {
+  python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+key, fid = sys.argv[1], sys.argv[2]
+def fid_of(r):
+    k = str(r.get("key", ""))
+    return str(r.get("fleet_id") or "") or (k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "")
+hit = [r for r in rows if fid not in ("", "-") and fid_of(r) == fid] if isinstance(rows, list) else []
+if not hit and fid in ("", "-") and key and isinstance(rows, list):
+    hit = [r for r in rows if str(r.get("key", "")) == key]
+if not hit:
+    sys.exit(1)
+r = hit[0]
+print("%s\t%s\t%s" % (r.get("node", "") or "-", r.get("key", ""), fid_of(r) or "-"))' "$1" "$2"
 }
 # ls_keys (`fleet ls --json` on stdin): every session's key, one a line; rc 1 when
 # the list is not JSON (nothing to compare against — ls_row then goes by name)
