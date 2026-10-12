@@ -97,7 +97,7 @@ func TestIsPerson(t *testing.T) {
 	}{
 		{"gh:1001", true}, {p, true},
 		{"gh:", false}, {"gh:x", false}, {"p:nope", false}, {strings.ToUpper(p), false},
-		{"verky", false}, {"wx:Zhang", false}, {store.PoolPrincipal, false}, {"", false},
+		{"someone", false}, {"wx:Zhang", false}, {store.PoolPrincipal, false}, {"", false},
 	} {
 		if got := isPerson(c.pid); got != c.want {
 			t.Errorf("isPerson(%q) = %v, want %v", c.pid, got, c.want)
@@ -141,7 +141,7 @@ func TestPAccountInviteMachineCert(t *testing.T) {
 	now := time.Now()
 	mint := func(code, email string) {
 		if err := h.srv.Store.CreateInvite(store.Invite{ID: "inv_" + code[:6], CodeHash: inviteHash(code), Email: email,
-			CreatedBy: "verkyyi (gh:100)", CreatedAt: now, ExpiresAt: now.Add(store.InviteTTL)}); err != nil {
+			CreatedBy: "admin (gh:100)", CreatedAt: now, ExpiresAt: now.Add(store.InviteTTL)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -174,7 +174,7 @@ func TestPAccountInviteMachineCert(t *testing.T) {
 	}
 
 	// Bind a machine: the operator adopts her login there.
-	if c := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "macmini", Login: "dana"}); c != 200 {
+	if c := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "spare", Login: "dana"}); c != 200 {
 		t.Fatalf("adopt dana: HTTP %d", c)
 	}
 	sess := emailCookie(pid, "Dana")
@@ -331,7 +331,7 @@ func TestMigrationKeepsGitHubPerson(t *testing.T) {
 	}
 	h := serve(st)
 	listPerson(t, h, pAlice, "alice-gh")
-	if c := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "macmini", Login: "alice"}); c != 200 {
+	if c := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "host-a", Login: "alice"}); c != 200 {
 		t.Fatalf("adopt: %d", c)
 	}
 	if _, err := st.CreateFleetTask(store.FleetTask{Owner: pAlice, Title: "fix it", Via: "⌘P"}, "tok-3603", time.Now()); err != nil {

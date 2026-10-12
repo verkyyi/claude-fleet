@@ -240,8 +240,8 @@ func TestMigration2_HubUsersKeepEveryone(t *testing.T) {
   added_at      TEXT NOT NULL,
   last_seen     TEXT
 )`),
-		`INSERT INTO hub_users VALUES (100, 'verkyyi', 'admin', 'verky', 'deploy', '2026-01-02T03:04:05Z', '` + last + `')`,
-		`INSERT INTO hub_users VALUES (3002, 'vincentgh', 'user', '', 'verkyyi (gh:100)', '2026-02-03T04:05:06Z', NULL)`,
+		`INSERT INTO hub_users VALUES (100, 'adminperson', 'admin', 'adm', 'deploy', '2026-01-02T03:04:05Z', '` + last + `')`,
+		`INSERT INTO hub_users VALUES (3002, 'otherperson', 'user', '', 'adminperson (gh:100)', '2026-02-03T04:05:06Z', NULL)`,
 		`DELETE FROM hub_migrations WHERE id = 2`,
 	} {
 		if _, err := db.Exec(q); err != nil {
@@ -253,8 +253,8 @@ func TestMigration2_HubUsersKeepEveryone(t *testing.T) {
 		Last                                 bool
 	}
 	want := map[int64]snap{
-		100:  {"verkyyi", "admin", "verky", "deploy", "2026-01-02T03:04:05Z", true},
-		3002: {"vincentgh", "user", "", "verkyyi (gh:100)", "2026-02-03T04:05:06Z", false},
+		100:  {"adminperson", "admin", "adm", "deploy", "2026-01-02T03:04:05Z", true},
+		3002: {"otherperson", "user", "", "adminperson (gh:100)", "2026-02-03T04:05:06Z", false},
 	}
 	for i := 0; i < 2; i++ {
 		if err := runMigrations(db); err != nil {
