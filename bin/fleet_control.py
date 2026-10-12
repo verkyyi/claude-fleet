@@ -38,6 +38,15 @@ OPS_LOG_MAX = 1 << 20
 # session it is — a scratch, a no-repo one — never through the issue bridge.
 FEEDBACK_PREFIX = "[fleet-feedback]"
 FEEDBACK_ACTOR = "feedback"
+# The heartbeat's reads (issue #3514): ccquota's agent asks `discover` and every
+# fleet's `fleet_status` every 5 s per login, and each answer ran the adapter
+# (inventory twice, capacity, workers) — ~0.7 s of CPU and ~250 processes a beat,
+# a third of a 2-core pod for three logins. Between state changes the answer is
+# the same, so the heartbeat methods reuse the last one for this long (seconds),
+# and ANY nudge ($FLEET_CONF_DIR/global/hub-nudge, written on every state change,
+# spawn, close and restore) makes the next read fresh. FLEET_CONTROL_READ_CACHE=0
+# reads every time, byte for byte as before; operations never use it.
+READ_CACHE_TTL = {"inventory": 60, "capacity": 20, "workers": 15}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS operations (
@@ -107,7 +116,37 @@ class Control:
         return run(["bash", str(self.bin / "fleet-control-read.sh"), mode, *args],
                    payload=payload, env=env, timeout=timeout)
 
-    def inventory(self):
+    def cached(self, key, ttl, read):
+        """read() through the heartbeat cache (READ_CACHE_TTL): the last answer while
+        younger than ttl AND no nudge came since it was read; else read() fresh,
+        kept for the next beat. A cache that cannot be read or written is simply
+        not used. Only JSON-able answers — a raise is never kept."""
+        if not ttl or os.environ.get("FLEET_CONTROL_READ_CACHE", "1") == "0":
+            return read()
+        path = self.conf_dir / "control" / "read-cache" / (key + ".json")
+        try:
+            nudge = (self.conf_dir / "global" / "hub-nudge").stat().st_mtime_ns
+        except OSError:
+            nudge = 0
+        try:
+            kept = json.loads(path.read_text())
+            if kept.get("nudge") == nudge and 0 <= time.time() - kept["at"] < ttl:
+                return kept["value"]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        at, value = time.time(), read()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(".%s.%d" % (path.name, os.getpid()))
+            tmp.write_text(json.dumps({"at": at, "nudge": nudge, "value": value}))
+            os.replace(tmp, path)
+        except OSError:
+            pass
+        return value
+
+    def inventory(self, cache=False):
+        if cache:
+            return self.cached("inventory", READ_CACHE_TTL["inventory"], self.inventory)
         code, output, _ = self.adapter("inventory")
         if code:
             raise Fault("UNAVAILABLE", "Cannot enumerate configured fleets")
@@ -193,11 +232,13 @@ class Control:
             out.update(repo_ready=verdict["repo_ready"], repo_missing=[str(m) for m in verdict["repo_missing"]])
         return out
 
-    def capacity(self):
+    def capacity(self, cache=False):
         """This login's own session cap and the count its spawn gate reads (issue
         #1587): {"sessions": n, "max_sessions": m}, m = 0 for unlimited. Best
         effort — None when the adapter cannot say, and discover then omits it, so
         the hub filters nothing (exactly what an older install sends)."""
+        if cache:
+            return self.cached("capacity", READ_CACHE_TTL["capacity"], self.capacity)
         code, output, _ = self.adapter("capacity")
         if code:
             return None
@@ -221,14 +262,17 @@ class Control:
             out["room"] = got["room"]
         return out
 
-    def fleet(self, fleet_id):
+    def fleet(self, fleet_id, cache=False):
         identifier(fleet_id)
-        for fleet in self.inventory():
+        for fleet in self.inventory(cache):
             if fleet["fleet_id"] == fleet_id:
                 return fleet
         raise Fault("NOT_FOUND", "Fleet is no longer configured on this machine")
 
-    def workers(self, fleet, window=""):
+    def workers(self, fleet, window="", cache=False):
+        if cache and not window:
+            return self.cached("workers-" + fleet["name"], READ_CACHE_TTL["workers"],
+                               lambda: self.workers(fleet))
         # window (issue #2237): that one window's rows by the same reads — a start's
         # post-condition check, which over the whole fleet cost seconds.
         code, output, err = self.adapter("workers", fleet["name"], *([window] if window else []))
@@ -990,10 +1034,10 @@ class Control:
             raise Fault("IDENTITY_MISMATCH", "Registered machine identity does not match")
         if method == "discover":
             fields(params, ())
-            fleets = [{k: v for k, v in f.items() if k != "config_path"} for f in self.inventory()]
+            fleets = [{k: v for k, v in f.items() if k != "config_path"} for f in self.inventory(True)]
             out = {"machine_id": self.machine_id, "hostname": socket.gethostname(),
                    "protocol": PROTOCOL, "fleets": fleets, "observed_at": now()}
-            capacity = self.capacity()
+            capacity = self.capacity(True)
             if capacity is not None:
                 out["capacity"] = capacity
             return out
@@ -1002,8 +1046,9 @@ class Control:
             return self.ready()
         if method in ("fleet_status", "config_get"):
             fields(params, ("fleet_id",))
-            fleet = self.fleet(params["fleet_id"])
-            return self.workers(fleet) if method == "fleet_status" else self.config(fleet)
+            if method == "fleet_status":
+                return self.workers(self.fleet(params["fleet_id"], True), cache=True)
+            return self.config(self.fleet(params["fleet_id"]))
         if method in GH_READS:
             validate_gh_read(params)
             return self.gh_read(self.fleet(params["fleet_id"]), GH_READS[method], params)

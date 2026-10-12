@@ -294,8 +294,11 @@ class HubFixture(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.node = Sandbox(self.root / "node")
+        # The heartbeat read cache (issue #3514) is off here: these tests change a
+        # conf and read again at once; test_heartbeat_reads_reuse_until_a_nudge
+        # turns it on.
         env = patch.dict(os.environ, PATH=str(self.node.tools) + os.pathsep + os.environ["PATH"],
-                         TMPDIR=str(self.node.tmp))
+                         TMPDIR=str(self.node.tmp), FLEET_CONTROL_READ_CACHE="0")
         env.start()
         self.addCleanup(env.stop)
         self.hub = hub_module.Hub(self.root / "hub")
@@ -958,6 +961,50 @@ class HubTests(HubFixture):
         self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 5)
         (self.node.root / "fleet.conf").write_text("FLEET_GLOBAL_MAX_SESSIONS=8\n")
         self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 8)
+
+    def test_heartbeat_reads_reuse_until_a_nudge(self):
+        # Issue #3514: ccquota's agent asks discover + fleet_status every 5 s per
+        # login, and each ran the adapter (~0.7 s of CPU, ~250 processes). With
+        # the cache on, the heartbeat methods reuse the last answer until its TTL
+        # or the next nudge; an operation's own reads never do.
+        ctl = self.node.controller
+        conf = self.node.root / "fleet.conf"
+        nudge = Path(ctl.conf_dir) / "global" / "hub-nudge"
+        with patch.dict(os.environ, FLEET_CONTROL_READ_CACHE="1"):
+            self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 0)
+            conf.write_text("FLEET_GLOBAL_MAX_SESSIONS=5\n")
+            self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 0)   # kept
+            nudge.parent.mkdir(parents=True, exist_ok=True)
+            nudge.write_text("")
+            self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 5)   # a nudge reads fresh
+            # fleet_status: one adapter run for two beats; a nudge runs it again.
+            calls = []
+            real = ctl.adapter
+
+            def counted(mode, *args, **kw):
+                calls.append(mode)
+                return real(mode, *args, **kw)
+
+            with patch.object(ctl, "adapter", side_effect=counted):
+                first = self.node.rpc("fleet_status", {"fleet_id": self.fleet})
+                again = self.node.rpc("fleet_status", {"fleet_id": self.fleet})
+                self.assertEqual(first, again)
+                self.assertEqual(calls, ["workers"], calls)   # inventory kept from discover, workers from the first
+                os.utime(nudge, ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
+                self.node.rpc("fleet_status", {"fleet_id": self.fleet})
+                self.assertEqual(calls.count("workers"), 2, calls)
+                # An operation's reads are always fresh.
+                ctl.fleet(self.fleet)
+                ctl.workers(ctl.fleet(self.fleet))
+                self.assertEqual(calls.count("workers"), 3, calls)
+            # Past its TTL the answer is read again.
+            with patch.dict(control.READ_CACHE_TTL, {"capacity": 0.01}):
+                conf.write_text("FLEET_GLOBAL_MAX_SESSIONS=8\n")
+                time.sleep(0.05)
+                self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 8)
+        # Off: every read runs the adapter, byte for byte as before.
+        conf.write_text("FLEET_GLOBAL_MAX_SESSIONS=9\n")
+        self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 9)
 
     def test_discover_carries_the_gates_own_verdict(self):
         # Issue #1836 (EPIC #2074 C5): with the count cap 0 the hub could never
