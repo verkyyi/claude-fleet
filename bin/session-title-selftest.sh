@@ -79,10 +79,10 @@ if [ -n "$REAL_TMUX" ]; then
   # column 22 is epicstale= — the login's batches nobody drives (issue #1916), empty with none
   # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
   # columns 24-28 are the measurement bus (issue #2431), 29 agentstatus= (#2536),
-  # 30 test= (#2505), 31 orphanrep= (#3369) — the last (columns 31-37 went with
-  # #3118); NF - 12 keeps the count of the 19
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 31, #3369); 16 before it as they were" "19 reap= detail= role= epic= epicstale= backfill= test= orphanrep=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 12, $18, $19, $20, $21, $22, $23, $30, $31 }')"
+  # 30 test= (#2505), 31 orphanrep= (#3369), 32 pin= (#3517) — the last (columns
+  # 31-37 went with #3118); NF - 12 keeps the count of the 20
+  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 32, #3517); 16 before it as they were" "20 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 12, $18, $19, $20, $21, $22, $23, $30, $31, $32 }')"
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
   out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"

@@ -342,8 +342,8 @@ waitfor 'Tab 操作' || fail "E: the list did not reopen: $(screen)"
 to send-keys -t o -l 'Far 在'
 waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
 to send-keys -t o Tab; waitfor '─ Far 在 m4' || fail "E: Tab on the far row: $(screen)"
-for _ in $(seq 1 5); do to send-keys -t o Down; done
-waitfor '▶ 停下' || fail "E: ↓5 is not 停下: $(screen)"
+for _ in $(seq 1 6); do to send-keys -t o Down; done
+waitfor '▶ 停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
 to send-keys -t o Enter
 waitfor '（在 m4）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
 [ "$(calls)" = "fleet-sidebar-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"

@@ -174,7 +174,8 @@ restore() {
     awk -F'\t' -v sess="$sess" -v skipf="$skip" 'FILENAME == skipf { if ($1 == sess) drop[$2] = 1; next }
       $1 == "FLEET" { print; next }
       $1 == "REAP" || $1 == "FID" { pend = pend $0 "\n"; next }
-      $1 == "WIN" { if (!($2 in drop)) printf "%s%s\n", pend, $0; pend = ""; next }' "$skip" "$mf" > "$tmp"
+      $1 == "WIN" { if (!($2 in drop)) printf "%s%s\n", pend, $0; pend = ""; next }
+      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" { print; pend = ""; next }' "$skip" "$mf" > "$tmp"   # #3517: by identity
     if grep -q '^WIN' "$tmp"; then
       log "restore: $sess — $(grep -c '^WIN' "$tmp") pinned session(s)"
       RESTORE_ONLY_MAP="$tmp" RESTORE_UNFINISHED=1 RESTORE_KEEP_DONE=1 bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :
