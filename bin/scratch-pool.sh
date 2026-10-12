@@ -153,8 +153,15 @@ POOL=$(fleet_pool_session "$SESS")
 # The HOME slot — a session of no repo, what ⚡ / ⌘N open — keeps 2 (issue #3514:
 # a claim takes one and the refill is a ~10 s warm-up, so a second ⌘N within it
 # went cold — 20 s on a loaded home). FLEET_SCRATCH_POOL still sets both.
-POOL_DEFAULT=1; POOL_HOME_DEFAULT=2
-[ -n "${FLEET_SELFTEST_ROOT:-}" ] && POOL_DEFAULT=0 && POOL_HOME_DEFAULT=0
+# FLEET_POOL_MIN (issue #3551, EPIC #3500 C6: ⚡ → 能打字 ≤ 3 s) is the HOME slot's
+# floor: it keeps at least that many however low FLEET_SCRATCH_POOL is set, and is
+# its size when FLEET_SCRATCH_POOL is unset — never above it otherwise. A pool
+# switched off (FLEET_SCRATCH_POOL 0 or "") stays off; unset = 2, as before.
+POOL_MIN=${FLEET_POOL_MIN:-2}; case "$POOL_MIN" in *[!0-9]*) POOL_MIN=2 ;; esac
+POOL_DEFAULT=1; POOL_HOME_DEFAULT=$POOL_MIN
+[ -n "${FLEET_SELFTEST_ROOT:-}" ] && POOL_DEFAULT=0 && POOL_HOME_DEFAULT=0 && POOL_MIN=${FLEET_POOL_MIN:-0}
+# home_want <n> → the HOME slot's size for a configured <n>: <n> lifted to the floor
+home_want() { case "$1" in ''|*[!0-9]*|0) printf '%s' "$1" ;; *) [ "$1" -lt "$POOL_MIN" ] && printf '%s' "$POOL_MIN" || printf '%s' "$1" ;; esac; }
 
 # REPO: the one slot this pass serves — a hosted repo, or `-` for HOME (#2233).
 # The pool is per repo, one road whatever the count (#1941). With no --repo,
@@ -169,7 +176,7 @@ if [ -z "$REPO_ARG" ]; then
       if [ "$CMD" = ensure ] && [ "$DELAY" = 1 ]; then
         while IFS= read -r _r; do
           [ -n "$_r" ] || continue
-          if [ "$_r" = - ]; then _w=${FLEET_SCRATCH_POOL-$POOL_HOME_DEFAULT}
+          if [ "$_r" = - ]; then _w=$(home_want "${FLEET_SCRATCH_POOL-$POOL_HOME_DEFAULT}")
           else _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL-$POOL_DEFAULT}" ); fi
           case "$_w" in ''|*[!0-9]*|0) continue ;; esac
           sleep "${FLEET_POOL_REFILL_DELAY:-45}"; break
@@ -223,7 +230,9 @@ else
   fleet_load_repo_conf "$SESS" "$REPO" || empty      # not hosted: an empty pool
 fi
 
-WANT="${FLEET_SCRATCH_POOL-$POOL_DEFAULT}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
+WANT="${FLEET_SCRATCH_POOL-$POOL_DEFAULT}"
+[ "$REPO" = - ] && WANT=$(home_want "$WANT")
+case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
 AGENT="${AGENT_ARG:-${FLEET_AGENT:-claude}}"
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
 MAXAGE="${FLEET_POOL_MAX_AGE:-1800}"; case "$MAXAGE" in ''|*[!0-9]*) MAXAGE=1800;; esac

@@ -25,7 +25,9 @@ under a fake passwd); nothing touches /var, /Library or a real login.
   I  the clients: available() false with FLEET_NODE_CORE=0, false for a sandbox that
      named no socket; the updater's as_login goes through exec-as when a core answers
   J  verify_release on a staged tree: tools links into <root>/tools by artifact digest
-     (a helper beside its tool), bin/ccquota = its artifact
+     (a helper beside its tool), bin/ccquota = its artifact; root's bytecode of a
+     listed module passes, one of an unlisted module or one others may write does
+     not (#3318)
   K  the seat's ops (#3668): machine start / stop / held / hup by a NAME in the core's
      own table — a child and a task, one copy, the stand-in's TERM stops it, a root
      process the old daemon left is found by its command and stopped; a name outside
@@ -483,6 +485,37 @@ class J_Staged(Sandbox):
                            env=self.env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
         self.assertIn("tools/bin/claude-helper", r.stdout)
+
+    def test_bytecode(self):
+        # #3318: root's bytecode of a listed module passes; one of a module the
+        # manifest does not list, or one others may write, does not; compile_release
+        # makes it for a release's bin/
+        sha = "e" * 40
+        d = make_release(self.root, sha, {"bin/mod.py": b"X = 1\n"})
+        write_pub(os.path.join(self.state, "release.pub"))
+        sys.path.insert(0, self.bin)
+        import fleet_node_core
+        self.assertIsNone(fleet_node_core.compile_release(d))
+        pyc = [n for n in os.listdir(os.path.join(d, "bin", "__pycache__")) if n.startswith("mod.")]
+        self.assertTrue(pyc)
+        self.assertEqual(fleet_node_core.pyc_source("bin/__pycache__/" + pyc[0]), "bin/mod.py")
+
+        def verify():
+            return subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", d],
+                                  env=self.env, capture_output=True, text=True)
+        r = verify()
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"), r.stdout + r.stderr)
+        full = os.path.join(d, "bin", "__pycache__", pyc[0])
+        os.chmod(full, 0o666)
+        r = verify()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("bytecode not the release owner's own", r.stdout)
+        os.chmod(full, 0o644)
+        with open(os.path.join(d, "bin", "__pycache__", "other.cpython-39.pyc"), "wb") as f:
+            f.write(b"x")
+        r = verify()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not in the signed manifest", r.stdout)
 
 
 class K_Machine(Sandbox):

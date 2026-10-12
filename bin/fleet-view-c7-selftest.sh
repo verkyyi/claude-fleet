@@ -15,8 +15,10 @@
 #      (`--warm-only`, exit 3 ⇒ cold — issue #3311), the 看台 onto the window it printed
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
-#      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing
-#   T  ⌘T and ⌘K, keys issue #3328 took away (compat-1v): the panel — ⌘T lit on
+#      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing;
+#      each ⌘N one run in timing/session.ndjson (#3551) — a cold one marked `cold`
+#   T  ⌘T and ⌘K, keys issue #3328 took away (compat-1v): the panel (its first
+#      frame one run in timing/panel.ndjson, #3551) — ⌘T lit on
 #      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
 #      each press logged how=old:<action>, counted by fleet_keys.old_presses (the
 #      doctor's oldkeys row); `send --agent codex` still carries; a direct attach: nothing
@@ -200,6 +202,20 @@ waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{wi
   || fail "N: ⌘N did not land on the warm window (now $(cur), it is $NW)"
 [ "$(wc -l < "$W/new.argv" | tr -d ' ')" = "$ncold" ] || fail "N: a warm window was ready, yet ⌘N opened one cold too"
 rm -f "$W/warm.ok"
+# the session clock (issue #3551): every ⌘N a run in timing/session.ndjson, the cold
+# ones carrying `cold`, the warm one only claim · go · total
+waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^session n=3 .* cold=2\$'" \
+  || fail "N: the three ⌘N are not three session runs, two cold: $(python3 "$BIN/fleet_timing.py" check)"
+python3 - "$FLEET_CONF_DIR/timing/session.ndjson" <<'PY' || fail "N: the warm ⌘N's run is not claim · go · total"
+import json, sys
+runs = {}
+for line in open(sys.argv[1]):
+    r = json.loads(line)
+    assert set(r) == {"ts", "what", "seg", "ms"} and r["what"] == "session", r
+    runs.setdefault(r["ts"], []).append(r["seg"])
+last = runs[max(runs)]
+sys.exit(0 if last == ["claim", "go", "total"] else 1)
+PY
 rm -f "$W/g/orch_fl"
 # another machine's C4 window (made here, link up) — the S and Q legs use it
 PW=$(ti new-window -d -P -F '#{window_id}' -t fl -n @m4 'sleep 600')
@@ -226,6 +242,10 @@ done
 grep -q '▶ ⚡ 新会话（空白）' "$W/dispatch.txt" || fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
 grep -qF '⌘T 已并进 ⌘P' "$W/dispatch.txt" || fail "T: the hint does not name ⌘T: $(grep '已并进' "$W/dispatch.txt")"
 grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && fail "T: ⌘T still opened the 派一件事 popup"
+# the panel clock (issue #3551): the frame drawn ⇒ one run boot · read · frame · total
+waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^panel n=1 '" \
+  || fail "T: the panel's first frame left no run in timing/panel.ndjson: $(python3 "$BIN/fleet_timing.py" check)"
+python3 "$BIN/fleet_timing.py" table panel | grep -q '^| frame | ' || fail "T: the panel run has no frame segment: $(python3 "$BIN/fleet_timing.py" table panel)"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
 to send-keys -t o:view Escape; sleep 0.8
 to send-keys -t o:view -H 1b 5b 39 33 32 7e

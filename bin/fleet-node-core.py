@@ -471,6 +471,7 @@ def verify_release(paths, d, sha):
             return "artifact %s: digest does not match the manifest" % name
         listed.add(".release/artifacts/" + name)
     digests = set(a.get("sha256") for a in arts.values())
+    owner = os.lstat(d).st_uid
     tools = os.path.realpath(os.path.join(paths.root, "tools"))
     for top, dirs, files in os.walk(d):
         for n in files + [x for x in dirs if os.path.islink(os.path.join(top, x))]:
@@ -500,6 +501,13 @@ def verify_release(paths, d, sha):
                 if os.path.islink(full) or not os.path.isfile(full):
                     return "%s: not a regular file" % rel
                 continue
+            if wire.pyc_source(rel) in listed:
+                # root's bytecode of a listed module (#3318): the release's owner's
+                # own regular file, nobody else may write it
+                st = os.lstat(full)
+                if stat.S_ISREG(st.st_mode) and st.st_uid == owner and not st.st_mode & 0o022:
+                    continue
+                return "%s: bytecode not the release owner's own" % rel
             return "%s: not in the signed manifest" % rel
     return None
 
@@ -518,7 +526,8 @@ def private_copy(src, dst):
     links (verify judges them), a FIFO / device refused, every mode reset (no
     setuid, no group or other write)."""
     shutil.rmtree(dst, ignore_errors=True)
-    shutil.copytree(src, dst, symlinks=True)
+    # a seat's bytecode never crosses: root compiles its own after the check (#3318)
+    shutil.copytree(src, dst, symlinks=True, ignore=shutil.ignore_patterns("__pycache__"))
     for top, dirs, files in os.walk(dst):
         for n in [top] + [os.path.join(top, x) for x in dirs + files]:
             st = os.lstat(n)
@@ -1042,6 +1051,7 @@ class Core(object):
             if why:
                 shutil.rmtree(inc, ignore_errors=True)
                 raise Refused(None, "%s: %s — current stays; the staged copy is kept as evidence" % (sha[:12], why))
+            self.compile(inc, a)
             os.rename(inc, dest)
             shutil.rmtree(staged, ignore_errors=True)
         else:
@@ -1050,6 +1060,7 @@ class Core(object):
             why = verify_release(self.p, dest, sha)
             if why:
                 raise Refused(None, "%s: %s — current stays" % (sha[:12], why))
+            self.compile(dest, a)
         old = link_target(self.p.current)
         if old and old != sha and os.path.isdir(self.p.rel(old)):
             swap_link(self.p.prev, self.p.rel(old))
@@ -1057,6 +1068,13 @@ class Core(object):
         self.place_admin_gate(a, dest)
         self.maybe_restart()
         return {"ok": True, "from": old, "to": sha}
+
+    def compile(self, d, a):
+        """A verified release's bytecode, made by root before current points at it
+        (#3318) — a release without it still switches, it is only slower; logged."""
+        why = wire.compile_release(d)
+        if why:
+            self.log(self.tl.uid, "switch", a, "bytecode: %s" % why)
 
     def op_rollback(self, conn, a):
         prev, cur = link_target(self.p.prev), link_target(self.p.current)

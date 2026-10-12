@@ -990,6 +990,13 @@ class Updater(object):
                     install_bin(self.art(d, arts, hart), os.path.join(tdir, hname), arts[hart]["sha256"])
                     swap_link(os.path.join(bind, hname), os.path.join(tdir, hname))
                 got[tool] = comps[tool]["version"]
+            # root's bytecode, before current can point here (#3318): a login cannot
+            # write it beside root's modules. Seated, the core makes it at the switch.
+            c = getattr(fns, "core", None)
+            if not self.seated and c is not None and hasattr(c, "compile_release"):
+                why = c.compile_release(d)
+                if why:
+                    self.log("bytecode %s: %s" % (sha[:12], why))
             got["at"] = now()
             write_json(mark, got)
             return got

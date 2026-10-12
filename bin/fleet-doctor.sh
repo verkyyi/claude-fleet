@@ -4078,6 +4078,28 @@ if _cs=$(bash "$(dirname "$0")/fleet-compose-latency.sh" --last 20 --summary 2>/
   fi
 fi
 
+# --- timing: ⌘P → 面板 and ⌘N / ⚡ → 能打字 (issue #3551, EPIC #3500 C6) ---------
+# fleet_timing.py's `check` over the last 10 runs of each, the medians against
+# FLEET_TIMING_PANEL_MS (500) and FLEET_TIMING_SESSION_MS (3000; warm opens only — a
+# cold one says the pool was empty, counted apart). Nothing measured yet ⇒ no row.
+# The segment table is `fleet_timing.py table`.
+if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [ -n "$_tm" ]; then
+  _tmsg=$(printf '%s\n' "$_tm" | awk '{
+    for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+    w = ($1 == "panel" ? "⌘P → 面板" : ($1 == "session" ? "新会话 → 能打字" : $1))
+    s = w " p50 " (v["p50"] == "—" ? "—" : sprintf("%.2fs", v["p50"] / 1000)) " (" v["n"] " 次"
+    if (v["cold"] > 0) s = s "，冷启 " v["cold"]
+    s = s ")"; if (v["over"] == 1) s = s " > " sprintf("%.1fs", v["limit"] / 1000)
+    printf "%s%s", (NR > 1 ? " · " : ""), s }')
+  if printf '%s\n' "$_tm" | grep -q ' over=1 '; then
+    warn timing "$_tmsg — fleet_timing.py table shows which segment"
+  elif printf '%s\n' "$_tm" | grep -q '^session .* p50=— '; then
+    warn timing "$_tmsg — every new session started cold: the warm pool is empty (scratch-pool.sh status)"
+  else
+    pass timing "$_tmsg"
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

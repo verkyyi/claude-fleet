@@ -90,6 +90,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `collect` | node | [node-doctor] | 采集守护卡住或超时：看 collect 日志里最慢的阶段 |
 | `commands` | node | [release-rules] | fleet 的 /命令 没装：下一次同步补，或装 fleet 插件 |
 | `compose` | node | [node-doctor] | ⌘P 慢：`fleet-compose-latency.sh --last 20` 看哪一段 |
+| `timing` | node | [node-doctor] | ⌘P 面板或新会话慢：`fleet_timing.py table` 看哪一段；新会话全是冷启 = 预热池空了（`scratch-pool.sh status`） |
 | `compute` | node | [node-doctor] | 这台能不能接入口派的会话：node.env 的 `CCQUOTA_FLEET_COMPUTE` |
 | `config` | node | [release-rules] | 安装不完整（缺 fleet.conf.example）：下一次同步补 |
 | `context` | node | [node-doctor] | 压缩后没续跑：看 context-ladder.log 的 resumed 行 |
