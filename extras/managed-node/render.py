@@ -188,7 +188,7 @@ def _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_prox
 
 
 def _relay_env(relay):
-    """The subscription relay this deployment runs (docs/CRED-RELAY.md): the node
+    """The subscription relay this deployment runs (docs/dev/CRED-RELAY.md): the node
     carries none of its own (claude-fleet#3577); empty = none."""
     if not relay:
         return []
