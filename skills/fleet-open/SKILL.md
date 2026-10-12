@@ -36,20 +36,19 @@ and without a tailnet on their side. Everything else is opened as is.
 
 ## What it prints — relay it
 
-One line in the tool's output:
+One line in the tool's output — a RECEIPT, not a send (issue #3538): it waits a few
+seconds (`FLEET_OPEN_ACK_WAIT`, 12) for the far side to say how it went.
 
 | result | meaning | what to tell the operator |
 |---|---|---|
-| `sent:client` | handed to the client they hold right now, through the hub (#1717): it opens it on the device in their hands — a computer opens it, an iTerm2 over ssh gets the escape, a phone gets a link to tap | "opened on your <device>" (stderr names it) — on a phone: "a link is at the bottom of your client" |
-| `sent:local` | no hub, and the client runs on this very screen: opened here | "opened" |
-| `sent:iterm2` | written to the iTerm2 they are using | "opened in your browser" — if nothing opened, their side (#1380) is not installed; give them the URL |
-| `sent:tunnel` | their reverse-tunnel opener (`open-url.sh`, port 2226) took it | "opened in your browser" |
-| `fallback:copied` | no iTerm2 / tunnel: the URL copied to their clipboard, one line saying so | "the link is on your clipboard" |
-| `fallback:path` | a file fleet-show could not send (`PATH …` line above it) | give them the path |
+| `opened` | the far side said it opened it: their client through the hub (#1717), their `fleet` thin client's loop (here, or through the home machine they watch this one from — 「经 mini2」), or this very screen | "opened on your <device>" (stderr names it) |
+| `failed:<why>` (exit 4) | the far side said it could not (no browser, a port busy, the forward refused, no thin client on the home) | say why, and give them the link |
+| `unconfirmed` | handed over, but no receipt within the wait — or a road that has none yet: the iTerm2 escape (#3540), a proxy window, open-url.sh's tunnel / clipboard; a phone's link on its bottom bar | "I sent it but cannot confirm it opened — the link is …" (stderr gives it) |
+| `failed:…` (exit 2) | a file fleet-show could not send (`PATH …` line above it) | give them the path |
 
-Why it fell back is on stderr (e.g. the active client is not iTerm2). A loopback page that
-falls back also names the `ssh -L <port>:127.0.0.1:<port>` the operator would need — the
-popup URL `http://127.0.0.1:<port>/…` means nothing on their computer without it.
+Which road it took and why is on stderr. A page on THIS machine never needs a tailnet on
+their side: its loopback port is forwarded over their own ssh — through the home machine
+too, whose link to this one carries it.
 
 ## Rules
 

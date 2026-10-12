@@ -2,7 +2,7 @@
 # fleet-repo.sh — the repos a fleet hosts (issue #788).
 #
 #   fleet-repo.sh list   [--session <sess>]
-#   fleet-repo.sh add    [--session <sess>] <owner/repo> [<checkout-dir>] [--base <branch>]
+#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>]
 #   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
 #   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #   fleet-repo.sh fold   <from-session> --into <session> [--dry-run] [--wait]
@@ -12,6 +12,10 @@
 # in fleet-lib.sh, issue #1937). An old-layout fleet conf that still names a repo is
 # read for one version; `remove` moves it out first (fleet_conf_repo_migrate).
 #
+# `add` takes a GitHub owner/name or ANY git address (issue #3600): https / ssh on
+# any host, an ssh-reachable bare repo, file:// or a local path. Its name is the
+# address's last two parts (fleet_repo_name_of; `--as <ns/name>` when that name is
+# taken), and a repo not on GitHub is cloned with git and never asks gh.
 # `add` is fleet_repo_register (fleet-lib.sh, issue #1104) — the one implementation
 # fleet-up.sh shares: reuse the checkout if it already is that repo, else clone it;
 # resolve the base branch (#603); write the overlay; then the follow-through —
@@ -46,13 +50,14 @@ die()   { echo "fleet-repo: $*" >&2; exit 1; }
 usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
-SESS=""; REPO=""; DIR=""; BASE=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
+SESS=""; REPO=""; DIR=""; BASE=""; AS=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
 INTO=""; DRY=0; WAIT=0
 if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --session) [ $# -ge 2 ] || usage; SESS="$2"; shift 2 ;;
     --base)    [ $# -ge 2 ] || usage; BASE="$2"; shift 2 ;;
+    --as)      [ $# -ge 2 ] || usage; AS="$2"; shift 2 ;;
     --window)  [ $# -ge 2 ] || usage; WIN="$2"; shift 2 ;;
     --worktree) [ $# -ge 2 ] || usage; WT="$2"; shift 2 ;;
     --tsv)     TSV=1; shift ;;
@@ -452,7 +457,7 @@ EOF
     [ -n "$REPO" ] || usage
     # One implementation (fleet_repo_register, issue #1104): stdout is its result
     # token, the human lines are on stderr.
-    fleet_repo_register "$SESS" "$REPO" ${DIR:+"$DIR"} ${BASE:+--base "$BASE"}
+    fleet_repo_register "$SESS" "$REPO" ${DIR:+"$DIR"} ${BASE:+--base "$BASE"} ${AS:+--as "$AS"}
     exit $?
     ;;
 

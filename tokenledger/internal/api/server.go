@@ -439,6 +439,10 @@ func (s *Server) routes() *routeMux {
 		// opened, with its own token — exact, so the /v1/fleet/ viewer gate is not
 		// in the way.
 		mux.HandleFunc(FleetTicketRegisterPath, s.handleFleetTicketRegister)
+		// Tickets whose home is the hub (claude-fleet#2677): a node's token or a
+		// person's sign-in, each scoped to its own by the handler.
+		mux.HandleFunc(FleetTicketsPath, s.handleFleetTickets)
+		mux.HandleFunc(FleetTicketsPath+"/", s.handleFleetTickets)
 		// The person's one orchestrator (claude-fleet#2117) is gone (#3118): an
 		// older node still asks, and is told 「没有编排」 — compat-1v.
 		mux.HandleFunc("/v1/node/orchestrator", s.handleNodeOrchestrator)

@@ -27,7 +27,7 @@
 #                    hook array) is undone; typing reaches it; registered as a
 #                    `view` row; the fleet's own global client-attached hook fires
 #   D. fleet-open  — from the remote session, the request reaches the proxy side
-#                    (sent:proxy), not an escape on the remote's terminal
+#                    (unconfirmed: the proxy has no receipt), not an escape on the remote's terminal
 #   N. no list     — (#1713) a node fleet session draws no list: fleet-sidebar.sh
 #                    sync there, a client on it, adds no sidebar pane and reaps the
 #                    one an older version drew; the drawer's selftest seam
@@ -365,7 +365,7 @@ waitfor 5 attached
 RP=$(tr_ display-message -p -t "$RW8" '#{pane_id}')
 RSOCK=$(tr_ display-message -p '#{socket_path}')
 out=$(TMUX="$RSOCK,1,0" TMUX_PANE="$RP" PATH="$PATH" bash "$BIN/fleet-open.sh" https://github.com 2>"$WORK/open.err")
-eq "D: fleet-open in the remote session hands it to the proxy" "sent:proxy" "$out"
+eq "D: fleet-open in the remote session hands it to the proxy (no receipt)" "unconfirmed" "$out"
 has "D: and says so on stderr" "$(cat "$WORK/open.err")" "proxy view"
 gotit() { grep -q '^https://github.com$' "$WORK/opened" 2>/dev/null; }
 waitfor 5 gotit || fail "D: the proxy side never re-issued the url" "$(cat "$WORK/opened" 2>/dev/null)"

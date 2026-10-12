@@ -20,10 +20,14 @@
 #                a cport is forwarded AS ITSELF before the page opens, one notice
 #                line, forwards.log open → close when the session's callback
 #                server stops; a busy port is said and nothing opens; a loopback
-#                page gets its forward and opens on it; a plain url just opens
+#                page gets its forward and opens on it; a plain url just opens;
+#                an open with an id answers `fleet-open.sh --ack <id> ok|fail <why>`
+#                (issue #3538, FLEET_THIN_ACK_CMD), a bad id none
 #   E  ROAD      fleet-open.sh on a thin 看台 (hub active thin): --browser → the
-#                7502 `open` with the view's token on its tty, `sent:client`; off
-#                → nothing written there (the old road); a `-via-` 看台 is not it
+#                7502 `open` with the view's token on its tty and the cport,
+#                `unconfirmed` with no receipt; without --browser the 看台 is told
+#                too (issue #3538: no longer behind the switch), no cport; a `-via-`
+#                看台 is not told directly
 #   F  WIRING    the plugin's hook calls fleet-browser.sh hook; both launchers
 #                export BROWSER only behind `fleet-browser.sh enabled`
 set -uo pipefail
@@ -278,11 +282,23 @@ pg.close()
 # a plain url: just opened, no forward
 th.open_req(j({"v": 1, "kind": "url", "url": "https://example.com/", "who": "w"}))
 if opened()[-1] != "https://example.com/": bad.append("url: %r" % opened()[-1])
+# the receipt (issue #3538): an open with an id answers `--ack <id> ok|fail <why>`
+acks = os.path.join(work, "acks")
+os.environ["FLEET_THIN_ACK_CMD"] = "sh -c 'printf \"%%s|\" \"$@\" >> %s; echo >> %s' ack" % (acks, acks)
+th.open_req(j({"v": 1, "kind": "url", "url": "https://example.com/r", "who": "w", "id": "abc123"}))
+busy = socket.socket(); busy.bind(("127.0.0.1", 0)); busy.listen(1); bp = busy.getsockname()[1]
+th.open_req(j({"v": 1, "kind": "url", "url": url, "cport": bp, "who": "w", "id": "def456"}))
+busy.close()
+th.open_req(j({"v": 1, "kind": "url", "url": "https://example.com/n", "who": "w", "id": "not hex"}))
+got = open(acks).read().splitlines() if os.path.exists(acks) else []
+if got[:1] != ["--ack|abc123|ok||"]: bad.append("ack ok: %r" % got)
+if len(got) < 2 or not got[1].startswith("--ack|def456|fail|local port %d is busy" % bp): bad.append("ack fail: %r" % got)
+if len(got) != 2: bad.append("ack: a bad id was answered: %r" % got)
 th.fwd.close_all()
 print("\n".join(bad) if bad else "ok")
 PY
 )
-[ "$out" = ok ] && ok 'D thin open: cport forwarded as itself, said, logged, closed when the server stops · busy said · page · url' \
+[ "$out" = ok ] && ok 'D thin open: cport forwarded as itself, said, logged, closed when the server stops · busy said · page · url · receipt ok/fail' \
   || bad "D $out"
 pkill -f "$WORK/bin/relay.py" 2>/dev/null
 
@@ -312,7 +328,7 @@ printf '100\t/dev/ttys901\n' > "$STATE/clients"
 road() {  # [--browser] — fleet-open.sh on the thin road
   PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1" FLEET_OPEN_WHERE_CMD="$WORK/bin/where" \
     FLEET_OPEN_URL_BIN="$WORK/bin/open-url" FLEET_THIN_OPEN_OUT="$WORK/thin.out" FLEET_SHOW_OUT="$WORK/show.out" \
-    FLEET_OPEN_SECRET_FILE="$WORK/open.secret" FLEET_OPEN_DOCPREV_ROOT="$WORK/none" \
+    FLEET_OPEN_SECRET_FILE="$WORK/open.secret" FLEET_OPEN_DOCPREV_ROOT="$WORK/none" FLEET_OPEN_ACK_WAIT=1 \
     bash "$BIN/fleet-open.sh" "$@" 2>"$WORK/road.err"
 }
 rm -f "$WORK/thin.out"
@@ -327,14 +343,18 @@ d = json.loads(base64.b64decode(m.group(2)))
 print("ok" if m.group(1) == "tok123" and d.get("cport") == 33418 and d.get("who") == "fleet-x" and d.get("ttl") == 600 else "payload %r" % d)
 PY
 )
-[ "$res" = sent:client ] && [ "$v" = ok ] && ok 'E --browser on a thin 看台 → 7502 open with its token, sent:client' \
+[ "$res" = unconfirmed ] && [ "$v" = ok ] && ok 'E --browser on a thin 看台 → 7502 open with its token, unconfirmed without a receipt' \
   || bad "E browser road: $res / $v / $(cat "$WORK/road.err")"
 grep -q 'MacBook' "$WORK/road.err" && ok 'E the device is named' || bad "E device: $(cat "$WORK/road.err")"
 rm -f "$WORK/thin.out"
 res=$(FLEET_BROWSER=0 road "$AUTH")
-[ ! -e "$WORK/thin.out" ] && [ "$res" != sent:client ] && ok 'E off → no 7502 written, the old road' \
-  || bad "E off wrote to the 看台 ($res)"
+python3 - "$WORK/thin.out" <<'PY' && ok 'E off → the 看台 is told too (#3538), no cport' || bad "E off ($res)"
+import base64, json, re, sys
+m = re.fullmatch(r"\x1b\]7502;open;token=tok123;j=([A-Za-z0-9+/=]+)\x07", open(sys.argv[1], "rb").read().decode())
+sys.exit(0 if m and "cport" not in json.loads(base64.b64decode(m.group(1))) else 1)
+PY
 printf '100\t/dev/ttys902\n' > "$STATE/clients"
+rm -f "$WORK/thin.out"
 res=$(FLEET_BROWSER=0 road --browser "$AUTH")
 [ ! -e "$WORK/thin.out" ] && ok 'E a -via- 看台 is not told directly' || bad "E -via- got the 7502 ($res)"
 

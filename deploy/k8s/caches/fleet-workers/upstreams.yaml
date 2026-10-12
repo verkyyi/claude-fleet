@@ -1,0 +1,28 @@
+# The caches' upstreams: CN mirrors, reached directly from the cluster (they are
+# in China; the shared services go out on their own, not through fleet-egress).
+# npm's is in ../base/verdaccio.yaml (registry.npmmirror.com).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fleet-pypi
+spec:
+  template:
+    spec:
+      containers:
+        - name: devpi
+          env:
+            - name: FLEET_PYPI_UPSTREAM
+              value: https://pypi.tuna.tsinghua.edu.cn/simple/
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fleet-goproxy
+spec:
+  template:
+    spec:
+      containers:
+        - name: athens
+          env:
+            - name: ATHENS_GO_BINARY_ENV_VARS
+              value: "GOPROXY=https://goproxy.cn,direct; GOSUMDB=sum.golang.google.cn"

@@ -307,6 +307,7 @@ with no hand step per login:
 |---|---|
 | `--github-proxy http://47.131.114.67:3128` | `/etc/gitconfig`: `http.https://github.com/.proxy` — git's github.com traffic through the Singapore relay (`extras/gh-relay`, CONNECT to GitHub hosts :443 from the cluster egress only). The image's `gh` wrapper reads the same address from `/etc/fleet-devnet.env` and sets `HTTPS_PROXY` for gh alone. |
 | `--git-mirror git://git-mirror.arc-runners.svc.cluster.local/24haowan-monorepo.git=https://github.com/GuangZhouShanyouGame/24haowan-monorepo.git` (repeatable) | `/etc/gitconfig`: `url.<mirror>.insteadOf <upstream>` — fetches come from the in-cluster CI mirror — and an identity `url.<upstream>.pushInsteadOf <upstream>`, so pushes still go to GitHub through the relay. |
+| `--cluster-caches` | in place of `--cn-mirrors` in the cluster layout (#3548): `/etc/fleet-devnet.env` points npm / pnpm / yarn / corepack at `fleet-npm`, pip and uv at `fleet-pypi`, Go at `fleet-goproxy` then goproxy.cn — the namespace's package caches, «Package caches» below. render.py refuses both flags together |
 | `--cn-mirrors` | `/etc/fleet-devnet.env`: npmmirror (npm · pnpm · yarn · corepack), the node dist mirror (nvm · fnm), goproxy.cn + `sum.golang.google.cn`. Every shell exports it (`/etc/profile.d/fleet-devnet.sh`, read by zshenv and bash.bashrc); a value the login already has wins. |
 | `--egress-allow 172.21.x.y:9418` | the egress guard lets that one in-cluster tcp destination through (before the Service-range cut) — the git-mirror Service's ClusterIP. Nothing else in-cluster. |
 
@@ -396,6 +397,101 @@ token in the shared proxy and writes only the `hub:<label>` marker into the
 login's `accounts/` (issue #3211). Every container start re-runs `prepare`,
 which adds the line to a store written before it, token untouched. Check it with
 `fleet-control-read.sh ready` as the login: `creds` reads `true`.
+
+## Shared services: credential proxy and egress
+
+(issue #3547, EPIC #3500 C2) The cluster runs ONE credential proxy and ONE way
+out for every user pod, beside them in `fleet-workers`; upgrading either never
+rebuilds a user pod.
+
+| Service | What | Manifests |
+|---|---|---|
+| `fleet-credproxy:80` | the cluster credential proxy (`ccquota credproxy`): takes a session's hub pass (`fcp-h1.`), asks the hub which account it is bound to, puts that account's short-lived token on the request and forwards it through the Singapore relay. 2 replicas, PDB, rolling `maxUnavailable: 0`, no Ingress | `deploy/k8s/credproxy/fleet-workers` |
+| `fleet-egress:3128` | a CONNECT proxy: pod range only, 443 only, a host allow-list (provider endpoints, GitHub, package sources), GitHub through `extras/gh-relay`. 2 replicas, PDB | `deploy/k8s/egress` |
+| network rules | default deny; `fleet/role=user` → kube-dns, the two services, the hub's address | `deploy/k8s/fleet-workers/networkpolicy.yaml` |
+
+`kubectl kustomize deploy/k8s/fleet-workers` renders all three
+(`deploy/k8s/credproxy/README.md` «fleet-workers» for the token Secret and the
+image pins). flannel enforces no NetworkPolicy, so on this cluster the walls that
+hold are the pod's own guard and the egress's source check; the policies are the
+same contract for a CNI that enforces them.
+
+A user pod uses them through three render flags:
+
+| Flag | What the node does |
+|---|---|
+| `--cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local` | every login's root route settings carry `FLEET_CRED_CENTRAL_URL` (its host on `FLEET_CRED_ALLOW_HOSTS`); every login's store and node agent settings say `CCQUOTA_FLEET_CREDS=0`, so the node program leases nothing into the pod; and each start deletes every subscription credential file the volume still holds — each store's `accounts/` tokens, hub-managed Codex `auth.json`, the pool index, the shared proxy's pool (the node token, the relay pass and the hub passes stay: they are the login's identity). The local proxy takes plain `http` for the central route only, and only to a `NAME.NS.svc.cluster.local` name |
+| `--egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128` | `/etc/fleet-devnet.env`: `HTTPS_PROXY` / `HTTP_PROXY` (both cases) and `NO_PROXY=localhost,127.0.0.1,::1,.svc,.cluster.local` for every login, the gh wrapper's road when no `--github-proxy` is named; `/etc/gitconfig`: `http.proxy` for every host |
+| `--egress-closed` (needs `--egress-proxy`) | the guard's last rule rejects everything else (IPv4 and IPv6): the pod reaches the outside only through its `--egress-allow` destinations |
+
+With `--egress-closed`, name each destination the node itself needs, before the
+range cuts: the two Services' ClusterIPs and the hub's address.
+
+```sh
+kubectl -n fleet-workers get svc fleet-credproxy fleet-egress -o jsonpath='{range .items[*]}{.spec.clusterIP}{"\n"}{end}'
+dig +short claudefleet.24haowan.com            # the hub (also the NetworkPolicy's ipBlock)
+python3 extras/managed-node/render.py … \
+  --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local \
+  --egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 --egress-closed \
+  --egress-allow CREDPROXY_IP:80 --egress-allow EGRESS_IP:3128 --egress-allow HUB_IP:443 \
+  --github-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 > /tmp/fleet-linux.json
+```
+
+The machine itself must be marked untrusted at the hub
+(`fleet-node-trust.sh set fleet-linux-0 untrusted`): the hub then refuses it any
+lease, and every session's route is central (an unreachable hub is `unknown`,
+also central — closed, never open).
+
+**Switching fleet-linux-0** (the migration's first step): apply the shared layer
+→ mark the machine untrusted → render with the flags → `kubectl apply` →
+`kubectl -n fleet-workers delete pod fleet-linux-0` (never `--force`). A session
+that was started before the switch holds a local session credential, not a hub
+pass, and gets 403 on the central route until it is reopened (↵ on its recovery
+page resumes the same conversation); the pod replace restarts every session
+anyway. So the switch goes in a window the people on the machine were told of.
+After it, `kubectl -n fleet-workers rollout restart deploy/fleet-credproxy` is a
+non-event for a running session.
+
+Check it, in the pod:
+
+```sh
+env | grep -i token                                   # nothing (as root in the fleet container and as a login)
+python3 -I ~/.claude/fleet/bin/fleet-cred-scan.py scan --no-hub   # routes=0
+find /var/db/fleet-cred -name .credentials.json -o -name auth.json   # nothing
+curl -sS --noproxy '*' -m3 https://registry.npmjs.org/   # refused (the guard)
+curl -sS -o /dev/null -w '%{http_code}\n' https://github.com/   # 200, through fleet-egress
+```
+
+BREAK-IT `cred-in-user-pod`.
+
+## Package caches
+
+(issue #3548, EPIC #3500 C3) Installing a package or starting a session's MCP
+servers never fetches from the internet at that moment: `deploy/k8s/caches` runs
+three read-through caches in `fleet-workers` — `fleet-npm:4873` (Verdaccio,
+npmmirror upstream), `fleet-pypi:3141` (devpi, Tsinghua), `fleet-goproxy:3000`
+(Athens, goproxy.cn) — each a StatefulSet of two replicas with a disk apiece, a
+PDB and `sessionAffinity: ClientIP` (a pod's second install hits the replica its
+first one filled). `kubectl kustomize deploy/k8s/fleet-workers` carries them
+beside the credential proxy and the egress; `deploy/k8s/caches/README.md` has the
+images, the upstreams and the checks.
+
+A user pod uses them with `render.py --cluster-caches` (above). With
+`--egress-closed`, add each cache's ClusterIP to `--egress-allow`
+(`IP:4873`, `IP:3141`, `IP:3000`) as for the credential proxy. One replica gone
+costs nothing but a cold cache; Go falls through to goproxy.cn on any error
+(`GOPROXY=…|https://goproxy.cn|direct`).
+
+The image preinstalls the default MCP servers (`conf/agent-defaults`): context7,
+playwright and server-github globally through npm, `mcp-server-fetch` as a uv tool
+(`/usr/local/bin`). `npx -y <package>` runs the global copy with no registry
+round trip; the `@latest` spec (playwright) asks `fleet-npm` once, in the
+cluster; `bin/mcp-fetch.sh` runs an installed `mcp-server-fetch` before `uvx`.
+A login whose `~/.claude.json` already names other commands keeps them (the
+defaults only fill).
+
+Git: fetches from the CI's mirror (`--git-mirror git://git-mirror.arc-runners…`,
+«Dev network»); the network rules let a user pod reach `arc-runners` on 9418.
 
 ## Upgrade and recovery
 

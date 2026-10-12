@@ -407,7 +407,9 @@ logged `refused: …` and dropped. The machine an action came from is the hub's
 word (the node's roster name), not the body's. A takeover drops what was queued
 for the old lease. Every action is one line in `<cache>/tmp/actions.log`. No hub
 and the one client here runs on this computer's own screen → `open` right here
-(`sent:local`); nobody connected → the terminal road, unchanged. There is no
+(`opened`); nobody connected → the terminal road, unchanged. Since #3538 fleet-open
+prints a receipt word — `opened` · `failed:<why>` · `unconfirmed` — and a client's
+`done` / `failed` IS the receipt. There is no
 hub page proxy yet, so a loopback page on a phone off the tailnet gets
 「回到电脑上再看」. `TestClientActionsReachTheOwnersLeaseSigned` and
 `bin/fleet-client-actions-selftest.sh` pin it.
@@ -804,7 +806,7 @@ either cap tally, no fleet-restore row, no sleep, failover or rate-limit scrape.
 directly (it trusts this machine's secret only), so `fleet-open.sh` there sees
 its newest client is a registered view with a spool (`<id>.d`, made only when
 `attach` was given a view id — a shell without one has no spool), drops the
-request in it and prints `sent:proxy`, and a second ssh session on the proxy's own
+request in it and prints `unconfirmed` (`sent:proxy` before #3538), and a second ssh session on the proxy's own
 connection (ControlMaster) streams it back here, where the local `fleet-open.sh`
 re-issues it — a url as is, a page on that machine's loopback through an
 `ssh -O forward` on the same connection.

@@ -27,7 +27,8 @@
 #             non-interactively when missing and sudo -n works). --no-deps skips.
 #   agent     ccquota → ~/.local/bin/ccquota: --ccquota <file>, else the hub's own
 #             build (/v1/node/dist/<os>-<arch>, SHA-256 checked), else one already
-#             on PATH, else `go install`.
+#             on PATH, else — the developer road only (FLEET_DIST_SOURCE=github,
+#             or a hub that keeps no releases) — `go install` (issue #2862).
 #   service   the agent under the platform's supervisor, as THIS login:
 #             macOS — a LaunchAgent in the gui domain, else (SSH-only login) a
 #             LaunchDaemon with UserName through sudo -n; Linux — a systemd user
@@ -49,7 +50,13 @@
 #             a node joined before #1719 has no line and keeps running sessions —
 #             unless --compute is given.
 #   online    polls <hub>/v1/node/self until the hub sees this agent (--wait).
-#   fleet     ~/.claude/fleet cloned at `stable` (or --fleet-src/--ref), then
+#   fleet     ~/.claude/fleet = the hub's SIGNED stable (fleet-release-lib.sh's
+#             fleet_rel_first_checkout: the key pinned, the tree verified, one
+#             local commit, no remote — never GitHub; the lib beside this script,
+#             else the hub's /install/bin/ copy for a `curl … | bash` run, issue
+#             #2862). GitHub only on the developer road: --fleet-src / --ref,
+#             FLEET_DIST_SOURCE=github, or a hub that keeps no releases (EPIC
+#             #2770 共同约定 7) — a git clone at `stable`. Then
 #             bin/fleet-login-bootstrap.sh: Claude Code, hooks, daemons, a seed
 #             fleet, doctor. Its failure is a WARN — the machine is already on the
 #             hub — with the rerun line. --no-fleet skips.
@@ -70,7 +77,8 @@ set -uo pipefail
 
 PROG=fleet-node-join
 HUB="" CODE="" JOINED="" UI=0 ADMIN=1 DEPS=1 FLEET=1 SERVICE=auto WAIT=180 FORCE=0
-SRC_REPO="https://github.com/verkyyi/claude-fleet.git" SRC_REF="" CCQ_SRC=""
+SRC_REF="" CCQ_SRC=""
+SRC_REPO="https://github.com/verkyyi/claude-fleet.git"  # dist-ok: the developer road only — --fleet-src/--ref, FLEET_DIST_SOURCE=github, or a hub that keeps no releases (issue #2862)
 SRC_SET=0
 COMPUTE=""   # "" = a first join's 0, a rerun's whatever node.env says (issue #1719)
 
@@ -407,6 +415,46 @@ install_deps() {
 }
 if [ "$DEPS" = 1 ]; then install_deps || exit 1; else say "deps: skipped (--no-deps)"; fi
 
+# ── where the fleet's code comes from (issue #2862) ─────────────────────────
+# hub_releases — 0 the hub keeps signed releases · 3 it keeps none (404: the
+# developer road, EPIC #2770 共同约定 7) · 1 no answer. Asked once.
+HUB_REL=""
+hub_releases() {
+  if [ -z "$HUB_REL" ]; then
+    c=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' "$HUB/v1/fleet/release/stable" 2>/dev/null) || c=000
+    case "$c" in 200) HUB_REL=0 ;; 404) HUB_REL=3 ;; *) HUB_REL=1 ;; esac
+  fi
+  return "$HUB_REL"
+}
+# dev_road — rc 0 when GitHub may be asked: FLEET_DIST_SOURCE=github, or a hub
+# that keeps no releases
+dev_road() {
+  [ "${FLEET_DIST_SOURCE:-}" = github ] && return 0
+  hub_releases; [ $? = 3 ]
+}
+# rel_lib — fleet-release-lib.sh sourced (its fetch beside it): this script's
+# own siblings, else the hub's /install/bin/ copies (a `curl … | bash` run has
+# no directory). rc 1 + REL_LIB_ERR when neither.
+REL_LIB=""
+rel_lib() {
+  [ -n "$REL_LIB" ] && return 0
+  d=""
+  if [ -f "$0" ]; then
+    d="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+    [ -f "$d/fleet-release-lib.sh" ] && [ -f "$d/fleet-release-fetch.py" ] && [ -f "$d/fleet-release-verify.py" ] || d=""
+  fi
+  if [ -z "$d" ]; then
+    d="$WORK/rel-bin"; mkdir -p "$d" || return 1
+    for f in fleet-release-lib.sh fleet-release-fetch.py fleet-release-verify.py; do
+      curl -fsS --max-time 60 -o "$d/$f" "$HUB/install/bin/$f" 2>"$WORK/rel-lib.err" \
+        || { REL_LIB_ERR="$HUB/install/bin/$f: $(tail -n 1 "$WORK/rel-lib.err")"; return 1; }
+    done
+  fi
+  # shellcheck source=fleet-release-lib.sh
+  . "$d/fleet-release-lib.sh" || { REL_LIB_ERR="cannot source $d/fleet-release-lib.sh"; return 1; }
+  REL_LIB="$d"
+}
+
 # ── agent binary ────────────────────────────────────────────────────────────
 sha256_of() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
@@ -442,7 +490,14 @@ install_ccquota() {
   if p="$(command -v ccquota 2>/dev/null)" && [ -n "$p" ]; then
     cp "$p" "$CCQ" && say "agent: ccquota from $p" && return 0
   fi
+  # the developer road only (issue #2862): a hub that keeps releases is where
+  # this machine's code comes from — it never builds from GitHub behind its back
+  if ! dev_road; then
+    say "agent: FAIL — the hub serves no ccquota-$OS-$ARCH and none is on PATH. Pass --ccquota <file> (FLEET_DIST_SOURCE=github builds it from GitHub with Go)"
+    return 1
+  fi
   if command -v go >/dev/null 2>&1; then
+    # dist-ok: the developer road — FLEET_DIST_SOURCE=github, or a hub that keeps no releases
     GOBIN="$LBIN" go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest >"$WORK/go.log" 2>&1 \
       && say "agent: ccquota built with go install" && return 0
     say "agent: go install failed: $(tail -n 2 "$WORK/go.log" | tr '\n' ' ')"
@@ -701,11 +756,40 @@ if [ "$FLEET" = 1 ]; then
     HOSTED=1
   else
     mkdir -p "$(dirname "$ROOT")"
-    if [ "$SRC_SET" = 1 ] && [ -z "$SRC_REF" ]; then
-      git clone -q "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
-    else
-      git clone -q -b "${SRC_REF:-stable}" "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
-    fi || { say "fleet: FAIL — git clone $SRC_REPO: $(tail -n 2 "$WORK/clone.log" | tr '\n' ' ')"; FLEET_RC=1; }
+    # the hub's signed stable first (issue #2862); GitHub only on the developer road
+    VIA=git
+    if [ "$SRC_SET" = 0 ] && [ -z "$SRC_REF" ] && [ "${FLEET_DIST_SOURCE:-}" != github ]; then
+      VIA=hub
+      if rel_lib; then
+        new="$ROOT.new.$$"; rm -rf "$new"
+        FLEET_HUB_URL="$HUB" fleet_rel_first_checkout "$new" "$CONF" 30 "$WORK/rel.log"
+        case $? in
+          0) git -C "$new" checkout -q -B master 2>/dev/null
+             if mv "$new" "$ROOT"; then
+               say "fleet: the hub's stable $(printf '%.12s' "$REL_SHA"), verified ($REL_FPR) — not GitHub"
+             else
+               rm -rf "$new"; say "fleet: FAIL — the hub's stable verified, but cannot move it to $ROOT"; FLEET_RC=1
+             fi ;;
+          3) rm -rf "$new"; VIA=git ;;  # no release store: the developer road
+          *) rm -rf "$new"
+             say "fleet: FAIL — the hub did not give its stable — $REL_STAGE: ${REL_ERR:-?}. Rerun (FLEET_DIST_SOURCE=github takes GitHub instead)"
+             FLEET_RC=1 ;;
+        esac
+      else
+        hub_releases; case $? in
+          3) VIA=git ;;  # an older hub: no client copy, no release store
+          *) say "fleet: FAIL — cannot take fleet-release-lib.sh (${REL_LIB_ERR:-?}). Rerun (FLEET_DIST_SOURCE=github takes GitHub instead)"
+             FLEET_RC=1 ;;
+        esac
+      fi
+    fi
+    if [ "$VIA" = git ]; then
+      if [ "$SRC_SET" = 1 ] && [ -z "$SRC_REF" ]; then
+        git clone -q "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
+      else
+        git clone -q -b "${SRC_REF:-stable}" "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
+      fi || { say "fleet: FAIL — git clone $SRC_REPO: $(tail -n 2 "$WORK/clone.log" | tr '\n' ' ')"; FLEET_RC=1; }
+    fi
   fi
   if [ "$HOSTED" = 1 ]; then
     if [ "$FLEET_RC" = 0 ]; then say "fleet: ok"; ui "✓ fleet 已装好：$ROOT"
@@ -728,7 +812,7 @@ if [ "$FLEET" = 1 ]; then
       ui "! fleet 没装完（初始化退出码 $FLEET_RC${LOG:+，见 $LOG}）：这台已在线；修好后重跑同一条命令即可"
     fi
   else
-    ui "! fleet 没装完（git clone 失败${LOG:+，见 $LOG}）：这台已在线；重跑同一条命令即可"
+    ui "! fleet 没装完（取 fleet 失败${LOG:+，见 $LOG}）：这台已在线；重跑同一条命令即可"
   fi
 else
   say "fleet: skipped (--no-fleet)"

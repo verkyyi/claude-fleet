@@ -47,6 +47,8 @@
 #   view-mouse-stale                                conf/tmux-view.conf + fleet-quickopen.py view-keys --if-stale
 #   window-killed                                   bin/fleet-restore.sh --auto (pull-back), fleet_win_retire
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
+#   restore-conversation-twice                      bin/fleet-restore.sh (restore, snapshot), fleet_restore_map_prune,
+#                                                   bin/.fleet-restore-resolve.py (one row per conversation)
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
@@ -92,6 +94,7 @@
 #   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
+#   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -1484,6 +1487,45 @@ drill_window_killed() {
   auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # a second tick: nothing doubles
   [ "$(nt list-windows -t oc -F '#{window_name}' | grep -c '^issue-1$')" = 1 ] || { WHY="a second tick opened issue-1 twice"; return 1; }
   WHAT="被删的 issue-1 下一拍以原对话回来，/fleet-history 记 reason=killed-window；fleet 自己关的 issue-2 不拉回（节拍 60s 另计）"
+}
+
+# One conversation in three map rows (issue #3543): two windows came back resuming
+# the same Claude conversation, and a reaped session stayed in the map for good —
+# the shrink guard ("keep the richer map") counted the duplicates and the retired.
+drill_restore_conversation_twice() {
+  CAP=20; BREAK_SOCK="$WORK/sock-ct"; local t0 n mf="$WORK/econf/fleets/oc/restore.map"
+  local sid=3543aaaa-0000-4000-8000-000000003543 gone=3543bbbb-0000-4000-8000-000000003543
+  local f1=1f0e0000-0000-4000-8000-000000035431 f2=1f0e0000-0000-4000-8000-000000035432
+  local f3=1f0e0000-0000-4000-8000-000000035433 f4=1f0e0000-0000-4000-8000-000000035434
+  # a no-repo row (column 16 `-`): it resumes in $HOME, where a shared cwd let three windows guess one id
+  ct_row() { printf 'FID\t%s\nWIN\t%s\t%s\t%s\t-\tworking\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$1" "$2" "$WORK/home" "$3"; }
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    ct_row "$f1" 'fleet-linux-0 shell' "$sid"; ct_row "$f2" '@macmini' "$sid"; ct_row "$f3" '@macmini' "$sid"
+  } > "$mf"
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  auto                                            # the break: a restore off that map
+  until_ok "$CAP" grep -q -- "--resume $sid" "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the conversation was not resumed at all"; return 1; }
+  sleep 1
+  n=$(grep -c -- "--resume $sid" "$WORK/claude-argv")
+  [ "$n" = 1 ] || { WHY="restore resumed conversation ${sid%%-*}… $n times (two agents on one transcript)"; return 1; }
+  n=$(nt list-windows -t oc -F '#{@fleet_id}' | grep -cx "$f3")
+  [ "$n" = 1 ] || { WHY="the kept window is not the newest row's ($f3): [$(nt list-windows -t oc -F '#{window_name} #{@fleet_id}' | tr '\n' ' ')]"; return 1; }
+  auto                                            # a second tick: nothing doubles
+  sleep 1
+  [ "$(grep -c -- "--resume $sid" "$WORK/claude-argv")" = 1 ] || { WHY="a second tick resumed the conversation again"; return 1; }
+  # a session the fleet reaped (fleet_win_retire), still in the stored map, the live
+  # fleet now smaller than that map: the snapshot drops it instead of keeping it
+  { cat "$mf"; ct_row "$f4" '我的会话-3' "$gone"; } > "$mf.x" && mv "$mf.x" "$mf"
+  mkdir -p "$WORK/econf/global/retired"; : > "$WORK/econf/global/retired/$f4"
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_restore_map_prune "$2" --retired "$3"' _ "$WORK/inst/bin" "$mf" "$f3" > "$mf.p"
+  grep -q "$gone" "$mf.p" && { WHY="a retired session no window carries survives the prune: $(grep -c WIN "$mf.p") rows"; return 1; }
+  [ "$(awk -F'\t' '$1 == "WIN"' "$mf.p" | wc -l | tr -d ' ')" = 1 ] || { WHY="the pruned map has not one row per conversation: [$(awk -F'\t' '$1 == "WIN" { print $2 }' "$mf.p" | tr '\n' ' ')]"; return 1; }
+  grep -q 'fleet_restore_map_prune "$prior" --retired' "$BIN/fleet-restore.sh" \
+    || { WHY="the snapshot's shrink guard does not prune the stored map before counting it"; return 1; }
+  SECS=$(since "$t0"); WHAT="同一对话在地图里三行：restore 只开最新那一行一个窗口、第二拍不重开；回收过的会话从地图里删掉"
 }
 
 # ---- /loop and fleet down (issue #1846) ------------------------------------------
@@ -5015,6 +5057,23 @@ _login_remove_selftest() {
   [ "$LOGIN_REMOVE_ST" = ok ]
 }
 
+# ---- spare-reuse-leaks (#3507, EPIC #3500 C11): a login washed for the next
+# person still held the last one's crontab, own services, entry keys file,
+# credsep store, onboarding kit, keychain and git/ssh credentials — and nobody
+# looked. Now one category table (fleet-login-reset-check.py) is the list: the
+# selftest plants one thing per category in a sandbox, every one is reported,
+# clearing one drops exactly that one, and a category the table lost is red.
+drill_spare_reuse_leaks() {
+  CAP=60; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/bin/fleet-login-reset-check.py" ] \
+    || { WHY="no bin/fleet-login-reset-check.py: nobody checks what the last person left on a reused login"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-reset-check-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-reset-check-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  WHAT="每类种一样 → reset: dirty 报出全部 $(printf '%s\n' "$out" | sed -n 's/^categories: //p') 类；清掉一类只少一类；--since 只认早于洗号的；表里少一类即红（沙盒真跑检查器）"
+  SECS=$(since "$t0")
+}
+
 # ---- login-remove-record-left (#2728): sysadminctl -deleteUser took the home
 # and left the record (drill10092046 on macmini), and the script said done —
 # the hub read removed and the OS login was nobody's. Now step 6 reads the
@@ -6102,6 +6161,21 @@ drill_linux_github_unreachable() {
   WHAT="gh-relay 只放集群出口的 CONNECT 到 GitHub:443；/etc/gitconfig 让 github.com 走中转、镜像仓库从集群镜像拉而推去 GitHub；/etc/fleet-devnet.env 给每个登录镜像源；egress 只开镜像 Service 一个口；镜像带工具链"
 }
 
+# ---- cred-in-user-pod (#3547, EPIC #3500 C2): a user pod in the cluster held the
+# subscription tokens its node program leased; now its sessions route to the one
+# cluster credential proxy, nothing is leased into it, the volume is purged at each
+# start, and the pod goes out only through the one egress.
+drill_cred_in_user_pod() {
+  CAP=20; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_central_pod_holds_no_credential \
+       >"$WORK/cred-user-pod.out" 2>&1; then
+    WHY="a user pod still leases or keeps a subscription credential, or reaches the internet directly: $(tail -n 3 "$WORK/cred-user-pod.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="render --cred-central / --egress-proxy / --egress-closed：每个登录 CCQUOTA_FLEET_CREDS=0、走 fleet-credproxy；启动时盘上的 token、Codex auth、池子删光（节点令牌、relay 通行证留着）；守卫最后一句 REJECT；出口只放白名单主机、只认 pod 网段"
+}
+
 # ---- linux-create-relay-403 (#3213): the hub's create op opens a login whose
 # account is still `creating`; the relay pass is refused (403) and must not undo it.
 drill_linux_create_relay_403() {
@@ -6350,6 +6424,30 @@ drill_report_parent_online_queued() {
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="a message to the online orchestrator by identity exited $rc [$out], want 0"; return 1; }
   WHAT="在线的编排（拿了角色、没有自己的键）按身份收 hub 推来的回报和消息：exit 0、记在 orchestrator 账本，不再 75「不在」让 hub 无限重推"
+}
+
+# A repo not on GitHub (issue #3600, EPIC #3570 共同约定 3): adding it from any git
+# address must never call gh — not to clone it, not to read its base branch. A gh
+# that only records and always fails stands in; a file:// bare repo whose HEAD is
+# `trunk` is the repo.
+drill_forge_none_gh_call() {
+  CAP=30; local sb t0 tok
+  sb="$WORK/fngh"; mkdir -p "$sb/shim" "$sb/conf/fleets/fn" "$sb/home"
+  printf 'FLEET_SESSION=fn\n' > "$sb/conf/fleets/fn/conf"
+  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.calls"\nexit 1\n' "$sb" > "$sb/shim/gh"; chmod +x "$sb/shim/gh"
+  git init -q --bare "$sb/demo.git" && git -C "$sb/demo.git" symbolic-ref HEAD refs/heads/trunk
+  git clone -q "$sb/demo.git" "$sb/seed" 2>/dev/null
+  git -C "$sb/seed" -c user.email=d@x -c user.name=d commit -q --allow-empty -m seed \
+    && git -C "$sb/seed" push -q origin HEAD:trunk 2>/dev/null || { WHY="cannot build the bare repo"; return 1; }
+  t0=$(now)
+  tok=$(HOME="$sb/home" FLEET_CONF_DIR="$sb/conf" PATH="$sb/shim:$PATH" _FLEET_REGISTER_NO_KICK=1 \
+        bash "$BIN/fleet-repo.sh" add --session fn "file://$sb/demo.git" 2>"$sb/err")
+  case "$tok" in added:*) ;; *) WHY="add did not land: [$tok] $(tail -2 "$sb/err" | tr '\n' ' ')"; return 1 ;; esac
+  [ ! -s "$sb/gh.calls" ] || { WHY="gh was called for a repo not on GitHub: $(tr '\n' ';' < "$sb/gh.calls")"; return 1; }
+  grep -qx 'FLEET_BASE_BRANCH="trunk"' "$sb/conf/fleets/fn/repos/"*.conf \
+    || { WHY="the base branch was not read off the remote: $(grep BASE "$sb/conf/fleets/fn/repos/"*.conf)"; return 1; }
+  grep -qx 'FLEET_FORGE="none"' "$sb/conf/fleets/fn/repos/"*.conf || { WHY="the conf does not say FLEET_FORGE=none"; return 1; }
+  SECS=$(since "$t0"); WHAT="file:// 裸仓库：克隆 + 主干解析 gh 0 次；conf 记 FLEET_REMOTE / FLEET_FORGE=none，主干 trunk 来自 ls-remote"
 }
 
 drill_cred_migration_client() {

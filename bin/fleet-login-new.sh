@@ -952,13 +952,13 @@ EOF
      然后敲 fleet——左边是你的会话，右边接到 $MACHINE 上的那一个。
    - 向导（一个 Claude 会话）会带你走一遍：加自己的仓库 → 提第一个 issue → 看 worker 跑 → 合并 PR。
    - 向导窗口关了、或想再开：在 $MACHINE 的 shell 里 fleet guide
-   - 在 $MACHINE 的 shell 里：fleet repo add owner/repo 把一个仓库加进来。
+   - 在 $MACHINE 的 shell 里：fleet repo add <owner/repo 或任何 git 地址> 把一个仓库加进来。
    - 想离开但不关会话：按 tmux 的 prefix 键（默认 Ctrl-b）再按 d；下次敲 fleet 接着用。
 
 6. 还要你自己做的
 
    - Codex：ccquota codex login personal --device-auth（按提示批准设备码）
-   - GitHub：gh auth login（用你自己的账号）
+   - GitHub：gh auth login（用你自己的账号；仓库都不在 GitHub 上就不用）
 
 这封信里没有密码：登录只用钥匙。连不上、要重设密码，找开号人${ADMIN:+ $ADMIN}。
 EOF
@@ -1053,13 +1053,13 @@ EOF
      then type fleet — your sessions on the left, the one on $MACHINE on the right.
    - The guide (a Claude session) walks you through: add your own repo → file your first issue → watch the worker → merge the PR.
    - Guide window closed, or want it back: fleet guide, in a shell on $MACHINE
-   - In a shell on $MACHINE: fleet repo add owner/repo adds a repo to it.
+   - In a shell on $MACHINE: fleet repo add <owner/repo or any git address> adds a repo to it.
    - To leave without closing anything: the tmux prefix (Ctrl-b by default), then d; type fleet again to pick up where you left.
 
 6. Still yours to do
 
    - Codex: ccquota codex login personal --device-auth   (approve the device code)
-   - GitHub: gh auth login   (your own account)
+   - GitHub: gh auth login   (your own account — only for repos on GitHub)
 
 There is no password in this letter: you log in with the key. Can't get in, or need
 a password reset — ask the admin${ADMIN:+ ($ADMIN)}.
@@ -1100,7 +1100,7 @@ if [ "$DAEMONS" = 0 ]; then
 fi
 i=$((i + 1)); say "  $i. as $LOGIN: ccquota codex login personal --device-auth   — approve the device code"
 say "     (never copy ~/.codex/auth.json between logins)"
-i=$((i + 1)); say "  $i. as $LOGIN: gh auth login   — their own GitHub identity"
+i=$((i + 1)); say "  $i. as $LOGIN: gh auth login   — their own GitHub identity (only for repos on GitHub)"
 i=$((i + 1)); say "  $i. on the hub: ccquota enroll --name $MACHINE-$LOGIN   — give $LOGIN the token privately"
 say "     (then docs/SHARED-MACHINE.md step 4: the ccquota agent)"
 if [ "$DAEMONS" = 1 ]; then

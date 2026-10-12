@@ -109,7 +109,9 @@ var routeAccess = map[string]string{
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
 	// The ticket registry (claude-fleet#2676): a node registers with its token.
 	FleetTicketRegisterPath: accessSelf,
-	control.RoutesPath:      accessSelf,
+	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.
+	FleetTicketsPath: accessSelf, FleetTicketsPath + "/": accessSelf,
+	control.RoutesPath: accessSelf,
 
 	// An admin's: subscriptions, machines, join codes, SPOT, credentials,
 	// audits, settings, the operator's own analytics.

@@ -41,6 +41,25 @@ RUN set -eu; cd /tmp; get() { curl -fsSL --retry 3 -o "$1" "$2"; echo "$3  $1" |
     get aliyun.tgz "https://github.com/aliyun/aliyun-cli/releases/download/v$ALIYUN_VERSION/aliyun-cli-linux-$ALIYUN_VERSION-amd64.tgz" "$ALIYUN_SHA256"; \
     tar --no-same-owner -xzf aliyun.tgz -C /usr/local/bin aliyun; chmod 755 /usr/local/bin/aliyun; \
     rm -rf /tmp/*; node --version; go version; kubectl version --client; fnm --version; aliyun version; corepack --version
+# The default MCP servers (conf/agent-defaults: context7 · playwright · github ·
+# fetch), preinstalled so a session starts them from disk (#3548): `npx -y <pkg>`
+# runs a global install with no registry round trip, mcp-github.sh finds
+# mcp-server-github's npx road the same way, and mcp-fetch.sh runs the uv tool's
+# mcp-server-fetch. A pin moves by editing these ARGs; `@latest` specs still ask
+# the registry — the cluster's fleet-npm (deploy/k8s/caches), never the internet.
+ARG UV_VERSION=0.13.0 UV_SHA256=1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154
+ARG MCP_NPM="@upstash/context7-mcp@4.3.0 @playwright/mcp@0.0.83 @modelcontextprotocol/server-github@2025.4.8"
+ARG MCP_FETCH_VERSION=2026.10.10
+RUN set -eu; cd /tmp; \
+    curl -fsSL --retry 3 -o uv.tgz "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz"; \
+    echo "$UV_SHA256  uv.tgz" | sha256sum -c -; \
+    tar --no-same-owner -xzf uv.tgz --strip-components=1 -C /usr/local/bin uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx; \
+    npm install -g --no-audit --no-fund $MCP_NPM; \
+    UV_TOOL_DIR=/usr/local/lib/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON=/usr/bin/python3 UV_PYTHON_DOWNLOADS=never \
+      uv tool install --no-cache "mcp-server-fetch==$MCP_FETCH_VERSION"; \
+    chown -R root:root /usr/local; chmod -R go-w /usr/local/lib/node_modules /usr/local/lib/uv-tools; \
+    rm -rf /tmp/* /root/.npm /root/.cache; \
+    for b in context7-mcp playwright-mcp mcp-server-github mcp-server-fetch uv uvx; do command -v "$b"; done
 # Every shell reads the node's machine-wide dev settings (mirrors, the GitHub
 # relay) — written at each start by fleet-node-linux.py, absent = nothing set;
 # gh alone goes through the relay (git is told by /etc/gitconfig).
