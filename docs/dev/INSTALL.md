@@ -1008,6 +1008,17 @@ checkout, a fake node and a stand-in agent that drops keys while it mounts) with
 there the eight pits and the first key are held, the seconds and words only printed.
 `fleet-onboard-clock-selftest.sh` pins the refusals, the concept scan and the scrub.
 
+**The website's seconds are this drill's** (issue #3589, EPIC #3569 C19). After a prod run,
+`bin/site-drill.py <out dir> [--rename <session name>=<example task>]` writes `site/drill.json`
+— per run the three steps the page shows (点试用，登录 = paste → certificate · 领到你的机器 =
+certificate → first session placed · 说第一句话 = placed → first key), the total and the screen
+captured at each step's end, every name in it made neutral (the drill login, the sandbox
+computer, the hub address, `conf/oss-scan.rules`). A run that never reached the first key is
+no measurement: nothing is written. Commit the file; `bin/site-build.sh` shows the slowest
+run's seconds, stopwatch, date and three screens together, says the measured time in place of
+「60 秒」 past 60 s, and prints `RED:` for that, for a drill older than 7 days (no seconds then)
+and for a drill with no screens. `site-drill-selftest.sh` feeds it 47 s, 130 s and 8-day-old runs.
+
 ## Publishing to installs — the `stable` tag (发布到各安装)
 
 Merging to `master` does not, by itself, reach any machine. What installs follow

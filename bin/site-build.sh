@@ -37,11 +37,17 @@
 #                                         the stopwatch and the drill's date
 #   slowest of the runs > 60 s          → the measured time in place of "60 秒"
 #                                         (e.g. "75 秒", "约 3 分钟"), and a RED: line
-# The drill file (C19 writes it; fleet-onboard-drill.sh --runs 3):
+# The drill file: bin/site-drill.py writes it from a `fleet-onboard-drill.sh
+# --hub prod --runs 3 --out <dir>` run (issue #3589, C19 — see its header):
 #   {"date": "YYYY-MM-DD", "runs": [{"total": 46.2,
-#     "steps": {"login": 8.1, "machine": 6.0, "first": 32.1}}, …]}
-# The slowest run (by total) is the one shown. The build then checks its own
-# output: every seconds-shaped number on either page is one the drill gave.
+#     "steps": {"login": 8.1, "machine": 6.0, "first": 32.1},
+#     "screens": {"login": "…", "machine": "…", "first": "…"}}, …]}
+# The slowest run (by total) is the one shown — its seconds AND its three
+# screens, which stand in the steps' pictures (<!--shot:k-->…<!--/shot--> in the
+# template) in place of the design's mock: numbers and pictures from one run.
+# A timed drill whose slowest run has no screens keeps the mock, with a RED:
+# line. The build then checks its own output: every seconds-shaped number on
+# either page is one the drill gave (a screen is the drill's own words).
 #
 # Exit: 0 built (RED: lines are warnings for the operator) · 1 a check failed ·
 # 2 usage.
@@ -64,7 +70,7 @@ while [ $# -gt 0 ]; do
     --docs) [ $# -ge 2 ] || { echo "site-build: --docs needs a directory" >&2; exit 2; }; DOCS="$2"; shift 2 ;;
     --drill) [ $# -ge 2 ] || { echo "site-build: --drill needs a file" >&2; exit 2; }; DRILL="$2"; shift 2 ;;
     --now) [ $# -ge 2 ] || { echo "site-build: --now needs YYYY-MM-DD" >&2; exit 2; }; NOW="$2"; shift 2 ;;
-    -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,53p' "$0"; exit 0 ;;
     *) echo "site-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -95,16 +101,23 @@ if os.path.isfile(DRILL):
         day = datetime.datetime.strptime(str(d['date'])[:10], '%Y-%m-%d').date()
         slow = max(runs, key=lambda r: float(r['total']))
         steps = {k: float(slow['steps'][k]) for k in ('login', 'machine', 'first')}
+        shots = slow.get('screens') if isinstance(slow.get('screens'), dict) else {}
+        shots = {k: shots[k] for k in ('login', 'machine', 'first')
+                 if isinstance(shots.get(k), str) and shots[k].strip()}
         total = float(slow['total'])
         age = (today - day).days
         if age > STALE_DAYS:
             why = 'drill of %s is %d days old (> %d)' % (day, age, STALE_DAYS)
             reds.append(why + ' — the page shows no seconds until it runs again')
         else:
-            drill = {'date': day.isoformat(), 'runs': len(runs), 'total': total, 'steps': steps}
+            drill = {'date': day.isoformat(), 'runs': len(runs), 'total': total, 'steps': steps,
+                     'screens': shots if len(shots) == 3 else None}
             why = 'drill of %s, slowest of %d runs: %.1f s' % (day, len(runs), total)
             if total > 60:
                 reds.append('slowest drill run took %.1f s (> 60): the page says the measured time, not 60' % total)
+            if not drill['screens']:
+                reds.append('the slowest drill run carries no screens: the steps keep the design\'s pictures '
+                            '(bin/site-drill.py writes them)')
     except Exception as e:   # a broken file is no measurement
         why = 'drill result unreadable: %s' % e
         reds.append(why)
@@ -178,6 +191,9 @@ def render(lang, S, items):
         allowed.update(('0s', '%ds' % scale))
         v['drill_src'] = S['drill_src'].replace('{runs}', str(drill['runs'])).replace('{date}', drill['date'])
         page = tmpl.replace('<!--timed-->\n', '').replace('<!--/timed-->\n', '')
+        if drill['screens']:
+            page = re.sub(r'<!--shot:([a-z]+)-->.*?<!--/shot-->', lambda m: '\x00SHOT:%s\x00' % m.group(1),
+                          page, flags=re.S)
     else:
         for k in TIMED_KEYS:
             v[k] = S[k + '_untimed']
@@ -219,6 +235,10 @@ def render(lang, S, items):
     page = re.sub(r'\{\{([a-z0-9_]+)\}\}', sub, page)
     if '{time}' in page or '{n}' in page:
         fail('%s: an unfilled {time} / {n} is left on the page' % lang)
+    page = re.sub(r'<!--/?shot(:[a-z]+)?-->', '', page)
+    if drill and drill['screens']:
+        page = re.sub('\x00SHOT:([a-z]+)\x00', lambda m: '<pre class="term-shot">%s</pre>'
+                      % html.escape(drill['screens'][m.group(1)], quote=False), page)
     return page, allowed
 
 # --- the seconds check -----------------------------------------------------
@@ -231,6 +251,7 @@ def text_of(page):
     metas = ' '.join(re.findall(r'<meta [^>]*content="([^"]*)"', page))
     title = ''.join(re.findall(r'<title>(.*?)</title>', page, flags=re.S))
     body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', page, flags=re.S)
+    body = re.sub(r'<pre class="term-shot">.*?</pre>', ' ', body, flags=re.S)   # the drill's own screen
     body = re.sub(r'<[^>]+>', ' ', body)
     return html.unescape(' '.join([title, metas, ld, body]))
 
@@ -291,7 +312,9 @@ for lang, (sub_dir, _) in pages.items():
         errs.append('%s: FAQ differs from faq.md: %s' % (lang, (p.stdout + p.stderr).strip()))
 
 with open(os.path.join(OUT, 'build.json'), 'w', encoding='utf-8') as fh:
-    json.dump({'timed': bool(drill), 'why': why, 'drill': drill, 'day': today.isoformat()},
+    json.dump({'timed': bool(drill), 'why': why, 'day': today.isoformat(),
+               'screens': bool(drill and drill['screens']),
+               'drill': dict(drill, screens=sorted(drill['screens'] or [])) if drill else None},
               fh, ensure_ascii=False, indent=1)
     fh.write('\n')
 

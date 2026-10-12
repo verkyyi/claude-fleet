@@ -164,6 +164,7 @@ html[lang=zh-CN] .sh h2{font-size:44px;line-height:1.25;letter-spacing:0}
 .s-ready{width:100%;max-width:270px;font:400 12.5px/1.8 var(--f-mono);color:var(--ink-2)}
 .s-ready .bar{height:6px;border-radius:9px;background:#2a2841;overflow:hidden;margin:8px 0 10px}
 .s-ready .bar i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--clay-deep),var(--clay))}
+.term-shot{margin:0;align-self:stretch;width:100%;overflow:hidden;white-space:pre;font:400 10.5px/1.45 var(--f-mono);color:#d9d3e2;display:flex;flex-direction:column;justify-content:flex-end}
 .s-first{width:100%;max-width:280px;font:400 12.5px/1.75 var(--f-mono);color:#d9d3e2}
 .clock{margin-top:22px;display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center;background:var(--bg-2);border:1px solid var(--line-2);border-radius:16px;padding:22px 26px}
 .big{font:600 56px/1 var(--f-mono);letter-spacing:-.02em;color:var(--ink);display:flex;align-items:baseline;gap:12px}
@@ -336,25 +337,25 @@ footer a:hover{color:var(--ink)}
   <div class="sh"><h2>{{steps_h}}</h2></div>
   <ol class="steps">
     <li class="step">
-      <div class="shot" aria-hidden="true"><div class="s-login"><svg width="34" height="34"><use href="#mk"/></svg>
+      <div class="shot" aria-hidden="true"><!--shot:login--><div class="s-login"><svg width="34" height="34"><use href="#mk"/></svg>
         <div class="gh"><svg class="i" viewBox="0 0 24 24"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>{{s1_gh}}</div>
-        <div class="or">{{s1_or}}</div></div></div>
+        <div class="or">{{s1_or}}</div></div><!--/shot--></div>
       <div class="step-f"><span class="num" aria-hidden="true">1</span><h3>{{s1}}</h3>{{t_login}}</div>
     </li>
     <li class="step">
-      <div class="shot" aria-hidden="true"><div class="s-ready">
+      <div class="shot" aria-hidden="true"><!--shot:machine--><div class="s-ready">
         <div><span class="okc">✓</span> {{s2_ready}}</div>
         <div class="bar"><i></i></div>
         <div class="dim">Claude Code · {{s2_kit}}</div>
-        <div class="dim">mac-a · {{s2_own}}</div></div></div>
+        <div class="dim">mac-a · {{s2_own}}</div></div><!--/shot--></div>
       <div class="step-f"><span class="num" aria-hidden="true">2</span><h3>{{s2}}</h3>{{t_machine}}</div>
     </li>
     <li class="step">
-      <div class="shot" aria-hidden="true"><div class="s-first">
+      <div class="shot" aria-hidden="true"><!--shot:first--><div class="s-first">
         <div><span class="clay">❯</span> {{s3_you}}</div>
         <div><span class="okc">⏺</span> {{s3_a}}</div>
         <div class="dim" style="padding-left:16px">{{s3_q1}}</div>
-        <div class="dim" style="padding-left:16px">{{s3_q2}}</div></div></div>
+        <div class="dim" style="padding-left:16px">{{s3_q2}}</div></div><!--/shot--></div>
       <div class="step-f"><span class="num" aria-hidden="true">3</span><h3>{{s3}}</h3>{{t_first}}</div>
     </li>
   </ol>
