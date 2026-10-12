@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 )
 
 // ccquota move — a node moves one of its sessions to another machine through
@@ -133,7 +135,7 @@ func move(args []string, stdout, stderr io.Writer) (int, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+*token)
+		nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
 		req.Header.Set("Content-Type", ctype)
 		resp, err := client.Do(req)
 		if err != nil {

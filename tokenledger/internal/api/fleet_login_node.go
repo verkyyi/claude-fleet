@@ -182,7 +182,9 @@ func (s *Server) machineServing(id string) string {
 //   - none yet: a new fixed-kind enrollment tagged with the device.
 func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now time.Time) (*NodeJoinResponse, string, error) {
 	if tok := bearer(r); tok != "" {
-		if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil &&
+		// The token is handed back, so only a bearer can say it — and not one
+		// its node turned off (claude-fleet#3710).
+		if ep, _ := s.nodeAuthOpt(r); ep != nil &&
 			(ep.OSUser == "" || ep.OSUser == sanitizeJoinField(osUser)) {
 			if id, err := s.Store.DeviceNodeEndpoint(fp); err != nil || id != ep.ID {
 				code, err := MintJoinCode()

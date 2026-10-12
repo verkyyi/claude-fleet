@@ -84,7 +84,7 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := s.sshRelayHTTPIdentity(r)
 	nodeActor := ""
-	if !ok && req.Cert == "" && bearer(r) != "" {
+	if !ok && req.Cert == "" && nodeAuthHeld(r) { // a bearer or a signature (claude-fleet#3710)
 		// A machine acting for its owner (claude-fleet#3106): the node token of
 		// a login, never a person's short-lived certificate. It acts as that
 		// login's person — FleetScope cuts the target to their own logins, so

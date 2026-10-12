@@ -342,6 +342,11 @@ type Server struct {
 	// or not — the keys page's 「正在打开」 (claude-fleet#3199).
 	entryReachSeen sync.Map
 
+	// nodeSigSeen remembers a signed request's answer for that request's life
+	// (claude-fleet#3710): a nonce is spent once, and one handler may ask
+	// nodeAuth twice (an identity tried, then another).
+	nodeSigSeen sync.Map // *http.Request → nodeAuthAnswer
+
 	// relayExpiredAt is when pending relays were last expired (UnixNano).
 	relayExpiredAt atomic.Int64
 }

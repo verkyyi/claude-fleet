@@ -10,12 +10,14 @@ import (
 	"os/user"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 )
 
 // One node program per machine (claude-fleet#2333, EPIC #2329 C5).
@@ -67,6 +69,9 @@ type MachineConfig struct {
 	Version string
 	// LiveInterval is the machine link's own heartbeat.
 	LiveInterval time.Duration
+	// KeyFile is the machine's signing key (claude-fleet#3710), machine.key
+	// beside machine.env; "" = the token.
+	KeyFile string
 	// ServicesFile is the machine daemon's state.json, whose services[] the
 	// link's beat carries (claude-fleet#2526); "" = none.
 	ServicesFile string
@@ -119,6 +124,8 @@ type MachineConfig struct {
 // machineLink is the machine's one connection to the hub.
 type machineLink struct {
 	cfg MachineConfig
+	// signer is cfg.KeyFile once the hub took it (claude-fleet#3710).
+	signer atomic.Pointer[nodesig.Signer]
 
 	mu    sync.Mutex
 	conn  *websocket.Conn // nil while down
@@ -251,6 +258,19 @@ func (l *lane) drop() {
 
 // run keeps the machine link up until ctx ends.
 func (ml *machineLink) run(ctx context.Context) {
+	if ml.cfg.KeyFile != "" {
+		// the machine's own key (claude-fleet#3710): fleet node install made
+		// and registered it; this confirms it (and makes it on an older install)
+		kctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		s, note := nodesig.Ensure(kctx, nil, ml.cfg.HubURL, ml.cfg.Token, ml.cfg.KeyFile)
+		cancel()
+		if note != "" {
+			log.Print("machine link: " + note)
+		}
+		if s != nil {
+			ml.signer.Store(s)
+		}
+	}
 	var bo nodeBackoff
 	var lastErr string
 	for {
@@ -285,7 +305,7 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	dctx, dcancel := context.WithTimeout(ctx, nodeDialTimeout)
 	defer dcancel()
 	conn, _, err := websocket.Dial(dctx, nodeURL(ml.cfg.HubURL), &websocket.DialOptions{
-		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + ml.cfg.Token}},
+		HTTPHeader: http.Header{"Authorization": []string{nodesig.Authorization(ml.signer.Load(), ml.cfg.Token, http.MethodGet, nodeURL(ml.cfg.HubURL))}},
 	})
 	if err != nil {
 		return false, err

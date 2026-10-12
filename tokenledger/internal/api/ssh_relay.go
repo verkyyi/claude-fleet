@@ -229,12 +229,8 @@ func (s *Server) fleetReadIdentity(r *http.Request) (sshRelayIdentity, bool) {
 // person, Actor names the machine and login ("node:<host>/<user>"). ok=false
 // for no bearer, a token that is no node's, or a login no person holds.
 func (s *Server) nodeLoginIdentity(r *http.Request) (sshRelayIdentity, bool) {
-	tok := bearer(r)
-	if tok == "" {
-		return sshRelayIdentity{}, false
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil || ep == nil || ep.Hostname == "" || ep.OSUser == "" {
+	ep, _ := s.nodeAuthOpt(r) // its signature, else its token (claude-fleet#3710)
+	if ep == nil || ep.Hostname == "" || ep.OSUser == "" {
 		return sshRelayIdentity{}, false
 	}
 	p, err := s.Store.PrincipalForLogin(ep.Hostname, ep.OSUser)
@@ -393,14 +389,8 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 // handleSSHRelayData serves SSHRelayDataPath: an agent attaching the data half of
 // a relay the hub asked it for.
 func (s *Server) handleSSHRelayData(w http.ResponseWriter, r *http.Request) {
-	tok := bearer(r)
-	if tok == "" {
-		httpError(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil {
-		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+	ep, ok := s.nodeEndpoint(w, r) // its signature, else its token (claude-fleet#3710)
+	if !ok {
 		return
 	}
 	p := s.sshRelays.get(r.URL.Query().Get("id"))

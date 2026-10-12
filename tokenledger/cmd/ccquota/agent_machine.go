@@ -18,6 +18,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 )
 
 // `ccquota agent --machine` (claude-fleet#2333, EPIC #2329 C5): ONE node
@@ -114,6 +115,9 @@ func runAgentMachine(args []string) error {
 	defer stop()
 	return agent.RunMachine(ctx, agent.MachineConfig{
 		HubURL: strings.TrimRight(*hub, "/"), Token: *token, Version: Version,
+		// machine.key beside machine.env (claude-fleet#3699, made by fleet node
+		// install), else $CCQUOTA_NODE_KEY.
+		KeyFile:      machineKeyFile(*machineEnv),
 		LiveInterval: *liveEvery, Tenants: tenants,
 		// The daemon's own state file sits beside the agent's state
 		// directory (/var/db/fleet-node/{agent,state.json}) — claude-fleet#2526.
@@ -222,6 +226,8 @@ func machineTenants(dir, state string, strict bool) ([]agent.Config, error) {
 		if cfg.Token == "" {
 			return nil, fmt.Errorf("%s: no CCQUOTA_TOKEN", n)
 		}
+		// the login's signing key beside its env file (claude-fleet#3710)
+		cfg.KeyFile = nodesig.Beside(path)
 		ra.ConfDir = getenv("FLEET_CONF_DIR")
 		cfg.Home = ra.Home
 		cfg.RunAs = ra
@@ -368,4 +374,15 @@ func runCoreExec(args []string) int {
 		return 2
 	}
 	return agent.CoreExec(*sock, *login, fs.Args())
+}
+
+// machineKeyFile is the machine's signing key (claude-fleet#3710):
+// $CCQUOTA_NODE_KEY (off = none), else machine.key beside machine.env, else none.
+func machineKeyFile(machineEnv string) string {
+	if p := os.Getenv("CCQUOTA_NODE_KEY"); p == "off" {
+		return ""
+	} else if p != "" {
+		return p
+	}
+	return nodesig.Beside(machineEnv)
 }

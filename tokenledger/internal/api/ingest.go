@@ -28,16 +28,11 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok := bearer(r)
-	if tok == "" {
-		httpError(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil {
-		// Deliberately vague: distinguishing "unknown token" from "known token,
-		// other failure" tells a prober which guesses were close.
-		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+	// Its signature, else its token (claude-fleet#3710). Deliberately vague:
+	// distinguishing "unknown token" from "known token, other failure" tells
+	// a prober which guesses were close.
+	ep, ok := s.nodeEndpoint(w, r)
+	if !ok {
 		return
 	}
 

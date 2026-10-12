@@ -448,7 +448,7 @@ func (a *Agent) codexQuotaLease(ctx context.Context, account, profile string, in
 	if err != nil {
 		return false
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
 	r, err := a.http.Do(req)
 	if err != nil {

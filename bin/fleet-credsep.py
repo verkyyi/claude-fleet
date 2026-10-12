@@ -688,6 +688,14 @@ def install(a):
         say("node.env: moved —", ne_path, "→", os.path.join(R, "node.env"))
     elif os.path.islink(ne_path):
         say("node.env: already in the store")
+    # the login's signing key goes with its token (issue #3710): a key left in
+    # the home would sign as the endpoint the token no longer shows
+    for kn in ("node.key", "node.key.ok"):
+        kp = os.path.join(conf, kn)
+        if os.path.isfile(kp) and not os.path.islink(kp):
+            move(kp, os.path.join(R, kn), ROLE)
+            MOVED.append([os.path.join(R, kn), kp])
+            say("%s: moved into the store" % kn)
 
     old = {}
     try:
@@ -1030,6 +1038,10 @@ def uninstall(a):
         if os.path.exists(pub) and not DRY:
             os.unlink(pub)
         say("node.env: back at", ne_path)
+    for kn in ("node.key", "node.key.ok"):  # issue #3710
+        if os.path.isfile(os.path.join(R, kn)):
+            move(os.path.join(R, kn), os.path.join(conf, kn), login)
+            say("%s: back at %s" % (kn, os.path.join(conf, kn)))
     say("credentials: %d moved back" % n)
     for p in (os.path.join(conf, "credsep.json"), os.path.join(LOG_BASE, login + ".log"),
               os.path.join(LOG_BASE, login + ".launch.log"), root_conf_path(login),

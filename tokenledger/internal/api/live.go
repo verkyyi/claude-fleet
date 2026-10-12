@@ -433,14 +433,8 @@ func (s *Server) handleLiveReport(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	tok := bearer(r)
-	if tok == "" {
-		httpError(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil {
-		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+	ep, ok := s.nodeEndpoint(w, r) // its signature, else its token (claude-fleet#3710)
+	if !ok {
 		return
 	}
 

@@ -830,15 +830,12 @@ func (s *Server) broadcastEntry(v int, hosts ...string) {
 // root's). It returns the machine's name; "" has answered already.
 func (s *Server) entryMachineOf(w http.ResponseWriter, r *http.Request) string {
 	w.Header().Set("Cache-Control", "no-store")
-	tok := bearer(r)
-	if tok == "" {
+	if !nodeAuthHeld(r) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
-		httpError(w, http.StatusUnauthorized, "the machine's node token is required")
-		return ""
 	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil || ep == nil {
-		httpError(w, http.StatusUnauthorized, "unrecognised node token")
+	// Its signature, else its token (claude-fleet#3710).
+	ep, _, ok := s.nodeEndpointOr(w, r, "the machine's node token is required", "unrecognised node token")
+	if !ok {
 		return ""
 	}
 	if !s.entryOn() {

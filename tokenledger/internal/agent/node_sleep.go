@@ -250,7 +250,7 @@ func (a *Agent) nodePost(ctx context.Context, path string, body any, timeout tim
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

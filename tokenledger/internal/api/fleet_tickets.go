@@ -76,11 +76,9 @@ func (c ticketCaller) sees(t store.FleetTicket) bool {
 // ticketCallerOf resolves r: a node token first (a bearer that is one), then a
 // person's session or the operator's door.
 func (s *Server) ticketCallerOf(r *http.Request) (ticketCaller, bool) {
-	if tok := bearer(r); tok != "" {
-		if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
-			host, user := s.peerSelf(ep)
-			return ticketCaller{owner: s.nodeTaskOwner(ep), actor: "node:" + user + "@" + host, node: true}, true
-		}
+	if ep, _ := s.nodeAuthOpt(r); ep != nil { // its signature, else its token (claude-fleet#3710)
+		host, user := s.peerSelf(ep)
+		return ticketCaller{owner: s.nodeTaskOwner(ep), actor: "node:" + user + "@" + host, node: true}, true
 	}
 	id, ok := s.sshRelayHTTPIdentity(r)
 	switch {

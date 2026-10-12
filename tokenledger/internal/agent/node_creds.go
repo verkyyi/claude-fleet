@@ -453,7 +453,7 @@ func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -32,6 +32,18 @@ func newSigNode(t *testing.T) sigNode {
 	return sigNode{key: priv, pub: base64.StdEncoding.EncodeToString(pub), id: NodeKeyID(pub)}
 }
 
+// sigNodeFromSeed is a sigNode from a key file's base64 seed.
+func sigNodeFromSeed(t *testing.T, b64 string) sigNode {
+	t.Helper()
+	seed, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		t.Fatalf("not a seed: %v", err)
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := priv.Public().(ed25519.PublicKey)
+	return sigNode{key: priv, pub: base64.StdEncoding.EncodeToString(pub), id: NodeKeyID(pub)}
+}
+
 func (n sigNode) header(method, uri, nonce string, at time.Time) string {
 	ts := strconv.FormatInt(at.Unix(), 10)
 	sig := ed25519.Sign(n.key, NodeSigMessage(n.id, ts, nonce, method, uri))

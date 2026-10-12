@@ -109,21 +109,19 @@ func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request)
 		self = id.Principal
 	}
 	if !ok {
-		if tok := bearer(r); tok != "" {
-			if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
-				host, user := s.peerSelf(ep)
-				id, ok = sshRelayIdentity{Actor: "node:" + user + "@" + host}, true
-				owner, err := s.Store.PrincipalForLogin(host, user)
-				switch {
-				case errors.Is(err, store.ErrNoPrincipal) || (err == nil && owner == ""):
-					httpError(w, http.StatusNotFound, "no person for this login")
-					return
-				case err != nil:
-					httpError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				self = owner
+		if ep, _ := s.nodeAuthOpt(r); ep != nil { // claude-fleet#3710
+			host, user := s.peerSelf(ep)
+			id, ok = sshRelayIdentity{Actor: "node:" + user + "@" + host}, true
+			owner, err := s.Store.PrincipalForLogin(host, user)
+			switch {
+			case errors.Is(err, store.ErrNoPrincipal) || (err == nil && owner == ""):
+				httpError(w, http.StatusNotFound, "no person for this login")
+				return
+			case err != nil:
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
 			}
+			self = owner
 		}
 	}
 	if !ok {

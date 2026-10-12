@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 )
 
 // ccquota lease — a node's side of the hub's issue leases (claude-fleet#1422).
@@ -88,7 +90,7 @@ Exit 0 granted/released, 3 held by another node, 1 hub unreachable, 2 usage.
 	if err != nil {
 		return 1, err
 	}
-	req.Header.Set("Authorization", "Bearer "+*token)
+	nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: leaseTimeout}).Do(req)
 	if err != nil {

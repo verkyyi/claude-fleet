@@ -121,14 +121,10 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "POST")
 		return
 	}
-	tok := bearer(r)
-	if tok == "" {
-		httpError(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil {
-		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+	// Its signature, else its token (claude-fleet#3710); the token hash keys
+	// a session's assertion either way.
+	ep, tokHash, ok := s.nodeEndpointOr(w, r, "missing bearer token", "unrecognised enrollment token")
+	if !ok {
 		return
 	}
 	var req placeRequest
@@ -216,7 +212,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	// fleet, or a start whose parent is not that session, is NOT_FOUND — a
 	// session opens work as itself the parent, nothing else.
 	if a := r.Header.Get(workerAssertHeader); a != "" {
-		c, err := verifyWorkerAssertion(a, HashToken(tok), now)
+		c, err := verifyWorkerAssertion(a, tokHash, now)
 		if err != nil {
 			s.placeAudit(p, fleetID, "refused:UNAUTHENTICATED", now)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": errorObject(err)})

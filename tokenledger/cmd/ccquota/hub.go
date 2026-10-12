@@ -26,6 +26,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/dns"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
@@ -1361,6 +1362,10 @@ func runAgent(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// This login's signing key (claude-fleet#3710): beside node.env, made and
+	// registered at start. A separated login's token comes down a pipe and its
+	// key is the launcher's to name (CCQUOTA_NODE_KEY), never one in the home.
+	keyFile := nodesig.LoginKeyPath()
 	if *token == "" {
 		// Separated (claude-fleet#1971): the root launcher hands the token
 		// down a pipe, never the environment a session could `ps -E`.
@@ -1369,6 +1374,9 @@ func runAgent(args []string) error {
 			return err
 		}
 		*token = t
+		if t != "" && os.Getenv("CCQUOTA_NODE_KEY") == "" {
+			keyFile = ""
+		}
 	}
 
 	h, err := homeDir(*home)
@@ -1401,6 +1409,9 @@ func runAgent(args []string) error {
 	cfg := agentFleetConfig(os.Getenv, nodeRoutes)
 	cfg.HubURL = strings.TrimRight(*hub, "/")
 	cfg.Token = *token
+	if !*once {
+		cfg.KeyFile = keyFile
+	}
 	cfg.Home = h
 	cfg.Sources = *sources
 	cfg.CodexHome = *codexHome

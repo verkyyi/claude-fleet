@@ -6597,6 +6597,34 @@ _fleet_hub_env() {
   return 0
 }
 
+# fleet_node_key_file → this login's signing key (issue #3710): $CCQUOTA_NODE_KEY
+# (off = none), else node.key beside node.env — none for a separated login (its
+# token is not in the home, and neither may its key be). The agent's start makes
+# and registers it (ccquota's nodesig.Ensure) and writes <key>.ok; Go's
+# nodesig.LoginKeyPath is the same rule.
+fleet_node_key_file() {
+  case "${CCQUOTA_NODE_KEY:-}" in
+    off) return 1 ;;
+    '') _fleet_node_separated && return 1; printf '%s/node.key' "$FLEET_CONF_DIR" ;;
+    *) printf '%s' "$CCQUOTA_NODE_KEY" ;;
+  esac
+}
+
+# fleet_node_auth <METHOD> <URL> <token> → the Authorization value a node request
+# to URL carries (issue #3710): its FleetSig signature once the hub took this
+# login's key (bin/fleet_node_sig.py auth — a signature is good once and for two
+# minutes, so a copied header is worth nothing), else `Bearer <token>`, byte for
+# byte as before. Sign right before the call: one value per request.
+fleet_node_auth() {
+  local key v
+  if key=$(fleet_node_key_file) && [ -r "$key" ] && [ -r "$key.ok" ] \
+     && v=$(python3 -I "$_FLEET_LIB_DIR/fleet_node_sig.py" auth "$key" "$1" "$2" 2>/dev/null) && [ -n "$v" ]; then
+    printf '%s' "$v"
+  else
+    printf 'Bearer %s' "$3"
+  fi
+}
+
 # fleet_hub_auth_note <reader> ok|fail [reason] — the ONE record of a node-side
 # hub READ the hub refused (issue #2630): `$FLEET_C/global/hub_auth_fail`, one
 # line per reader — `<reader><TAB><since><TAB><last><TAB><reason>`. A refusal

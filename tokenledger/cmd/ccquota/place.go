@@ -15,6 +15,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 )
 
 // ccquota place — a node asks the hub where a new session should run
@@ -163,7 +164,7 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	if err != nil {
 		return 1, err
 	}
-	req.Header.Set("Authorization", "Bearer "+*token)
+	nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
 	req.Header.Set("Content-Type", "application/json")
 	// The session this placement is for (claude-fleet#1810): its tool service
 	// (bin/fleet-mcp.py) verified the session's credential and signed this
