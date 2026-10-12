@@ -433,6 +433,7 @@ func (s *Server) routes() *routeMux {
 	// Who may sign in with GitHub (claude-fleet#1986): the admin's, with or
 	// without the fleet module.
 	mux.Handle("/v1/fleet/users", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetUsers))))
+	mux.Handle("/v1/fleet/users/sessions", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetUserSessions))))
 	// Invites (claude-fleet#2261): an admin mints one; the newcomer's
 	// install command fetches /i/<code>, public — the code is the credential.
 	mux.Handle("/v1/fleet/invites", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetInvites))))

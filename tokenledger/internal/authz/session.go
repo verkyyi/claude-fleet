@@ -44,6 +44,10 @@ type Session struct {
 	// re-reads the list on every request, so a person taken off it or demoted
 	// is refused on their next one whatever the cookie says.
 	Role string `json:"role,omitempty"`
+	// Iat is when this value was signed (claude-fleet#3701): what a person's
+	// «sign out everywhere» cut-off and the sliding renewal compare against.
+	// A cookie from before has none (0) and reads as signed at the epoch.
+	Iat int64 `json:"iat,omitempty"`
 }
 
 // Principal is the person this session is for: UID, else the subject.
@@ -57,7 +61,7 @@ func (s *Session) Principal() string {
 // SignRole mints the cookie value for a person signed in by sub, admitted as
 // role, for ttl.
 func SignRole(sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
-	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role})
+	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix()})
 	enc := base64.RawURLEncoding.EncodeToString(body)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(enc))

@@ -492,6 +492,18 @@ CREATE TABLE IF NOT EXISTS hub_identities (
 );
 CREATE INDEX IF NOT EXISTS idx_hub_identities_principal ON hub_identities(principal_id);
 
+-- A person's web sessions cut off at once (claude-fleet#3701): every session
+-- value signed before not_before (Unix seconds) is refused, whichever browser
+-- or CLI holds it. One row per person; a later cut-off replaces it. The
+-- session itself stays a signed cookie -- this is the only thing the gate
+-- reads besides hub_users.
+CREATE TABLE IF NOT EXISTS hub_session_cutoffs (
+  principal_id TEXT PRIMARY KEY,
+  not_before   INTEGER NOT NULL,
+  by_principal TEXT NOT NULL DEFAULT '',
+  at           TEXT NOT NULL
+);
+
 -- Sign-in by mail (claude-fleet#3604, EPIC #3570 C11): one row per mail
 -- asked for — sent or not, so a known address and an unknown one leave the
 -- same trace and hit the same limits. Only hashes: the link's token, the

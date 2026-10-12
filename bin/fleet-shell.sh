@@ -1039,17 +1039,24 @@ keeper)
       fi
       if [ $((now - ${slow:-0})) -ge "$every" ]; then
         slow=$now
-        bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
-        # the connection certificate (issue #2112): 12 hours, and an open shell
-        # never re-enters `fleet-connect.py --enter` — so with less than
-        # FLEET_CERT_RENEW_UNDER (3600 s) left, renew it here, quietly, at most
-        # every FLEET_CERT_CHECK_EVERY (300 s). Only exit 3 (scan again) is the
-        # person's: one message on each client here, once until it clears.
-        if [ $((now - ${certck:-0})) -ge "${FLEET_CERT_CHECK_EVERY:-300}" ]; then
-          certck=$now
+        # the connection certificate (issue #2112), renewed when USED (#3701):
+        # the hub read just below signs with it, so first `renew --on-use hub`
+        # — nothing asked above 20% of its 12 hours. It prints `left <secs>`;
+        # the next look is when that margin is reached (certdue), so between
+        # looks nothing runs — no timer — unless the certificate file is newer
+        # than the last look (a `fleet login` / renew elsewhere). Only exit 3
+        # (scan again) is the person's: one message on each client here, once
+        # until it clears.
+        if [ "$now" -ge "${certdue:-0}" ] || [ "${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" -nt "$CL_DIR/client.certlook" ]; then
+          : > "$CL_DIR/client.certlook"
           crc=0
-          ${FLEET_CERT_RENEW_CMD:-python3 "$BIN/fleet-login.py" renew} --quiet --if-under "${FLEET_CERT_RENEW_UNDER:-3600}" \
-            >/dev/null 2>&1 || crc=$?
+          cleft=$(${FLEET_CERT_RENEW_CMD:-python3 "$BIN/fleet-login.py" renew} --quiet --on-use hub 2>/dev/null) || crc=$?
+          cleft=${cleft##*left }
+          case "$cleft" in
+            ''|*[!0-9]*) certdue=$((now + 3600)) ;;   # no certificate here (or no answer): look again in an hour
+            *) certdue=$((now + cleft - ${FLEET_RENEW_BELOW_SECS:-8640}))
+               [ "$certdue" -gt $((now + 60)) ] || certdue=$((now + 60)) ;;
+          esac
           if [ "$crc" = 3 ]; then
             if [ ! -f "$CL_DIR/client.rescan" ]; then
               : > "$CL_DIR/client.rescan"
@@ -1061,6 +1068,7 @@ keeper)
             rm -f "$CL_DIR/client.rescan"
           fi
         fi
+        bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
         # a newer client, taken in place once you are idle (issue #1781); applied
         # (4) → this keeper is the old one's code: the new one takes over, same pid
         if [ "${FLEET_NODE_HOSTED:-0}" != 1 ]; then

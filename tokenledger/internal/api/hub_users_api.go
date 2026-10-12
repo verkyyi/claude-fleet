@@ -257,40 +257,10 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, now := actorOf(r), time.Now()
-	id, known, err := s.Store.PinnedID(login)
+	id, pid, known, err := s.listedPerson(login)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	var pid string
-	if personPrincipalRE.MatchString(login) {
-		u, err := s.Store.HubUserByPrincipal(login)
-		if err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if u != nil {
-			pid, known = u.PrincipalID, true
-		}
-	} else if known {
-		if pid, err = s.githubPersonOf(id); err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	} else {
-		// A row whose name was never pinned under this spelling: find it by
-		// the username it carries.
-		users, err := s.Store.HubUsers()
-		if err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		for _, u := range users {
-			if strings.EqualFold(u.Login, login) {
-				id, pid, known = u.GitHubID, u.PrincipalID, true
-				break
-			}
-		}
 	}
 	if !known {
 		httpError(w, http.StatusNotFound, login+" is not on the list")
@@ -315,9 +285,84 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revoked := s.revokePersonDevices(pid, actor, now)
+	// Their cookies die with the row, and stay dead if they are added back
+	// (claude-fleet#3701).
+	if err := s.Store.CutSessions(pid, actor, now); err != nil {
+		log.Printf("hub users: cut %s's sessions: %v", target, err)
+	}
 	_ = s.Store.HubAudit(actor, "user.remove", target, "ok", fmt.Sprintf("%d device(s) revoked", revoked), now)
 	log.Printf("hub users: %s removed by %s (%d device(s) revoked)", target, actor, revoked)
 	s.writeFleetUsers(w, http.StatusOK, map[string]any{"removed": login, "github_id": id, "devices_revoked": revoked})
+}
+
+// listedPerson finds a person on the list by a GitHub username or a
+// principal: their pinned GitHub ID (0 for none), principal, and whether
+// they are on it.
+func (s *Server) listedPerson(login string) (id int64, pid string, known bool, err error) {
+	if id, known, err = s.Store.PinnedID(login); err != nil {
+		return 0, "", false, err
+	}
+	if personPrincipalRE.MatchString(login) {
+		u, err := s.Store.HubUserByPrincipal(login)
+		if err != nil || u == nil {
+			return id, "", false, err
+		}
+		return id, u.PrincipalID, true, nil
+	}
+	if known {
+		pid, err = s.githubPersonOf(id)
+		return id, pid, err == nil, err
+	}
+	// A row whose name was never pinned under this spelling: find it by the
+	// username it carries.
+	users, err := s.Store.HubUsers()
+	if err != nil {
+		return 0, "", false, err
+	}
+	for _, u := range users {
+		if strings.EqualFold(u.Login, login) {
+			return u.GitHubID, u.PrincipalID, true, nil
+		}
+	}
+	return id, "", false, nil
+}
+
+// handleFleetUserSessions is «sign out everywhere» for one person
+// (claude-fleet#3701), the admin's: every web session they hold — each
+// browser, each CLI bearer — is refused from now on; they sign in again.
+//
+//	POST /v1/fleet/users/sessions {login}     (a GitHub username or p:<uuid>)
+func (s *Server) handleFleetUserSessions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if s.Store == nil {
+		httpError(w, http.StatusServiceUnavailable, "no database")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	login, _, ok := userRequest(w, r)
+	if !ok {
+		return
+	}
+	actor, now := actorOf(r), time.Now()
+	_, pid, known, err := s.listedPerson(login)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !known {
+		httpError(w, http.StatusNotFound, login+" is not on the list")
+		return
+	}
+	if err := s.Store.CutSessions(pid, actor, now); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.Store.HubAudit(actor, "user.sessions.cut", login+" ("+pid+")", "ok", "every web session refused", now)
+	writeJSON(w, http.StatusOK, map[string]any{"cut": login, "principal": pid, "before": now.Unix()})
 }
 
 // revokePersonDevices revokes every device registered to principal, so its

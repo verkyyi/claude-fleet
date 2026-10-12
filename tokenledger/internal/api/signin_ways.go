@@ -44,13 +44,21 @@ func (s *Server) sessionKey() string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
+// sessionTTLDefault is a session cookie's life (claude-fleet#3701, 发起人拍板
+// 20): a day, slid forward while it is used (sessionSlide).
+const sessionTTLDefault = 24 * time.Hour
+
+// sessionSlide is the share of a session's life left below which a request
+// carrying it gets a fresh cookie: 20% — under 4.8 hours of a day.
+const sessionSlide = 0.2
+
 // sessionTTL is how long a session cookie lives: GitHub's setting when it is
-// on, else a week. The list is re-read on every request either way.
+// on, else a day. The list is re-read on every request either way.
 func (s *Server) sessionTTL() time.Duration {
 	if s.GitHub != nil {
 		return s.GitHub.ttl()
 	}
-	return 7 * 24 * time.Hour
+	return sessionTTLDefault
 }
 
 // otherWaysOn: WeChat or a mail is offered, so /signin is the page with
