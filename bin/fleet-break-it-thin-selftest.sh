@@ -8,7 +8,13 @@
 #   thin-notify-two-views  bin/fleet_thin_lease.py (beat · holder · notify): two
 #                          看台 on one home machine; the person moves to the other
 #   thin-open-no-loop      bin/fleet-open.sh with a thin lease: no hub action, no
-#                          spool — the escape on the 看台's own terminal
+#                          spool — OSC 7502 open with the 看台's token on its own
+#                          terminal (issue #3538: the escape reached no one)
+#   open-via-home-lost     bin/fleet-open.sh (issue #3538): the person watches this
+#                          machine's session through ANOTHER machine's 看台 (经 mini2);
+#                          the open goes to that home (--from-peer, FLEET_OPEN_RELAY_CMD
+#                          standing in for the peer link), whose 看台's loop gets the
+#                          home's port and answers — `opened`, never a silent escape
 #   view-popup-wide-bleed  a session streaming wrapped CJK behind the ⌘P list
 #                          (issue #3058): the 看台's popup binds say --freeze, and
 #                          through the real dash-popup.sh not one of the pane's wide
@@ -149,15 +155,56 @@ drill_thin_open_no_loop() {
   p0=$("$RT" -S "$B/s/fl" list-panes -t fl -F '#{pane_id}' | head -n 1); t0=$(now)
   r=$(env TMUX="$B/s/fl,0,0" TMUX_PANE="$p0" PATH="$B/bin:$PATH" FLEET_OPEN_WHERE_CMD="$B/where.sh" \
         FLEET_OPEN_ACTIONS_BIN="$B/actions.sh" FLEET_OPEN_SECRET_FILE="$B/open.secret" FLEET_OPEN_URL_BIN=/usr/bin/false \
-        bash "$BIN/fleet-open.sh" https://example.com/p 2>"$B/open.err")
-  until_ok 3 grep -aq $'\033]1337;Custom=id=' "$B/out-a" \
-    || { WHY="no OSC 1337 on 看台 a's terminal ($r: $(cat "$B/open.err"))"; th_done; return 1; }
+        FLEET_OPEN_ACK_WAIT=1 bash "$BIN/fleet-open.sh" https://example.com/p 2>"$B/open.err")
+  until_ok 3 grep -aq $'\033]7502;open;token=t;j=' "$B/out-a" \
+    || { WHY="no OSC 7502 open on 看台 a's terminal ($r: $(cat "$B/open.err"))"; th_done; return 1; }
+  [ "$r" = unconfirmed ] || { WHY="no loop answered, yet fleet-open said '$r'"; th_done; return 1; }
   SECS=$(since "$t0")
   [ -f "$B/actions.called" ] && { WHY="the page went to the hub's action queue (nobody polls it for a thin client)"; th_done; return 1; }
   # a spool request: <view>.d/<epoch>-<pid>.json (C2 keeps the 看台's history in that dir too)
   for d in "$B"/conf/remote-views/*.d/[0-9]*-[0-9]*.json; do [ -f "$d" ] && { WHY="a spool nobody reads was made"; th_done; return 1; }; done
   th_done
-  WHAT="租约 via=thin：fleet open 不进入口的动作队列、不建 spool，OSC 1337 直接到看台客户端的终端（${r}）"
+  WHAT="租约 via=thin：fleet open 不进入口的动作队列、不建 spool，OSC 7502 open 带看台令牌直接到它的终端；没回执报 ${r}"
+}
+
+drill_open_via_home_lost() {
+  CAP=6   # the open → relayed to the home → its 看台's loop → the receipt back
+  local t0 r p0 lp
+  th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
+  printf '#!/bin/sh\necho %s\n' "'{\"state\":\"active\",\"source\":\"hub\",\"via\":\"thin\"}'" > "$B/where.sh"
+  # the session's machine: its only 看台 is the home's far one (b-via-home), b's tty
+  mkdir -p "$B/sess/remote-views"
+  sed 's/node=home/node=sessbox/' "$B/conf/remote-views/b" > "$B/sess/remote-views/b-via-home"
+  # the peer link: run the home's fleet-open here, as the home (its conf, its 看台s)
+  cat > "$B/relay.sh" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" > "$B/relay.argv"
+shift
+exec env FLEET_CONF_DIR="$B/conf" FLEET_OPEN_FWD_CMD="$B/fwd.sh" "\$@"
+EOS
+  printf '#!/bin/sh\necho 4242\n' > "$B/fwd.sh"   # the home's link to the session's machine: -L 4242 → 8765
+  chmod +x "$B/where.sh" "$B/relay.sh" "$B/fwd.sh"
+  # b is the client the person is at: its activity a second newer than a's
+  sleep 1.1; printf 'z' > "$B/ctl-b"; sleep 0.4; : > "$B/out-a"; : > "$B/out-b"
+  # the person's loop on b's line: read the 7502, answer the receipt on the home
+  ( for _ in $(seq 1 50); do grep -aq $'\033]7502;open;' "$B/out-b" && break; sleep 0.1; done
+    id=$(python3 -c 'import base64,json,re,sys
+m = re.search(rb"\x1b\]7502;open;token=t;j=([A-Za-z0-9+/=]+)\x07", open(sys.argv[1],"rb").read())
+d = json.loads(base64.b64decode(m.group(1))); print(d["id"] if d.get("rport") == 4242 else "")' "$B/out-b" 2>/dev/null)
+    [ -z "$id" ] || FLEET_CONF_DIR="$B/conf" bash "$BIN/fleet-open.sh" --ack "$id" ok ) &
+  lp=$!
+  p0=$("$RT" -S "$B/s/fl" list-panes -t fl -F '#{pane_id}' | head -n 1); t0=$(now)
+  r=$(env TMUX="$B/s/fl,0,0" TMUX_PANE="$p0" PATH="$B/bin:$PATH" FLEET_CONF_DIR="$B/sess" FLEET_OPEN_WHERE_CMD="$B/where.sh" \
+        FLEET_OPEN_RELAY_CMD="$B/relay.sh" FLEET_REMOTE_BIN="$BIN" FLEET_OPEN_SECRET_FILE="$B/open.secret" \
+        FLEET_OPEN_URL_BIN=/usr/bin/false FLEET_OPEN_ACK_WAIT=4 bash "$BIN/fleet-open.sh" ':8765/d/x/' 2>"$B/open.err")
+  SECS=$(since "$t0")
+  wait "$lp" 2>/dev/null
+  [ "$r" = opened ] || { WHY="fleet-open said '$r', not opened ($(tr '\n' ' ' < "$B/open.err"))"; th_done; return 1; }
+  case "$(cat "$B/relay.argv" 2>/dev/null)" in *"--from-peer sessbox:"*" -- http://127.0.0.1:8765/d/x/") ;;
+    *) WHY="the home was not asked with --from-peer + the loopback URL: $(cat "$B/relay.argv" 2>/dev/null)"; th_done; return 1 ;; esac
+  grep -aq $'\033]1337;Custom=' "$B/out-b" && { WHY="an iTerm2 escape went out on the side (the silent road)"; th_done; return 1; }
+  th_done
+  WHAT="经别的机器的看台看会话时，open 交给那台家（--from-peer），家把会话机器的回环端口转成自己的 4242 交给看台的循环，回执回来：${r}"
 }
 
 # view-popup-wide-bleed (issue #3058): tmux 3.7c draws a wide character a pane writes

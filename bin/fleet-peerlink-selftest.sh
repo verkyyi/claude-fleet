@@ -30,6 +30,9 @@
 #   I. switch   — FLEET_PEERLINK_MODE=demand in fleet.conf: back to #3002's rule
 #   J. list     — bin/fleet-peer-list.sh: the node token's GET /v1/node/peers — rc 0
 #                 + the JSON, rc 3 with no token / an older hub, rc 1 down or refused
+#   K. exec/fwd — (issue #3538) `exec` runs one command over an up link's master (rc 3
+#                 for none / down); `fwd` adds `-L <port>:127.0.0.1:<rport>`, prints
+#                 the port, cancels it at FLEET_OPEN_PAGE_SECS; refused → rc 1
 #
 # No network: bin/fleet-peerlink-fake-ssh.py plays ssh, a script plays
 # fleet-peer-cert.sh.
@@ -313,7 +316,39 @@ out=$(pl_list JCODE=down JBODY= 2>&1 >/dev/null); rc=$?
 pl_list JCODE=403 JBODY='{"error":"no"}' >/dev/null 2>&1; rc=$?
 [ "$rc" = 1 ] && ok || fail "J: refused (403): rc $rc, want 1"
 
+
+# ---- K. exec · fwd (issue #3538): fleet-open's road to a thin client's HOME ---------------
+# A link that is up (state.json + its socket file); a stand-in ssh records each call.
+K="$WORK/k"; mkdir -p "$K/conf/peerlink"
+: > "$K/m2.sock"
+printf '{"links":[{"machine":"mini2","login":"%s","phase":"up","sock":"%s","host":"mini2.lan"},{"machine":"m9","login":"x","phase":"down","sock":"%s","host":"m9"}]}\n' \
+  "$(id -un)" "$K/m2.sock" "$K/m2.sock" > "$K/conf/peerlink/state.json"
+cat > "$K/ssh" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >> "$K/ssh.log"
+case " \$* " in *" -O forward "*|*" -O cancel "*) exit "\${K_FWD_RC:-0}" ;; esac
+for a; do last=\$a; done
+echo "ran: \$last"
+EOS
+chmod +x "$K/ssh"
+kpl() { FLEET_CONF_DIR="$K/conf" FLEET_PEERLINK_SSH="$K/ssh" python3 "$BIN/fleet-peerlink.py" "$@"; }
+out=$(kpl exec mini2 -- bash .claude/fleet/bin/fleet-open.sh --from-peer m:u -- 'http://127.0.0.1:1/a b'); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "ran: bash .claude/fleet/bin/fleet-open.sh --from-peer m:u -- 'http://127.0.0.1:1/a b'" ] && ok \
+  || fail "K: exec: rc $rc [$out]"
+grep -q -- "-S $K/m2.sock -o ControlMaster=no -T -l $(id -un) mini2.lan" "$K/ssh.log" && ok || fail "K: exec rides the link's master: $(cat "$K/ssh.log")"
+kpl exec m9 -- true >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: exec to a link that is down must be rc 3"
+kpl exec nowhere -- true >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: exec to no link must be rc 3"
+: > "$K/ssh.log"
+port=$(FLEET_OPEN_PAGE_SECS=1 kpl fwd mini2 "$(id -un)" 8765); rc=$?
+[ "$rc" = 0 ] && case "$port" in ''|*[!0-9]*) false ;; *) true ;; esac && ok || fail "K: fwd: rc $rc [$port]"
+grep -q -- "-S $K/m2.sock -O forward -L 127.0.0.1:$port:127.0.0.1:8765 -l $(id -un) mini2.lan" "$K/ssh.log" && ok \
+  || fail "K: fwd adds -L <port>:127.0.0.1:8765 to the master: $(cat "$K/ssh.log")"
+until_ok 6 grep -q -- "-O cancel -L 127.0.0.1:$port:127.0.0.1:8765" "$K/ssh.log" && ok || fail "K: the forward was never cancelled at its deadline"
+K_FWD_RC=255 kpl fwd mini2 "$(id -un)" 8765 >/dev/null 2>&1; [ $? = 1 ] && ok || fail "K: a refused forward must be rc 1"
+kpl fwd m9 x 8765 >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: fwd over a link that is down must be rc 3"
+kpl fwd mini2 "$(id -un)" 99999 >/dev/null 2>&1; [ $? = 2 ] && ok || fail "K: fwd to a bad port must be rc 2"
+
 [ -n "${PEERLINK_SHOW:-}" ] && cat "$WORK/doctor-rows.txt"
 
 if [ "$FAILS" -gt 0 ]; then printf 'fleet-peerlink selftest: %d FAILED, %d passed\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
-printf 'selftest OK: fleet-peerlink (%d checks — want · linger · doctor · sock · pane · units · routes · all · switch · list)\n' "$CHECKS"
+printf 'selftest OK: fleet-peerlink (%d checks — want · linger · doctor · sock · pane · units · routes · all · switch · list · exec/fwd)\n' "$CHECKS"
