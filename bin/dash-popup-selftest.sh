@@ -288,7 +288,7 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # line (fleet-sidebar.py `Ask`); what duplicated the sidebar is gone. Two stay
 # since issue #1714 took the node's keys (prefix b / u / c / ! and the alert-count
 # taps were the only doors of backlog / usage / config / alerts): keys — the
-# client's prefix ? — and the task picker, until its chain retires (#1739). The
+# client's prefix ? — and the task picker, until its chain was deleted (#3732). The
 # row menu is a display-menu, not a popup. Issue #1903 adds the third, quick open
 # (⌘P / prefix /): a filtered list over every session needs the screen.
 # Issue #2112 (PR #2148) adds the fourth, rescan: the bar's 「重新扫码」 runs
@@ -299,13 +299,14 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # every machine with its route and source, a pick needs the screen (issue #2919).
 # Issue #3375 adds the seventh, repo_add (⌘P's 添加仓库…): a typed owner/name or
 # link, then the clone's progress and the verdict held on screen.
+# Issue #3732 deleted the task picker (fleet-task-pick.sh) with the ⌂ chain.
 kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v '^$' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
 kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '/tmux-dashboard\.sh$' \
   | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-[ "$kept_hub" = 'popup_dispatch popup_keys popup_quickopen popup_repo_add popup_rescan popup_route popup_tasks' ] \
-  || fail "kept popups: want dispatch keys quickopen repo_add rescan route tasks (7), got: $kept_hub (all, the hub too: $kept)"
+[ "$kept_hub" = 'popup_dispatch popup_keys popup_quickopen popup_repo_add popup_rescan popup_route' ] \
+  || fail "kept popups: want dispatch keys quickopen repo_add rescan route (6), got: $kept_hub (all, the hub too: $kept)"
 # the one-field popups that moved onto the sidebar's line open no popup at all
 for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
          dash-migrate.sh open-url.sh dash-repo-add.sh fleet-row-remote.sh; do

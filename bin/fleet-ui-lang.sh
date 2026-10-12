@@ -834,8 +834,6 @@ fleet_ui_t() {
     en:panel_no_action_fmt)     printf 'this row cannot %s' "${1:-}" ;;
     zh:panel_no_waiting)        printf '没有在问你的会话' ;;
     en:panel_no_waiting)        printf 'nobody is waiting on you' ;;
-    zh:popup_tasks)             printf '任务' ;;
-    en:popup_tasks)             printf 'Tasks' ;;
     zh:popup_new_task)          printf '新建任务' ;;
     en:popup_new_task)          printf 'New task' ;;
     zh:popup_answer)            printf '回答' ;;
