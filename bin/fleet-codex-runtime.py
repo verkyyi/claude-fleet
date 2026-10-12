@@ -199,6 +199,14 @@ def run(argv, prepare=None, tick=None):
         attention = Path(__file__).with_name("fleet-codex-attention.py")
         if attention.is_file():
             monitor = runpy.run_path(str(attention))["Monitor"](remote, env)
+        # issue #3461: the live context / model reading for the top line
+        meter = None
+        meter_mod = Path(__file__).with_name("fleet-codex-session.py")
+        if meter_mod.is_file():
+            try:
+                meter = runpy.run_path(str(meter_mod))["Meter"](env)
+            except Exception:
+                meter = None
         # issue #2430: the seed is SUBMITTED — a first sentence left sitting in
         # the composer gets its Enter (bin/fleet-codex-seed.py; reads only).
         seeder = None
@@ -213,6 +221,7 @@ def run(argv, prepare=None, tick=None):
         while client.poll() is None and guardian.poll() is None and not ended:
             if time.monotonic() >= next_tick:
                 if monitor: monitor.tick()
+                if meter is not None: meter.tick()
                 if seeder is not None and not seeder.tick():
                     seeder = None
                 if tick: tick()

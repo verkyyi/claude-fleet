@@ -126,6 +126,61 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1, p.stderr)
         self.assertEqual(json.loads(p.stdout)['verdict'], 'UNKNOWN')
 
+    def test_agent_switch_clears_every_bus_stamp(self):
+        # issue #3461: a Claude → Codex transfer (fleet-transfer.sh) and a Codex
+        # launch (fleet-codex.sh) unset the WHOLE measurement bus — @ctx_left /
+        # @ctx_ts / @ctx_src too, or the top line reads the old agent's numbers.
+        bus = ['@ctx_pct', '@ctx_limit', '@ctx_band', '@ctx_left', '@ctx_ts', '@ctx_src', '@model', '@effort']
+        for script, marker in (('fleet-transfer.sh', 'for key in @cc_account'), ('fleet-codex.sh', 'for _opt in @codex_identity')):
+            line = next(l.strip() for l in (BIN / script).read_text().splitlines() if l.strip().startswith(marker))
+            for name in bus:
+                self.assertIn(' ' + name + ' ', line, script + ' must unset ' + name)
+
+    @unittest.skipUnless(shutil.which('tmux'), 'tmux unavailable')
+    def test_meter_feeds_the_bus_mid_turn(self):
+        # issue #3461: the hook feeds the bus only at SessionStart (no token count
+        # yet) and Stop; the launcher's Meter re-reads a CHANGED rollout every few
+        # seconds, so a long turn's context moves like a Claude window's.
+        label = 'codex-meter-test-' + str(os.getpid())
+        tm = ['tmux', '-L', label]
+        def call(*args):
+            return subprocess.check_output(tm + list(args), text=True).strip()
+        saved = {k: os.environ.get(k) for k in ('TMUX', 'TMUX_PANE')}
+        try:
+            call('new-session', '-d', '-s', 'fixture', '-n', 'w', 'sleep 60')
+            pane = call('display-message', '-p', '#{pane_id}')
+            os.environ['TMUX'] = call('display-message', '-p', '#{socket_path}') + ',1,0'
+            os.environ.pop('TMUX_PANE', None)
+            ident = dict(self.data, transcript=str(self.path))
+            for name, value in (('@cc_agent', 'codex'), ('@cc_launcher_pid', '1234'),
+                                ('@codex_identity', json.dumps(ident)), ('@model', 'Opus 5.5'), ('@ctx_left', '90')):
+                call('set-option', '-w', '-t', pane, name, value)
+            opt = lambda n: call('display-message', '-p', '-t', pane, '#{' + n + '}')
+            meter = cx.Meter(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_METER_SECS='5'))
+            self.assertTrue(meter.tick(100))
+            self.assertEqual([opt(n) for n in ('@ctx_pct', '@ctx_left', '@ctx_band', '@ctx_src', '@model')],
+                             ['40', '60', 'ok', 'codex', 'gpt-fixture'])
+            self.assertRegex(opt('@ctx_ts'), r'^[0-9]{10}$')
+            self.assertFalse(meter.tick(101), 'paced: no read inside the period')
+            self.assertFalse(meter.tick(106), 'an unchanged rollout is not re-read')
+            newer = json.loads(json.dumps(self.records[-1]))
+            newer['payload']['info']['last_token_usage']['total_tokens'] = 150000
+            self.records.append(newer); self.write()
+            self.assertTrue(meter.tick(112))
+            self.assertEqual((opt('@ctx_pct'), opt('@ctx_left')), ('50', '50'))
+            # a replacement launch owns the window: never stamped by the old meter
+            call('set-option', '-w', '-t', pane, '@cc_launcher_pid', '5678')
+            newer = json.loads(json.dumps(newer)); newer['payload']['info']['last_token_usage']['total_tokens'] = 240000
+            self.records.append(newer); self.write()
+            self.assertFalse(meter.tick(118))
+            self.assertEqual(opt('@ctx_pct'), '50')
+            self.assertFalse(cx.Meter({}).tick(0), 'no pane, no owner: nothing')
+        finally:
+            for k, v in saved.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
+            subprocess.run(tm + ['kill-server'], capture_output=True)
+
     @unittest.skipUnless(shutil.which('tmux'), 'tmux unavailable')
     def test_hooks_cache_queue_and_parent_end_to_end(self):
         label = 'codex-session-test-' + str(os.getpid())
