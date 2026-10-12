@@ -300,7 +300,7 @@ fv.view_fleet = lambda vid, row=None: "fl"
 fv.here_label = lambda row: "m4"
 fv.fleet_logins = lambda: {"UU": "verky"}
 fv.windows = lambda fleet: {"@3": ("f3", "orchestrator", 0)}   # the holder here, too
-fv.produce = lambda fleet: ""
+fv.produce = lambda fleet, **kw: ""
 assert fv.entries("v1") == [], fv.entries("v1")
 assert not hasattr(fv, "go_orch") and not hasattr(fv, "orch_target"), "the orchestrator readers are gone"
 EOF
@@ -349,7 +349,7 @@ fv.windows = lambda fleet: {"@5": ("", "worker", now - 600), "@6": ("", "worker"
 os.environ["FLEET_UI_LANG"] = "zh"
 fv.gone_text = lambda fleet: ""
 def run(repos):
-    fv.produce = lambda fleet: body(repos)
+    fv.produce = lambda fleet, **kw: body(repos)
     return fv.entries("v1")
 it = run(["o/claude-fleet"])
 heads = [e["group"] for e in it if e["kind"] == "hdr"]
@@ -447,7 +447,7 @@ fv.view_fleet = lambda vid, row=None: "fl"
 fv.here_label = lambda row: "nodeA"
 fv.fleet_logins = lambda: {}
 fv.windows = lambda fleet: {"@9": ("", "worker", int(time.time()) - 3 * 86400)}   # merged days ago: 已结束
-fv.produce = lambda fleet: open_rows
+fv.produce = lambda fleet, **kw: open_rows
 fv.gone_text = lambda fleet: gone
 it = fv.entries("v1")
 sec = [e for e in it if e["kind"] == "sec"]

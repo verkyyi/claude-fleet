@@ -867,3 +867,7 @@ FLEET_FEEDBACK_CONNECT_SECS        knob: internal pacing, curl connect timeout f
 FLEET_FEEDBACK_LOG_MINS            knob: internal, how recent a log must be to be offered as an attachment (default 30, #3358)
 FLEET_FEEDBACK_OUTBOX_DAYS         knob: internal, days a feedback kept while the hub was away waits before it is dropped (default 3, #3358)
 FLEET_FEEDBACK_TICK                knob: 0 stops the diskguard tick sending the feedback outbox (default 1, #3358)
+FLEET_CPU_STAT_FILE                test seam: the cgroup cpu.stat the doctor's cpu row samples (#3514)
+FLEET_CPU_MAX_FILE                 test seam: the cgroup cpu.max the doctor's cpu row reads the limit from (#3514)
+FLEET_CPU_SAMPLE_SECS              knob: internal pacing, seconds the doctor's cpu row samples the cgroup over (default 2, #3514)
+FLEET_CPU_THROTTLE_WARN            knob: internal, % of CPU periods throttled at which the doctor's cpu row WARNs (default 20, #3514)
