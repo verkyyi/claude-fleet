@@ -404,10 +404,13 @@ pullback_scan() {
   # A mark outlives its window only until the same identity is live again (a
   # history resume, a migrate's reopen): then it must not excuse the NEXT kill.
   # Two minutes of grace, so a closer's mark is never lifted before its kill lands.
+  # One pass over every mark (issue #3544): a pool that churned for a day left
+  # ~870 of them, and a `printf | grep` per mark was ~1,700 processes every tick.
   local rd t; rd=$(fleet_retired_dir)
-  [ -d "$rd" ] && find "$rd" -type f -mmin +2 2>/dev/null | while IFS= read -r t; do
-    printf '%s\n' "$live" | grep -qxF "${t##*/}" && rm -f "$t"
-  done
+  [ -d "$rd" ] && find "$rd" -type f -mmin +2 2>/dev/null \
+    | awk 'NR == FNR { if ($0 != "") live[$0] = 1; next }
+           { n = $0; sub(/.*\//, "", n); if (n in live) print }' <(printf '%s\n' "$live") - \
+    | while IFS= read -r t; do rm -f "$t"; done
   pb=$(pullback_file "$sess")
   while IFS= read -r line; do
     wtag=${line%%$'\t'*}

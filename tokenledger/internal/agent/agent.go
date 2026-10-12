@@ -263,6 +263,10 @@ type Agent struct {
 	// (claude-fleet#2798): kept across reconnects, so a slow read lands on
 	// a later beat instead of emptying this one.
 	fleetRd         asyncReading[fleetPart]
+	// fleetRdNudge is hub-nudge's mtime (UnixNano) when the kept fleet read
+	// started, 0 = none seen (claude-fleet#3544): fleetReuse keeps that read
+	// while the file has not moved since.
+	fleetRdNudge atomic.Int64
 	scanner         *scan.Scanner
 	codex           *scan.Scanner
 	codexProfiles   []*codexCollector

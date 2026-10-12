@@ -427,7 +427,8 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	// The first beat of the process has no earlier reading to fall back on,
 	// so it waits for the read (as every beat did before #2798): a beat that
 	// says no fleets would read a busy login as idle.
-	fp, at, _ := a.fleetRd.get(ctx, 0, fleetBeatBudget, true, func(ctx context.Context) (fleetPart, bool) {
+	fp, at, _ := a.fleetRd.get(ctx, a.fleetReuse(), fleetBeatBudget, true, func(ctx context.Context) (fleetPart, bool) {
+		a.fleetRdNudge.Store(a.fleetNudgeMtime())
 		return a.readFleetPart(ctx, probe)
 	})
 	fp.fill(&hb, at)

@@ -31,6 +31,7 @@
 #        pool off, `--status`, the claim's fast-forward to origin/<base>
 #   W2. default sizes: a repo slot 1, the HOME slot 2 (#3514)
 #   Y. a warm entry that never opens gives its admission back (#2502)
+#   Z. one ensure pass reads the account once (#3544)
 #   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
 #
 # Exit 0 = pass; non-zero = fail.
@@ -473,6 +474,21 @@ left=$(find "$WORK/adm/.claude-dash/global/admit-reserve" -type f 2>/dev/null | 
 r=$(admenv bash -c 'source "$1"; fleet_admit_reserved' _ "$LIB")
 [ "$r" = 0 ] || fail "Y after five failed ticks nothing counts as admitted (got $r)"
 ok "Y five failed warm ticks: every admission given back, 0 admitted-not-yet-counted"
+
+# Z: one pass reads the account once (issue #3544) — a tick that checked its
+# entries asked `fleet-account.sh active` a dozen times, ~2 s of CPU a minute per
+# login. A shadow bin/ whose fleet-account.sh counts itself: two ready HOME
+# entries, one HOME ensure → one read, and both still pass as usable (no spawn).
+ZB="$WORK/zbin"; mkdir -p "$ZB"
+for f in "$BIN"/*; do ln -s "$f" "$ZB/${f##*/}"; done
+rm -f "$ZB/fleet-account.sh"
+printf '#!/bin/sh\necho x >> "%s/acct-reads"\nexit 0\n' "$WORK" > "$ZB/fleet-account.sh"; chmod +x "$ZB/fleet-account.sh"
+reset_state; mkfleet; mkconf 1; home '@21'; home '@22'; rm -f "$WORK/acct-reads"
+env FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$ZB/scratch-pool.sh" ensure tf --repo - --tick >/dev/null 2>&1
+n=$(grep -c . "$WORK/acct-reads" 2>/dev/null || echo 0)
+[ "$n" = 1 ] || fail "Z one ensure pass must read the account once, read it $n times"
+! grep -q 'new-session' "$STATE/log" || fail "Z both entries are usable: nothing to spawn" "$(cat "$STATE/log")"
+ok "Z one ensure pass reads the account once; its entries still pass"
 
 printf '\n%s tests passed\n' "$pass"
 exit 0

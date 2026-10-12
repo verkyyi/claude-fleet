@@ -5,7 +5,8 @@
 //
 // The line comes from bin/fleet-client-where.sh, THE one reader (EPIC rule 7):
 // the hub's client lease, or with no hub the fleet-shell client attached here.
-// lifecycle.ts reads it at the start and every WHERE_POLL_MS (the timer and `$`
+// lifecycle.ts reads it at the start and every WHERE_POLL_MS — a read another
+// session of this login took under WHERE_SHARED_SECS ago is taken as is — (the timer and `$`
 // live there: the engine follows `$` only within one file); compose.ts's
 // `prompt.compose` hook adds it as the last `session` section, so a takeover (the phone
 // opening the client) reaches the model's next request within the poll. A read
@@ -17,13 +18,18 @@ export const WHERE_POLL_MS = 15_000
 /** The script asks the hub (≤5 s) and maybe tmux; well inside this. */
 export const WHERE_TIMEOUT_MS = 10_000
 export const WHERE_SECTION = 'fleet:where'
+/**
+ * Every session of a login polls; they share one read this young (issue #3544:
+ * ten idle sessions were ten hub requests and ten python starts every 15 s).
+ */
+export const WHERE_SHARED_SECS = 14
 
 let line: string | undefined
 
 /** <install>/bin/fleet-client-where.sh from the plugin root (<install>/mod/fleet). */
 export function whereArgv(root: string): string[] {
   const base = root.replace(/\/+$/, '').replace(/\/\.claude-plugin$/, '')
-  return ['bash', `${base}/../../bin/fleet-client-where.sh`]
+  return ['bash', `${base}/../../bin/fleet-client-where.sh`, '--max-age', String(WHERE_SHARED_SECS)]
 }
 
 /**

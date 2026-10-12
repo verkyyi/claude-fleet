@@ -235,7 +235,20 @@ fleet_cfg_expected_load
 # The account a warm entry was launched under is baked into its claude process
 # (fleet-claude.sh exports CLAUDE_CODE_OAUTH_TOKEN at exec time), so an entry
 # warmed under a rotated-away account must not be handed out.
+# acct_memo — read the account once for this pass (issue #3544): an ensure that
+# checks three entries asked `fleet-account.sh active` twelve times, ~2 s of CPU a
+# tick per login, and the answer does not change inside one pass. acct_now then
+# answers from the memo (same output, same rc) until the process ends.
+acct_memo() {
+  _ACCT_NOW_RC=0
+  _ACCT_NOW=$(acct_now) || _ACCT_NOW_RC=$?
+  _ACCT_MEMO=1
+}
 acct_now() {
+  if [ "${_ACCT_MEMO:-0}" = 1 ]; then
+    [ -z "$_ACCT_NOW" ] || printf '%s\n' "$_ACCT_NOW"
+    return "$_ACCT_NOW_RC"
+  fi
   if [ "$AGENT" = codex ]; then
     if [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
       local chome
@@ -561,6 +574,14 @@ align() {
 # fleet_scratch_alloc fetches on its own).
 pool_fetch() {
   [ "$REPO" != - ] && [ -n "$MAIN" ] && [ -d "$MAIN/.git" ] || return 0
+  # base-sync fetches this same checkout every ~60 s (issue #3544): a FETCH_HEAD
+  # younger than FLEET_POOL_FETCH_FRESH_MIN minutes (2; 0 = always fetch) is that
+  # fetch, and origin/<base> is as new as a second one would make it.
+  local fresh="${FLEET_POOL_FETCH_FRESH_MIN:-2}"
+  case "$fresh" in ''|*[!0-9]*) fresh=2 ;; esac
+  if [ "$fresh" -gt 0 ] && [ -n "$(find "$MAIN/.git/FETCH_HEAD" -mmin "-$fresh" 2>/dev/null)" ]; then
+    return 0
+  fi
   git -C "$MAIN" fetch origin "$BASE" --quiet >/dev/null 2>&1
   return 0
 }
@@ -650,6 +671,7 @@ cmd_ensure() {
   # well inside the 30 s the batch promises, yet not on the claimer's first keys.
   [ "$SOON" = 1 ] && sleep "${FLEET_POOL_CLAIM_REFILL_DELAY:-5}"
   pool_lock || return 0
+  acct_memo
   cmd_reap
   # Count what is ready; an entry over the slot's size goes (a lowered
   # FLEET_SCRATCH_POOL shrinks the slot), and every one kept is moved to the

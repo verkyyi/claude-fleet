@@ -39,8 +39,8 @@ function whereText(sections: readonly { id: string; text: string }[]): string | 
 }
 
 test('the script path sits beside the plugin: <install>/bin', () => {
-  expect(whereArgv('/i/mod/fleet')).toEqual(['bash', '/i/mod/fleet/../../bin/fleet-client-where.sh'])
-  expect(whereArgv('/i/mod/fleet/.claude-plugin/')).toEqual(['bash', '/i/mod/fleet/../../bin/fleet-client-where.sh'])
+  expect(whereArgv('/i/mod/fleet')).toEqual(['bash', '/i/mod/fleet/../../bin/fleet-client-where.sh', '--max-age', '14'])
+  expect(whereArgv('/i/mod/fleet/.claude-plugin/')).toEqual(['bash', '/i/mod/fleet/../../bin/fleet-client-where.sh', '--max-age', '14'])
 })
 
 test('a failed read keeps the line; 0 and 3 replace it', () => {
