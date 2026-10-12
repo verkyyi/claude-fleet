@@ -37,8 +37,8 @@ func frl2Claims(t *testing.T, tok string) relayPass2Claims {
 }
 
 func TestRelayFrl2OffAddsNothing(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
-	code, out := mintRelay(t, h, m4)
+	h, nodeTok, _ := newVaultHarness(t)
+	code, out := mintRelay(t, h, nodeTok)
 	if tok, _ := out["token"].(string); code != 200 || !strings.HasPrefix(tok, relayTokenPrefix) {
 		t.Fatalf("no key: %d %v; want frl1 as before", code, out)
 	}
@@ -70,14 +70,14 @@ func mintRelay2(t *testing.T, h *harness, nodeTok string) (int, map[string]any) 
 }
 
 func TestRelayFrl2IssueCheckRevoke(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
+	h, nodeTok, _ := newVaultHarness(t)
 	pub := withRelayKey(h)
-	host := revMachine(revHost(t, h, m4))
+	host := revMachine(revHost(t, h, nodeTok))
 	// an older node asks with no kind: it still gets the frl1 it can keep
-	if code, out := mintRelay(t, h, m4); code != 200 || !strings.HasPrefix(out["token"].(string), relayTokenPrefix) {
+	if code, out := mintRelay(t, h, nodeTok); code != 200 || !strings.HasPrefix(out["token"].(string), relayTokenPrefix) {
 		t.Fatalf("a caller that does not ask for frl2: %d %v", code, out)
 	}
-	code, out := mintRelay2(t, h, m4)
+	code, out := mintRelay2(t, h, nodeTok)
 	tok, _ := out["token"].(string)
 	if code != 200 || !strings.HasPrefix(tok, relayPass2Prefix) {
 		t.Fatalf("mint with a key: %d %v", code, out)
@@ -130,7 +130,7 @@ func TestRelayFrl2IssueCheckRevoke(t *testing.T) {
 	}
 
 	// A re-mint supersedes the old pass on the hub's road.
-	tok2 := mustMintRelay2(t, h, m4)
+	tok2 := mustMintRelay2(t, h, nodeTok)
 	if code, _ := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusForbidden {
 		t.Fatalf("superseded pass: %d, want 403", code)
 	}

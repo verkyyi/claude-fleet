@@ -245,7 +245,7 @@ if not os.path.exists(sp):
 seed = open(sp, "rb").read()
 open(os.path.join(d, key + ".pub"), "w").write(base64.b64encode(ed.public_key(seed)).decode())
 now = int(time.time())
-c = {"v": 2, "jti": os.urandom(8).hex(), "machine": "m4", "login": login, "principal": "gh:7",
+c = {"v": 2, "jti": os.urandom(8).hex(), "machine": "host-a", "login": login, "principal": "gh:7",
      "iat": now + ia, "exp": now + ea}
 body = "frl2." + base64.urlsafe_b64encode(json.dumps(c).encode()).decode().rstrip("=")
 tok = body + "." + base64.urlsafe_b64encode(ed.sign(seed, body.encode())).decode().rstrip("=")

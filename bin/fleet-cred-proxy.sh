@@ -125,7 +125,7 @@ relay_due() {
     [ -f "$f" ] && { w=$f; break; }
   done
   [ -n "$w" ] || return 1
-  st=$(stat -f %m "$w" 2>/dev/null || stat -c %Y "$w" 2>/dev/null) || return 1
+  st=$(stat -c %Y "$w" 2>/dev/null || stat -f %m "$w" 2>/dev/null) || return 1   # GNU first: its -f is the filesystem
   [ "$st" != "$RELAY_SEEN" ] || return 1
   RELAY_SEEN=$st
   RELAY_WHY=$(awk '{print $1; exit}' "$w" 2>/dev/null)
