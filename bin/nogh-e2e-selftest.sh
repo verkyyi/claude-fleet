@@ -16,7 +16,7 @@
 #               operator maps the person to this machine's login; `fleet login`
 #               in the terminal confirmed by that browser — the certificate lands
 #   2. 开单     an EPIC and its member filed through the one filer channel into a
-#               repo at ssh://macmini/~/repos/demo.git (a bare repo here, C7);
+#               repo at ssh://mac-a/~/repos/demo.git (a bare repo here, C7);
 #               they are the person's: their browser lists them (我的单子)
 #   3. 派活     dash-issue-session.sh opens the member on a private tmux server:
 #               the hub's claim is taken, the worktree and window are there, the
@@ -262,7 +262,7 @@ L=$(id -un)
 JC=$(api -X POST -H 'Content-Type: application/json' -d '{}' "$HUB/v1/fleet/join-codes" | jget code) \
   || die 'the operator API minted no join code'
 J=$(curl -fsS -m 10 -H 'Content-Type: application/json' -X POST \
-      -d "{\"code\":\"$JC\",\"hostname\":\"macmini\",\"os_user\":\"$L\"}" "$HUB/v1/node/join") \
+      -d "{\"code\":\"$JC\",\"hostname\":\"mac-a\",\"os_user\":\"$L\"}" "$HUB/v1/node/join") \
   || die '/v1/node/join refused the code'
 NTOK=$(printf '%s' "$J" | jget token 2>/dev/null)
 [ -n "$NTOK" ] || die 'the join answer had no token' "$J"
@@ -275,7 +275,7 @@ import json, sys, time
 req = json.load(sys.stdin); m = req.get("method")
 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 if m == "discover":
-    r = {"machine_id": "7e2e0000-0000-4000-8000-000000003605", "hostname": "macmini", "protocol": 1,
+    r = {"machine_id": "7e2e0000-0000-4000-8000-000000003605", "hostname": "mac-a", "protocol": 1,
          "observed_at": now, "fleets": []}
 elif m == "ready":
     r = {"ready": True, "gh": False, "creds": True, "checkouts": True, "missing": [], "observed_at": now}
@@ -333,7 +333,7 @@ passed
 
 # ---- the fleet's side: a sandbox login on the same machine ---------------------
 # Real git, a real tmux server on a private socket, the agent a recorder. The repo
-# lives at ssh://macmini/~/repos/demo.git — git reaches a bare repo here for it.
+# lives at ssh://mac-a/~/repos/demo.git — git reaches a bare repo here for it.
 REAL_GIT=$(command -v git)
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/bash
@@ -356,7 +356,7 @@ cat > "$GIT_CONFIG_GLOBAL" <<EOF
 	name = nogh-e2e
 	email = nogh@example.invalid
 [url "file://$WORK/srv/repos/"]
-	insteadOf = ssh://macmini/~/repos/
+	insteadOf = ssh://mac-a/~/repos/
 [url "file://$WORK/nowhere-github/"]
 	insteadOf = https://github.com/
 	insteadOf = git@github.com:
@@ -387,9 +387,9 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
 printf 'FLEET_SESSION=%s\nFLEET_CLEANUP_MERGED_GRACE=0\nFLEET_REAP_MIN_AGE=0\n' "$S" > "$FLEET_CONF_DIR/fleets/$S/conf"
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s "$S" -n home -x 200 -y 50 || die 'could not start the private tmux server'
 tmux set-option -w -t "$S:home" @fleet_role home >/dev/null 2>&1
-ADDR='ssh://macmini/~/repos/demo.git'
+ADDR='ssh://mac-a/~/repos/demo.git'
 tok=$(bash "$BIN/fleet-repo.sh" add --session "$S" "$ADDR" 2>"$WORK/err") || die 'fleet repo add refused the ssh address' "$tok $(cat "$WORK/err")"
-R=macmini/demo
+R=mac-a/demo
 . "$BIN/fleet-lib.sh"
 [ "$tok" = "added:$(fleet_slug "$R")" ] || die 'fleet repo add named the repo otherwise' "$tok"
 RCONF=$(fleet_repo_conf_file "$S" "$R")
