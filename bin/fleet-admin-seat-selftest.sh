@@ -8,6 +8,7 @@
 # server on 127.0.0.1. The core's switch placing the gate is
 # bin/fleet-node-core-selftest.py G_Switch; the tampering drill is
 # bin/fleet-break-it-admin-selftest.sh fleetadmin-gate-tampered.
+# shellcheck disable=SC2034  # out / rc are read inside check's eval strings
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fas.XXXXXX")"
@@ -42,7 +43,7 @@ s.serve_forever()
 PY
   PIDS+=($!)
   local i
-  for i in $(seq 50); do [ -f "$d/port" ] && break; sleep 0.1; done
+  for _ in $(seq 50); do [ -f "$d/port" ] && break; sleep 0.1; done
   URL="http://127.0.0.1:$(cat "$d/port")"
 }
 
@@ -52,7 +53,8 @@ ST="$WORK/state"; ROOT="$WORK/root"; REL="$ROOT/$(printf 'c%.0s' $(seq 40))"
 mkdir -p "$ST" "$REL/bin" "$WORK/sudoers.d"
 cp "$BIN/fleet-admin-gate.sh" "$REL/bin/"
 ln -s "$REL" "$ROOT/current"
-export FLEET_NODE_TEST=1 FLEET_NODE_STATE="$ST" FLEET_NODE_ROOT="$ROOT" FLEET_ADMIN_ROLE="$(id -un)" \
+ME=$(id -un)
+export FLEET_NODE_TEST=1 FLEET_NODE_STATE="$ST" FLEET_NODE_ROOT="$ROOT" FLEET_ADMIN_ROLE="$ME" \
   FLEET_ADMIN_SUDOERS="$WORK/sudoers.d/fleet-admin" FLEET_ADMIN_VISUDO=""
 AS=(python3 -I "$BIN/fleet_admin_seat.py")
 
