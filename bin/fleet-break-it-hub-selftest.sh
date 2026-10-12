@@ -2230,6 +2230,8 @@ PY
   [ "$rc" = 1 ] || { WHY="the machine forgot k1 was revoked: $out"; return 1; }
   grep -q 'save_revoked(self.pubkey + ".revoked"' "$BIN/fleet-release-fetch.py" \
     || { WHY="fleet-release-fetch.py no longer keeps the revoked ids it saw"; return 1; }
+  grep -q 'relverify.signer_of(pub, m' "$BIN/fleet-node-core.py" \
+    || { WHY="the root core's switch no longer holds the signer to the chain and the revocations"; return 1; }
   grep -q 'f.Trust.Keep(\*pub)' "$ROOT/tokenledger/cmd/ccquota/release.go" \
     || { WHY="ccquota release fetch no longer keeps the revoked ids it saw"; return 1; }
   WHAT='根钥匙作废 k1：清单带作废单即拒；下一版不带了，机器记下的作废 id 照拒；伪造的作废单（非根钥匙签）不认（Go 半边测试按名核对在，Go 门跑它们）'

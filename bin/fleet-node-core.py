@@ -124,6 +124,13 @@ sys.path.insert(0, HERE)
 import fleet_ed25519  # noqa: E402
 import fleet_node_core as wire  # noqa: E402
 
+# the release trust (issue #3559): the pinned key, or a key it vouches for
+# through the manifest's key_chain that no revocation names — the same rule as
+# ccquota and fleet-release-fetch.py, one Python copy
+_rv = importlib.util.spec_from_file_location("fleet_release_verify", os.path.join(HERE, "fleet-release-verify.py"))
+relverify = importlib.util.module_from_spec(_rv)
+_rv.loader.exec_module(relverify)
+
 _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.join(HERE, "fleet-node-supervisor.py"))
 sup = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sup)
@@ -413,13 +420,20 @@ def signed_manifest(paths, d, sha):
             sig = base64.b64decode(f.read().strip())
     except (OSError, ValueError, TypeError) as e:
         return None, "no signed manifest: %s" % e
-    if not fleet_ed25519.verify(pub, mb, sig):
-        return None, "the signature is not the machine's release key's"
     try:
         m = json.loads(mb.decode("utf-8"))
     except ValueError:
         return None, "manifest is not JSON"
-    if not isinstance(m, dict) or m.get("schema") != 1 or m.get("sha") != sha:
+    if not isinstance(m, dict):
+        return None, "manifest is not JSON"
+    # the pinned key, or one it vouches for through the key_chain that no
+    # revocation names (issue #3559)
+    signer, why = relverify.signer_of(pub, m, known=relverify.load_revoked(paths.pubkey + ".revoked")[0])
+    if signer is None:
+        return None, why
+    if not fleet_ed25519.verify(signer, mb, sig):
+        return None, "the signature is not the machine's release key's"
+    if m.get("schema") != 1 or m.get("sha") != sha:
         return None, "manifest names %s, not %s" % (m.get("sha") if isinstance(m, dict) else None, sha)
     return m, None
 
