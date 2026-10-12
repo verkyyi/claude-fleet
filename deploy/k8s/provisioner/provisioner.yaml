@@ -1,0 +1,124 @@
+# fleet-provisioner — the one service in fleet-workers that writes to Kubernetes
+# (claude-fleet#3558, EPIC #3500 C16 · 共同约定 2). bin/fleet-provisioner.py: no
+# hub link, no other caller than fleet-ops (fleet/role: control), and nothing it
+# acts on but a ticket the hub signed (create-user-pod · destroy-user-pod ·
+# set-limits · create-job). Its Role is the four kinds a person's pod and a Job
+# are made of, in this namespace, and its nonce book; policy.yaml holds every
+# one of its requests to render.py's template.
+#
+# The image is the managed-node image (python3 and the release tree it was built
+# from), pinned by digest at apply; the person also creates the ConfigMap
+# fleet-provisioner (template.json + account.pub) — README.md.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: fleet-provisioner, namespace: fleet-workers}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: fleet-provisioner, namespace: fleet-workers}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, create, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, create, delete]
+  - apiGroups: [""]
+    resources: [services, persistentvolumeclaims]
+    verbs: [get, create, delete]
+  # the nonce book only: read it, write it (never create one, never another)
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [fleet-provisioner-nonces]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: fleet-provisioner, namespace: fleet-workers}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: fleet-provisioner}
+subjects:
+  - {kind: ServiceAccount, name: fleet-provisioner, namespace: fleet-workers}
+---
+# Every ticket's nonce, spent once whichever replica took it. No `data:` here
+# on purpose: a re-apply leaves the provisioner's entries alone (a wiped book
+# would reopen a replay until the tickets' exp).
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: fleet-provisioner-nonces, namespace: fleet-workers}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: fleet-provisioner, namespace: fleet-workers}
+spec:
+  type: ClusterIP
+  selector: {app: fleet-provisioner}
+  ports:
+    - {name: http, protocol: TCP, port: 8790, targetPort: 8790}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-provisioner
+  namespace: fleet-workers
+  labels: {app: fleet-provisioner, fleet/role: provisioner}
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels: {app: fleet-provisioner}
+  template:
+    metadata:
+      labels: {app: fleet-provisioner, fleet/role: provisioner}
+    spec:
+      serviceAccountName: fleet-provisioner
+      # the one pod here that carries a token, and only its own account's
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: fleet-provisioner}
+      containers:
+        - name: provisioner
+          image: fleet-provisioner-image
+          command: [/usr/bin/python3, -I, /opt/claude-fleet/seed/current/bin/fleet-provisioner.py, serve, --listen, ":8790"]
+          env:
+            - {name: FLEET_PROVISIONER_CONF, value: /etc/fleet-provisioner/template.json}
+            - {name: FLEET_PROVISIONER_PUB, value: /etc/fleet-provisioner/account.pub}
+          ports:
+            - containerPort: 8790
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8790}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8790}
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+          volumeMounts:
+            - {name: conf, mountPath: /etc/fleet-provisioner, readOnly: true}
+      volumes:
+        - name: conf
+          configMap: {name: fleet-provisioner}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: fleet-provisioner, namespace: fleet-workers}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: fleet-provisioner}

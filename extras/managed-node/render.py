@@ -210,6 +210,18 @@ def _probes():
     }
 
 
+# Each kind of pod runs as its own ServiceAccount, and none of them mounts a
+# token (#3558, EPIC #3500 C16 · 共同约定 2): the accounts are
+# deploy/k8s/fleet-workers/serviceaccounts.yaml's, every one with
+# automountServiceAccountToken false — only fleet-ops (read) and
+# fleet-provisioner (write, by template) carry one. A pod naming an account the
+# namespace has not got is never created: apply fleet-workers first.
+SA_NODE = 'fleet-linux'
+SA_USER = 'fleet-user'
+SA_DOOR = 'fleet-door'
+SA_JOB = 'fleet-job'
+
+
 # root only for the switch into the login (and sshd's): never NET_ADMIN / NET_RAW,
 # so the egress guard's rules stay put (#3281)
 NODE_SECURITY = {'runAsUser': 0, 'allowPrivilegeEscalation': False,
@@ -279,6 +291,7 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
                   'selector': {'matchLabels': labels}, 'updateStrategy': {'type': 'OnDelete'},
                   'persistentVolumeClaimRetentionPolicy': {'whenDeleted': 'Retain', 'whenScaled': 'Retain'},
                   'template': {'metadata': {'labels': pod_labels}, 'spec': {
+                      'serviceAccountName': SA_NODE,
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
                       'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed)],
@@ -392,6 +405,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                   'selector': {'matchLabels': select},
                   'template': {'metadata': {'labels': labels}, 'spec': {
                       'hostname': name, 'enableServiceLinks': False,
+                      'serviceAccountName': SA_USER,
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
                       'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed)],
@@ -469,6 +483,7 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
          'spec': {'replicas': replicas, 'revisionHistoryLimit': 2,
                   'selector': {'matchLabels': {'fleet/role': 'door'}},
                   'template': {'metadata': {'labels': labels}, 'spec': {
+                      'serviceAccountName': SA_DOOR,
                       'automountServiceAccountToken': False, 'enableServiceLinks': False,
                       'terminationGracePeriodSeconds': 30,
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
@@ -481,6 +496,56 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
                                   {'name': 'logs', 'emptyDir': {}},
                                   {'name': 'secret', 'secret': {'secretName': DOOR_SECRET, 'defaultMode': 0o400}}]}}}},
     ]
+
+
+# A throwaway Job (#3558, EPIC #3500 C16; its runner is C7's): no key, no home,
+# no token, not root. Named after the ticket's nonce, so a replayed create is
+# AlreadyExists; labelled fleet/owner (never fleet/pod — the owner pod's Service
+# selects that label, and a Job must never answer for the person's sshd).
+JOB_SECURITY = {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001, 'allowPrivilegeEscalation': False,
+                'readOnlyRootFilesystem': True, 'capabilities': {'drop': ['ALL']},
+                'seccompProfile': {'type': 'RuntimeDefault'}}
+
+
+def job_resources(image, pod, repo, ref, nonce, namespace='fleet-workers', pull_secrets=('acr-pull',),
+                  deadline=3600):
+    """One Job: the image (by digest) runs once on one commit of one repo for the
+    session in <pod>; its writable places are two emptyDirs (/work, /tmp)."""
+    if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
+        raise ValueError('pin the job image by sha256 digest')
+    if not re.fullmatch(USER_POD_RE, pod):
+        raise ValueError('a Job serves a u-<nonce> pod, not %r' % pod)
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}', repo):
+        raise ValueError('--job-repo is OWNER/NAME, not %r' % repo)
+    if not re.fullmatch(r'[0-9a-f]{40}', ref):
+        raise ValueError('--job-ref is a 40-hex commit, not %r' % ref)
+    if not re.fullmatch(r'[0-9a-f]{32}', nonce):
+        raise ValueError('a Job is named by its ticket nonce (32 hex), not %r' % nonce)
+    if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
+        raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    name = 'job-' + nonce[:12]
+    labels = {'app.kubernetes.io/name': 'fleet-job', 'fleet/role': 'job', 'fleet/owner': pod}
+    container = {
+        'name': 'job', 'image': image,
+        'env': [{'name': 'FLEET_JOB_REPO', 'value': repo}, {'name': 'FLEET_JOB_REF', 'value': ref},
+                {'name': 'FLEET_JOB_OWNER', 'value': pod}, {'name': 'HOME', 'value': '/work'}],
+        'resources': {'requests': {'cpu': '250m', 'memory': '512Mi'}, 'limits': {'cpu': '2', 'memory': '4Gi'}},
+        'securityContext': JOB_SECURITY,
+        'workingDir': '/work',
+        'volumeMounts': [{'name': 'work', 'mountPath': '/work'}, {'name': 'tmp', 'mountPath': '/tmp'}],
+    }
+    return [{'apiVersion': 'batch/v1', 'kind': 'Job',
+             'metadata': {'name': name, 'namespace': namespace, 'labels': labels},
+             'spec': {'backoffLimit': 0, 'activeDeadlineSeconds': deadline, 'ttlSecondsAfterFinished': 600,
+                      'template': {'metadata': {'labels': labels}, 'spec': {
+                          'serviceAccountName': SA_JOB, 'automountServiceAccountToken': False,
+                          'enableServiceLinks': False, 'restartPolicy': 'Never',
+                          'securityContext': {'runAsNonRoot': True, 'runAsUser': 10001, 'runAsGroup': 10001,
+                                              'fsGroup': 10001, 'seccompProfile': {'type': 'RuntimeDefault'}},
+                          'imagePullSecrets': [{'name': n} for n in pull_secrets],
+                          'containers': [container],
+                          'volumes': [{'name': 'work', 'emptyDir': {'sizeLimit': '20Gi'}},
+                                      {'name': 'tmp', 'emptyDir': {'sizeLimit': '2Gi'}}]}}}}]
 
 
 def user_pod_limits_patch(limits):
@@ -544,6 +609,13 @@ if __name__ == '__main__':
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
     p.add_argument('--door-replicas', type=int, default=2)
+    # a throwaway Job (#3558; docs/dev/MANAGED-LINUX.md «Cluster permissions») — the
+    # provisioner renders the same from a create-job ticket
+    p.add_argument('--job', default='', metavar='u-NONCE',
+                   help='render one throwaway Job for this pod (needs --image, --job-repo, --job-ref, --job-nonce)')
+    p.add_argument('--job-repo', default='')
+    p.add_argument('--job-ref', default='')
+    p.add_argument('--job-nonce', default='')
     p.add_argument('--limits-patch', action='store_true',
                    help='print only the patch that moves --limits on a running pod (rolls that pod alone)')
     args = p.parse_args()
@@ -558,6 +630,11 @@ if __name__ == '__main__':
         if args.door:
             items = door_resources(args.image, args.hub, args.namespace, args.door_replicas, args.entry_lb_spec,
                                    pull_secrets=args.pull_secrets or ['acr-pull'])
+            print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
+            raise SystemExit(0)
+        if args.job:
+            items = job_resources(args.image, args.job, args.job_repo, args.job_ref, args.job_nonce, args.namespace,
+                                  pull_secrets=args.pull_secrets or ['acr-pull'])
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         missing = [f for f in ('image', 'hub', 'storage_class') if not getattr(args, f)]

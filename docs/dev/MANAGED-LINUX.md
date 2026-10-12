@@ -604,6 +604,57 @@ create secret … --dry-run=client -o yaml | kubectl apply -f -`), then
 `kubectl -n $NS rollout restart deploy/fleet-door` — every pod takes only the new
 key from its next login. BREAK-IT `door-wrong-pod` drills the door on a real sshd.
 
+## Cluster permissions
+
+(issue #3558, EPIC #3500 C16 · 共同约定 2) Every service in fleet-workers has
+exactly the permission it needs — for almost all of them, none:
+
+| Account | Who runs as it | Kubernetes |
+|---|---|---|
+| `fleet-user` | a person's pod (`render.py --user-pod`) | none, no token |
+| `fleet-job` | a throwaway Job (`render.py --job`) | none, no token |
+| `fleet-door` · `fleet-linux` | the door · the shared node | none, no token |
+| `fleet-credproxy` · `fleet-egress` · `fleet-npm` · `fleet-pypi` · `fleet-goproxy` | the shared services | none, no token |
+| `fleet-ops` | the central patrol (#3734) | read: pods and their metrics |
+| `fleet-provisioner` | `bin/fleet-provisioner.py` | write — Deployments · Jobs · Services · PVCs in fleet-workers, held to the template |
+
+Each account AND each pod says `automountServiceAccountToken: false`
+(`deploy/k8s/fleet-workers/serviceaccounts.yaml`; render.py's templates carry it
+and the account's name). A user pod's egress guard already rejects the service
+and pod ranges, so the API server is not even reachable from it.
+
+The provisioner is never connected to the hub. fleet-ops hands it what the hub
+sent, and it acts only on a **cluster ticket**: the hub's account key (C15's)
+under the domain `fleet-cluster-ticket-v1`, `c1.<payload>.<sig>`, for this
+cluster, five minutes, its nonce spent once in the ConfigMap
+`fleet-provisioner-nonces` before anything is done. The ops are typed —
+`create-user-pod {pod, limits}` · `destroy-user-pod {pod}` · `set-limits {pod,
+limits}` · `create-job {pod, repo, ref}` — never a manifest: it renders render.py's
+template itself, checks it (`off_template`), and the API server checks it again
+with the `ValidatingAdmissionPolicy` `fleet-provisioner-template` (`deploy/k8s/provisioner/policy.yaml`):
+images by digest, no privilege or escalation, ALL caps dropped and only the user
+pod's own added, no host namespaces, no hostPath or projected volume, no token,
+the fixed account, ClusterIP Services, fleet-workers only, and only objects
+labelled `fleet/role: user|job` — before and after a change. A destroy checks all
+three objects are the pod's before it deletes any.
+
+A Job (`render.py --job`, C7 runs things in it): the image by digest, `runAsNonRoot`
+(uid 10001), ALL caps dropped, a read-only root with `/work` and `/tmp` as
+emptyDirs, no token, no home disk; named `job-<nonce[:12]>` so a replayed create
+is AlreadyExists; labelled `fleet/owner` (never `fleet/pod`, which the owner's
+Service selects); the network rules let it reach DNS, the package caches and the
+CI git mirror only.
+
+Still root: the user pod's own `fleet` container — it is a whole node today
+(supervisor, node program, the credential role user, useradd). #3757 moves it to
+the login's own UID, root left only for sshd's login step.
+
+`deploy/k8s/provisioner/README.md` applies it. BREAK-IT `sa-token-in-user-pod`
+and `provisioner-off-template` drill both halves — on this machine
+(`bin/fleet-break-it-cluster-selftest.sh`) and on kind, with every account's
+`kubectl auth can-i --list` on the run's summary page
+(`.github/workflows/cluster-perms.yml`).
+
 ## Upgrade and recovery
 
 The machine follows `stable` by itself, with the same updater as a Mac

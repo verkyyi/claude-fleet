@@ -45,6 +45,8 @@ spec:
         app: fleet-goproxy
         fleet/role: ops
     spec:
+      # its own account, no token (#3558; ../../fleet-workers/serviceaccounts.yaml)
+      serviceAccountName: fleet-goproxy
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       affinity:

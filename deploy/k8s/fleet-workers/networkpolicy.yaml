@@ -163,6 +163,15 @@ spec:
         - {protocol: TCP, port: 4873}
         - {protocol: TCP, port: 3141}
         - {protocol: TCP, port: 3000}
+    # a throwaway Job (#3558): the package caches alone
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: job
+      ports:
+        - {protocol: TCP, port: 4873}
+        - {protocol: TCP, port: 3141}
+        - {protocol: TCP, port: 3000}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -182,3 +191,81 @@ spec:
             cidr: 0.0.0.0/0
             except:
               - 100.100.100.200/32
+---
+# A throwaway Job (#3558, C16; 共同约定 8): no public internet, the package caches
+# and the CI git mirror alone — and nothing comes in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: job-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: job
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: ops
+      ports:
+        - {protocol: TCP, port: 4873}
+        - {protocol: TCP, port: 3141}
+        - {protocol: TCP, port: 3000}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: arc-runners
+      ports:
+        - {protocol: TCP, port: 9418}
+---
+# The provisioner (#3558, C16): in from fleet-ops alone (fleet/role: control,
+# #3734), out to the API server alone (its address is the cluster's: any, on
+# 443 / 6443, never the cloud metadata address).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provisioner-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: provisioner
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: control
+      ports:
+        - {protocol: TCP, port: 8790}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 100.100.100.200/32
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}

@@ -1,0 +1,61 @@
+name: cluster-perms
+
+# The cluster half of BREAK-IT sa-token-in-user-pod and provisioner-off-template
+# (claude-fleet#3558, EPIC #3500 C16): fleet-workers' accounts, fleet-ops' Role,
+# the provisioner, its Role and its admission policy on a throwaway kind
+# cluster in this runner (deploy/k8s/provisioner/kind-drill.sh). The run's
+# summary page carries `kubectl auth can-i --list` for every account. Nothing
+# here touches a real cluster, and it needs no credential.
+#
+# Docker Hub pulls go through mirror.gcr.io (claude-fleet#2734), as hub-rolling's.
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/k8s/fleet-workers/**'
+      - 'deploy/k8s/provisioner/**'
+      - 'deploy/k8s/credproxy/**'
+      - 'deploy/k8s/egress/**'
+      - 'deploy/k8s/caches/**'
+      - 'extras/managed-node/render.py'
+      - 'bin/fleet-provisioner.py'
+      - 'bin/fleet_cluster_ticket.py'
+      - 'bin/fleet_admin_ticket.py'
+      - 'bin/fleet_ed25519.py'
+      - '.github/workflows/cluster-perms.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cluster-perms-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Hub through mirror.gcr.io
+        run: |
+          set -euo pipefail
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' > /tmp/daemon.json
+          sudo mv /tmp/daemon.json "$f"
+          sudo systemctl restart docker
+          docker info --format '{{.RegistryConfig.Mirrors}}'
+
+      # a local registry: the policy admits images by digest only, so the
+      # stand-ins are pushed and referenced as <registry>/<name>@sha256:…
+      - uses: helm/kind-action@v1
+        id: kind
+        with:
+          cluster_name: perms
+          wait: 120s
+          registry: true
+
+      - name: The drill (both rows; can-i for every account)
+        run: deploy/k8s/provisioner/kind-drill.sh "${{ steps.kind.outputs.LOCAL_REGISTRY }}"

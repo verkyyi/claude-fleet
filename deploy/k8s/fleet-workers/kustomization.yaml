@@ -1,10 +1,15 @@
 # fleet-workers' shared layer (claude-fleet#3547, EPIC #3500 C2): the cluster
 # credential proxy and the one egress, each once, the package caches (#3548,
 # C3: fleet-npm · fleet-pypi · fleet-goproxy), plus the namespace's network rules. User pods (extras/managed-node/render.py, label fleet/role=user) are
-# rendered and applied apart. Applied by a person (README.md), never by hub-deploy.
+# rendered and applied apart. Every pod here runs as its own account with no
+# token but fleet-ops (read) and fleet-provisioner (write, by template — #3558,
+# C16): serviceaccounts.yaml, ../provisioner. Applied by a person (README.md),
+# never by hub-deploy.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - serviceaccounts.yaml
+  - ../provisioner
   - ../credproxy/fleet-workers
   - ../egress/fleet-workers
   - ../caches/fleet-workers
