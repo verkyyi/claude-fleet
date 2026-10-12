@@ -25,6 +25,10 @@
 #   G. KEPT IS ALIVE (issue #3444) — a done no-issue row whose person chose a
 #      reap policy other than the idle reaper's (`keep`, `at:…`) stays on the
 #      list; `done:2h` / no policy still ends; `exited` ends whatever its policy.
+#   H. A TURN IS NOT THE END (issue #3496) — a done no-issue row whose state
+#      stamp is younger than its idle window (`done:<dur>`, else 15m) stays on
+#      the list (drills 35–38: the newcomer's first session vanished from
+#      `fleet ls` the moment it answered); past the window it ends.
 # tmux runs on a PRIVATE socket via a PATH shim; gh fails.
 set -uo pipefail
 export FLEET_DASH_ORDER=status
@@ -171,6 +175,39 @@ hasnt "G: a done:2h one still ends" "$n" "idlehome"
 hasnt "G: …so does one with no policy" "$n" "barehome"
 hasnt "G: an exited one ends whatever its policy" "$n" "keptgone"
 has   "G: the heading counts the three" "$n" "▸ 已结束 (3)"
+
+# --- H. a turn is not the end (issue #3496) ----------------------------------------
+for w in $(tmux list-windows -t alpha -F '#{window_id}'); do
+  case "$(tmux display-message -p -t "$w" '#{window_name}')" in plan) ;; *) tmux kill-window -t "$w" ;; esac
+done
+T=$(date +%s)
+win justdone  @norepo 1 @claude_state done @claude_state_ts "$T"                                   >/dev/null
+win firstdone @norepo 1 @claude_state done @claude_state_ts "$((T - 120))" @reap_policy done:15m   >/dev/null
+win longidle  @norepo 1 @claude_state done @claude_state_ts "$((T - 3600))" @reap_policy done:2h   >/dev/null
+win stale     @norepo 1 @claude_state done @claude_state_ts "$((T - 1200))"                         >/dev/null
+win overdue   @norepo 1 @claude_state done @claude_state_ts "$((T - 660))" @reap_policy done:10m   >/dev/null
+win exitnow   @norepo 1 @claude_state exited @claude_state_ts "$T"                                  >/dev/null
+n=$(names)
+has   "H: a session that just finished its turn stays on the list" "$n" "justdone"
+has   "H: …so does one 2 minutes into its done:15m window" "$n" "firstdone"
+has   "H: …and one an hour into done:2h" "$n" "longidle"
+hasnt "H: idle past the 15m default, it ends" "$n" "stale"
+hasnt "H: idle past its done:10m, it ends" "$n" "overdue"
+hasnt "H: exited ends at once" "$n" "exitnow"
+has   "H: the heading counts the three" "$n" "▸ 已结束 (3)"
+TSV="$WORK/rows-h.tsv"
+FLEET_SESSION=alpha FLEET_ROWS_UNFOLD=1 python3 - "$BIN" "$TSV" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("qo", sys.argv[1] + "/fleet-quickopen.py")
+qo = importlib.util.module_from_spec(spec); spec.loader.exec_module(qo)
+rs = qo.full_rows("alpha")
+open(sys.argv[2], "w").write("".join("\t".join([r["key"], r["state"], r["glyph"], r["name"], r["node"], r["group"],
+                                                 r["badge"], r["issue"], r["pr"], r["reap"], r["title"], r["repo"],
+                                                 r["ended"]]) + "\n" for r in rs or []))
+PY
+out=$(FLEET_SESSION_CLI_ROWS="$TSV" python3 "$BIN/fleet-session-cli.py" ls --json)
+has   "H: fleet ls lists the session that just answered" "$out" '"justdone"'
+hasnt "H: …and not the stale one" "$out" '"stale"'
 
 printf 'dash-ended-group-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]
