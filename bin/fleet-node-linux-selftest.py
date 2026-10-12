@@ -478,7 +478,7 @@ class LinuxNode(unittest.TestCase):
                 Path(path).write_text(data)
 
             me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
-            args = Mock(login='arvin2', uid=10003, hub='https://hub.example', join_file=str(code),
+            args = Mock(login='dana2', uid=10003, hub='https://hub.example', join_file=str(code),
                         relay='https://relay.example')
             with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
                     patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'), \
@@ -486,7 +486,7 @@ class LinuxNode(unittest.TestCase):
                     patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown'):
                 m.prepare(args)
                 s.account_adopt.assert_called_once()
-                self.assertFalse((d / 'cred/arvin2/cred-proxy/relay.token').exists())
+                self.assertFalse((d / 'cred/dana2/cred-proxy/relay.token').exists())
                 relay_code[0] = 500
                 with self.assertRaises(m.HubHTTPError):
                     m.prepare(args)
@@ -675,19 +675,19 @@ class LinuxNode(unittest.TestCase):
             t = s.default_table(s.Paths())
         self.assertEqual((t['children'], t['tasks'], t['account']), ([], [], []))
         routes = s.door_routes({'routes': [
-            {'login': 'arvin', 'service': 'u-k3x9q2'},
+            {'login': 'dana', 'service': 'u-k3x9q2'},
             {'login': 'bob', 'service': 'u-aaaa1'}, {'login': 'bob', 'service': 'u-bbbb2'},
             {'login': 'carol', 'service': 'fleet-linux'}, {'login': 'root;x', 'service': 'u-cccc3'}]})
-        self.assertEqual(routes, {'arvin': 'u-k3x9q2'})
+        self.assertEqual(routes, {'dana': 'u-k3x9q2'})
         with tempfile.TemporaryDirectory() as d:
             pw = os.path.join(d, 'passwd')
             Path(pw).write_text(json.dumps({'other': {'uid': 1001, 'gid': 20, 'home': '/home/other'}}))
             with patch.dict(os.environ, {'FLEET_NODE_TEST': '1', 'FLEET_NODE_PASSWD': pw}):
-                v = s.door_eligible(['arvin', 'other', 'root', 'dave'], {'arvin': 'u-k3x9q2', 'other': 'u-oooo1'})
-            self.assertIsNone(v['arvin'])
+                v = s.door_eligible(['dana', 'other', 'root', 'dave'], {'dana': 'u-k3x9q2', 'other': 'u-oooo1'})
+            self.assertIsNone(v['dana'])
             self.assertIn('not a door account', v['other'])
             self.assertTrue(v['root'] and v['dave'])
-            self.assertEqual(json.loads(Path(pw).read_text())['arvin']['gecos'], 'fleet-door')
+            self.assertEqual(json.loads(Path(pw).read_text())['dana']['gecos'], 'fleet-door')
 
     def test_pull_secret_is_a_flag(self):
         """#3290: ACK's password-free ACR plugin names its Secret acr-credential-<hash>;
@@ -966,8 +966,8 @@ class LinuxNode(unittest.TestCase):
             (state / 'linux-tenants').mkdir(parents=True)
             logins.mkdir()
             (state / 'machine.env').write_text('CCQUOTA_HUB_URL=https://hub.example/\n')
-            store = cred / 'arvin'
-            (state / 'linux-tenants' / 'arvin.json').write_text(json.dumps({'login': 'arvin', 'uid': 10003, 'gid': 10003}))
+            store = cred / 'dana'
+            (state / 'linux-tenants' / 'dana.json').write_text(json.dumps({'login': 'dana', 'uid': 10003, 'gid': 10003}))
             for f, text in (('node.env', 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET_CREDS=1\n'),
                             ('accounts/max1.hub/.credentials.json', '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}'),
                             ('accounts/pooled', 'sk-ant-oat01-y'), ('accounts/max1.conf', 'label=max1\n'),
@@ -978,7 +978,7 @@ class LinuxNode(unittest.TestCase):
             pool = cred / '.shared/pool/claude/' / ('a' * 32)
             pool.mkdir(parents=True)
             (pool / '.credentials.json').write_text('{"claudeAiOauth":{}}')
-            (logins / 'arvin.env').write_text('CCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET_CREDS=1\nFLEET_CONF_DIR=/home/arvin/.config/claude-fleet\n')
+            (logins / 'dana.env').write_text('CCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET_CREDS=1\nFLEET_CONF_DIR=/home/dana/.config/claude-fleet\n')
             lib.mkdir()
             s = Mock()
             s.Paths.return_value = Mock(state=str(state))
@@ -996,24 +996,24 @@ class LinuxNode(unittest.TestCase):
                     patch.dict(os.environ, {'FLEET_CRED_CENTRAL_URL': central}):
                 self.assertEqual(m.creds_flag(), '0')
                 m.route_heal(Mock(hub='', relay='https://relay.example'))
-                conf = m.env_read(lib / 'arvin.conf')
+                conf = m.env_read(lib / 'dana.conf')
                 self.assertEqual(conf['FLEET_CRED_CENTRAL_URL'], central)
                 self.assertIn('fleet-credproxy.fleet-workers.svc.cluster.local', conf['FLEET_CRED_ALLOW_HOSTS'].split())
                 self.assertEqual(m.env_read(store / 'node.env')['CCQUOTA_FLEET_CREDS'], '0')
                 self.assertEqual(m.env_read(store / 'node.env')['CCQUOTA_TOKEN'], 'node-tok')
-                self.assertEqual(m.env_read(logins / 'arvin.env')['CCQUOTA_FLEET_CREDS'], '0')
-                self.assertEqual(m.env_read(logins / 'arvin.env')['FLEET_CONF_DIR'], '/home/arvin/.config/claude-fleet')
+                self.assertEqual(m.env_read(logins / 'dana.env')['CCQUOTA_FLEET_CREDS'], '0')
+                self.assertEqual(m.env_read(logins / 'dana.env')['FLEET_CONF_DIR'], '/home/dana/.config/claude-fleet')
                 left = sorted(str(f.relative_to(cred)) for f in cred.rglob('*') if f.is_file())
-                self.assertEqual(left, ['arvin/accounts/max1.conf', 'arvin/cred-proxy/hub-passes.json',
-                                        'arvin/cred-proxy/relay.token', 'arvin/node.env'])
+                self.assertEqual(left, ['dana/accounts/max1.conf', 'dana/cred-proxy/hub-passes.json',
+                                        'dana/cred-proxy/relay.token', 'dana/node.env'])
                 for f in cred.rglob('*'):
                     if f.is_file():
                         self.assertNotIn('sk-ant-', f.read_text(), f)
                 # a second start finds nothing to do
                 with patch.object(m, 'private_write') as pw:
-                    self.assertFalse(m.central_heal(s, s.Paths(), c, 'arvin'))
+                    self.assertFalse(m.central_heal(s, s.Paths(), c, 'dana'))
                     pw.assert_not_called()
-                self.assertEqual(m.cred_purge(c, ['arvin']), 0)
+                self.assertEqual(m.cred_purge(c, ['dana']), 0)
                 # the dev network: the egress is every login's proxy, the cluster direct
                 git, shell = m.devnet_settings({'FLEET_EGRESS_PROXY': egress})
                 self.assertIn('[http]\n\tproxy = ' + egress, git)

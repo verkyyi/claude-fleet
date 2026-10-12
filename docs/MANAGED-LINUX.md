@@ -540,7 +540,7 @@ the StorageClass allows expansion). The machine join code goes in the Secret
 
 (issue #3549, EPIC #3500 C4) The cluster has ONE public way in for everyone whose
 home is their own pod: the door. A person connects as always —
-`ssh <login>@<name>.cf.24haowan.com -p 22022`, their phone or their computer — and
+`ssh <login>@<name>.<zone> -p 22022`, their phone or their computer — and
 the door hands them to their own pod. `render.py --door` renders it:
 
 | Object | What |

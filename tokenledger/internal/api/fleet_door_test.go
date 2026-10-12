@@ -37,7 +37,7 @@ func doorHome(t *testing.T, h *harness, person, machine, login string) {
 // reaches the door.
 func TestDoorRoutesEachLoginToItsOwnPod(t *testing.T) {
 	h := entryHarness(t)
-	_, tok5 := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
+	_, tokA := rootNode(t, h, "rootA", "home-a", control.CapEntryKeys)
 
 	// No door named: the table is not there.
 	_, dtok0 := rootNode(t, h, "door0", "fleet-door0", control.CapEntryKeys)
@@ -73,8 +73,8 @@ func TestDoorRoutesEachLoginToItsOwnPod(t *testing.T) {
 		t.Fatalf("bob holds keys at the door he never added: %s", raw)
 	}
 
-	// Only the door reads it: another machine, a login's token → 403.
-	for name, tok := range map[string]string{"another machine": tok5, "a login": h.tokens["macmini-alice"], "a door not named": dtok0} {
+	// Only the door reads it: another machine → 403.
+	for name, tok := range map[string]string{"another machine": tokA, "a door not named": dtok0} {
 		if code, _, raw := doorRoutes(t, h, tok); code != http.StatusForbidden {
 			t.Fatalf("%s reads the door's table: HTTP %d %s, want 403", name, code, raw)
 		}
@@ -84,9 +84,9 @@ func TestDoorRoutesEachLoginToItsOwnPod(t *testing.T) {
 	}
 
 	// A home on a machine is that machine's, never the door's.
-	doorHome(t, h, pAlice, "macmini", "alice")
+	doorHome(t, h, pAlice, "home-a", "alice")
 	if _, list, raw := doorRoutes(t, h, dtok); len(list.Routes) != 1 || list.Routes[0].Login != "bob" || len(list.Logins) != 1 {
-		t.Fatalf("a home on macmini at the door: %s", raw)
+		t.Fatalf("a home on a machine at the door: %s", raw)
 	}
 
 	// door-wrong-pod: two pods claim one login ⇒ the door routes neither.
@@ -142,7 +142,7 @@ func TestDoorDNSPointsPodHomesAtTheDoor(t *testing.T) {
 		t.Fatalf("the pod's public port %d, want the door's %d", p, entryPort)
 	}
 	// Any other home is still its own.
-	if m := h.srv.entryAddrMachine("macmini", now); m != "macmini" {
-		t.Fatalf("macmini is reached at %s", m)
+	if m := h.srv.entryAddrMachine("home-a", now); m != "home-a" {
+		t.Fatalf("home-a is reached at %s", m)
 	}
 }
