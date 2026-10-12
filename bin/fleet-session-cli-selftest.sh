@@ -42,6 +42,9 @@
 #                            two machines → the candidates and exit 4, --machine
 #                            picks; none → 3; a service has no run → 3; bin/fleet
 #                            routes the verbs here
+#   M  --home, bare PATH (issue #3454) the thin client's `fleet ls` on the home over
+#                            a one-shot ssh: tmux only as the vendor copy, the fleet
+#                            still found and its rows listed; no fleet → 「家机器 …」
 #   L  在问 (issue #2538)     a needs row whose cache row carries what it asks
 #                            (fields 27-28): ls grows a 在问 column (kind · the
 #                            first 40 characters), show prints it whole, ls
@@ -384,6 +387,28 @@ out=$(cqa answer '#12' </dev/null 2>&1)
 has "L answer: the question is the prompt's 题干" "登录页重做（m4）在问你（权限）：" "$out"
 has "L answer: …in its own words" "  $Q" "$out"
 has "L ls: nobody asks → no 在问 column" "状态    PR" "$(cli ls)"
+
+# --- M. --home over a bare ssh (issue #3454) -------------------------------------------
+# The thin client's `fleet ls` runs `--home ls` on the home over a one-shot ssh: PATH
+# there is /usr/bin:/bin, and a managed login's tmux is only the vendor copy. The home
+# must still find its fleet and list its rows, never 「这台机器上没有在跑的 fleet」.
+REAL=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux)
+MH="$W/mhome" MX="$W/mtmx"
+mkdir -p "$MH/.local/share/claude-fleet-vendor/bin" "$W/mconf/fleets/fx" "$MX"
+ln -s "$REAL" "$MH/.local/share/claude-fleet-vendor/bin/tmux"
+printf 'FLEET_SESSION=fx\n' > "$W/mconf/fleets/fx/conf"
+TMUX_TMPDIR="$MX" "$REAL" -L fx -f /dev/null new-session -d -s fx -n issue-7 'sleep 300'
+TMUX_TMPDIR="$MX" "$REAL" -L fx set -w -t fx:issue-7 @issue 7
+bare() { env -i HOME="$MH" FLEET_CONF_DIR="$1" TMUX_TMPDIR="$MX" PATH=/usr/bin:/bin FLEET_TOOL_DIRS="$W/none" \
+         LANG=en_US.UTF-8 FLEET_UI_LANG=zh python3 "$BIN/fleet-session-cli.py" --home ls --json; }
+out=$(bare "$W/mconf" 2>&1); rc=$?
+eq "M --home ls --json over a bare PATH exits 0" 0 "$rc"
+eq "M …lists the home's row (the vendor tmux found)" "issue-7|7" \
+  "$(printf '%s' "$out" | python3 -c 'import json,sys; print(";".join("%s|%s" % (r["name"], r["issue"]) for r in json.load(sys.stdin)))' 2>&1)"
+out=$(bare "$W/mconf-none" 2>&1); rc=$?
+eq "M no fleet on the home → exit 1" 1 "$rc"
+has "M …named as the home, not this machine" "家机器" "$out"
+TMUX_TMPDIR="$MX" "$REAL" -L fx kill-server >/dev/null 2>&1
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-session-cli selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

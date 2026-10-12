@@ -90,6 +90,7 @@ import importlib.util
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -622,10 +623,28 @@ def sh_lib(snippet):
         return ""
 
 
+TOOLS_FILLED = [False]
+
+
+def tools_on_path():
+    """PATH with the fleet's tmux on it, once, for this process and every child (issue
+    #3454). The thin client's `--run` is a bare ssh: a managed login's tmux is the
+    vendor copy fleet_find_tool picks, never on that PATH, so `fleet_sockets` saw no
+    fleet and the home answered 「没有在跑的 fleet」 to a person whose sessions run there."""
+    if TOOLS_FILLED[0] or not (BIN / "fleet-lib.sh").exists():
+        return
+    TOOLS_FILLED[0] = True
+    pth = sh_lib('p=$(fleet_path_fill); t=$(fleet_find_tool tmux 2>/dev/null); '
+                 'case "$t" in /*) p="${t%/*}:$p" ;; esac; printf "%s\\n" "$p"')
+    if pth:
+        os.environ["PATH"] = pth
+
+
 def fleet_here():
     """The first fleet live on this machine (fleet_sockets), "" on a client-only computer."""
     if not (BIN / "fleet-lib.sh").exists():
         return ""
+    tools_on_path()
     return sh_lib("fleet_sockets 2>/dev/null")
 
 
@@ -649,15 +668,18 @@ def road():
     return "here" if fleet_here() else "home"
 
 
-def home_setup():
-    """--home: this machine's fleet — FLEET_SESSION, the fleet server's environment
+def home_setup(asked=False):
+    """--home (`asked`: by name — the thin client's `--run`): this machine's fleet — FLEET_SESSION, the fleet server's environment
     (its TMPDIR is where the hub's cache lives) and TMUX at its socket."""
     HOME[0] = True
     if os.environ.get("FLEET_SESSION_CLI_ROWS"):
         return True
+    tools_on_path()
     sess = os.environ.get("FLEET_SESSION") or fleet_here()
     if not sess:
-        say("这台机器上没有在跑的 fleet")
+        # asked over --run, this machine is the person's home, not where they type
+        say("家机器 %s 上没有在跑的 fleet，你还没有会话" % socket.gethostname().split(".")[0] if asked
+            else "这台机器上没有在跑的 fleet")
         return False
     os.environ["FLEET_SESSION"] = sess
     try:
@@ -836,7 +858,7 @@ def main(argv):
     # and runs this again (FLEET_SHELL=1 then) — the seam reads a file instead
     # (`ls --services` reads a cache file, never the client: no re-run)
     if home:
-        if not home_setup():
+        if not home_setup(asked=True):
             return 1
     elif os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS") \
             and not (verb == "ls" and "--services" in args) and verb not in ("service", "task"):
