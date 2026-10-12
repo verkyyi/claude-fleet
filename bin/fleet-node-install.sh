@@ -40,7 +40,13 @@
 #             com.claude-fleet.node-core (fleet-node-core.py install), 0 removes it;
 #             neither: an installed one is kept converged, none = no line at all
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
-#             (fleet-node-supervisor.py install, from `current` — C3)
+#             (fleet-node-supervisor.py install, from `current` — C3).
+#             FLEET_NODE_SEAT=1 on the command (with the core serving) moves it
+#             onto its own account in the same step (#3668): `install --seat`
+#             makes _fleetnode / fleetnode, the core takes requests from it alone
+#             from that moment, the root daemon hands its children over and the
+#             seat adopts them — nothing restarts. An account already there
+#             keeps the daemon on it; none = root, byte for byte
 #             — whose `spotlight` task turns Spotlight off at its start (#3402,
 #             docs/MANAGED-NODE.md §19)
 #   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
@@ -455,8 +461,14 @@ esac
 # ---------------------------------------------------------------- 守护 ----------
 mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins" || fail 守护 "建不了 $STATE/logins"
 SUP="$CUR/bin/fleet-node-supervisor.py"
-if "$PY" -I "$SUP" install --check >/dev/null 2>&1; then
-  skip 守护 "com.claude-fleet.node 已装好、在跑"
+SEAT=_fleetnode; [ "$OS" = linux ] && SEAT=fleetnode
+if [ "${FLEET_NODE_SEAT:-}" = 1 ] && ! id -u "$SEAT" >/dev/null 2>&1; then
+  # the daemon's own account (#3668): made and moved onto in ONE step — the core
+  # takes requests from it alone the moment it exists
+  out="$("$PY" -I "$SUP" install --seat 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
+  ok 守护 "$(printf '%s' "$out" | tail -n 1)（守护以 ${SEAT} 跑，要 root 的事经核心）"
+elif "$PY" -I "$SUP" install --check >/dev/null 2>&1; then
+  skip 守护 "com.claude-fleet.node 已装好、在跑$(id -u "$SEAT" >/dev/null 2>&1 && echo "（以 ${SEAT}）")"
 else
   out="$("$PY" -I "$SUP" install 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
   ok 守护 "$(printf '%s' "$out" | tail -n 1)"

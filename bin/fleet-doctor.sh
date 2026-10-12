@@ -1942,7 +1942,7 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     4) warn node "machine daemon com.claude-fleet.node: $nline (issue #2973; detail: \`fleet-node-supervisor.py status --json\` → fda)" ;;
     6) fail node "machine daemon com.claude-fleet.node: $nline (issue #3167; detail: \`fleet-node-supervisor.py status --json\` → fda.stuck)" ;;
     5) fail node "machine daemon com.claude-fleet.node: $nline — every machine and account task (updater, memguard, collector …) is stopped with it (issue #3086)" ;;
-    1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
+    1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log (a daemon on _fleetnode: /var/log/fleet-node/node/supervisor.log), \`fleet-node-supervisor.py status\`" ;;
   esac
   # A taken-over login is a TENANT: no admin, no sudo (issue #2842). What a session
   # may destroy is what its login can do — this row is the guarantee, never a rule

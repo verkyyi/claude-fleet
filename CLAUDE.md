@@ -957,9 +957,10 @@ Do not install from memory: read the doc and work from it.
   `bin/fleet-node-core.py` (`com.claude-fleet.node-core` / `fleet-node-core.service`,
   root) opens no port and reads nothing from the hub: one socket,
   `/var/run/fleet-node-core.sock` 0660, the peer's uid checked by the kernel
-  (only the node daemon's: `_fleetnode`, root until C14), one line `{op, args}`
-  with no extra key, and only `run-as` · `stop-as` · `exec-as` · `kill` · `memguard`
-  · `power` · `switch` · `rollback` (`bin/fleet_node_core.py` is the wire + client).
+  (only the node daemon's: `_fleetnode` once it exists — re-read per connection —
+  else root), one line `{op, args}` with no extra key, and only `run-as` · `stop-as`
+  · `exec-as` · `kill` · `memguard` · `power` · `switch` · `rollback` · `machine` ·
+  `sweep` · `entry` · `report` (`bin/fleet_node_core.py` is the wire + client).
   A job is a NAME of the account task table, never an argv; exec-as's argv[0] lives
   under `<current>/bin/`; `switch` re-checks the release with the core's own key
   (`bin/fleet_ed25519.py`, plain Python) and every digest. Off the table ⇒
@@ -968,7 +969,15 @@ Do not install from memory: read the doc and work from it.
   core-held tasks are asked of it (`fleet-node-core.py call … --follow`), the updater's
   switch / rollback / `as_login` too; no core (or `FLEET_NODE_CORE=0`) ⇒ the old road,
   byte for byte. A new privileged op is a BREAK-IT row first (`root-core-*`), then a
-  line in the table. docs/MANAGED-NODE.md §20.
+  line in the table. docs/MANAGED-NODE.md §20. **The daemon itself runs as
+  `_fleetnode`** (issue #3668, C14): `FLEET_NODE_SEAT=1 fleet node install` →
+  `install --seat` makes the account and moves the daemon onto it in ONE step (the
+  root daemon hands its children over — `seat-handover.json` — and the seat adopts
+  them); seated, everything root's is a core op (`machine {job, action}` by a name
+  in the core's own `machine_table`, `sweep`, `entry`, `report table|fda|tenants|lanes`),
+  it writes only `<state>/node` (state.json's link target), `<state>/locks`,
+  `<log>/node` and the register's run/runs/alerts (`seat_layout` / `seat_share`).
+  No seat ⇒ the root daemon, byte for byte. §22, BREAK-IT `fleetnode-compromised`.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
   (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves

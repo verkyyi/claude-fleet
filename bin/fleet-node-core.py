@@ -8,8 +8,9 @@ reads nothing the hub sends: it listens on ONE local socket,
 /var/run/fleet-node-core.sock (0660, the peer's group), and every connection is
 checked first — the peer's uid (getpeereid: LOCAL_PEERCRED on macOS, SO_PEERCRED
 on Linux) must be the node daemon's account (FLEET_NODE_CORE_PEER: `_fleetnode` /
-`fleetnode` once C14 made it, else root — today's daemon); anyone else is cut off
-and logged before a byte is read.
+`fleetnode` once C14 made it, else root — read again on every connection, so the
+seat is the one peer the moment `install --seat` makes it, #3668); anyone else is
+cut off and logged before a byte is read.
 
 A request is one line {"op", "args"} — not one key more (bin/fleet_node_core.py
 holds the wire half). The table, written here and nowhere else:
@@ -26,6 +27,21 @@ holds the wire half). The table, written here and nowhere else:
                           prepCmd rule, moved here), root-owned, nobody else may write
   kill     {pid}          TERM, 5 s, KILL — only a process of a managed login or a
                           job this core started
+  machine  {job, action}  a machine job (#3668) by its NAME in the core's own table
+                          (fleet-node-supervisor.py machine_table: the table's
+                          children and tasks, the entry's listener + revocation
+                          follower, the test runner) — never an argv. action start
+                          (as root, one copy; {"ok","pid"} then {"exit"}) · stop
+                          (its job, or the root process running exactly that job's
+                          command — what the root daemon left at the handover) ·
+                          held (what holds its reload, read-only) · hup (SIGHUP, only
+                          a job whose table entry reloads on it)
+  sweep    {}             the leftover sweep (plists to the attic, launchctl bootout)
+  entry    {}             one entry-port pass: converge (host key, keys files, sshd -t,
+                          com.apple.access_ssh) + the audit
+  report   {kind}         read-only: table · fda (Full Disk Access of the core's chain)
+                          · tenants (sudo -l -U, the sudoers files) · lanes (the
+                          refused lanes in the node program's books)
   memguard {level}        fleet-memguard.sh --once as root (once · report)
   power    {profile}      spotlight-off (macOS): fleet-spotlight.sh off --tick
   switch   {sha}          the release in <state>/staging/<sha>/ (a non-root
@@ -52,7 +68,8 @@ Usage:
   fleet-node-core.py call <op> [<args JSON>] [--follow]
                                                  one request, the reply on stdout; exit 0 ok
                                                  · 2 refused · 1 error / no core. --follow
-                                                 (run-as): wait for the job and exit with its rc;
+                                                 (run-as · machine start): wait for the job and exit
+                                                 with its rc;
                                                  SIGTERM asks stop-as first (the node daemon's
                                                  child for a job the core runs)
   fleet-node-core.py status [--check]            installed · socket · refusals; --check: 0 serving
@@ -63,7 +80,8 @@ Usage:
 Seams: FLEET_NODE_CORE_SOCK · FLEET_NODE_CORE_LOG · FLEET_NODE_CORE_PEER ·
 FLEET_NODE_CORE_PEER_UID (FLEET_NODE_TEST only) · FLEET_NODE_CORE_ALERT_N ·
 FLEET_NODE_STATE · FLEET_NODE_ROOT · FLEET_NODE_RUNTIME · FLEET_NODE_LOG ·
-FLEET_NODE_TABLE / FLEET_NODE_PASSWD (the supervisor's) · FLEET_NODE_TEST=1.
+FLEET_NODE_TABLE / FLEET_NODE_PASSWD (the supervisor's; under FLEET_NODE_TEST the
+fake passwd also names the seat) · FLEET_NODE_TEST=1.
 """
 from __future__ import print_function
 
@@ -103,6 +121,9 @@ LABEL = "com.claude-fleet.node-core"
 SYSTEMD_UNIT = "fleet-node-core.service"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 LEVELS = ("once", "report")
+MACHINE_ACTIONS = ("start", "stop", "held", "hup")
+REPORTS = ("table", "fda", "tenants", "lanes")
+MACHINE = "@machine"     # the book's login for a machine job: no login is spelled so
 PROFILES = ("spotlight-off",)
 EXEC_TIMEOUT = 1800
 OUT_MAX = 65536
@@ -171,6 +192,13 @@ def allowed_peer():
         u = int(env("FLEET_NODE_CORE_PEER_UID", "0"))
         return u, os.getegid()
     names = [env("FLEET_NODE_CORE_PEER", "")] if env("FLEET_NODE_CORE_PEER", "") else ["_fleetnode", "fleetnode"]
+    if testing() and env("FLEET_NODE_PASSWD", ""):
+        # a sandbox's seat (#3668): the fake passwd names it, or the peer is root
+        fake = sup.read_json(env("FLEET_NODE_PASSWD", ""), {}) or {}
+        for n in names:
+            if isinstance(fake.get(n), dict):
+                return int(fake[n]["uid"]), int(fake[n]["gid"])
+        return 0, 0
     for n in names:
         try:
             pw = pwd.getpwnam(n)
@@ -226,6 +254,21 @@ def resolve_job(paths, login, job, ident):
     """The entry for (login, job) the supervisor would build — from the table, never
     from the request — else Refused."""
     sp = sup.Paths()
+    m = sup.TASK_JOB_RE.match(job)
+    if job.startswith("task:"):
+        # an agent task's attempt (#3668): the entry from the register, the slot,
+        # attempt and manual time only fill its window and prompt
+        if not m:
+            raise Refused(None, "job %r is not task:<name>@<day>#<attempt>[~HHMM]" % job)
+        name, day, attempt, manual = m.group(1), m.group(2), int(m.group(3)), m.group(4)
+        for lg, nm, path, svc, why in sup.service_files(sp):
+            if lg == login and nm == name:
+                if svc is None or svc.get("kind") != "task":
+                    raise Refused(None, "%s/%s is not a runnable task: %s" % (login, name, why or "a service"))
+                if svc.get("state", "enabled") != "enabled":
+                    raise Refused(None, "task %s/%s is stopped" % (login, name))
+                return sup.task_entry(sp, svc, ident, day, attempt, manual)
+        raise Refused(None, "no task %s/%s in the register" % (login, name))
     if job.startswith("svc:"):
         name = job[4:]
         if not sup.SVC_NAME_RE.match(name):
@@ -429,7 +472,7 @@ def chown_root(top):
 class Core(object):
     def __init__(self, paths):
         self.p = paths
-        self.peer = allowed_peer()
+        self.peer = allowed_peer()      # at start, for the socket's group; re-read per connection
         self.jobs = {}                 # (login, job) -> Popen
         self.lock = threading.Lock()
         self.refusals = collections.deque()
@@ -472,8 +515,11 @@ class Core(object):
             uid = peer_uid(conn)
         except (OSError, struct.error):
             uid = None
-        if uid != self.peer[0]:
-            self.log(uid, "-", None, "refused: peer uid %s is not the node daemon's (%d) — cut off" % (uid, self.peer[0]))
+        # per connection (#3668): the moment `install --seat` makes _fleetnode it
+        # is the one peer — the root daemon it replaces is cut off in the same step
+        peer = allowed_peer()
+        if uid != peer[0]:
+            self.log(uid, "-", None, "refused: peer uid %s is not the node daemon's (%d) — cut off" % (uid, peer[0]))
             conn.close()
             return
         conn.settimeout(10)
@@ -528,6 +574,10 @@ class Core(object):
         why = sup.account_runnable(ent)
         if why:
             raise Refused(None, why)
+        if ent.get("creds"):
+            missing = sup.service_creds(sup.Paths(), ent)[1]
+            if missing:
+                return {"error": "missing credential %s" % ", ".join(missing)}
         key = (a["login"], a["job"])
         with self.lock:
             old = self.jobs.get(key)
@@ -584,6 +634,136 @@ class Core(object):
             rc, out, err = 124, x.stdout or b"", (x.stderr or b"") + b"\n(timed out)"
         return {"ok": True, "rc": rc, "out": out[-OUT_MAX:].decode("utf-8", "replace"),
                 "err": err[-OUT_MAX:].decode("utf-8", "replace")}
+
+    # -- the seated daemon's root half (#3668)
+    def machine_job(self, name):
+        """(entry, is_task) of a machine job by name — from the core's own table,
+        never from the request — else Refused."""
+        t = sup.machine_table(sup.Paths())
+        for kind in ("children", "tasks"):
+            for ent in t[kind]:
+                if ent.get("name") != name:
+                    continue
+                if ent.get("account") or ent.get("core") or not ent.get("cmd"):
+                    raise Refused(None, "job %r is not a machine job of mine (its own op, or none)" % name)
+                return ent, kind == "tasks"
+        raise Refused(None, "job %r is not in the machine table" % name)
+
+    def strays(self, ent):
+        """Root processes running exactly <ent>'s command that are not in the book:
+        what the root daemon left running when the seat took over."""
+        full = " ".join(ent["cmd"])
+        tail = " ".join(ent["cmd"][1:])
+        out = []
+        try:
+            ps = subprocess.run(["/bin/ps", "-axo", "pid=,uid=,command="], capture_output=True, text=True,
+                                timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            return out
+        for line in ps.splitlines():
+            parts = line.split(None, 2)
+            # root's (the core's own uid: 0 on a machine, the sandbox's in a test)
+            if len(parts) < 3 or not parts[0].isdigit() or parts[1] != str(os.geteuid()):
+                continue
+            pid, cmd = int(parts[0]), parts[2].strip()
+            if pid == os.getpid():
+                continue
+            if cmd == full or (tail and cmd.endswith(" " + tail) and os.path.basename(ent["cmd"][0]) in cmd):
+                out.append(pid)
+        return out
+
+    def machine_log(self, name, task):
+        d = os.path.join(self.p.log, "tasks") if task else self.p.log
+        os.makedirs(d, 0o755, exist_ok=True)
+        path = os.path.join(d, name + ".log")
+        try:
+            if os.path.getsize(path) > 1 << 20:
+                os.rename(path, path + ".1")
+        except OSError:
+            pass
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise OSError("log %s is not a regular file" % path)
+        return os.fdopen(fd, "ab")
+
+    def op_machine(self, conn, a):
+        if a["action"] not in MACHINE_ACTIONS:
+            raise Refused(None, "action %r — one of %s" % (a["action"], ", ".join(MACHINE_ACTIONS)))
+        ent, task = self.machine_job(a["job"])
+        key = (MACHINE, a["job"])
+        with self.lock:
+            p = self.jobs.get(key)
+        mine = p if p is not None and p.poll() is None else None
+        if a["action"] == "held":
+            pid = mine.pid if mine else next(iter(self.strays(ent)), None)
+            return {"ok": True, "held": sup.reload_held(ent, pid) if pid else ""}
+        if a["action"] == "hup":
+            if ent.get("reload_signal") != "HUP":
+                raise Refused(None, "job %s does not reload on SIGHUP" % a["job"])
+            pids = [mine.pid] if mine else self.strays(ent)
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGHUP)
+                except OSError:
+                    pass
+            return {"ok": True, "signalled": len(pids)}
+        if a["action"] == "stop":
+            if mine:
+                return {"ok": True, "stopped": stop_group(mine.pid)}
+            pids = self.strays(ent)
+            return {"ok": True, "stopped": all(stop_group(x) for x in pids) if pids else False, "strays": len(pids)}
+        # start: one copy — a job of mine still running, or the root daemon's
+        if mine:
+            return {"error": "running", "pid": mine.pid}
+        left = self.strays(ent)
+        if left:
+            return {"error": "running (left by the root daemon)", "pid": left[0]}
+        if not sup.trusted(sup.script_of(ent["cmd"])):
+            raise Refused(None, "job %s: %s is not root-owned, or someone else may write it"
+                          % (a["job"], sup.script_of(ent["cmd"])))
+        with self.lock:
+            fh = self.machine_log(a["job"], task)
+            p = subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                                 env=sup.machine_env(sup.Paths(), ent.get("env")), start_new_session=True,
+                                 close_fds=True)
+            fh.close()
+            self.jobs[key] = p
+        self.log(self.tl.uid, "machine", a, "ok pid %d" % p.pid)
+        self.send(conn, {"ok": True, "pid": p.pid})
+        rc = p.wait()
+        with self.lock:
+            if self.jobs.get(key) is p:
+                del self.jobs[key]
+        self.send(conn, {"exit": rc})
+        return None
+
+    def op_sweep(self, conn, a):
+        res = sup.sweep(sup.Paths())
+        return {"ok": True, "result": json.loads(json.dumps(res, default=str))}
+
+    def op_entry(self, conn, a):
+        sp = sup.Paths()
+        sup.door_pull(sp)
+        b = sup.entry_converge(sp)
+        audit = None
+        if b is not None:
+            try:
+                audit = sup.entry_audit(sp)
+            except Exception as e:  # the record must never take the pass down
+                audit = "audit: %s" % e
+        return {"ok": True, "result": json.loads(json.dumps(b, default=str)), "audit": audit}
+
+    def op_report(self, conn, a):
+        if a["kind"] not in REPORTS:
+            raise Refused(None, "kind %r — one of %s" % (a["kind"], ", ".join(REPORTS)))
+        if a["kind"] == "table":
+            return {"ok": True, "table": json.loads(json.dumps(sup.machine_table(sup.Paths()), default=str))}
+        if a["kind"] == "fda":
+            return {"ok": True, "reading": sup.fda_reading()}
+        if a["kind"] == "lanes":
+            return {"ok": True, "reading": sup.lane_refusals(sup.Paths())}
+        return {"ok": True, "reading": sup.tenants_reading(sup.Paths())}
 
     def op_kill(self, conn, a):
         pid = a["pid"]
@@ -752,7 +932,7 @@ def cli_call(rest):
         return 2
     if not r.get("ok"):
         return 1
-    if not (follow and op == "run-as"):
+    if not (follow and (op == "run-as" or (op == "machine" and args.get("action") == "start"))):
         return 0 if r.get("rc", 0) == 0 else r["rc"] if isinstance(r.get("rc"), int) and 0 < r["rc"] < 256 else 1
 
     # the job runs under the core; this process stands in for it under the node
@@ -761,7 +941,10 @@ def cli_call(rest):
 
     def term(*_):
         try:
-            wire.call("stop-as", {"login": args.get("login"), "job": args.get("job")}, timeout=15)
+            if op == "machine":
+                wire.call("machine", {"job": args.get("job"), "action": "stop"}, timeout=15)
+            else:
+                wire.call("stop-as", {"login": args.get("login"), "job": args.get("job")}, timeout=15)
         except (OSError, ValueError):
             pass
     signal.signal(signal.SIGTERM, term)
