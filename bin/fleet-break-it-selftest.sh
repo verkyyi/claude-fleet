@@ -47,6 +47,8 @@
 #   view-mouse-stale                                conf/tmux-view.conf + fleet-quickopen.py view-keys --if-stale
 #   window-killed                                   bin/fleet-restore.sh --auto (pull-back), fleet_win_retire
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
+#   restore-conversation-twice                      bin/fleet-restore.sh (restore, snapshot), fleet_restore_map_prune,
+#                                                   bin/.fleet-restore-resolve.py (one row per conversation)
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
@@ -1484,6 +1486,45 @@ drill_window_killed() {
   auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # a second tick: nothing doubles
   [ "$(nt list-windows -t oc -F '#{window_name}' | grep -c '^issue-1$')" = 1 ] || { WHY="a second tick opened issue-1 twice"; return 1; }
   WHAT="被删的 issue-1 下一拍以原对话回来，/fleet-history 记 reason=killed-window；fleet 自己关的 issue-2 不拉回（节拍 60s 另计）"
+}
+
+# One conversation in three map rows (issue #3543): two windows came back resuming
+# the same Claude conversation, and a reaped session stayed in the map for good —
+# the shrink guard ("keep the richer map") counted the duplicates and the retired.
+drill_restore_conversation_twice() {
+  CAP=20; BREAK_SOCK="$WORK/sock-ct"; local t0 n mf="$WORK/econf/fleets/oc/restore.map"
+  local sid=3543aaaa-0000-4000-8000-000000003543 gone=3543bbbb-0000-4000-8000-000000003543
+  local f1=1f0e0000-0000-4000-8000-000000035431 f2=1f0e0000-0000-4000-8000-000000035432
+  local f3=1f0e0000-0000-4000-8000-000000035433 f4=1f0e0000-0000-4000-8000-000000035434
+  # a no-repo row (column 16 `-`): it resumes in $HOME, where a shared cwd let three windows guess one id
+  ct_row() { printf 'FID\t%s\nWIN\t%s\t%s\t%s\t-\tworking\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$1" "$2" "$WORK/home" "$3"; }
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    ct_row "$f1" 'fleet-linux-0 shell' "$sid"; ct_row "$f2" '@macmini' "$sid"; ct_row "$f3" '@macmini' "$sid"
+  } > "$mf"
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  auto                                            # the break: a restore off that map
+  until_ok "$CAP" grep -q -- "--resume $sid" "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the conversation was not resumed at all"; return 1; }
+  sleep 1
+  n=$(grep -c -- "--resume $sid" "$WORK/claude-argv")
+  [ "$n" = 1 ] || { WHY="restore resumed conversation ${sid%%-*}… $n times (two agents on one transcript)"; return 1; }
+  n=$(nt list-windows -t oc -F '#{@fleet_id}' | grep -cx "$f3")
+  [ "$n" = 1 ] || { WHY="the kept window is not the newest row's ($f3): [$(nt list-windows -t oc -F '#{window_name} #{@fleet_id}' | tr '\n' ' ')]"; return 1; }
+  auto                                            # a second tick: nothing doubles
+  sleep 1
+  [ "$(grep -c -- "--resume $sid" "$WORK/claude-argv")" = 1 ] || { WHY="a second tick resumed the conversation again"; return 1; }
+  # a session the fleet reaped (fleet_win_retire), still in the stored map, the live
+  # fleet now smaller than that map: the snapshot drops it instead of keeping it
+  { cat "$mf"; ct_row "$f4" '我的会话-3' "$gone"; } > "$mf.x" && mv "$mf.x" "$mf"
+  mkdir -p "$WORK/econf/global/retired"; : > "$WORK/econf/global/retired/$f4"
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_restore_map_prune "$2" --retired "$3"' _ "$WORK/inst/bin" "$mf" "$f3" > "$mf.p"
+  grep -q "$gone" "$mf.p" && { WHY="a retired session no window carries survives the prune: $(grep -c WIN "$mf.p") rows"; return 1; }
+  [ "$(awk -F'\t' '$1 == "WIN"' "$mf.p" | wc -l | tr -d ' ')" = 1 ] || { WHY="the pruned map has not one row per conversation: [$(awk -F'\t' '$1 == "WIN" { print $2 }' "$mf.p" | tr '\n' ' ')]"; return 1; }
+  grep -q 'fleet_restore_map_prune "$prior" --retired' "$BIN/fleet-restore.sh" \
+    || { WHY="the snapshot's shrink guard does not prune the stored map before counting it"; return 1; }
+  SECS=$(since "$t0"); WHAT="同一对话在地图里三行：restore 只开最新那一行一个窗口、第二拍不重开；回收过的会话从地图里删掉"
 }
 
 # ---- /loop and fleet down (issue #1846) ------------------------------------------
