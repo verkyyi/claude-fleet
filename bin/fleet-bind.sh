@@ -152,7 +152,22 @@ done
 
 # Cross-machine claim gate — the same read dash-issue-session.sh makes at spawn.
 # A gh outage degrades to bind-anyway (never a false refusal), matching the spawner.
-if [ "$FORCE" != 1 ] && [ "$FRESH" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
+# A hub repo (FLEET_TICKETS=hub, issue #3598): the hub's atomic claim IS the gate —
+# taken by another ⇒ refused, ours ⇒ held; the hub down binds anyway. No gh, and
+# no open-PR probe where the repo has no GitHub (FLEET_FORGE=none).
+TK_HUB=0; [ -n "$REPO" ] && fleet_ticket_hub "$REPO" "$SESS" && TK_HUB=1
+TK_ID="hub:$(fleet_norm_repo "$REPO")#$num"; TK_HELD=0
+if [ "$TK_HUB" = 1 ] && [ "$FORCE" != 1 ] && [ "$FRESH" != 1 ]; then
+  st=$(fleet_ticket_view "$REPO" "$num" state .state 2>/dev/null) || st=''
+  [ -n "$st" ] && [ "$st" != OPEN ] && die "#$num is closed — --force to bind anyway" 4
+  if [ "$(fleet_repo_forge "$REPO" "$SESS")" != none ] && command -v gh >/dev/null 2>&1; then
+    n_open_pr=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq 'length' 2>/dev/null)
+    [ "${n_open_pr//[^0-9]/}" -gt 0 ] 2>/dev/null && die "#$num has an open PR — --force to bind anyway" 4
+  fi
+  co=$(bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" 2>&1); crc=$?
+  [ "$crc" = 3 ] && die "#$num is already claimed (${co#fleet-ticket: }) — --force to bind anyway" 4
+  [ "$crc" = 0 ] && TK_HELD=1
+elif [ "$FORCE" != 1 ] && [ "$FRESH" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state \
         --jq '"\(.assignees|length)\t\(.state)"' 2>/dev/null)
   n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
@@ -168,13 +183,21 @@ fi
 # --- the promotion ------------------------------------------------------------
 # Run the rename FROM the worktree: the branch is checked out there, and git
 # updates that worktree's HEAD in place, so the running session's cwd never moves.
-git -C "$WT" branch -m "$slug" "$branch" >/dev/null 2>&1 \
-  || die "could not rename branch $slug → $branch" 1
+if ! git -C "$WT" branch -m "$slug" "$branch" >/dev/null 2>&1; then
+  [ "$TK_HELD" = 1 ] && bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1
+  die "could not rename branch $slug → $branch" 1
+fi
 
 # Claim: assign @me, exactly the claim-at-spawn the spawner does, so a peer's
 # dedup read sees this within ~1s. --force skips it (the claim is why it refused).
+# A hub ticket: the gate's claim was the claim (FRESH: take it now).
+if [ "$TK_HUB" = 1 ]; then
+  [ "$FORCE" != 1 ] && [ "$TK_HELD" != 1 ] \
+    && bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" >/dev/null 2>&1
+else
 [ "$FORCE" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
   && gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1
+fi
 
 # Window name from the issue CONTENT (issue #216's rule): an explicit --title wins
 # and costs no round-trip; else one gh read; else the bare issue-<N> slug.
@@ -183,7 +206,10 @@ git -C "$WT" branch -m "$slug" "$branch" >/dev/null 2>&1 \
 # wrote (fleet-issue-file.sh --bind) — no EPIC member, and no read at all: it is
 # named by its use, the way any non-member is (issue #2545).
 title="$TITLE"; body=''
-if [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
+if [ -z "$title" ] && [ "$TK_HUB" = 1 ]; then
+  tb=$(fleet_ticket_view "$REPO" "$num" title,body '.title + "\n" + .body') || tb=''
+  title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
+elif [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   tb=$(gh issue view "$num" --repo "$REPO" --json title,body -q '.title + "\n" + .body' 2>/dev/null) || tb=''
   title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
 fi

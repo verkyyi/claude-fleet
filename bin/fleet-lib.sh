@@ -1213,6 +1213,30 @@ fleet_ticket_home() {
   case "$v" in hub) printf 'hub' ;; *) printf 'github' ;; esac
 }
 
+# fleet_ticket_hub <repo> [sess] → rc 0 ⇔ <repo>'s tickets live on the hub (issue
+# #3598, EPIC #3570 C5). The dispatch / claim / panel scripts branch on it: a hub
+# repo goes through the door (bin/fleet-ticket.sh), every other repo keeps the gh
+# call it always made, byte for byte (共同约定 4).
+fleet_ticket_hub() { [ "$(fleet_ticket_home "${1:-}" "${2:-}")" = hub ]; }
+
+# fleet_ticket_view <repo> <num> <fields> [jq-filter] → a hub ticket read through
+# the door, in gh issue view's field names; with a filter, what `gh … --jq` would
+# print (jq -r). rc = the door's (4 = the hub is not reachable).
+fleet_ticket_view() {
+  local repo="${1:-}" n="${2:-}" f="${3:-}" q="${4:-}" out
+  out=$(bash "$_FLEET_LIB_DIR/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$n" --json "$f" 2>/dev/null) || return $?
+  [ -n "$out" ] || return 1
+  if [ -n "$q" ]; then printf '%s\n' "$out" | jq -r "$q"; else printf '%s\n' "$out"; fi
+}
+
+# fleet_ticket_claimant → who takes a hub ticket (the claim's `by`): this login on
+# this machine, `<login>@<host>` — the same answer at the claim and its release
+# (the hub releases only the holder's). FLEET_TICKET_BY overrides it (a selftest's
+# second machine).
+fleet_ticket_claimant() {
+  printf '%s' "${FLEET_TICKET_BY:-$(id -un 2>/dev/null)@$(hostname -s 2>/dev/null || hostname)}"
+}
+
 # ---- the seed repo (issue #1167) --------------------------------------------
 # A new login's fleet comes up on claude-fleet itself (`fleet-up.sh --seed`) only so
 # the fleet works from its first minute; the login has no write access there, and
@@ -3590,8 +3614,19 @@ fleet_landed() {
 # (session-end-hook.sh --recycle) both call it. The caller decides the issue is
 # OPEN and unlanded. Args: <repo> <issue> <what happened, one clause>
 fleet_issue_release_claim() {
-  local repo="${1:-}" iss="${2:-}" what="${3:-}"
-  [ -n "$repo" ] && [ -n "$iss" ] && command -v gh >/dev/null 2>&1 || return 0
+  local repo="${1:-}" iss="${2:-}" what="${3:-}" tid
+  [ -n "$repo" ] && [ -n "$iss" ] || return 0
+  # A hub repo's claim is the hub's (issue #3598): released by its holder, the
+  # line posted through the door — no gh.
+  if fleet_ticket_hub "$repo"; then
+    tid="hub:$(fleet_norm_repo "$repo")#$iss"
+    bash "$_FLEET_LIB_DIR/fleet-ticket.sh" claim "$tid" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1 || true
+    bash "$_FLEET_LIB_DIR/fleet-ticket.sh" post "$tid" --body "$what. The ticket stays OPEN and the claim is released, so it can be picked up again.
+
+<!-- fleet:no-relay -->" >/dev/null 2>&1 || true
+    return 0
+  fi
+  command -v gh >/dev/null 2>&1 || return 0
   gh -R "$repo" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
   gh -R "$repo" issue comment "$iss" --body "$what. The issue stays OPEN and the claim is released, so it can be picked up again.
 
@@ -8236,7 +8271,9 @@ fleet_issue_plain_name() {
 # machine's issue cache; nothing at all ⇒ the plain name.
 fleet_issue_win_name() {
   local repo="${1:-}" num="${2:-}" t="${3:-}" b="${4:-}" ref er en f sh='' et eb js now ts
-  if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
+  if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && fleet_ticket_hub "$repo"; then
+    b=$(fleet_ticket_view "$repo" "$num" body .body) || b=''   # a hub ticket: the door (#3598)
+  elif [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
     b=$(gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
   fi
   ref=$(fleet_epic_member_ref "$b")
@@ -8248,8 +8285,11 @@ fleet_issue_win_name() {
     if [ -s "$f" ] && [ $(( now - ${ts:-0} )) -lt 3600 ]; then
       IFS= read -r sh < "$f"
     else
-      js=''; command -v gh >/dev/null 2>&1 \
-        && js=$(gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
+      js=''
+      if fleet_ticket_hub "$er"; then js=$(fleet_ticket_view "$er" "$en" title,body) || js=''
+      elif command -v gh >/dev/null 2>&1; then
+        js=$(gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
+      fi
       if [ -n "$js" ]; then
         et=$(printf '%s' "$js" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title") or "")' 2>/dev/null)
         eb=$(printf '%s' "$js" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' 2>/dev/null)

@@ -176,28 +176,51 @@ fi
 # text. `--jq` is gh's BUILT-IN jq — no external dependency.
 printf '\n===== issue #%s · %s =====\n' "$issue" "$repo"
 cached_body=$(python3 "$BIN/fleet-issue-cache.py" read "$cwd" "$repo" "$issue" "$want_comments" 2>/dev/null) || cached_body=''
+# The ONE read's fields and its gh --jq render, shared by both homes below.
+fields='number,title,state,url,body,labels,assignees,comments'
+jqf='"title: \(.title)",
+     "state: \(.state)   labels: \((.labels//[])|map(.name)|join(", ")|if .=="" then "-" else . end)",
+     "assignees: \((.assignees//[])|map(.login)|join(", "))",
+     "url: \(.url)",
+     "",
+     "----- issue body -----",
+     (if (.body//"")=="" then "(empty)" else .body end)'
+if [ "$want_comments" = 1 ]; then
+  jqf="$jqf,
+     \"\",
+     \"----- comments (\\((.comments//[])|length)) -----\",
+     ((.comments//[]) | if length==0 then [\"(none)\"]
+                        else map(\"--- @\\(.author.login // \"?\") · \\(.createdAt) ---\\n\\(.body)\") end | .[])"
+fi
+# claim_line <assignees> <how to claim> — the claim (issue #283): the spawn
+# pre-claims it, so this is a read, not a write — claim only on the miss.
+claim_line() {
+  if [ -n "$1" ]; then
+    printf '\nclaim: HELD by %s — the spawn pre-claimed it (issue #283). Do NOT re-assign.\n' "$1"
+  else
+    printf '\nclaim: UNCLAIMED — claim it now:  %s\n' "$2"
+  fi
+}
 if [ -n "$cached_body" ]; then
   printf '%s\n' "$cached_body"
   rc=0
+elif fleet_ticket_hub "$repo" "$sess"; then
+  # A hub ticket (FLEET_TICKETS=hub, issue #3598): read through the door, rendered
+  # by the same filter; the claim is the hub's (atomic) — no gh.
+  tid="hub:$(fleet_norm_repo "$repo")#$issue"
+  if body=$(fleet_ticket_view "$repo" "$issue" "$fields" "$jqf") && [ -n "$body" ]; then
+    printf '%s\n' "$body"
+    rc=0
+    claim_line "$(printf '%s\n' "$body" | sed -n 's/^assignees: //p' | head -1)" \
+      "bash ~/.claude/fleet/bin/fleet-ticket.sh claim '$tid' --by '$(fleet_ticket_claimant)'"
+  else
+    printf 'the ticket door could not read %s — is the hub reachable? (fleet-ticket.sh read %s)\n' "$tid" "$tid"
+    rc=5
+  fi
 elif ! command -v gh >/dev/null 2>&1; then
   printf 'gh: NOT ON PATH — the issue could not be read (fleet + charter above are still valid)\n'
   rc=5
 else
-  fields='number,title,state,url,body,labels,assignees,comments'
-  jqf='"title: \(.title)",
-       "state: \(.state)   labels: \((.labels//[])|map(.name)|join(", ")|if .=="" then "-" else . end)",
-       "assignees: \((.assignees//[])|map(.login)|join(", "))",
-       "url: \(.url)",
-       "",
-       "----- issue body -----",
-       (if (.body//"")=="" then "(empty)" else .body end)'
-  if [ "$want_comments" = 1 ]; then
-    jqf="$jqf,
-       \"\",
-       \"----- comments (\\((.comments//[])|length)) -----\",
-       ((.comments//[]) | if length==0 then [\"(none)\"]
-                          else map(\"--- @\\(.author.login // \"?\") · \\(.createdAt) ---\\n\\(.body)\") end | .[])"
-  fi
   # gh's stderr goes to its own file, never into $body: on success the body IS the
   # brief, and a stray gh notice folded into it would read as issue content.
   gherr="${TMPDIR:-/tmp}/fleet-claim-brief.$$.err"
@@ -206,15 +229,9 @@ else
      && [ -n "$body" ]; then
     printf '%s\n' "$body"
     rc=0
-    # The claim (issue #283): the ASSIGNEE is the claim, and the spawn pre-claims
-    # it (dash-issue-session.sh), so this is a read, not a write — assign only on
-    # the miss. Parsed off the header line the single read already printed.
-    asg=$(printf '%s\n' "$body" | sed -n 's/^assignees: //p' | head -1)
-    if [ -n "$asg" ]; then
-      printf '\nclaim: HELD by %s — the spawn pre-claimed it (issue #283). Do NOT re-assign.\n' "$asg"
-    else
-      printf '\nclaim: UNCLAIMED — claim it now:  gh issue edit %s --repo %s --add-assignee @me\n' "$issue" "$repo"
-    fi
+    # Parsed off the header line the single read already printed.
+    claim_line "$(printf '%s\n' "$body" | sed -n 's/^assignees: //p' | head -1)" \
+      "gh issue edit $issue --repo $repo --add-assignee @me"
   else
     printf 'gh: could not read issue #%s in %s — %s\n' "$issue" "$repo" \
       "$(tr '\n' ' ' < "$gherr" 2>/dev/null)"

@@ -33,7 +33,6 @@ bin/fleet-webhook.sh
 bin/fleet_park.py
 bin/refocus-hook.sh
 bin/tmux-dash-collect.sh
-bin/tmux-dashboard-rows.sh
 bin/tmux-issue-preview.sh
 bin/tmux-pr-refresh.sh
 hooks/bash-guard.py

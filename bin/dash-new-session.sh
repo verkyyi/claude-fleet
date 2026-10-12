@@ -19,7 +19,8 @@ _rc=0; REPO=$(unset TMUX_PANE; fleet_target_repo "$SESS") || _rc=$?
 [ "$_rc" = 4 ] && { fleet_ui_fail "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
 [ -n "$REPO" ] || REPO="${FLEET_REPO:-}"
 [ -z "$REPO" ] && { fleet_ui_fail "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
-command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create issue"; exit 1; }
+# A hub repo's ticket is filed through the door (issue #3598): no gh needed.
+fleet_ticket_hub "$REPO" "$SESS" || command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create issue"; exit 1; }
 
 # Session cap (issues #28, #70): check BEFORE creating the issue so a full fleet
 # doesn't leave a dangling backlog issue with no session behind it. Pass "$SESS"

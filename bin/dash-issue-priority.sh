@@ -42,9 +42,20 @@ FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 # In a 2+ repo fleet: the row's repo, else CF_REPO, else nothing (refused).
 REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot set priority on #$num"; exit 1; }
-command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot set priority on #$num"; exit 1; }
+# A hub repo's priority is the ticket's own field, set through the door (issue
+# #3598, EPIC #3570 C5): no gh. Any other repo swaps the label, as always.
+TK_HUB=0; fleet_ticket_hub "$REPO" "$FLEET_SESSION" && TK_HUB=1
+[ "$TK_HUB" = 1 ] || command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot set priority on #$num"; exit 1; }
 
 # --- background authoritative pass: strip every REAL priority label, set target ---
+if [ "$mode" = commit ] && [ "$TK_HUB" = 1 ]; then
+  if ! bash "$BIN/fleet-ticket.sh" priority "hub:$(fleet_norm_repo "$REPO")#$num" "${commit_target:-none}" >/dev/null 2>&1; then
+    tmux display-message "failed to set priority on #$num"
+    exit 1
+  fi
+  GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1
+  exit 0
+fi
 if [ "$mode" = commit ]; then
   cur_labels=$(gh issue view "$num" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null)
   # edit_args always carries --repo, so its expansion is safe under set -u even when

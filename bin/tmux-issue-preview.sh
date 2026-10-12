@@ -30,7 +30,10 @@ ROWREPO=''
 for _a in "$@"; do case "$_a" in --repo=*) ROWREPO="${_a#--repo=}" ;; esac; done
 REPO=$(CF_REPO='' fleet_backlog_repo "${FLEET_SESSION:-}" "$ROWREPO")
 [ -z "$REPO" ] && { printf '%s  (no repo resolved for this fleet)%s\n' "$(c "$GY")" "$R"; exit 0; }
-command -v gh >/dev/null 2>&1 || { printf '%s  gh not found — cannot preview%s\n' "$(c "$GY")" "$R"; exit 0; }
+# A hub repo's ticket (FLEET_TICKETS=hub, issue #3598) is read through the door,
+# in gh's field names — the same cache, the same render, no gh.
+TK_HUB=0; fleet_ticket_hub "$REPO" "${FLEET_SESSION:-}" && TK_HUB=1
+[ "$TK_HUB" = 1 ] || command -v gh >/dev/null 2>&1 || { printf '%s  gh not found — cannot preview%s\n' "$(c "$GY")" "$R"; exit 0; }
 
 slug=$(fleet_slug "$REPO"); cache="$(fleet_cache_dir "$slug")/issue_${num}.json"; ts="$cache.ts"
 TTL="${FLEET_ISSUE_TTL:-180}"
@@ -39,8 +42,12 @@ if [ ! -s "$cache" ] || [ $(( now - last )) -ge "$TTL" ]; then
   # Cache the RAW JSON (gh's built-in engine — no standalone jq dependency); the
   # colouring + width-aware wrap happen at render time below so they track the
   # live pane width instead of a baked-in guess.
+  if [ "$TK_HUB" = 1 ]; then
+    raw=$(fleet_ticket_view "$REPO" "$num" number,title,state,body,labels,milestone,assignees,comments,url) || raw=''
+  else
   raw=$(gh issue view "$num" --repo "$REPO" \
     --json number,title,state,body,labels,milestone,assignees,comments,url 2>/dev/null)
+  fi
   if [ -n "$raw" ]; then
     printf '%s' "$raw" > "$cache.$$" && mv "$cache.$$" "$cache" && echo "$now" > "$ts"
     rm -f "$cache.$$"
@@ -53,6 +60,6 @@ fi
 # the preview degrades to readable-but-unstyled rather than blank.
 if command -v python3 >/dev/null 2>&1; then
   FZF_PREVIEW_COLUMNS="${FZF_PREVIEW_COLUMNS:-60}" python3 "$BIN/.tmux-issue-preview-render.py" < "$cache"
-else
+elif [ "$TK_HUB" != 1 ]; then
   gh issue view "$num" --repo "$REPO" 2>/dev/null | head -60
 fi
