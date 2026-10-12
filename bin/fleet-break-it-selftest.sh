@@ -6352,6 +6352,30 @@ drill_report_parent_online_queued() {
   WHAT="在线的编排（拿了角色、没有自己的键）按身份收 hub 推来的回报和消息：exit 0、记在 orchestrator 账本，不再 75「不在」让 hub 无限重推"
 }
 
+# A repo not on GitHub (issue #3600, EPIC #3570 共同约定 3): adding it from any git
+# address must never call gh — not to clone it, not to read its base branch. A gh
+# that only records and always fails stands in; a file:// bare repo whose HEAD is
+# `trunk` is the repo.
+drill_forge_none_gh_call() {
+  CAP=30; local sb t0 tok
+  sb="$WORK/fngh"; mkdir -p "$sb/shim" "$sb/conf/fleets/fn" "$sb/home"
+  printf 'FLEET_SESSION=fn\n' > "$sb/conf/fleets/fn/conf"
+  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.calls"\nexit 1\n' "$sb" > "$sb/shim/gh"; chmod +x "$sb/shim/gh"
+  git init -q --bare "$sb/demo.git" && git -C "$sb/demo.git" symbolic-ref HEAD refs/heads/trunk
+  git clone -q "$sb/demo.git" "$sb/seed" 2>/dev/null
+  git -C "$sb/seed" -c user.email=d@x -c user.name=d commit -q --allow-empty -m seed \
+    && git -C "$sb/seed" push -q origin HEAD:trunk 2>/dev/null || { WHY="cannot build the bare repo"; return 1; }
+  t0=$(now)
+  tok=$(HOME="$sb/home" FLEET_CONF_DIR="$sb/conf" PATH="$sb/shim:$PATH" _FLEET_REGISTER_NO_KICK=1 \
+        bash "$BIN/fleet-repo.sh" add --session fn "file://$sb/demo.git" 2>"$sb/err")
+  case "$tok" in added:*) ;; *) WHY="add did not land: [$tok] $(tail -2 "$sb/err" | tr '\n' ' ')"; return 1 ;; esac
+  [ ! -s "$sb/gh.calls" ] || { WHY="gh was called for a repo not on GitHub: $(tr '\n' ';' < "$sb/gh.calls")"; return 1; }
+  grep -qx 'FLEET_BASE_BRANCH="trunk"' "$sb/conf/fleets/fn/repos/"*.conf \
+    || { WHY="the base branch was not read off the remote: $(grep BASE "$sb/conf/fleets/fn/repos/"*.conf)"; return 1; }
+  grep -qx 'FLEET_FORGE="none"' "$sb/conf/fleets/fn/repos/"*.conf || { WHY="the conf does not say FLEET_FORGE=none"; return 1; }
+  SECS=$(since "$t0"); WHAT="file:// 裸仓库：克隆 + 主干解析 gh 0 次；conf 记 FLEET_REMOTE / FLEET_FORGE=none，主干 trunk 来自 ls-remote"
+}
+
 drill_cred_migration_client() {
   CAP=120; local t0
   t0=$(now)

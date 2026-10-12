@@ -55,8 +55,21 @@ t() { fleet_ui_t "$@"; }
 # same rule fleet_repo_register applies, checked here first so a typo re-asks in
 # the popup instead of burning a fleet-repo.sh run on it. A pasted link may carry
 # a tail (/tree/main, ?tab=…, #readme) — only owner/name is kept.
+#
+# Any other git address (issue #3600: GitLab, Gitee, a self-hosted forge, an ssh
+# bare repo, file:// or a path) is printed AS GIVEN when it yields a name — the
+# address is what fleet-repo.sh add keeps.
 shape() {
-  local r; r=$(printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  local r n; r=$(printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  case "$r" in github.com/*|www.github.com/*) ;; *)
+    if [ "$(fleet_forge_of "$r")" = none ]; then
+      # a path is a repo only when it is there (a stray `/r` re-asks)
+      case "$r" in /*|file://*) [ -d "${r#file://}" ] || return 1 ;; esac
+      n=$(fleet_repo_name_of "$r")
+      case "$n" in *[!A-Za-z0-9_./-]* | */*/* | /* | */) return 1 ;; ?*/?*) printf '%s' "$r"; return 0 ;; esac
+      return 1
+    fi ;;
+  esac
   case "$r" in
     http://*|https://*|ssh://*|github.com/*|www.github.com/*)
       r="${r#*://}"; r="${r%%[?#]*}"
@@ -188,7 +201,8 @@ else
     echo "refused:invalid-repo"; exit 1; }
 fi
 
-name=$(basename "$REPO"); dir="$HOME/projects/$name"
+RNAME=$(fleet_repo_name_of "$REPO")   # an address's name (#3600); owner/name as is
+name=$(basename "$RNAME"); dir="$HOME/projects/$name"
 tokf=$(mktemp "${TMPDIR:-/tmp}/dash-repo-add.XXXXXX") || exit 2
 errf=$(mktemp "${TMPDIR:-/tmp}/dash-repo-add.XXXXXX") || { rm -f "$tokf"; exit 2; }
 trap 'rm -f "$tokf" "$errf"' EXIT
@@ -210,9 +224,9 @@ case "$token" in
 esac
 # refused:hosted: say where the code already is — the repo's own checkout
 [ "$token" = refused:hosted ] && {
-  have=$(bash "$BIN/fleet-repo.sh" get --session "$SESS" FLEET_MAIN "$REPO" 2>/dev/null)
+  have=$(bash "$BIN/fleet-repo.sh" get --session "$SESS" FLEET_MAIN "$RNAME" 2>/dev/null)
   [ -n "$have" ] && dir="$have"; }
-v=$(verdict "$token" "$REPO" "$dir" "$errf")
+v=$(verdict "$token" "$RNAME" "$dir" "$errf")
 printf '\n%s\n' "$v" >&2
 printf '%s\n' "$token"
 
