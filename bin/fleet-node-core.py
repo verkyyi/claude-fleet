@@ -96,7 +96,9 @@ _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.
 sup = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sup)
 
-MAC = sys.platform == "darwin"
+# the supervisor's word, so a Linux sandbox with a fake launchctl is a Mac to both
+MAC = sup.MAC
+DARWIN = sys.platform == "darwin"   # the kernel's: which peer-credential call answers
 LABEL = "com.claude-fleet.node-core"
 SYSTEMD_UNIT = "fleet-node-core.service"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -156,7 +158,7 @@ class Refused(Exception):
 # ------------------------------------------------------------- the peer --------
 def peer_uid(conn):
     """The connecting process's uid, from the kernel — never from the request."""
-    if MAC:
+    if DARWIN:
         b = conn.getsockopt(0, 1, 76)          # SOL_LOCAL, LOCAL_PEERCRED: struct xucred
         return struct.unpack_from("<II", b)[1]
     b = conn.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_PEERCRED", 17), struct.calcsize("3i"))
@@ -388,7 +390,7 @@ def verify_release(paths, d, sha):
                 h = sha256_file(full)
                 if h in digests and any(k.startswith("ccquota-") for k, a in arts.items() if a.get("sha256") == h):
                     continue
-                if MAC and subprocess.call(["/usr/bin/codesign", "--verify", "--strict", full],
+                if DARWIN and subprocess.call(["/usr/bin/codesign", "--verify", "--strict", full],
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
                     continue
                 return "bin/ccquota: not the release's ccquota artifact"
