@@ -250,6 +250,11 @@ LEFTOVER_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.).*\.plist\..+$")
 # an account unit (issue #2332). cred-proxy-shared has no template — it is listed
 # so an account's adopt never boots the machine's proxy out.
 MACHINE_UNITS = ("memguard", "node", "cred-proxy-shared")
+# The locale every child is started in (issue #3514): macOS always has
+# en_US.UTF-8, a slim Linux image only C.UTF-8 — there en_US.UTF-8 named a locale
+# that does not exist, perl warned on every call and python's setlocale raised,
+# so the 看台's ⌘P table was never built on fleet-linux-0.
+NODE_LANG = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
 ACCOUNT_ENV_DROP = ("UserName", "GroupName")
 
 
@@ -944,7 +949,11 @@ def account_entry(unit, login, ident, brew):
     e = dict((k, fill(v, home, brew)) for k, v in (unit.get("env") or {}).items()
              if k not in ACCOUNT_ENV_DROP)
     e.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-    e.setdefault("LANG", "en_US.UTF-8")
+    e.setdefault("LANG", NODE_LANG)
+    # the plists' own LANG / LC_ALL are macOS's: on Linux the same words name no locale
+    for k in ("LANG", "LC_ALL", "LC_CTYPE"):
+        if e.get(k) == "en_US.UTF-8":
+            e[k] = NODE_LANG
     e.update(HOME=home, USER=login, LOGNAME=login,
              FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
              FLEET_NODE_ACCOUNT=login)
@@ -1082,7 +1091,7 @@ def service_entry(paths, svc, path, ident):
     """A service as a child of the daemon (account_entry's shape)."""
     uid, gid, home = ident
     login, name = svc["login"], svc["name"]
-    e = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"}
+    e = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": NODE_LANG}
     e.update((k, v) for k, v in (svc.get("env") or {}).items() if k not in SVC_ENV_DROP)
     e.update(HOME=home, USER=login, LOGNAME=login, FLEET_SERVICE=name)
     lg = service_log(paths, login, name)
@@ -1362,7 +1371,7 @@ def task_entry(paths, svc, ident, day, attempt, manual=None):
     done = task_fill((svc.get("done_when") or {}).get("file"), day)
     if done.startswith("~/"):
         done = os.path.join(home, done[2:])
-    e = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"}
+    e = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": NODE_LANG}
     e.update((k, v) for k, v in (svc.get("env") or {}).items() if k not in SVC_ENV_DROP)
     e.update(HOME=home, USER=login, LOGNAME=login, FLEET_SERVICE=name,
              FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
@@ -1570,7 +1579,7 @@ class Supervisor(object):
             "HOME": os.path.join(self.p.state, "home"),
             "FLEET_CONF_DIR": os.path.join(self.p.state, "conf"),
             "TMPDIR": os.path.join(self.p.state, "tmp"),
-            "LANG": "en_US.UTF-8",
+            "LANG": NODE_LANG,
             "FLEET_NODE": "1",
         }
         e.update(node_environment())
