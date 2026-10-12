@@ -106,7 +106,7 @@ func TestNodeRetire_UserOnlyOwn(t *testing.T) {
 	adminTok := enroll("mini-node")
 	retireNodeRow(t, h.srv, "ep_alice-new", "alicebook.local", aliceLogin)
 	giveAccount(t, h.srv, githubPrincipal(ghAlice.ID), "alicebook.local")
-	retireNodeRow(t, h.srv, "ep_mini-node", "mini.local", "verkyyi")
+	retireNodeRow(t, h.srv, "ep_mini-node", "mini.local", "ivan")
 
 	for _, id := range []string{"ep_mini-node", "ep_nobody"} {
 		if code, out := retireCookiePost(t, h, user, NodeRetirePath, NodeRevokeRequest{EndpointID: id}); code != http.StatusForbidden {

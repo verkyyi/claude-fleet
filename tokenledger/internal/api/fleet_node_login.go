@@ -6,10 +6,10 @@ import (
 
 // One login takes new sessions on a machine (claude-fleet#2430).
 //
-// A person may hold two logins on one machine — m5's verkyyi (the old admin
-// account) and verky (the ordinary account #2210 moved them to) — each with a
+// A person may hold two logins on one machine — mac-b's dave (the old admin
+// account) and carol (the ordinary account #2210 moved them to) — each with a
 // fleet registered under them. Placement scores logins, so which one a new
-// session lands in was the luck of the room each reported (verky 38, verkyyi
+// session lands in was the luck of the room each reported (carol 38, dave
 // 9). While a migration runs the operator may want ONE: the setting
 //
 //	fleet.node_login.<machine> = <login>

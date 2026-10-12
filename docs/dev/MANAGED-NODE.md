@@ -38,7 +38,7 @@ EPIC #2329 共同约定 1：**机器的期望状态在入口。** 入口为每�
 
 ```
 POST /v1/fleet/nodes/join-codes      （操作者）
-  {"label": "m4"?, "trusted": true?, "role": "managed"?, "kind": "fixed"?}
+  {"label": "mac-a"?, "trusted": true?, "role": "managed"?, "kind": "fixed"?}
 → {"code": "fj_…", "expires_at": …, "command": "…", "trust": "trusted", "role": "managed"}
 ```
 
@@ -64,7 +64,7 @@ GET 的回答：
   "version": 3,
   "release": "4ffae0a5…",
   "components": {"ccquota": "prod-02e8161b", "claude": "2.1.3", "codex": "0.10.0", "runtime": "4ffae0a5"},
-  "accounts": ["verkyyi", "24haowan"],
+  "accounts": ["dave", "globex"],
   "spare_accounts": 2,
   "trust": "trusted",
   "trust_source": "machine",
@@ -105,7 +105,7 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 ## 5. 一个版本内新旧并存
 
 - 旧节点：按它加入时的机器（`enrolled_host`，老数据回填为当时报的名字）。
-- 迁移时 `enrolled_host` 用每个 endpoint 当时报的名字补齐，所以 m4 / m5 现有的登录一个都不掉。
+- 迁移时 `enrolled_host` 用每个 endpoint 当时报的名字补齐，所以 mac-a / mac-b 现有的登录一个都不掉。
 - 下一批删旧规则（`# compat-1v: 下一批删`）：那时每台机器都已凭托管加入码重新加入（C1 / C8）。
 
 ## 6. 一个节点程序服务整台机器（C5，#2333）
@@ -381,7 +381,7 @@ bin/fleet-node-drill.sh count        # 五个指标此刻的读数（不用 root
 sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitHub 挡板
 ```
 
-在**被演练的那台**上跑（先 m4，共同约定 6）。每一步动真机前先问（y 做 · n 跳过记 SKIP · q 停）：
+在**被演练的那台**上跑（先 mac-a，共同约定 6）。每一步动真机前先问（y 做 · n 跳过记 SKIP · q 停）：
 基线 → 加入码（人）→ 安装（人，§8 那一条）→ 逐个账号 `account adopt`（发起人自己的账号最后迁；管理员登录 adopt 退 5、记 SKIP——它不交给守护，§15；其余失败即停并打印 `account release`）
 → 升级（人移 stable 到 `--to`，等更新器 `committed`）→ 回退（人移到 `--fail`：master 上一个只加 `conf/drill-fail` 的提交——带这个标记的发布版 doctor 多一行 FAIL（`fleet-node-update.py` `DRILL_FAIL`）——等 `rolled-back` 回到 `--to`；看完 stable **往前**移到删掉标记的下一提交。不用演练分支：install-sync 从不往回移，停在主干外的提交上的非托管账号就再也跟不上 stable）
 → 复查（`doctor --machine` + 五个指标）→ 断 GitHub（这一步内 `/etc/hosts` 挡住 github.com 等，重装应全部跳过、只从入口取到当前发布版；挡板总会撤掉，下次启动也先撤）
@@ -393,7 +393,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 （`.bak` / `.retired` 等残留不算）；种类 = 各账号服务组合去重（托管账号算「守护代跑」一种）；GitHub = 未托管且有 install-sync 的账号数；
 部件 = `doctor --machine` 里 runtime / ccquota / claude / codex / tmux / cache 不是 PASS 的个数。沙箱自测 `bin/fleet-node-drill-selftest.sh`。
 
-演练记录与五个指标的读数：#2336（m4，2026-10-08）。
+演练记录与五个指标的读数：#2336（mac-a，2026-10-08）。
 演练里的「升级」用一个只改这份文档的提交；「回退」用一个只加 `conf/drill-fail` 的提交，再用一个删掉它的提交往前走。
 演练前先在被演练的机器上 `count` 一次；中途新开的登录不在 `--logins` 里就不会被迁。
 
@@ -525,9 +525,9 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
    `/var/db/fleet-node/attic/<时间>-handwritten/`，不删；清扫下一轮不再点名，体检转绿；
 6. 旧的启动脚本留一版作手动补跑的后路（发起人拍板 4），下一批删。
 
-**mini2 的两项（2026-10-09）**：
+**mac-d 的两项（2026-10-09）**：
 
-    # 短信通知：verkyyi → verky，常驻；Bark 推送密钥进凭据库
+    # 短信通知：dave → carol，常驻；Bark 推送密钥进凭据库
     fleet service cred set BARK_KEY                    # 值从标准输入读
     fleet service add sms-watch --cred BARK_KEY --path <它的状态目录> -- ~/bin/sms-watch
     # 每日推送：run.sh 的「07:00 后开会话、做完看 runs/<日>.done.json、试两次」由定时任务接手
@@ -536,14 +536,14 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
         --done-file '~/daily-report/runs/{date}.done.json' \
         --path ~/daily-report --path ~/.claude/skills/daily-brief
     fleet task run daily-report --now                  # 跑通一次再撤旧的
-    sudo launchctl bootout system/com.verkyyi.sms-watch
-    sudo launchctl bootout system/com.verky.daily-report
+    sudo launchctl bootout system/com.dave.sms-watch
+    sudo launchctl bootout system/com.carol.daily-report
 
 验收：`ls /Library/LaunchDaemons | grep -c -E 'sms-watch|daily-report'` 为 0；`fleet ls --services` 两行都在跑；
 次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
 仍可手动补跑一版。
 
-**mini2 的手机 MCP（#3247）**：`phone-mcp` 同样登记给守护，以管理员登录 verkyyi 常驻、带鉴权代理听 tailnet，
+**mac-d 的手机 MCP（#3247）**：`phone-mcp` 同样登记给守护，以管理员登录 dave 常驻、带鉴权代理听 tailnet，
 人的每个登录经 http 连它——装法、配法、换令牌见 [PHONE-MCP.md](PHONE-MCP.md)。
 
 ## 14. 托管机器不是谁的常驻客户端（#2702 · #2720 · #2904）
@@ -580,7 +580,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   一行 `shell`：都没有 PASS，有就 WARN（不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
   节点上的客户端（#2720）只在 `$TMPDIR` 里、只在一次 SSH 期间存在，不在点名之列。
 - **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
-  （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
+  （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：dave）、不用 fleet 的本地用户一律不扫、不点名、
   不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。
 - **fleet 自己的启动项例外**（#2981）：托管机器上，清扫把「期望集合」之外的 fleet 启动项（`com.claude-fleet.*` /
   `com.ccquota.*`）先 bootout 再挪进 attic（7 天，`attic restore <id>` 放回）——整机守护不跑的机器级单元、
@@ -600,8 +600,8 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **接管的登录是租户**：守护 `account adopt` 的登录没有 admin、没有 sudo——物理上建不了账号、删不了账号、
   改不了 root 的守护进程。worker 就跑在这样的登录下，所以「worker 不许建临时账号」不需要写成一句提示词，
   也不该写：一句提示词拦不住一个不听话（或被注入）的会话，却会让有能力的会话也不敢动手（#2139 的演练被连推 5 轮给人）。
-- **管理员的能力是管理员的**：verkyyi 这类有 sudo 的登录可以做，任何以它身份跑的会话也可以做——包括编排经
-  `m4-admin` / `m5-admin` 的管理员 SSH。限制的对象是普通租户，不是角色。
+- **管理员的能力是管理员的**：dave 这类有 sudo 的登录可以做，任何以它身份跑的会话也可以做——包括编排经
+  `mac-a-admin` / `mac-b-admin` 的管理员 SSH。限制的对象是普通租户，不是角色。
 - **要 root 的脚本只看能力**：`fleet-onboard-drill.sh`、`fleet-login-smoke.sh` 的预检只问 `sudo -n`，
   不通就拒并说「需要管理员登录（有 sudo）」，从不问「调用的是不是 worker」。新写的同类脚本照此办。
 - **能力面是检查出来的**：`account adopt` 先查这个登录——admin 组、`sudo -l -U` 的规则、sudoers 里的名字——
@@ -615,7 +615,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 
 ## 16. 入口端口：只认入口登记的钥匙（EPIC #3067 C3，#3070）
 
-每人一个地址（`<名字>.cf.24haowan.com`），指向他的家机器上**第二个 sshd**——fleet 里唯一一个有意监听公网的服务。
+每人一个地址（`<名字>.cf.example.com`），指向他的家机器上**第二个 sshd**——fleet 里唯一一个有意监听公网的服务。
 机器原有的远程登录（22 端口、tailnet 上的）一字不动、不上公网。
 
 - **开关**：`FLEET_ENTRY=1`（端口 `FLEET_ENTRY_PORT`，默认 22022），写在 `<state>/machine.env`——launchd 不给守护环境变量，
@@ -671,7 +671,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   （租期 2 小时，每次报时续上；UPnP 只取应答路由器自己私网地址上的描述）；`off` 不碰路由器。没人以这台为家（没在听）就不请路由器。
 - **路由器给入口的公网端口**：机器有运维写的 `CCQUOTA_FLEET_NODE_ROUTES` `entry=host:port`（环境、machine.env，或接管登录的
   `<state>/logins/<login>.env`——节点程序读的那份）时，报告带上 `entry_host` / `entry_port`，入口在**那个端口**上敲来源地址和
-  这个 host 解析出的公网地址（macmini `entry=ssh.minihaowan.com:22122`，mini2 `:22123`，路由器转到各自的 :22022）；体检写
+  这个 host 解析出的公网地址（mac-c `entry=ssh.minihaowan.com:22122`，mac-d `:22123`，路由器转到各自的 :22022）；体检写
   「在路由器上把公网 TCP <那个端口> 转发到 <有线网卡地址>:22022」。`public=` 是系统 sshd 的，这里不读；没有 `entry=` 就是 22022。
 - **入口从外面敲门**：机器 token `POST /v1/node/entry-reach`。公网 IPv4 不由机器说——是入口看到这次报告从哪来
   （入口前面的 ingress 写进 `X-Forwarded-For` 的那个）；路由器给了映射就用映射的外侧端口。入口对每个地址拨 TCP、
@@ -691,25 +691,25 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 ### 你的地址指向你的家（EPIC #3067 C7，#3073）
 
 - **只有入口写记录**：`tokenledger/internal/dns`（provider 接口 List · Upsert · Delete、DNSPod 实现、测试用假实现）。
-  记录建在 DNSPod 上已有的 24haowan.com 里（`<名字>.cf`，A / AAAA，TTL 600），不委托、不另开 zone。
+  记录建在 DNSPod 上已有的 example.com 里（`<名字>.cf`，A / AAAA，TTL 600），不委托、不另开 zone。
   DNSPod 用旧版 token API（`https://dnsapi.cn/`：`Record.List` / `Record.Create` + `Record.Remark` / `Record.Modify` /
   `Record.Remove`）；建时在备注里打 `fleet`，List 只认带它、且在 `cf` 下的——别的记录一条不碰；打不上备注的新记录当场删掉。
 - **一个循环**：入口上 `RunEntryDNS`（`internal/leader` 选主 `entry-dns`，只一个副本写）每分钟：每个在用的地址名
   （改名后的旧名留 7 天）的目标 = 它的人的家机器的 `reachable(machine)`（上一节）；与记录现状比对，只写差异
-  （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A verky.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
+  （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A carol.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
   ⇒ 一条不改，记录留着最后的地址，钥匙页写「从外面连不上」；手动换家 ⇒ 下一拍改指新家；有人在控制台手改 ⇒ 下一拍改回，
   审计写「有人手改」。DNSPod 报错只记日志（不带凭据），不删记录，下一拍再试。
 - **有家就有名**（#3337，人拍板）：人有了家而还没起地址名时，入口替他领下建议名（GitHub 登录名，`entrySuggestedName`；
   被别人占着就换下一个候选，都不行就不领、钥匙页照旧问）——自动设家、手动换家时和家一起领（同一次推送），以前就有家没名的人
   由上面的循环下一拍补上；审计 `name_set`、操作者 `hub`。人之后照样在钥匙页改。运维仍不能替人起任意名（`PUT name` 403）。
-- **没领的名字不指向任何地方**（#3337）：24haowan.com 自己有通配 `*.24haowan.com` → 入口（TTL 3600），没人领的
+- **没领的名字不指向任何地方**（#3337）：example.com 自己有通配 `*.example.com` → 入口（TTL 3600），没人领的
   `<名字>.cf` 原先落进它、手机连到入口报 EOF。循环再维护一条自己的 `*.cf`：只有一条 TXT（`EntryDNSUnclaimed`，说这个名字没人领），
   没有 A / AAAA——`cf` 下没领的名字查地址得 NODATA；被手删下一拍补回。领了的名字自己的记录照常胜过它。TTL 都是 600（DNSPod 免费版下限）。
 - **端口不进 DNS**（改约定 3）：两台家机器在同一个路由器后面时地址相同、端口不同（路由器转发到入口的外侧端口，即机器节点路线里的
-  `entry=<host>:<port>`——macmini 22122、mini2 22123，没有就是 22022；C6 敲门用的就是它，`public=` 是系统 sshd 的，不读）。钥匙页给 Termius 的「端口」= 家机器的这个端口（`entryPublicPort`：可达的那一行，IPv4 在前），不是常数 22022；
+  `entry=<host>:<port>`——mac-c 22122、mac-d 22123，没有就是 22022；C6 敲门用的就是它，`public=` 是系统 sshd 的，不读）。钥匙页给 Termius 的「端口」= 家机器的这个端口（`entryPublicPort`：可达的那一行，IPv4 在前），不是常数 22022；
   换家确认时端口变了就写「端口改成 N」。IPv6 在别的端口上应门（不经路由器转发）就不写 AAAA——一个名字只给 Termius 一个端口。
 - **凭据**：入口环境 `CCQUOTA_DNS_DP_ID` / `CCQUOTA_DNS_DP_KEY`（`deploy/k8s/overlays/prod/deployment-env.yaml` 从 `new-deploy/acme-dnspod`
-  的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=24haowan.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
+  的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=example.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
   缺一样 ⇒ 循环不起、0 次调用。⚠️ 这把 token 与 ACME DNS-01 共用、管整个 DNSPod 账号（不只这一个域名）：轮换它要同时顾到 ACME。
 - **吊销名单**（#3560，EPIC #3500 C18）：守护里一个线程跟着入口的 `GET /v1/node/revocations?since=<v>&wait=25`
   （机器令牌；入口有变化立刻回），把名单存成 `<state>/entry/revocations.json`，把其中连接证书的序号
@@ -718,7 +718,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   会拒掉所有钥匙，所以 KRL 不在就不写这行。入口停着时照用最后一份；名单关着（入口 404）或入口端口关着什么都不写。
   手动：`fleet-node-supervisor.py entry revocations pull | follow | apply <file> | status`。C4 的门装同一份 KRL。
   BREAK-IT：`cred-revoked-still-works`。
-- 查：`dig +short @223.5.5.5 <名字>.cf.24haowan.com`（没领的名字：空；`dig TXT` 见那句话）；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows` · `entry-name-unclaimed`。
+- 查：`dig +short @223.5.5.5 <名字>.cf.example.com`（没领的名字：空；`dig TXT` 见那句话）；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows` · `entry-name-unclaimed`。
 
 ## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
 
@@ -807,7 +807,7 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
 ## 19. 托管 Mac 关掉 Spotlight（#3402）
 
 托管机器是给会话干活的，不是谁的桌面：Spotlight 索引每个 worktree、git 目录和会话日志，
-白吃 CPU。2026-10-11 macmini 的 `fseventsd` 115%、负载 30；mini2 的卷早已
+白吃 CPU。2026-10-11 mac-c 的 `fseventsd` 115%、负载 30；mac-d 的卷早已
 `Indexing disabled`，可 console 登录的 `spotlightknowledged`（CoreSpotlight 知识代理，
 不归 `mdutil` 管）照样 99% 跑了 7 小时。所以「关」是两半：
 

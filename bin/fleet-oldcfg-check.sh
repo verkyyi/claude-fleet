@@ -6,7 +6,7 @@
 # the MCP servers (fleet-oldcfg-replay.py's three) — and runs everything they name
 # from the live ~/.claude/fleet. After a stable move the sidebar showed ONE yellow
 # 配置旧 for every old session, so the ones that WOULD FAIL — a hook script gone, a
-# mod tool with no handler (2026-10-06: four sessions on m5 failing every spawn
+# mod tool with no handler (2026-10-06: four sessions on mac-b failing every spawn
 # with «no tool.call hook answered») — looked exactly like the ones that merely
 # lacked a new feature, and a looping scheduler (never reopened by the idle tick,
 # on purpose) broke in silence until it reported an error.

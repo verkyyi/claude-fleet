@@ -168,7 +168,7 @@ func TestLanding_ServerPicksTheLanguage(t *testing.T) {
 }
 
 func TestSigninAndDeny_InChinese(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, "ivan")
 	req, _ := http.NewRequest("GET", h.http.URL+"/signin?e=expired", nil)
 	req.Header.Set("Accept-Language", "zh-CN")
 	resp, err := http.DefaultClient.Do(req)
@@ -198,13 +198,13 @@ func TestSigninAndDeny_InChinese(t *testing.T) {
 // A choice made while signed in is the account's: a second browser with no
 // cookie, signed in as the same person, gets it back.
 func TestPageLocale_FollowsTheAccount(t *testing.T) {
-	h := newGitHubHarness(t, "verkyyi")
+	h := newGitHubHarness(t, "ivan")
 	// The settings table rides the fleet module, as on the live hub; a hub
 	// without it simply has no account rung (cookie only).
 	if err := h.srv.Store.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
-	_, sess := h.signIn(t, fakeGHUser{ID: 999, Login: "verkyyi"})
+	_, sess := h.signIn(t, fakeGHUser{ID: 999, Login: "ivan"})
 	if sess == nil {
 		t.Fatal("no session")
 	}

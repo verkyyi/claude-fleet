@@ -39,7 +39,7 @@ const CREDS = {
 };
 const LIVE = { sessions: [
   { account: 'u-a', os_user: 'alice-mac', worktree: '/w/claude-fleet-issue-1950', started_at: iso(NOW - 600000) },
-  { account: 'u-a', os_user: 'verkyyi', cwd: '/w/scratch-6', started_at: iso(NOW - 60000) },
+  { account: 'u-a', os_user: 'erin', cwd: '/w/scratch-6', started_at: iso(NOW - 60000) },
   { account: '', os_user: 'x', session_id: 'abc' },
 ] };
 
@@ -105,7 +105,7 @@ test('pool headroom: the mean free share and the soonest reset, paused cards lef
 test('who is on which: live sessions named by their GitHub account, newest first', () => {
   const cards = subscriptions({ limits: LIMITS, accounts: ACCOUNTS, creds: CREDS, live: LIVE });
   const rows = leaseRows(LIVE, cards, { users: [{ login: 'alice', machine_login: 'alice-mac' }] });
-  assert.deepEqual(rows.map((r) => [r.session, r.person, r.sub]), [['scratch-6', 'verkyyi', 'max-a'], ['claude-fleet-issue-1950', 'alice', 'max-a']]);
+  assert.deepEqual(rows.map((r) => [r.session, r.person, r.sub]), [['scratch-6', 'erin', 'max-a'], ['claude-fleet-issue-1950', 'alice', 'max-a']]);
   assert.deepEqual(leaseRows(null, cards, null), []);
   const sw = switchRows([{ from_account: 'u-a', to_account: 'codex:account:x', observed_at: iso(NOW) }], cards);
   assert.deepEqual([sw[0].from, sw[0].to], ['max-a', 'codex-1']);
@@ -139,11 +139,11 @@ test('adding a subscription: the commands, then the wait ends when a fake machin
 
 test('machines: lost last, load per core, trend and version carried', () => {
   const ms = machineCards({ machines: [
-    { hostname: 'm5.lan', status: 'lost', load1: 0, ncpu: 8, sessions: 0, kind: 'fixed' },
-    { hostname: 'mini2.tail.ts.net', status: 'online', load1: 4, ncpu: 8, sessions: 3, kind: 'fixed', load_hist: [0.1, 0.5] },
-    { hostname: 'm4', status: 'maintenance', load1: 1, ncpu: 4, sessions: null, kind: 'ephemeral', maintenance: { reason: 'upgrade', by: 'verkyyi' } },
-  ], nodes: [{ hostname: 'mini2.tail.ts.net', fleet_version: '0.4.1', endpoint_id: 'ep_a' }, { hostname: 'mini2.tail.ts.net', agent_version: '0.3.9', endpoint_id: 'ep_b' }] });
-  assert.deepEqual(ms.map((m) => [m.name, m.status]), [['mini2', 'online'], ['m4', 'maintenance'], ['m5', 'lost']]);
+    { hostname: 'mac-b.lan', status: 'lost', load1: 0, ncpu: 8, sessions: 0, kind: 'fixed' },
+    { hostname: 'mac-d.example.ts.net', status: 'online', load1: 4, ncpu: 8, sessions: 3, kind: 'fixed', load_hist: [0.1, 0.5] },
+    { hostname: 'mac-a', status: 'maintenance', load1: 1, ncpu: 4, sessions: null, kind: 'ephemeral', maintenance: { reason: 'upgrade', by: 'erin' } },
+  ], nodes: [{ hostname: 'mac-d.example.ts.net', fleet_version: '0.4.1', endpoint_id: 'ep_a' }, { hostname: 'mac-d.example.ts.net', agent_version: '0.3.9', endpoint_id: 'ep_b' }] });
+  assert.deepEqual(ms.map((m) => [m.name, m.status]), [['mac-d', 'online'], ['mac-a', 'maintenance'], ['mac-b', 'lost']]);
   assert.equal(ms[0].loadCore, 0.5);
   assert.deepEqual(ms[0].hist, [0.1, 0.5]);
   assert.equal(ms[0].version, '0.4.1');
@@ -153,45 +153,45 @@ test('machines: lost last, load per core, trend and version carried', () => {
   assert.deepEqual(ms[2].eps, []);
   // spare logins (claude-fleet#2263): a count only while the hub sends one
   assert.equal(ms[0].spare, null);
-  const sp = machineCards({ machines: [{ hostname: 'm5', status: 'online', spare: 1, logins_used: 2, login_cap: 10 }] })[0];
+  const sp = machineCards({ machines: [{ hostname: 'mac-b', status: 'online', spare: 1, logins_used: 2, login_cap: 10 }] })[0];
   assert.deepEqual([sp.spare, sp.used, sp.cap], [1, 2, 10]);
   assert.deepEqual(machineCards(null), []);
 });
 
 test('machines: one link for the machine, its logins listed under it (claude-fleet#2333)', () => {
-  const [m] = machineCards({ machines: [{ hostname: 'm4', status: 'online', links: 1, logins: 2 }], nodes: [
-    { hostname: 'm4', os_user: 'root', endpoint_id: 'ep_mach', machine_link: true },
-    { hostname: 'm4', os_user: 'beta', endpoint_id: 'ep_b', via: 'ep_mach' },
-    { hostname: 'm4', os_user: 'alpha', endpoint_id: 'ep_a', via: 'ep_mach' },
+  const [m] = machineCards({ machines: [{ hostname: 'mac-a', status: 'online', links: 1, logins: 2 }], nodes: [
+    { hostname: 'mac-a', os_user: 'root', endpoint_id: 'ep_mach', machine_link: true },
+    { hostname: 'mac-a', os_user: 'beta', endpoint_id: 'ep_b', via: 'ep_mach' },
+    { hostname: 'mac-a', os_user: 'alpha', endpoint_id: 'ep_a', via: 'ep_mach' },
   ] });
   assert.equal(m.links, 1);
   assert.deepEqual(m.logins, ['alpha', 'beta']);
   // an older hub says nothing of links
-  assert.equal(machineCards({ machines: [{ hostname: 'm5', status: 'online' }] })[0].links, null);
+  assert.equal(machineCards({ machines: [{ hostname: 'mac-b', status: 'online' }] })[0].links, null);
 });
 
 test('machines: a login whose lane the hub refuses is named on its card (claude-fleet#2501)', () => {
-  const why = 'unrecognised enrollment token for login verky: this login re-registered';
-  const [m] = machineCards({ machines: [{ hostname: 'mini2', status: 'online', links: 1, logins_refused: { verky: why } }] });
-  assert.deepEqual(m.refused, { verky: why });
+  const why = 'unrecognised enrollment token for login dave: this login re-registered';
+  const [m] = machineCards({ machines: [{ hostname: 'mac-d', status: 'online', links: 1, logins_refused: { dave: why } }] });
+  assert.deepEqual(m.refused, { dave: why });
   // an older hub says nothing
-  assert.deepEqual(machineCards({ machines: [{ hostname: 'm5', status: 'online' }] })[0].refused, {});
+  assert.deepEqual(machineCards({ machines: [{ hostname: 'mac-b', status: 'online' }] })[0].refused, {});
 });
 
 test('machines: the admin\'s short name labels the card, the hostname stays the action\'s (claude-fleet#1706)', () => {
   const ms = machineCards({ machines: [
-    { hostname: 'macmini', alias: 'm5', status: 'online' },
-    { hostname: 'mini2.tail.ts.net', alias: 'm4', status: 'online' },
+    { hostname: 'mac-c', alias: 'mac-b', status: 'online' },
+    { hostname: 'mac-d.example.ts.net', alias: 'mac-a', status: 'online' },
     { hostname: 'spot-1', status: 'online' },
   ] });
-  assert.deepEqual(ms.map((m) => [m.label, m.name]), [['m4', 'mini2'], ['m5', 'macmini'], ['spot-1', 'spot-1']]);
+  assert.deepEqual(ms.map((m) => [m.label, m.name]), [['mac-a', 'mac-d'], ['mac-b', 'mac-c'], ['spot-1', 'spot-1']]);
 });
 
 test('the join wait ends when the code it minted is used; the countdown counts down', () => {
   const codes = { codes: [{ label: 'web-1', used_at: null }, { label: 'web-0', used_at: iso(NOW), joined_host: 'old' }] };
   assert.equal(joined(codes, 'web-1'), null);
-  codes.codes[0].used_at = iso(NOW); codes.codes[0].joined_host = 'm5';
-  assert.equal(joined(codes, 'web-1').joined_host, 'm5');
+  codes.codes[0].used_at = iso(NOW); codes.codes[0].joined_host = 'mac-b';
+  assert.equal(joined(codes, 'web-1').joined_host, 'mac-b');
   assert.equal(countdown(NOW + 1800000, NOW), '30:00');
   assert.equal(countdown(NOW + 61000, NOW), '1:01');
   assert.equal(countdown(NOW - 5, NOW), '0:00');
@@ -202,8 +202,8 @@ test('users: a typed name is cleaned and checked; deploy admins first', () => {
   assert.equal(cleanLogin('https://github.com/octo-cat/'), 'octo-cat');
   assert.ok(GH_LOGIN_RE.test('octo-cat'));
   assert.ok(!GH_LOGIN_RE.test('-bad') && !GH_LOGIN_RE.test('a--b') && !GH_LOGIN_RE.test('x'.repeat(40)));
-  const rows = userRows({ users: [{ login: 'zed', role: 'user' }, { login: 'amy', role: 'user' }, { login: 'verkyyi', role: 'admin', deploy: true }] });
-  assert.deepEqual(rows.map((u) => u.login), ['verkyyi', 'amy', 'zed']);
+  const rows = userRows({ users: [{ login: 'zed', role: 'user' }, { login: 'amy', role: 'user' }, { login: 'erin', role: 'admin', deploy: true }] });
+  assert.deepEqual(rows.map((u) => u.login), ['erin', 'amy', 'zed']);
   assert.deepEqual(userRows(null), []);
 });
 
@@ -225,7 +225,7 @@ test('audit: grouped by day, newest first; actors without their principal', () =
   assert.equal(days.length, 2);
   assert.deepEqual(days[0].events.map((e) => e.action), ['a', 'b']);
   assert.deepEqual(auditDays(undefined), []);
-  assert.equal(auditWho({ actor: 'verkyyi (gh:100)' }), 'verkyyi');
+  assert.equal(auditWho({ actor: 'erin (gh:100)' }), 'erin');
   assert.equal(auditWho({ actor: '' }), '—');
   for (const k of AUDIT_KINDS) assert.ok(en['ui.aud.k.' + k] && zhCN['ui.aud.k.' + k], k);
 });
@@ -298,13 +298,13 @@ test('vault labels find their own account — four Claude + one Codex is five ca
   const acct = (u, email, source = 'claude') => ({ account_uuid: u, email, source });
   const limits = { per_account: [
     { account_uuid: 'u-icloud', label: 'ylianghui@icloud.com', limits: { available: true } },
-    { account_uuid: 'u-gmail', label: 'verky.yi@gmail.com', limits: { available: true } },
-    { account_uuid: 'u-24h', label: 'verky@24helpful.com', limits: { available: true } },
-    { account_uuid: 'codex:account:a0', label: 'verky.yi@gmail.com', limits: { available: true, source: 'codex' } },
+    { account_uuid: 'u-gmail', label: 'dave.yi@gmail.com', limits: { available: true } },
+    { account_uuid: 'u-24h', label: 'dave@24helpful.com', limits: { available: true } },
+    { account_uuid: 'codex:account:a0', label: 'dave.yi@gmail.com', limits: { available: true, source: 'codex' } },
     { account_uuid: 'u-gu', label: 'ly297@georgetown.edu', limits: { available: true } },
   ] };
-  const accounts = [acct('u-icloud', 'ylianghui@icloud.com'), acct('u-gmail', 'verky.yi@gmail.com'), acct('u-24h', 'verky@24helpful.com'),
-    acct('codex:account:a0', 'verky.yi@gmail.com', 'codex'), acct('u-gu', 'ly297@georgetown.edu')];
+  const accounts = [acct('u-icloud', 'ylianghui@icloud.com'), acct('u-gmail', 'dave.yi@gmail.com'), acct('u-24h', 'dave@24helpful.com'),
+    acct('codex:account:a0', 'dave.yi@gmail.com', 'codex'), acct('u-gu', 'ly297@georgetown.edu')];
   const pool = (provider, account) => ({ principal_id: 'pool', provider, account, created_at: iso(NOW) });
   const creds = { credentials: [pool('claude', '24helpful'), pool('claude', 'gmail'), pool('claude', 'icloud'), pool('claude', 'ly297'), pool('codex', 'default')] };
   const cards = subscriptions({ limits, accounts, creds });
@@ -322,13 +322,13 @@ test('the hub counts what its vault holds — 4 Claude · 1 Codex, the rest 未�
   const acct = (u, email, source = 'claude') => ({ account_uuid: u, email, source });
   const row = (u, label, source) => ({ account_uuid: u, label, limits: { available: true, ...(source ? { source } : {}) } });
   const limits = { per_account: [
-    row('u-icloud', 'ylianghui@icloud.com'), row('u-gmail', 'verky.yi@gmail.com'), row('u-24h', 'verky@24helpful.com'),
+    row('u-icloud', 'ylianghui@icloud.com'), row('u-gmail', 'dave.yi@gmail.com'), row('u-24h', 'dave@24helpful.com'),
     row('u-gu', 'ly297@georgetown.edu'), row('win_cf27aa', 'win_cf27aa'),
-    row('codex:account:a0', 'verky.yi@gmail.com', 'codex'), row('codex:account:98', 'keep.cj@gmail.com', 'codex'),
+    row('codex:account:a0', 'dave.yi@gmail.com', 'codex'), row('codex:account:98', 'keep.cj@gmail.com', 'codex'),
     row('codex:local', 'Codex (local usage)', 'codex'),
   ] };
-  const accounts = [acct('u-icloud', 'ylianghui@icloud.com'), acct('u-gmail', 'verky.yi@gmail.com'), acct('u-24h', 'verky@24helpful.com'),
-    acct('u-gu', 'ly297@georgetown.edu'), acct('codex:account:a0', 'verky.yi@gmail.com', 'codex'), acct('codex:account:98', 'keep.cj@gmail.com', 'codex')];
+  const accounts = [acct('u-icloud', 'ylianghui@icloud.com'), acct('u-gmail', 'dave.yi@gmail.com'), acct('u-24h', 'dave@24helpful.com'),
+    acct('u-gu', 'ly297@georgetown.edu'), acct('codex:account:a0', 'dave.yi@gmail.com', 'codex'), acct('codex:account:98', 'keep.cj@gmail.com', 'codex')];
   const pool = (provider, account, uuid) => ({ principal_id: 'pool', provider, account, created_at: iso(NOW), ...(uuid ? { account_uuid: uuid } : {}) });
   // by identity: the Codex one from its id_token, one Claude one recorded at import
   // under a label that names nothing ("spare-1" would otherwise be its own card)
@@ -394,16 +394,16 @@ test('a card says when its reading was taken and by whom (claude-fleet#2169)', (
 });
 
 test('machines: trust and its source, 期望 / 实际 for a managed machine (claude-fleet#2214)', () => {
-  const ms = machineCards({ machines: [{ hostname: 'm4', status: 'online' }, { hostname: 'm5', status: 'online' }, { hostname: 'm6', status: 'online' }],
+  const ms = machineCards({ machines: [{ hostname: 'mac-a', status: 'online' }, { hostname: 'mac-b', status: 'online' }, { hostname: 'm6', status: 'online' }],
     nodes: [
-      { hostname: 'm4', trust: 'trusted', trust_source: 'join_code', desired: { want: 3, reached: 2, diff: 'codex' } },
-      { hostname: 'm4', trust: 'trusted', trust_source: 'machine_name' },
-      { hostname: 'm5', trust: 'untrusted', trust_source: 'name_borrowed' },
+      { hostname: 'mac-a', trust: 'trusted', trust_source: 'join_code', desired: { want: 3, reached: 2, diff: 'codex' } },
+      { hostname: 'mac-a', trust: 'trusted', trust_source: 'machine_name' },
+      { hostname: 'mac-b', trust: 'untrusted', trust_source: 'name_borrowed' },
       { hostname: 'm6' },
     ] });
   const by = Object.fromEntries(ms.map((m) => [m.name, m]));
-  assert.deepEqual([by.m4.trust, by.m4.trustSource, by.m4.desired.want, by.m4.desired.reached], ['trusted', 'join_code', 3, 2]);
-  assert.deepEqual([by.m5.trust, by.m5.trustSource, by.m5.desired], ['untrusted', 'name_borrowed', null]);
+  assert.deepEqual([by['mac-a'].trust, by['mac-a'].trustSource, by['mac-a'].desired.want, by['mac-a'].desired.reached], ['trusted', 'join_code', 3, 2]);
+  assert.deepEqual([by['mac-b'].trust, by['mac-b'].trustSource, by['mac-b'].desired], ['untrusted', 'name_borrowed', null]);
   assert.deepEqual([by.m6.trust, by.m6.desired], ['', null]);
 });
 
@@ -414,36 +414,36 @@ test('user deletion lives on the user detail page and still requires confirmatio
 
 // claude-fleet#3302: a person holds several logins with different names on
 // different machines; the pages list every pair, never one "account name".
-const ARVIN = { login: 'cjilyy', machine_login: 'arvin', logins: [
-  { hostname: 'fleet-linux-0', login: '24haowan', state: 'active', home: true, kind: 'node' },
-  { hostname: 'macmini', login: '24haowan', state: 'active', kind: 'node' },
+const BOB = { login: 'cjilyy', machine_login: 'bob', logins: [
+  { hostname: 'linux-a', login: 'acme', state: 'active', home: true, kind: 'node' },
+  { hostname: 'mac-c', login: 'acme', state: 'active', kind: 'node' },
   { hostname: 'myMac', login: 'arvincao', state: 'pending', kind: 'client' },
 ] };
-const VERKY = { login: 'verkyyi', logins: [
-  { hostname: 'macmini', login: 'verky', state: 'active', kind: 'node' },
-  { hostname: 'Verkys-Mac', login: 'verkyyi', state: 'active', kind: 'client' },
+const DAVE = { login: 'erin', logins: [
+  { hostname: 'mac-c', login: 'dave', state: 'active', kind: 'node' },
+  { hostname: 'Verkys-Mac', login: 'erin', state: 'active', kind: 'client' },
 ] };
 
 test('every machine·login pair of a person, with state, home and kind', () => {
   useLocale('zh-CN');
-  const ps = loginPairs(ARVIN);
+  const ps = loginPairs(BOB);
   assert.deepEqual(ps.map((p) => [p.machine, p.login, p.home, p.kind]),
-    [['fleet-linux-0', '24haowan', true, 'node'], ['macmini', '24haowan', false, 'node'], ['myMac', 'arvincao', false, 'client']]);
-  assert.equal(loginPairText(ps[0]), 'fleet-linux-0 · 24haowan (在用, 家, 服务节点)');
+    [['linux-a', 'acme', true, 'node'], ['mac-c', 'acme', false, 'node'], ['myMac', 'arvincao', false, 'client']]);
+  assert.equal(loginPairText(ps[0]), 'linux-a · acme (在用, 家, 服务节点)');
   assert.equal(loginPairText(ps[2]), 'myMac · arvincao (排队开号, 客户端)');
-  const cell = pairsCell(ARVIN);
-  for (const w of ['fleet-linux-0 · 24haowan', 'macmini · 24haowan', 'myMac · arvincao', '家', '客户端']) assert.ok(cell.includes(w), w);
-  assert.ok(!cell.includes('arvin<'), 'machine_login is not shown as the account name');
+  const cell = pairsCell(BOB);
+  for (const w of ['linux-a · acme', 'mac-c · acme', 'myMac · arvincao', '家', '客户端']) assert.ok(cell.includes(w), w);
+  assert.ok(!cell.includes('bob<'), 'machine_login is not shown as the account name');
   assert.ok(pairsCell({ login: 'x', logins: [] }).includes('还没有哪个服务节点上有登录名'));
   useLocale('en');
-  assert.equal(loginPairText(loginPairs(VERKY)[0]), 'macmini · verky (active, service node)');
+  assert.equal(loginPairText(loginPairs(DAVE)[0]), 'mac-c · dave (active, service node)');
 });
 
 test('a session finds its person by machine and login, not by one mapped name', () => {
-  const who = loginOwners({ users: [ARVIN, VERKY] });
+  const who = loginOwners({ users: [BOB, DAVE] });
   assert.equal(who('myMac.local', 'arvincao'), 'cjilyy');
-  assert.equal(who('macmini', 'verky'), 'verkyyi');
-  assert.equal(who('', 'verkyyi'), 'verkyyi'); // one holder of the name
+  assert.equal(who('mac-c', 'dave'), 'erin');
+  assert.equal(who('', 'erin'), 'erin'); // one holder of the name
   assert.equal(who('nowhere', 'nobody'), '');
   // the same login name on one machine held by two people is told apart by machine
   const two = loginOwners({ users: [{ login: 'a', logins: [{ hostname: 'm1', login: 'dev' }] }, { login: 'b', logins: [{ hostname: 'm2', login: 'dev' }] }] });
@@ -455,9 +455,9 @@ test('a session finds its person by machine and login, not by one mapped name', 
 
 test('the pool table: one row per pool subscription, room left, soonest reset, who is on it (claude-fleet#3231)', () => {
   const pool = [
-    { account: 'max-a', label: 'a@example.com', provider: 'claude', owner: 'pool', used_5h_pct: 64, used_7d_pct: 41, resets_5h_at: iso(NOW + 3600000), resets_at: iso(NOW + 3 * 86400000), people: ['verkyyi', '小周'], sessions: 6, state: 'in_use' },
+    { account: 'max-a', label: 'a@example.com', provider: 'claude', owner: 'pool', used_5h_pct: 64, used_7d_pct: 41, resets_5h_at: iso(NOW + 3600000), resets_at: iso(NOW + 3 * 86400000), people: ['erin', '小周'], sessions: 6, state: 'in_use' },
     { account: 'max-b', label: '', provider: 'claude', owner: 'pool', used_5h_pct: 100, used_7d_pct: 78, resets_5h_at: iso(NOW - 60000), resets_at: iso(NOW + 86400000), people: [], sessions: 0, state: 'limited', limited: '5h' },
-    { account: 'default', label: 'x@example.com', provider: 'codex', owner: 'pool', used_5h_pct: 20, used_7d_pct: 29, people: ['verkyyi'], sessions: 3, state: 'in_use' },
+    { account: 'default', label: 'x@example.com', provider: 'codex', owner: 'pool', used_5h_pct: 20, used_7d_pct: 29, people: ['erin'], sessions: 3, state: 'in_use' },
     { account: 'old', provider: 'claude', owner: 'pool', used_5h_pct: null, used_7d_pct: null, people: [], sessions: 0, state: 'idle' },
     { account: 'mine', provider: 'claude', owner: 'gh:9', people: [], sessions: 0, state: 'idle' },
     { account: 'tok', provider: 'github', owner: 'pool', people: [], sessions: 0, state: 'idle' },
@@ -471,7 +471,7 @@ test('the pool table: one row per pool subscription, room left, soonest reset, w
   const a = rows[0];
   assert.equal(a.id, 'u-a');
   assert.deepEqual([a.left5, a.left7, a.used5, a.state, a.reset], [36, 59, 64, 'ok', NOW + 3600000]);
-  assert.deepEqual(a.people, ['verkyyi', '小周']);
+  assert.deepEqual(a.people, ['erin', '小周']);
   const b = rows.find((r) => r.label === 'max-b');
   assert.deepEqual([b.state, b.reset, b.id], ['limited', NOW + 86400000, ''], 'a past reset is skipped; no card, no link');
   assert.equal(rows[1].state, 'paused', 'a paused card wins over the hub state');

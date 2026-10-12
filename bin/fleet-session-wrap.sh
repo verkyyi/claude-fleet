@@ -47,7 +47,7 @@
 #
 # Before this, one stray double Ctrl+C closed the window (the SessionEnd hook's
 # kill-window), and on a machine whose last window that was, the tmux server and
-# every client's view of the machine went with it (m4, 2026-10-05/06).
+# every client's view of the machine went with it (mac-a, 2026-10-05/06).
 #
 # The rule bin/session-wrap-selftest.sh lints: no spawn path runs fleet-claude.sh
 # directly in a new window / respawned pane — it names this script.

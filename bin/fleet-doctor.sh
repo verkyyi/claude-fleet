@@ -801,7 +801,7 @@ fi
 # --- live install freshness: is THIS machine's ~/.claude/fleet current? (#635) ---
 # The commands/skills checks above answer "is it installed". This answers "is it
 # CURRENT", which nothing used to. `/fleet-sync-install` is per-machine and
-# manual, so machine #2 goes stale in silence: on 2026-09-14 macmini's live
+# manual, so machine #2 goes stale in silence: on 2026-09-14 mac-c's live
 # install sat 28 commits behind master — no #603 base-branch fix, no #617 quota
 # ranking, no #608 matrix — and doctor was green on BOTH boxes. The plugin path
 # (#611) fixed this for commands/skills/hooks only; `bin/`, `conf/` and the
@@ -1380,7 +1380,7 @@ fi
 # --- sshtrust (issue #1626): no standing key from another fleet machine ----------
 # Cross-machine ssh rides a five-minute certificate the hub signs per connection
 # (fleet-peer-cert.sh); a key another fleet machine left in ~/.ssh/authorized_keys
-# (`verkyyi@macmini`) admits it forever and the hub never hears of it. WARN with
+# (`dave@mac-c`) admits it forever and the hub never hears of it. WARN with
 # each entry (line, type, comment — never the key); PASS when there is none. A
 # login that knows no other fleet machine prints nothing: the degenerate case.
 _tr=$(bash "$(dirname "$0")/fleet-peer-trust.sh" 2>/dev/null); _tr_rc=$?
@@ -1935,7 +1935,7 @@ fi
 
 # --- CPU throttling (issue #3514) ------------------------------------------------
 # A container with a CPU limit (a Kubernetes pod) is not loaded, it is THROTTLED:
-# fleet-linux-0 ran at its 2-core limit with 83% of its CFS periods throttled —
+# linux-a ran at its 2-core limit with 83% of its CFS periods throttled —
 # ⌘P took 5 s, a new session 20 s — while `machine` above read the host's load.
 # The cgroup's own counters, sampled over FLEET_CPU_SAMPLE_SECS (2): the share of
 # periods throttled, and the cores used against the limit. No cgroup CPU limit
@@ -2785,7 +2785,7 @@ if [ "$nwchk" != 0 ]; then
 fi
 
 # --- ingress: is the PUBLIC SSH entry reachable from OUTSIDE, and is it this host? (#1196) --
-# Opening victor's login (EPIC #1190) the public entry could not be verified from
+# Opening erin's login (EPIC #1190) the public entry could not be verified from
 # this machine or from a laptop beside it — NAT hairpin, same subnet — and only a
 # box on the far side of the internet showed that the entry was port 22022. So
 # this row asks a PROBE host — FLEET_SSH_PROBE_HOST, an ssh destination that
@@ -2954,8 +2954,8 @@ fi
 # #1528 — the only place that key is read). Fill only: a value the login set is
 # never overwritten, and ~/.claude/settings.fleet-override.json lists keys never
 # written at all. This row counts the keys that differ from the defaults — on
-# 2026-10-04 m4's verkyyi login had 8 (no defaultMode, so every spawned session
-# ran in auto mode while m5's ran bypass). FLEET_KEEP_AGENTS_KEY=1 (env or
+# 2026-10-04 mac-a's dave login had 8 (no defaultMode, so every spawned session
+# ran in auto mode while mac-b's ran bypass). FLEET_KEEP_AGENTS_KEY=1 (env or
 # fleet.settings) leaves leftArrowOpensAgents to the login.
 _dj="$(dirname "$0")/../conf/claude-settings.default.json"
 if [ -f "$_hm" ] && [ -f "$_dj" ] && command -v python3 >/dev/null 2>&1; then
@@ -2974,7 +2974,7 @@ fi
 # --- Claude Code's first-run questions answered (issue #2401) ---
 # A login's first Claude start asks things a fleet pane has nobody to answer: the
 # onboarding, and on 2.1.29x "Make auto mode your default permission mode?" — on
-# 2026-10-08 the new `verky` logins on m5 and m4 sat on that one for good, their
+# 2026-10-08 the new `carol` logins on mac-b and mac-a sat on that one for good, their
 # `guide` session a stuck row. The answers are two ~/.claude.json keys
 # (hasCompletedOnboarding, hasSeenAutoDefaultNudge); a new login gets them from
 # fleet-login-bootstrap.sh's onboard step before its first start, an existing one
@@ -2999,8 +2999,8 @@ fi
 # and one fleet block in ~/.claude/CLAUDE.md / $CODEX_HOME/AGENTS.md; the repo's
 # skills/ are counted here (the skills passes install them). Fill only — an item
 # listed in ~/.config/claude-fleet/agent-overrides.json is never written and stops
-# counting. 2026-10-04 reading: 15 missing across m5 + m4 (Claude 4 each; Codex m5
-# 1, m4 6). A Codex home that does not exist reads n/a — Codex is not set up on
+# counting. 2026-10-04 reading: 15 missing across mac-b + mac-a (Claude 4 each; Codex mac-b
+# 1, mac-a 6). A Codex home that does not exist reads n/a — Codex is not set up on
 # that login. The trailing hint names what a default server still needs on PATH:
 # `fetch` runs on uvx (`brew install uv`), `github` on github-mcp-server
 # (`brew install github-mcp-server`; the npx server stands in until then).
@@ -3084,7 +3084,7 @@ fi
 # --- reap: sessions past their reap policy that are still open (issue #3352) ---
 # bin/fleet-reap-overdue.py is the one reader: a merged worker past its grace, a
 # finished scratch past its `done`, with why it is still there. WARN once any has
-# been stuck > 30 min — on 2026-10-11 macmini's idle pass timed out every tick and
+# been stuck > 30 min — on 2026-10-11 mac-c's idle pass timed out every tick and
 # took the merged-PR pass with it, and nothing said so. No fleet ⇒ no row.
 _ro="$(dirname "$0")/fleet-reap-overdue.py"
 if [ -f "$_ro" ]; then
@@ -3770,7 +3770,7 @@ fi
 # project root — a linked worktree resolves to its MAIN checkout — with an exact
 # lookup in ~/.claude.json (`projects[<root>].hasTrustDialogAccepted === true`); with
 # it missing every dispatched worker parks on the dialog with nobody to answer
-# (macmini, 2026-09-12: 7+ minutes, slot "filled", nothing logged). The launcher
+# (mac-c, 2026-09-12: 7+ minutes, slot "filled", nothing logged). The launcher
 # pre-trusts at spawn since #563, but a live install that predates it, or an
 # opted-out fleet (FLEET_PRETRUST=0), still stalls.
 # Why the base fault matters: when FLEET_BASE_BRANCH is wrong nothing looks broken —

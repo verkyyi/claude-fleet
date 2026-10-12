@@ -32,7 +32,7 @@ func (n *writeNode) beatCompute(host, user, machine string, load1 float64, compu
 func TestComputeUnsetAddsNothing(t *testing.T) {
 	h, _, _, _, _ := twoNodes(t)
 	machines, nodes := nodeStatuses(t, h)
-	for _, host := range []string{"m5", "m4"} {
+	for _, host := range []string{"mac-d", "mac-c"} {
 		if _, has := machines[host]["compute_off"]; has {
 			t.Fatalf("%s machine carries compute_off with nothing set: %v", host, machines[host])
 		}
@@ -40,51 +40,51 @@ func TestComputeUnsetAddsNothing(t *testing.T) {
 			t.Fatalf("%s node carries compute_off with nothing set: %v", host, nodes[host])
 		}
 	}
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("placement with nothing set: %q %v; want m4", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("placement with nothing set: %q %v; want mac-c", pl.Machine, err)
 	}
 }
 
 // A heartbeat saying compute=false takes the login out of placement — auto
 // and named — and the roster says 只协调; compute back on puts it back.
 func TestComputeOffNodeIsNeverPlaced(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	// m4 is the better machine; only compute=0 can keep work off it.
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	m4.beatCompute("m4", "verk", machineB, 0.5, computeOff(), f4)
-	waitFor(t, 3*time.Second, "m4 reports compute off", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+	h, macD, macC, f5, f4 := twoNodes(t)
+	// mac-c is the better machine; only compute=0 can keep work off it.
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	macC.beatCompute("mac-c", "frank", machineB, 0.5, computeOff(), f4)
+	waitFor(t, 3*time.Second, "mac-c reports compute off", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return !control.ComputeOn(hb.Compute)
 	})
-	waitLoad(t, h, "m5", 5)
+	waitLoad(t, h, "mac-d", 5)
 	pl, err := h.srv.PickNode("", writeRepo)
-	if err != nil || pl.Machine != "m5" || !strings.Contains(pl.Reason, "m4 excluded: "+excludedComputeOff) {
-		t.Fatalf("auto placement = %q %q %v; want m5 with m4 excluded as compute off", pl.Machine, pl.Reason, err)
+	if err != nil || pl.Machine != "mac-d" || !strings.Contains(pl.Reason, "mac-c excluded: "+excludedComputeOff) {
+		t.Fatalf("auto placement = %q %q %v; want mac-d with mac-c excluded as compute off", pl.Machine, pl.Reason, err)
 	}
-	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 31,
-		"worker_id": issueWID(f5.FleetID, 31), "node": "m4"})
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "issue": 31,
+		"worker_id": issueWID(f5.FleetID, 31), "node": "mac-c"})
 	e, _ := out["error"].(map[string]any)
 	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(e["message"].(string), "compute off") {
-		t.Fatalf("named place on m4 = %d %v; want NO_ELIGIBLE_NODE naming compute off", st, out)
+		t.Fatalf("named place on mac-c = %d %v; want NO_ELIGIBLE_NODE naming compute off", st, out)
 	}
-	if m4.count() != 0 {
-		t.Fatalf("m4 got %d writes; want none", m4.count())
+	if macC.count() != 0 {
+		t.Fatalf("mac-c got %d writes; want none", macC.count())
 	}
 	machines, nodes := nodeStatuses(t, h)
-	if nodes["m4"]["compute_off"] != true || machines["m4"]["compute_off"] != true {
-		t.Fatalf("roster: machine %v node %v; want compute_off on m4", machines["m4"], nodes["m4"])
+	if nodes["mac-c"]["compute_off"] != true || machines["mac-c"]["compute_off"] != true {
+		t.Fatalf("roster: machine %v node %v; want compute_off on mac-c", machines["mac-c"], nodes["mac-c"])
 	}
-	if _, has := nodes["m5"]["compute_off"]; has {
-		t.Fatalf("m5 node carries compute_off: %v", nodes["m5"])
+	if _, has := nodes["mac-d"]["compute_off"]; has {
+		t.Fatalf("mac-d node carries compute_off: %v", nodes["mac-d"])
 	}
 
-	m4.beatCompute("m4", "verk", machineB, 0.5, nil, f4)
-	waitFor(t, 3*time.Second, "m4 compute back on", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+	macC.beatCompute("mac-c", "frank", machineB, 0.5, nil, f4)
+	waitFor(t, 3*time.Second, "mac-c compute back on", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return control.ComputeOn(hb.Compute)
 	})
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
-		t.Fatalf("after compute on: %q %v; want m4", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
+		t.Fatalf("after compute on: %q %v; want mac-c", pl.Machine, err)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestComputeOffNodeIsNeverPlaced(t *testing.T) {
 // out even while its heartbeats say nothing.
 func TestComputeOffHelloIsHonoured(t *testing.T) {
 	h := newFleetHarness(t)
-	m5 := connectWriteNode(t, h, "m5")
-	c := dialNode(t, h, h.enroll(t, "m4"))
+	macD := connectWriteNode(t, h, "mac-d")
+	c := dialNode(t, h, h.enroll(t, "mac-c"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
@@ -105,20 +105,20 @@ func TestComputeOffHelloIsHonoured(t *testing.T) {
 	if err := wsjson.Read(ctx, c, &reply); err != nil || reply.Type != control.TypeWelcome {
 		t.Fatalf("hello: %v %+v", err, reply)
 	}
-	m4 := &writeNode{t: t, conn: c, answer: accepted}
-	go m4.serve()
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	m4.beatLoad("m4", "verk", machineB, 0.5, 1, f4)
+	macC := &writeNode{t: t, conn: c, answer: accepted}
+	go macC.serve()
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 0.5, 1, f4)
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
-	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
-		t.Fatalf("placement = %q %v; want m5 (m4's hello said compute off)", pl.Machine, err)
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("placement = %q %v; want mac-d (mac-c's hello said compute off)", pl.Machine, err)
 	}
-	if _, nodes := nodeStatuses(t, h); nodes["m4"]["compute_off"] != true {
-		t.Fatalf("roster node m4 = %v; want compute_off", nodes["m4"])
+	if _, nodes := nodeStatuses(t, h); nodes["mac-c"]["compute_off"] != true {
+		t.Fatalf("roster node mac-c = %v; want compute_off", nodes["mac-c"])
 	}
 }
 
@@ -135,12 +135,12 @@ func TestComputeOffNodeCannotLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.NodeConnected(ep.ID, "m4", "alice", "test", control.Proto, 60000, time.Now()); err != nil {
+	if err := h.srv.Store.NodeConnected(ep.ID, "mac-c", "alice", "test", control.Proto, 60000, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	setBeat := func(compute *bool) {
-		raw, _ := json.Marshal(control.Heartbeat{Hostname: "m4", OSUser: "alice", Compute: compute, ObservedAt: time.Now()})
-		if err := h.srv.Store.NodeHeartbeat(ep.ID, "m4", "alice", "", control.Proto, string(raw), time.Now()); err != nil {
+		raw, _ := json.Marshal(control.Heartbeat{Hostname: "mac-c", OSUser: "alice", Compute: compute, ObservedAt: time.Now()})
+		if err := h.srv.Store.NodeHeartbeat(ep.ID, "mac-c", "alice", "", control.Proto, string(raw), time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -159,32 +159,32 @@ func TestComputeOffNodeCannotLease(t *testing.T) {
 // the beat's time and agent build — and, when the login's link keeps changing
 // hands (two agents of one login, each with its own word), how often.
 func TestComputeOffReasonNamesItsSource(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
+	h, macD, macC, f5, f4 := twoNodes(t)
 	at := time.Date(2026, 10, 9, 15, 11, 2, 0, time.UTC)
-	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
-	beat(t, m4.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
+	beat(t, macC.conn, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "frank", MachineID: machineB,
 		Load1: 0.5, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
 		Fleets: []control.Fleet{f4}, Compute: computeOff(), ObservedAt: at, AgentVersion: "v-stale"})
-	waitFor(t, 3*time.Second, "m4 reports compute off", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+	waitFor(t, 3*time.Second, "mac-c reports compute off", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return !control.ComputeOn(hb.Compute)
 	})
-	waitLoad(t, h, "m5", 5)
+	waitLoad(t, h, "mac-d", 5)
 	pl, err := h.srv.PickNode("", writeRepo)
-	want := "m4 excluded: " + excludedComputeOff + " · reported 15:11:02Z by agent v-stale heartbeat"
-	if err != nil || pl.Machine != "m5" || !strings.Contains(pl.Reason, want) {
-		t.Fatalf("placement = %q %q %v; want m5 with %q", pl.Machine, pl.Reason, err, want)
+	want := "mac-c excluded: " + excludedComputeOff + " · reported 15:11:02Z by agent v-stale heartbeat"
+	if err != nil || pl.Machine != "mac-d" || !strings.Contains(pl.Reason, want) {
+		t.Fatalf("placement = %q %q %v; want mac-d with %q", pl.Machine, pl.Reason, err, want)
 	}
 	if strings.Contains(pl.Reason, "被顶替") {
 		t.Fatalf("one link, never displaced: %q", pl.Reason)
 	}
 	// A second agent of the same login takes the link: the reason counts it.
-	m4b := connectWriteNodeTok(t, h, h.tokens["m4"])
-	beat(t, m4b.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+	m4b := connectWriteNodeTok(t, h, h.tokens["mac-c"])
+	beat(t, m4b.conn, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "frank", MachineID: machineB,
 		Load1: 0.5, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
 		Fleets: []control.Fleet{f4}, Compute: computeOff(), ObservedAt: at, AgentVersion: "v-stale"})
 	waitFor(t, 3*time.Second, "the link changed hands", func() bool {
-		return h.srv.nodes.supersededSince("ep_m4", time.Now()) == 1
+		return h.srv.nodes.supersededSince("ep_mac-c", time.Now()) == 1
 	})
 	pl, err = h.srv.PickNode("", writeRepo)
 	if err != nil || !strings.Contains(pl.Reason, "被顶替 1 次") {

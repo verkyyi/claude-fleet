@@ -54,7 +54,7 @@ eq() {  # <desc> <expected> <actual>
 ok() { CHECKS=$((CHECKS + 1)); }
 
 # ===== A: a CJK title names the window after the WORK, not its number =========
-# The four titles from the #579 report (24haowan-monorepo, 2026-09-13) — all four
+# The four titles from the #579 report (24globex-monorepo, 2026-09-13) — all four
 # spawned windows called issue-<N> before this change.
 eq "A pure-CJK title"            "台账点文本跳录音" "$(fleet_win_name '台账点文本跳录音')"
 eq "A pure-CJK title (2)"        "发布按钮收起来"   "$(fleet_win_name '发布按钮收起来')"
@@ -232,8 +232,8 @@ eq "J use: only the part before 「：」" "常备会话预热把机器锁死" \
 eq "J use: …and before an ASCII ': '" "fix-the-cache" "$(fleet_issue_plain_name 'Fix the cache: fleet_lw drops rows')"
 eq "J use: a （aside） is dropped" "测试身份开出来的home会话" \
    "$(fleet_issue_plain_name '测试身份（fleet --test-identity claude）开出来的 home 会话落在人的侧栏里当 norepo，没有回收策略')"
-eq "J use: no hyphen beside a CJK glyph" "入口把home会话放进macmin" \
-   "$(fleet_issue_plain_name '入口把 home 会话放进 macmini 上另一个登录（verkyyi）的旧 fleet')"
+eq "J use: no hyphen beside a CJK glyph" "入口把home会话放进mac-c" \
+   "$(fleet_issue_plain_name '入口把 home 会话放进 mac-c 上另一个登录（dave）的旧 fleet')"
 eq "J use: fleet- prefix, .sh suffix, --flag, under_score come off" "issue-file对超长标题给提" \
    "$(fleet_issue_plain_name 'fleet-issue-file.sh --hint 对超长标题给提示 fleet_title_use')"
 eq "J use: an ASCII-only title still slugs" "add-a-hint" "$(fleet_issue_plain_name 'Add a hint --flag fleet_x')"
@@ -243,8 +243,8 @@ eq "J use: clipped to 24 columns" "托管机器上旧版fleet-host" "$got"
 eq "J use: a title that cleans to nothing keeps fleet_win_name's name" "fleet-x-y" \
    "$(fleet_issue_plain_name 'fleet_x: --y')"
 eq "J use: still never a panel name" "" "$(fleet_issue_plain_name 'Plan')"
-eq "J use: deterministic across processes" "$(fleet_issue_plain_name '入口把 home 会话放进 macmini 上')" \
-   "$(bash -c '. "$1"; fleet_issue_plain_name "入口把 home 会话放进 macmini 上"' _ "$LIB")"
+eq "J use: deterministic across processes" "$(fleet_issue_plain_name '入口把 home 会话放进 mac-c 上')" \
+   "$(bash -c '. "$1"; fleet_issue_plain_name "入口把 home 会话放进 mac-c 上"' _ "$LIB")"
 eq "J issue name: a non-member goes through it" "常备会话预热把机器锁死" \
    "$(PATH="$WORK/gh:$PATH" bash -c '. "$1"; fleet_issue_win_name acme/app 13 "常备会话预热把机器锁死：scratch-pool" "plain body"' _ "$LIB")"
 eq "J issue name: a member keeps its 简称·title, byte for byte" "托管节点·节点程序-fleet-x" \

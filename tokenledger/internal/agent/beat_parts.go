@@ -17,7 +17,7 @@ import (
 // the machine's load and memory (a sysctl, every sysEvery), the login's fleets
 // (fleet-control.py, slow and sometimes stuck — #1797), a managed machine's
 // versions (the updater, every versionsEvery). Each carries the time it was
-// read, and none waits on another: before this, m5's beat ran the fleet probe
+// read, and none waits on another: before this, mac-b's beat ran the fleet probe
 // first and the hub read its load as empty all day.
 
 // asyncReading keeps the last completed reading of something slow. get starts

@@ -24,7 +24,7 @@
 # list_row_named <name> (a screen on stdin): a list ROW carrying the name — the left column before 「│」,
 # never the input line 「› <name>」 (the typed name is not a session; matching
 # it passed the #1901 final run while the list said 「No sessions」). Only a
-# line of the split counts (one with 「│」: the shell prompt 「drill1007b@mini2 %」
+# line of the split counts (one with 「│」: the shell prompt 「drill1007b@mac-d %」
 # above it passed #2221's run), and the name is a whole word — no letter,
 # digit, @, _ or - against either side.
 list_row_named() {
@@ -51,7 +51,7 @@ THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not 
 # The 看台 drawn: its top line's ‹ i/n › (fleet-topbar.py) — the screen's own proof
 # the view is up. thin.log's `drawn` / a `connect` with first_ms need the home's
 # OSC 7502 cur, which no home sent before issue #3489, so the log alone never said landed
-# (C9 run 22, issue #3276: 「‹ 2/2 › … @mini2」 on screen, 1260 s of waiting).
+# (C9 run 22, issue #3276: 「‹ 2/2 › … @mac-d」 on screen, 1260 s of waiting).
 # shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
 VIEW_UP='‹ ?[0-9–-]+/[0-9]+ ?›'
 # thin_first_state (the newcomer's thin.log on stdin, docs/dev/CLIENT-LOGS.md):

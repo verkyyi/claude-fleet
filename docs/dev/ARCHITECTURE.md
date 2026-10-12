@@ -875,7 +875,7 @@ root, where a linked git worktree resolves to its **main checkout** (that is why
 machine with only `FLEET_MAIN` trusted spawns workers straight into `/fleet-claim`
 with no `…-issue-<N>` entries at all). A fleet pane has nobody to press Enter, so
 an untrusted `FLEET_MAIN` parks every dispatched worker on that dialog — slot
-counted, nothing running, nothing logged (macmini, 2026-09-12). `bin/fleet-claude.sh`,
+counted, nothing running, nothing logged (mac-c, 2026-09-12). `bin/fleet-claude.sh`,
 the one door every spawn/restore/migrate walks through, therefore calls
 `bin/fleet-trust.sh grant --main $FLEET_MAIN $PWD` before `exec claude`. The helper
 is the rail: it writes **only** the base checkout and directories whose git common

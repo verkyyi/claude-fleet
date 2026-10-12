@@ -55,7 +55,7 @@ private_key	-----BEGIN OPENSSH PRIVATE KEY----- b3BlbnNzaC1rZXk= AAAA -----END O
 authorization	header Authorization: Bearer eyJhbGciOi.payload.sig sent
 cookie	Cookie: session=abc123; path=/
 bearer	got bearer abc.DEF-123_~+/= back
-url_query	GET https://hub.example/v1/x?node=m5&token=SEKRIT123&a=1 failed
+url_query	GET https://hub.example/v1/x?node=mac-b&token=SEKRIT123&a=1 failed
 env_secret	FLEET_HUB_TOKEN=tok-zzz9 in the environment
 json_token	{"url": "https://h", "token": "hub-json-token-77"}
 gitlab	token glpat-FAKE-not-real in the remote
@@ -96,8 +96,8 @@ while IFS= read -r l; do printf '%s' "$l" | fleet_clientlog_redact >> "$WORK/sh.
 if cmp -s "$WORK/py.out" "$WORK/sh.out"; then ok "B redaction: python = sh on $(wc -l < "$WORK/corpus" | tr -d ' ') lines"
 else bad "B redaction differs:"; diff "$WORK/py.out" "$WORK/sh.out" | head -6; fi
 R=$'relay closed\tby hub\nnext line ghp_SECRETSECRET 中文'
-python3 "$BIN/fleet_clientlog.py" write connect relay-end m5 relay 1023 hub "$R"
-fleet_clientlog connect relay-end m5 relay 1023 hub "$R"
+python3 "$BIN/fleet_clientlog.py" write connect relay-end mac-b relay 1023 hub "$R"
+fleet_clientlog connect relay-end mac-b relay 1023 hub "$R"
 n=$(cut -f2- "$LOGS/connect.log" | sort -u | wc -l | tr -d ' ')
 cols=$(awk -F '\t' '{ print NF }' "$LOGS/connect.log" | sort -u | tr '\n' ' ')
 ts=$(cut -f1 "$LOGS/connect.log" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$')
@@ -153,7 +153,7 @@ def send(c, op, data):
 
 def place(c, body):
     out = {"state": "failed", "exit": 4,
-           "line": "REFUSED NO_CAPACITY\tNo machine can take it: m4: CPU busy 93% over 80%; m5: offline"}
+           "line": "REFUSED NO_CAPACITY\tNo machine can take it: mac-a: CPU busy 93% over 80%; mac-b: offline"}
     raw = json.dumps(out).encode()
     c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(raw) + raw)
     c.close()
@@ -231,13 +231,13 @@ spec = importlib.util.spec_from_file_location("fc", sys.argv[1] + "/fleet-connec
 fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
 route = {"kind": "direct", "name": "lan", "host": "10.0.0.9", "port": 22}
 if sys.argv[2] == "cmd":
-    print(" ".join(fc.ssh_command({"alias": "m5"}, route, "u1", "")))
+    print(" ".join(fc.ssh_command({"alias": "mac-b"}, route, "u1", "")))
     sys.exit(0)
-sys.exit(fc.run_logged(sys.argv[3:], "m5", route, "u1"))
+sys.exit(fc.run_logged(sys.argv[3:], "mac-b", route, "u1"))
 EOF
 python3 "$WORK/runssh.py" "$BIN" run sh -c 'exit 255'; rc=$?
-st=$(awk -F '\t' '$2 == "ssh-start" && $3 == "m5" && $4 == "direct"' "$LOGS/connect.log" | tail -n 1)
-en=$(awk -F '\t' '$2 == "ssh-end" && $3 == "m5"' "$LOGS/connect.log" | tail -n 1)
+st=$(awk -F '\t' '$2 == "ssh-start" && $3 == "mac-b" && $4 == "direct"' "$LOGS/connect.log" | tail -n 1)
+en=$(awk -F '\t' '$2 == "ssh-end" && $3 == "mac-b"' "$LOGS/connect.log" | tail -n 1)
 if [ "$rc" = 255 ] && [ -n "$st" ] && [ "$(printf '%s' "$en" | cut -f6)" = "exit 255" ]; then
   ok "F ssh exit 255 → ssh-start + ssh-end · exit 255, and fleet-connect exits 255"
 else bad "F ssh lines/rc: rc=$rc start=[$st] end=[$en]"; fi
@@ -257,7 +257,7 @@ CD="$WORK/client"; mkdir -p "$CD"; printf 'lease-1\n' > "$CD/client.lease"; prin
 FLEET_HUB_URL="$HUB" FLEET_HUB_TOKEN=tok-1 FLEET_CLIENT_DIR="$CD" FLEET_CLIENT_PLACE_WAIT=5 \
   bash "$BIN/fleet-client-place.sh" o/r 42 >/dev/null 2>&1; rc=$?
 pl=$(tail -n 1 "$LOGS/place.log" 2>/dev/null)
-case "$pl" in *$'\t'issue-42$'\t'auto$'\t'-$'\t'*$'\t''REFUSED 4'$'\t''repo=o/r | No machine can take it: m4: CPU busy 93% over 80%; m5: offline'*) r=1 ;; *) r='' ;; esac
+case "$pl" in *$'\t'issue-42$'\t'auto$'\t'-$'\t'*$'\t''REFUSED 4'$'\t''repo=o/r | No machine can take it: mac-a: CPU busy 93% over 80%; mac-b: offline'*) r=1 ;; *) r='' ;; esac
 [ "$rc" = 4 ] && [ -n "$r" ] && ok "G the hub's REFUSED, every machine's reason → place.log" \
   || bad "G place.log: rc=$rc line=[$pl]"
 FLEET_CONF_DIR="$WORK/noconf" FLEET_CLIENT_DIR="$WORK/none" bash "$BIN/fleet-client-place.sh" o/r scratch >/dev/null 2>&1; rc=$?

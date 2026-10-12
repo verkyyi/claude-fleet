@@ -71,9 +71,9 @@ unset TMUX TMUX_PANE FLEET_SHELL FLEET_SESSION
 # three rows as the list writes them (switch-rows.tsv, fleet-quickopen.py rows_text)
 T=$'\t'
 {
-  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}m4${T}acme/web (2)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
-  printf '%s\n' "wid:F/issue-13${T}working${T}●${T}登录页样式${T}m5${T}acme/web (2)${T}${T}#13${T}—${T}done:2h${T}${T}acme/web"
-  printf '%s\n' "wid:F/scratch-3${T}idle${T}○${T}随便聊聊${T}m4${T}无仓库 (1)${T}${T}—${T}—${T}keep${T}${T}none"
+  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}mac-a${T}acme/web (2)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
+  printf '%s\n' "wid:F/issue-13${T}working${T}●${T}登录页样式${T}mac-b${T}acme/web (2)${T}${T}#13${T}—${T}done:2h${T}${T}acme/web"
+  printf '%s\n' "wid:F/scratch-3${T}idle${T}○${T}随便聊聊${T}mac-a${T}无仓库 (1)${T}${T}—${T}—${T}keep${T}${T}none"
 } > "$W/rows.tsv"
 cat > "$W/write" <<EOF
 #!/bin/bash
@@ -91,9 +91,9 @@ NOW=1800000000
 U=$(printf '\037')
 {
   printf '#ts%s%s\n' "$U" "$NOW"
-  printf '%s\n' "wid:F/issue-12${U}m4${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}merged${U}${U}${U}62${U}ok${U}$((NOW - 20))${U}Opus 5.5${U}high"
-  printf '%s\n' "wid:F/issue-13${U}m5${U}online${U}13${U}acme/web${U}working${U}codex:7_x${U}登录页样式${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:2h${U}${U}${U}47${U}watch${U}$((NOW - 485))${U}gpt-6-astra${U}medium"
-  printf '%s\n' "wid:F/scratch-3${U}m4${U}online${U}${U}${U}idle${U}claude${U}随便聊聊${U}${U}${U}0${U}${U}hub${U}${U}${U}ok"
+  printf '%s\n' "wid:F/issue-12${U}mac-a${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}merged${U}${U}${U}62${U}ok${U}$((NOW - 20))${U}Opus 5.5${U}high"
+  printf '%s\n' "wid:F/issue-13${U}mac-b${U}online${U}13${U}acme/web${U}working${U}codex:7_x${U}登录页样式${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:2h${U}${U}${U}47${U}watch${U}$((NOW - 485))${U}gpt-6-astra${U}medium"
+  printf '%s\n' "wid:F/scratch-3${U}mac-a${U}online${U}${U}${U}idle${U}claude${U}随便聊聊${U}${U}${U}0${U}${U}hub${U}${U}${U}ok"
 } > "$W/remote"
 cli() { FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_WRITE="$W/write" FLEET_SESSION_CLI_CACHE="$W/remote" \
         FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
@@ -102,10 +102,10 @@ cli() { FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_WRITE="$W/write" 
 out=$(cli ls); rc=$?
 eq "A ls exits 0" 0 "$rc"
 eq "A ls: a header and three rows" 4 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
-has "A ls header" "名称        单号  机器  Agent   剩余            模型         Effort  状态    PR    回收方式" "$out"
-has "A ls row: 单号 · 机器 · Agent · 剩余 · 模型 · Effort · 状态 · PR · 回收方式" "登录页重做  #12   m4    Claude  62%             Opus 5.5     high    在问你  #75✓  merged" "$out"
-has "A ls row: a stale Codex reading says how old; no PR (—) is blank" "登录页样式  #13   m5    Codex   47% (8 分钟前)  gpt-6-astra  medium  在干活        done:2h" "$out"
-has "A ls row: an older node's session — for the bus" "随便聊聊          m4    Claude  —               —            —       空闲          keep" "$out"
+has "A ls header" "名称        单号  机器   Agent   剩余            模型         Effort  状态    PR    回收方式" "$out"
+has "A ls row: 单号 · 机器 · Agent · 剩余 · 模型 · Effort · 状态 · PR · 回收方式" "登录页重做  #12   mac-a  Claude  62%             Opus 5.5     high    在问你  #75✓  merged" "$out"
+has "A ls row: a stale Codex reading says how old; no PR (—) is blank" "登录页样式  #13   mac-b  Codex   47% (8 分钟前)  gpt-6-astra  medium  在干活        done:2h" "$out"
+has "A ls row: an older node's session — for the bus" "随便聊聊          mac-a  Claude  —               —            —       空闲          keep" "$out"
 case "$out" in *$'\033'*) eq "A ls: no colour off a terminal" none colour ;; *) eq "A ls: no colour off a terminal" none none ;; esac
 # on a terminal: 剩余 coloured — green >50, amber 20–50, red <20 or handoff, grey stale
 eq "A colours" "32 90 31 33 31" "$(FLEET_SESSION_CLI_NOW=$NOW python3 - "$BIN" <<'PY'
@@ -123,7 +123,7 @@ eq "A ls --json" "wid:F/issue-12|12|#75✓|merged;wid:F/issue-13|13||done:2h;wid
 # a 「结果给你」 row (issue #3517): the report of a reaped session is no session —
 # off the default list, still under --all
 cp "$W/rows.tsv" "$W/rows-orep.tsv"
-printf '%s\n' "orphanrep:o1@m4${T}orphanrep${T}✉${T}verkyyi-claude-fleet:issue-3076 REAPED${T}m4${T}acme/web (2)${T}结果给你${T}#3076${T}—${T}${T}${T}acme/web" >> "$W/rows-orep.tsv"
+printf '%s\n' "orphanrep:o1@mac-a${T}orphanrep${T}✉${T}verkyyi-claude-fleet:issue-3076 REAPED${T}mac-a${T}acme/web (2)${T}结果给你${T}#3076${T}—${T}${T}${T}acme/web" >> "$W/rows-orep.tsv"
 corep() { FLEET_SESSION_CLI_ROWS="$W/rows-orep.tsv" FLEET_SESSION_CLI_CACHE="$W/remote" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
 eq "A ls: a reaped session's report row is not listed" 0 "$(corep ls | grep -c 'REAPED')"
 eq "A ls --json: …nor in --json" 0 "$(corep ls --json | grep -c 'orphanrep')"
@@ -136,8 +136,8 @@ eq "A no cache at all: every row still listed, the bus —" 3 "$(FLEET_SESSION_C
 # `#me`, never left blank (the onboard drill read it as «-»). A hub row keeps its own.
 printf '@7\tdone\t●\t我的会话 · first\t\t\t\t—\t—\t\tfirst\t\t\n' > "$W/rows-own.tsv"
 cat "$W/rows.tsv" >> "$W/rows-own.tsv"
-{ printf '#ts%s%s\n#me%smini2\n' "$U" "$NOW" "$U"; cat "$W/remote"; } > "$W/remote-me"
-eq "A ls --json: an own row is named by #me, a hub row keeps its node" "@7|mini2;wid:F/issue-12|m4;wid:F/issue-13|m5;wid:F/scratch-3|m4;" \
+{ printf '#ts%s%s\n#me%smac-d\n' "$U" "$NOW" "$U"; cat "$W/remote"; } > "$W/remote-me"
+eq "A ls --json: an own row is named by #me, a hub row keeps its node" "@7|mac-d;wid:F/issue-12|mac-a;wid:F/issue-13|mac-b;wid:F/scratch-3|mac-a;" \
   "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-me" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin)))')"
 # A fresh login on its home has NO hub cache (issue #3470: the hub loop never
 # wrote one there — drill 34 read step 8's row as unnamed): an own row is still
@@ -152,7 +152,7 @@ eq "A ls --json: no hub cache ⇒ …through FLEET_NODE_ALIASES (#3470)" "@7|hom
 # wid:F/scratch-9, so `fleet ls --json` carries worker_id + fleet_id for the own
 # row — the drill's locate finds its window by it — and a write by the own key
 # goes through the hub; no hub ⇒ the window's own @fleet_id off this machine's tmux
-{ cat "$W/remote-me"; printf '%s\n' "wid:F/scratch-9${U}mini2${U}online${U}${U}${U}done${U}claude${U}我的会话${U}${U}${U}1${U}@7${U}hub${U}${U}${U}ok"; } > "$W/remote-own"
+{ cat "$W/remote-me"; printf '%s\n' "wid:F/scratch-9${U}mac-d${U}online${U}${U}${U}done${U}claude${U}我的会话${U}${U}${U}1${U}@7${U}hub${U}${U}${U}ok"; } > "$W/remote-own"
 eq "A ls --json: an own row carries the hub's worker_id + fleet_id (#3467)" "@7|F/scratch-9|scratch-9;wid:F/issue-12|F/issue-12|issue-12;" \
   "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-own" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"]) for r in json.load(sys.stdin)[:2]))')"
 FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-own" FLEET_SESSION_CLI_WRITE="$W/write" \
@@ -191,7 +191,7 @@ cli show >/dev/null 2>&1; eq "B show with no session → usage, exit 2" 2 "$?"
 
 # --- C. show -------------------------------------------------------------------------
 out=$(cli show '#12')
-has "C show: 机器" "机器      m4" "$out"
+has "C show: 机器" "机器      mac-a" "$out"
 has "C show: PR" "PR        #75✓" "$out"
 has "C show: 回收方式" "回收方式  merged" "$out"
 has "C show: the key" "key       wid:F/issue-12" "$out"
@@ -328,9 +328,9 @@ fi
 
 # --- I. a batch driver (issue #2544) ---------------------------------------------------
 {
-  printf '%s\n' "wid:F/acme-web:scratch-4${T}looping${T}↻${T}像本地·批次${T}m5${T}acme/web (3)${T}7/9${T}#2482${T}—${T}done:2h${T}${T}acme/web"
-  printf '%s\n' "wid:F/acme-web:scratch-5${T}looping${T}↻${T}#2490${T}m5${T}acme/web (3)${T}0/4${T}#2490${T}—${T}done:2h${T}${T}acme/web"
-  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}m4${T}acme/web (3)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
+  printf '%s\n' "wid:F/acme-web:scratch-4${T}looping${T}↻${T}像本地·批次${T}mac-b${T}acme/web (3)${T}7/9${T}#2482${T}—${T}done:2h${T}${T}acme/web"
+  printf '%s\n' "wid:F/acme-web:scratch-5${T}looping${T}↻${T}#2490${T}mac-b${T}acme/web (3)${T}0/4${T}#2490${T}—${T}done:2h${T}${T}acme/web"
+  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}mac-a${T}acme/web (3)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
 } > "$W/rows-epic.tsv"
 cbi() { FLEET_SESSION_CLI_ROWS="$W/rows-epic.tsv" FLEET_SESSION_CLI_CACHE="" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
 out=$(cbi ls)
@@ -346,15 +346,15 @@ eq "I ls --json: progress + epic_url" "7/9|https://github.com/acme/web/issues/24
 
 # --- J. the test identity's sessions (issue #2505) -------------------------------------
 {
-  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}m4${T}acme/web (1)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
-  printf '%s\n' "wid:F/fid-a${T}idle${T}○${T}test-norepo${T}m5${T}无仓库 (2)${T}${T}—${T}—${T}done:10m${T}${T}none"
-  printf '%s\n' "wid:F/fid-b${T}idle${T}○${T}test-norepo-2${T}m4${T}无仓库 (2)${T}${T}—${T}—${T}done:10m${T}${T}none"
+  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}mac-a${T}acme/web (1)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
+  printf '%s\n' "wid:F/fid-a${T}idle${T}○${T}test-norepo${T}mac-b${T}无仓库 (2)${T}${T}—${T}—${T}done:10m${T}${T}none"
+  printf '%s\n' "wid:F/fid-b${T}idle${T}○${T}test-norepo-2${T}mac-a${T}无仓库 (2)${T}${T}—${T}—${T}done:10m${T}${T}none"
 } > "$W/rows-test.tsv"
 {
   printf '#ts%s%s\n' "$U" "$NOW"
-  printf '%s\n' "wid:F/issue-12${U}m4${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}${U}0${U}${U}hub${U}${U}${U}ok"
-  printf '%s\n' "wid:F/fid-a${U}m5${U}online${U}${U}${U}idle${U}claude${U}test-norepo${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
-  printf '%s\n' "wid:F/fid-b${U}m4${U}online${U}${U}${U}idle${U}claude${U}test-norepo-2${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
+  printf '%s\n' "wid:F/issue-12${U}mac-a${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}${U}0${U}${U}hub${U}${U}${U}ok"
+  printf '%s\n' "wid:F/fid-a${U}mac-b${U}online${U}${U}${U}idle${U}claude${U}test-norepo${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
+  printf '%s\n' "wid:F/fid-b${U}mac-a${U}online${U}${U}${U}idle${U}claude${U}test-norepo-2${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
 } > "$W/remote-test"
 ctst() { FLEET_SESSION_CLI_ROWS="$W/rows-test.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-test" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
 out=$(ctst ls)
@@ -377,11 +377,11 @@ has "J …and says so" "没有测试会话" "$out"
 # --- K. service / task (issue #2527) -------------------------------------------------
 cat > "$W/hub_services" <<'JSON'
 {"ts": 1800000000, "machines": [
- {"hostname": "mini2.tail.ts.net", "label": "mini2", "services": [
-  {"name": "daily-report", "kind": "task", "login": "verky", "state": "scheduled"},
-  {"name": "sms-watch", "kind": "service", "login": "verky", "state": "running"}]},
- {"hostname": "m4.tail.ts.net", "label": "m4", "services": [
-  {"name": "sms-watch", "kind": "service", "login": "verky", "state": "running"}]}]}
+ {"hostname": "mac-d.example.ts.net", "label": "mac-d", "services": [
+  {"name": "daily-report", "kind": "task", "login": "carol", "state": "scheduled"},
+  {"name": "sms-watch", "kind": "service", "login": "carol", "state": "running"}]},
+ {"hostname": "mac-a.example.ts.net", "label": "mac-a", "services": [
+  {"name": "sms-watch", "kind": "service", "login": "carol", "state": "running"}]}]}
 JSON
 svc() { FLEET_SERVICES_CACHE="$W/hub_services" FLEET_SERVICES_STATE="" FLEET_SESSION_CLI_WRITE="$W/write" \
         python3 "$BIN/fleet-session-cli.py" "$@"; }
@@ -389,13 +389,13 @@ svc() { FLEET_SERVICES_CACHE="$W/hub_services" FLEET_SERVICES_STATE="" FLEET_SES
 out=$(svc task run daily-report --now 2>&1); rc=$?
 eq "K task run --now exits 0" 0 "$rc"
 eq "K …→ service_control run_now on its (machine, login)" \
-  'service_control {"machine": "mini2.tail.ts.net", "login": "verky", "name": "daily-report", "action": "run_now"}' \
+  'service_control {"machine": "mac-d.example.ts.net", "login": "carol", "name": "daily-report", "action": "run_now"}' \
   "$(tail -1 "$W/writes")"
-has "K …says so, and where the session shows up" "现在跑一次 mini2/verky/daily-report：已完成" "$out"
+has "K …says so, and where the session shows up" "现在跑一次 mac-d/carol/daily-report：已完成" "$out"
 has "K …the session's name" "fleet ls（daily-report-" "$out"
 svc task schedule daily-report --at 07:30 --tz Asia/Shanghai >/dev/null; eq "K schedule exits 0" 0 "$?"
 eq "K …→ set_schedule with at + tz" \
-  'service_control {"machine": "mini2.tail.ts.net", "login": "verky", "name": "daily-report", "action": "set_schedule", "at": "07:30", "tz": "Asia/Shanghai"}' \
+  'service_control {"machine": "mac-d.example.ts.net", "login": "carol", "name": "daily-report", "action": "set_schedule", "at": "07:30", "tz": "Asia/Shanghai"}' \
   "$(tail -1 "$W/writes")"
 n=$(wc -l < "$W/writes")
 svc task run daily-report >/dev/null 2>&1; eq "K run without --now → 2" 2 "$?"
@@ -406,11 +406,11 @@ svc task run sms-watch --now >/dev/null 2>&1; eq "K a service is no task → 3" 
 svc task stop ghost >/dev/null 2>&1; eq "K no such entry → 3" 3 "$?"
 err=$(svc service restart sms-watch 2>&1 >/dev/null); rc=$?
 eq "K a name on two machines → 4" 4 "$rc"
-has "K …the candidates" "m4  verky" "$err"
+has "K …the candidates" "mac-a  carol" "$err"
 eq "K …and nothing was written" "$n" "$(wc -l < "$W/writes")"
-svc service restart sms-watch --machine m4 >/dev/null; eq "K --machine picks" 0 "$?"
-eq "K …→ restart on m4" \
-  'service_control {"machine": "m4.tail.ts.net", "login": "verky", "name": "sms-watch", "action": "restart"}' \
+svc service restart sms-watch --machine mac-a >/dev/null; eq "K --machine picks" 0 "$?"
+eq "K …→ restart on mac-a" \
+  'service_control {"machine": "mac-a.example.ts.net", "login": "carol", "name": "sms-watch", "action": "restart"}' \
   "$(tail -1 "$W/writes")"
 err=$(FAKE_REFUSE=1 svc task stop daily-report 2>&1 >/dev/null); rc=$?
 eq "K a refused write → exit 1" 1 "$rc"
@@ -422,8 +422,8 @@ eq "K bin/fleet routes the control verbs" 1 "$(grep -c 'stop|start|restart|run|s
 Q='Bash(git push origin issue-12 --force-with-lease) — 允许这个命令在 /w 下运行吗？'
 {
   printf '#ts%s%s\n' "$U" "$NOW"
-  printf '%s\n' "wid:F/issue-12${U}m4${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}perm${U}0${U}${U}hub${U}${U}${U}ok${U}${U}merged${U}${U}${U}${U}${U}${U}${U}${U}${U}permission${U}$Q"
-  printf '%s\n' "wid:F/issue-13${U}m5${U}online${U}13${U}acme/web${U}working${U}codex:7_x${U}登录页样式${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:2h${U}${U}${U}47${U}watch${U}$((NOW - 485))${U}gpt-6-astra${U}medium${U}${U}question${U}stale words of a turn now over"
+  printf '%s\n' "wid:F/issue-12${U}mac-a${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}perm${U}0${U}${U}hub${U}${U}${U}ok${U}${U}merged${U}${U}${U}${U}${U}${U}${U}${U}${U}permission${U}$Q"
+  printf '%s\n' "wid:F/issue-13${U}mac-b${U}online${U}13${U}acme/web${U}working${U}codex:7_x${U}登录页样式${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:2h${U}${U}${U}47${U}watch${U}$((NOW - 485))${U}gpt-6-astra${U}medium${U}${U}question${U}stale words of a turn now over"
 } > "$W/remote-ask"
 cqa() { FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_WRITE="$W/write" FLEET_SESSION_CLI_CACHE="$W/remote-ask" \
         FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
@@ -435,7 +435,7 @@ has "L show: the whole question" "在问      权限：$Q" "$(cqa show '#12')"
 eq "L ls --json: ask_kind / ask" "permission|$Q;|;|;" \
   "$(cqa ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["ask_kind"], r["ask"]) for r in json.load(sys.stdin)))')"
 out=$(cqa answer '#12' </dev/null 2>&1)
-has "L answer: the question is the prompt's 题干" "登录页重做（m4）在问你（权限）：" "$out"
+has "L answer: the question is the prompt's 题干" "登录页重做（mac-a）在问你（权限）：" "$out"
 has "L answer: …in its own words" "  $Q" "$out"
 has "L ls: nobody asks → no 在问 column" "状态    PR" "$(cli ls)"
 
@@ -467,8 +467,8 @@ eq "M no fleet on the home → exit 1" 1 "$rc"
 has "M …named as the home, not this machine" "家机器" "$out"
 
 # --- N. --home lists EVERY machine's sessions (issue #3478) -----------------------------
-# Drill 35: the hub picked m4 («the machine you used last») to run `fleet ls`, the
-# newcomer's session ran on mini2, and m4's fleet had no hub cache (its loop never
+# Drill 35: the hub picked mac-a («the machine you used last») to run `fleet ls`, the
+# newcomer's session ran on mac-d, and mac-a's fleet had no hub cache (its loop never
 # ran) — the list came back without it. A missing / stale cache is refreshed once
 # (FLEET_SESSION_CLI_REFRESH stands in for fleet-hub-sessions.sh --refresh, writing
 # what a round writes); a fresh one is not asked again; a silent hub is said.
@@ -477,7 +477,7 @@ cat > "$W/nrefresh" <<EOF
 #!/bin/bash
 echo x >> "$W/nrefreshed"
 [ "\${NREFUSE:-}" = 1 ] && exit 1
-printf '#ts\037%s\n#me\037m4\nwid:0123abcd-0000-4000-8000-00000000beef/fid-first\037mini2\037online\037\037\037working\037claude\037first\037\037\0370\037\037hub\037\037\037ok\n' "\$(date +%s)" > "$NG/remote_fx"
+printf '#ts\037%s\n#me\037mac-a\nwid:0123abcd-0000-4000-8000-00000000beef/fid-first\037mac-d\037online\037\037\037working\037claude\037first\037\037\0370\037\037hub\037\037\037ok\n' "\$(date +%s)" > "$NG/remote_fx"
 date +%s > "$NG/hub_ok"
 EOF
 chmod +x "$W/nrefresh"
@@ -489,11 +489,11 @@ out=$(NREFUSE=1 nls 2>"$W/nerr"); rc=$?
 eq "N no cache, hub silent → exit 0, this machine's rows" "0 issue-7|$(hostname -s 2>/dev/null || hostname)" "$rc $(printf '%s' "$out" | names)"
 has "N …and it says the list is this machine's only" "入口没答" "$(cat "$W/nerr")"
 out=$(nls 2>"$W/nerr"); rc=$?
-eq "N no cache → refreshed once, both machines listed (the other one's row too)" "0 first|mini2;issue-7|m4" "$rc $(printf '%s' "$out" | names)"
+eq "N no cache → refreshed once, both machines listed (the other one's row too)" "0 first|mac-d;issue-7|mac-a" "$rc $(printf '%s' "$out" | names)"
 eq "N …nothing said" "" "$(cat "$W/nerr")"
 : > "$W/nrefreshed"
 out=$(nls 2>/dev/null)
-eq "N a fresh cache is not asked again" "0|first|mini2;issue-7|m4" "$(wc -l < "$W/nrefreshed" | tr -d ' ')|$(printf '%s' "$out" | names)"
+eq "N a fresh cache is not asked again" "0|first|mac-d;issue-7|mac-a" "$(wc -l < "$W/nrefreshed" | tr -d ' ')|$(printf '%s' "$out" | names)"
 echo $(( $(date +%s) - 3600 )) > "$NG/hub_ok"
 out=$(nls 2>/dev/null)
 eq "N a stale cache (an hour old) is refreshed" "1" "$(wc -l < "$W/nrefreshed" | tr -d ' ')"

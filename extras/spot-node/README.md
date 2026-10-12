@@ -1,6 +1,6 @@
 # SPOT 执行节点（issue #1428，EPIC #1419 R1）
 
-固定机器（m5、m4）都忙的时候，入口（tokenledger hub）在它自己所在的
+固定机器（mac-b、mac-a）都忙的时候，入口（tokenledger hub）在它自己所在的
 Kubernetes 集群里、SPOT 机器上起一台临时执行节点并派活；空闲满 30 分钟
 自动释放；SPOT 机器被云回收时，节点先把空闲会话经入口搬走，没来得及的
 按「意外下线」处理——租约立即释放、不自动重派、记录在案。
@@ -44,7 +44,7 @@ hub 已经跑在 ACK（`new-deploy` 命名空间，`deploy/ccquota-hub`）。要
 ```yaml
 env:
   - name: CCQUOTA_FLEET_SPOT_IMAGE
-    value: registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota-node:<tag>
+    value: registry.example.com/acme/ccquota-node:<tag>
   - name: CCQUOTA_FLEET_SPOT_HUB_URL          # pod 从集群内怎么到 hub；缺省用 CCQUOTA_FLEET_PUBLIC_URL
     value: http://ccquota-hub.new-deploy.svc:8787
   - name: CCQUOTA_FLEET_SPOT_NODE_SELECTOR    # SPOT 节点池
@@ -73,8 +73,8 @@ agent 按 #1415 向入口短期租用（`CCQUOTA_FLEET_CREDS=1` 走 node.env；�
 docker build -f extras/spot-node/Dockerfile \
   --build-arg VERSION=$(git rev-parse --short HEAD) \
   --platform linux/amd64 \
-  -t registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota-node:$(git rev-parse --short HEAD) .
-docker push registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota-node:$(git rev-parse --short HEAD)
+  -t registry.example.com/acme/ccquota-node:$(git rev-parse --short HEAD) .
+docker push registry.example.com/acme/ccquota-node:$(git rev-parse --short HEAD)
 ```
 
 `--build-arg CLAUDE_INSTALL=0 CODEX_INSTALL=0` 跳过两个 CLI 的安装（CI 这么

@@ -53,7 +53,7 @@ STATE="$FLEET_CONF_DIR/global/onboard.state"
 SESS=onb-test
 mkdir -p "$FLEET_CONF_DIR/fleets/$SESS/repos"
 printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$SESS/conf"
-printf 'FLEET_REPO=victor/app\n' > "$FLEET_CONF_DIR/fleets/$SESS/repos/victor-app.conf"
+printf 'FLEET_REPO=erin/app\n' > "$FLEET_CONF_DIR/fleets/$SESS/repos/erin-app.conf"
 brief() { bash "$OB" brief --session "$SESS" --no-gh "$@" 2>&1; }
 
 # --- 1. resume from nothing --------------------------------------------------
@@ -67,16 +67,16 @@ printf '%s\n' "$out" | grep -q '\[seed\]' && fail "no FLEET_SEED, yet a repo was
 printf 'FLEET_SEED=1\n' >> "$FLEET_CONF_DIR/fleets/$SESS/conf"
 out=$(brief --dev)
 printf '%s\n' "$out" | grep -q '^  verkyyi/claude-fleet  \[seed\]' || fail "the conf's own repo is not tagged [seed]" "$out"
-printf '%s\n' "$out" | grep -q '^  victor/app *$' || fail "an overlay repo must never be the seed" "$out"
+printf '%s\n' "$out" | grep -q '^  erin/app *$' || fail "an overlay repo must never be the seed" "$out"
 ok "FLEET_SEED=1 tags only the conf's own repo"
 
 # --- 2. merge ----------------------------------------------------------------
 bash "$OB" set step=repo lang=zh || fail "set failed"
-bash "$OB" set repo=victor/app step=issue || fail "second set failed"
+bash "$OB" set repo=erin/app step=issue || fail "second set failed"
 bash "$OB" set issue=12 step=watch || fail "third set failed"
 got=$(bash "$OB" get)
 [ "$(bash "$OB" get lang)" = zh ]         || fail "lang lost across sets" "$got"
-[ "$(bash "$OB" get repo)" = victor/app ] || fail "repo lost across sets" "$got"
+[ "$(bash "$OB" get repo)" = erin/app ] || fail "repo lost across sets" "$got"
 [ "$(bash "$OB" get step)" = watch ]      || fail "last step did not win" "$got"
 [ "$(grep -c '^step=' "$STATE")" = 1 ]    || fail "step written twice" "$got"
 [ "$(grep -c '^updated=' "$STATE")" = 1 ] || fail "updated written twice" "$got"

@@ -146,7 +146,7 @@ esac
 ''')
         self.script(self.bin / "dash-issue-session.sh", '''#!/bin/bash
 if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
-  echo "dash-issue-session: #$1 的入口租约已拿到 (m4)" >&2
+  echo "dash-issue-session: #$1 的入口租约已拿到 (mac-a)" >&2
   echo "dash-issue-session: at capacity: 6/6 sessions" >&2
   echo "tmux: toast" >&2
   exit 2
@@ -1430,7 +1430,7 @@ echo "https://github.com/example/project/issues/129"
 echo "https://github.com/example/project/issues/131"
 ''')
         for key, params in (("a-issue", {"issue": 130, "agent": "codex"}),
-                            ("a-new", {"kind": "new", "title": "在 m4 上用 codex", "agent": "codex"}),
+                            ("a-new", {"kind": "new", "title": "在 mac-a 上用 codex", "agent": "codex"}),
                             ("a-scratch", {"kind": "scratch", "name": "codex 试试", "agent": "codex"}),
                             ("a-none", {"issue": 132})):
             op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key=key,
@@ -1439,7 +1439,7 @@ echo "https://github.com/example/project/issues/131"
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "130 demo --print --agent codex --origin hub --repo example/project\n"
                          "131 demo --print --agent codex --origin hub --repo example/project"
-                         " --words-file <在 m4 上用 codex>\n"
+                         " --words-file <在 mac-a 上用 codex>\n"
                          "132 demo --print --agent claude --origin hub --repo example/project\n")
         self.assertEqual((self.node.conf / "scratch.calls").read_text(),
                          "demo --origin hub --print --agent codex --repo example/project --name codex 试试\n")
@@ -1469,7 +1469,7 @@ printf '@9\\t4242\\t/fixture/moved\\n'
             params = dict(base, move_id=mid, state="done", raw=0, pushed=True, issue=7,
                           origin_wid="22222222-2222-4222-8222-222222222222/issue-1")
             self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "worker_move_in",
-                                     "params": params, "actor": "node:verk@m5"})
+                                     "params": params, "actor": "node:bob@mac-b"})
             return self.node.wait(op_id)
 
         done = move("33333333-3333-4333-8333-333333333333", "a" * 32)

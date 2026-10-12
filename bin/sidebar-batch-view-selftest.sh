@@ -54,7 +54,7 @@ def hdr(target, name):
     return ['hdr', target, '', name, ''] + [''] * (N - 5)
 
 
-A, B = 'verkyyi/claude-fleet', 'verkyyi/24haowan-monorepo'
+A, B = 'verkyyi/claude-fleet', 'dave/acme-monorepo'
 
 
 def frame(opened=()):
@@ -73,7 +73,7 @@ def frame(opened=()):
     rows += [row('@31', 'working', '节点侧读入口失败', issue='#2630'),
              row('@32', 'needs', '托管机器升级卡住', issue='#2631'),
              row('@33', 'working', '写设计页')]
-    rows.append(hdr(B, '24haowan-monorepo (4)'))
+    rows.append(hdr(B, 'acme-monorepo (4)'))
     for wid, name in (('@6', 'TUOKE多人同空间'), ('@7', '拓客第二版')):
         rows.append(row(wid, 'looping', name, '▾' if wid in opened else '▸', '9/9'))
     rows.append(row('@41', 'done', '写设计页（拓客第二版）'))
@@ -162,7 +162,7 @@ check('C a solo group is no session', 'solo:' + A not in sb.sessions(v))
 _st = sb.STAGE
 sb.STAGE = '1'
 open(os.path.join(os.environ['FLEET_STATUS_G'], 'orch_fleet'), 'w').write(
-    '\x1f'.join(['fleet/abc', 'm5', '1', 'working', '', '', '0', 'decide=2', 'park=1', 'todo=3', 'renew=1']) + '\n')
+    '\x1f'.join(['fleet/abc', 'mac-b', '1', 'working', '', '', '0', 'decide=2', 'park=1', 'todo=3', 'renew=1']) + '\n')
 _v = sb.batch_view(frame(), '@99', set(), {})
 check('D the batch view is all the list is', sb.with_portal(_v, None, 'fleet') == _v, sb.with_portal(_v, None, 'fleet'))
 check('D no steward row, no 「新任务」 key anywhere',

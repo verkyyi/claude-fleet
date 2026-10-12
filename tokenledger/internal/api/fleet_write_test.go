@@ -164,7 +164,7 @@ func (n *writeNode) beatLoad(host, user, machine string, load1 float64, sessions
 // waitLoad blocks until the hub has stored host's beat at load1. Each node is
 // its own connection, so waiting on one machine's beat says nothing about
 // another's: a test that re-beats two machines and then places waits on both
-// (claude-fleet#2168 — PickNode read m5's load from twoNodes).
+// (claude-fleet#2168 — PickNode read mac-d's load from twoNodes).
 func waitLoad(t *testing.T, h *harness, host string, load1 float64) {
 	t.Helper()
 	waitFor(t, 3*time.Second, host+" reports load "+strconv.FormatFloat(load1, 'f', -1, 64), func() bool {
@@ -192,40 +192,40 @@ func postFleet(t *testing.T, h *harness, tool string, args map[string]any, wantS
 	return out
 }
 
-// twoNodes is the issue's rig: m5 and m4, the same repo on each, both
-// connected and accepting writes. m5 is busy (1.0 load per core).
+// twoNodes is the issue's rig: mac-d and mac-c, the same repo on each, both
+// connected and accepting writes. mac-d is busy (1.0 load per core).
 func twoNodes(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
 	t.Helper()
 	h := newFleetHarness(t)
-	m5 := connectWriteNode(t, h, "m5")
-	m4 := connectWriteNode(t, h, "m4")
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
-	m5.beatLoad("m5", "verk", machineA, 10, 3, f5)
-	m4.beatLoad("m4", "verk", machineB, 1, 1, f4)
+	macD := connectWriteNode(t, h, "mac-d")
+	macC := connectWriteNode(t, h, "mac-c")
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
-	return h, m5, m4, f5, f4
+	return h, macD, macC, f5, f4
 }
 
-// The issue's acceptance check: with m5 under load, worker_start(node=auto)
-// lands on m4, says why, and a repeat of the same request runs once.
+// The issue's acceptance check: with mac-d under load, worker_start(node=auto)
+// lands on mac-c, says why, and a repeat of the same request runs once.
 func TestFleetWriteAutoPlacesOnIdleNode(t *testing.T) {
-	h, m5, m4, _, f4 := twoNodes(t)
+	h, macD, macC, _, f4 := twoNodes(t)
 	args := map[string]any{"issue": 7, "repo": writeRepo, "idempotency_key": "start-7"}
 	op := postFleet(t, h, "worker_start", args, 200)
 	if op["fleet_id"] != f4.FleetID || op["status"] != "accepted" {
-		t.Fatalf("worker_start(node=auto) = %v; want accepted on m4's fleet %s", op, f4.FleetID)
+		t.Fatalf("worker_start(node=auto) = %v; want accepted on mac-c's fleet %s", op, f4.FleetID)
 	}
 	pl, _ := op["placement"].(map[string]any)
-	if pl["machine"] != "m4" || !strings.Contains(pl["reason"].(string), "m5 excluded: load 1.00/core") {
-		t.Fatalf("placement = %v; want m4 with m5's exclusion in the reason", pl)
+	if pl["machine"] != "mac-c" || !strings.Contains(pl["reason"].(string), "mac-d excluded: load 1.00/core") {
+		t.Fatalf("placement = %v; want mac-c with mac-d's exclusion in the reason", pl)
 	}
-	if m5.count() != 0 || m4.count() != 1 {
-		t.Fatalf("writes sent: m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes sent: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
-	env := m4.writes[0]
+	env := macC.writes[0]
 	if env["action"] != "worker_start" || env["actor"] != "operator" || env["operation_id"] != op["operation_id"] {
 		t.Fatalf("envelope = %v", env)
 	}
@@ -238,8 +238,8 @@ func TestFleetWriteAutoPlacesOnIdleNode(t *testing.T) {
 
 	// The same request again: the same operation, no second write.
 	again := postFleet(t, h, "worker_start", args, 200)
-	if again["operation_id"] != op["operation_id"] || m4.count() != 1 {
-		t.Fatalf("repeat returned %v (m4 writes %d); want the first operation and no second write", again["operation_id"], m4.count())
+	if again["operation_id"] != op["operation_id"] || macC.count() != 1 {
+		t.Fatalf("repeat returned %v (mac-c writes %d); want the first operation and no second write", again["operation_id"], macC.count())
 	}
 	// The same key for something else is refused.
 	other := map[string]any{"issue": 8, "repo": writeRepo, "idempotency_key": "start-7"}
@@ -249,14 +249,14 @@ func TestFleetWriteAutoPlacesOnIdleNode(t *testing.T) {
 
 	// The journal keeps the placement for operation_get.
 	got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+op["operation_id"].(string), 200)
-	if got["placement"].(map[string]any)["machine"] != "m4" {
+	if got["placement"].(map[string]any)["machine"] != "mac-c" {
 		t.Fatalf("operation_get lost the placement: %v", got)
 	}
 }
 
 // Concurrent calls with one key: exactly one reaches a node.
 func TestFleetWriteIdempotentUnderRace(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	var wg sync.WaitGroup
 	ids := make([]string, 8)
 	for i := range ids {
@@ -274,17 +274,17 @@ func TestFleetWriteIdempotentUnderRace(t *testing.T) {
 			t.Fatalf("operation ids differ: %v", ids)
 		}
 	}
-	if m4.count() != 1 {
-		t.Fatalf("m4 received %d writes; want exactly 1", m4.count())
+	if macC.count() != 1 {
+		t.Fatalf("mac-c received %d writes; want exactly 1", macC.count())
 	}
 }
 
 // A node that is not connected is refused at once: nothing journalled,
 // nothing queued, nothing sent when it comes back.
 func TestFleetWriteOfflineFailsWithoutQueueing(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
-	m4.conn.Close(websocket.StatusNormalClosure, "gone")
-	waitFor(t, 3*time.Second, "m4 disconnected", func() bool { return h.srv.nodes.get("ep_m4") == nil })
+	h, _, macC, _, f4 := twoNodes(t)
+	macC.conn.Close(websocket.StatusNormalClosure, "gone")
+	waitFor(t, 3*time.Second, "mac-c disconnected", func() bool { return h.srv.nodes.get("ep_mac-c") == nil })
 
 	start := map[string]any{"issue": 11, "fleet_id": f4.FleetID, "idempotency_key": "off-1"}
 	if e := postFleet(t, h, "worker_start", start, 503)["error"].(map[string]any); e["code"] != "UNAVAILABLE" {
@@ -293,26 +293,26 @@ func TestFleetWriteOfflineFailsWithoutQueueing(t *testing.T) {
 	if _, err := h.srv.Store.FleetOperationByIdem("operator", "off-1"); err == nil {
 		t.Fatal("a refused write was journalled; the key must stay free for a retry")
 	}
-	// Placed: m4 is gone and m5 is busy — no machine qualifies.
+	// Placed: mac-c is gone and mac-d is busy — no machine qualifies.
 	auto := map[string]any{"issue": 11, "repo": writeRepo, "idempotency_key": "off-2"}
 	e := postFleet(t, h, "worker_start", auto, 503)["error"].(map[string]any)
-	if e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(e["message"].(string), "m5: load") {
+	if e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(e["message"].(string), "mac-d: load") {
 		t.Fatalf("placed start with no eligible node: %v", e)
 	}
 
-	// m4 returns: nothing was waiting for it.
-	back := connectWriteNodeTok(t, h, h.tokens["m4"])
-	waitFor(t, 3*time.Second, "m4 reconnected", func() bool { return h.srv.nodes.get("ep_m4") != nil })
+	// mac-c returns: nothing was waiting for it.
+	back := connectWriteNodeTok(t, h, h.tokens["mac-c"])
+	waitFor(t, 3*time.Second, "mac-c reconnected", func() bool { return h.srv.nodes.get("ep_mac-c") != nil })
 	time.Sleep(200 * time.Millisecond)
-	if m4.count() != 0 || back.count() != 0 {
-		t.Fatalf("a refused write was delivered later (m4=%d, reconnect=%d)", m4.count(), back.count())
+	if macC.count() != 0 || back.count() != 0 {
+		t.Fatalf("a refused write was delivered later (mac-c=%d, reconnect=%d)", macC.count(), back.count())
 	}
 }
 
 // What the node says decides the status: a structured refusal is failed, an
 // unconfirmed outcome or silence is unknown — and unknown is never re-sent.
 func TestFleetWriteOutcomes(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	old := fleetWriteWait
 	fleetWriteWait = 300 * time.Millisecond
 	t.Cleanup(func() { fleetWriteWait = old })
@@ -320,37 +320,37 @@ func TestFleetWriteOutcomes(t *testing.T) {
 		return postFleet(t, h, "worker_start", map[string]any{"issue": 12, "fleet_id": f4.FleetID, "idempotency_key": key}, 200)
 	}
 
-	m4.setAnswer(func(map[string]any) (any, *control.Error) {
+	macC.setAnswer(func(map[string]any) (any, *control.Error) {
 		return nil, &control.Error{Code: "NOT_FOUND", Message: "Fleet is not configured"}
 	})
 	if op := start("o-refused"); op["status"] != "failed" {
 		t.Fatalf("a node refusal = %v; want failed", op)
 	}
-	m4.setAnswer(func(map[string]any) (any, *control.Error) {
+	macC.setAnswer(func(map[string]any) (any, *control.Error) {
 		return nil, &control.Error{Code: control.CodeUnknownOutcome, Message: "controller crashed"}
 	})
 	if op := start("o-crash"); op["status"] != "unknown" {
 		t.Fatalf("an unconfirmed write = %v; want unknown", op)
 	}
-	m4.setAnswer(func(map[string]any) (any, *control.Error) { return nil, nil })
+	macC.setAnswer(func(map[string]any) (any, *control.Error) { return nil, nil })
 	op := start("o-silent")
 	if op["status"] != "unknown" {
 		t.Fatalf("a write the node never acknowledged = %v; want unknown", op)
 	}
-	n := m4.count()
-	if again := start("o-silent"); again["operation_id"] != op["operation_id"] || m4.count() != n {
+	n := macC.count()
+	if again := start("o-silent"); again["operation_id"] != op["operation_id"] || macC.count() != n {
 		t.Fatal("retrying an unknown operation's key re-sent it")
 	}
 }
 
 // The grant: a person needs the tool's scope, and sees only their own logins.
 func TestFleetWriteAuthorization(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
-	p, err := h.srv.Store.AdoptPrincipal("wx-verk", "verk", "Verk", time.Now())
+	h, _, macC, _, f4 := twoNodes(t)
+	p, err := h.srv.Store.AdoptPrincipal("wx-frank", "frank", "Frank", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	as := func(person string) fleetPrincipal {
@@ -367,26 +367,26 @@ func TestFleetWriteAuthorization(t *testing.T) {
 	}
 
 	h.srv.FleetPersonScopes = []string{"fleet:read"}
-	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-verk"), "worker_start", args("a1")); errorObject(err)["code"] != "FORBIDDEN" {
+	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), "worker_start", args("a1")); errorObject(err)["code"] != "FORBIDDEN" {
 		t.Fatalf("start without worker:start: %v; want FORBIDDEN", err)
 	}
 	// Every person is refused config:write by default, whatever the key.
 	h.srv.FleetPersonScopes = nil
 	cfg := map[string]any{"fleet_id": f4.FleetID, "key": "FLEET_MAX_SESSIONS", "value": 1,
 		"expected_revision": strings.Repeat("a", 64), "idempotency_key": "c1"}
-	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-verk"), "config_set", cfg); errorObject(err)["code"] != "FORBIDDEN" {
+	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), "config_set", cfg); errorObject(err)["code"] != "FORBIDDEN" {
 		t.Fatalf("config_set by a person: %v; want FORBIDDEN", err)
 	}
 	// Not their login: indistinguishable from no such fleet.
 	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-someone"), "worker_start", args("a2")); errorObject(err)["code"] != "NOT_FOUND" {
 		t.Fatalf("start on someone else's fleet: %v; want NOT_FOUND", err)
 	}
-	if m4.count() != 0 {
-		t.Fatalf("a refused call reached the node (%d writes)", m4.count())
+	if macC.count() != 0 {
+		t.Fatalf("a refused call reached the node (%d writes)", macC.count())
 	}
 	// With the default grant, their own login works.
-	op, err := h.srv.SubmitWrite(context.Background(), as("wx-verk"), "worker_start", args("a3"))
-	if err != nil || op["status"] != "accepted" || m4.writes[0]["actor"] != "wx-verk" {
+	op, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), "worker_start", args("a3"))
+	if err != nil || op["status"] != "accepted" || macC.writes[0]["actor"] != "wx-frank" {
 		t.Fatalf("own start: %v %v", op, err)
 	}
 }
@@ -394,26 +394,26 @@ func TestFleetWriteAuthorization(t *testing.T) {
 // The per-person cap: at the cap a machine is excluded from placement, and a
 // start named at it is refused.
 func TestFleetWriteNodeCap(t *testing.T) {
-	h, m5, m4, _, f4 := twoNodes(t)
+	h, macD, macC, _, f4 := twoNodes(t)
 	// No machine has a default cap (claude-fleet#1994): the operator sets one.
-	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"m4", "6", time.Now()); err != nil {
+	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"mac-c", "6", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	m5.beatLoad("m5", "verk", machineA, 1, 3, fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1))
-	m4.beatLoad("m4", "verk", machineB, 0, 6, f4) // idle, but at m4's cap of 6
+	macD.beatLoad("mac-d", "frank", machineA, 1, 3, fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1))
+	macC.beatLoad("mac-c", "frank", machineB, 0, 6, f4) // idle, but at mac-c's cap of 6
 	time.Sleep(100 * time.Millisecond)
 
 	op := postFleet(t, h, "worker_start", map[string]any{"issue": 14, "repo": writeRepo, "idempotency_key": "cap-1"}, 200)
 	pl := op["placement"].(map[string]any)
-	if pl["machine"] != "m5" || !strings.Contains(pl["reason"].(string), "m4 excluded: at the per-person cap (6/6") {
-		t.Fatalf("placement = %v; want m5, m4 at its cap", pl)
+	if pl["machine"] != "mac-d" || !strings.Contains(pl["reason"].(string), "mac-c excluded: at the per-person cap (6/6") {
+		t.Fatalf("placement = %v; want mac-d, mac-c at its cap", pl)
 	}
 	e := postFleet(t, h, "worker_start", map[string]any{"issue": 15, "fleet_id": f4.FleetID, "idempotency_key": "cap-2"}, 429)
 	if e["error"].(map[string]any)["code"] != "AT_CAPACITY" {
 		t.Fatalf("named start at the cap: %v", e)
 	}
 	// The operator raises it.
-	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"m4", "8", time.Now()); err != nil {
+	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"mac-c", "8", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	postFleet(t, h, "worker_start", map[string]any{"issue": 15, "fleet_id": f4.FleetID, "idempotency_key": "cap-3"}, 200)
@@ -459,7 +459,7 @@ func TestFleetWriteIntegrationRealFleetControl(t *testing.T) {
 	home := t.TempDir()
 	installFakeFleetControl(t, py, bin, home, "fleet-alpha", writeRepo)
 	a, err := agent.New(agent.Config{
-		HubURL: h.http.URL, Token: h.enroll(t, "m4"), Home: home,
+		HubURL: h.http.URL, Token: h.enroll(t, "mac-c"), Home: home,
 		StateDir: filepath.Join(home, "state"), SessionsDir: filepath.Join(home, "sessions"),
 		Sources: "claude", LiveInterval: 150 * time.Millisecond, ScanInterval: time.Hour, LimitsInterval: time.Hour,
 		Fleet: true, Version: "it-write",
@@ -516,43 +516,43 @@ func TestFleetWriteIntegrationRealFleetControl(t *testing.T) {
 // account_class on worker_start (claude-fleet#1540): local / pool reach the
 // node's params, any adds nothing, free text is refused.
 func TestFleetWriteAccountClass(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	postFleet(t, h, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "account_class": "pool", "idempotency_key": "ac-7"}, 200)
-	if m4.count() != 1 {
-		t.Fatalf("m4 writes = %d; want 1", m4.count())
+	if macC.count() != 1 {
+		t.Fatalf("mac-c writes = %d; want 1", macC.count())
 	}
-	if params := m4.writes[0]["params"].(map[string]any); params["account_class"] != "pool" {
+	if params := macC.writes[0]["params"].(map[string]any); params["account_class"] != "pool" {
 		t.Fatalf("params = %v; want account_class pool", params)
 	}
 	postFleet(t, h, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "account_class": "any", "idempotency_key": "ac-8"}, 200)
-	if m4.count() != 2 {
-		t.Fatalf("m4 writes = %d; want 2", m4.count())
+	if macC.count() != 2 {
+		t.Fatalf("mac-c writes = %d; want 2", macC.count())
 	}
-	if params := m4.writes[1]["params"].(map[string]any); params["account_class"] != nil {
+	if params := macC.writes[1]["params"].(map[string]any); params["account_class"] != nil {
 		t.Fatalf("any must add nothing: %v", params)
 	}
 	e := postFleet(t, h, "worker_start", map[string]any{"issue": 9, "fleet_id": f4.FleetID, "account_class": "x", "idempotency_key": "ac-9"}, 400)["error"].(map[string]any)
-	if e["code"] != "INVALID_ARGUMENT" || m4.count() != 2 {
-		t.Fatalf("free text: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", e, m4.count())
+	if e["code"] != "INVALID_ARGUMENT" || macC.count() != 2 {
+		t.Fatalf("free text: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", e, macC.count())
 	}
 }
 
 // reap on worker_start (claude-fleet#1902): a reap policy reaches the node's
 // params as one word, none adds nothing, anything off the grammar is refused.
 func TestFleetWriteReapPolicy(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	postFleet(t, h, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "reap": "merged:48h", "idempotency_key": "rp-7"}, 200)
-	if params := m4.writes[0]["params"].(map[string]any); params["reap"] != "merged:48h" {
+	if params := macC.writes[0]["params"].(map[string]any); params["reap"] != "merged:48h" {
 		t.Fatalf("params = %v; want reap merged:48h", params)
 	}
 	postFleet(t, h, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "idempotency_key": "rp-8"}, 200)
-	if params := m4.writes[1]["params"].(map[string]any); params["reap"] != nil {
+	if params := macC.writes[1]["params"].(map[string]any); params["reap"] != nil {
 		t.Fatalf("no reap must add nothing: %v", params)
 	}
 	for i, bad := range []string{"never", "keep; rm -rf /", "done:0", "at:soon"} {
 		e := postFleet(t, h, "worker_start", map[string]any{"issue": 20 + i, "fleet_id": f4.FleetID, "reap": bad, "idempotency_key": "rp-bad-" + strconv.Itoa(i)}, 400)["error"].(map[string]any)
-		if e["code"] != "INVALID_ARGUMENT" || m4.count() != 2 {
-			t.Fatalf("reap %q: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, m4.count())
+		if e["code"] != "INVALID_ARGUMENT" || macC.count() != 2 {
+			t.Fatalf("reap %q: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, macC.count())
 		}
 	}
 	for _, ok := range []string{"merged", "done:2h", "loop-end", "keep", "at:2026-10-06T18:00:00Z", "at:18:00"} {
@@ -565,9 +565,9 @@ func TestFleetWriteReapPolicy(t *testing.T) {
 // test on worker_start (claude-fleet#2505): a scratch the test identity
 // placed reaches the node as test=true; only `true`, only on a scratch.
 func TestFleetWriteTestScratch(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "no_repo": true, "test": true, "fleet_id": f4.FleetID, "idempotency_key": "ts-1"}, 200)
-	if params := m4.writes[0]["params"].(map[string]any); params["test"] != true {
+	if params := macC.writes[0]["params"].(map[string]any); params["test"] != true {
 		t.Fatalf("params = %v; want test=true", params)
 	}
 	for i, bad := range []map[string]any{
@@ -577,8 +577,8 @@ func TestFleetWriteTestScratch(t *testing.T) {
 	} {
 		bad["fleet_id"], bad["idempotency_key"] = f4.FleetID, "ts-bad-"+strconv.Itoa(i)
 		e := postFleet(t, h, "worker_start", bad, 400)["error"].(map[string]any)
-		if e["code"] != "INVALID_ARGUMENT" || m4.count() != 1 {
-			t.Fatalf("%v: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, m4.count())
+		if e["code"] != "INVALID_ARGUMENT" || macC.count() != 1 {
+			t.Fatalf("%v: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, macC.count())
 		}
 	}
 }

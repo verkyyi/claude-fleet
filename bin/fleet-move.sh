@@ -15,7 +15,7 @@
 #   fleet-move.sh --rebalance [--max N|all] [--dry-run]
 #   opts: --via hub         move THROUGH the hub (issue #1426, EPIC #1419 C7):
 #                           the two machines never talk — see "Through the hub"
-#                           below. --to is then a machine name (m4), not ssh.
+#                           below. --to is then a machine name (mac-b), not ssh.
 #         --rebalance       ask the hub where sessions should run, and move the
 #                           longest-idle sessions off THIS machine while the hub
 #                           says another one is the better place — at most

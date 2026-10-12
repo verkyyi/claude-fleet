@@ -5,7 +5,7 @@ The hub (`tokenledger/`, the `ccquota` image) runs as one Deployment. Two shapes
 released one pod at a time — 0 seconds down; **production** runs the
 `components/sqlite-single` shape — one replica on one SQLite data disk,
 `Recreate` — until the switch (RUNBOOK.md «换库»), which deletes one line from
-`overlays/prod/kustomization.yaml`. These manifests moved here from `24haowan-monorepo/doc/k8s-yamls/ccquota/`
+`overlays/prod/kustomization.yaml`. These manifests moved here from `acme-monorepo/doc/k8s-yamls/ccquota/`
 (EPIC #1982 C1, issue #1983); the monorepo copy is read-only from then on.
 
 ```
@@ -38,7 +38,7 @@ Actions → hub-deploy → Run workflow: `workflow_dispatch` is never paused.
 Once it goes, the deploy job:
 
 1. packs the client (`bin/fleet-client-pack.sh`) and builds `tokenledger/` for
-   linux/amd64, pushed as `registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota:prod-<sha7>`
+   linux/amd64, pushed as `registry.example.com/acme/ccquota:prod-<sha7>`
    (`VERSION=prod-<sha7>`, which is what `/version` reports);
 2. renders `overlays/prod` with that tag (the manifests carry the placeholder
    `set-by-hub-deploy`; the live tag is never committed);
@@ -168,8 +168,8 @@ workflow. The one exception is the switch itself (RUNBOOK.md «换库»).
   `gha-claudefleet-deploy` (trusts `sub=repo:verkyyi/claude-fleet:environment:prod`
   only).
 - Aliyun: `gha-prod-kubeconfig` (a temporary kubeconfig) + `gha-claudefleet-acr-push`
-  (pull/push `24haowan/ccquota` only).
-- Cluster: Role `new-deploy/claudefleet-deployer` (24haowan-monorepo#11751) —
+  (pull/push `acme/ccquota` only).
+- Cluster: Role `new-deploy/claudefleet-deployer` (acme-monorepo#11751) —
   the hub's Deployment, Service, Ingress, the `ccquota-pricing` ConfigMap, a
   read of the `ccquota-data` PVC, pod exec for the snapshot, and patch on
   `pods/ephemeralcontainers` for the pre-switch check (issues #2050, #2052 —
@@ -182,7 +182,7 @@ workflow. The one exception is the switch itself (RUNBOOK.md «换库»).
   none, so until the switch the Role needs nothing new). No Secret, no
   RBAC. The updating page's own objects are not in the Role: a person applies
   them (updating/README.md).
-  The Role lives in 24haowan-monorepo, not here. The credential-proxy line it
+  The Role lives in acme-monorepo, not here. The credential-proxy line it
   needs (until it has it, the release skips the proxy with a warning) is the
   name added to its first rule:
 
@@ -210,6 +210,6 @@ workflow. The one exception is the switch itself (RUNBOOK.md «换库»).
 
 ## Addresses
 
-`https://claudefleet.24haowan.com` is the hub's address (`CCQUOTA_FLEET_PUBLIC_URL`,
-so `/install` hands it to new clients). `https://ccquota.24haowan.com` stays
+`https://hub.example.com` is the hub's address (`CCQUOTA_FLEET_PUBLIC_URL`,
+so `/install` hands it to new clients). `https://ccquota.example.com` stays
 served until every client has moved; both are in `overlays/prod/ingress-hosts.yaml`.

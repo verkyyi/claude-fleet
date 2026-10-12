@@ -103,16 +103,16 @@ func TestFleetStreamScoped(t *testing.T) {
 		case "":
 			return nil, nil
 		case "alice":
-			return func(host, user string) bool { return host == "m5" && user == "alice" }, nil
+			return func(host, user string) bool { return host == "mac-d" && user == "alice" }, nil
 		}
 		return func(string, string) bool { return false }, nil
 	}
-	a := connectFakeNode(t, h, "m5", false)
-	b := connectFakeNode(t, h, "m4", false)
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
 	fa := fakeFleet(t, machineA, "alice-fleet", "", "", 1)
 	fb := fakeFleet(t, machineB, "bob-fleet", "", "", 2)
-	a.beat("m5", "alice", machineA, fa)
-	b.beat("m4", "bob", machineB, fb)
+	a.beat("mac-d", "alice", machineA, fa)
+	b.beat("mac-c", "bob", machineB, fb)
 	waitFor(t, 3*time.Second, "registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
@@ -120,10 +120,10 @@ func TestFleetStreamScoped(t *testing.T) {
 	alice := openStream(t, h, "alice", "")
 	for _, topic := range []string{"nodes", "sessions"} {
 		ev := nextEvent(t, alice, topic, 3*time.Second)
-		if strings.Contains(ev.data, `"m4"`) || strings.Contains(ev.data, "bob") {
+		if strings.Contains(ev.data, `"mac-c"`) || strings.Contains(ev.data, "bob") {
 			t.Errorf("alice's %s event carries bob's machine: %s", topic, ev.data)
 		}
-		if !strings.Contains(ev.data, `"m5"`) {
+		if !strings.Contains(ev.data, `"mac-d"`) {
 			t.Errorf("alice's %s event lacks her own machine: %s", topic, ev.data)
 		}
 		var f struct {
@@ -137,12 +137,12 @@ func TestFleetStreamScoped(t *testing.T) {
 	stranger := openStream(t, h, "stranger", "?topics=nodes,sessions")
 	for _, topic := range []string{"nodes", "sessions"} {
 		ev := nextEvent(t, stranger, topic, 3*time.Second)
-		if strings.Contains(ev.data, `"m4"`) || strings.Contains(ev.data, `"m5"`) {
+		if strings.Contains(ev.data, `"mac-c"`) || strings.Contains(ev.data, `"mac-d"`) {
 			t.Errorf("a person with no login sees a machine in %s: %s", topic, ev.data)
 		}
 	}
 	op := openStream(t, h, "", "?topics=nodes")
-	if ev := nextEvent(t, op, "nodes", 3*time.Second); !strings.Contains(ev.data, `"m4"`) || !strings.Contains(ev.data, `"m5"`) {
+	if ev := nextEvent(t, op, "nodes", 3*time.Second); !strings.Contains(ev.data, `"mac-c"`) || !strings.Contains(ev.data, `"mac-d"`) {
 		t.Errorf("the operator's nodes event = %s; want both machines", ev.data)
 	}
 }
@@ -153,9 +153,9 @@ func TestFleetStreamScoped(t *testing.T) {
 func TestFleetStreamOnlyOnChange(t *testing.T) {
 	streamTiming(t, 50*time.Millisecond, time.Hour)
 	h := newFleetHarness(t)
-	a := connectFakeNode(t, h, "m5", false)
+	a := connectFakeNode(t, h, "mac-d", false)
 	at := time.Now().Add(-time.Minute)
-	hb := control.Heartbeat{Hostname: "m5", OSUser: "alice", MachineID: machineA, Load1: 1.5, NCPU: 8, ObservedAt: at}
+	hb := control.Heartbeat{Hostname: "mac-d", OSUser: "alice", MachineID: machineA, Load1: 1.5, NCPU: 8, ObservedAt: at}
 	beat(t, a.conn, control.Proto, hb)
 	waitFor(t, 3*time.Second, "node heard", func() bool { return len(roster(t, h).Nodes) == 1 && roster(t, h).Nodes[0].LastHeartbeat != nil })
 

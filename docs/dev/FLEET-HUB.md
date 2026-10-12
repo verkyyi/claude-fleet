@@ -134,7 +134,7 @@ remote branches above used to refuse. Nothing in `bin/` dials the network: the
 ccquota agent's control channel is this machine's only door to the hub.
 
 - **The map.** After heartbeats the hub pushes each relay-capable node its owner's
-  worker map — every worker on every machine, with its machine (`m4`, or `m4:lost`)
+  worker map — every worker on every machine, with its machine (`mac-a`, or `mac-a:lost`)
   and its parent's worker_id (the inventory's `@origin_wid` column, #1423) — and the
   agent writes it as `hub-workers.tsv` (`<worker_id>\t<node>\t<parent wid>`).
 - **The outbox.** `fleet-report-parent.sh` (a parent elsewhere) and
@@ -185,8 +185,8 @@ ccquota agent's control channel is this machine's only door to the hub.
   hub without the endpoint ⇒ exit 3, nothing asked, nothing written.
 - **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
   parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
-  the map drops it. `fleet-children.sh` lists a remote child as `m4 remote` (or
-  `gone · m4`), and `fleet_window_waiting_children` — the reaper's
+  the map drops it. `fleet-children.sh` lists a remote child as `mac-a remote` (or
+  `gone · mac-a`), and `fleet_window_waiting_children` — the reaper's
   `retained:children` — counts a remote child until its MERGED report arrives,
   skipping a lost node and any map older than `FLEET_HUB_RETAIN_SECS` (600 s).
 
@@ -207,23 +207,23 @@ when nobody is looking (`FLEET_HUB_SESSIONS_EVERY`). `tmux-dashboard-rows.sh` on
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is
 not this machine's — render mixed in with the local windows, nested by
 `@origin_wid` (or the issue's sub-issue parent), and **look exactly like the
-local rows** (issue #1475, the operator's call: no `[m4]` prefix, no machine
-tag — the machine is the row menu's title, `侧边栏 · 在 m4`, and the status line
+local rows** (issue #1475, the operator's call: no `[mac-a]` prefix, no machine
+tag — the machine is the row menu's title, `侧边栏 · 在 mac-a`, and the status line
 on top). Their window id is `wid:<worker_id>`, so reap, rename, pin and fold
 find no window: remote rows are read-only; Enter (or the menu's `e`) opens the
 proxy window below. Their red `?` / `⊘` (asking you, waiting for a
 permission) is the local one: the inventory's column 12 carries `@claude_needs`.
 The **machine status line** heads the sidebar (and the hub list):
-`● m5 22 · ● m4 3` — one entry per machine, `●` online / `◐` 维护中 (the
+`● mac-b 22 · ● mac-a 3` — one entry per machine, `●` online / `◐` 维护中 (the
 operator's flag before a planned outage, issue #1427: heard, no new work sent
 there, rows unchanged) / `○` lost with `N 分钟没联系`, and your session count there; the local count is the frame's own
 rows, the others come from the cache's `#node` lines (the hub's `nodes` list,
 derived from the sessions on an older hub). A machine the hub calls lost, or a
 cache older than `FLEET_HUB_SESSIONS_STALE` (60 s), keeps its rows — dimmed,
-un-nested, in their own group at the foot under a `─ m4 失联 3 分钟 ─` heading —
+un-nested, in their own group at the foot under a `─ mac-a 失联 3 分钟 ─` heading —
 never vanishes — and since #1483 the same holds when the HUB is the silent one
 (`global/hub_ok`, below). Machine labels come from `FLEET_NODE_ALIASES`
-(`macmini=m5 mini2=m4`). To feed the nesting, the controller's worker inventory
+(`mac-c=mac-b mac-d=mac-a`). To feed the nesting, the controller's worker inventory
 carries each window's `name`, `origin_wid` and `needs` (columns 10–12 of
 `fleet-control-read.sh workers`, optional).
 
@@ -295,15 +295,15 @@ stderr says `hub unreachable for Ns`). Every reader goes through
 cache from before the file is judged by its own `#ts`, as it always was), none
 probes the hub: older than `FLEET_HUB_SESSIONS_STALE` (60 s) ⇒ 失联. Then the
 sidebar keeps the last list — the other machines' rows dimmed where they
-stand, each ending in `@m4!` (issue #1882: no group of their own, the list
+stand, each ending in `@mac-a!` (issue #1882: no group of their own, the list
 does not move) — and on the hub
 source this machine's rows come from tmux again (the local-source code, so a
 window opened or closed meanwhile shows at once, and a row's state is its live
 state as always: the hub's word on WHICH local rows exist is as old as its
 silence, this machine's tmux is not); the bar reads `入口 ○ 失联 Nm`, a proxy
-window's machine `m4 ○ 失联 Nm` (nothing here can hear it; a machine the hub had
+window's machine `mac-a ○ 失联 Nm` (nothing here can hear it; a machine the hub had
 already called lost keeps its own, longer silence) and a local window's chip its
-live readings; a remote row's menu is titled `… · 入口失联 Nm`, «新建到 m4…» is
+live readings; a remote row's menu is titled `… · 入口失联 Nm`, «新建到 mac-a…» is
 greyed with the reason, and every action on a remote row refuses with a toast
 (`fleet-sidebar-remote.sh`: 「入口失联 Nm，稍后再试」) instead of a 40-second
 timeout — Enter on the row (the proxy, a direct ssh) still works. The next
@@ -462,7 +462,7 @@ older hub ignores `wait`) keeps the 2 s cadence. No `wait`, no validator, nobody
 looking, or `FLEET_HUB_SESSIONS_LONGPOLL=0`: the request and its answer are
 what they were. Budget: a change on machine A reaches machine B's list in ≈ 0.5 s
 (≈ 0.125 mean poll + 0.1 debounce + the beat + the held answer + the cache
-write; it was ≤ 3 s with the 2 s cadence); `bin/fleet-hub-latency.sh --observer m4`
+write; it was ≤ 3 s with the 2 s cadence); `bin/fleet-hub-latency.sh --observer mac-a`
 measures it from a fleet pane on A (ten rounds, median), with the watcher half
 over one ssh to B.
 
@@ -496,29 +496,29 @@ certificate's person: their own workers only (`FleetScope`; another person's is
 takes `operation_get`, so the shell reads its outcome with no token anywhere. A
 local row's items are untouched, and with the hub off none of this exists: the
 menu offers these only on `wid:` rows, which only the hub's cache produces.
-Both menus also list **「新建到 m4…」** — one item per other machine the cache's
+Both menus also list **「新建到 mac-a…」** — one item per other machine the cache's
 `#node` lines say is online — which files the issue and spawns its worker THERE
 (`dash-issue-new.sh --node=<m>` → `dash-issue-session.sh --node`, #1475); no
 cache, no item.
 
 **The shell on your own computer** (issue #1484, EPIC #1479 C5) — **the `fleet`
-client, the ONLY way in** (issue #1628). `fleet` / `fleet m4` (`bin/fleet` →
+client, the ONLY way in** (issue #1628). `fleet` / `fleet mac-a` (`bin/fleet` →
 `bin/fleet-shell.sh`) always opens the client; there is no fallback to ssh-ing
 into a machine's own list. No tmux / tmux < 3.2 → one line on installing it,
 exit 1; no terminal (a pipe, a script) → exit 2; a client that fails before its
 attach → one line `客户端起不来：<why>` (fail_start), exit 1 — nothing else opens.
 `fleet connect` is route + ssh only: what the client runs inside, and a
-debugging aid (`fleet connect m4 --print`); `fleet m4 --print` is refused,
+debugging aid (`fleet connect mac-a --print`); `fleet mac-a --print` is refused,
 naming it. An iPad / iPhone ssh's into any machine with the fleet installed and
 runs `fleet` there: the same client, on that machine, and its bar says
-`客户端在 m5 上运行` (`client_where` stamps `@fleet_client_remote` =
+`客户端在 mac-b 上运行` (`client_where` stamps `@fleet_client_remote` =
 `<tty>|<machine>` when `SSH_CONNECTION` is set; `tmux-status.sh`'s `cr=` draws it
 for that tty's client alone).
 The client's right pane rides the fastest line: a reconnect first tries the
 line remembered last, whatever its age (`FLEET_CONNECT_RETEST=last`, issue
 #2886), and re-measures every route only when that one does not answer; while it
 is on the hub relay the window carries `@remote_route relay` — the bar's
-machine chip reads `m4 · 中转` — and one direct handshake runs every
+machine chip reads `mac-a · 中转` — and one direct handshake runs every
 `FLEET_CONNECT_UPGRADE_SECS` (15; `fleet connect --probe-direct`, ~0.1–0.2 s);
 when one answers, the pane waits for the keys to rest `FLEET_REMOTE_IDLE_SECS`
 (2), closes the relay's ControlMaster and reconnects direct in about a second —
@@ -541,7 +541,7 @@ at. Nothing is rendered anew — the shell is a composition: its own tmux server
 ONE window, `home`: the list pane (`fleet-sidebar.py`, drawn by the conf's hooks,
 `conf/tmux-shell.conf`) on the left, and on the right a nested client of the
 shell's STAGE — a second server, `-L fleet-shell-stage`
-(`conf/tmux-shell-stage.conf`), holding ONE proxy window per machine (`m4 <name>`,
+(`conf/tmux-shell-stage.conf`), holding ONE proxy window per machine (`mac-a <name>`,
 `@remote=<node>:<wid>`, `fleet-remote-view.sh run --shell`, so the far end
 registers a shell client and hides its own list and bar, #1485). Switching
 machines is a `select-window` on the stage (issue #1759): tmux repaints every
@@ -579,7 +579,7 @@ computer's, never sent on). These are the ONLY person's keys in the fleet (issue
 `bin/fleet-shell-selftest.sh` is the check: a fake hub, a fake `fleet connect`,
 an ssh shim, an isolated socket. The bar's machine chip reads the sessions
 cache's `#node` line when `hub_nodes` has no row (a certificate identity on a
-hub that predates #1502's `/v1/fleet/summary`): `m4 ●` rather than `?`.
+hub that predates #1502's `/v1/fleet/summary`): `mac-a ●` rather than `?`.
 
 **Which machine's install is old** (issue #644, EPIC #1524 R4). Every node's
 heartbeat carries its live install's HEAD (`fleet-install-version.sh --json`,
@@ -593,8 +593,8 @@ checkout has not fetched) or empty — no version reported, no live checkout, no
 local tag: unknown, never drawn as current (the #635 rule). Only `old:<n>`
 shows: the bar's machine chip ends in `· 旧` for the machine the current
 window is on — this one included, a lost one too, at every width — and
-`fleet-doctor`'s `install` row lists every machine (`machines (hub): m4 at
-a1b2c3d — 3 behind stable (OLD) · m5 at bc4e8e1 — at stable`), a WARN when
+`fleet-doctor`'s `install` row lists every machine (`machines (hub): mac-a at
+a1b2c3d — 3 behind stable (OLD) · mac-b at bc4e8e1 — at stable`), a WARN when
 any is old. No cache (hub off, a certificate identity) draws and prints
 nothing; a cache from before #644 has no word and draws nothing.
 `tmux-status-selftest.sh` G/K and `install-version-selftest.sh` H pin it.
@@ -825,7 +825,7 @@ prints it.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
-a **proxy window** `m4 <name>` (its pane header carries the same `m4`, so a
+a **proxy window** `mac-a <name>` (its pane header carries the same `mac-a`, so a
 glance says the keys go elsewhere; issue #1475 — the machine's name alone, no ⇄
 since #1621: a proxy window is known by `@remote`, never its name), marked `@remote=<node>:<worker_id>`, whose pane
 is `ssh -tt <host> fleet-remote-view.sh attach <worker_id>` — on the other machine
@@ -838,7 +838,7 @@ machine** — Enter on another row of the same machine retargets it. Closing
 the window only drops the connection; a drop reconnects (backing off, and
 alternating with the hub relay `fleet connect --proxy` when one is configured;
 in the shell, `fleet connect` re-measures every route instead, #1628).
-The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`m4=m4-lan`) maps it.
+The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`mac-a=mac-a-lan`) maps it.
 
 **The machine has no list of its own to get out of the way** (issue #1713, EPIC
 #1710 C3 — #1475/#1485's make-way rule retired). The task list is the CLIENT's:
@@ -853,7 +853,7 @@ client arriving or leaving changes nothing on the node: no status line, prefix,
 marker or hook is touched, and no pane is added, removed or moved. The one thing
 a viewed window gives up is its own top header (#1549, `pane-border-status off`),
 ONE WAY: taken at the attach (and at `select` for a window born since), never
-given back, so the viewer's `m4 …` header is the one title line and no client
+given back, so the viewer's `mac-a …` header is the one title line and no client
 change resizes a pane. The first attach after the upgrade undoes what the retired
 rule left (`@remote_view_saved` / `@remote_view_solo`, the hidden status line and
 prefix, the global `client-attached[77]` / `client-detached[77]` hooks, a
@@ -1216,7 +1216,7 @@ Install a launchd service after installing the optional SDK:
 ```sh
 python3 ~/.claude/fleet/bin/fleet-hub-service.py install \
   --python ~/.claude/fleet-mcp-venv/bin/python \
-  --resource-url https://macmini.example.ts.net:8450/mcp --port 8766
+  --resource-url https://mac-c.example.ts.net:8450/mcp --port 8766
 ```
 
 The installer creates `~/Library/LaunchAgents/com.claude-fleet.hub.plist`, backs

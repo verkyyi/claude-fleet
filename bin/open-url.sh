@@ -4,7 +4,7 @@
 # 1) Tunnel mode (instant, zero clicks): if the reverse-forwarded opener port
 #    is live, send the URL through it — a tiny listener on your laptop runs
 #    `open <url>` in your local browser. One-time setup on the LAPTOP:
-#      ~/.ssh/config →  Host macmini
+#      ~/.ssh/config →  Host mac-c
 #                         RemoteForward 2226 127.0.0.1:2226
 #      listener      →  run extras/laptop-url-opener.sh from this repo
 # 2) Fallback (no tunnel): the URL copied to your LOCAL clipboard (OSC 52, needs

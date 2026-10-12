@@ -47,7 +47,7 @@ func (f *fakeDNSPod) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply("-1", "Login failed", nil)
 		return
 	}
-	if r.PostForm.Get("domain") != "24haowan.com" {
+	if r.PostForm.Get("domain") != "example.com" {
 		reply("6", "bad domain", nil)
 		return
 	}
@@ -104,7 +104,7 @@ func TestDNSPodProvider(t *testing.T) {
 	f := &fakeDNSPod{}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	p := NewDNSPod(Config{ID: "123", Key: "s3cr3t", Domain: "24haowan.com", Subdomain: "cf"})
+	p := NewDNSPod(Config{ID: "123", Key: "s3cr3t", Domain: "example.com", Subdomain: "cf"})
 	p.URL = srv.URL
 	ctx := context.Background()
 
@@ -115,24 +115,24 @@ func TestDNSPodProvider(t *testing.T) {
 	// Someone else's records: the wildcard, an unmarked one under cf.
 	f.with(func() {
 		f.recs = append(f.recs,
-			map[string]string{"id": "1", "name": "*", "type": "CNAME", "value": "24haowan.com.", "ttl": "600", "remark": ""},
+			map[string]string{"id": "1", "name": "*", "type": "CNAME", "value": "example.com.", "ttl": "600", "remark": ""},
 			map[string]string{"id": "2", "name": "bob.cf", "type": "A", "value": "1.1.1.1", "ttl": "600", "remark": ""},
 			map[string]string{"id": "3", "name": "www", "type": "A", "value": "1.1.1.2", "ttl": "600", "remark": Marker})
 	})
 
-	r, err := p.Upsert(ctx, Record{Name: "verky.cf", Type: "A", Value: "23.119.126.213", TTL: TTL})
+	r, err := p.Upsert(ctx, Record{Name: "erin.cf", Type: "A", Value: "198.51.100.213", TTL: TTL})
 	if err != nil || r.ID == "" {
 		t.Fatalf("create: %+v %v", r, err)
 	}
 	got, err := p.List(ctx)
-	if err != nil || len(got) != 1 || got[0].Name != "verky.cf" || got[0].Value != "23.119.126.213" || got[0].TTL != TTL {
+	if err != nil || len(got) != 1 || got[0].Name != "erin.cf" || got[0].Value != "198.51.100.213" || got[0].TTL != TTL {
 		t.Fatalf("list: %+v %v — only the marked record under cf", got, err)
 	}
-	r.Value = "23.119.126.99"
+	r.Value = "198.51.100.99"
 	if _, err := p.Upsert(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := p.List(ctx); len(got) != 1 || got[0].ID != r.ID || got[0].Value != "23.119.126.99" {
+	if got, _ := p.List(ctx); len(got) != 1 || got[0].ID != r.ID || got[0].Value != "198.51.100.99" {
 		t.Fatalf("modify: %+v", got)
 	}
 	if err := p.Delete(ctx, r.ID); err != nil {
@@ -166,12 +166,12 @@ func TestDNSPodProvider(t *testing.T) {
 	// A record that cannot be marked is removed again (else every tick
 	// would make one more).
 	f.with(func() { f.failRemark = true })
-	if _, err := p.Upsert(ctx, Record{Name: "verky.cf", Type: "A", Value: "23.119.126.213", TTL: TTL}); err == nil {
+	if _, err := p.Upsert(ctx, Record{Name: "erin.cf", Type: "A", Value: "198.51.100.213", TTL: TTL}); err == nil {
 		t.Fatal("unmarked create answered ok")
 	}
 	f.with(func() {
 		for _, rec := range f.recs {
-			if rec["name"] == "verky.cf" {
+			if rec["name"] == "erin.cf" {
 				t.Errorf("unmarked record left behind: %v", rec)
 			}
 		}
@@ -182,7 +182,7 @@ func TestDNSPodProvider(t *testing.T) {
 			}
 		}
 	})
-	bad := NewDNSPod(Config{ID: "123", Key: "wrong-s3cr3t", Domain: "24haowan.com", Subdomain: "cf"})
+	bad := NewDNSPod(Config{ID: "123", Key: "wrong-s3cr3t", Domain: "example.com", Subdomain: "cf"})
 	bad.URL = srv.URL
 	if _, err := bad.List(ctx); err == nil || strings.Contains(err.Error(), "s3cr3t") {
 		t.Fatalf("bad token: %v", err)
@@ -190,7 +190,7 @@ func TestDNSPodProvider(t *testing.T) {
 }
 
 func TestNameOf(t *testing.T) {
-	for host, want := range map[string]string{"verky.cf": "verky", "VERKY.cf": "verky", "cf": "", "a.b.cf": "", "www": "", ".cf": ""} {
+	for host, want := range map[string]string{"erin.cf": "erin", "ERIN.cf": "erin", "cf": "", "a.b.cf": "", "www": "", ".cf": ""} {
 		if got := NameOf(host, "cf"); got != want {
 			t.Errorf("NameOf(%q) = %q, want %q", host, got, want)
 		}

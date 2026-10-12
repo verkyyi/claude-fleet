@@ -26,7 +26,7 @@
 #      @peer_view) whose shell's directory is the session's @worktree; ⌃\ again is
 #      back on the session, ⌃\ there selects the same one (one a session); the
 #      session's window gone takes its shell along. Another machine's: a channel
-#      on C5's link (`ssh -S <link> -l <login> m4 … shell-here <wid>`), its prompt
+#      on C5's link (`ssh -S <link> -l <login> mac-a … shell-here <wid>`), its prompt
 #      in the far worktree. A direct attach: no shell window. Issue #3183: in ⌘P,
 #      ⌃\ on a lit row opens THAT session's shell though it is not on screen, in
 #      the directory its agent is in (@agent_cwd — its last Bash call's cwd — else
@@ -117,9 +117,9 @@ cat > "$W/send.sh" <<EOF
 [ -e '$W/slow' ] && sleep 3
 cp "\$1" '$W/sent.json'
 echo x >> '$W/send.calls'
-echo 'REMOTE m4 start done $MU/new9	filed: #77'
+echo 'REMOTE mac-a start done $MU/new9	filed: #77'
 EOF
-# C5's link to m4: a fake ssh — `select` answers at once, anything else is the far
+# C5's link to mac-a: a fake ssh — `select` answers at once, anything else is the far
 # shell: its argv kept, a shell in the far worktree
 cat > "$W/fakessh.sh" <<EOF
 #!/bin/sh
@@ -128,8 +128,8 @@ printf '%s\n' "\$@" > '$W/ssh.argv'
 cd '$W/farwt' && exec /bin/sh -i
 EOF
 chmod +x "$W/ensure.sh" "$W/newsess.sh" "$W/send.sh" "$W/fakessh.sh"
-: > "$W/conf/peerlink/m4.sock"
-printf '{"links":[{"machine":"m4","login":"%s","phase":"up","sock":"%s","host":"m4"}]}\n' "$ME" "$W/conf/peerlink/m4.sock" \
+: > "$W/conf/peerlink/mac-a.sock"
+printf '{"links":[{"machine":"mac-a","login":"%s","phase":"up","sock":"%s","host":"mac-a"}]}\n' "$ME" "$W/conf/peerlink/mac-a.sock" \
   > "$W/conf/peerlink/state.json"
 printf 'acme/app\nacme/web\n' > "$W/g/hub_repos"
 : > "$W/rows.txt"
@@ -174,7 +174,7 @@ sleep 1
 [ -s "$W/pane0.in" ] && fail "N: ⌘N's bytes reached a pane in a direct attach: $(od -c "$W/pane0.in" | head -2)"
 # the orchestrator's holder here and orch_<fleet> naming another machine's: ⌘N
 # goes to neither — a new session, every press
-printf '%s\n' "$MU/orch4${US}m4${US}online${US}working${US}${US}" > "$W/g/orch_fl"
+printf '%s\n' "$MU/orch4${US}mac-a${US}online${US}working${US}${US}" > "$W/g/orch_fl"
 to send-keys -t o:view -H 1b 5b 39 32 38 7e
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new1" || fail "N: ⌘N in the 看台 opened no new session"
 N1=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new1" { print $1 }')
@@ -218,8 +218,8 @@ sys.exit(0 if last == ["claim", "go", "total"] else 1)
 PY
 rm -f "$W/g/orch_fl"
 # another machine's C4 window (made here, link up) — the S and Q legs use it
-PW=$(ti new-window -d -P -F '#{window_id}' -t fl -n @m4 'sleep 600')
-for o in "@fleet_role panel" "@peer m4@$ME" "@peer_view v1" "@peer_node m4" "@peer_login $ME" "@peer_cur wid:$MU/far1"; do
+PW=$(ti new-window -d -P -F '#{window_id}' -t fl -n @mac-a 'sleep 600')
+for o in "@fleet_role panel" "@peer mac-a@$ME" "@peer_view v1" "@peer_node mac-a" "@peer_login $ME" "@peer_cur wid:$MU/far1"; do
   ti set-option -w -t "$PW" ${o%% *} "${o#* }"
 done
 pass "N  ⌘N: a new no-repo session every press, the 看台 on it — never the orchestrator's holder, no orchestrator script; a direct attach: nothing"
@@ -296,19 +296,19 @@ waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{wi
 [ -s "$W/pane1.in" ] && fail "S: ⌃\\ reached alpha's pane"
 ti kill-window -t "$W1"
 waitfor 24 sh -c "! tmux -S '$IN' list-windows -t fl -F '#{window_id}' | grep -qx '$SW'" || fail "S: alpha gone, its shell stayed"
-# another machine's: the m4 window, on far1
+# another machine's: the mac-a window, on far1
 ti select-window -t "=fl@view-v1:$PW"; ti set-option -w -t "$PW" @peer_cur "wid:$MU/far1"; sleep 0.3
 to send-keys -t o:view 'C-\'
-waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'm4@$ME:$MU/far1'" \
-  || fail "S: ⌃\\ on m4's session made no shell window: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}')"
-waitfor 20 test -s "$W/ssh.argv" || fail "S: no ssh on the link for m4's shell"
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'mac-a@$ME:$MU/far1'" \
+  || fail "S: ⌃\\ on mac-a's session made no shell window: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}')"
+waitfor 20 test -s "$W/ssh.argv" || fail "S: no ssh on the link for mac-a's shell"
 argv=$(tr '\n' ' ' < "$W/ssh.argv")
-for want in "-S $W/conf/peerlink/m4.sock" "ControlMaster=no" "-tt" "-l $ME" " m4 " "fleet-remote-view.sh shell-here $MU/far1"; do
-  case " $argv " in *"$want"*) ;; *) fail "S: m4's shell ssh lacks 「${want}」: $argv" ;; esac
+for want in "-S $W/conf/peerlink/mac-a.sock" "ControlMaster=no" "-tt" "-l $ME" " mac-a " "fleet-remote-view.sh shell-here $MU/far1"; do
+  case " $argv " in *"$want"*) ;; *) fail "S: mac-a's shell ssh lacks 「${want}」: $argv" ;; esac
 done
 sleep 0.5; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*farwt'" \
-  || fail "S: m4's shell is not in its worktree: $(to capture-pane -p -t o:view | tail -5)"
+  || fail "S: mac-a's shell is not in its worktree: $(to capture-pane -p -t o:view | tail -5)"
 # issue #3183: ⌃\ on a lit row of ⌘P — gamma, not on screen, its agent in bin/
 # (the cd runs in the pane's own process: tmux reads the cwd of the pane's
 # foreground process group LEADER, and dash keeps a `sh -c` wrapper as that)
@@ -366,7 +366,7 @@ waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -q
 sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-delta=='" \
   || fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | grep -v '^$'; ti list-windows -t fl -F '#{window_id} #{@view_shell} mode=#{pane_in_mode} cmd=#{pane_current_command}')"
-pass "S  ⌃\\: the session's shell in its worktree (here; m4 over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
+pass "S  ⌃\\: the session's shell in its worktree (here; mac-a over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
 
 # --- P: ⌘P's one entry (issues #3180, #3327 — 方案 B) ------------------------------------------
 vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }
@@ -562,7 +562,7 @@ pass "Q  ⌘Q: OSC 7502 quit (the row's token) on the client's tty, then detache
 # --- L: fleet ls / open with no client tmux --------------------------------------------------
 T=$'\t'
 {
-  printf '%s\n' "wid:$MU/issue-12${T}needs${T}!${T}登录页重做${T}m4${T}acme/web (2)${T}${T}#12${T}—${T}merged${T}登录页重做${T}acme/web"
+  printf '%s\n' "wid:$MU/issue-12${T}needs${T}!${T}登录页重做${T}mac-a${T}acme/web (2)${T}${T}#12${T}—${T}merged${T}登录页重做${T}acme/web"
   printf '%s\n' "$W2${T}working${T}●${T}样式${T}nodeA${T}acme/web (2)${T}${T}#13${T}—${T}done:2h${T}${T}acme/web"
 } > "$W/rows.tsv"
 cat > "$W/argv.sh" <<EOF
@@ -578,7 +578,7 @@ FLEET_SESSION_CLI_ROWS='$W/rows.tsv' FLEET_SESSION_CLI_CACHE= exec sh -c "\$last
 EOF
 out=$(FLEET_SESSION_CLI_ROAD=home FLEET_THIN_ARGV_CMD="sh $W/argv.sh" FLEET_REMOTE_BIN="$BIN" FLEET_THIN_LOG="$W/thin.log" \
   python3 "$BIN/fleet-session-cli.py" ls </dev/null 2>&1) || fail "L: fleet ls over the home exited non-zero: $out"
-for want in 登录页重做 样式 m4 nodeA; do
+for want in 登录页重做 样式 mac-a nodeA; do
   case "$out" in *"$want"*) ;; *) fail "L: fleet ls lacks 「${want}」: $out" ;; esac
 done
 hargv=$(tr '\n' ' ' < "$W/home.argv")
@@ -599,7 +599,7 @@ pass "L  fleet ls with no client tmux: one ssh to the home (no master), two mach
 cat > "$W/rbin/fleet-client-place.sh" <<EOF
 #!/bin/sh
 printf '%s\n' "\$@" > '$W/place.argv'
-printf 'REMOTE m4 start done %s\tok\n' '$MU/home1'
+printf 'REMOTE mac-a start done %s\tok\n' '$MU/home1'
 EOF
 cat > "$W/claude.sh" <<EOF
 #!/bin/sh

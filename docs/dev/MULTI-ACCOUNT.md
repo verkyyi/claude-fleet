@@ -470,7 +470,7 @@ two windows as if they were one budget. Live pool, 2026-09-13:
 
 ```
 ly297@georgetown.edu     5h  0% · 7d 80%     headroom 20
-verky@24helpful.com   ●  5h 77% · 7d 51%     headroom 23
+carol@24helpful.com   ●  5h 77% · 7d 51%     headroom 23
 ```
 
 The account with a **completely unused 5-hour window** scored *below* the one

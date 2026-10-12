@@ -170,7 +170,7 @@ cwclean() {
 # session pane they do reach bin/tmux-shim (it leads the agent's PATH), which
 # passes the fleet's own scripts through and judges everything else the same way.
 # brew() — Homebrew pours kegs with the CALLER's umask (issue #2283). A login on
-# umask 077 (m5's verkyyi and root, 2026-10-07) upgraded nine formulae into
+# umask 077 (mac-b's dave and root, 2026-10-07) upgraded nine formulae into
 # drwx------ kegs, and every OTHER login on the machine lost python's ssl and
 # tmux. Only brew writes the shared prefix, so only brew gets Homebrew's own
 # default, 022 — in a subshell, so this shell's umask (a deliberate privacy

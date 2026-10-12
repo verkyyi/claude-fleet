@@ -69,7 +69,7 @@ func TestEntryAutoNameWithHome(t *testing.T) {
 	if _, err := h.srv.Store.SetEntryName(pAlice, bobSug, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pBob, Machine: "macmini-m4", Login: "bob", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pBob, Machine: "mac-e-mac-c", Login: "bob", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	h.srv.EntryDNS = NewEntryDNS(dns.NewFake(), "cf")
@@ -87,7 +87,7 @@ func TestEntryAutoNameWithHome(t *testing.T) {
 }
 
 // A name nobody claimed is not in the plan and has no address: the zone's
-// own wildcard (*.24haowan.com → the hub) is shadowed by the loop's *.cf,
+// own wildcard (*.example.com → the hub) is shadowed by the loop's *.cf,
 // which carries a TXT saying so and no A / AAAA. Its hand removal is put
 // back; a second tick writes nothing.
 func TestEntryDNSUnclaimedNameResolvesNowhere(t *testing.T) {
@@ -99,10 +99,10 @@ func TestEntryDNSUnclaimedNameResolvesNowhere(t *testing.T) {
 	if _, err := h.srv.Store.SetEntryName(pAlice, "alice", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini", now, true, "23.119.126.213")
+	dnsReach(t, h, "mac-e", now, true, "198.51.100.213")
 
 	targets, err := h.srv.entryDNSTargets("cf", now)
 	if err != nil {
@@ -125,7 +125,7 @@ func TestEntryDNSUnclaimedNameResolvesNowhere(t *testing.T) {
 		}
 		return strings.Join(b, " | ")
 	}
-	want := "TXT *.cf " + EntryDNSUnclaimed + " | A alice.cf 23.119.126.213"
+	want := "TXT *.cf " + EntryDNSUnclaimed + " | A alice.cf 198.51.100.213"
 	if got := zone(); got != want {
 		t.Fatalf("zone: %s\nwant %s", got, want)
 	}

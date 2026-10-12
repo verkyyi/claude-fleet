@@ -4,7 +4,7 @@
 #
 #   A  not a managed machine: status --check says nothing (2), off refuses (1)
 #   B  a volume indexing → WARN naming it; off runs mdutil -a -i off + -E → PASS
-#   C  a knowledge agent running (volumes already off — mini2, 2026-10-11) → WARN;
+#   C  a knowledge agent running (volumes already off — mac-d, 2026-10-11) → WARN;
 #      off disables + boots out every agent in gui/ and user/ for every uid → PASS
 #   D  hot: fseventsd 115% for an hour → WARN; the same for 5 minutes → not hot
 #   E  <state>/spotlight.keep: PASS «kept on», off touches nothing
@@ -48,7 +48,7 @@ sp() {
 }
 reset() {
   printf '/ off\n/System/Volumes/Data off\n' > "$WORK/vols"
-  printf 'verky 01:00:00 0.5 /usr/bin/zsh\n' > "$WORK/ps"
+  printf 'carol 01:00:00 0.5 /usr/bin/zsh\n' > "$WORK/ps"
   : > "$WORK/mdutil.log"; : > "$WORK/launchctl.log"
 }
 
@@ -75,9 +75,9 @@ out=$(sp status --check); rc=$?
 
 # C
 reset
-printf 'verkyyi 07:13:04 0.4 /System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged\n' >> "$WORK/ps"
+printf 'dave 07:13:04 0.4 /System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged\n' >> "$WORK/ps"
 out=$(sp status --check); rc=$?
-[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'knowledge agent running for: verkyyi' && ok "C knowledge agent running (volumes off) → WARN" || bad "C rc=$rc out=[$out]"
+[ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'knowledge agent running for: dave' && ok "C knowledge agent running (volumes off) → WARN" || bad "C rc=$rc out=[$out]"
 sp off >/dev/null; rc=$?
 n=0
 for u in 501 504; do for s in com.apple.spotlightknowledged com.apple.spotlightknowledged.importer com.apple.spotlightknowledged.updater; do

@@ -6,7 +6,7 @@
 # label / no sub-issues API / no account left under the ceiling.
 #
 # `/fleet-epic` is a GENERIC fleet skill — it ships to every fleet (claude-fleet,
-# 24haowan-monorepo, tokenledger, whatever is created next), so it may assume
+# acme-monorepo, tokenledger, whatever is created next), so it may assume
 # NOTHING about the target repo. This is the assumption check, one screen, in
 # fleet-doctor.sh's `TAG  STATE  detail` shape.
 #

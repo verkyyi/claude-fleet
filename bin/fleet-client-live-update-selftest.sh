@@ -7,7 +7,7 @@
 # and bin/fleet-shell.sh `reload`, bin/fleet-client-badge.sh's update segment.
 #
 # Nothing real is reached: the hub address is a placeholder, fleet-connect.py is
-# a FAKE (prints a --pick answer for m5), ssh is a shim that holds the proxy
+# a FAKE (prints a --pick answer for mac-b), ssh is a shim that holds the proxy
 # pane open, the lease command is `false`, the warm / actions loops are off.
 #
 # Legs:
@@ -120,8 +120,8 @@ cat > "$WORK/fleet-connect.py" <<EOF
 #!/usr/bin/env python3
 import json, sys
 if "--pick" in sys.argv:
-    print(json.dumps({"machine": "m5", "hostname": "macmini", "reason": "last", "login": "verk",
-                      "machines": [{"alias": "m5", "hostname": "macmini"}]}))
+    print(json.dumps({"machine": "mac-b", "hostname": "mac-c", "reason": "last", "login": "bob",
+                      "machines": [{"alias": "mac-b", "hostname": "mac-c"}]}))
 sys.exit(0)
 EOF
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
@@ -137,8 +137,8 @@ exit 0
 EOF
 chmod +x "$SHIM/ssh"
 export FLEET_REMOTE_SSH_CMD="$SHIM/ssh"
-printf '{"sessions": [], "nodes": [{"machine_name": "macmini", "availability": "online", "sessions": 0}]}\n' > "$WORK/sessions.json"
-export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=verk
+printf '{"sessions": [], "nodes": [{"machine_name": "mac-c", "availability": "online", "sessions": 0}]}\n' > "$WORK/sessions.json"
+export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=bob
 
 # mkver <dir> <version> <commit> — a client: every file of this bin/ and conf/ a
 # symlink (the fake connect a copy), and the mark the installer writes

@@ -224,7 +224,7 @@ import sys, time
 sys.path.insert(0, sys.argv[1])
 import fleet_notify
 g, w = sys.argv[2] + "/g", sys.argv[2]
-row = lambda st: [{"wid": "u/f-two", "issue": "3005", "state": st, "needs": "ask" if st == "needs" else "", "node": "m4"}]
+row = lambda st: [{"wid": "u/f-two", "issue": "3005", "state": st, "needs": "ask" if st == "needs" else "", "node": "mac-a"}]
 fleet_notify.beat(row("working"), g, "", sender=[w + "/send.sh"])
 fleet_notify.beat(row("needs"), g, "", sender=[w + "/send.sh"])
 time.sleep(1)

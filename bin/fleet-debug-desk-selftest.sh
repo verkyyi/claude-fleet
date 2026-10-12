@@ -48,11 +48,11 @@ printf 'FAIL tls\n' > "$WORK/b/bundle/doctor.txt"; printf 'closed by client\n' >
 printf '{"v":1}\n' > "$WORK/b/bundle/manifest.json"
 (cd "$WORK/b" && tar czf "$WORK/good.tgz" bundle)
 ans "GET /v1/node/debug/abcdefgh/bundle" 200 < "$WORK/good.tgz"
-ans "GET /v1/node/debug/abcdefgh/hub.json" 200 <<<'{"who": "arvin"}'
+ans "GET /v1/node/debug/abcdefgh/hub.json" 200 <<<'{"who": "alice"}'
 out=$(D fetch abcdefgh 2>&1); rc=$?
 dst="$TMPDIR/fleet-debug/abcdefgh"
 if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | head -1)" = "$dst" ] && [ -f "$dst/bundle/bundle/doctor.txt" ] \
-   && [ -f "$dst/bundle/bundle/logs/connect.log" ] && grep -q arvin "$dst/hub.json"; then
+   && [ -f "$dst/bundle/bundle/logs/connect.log" ] && grep -q alice "$dst/hub.json"; then
   ok "A fetch: the bundle under \$TMPDIR/fleet-debug/<id>/bundle, hub.json beside it, the list printed"
 else bad "A fetch rc=$rc out=$out"; fi
 python3 - "$WORK/evil.tgz" <<'PY'
@@ -104,14 +104,14 @@ D propose abcdefgh 'use sk-ant-abcdefghijklmnop' >/dev/null 2>&1; [ $? = 2 ] && 
 
 # --- D feed + the steward's line ---------------------------------------------
 ans "GET /v1/node/debug/feed" 200 <<'EOF'
-{"reports":[{"id":"abcdefgh","state":"concluded","who":"arvin","cause":"python3 没装证书库","url":"https://hub/s/abcdefgh","ours":["安装时查证书库"],"updated_at":"2026-10-10T07:00:00Z"},
+{"reports":[{"id":"abcdefgh","state":"concluded","who":"alice","cause":"python3 没装证书库","url":"https://hub/s/abcdefgh","ours":["安装时查证书库"],"updated_at":"2026-10-10T07:00:00Z"},
 {"id":"cccccccc","state":"diagnosing","who":"fp 12345678","url":"https://hub/s/cccccccc","updated_at":"2026-10-10T07:01:00Z"},
 {"id":"dddddddd","state":"unfinished","who":"fp 12345678","why":"诊断员 15 分钟没交页 — 已转给管理员","url":"https://hub/s/dddddddd","updated_at":"2026-10-10T07:02:00Z"}]}
 EOF
 : > "$WORK/hub.log"
 out=$(D feed); rc=$?
 if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c '^〔诊断〕')" = 2 ] \
-   && printf '%s\n' "$out" | grep -qx '〔诊断〕arvin · python3 没装证书库 · https://hub/s/abcdefgh' \
+   && printf '%s\n' "$out" | grep -qx '〔诊断〕alice · python3 没装证书库 · https://hub/s/abcdefgh' \
    && printf '%s\n' "$out" | grep -q '要我们改的（你点头才立单，file_issue）：安装时查证书库' \
    && printf '%s\n' "$out" | grep -q '〔诊断〕fp 12345678 · 没看完（诊断员 15 分钟没交页 — 已转给管理员）· https://hub/s/dddddddd'; then
   ok "D feed: concluded and unfinished say one line each (cause · link · 要我们改的); diagnosing says nothing"
@@ -123,7 +123,7 @@ else bad "D feed again: out=$out2 after=$after log=$(cat "$WORK/hub.log")"; fi
 
 # the steward's beat: debug_step → send(orchestrator, line)
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s/sent"; cat >> "%s/sent"; printf "\\n--\\n" >> "%s/sent"\n' "$WORK" "$WORK" "$WORK" > "$WORK/send"
-printf '#!/bin/sh\nprintf "{\\"lines\\": [\\"〔诊断〕arvin · 证书 · https://hub/s/abcdefgh\\"]}"\nexit ${DBG_RC:-0}\n' > "$WORK/feed"
+printf '#!/bin/sh\nprintf "{\\"lines\\": [\\"〔诊断〕alice · 证书 · https://hub/s/abcdefgh\\"]}"\nexit ${DBG_RC:-0}\n' > "$WORK/feed"
 printf '#!/bin/sh\nprintf "@1\\torchestrator\\tidle\\t\\t\\t\\t\\t\\n"\n' > "$WORK/wins-orch"
 printf '#!/bin/sh\nprintf "@1\\tworker\\tidle\\t7\\to/r\\t\\t\\t\\n"\n' > "$WORK/wins-none"
 chmod +x "$WORK/send" "$WORK/feed" "$WORK/wins-orch" "$WORK/wins-none"
@@ -137,7 +137,7 @@ n1=$(step wins-orch 1000)
 n2=$(step wins-orch 1030)
 n3=$(step wins-orch 1061)
 if [ "$n0" = 0 ] && [ "$n1" = 1 ] && [ "$n2" = 0 ] && [ "$n3" = 1 ] && [ "$(grep -c '^orchestrator$' "$WORK/sent")" = 2 ] \
-   && grep -q '〔诊断〕arvin · 证书 · https://hub/s/abcdefgh' "$WORK/sent"; then
+   && grep -q '〔诊断〕alice · 证书 · https://hub/s/abcdefgh' "$WORK/sent"; then
   ok "D steward: each line to the orchestrator; none read without an orchestrator window; at most once a minute"
 else bad "D steward: n=$n0/$n1/$n2/$n3 sent=$(cat "$WORK/sent" 2>/dev/null)"; fi
 rm -f "$FLEET_CONF_DIR/global/debug-feed.step"

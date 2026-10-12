@@ -42,7 +42,7 @@ func validateLinuxAccountOp(op control.AccountOp, service string) error {
 	if op.Op != control.AccountCreate && op.Op != control.AccountRemove {
 		return errors.New("op must be create or remove")
 	}
-	// A digit may lead where the person already holds the name (`24haowan`,
+	// A digit may lead where the person already holds the name (`acme`,
 	// EPIC #3208 共同约定 5): the opener passes useradd --badname for it.
 	existing := op.Op == control.AccountRemove || op.Existing
 	if !control.ValidCreateLogin(op.Login, existing) {

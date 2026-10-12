@@ -15,7 +15,7 @@ func usageSilentBeat(t *testing.T, st *store.Store, state string, at time.Time) 
 	t.Helper()
 	workers := `[{"agent":"claude","state":"` + state + `","key":"verkyyi-claude-fleet:issue-1"},` +
 		`{"agent":"claude","state":"looping","key":"verkyyi-claude-fleet:scratch-4"}]`
-	if _, err := st.RecordFleetSnapshot("ep-verky", "macmini", "verky", "machine-1", []store.FleetReport{{
+	if _, err := st.RecordFleetSnapshot("ep-heidi", "mac-e", "heidi", "machine-1", []store.FleetReport{{
 		FleetID: "fleet-1", Name: "fleet", Agent: "claude", State: "running", WorkerCount: 2, WorkersJSON: workers,
 	}}, at); err != nil {
 		t.Fatal(err)
@@ -61,13 +61,13 @@ func TestUsageSilentRaisedWhenWorkingLoginSendsNothing(t *testing.T) {
 	usageSilentBeat(t, st, "working", now)
 	srv.UsageSilentTick(now, true)
 	subs := usageSilentOpen(t, st)
-	if len(subs) != 1 || subs[0] != "ep-verky/claude" {
-		t.Fatalf("want one usage_silent on ep-verky/claude, have %v", subs)
+	if len(subs) != 1 || subs[0] != "ep-heidi/claude" {
+		t.Fatalf("want one usage_silent on ep-heidi/claude, have %v", subs)
 	}
 
 	// A turn lands: cleared on the next sweep.
 	if _, _, err := st.InsertEvents([]model.UsageEvent{{
-		Source: model.SourceClaude, AccountUUID: "claude:local", EndpointID: "ep-verky", OSUser: "verky",
+		Source: model.SourceClaude, AccountUUID: "claude:local", EndpointID: "ep-heidi", OSUser: "heidi",
 		MessageUUID: "m-1", SessionID: "s", TS: now.Add(time.Minute), Model: "claude-opus-5-5", OutputTokens: 10,
 	}}); err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestUsageSilentQuietWhenUsageFlowsOrNothingWorks(t *testing.T) {
 	for i := 0; i <= 4; i++ {
 		at := t0.Add(time.Duration(i) * 15 * time.Minute)
 		if _, _, err := st.InsertEvents([]model.UsageEvent{{
-			Source: model.SourceClaude, AccountUUID: "acct", EndpointID: "ep-verky", OSUser: "verky",
+			Source: model.SourceClaude, AccountUUID: "acct", EndpointID: "ep-heidi", OSUser: "heidi",
 			MessageUUID: "m-" + at.Format(time.RFC3339), SessionID: "s", TS: at, Model: "claude-opus-5-5", OutputTokens: 1,
 		}}); err != nil {
 			t.Fatal(err)

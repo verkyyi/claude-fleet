@@ -168,7 +168,7 @@ drill_node_supervisor_wedged() {
   printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
   printf '{"children":[],"tasks":[{"name":"t","every":0.5,"cmd":["/bin/bash","%s"]},{"name":"u","every":0.5,"cmd":["/bin/bash","%s"]}]}\n' \
     "$sb/ok.sh" "$sb/ok.sh" > "$sb/table.json"
-  # the fda phase blocks in an open() of a FIFO nobody writes — mini2's 2026-10-11
+  # the fda phase blocks in an open() of a FIFO nobody writes — mac-d's 2026-10-11
   # hang (its open() of TCC.db never returned: the loop stopped for good, and every
   # restart stopped again, the probe due at once)
   mkfifo "$sb/hang"
@@ -209,7 +209,7 @@ drill_node_fda_probe_hang() {
   cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
   printf '{"children":[],"tasks":[{"name":"t","every":0.3,"cmd":["/bin/bash","%s"]}]}\n' "$sb/ok.sh" > "$sb/table.json"
-  mkfifo "$sb/TCC.db"   # an open() of it never returns — tccd not answering (mini2, 2026-10-11)
+  mkfifo "$sb/TCC.db"   # an open() of it never returns — tccd not answering (mac-d, 2026-10-11)
   t0=$(now)
   FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
     FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
@@ -229,7 +229,7 @@ drill_node_fda_probe_hang() {
   WHAT="完全磁盘访问探测读 TCC.db 的 open() 永不返回：探测是子进程，主循环照转，1s 后杀掉、记为「未知」（不报「没有权限」），任务一直在跑，看门狗没触发"
 }
 
-# tcc-prompt-wedge (#3167): mini2's admin agent ran fleet-login-new.sh; sysadminctl
+# tcc-prompt-wedge (#3167): mac-d's admin agent ran fleet-login-new.sh; sysadminctl
 # asked TCC for SysAdminFiles, charged to ccquota (an ungranted identity on every
 # release), and the dialog sat on a console nobody watched. The user tccd waited
 # on it forever, sandboxd's approval queues filled behind it, and every user
@@ -365,9 +365,9 @@ drill_service_killed() {
 drill_service_login_moved() {
   CAP=30   # the move → the first run under the new login
   local sb sup ha hb t0 r
-  sb="$WORK/svcmove"; ha="$sb/Users/verkyyi"; hb="$sb/Users/verky"
+  sb="$WORK/svcmove"; ha="$sb/Users/frank"; hb="$sb/Users/erin"
   mkdir -p "$sb/LaunchDaemons" "$ha/daily-report/logs" "$ha/.claude/skills/daily-report" "$hb"
-  printf '{"verkyyi": {"uid": %s, "gid": %s, "home": "%s"}, "verky": {"uid": %s, "gid": %s, "home": "%s"}}\n' \
+  printf '{"frank": {"uid": %s, "gid": %s, "home": "%s"}, "erin": {"uid": %s, "gid": %s, "home": "%s"}}\n' \
     "$(id -u)" "$(id -g)" "$ha" "$(id -u)" "$(id -g)" "$hb" > "$sb/passwd.json"
   printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
   printf 'skill\n' > "$ha/.claude/skills/daily-report/SKILL.md"
@@ -377,29 +377,29 @@ drill_service_login_moved() {
   export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
     FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
     FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
-  printf 'k\n' | python3 "$BIN/fleet-node-supervisor.py" service cred set --login verkyyi --name BARK_KEY >/dev/null
-  python3 "$BIN/fleet-node-supervisor.py" service add --login verkyyi --name daily-report --cred BARK_KEY \
+  printf 'k\n' | python3 "$BIN/fleet-node-supervisor.py" service cred set --login frank --name BARK_KEY >/dev/null
+  python3 "$BIN/fleet-node-supervisor.py" service add --login frank --name daily-report --cred BARK_KEY \
     --path "$ha/daily-report" --path "$ha/.claude/skills/daily-report" -- "$ha/daily-report/run.sh" >"$sb/add.out" 2>&1 \
     || { WHY="service add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
   python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
   sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
-  until_ok 15 grep -q '^ok verkyyi' "$sb/log/logins/verkyyi/daily-report.log" \
+  until_ok 15 grep -q '^ok frank' "$sb/log/logins/frank/daily-report.log" \
     || { WHY="it never ran as the old login: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
-  python3 "$BIN/fleet-node-supervisor.py" account release verkyyi >"$sb/rel.out" 2>&1; r=$?
-  [ "$r" = 6 ] && grep -q 'service move --login verkyyi --name daily-report' "$sb/rel.out" \
+  python3 "$BIN/fleet-node-supervisor.py" account release frank >"$sb/rel.out" 2>&1; r=$?
+  [ "$r" = 6 ] && grep -q 'service move --login frank --name daily-report' "$sb/rel.out" \
     || { WHY="releasing the old login with a task left was not refused 6 (rc $r)"; kill "$sup" 2>/dev/null; return 1; }
   grep -q 'exit 6' "$BIN/fleet-login-remove.sh" || { WHY="fleet-login-remove.sh has no exit 6 refusal"; kill "$sup" 2>/dev/null; return 1; }
   t0=$(now)
-  python3 "$BIN/fleet-node-supervisor.py" service move --login verkyyi --name daily-report --to verky >"$sb/move.out" 2>&1 \
+  python3 "$BIN/fleet-node-supervisor.py" service move --login frank --name daily-report --to erin >"$sb/move.out" 2>&1 \
     || { WHY="service move failed: $(tail -2 "$sb/move.out" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
-  until_ok 30 grep -q '^ok verky$' "$sb/log/logins/verky/daily-report.log" \
-    || { WHY="it did not run as the new login: $(tail -2 "$sb/log/logins/verky/daily-report.log" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
+  until_ok 30 grep -q '^ok erin$' "$sb/log/logins/erin/daily-report.log" \
+    || { WHY="it did not run as the new login: $(tail -2 "$sb/log/logins/erin/daily-report.log" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
   SECS=$(since "$t0")
-  grep -q '^give up' "$sb/log/logins/verky/daily-report.log" && { WHY="it gave up under the new login"; kill "$sup" 2>/dev/null; return 1; }
-  [ -z "$(ls "$sb/db/logins/verkyyi/services")" ] && [ ! -e "$ha/daily-report" ] && [ ! -e "$ha/.claude/skills/daily-report" ] \
-    && [ ! -e "$sb/log/logins/verkyyi/daily-report.log" ] && [ ! -e "$sb/db/logins/verkyyi/creds/BARK_KEY" ] \
+  grep -q '^give up' "$sb/log/logins/erin/daily-report.log" && { WHY="it gave up under the new login"; kill "$sup" 2>/dev/null; return 1; }
+  [ -z "$(ls "$sb/db/logins/frank/services")" ] && [ ! -e "$ha/daily-report" ] && [ ! -e "$ha/.claude/skills/daily-report" ] \
+    && [ ! -e "$sb/log/logins/frank/daily-report.log" ] && [ ! -e "$sb/db/logins/frank/creds/BARK_KEY" ] \
     || { WHY="something of it is left under the old login"; kill "$sup" 2>/dev/null; return 1; }
-  grep -q 'pushed verky' "$hb/daily-report/logs/run.log" || { WHY="the job's own log is not in the new home"; kill "$sup" 2>/dev/null; return 1; }
+  grep -q 'pushed erin' "$hb/daily-report/logs/run.log" || { WHY="the job's own log is not in the new home"; kill "$sup" 2>/dev/null; return 1; }
   kill "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
@@ -450,7 +450,7 @@ d = {"Label": sys.argv[2], "ProgramArguments": [sys.argv[4]], "KeepAlive": True}
 if sys.argv[3]: d["UserName"] = sys.argv[3]
 plistlib.dump(d, open(sys.argv[1], "wb"))' "$@"
   }
-  # the two hand-written ones (mini2, 2026-10-09: com.verkyyi.sms-watch, com.verky.daily-report) ...
+  # the two hand-written ones (mac-d, 2026-10-09: com.frank.sms-watch, com.erin.daily-report) ...
   pl "$sb/LaunchDaemons/com.alice.sms-watch.plist" com.alice.sms-watch alice "$sb/Users/alice/bin/sms-watch"
   pl "$sb/Users/alice/Library/LaunchAgents/com.alice.daily-report.plist" com.alice.daily-report "" "$sb/Users/alice/bin/sms-watch"
   # ... and what is not a person's background task: a root daemon, a system account's, an app's own agent
@@ -560,7 +560,7 @@ drill_task_rerun_root_only() {
   # the client's table says where the entry lives; the "hub" stands in for the
   # node half the agent runs for service_control (node_service_ctl.go): its
   # fixed supervisor argv, on the lane's own login
-  printf '{"ts": 1, "machines": [{"hostname": "m4.drill", "label": "m4", "services": [{"name": "daily", "kind": "task", "login": "alice", "state": "scheduled"}]}]}\n' > "$sb/hub_services"
+  printf '{"ts": 1, "machines": [{"hostname": "mac-a.drill", "label": "mac-a", "services": [{"name": "daily", "kind": "task", "login": "alice", "state": "scheduled"}]}]}\n' > "$sb/hub_services"
   {
     printf '#!/bin/bash\n[ "$1" = service_control ] || exit 9\n'
     printf 'if python3 -I %q service run --login alice --name daily >/dev/null 2>%q; then\n' "$BIN/fleet-node-supervisor.py" "$sb/hub.err"
@@ -626,7 +626,7 @@ LC
 
 # login-remove-managed (#2924): deleting a login the daemon took over — step 4
 # killed its demoted tasks, root's supervisor started them again, three rounds,
-# exit 1 (drill10092351 on mini2); its accounts.json entry outlived the login.
+# exit 1 (drill10092351 on mac-d); its accounts.json entry outlived the login.
 # Now fleet-login-remove.sh's step 1c `account forget`s it first: the live
 # daemon stops its tasks and starts none again, its entry and env go.
 drill_login_remove_managed() {
@@ -675,7 +675,7 @@ _forget_unset() {
 
 # account-release-gone-login (#2924): `account release` of a login already
 # deleted put its node agent's LaunchDaemon back and loaded it — a daemon for a
-# user that is not there, exiting 1 forever (drill10092257 on macmini). Now a
+# user that is not there, exiting 1 forever (drill10092257 on mac-c). Now a
 # release of a login not on the machine loads nothing and only forgets it.
 drill_account_release_gone_login() {
   CAP=10
@@ -804,19 +804,19 @@ LC
 drill_account_op_reload_cut() {
   CAP=12   # a 2 s "create" held through, then the restart on the next tick
   local sb lg na t0 pid1 pid2 st
-  sb="$WORK/opcut"; lg="$sb/db/logins"; mkdir -p "$lg" "$sb/db/agent/verky" "$sb/LaunchDaemons"
+  sb="$WORK/opcut"; lg="$sb/db/logins"; mkdir -p "$lg" "$sb/db/agent/erin" "$sb/LaunchDaemons"
   # the default table holds the node agent on its tenants' books — the file the agent writes
   grep -q '"hold": os.path.join(paths.state, "agent", "\*", "account-ops.json")' "$BIN/fleet-node-supervisor.py" \
     || { WHY="the node-agent child has no hold on account-ops.json"; return 1; }
   grep -q 'accountOpsFile = "account-ops.json"' "$BIN/../tokenledger/internal/agent/node_accounts.go" \
     || { WHY="the agent no longer writes account-ops.json"; return 1; }
-  printf 'CCQUOTA_TOKEN=x\n' > "$lg/verky.env"
+  printf 'CCQUOTA_TOKEN=x\n' > "$lg/erin.env"
   # the node agent, played: its first run opens "alice" (2 s), marking the op in its
   # book with its own pid, and says done with that pid; a later run just serves
   na="$sb/na.sh"
   cat > "$na" <<'NA'
 #!/bin/bash
-b="$1/agent/verky/account-ops.json"
+b="$1/agent/erin/account-ops.json"
 [ -e "$1/done" ] && exec sleep 300
 printf '{"inflight":{"op-1":{"op":"create","login":"alice","pid":%s}}}\n' "$$" > "$b.tmp" && mv "$b.tmp" "$b"
 : > "$1/started"; sleep 2
@@ -852,7 +852,7 @@ drill_node_agent_adopted_no_reload() {
   CAP=10   # the second daemon's adopt + the next tick's reload (stop + start)
   local sb lg sup1 sup2 pid1 pid2 t0 st
   sb="$WORK/adoptreload"; lg="$sb/db/logins"; mkdir -p "$lg" "$sb/LaunchDaemons"
-  printf 'CCQUOTA_TOKEN=x\n' > "$lg/verky.env"
+  printf 'CCQUOTA_TOKEN=x\n' > "$lg/erin.env"
   # a plain argv: adopt matches the live process's command line to the one recorded
   python3 -c 'import json, sys; d = sys.argv[1]; json.dump({"children": [{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
     "requires": [d + "/db/logins/*.env"], "reload": d + "/db/logins/*.env"}]}, open(d + "/table.json", "w"))' "$sb"
@@ -962,7 +962,7 @@ drill_node_update_half() {
   WHAT="更新取包时被 kill -9：整台机器原样不动；下一轮从头取完、所有部件一起换上；新版体检多出 FAIL（Claude Code 起不来）→ 运行时、ccquota、Claude、开号缓存、账号链接全部回到上一版，这一版不再重试"
 }
 
-# node-update-stale-fail (#2906): macmini sat on ee7099a for hours — a torn read
+# node-update-stale-fail (#2906): mac-c sat on ee7099a for hours — a torn read
 # recorded at 00:17 by an updater that never cleared `failed` after a stage that
 # landed; every new release's doctor (the first with a key row) called it a new
 # FAIL, rolled back, and skipped that sha until stable moved again.
@@ -1055,7 +1055,7 @@ drill_codesign_identity_switch() {
   SECS=$(since "$t0")
 }
 
-# runtime-gc-admin-tree (#3248): mini2's admin verkyyi (never taken over) had a
+# runtime-gc-admin-tree (#3248): mac-d's admin frank (never taken over) had a
 # ~/.claude/fleet linked into <root>/fc6b100…; the updater only counted managed
 # logins' trees, pruned fc6b100, and the admin agent's fork/exec of
 # bin/fleet-login-new.sh failed — no login opened, none removed. Now any login's
@@ -1305,7 +1305,7 @@ PY
 }
 
 # spotlight-on (#3402): a managed Mac with a volume indexing and a person's
-# CoreSpotlight knowledge agent at 99% for hours (mini2, 2026-10-11, while every
+# CoreSpotlight knowledge agent at 99% for hours (mac-d, 2026-10-11, while every
 # volume already read «Indexing disabled»). The doctor's row WARNs on both; one
 # `off` (what the machine daemon runs at its start and hourly) turns the volume
 # off and disables + boots out the agent, and the row reads PASS again.
@@ -1314,7 +1314,7 @@ drill_spotlight_on() {
   local sb t0 rc out
   sb="$WORK/spotlight"; mkdir -p "$sb/state" "$sb/bin"; : > "$sb/state/machine.env"
   printf '/ off\n/System/Volumes/Data on\n' > "$sb/vols"
-  printf 'verkyyi 07:13:04 99.0 /System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged\n' > "$sb/ps"
+  printf 'frank 07:13:04 99.0 /System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged\n' > "$sb/ps"
   cat > "$sb/bin/mdutil" <<EOF
 #!/bin/bash
 case "\$*" in
@@ -1335,7 +1335,7 @@ EOF
   grep -q 'warn spotlight' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh has no spotlight row"; return 1; }
   out=$(spot status --check); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'indexing on: /System/Volumes/Data' \
-    && printf '%s' "$out" | grep -q 'spotlightknowledged(verkyyi) 99.0%' \
+    && printf '%s' "$out" | grep -q 'spotlightknowledged(frank) 99.0%' \
     || { WHY="Spotlight on, yet the row is not WARN naming both (rc $rc): $out"; return 1; }
   t0=$(now)
   spot off --tick >/dev/null || { WHY="off --tick failed"; return 1; }

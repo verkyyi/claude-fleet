@@ -12,7 +12,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// Usage-silent alerts (claude-fleet#3204). Login verky ran Claude on two
+// Usage-silent alerts (claude-fleet#3204). Login carol ran Claude on two
 // machines for three days and the hub took none of it: its ~/.claude.json had
 // no /login, so the agent skipped every Claude scan and said nothing. To the
 // hub that looked exactly like a login nobody used. The fleet inventory says

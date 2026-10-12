@@ -99,9 +99,9 @@ has "A second call: home-session codex" "$(sed -n 2p "$WORK/stub.log")" "call:ho
 has "A the first sentence rides in the body file" "$(sed -n 2p "$WORK/stub.log")" "|body=hi there"
 eq "A two calls, nothing attached" "$(wc -l < "$WORK/stub.log" | tr -d ' ')" 2
 : > "$WORK/stub.log"
-FLEET_HOME_SHELL="$WORK/stubshell.sh" FLEET_SHELL_NO_ATTACH=1 sh "$BIN/fleet" claude --node m4 >/dev/null 2>&1
-eq "A --node: the client onto that machine" "$(sed -n 1p "$WORK/stub.log")" "call:m4|attach=1|first=1"
-eq "A --node: the place names it, no body" "$(sed -n 2p "$WORK/stub.log")" "call:home-session claude --node m4|attach=1|first="
+FLEET_HOME_SHELL="$WORK/stubshell.sh" FLEET_SHELL_NO_ATTACH=1 sh "$BIN/fleet" claude --node mac-a >/dev/null 2>&1
+eq "A --node: the client onto that machine" "$(sed -n 1p "$WORK/stub.log")" "call:mac-a|attach=1|first=1"
+eq "A --node: the place names it, no body" "$(sed -n 2p "$WORK/stub.log")" "call:home-session claude --node mac-a|attach=1|first="
 : > "$WORK/stub.log"
 FLEET_HOME_SHELL="$WORK/stubshell.sh" FLEET_SHELL_NO_ATTACH=1 sh "$BIN/fleet" codex --bogus >/dev/null 2>&1; rc=$?
 eq "A a bad option: exit 2" "$rc" 2
@@ -188,7 +188,7 @@ grep -q '^first_home$' "$BIN/fleet-shell.sh" && ok "E first_home is called on st
 cat > "$WORK/fhshadow/fleet-shell.sh" <<EOF
 #!/bin/bash
 printf 'call:%s\n' "\$*" >> "$WORK/stub.log"
-[ -n "\${FLEET_HOME_FAILED:-}" ] && printf '没有机器能开：m4 只协调\n这台 (mini) 没被选：没开承载 → fleet host on\n' > "\$FLEET_HOME_FAILED"
+[ -n "\${FLEET_HOME_FAILED:-}" ] && printf '没有机器能开：mac-a 只协调\n这台 (mini) 没被选：没开承载 → fleet host on\n' > "\$FLEET_HOME_FAILED"
 [ -n "\${FH_MARK:-}" ] && : > "$WORK/fhconf/home-session.first"
 exit 4
 EOF
@@ -204,10 +204,10 @@ first2() {
 }
 out=$(first2)
 eq "E2 refused: tried twice (one retry)" "$(printf '%s\n' "$out" | grep -c '^call:home-session claude --first')" 2
-has "E2 the client's line says it" "$out" "T:display-message -d 60000 你的第一个会话没开出来 · 原因：没有机器能开：m4 只协调 · 下一步："
+has "E2 the client's line says it" "$out" "T:display-message -d 60000 你的第一个会话没开出来 · 原因：没有机器能开：mac-a 只协调 · 下一步："
 f=$(cat "$WORK/fhcache/home-first.failed" 2>/dev/null)
 eq "E2 home-first.failed: 没开出来" "$(printf '%s\n' "$f" | sed -n 1p)" "你的第一个会话没开出来"
-eq "E2 …原因 (the place's message)" "$(printf '%s\n' "$f" | sed -n 2p)" "原因：没有机器能开：m4 只协调"
+eq "E2 …原因 (the place's message)" "$(printf '%s\n' "$f" | sed -n 2p)" "原因：没有机器能开：mac-a 只协调"
 eq "E2 …下一步 (what opens it, then try again)" "$(printf '%s\n' "$f" | sed -n 3p)" "下一步：这台 (mini) 没被选：没开承载 → fleet host on"
 has "E2 the first failure says it retries" "$(printf '%s\n' "$out" | grep '^T:' | head -1)" "秒后自动再试一次"
 [ -e "$WORK/fhcache/home-first.lock" ] && fail "E2 the lock left behind" || ok "E2 the lock released"
@@ -228,7 +228,7 @@ has "E2 …下一步" "$w" "下一步："
 # says nothing failed, until the hub says otherwise or
 # FLEET_HOME_FIRST_OPENING_MAX runs out; a stale line (or failed) is the old two tries
 mkdir -p "$WORK/fhg"
-acct() { printf '#ts\037%s\n#account\037%s\0375\037mini2\037verkyyi\037%s\n' "$(date +%s)" "$1" "$2" > "$WORK/fhg/hub_repos"; }
+acct() { printf '#ts\037%s\n#account\037%s\0375\037mac-d\037dave\037%s\n' "$(date +%s)" "$1" "$2" > "$WORK/fhg/hub_repos"; }
 acct opening "$(date +%s)"
 out=$(first2 FLEET_STATUS_G="$WORK/fhg" FLEET_HOME_FIRST_OPENING_MAX=3)
 eq "E3 opening: held on the hub's word (3 more tries), then the old two" "$(printf '%s\n' "$out" | grep -c '^call:home-session claude --first')" 5

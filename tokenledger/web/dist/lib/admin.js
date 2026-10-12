@@ -80,7 +80,7 @@ export const credKey = (c) => `${c.provider}/${c.account}`;
  * credential's, from its id_token) goes on that card first (claude-fleet#2127:
  * a second Codex account broke the guess below). The rest is by label, which
  * is whatever the operator typed at import — "gmail" for
- * verky.yi@gmail.com, "default" for the one Codex login — so it is matched to
+ * carol.yi@gmail.com, "default" for the one Codex login — so it is matched to
  * an account of the SAME provider in three passes (claude-fleet#2104: four
  * real subscriptions showed as eight cards beside their own credentials):
  *   1. exactly: label, display label, e-mail, its local part or the uuid;
@@ -383,7 +383,7 @@ export function loginOwners(users) {
 }
 
 /** loginPairs is a person's machine·login pairs as the pages print them
- *  (claude-fleet#3302): `macmini · verky`, its state, 家 on the home, and
+ *  (claude-fleet#3302): `mac-c · carol`, its state, 家 on the home, and
  *  the machine's kind. One login is never the person's "account name". */
 export function loginPairs(u) {
   return ((u && u.logins) || []).map((l) => ({
@@ -393,7 +393,7 @@ export function loginPairs(u) {
   }));
 }
 
-/** loginPairText is one pair as a line: `macmini · verky (active, 家, 服务节点)`. */
+/** loginPairText is one pair as a line: `mac-c · carol (active, 家, 服务节点)`. */
 export function loginPairText(p) {
   return `${p.machine} · ${p.login} (${[p.stateText, ...(p.home ? [t('ui.usr.home')] : []), p.kindText].join(', ')})`;
 }

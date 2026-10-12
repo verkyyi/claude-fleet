@@ -1185,7 +1185,7 @@ elif [ "$COPY" = 1 ]; then
 fi
 
 # --- docprev (issue #2415) -----------------------------------------------------
-# Not gated on skills/ changing: the m4 server outlived the install that replaced it.
+# Not gated on skills/ changing: the mac-a server outlived the install that replaced it.
 dp_sh="$CDIR/skills/doc-preview/share.sh"
 if [ -x "$dp_sh" ] && [ -d "$HOME/.cache/claude-doc-preview" ]; then
   if [ "$DRY" = 1 ]; then

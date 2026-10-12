@@ -79,8 +79,8 @@ cat > "$SB/fleet-connect.py" <<'EOF'
 #!/usr/bin/env python3
 import json, sys
 if "--pick" in sys.argv:
-    print(json.dumps({"machine": "m5", "hostname": "macmini", "reason": "last", "login": "verk",
-                      "machines": [{"alias": "m5", "hostname": "macmini"}]}))
+    print(json.dumps({"machine": "mac-b", "hostname": "mac-c", "reason": "last", "login": "bob",
+                      "machines": [{"alias": "mac-b", "hostname": "mac-c"}]}))
 sys.exit(0)
 EOF
 chmod +x "$SB/fleet-connect.py"
@@ -106,8 +106,8 @@ exit 0
 EOF
 chmod +x "$SHIM/ssh"
 export FLEET_REMOTE_SSH_CMD="$SHIM/ssh"
-printf '{"sessions": [], "nodes": [{"machine_name": "macmini", "availability": "online", "sessions": 0, "observed_at": "2026-10-06T10:00:00Z"}]}\n' > "$WORK/sessions.json"
-export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=verk
+printf '{"sessions": [], "nodes": [{"machine_name": "mac-c", "availability": "online", "sessions": 0, "observed_at": "2026-10-06T10:00:00Z"}]}\n' > "$WORK/sessions.json"
+export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=bob
 
 out=$("$SB/fleet" 2>"$WORK/up.err"); rc=$?
 [ "$rc" = 0 ] && [ "$out" = "$SESS" ] || { printf 'FAIL: the client did not start (rc %s): %s\n' "$rc" "$(cat "$WORK/up.err")" >&2; exit 1; }

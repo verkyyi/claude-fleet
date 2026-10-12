@@ -248,7 +248,7 @@ if [ "$cmd" = line ]; then
   # 2) the fallback — a HEADING-style section: `## 上线证据` with the line UNDER it
   # (issue #841). /fleet-epic-plan wrote that shape until #840 unified the write
   # side on the labelled line, and those members are already filed: on 2026-09-20
-  # all 8 members of the two live EPICs on 24haowan-monorepo had it, so every one
+  # all 8 members of the two live EPICs on acme-monorepo had it, so every one
   # of them read as 无证据. Read it back rather than asking the operator to rewrite
   # bodies. Blank lines under the heading are skipped; the next heading (or the end
   # of the body) ends the section and, with nothing in it, is still exit 1 — never

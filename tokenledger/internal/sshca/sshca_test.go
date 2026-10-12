@@ -86,7 +86,7 @@ func TestSignPrincipalsValidityKeyID(t *testing.T) {
 	if err := checker.CheckCert("wangxiaoming", pc); err != nil {
 		t.Fatalf("sshd-style check refused a fresh certificate: %v", err)
 	}
-	if err := checker.CheckCert("verkyyi", pc); err == nil {
+	if err := checker.CheckCert("erin", pc); err == nil {
 		t.Fatal("certificate admitted a login that is not its principal")
 	}
 	checker.Clock = func() time.Time { return now.Add(12*time.Hour + time.Second) }
@@ -180,7 +180,7 @@ func TestSignPeer(t *testing.T) {
 	ca := newCA(t)
 	k, _ := userKey(t)
 	now := time.Date(2026, 10, 5, 8, 0, 0, 0, time.UTC)
-	iss, err := ca.SignPeer(PeerRequest{Key: k, Source: "verk@m5", Target: "verk@m4", Purpose: "view", Login: "verk", TTL: time.Hour}, now)
+	iss, err := ca.SignPeer(PeerRequest{Key: k, Source: "carol@mac-b", Target: "carol@mac-a", Purpose: "view", Login: "carol", TTL: time.Hour}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestSignPeer(t *testing.T) {
 	if got := time.Unix(int64(c.ValidBefore), 0).Sub(now); got != PeerTTL {
 		t.Fatalf("lives %v; want PeerTTL (asked an hour)", got)
 	}
-	if c.KeyId != "peer:verk@m5>verk@m4:view" || len(c.ValidPrincipals) != 1 || c.ValidPrincipals[0] != "verk" {
+	if c.KeyId != "peer:carol@mac-b>carol@mac-a:view" || len(c.ValidPrincipals) != 1 || c.ValidPrincipals[0] != "carol" {
 		t.Fatalf("key id %q principals %v", c.KeyId, c.ValidPrincipals)
 	}
 	if _, ok := c.Permissions.Extensions["permit-agent-forwarding"]; ok {
@@ -197,7 +197,7 @@ func TestSignPeer(t *testing.T) {
 	if _, ok := c.Permissions.Extensions["permit-pty"]; !ok {
 		t.Fatal("no pty: a remote view could not attach")
 	}
-	short, _ := ca.SignPeer(PeerRequest{Key: k, Source: "a", Target: "b", Purpose: "move", Login: "verk", TTL: 30 * time.Second}, now)
+	short, _ := ca.SignPeer(PeerRequest{Key: k, Source: "a", Target: "b", Purpose: "move", Login: "carol", TTL: 30 * time.Second}, now)
 	if got := short.ValidBefore.Sub(now); got != 30*time.Second {
 		t.Fatalf("asked 30s, lives %v", got)
 	}

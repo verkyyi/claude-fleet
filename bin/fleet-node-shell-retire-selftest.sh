@@ -47,7 +47,7 @@ fl() {
         FLEET_NODE_STATE="$st" FLEET_NODE_RUNTIME="$T/no-runtime" FLEET_CLIENT_UPDATED=1 \
         ${FL_ENV:-} sh "$FLEET" "$@" </dev/null 2>&1); rc=$?
 }
-for args in "" "m4"; do
+for args in "" "mac-a"; do
   # shellcheck disable=SC2086  # the words are the command line
   fl "$T/managed" $args
   [ "$rc" = 2 ] && ok "fleet $args → the client's road (rc 2: no terminal here)" || bad "fleet $args → rc $rc: $out"
@@ -133,7 +133,7 @@ rt --login "$ME" --if-idle
 [ "$rc" = 0 ] && ok "--if-idle once nothing runs: rc 0" || bad "--if-idle idle rc $rc: $out"
 
 # the fleet's header comments an older retire left without their hook (issue #2991,
-# macmini's guest logins): the same rule the daemon's status counts takes them out
+# mac-c's guest logins): the same rule the daemon's status counts takes them out
 cat > "$H/.zshrc" <<'EOF'
 export PATH="$HOME/.local/bin:$PATH"
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-entry.sh — the entry port's ForceCommand (issue #3071, EPIC #3067 C5,
-# 共同约定 4): what a connection to `<name>.cf.24haowan.com:22022` runs. It is a
+# 共同约定 4): what a connection to `<name>.cf.example.com:22022` runs. It is a
 # DISPATCH, not a limit — sshd runs it as the person's own login, with their
 # shell, and a command goes on exactly as it would on port 22:
 #

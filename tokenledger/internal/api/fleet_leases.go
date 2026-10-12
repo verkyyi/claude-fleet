@@ -55,7 +55,7 @@ func (s *Server) leaseClock() time.Time {
 }
 
 // nodeLabel is how a holder is named to the node that lost: the machine's
-// first hostname label ("m5" for "m5.local").
+// first hostname label ("mac-b" for "mac-b.local").
 func nodeLabel(hostname string) string {
 	if i := strings.IndexByte(hostname, '.'); i > 0 {
 		return hostname[:i]

@@ -662,9 +662,9 @@ func TestUsage_UnknownDimensionIsRejected(t *testing.T) {
 // WHICH machine to go fix.
 func TestLimits_UnavailableCarriesTheEndpointsOwnReason(t *testing.T) {
 	h := newHarness(t)
-	tok := h.enroll(t, "macmini")
+	tok := h.enroll(t, "mac-e")
 
-	batch := batchFor("acct-a", "macmini", []string{"r1"}, "/a")
+	batch := batchFor("acct-a", "mac-e", []string{"r1"}, "/a")
 	batch.LimitsUnavailable = "the local OAuth token has expired; it refreshes when Claude Code next runs"
 	if resp := h.push(t, tok, batch); resp.StatusCode != 200 {
 		t.Fatalf("HTTP %d", resp.StatusCode)
@@ -678,7 +678,7 @@ func TestLimits_UnavailableCarriesTheEndpointsOwnReason(t *testing.T) {
 	if view.Available {
 		t.Fatal("available = true with no snapshot")
 	}
-	if !strings.Contains(view.Reason, "macmini") {
+	if !strings.Contains(view.Reason, "mac-e") {
 		t.Errorf("reason %q does not name the endpoint to go fix", view.Reason)
 	}
 	if !strings.Contains(view.Reason, "expired") {
@@ -712,9 +712,9 @@ func TestLimits_NoReasonReportedFallsBackToTheGenericMessage(t *testing.T) {
 // plumbing exists to replace.
 func TestIngest_LaterBatchesDoNotEraseTheLimitsReason(t *testing.T) {
 	h := newHarness(t)
-	tok := h.enroll(t, "macmini")
+	tok := h.enroll(t, "mac-e")
 
-	first := batchFor("acct-a", "macmini", []string{"c1"}, "/a")
+	first := batchFor("acct-a", "mac-e", []string{"c1"}, "/a")
 	first.LimitsUnavailable = "the local OAuth token has expired"
 	if resp := h.push(t, tok, first); resp.StatusCode != 200 {
 		t.Fatalf("HTTP %d", resp.StatusCode)
@@ -722,7 +722,7 @@ func TestIngest_LaterBatchesDoNotEraseTheLimitsReason(t *testing.T) {
 
 	// The rest of the same scan: no limits verdict, just more events.
 	for i := 2; i <= 4; i++ {
-		rest := batchFor("acct-a", "macmini", []string{fmt.Sprintf("c%d", i)}, "/a")
+		rest := batchFor("acct-a", "mac-e", []string{fmt.Sprintf("c%d", i)}, "/a")
 		if resp := h.push(t, tok, rest); resp.StatusCode != 200 {
 			t.Fatalf("chunk %d: HTTP %d", i, resp.StatusCode)
 		}
@@ -736,7 +736,7 @@ func TestIngest_LaterBatchesDoNotEraseTheLimitsReason(t *testing.T) {
 	if !strings.Contains(view.Reason, "expired") {
 		t.Fatalf("reason = %q; the later chunks erased what the first one reported", view.Reason)
 	}
-	if !strings.Contains(view.Reason, "macmini") {
+	if !strings.Contains(view.Reason, "mac-e") {
 		t.Errorf("reason = %q; it no longer names the machine to go fix", view.Reason)
 	}
 }

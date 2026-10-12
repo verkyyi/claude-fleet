@@ -185,7 +185,7 @@ func (f *Fetcher) get(ctx context.Context, rel string, max int64) ([]byte, error
 // The manifest and its signature are two reads, and the hub resolves each
 // through <sha>/current on its own: a build or reseal of the same sha landing
 // between them hands back a manifest of one build and the signature of another,
-// which fails the check with the right key (claude-fleet#2843: macmini, 341ae18,
+// which fails the check with the right key (claude-fleet#2843: mac-c, 341ae18,
 // right after stable moved). So a failed check reads the pair once more; a key
 // that really differs fails both times.
 func (f *Fetcher) Manifest(ctx context.Context, sha string) (*Manifest, []byte, string, error) {

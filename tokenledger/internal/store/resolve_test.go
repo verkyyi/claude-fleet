@@ -489,10 +489,10 @@ func TestResolveCredentialLabel(t *testing.T) {
 		}
 	}
 	add("u-icloud", "claude", "ylianghui@icloud.com", "Lee-ICLOUD")
-	add("u-gmail", "claude", "verky.yi@gmail.com", "Lee")
-	add("u-24h", "claude", "verky@24helpful.com", "Lee")
+	add("u-gmail", "claude", "erin.yi@gmail.com", "Lee")
+	add("u-24h", "claude", "erin@24helpful.com", "Lee")
 	add("u-gu", "claude", "ly297@georgetown.edu", "Lee")
-	add("codex:account:a0", "codex", "verky.yi@gmail.com", "Codex account")
+	add("codex:account:a0", "codex", "erin.yi@gmail.com", "Codex account")
 	add("codex:local", "codex", "", "Codex (local usage)")
 	add("win_cf27f64c872e47f0", "claude", "", "")
 	for _, tc := range []struct{ source, label, want string }{
@@ -500,7 +500,7 @@ func TestResolveCredentialLabel(t *testing.T) {
 		{"claude", "gmail", "u-gmail"},
 		{"claude", "24helpful", "u-24h"},
 		{"claude", "ly297", "u-gu"},
-		{"claude", "Verky.Yi@gmail.com", "u-gmail"},
+		{"claude", "Erin.Yi@gmail.com", "u-gmail"},
 		{"claude", "lee-icloud", "u-icloud"},
 		{"claude", "lee", ""},                  // three accounts wear it
 		{"claude", "win_cf27f64c872e47f0", ""}, // a stand-in is never the answer

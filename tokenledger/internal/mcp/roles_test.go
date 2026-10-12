@@ -21,7 +21,7 @@ func TestRunUser_ScopedToLogin(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 	s := &mcpServer{api: &api.Server{Store: st, Pricing: pricing.Default()}}
-	for _, who := range []struct{ acct, ep, login string }{{"acct-a", "mini", "verkyyi"}, {"acct-b", "box", "alice"}} {
+	for _, who := range []struct{ acct, ep, login string }{{"acct-a", "mini", "frank"}, {"acct-b", "box", "alice"}} {
 		id := model.Identity{AccountUUID: who.acct, Email: who.acct + "@example.com", Hostname: who.ep}
 		if err := st.UpsertAccount(id, "max", "default_claude_max_20x"); err != nil {
 			t.Fatal(err)
@@ -47,7 +47,7 @@ func TestRunUser_ScopedToLogin(t *testing.T) {
 	if len(rows) != 1 || rows[0].OSUser != "alice" || rows[0].AccountUUID != "" {
 		t.Errorf("list_sessions as alice = %+v", rows)
 	}
-	if _, err := s.runUser(&api.UserLogins{Login: "alice"}, "get_session", map[string]any{"session_id": "s-verkyyi"}); err == nil {
+	if _, err := s.runUser(&api.UserLogins{Login: "alice"}, "get_session", map[string]any{"session_id": "s-frank"}); err == nil {
 		t.Error("get_session of someone else's session answered")
 	}
 	if _, err := s.runUser(&api.UserLogins{Login: "alice"}, "get_session", map[string]any{"session_id": "s-alice"}); err != nil {

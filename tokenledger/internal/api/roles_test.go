@@ -65,11 +65,11 @@ const (
 	rolesUntil = "2026-08-31T15:00:00Z"
 )
 
-// rolesHarness: a full hub, an admin (verkyyi) and a user (alice, machine
+// rolesHarness: a full hub, an admin (ivan) and a user (alice, machine
 // login alice-mac), usage from both on two subscriptions.
 func rolesHarness(t *testing.T) (h *ghHarness, admin, user *http.Cookie) {
 	t.Helper()
-	h = newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h = newGitHubHarnessWith(t, fullServer, "ivan")
 	h.addUser(t, ghAlice)
 	if err := h.srv.Store.UpsertHubUser(store.HubUser{GitHubID: ghAlice.ID, Login: ghAlice.Login,
 		Role: store.RoleUser, MachineLogin: aliceLogin, AddedBy: "gh:100"}); err != nil {
@@ -109,7 +109,7 @@ func rolesHarness(t *testing.T) (h *ghHarness, admin, user *http.Cookie) {
 			t.Fatalf("push %s: %d", label, resp.StatusCode)
 		}
 	}
-	push("mini", "acct-a", "verkyyi", "s-admin-1", "s-admin-2")
+	push("mini", "acct-a", "ivan", "s-admin-1", "s-admin-2")
 	push("alicebox", "acct-b", aliceLogin, "s-alice")
 	// alice-mac is hers on alicebox: what adoption records once the
 	// machine's agent runs as her mapped login (claude-fleet#2514).
@@ -250,10 +250,10 @@ func TestRoleScope_UserSeesOwnRows(t *testing.T) {
 	var page struct {
 		Login string `json:"os_user"`
 	}
-	_, b = rolesGet(t, h, user, "/v1/user?user=verkyyi"+rng)
+	_, b = rolesGet(t, h, user, "/v1/user?user=ivan"+rng)
 	_ = json.Unmarshal(b, &page)
 	if page.Login != aliceLogin {
-		t.Errorf("user /v1/user?user=verkyyi answered %q; want their own page", page.Login)
+		t.Errorf("user /v1/user?user=ivan answered %q; want their own page", page.Login)
 	}
 
 	var m Me
@@ -285,7 +285,7 @@ func TestRoleScope_NoMachineLoginSeesNothing(t *testing.T) {
 func TestRoleScope_LiveFilteredToLogin(t *testing.T) {
 	s := &Server{}
 	snap := Snapshot{Sessions: []LiveSession{
-		{SessionID: "a", Account: "acct-a", OSUser: "verkyyi", InputTokens: 5},
+		{SessionID: "a", Account: "acct-a", OSUser: "ivan", InputTokens: 5},
 		{SessionID: "b", Account: "acct-b", ProfileID: "p", OSUser: aliceLogin, InputTokens: 7},
 	}}
 	got := s.FilterLiveFor(snap, "all", "", &UserLogins{Login: aliceLogin})
@@ -340,7 +340,7 @@ func TestRoleScope_FleetToolsEachTrimmed(t *testing.T) {
 		}
 	}
 
-	// Two people, two machines: verkyyi@mini and alice@alicebox.
+	// Two people, two machines: ivan@mini and alice@alicebox.
 	at := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	raise := func(kind, subject string, detail any) {
 		b, _ := json.Marshal(detail)
@@ -348,7 +348,7 @@ func TestRoleScope_FleetToolsEachTrimmed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	raise(store.AlertNodeLost, "ep_mini", map[string]any{"endpoint_id": "ep_mini", "hostname": "mini", "os_user": "verkyyi"})
+	raise(store.AlertNodeLost, "ep_mini", map[string]any{"endpoint_id": "ep_mini", "hostname": "mini", "os_user": "ivan"})
 	raise(store.AlertNodeLost, "ep_alicebox", map[string]any{"endpoint_id": "ep_alicebox", "hostname": "alicebox", "os_user": aliceLogin})
 	raise(store.AlertLeaseConflict, "o/r#1", leaseConflict{Repo: "o/r", Issue: 1,
 		Holder: leaseConflictSide{EndpointID: "ep_mini"}, Reporter: leaseConflictSide{EndpointID: "ep_gone"}})

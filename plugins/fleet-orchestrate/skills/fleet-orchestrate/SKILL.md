@@ -91,7 +91,7 @@ the HOW of each rule.
 | a question, not work (rule 5) | answer it. |
 
 **A title is the issue's use, from the person's side** (issue #2545): one sentence of
-what is wrong or wanted — 「每日推送没跑成」「mini2 开不了会话」 — at most 20 汉字, no
+what is wrong or wanted — 「每日推送没跑成」「mac-d 开不了会话」 — at most 20 汉字, no
 script name, flag or `snake_name`. The worker's window and its sidebar row are named
 after it (the part before the first 「：」, technical tokens dropped), and a row has room
 for ~9 glyphs; the mechanism, the script, the error line go in the body.

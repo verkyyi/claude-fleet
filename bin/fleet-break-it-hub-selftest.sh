@@ -440,7 +440,7 @@ PY
 }
 
 # A node's own hub writes with the person's certificate lapsed (issue #3106):
-# the steward on macmini could not reap three finished workers on mini2 — the
+# the steward on mac-c could not reap three finished workers on mac-d — the
 # write door took only a viewer token or the person's 12-hour `fleet login`
 # certificate, and nothing on a node renews that. Here a sandbox login holds an
 # EXPIRED certificate and no viewer token; fleet_hub_reap must still land, by the
@@ -1096,7 +1096,7 @@ drill_machine_agent_wrong_login() {
 }
 
 # A fleet whose tmux server is gone — an old login's per-repo fleet still
-# reported to the hub (2026-10-08 m5, fleet-24haowan-monorepo) — took a home
+# reported to the hub (2026-10-08 mac-b, fleet-globex-monorepo) — took a home
 # start, answered UNKNOWN and never tried the next candidate (issue #2477).
 drill_place_server_down() {
   CAP=120; local t0 lbl out rc gohalf
@@ -1133,7 +1133,7 @@ drill_place_server_down() {
 }
 
 # A file dropped into the writing area on one computer, the session opened on
-# another (2026-10-07 #2392: a MacBook screenshot, the session on mini2): the
+# another (2026-10-07 #2392: a MacBook screenshot, the session on mac-d): the
 # issue named the MacBook's path, the worker could not read it (issue #2393).
 drill_attach_cross_machine() {
   CAP=120; local t0 d="$WORK/attach" out rc gohalf
@@ -1210,7 +1210,7 @@ drill_pool_admit_phantoms() {
 }
 
 # guide-admission-room (issue #3472): a newcomer's FIRST window — the onboarding
-# guide — refused three times by the room estimate on mini2 (pressure normal, 28 %
+# guide — refused three times by the room estimate on mac-d (pressure normal, 28 %
 # free, floor 15 %, «room for 0 more at ~960 MB»), and the stop sat in a file.
 # For real on a sandbox state dir with stubbed readings (16000 MB, 18 % free,
 # ~1200 MB a session ⇒ room 0, above the floor): an ordinary spawn is held, the
@@ -1246,11 +1246,11 @@ drill_guide_admission_room() {
   WHAT="room 0、压力正常、在保底线之上：普通会话照拦，新手引导放行，压力 warn 仍拦；三次没开口写 onboard.stuck 并发出 onboard-stuck 事件"
 }
 
-# admit-room-advice (issue #3479): the newcomer's SECOND ordinary session on mini2
+# admit-room-advice (issue #3479): the newcomer's SECOND ordinary session on mac-d
 # (drill 35) — pressure normal, 25 % free, floor 15 %, «room for 0 more at ~882 MB
 # each»: the hysteresis an earlier hold left and a just-opened window's reservation
 # took the one-more estimate to 0 while 757 MB sat above the floor. For real, on a
-# sandbox state dir with mini2's numbers (16384 MB, agents of 294 MB × 3 = 882,
+# sandbox state dir with mac-d's numbers (16384 MB, agents of 294 MB × 3 = 882,
 # admit-held + one confirmed reservation): the spawn gate admits and notes it, the
 # capacity beat tells the hub room 1 (not «full»), a second reservation, warn
 # pressure and the floor still hold, FLEET_ADMIT_ROOM=hold gives the old refusal.
@@ -1266,7 +1266,7 @@ drill_admit_room_advice() {
             FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 FLEET_MACHINE_MAX_SESSIONS=0 "$@" 2>&1; }
   setup
   out=$(adm FLEET_ADMIT_ROOM=hold bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
-  case "$out" in *'pressure normal'*'room for 0 more at ~882 MB'*'|rc=1') ;; *) WHY="the strict rule does not reproduce mini2's refusal: $out"; return 1 ;; esac
+  case "$out" in *'pressure normal'*'room for 0 more at ~882 MB'*'|rc=1') ;; *) WHY="the strict rule does not reproduce mac-d's refusal: $out"; return 1 ;; esac
   setup   # admitted, and its window opened (confirmed) — so it stays reserved
   out=$(adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; rc=\$?; [ \$rc = 0 ] && fleet_admit_confirm >/dev/null; echo \"|rc=\$rc\"")
   [ "$out" = '|rc=0' ] || { WHY="room 0 at normal pressure, 757 MB above the floor + reserved, refused the second session: $out"; return 1; }
@@ -1283,14 +1283,14 @@ drill_admit_room_advice() {
   setup; out=$(A=14 adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
   case "$out" in *'内存紧张'*'|rc=1') ;; *) WHY="below the kept-back floor must still hold: $out"; return 1 ;; esac
   setup; out=$(adm bash "$BIN/fleet-control-read.sh" capacity)
-  case "$out" in *'"admit":true'*'"room":2}'*) ;; *) WHY="the capacity beat under mini2's reading must say admit:true room 2 (the hub reads room < 1 as full): $out"; return 1 ;; esac
+  case "$out" in *'"admit":true'*'"room":2}'*) ;; *) WHY="the capacity beat under mac-d's reading must say admit:true room 2 (the hub reads room < 1 as full): $out"; return 1 ;; esac
   grep -q '^func TestClientPlaceNamedFullSaysPinned(' "$ROOT/tokenledger/internal/api/fleet_place_fallback_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestClientPlaceNamedFullSaysPinned is not in fleet_place_fallback_test.go"; return 1; }
   SECS=$(since "$t0")
-  WHAT="mini2 的数（25% 空闲、保底 15%、约 882 MB/会话、残留 hold + 1 个刚开的窗口）：普通第二个会话放行并记下；容量拍子报 room 2；两个还在开的 spawn、压力 warn、低于保底线仍拦；FLEET_ADMIT_ROOM=hold 复现原拒绝"
+  WHAT="mac-d 的数（25% 空闲、保底 15%、约 882 MB/会话、残留 hold + 1 个刚开的窗口）：普通第二个会话放行并记下；容量拍子报 room 2；两个还在开的 spawn、压力 warn、低于保底线仍拦；FLEET_ADMIT_ROOM=hold 复现原拒绝"
 }
 
-# admit-open-window-twice (issue #3487): after #3480 mini2 still refused a
+# admit-open-window-twice (issue #3487): after #3480 mac-d still refused a
 # newcomer's FIRST ordinary session (drill 36, 2026-10-12T04:02:09Z): pressure
 # normal, 29 % free, «room for 0 more at ~822 MB each: 4751 MB available, 2457 MB
 # kept back, 3 admitted not yet counted» — 4751 − 2457 − 3 × 822 = −172. The three

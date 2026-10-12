@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // GitHub OIDC → Aliyun STS → ACK short-lived kubeconfig (EPIC #1982 C1, issue #1983).
 //
-// Ported from 24haowan-monorepo's .github/actions/prod-kubeconfig/oidc.js. Three
+// Ported from acme-monorepo's .github/actions/prod-kubeconfig/oidc.js. Three
 // steps, Node's standard library only (ubuntu-latest has node 20; no aliyun CLI):
 //   ① ask GitHub for this job's OIDC token (`permissions: id-token: write`); its
 //      sub is `repo:verkyyi/claude-fleet:environment:prod` only for a job in the
@@ -16,7 +16,7 @@
 // No token, STS or certificate is ever printed.
 //
 // Usage:
-//   node oidc.js --role-arn <arn> --provider-arn <arn> --cluster <id> --out <file> [--minutes 60] [--region cn-shenzhen]
+//   node oidc.js --role-arn <arn> --provider-arn <arn> --cluster <id> --out <file> [--minutes 60] [--region region-a]
 //   node oidc.js --selftest
 'use strict';
 

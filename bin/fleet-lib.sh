@@ -361,7 +361,7 @@ fleet_each_conf() {
       sess=${d%/}; sess=${sess##*/}
       # A name with a `.` is never a fleet (issue #2430): fleet-up turns `.` into
       # `-` (tmux session names hold none), so `fleets/fleet.ghost-bak-<stamp>/`
-      # is somebody's backup — on m5 it was reported to the hub as a fleet.
+      # is somebody's backup — on mac-b it was reported to the hub as a fleet.
       case "$sess" in *.*) continue ;; esac
       # The machine's own config stranded under fleets/ by the pre-#1887 migrator
       # is not a fleet (issue #2059) — `fleet-conf.sh migrate` puts it back — and
@@ -545,7 +545,7 @@ fleet_norm_repo() {
 # they picked. tmux then holds every window under two session names, and asked
 # which session a window, pane or client is in (a bare session_name from a
 # `-t @w` / `-t %p` / `$TMUX_PANE` context, or with no -t at all) it answers with
-# the MOST RECENTLY ACTIVE of them — a shell typing on m4 would make every hook
+# the MOST RECENTLY ACTIVE of them — a shell typing on mac-a would make every hook
 # in every worker pane resolve to its view session. Two rails:
 #   • FLEET_SESSION_FMT — the fleet's own name from any context: a grouped
 #     session's group is named after the fleet session it was grouped onto, so the
@@ -2076,8 +2076,8 @@ fleet_forge_of() {
 # fleet_repo_name_of <addr|ns/name> → the repo's two-part name: GitHub's own
 # owner/name; elsewhere the path's last two parts (`gitlab.com/g/sub/p` → `sub/p`).
 # A path of one part — or a home path (`~`), whose folders name no owner — takes
-# the host's first label as its namespace (`ssh://macmini/~/repos/demo.git` →
-# `macmini/demo`), `local` for a local path. A bare name passes through
+# the host's first label as its namespace (`ssh://mac-c/~/repos/demo.git` →
+# `mac-c/demo`), `local` for a local path. A bare name passes through
 # fleet_norm_repo. Nothing printed when there is no name to take.
 fleet_repo_name_of() {
   local p n ns q
@@ -2382,7 +2382,7 @@ fleet_socket() { printf '%s' "$1"; }
 # an ssh whose network froze, a hung control client) pins it there for good, and
 # every `tmux -L <label> …` — ls, has-session, new-session, fleet-up's — prints
 # `server exited unexpectedly` and fails. tmux never replaces a socket it can
-# connect to, so nothing recovers until the file is removed (2026-10-05, m4). A
+# connect to, so nothing recovers until the file is removed (2026-10-05, mac-a). A
 # socket NOBODY listens on is not this: tmux unlinks that one itself.
 #
 # fleet_socket_path <label> — the -L socket's path, as tmux builds it.
@@ -2663,7 +2663,7 @@ fleet_guide_open() {
 # collector's clock, in its own process group: fleet_timebox kills the PHASE's
 # group at FLEET_COLLECT_GUIDE_BUDGET (30 s), and a cold open — claude's start on
 # a busy node — can take longer. A killed open left no window, no try counted and
-# no stop written: the same kill every tick, a bare shell for good (fleet-linux-0,
+# no stop written: the same kill every tick, a bare shell for good (linux-a,
 # 2026-10-11). Its output goes to global/onboard.open.log; a failure leaves
 # global/onboard.openfail for the next tick (fleet_guide_why), never a stop —
 # the budget decides when to stop.
@@ -2842,7 +2842,7 @@ fleet_server_tmpdir() {
 }
 
 # Where claude and tmux live when PATH does not say (issue #1774, #1784). A shell
-# started by ssh or a daemon on m4 had neither ~/.local/bin (Claude Code's native
+# started by ssh or a daemon on mac-a had neither ~/.local/bin (Claude Code's native
 # install) nor /opt/homebrew/bin (tmux) on PATH, so `exec claude` failed and a
 # restore parked at a shell twice. FLEET_TOOL_DIRS is the fixed search order after
 # PATH; a selftest points it at a sandbox.
@@ -3804,7 +3804,7 @@ fleet_primary_fresh() {
 # another window (migrate, move, restore) as a BOOTSTRAP value: only while the
 # new agent has said nothing yet (no @agent_status_ts), checked and written in
 # one tmux command, so a carried `looping` never lands on top of the agent's own
-# first report (issue #2537: two sessions migrated from mini2 read looping while
+# first report (issue #2537: two sessions migrated from mac-d read looping while
 # they worked). Labelled `carried`, the lowest rank: any writer replaces it.
 fleet_state_carry() {
   local sock="${1:-}" win="${2:-}" st="${3:-}" now
@@ -5652,7 +5652,7 @@ _fleet_load_per_core() {
 # cgroup's own counters (issue #3542), sampled over <secs> (default 1), or nothing
 # when there is no cgroup CPU limit (a Mac, a VM, `max`) — the caller then reads the
 # load as before. Inside a container /proc/loadavg is the whole HOST's: two idle
-# logins on fleet-linux-0 read 1.4–2.2/core while the pod used 1.1 of 4 cores, 0%
+# logins on linux-a read 1.4–2.2/core while the pod used 1.1 of 4 cores, 0%
 # throttled. Same reading as fleet-doctor.sh's `cpu` row (a /bin/sh script that
 # cannot source this file) — KEEP IN SYNC. FLEET_CPU_STAT_FILE / FLEET_CPU_MAX_FILE
 # point it elsewhere (a selftest).
@@ -6227,7 +6227,7 @@ fleet_retired_dir() { printf '%s' "${FLEET_PULLBACK_RETIRED_DIR:-$FLEET_CONF_DIR
 # fleet_win_retire <window> [<sock>] — mark that window's session as closed by the
 # fleet. Never fails; a window with no @fleet_id has nothing to mark.
 # --- which login a fleet runs under, on the CLIENT (issue #2430) ---------------
-# One person may hold two logins on one machine (m5: verkyyi + verky, #2210), each
+# One person may hold two logins on one machine (mac-b: erin + dave, #2210), each
 # with its own fleet. The hub places a session in either; the client must ssh in
 # AS THE LOGIN THAT HOLDS IT — the far end only finds a worker in its own login's
 # fleets, so the wrong login answers "not live". The map is
@@ -6832,7 +6832,7 @@ fleet_hub_lease() {
   pre=$(fleet_okey_prefix "$sess" "$repo")
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
-  # Name machines the way the sidebar does (FLEET_NODE_ALIASES, `macmini=m5`): the
+  # Name machines the way the sidebar does (FLEET_NODE_ALIASES, `mac-c=mac-b`): the
   # hub only knows a hostname's first label.
   out=$(printf '%s\n' "$out" | head -n1 | awk -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
@@ -6848,7 +6848,7 @@ fleet_hub_lease() {
 }
 
 # fleet_node_is_self <name> — is <name> this machine? `local` / `here`, this
-# host's short name, or its FLEET_NODE_ALIASES alias (`macmini=m5` → m5), any case.
+# host's short name, or its FLEET_NODE_ALIASES alias (`mac-c=mac-b` → mac-b), any case.
 fleet_node_is_self() {
   local n h
   n=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
@@ -6910,7 +6910,7 @@ fleet_hub_place() {
     printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening %s here\n' "$sess" "$what" >&2; return 1; }
   if [ "$num" = scratch ]; then wid="$u"; name=$(printf '%s' "$name" | LC_ALL=C tr -d '[:cntrl:]#')
   else pre=$(fleet_okey_prefix "$sess" "$repo"); wid="$u/${pre}issue-$num"; name=''; fi
-  # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
+  # An alias the operator typed (`mac-b`) is the hub's hostname (`mac-c`).
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   case "$wait" in *[!0-9]*) wait='' ;; esac
@@ -6942,7 +6942,7 @@ fleet_hub_place() {
 
 # fleet_hub_move plan|send [<flag>…] <repo> <worker_id> — move a session to another
 # machine through the hub (issue #1426, EPIC #1419 C7; fleet-move.sh --via hub).
-# Off unless CCQUOTA_FLEET=1. A `--node <m>` flag naming an alias (`m5`) is turned
+# Off unless CCQUOTA_FLEET=1. A `--node <m>` flag naming an alias (`mac-b`) is turned
 # back into the hostname the hub knows; machine names in the answer go through
 # FLEET_NODE_ALIASES, as the sidebar's do. Prints the move command's one line:
 #   plan → `LOCAL <m>\t<reason>` / `REMOTE <m> movable|old\t<reason>` / `REFUSED <code>\t<msg>`
@@ -8368,7 +8368,7 @@ fleet_member_win_name() {
 # parentheses dropped, the technical tokens dropped — a `--flag`, an
 # under_score_name or run of underscores, a backtick; a `fleet-` word prefix and a
 # `.sh`/`.py`/… suffix come off the word they sit on — and no hyphen between a
-# CJK glyph and its neighbour (「入口把home会话放进macmini上」, not
+# CJK glyph and its neighbour (「入口把home会话放进mac-c上」, not
 # 「入口把-home-会话…」). Then fleet_win_name's rules (character set, reserved
 # panel names) and a 24-column clip. Deterministic: a
 # pure function of the title, one perl fork, spawn / bind / reopen only. A title
@@ -8869,7 +8869,7 @@ fleet_session_cost_mb() { local c; c=$(_fleet_session_cost); printf '%s\n' "${c%
 # failed new-window, a warm entry that never came up, a session placed on another
 # machine — and is VOID, deleted on sight. Before this one never went away early:
 # the warm pool's every failing tick left one, three slots kept 3–5 phantoms
-# alive, and mini2 read "room for 0" at 54 % free. And the owner's OWN earlier
+# alive, and mac-d read "room for 0" at 54 % free. And the owner's OWN earlier
 # reservation is not counted against it, nor taken twice (dash-new-session's exec
 # into dash-issue-session, a re-check in the same process): one spawn, one cost.
 _fleet_admit_owner() { printf '%s' "${FLEET_ADMIT_OWNER:-$$}"; }
@@ -8915,7 +8915,7 @@ fleet_admit_reserved() {
 # still running unconfirmed (live), or an in-flight marker (#531) — whichever is
 # more. A confirmed reservation (ok) is a window whose agent is booting or already
 # in the memory reading, so the advice rule (issue #3487) does not charge it a
-# second time: on mini2 (drill 36) the guide and the warm pool's fresh windows
+# second time: on mac-d (drill 36) the guide and the warm pool's fresh windows
 # held three ok reservations — 4751 − 2457 − 3 × 822 < 0 refused a newcomer's
 # first session at normal pressure with 29 % free, all three already in `avail`.
 fleet_admit_pending() {
@@ -9112,7 +9112,7 @@ EOF
 #                    fired (issue #1831).
 # An unreadable probe admits (no reading is not a reason to stop the fleet).
 # The onboarding guide passes the ROOM reading (issue #3472): a newcomer's first
-# window is the one thing the login is for, and on mini2 the per-session cost
+# window is the one thing the login is for, and on mac-d the per-session cost
 # (~960 MB × the reserved ones) read «room for 0 more» at 28 % free with the
 # kernel calling pressure normal — three refusals and the person never met the
 # guide. So with FLEET_ADMIT_GUIDE=1 (dash-raw-session sets it for the pinned
@@ -9122,7 +9122,7 @@ EOF
 # absolute, only the one-more-session estimate is waived. It is bounded: a login
 # has one pinned guide, opened only while none runs. FLEET_ADMIT_GUIDE_PASS=0
 # turns the waiver off.
-# Every spawn gets most of that since #3479: on mini2 (drill 35) a newcomer's
+# Every spawn gets most of that since #3479: on mac-d (drill 35) a newcomer's
 # SECOND ordinary session read «room for 0 more at ~882 MB each» at 25 % free,
 # floor 15 %, pressure normal — and 51 % free right after. The base estimate
 # alone left room for one; what took it to 0 was the hysteresis an earlier hold

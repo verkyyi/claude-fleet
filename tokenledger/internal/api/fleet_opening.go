@@ -28,7 +28,7 @@ import (
 // own install" — but a real create on a Mac runs sysadminctl (minutes), the
 // clone, credential separation and the daemons: the drill of 2026-10-09 read
 // 「about 5s」 for six minutes (claude-fleet#2696). 8 min was still short:
-// macmini's create of drill10100612 (claude-fleet#2908) — record 23:14,
+// mac-c's create of drill10100612 (claude-fleet#2908) — record 23:14,
 // `sysadminctl -addUser` done 23:19 (5 min alone, on every drill run), home
 // with the install and daemons 23:27 — took 13 min and more, so a machine
 // with no history of its own is told 14. A machine that has opened logins
@@ -58,7 +58,7 @@ var openingOverFloor = 8 * time.Minute
 // registered the doors keep saying opening — about openingSettleETA more —
 // and past openingSettle they say failed, naming the step that did not come.
 // Before, active alone read as done: every door went quiet, placement said
-// 「mini2: 没有你的登录」 and nobody said why.
+// 「mac-d: 没有你的登录」 and nobody said why.
 const openingSettleETA = 90
 
 var openingSettle = 10 * time.Minute

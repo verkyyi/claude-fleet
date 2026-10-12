@@ -4,11 +4,11 @@
 # Run it on the computer you ssh FROM (the one running iTerm2), either locally
 # from a checkout:
 #
-#   bash extras/iterm2/install.sh --mini macmini
+#   bash extras/iterm2/install.sh --mini mac-c
 #
 # or from the mini, over the ssh you already have to the laptop:
 #
-#   ssh macbook 'bash -s -- --mini macmini' < ~/.claude/fleet/extras/iterm2/install.sh
+#   ssh macbook 'bash -s -- --mini mac-c' < ~/.claude/fleet/extras/iterm2/install.sh
 #
 # --mini is the ssh alias THIS computer uses to reach the mini. The secret
 # (~/.config/claude-fleet/open.secret there) — and, when run through `bash -s`

@@ -29,7 +29,7 @@
 #   ○ 入口 Nm        hub mode, and the hub has been silent past
 #                    FLEET_HUB_SESSIONS_STALE (fleet_status_hub_lost, #1483)
 #   <ctr> ○          FLEET_STATUS_CONTAINER is set and that container is down
-#   客户端在 m5 上运行  (the client, fleet-shell.sh) this CLIENT runs on m5 over
+#   客户端在 mac-b 上运行  (the client, fleet-shell.sh) this CLIENT runs on mac-b over
 #                    ssh — an iPad / iPhone's way in (issue #1628): `cr=` is
 #                    `<client_tty>:<@fleet_client_remote>`, the option `<tty>|<m>`
 #                    fleet-shell.sh's client_where stamped; drawn first, and only
@@ -371,7 +371,7 @@ status_hub_render() {
 }
 
 # --- The right pane's title (issue #1759): the shell's STAGE server
-# (conf/tmux-shell-stage.conf) draws `m4 <name>` itself and asks here for what
+# (conf/tmux-shell-stage.conf) draws `mac-a <name>` itself and asks here for what
 # the bar used to say after the machine's name — ` · 中转`, `○ 失联 Nm`, `旧` —
 # in hub mode only, and nothing else.
 if [ "$STATUS_PART" = title ]; then

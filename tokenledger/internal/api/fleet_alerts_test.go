@@ -70,13 +70,13 @@ func (n *fakeNode) settle() {
 // row keeps both moments.
 func TestNodeLostRaisedAfter120sAndClearedOnReturn(t *testing.T) {
 	h := newFleetHarness(t)
-	n := connectFakeNode(t, h, "m5", false)
-	n.beat("m5", "verkyyi", machineA)
+	n := connectFakeNode(t, h, "mac-d", false)
+	n.beat("mac-d", "ivan", machineA)
 	// The connect stamps a heartbeat too; wait for the BEAT's (it names the
 	// login), or the sweep below races it.
-	waitFor(t, 3*time.Second, "m5 beat recorded", func() bool {
+	waitFor(t, 3*time.Second, "mac-d beat recorded", func() bool {
 		ns, _ := h.srv.Store.Nodes()
-		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "verkyyi"
+		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "ivan"
 	})
 	n.settle()
 	last := lastBeat(t, h)
@@ -95,11 +95,11 @@ func TestNodeLostRaisedAfter120sAndClearedOnReturn(t *testing.T) {
 	}
 	var d map[string]any
 	_ = json.Unmarshal([]byte(lost[0].Detail), &d)
-	if d["hostname"] == "" || d["os_user"] != "verkyyi" {
+	if d["hostname"] == "" || d["os_user"] != "ivan" {
 		t.Fatalf("node_lost detail does not name the machine: %s", lost[0].Detail)
 	}
 
-	n.beat("m5", "verkyyi", machineA)
+	n.beat("mac-d", "ivan", machineA)
 	waitFor(t, 3*time.Second, "node_lost cleared by the next beat", func() bool {
 		return len(openAlerts(t, h, store.AlertNodeLost)) == 0
 	})
@@ -119,11 +119,11 @@ func TestNodeLostRaisedAfter120sAndClearedOnReturn(t *testing.T) {
 // could not beat to a dead hub are not all lost the moment it is back.
 func TestNodeLostCountsFromHubStart(t *testing.T) {
 	h := newFleetHarness(t)
-	n := connectFakeNode(t, h, "m4", false)
-	n.beat("m4", "verkyyi", machineB)
-	waitFor(t, 3*time.Second, "m4 beat recorded", func() bool {
+	n := connectFakeNode(t, h, "mac-c", false)
+	n.beat("mac-c", "ivan", machineB)
+	waitFor(t, 3*time.Second, "mac-c beat recorded", func() bool {
 		ns, _ := h.srv.Store.Nodes()
-		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "verkyyi"
+		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "ivan"
 	})
 	n.settle()
 	start := lastBeat(t, h).Add(10 * time.Minute) // the hub restarted 10 min later
@@ -160,25 +160,25 @@ func (n *leaseNode) reconnect(t *testing.T, h *harness, issues ...int) {
 	n.show(t, issues...)
 }
 
-// The acceptance test: while m4 was away its issue's lease went to m5. m4
+// The acceptance test: while mac-c was away its issue's lease went to mac-d. mac-c
 // comes back still running it → one lease_conflict naming both sides, and
 // neither lease nor session changes. A conflict seen mid-connection is not a
 // reconnect and raises nothing.
 func TestLeaseConflictOnReconnect(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
-	if code, out := m5.acquire(t, h, 7, false); code != 200 {
-		t.Fatalf("m5 acquire: %d %v", code, out)
+	h, macD, macC := newLeasePair(t)
+	if code, out := macD.acquire(t, h, 7, false); code != 200 {
+		t.Fatalf("mac-d acquire: %d %v", code, out)
 	}
-	m5.show(t, 7)
+	macD.show(t, 7)
 
-	m4.show(t, 7) // same connection: not a reconnect
+	macC.show(t, 7) // same connection: not a reconnect
 	time.Sleep(200 * time.Millisecond)
 	if a := openAlerts(t, h, store.AlertLeaseConflict); len(a) != 0 {
 		t.Fatalf("lease_conflict raised on an ordinary beat: %+v", a)
 	}
 
-	m4.reconnect(t, h, 7)
-	waitFor(t, 3*time.Second, "lease_conflict on m4's reconnect", func() bool {
+	macC.reconnect(t, h, 7)
+	waitFor(t, 3*time.Second, "lease_conflict on mac-c's reconnect", func() bool {
 		return len(openAlerts(t, h, store.AlertLeaseConflict)) == 1
 	})
 	a := openAlerts(t, h, store.AlertLeaseConflict)[0]
@@ -189,40 +189,40 @@ func TestLeaseConflictOnReconnect(t *testing.T) {
 	if err := json.Unmarshal([]byte(a.Detail), &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Holder.WorkerID != m5.wid(7) || c.Holder.Node != "verkyyi@m5" ||
-		c.Reporter.WorkerID != m4.wid(7) || c.Reporter.Node != "verkyyi@m4" {
+	if c.Holder.WorkerID != macD.wid(7) || c.Holder.Node != "ivan@mac-d" ||
+		c.Reporter.WorkerID != macC.wid(7) || c.Reporter.Node != "ivan@mac-c" {
 		t.Fatalf("conflict does not name both sides: %+v", c)
 	}
 	leases, _ := h.srv.Store.Leases(time.Now())
-	if len(leases) != 1 || leases[0].WorkerID != m5.wid(7) {
+	if len(leases) != 1 || leases[0].WorkerID != macD.wid(7) {
 		t.Fatalf("the lease moved: %+v", leases)
 	}
 
 	// A second reconnect with the same conflict adds no row.
-	m4.reconnect(t, h, 7)
+	macC.reconnect(t, h, 7)
 	time.Sleep(200 * time.Millisecond)
 	if all, _ := h.srv.Store.FleetAlerts(0); len(all) != 1 {
 		t.Fatalf("rows after a repeat reconnect = %d, want 1", len(all))
 	}
 
-	// m4's session ends: the sweep sees the two sides agree and clears it.
-	m4.show(t)
-	waitFor(t, 3*time.Second, "m4's empty beat registered", func() bool {
+	// mac-c's session ends: the sweep sees the two sides agree and clears it.
+	macC.show(t)
+	waitFor(t, 3*time.Second, "mac-c's empty beat registered", func() bool {
 		return !reporterShows(mustFleets(t, h), c)
 	})
 	h.srv.NodeAlertTick(time.Now(), time.Now())
 	if a := openAlerts(t, h, store.AlertLeaseConflict); len(a) != 0 {
-		t.Fatalf("lease_conflict still open after m4 stopped showing #7: %+v", a)
+		t.Fatalf("lease_conflict still open after mac-c stopped showing #7: %+v", a)
 	}
 }
 
 // A node reconnecting with the lease it holds itself is no conflict.
 func TestLeaseNoConflictForOwnLease(t *testing.T) {
-	h, _, m4 := newLeasePair(t)
-	if code, out := m4.acquire(t, h, 9, false); code != 200 {
-		t.Fatalf("m4 acquire: %d %v", code, out)
+	h, _, macC := newLeasePair(t)
+	if code, out := macC.acquire(t, h, 9, false); code != 200 {
+		t.Fatalf("mac-c acquire: %d %v", code, out)
 	}
-	m4.reconnect(t, h, 9)
+	macC.reconnect(t, h, 9)
 	time.Sleep(200 * time.Millisecond)
 	if a := openAlerts(t, h, store.AlertLeaseConflict); len(a) != 0 {
 		t.Fatalf("lease_conflict for the holder's own session: %+v", a)

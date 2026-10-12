@@ -14,12 +14,12 @@ import (
 //
 // Two things are recorded here, and both are deliberately NOT the roster:
 //
-//   - A node's KIND — fixed (m5, m4: a machine someone owns) or ephemeral (a
+//   - A node's KIND — fixed (mac-b, mac-a: a machine someone owns) or ephemeral (a
 //     container the hub created, on a SPOT instance the cloud may take back
 //     at any moment). It lives on the endpoint, stamped from the join code the
 //     hub minted for it, so the agent's own word never decides it: a fixed
 //     machine cannot talk itself into the ephemeral weight, and a SPOT pod
-//     cannot claim to be m5. fleet_join_codes.kind carries it until the code
+//     cannot claim to be mac-b. fleet_join_codes.kind carries it until the code
 //     is redeemed.
 //   - The SPOT node's LIFE — fleet_spot_nodes: one row per node the hub
 //     started, from the pod create through join, online, idle, release or

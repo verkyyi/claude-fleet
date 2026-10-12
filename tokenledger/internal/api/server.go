@@ -860,7 +860,7 @@ func (s *Server) routes() *routeMux {
 	mux.Handle("/embed/", badgeGate)
 
 	// The public counter (claude-fleet#1988): the hub's one lifetime total,
-	// readable by anyone while hub.public_meter is on, so 24haowan.com's
+	// readable by anyone while hub.public_meter is on, so example.com's
 	// homepage takes it straight from here instead of through a token.
 	mux.HandleFunc("/meter.json", s.handleMeter)
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)

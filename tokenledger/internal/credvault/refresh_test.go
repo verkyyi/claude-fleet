@@ -23,10 +23,10 @@ func TestProxyRefresherParsesAndClassifies(t *testing.T) {
 		if provider != Codex || form["refresh_token"] != "rt-0" || form["client_id"] != CodexClientID || form["grant_type"] != "refresh_token" {
 			t.Fatalf("form = %v", form)
 		}
-		return ProxyAnswer{Status: 200, Via: "op@m5", Body: []byte(`{"access_token":"at-1","refresh_token":"rt-1","id_token":"id-1","expires_in":3600}`)}, nil
+		return ProxyAnswer{Status: 200, Via: "op@mac-b", Body: []byte(`{"access_token":"at-1","refresh_token":"rt-1","id_token":"id-1","expires_in":3600}`)}, nil
 	}}
 	acc, next, via, err := ok.RefreshVia(context.Background(), Codex, s)
-	if err != nil || via != "op@m5" || acc.AccessToken != "at-1" || acc.IDToken != "id-1" || acc.AccountID != "acct" ||
+	if err != nil || via != "op@mac-b" || acc.AccessToken != "at-1" || acc.IDToken != "id-1" || acc.AccountID != "acct" ||
 		next.RefreshToken != "rt-1" || next.IDToken != "id-1" || acc.ExpiresAt == nil || !acc.ExpiresAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("ok: %+v %+v %q %v", acc, next, via, err)
 	}
@@ -39,10 +39,10 @@ func TestProxyRefresherParsesAndClassifies(t *testing.T) {
 	}
 
 	refused := &ProxyRefresher{Via: func(context.Context, string, map[string]string) (ProxyAnswer, error) {
-		return ProxyAnswer{Status: 403, Via: "op@m4", Body: []byte(`{"error":{"code":"unsupported_country_region_territory"}}`)}, nil
+		return ProxyAnswer{Status: 403, Via: "op@mac-a", Body: []byte(`{"error":{"code":"unsupported_country_region_territory"}}`)}, nil
 	}}
 	_, next, via, err = refused.RefreshVia(context.Background(), Codex, s)
-	if err == nil || errors.Is(err, ErrRefreshUnavailable) || via != "op@m4" || next.RefreshToken != "rt-0" {
+	if err == nil || errors.Is(err, ErrRefreshUnavailable) || via != "op@mac-a" || next.RefreshToken != "rt-0" {
 		t.Fatalf("refused: %v %q %+v", err, via, next)
 	}
 
@@ -58,7 +58,7 @@ func TestProxyRefresherParsesAndClassifies(t *testing.T) {
 	rows, _ := v.Store.CredAuditLog("pool", 10)
 	found := false
 	for _, r := range rows {
-		if r.Action == "refresh" && r.Detail == "ok · refresh_via=op@m5" {
+		if r.Action == "refresh" && r.Detail == "ok · refresh_via=op@mac-b" {
 			found = true
 		}
 	}
@@ -90,7 +90,7 @@ func TestRelayRefresher(t *testing.T) {
 	nodeRuns := 0
 	node := &ProxyRefresher{Now: func() time.Time { return now }, Via: func(context.Context, string, map[string]string) (ProxyAnswer, error) {
 		nodeRuns++
-		return ProxyAnswer{Status: 200, Via: "op@m5", Body: []byte(`{"access_token":"at-node","refresh_token":"rt-node","expires_in":3600}`)}, nil
+		return ProxyAnswer{Status: 200, Via: "op@mac-b", Body: []byte(`{"access_token":"at-node","refresh_token":"rt-node","expires_in":3600}`)}, nil
 	}}
 	r := &RelayRefresher{URL: relay.URL + "/", Pass: func() (string, error) { return "frh1.pass", nil }, Fallback: node,
 		Now: func() time.Time { return now }}
@@ -133,7 +133,7 @@ func TestRelayRefresher(t *testing.T) {
 		before := nodeRuns
 		acc, next, via, err := r.RefreshVia(context.Background(), Codex, s)
 		if err != nil || nodeRuns != before+1 || acc.AccessToken != "at-node" || next.RefreshToken != "rt-node" ||
-			!strings.HasPrefix(via, "op@m5 (relay unavailable: ") {
+			!strings.HasPrefix(via, "op@mac-b (relay unavailable: ") {
 			t.Fatalf("%s: %+v %q %v", name, acc, via, err)
 		}
 	}
@@ -157,7 +157,7 @@ func TestRelayRefresher(t *testing.T) {
 
 	// Claude keeps the node path: the relay route is OpenAI's only.
 	before := nodeRuns
-	if _, _, via, err := r.RefreshVia(context.Background(), Claude, Secret{RefreshToken: "c-rt"}); err != nil || via != "op@m5" || nodeRuns != before+1 {
+	if _, _, via, err := r.RefreshVia(context.Background(), Claude, Secret{RefreshToken: "c-rt"}); err != nil || via != "op@mac-b" || nodeRuns != before+1 {
 		t.Fatalf("claude: %q %v", via, err)
 	}
 

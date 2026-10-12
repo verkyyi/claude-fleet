@@ -42,23 +42,23 @@ test('the machine page is allowed to whoever has either machine list, and is no 
 
 const detail = (over = {}) => ({
   at: ago(0),
-  machine: { hostname: 'macmini.tail435588.ts.net', alias: '', status: 'online', role: 'host' },
-  logins: [{ os_user: '24haowan', status: 'online', sessions: 2, last_heartbeat: ago(5) }],
+  machine: { hostname: 'mac-e.example.ts.net', alias: '', status: 'online', role: 'host' },
+  logins: [{ os_user: 'acme', status: 'online', sessions: 2, last_heartbeat: ago(5) }],
   other_logins: 2, logins_at: ago(5),
-  services: [{ name: 'sms', kind: 'service', login: '24haowan', state: 'running' }], services_at: ago(20),
+  services: [{ name: 'sms', kind: 'service', login: 'acme', state: 'running' }], services_at: ago(20),
   version: { agent: 'prod-341ae18', fleet: 'abc1234', want: 3, reached: 3, release: 'aaaaaaaa1', want_release: 'aaaaaaaa1', at: null },
   load: { now: 4, ncpu: 8, hist: [0.2, 0.4, 0.5], hist_step_sec: 300, at: null },
   mem: { used: 12 * 2 ** 30, total: 16 * 2 ** 30, pressure: 0.75, at: null },
-  sessions: [{ machine_name: 'macmini', os_user: '24haowan', worker: { key: 'issue-1', state: 'working', born: 5 } }],
+  sessions: [{ machine_name: 'mac-e', os_user: 'acme', worker: { key: 'issue-1', state: 'working', born: 5 } }],
   sessions_at: ago(5),
   ...over,
 });
 
 test('detailModel: five blocks, each with its own age; an old node is 时间未知 and 节点太旧，未报', () => {
   const v = detailModel(detail(), NOW);
-  assert.equal(v.name, 'macmini');
-  assert.equal(v.label, 'macmini');
-  assert.deepEqual(v.logins.map((r) => r.login), ['24haowan']);
+  assert.equal(v.name, 'mac-e');
+  assert.equal(v.label, 'mac-e');
+  assert.deepEqual(v.logins.map((r) => r.login), ['acme']);
   assert.equal(v.others, 2, '另有 2 个登录');
   assert.equal(v.services.length, 1);
   assert.equal(v.sessions.length, 1);

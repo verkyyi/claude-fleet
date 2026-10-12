@@ -25,7 +25,7 @@ func setCredential(cmd *exec.Cmd, ra *RunAs) {
 
 // darwinMaxGroups is macOS's NGROUPS_MAX: setgroups(2) answers EINVAL to a
 // longer list, so every command the machine agent started as a login in more
-// groups failed with «fork/exec …: invalid argument» (m4, claude-fleet#2336).
+// groups failed with «fork/exec …: invalid argument» (mac-a, claude-fleet#2336).
 const darwinMaxGroups = 16
 
 // capGroups keeps a supplementary list setgroups(2) accepts on goos: the login's

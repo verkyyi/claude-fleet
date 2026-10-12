@@ -49,8 +49,8 @@ ND="$BIN/fleet_needs_detail.py"
 # ============================================================================
 # A. detail — the one rule
 # ============================================================================
-eq "A: AskUserQuestion's first question" "演练放在 m5 还是只在 m4？" \
-   "$(printf '%s' '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"演练放在 m5 还是只在 m4？","options":[]},{"question":"second"}]}}' | python3 "$ND" payload)"
+eq "A: AskUserQuestion's first question" "演练放在 mac-b 还是只在 mac-a？" \
+   "$(printf '%s' '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"演练放在 mac-b 还是只在 mac-a？","options":[]},{"question":"second"}]}}' | python3 "$ND" payload)"
 eq "A: a permission's tool and command" "Bash: git push origin x" \
    "$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push\n  origin x"}}' | python3 "$ND" payload)"
 eq "A: an edit names its file" "Edit: /a/b.py" "$(printf '%s' '{"tool_name":"Edit","tool_input":{"file_path":"/a/b.py"}}' | python3 "$ND" payload)"
@@ -79,8 +79,8 @@ PANE=$(T display-message -p -t "=$L:" '#{pane_id}')
 # ============================================================================
 st() { TMUX="$SOCK,0,0" TMUX_PANE="$PANE" sh "$BIN/set-claude-state.sh" "$@"; }
 opt() { T display-message -p -t "$PANE" "$1"; }
-printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"演练放在 m5 还是只在 m4？"}]}}' | st busy
-eq "B: PreToolUse AskUserQuestion → needs/ask + its question" "needs/ask|演练放在 m5 还是只在 m4？" "$(opt '#{@claude_state}/#{@claude_needs}|#{@claude_needs_detail}')"
+printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"演练放在 mac-b 还是只在 mac-a？"}]}}' | st busy
+eq "B: PreToolUse AskUserQuestion → needs/ask + its question" "needs/ask|演练放在 mac-b 还是只在 mac-a？" "$(opt '#{@claude_state}/#{@claude_needs}|#{@claude_needs_detail}')"
 printf '%s' '{"hook_event_name":"PostToolUse"}' | st working
 eq "B: answered → working, the question gone with the subtype" "working/|" "$(opt '#{@claude_state}/#{@claude_needs}|#{@claude_needs_detail}')"
 printf '%s' '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"mod 的问题"}]}}' | st --via mod ask

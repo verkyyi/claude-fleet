@@ -18,7 +18,7 @@ import (
 // for it to land.
 func beatMem(t *testing.T, h *harness, n *writeNode, host, machine string, load1 float64, free, total uint64, pressure, sessions int, f control.Fleet) {
 	t.Helper()
-	beat(t, n.conn, control.Proto, control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine,
+	beat(t, n.conn, control.Proto, control.Heartbeat{Hostname: host, OSUser: "frank", MachineID: machine,
 		Load1: load1, NCPU: 10, MemFreeBytes: free, MemTotalBytes: total, MemPressure: pressure,
 		Sessions: sessions, Fleets: []control.Fleet{f}, ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, host+"'s beat landed", func() bool {
@@ -77,9 +77,9 @@ func TestMemFloorIsRelative(t *testing.T) {
 // Same load, very different account use: the same score, and the reason no
 // longer names the account — the quota is still shown on the candidate.
 func TestPlacementQuotaNotScored(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
-	beatMem(t, h, m4, "m4", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 2, 32<<30, 64<<30, 1, 3, f5)
+	beatMem(t, h, macC, "mac-c", machineB, 2, 32<<30, 64<<30, 1, 3, f4)
 	reset := time.Now().UTC().Add(time.Hour)
 	for acct, util := range map[string]float64{"acct-busy": 95, "acct-idle": 5} {
 		if err := h.srv.Store.InsertLimits(&model.LimitsSnapshot{AccountUUID: acct, ObservedAt: time.Now().UTC(),
@@ -87,79 +87,79 @@ func TestPlacementQuotaNotScored(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c := judgeAll(t, h, map[string]string{"ep_m5": "acct-busy", "ep_m4": "acct-idle"})
-	if c["m5"].QuotaUsedPct == nil || *c["m5"].QuotaUsedPct != 95 || c["m4"].QuotaUsedPct == nil || *c["m4"].QuotaUsedPct != 5 {
-		t.Fatalf("quota not shown: m5 %v m4 %v", c["m5"].QuotaUsedPct, c["m4"].QuotaUsedPct)
+	c := judgeAll(t, h, map[string]string{"ep_mac-d": "acct-busy", "ep_mac-c": "acct-idle"})
+	if c["mac-d"].QuotaUsedPct == nil || *c["mac-d"].QuotaUsedPct != 95 || c["mac-c"].QuotaUsedPct == nil || *c["mac-c"].QuotaUsedPct != 5 {
+		t.Fatalf("quota not shown: mac-d %v mac-c %v", c["mac-d"].QuotaUsedPct, c["mac-c"].QuotaUsedPct)
 	}
-	if !c["m5"].Eligible || !c["m4"].Eligible || c["m5"].Score != c["m4"].Score {
-		t.Fatalf("same load, different quota: m5 %+v, m4 %+v; want the same score", c["m5"], c["m4"])
+	if !c["mac-d"].Eligible || !c["mac-c"].Eligible || c["mac-d"].Score != c["mac-c"].Score {
+		t.Fatalf("same load, different quota: mac-d %+v, mac-c %+v; want the same score", c["mac-d"], c["mac-c"])
 	}
-	if r := placementReason(c["m4"], []Candidate{c["m4"], c["m5"]}); strings.Contains(r, "account") {
+	if r := placementReason(c["mac-c"], []Candidate{c["mac-c"], c["mac-d"]}); strings.Contains(r, "account") {
 		t.Fatalf("reason %q still names the account", r)
 	}
 }
 
 // CPU idle but memory tight loses to a machine busier on CPU with memory to
-// spare: the issue's own case (m4 0.42/core, 1.6 of 16 GiB vs m5 0.26/core,
-// 34 of 64 GiB) — here m4 is held just above its 2 GiB floor.
+// spare: the issue's own case (mac-c 0.42/core, 1.6 of 16 GiB vs mac-d 0.26/core,
+// 34 of 64 GiB) — here mac-c is held just above its 2 GiB floor.
 func TestPlacementMemoryTightLoses(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 4, 34<<30, 64<<30, 1, 7, f5) // 0.40/core → cpu 0.5, mem 0.53
-	beatMem(t, h, m4, "m4", machineB, 0, 3<<30, 16<<30, 1, 1, f4)  // idle cpu, mem 0.19
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 4, 34<<30, 64<<30, 1, 7, f5) // 0.40/core → cpu 0.5, mem 0.53
+	beatMem(t, h, macC, "mac-c", machineB, 0, 3<<30, 16<<30, 1, 1, f4)  // idle cpu, mem 0.19
 	c := judgeAll(t, h, nil)
-	if !c["m4"].Eligible || !c["m5"].Eligible || c["m4"].Score >= c["m5"].Score {
-		t.Fatalf("m4 %+v vs m5 %+v; want both eligible, m4 scored lower", c["m4"], c["m5"])
+	if !c["mac-c"].Eligible || !c["mac-d"].Eligible || c["mac-c"].Score >= c["mac-d"].Score {
+		t.Fatalf("mac-c %+v vs mac-d %+v; want both eligible, mac-c scored lower", c["mac-c"], c["mac-d"])
 	}
-	st, out := placeCall(t, h, h.tokens["m4"], map[string]any{"repo": writeRepo, "issue": 31, "worker_id": issueWID(f4.FleetID, 31)})
-	if pl, _ := out["placement"].(map[string]any); st != 200 || pl["machine"] != "m5" {
-		t.Fatalf("place = %d %v; want m5", st, out)
+	st, out := placeCall(t, h, h.tokens["mac-c"], map[string]any{"repo": writeRepo, "issue": 31, "worker_id": issueWID(f4.FleetID, 31)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || pl["machine"] != "mac-d" {
+		t.Fatalf("place = %d %v; want mac-d", st, out)
 	}
 }
 
 // Below max(2 GiB, 10% of total) free is out: 5 GiB of 64 is under 6.4.
 func TestPlacementBelowMemFloorExcluded(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 0, 5<<30, 64<<30, 1, 1, f5)
-	beatMem(t, h, m4, "m4", machineB, 0, 1800<<20, 16<<30, 1, 1, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 0, 5<<30, 64<<30, 1, 1, f5)
+	beatMem(t, h, macC, "mac-c", machineB, 0, 1800<<20, 16<<30, 1, 1, f4)
 	c := judgeAll(t, h, nil)
-	if c["m5"].Eligible || !strings.Contains(c["m5"].Excluded, "free memory 5.0 GiB < 6.4 GiB") {
-		t.Fatalf("m5 = %+v; want excluded under its 6.4 GiB floor", c["m5"])
+	if c["mac-d"].Eligible || !strings.Contains(c["mac-d"].Excluded, "free memory 5.0 GiB < 6.4 GiB") {
+		t.Fatalf("mac-d = %+v; want excluded under its 6.4 GiB floor", c["mac-d"])
 	}
-	if c["m4"].Eligible || !strings.Contains(c["m4"].Excluded, "< 2.0 GiB") {
-		t.Fatalf("m4 = %+v; want excluded under the 2 GiB floor", c["m4"])
+	if c["mac-c"].Eligible || !strings.Contains(c["mac-c"].Excluded, "< 2.0 GiB") {
+		t.Fatalf("mac-c = %+v; want excluded under the 2 GiB floor", c["mac-c"])
 	}
 }
 
 // Memory pressure at warn excludes a machine whatever its free memory; an
 // agent that does not report it (0) is never excluded for it.
 func TestPlacementMemPressureExcluded(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	beatMem(t, h, m5, "m5", machineA, 0, 40<<30, 64<<30, 2, 1, f5)
-	beatMem(t, h, m4, "m4", machineB, 0, 8<<30, 16<<30, 0, 1, f4)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	beatMem(t, h, macD, "mac-d", machineA, 0, 40<<30, 64<<30, 2, 1, f5)
+	beatMem(t, h, macC, "mac-c", machineB, 0, 8<<30, 16<<30, 0, 1, f4)
 	c := judgeAll(t, h, nil)
-	if c["m5"].Eligible || c["m5"].Excluded != "memory pressure warn" {
-		t.Fatalf("m5 = %+v; want excluded on memory pressure", c["m5"])
+	if c["mac-d"].Eligible || c["mac-d"].Excluded != "memory pressure warn" {
+		t.Fatalf("mac-d = %+v; want excluded on memory pressure", c["mac-d"])
 	}
-	if !c["m4"].Eligible {
-		t.Fatalf("m4 = %+v; an unreported pressure must not exclude", c["m4"])
+	if !c["mac-c"].Eligible {
+		t.Fatalf("mac-c = %+v; an unreported pressure must not exclude", c["mac-c"])
 	}
-	beatMem(t, h, m5, "m5", machineA, 0, 40<<30, 64<<30, 4, 1, f5)
-	if c := judgeAll(t, h, nil); c["m5"].Excluded != "memory pressure critical" {
-		t.Fatalf("m5 = %+v; want excluded on critical pressure", c["m5"])
+	beatMem(t, h, macD, "mac-d", machineA, 0, 40<<30, 64<<30, 4, 1, f5)
+	if c := judgeAll(t, h, nil); c["mac-d"].Excluded != "memory pressure critical" {
+		t.Fatalf("mac-d = %+v; want excluded on critical pressure", c["mac-d"])
 	}
 }
 
-// No machine carries a default cap: m4 at 22 sessions is still a candidate,
+// No machine carries a default cap: mac-c at 22 sessions is still a candidate,
 // and the settings' effective view lists no node cap.
 func TestPlacementNoDefaultNodeCap(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
-	beatMem(t, h, m4, "m4", machineB, 0, 8<<30, 16<<30, 1, 22, f4)
+	h, _, macC, _, f4 := twoNodes(t)
+	beatMem(t, h, macC, "mac-c", machineB, 0, 8<<30, 16<<30, 1, 22, f4)
 	c := judgeAll(t, h, nil)
-	if c["m4"].Cap != nil || !c["m4"].Eligible {
-		t.Fatalf("m4 = %+v; want no cap, eligible", c["m4"])
+	if c["mac-c"].Cap != nil || !c["mac-c"].Eligible {
+		t.Fatalf("mac-c = %+v; want no cap, eligible", c["mac-c"])
 	}
-	if _, ok := h.srv.nodeCap("m4", map[string]string{}); ok {
-		t.Fatal("m4 has a default cap")
+	if _, ok := h.srv.nodeCap("mac-c", map[string]string{}); ok {
+		t.Fatal("mac-c has a default cap")
 	}
 	eff := getFleet(t, h, "/v1/fleet/settings", 200)["effective"].(map[string]any)
 	for k := range eff {

@@ -977,7 +977,7 @@ def uninstall(a):
     if DRY and not rec and not meta:
         if os.path.lexists(R):
             # an install that stopped halfway leaves the store and no credsep.json
-            # (2026-10-07 m4, issue #2273): the way back is in the store's meta.json
+            # (2026-10-07 mac-b, issue #2273): the way back is in the store's meta.json
             say("credsep: HALF INSTALLED — %s is there but %s has no credsep.json (an install that stopped"
                 % (R, conf))
             say("  halfway); the store is not readable here. Put it back, from the store's meta.json:")
@@ -2644,7 +2644,7 @@ def agent_reload(login, R):
 
 
 # ---- reconcile: a plain node.env back in a separated home (issue #2649) -------------
-# A writer from before #2316 (`fleet host on` on 2026-10-08, macmini) replaced the
+# A writer from before #2316 (`fleet host on` on 2026-10-08, mac-d) replaced the
 # link with a plain file: the token readable in the home again, and the store's
 # copy left behind. Root folds the home copy into the store — the NEWER file's
 # value wins a key both have (--prefer home|store overrides), a key only one has

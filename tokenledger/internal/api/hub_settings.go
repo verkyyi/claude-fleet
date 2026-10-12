@@ -378,7 +378,7 @@ func (s *Server) routesExtra() []FleetMachine {
 }
 
 // parseMachineNames reads fleet.machine_names (claude-fleet#1706):
-// "macmini=m5, mini2=m4" → {"macmini": "m5", "mini2": "m4"}, keyed by the
+// "mac-e=mac-d, mac-f=mac-c" → {"mac-e": "mac-d", "mac-f": "mac-c"}, keyed by the
 // hostname's first label, lower-cased, the way a heartbeat's hostname is
 // matched. Both sides go into ssh configs, so both are plain tokens; a name
 // two machines would share is refused.

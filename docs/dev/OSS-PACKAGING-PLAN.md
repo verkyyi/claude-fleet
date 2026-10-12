@@ -261,11 +261,11 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 > 的账号得分反而更低：
 > ```
 > ly297@georgetown.edu     5h  0% · 7d 80%   headroom 20   ← 整个 5h 窗口闲置
-> verky@24helpful.com   ●  5h 77% · 7d 51%   headroom 23   ← 每次 spawn 继续堆这里
+> carol@24helpful.com   ●  5h 77% · 7d 51%   headroom 23   ← 每次 spawn 继续堆这里
 > ```
 > 新排名 `5h余量×2 + 7d余量` → 同样两行变成 **220 vs 95**。
 > 依据：**5h 窗口过期作废**，没花完的部分在 reset 时蒸发；周额度只是放在那里。
-> 上线后 `●` 当即从 `verky@24helpful` 移到 `ly297`。
+> 上线后 `●` 当即从 `carol@24helpful` 移到 `ly297`。
 >
 > 分层安全取向（派工时明确要求不自落、留给操作员 review）：排名修正默认生效
 > （正在流血的伤口，且仍受 `CEILING` 门控）；相位 hold 需 `phase --plan --apply`
@@ -274,8 +274,8 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 >
 > **上线后实测（2026-09-14，三个 fleet 共 12 个 worker 窗口的账号分布）：**
 > ```
-> 修复前   17 verky@24helpful · 1 verky.yi · 1 ly297     ← 全压在一份上
-> 修复后    7 ly297 · 5 verky@24helpful · 1 verky.yi      ← 真的在轮着用
+> 修复前   17 carol@24helpful · 1 carol.yi · 1 ly297     ← 全压在一份上
+> 修复后    7 ly297 · 5 carol@24helpful · 1 carol.yi      ← 真的在轮着用
 > ```
 > 同期 `ly297` 的 7d 用量从 8% 涨到 17%（此前四小时纹丝不动），`●` 也移了过去。
 > **排名修正是有效的,不只是理论上更对。**
@@ -516,14 +516,14 @@ M3 的工作量因此**显著下降**，但「让第二个人装得上」的目�
 
 **`/fleet-sync-install` 是 per-machine 且手动的,所以第二台机器会静默落后。**
 
-实测：操作员问「mini 上的 fleet 是最新的吗」，查下来 **macmini 的 live install 落后
+实测：操作员问「mini 上的 fleet 是最新的吗」，查下来 **mac-c 的 live install 落后
 28 个提交**（停在 PR #539），缺了 #603 base branch 修正、#617 配额排名修正、
 #608 能力矩阵 —— 而 mini 正是那台跑长时任务的共享机器。没有任何信号提示过它落后。
 
 同步它要手工处理：fast-forward + 5 个改动的 launchd 单元重载 + 1 个**新** daemon
 （quotawatch）模板化并 bootstrap + 3 个 commands + 1 个 skill 目录镜像。
 同步后 doctor 从「1 WARN」到 21 PASS 全绿（顺带修掉 memory 里挂了很久的
-macmini 信任 TODO）。
+mac-c 信任 TODO）。
 
 ### 对打包方案的影响
 
@@ -532,7 +532,7 @@ macmini 信任 TODO）。
 | **这是打包前的真问题** | 一个 5 人团队有 5+ 台机器。按现在的机制，每台都要有人记得手工跑 `/fleet-sync-install`，而落后了**没有任何提示** |
 | **[#611](https://github.com/verkyyi/claude-fleet/issues/611)（plugin 分发）封掉了一半** ✅ | plugin 覆盖 commands / skills / hook 表这半边：marketplace 开 `autoUpdate` 后别的机器自己跟上，不用谁记得跑 `/fleet-sync-install`。**但只有这半边** —— `bin/`、`conf/`、daemon 住在稳定的 `~/.claude/fleet`（plugin 安装路径带版本号、每次更新都变，launchd 单元和 tmux bind 没法指进去），那半边仍然是 per-machine 手工的 |
 | **本机自知** ✅ 已上线（[#635](https://github.com/verkyyi/claude-fleet/issues/635)） | `fleet-doctor.sh` 新增 `install` 行：`bin/fleet-install-version.sh` fetch 一个分支后比 `HEAD…origin/<trunk>`，落后就 WARN 出提交数 + 修复命令（`pull --ff-only` → `/fleet-sync-install`），ahead/diverged/dirty 一并报。**fetch 失败报 `UNKNOWN` 而不是 0** —— 「安静」曾经就等于「绿」，这条就是那个 bug。只给人工调用；collector 的 60s tick 用 `--no-fetch`（免费，且自报 `fetched: no`） |
-| **跨机器可见** ✅（[#644](https://github.com/verkyyi/claude-fleet/issues/644)：心跳带 `fleet_version`，hub 刷新环按本机 `refs/tags/stable` 判一个词写进 `hub_nodes`，底栏机器格落后即 `· 旧`，doctor `install` 行列出每台机器与落后数；读不到是「unknown」不是 0） | 曾经 doctor 只体检本机 —— 而落后的那台你今天根本没登。落点已经确定且**不需要新服务**：TokenLedger hub 的 `store.Endpoint` 行已经带 `Hostname` / `MachineID` / `CCVersion` / `AgentVersion` / `LastSeen`，紧挨着再加一个 fleet 版本字段即可（agent 侧执行 `fleet-install-version.sh --json --no-fetch --no-logins` 取值，随已有心跳上报）。**本仓库这边已经做完**（[#644](https://github.com/verkyyi/claude-fleet/issues/644)）：`--json` 的 key 集合与取值形状是消费方可以硬编码的契约 —— `behind` 读不到是 `null` 不是 0、`follow_verdict` 是 #1123 的固定 token —— 由 `install-version-selftest.sh` 的 H 段钉死，改名先在这边红。**采集 / 上报 / 存储 / 展示在 `verkyyi/tokenledger`，不在本仓库**，已按上面的契约立单 tokenledger#157（含改哪些文件） |
+| **跨机器可见** ✅（[#644](https://github.com/verkyyi/claude-fleet/issues/644)：心跳带 `fleet_version`，hub 刷新环按本机 `refs/tags/stable` 判一个词写进 `hub_nodes`，底栏机器格落后即 `· 旧`，doctor `install` 行列出每台机器与落后数；读不到是「unknown」不是 0） | 曾经 doctor 只体检本机 —— 而落后的那台你今天根本没登。落点已经确定且**不需要新服务**：TokenLedger hub 的 `store.Endpoint` 行已经带 `Hostname` / `MachineID` / `CCVersion` / `AgentVersion` / `LastSeen`，紧挨着再加一个 fleet 版本字段即可（agent 侧执行 `fleet-install-version.sh --json --no-fetch --no-logins` 取值，随已有心跳上报）。**本仓库这边已经做完**（[#644](https://github.com/verkyyi/claude-fleet/issues/644)）：`--json` 的 key 集合与取值形状是消费方可以硬编码的契约 —— `behind` 读不到是 `null` 不是 0、`follow_verdict` 是 #1123 的固定 token —— 由 `install-version-selftest.sh` 的 H 段钉死，改名先在这边红。**采集 / 上报 / 存储 / 展示在 `dave/tokenledger`，不在本仓库**，已按上面的契约立单 tokenledger#157（含改哪些文件） |
 
 > ⚠️ 排查时的坑：非交互 SSH 的 PATH 不含 `/opt/homebrew/bin`，doctor 会误报
 > tmux/fzf/gh/claude 全部 not found。远程体检要走 `zsh -lc`。
@@ -625,8 +625,8 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 | 仓库 | 涉及 issue | 起法 |
 |---|---|---|
 | `verkyyi/claude-fleet` | 大多数 | 已有 fleet |
-| `verkyyi/tokenledger` | 18（归因）、M1 全部 | ✅ **`fleet-tokenledger` 已存在**，直接用 |
-| 团队 config repo | M4 | 还不存在，M4 时新建 |
+| `dave/tokenledger` | 18（归因）、M1 全部 | ✅ **`fleet-tokenledger` 已存在**，直接用 |
+| 团队 config repo | MAC-A | 还不存在，MAC-A 时新建 |
 
 #### TokenLedger 的「四名一体」—— 每次都绕，写一次
 
@@ -635,13 +635,13 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 
 | 维度 | 今天的名字 |
 |---|---|
-| GitHub 仓库 | `verkyyi/tokenledger` |
+| GitHub 仓库 | `dave/tokenledger` |
 | 本地检出 | `~/projects/ccquota` |
 | fleet session / socket | `fleet-tokenledger`（`tmux -L fleet-tokenledger`、`dash-issue-session.sh <N> fleet-tokenledger`；base branch `main`） |
-| 命令 / Go module / env 前缀 | **全是 `ccquota`** —— 二进制 `ccquota`、`module github.com/verkyyi/ccquota`、`CCQUOTA_HUB_URL` / `CCQUOTA_ACCOUNT` / `CCQUOTA_VIEWER_TOKEN` |
+| 命令 / Go module / env 前缀 | **全是 `ccquota`** —— 二进制 `ccquota`、`module github.com/dave/ccquota`、`CCQUOTA_HUB_URL` / `CCQUOTA_ACCOUNT` / `CCQUOTA_VIEWER_TOKEN` |
 
 ⚠️ 两个照着新名字会扑空的地方：**`go install` 必须用旧 module 路径**
-（`go.mod` 里就是 `github.com/verkyyi/ccquota`，标识符 cutover 没做，见 #629 的约束）；
+（`go.mod` 里就是 `github.com/dave/ccquota`，标识符 cutover 没做，见 #629 的约束）；
 按改名前的 fleet 名去 `tmux -L` 也扑空 —— `fleet_sockets` 里只有 `fleet-tokenledger`。
 
 #### 决定:不把 TokenLedger 合进 claude-fleet（2026-09-14 评估，结论已定）
@@ -691,9 +691,9 @@ tmux socket 本来就 per-uid；ccquota 明确要求每个 OS login 一个 agent
 #### 并发实测（2026-09-13，本机）
 
 ```
-fleet-claude-fleet       ×6   verky@24helpful.com
-fleet-24haowan-monorepo  ×11  verky@24helpful.com ×9 · verky.yi@gmail.com ×1 · ly297@georgetown.edu ×1
-fleet-tokenledger        ×1   verky@24helpful.com
+fleet-claude-fleet       ×6   carol@24helpful.com
+fleet-acme-monorepo  ×11  carol@24helpful.com ×9 · carol.yi@gmail.com ×1 · ly297@georgetown.edu ×1
+fleet-tokenledger        ×1   carol@24helpful.com
 ```
 
 三个账号同时在跑，证实 `CLAUDE_CODE_OAUTH_TOKEN` 仍是 per-process 生效。
@@ -719,7 +719,7 @@ README 改写已落 main（ccquota PR #18 → #19，commit `3f29d7d`）。六条
 > **大声警告**、`fleet-doctor.sh` 新增 `base` 检查行。该 fleet 的 conf 已改回
 > `main`，doctor 现在三个 fleet 全 PASS：
 > ```
-> PASS base  fleet-24haowan-monorepo: … base "master" is the repo default
+> PASS base  fleet-acme-monorepo: … base "master" is the repo default
 > PASS base  fleet-tokenledger:       … base "main"   is the repo default
 > PASS base  fleet-claude-fleet:      … base "master" is the repo default
 > ```
@@ -766,7 +766,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 > 标签基础大体已有。真正空白的是**用它来调度**，所以改由最独立的 19 领头。
 >
 > 📌 实测发现的真问题（2026-09-13）：三份账号里几乎所有 window 都压在
-> `verky@24helpful.com` 一份上 —— **不是相位问题,是根本没在轮着用**。
+> `carol@24helpful.com` 一份上 —— **不是相位问题,是根本没在轮着用**。
 > 这让 19 的价值比原先估计的更高。
 
 ### M3 — 让第二个人装得上
@@ -787,7 +787,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 期间别派其他 worker。其余几条开发可并行，**落地仍一条一条来** —— 每条 land 后
 sync-install + 冒烟，确认 fleet 没炸再下一条。
 
-### M4 — 团队层
+### MAC-A — 团队层
 
 **backlog 已全部建好（2026-09-13）**：
 
@@ -837,7 +837,7 @@ worker+PR），全局 cap 10。
 | **M1** | ccquota#16 README 主线改写 | ✅ 已落 main（PR #18 → #19） |
 | **M2** | [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#600](https://github.com/verkyyi/claude-fleet/issues/600) token 标签+team 归因 · [#601](https://github.com/verkyyi/claude-fleet/issues/601) 争用策略 · [#599](https://github.com/verkyyi/claude-fleet/issues/599) **跨 provider 溢出（头条）** · [#602](https://github.com/verkyyi/claude-fleet/issues/602) Codex 多 home | ⬜ 待派工（hands-on） |
 | **M3** | [#607](https://github.com/verkyyi/claude-fleet/issues/607) `@agent_state` 正名 · [#609](https://github.com/verkyyi/claude-fleet/issues/609) mini 多 OS login · [#610](https://github.com/verkyyi/claude-fleet/issues/610) OTEL | ⬜ 待派工（[#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 ✅ · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin ✅ 已完成） |
-| **M4** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
+| **MAC-A** | [#612](https://github.com/verkyyi/claude-fleet/issues/612) `scope:` 轴 · [#613](https://github.com/verkyyi/claude-fleet/issues/613) `memory promote` · [#614](https://github.com/verkyyi/claude-fleet/issues/614) config 双 target | ⬜ |
 | **计划外（用它 → 被它咬到 → 修它）** | 两轮共 **18 条已落地** —— 全清单见[下一节](#计划外产出清单两轮18-条) | ✅ 已上线双机同步 · 在途 [#660](https://github.com/verkyyi/claude-fleet/issues/660) |
 | **团队协作方向** | ✅ claim 租约已建 [#631](https://github.com/verkyyi/claude-fleet/issues/631)（2026-09-14，待派工）· ⬜ managed-settings.json 作团队策略基线（未建 issue）· ⬜ 复用 ccquota hub 做跨设备 presence（未建 issue） | 🔶 部分已建 · 见[第九之三章](#九之三团队协作跨-fleet--跨设备--多人) |
 | **待派工** | [#622](https://github.com/verkyyi/claude-fleet/issues/622) 常驻只读 triage worker（阶段 1） | ⬜ 要起常驻 session，需操作员点头 |
@@ -877,7 +877,7 @@ worker+PR），全局 cap 10。
 | [#658](https://github.com/verkyyi/claude-fleet/issues/658) | [#659](https://github.com/verkyyi/claude-fleet/pull/659) | 红灯会自己散 —— 事件写入的状态开始对照 transcript 校正 |
 | [#544](https://github.com/verkyyi/claude-fleet/issues/544) | [#661](https://github.com/verkyyi/claude-fleet/pull/661) | closed-unmerged 回收先证明「session 没了」，而不是「PR 关了」 |
 | [#635](https://github.com/verkyyi/claude-fleet/issues/635) | [#646](https://github.com/verkyyi/claude-fleet/pull/646) | doctor 报 live install 落后主干多少提交（mini 落后 28 个而两台全绿） |
-| [#629](https://github.com/verkyyi/claude-fleet/issues/629) | [#641](https://github.com/verkyyi/claude-fleet/pull/641) | 补 ccquota 的获取方式，外链改到改名后的 `verkyyi/tokenledger` |
+| [#629](https://github.com/verkyyi/claude-fleet/issues/629) | [#641](https://github.com/verkyyi/claude-fleet/pull/641) | 补 ccquota 的获取方式，外链改到改名后的 `dave/tokenledger` |
 | [#642](https://github.com/verkyyi/claude-fleet/issues/642) | [#643](https://github.com/verkyyi/claude-fleet/pull/643) | 「不合并 TokenLedger」的评估结论进文档 |
 | [#625](https://github.com/verkyyi/claude-fleet/issues/625) | [#654](https://github.com/verkyyi/claude-fleet/pull/654) | 会话生命周期事实可选外发 —— 把「花了多少」和「做成了什么」接上 |
 | [#648](https://github.com/verkyyi/claude-fleet/issues/648) | [#649](https://github.com/verkyyi/claude-fleet/pull/649) | dash 子任务默认折叠，←/→ 展开收缩（live 和 landed 两个视图都嵌套） |
@@ -893,7 +893,7 @@ worker+PR），全局 cap 10。
 
 | | 计划内（2026-09-13 的 backlog） | 计划外（用它 → 被咬 → 修它） |
 |---|---|---|
-| 条目 | 13（M2 5 · M3 5 · M4 3） | 18 已落地（+1 在途） |
+| 条目 | 13（M2 5 · M3 5 · MAC-A 3） | 18 已落地（+1 在途） |
 | 同期已落地 | **3** —— [#598](https://github.com/verkyyi/claude-fleet/issues/598) 相位错开 · [#608](https://github.com/verkyyi/claude-fleet/issues/608) 能力矩阵 · [#611](https://github.com/verkyyi/claude-fleet/issues/611) plugin | **18** |
 | 仍 ⬜ | 10 | — |
 
@@ -925,10 +925,10 @@ monorepo worktree 要跑几分钟，拖长整个 tick）→ [#653](https://githu
 
 1. **先让它跑起来，让它咬你。** backlog 是对「什么重要」的猜测；一次 103 分钟的
    静默停摆是证据。证据比猜测便宜，也比猜测准。
-2. **backlog 不是进度条。** M2/M3/M4 大部分仍 ⬜ 并不等于停滞 —— 同期落了 18 条，
+2. **backlog 不是进度条。** M2/M3/MAC-A 大部分仍 ⬜ 并不等于停滞 —— 同期落了 18 条，
    而且改的是每天都在踩的东西。
 3. **但 backlog 不能删。** 计划外产出**清一色是修复**。方向性的东西
-   （跨 provider 溢出 [#599](https://github.com/verkyyi/claude-fleet/issues/599)、团队层 M4）不会被咬出来，只会被规划出来。
+   （跨 provider 溢出 [#599](https://github.com/verkyyi/claude-fleet/issues/599)、团队层 MAC-A）不会被咬出来，只会被规划出来。
    两条线是互补的，不是替代。
 4. **得有低摩擦的归档渠道，「被咬到」才会变成 issue。** 这批东西几乎都是在**别的活
    干到一半**时冒出来的 —— 能当场 file 掉，它才会存在。fleet 里这是一条命令

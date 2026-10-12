@@ -136,7 +136,7 @@ printf '%s\n' "\$*" >> "$WORK/claude.argv"
 SH
 chmod +x "$WORK/fake-claude"
 export FLEET_PHONE_DIR="$WORK/cl"
-URL="http://mini2.example:47230/mcp"
+URL="http://mac-d.example:47230/mcp"
 eq "E: no token on stdin ⇒ exit 2" "2" "$(python3 "$PM" client set --url "$URL" --claude "$WORK/fake-claude" </dev/null >/dev/null 2>&1; echo $?)"
 printf '%s\n' "$NEW" | python3 "$PM" client set --url "$URL" --claude "$WORK/fake-claude" >/dev/null || fail "E: client set exits 0"
 C=$(cat "$CODEX_HOME/config.toml")
@@ -146,7 +146,7 @@ WANT='model_reasoning_effort = "high"
 command = "npx"
 # >>> fleet phone >>>
 [mcp_servers.phone]
-url = "http://mini2.example:47230/mcp"
+url = "http://mac-d.example:47230/mcp"
 http_headers = { "Authorization" = "Bearer '"$NEW"'" }
 # <<< fleet phone <<<
 # >>> fleet plugins — bin/fleet-codex-plugins.py sync writes this block; edit outside it >>>
@@ -158,7 +158,7 @@ printf '%s\n' "$NEW" | python3 "$PM" client set --url "$URL" --claude "$WORK/fak
 eq "E: a second run changes nothing" "$WANT" "$(cat "$CODEX_HOME/config.toml")"
 A=$(cat "$WORK/claude.argv")
 has "E: claude: the old phone removed first" "mcp remove phone -s user" "$A"
-has "E: claude: added as http with a headersHelper" '"type": "http", "url": "http://mini2.example:47230/mcp", "headersHelper":' "$A"
+has "E: claude: added as http with a headersHelper" '"type": "http", "url": "http://mac-d.example:47230/mcp", "headersHelper":' "$A"
 hasnt "E: claude: never the token in argv" "$NEW" "$A"
 eq "E: client header prints the bearer" "{\"Authorization\": \"Bearer $NEW\"}" "$(python3 "$PM" client header)"
 eq "E: client.json is 0600" "600" "$(mode "$FLEET_PHONE_DIR/client.json")"

@@ -130,7 +130,7 @@
 #              before the link moves (FLEET_DOCTOR_BASELINE=1) — a check the new
 #              version added or made stricter fails on the old evidence there
 #              too, so it is not the switch's fault (2026-10-09: two new doctor
-#              FAILs read the old daemons' last hour and rolled macmini back).
+#              FAILs read the old daemons' last hour and rolled mac-c back).
 #              And the doctor after the switch judges only what happened after
 #              it: the apply's daemons get one sleep tick first (≤
 #              FLEET_INSTALL_SETTLE_SECS, 90; the hub-sessions loop --ensure'd),
@@ -580,7 +580,7 @@ team_follow() {
 # first tick any batch held, and only reaching stable (finish current|switched)
 # clears it — a new stable, or another batch taking over the hold, does not. With
 # 3-7 batches in parallel a per-batch clock (each mark's own, reset when the mark
-# went quiet for a tick or stable moved) never reached the cap: macmini sat two
+# went quiet for a tick or stable moved) never reached the cap: mac-c sat two
 # stables behind. $HOLDD/<mark name> keeps `released:` (one comment per mark per
 # stable); a mark not active this tick loses its file.
 hold_get() { sed -n "s/^$2: //p" "$HOLDD/$1" 2>/dev/null | head -1; }
@@ -961,7 +961,7 @@ main() {
   # But the updater moves the ROOT runtime, never this login's ~/.claude/fleet —
   # and every account task the daemon runs for this login is
   # __HOME__/.claude/fleet/bin/…, so a login whose tick said off sat on the copy
-  # it was bootstrapped with (issue #2688: mini2's verky, no fleet-service.sh, its
+  # it was bootstrapped with (issue #2688: mac-d's carol, no fleet-service.sh, its
   # fleet-answer.sh answering «no live pane»). #2688 had it follow the MACHINE's
   # release over git; since issue #2774 (EPIC #2770 C4) the updater does it: it makes
   # this login's ~/.claude/fleet a tree of links into the runtime's <root>/<sha>/

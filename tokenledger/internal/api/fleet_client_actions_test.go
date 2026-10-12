@@ -64,9 +64,9 @@ func TestClientActionsReachTheOwnersLeaseSigned(t *testing.T) {
 		t.Fatalf("renewal key %q, want the same %q", ren.ActionKey, acq.ActionKey)
 	}
 
-	// A loopback page on m4: queued for the lease, the machine is the hub's word.
+	// A loopback page on mac-c: queued for the lease, the machine is the hub's word.
 	code, sent := send(n["verk4"].token, ClientActionSend{Kind: "open_url", RPort: 8765, Path: "d/x/",
-		Links: ClientActionLinks{Tailnet: "https://m4.tail.ts.net/d/x/", Hub: "javascript:alert(1)"}})
+		Links: ClientActionLinks{Tailnet: "https://mac-c.example.ts.net/d/x/", Hub: "javascript:alert(1)"}})
 	if code != 200 || sent.State != "queued" || sent.ID == "" || sent.Client == nil || sent.Client.Device != "MacBook" {
 		t.Fatalf("send: HTTP %d %+v", code, sent)
 	}
@@ -83,14 +83,14 @@ func TestClientActionsReachTheOwnersLeaseSigned(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.ID != sent.ID || a.Lease != acq.Lease.ID || a.Kind != "open_url" || a.RPort != 8765 || a.Path != "/d/x/" ||
-		a.Scheme != "http" || a.Machine != "m4" || a.Host != "macmini-m4" || a.Links.Tailnet == "" || a.Links.Hub != "" {
+		a.Scheme != "http" || a.Machine != "mac-c" || a.Host != "mac-e-mac-c" || a.Links.Tailnet == "" || a.Links.Hub != "" {
 		t.Fatalf("payload = %+v", a)
 	}
 	if _, p := poll(acq.Lease.ID, 0); len(p.Actions) != 0 {
 		t.Fatalf("delivered twice: %+v", p)
 	}
 
-	// An OAuth page whose callback listens on m4 (issue #3236): the port and the
+	// An OAuth page whose callback listens on mac-c (issue #3236): the port and the
 	// session asking ride the signed payload; a bad port is refused.
 	if code, _ := send(n["verk4"].token, ClientActionSend{Kind: "open_url", URL: "https://example.com/auth", CPort: 70000}); code != 400 {
 		t.Fatalf("cport 70000: HTTP %d, want 400", code)

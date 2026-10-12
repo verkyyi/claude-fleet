@@ -42,7 +42,7 @@ func TestIngest_ProbeLabelFoldsAnUnmatchedFingerprintOntoItsAccount(t *testing.T
 				resp.Body.Close()
 			}
 			login("u-icloud", "ylianghui@icloud.com", old)
-			login("u-gmail", "verky.yi@gmail.com", time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC))
+			login("u-gmail", "heidi.yi@gmail.com", time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC))
 
 			key := sessions.FingerprintFor(&moved)
 			if tc.fold {

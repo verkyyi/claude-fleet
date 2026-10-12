@@ -545,7 +545,7 @@ class C_DaemonAndCommit(Sandbox):
 
 class R_Prune(Sandbox):
     """issue #3100: the root keeps current, .prev and what is in use — every
-    tick, after an hour, never a week (mini2 held 56 releases, 18 GB)."""
+    tick, after an hour, never a week (mac-d held 56 releases, 18 GB)."""
 
     def test_prune_rule(self):
         V4, V5 = "4" * 40, "5" * 40
@@ -769,7 +769,7 @@ TORN = ("fetch: ccquota: signature does not match the pinned key")
 
 
 class O_TornReadPast(Sandbox):
-    """issue #2906: macmini's updater from before #2843 left one torn read in
+    """issue #2906: mac-c's updater from before #2843 left one torn read in
     `failed` after the stages that followed it landed; every new release's
     doctor read it as a new key FAIL, rolled back, and skipped the sha forever."""
 
@@ -851,7 +851,7 @@ class O_TornReadPast(Sandbox):
         self.assertEqual(self.tick(V2, FLEET_NODE_UPDATE_SKIP_RETRY="0")["result"], "skipped")
 
     def test_skip_retried_once_the_torn_read_is_past(self):
-        """macmini's 336f12c5: skipped for a key FAIL whose cause is gone."""
+        """mac-c's 336f12c5: skipped for a key FAIL whose cause is gone."""
         self.install(V1)
         self.release(V2, claude="2.1.2")
         st = self.state()
@@ -1616,12 +1616,12 @@ class Q_AdminAgent(Sandbox):
             f.write('#!/bin/sh\necho "$*" >> %s\n' % self.lc)
         os.chmod(fake, 0o755)
         self.env["FLEET_NODE_LAUNCHCTL"] = fake
-        self.own = os.path.join(self.d, "Users", "verky", ".local", "bin", "ccquota")
+        self.own = os.path.join(self.d, "Users", "frank", ".local", "bin", "ccquota")
         os.makedirs(os.path.dirname(self.own))
         with open(self.own, "w") as f:
             f.write("#!/bin/sh\necho ccquota prod-e715029\n")
         os.chmod(self.own, 0o755)
-        self.meta("verky", self.own)
+        self.meta("frank", self.own)
         self.meta("alice", self.own)     # taken over: the machine program's tenant
 
     def meta(self, login, prog):
@@ -1654,11 +1654,11 @@ class Q_AdminAgent(Sandbox):
     def test_follows_switch_and_rollback(self):
         cq = os.path.join(self.root, "agent", "ccquota")
         self.install(V1)
-        self.assertEqual(self.argv0("verky"), cq)
+        self.assertEqual(self.argv0("frank"), cq)
         self.assertIn(V1[:7].encode(), self.agent_bytes())          # the release's bytes at one path
         self.assertEqual(self.argv0("alice"), self.own)            # a tenant is never touched
-        self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.verky"])
-        self.assertEqual(oct(os.stat(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json")).st_mode
+        self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.frank"])
+        self.assertEqual(oct(os.stat(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "frank", "meta.json")).st_mode
                              & 0o777), "0o600")
         rows = self.rows()
         self.assertEqual(len(rows), 1, rows)
@@ -1670,8 +1670,8 @@ class Q_AdminAgent(Sandbox):
         self.release(V2)
         self.assertEqual(self.tick(V2)["phase"], "switched")
         self.assertEqual(len(self.kicks()), 2)
-        self.assertEqual(self.state()["admin_agents"]["verky"]["sha"], V2)
-        self.assertEqual(self.argv0("verky"), cq)                  # the path stays
+        self.assertEqual(self.state()["admin_agents"]["frank"]["sha"], V2)
+        self.assertEqual(self.argv0("frank"), cq)                  # the path stays
         self.assertIn(V2[:7].encode(), self.agent_bytes())
         # a release whose claude fails the doctor rolls back — the agent with it
         V3 = "3" * 40
@@ -1683,17 +1683,17 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(self.tick(V3)["result"], "rolled-back")
         self.assertEqual(self.current(), V2)
         self.assertEqual(len(self.kicks()), 4)                     # onto V3, back onto V2
-        self.assertEqual(self.state()["admin_agents"]["verky"]["sha"], V2)
+        self.assertEqual(self.state()["admin_agents"]["frank"]["sha"], V2)
         self.assertIn(V2[:7].encode(), self.agent_bytes())          # the copy went back too
 
     def test_own_old_binary_is_warned_then_repointed(self):
         self.install(V1)
-        self.meta("verky", self.own)                               # credsep install / a hand put it back
+        self.meta("frank", self.own)                               # credsep install / a hand put it back
         rows = self.rows()
         self.assertTrue(rows and "WARN" in rows[0] and "prod-e715029" in rows[0], rows)
         self.assertFalse(any("FAIL" in l and "admin-agent" in l for l in self.cmd("doctor").stdout.splitlines()))
         self.tick(V1)
-        self.assertEqual(self.argv0("verky"), os.path.join(self.root, "agent", "ccquota"))
+        self.assertEqual(self.argv0("frank"), os.path.join(self.root, "agent", "ccquota"))
         self.assertEqual(len(self.kicks()), 2)
         self.assertIn("PASS", self.rows()[0])
 
@@ -1714,7 +1714,7 @@ class Q_AdminAgent(Sandbox):
         dd = self.env["FLEET_CREDSEP_DAEMON_DIR"]
         if not os.path.isdir(dd):
             os.makedirs(dd)
-        shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky"))   # oss-ok: the class fixture's login (setUp)
+        shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "frank"))   # oss-ok: the class fixture's login (setUp)
         self.gui_meta("carol", self.own)
         self.install(V1)
         self.assertEqual(self.argv0("carol"), self.own)            # no daemon there: not ours to restart
@@ -1730,14 +1730,14 @@ class Q_AdminAgent(Sandbox):
         self.assertIn("PASS", self.rows()[0])
 
     def test_no_admin_agent_no_row(self):
-        shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky"))
+        shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "frank"))
         self.install(V1)
         self.assertEqual(self.kicks(), [])
         self.assertEqual(self.rows(), [])
 
 
 class S_AdminTree(Sandbox):
-    """issue #3248: a login NOT taken over (mini2's admin verkyyi, its node agent
+    """issue #3248: a login NOT taken over (mac-d's admin heidi, its node agent
     exec'ing ~/.claude/fleet/bin/fleet-login-new.sh) whose ~/.claude/fleet is a
     tree LINKED into the runtime: the release it links is never pruned while it
     stands there, the updater moves it with the machine like a managed login's,
@@ -1746,12 +1746,12 @@ class S_AdminTree(Sandbox):
 
     def setUp(self):
         Sandbox.setUp(self)
-        self.vh = os.path.join(self.d, "Users", "verky")
+        self.vh = os.path.join(self.d, "Users", "frank")
         self.ch = os.path.join(self.d, "Users", "carol")
         os.makedirs(self.vh)
         os.makedirs(os.path.join(self.ch, ".claude", "fleet", "bin"))
         me = {"uid": os.geteuid(), "gid": os.getegid()}
-        self.wj(self.env["FLEET_NODE_PASSWD"], {"alice": dict(me, home=self.home), "verky": dict(me, home=self.vh),
+        self.wj(self.env["FLEET_NODE_PASSWD"], {"alice": dict(me, home=self.home), "frank": dict(me, home=self.vh),
                                                 "carol": dict(me, home=self.ch)})
 
     def live(self, home):
@@ -1764,7 +1764,7 @@ class S_AdminTree(Sandbox):
             return None
 
     def link(self, sha):
-        """verky bootstrapped by link-tree (fleet-login-install.sh's runtime road)."""
+        """frank bootstrapped by link-tree (fleet-login-install.sh's runtime road)."""
         r = subprocess.run([sys.executable, UPD, "link-tree", sha, "--no-apply"],
                            env=dict(self.env, HOME=self.vh, FLEET_NODE_ROOT=self.root),
                            capture_output=True, text=True, timeout=60)
@@ -1808,7 +1808,7 @@ class S_AdminTree(Sandbox):
         shutil.rmtree(os.path.join(self.root, V1))
         self.assertFalse(os.path.exists(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")))
         rows = self.rows()
-        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+verky: .*no longer has", l) for l in rows), rows)
+        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+frank: .*no longer has", l) for l in rows), rows)
         self.assertFalse(any("carol" in l for l in rows), rows)
         self.tick(V2)
         self.assertEqual(self.at(self.vh), V2)
@@ -1817,7 +1817,7 @@ class S_AdminTree(Sandbox):
         self.assertTrue(rows and all("PASS" in l for l in rows), rows)
         # a tree that is gone outright FAILs too
         shutil.rmtree(os.path.realpath(self.live(self.vh)))
-        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+verky: .*which is gone", l) for l in self.rows()))
+        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+frank: .*which is gone", l) for l in self.rows()))
 
 
 def _codesign_ready():
@@ -1843,11 +1843,11 @@ class T_Codesign(Sandbox):
             f.write("#!/bin/sh\nexit 0\n")
         os.chmod(lc, 0o755)
         self.env["FLEET_NODE_LAUNCHCTL"] = lc
-        d = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky")
+        d = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "frank")
         os.makedirs(d)
         self.wj(os.path.join(d, "meta.json"), {
-            "login": "verky", "agent": {"kind": "launchd-system", "path": "/x.plist", "label": "com.ccquota.agent.verky"},
-            "agent_argv": ["/Users/verky/.local/bin/ccquota", "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
+            "login": "frank", "agent": {"kind": "launchd-system", "path": "/x.plist", "label": "com.ccquota.agent.frank"},
+            "agent_argv": ["/Users/frank/.local/bin/ccquota", "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
         self.agent = os.path.join(self.root, "agent", "ccquota")
 
     def release_macho(self, sha, prog):
@@ -1891,7 +1891,7 @@ class T_Codesign(Sandbox):
         self.assertEqual(oct(os.stat(kc).st_mode & 0o777), "0o700")
         self.assertEqual(oct(os.stat(os.path.join(kc, "keychain.pass")).st_mode & 0o777), "0o600")
         # the grant a person gives now: path + requirement, as TCC records it
-        self.assertEqual(self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json"))
+        self.assertEqual(self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "frank", "meta.json"))
                          ["agent_argv"][0], self.agent)
         self.assertEqual(self.cs("--verify", "--strict", "-R=" + req, self.agent).returncode, 0)
         before = sh256(open(self.agent, "rb").read())

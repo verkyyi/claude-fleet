@@ -30,7 +30,7 @@ func newLeaseNode(t *testing.T, h *harness, host, machine string) *leaseNode {
 	ln := &leaseNode{fakeNode: n, host: host, machine: machine, token: h.tokens[host]}
 	f := fakeFleet(t, machine, "fleet-"+host, leaseRepo, "/Users/x/"+host)
 	ln.fleet = f.FleetID
-	n.beat(host, "verkyyi", machine, f)
+	n.beat(host, "ivan", machine, f)
 	waitFor(t, 3*time.Second, host+" fleet registered", func() bool {
 		_, err := h.srv.Store.Fleet(f.FleetID)
 		return err == nil
@@ -40,7 +40,7 @@ func newLeaseNode(t *testing.T, h *harness, host, machine string) *leaseNode {
 
 // show beats with the given issues live in this node's fleet.
 func (n *leaseNode) show(t *testing.T, issues ...int) {
-	n.beat(n.host, "verkyyi", n.machine, fakeFleet(t, n.machine, "fleet-"+n.host, leaseRepo, "/Users/x/"+n.host, issues...))
+	n.beat(n.host, "ivan", n.machine, fakeFleet(t, n.machine, "fleet-"+n.host, leaseRepo, "/Users/x/"+n.host, issues...))
 }
 
 func (n *leaseNode) wid(issue int) string {
@@ -106,15 +106,15 @@ func newLeasePair(t *testing.T) (*harness, *leaseNode, *leaseNode) {
 	c := &leaseClock{}
 	h.srv.leaseNow = c.now
 	leaseClocks.Store(h, c)
-	m5 := newLeaseNode(t, h, "m5", machineA)
-	m4 := newLeaseNode(t, h, "m4", machineB)
-	return h, m5, m4
+	macD := newLeaseNode(t, h, "mac-d", machineA)
+	macC := newLeaseNode(t, h, "mac-c", machineB)
+	return h, macD, macC
 }
 
-// The acceptance test: m5 and m4 open the same issue at the same moment —
+// The acceptance test: mac-d and mac-c open the same issue at the same moment —
 // exactly one wins, and the other is told who holds it.
 func TestLeaseConcurrentAcquireOneWinner(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
+	h, macD, macC := newLeasePair(t)
 	const rounds = 8
 	type res struct {
 		node   string
@@ -125,7 +125,7 @@ func TestLeaseConcurrentAcquireOneWinner(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := 0; i < rounds; i++ {
-		for _, n := range []*leaseNode{m5, m4} {
+		for _, n := range []*leaseNode{macD, macC} {
 			wg.Add(1)
 			go func(n *leaseNode) {
 				defer wg.Done()
@@ -174,75 +174,75 @@ func TestLeaseConcurrentAcquireOneWinner(t *testing.T) {
 // A session that ended (its window gone from the holder's heartbeat) frees
 // the issue for anyone.
 func TestLeaseReleasedWhenSessionEnds(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
-	if st, out := m5.acquire(t, h, 12, false); st != http.StatusOK {
-		t.Fatalf("m5 acquire: %d %v", st, out)
+	h, macD, macC := newLeasePair(t)
+	if st, out := macD.acquire(t, h, 12, false); st != http.StatusOK {
+		t.Fatalf("mac-d acquire: %d %v", st, out)
 	}
 	// Before the window exists the beat does not show it: the lease holds.
-	m5.show(t)
+	macD.show(t)
 	time.Sleep(100 * time.Millisecond)
-	if st, out := m4.acquire(t, h, 12, false); st != http.StatusConflict || holderNode(out) != "m5" {
-		t.Fatalf("m4 acquire while m5 starts: %d %v", st, out)
+	if st, out := macC.acquire(t, h, 12, false); st != http.StatusConflict || holderNode(out) != "mac-d" {
+		t.Fatalf("mac-c acquire while mac-d starts: %d %v", st, out)
 	}
-	m5.show(t, 12)
+	macD.show(t, 12)
 	waitFor(t, 3*time.Second, "lease seen", func() bool {
 		ls, _ := h.srv.Store.Leases(time.Now())
 		return len(ls) == 1 && ls[0].Seen
 	})
-	m5.show(t)
+	macD.show(t)
 	waitFor(t, 3*time.Second, "lease released", func() bool {
 		ls, _ := h.srv.Store.Leases(time.Now())
 		return len(ls) == 0
 	})
-	if st, out := m4.acquire(t, h, 12, false); st != http.StatusOK {
-		t.Fatalf("m4 acquire after the session ended: %d %v", st, out)
+	if st, out := macC.acquire(t, h, 12, false); st != http.StatusOK {
+		t.Fatalf("mac-c acquire after the session ended: %d %v", st, out)
 	}
 }
 
 // A node that goes silent keeps its leases for 30 minutes after the last beat
 // that saw them, then they are released — nothing is re-dispatched.
 func TestLeaseReleasedThirtyMinutesAfterNodeLost(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
+	h, macD, macC := newLeasePair(t)
 	base := time.Now()
 	c, _ := leaseClocks.Load(h)
 	set := func(d time.Duration) { c.(*leaseClock).freeze(base.Add(d)) }
 
-	if st, _ := m5.acquire(t, h, 5, false); st != http.StatusOK {
-		t.Fatal("m5 acquire")
+	if st, _ := macD.acquire(t, h, 5, false); st != http.StatusOK {
+		t.Fatal("mac-d acquire")
 	}
-	m5.show(t, 5)
+	macD.show(t, 5)
 	waitFor(t, 3*time.Second, "lease seen", func() bool {
 		ls, _ := h.srv.Store.Leases(base)
 		return len(ls) == 1 && ls[0].Seen
 	})
-	// m5 goes silent now.
+	// mac-d goes silent now.
 	set(29 * time.Minute)
-	if st, out := m4.acquire(t, h, 5, false); st != http.StatusConflict || holderNode(out) != "m5" {
-		t.Fatalf("29 min after m5's last beat: %d %v", st, out)
+	if st, out := macC.acquire(t, h, 5, false); st != http.StatusConflict || holderNode(out) != "mac-d" {
+		t.Fatalf("29 min after mac-d's last beat: %d %v", st, out)
 	}
 	set(31 * time.Minute)
-	if st, out := m4.acquire(t, h, 5, false); st != http.StatusOK {
-		t.Fatalf("31 min after m5's last beat: %d %v", st, out)
+	if st, out := macC.acquire(t, h, 5, false); st != http.StatusOK {
+		t.Fatalf("31 min after mac-d's last beat: %d %v", st, out)
 	}
 }
 
 // A spawn that dies before its window exists frees the issue after the start
 // grace, without any heartbeat ever showing it.
 func TestLeaseStartGraceExpires(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
+	h, macD, macC := newLeasePair(t)
 	base := time.Now()
 	c, _ := leaseClocks.Load(h)
 	clk := c.(*leaseClock)
 	clk.freeze(base)
-	if st, _ := m5.acquire(t, h, 9, false); st != http.StatusOK {
-		t.Fatal("m5 acquire")
+	if st, _ := macD.acquire(t, h, 9, false); st != http.StatusOK {
+		t.Fatal("mac-d acquire")
 	}
 	clk.freeze(base.Add(leaseStartGrace - time.Minute))
-	if st, _ := m4.acquire(t, h, 9, false); st != http.StatusConflict {
+	if st, _ := macC.acquire(t, h, 9, false); st != http.StatusConflict {
 		t.Fatal("inside the start grace the lease must hold")
 	}
 	clk.freeze(base.Add(leaseStartGrace + time.Minute))
-	if st, out := m4.acquire(t, h, 9, false); st != http.StatusOK {
+	if st, out := macC.acquire(t, h, 9, false); st != http.StatusOK {
 		t.Fatalf("after the start grace: %d %v", st, out)
 	}
 }
@@ -250,35 +250,35 @@ func TestLeaseStartGraceExpires(t *testing.T) {
 // The same worker asking again keeps its lease; release gives it back; a
 // forced take is granted and recorded with whom it displaced.
 func TestLeaseRepeatReleaseAndForce(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
-	if st, _ := m5.acquire(t, h, 3, false); st != http.StatusOK {
+	h, macD, macC := newLeasePair(t)
+	if st, _ := macD.acquire(t, h, 3, false); st != http.StatusOK {
 		t.Fatal("first acquire")
 	}
-	if st, out := m5.acquire(t, h, 3, false); st != http.StatusOK {
+	if st, out := macD.acquire(t, h, 3, false); st != http.StatusOK {
 		t.Fatalf("same worker again: %d %v", st, out)
 	}
-	st, out := m4.acquire(t, h, 3, true)
+	st, out := macC.acquire(t, h, 3, true)
 	if st != http.StatusOK {
 		t.Fatalf("forced: %d %v", st, out)
 	}
-	if d, _ := out["displaced"].(map[string]any); d["node"] != "m5" {
+	if d, _ := out["displaced"].(map[string]any); d["node"] != "mac-d" {
 		t.Fatalf("forced grant should name the displaced holder: %v", out)
 	}
 	var n int
 	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_audit WHERE action = 'lease_force'
-		AND outcome LIKE 'FORCED from %m5'`).Scan(&n); err != nil || n != 1 {
+		AND outcome LIKE 'FORCED from %mac-d'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("lease_force audit rows = %d (%v), want 1", n, err)
 	}
-	// m5 no longer holds it, so its release is a no-op; m4's is real.
-	if st, out := leaseCall(t, h, m5.token, map[string]any{"action": "release", "repo": leaseRepo, "issue": 3,
-		"worker_id": m5.wid(3)}); st != http.StatusOK || out["released"] != false {
+	// mac-d no longer holds it, so its release is a no-op; mac-c's is real.
+	if st, out := leaseCall(t, h, macD.token, map[string]any{"action": "release", "repo": leaseRepo, "issue": 3,
+		"worker_id": macD.wid(3)}); st != http.StatusOK || out["released"] != false {
 		t.Fatalf("stale release: %d %v", st, out)
 	}
-	if st, out := leaseCall(t, h, m4.token, map[string]any{"action": "release", "repo": leaseRepo, "issue": 3,
-		"worker_id": m4.wid(3)}); st != http.StatusOK || out["released"] != true {
+	if st, out := leaseCall(t, h, macC.token, map[string]any{"action": "release", "repo": leaseRepo, "issue": 3,
+		"worker_id": macC.wid(3)}); st != http.StatusOK || out["released"] != true {
 		t.Fatalf("release: %d %v", st, out)
 	}
-	if st, _ := m5.acquire(t, h, 3, false); st != http.StatusOK {
+	if st, _ := macD.acquire(t, h, 3, false); st != http.StatusOK {
 		t.Fatal("acquire after release")
 	}
 }
@@ -286,21 +286,21 @@ func TestLeaseRepeatReleaseAndForce(t *testing.T) {
 // A node cannot take a lease in another node's name, and a malformed request
 // or a stranger's token is refused.
 func TestLeaseRefusals(t *testing.T) {
-	h, m5, m4 := newLeasePair(t)
-	if st, _ := leaseCall(t, h, m4.token, map[string]any{"action": "acquire", "repo": leaseRepo, "issue": 4,
-		"worker_id": m5.wid(4)}); st != http.StatusForbidden {
-		t.Fatalf("m4 acquiring for m5's fleet: HTTP %d, want 403", st)
+	h, macD, macC := newLeasePair(t)
+	if st, _ := leaseCall(t, h, macC.token, map[string]any{"action": "acquire", "repo": leaseRepo, "issue": 4,
+		"worker_id": macD.wid(4)}); st != http.StatusForbidden {
+		t.Fatalf("mac-c acquiring for mac-d's fleet: HTTP %d, want 403", st)
 	}
-	if st, _ := leaseCall(t, h, m5.token, map[string]any{"action": "acquire", "repo": leaseRepo, "issue": 4,
-		"worker_id": m5.wid(5)}); st != http.StatusBadRequest {
+	if st, _ := leaseCall(t, h, macD.token, map[string]any{"action": "acquire", "repo": leaseRepo, "issue": 4,
+		"worker_id": macD.wid(5)}); st != http.StatusBadRequest {
 		t.Fatalf("worker_id for another issue: HTTP %d, want 400", st)
 	}
 	if st, _ := leaseCall(t, h, "nope", map[string]any{"action": "acquire", "repo": leaseRepo, "issue": 4,
-		"worker_id": m5.wid(4)}); st != http.StatusUnauthorized {
+		"worker_id": macD.wid(4)}); st != http.StatusUnauthorized {
 		t.Fatalf("unknown token: HTTP %d, want 401", st)
 	}
 	if st, _ := leaseCall(t, h, viewerToken, map[string]any{"action": "acquire", "repo": leaseRepo, "issue": 4,
-		"worker_id": m5.wid(4)}); st != http.StatusUnauthorized {
+		"worker_id": macD.wid(4)}); st != http.StatusUnauthorized {
 		t.Fatalf("viewer token is not a node: HTTP %d, want 401", st)
 	}
 }
@@ -309,7 +309,7 @@ func TestLeaseRefusals(t *testing.T) {
 func TestLeaseRouteAbsentWhenModuleOff(t *testing.T) {
 	h := newHarness(t)
 	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/node/lease", bytes.NewReader([]byte(`{}`)))
-	req.Header.Set("Authorization", "Bearer "+h.enroll(t, "m5"))
+	req.Header.Set("Authorization", "Bearer "+h.enroll(t, "mac-d"))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

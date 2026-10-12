@@ -6,7 +6,7 @@
 # starts a ~70s refresh loop. When a launchd job's tick exits, launchd kills every
 # process left in its process group — the loop died ~1 s after each start, and
 # with no client attached (the sidebar's keeper is the other caller) remote_<sess>
-# stood still for 10 hours on m4. Legs:
+# stood still for 10 hours on mac-a. Legs:
 #   A. survives the tick — --ensure run by a process-group leader that is then
 #      SIGKILLed as a group (what launchd does): the loop lives on, in a process
 #      group of its own, and keeps writing the cache (hub_ok moves)

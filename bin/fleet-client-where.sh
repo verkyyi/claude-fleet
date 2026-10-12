@@ -5,8 +5,8 @@
 # nothing else guesses a terminal or a device).
 #
 #   fleet-client-where.sh           one line:  MacBook · macOS · iTerm2 3.6 · 能：打开网页、收文件、系统通知、iTerm2
-#                                              verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接
-#                                              MacBook · macOS · iTerm2 3.6 · 能：… · 也开着：verkyyi-iphone
+#                                              dave-iphone · iOS · Termius（客户端在 mac-b 上运行）· 能：给链接
+#                                              MacBook · macOS · iTerm2 3.6 · 能：… · 也开着：dave-iphone
 #   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source","hub",
 #                                    "clients","primary"[,"hub_why"][,"node_token"]}
 #   fleet-client-where.sh --max-age <secs>   the same, but this login's last

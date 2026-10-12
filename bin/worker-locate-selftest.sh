@@ -120,18 +120,18 @@ tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-windo
 
 # --- C: the hub branch ------------------------------------------------------------------
 CACHE="$FLEET_CONF_DIR/control/hub-workers.tsv"
-printf '%s/issue-7\tm4\n' "$F" > "$CACHE"
+printf '%s/issue-7\tmac-a\n' "$F" > "$CACHE"
 loc "wid:$F/issue-7" "$L"; ok; [ "$out" = unknown ] && [ -z "$err" ] || fail "C: CCQUOTA_FLEET off ⇒ the cache is never read" "$out / $err"
 export CCQUOTA_FLEET=1
-loc "wid:$F/issue-7" "$L"; ok; [ "$out" = "remote m4" ] || fail "C: fresh cache → remote m4" "$out / $err"
+loc "wid:$F/issue-7" "$L"; ok; [ "$out" = "remote mac-a" ] || fail "C: fresh cache → remote mac-a" "$out / $err"
 loc "wid:$U/issue-8" "$L"; ok; [ "$out" = unknown ] || fail "C: own fleet never asks the hub" "$out"
 touch -t 202001010000 "$CACHE"
 loc "wid:$F/issue-7" "$L"; ok; [ "$out" = unknown ] && [ "$(printf '%s\n' "$err" | grep -c .)" = 1 ] \
   || fail "C: stale cache, no refresher → unknown + one stderr note" "$out / $err"
 export FLEET_HUB_STATUS_CMD="printf '%s/issue-9\tm4b\n' $F"
 loc "wid:$F/issue-9" "$L"; ok; [ "$out" = "remote m4b" ] || fail "C: FLEET_HUB_STATUS_CMD refreshes the cache" "$out / $err"
-export FLEET_HUB_STATUS_CMD="printf '%s/issue-7\tm4\n' $F"; touch -t 202001010000 "$CACHE"
-loc "wid:$F/issue-7" "$L"; ok; [ "$out" = "remote m4" ] || fail "C: refreshed again" "$out / $err"
+export FLEET_HUB_STATUS_CMD="printf '%s/issue-7\tmac-a\n' $F"; touch -t 202001010000 "$CACHE"
+loc "wid:$F/issue-7" "$L"; ok; [ "$out" = "remote mac-a" ] || fail "C: refreshed again" "$out / $err"
 
 # --- D: the scripts ----------------------------------------------------------------------
 run() { out=$(env -u TMUX "$@" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
@@ -140,9 +140,9 @@ run bash "$BIN/fleet-peer-send.sh" -L "$L" issue:7 hi; base="$rc|$out|$err"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$U/issue-7" hi
 ok; [ "$rc|$out|$err" = "$base" ] || fail "D: peer-send wid (local) must match issue:7 exactly" "[$rc|$out|$err] vs [$base]"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi
-# No pane: sent as the operator (issue #1649) — handed to the hub, queued, says m4.
-ok; [ "$rc" = 3 ] && case "$out" in *"on m4"*) true ;; *) false ;; esac \
-  || fail "D: peer-send remote wid from no pane → queued as the operator, says m4" "rc=$rc $out $err"
+# No pane: sent as the operator (issue #1649) — handed to the hub, queued, says mac-a.
+ok; [ "$rc" = 3 ] && case "$out" in *"on mac-a"*) true ;; *) false ;; esac \
+  || fail "D: peer-send remote wid from no pane → queued as the operator, says mac-a" "rc=$rc $out $err"
 rm -f "$FLEET_CONF_DIR/control/hub-outbox/"*.json 2>/dev/null
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$U/issue-8" hi
 ok; [ "$rc" = 1 ] && case "$err" in *"no live worker"*) true ;; *) false ;; esac || fail "D: peer-send unknown wid → exit 1" "rc=$rc $err"
@@ -150,8 +150,8 @@ run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:bogus" hi
 ok; [ "$rc" = 2 ] || fail "D: peer-send malformed wid → exit 2" "rc=$rc $err"
 # await
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-7" -L "$L" --parent issue-1 --timeout 5 --interval 1
-ok; [ "$rc" = 5 ] && [ "$(printf '%s\n' "$out" | head -1)" = NO-WORKER ] && case "$out" in *"lives on m4"*) true ;; *) false ;; esac \
-  || fail "D: await remote wid → NO-WORKER (5), says m4" "rc=$rc $out / $err"
+ok; [ "$rc" = 5 ] && [ "$(printf '%s\n' "$out" | head -1)" = NO-WORKER ] && case "$out" in *"lives on mac-a"*) true ;; *) false ;; esac \
+  || fail "D: await remote wid → NO-WORKER (5), says mac-a" "rc=$rc $out / $err"
 run bash "$BIN/fleet-await.sh" "wid:$U/issue-8" -L "$L" --parent issue-1 --no-spawn --timeout 5 --interval 1
 ok; [ "$rc" = 5 ] && case "$out" in *"#8 has no live worker (--no-spawn)"*) true ;; *) false ;; esac \
   || fail "D: await own wid → #8 through today's path" "rc=$rc $out / $err"
@@ -159,7 +159,7 @@ run bash "$BIN/fleet-await.sh" "wid:$U/scratch-3" -L "$L" --parent issue-1 --tim
 ok; [ "$rc" = 2 ] || fail "D: await scratch wid → usage refusal" "rc=$rc $err"
 # answer
 run bash "$BIN/fleet-answer.sh" -L "$L" --show "wid:$F/issue-7"
-ok; [ "$rc" = 1 ] && case "$err" in *"lives on m4"*) true ;; *) false ;; esac || fail "D: answer remote wid → exit 1" "rc=$rc $err"
+ok; [ "$rc" = 1 ] && case "$err" in *"lives on mac-a"*) true ;; *) false ;; esac || fail "D: answer remote wid → exit 1" "rc=$rc $err"
 run bash "$BIN/fleet-answer.sh" -L "$L" --show "wid:$U/issue-8"
 ok; [ "$rc" = 1 ] && case "$err" in *"no live worker"*) true ;; *) false ;; esac || fail "D: answer unknown wid → exit 1" "rc=$rc $err"
 # report-parent: a child whose parent key issue-7 is ALSO a local window
@@ -174,7 +174,7 @@ tf set-window-option -t "$wc" @origin_wid "$F/issue-7"
 # A remote parent is relayed through the hub since #1421 (hub-relay-selftest.sh
 # pins the relay); here: never the local issue-7.
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --summary x --dry-run
-ok; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7 on m4"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7 on mac-a"*) true ;; *) false ;; esac \
   && case "$out" in *"$w7"*) false ;; *) true ;; esac \
   || fail "D: report-parent with a remote parent → relayed to it, never the local issue-7" "rc=$rc out=$out err=$err"
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --origin "wid:$F/issue-7" --state blocked --summary x --dry-run

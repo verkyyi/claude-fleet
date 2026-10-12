@@ -274,8 +274,8 @@ SPAWN_NOTE='fleet: lease refused: HTTP 403 — fleet c45a2451 is not registered 
 grep -qF 'fleet: lease refused: HTTP 403 — fleet c45a2451 is not registered to this node — no lease on #777' "$WORK/err" \
                                       || fail "G3 the spawn's lease note must pass through unchanged" "$(cat "$WORK/err")"
 grep -q 'spawn was refused' "$WORK/err" && fail "G3 a spawn that went ahead is not 「refused」" "$(cat "$WORK/err")"
-SPAWN_NOTE='dash-issue-session: #777 的入口租约已拿到 (m5)' run_fif --title "Ship it" --spawn
-grep -qF '#777 的入口租约已拿到 (m5)' "$WORK/err" || fail "G3 the grant line must pass through" "$(cat "$WORK/err")"
+SPAWN_NOTE='dash-issue-session: #777 的入口租约已拿到 (mac-b)' run_fif --title "Ship it" --spawn
+grep -qF '#777 的入口租约已拿到 (mac-b)' "$WORK/err" || fail "G3 the grant line must pass through" "$(cat "$WORK/err")"
 ok "G3 --spawn passes the lease line (refused: <why> / 已拿到) through verbatim"
 
 # ============================ H: --from role ===============================

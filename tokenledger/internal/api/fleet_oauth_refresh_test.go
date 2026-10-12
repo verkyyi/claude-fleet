@@ -83,7 +83,7 @@ func (p *fakeProvider) refuse(status int, body string) {
 }
 
 // proxyVaultHarness is a hub whose vault refreshes through nodes, with alice's
-// m4 login (the leasing node) and one pool codex refresh token stored.
+// mac-c login (the leasing node) and one pool codex refresh token stored.
 func proxyVaultHarness(t *testing.T) (*harness, string) {
 	t.Helper()
 	h := newFleetHarness(t)
@@ -92,12 +92,12 @@ func proxyVaultHarness(t *testing.T) (*harness, string) {
 		t.Fatal(err)
 	}
 	h.srv.Vault = &credvault.Vault{Store: h.srv.Store, Sealer: sealer, Refresher: &credvault.ProxyRefresher{Via: h.srv.NodeOAuthRefresh}}
-	tok := enrollAs(t, h, "alice-m4", "m4", "alice")
+	tok := enrollAs(t, h, "alice-mac-c", "mac-c", "alice")
 	p, err := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal,
@@ -132,7 +132,7 @@ func startRefreshAgent(t *testing.T, h *harness, provider *fakeProvider) (logBuf
 	t.Helper()
 	const adminUser = "opadmin"
 	h.srv.FleetAdmins = append(h.srv.FleetAdmins, adminUser)
-	tok := enrollAs(t, h, "m5-admin", "m5", adminUser)
+	tok := enrollAs(t, h, "mac-d-admin", "mac-d", adminUser)
 	home := t.TempDir()
 	a, err := agent.New(agent.Config{
 		HubURL: h.http.URL, Token: tok, Home: home,

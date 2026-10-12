@@ -105,15 +105,15 @@ func TestNodeLeaseAfterRelogin(t *testing.T) {
 		Provider: credvault.Claude, Account: "icloud", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-POOLSECRET", ExpiresAt: &exp}}); code != http.StatusOK {
 		t.Fatalf("put pool: %d %v", code, out)
 	}
-	reloginTo(t, h, pAlice, "m4", "alice2", "ep_alice2-m4")
+	reloginTo(t, h, pAlice, "mac-c", "alice2", "ep_alice2-mac-c")
 	if p, err := h.srv.Store.Principal(pAlice); err != nil || p.Login != "alice" {
 		t.Fatalf("person record = %+v, %v; want login alice", p, err)
 	}
 
-	moved := enrollAs(t, h, "alice2-m4", "m4", "alice2")
+	moved := enrollAs(t, h, "alice2-mac-c", "mac-c", "alice2")
 	code, got, refusal := lease(t, h, moved)
 	if code != http.StatusOK {
-		t.Fatalf("the migrated login alice2 on m4: %d %v, want 200", code, refusal)
+		t.Fatalf("the migrated login alice2 on mac-c: %d %v, want 200", code, refusal)
 	}
 	pool := false
 	for _, c := range got.Credentials {
@@ -125,9 +125,9 @@ func TestNodeLeaseAfterRelogin(t *testing.T) {
 		t.Fatalf("credentials = %+v, want the pool's", got.Credentials)
 	}
 
-	old := enrollAs(t, h, "alice-old-m4", "m4", "alice")
+	old := enrollAs(t, h, "alice-old-mac-c", "mac-c", "alice")
 	if code, _, refusal := lease(t, h, old); code != http.StatusForbidden || refusal["error"] != LeaseNoPrincipal ||
-		!strings.Contains(refusal["message"], "alice on m4") {
+		!strings.Contains(refusal["message"], "alice on mac-c") {
 		t.Fatalf("the old login after the move: %d %v, want 403 %s", code, refusal, LeaseNoPrincipal)
 	}
 }
@@ -181,20 +181,20 @@ func TestAccountsRename(t *testing.T) {
 		t.Fatalf("rename an unknown person: %d %v, want 404", code, out)
 	}
 
-	// bob's account on mini2 moves to bob3, which carol's record already
+	// bob's account on mac-f moves to bob3, which carol's record already
 	// holds (fleet_principals.login is UNIQUE): taken.
 	b, err := h.srv.Store.AdoptPrincipal("wx-bob", "bob", "Bob", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(b, "mini2", now); err != nil {
+	if err := h.srv.Store.AdoptAccount(b, "mac-f", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.srv.Store.AdoptPrincipal("wx-carol", "bob3", "Carol", now); err != nil {
 		t.Fatal(err)
 	}
-	reloginTo(t, h, b.ID, "mini2", "bob3", "ep_b")
-	if code, out := h.post(t, "/v1/fleet/accounts", FleetAccountRequest{Action: "rename", PrincipalID: b.ID, Hostname: "mini2"}); code != http.StatusConflict {
+	reloginTo(t, h, b.ID, "mac-f", "bob3", "ep_b")
+	if code, out := h.post(t, "/v1/fleet/accounts", FleetAccountRequest{Action: "rename", PrincipalID: b.ID, Hostname: "mac-f"}); code != http.StatusConflict {
 		t.Fatalf("rename onto carol's login: %d %v, want 409", code, out)
 	}
 	if got, _ := h.srv.Store.Principal(b.ID); got.Login != "bob" {

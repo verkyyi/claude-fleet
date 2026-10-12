@@ -37,8 +37,8 @@ const flush = () => new Promise((r) => setImmediate(r));
 const lines = (...xs) => xs.map((text) => ({ text }));
 
 test('logPath encodes every part; refusal reads a HEAD status', () => {
-  assert.equal(logPath('macmini.ts.net', 'twentyfour', 'sms-watch'), '/v1/nodes/macmini.ts.net/services/twentyfour/sms-watch/log');
-  assert.equal(logPath('m4', 'a/b', 'x y'), '/v1/nodes/m4/services/a%2Fb/x%20y/log');
+  assert.equal(logPath('mac-c.example.ts.net', 'twentyfour', 'sms-watch'), '/v1/nodes/mac-c.example.ts.net/services/twentyfour/sms-watch/log');
+  assert.equal(logPath('mac-a', 'a/b', 'x y'), '/v1/nodes/mac-a/services/a%2Fb/x%20y/log');
   assert.equal(refusal(200), '');
   assert.equal(refusal(403), 'denied');
   assert.equal(refusal(404), 'gone');

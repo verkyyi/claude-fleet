@@ -40,7 +40,7 @@ unset CLAUDE_CONFIG_DIR FLEET_TRUST_RACE_HOOK
 CFG="$HOME/.claude.json"
 
 # a realistic fake: unrelated top-level keys, one trusted project with many keys,
-# one UNtrusted project (the macmini shape: FLEET_MAIN present but false).
+# one UNtrusted project (the mac-c shape: FLEET_MAIN present but false).
 MAIN="$WORK/proj/repo"; mkdir -p "$WORK/proj"
 git init -q "$MAIN" && git -C "$MAIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 MAIN_P=$(cd "$MAIN" && pwd -P)

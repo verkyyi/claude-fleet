@@ -133,10 +133,10 @@ if [ -n "$REAL_TMUX" ]; then
     T set-option -wu -t "=$S:draft" "$o"; T set-option -wu -t "=$S:uncached" "$o"
   done
   T set-option -w -t "=$S:uncached" @claude_state needs
-  T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 m5 还是只在 m4？'
+  T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 mac-b 还是只在 mac-a？'
   T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'
   out1=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: a needs session carries its question (column 19, #1951)" "detail=演练放在 m5 还是只在 m4？" \
+  eq "A: a needs session carries its question (column 19, #1951)" "detail=演练放在 mac-b 还是只在 mac-a？" \
      "$(printf '%s\n' "$out1" | awk -F'\t' '$10 == "uncached" { print $19 }')"
   eq "A: not in needs → no question, whatever the option says" "detail=" \
      "$(printf '%s\n' "$out1" | awk -F'\t' '$10 == "draft" { print $19 }')"
@@ -148,11 +148,11 @@ if [ -n "$REAL_TMUX" ]; then
   # as title=; an issue window keeps its issue's title whatever the line says
   T new-window -d -t "=$S:" -n '我的会话' 'sleep 600'
   T set-option -w -t "=$S:我的会话" @norepo 1
-  T set-option -w -t "=$S:我的会话" @task_line '帮我看下 mini2 的日志'
+  T set-option -w -t "=$S:我的会话" @task_line '帮我看下 mac-d 的日志'
   T set-option -w -t "=$S:draft" @task_line '试一下新的侧栏'
   T set-option -w -t "=$S:fix-sidebar-slug" @task_line '/fleet-claim'
   out5=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mini2 的日志" "$(col17 "$out5" '我的会话')"
+  eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mac-d 的日志" "$(col17 "$out5" '我的会话')"
   eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
   eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
   eq "A: …and the line moves no other column (32 columns, #3369, #3517)" "20 reap= detail= role= epic=" \
@@ -203,8 +203,8 @@ assert (p0, x0) == (p, {k: v for k, v in x.items() if k != "title"}), (x0, x)
 p, x = inventory_row(base[:9] + ["title=x"])
 assert x["name"] == "title=x" and "title" not in x, x
 # column 19 (issue #1951): the question a needs session asks; empty = None
-p, x = inventory_row(base + tail + ["title=t", "reap=", "detail=演练放在 m5 还是只在 m4？"])
-assert x["detail"] == "演练放在 m5 还是只在 m4？" and x["title"] == "t" and x["reap"] is None, x
+p, x = inventory_row(base + tail + ["title=t", "reap=", "detail=演练放在 mac-b 还是只在 mac-a？"])
+assert x["detail"] == "演练放在 mac-b 还是只在 mac-a？" and x["title"] == "t" and x["reap"] is None, x
 p, x = inventory_row(base + tail + ["title=t", "reap=keep", "detail="])
 assert x["detail"] is None and x["reap"] == "keep", x
 p, x = inventory_row(base + tail + ["title=t", "reap=keep"])
@@ -262,21 +262,21 @@ path, f, me = sys.argv[1:4]
 def s(key, **w):
     w.setdefault("key", key); w.setdefault("state", "working"); w.setdefault("lifecycle", "awake")
     w.setdefault("agent", "claude"); w.setdefault("repo", "acme/app")
-    return dict(worker_id=f + "/" + key, machine_name="mini2.local", os_user=me, fleet_id=f,
+    return dict(worker_id=f + "/" + key, machine_name="mac-d.local", os_user=me, fleet_id=f,
                 fleet_name="x", availability="online", worker=w, observed_at="2026-10-06T10:00:00Z")
 sessions = [s("issue-21", issue=21, name="slug-of-21", title="远程的 issue 标题"),
             s("issue-22", issue=22, name="slug-of-22", title=None),
             s("issue-23", issue=23, name="slug-of-23"),
-            s("issue-24", issue=24, name="slug-of-24", state="needs", needs="ask", detail="演练放在 m5 还是只在 m4？"),
+            s("issue-24", issue=24, name="slug-of-24", state="needs", needs="ask", detail="演练放在 mac-b 还是只在 mac-a？"),
             s("scratch-5", name="scratch-5", state="needs", needs="perm", detail="Bash: git push"),
             s("issue-25", issue=25, name="slug-of-25", state="failed"),
             s("issue-26", issue=26, name="slug-of-26", agent="codex", ctx_left=81, ctx_band="ok",
               ctx_ts=1800000000, model="gpt-6-astra", effort="high"),
             s("issue-27", issue=27, name="slug-of-27", ctx_left=None, ctx_band=None, model=None)]
-nodes = [dict(machine_name="mini2.local", availability="online", sessions=3, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
+nodes = [dict(machine_name="mac-d.local", availability="online", sessions=3, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
-export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4"
+export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mac-d=mac-a"
 bash "$HUBS" --refresh 2>"$WORK/err" || fail "C: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 US=$'\x1f'
@@ -290,9 +290,9 @@ eq "C: a measured session's row carries fields 21-25" "25|81|ok|1800000000|gpt-6
 eq "C: nulls for every bus key keep the row's 16 fields" "16|" "$(crow issue-27)"
 # who waits on you and what they ask (issue #1951): needs_<sess> beside the cache
 eq "C: needs_<sess> lists the needs / failed sessions with their question" \
-   "$F/issue-24${US}#24${US}ask${US}m4${US}演练放在 m5 还是只在 m4？
-$F/scratch-5${US}scratch-5${US}perm${US}m4${US}Bash: git push
-$F/issue-25${US}#25${US}failed${US}m4${US}" "$(cat "$G/needs_$S" 2>/dev/null)"
+   "$F/issue-24${US}#24${US}ask${US}mac-a${US}演练放在 mac-b 还是只在 mac-a？
+$F/scratch-5${US}scratch-5${US}perm${US}mac-a${US}Bash: git push
+$F/issue-25${US}#25${US}failed${US}mac-a${US}" "$(cat "$G/needs_$S" 2>/dev/null)"
 
 # ============================================================================
 # D. sidebar — field 14
@@ -334,9 +334,9 @@ eq "D: a scratch row is byte for byte as before" \
 # another machine's rows: field 17 of the hub cache
 export CCQUOTA_FLEET=1
 NOW=$(date +%s); printf '%s\n' "$NOW" > "$G/hub_ok"
-{ printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-  printf 'wid:%s/issue-21\037m4\037online\03721\037acme/app\037done\037claude\037RT\037\037\0370\037\037hub\037\0371759000000\037stale\037远程的 issue 标题\n' "$F"
-  printf 'wid:%s/issue-22\037m4\037online\03722\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\0371759000000\n' "$F"
+{ printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0372\037%s\n' "$NOW" "$NOW"
+  printf 'wid:%s/issue-21\037mac-a\037online\03721\037acme/app\037done\037claude\037RT\037\037\0370\037\037hub\037\0371759000000\037stale\037远程的 issue 标题\n' "$F"
+  printf 'wid:%s/issue-22\037mac-a\037online\03722\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\0371759000000\n' "$F"
 } > "$G/remote_$S"
 s=$(side)
 eq "D: a remote row carries its node's title as field 14" "远程的 issue 标题" "$(fld "$s" RT 14)"
@@ -354,7 +354,7 @@ wl() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}working$US$US$3$US$4$US$US$US
 unset CCQUOTA_FLEET
 : > "$WLIST_FILE"
 wl 1 scratch-5 @1 '' '' '试一下新的侧栏'
-wl 2 '我的会话' @2 '' 1 '帮我看下 mini2 的日志'
+wl 2 '我的会话' @2 '' 1 '帮我看下 mac-d 的日志'
 wl 3 norepo-2 @3 '' 1 ''
 wl 4 '我的会话-2' @4 '' 1 '第二个'
 wl 5 issue-12 @5 12 '' '/fleet-claim'
@@ -362,7 +362,7 @@ s=$(side)
 lbl() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v w="$2" '$1 == w { print $4 }'; }
 eq "D2: an unbound scratch → its first sentence as the label" "试一下新的侧栏" "$(lbl "$s" @1)"
 eq "D2: …and as field 14" "试一下新的侧栏" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@1" { print $14 }')"
-eq "D2: a no-repo session → 我的会话 · <line>" "我的会话 · 帮我看下 mini2 的日志" "$(lbl "$s" @2)"
+eq "D2: a no-repo session → 我的会话 · <line>" "我的会话 · 帮我看下 mac-d 的日志" "$(lbl "$s" @2)"
 eq "D2: an older norepo-N with no line → 我的会话" "我的会话" "$(lbl "$s" @3)"
 eq "D2: a deduped 我的会话-2 → 我的会话 · <line>" "我的会话 · 第二个" "$(lbl "$s" @4)"
 eq "D2: an issue window with no cached title keeps its name" "issue-12" "$(lbl "$s" @5)"
@@ -370,7 +370,7 @@ eq "D2: …and no field 14 (the line is not its title)" "-" \
    "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@5" { print (NF >= 14 ? $14 : "-") }')"
 eq "D2: no row reads norepo" "" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 ~ /norepo/')"
 # fleet ls reads these same rows (fleet-quickopen.py full_rows → parse_rows)
-eq "D2: fleet ls's parse of them — names, no norepo" "试一下新的侧栏|我的会话 · 帮我看下 mini2 的日志|我的会话|我的会话 · 第二个|issue-12" \
+eq "D2: fleet ls's parse of them — names, no norepo" "试一下新的侧栏|我的会话 · 帮我看下 mac-d 的日志|我的会话|我的会话 · 第二个|issue-12" \
    "$(printf '%s\n' "$s" | python3 -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("qo", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)

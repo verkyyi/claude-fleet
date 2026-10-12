@@ -123,7 +123,7 @@ func waitFor(t *testing.T, d time.Duration, what string, cond func() bool) {
 // Off is today's hub: no route, no table.
 func TestFleetModuleOffAddsNothing(t *testing.T) {
 	h := newHarness(t)
-	tok := h.enroll(t, "m5")
+	tok := h.enroll(t, "mac-d")
 
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+control.Path, nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
@@ -158,12 +158,12 @@ func TestNodeConnectRequiresEnrollmentToken(t *testing.T) {
 
 func TestNodeHeartbeatListedOnline(t *testing.T) {
 	h := newFleetHarness(t)
-	c := dialNode(t, h, h.enroll(t, "m5"))
+	c := dialNode(t, h, h.enroll(t, "mac-d"))
 	if w := hello(t, c, control.Proto, 5000); !w.Accepted {
 		t.Fatalf("a current node was not accepted: %+v", w)
 	}
 	beat(t, c, control.Proto, control.Heartbeat{
-		Hostname: "m5", OSUser: "verkyyi", Load1: 2.5, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 64 << 30,
+		Hostname: "mac-d", OSUser: "ivan", Load1: 2.5, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 64 << 30,
 		Sessions: 3, Fleets: []control.Fleet{{FleetID: "f1", Name: "fleet-a", State: "running", Count: 3}},
 	})
 	var snap NodesSnapshot
@@ -172,7 +172,7 @@ func TestNodeHeartbeatListedOnline(t *testing.T) {
 		return len(snap.Nodes) == 1 && sessionsIs(snap.Nodes[0].Sessions, 3)
 	})
 	n := snap.Nodes[0]
-	if n.Status != "online" || !n.Connected || !n.Compatible || n.Hostname != "m5" || n.Load1 != 2.5 || n.NCPU != 10 {
+	if n.Status != "online" || !n.Connected || !n.Compatible || n.Hostname != "mac-d" || n.Load1 != 2.5 || n.NCPU != 10 {
 		t.Fatalf("node = %+v", n)
 	}
 	if len(n.Fleets) != 1 || n.Fleets[0].Name != "fleet-a" || n.Fleets[0].Count != 3 {
@@ -234,8 +234,8 @@ func TestNodeProtoMismatchRefusesWrites(t *testing.T) {
 
 func TestNodeFirstMessageMustBeHello(t *testing.T) {
 	h := newFleetHarness(t)
-	c := dialNode(t, h, h.enroll(t, "m5"))
-	beat(t, c, control.Proto, control.Heartbeat{Hostname: "m5"})
+	c := dialNode(t, h, h.enroll(t, "mac-d"))
+	beat(t, c, control.Proto, control.Heartbeat{Hostname: "mac-d"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var reply control.Message
@@ -272,9 +272,9 @@ func TestNodeStatusLostAfterThreeMissedBeats(t *testing.T) {
 // A node that goes silent is marked lost — and kept, never dropped.
 func TestNodeGoesLostButStaysListed(t *testing.T) {
 	h := newFleetHarness(t)
-	c := dialNode(t, h, h.enroll(t, "m4"))
+	c := dialNode(t, h, h.enroll(t, "mac-c"))
 	hello(t, c, control.Proto, 100)
-	beat(t, c, control.Proto, control.Heartbeat{Hostname: "m4", Sessions: 2})
+	beat(t, c, control.Proto, control.Heartbeat{Hostname: "mac-c", Sessions: 2})
 	waitFor(t, 3*time.Second, "online", func() bool {
 		s := roster(t, h)
 		return len(s.Nodes) == 1 && s.Nodes[0].Status == "online" && sessionsIs(s.Nodes[0].Sessions, 2)

@@ -18,7 +18,7 @@
 #      then `sudo dscl .` reading `passwd /Users/<login> <pw>` on its STDIN, then
 #      the shell back to /bin/zsh. <pw> never enters any argv (issue #2396: the
 #      old `-password <pw>` sat in `ps` for the ~5 minutes sysadminctl ran, to
-#      every login on the machine — and still runs, every time on macmini:
+#      every login on the machine — and still runs, every time on mac-c:
 #      the whole create, home + install + daemons, is 13 min and more, #2908);
 #      the login is shell-less while it still has
 #      no password, so a blank-password `su` reaches nothing. <pw> is
@@ -74,7 +74,7 @@
 #      account's store /var/db/fleet-cred/<login>/ (0700 _fleetcred), the proxy
 #      run as _fleetcred, the pool (step 5) inside the store — on a machine that
 #      runs the shared proxy the new login is one more TENANT of it, never an own
-#      proxy (issue #3155: drill10110804 on mini2 was neither). Its preflight is
+#      proxy (issue #3155: drill10110804 on mac-d was neither). Its preflight is
 #      "nothing runs as this login yet". From then on the login needs no sudo:
 #      its sessions reach the subscription only through the proxy. The run ends
 #      with ONE line the hub reads — `credsep: separated` (status separated AND
@@ -227,7 +227,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$LOGIN" ] || usage
-# A leading digit is allowed (macOS permits it; `24haowan` opened on a second
+# A leading digit is allowed (macOS permits it; `acme` opened on a second
 # machine, issue #2105) — an all-digit name is not: it reads as a uid.
 printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \
   && printf '%s' "$LOGIN" | grep -q '[a-z_-]' \
@@ -367,7 +367,7 @@ else
   PWFILE="$ONBOARD/password.txt"; PWGEN=1
 fi
 # 24 random letters and digits, ending in one of each: a machine's password
-# policy may want both (macmini: hasLetter · hasDigit), and a draw with no
+# policy may want both (mac-c: hasLetter · hasDigit), and a draw with no
 # digit is refused (dscl / sysadminctl 5402, C9 run 11)
 # a bounded read first: tr never waits on SIGPIPE to stop (#3419 — an inherited
 # SIG_IGN made the unbounded form spin on /dev/urandom forever)
@@ -611,7 +611,7 @@ if [ "$DONLY" = 0 ]; then
   if [ "$RECYCLE" = 1 ]; then step "its home directory (the wash made it; createhomedir fills only what is missing — mode 700)"
   else step "create its home directory (mode 700 — every login is in staff)"; fi
   run sudo createhomedir -c -u "$LOGIN"
-  # macOS's default home is 0750 <login>:staff on some machines (m4, issue
+  # macOS's default home is 0750 <login>:staff on some machines (mac-a, issue
   # #2414) and every login is in staff, so any other login could list ~/.claude,
   # ~/.claude/projects, ~/.codex. Never rely on the default: 700, the mode only
   # — the ACL (`everyone deny delete`) is left as macOS made it.

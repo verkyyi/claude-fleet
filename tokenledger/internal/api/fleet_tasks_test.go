@@ -43,9 +43,9 @@ func taskPost(t *testing.T, h *harness, path string, body any) (int, map[string]
 // CapTask is sent `task: T1` with the no-repo scratch, the record says where
 // it landed — and there is no issue anywhere.
 func TestTaskNoRepoIsARecordOnly(t *testing.T) {
-	h, m5, m4, f4, _, _ := capNodes(t, control.CapTask)
+	h, macD, macC, f4, _, _ := capNodes(t, control.CapTask)
 	lease, key := clientLeaseFor(t, h)
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
 		"workers": []map[string]any{{"window_id": "@6", "worker_id": f4.FleetID + "/" + machineB}}}))
 
 	st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
@@ -53,12 +53,12 @@ func TestTaskNoRepoIsARecordOnly(t *testing.T) {
 	if st != 200 || out.State != "done" || out.Task != "T1" {
 		t.Fatalf("place = %d %+v; want done with task T1", st, out)
 	}
-	if m5.count() != 0 || m4.count() != 1 {
-		t.Fatalf("writes m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
-	params := m4.writes[0]["params"].(map[string]any)
+	params := macC.writes[0]["params"].(map[string]any)
 	if params["task"] != "T1" || params["kind"] != "scratch" || params["no_repo"] != true {
-		t.Fatalf("m4 was sent %v; want a no-repo scratch carrying task T1", params)
+		t.Fatalf("mac-c was sent %v; want a no-repo scratch carrying task T1", params)
 	}
 	ts := taskRecords(t, h)
 	if len(ts) != 1 {
@@ -67,10 +67,10 @@ func TestTaskNoRepoIsARecordOnly(t *testing.T) {
 	r := ts[0]
 	if r["id"] != "T1" || r["title"] != "看看这台机器风扇为什么一直转" || r["via"] != "⌘P" || r["device"] != "MacBook" ||
 		r["state"] != store.TaskOpen || r["worker_id"] != f4.FleetID+"/"+machineB || r["issue"] != "" || r["repo"] != "" {
-		t.Fatalf("record = %v; want T1 open on m4 with the words' first line and no issue", r)
+		t.Fatalf("record = %v; want T1 open on mac-c with the words' first line and no issue", r)
 	}
-	if !strings.HasPrefix(r["machine"].(string), "m4") {
-		t.Fatalf("record machine = %v; want m4", r["machine"])
+	if !strings.HasPrefix(r["machine"].(string), "mac-c") {
+		t.Fatalf("record machine = %v; want mac-c", r["machine"])
 	}
 	// the same idempotency key again is the same record, never a second
 	if st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
@@ -85,9 +85,9 @@ func TestTaskNoRepoIsARecordOnly(t *testing.T) {
 // A task that chose a repo is a new start: the machine files its issue, and
 // the issue hangs on the record (from the session's key, issue-77).
 func TestTaskWithRepoHangsItsIssue(t *testing.T) {
-	h, _, m4, f4, _, _ := capNodes(t, control.CapTask)
+	h, _, macC, f4, _, _ := capNodes(t, control.CapTask)
 	lease, key := clientLeaseFor(t, h)
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@4", "key": "issue-77",
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@4", "key": "issue-77",
 		"workers": []map[string]any{{"window_id": "@4", "worker_id": f4.FleetID + "/issue-77"}}}))
 
 	st, out := clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "new", "node": "auto",
@@ -95,9 +95,9 @@ func TestTaskWithRepoHangsItsIssue(t *testing.T) {
 	if st != 200 || out.State != "done" || out.Task != "T1" {
 		t.Fatalf("place = %d %+v; want done with T1", st, out)
 	}
-	params := m4.writes[0]["params"].(map[string]any)
+	params := macC.writes[0]["params"].(map[string]any)
 	if params["task"] != "T1" || params["kind"] != "new" || params["title"] != "给 hub 加一个 /healthz" {
-		t.Fatalf("m4 was sent %v; want kind=new carrying task T1", params)
+		t.Fatalf("mac-c was sent %v; want kind=new carrying task T1", params)
 	}
 	r := taskRecords(t, h)[0]
 	if r["issue"] != writeRepo+"#77" || r["session_key"] != "issue-77" || r["repo"] != writeRepo || r["state"] != store.TaskOpen {
@@ -109,33 +109,33 @@ func TestTaskWithRepoHangsItsIssue(t *testing.T) {
 // (task_issue, bound to its session) and the issue hangs on the record; a
 // second ask answers the same issue and sends nothing.
 func TestTaskIssueOnDemand(t *testing.T) {
-	h, _, m4, f4, _, _ := capNodes(t, control.CapTask)
+	h, _, macC, f4, _, _ := capNodes(t, control.CapTask)
 	lease, key := clientLeaseFor(t, h)
 	wid := f4.FleetID + "/" + machineB
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
 		"workers": []map[string]any{{"window_id": "@6", "worker_id": wid}}}))
 	if st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
 		"task": true, "body": "整理一下这周的账单", "idempotency_key": "c-task-3"}); st != 200 || out.Task != "T1" {
 		t.Fatalf("place = %d %+v", st, out)
 	}
-	m4.setOpGet(finished("succeeded", map[string]any{"issue_url": "https://github.com/" + writeRepo + "/issues/3312"}))
+	macC.setOpGet(finished("succeeded", map[string]any{"issue_url": "https://github.com/" + writeRepo + "/issues/3312"}))
 
 	st, rec := taskPost(t, h, FleetTasksPath+"/T1/issue", map[string]any{"repo": writeRepo})
 	if st != 200 || rec["issue"] != writeRepo+"#3312" {
 		t.Fatalf("建 GitHub 单 = %d %v; want the issue on the record", st, rec)
 	}
-	if m4.count() != 2 {
-		t.Fatalf("m4 writes = %d; want the start and the filing", m4.count())
+	if macC.count() != 2 {
+		t.Fatalf("mac-c writes = %d; want the start and the filing", macC.count())
 	}
-	env := m4.writes[1]
+	env := macC.writes[1]
 	params := env["params"].(map[string]any)
 	if env["action"] != "task_issue" || env["fleet_id"] != f4.FleetID || params["task"] != "T1" ||
 		params["repo"] != writeRepo || params["worker_id"] != wid || params["title"] != "整理一下这周的账单" {
-		t.Fatalf("m4 was sent %v; want task_issue for T1 on the task's own fleet, bound to its session", env)
+		t.Fatalf("mac-c was sent %v; want task_issue for T1 on the task's own fleet, bound to its session", env)
 	}
 	if st, rec := taskPost(t, h, FleetTasksPath+"/T1/issue", map[string]any{"repo": writeRepo}); st != 200 ||
-		rec["issue"] != writeRepo+"#3312" || m4.count() != 2 {
-		t.Fatalf("again = %d %v (writes %d); want the same issue, nothing sent", st, rec, m4.count())
+		rec["issue"] != writeRepo+"#3312" || macC.count() != 2 {
+		t.Fatalf("again = %d %v (writes %d); want the same issue, nothing sent", st, rec, macC.count())
 	}
 	// the client's road: the signed place request's action task_issue
 	st2, out := clientPlace(t, h, lease, key, map[string]any{"action": "task_issue", "task_ref": "T1"})
@@ -180,17 +180,17 @@ func TestTaskRefusedIsRecorded(t *testing.T) {
 // byte the place it was. And a machine that does not say CapTask is never
 // sent one: its start opens as before (the record still stands).
 func TestTaskOffAddsNothing(t *testing.T) {
-	h, _, m4, f4, _, _ := capNodes(t)
+	h, _, macC, f4, _, _ := capNodes(t)
 	lease, key := clientLeaseFor(t, h)
-	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
+	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
 		"workers": []map[string]any{{"window_id": "@6", "worker_id": f4.FleetID + "/" + machineB}}}))
 	st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
 		"body": "整理这周的日报", "idempotency_key": "c-plain"})
 	if st != 200 || out.State != "done" || out.Task != "" {
 		t.Fatalf("place = %d %+v; want done, no task", st, out)
 	}
-	if _, ok := m4.writes[0]["params"].(map[string]any)["task"]; ok {
-		t.Fatalf("a plain start was sent a task: %v", m4.writes[0])
+	if _, ok := macC.writes[0]["params"].(map[string]any)["task"]; ok {
+		t.Fatalf("a plain start was sent a task: %v", macC.writes[0])
 	}
 	if ts := taskRecords(t, h); len(ts) != 0 {
 		t.Fatalf("records = %v; want none", ts)
@@ -199,12 +199,12 @@ func TestTaskOffAddsNothing(t *testing.T) {
 	if strings.Contains(string(raw), `"task"`) {
 		t.Fatalf("a plain answer names a task: %s", raw)
 	}
-	// m4 predates the task record: the record is written, m4 is sent none
+	// mac-c predates the task record: the record is written, mac-c is sent none
 	if st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
 		"task": true, "body": "看看风扇", "idempotency_key": "c-old"}); st != 200 || out.Task != "T1" {
 		t.Fatalf("place = %d %+v", st, out)
 	}
-	if _, ok := m4.writes[1]["params"].(map[string]any)["task"]; ok {
-		t.Fatalf("a node without CapTask was sent a task: %v", m4.writes[1])
+	if _, ok := macC.writes[1]["params"].(map[string]any)["task"]; ok {
+		t.Fatalf("a node without CapTask was sent a task: %v", macC.writes[1])
 	}
 }

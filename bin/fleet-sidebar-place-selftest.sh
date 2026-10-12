@@ -9,25 +9,25 @@
 # `restore`), every question opens on ONE line under the session
 # (bin/fleet-ask.py, `@stage_ask`) and is answered there with send-keys, and
 # what the list says is on the bar — read off the attached client's terminal. Around it a sandbox bin/ of symlinks to the shipped scripts, three
-# faked: tmux-dashboard-rows.sh prints a rows file (two repo headings, an m5 row),
+# faked: tmux-dashboard-rows.sh prints a rows file (two repo headings, an mac-b row),
 # fleet-client-place.sh is the hub — it logs its argv and answers per a scenario
 # file (C1's exit codes), adding the new session's row to the rows file when it
 # «opens» one — and fleet-remote-view.sh logs the row a switch steps into. The
-# hub's /v1/nodes is a hub_nodes cache under FLEET_STATUS_G: m4 (1 running), m5
+# hub's /v1/nodes is a hub_nodes cache under FLEET_STATUS_G: mac-a (1 running), mac-b
 # (3 running), mbp (only coordinates).
 #   A. `new`: the repo menu (both repos) → ↵ → the issue line → 42 ↵ → 「开在哪」:
-#      自动 first and highlighted, m4 before m5 (fewer running), mbp greyed
+#      自动 first and highlighted, mac-a before mac-b (fewer running), mbp greyed
 #      只协调; ↓↓↓ never lands on mbp; ↵ on 自动 runs the place with
 #      `acme/web 42 --node auto`; the bar says 正在…开; the new row appears,
 #      is selected, and the switch stepped into it; the bar says 已切过去
 #   B. `scratch`: a scratch — repo (the highlighted row's preselected), then
-#      「开在哪」 → m4: `<repo> scratch --node <m4's hostname>`
+#      「开在哪」 → mac-a: `<repo> scratch --node <mac-a's hostname>`
 #   C. `restore`: the key line takes issue-9 → `restore:issue-9`
 #   D. the hub unreachable (hub_ok stale): `new` says 入口连不上，暂时不能新建 — no
 #      menu, nothing run; the place itself unreachable (exit 1) says the same
 #   E. no machine can take it (REFUSED, exit 4): the hub's reason, as it said it
-#   F. held elsewhere (HELD, exit 3): 已在 m5 上跑 · y 切过去 → y steps into the
-#      m5 row of that issue
+#   F. held elsewhere (HELD, exit 3): 已在 mac-b 上跑 · y 切过去 → y steps into the
+#      mac-b row of that issue
 #   G. degenerate: nothing in the list says 这台电脑上没有 fleet any more
 #   (pure) an empty list (issue #1927): no hub_repos → the old toast; one repo
 #      in it → straight to 「开在哪」; two → the repo menu; none → who to ask;
@@ -72,7 +72,7 @@ ROWS="$WORK/rows"; LOG="$WORK/place.log"; VIEW="$WORK/view.log"; SCEN="$WORK/sce
 : > "$LOG"; : > "$VIEW"
 rows_reset() {
   printf 'hdr%sacme/app%s%sapp (1)%s\n' "$US" "$US" "$US" "$US" > "$ROWS"
-  printf 'wid:U/issue-7%sworking%s*%sseven%s%s%s0%s%sm5%s7%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" >> "$ROWS"
+  printf 'wid:U/issue-7%sworking%s*%sseven%s%s%s0%s%smac-b%s7%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" >> "$ROWS"
   printf 'hdr%sacme/web%s%sweb (0)%s\n' "$US" "$US" "$US" "$US" >> "$ROWS"
 }
 rows_reset
@@ -83,20 +83,20 @@ cat > "$SB/fleet-client-place.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$LOG"
 case "\$(cat "$SCEN")" in
-  ok)   printf 'wid:U/issue-42${US}working${US}*${US}forty-two${US}${US}${US}0${US}${US}m4${US}42${US}${US}\n' >> "$ROWS"
-        printf 'REMOTE m4 op1 done U/issue-42\tm5 busier\n'; exit 0 ;;
-  full) printf 'REFUSED NO_CAPACITY\tm4: 满了 (6/6)；m5: 满了 (8/8)\n'; exit 4 ;;
-  held) printf 'HELD m5\t#7 is leased on m5\n'; exit 3 ;;
+  ok)   printf 'wid:U/issue-42${US}working${US}*${US}forty-two${US}${US}${US}0${US}${US}mac-a${US}42${US}${US}\n' >> "$ROWS"
+        printf 'REMOTE mac-a op1 done U/issue-42\tmac-b busier\n'; exit 0 ;;
+  full) printf 'REFUSED NO_CAPACITY\tmac-a: 满了 (6/6)；mac-b: 满了 (8/8)\n'; exit 4 ;;
+  held) printf 'HELD mac-b\t#7 is leased on mac-b\n'; exit 3 ;;
   down) printf 'fleet-client-place: the hub could not be asked: timed out\n' >&2; exit 1 ;;
-  *)    printf 'UNKNOWN m4 op9\tstill starting\n'; exit 6 ;;
+  *)    printf 'UNKNOWN mac-a op9\tstill starting\n'; exit 6 ;;
 esac
 EOF
 chmod +x "$SB/tmux-dashboard-rows.sh" "$SB/fleet-client-place.sh" "$SB/fleet-remote-view.sh"
 node_row() { local IFS=$US; printf '%s\n' "$*"; }
 { printf '#ts%s%s\n' "$US" "$(date +%s)"
-  node_row m5 online 1.00 8 40 3 abc 1 1 2 ok '' m5.local
+  node_row mac-b online 1.00 8 40 3 abc 1 1 2 ok '' mac-b.local
   node_row mbp online 0.50 8 40 0 abc 1 1 2 ok coord MacBook-Pro.local
-  node_row m4 online 1.00 8 40 1 abc 1 1 2 ok '' mac-mini-m4.local; } > "$FLEET_STATUS_G/hub_nodes"
+  node_row mac-a online 1.00 8 40 1 abc 1 1 2 ok '' mac-mini-mac-a.local; } > "$FLEET_STATUS_G/hub_nodes"
 hub_fresh() { date +%s > "$FLEET_STATUS_G/hub_ok"; }
 hub_fresh
 
@@ -109,10 +109,10 @@ print("menu", [(v, l, n, g) for v, l, n, g in m.where_menu()])
 g = os.environ["FLEET_STATUS_G"]
 os.rename(g + "/hub_nodes", g + "/hub_nodes.13")
 with open(g + "/hub_nodes", "w") as f:   # an older loop: 11 fields, no place word
-    f.write("#ts\x1f1\nm5\x1fonline\x1f1\x1f8\x1f4\x1f2\x1fa\x1f1\x1f1\x1f2\x1fok\nm6\x1flost\x1f1\x1f8\x1f4\x1f0\x1fa\x1f1\x1f1\x1f2\x1fok\n")
+    f.write("#ts\x1f1\nmac-b\x1fonline\x1f1\x1f8\x1f4\x1f2\x1fa\x1f1\x1f1\x1f2\x1fok\nm6\x1flost\x1f1\x1f8\x1f4\x1f0\x1fa\x1f1\x1f1\x1f2\x1fok\n")
 print("old", [(v, n, g) for v, l, n, g in m.where_menu()])
 os.rename(g + "/hub_nodes.13", g + "/hub_nodes")
-rows = [["hdr", "acme/app", "", "app"], ["wid:U/issue-7", "working", "*", "seven", "", "", "0", "", "m5", "7", "", ""],
+rows = [["hdr", "acme/app", "", "app"], ["wid:U/issue-7", "working", "*", "seven", "", "", "0", "", "mac-b", "7", "", ""],
         ["hdr", "acme/web", "", "web"]]
 print("repos", m.shell_repos(rows), m.repo_of(rows, "wid:U/issue-7"), m.repo_of(rows, "hdr:acme/web"))
 # An empty list (issue #1927): the hub's hub_repos stands in for the headings.
@@ -137,29 +137,29 @@ def acct(label, line, repos=""):
         f.write("#ts\x1f1\n#account\x1f" + line + "\x1f1\n" + repos)
     ask, toast = m.place_start("scratch", [], "a", name="tea")
     print(label, ask and ask.kind, type(toast).__name__, getattr(toast, "retry", None), toast)
-acct("a1", "opening\x1f42\x1fm4.local\x1fverkyyi")
-acct("a2", "failed\x1f\x1fm4.local\x1fverkyyi")
-acct("a3", "none\x1f\x1f\x1fverkyyi")
-acct("a4", "opening\x1f42\x1fm4.local\x1fverkyyi", "acme/solo\n")
+acct("a1", "opening\x1f42\x1fmac-a.local\x1fdave")
+acct("a2", "failed\x1f\x1fmac-a.local\x1fdave")
+acct("a3", "none\x1f\x1f\x1fdave")
+acct("a4", "opening\x1f42\x1fmac-a.local\x1fdave", "acme/solo\n")
 print("a5", m.hub_repos(), m.hub_account())
 os.unlink(g + "/hub_repos")
 print("a6", m.hub_account())
 PY
 )
 has 'pure: 自动 first' "$pure" "menu [('auto', '自动（入口挑最闲的）', '推荐', False)"
-has 'pure: m4 (1 running) before m5 (3)' "$pure" "('mac-mini-m4.local', 'm4', '1 个在跑', False), ('m5.local', 'm5', '3 个在跑', False), ('MacBook-Pro.local', 'mbp', '只协调', True)"
-has 'pure: an 11-field cache — its label is the node, a lost one greyed' "$pure" "old [('auto', '推荐', False), ('m5', '2 个在跑', False), ('m6', '失联', True)]"
+has 'pure: mac-a (1 running) before mac-b (3)' "$pure" "('mac-mini-mac-a.local', 'mac-a', '1 个在跑', False), ('mac-b.local', 'mac-b', '3 个在跑', False), ('MacBook-Pro.local', 'mbp', '只协调', True)"
+has 'pure: an 11-field cache — its label is the node, a lost one greyed' "$pure" "old [('auto', '推荐', False), ('mac-b', '2 个在跑', False), ('m6', '失联', True)]"
 has 'pure: the repos from the headings, a row in the heading above it' "$pure" "repos ['acme/app', 'acme/web'] acme/app acme/web"
 has 'empty list, no hub_repos: the old toast, byte for byte' "$pure" "e0 None None None 还没有仓库：侧栏里先要有一个仓库的会话"
-has 'empty list + one hub repo: straight to 「开在哪」' "$pure" "e1 place-where acme/solo ['auto', 'mac-mini-m4.local', 'm5.local', 'MacBook-Pro.local'] "
+has 'empty list + one hub repo: straight to 「开在哪」' "$pure" "e1 place-where acme/solo ['auto', 'mac-mini-mac-a.local', 'mac-b.local', 'MacBook-Pro.local'] "
 has 'headings present: the repo menu from them, hub_repos unread' "$pure" "e1rows place-repo  ['acme/app', 'acme/web'] "
 has 'empty list + two hub repos: the repo menu' "$pure" "e2 place-repo  ['acme/a', 'acme/b'] "
 has 'the hub says none: who to ask' "$pure" "e3 None None None 你还没有能开会话的机器：请入口管理员给你分一台"
-has '#2069 opening: sticky, the ↵ held for a retry' "$pure" "a1 None Sticky ('scratch', 'a', 'tea', False) 正在为你开机器（m4.local），约 42 秒 — 开好后自动接着开"
-has '#2069 failed: sticky, who to ask, no retry' "$pure" "a2 None Sticky None 给你开机器没成功：请找入口管理员 verkyyi"
-has '#2069 none: sticky, names the admin' "$pure" "a3 None Sticky None 你还没有能开会话的机器：请找入口管理员 verkyyi 给你分一台"
+has '#2069 opening: sticky, the ↵ held for a retry' "$pure" "a1 None Sticky ('scratch', 'a', 'tea', False) 正在为你开机器（mac-a.local），约 42 秒 — 开好后自动接着开"
+has '#2069 failed: sticky, who to ask, no retry' "$pure" "a2 None Sticky None 给你开机器没成功：请找入口管理员 dave"
+has '#2069 none: sticky, names the admin' "$pure" "a3 None Sticky None 你还没有能开会话的机器：请找入口管理员 dave 给你分一台"
 has '#2069 a repo beside the line: straight to 「开在哪」' "$pure" "a4 place-where str None "
-has '#2069 the #account line is never a repo' "$pure" "a5 ['acme/solo'] {'state': 'opening', 'eta': '42', 'machine': 'm4.local', 'ask': 'verkyyi'}"
+has '#2069 the #account line is never a repo' "$pure" "a5 ['acme/solo'] {'state': 'opening', 'eta': '42', 'machine': 'mac-a.local', 'ask': 'dave'}"
 has '#2069 no file: no account word' "$pure" "a6 None"
 vst=$(FLEET_STATUS_G="$FLEET_STATUS_G" bash -c '. "$1/fleet-status-lib.sh"; fleet_status_hub_node mbp; printf "%s|%s" "$HN_VST" "$HN_SESS"' _ "$SB")
 eq 'fleet_status_hub_node: ver_state off a 13-field line' 'ok|0' "$vst"
@@ -231,9 +231,9 @@ s=$(aline)
 has 'A: 「开在哪」 names the repo and the issue' "$s" 'web #42 → 开在哪'
 has 'A: 自动 highlighted' "$s" '› 自动（入口挑最闲的）'
 has 'A: mbp greyed 只协调' "$s" '只协调'
-order=$(printf '%s\n' "$s" | grep -nE '自动|  m4|  m5|  mbp' | cut -d: -f1 | tr '\n' ' ')
-m4l=$(printf '%s\n' "$s" | grep -n ' m4 ' | head -1 | cut -d: -f1); m5l=$(printf '%s\n' "$s" | grep -n ' m5 ' | head -1 | cut -d: -f1)
-CHECKS=$((CHECKS + 1)); [ -n "$m4l" ] && [ -n "$m5l" ] && [ "$m4l" -lt "$m5l" ] || fail 'A: m4 (1 running) above m5 (3 running)' "$order"
+order=$(printf '%s\n' "$s" | grep -nE '自动|  mac-a|  mac-b|  mbp' | cut -d: -f1 | tr '\n' ' ')
+m4l=$(printf '%s\n' "$s" | grep -n ' mac-a ' | head -1 | cut -d: -f1); m5l=$(printf '%s\n' "$s" | grep -n ' mac-b ' | head -1 | cut -d: -f1)
+CHECKS=$((CHECKS + 1)); [ -n "$m4l" ] && [ -n "$m5l" ] && [ "$m4l" -lt "$m5l" ] || fail 'A: mac-a (1 running) above mac-b (3 running)' "$order"
 key Down; key Down; key Down
 has 'A: ↓↓↓ wraps past mbp, never onto it' "$(aline)" '› 自动'
 hasnt 'A: mbp never highlighted' "$(aline)" '› mbp'
@@ -242,14 +242,14 @@ key Enter
 CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'A: the reap question after 「开在哪」' "$(aline)"
 has 'A: 合并后回收 highlighted for an issue' "$(aline)" '› 合并后回收'
 key Enter
-CHECKS=$((CHECKS + 1)); waitfor 8 '已在 m4 上开好，已切过去' bar || fail 'A: the bar says it switched' "$(bar | tail -c 400)"
+CHECKS=$((CHECKS + 1)); waitfor 8 '已在 mac-a 上开好，已切过去' bar || fail 'A: the bar says it switched' "$(bar | tail -c 400)"
 has 'A: the bar said where it was opening' "$(bar)" '正在'
 eq 'A: the place ran: repo, issue, --node auto' 'acme/web 42 --node auto' "$(tail -n1 "$LOG")"
 eq 'A: the switch stepped into the new row' 'wid:U/issue-42' "$(tail -n1 "$VIEW")"
 CHECKS=$((CHECKS + 1)); waitfor 5 'forty-two' screen || fail 'A: the new row is in the list' "$(screen)"
 CHECKS=$((CHECKS + 1)); [ -z "$(askp)" ] || fail 'A: the question line outlived its last answer' "$(aline)"
 
-# B. scratch → repo → where → m4
+# B. scratch → repo → where → mac-a
 rows_reset; : > "$VIEW"
 park scratch
 CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'B: `scratch` opens the repo menu' "$(aline)"
@@ -261,7 +261,7 @@ CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'B: the reap ques
 has 'B: 做完就回收 highlighted for a scratch' "$(aline)" '› 做完就回收'
 key Down; key Down; key Down; key Enter
 sleep 1
-has 'B: a scratch on m4, by its hostname' "$(tail -n1 "$LOG")" ' scratch --node mac-mini-m4.local'
+has 'B: a scratch on mac-a, by its hostname' "$(tail -n1 "$LOG")" ' scratch --node mac-mini-mac-a.local'
 has 'B: 常驻 rides along as --reap keep' "$(tail -n1 "$LOG")" '--reap keep'
 
 # C. restore → repo → key → where
@@ -273,7 +273,7 @@ CHECKS=$((CHECKS + 1)); waitfor 5 '恢复›' || fail 'C: the key line' "$(aline
 key i s s u e - 9; key Enter
 CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'C: 「开在哪」 after the key' "$(aline)"
 key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 'm4 还没回话' bar || fail 'C: an UNKNOWN says it has not answered' "$(bar | tail -c 400)"
+CHECKS=$((CHECKS + 1)); waitfor 5 'mac-a 还没回话' bar || fail 'C: an UNKNOWN says it has not answered' "$(bar | tail -c 400)"
 has 'C: restore:issue-9' "$(tail -n1 "$LOG")" ' restore:issue-9 --node auto'
 
 # D. the hub unreachable
@@ -290,16 +290,16 @@ CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' bar || 
 # E. full
 echo full > "$SCEN"; sleep 1.5; : > "$TTY"
 park scratch; key Enter; key Enter; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '开不了：m4: 满了 (6/6)' bar || fail 'E: the hub reason, as it said it' "$(bar | tail -c 400)"
+CHECKS=$((CHECKS + 1)); waitfor 5 '开不了：mac-a: 满了 (6/6)' bar || fail 'E: the hub reason, as it said it' "$(bar | tail -c 400)"
 
 # F. held elsewhere → y
 echo held > "$SCEN"; : > "$VIEW"
 park new; key Enter; key 7; key Enter; key Enter; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '已在 m5 上跑' || fail 'F: HELD asks to switch' "$(aline)"
+CHECKS=$((CHECKS + 1)); waitfor 5 '已在 mac-b 上跑' || fail 'F: HELD asks to switch' "$(aline)"
 has 'F: …with y' "$(aline)" 'y 切过去'
 key y
 sleep .5
-eq 'F: y stepped into the m5 row of #7' 'wid:U/issue-7' "$(tail -n1 "$VIEW")"
+eq 'F: y stepped into the mac-b row of #7' 'wid:U/issue-7' "$(tail -n1 "$VIEW")"
 
 # G. the old refusal is gone from the view's strings
 CHECKS=$((CHECKS + 1)); grep -q 'shell_local_only' "$BIN/fleet-sidebar.py" "$BIN/fleet-ui-lang.sh" && fail 'G: the 「这台电脑上没有 fleet」 refusal is still wired'

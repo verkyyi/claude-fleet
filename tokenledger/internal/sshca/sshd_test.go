@@ -155,7 +155,7 @@ TrustedUserCAKeys %s
 	// gets in; one minted six minutes ago does not.
 	peerFor := func(name string, at time.Time) (string, string) {
 		key, pk := newKey(name)
-		iss, err := ca.SignPeer(PeerRequest{Key: pk, Source: "u@m5", Target: me.Username + "@m4", Purpose: "view", Login: me.Username}, at)
+		iss, err := ca.SignPeer(PeerRequest{Key: pk, Source: "u@mac-b", Target: me.Username + "@mac-a", Purpose: "view", Login: me.Username}, at)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,7 +167,7 @@ TrustedUserCAKeys %s
 	if k, c := peerFor("peer-expired", now.Add(-6*time.Minute)); try(k, c) == nil {
 		t.Fatal("an expired peer certificate got in")
 	}
-	if !strings.Contains(log.String(), "peer:u@m5>") {
+	if !strings.Contains(log.String(), "peer:u@mac-b>") {
 		t.Errorf("sshd's log does not name the peer key id: %s", log.String())
 	}
 	if err := try(opKey, ""); err != nil {

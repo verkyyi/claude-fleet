@@ -291,7 +291,7 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 		Via: "local", Host: "MacBook", Caps: []string{"open_url", "show_file", "notify", "iterm2", "rm -rf"}}, now)
 	code, out := read(n["alice4"].token)
 	if code != 200 || out.State != "active" || out.Lease == nil {
-		t.Fatalf("alice on m4: HTTP %d %+v", code, out)
+		t.Fatalf("alice on mac-c: HTTP %d %+v", code, out)
 	}
 	l := out.Lease
 	if l.Device != "MacBook" || l.OS != "macOS" || l.Terminal != "iTerm2 3.6.1" || l.Via != "local" || l.Host != "MacBook" {
@@ -308,9 +308,9 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 	}
 	// The phone opens beside it: the read follows the primary (just opened),
 	// and lists both.
-	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "verkyyi-iphone", OS: "iOS", Terminal: "Termius",
-		Via: "tailnet", Host: "m5", Caps: []string{"link"}}, now.Add(time.Second))
-	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Device != "verkyyi-iphone" || o.Lease.Host != "m5" || o.Lease.Via != "tailnet" ||
+	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "ivan-iphone", OS: "iOS", Terminal: "Termius",
+		Via: "tailnet", Host: "mac-d", Caps: []string{"link"}}, now.Add(time.Second))
+	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Device != "ivan-iphone" || o.Lease.Host != "mac-d" || o.Lease.Via != "tailnet" ||
 		len(o.Clients) != 2 || o.Primary != o.Lease.ID {
 		t.Fatalf("after the phone opened: %+v", o)
 	}
@@ -320,8 +320,8 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 		t.Fatalf("bad via kept: %+v", o.Lease)
 	}
 	// The client on a managed machine (#2720) says so.
-	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "y", Via: "node-hosted", Host: "m5", Caps: []string{"link"}}, now.Add(3*time.Second))
-	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Via != "node-hosted" || o.Lease.Host != "m5" {
+	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "y", Via: "node-hosted", Host: "mac-d", Caps: []string{"link"}}, now.Add(3*time.Second))
+	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Via != "node-hosted" || o.Lease.Host != "mac-d" {
 		t.Fatalf("node-hosted via: %+v", o.Lease)
 	}
 	// The operator's own login (owned by nobody) reads the operator's lease.
@@ -342,9 +342,9 @@ func TestClientLeaseRenewRefillsAfterRestart(t *testing.T) {
 	var tb clientLeaseTable
 	t0 := time.Date(2026, 10, 6, 19, 50, 0, 0, time.UTC)
 	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
-	macW := ClientLeaseRequest{Device: "Verky's Mac", Terminal: "iTerm2 3.6", OS: "macOS", Via: "tailnet",
-		Host: "m5", Caps: []string{"link", "iterm2"}}
-	phW := ClientLeaseRequest{Device: "iPhone", Terminal: "Termius", OS: "iOS", Via: "tailnet", Host: "m5",
+	macW := ClientLeaseRequest{Device: "Heidi's Mac", Terminal: "iTerm2 3.6", OS: "macOS", Via: "tailnet",
+		Host: "mac-d", Caps: []string{"link", "iterm2"}}
+	phW := ClientLeaseRequest{Device: "iPhone", Terminal: "Termius", OS: "iOS", Via: "tailnet", Host: "mac-d",
 		Caps: []string{"link"}}
 	mac := tb.acquire("p:a", macW, at(0))
 	ph := tb.acquire("p:a", phW, at(1))
@@ -366,8 +366,8 @@ func TestClientLeaseRenewRefillsAfterRestart(t *testing.T) {
 	got, _ := json.Marshal(tb.get("p:a", at(5)).Lease)
 	var l ClientLease
 	_ = json.Unmarshal(got, &l)
-	if l.Device != "Verky's Mac" || l.Terminal != "iTerm2 3.6" || l.OS != "macOS" || l.Via != "tailnet" ||
-		l.Host != "m5" || strings.Join(l.Caps, ",") != "link,iterm2" {
+	if l.Device != "Heidi's Mac" || l.Terminal != "iTerm2 3.6" || l.OS != "macOS" || l.Via != "tailnet" ||
+		l.Host != "mac-d" || strings.Join(l.Caps, ",") != "link,iterm2" {
 		t.Fatalf("where after one renewal = %s", got)
 	}
 	if n := len(tb.get("p:a", at(5)).Clients); n != 2 {
@@ -407,8 +407,8 @@ func TestNodeClientHoldsThinLease(t *testing.T) {
 		return res.StatusCode, out
 	}
 	code, out := post(n["alice5"].token, map[string]any{"action": "acquire", "device": "MacBook", "os": "macOS",
-		"terminal": "iTerm2 3.6.1", "via": "thin", "host": "m5", "caps": []string{"notify", "iterm2"}})
-	if code != 200 || out.State != "active" || out.Lease == nil || out.Lease.Via != "thin" || out.Lease.Host != "m5" {
+		"terminal": "iTerm2 3.6.1", "via": "thin", "host": "mac-d", "caps": []string{"notify", "iterm2"}})
+	if code != 200 || out.State != "active" || out.Lease == nil || out.Lease.Via != "thin" || out.Lease.Host != "mac-d" {
 		t.Fatalf("acquire: HTTP %d %+v", code, out)
 	}
 	if out.ActionKey != "" {

@@ -17,8 +17,8 @@ func TestEntryDefaultsFollowTheDeploy(t *testing.T) {
 		t.Fatal("no DNS: off, no zone")
 	}
 	h.srv.EntryDNS = NewEntryDNS(dns.NewFake(), "cf")
-	h.srv.EntryDNS.Zone = "cf.24haowan.com"
-	if !h.srv.entryOn() || h.srv.setting(EntryDomainKey) != "cf.24haowan.com" {
+	h.srv.EntryDNS.Zone = "cf.example.com"
+	if !h.srv.entryOn() || h.srv.setting(EntryDomainKey) != "cf.example.com" {
 		t.Fatalf("DNS: entry %v, zone %q", h.srv.entryOn(), h.srv.setting(EntryDomainKey))
 	}
 	settings, _ := h.srv.Store.FleetSettings()
@@ -46,13 +46,13 @@ func TestEntryDefaultsFollowTheDeploy(t *testing.T) {
 // answered again (claude-fleet#3199).
 func TestEntryPushClearsTheReachGap(t *testing.T) {
 	h := entryHarness(t)
-	h.srv.entryReachAt.Store("macmini", time.Now())
-	h.srv.entryReachAt.Store("macmini-m4", time.Now())
-	h.srv.broadcastEntry(1, "macmini")
-	if _, ok := h.srv.entryReachAt.Load("macmini"); ok {
+	h.srv.entryReachAt.Store("mac-e", time.Now())
+	h.srv.entryReachAt.Store("mac-e-mac-c", time.Now())
+	h.srv.broadcastEntry(1, "mac-e")
+	if _, ok := h.srv.entryReachAt.Load("mac-e"); ok {
 		t.Fatal("the home's gap stands")
 	}
-	if _, ok := h.srv.entryReachAt.Load("macmini-m4"); !ok {
+	if _, ok := h.srv.entryReachAt.Load("mac-e-mac-c"); !ok {
 		t.Fatal("another machine's gap went too")
 	}
 }

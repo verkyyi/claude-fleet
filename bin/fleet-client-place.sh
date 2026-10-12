@@ -463,7 +463,7 @@ def self_lines(o):
     # a newcomer's client (`solo`, what a fresh install writes) runs them on the
     # login the hub opened for it, and a candidate of this same login name on
     # another machine is that place — telling them to `fleet host on` HERE sent
-    # the drill's newcomer after the wrong computer while mini2 said why.
+    # the drill's newcomer after the wrong computer while mac-d said why.
     elsewhere = os.environ.get("FLEET_CLIENT_LAYOUT") == "solo" or any(
         isinstance(c, dict) and me and str(c.get("os_user") or "") == me for c in pl.get("candidates") or [])
     if not here and not elsewhere and host and node in ("auto", "") and kind != "restore" \

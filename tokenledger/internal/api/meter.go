@@ -19,7 +19,7 @@ import (
 // The public counter (claude-fleet#1988).
 //
 // /meter.json is the figure on claudefleet's front page and on
-// 24haowan.com's homepage, which used to reach it through a publisher script
+// example.com's homepage, which used to reach it through a publisher script
 // holding a viewer token (monorepo tools/ccquota-publish.sh → live.json on a
 // bucket). Its fields ARE that file's page contract — TokenMeter.vue replays
 // each window — so a rename here is a rename there:

@@ -77,7 +77,7 @@ import json, os, subprocess, sys, tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 SB = sys.argv[1]
 state = {"polls": 0, "pub": None, "deny": os.path.exists(os.path.join(SB, "deny"))}
-CONF = "# fleet-ssh-config v1 — test\n\nHost m4 fleet-m4 fleet-m4-public\n  HostName 127.0.0.1\n  User alice\n  IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub\n"
+CONF = "# fleet-ssh-config v1 — test\n\nHost mac-a fleet-mac-a fleet-mac-a-public\n  HostName 127.0.0.1\n  User alice\n  IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub\n"
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def reply(self, code, obj):
@@ -192,7 +192,7 @@ echo "$L" | grep -A1 'Principals:' | grep -qx '[[:space:]]*alice' && ok "A princ
 [ "$(cat "$HOME/.ssh/fleet-cert-who" 2>/dev/null)" = "$(printf 'gh:Alice\talice-gh')" ] && ok "A GitHub login recorded (fleet-cert-who)" \
   || bad "A who record: $(cat "$HOME/.ssh/fleet-cert-who" 2>&1)"
 echo "$L" | grep -q "Signing CA: ED25519 $(ssh-keygen -lf "$SB/ca.pub" | awk '{print $2}')" && ok "A signed by the CA" || bad "A signing CA: $L"
-grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" && ok "A ssh config written" || bad "A ssh config"
+grep -q '^Host mac-a fleet-mac-a fleet-mac-a-public$' "$HOME/.ssh/fleet-ssh-config" && ok "A ssh config written" || bad "A ssh config"
 grep -qx "export FLEET_HUB_URL=\"http://127.0.0.1:$PORT\"" "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A hub remembered in fleet.conf" || bad "A hub not remembered: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 grep -qx 'FLEET_HOST=0' "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A FLEET_HOST=0 (#1806)" || bad "A no FLEET_HOST=0: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 [ -f "$HOME/.config/claude-fleet/hub.json" ] && grep -q '"url"' "$HOME/.config/claude-fleet/hub.json" && bad "A the url went to hub.json too" || ok "A hub.json holds no url"

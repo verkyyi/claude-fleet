@@ -145,8 +145,8 @@ func (n *machNode) beat(login string, hb control.Heartbeat) {
 	n.send(login, m)
 }
 
-// machineRig is m4 as one machine link carrying alpha and beta, every
-// endpoint identified as m4's. admins are the hub's admin logins (default
+// machineRig is mac-c as one machine link carrying alpha and beta, every
+// endpoint identified as mac-c's. admins are the hub's admin logins (default
 // alpha); an admin's hello says so.
 func machineRig(t *testing.T, admins ...string) (*harness, *machNode) {
 	t.Helper()
@@ -158,10 +158,10 @@ func machineRig(t *testing.T, admins ...string) (*harness, *machNode) {
 	h.enroll(t, "mach")
 	for _, l := range []string{"alpha", "beta"} {
 		h.enroll(t, l)
-		identify(t, h, l, "m4", l)
+		identify(t, h, l, "mac-c", l)
 	}
 	n := dialMachine(t, h, h.tokens["mach"])
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
 	for _, l := range []string{"alpha", "beta"} {
 		if r := n.login(l, h.tokens[l], hasString(admins, l), control.CapRead, control.CapWrite, control.CapMove); r.Type != control.TypeWelcome || r.Login != l {
 			t.Fatalf("%s's hello answered %+v", l, r)
@@ -174,8 +174,8 @@ func machineRig(t *testing.T, admins ...string) (*harness, *machNode) {
 // under it — each still an endpoint of its own.
 func TestMachineLinkCarriesEveryLogin(t *testing.T) {
 	h, n := machineRig(t)
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now()})
-	n.beat("beta", control.Heartbeat{Hostname: "m4", OSUser: "beta", NCPU: 10, ObservedAt: time.Now()})
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now()})
+	n.beat("beta", control.Heartbeat{Hostname: "mac-c", OSUser: "beta", NCPU: 10, ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, "both logins online", func() bool {
 		on := 0
 		for _, v := range roster(t, h).Nodes {
@@ -199,10 +199,10 @@ func TestMachineLinkCarriesEveryLogin(t *testing.T) {
 		}
 	}
 	if len(snap.Machines) != 1 {
-		t.Fatalf("machines = %+v; want m4 alone", snap.Machines)
+		t.Fatalf("machines = %+v; want mac-c alone", snap.Machines)
 	}
-	if m := snap.Machines[0]; m.Hostname != "m4" || m.Links != 1 || m.Logins != 2 || m.Online != 2 {
-		t.Fatalf("m4 = links %d logins %d online %d; want 1 link carrying 2 logins", m.Links, m.Logins, m.Online)
+	if m := snap.Machines[0]; m.Hostname != "mac-c" || m.Links != 1 || m.Logins != 2 || m.Online != 2 {
+		t.Fatalf("mac-c = links %d logins %d online %d; want 1 link carrying 2 logins", m.Links, m.Logins, m.Online)
 	}
 	// The link itself is never somewhere to run sessions.
 	hb, _, _ := h.srv.nodeStatusOf("ep_mach", time.Now())
@@ -231,11 +231,11 @@ func TestMachineLinkCarriesEveryLogin(t *testing.T) {
 func TestMachineLinkSessionLandsOnItsLogin(t *testing.T) {
 	// The operator's own starts land on the operator's logins: both, here.
 	h, n := machineRig(t, "alpha", "beta")
-	fa := fakeFleet(t, machineA, "fleet-alpha", "verkyyi/other", "/u/alpha/other", 1)
+	fa := fakeFleet(t, machineA, "fleet-alpha", "ivan/other", "/u/alpha/other", 1)
 	fb := fakeFleet(t, machineB, "fleet-beta", writeRepo, "/u/beta/claude-fleet", 1)
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", MachineID: machineA, NCPU: 10,
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", MachineID: machineA, NCPU: 10,
 		MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Fleets: []control.Fleet{fa}, ObservedAt: time.Now()})
-	n.beat("beta", control.Heartbeat{Hostname: "m4", OSUser: "beta", MachineID: machineB, NCPU: 10,
+	n.beat("beta", control.Heartbeat{Hostname: "mac-c", OSUser: "beta", MachineID: machineB, NCPU: 10,
 		MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Fleets: []control.Fleet{fb}, ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
@@ -256,7 +256,7 @@ func TestMachineLinkSessionLandsOnItsLogin(t *testing.T) {
 // never beta, and alpha's result on the link makes the account active.
 func TestMachineLinkAccountCreateGoesToTheAdminLogin(t *testing.T) {
 	h, n := machineRig(t)
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-c"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	m, op := expectAccountOp(t, &tnode{in: n.inbox("alpha")})
@@ -269,7 +269,7 @@ func TestMachineLinkAccountCreateGoesToTheAdminLogin(t *testing.T) {
 	res, _ := control.New(control.TypeAccountResult, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
 	res.OpID = m.OpID
 	n.send("alpha", res)
-	waitState(t, h, "WangXiaoMing", "m4", store.AccountActive)
+	waitState(t, h, "WangXiaoMing", "mac-c", store.AccountActive)
 
 	// beta answering alpha's op is refused as not the admin.
 	res.OpID = "another"
@@ -285,54 +285,54 @@ func TestMachineLinkAccountCreateGoesToTheAdminLogin(t *testing.T) {
 	}
 }
 
-// 迁移: a session moved from m5 to m4 is written to the m4 login that hosts
+// 迁移: a session moved from mac-d to mac-c is written to the mac-c login that hosts
 // the fleet — on its lane, stamped with its login.
 func TestMachineLinkMoveLandsOnItsLogin(t *testing.T) {
 	h := newFleetHarness(t)
-	m5 := connectWriteNodeCaps(t, h, h.enroll(t, "m5"), control.CapRead, control.CapWrite, control.CapMove)
+	macD := connectWriteNodeCaps(t, h, h.enroll(t, "mac-d"), control.CapRead, control.CapWrite, control.CapMove)
 	h.enroll(t, "mach")
-	for _, l := range []string{"alpha", "verk"} {
+	for _, l := range []string{"alpha", "frank"} {
 		h.enroll(t, l)
-		identify(t, h, l, "m4", l)
+		identify(t, h, l, "mac-c", l)
 	}
 	n := dialMachine(t, h, h.tokens["mach"])
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", ObservedAt: time.Now()})
-	for _, l := range []string{"alpha", "verk"} {
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", ObservedAt: time.Now()})
+	for _, l := range []string{"alpha", "frank"} {
 		if r := n.login(l, h.tokens[l], false, control.CapRead, control.CapWrite, control.CapMove); r.Type != control.TypeWelcome {
 			t.Fatalf("%s: %+v", l, r)
 		}
 	}
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
-	m5.beatLoad("m5", "verk", machineA, 10, 3, f5)
-	n.beat("verk", control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB, Load1: 1, NCPU: 10,
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5)
+	n.beat("frank", control.Heartbeat{Hostname: "mac-c", OSUser: "frank", MachineID: machineB, Load1: 1, NCPU: 10,
 		MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1, Fleets: []control.Fleet{f4}, ObservedAt: time.Now()})
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now()})
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now()})
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
-	tok5 := h.tokens["m5"]
+	tok5 := h.tokens["mac-d"]
 	wid5, wid4 := issueWID(f5.FleetID, 7), issueWID(f4.FleetID, 7)
 	if st, out := leaseCall(t, h, tok5, map[string]any{"action": "acquire", "repo": writeRepo, "issue": 7, "worker_id": wid5}); st != 200 {
-		t.Fatalf("m5's lease: %d %v", st, out)
+		t.Fatalf("mac-d's lease: %d %v", st, out)
 	}
 	bundle := uploadBundle(t, h, tok5, []byte("bundle"))
 	st, out := moveCall(t, h, tok5, moveBody(wid5, bundle, "done"))
 	if st != 200 || out["to_wid"] != wid4 {
-		t.Fatalf("move = %d %v; want it sent to m4's verk as %s", st, out, wid4)
+		t.Fatalf("move = %d %v; want it sent to mac-c's frank as %s", st, out, wid4)
 	}
-	if n.count("verk") != 1 || n.count("alpha") != 0 || m5.count() != 0 {
-		t.Fatalf("writes: verk=%d alpha=%d m5=%d; want 1 0 0", n.count("verk"), n.count("alpha"), m5.count())
+	if n.count("frank") != 1 || n.count("alpha") != 0 || macD.count() != 0 {
+		t.Fatalf("writes: frank=%d alpha=%d mac-d=%d; want 1 0 0", n.count("frank"), n.count("alpha"), macD.count())
 	}
-	if env := n.writes["verk"][0]; env["action"] != "worker_move_in" || env["fleet_id"] != f4.FleetID {
-		t.Fatalf("verk was sent %v", env)
+	if env := n.writes["frank"][0]; env["action"] != "worker_move_in" || env["fleet_id"] != f4.FleetID {
+		t.Fatalf("frank was sent %v", env)
 	}
 	// Only the login the move is for may fetch its transcript.
 	if st, _ := downloadBundle(t, h, h.tokens["alpha"], bundle); st != 404 {
-		t.Fatalf("alpha fetched verk's bundle: %d", st)
+		t.Fatalf("alpha fetched frank's bundle: %d", st)
 	}
-	if st, _ := downloadBundle(t, h, h.tokens["verk"], bundle); st != 200 {
-		t.Fatalf("verk's download = %d", st)
+	if st, _ := downloadBundle(t, h, h.tokens["frank"], bundle); st != 200 {
+		t.Fatalf("frank's download = %d", st)
 	}
 }
 
@@ -343,14 +343,14 @@ func TestMachineLinkMoveLandsOnItsLogin(t *testing.T) {
 func TestMachineLinkRefusesWrongLogin(t *testing.T) {
 	h, n := machineRig(t)
 	h.enroll(t, "carol")
-	identify(t, h, "carol", "m4", "carol")
+	identify(t, h, "carol", "mac-c", "carol")
 	h.enroll(t, "dave")
-	identify(t, h, "dave", "m5", "dave")
+	identify(t, h, "dave", "mac-d", "dave")
 
 	for _, c := range []struct{ login, token, why string }{
 		{"carol", h.tokens["alpha"], "alpha's"},
 		{"carol", h.tokens["mach"], "machine's token"},
-		{"dave", h.tokens["dave"], "belongs to m5"},
+		{"dave", h.tokens["dave"], "belongs to mac-d"},
 		{"carol", "not-a-token", "unrecognised"},
 		{"carol", "", "own node token"},
 	} {
@@ -416,7 +416,7 @@ func TestMachineLinkAndPlainAgents(t *testing.T) {
 	if w := hello(t, plain, control.Proto, 60000); !w.Accepted {
 		t.Fatalf("plain hello: %+v", w)
 	}
-	beat(t, plain, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "carol"})
+	beat(t, plain, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "carol"})
 	waitFor(t, 3*time.Second, "carol online on her own link", func() bool {
 		for _, v := range roster(t, h).Nodes {
 			if v.EndpointID == "ep_carol" {
@@ -425,9 +425,9 @@ func TestMachineLinkAndPlainAgents(t *testing.T) {
 		}
 		return false
 	})
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", ObservedAt: time.Now()})
-	n.beat("beta", control.Heartbeat{Hostname: "m4", OSUser: "beta", ObservedAt: time.Now()})
-	waitFor(t, 3*time.Second, "m4: the machine link + carol's own", func() bool {
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", ObservedAt: time.Now()})
+	n.beat("beta", control.Heartbeat{Hostname: "mac-c", OSUser: "beta", ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "mac-c: the machine link + carol's own", func() bool {
 		ms := roster(t, h).Machines
 		return len(ms) == 1 && ms[0].Links == 2 && ms[0].Logins == 3
 	})
@@ -531,8 +531,8 @@ func TestMachineLinkLoginComputeFollowsItsProbe(t *testing.T) {
 	now := time.Now()
 	off := false
 	probe := &control.NodeProbe{Loc: "US", Anthropic: "reachable", OpenAI: "reachable", TS: now.Add(-23 * time.Hour), Verdict: control.ProbeOK}
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", NCPU: 10, ObservedAt: now, Compute: &off, Probe: probe})
-	n.beat("beta", control.Heartbeat{Hostname: "m4", OSUser: "beta", NCPU: 10, ObservedAt: now, Compute: &off})
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", NCPU: 10, ObservedAt: now, Compute: &off, Probe: probe})
+	n.beat("beta", control.Heartbeat{Hostname: "mac-c", OSUser: "beta", NCPU: 10, ObservedAt: now, Compute: &off})
 	waitFor(t, 3*time.Second, "alpha's beat with its probe recorded", func() bool {
 		hb, _, _ := h.srv.nodeStatusOf("ep_alpha", time.Now())
 		hb2, _, _ := h.srv.nodeStatusOf("ep_beta", time.Now())
@@ -583,10 +583,10 @@ func TestReissueKeepsTheMachineLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", control.LoginNodePath, nil)
-	_, _, err := h.srv.deviceNode(req, fp, "m4", "beta", time.Now())
+	_, _, err := h.srv.deviceNode(req, fp, "mac-c", "beta", time.Now())
 	var mm *machineManagedErr
-	if !errors.As(err, &mm) || !strings.Contains(err.Error(), "account adopt beta --rejoin") || !strings.Contains(err.Error(), "m4") {
-		t.Fatalf("reissue for a machine-served login: %v; want machine_managed naming m4 and the fix", err)
+	if !errors.As(err, &mm) || !strings.Contains(err.Error(), "account adopt beta --rejoin") || !strings.Contains(err.Error(), "mac-c") {
+		t.Fatalf("reissue for a machine-served login: %v; want machine_managed naming mac-c and the fix", err)
 	}
 	if ep, err := h.srv.Store.EndpointByTokenHash(HashToken(h.tokens["beta"])); err != nil || ep.ID != "ep_beta" {
 		t.Fatalf("the machine's token after a refused reissue: %v %v", ep, err)
@@ -616,9 +616,9 @@ func TestReissueKeepsTheMachineLane(t *testing.T) {
 	}
 	// The machine link's beat names the refused login; the Machines card
 	// carries it (令牌失效 · 需要 relogin).
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
 		LoginsRefused: map[string]string{"beta": r.Error.Message}})
-	waitFor(t, 3*time.Second, "m4 names beta refused", func() bool {
+	waitFor(t, 3*time.Second, "mac-c names beta refused", func() bool {
 		ms := roster(t, h).Machines
 		return len(ms) == 1 && strings.Contains(ms[0].LoginsRefused["beta"], "re-registered")
 	})

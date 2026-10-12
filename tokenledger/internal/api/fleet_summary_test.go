@@ -66,9 +66,9 @@ func TestFleetSummaryByCertificate(t *testing.T) {
 	h.srv.SSHCA = sshca.New(k.ca)
 	now := time.Now()
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	h.srv.Store.AdoptAccount(p, "m5", now)
-	connectNode(t, h, "m5-alice", "m5", "alice", false)
-	connectNode(t, h, "m4-bob", "m4", "bob", false)
+	h.srv.Store.AdoptAccount(p, "mac-d", now)
+	connectNode(t, h, "mac-d-alice", "mac-d", "alice", false)
+	connectNode(t, h, "mac-c-bob", "mac-c", "bob", false)
 	waitFor(t, 3*time.Second, "two nodes", func() bool { return len(roster(t, h).Nodes) == 2 })
 
 	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
@@ -82,11 +82,11 @@ func TestFleetSummaryByCertificate(t *testing.T) {
 		t.Fatalf("a valid certificate: HTTP %d %s", code, raw)
 	}
 	ms, as := summaryKeys(out)
-	if len(ms) != 1 || ms[0] != "m5" {
-		t.Fatalf("alice's machines = %v, want [m5]", ms)
+	if len(ms) != 1 || ms[0] != "mac-d" {
+		t.Fatalf("alice's machines = %v, want [mac-d]", ms)
 	}
-	if len(as) != 1 || as[0] != "acct-m5-alice" {
-		t.Fatalf("alice's subscriptions = %v, want [acct-m5-alice]", as)
+	if len(as) != 1 || as[0] != "acct-mac-d-alice" {
+		t.Fatalf("alice's subscriptions = %v, want [acct-mac-d-alice]", as)
 	}
 	for _, a := range out.PerAccount {
 		if a.Limits != nil && len(a.Limits.EndpointShares) != 0 {
@@ -133,23 +133,23 @@ func TestFleetSummaryCarriesHostedRepos(t *testing.T) {
 	h.srv.SSHCA = sshca.New(k.ca)
 	now := time.Now()
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	h.srv.Store.AdoptAccount(p, "m5", now)
-	a := connectNode(t, h, "m5-alice", "m5", "alice", false)
-	b := connectNode(t, h, "m4-bob", "m4", "bob", false)
+	h.srv.Store.AdoptAccount(p, "mac-d", now)
+	a := connectNode(t, h, "mac-d-alice", "mac-d", "alice", false)
+	b := connectNode(t, h, "mac-c-bob", "mac-c", "bob", false)
 	connectNode(t, h, "m3-bob", "m3", "bob", false)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
-	if _, err := h.srv.Store.RecordFleetSnapshot(a.id, "m5", "alice", "mach-m5", []store.FleetReport{
+	if _, err := h.srv.Store.RecordFleetSnapshot(a.id, "mac-d", "alice", "mach-mac-d", []store.FleetReport{
 		{FleetID: "11111111-1111-4111-8111-111111111111", Name: "f1", Repo: "acme/web", Repos: []string{"acme/web", "acme/api"}, Checkout: "/c"},
 		{FleetID: "22222222-2222-4222-8222-222222222222", Name: "f2", Repo: "acme/web", Checkout: "/d"}}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.RecordFleetSnapshot(b.id, "m4", "bob", "mach-m4", []store.FleetReport{
+	if _, err := h.srv.Store.RecordFleetSnapshot(b.id, "mac-c", "bob", "mach-mac-c", []store.FleetReport{
 		{FleetID: "33333333-3333-4333-8333-333333333333", Name: "f3", Repo: "bob/secret", Checkout: "/e"},
 		{FleetID: "44444444-4444-4444-8444-444444444444", Name: "f4", Repo: "bob/old", Checkout: "/f"}}, now); err != nil {
 		t.Fatal(err)
 	}
-	// m4's second snapshot drops a fleet it used to report: present=0, not hosted.
-	if _, err := h.srv.Store.RecordFleetSnapshot(b.id, "m4", "bob", "mach-m4", []store.FleetReport{
+	// mac-c's second snapshot drops a fleet it used to report: present=0, not hosted.
+	if _, err := h.srv.Store.RecordFleetSnapshot(b.id, "mac-c", "bob", "mach-mac-c", []store.FleetReport{
 		{FleetID: "33333333-3333-4333-8333-333333333333", Name: "f3", Repo: "bob/secret", Checkout: "/e"}}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestFleetSummaryCarriesHostedRepos(t *testing.T) {
 		t.Fatalf("alice: HTTP %d %s, want her one machine", code, raw)
 	}
 	if got := strings.Join(out.Machines[0].Repos, ","); got != "acme/api,acme/web" {
-		t.Fatalf("m5 repos = %q, want acme/api,acme/web", got)
+		t.Fatalf("mac-d repos = %q, want acme/api,acme/web", got)
 	}
 
 	code, out, raw = postSummary(t, h, asOperator, nil)
@@ -174,7 +174,7 @@ func TestFleetSummaryCarriesHostedRepos(t *testing.T) {
 	for _, m := range out.Machines {
 		got[m.Hostname] = strings.Join(m.Repos, ",")
 	}
-	if got["m4"] != "bob/secret" || got["m5"] != "acme/api,acme/web" || got["m3"] != "" {
+	if got["mac-c"] != "bob/secret" || got["mac-d"] != "acme/api,acme/web" || got["m3"] != "" {
 		t.Fatalf("operator repos = %v", got)
 	}
 	if strings.Contains(raw, `"repos":null`) || strings.Count(raw, `"repos":`) < 3 {
@@ -191,9 +191,9 @@ func TestFleetReadDoorsByNodeToken(t *testing.T) {
 	h := newFleetHarness(t)
 	now := time.Now()
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	h.srv.Store.AdoptAccount(p, "m5", now)
-	alice := connectNode(t, h, "m5-alice", "m5", "alice", false)
-	bob := connectNode(t, h, "m4-bob", "m4", "bob", false)
+	h.srv.Store.AdoptAccount(p, "mac-d", now)
+	alice := connectNode(t, h, "mac-d-alice", "mac-d", "alice", false)
+	bob := connectNode(t, h, "mac-c-bob", "mac-c", "bob", false)
 	waitFor(t, 3*time.Second, "two nodes", func() bool { return len(roster(t, h).Nodes) == 2 })
 	asNode := func(tok string) func(http.Header) {
 		return func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+tok) }
@@ -204,8 +204,8 @@ func TestFleetReadDoorsByNodeToken(t *testing.T) {
 		t.Fatalf("alice's node token: HTTP %d %s", code, raw)
 	}
 	ms, as := summaryKeys(out)
-	if len(ms) != 1 || ms[0] != "m5" || len(as) != 1 || as[0] != "acct-m5-alice" {
-		t.Fatalf("alice's node token reads machines %v subscriptions %v, want [m5] [acct-m5-alice]", ms, as)
+	if len(ms) != 1 || ms[0] != "mac-d" || len(as) != 1 || as[0] != "acct-mac-d-alice" {
+		t.Fatalf("alice's node token reads machines %v subscriptions %v, want [mac-d] [acct-mac-d-alice]", ms, as)
 	}
 	for _, a := range out.PerAccount {
 		if a.Limits != nil && len(a.Limits.EndpointShares) != 0 {
@@ -235,10 +235,10 @@ func TestFleetReadDoorsByNodeToken(t *testing.T) {
 // later does not blank it; a machine where none reported has no key.
 func TestFleetSummaryCarriesMachineFleetVersion(t *testing.T) {
 	h := newFleetHarness(t)
-	a := connectNode(t, h, "m5-alice", "m5", "alice", false)
-	c := connectNode(t, h, "m5-carol", "m5", "carol", false)
-	connectNode(t, h, "m4-bob", "m4", "bob", false)
-	beat(t, a.c, control.Proto, control.Heartbeat{Hostname: "m5", OSUser: "alice", FleetVersion: "aaaaaaa"})
+	a := connectNode(t, h, "mac-d-alice", "mac-d", "alice", false)
+	c := connectNode(t, h, "mac-d-carol", "mac-d", "carol", false)
+	connectNode(t, h, "mac-c-bob", "mac-c", "bob", false)
+	beat(t, a.c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "alice", FleetVersion: "aaaaaaa"})
 	waitFor(t, 3*time.Second, "alice's version", func() bool {
 		for _, n := range roster(t, h).Nodes {
 			if n.OSUser == "alice" && n.FleetVersion == "aaaaaaa" {
@@ -248,7 +248,7 @@ func TestFleetSummaryCarriesMachineFleetVersion(t *testing.T) {
 		return false
 	})
 	time.Sleep(20 * time.Millisecond)
-	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "m5", OSUser: "carol"})
+	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "carol"})
 	code, out, raw := postSummary(t, h, asOperator, nil)
 	if code != 200 {
 		t.Fatalf("operator: HTTP %d %s", code, raw)
@@ -257,10 +257,10 @@ func TestFleetSummaryCarriesMachineFleetVersion(t *testing.T) {
 	for _, m := range out.Machines {
 		got[m.Hostname] = m.FleetVersion
 	}
-	if got["m5"] != "aaaaaaa" || got["m4"] != "" {
-		t.Fatalf("machine fleet versions = %v, want m5 aaaaaaa, m4 none (%s)", got, raw)
+	if got["mac-d"] != "aaaaaaa" || got["mac-c"] != "" {
+		t.Fatalf("machine fleet versions = %v, want mac-d aaaaaaa, mac-c none (%s)", got, raw)
 	}
 	if strings.Count(raw, `"fleet_version":`) != 1 {
-		t.Fatalf("only m5 carries the key: %s", raw)
+		t.Fatalf("only mac-d carries the key: %s", raw)
 	}
 }

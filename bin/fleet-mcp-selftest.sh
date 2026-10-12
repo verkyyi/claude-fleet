@@ -125,7 +125,7 @@ fake fleet-issue-file.sh 'echo "https://github.com/acme/app/issues/900"'
 fake fleet-gh.sh 'echo "{}"'
 fake fleet-context.sh 'echo "ctx 41% OK"'
 fake fleet-transfer.sh 'echo /req/1'
-fake fleet-client-where.sh 'echo "m5 iTerm2"; exit 3'
+fake fleet-client-where.sh 'echo "mac-b iTerm2"; exit 3'
 fake fleet-show.sh 'echo "SENT a.png"'
 fake fleet-open.sh 'echo sent:iterm2'
 fake fleet-handoff-cycle.sh "sleep 2; echo cycle-done >> '$LOG.cycle'"

@@ -405,7 +405,7 @@ rm -f "$ACCT_DIR/c.conf"; : > "$STATE_LIMITED"; rm -f "$STATE_QUOTA" "$STATE_QUO
 # ============================================================================
 # The regression this pins is a real loss, not a hypothetical. Live pool,
 # 2026-09-13: ly297 sat at `5h 0% · 7d 80%` for a whole 5-hour window while
-# verky@24helpful went 8% → 77% of ITS window in four hours. ccquota's
+# carol@24helpful went 8% → 77% of ITS window in four hours. ccquota's
 # headroom_pct = 100 - max(5h, 7d) scored them 20 and 23, so every spawn kept
 # landing on the account that was already burning — and ly297's window then reset
 # with nothing spent. 5h capacity is use-it-or-lose-it; that is why it counts

@@ -68,7 +68,8 @@ cat "$WORK/local.out"
 SH
 chmod +x "$WORK/fakepath/uname" "$WORK/fakepath/ssh" "$WORK/fakepath/ssh-keyscan"
 
-KEY_A='AAAAC3NzaC1lZDI1NTE5AAAAIBXhuOVXx5vzpKxnA40jlfLiZs0TpIdZ79oV13q2HqYr'
+# a made-up host key (decodes to no machine) — issue #3578
+KEY_A='AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKeyFakeHostKeyFakeHostKeyFakeHostKe'
 KEY_B='AAAAC3NzaC1lZDI1NTE5AAAAIOtherMachineOtherMachineOtherMachineOtherMach'
 reset() {
   : > "$WORK/ssh.argv"; : > "$WORK/keyscan.argv"; echo out > "$WORK/ssh.mode"; echo 0 > "$WORK/ssh.rc"

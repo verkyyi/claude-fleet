@@ -34,27 +34,27 @@ func TestNodePeersSamePersonOnly(t *testing.T) {
 	h, _, n := peerHarness(t)
 
 	st, got, raw := peersGet(t, h, n["alice5"].token)
-	if st != 200 || got.Login != "alice" || got.Hostname != "macmini" {
-		t.Fatalf("alice@m5: HTTP %d %s", st, raw)
+	if st != 200 || got.Login != "alice" || got.Hostname != "mac-e" {
+		t.Fatalf("alice@mac-d: HTTP %d %s", st, raw)
 	}
-	if len(got.Peers) != 1 || got.Peers[0].Hostname != "macmini-m4" || got.Peers[0].Login != "alice" || got.Peers[0].Alias != "m4" {
-		t.Fatalf("alice@m5 peers %+v; want alice on macmini-m4 (m4) only", got.Peers)
+	if len(got.Peers) != 1 || got.Peers[0].Hostname != "mac-e-mac-c" || got.Peers[0].Login != "alice" || got.Peers[0].Alias != "mac-c" {
+		t.Fatalf("alice@mac-d peers %+v; want alice on mac-e-mac-c (mac-c) only", got.Peers)
 	}
 	routes := map[string]FleetRoute{}
 	for _, r := range got.Peers[0].Routes {
 		routes[r.Name] = r
 	}
-	if routes["public"].Host != "203.0.113.4" || routes["public"].Port != 22023 || routes["tailnet"].Host != "m4.tail.ts.net" {
-		t.Fatalf("m4's routes %+v; want its public port and tailnet name", got.Peers[0].Routes)
+	if routes["public"].Host != "203.0.113.4" || routes["public"].Port != 22023 || routes["tailnet"].Host != "mac-c.example.ts.net" {
+		t.Fatalf("mac-c's routes %+v; want its public port and tailnet name", got.Peers[0].Routes)
 	}
 
 	// The operator's own login (no person owns it): the same name elsewhere.
-	if st, got, raw := peersGet(t, h, n["verk4"].token); st != 200 || len(got.Peers) != 1 || got.Peers[0].Login != "verk" || got.Peers[0].Hostname != "macmini" {
-		t.Fatalf("verk@m4: HTTP %d %+v %s; want verk on macmini", st, got.Peers, raw)
+	if st, got, raw := peersGet(t, h, n["verk4"].token); st != 200 || len(got.Peers) != 1 || got.Peers[0].Login != "frank" || got.Peers[0].Hostname != "mac-e" {
+		t.Fatalf("frank@mac-c: HTTP %d %+v %s; want frank on mac-e", st, got.Peers, raw)
 	}
-	// Bob has no login on another machine: nobody — not alice, not verk.
+	// Bob has no login on another machine: nobody — not alice, not frank.
 	if st, got, raw := peersGet(t, h, n["bob4"].token); st != 200 || len(got.Peers) != 0 {
-		t.Fatalf("bob@m4: HTTP %d %+v %s; want none", st, got.Peers, raw)
+		t.Fatalf("bob@mac-c: HTTP %d %+v %s; want none", st, got.Peers, raw)
 	}
 	if st, _, _ := peersGet(t, h, ""); st != 401 {
 		t.Fatalf("no token: HTTP %d; want 401", st)

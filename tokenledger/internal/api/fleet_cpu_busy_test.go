@@ -27,37 +27,37 @@ func waitBusy(t *testing.T, h *harness, host string, busy float64) {
 // takes the session; one whose CPUs are 90% busy is out, and says so in
 // CPU terms with the load beside it.
 func TestPlaceGatesOnCPUBusyNotLoad(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
-	m5.beatBusy("m5", "verk", machineA, 20, 0.5, 0, f5)
-	m4.beatBusy("m4", "verk", machineB, 1, 0.9, 0, f4)
-	waitBusy(t, h, "m5", 0.5)
-	waitBusy(t, h, "m4", 0.9)
+	h, macD, macC, f5, f4 := twoNodes(t)
+	macD.beatBusy("mac-d", "frank", machineA, 20, 0.5, 0, f5)
+	macC.beatBusy("mac-c", "frank", machineB, 1, 0.9, 0, f4)
+	waitBusy(t, h, "mac-d", 0.5)
+	waitBusy(t, h, "mac-c", 0.9)
 	pl, err := h.srv.PickNode("", writeRepo)
-	if err != nil || pl.Machine != "m5" {
-		t.Fatalf("placement = %q %v; want m5 (load 2/core, CPU 50%% busy)", pl.Machine, err)
+	if err != nil || pl.Machine != "mac-d" {
+		t.Fatalf("placement = %q %v; want mac-d (load 2/core, CPU 50%% busy)", pl.Machine, err)
 	}
-	if !strings.Contains(pl.Reason, "m4 excluded: CPU busy 90% > 80% (load 0.10/core)") || !strings.Contains(pl.Reason, "CPU busy 50%") {
+	if !strings.Contains(pl.Reason, "mac-c excluded: CPU busy 90% > 80% (load 0.10/core)") || !strings.Contains(pl.Reason, "CPU busy 50%") {
 		t.Fatalf("reason = %q", pl.Reason)
 	}
 
 	// The machine's own ceiling (machine.env FLEET_MAX_CPU_BUSY) wins over
-	// the hub's: m4 at 90% under its 95% is a candidate again, and the
+	// the hub's: mac-c at 90% under its 95% is a candidate again, and the
 	// idler-scored one.
-	m4.beatBusy("m4", "verk", machineB, 1, 0.9, 0.95, f4)
-	waitFor(t, 3*time.Second, "m4 reports its ceiling", func() bool {
-		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+	macC.beatBusy("mac-c", "frank", machineB, 1, 0.9, 0.95, f4)
+	waitFor(t, 3*time.Second, "mac-c reports its ceiling", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_mac-c", time.Now())
 		return hb.MaxCPUBusy == 0.95
 	})
 	pl, err = h.srv.PickNode("", writeRepo)
 	if err != nil {
-		t.Fatalf("with m4's own ceiling: %v", err)
+		t.Fatalf("with mac-c's own ceiling: %v", err)
 	}
 	for _, c := range pl.Candidates {
 		if !c.Eligible {
 			t.Fatalf("%s excluded under its own ceiling: %s", c.Machine, c.Excluded)
 		}
-		if c.Machine == "m4" && c.CPUBusyMax != 0.95 {
-			t.Fatalf("m4 judged against %v, want 0.95", c.CPUBusyMax)
+		if c.Machine == "mac-c" && c.CPUBusyMax != 0.95 {
+			t.Fatalf("mac-c judged against %v, want 0.95", c.CPUBusyMax)
 		}
 	}
 }
@@ -65,15 +65,15 @@ func TestPlaceGatesOnCPUBusyNotLoad(t *testing.T) {
 // claude-fleet#2882: the refusal names every machine — the busy candidates, and
 // a host where the caller has no login (mid-update, saying so).
 func TestRefusalListsEveryMachine(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
+	h, macD, macC, f5, f4 := twoNodes(t)
 	m6 := connectWriteNode(t, h, "m6")
-	beat(t, m6.conn, control.Proto, control.Heartbeat{Hostname: "m6", OSUser: "arvin", MachineID: "machine-m6",
+	beat(t, m6.conn, control.Proto, control.Heartbeat{Hostname: "m6", OSUser: "erin", MachineID: "machine-m6",
 		Load1: 1, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30,
 		Versions: &control.Versions{Update: &control.UpdateState{Phase: "switching"}}, ObservedAt: time.Now()})
-	m5.beatBusy("m5", "verk", machineA, 20, 0.85, 0, f5)
-	m4.beatBusy("m4", "verk", machineB, 20, 0.95, 0, f4)
-	waitBusy(t, h, "m5", 0.85)
-	waitBusy(t, h, "m4", 0.95)
+	macD.beatBusy("mac-d", "frank", machineA, 20, 0.85, 0, f5)
+	macC.beatBusy("mac-c", "frank", machineB, 20, 0.95, 0, f4)
+	waitBusy(t, h, "mac-d", 0.85)
+	waitBusy(t, h, "mac-c", 0.95)
 	waitFor(t, 3*time.Second, "m6 heard", func() bool {
 		_, st, ok := h.srv.nodeStatusOf("ep_m6", time.Now())
 		return ok && st == "online"
@@ -83,7 +83,7 @@ func TestRefusalListsEveryMachine(t *testing.T) {
 		t.Fatal("placement succeeded with every CPU over the ceiling")
 	}
 	msg := err.Error()
-	for _, want := range []string{"m5: CPU busy 85% > 80% (load 2.00/core)", "m4: CPU busy 95% > 80%", "m6: 没有你的登录；正在更新（switching）"} {
+	for _, want := range []string{"mac-d: CPU busy 85% > 80% (load 2.00/core)", "mac-c: CPU busy 95% > 80%", "m6: 没有你的登录；正在更新（switching）"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("refusal %q lacks %q", msg, want)
 		}

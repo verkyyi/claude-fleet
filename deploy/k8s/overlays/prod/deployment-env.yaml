@@ -146,7 +146,7 @@ spec:
             # once. Roll back: delete this entry.
             - name: CCQUOTA_FLEET_HUB_QUOTA
               value: "relay"
-            # Placement's load ceiling (#2882): macmini's load1 sits at 17-24 on
+            # Placement's load ceiling (#2882): mac-c's load1 sits at 17-24 on
             # 15 cores from ~200 small fleet processes while 3-4 cores work, so
             # 0.8/core refused every new session there. 1.6 was set by hand
             # (`kubectl set env`) and lives here so an apply keeps it. It gates
@@ -160,7 +160,7 @@ spec:
               value: |-
                 [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]
             # Address records (claude-fleet#3073, EPIC #3067 C7): every
-            # person's <name>.cf.24haowan.com, written by the hub only. The
+            # person's <name>.cf.example.com, written by the hub only. The
             # token is ACME DNS-01's own (new-deploy/acme-dnspod), read here,
             # never copied — it covers the whole DNSPod account, so rotating
             # it means ACME too. No Secret ⇒ the pod starts and the loop makes

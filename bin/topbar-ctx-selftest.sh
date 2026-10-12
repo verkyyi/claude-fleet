@@ -87,7 +87,7 @@ sessions = [s("issue-41", issue=41, name="RM", ctx_left=23, ctx_band="watch", ct
 nodes = [dict(machine_name="tbctx-peer.invalid", availability="online", sessions=2, observed_at="2026-10-09T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
-export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="tbctx-peer=m4"
+export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="tbctx-peer=mac-a"
 bash "$HUBS" --refresh 2>"$WORK/err" || fail "B: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 eq "B: the cache's fields 21-25" "23|watch|$TS|Fable 5.1|high" \
@@ -162,7 +162,7 @@ mkdir -p "$WORK/ro" "$WORK/notdir"; : > "$WORK/notdir/f"; chmod 555 "$WORK/ro"
 # 2 node · 3 online · 4 issue · … 8 name · 17 title · 21-25 the bus)
 OW="wid:$F/orchestrator"
 printf '%s
-' "$OW${US}m5${US}online${US}${US}${US}working${US}claude${US}orchestrator${US}${US}${US}0${US}${US}hub${US}${US}${US}${US}编排${US}${US}${US}${US}23${US}watch${US}$TS${US}Fable 5.1${US}high" > "$G/remote_$S-orch"
+' "$OW${US}mac-b${US}online${US}${US}${US}working${US}claude${US}orchestrator${US}${US}${US}0${US}${US}hub${US}${US}${US}${US}编排${US}${US}${US}${US}23${US}watch${US}$TS${US}Fable 5.1${US}high" > "$G/remote_$S-orch"
 out=$(FLEET_SHELL=1 FLEET_SIDEBAR_STALL_LOG="$WORK/logs/sidebar-stall.log" python3 - "$BIN" "$S-orch" "$OW" "$TS" "$WORK" "$LOCAL_ROW" <<'PY'
 import importlib.util, os, subprocess, sys
 def load(name, path):
@@ -181,7 +181,7 @@ chk("orchestrator: a record off the cache", rec is not None, True)
 if rec:
     chk("orchestrator: its bus", tuple(rec.get(k) for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort")),
         (23, "watch", ts, "Fable 5.1", "high"))
-    chk("orchestrator: its machine", rec.get("node"), "m5")
+    chk("orchestrator: its machine", rec.get("node"), "mac-b")
     chk("orchestrator: its title", rec.get("title"), "编排")
     chk("orchestrator: no key", rec.get("key"), "")
     chk("orchestrator: its wid", rec.get("wid"), wid[4:])
@@ -228,7 +228,7 @@ CHECKS=$((CHECKS + 10))
 # ============================================================================
 mkdir -p "$WORK/cfgc/remote-views" "$WORK/cfgc/global"
 # fleet-hub-sessions.sh's columns: 1 wid · 2 node · 3 online|lost · 4 issue · 5 repo · 6 state
-row() { printf 'wid:%s/%s\037m5\037%s\037\037\037%s\037claude\n' "$F" "$1" "$2" "$3"; }
+row() { printf 'wid:%s/%s\037mac-b\037%s\037\037\037%s\037claude\n' "$F" "$1" "$2" "$3"; }
 { row issue-1 online needs; row issue-2 online needs; row issue-3 lost needs; row issue-4 online working; } > "$G/remote_$S-wait"
 printf '%s\t@7\tabc\thook gone\n' "$S-wait" > "$WORK/cfgc/global/agent-cfg.broken"
 out=$(FLEET_UI_LANG=zh python3 - "$BIN" "$G" "$S" "$WORK/cfgc/remote-views" <<'PY2'

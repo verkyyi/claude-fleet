@@ -68,8 +68,8 @@ run 2 'part of the login'           '--name inside the login'   --login drill100
 # --- the scratch step's row match (issue #2221) ---------------------------------
 # the #2221 screen: the shell prompt 「<login>@host % …」 above the split, the
 # list 「No sessions」, the typed name on the input line — no row, so it FAILs
-scr() { printf '%s\n' 'drill1007b@mini2 ~ % curl -fsSL https://hub.example/install | sh' \
-          '  No sessions                 │ drill1007b@mini2 ~ %' "$@"; }
+scr() { printf '%s\n' 'drill1007b@mac-d ~ % curl -fsSL https://hub.example/install | sh' \
+          '  No sessions                 │ drill1007b@mac-d ~ %' "$@"; }
 rowm() { bash "$DRILL" --row-named "$1"; }
 if scr '› drill                       │' | rowm drill >/dev/null; then bad 'scratch: the prompt line / input line passed as a row'
 else ok 'scratch: 「<login>@host %」 + 「No sessions」 is no row (FAIL)'; fi
@@ -85,18 +85,18 @@ else bad "scratch: the real row: got '$r'"; fi
 # the installer prints 「能力:」 BEFORE its QR: 能力: alone must not read as
 # 「no QR」, or scan SKIPs and client types fleet into the waiting QR screen
 qrs() { bash "$DRILL" --login drill1007c --qr-state; }
-P0='drill1007c@mini2 ~ % curl -fsSL https://hub.example/install | sh'
+P0='drill1007c@mac-d ~ % curl -fsSL https://hub.example/install | sh'
 CAP='能力: 基础 · 承载 未开 · 入口 接'
 st=$(printf '%s\n' "$P0" "$CAP" | qrs)
 [ "$st" = wait ] && ok 'qr: 「能力:」 alone is wait, not no-QR' || bad "qr: 能力: alone read '$st'"
 st=$(printf '%s\n' "$P0" "$CAP" 'fleet · 需要扫码登录' '█▀▀▀▀▀█' '验证码 VVKS-LCLT' | qrs)
 [ "$st" = qr ] && ok 'qr: 能力: then the QR (the #2255 screen) reads qr — scan confirms, never SKIP' || bad "qr: the #2255 screen read '$st'"
-st=$(printf '%s\n' "$P0" "$CAP" '  ● 新任务                 │ drill1007c@mini2 ~ %' | qrs)
+st=$(printf '%s\n' "$P0" "$CAP" '  ● 新任务                 │ drill1007c@mac-d ~ %' | qrs)
 [ "$st" = none ] && ok 'qr: 能力: then the client, no code, reads none (SKIP)' || bad "qr: known computer read '$st'"
-st=$(printf '%s\n' "$P0" "$CAP" 'drill1007c@mini2 ~ % ' | qrs)
+st=$(printf '%s\n' "$P0" "$CAP" 'drill1007c@mac-d ~ % ' | qrs)
 [ "$st" = none ] && ok 'qr: 能力: then back at the prompt, no code, reads none' || bad "qr: back at prompt read '$st'"
 # the newcomer's install prints no 能力 line (issue #2347): 用时 is its end
-st=$(printf '%s\n' "$P0" '用时 9 秒' '  ● 新任务                 │ drill1007c@mini2 ~ %' | qrs)
+st=$(printf '%s\n' "$P0" '用时 9 秒' '  ● 新任务                 │ drill1007c@mac-d ~ %' | qrs)
 [ "$st" = none ] && ok 'qr: 用时 (no 能力:) then the client, no code, reads none' || bad "qr: newcomer end read '$st'"
 st=$(printf '%s\n' "$P0" '用时 9 秒' | qrs)
 [ "$st" = wait ] && ok 'qr: 「用时」 alone is wait, not no-QR' || bad "qr: 用时 alone read '$st'"
@@ -120,7 +120,7 @@ st=$(printf '%s\n' "$A0" '  │ …/attachments/a1/drill-shot.png' '  │ ⏺ Re
 st=$(printf '%s\n' "$A0" '  │ ⏺ 红色' | ats)
 [ "$st" = wait ] && ok 'attach: an answer with no file on the session machine is not a pass' || bad "attach: no-path answer read '$st'"
 # the thin client's road (issue #3496): Claude Code reads the pasted inbox path
-# and shows `[Image #N]`, never the path — drill 38's own @8 screen on mini2
+# and shows `[Image #N]`, never the path — drill 38's own @8 screen on mac-d
 st=$(printf '%s\n' '❯ 看图' '⏺ 没看到图片，这条消息里没有附件。' '❯ 看图 这张图是什么颜色？只回答一个颜色词 [Image #1]' '  ⎿  [Image #1]' '⏺ 红色' | ats)
 [ "$st" = answered ] && ok 'attach: [Image #1] then 红色 is answered (the thin road)' || bad "attach: [Image #N] answer read '$st'"
 st=$(printf '%s\n' '❯ 看图 这张图是什么颜色？只回答一个颜色词 [Image #1]' | ats)
@@ -130,28 +130,28 @@ st=$(printf '%s\n' '  │ /Users/d/.cache/claude-fleet/inbox/5a1e-fid/20261012T0
 st=$(printf '%s\n' "$A0" '附件没带过去：drill-shot.png（入口还不收附件）' | ats)
 [ "$st" = lost ] && ok 'attach: 「附件没带过去」 is lost' || bad "attach: lost read '$st'"
 # --- node-restart-resume: the row's key off `fleet ls --json` -------------------
-LS='[{"key":"@12","name":"first","node":"m4"},{"key":"wid:8f0c-uuid/5a1e-fid","name":"看图 这张图是什么颜色","node":"m4"}]'
+LS='[{"key":"@12","name":"first","node":"mac-a"},{"key":"wid:8f0c-uuid/5a1e-fid","name":"看图 这张图是什么颜色","node":"mac-a"}]'
 r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row 看图)
-[ "$r" = "$(printf 'm4\twid:8f0c-uuid/5a1e-fid\t5a1e-fid')" ] && ok 'restart: ls_row gives node · key · @fleet_id' || bad "restart: ls_row got '$r'"
+[ "$r" = "$(printf 'mac-a\twid:8f0c-uuid/5a1e-fid\t5a1e-fid')" ] && ok 'restart: ls_row gives node · key · @fleet_id' || bad "restart: ls_row got '$r'"
 r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row first)
 [ "$(printf '%s' "$r" | cut -f3)" = - ] && ok 'restart: a local row has no @fleet_id (-)' || bad "restart: local row got '$r'"
 # a thin client's list comes from its home (issue #3467): the session is the home's
 # own row (`@7`), its identity the list's fleet_id field — locate finds it by that
-LSO='[{"key":"@7","name":"我的会话 · first","title":"first","node":"mini2","worker_id":"U/f7","fleet_id":"f7"}]'
+LSO='[{"key":"@7","name":"我的会话 · first","title":"first","node":"mac-d","worker_id":"U/f7","fleet_id":"f7"}]'
 r=$(printf '%s' "$LSO" | bash "$DRILL" --ls-row first)
-[ "$r" = "$(printf 'mini2\t@7\tf7')" ] && ok 'restart: an own row of the home gives its @fleet_id (#3467)' || bad "restart: own row got '$r'"
+[ "$r" = "$(printf 'mac-d\t@7\tf7')" ] && ok 'restart: an own row of the home gives its @fleet_id (#3467)' || bad "restart: own row got '$r'"
 if printf '%s' "$LS" | bash "$DRILL" --ls-row nope >/dev/null; then bad 'restart: ls_row found a row that is not there'; else ok 'restart: no such row is rc 1'; fi
 # found again by IDENTITY (issue #3489): once its agent answered, the session's
 # name and title are no longer the words it was opened with — drill 37 lost
 # 「first」 and 「看图」 that way. The row kept at step 8 / 9 answers by @fleet_id
 # (the list's field or a wid: key's tail), else by key; never by name.
-LSR='[{"key":"@7","name":"我的会话 · 颜色问答","title":"颜色问答","node":"mini2","fleet_id":"f7"},{"key":"wid:U/f9","name":"first","node":"m5"}]'
+LSR='[{"key":"@7","name":"我的会话 · 颜色问答","title":"颜色问答","node":"mac-d","fleet_id":"f7"},{"key":"wid:U/f9","name":"first","node":"mac-b"}]'
 r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id @7 f7)
-[ "$r" = "$(printf 'mini2\t@7\tf7')" ] && ok 'identity: a retitled own row is found by its @fleet_id' || bad "identity: own row got '$r'"
+[ "$r" = "$(printf 'mac-d\t@7\tf7')" ] && ok 'identity: a retitled own row is found by its @fleet_id' || bad "identity: own row got '$r'"
 r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id @3 f7)
 [ "$(printf '%s' "$r" | cut -f2)" = @7 ] && ok 'identity: a new window id (a restart) still finds it by @fleet_id' || bad "identity: restarted got '$r'"
 r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id wid:U/f9 f9)
-[ "$r" = "$(printf 'm5\twid:U/f9\tf9')" ] && ok 'identity: a hub row by its wid: tail' || bad "identity: wid row got '$r'"
+[ "$r" = "$(printf 'mac-b\twid:U/f9\tf9')" ] && ok 'identity: a hub row by its wid: tail' || bad "identity: wid row got '$r'"
 r=$(printf '%s' "$LSR" | bash "$DRILL" --ls-row-id wid:U/f9 -)
 [ "$(printf '%s' "$r" | cut -f2)" = wid:U/f9 ] && ok 'identity: no @fleet_id known — by key' || bad "identity: by key got '$r'"
 if printf '%s' "$LSR" | bash "$DRILL" --ls-row-id @8 f8 >/dev/null; then bad 'identity: a session that is gone was found'; else ok 'identity: gone is rc 1, never another row by name'; fi
@@ -159,19 +159,19 @@ if printf '%s' "$LSR" | bash "$DRILL" --ls-row first >/dev/null && ! printf '%s'
 # step 8 by IDENTITY (issue #3464): the thin client's ⚡ session is 「我的会话」, its
 # words the title — the new row is the key that was not in the list before ↵, never
 # an older session sharing the words; its node is the home's (#me), never «-»
-LS0='[{"key":"@4","name":"test-我的会话 · first","title":"first","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"}]'
+LS0='[{"key":"@4","name":"test-我的会话 · first","title":"first","node":"mac-d"},{"key":"wid:U/old","name":"first","node":"mac-a"}]'
 printf '%s' "$LS0" | bash "$DRILL" --ls-keys > "$T/before.keys"
 [ "$(tr '\n' ' ' < "$T/before.keys")" = '@4 wid:U/old ' ] && ok 'step 8: --ls-keys lists the keys before ↵' || bad "step 8: ls-keys got '$(cat "$T/before.keys")'"
-LS1='[{"key":"@4","name":"test-我的会话 · first","title":"first","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"},{"key":"@7","name":"我的会话 · first","title":"first","node":"mini2"}]'
+LS1='[{"key":"@4","name":"test-我的会话 · first","title":"first","node":"mac-d"},{"key":"wid:U/old","name":"first","node":"mac-a"},{"key":"@7","name":"我的会话 · first","title":"first","node":"mac-d"}]'
 r=$(printf '%s' "$LS1" | bash "$DRILL" --ls-row first "$T/before.keys")
-[ "$r" = "$(printf 'mini2\t@7\t-')" ] && ok 'step 8: the new row is found by key, not by an older row of the same words' || bad "step 8: by identity got '$r'"
+[ "$r" = "$(printf 'mac-d\t@7\t-')" ] && ok 'step 8: the new row is found by key, not by an older row of the same words' || bad "step 8: by identity got '$r'"
 r=$(printf '%s' "$LS1" | bash "$DRILL" --ls-row first)
 [ "$(printf '%s' "$r" | cut -f2)" = @4 ] && ok 'step 8: by name alone an older row answers (why the before-set)' || bad "step 8: by name got '$r'"
-LS2='[{"key":"@4","name":"test-我的会话","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"},{"key":"@8","name":"我的会话","title":"","node":"mini2"}]'
+LS2='[{"key":"@4","name":"test-我的会话","node":"mac-d"},{"key":"wid:U/old","name":"first","node":"mac-a"},{"key":"@8","name":"我的会话","title":"","node":"mac-d"}]'
 r=$(printf '%s' "$LS2" | bash "$DRILL" --ls-row first "$T/before.keys")
-[ "$r" = "$(printf 'mini2\t@8\t-')" ] && ok 'step 8: the only new row answers even with no title yet' || bad "step 8: only-new got '$r'"
+[ "$r" = "$(printf 'mac-d\t@8\t-')" ] && ok 'step 8: the only new row answers even with no title yet' || bad "step 8: only-new got '$r'"
 if printf '%s' "$LS0" | bash "$DRILL" --ls-row first "$T/before.keys" >/dev/null; then bad 'step 8: nothing new still found a row'; else ok 'step 8: nothing new is rc 1'; fi
-LS3='[{"key":"@4","name":"x","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"},{"key":"@8","name":"a"},{"key":"@9","name":"b"}]'
+LS3='[{"key":"@4","name":"x","node":"mac-d"},{"key":"wid:U/old","name":"first","node":"mac-a"},{"key":"@8","name":"a"},{"key":"@9","name":"b"}]'
 if printf '%s' "$LS3" | bash "$DRILL" --ls-row first "$T/before.keys" >/dev/null; then bad 'step 8: two unnamed new rows were guessed'; else ok 'step 8: two new rows, neither named: rc 1, never a guess'; fi
 if printf 'nope' | bash "$DRILL" --ls-keys >/dev/null; then bad 'step 8: a list that is not JSON gave keys'; else ok 'step 8: a list that is not JSON is rc 1 (then by name)'; fi
 # the client's bar alone (C9 run 2: 「⌘N 编排」, no 新任务 row) is the client
@@ -197,7 +197,7 @@ printf '%s %s %s\n' "$m" "$url" "$body" >> "$CURL_LOG"
 printf 'ARGV %s\n' "$argv" >> "$CURL_LOG"
 n=$(grep -c '^DELETE ' "$CURL_LOG")
 if [ "$m" = DELETE ] && [ "$n" -le "${CURL_202:-0}" ]; then
-  printf '{"logins":["drillx@m5"],"status":"removing"}' > "$out"; printf 202
+  printf '{"logins":["drillx@mac-b"],"status":"removing"}' > "$out"; printf 202
 elif [ -n "${CURL_ACCOUNTS:-}" ] && [ "${url%/v1/fleet/accounts}" != "$url" ]; then
   # the operator's roster (issue #3471): GET answers the fixture, POST is logged
   if [ "$m" = GET ]; then cat "$CURL_ACCOUNTS" > "$out"; else printf '{}' > "$out"; fi; printf 200
@@ -237,7 +237,7 @@ if [ "$rc" = 0 ] && [ "$(grep -c '^DELETE ' "$T/curl.log")" = 4 ] && printf '%s\
 then ok 'teardown --invite: 202 removing is waited out, then the person is gone (exit 0)'
 else bad "202 removing: exit $rc, $(grep -c '^DELETE ' "$T/curl.log") DELETEs: $(printf '%s' "$out" | tail -n 4)"; fi
 # --- the home machine (issue #3471): steps 11–12 look THERE, never here alone ----
-# drill 33's login stayed on mini2 (its --home) under offboard PASS + residue
+# drill 33's login stayed on mac-d (its --home) under offboard PASS + residue
 # PASS. The seam stands in for ssh: <dir>/<machine> = what is left there, <dir>/
 # <machine>.down = unreachable, neither = the real probe run on this machine
 # (where no such login exists — a clean home)
@@ -259,47 +259,47 @@ far() {
     FLEET_DRILL_HOME_SSH="$T/shim/homessh" CCQUOTA_VIEWER_TOKEN="${VIEWER_T:-}" FLEET_HUB_TOKEN='' \
     bash "$DRILL" --teardown "$l" "$@" 2>&1
 }
-mkdir -p "$T/homes/drillw"; printf 'login record (uid 506)\nhome /Users/drillw\n3 process(es) of drillw\n' > "$T/far/mini2"
-out=$(far drillw --home mini2); rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*on mini2: login record' \
-   && printf '%s\n' "$out" | grep -q 'on mini2: 3 process' && ! printf '%s\n' "$out" | grep -q ': PASS '
+mkdir -p "$T/homes/drillw"; printf 'login record (uid 506)\nhome /Users/drillw\n3 process(es) of drillw\n' > "$T/far/mac-d"
+out=$(far drillw --home mac-d); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*on mac-d: login record' \
+   && printf '%s\n' "$out" | grep -q 'on mac-d: 3 process' && ! printf '%s\n' "$out" | grep -q ': PASS '
 then ok 'teardown --home: the login still on the home machine is a residue FAIL naming it (exit 1)'
 else bad "teardown --home, login left there: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
-if grep -q '^mini2 sh -s -- drillw$' "$T/far/calls" 2>/dev/null; then ok 'the residue probe ran ON the home machine, for that login'
-else bad "no probe on mini2: $(cat "$T/far/calls" 2>/dev/null)"; fi
-r=$(ls "$T"/fleet-onboard-drill.drillw.*/residue-mini2.txt 2>/dev/null | head -n 1)
-if [ -n "$r" ] && grep -q 'login record' "$r"; then ok "the home machine's answer is kept (residue-mini2.txt)"; else bad "no residue-mini2.txt (${r:-none})"; fi
+if grep -q '^mac-d sh -s -- drillw$' "$T/far/calls" 2>/dev/null; then ok 'the residue probe ran ON the home machine, for that login'
+else bad "no probe on mac-d: $(cat "$T/far/calls" 2>/dev/null)"; fi
+r=$(ls "$T"/fleet-onboard-drill.drillw.*/residue-mac-d.txt 2>/dev/null | head -n 1)
+if [ -n "$r" ] && grep -q 'login record' "$r"; then ok "the home machine's answer is kept (residue-mac-d.txt)"; else bad "no residue-mac-d.txt (${r:-none})"; fi
 # its local login already gone: the teardown still runs, for the home machine
-out=$(far drillq --home mini2); rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*on mini2'; then ok 'teardown --home with no login here: still checks the home machine (exit 1)'
+out=$(far drillq --home mac-d); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*on mac-d'; then ok 'teardown --home with no login here: still checks the home machine (exit 1)'
 else bad "teardown --home, nothing here: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
 # the home machine clean: PASS, and it says it looked there
-rm -f "$T/far/mini2"; mkdir -p "$T/homes/drillw"
-out=$(far drillw --home mini2); rc=$?
-if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -Eq '^PASS +residue +none on .* mini2:'; then ok 'teardown --home, the home machine clean: residue PASS names it (exit 0)'
+rm -f "$T/far/mac-d"; mkdir -p "$T/homes/drillw"
+out=$(far drillw --home mac-d); rc=$?
+if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -Eq '^PASS +residue +none on .* mac-d:'; then ok 'teardown --home, the home machine clean: residue PASS names it (exit 0)'
 else bad "teardown --home, clean: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
 # unreachable: never read as clean
-mkdir -p "$T/homes/drillw"; : > "$T/far/mini2.down"
-out=$(far drillw --home mini2); rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*could not read mini2'; then ok 'a home machine that cannot be read is a FAIL, never clean'
+mkdir -p "$T/homes/drillw"; : > "$T/far/mac-d.down"
+out=$(far drillw --home mac-d); rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +residue .*could not read mac-d'; then ok 'a home machine that cannot be read is a FAIL, never clean'
 else bad "home machine down: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
-rm -f "$T/far/mini2.down"
+rm -f "$T/far/mac-d.down"
 # the hub's roster names the machine (no --home): asked to close it, and a login
 # the node could not remove (#3167's eDSPermissionError) is an offboard FAIL with its words
 cat > "$T/accounts.json" <<'EOF'
-{"accounts":[{"principal_id":"drill-7","hostname":"mini2.local","login":"drillr","state":"failed","op":"create","detail":"login drillr is still on this machine (eDSPermissionError)"},
- {"principal_id":"p-other","hostname":"m4","login":"someone","state":"active","op":"create"}]}
+{"accounts":[{"principal_id":"drill-7","hostname":"mac-d.local","login":"drillr","state":"failed","op":"create","detail":"login drillr is still on this machine (eDSPermissionError)"},
+ {"principal_id":"p-other","hostname":"mac-a","login":"someone","state":"active","op":"create"}]}
 EOF
 mkdir -p "$T/homes/drillr"; : > "$T/curl.log"
 out=$(VIEWER_T=tok CURL_ACCOUNTS="$T/accounts.json" far drillr); rc=$?
-if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'asked the hub to close drillr@mini2.local (failed)' \
-   && printf '%s\n' "$out" | grep -Eq '^FAIL +offboard .*drillr@mini2.local still failed: .*eDSPermissionError'
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'asked the hub to close drillr@mac-d.local (failed)' \
+   && printf '%s\n' "$out" | grep -Eq '^FAIL +offboard .*drillr@mac-d.local still failed: .*eDSPermissionError'
 then ok "the roster's machine: the hub is asked to close it, a failed remove is an offboard FAIL with the node's words"
 else bad "roster close: exit $rc: $(printf '%s' "$out" | tail -n 5)"; fi
-if grep -q '^POST https://hub.example/v1/fleet/accounts {"action": "remove", "principal_id": "drill-7", "hostname": "mini2.local"}' "$T/curl.log"
+if grep -q '^POST https://hub.example/v1/fleet/accounts {"action": "remove", "principal_id": "drill-7", "hostname": "mac-d.local"}' "$T/curl.log"
 then ok 'the remove went to POST /v1/fleet/accounts for that row only'
-else bad "no remove POST for drill-7@mini2.local: $(grep '^POST' "$T/curl.log")"; fi
-if grep -q '^mini2.local sh -s -- drillr$' "$T/far/calls"; then ok "the residue probe reached the roster's machine with no --home"
+else bad "no remove POST for drill-7@mac-d.local: $(grep '^POST' "$T/curl.log")"; fi
+if grep -q '^mac-d.local sh -s -- drillr$' "$T/far/calls"; then ok "the residue probe reached the roster's machine with no --home"
 else bad "the roster's machine was not probed: $(cat "$T/far/calls")"; fi
 
 # --- a SIGTERM mid-run is ABORTED, never PASS (#2865) ----------------------------
@@ -326,41 +326,41 @@ else bad "SIGTERM mid-run: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
 # --- the client step on the thin client's first-session road (issue #3062) -------
 # its progress is the client starting, not 「back at the prompt」 (run 17 typed
 # `fleet` over 「opening a machine for you」)
-for say in 'fleet · opening a machine for you (mini2), about 45s — your first session opens once it is ready' \
-           'fleet · 机器 mini2 上的登录开好了，等它的 fleet 报上来（最多再等 590 秒）' \
+for say in 'fleet · opening a machine for you (mac-d), about 45s — your first session opens once it is ready' \
+           'fleet · 机器 mac-d 上的登录开好了，等它的 fleet 报上来（最多再等 590 秒）' \
            'fleet · your first session did not open'; do
   printf '%s\n' "$say" | bash "$DRILL" --thin-first-says && ok "client: the thin road's line counts: ${say#fleet · }" \
     || bad "client: not recognised: $say"
 done
-printf '%s\n' 'drill@m5 ~ % ' | bash "$DRILL" --thin-first-says && bad 'client: a bare prompt read as the thin road' \
+printf '%s\n' 'drill@mac-b ~ % ' | bash "$DRILL" --thin-first-says && bad 'client: a bare prompt read as the thin road' \
   || ok 'client: a bare prompt is not the thin road'
 # the 看台 on screen is the landing too (issue #3276, C9 run 22: the view drawn,
 # thin.log never said so — no home sent the OSC 7502 cur its `drawn` waits for before #3489)
-printf '%s\n' ' ‹ 2/2 ›  ● 在干活  scratch-1  first session …… @mini2' | bash "$DRILL" --thin-view-up \
-  && ok 'client: the drawn 看台 (‹ 2/2 › … @mini2) reads as up' || bad 'client: the drawn 看台 not recognised'
-printf '%s\n' 'fleet · 第一个会话开在 mini2' 'drill@m5 ~ % ' | bash "$DRILL" --thin-view-up \
+printf '%s\n' ' ‹ 2/2 ›  ● 在干活  scratch-1  first session …… @mac-d' | bash "$DRILL" --thin-view-up \
+  && ok 'client: the drawn 看台 (‹ 2/2 › … @mac-d) reads as up' || bad 'client: the drawn 看台 not recognised'
+printf '%s\n' 'fleet · 第一个会话开在 mac-d' 'drill@mac-b ~ % ' | bash "$DRILL" --thin-view-up \
   && bad 'client: the road / a prompt read as the drawn 看台' || ok 'client: the road is not the drawn 看台'
 # its outcome, off the newcomer's thin.log: placed + a connection that drew the view
 tl() { printf '%s\t%s\t%s\t\t\t\t%s\t%s\t%s\n' "2026-10-11T03:45:50Z" "$@"; }
-st=$( { tl first m5 '' '' 'no fleet session is live on m5'; tl first mini2 '' 0 'REMOTE mini2'; tl connect mini2 120 '' ''; } | bash "$DRILL" --thin-first)
+st=$( { tl first mac-b '' '' 'no fleet session is live on mac-b'; tl first mac-d '' 0 'REMOTE mac-d'; tl connect mac-d 120 '' ''; } | bash "$DRILL" --thin-first)
 [ "$st" = landed ] && ok 'client: placed + drawn = landed' || bad "client: landed read as '$st'"
 # the view drawn while the connection is still open (#3155): the `drawn` line,
 # no `connect` line yet (that one is written when the connection ends)
-st=$( { tl first m5 '' '' x; tl first mini2 '' 0 'REMOTE mini2'; tl drawn mini2 340 '' ''; } | bash "$DRILL" --thin-first)
+st=$( { tl first mac-b '' '' x; tl first mac-d '' 0 'REMOTE mac-d'; tl drawn mac-d 340 '' ''; } | bash "$DRILL" --thin-first)
 [ "$st" = landed ] && ok 'client: placed + drawn (connection still open) = landed' || bad "client: drawn-while-open read as '$st'"
-st=$( { tl first m5 '' '' x; tl first mini2 '' 0 'REMOTE mini2'; } | bash "$DRILL" --thin-first)
+st=$( { tl first mac-b '' '' x; tl first mac-d '' 0 'REMOTE mac-d'; } | bash "$DRILL" --thin-first)
 [ "$st" = placed ] && ok 'client: placed, not drawn yet' || bad "client: placed read as '$st'"
-st=$( { tl first m5 '' '' x; tl first - '' 1 'No fleet on any of your machines'; tl quit m5 '' 1 'no first session'; } | bash "$DRILL" --thin-first)
+st=$( { tl first mac-b '' '' x; tl first - '' 1 'No fleet on any of your machines'; tl quit mac-b '' 1 'no first session'; } | bash "$DRILL" --thin-first)
 [ "$st" = failed ] && ok 'client: no first session = failed' || bad "client: failed read as '$st'"
-st=$(tl first m5 '' '' 'no fleet session is live on m5' | bash "$DRILL" --thin-first)
+st=$(tl first mac-b '' '' 'no fleet session is live on mac-b' | bash "$DRILL" --thin-first)
 [ "$st" = wait ] && ok 'client: still on the road = wait' || bad "client: wait read as '$st'"
 # --- the scratch step's wait while the hub opens the login (issue #2908) -----------
 # the ETA on the visible screen: the smallest of the pane's and the bar's, none
 # when the screen says no opening
-e=$(printf '%s\n' '  first   │ 正在为你开机器（mini2），约 412 秒。' \
-      '正在为你开机器（mini2），约 480 秒 — 开好后自动接着开' | bash "$DRILL" --opening-eta)
+e=$(printf '%s\n' '  first   │ 正在为你开机器（mac-d），约 412 秒。' \
+      '正在为你开机器（mac-d），约 480 秒 — 开好后自动接着开' | bash "$DRILL" --opening-eta)
 [ "$e" = 412 ] && ok 'opening: the ETA read off the screen (the smaller one)' || bad "opening: ETA got '$e'"
-e=$(printf '%s\n' 'opening a machine for you (mini2), about 95s.' | bash "$DRILL" --opening-eta)
+e=$(printf '%s\n' 'opening a machine for you (mac-d), about 95s.' | bash "$DRILL" --opening-eta)
 [ "$e" = 95 ] && ok 'opening: the English ETA' || bad "opening: English ETA got '$e'"
 e=$(printf '%s\n' '  first  scratch  │ 约 30 秒' | bash "$DRILL" --opening-eta)
 [ -z "$e" ] && ok 'opening: a number with no 正在为你开机器 is no ETA' || bad "opening: ETA off a non-opening screen: '$e'"

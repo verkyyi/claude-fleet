@@ -38,37 +38,37 @@ func connectCaps(t *testing.T, h *harness, label, hostname, osUser string, admin
 	return n
 }
 
-// spareFleet is four admin machines: m4 busy, m5 quiet (both separate
+// spareFleet is four admin machines: mac-c busy, mac-d quiet (both separate
 // credentials), m6 the same but 维护中, m7 (3 sessions) whose node does not
 // separate credentials. Routes let /v1/fleet/home answer a machine.
 func spareFleet(t *testing.T, h *harness) map[string]*fleetNode {
 	t.Helper()
-	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetAdmins = []string{"ivan"}
 	nodes := map[string]*fleetNode{}
 	for _, m := range []struct {
 		host     string
 		credsep  bool
 		sessions int
-	}{{"m4", true, 5}, {"m5", true, 1}, {"m6", true, 0}, {"m7", false, 3}} {
+	}{{"mac-c", true, 5}, {"mac-d", true, 1}, {"m6", true, 0}, {"m7", false, 3}} {
 		var caps []string
 		if m.credsep {
 			caps = []string{control.CapCredsep}
 		}
-		n := connectCaps(t, h, m.host+"-op", m.host, "verkyyi", true, caps...)
-		beatCount(t, n, m.host, "verkyyi", m.sessions)
+		n := connectCaps(t, h, m.host+"-op", m.host, "ivan", true, caps...)
+		beatCount(t, n, m.host, "ivan", m.sessions)
 		nodes[m.host] = n
 	}
 	if _, _, err := h.srv.enterMaintenance("m6", "drill", "test", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	routes, err := ParseFleetRoutes(`[{"hostname":"m4","routes":[{"name":"public","host":"203.0.113.4"}]},
-	  {"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5"}]}]`)
+	routes, err := ParseFleetRoutes(`[{"hostname":"mac-c","routes":[{"name":"public","host":"203.0.113.4"}]},
+	  {"hostname":"mac-d","routes":[{"name":"public","host":"203.0.113.5"}]}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.srv.FleetRoutes = routes
 	waitFor(t, 3*time.Second, "the roster to carry every beat", func() bool {
-		return h.srv.leastBusyMachine(time.Now()) == "m5"
+		return h.srv.leastBusyMachine(time.Now()) == "mac-d"
 	})
 	return nodes
 }
@@ -115,13 +115,13 @@ func TestSpareHandedToANewcomerAndRefilled(t *testing.T) {
 	nodes := spareFleet(t, h)
 	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
 	sparesOn(t, h, "1")
-	openSpares(t, nodes["m4"], 1, control.CredsepSeparated)
-	m5 := openSpares(t, nodes["m5"], 1, control.CredsepSeparated)
+	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
+	macD := openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
 	// 维护中 (m6) and a node that does not separate credentials (m7): none.
 	noOp(t, nodes, "m6", "m7")
 	waitFor(t, 3*time.Second, "both spares to be ready", func() bool {
 		r := h.srv.spareReadyHosts()
-		return r["m4"] == 1 && r["m5"] == 1
+		return r["mac-c"] == 1 && r["mac-d"] == 1
 	})
 
 	listPerson(t, h, p, "LiSi")
@@ -135,25 +135,25 @@ func TestSpareHandedToANewcomerAndRefilled(t *testing.T) {
 		} `json:"machine"`
 	}
 	_ = json.Unmarshal(body, &home)
-	if code != http.StatusOK || home.Machine == nil || home.Machine.Hostname != "m5" || home.Login != m5[0] {
-		t.Fatalf("home: HTTP %d %s; want m5 under its spare login %s at once", code, body, m5[0])
+	if code != http.StatusOK || home.Machine == nil || home.Machine.Hostname != "mac-d" || home.Login != macD[0] {
+		t.Fatalf("home: HTTP %d %s; want mac-d under its spare login %s at once", code, body, macD[0])
 	}
 	if took > 3*time.Second {
 		t.Fatalf("home took %v; want ≤ 3s", took)
 	}
 	// Mapped, not renamed: the person's login IS the spare's name.
-	if pr, err := h.srv.Store.Principal(p); err != nil || pr.Login != m5[0] || pr.DisplayName == store.SpareFullName {
+	if pr, err := h.srv.Store.Principal(p); err != nil || pr.Login != macD[0] || pr.DisplayName == store.SpareFullName {
 		t.Fatalf("principal = %+v, %v", pr, err)
 	}
-	if a := accountState(t, h, p, "m5"); a.State != store.AccountActive || a.Login != m5[0] {
+	if a := accountState(t, h, p, "mac-d"); a.State != store.AccountActive || a.Login != macD[0] {
 		t.Fatalf("account = %+v", a)
 	}
 	// The spare taken is refilled on its own; the other machine's stays.
-	_, op := expectAccountOp(t, nodes["m5"].tnode)
-	if op.Op != control.AccountCreate || !strings.HasPrefix(op.Login, "fleetu") || op.Login == m5[0] {
+	_, op := expectAccountOp(t, nodes["mac-d"].tnode)
+	if op.Op != control.AccountCreate || !strings.HasPrefix(op.Login, "fleetu") || op.Login == macD[0] {
 		t.Fatalf("refill op = %+v", op)
 	}
-	noOp(t, nodes, "m4")
+	noOp(t, nodes, "mac-c")
 }
 
 // The count is min(fleet.spare_max, the machine's login cap − the logins
@@ -162,52 +162,52 @@ func TestSpareCountFollowsTheMachinesRoom(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
-	setHubSetting(t, h.srv, NodeUserCapPrefix+"m4", "3")
-	// Two logins already handed out on m4.
+	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "3")
+	// Two logins already handed out on mac-c.
 	for _, id := range []string{"gh:7001", "gh:7002"} {
 		p, err := h.srv.Store.AdoptPrincipal(id, "u"+id[3:], "", time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+		if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	sparesOn(t, h, "5")
-	openSpares(t, nodes["m4"], 1, control.CredsepSeparated) // 3 − 2 = 1
-	openSpares(t, nodes["m5"], 5, control.CredsepSeparated) // min(5, 10 − 0)
-	noOp(t, nodes, "m4")
+	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated) // 3 − 2 = 1
+	openSpares(t, nodes["mac-d"], 5, control.CredsepSeparated) // min(5, 10 − 0)
+	noOp(t, nodes, "mac-c")
 	waitFor(t, 3*time.Second, "the spares to be ready", func() bool {
 		r := h.srv.spareReadyHosts()
-		return r["m4"] == 1 && r["m5"] == 5
+		return r["mac-c"] == 1 && r["mac-d"] == 5
 	})
 
 	var snap NodesSnapshot
 	h.getJSON(t, "/v1/nodes", &snap)
 	seen := false
 	for _, m := range snap.Machines {
-		if m.Hostname != "m4" {
+		if m.Hostname != "mac-c" {
 			continue
 		}
 		seen = true
 		if m.Spare == nil || *m.Spare != 1 || m.LoginsUsed == nil || *m.LoginsUsed != 2 || m.LoginCap == nil || *m.LoginCap != 3 {
-			t.Fatalf("m4 = spare %v used %v cap %v; want 1 · 2 / 3", m.Spare, m.LoginsUsed, m.LoginCap)
+			t.Fatalf("mac-c = spare %v used %v cap %v; want 1 · 2 / 3", m.Spare, m.LoginsUsed, m.LoginCap)
 		}
 	}
 	if !seen {
-		t.Fatal("m4 is not on the operator's roster")
+		t.Fatal("mac-c is not on the operator's roster")
 	}
 
-	// The cap comes down: m5's newest spares close until it holds 2.
+	// The cap comes down: mac-d's newest spares close until it holds 2.
 	setHubSetting(t, h.srv, SpareMaxKey, "2")
 	h.srv.replenishSpares(time.Now(), true)
 	h.srv.dispatchAccounts()
 	for i := 0; i < 3; i++ {
-		if _, op := expectAccountOp(t, nodes["m5"].tnode); op.Op != control.AccountRemove || !strings.HasPrefix(op.Login, "fleetu") {
+		if _, op := expectAccountOp(t, nodes["mac-d"].tnode); op.Op != control.AccountRemove || !strings.HasPrefix(op.Login, "fleetu") {
 			t.Fatalf("shrink op = %+v; want a remove of a spare", op)
 		}
 	}
-	noOp(t, nodes, "m5")
+	noOp(t, nodes, "mac-d")
 }
 
 // A spare whose create did not come back credential-separated is never
@@ -219,19 +219,19 @@ func TestSpareUnseparatedIsNeverHandedOut(t *testing.T) {
 	nodes := spareFleet(t, h)
 	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
 	sparesOn(t, h, "1")
-	openSpares(t, nodes["m4"], 1, control.CredsepSeparated)
-	openSpares(t, nodes["m5"], 1, "") // a node that did not say separated
-	waitFor(t, 3*time.Second, "m5's spare to fail and m4's to be ready", func() bool {
+	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
+	openSpares(t, nodes["mac-d"], 1, "") // a node that did not say separated
+	waitFor(t, 3*time.Second, "mac-d's spare to fail and mac-c's to be ready", func() bool {
 		pic, _ := h.srv.sparePicture()
-		return pic["m5"] != nil && pic["m5"].Failed && pic["m4"] != nil && pic["m4"].Ready == 1
+		return pic["mac-d"] != nil && pic["mac-d"].Failed && pic["mac-c"] != nil && pic["mac-c"].Ready == 1
 	})
 	if h.srv.replenishSpares(time.Now(), true) {
 		t.Fatal("the refill queued again beside a failed spare")
 	}
 	listPerson(t, h, p, "")
 	h.srv.onPrincipalSignIn(p, "")
-	if a := accountState(t, h, p, "m4"); a.State != store.AccountActive || !strings.HasPrefix(a.Login, "fleetu") {
-		t.Fatalf("account on m4 = %+v; want m4's separated spare (m5's is not handed out)", a)
+	if a := accountState(t, h, p, "mac-c"); a.State != store.AccountActive || !strings.HasPrefix(a.Login, "fleetu") {
+		t.Fatalf("account on mac-c = %+v; want mac-c's separated spare (mac-d's is not handed out)", a)
 	}
 }
 
@@ -242,11 +242,11 @@ func TestSpareIsInNoPeopleView(t *testing.T) {
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
 	sparesOn(t, h, "1")
-	openSpares(t, nodes["m4"], 1, control.CredsepSeparated)
-	openSpares(t, nodes["m5"], 1, control.CredsepSeparated)
+	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
+	openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
 	waitFor(t, 3*time.Second, "both spares to be ready", func() bool {
 		r := h.srv.spareReadyHosts()
-		return r["m4"] == 1 && r["m5"] == 1
+		return r["mac-c"] == 1 && r["mac-d"] == 1
 	})
 	ps, err := h.srv.Store.Principals()
 	if err != nil {
@@ -280,8 +280,8 @@ func TestSpareEmptyFallsBackToOpening(t *testing.T) {
 	nodes := spareFleet(t, h)
 	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
 	sparesOn(t, h, "1")
-	expectAccountOp(t, nodes["m4"].tnode) // sent, never answered: creating
-	expectAccountOp(t, nodes["m5"].tnode)
+	expectAccountOp(t, nodes["mac-c"].tnode) // sent, never answered: creating
+	expectAccountOp(t, nodes["mac-d"].tnode)
 
 	listPerson(t, h, p, "WangWu")
 	code, body := asUID(t, h, http.MethodGet, control.HomePath, p, "", nil)
@@ -293,7 +293,7 @@ func TestSpareEmptyFallsBackToOpening(t *testing.T) {
 	if eta, _ := home["eta_s"].(float64); eta < 5 {
 		t.Fatalf("eta_s = %v", home["eta_s"])
 	}
-	_, op := expectAccountOp(t, nodes["m5"].tnode)
+	_, op := expectAccountOp(t, nodes["mac-d"].tnode)
 	if op.Op != control.AccountCreate || strings.HasPrefix(op.Login, "fleetu") || op.FullName == store.SpareFullName {
 		t.Fatalf("op = %+v; want the person's own create", op)
 	}
@@ -318,7 +318,7 @@ func TestSpareOffAddsNothing(t *testing.T) {
 	}
 	listPerson(t, h, p, "ZhaoLiu")
 	h.srv.onPrincipalSignIn(p, "ZhaoLiu")
-	if _, op := expectAccountOp(t, nodes["m5"].tnode); op.Login != "zhaoliu" {
+	if _, op := expectAccountOp(t, nodes["mac-d"].tnode); op.Login != "zhaoliu" {
 		t.Fatalf("op = %+v; want the person's own create", op)
 	}
 }
@@ -329,8 +329,8 @@ func TestSpareSettings(t *testing.T) {
 			t.Errorf("%s=%q: refusal %q, want ok=%v", SpareMaxKey, v, msg, ok)
 		}
 	}
-	if got := nodeUserCap("m4.lan", map[string]string{NodeUserCapPrefix + "m4": "3"}); got != 3 {
-		t.Errorf("nodeUserCap(m4.lan) = %d, want 3", got)
+	if got := nodeUserCap("mac-c.lan", map[string]string{NodeUserCapPrefix + "mac-c": "3"}); got != 3 {
+		t.Errorf("nodeUserCap(mac-c.lan) = %d, want 3", got)
 	}
 	if got := nodeUserCap("m9", nil); got != defaultNodeUserCap {
 		t.Errorf("nodeUserCap(m9) = %d, want %d", got, defaultNodeUserCap)

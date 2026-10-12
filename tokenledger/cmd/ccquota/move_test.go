@@ -21,7 +21,7 @@ func TestMoveCLIContract(t *testing.T) {
 	if err := os.WriteFile(bundle, []byte("tar"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	send := []string{"send", "--node", "m4", "--bundle", bundle, "--branch", "issue-7", "--sid", "s", "--name", "n", "verkyyi/claude-fleet", wid}
+	send := []string{"send", "--node", "mac-a", "--bundle", bundle, "--branch", "issue-7", "--sid", "s", "--name", "n", "verkyyi/claude-fleet", wid}
 	cases := []struct {
 		name   string
 		args   []string
@@ -30,17 +30,17 @@ func TestMoveCLIContract(t *testing.T) {
 		code   int
 		out    string
 	}{
-		{"plan local", []string{"plan", "verkyyi/claude-fleet", wid}, []string{`{"local":true,"placement":{"machine":"m5.local","reason":"chose m5"}}`}, 200,
-			0, "LOCAL m5\tchose m5"},
-		{"plan remote", []string{"plan", "--node", "m4", "verkyyi/claude-fleet", wid}, []string{`{"local":false,"movable":true,"placement":{"machine":"m4","reason":"chose m4"}}`}, 200,
-			0, "REMOTE m4 movable\tchose m4"},
+		{"plan local", []string{"plan", "verkyyi/claude-fleet", wid}, []string{`{"local":true,"placement":{"machine":"mac-b.local","reason":"chose mac-b"}}`}, 200,
+			0, "LOCAL mac-b\tchose mac-b"},
+		{"plan remote", []string{"plan", "--node", "mac-a", "verkyyi/claude-fleet", wid}, []string{`{"local":false,"movable":true,"placement":{"machine":"mac-a","reason":"chose mac-a"}}`}, 200,
+			0, "REMOTE mac-a movable\tchose mac-a"},
 		{"moved after a wait", send, []string{
-			`{"placement":{"machine":"m4"},"to_wid":"22222222-2222-4222-8222-222222222222/issue-7","operation":{"operation_id":"op","status":"accepted"}}`,
+			`{"placement":{"machine":"mac-a"},"to_wid":"22222222-2222-4222-8222-222222222222/issue-7","operation":{"operation_id":"op","status":"accepted"}}`,
 			`{"operation":{"operation_id":"op","status":"running"}}`,
 			`{"operation":{"operation_id":"op","status":"succeeded","result":{"window":"@3","pid":"42"}}}`}, 200,
-			0, "MOVED m4 @3 42\t22222222-2222-4222-8222-222222222222/issue-7"},
+			0, "MOVED mac-a @3 42\t22222222-2222-4222-8222-222222222222/issue-7"},
 		{"target failed", send, []string{
-			`{"placement":{"machine":"m4"},"operation":{"operation_id":"op","status":"failed","result":{"error":{"code":"EXECUTION_FAILED","message":"stale branch"}}}}`}, 200,
+			`{"placement":{"machine":"mac-a"},"operation":{"operation_id":"op","status":"failed","result":{"error":{"code":"EXECUTION_FAILED","message":"stale branch"}}}}`}, 200,
 			5, "FAILED EXECUTION_FAILED\tstale branch"},
 		{"held", send, []string{`{"error":{"code":"ALREADY_CLAIMED","message":"#7 is leased to m3"},"holder":{"node":"m3"}}`}, 409,
 			3, "HELD m3\t#7 is leased to m3"},
@@ -92,13 +92,13 @@ func TestMoveCLIUnknownAfterWait(t *testing.T) {
 			_, _ = w.Write([]byte(`{"bundle_id":"0123456789abcdef0123456789abcdef"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"placement":{"machine":"m4"},"operation":{"operation_id":"op","status":"accepted"}}`))
+		_, _ = w.Write([]byte(`{"placement":{"machine":"mac-a"},"operation":{"operation_id":"op","status":"accepted"}}`))
 	}))
 	defer srv.Close()
 	bundle := filepath.Join(t.TempDir(), "b.tar")
 	_ = os.WriteFile(bundle, []byte("tar"), 0o600)
 	var stdout, stderr bytes.Buffer
-	code, _ := move([]string{"send", "--hub", srv.URL, "--token", "tok", "--node", "m4", "--bundle", bundle, "--branch", "b",
+	code, _ := move([]string{"send", "--hub", srv.URL, "--token", "tok", "--node", "mac-a", "--bundle", bundle, "--branch", "b",
 		"--sid", "s", "--name", "n", "--wait", "50ms", "o/r", "11111111-1111-4111-8111-111111111111/issue-7"}, &stdout, &stderr)
 	if code != moveUnknown || !strings.HasPrefix(stdout.String(), "UNKNOWN op\t") {
 		t.Fatalf("got %d %q; want UNKNOWN (never a guess)", code, stdout.String())

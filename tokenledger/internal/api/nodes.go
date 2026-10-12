@@ -947,8 +947,8 @@ type NodeFleetSummary struct {
 	Error   string   `json:"error,omitempty"` // why a state "unknown" fleet could not be read
 }
 
-// MachineView folds a machine's logins into one row: the operator asks "is m4
-// up", not "is each of m4's six agents up".
+// MachineView folds a machine's logins into one row: the operator asks "is mac-a
+// up", not "is each of mac-a's six agents up".
 type MachineView struct {
 	Hostname string `json:"hostname"`
 	// Alias is the short name the admin gave it (fleet.machine_names,

@@ -56,7 +56,7 @@ const (
 	entryReachV6Max = 4
 )
 
-// entryCGNAT is 100.64.0.0/10: carrier NAT's (and the tailnet's) space.
+// entryCGNAT is 100.64.0.0/10: carrier NAT's (and the tailnet's) space. // oss-ok: CGNAT 网段本身
 var entryCGNAT = netip.MustParsePrefix("100.64.0.0/10")
 
 // entryNotPublic are the unicast ranges no one outside reaches a home at.

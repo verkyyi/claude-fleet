@@ -82,7 +82,7 @@ func TestSessionsCountOneAnswer(t *testing.T) {
 		sess *http.Cookie
 		want []string
 	}{
-		{"admin", admin, []string{"mini/verkyyi"}},
+		{"admin", admin, []string{"mini/ivan"}},
 		{"user", user, []string{"alicebox/" + aliceLogin}},
 	} {
 		for i, hh := range []*ghHarness{h, h2} {

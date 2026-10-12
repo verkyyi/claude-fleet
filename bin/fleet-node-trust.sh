@@ -17,7 +17,7 @@
 # that sets it, for itself or another. No setting = untrusted — a machine that
 # joins later, a computer that only holds a connection certificate. When this
 # shipped, every machine with an active fleet account was marked trusted once
-# (m4 / m5 lease exactly what they leased before).
+# (mac-a / mac-b lease exactly what they leased before).
 #
 # Who may:
 #   set / status  the operator: a viewer token in CCQUOTA_VIEWER_TOKEN, read from
@@ -39,7 +39,7 @@
 #
 # Output, one line per machine on stdout:
 #   trust: SET m9 trusted
-#   trust: m4 trusted
+#   trust: mac-a trusted
 #   trust: m9 untrusted
 #
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport, for the selftest.

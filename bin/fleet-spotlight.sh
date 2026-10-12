@@ -2,8 +2,8 @@
 # fleet-spotlight.sh — a managed Mac runs with Spotlight OFF (issue #3402).
 #
 # Spotlight indexing every worktree, git object and session log ate the
-# machine the sessions run on: 2026-10-11, macmini's fseventsd at 115% CPU
-# (load 30 on 15 cores), mini2's spotlightknowledged at 99% for 7 hours —
+# machine the sessions run on: 2026-10-11, mac-c's fseventsd at 115% CPU
+# (load 30 on 15 cores), mac-d's spotlightknowledged at 99% for 7 hours —
 # while every volume there already read «Indexing disabled». So OFF is two
 # halves, and `mdutil` alone is only the first:
 #   volumes   `mdutil -a -i off` (+ `mdutil -a -E` the first time, the old

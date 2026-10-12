@@ -12,7 +12,7 @@
 #   C  panel commands — FLEET_PANEL_COMMANDS read from fleet.conf with no shell:
 #      the last line wins, `none` empties, no file ⇒ the default
 #   D  a locale this machine lacks (LANG=en_US.UTF-8 on a slim image) — the
-#      server's environment on fleet-linux-0: fleet-quickopen.py and
+#      server's environment on linux-a: fleet-quickopen.py and
 #      fleet-quick-dispatch.py start anyway (C.UTF-8, else C), where setlocale
 #      raised and the 看台's ⌘P table was never built
 #

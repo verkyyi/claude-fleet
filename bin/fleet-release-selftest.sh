@@ -5,7 +5,7 @@
 # A sandbox origin (bare repo, three commits on master, stable at the first), the
 # REAL bin/fleet-stable.sh as step ②, and fakes for everything past GitHub: a gh
 # on PATH (canned check runs / macOS runs per commit), a hub whose /version reads
-# the sandbox's stable tag, a /v1/nodes with m4 · m5 (this machine) · a lost m7,
+# the sandbox's stable tag, a /v1/nodes with mac-a · mac-b (this machine) · a lost m7,
 # machines whose version is a file the KICK writes, a local install-sync that
 # writes its state file, a doctor that prints an install row.
 #
@@ -13,9 +13,9 @@
 #      nothing synced, no log line — also while a check is still running.
 #   B. CI red (a check run failed) → exit 3, the check is NAMED, stable unmoved,
 #      log result=refused:ci. A red macOS run → exit 3 with its run URL.
-#   C. a release: stable moves, the hub follows, m4 is kicked and follows, the lost
+#   C. a release: stable moves, the hub follows, mac-a is kicked and follows, the lost
 #      m7 is named and not waited for, this machine syncs and its doctor PASSes →
-#      exit 0, ①–⑥ each one line, log result=released with m4@<n>s.
+#      exit 0, ①–⑥ each one line, log result=released with mac-a@<n>s.
 #   D. --rollback moves stable back to the log's `from`, log result=rollback.
 #   E. a machine that never follows → exit 5 naming it and the rollback command,
 #      log result=failed:machines; stable stays where ② put it.
@@ -25,7 +25,7 @@
 #      PASS install rows → ⑤ still passes; a FAIL install row after a PASS one →
 #      ⑤ stops. One machine of two arrives → ④ says 1/2 台到位, the other named.
 #   H. (issue #2497) a machine whose ssh version is the target but whose second
-#      login the hub hears behind is NOT there: ④ names `m4/verky2 仍在 <sha>`.
+#      login the hub hears behind is NOT there: ④ names `mac-a/verky2 仍在 <sha>`.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,8 +76,8 @@ macgreen() { : > "$d/macruns"; for s in "$@"; do printf '%s\tcompleted\tsuccess\
 # the hub, the roster, the machines, this machine
 printf '#!/bin/sh\nprintf "{\\"stable\\": \\"%%s\\"}" "$(git --git-dir=%s rev-parse refs/tags/stable)"\n' "$d/origin.git" > "$d/hubver"
 cat > "$d/nodes.json" <<'J'
-{"machines": [{"hostname": "m4host.local", "alias": "m4", "status": "online"},
-              {"hostname": "m5host", "alias": "m5", "status": "online"},
+{"machines": [{"hostname": "m4host.local", "alias": "mac-a", "status": "online"},
+              {"hostname": "m5host", "alias": "mac-b", "status": "online"},
               {"hostname": "m7host", "alias": "m7", "status": "lost"},
               {"hostname": "laptop", "status": "online", "personal": true}],
  "nodes": [{"hostname": "m4host.local", "fleet_version": "0000000", "last_heartbeat": "2026-10-08T00:00:00Z"}]}
@@ -122,7 +122,7 @@ run() {   # run <args…> — fleet-release in the sandbox; OUT + RC
 }
 has() { case "$OUT" in *"$1"*) return 0 ;; esac; return 1; }
 lastlog() { tail -n 1 "$d/release.log" 2>/dev/null; }
-echo "$c1" > "$d/ver.m4"
+echo "$c1" > "$d/ver.mac-a"
 
 # ── A. --dry-run lists the six steps ──
 macgreen "$c2"
@@ -131,7 +131,7 @@ n=0; for s in ① ② ③ ④ ⑤ ⑥; do printf '%s\n' "$OUT" | grep -q "^$s " 
 if [ "$RC" = 0 ] && [ "$n" = 6 ]; then ok "A dry-run lists the six steps"; else bad "A dry-run rc=$RC steps=$n: $OUT"; fi
 { [ "$(stable)" = "$c1" ] && [ ! -f "$d/kicked" ] && [ ! -f "$d/synced" ] && [ ! -f "$d/release.log" ]; } \
   && ok "A dry-run pushed, kicked, synced and logged nothing" || bad "A dry-run changed something"
-has 'm4=' && ! has 'm5=' && has 'm7（lost）' && ok "A ④ waits on m4, not on this machine (m5), names the lost m7" \
+has 'mac-a=' && ! has 'mac-b=' && has 'm7（lost）' && ok "A ④ waits on mac-a, not on this machine (mac-b), names the lost m7" \
   || bad "A ④ machine list: $(printf '%s\n' "$OUT" | grep '④')"
 
 printf 'completed\tsuccess\tlint\nin_progress\t\tselftests (shard 2)\n' > "$d/checks.$c2"
@@ -159,8 +159,8 @@ run --to "$c2"
 n=0; for s in ① ② ③ ④ ⑤ ⑥; do printf '%s\n' "$OUT" | grep -q "^$s " && n=$((n + 1)); done
 { [ "$RC" = 0 ] && [ "$n" = 6 ] && [ "$(stable)" = "$c2" ]; } && ok "C released: six lines, stable moved" \
   || bad "C release rc=$RC steps=$n stable=$(stable): $OUT"
-grep -qx m4 "$d/kicked" 2>/dev/null && ! grep -q m7 "$d/kicked" && ok "C kicked m4 (not the lost m7)" || bad "C kicks: $(cat "$d/kicked" 2>/dev/null)"
-case "$(lastlog)" in *result=released*machines=m4@*) ok "C logged released with m4's arrival" ;; *) bad "C log: $(lastlog)" ;; esac
+grep -qx mac-a "$d/kicked" 2>/dev/null && ! grep -q m7 "$d/kicked" && ok "C kicked mac-a (not the lost m7)" || bad "C kicks: $(cat "$d/kicked" 2>/dev/null)"
+case "$(lastlog)" in *result=released*machines=mac-a@*) ok "C logged released with mac-a's arrival" ;; *) bad "C log: $(lastlog)" ;; esac
 
 # ── D. --rollback ──
 run --rollback
@@ -168,12 +168,12 @@ run --rollback
 case "$(lastlog)" in *result=rollback*) ok "D logged rollback" ;; *) bad "D log: $(lastlog)" ;; esac
 
 # ── E. a machine that never follows ──
-touch "$d/stuck.m4"; echo "$c1" > "$d/ver.m4"
+touch "$d/stuck.mac-a"; echo "$c1" > "$d/ver.mac-a"
 run --to "$c2" --machines-timeout 2
-{ [ "$RC" = 5 ] && has 'm4（在' && has 'fleet release --rollback' && [ "$(stable)" = "$c2" ]; } \
+{ [ "$RC" = 5 ] && has 'mac-a（在' && has 'fleet release --rollback' && [ "$(stable)" = "$c2" ]; } \
   && ok "E a machine that never follows: exit 5, named, rollback said" || bad "E rc=$RC: $OUT"
-case "$(lastlog)" in *result=failed:machines*m4:timeout*) ok "E logged failed:machines" ;; *) bad "E log: $(lastlog)" ;; esac
-rm -f "$d/stuck.m4"
+case "$(lastlog)" in *result=failed:machines*mac-a:timeout*) ok "E logged failed:machines" ;; *) bad "E log: $(lastlog)" ;; esac
+rm -f "$d/stuck.mac-a"
 
 # ── F. this machine rejects the version → stable moved back on its own ──
 macgreen "$c3"; touch "$d/reject"
@@ -218,11 +218,11 @@ d["nodes"].append({"hostname": "m4host.local", "os_user": "fleet-node", "machine
 json.dump(d, open(p, "w"))
 PY2
 run --to "$c4" --machines-timeout 2
-{ [ "$RC" = 5 ] && has "m4/verky2 仍在 ${c1:0:7}" && printf '%s\n' "$OUT" | grep '^④' | grep -q '1/2 台到位' \
-  && [ "$(cat "$d/ver.m4")" = "$c4" ] && ! has 'fleet-node'; } \
-  && ok "H m4 at the target over ssh but its login verky2 behind: not arrived, named" || bad "H rc=$RC: $OUT"
+{ [ "$RC" = 5 ] && has "mac-a/verky2 仍在 ${c1:0:7}" && printf '%s\n' "$OUT" | grep '^④' | grep -q '1/2 台到位' \
+  && [ "$(cat "$d/ver.mac-a")" = "$c4" ] && ! has 'fleet-node'; } \
+  && ok "H mac-a at the target over ssh but its login verky2 behind: not arrived, named" || bad "H rc=$RC: $OUT"
 run --to "$c4" --dry-run
-has "m4/verky2 仍在 ${c1:0:7}" && ok "H --dry-run names the login behind" || bad "H dry-run: $(printf '%s\n' "$OUT" | grep "^④")"
+has "mac-a/verky2 仍在 ${c1:0:7}" && ok "H --dry-run names the login behind" || bad "H dry-run: $(printf '%s\n' "$OUT" | grep "^④")"
 
 [ "$fails" -eq 0 ] && { echo "PASS fleet-release-selftest"; exit 0; }
 echo "FAIL fleet-release-selftest: $fails"; exit 1

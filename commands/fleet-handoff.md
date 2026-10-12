@@ -161,7 +161,7 @@ Then take the FIRST matching case:
 
    > A handoff written *into* the repo used to be the worker path
    > (`doc/handoff/<slug>.md`, committed in the `issue-<N>` worktree). It is
-   > **retired** — measured on 24haowan-monorepo (its issue #2656): 20 committed
+   > **retired** — measured on acme-monorepo (its issue #2656): 20 committed
    > handoffs, **24 citations from production code comments**, 2 of them pointing at
    > files deleted months earlier. A handoff is scaffolding; committed scaffolding
    > never gets removed, it just gets cited. That repo now fails CI on any tracked

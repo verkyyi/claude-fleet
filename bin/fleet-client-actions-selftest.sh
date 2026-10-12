@@ -321,13 +321,13 @@ eq "E no iterm2, a computer → the system notifier" "t|b" "$(cat "$WORK/notifie
 
 # --- F. a phone (caps link): a link to tap, never an open -------------------------------
 where '["link"]' tailnet
-reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.tail0.ts.net/d/x/"}}'
-has "F via tailnet → the tailnet address" "$(cat "$CL/links.shown" 2>/dev/null)" "打开：https://box.tail0.ts.net/d/x/"
+reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.example.ts.net/d/x/"}}'
+has "F via tailnet → the tailnet address" "$(cat "$CL/links.shown" 2>/dev/null)" "打开：https://box.example.ts.net/d/x/"
 eq "F … nothing opened, no forward" "|" "$(cat "$WORK/opened" 2>/dev/null)|$(cat "$WORK/ssh.log" 2>/dev/null)"
 where '["link"]' public
-reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.tail0.ts.net/d/x/","hub":"https://hub.example/p/abc/"}}'
+reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.example.ts.net/d/x/","hub":"https://hub.example/p/abc/"}}'
 has "F via public → the hub's address" "$(cat "$CL/links.shown" 2>/dev/null)" "打开：https://hub.example/p/abc/"
-reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.tail0.ts.net/d/x/"}}'
+reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.example.ts.net/d/x/"}}'
 has "F neither → 回到电脑上再看" "$(cat "$CL/links.shown" 2>/dev/null)" "回到电脑上再看"
 has "F … and the page is on the 待看 list" "$(cat "$CL/links.pending" 2>/dev/null)" "otherbox:8765/d/x/"
 has "F logged later" "$(cat "$CL/actions.log")" "open_url	later"
@@ -356,8 +356,8 @@ where '["link"]' node-hosted
 reset; signed "{\"kind\":\"show_file\",\"file\":\"$WORK/shot.png\",\"name\":\"shot.png\"}"
 has "G the client on a managed machine (#2720): the path, printed" "$(cat "$CL/links.shown" 2>/dev/null)" "文件：otherbox:$WORK/shot.png"
 has "G … logged path" "$(cat "$CL/actions.log")" "show_file	path"
-reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.tail0.ts.net/d/x/"}}'
-has "G … a page: a link, never an open" "$(cat "$CL/links.shown" 2>/dev/null)" "打开：https://box.tail0.ts.net/d/x/"
+reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.example.ts.net/d/x/"}}'
+has "G … a page: a link, never an open" "$(cat "$CL/links.shown" 2>/dev/null)" "打开：https://box.example.ts.net/d/x/"
 eq "G … nothing opened" "" "$(cat "$WORK/opened" 2>/dev/null)"
 
 # --- H. the key: written 0600 by the acquire, never printed ----------------------------

@@ -1369,7 +1369,7 @@ func (s *Server) scopeFor(person string) (func(hostname, osUser string) bool, er
 }
 
 // sameMachine matches a roster hostname against a name a caller gave: the
-// whole name, or its first label ("m4" for "m4.local"), case-insensitively.
+// whole name, or its first label ("mac-a" for "mac-a.local"), case-insensitively.
 func sameMachine(hostname, name string) bool {
 	h, n := strings.ToLower(hostname), strings.ToLower(name)
 	if h == n {

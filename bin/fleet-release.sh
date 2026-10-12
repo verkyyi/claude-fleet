@@ -9,7 +9,7 @@
 #   (issue #2483, EPIC #2482 C3).
 #
 # Moving stable used to be a hand-run `fleet-stable.sh move` and nothing after
-# it: nobody looked whether the hub handed the new client out, whether m4 / m5
+# it: nobody looked whether the hub handed the new client out, whether mac-c / mac-d
 # followed, whether this machine's own install switched. On 2026-10-08 stable sat
 # 14 commits / 7 hours behind master and the client and node fixes reached no
 # machine. The six steps, one line each:

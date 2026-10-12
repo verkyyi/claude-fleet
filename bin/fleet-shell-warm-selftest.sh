@@ -12,21 +12,21 @@
 # socket of its own (`-L fwarm<pid>`), killed at the end.
 #   A. degenerate — FLEET_SHELL_WARM=0: no master, no log; no sidebar cache: no
 #                   master either
-#   B. warm       — one tick off a cache listing m5 (online, 2 sessions), m4
+#   B. warm       — one tick off a cache listing mac-b (online, 2 sessions), mac-a
 #                   (online, 1), m3 (online, 0), m2 (lost, 3) and this computer:
-#                   a master for m5 and m4 only, each `fleet connect <m> -o
+#                   a master for mac-b and mac-a only, each `fleet connect <m> -o
 #                   ControlMaster=yes -o ControlPath=$TMPDIR/warm/<m>.sock -o
 #                   ControlPersist=10m -o SessionType=none … -o
 #                   ServerAliveInterval=2 -o ServerAliveCountMax=3 -o IPQoS=… -o
 #                   Compression=no`; a second tick starts nothing; the cap
 #                   (FLEET_SHELL_WARM_MAX=1) keeps the busiest
-#   C. down       — m4 goes lost: the next tick closes its master (`-O exit`, the
-#                   socket gone), m5's stands; a master a window rides
+#   C. down       — mac-a goes lost: the next tick closes its master (`-O exit`, the
+#                   socket gone), mac-b's stands; a master a window rides
 #                   (`@remote_ctl`) is kept even once its machine drops out; a
 #                   dead master (check fails) is started again; the loop proper
 #                   closes every master once the shell's server is gone
-#   D. ride       — `run --shell m5 <wid>` with m5's master warm: the session goes
-#                   over it (`-S …/warm/m5.sock`, ControlMaster=no), fleet connect
+#   D. ride       — `run --shell mac-b <wid>` with mac-b's master warm: the session goes
+#                   over it (`-S …/warm/mac-b.sock`, ControlMaster=no), fleet connect
 #                   is never run, the warm master is NOT closed when the pane ends;
 #                   cold (no warm master): fleet connect --enter with
 #                   ServerAliveInterval=2 / ServerAliveCountMax=3 / IPQoS / Compression=no
@@ -115,7 +115,7 @@ tick() { bash "$BIN/fleet-shell.sh" warm "$S" --once; }
 
 # ================================================================================
 # A. degenerate
-cache m5:online:2
+cache mac-b:online:2
 FLEET_SHELL_WARM=0 bash "$BIN/fleet-shell.sh" warm "$S"; rc=$?
 eq 'A: FLEET_SHELL_WARM=0 exits 0' 0 "$rc"
 eq 'A: FLEET_SHELL_WARM=0 started nothing' '' "$(cat "$WORK/connect.log" 2>/dev/null)"
@@ -126,47 +126,47 @@ eq 'A: no sidebar cache → no master' '' "$(cat "$WORK/connect.log" 2>/dev/null
 
 # ================================================================================
 # B. warm
-cache m5:online:2 m4:online:1 m3:online:0 m2:lost:3 "$me:online:4"
+cache mac-b:online:2 mac-a:online:1 m3:online:0 m2:lost:3 "$me:online:4"
 tick; sleep 0.5
 log=$(cat "$WORK/connect.log" 2>/dev/null)
 eq 'B: two masters started' 2 "$(printf '%s\n' "$log" | grep -c .)"
-m5=$(printf '%s\n' "$log" | grep '^m5 ')
-has 'B: m5 started' "$m5" "m5 -o ControlMaster=yes -o ControlPath=$WD/m5.sock -o ControlPersist=10m"
+mac_b=$(printf '%s\n' "$log" | grep '^mac-b ')
+has 'B: mac-b started' "$mac_b" "mac-b -o ControlMaster=yes -o ControlPath=$WD/mac-b.sock -o ControlPersist=10m"
 for o in SessionType=none ForkAfterAuthentication=yes BatchMode=yes ServerAliveInterval=2 ServerAliveCountMax=3 \
-         'IPQoS=lowdelay throughput' Compression=no; do has "B: m5's master carries $o" "$m5" "-o $o"; done
-has 'B: m4 started' "$log" "m4 -o ControlMaster=yes -o ControlPath=$WD/m4.sock"
+         'IPQoS=lowdelay throughput' Compression=no; do has "B: mac-b's master carries $o" "$mac_b" "-o $o"; done
+has 'B: mac-a started' "$log" "mac-a -o ControlMaster=yes -o ControlPath=$WD/mac-a.sock"
 hasnt 'B: m3 (no session) not started' "$log" 'm3 '
 hasnt 'B: m2 (lost) not started' "$log" 'm2 '
 hasnt 'B: this computer never warmed' "$log" "$me "
-[ -S "$WD/m5.sock" ] && [ -S "$WD/m4.sock" ] || fail 'B: the masters hold their sockets'
+[ -S "$WD/mac-b.sock" ] && [ -S "$WD/mac-a.sock" ] || fail 'B: the masters hold their sockets'
 : > "$WORK/connect.log"; tick; sleep 0.3
 eq 'B: a second tick starts nothing (both alive)' '' "$(cat "$WORK/connect.log")"
 # the cap keeps the busiest
 mv "$WD" "$WD.keep"
 FLEET_SHELL_WARM_MAX=1 tick; sleep 0.3
-eq 'B: FLEET_SHELL_WARM_MAX=1 → only the busiest (m5)' 'm5' "$(cut -d' ' -f1 "$WORK/connect.log" | tr '\n' ' ' | sed 's/ $//')"
+eq 'B: FLEET_SHELL_WARM_MAX=1 → only the busiest (mac-b)' 'mac-b' "$(cut -d' ' -f1 "$WORK/connect.log" | tr '\n' ' ' | sed 's/ $//')"
 rm -rf "$WD"; mv "$WD.keep" "$WD"; : > "$WORK/connect.log"
 
 # ================================================================================
 # C. down
 : > "$WORK/ssh.log"
-cache m5:online:2 m4:lost:1
+cache mac-b:online:2 mac-a:lost:1
 tick
-has 'C: m4 lost → its master closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/m4.sock"
-[ -e "$WD/m4.sock" ] && fail 'C: m4.sock still there'
-hasnt "C: m5's master stands" "$(cat "$WORK/ssh.log")" "EXIT $WD/m5.sock"
-# a window rides m5's master: kept even when m5 drops out
+has 'C: mac-a lost → its master closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/mac-a.sock"
+[ -e "$WD/mac-a.sock" ] && fail 'C: mac-a.sock still there'
+hasnt "C: mac-b's master stands" "$(cat "$WORK/ssh.log")" "EXIT $WD/mac-b.sock"
+# a window rides mac-b's master: kept even when mac-b drops out
 ts -f /dev/null new-session -d -s "$S" -x 80 -y 20 'sleep 300'
-ts set-window-option -t "=$S:" @remote_ctl "$WD/m5.sock"
-cache m4:lost:1
+ts set-window-option -t "=$S:" @remote_ctl "$WD/mac-b.sock"
+cache mac-a:lost:1
 : > "$WORK/ssh.log"; tick
-hasnt 'C: a master a window rides is kept' "$(cat "$WORK/ssh.log")" "EXIT $WD/m5.sock"
+hasnt 'C: a master a window rides is kept' "$(cat "$WORK/ssh.log")" "EXIT $WD/mac-b.sock"
 ts set-window-option -u -t "=$S:" @remote_ctl
 # a dead master comes back
-cache m5:online:2
-printf '%s\n' "$WD/m5.sock" > "$WORK/dead"
+cache mac-b:online:2
+printf '%s\n' "$WD/mac-b.sock" > "$WORK/dead"
 : > "$WORK/connect.log"; tick; sleep 0.3
-has 'C: a dead master is started again' "$(cat "$WORK/connect.log")" 'm5 -o ControlMaster=yes'
+has 'C: a dead master is started again' "$(cat "$WORK/connect.log")" 'mac-b -o ControlMaster=yes'
 rm -f "$WORK/dead"
 # the loop proper: one at a time; the server gone → every master closed, loop ends
 FLEET_SHELL_WARM_EVERY=1 bash "$BIN/fleet-shell.sh" warm "$S" & lp=$!
@@ -177,7 +177,7 @@ eq 'C: a second loop exits at once (one at a time)' 0 "$rc"
 ts kill-server 2>/dev/null
 for _ in 1 2 3 4 5 6; do kill -0 "$lp" 2>/dev/null || break; sleep 0.5; done
 kill -0 "$lp" 2>/dev/null && { fail 'C: the loop outlived the server'; kill "$lp"; }
-has 'C: the server gone → m5 closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/m5.sock"
+has 'C: the server gone → mac-b closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/mac-b.sock"
 [ -e "$WD/loop.pid" ] && fail 'C: loop.pid left behind'
 
 # ================================================================================
@@ -191,62 +191,62 @@ import sys
 open("$WORK/fc.log", "a").write(" ".join(sys.argv[1:]) + "\n")
 EOF
 WID="11111111-1111-4111-8111-111111111111/issue-7"
-cache m5:online:2
+cache mac-b:online:2
 : > "$WORK/connect.log"; tick; sleep 0.3
-[ -S "$WD/m5.sock" ] || fail 'D: no warm master to ride'
+[ -S "$WD/mac-b.sock" ] || fail 'D: no warm master to ride'
 : > "$WORK/ssh.log"; rm -f "$WORK/fc.log"
-FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb bash "$SB/fleet-remote-view.sh" run --shell m5 "$WID" >/dev/null 2>&1; rc=$?
+FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb bash "$SB/fleet-remote-view.sh" run --shell mac-b "$WID" >/dev/null 2>&1; rc=$?
 eq 'D: the pane ended cleanly' 0 "$rc"
 sl=$(cat "$WORK/ssh.log")
-has 'D: the session rode the warm master' "$sl" "RUN -tt -o ClearAllForwardings=yes -o ControlMaster=no -S $WD/m5.sock m5 bash rb/fleet-remote-view.sh attach --shell"
-hasnt 'D: fleet connect never ran' "$(cat "$WORK/fc.log" 2>/dev/null)" 'm5'
-hasnt 'D: the warm master was not closed by the pane' "$sl" "EXIT $WD/m5.sock"
-[ -S "$WD/m5.sock" ] || fail 'D: the warm master is gone after the pane'
+has 'D: the session rode the warm master' "$sl" "RUN -tt -o ClearAllForwardings=yes -o ControlMaster=no -S $WD/mac-b.sock mac-b bash rb/fleet-remote-view.sh attach --shell"
+hasnt 'D: fleet connect never ran' "$(cat "$WORK/fc.log" 2>/dev/null)" 'mac-b'
+hasnt 'D: the warm master was not closed by the pane' "$sl" "EXIT $WD/mac-b.sock"
+[ -S "$WD/mac-b.sock" ] || fail 'D: the warm master is gone after the pane'
 # cold: no warm master → fleet connect, with the new keepalive
-FLEET_SHELL_WARM=0 FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb bash "$SB/fleet-remote-view.sh" run --shell m5 "$WID" >/dev/null 2>&1
+FLEET_SHELL_WARM=0 FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb bash "$SB/fleet-remote-view.sh" run --shell mac-b "$WID" >/dev/null 2>&1
 fc=$(cat "$WORK/fc.log" 2>/dev/null)
-has 'D: cold → fleet connect --enter' "$fc" '--enter m5'
+has 'D: cold → fleet connect --enter' "$fc" '--enter mac-b'
 for o in ServerAliveInterval=2 ServerAliveCountMax=3 'IPQoS=lowdelay throughput' Compression=no ControlMaster=yes; do
   has "D: cold master carries $o" "$fc" "-o $o"
 done
 hasnt 'D: the old 5 s keepalive is gone' "$fc" 'ServerAliveInterval=5'
 
 # ================================================================================
-# L. login (issue #2987) — the sessions on m5 are in the fleet of login `verky`
+# L. login (issue #2987) — the sessions on mac-b are in the fleet of login `carol`
 #    (`fleet_logins`), the person's default login is another: the warm master is
-#    `m5@verky.sock`, opened as verky (FLEET_CONNECT_LOGIN), and `run` for a
-#    session of that fleet rides it. Before: one `m5.sock` as the default login,
-#    which `run` refused to ride for verky — every switch a private master.
+#    `mac-b@carol.sock`, opened as carol (FLEET_CONNECT_LOGIN), and `run` for a
+#    session of that fleet rides it. Before: one `mac-b.sock` as the default login,
+#    which `run` refused to ride for carol — every switch a private master.
 rm -rf "$WD"; : > "$WORK/connect.log"; : > "$WORK/ssh.log"
 LU=22222222-2222-4222-8222-222222222222
-printf '%s\tverky\n' "$LU" > "$G/fleet_logins"
+printf '%s\tcarol\n' "$LU" > "$G/fleet_logins"
 cat > "$WORK/connect" <<EOF
 #!/bin/bash
 printf '%s login=%s\n' "\$*" "\${FLEET_CONNECT_LOGIN:-}" >> "$WORK/connect.log"
 for a in "\$@"; do case "\$a" in ControlPath=*) ctl=\${a#ControlPath=} ;; esac; done
 [ -n "\${ctl:-}" ] && python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "\$ctl"
-[ -n "\${FLEET_CONNECT_ROUTE_FILE:-}" ] && printf '{"machine": "m5", "kind": "direct", "name": "tailnet", "login": "%s"}\n' "\${FLEET_CONNECT_LOGIN:-verkyyi}" > "\$FLEET_CONNECT_ROUTE_FILE"
+[ -n "\${FLEET_CONNECT_ROUTE_FILE:-}" ] && printf '{"machine": "mac-b", "kind": "direct", "name": "tailnet", "login": "%s"}\n' "\${FLEET_CONNECT_LOGIN:-dave}" > "\$FLEET_CONNECT_ROUTE_FILE"
 exit 0
 EOF
-cache m5:online:2
-printf 'wid:%s/issue-3\037m5\037online\n' "$LU" >> "$G/remote_$S"
+cache mac-b:online:2
+printf 'wid:%s/issue-3\037mac-b\037online\n' "$LU" >> "$G/remote_$S"
 tick; sleep 0.5
 log=$(cat "$WORK/connect.log")
-has 'L: the master is the login'"'"'s own: m5@verky.sock' "$log" "ControlPath=$WD/m5@verky.sock"
-has 'L: …opened as that login' "$log" 'login=verky'
+has 'L: the master is the login'"'"'s own: mac-b@carol.sock' "$log" "ControlPath=$WD/mac-b@carol.sock"
+has 'L: …opened as that login' "$log" 'login=carol'
 eq 'L: one master, not one per login it does not need' 1 "$(grep -c . "$WORK/connect.log")"
-[ -S "$WD/m5@verky.sock" ] || fail 'L: m5@verky.sock is up'
+[ -S "$WD/mac-b@carol.sock" ] || fail 'L: mac-b@carol.sock is up'
 : > "$WORK/ssh.log"
 FLEET_CONF_DIR="$WORK/conf" FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb \
-  bash "$SB/fleet-remote-view.sh" run --shell m5 "$LU/issue-3" >/dev/null 2>&1
+  bash "$SB/fleet-remote-view.sh" run --shell mac-b "$LU/issue-3" >/dev/null 2>&1
 sl=$(cat "$WORK/ssh.log")
-has 'L: run rides the login'"'"'s warm master' "$sl" "-S $WD/m5@verky.sock"
-has 'L: …as that login' "$sl" '-l verky'
+has 'L: run rides the login'"'"'s warm master' "$sl" "-S $WD/mac-b@carol.sock"
+has 'L: …as that login' "$sl" '-l carol'
 hasnt 'L: …no private master' "$(cat "$WORK/fc.log" 2>/dev/null)" "$LU"
 # a tick with the login's sessions gone closes its master
-cache m5:online:2
+cache mac-b:online:2
 : > "$WORK/ssh.log"; tick
-has 'L: no session of that login left → its master closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/m5@verky.sock"
+has 'L: no session of that login left → its master closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/mac-b@carol.sock"
 rm -f "$G/fleet_logins"
 cat > "$WORK/connect" <<EOF
 #!/bin/bash
@@ -262,7 +262,7 @@ rm -rf "$WD"; : > "$WORK/connect.log"; tick; sleep 0.3
 awk '/^node_ssh_host\(\) \{/ || /^node_sources\(\) \{/ { on = 1 } on { print } on && /^}/ { on = 0 }' \
   "$BIN/fleet-hub-sessions.sh" > "$WORK/ns.sh"
 out=$( CLIENT="$S" bash -c '. "$1"; node_sources' _ "$WORK/ns.sh" 2>/dev/null)
-eq 'E: the warm master is a node source' "$(printf 'm5\tm5\t%s' "$WD/m5.sock")" "$out"
+eq 'E: the warm master is a node source' "$(printf 'mac-b\tmac-b\t%s' "$WD/mac-b.sock")" "$out"
 
 # ================================================================================
 # F. e2e — the client-mode loop's log
@@ -271,14 +271,14 @@ iso() { python3 -c 'import datetime,sys; print(datetime.datetime.utcfromtimestam
 sj() {   # <state-7> <observed-7> <state-9>
   cat > "$WORK/sess.json" <<EOF
 {"sessions": [
- {"worker_id": "$WID", "machine_name": "m5", "os_user": "verk", "availability": "online", "observed_at": "$2",
+ {"worker_id": "$WID", "machine_name": "mac-b", "os_user": "bob", "availability": "online", "observed_at": "$2",
   "worker": {"issue": 7, "repo": "a/b", "state": "$1", "agent": "claude", "name": "issue-7", "needs": ""}},
- {"worker_id": "11111111-1111-4111-8111-111111111111/issue-9", "machine_name": "m5", "os_user": "verk", "availability": "online", "observed_at": "$2",
+ {"worker_id": "11111111-1111-4111-8111-111111111111/issue-9", "machine_name": "mac-b", "os_user": "bob", "availability": "online", "observed_at": "$2",
   "worker": {"issue": 9, "repo": "a/b", "state": "$3", "agent": "claude", "name": "issue-9", "needs": ""}}],
- "nodes": [{"machine_name": "m5", "availability": "online", "sessions": 2, "observed_at": "$2"}]}
+ "nodes": [{"machine_name": "mac-b", "availability": "online", "sessions": 2, "observed_at": "$2"}]}
 EOF
 }
-ref() { FLEET_HUB_SESSIONS_CLIENT="$S" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat $WORK/sess.json" FLEET_HUB_SESSIONS_USER=verk \
+ref() { FLEET_HUB_SESSIONS_CLIENT="$S" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat $WORK/sess.json" FLEET_HUB_SESSIONS_USER=bob \
         bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1; }
 rm -f "$G/remote_$S" "$G/hub_e2e.log"
 sj working "$(iso "$now")" idle; ref

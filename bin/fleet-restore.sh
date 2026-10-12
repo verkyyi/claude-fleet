@@ -1035,7 +1035,7 @@ fresh_window() {
 }
 
 # ------------------------------------------------------------- auto_restore ---
-# The diskguard tick's pull-up (issue #1784). m4 went dark twice in one night on
+# The diskguard tick's pull-up (issue #1784). mac-a went dark twice in one night on
 # «last window closed → server gone → nobody brings it back»: --if-down existed,
 # but only an armed launchd watcher ever ran it, and nothing armed it. This runs
 # every tick, unarmed, and is safe to: a fleet taken down on purpose carries

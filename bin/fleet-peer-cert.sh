@@ -71,7 +71,7 @@ SHOWN=${MACHINE##*@}; SHOWN=${SHOWN%%.*}   # the name the operator typed, for th
 case "$PURPOSE" in view|upgrade|move) ;; *) die 2 "purpose must be view, upgrade or move, not '$PURPOSE'" ;; esac
 # An ssh destination is fine: drop a user@, keep the host's first label unless
 # it is an address, and turn a local label back into the hub's name
-# (FLEET_NODE_ALIASES `macmini=m5`: m5 → macmini).
+# (FLEET_NODE_ALIASES `mac-c=mac-b`: mac-b → mac-c).
 MACHINE=${MACHINE##*@}
 case "$MACHINE" in
   *[!0-9.]*) MACHINE=${MACHINE%%.*} ;;
@@ -81,8 +81,8 @@ MACHINE=${hub_name:-$MACHINE}
 # Then the hub's own list (issue #1719): peer/machines, `<hostname> <alias>` per
 # line, written by `fleet login` from the hub's answer. The alias, the hostname,
 # a route of either (`m4-lan`, the operator's <name>-lan/-ts/-pub) and the
-# generated `fleet-<alias>…` names all become the hostname — so `m4`, `m4-lan`
-# and `mini2` share ONE certificate file, and the hub is asked by the name it
+# generated `fleet-<alias>…` names all become the hostname — so `mac-a`, `m4-lan`
+# and `mac-d` share ONE certificate file, and the hub is asked by the name it
 # knows. The ONE place a typed name becomes a machine: fleet-node-upgrade.sh
 # --host, fleet-remote-view.sh and the generated ssh Match blocks all pass
 # their name through here.

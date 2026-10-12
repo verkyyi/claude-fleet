@@ -32,10 +32,10 @@ import (
 // down, the gateway port is closed. The hub is reachable from everywhere and
 // every machine already holds a link open to it, so the hub pairs the two:
 //
-//	ssh -o ProxyCommand='fleet connect --proxy m4' m4
+//	ssh -o ProxyCommand='fleet connect --proxy mac-a' mac-a
 //
-// opens a WebSocket here; the hub asks one of m4's agents, over its control
-// channel, to dial a data stream back; the agent splices that onto m4's own
+// opens a WebSocket here; the hub asks one of mac-a's agents, over its control
+// channel, to dial a data stream back; the agent splices that onto mac-a's own
 // sshd at 127.0.0.1:22; the hub copies bytes between the two. SSH runs end to
 // end inside it: the hub sees ciphertext, and sshd still decides who logs in.
 //

@@ -17,8 +17,8 @@ func trainRoster(time.Time) (NodesSnapshot, error) {
 		{Hostname: "M2.local", MachineLink: true, Status: "online"},
 		{Hostname: "m3", MachineLink: true, Status: "online"},
 		{Hostname: "m3", OSUser: "alice", Status: "online"},
-		{Hostname: "m4", MachineLink: true, Status: "maintenance"},
-		{Hostname: "m5", MachineLink: true, Status: "lost"},
+		{Hostname: "mac-c", MachineLink: true, Status: "maintenance"},
+		{Hostname: "mac-d", MachineLink: true, Status: "lost"},
 		{Hostname: "laptop", OSUser: "bob", Status: "online"},
 	}}, nil
 }
@@ -90,7 +90,7 @@ func TestReleaseTrainLedger(t *testing.T) {
 	}
 	srv.noteReleaseReach("m3", b, now.Add(20*time.Minute))
 	p.h.getJSON(t, ReleaseStatsPath, &st)
-	// 50 and 80 minutes; m4 (维护中) and m5 (lost) never asked for
+	// 50 and 80 minutes; mac-c (维护中) and mac-d (lost) never asked for
 	if st.TrainsReached != 1 || st.MergesPending != 0 || st.MergeToAll.N != 2 ||
 		secs(st.MergeToAll.MedianSecs) != 3000 || secs(st.MergeToAll.P90Secs) != 4800 {
 		t.Fatalf("merge → all: %+v", st)

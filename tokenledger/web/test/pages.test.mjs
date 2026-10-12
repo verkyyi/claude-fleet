@@ -52,8 +52,8 @@ test('delta: percent change, nothing when there is no earlier window', () => {
 });
 
 test('bars merge one machine across endpoints, largest first, tail folded', () => {
-  const rows = bars([{ label: 'm4', tokens: 5 }, { label: 'mini2', tokens: 9 }, { label: 'm4', tokens: 6 }, { label: 'zero', tokens: 0 }]);
-  assert.deepEqual(rows, [['m4', 11], ['mini2', 9]]);
+  const rows = bars([{ label: 'mac-a', tokens: 5 }, { label: 'mac-d', tokens: 9 }, { label: 'mac-a', tokens: 6 }, { label: 'zero', tokens: 0 }]);
+  assert.deepEqual(rows, [['mac-a', 11], ['mac-d', 9]]);
   const many = bars(Array.from({ length: 9 }, (_, i) => ({ label: 'h' + i, tokens: 10 - i })), 4);
   assert.equal(many.length, 4);
   assert.deepEqual(many[3], ['other', 7 + 6 + 5 + 4 + 3 + 2]);
@@ -74,12 +74,12 @@ test('the area chart scales to a nice top and labels its days', () => {
 
 const FS = {
   sessions: [
-    { machine_name: 'mini2', os_user: 'verk', availability: 'online', worker: { worker_id: 'w1', key: 'issue-1950', repo: 'verkyyi/claude-fleet', title: 'Team settings', state: 'working', worktree: '/wt/1950', born: 200, agent: 'claude' } },
-    { machine_name: 'm4', os_user: 'verk', availability: 'lost', worker: { worker_id: 'w2', key: 'issue-1953', title: 'Doctor row', state: 'waiting', worktree: '/wt/1953', born: 300 } },
-    { machine_name: 'm4', os_user: 'verk', availability: 'online', worker: { worker_id: 'w3', key: 'scratch-6', state: 'idle', born: 100 } },
-    { machine_name: 'm4', os_user: 'verk', availability: 'online', worker: { worker_id: 'w4', key: 'issue-9', state: 'blocked', born: 50 } },
+    { machine_name: 'mac-d', os_user: 'dave', availability: 'online', worker: { worker_id: 'w1', key: 'issue-1950', repo: 'verkyyi/claude-fleet', title: 'Team settings', state: 'working', worktree: '/wt/1950', born: 200, agent: 'claude' } },
+    { machine_name: 'mac-a', os_user: 'dave', availability: 'lost', worker: { worker_id: 'w2', key: 'issue-1953', title: 'Doctor row', state: 'waiting', worktree: '/wt/1953', born: 300 } },
+    { machine_name: 'mac-a', os_user: 'dave', availability: 'online', worker: { worker_id: 'w3', key: 'scratch-6', state: 'idle', born: 100 } },
+    { machine_name: 'mac-a', os_user: 'dave', availability: 'online', worker: { worker_id: 'w4', key: 'issue-9', state: 'blocked', born: 50 } },
   ],
-  nodes: [{ machine_name: 'mini2', availability: 'online' }, { machine_name: 'm1', availability: 'lost' }, { machine_name: 'm2', availability: 'maintenance' }],
+  nodes: [{ machine_name: 'mac-d', availability: 'online' }, { machine_name: 'm1', availability: 'lost' }, { machine_name: 'm2', availability: 'maintenance' }],
 };
 const LIVE = { sessions: [{ worktree: '/wt/1950', context_used_pct: 41.2, model: 'claude-opus-5-5', account: 'Max · A' }, { cwd: '/wt/1953', context_unknown: true, context_used_pct: 0 }] };
 
@@ -96,28 +96,28 @@ test('rows join live context and model by worktree, newest first', () => {
 
 test('a worker that waits on you says what it asks, in its own words (claude-fleet#2538)', () => {
   const fs = { sessions: [
-    { machine_name: 'm5', availability: 'online', worker: { worker_id: 'a', key: 'issue-1', state: 'needs', needs: 'ask', detail: 'hook words', status_kind: 'permission', status_msg: 'Bash: git push origin x', born: 3 } },
-    { machine_name: 'm5', availability: 'online', worker: { worker_id: 'b', key: 'issue-2', state: 'needs', needs: 'ask', detail: '放在 m5 还是 m4？', born: 2 } },
-    { machine_name: 'm5', availability: 'online', worker: { worker_id: 'c', key: 'issue-3', state: 'working', status_msg: 'Running tests', born: 1 } },
+    { machine_name: 'mac-b', availability: 'online', worker: { worker_id: 'a', key: 'issue-1', state: 'needs', needs: 'ask', detail: 'hook words', status_kind: 'permission', status_msg: 'Bash: git push origin x', born: 3 } },
+    { machine_name: 'mac-b', availability: 'online', worker: { worker_id: 'b', key: 'issue-2', state: 'needs', needs: 'ask', detail: '放在 mac-b 还是 mac-a？', born: 2 } },
+    { machine_name: 'mac-b', availability: 'online', worker: { worker_id: 'c', key: 'issue-3', state: 'working', status_msg: 'Running tests', born: 1 } },
   ] };
   const rows = sessionRows(fs, null);
   const by = (k) => rows.find((r) => r.key === k);
   assert.equal(by('issue-1').state, 'waiting', 'a fleet worker\'s needs is a waiting row');
   assert.deepEqual(by('issue-1').ask, { kind: 'permission', msg: 'Bash: git push origin x' }, 'the agent\'s own report wins');
-  assert.deepEqual(by('issue-2').ask, { kind: 'question', msg: '放在 m5 还是 m4？' }, 'else the needs subtype + detail');
+  assert.deepEqual(by('issue-2').ask, { kind: 'question', msg: '放在 mac-b 还是 mac-a？' }, 'else the needs subtype + detail');
   assert.equal(by('issue-3').ask, null, 'a working session asks nothing');
   assert.equal(askLine(by('issue-1').ask), 'permission: Bash: git push origin x');
   assert.equal(askLine(by('issue-1').ask, 8), 'permission: Bash: gi…');
   assert.equal(askLine(null), '');
   assert.equal(askOf({ status_msg: 'x'.repeat(300) }, 'waiting').msg.length, 200);
   assert.match(attention(rows, [], false)[0].sub, /^permission: Bash: git push origin x · /);
-  try { useLocale('zh-CN'); assert.equal(askLine(by('issue-2').ask), '问题：放在 m5 还是 m4？'); } finally { useLocale('en'); }
+  try { useLocale('zh-CN'); assert.equal(askLine(by('issue-2').ask), '问题：放在 mac-b 还是 mac-a？'); } finally { useLocale('en'); }
 });
 
 test('a row carries its session\'s pool tokens today, none recorded is 0 (claude-fleet#3377)', () => {
   const rows = sessionRows({ sessions: [
-    { machine_name: 'm5', tokens_today: 1234567, worker: { worker_id: 'a', key: 'issue-1', born: 2 } },
-    { machine_name: 'm5', worker: { worker_id: 'b', key: 'issue-2', born: 1 } },
+    { machine_name: 'mac-b', tokens_today: 1234567, worker: { worker_id: 'a', key: 'issue-1', born: 2 } },
+    { machine_name: 'mac-b', worker: { worker_id: 'b', key: 'issue-2', born: 1 } },
   ] }, null);
   assert.equal(rows.find((r) => r.key === 'issue-1').tokens, 1234567);
   assert.equal(rows.find((r) => r.key === 'issue-2').tokens, 0);
@@ -135,7 +135,7 @@ test('filters count by group and search across key, repo, title, machine', () =>
   assert.deepEqual(counts(rows), { all: 4, working: 1, waiting: 2, idle: 1 });
   assert.deepEqual(filterRows(rows, 'waiting', '').map((r) => r.key), ['issue-1953', 'issue-9']);
   assert.deepEqual(filterRows(rows, 'all', 'TEAM').map((r) => r.key), ['issue-1950']);
-  assert.deepEqual(filterRows(rows, 'all', 'm4').length, 3);
+  assert.deepEqual(filterRows(rows, 'all', 'mac-a').length, 3);
   assert.deepEqual(filterRows(rows, 'idle', 'nope'), []);
   assert.equal(running(rows).length, 3);
   assert.equal(stateOf('weird').label, 'Unknown');
@@ -230,16 +230,16 @@ test('client devices: not a hosting machine, not idle, the newest key per name',
       { fingerprint: 'mbp-new', name: 'MacBookPro', last_used_at: '2026-10-09T08:00:00Z' },
       { fingerprint: 'mbp-old', name: 'MacBookPro', last_used_at: '2026-10-05T08:00:00Z' },
       { fingerprint: 'ipad', name: 'iPad', last_used_at: '2026-10-08T08:00:00Z' },
-      { fingerprint: 'mini2', name: 'mini2', host: true, last_used_at: '2026-10-09T09:00:00Z' },
+      { fingerprint: 'mac-d', name: 'mac-d', host: true, last_used_at: '2026-10-09T09:00:00Z' },
       { fingerprint: 'stale', name: 'old-mbp', last_used_at: '2026-09-01T00:00:00Z' },
       { fingerprint: 'gone', name: 'x', revoked_at: '2026-09-02T00:00:00Z', last_used_at: '2026-09-01T00:00:00Z' },
     ],
   };
   assert.deepEqual(clientDevices(body, now).map((d) => d.fingerprint), ['mbp-new', 'ipad']);
   assert.deepEqual([...whyNotClient(body, now).entries()].filter((e) => e[1]),
-    [['mbp-old', 'replaced'], ['mini2', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
+    [['mbp-old', 'replaced'], ['mac-d', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
   assert.deepEqual(deviceHistory(body, now).past.map((d) => [d.fingerprint, d.why]),
-    [['mbp-old', 'replaced'], ['mini2', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
+    [['mbp-old', 'replaced'], ['mac-d', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
   assert.deepEqual(clientDevices(undefined), []);
 });
 
@@ -334,20 +334,20 @@ test('my machines: two machines and a coordinating laptop, nobody else', () => {
   useLocale('en');
   const node = (hostname, os_user, extra) => ({ endpoint_id: hostname + '/' + os_user, hostname, os_user, status: 'online', load1: 2, ncpu: 8, sessions: 1, ...extra });
   const snap = {
-    machines: [{ hostname: 'macmini.local', alias: 'm5' }, { hostname: 'mini2.local', alias: 'm4' }],
+    machines: [{ hostname: 'mac-c.local', alias: 'mac-b' }, { hostname: 'mac-d.local', alias: 'mac-a' }],
     nodes: [
-      node('macmini.local', 'alice', { sessions: 2 }),
-      node('mini2.local', 'alice', { sessions: 0, load1: 1.92 }),
+      node('mac-c.local', 'alice', { sessions: 2 }),
+      node('mac-d.local', 'alice', { sessions: 0, load1: 1.92 }),
       node('alice-mbp', 'alice', { compute_off: true, personal: true, status: 'lost' }),
-      node('macmini.local', 'bob', { sessions: 5 }),
-      node('macmini.local', 'root', { machine_link: true }),
+      node('mac-c.local', 'bob', { sessions: 5 }),
+      node('mac-c.local', 'root', { machine_link: true }),
       node('elsewhere', 'alice', {}),
     ],
   };
-  const me = { role: 'user', logins: [{ machine: 'macmini.local', login: 'alice' }, { machine: 'mini2.local', login: 'alice' }, { machine: 'alice-mbp', login: 'alice' }] };
+  const me = { role: 'user', logins: [{ machine: 'mac-c.local', login: 'alice' }, { machine: 'mac-d.local', login: 'alice' }, { machine: 'alice-mbp', login: 'alice' }] };
   const rows = myMachines(snap, me);
   assert.deepEqual(rows.map((r) => [r.label, r.login, r.takes, r.sessions]), [
-    ['m4', 'alice', 'on', 0], ['m5', 'alice', 'on', 2], ['alice-mbp', 'alice', 'coord', null],
+    ['mac-a', 'alice', 'on', 0], ['mac-b', 'alice', 'on', 2], ['alice-mbp', 'alice', 'coord', null],
   ]);
   assert.equal(rows[0].loadCore, 0.24);
   assert.equal(rows[2].loadCore, null, 'a coordinating laptop has no load to show');
@@ -355,26 +355,26 @@ test('my machines: two machines and a coordinating laptop, nobody else', () => {
 });
 
 // One machine is one row (claude-fleet#2680): two logins of the viewer's on
-// m4 name both on the one row and add their sessions; a machine whose login
+// mac-a name both on the one row and add their sessions; a machine whose login
 // only coordinates for the moment still shows the machine's load, read from
 // the newest heard beat — only a person's own computer shows none.
 test('my machines: one row per machine, its load even while it only coordinates', () => {
   const node = (hostname, os_user, extra) => ({ endpoint_id: hostname + '/' + os_user, hostname, os_user, status: 'online', load1: 2, ncpu: 8, sessions: 1, ...extra });
   const snap = {
-    machines: [{ hostname: 'macmini', alias: 'm5' }, { hostname: 'mini2', alias: 'm4' }],
+    machines: [{ hostname: 'mac-c', alias: 'mac-b' }, { hostname: 'mac-d', alias: 'mac-a' }],
     nodes: [
-      node('mini2', 'verkyyi', { sessions: 3, load1: 4, last_heartbeat: '2026-10-09T10:00:00Z' }),
-      node('mini2', 'verky', { sessions: 5, load1: 6, last_heartbeat: '2026-10-09T10:00:05Z' }),
-      node('macmini', 'verky', { compute_off: true, compute_why: 'CCQUOTA_FLEET_COMPUTE=0', load1: 1, ncpu: 4 }),
+      node('mac-d', 'frank', { sessions: 3, load1: 4, last_heartbeat: '2026-10-09T10:00:00Z' }),
+      node('mac-d', 'erin', { sessions: 5, load1: 6, last_heartbeat: '2026-10-09T10:00:05Z' }),
+      node('mac-c', 'erin', { compute_off: true, compute_why: 'CCQUOTA_FLEET_COMPUTE=0', load1: 1, ncpu: 4 }),
     ],
   };
-  const me = { logins: [{ machine: 'mini2', login: 'verky' }, { machine: 'mini2', login: 'verkyyi' }, { machine: 'macmini', login: 'verky' }] };
+  const me = { logins: [{ machine: 'mac-d', login: 'erin' }, { machine: 'mac-d', login: 'frank' }, { machine: 'mac-c', login: 'erin' }] };
   const rows = myMachines(snap, me);
   assert.deepEqual(rows.map((r) => [r.label, r.login, r.takes, r.sessions, r.loadCore]), [
-    ['m4', 'verky · verkyyi', 'on', 8, 0.75],
-    ['m5', 'verky', 'coord', null, 0.25],
+    ['mac-a', 'erin · frank', 'on', 8, 0.75],
+    ['mac-b', 'erin', 'coord', null, 0.25],
   ]);
-  const [r] = myMachines({ nodes: [node('mini2', 'a', { sessions: null }), node('mini2', 'b', {})] }, {});
+  const [r] = myMachines({ nodes: [node('mac-d', 'a', { sessions: null }), node('mac-d', 'b', {})] }, {});
   assert.equal(r.sessions, undefined, 'one unknown count makes the machine unknown');
 });
 
@@ -402,17 +402,17 @@ test('taskRows reads a task record beside its session', async () => {
   const { taskRows, taskCounts, filterTasks } = await import('../dist/lib/pages.js');
   const now = Date.parse('2026-10-11T14:10:00');
   const body = { observed_at: '2026-10-11T14:10:00Z', tasks: [
-    { id: 'T219', title: '看看这台机器风扇为什么一直转', owner: 'verky', machine: 'macmini.local', state: 'open',
+    { id: 'T219', title: '看看这台机器风扇为什么一直转', owner: 'erin', machine: 'mac-c.local', state: 'open',
       created_at: '2026-10-11T14:06:00', live: { key: '', state: 'working', ctx_left: 71 } },
-    { id: 'T218', title: '给 hub 加一个 /healthz', owner: 'verky', repo: 'verkyyi/claude-fleet', state: 'open',
+    { id: 'T218', title: '给 hub 加一个 /healthz', owner: 'erin', repo: 'verkyyi/claude-fleet', state: 'open',
       issue: 'verkyyi/claude-fleet#3312', session_key: 'issue-3312', created_at: '2026-10-11T14:02:00', live: { state: 'needs' } },
-    { id: 'T214', title: '整理一下这周的账单', owner: 'verky', state: 'open', created_at: '2026-10-10T11:12:00' },
-    { id: 'T213', title: '没开起来的', owner: 'verky', state: 'refused', note: 'no machine', created_at: '2026-10-10T10:00:00' },
+    { id: 'T214', title: '整理一下这周的账单', owner: 'erin', state: 'open', created_at: '2026-10-10T11:12:00' },
+    { id: 'T213', title: '没开起来的', owner: 'erin', state: 'refused', note: 'no machine', created_at: '2026-10-10T10:00:00' },
   ] };
   const rows = taskRows(body);
   assert.deepEqual(rows.map((r) => r.id), ['T219', 'T218', 'T214', 'T213']);
   assert.equal(rows[0].state, 'working');
-  assert.equal(rows[0].machine, 'macmini');
+  assert.equal(rows[0].machine, 'mac-c');
   assert.equal(rows[0].ctxLeft, 71);
   assert.equal(rows[0].issueURL, '');
   assert.equal(rows[1].state, 'waiting');

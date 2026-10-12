@@ -7,7 +7,7 @@ import (
 )
 
 // A person is not one login (claude-fleet#3302): the same GitHub person can
-// hold `verky` on two machines and `verkyyi` on a third. The admin pages and
+// hold `carol` on two machines and `dave` on a third. The admin pages and
 // `fleet hub accounts` used to show one name for a person — the hub_users
 // row's machine_login — which hid the real mapping. PersonLogin is one
 // (machine, login) pair a person holds, read from the account rows as they

@@ -25,7 +25,7 @@ var (
 
 func pairsHarness(t *testing.T) (h *ghHarness, bob, carol *http.Cookie) {
 	t.Helper()
-	h = newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h = newGitHubHarnessWith(t, fullServer, "ivan")
 	now := time.Now()
 	base := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	ingest := func(ep, host, sid string) {

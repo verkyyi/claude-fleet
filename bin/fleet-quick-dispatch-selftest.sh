@@ -68,12 +68,12 @@ eq 'B: a last one no longer hosted → the first' 'acme/app' "$(D payload --titl
 cat > "$WORK/send.sh" <<EOF
 #!/bin/bash
 cp "\$1" "$WORK/sent.json"
-printf 'REMOTE m5 start done U/f1\n'
+printf 'REMOTE mac-b start done U/f1\n'
 EOF
 chmod +x "$WORK/send.sh"
 out=$(FLEET_DISPATCH_SEND_CMD="$WORK/send.sh" D send --title '看日志' --repo acme/web --codex) \
   || fail "C: send with no list exited non-zero" "$out"
-has 'C: said how it ended' "$out" 'm5'
+has 'C: said how it ended' "$out" 'mac-b'
 eq 'C: the payload went out with its agent' 'codex' "$(J agent < "$WORK/sent.json")"
 eq 'C: the last repo is remembered (compose-state.json)' 'acme/web' "$(J repo < "$WORK/state/compose-state.json")"
 printf '#!/bin/sh\nprintf "没有机器有空\\n" >&2; exit 4\n' > "$WORK/nope.sh"; chmod +x "$WORK/nope.sh"
@@ -102,7 +102,7 @@ cat > "$QB/fleet-client-place.sh" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$Q_ARGS"
 printf '{"key": "acme-web:issue-42", "filed": "https://github.com/acme/web/issues/42"}' > "$FLEET_PLACE_RESULT"
-printf 'REMOTE m5 start done U/f42\t\n'
+printf 'REMOTE mac-b start done U/f42\t\n'
 EOF
 chmod +x "$QB/fleet-client-place.sh"
 printf '{"title":"看日志","body":"看日志","repo":"acme/web","via":"dispatch"}\n' > "$WORK/e.json"
@@ -122,7 +122,7 @@ python3 "$QB/fleet-compose.py" --send "$WORK/e3.json" >/dev/null 2>&1 || fail "E
 case "$(cat "$Q_ARGS")" in *--task*) fail "E: the writing area (not ⌘P) asked for a task" "$(cat "$Q_ARGS")" ;; esac
 CHECKS=$((CHECKS + 1))
 has 'E: stderr says the issue filed' "$(cat "$WORK/e.err")" 'filed: #42'
-eq 'E: stdout stays the place'"'"'s one line' 'REMOTE m5 start done U/f42' "$(tr -d '\t' < "$WORK/e.out")"
+eq 'E: stdout stays the place'"'"'s one line' 'REMOTE mac-b start done U/f42' "$(tr -d '\t' < "$WORK/e.out")"
 # the list's word for it (fleet-sidebar.py compose_told)
 has 'E: the list says 「已建 #N 并开工」 for a ⌘T send' "$(sed -n '/^def compose_told/,/^def placed/p' "$BIN/fleet-sidebar.py")" 'sidebar_dispatch_done_fmt'
 eq 'E: the words' '已建 #42 并开工' "$(sh "$BIN/fleet-ui-lang.sh" t sidebar_dispatch_done_fmt 42)"

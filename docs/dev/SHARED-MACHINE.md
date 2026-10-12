@@ -225,12 +225,12 @@ an administrator reviews and activates the migration. Both grants live on the hu
 
 ```sh
 export CCQUOTA_VIEWER_TOKEN=…            # the operator's, from the environment only
-fleet-cred-policy.sh effective --machine fleet-linux-0 --principal gh:2718137   # each account: ALLOW / DENY + why, with its UUID
-fleet-cred-policy.sh set node fleet-linux-0 <uuid> <uuid> …
+fleet-cred-policy.sh effective --machine linux-a --principal gh:2718137   # each account: ALLOW / DENY + why, with its UUID
+fleet-cred-policy.sh set node linux-a <uuid> <uuid> …
 fleet-cred-policy.sh set user gh:2718137 <uuid> …
 fleet-cred-policy.sh deny user gh:…      # nothing at all
-fleet-cred-policy.sh all node fleet-linux-0     # explicit all, including future subscriptions
-fleet-cred-policy.sh clear node fleet-linux-0   # unconfigured: denied in strict mode
+fleet-cred-policy.sh all node linux-a     # explicit all, including future subscriptions
+fleet-cred-policy.sh clear node linux-a   # unconfigured: denied in strict mode
 fleet-cred-policy.sh show
 ```
 

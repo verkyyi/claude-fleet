@@ -13,19 +13,19 @@ import (
 // start goes to the live fleet, and the down one's verdict says why.
 func TestPlacementSkipsDownFleet(t *testing.T) {
 	h := newFleetHarness(t)
-	old := connectWriteNode(t, h, "m5-verkyyi")
-	nu := connectWriteNode(t, h, "m5-verky")
-	fo := fakeFleet(t, machineA, "fleet-24haowan-monorepo", writeRepo, "/Users/verkyyi/24haowan")
+	old := connectWriteNode(t, h, "mac-d-ivan")
+	nu := connectWriteNode(t, h, "mac-d-heidi")
+	fo := fakeFleet(t, machineA, "fleet-globex-monorepo", writeRepo, "/Users/ivan/globex")
 	fo.State, fo.Workers, fo.Count = fleetStateDown, nil, 0
-	fn := fakeFleet(t, machineB, "fleet", writeRepo, "/Users/verky/claude-fleet", 2)
-	old.beatLoad("m5", "verkyyi", machineA, 0, 0, fo)
-	nu.beatLoad("m5", "verky", machineB, 6, 3, fn)
+	fn := fakeFleet(t, machineB, "fleet", writeRepo, "/Users/heidi/claude-fleet", 2)
+	old.beatLoad("mac-d", "ivan", machineA, 0, 0, fo)
+	nu.beatLoad("mac-d", "heidi", machineB, 6, 3, fn)
 	waitFor(t, 3*time.Second, "both logins' fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
 	pl, err := h.srv.PickNode("", writeRepo)
 	if err != nil || pl.FleetID != fn.FleetID {
-		t.Fatalf("placed %+v (%v); want verky's live fleet", pl, err)
+		t.Fatalf("placed %+v (%v); want heidi's live fleet", pl, err)
 	}
 	var why string
 	for _, c := range pl.Candidates {
@@ -37,8 +37,8 @@ func TestPlacementSkipsDownFleet(t *testing.T) {
 		t.Fatalf("down fleet's verdict = %q; want %q, not a fullness word", why, excludedDown)
 	}
 	// Only the down fleet left: no machine, and the reason names it.
-	nu.beatLoad("m5", "verky", machineB, 6, 3)
-	waitFor(t, 3*time.Second, "verky's fleet gone", func() bool {
+	nu.beatLoad("mac-d", "heidi", machineB, 6, 3)
+	waitFor(t, 3*time.Second, "heidi's fleet gone", func() bool {
 		_, err := h.srv.PickNode("", writeRepo)
 		return err != nil
 	})
@@ -51,11 +51,11 @@ func TestPlacementSkipsDownFleet(t *testing.T) {
 // live one stands for the login (before, "first by name" picked the dead one).
 func TestPlacementSameLoginPrefersLiveFleet(t *testing.T) {
 	h := newFleetHarness(t)
-	n := connectWriteNode(t, h, "m5")
-	fd := fakeFleet(t, machineA, "a-old", writeRepo, "/Users/verky/old")
+	n := connectWriteNode(t, h, "mac-d")
+	fd := fakeFleet(t, machineA, "a-old", writeRepo, "/Users/heidi/old")
 	fd.State, fd.Workers, fd.Count = fleetStateDown, nil, 0
-	fu := fakeFleet(t, machineA, "b-live", writeRepo, "/Users/verky/claude-fleet", 1)
-	n.beatLoad("m5", "verky", machineA, 1, 1, fd, fu)
+	fu := fakeFleet(t, machineA, "b-live", writeRepo, "/Users/heidi/claude-fleet", 1)
+	n.beatLoad("mac-d", "heidi", machineA, 1, 1, fd, fu)
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
@@ -69,15 +69,15 @@ func TestPlacementSameLoginPrefersLiveFleet(t *testing.T) {
 // exit 8, UNAVAILABLE — nothing opened) is tried on the next machine, as any
 // decline is (claude-fleet#1610), never answered UNKNOWN.
 func TestClientPlaceServerDownTriesNextMachine(t *testing.T) {
-	h, _, m4, m3, _, _, f3 := threeNodes(t)
+	h, _, macC, m3, _, _, f3 := threeNodes(t)
 	lease, key := clientLeaseFor(t, h)
-	line := "start: fleet fleet-m4 has no running tmux server — nothing opened"
-	m4.setOpGet(declines(8, line))
+	line := "start: fleet fleet-mac-c has no running tmux server — nothing opened"
+	macC.setOpGet(declines(8, line))
 	m3.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@61",
 		"workers": []map[string]any{{"window_id": "@61", "worker_id": f3.FleetID + "/scratch-1"}}}))
 	st, out := clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "scratch", "wait": 5})
 	if st != 200 || out.Exit != 0 || out.Machine != "m3" || len(out.Attempts) != 1 ||
 		!strings.Contains(out.Attempts[0].Why, "no running tmux server") {
-		t.Fatalf("place = %d %+v; want done on m3 after m4's server-down decline", st, out)
+		t.Fatalf("place = %d %+v; want done on m3 after mac-c's server-down decline", st, out)
 	}
 }

@@ -24,7 +24,7 @@ import (
 //     holds a connection certificate, lease nothing until the operator says so;
 //   - the one migration (trustMigrate) marks every machine that had an ACTIVE
 //     fleet account when this shipped as trusted, once, and stamps
-//     fleet.node_trust_migrated — so m4 / m5 lease exactly what they leased
+//     fleet.node_trust_migrated — so mac-a / mac-b lease exactly what they leased
 //     before (TestTrustOffAddsNothing);
 //   - read by POST /v1/node/credentials after the principal and revocation
 //     checks: untrusted → 403 untrusted_node + a fleet_cred_audit deny row;
@@ -128,7 +128,7 @@ func (s *Server) trustMigrate(settings map[string]string, now time.Time) error {
 
 // setTrust is the operator's write: trusted | untrusted (or "" to drop the
 // key, which reads untrusted). Every spelling of the machine is cleared first
-// so "m5.local" and "m5" cannot disagree.
+// so "mac-b.local" and "mac-b" cannot disagree.
 func (s *Server) setTrust(machine, value string, now time.Time) (was string, err error) {
 	return s.setTrustAs("operator", machine, value, now)
 }

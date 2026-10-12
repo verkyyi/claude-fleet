@@ -227,7 +227,7 @@ process() {
   # spawns after that is born in a dead cwd (Claude Code aborts at launch). Same
   # exact-or-prefix match as the live-pane gate above — a server cwd'd in a subdir
   # still counts. This is a fleet-wide signal (fleet_server_cwds walks every live
-  # server), so a claude-fleet server drifted into a 24haowan worktree protects it.
+  # server), so a claude-fleet server drifted into a acme worktree protects it.
   if printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qxF "$dir" || printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qF "$dir/"; then
     say "KEEP  $branch  (a tmux server is cwd'd here)"; kept=$((kept+1)); return
   fi

@@ -156,7 +156,7 @@ else
 fi
 
 # 5 — no hub URL anywhere: usage error.
-out=$("$BIN/fleet" connect --proxy m4 < /dev/null 2>&1); rc=$?
+out=$("$BIN/fleet" connect --proxy mac-a < /dev/null 2>&1); rc=$?
 case "$rc:$out" in
   2:*"no hub URL"*) ok "no hub URL: exit 2" ;;
   *) bad "no hub URL: rc=$rc out=$out" ;;
@@ -164,7 +164,7 @@ esac
 
 # 6 — the dispatcher: `fleet connect <machine>` is connect's (no hub → the usage
 # error, exit 2); a first word that is no command is a MACHINE for the CLIENT
-# (#1628 — never connect's), so `fleet m4 --print` is refused, naming connect.
+# (#1628 — never connect's), so `fleet mac-a --print` is refused, naming connect.
 out=$("$BIN/fleet" connect nosuch 2>&1); rc=$?
 case "$rc:$out" in
   2:*"no hub URL"*) ok "dispatcher: fleet connect <machine>; no hub → exit 2" ;;
@@ -188,8 +188,8 @@ case "$rc:$out" in
 esac
 out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet-connect.py" --pick here 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "no hub: --pick <this computer's alias> → 0" || bad "no hub --pick here: rc=$rc out=$out"
-out=$("$BIN/fleet-connect.py" --pick m4 2>&1); rc=$?
-case "$rc:$out" in 1:*m4*) ok "no hub: --pick <another machine> → 1" ;; *) bad "no hub --pick m4: rc=$rc out=$out" ;; esac
+out=$("$BIN/fleet-connect.py" --pick mac-a 2>&1); rc=$?
+case "$rc:$out" in 1:*mac-a*) ok "no hub: --pick <another machine> → 1" ;; *) bad "no hub --pick mac-a: rc=$rc out=$out" ;; esac
 out=$(FLEET_NODE_ALIASES="$me=here" "$BIN/fleet" connect --print 2>&1); rc=$?
 [ "$rc:$out" = "0:local here" ] && ok "no hub: fleet connect --print → local here" || bad "no hub --print: rc=$rc out=$out"
 

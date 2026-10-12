@@ -139,8 +139,8 @@ go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest   # ne
 
 > TokenLedger now lives in the [claude-fleet](https://github.com/verkyyi/claude-fleet)
 > monorepo, under `tokenledger/` (claude-fleet issue #1391), with its full
-> history. The old `go install github.com/verkyyi/ccquota/...` /
-> `github.com/verkyyi/tokenledger` paths are retired; the command is still
+> history. The old `go install github.com/frank/ccquota/...` /
+> `github.com/frank/tokenledger` paths are retired; the command is still
 > `ccquota` and every `CCQUOTA_*` variable is unchanged.
 
 **The product is TokenLedger; the binary is `ccquota`.** The rename is cosmetic
@@ -798,7 +798,7 @@ install line (`/install`) joins every computer this way (`fleet node join
 --no-fleet --no-deps --no-admin`), and the same scan writes the ssh snippet
 with a peer-certificate `Match` per other machine: the hub's answer carries
 `machines` (`[{hostname, alias}]`), which `fleet login` keeps in
-`peer/machines` so `fleet-peer-cert.sh` turns `m4`, `m4-lan` and `mini2` into
+`peer/machines` so `fleet-peer-cert.sh` turns `mac-a`, `mac-a-lan` and `mac-d` into
 one machine and one certificate.
 
 **Can it run? The probe and the team policy** (claude-fleet#1720).
@@ -924,13 +924,13 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines; `least-busy` = the hub picks, claude-fleet#2069) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
-| `fleet.machine_names` | — | the short name every client shows a machine by, `macmini=m5,mini2=m4` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |
+| `fleet.machine_names` | — | the short name every client shows a machine by, `mac-c=mac-b,mac-d=mac-a` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |
 | `fleet.spares` | off | keep spare logins opened on every host machine (claude-fleet#2263): a newcomer's first sign-in is handed a ready one — recorded as theirs, never renamed — instead of waiting for one to be made. Only on a machine whose admin node opens logins credential-separated (`credsep`, claude-fleet#2294), and a spare whose create did not come back `separated` is never handed out (and stops that machine's refill until `forget`). Refilled on the admin beat only when the machine is fit (online, not 维护中, load / memory inside the placement thresholds, its admit gate open); 维护中 or under pressure it only shrinks. Each spare is a macOS user (measured idle: ~9 processes, 60–75 MB, 0.25–0.9 GB): turn it on once you have agreed to that. `fleet hub machines` shows 备用 N · 已用 M / 上限 K |
 | `fleet.spare_max` | 5 | spares per machine, at most — within `fleet.node_user_cap.<machine>` − the logins handed out there |
 | `fleet.clusters` | — | the clusters that keep spare **pods** (claude-fleet#3553): each one's name as its fleet-ops reports it (`CCQUOTA_FLEET_PROVISIONER` set, hello `cluster_ops`). With `fleet.spares` on and the account key set, a newcomer placed on a cluster (`fleet.auto_assign` or an assign naming it) is handed a ready pod of their own — bound, not started — and removing them destroys the pod and starts a fresh one; `docs/dev/MANAGED-LINUX.md` «Spare pods» |
 | `fleet.spare_max.<cluster>` | `fleet.spare_max` | spare pods one cluster keeps, within `fleet.node_user_cap.<cluster>` − the pods people hold |
 | `fleet.entry` | off | the direct door's book (claude-fleet#3068): people's keys, address names and homes, pushed to their home machines; the keys page `/fleet/keys` (claude-fleet#3069) |
-| `fleet.entry_domain` | — | the zone every address lives under, `cf.24haowan.com` → `<name>.cf.24haowan.com`; unset, the keys page says 「地址还没配好」 |
+| `fleet.entry_domain` | — | the zone every address lives under, `cf.example.com` → `<name>.cf.example.com`; unset, the keys page says 「地址还没配好」 |
 | `fleet.node_user_cap.<machine>` | 10 | how many logins the machine may hold (handed out + spare) |
 | `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
@@ -987,7 +987,7 @@ password-less sudo. Two rails, both required:
 
 | where | setting | effect |
 |---|---|---|
-| hub | `CCQUOTA_FLEET_ADMIN_USERS=verkyyi` | only nodes running as one of these OS logins are ever sent an op |
+| hub | `CCQUOTA_FLEET_ADMIN_USERS=frank` | only nodes running as one of these OS logins are ever sent an op |
 | agent | `CCQUOTA_FLEET_ADMIN=1` (operator's login only) | the agent says so in its hello and runs ops; any other agent refuses every op (`NOT_ADMIN`) |
 
 The node accepts exactly two ops, each with argv fixed on the node — the hub
@@ -996,7 +996,7 @@ only picks the login and display name, both re-validated there:
     create  ~/.claude/fleet/bin/fleet-login-new.sh <login> --full-name <name> --share-pool --apply
     remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
 
-`fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames) queues an *unmapped*
+`fleet hub set fleet.auto_assign mac-a[,mac-b]` (roster hostnames) queues an *unmapped*
 person's login on those machines at their first sign-in; `least-busy`
 (claude-fleet#2069) queues it on ONE machine the hub picks at that moment —
 online (not 维护中, not lost), not only-coordinating, not a person's own
@@ -1159,14 +1159,14 @@ system share of CPU time over the last minute — darwin: one long-lived
 above **0.8 busy** (`CCQUOTA_FLEET_MAX_CPU_BUSY` for the hub; a machine's own
 `FLEET_MAX_CPU_BUSY` in machine.env — or the plain agent's environment — rides
 its beat as `max_cpu_busy` and wins), scored with `cpu_idle = 1 − busy /
-ceiling`, the load shown beside it (`m5 excluded: CPU busy 85% > 80% (load
+ceiling`, the load shown beside it (`mac-b excluded: CPU busy 85% > 80% (load
 2.00/core)`). An agent that does not report it is judged on load per core as
 above (`CCQUOTA_FLEET_MAX_LOAD_PER_CORE`). A refusal (`node=auto`) names every
 host machine, not only the candidates: one where the caller has no login says
 `没有你的登录`, one whose updater is mid-switch adds `正在更新（<phase>）`.
 
 ```json
-"placement": {"machine": "m4", "reason": "chose m4 (score 0.500, load 0.10/core, 8.0/16 GiB free, 1 sessions); m5 excluded: load 1.00/core > 0.8", "candidates": [...]}
+"placement": {"machine": "mac-a", "reason": "chose mac-a (score 0.500, load 0.10/core, 8.0/16 GiB free, 1 sessions); mac-b excluded: load 1.00/core > 0.8", "candidates": [...]}
 ```
 
 The per-person cap is the hub setting `fleet.node_cap.<machine>` (no default
@@ -1176,7 +1176,7 @@ fleet too — a start or resume past it is `AT_CAPACITY`. The operator sets it:
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"key":"fleet.node_cap.m4","value":"8"}' https://hub/v1/fleet/settings   # "" = uncapped again
+  -d '{"key":"fleet.node_cap.mac-a","value":"8"}' https://hub/v1/fleet/settings   # "" = uncapped again
 ```
 
 **A login at its own cap is never a candidate** (claude-fleet#1587). Every
@@ -1304,7 +1304,7 @@ list's `relay_pub` (claude-fleet#3561); session passes live four hours too. The 
     #   codex:  "secret":{"refresh_token":"…","account_id":"…"}   (from ~/.codex/auth.json)
     #   github: "secret":{"token":"gho_…","user":"<login>"}
     curl -H "Authorization: Bearer $VIEWER" $HUB/v1/fleet/credentials          # metadata only
-    curl -H "Authorization: Bearer $VIEWER" -d '{"hostname":"m4","reason":"lost"}' $HUB/v1/fleet/credentials/revoke
+    curl -H "Authorization: Bearer $VIEWER" -d '{"hostname":"mac-a","reason":"lost"}' $HUB/v1/fleet/credentials/revoke
     #   {"principal_id":…} revokes a person everywhere; both = that person on that machine; "lift":true undoes
 
 Every issue, refusal, refresh, store and revocation is an audit row:
@@ -1333,14 +1333,14 @@ provider serves:
 - **Which node.** A connected **admin** agent (on `CCQUOTA_FLEET_ADMIN_USERS`,
   started with `CCQUOTA_FLEET_ADMIN=1`) whose hello offered `oauth_refresh`,
   online by its heartbeat, not a SPOT pod (its egress is the cluster's own),
-  lowest load per core first — m5 or m4, whichever is idler. The node picks the
+  lowest load per core first — mac-b or mac-a, whichever is idler. The node picks the
   token endpoint itself, by provider: the hub cannot name a host or send a body
   anywhere else, so a node is never a general forwarder.
 - **Nothing stays on the node.** The form and the provider's answer live in one
   goroutine's memory; `agent.log` gets one line — provider, HTTP status, how
   long — never a byte of either body.
 - **The audit says where.** The vault's `refresh` row carries
-  `refresh_via=<login>@<host>` (`ok · refresh_via=verkyyi@m5`, or
+  `refresh_via=<login>@<host>` (`ok · refresh_via=frank@mac-b`, or
   `failed: token endpoint answered 403 … · refresh_via=…` when the provider
   refused through that node).
 - **No node online → `refresh_unavailable`.** The lease row's error (and the
@@ -1438,7 +1438,7 @@ with the same KMS request id.
 | where | setting | effect |
 |---|---|---|
 | hub | `CCQUOTA_FLEET_CRED_KMS_KEY_ID=alias/ccquota-fleet` | the master key (id or alias). Set = KMS mode |
-| hub | `CCQUOTA_FLEET_CRED_KMS_REGION=cn-shenzhen` (or `CCQUOTA_FLEET_CRED_KMS_ENDPOINT=kms-vpc.cn-shenzhen.aliyuncs.com`) | where KMS answers |
+| hub | `CCQUOTA_FLEET_CRED_KMS_REGION=region-a` (or `CCQUOTA_FLEET_CRED_KMS_ENDPOINT=kms-vpc.region-a.aliyuncs.com`) | where KMS answers |
 | hub | RRSA: `ALIBABA_CLOUD_ROLE_ARN` + `ALIBABA_CLOUD_OIDC_PROVIDER_ARN` + `ALIBABA_CLOUD_OIDC_TOKEN_FILE` (ACK injects them); else `ALIBABA_CLOUD_ECS_METADATA=<role>`; else `ALIBABA_CLOUD_ACCESS_KEY_ID` / `_SECRET` | the hub's identity. **Use RRSA or an instance role**: a static AccessKey in a Secret puts KMS one Secret away again (the hub logs a warning) |
 
 The RAM role needs `kms:GenerateDataKey`, `kms:Decrypt` and `kms:Encrypt` on
@@ -1508,7 +1508,7 @@ until the hub has both a CA and GitHub sign-in, because that is what the first
    online-ness only — a login needs no writable control channel or cap room).
    None online → `503 {"code":"no_machine_online","error":"你的机器都不在线",
    "home":{candidates…}}`, which `fleet` prints as is and exits 1. The answer
-   carries the whole route list, so no second fetch; `fleet m4` names the
+   carries the whole route list, so no second fetch; `fleet mac-a` names the
    machine and never asks.
 3. **Route**, as `fleet connect` below, then **ssh**. The hub unreachable at
    step 2 falls back to the remembered machine.
@@ -1531,7 +1531,7 @@ expired certificate is simply refused — scan again for the next one.
 | setting | where | what |
 |---|---|---|
 | `CCQUOTA_FLEET_SSH_CA_KEY=/secrets/ssh-ca/ca` | hub | the CA private key (OpenSSH, unencrypted), mounted from its **own** k8s Secret — never the database. Unset: no certificates. Set but unreadable: the hub refuses to start |
-| `CCQUOTA_FLEET_ROUTES='[{"hostname":"macmini","alias":"m5","routes":[{"name":"public","host":"…","port":22022},{"name":"tailnet","host":"…"}]}]'` | hub | the machines and the ways in, for the 连接 page and the ssh config; the first route is the default |
+| `CCQUOTA_FLEET_ROUTES='[{"hostname":"mac-c","alias":"mac-b","routes":[{"name":"public","host":"…","port":22022},{"name":"tailnet","host":"…"}]}]'` | hub | the machines and the ways in, for the 连接 page and the ssh config; the first route is the default |
 | `CCQUOTA_FLEET_PUBLIC_URL=https://…` | hub | the address the QR points at (default: as the request reached the hub) |
 
 Make the CA once: `ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca`, then
@@ -1586,11 +1586,11 @@ no-op. `/v1/nodes` shows each admin node's answer as `ssh_ca`;
 Before claude-fleet's `dash-issue-session.sh` opens a session on an issue it
 takes the hub's lease on `(repo, issue)`; the hub grants it to exactly one node
 (one transaction on its single writer), and the other is refused with the
-holder's name — `已被 m5 认领`, exit 3. GitHub's assignee check still runs
+holder's name — `已被 mac-b 认领`, exit 3. GitHub's assignee check still runs
 after it as the second guard.
 
 ```sh
-ccquota lease acquire [--force] <owner/repo> <issue> <worker_id>   # GRANTED m4 · HELD m5 <wid> <expires> (exit 3)
+ccquota lease acquire [--force] <owner/repo> <issue> <worker_id>   # GRANTED mac-a · HELD mac-b <wid> <expires> (exit 3)
 ccquota lease release <owner/repo> <issue> <worker_id>             # RELEASED · NOT_HELD
 ```
 
@@ -1650,9 +1650,9 @@ session should run.
 
 ```sh
 ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] <owner/repo> <issue> <worker_id>
-#  LOCAL m5<TAB><reason>                      exit 0 — open it here, as today
-#  REMOTE m4 <operation_id> <status><TAB><reason>  exit 0 — the hub sent it there
-#  HELD m4<TAB><msg>                          exit 3 — leased elsewhere
+#  LOCAL mac-b<TAB><reason>                      exit 0 — open it here, as today
+#  REMOTE mac-a <operation_id> <status><TAB><reason>  exit 0 — the hub sent it there
+#  HELD mac-a<TAB><msg>                          exit 3 — leased elsewhere
 #  REFUSED <code><TAB><msg>                   exit 4 — no machine can take it
 #  (exit 1: the hub could not be asked; the spawn opens it here)
 ```
@@ -1673,15 +1673,15 @@ machine named with `--node` is honoured or refused, never swapped.
 
 ### A session moves between machines — through the hub (claude-fleet#1426)
 
-`fleet-move.sh <window> --via hub --to m4` (and `--rebalance`) moves an idle
+`fleet-move.sh <window> --via hub --to mac-a` (and `--rebalance`) moves an idle
 session without the two machines ever reaching each other:
 
 ```sh
 ccquota move plan [--node auto|<machine>] <owner/repo> <worker_id>
-#  LOCAL m5<TAB><reason> · REMOTE m4 movable|old<TAB><reason> · REFUSED <code><TAB><msg> (exit 4)
-ccquota move send --node m4 --bundle <tar> --branch <b> --sid <uuid> --name <n> [--pushed]
+#  LOCAL mac-b<TAB><reason> · REMOTE mac-a movable|old<TAB><reason> · REFUSED <code><TAB><msg> (exit 4)
+ccquota move send --node mac-a --bundle <tar> --branch <b> --sid <uuid> --name <n> [--pushed]
                   [--raw 0|1] [--state s] [--origin o] [--origin-wid w] [--handle h] <owner/repo> <worker_id>
-#  MOVED m4 <window> <pid><TAB><new worker_id>  exit 0   HELD m4<TAB><msg>      exit 3
+#  MOVED mac-a <window> <pid><TAB><new worker_id>  exit 0   HELD mac-a<TAB><msg>      exit 3
 #  REFUSED <code><TAB><msg>                     exit 4   FAILED <code><TAB><msg> exit 5
 #  UNKNOWN <operation><TAB><msg>                exit 6 — no outcome yet: never close the source
 ```
@@ -1726,7 +1726,7 @@ list / delete on pods in its namespace (`extras/spot-node/k8s.yaml`).
 **Kind.** A node is `fixed` (a machine someone owns) or `ephemeral` (one the
 hub started). The kind is stamped on the endpoint **from the join code** the
 hub minted — never from the joining side — so a SPOT pod cannot claim to be
-m5 and m5 cannot talk itself into the SPOT weight. `POST /v1/fleet/join-codes`
+mac-b and mac-b cannot talk itself into the SPOT weight. `POST /v1/fleet/join-codes`
 takes `{kind: "ephemeral"}` for a SPOT box the operator runs by hand; the
 join answer carries `kind`, and the join script writes
 `CCQUOTA_FLEET_NODE_KIND=ephemeral` into `node.env`, which is what makes the
@@ -1792,7 +1792,7 @@ someone ends it — never a placement target the moment its agent reconnects.
 
 Where it is read: the roster (`/v1/nodes`: node and machine `status`
 `maintenance`, with the record), `fleet_sessions` (`availability`, which the
-sidebar's machine line draws as `◐ m5 维护中`), placement (`judge` excludes it,
+sidebar's machine line draws as `◐ mac-b 维护中`), placement (`judge` excludes it,
 for `auto` and for a start that names it — unlike not-ready, this is a decision
 about the machine, not a report from it), `move plan` (so rebalance moves
 everything off), and `/v1/fleet/home` (`fleet connect` lands elsewhere; a 维护中
@@ -1815,15 +1815,15 @@ every machine already holds a link open to it. The relay carries an SSH
 connection over that path:
 
 ```sh
-ssh -o ProxyCommand='fleet connect --proxy m4' m4
+ssh -o ProxyCommand='fleet connect --proxy mac-a' mac-a
 ```
 
 `fleet connect` (`bin/fleet` → `bin/fleet-connect.py`, standard-library
-Python, nothing else to install) opens a WebSocket to `/v1/ssh-relay/connect?node=m4`;
-the hub sends a `ssh_relay_open` down one of m4's control channels; that agent dials
-a second WebSocket back to `/v1/node/ssh-relay` and splices it onto m4's own sshd at
+Python, nothing else to install) opens a WebSocket to `/v1/ssh-relay/connect?node=mac-a`;
+the hub sends a `ssh_relay_open` down one of mac-a's control channels; that agent dials
+a second WebSocket back to `/v1/node/ssh-relay` and splices it onto mac-a's own sshd at
 `127.0.0.1:22`. The hub copies bytes between the two and never decrypts them —
-SSH runs end to end, and m4's sshd still decides who logs in. The agent opens no
+SSH runs end to end, and mac-a's sshd still decides who logs in. The agent opens no
 listener: both its connections are outbound, and the local one is loopback only.
 An agent offers this with the `ssh_relay` hello capability, on by default with the
 fleet module; `CCQUOTA_FLEET_SSH_RELAY=0` on the agent turns it off.
@@ -1859,7 +1859,7 @@ sees its SSH session end instead of a stream that silently stops.
 
 ```sh
 fleet connect            # the machine you used last, else the hub's first
-fleet connect m4 -v      # print the measurement table and the choice
+fleet connect mac-a -v      # print the measurement table and the choice
 ```
 
 It asks the hub `GET|POST /v1/fleet/routes` for the machines the caller may
@@ -1989,7 +1989,7 @@ Depends on the embed, and the reason is structural:
 | `<iframe>` — your site, a docs page, a wiki, a wallboard | **Truly live.** `/embed/u/<login>` polls the raw figure (every 30s; `?every=`) and, only when it has actually *changed*, swaps in a badge rendered `?from=<the previous value>` — so the wheels roll the real difference, position by position, as many turns as each one carried. |
 
 ```html
-<iframe src="https://hub.example/embed/u/verkyyi?theme=auto&bg=transparent"
+<iframe src="https://hub.example/embed/u/frank?theme=auto&bg=transparent"
         width="400" height="60" frameborder="0" title="Claude Code tokens"></iframe>
 ```
 

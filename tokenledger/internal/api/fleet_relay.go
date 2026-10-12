@@ -144,7 +144,7 @@ func (s *Server) activeAccounts() []store.FleetAccount {
 }
 
 // shortNode is the machine as claude-fleet names it: the roster hostname's
-// first label ("m4" for "m4.local").
+// first label ("mac-a" for "mac-a.local").
 func shortNode(hostname string) string {
 	if i := strings.IndexByte(hostname, '.'); i > 0 {
 		return hostname[:i]

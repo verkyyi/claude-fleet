@@ -148,10 +148,10 @@ func nodeSelf(t *testing.T, h *harness, token string) int {
 func TestSpotPeakStartsNodeAndIdleReleasesIt(t *testing.T) {
 	h, k8s := newSpotHarness(t, SpotConfig{Idle: 150 * time.Millisecond})
 	ctx := context.Background()
-	m5 := connectWriteNode(t, h, "m5")
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	m5.beatLoad("m5", "verk", machineA, 10, 3, f5) // 1.0 load/core: out
-	waitFor(t, 3*time.Second, "m5 registered", func() bool {
+	macD := connectWriteNode(t, h, "mac-d")
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5) // 1.0 load/core: out
+	waitFor(t, 3*time.Second, "mac-d registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 1
 	})
 
@@ -316,9 +316,9 @@ func TestSpotPeakStartsNodeAndIdleReleasesIt(t *testing.T) {
 	if resp, err := http.Post(h.http.URL+"/v1/node/join", "application/json", bytes.NewReader(body)); err != nil || resp.StatusCode != 401 {
 		t.Fatalf("spent join code: %v %v", resp.StatusCode, err)
 	}
-	// m5 is untouched by all of it.
-	if m5.count() != 0 {
-		t.Fatalf("m5 received %d writes", m5.count())
+	// mac-d is untouched by all of it.
+	if macD.count() != 0 {
+		t.Fatalf("mac-d received %d writes", macD.count())
 	}
 }
 
@@ -380,7 +380,7 @@ func TestSpotReclaimReleasesLeasesAtOnce(t *testing.T) {
 	}
 	// A fixed machine's token gets a clean refusal.
 	req, _ = http.NewRequest(http.MethodPost, h.http.URL+"/v1/node/reclaim", strings.NewReader("{}"))
-	req.Header.Set("Authorization", "Bearer "+h.enroll(t, "m4"))
+	req.Header.Set("Authorization", "Bearer "+h.enroll(t, "mac-c"))
 	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 404 {
 		t.Fatalf("reclaim from a fixed machine: %v %v", resp.StatusCode, err)
 	}
@@ -408,7 +408,7 @@ func TestSpotReclaimReleasesLeasesAtOnce(t *testing.T) {
 	// The issue is free again — nothing re-dispatched it, but the next
 	// acquire from anywhere succeeds.
 	granted, _, _, err = h.srv.Store.AcquireLease(store.LeaseClaim{Repo: writeRepo, Issue: 7, WorkerID: "x/issue-7",
-		FleetID: "x", EndpointID: "ep_m4", Hostname: "m4", OSUser: "verk"}, leaseStartGrace, time.Now())
+		FleetID: "x", EndpointID: "ep_mac-c", Hostname: "mac-c", OSUser: "frank"}, leaseStartGrace, time.Now())
 	if err != nil || !granted {
 		t.Fatalf("#7 after the reclaim: granted=%v err=%v", granted, err)
 	}
@@ -456,9 +456,9 @@ func TestSpotBootTimeoutAndClusterOutage(t *testing.T) {
 // the default, wins when the setting says so, and the setting is bounded.
 func TestSpotWeightPrefersFixedMachines(t *testing.T) {
 	h, k8s := newSpotHarness(t, SpotConfig{Max: 2})
-	m4 := connectWriteNode(t, h, "m4")
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet")
-	m4.beatLoad("m4", "verk", machineB, 1, 0, f4)
+	macC := connectWriteNode(t, h, "mac-c")
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet")
+	macC.beatLoad("mac-c", "frank", machineB, 1, 0, f4)
 	if _, err := h.srv.Spot.Start(context.Background(), "test", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +472,7 @@ func TestSpotWeightPrefersFixedMachines(t *testing.T) {
 			s != nil && len(s.Nodes) == 1 && s.Nodes[0].State == store.SpotOnline
 	})
 	pl, err := h.srv.PickNode("", writeRepo)
-	if err != nil || pl.Machine != "m4" {
+	if err != nil || pl.Machine != "mac-c" {
 		t.Fatalf("default weight: chose %q (%v)", pl.Machine, err)
 	}
 	for _, c := range pl.Candidates {
@@ -517,10 +517,10 @@ func TestSpotWeightPrefersFixedMachines(t *testing.T) {
 // stamps the kind, for a SPOT box the operator runs outside the cluster.
 func TestSpotOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
-	m5 := connectWriteNode(t, h, "m5")
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	m5.beatLoad("m5", "verk", machineA, 10, 3, f5)
-	waitFor(t, 3*time.Second, "m5 registered", func() bool {
+	macD := connectWriteNode(t, h, "mac-d")
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5)
+	waitFor(t, 3*time.Second, "mac-d registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 1
 	})
 	if snap := roster(t, h); snap.Spot != nil {

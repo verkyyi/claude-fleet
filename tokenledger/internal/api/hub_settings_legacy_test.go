@@ -57,7 +57,7 @@ func settingCount(t *testing.T, st *store.Store, key string) int {
 func TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey(t *testing.T) {
 	h := newUsersHarness(t)
 	st := h.srv.Store
-	oldIdentity(t, st, "huangyongsheng", "vincent", "m4", true)
+	oldIdentity(t, st, "huangyongsheng", "vincent", "mac-c", true)
 	// An old key with no principal row behind it (yilianghui's, cleared by
 	// hand on prod — here still there).
 	if err := st.SetFleetSetting("user.yilianghui.machine_login", "yl", time.Now()); err != nil {
@@ -110,7 +110,7 @@ func TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey(t *testing.T) {
 	}
 
 	// A non-GitHub principal still cannot take an old identity's login.
-	oldIdentity(t, st, "zx", "zx", "m4", true)
+	oldIdentity(t, st, "zx", "zx", "mac-c", true)
 	if code, why := h.srv.putHubSetting("operator", "user.caojian.machine_login", "zx", time.Now()); code != http.StatusBadRequest {
 		t.Fatalf("old → old = %d %s", code, why)
 	}
@@ -123,10 +123,10 @@ func TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey(t *testing.T) {
 func TestDropLegacyMachineLogins(t *testing.T) {
 	h := newUsersHarness(t)
 	st, now := h.srv.Store, time.Now()
-	oldIdentity(t, st, "zx", "zx", "m4", true)            // kept
-	oldIdentity(t, st, "caojian", "24haowan", "m4", true) // a GitHub person mapped to it
+	oldIdentity(t, st, "zx", "zx", "mac-c", true)          // kept
+	oldIdentity(t, st, "caojian", "globex", "mac-c", true) // a GitHub person mapped to it
 	if err := st.UpsertHubUser(store.HubUser{GitHubID: ghAlice.ID, Login: "alice", Role: store.RoleUser,
-		MachineLogin: "24haowan", AddedBy: "test", AddedAt: now}); err != nil {
+		MachineLogin: "globex", AddedBy: "test", AddedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AdoptPrincipal(githubPrincipal(ghAdmin.ID), "malm", "", now); err != nil {
@@ -158,7 +158,7 @@ func TestDropLegacyMachineLogins(t *testing.T) {
 		}
 	}
 	for _, part := range []string{
-		"user.caojian.machine_login 24haowan → (default): old identity, login 24haowan is gh:200's",
+		"user.caojian.machine_login globex → (default): old identity, login globex is gh:200's",
 		"user.huangyongsheng.machine_login vincent → (default): old identity, no account holds login vincent",
 		"user.oldzx.machine_login zx → (default): old identity, login zx is zx's, not oldzx's",
 	} {

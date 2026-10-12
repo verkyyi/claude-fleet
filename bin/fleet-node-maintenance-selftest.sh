@@ -12,11 +12,11 @@
 #   C. enter     POST /v1/node/maintenance {"action":"enter","reason":…} with
 #                the bearer token FROM node.env (the caller's environment has
 #                none, and gets none back), Content-Type json, a reason with
-#                quotes and CJK intact; prints `ENTERED m5 · <reason> · since …
+#                quotes and CJK intact; prints `ENTERED mac-b · <reason> · since …
 #                · by …`; exit 0
-#   D. status    GET (no body, no -X POST); online → `m5 online`; flagged →
-#                `m5 maintenance · <reason> · since …`
-#   E. leave     POST {"action":"leave"}; prints `LEFT m5`; exit 0
+#   D. status    GET (no body, no -X POST); online → `mac-b online`; flagged →
+#                `mac-b maintenance · <reason> · since …`
+#   E. leave     POST {"action":"leave"}; prints `LEFT mac-b`; exit 0
 #   F. old hub   404 → exit 4 and the "predates issue #1427" note (so does a 401
 #                whose body is the viewer gate's — an older hub has no such path);
 #                409 → exit 4 naming the agent; 401 otherwise → naming the token
@@ -56,8 +56,8 @@ chmod +x "$STUB"
 export STUB_LOG="$WORK/curl.log" STUB_BODY="$WORK/curl.body" STUB_ENV="$WORK/curl.env" FLEET_HUB_CURL="$STUB"
 reset() { rm -f "$STUB_LOG" "$STUB_BODY" "$STUB_ENV"; }
 
-ONLINE='{"machine":"m5","status":"online","maintenance":null}'
-FLAGGED='{"machine":"m5","status":"maintenance","maintenance":{"machine":"m5","reason":"升级 macOS \"Tahoe\"","since":"2026-10-05T12:00:00Z","by":"node:verkyyi@m5"}}'
+ONLINE='{"machine":"mac-b","status":"online","maintenance":null}'
+FLAGGED='{"machine":"mac-b","status":"maintenance","maintenance":{"machine":"mac-b","reason":"升级 macOS \"Tahoe\"","since":"2026-10-05T12:00:00Z","by":"node:dave@mac-b"}}'
 
 # A. off
 reset
@@ -80,17 +80,17 @@ grep -q 'fleet-hub-node.sh env --write' "$WORK/err" || fail "B: no fix named: $(
 ok
 
 # node.env from here on: the token lives in the file, NOT in our environment
-printf 'CCQUOTA_HUB_URL=https://hub.example/\nCCQUOTA_TOKEN=tok-m5-secret\nCCQUOTA_FLEET=1\n' > "$FLEET_CONF_DIR/node.env"
+printf 'CCQUOTA_HUB_URL=https://hub.example/\nCCQUOTA_TOKEN=tok-mac-b-secret\nCCQUOTA_FLEET=1\n' > "$FLEET_CONF_DIR/node.env"
 chmod 600 "$FLEET_CONF_DIR/node.env"
 
 # C. enter
 reset
 out=$(FAKE_BODY="$FLAGGED" "$SUT" enter --reason '升级 macOS "Tahoe"' 2>"$WORK/err"); rc=$?
 [ "$rc" -eq 0 ] || fail "C: exit $rc: $out / $(cat "$WORK/err")"
-[ "$out" = 'maintenance: ENTERED m5 · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:verkyyi@m5' ] || fail "C: line: $out"
+[ "$out" = 'maintenance: ENTERED mac-b · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:dave@mac-b' ] || fail "C: line: $out"
 grep -q -- '-X POST' "$STUB_LOG" || fail "C: not a POST: $(cat "$STUB_LOG")"
 grep -q 'https://hub.example/v1/node/maintenance' "$STUB_LOG" || fail "C: url (trailing slash folded): $(cat "$STUB_LOG")"
-grep -q 'Authorization: Bearer tok-m5-secret' "$STUB_LOG" || fail "C: bearer from node.env missing: $(cat "$STUB_LOG")"
+grep -q 'Authorization: Bearer tok-mac-b-secret' "$STUB_LOG" || fail "C: bearer from node.env missing: $(cat "$STUB_LOG")"
 grep -q 'Content-Type: application/json' "$STUB_LOG" || fail "C: content type: $(cat "$STUB_LOG")"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d=={"action":"enter","reason":"升级 macOS \"Tahoe\""}, d' "$STUB_BODY" || fail "C: body: $(cat "$STUB_BODY")"
 [ -z "${CCQUOTA_TOKEN:-}" ] || fail "C: the token leaked into THIS shell"
@@ -99,17 +99,17 @@ ok
 # D. status
 reset
 out=$(FAKE_BODY="$ONLINE" "$SUT" status 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: m5 online' ]; } || fail "D: online: rc=$rc [$out]"
+{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: mac-b online' ]; } || fail "D: online: rc=$rc [$out]"
 grep -q -- '-X POST' "$STUB_LOG" && fail "D: status must be a GET: $(cat "$STUB_LOG")"
 [ ! -s "$STUB_BODY" ] || fail "D: status sent a body: $(cat "$STUB_BODY")"
 out=$(FAKE_BODY="$FLAGGED" "$SUT" status 2>"$WORK/err")
-[ "$out" = 'maintenance: m5 maintenance · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:verkyyi@m5' ] || fail "D: flagged: [$out]"
+[ "$out" = 'maintenance: mac-b maintenance · 升级 macOS "Tahoe" · since 2026-10-05T12:00:00Z · by node:dave@mac-b' ] || fail "D: flagged: [$out]"
 ok
 
 # E. leave
 reset
 out=$(FAKE_BODY="$ONLINE" "$SUT" leave 2>"$WORK/err"); rc=$?
-{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: LEFT m5' ]; } || fail "E: rc=$rc [$out]"
+{ [ "$rc" -eq 0 ] && [ "$out" = 'maintenance: LEFT mac-b' ]; } || fail "E: rc=$rc [$out]"
 [ "$(cat "$STUB_BODY")" = '{"action":"leave"}' ] || fail "E: body: $(cat "$STUB_BODY")"
 ok
 
@@ -152,7 +152,7 @@ ok
 # I. no leak: the token reached curl (it must) but nothing else
 reset
 FAKE_BODY="$ONLINE" "$SUT" status >/dev/null 2>&1
-grep -q '^CCQUOTA_TOKEN=tok-m5-secret$' "$STUB_ENV" || fail "I: curl ran without the token in its environment"
+grep -q '^CCQUOTA_TOKEN=tok-mac-b-secret$' "$STUB_ENV" || fail "I: curl ran without the token in its environment"
 [ -z "${CCQUOTA_TOKEN:-}" ] || fail "I: token in the caller's environment"
 ok
 

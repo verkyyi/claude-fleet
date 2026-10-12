@@ -68,8 +68,8 @@ tl() { tf display-message -p -t "$1" '#{@task_line}'; }
 # --- A ------------------------------------------------------------------------
 hook "$PA" "$POST" '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":"UserPromptSubmit"}'
 eq "A: a PostToolUse writes nothing" "" "$(tl "$PA")"
-hook "$PA" "$UPS" "$(ups $'  帮我看下\tmini2 的日志\n\n然后告诉我  ')"
-eq "A: the first prompt — tab / newlines folded, trimmed" "帮我看下 mini2 的日志 然后告诉我" "$(tl "$PA")"
+hook "$PA" "$UPS" "$(ups $'  帮我看下\tmac-d 的日志\n\n然后告诉我  ')"
+eq "A: the first prompt — tab / newlines folded, trimmed" "帮我看下 mac-d 的日志 然后告诉我" "$(tl "$PA")"
 long=$(python3 -c 'print("一二三四五六七八九十" * 5)')
 hook "$PB" "$UPS" "$(ups "$long")"
 got=$(tl "$PB")
@@ -78,7 +78,7 @@ eq "A: a long first prompt — 40 characters, the last an ellipsis" "40 …" \
 
 # --- B ------------------------------------------------------------------------
 hook "$PA" "$UPS" "$(ups '第二句话')"
-eq "B: a later prompt never replaces it" "帮我看下 mini2 的日志 然后告诉我" "$(tl "$PA")"
+eq "B: a later prompt never replaces it" "帮我看下 mac-d 的日志 然后告诉我" "$(tl "$PA")"
 
 # --- C ------------------------------------------------------------------------
 tf set-window-option -u -t "$PA" @task_line
@@ -87,9 +87,9 @@ tf set-window-option -t "$PA" @claude_needs blocked
 hook "$PA" "$POST" '{"hook_event_name":"PostToolUse","tool_name":"Bash"}'
 eq "C: a blocked window stays blocked across a tool call" "needs/blocked" \
    "$(tf display-message -p -t "$PA" '#{@claude_state}/#{@claude_needs}')"
-hook "$PA" "$UPS" "$(ups '答复：用 m4')"
+hook "$PA" "$UPS" "$(ups '答复：用 mac-a')"
 eq "C: the first prompt both clears blocked…" "working" "$(tf display-message -p -t "$PA" '#{@claude_state}')"
-eq "C: …and stamps the line" "答复：用 m4" "$(tl "$PA")"
+eq "C: …and stamps the line" "答复：用 mac-a" "$(tl "$PA")"
 
 # --- D ------------------------------------------------------------------------
 ac() { tf display-message -p -t "$1" '#{@agent_cwd}'; }

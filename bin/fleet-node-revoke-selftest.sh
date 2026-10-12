@@ -65,10 +65,10 @@ reset() { rm -f "$STUB_LOG" "$STUB_HDR" "$STUB_BODY" "$FAKE_DIR"/*; unset FAKE_R
 fake() { printf '%s' "$2" > "$FAKE_DIR/$1.body"; printf '%s' "${3:-200}" > "$FAKE_DIR/$1.code"; }
 
 VIEWER='viewer-SECRET-1403'
-ROSTER='{"nodes":[{"endpoint_id":"ep_9","hostname":"m9.local","os_user":"alice"},{"endpoint_id":"ep_8","hostname":"m9","os_user":"bob"},{"endpoint_id":"ep_4","hostname":"m4","os_user":"alice"}]}'
+ROSTER='{"nodes":[{"endpoint_id":"ep_9","hostname":"m9.local","os_user":"alice"},{"endpoint_id":"ep_8","hostname":"m9","os_user":"bob"},{"endpoint_id":"ep_4","hostname":"mac-a","os_user":"alice"}]}'
 
 # A. usage
-for args in '' '"bad name!"' 'm9 m4' '--frob m9' 'm9 --reason' 'm9:al:ice'; do
+for args in '' '"bad name!"' 'm9 mac-a' '--frob m9' 'm9 --reason' 'm9:al:ice'; do
   reset
   eval "\"\$SUT\" $args" >/dev/null 2>"$WORK/err"; rc=$?
   [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
@@ -115,8 +115,8 @@ fake nodes "$ROSTER"
 "$SUT" m9 >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 5 ] && grep -q 'ep_8' "$WORK/err" && grep -q 'ep_9' "$WORK/err" || fail "E: ambiguous: exit $rc $(cat "$WORK/err")"
 grep -q 'revoke' "$STUB_BODY" && fail "E: revoked an ambiguous name"
-fake revoke '{"endpoint_id":"ep_4","hostname":"m4","os_user":"alice","already":false}'
-out=$("$SUT" m4 2>/dev/null) || fail "E: one login on m4 is not ambiguous"
+fake revoke '{"endpoint_id":"ep_4","hostname":"mac-a","os_user":"alice","already":false}'
+out=$("$SUT" mac-a 2>/dev/null) || fail "E: one login on mac-a is not ambiguous"
 reset
 fake nodes "$ROSTER"
 "$SUT" m7 >/dev/null 2>"$WORK/err"; rc=$?

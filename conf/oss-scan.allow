@@ -22,3 +22,47 @@ deploy/k8s/egress/base/fleet-egress.py	private-ipv4	内嵌自测：要的就是�
 extras/gh-relay/gh-relay.py	private-ipv4	内嵌自测：要的就是私网地址被拒
 extras/gh-relay/gh-relay.service	private-ipv4	Lightsail 默认 VPC 的解析器地址（AWS 的产品默认），重建后照 README 核对
 conf/compat-ours.conf	*	compat-1v（#3577，下一批删）：我们自己机器在未设新键时的旧值，只在配置的入口是我们的时才读
+
+# (tokenledger's files are spelled `tokenledge?/…`: no conf line may name that tree — tokenledger-isolation-selftest)
+# C8 (#3578): tests and docs whose private addresses ARE the point — LAN / tailnet / entry
+# route logic is judged on private ranges; every address in them is made up.
+bin/client-log-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/entry-e2e-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-break-it-entry-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-break-it-peerlink-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-break-it-thin-client-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-client-route-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-client-where-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-connect-route-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-doctor-host-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-entry-lang-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-host-tune-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-install-join-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-login-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-node-hosted-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-node-linux-selftest.py	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-node-supervisor-selftest.py	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-open-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-peer-cert-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+bin/fleet-peerlink-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/cmd/ccquota/hub_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/cmd/ccquota/tls_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/agent/node_entry_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/agent/node_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/fleet_certs_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/fleet_debug_ticket_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/fleet_entry_reach_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/fleet_home_login_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/fleet_maintenance_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/fleet_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/hub_users_api_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/api/node_route_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/internal/credproxy/credproxy_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+extras/gh-relay/README.md	private-ipv4	Lightsail VPC 的默认解析地址（AWS 定的，每台实例都一样）
+tokenledge?/README.md	private-ipv4	配置写法示例里的局域网地址（编的）
+# C8 (#3578): a vendor's public address, not our cloud
+tokenledge?/internal/store/sources_test.go	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：测供应商归类，不是我们的云
+tokenledge?/README.md	cloud	阿里云 KMS 接入点的写法（区域已是占位 region-a）
+deploy/k8s/RUNBOOK.md	cloud	阿里云 ACK 自带的系统镜像地址（供应商的仓库，区域已是占位）
+# C8 (#3578): pinned to a value the code still hard-codes — goes with C7's change
+tokenledge?/internal/api/meter_test.go	corp-domain	测 meter.go 写死的放行来源；C7 把它改成配置项时一起换

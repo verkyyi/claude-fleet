@@ -171,8 +171,8 @@ func TestMachineOpensLoginsWithFixedArgv(t *testing.T) {
 	hub := newMachineAcctHub(t)
 	runMachineLink(t, linuxMachineConfig(t, hub.srv.URL))
 	code := "fj_" + strings.Repeat("a", 26)
-	m := hub.send(t, control.AccountOp{Op: control.AccountCreate, Login: "24haowan", Existing: true,
-		FullName: "Arvin, Wang", JoinCode: code})
+	m := hub.send(t, control.AccountOp{Op: control.AccountCreate, Login: "24acme", Existing: true,
+		FullName: "Dave, Wang", JoinCode: code})
 	r := hub.answer(t, m.OpID)
 	var res control.AccountResult
 	_ = json.Unmarshal(r.Payload, &res)
@@ -185,7 +185,7 @@ func TestMachineOpensLoginsWithFixedArgv(t *testing.T) {
 	if !hasCap(caps, control.CapLoginJoin) {
 		t.Fatalf("machine hello caps %v lack %s", caps, control.CapLoginJoin)
 	}
-	want := []string{serviceCtlPython, "-I", testOpener, "login", "open", "24haowan", "--full-name", "Arvin Wang"}
+	want := []string{serviceCtlPython, "-I", testOpener, "login", "open", "24acme", "--full-name", "Dave Wang"}
 	runs := f.snapshot()
 	if len(runs) != 1 || !reflect.DeepEqual(runs[0], want) {
 		t.Fatalf("create ran %q; want %q", runs, want)
@@ -222,7 +222,7 @@ func TestMachineRefusesOtherRootOps(t *testing.T) {
 		"the service":      {Op: control.AccountRemove, Login: "fleet"},
 		"the credsep role": {Op: control.AccountRemove, Login: "fleetcred"},
 		"all digits":       {Op: control.AccountCreate, Login: "1234", Existing: true, FullName: "x"},
-		"digit, not held":  {Op: control.AccountCreate, Login: "24haowan", FullName: "x"},
+		"digit, not held":  {Op: control.AccountCreate, Login: "24acme", FullName: "x"},
 		"a flag login":     {Op: control.AccountCreate, Login: "--uid=0", FullName: "x"},
 		"a bad name":       {Op: control.AccountCreate, Login: "drill2", FullName: "a\nb"},
 		"a bad join code":  {Op: control.AccountCreate, Login: "drill2", FullName: "x", JoinCode: "fj_x; rm -rf /"},

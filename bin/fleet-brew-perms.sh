@@ -2,7 +2,7 @@
 # fleet-brew-perms.sh — a Homebrew keg the other logins cannot read (issue #2283).
 #
 # WHY: brew makes its directories with the CALLER's umask. On a machine where the
-# brew prefix's owner runs umask 077 (m5, 2026-10-07, #2277), one upgrade poured
+# brew prefix's owner runs umask 077 (mac-b, 2026-10-07, #2277), one upgrade poured
 # nine kegs as drwx------ — Cellar/<formula>/, Cellar/<formula>/<version>/, the
 # files inside them and the opt/<formula> link. The owner noticed nothing; every
 # OTHER login on the machine lost `import ssl` (errno 13) in Homebrew's python3,

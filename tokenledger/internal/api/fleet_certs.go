@@ -67,7 +67,7 @@ const (
 
 // FleetMachine is one machine people connect to, and the ways to reach it
 // (CCQUOTA_FLEET_ROUTES). Hostname is the roster's name for it — what
-// accounts are keyed on; Alias is what people type (`ssh m4`).
+// accounts are keyed on; Alias is what people type (`ssh mac-a`).
 type FleetMachine struct {
 	Hostname string       `json:"hostname"`
 	Alias    string       `json:"alias,omitempty"`

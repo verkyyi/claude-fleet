@@ -99,17 +99,17 @@ func nodeList(t *testing.T, h *harness, tok string) (int, control.EntryNodeList,
 	return code, out, raw
 }
 
-// entryHarness: Alice has logins with a live fleet on macmini and
-// macmini-m4, Bob on macmini-m4; the door is on.
+// entryHarness: Alice has logins with a live fleet on mac-e and
+// mac-e-mac-c, Bob on mac-e-mac-c; the door is on.
 func entryHarness(t *testing.T) *harness {
 	t.Helper()
 	h, _ := certHarness(t)
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "macmini-m4", Login: "bob"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "mac-e-mac-c", Login: "bob"}); code != 200 {
 		t.Fatalf("adopt bob: HTTP %d", code)
 	}
-	loginReportsFleet(t, h, "macmini", "alice", "00000000-0000-4000-8000-000000000005")
-	loginReportsFleet(t, h, "macmini-m4", "alice", "00000000-0000-4000-8000-000000000004")
-	loginReportsFleet(t, h, "macmini-m4", "bob", "00000000-0000-4000-8000-0000000000b4")
+	loginReportsFleet(t, h, "mac-e", "alice", "00000000-0000-4000-8000-000000000005")
+	loginReportsFleet(t, h, "mac-e-mac-c", "alice", "00000000-0000-4000-8000-000000000004")
+	loginReportsFleet(t, h, "mac-e-mac-c", "bob", "00000000-0000-4000-8000-0000000000b4")
 	if err := h.srv.Store.SetFleetSetting(EntryKey, "on", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -123,17 +123,17 @@ func entryHarness(t *testing.T) *harness {
 // fleet, and both machines hear it.
 func TestEntryKeysPushToHomeOnly(t *testing.T) {
 	h := entryHarness(t)
-	m5, tok5 := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
-	m4, tok4 := rootNode(t, h, "root4", "macmini-m4", control.CapEntryKeys)
-	old, _ := rootNode(t, h, "root-old", "macmini", control.CapRead) // an older agent
+	macD, tok5 := rootNode(t, h, "root5", "mac-e", control.CapEntryKeys)
+	macC, tok4 := rootNode(t, h, "root4", "mac-e-mac-c", control.CapEntryKeys)
+	old, _ := rootNode(t, h, "root-old", "mac-e", control.CapRead) // an older agent
 
-	// Alice makes macmini her home, and gets her suggested name with it
-	// (#3337): only macmini hears it, once.
-	code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), map[string]any{"machine": "macmini"})
+	// Alice makes mac-e her home, and gets her suggested name with it
+	// (#3337): only mac-e hears it, once.
+	code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), map[string]any{"machine": "mac-e"})
 	if code != 200 || !strings.Contains(raw, `"login":"alice"`) || !strings.Contains(raw, `"version":2`) {
-		t.Fatalf("Alice's home → macmini: HTTP %d %s", code, raw)
+		t.Fatalf("Alice's home → mac-e: HTTP %d %s", code, raw)
 	}
-	nextEntry(t, m5, 2, "macmini after the home is set and her suggested name claimed (#3337)")
+	nextEntry(t, macD, 2, "mac-e after the home is set and her suggested name claimed (#3337)")
 
 	// A key: added (201), the version moves, the home hears it.
 	line := entryKeyLine(t, "alice-phone")
@@ -146,7 +146,7 @@ func TestEntryKeysPushToHomeOnly(t *testing.T) {
 	if k.ID == "" || !strings.HasPrefix(k.FP, "SHA256:") || k.Type != ssh.KeyAlgoED25519 || k.Name != "alice-phone" {
 		t.Fatalf("added key %+v", k)
 	}
-	nextEntry(t, m5, 3, "macmini after the key")
+	nextEntry(t, macD, 3, "mac-e after the key")
 	// The same key again is hers already: 200, the version stays.
 	if code, raw := entryCall(t, h, http.MethodPost, control.EntryKeysPath, asSession(pAlice), map[string]any{"public_key": line}); code != 200 || !strings.Contains(raw, k.ID) {
 		t.Fatalf("Alice adds the same key again: HTTP %d %s, want 200 with the same key", code, raw)
@@ -156,14 +156,14 @@ func TestEntryKeysPushToHomeOnly(t *testing.T) {
 	code, list, raw := nodeList(t, h, tok5)
 	if code != 200 || list.Version != 3 || len(list.Logins) != 1 || list.Logins["alice"].Person != pAlice ||
 		len(list.Logins["alice"].Keys) != 1 || list.Logins["alice"].Keys[0].FP != k.FP || !strings.Contains(line, list.Logins["alice"].Keys[0].B64) {
-		t.Fatalf("macmini's list: HTTP %d %s", code, raw)
+		t.Fatalf("mac-e's list: HTTP %d %s", code, raw)
 	}
 	// The label rides along (claude-fleet#3071: the home's 看台 names the device
 	// by it); the key's comment never does.
 	if list.Logins["alice"].Keys[0].Name != "alice-phone" {
 		t.Fatalf("the node's list lacks the key's label: %s", raw)
 	}
-	if code, _, raw := nodeList(t, h, h.tokens["macmini-alice"]); code != http.StatusForbidden {
+	if code, _, raw := nodeList(t, h, h.tokens["mac-e-alice"]); code != http.StatusForbidden {
 		t.Fatalf("a login's token reads the list: HTTP %d %s, want 403", code, raw)
 	}
 
@@ -180,21 +180,21 @@ func TestEntryKeysPushToHomeOnly(t *testing.T) {
 	if code, raw := entryCall(t, h, http.MethodGet, control.EntryKeysPath+"?principal="+pAlice, asSession(pBob), nil); code != http.StatusNotFound {
 		t.Fatalf("Bob reads Alice's keys: HTTP %d %s, want 404", code, raw)
 	}
-	// Bob's first visit gives him his one live fleet as home: macmini-m4 hears it.
+	// Bob's first visit gives him his one live fleet as home: mac-e-mac-c hears it.
 	code, raw = entryCall(t, h, http.MethodGet, control.EntryKeysPath, asSession(pBob), nil)
-	if code != 200 || strings.Contains(raw, k.ID) || !strings.Contains(raw, `"machine":"macmini-m4","login":"bob","set_by":"auto"`) {
+	if code != 200 || strings.Contains(raw, k.ID) || !strings.Contains(raw, `"machine":"mac-e-mac-c","login":"bob","set_by":"auto"`) {
 		t.Fatalf("Bob's own view: HTTP %d %s", code, raw)
 	}
-	nextEntry(t, m4, 5, "macmini-m4 after Bob's first home and his name, in one push")
+	nextEntry(t, macC, 5, "mac-e-mac-c after Bob's first home and his name, in one push")
 
-	// Alice revokes: v6 reaches macmini, and her key is gone from its list.
+	// Alice revokes: v6 reaches mac-e, and her key is gone from its list.
 	code, raw = entryCall(t, h, http.MethodDelete, control.EntryKeysPath+"/"+k.ID, asSession(pAlice), nil)
 	if code != 200 || !strings.Contains(raw, `"revoked_at"`) {
 		t.Fatalf("Alice revokes: HTTP %d %s", code, raw)
 	}
-	nextEntry(t, m5, 6, "macmini after the revoke")
+	nextEntry(t, macD, 6, "mac-e after the revoke")
 	if _, list, raw := nodeList(t, h, tok5); list.Version != 6 || len(list.Logins["alice"].Keys) != 0 {
-		t.Fatalf("macmini's list after the revoke: %s", raw)
+		t.Fatalf("mac-e's list after the revoke: %s", raw)
 	}
 	// Revoked once is revoked: no new version.
 	if code, _ := entryCall(t, h, http.MethodDelete, control.EntryKeysPath+"/"+k.ID, asSession(pAlice), nil); code != 200 {
@@ -204,36 +204,36 @@ func TestEntryKeysPushToHomeOnly(t *testing.T) {
 	if code, raw := entryCall(t, h, http.MethodPost, control.EntryKeysPath, asSession(pBob), map[string]any{"public_key": line}); code != http.StatusCreated {
 		t.Fatalf("Bob adds the key Alice revoked: HTTP %d %s, want 201", code, raw)
 	}
-	nextEntry(t, m4, 7, "macmini-m4 after Bob's key (and nothing for Alice's revoke before it)")
+	nextEntry(t, macC, 7, "mac-e-mac-c after Bob's key (and nothing for Alice's revoke before it)")
 
 	// A home only goes where a live fleet is; a move reaches both machines.
 	for name, body := range map[string]map[string]any{
 		"no login there":       {"machine": "spare"},
-		"someone else's login": {"machine": "macmini-m4", "login": "bob"},
+		"someone else's login": {"machine": "mac-e-mac-c", "login": "bob"},
 	} {
 		if code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), body); code != http.StatusUnprocessableEntity {
 			t.Fatalf("Alice's home → %s: HTTP %d %s, want 422", name, code, raw)
 		}
 	}
-	if code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), map[string]any{"machine": "m4"}); code != 200 || !strings.Contains(raw, `"version":8`) {
-		t.Fatalf("Alice's home → m4: HTTP %d %s", code, raw)
+	if code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), map[string]any{"machine": "mac-c"}); code != 200 || !strings.Contains(raw, `"version":8`) {
+		t.Fatalf("Alice's home → mac-c: HTTP %d %s", code, raw)
 	}
-	nextEntry(t, m5, 8, "the old home after the move")
-	nextEntry(t, m4, 8, "the new home after the move")
+	nextEntry(t, macD, 8, "the old home after the move")
+	nextEntry(t, macC, 8, "the new home after the move")
 	if _, list, raw := nodeList(t, h, tok5); len(list.Logins) != 0 {
-		t.Fatalf("macmini still lists someone after Alice moved away: %s", raw)
+		t.Fatalf("mac-e still lists someone after Alice moved away: %s", raw)
 	}
 	if _, list, raw := nodeList(t, h, tok4); len(list.Logins) != 2 || list.Logins["alice"].Person != pAlice || list.Logins["bob"].Person != pBob {
-		t.Fatalf("macmini-m4's list after the move: %s", raw)
+		t.Fatalf("mac-e-mac-c's list after the move: %s", raw)
 	}
 
 	// The node without the capability heard nothing, ever.
 	silent(t, old, "no CapEntryKeys")
 	// A machine that reconnects hears the current version on its first beat.
-	m5.CloseNow()
+	macD.CloseNow()
 	m5b := teamNode(t, h, tok5, control.CapEntryKeys)
-	beat(t, m5b, control.Proto, control.Heartbeat{Hostname: "macmini", OSUser: "root"})
-	nextEntry(t, m5b, 8, "macmini reconnects")
+	beat(t, m5b, control.Proto, control.Heartbeat{Hostname: "mac-e", OSUser: "root"})
+	nextEntry(t, m5b, 8, "mac-e reconnects")
 }
 
 // A private key pasted by mistake is refused, not stored, and appears in no
@@ -345,7 +345,7 @@ func TestEntryNames(t *testing.T) {
 		t.Fatalf("operator names Alice: HTTP %d %s, want 403", code, raw)
 	}
 	// A first visit suggests a name from the sign-in.
-	if got := entrySuggestName("Verky.Yi_99"); got != "verky-yi-99" {
+	if got := entrySuggestName("Heidi.Yi_99"); got != "heidi-yi-99" {
 		t.Fatalf("suggest: %q", got)
 	}
 }
@@ -354,8 +354,8 @@ func TestEntryNames(t *testing.T) {
 // it once, and an accepted entry stamps the key's last use.
 func TestEntryAuditBackfill(t *testing.T) {
 	h := entryHarness(t)
-	_, tok5 := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
-	if code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), map[string]any{"machine": "macmini"}); code != 200 {
+	_, tok5 := rootNode(t, h, "root5", "mac-e", control.CapEntryKeys)
+	if code, raw := entryCall(t, h, http.MethodPut, control.EntryHomePath, asSession(pAlice), map[string]any{"machine": "mac-e"}); code != 200 {
 		t.Fatalf("home: HTTP %d %s", code, raw)
 	}
 	code, raw := entryCall(t, h, http.MethodPost, control.EntryKeysPath, asSession(pAlice), map[string]any{"public_key": entryKeyLine(t, "x")})
@@ -383,7 +383,7 @@ func TestEntryAuditBackfill(t *testing.T) {
 	for _, a := range all {
 		if a.Actor == "node" {
 			n++
-			if a.Machine != "macmini" {
+			if a.Machine != "mac-e" {
 				t.Fatalf("a node line's machine is %q, want the token's own", a.Machine)
 			}
 		}
@@ -397,8 +397,8 @@ func TestEntryAuditBackfill(t *testing.T) {
 // machine is ever sent entry_keys.
 func TestEntryOffAddsNothing(t *testing.T) {
 	h, _ := certHarness(t)
-	loginReportsFleet(t, h, "macmini", "alice", "00000000-0000-4000-8000-000000000005")
-	m5, tok5 := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
+	loginReportsFleet(t, h, "mac-e", "alice", "00000000-0000-4000-8000-000000000005")
+	macD, tok5 := rootNode(t, h, "root5", "mac-e", control.CapEntryKeys)
 	for _, c := range []struct {
 		method, path string
 		body         any
@@ -406,7 +406,7 @@ func TestEntryOffAddsNothing(t *testing.T) {
 		{http.MethodGet, control.EntryKeysPath, nil},
 		{http.MethodPost, control.EntryKeysPath, map[string]any{"public_key": entryKeyLine(t, "x")}},
 		{http.MethodPut, control.EntryNamePath, map[string]any{"name": "alice"}},
-		{http.MethodPut, control.EntryHomePath, map[string]any{"machine": "macmini"}},
+		{http.MethodPut, control.EntryHomePath, map[string]any{"machine": "mac-e"}},
 	} {
 		if code, raw := entryCall(t, h, c.method, c.path, asSession(pAlice), c.body); code != http.StatusNotFound {
 			t.Fatalf("off: %s %s: HTTP %d %s, want 404", c.method, c.path, code, raw)
@@ -419,10 +419,10 @@ func TestEntryOffAddsNothing(t *testing.T) {
 		t.Fatalf("off: version %d", v)
 	}
 	// Even a version written behind the doors' back is never pushed.
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini", Login: "alice", SetBy: "t", SetAt: time.Now()}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e", Login: "alice", SetBy: "t", SetAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	h.srv.broadcastEntry(1, "macmini")
-	beat(t, m5, control.Proto, control.Heartbeat{Hostname: "macmini", OSUser: "root"})
-	silent(t, m5, "off")
+	h.srv.broadcastEntry(1, "mac-e")
+	beat(t, macD, control.Proto, control.Heartbeat{Hostname: "mac-e", OSUser: "root"})
+	silent(t, macD, "off")
 }

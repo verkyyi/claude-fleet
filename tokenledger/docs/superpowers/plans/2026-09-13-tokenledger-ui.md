@@ -29,7 +29,7 @@ openai            (codex)            2022   248537722 —
 dashscope.aliyuncs.com               1324     2048721 $0.235736
 api.deepseek.com                       38       27924 unpriced
 ark.cn-beijing.volces.com              10         680 unpriced
-ai-relay.24hw.cn                       10         230 $0.000329
+ai-relay.example.com                       10         230 $0.000329
 ```
 
 Five real providers; `vendor_bill` currently has zero rows, so its "cost without
@@ -594,7 +594,7 @@ Verify against the live hub through the browser, or against the API directly:
 
 ```bash
 curl -s -H "Authorization: Bearer $CCQUOTA_VIEWER_TOKEN" \
-  "https://ccquota.24haowan.com/v1/usage?by=provider&account=all&since=30d&limit=50" \
+  "https://ccquota.example.com/v1/usage?by=provider&account=all&since=30d&limit=50" \
   | python3 -m json.tool | head -40
 ```
 
@@ -775,7 +775,7 @@ and not the headings above them.
 - [ ] **Step 2: Full local verification**
 
 ```bash
-cd /Users/verkyyi/projects/ccquota-scratch-1
+cd /Users/dave/projects/ccquota-scratch-1
 gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
 go vet ./...
 go test -race ./...
@@ -816,9 +816,9 @@ Follow `doc/k8s-yamls/ccquota/RUNBOOK.md` in the monorepo:
 ```bash
 SHA=$(git rev-parse --short=8 HEAD)
 docker buildx build --platform linux/amd64 --build-arg VERSION=prod-$SHA \
-  -t registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota:prod-$SHA --push .
+  -t registry.example.com/acme/ccquota:prod-$SHA --push .
 kubectl -n new-deploy set image deploy/ccquota-hub \
-  ccquota=registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/ccquota:prod-$SHA
+  ccquota=registry-vpc.example.com/acme/ccquota:prod-$SHA
 kubectl -n new-deploy rollout status deploy/ccquota-hub
 ```
 
@@ -828,12 +828,12 @@ the pod sticks in `ContainerCreating`, the runbook's first step is
 
 - [ ] **Step 7: Verify live**
 
-Open `https://ccquota.24haowan.com/` and confirm the page renders one surface
+Open `https://ccquota.example.com/` and confirm the page renders one surface
 with the five providers. Then re-check the two things a UI change can silently
 break:
 
 ```bash
-curl -s -H "Authorization: Bearer $TOK" "https://ccquota.24haowan.com/v1/usage?by=source&account=all&since=3650d"
+curl -s -H "Authorization: Bearer $TOK" "https://ccquota.example.com/v1/usage?by=source&account=all&since=3650d"
 ```
 
 Event and token counts must match the figures recorded in subproject A's

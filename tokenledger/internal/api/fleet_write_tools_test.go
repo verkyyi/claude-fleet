@@ -25,7 +25,7 @@ import (
 // each, deduplicated by key, and sent to the worker's node with exactly the
 // arguments the node's whitelist accepts.
 func TestFleetWriteAnswerAndReap(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	wid := f4.FleetID + "/issue-2"
 	for _, tool := range []string{"worker_answer", "worker_reap"} {
 		if !hasString(FleetTools, tool) || !fleetWriteTools[tool] {
@@ -42,28 +42,28 @@ func TestFleetWriteAnswerAndReap(t *testing.T) {
 	if op["status"] != "accepted" {
 		t.Fatalf("worker_answer = %v; want accepted", op)
 	}
-	waitFor(t, 2*time.Second, "the node took the answer", func() bool { return m4.count() == 1 })
-	env := m4.writes[0]
+	waitFor(t, 2*time.Second, "the node took the answer", func() bool { return macC.count() == 1 })
+	env := macC.writes[0]
 	params, _ := env["params"].(map[string]any)
 	if env["action"] != "worker_answer" || params["worker_id"] != wid || params["answer"] != "yes" || len(params) != 2 {
 		t.Fatalf("the node was sent %v", env)
 	}
 	// The same key is the same operation, not a second keystroke.
-	if again := postFleet(t, h, "worker_answer", map[string]any{"worker_id": wid, "answer": "yes", "idempotency_key": "a1"}, 200); again["operation_id"] != op["operation_id"] || m4.count() != 1 {
+	if again := postFleet(t, h, "worker_answer", map[string]any{"worker_id": wid, "answer": "yes", "idempotency_key": "a1"}, 200); again["operation_id"] != op["operation_id"] || macC.count() != 1 {
 		t.Fatal("a repeated answer key was sent again")
 	}
 	// The grammar: yes / no / picks; anything else never reaches a node.
 	for i, good := range []string{"no", "2", "1,3", "2 1,3", "12 3 4,5,6"} {
 		postFleet(t, h, "worker_answer", map[string]any{"worker_id": wid, "answer": good, "idempotency_key": fmt.Sprintf("ok-%d", i)}, 200)
 	}
-	before := m4.count()
+	before := macC.count()
 	for _, bad := range []any{"yes; rm -rf /", "", "0", "y", "1,,2", "YES", 2, true, "1 2 3 4 5 6 7 8 9"} {
 		postFleet(t, h, "worker_answer", map[string]any{"worker_id": wid, "answer": bad, "idempotency_key": "bad"}, 400)
 	}
 	postFleet(t, h, "worker_answer", map[string]any{"worker_id": wid, "idempotency_key": "no-answer"}, 400)
 	postFleet(t, h, "worker_answer", map[string]any{"worker_id": wid, "answer": "yes", "text": "x", "idempotency_key": "extra"}, 400)
-	if m4.count() != before {
-		t.Fatalf("a refused answer reached the node (%d → %d writes)", before, m4.count())
+	if macC.count() != before {
+		t.Fatalf("a refused answer reached the node (%d → %d writes)", before, macC.count())
 	}
 
 	// A reap: worker_id only.
@@ -71,8 +71,8 @@ func TestFleetWriteAnswerAndReap(t *testing.T) {
 	if op["status"] != "accepted" {
 		t.Fatalf("worker_reap = %v; want accepted", op)
 	}
-	waitFor(t, 2*time.Second, "the node took the reap", func() bool { return m4.count() == before+1 })
-	env = m4.writes[len(m4.writes)-1]
+	waitFor(t, 2*time.Second, "the node took the reap", func() bool { return macC.count() == before+1 })
+	env = macC.writes[len(macC.writes)-1]
 	params, _ = env["params"].(map[string]any)
 	if env["action"] != "worker_reap" || params["worker_id"] != wid || len(params) != 1 {
 		t.Fatalf("the node was sent %v", env)
@@ -83,11 +83,11 @@ func TestFleetWriteAnswerAndReap(t *testing.T) {
 	// Each tool needs its own scope: a person granted the others is refused;
 	// the default person grant holds both (their own workers are theirs to
 	// answer and reap); another person's worker is NOT_FOUND.
-	p, err := h.srv.Store.AdoptPrincipal("wx-verk", "verk", "Verk", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal("wx-frank", "frank", "Frank", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	as := func(person string) fleetPrincipal {
@@ -105,25 +105,25 @@ func TestFleetWriteAnswerAndReap(t *testing.T) {
 		if tool == "worker_answer" {
 			args["answer"] = "no"
 		}
-		if _, err := h.srv.SubmitWrite(context.Background(), as("wx-verk"), tool, args); errorObject(err)["code"] != "FORBIDDEN" {
+		if _, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), tool, args); errorObject(err)["code"] != "FORBIDDEN" {
 			t.Fatalf("%s without its scope: %v; want FORBIDDEN", tool, err)
 		}
 	}
 	h.srv.FleetPersonScopes = nil
-	n := m4.count()
+	n := macC.count()
 	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-someone"), "worker_reap", map[string]any{"worker_id": wid, "idempotency_key": "p-other"}); errorObject(err)["code"] != "NOT_FOUND" {
 		t.Fatalf("reap of someone else's worker: %v; want NOT_FOUND", err)
 	}
-	if m4.count() != n {
+	if macC.count() != n {
 		t.Fatal("a refused person call reached the node")
 	}
-	op, err = h.srv.SubmitWrite(context.Background(), as("wx-verk"), "worker_answer", map[string]any{"worker_id": wid, "answer": "no", "idempotency_key": "p-own"})
+	op, err = h.srv.SubmitWrite(context.Background(), as("wx-frank"), "worker_answer", map[string]any{"worker_id": wid, "answer": "no", "idempotency_key": "p-own"})
 	if err != nil || op["status"] != "accepted" {
 		t.Fatalf("own answer with the default grant: %v %v", op, err)
 	}
-	waitFor(t, 2*time.Second, "the person's answer reached the node", func() bool { return m4.count() == n+1 })
-	if m4.writes[len(m4.writes)-1]["actor"] != "wx-verk" {
-		t.Fatalf("the journal actor = %v; want the person", m4.writes[len(m4.writes)-1]["actor"])
+	waitFor(t, 2*time.Second, "the person's answer reached the node", func() bool { return macC.count() == n+1 })
+	if macC.writes[len(macC.writes)-1]["actor"] != "wx-frank" {
+		t.Fatalf("the journal actor = %v; want the person", macC.writes[len(macC.writes)-1]["actor"])
 	}
 }
 
@@ -137,17 +137,17 @@ func TestFleetWriteByCertificate(t *testing.T) {
 	h := newFleetHarness(t)
 	k := newCertKit(t)
 	h.srv.SSHCA = sshca.New(k.ca)
-	m5 := connectWriteNode(t, h, "m5")
-	m4 := connectWriteNode(t, h, "m4")
+	macD := connectWriteNode(t, h, "mac-d")
+	macC := connectWriteNode(t, h, "mac-c")
 	f5 := fakeFleet(t, machineA, "alice-fleet", writeRepo, "/u/alice/claude-fleet", 1)
 	f4 := fakeFleet(t, machineB, "bob-fleet", writeRepo, "/u/bob/claude-fleet", 7)
-	m5.beatLoad("m5", "alice", machineA, 1, 1, f5)
-	m4.beatLoad("m4", "bob", machineB, 1, 1, f4)
+	macD.beatLoad("mac-d", "alice", machineA, 1, 1, f5)
+	macC.beatLoad("mac-c", "bob", machineB, 1, 1, f4)
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", time.Now())
-	h.srv.Store.AdoptAccount(p, "m5", time.Now())
+	h.srv.Store.AdoptAccount(p, "mac-d", time.Now())
 	now := time.Now()
 	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 
@@ -172,30 +172,30 @@ func TestFleetWriteByCertificate(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&out)
 		return resp.StatusCode, out
 	}
-	// m5 answers with a finished operation, so operation_get below reads the
+	// mac-d answers with a finished operation, so operation_get below reads the
 	// journal and never waits on a reconcile.
-	m5.setAnswer(func(env map[string]any) (any, *control.Error) {
+	macD.setAnswer(func(env map[string]any) (any, *control.Error) {
 		return map[string]any{"operation_id": env["operation_id"], "fleet_id": env["fleet_id"],
 			"action": env["action"], "status": "succeeded", "result": map[string]any{"answered": "yes"}}, nil
 	})
 	mine := `{"worker_id":"` + f5.FleetID + `/issue-1","answer":"yes","idempotency_key":"c1"}`
 	bobs := `{"worker_id":"` + f4.FleetID + `/issue-7","idempotency_key":"c2"}`
 
-	// Her own worker: accepted, journalled as her, m5 got it with her actor.
+	// Her own worker: accepted, journalled as her, mac-d got it with her actor.
 	code, out := post(signed(good, control.WriteSigNamespace, now.Unix(), "worker_answer", mine, mine), "")
 	if code != 200 || out["status"] != "succeeded" {
 		t.Fatalf("alice answers her worker: HTTP %d %v", code, out)
 	}
-	waitFor(t, 2*time.Second, "m5 took the write", func() bool { return m5.count() == 1 })
-	if m5.writes[0]["actor"] != "wx-alice" || m5.writes[0]["action"] != "worker_answer" {
-		t.Fatalf("m5 was sent %v", m5.writes[0])
+	waitFor(t, 2*time.Second, "mac-d took the write", func() bool { return macD.count() == 1 })
+	if macD.writes[0]["actor"] != "wx-alice" || macD.writes[0]["action"] != "worker_answer" {
+		t.Fatalf("mac-d was sent %v", macD.writes[0])
 	}
 	// …and reads it back through the same door.
 	get := `{"operation_id":"` + out["operation_id"].(string) + `"}`
 	if code, got := post(signed(good, control.WriteSigNamespace, now.Unix(), "operation_get", get, get), ""); code != 200 || got["operation_id"] != out["operation_id"] {
 		t.Fatalf("operation_get by certificate: HTTP %d %v", code, got)
 	}
-	// Bob's worker is not hers: NOT_FOUND, and m4 never hears of it.
+	// Bob's worker is not hers: NOT_FOUND, and mac-c never hears of it.
 	if code, got := post(signed(good, control.WriteSigNamespace, now.Unix(), "worker_reap", bobs, bobs), ""); code != 404 {
 		t.Fatalf("alice reaps bob's worker: HTTP %d %v; want 404", code, got)
 	}
@@ -221,16 +221,16 @@ func TestFleetWriteByCertificate(t *testing.T) {
 	if code, _ := post(signed(good, control.WriteSigNamespace, now.Unix(), "fleet_list", `{}`, `{}`), ""); code != 400 {
 		t.Fatalf("fleet_list through the write door: HTTP %d; want 400", code)
 	}
-	if m4.count() != 0 || m5.count() != 1 {
-		t.Fatalf("a refused signed write reached a node (m5=%d m4=%d)", m5.count(), m4.count())
+	if macC.count() != 0 || macD.count() != 1 {
+		t.Fatalf("a refused signed write reached a node (mac-d=%d mac-c=%d)", macD.count(), macC.count())
 	}
 	// The operator's token through the same door sees every login.
 	if code, got := post(WriteRequest{Tool: "worker_reap", ArgsJSON: bobs}, viewerToken); code != 200 || got["status"] != "accepted" {
 		t.Fatalf("operator reaps bob's worker through the write door: HTTP %d %v", code, got)
 	}
-	waitFor(t, 2*time.Second, "m4 took the operator's reap", func() bool { return m4.count() == 1 })
-	if m4.writes[0]["actor"] != "operator" {
-		t.Fatalf("the operator's write was journalled as %v", m4.writes[0]["actor"])
+	waitFor(t, 2*time.Second, "mac-c took the operator's reap", func() bool { return macC.count() == 1 })
+	if macC.writes[0]["actor"] != "operator" {
+		t.Fatalf("the operator's write was journalled as %v", macC.writes[0]["actor"])
 	}
 	// GET is not a door.
 	resp, err := http.Get(h.http.URL + control.WritePath)
@@ -247,7 +247,7 @@ func TestFleetWriteByCertificate(t *testing.T) {
 // machine. A journalled write under worker:message's authority; the node gets
 // worker_id and the name — nothing else, and no name with a control character.
 func TestFleetWriteRename(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	wid := f4.FleetID + "/issue-2"
 	if !hasString(FleetTools, "worker_rename") || !fleetWriteTools["worker_rename"] || fleetScopeOf["worker_rename"] != "worker:message" {
 		t.Fatal("worker_rename must be a listed write tool under worker:message")
@@ -256,8 +256,8 @@ func TestFleetWriteRename(t *testing.T) {
 	if op["status"] != "accepted" {
 		t.Fatalf("worker_rename = %v; want accepted", op)
 	}
-	waitFor(t, 2*time.Second, "the node took the rename", func() bool { return m4.count() == 1 })
-	env := m4.writes[0]
+	waitFor(t, 2*time.Second, "the node took the rename", func() bool { return macC.count() == 1 })
+	env := macC.writes[0]
 	params, _ := env["params"].(map[string]any)
 	if env["action"] != "worker_rename" || params["worker_id"] != wid || params["name"] != "登录页 · 重做" || len(params) != 2 {
 		t.Fatalf("the node was sent %v", env)
@@ -267,8 +267,8 @@ func TestFleetWriteRename(t *testing.T) {
 	}
 	postFleet(t, h, "worker_rename", map[string]any{"worker_id": wid, "idempotency_key": "no-name"}, 400)
 	postFleet(t, h, "worker_rename", map[string]any{"worker_id": wid, "name": "x", "text": "x", "idempotency_key": "extra"}, 400)
-	if m4.count() != 1 {
-		t.Fatalf("a refused rename reached the node (%d writes)", m4.count())
+	if macC.count() != 1 {
+		t.Fatalf("a refused rename reached the node (%d writes)", macC.count())
 	}
 }
 
@@ -276,7 +276,7 @@ func TestFleetWriteRename(t *testing.T) {
 // on another machine. A journalled write under worker:reap's authority; the node
 // gets worker_id and the policy — fleet_reap_policy.py's grammar, nothing else.
 func TestFleetWriteReapPolicyTool(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	wid := f4.FleetID + "/issue-2"
 	if !hasString(FleetTools, "worker_reap_policy") || !fleetWriteTools["worker_reap_policy"] || fleetScopeOf["worker_reap_policy"] != "worker:reap" {
 		t.Fatal("worker_reap_policy must be a listed write tool under worker:reap")
@@ -289,8 +289,8 @@ func TestFleetWriteReapPolicyTool(t *testing.T) {
 			t.Fatalf("worker_reap_policy %q = %v; want accepted", p, op)
 		}
 	}
-	waitFor(t, 2*time.Second, "the node took every policy", func() bool { return m4.count() == len(good) })
-	env := m4.writes[0]
+	waitFor(t, 2*time.Second, "the node took every policy", func() bool { return macC.count() == len(good) })
+	env := macC.writes[0]
 	params, _ := env["params"].(map[string]any)
 	if env["action"] != "worker_reap_policy" || params["worker_id"] != wid || params["policy"] != "merged" || len(params) != 2 {
 		t.Fatalf("the node was sent %v", env)
@@ -301,8 +301,8 @@ func TestFleetWriteReapPolicyTool(t *testing.T) {
 	}
 	postFleet(t, h, "worker_reap_policy", map[string]any{"worker_id": wid, "idempotency_key": "no-policy"}, 400)
 	postFleet(t, h, "worker_reap_policy", map[string]any{"worker_id": wid, "policy": "keep", "name": "x", "idempotency_key": "extra"}, 400)
-	if m4.count() != len(good) {
-		t.Fatalf("a refused policy reached the node (%d writes)", m4.count())
+	if macC.count() != len(good) {
+		t.Fatalf("a refused policy reached the node (%d writes)", macC.count())
 	}
 }
 
@@ -310,7 +310,7 @@ func TestFleetWriteReapPolicyTool(t *testing.T) {
 // journalled write under worker:message's authority; the node gets worker_id and
 // on|off — a set, never a toggle, so a retry lands the same way.
 func TestFleetWritePinTool(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	wid := f4.FleetID + "/issue-2"
 	if !hasString(FleetTools, "worker_pin") || !fleetWriteTools["worker_pin"] || fleetScopeOf["worker_pin"] != "worker:message" || !nodeWriteTools["worker_pin"] {
 		t.Fatal("worker_pin must be a listed write tool under worker:message, open to a node token")
@@ -321,8 +321,8 @@ func TestFleetWritePinTool(t *testing.T) {
 			t.Fatalf("worker_pin %q = %v; want accepted", p, op)
 		}
 	}
-	waitFor(t, 2*time.Second, "the node took both", func() bool { return m4.count() == 2 })
-	env := m4.writes[0]
+	waitFor(t, 2*time.Second, "the node took both", func() bool { return macC.count() == 2 })
+	env := macC.writes[0]
 	params, _ := env["params"].(map[string]any)
 	if env["action"] != "worker_pin" || params["worker_id"] != wid || params["pin"] != "on" || len(params) != 2 {
 		t.Fatalf("the node was sent %v", env)
@@ -332,8 +332,8 @@ func TestFleetWritePinTool(t *testing.T) {
 	}
 	postFleet(t, h, "worker_pin", map[string]any{"worker_id": wid, "idempotency_key": "no-pin"}, 400)
 	postFleet(t, h, "worker_pin", map[string]any{"worker_id": wid, "pin": "on", "name": "x", "idempotency_key": "extra"}, 400)
-	if m4.count() != 2 {
-		t.Fatalf("a refused pin reached the node (%d writes)", m4.count())
+	if macC.count() != 2 {
+		t.Fatalf("a refused pin reached the node (%d writes)", macC.count())
 	}
 }
 
@@ -342,7 +342,7 @@ func TestFleetWritePinTool(t *testing.T) {
 // a stop + resume of the same conversation); the node gets worker_id and, when
 // named, the account label — nothing else, and no label that is not one argv word.
 func TestFleetWriteSwitch(t *testing.T) {
-	h, _, m4, _, f4 := twoNodes(t)
+	h, _, macC, _, f4 := twoNodes(t)
 	wid := f4.FleetID + "/issue-2"
 	if !hasString(FleetTools, "worker_switch") || !fleetWriteTools["worker_switch"] || fleetScopeOf["worker_switch"] != "worker:stop" {
 		t.Fatal("worker_switch must be a listed write tool under worker:stop")
@@ -351,24 +351,24 @@ func TestFleetWriteSwitch(t *testing.T) {
 	if op["status"] != "accepted" {
 		t.Fatalf("worker_switch = %v; want accepted", op)
 	}
-	waitFor(t, 2*time.Second, "the node took the switch", func() bool { return m4.count() == 1 })
-	env := m4.writes[0]
+	waitFor(t, 2*time.Second, "the node took the switch", func() bool { return macC.count() == 1 })
+	env := macC.writes[0]
 	params, _ := env["params"].(map[string]any)
 	if env["action"] != "worker_switch" || params["worker_id"] != wid || len(params) != 1 {
 		t.Fatalf("the node was sent %v", env)
 	}
 	postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "account": "gmail", "idempotency_key": "s2"}, 200)
-	waitFor(t, 2*time.Second, "the node took the named switch", func() bool { return m4.count() == 2 })
-	params, _ = m4.writes[1]["params"].(map[string]any)
+	waitFor(t, 2*time.Second, "the node took the named switch", func() bool { return macC.count() == 2 })
+	params, _ = macC.writes[1]["params"].(map[string]any)
 	if params["account"] != "gmail" || len(params) != 2 {
-		t.Fatalf("the node was sent %v", m4.writes[1])
+		t.Fatalf("the node was sent %v", macC.writes[1])
 	}
 	for i, bad := range []any{"", "a b", "x;rm", "../x", 3, true} {
 		postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "account": bad, "idempotency_key": fmt.Sprintf("bad-%d", i)}, 400)
 	}
 	postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "text": "x", "idempotency_key": "extra"}, 400)
-	if m4.count() != 2 {
-		t.Fatalf("a refused switch reached the node (%d writes)", m4.count())
+	if macC.count() != 2 {
+		t.Fatalf("a refused switch reached the node (%d writes)", macC.count())
 	}
 }
 
@@ -376,7 +376,7 @@ func TestFleetWriteSwitch(t *testing.T) {
 // under worker:start for one version, so an older client's ⌘N gets an answer —
 // 409 INVALID_STATE 「没有编排」 — and no node is ever sent anything.
 func TestFleetWriteOrchEnsure(t *testing.T) {
-	h, m5, m4, f5, _ := twoNodes(t)
+	h, macD, macC, f5, _ := twoNodes(t)
 	if !hasString(FleetTools, "orch_ensure") || !fleetWriteTools["orch_ensure"] || fleetScopeOf["orch_ensure"] != "worker:start" {
 		t.Fatal("orch_ensure must stay a listed write tool under worker:start for one version")
 	}
@@ -389,20 +389,20 @@ func TestFleetWriteOrchEnsure(t *testing.T) {
 	postFleet(t, h, "orch_ensure", map[string]any{"session": "x", "idempotency_key": "bad"}, 400)
 	postFleet(t, h, "orch_ensure", map[string]any{}, 400)
 	time.Sleep(200 * time.Millisecond)
-	if m4.count() != 0 || m5.count() != 0 {
-		t.Fatalf("orch_ensure reached a node (m4=%d m5=%d)", m4.count(), m5.count())
+	if macC.count() != 0 || macD.count() != 0 {
+		t.Fatalf("orch_ensure reached a node (mac-c=%d mac-d=%d)", macC.count(), macD.count())
 	}
 }
 
 // A node acts for its owner by its OWN token (claude-fleet#3106): the steward
-// on m5 reaps alice's finished worker on m4 with no connection certificate —
-// m5's login and m4's are both alice's — and the same request against bob's
+// on mac-d reaps alice's finished worker on mac-c with no connection certificate —
+// mac-d's login and mac-c's are both alice's — and the same request against bob's
 // worker is NOT_FOUND, never sent. A node token writes the worker tools only;
 // a login that belongs to no person is refused; the hub audit names the machine.
 func TestFleetWriteByNodeToken(t *testing.T) {
 	h := newFleetHarness(t)
-	t5, t4a, t4b := h.enroll(t, "m5-alice"), h.enroll(t, "m4-alice"), h.enroll(t, "m4-bob")
-	for label, hu := range map[string][2]string{"m5-alice": {"m5", "alice"}, "m4-alice": {"m4", "alice"}, "m4-bob": {"m4", "bob"}} {
+	t5, t4a, t4b := h.enroll(t, "mac-d-alice"), h.enroll(t, "mac-c-alice"), h.enroll(t, "mac-c-bob")
+	for label, hu := range map[string][2]string{"mac-d-alice": {"mac-d", "alice"}, "mac-c-alice": {"mac-c", "alice"}, "mac-c-bob": {"mac-c", "bob"}} {
 		ident := model.Identity{AccountUUID: "acct-" + label, Hostname: hu[0], OSUser: hu[1]}
 		if err := h.srv.Store.UpsertAccount(ident, "max", ""); err != nil {
 			t.Fatal(err)
@@ -411,22 +411,22 @@ func TestFleetWriteByNodeToken(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m5 := connectWriteNodeTok(t, h, t5)
+	macD := connectWriteNodeTok(t, h, t5)
 	m4a := connectWriteNodeTok(t, h, t4a)
 	m4b := connectWriteNodeTok(t, h, t4b)
 	f5 := fakeFleet(t, machineA, "alice-fleet", writeRepo, "/u/alice/claude-fleet", 1)
 	f4a := fakeFleet(t, machineC, "alice-fleet", writeRepo, "/u/alice/claude-fleet", 3)
 	f4b := fakeFleet(t, machineB, "bob-fleet", writeRepo, "/u/bob/claude-fleet", 7)
-	m5.beatLoad("m5", "alice", machineA, 1, 1, f5)
-	m4a.beatLoad("m4", "alice", machineC, 1, 1, f4a)
-	m4b.beatLoad("m4", "bob", machineB, 1, 1, f4b)
+	macD.beatLoad("mac-d", "alice", machineA, 1, 1, f5)
+	m4a.beatLoad("mac-c", "alice", machineC, 1, 1, f4a)
+	m4b.beatLoad("mac-c", "bob", machineB, 1, 1, f4b)
 	waitFor(t, 3*time.Second, "three fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 3
 	})
 	now := time.Now()
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	h.srv.Store.AdoptAccount(p, "m5", now)
-	h.srv.Store.AdoptAccount(p, "m4", now)
+	h.srv.Store.AdoptAccount(p, "mac-d", now)
+	h.srv.Store.AdoptAccount(p, "mac-c", now)
 
 	post := func(tool, args, tok string) (int, map[string]any) {
 		b, _ := json.Marshal(WriteRequest{Tool: tool, ArgsJSON: args})
@@ -447,11 +447,11 @@ func TestFleetWriteByNodeToken(t *testing.T) {
 
 	code, out := post("worker_reap", mine, t5)
 	if code != 200 || out["status"] != "accepted" {
-		t.Fatalf("m5's node token reaps alice's worker on m4: HTTP %d %v", code, out)
+		t.Fatalf("mac-d's node token reaps alice's worker on mac-c: HTTP %d %v", code, out)
 	}
-	waitFor(t, 2*time.Second, "m4 (alice) took the reap", func() bool { return m4a.count() == 1 })
+	waitFor(t, 2*time.Second, "mac-c (alice) took the reap", func() bool { return m4a.count() == 1 })
 	if m4a.writes[0]["actor"] != "wx-alice" || m4a.writes[0]["action"] != "worker_reap" {
-		t.Fatalf("m4 was sent %v; want worker_reap journalled as alice", m4a.writes[0])
+		t.Fatalf("mac-c was sent %v; want worker_reap journalled as alice", m4a.writes[0])
 	}
 	get := `{"operation_id":"` + out["operation_id"].(string) + `"}`
 	if code, got := post("operation_get", get, t5); code != 200 || got["operation_id"] != out["operation_id"] {
@@ -472,8 +472,8 @@ func TestFleetWriteByNodeToken(t *testing.T) {
 	if code, got := post("worker_reap", bobs, "not-a-node-token"); code != 401 {
 		t.Fatalf("garbage bearer: HTTP %d %v; want 401", code, got)
 	}
-	if m4b.count() != 0 || m5.count() != 0 {
-		t.Fatalf("a refused node write reached a node (m4 bob=%d m5=%d)", m4b.count(), m5.count())
+	if m4b.count() != 0 || macD.count() != 0 {
+		t.Fatalf("a refused node write reached a node (mac-c bob=%d mac-d=%d)", m4b.count(), macD.count())
 	}
 	log, _ := h.srv.Store.HubAuditLog(20)
 	var saw []string
@@ -482,7 +482,7 @@ func TestFleetWriteByNodeToken(t *testing.T) {
 			saw = append(saw, e.Actor+" "+e.Target+" "+e.Outcome)
 		}
 	}
-	if len(saw) != 2 || !strings.HasPrefix(saw[0], "node:m5/alice ") && !strings.HasPrefix(saw[1], "node:m5/alice ") {
-		t.Fatalf("hub audit of the node writes = %v; want two rows by node:m5/alice (the reap, the refused one)", saw)
+	if len(saw) != 2 || !strings.HasPrefix(saw[0], "node:mac-d/alice ") && !strings.HasPrefix(saw[1], "node:mac-d/alice ") {
+		t.Fatalf("hub audit of the node writes = %v; want two rows by node:mac-d/alice (the reap, the refused one)", saw)
 	}
 }

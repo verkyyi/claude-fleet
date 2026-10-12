@@ -7,7 +7,7 @@ name: newcomer-cn
 
 # A newcomer's whole first time from a 国内 network, every day (issue #2888).
 #
-# Arvin's new machine in China hit three pits in a row (TLS roots #2878, the
+# Alice's new machine in China hit three pits in a row (TLS roots #2878, the
 # placement threshold #2882, the relay dropping under Clash) on a road we had
 # only ever walked from the US. The self-hosted runner in the Shenzhen ACK
 # cluster is a Linux box on the same side of the firewall, so bin/newcomer-cn.sh

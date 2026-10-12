@@ -60,7 +60,7 @@ cat > "$T/fake-shell.sh" <<'EOF'
 #!/bin/bash
 # fleet-shell.sh's seam: the client starts; the hub refuses the session
 case "${1:-}" in
-  home-session) echo 'fleet claude: 没有机器能开 — macmini: load 1.22/core > 0.8' >&2; exit 4 ;;
+  home-session) echo 'fleet claude: 没有机器能开 — mac-c: load 1.22/core > 0.8' >&2; exit 4 ;;
 esac
 exit 0
 EOF
@@ -129,7 +129,7 @@ sh "$P" after place 0
 eq 'D: a success empties the book' 0 "$(nbook)"
 fresh D4
 mkdir -p "$FLEET_SHELL_CACHE/logs"
-printf '2026-10-10T06:16:04Z\tplace\tm5\t-\t\trefused\tno machine can take it\n' > "$FLEET_SHELL_CACHE/logs/place.log"
+printf '2026-10-10T06:16:04Z\tplace\tmac-b\t-\t\trefused\tno machine can take it\n' > "$FLEET_SHELL_CACHE/logs/place.log"
 sh "$P" fail place 1 < /dev/null
 has 'D: no reason given → the last line of the client log' "$(book)" 'refused · no machine can take it'
 
@@ -151,10 +151,10 @@ eq 'E: FLEET_DEBUG_PROMPT=0 records nothing (exec as before)' 0 "$(nbook)"
 # --- F: fleet-connect.py --------------------------------------------------------------
 fresh F
 export FLEET_CLIENT_LOG_DIR="$T/clog"
-python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 m5 < /dev/null > /dev/null 2>&1
+python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 mac-b < /dev/null > /dev/null 2>&1
 eq 'F: a connect that cannot reach the hub is written down' 1 "$(nbook)"
 has 'F: as connect' "$(book)" "$(printf '\tconnect\t')"
-python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 --print m5 < /dev/null > /dev/null 2>&1
+python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 --print mac-b < /dev/null > /dev/null 2>&1
 python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 --pick < /dev/null > /dev/null 2>&1
 eq 'F: --print / --pick are never written down' 1 "$(nbook)"
 unset FLEET_CLIENT_LOG_DIR
@@ -173,7 +173,7 @@ else
   cat > "$T/rv/ssh" <<'EOF'
 #!/bin/bash
 for a in "$@"; do [ "$a" = -O ] && exit 1; done
-echo 'ssh: connect to host m5 port 22: Connection refused' >&2
+echo 'ssh: connect to host mac-b port 22: Connection refused' >&2
 exit 255
 EOF
   chmod +x "$T/rv/ssh"
@@ -182,7 +182,7 @@ EOF
     "env HOME=$HOME TMPDIR=$T/rv/tmp FLEET_CONF_DIR=$FLEET_CONF_DIR FLEET_SHELL_CACHE=$FLEET_SHELL_CACHE \
        FLEET_REMOTE_SSH_CMD=$T/rv/ssh FLEET_REMOTE_VIA_HUB=0 FLEET_SHELL_WARM=0 FLEET_UI_LANG=zh \
        FLEET_DEBUG_STALL_SECS=2 FLEET_DEBUG_CMD=$T/fake-debug \
-       bash $BIN/fleet-remote-view.sh run --shell m5 $wid; sleep 30"
+       bash $BIN/fleet-remote-view.sh run --shell mac-b $wid; sleep 30"
   seen=''
   for _ in $(seq 1 80); do
     "$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null | grep -q '按 d 让远端看一眼' && { seen=1; break; }
@@ -192,7 +192,7 @@ EOF
     || bad "G: no 按 d on the page: $("$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null | grep . | tr '\n' '|')"
   "$REAL_TMUX" -S "$SOCK" send-keys -t '=rv:' d
   for _ in $(seq 1 50); do [ -s "$T/debug.calls" ] && break; sleep 0.1; done
-  has 'G: d runs the report from the page' "$(cat "$T/debug.calls" 2>/dev/null)" 'report --note 正在连接 m5 卡住'
+  has 'G: d runs the report from the page' "$(cat "$T/debug.calls" 2>/dev/null)" 'report --note 正在连接 mac-b 卡住'
   for _ in $(seq 1 30); do
     "$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null | grep -q 'hub.example/s/abc123' && break; sleep 0.1
   done

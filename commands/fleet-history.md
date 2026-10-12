@@ -71,7 +71,7 @@ bash ~/.claude/fleet/bin/fleet-history.sh list $ARGUMENTS
 
 **A fleet hosting 2+ repos** (issue #804): that one call merges every hosted
 repo's ledger into one newest-first list. It opens with a `repos:` legend
-(`cf=verkyyi/claude-fleet · to=verkyyi/tokenledger …`) and each row carries its
+(`cf=verkyyi/claude-fleet · to=dave/tokenledger …`) and each row carries its
 repo's short tag in a column after the key; a filter word also matches the repo
 (`list tokenledger`). Every per-row action below runs against **that row's
 repo** — load it first, then use the `$FLEET_REPO` / `$FLEET_MAIN` it sets:

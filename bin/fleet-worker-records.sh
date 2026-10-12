@@ -6,9 +6,9 @@
 #   fleet-worker-records.sh push  --session S --repo R --key K [--win W] [--evidence-only]
 #   fleet-worker-records.sh fetch --session S --repo R (--epic E | --issue M | --history) [--dir D]
 #
-# WHY. A member the hub placed on m4 captured its 改动前 / 改动后 THERE
-# (fleet-evidence.sh writes under m4's $FLEET_CONF_DIR) and was reaped THERE
-# (its /fleet-history row is m4's ledger). The machine that ran the EPIC read
+# WHY. A member the hub placed on mac-a captured its 改动前 / 改动后 THERE
+# (fleet-evidence.sh writes under mac-a's $FLEET_CONF_DIR) and was reaped THERE
+# (its /fleet-history row is mac-a's ledger). The machine that ran the EPIC read
 # 无证据 for six of twelve members and had one history row of seven. Now the
 # reaping machine uploads what the worker left — every evidence file, its
 # ledger row — to the hub, keyed by the worker_id (issue #1646); the other

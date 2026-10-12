@@ -16,10 +16,10 @@ func intp(n int) *int { return &n }
 // claude-fleet is behind trunk" from what the agent relayed.
 func TestIngest_FleetVersionLandsOnTheEndpointAndSurvivesGuestBatches(t *testing.T) {
 	h := newHarness(t)
-	tok := h.enroll(t, "macmini")
+	tok := h.enroll(t, "mac-e")
 
 	seen := time.Date(2026, 9, 24, 9, 30, 0, 0, time.UTC)
-	login := batchFor("acct-a", "macmini", []string{"c1"}, "/a")
+	login := batchFor("acct-a", "mac-e", []string{"c1"}, "/a")
 	login.AccountOrigin = model.OriginLogin
 	login.FleetVersion = &model.FleetVersion{
 		Head: "0164208", Branch: "master", Behind: nil, Ahead: nil, Fetched: false,
@@ -30,12 +30,12 @@ func TestIngest_FleetVersionLandsOnTheEndpointAndSurvivesGuestBatches(t *testing
 	}
 
 	// A subscription merely seen in a session, then a limits-only batch.
-	guest := batchFor("acct-b", "macmini", []string{"g1"}, "/a")
+	guest := batchFor("acct-b", "mac-e", []string{"g1"}, "/a")
 	guest.AccountOrigin = model.OriginSession
 	if resp := h.push(t, tok, guest); resp.StatusCode != 200 {
 		t.Fatalf("guest: HTTP %d", resp.StatusCode)
 	}
-	limits := batchFor("acct-a", "macmini", nil, "/a")
+	limits := batchFor("acct-a", "mac-e", nil, "/a")
 	limits.AccountOrigin = model.OriginLogin
 	if resp := h.push(t, tok, limits); resp.StatusCode != 200 {
 		t.Fatalf("limits: HTTP %d", resp.StatusCode)

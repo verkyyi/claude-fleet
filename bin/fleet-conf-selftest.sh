@@ -11,7 +11,7 @@
 #   A. degenerate   — a login that is neither client nor node: migrate writes
 #                     nothing, host says 0, the doctor's 能力 row is 基础 · 承载 未开;
 #                     $FLEET_CONF_DIR/fleet.conf is never listed as a fleet
-#   B. node (m4)    — install fleet.conf (hub URL, a viewer TOKEN, CCQUOTA_FLEET,
+#   B. node (mac-a)    — install fleet.conf (hub URL, a viewer TOKEN, CCQUOTA_FLEET,
 #                     aliases) + fleets/fleet/conf + node.env: every key resolves
 #                     byte for byte as before; the token moved to secrets.env
 #                     (0600) and is in no config; each old file kept as .bak; the
@@ -20,14 +20,14 @@
 #   C. client (MacBook) — hub.json {url, token} + shell.conf: FLEET_HOST=0,
 #                     FLEET_HUB_URL in [common], hub.json keeps ONLY its token;
 #                     fleet-connect.py / fleet-login.py read the address there
-#   D. client,node (m5) — all of the above at once: the shell (FLEET_SHELL=1)
+#   D. client,node (mac-b) — all of the above at once: the shell (FLEET_SHELL=1)
 #                     reads [common]+[client] and none of [node]; a node reader
 #                     sees everything as before
 #   E. writes       — the config modal's writer puts a new key INSIDE [node];
 #                     set-hub on a fresh login makes a FLEET_HOST=0 file; the old
 #                     add-role node / set-hub --role node turn hosting on
 #   F. doctor before— an unmigrated node: 能力 INFO, inferred, names the command
-#   G. the old key  — a file that still says FLEET_ROLE (m5 client,node · a laptop
+#   G. the old key  — a file that still says FLEET_ROLE (mac-b client,node · a laptop
 #                     node that only coordinates · a client) is rewritten in place
 #                     by migrate: FLEET_HOST 1 · 0 · 0, every other line kept, and
 #                     until then host / the doctor read the old key (one version);
@@ -116,11 +116,11 @@ rm -f "$CD/fleet.conf"
 # ---------------------------------------------------------------------------- B
 node_fixture() {
   cat > "$INS/fleet.conf" <<'EOF'
-# ~/.claude/fleet/fleet.conf on m4
+# ~/.claude/fleet/fleet.conf on mac-a
 export CCQUOTA_HUB_URL=https://hub.example
 export CCQUOTA_VIEWER_TOKEN=vt-secret-123
 export CCQUOTA_FLEET=1
-FLEET_NODE_ALIASES="macmini=m5 mini2=m4"
+FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a"
 FLEET_SPAWN_NODE=local
 FLEET_SIDEBAR_SOURCE=local
 
@@ -221,7 +221,7 @@ has "D: fleet.settings folded" "$(cat "$CD/fleet.conf")" "FLEET_INSTALL_SYNC=0"
 [ -f "$CD/fleet.settings.bak" ] && [ ! -e "$CD/fleet.settings" ] && ok || bad "D: fleet.settings kept as .bak"
 sv=$(view shell)
 has "D: the shell reads [client]" "$sv" "FLEET_SHELL_WIDTH=34"
-has "D: the shell reads [common]" "$sv" "FLEET_NODE_ALIASES=macmini=m5 mini2=m4"
+has "D: the shell reads [common]" "$sv" "FLEET_NODE_ALIASES=mac-c=mac-b mac-d=mac-a"
 has "D: the shell gets the hub URL" "$sv" "CCQUOTA_HUB_URL=https://hub.example"
 has "D: the shell does NOT read the node's FLEET_SIDEBAR_SOURCE" "$sv" "FLEET_SIDEBAR_SOURCE=<unset>"
 has "D: …nor its CCQUOTA_FLEET" "$sv" "CCQUOTA_FLEET=<unset>"
@@ -263,19 +263,19 @@ hasnt "F: no credential printed" "$l" "vt-secret"
 oldkey() {   # $1 FLEET_ROLE value — a file one version old, in the [common] it had
   printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_ROLE="%s"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG=zh\n' "$1" > "$CD/fleet.conf"
 }
-# m5: client,node with a fleet here
+# mac-b: client,node with a fleet here
 mkbox g1; node_fixture; rm -f "$INS/fleet.conf"; oldkey client,node
-is "G m5: before migrate, host reads the old key" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_ROLE=client,node（旧键）')"
+is "G mac-b: before migrate, host reads the old key" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_ROLE=client,node（旧键）')"
 l=$(cap_line)
-has "G m5: doctor says the old key and the command" "$l" "FLEET_ROLE=client,node（旧键） — 同步时自动改写成 FLEET_HOST"
-has "G m5: …as INFO" "$l" "INFO  能力"
+has "G mac-b: doctor says the old key and the command" "$l" "FLEET_ROLE=client,node（旧键） — 同步时自动改写成 FLEET_HOST"
+has "G mac-b: …as INFO" "$l" "INFO  能力"
 want=$(sed 's/^FLEET_ROLE="client,node"$/FLEET_HOST=1/' "$CD/fleet.conf")
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
-has "G m5: migrate says what it rewrote" "$out" 'FLEET_ROLE="client,node" → FLEET_HOST=1'
-is "G m5: rewritten in place, every other line kept" "$(cat "$CD/fleet.conf")" "$want"
-is "G m5: host 1" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_HOST')"
+has "G mac-b: migrate says what it rewrote" "$out" 'FLEET_ROLE="client,node" → FLEET_HOST=1'
+is "G mac-b: rewritten in place, every other line kept" "$(cat "$CD/fleet.conf")" "$want"
+is "G mac-b: host 1" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_HOST')"
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
-has "G m5: a second migrate is a no-op" "$out" "already one file"
+has "G mac-b: a second migrate is a no-op" "$out" "already one file"
 # a laptop joined only to coordinate: node.env COMPUTE=0, no fleet here
 mkbox g2; oldkey client,node
 printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t\nCCQUOTA_FLEET_COMPUTE=0\n' > "$CD/node.env"; chmod 600 "$CD/node.env"

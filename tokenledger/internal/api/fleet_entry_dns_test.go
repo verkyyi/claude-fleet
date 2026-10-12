@@ -77,21 +77,21 @@ func TestEntryDNSFollowsTheHome(t *testing.T) {
 
 	// Someone else's record in the zone (the fake lists it as if marked):
 	// not under the subdomain, so never touched.
-	if _, err := f.Upsert(ctx, dns.Record{Name: "www", Type: "A", Value: "47.107.245.170", TTL: 600}); err != nil {
+	if _, err := f.Upsert(ctx, dns.Record{Name: "www", Type: "A", Value: "203.0.113.213", TTL: 600}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.srv.Store.SetEntryName(pAlice, "alice", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini", now, true, "23.119.126.213", "2001:db8::5")
+	dnsReach(t, h, "mac-e", now, true, "198.51.100.213", "2001:db8::5")
 
 	if n := h.srv.EntryDNSTick(ctx, now); n != 3 {
 		t.Fatalf("first tick: %d writes, want 3 — alice's two and the guard (%s)", n, dnsZone(f))
 	}
-	want := "A alice.cf 23.119.126.213 | AAAA alice.cf 2001:db8::5 | A www 47.107.245.170"
+	want := "A alice.cf 198.51.100.213 | AAAA alice.cf 2001:db8::5 | A www 203.0.113.213"
 	if got := dnsZone(f); got != want {
 		t.Fatalf("zone: %s\nwant %s", got, want)
 	}
@@ -117,20 +117,20 @@ func TestEntryDNSFollowsTheHome(t *testing.T) {
 		}
 	}
 	t2 := now.Add(5 * time.Minute)
-	dnsReach(t, h, "macmini", t2, true, "23.119.126.99", "2001:db8::5")
+	dnsReach(t, h, "mac-e", t2, true, "198.51.100.99", "2001:db8::5")
 	if n := h.srv.EntryDNSTick(ctx, t2); n != 1 {
 		t.Fatalf("moved: %d writes, want 1", n)
 	}
 	for _, r := range f.Records() {
-		if r.Name == "alice.cf" && r.Type == "A" && (r.ID != aID || r.Value != "23.119.126.99") {
-			t.Fatalf("moved: %+v, want id %s → 23.119.126.99", r, aID)
+		if r.Name == "alice.cf" && r.Type == "A" && (r.ID != aID || r.Value != "198.51.100.99") {
+			t.Fatalf("moved: %+v, want id %s → 198.51.100.99", r, aID)
 		}
 	}
 
 	// The home nobody reaches: nothing changes, the last address stays.
 	before := dnsZone(f)
 	t3 := t2.Add(5 * time.Minute)
-	dnsReach(t, h, "macmini", t3, false, "23.119.126.99", "2001:db8::5")
+	dnsReach(t, h, "mac-e", t3, false, "198.51.100.99", "2001:db8::5")
 	if n := h.srv.EntryDNSTick(ctx, t3); n != 0 || dnsZone(f) != before {
 		t.Fatalf("unreachable: %d writes, zone %s (was %s)", n, dnsZone(f), before)
 	}
@@ -142,27 +142,27 @@ func TestEntryDNSFollowsTheHome(t *testing.T) {
 
 	// Someone edits the record by hand: put back, and said so.
 	t4 := t3.Add(5 * time.Minute)
-	dnsReach(t, h, "macmini", t4, true, "23.119.126.99", "2001:db8::5")
+	dnsReach(t, h, "mac-e", t4, true, "198.51.100.99", "2001:db8::5")
 	h.srv.EntryDNSTick(ctx, t4)
 	f.Set(aID, "1.2.3.4")
 	if n := h.srv.EntryDNSTick(ctx, t4.Add(time.Minute)); n != 1 {
 		t.Fatalf("hand edit: %d writes", n)
 	}
-	if got := dnsAudits(t, h, pAlice); len(got) == 0 || !strings.Contains(got[0], "有人手改") || !strings.Contains(got[0], "1.2.3.4 → 23.119.126.99") {
+	if got := dnsAudits(t, h, pAlice); len(got) == 0 || !strings.Contains(got[0], "有人手改") || !strings.Contains(got[0], "1.2.3.4 → 198.51.100.99") {
 		t.Fatalf("hand edit audit: %q", got)
 	}
 
 	// The person moves their home by hand: the next tick points at it — an
 	// IPv4-only home, so the AAAA goes.
 	t5 := t4.Add(5 * time.Minute)
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini-m4", Login: "alice", SetBy: "t", SetAt: t5}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e-mac-c", Login: "alice", SetBy: "t", SetAt: t5}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini-m4", t5, true, "23.119.126.77")
+	dnsReach(t, h, "mac-e-mac-c", t5, true, "198.51.100.77")
 	if n := h.srv.EntryDNSTick(ctx, t5); n != 2 {
 		t.Fatalf("new home: %d writes, want 2 (%s)", n, dnsZone(f))
 	}
-	if got, want := dnsZone(f), "A alice.cf 23.119.126.77 | A www 47.107.245.170"; got != want {
+	if got, want := dnsZone(f), "A alice.cf 198.51.100.77 | A www 203.0.113.213"; got != want {
 		t.Fatalf("new home: %s\nwant %s", got, want)
 	}
 	for _, line := range dnsAudits(t, h, pAlice)[:2] {
@@ -177,13 +177,13 @@ func TestEntryDNSFollowsTheHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.srv.EntryDNSTick(ctx, t6)
-	if got, want := dnsZone(f), "A alice.cf 23.119.126.77 | A alice2.cf 23.119.126.77 | A www 47.107.245.170"; got != want {
+	if got, want := dnsZone(f), "A alice.cf 198.51.100.77 | A alice2.cf 198.51.100.77 | A www 203.0.113.213"; got != want {
 		t.Fatalf("renamed: %s\nwant %s", got, want)
 	}
 	t7 := t6.Add(store.EntryNameKeep + time.Hour)
-	dnsReach(t, h, "macmini-m4", t7, true, "23.119.126.77")
+	dnsReach(t, h, "mac-e-mac-c", t7, true, "198.51.100.77")
 	h.srv.EntryDNSTick(ctx, t7)
-	if got, want := dnsZone(f), "A alice2.cf 23.119.126.77 | A www 47.107.245.170"; got != want {
+	if got, want := dnsZone(f), "A alice2.cf 198.51.100.77 | A www 203.0.113.213"; got != want {
 		t.Fatalf("past seven days: %s\nwant %s", got, want)
 	}
 }
@@ -199,16 +199,16 @@ func TestEntryDNSRetriesAFailedWrite(t *testing.T) {
 	if _, err := h.srv.Store.SetEntryName(pAlice, "alice", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini", now, true, "23.119.126.213")
+	dnsReach(t, h, "mac-e", now, true, "198.51.100.213")
 	f.Fail = errors.New("list down")
 	if n := h.srv.EntryDNSTick(ctx, now); n != 0 || len(f.Records()) != 0 {
 		t.Fatalf("list down: %d writes", n)
 	}
 	h.srv.EntryDNSTick(ctx, now)
-	if got := dnsZone(f); got != "A alice.cf 23.119.126.213" {
+	if got := dnsZone(f); got != "A alice.cf 198.51.100.213" {
 		t.Fatalf("after: %s", got)
 	}
 	if got := dnsAudits(t, h, pAlice); len(got) != 1 {
@@ -225,7 +225,7 @@ func TestEntryDNSOffMakesNoCall(t *testing.T) {
 		t.Fatal("FromEnv on with nothing set")
 	}
 	t.Setenv("CCQUOTA_DNS_DP_ID", "1")
-	t.Setenv("CCQUOTA_DNS_DOMAIN", "24haowan.com")
+	t.Setenv("CCQUOTA_DNS_DOMAIN", "example.com")
 	t.Setenv("CCQUOTA_DNS_SUBDOMAIN", "cf")
 	if _, ok := dns.FromEnv(); ok {
 		t.Fatal("FromEnv on without the key")
@@ -236,10 +236,10 @@ func TestEntryDNSOffMakesNoCall(t *testing.T) {
 	if _, err := h.srv.Store.SetEntryName(pAlice, "alice", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini", now, true, "23.119.126.213")
+	dnsReach(t, h, "mac-e", now, true, "198.51.100.213")
 	// Off: RunEntryDNS returns at once, a tick does nothing.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -307,9 +307,9 @@ func TestEntryPageHomeUnreachableFromOutside(t *testing.T) {
 	entryOpenGrace = 0
 	t.Cleanup(func() { entryOpenGrace = old })
 	page("past the grace", "入口没在听", "正在为你打开")
-	dnsReach(t, h, home.Machine, time.Now().UTC(), false, "23.119.126.213")
+	dnsReach(t, h, home.Machine, time.Now().UTC(), false, "198.51.100.213")
 	page("dialled, nobody answers", "没有回应：路由器还没把端口 22022 转到")
-	dnsReach(t, h, home.Machine, time.Now().UTC(), true, "23.119.126.213")
+	dnsReach(t, h, home.Machine, time.Now().UTC(), true, "198.51.100.213")
 	page("reachable", "外面连得上", "外面还连不上", `http-equiv="refresh"`)
 }
 
@@ -321,23 +321,23 @@ func TestEntryDNSPortIsTheHomes(t *testing.T) {
 	h := entryHarness(t)
 	f := dns.NewFake()
 	h.srv.EntryDNS = NewEntryDNS(f, "cf")
-	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.24haowan.com", time.Now())
+	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.example.com", time.Now())
 	keysPost(t, h, pAlice, "do", "name", "name", "alice")
 	now := time.Now().UTC()
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini-m4", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e-mac-c", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini", now, true, "23.119.126.213:22122")
-	dnsReach(t, h, "macmini-m4", now, true, "23.119.126.213:22123", "[2001:db8::9]:22022")
+	dnsReach(t, h, "mac-e", now, true, "198.51.100.213:22122")
+	dnsReach(t, h, "mac-e-mac-c", now, true, "198.51.100.213:22123", "[2001:db8::9]:22022")
 	h.srv.EntryDNSTick(context.Background(), now)
-	if got, want := dnsZone(f), "A alice.cf 23.119.126.213"; got != want {
+	if got, want := dnsZone(f), "A alice.cf 198.51.100.213"; got != want {
 		t.Fatalf("zone: %s\nwant %s (no AAAA on another port)", got, want)
 	}
 	_, body, _ := keysPage(t, h, pAlice, "?step=4", nil)
 	if !strings.Contains(body, `<span class="v">22123</span>`) {
-		t.Fatalf("home macmini-m4: the port is not 22123:\n%s", body)
+		t.Fatalf("home mac-e-mac-c: the port is not 22123:\n%s", body)
 	}
-	_, body, _ = keysPage(t, h, pAlice, "?move=macmini&login=alice", nil)
+	_, body, _ = keysPage(t, h, pAlice, "?move=mac-e&login=alice", nil)
 	if !strings.Contains(body, "端口改成 <b>22122</b>（原来 22123）") {
 		t.Fatalf("move sheet does not say the port changes:\n%s", body)
 	}

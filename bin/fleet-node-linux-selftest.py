@@ -244,14 +244,14 @@ class LinuxNode(unittest.TestCase):
                     patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
                     patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'), patch.object(m, 'devnet'), \
                     patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
-                    patch.object(m, 'tenants', return_value={'24haowan': {}, 'drill2': {}}), \
+                    patch.object(m, 'tenants', return_value={'24acme': {}, 'drill2': {}}), \
                     patch.object(m, 'bootstrap', side_effect=boot), patch.object(m, 'as_tenant'), \
                     patch.object(m, 'login_open') as opened, patch.object(m, 'ensure_login') as ensured, \
                     patch.object(m.subprocess, 'run', side_effect=run_cmd), patch.object(m.signal, 'signal'):
                 (state / 'ssh').mkdir(parents=True)
                 (state / 'ssh/ssh_host_ed25519_key').write_text('k')
                 m.foreground(Mock(login='none', hub='h', join_file='/run/fleet-join/login', machine_join_file=''))
-            self.assertEqual(booted, ['24haowan', 'drill2'])
+            self.assertEqual(booted, ['24acme', 'drill2'])
             install = [c for c in installs if any(str(x).endswith('fleet-node-install.sh') for x in c)]
             self.assertEqual(len(install), 1)
             self.assertNotIn('--login', install[0])
@@ -285,15 +285,15 @@ class LinuxNode(unittest.TestCase):
             state, cred, lib = d / 'state', d / 'cred', d / 'lib'
             (state / 'linux-tenants').mkdir(parents=True)
             (state / 'machine.env').write_text('CCQUOTA_HUB_URL=https://hub.example/\n')
-            for i, login in enumerate(('fleet', '24haowan', 'fresh')):
+            for i, login in enumerate(('fleet', '24acme', 'fresh')):
                 (state / 'linux-tenants' / (login + '.json')).write_text(json.dumps(
                     {'login': login, 'uid': 10002 + i, 'gid': 10002 + i}))
-            for login in ('fleet', '24haowan'):
+            for login in ('fleet', '24acme'):
                 (cred / login).mkdir(parents=True)
                 (cred / login / 'node.env').write_text(
                     'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t-%s\n' % login)
             lib.mkdir()
-            (lib / '24haowan.conf').write_text('FLEET_HUB_URL=https://hub.example\nFLEET_CRED_CENTRAL_URL=https://c.example\n')
+            (lib / '24acme.conf').write_text('FLEET_HUB_URL=https://hub.example\nFLEET_CRED_CENTRAL_URL=https://c.example\n')
             s = Mock()
             s.Paths.return_value = Mock(state=str(state))
             c = Mock(ROOT_BASE=str(cred), LIB=str(lib))
@@ -306,18 +306,18 @@ class LinuxNode(unittest.TestCase):
             with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
                     patch.object(m, 'private_write', side_effect=write):
                 m.route_heal(args)
-                conf = m.env_read(lib / '24haowan.conf')
+                conf = m.env_read(lib / '24acme.conf')
                 self.assertEqual(conf['FLEET_CRED_RELAY_URL'], 'https://relay.example')
                 self.assertEqual(conf['FLEET_CRED_ALLOW_HOSTS'], 'hub.example relay.example')
                 self.assertEqual(conf['FLEET_HUB_URL'], 'https://hub.example')
                 self.assertEqual(conf['FLEET_CRED_CENTRAL_URL'], 'https://c.example')
                 self.assertEqual(m.env_read(lib / 'fleet.conf')['FLEET_CRED_RELAY_URL'], 'https://relay.example')
                 self.assertFalse((lib / 'fresh.conf').exists())
-                before = (lib / '24haowan.conf').stat().st_mtime_ns
+                before = (lib / '24acme.conf').stat().st_mtime_ns
                 with patch.object(m, 'private_write') as pw:
                     m.route_heal(args)
                     pw.assert_not_called()
-                self.assertEqual((lib / '24haowan.conf').stat().st_mtime_ns, before)
+                self.assertEqual((lib / '24acme.conf').stat().st_mtime_ns, before)
         src = (BIN / 'fleet-node-linux.py').read_text()
         fg = src[src.index('def foreground('):src.index('class Loop(')]
         self.assertLess(fg.index('boot()'), fg.index('lib_owner_heal()'))
@@ -865,10 +865,10 @@ class LinuxNode(unittest.TestCase):
         plain = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']['spec']
         self.assertFalse([e for e in plain['containers'][0]['env'] if e['name'].startswith(('FLEET_GIT', 'FLEET_CN'))])
         pod = json.loads(subprocess.check_output(base + [
-            '--github-proxy', 'http://47.131.114.67:3128', '--git-mirror', mirror, '--cn-mirrors',
+            '--github-proxy', 'http://203.0.113.211:3128', '--git-mirror', mirror, '--cn-mirrors',
             '--egress-allow', '172.21.5.6:9418']))['items'][-1]['spec']['template']['spec']
         env = {e['name']: e['value'] for e in pod['containers'][0]['env']}
-        self.assertEqual(env['FLEET_GITHUB_PROXY'], 'http://47.131.114.67:3128')
+        self.assertEqual(env['FLEET_GITHUB_PROXY'], 'http://203.0.113.211:3128')
         self.assertEqual(env['FLEET_GIT_MIRRORS'], mirror)
         self.assertEqual(env['FLEET_CN_MIRRORS'], '1')
         v4 = [l for l in pod['initContainers'][0]['command'][-1].splitlines() if l.startswith('-A OUTPUT')]
@@ -890,7 +890,7 @@ class LinuxNode(unittest.TestCase):
 
             def cfg(*args):
                 return subprocess.check_output(['git'] + list(args), env=git, cwd=d, text=True).strip()
-            self.assertEqual(cfg('config', '--system', 'http.https://github.com/.proxy'), 'http://47.131.114.67:3128')
+            self.assertEqual(cfg('config', '--system', 'http.https://github.com/.proxy'), 'http://203.0.113.211:3128')
             subprocess.check_call(['git', 'init', '-q', 'r'], env=git, cwd=d)
             d2 = os.path.join(d, 'r')
             subprocess.check_call(['git', 'remote', 'add', 'origin', 'https://github.com/Org/mono.git'], env=git, cwd=d2)
@@ -900,7 +900,7 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(get('--push', 'origin'), 'https://github.com/Org/mono.git')
             self.assertEqual(get('other'), 'https://github.com/Org/other.git')
             shell = Path(ef).read_text()
-            for line in ('FLEET_GITHUB_PROXY=http://47.131.114.67:3128', 'npm_config_registry=https://registry.npmmirror.com',
+            for line in ('FLEET_GITHUB_PROXY=http://203.0.113.211:3128', 'npm_config_registry=https://registry.npmmirror.com',
                          'GOPROXY=https://goproxy.cn,direct', 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node'):
                 self.assertIn(line + '\n', shell)
             # what every shell sees, and a login's own value still wins
@@ -1196,10 +1196,10 @@ class LinuxNode(unittest.TestCase):
             p = s.Paths()
             p.state = d
             self.assertEqual(s.entry_route(p, {}), ('47.1.2.3', 22022))
-            cfg = s.entry_config(s.EntryPaths(p), 22022, ['24haowan'])
+            cfg = s.entry_config(s.EntryPaths(p), 22022, ['24acme'])
         lines = set(cfg.splitlines())
         for want in ('Port 22022', 'AuthenticationMethods publickey', 'PasswordAuthentication no',
-                     'KbdInteractiveAuthentication no', 'PermitRootLogin no', 'AllowUsers 24haowan'):
+                     'KbdInteractiveAuthentication no', 'PermitRootLogin no', 'AllowUsers 24acme'):
             self.assertIn(want, lines)
         self.assertIn('AuthorizedKeysFile %s/entry/keys/%%u' % d, lines)
         self.assertFalse([l for l in lines if 'authorized_keys' in l and not l.startswith('#')])
@@ -1562,13 +1562,13 @@ class LinuxTenants(unittest.TestCase):
         """linux-uid-reuse: same number after a restart, a removed number never
         handed out again, a home owned by anyone else stops the boot."""
         with FakeOS(self.m, self.tmp.name) as f:
-            a = f.open('24haowan')
+            a = f.open('24acme')
             b = f.open('drill2')
             self.assertEqual((a.pw_uid, b.pw_uid), (10002, 10003))
-            self.assertTrue(any(c[0] == 'useradd' and c[-1] == '24haowan' for c in f.calls))
+            self.assertTrue(any(c[0] == 'useradd' and c[-1] == '24acme' for c in f.calls))
             f.reboot()
             self.m.boot()
-            self.assertEqual(f.users['24haowan'][0], 10002)
+            self.assertEqual(f.users['24acme'][0], 10002)
             self.assertEqual(f.users['drill2'][0], 10003)
             self.assertEqual(f.remove('drill2'), 0)
             c = f.open('drill3')
@@ -1577,30 +1577,30 @@ class LinuxTenants(unittest.TestCase):
             # the same name back is a NEW person: a new number, never the retired one
             self.assertEqual(f.open('drill2').pw_uid, 10005)
             # a wrong owner on a home stops the boot; nothing is chowned
-            f.owner[f.paths.users + '/24haowan'] = (10004, 10004)
+            f.owner[f.paths.users + '/24acme'] = (10004, 10004)
             f.reboot()
             chowns = dict(f.owner)
             with self.assertRaisesRegex(ValueError, 'nothing chowned'):
                 self.m.boot()
             self.assertEqual(f.owner, chowns)
-            self.assertNotIn('24haowan', f.users)
+            self.assertNotIn('24acme', f.users)
 
     def test_login_locked(self):
         """linux-login-locked (#3304): the entry sshd runs `UsePAM no`, which turns
         a LOCKED account (`!`) away even with its key — open and boot leave `*`,
         and a login an older open left locked is put right by the next boot."""
         with FakeOS(self.m, self.tmp.name) as f:
-            f.open('24haowan')
-            self.assertEqual(f.shadow['24haowan'], '*')
-            f.shadow['24haowan'] = '!'          # what an older open / the image left
+            f.open('24acme')
+            self.assertEqual(f.shadow['24acme'], '*')
+            f.shadow['24acme'] = '!'          # what an older open / the image left
             self.m.boot()
-            self.assertEqual(f.shadow['24haowan'], '*')
+            self.assertEqual(f.shadow['24acme'], '*')
             f.reboot()
             self.m.boot()
-            self.assertEqual(f.shadow['24haowan'], '*')
-            f.shadow['24haowan'] = '!'
-            f.open('24haowan')                  # an open of the existing login heals it too
-            self.assertEqual(f.shadow['24haowan'], '*')
+            self.assertEqual(f.shadow['24acme'], '*')
+            f.shadow['24acme'] = '!'
+            f.open('24acme')                  # an open of the existing login heals it too
+            self.assertEqual(f.shadow['24acme'], '*')
             n = len(f.calls)
             self.m.boot()                       # already `*`: nothing to change
             self.assertFalse(any(c[0] == 'usermod' for c in f.calls[n:]))
@@ -1649,28 +1649,28 @@ class LinuxTenants(unittest.TestCase):
         """linux-tenant-cross-read: every home is 0700 after open and boot, and a
         new login never takes over a home another number owns."""
         with FakeOS(self.m, self.tmp.name) as f:
-            f.open('24haowan')
+            f.open('24acme')
             f.open('drill2')
             homes = Path(f.paths.users)
             os.chmod(homes / 'drill2', 0o755)       # someone widened it
             f.reboot()
             self.m.boot()
-            for h in ('24haowan', 'drill2'):
+            for h in ('24acme', 'drill2'):
                 self.assertEqual((homes / h).stat().st_mode & 0o777, 0o700, h)
             (homes / 'drill9').mkdir()
-            f.owner[str(homes / 'drill9')] = (10002, 10002)     # 24haowan's files
+            f.owner[str(homes / 'drill9')] = (10002, 10002)     # 24acme's files
             with self.assertRaisesRegex(ValueError, 'nothing chowned'):
                 f.open('drill9')
             self.assertEqual(f.owner[str(homes / 'drill9')], (10002, 10002))
 
     def test_names_and_exit_codes(self):
         m = self.m
-        for good in ('24haowan', 'fleet', 'drill2'):
+        for good in ('24acme', 'fleet', 'drill2'):
             self.assertTrue(m.valid_name(good), good)
         for bad in ('1234', 'a', 'root', 'Bob', '-x', 'a_b', 'x' * 17):
             self.assertFalse(m.valid_name(bad), bad)
         self.assertFalse(m.valid_full_name('a:b'))
-        self.assertTrue(m.valid_full_name('Arvin Wang'))
+        self.assertTrue(m.valid_full_name('Erin Wang'))
         with FakeOS(m, self.tmp.name) as f:
             f.users['admin1'] = (20000, '/home/admin1')
             f.sup.tenant_privileges = lambda login: (['sudo -l: (ALL) ALL'], True)
@@ -1707,12 +1707,12 @@ class LinuxTenants(unittest.TestCase):
         op again goes on, any other op (or a hand) meets 'exists' (3)."""
         m = self.m
         with FakeOS(m, self.tmp.name) as f:
-            m.ensure_login(f.sup, f.paths, '24haowan', op='ab12')
-            decl = json.loads(m.tenant_path(f.paths, '24haowan').read_text())
+            m.ensure_login(f.sup, f.paths, '24acme', op='ab12')
+            decl = json.loads(m.tenant_path(f.paths, '24acme').read_text())
             self.assertEqual(decl['op'], 'ab12')
-            m.ensure_login(f.sup, f.paths, '24haowan', op='ab12')       # a re-ask, a resume
+            m.ensure_login(f.sup, f.paths, '24acme', op='ab12')       # a re-ask, a resume
             with self.assertRaises(m.Refuse) as e:
-                m.ensure_login(f.sup, f.paths, '24haowan', op='cd34')
+                m.ensure_login(f.sup, f.paths, '24acme', op='cd34')
             self.assertEqual(e.exception.rc, 3)
             f.open('drill2')                                            # by hand: no op
             with self.assertRaises(m.Refuse) as e:

@@ -63,20 +63,20 @@ func holder(t *testing.T, h *harness, endpoint string) string {
 // replica keeps receiving; a node gone everywhere is still UNAVAILABLE.
 func TestNodeRouteTwoReplicas(t *testing.T) {
 	ha, hb := newReplicaPair(t)
-	m5 := connectWriteNode(t, ha, "m5") // held by hub-a
-	m4 := connectWriteNode(t, hb, "m4") // held by hub-b
-	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
-	m5.beatLoad("m5", "verk", machineA, 1, 1, f5)
-	m4.beatLoad("m4", "verk", machineB, 1, 1, f4)
+	macD := connectWriteNode(t, ha, "mac-d") // held by hub-a
+	macC := connectWriteNode(t, hb, "mac-c") // held by hub-b
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 1, 1, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
 	for _, h := range []*harness{ha, hb} {
 		h := h
 		waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 			return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 		})
 	}
-	if holder(t, ha, "ep_m5") != "hub-a" || holder(t, ha, "ep_m4") != "hub-b" {
-		t.Fatalf("link rows: m5=%q m4=%q; want hub-a and hub-b", holder(t, ha, "ep_m5"), holder(t, ha, "ep_m4"))
+	if holder(t, ha, "ep_mac-d") != "hub-a" || holder(t, ha, "ep_mac-c") != "hub-b" {
+		t.Fatalf("link rows: mac-d=%q mac-c=%q; want hub-a and hub-b", holder(t, ha, "ep_mac-d"), holder(t, ha, "ep_mac-c"))
 	}
 
 	// The roster of either replica shows both connected.
@@ -106,26 +106,26 @@ func TestNodeRouteTwoReplicas(t *testing.T) {
 	before := ha.srv.forwarded.Load() + hb.srv.forwarded.Load()
 	got := map[string]int{}
 	for _, from := range []*harness{ha, hb} {
-		got[from.srv.Replica.Name+"→m5"] = send("m5", from, f5)
-		got[from.srv.Replica.Name+"→m4"] = send("m4", from, f4)
+		got[from.srv.Replica.Name+"→mac-d"] = send("mac-d", from, f5)
+		got[from.srv.Replica.Name+"→mac-c"] = send("mac-c", from, f4)
 	}
-	t.Logf("送达（两份入口 × 两台机器 × %d 次派活）：hub-a→m5 %d · hub-a→m4 %d · hub-b→m5 %d · hub-b→m4 %d",
-		perPair, got["hub-a→m5"], got["hub-a→m4"], got["hub-b→m5"], got["hub-b→m4"])
+	t.Logf("送达（两份入口 × 两台机器 × %d 次派活）：hub-a→mac-d %d · hub-a→mac-c %d · hub-b→mac-d %d · hub-b→mac-c %d",
+		perPair, got["hub-a→mac-d"], got["hub-a→mac-c"], got["hub-b→mac-d"], got["hub-b→mac-c"])
 	for k, n := range got {
 		if n != perPair {
 			t.Errorf("%s: %d/%d delivered", k, n, perPair)
 		}
 	}
-	if m5.count() != 2*perPair || m4.count() != 2*perPair {
-		t.Fatalf("writes the nodes received: m5=%d m4=%d; want %d each", m5.count(), m4.count(), 2*perPair)
+	if macD.count() != 2*perPair || macC.count() != 2*perPair {
+		t.Fatalf("writes the nodes received: mac-d=%d mac-c=%d; want %d each", macD.count(), macC.count(), 2*perPair)
 	}
 	if fw := ha.srv.forwarded.Load() + hb.srv.forwarded.Load() - before; fw != 2*perPair {
 		t.Fatalf("%d calls forwarded; want exactly the %d that landed on the replica without the link", fw, 2*perPair)
 	}
 
-	// A live read forwards too: hub-a asks m4 (on hub-b) for an operation.
+	// A live read forwards too: hub-a asks mac-c (on hub-b) for an operation.
 	op := postFleet(t, ha, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "idempotency_key": "read-1"}, 200)
-	res, machine, err := ha.srv.NodeRead(context.Background(), "ep_m4", "operation_get",
+	res, machine, err := ha.srv.NodeRead(context.Background(), "ep_mac-c", "operation_get",
 		map[string]any{"operation_id": op["operation_id"]})
 	if err != nil {
 		t.Fatalf("NodeRead through hub-b: %v", err)
@@ -136,25 +136,25 @@ func TestNodeRouteTwoReplicas(t *testing.T) {
 		t.Fatalf("forwarded read answered %s (machine %q)", res, machine)
 	}
 
-	// m4 drops hub-b and comes back through hub-a.
-	m4.conn.Close(websocket.StatusNormalClosure, "moving")
-	back := connectWriteNodeTok(t, ha, ha.tokens["m4"])
-	waitFor(t, 3*time.Second, "m4 held by hub-a", func() bool {
-		return ha.srv.nodes.get("ep_m4") != nil && hb.srv.nodes.get("ep_m4") == nil && holder(t, ha, "ep_m4") == "hub-a"
+	// mac-c drops hub-b and comes back through hub-a.
+	macC.conn.Close(websocket.StatusNormalClosure, "moving")
+	back := connectWriteNodeTok(t, ha, ha.tokens["mac-c"])
+	waitFor(t, 3*time.Second, "mac-c held by hub-a", func() bool {
+		return ha.srv.nodes.get("ep_mac-c") != nil && hb.srv.nodes.get("ep_mac-c") == nil && holder(t, ha, "ep_mac-c") == "hub-a"
 	})
 	moved := 0
 	for _, from := range []*harness{ha, hb} {
-		moved += send("m4-back", from, f4)
+		moved += send("mac-c-back", from, f4)
 	}
 	t.Logf("重连到另一份后：送达 %d/%d", moved, 2*perPair)
 	if back.count() != 2*perPair {
-		t.Fatalf("after the reconnect m4 received %d; want %d", back.count(), 2*perPair)
+		t.Fatalf("after the reconnect mac-c received %d; want %d", back.count(), 2*perPair)
 	}
 
 	// Gone from both: refused before anything is journalled, as before.
 	back.conn.Close(websocket.StatusNormalClosure, "gone")
-	waitFor(t, 3*time.Second, "m4 gone", func() bool {
-		return ha.srv.nodes.get("ep_m4") == nil && holder(t, ha, "ep_m4") == ""
+	waitFor(t, 3*time.Second, "mac-c gone", func() bool {
+		return ha.srv.nodes.get("ep_mac-c") == nil && holder(t, ha, "ep_mac-c") == ""
 	})
 	for _, from := range []*harness{ha, hb} {
 		e := postFleet(t, from, "worker_start", map[string]any{"issue": 9, "fleet_id": f4.FleetID,
@@ -170,13 +170,13 @@ func TestNodeRouteTwoReplicas(t *testing.T) {
 // NOT_HERE releases its row.
 func TestNodeRouteHolderGone(t *testing.T) {
 	ha, hb := newReplicaPair(t)
-	m4 := connectWriteNode(t, hb, "m4")
-	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
-	m4.beatLoad("m4", "verk", machineB, 1, 1, f4)
+	macC := connectWriteNode(t, hb, "mac-c")
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
 	waitFor(t, 3*time.Second, "fleet registered", func() bool {
 		return len(getFleet(t, ha, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 1
 	})
-	row, _, _ := ha.srv.Store.NodeConnOf("ep_m4")
+	row, _, _ := ha.srv.Store.NodeConnOf("ep_mac-c")
 
 	// The holder's address no longer answers.
 	dead := row
@@ -188,8 +188,8 @@ func TestNodeRouteHolderGone(t *testing.T) {
 	if op["status"] != "failed" || !strings.Contains(fmt.Sprint(op["result"]), "UNAVAILABLE") {
 		t.Fatalf("write through an unreachable holder = %v; want failed UNAVAILABLE", op)
 	}
-	if m4.count() != 0 {
-		t.Fatalf("m4 received %d writes", m4.count())
+	if macC.count() != 0 {
+		t.Fatalf("mac-c received %d writes", macC.count())
 	}
 
 	// A holder that answers but has no such link: NOT_HERE, row released.
@@ -198,16 +198,16 @@ func TestNodeRouteHolderGone(t *testing.T) {
 	if err := ha.srv.Store.ClaimNodeConn(gone); err != nil {
 		t.Fatal(err)
 	}
-	m4.conn.Close(websocket.StatusNormalClosure, "gone")
-	waitFor(t, 3*time.Second, "hub-b dropped m4", func() bool { return hb.srv.nodes.get("ep_m4") == nil })
-	if got := holder(t, ha, "ep_m4"); got != "hub-x" {
+	macC.conn.Close(websocket.StatusNormalClosure, "gone")
+	waitFor(t, 3*time.Second, "hub-b dropped mac-c", func() bool { return hb.srv.nodes.get("ep_mac-c") == nil })
+	if got := holder(t, ha, "ep_mac-c"); got != "hub-x" {
 		t.Fatalf("hub-b's drop deleted a row it did not write (holder %q)", got)
 	}
 	op = postFleet(t, ha, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "idempotency_key": "gone-1"}, 200)
 	if op["status"] != "failed" {
 		t.Fatalf("write to a holder without the link = %v; want failed", op)
 	}
-	if got := holder(t, ha, "ep_m4"); got != "" {
+	if got := holder(t, ha, "ep_mac-c"); got != "" {
 		t.Fatalf("NOT_HERE left the stale row (holder %q)", got)
 	}
 }
@@ -235,7 +235,7 @@ func TestNodeRouteNeedsReplicaToken(t *testing.T) {
 // EPIC #2119 共同约定 1: a single hub (no CCQUOTA_REPLICA) has no route, no
 // table, and never forwards — every write goes down its own link as before.
 func TestNodeRouteSingleNeverForwards(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
+	h, macD, macC, f5, f4 := twoNodes(t)
 	if h.srv.Replica != nil {
 		t.Fatal("the single-hub harness is a replica")
 	}
@@ -246,8 +246,8 @@ func TestNodeRouteSingleNeverForwards(t *testing.T) {
 			t.Fatalf("single-hub write: %v", op)
 		}
 	}
-	if m5.count() != 1 || m4.count() != 1 {
-		t.Fatalf("writes: m5=%d m4=%d", m5.count(), m4.count())
+	if macD.count() != 1 || macC.count() != 1 {
+		t.Fatalf("writes: mac-d=%d mac-c=%d", macD.count(), macC.count())
 	}
 	if n := h.srv.forwarded.Load(); n != 0 {
 		t.Fatalf("a single hub forwarded %d calls", n)

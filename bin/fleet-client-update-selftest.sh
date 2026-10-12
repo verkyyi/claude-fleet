@@ -218,8 +218,8 @@ case "$out" in *能力*基础*) ok "H …and the 能力 row (#1806)" ;; *) bad "
 install_client v1; cp "$BIN/fleet" "$ROOT/bin/fleet"; hub v2 1 1
 mkdir -p "$ROOT.next/bin"; cp "$HUBD/new/"* "$ROOT.next/bin/"; chmod +x "$ROOT.next/bin/"*
 printf 'version=v2\ncompat=1\ncommit=beef002\n' > "$ROOT.next/.client-version"; : > "$ROOT.next/.staged"
-out=$(sh "$ROOT/bin/fleet" m4 2>&1)
-case "$out" in *已更新到\ beef002*"NEW m4"*) ok "I \`fleet m4\`: switched, then the NEW fleet ran with the same args" ;;
+out=$(sh "$ROOT/bin/fleet" mac-a 2>&1)
+case "$out" in *已更新到\ beef002*"NEW mac-a"*) ok "I \`fleet mac-a\`: switched, then the NEW fleet ran with the same args" ;;
   *) bad "I bin/fleet: $out" ;; esac
 
 if [ "$fail" = 0 ]; then echo "PASS fleet-client-update-selftest"; else echo "FAIL fleet-client-update-selftest"; fi

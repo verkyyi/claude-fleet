@@ -7,7 +7,7 @@
 #
 # Why: every worktree used to install its node_modules from zero — slow, hundreds
 # of MB a directory, and tens of thousands of new files for fseventsd to chew
-# (2026-10-11: fseventsd at 115% CPU on the macmini, issue #3402). Measured on the
+# (2026-10-11: fseventsd at 115% CPU on the mac-c, issue #3402). Measured on the
 # monorepo's core/admin-frontend: `npm ci` in a second worktree wrote 41,778 files
 # and 298 MB; an APFS clone of the first one's tree took 0.33 s and 12 MB.
 #

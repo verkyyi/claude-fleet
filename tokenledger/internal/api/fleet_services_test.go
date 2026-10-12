@@ -15,42 +15,42 @@ import (
 func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 	h, n := machineRig(t)
 	for _, l := range []string{"alpha", "beta"} {
-		n.beat(l, control.Heartbeat{Hostname: "m4", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
+		n.beat(l, control.Heartbeat{Hostname: "mac-c", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
 	}
 	rc := 1
 	started := time.Now().Add(-time.Hour).UTC()
 	next := time.Now().Add(time.Minute).UTC()
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
 		Services: []control.ServiceStatus{
 			{Name: "sms-watch", Kind: "service", Login: "alpha", State: "running", StartedAt: &started, LastRun: &started, LastLogLine: "sent 3"},
 			{Name: "daily-report", Kind: "service", Login: "alpha", State: "down", LastRC: &rc, NextRun: &next, LastLogLine: "give up"},
 			{Name: "beta-thing", Kind: "service", Login: "beta", State: "invalid", Why: "bad exec"},
 		}})
-	waitFor(t, 3*time.Second, "m4 carries its register", func() bool {
+	waitFor(t, 3*time.Second, "mac-c carries its register", func() bool {
 		ms := roster(t, h).Machines
 		return len(ms) == 1 && len(ms[0].Services) == 3
 	})
 	m := roster(t, h).Machines[0]
 	if m.ServicesAt == nil || m.Services[1].LastLogLine != "give up" || m.Services[1].NextRun == nil {
-		t.Fatalf("m4's register = %+v at %v", m.Services, m.ServicesAt)
+		t.Fatalf("mac-c's register = %+v at %v", m.Services, m.ServicesAt)
 	}
 
-	// A person who holds alpha on m4 sees alpha's entries only — though the
+	// A person who holds alpha on mac-c sees alpha's entries only — though the
 	// beat came on the link's own (root) row they never see.
-	alphaOnly := func(host, login string) bool { return host == "m4" && login == "alpha" }
+	alphaOnly := func(host, login string) bool { return host == "mac-c" && login == "alpha" }
 	snap, err := h.srv.nodesWhere(time.Now(), alphaOnly)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(snap.Machines) != 1 || len(snap.Machines[0].Services) != 2 {
-		t.Fatalf("alpha's view of m4 = %+v", snap.Machines)
+		t.Fatalf("alpha's view of mac-c = %+v", snap.Machines)
 	}
 	for _, sv := range snap.Machines[0].Services {
 		if sv.Login != "alpha" {
 			t.Fatalf("alpha sees %s's entry %s", sv.Login, sv.Name)
 		}
 	}
-	// Someone with no login on m4 sees no m4 at all.
+	// Someone with no login on mac-c sees no mac-c at all.
 	if snap, _ := h.srv.nodesWhere(time.Now(), func(string, string) bool { return false }); len(snap.Machines) != 0 {
 		t.Fatalf("a stranger sees %+v", snap.Machines)
 	}
@@ -61,15 +61,15 @@ func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 	for _, a := range open {
 		subjects[a.Subject] = true
 	}
-	if len(open) != 2 || !subjects["m4/alpha/daily-report"] || !subjects["m4/beta/beta-thing"] {
+	if len(open) != 2 || !subjects["mac-c/alpha/daily-report"] || !subjects["mac-c/beta/beta-thing"] {
 		t.Fatalf("service_failed = %+v", open)
 	}
 	// alpha's alert reads: theirs only, on the alerts read and on the summary.
 	seen := h.srv.alertsSeenBy(fleetPrincipal{scope: alphaOnly}, open)
-	if len(seen) != 1 || seen[0].Subject != "m4/alpha/daily-report" || !strings.Contains(seen[0].Detail, `"last_log_line":"give up"`) {
+	if len(seen) != 1 || seen[0].Subject != "mac-c/alpha/daily-report" || !strings.Contains(seen[0].Detail, `"last_log_line":"give up"`) {
 		t.Fatalf("alpha's alerts = %+v", seen)
 	}
-	if got := h.srv.openServiceAlerts(alphaOnly); len(got) != 1 || got[0].Subject != "m4/alpha/daily-report" {
+	if got := h.srv.openServiceAlerts(alphaOnly); len(got) != 1 || got[0].Subject != "mac-c/alpha/daily-report" {
 		t.Fatalf("alpha's summary alerts = %+v", got)
 	}
 	if got := h.srv.openServiceAlerts(nil); len(got) != 2 {
@@ -78,7 +78,7 @@ func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 
 	// Raising again is a no-op; a beat with the entry back up clears it, and
 	// a removed entry's alert clears too.
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
 		Services: []control.ServiceStatus{
 			{Name: "sms-watch", Kind: "service", Login: "alpha", State: "running"},
 			{Name: "daily-report", Kind: "service", Login: "alpha", State: "running"},
@@ -87,8 +87,8 @@ func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 		return len(openAlerts(t, h, store.AlertServiceFailed)) == 0
 	})
 	// An empty register (nil on the wire) leaves the roster without one.
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
-	waitFor(t, 3*time.Second, "m4's register gone", func() bool {
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "mac-c's register gone", func() bool {
 		ms := roster(t, h).Machines
 		return len(ms) == 1 && ms[0].Services == nil
 	})
@@ -98,7 +98,7 @@ func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 // register.
 func TestLoginBeatCarriesNoServiceAlert(t *testing.T) {
 	h, n := machineRig(t)
-	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now(),
 		Services: []control.ServiceStatus{{Name: "x", Kind: "service", Login: "beta", State: "down"}}})
 	waitFor(t, 3*time.Second, "alpha online", func() bool {
 		for _, v := range roster(t, h).Nodes {

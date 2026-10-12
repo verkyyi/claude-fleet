@@ -48,10 +48,10 @@ func everyFinding(t *testing.T) []findings.Finding {
 			{PrincipalID: "pool", Provider: "claude", Account: "icloud", ExpiresAt: time.Now().UTC().Add(20 * 24 * time.Hour)},
 			{PrincipalID: pBob, Provider: "claude", Account: "own", ExpiresAt: time.Now().UTC().Add(-2 * 24 * time.Hour)},
 		},
-		ComputeClosed: []findings.ComputeClosed{{EndpointID: "ep_m4", Hostname: "m4", OSUser: "alice", Loc: "CN",
+		ComputeClosed: []findings.ComputeClosed{{EndpointID: "ep_mac-c", Hostname: "mac-c", OSUser: "alice", Loc: "CN",
 			Reason: "egress CN: Anthropic says unsupported_region, OpenAI unreachable"}},
 		Logins: []findings.LoginState{
-			{Provider: "codex", Account: "ops@example.com", Where: "m5:default", State: "reauth_required",
+			{Provider: "codex", Account: "ops@example.com", Where: "mac-d:default", State: "reauth_required",
 				Reason: "Access token expired and no refresh credential is available", Command: "codex login --device-auth"},
 		},
 	})

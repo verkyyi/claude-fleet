@@ -1140,7 +1140,7 @@ def main(argv=None):
         return 1
     except Exception as exc:
         # The reason rides along (issue #2471): «Local controller failed» alone
-        # was all the hub read from m4 for a day, while the cause was one
+        # was all the hub read from mac-a for a day, while the cause was one
         # PermissionError on a conf dir the login could not open.
         traceback.print_exc()
         why = ("%s: %s" % (type(exc).__name__, exc)).strip().splitlines()[0][:200]

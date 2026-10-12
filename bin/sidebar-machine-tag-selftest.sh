@@ -4,16 +4,16 @@
 # since issue #2305 moved it off the row. Drives bin/fleet-sidebar.py's own
 # functions (machine_tag / detail_line / row_glyph / row_text) and
 # bin/fleet-remote-view.sh's proxy title:
-#   A. three kinds   — another machine `@m4` · this computer `@本机` · a lost
-#                      machine `@m4!` · `@m5~` heard over the shell's own
+#   A. three kinds   — another machine `@mac-a` · this computer `@本机` · a lost
+#                      machine `@mac-a!` · `@mac-b~` heard over the shell's own
 #                      connection — each in the bar's detail line
 #   B. the row       — state · name · N/N only: no mark at any width, row_need
 #                      asks nothing for it; a lost machine's row takes `⊘` as
 #                      its state glyph
 #   C. degenerate    — field 9 empty (a node's own row): no mark in the bar
 #   D. English       — `@here`
-#   E. proxy title   — fleet-remote-view.sh titles a proxy `<name> · @m4`
-#                      (`@本机` on this computer), never `m4 <name>`
+#   E. proxy title   — fleet-remote-view.sh titles a proxy `<name> · @mac-a`
+#                      (`@本机` on this computer), never `mac-a <name>`
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
@@ -22,7 +22,7 @@ fail() { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$*" >&2; }
 
 run_py() {   # <lang> — the checks below, in that UI language
   FLEET_UI_LANG="$1" FLEET_SIDEBAR_HOST="MacBookPro.local" \
-  FLEET_NODE_ALIASES="macmini=m5 mini2=m4 MacBookPro=MacBook" \
+  FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a MacBookPro=MacBook" \
   python3 - "$BIN/fleet-sidebar.py" "$1" <<'PY'
 import importlib.util, sys, unicodedata
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -36,13 +36,13 @@ w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t
 
 if lang == "zh":
     # A. the three kinds of machine (+ the via mark), and where they show: the bar
-    check(m.machine_tag("m4") == "@m4", "A: another machine → @m4")
+    check(m.machine_tag("mac-a") == "@mac-a", "A: another machine → @mac-a")
     check(m.machine_tag("MacBook") == "@本机", "A: this computer (its alias) → @本机")
     check(m.machine_tag("macbookpro") == "@本机", "A: this computer (its hostname, any case) → @本机")
-    check(m.machine_tag("m4!") == "@m4!", "A: a lost machine → @m4!")
-    check(m.machine_tag("m5~") == "@m5~", "A: heard over the shell's connection → @m5~")
-    row = m.row_fields("\x1f".join(("wid:x/issue-1", "working", "●", "issue-1", " ", "", "0", "", "m4", "#1")))
-    check(m.detail_line(row) == "issue-1 · #1 · @m4", "A: the bar names the machine: %r" % m.detail_line(row))
+    check(m.machine_tag("mac-a!") == "@mac-a!", "A: a lost machine → @mac-a!")
+    check(m.machine_tag("mac-b~") == "@mac-b~", "A: heard over the shell's connection → @mac-b~")
+    row = m.row_fields("\x1f".join(("wid:x/issue-1", "working", "●", "issue-1", " ", "", "0", "", "mac-a", "#1")))
+    check(m.detail_line(row) == "issue-1 · #1 · @mac-a", "A: the bar names the machine: %r" % m.detail_line(row))
     here = row[:8] + ["MacBook"] + row[9:]
     check("@本机" in m.detail_line(here), "A: …@本机 for this computer's own: %r" % m.detail_line(here))
 
@@ -53,7 +53,7 @@ if lang == "zh":
             text = m.row_text(" ", "●", "└", "x" * 60, badge, width)
             check("@" not in text and w(text) <= width and (not badge or text.endswith("· " + badge)),
                   "B: %d cells, badge %r: name + badge only: %r" % (width, badge, text))
-    lost = row[:8] + ["m4!"] + row[9:]
+    lost = row[:8] + ["mac-a!"] + row[9:]
     check(m.row_glyph(lost) == (m.LOST_GLYPH, "lost") and m.LOST_GLYPH == "⊘",
           "B: a lost machine's row says so in its state glyph: %r" % (m.row_glyph(lost),))
     check(m.row_glyph(row) == ("●", ""), "B: …a live one keeps its own glyph")
@@ -65,7 +65,7 @@ if lang == "zh":
 else:
     # D. English
     check(m.machine_tag("MacBook") == "@here", "D: English → @here")
-    check(m.machine_tag("m4") == "@m4", "D: …another machine as ever")
+    check(m.machine_tag("mac-a") == "@mac-a", "D: …another machine as ever")
 print("CHECKS %d" % n)
 PY
 }
@@ -78,15 +78,15 @@ for lang in zh en; do
   FAIL=$((FAIL + $(printf '%s\n' "$out" | grep -c '^FAIL')))
 done
 
-# E. the proxy window's title (fleet-remote-view.sh): `<name> · @m4`, `@本机` here
+# E. the proxy window's title (fleet-remote-view.sh): `<name> · @mac-a`, `@本机` here
 CHECKS=$((CHECKS + 1))
 src=$(sed -n '/^rv_machine_word()/,/^}/p' "$BIN/fleet-remote-view.sh")
 [ -n "$src" ] || fail "E: fleet-remote-view.sh has rv_machine_word"
-words=$(FLEET_UI_LANG=zh FLEET_SIDEBAR_HOST=macmini.local FLEET_NODE_ALIASES="macmini=m5 mini2=m4" BIN="$BIN" bash -c '
+words=$(FLEET_UI_LANG=zh FLEET_SIDEBAR_HOST=mac-c.local FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" BIN="$BIN" bash -c '
   . "$BIN/fleet-ui-lang.sh"; eval "$1"
-  printf "%s|%s|%s|%s" "$(rv_machine_word m4)" "$(rv_machine_word m5)" "$(rv_machine_word M5)" "$(rv_machine_word macmini)"' _ "$src")
-[ "$words" = "m4|本机|本机|本机" ] && printf 'ok   E: the title'"'"'s machine word: m4 elsewhere, 本机 here\n' \
-  || fail "E: the title's machine word — got [$words] want [m4|本机|本机|本机]"
+  printf "%s|%s|%s|%s" "$(rv_machine_word mac-a)" "$(rv_machine_word mac-b)" "$(rv_machine_word MAC-B)" "$(rv_machine_word mac-c)"' _ "$src")
+[ "$words" = "mac-a|本机|本机|本机" ] && printf 'ok   E: the title'"'"'s machine word: mac-a elsewhere, 本机 here\n' \
+  || fail "E: the title's machine word — got [$words] want [mac-a|本机|本机|本机]"
 CHECKS=$((CHECKS + 1))
 if grep -q 'title="${name:-${wid#\*/}} · @$(rv_machine_word "$node")"' "$BIN/fleet-remote-view.sh" \
    && ! grep -q 'title="$node ' "$BIN/fleet-remote-view.sh"; then

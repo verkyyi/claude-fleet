@@ -34,7 +34,7 @@ compute off / compute_region 文案写成「HK via relay (local CN)」。BREAK-I
 
 ## 入口自己刷新 OpenAI 凭据（R1，issue #1976）
 
-入口设 `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` + `CCQUOTA_FLEET_CRED_RELAY_URL=https://fleet-relay.24hw.cn`
+入口设 `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` + `CCQUOTA_FLEET_CRED_RELAY_URL=https://relay.example.com`
 后，Codex 的刷新由入口直接 POST 到转发机 `/openai-auth/oauth/token`，不再交给某台管理节点——
 长期 refresh token 不进任何机器的内存，管理节点不在线也能刷新。入口给自己签一张通行证
 `frh1.<到期>.<HMAC>`（密钥由 `CCQUOTA_FLEET_SESSION_CRED_KEY` 派生，五分钟，每次刷新现签，不落库），
@@ -57,7 +57,7 @@ prod 入口已开（#2137：`deploy/k8s/overlays/prod/deployment-env.yaml`，bas
 - **回落**：转发机 5 秒内没给出 GitHub 自己的回答（连不上、超时、403/404/5xx），入口直连
   `github.com` 再试一次（8 秒）；两条都不通，用户看到原来那句「连不上 GitHub」，总共不超过 13 秒。
   GitHub 自己答了错（如 `bad_verification_code`）就到此为止，不重试。
-- **日志**：成功是 `github sign-in: token exchanged through the relay https://fleet-relay.24hw.cn`；
+- **日志**：成功是 `github sign-in: token exchanged through the relay https://relay.example.com`；
   回落是 `github sign-in: relay …: <原因> — trying github.com directly`。
 - 不设（或 `direct`）：入口自己直连，和以前一模一样；GitHub 登录没开时这个开关被忽略。
 
@@ -254,7 +254,7 @@ sudo grep -c 'GET /v1/relay/check' /var/log/caddy/access.log   # 换版后应只
 `fleet.conf` 的 `[common]`：
 
 ```sh
-FLEET_CRED_RELAY_URL=https://fleet-relay.24hw.cn
+FLEET_CRED_RELAY_URL=https://relay.example.com
 ```
 
 本机代理的启动器（`fleet-cred-proxy.sh run` / `ensure`）发现配了转发、又没有
@@ -307,8 +307,8 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
 按发起人拍板，**新起一台**，与生产的 `ai-relay-1g` 分开（同配置：Lightsail `micro_3_0`，
 2 vCPU / 1 GB / 每月 2 TB，`ap-southeast-1`，Debian 12，每月 7 美元，静态 IP）。
 
-1. 建实例 `fleet-relay-sg`，挂静态 IP；阿里云 DNS 加 A 记录 `fleet-relay.24hw.cn`
-   （`*.24haowan.com` 有通配，理由同 `doc/review/2026-09-12-ai-gateway-overseas-relay.md`）。
+1. 建实例 `fleet-relay-sg`，挂静态 IP；阿里云 DNS 加 A 记录 `relay.example.com`
+   （`*.example.com` 有通配，理由同 `doc/review/2026-09-12-ai-gateway-overseas-relay.md`）。
 2. 防火墙：22 ← 运维本机 /32；80、443 ← any（fleet 机器在各处、集群出口也要进，门禁靠通行证，不靠来源 IP；
    80 只为 ACME）。
 3. **先**装核验进程（Debian 12 自带 python3；没有就 `apt install python3`）：
@@ -326,7 +326,7 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
 
    ```ini
    [Service]
-   Environment=FLEET_RELAY_SITE=fleet-relay.24hw.cn
+   Environment=FLEET_RELAY_SITE=relay.example.com
    ```
 
    **已经在跑的转发机升级到 #2048**：同样先装、启动核验进程，`curl` 它的 `/healthz` 得 `ok`，
@@ -338,10 +338,10 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
 5. 验证（不需要任何凭据）：
 
    ```sh
-   curl -s https://fleet-relay.24hw.cn/healthz                                  # ok
-   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://fleet-relay.24hw.cn/anthropic/v1/messages   # 403（没有通行证）
-   curl -s -o /dev/null -w '%{http_code}\n' https://fleet-relay.24hw.cn/v1/models                       # 404（不是开放代理）
-   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://fleet-relay.24hw.cn/github-oauth/login/oauth/access_token   # 403（没有通行证；#3392 的路由在）
+   curl -s https://relay.example.com/healthz                                  # ok
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://relay.example.com/anthropic/v1/messages   # 403（没有通行证）
+   curl -s -o /dev/null -w '%{http_code}\n' https://relay.example.com/v1/models                       # 404（不是开放代理）
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://relay.example.com/github-oauth/login/oauth/access_token   # 403（没有通行证；#3392 的路由在）
    ```
 
 6. 一台可信、不能直连的登录：`fleet.conf` 加 `FLEET_CRED_RELAY_URL`，`fleet-relay-cred.sh fetch`，

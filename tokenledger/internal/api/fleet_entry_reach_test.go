@@ -153,12 +153,12 @@ func TestEntryReachCandidates(t *testing.T) {
 	// the router forwards public :22123 to the entry (the machine's entry=
 	// route): the source and the route's own address are knocked on there
 	pub := control.EntryReachReport{Port: 22022, EntryHost: "gw.example", EntryPort: 22123}
-	got, _ = entryReachCandidates(pub, ip("23.119.126.213"), true, ip("23.119.126.213"), ip("23.119.126.214"), ip("10.1.1.1"))
+	got, _ = entryReachCandidates(pub, ip("203.0.114.213"), true, ip("203.0.114.213"), ip("203.0.114.214"), ip("10.1.1.1"))
 	s = nil
 	for _, c := range got {
 		s = append(s, netip.AddrPortFrom(c.addr, uint16(c.port)).String()+"/"+c.via)
 	}
-	if strings.Join(s, " ") != "23.119.126.213:22123/source 23.119.126.214:22123/route" {
+	if strings.Join(s, " ") != "203.0.114.213:22123/source 203.0.114.214:22123/route" {
 		t.Fatalf("public route: %v, want the source and the route's other public address on :22123", s)
 	}
 	// the router's outside address is the carrier's
@@ -205,7 +205,7 @@ func reachKeyLine(k ssh.PublicKey) string {
 // check is older than EntryReachFresh.
 func TestEntryReachUnreachableNotRecorded(t *testing.T) {
 	h := entryHarness(t)
-	_, tok := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
+	_, tok := rootNode(t, h, "root5", "mac-e", control.CapEntryKeys)
 	old, oldT := entryDialable, entryProbeTimeout
 	discard := netip.MustParsePrefix("100::/64") // RFC 6666: routes nowhere
 	entryDialable = func(a netip.Addr) bool { return a.IsLoopback() || discard.Contains(a) || entryPublicAddr(a) }
@@ -237,24 +237,24 @@ func TestEntryReachUnreachableNotRecorded(t *testing.T) {
 		t.Fatalf("verdict %s, want 127.0.0.1 reachable and 100::1 not (timeout / unreachable)", raw)
 	}
 	now := time.Now()
-	got, err := h.srv.EntryReachable("macmini", now)
+	got, err := h.srv.EntryReachable("mac-e", now)
 	if err != nil || len(got) != 1 || got[0].Addr != "127.0.0.1" || got[0].Port != port || got[0].Family != "ipv4" {
-		t.Fatalf("reachable(macmini) = %+v %v, want only 127.0.0.1:%d", got, err, port)
+		t.Fatalf("reachable(mac-e) = %+v %v, want only 127.0.0.1:%d", got, err, port)
 	}
-	if got, _ := h.srv.EntryReachable("macmini.local", now); len(got) != 1 {
+	if got, _ := h.srv.EntryReachable("mac-e.local", now); len(got) != 1 {
 		t.Fatalf("reachable by the machine's longer name: %+v", got)
 	}
-	if got, _ := h.srv.EntryReachable("macmini", now.Add(EntryReachFresh+time.Minute)); len(got) != 0 {
+	if got, _ := h.srv.EntryReachable("mac-e", now.Add(EntryReachFresh+time.Minute)); len(got) != 0 {
 		t.Fatalf("a stale check still counts: %+v", got)
 	}
 	// the key no longer matches (the address now reaches another box): it drops out
-	h.srv.entryReachAt.Delete("macmini")
+	h.srv.entryReachAt.Delete("mac-e")
 	rep.HostKey = reachKeyLine(reachKey(t))
 	if _, v, raw = reachPost(t, h, tok, rep, ""); len(v.Addrs) == 0 || v.Addrs[0].Reason != control.ReachHostKey ||
 		v.Addrs[0].LastOK == nil {
 		t.Fatalf("after the key changed: %s, want 钥匙不符 with the last success kept", raw)
 	}
-	if got, _ := h.srv.EntryReachable("macmini", time.Now()); len(got) != 0 {
+	if got, _ := h.srv.EntryReachable("mac-e", time.Now()); len(got) != 0 {
 		t.Fatalf("a host-key mismatch counts as reachable: %+v", got)
 	}
 	// a second report inside the gap is answered from the last check, no dial
@@ -263,7 +263,7 @@ func TestEntryReachUnreachableNotRecorded(t *testing.T) {
 		t.Fatalf("a report inside %v was checked again", entryReachGap)
 	}
 	// nothing listening: nothing is dialled, nothing counts
-	h.srv.entryReachAt.Delete("macmini")
+	h.srv.entryReachAt.Delete("mac-e")
 	if _, v, raw = reachPost(t, h, tok, control.EntryReachReport{Port: port, Listening: false}, ""); len(v.Addrs) != 0 {
 		t.Fatalf("not listening yet dialled: %s", raw)
 	}
@@ -274,7 +274,7 @@ func TestEntryReachUnreachableNotRecorded(t *testing.T) {
 // address alone — and the verdict still says it has no public IPv4.
 func TestEntryReachIPv6Only(t *testing.T) {
 	h := entryHarness(t)
-	_, tok := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
+	_, tok := rootNode(t, h, "root5", "mac-e", control.CapEntryKeys)
 	key := reachKey(t)
 	old := entryProbe
 	entryProbe = func(_ context.Context, addr string, port int, want ssh.PublicKey) string {
@@ -290,7 +290,7 @@ func TestEntryReachIPv6Only(t *testing.T) {
 	if code != 200 || v.NoPublic != "cgnat" || v.Source != "100.71.4.2" {
 		t.Fatalf("verdict %d %s, want cgnat seen from 100.71.4.2", code, raw)
 	}
-	got, _ := h.srv.EntryReachable("macmini", time.Now())
+	got, _ := h.srv.EntryReachable("mac-e", time.Now())
 	if len(got) != 1 || got[0].Family != "ipv6" || got[0].Addr != "2408:8207:1:2::9" {
 		t.Fatalf("reachable = %+v, want the IPv6 address alone", got)
 	}
@@ -300,7 +300,7 @@ func TestEntryReachIPv6Only(t *testing.T) {
 // host key must be one.
 func TestEntryReachDoor(t *testing.T) {
 	h := entryHarness(t)
-	_, tok := rootNode(t, h, "root5", "macmini", control.CapEntryKeys)
+	_, tok := rootNode(t, h, "root5", "mac-e", control.CapEntryKeys)
 	rep := control.EntryReachReport{Port: 22022, HostKey: "not a key", Listening: true}
 	if code, _, raw := reachPost(t, h, tok, rep, ""); code != http.StatusBadRequest {
 		t.Fatalf("a bad host key: HTTP %d %s", code, raw)

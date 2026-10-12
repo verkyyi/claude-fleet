@@ -16,7 +16,7 @@ import (
 // (claude-fleet#2515, EPIC #2512 C3).
 
 // adminViewsHarness is rolesHarness with the admin's own login on record
-// (verkyyi on mini), a fleet with one session on each machine, and a device
+// (ivan on mini), a fleet with one session on each machine, and a device
 // each.
 func adminViewsHarness(t *testing.T) (h *ghHarness, admin, user *http.Cookie) {
 	t.Helper()
@@ -27,7 +27,7 @@ func adminViewsHarness(t *testing.T) (h *ghHarness, admin, user *http.Cookie) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RecordLoginAccount(p, "mini", "verkyyi", "ep_mini", "test", now); err != nil {
+	if _, err := st.RecordLoginAccount(p, "mini", "ivan", "ep_mini", "test", now); err != nil {
 		t.Fatal(err)
 	}
 	snap := func(ep, host, osUser, fid, key, state string) {
@@ -37,7 +37,7 @@ func adminViewsHarness(t *testing.T) (h *ghHarness, admin, user *http.Cookie) {
 			t.Fatal(err)
 		}
 	}
-	snap("ep_mini", "mini", "verkyyi", "11111111-1111-4111-8111-111111111111", "issue-1", "working")
+	snap("ep_mini", "mini", "ivan", "11111111-1111-4111-8111-111111111111", "issue-1", "working")
 	snap("ep_alicebox", "alicebox", aliceLogin, "22222222-2222-4222-8222-222222222222", "issue-2", "waiting")
 	for _, d := range []store.FleetDevice{
 		{Fingerprint: "SHA256:admin", PrincipalID: githubPrincipal(ghAdmin.ID), PublicKey: "ssh-ed25519 AAAAadmin", Name: "admin-mac"},
@@ -98,8 +98,8 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 		Buckets []store.Bucket `json:"buckets"`
 	}
 	getJSON(t, h, admin, "/v1/usage?by=user&account=all"+rng, &usage)
-	if len(usage.Buckets) != 1 || usage.Buckets[0].Key != "verkyyi" {
-		t.Errorf("admin /v1/usage by user = %+v; want only their own verkyyi", usage.Buckets)
+	if len(usage.Buckets) != 1 || usage.Buckets[0].Key != "ivan" {
+		t.Errorf("admin /v1/usage by user = %+v; want only their own ivan", usage.Buckets)
 	}
 	var sum struct {
 		Events int64 `json:"events"`
@@ -137,9 +137,9 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 	if len(ov.People) != 2 || byPID[adminPID].Week != 200 || byPID[alicePID].Week != 100 {
 		t.Errorf("admin overview people = %+v; want %s 200 and %s 100", ov.People, adminPID, alicePID)
 	}
-	if v := byPID[adminPID]; v.Sessions != 1 || v.Running != 1 || len(v.Logins) != 1 || v.Logins[0] != [2]string{"mini", "verkyyi"} ||
+	if v := byPID[adminPID]; v.Sessions != 1 || v.Running != 1 || len(v.Logins) != 1 || v.Logins[0] != [2]string{"mini", "ivan"} ||
 		v.Name != ghAdmin.Login || v.Limit != nil {
-		t.Errorf("admin overview %s = %+v; want 1 running session on mini/verkyyi, named %s, 不限额", adminPID, v, ghAdmin.Login)
+		t.Errorf("admin overview %s = %+v; want 1 running session on mini/ivan, named %s, 不限额", adminPID, v, ghAdmin.Login)
 	}
 	if ov.Totals.Sessions != 2 || ov.Totals.Running != 2 || ov.Totals.Tokens != 300 || ov.Totals.TokensUnattributed != 0 || ov.Totals.Machines != 2 {
 		t.Errorf("admin overview totals = %+v", ov.Totals)
@@ -149,10 +149,10 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 	}
 
 	// Sessions.
-	if _, got := sessionLogins(t, h, admin, "/v1/fleet/fleet_sessions"); !equalStrings(got, []string{"mini/verkyyi"}) {
-		t.Errorf("admin /v1/fleet/fleet_sessions = %v; want only mini/verkyyi", got)
+	if _, got := sessionLogins(t, h, admin, "/v1/fleet/fleet_sessions"); !equalStrings(got, []string{"mini/ivan"}) {
+		t.Errorf("admin /v1/fleet/fleet_sessions = %v; want only mini/ivan", got)
 	}
-	if _, got := sessionLogins(t, h, admin, AdminSessionsPath); !equalStrings(got, []string{"alicebox/" + aliceLogin, "mini/verkyyi"}) {
+	if _, got := sessionLogins(t, h, admin, AdminSessionsPath); !equalStrings(got, []string{"alicebox/" + aliceLogin, "mini/ivan"}) {
 		t.Errorf("admin %s = %v; want both", AdminSessionsPath, got)
 	}
 	if _, got := sessionLogins(t, h, user, "/v1/fleet/fleet_sessions"); !equalStrings(got, []string{"alicebox/" + aliceLogin}) {

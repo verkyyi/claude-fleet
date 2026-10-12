@@ -31,38 +31,38 @@ func TestPlaceCLIContract(t *testing.T) {
 		code       int
 		out        string
 	}{
-		{"local", `{"local":true,"placement":{"machine":"m5","reason":"chose m5 (score 0.7)"}}`, 200,
-			0, "LOCAL m5\tchose m5 (score 0.7)"},
-		{"remote", `{"local":false,"placement":{"machine":"m4","reason":"chose m4;\n m5 excluded: load 1.00/core > 0.8"},
+		{"local", `{"local":true,"placement":{"machine":"mac-b","reason":"chose mac-b (score 0.7)"}}`, 200,
+			0, "LOCAL mac-b\tchose mac-b (score 0.7)"},
+		{"remote", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a;\n mac-b excluded: load 1.00/core > 0.8"},
 			"operation":{"operation_id":"op_1","status":"accepted"}}`, 200,
-			0, "REMOTE m4 op_1 accepted\tchose m4; m5 excluded: load 1.00/core > 0.8"},
+			0, "REMOTE mac-a op_1 accepted\tchose mac-a; mac-b excluded: load 1.00/core > 0.8"},
 		// claude-fleet#1586: what became of the start there.
-		{"remote done", `{"local":false,"placement":{"machine":"m4","reason":"chose m4"},
-			"operation":{"operation_id":"op_2","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@42","node":"m4"}}`, 200,
-			0, "REMOTE m4 op_2 done @42\tchose m4"},
-		{"remote declined", `{"local":false,"placement":{"machine":"m4","reason":"chose m4"},
+		{"remote done", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},
+			"operation":{"operation_id":"op_2","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@42","node":"mac-a"}}`, 200,
+			0, "REMOTE mac-a op_2 done @42\tchose mac-a"},
+		{"remote declined", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},
 			"operation":{"operation_id":"op_3","status":"failed"},
-			"outcome":{"state":"refused","exit":2,"stderr1":"dash-issue-session: at capacity:\n 6/6","node":"m4"}}`, 200,
-			5, "DECLINED m4 op_3 2\tdash-issue-session: at capacity: 6/6"},
-		{"remote unknown", `{"local":false,"placement":{"machine":"m4","reason":"chose m4"},
-			"operation":{"operation_id":"op_4","status":"accepted"},"outcome":{"state":"unknown","stderr1":"no final state from m4","node":"m4"}}`, 200,
-			6, "UNKNOWN m4 op_4\tno final state from m4"},
-		{"held", `{"error":{"code":"ALREADY_CLAIMED","message":"#7 is leased to m4"},"holder":{"node":"m4"}}`, 409,
-			3, "HELD m4\t#7 is leased to m4"},
+			"outcome":{"state":"refused","exit":2,"stderr1":"dash-issue-session: at capacity:\n 6/6","node":"mac-a"}}`, 200,
+			5, "DECLINED mac-a op_3 2\tdash-issue-session: at capacity: 6/6"},
+		{"remote unknown", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},
+			"operation":{"operation_id":"op_4","status":"accepted"},"outcome":{"state":"unknown","stderr1":"no final state from mac-a","node":"mac-a"}}`, 200,
+			6, "UNKNOWN mac-a op_4\tno final state from mac-a"},
+		{"held", `{"error":{"code":"ALREADY_CLAIMED","message":"#7 is leased to mac-a"},"holder":{"node":"mac-a"}}`, 409,
+			3, "HELD mac-a\t#7 is leased to mac-a"},
 		{"no machine", `{"error":{"code":"NO_ELIGIBLE_NODE","message":"No machine can take a new session now"}}`, 503,
 			4, "REFUSED NO_ELIGIBLE_NODE\tNo machine can take a new session now"},
 		// claude-fleet#1610: machines that declined first ride the line's
 		// third field; every machine declining is REFUSED ALL_DECLINED.
 		{"done after a decline", `{"local":false,"placement":{"machine":"m3","reason":"chose m3"},
 			"operation":{"operation_id":"op_5","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@9","node":"m3"},
-			"attempts":[{"machine":"m4","operation_id":"op_4","state":"failed","exit":1,"why":"fleet discover: fork/exec"}]}`, 200,
-			0, "REMOTE m3 op_5 done @9\tchose m3\tafter m4:op_4:1"},
-		{"local after a decline", `{"local":true,"placement":{"machine":"m5","reason":"chose m5"},
-			"attempts":[{"machine":"m4","state":"refused","exit":1,"why":"node gone"}]}`, 200,
-			0, "LOCAL m5\tchose m5\tafter m4:-:1"},
-		{"all declined", `{"error":{"code":"ALL_DECLINED","message":"every machine that could take it said no — m4: declined: a; m3: declined: b"},
-			"attempts":[{"machine":"m4","operation_id":"op_4","exit":1,"why":"a"},{"machine":"m3","operation_id":"op_6","exit":2,"why":"b"}]}`, 409,
-			4, "REFUSED ALL_DECLINED\tevery machine that could take it said no — m4: declined: a; m3: declined: b\tafter m4:op_4:1,m3:op_6:2"},
+			"attempts":[{"machine":"mac-a","operation_id":"op_4","state":"failed","exit":1,"why":"fleet discover: fork/exec"}]}`, 200,
+			0, "REMOTE m3 op_5 done @9\tchose m3\tafter mac-a:op_4:1"},
+		{"local after a decline", `{"local":true,"placement":{"machine":"mac-b","reason":"chose mac-b"},
+			"attempts":[{"machine":"mac-a","state":"refused","exit":1,"why":"node gone"}]}`, 200,
+			0, "LOCAL mac-b\tchose mac-b\tafter mac-a:-:1"},
+		{"all declined", `{"error":{"code":"ALL_DECLINED","message":"every machine that could take it said no — mac-a: declined: a; m3: declined: b"},
+			"attempts":[{"machine":"mac-a","operation_id":"op_4","exit":1,"why":"a"},{"machine":"m3","operation_id":"op_6","exit":2,"why":"b"}]}`, 409,
+			4, "REFUSED ALL_DECLINED\tevery machine that could take it said no — mac-a: declined: a; m3: declined: b\tafter mac-a:op_4:1,m3:op_6:2"},
 		{"not a hub fleet", `{"error":"fleet x is not registered to this node"}`, 403, 1, ""},
 		{"hub broken", `{"error":{"code":"INTERNAL","message":"db"}}`, 500, 1, ""},
 	}
@@ -86,7 +86,7 @@ func TestPlaceCLIContract(t *testing.T) {
 	if _, has := got["wait"]; has {
 		t.Fatalf("no --wait sent a wait: %v; the hub's default must apply", got)
 	}
-	ts := answer(200, `{"local":true,"placement":{"machine":"m5"}}`)
+	ts := answer(200, `{"local":true,"placement":{"machine":"mac-b"}}`)
 	defer ts.Close()
 	var out, errb bytes.Buffer
 	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--wait", "0", "o/r", "7", wid}, &out, &errb); code != 0 || got["wait"] != float64(0) {
@@ -113,16 +113,16 @@ func TestPlaceCLIScratch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"local":false,"placement":{"machine":"m4","reason":"chose m4"},"operation":{"operation_id":"op_9","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@7","node":"m4"}}`))
+		_, _ = w.Write([]byte(`{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},"operation":{"operation_id":"op_9","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@7","node":"mac-a"}}`))
 	}))
 	defer ts.Close()
 	fleet := "11111111-1111-4111-8111-111111111111"
 	var out, errb bytes.Buffer
-	code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--node", "m4", "--name", "试一下", "o/r", "scratch", fleet}, &out, &errb)
-	if code != 0 || strings.TrimRight(out.String(), "\n") != "REMOTE m4 op_9 done @7\tchose m4" {
+	code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--node", "mac-a", "--name", "试一下", "o/r", "scratch", fleet}, &out, &errb)
+	if code != 0 || strings.TrimRight(out.String(), "\n") != "REMOTE mac-a op_9 done @7\tchose mac-a" {
 		t.Fatalf("code %d out %q", code, out.String())
 	}
-	if got["kind"] != "scratch" || got["fleet_id"] != fleet || got["name"] != "试一下" || got["node"] != "m4" {
+	if got["kind"] != "scratch" || got["fleet_id"] != fleet || got["name"] != "试一下" || got["node"] != "mac-a" {
 		t.Fatalf("request body %v", got)
 	}
 	for _, k := range []string{"issue", "worker_id"} {
@@ -145,7 +145,7 @@ func TestPlaceCarriesWorkerAssertion(t *testing.T) {
 	var hdr []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hdr = r.Header.Values("X-Fleet-Worker")
-		_, _ = w.Write([]byte(`{"local":true,"placement":{"machine":"m5"}}`))
+		_, _ = w.Write([]byte(`{"local":true,"placement":{"machine":"mac-b"}}`))
 	}))
 	defer ts.Close()
 	wid := "11111111-1111-4111-8111-111111111111/issue-7"

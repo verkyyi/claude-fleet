@@ -27,7 +27,7 @@ import (
 
 // ParseNodeRoutes reads CCQUOTA_FLEET_NODE_ROUTES:
 // "name=host[:port],name=host[:port]", e.g.
-// "public=gw.example.com:22023,lan=192.168.1.20". Names and hosts are
+// "public=gw.example.com:22023,lan=192.168.1.20". Names and hosts are // oss-ok: 编的示例地址
 // plain tokens (letters, digits, . - _) — the hub writes them into ssh
 // configs.
 func ParseNodeRoutes(s string) ([]control.NodeRoute, error) {
@@ -85,7 +85,7 @@ type tailnetName struct {
 }
 
 // tailnetSelfName is the injection point for tests: this machine's tailnet
-// DNS name ("m4.tail1234.ts.net"), "" when there is no tailscale.
+// DNS name ("mac-a.example.ts.net"), "" when there is no tailscale.
 var tailnetSelfName = func(ctx context.Context) string {
 	bin, err := exec.LookPath("tailscale")
 	if err != nil {
@@ -173,7 +173,7 @@ func virtualIf(name string) bool {
 	return false
 }
 
-// cgnat is 100.64.0.0/10 — the tailnet's own addresses (and carrier NAT's),
+// cgnat is 100.64.0.0/10 — the tailnet's own addresses (and carrier NAT's), // oss-ok: CGNAT 网段本身
 // never a LAN a person shares with this machine.
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 

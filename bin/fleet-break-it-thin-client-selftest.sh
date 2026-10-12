@@ -386,7 +386,7 @@ drill_thin_home_login_no_fleet() {
     || { WHY="fleet-connect.py no longer takes the home answer's per-machine login / skips no_fleet"; return 1; }
   grep -q 'thin_no_fleet_fmt' "$BIN/fleet-thin.py" || { WHY="the thin loop no longer says which login had no fleet"; return 1; }
   t0=$(now)
-  WHAT='人的 fleet 搬到同机另一个登录（verkyyi → verky）：入口的家答案每台机器带上有活 fleet 的那个登录（不是人的默认登录、不是别人的登录），别处有 fleet 时没有 fleet 的机器不当家、换家也不去；fleet-connect 照它进（FLEET_CONNECT_LOGIN 仍优先），看台遇到 rc 3 说「<机器> 这台机器的登录 <登录> 下没有 fleet」'
+  WHAT='人的 fleet 搬到同机另一个登录（dave → carol）：入口的家答案每台机器带上有活 fleet 的那个登录（不是人的默认登录、不是别人的登录），别处有 fleet 时没有 fleet 的机器不当家、换家也不去；fleet-connect 照它进（FLEET_CONNECT_LOGIN 仍优先），看台遇到 rc 3 说「<机器> 这台机器的登录 <登录> 下没有 fleet」'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?

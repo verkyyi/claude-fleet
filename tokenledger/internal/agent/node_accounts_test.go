@@ -342,7 +342,7 @@ func TestAdminAgentCreatesExistingDigitLogin(t *testing.T) {
 
 	accountGOOS = "darwin"
 	shrinkBackoff(t)
-	hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "24haowan", FullName: "Cao Jian", Existing: true})
+	hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "24acme", FullName: "Cao Jian", Existing: true})
 	a := adminAgent(t, hub.srv.URL, true)
 	newLog, _ := fakeLoginScripts(t, a.cfg.Home, "0")
 	runAgentUntil(t, a, 5*time.Second, func() bool { r, _, _ := hub.snapshot(); return len(r) > 0 })
@@ -351,7 +351,7 @@ func TestAdminAgentCreatesExistingDigitLogin(t *testing.T) {
 		t.Fatalf("results=%v errors=%v", results, errs)
 	}
 	got, _ := os.ReadFile(newLog)
-	if want := "[24haowan][--full-name][Cao Jian][--share-pool][--apply]\n"; string(got) != want {
+	if want := "[24acme][--full-name][Cao Jian][--share-pool][--apply]\n"; string(got) != want {
 		t.Fatalf("fleet-login-new.sh argv = %q, want %q", got, want)
 	}
 
@@ -359,9 +359,9 @@ func TestAdminAgentCreatesExistingDigitLogin(t *testing.T) {
 		goos string
 		op   control.AccountOp
 	}{
-		"unmarked":   {"darwin", control.AccountOp{Op: control.AccountCreate, Login: "24haowan", FullName: "x"}},
+		"unmarked":   {"darwin", control.AccountOp{Op: control.AccountCreate, Login: "24acme", FullName: "x"}},
 		"all digits": {"darwin", control.AccountOp{Op: control.AccountCreate, Login: "2468", FullName: "x", Existing: true}},
-		"linux":      {"linux", control.AccountOp{Op: control.AccountCreate, Login: "24haowan", FullName: "x", Existing: true}},
+		"linux":      {"linux", control.AccountOp{Op: control.AccountCreate, Login: "24acme", FullName: "x", Existing: true}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			accountGOOS = c.goos

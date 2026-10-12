@@ -37,35 +37,35 @@ func connectStaleAdmin(t *testing.T, h *harness, label, hostname, osUser, versio
 
 func TestStaleAdminIsNeverSentACreate(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi", "ops"}
-	stale := connectStaleAdmin(t, h, "m4-op", "m4", "verkyyi", "prod-e715029")
+	h.srv.FleetAdmins = []string{"ivan", "ops"}
+	stale := connectStaleAdmin(t, h, "mac-c-op", "mac-c", "ivan", "prod-e715029")
 
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "m4"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "WangXiaoMing", Hostname: "mac-c"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	if got, ok := readMsg(stale.tnode, 500*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("the stale admin was sent %+v", got)
 	}
-	a := accountState(t, h, "WangXiaoMing", "m4")
+	a := accountState(t, h, "WangXiaoMing", "mac-c")
 	if a.State != store.AccountPending {
 		t.Fatalf("account = %+v; want it still queued", a)
 	}
 
 	// The roster says it is an admin that cannot open a login.
 	for _, n := range roster(t, h).Nodes {
-		if n.OSUser == "verkyyi" && (!n.Admin || n.LoginJoin) {
+		if n.OSUser == "ivan" && (!n.Admin || n.LoginJoin) {
 			t.Fatalf("stale admin in the roster: admin=%v login_join=%v", n.Admin, n.LoginJoin)
 		}
 	}
 
 	// Past openingNoAdmin the opening says which admin is too old.
 	why := h.srv.openingStuck(a, a.RequestedAt.Add(openingNoAdmin+time.Second))
-	if !strings.Contains(why, "too old") || !strings.Contains(why, "verkyyi (ccquota prod-e715029)") {
+	if !strings.Contains(why, "too old") || !strings.Contains(why, "ivan (ccquota prod-e715029)") {
 		t.Fatalf("stuck why = %q; want it to name the stale admin", why)
 	}
 
 	// A current admin on the machine takes the queued create.
-	current := connectNode(t, h, "m4-ops", "m4", "ops", true)
+	current := connectNode(t, h, "mac-c-ops", "mac-c", "ops", true)
 	_, op := expectAccountOp(t, current.tnode)
 	if op.Op != control.AccountCreate || op.Login != "wangxiaoming" || op.JoinCode == "" {
 		t.Fatalf("op = %+v; want a create with its join code", op)
@@ -78,13 +78,13 @@ func TestStaleAdminIsNeverSentACreate(t *testing.T) {
 func TestLeastBusySkipsAMachineWithOnlyAStaleAdmin(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	stale := connectStaleAdmin(t, h, "mini2-op", "mini2", "verkyyi", "prod-e715029")
-	beatCount(t, stale, "mini2", "verkyyi", 0)
-	busy := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	beatCount(t, busy, "m4", "verkyyi", 5)
-	waitFor(t, 3*time.Second, "least-busy to pick m4 over the idle stale-admin machine", func() bool {
-		return h.srv.leastBusyMachine(time.Now()) == "m4"
+	h.srv.FleetAdmins = []string{"ivan"}
+	stale := connectStaleAdmin(t, h, "mac-f-op", "mac-f", "ivan", "prod-e715029")
+	beatCount(t, stale, "mac-f", "ivan", 0)
+	busy := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
+	beatCount(t, busy, "mac-c", "ivan", 5)
+	waitFor(t, 3*time.Second, "least-busy to pick mac-c over the idle stale-admin machine", func() bool {
+		return h.srv.leastBusyMachine(time.Now()) == "mac-c"
 	})
 
 	// With the current admin gone, nothing can open a login — and the word
@@ -98,7 +98,7 @@ func TestLeastBusySkipsAMachineWithOnlyAStaleAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	why := noLoginOpenerWhy(snap)
-	if !strings.HasPrefix(why, noLoginOpener) || !strings.Contains(why, "verkyyi@mini2 (ccquota prod-e715029)") {
+	if !strings.HasPrefix(why, noLoginOpener) || !strings.Contains(why, "ivan@mac-f (ccquota prod-e715029)") {
 		t.Fatalf("why = %q; want it to name the stale admin", why)
 	}
 }

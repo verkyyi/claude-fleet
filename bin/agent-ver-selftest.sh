@@ -176,8 +176,8 @@ eq "D: no ver line — the renew row is ok (as before #1895)" ok "$(f13 "$s0" RE
 export CCQUOTA_FLEET=1
 NOW=$(date +%s); FID=11111111-2222-3333-4444-555555555555
 printf '%s\n' "$NOW" > "$G/hub_ok"
-{ printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-  printf 'wid:%s/issue-7\037m4\037online\0377\037acme/app\037done\037claude\037RR\037\037\0370\037\037hub\037\0371759000000\037renew\n' "$FID"
+{ printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0372\037%s\n' "$NOW" "$NOW"
+  printf 'wid:%s/issue-7\037mac-a\037online\0377\037acme/app\037done\037claude\037RR\037\037\0370\037\037hub\037\0371759000000\037renew\n' "$FID"
 } > "$G/remote_$S"
 eq "D: a remote row takes its machine's verdict — renew" renew "$(f13 "$(side)" RR)"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
@@ -185,13 +185,13 @@ rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 # ============================================================================
 # E. sidebar — 待换新 where 配置旧 goes: the bar (issue #2305)
 # ============================================================================
-out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
+out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
   python3 - "$BIN/fleet-sidebar.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
+row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
 assert m.cfg_tag("renew") == "待换新", m.cfg_tag("renew")
-assert m.detail_line(row + ["renew"]) == "worker-one · @m4 · 待换新", m.detail_line(row + ["renew"])
+assert m.detail_line(row + ["renew"]) == "worker-one · @mac-a · 待换新", m.detail_line(row + ["renew"])
 assert m.detail_line(row[:8] + [""] + row[9:] + ["renew"]) == "worker-one · 待换新"
 assert m.detail_line(row + ["stale"]).endswith("· 配置旧")
 assert m.row_glyph(row + ["renew"]) == ("✓", "") and m.row_need(row + ["renew"]) == m.row_need(row)

@@ -69,7 +69,7 @@ sessions = [s("issue-41", 1234567, issue=41, name="RT"),
 nodes = [dict(machine_name="far3377.local", availability="online", sessions=6, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
-export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="far3377=m4"
+export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="far3377=mac-a"
 bash "$HUBS" --refresh 2>"$WORK/err" || fail "A: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $21 "|" $27 "|" $29 }'; }
@@ -113,14 +113,14 @@ eq "B: ctx_of reads tokens_today, none from a five-part or 0 field" "ok" "$out"
 # C. the top line and ⌘P
 # ============================================================================
 REC="$WORK/rec.json"
-printf '%s' '{"i":1,"n":2,"state":"working","key":"#41","title":"会话用量","pr":"","node":"m4","ctx_left":62,"ctx_band":"ok","ctx_ts":9999999999,"model":"Opus 5.5","effort":"high","tokens_today":1234567}' > "$REC"
+printf '%s' '{"i":1,"n":2,"state":"working","key":"#41","title":"会话用量","pr":"","node":"mac-a","ctx_left":62,"ctx_band":"ok","ctx_ts":9999999999,"model":"Opus 5.5","effort":"high","tokens_today":1234567}' > "$REC"
 for c in 45 100 160; do
   line=$(FLEET_UI_LANG=zh python3 "$BIN/fleet-topbar.py" fit "$c" "$REC")
   case "$line" in *"今天 123 万"*) CHECKS=$((CHECKS+1)) ;; *) fail "C: the top line at $c columns says 今天 123 万" "$line" ;; esac
 done
 line=$(FLEET_UI_LANG=en python3 "$BIN/fleet-topbar.py" fit 100 "$REC")
 case "$line" in *"1.2M today"*) CHECKS=$((CHECKS+1)) ;; *) fail "C: en says 1.2M today" "$line" ;; esac
-printf '%s' '{"i":1,"n":2,"state":"working","key":"#41","title":"会话用量","pr":"","node":"m4","ctx_left":62}' > "$REC"
+printf '%s' '{"i":1,"n":2,"state":"working","key":"#41","title":"会话用量","pr":"","node":"mac-a","ctx_left":62}' > "$REC"
 line=$(python3 "$BIN/fleet-topbar.py" fit 160 "$REC")
 case "$line" in *今天*) fail "C: no tokens_today, but the line says 今天" "$line" ;; *) CHECKS=$((CHECKS+1)) ;; esac
 out=$(python3 - "$BIN" <<'PY'

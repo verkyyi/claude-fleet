@@ -16,24 +16,24 @@ import (
 func TestServiceControl(t *testing.T) {
 	h, n := machineRig(t)
 	for _, l := range []string{"alpha", "beta"} {
-		n.beat(l, control.Heartbeat{Hostname: "m4", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
+		n.beat(l, control.Heartbeat{Hostname: "mac-c", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
 	}
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
 		Services: []control.ServiceStatus{
 			{Name: "daily-report", Kind: "task", Login: "alpha", State: "scheduled"},
 			{Name: "sms-watch", Kind: "service", Login: "alpha", State: "running"},
 			{Name: "beta-thing", Kind: "service", Login: "beta", State: "running"},
 		}})
-	waitFor(t, 3*time.Second, "m4 carries its register", func() bool {
+	waitFor(t, 3*time.Second, "mac-c carries its register", func() bool {
 		ms := roster(t, h).Machines
 		return len(ms) == 1 && len(ms[0].Services) == 3
 	})
-	// The HTTP door as a caller who holds alpha on m4 only.
+	// The HTTP door as a caller who holds alpha on mac-c only.
 	h.srv.fleetScopeHook = func(*http.Request) (func(string, string) bool, error) {
-		return func(host, login string) bool { return host == "m4" && login == "alpha" }, nil
+		return func(host, login string) bool { return host == "mac-c" && login == "alpha" }, nil
 	}
 	ctl := func(login, name, action, key string, extra map[string]any) map[string]any {
-		a := map[string]any{"machine": "m4", "login": login, "name": name, "action": action, "idempotency_key": key}
+		a := map[string]any{"machine": "mac-c", "login": login, "name": name, "action": action, "idempotency_key": key}
 		for k, v := range extra {
 			a[k] = v
 		}
@@ -89,7 +89,7 @@ func TestServiceControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(pr, "m4", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(pr, "mac-c", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	h.srv.fleetScopeHook = nil

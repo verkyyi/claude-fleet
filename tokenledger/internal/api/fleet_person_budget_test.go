@@ -73,7 +73,7 @@ func TestPersonBudgetCentral(t *testing.T) {
 	if err := r.h.srv.Vault.Put("gh:1004", credvault.Claude, "zx1", credvault.Secret{RefreshToken: "rt-zx"}); err != nil {
 		t.Fatal(err)
 	}
-	verk := r.issueOn(t, r.tok5, r.f5, fidA)
+	frank := r.issueOn(t, r.tok5, r.f5, fidA)
 	zx := r.issueOn(t, r.h.tokens["m3"], f3.FleetID, fidB)
 
 	// a bad budget is refused; a good one is stored normalized
@@ -84,7 +84,7 @@ func TestPersonBudgetCentral(t *testing.T) {
 	}
 
 	for i, want := range []float64{150, 300} {
-		if st, body := r.call(t, credvault.Claude, verk); st != 200 {
+		if st, body := r.call(t, credvault.Claude, frank); st != 200 {
 			t.Fatalf("request %d under budget → %d %s", i+1, st, body)
 		}
 		waitFor(t, 3*time.Second, "usage reported", func() bool { return personUsed(t, r.h, "gh:1005") == want })
@@ -94,12 +94,12 @@ func TestPersonBudgetCentral(t *testing.T) {
 	before := len(r.upAuth)
 	r.mu.Unlock()
 	r.pastCache()
-	st, body := r.call(t, credvault.Claude, verk)
+	st, body := r.call(t, credvault.Claude, frank)
 	if st != http.StatusForbidden || !strings.Contains(body, PersonBudgetExceeded) || !strings.Contains(body, "已达个人额度") {
 		t.Fatalf("over budget → %d %s; want 403 person_budget_exceeded", st, body)
 	}
 	t.Logf("over budget, the session sees: %d %s", st, body)
-	if st, body := r.call(t, credvault.Codex, verk); st != http.StatusForbidden || !strings.Contains(body, `"code":"`+PersonBudgetExceeded+`"`) {
+	if st, body := r.call(t, credvault.Codex, frank); st != http.StatusForbidden || !strings.Contains(body, `"code":"`+PersonBudgetExceeded+`"`) {
 		t.Fatalf("over budget (codex) → %d %s", st, body)
 	}
 	r.mu.Lock()
@@ -115,7 +115,7 @@ func TestPersonBudgetCentral(t *testing.T) {
 	// the 5h window passes: back in (the week's 1000 still has room)
 	clk.add(5*time.Hour + 11*time.Minute)
 	r.pastCache()
-	if st, body := r.call(t, credvault.Claude, verk); st != 200 {
+	if st, body := r.call(t, credvault.Claude, frank); st != 200 {
 		t.Fatalf("after the window → %d %s", st, body)
 	}
 }
@@ -138,7 +138,7 @@ func TestPersonBudgetNode(t *testing.T) {
 		!strings.Contains(out["message"].(string), "近 7 天") {
 		t.Fatalf("over the week: %d %v", st, out)
 	}
-	// m4's login is nobody's: reported, not counted, never over
+	// mac-c's login is nobody's: reported, not counted, never over
 	st, out = sessDo(t, h, http.MethodPost, "/v1/node/usage", tok4, "", rep)
 	if st != 200 || out["over"] != false || out["principal"] != "" {
 		t.Fatalf("a login with no person: %d %v", st, out)
@@ -149,7 +149,7 @@ func TestPersonBudgetNode(t *testing.T) {
 	// the operator's list carries the person with their budget
 	st, out = sessDo(t, h, http.MethodGet, "/v1/fleet/person-usage", viewerToken, "", nil)
 	people, _ := out["people"].([]any)
-	if st != 200 || len(people) != 1 || people[0].(map[string]any)["display_name"] != "Verk" ||
+	if st != 200 || len(people) != 1 || people[0].(map[string]any)["display_name"] != "Frank" ||
 		people[0].(map[string]any)["limit_week"].(float64) != 1000 {
 		t.Fatalf("person-usage: %d %v", st, out)
 	}

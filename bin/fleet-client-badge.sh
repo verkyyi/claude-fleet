@@ -4,20 +4,20 @@
 # three things — this login, the ⟳ slot, the keys of where the keyboard is — so
 # while all is well this is the GitHub login alone:
 #
-#   verkyyi                        signed in, the hub answers (blue)
-#   verkyyi · 入口连不上           (orange) a hub is set but cannot be asked
-#   verkyyi · 入口不认这台电脑 · 请重新扫码（fleet login）
+#   dave                        signed in, the hub answers (blue)
+#   dave · 入口连不上           (orange) a hub is set but cannot be asked
+#   dave · 入口不认这台电脑 · 请重新扫码（fleet login）
 #                                  (orange) the hub answered 401: it refused this
 #                                  machine's certificate (issue #2112) — scan again;
 #                                  a tap on it runs fleet login
-#   verkyyi                        (orange) nobody holds the client lease
+#   dave                        (orange) nobody holds the client lease
 #   a bar narrower than 60 columns: the login only, in its colour
 #
 # The login is the person's GitHub login (issue #2577): the hub's certificate
 # answer names it and `fleet login` keeps it in ${FLEET_CERT:-~/.ssh/fleet-cert}-who
 # (<key id>\t<login>), read only while its key id is the certificate's
 # (`ssh-keygen -L`). The certificate's principal is a MACHINE login (the node's
-# `verky`, another name on another machine), so with no GitHub login known the
+# `carol`, another name on another machine), so with no GitHub login known the
 # badge falls back to it — else this computer's user — marked `?`. Which machine
 # and which login: `fleet status`.
 #

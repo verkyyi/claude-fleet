@@ -25,7 +25,7 @@ func TestLaneStateRecordsAWrongLogin(t *testing.T) {
 	if _, err := os.Stat(p); err == nil {
 		t.Fatal("a non-WRONG_LOGIN refusal wrote lane.json")
 	}
-	why := "unrecognised enrollment token for login verky: this login re-registered"
+	why := "unrecognised enrollment token for login frank: this login re-registered"
 	a.laneRefused(&control.Error{Code: control.CodeWrongLogin, Message: why})
 	var first LaneState
 	b, err := os.ReadFile(p)

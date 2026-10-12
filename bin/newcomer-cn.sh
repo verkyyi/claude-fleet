@@ -4,7 +4,7 @@
 #   — a newcomer's whole first time against the REAL hub, from a 国内 network
 #     (issue #2888): the GitHub Actions runner in the Shenzhen ACK cluster
 #     (`runs-on: ack`, newcomer-cn.yml — staged in extras/workflows/) is a Linux box behind
-#     the same Great Firewall Arvin's new machine was. Every step is timed and
+#     the same Great Firewall Alice's new machine was. Every step is timed and
 #     judged by bin/fleet-onboard-judge.sh — the screens fleet-onboard-drill.sh
 #     (macOS) reads the same way.
 #

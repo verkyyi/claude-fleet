@@ -61,7 +61,7 @@
 # the stderr line gives the person's side the link. Which road it took is on stderr.
 #
 # THE HOME (issue #3538): a session on THIS machine watched through another machine's
-# 看台 (`<id>-via-<home>`, EPIC #2999 C4 — 「经 mini2」) cannot reach the person's loop:
+# 看台 (`<id>-via-<home>`, EPIC #2999 C4 — 「经 mac-d」) cannot reach the person's loop:
 # their loop talks to the home only. So the open goes to the home over this machine's
 # peer link (`fleet-peerlink.py exec <home>`) as `fleet-open.sh --from-peer <me>:<login>`:
 # the home adds a forward to us on ITS link to this machine (`fleet-peerlink.py fwd`),

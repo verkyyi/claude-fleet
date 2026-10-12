@@ -113,13 +113,13 @@ a = sys.argv[1:]
 opt = {x.split("=", 1)[0]: (x.split("=", 1)[1] if "=" in x else "") for x in a if x.startswith("--")}
 pos = [x for x in a if not x.startswith("--")]
 cmd = " ".join(pos[:2])
-if cmd == "status" and "--json" in opt: print(json.dumps({"Self": {"DNSName": "box.tailnet.ts.net."}}))
+if cmd == "status" and "--json" in opt: print(json.dumps({"Self": {"DNSName": "box.example.ts.net."}}))
 elif pos[:1] == ["status"]: sys.exit(1 if os.path.exists(os.path.join(W, "ts.down")) else 0)
 elif pos[:1] == ["ip"]: print(rd("ts.ip"))
 elif cmd == "serve status":
     if "--json" in opt:
         print(json.dumps({"TCP": {p: {"HTTPS": True} for p in st["web"]},
-                          "Web": {"box.tailnet.ts.net:" + p: {"Handlers": {"/": {"Proxy": u}}} for p, u in st["web"].items()}}))
+                          "Web": {"box.example.ts.net:" + p: {"Handlers": {"/": {"Proxy": u}}} for p, u in st["web"].items()}}))
 elif cmd == "serve reset": st["web"] = {}; save()
 elif pos[:1] == ["serve"] and pos[-1:] == ["off"]: st["web"].pop(opt.get("--https", ""), None); save()
 elif pos[:1] == ["serve"] and "--bg" in opt:
@@ -184,7 +184,7 @@ reset_state; echo operator > "$WORK/serve.mode"
 out="$(share "$WORK/a.md")"; rc=$?
 [ "$rc" = 0 ] || fail "1: a refused serve must fall back, not fail (rc=$rc)" "$out"
 PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
-has "READY http://box.tailnet.ts.net:$PORT/d/" "$out" "1: READY must be the http-direct URL on the server port"
+has "READY http://box.example.ts.net:$PORT/d/" "$out" "1: READY must be the http-direct URL on the server port"
 has "plain http inside the tailnet" "$out" "1: the READY line must say it is plain http inside the tailnet"
 lacks "HTTPS Certificates" "$out" "1: a not-operator refusal must NOT print the cert hint"
 ok [ "$(cat "$ROOT/mode")" = http-direct ]
@@ -194,11 +194,11 @@ path="/${url#http://*/}"
 code="$(python3 -c 'import sys,urllib.request;print(urllib.request.urlopen("http://127.0.0.1:"+sys.argv[1]+sys.argv[2]).status)' "$PORT" "$path" 2>&1)"
 has 200 "$code" "1: the http-direct server must serve the doc on the tailnet address"
 out="$(share --list)"
-has "Shared docs at: http://box.tailnet.ts.net:$PORT/" "$out" "1: --list must report the http-direct URL"
+has "Shared docs at: http://box.example.ts.net:$PORT/" "$out" "1: --list must report the http-direct URL"
 # a second share reuses the server + mode and never re-asks tailscale serve
 : > "$WORK/serve.argv"
 out="$(share "$WORK/b.md")"
-has "READY http://box.tailnet.ts.net:$PORT/d/" "$out" "1b: a second share must keep the same http-direct URL"
+has "READY http://box.example.ts.net:$PORT/d/" "$out" "1b: a second share must keep the same http-direct URL"
 ok [ ! -s "$WORK/serve.argv" ]
 out="$(share --publish "$(ls "$ROOT/entries" | head -1 | sed "s/\.json$//")")"
 has "not tailscale's operator" "$out" "1c: --publish in http-direct must say why public links are unavailable"
@@ -207,7 +207,7 @@ has "not tailscale's operator" "$out" "1c: --publish in http-direct must say why
 out="$(PRIMARY='' share "$WORK/a.md")"
 has "READY http://127.0.0.1:$PORT/d/" "$out" "1d: READY must be the loopback URL by default"
 has "fleet-open" "$out" "1d: the READY note must point at fleet-open"
-has "TAILNET http://box.tailnet.ts.net:$PORT/d/" "$out" "1d: the tailnet URL must follow as TAILNET"
+has "TAILNET http://box.example.ts.net:$PORT/d/" "$out" "1d: the tailnet URL must follow as TAILNET"
 url="$(printf '%s\n' "$out" | sed -n 's/^READY \(http:[^ ]*\).*/\1/p')"
 code="$(python3 -c 'import sys,urllib.request;print(urllib.request.urlopen(sys.argv[1]).status)' "$url" 2>&1)"
 has 200 "$code" "1d: the loopback READY URL must serve the doc"
@@ -224,7 +224,7 @@ has "nothing is being shared" "$(share --list)" "2: a failed share must leave --
 # --- 3. serve works → https (unchanged) ------------------------------------
 reset_state; echo ok > "$WORK/serve.mode"
 out="$(share "$WORK/a.md")"
-has "READY https://box.tailnet.ts.net" "$out" "3: a working serve must give the https URL"
+has "READY https://box.example.ts.net" "$out" "3: a working serve must give the https URL"
 lacks "http-direct" "$out" "3: https mode must not carry the http-direct note"
 ok [ "$(cat "$ROOT/mode")" = https ]
 has "http://127.0.0.1:$(cat "$ROOT/server.port")" "$(cat "$WORK/serve.argv")" "3: serve must front the loopback server"
@@ -249,7 +249,7 @@ PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
 # share.sh must move OFF the held start port onto another one
 [ -n "$PORT" ] && [ "$PORT" != "$HELD" ] || fail "4: share.sh must bind a port other than the held start port $HELD (bound: ${PORT:-none})"
 CHECKS=$((CHECKS + 1))
-has "READY http://box.tailnet.ts.net:$PORT/d/" "$out" "4: READY must name the port actually bound"
+has "READY http://box.example.ts.net:$PORT/d/" "$out" "4: READY must name the port actually bound"
 ok kill -0 "$(cat "$ROOT/server.pid")"
 lacks "Address already in use" "$(cat "$ROOT/server.log" 2>/dev/null)" "4: the server must never have died on EADDRINUSE"
 
@@ -337,7 +337,7 @@ out="$(share --local --tunnel "$WORK/b.md")"; rc=$?
 # a later plain share → https on the same loopback server
 rm -f "$WORK/ts.down"
 out="$(share "$WORK/b.md")"
-has "READY https://box.tailnet.ts.net" "$out" "8b: a plain share after --local must give https"
+has "READY https://box.example.ts.net" "$out" "8b: a plain share after --local must give https"
 ok [ "$(cat "$ROOT/mode")" = https ]
 ok [ "$(cat "$ROOT/server.port")" = "$PORT" ]
 has "http://127.0.0.1:$PORT" "$(cat "$WORK/serve.argv")" "8b: serve must front the same loopback server"
@@ -406,7 +406,7 @@ id="${doc#/d/}"; id="${id%/}"
 CHECKS=$((CHECKS + 1)); printf '%s\n' "$id" | grep -Eqx '[0-9a-f]{32}' || fail "10a: a doc link must carry a 128-bit random code, got '$doc'" "$out"
 IDX="$(cat "$ROOT/index.token")"
 CHECKS=$((CHECKS + 1)); printf '%s\n' "$IDX" | grep -Eqx '[0-9a-f]{32}' || fail "10a: the index code must be 128 random bits"
-has "INDEX https://box.tailnet.ts.net/i/$IDX/" "$out" "10a: INDEX must be the coded index URL"
+has "INDEX https://box.example.ts.net/i/$IDX/" "$out" "10a: INDEX must be the coded index URL"
 has "TTL expires in 7d" "$out" "10a: the default TTL is 7 days and the share says so"
 has 200 "$(code "$PORT" "$doc")" "10a: the right code → 200"
 has 404 "$(code "$PORT" /)" "10a: the root → 404 (no code, no listing)"
@@ -519,7 +519,7 @@ out="$(HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$NEWBASE" DOC
 NP="$(cat "$ROOT/server.port")"
 ok [ "$NP" != "$PORT" ]
 ok [ "$(cat "$ROOT/https.port")" = "$HP" ]
-has "READY https://box.tailnet.ts.net/d/" "$out" "10h: the URL keeps its tailnet port"
+has "READY https://box.example.ts.net/d/" "$out" "10h: the URL keeps its tailnet port"
 CHECKS=$((CHECKS + 1)); [ "$(routes)" = "$HP>$NP" ] || fail "10h: a restarted server re-points this login's route, never opens another" "$(routes)"
 PORT="$NP"
 # stacked + dead routes: two more onto our server, one on a dead port we once served,

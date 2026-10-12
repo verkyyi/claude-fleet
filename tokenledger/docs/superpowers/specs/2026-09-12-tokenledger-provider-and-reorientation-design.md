@@ -26,7 +26,7 @@ first two. Presenting `gateway` as a peer of `claude` and `codex` therefore puts
 a black box beside two concrete products, and the dashboard's source tabs,
 source chips and per-source KPI tiles all inherit that error.
 
-Measured on the live hub (`ccquota.24haowan.com`, 90 days to 2026-09-13):
+Measured on the live hub (`ccquota.example.com`, 90 days to 2026-09-13):
 
 ```
 model                         events   tokens  unpriced   billed_usd
@@ -57,7 +57,7 @@ r, ok := g.rates[Normalize(e.Model)]   // key: model id alone
 ```
 
 The gateway's own source of truth does not agree. `core/ai-gateway/catalog.json`
-(in the `24haowan-monorepo`) keys every model by **vendor and model**:
+(in the `acme-monorepo`) keys every model by **vendor and model**:
 
 ```
 dashscope/qwen-flash   dashscope/qwen3-max   dashscope/qwen-plus
@@ -401,7 +401,7 @@ touches the gateway. Three consequences, none of which change the design:
 
 3. **It is the source where a provider is most obviously meaningful,** since a
    bill is by definition one vendor's. Its collector does not exist yet (it lives
-   in `24haowan-monorepo`); when it is built it should set `provider` to the
+   in `acme-monorepo`); when it is built it should set `provider` to the
    vendor it is billing for. `ProviderNote` says so, so a blank there reads as
    "the collector did not state it" rather than "this spend has no vendor".
 

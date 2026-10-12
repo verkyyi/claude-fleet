@@ -26,7 +26,7 @@
 #   · ONE WINDOW on it, `home` (`@shell_frame`): the list pane on the left, and on
 #     the right a NESTED client of the STAGE (`viewer` below) — a second server of
 #     the shell's, `-L <session>-stage` (conf/tmux-shell-stage.conf), holding ONE
-#     WINDOW PER MACHINE, each a proxy window (`m4 <name>`, `@remote=<node>:<wid>`)
+#     WINDOW PER MACHINE, each a proxy window (`mac-a <name>`, `@remote=<node>:<wid>`)
 #     exactly as a fleet opens one on a remote row (#1424/#1475), its pane
 #     `fleet-remote-view.sh run --shell`: the far end registers a SHELL client and
 #     hides its own list, bar and prefix while only shells are attached (#1485).
@@ -1557,8 +1557,8 @@ EOF
   export FLEET_CLIENT_DIR="$CL_DIR" FLEET_SESSION="$SESS"
   hopen=home_opening_fmt; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && hopen=home_opening_solo_fmt
   # 「正在开 …」 is a WAIT, not a fact (issue #2743): on a terminal it stays on its
-  # line only while the hub decides, then the answer — 会话开在 m5 / 回到你上一次的
-  # 会话（m4） / why it failed — is written over it, so one line says what happened
+  # line only while the hub decides, then the answer — 会话开在 mac-b / 回到你上一次的
+  # 会话（mac-a） / why it failed — is written over it, so one line says what happened
   hwait=''
   if [ -t 2 ]; then
     printf 'fleet: %s' "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)" >&2; hwait=1
@@ -1780,7 +1780,7 @@ running)
 # the client's list cache: the session going `exited` (the agent's /exit) while
 # watched ends the view. The attach returns either way — ⌃D, prefix d, closing
 # the terminal, the session ending — and the server goes with it; the terminal
-# gets one line: 「会话已结束（m5）」 or 「会话在后台继续（m5）。`fleet` 可以找回。」
+# gets one line: 「会话已结束（mac-b）」 or 「会话在后台继续（mac-b）。`fleet` 可以找回。」
 # The client must be up: its warm lines and its list's cache are what this rides.
 #   solo <machine> <worker id> [<session>]     Exit 0; 1 no client; 2 usage.
 #   FLEET_SOLO_ATTACH=0 (the selftests): start it, print its socket, no attach.

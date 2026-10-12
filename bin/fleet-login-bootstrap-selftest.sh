@@ -112,7 +112,7 @@ git init -q -b master "$FX" && git -C "$FX" add -A && git -C "$FX" commit -qm st
 git -C "$FX" tag stable
 STABLE=$(git -C "$FX" rev-parse HEAD)
 echo later > "$FX/later" && git -C "$FX" add later && git -C "$FX" commit -qm master-tip
-GB="$WORK/gh"; mkdir -p "$GB/verkyyi"
+GB="$WORK/gh"; mkdir -p "$GB/dave"
 git clone -q --bare "$FX" "$GB/verkyyi/claude-fleet.git"
 export FLEET_BOOTSTRAP_GIT_BASE="$GB" FLEET_INSTALL_PLATFORM=none
 # no system daemons for this login unless a leg installs some (the operator's

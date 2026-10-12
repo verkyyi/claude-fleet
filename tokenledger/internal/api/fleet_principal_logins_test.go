@@ -26,8 +26,8 @@ import (
 
 // The people of these tests, by the logins the map gives them.
 const (
-	pYi    = "gh:2718137" // verkyyi
-	pCao   = "gh:3001"    // 24haowan
+	pYi    = "gh:2718137" // ivan
+	pCao   = "gh:3001"    // globex
 	pHuang = "gh:3002"    // vincent
 	pZhang = "gh:3003"    // in no map
 )
@@ -66,35 +66,35 @@ func meFor(t *testing.T, h *harness, uid string) FleetMe {
 }
 
 // The acceptance line of #1458: the operator signs in, /v1/fleet/me names
-// them, and their login `verkyyi` is active on the two machines whose
+// them, and their login `ivan` is active on the two machines whose
 // agents run as it — recorded by adoption, with no create op ever sent to the
 // admin node. A colleague mapped to a login that exists on ONE machine gets
 // exactly that one.
 func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	setHubSetting(t, h.srv, AutoAssignKey, "macmini,mini2") // must NOT apply to a mapped person
-	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi", pCao: "24haowan"})
-	admin := connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
-	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
-	m4admin := connectNode(t, h, "m4-op", "mini2", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-e,mac-f") // must NOT apply to a mapped person
+	mapLogins(t, h.srv, map[string]string{pYi: "ivan", pCao: "globex"})
+	admin := connectNode(t, h, "mac-d-op", "mac-e", "ivan", true)
+	connectNode(t, h, "mac-d-24h", "mac-e", "globex", false)
+	m4admin := connectNode(t, h, "mac-c-op", "mac-f", "ivan", true)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
 
-	enterAs(t, h, pYi, "verkyyi")
+	enterAs(t, h, pYi, "ivan")
 	me := meFor(t, h, pYi)
 	if !me.Signed || me.Person != pYi || me.Principal == nil || me.Principal.ID != pYi ||
-		me.Principal.Login != "verkyyi" || me.Principal.DisplayName != "verkyyi" {
+		me.Principal.Login != "ivan" || me.Principal.DisplayName != "ivan" {
 		t.Fatalf("/v1/fleet/me = %+v", me)
 	}
 	hosts := map[string]string{}
 	for _, a := range me.Accounts {
 		hosts[a.Hostname] = a.State + "/" + a.Op
 	}
-	if len(hosts) != 2 || hosts["macmini"] != "active/adopt" || hosts["mini2"] != "active/adopt" {
-		t.Fatalf("accounts = %v, want verkyyi adopted on macmini and mini2", hosts)
+	if len(hosts) != 2 || hosts["mac-e"] != "active/adopt" || hosts["mac-f"] != "active/adopt" {
+		t.Fatalf("accounts = %v, want ivan adopted on mac-e and mac-f", hosts)
 	}
-	for name, n := range map[string]*fleetNode{"macmini admin": admin, "mini2 admin": m4admin} {
+	for name, n := range map[string]*fleetNode{"mac-e admin": admin, "mac-f admin": m4admin} {
 		if got, ok := readMsg(n.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 			t.Fatalf("%s was sent an op for a mapped person: %+v", name, got)
 		}
@@ -103,23 +103,23 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 	// A colleague whose login exists on one machine only.
 	enterAs(t, h, pCao, "")
 	p, err := h.srv.Store.Principal(pCao)
-	if err != nil || p.Login != "24haowan" {
+	if err != nil || p.Login != "globex" {
 		t.Fatalf("caojian → %+v %v", p, err)
 	}
 	accts, _ := h.srv.Store.FleetAccounts(pCao)
-	if len(accts) != 1 || accts[0].Hostname != "macmini" || accts[0].State != store.AccountActive {
-		t.Fatalf("caojian's accounts = %+v, want 24haowan adopted on macmini only", accts)
+	if len(accts) != 1 || accts[0].Hostname != "mac-e" || accts[0].State != store.AccountActive {
+		t.Fatalf("caojian's accounts = %+v, want globex adopted on mac-e only", accts)
 	}
 	// ...and only sees that machine's own login, never the operator's.
 	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", pCao, nil)
 	var snap NodesSnapshot
 	json.Unmarshal(body, &snap)
-	if len(snap.Nodes) != 1 || snap.Nodes[0].OSUser != "24haowan" || snap.Nodes[0].Hostname != "macmini" {
+	if len(snap.Nodes) != 1 || snap.Nodes[0].OSUser != "globex" || snap.Nodes[0].Hostname != "mac-e" {
 		t.Fatalf("caojian sees %+v", snap.Nodes)
 	}
 
 	// A machine that joins AFTER the sign-in is adopted at its hello.
-	connectNode(t, h, "m6-op", "mini3", "verkyyi", true)
+	connectNode(t, h, "m6-op", "mini3", "ivan", true)
 	waitState(t, h, pYi, "mini3", store.AccountActive)
 	// A machine joining as somebody else's login adopts nothing for anyone.
 	connectNode(t, h, "m6-x", "mini3", "mallory", false)
@@ -154,8 +154,8 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 func TestFleetUnmappedSignInLeavesNoRow(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi"})
-	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
+	mapLogins(t, h.srv, map[string]string{pYi: "ivan"})
+	connectNode(t, h, "mac-d-op", "mac-e", "ivan", true)
 
 	enterAs(t, h, pZhang, "zhangsan")
 	me := meFor(t, h, pZhang)
@@ -200,14 +200,14 @@ func TestFleetUnmappedSignInLeavesNoRow(t *testing.T) {
 func TestFleetForgetDropsOnlyRowsThatNeverReachedAMachine(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
-	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetAdmins = []string{"ivan"}
 
 	// The bad data: a row minted for someone and a create queued on a
 	// machine with no admin connected.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pZhang, Hostname: "mini2"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pZhang, Hostname: "mac-f"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
-	if a := accountState(t, h, pZhang, "mini2"); a.State != store.AccountPending {
+	if a := accountState(t, h, pZhang, "mac-f"); a.State != store.AccountPending {
 		t.Fatalf("queued row = %+v", a)
 	}
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pZhang}); code != 200 {
@@ -227,21 +227,21 @@ func TestFleetForgetDropsOnlyRowsThatNeverReachedAMachine(t *testing.T) {
 	// An adopted (active) login refuses to be forgotten; `remove` is the
 	// path that actually closes it. A pending row beside it can still go,
 	// by hostname, leaving the active one.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "macmini", Login: "alice"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "mac-e", Login: "alice"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pAlice, Hostname: "mini2"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pAlice, Hostname: "mac-f"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pAlice}); code != http.StatusConflict {
 		t.Fatalf("forget with an active login: HTTP %d, want 409", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pAlice, Hostname: "mini2"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pAlice, Hostname: "mac-f"}); code != 200 {
 		t.Fatalf("forget pending row: HTTP %d", code)
 	}
 	as, _ := h.srv.Store.FleetAccounts(pAlice)
-	if len(as) != 1 || as[0].Hostname != "macmini" || as[0].State != store.AccountActive {
-		t.Fatalf("after forgetting mini2: %+v", as)
+	if len(as) != 1 || as[0].Hostname != "mac-e" || as[0].State != store.AccountActive {
+		t.Fatalf("after forgetting mac-f: %+v", as)
 	}
 	// A signed-in person can no more forget than assign.
 	req, _ := json.Marshal(FleetAccountRequest{Action: "forget", PrincipalID: pAlice})
@@ -255,18 +255,18 @@ func TestFleetForgetDropsOnlyRowsThatNeverReachedAMachine(t *testing.T) {
 func TestFleetMapRefusesToRenameAnExistingLogin(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi"})
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pYi, Hostname: "mini2", Login: "yilianghui"}); code != 200 {
+	mapLogins(t, h.srv, map[string]string{pYi: "ivan"})
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pYi, Hostname: "mac-f", Login: "yilianghui"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
-	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
+	connectNode(t, h, "mac-d-op", "mac-e", "ivan", true)
 	enterAs(t, h, pYi, "")
 	p, _ := h.srv.Store.Principal(pYi)
 	if p.Login != "yilianghui" {
 		t.Fatalf("sign-in renamed the login: %+v", p)
 	}
-	if a := accountState(t, h, pYi, "macmini"); a.State != "" {
-		t.Fatalf("a mismatched row was adopted onto macmini: %+v", a)
+	if a := accountState(t, h, pYi, "mac-e"); a.State != "" {
+		t.Fatalf("a mismatched row was adopted onto mac-e: %+v", a)
 	}
 }
 
@@ -276,9 +276,9 @@ func TestFleetMapRefusesToRenameAnExistingLogin(t *testing.T) {
 func TestFleetNoMapIsTheOldBehaviour(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	setHubSetting(t, h.srv, AutoAssignKey, "m4")
-	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	h.srv.FleetAdmins = []string{"ivan"}
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-c")
+	admin := connectNode(t, h, "mac-c-op", "mac-c", "ivan", true)
 	enterAs(t, h, pZhang, "张三")
 	_, op := expectAccountOp(t, admin.tnode)
 	if op.Op != control.AccountCreate || op.Login != "user3003" || op.FullName != "张三" {
@@ -309,11 +309,11 @@ func asUID(t *testing.T, h *harness, method, path, uid, name string, body []byte
 // still recorded nowhere by any of them.
 func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	h, _ := certHarness(t)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi", pCao: "24haowan", pHuang: "vincent"})
-	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
-	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
-	connectNode(t, h, "m5-v", "macmini", "vincent", false)
+	h.srv.FleetAdmins = []string{"ivan"}
+	mapLogins(t, h.srv, map[string]string{pYi: "ivan", pCao: "globex", pHuang: "vincent"})
+	connectNode(t, h, "mac-d-op", "mac-e", "ivan", true)
+	connectNode(t, h, "mac-d-24h", "mac-e", "globex", false)
+	connectNode(t, h, "mac-d-v", "mac-e", "vincent", false)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
 	for _, uid := range []string{pYi, pCao, pHuang} {
 		if _, err := h.srv.Store.Principal(uid); !errors.Is(err, store.ErrNoPrincipal) {
@@ -327,15 +327,15 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	json.Unmarshal(body, &st)
 	pc, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pYi, "易良辉", nil)
 	page := html.UnescapeString(string(raw))
-	if pc != 200 || strings.Contains(page, "issue yet") || !strings.Contains(page, ">Confirm</button>") || !strings.Contains(page, "verkyyi") {
+	if pc != 200 || strings.Contains(page, "issue yet") || !strings.Contains(page, ">Confirm</button>") || !strings.Contains(page, "ivan") {
 		t.Fatalf("confirm page %d:\n%s", pc, page)
 	}
 	p, err := h.srv.Store.Principal(pYi)
-	if err != nil || p.Login != "verkyyi" || p.DisplayName != "易良辉" {
+	if err != nil || p.Login != "ivan" || p.DisplayName != "易良辉" {
 		t.Fatalf("the page did not place them: %+v %v", p, err)
 	}
-	if a := accountState(t, h, pYi, "macmini"); a.State != store.AccountActive || a.Op != "adopt" {
-		t.Fatalf("verkyyi on macmini = %+v", a)
+	if a := accountState(t, h, pYi, "mac-e"); a.State != store.AccountActive || a.Op != "adopt" {
+		t.Fatalf("ivan on mac-e = %+v", a)
 	}
 	pc, done := cookieForm(t, h, personCookie(pYi, "易良辉"), h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	if pc != 200 || !strings.Contains(done, "valid until") {
@@ -344,7 +344,7 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
 	var cr CertResponse
 	json.Unmarshal(body, &cr)
-	if code != 200 || strings.Join(cr.Principals, ",") != "verkyyi" || parseCert(t, cr.Certificate).KeyId != sshca.KeyIDPrefix+pYi {
+	if code != 200 || strings.Join(cr.Principals, ",") != "ivan" || parseCert(t, cr.Certificate).KeyId != sshca.KeyIDPrefix+pYi {
 		t.Fatalf("poll: %d %s", code, body)
 	}
 
@@ -353,13 +353,13 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	if code, b := asUID(t, h, http.MethodGet, "/connect", pCao, "曹健", nil); code != 200 || !strings.Contains(string(b), "连接") {
 		t.Fatalf("/connect: %d %s", code, b)
 	}
-	if p, err := h.srv.Store.Principal(pCao); err != nil || p.Login != "24haowan" || p.DisplayName != "曹健" {
+	if p, err := h.srv.Store.Principal(pCao); err != nil || p.Login != "globex" || p.DisplayName != "曹健" {
 		t.Fatalf("/connect did not place them: %+v %v", p, err)
 	}
 	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", pCao, "", nil)
 	var ci ConnectInfo
 	json.Unmarshal(body, &ci)
-	if code != 200 || !ci.Signed || ci.Login != "24haowan" || ci.Problem != "" || len(ci.Machines) != 1 || ci.Machines[0].Hostname != "macmini" {
+	if code != 200 || !ci.Signed || ci.Login != "globex" || ci.Problem != "" || len(ci.Machines) != 1 || ci.Machines[0].Hostname != "mac-e" {
 		t.Fatalf("connect info %d %+v", code, ci)
 	}
 

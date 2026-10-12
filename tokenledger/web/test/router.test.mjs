@@ -8,7 +8,7 @@ import { PAGES } from '../dist/lib/shell.js';
 import { routeFor, movedTo, MOVED, pathParam, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
 
 // A prefix page's path is one name under its href (/machines/<host>, claude-fleet#2796).
-const pathOf = (p) => (p.prefix ? p.href + 'm4' : p.href);
+const pathOf = (p) => (p.prefix ? p.href + 'mac-b' : p.href);
 
 const ORIGIN = 'https://hub.example';
 const anchor = (href, attrs = {}) => ({ href, target: attrs.target || '', hasAttribute: (n) => n in attrs });

@@ -26,7 +26,7 @@ awkr() { LC_ALL=C awk -v table="$SHAPES" -f "$BIN/fleet-redact.awk" "$@"; }
 # the corpus: every kind 共同约定第 1 条 names, the neighbours that must survive,
 # a non-ASCII line and a last line with no newline
 cat > "$T/corpus" <<'EOF'
-plain: desk-session-handoff-notes-and-more task-runner HostKeyAlias=fleet-m5 ConnectTimeout=15
+plain: desk-session-handoff-notes-and-more task-runner HostKeyAlias=fleet-mac-b ConnectTimeout=15
 GH ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 and github_pat_11ABCDEFGHIJKLMNOPQRST_xyz
 key sk-ant-api03-abcdefghijklmnop more
 -----BEGIN OPENSSH PRIVATE KEY-----
@@ -68,7 +68,7 @@ python3 "$BIN/fleet_redact.py" --stats "$T/p.st" < "$T/corpus" > "$T/p.out"
 awkr -v stats="$T/a.st" < "$T/corpus" > "$T/a.out"
 if cmp -s "$T/p.out" "$T/a.out" && cmp -s "$T/p.st" "$T/a.st"; then ok "B python and awk: the same bytes and the same counts"
 else bad "B python and awk differ:"; diff "$T/p.out" "$T/a.out" | head -n 10; diff "$T/p.st" "$T/a.st"; fi
-for w in desk-session-handoff-notes-and-more task-runner HostKeyAlias=fleet-m5 OTHER=1 '"url": "https://x"' ' tail' ' y'; do
+for w in desk-session-handoff-notes-and-more task-runner HostKeyAlias=fleet-mac-b OTHER=1 '"url": "https://x"' ' tail' ' y'; do
   grep -qF -e "$w" "$T/p.out" || bad "B over-redacted: [$w] is gone"
 done
 grep -q 'unterminated' "$T/p.out" && bad "B an unterminated key block leaked" || ok "B an unterminated key block is dropped to the end"
@@ -83,7 +83,7 @@ mkhome() {  # mkhome <dir>
   local h="$1/home" lg="$1/home/.cache/claude-fleet/shell/logs"
   mkdir -p "$lg" "$h/.ssh" "$1/conf"
   cp "$T/corpus" "$lg/connect.log"
-  printf 'place m5 → refused sk-ant-api03-placeplaceplace\n' > "$lg/place.log"
+  printf 'place mac-b → refused sk-ant-api03-placeplaceplace\n' > "$lg/place.log"
   printf 'keeper renew ok\n' > "$lg/keeper.log"
   printf 'NOTLISTED_cert\n' > "$h/.ssh/fleet-cert"
   printf '{"token": "NOTLISTED_hubjson"}\n' > "$1/conf/hub.json"

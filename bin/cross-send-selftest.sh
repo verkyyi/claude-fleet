@@ -54,13 +54,13 @@ p7=$(tf display-message -p -t "$w7" '#{pane_id}')
 (cd "$BIN" && python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$FLEET_CONF_DIR") >/dev/null 2>&1
 U=$(lib fleet_uuid "$L")
 [ -n "$U" ] || { echo 'cross-send selftest: no fleet UUID could be minted' >&2; exit 1; }
-F=11111111-2222-3333-4444-555555555555          # a fleet on another machine ("m4")
+F=11111111-2222-3333-4444-555555555555          # a fleet on another machine ("mac-a")
 CACHE="$FLEET_CONF_DIR/control/hub-workers.tsv"
 OUTBOX="$FLEET_CONF_DIR/control/hub-outbox"
 BOOK="$FLEET_CONF_DIR/fleets/$L/delivery.ndjson"
 QDIR="$FLEET_CONF_DIR/fleets/$L/peer-queue"
 mkdir -p "${CACHE%/*}"
-printf '%s/issue-42\tm4\t\n%s/acme-app:issue-43\tm4\t\n%s/issue-44\tm5:lost\t\n' "$F" "$F" "$F" > "$CACHE"
+printf '%s/issue-42\tmac-a\t\n%s/acme-app:issue-43\tmac-a\t\n%s/issue-44\tmac-b:lost\t\n' "$F" "$F" "$F" > "$CACHE"
 export CCQUOTA_FLEET=1
 outbox() { ls "$OUTBOX"/*.json 2>/dev/null; }
 jget() { python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); v=r
@@ -141,7 +141,7 @@ OPID='"operation_id":"00000000-0000-4000-8000-000000000042"'
 fa() { out=$(env -u TMUX -u TMUX_PANE bash "$BIN/fleet-answer.sh" --session "$L" "$@" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 answer '{'"$OPID"',"status":"succeeded","result":{"answered":"2 1,3","how":"confirmed"}}'
 fa --answer "wid:$F/issue-42" 2 1,3
-ok; [ "$rc" = 0 ] && case "$out" in "answered → $F/issue-42 on m4"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 0 ] && case "$out" in "answered → $F/issue-42 on mac-a"*) true ;; *) false ;; esac \
   || fail "J: succeeded ⇒ answered, exit 0" "rc=$rc out=$out err=$err"
 ok; [ "$(nwrites)" = 1 ] && [ "$(cut -f1 "$WRITES")" = worker_answer ] \
   && python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["worker_id"]==sys.argv[2] and d["answer"]=="2 1,3" else 1)' \
@@ -159,7 +159,7 @@ fa --answer "wid:$F/issue-42" 1
 ok; [ "$rc" = 4 ] || fail "J: unknown ⇒ exit 4 (sent, not confirmed)" "rc=$rc err=$err"
 n0=$(nwrites)
 fa --show "wid:$F/issue-42"
-ok; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *"lives on m4"*--answer*) true ;; *) false ;; esac \
+ok; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *"lives on mac-a"*--answer*) true ;; *) false ;; esac \
   || fail "J: --show elsewhere refuses, says where, writes nothing" "rc=$rc err=$err"
 fa --answer "wid:$F/issue-44" 1
 ok; [ "$rc" = 1 ] && [ "$(nwrites)" = "$n0" ] && case "$err" in *offline*) true ;; *) false ;; esac \

@@ -29,7 +29,7 @@
 #      normal pressure above the floor admits it under the strict rule
 #      (FLEET_ADMIT_ROOM=hold), never an ordinary spawn there; pressure, the
 #      floor, load and a standing hold still bind.
-#   I. the room estimate is advice at normal pressure (issue #3479, mini2's
+#   I. the room estimate is advice at normal pressure (issue #3479, mac-d's
 #      drill 35 numbers): room 0 above the floor + reserved admits an ordinary
 #      spawn and notes it; the reserved sessions, pressure and the floor still
 #      hold, and FLEET_ADMIT_ROOM=hold restores the strict rule.
@@ -251,7 +251,7 @@ done
 ok "E crash restore / handoff never reach the admission gate"
 
 # ===== H: the onboarding guide passes the room estimate (issue #3472) ===========
-# mini2, drill 34: pressure normal, 28 % free, floor 15 % — and «room for 0 more»
+# mac-d, drill 34: pressure normal, 28 % free, floor 15 % — and «room for 0 more»
 # at ~960 MB a session refused a newcomer's FIRST window three times. Here: 16000
 # MB × 18 % = 2880 avail, floor 2400 → (2880 − 2400) / 600 = 0 room, above the floor.
 r=$(admit 'echo 1 18 5 0' 'echo 0.5' FLEET_ADMIT_ROOM=hold)
@@ -280,7 +280,7 @@ grep -q '\[ "\$NAME" = guide \] && \[ "\$PIN" = 1 \] && \[ "\$PROMPT" = /fleet-o
 ok "H the onboarding guide passes room 0 at normal pressure above the floor; pressure/floor/load/hold still bind"
 
 # ===== I: the room estimate is advice at normal pressure (issue #3479) =========
-# mini2, drill 35: the newcomer's SECOND ordinary session — pressure normal, 25 %
+# mac-d, drill 35: the newcomer's SECOND ordinary session — pressure normal, 25 %
 # free, floor 15 %, ~882 MB a session, «room for 0 more». Here: 16384 MB, agents
 # of 294 MB (× 3 = 882), 25 % → 4096 avail, floor 2457; the hold an earlier
 # refusal left (+1024 MB) and the guide's confirmed window (1 × 882) take room to
@@ -292,7 +292,7 @@ m2setup() { rm -rf "$WORK/t"; mkdir -p "$WORK/t/.claude-dash/global/admit-reserv
 m2setup
 r=$(m2 FLEET_ADMIT_ROOM=hold)
 case "$r" in 1\|*pressure\ normal*room\ for\ 0\ more\ at\ ~882\ MB*4096\ MB\ available,\ 2457\ MB\ kept\ back*1024\ MB*1\ admitted*) ;;
-  *) fail "I setup: the strict rule reproduces mini2's refusal (got '$r')" ;; esac
+  *) fail "I setup: the strict rule reproduces mac-d's refusal (got '$r')" ;; esac
 m2setup; r=$(m2); [ "$r" = "0|" ] || fail "I room 0 at normal pressure, 757 MB above the floor + reserved: an ordinary spawn is admitted (got '$r')"
 [ ! -e "$WORK/t/.claude-dash/global/admit-advice.log" ] || fail "I a bare read (the doctor, the capacity beat) notes nothing"
 [ -e "$WORK/t/.claude-dash/global/admit-held" ] || fail "I advice is no recovery: the hold stays"
@@ -317,16 +317,16 @@ grep -q 'room 0 at ~882 MB each, 4096 MB available, 2457 MB kept back, 1 admitte
 m2setup
 r=$(env FLEET_ADMIT=1 HOME="$WORK/t" TMPDIR="$WORK/t" FLEET_CONF_DIR="$WORK/t/.claude-dash" FLEET_LOAD_PROBE_CMD='echo 0.5' FLEET_MEM_TOTAL_MB=16384 \
   FLEET_MEM_PS_CMD="$M2PS" FLEET_MEM_PROBE_CMD='echo 1 25 0 0' bash "$BIN/fleet-control-read.sh" capacity 2>&1)
-case "$r" in *'"admit":true'*'"room":2}'*) ;; *) fail "I capacity under mini2's reading says admit:true room 2 (the guide's open window is in avail, #3487) — not «full» to the hub (got '$r')" ;; esac
+case "$r" in *'"admit":true'*'"room":2}'*) ;; *) fail "I capacity under mac-d's reading says admit:true room 2 (the guide's open window is in avail, #3487) — not «full» to the hub (got '$r')" ;; esac
 r=$(env FLEET_ADMIT=1 FLEET_ADMIT_ROOM=hold HOME="$WORK/t" TMPDIR="$WORK/t" FLEET_CONF_DIR="$WORK/t/.claude-dash" FLEET_LOAD_PROBE_CMD='echo 0.5' FLEET_MEM_TOTAL_MB=16384 \
   FLEET_MEM_PS_CMD="$M2PS" FLEET_MEM_PROBE_CMD='echo 1 25 0 0' bash "$BIN/fleet-control-read.sh" capacity 2>&1)
 case "$r" in *'"admit":false'*'"room":0}'*) ;; *) fail "I capacity under FLEET_ADMIT_ROOM=hold stays admit:false room 0 (got '$r')" ;; esac
 r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_admit_room_advised "0 600 8000 2400 0 0 0 0"; fleet_admit_room_advised "9 600 8000 2400 0 0 0 0"; FLEET_ADMIT_ROOM=hold fleet_admit_room_advised "0 600 8000 2400 0 0 0 0"' _ "$BIN" | paste -sd, -)
 [ "$r" = "10,10,0" ] || fail "I advised room: ceil((avail − floor − reserved × cost) / cost), never below the strict room; hold = strict (got '$r')"
-ok "I room estimate is advice at normal pressure: mini2's second session admitted + noted; reserved/pressure/floor/hold still bind"
+ok "I room estimate is advice at normal pressure: mac-d's second session admitted + noted; reserved/pressure/floor/hold still bind"
 
 # ===== J: a window already open is not charged twice (issue #3487) =============
-# mini2, drill 36 (control/ops.log 2026-10-12T04:02:09Z): a newcomer's FIRST
+# mac-d, drill 36 (control/ops.log 2026-10-12T04:02:09Z): a newcomer's FIRST
 # ordinary session, pressure normal, 29 % free, refused «room for 0 more at ~822 MB
 # each: 4751 MB available, 2457 MB kept back, 3 admitted not yet counted» — the
 # guide and the warm pool's windows, open and confirmed, their agents already in
@@ -338,7 +338,7 @@ m3setup() { rm -rf "$WORK/t"; mkdir -p "$WORK/t/.claude-dash/global/admit-reserv
 m3() { KEEP=1 admit "echo ${P:-1} 29 0 0" 'echo 0.5' FLEET_MEM_TOTAL_MB=16384 FLEET_MEM_PS_CMD="$M3PS" "$@"; }
 m3setup
 r=$(env TMPDIR="$WORK/t" FLEET_MEM_TOTAL_MB=16384 FLEET_MEM_PS_CMD="$M3PS" FLEET_MEM_PROBE_CMD='echo 1 29 0 0' bash -c 'source "$1/fleet-lib.sh"; fleet_machine_headroom' _ "$BIN")
-[ "$r" = "0 822 4751 2457 3 0 274 3 0" ] || fail "J mini2's real inputs: room 0, cost 822, 4751 avail, 2457 floor, 3 reserved, 0 still opening (got '$r')"
+[ "$r" = "0 822 4751 2457 3 0 274 3 0" ] || fail "J mac-d's real inputs: room 0, cost 822, 4751 avail, 2457 floor, 3 reserved, 0 still opening (got '$r')"
 m3setup; r=$(m3 FLEET_ADMIT_ROOM=hold)
 case "$r" in 1\|*room\ for\ 0\ more\ at\ ~822\ MB\ each:\ 4751\ MB\ available,\ 2457\ MB\ kept\ back,\ 3\ admitted\ not\ yet\ counted*) ;;
   *) fail "J setup: the strict rule reproduces drill 36's refusal (got '$r')" ;; esac
@@ -351,10 +351,10 @@ r=$(env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/t" FLEET_LOAD_PROBE_CMD='echo 0
 [ "$r" = "0|" ] || fail "J fleet_session_cap_ok admits drill 36's session (got '$r')"
 grep -q '4751 MB available, 2457 MB kept back, 3 admitted not yet counted (0 still opening) — admitted at normal pressure (advice)' \
   "$WORK/t/.claude-dash/global/admit-advice.log" 2>/dev/null || fail "J the admission is noted with the numbers it weighed" "$(cat "$WORK/t/.claude-dash/global/admit-advice.log" 2>/dev/null)"
-# the orchestrator's later read on mini2: '0 906 4915 2457 2 1024 302 4' (no pending field: an older line charges all)
+# the orchestrator's later read on mac-d: '0 906 4915 2457 2 1024 302 4' (no pending field: an older line charges all)
 r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_admit_room_advised "0 822 4751 2457 3 0 274 3 0"; fleet_admit_room_advised "0 822 4751 2457 3 0 274 3"' _ "$BIN" | paste -sd, -)
 [ "$r" = "3,0" ] || fail "J advised room counts only the spawns still opening; an 8-field line keeps #3480's sum (got '$r')"
-ok "J drill 36 on mini2: open windows are not charged twice — the first session is admitted; pressure still binds"
+ok "J drill 36 on mac-d: open windows are not charged twice — the first session is admitted; pressure still binds"
 
 printf '\nselftest OK: %s assertions passed (machine admission, issues #1090 #1831 #3472 #3479 #3487)\n' "$pass"
 exit 0

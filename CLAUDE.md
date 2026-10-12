@@ -256,7 +256,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   looking at one machine each see the row they picked. tmux then holds every
   window under two session names: `list-windows -a` lists it twice, and a bare
   `#{session_name}` resolved from a window / pane / `$TMUX_PANE` names whichever
-  session was active last — a shell typing on m4 would make every hook in every
+  session was active last — a shell typing on mac-a would make every hook in every
   worker pane resolve to its view. So every scan goes through `fleet_lw`
   (`bin/fleet-lib.sh`; `fleet_lw_fmt`/`fleet_lw_filter` for a command sequence,
   inline copies in `tmux-spinner.sh` and `fleet-alerts.sh` KEPT IN SYNC), and

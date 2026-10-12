@@ -46,14 +46,14 @@ func TestCredPolicyInstallAndMigration(t *testing.T) {
 	if err = s.SetFleetSetting("fleet.cred_allow.user.gh:1", "[]", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.ActivateCredPolicy(before, []string{"fleet.cred_allow.node.m4"}, "admin", time.Now()); !errors.Is(err, ErrCredPolicyChanged) {
+	if err = s.ActivateCredPolicy(before, []string{"fleet.cred_allow.node.mac-a"}, "admin", time.Now()); !errors.Is(err, ErrCredPolicyChanged) {
 		t.Fatalf("concurrent change: %v", err)
 	}
 	after := get()
-	if after["fleet.cred_policy.mode"] != "legacy" || after["fleet.cred_allow.node.m4"] != "" {
+	if after["fleet.cred_policy.mode"] != "legacy" || after["fleet.cred_allow.node.mac-a"] != "" {
 		t.Fatal("failed activation partially wrote grants")
 	}
-	if err = s.ActivateCredPolicy(after, []string{"fleet.cred_allow.node.m4"}, "admin", time.Now()); err != nil {
+	if err = s.ActivateCredPolicy(after, []string{"fleet.cred_allow.node.mac-a"}, "admin", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if get()["fleet.cred_policy.mode"] != "strict" {

@@ -63,9 +63,9 @@ every row below is ✅. One row per row of the EPIC page's 「侧栏的每一件
 (17 rows covering the sidebar's 24 jobs — the 11 menu items share row 7), no more,
 no fewer; a job found later gets a row here and a member issue. Evidence lives
 under `$FLEET_CONF_DIR/fleets/fleet/epic/3178/evidence/3186/` (`fleet-evidence.sh`,
-never committed) — `panel` · `menus` · `rows` are the macmini 看台's own
+never committed) — `panel` · `menus` · `rows` are the mac-c 看台's own
 `fleet-quickopen.py view-panel | view-menu | view-rows` output. 「点头」 = 发起人
-@verkyyi 2026-10-11 确认方案（「需要你定的事」全部按建议）.
+@dave 2026-10-11 确认方案（「需要你定的事」全部按建议）.
 
 状态：✅ 有证据（17/17，2026-10-11 全绿）
 
@@ -76,7 +76,7 @@ never committed) — `panel` · `menus` · `rows` are the macmini 看台's own
 | 3 | 问题原话 | 「等你」那一行下面一行（status_msg / `@claude_needs_detail`） | `fleet-view-selftest.sh`（原话行） · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 4 | 按仓库分组、父子缩进、已结束折起来 | 按「你该做什么」分组；仓库只在 2 个以上时做行尾标签；子会话缩进；已结束折在最下 | `panel` · `rows`（`claude-fleet` / `no repo` 标签） | ✅ |
 | 5 | 置顶 | 「置顶」组；Tab →「置顶」（本机的行；别的机器的行侧栏也不能置顶） | `menus`（Pin） · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
-| 6 | 别的机器的会话、失联变灰 | 同样列出，行尾标机器；失联 / 过期：顶上整条红字 + 那几行「? 失联 N 分钟」，↵ 说进不去 | `panel`（mini2 的行）· `fleet-view-hub-fresh-selftest.sh` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
+| 6 | 别的机器的会话、失联变灰 | 同样列出，行尾标机器；失联 / 过期：顶上整条红字 + 那几行「? 失联 N 分钟」，↵ 说进不去 | `panel`（mac-d 的行）· `fleet-view-hub-fresh-selftest.sh` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 7 | 点一行出菜单：回答 · 发消息 · 改名 · 停 · 继续 · 唤醒 · 改回收方式 · 回收 · 换账号 · 换 Claude/Codex · 打开它的改动 | 选中按 Tab，同一份菜单（`ACTIONS`；`SIDEBAR_ACTIONS` 一一对照）；别的机器的行有 回答 · 发消息 · 改名 · 改回收方式 · 停 · 回收 · 恢复 | `menus` · `fleet-view-actions-selftest.sh` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 8 | 改名、发消息、回答时在那一行下面问一句 | 面板底部问一句（↵ 交 · Esc 退），答完回到列表 | `fleet-view-actions-selftest.sh` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 9 | 配置坏了「会坏·需重开」 | 那一行的 `✗ 会坏·需重开` 标签 | `fleet-view-selftest.sh`（cfg broken） | ✅ |
@@ -133,7 +133,7 @@ panel's commands first — 退出 fleet · 新会话 claude / codex · 切到多
 query lists the sessions waiting on you first, then the most recent and the one
 in view last, so ⌘P ↵ is «the one I was just on». A query keeps the rows it matches: a substring of the name first
 (earlier is better, a word start best), then a substring of the machine, state
-or repo (`m4`, `needs`), then the letters in order (`crr` → 「Codex: reap
+or repo (`mac-a`, `needs`), then the letters in order (`crr` → 「Codex: reap
 rules」); ties go to the more recent. ⌘P + two letters + ↵ reaches any session
 in four keys.
 
@@ -384,7 +384,7 @@ old client's parts, and none of their faults.
   until the old client goes (EPIC #2999 C11).
 
 **Your address: no command = the 看台** (issue #3071, EPIC #3067 C5). On your
-home machine's entry port (`ssh -p 22022 <login>@<name>.cf.24haowan.com`, a key
+home machine's entry port (`ssh -p 22022 <login>@<name>.cf.example.com`, a key
 added on the hub's key page) there is nothing to type: a connection with **no
 command on a terminal** lands in your 看台 — the session you looked at last
 from that key, else the orchestrator (#3060's first screen); ⌃\ there is the
@@ -399,13 +399,13 @@ your login, never a limit; each arrival is one line in `logs/entry.ndjson`.
 1. Open the hub's key page on the phone — `<hub>/fleet/keys` (sign in once).
    The first time it asks for your address's name: lowercase letters, digits
    and `-`, 3–20 (the GitHub name is filled in); your address becomes
-   `<name>.cf.24haowan.com`.
+   `<name>.cf.example.com`.
 2. In Termius: Keychain → **Generate key** (ED25519) → open it → **Copy public
    key**; paste that one line on the key page, give it a name (`iPhone`), **加上**.
    A private key pasted by mistake is refused and never kept.
 3. In Termius: **New host** with the four things the page lists, each with a
-   copy button — **地址** `<name>.cf.24haowan.com` · **端口** your home's entry
-   port as the page says (today 22122 for macmini, 22123 for mini2 — the
+   copy button — **地址** `<name>.cf.example.com` · **端口** your home's entry
+   port as the page says (today 22122 for mac-c, 22123 for mac-d — the
    router's outside port, not always 22022) · **用户名** your login on the home
    machine · **钥匙** the one you just added. Connect: the first time Termius
    asks you to trust the host key — that is the home's entry port's own key.
@@ -487,11 +487,11 @@ the bar is the same three things as any layout's (below), with `⌃D 放到后�
 where ⌘↑↓ would be. **Leaving is
 putting it in the background**: ⌃D (caught by the client; the agent never sees
 it — its own `/exit` still ends it), `prefix d` or closing the terminal only
-detach, and the terminal says 「会话在后台继续（m5）。下次输入 fleet 回来。」
+detach, and the terminal says 「会话在后台继续（mac-b）。下次输入 fleet 回来。」
 (`fleet-topbar.py goodbye`, run by `fleet-shell.sh` once the attach returns).
 The session runs on under its `@reap_policy`. When the agent ends itself
 (`/exit`), the list sees the row in view go `exited` and detaches the client:
-「会话已结束（m5）。fleet 可以恢复。」 — the next `fleet` is back on that session's
+「会话已结束（mac-b）。fleet 可以恢复。」 — the next `fleet` is back on that session's
 recovery page (↵ resumes it). `fleet` with the client still running re-attaches
 to what it showed; with nothing running it opens the row it showed last (the
 switch history's head) once the list has read it, or a new HOME Claude session
@@ -535,8 +535,8 @@ columns) has the glyph, #N, the clipped title and 「62%」; from 80 the state's
 「PR #N」 and 「62% Opus 5.5 high」; from 140 the repo after the title, the PR's
 checks (✓ / … / ✗), 「剩余 62% · Opus 5.5 · high」 and 「⌘P」. The whole line is red
 while the session waits on you — a question or an OK, its own words in the
-title's place — and grey with ? while its machine is out of reach (「m4 连不上」)
-or on the hub relay (「m4 经中转」), the only time the machine is named. Going
+title's place — and grey with ? while its machine is out of reach (「mac-a 连不上」)
+or on the hub relay (「mac-a 经中转」), the only time the machine is named. Going
 round the sessions, and what the others are doing, is the panel's (⌘P ↑↓ ↵).
 
 It reads ONE record, `switch-bar.json` beside the switch history, which the list
@@ -559,7 +559,7 @@ the line through the nested client, and the widths.
 
 ## A new session in one command — `fleet claude` / `fleet codex` (issue #2264)
 
-`fleet claude [--node m4] [a first sentence…]` (or `fleet codex …`) opens a
+`fleet claude [--node mac-a] [a first sentence…]` (or `fleet codex …`) opens a
 **HOME session** — no repo, in your home directory on a fleet machine, with that
 agent — and shows it, like running `claude` locally; the words are its first
 turn. It is the one HOME-session primitive (EPIC #2259 共同约定 2):
@@ -578,9 +578,9 @@ It is not the client's stage but a tmux server of its own (`-L
 pinned to that session, so the client's own view — open in another terminal or
 not — never moves with it. A watcher reads the row off the client's list cache
 for as long as the view lives: the session going `exited` (the agent's `/exit`)
-ends the view, and the terminal is back at its prompt with 「会话已结束（m5）。」.
+ends the view, and the terminal is back at its prompt with 「会话已结束（mac-b）。」.
 ⌃D, `prefix d` or closing the terminal only put it in the background:
-「会话在后台继续（m5）。`fleet` 可以找回。」 — the session runs on, `fleet` lists
+「会话在后台继续（mac-b）。`fleet` 可以找回。」 — the session runs on, `fleet` lists
 it. Either way the view's server goes with the attach, and a client `fleet
 claude` had to start for its ask is quit again (`fleet quit`, below), so nothing
 of fleet stays behind. No hub (a LOCAL placement): the client attaches, as
@@ -634,7 +634,7 @@ started it.
   the actions loop, the warm loop and its ssh masters, the shell's server with
   the list and the bar, the stage with its connections. **The sessions on the
   machines keep running** — a closed proxy only drops its connection — so there
-  is no question first, and the terminal says 「fleet 已退出；会话仍在 m5/m4 上运行，
+  is no question first, and the terminal says 「fleet 已退出；会话仍在 mac-b/mac-a 上运行，
   `fleet` 重新进入。」. From inside the client (a key, a menu) it goes on in the
   background, since what runs it is about to go.
 - `fleet status` says which: 「客户端在后台运行（`fleet quit` 退出）。」 or
@@ -700,7 +700,7 @@ answer is a person's steps, the reasons live in the sections it points to.
 看哪一行红；在 Mac 上 `fleet login` 续证书、`fleet update` 跟上 stable。
 
 **会话结束了**（`/exit`、⌃C、进程被杀）——窗口留在恢复页：↵ 用同一段对话续上 · r 新开 ·
-q 回收（`docs/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（m5）。fleet 可以恢复。」
+q 回收（`docs/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（mac-b）。fleet 可以恢复。」
 时，下一次 `fleet` 就回到那个恢复页。⌃D / 关终端只是**放到后台**，会话照跑（上一节）。
 
 **额度和用量在哪看**——入口网页：`<入口>/quota`「我的额度」：每个订阅的 5 小时 / 7 天窗、

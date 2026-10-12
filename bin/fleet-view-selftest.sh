@@ -82,7 +82,7 @@ tmux -S "$STOCK" -f /dev/null new-session -d -s k -x 100 -y 30 'sleep 600' || fa
 tmux -S "$STOCK" list-keys > "$W/stock.keys"
 norm() { awk '{ $1 = $1; print }'; }
 # The rows the 看台 lists (tmux-dashboard-rows.sh --sidebar's shape, 19 fields),
-# through the producer seam: two here, one on m4, one of another login here, one
+# through the producer seam: two here, one on mac-a, one of another login here, one
 # ended. Window ids are filled in once the windows exist.
 cat > "$W/rows.sh" <<'EOF'
 #!/bin/sh
@@ -142,7 +142,7 @@ row() { local IFS="$US"; printf '%s\n' "$*"; }
   row hdr verkyyi/claude-fleet '' 'claude-fleet (4)' ' '
   row "$W1" working ⠹ 'alpha短名 ⇢cla' ' ' '' 0 '' '' '#11' — 50% ok 'Alpha 的完整标题很长很长' merged '' '' '' ''
   row "$W2" needs ! 'beta' ' ' '' 0 '' '' '#12' — 50% ok 'Beta 要你拍板' 'done:2h' '' question '要不要继续合并？' ''
-  row "wid:$MU/far1" working ⠹ 'gamma' ' ' '' 0 '' m4 '#13' — · ok 'Gamma 在 m4' keep '' '' '' ''
+  row "wid:$MU/far1" working ⠹ 'gamma' ' ' '' 0 '' mac-a '#13' — · ok 'Gamma 在 mac-a' keep '' '' '' ''
   row "wid:$OU/oth1" working ⠹ 'delta' ' ' '' 0 '' nodeA '#14' — · ok 'Delta 另一个登录' merged '' '' '' ''
   row hdr ended '' '▸ Ended (1)' ' '
   row "$W0" 'done' ✓ 'old' ' ' '' 0 '' '' '#9' — · ok 'Old 做完的' merged '' '' '' ''
@@ -179,7 +179,7 @@ done
 grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || fail "B: the first line is not 等你: $(head -4 "$W/popup.txt")"
 [ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话（空白）' "$W/popup.txt" || fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
-for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ m4' '─ nodeA' '在问你'; do
+for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
   grep -qF -- "$bad" "$W/popup.txt" && fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
 ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
@@ -246,15 +246,15 @@ pass "C  ↵ here: select-window on the 看台, no whole-screen clear, logged ($
 # --- D: another machine (C4) ---------------------------------------------------------------
 before=$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" go 'fl@view-v1' "$MU/far1"; rc=$?
-[ "$rc" = 3 ] || fail "D: go to m4's session with no link answered $rc, not 3"
+[ "$rc" = 3 ] || fail "D: go to mac-a's session with no link answered $rc, not 3"
 PW=$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')
 [ "$PW" != "$before" ] || fail "D: a far go did not show the machine's window"
-[ "$(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')" = "m4@$ME|v1|panel|wid:$MU/far1" ] \
+[ "$(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')" = "mac-a@$ME|v1|panel|wid:$MU/far1" ] \
   || fail "D: the peer window: $(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')"
 tail -1 "$log" | grep -q '"method":"peer-wait"' || fail "D: not logged peer-wait: $(tail -1 "$log")"
-tail -1 "$log" | grep -q '"machine":"m4"' || fail "D: the far machine is not logged: $(tail -1 "$log")"
+tail -1 "$log" | grep -q '"machine":"mac-a"' || fail "D: the far machine is not logged: $(tail -1 "$log")"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$MU/far1"; [ $? = 3 ] || fail "D: a second far go is not rc 3"
-[ "$(ti list-windows -t fl -F '#{@peer}' | grep -c "^m4@$ME\$")" = 1 ] || fail "D: a second go made a second m4 window"
+[ "$(ti list-windows -t fl -F '#{@peer}' | grep -c "^mac-a@$ME\$")" = 1 ] || fail "D: a second go made a second mac-a window"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$OU/oth1"; [ $? = 3 ] || fail "D: another login's session here is not a peer go (rc 3)"
 ti list-windows -t fl -F '#{@peer}' | grep -qx 'nodeA@other' || fail "D: another login here got no window of its own: $(ti list-windows -t fl -F '#{@peer}')"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "@99999"; [ $? = 4 ] || fail "D: a gone window is not rc 4"
@@ -285,7 +285,7 @@ for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 [ -s "$W/pane1.in" ] && fail "E: a ⌘ key's bytes reached a pane: $(od -c "$W/pane1.in" | head -2)"
 pass "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] b on a phone; the fleet session keeps its keys"
 
-# --- G: a phone (issue #3006, C9): 40 columns, ⌃] p the whole screen, ⌃] n on to m4 ----------
+# --- G: a phone (issue #3006, C9): 40 columns, ⌃] p the whole screen, ⌃] n on to mac-a ----------
 to resize-window -t o:view -x 40 -y 20
 sleep 0.5
 [ "$(ti display-message -p -t 'fl@view-v1:' '#{client_width}')" = 40 ] \
@@ -305,10 +305,10 @@ PY
 [ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone.txt" "$FLEET_VIEW_EVIDENCE_PHONE"
 to send-keys -t o:view Escape; sleep 0.5
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "G: go to alpha"
-to send-keys -t o:view C-] n                 # alpha → the next in the list: m4's session
-for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in m4@*) break ;; esac; done
+to send-keys -t o:view C-] n                 # alpha → the next in the list: mac-a's session
+for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in mac-a@*) break ;; esac; done
 case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in
-  "m4@$ME") ;; *) fail "G: ⌃] n from alpha did not step on to m4's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
+  "mac-a@$ME") ;; *) fail "G: ⌃] n from alpha did not step on to mac-a's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
 esac
 to resize-window -t o:view -x 120 -y 32
 pass "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
@@ -320,12 +320,12 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
 g = Path(tempfile.mkdtemp())
-(g / "orch_fl").write_text("\x1f".join(["UU/orchfid", "macmini", "online", "looping", "", "", "0", "park=1", "todo=2"]) + "\n")
+(g / "orch_fl").write_text("\x1f".join(["UU/orchfid", "mac-c", "online", "looping", "", "", "0", "park=1", "todo=2"]) + "\n")
 fv.dash_global = lambda: g
 fv.view_row = lambda vid: {}
 fv.view_fleet = lambda vid, row=None: "fl"
-fv.here_label = lambda row: "m4"
-fv.fleet_logins = lambda: {"UU": "verky"}
+fv.here_label = lambda row: "mac-a"
+fv.fleet_logins = lambda: {"UU": "carol"}
 fv.windows = lambda fleet: {"@3": ("f3", "orchestrator", 0)}   # the holder here, too
 fv.produce = lambda fleet, **kw: ""
 assert fv.entries("v1") == [], fv.entries("v1")
@@ -337,7 +337,7 @@ pass "H  no session is special: orch_<fleet> and a holder window add no line (is
 # 2 machines × 6 kinds of row (asking with its words, failed, broken configuration,
 # just merged, pinned, lost): the groups in order, the six glyphs each one cell
 # (ASCII under FLEET_GLYPHS=ascii, no colour under NO_COLOR), the state word only
-# on the lit row, the question under its row, tags (✗ broken · ∅ · k/N · m4 失联,
+# on the lit row, the question under its row, tags (✗ broken · ∅ · k/N · mac-a 失联,
 # the repo only with 2+), no machine group, a child under a parent of another
 # group at depth 0, and a two-word query (「修 3164」) hits #3164.
 cat > "$W/leg-i.py" <<'PYI'
@@ -363,15 +363,15 @@ def body(repos):
     r.append(row("@5", "done", "✓", "landed", " ", "", "0", "", "", "#3164", "merged", "·", "ok", "修 列表冻住", "merged"))
     r.append(row("@6", "done", "✓", "oldie", " ", "", "0", "", "", "#6", "merged", "·", "ok", "很早合并的", "merged"))
     r.append(row("hdr", repos[1] if len(repos) > 1 else "none", "", "tokenledger (1)" if len(repos) > 1 else "无仓库 (1)", " "))
-    r.append(row("wid:MU/far1", "working", "⠹", "far", " ", "", "0", "", "m4!", "#7", "—", "·", "ok", "失联机器上的", "merged"))
-    r.append(row("wid:MU/far2", "needs", "!", "far2", " ", "", "0", "", "m4", "#8", "—", "·", "ok", "m4 在问", "merged", "", "permission", "Bash: rm -rf build"))
+    r.append(row("wid:MU/far1", "working", "⠹", "far", " ", "", "0", "", "mac-a!", "#7", "—", "·", "ok", "失联机器上的", "merged"))
+    r.append(row("wid:MU/far2", "needs", "!", "far2", " ", "", "0", "", "mac-a", "#8", "—", "·", "ok", "mac-a 在问", "merged", "", "permission", "Bash: rm -rf build"))
     r.append(row("hdr", "ended", "", "▸ 已结束 (1)", " "))
     r.append(row("@9", "done", "✓", "ended", " ", "", "0", "", "", "", "—", "·", "ok", "结束的", "merged"))
     return "\n".join(r) + "\n"
 fv.view_row = lambda vid: {}
 fv.view_fleet = lambda vid, row=None: "fl"
 fv.here_label = lambda row: "nodeA"
-fv.fleet_logins = lambda: {"MU": "verky"}
+fv.fleet_logins = lambda: {"MU": "carol"}
 fv.windows = lambda fleet: {"@5": ("", "worker", now - 600), "@6": ("", "worker", now - 3 * 86400), "@9": ("", "worker", now - 60)}
 os.environ["FLEET_UI_LANG"] = "zh"
 fv.gone_text = lambda fleet: ""
@@ -391,7 +391,7 @@ ask = [e for e in it if e["kind"] == "ask"]
 assert [a["of"] for a in ask] == ["@3", "MU/far2"] and ask[0]["text"] == "要不要合并这个 PR？ 第二行", ask
 tags = {e["target"]: e["tags"] for e in it if e["kind"] == "sess"}
 assert tags["@4"] == ["✗ 会坏·需重开", "∅"], tags["@4"]
-assert tags["MU/far1"] == ["m4 失联"] and tags["MU/far2"] == [] and tags["@2"] == ["1/2"], tags
+assert tags["MU/far1"] == ["mac-a 失联"] and tags["MU/far2"] == [] and tags["@2"] == ["1/2"], tags
 assert not any("o/claude-fleet" in " ".join(t) or "claude-fleet" in " ".join(t) for t in tags.values()), tags
 # a child whose parent sits in another group stands at depth 0
 dep = {e["target"]: e["depth"] for e in it if e["kind"] == "sess"}
@@ -404,9 +404,9 @@ v = fv.visible(it, "修 3164", set())
 assert v and v[0]["target"] == "@5", [e.get("target") for e in v]
 assert fv.visible(it, "3164 不存在的词", set()) == []
 # a match is the title or the issue number, never a machine's name (issue #3327):
-# `m4` lights no row on m4, `#8` its issue
-assert [e for e in fv.visible(it, "m4", set()) if e["kind"] == "sess" and "m4" not in (e.get("text") or "")] == [], \
-    [(e.get("target"), e.get("text")) for e in fv.visible(it, "m4", set())]
+# `mac-a` lights no row on mac-a, `#8` its issue
+assert [e for e in fv.visible(it, "mac-a", set()) if e["kind"] == "sess" and "mac-a" not in (e.get("text") or "")] == [], \
+    [(e.get("target"), e.get("text")) for e in fv.visible(it, "mac-a", set())]
 assert [e["target"] for e in fv.visible(it, "#8", set()) if e["kind"] == "sess"] == ["MU/far2"], fv.visible(it, "#8", set())
 # paint
 def w1(c): return 0 if unicodedata.category(c) in ("Mn", "Me", "Cf") else (2 if unicodedata.east_asian_width(c) in "WF" else 1)

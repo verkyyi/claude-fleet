@@ -5,7 +5,7 @@
 #   A  pure: fleet-sidebar.py single_layout (solo is one pane; `@fleet_layout`
 #      wins over the environment); solo_ended detaches only on a change to
 #      `exited` SEEN on the row in view, only in solo, and leaves the machine in
-#      the `solo-ended` file; fleet-topbar.py goodbye says 「在后台继续（m5）·
+#      the `solo-ended` file; fleet-topbar.py goodbye says 「在后台继续（mac-b）·
 #      下次输入 fleet 回来」, or — that file present — 「会话已结束 · fleet 可以恢复」
 #      and takes the file.
 #   B  for real, on private tmux sockets with the client's two confs and a
@@ -25,12 +25,12 @@
 #   D  `fleet claude`'s OWN view (issue #2349, fleet-shell.sh `solo <m> <wid>`),
 #      for real on private sockets, the client up in its saved `multi` layout:
 #      D1 the terminal is that one session and one bottom line 「⌃D 放到后台 ·
-#      /exit 结束会话 … m5」 — no list, no top line, a tmux server of its own —
+#      /exit 结束会话 … mac-b」 — no list, no top line, a tmux server of its own —
 #      and the client's `@fleet_layout` / fleet.conf are neither read nor
 #      written; D2 the row going `exited` (seen while watched) ends the view: the
-#      terminal is back at its prompt with 「会话已结束（m5）。」 and the view's
+#      terminal is back at its prompt with 「会话已结束（mac-b）。」 and the view's
 #      server gone; D3 a row already exited when opened ends nothing, ⌃D leaves
-#      with 「会话在后台继续（m5）。`fleet` 可以找回。」, the session never saw the
+#      with 「会话在后台继续（mac-b）。`fleet` 可以找回。」, the session never saw the
 #      ⌃D, the client and its layout untouched; D4 the person's own multi-session
 #      client attached beside it: `fleet claude` → /exit leaves its screen, its
 #      client, its server options (layout, bar), its lease, its where, its
@@ -41,10 +41,10 @@
 #      this login in $HOME with the fleet's commands on its PATH; ⌃D from the
 #      shell → the background. B does the same in the client's `solo` layout.
 #      D6 接回 (issue #2564, EPIC #2563 C1): `fleet claude` with a current home
-#      session — the hub's `RESUME m5 F/w1` (fleet-shell.sh home-session stubbed:
+#      session — the hub's `RESUME mac-b F/w1` (fleet-shell.sh home-session stubbed:
 #      the line, its result file with also_open) — opens THAT session in its own
 #      view, nothing new asked (no --new), the bar says 「另一台也开着：MacBook」,
-#      and the terminal keeps 「回到你上一次的会话（m5）」 above it; `fleet claude
+#      and the terminal keeps 「回到你上一次的会话（mac-b）」 above it; `fleet claude
 #      --new` asks with --new.
 #
 # Drives: bin/fleet-shell.sh, bin/fleet-home-session.sh, bin/fleet-sidebar.py, bin/fleet-sidebar.sh,
@@ -85,7 +85,7 @@ def fake_tmux(*args):
     return layout[0] if args[:2] == ("show-options", "-gqv") else ""
 sb.tmux = fake_tmux
 ended = Path(state) / "solo-ended"
-rec = lambda st: {"state": st, "node": "m5"}
+rec = lambda st: {"state": st, "node": "mac-b"}
 def detached():
     return [c for c in calls if c[0] == "detach-client"]
 eq("first sight of a row: nothing", sb.solo_ended("wid:a", rec(""), "$1"), False)
@@ -94,7 +94,7 @@ eq("still exited: nothing", sb.solo_ended("wid:b", rec("exited"), "$1"), False)
 sb.solo_ended("wid:a", rec("working"), "$1")
 eq("working → exited on the row in view: detached", sb.solo_ended("wid:a", rec("exited"), "$1"), True)
 eq("…the client of THIS session", detached(), [("detach-client", "-s", "$1")])
-eq("…the machine left for goodbye", ended.read_text(), "m5\n")
+eq("…the machine left for goodbye", ended.read_text(), "mac-b\n")
 ended.unlink(); calls.clear()
 sb.solo_ended("wid:c", rec("done"), "$1")
 eq("a switch onto an exited row is no exit", sb.solo_ended("wid:d", rec("exited"), "$1"), False)
@@ -109,12 +109,12 @@ def bye():
     with contextlib.redirect_stdout(out):
         tb.goodbye()
     return out.getvalue()
-(Path(state) / "switch-bar.json").write_text('{"node": "m5", "state": "working"}\n')
-eq("goodbye: left in the background", bye(), "会话在后台继续（m5）。\n下次输入 fleet 回来。\n")
-ended.write_text("m4\n")
-eq("goodbye: the session ended", bye(), "会话已结束（m4）。\nfleet 可以恢复。\n")
+(Path(state) / "switch-bar.json").write_text('{"node": "mac-b", "state": "working"}\n')
+eq("goodbye: left in the background", bye(), "会话在后台继续（mac-b）。\n下次输入 fleet 回来。\n")
+ended.write_text("mac-a\n")
+eq("goodbye: the session ended", bye(), "会话已结束（mac-a）。\nfleet 可以恢复。\n")
 eq("goodbye: the file taken", ended.exists(), False)
-eq("goodbye: once", bye(), "会话在后台继续（m5）。\n下次输入 fleet 回来。\n")
+eq("goodbye: once", bye(), "会话在后台继续（mac-b）。\n下次输入 fleet 回来。\n")
 if errs:
     print("FAIL A:\n  " + "\n  ".join(errs)); sys.exit(1)
 print("A: layout rule + solo_ended + goodbye: %d checks" % n[0])
@@ -225,9 +225,9 @@ try:
     # the stage: one window standing for the session (`cat`: a ⌃D reaching it ends it)
     (work / 'stage.conf').write_text(fill('tmux-shell-stage.conf'))
     tm('-f', str(work / 'stage.conf'), 'new-session', '-d', '-s', 'fc-stage', '-x', '120', '-y', '30',
-       '-n', 'm5 ~', "printf 'CLAUDE-SESSION\\n'; exec cat", s=stage)
-    tm('set-window-option', '-t', 'fc-stage:', '@remote', 'm5:fleet/abc', s=stage)
-    (state / 'switch-bar.json').write_text(json.dumps({"state": "working", "node": "m5", "title": "~"}))
+       '-n', 'mac-b ~', "printf 'CLAUDE-SESSION\\n'; exec cat", s=stage)
+    tm('set-window-option', '-t', 'fc-stage:', '@remote', 'mac-b:fleet/abc', s=stage)
+    (state / 'switch-bar.json').write_text(json.dumps({"state": "working", "node": "mac-b", "title": "~"}))
     viewer = 'env -u TMUX %s -S %s attach -t fc-stage' % (shlex.quote(real_tmux), shlex.quote(stage))
     tm('-f', '/dev/null', 'new-session', '-d', '-s', 'fc', '-x', '120', '-y', '30', '-n', 'home', viewer)
     env['TMUX'] = sock + ',1,0'
@@ -266,7 +266,7 @@ try:
     check(r.returncode == 0, 'layout solo: rc %d %s' % (r.returncode, r.stderr))
     check(tm('show-options', '-gqv', '@fleet_layout') == 'solo', 'no @fleet_layout solo')
     check(tm('show-options', '-gqv', 'status', s=stage) == 'off', 'solo: the stage top line is still on')
-    tm('set-option', '-g', '@fleet_view_node', 'm5')   # what the list writes off the row in view
+    tm('set-option', '-g', '@fleet_view_node', 'mac-b')   # what the list writes off the row in view
     attach()
     def solo_drawn():
         rows = screen().split('\n')
@@ -302,10 +302,10 @@ try:
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-\\'])
     far_log = work / 'far-ssh.log'
     in_wt = lambda: far_log.exists() and 'cwd=%s' % os.path.realpath(str(far_wt)) in far_log.read_text()
-    check(wait(lambda: here().split('|')[1] == 'm5:fleet/abc' and in_wt()),
+    check(wait(lambda: here().split('|')[1] == 'mac-b:fleet/abc' and in_wt()),
           'solo ⌃\\: not the session\'s shell in its worktree: %r\n%s' % (here(), tm('capture-pane', '-p', '-t', 'fc:')))
     name, _, sh_pane, cwd = here().split('|')
-    check(name.startswith('shell · ') and name.endswith(' @m5'), 'solo ⌃\\: the shell window\'s title: %r' % name)
+    check(name.startswith('shell · ') and name.endswith(' @mac-b'), 'solo ⌃\\: the shell window\'s title: %r' % name)
     check("fleet-remote-view.sh shell-here 'fleet/abc'" in (work / 'far-ssh.log').read_text(),
           'solo ⌃\\: not shell-here on the session\'s machine: %r' % (work / 'far-ssh.log').read_text())
     check(wait(lambda: '⌃\\ 回到会话' in screen().split('\n')[-1]), 'solo ⌃\\: the bar: %r' % screen().split('\n')[-1])
@@ -337,7 +337,7 @@ try:
     check(wait(lambda: clients() == ''), 'solo: ⌃D did not detach (clients %r)' % clients())
     check(wait(lambda: '下次输入 fleet 回来。' in screen()), 'solo: no goodbye after ⌃D:\n%s' % screen())
     bye = [l for l in screen().split('\n') if l.strip()]
-    check('会话在后台继续（m5）。' in bye, 'solo: the goodbye lines: %r' % bye)
+    check('会话在后台继续（mac-b）。' in bye, 'solo: the goodbye lines: %r' % bye)
     time.sleep(.5)
     check(tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{@remote}', s=stage) == before,
           'solo: ⌃D reached the session (its cat ended)')
@@ -532,14 +532,14 @@ def terminal():
     tm('kill-server', s=term)
     if eof.exists():
         eof.unlink()
-    cmd = 'bash %s solo m5 F/w1 fc; echo PROMPT; exec sleep 600' % shlex.quote(str(bin_dir / 'fleet-shell.sh'))
+    cmd = 'bash %s solo mac-b F/w1 fc; echo PROMPT; exec sleep 600' % shlex.quote(str(bin_dir / 'fleet-shell.sh'))
     tm('-f', '/dev/null', 'new-session', '-d', '-s', 'term', '-x', '100', '-y', '24', cmd, s=term)
     tm('set-option', '-g', 'status', 'off', s=term)
 
 
 def drawn():
     lines = screen().split('\n')
-    return 'REMOTE-SESSION m5 F/w1' in lines[0] and '⌃D 放到后台 · /exit 结束会话' in lines[-1]
+    return 'REMOTE-SESSION mac-b F/w1' in lines[0] and '⌃D 放到后台 · /exit 结束会话' in lines[-1]
 
 
 try:
@@ -549,11 +549,11 @@ try:
 
     # D1. the whole terminal is that session and one bottom line — no list, no
     # top line — and the client's layout is neither read nor written
-    rows.write_text('#node\x1fm5\n')
+    rows.write_text('#node\x1fmac-b\n')
     terminal()
     check(wait(drawn, 10), 'D1: not the one-session screen:\n%s' % screen())
     lines = screen().split('\n')
-    check(lines[-1].rstrip().endswith('m5'), 'D1: no machine on the bar: %r' % lines[-1])
+    check(lines[-1].rstrip().endswith('mac-b'), 'D1: no machine on the bar: %r' % lines[-1])
     check('新任务' not in screen() and '│' not in screen() and '⌘N' not in screen(), 'D1: a list or a key row:\n%s' % screen())
     check(len(solos()) == 1, 'D1: not one view server of its own: %r' % solos())
     check(tm('show-options', '-gqv', '@fleet_layout').stdout.strip() == 'multi', 'D1: the client\'s layout moved')
@@ -561,12 +561,12 @@ try:
 
     # D2. the session ending (`exited`, seen while watched) → the view goes, the
     # terminal is back at its prompt with one line
-    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
+    rows.write_text('wid:F/w1\x1fmac-b\x1f\x1f\x1f\x1fworking\n')
     time.sleep(1)
     check(drawn(), 'D2: the view went before the session ended:\n%s' % screen())
-    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fexited\n')
+    rows.write_text('wid:F/w1\x1fmac-b\x1f\x1f\x1f\x1fexited\n')
     check(wait(lambda: 'PROMPT' in screen()), 'D2: /exit did not end the view:\n%s' % screen())
-    check('会话已结束（m5）。' in screen(), 'D2: the last line: %r' % screen())
+    check('会话已结束（mac-b）。' in screen(), 'D2: the last line: %r' % screen())
     check(solos() == [], 'D2: the view\'s server stayed: %r' % solos())
     print('D2: /exit → %r, back at the prompt' % [l for l in screen().split('\n') if l.strip()][-2])
 
@@ -578,7 +578,7 @@ try:
     check(drawn(), 'D3: a session already exited when opened ended the view:\n%s' % screen())
     tm('send-keys', '-t', 'term:', 'C-d', s=term)
     check(wait(lambda: 'PROMPT' in screen()), 'D3: ⌃D did not leave the view:\n%s' % screen())
-    check('会话在后台继续（m5）。`fleet` 可以找回。' in screen(), 'D3: the last line: %r' % screen())
+    check('会话在后台继续（mac-b）。`fleet` 可以找回。' in screen(), 'D3: the last line: %r' % screen())
     check(not eof.exists(), 'D3: ⌃D reached the session')
     check(solos() == [], 'D3: the view\'s server stayed: %r' % solos())
     check(tm('has-session', '-t', 'fc').returncode == 0, 'D3: the client went with the view')
@@ -611,14 +611,14 @@ try:
                 sorted((p.name, p.read_text()) for p in sw_state.iterdir()),
                 (conf_dir / 'fleet.conf').read_text())
     before = regular()
-    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
+    rows.write_text('wid:F/w1\x1fmac-b\x1f\x1f\x1f\x1fworking\n')
     terminal()
     check(wait(drawn, 10), 'D4: not the one-session screen:\n%s' % screen())
     time.sleep(.6)
     check(regular() == before, 'D4: the view moved the regular client while open')
-    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fexited\n')
+    rows.write_text('wid:F/w1\x1fmac-b\x1f\x1f\x1f\x1fexited\n')
     check(wait(lambda: 'PROMPT' in screen()), 'D4: /exit did not end the view:\n%s' % screen())
-    check('会话已结束（m5）。' in screen(), 'D4: the last line: %r' % screen())
+    check('会话已结束（mac-b）。' in screen(), 'D4: the last line: %r' % screen())
     time.sleep(.5)
     after = regular()
     for i, what in enumerate(('screen', 'clients', 'options (layout, bar)', 'lease', 'where', 'switch history', 'fleet.conf')):
@@ -627,13 +627,13 @@ try:
     print('D4: a regular client beside it — screen, client, lease, where, layout, switch history untouched')
 
     # D5. ⌃\ (issue #2566; #2744): to THIS SESSION's shell — the view's second
-    # window, `@solo_shell m5:F/w1`, its program on the session's machine (the
+    # window, `@solo_shell mac-b:F/w1`, its program on the session's machine (the
     # far-end ssh above) in its worktree — and ⌃\ again back: the session's window
     # and pane where they were, its proxy never saw the key (a ⌃\ reaching it
     # would SIGQUIT the view away); prefix \ the same shell; prefix ! this
     # computer's, this login in $HOME with the fleet's commands on its PATH; ⌃D
     # from a shell still leaves the view to the background
-    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
+    rows.write_text('wid:F/w1\x1fmac-b\x1f\x1f\x1f\x1fworking\n')
     terminal()
     check(wait(drawn, 10), 'D5: not the one-session screen:\n%s' % screen())
     check('⌃\\ 会话 shell' in screen().split('\n')[-1], 'D5: no ⌃\\ on the bar: %r' % screen().split('\n')[-1])
@@ -647,7 +647,7 @@ try:
     tm('send-keys', '-t', 'term:', 'C-\\', s=term)
     far_log = work / 'far-ssh.log'
     in_wt = lambda: far_log.exists() and 'cwd=%s' % os.path.realpath(str(far_wt)) in far_log.read_text()
-    check(wait(lambda: at().split('|')[1] == 'm5:F/w1' and in_wt()),
+    check(wait(lambda: at().split('|')[1] == 'mac-b:F/w1' and in_wt()),
           'D5: ⌃\\ did not open the session\'s shell in its worktree: %r' % at())
     sh_win, _, sh_pane, cwd = at().split('|')
     check("fleet-remote-view.sh shell-here 'F/w1'" in (work / 'far-ssh.log').read_text(),
@@ -675,15 +675,15 @@ try:
     check(wait(lambda: at().split('|')[2] == sess_pane), 'D5: ⌃\\ from prefix !\'s shell did not come back: %r' % at())
     check(not eof.exists(), 'D5: ⌃\\ reached the session')
     tm('send-keys', '-t', 'term:', 'C-\\', s=term)
-    check(wait(lambda: at().split('|')[1] == 'm5:F/w1'), 'D5: not on the shell for ⌃D')
+    check(wait(lambda: at().split('|')[1] == 'mac-b:F/w1'), 'D5: not on the shell for ⌃D')
     tm('send-keys', '-t', 'term:', 'C-d', s=term)
     check(wait(lambda: 'PROMPT' in screen()), 'D5: ⌃D from the shell did not leave the view:\n%s' % screen())
-    check('会话在后台继续（m5）。`fleet` 可以找回。' in screen() and not eof.exists(), 'D5: the last line: %r' % screen())
+    check('会话在后台继续（mac-b）。`fleet` 可以找回。' in screen() and not eof.exists(), 'D5: the last line: %r' % screen())
     cwd = os.path.realpath(str(far_wt))
     print('D5: ⌃\\ → the session\'s shell in %s → ⌃\\ → the same session pane; prefix \\ the same; prefix ! here; ⌃D → the background' % cwd)
 
     # D6. 接回 (issue #2564): the hub says the person's current home session is
-    # F/w1 on m5 — `fleet claude` goes back to it in its own view
+    # F/w1 on mac-b — `fleet claude` goes back to it in its own view
     calls = work / 'home-calls'
     stub = work / 'home-shell.sh'
     stub.write_text('''#!/bin/bash
@@ -691,9 +691,9 @@ printf '%%s\\n' "$*" >> %(calls)s
 case "$1" in
   running) exit 0 ;;
   home-session)
-    [ -n "${FLEET_PLACE_RESULT:-}" ] && printf '{"worker_id": "F/w1", "machine": "m5", "resume": true, "also_open": ["MacBook"]}' > "$FLEET_PLACE_RESULT"
-    printf '回到你上一次的会话（m5）\\n' >&2
-    printf 'RESUME m5 F/w1\\t回到你上一次的会话（m5）\\n' ;;
+    [ -n "${FLEET_PLACE_RESULT:-}" ] && printf '{"worker_id": "F/w1", "machine": "mac-b", "resume": true, "also_open": ["MacBook"]}' > "$FLEET_PLACE_RESULT"
+    printf '回到你上一次的会话（mac-b）\\n' >&2
+    printf 'RESUME mac-b F/w1\\t回到你上一次的会话（mac-b）\\n' ;;
   solo) exec bash %(shell)s solo "$2" "$3" fc ;;
 esac
 ''' % {'calls': shlex.quote(str(calls)), 'shell': shlex.quote(str(bin_dir / 'fleet-shell.sh'))})
@@ -701,20 +701,20 @@ esac
     tm('kill-server', s=term)
     if eof.exists():
         eof.unlink()
-    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fidle\n')
+    rows.write_text('wid:F/w1\x1fmac-b\x1f\x1f\x1f\x1fidle\n')
     cmd = 'FLEET_HOME_SHELL=%s bash %s claude; echo PROMPT; exec sleep 600' % (
         shlex.quote(str(stub)), shlex.quote(str(bin_dir / 'fleet-home-session.sh')))
     tm('-f', '/dev/null', 'new-session', '-d', '-s', 'term', '-x', '100', '-y', '24', cmd, s=term)
     tm('set-option', '-g', 'status', 'off', s=term)
     check(wait(drawn, 10), 'D6: not the one-session screen of F/w1:\n%s' % screen())
     bar = screen().split('\n')[-1]
-    check('另一台也开着：MacBook' in bar and bar.rstrip().endswith('m5'), 'D6: the bar: %r' % bar)
+    check('另一台也开着：MacBook' in bar and bar.rstrip().endswith('mac-b'), 'D6: the bar: %r' % bar)
     asked = calls.read_text().splitlines()
     check(any(a.startswith('home-session claude') and '--new' not in a for a in asked), 'D6: the ask: %r' % asked)
-    check(any(a == 'solo m5 F/w1' for a in asked), 'D6: not the view of F/w1: %r' % asked)
+    check(any(a == 'solo mac-b F/w1' for a in asked), 'D6: not the view of F/w1: %r' % asked)
     tm('send-keys', '-t', 'term:', 'C-d', s=term)
     check(wait(lambda: 'PROMPT' in screen()), 'D6: ⌃D did not leave the view:\n%s' % screen())
-    check('回到你上一次的会话（m5）' in screen(), 'D6: the terminal never said it went back:\n%s' % screen())
+    check('回到你上一次的会话（mac-b）' in screen(), 'D6: the terminal never said it went back:\n%s' % screen())
     check(not eof.exists(), 'D6: ⌃D reached the session')
     calls.write_text('')
     tm('kill-server', s=term)

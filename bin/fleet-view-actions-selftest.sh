@@ -102,10 +102,10 @@ export FLEET_VIEW_LANDED_CMD="cat '$W/gone.txt'"
   row "$W2" needs ! 'beta' ' ' '' 0 'perm' '' '#12' — 50% ok 'Beta 要批准' merged '' '' 'Bash rm' ''
   row "$W4" needs ! 'delta' ' ' '' 0 'question' '' '#14' — 50% ok 'Delta 在问' merged '' '' '选哪个？' ''
   row "$W5" sleeping z 'eps' ' ' '' 0 '' '' '#15' — 50% ok 'Eps 睡着' merged '' '' '' ''
-  row "wid:$MU/far1" working ⠹ 'far' ' ' '' 0 '' m4 '#13' — · ok 'Far 在 m4' keep '' '' '' ''
-  row "wid:$MU/far2" needs ! 'farask' ' ' '' 0 'perm' m4 '#16' — · ok 'Farask 要批准' keep '' '' 'Bash ls' ''
-  row "wid:$MU/far3" working ⠹ 'farlost' ' ' '' 0 '' 'm4!' '#17' — · ok 'Farlost 失联' keep '' '' '' ''
-  row "wid:$MU/far4" exited x 'fargone' ' ' '' 0 '' m4 '#18' — · ok 'Fargone 停了' keep '' '' '' ''
+  row "wid:$MU/far1" working ⠹ 'far' ' ' '' 0 '' mac-a '#13' — · ok 'Far 在 mac-a' keep '' '' '' ''
+  row "wid:$MU/far2" needs ! 'farask' ' ' '' 0 'perm' mac-a '#16' — · ok 'Farask 要批准' keep '' '' 'Bash ls' ''
+  row "wid:$MU/far3" working ⠹ 'farlost' ' ' '' 0 '' 'mac-a!' '#17' — · ok 'Farlost 失联' keep '' '' '' ''
+  row "wid:$MU/far4" exited x 'fargone' ' ' '' 0 '' mac-a '#18' — · ok 'Fargone 停了' keep '' '' '' ''
   row hdr ended '' '▸ Ended (1)' ' '
   row "$W3" exited x 'gamma' ' ' '' 0 '' '' '' — · ok 'Gamma 退出了' merged '' '' '' ''
 } > "$W/rows.txt"
@@ -267,7 +267,7 @@ export FLEET_STATUS_G="$G" CCQUOTA_FLEET=1
 { printf '#ts\037%s\n' "$(date +%s)"
   for k in far1:far: far2:farask:perm far3:farlost: far4:fargone:; do
     IFS=: read -r id nm nd <<< "$k"
-    printf 'wid:%s/%s\037m4\037\037\037\037\037\037%s\037\037%s\n' "$MU" "$id" "$nm" "$nd"
+    printf 'wid:%s/%s\037mac-a\037\037\037\037\037\037%s\037\037%s\n' "$MU" "$id" "$nm" "$nd"
   done; } > "$G/remote_fl"
 date +%s > "$G/hub_ok"
 WRITES="$W/writes"; : > "$WRITES"
@@ -292,7 +292,7 @@ far() {   # <id> <action> <tool> <json fragment> [view-act args…]
   body=$(cut -f2 "$WRITES")
   case "$body" in *"\"worker_id\":\"$MU/$id\""*) ;; *) fail "E: $act's write names no worker_id: $body" ;; esac
   case "$body" in *"$frag"*) ;; *) fail "E: $act's write lacks $frag: $body" ;; esac
-  case "$out" in *m4*) ;; *) fail "E: $act's outcome does not name the machine: $out" ;; esac
+  case "$out" in *mac-a*) ;; *) fail "E: $act's outcome does not name the machine: $out" ;; esac
   grep -qx -- --refresh "$HS" || fail "E: $act was not followed by a hub --refresh: $(cat "$HS")"
 }
 far far1 message worker_message '"text":"你好 hi"' --text '你好 hi'
@@ -304,10 +304,10 @@ vtext() { qo view-rows --view fl@view-v1 | awk -F '\t' -v t="$1" '$1 == "sess" &
 [ -s "$G/view-names.fl" ] || fail "E: no hold written for the far rename"
 FLEET_VIEW_NAME_HOLD_SECS=0 qo view-rows --view fl@view-v1 >/dev/null
 [ ! -s "$G/view-names.fl" ] || fail "E: a hold past FLEET_VIEW_NAME_HOLD_SECS was kept: $(cat "$G/view-names.fl")"
-[ "$(vtext "$MU/far1")" = 'Far 在 m4' ] || fail "E: an expired hold still names the row: $(vtext "$MU/far1")"
+[ "$(vtext "$MU/far1")" = 'Far 在 mac-a' ] || fail "E: an expired hold still names the row: $(vtext "$MU/far1")"
 qo view-act --view fl@view-v1 "$MU/far1" rename --text '新名' >/dev/null 2>&1 || fail "E: the second far rename failed"
 cp "$W/rows.txt" "$W/rows.bak"
-sed "s/Far 在 m4/新名/" "$W/rows.bak" > "$W/rows.txt"
+sed "s/Far 在 mac-a/新名/" "$W/rows.bak" > "$W/rows.txt"
 [ "$(vtext "$MU/far1")" = '新名' ] || fail "E: the hub's own new name is not shown"
 [ ! -s "$G/view-names.fl" ] || fail "E: the hold outlived the hub saying the name: $(cat "$G/view-names.fl")"
 mv "$W/rows.bak" "$W/rows.txt"
@@ -331,7 +331,7 @@ rm -f "$FLEET_CONF_DIR/hub.answer"
 reset; : > "$WRITES"
 out=$(qo view-act --view fl@view-v1 "$MU/far3" reap --yes 2>&1) && fail "E: a lost row's reap exited 0"
 [ -z "$(calls)" ] && [ ! -s "$WRITES" ] || fail "E: a lost row sent «$(calls) $(cat "$WRITES")»"
-case "$out" in *"m4 失联，做不了"*) ;; *) fail "E: a lost row does not say why: $out" ;; esac
+case "$out" in *"mac-a 失联，做不了"*) ;; *) fail "E: a lost row does not say why: $out" ;; esac
 # the popup: Tab → 停 on the far row, off the screen's thread, the outcome on the bottom line
 reset; : > "$WRITES"
 # the pane is the outer server's: hand it E's environment (the hub seams, the cache)
@@ -341,11 +341,11 @@ to respawn-pane -k -t o "env TMUX='$IN,0,0' ESCDELAY=25$penv python3 '$BIN/fleet
 waitfor 'Tab 操作' || fail "E: the list did not reopen: $(screen)"
 to send-keys -t o -l 'Far 在'
 waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
-to send-keys -t o Tab; waitfor '─ Far 在 m4' || fail "E: Tab on the far row: $(screen)"
+to send-keys -t o Tab; waitfor '─ Far 在 mac-a' || fail "E: Tab on the far row: $(screen)"
 for _ in $(seq 1 6); do to send-keys -t o Down; done
 waitfor '▶ 停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
 to send-keys -t o Enter
-waitfor '（在 m4）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
+waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
 [ "$(calls)" = "fleet-sidebar-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
 pass "E  another machine's row: each far action one sidebar-remote call + one hub write (worker_id, answer, pin on/off), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
 echo "PASS fleet-view-actions-selftest"

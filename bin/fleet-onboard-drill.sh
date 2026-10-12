@@ -13,7 +13,7 @@
 # copied from. Every screen lands as screen-NN-<step>.txt in the run's dir.
 #
 # --home <machine> (issue #3432): the newcomer's login is opened on THAT
-# machine — mini2, fleet-linux-0 — not where placement would put it. With no
+# machine — mac-d, linux-a — not where placement would put it. With no
 # --invite the drill mints its own drill person for it (`fleet drill invite
 # --login <login> --home <machine>`, an admin's certificate or token; the login
 # is then drill<MMDDHHMM> unless --login names a drill<x>); with --invite the
@@ -119,7 +119,7 @@
 #               device, node (DELETE /v1/self, signed by the login's own
 #               certificate, else the code) — no operator token needed.
 #               Every OTHER machine the login was put on (issue #3471 — drill 33
-#               left drill10120108 on mini2 under a PASS): --home, and each
+#               left drill10120108 on mac-d under a PASS): --home, and each
 #               machine the hub's roster (GET /v1/fleet/accounts, the operator's
 #               token) lists a login of that name on — the hub is asked to close
 #               it (POST action remove) and the roster read until it is removed;
@@ -439,7 +439,7 @@ step_open() {
   local pw t out key="$RUN/id_ed25519"
   ssh-keygen -q -t ed25519 -N '' -C "$PROG-$LOGIN" -f "$key" || { failstep open 'ssh-keygen failed'; return 1; }
   # the password: 24 random letters and digits, ending in one of each — the
-  # machine's policy wants both (macmini: minLength12 · hasLetter · hasDigit),
+  # machine's policy wants both (mac-c: minLength12 · hasLetter · hasDigit),
   # and a draw with no digit made sysadminctl refuse it, 5402 (C9 run 11)
   pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22)a7"
   # every login before this run: a login the hub opens for the drill person
@@ -462,7 +462,7 @@ step_open() {
   fi
   ( cd / && sudo -n dscl . -create "/Users/$LOGIN" UserShell /bin/zsh ) >> "$RUN/open.log" 2>&1
   # how long addUser itself took here — the hub's create of the drill
-  # person's login takes ~5 min in it on macmini (#2908); this is the
+  # person's login takes ~5 min in it on mac-c (#2908); this is the
   # comparison from an admin's shell
   t=$((SECONDS - t)); note "sysadminctl -addUser: ${t}s"; printf 'sysadminctl -addUser: %ss\n' "$t" >> "$RUN/open.log"
   ( cd / && sudo -n createhomedir -c -u "$LOGIN" ) >> "$RUN/open.log" 2>&1 || :
@@ -683,7 +683,7 @@ thin_is() {
 # login_bin <file>: the newcomer login's OWN copy of a fleet script, the one
 # place the drill resolves it (issue #3499) — its node install
 # (~/.claude/fleet/bin: a managed login, which is what the login is when the
-# drill runs ON its --home — drill 39, macmini = mini2, had no client install)
+# drill runs ON its --home — drill 39, mac-c = mac-d, had no client install)
 # else its client install (~/.local/share/claude-fleet/bin). Neither: rc 1 and
 # one line naming both places, never a guess.
 login_bin() {
@@ -1127,7 +1127,7 @@ step_attach() {
 # The client must come back on the SAME session: restore says `back` for it,
 # `fleet ls` still has its key, and the right pane shows its text again. Only
 # a session on THIS machine can be restarted from here — elsewhere is a FAIL
-# that says so (the drill runs on the machine the hub places on, m4).
+# that says so (the drill runs on the machine the hub places on, mac-a).
 SL='' SLH='' SFLEET='' SKEY='' SNODE='' SFID='' SFID_K=''
 # as_sess <cmd…>: run as the session's login, its own HOME / conf dir / TMPDIR
 as_sess() {
@@ -1172,7 +1172,7 @@ locate() {
     done
   done
   SL='' SLH=''
-  # another machine's (issue #3432 — --home mini2 / fleet-linux-0): restarted
+  # another machine's (issue #3432 — --home mac-d / linux-a): restarted
   # there, as the session's own login, over that login's client
   SNODE=$(printf '%s' "$r" | cut -f1) SFID=$fid
   if [ "$SNODE" != - ] && ! same_machine "$SNODE" "$(hostname -s 2>/dev/null || hostname)"; then
@@ -1286,7 +1286,7 @@ step_restart() {
 }
 
 # --- every machine the login was put on (issue #3471) -----------------------------
-# Drill 33's login stayed on mini2 (its --home) while steps 11–12 read PASS: both
+# Drill 33's login stayed on mac-d (its --home) while steps 11–12 read PASS: both
 # looked at this machine only. Now the machines are the run's --home plus every
 # machine the hub's roster lists a login of that name on (GET /v1/fleet/accounts,
 # the operator's token); step 11 has the hub close each one and step 12 looks

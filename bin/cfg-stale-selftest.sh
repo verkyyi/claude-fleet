@@ -99,10 +99,10 @@ hasnt "A: …never the current one" "$(printf '%s\n' "$h" | grep 'NEW')" "配置
 export CCQUOTA_FLEET=1
 NOW=$(date +%s); F=11111111-2222-3333-4444-555555555555
 printf '%s\n' "$NOW" > "$G/hub_ok"
-{ printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-  printf 'wid:%s/issue-7\037m4\037online\0377\037acme/app\037done\037claude\037RS\037\037\0370\037\037hub\037\037%s\037stale\n' "$F" "$((B=1759000000))"
-  printf 'wid:%s/issue-8\037m4\037online\0378\037acme/app\037done\037claude\037RO\037\037\0370\037\037hub\037\037%s\037ok\n' "$F" "$B"
-  printf 'wid:%s/issue-9\037m4\037online\0379\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\037%s\n' "$F" "$B"
+{ printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0372\037%s\n' "$NOW" "$NOW"
+  printf 'wid:%s/issue-7\037mac-a\037online\0377\037acme/app\037done\037claude\037RS\037\037\0370\037\037hub\037\037%s\037stale\n' "$F" "$((B=1759000000))"
+  printf 'wid:%s/issue-8\037mac-a\037online\0378\037acme/app\037done\037claude\037RO\037\037\0370\037\037hub\037\037%s\037ok\n' "$F" "$B"
+  printf 'wid:%s/issue-9\037mac-a\037online\0379\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\037%s\n' "$F" "$B"
 } > "$G/remote_$S"
 s=$(side)
 eq "A: a remote row takes its machine's verdict — stale" "stale" "$(f13 "$s" RS)"
@@ -113,15 +113,15 @@ rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 # ============================================================================
 # B. sidebar — 配置旧 in the bar, never on the row (issue #2305)
 # ============================================================================
-out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
+out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
   python3 - "$BIN/fleet-sidebar.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 assert m.ROW_FIELDS == 19   # 14: title (#1921), 15: reap (#1902), 16: backfill (#2235), 17-18: ask (#2538), 19: ctx (#2717, #2963)
-row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
+row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
 assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
-assert m.detail_line(row + ["stale"]) == "worker-one · @m4 · 配置旧", m.detail_line(row + ["stale"])
-assert m.detail_line(row + ["ok"]) == m.detail_line(row) == "worker-one · @m4", m.detail_line(row + ["ok"])
+assert m.detail_line(row + ["stale"]) == "worker-one · @mac-a · 配置旧", m.detail_line(row + ["stale"])
+assert m.detail_line(row + ["ok"]) == m.detail_line(row) == "worker-one · @mac-a", m.detail_line(row + ["ok"])
 local = row[:8] + [""] + row[9:]
 assert m.detail_line(local + ["stale"]) == "worker-one · 配置旧"   # a local row: no @ mark, still 配置旧
 assert m.row_glyph(row + ["stale"]) == ("✓", ""), "stale is not urgent: the row keeps its glyph"

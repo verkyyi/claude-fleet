@@ -30,7 +30,7 @@
 #   projects[<root>].hasTrustDialogAccepted === true
 # If that is not true it shows "Quick safety check: Is this a project you created
 # or one you trust?" and waits. A fleet pane has nobody to press Enter: on
-# 2026-09-12 two autofill-dispatched workers on the macmini sat on that dialog for
+# 2026-09-12 two autofill-dispatched workers on the mac-c sat on that dialog for
 # 7+ minutes — slot "filled", nothing running, nothing logged — because THAT
 # machine's FLEET_MAIN entry read false. So the one key a fleet needs is its base
 # checkout, and the launcher (bin/fleet-claude.sh) calls `grant` on every spawn;

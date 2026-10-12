@@ -162,7 +162,7 @@ func TestClientLeaseTwoReplicas(t *testing.T) {
 // A live report received by one replica shows on the other's /v1/live.
 func TestLiveTwoReplicas(t *testing.T) {
 	a, b := asReplicas(t, newFleetHarness(t))
-	tokA, tokB := a.enroll(t, "m5"), a.enroll(t, "m4")
+	tokA, tokB := a.enroll(t, "mac-d"), a.enroll(t, "mac-c")
 	report := func(h *harness, tok, sid string) {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"sessions": []LiveSession{{SessionID: sid, Source: "claude", ObservedAt: time.Now()}}})
@@ -247,7 +247,7 @@ func TestReplicaStateSingleHub(t *testing.T) {
 	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusAccepted {
 		t.Fatalf("poll: %d", code)
 	}
-	tok := h.enroll(t, "m5")
+	tok := h.enroll(t, "mac-d")
 	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/live/report", strings.NewReader(`{"sessions":[]}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 200 {

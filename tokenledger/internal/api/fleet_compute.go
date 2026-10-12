@@ -249,7 +249,7 @@ func newLoginCompute(snap NodesSnapshot, host string, settings map[string]string
 // a relay probe (claude-fleet#3364) is an existing login whose credential
 // proxy goes through the relay BECAUSE this machine's own egress is not
 // served — a new login is not given that road (EPIC #3208), so it sees the
-// machine's own region, unsupported. C9's 27th drill: fleet-linux-0's old
+// machine's own region, unsupported. C9's 27th drill: linux-a's old
 // logins said SG via relay, the hub opened the newcomer there, and its login
 // probed CN. A direct probe is returned as it is.
 func directProbe(p *control.NodeProbe) *control.NodeProbe {

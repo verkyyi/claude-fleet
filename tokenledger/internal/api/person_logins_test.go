@@ -19,21 +19,21 @@ func liveAccounts() []store.FleetAccount {
 		return store.FleetAccount{PrincipalID: pid, Hostname: host, Login: login, State: state}
 	}
 	return []store.FleetAccount{
-		row("gh:2718137", "macmini", "verky", store.AccountActive),
-		row("gh:2718137", "mini2", "verky", store.AccountActive),
-		row("gh:2718137", "Verkys-Mac", "verkyyi", store.AccountActive),
-		row("gh:2987262", "fleet-linux-0", "24haowan", store.AccountActive),
-		row("gh:2987262", "macmini", "24haowan", store.AccountActive),
-		row("gh:2987262", "mini2", "24haowan", store.AccountActive),
+		row("gh:2718137", "mac-e", "heidi", store.AccountActive),
+		row("gh:2718137", "mac-f", "heidi", store.AccountActive),
+		row("gh:2718137", "Verkys-Mac", "ivan", store.AccountActive),
+		row("gh:2987262", "linux-b", "globex", store.AccountActive),
+		row("gh:2987262", "mac-e", "globex", store.AccountActive),
+		row("gh:2987262", "mac-f", "globex", store.AccountActive),
 		row("gh:2987262", "caojiandeMac-mini.local", "caojian", store.AccountActive),
 		row("gh:2987262", "myMac", "arvincao", store.AccountPending),
-		row(store.SparePrefix+"1", "macmini", "spare1", store.AccountActive),
+		row(store.SparePrefix+"1", "mac-e", "spare1", store.AccountActive),
 	}
 }
 
 func TestPersonLoginsEveryPairWithHomeAndKind(t *testing.T) {
-	homes := map[string]store.EntryHome{"gh:2987262": {Person: "gh:2987262", Machine: "fleet-linux-0", Login: "24haowan"}}
-	hosts := []string{"macmini.local", "mini2", "fleet-linux-0"}
+	homes := map[string]store.EntryHome{"gh:2987262": {Person: "gh:2987262", Machine: "linux-b", Login: "globex"}}
+	hosts := []string{"mac-e.local", "mac-f", "linux-b"}
 	got := buildPersonLogins(liveAccounts(), homes, hosts)
 
 	type pair struct {
@@ -49,9 +49,9 @@ func TestPersonLoginsEveryPairWithHomeAndKind(t *testing.T) {
 		return out
 	}
 	wantArvin := []pair{
-		{"fleet-linux-0", "24haowan", "active", true, "node"},
-		{"macmini", "24haowan", "active", false, "node"},
-		{"mini2", "24haowan", "active", false, "node"},
+		{"linux-b", "globex", "active", true, "node"},
+		{"mac-e", "globex", "active", false, "node"},
+		{"mac-f", "globex", "active", false, "node"},
 		{"caojiandeMac-mini.local", "caojian", "active", false, "client"},
 		{"myMac", "arvincao", "pending", false, "client"},
 	}
@@ -59,9 +59,9 @@ func TestPersonLoginsEveryPairWithHomeAndKind(t *testing.T) {
 		t.Fatalf("gh:2987262 =\n%+v\nwant\n%+v", g, wantArvin)
 	}
 	wantYi := []pair{
-		{"macmini", "verky", "active", false, "node"},
-		{"mini2", "verky", "active", false, "node"},
-		{"Verkys-Mac", "verkyyi", "active", false, "client"},
+		{"mac-e", "heidi", "active", false, "node"},
+		{"mac-f", "heidi", "active", false, "node"},
+		{"Verkys-Mac", "ivan", "active", false, "client"},
 	}
 	if g := flat(got["gh:2718137"]); !reflect.DeepEqual(g, wantYi) {
 		t.Fatalf("gh:2718137 =\n%+v\nwant\n%+v", g, wantYi)
@@ -70,7 +70,7 @@ func TestPersonLoginsEveryPairWithHomeAndKind(t *testing.T) {
 		t.Fatalf("a spare login is nobody's: %v", got)
 	}
 	// A home naming another login on that machine marks nothing.
-	other := buildPersonLogins(liveAccounts(), map[string]store.EntryHome{"gh:2718137": {Machine: "macmini", Login: "someone"}}, nil)
+	other := buildPersonLogins(liveAccounts(), map[string]store.EntryHome{"gh:2718137": {Machine: "mac-e", Login: "someone"}}, nil)
 	for _, l := range other["gh:2718137"] {
 		if l.Home {
 			t.Fatalf("home on %+v", l)
@@ -92,12 +92,12 @@ func TestFleetUsersAndAccountsListEveryLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for host, login := range map[string]string{"macmini": "alice", "mini2": "ali", "alices-mac": "alicew"} {
+	for host, login := range map[string]string{"mac-e": "alice", "mac-f": "ali", "alices-mac": "alicew"} {
 		if _, err := h.srv.Store.RecordLoginAccount(p, host, login, "", "", now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pid, Machine: "mini2", Login: "ali", SetBy: "t", SetAt: now}); err != nil {
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pid, Machine: "mac-f", Login: "ali", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestFleetUsersAndAccountsListEveryLogin(t *testing.T) {
 		}
 		return out
 	}
-	want := map[string]string{"macmini": "alice,active,client", "mini2": "ali,active,client,home", "alices-mac": "alicew,active,client"}
+	want := map[string]string{"mac-e": "alice,active,client", "mac-f": "ali,active,client,home", "alices-mac": "alicew,active,client"}
 
 	code, body := h.call(t, http.MethodGet, "/v1/fleet/users", "", nil)
 	if code != http.StatusOK {

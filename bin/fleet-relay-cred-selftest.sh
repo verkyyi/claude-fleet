@@ -10,7 +10,7 @@
 # What it pins:
 #   A. usage     no action / unknown / extra args / bad machine: exit 2
 #   B. fetch     module off → 10, nothing asked; no node token → 1; fetch →
-#                `ISSUED m4/alice`, the pass kept 0600 in a 0700 dir; the node
+#                `ISSUED mac-a/alice`, the pass kept 0600 in a 0700 dir; the node
 #                token and the pass never in a curl argv
 #   C. keep      check → OK; fetch again → KEPT (no new mint); --force → a new
 #                pass, and the old one no longer passes
@@ -57,7 +57,7 @@ mkdir -p "$HOME" "$FLEET_CONF_DIR"
 unset CCQUOTA_FLEET CCQUOTA_TOKEN CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT
 
 SUB='sk-ant-oat01-FAKESUBSCRIPTION-0123456789'
-NODE_TOK='ccq_node-token-for-m4'
+NODE_TOK='ccq_node-token-for-mac-a'
 VIEWER='viewer-token-xyz'
 
 # ---- the fakes: hub, upstream, and (without Caddy) the relay ---------------
@@ -101,14 +101,14 @@ class Hub(Base):
             if auth != "Bearer " + NODE:
                 return self.send(401, {"error": "unrecognised enrollment token"})
             if os.path.exists(os.path.join(work, "hub-untrusted")):
-                return self.send(403, {"error": "untrusted_node", "message": "m4 is not a trusted machine"})
+                return self.send(403, {"error": "untrusted_node", "message": "mac-a is not a trusted machine"})
             tok = "frl1." + secrets.token_urlsafe(32)
-            for h in [h for h, m in HASHES.items() if m == "m4"]:
+            for h in [h for h, m in HASHES.items() if m == "mac-a"]:
                 del HASHES[h]
-            HASHES[hashlib.sha256(tok.encode()).hexdigest()] = "m4"
-            SETTINGS["fleet.node_relay.m4"] = "alice"
+            HASHES[hashlib.sha256(tok.encode()).hexdigest()] = "mac-a"
+            SETTINGS["fleet.node_relay.mac-a"] = "alice"
             jlog("hub.log", {"route": "mint"})
-            return self.send(200, {"token": tok, "machine": "m4", "login": "alice", "issued_at": "now"})
+            return self.send(200, {"token": tok, "machine": "mac-a", "login": "alice", "issued_at": "now"})
         if self.path == "/test/revoke":
             HASHES.clear(); SETTINGS.clear()
             return self.send(200, {})
@@ -126,7 +126,7 @@ class Hub(Base):
         if self.path == "/v1/node/self":
             if self.headers.get("Authorization") != "Bearer " + NODE:
                 return self.send(401, {})
-            return self.send(200, {"hostname": "m4", "trust": "trusted"})
+            return self.send(200, {"hostname": "mac-a", "trust": "trusted"})
         if self.path == "/v1/relay/check":
             jlog("hub.log", {"route": "check", "authorization": "Authorization" in self.headers,
                              "cookie": "Cookie" in self.headers, "uri": self.headers.get("X-Forwarded-Uri", "")})
@@ -268,7 +268,7 @@ printf 'CCQUOTA_TOKEN=%s\nCCQUOTA_HUB_URL=%s\n' "$NODE_TOK" "$HUB" > "$FLEET_CON
 chmod 600 "$FLEET_CONF_DIR/node.env"
 out=$("$SUT" fetch 2>"$WORK/err"); rc=$?
 [ "$rc" -eq 0 ] || fail "B: fetch exit $rc: $(cat "$WORK/err")"; ok
-case "$out" in "relay: ISSUED m4/alice → $FLEET_CONF_DIR/cred-proxy/relay.token") ok ;; *) fail "B: fetch said '$out'" ;; esac
+case "$out" in "relay: ISSUED mac-a/alice → $FLEET_CONF_DIR/cred-proxy/relay.token") ok ;; *) fail "B: fetch said '$out'" ;; esac
 TOKFILE="$FLEET_CONF_DIR/cred-proxy/relay.token"
 PASS1=$(cat "$TOKFILE")
 case "$PASS1" in frl1.?*) ok ;; *) fail "B: kept pass is not frl1." ;; esac
@@ -369,14 +369,14 @@ done
 
 # ---- H. operator: status, revoke --------------------------------------------
 unset CCQUOTA_VIEWER_TOKEN
-"$SUT" revoke m4 >/dev/null 2>"$WORK/err"; rc=$?
+"$SUT" revoke mac-a >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" -eq 1 ] && grep -q CCQUOTA_VIEWER_TOKEN "$WORK/err" || fail "H: revoke with no viewer token exit $rc"; ok
 export CCQUOTA_VIEWER_TOKEN="$VIEWER"
 out=$("$SUT" status) || fail "H: status exit $?"
-[ "$out" = 'relay: m4 alice' ] || fail "H: status said '$out'"; ok
-out=$("$SUT" revoke M4.local) || fail "H: revoke exit $?"
-[ "$out" = 'relay: REVOKED m4' ] || fail "H: revoke said '$out'"; ok
-grep -q '"key": "fleet.node_relay.m4"' "$WORK/hub.log" || fail "H: revoke did not PUT fleet.node_relay.m4"; ok
+[ "$out" = 'relay: mac-a alice' ] || fail "H: status said '$out'"; ok
+out=$("$SUT" revoke MAC-A.local) || fail "H: revoke exit $?"
+[ "$out" = 'relay: REVOKED mac-a' ] || fail "H: revoke said '$out'"; ok
+grep -q '"key": "fleet.node_relay.mac-a"' "$WORK/hub.log" || fail "H: revoke did not PUT fleet.node_relay.mac-a"; ok
 code=$(through /anthropic/v1/messages "$PASS")
 [ "$code" = 403 ] || fail "E[$KIND]: revoked pass → $code"; ok
 "$SUT" check >"$WORK/out" 2>&1; rc=$?

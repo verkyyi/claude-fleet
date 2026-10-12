@@ -23,7 +23,7 @@ import (
 
 // Only the hub's own pass opens the route, and only its one path.
 func TestGitHubRelayRouteCheck(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
+	h, macC, _ := newVaultHarness(t)
 	h.srv.SessionCredKey = bytes.Repeat([]byte{9}, 32)
 	pass, err := h.srv.HubRelayPass()
 	if err != nil {
@@ -39,7 +39,7 @@ func TestGitHubRelayRouteCheck(t *testing.T) {
 		}
 	}
 	// A machine's relay credential opens the vendors' routes, never github.com.
-	tok := mustMintRelay(t, h, m4)
+	tok := mustMintRelay(t, h, macC)
 	if code, _ := relayCheck(t, h, tok, relayGitHubTokenPath); code != http.StatusForbidden {
 		t.Fatalf("machine pass on %s: %d, want 403", relayGitHubTokenPath, code)
 	}

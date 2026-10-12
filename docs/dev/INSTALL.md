@@ -102,7 +102,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    branch, then `PASS install … up to date` or `WARN install … is N commit(s)
    behind` with the fix (`git -C ~/.claude/fleet pull --ff-only`, then
    `/fleet-sync-install`, which also reloads the changed daemons). A fetch that
-   fails reports **unknown**, never up-to-date: on 2026-09-14 macmini sat 28
+   fails reports **unknown**, never up-to-date: on 2026-09-14 mac-c sat 28
    commits behind master with a fully green doctor on both machines, and silence
    reading as green is the whole failure. `bin/fleet-install-version.sh` is the
    same check standalone (`--json` for a reporter, `--no-fetch` for anything that
@@ -258,7 +258,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    `skills` / `codex-skills` passes into `~/.claude/skills` and
    `$CODEX_HOME/skills`); `fleet-doctor`'s `agents` line reads
    `claude N missing · codex M missing · skills K missing` (2026-10-04: 15 across
-   m5 + m4), `codex n/a` on a login with no `$CODEX_HOME`. These hooks are no-ops outside
+   mac-b + mac-a), `codex n/a` on a login with no `$CODEX_HOME`. These hooks are no-ops outside
    tmux and always exit 0, so they are safe to add globally. The `Stop` entry also
    fires `classify-hook.sh`, the real-time path for state classification: it
    hands just the stopped window to `classify-sessions.sh --window`, so the
@@ -399,8 +399,8 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      line is red and another's is green.
 
      TokenLedger lives in this repo under `tokenledger/` (its own Go module,
-     merged with full history in issue #1391; the old `github.com/verkyyi/ccquota`
-     / `verkyyi/tokenledger` install paths are retired). Installing the fleet
+     merged with full history in issue #1391; the old `github.com/dave/ccquota`
+     / `dave/tokenledger` install paths are retired). Installing the fleet
      never builds it — `go install` above is the only way it gets onto `PATH`.
      The product was renamed to TokenLedger on 2026-09-14 but **the identifiers
      were deliberately not**: the command, the `CCQUOTA_*` variables and
@@ -650,7 +650,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    iPad / iPhone ssh's into any machine with the fleet installed and runs the
    same `fleet` there — the client then runs on that machine (its own
    `-L fleet-shell` server, not that machine's fleet session) and its bar says
-   `客户端在 m5 上运行` — which is exactly what the SSH login above opens (issue
+   `客户端在 mac-b 上运行` — which is exactly what the SSH login above opens (issue
    #1711): there is one way in. A direct `tmux attach` to a machine's fleet
    session is not blocked, but it is not a way in to document or rely on.
 
@@ -880,7 +880,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
 
 A colleague gets ONE line from the operator — `curl -fsSL https://<入口>/install | sh` — and
 nothing else. What they then see, press and wait for, as
-`bin/fleet-onboard-drill.sh` recorded it on a throwaway login on m4 — final run
+`bin/fleet-onboard-drill.sh` recorded it on a throwaway login on mac-a — final run
 2026-10-07, stable `644641e`, hub `prod-56a4d57`, a DRILL PERSON confirming the scan
 (`fleet drill invite`), the client on the test identity; paste → list in 137 s
 (「要人帮」 = a step they would have had to ask someone about):
@@ -952,7 +952,7 @@ sudo -v
 ~/.claude/fleet/bin/fleet drill invite              # a DRILL PERSON: prints its login + approve code
 ~/.claude/fleet/bin/fleet-onboard-drill.sh --login <login> --invite <code>   # the line it printed
 ~/.claude/fleet/bin/fleet-onboard-drill.sh --teardown <login> --invite <code>   # a run left up with --keep
-~/.claude/fleet/bin/fleet-onboard-drill.sh --home fleet-linux-0   # pick the machine (issue #3432)
+~/.claude/fleet/bin/fleet-onboard-drill.sh --home linux-a   # pick the machine (issue #3432)
 ```
 
 **Pick the machine the newcomer lands on** (issue #3432): `--home <machine>` mints the run's
@@ -960,7 +960,7 @@ own drill person with `fleet drill invite --login drill<MMDDHHMM> --home <machin
 hub opens its login THERE — no placement asked (only a drill person carries a home; a real
 newcomer is always placed). Step 8 checks the session's row is on it, and step 10 restarts
 that machine's tmux as the session's login over the login's own client (`fleet-thin.py --run
---home <machine>`), so `--home mini2` and `--home fleet-linux-0` both run from one drill
+--home <machine>`), so `--home mac-d` and `--home linux-a` both run from one drill
 machine — any machine but `--home` itself (the drill's own login is there). Steps 8–10 run in a
 sandbox first: `bin/fleet-onboard-drill-steps-selftest.sh` (`FLEET_DRILL_ONLY=8-10`).
 

@@ -4,9 +4,9 @@
 #
 # ⌘P (bin/fleet_view.py entries → produce → tmux-dashboard-rows.sh) reads the
 # other machines' rows from global/remote_<fleet>, which fleet-hub-sessions.sh's
-# loop keeps and the collector's tick (re)starts. On 2026-10-10 mini2's node
+# loop keeps and the collector's tick (re)starts. On 2026-10-10 mac-d's node
 # supervisor wedged, the collector stopped with it, the file froze, and four
-# workers reaped on macmini stayed in mini2's ⌘P.
+# workers reaped on mac-c stayed in mac-d's ⌘P.
 #
 #   A  degenerate — no remote_<fleet> on disk: the list asks the hub nothing
 #   B  frozen — the far worker is in the cache, the hub has since dropped it,
@@ -97,7 +97,7 @@ frozen() {
   bash "$HUBS" --refresh 2>/dev/null || fail "setup: --refresh failed"
   grep -q "$F/issue-3058" "$G/remote_$S" 2>/dev/null || fail "setup: the far worker is not in the cache" "$(cat "$G/remote_$S" 2>/dev/null)"
   echo $(( $(date +%s) - 960 )) > "$G/hub_ok"
-  cp "$WORK/after.json" "$WORK/hub.json"   # macmini reaped #3058; the hub knows
+  cp "$WORK/after.json" "$WORK/hub.json"   # mac-c reaped #3058; the hub knows
   : > "$WORK/hub.log"
 }
 
@@ -114,7 +114,7 @@ case "$LEGS" in *B*)
   frozen
   r=$(FLEET_VIEW_HUB_FRESH=10 rows)
   printf '%s\n' "$r" | grep -q '断线重连不回显' || fail "B: the live far worker is not listed" "$r"
-  printf '%s\n' "$r" | grep -q '弹窗背后刷中文' && fail "B: ⌘P still lists #3058, reaped on macmini (the cache froze with it)" "$r"
+  printf '%s\n' "$r" | grep -q '弹窗背后刷中文' && fail "B: ⌘P still lists #3058, reaped on mac-c (the cache froze with it)" "$r"
   [ "$(asks)" -ge 1 ] || fail "B: the open did not ask the hub"
   for _ in 1 2 3 4 5 6 7 8 9 10; do loop_alive && break; sleep 0.3; done
   loop_alive || fail "B: no loop running after the open"

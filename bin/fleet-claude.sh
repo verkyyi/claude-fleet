@@ -180,7 +180,7 @@ fleet_as_stamp
 # (`projects[<root>].hasTrustDialogAccepted`). When that entry is missing or
 # false for $FLEET_MAIN, EVERY spawned worker stops at "Quick safety check: Is this
 # a project you created or one you trust?" and, with nobody in the pane, sits
-# there for good — on 2026-09-12 two autofill-dispatched workers on the macmini did
+# there for good — on 2026-09-12 two autofill-dispatched workers on the mac-c did
 # exactly that for 7+ minutes while the dispatcher counted their slots as filled.
 # So the single door every spawn walks through writes the trust itself, scoped:
 # bin/fleet-trust.sh grants ONLY the base checkout and worktrees OF it (this cwd,

@@ -194,7 +194,7 @@ func (s *Server) clientPrincipal(id sshRelayIdentity) (fleetPrincipal, error) {
 }
 
 // machineHostname turns a client's machine name (an alias from the route
-// list, `m5`) into the roster hostname placement matches on.
+// list, `mac-b`) into the roster hostname placement matches on.
 func (s *Server) machineHostname(name string) string {
 	for _, m := range s.fleetMachines() {
 		if m.Alias != "" && strings.EqualFold(m.Alias, name) {

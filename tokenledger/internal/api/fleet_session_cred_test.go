@@ -18,8 +18,8 @@ import (
 
 const sessVerifier = "verifier-secret"
 
-// sessHarness is twoNodes with passes on and m5's login (verk) a person;
-// m4's login is nobody.
+// sessHarness is twoNodes with passes on and mac-d's login (frank) a person;
+// mac-c's login is nobody.
 func sessHarness(t *testing.T) (*harness, string, string, string, string) {
 	t.Helper()
 	h, _, _, f5, f4 := twoNodes(t)
@@ -30,14 +30,14 @@ func sessHarness(t *testing.T) (*harness, string, string, string, string) {
 		t.Fatal(err)
 	}
 	h.srv.Vault = &credvault.Vault{Store: h.srv.Store, Sealer: sealer, Refresher: &stubRefresher{}}
-	p, err := h.srv.Store.AdoptPrincipal("gh:1005", "verk", "Verk", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal("gh:1005", "frank", "Frank", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.srv.Store.AdoptAccount(p, "m5", time.Now()); err != nil {
+	if err := h.srv.Store.AdoptAccount(p, "mac-d", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	return h, h.tokens["m5"], h.tokens["m4"], f5.FleetID, f4.FleetID
+	return h, h.tokens["mac-d"], h.tokens["mac-c"], f5.FleetID, f4.FleetID
 }
 
 func sessDo(t *testing.T, h *harness, method, path, token, assertion string, body any) (int, map[string]any) {
@@ -112,8 +112,8 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 	out := sessIssue(t, h, tok5, f5, nil)
 	cred, _ := out["cred"].(string)
 	wid := assertClaims(f5, time.Now()).WorkerID
-	if !strings.HasPrefix(cred, "fcp-h1.") || out["principal_id"] != "gh:1005" || out["worker_id"] != wid || out["machine"] != "m5" {
-		t.Fatalf("issue = %v; want an fcp-h1. pass for gh:1005 / %s on m5", out, wid)
+	if !strings.HasPrefix(cred, "fcp-h1.") || out["principal_id"] != "gh:1005" || out["worker_id"] != wid || out["machine"] != "mac-d" {
+		t.Fatalf("issue = %v; want an fcp-h1. pass for gh:1005 / %s on mac-d", out, wid)
 	}
 	exp, _ := time.Parse(time.RFC3339, out["expires_at"].(string))
 	if d := time.Until(exp); d < SessionCredTTL-time.Minute || d > SessionCredTTL+time.Minute {
@@ -125,7 +125,7 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 	}
 	v := sessVerify(t, h, map[string]any{"cred": cred, "principal": "gh:1005", "provider": "claude"})
 	if v["valid"] != true || v["revoked"] != false || v["principal"] != "gh:1005" || v["worker_id"] != wid ||
-		v["machine"] != "m5" || v["exp"] == nil || len(v["providers"].([]any)) != 2 {
+		v["machine"] != "mac-d" || v["exp"] == nil || len(v["providers"].([]any)) != 2 {
 		t.Fatalf("verify = %v; want a valid pass for gh:1005", v)
 	}
 	// The operator may verify too; a node's token, or none, may not.
@@ -138,7 +138,7 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 		}
 	}
 	a := sessAudits(t, h)
-	if len(a) != 1 || a[0].actor != "node:verk@m5" || a[0].worker != wid || a[0].key != "issue-1" ||
+	if len(a) != 1 || a[0].actor != "node:frank@mac-d" || a[0].worker != wid || a[0].key != "issue-1" ||
 		!strings.HasPrefix(a[0].outcome, "issued sc_") {
 		t.Fatalf("audit = %+v; want one issued row for %s", a, wid)
 	}
@@ -164,7 +164,7 @@ func TestSessionCredIssueOnlyForTrueStatement(t *testing.T) {
 		{"no assertion", tok5, "", 401},
 		{"another node's key", tok5, signWorkerAssertion(assertClaims(f5, now), HashToken(tok4)), 401},
 		{"tampered", tok5, signWorkerAssertion(assertClaims(f5, now), HashToken(tok5)) + "x", 401},
-		{"m4's fleet, signed by m5", tok5, signWorkerAssertion(assertClaims(f4, now), HashToken(tok5)), 404},
+		{"mac-c's fleet, signed by mac-d", tok5, signWorkerAssertion(assertClaims(f4, now), HashToken(tok5)), 404},
 		{"a login that is nobody", tok4, signWorkerAssertion(assertClaims(f4, now), HashToken(tok4)), 403},
 		{"not a node", viewerToken, signWorkerAssertion(assertClaims(f5, now), HashToken(tok5)), 401},
 	}
@@ -178,8 +178,8 @@ func TestSessionCredIssueOnlyForTrueStatement(t *testing.T) {
 		t.Fatalf("passes recorded: %+v", rows)
 	}
 	// A machine / person revoked gets none either.
-	if st, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m5"}); st != 200 {
-		t.Fatalf("revoke m5: %d %v", st, out)
+	if st, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-d"}); st != 200 {
+		t.Fatalf("revoke mac-d: %d %v", st, out)
 	}
 	if st, out := sessDo(t, h, http.MethodPost, "/v1/fleet/session-cred", tok5,
 		signWorkerAssertion(assertClaims(f5, now), HashToken(tok5)), nil); st != 403 || out["error"] != LeaseRevoked {
@@ -187,7 +187,7 @@ func TestSessionCredIssueOnlyForTrueStatement(t *testing.T) {
 	}
 	// Bad arguments.
 	a := signWorkerAssertion(assertClaims(f5, now), HashToken(tok5))
-	h.srv.Store.Unrevoke("m5", "")
+	h.srv.Store.Unrevoke("mac-d", "")
 	for _, body := range []map[string]any{{"providers": []string{"github"}}, {"ttl_seconds": 60}, {"ttl_seconds": 90000}} {
 		if st, out := sessDo(t, h, http.MethodPost, "/v1/fleet/session-cred", tok5, a, body); st != 400 {
 			t.Errorf("%v: %d %v; want 400", body, st, out)
@@ -269,7 +269,7 @@ func TestSessionCredRevokeTakesEffect(t *testing.T) {
 		t.Fatalf("before: %v", v)
 	}
 	if st, _ := sessDo(t, h, http.MethodDelete, "/v1/fleet/session-cred/"+id, tok4, "", nil); st != 404 {
-		t.Fatalf("another node revoking m5's pass: %d; want 404", st)
+		t.Fatalf("another node revoking mac-d's pass: %d; want 404", st)
 	}
 	if st, out := sessDo(t, h, http.MethodDelete, "/v1/fleet/session-cred/"+id, tok5, "", nil); st != 200 || out["already"] != false {
 		t.Fatalf("node revoke: %d %v", st, out)
@@ -299,14 +299,14 @@ func TestSessionCredRevokeTakesEffect(t *testing.T) {
 	out = sessIssue(t, h, tok5, f5, nil)
 	cred = out["cred"].(string)
 	_ = sessVerify(t, h, map[string]any{"cred": cred}) // cached valid
-	if st, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m5", Reason: "lost"}); st != 200 {
-		t.Fatalf("revoke m5: %d %v", st, out)
+	if st, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "mac-d", Reason: "lost"}); st != 200 {
+		t.Fatalf("revoke mac-d: %d %v", st, out)
 	}
 	if v := sessVerify(t, h, map[string]any{"cred": cred}); v["valid"] != false || v["revoked"] != true {
 		t.Fatalf("after the machine's revocation: %v; want revoked", v)
 	}
 	a := sessAudits(t, h)
-	if len(a) != 4 || !strings.HasPrefix(a[1].outcome, "revoked sc_") || a[1].actor != "node:verk@m5" {
+	if len(a) != 4 || !strings.HasPrefix(a[1].outcome, "revoked sc_") || a[1].actor != "node:frank@mac-d" {
 		t.Fatalf("audit = %+v; want issue, the node's revoke, two issues", a)
 	}
 }
@@ -337,13 +337,13 @@ func TestSessionCredRenew(t *testing.T) {
 	}
 }
 
-// A trusted machine may ask for a pass too (one interface): m5 is trusted by
+// A trusted machine may ask for a pass too (one interface): mac-d is trusted by
 // the migration and still gets one, and its lease is untouched by the call.
 func TestSessionCredTrustedMachineToo(t *testing.T) {
 	h, tok5, _, f5, _ := sessHarness(t)
 	set, err := h.srv.trustSettings(time.Now())
-	if err != nil || trustOf("m5", set) != TrustTrusted {
-		t.Fatalf("m5 trust = %v (%v); want trusted by the migration", trustOf("m5", set), err)
+	if err != nil || trustOf("mac-d", set) != TrustTrusted {
+		t.Fatalf("mac-d trust = %v (%v); want trusted by the migration", trustOf("mac-d", set), err)
 	}
 	sessIssue(t, h, tok5, f5, nil)
 	if a := sessAudits(t, h); len(a) != 1 || !strings.HasSuffix(a[0].outcome, "· trusted") {
@@ -385,12 +385,12 @@ func TestSessionCredClientComputer(t *testing.T) {
 		t.Fatalf("no pass: %v", out)
 	}
 	v := sessVerify(t, h, map[string]any{"cred": out["cred"]})
-	if v["valid"] != true || v["worker_id"] != fleetid.WorkerID(cf, assertFid) || v["machine"] != "m5" {
+	if v["valid"] != true || v["worker_id"] != fleetid.WorkerID(cf, assertFid) || v["machine"] != "mac-d" {
 		t.Fatalf("verify: %v", v)
 	}
 	for name, c := range map[string]struct{ tok, fleet string }{
-		"m5's client fleet, signed by m4":  {tok4, cf},
-		"an unregistered, underived fleet": {tok5, fleetid.ClientFleetID("someone-else")},
+		"mac-d's client fleet, signed by mac-c": {tok4, cf},
+		"an unregistered, underived fleet":      {tok5, fleetid.ClientFleetID("someone-else")},
 	} {
 		a := signWorkerAssertion(assertClaims(c.fleet, now), HashToken(c.tok))
 		if st, out := sessDo(t, h, http.MethodPost, "/v1/fleet/session-cred", c.tok, a, nil); st != 404 || out["cred"] != nil {

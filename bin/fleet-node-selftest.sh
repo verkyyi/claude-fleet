@@ -91,7 +91,7 @@ class H(BaseHTTPRequestHandler):
             st = state["codes"][dc]
             res = {"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "serial": "1", "key_id": "gh:Alice",
                    "principals": ["alice"], "valid_after": "2026-10-05T00:00:00Z", "valid_before": "2026-10-05T12:00:00Z",
-                   "ssh_config": "# fleet-ssh-config v1\n\nHost m4 fleet-m4\n  HostName 127.0.0.1\n  User alice\n", "hub": "x"}
+                   "ssh_config": "# fleet-ssh-config v1\n\nHost mac-a fleet-mac-a\n  HostName 127.0.0.1\n  User alice\n", "hub": "x"}
             if st.get("purpose") == "node":
                 res["node"] = {"endpoint_id": "ep_1", "label": st["device_name"] + "-" + st["os_user"], "token": TOKEN,
                     "hub": "x", "admin": False, "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"], "kind": "fixed"}
@@ -176,15 +176,15 @@ if grep -qx 'FLEET_HOST=0' "$SB/h1/.config/claude-fleet/fleet.conf" && ! grep -q
   ok "A fleet.conf: FLEET_HOST=0 (joined, only coordinates), no FLEET_ROLE"
 else bad "A fleet.conf: $(cat "$SB/h1/.config/claude-fleet/fleet.conf")"; fi
 # issue #1719: a first join only coordinates, and the scan wrote the
-# machine-to-machine Match for every other machine (here m4, from a hub that
+# machine-to-machine Match for every other machine (here mac-a, from a hub that
 # predates `machines`: the alias stands for the hostname).
 grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF" 2>/dev/null && ok "A node.env says CCQUOTA_FLEET_COMPUTE=0 (只协调)" \
   || bad "A node.env compute: $(grep COMPUTE "$ENVF" 2>/dev/null)"
 SNIP="$SB/h1/.ssh/fleet-ssh-config"
 PBIN=$(cd "$BIN" && pwd -P)   # `fleet` runs its siblings by their physical path (/var → /private/var on macOS)
-if grep -qF "Match originalhost m4,m4-*,fleet-m4,fleet-m4-* exec \"'$PBIN/fleet-peer-cert.sh' m4 view" "$SNIP" 2>/dev/null \
-   && grep -q '^  IdentityFile ~/.ssh/fleet-peer$' "$SNIP" && grep -qx 'm4 m4' "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null; then
-  ok "A the ssh snippet carries the peer Match for m4; peer/machines lists it"
+if grep -qF "Match originalhost mac-a,mac-a-*,fleet-mac-a,fleet-mac-a-* exec \"'$PBIN/fleet-peer-cert.sh' mac-a view" "$SNIP" 2>/dev/null \
+   && grep -q '^  IdentityFile ~/.ssh/fleet-peer$' "$SNIP" && grep -qx 'mac-a mac-a' "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null; then
+  ok "A the ssh snippet carries the peer Match for mac-a; peer/machines lists it"
 else bad "A peer section: $(cat "$SNIP" 2>/dev/null) / $(cat "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null)"; fi
 norm <"$SB/out" >"$SB/node.out"
 cat >"$SB/node.want" <<'EOF'

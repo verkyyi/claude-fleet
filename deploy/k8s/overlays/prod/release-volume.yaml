@@ -1,6 +1,6 @@
 # Node releases (claude-fleet#2335 code, wired by #2366): the hub keeps every
 # stable's signed release on the OSS bucket `haowan24-fleet-releases`
-# (cn-shenzhen, private), mounted at /releases by deployment-release.yaml.
+# (region-a, private), mounted at /releases by deployment-release.yaml.
 # Both replicas mount it at once during a rolling release, hence RWX; the
 # store's on-volume layout is written for ossfs (internal/api/fleet_release.go:
 # no directory rename, one-file pointer). The bucket, the RAM user
