@@ -12,6 +12,7 @@
 #
 #   sa-token-in-user-pod     extras/managed-node/render.py + deploy/k8s/fleet-workers
 #   provisioner-off-template bin/fleet-provisioner.py + bin/fleet_cluster_ticket.py
+#   spare-pod-leaks          bin/fleet-provisioner.py + tokenledger/internal/api/fleet_spare_pods.go
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -188,7 +189,7 @@ EOF
     python3 "$BIN/fleet_cluster_ticket.py" sign "$1" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(nonce=sys.argv[2], exp=int(sys.argv[3])); print(json.dumps(f))' "$2" "${3:-$n}" "${4:-$exp}")"
   }
   prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
-  local up='{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":""}'
+  local up='{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}'
   local ref job_none job_good
   ref=$(printf 'b%.0s' $(seq 1 40))
   job_none='{"op":"create-job","cluster":"drill","pod":"u-none1","repo":"o/r","ref":"'"$ref"'"}'
@@ -199,13 +200,16 @@ EOF
   done <<EOF
 no ticket|
 forged|$(tk "$d/other" "$up")
-another cluster|$(tk "$d/key" '{"op":"create-user-pod","cluster":"prod","pod":"u-drill1","limits":""}')
+another cluster|$(tk "$d/key" '{"op":"create-user-pod","cluster":"prod","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}')
 expired|$(tk "$d/key" "$up" "$n" "$(( $(date +%s) - 1 ))")
 an account ticket|v1.$(tk "$d/key" "$up" | cut -d. -f2-)
-a field the template has not got|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","privileged":true}')
+a field the template has not got|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz","privileged":true}')
+a create with no join code|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":""}' 66666666666666666666666666666666)
+a join code off its grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"x; rm -rf /"}' 77777777777777777777777777777777)
+a bind of somebody else's object|$(tk "$d/key" '{"op":"bind-user-pod","cluster":"drill","pod":"u-door1","principal":"gh.1"}' 88888888888888888888888888888888)
 an op it has not got|$(tk "$d/key" '{"op":"create-pod","cluster":"drill","pod":"u-drill1"}')
-a name that is not a person's pod|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"fleet-door","limits":""}')
-limits off the grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"cpu=0"}' 55555555555555555555555555555555)
+a name that is not a person's pod|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"fleet-door","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}')
+limits off the grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"cpu=0","join":"fj_abcdefghijklmnopqrstuvwxyz"}' 55555555555555555555555555555555)
 somebody else's object|$(tk "$d/key" '{"op":"destroy-user-pod","cluster":"drill","pod":"u-door1"}' fedcba9876543210fedcba9876543210)
 a Job for no pod|$(tk "$d/key" "$job_none" 11111111111111111111111111111111)
 EOF
@@ -234,7 +238,11 @@ cases = {
     "another namespace": mut(dep, lambda o: o["metadata"].update(namespace="kube-system")),
     "no user label": mut(dep, lambda o: o["metadata"]["labels"].update({"fleet/role": "door"})),
     "LoadBalancer": mut(svc, lambda o: o["spec"].update(type="LoadBalancer")),
+    "a Secret by another name": mut(p.join_secret("u-drill1", "fleet-workers", "fj_x"), lambda o: o["metadata"].update(name="fleet-door")),
+    "a Secret with a second key": mut(p.join_secret("u-drill1", "fleet-workers", "fj_x"), lambda o: o["data"].update(token="eA==")),
+    "an unlabelled Secret": mut(p.join_secret("u-drill1", "fleet-workers", "fj_x"), lambda o: o["metadata"].update(labels={})),
 }
+assert p.off_template(p.join_secret("u-drill1", "fleet-workers", "fj_x"), "fleet-workers") is None
 let = [k for k, o in cases.items() if not p.off_template(o, "fleet-workers")]
 print("let through: " + ", ".join(let) if let else "")
 PY
@@ -242,7 +250,8 @@ PY
   [ -z "$why" ] || { WHY="the guard $why"; return 1; }
   # the hub's tickets: each runs once, inside the namespace, by the template
   prov "$(tk "$d/key" "$up")"
-  [ "$RC" = 0 ] && [ "$(grep -c '^POST /.*/namespaces/fleet-workers/' "$d/writes")" = 3 ] \
+  [ "$RC" = 0 ] && [ "$(grep -c '^POST /.*/namespaces/fleet-workers/' "$d/writes")" = 4 ] \
+    && grep -q '^POST /api/v1/namespaces/fleet-workers/secrets/u-drill1-join$' "$d/writes" \
     || { WHY="the hub's create: rc $RC, wrote: $(cat "$d/writes" 2>/dev/null): $OUT"; return 1; }
   : > "$d/writes"
   prov "$(tk "$d/key" "$up")"
@@ -258,9 +267,97 @@ PY
   : > "$d/writes"
   prov "$(tk "$d/key" '{"op":"destroy-user-pod","cluster":"drill","pod":"u-drill1"}' 44444444444444444444444444444444)"
   SECS=$(since "$t0")
-  [ "$RC" = 0 ] && [ "$(grep -c '^DELETE .*/u-drill1$' "$d/writes")" = 3 ] \
+  [ "$RC" = 0 ] && [ "$(grep -c '^DELETE .*/u-drill1$' "$d/writes")" = 3 ] && grep -q '^DELETE .*/secrets/u-drill1-join$' "$d/writes" \
     || { WHY="the hub's destroy: rc $RC: $(cat "$d/writes"): $OUT"; return 1; }
-  WHAT="以执行器的身份：不带单 / 伪造 / 别的集群 / 过期 / 账号单冒充 / 多一个字段（privileged）/ 表外操作 / 非用户 pod 的名字 / 删别人的对象 / 重放，全部拒绝、一个请求都没发；自己的模板检查拦下特权 · 提权 · SYS_ADMIN · hostPath · hostNetwork · 挂令牌 · 别的账号 · 按标签的镜像 · 别的命名空间 · LoadBalancer；入口签的建 / Job / 改上限 / 删各只跑一次"
+  WHAT="以执行器的身份：不带单 / 伪造 / 别的集群 / 过期 / 账号单冒充 / 多一个字段（privileged）/ 表外操作 / 非用户 pod 的名字 / 删别人的对象 / 重放，全部拒绝、一个请求都没发；自己的模板检查拦下特权 · 提权 · SYS_ADMIN · hostPath · hostNetwork · 挂令牌 · 别的账号 · 按标签的镜像 · 别的命名空间 · LoadBalancer；入口签的建（连 join Secret）/ Job / 改上限 / 删（连 join Secret）各只跑一次；不带 join 码、join 码不合语法、给别人的对象打标签也拒；Secret 只能是 <fleet/pod>-join、一个键、带 user 标签"
+}
+
+# spare-pod-leaks (#3553): a spare pod the hub hands to 乙 must hold nothing of
+# 甲's — not 甲's pod reused, not 甲's disk, not 甲's join code, not 甲's records on
+# the hub. The provisioner half: 甲's pod is created (join Secret · PVC · Service ·
+# Deployment), bound, and destroyed — all four deleted, the stand-in API holding
+# none of them after; a replay of 甲's create is refused; 乙's pod is a NEW name, a
+# NEW claim with no data source, its own join Secret; a bind aimed at 甲's gone pod
+# is refused. The hub half: TestSparePodClaimDestroyRefill — 甲 handed a ready pod
+# by a write (≤ 10 s), 甲's 家 / node tokens / passes / leases / join codes cleared
+# before the destroy, spare.claim / spare.destroy audited, 乙 handed a different
+# pod — run here with a Go toolchain, else by the Go gate.
+drill_spare_pod_leaks() {
+  CAP=120
+  local d="$WORK/leak" t0 api exp gohalf out rc k jia
+  mkdir -p "$d/sa"; t0=$(now)
+  api=$(stub_api "$d") || { WHY="no stand-in API"; return 1; }
+  printf 'drill-token\n' > "$d/sa/token"
+  head -c 32 /dev/urandom > "$d/key"
+  python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
+  printf '{"cluster": "drill", "namespace": "fleet-workers", "user_pod": {"image": "x@sha256:%s", "hub": "https://hub.example.com", "storage_class": "csi"}}\n' \
+    "$D64" > "$d/template.json"
+  export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
+    FLEET_PROVISIONER_API="$api" FLEET_PROVISIONER_SA_DIR="$d/sa"
+  exp=$(( $(date +%s) + 300 ))
+  tk() { # tk <json fields without exp> — signed with the hub's key
+    python3 "$BIN/fleet_cluster_ticket.py" sign "$d/key" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(exp=int(sys.argv[2])); print(json.dumps(f))' "$1" "$exp")"
+  }
+  prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
+  jia='{"op":"create-user-pod","cluster":"drill","pod":"u-jia0001","limits":"","join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"a0000000000000000000000000000001"}'
+  prov "$(tk "$jia")"
+  [ "$RC" = 0 ] && [ "$(grep -c '^POST ' "$d/writes")" = 4 ] || { WHY="甲's create: rc $RC: $(cat "$d/writes"): $OUT"; return 1; }
+  prov "$(tk '{"op":"bind-user-pod","cluster":"drill","pod":"u-jia0001","principal":"gh.7001","nonce":"a0000000000000000000000000000002"}')"
+  [ "$RC" = 0 ] && grep -q '^PATCH /apis/apps/v1/namespaces/fleet-workers/deployments/u-jia0001$' "$d/writes" \
+    || { WHY="甲's bind: rc $RC: $OUT"; return 1; }
+  : > "$d/writes"
+  prov "$(tk '{"op":"destroy-user-pod","cluster":"drill","pod":"u-jia0001","nonce":"a0000000000000000000000000000003"}')"
+  [ "$RC" = 0 ] || { WHY="甲's destroy: rc $RC: $OUT"; return 1; }
+  for k in deployments/u-jia0001 services/u-jia0001 persistentvolumeclaims/u-jia0001 secrets/u-jia0001-join; do
+    grep -q "^DELETE .*/$k\$" "$d/writes" || { WHY="甲's destroy left $k: $(cat "$d/writes")"; return 1; }
+  done
+  # nothing of 甲's left on the API: every GET for it is 404
+  out=$(python3 - "$api" <<'PY'
+import sys, urllib.request, urllib.error
+left = []
+for p in ("/apis/apps/v1/namespaces/fleet-workers/deployments/u-jia0001",
+          "/api/v1/namespaces/fleet-workers/services/u-jia0001",
+          "/api/v1/namespaces/fleet-workers/persistentvolumeclaims/u-jia0001",
+          "/api/v1/namespaces/fleet-workers/secrets/u-jia0001-join"):
+    r = urllib.request.Request(sys.argv[1] + p, headers={"Authorization": "Bearer drill-token"})
+    try:
+        urllib.request.urlopen(r)
+        left.append(p.rsplit("/", 2)[-2] + "/" + p.rsplit("/", 1)[1])
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            left.append("%s: HTTP %d" % (p, e.code))
+print(" ".join(left))
+PY
+)
+  [ -z "$out" ] || { WHY="甲's objects still there after the destroy: $out"; return 1; }
+  # a replay of 甲's create cannot bring 甲's pod (or disk) back
+  prov "$(tk "$jia")"
+  [ "$RC" = 3 ] || { WHY="a replay of 甲's create: rc $RC: $OUT"; return 1; }
+  # 乙's pod: a new name, a new empty claim, its own join code
+  : > "$d/writes"
+  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-yi000002","limits":"","join":"fj_bbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"b0000000000000000000000000000001"}')"
+  [ "$RC" = 0 ] && grep -q '^POST /api/v1/namespaces/fleet-workers/persistentvolumeclaims/u-yi000002$' "$d/writes" \
+    && ! grep -q 'jia' "$d/writes" || { WHY="乙's create: rc $RC: $(cat "$d/writes"): $OUT"; return 1; }
+  # a bind aimed at 甲's gone pod is refused
+  prov "$(tk '{"op":"bind-user-pod","cluster":"drill","pod":"u-jia0001","principal":"gh.7002","nonce":"b0000000000000000000000000000002"}')"
+  [ "$RC" = 3 ] || { WHY="a bind of 甲's gone pod to 乙: rc $RC: $OUT"; return 1; }
+  # the hub half
+  gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestSparePodClaimDestroyRefill"
+  grep -q '^func TestSparePodClaimDestroyRefill(' "$ROOT/tokenledger/internal/api/fleet_spare_pods_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestSparePodClaimDestroyRefill is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestSparePodClaimDestroyRefill$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 甲领 · 删 · 乙领 通过" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="甲的 pod 建（join Secret · PVC · Service · Deployment）、打标签、删：四样全删、API 上一样不剩；重放甲的建被拒；乙拿到新名字、新的空盘、自己的 join 码；把甲已删的 pod 绑给乙被拒；${gohalf}"
 }
 
 cred_run_drills "$0"

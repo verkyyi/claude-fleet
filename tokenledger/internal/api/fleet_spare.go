@@ -261,7 +261,8 @@ func (s *Server) spareFitMachines(now time.Time) []string {
 	for _, m := range snap.Machines {
 		h := strings.ToLower(m.Hostname)
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
-			m.Sessions == nil || !admin[h] || paused[h] || !s.nodes.credsepAdminFor(m.Hostname) {
+			m.Sessions == nil || !admin[h] || paused[h] || !s.nodes.credsepAdminFor(m.Hostname) ||
+			isUserPodName(m.Hostname) { // one person's pod holds one login (claude-fleet#3553)
 			continue
 		}
 		var lpc *float64
@@ -300,7 +301,7 @@ func (s *Server) replenishSpares(now time.Time, force bool) bool {
 		log.Printf("fleet: spares: %v", err)
 		return false
 	}
-	queued := false
+	queued := s.replenishClusterSpares(now)
 	for _, m := range pic {
 		queued = s.shrinkSpares(m, now) || queued
 	}
@@ -384,9 +385,33 @@ func (s *Server) isSpareOp(opID string) bool {
 // account row (store.ClaimSpareFor). nil when it handed none: spares off, a
 // drill, no ready spare there, or a login of theirs already on host.
 func (s *Server) claimSpareOn(principal, displayName, actor, host string, now time.Time) *store.FleetAccount {
-	if !s.sparesOn() || store.IsSparePrincipal(principal) || s.Store.IsDrill(principal) {
+	if !s.sparesOn() || store.IsSparePrincipal(principal) {
 		return nil
 	}
+	if s.isCluster(host) {
+		// A cluster hands a whole pod (claude-fleet#3553) — to a drill
+		// identity too: the pod is destroyed whole at its remove, so nothing
+		// of the drill is left for the next person.
+		return s.claimClusterSpare(principal, displayName, actor, host, now)
+	}
+	if s.Store.IsDrill(principal) {
+		return nil
+	}
+	a := s.claimSpareAt(principal, displayName, actor, host, now)
+	if a == nil {
+		return nil
+	}
+	go func() {
+		if s.replenishSpares(time.Now(), true) {
+			s.dispatchAccounts()
+		}
+	}()
+	return a
+}
+
+// claimSpareAt is the claim itself: the oldest ready spare login on host,
+// whoever principal is. nil when none was handed.
+func (s *Server) claimSpareAt(principal, displayName, actor, host string, now time.Time) *store.FleetAccount {
 	var a *store.FleetAccount
 	var err error
 	switch _, perr := s.Store.Principal(principal); {
@@ -419,11 +444,6 @@ func (s *Server) claimSpareOn(principal, displayName, actor, host string, now ti
 		return nil
 	}
 	log.Printf("fleet: %s: handed spare login %s on %s", principal, a.Login, host)
-	go func() {
-		if s.replenishSpares(time.Now(), true) {
-			s.dispatchAccounts()
-		}
-	}()
 	return a
 }
 
@@ -445,7 +465,7 @@ func (s *Server) claimSpares(principal, displayName, actor string, hosts []strin
 	}
 	var out []string
 	for _, host := range hosts {
-		if have[strings.ToLower(host)] {
+		if have[strings.ToLower(host)] || (s.isCluster(host) && s.holdsClusterPod(principal, host)) {
 			continue
 		}
 		if s.claimSpareOn(principal, displayName, actor, host, now) != nil {

@@ -167,6 +167,8 @@ var hubSettings = map[string]hubSetting{
 		}},
 	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
 		check: onOff(SparesKey, "off")},
+	ClustersKey: {def: "", help: "the clusters that keep spare pods (claude-fleet#3553): each one's name as its fleet-ops reports it, comma-separated; with fleet.spares on and the account key set, a newcomer placed there is handed a ready pod",
+		check: checkClusters},
 	SpareMaxKey: {def: "2", help: "at most this many spare logins per machine, within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
 		check: checkSpareMax},
 	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (mac-a.local=mac-a, mac-b.local=mac-b)",

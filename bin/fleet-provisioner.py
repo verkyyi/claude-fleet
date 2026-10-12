@@ -12,16 +12,20 @@ is the hub's account key's, for THIS cluster, short-lived and single-use — the
 nonce is spent in the ConfigMap fleet-provisioner-nonces before anything is
 done. The ops are typed, never a manifest:
 
-  create-user-pod  pod limits      render.py's user pod (PVC · Service · Deployment)
-  destroy-user-pod pod             those three, each only if it is a user pod's
+  create-user-pod  pod limits join render.py's user pod (PVC · Service · Deployment)
+                                  and its join Secret u-<nonce>-join (#3553)
+  destroy-user-pod pod             those three, each only if it is a user pod's,
+                                   and the join Secret
   set-limits       pod limits      that pod's Deployment, nobody else's
   create-job       pod repo ref    render.py's throwaway Job for that pod
+  bind-user-pod    pod principal   a claimed pod's fleet/principal label (#3553)
 
 Everything it would send is first held to the template here (off_template —
 the admission policy's own rules, deploy/k8s/provisioner/policy.yaml, which the
 API server applies again to every request this account makes). Its Role is
 deployments · services · persistentvolumeclaims · jobs in its own namespace,
-and the one ConfigMap; no pod, no Secret, no other namespace.
+the one ConfigMap, and create / delete (never read) of a pod's join Secret; no
+pod, no other Secret, no other namespace.
 
 Exit (once): 0 done · 3 refused (one stderr line why; nothing done) · 1 failed
 (the API said no or is unreachable; a re-ask signs a fresh ticket) · 2 usage.
@@ -33,6 +37,7 @@ FLEET_PROVISIONER_API (default https://kubernetes.default.svc) and
 FLEET_PROVISIONER_SA_DIR (its token and CA).
 """
 import argparse
+import base64
 import http.server
 import importlib.util
 import json
@@ -68,7 +73,19 @@ PATHS = {
     'Service': '/api/v1/namespaces/%s/services',
     'Deployment': '/apis/apps/v1/namespaces/%s/deployments',
     'Job': '/apis/batch/v1/namespaces/%s/jobs',
+    'Secret': '/api/v1/namespaces/%s/secrets',
 }
+JOIN_KEY = 'machine'
+
+
+def join_secret(pod, ns, code):
+    """The pod's join Secret (render.py mounts u-<nonce>-join, key machine):
+    its one-time machine join code, the only thing in it."""
+    return {'apiVersion': 'v1', 'kind': 'Secret', 'type': 'Opaque',
+            'metadata': {'name': pod + '-join', 'namespace': ns,
+                         'labels': {'fleet/role': 'user', 'fleet/pod': pod}},
+            # data, not stringData: what admission sees is what was sent
+            'data': {JOIN_KEY: base64.b64encode(code.encode()).decode()}}
 
 
 def render():
@@ -88,6 +105,13 @@ def off_template(o, ns):
         return 'namespace %r, not %r' % (meta.get('namespace'), ns)
     if (meta.get('labels') or {}).get('fleet/role') not in ROLES:
         return '%s %s carries no fleet/role user|job label' % (kind, meta.get('name'))
+    if kind == 'Secret':
+        labels = meta['labels']
+        if labels.get('fleet/role') != 'user' or meta.get('name') != '%s-join' % labels.get('fleet/pod'):
+            return 'a Secret the template makes is a user pod\'s join Secret, <fleet/pod>-join'
+        if o.get('type', 'Opaque') != 'Opaque' or set(o.get('stringData') or {}) | set(o.get('data') or {}) != {JOIN_KEY}:
+            return 'a join Secret is Opaque and holds only %r' % JOIN_KEY
+        return None
     s = o.get('spec') or {}
     if kind == 'Service':
         if s.get('type', 'ClusterIP') != 'ClusterIP' or s.get('externalIPs') or s.get('externalName'):
@@ -236,7 +260,8 @@ def act(t, conf, api, r=None):
             objs = r.user_pod_resources(name=pod, namespace=ns, limits=r.user_pod_limits(t['limits']), **kw)
         except (ValueError, TypeError) as e:
             raise Refused('cannot render the user pod: %s' % e)
-        return create(api, ns, objs)
+        # the join Secret first: the pod mounts it at its start
+        return create(api, ns, [join_secret(pod, ns, t['join'])] + objs)
     if op == 'create-job':
         if user_pod_of(api, ns, 'Deployment', pod) is None:
             raise Refused('no user pod %s to run a Job for' % pod)
@@ -272,7 +297,22 @@ def act(t, conf, api, r=None):
             if st != 404:
                 _ok(st, out, 'delete %s %s' % (kind, pod))
             done.append('%s %s deleted' % (kind, pod))
+        # the join Secret: never read (the Role has no get), deleted by name;
+        # the admission policy refuses the delete unless it is a user pod's
+        st, out = api.call('DELETE', (PATHS['Secret'] % ns) + '/' + pod + '-join',
+                           {'apiVersion': 'v1', 'kind': 'DeleteOptions'})
+        if st != 404:
+            _ok(st, out, 'delete Secret %s-join' % pod)
+            done.append('Secret %s-join deleted' % pod)
         return done
+    if op == 'bind-user-pod':
+        if user_pod_of(api, ns, 'Deployment', pod) is None:
+            raise Refused('no user pod %s to bind' % pod)
+        st, out = api.call('PATCH', (PATHS['Deployment'] % ns) + '/' + pod,
+                           {'metadata': {'labels': {'fleet/principal': t['principal']}}},
+                           'application/strategic-merge-patch+json')
+        _ok(st, out, 'label Deployment %s' % pod)
+        return ['Deployment %s fleet/principal=%s' % (pod, t['principal'])]
     raise Refused('not a provisioner op: %s' % op)
 
 

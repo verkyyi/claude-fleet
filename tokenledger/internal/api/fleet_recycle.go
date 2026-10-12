@@ -39,6 +39,9 @@ func (s *Server) recycleOn(principal, host string) bool {
 	if !s.Fleet || s.Store == nil || !s.sparesOn() || store.IsSparePrincipal(principal) || s.Store.IsDrill(principal) {
 		return false
 	}
+	if s.clusterPodOf(host) != nil {
+		return false // a pod is destroyed, never washed (claude-fleet#3553)
+	}
 	_, ok := s.nodes.recyclerFor(host)
 	return ok
 }
