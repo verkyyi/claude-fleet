@@ -62,6 +62,9 @@ QDIR="$FLEET_CONF_DIR/fleets/$L/peer-queue"
 mkdir -p "${CACHE%/*}"
 printf '%s/issue-42\tmac-a\t\n%s/acme-app:issue-43\tmac-a\t\n%s/issue-44\tmac-b:lost\t\n' "$F" "$F" "$F" > "$CACHE"
 export CCQUOTA_FLEET=1
+# The map is written once, here; every leg after must still trust it — on a slow
+# runner leg J came >30s later and the 30s default called it stale (issue #3782).
+export FLEET_HUB_CACHE_SECS=86400
 outbox() { ls "$OUTBOX"/*.json 2>/dev/null; }
 jget() { python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); v=r
 for k in sys.argv[2].split("."): v=v.get(k) if isinstance(v, dict) else None
