@@ -8,7 +8,7 @@
 # worker UNLESS the comment carries `<!-- fleet:no-relay -->`. Every fleet actor
 # shares the OWNER identity, so author-filtering cannot separate them — the marker
 # is the only reliable discriminator. This wrapper puts it on (or deliberately
-# off) so no hand-written `gh issue comment` can accidentally feed a worker.
+# off) so no hand-written issue comment can accidentally feed a worker.
 #
 # ⚠️ THE ONE MISTAKE THIS TOOL INVITES: the default is RECORD-ONLY. A bare call
 # posts a comment the bound worker will NEVER see. If you are writing an
@@ -45,7 +45,7 @@
 #                once. External/human commenters need no wrapper at all (their
 #                comments are unmarked by default = relayed, subject to the gate).
 #   --close      close the issue AFTER posting the (marked) comment — the wrapper
-#                for a no-PR wrap-up. A bare `gh issue close --comment` posts an
+#                for a no-PR wrap-up. A bare close-with-comment posts an
 #                UNMARKED comment the bridge relays straight back into the closing
 #                worker's own pane (issue #486); this keeps the close comment on
 #                the marker rail. Composes with the mode flags (default --note).
@@ -69,7 +69,7 @@
 # Repo resolution: --repo (an empty one counts as absent), else $CF_REPO; else
 # fleet_target_repo — the pane's window repo (@repo), else the fleet's only repo, else
 # a refusal (pass --repo; issues #1461, #1938); outside a fleet, the global FLEET_REPO. Prints the created comment URL on success (like
-# `gh issue comment`).
+# GitHub's own comment command).
 set -uo pipefail
 
 MARKER='<!-- fleet:no-relay -->'
@@ -93,7 +93,7 @@ while [ "$#" -gt 0 ]; do
     --to-worker) relay=1 ;;
     --close)     do_close=1 ;;
     # gh-compatible spellings (#528). hooks/bash-guard.py rewrites a raw
-    # gh issue-comment onto this wrapper verbatim, and a human reaching for the
+    # issue-comment from gh onto this wrapper verbatim, and a human reaching for the
     # wrapper types what gh taught them; the old `-*) unknown flag` catch-all
     # turned both into a SECOND failure right after the first one (--body-file
     # alone accounted for 13 of them). Accept gh's short forms and --body-file.
@@ -141,7 +141,9 @@ if [ -z "$repo" ]; then
   [ -n "$repo" ] || repo="${FLEET_REPO:-}"
 fi
 [ -z "$repo" ] && { printf 'fleet-comment: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
-command -v gh >/dev/null 2>&1 || { printf 'fleet-comment: gh not on PATH\n' >&2; exit 1; }
+# gh is needed only where the ticket lives on GitHub (a hub repo's never asks it).
+[ "${FLEET_TICKET_BACKEND:-}" = hub ] || [ "$(fleet_ticket_home "$repo")" = hub ] \
+  || command -v gh >/dev/null 2>&1 || { printf 'fleet-comment: gh not on PATH\n' >&2; exit 1; }
 
 # --- --to-worker on a repo the bridge does not poll (issue #2059) ------------
 # `--to-worker` leaves the comment unmarked for the issue-bridge to relay — but only
@@ -248,37 +250,25 @@ comment_verdict() {
   fi
 }
 
-# Post / close, with the REST fallback (issue #1042): `gh issue comment` and
-# `gh issue close` are GraphQL, and when the account's GraphQL budget is spent the
-# epic tick log and every worker note used to fail outright while REST still
-# worked. A rate-limit refusal (or the shared gh-limit marker) sends the SAME
-# body — marker + footer included — through `issues/N/comments -F body=@file`.
-# stdout stays exactly the comment URL either way. Both go through the per-token
-# write queue (fleet_gh_wrun, issue #1264): paced, and a secondary limit is
-# waited out once with every other writer instead of failing the comment.
+# Post / close go through the ticket door (issue #3595, EPIC #3570 共同约定 2): this
+# script composes the body (marker + footer), bin/fleet-ticket.sh carries it to
+# the ticket's home — the hub for a FLEET_TICKETS=hub repo, else GitHub with the
+# REST fallback (issue #1042) and the per-token write queue (issue #1264), exactly
+# as it ran here before. stdout stays exactly the comment URL either way.
+case "${FLEET_TICKET_BACKEND:-}" in
+  hub|gh) tkb=$FLEET_TICKET_BACKEND ;;
+  *) if [ "$(fleet_ticket_home "$repo")" = hub ]; then tkb=hub; else tkb=gh; fi ;;
+esac
+tid="$tkb:$(fleet_norm_repo "$repo")#$num"
 post_comment() {
-  local out rc tmp
-  out=$(fleet_gh_wrun graphql comment issue comment "$num" --repo "$repo" --body "$body"); rc=$?
-  if [ "$rc" -eq 0 ]; then [ -n "$out" ] && printf '%s\n' "$out"; return 0; fi
-  [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || return "$rc"
+  local tmp rc
   tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-comment.XXXXXX") || return 1
   printf '%s' "$body" > "$tmp"
-  out=$(fleet_gh_rest_comment "$repo" "$num" "$tmp"); rc=$?
+  bash "$BIN/fleet-ticket.sh" post "$tid" --body-file "$tmp"; rc=$?
   rm -f "$tmp"
-  [ "$rc" -eq 0 ] || return "$rc"
-  printf 'fleet-comment: GraphQL rate-limited — posted via REST\n' >&2
-  fleet_gh_log "fallback-ok op=comment repo=$repo issue=$num"
-  [ -n "$out" ] && printf '%s\n' "$out"
-  return 0
+  return "$rc"
 }
-close_issue() {
-  local rc
-  fleet_gh_wrun graphql comment issue close "$num" --repo "$repo"; rc=$?
-  [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || return "$rc"
-  fleet_gh_rest_issue_close "$repo" "$num" >/dev/null || return $?
-  printf 'fleet-comment: GraphQL rate-limited — closed #%s via REST\n' "$num" >&2
-  fleet_gh_log "fallback-ok op=close repo=$repo issue=$num"
-}
+close_issue() { bash "$BIN/fleet-ticket.sh" close "$tid"; }
 # --close: comment first (marked), THEN close — so the wrap-up note exists even if
 # the close itself fails, and the bridge never sees an unmarked close comment (#486).
 if [ "$do_close" -eq 1 ]; then

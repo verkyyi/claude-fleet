@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-issue-file.sh — the ONE channel every fleet actor files a GitHub issue
-# through (issue #332). Consolidates the three historical `gh issue create` sites
+# through (issue #332). Consolidates the three historical issue-create sites
 # — the backlog ⌃n / prefix+n filer (bin/dash-issue-new.sh), the dash new-session
 # box (bin/dash-new-session.sh), and the operator's file+spawn op from the hub
 # — behind one script with one body/label/provenance
@@ -9,7 +9,7 @@
 # Responsibilities, each a small testable step:
 #   1. VALIDATE any requested labels against the FIXED canonical taxonomy —
 #      fleet_labels_allowed in fleet-lib.sh (issue #333), the same set
-#      bin/fleet-labels-seed.sh installs, NOT the live `gh label list`. Reject an
+#      bin/fleet-labels-seed.sh installs, NOT the repo's live label list. Reject an
 #      off-taxonomy label UP FRONT with a clear message instead of an opaque `gh
 #      issue create` failure, and reject it even if it has been minted in the
 #      repo out of band (fixed seed, no minting). The check is deterministic +
@@ -46,7 +46,7 @@
 #      ORCHESTRATOR's pane with neither --rule nor a fleet:rule marker in its body
 #      is filed all the same, with 「未注明规则」 added and one line in
 #      logs/rules.log — never refused.
-#   3. `gh issue create` (title · body · labels · milestone). When no --milestone
+#   3. create, through the ticket door (`fleet-ticket.sh new --filed`; issue #3595) (title · body · labels · milestone). When no --milestone
 #      is given and FLEET_DEFAULT_MILESTONE is set for the fleet, default to it —
 #      auto-creating the milestone if absent — so nothing lands unsorted (issue
 #      #433). Best-effort: milestone plumbing never wedges the fast path.
@@ -66,7 +66,7 @@
 #      orchestrator, the steward and an EPIC driver spawn — fleet_spawn_refused);
 #      a breakage a worker files is queued for the steward, which spawns its fixer.
 #
-# Prints the created issue URL on stdout (exactly like `gh issue create`) so a
+# Prints the created issue URL on stdout (exactly like GitHub's own create) so a
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
 # Exit codes: 0 ok · 2 usage · 3 unknown label · 1 no-repo / create failure ·
 # 4 --spawn with no live parent (issue #1355; filed first when the spawn said it) — so a
@@ -190,11 +190,16 @@ if [ -z "$repo" ] && [ -n "$_fs" ]; then
 fi
 [ -n "$repo" ] || repo="${FLEET_REPO:-}"
 [ -z "$repo" ] && { printf 'fleet-issue-file: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
-command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >&2; exit 1; }
+# Where its tickets live (issue #3595): every write below goes through the ticket
+# door, bin/fleet-ticket.sh — GitHub for today's every repo, the hub for a
+# FLEET_TICKETS=hub one (which never needs gh to file).
+tk_home=$(fleet_ticket_home "$repo" "$_fs")
+if [ "$tk_home" = hub ]; then tkb=hub; else tkb=gh; fi
+[ "$tk_home" = hub ] || command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >&2; exit 1; }
 
 # --- 1. validate labels against the canonical taxonomy (reject off-taxonomy) ---
 # The allowed set is the FIXED fleet_labels_allowed taxonomy (issue #333), the
-# same set bin/fleet-labels-seed.sh installs — NOT the live `gh label list`. So
+# same set bin/fleet-labels-seed.sh installs — NOT the repo's live label list. So
 # no filer can file against a label that was minted in the repo out of band
 # (fixed seed, no minting), the check is deterministic + offline (no gh read),
 # and it holds identically for every filer including workers. Only when labels
@@ -286,7 +291,7 @@ if [ -n "$breakage_key" ]; then
     _t=0
     while [ ! -s "$bk_lock/issue" ] && [ -d "$bk_lock" ] && [ "$_t" -lt $((_bk_wait * 10)) ]; do sleep 0.1; _t=$((_t + 1)); done
     if [ -s "$bk_lock/issue" ]; then
-      bk_existing="https://github.com/$repo/issues/$(tr -dc 0-9 < "$bk_lock/issue")"
+      bk_existing=$(bash "$BIN/fleet-ticket.sh" url "$tkb:$(fleet_norm_repo "$repo")#$(tr -dc 0-9 < "$bk_lock/issue")")
     elif mkdir "$bk_lock" 2>/dev/null; then
       bk_held=1                                   # the holder gave up (its create failed): our turn
     else
@@ -296,7 +301,12 @@ if [ -n "$breakage_key" ]; then
   fi
   if [ "$bk_held" = 1 ] && [ -z "$bk_existing" ]; then
     # Another machine may have filed it: the marker in an open issue's body.
-    bk_existing=$(fleet_breakage_find "$repo" "$breakage_key") || bk_existing=''
+    if [ "$tk_home" = hub ]; then
+      bk_existing=$(bash "$BIN/fleet-ticket.sh" find --repo "$repo" --marker "$(fleet_breakage_marker "$breakage_key")" 2>/dev/null) \
+        && bk_existing=${bk_existing#*	} || bk_existing=''
+    else
+      bk_existing=$(fleet_breakage_find "$repo" "$breakage_key") || bk_existing=''
+    fi
     [ -n "$bk_existing" ] && printf '%s\n' "${bk_existing##*/}" > "$bk_lock/issue"
   fi
   if [ -n "$bk_existing" ]; then
@@ -308,12 +318,10 @@ if [ -n "$breakage_key" ]; then
     # part of the name (`_who（`: unbound variable).
     _cb="同一故障，来自 ${_role}${_who:+（${_who}）}"$'\n\n'"$(fleet_from_marker "$_role" "$repo")"$'\n'"<!-- fleet:no-relay -->"
     _cnum="${bk_existing##*/}"
-    if ! fleet_gh_write issue comment "$_cnum" --repo "$repo" --body "$_cb" >/dev/null 2>&1; then
-      _cf=$(mktemp "${TMPDIR:-/tmp}/fleet-bk-comment.XXXXXX") && printf '%s' "$_cb" > "$_cf" \
-        && fleet_gh_rest_comment "$repo" "$_cnum" "$_cf" >/dev/null 2>&1 \
-        || printf 'fleet-issue-file: could not comment on %s\n' "$bk_existing" >&2
-      rm -f "${_cf:-}"
-    fi
+    _cf=$(mktemp "${TMPDIR:-/tmp}/fleet-bk-comment.XXXXXX") && printf '%s' "$_cb" > "$_cf" \
+      && bash "$BIN/fleet-ticket.sh" post "$tkb:$(fleet_norm_repo "$repo")#$_cnum" --body-file "$_cf" >/dev/null 2>&1 \
+      || printf 'fleet-issue-file: could not comment on %s\n' "$bk_existing" >&2
+    rm -f "${_cf:-}"
     printf 'fleet-issue-file: breakage %s already has an open issue: %s — commented there, not filing (exit 5)\n' "$breakage_key" "$bk_existing" >&2
     [ "$bk_auto" = 1 ] && printf 'fleet-issue-file: (taken as that breakage because the base branch is red and the text names it — a different problem? re-file with --no-breakage)\n' >&2
     printf '%s\n' "$bk_existing"
@@ -369,20 +377,16 @@ fi
 if [ -z "${FLEET_DEFAULT_MILESTONE+set}" ]; then
   fleet_load_conf "$(fleet_current_session)" 2>/dev/null
 fi
-if [ -z "$milestone" ] && [ -n "${FLEET_DEFAULT_MILESTONE:-}" ]; then
+# A hub repo has no milestones: the knob is GitHub's.
+if [ -z "$milestone" ] && [ -n "${FLEET_DEFAULT_MILESTONE:-}" ] && [ "$tk_home" != hub ]; then
   default_ms="$FLEET_DEFAULT_MILESTONE"
-  owner="${repo%%/*}"; name="${repo#*/}"
-  # Ensure the milestone exists so `gh issue create --milestone` can't fail on a
-  # missing one: idempotently POST it (a 422 "already_exists" just means it's
-  # already there — confirm via the list). BEST-EFFORT (issue #297): on ANY
-  # failure WARN and file WITHOUT a milestone rather than wedge the fast path —
-  # ⌃n must never fail to file because of milestone plumbing.
-  if fleet_gh_write api --method POST "repos/$owner/$name/milestones" \
-        -f title="$default_ms" -f state=open >/dev/null 2>&1; then
-    milestone="$default_ms"                       # freshly created
-  elif gh api "repos/$owner/$name/milestones" --paginate -q '.[].title' 2>/dev/null \
-        | grep -Fxq -- "$default_ms"; then
-    milestone="$default_ms"                       # already existed (create 422'd)
+  # Ensure the milestone exists so the create's --milestone can't fail on a
+  # missing one: the door POSTs it idempotently (a 422 "already_exists" just
+  # means it's already there — it confirms via the list). BEST-EFFORT (issue
+  # #297): on ANY failure WARN and file WITHOUT a milestone rather than wedge the
+  # fast path — ⌃n must never fail to file because of milestone plumbing.
+  if bash "$BIN/fleet-ticket.sh" milestone "$repo" "$default_ms" >/dev/null 2>&1; then
+    milestone="$default_ms"
   else
     printf 'fleet-issue-file: could not ensure milestone %s — filing without one\n' \
       "$default_ms" >&2
@@ -405,16 +409,24 @@ if [ "$breakage" != 1 ]; then
          && printf 'fleet-issue-file: hint: the title is %s columns — keep it to one use, ≤ 20 汉字 (「mac-a 开不了会话」); details go in the body (issue #2545)\n' "$_tw" >&2 ;;
   esac
 fi
-create_args=(--repo "$repo" --title "$title" --body "$body")
+_bf=$(mktemp "${TMPDIR:-/tmp}/fleet-issue-body.XXXXXX") || exit 1
+printf '%s' "$body" > "$_bf"
+create_args=(--repo "$repo" --title "$title" --body-file "$_bf")
 [ -n "$milestone" ] && create_args+=(--milestone "$milestone")
 if [ "${#labels[@]}" -gt 0 ]; then
   for _l in ${labels[@]+"${labels[@]}"}; do create_args+=(--label "$_l"); done
 fi
-url=$(fleet_gh_write issue create "${create_args[@]}" 2>/dev/null) \
-  || { printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2
+# The door's write step (fleet-ticket.sh new --filed): GitHub's create through the
+# write throttle, or the hub's POST — the URL on stdout either way.
+url=$(bash "$BIN/fleet-ticket.sh" new --filed "${create_args[@]}" 2>/dev/null); _crc=$?
+rm -f "$_bf"
+[ "$_crc" = 0 ] \
+  || { if [ "$tk_home" = hub ]; then printf 'fleet-issue-file: the hub would not open the ticket in %s (exit %s)\n' "$repo" "$_crc" >&2
+       else printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2; fi   # no-gh-ok: a message
        [ "$bk_held" = 1 ] && rm -rf "$bk_lock"   # a waiter may take the breakage over
+       [ "$_crc" = 4 ] && exit 4
        exit 1; }
-[ -z "$url" ] && { printf 'fleet-issue-file: gh issue create returned no URL\n' >&2; [ "$bk_held" = 1 ] && rm -rf "$bk_lock"; exit 1; }
+[ -z "$url" ] && { printf 'fleet-issue-file: gh issue create returned no URL\n' >&2; [ "$bk_held" = 1 ] && rm -rf "$bk_lock"; exit 1; }   # no-gh-ok: a message
 printf '%s\n' "$url"                          # stdout = the URL (like gh), for the caller
 num="${url##*/}"; num="${num//[^0-9]/}"
 # The number is what the same-second filers on this machine are waiting for.
@@ -425,10 +437,8 @@ num="${url##*/}"; num="${num//[^0-9]/}"
 # so resolve that first. A failure here NEVER loses the filed issue — it just
 # stays standalone and we say so on stderr.
 if [ -n "$parent" ] && [ -n "$num" ]; then
-  owner="${repo%%/*}"; name="${repo#*/}"
-  child_id=$(gh api "repos/$owner/$name/issues/$num" -q '.id' 2>/dev/null)
-  if [ -n "$child_id" ] && fleet_gh_write api --method POST \
-        "repos/$owner/$name/issues/$parent/sub_issues" -F sub_issue_id="$child_id" >/dev/null 2>&1; then
+  _nr=$(fleet_norm_repo "$repo")
+  if bash "$BIN/fleet-ticket.sh" link "$tkb:$_nr#$parent" "$tkb:$_nr#$num" >/dev/null 2>&1; then
     printf 'fleet-issue-file: linked #%s as a sub-issue of #%s\n' "$num" "$parent" >&2
   else
     printf 'fleet-issue-file: could not link #%s under #%s — filed standalone\n' "$num" "$parent" >&2

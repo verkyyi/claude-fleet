@@ -1121,7 +1121,7 @@ fleet_load_repo_conf() {
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED" FLEET_TICKETS
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +
 # the caller's environment): the baseline _fleet_repo_keys_reset restores. A key set
@@ -1183,6 +1183,34 @@ fleet_ticket_url() {
     return 0
   fi
   printf 'https://github.com/%s/issues/%s\n' "$repo" "$n"
+}
+
+# fleet_ticket_home <repo> [sess] → `hub` or `github`: where <repo>'s tickets live
+# (issue #3595, EPIC #3570 共同约定 1). The repo conf's FLEET_TICKETS — its overlay,
+# else the fleet conf — read in a subshell; no session given ⇒ the caller's, else
+# the one fleet (one per login) whose repos/ holds the repo. Anything but `hub`
+# (unset, empty, a typo) is `github`: today's every repo, byte for byte. One repo
+# has ONE home — never two numberings in one repo. A per-repo key
+# (_FLEET_REPO_OVERRIDABLE), so one repo's value never leaks onto another's.
+fleet_ticket_home() {
+  local repo sess="${2:-}" v='' d
+  repo=$(fleet_norm_repo "${1:-}")
+  [ -n "$repo" ] || { printf 'github'; return 0; }
+  [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
+  if [ -z "$sess" ] && [ -d "$FLEET_CONF_DIR/fleets" ]; then
+    [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
+    for d in "$FLEET_CONF_DIR"/fleets/*/repos/"$(fleet_slug "$repo")".conf; do
+      [ -f "$d" ] || continue
+      d=${d%/repos/*}; sess=${d##*/}; break
+    done
+  fi
+  # Inside a fleet only the repo's conf answers; outside any, the environment's.
+  if [ -n "$sess" ]; then
+    v=$(fleet_repo_conf_get "$sess" "$repo" FLEET_TICKETS 2>/dev/null) || v=''
+  else
+    v="${FLEET_TICKETS:-}"
+  fi
+  case "$v" in hub) printf 'hub' ;; *) printf 'github' ;; esac
 }
 
 # ---- the seed repo (issue #1167) --------------------------------------------

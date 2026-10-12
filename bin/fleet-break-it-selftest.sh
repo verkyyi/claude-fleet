@@ -168,6 +168,8 @@
 #   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
+#   ticket-hub-down                                 bin/fleet-ticket.sh, bin/fleet_ticket.py, fleet-comment.sh,
+#                                                   fleet-issue-file.sh (fleet_ticket_home: a hub repo never asks gh)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6854,6 +6856,33 @@ print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))
   [ -z "$(FLEET_CONF_DIR="$d/conf" python3 "$BIN/fleet-orphan-reports.py" cell)" ] \
     || { WHY="a read report is still carried"; return 1; }
   WHAT="交给你的子会话结果：侧栏和入口都读得到（盘点第 31 列），读过就不再出现"
+}
+
+# A hub repo's ticket door with the hub gone (issue #3595, EPIC #3570 C2): every
+# verb says 入口不通 and exits 4 — never a quiet fallback to GitHub, which would
+# open a second numbering of the same repo — and the collector's cache stays the
+# last good copy.
+drill_ticket_hub_down() {
+  CAP=30; local d="$WORK/thd" t0 port rc1 rc2 rc3 rc4
+  mkdir -p "$d/conf/fleets/fs/repos" "$d/fakebin" "$d/cache" "$d/tmp"
+  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.log"\nexit 1\n' "$d" > "$d/fakebin/gh"; chmod +x "$d/fakebin/gh"
+  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=t\n' "$port" > "$d/conf/node.env"
+  printf 'FLEET_TICKETS=hub\n' > "$d/conf/fleets/fs/repos/acme-app.conf"
+  printf '· no milestone\t#4\t·\tthe last good copy\n' > "$d/cache/issues"
+  tk() { env -u TMUX -u TMUX_PANE -u CCQUOTA_HUB_URL -u CCQUOTA_TOKEN FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+           PATH="$d/fakebin:$PATH" TMPDIR="$d/tmp" FLEET_HUB_TIMEOUT=3 "$@"; }
+  t0=$(now)
+  tk bash "$BIN/fleet-ticket.sh" read 'hub:acme/app#4' >/dev/null 2>"$d/err"; rc1=$?
+  tk bash "$BIN/fleet-comment.sh" 4 --repo acme/app --body hi >/dev/null 2>&1; rc2=$?
+  tk bash "$BIN/fleet-issue-file.sh" --repo acme/app --title t >/dev/null 2>&1; rc3=$?
+  tk python3 "$BIN/fleet_ticket.py" cache --repo acme/app --dir "$d/cache" 2>/dev/null; rc4=$?
+  SECS=$(since "$t0")
+  [ "$rc1/$rc2/$rc3/$rc4" = 4/4/4/4 ] || { WHY="read/comment/file/cache exited $rc1/$rc2/$rc3/$rc4, not 4 each: $(cat "$d/err")"; return 1; }
+  grep -q '入口不通' "$d/err" || { WHY="no 入口不通 line: $(cat "$d/err")"; return 1; }
+  [ ! -s "$d/gh.log" ] || { WHY="fell back to GitHub: $(cat "$d/gh.log")"; return 1; }
+  grep -q 'the last good copy' "$d/cache/issues" || { WHY="the cache lost its last good copy"; return 1; }
+  WHAT="入口不通：开单 / 读单 / 评论 / 采集都退出 4、说入口不通，一次也不找 GitHub，缓存留着最后一份"
 }
 
 # ================================================================ run ====}

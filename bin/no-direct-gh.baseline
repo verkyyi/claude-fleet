@@ -1,0 +1,39 @@
+# no-direct-gh.baseline — the programs that still call gh directly (issue #3595).
+# bin/no-direct-gh-selftest.sh reads it: a file not listed here may not start; a
+# listed file that stopped must be deleted from here. Only ever delete lines.
+bin/dash-issue-close.sh
+bin/dash-issue-priority.sh
+bin/dash-issue-session.sh
+bin/dash-repo-add.sh
+bin/fleet-agent-defaults.py
+bin/fleet-bind.sh
+bin/fleet-claim-brief.sh
+bin/fleet-cleanup.sh
+bin/fleet-control-read.sh
+bin/fleet-doctor-onboard.sh
+bin/fleet-doctor.sh
+bin/fleet-epic-preflight.sh
+bin/fleet-epic-stable-row.sh
+bin/fleet-evidence.sh
+bin/fleet-handoff-cycle.sh
+bin/fleet-history.sh
+bin/fleet-issue-bridge.sh
+bin/fleet-labels-seed.sh
+bin/fleet-lib.sh
+bin/fleet-login-new.sh
+bin/fleet-mcp.py
+bin/fleet-onboard-defaults.py
+bin/fleet-onboard.sh
+bin/fleet-report-stats.py
+bin/fleet-restore-pick.sh
+bin/fleet-restore.sh
+bin/fleet-steward-conflicts.sh
+bin/fleet-ui-lang.sh
+bin/fleet-webhook.sh
+bin/fleet_park.py
+bin/refocus-hook.sh
+bin/tmux-dash-collect.sh
+bin/tmux-dashboard-rows.sh
+bin/tmux-issue-preview.sh
+bin/tmux-pr-refresh.sh
+hooks/bash-guard.py
