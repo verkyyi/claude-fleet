@@ -11,6 +11,11 @@
 #                                 when it turns on; turned off → the proxy stops.
 #                                 A proxy that dies is restarted within
 #                                 FLEET_CRED_PROXY_WATCH_SECS (2) + a 2s breath.
+#   fleet-cred-proxy.sh relay-tick  separated / shared only: one pass of the
+#                                 relay-pass keeping `run` does, then exit — what
+#                                 the node daemon runs every minute for a login on
+#                                 the machine's shared proxy instead of a resident
+#                                 `run` (issue #3524). Elsewhere a no-op.
 #   fleet-cred-proxy.sh ensure    start it detached when it is on and not running
 #                                 (a computer with no daemon — a client-only one);
 #                                 prints the port. Exit 3 = switched off.
@@ -183,6 +188,17 @@ if [ -n "$SEP_RUN" ]; then
         sleep "$IDLE" & wait $! 2>/dev/null
         [ -f "$CONF/credsep.json" ] || exec "$0" run "$@"
       done ;;
+    relay-tick)   # ONE pass of `run`'s relay keeping, then exit (issue #3524): a
+      # login on the machine's shared proxy has no resident launcher — the node
+      # daemon runs this every minute as the login. The clocks `run` keeps in its
+      # variables live in $STATE/relay-keep between passes.
+      mkdir -p "$STATE" && chmod 700 "$STATE"
+      read -r RELAY_AT RELAY_HELD RELAY_WAIT 2>/dev/null < "$STATE/relay-keep"
+      case "${RELAY_AT:-}${RELAY_HELD:-}${RELAY_WAIT:-}" in ''|*[!0-9]*) RELAY_AT=0 RELAY_HELD=1 RELAY_WAIT=0 ;; esac
+      [ "$(switch_now)" = 1 ] && relay_due && relay_fetch
+      printf '%s %s %s\n' "$RELAY_AT" "$RELAY_HELD" "$RELAY_WAIT" > "$STATE/relay-keep.$$" \
+        && mv -f "$STATE/relay-keep.$$" "$STATE/relay-keep"
+      exit 0 ;;
     ensure|port)
       live_pid >/dev/null || { echo "fleet-cred-proxy: separated, and its service is not running ($SEP_RUN)" >&2; exit 1; }
       cat "$SEP_RUN/port"; exit 0 ;;
@@ -201,6 +217,8 @@ fi
 # tick still pulls
 export FLEET_CRED_QUOTA_PUSH="${FLEET_CRED_QUOTA_PUSH-$BIN/fleet-proxy-quota.sh}"
 case "$cmd" in
+  relay-tick)   # not separated: the resident launcher keeps the pass itself
+    exit 0 ;;
   node-token|node-hash|probe|store|unstore|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
   run)
