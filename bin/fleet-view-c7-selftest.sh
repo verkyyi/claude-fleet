@@ -470,12 +470,15 @@ waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -q
 [ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] || fail "P: blank ⚡ is not ⌘N's: $(sed -n 3p "$W/new.argv")"
 N3=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new3" { print $1 }')
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N3' ]" || fail "P: the 看台 is not on new3 ($(cur))"
+# the blank ⚡'s panel may still be closing after the go: a ⌘P now reaches IT, its
+# stale list passes `listed`, and Tab / ← fall through to new3 (issue #3782)
+waitfor 12 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || fail "P: the blank ⚡'s panel stayed after the go"
 # words with 不绑仓库: a session here whose first turn is the words
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || fail "P: ⌘P (no repo) listed nothing"
 to send-keys -t o:view -l '看看日志'; sleep 0.4
 to send-keys -t o:view Tab; sleep 0.2; to send-keys -t o:view Left; sleep 0.3   # acme/app (the last send's) → 不绑仓库
-to capture-pane -p -t o:view | grep -q '仓库 ‹不绑仓库›' || fail "P: ← from the last repo is not 不绑仓库: $(to capture-pane -p -t o:view | grep -v '^$')"
+waitfor 8 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '仓库 ‹不绑仓库›'" || fail "P: ← from the last repo is not 不绑仓库: $(to capture-pane -p -t o:view | grep -v '^$')"
 to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || fail "P: words with no repo opened no session"
 [ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --prompt 看看日志 --no-desk --print fl" ] || fail "P: words with no repo: $(sed -n 4p "$W/new.argv")"

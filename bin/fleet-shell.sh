@@ -1043,12 +1043,16 @@ keeper)
         # the hub read just below signs with it, so first `renew --on-use hub`
         # — nothing asked above 20% of its 12 hours. It prints `left <secs>`;
         # the next look is when that margin is reached (certdue), so between
-        # looks nothing runs — no timer — unless the certificate file is newer
-        # than the last look (a `fleet login` / renew elsewhere). Only exit 3
-        # (scan again) is the person's: one message on each client here, once
-        # until it clears.
-        if [ "$now" -ge "${certdue:-0}" ] || [ "${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" -nt "$CL_DIR/client.certlook" ]; then
-          : > "$CL_DIR/client.certlook"
+        # looks nothing runs — no timer — unless the certificate changed since
+        # the last look (a `fleet login` / renew elsewhere). Changed = its bytes,
+        # never `-nt`: bash 3.2 compares whole seconds, so a certificate written
+        # in the second of the look went unseen until certdue (issue #3782). The
+        # sum is taken BEFORE the renew: its own write is one more cheap look.
+        # Only exit 3 (scan again) is the person's: one message on each client
+        # here, once until it clears.
+        ck=$(cksum < "${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" 2>/dev/null) || ck=''
+        if [ "$now" -ge "${certdue:-0}" ] || [ "$ck" != "${certck-}" ]; then
+          certck=$ck
           crc=0
           cleft=$(${FLEET_CERT_RENEW_CMD:-python3 "$BIN/fleet-login.py" renew} --quiet --on-use hub 2>/dev/null) || crc=$?
           cleft=${cleft##*left }
