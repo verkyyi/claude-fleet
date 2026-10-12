@@ -95,6 +95,8 @@
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
 #   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
+#   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
+#                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -5071,6 +5073,25 @@ drill_spare_reuse_leaks() {
   out=$(bash "$ROOT/bin/fleet-login-reset-check-selftest.sh" 2>&1) \
     || { WHY="fleet-login-reset-check-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
   WHAT="每类种一样 → reset: dirty 报出全部 $(printf '%s\n' "$out" | sed -n 's/^categories: //p') 类；清掉一类只少一类；--since 只认早于洗号的；表里少一类即红（沙盒真跑检查器）"
+  SECS=$(since "$t0")
+}
+
+# ---- spare-recycle-dirty (#3504, EPIC #3500 C12): a removed person's login is
+# washed into a spare for the next person — and the hub still held the last
+# person's node token, relay credential, leases, 家 or a join code for it, or a
+# wash that said dirty / not separated / nothing was handed out all the same.
+# Now: cleared before the reset is sent, checked again before the spare is
+# recorded, and anything unclean leaves the row failed, never handed out.
+drill_spare_recycle_dirty() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
+  t0=$(now)
+  grep -q 'recycleLeftovers(\*a, now)' "$f" \
+    || { WHY="applyReset no longer checks the hub's half before recording the spare"; return 1; }
+  grep -q 'case res.Reset != control.ResetClean:' "$f" \
+    || { WHY="applyReset no longer refuses a wash that did not say reset: clean"; return 1; }
+  _drill_go_tests 'TestRemoveRecyclesLoginIntoSpare TestRecycleNeverHandsOutAnUncleanWash TestRecycleLeftoversNamesEachHubPiece TestRecycleNoAnswerFailsAfterThirtyMinutes TestRemoveOldRoadWhenNotRecycling' \
+    "$ROOT/tokenledger/internal/api/fleet_recycle_test.go" \
+    '删号发 reset、洗净且隔离才成备用（spare.recycle）；dirty / 没隔离 / 没结论 / 跑失败 / 30 分钟无回音都 failed 不发出；入口侧节点令牌·中转·租约·家·未用 join code 先清后查；delete / 备用关 / 老 admin 走老路（go test）' || return 1
   SECS=$(since "$t0")
 }
 

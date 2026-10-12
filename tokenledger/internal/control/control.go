@@ -208,6 +208,12 @@ const CapCredsep = "credsep"
 // newcomer only on a machine that has one.
 const CapLoginJoin = "login_join"
 
+// CapRecycle is the hello capability an admin node lists when its remove
+// script has the --recycle mode (claude-fleet#3504): the hub may then wash a
+// person's login back into a spare (AccountReset) instead of deleting it. An
+// admin without it is sent a remove, as before.
+const CapRecycle = "recycle"
+
 // CapMachine is the hello capability of a MACHINE link (claude-fleet#2333,
 // EPIC #2329 C5): one connection, dialled by `ccquota agent --machine` with
 // the machine's own node token, that carries every login of the machine. Each
@@ -984,13 +990,26 @@ type Fleet struct {
 //
 //	create  fleet-login-new.sh <login> --full-name <name> --share-pool --apply
 //	remove  fleet-login-remove.sh <login> --keep-home --apply
+//	reset   fleet-login-remove.sh <login> --recycle --keep-home --apply
 //
 // The hub chooses only the login and the display name, and both are checked
 // against ValidCreateLogin / ValidFullName on the node before anything runs.
+//
+// reset (claude-fleet#3504, EPIC #3500 C12) washes a person's login for the
+// next one instead of deleting it: the remove script's --recycle mode keeps the
+// OS user, empties what the person left, re-joins the login with the op's
+// fresh join code and ends with two lines — `reset: clean|dirty …` then
+// `credsep: separated|…` (AccountResult.Reset / .Credsep). Sent only to an
+// admin whose hello lists CapRecycle.
 const (
 	AccountCreate = "create"
 	AccountRemove = "remove"
+	AccountReset  = "reset"
 )
+
+// ResetClean is AccountResult.Reset for a login the reset check found clean
+// (bin/fleet-login-reset-check.py's last line `reset: clean`).
+const ResetClean = "clean"
 
 // RemoveExitNoLogin is fleet-login-remove.sh's exit when the machine has no
 // such login (claude-fleet#2696): nothing to remove, so the hub records the
@@ -1040,6 +1059,10 @@ type AccountResult struct {
 	// CredsepSeparated when no token is readable from it. Absent from a node
 	// that does not separate — a spare it opened is never handed out.
 	Credsep string `json:"credsep,omitempty"`
+	// Reset is a reset's verdict (claude-fleet#3504): ResetClean when the
+	// script's `reset:` line said clean, else what it said ("dirty home,…").
+	// Absent on any other op. Only a clean, separated reset is handed out.
+	Reset string `json:"reset,omitempty"`
 }
 
 // MaxLoginLen bounds a hub-generated login. macOS allows longer short names;

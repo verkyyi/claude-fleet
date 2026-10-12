@@ -153,15 +153,21 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 	case !errors.Is(err, sql.ErrNoRows):
 		return nil, err
 	}
-	var spareID, login string
-	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_accounts
-		WHERE principal_id LIKE ? AND hostname = ? AND state = ? AND op = 'create'
-		ORDER BY updated_at, principal_id LIMIT 1`, spareLikePattern, hostname, AccountActive).Scan(&spareID, &login)
+	var spareID, login, name string
+	err = tx.QueryRow(`SELECT a.principal_id, a.login, p.login FROM fleet_accounts a
+		JOIN fleet_principals p ON p.principal_id = a.principal_id
+		WHERE a.principal_id LIKE ? AND a.hostname = ? AND a.state = ? AND a.op = 'create'
+		ORDER BY a.updated_at, a.principal_id LIMIT 1`, spareLikePattern, hostname, AccountActive).Scan(&spareID, &login, &name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoSpare
 	}
 	if err != nil {
 		return nil, err
+	}
+	if name != login {
+		// A recycled spare whose login a person's record still holds
+		// (claude-fleet#3504): its record is no name to hand on.
+		return nil, ErrSpareNameHeld
 	}
 	ts := at.UTC().Format(rfc)
 	r, err := tx.Exec(`UPDATE fleet_principals SET principal_id = ?, display_name = ?, last_login_at = ?

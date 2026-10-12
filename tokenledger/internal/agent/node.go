@@ -225,6 +225,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// Every login this node's create op opens is separated (claude-fleet#2294).
 		caps = append(caps, control.CapCredsep)
 	}
+	if a.cfg.FleetAdmin && recycleCapable(a.cfg.Home) {
+		// Its remove script washes a login for the next person (claude-fleet#3504).
+		caps = append(caps, control.CapRecycle)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,

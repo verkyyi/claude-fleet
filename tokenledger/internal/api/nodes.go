@@ -114,6 +114,9 @@ type nodeConn struct {
 	// canLoginJoin is an admin hello's CapLoginJoin (claude-fleet#3032): its
 	// create hands the login its join code. Set once, before publish.
 	canLoginJoin bool
+	// canRecycle is an admin hello's CapRecycle (claude-fleet#3504): its
+	// remove script washes a login for the next person. Set once, before publish.
+	canRecycle bool
 	// machineOpener: a machine link whose hello listed CapLoginJoin
 	// (claude-fleet#3210) — a Linux managed machine has no admin login, so its
 	// root node program opens and closes its own logins. It is that machine's
@@ -347,6 +350,24 @@ func (n *nodeConns) credsepAdminFor(hostname string) bool {
 	return c != nil && c.canCredsep
 }
 
+// recyclerFor returns hostname's account-op node (openerFor's pick) when it
+// can wash a login back into a spare (claude-fleet#3504): its hello listed
+// CapRecycle, its logins open credential-separated, and the machine is no
+// person's own computer.
+func (n *nodeConns) recyclerFor(hostname string) (string, bool) {
+	id, ok := n.openerFor(hostname)
+	if !ok {
+		return "", false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	if c == nil || !c.canRecycle || !c.canCredsep || c.personal {
+		return "", false
+	}
+	return id, true
+}
+
 // ErrNodeOffline is returned when a write is addressed to a node with no open
 // control channel.
 var ErrNodeOffline = errors.New("node has no open control channel")
@@ -491,6 +512,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket),
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
+		canRecycle:    hp.HasCap(control.CapRecycle),
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),

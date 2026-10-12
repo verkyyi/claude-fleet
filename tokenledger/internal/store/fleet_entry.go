@@ -432,6 +432,30 @@ func (s *Store) SetEntryHome(h EntryHome) (int, error) {
 	return v, tx.Commit()
 }
 
+// ClearEntryHome drops person's home when it is still machine/login — the
+// exact pair EntryHomes read (claude-fleet#3504: a login washed for the next
+// person is nobody's home any more). It reports the new version, 0 when no
+// row matched (nothing changed, nothing to push).
+func (s *Store) ClearEntryHome(person, machine, login string) (int, error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck — a no-op after Commit
+	res, err := tx.Exec(`DELETE FROM fleet_entry_home WHERE person = ? AND machine = ? AND login = ?`, person, machine, login)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, nil
+	}
+	v, err := s.bumpEntry(tx)
+	if err != nil {
+		return 0, err
+	}
+	return v, tx.Commit()
+}
+
 // AddEntryAudit records lines; one whose id is already there is skipped, so
 // a node sending its backlog twice records it once. It returns how many
 // were new.
