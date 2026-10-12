@@ -871,3 +871,7 @@ FLEET_CPU_STAT_FILE                test seam: the cgroup cpu.stat the doctor's c
 FLEET_CPU_MAX_FILE                 test seam: the cgroup cpu.max the doctor's cpu row reads the limit from (#3514)
 FLEET_CPU_SAMPLE_SECS              knob: internal pacing, seconds the doctor's cpu row samples the cgroup over (default 2, #3514)
 FLEET_CPU_THROTTLE_WARN            knob: internal, % of CPU periods throttled at which the doctor's cpu row WARNs (default 20, #3514)
+FLEET_POOL_CPU_READING             env handoff: the cgroup CPU reading scratch-pool.sh's fan-out samples once and hands each slot's pass (`-` = no limit; also a test seam, #3542)
+FLEET_POOL_CPU_SAMPLE_SECS         knob: internal pacing, seconds the pool's grow gate samples the cgroup over (default 1, #3542)
+FLEET_POOL_CPU_THROTTLE            knob: internal, % of CPU periods throttled at which a cgroup-limited pool stops growing (default 10, #3542)
+FLEET_POOL_CPU_SHARE               knob: internal, share of the cgroup CPU limit used above which the pool stops growing (default 0.8, #3542)
