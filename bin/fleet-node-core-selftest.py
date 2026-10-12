@@ -417,8 +417,8 @@ class G_Switch(Sandbox):
                      extra={"key": rv.key_id(k1), "key_chain": chain})
         self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
         self.assertEqual(self.req("rollback", {}), {"ok": True, "from": self.B, "to": self.A})
+        self.B = "c" * 40  # B stays on disk after the rollback; the revoked cases stage another
         rev = rv.make_doc(SECRET, {"schema": 1, "kind": "release-revoked", "version": 1, "keys": [rv.key_id(k1)], "by": rv.key_id(rk)})
-        shutil.rmtree(os.path.join(self.state, "staging", self.B), ignore_errors=True)
         make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
                      extra={"key": rv.key_id(k1), "key_chain": chain, "revoked": rev})
         self.assertIn("revoked", self.refused_switch("a revoked key (the manifest's list)")["why"])
