@@ -1,0 +1,183 @@
+package api
+
+import (
+	"bytes"
+	"compress/gzip"
+	"io/fs"
+	"net/http"
+	"path"
+	"strings"
+)
+
+// The public website's own paths (claude-fleet#3584, EPIC #3569 C14).
+//
+// bin/site-build.sh writes the site — / in 中文, /en/ in English — and
+// bin/docs-build.sh the documentation; both are embedded (web.Site, web.Docs)
+// and served only while the site is on (CCQUOTA_SITE=on, our own hub). With it
+// off — a self-hoster's default — none of these paths is answered here and
+// each falls through exactly as before.
+//
+//	/            the 中文 page for someone signed out (serveSite, app_mount.go)
+//	/en/         the English page (/en → 301 /en/)
+//	/site/<f>    its assets: fonts, share cards, icons
+//	/favicon.ico /favicon.svg /apple-touch-icon.png   what a browser asks the root for
+//	/docs/<p>    docs zh/<p>.html (<p>/ → <p>/index.html, <p>.md → the Markdown)
+//	/en/docs/<p> the same in English
+//
+// A page's absolute addresses (canonical, hreflang, og:url, JSON-LD) are built
+// with the placeholder siteOrigin and become this hub's address (hubURL) as
+// the page is served, so no hub's address is written in the repo.
+
+const siteOrigin = "__ORIGIN__"
+
+// siteCSP: the pages load nothing from anywhere else.
+const siteCSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+var siteTypes = map[string]string{
+	".woff2": "font/woff2",
+	".png":   "image/png",
+	".ico":   "image/x-icon",
+	".svg":   "image/svg+xml",
+	".txt":   "text/plain; charset=utf-8",
+	".md":    "text/markdown; charset=utf-8",
+	".html":  "text/html; charset=utf-8",
+}
+
+// serveSitePath answers the site's paths above (true), or leaves r alone
+// (false): the site is off, the method is not a read, or the path is not one
+// of them.
+func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
+	if !s.Site || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		return false
+	}
+	p := r.URL.Path
+	switch {
+	case p == "/en" || p == "/docs" || p == "/en/docs":
+		http.Redirect(w, r, withQuery(p+"/", r), http.StatusMovedPermanently)
+	case p == "/en/":
+		if !s.sitePage(w, r, "en/index.html", "en") {
+			http.NotFound(w, r)
+		}
+	case p == "/favicon.ico" || p == "/apple-touch-icon.png":
+		s.siteAsset(w, r, strings.TrimPrefix(p, "/"))
+	case p == "/favicon.svg":
+		s.siteAsset(w, r, "logo.svg")
+	case strings.HasPrefix(p, "/site/"):
+		s.siteAsset(w, r, strings.TrimPrefix(p, "/site/"))
+	case strings.HasPrefix(p, "/docs/"):
+		s.serveDoc(w, r, "zh", strings.TrimPrefix(p, "/docs/"))
+	case strings.HasPrefix(p, "/en/docs/"):
+		s.serveDoc(w, r, "en", strings.TrimPrefix(p, "/en/docs/"))
+	default:
+		return false
+	}
+	return true
+}
+
+// sitePage serves one of the site's pages, its origin filled in; false when
+// this hub carries no such page.
+func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang string) bool {
+	if s.SiteFS == nil {
+		return false
+	}
+	b, err := fs.ReadFile(s.SiteFS, name)
+	if err != nil {
+		return false
+	}
+	b = bytes.ReplaceAll(b, []byte(siteOrigin), []byte(s.hubURL(r)))
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Language", lang)
+	h.Set("Cache-Control", "public, max-age=300")
+	h.Set("Content-Security-Policy", siteCSP)
+	h.Set("X-Content-Type-Options", "nosniff")
+	writeSiteBody(w, r, b, true)
+	return true
+}
+
+// siteAsset serves a file of the site that is not a page; anything else under
+// /site/ is 404.
+func (s *Server) siteAsset(w http.ResponseWriter, r *http.Request, name string) {
+	ext := path.Ext(name)
+	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || strings.HasPrefix(path.Base(name), ".") {
+		http.NotFound(w, r)
+		return
+	}
+	age := "86400"
+	if ext == ".woff2" {
+		age = "604800"
+	}
+	serveFSFile(w, r, s.SiteFS, name, "public, max-age="+age)
+}
+
+// serveDoc serves the documentation page rest of lang: "" and "<dir>/" are
+// that directory's index, "<p>.md" the page's Markdown, "<p>" its HTML — and a
+// bare directory name is sent on to "<dir>/".
+func (s *Server) serveDoc(w http.ResponseWriter, r *http.Request, lang, rest string) {
+	if s.DocsFS == nil || strings.Contains(rest, "//") {
+		http.NotFound(w, r)
+		return
+	}
+	var name string
+	switch {
+	case rest == "" || strings.HasSuffix(rest, "/"):
+		name = lang + "/" + rest + "index.html"
+	case strings.HasSuffix(rest, ".md"):
+		name = lang + "/" + rest
+	default:
+		name = lang + "/" + rest + ".html"
+		if _, err := fs.Stat(s.DocsFS, name); err != nil {
+			if _, err := fs.Stat(s.DocsFS, lang+"/"+rest+"/index.html"); err == nil {
+				http.Redirect(w, r, withQuery(r.URL.Path+"/", r), http.StatusMovedPermanently)
+				return
+			}
+		}
+	}
+	if !fs.ValidPath(name) {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Language", lang)
+	w.Header().Set("Content-Security-Policy", siteCSP)
+	serveFSFile(w, r, s.DocsFS, name, "public, max-age=300")
+}
+
+// serveFSFile writes one file of fsys with its type and cache header, or 404.
+func serveFSFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name, cache string) {
+	b, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	ct := siteTypes[path.Ext(name)]
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	h := w.Header()
+	h.Set("Content-Type", ct)
+	h.Set("Cache-Control", cache)
+	h.Set("X-Content-Type-Options", "nosniff")
+	writeSiteBody(w, r, b, strings.HasPrefix(ct, "text/") || ct == "image/svg+xml")
+}
+
+// writeSiteBody writes b — gzip'd when it is text and the browser takes gzip:
+// a page is a third of its size on a phone's slow link, where the first paint
+// waits on it.
+func writeSiteBody(w http.ResponseWriter, r *http.Request, b []byte, text bool) {
+	if text {
+		w.Header().Add("Vary", "Accept-Encoding")
+	}
+	if !text || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(b)
+		}
+		return
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	if r.Method == http.MethodHead {
+		return
+	}
+	zw, _ := gzip.NewWriterLevel(w, gzip.BestCompression)
+	_, _ = zw.Write(b)
+	_ = zw.Close()
+}

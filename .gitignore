@@ -14,4 +14,8 @@ extras/web-chat/ui/node_modules/
 # stray files a shell slip once committed at the root (issue #3576)
 /trap
 /Authorization:*
-tokenledger/web/docs/
+tokenledger/web/docs/*
+!tokenledger/web/docs/.gitkeep
+# the website build (issue #3584): bin/site-build.sh writes it before the image build
+tokenledger/web/site/*
+!tokenledger/web/site/.gitkeep

@@ -25,7 +25,6 @@ Hosted means we run a hub just for your company and you only connect subscriptio
 They live on the machine that runs your sessions, in your own OS account that nobody else can read; subscription keys are kept by the hub and never enter a session, and actions are logged.
 
 ### Does it work offline?
-<!-- faq: site -->
 Sessions need to reach Claude's or ChatGPT's service to work; a self-hosted single computer needs no hub, and no GitHub either.
 
 ### Is this an Anthropic product?

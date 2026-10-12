@@ -25,3 +25,32 @@ func Assets() fs.FS {
 	}
 	return sub
 }
+
+// The public website and its documentation (claude-fleet#3584). Both are build
+// outputs like the client pack — bin/site-build.sh and bin/docs-build.sh write
+// them before the image is built (hub-deploy) — so only each directory's
+// .gitkeep is committed, and a binary built without them serves neither.
+
+//go:embed all:site
+var site embed.FS
+
+//go:embed all:docs
+var docs embed.FS
+
+// Site returns the built website (index.html, en/index.html, its assets), or
+// nil when this binary carries none.
+func Site() fs.FS { return built(site, "site", "index.html") }
+
+// Docs returns the built documentation (zh/…, en/…), or nil.
+func Docs() fs.FS { return built(docs, "docs", "zh/index.html") }
+
+func built(f embed.FS, dir, probe string) fs.FS {
+	sub, err := fs.Sub(f, dir)
+	if err != nil {
+		return nil
+	}
+	if _, err := fs.Stat(sub, probe); err != nil {
+		return nil
+	}
+	return sub
+}
