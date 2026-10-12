@@ -57,6 +57,15 @@ cat > "$W/shim/sudo" <<'EOF'
 #!/bin/sh
 printf 'sudo %s\n' "$*" >> "$RS_LOG"
 [ "$1" = -u ] && { shift 2; [ "$1" = -H ] && shift; }
+# `install -o <uid>` is root's to do: as the runner, the owner is dropped
+if [ "$1" = install ]; then
+  shift; set -- install "$@"; n=$#; i=0
+  while [ "$i" -lt "$n" ]; do
+    a=$1; shift; i=$((i + 1))
+    if [ "$a" = -o ]; then shift; i=$((i + 1)); continue; fi
+    set -- "$@" "$a"
+  done
+fi
 exec "$@"
 EOF
 cat > "$W/shim/createhomedir" <<'EOF'

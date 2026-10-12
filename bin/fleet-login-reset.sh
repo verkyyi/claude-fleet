@@ -232,7 +232,7 @@ fi
 
 # ---- 4 check -----------------------------------------------------------------
 step 4 "check: nothing of the last person left (fleet-login-reset-check.py --since the wash)"
-CHK=(sudo python3 -I "$CHECK_PY" "$LOGIN" --since "${SINCE:-0}" --home "$H" --uid "$UIDT"
+CHK=(sudo python3 -I "$CHECK_PY" "$LOGIN" --platform darwin --since "${SINCE:-0}" --home "$H" --uid "$UIDT"
      --homes-root "$HOMES" --node-state "$NODE_STATE" --cred-base "$CRED_BASE" --archive-dir "$ARCHIVE_DIR")
 [ -z "$RROOT" ] || CHK+=(--root "$RROOT")
 show "${CHK[@]}"
