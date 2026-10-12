@@ -5285,7 +5285,7 @@ print(m.fda_line({"fda": {"ok": False, "program": "/x/Python"}}))' 2>&1)
 
 # ---- spare-wash-no-fda (#3508): the admin agent has no Full Disk Access, and
 # macOS refuses even root's rename of a home without it — every recycle on
-# macmini ended `reset: dirty wash` at `sudo mv /Users/<login> …`, the login
+# the Mac ended `reset: dirty wash` at `sudo mv /Users/<login> …`, the login
 # failed and never went back to the spares. Now the wash rides the remove
 # script's local ssh road (forced `wash <login> <stamp>`), as its delete does.
 drill_spare_wash_no_fda() {

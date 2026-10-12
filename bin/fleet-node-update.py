@@ -407,7 +407,7 @@ def agent_unit(login, meta):
     `release` to put back — for a launchd-gui agent that is the LaunchAgent it
     booted out, while what runs is the LaunchDaemon it wrote in its place,
     com.ccquota.agent.<login> (fleet-credsep.py install). Read only the kind, a
-    converted Mac admin (macmini's verkyyi, issue #3508) was never followed: it
+    converted Mac admin (issue #3508) was never followed: it
     stayed on its own /usr/local/bin/ccquota, said no login_join, and the
     machine opened no login."""
     svc = meta.get("agent")

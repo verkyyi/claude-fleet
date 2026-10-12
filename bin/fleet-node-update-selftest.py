@@ -1701,28 +1701,31 @@ class Q_AdminAgent(Sandbox):
         """A Mac admin whose agent was a LaunchAgent: credsep keeps that in
         meta.json for `release` and runs it as LaunchDaemon com.ccquota.agent.<login>."""
         mp = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], login, "meta.json")
+        if not os.path.isdir(os.path.dirname(mp)):
+            os.makedirs(os.path.dirname(mp))
         self.wj(mp, {"login": login, "agent": {"kind": "launchd-gui", "label": "com.ccquota.agent",
                                                "path": "/Users/%s/Library/LaunchAgents/com.ccquota.agent.plist" % login},
                      "agent_argv": [prog, "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
         os.chmod(mp, 0o600)
 
     def test_converted_gui_agent_is_followed(self):
-        # issue #3508: macmini's verkyyi stayed on its own ccquota (no login_join) because
+        # issue #3508: a Mac's admin stayed on its own ccquota (no login_join) because
         # its meta.json said launchd-gui — the LaunchDaemon credsep made in its place runs it
         dd = self.env["FLEET_CREDSEP_DAEMON_DIR"]
         if not os.path.isdir(dd):
             os.makedirs(dd)
-        self.gui_meta("verky", self.own)
+        shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky"))   # oss-ok: the class fixture's login (setUp)
+        self.gui_meta("carol", self.own)
         self.install(V1)
-        self.assertEqual(self.argv0("verky"), self.own)            # no daemon there: not ours to restart
+        self.assertEqual(self.argv0("carol"), self.own)            # no daemon there: not ours to restart
         self.assertEqual(self.kicks(), [])
         self.assertEqual(self.rows(), [])
-        open(os.path.join(dd, "com.ccquota.agent.verky.plist"), "w").close()
+        open(os.path.join(dd, "com.ccquota.agent.carol.plist"), "w").close()
         self.assertTrue(self.rows() and "WARN" in self.rows()[0], self.rows())
         self.tick(V1)
-        self.assertEqual(self.argv0("verky"), os.path.join(self.root, "agent", "ccquota"))
-        self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.verky"])
-        meta = self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json"))
+        self.assertEqual(self.argv0("carol"), os.path.join(self.root, "agent", "ccquota"))
+        self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.carol"])
+        meta = self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "carol", "meta.json"))
         self.assertEqual(meta["agent"]["kind"], "launchd-gui")     # release still puts the original back
         self.assertIn("PASS", self.rows()[0])
 
