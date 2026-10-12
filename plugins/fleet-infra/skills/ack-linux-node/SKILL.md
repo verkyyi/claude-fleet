@@ -7,8 +7,8 @@ description: 在 Kubernetes（如阿里云 ACK）上起一台托管 Linux 节点
 
 占位：`<HUB_URL>` 入口 · `<NODE>` 节点名（pod 名）· `<REGISTRY>` 镜像仓库 · `<STORAGE_CLASS>` 加密云盘的存储类 ·
 `<PULL_SECRET>` 拉镜像的 Secret · `<LB_ADDRESS>` 入口端口的负载均衡地址。都从私有部署仓库或人那里拿，**不写进本仓库**。
-权威出处：`docs/MANAGED-LINUX.md`「Build the ACK image」「ACK resources」（含 Egress guard、Dev network）「Hub, relay, and access」
-「Shared services」「Package caches」「Upgrade and recovery」「Acceptance evidence」；演练顺序 `docs/MANAGED-LINUX-DRILL.md` §0–⑦；
+权威出处：`docs/dev/MANAGED-LINUX.md`「Build the ACK image」「ACK resources」（含 Egress guard、Dev network）「Hub, relay, and access」
+「Shared services」「Package caches」「Upgrade and recovery」「Acceptance evidence」；演练顺序见那次的演练单（`MANAGED-LINUX-DRILL.md` §0–⑦，#3576 删、git 历史里还在）；
 共享层 `deploy/k8s/fleet-workers`、`deploy/k8s/egress`、`deploy/k8s/caches` 各自的 README。
 
 ## 什么时候用
@@ -32,7 +32,7 @@ curl -fsS <HUB_URL>/healthz
 
 ## 步骤
 
-1. 打镜像（`docs/MANAGED-LINUX.md`「Build the ACK image」）：
+1. 打镜像（`docs/dev/MANAGED-LINUX.md`「Build the ACK image」）：
    ```sh
    bash extras/managed-node/prepare-image.sh <HUB_URL> <release.pub> RELEASE_COMMIT /tmp/fleet-node-image linux-amd64
    docker build --platform linux/amd64 -t <REGISTRY>/fleet-managed-node:RELEASE_COMMIT /tmp/fleet-node-image
@@ -61,10 +61,10 @@ curl -fsS <HUB_URL>/healthz
 ## 怎么验收
 
 - 节点里：`fleet-node-supervisor.py status --check` 退出 0；`readlink /var/db/fleet-node/runtime/current` 是 stable 的提交。
-- 出口：pod 里 `curl -m3` 云元数据地址被拒（地址和命令照 `docs/MANAGED-LINUX.md`「Egress guard」）；`iptables -F` 报 Permission denied。
+- 出口：pod 里 `curl -m3` 云元数据地址被拒（地址和命令照 `docs/dev/MANAGED-LINUX.md`「Egress guard」）；`iptables -F` 报 Permission denied。
 - 凭据：会话里 `env | grep -i token` 为空；`fleet-cred-scan.py scan --no-hub` 干净。
 - 入口：`fleet hub machines` 有 `<NODE>` 在线；`fleet route <NODE>` 能到；派一个会话能回话。
-- `docs/MANAGED-LINUX.md`「Acceptance evidence」逐条打钩。
+- `docs/dev/MANAGED-LINUX.md`「Acceptance evidence」逐条打钩。
 
 ## 怎么回滚
 

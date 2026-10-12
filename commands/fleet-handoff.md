@@ -35,7 +35,7 @@ Transfer notes and conversation evidence stay in private local files (§T).
 
 Every fleet step in this skill is a call to the fleet's tool service — Claude
 shows its tools as `mcp__fleet__<name>`, a Codex session reaches the same tools
-on its `fleet` server (docs/FLEET-MCP.md). Call **`mcp__fleet__status`** once and
+on its `fleet` server (docs/dev/FLEET-MCP.md). Call **`mcp__fleet__status`** once and
 reuse the literal values its `window` line prints (`issue=` · `repo=`):
 
 - **No fleet** (`window: (not in tmux)`, or no repo this fleet hosts) → **ABORT**
@@ -239,7 +239,7 @@ keep `@claude_state` at `working` and stall the helper's wait-idle):
 
 This mode runs from the **source Claude or Codex** in its issue/scratch worktree.
 Use the operator-selected target as `TARGET` below (`claude` or `codex`). The hub
-may use the operator CLI described in `~/.claude/fleet/docs/SESSION-TRANSFER.md`
+may use the operator CLI described in `~/.claude/fleet/docs/dev/SESSION-TRANSFER.md`
 to select a different window, but this skill never guesses another source pane.
 Do not use C2–C4: no issue comment, `/clear`, or clear-cycle helper in this mode.
 
@@ -373,7 +373,7 @@ plain `claude` session, and this pickup arrives as its first user turn.
 ## 排障
 
 No `fleet` tool in this session (`FLEET_MCP=0`, a session older than the tool
-service): docs/FLEET-MCP.md lists the exact script each call above runs, from
+service): docs/dev/FLEET-MCP.md lists the exact script each call above runs, from
 `~/.claude/fleet/bin/` — the arm is
 `nohup ~/.claude/fleet/bin/fleet-handoff-cycle.sh --pane "$TMUX_PANE" --doc "$DOC" >/dev/null 2>&1 &`
 (or `--issue "$ISSUE"` for comment storage), detached exactly as the tool does.

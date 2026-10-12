@@ -2,7 +2,7 @@
 # fleet-mcp-selftest.sh — the fleet tool service's contract (issue #1807, EPIC #1813 C5).
 #
 # bin/fleet-mcp.py is the ONE stdio MCP server Claude and Codex sessions both mount
-# (docs/FLEET-MCP.md). Driven against fake scripts in a sandbox bin/:
+# (docs/dev/FLEET-MCP.md). Driven against fake scripts in a sandbox bin/:
 #   A  initialize + tools/list: server `fleet`, exactly the twenty-three core tools
 #      (the dispatch group is `fleet-orch`'s — Q), every schema closed
 #      (additionalProperties false)

@@ -402,7 +402,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      The product was renamed to TokenLedger on 2026-09-14 but **the identifiers
      were deliberately not**: the command, the `CCQUOTA_*` variables and
      `~/.ccquota/` are all still spelled `ccquota`, and this fleet reads them
-     under those names. See [`tokenledger/README.md`](../tokenledger/README.md)
+     under those names. See [`tokenledger/README.md`](../../tokenledger/README.md)
      for standing up the hub and pointing `CCQUOTA_HUB_URL` at it.
 
      Next, the **diskguard** watcher (`com.claude-fleet.diskguard`, 60s) is strongly

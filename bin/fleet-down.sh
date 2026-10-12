@@ -3,7 +3,7 @@
 #
 # Tear down a fleet: kill its tmux session. The local checkout is ALWAYS left on
 # disk (your work lives there). With --purge, also remove the per-fleet conf and
-# this fleet's slug'd cache files. See docs/ARCHITECTURE.md.
+# this fleet's slug'd cache files. See docs/dev/ARCHITECTURE.md.
 #
 # It asks first (issue #1846): one slip took a dozen sessions and a running batch
 # down, and getting them back was by memory. With the fleet live it lists the

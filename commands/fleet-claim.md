@@ -21,7 +21,7 @@ to land. Nothing in this fleet is waiting to approve your work.
 
 **Every fleet step is a tool call** (issue #1811). The session has the fleet's
 tool service mounted as `fleet` — Claude shows its tools as `mcp__fleet__<name>`,
-a Codex session reaches the same tools on its `fleet` server (docs/FLEET-MCP.md is
+a Codex session reaches the same tools on its `fleet` server (docs/dev/FLEET-MCP.md is
 the one spec). Each tool checks its arguments and runs the fleet script behind it
 unchanged — exit code, stdout and stderr come back as they came — so the caps,
 guards and dedup are exactly what they were. Where this skill says "call
@@ -455,7 +455,7 @@ override them):
   If that input does not resolve the blocker (for example, a `[child-report]`),
   call `mcp__fleet__ask` again with what is still open before stopping. Then
   stop — don't spin.
-  **Every question carries its own answer** (issue #2669, docs/DECISIONS.md):
+  **Every question carries its own answer** (issue #2669, docs/dev/DECISIONS.md):
   give `suggest` (what you would decide, and why — the batch's charter usually
   already says), and `default` / `due` when they differ from «the suggestion,
   4 hours». Past the deadline the steward answers you WITH it — the answer
@@ -524,7 +524,7 @@ diagnosis — and this section is the one place a worker skill spells a path.
 
 **No `fleet` tool in the session at all** (`FLEET_MCP=0`, a session started
 before the tool service, a Codex build without MCP): every tool above names its
-script in its description, and docs/FLEET-MCP.md lists each tool's exact argv —
+script in its description, and docs/dev/FLEET-MCP.md lists each tool's exact argv —
 run that, unchanged, from `~/.claude/fleet/bin/`. Say in your report that the
 tools were missing; it is a setup gap, not a way of working.
 

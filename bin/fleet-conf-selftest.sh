@@ -131,7 +131,7 @@ EOF
   cat > "$CD/fleets/fleet/conf" <<EOF
 # claude-fleet: fleet 'fleet' — written by fleet-up.sh 2026-10-04 07:23:29
 # Overlays the global fleet.conf for this fleet's tmux session. Add any other
-# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
+# FLEET_* keys (see conf/fleet.conf.reference) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.
 FLEET_REPO="acme/app"
 FLEET_MAIN="$H/projects/app"
 FLEET_BASE_BRANCH="main"

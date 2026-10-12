@@ -9,7 +9,7 @@
 # That is how FLEET_AUTO_HANDOFF_PCT=60 sat inert in the global conf for weeks
 # while every one of 134 handoff cycles was worker-initiated (#561; same class as
 # #472, where FLEET_MODEL was a conf key only the launcher could see). The rule
-# (docs/ARCHITECTURE.md → "Hooks read the conf"): a hook that needs a FLEET_* knob
+# (docs/dev/ARCHITECTURE.md → "Hooks read the conf"): a hook that needs a FLEET_* knob
 # LOADS THE CONF; the launcher does not export. A bash hook sources fleet-lib.sh and
 # runs fleet_load_conf "$(fleet_current_session)" itself (session-end-hook.sh); a
 # `sh`-wired hook cannot (fleet-lib is bash-only), so it calls THIS script — the one

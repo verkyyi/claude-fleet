@@ -113,7 +113,7 @@ both() {
 echo "A. no fleet"
 mkdir -p "$T/a/fleets"
 both A "$T/a" "claude fleet ○ 未配置" "claude fleet ○ not set up"
-has "见 ~/.claude/fleet/docs/INSTALL.md" "points at INSTALL.md"
+has "见 ~/.claude/fleet/docs/dev/INSTALL.md" "points at INSTALL.md"
 hasnot "打开客户端" "no action line"
 hasnot "hushfleet" "no hide line"
 

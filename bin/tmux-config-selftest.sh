@@ -2,7 +2,7 @@
 # tmux-config-selftest.sh — hermetic smoke test for bin/fleet-config-lib.sh (the
 # prefix+c config modal, issues #83 + #89). No tmux, no fzf, no network.
 #
-# Asserts the modal's core contract against the REAL fleet.conf.example (so it
+# Asserts the modal's core contract against the REAL conf/fleet.conf.reference (so it
 # also guards that the example stays parseable + fully annotated) plus TEMP
 # install/login/per-fleet confs:
 #   • KEY LIST      every FLEET_* key in the example is discovered.

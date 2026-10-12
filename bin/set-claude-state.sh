@@ -531,7 +531,7 @@ if [ "$sem" = "done" ]; then
   _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
   _cm=$(printf '%s\n' "$_kv" | sed -n 4p)             # compactions before a handoff (issue #1316)
   # The context ladder's defaults (issue #1571): handoff 80, compact-prep 55, at
-  # most 3 compactions — KEEP IN SYNC with fleet.conf.example, fleet-context.sh,
+  # most 3 compactions — KEEP IN SYNC with conf/fleet.conf.reference, fleet-context.sh,
   # conf/statusline.sh, fleet-doctor.sh and fleet-codex-session.py
   # (context-ladder-defaults-selftest.sh pins all of them). Unset ⇒ the default,
   # but only when the conf path is intact: a missing lib resolves nothing, and that

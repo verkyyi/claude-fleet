@@ -9,7 +9,7 @@
 #     (issue #1164, EPIC #1163; no GUI sign-in needed since #1192, EPIC #1190;
 #     writes the person's welcome letter since #1195, EPIC #1212).
 #
-# docs/SHARED-MACHINE.md steps 1–2b used to be ~7 hand-typed admin commands
+# docs/dev/SHARED-MACHINE.md steps 1–2b used to be ~7 hand-typed admin commands
 # spread over two docs; a missed chown or group membership meant the person
 # could not log in, or could not use the pool, and the admin had to go hunting.
 # This script is those steps, in order:
@@ -150,7 +150,7 @@
 # ~/projects/… step 7's clone died on `Unable to read current working
 # directory` (#1210 ④; sync-logins had the same in #1162). --pubkey /
 # --pool-src / --password-file are made absolute first, so a relative
-# `--pubkey alice.pub` (docs/SHARED-MACHINE.md's example) is still found.
+# `--pubkey alice.pub` (docs/dev/SHARED-MACHINE.md's example) is still found.
 #
 # --daemons-only (issue #1223): step 8 ALONE, for a login that already exists
 # but has no com.claude-fleet.<login>.* under /Library/LaunchDaemons — the
@@ -183,7 +183,7 @@
 #      ~/<login>-onboard/op before step 1, its result appended on success, so
 #      the same op arriving twice is answered from it (the agent reads it).
 #
-# Conf: FLEET_SSH_PUBLIC_HOST / FLEET_SSH_PUBLIC_PORT (global; fleet.conf.example)
+# Conf: FLEET_SSH_PUBLIC_HOST / FLEET_SSH_PUBLIC_PORT (global; conf/fleet.conf.reference)
 #      — the public SSH entry the welcome letter names.
 # Env: FLEET_LOGIN_CREDSEP_WAIT (15) — seconds 7b waits for `check` to pass
 #      (the proxy starting) before it reports `pending`.
@@ -256,7 +256,7 @@ if [ "$DONLY" = 1 ]; then
   # silently dropped (--full-name is accepted and unused: a caller may pass the
   # create argv it already has).
   [ "$DAEMONS" = 1 ] || die2 "--daemons-only and --no-daemons contradict each other"
-  [ "$SHARE" = 0 ] || die2 "--daemons-only installs the background services only; --share-pool is step 5 (docs/SHARED-MACHINE.md 2b for an existing login)"
+  [ "$SHARE" = 0 ] || die2 "--daemons-only installs the background services only; --share-pool is step 5 (docs/dev/SHARED-MACHINE.md 2b for an existing login)"
   [ -z "$PUBKEY" ] || die2 "--daemons-only installs the background services only; --pubkey is step 4"
   [ -z "$PWFILE" ] || die2 "--daemons-only installs the background services only; --password-file is step 1"
   WELCOME=0 CREDSEP=0
@@ -1134,7 +1134,7 @@ i=$((i + 1)); say "  $i. as $LOGIN: ccquota codex login personal --device-auth  
 say "     (never copy ~/.codex/auth.json between logins)"
 i=$((i + 1)); say "  $i. as $LOGIN: gh auth login   — their own GitHub identity (only for repos on GitHub)"
 i=$((i + 1)); say "  $i. on the hub: ccquota enroll --name $MACHINE-$LOGIN   — give $LOGIN the token privately"
-say "     (then docs/SHARED-MACHINE.md step 4: the ccquota agent)"
+say "     (then docs/dev/SHARED-MACHINE.md step 4: the ccquota agent)"
 if [ "$DAEMONS" = 1 ]; then
   say "  claude-fleet + Claude Code were installed for $LOGIN above (step 8b) — no GUI sign-in, no step here"
 else

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-revoke-selftest.sh — docs/BREAK-IT.md rows `cred-revoked-still-works`
+# fleet-break-it-revoke-selftest.sh — docs/dev/BREAK-IT.md rows `cred-revoked-still-works`
 # and `relay-revocations-hub-down` (issue #3560, EPIC #3500 C18): the hub's
 # revocation list, followed by the relay and the door, refuses a revoked pass and
 # certificate within 10 seconds — and keeps refusing with the hub away. Split from

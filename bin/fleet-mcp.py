@@ -27,7 +27,7 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
   transfer  action [+ to, handoff, loop, …] → bin/fleet-transfer.sh | fleet-loop.py from-claude
   where / show / open               → bin/fleet-client-where.sh / fleet-show.sh / fleet-open.sh
 
-docs/FLEET-MCP.md is the one spec; later EPIC members add tools there and here.
+docs/dev/FLEET-MCP.md is the one spec; later EPIC members add tools there and here.
 
 Two groups (issue #3113, EPIC #3111 C2). The default server `fleet` LISTS the tools
 a session works with; the dispatch group — spawn · await · children · answer_dialog ·
@@ -77,7 +77,7 @@ one per launch and hands it to the agent — and so to this server — ONLY thro
 environment ($FLEET_WORKER_CRED); every tool call verifies it first and then acts as
 the session it names, refusing what is outside that session's scope. A call without
 one (a person in a shell, an older session) runs as before, by the window's options,
-and the call log says so. docs/FLEET-MCP.md «Identity» is the spec.
+and the call log says so. docs/dev/FLEET-MCP.md «Identity» is the spec.
 
 The hub route (issue #1810, EPIC #1813 C8): when THIS fleet runs with the hub
 (fleet_hub_on + a node token) and the call carries a credential that held, the
@@ -1373,12 +1373,12 @@ TOOLS = {
                        "your next turn, by the existing channels. Then end your turn — do not spin. Give "
                        "suggest (+ default / due): with the steward installed and someone holding its seat, "
                        "past the deadline it answers with the suggestion; otherwise the question waits for "
-                       "the person (bin/fleet_decision.py, docs/DECISIONS.md).",
+                       "the person (bin/fleet_decision.py, docs/dev/DECISIONS.md).",
         "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string", "description": "What you need, and why you cannot go on without it."},
             "kind": {"type": "string", "enum": ["question", "permission"],
                      "description": "question (default) or permission (an authorization you need)."},
-            "suggest": {"type": "string", "description": "What you would decide, and why (docs/DECISIONS.md)."},
+            "suggest": {"type": "string", "description": "What you would decide, and why (docs/dev/DECISIONS.md)."},
             "default": {"type": "string",
                         "description": "What happens if nobody answers by the deadline (default: the suggestion)."},
             "due": {"type": "string",

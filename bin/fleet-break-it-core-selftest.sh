@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-core-selftest.sh — the docs/BREAK-IT.md rows of the machine's root
+# fleet-break-it-core-selftest.sh — the docs/dev/BREAK-IT.md rows of the machine's root
 # core (issue #3555, EPIC #3500 C13): each drill starts a real `fleet-node-core.py
 # serve` on a sandbox socket (FLEET_NODE_TEST=1: the node daemon's uid is this
 # uid unless the drill says otherwise), does the wrong thing for real, and passes

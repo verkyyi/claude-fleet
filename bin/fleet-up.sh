@@ -16,7 +16,7 @@
 # repo put any other way (issue #1937). With no repo (outside a checkout, or
 # --no-repo) the fleet comes up with what it hosts — a brand-new one with none, its
 # hub in $HOME; new sessions are then no-repo sessions until one is added. The
-# collector is kicked so the sidebar has data at once. See docs/ARCHITECTURE.md.
+# collector is kicked so the sidebar has data at once. See docs/dev/ARCHITECTURE.md.
 #
 # A fleet ≡ a tmux session ≡ one login. Run it for every repo you want to work:
 # the first brings the fleet up, each further one adds its repo.

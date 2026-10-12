@@ -156,11 +156,11 @@ CHECKS=$((CHECKS + 1))
 [ -f "$SHADOW/.claude-plugin/plugin.json" ] || fail "the shadow has no real .claude-plugin/plugin.json"
 ok ".claude-plugin is copied, not symlinked (the plugin validator will not follow one)"
 
-# fleet.conf.example IS tracked and IS read (fcfg_default / fcfg_validate) — the
+# conf/fleet.conf.reference IS tracked and IS read (fcfg_default / fcfg_validate) — the
 # exclusion must be the conf, not everything conf-shaped.
 CHECKS=$((CHECKS + 1))
-[ -e "$SHADOW/fleet.conf.example" ] || fail "the shadow dropped fleet.conf.example — the config modal reads it"
-ok "fleet.conf.example survives the mirror"
+[ -e "$SHADOW/conf/fleet.conf.reference" ] || fail "the shadow dropped conf/fleet.conf.reference — the config modal reads it"
+ok "conf/fleet.conf.reference survives the mirror"
 
 missing=''
 for e in "$FAKE"/* "$FAKE"/.[!.]*; do

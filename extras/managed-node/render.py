@@ -188,7 +188,7 @@ def _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_prox
 
 
 def _relay_env(relay):
-    """The subscription relay this deployment runs (docs/CRED-RELAY.md): the node
+    """The subscription relay this deployment runs (docs/dev/CRED-RELAY.md): the node
     carries none of its own (claude-fleet#3577); empty = none."""
     if not relay:
         return []
@@ -505,7 +505,7 @@ if __name__ == '__main__':
                    help='image-pull Secret in the namespace (repeatable; default acr-pull). On ACK: '
                         'kubectl -n fleet-workers get secret | grep acr-credential')
     p.add_argument('--entry-lb-spec', default='slb.s1.small', help='CLB spec, or clcu (pay by use)')
-    # the egress guard's ranges (#3281; docs/MANAGED-LINUX.md «Egress guard»)
+    # the egress guard's ranges (#3281; docs/dev/MANAGED-LINUX.md «Egress guard»)
     p.add_argument('--egress-dns', default=EGRESS['dns'], help='kube-dns ClusterIP: the one private address allowed (53)')
     p.add_argument('--egress-metadata', default=EGRESS['metadata'], help='cloud metadata address, cut')
     p.add_argument('--egress-pod-cidr', default=EGRESS['pod_cidr'], help="the cluster's pod range, cut")
@@ -515,7 +515,7 @@ if __name__ == '__main__':
     p.add_argument('--egress-allow', action='append', default=[], metavar='IP[/n]:PORT',
                    help='an in-cluster destination the guard lets through, tcp (repeatable) - e.g. the '
                         "git-mirror Service's ClusterIP:9418")
-    # the dev network (#3348; docs/MANAGED-LINUX.md «Dev network»)
+    # the dev network (#3348; docs/dev/MANAGED-LINUX.md «Dev network»)
     p.add_argument('--github-proxy', default='', help="git's and gh's road to GitHub: http://RELAY:3128 (extras/gh-relay)")
     p.add_argument('--git-mirror', action='append', default=[], metavar='MIRROR=UPSTREAM',
                    help='fetch UPSTREAM (https://github.com/OWNER/REPO.git) from MIRROR; pushes stay on GitHub (repeatable)')
@@ -525,7 +525,7 @@ if __name__ == '__main__':
     p.add_argument('--cluster-caches', action='store_true',
                    help="every login's npm / pip / Go packages from the cluster's caches in --namespace "
                         '(fleet-npm:4873, fleet-pypi:3141, fleet-goproxy:3000 - deploy/k8s/caches)')
-    # the cluster's shared services (#3547; docs/MANAGED-LINUX.md «Shared services»)
+    # the cluster's shared services (#3547; docs/dev/MANAGED-LINUX.md «Shared services»)
     p.add_argument('--cred-central', default='', metavar='URL',
                    help='the cluster credential proxy (http://fleet-credproxy.fleet-workers.svc.cluster.local): '
                         'every session routes central, no subscription credential is leased into or kept in the pod')
@@ -534,13 +534,13 @@ if __name__ == '__main__':
     p.add_argument('--egress-closed', action='store_true',
                    help='the guard rejects the public internet too: out only through --egress-allow destinations '
                         "(the egress and credproxy Services' ClusterIPs, the hub's address)")
-    # one person's pod (#3550; docs/MANAGED-LINUX.md «User pods»)
+    # one person's pod (#3550; docs/dev/MANAGED-LINUX.md «User pods»)
     p.add_argument('--user-pod', default='', metavar='u-NONCE',
                    help="render one person's pod (Deployment + Service + home disk) instead of the shared node")
     p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
                    help="the pod's ceiling: the hub's fleet.user_pod_limits.<principal> value (default %s)"
                         % ','.join('%s=%s' % kv for kv in USER_POD_LIMITS.items()))
-    # the cluster's one door (#3549; docs/MANAGED-LINUX.md «The door»)
+    # the cluster's one door (#3549; docs/dev/MANAGED-LINUX.md «The door»)
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
     p.add_argument('--door-replicas', type=int, default=2)

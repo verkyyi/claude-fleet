@@ -1,12 +1,12 @@
 # The relay's local gate (claude-fleet#2048) — Caddy's forward_auth asks it on
-# 127.0.0.1:2091, it asks the hub. docs/CRED-RELAY.md «入口重启时» is the runbook.
+# 127.0.0.1:2091, it asks the hub. docs/dev/CRED-RELAY.md «入口重启时» is the runbook.
 # Install: /usr/local/lib/fleet-relay/fleet-relay-check.py (0755) + this file as
 # /etc/systemd/system/fleet-relay-check.service, then
 #   sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check
 # Nothing here is a secret. The revocation list (claude-fleet#3560) is on once
 # its token is a credential: put the hub's CCQUOTA_FLEET_REVOCATIONS_TOKEN in
 # /etc/fleet-relay/revocations-token (root 0600) and uncomment LoadCredential
-# (a missing file would stop the unit) — docs/CRED-RELAY.md «吊销名单».
+# (a missing file would stop the unit) — docs/dev/CRED-RELAY.md «吊销名单».
 # frl2 passes (claude-fleet#3561) are verified here with the list's key: install
 # bin/fleet_ed25519.py beside the script (python3 without `cryptography`).
 [Unit]

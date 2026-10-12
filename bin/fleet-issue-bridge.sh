@@ -16,7 +16,7 @@
 #   • --deliver (webhook) — read ONE GitHub `issue_comment` delivery JSON on stdin,
 #     validate its HMAC (FLEET_ISSUE_BRIDGE_SECRET), and relay that one comment.
 #     Wire it behind `gh webhook forward` / a cloudflared tunnel for sub-second
-#     latency. See docs/ISSUE-BRIDGE.md.
+#     latency. See docs/dev/ISSUE-BRIDGE.md.
 #
 # A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3597, EPIC #3570
 # C4) never asks GitHub for its comments:

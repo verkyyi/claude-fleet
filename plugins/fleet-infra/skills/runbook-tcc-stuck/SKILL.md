@@ -7,8 +7,8 @@ description: 托管 Mac 上 macOS 隐私授权（TCC）卡死的故障手册—�
 
 占位：`<MAC>` 那台托管 Mac · `<ADMIN>` 它的管理员登录名 · `<LOGIN>` 卡住的账号 · `<RT>` 运行时根目录
 `/Library/Application Support/claude-fleet`。
-权威出处：`docs/MANAGED-NODE.md` §6「删号要完全磁盘访问」「删号不再等这个授权：走本机 ssh」「管理员 agent 一个固定签名身份」；
-`docs/BREAK-IT.md` 行 `node-fda-probe-hang` · `tcc-disclaim-sigpipe` · `login-remove-dscl-denied` · `codesign-identity-switch`
+权威出处：`docs/dev/MANAGED-NODE.md` §6「删号要完全磁盘访问」「删号不再等这个授权：走本机 ssh」「管理员 agent 一个固定签名身份」；
+`docs/dev/BREAK-IT.md` 行 `node-fda-probe-hang` · `tcc-disclaim-sigpipe` · `login-remove-dscl-denied` · `codesign-identity-switch`
 （和 #3167 那一行）；`bin/fleet-node-supervisor.py` 的 `tcc_stuck_line` / `fda_line`；`bin/fleet-tcc-disclaim.py`；
 `bin/fleet_node_codesign.py`。新机器上架时预先点掉授权框见 [mac-node-prep]；删号本身见 [login-lifecycle]。
 

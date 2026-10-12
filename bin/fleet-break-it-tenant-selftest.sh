@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-tenant-selftest.sh — the docs/BREAK-IT.md rows a new ordinary
+# fleet-break-it-tenant-selftest.sh — the docs/dev/BREAK-IT.md rows a new ordinary
 # login's three lines added (issue #2298, EPIC #2293 C7): each drill builds the
 # fake machine of bin/fleet-tenant-scan-selftest.sh (TENANT_SCAN_LIB=1), opens
 # the way for real, and passes when bin/fleet-tenant-scan.sh's item goes red on

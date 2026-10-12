@@ -7,7 +7,7 @@ description: 起一台海外中转机，让不能直连的机器和入口经它�
 
 占位：`<RELAY_HOST>` 中转的域名 · `<HUB_URL>` 入口 · `<HUB_NAMESPACE>` 入口所在的 k8s 命名空间 ·
 `<CLUSTER_EGRESS>` 集群出口的 /32 · `<NODE>` 机器名。都从私有部署仓库或人那里拿，**不写进本仓库**。
-权威出处：`docs/CRED-RELAY.md`「转发机的配置」「上线步骤」「入口重启时」「入口的 GitHub 登录换令牌」「机器这一侧」「撤销（运维）」「完成判据 / 上线证据」；
+权威出处：`docs/dev/CRED-RELAY.md`「转发机的配置」「上线步骤」「入口重启时」「入口的 GitHub 登录换令牌」「机器这一侧」「撤销（运维）」「完成判据 / 上线证据」；
 `deploy/k8s/RUNBOOK.md`「GitHub 登录换令牌走新加坡中转」；`extras/gh-relay/README.md`；
 文件：`extras/cred-relay/{Caddyfile,fleet-relay-check.py,fleet-relay-check.service}`、`extras/gh-relay/{gh-relay.py,gh-relay.service}`。
 
@@ -57,7 +57,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://<RELAY_HOST>/v1/models         
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<RELAY_HOST>/github-oauth/login/oauth/access_token  # 403
 curl -sS -o /dev/null -w '%{http_code}\n' -x http://<RELAY_HOST>:3128 https://github.com/        # 从集群出口：200
 ```
-- 机器上 Claude、Codex 各回一次 PONG（`docs/CRED-RELAY.md`「完成判据」那段命令）。
+- 机器上 Claude、Codex 各回一次 PONG（`docs/dev/CRED-RELAY.md`「完成判据」那段命令）。
 - 中转机上查不到凭据片段：`sudo grep -rEc 'sk-ant-|eyJhbGci|Bearer ' /var/log/caddy/ /etc/caddy/` 全 0；日志一行只有前缀 / 状态 / 字节。
 - 入口重启后：`journalctl -u fleet-relay-check --since '-15 min' | grep -E ' hub-(down|up) '` 先 down 后 up；
   GitHub 登录：`kubectl -n <HUB_NAMESPACE> logs deploy/ccquota-hub --since=10m | grep 'github sign-in'`。

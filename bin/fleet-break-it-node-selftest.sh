@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-node-selftest.sh — docs/BREAK-IT.md row `node-supervisor-dead`
+# fleet-break-it-node-selftest.sh — docs/dev/BREAK-IT.md row `node-supervisor-dead`
 # (issue #2331, EPIC #2329 C3): the machine's one daemon dies. Its own file, like
 # the cred-shared drill whose runner it sources (BREAK_CRED_LIB=1);
 # bin/fleet-break-it-selftest.sh's lockstep lint reads the drill_* names here too.

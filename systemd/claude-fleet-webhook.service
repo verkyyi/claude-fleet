@@ -7,11 +7,11 @@
 # is a persistent supervisor, not an interval tick).
 #
 # OFF by default: it idles cheaply unless a fleet's conf sets FLEET_WEBHOOK=1.
-# Prereq: `gh extension install cli/gh-webhook` (see docs/WEBHOOK.md). Polling
+# Prereq: `gh extension install cli/gh-webhook` (see docs/dev/WEBHOOK.md). Polling
 # (collector + pr-refresh) stays the backstop, so a missed delivery only costs
 # freshness, never correctness. Install: substitute __HOME__, drop into
 # ~/.config/systemd/user/, then `systemctl --user enable --now
-# claude-fleet-webhook.service`. See docs/INSTALL.md.
+# claude-fleet-webhook.service`. See docs/dev/INSTALL.md.
 [Unit]
 Description=claude-fleet webhook daemon (fresh PR/issue/CI status via gh webhook forward, no public endpoint)
 

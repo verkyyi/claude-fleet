@@ -13,7 +13,7 @@
 # `-` (or no text) reads the sentence from stdin — the command body hands it over
 # a quoted heredoc, so no quote the person typed can break the shell line.
 #
-# What goes out (POST /v1/node/feedback, multipart — docs/FLEET-HUB.md «Feedback»):
+# What goes out (POST /v1/node/feedback, multipart — docs/dev/FLEET-HUB.md «Feedback»):
 #   text    the sentence, through conf/secret-shapes.list (bin/fleet_redact.py)
 #   ctx     fleet_version (@agent_ver, else the install's version) · agent (claude |
 #           codex) · machine_kind (managed-mac | managed-linux | own: fleet_node_manages)

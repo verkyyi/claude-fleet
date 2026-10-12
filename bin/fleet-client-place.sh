@@ -227,7 +227,7 @@ def read(path):
 
 fc = connect_module()
 # Every answer leaves one line in the client's place.log (issue #2896,
-# docs/CLIENT-LOGS.md): the line printed, plus every reason said on stderr —
+# docs/dev/CLIENT-LOGS.md): the line printed, plus every reason said on stderr —
 # the hub's `No machine can take…` with each machine's reason included.
 T0, SAID = time.time(), []
 

@@ -20,7 +20,7 @@ models generating tokens on a server at the same instant. Parallel work includes
 time spent executing tools. It does not establish a 25× speedup, savings, team
 size, or a causal link to the separate 84-PR total.
 
-![25 anonymous Claude sessions with overlapping recorded processing turns](img/concurrency-25-sessions.png)
+![25 anonymous Claude sessions with overlapping recorded processing turns](../public/img/concurrency-25-sessions.png)
 
 The chart uses Beijing time (UTC+8). Mint rows are 23 sessions in one business
 project; the final two rows are ClaudeFleet sessions. Labels are anonymous.

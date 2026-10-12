@@ -8,8 +8,8 @@
 #
 # The defaults are spelled in several places (each a different language or a hot
 # path that cannot source a shared table), so this test holds them in lockstep:
-#   A  fleet.conf.example's commented defaults ARE 55 / 80 / 3
-#   B  every code default equals fleet.conf.example's (a lint — the next edit to
+#   A  conf/fleet.conf.reference's commented defaults ARE 55 / 80 / 3
+#   B  every code default equals conf/fleet.conf.reference's (a lint — the next edit to
 #      one site without the others reds here):
 #        bin/set-claude-state.sh    the Stop hook (_hp / _cp / _cm)
 #        bin/fleet-context.sh       the read the session asks
@@ -22,25 +22,25 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-EX="$ROOT/fleet.conf.example"
+EX="$ROOT/conf/fleet.conf.reference"
 CTX="$BIN/fleet-context.sh"
 
 pass=0 failn=0
 ok()  { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 bad() { failn=$((failn + 1)); printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; }
 
-# ---- A: fleet.conf.example --------------------------------------------------------
+# ---- A: conf/fleet.conf.reference --------------------------------------------------------
 exval() { sed -n "s/^#$1=\([0-9][0-9]*\)[[:space:]].*/\1/p" "$EX" | head -1; }
 H=$(exval FLEET_AUTO_HANDOFF_PCT); C=$(exval FLEET_COMPACT_PREP_PCT); M=$(exval FLEET_COMPACT_MAX)
-[ "$H/$C/$M" = "80/55/3" ] && ok "A fleet.conf.example: handoff 80 · compact-prep 55 · max 3" \
-  || bad "A fleet.conf.example must document 80/55/3, got '$H/$C/$M'"
+[ "$H/$C/$M" = "80/55/3" ] && ok "A conf/fleet.conf.reference: handoff 80 · compact-prep 55 · max 3" \
+  || bad "A conf/fleet.conf.reference must document 80/55/3, got '$H/$C/$M'"
 [ -n "$H" ] && [ -n "$C" ] && [ -n "$M" ] || { printf 'context-ladder-defaults-selftest: FAIL (no defaults parsed)\n' >&2; exit 1; }
 
 # ---- B: every code site carries the same numbers ----------------------------------
 # site <file> <fixed string> <what>
 site() {
   if grep -qF -- "$2" "$ROOT/$1"; then ok "B $1: $3"
-  else bad "B $1 must carry the fleet.conf.example default ($3): no '$2'"; fi
+  else bad "B $1 must carry the conf/fleet.conf.reference default ($3): no '$2'"; fi
 }
 site bin/set-claude-state.sh    "then _hp=$H; else _hp=0; fi"            "handoff $H"
 site bin/set-claude-state.sh    "then _cp=$C; else _cp=0; fi"            "compact-prep $C"

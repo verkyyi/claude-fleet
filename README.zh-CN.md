@@ -10,14 +10,14 @@ claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issu
 
 例如，让一个会话修复登录问题，另一个补充导出功能的测试，再让一个完善文档。它们各自在自己的分支和工作目录里推进，通过 PR 交付；团队继续用 GitHub Issues 和 PR 留下需求、讨论和变更记录。
 
-项目来自一台常开 Mac mini 上的持续开发实践。本机 Transcript 核算记录到：**历史峰值 25 个 Claude 主 Session，在 25 份独立任务目录中并行处理任务**（2026 年 9 月 1 日）；另一次记录中，至少 **15 个任务连续并行约 14.46 分钟**。统计的是 CLI 处理轮次重叠，详见[实证数据与统计口径](docs/USAGE-EVIDENCE.md#中文说明)。
+项目来自一台常开 Mac mini 上的持续开发实践。本机 Transcript 核算记录到：**历史峰值 25 个 Claude 主 Session，在 25 份独立任务目录中并行处理任务**（2026 年 9 月 1 日）；另一次记录中，至少 **15 个任务连续并行约 14.46 分钟**。统计的是 CLI 处理轮次重叠，详见[实证数据与统计口径](docs/dev/USAGE-EVIDENCE.md#中文说明)。
 
-![claude-fleet 任务看板：集中查看会话状态、Issue、模型和上下文用量](docs/img/dashboard.svg)
-![tmux 状态栏：快速识别正在工作、已完成和等待你处理的会话](docs/img/statusbar.svg)
+![claude-fleet 任务看板：集中查看会话状态、Issue、模型和上下文用量](docs/public/img/dashboard.svg)
+![tmux 状态栏：快速识别正在工作、已完成和等待你处理的会话](docs/public/img/statusbar.svg)
 
 <sub>截图来自真实 tmux 界面，使用演示仓库数据。界面中的部分标签和提示仍为英文。</sub>
 
-[快速上手](#快速上手) · [小团队并行工作流](#小团队并行工作流) · [实证数据](docs/USAGE-EVIDENCE.md#中文说明) · [常用快捷键](#常用快捷键) · [配置与多仓库](#配置与多仓库) · [订阅与额度](#订阅账号池与额度管理) · [更多文档](#更多文档)
+[快速上手](#快速上手) · [小团队并行工作流](#小团队并行工作流) · [实证数据](docs/dev/USAGE-EVIDENCE.md#中文说明) · [常用快捷键](#常用快捷键) · [配置与多仓库](#配置与多仓库) · [订阅与额度](#订阅账号池与额度管理) · [更多文档](#更多文档)
 
 ## 它能帮你做什么
 
@@ -29,7 +29,7 @@ claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issu
 - **把订阅额度纳入调度。** 注册多个 Claude 账号后，可在账号限额时迁移会话；接入 TokenLedger（`ccquota`）后，还能按账号余量分配新任务、提前预警和轮换、安排窗口错峰，并按需暂停入口远程开会话。详见[订阅与额度管理](#订阅账号池与额度管理)。
 - **管理收尾和长期运行。** worker 通过 PR 交付；后台清理符合条件的已结束任务。Claude Code 会话可通过 `/fleet-handoff` 保存交接信息，跨上下文窗口继续工作。
 
-![GitHub 待办面板：按里程碑组织 Issue，并显示正在处理的任务](docs/img/backlog.svg)
+![GitHub 待办面板：按里程碑组织 Issue，并显示正在处理的任务](docs/public/img/backlog.svg)
 
 ## 快速上手
 
@@ -53,10 +53,10 @@ claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issu
 ```sh
 git clone https://github.com/verkyyi/claude-fleet.git
 cd claude-fleet
-claude "请按照 docs/INSTALL.md 在这台机器上安装 claude-fleet，并用中文说明配置和验证结果。"
+claude "请按照 docs/dev/INSTALL.md 在这台机器上安装 claude-fleet，并用中文说明配置和验证结果。"
 ```
 
-安装流程以 [docs/INSTALL.md](docs/INSTALL.md) 为准。Claude 会检查依赖，配置 `~/.claude/fleet/`、tmux、Claude Code hooks 和后台服务，并在修改前说明涉及的文件。准备好你的业务仓库名（如 `your-org/your-repo`）、本地路径和主分支信息。
+安装流程以 [docs/dev/INSTALL.md](docs/dev/INSTALL.md) 为准。Claude 会检查依赖，配置 `~/.claude/fleet/`、tmux、Claude Code hooks 和后台服务，并在修改前说明涉及的文件。准备好你的业务仓库名（如 `your-org/your-repo`）、本地路径和主分支信息。
 
 安装后运行诊断，检查依赖、服务和安装版本：
 
@@ -64,7 +64,7 @@ claude "请按照 docs/INSTALL.md 在这台机器上安装 claude-fleet，并用
 sh ~/.claude/fleet/bin/fleet-doctor.sh
 ```
 
-手动安装和卸载也见同一份[安装手册](docs/INSTALL.md)。手册目前是英文，可以让 Claude 用中文带你完成。
+手动安装和卸载也见同一份[安装手册](docs/dev/INSTALL.md)。手册目前是英文，可以让 Claude 用中文带你完成。
 
 ### 3. 为你的业务仓库启动 fleet
 
@@ -196,7 +196,7 @@ worker 的默认流程是：认领 Issue → 实现 → 验证 → 提交 PR →
 
 ## 配置与多仓库
 
-全局配置位于 `~/.claude/fleet/fleet.conf`，完整选项见 [fleet.conf.example](fleet.conf.example)。常用配置示例：
+全局配置位于 `~/.claude/fleet/fleet.conf`，常用项见 [fleet.conf.example](fleet.conf.example)，全部选项与默认值见 [conf/fleet.conf.reference](conf/fleet.conf.reference)。常用配置示例：
 
 ```sh
 FLEET_REPO="your-org/your-repo"       # Issues 和 PR 所在仓库
@@ -230,7 +230,7 @@ tmux -L fleet-infra attach -t fleet-infra
 
 多个任务并行时，除了代码进度，还需要知道：**哪个账号有余量、何时重置、正在运行的任务如何接着做。** Fleet 的账号池在本机所有 fleet 之间共用；没有注册账号时保持单账号用法。这些能力目前面向 **Claude Code**，Codex 的账号轮换和配额尚未接入。
 
-账号池本身可以处理限额提示和会话迁移；接入 [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) 后，还能根据账号级额度提前采取行动。产品名是 TokenLedger，命令仍叫 `ccquota`，相关配置仍使用 `CCQUOTA_*`；CLI 和 hub 需要另外配置，见[安装手册](docs/INSTALL.md)。
+账号池本身可以处理限额提示和会话迁移；接入 [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger) 后，还能根据账号级额度提前采取行动。产品名是 TokenLedger，命令仍叫 `ccquota`，相关配置仍使用 `CCQUOTA_*`；CLI 和 hub 需要另外配置，见[安装手册](docs/dev/INSTALL.md)。
 
 | 能力 | 实际行为 | 启用条件 |
 |---|---|---|
@@ -252,7 +252,7 @@ chmod 600 ~/.config/claude-fleet/accounts/work
 ~/.claude/fleet/bin/fleet-account.sh list
 ```
 
-token 保存在仓库外。详细步骤、指定账号子集和重置时间的兜底配置见[账号池设置](docs/MULTI-ACCOUNT.md#setup)。账号在启动时通过环境变量选择，Claude 的设置、hooks 和会话记录仍共用一份配置。
+token 保存在仓库外。详细步骤、指定账号子集和重置时间的兜底配置见[账号池设置](docs/dev/MULTI-ACCOUNT.md#setup)。账号在启动时通过环境变量选择，Claude 的设置、hooks 和会话记录仍共用一份配置。
 
 点击底部用量数字，打开「用量 + 账号」面板。手动选账号会调整启动时的初始选择，并迁移当前 fleet 的空闲 Claude 会话；正在执行任务或等待 `/loop` 下一轮的会话不受这条手动路径影响。后续启动仍可能按额度策略重新选账号，并非永久锁定。
 
@@ -266,7 +266,7 @@ token 保存在仓库外。详细步骤、指定账号子集和重置时间的�
 
 ### 接入额度读数，提前预警与轮换
 
-按[安装手册](docs/INSTALL.md)配置 `ccquota`、hub 和查看凭据，在 `fleet.conf` 中导出 hub 地址，让后台服务也能读取。下面其余几项为默认策略，可按需调整：
+按[安装手册](docs/dev/INSTALL.md)配置 `ccquota`、hub 和查看凭据，在 `fleet.conf` 中导出 hub 地址，让后台服务也能读取。下面其余几项为默认策略，可按需调整：
 
 ```sh
 export CCQUOTA_HUB_URL="https://your-ccquota-hub.example"
@@ -278,7 +278,7 @@ FLEET_ACCOUNT_PHASE_AUTO=0
 
 查看凭据可保存在 `~/.ccquota/viewer-token`。ccquota 中的账号名称应与 Fleet 的账号标签一致；也可在对应的 `<标签>.conf` 中设置 `CCQUOTA_ACCOUNT=<uuid>` 显式关联。没有读数的账号会显示为缺失，不会被当成「使用了 0%」，也不会作为额度触发迁移的接收目标。
 
-独立的额度监控服务约每 60 秒检查一次，读取跨设备的账号级 5 小时／7 天用量与重置时间；预警和轮换按账号、按重置窗口去重。新会话按各账号的**周额度进度**（相对于均匀消耗领先或落后多少点）排名，让几个账号的周额度一起消耗而不是先耗尽最紧的那个；监控还会把远超进度的账号上的空闲会话每次迁走一个（详见 [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)）。缺少可用数据时，提前处理策略退回到限额提示触发的路径，hub 暂时不可用不会直接阻止开发。
+独立的额度监控服务约每 60 秒检查一次，读取跨设备的账号级 5 小时／7 天用量与重置时间；预警和轮换按账号、按重置窗口去重。新会话按各账号的**周额度进度**（相对于均匀消耗领先或落后多少点）排名，让几个账号的周额度一起消耗而不是先耗尽最紧的那个；监控还会把远超进度的账号上的空闲会话每次迁走一个（详见 [docs/dev/MULTI-ACCOUNT.md](docs/dev/MULTI-ACCOUNT.md#pacing-the-weekly-budget-across-the-pool-issue-1231)）。缺少可用数据时，提前处理策略退回到限额提示触发的路径，hub 暂时不可用不会直接阻止开发。
 
 ### 可选：窗口错峰和远程开会话闸门
 
@@ -317,7 +317,7 @@ sh ~/.claude/fleet/bin/fleet-doctor.sh
 
 `--status` 区分 `off`、`never`、`fresh`、`stale` 和 `blind`。默认超过 600 秒未更新会提示 `quota stale`；连续 3 次读取为空，即使时间戳很新，也会提示 `quota blind`。状态栏和 doctor 都会暴露这些问题。
 
-本地会话记录统计的 token 用量是**跨账号汇总的估算值**；ccquota 提供的账号级额度读数是另一类数据。二者都应与账单区分。完整机制、手动迁移和排错见[多账号文档](docs/MULTI-ACCOUNT.md)。
+本地会话记录统计的 token 用量是**跨账号汇总的估算值**；ccquota 提供的账号级额度读数是另一类数据。二者都应与账单区分。完整机制、手动迁移和排错见[多账号文档](docs/dev/MULTI-ACCOUNT.md)。
 
 ## 进阶功能
 
@@ -350,7 +350,7 @@ claude plugin install fleet@claude-fleet --scope user --yes
 
 ### 可选能力
 
-- **统一 MCP 管理多台机器。** 可选的 [Fleet Hub](docs/FLEET-HUB.md) 集中注册 MINI 等 SSH 主机，让授权 Agent 查询 Fleet、按 Issue 启动 worker、按跨 handoff / 账号迁移仍稳定的 worker 身份给它发消息、优雅停止与恢复、修改指定配置，并跟踪操作结果。支持本机 stdio、OAuth HTTP，以及通过私有 HTTPS 使用授权令牌的常驻服务。
+- **统一 MCP 管理多台机器。** 可选的 [Fleet Hub](docs/dev/FLEET-HUB.md) 集中注册 MINI 等 SSH 主机，让授权 Agent 查询 Fleet、按 Issue 启动 worker、按跨 handoff / 账号迁移仍稳定的 worker 身份给它发消息、优雅停止与恢复、修改指定配置，并跟踪操作结果。支持本机 stdio、OAuth HTTP，以及通过私有 HTTPS 使用授权令牌的常驻服务。
 - **SSH 远程使用。** 可以从笔记本连接常开的开发机。项目的 URL 打开工具支持通过 SSH 隧道在本地浏览器打开链接，也有弹窗和剪贴板回退方式，见 [SSH 链接设置](README.md#opening-links-over-ssh)。
 - **Codex worker。** 可通过看板 `Ctrl-V` 或 `FLEET_AGENT=codex` 选择 Codex。工作目录隔离、Issue 绑定和 PR/CI 管理共用，但 Claude Code 的上下文交接、会话恢复和配额管理尚未适配到 Codex。完整能力表由代码生成并检查，见 [Claude Code 与 Codex 对照](README.md#agents-claude-code-and-codex)。
 
@@ -367,15 +367,15 @@ claude plugin install fleet@claude-fleet --scope user --yes
 
 | 文档 | 内容 |
 |---|---|
-| [安装与卸载](docs/INSTALL.md) | 完整安装流程、组件、后台服务和卸载 |
-| [术语表](docs/TERMS.md) | fleet、hub、worker、collector 等概念 |
-| [架构说明](docs/ARCHITECTURE.md) | 组件关系、多 fleet 与缓存隔离 |
-| [Fleet Hub](docs/FLEET-HUB.md) | 跨机器 MCP 入口、机器注册、授权与操作记录 |
-| [状态机制](docs/STATE.md) | 会话状态如何产生、展示和纠正 |
-| [多账号与额度](docs/MULTI-ACCOUNT.md) | 账号池、轮换、会话迁移、窗口错峰与排错 |
-| [任务清理](docs/CLEANUP.md) | PR 结束后的窗口和 worktree 生命周期 |
-| [Issue 消息桥](docs/ISSUE-BRIDGE.md) | Issue 评论与运行中 worker 的消息传递 |
-| [事件输出](docs/EMIT.md) | 可选的会话生命周期事件输出及数据范围 |
+| [安装与卸载](docs/dev/INSTALL.md) | 完整安装流程、组件、后台服务和卸载 |
+| [术语表](docs/dev/TERMS.md) | fleet、hub、worker、collector 等概念 |
+| [架构说明](docs/dev/ARCHITECTURE.md) | 组件关系、多 fleet 与缓存隔离 |
+| [Fleet Hub](docs/dev/FLEET-HUB.md) | 跨机器 MCP 入口、机器注册、授权与操作记录 |
+| [状态机制](docs/dev/STATE.md) | 会话状态如何产生、展示和纠正 |
+| [多账号与额度](docs/dev/MULTI-ACCOUNT.md) | 账号池、轮换、会话迁移、窗口错峰与排错 |
+| [任务清理](docs/dev/CLEANUP.md) | PR 结束后的窗口和 worktree 生命周期 |
+| [Issue 消息桥](docs/dev/ISSUE-BRIDGE.md) | Issue 评论与运行中 worker 的消息传递 |
+| [事件输出](docs/dev/EMIT.md) | 可选的会话生命周期事件输出及数据范围 |
 | [贡献指南](CONTRIBUTING.md) | Shell 脚本约定与检查要求 |
 
 欢迎改进中文说明、补充团队实践。更新命令或功能时，请同步核对中英文 README。

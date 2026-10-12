@@ -3,7 +3,7 @@
 # (issue #1811, EPIC #1813 C9).
 #
 # A worker session — Claude or Codex — reaches the fleet through the one tool
-# service (bin/fleet-mcp.py, docs/FLEET-MCP.md). So the steps a worker runs from a
+# service (bin/fleet-mcp.py, docs/dev/FLEET-MCP.md). So the steps a worker runs from a
 # skill say `mcp__fleet__<tool>`, and a `~/.claude/fleet/bin/…` path may appear only
 # under a heading that says it is not a worker step: one containing `运营者`
 # (operator) or `排障` (troubleshooting), down to the next heading of the same or

@@ -179,7 +179,7 @@ fi
 SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
 case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
 CACHE="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
-# The keys of a local Claude (issue #2760, EPIC #2756 C4; docs/CLIENT.md «和本地
+# The keys of a local Claude (issue #2760, EPIC #2756 C4; docs/dev/CLIENT.md «和本地
 # Claude 的键»): FLEET_KEYS_PARITY on (the default) = extended keys on the shell's
 # and the stage's servers (the confs' __PARITY__) and the prefix ⌃], so ⌃B reaches
 # the session from iTerm2 (conf/tmux-shell.conf says how, per terminal); 0 = both as
@@ -316,7 +316,7 @@ CL_DIR="$CACHE/tmp"
 export FLEET_CLIENT_KEY_FILE="$CL_DIR/client.key"
 export FLEET_CLIENT_LIST_FILE="$CL_DIR/client.list.json"
 LEASE_CMD="${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py}"
-# The client's own record (issue #2896, docs/CLIENT-LOGS.md): connect / place /
+# The client's own record (issue #2896, docs/dev/CLIENT-LOGS.md): connect / place /
 # keeper / login .log beside each other. The keeper's raw stdout + stderr go to
 # keeper.out (rotated before each start: the keeper holds it open), its renewals
 # to keeper.log as lines (fleet_clientlog, bin/fleet-client-lib.sh).

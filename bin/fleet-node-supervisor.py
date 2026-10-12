@@ -185,7 +185,7 @@ Usage:
                                                way back when the hub refuses its lane; no admin
                                                browser session
 
-Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
+Seams (sandbox tests, docs/dev/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_STATE      /var/db/fleet-node          FLEET_NODE_LOG   /var/log/fleet-node
   FLEET_NODE_RUNTIME    /Library/Application Support/claude-fleet/current
   FLEET_NODE_DAEMON_DIR /Library/LaunchDaemons      FLEET_NODE_USERS /Users
@@ -3066,7 +3066,7 @@ def taken_over(paths):
 
 SHELL_HOOK_RE = re.compile(r"shell/fleet-login\.zsh|shell/cw\.zsh")
 # the comment lines the fleet wrote above such a hook (a guest login's header, the
-# login-banner line of docs/INSTALL.md) — fleet text, nothing of the person's
+# login-banner line of docs/dev/INSTALL.md) — fleet text, nothing of the person's
 SHELL_HEAD_RE = re.compile(r"^#\s*(cfguest:shell\b|claude-fleet login:|banner, then an SSH login)")
 
 

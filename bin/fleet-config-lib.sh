@@ -6,7 +6,7 @@
 #   per-fleet conf    ($FLEET_CONF_DIR/fleets/<session>/conf)  ▸ wins
 #   login settings    ($FLEET_CONF_DIR/fleet.settings)         ▸ this fleet too
 #   legacy install    (<install>/fleet.conf)                   · read-only fallback
-#   code default      (documented in fleet.conf.example)         fallback
+#   code default      (documented in conf/fleet.conf.reference)         fallback
 # — exactly the precedence fleet_load_conf applies at runtime. One login runs one
 # fleet (#977), so the first two ARE one layer to the user — "this fleet" — and
 # the modal writes only them (or a hosted repo's overlay, issue #1102): a key's
@@ -15,7 +15,7 @@
 # still READ (old installs load byte for byte) but never written.
 #
 # The KEY LIST, per-key help, AND per-key attributes are all PARSED from
-# fleet.conf.example (the single source of truth — never a hardcoded divergent
+# conf/fleet.conf.reference (the single source of truth — never a hardcoded divergent
 # copy). Each key carries a declarative tag line (issue #89):
 #   # @label=… @group=… @tier=… @scope=… @edit=… @unit=…
 # which drives the modal's friendly label, section grouping, visibility tier,
@@ -34,7 +34,7 @@ FCFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FCFG_US="$(printf '\037')"
 
 # --- file locations (all overridable for tests) -----------------------------
-fcfg_example()     { printf '%s' "${FCFG_EXAMPLE:-$FCFG_DIR/../fleet.conf.example}"; }
+fcfg_example()     { printf '%s' "${FCFG_EXAMPLE:-$FCFG_DIR/../conf/fleet.conf.reference}"; }
 # The login layer. Since issue #979 a login keeps ONE settings file,
 # $FLEET_CONF_DIR/fleet.settings, which wins over the install's fleet.conf. Since
 # issue #1102 every global-only write lands there — the first one creates it — and
@@ -143,7 +143,7 @@ fcfg_full() { _fcfg_block "$1"; }
 
 # --- declarative tags (issue #89) -------------------------------------------
 # Each key carries a single "# @label=… @group=… @tier=… @scope=… @edit=… @unit=…"
-# comment line directly above its assignment (see fleet.conf.example). That line
+# comment line directly above its assignment (see conf/fleet.conf.reference). That line
 # is the source of truth for the modal's friendly label, grouping, visibility
 # tier, allowed write scope, and editor/validation type. We parse it here so the
 # scripts never hardcode a divergent copy.
@@ -184,7 +184,7 @@ fcfg_tag() {
   '
 }
 
-# The config modal keeps fleet.conf.example as the English source of truth, then
+# The config modal keeps conf/fleet.conf.reference as the English source of truth, then
 # translates only the tmux-facing labels when the fleet asks for a Chinese UI.
 _fcfg_ui_is_zh() {
   case "${FLEET_UI_LANG:-auto}" in
@@ -666,7 +666,7 @@ fcfg_key_wscope() {
 # These helpers need fleet-lib (fleet_repos & co.) in scope — the modal and the
 # editor source it; without it there are simply no repo scopes.
 #
-# The keys a repo overlay DOCUMENTEDLY carries (fleet.conf.example's "Per-repo
+# The keys a repo overlay DOCUMENTEDLY carries (conf/fleet.conf.reference's "Per-repo
 # settings" block): the deploy + launch knobs, then fleet-lib's
 # _FLEET_REPO_OVERRIDABLE (read live, so the two cannot drift).
 fcfg_repo_keys() {

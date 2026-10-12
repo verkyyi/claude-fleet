@@ -104,7 +104,7 @@ fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]  
 - o/r#2668 → #2678 · 决定单出现抽样区 · 2026-10-09T10:00:00Z
   `…/steward/samples/o-r.2668/evidence/2678/after-….txt`
   ```
-  （文字证据的前 8 行；图片是 ![说明](路径)）
+  （文字证据的前 8 行；图片是 `![说明](路径)`）
   ```
   <!-- fleet:sample epic=o/r#2668 member=2678 -->
 ```
@@ -124,7 +124,7 @@ fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]  
 ## 每天一张「替你按建议定了什么」
 
 `decided --date <那天>`（issue #2679）是日报的这一节：按人的时区（`FLEET_DECISION_TZ`）取那一天
-贴出的每一条 `fleet:default-decided` 记录，一条一行——时间 · 「事项」→ 按「默认」 · [翻案](原单上那条提问的评论链接)；
+贴出的每一条 `fleet:default-decided` 记录，一条一行——时间 · 「事项」→ 按「默认」 · `[翻案](原单上那条提问的评论链接)`；
 没带字段的旧记录用它自己的首行和「原话」链接。单子经 `fleet-ticket.sh`：`--epic` 点名的，否则每个托管仓库
 那天以来更新过的 `epic` 单（`fleet-ticket.sh list --label epic --state all --since`；记录本身会刷新 EPIC 的
 更新时间）加上正在跑的批次标记。同一 row 只算一次，所以条数就是各批次单上的记录数。读不到某张单时照样出其余的，

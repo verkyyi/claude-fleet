@@ -3,7 +3,7 @@
 # (issue #333). Nothing else seeds labels at install: `gh label` starts empty on
 # a fresh repo, and the issue-filer channel (bin/fleet-issue-file.sh) rejects any
 # label not in the fixed set — so without this step a fresh-repo fleet could file
-# no labelled issue at all. Run once at install (docs/INSTALL.md calls it) and
+# no labelled issue at all. Run once at install (docs/dev/INSTALL.md calls it) and
 # re-run any time to reconcile.
 #
 # IDEMPOTENT: each label is `gh label create --force`d, which CREATES the label

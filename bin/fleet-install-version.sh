@@ -19,7 +19,7 @@
 #
 # It only ever REPORTS. Auto-pulling `bin/` under a machine running 19 workers is
 # far more risk than the staleness it would fix, so the fix command is printed,
-# never run (and see docs/INSTALL.md — a real sync also reloads the changed
+# never run (and see docs/dev/INSTALL.md — a real sync also reloads the changed
 # launchd units, which no `git pull` does).
 #
 # Verdicts (the `verdict:` line, one token — exit code in brackets):
@@ -116,7 +116,7 @@ verdict=UNKNOWN rc=2
 if [ ! -d "$dir" ]; then
   err="no live install at $dir"
 elif ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  err="$dir is not a git checkout — this check needs one to compare (a file-copy install cannot be measured; re-home it per docs/INSTALL.md)"
+  err="$dir is not a git checkout — this check needs one to compare (a file-copy install cannot be measured; re-home it per docs/dev/INSTALL.md)"
 else
   head=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
   branch=$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)

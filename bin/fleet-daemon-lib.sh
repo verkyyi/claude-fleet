@@ -117,7 +117,7 @@ fleet_daemon_keepalive_units() { printf '%s\n' memguard; }
 # off, a pure client — issue #3534) still runs; every other template serves the
 # sessions on this machine and is neither installed nor kept there
 # (fleet-install-apply.sh's `daemons` step). The reasons, one per unit, are
-# docs/INSTALL.md «纯客户端装哪些后台»:
+# docs/dev/INSTALL.md «纯客户端装哪些后台»:
 #   install-sync — the only thing that moves a full install's ~/.claude/fleet to
 #                  stable (an install-line client has none: `fleet` updates it at
 #                  start, fleet-client-update.sh); an interval tick, not resident,

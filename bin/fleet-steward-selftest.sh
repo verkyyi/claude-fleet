@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-steward-selftest.sh — the steward (issue #2670, EPIC #2668 C2):
 # bin/fleet-steward-tick.sh → bin/fleet_steward.py (the beat with no model). The
-# resident window (bin/fleet-steward.sh), its attention count and the decide
+# resident window (the retired bin/fleet-steward.sh), its attention count and the decide
 # count's road to the client went with the seat (issue #3118).
 #
 # GitHub is a directory of comment files (fleet_decision.py's seams), the fleet's
@@ -27,7 +27,7 @@
 #   O  nobody holds the steward role (EPIC #3111 C4, issue #3115): a due row is not
 #      answered, no backstop / merge, no sheet, page, [decision] or state
 #   G  the beat is the holder's: `beat --holder` with no holder and a bare `beat`
-#      even with one are rc 3, no state file; bin/fleet-steward.sh is a quiet shell
+#      even with one are rc 3, no state file; bin/fleet-steward.sh is gone
 #   J  no steward count rides the inventory or the client cache (issue #3118)
 #   M  who closed a row (issue #2834): rows[id].by is steward · person · default,
 #      today's counts carry the default too; a state file written before the field
@@ -392,9 +392,8 @@ python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc3=$?
 [ "$rc" = 3 ] && [ "$rc2" = 3 ] && [ "$rc3" = 3 ] && [ ! -e "$STATE" ] \
   && ok "G: no holder ⇒ beat --holder is a no-op; a bare beat refuses even with one (rc 3, no state written)" \
   || bad "G: unheld beat rc=$rc, bare rc=$rc2/$rc3"
-o=$(FLEET_STEWARD=1 bash "$BIN/fleet-steward.sh" ensure st 2>&1); rc=$?
-[ "$rc" = 0 ] && [ -z "$o" ] && ok "G: fleet-steward.sh ensure is a quiet shell — nothing printed, rc 0, no window (issue #3118)" \
-  || bad "G: the retired launcher said [$o] rc=$rc"
+[ ! -e "$BIN/fleet-steward.sh" ] && ok "G: the retired launcher bin/fleet-steward.sh is gone (issues #3118, #3576)" \
+  || bad "G: bin/fleet-steward.sh is back"
 
 # J — no steward column rides the inventory (issue #3118): columns 31-37 are gone
 grep -v '^ *#' "$BIN/fleet-control-read.sh" "$BIN/fleet-hub-sessions.sh" | grep -q 'orch_decide\|orch_park\|orchdec=\|orchpark=' \

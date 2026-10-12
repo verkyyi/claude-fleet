@@ -684,4 +684,5 @@ Do not label the node production-ready until those live checks pass.
 
 The real-person walk on fleet-linux-0 (a login opened from the hub, connected
 from a computer and a phone, Claude answering, a drill login removed and checked
-gone) follows [MANAGED-LINUX-DRILL.md](MANAGED-LINUX-DRILL.md), step by step.
+gone) followed the drill sheet `MANAGED-LINUX-DRILL.md`, step by step (a one-off
+record, removed in #3576 — it is in git history).

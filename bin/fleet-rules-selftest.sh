@@ -23,7 +23,7 @@
 #      the steward's with its; a worker's launch carries no table
 #   G  a broken fleet table: classify falls back to the code's list, a role
 #      still renders (body alone)
-#   H  the words live in the table only: docs/DECISIONS.md lists no keywords, the
+#   H  the words live in the table only: docs/dev/DECISIONS.md lists no keywords, the
 #      orchestrator's body no longer spells the shapes
 #   I  the built-in rows live in the skill dirs (issue #3114): the orchestrate
 #      plugin's rules.md holds only orchestrator rows, the steward's only steward
@@ -141,8 +141,8 @@ p=$(FLEET_RULES_DEFAULT="$WORK/broken.md" R prompt orchestrator 2>/dev/null)
 [ "$p" = "$(R body orchestrator)" ] && ok "G: …and the orchestrator still renders, on its body alone" || bad "G: prompt with a broken table"
 
 # --- H the words live in the table only ------------------------------------------------
-grep -q '付费 · 花钱' "$ROOT/docs/DECISIONS.md" && bad "H: docs/DECISIONS.md still lists keywords" \
-  || { grep -q 'role-rules.default.md' "$ROOT/docs/DECISIONS.md" && ok "H: docs/DECISIONS.md points at the rule table" || bad "H: DECISIONS.md names no table"; }
+grep -q '付费 · 花钱' "$ROOT/docs/dev/DECISIONS.md" && bad "H: docs/dev/DECISIONS.md still lists keywords" \
+  || { grep -q 'role-rules.default.md' "$ROOT/docs/dev/DECISIONS.md" && ok "H: docs/dev/DECISIONS.md points at the rule table" || bad "H: DECISIONS.md names no table"; }
 R body orchestrator | grep -q '几处独立改动或跨仓库' && bad "H: the orchestrator's body still spells the shapes" \
   || ok "H: the orchestrator's body says 按规则表派, the shapes are the table's"
 

@@ -4,7 +4,7 @@
 # and prefix+b backlog fzf popups (issues #83, #89).
 #
 # Rows are DECLARATIVELY driven by the @label/@group/@tier/@scope/@edit/@unit
-# tags in fleet.conf.example (parsed via fleet-config-lib.sh) — there is no
+# tags in conf/fleet.conf.reference (parsed via fleet-config-lib.sh) — there is no
 # hardcoded key list here. Each key shows its FRIENDLY LABEL, effective value,
 # and TWO text tags: what it is (dim `locked` identity view-only · magenta `repo`
 # settable per repo · blank otherwise) and the layer the effective value came
@@ -88,7 +88,7 @@ cfg_t() {
       header) printf '↵编辑 · Space详情 · %s范围 · ?key · %s刷新 · Esc' "$DASH_GLYPH_SCOPE" "$DASH_GLYPH_RELOAD" ;;
       border_fmt) printf ' fleet 配置 · 写入到 %s ' "${2:-}" ;;
       no_fzf) printf 'prefix+c 配置面板需要 fzf' ;;
-      no_example) printf '找不到 fleet.conf.example，无法生成配置面板' ;;
+      no_example) printf '找不到 conf/fleet.conf.reference，无法生成配置面板' ;;
       scope_msg_fmt) printf 'config: 现在写入到 %s' "${2:-}" ;;
       stage_fail_fmt) printf 'config: 无法暂存编辑 %s（磁盘满或只读？）' "${2:-}" ;;
       pick_fmt) printf ' 选择 %s → %s 层 ' "${2:-}" "${3:-}" ;;
@@ -144,7 +144,7 @@ cfg_t() {
       header) printf '↵ edit · Space detail · %s scope · ? key · %s reload' "$DASH_GLYPH_SCOPE" "$DASH_GLYPH_RELOAD" ;;
       border_fmt) printf ' fleet config · edits write to %s ' "${2:-}" ;;
       no_fzf) printf 'fzf required for the prefix+c config modal' ;;
-      no_example) printf 'fleet.conf.example not found — cannot build the config modal' ;;
+      no_example) printf 'conf/fleet.conf.reference not found — cannot build the config modal' ;;
       scope_msg_fmt) printf 'config: edits now write to %s' "${2:-}" ;;
       stage_fail_fmt) printf 'config: could not stage an edit for %s (full/read-only volume?)' "${2:-}" ;;
       pick_fmt) printf ' pick %s → %s layer ' "${2:-}" "${3:-}" ;;

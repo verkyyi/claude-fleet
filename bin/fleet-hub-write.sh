@@ -5,7 +5,7 @@
 # A row in the sidebar that lives on another machine (`wid:<worker_id>`, #1423)
 # cannot be acted on by any script here: the window is not on this tmux server.
 # Every action on it is a hub WRITE — `/v1/fleet/<tool>`, journalled on the hub
-# and on the node (docs/FLEET-HUB.md «Writes, concurrency and disconnected
+# and on the node (docs/dev/FLEET-HUB.md «Writes, concurrency and disconnected
 # machines») — and this script is where every such write leaves this machine
 # (EPIC #1479 convention 6: 远程的东西本机不回收). Reads stay with
 # fleet-hub-sessions.sh; the render path never runs this.
@@ -19,7 +19,7 @@
 #                worker_start · gh_comment · config_set · service_control ·
 #                orch_ensure (issue #2616; answers 「没有编排」 since #3118) — the hub's
 #                write tools; anything else is refused here before a byte goes out.
-#   <json-args>  ONE JSON object: the tool's arguments as docs/FLEET-HUB.md lists
+#   <json-args>  ONE JSON object: the tool's arguments as docs/dev/FLEET-HUB.md lists
 #                them. `idempotency_key` is added when absent (`--idem`, else a
 #                fresh `w-<epoch>-<random>`), so a plain call is one operation and
 #                a retry with the same key is the SAME operation, never a second.
@@ -198,7 +198,7 @@ if [ "$TOOL" = operation_get ]; then
   # `operation_get <id>` — the bare id, or a JSON object naming it.
   case "$ARGS" in \{*) ;; *) ARGS=$(printf '{"operation_id":"%s"}' "$ARGS") ;; esac
 else
-  case "$WRITE_TOOLS" in *" $TOOL "*) ;; *) note "'$TOOL' is not a hub write tool (see docs/FLEET-HUB.md «Tools»)"; exit 2 ;; esac
+  case "$WRITE_TOOLS" in *" $TOOL "*) ;; *) note "'$TOOL' is not a hub write tool (see docs/dev/FLEET-HUB.md «Tools»)"; exit 2 ;; esac
 fi
 # A client in standby sends nothing (issue #1715; #1932): its lease is no longer
 # held (asked to leave past the limit, or disconnected) — Enter takes one first.

@@ -1,6 +1,6 @@
 # A deployment's own settings. Secrets are only ever referenced by key (Secret
 # `ccquota`), never written in an overlay. Each key is described in
-# fleet.conf.example («Deployment addresses») and docs/CRED-RELAY.md.
+# fleet.conf.example («Deployment addresses») and docs/dev/CRED-RELAY.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,7 +21,7 @@ spec:
               value: "alice"
             - name: CCQUOTA_GITHUB_ADMINS
               value: "alice"
-            # optional: a relay in a region the providers serve (docs/CRED-RELAY.md);
+            # optional: a relay in a region the providers serve (docs/dev/CRED-RELAY.md);
             # delete the entry for none
             - name: CCQUOTA_FLEET_CRED_RELAY_URL
               value: "https://relay.example.com"

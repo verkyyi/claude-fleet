@@ -22,7 +22,7 @@
 #                 box's reading; a shared CI runner gets the slack); a switch
 #                 across clears no whole screen on the client
 # The line dying under a window and a 看台 reaped with its windows still open are
-# docs/BREAK-IT.md rows, drilled on the same rig by
+# docs/dev/BREAK-IT.md rows, drilled on the same rig by
 # bin/fleet-break-it-peerlink-selftest.sh (peer-window-ssh-killed / -left-behind).
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 # shellcheck disable=SC2154  # PR_U_* / PR_W_* come from the sourced rig

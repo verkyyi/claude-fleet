@@ -136,7 +136,7 @@ preview ctrl-p alt-p' ;;
 # (bin/fleet_keys.py FORWARD, compat-1v).
 # `needs` (⌘J / prefix k, code 924) and `help` (⌘/ / prefix ?, code 926) went
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
-# keys live in docs/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
+# keys live in docs/dev/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
 # an iTerm2 profile written before still sends them (the conf swallows both).
 # The LAST column (issue #3185, EPIC #3178 C7): `1` = bound by default — only
 # quickopen (⌘P, the panel); every other row is bound only when the person names

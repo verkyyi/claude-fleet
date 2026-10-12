@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fleet_decision.py — THE one reader and writer of the decision format (issue
-#2669, EPIC #2668 C1). docs/DECISIONS.md is the spec; nothing else parses,
+#2669, EPIC #2668 C1). docs/dev/DECISIONS.md is the spec; nothing else parses,
 renders or judges a question's deadline.
 
 A worker's `ask` (bin/fleet-mcp.py tool_ask) posts a ⛔ comment on its own

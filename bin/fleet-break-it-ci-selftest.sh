@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-ci-selftest.sh — the docs/BREAK-IT.md rows of the machine's test
+# fleet-break-it-ci-selftest.sh — the docs/dev/BREAK-IT.md rows of the machine's test
 # runner (issue #3144, EPIC #3139 C5 · 共同约定 6). Each drill builds the sandbox
 # machine of bin/fleet-ci-runner-selftest.py (`drill <name>`: a fake GitHub API on
 # 127.0.0.1, a fake runner archive, a fake test login) and runs bin/fleet-ci-runner.py

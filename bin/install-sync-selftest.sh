@@ -988,7 +988,7 @@ eq "K: systemd timer 1800" 1800 "$(sed -n 's/^OnUnitActiveSec=//p' "$ROOT/system
 eq "K: daemon table 1800" 1800 "$( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_interval install-sync )"
 grep -q '<key>ProcessType</key><string>Standard</string>' "$ROOT/launchd/com.claude-fleet.install-sync.plist.tmpl" \
   || fail "K: install-sync must be ProcessType=Standard (it rewrites bin/, issue #588)"; CHECKS=$((CHECKS + 1))
-grep -q '^#FLEET_INSTALL_SYNC=1$' "$ROOT/fleet.conf.example" || fail "K: fleet.conf.example lacks #FLEET_INSTALL_SYNC=1"; CHECKS=$((CHECKS + 1))
+grep -q '^#FLEET_INSTALL_SYNC=1$' "$ROOT/conf/fleet.conf.reference" || fail "K: conf/fleet.conf.reference lacks #FLEET_INSTALL_SYNC=1"; CHECKS=$((CHECKS + 1))
 grep -q 'FLEET_INSTALL_SYNC' "$BIN/fleet-lib.sh" || fail "K: FLEET_INSTALL_SYNC not in _FLEET_GLOBAL_ONLY"; CHECKS=$((CHECKS + 1))
 
 printf 'install-sync-selftest OK (%d checks)\n' "$CHECKS"

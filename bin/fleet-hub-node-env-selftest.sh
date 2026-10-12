@@ -53,7 +53,7 @@ DAEMON="$DD/com.ccquota.agent.$(id -un).plist"
 TOKEN='fn_SECRET_1234567890abcdef'
 
 # plist <label> <token> [<extra dict rows>] → an XML plist the way the hand-written
-# ones look (docs/SHARED-MACHINE.md step 4): EnvironmentVariables with the hub
+# ones look (docs/dev/SHARED-MACHINE.md step 4): EnvironmentVariables with the hub
 # settings, plus HOME (not CCQUOTA_*) and an integer (not a string).
 plist() {
   cat <<EOF

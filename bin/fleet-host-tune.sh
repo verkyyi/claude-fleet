@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-host-tune.sh — walk the unattended-Mac checklist (docs/HOST.md) in one go
+# fleet-host-tune.sh — walk the unattended-Mac checklist (docs/dev/HOST.md) in one go
 # (issue #1082, EPIC #1074).
 #
 #   fleet-host-tune.sh [--plan|--apply] [--yes] [--wifi-off]
@@ -22,7 +22,7 @@
 #             Wi-Fi — that would cut an SSH session off mid-command.
 #
 # Never touched, only hinted: the iCloud sign-in and GUI programs on the console
-# (a Settings decision each; docs/HOST.md#headless). macOS only — elsewhere it
+# (a Settings decision each; docs/dev/HOST.md#headless). macOS only — elsewhere it
 # says so and exits 0. Exit: 0 = nothing failed; 1 = an applied command failed;
 # 2 = usage.
 set -uo pipefail
@@ -75,7 +75,7 @@ offer() {
   else sub "FAILED (exit $?) — nothing else was changed for $name"; n_fail=$((n_fail + 1)); fi
 }
 
-# --- 1. spotlight (doctor line: spotlight; docs/HOST.md#spotlight) ------------
+# --- 1. spotlight (doctor line: spotlight; docs/dev/HOST.md#spotlight) ------------
 spvol=/System/Volumes/Data; [ -d "$spvol" ] || spvol=/
 apply_spotlight() { sudo mdutil -a -i off; }
 if command -v mdutil >/dev/null 2>&1; then
@@ -91,7 +91,7 @@ else
   row SKIP spotlight "no mdutil on PATH"
 fi
 
-# --- 2. nofile (doctor line: nofile; docs/HOST.md#nofile) ---------------------
+# --- 2. nofile (doctor line: nofile; docs/dev/HOST.md#nofile) ---------------------
 # The doctor passes at >= 4096. The fleet's own daemons already raise theirs
 # (#1080); this is the host-wide default every OTHER LaunchAgent starts at.
 # Two parts, both needed: `launchctl limit` for now, a LaunchDaemon for reboots.
@@ -124,7 +124,7 @@ else
   row SKIP nofile "no launchctl on PATH"
 fi
 
-# --- 3. sleep (doctor line: sleep; docs/HOST.md#headless) ---------------------
+# --- 3. sleep (doctor line: sleep; docs/dev/HOST.md#headless) ---------------------
 # Target: never sleep, restart after a power cut, wake on LAN. A key the machine
 # does not print (no womp on some models) is left alone.
 if command -v pmset >/dev/null 2>&1; then
@@ -153,7 +153,7 @@ else
   row SKIP sleep "no pmset on PATH"
 fi
 
-# --- 4. siri (doctor line: siri; docs/HOST.md#headless) -----------------------
+# --- 4. siri (doctor line: siri; docs/dev/HOST.md#headless) -----------------------
 # Per-user and no sudo: the same key the doctor reads and the Settings toggle
 # writes. Its helpers exit when the toggle is flipped in Settings, or at the next
 # login after this write — the Settings toggle stays the authoritative switch.
@@ -170,7 +170,7 @@ else
   row SKIP siri "no defaults on PATH"
 fi
 
-# --- 5. network (doctor line: network; docs/HOST.md#network) -----------------
+# --- 5. network (doctor line: network; docs/dev/HOST.md#network) -----------------
 # The doctor WARNs when one gateway is the default route through 2+ interfaces
 # (wired + Wi-Fi on one subnet). That case is offered unasked: another interface
 # already reaches the same gateway, so switching Wi-Fi off cannot cut the host
@@ -207,7 +207,7 @@ else
   fi
 fi
 
-# --- hints: Settings decisions, never run (docs/HOST.md#headless) -------------
+# --- hints: Settings decisions, never run (docs/dev/HOST.md#headless) -------------
 iclive=""
 for icd in bird cloudd fileproviderd; do
   pgrep -x "$icd" >/dev/null 2>&1 && iclive="$iclive $icd"
@@ -217,7 +217,7 @@ if [ -n "$iclive" ]; then
 else
   row OK icloud "no iCloud sync daemon resident"
 fi
-row HINT gui "quit browsers / Electron apps on the console and trim System Settings → General → Login Items (not done by this script; docs/HOST.md#headless)"
+row HINT gui "quit browsers / Electron apps on the console and trim System Settings → General → Login Items (not done by this script; docs/dev/HOST.md#headless)"
 
 # --- summary --------------------------------------------------------------------
 echo

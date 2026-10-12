@@ -119,8 +119,8 @@ prod 入口已开（`deploy/k8s/overlays/prod/deployment-env.yaml`）；回滚�
 入口发布、Pod 重建的那几十秒，入口对 `/v1/relay/check` 回 503 或连不上（2026-10-07 05:24Z 实测整站
 503）。Caddy 若直接问入口，这段时间经转发的请求全被拒：可信但不能直连的 relay 路、集群中心代理（C6）
 的出口一起断。所以 Caddy 不直接问入口，问转发机上一个只听 `127.0.0.1:2091` 的小进程
-[`extras/cred-relay/fleet-relay-check.py`](../extras/cred-relay/fleet-relay-check.py)
-（python3 标准库，systemd 单元 [`fleet-relay-check.service`](../extras/cred-relay/fleet-relay-check.service)），
+[`extras/cred-relay/fleet-relay-check.py`](../../extras/cred-relay/fleet-relay-check.py)
+（python3 标准库，systemd 单元 [`fleet-relay-check.service`](../../extras/cred-relay/fleet-relay-check.service)），
 它再问入口。按（通行证的 SHA-256, 路由前缀）记一张表，只在内存里：
 
 | 入口怎么答 | 核验进程怎么做 |
@@ -283,7 +283,7 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
 
 ## 转发机的配置
 
-整份 Caddy 配置就是 [`extras/cred-relay/Caddyfile`](../extras/cred-relay/Caddyfile)，自检
+整份 Caddy 配置就是 [`extras/cred-relay/Caddyfile`](../../extras/cred-relay/Caddyfile)，自检
 `bin/fleet-relay-cred-selftest.sh` 跑的就是这份文件（PATH 上有 `caddy` 或设
 `FLEET_RELAY_CADDY` 时；否则用同规则的假转发）。要点：
 

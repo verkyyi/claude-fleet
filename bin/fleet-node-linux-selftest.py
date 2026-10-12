@@ -586,7 +586,7 @@ class LinuxNode(unittest.TestCase):
         # the shared node renders as before
         node = json.loads(subprocess.check_output(base[:-2]))['items']
         self.assertEqual(node[-1]['kind'], 'StatefulSet')
-        self.assertIn('User pods', (BIN.parent / 'docs/MANAGED-LINUX.md').read_text())
+        self.assertIn('User pods', (BIN.parent / 'docs/dev/MANAGED-LINUX.md').read_text())
 
     def test_user_pod_table_has_no_machine_loops(self):
         """#3550: a user pod runs no machine-level loop (they are the cluster's
@@ -701,7 +701,7 @@ class LinuxNode(unittest.TestCase):
                          [{'name': 'acr-credential-560b'}, {'name': 'y'}])
         r = subprocess.run(base + ['--pull-secret', 'Bad Name'], capture_output=True)
         self.assertNotEqual(r.returncode, 0)
-        doc = (BIN.parent / 'docs/MANAGED-LINUX.md').read_text()
+        doc = (BIN.parent / 'docs/dev/MANAGED-LINUX.md').read_text()
         self.assertIn('--pull-secret', doc)
 
     def test_egress_guard_cuts_metadata_and_cluster(self):

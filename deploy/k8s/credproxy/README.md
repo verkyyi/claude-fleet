@@ -21,7 +21,7 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
   （`--stale`，默认 15 分钟，且不超过 access token 自己的到期）；没见过的通行证回 503
   （客户端会重试），永不回 403。
 - 转发机的 `forward_auth` 也问入口（`/v1/relay/check`，C7），经转发机上的本机核验进程：入口重启的
-  那几十秒里，10 分钟内核过的通行证照常放行（claude-fleet#2048，docs/CRED-RELAY.md「入口重启时」）。
+  那几十秒里，10 分钟内核过的通行证照常放行（claude-fleet#2048，docs/dev/CRED-RELAY.md「入口重启时」）。
 
 ## 首次上线（人做，一次）
 

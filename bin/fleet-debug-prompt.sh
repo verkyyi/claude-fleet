@@ -52,7 +52,7 @@ debug_run() {
 }
 
 # the reason a caller did not give: the last line of the client's own log for
-# that action (docs/CLIENT-LOGS.md, already redacted), its result · reason
+# that action (docs/dev/CLIENT-LOGS.md, already redacted), its result · reason
 log_reason() {
   f="${FLEET_CLIENT_LOG_DIR:-$CACHE/logs}/$1.log"
   [ -s "$f" ] || return 0

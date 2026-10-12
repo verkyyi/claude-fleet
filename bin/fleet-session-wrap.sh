@@ -233,7 +233,7 @@ while :; do
     tmux set-option -p -t "$TMUX_PANE" @wrap_win "$(opt window_id)" 2>/dev/null
   fi
   export FLEET_SESSION_WRAP=$$
-  # The session's own credential (issue #1809, docs/FLEET-MCP.md «Identity»): minted
+  # The session's own credential (issue #1809, docs/dev/FLEET-MCP.md «Identity»): minted
   # fresh for every launch, handed to the agent — and so to the fleet tool service —
   # through the environment ONLY (never argv, a file or a log), revoked when the
   # agent exits. No tool service (FLEET_MCP=0), outside tmux, or a mint that fails:

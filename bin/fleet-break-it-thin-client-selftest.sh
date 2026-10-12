@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-thin-client-selftest.sh — docs/BREAK-IT.md rows thin-* on the
+# fleet-break-it-thin-client-selftest.sh — docs/dev/BREAK-IT.md rows thin-* on the
 # CLIENT side (issue #3007, EPIC #2999 C10): the thin loop on the person's own
 # computer (bin/fleet-thin.py) against the three kinds of "connection state gone
 # bad" (#2987) and the two ways its one line goes away. Its own file, on the cred

@@ -25,7 +25,7 @@ and on every login that should reach it (the person's own, on any machine):
            in their own config). config.toml is edited as TEXT.
   client unset / client header (the helper) / client show
 
-The token never enters argv, a log line, an issue or a commit. docs/PHONE-MCP.md.
+The token never enters argv, a log line, an issue or a commit. docs/dev/PHONE-MCP.md.
 """
 import argparse
 import hmac

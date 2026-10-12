@@ -8,7 +8,7 @@ spec:
       containers:
         - name: egress
           env:
-            # the hub's ACK cluster's pod range (docs/MANAGED-LINUX.md «Egress guard»)
+            # the hub's ACK cluster's pod range (docs/dev/MANAGED-LINUX.md «Egress guard»)
             - name: FLEET_EGRESS_SOURCES
               value: "172.20.0.0/16"
             # GitHub's git transport times out from the CN egress: through the

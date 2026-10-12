@@ -1,5 +1,5 @@
 # The fleet's Singapore relay (claude-fleet#1974, EPIC #1967 C7) — the whole
-# Caddy config of the forwarder. docs/CRED-RELAY.md is the runbook; the
+# Caddy config of the forwarder. docs/dev/CRED-RELAY.md is the runbook; the
 # selftest (bin/fleet-relay-cred-selftest.sh) runs THIS file against fakes.
 #
 # The relay holds no credential and parses none:

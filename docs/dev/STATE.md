@@ -64,7 +64,7 @@ So the `*permission*` match overwrote the `ask` `PreToolUse` had just stamped, a
 the dash showed `⊘` — *"only a human can press this"* — on a question `⌃k` could
 have answered. The first real remote-answer attempt hit exactly that and gave up.
 The subtype is now settled against the **transcript**, via
-[`bin/fleet-pending-tool.sh`](../bin/fleet-pending-tool.sh): the newest `tool_use`
+[`bin/fleet-pending-tool.sh`](../../bin/fleet-pending-tool.sh): the newest `tool_use`
 with no `tool_result`. That is the same rule `fleet-answer.sh` and
 `fleet-permission.sh` already gate on, so **the dash glyph and the two tools that
 act on it can no longer disagree** — which was the actual defect, not the glyph.
@@ -76,10 +76,10 @@ answer channel that is not there.
 **Freshness is by construction, not by timestamp.** `@claude_needs` is written on
 *every* non-`leave` state write — a `working`/`done` write clears it — and the other
 writers of `@claude_state`
-([`classify-sessions.sh`](../bin/classify-sessions.sh), the spinner's
+([`classify-sessions.sh`](../../bin/classify-sessions.sh), the spinner's
 stale-`working` demote) clear it as well. So no reader can ever pair a fresh state
 with a stale reason, and readers consult it only while the state is `needs`.
-Pinned end to end by [`bin/needs-reason-selftest.sh`](../bin/needs-reason-selftest.sh).
+Pinned end to end by [`bin/needs-reason-selftest.sh`](../../bin/needs-reason-selftest.sh).
 
 **Worker-declared blockers persist across the rest of the turn (#704).** The
 charter uses `sh ~/.claude/fleet/bin/set-claude-state.sh blocked`, which stamps
@@ -97,7 +97,7 @@ stopping. A live question or permission notification supersedes the declaration
 with `ask`/`perm`; those dialogs then follow their ordinary lifecycle. Two checks
 confirming no live Claude also clear it; Codex remains outside the Claude
 transcript reconcile. The lifecycle and in-flight-reader cases are pinned by
-[`bin/blocked-state-selftest.sh`](../bin/blocked-state-selftest.sh).
+[`bin/blocked-state-selftest.sh`](../../bin/blocked-state-selftest.sh).
 
 Construction keeps the reason *consistent with its state*; it cannot keep either
 consistent with **reality**, because both are written on events and a blocked session
@@ -107,9 +107,9 @@ reconcile](#the-other-backstop--stale-needs-reconcile-658) below is for.
 ## The fast path — Claude Code hooks (instant, semantic-blind)
 
 Claude Code fires shell **hooks** on turn edges. Each one runs
-[`bin/set-claude-state.sh`](../bin/set-claude-state.sh), which stamps
+[`bin/set-claude-state.sh`](../../bin/set-claude-state.sh), which stamps
 `@claude_state` on the **current pane's window** (`$TMUX_PANE`). It is wired in
-[`hooks/settings-hooks.json`](../hooks/settings-hooks.json):
+[`hooks/settings-hooks.json`](../../hooks/settings-hooks.json):
 
 | Claude Code hook | Arg passed | Resulting state |
 |---|---|---|
@@ -176,7 +176,7 @@ discriminations so the fast signal does not cry wolf:
   `SendMessage` queued underneath it, the issue bridge was dead, `fleet-answer.sh`
   correctly refused (not a question), and `tmux send-keys` is hook-blocked (#437) —
   and a relayed message could not have pressed the key anyway.
-  [`bin/fleet-permission.sh`](../bin/fleet-permission.sh) closes it, without ever
+  [`bin/fleet-permission.sh`](../../bin/fleet-permission.sh) closes it, without ever
   approving anything:
   - `--show` makes the **blocked command and the prompt's own reason readable
     without attaching** (the transcript gives the pending `tool_use`; the reason is
@@ -210,7 +210,7 @@ Several read-only surfaces render off it; none of them owns it.
 
 ### 1. The fzf dashboard — the primary visible surface
 
-[`bin/tmux-dashboard-rows.sh`](../bin/tmux-dashboard-rows.sh) is a **self-contained
+[`bin/tmux-dashboard-rows.sh`](../../bin/tmux-dashboard-rows.sh) is a **self-contained
 renderer**: it reads `@claude_state` (and `@claude_state_ts`) directly off every
 window and paints one row per session — the state glyph, bound issue, summary, PR
 status, and context %. It animates the `working` spinner from **its own** frame
@@ -219,7 +219,7 @@ daemon. This is where you actually *see* per-window state.
 
 ### 2. The needs badge (the spinner daemon)
 
-[`bin/tmux-spinner.sh`](../bin/tmux-spinner.sh) is an always-on daemon (launchd
+[`bin/tmux-spinner.sh`](../../bin/tmux-spinner.sh) is an always-on daemon (launchd
 `com.claude-fleet.spinner`) that scans every window ~8×/second (`SPIN_INTERVAL`,
 default `0.12s`), **change-detected** — it only re-writes an option when the value
 actually moves, so a calm fleet costs a handful of `tmux` reads per frame. Its
@@ -308,7 +308,7 @@ no schedule was recorded — both look like `Stop` → `done`. And a `done` wind
 question the Notification filter left untouched. So `done` / `needs` / `looping`
 are *ambiguous, quiet* states worth a second look by an LLM.
 
-[`bin/classify-sessions.sh`](../bin/classify-sessions.sh) reads the pane text and
+[`bin/classify-sessions.sh`](../../bin/classify-sessions.sh) reads the pane text and
 asks `claude -p --model haiku` to classify it as `STOPPED` / `WAITING` /
 `LOOPING` / `ERROR`, then writes the reconciled `@claude_state` (`done` / `needs`
 / `looping` / `needs`). It is heavily gated so it is cheap and safe:
@@ -349,7 +349,7 @@ Jev (never a real key or network).
 Two things trigger it:
 
 1. **`classify-hook.sh` on `Stop`** — the real-time path. The moment
-   `set-claude-state.sh` stamps `done`, [`bin/classify-hook.sh`](../bin/classify-hook.sh)
+   `set-claude-state.sh` stamps `done`, [`bin/classify-hook.sh`](../../bin/classify-hook.sh)
    backgrounds a `--window` classification so the `done`→`looping`/`needs`
    correction lands within ~1–2s. It backgrounds the work and exits `0`, so it
    never slows the turn; it is a no-op if `claude` isn't on `PATH`.
@@ -362,9 +362,9 @@ The classifier is **optional** — everything else works without it; you simply 
 ## The floor — native-truth reconcile (#806)
 
 The demoter below reads *activity*; this pass reads the **agent**. Every tick of the
-sleep daemon ([`bin/fleet-sleep-daemon.sh`](../bin/fleet-sleep-daemon.sh), 60s, its
+sleep daemon ([`bin/fleet-sleep-daemon.sh`](../../bin/fleet-sleep-daemon.sh), 60s, its
 own launchd/systemd unit — not the spinner) runs
-[`bin/fleet-state-reconcile.py`](../bin/fleet-state-reconcile.py) first, over every
+[`bin/fleet-state-reconcile.py`](../../bin/fleet-state-reconcile.py) first, over every
 live fleet socket, whatever `FLEET_SLEEP` says:
 
 - **Claude** — Claude Code registers each TUI under `~/.claude/sessions/<pid>.json`
@@ -397,7 +397,7 @@ demoter inside it, had just spent 15h wedged in a busy loop. `logs/stuck.log` he
 300 missed-Stop demotions averaging 757s late, 39 of them past 30 min, and the
 sleep daemon's largest rejection (`worker is not done`, 34% of verdicts) was fed by
 the same windows. Pinned by
-[`bin/fleet-state-reconcile-selftest.sh`](../bin/fleet-state-reconcile-selftest.sh).
+[`bin/fleet-state-reconcile-selftest.sh`](../../bin/fleet-state-reconcile-selftest.sh).
 
 ## The backstop — stuck-working demotion (#101)
 
@@ -461,7 +461,7 @@ shapes of that were live on 2026-09-14:
   precisely what tells the operator not to answer the thing that would end it.
 
 So the spinner reconciles the stamp against the **transcript**, using the same
-[`bin/fleet-pending-tool.sh`](../bin/fleet-pending-tool.sh) oracle that set the
+[`bin/fleet-pending-tool.sh`](../../bin/fleet-pending-tool.sh) oracle that set the
 subtype in the first place — asked now about a **window** rather than a file
 (`fleet-pending-tool.sh [-L <sock>] <target>` resolves pane → Claude pid → the
 session registry's `sessionId` → the transcript, and reports *no live Claude* and
@@ -493,7 +493,7 @@ Three rails make this safe to run unattended:
   that as no evidence at all: it required `ask`/`perm`, so a plain `needs` produced
   **no verdict** and nothing could ever clear it. That stranded an entire red path,
   not a few legacy stamps — an empty subtype is what
-  [`classify-sessions.sh`](../bin/classify-sessions.sh) writes (it clears the subtype
+  [`classify-sessions.sh`](../../bin/classify-sessions.sh) writes (it clears the subtype
   by design, #640), and the classifier only ever runs at **Stop**, where a pending
   `tool_use` cannot exist. Clearing it on the same 20s grace is no better, because
   that red is a real **category**: a worker that ends its turn asking the operator a
@@ -529,7 +529,7 @@ per pass; the rest are picked up by the next one.
 
 `tmux-spinner.sh --needs-check` runs exactly **one** pass and exits — for an operator
 who wants a stale red re-judged now instead of at the next tick, and for
-[`bin/needs-reconcile-selftest.sh`](../bin/needs-reconcile-selftest.sh), which drives
+[`bin/needs-reconcile-selftest.sh`](../../bin/needs-reconcile-selftest.sh), which drives
 passes one at a time so the two-checks-agree rule is pinned by *count* rather than by
 wall clock (a wall-clock assertion passes for the wrong reason, which is the mistake
 #658 itself was filed on).
@@ -551,7 +551,7 @@ The trace separates them at a glance — `cand=` says the pass saw the window, `
 says whether it wrote, `starved=` says the budget ran out first, and `armed=` is the
 strike table verbatim, so a stall shows as the *same* set armed over and over. (It was
 the third: #691's 3 s strike TTL.) Off by default;
-[`needs-reconcile-selftest.sh`](../bin/needs-reconcile-selftest.sh) drives its daemon
+[`needs-reconcile-selftest.sh`](../../bin/needs-reconcile-selftest.sh) drives its daemon
 with it **on** and dumps the trace, the strike table and every window's stamps when
 PART B goes red, so a flake there arrives with its own evidence.
 
@@ -633,7 +633,7 @@ engine takes one unmatched hook per event per plugin. Checks:
 **Context + quota (#1338, `hooks/usage.ts`).** The engine pushes
 `session.measure` after every turn and when a rate-limit window moves a point —
 rendered or not, so a background window nobody watches reports too. The mod
-writes the SAME options [`conf/statusline.sh`](../conf/statusline.sh) does, on
+writes the SAME options [`conf/statusline.sh`](../../conf/statusline.sh) does, on
 the same scale (newest write wins): `@ctx_pct` / `@ctx_limit`, and — only when
 both windows have a reading — `@rl5h` `@rl7d` `@rl_reset` `@rl_ts` plus
 `@rl_src mod` (a status-line stamp unsets `@rl_src`, so absent = the status
@@ -748,7 +748,7 @@ after that condition has cleared and come back.
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits
   the Stop-hook `block` decision that steers a near-full session into
   `/fleet-handoff` when context crosses `FLEET_AUTO_HANDOFF_PCT`. It reads the
-  context % from `@ctx_pct`, which [`conf/statusline.sh`](../conf/statusline.sh)
+  context % from `@ctx_pct`, which [`conf/statusline.sh`](../../conf/statusline.sh)
   stamps on the same window-option bus each render, and the threshold from the
   **conf** — `bin/fleet-hook-conf.sh` (global `fleet.conf` → this fleet's overlay),
   never the hook's environment, which nothing exports into (#561). That is a

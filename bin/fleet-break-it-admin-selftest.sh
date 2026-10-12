@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-admin-selftest.sh — the docs/BREAK-IT.md row of the admin seat's
+# fleet-break-it-admin-selftest.sh — the docs/dev/BREAK-IT.md row of the admin seat's
 # two root scripts (issue #3557, EPIC #3500 C15 · 共同约定 11): the drill builds
 # the admin directory the way the seat's installer lays it out — the gate
 # (bin/fleet-admin-gate.sh) copied under both names, admin.conf, the hub's

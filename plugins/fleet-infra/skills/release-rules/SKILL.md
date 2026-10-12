@@ -8,8 +8,8 @@ description: 发版的规矩——stable 只由发布列车推进；入口、发
 占位：`<HUB_URL>` 入口地址（`grep FLEET_HUB_URL ~/.config/claude-fleet/fleet.conf`）· `<SHA>` 要发的提交 ·
 `<RUN>` 列车的 run id。仓库是 `verkyyi/claude-fleet`（或你的派生仓库）。
 权威出处：仓库根 `CLAUDE.md`「CI runs only the RELATED tests」那一条（发布列车、唯一自动发版的路）；
-`.github/workflows/release-train.yml` 头注释；`bin/fleet-stable.sh` 头注释（8 道门）；`docs/BREAK-IT.md` 的
-`train-*`、`macos-red-to-stable`、`release-artifact-missing`、`release-ccquota-stale` 行；`docs/MANAGED-NODE.md` §7。
+`.github/workflows/release-train.yml` 头注释；`bin/fleet-stable.sh` 头注释（8 道门）；`docs/dev/BREAK-IT.md` 的
+`train-*`、`macos-red-to-stable`、`release-artifact-missing`、`release-ccquota-stale` 行；`docs/dev/MANAGED-NODE.md` §7。
 出了事照 [runbook-train-stuck]；入口本身的发布与回退照 [hub-deploy]。
 
 **五条规矩**（每条都是一次事故换来的）：
@@ -74,6 +74,6 @@ fleet doctor --installs                                      # 每份安装离 s
 ## 怎么回滚
 
 - stable 不往回挪。坏版本的回滚 = 修好合进 master 发下一版；等的这段时间，托管机器的更新器在体检多出 FAIL 时
-  会自己退回上一版并跳过这个 sha（`docs/MANAGED-NODE.md` §7）。
+  会自己退回上一版并跳过这个 sha（`docs/dev/MANAGED-NODE.md` §7）。
 - 入口坏了：照 [hub-deploy] 的手动回退（`tag` = 旧镜像），之后让下一趟列车把入口和 stable 带回同一个提交。
 - 误挪了 stable（挪到了列车之前、或没部署入口）：不要再挪回去；部署入口到同一个提交，或让下一趟列车往前带。

@@ -10,7 +10,7 @@
 # Exit status is the number of FAILs (0 = everything at least usable), so it can
 # gate an install script: `sh fleet-doctor.sh && ...`.
 #
-# Dependency truth (keep in sync with README.md#dependencies and docs/INSTALL.md):
+# Dependency truth (keep in sync with README.md#dependencies and docs/dev/INSTALL.md):
 #   tmux ≥ 3.2   core — the whole thing is a tmux session
 #   fzf  ≥ 0.45  dash — the dashboard binds use `transform` (fzf 0.45+)
 #   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
@@ -194,7 +194,7 @@ _xconf_val() {  # <file> <KEY> → the last assignment's value, `export` allowed
 #   承载   only on a computer that hosts (or has the hub switch on): which
 #          machine, and the node token verdict (issue #1491 — WARN when the
 #          entry's lease / placement / move would fall back silently)
-# The hub protocol's word stays node (node.env, /v1/node/*): docs/TERMS.md.
+# The hub protocol's word stays node (node.env, /v1/node/*): docs/dev/TERMS.md.
 _hub_url=${FLEET_HUB_URL:-}
 [ -n "$_hub_url" ] || _hub_url=$(_xconf_val "$conf_dir/fleet.conf" FLEET_HUB_URL)
 [ -n "$_hub_url" ] || _hub_url=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_HUB_URL)
@@ -661,7 +661,7 @@ fi
 # never a FAIL: install-sync uses the doctor's FAIL count as its rollback gate.
 if [ -f "$conf_dir/global/bootstrapped" ]; then
   if onboard=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-doctor-onboard.sh" 2>/dev/null); then
-    pass onboard "$onboard · 本机 / 联机模式: docs/LOCAL-AND-HUB.md"
+    pass onboard "$onboard · 本机 / 联机模式: docs/dev/LOCAL-AND-HUB.md"
   else warn onboard "${onboard:-readiness probe failed}"; fi
 fi
 
@@ -711,7 +711,7 @@ fi
 # --- fleet skills tree (optional: repo-shipped skills/ base skills) ---
 # Some fleet commands delegate to a repo-versioned base SKILL under
 # ~/.claude/skills/ (installed by /fleet-sync-install's skills pass — see
-# docs/INSTALL.md). The load-bearing case is /fleet-handoff, which runs the base
+# docs/dev/INSTALL.md). The load-bearing case is /fleet-handoff, which runs the base
 # `handoff` skill VERBATIM: with the command present but the skill missing,
 # /fleet-handoff points at a dependency a fresh install never shipped (issue #311).
 # So specifically flag that combination — command installed, base skill absent.
@@ -927,13 +927,13 @@ fi
 
 # --- config modal (prefix+c: view/edit per-fleet + global fleet config) ---
 # The popup (bin/tmux-config.sh) sources its key list + per-key help from
-# fleet.conf.example; without that file it can't render. It lives in the repo /
+# conf/fleet.conf.reference; without that file it can't render. It lives in the repo /
 # install root (one dir up from bin/).
 ex_root=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
-if [ -f "$ex_root/fleet.conf.example" ]; then
-  pass config "fleet.conf.example present — prefix+c config modal can render (view/edit keys)"
+if [ -f "$ex_root/conf/fleet.conf.reference" ]; then
+  pass config "conf/fleet.conf.reference present — prefix+c config modal can render (view/edit keys)"
 else
-  warn config "fleet.conf.example missing — prefix+c config modal has no key list/help source"
+  warn config "conf/fleet.conf.reference missing — prefix+c config modal has no key list/help source"
 fi
 
 # --- panel keys vs the tmux prefix (issues #556/#558) ---
@@ -1151,7 +1151,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     done
     if command -v "${FLEET_QUOTA_BIN:-ccquota}" >/dev/null 2>&1; then
       # NAME the binary on the other side of this contract (issue #668). ccquota
-      # ships no tagged release (docs/INSTALL.md) — everyone installs it with
+      # ships no tagged release (docs/dev/INSTALL.md) — everyone installs it with
       # `go install …@latest`, so the builds DO drift between machines, and the
       # shape FAIL below is precisely the moment a human needs to know which one
       # answered: its advice can only say *"that build is probably newer than this
@@ -1241,7 +1241,7 @@ daemon_verdict() {   # $1=tag $2=label $3=pass-msg $4=what-is-lost-when-missing
 }
 
 # --- mode (issue #1539): local or hub, per fleet ---------------------------------
-# Which of the two modes each fleet on this login runs in — docs/LOCAL-AND-HUB.md
+# Which of the two modes each fleet on this login runs in — docs/dev/LOCAL-AND-HUB.md
 # is the matrix of what that decides. The login-wide value (environment ▸
 # fleet.settings ▸ the install's fleet.conf, as the node line reads it) is every
 # fleet's default; a fleet conf's own CCQUOTA_FLEET line wins (fleet_hub_on in
@@ -1273,7 +1273,7 @@ $(_fleet_confs "$conf_dir")
 EOF
 fi
 [ -n "$_mode_out" ] || { [ "$_mode_g" = 1 ] && _mode_out=hub || _mode_out=local; }
-info mode "$_mode_out — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md"
+info mode "$_mode_out — 本机 / 联机各管什么: docs/dev/LOCAL-AND-HUB.md"
 
 # --- tools (issue #1774, #1784): can a PATH-less shell find claude and tmux? -----
 # What a daemon, an ssh command or a restore sees — not this terminal's PATH. Asked
@@ -1544,7 +1544,7 @@ EOF
     else
       pass emit "$earmed fleet(s) emitting session lifecycle facts (spool drained)"
     fi
-    printf '        note: session.start/bind/pr/end only — no prompt content, paths, titles or hostname leave the machine. See docs/EMIT.md.\n'
+    printf '        note: session.start/bind/pr/end only — no prompt content, paths, titles or hostname leave the machine. See docs/dev/EMIT.md.\n'
   fi
 fi
 
@@ -2574,7 +2574,7 @@ fi
 # section is skipped on Linux, silently (there is no Spotlight, no pmset). Each
 # line is report-only — the doctor NEVER changes system state; it names the
 # command and says how to silence the line. Later members append rows here and
-# sections to docs/HOST.md; pinned by bin/fleet-doctor-host-selftest.sh. The
+# sections to docs/dev/HOST.md; pinned by bin/fleet-doctor-host-selftest.sh. The
 # `network` row (#1081) sits just after the section: Linux has that fact too.
 if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
 
@@ -2582,7 +2582,7 @@ if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
 #    Mac mini was not a session but mds_stores: 71 CPU-minutes in 4.5h of uptime,
 #    74% at the instant, re-indexing worktrees that live for minutes. An unattended
 #    host has nobody to search it, so the first host recommendation is to turn
-#    indexing off (docs/HOST.md#spotlight). WARN, not FAIL: it is a cost, not a
+#    indexing off (docs/dev/HOST.md#spotlight). WARN, not FAIL: it is a cost, not a
 #    broken install. FLEET_DOCTOR_SPOTLIGHT=0 (env or fleet.settings) silences it.
 spchk="${FLEET_DOCTOR_SPOTLIGHT:-$(_gconf_val FLEET_DOCTOR_SPOTLIGHT)}"
 if [ "$spchk" != 0 ] && command -v mdutil >/dev/null 2>&1; then
@@ -2590,11 +2590,11 @@ if [ "$spchk" != 0 ] && command -v mdutil >/dev/null 2>&1; then
   spout=$(mdutil -s "$spvol" 2>&1 | tr '\n' ' ')
   case "$spout" in
     *"Indexing enabled"*)
-      warn spotlight "Spotlight is still indexing $spvol — an unattended host should turn it off: \`sudo mdutil -a -i off\` (undo: \`sudo mdutil -a -i on\`; see docs/HOST.md#spotlight). Silence: FLEET_DOCTOR_SPOTLIGHT=0" ;;
+      warn spotlight "Spotlight is still indexing $spvol — an unattended host should turn it off: \`sudo mdutil -a -i off\` (undo: \`sudo mdutil -a -i on\`; see docs/dev/HOST.md#spotlight). Silence: FLEET_DOCTOR_SPOTLIGHT=0" ;;
     *disabled*)
       pass spotlight "Spotlight indexing off on $spvol" ;;
     *)
-      info spotlight "could not read Spotlight state for $spvol (mdutil -s: $(printf '%s' "$spout" | cut -c1-120)) — see docs/HOST.md#spotlight" ;;
+      info spotlight "could not read Spotlight state for $spvol (mdutil -s: $(printf '%s' "$spout" | cut -c1-120)) — see docs/dev/HOST.md#spotlight" ;;
   esac
 fi
 
@@ -2632,7 +2632,7 @@ if command -v launchctl >/dev/null 2>&1; then
   case "$nfsoft" in
     ''|*[!0-9]*) ;;   # unreadable (or "unlimited"): nothing useful to say
     *) if [ "$nfsoft" -lt 4096 ]; then
-         info nofile "system default file limit is $nfsoft (launchctl limit maxfiles); fleet daemons raise their own to 65536 (see nofile= in their logs), other LaunchAgents: docs/HOST.md#nofile"
+         info nofile "system default file limit is $nfsoft (launchctl limit maxfiles); fleet daemons raise their own to 65536 (see nofile= in their logs), other LaunchAgents: docs/dev/HOST.md#nofile"
        else
          pass nofile "system default file limit is $nfsoft (launchctl limit maxfiles)"
        fi ;;
@@ -2662,11 +2662,11 @@ if [ "$slchk" != 0 ] && command -v pmset >/dev/null 2>&1; then
   [ "$wompval" = 0 ] && slhint="$slhint; womp is 0 — no wake-on-LAN: \`sudo pmset -a womp 1\`"
   case "$slval" in
     0)
-      pass sleep "never sleeps: pmset sleep 0$slnote$slhint${slhint:+ (see docs/HOST.md#headless)}" ;;
+      pass sleep "never sleeps: pmset sleep 0$slnote$slhint${slhint:+ (see docs/dev/HOST.md#headless)}" ;;
     ''|*[!0-9]*)
-      info sleep "could not read the sleep setting (pmset -g: $(printf '%s' "$pmout" | tr '\n' ' ' | cut -c1-120)) — see docs/HOST.md#headless" ;;
+      info sleep "could not read the sleep setting (pmset -g: $(printf '%s' "$pmout" | tr '\n' ' ' | cut -c1-120)) — see docs/dev/HOST.md#headless" ;;
     *)
-      warn sleep "host sleeps after $slval min idle — an unattended host should never sleep: \`sudo pmset -a sleep 0 autorestart 1 womp 1\` (undo: \`sudo pmset -a sleep $slval\`; see docs/HOST.md#headless)$slnote. Silence: FLEET_DOCTOR_SLEEP=0" ;;
+      warn sleep "host sleeps after $slval min idle — an unattended host should never sleep: \`sudo pmset -a sleep 0 autorestart 1 womp 1\` (undo: \`sudo pmset -a sleep $slval\`; see docs/dev/HOST.md#headless)$slnote. Silence: FLEET_DOCTOR_SLEEP=0" ;;
   esac
 fi
 
@@ -2676,20 +2676,20 @@ fi
 #    setting: `defaults read com.apple.assistant.support "Assistant Enabled"` is
 #    1 while on; 0, or no key at all (never enabled), while off. INFO, not WARN:
 #    it costs memory, not CPU, and the fix is a Settings toggle
-#    (docs/HOST.md#headless). Read-only — never `defaults write`.
+#    (docs/dev/HOST.md#headless). Read-only — never `defaults write`.
 #    FLEET_DOCTOR_SIRI=0 silences it.
 sichk="${FLEET_DOCTOR_SIRI:-$(_gconf_val FLEET_DOCTOR_SIRI)}"
 if [ "$sichk" != 0 ] && command -v defaults >/dev/null 2>&1; then
   sival=$(defaults read com.apple.assistant.support "Assistant Enabled" 2>/dev/null | tr -d '[:space:]')
   case "$sival" in
     1)
-      info siri "Siri is on — its helpers (sirittsd, siriactionsd, assistantd, Siri AI) stay resident (~400 MB for the speech service alone) on a host nobody talks to; turn it off: System Settings → Apple Intelligence & Siri → Siri off (see docs/HOST.md#headless). Silence: FLEET_DOCTOR_SIRI=0" ;;
+      info siri "Siri is on — its helpers (sirittsd, siriactionsd, assistantd, Siri AI) stay resident (~400 MB for the speech service alone) on a host nobody talks to; turn it off: System Settings → Apple Intelligence & Siri → Siri off (see docs/dev/HOST.md#headless). Silence: FLEET_DOCTOR_SIRI=0" ;;
     0)
       pass siri "Siri off" ;;
     '')
       pass siri "Siri off (never enabled — no Assistant Enabled key)" ;;
     *)
-      info siri "could not read the Siri setting (Assistant Enabled=$sival) — see docs/HOST.md#headless" ;;
+      info siri "could not read the Siri setting (Assistant Enabled=$sival) — see docs/dev/HOST.md#headless" ;;
   esac
 fi
 
@@ -2699,7 +2699,7 @@ fi
 #    2026-09-24 contactsd alone had 4.5 CPU-minutes syncing a server's contacts.
 #    INFO, not WARN: a signed-in account can be deliberate (Find My, Screen
 #    Sharing sign-in), and signing out is a Settings decision
-#    (docs/HOST.md#headless). The row names which daemons are alive so a partial
+#    (docs/dev/HOST.md#headless). The row names which daemons are alive so a partial
 #    sign-out (iCloud Drive off, account kept) reads as progress.
 #    FLEET_DOCTOR_ICLOUD=0 silences it.
 icchk="${FLEET_DOCTOR_ICLOUD:-$(_gconf_val FLEET_DOCTOR_ICLOUD)}"
@@ -2709,7 +2709,7 @@ if [ "$icchk" != 0 ] && command -v pgrep >/dev/null 2>&1; then
     pgrep -x "$icd" >/dev/null 2>&1 && iclive="$iclive $icd"
   done
   if [ -n "$iclive" ]; then
-    info icloud "iCloud sync daemons resident:$iclive — they sync an account no session uses; sign out of iCloud, or turn off iCloud Drive + Contacts: System Settings → Apple Account → iCloud (see docs/HOST.md#headless). Silence: FLEET_DOCTOR_ICLOUD=0"
+    info icloud "iCloud sync daemons resident:$iclive — they sync an account no session uses; sign out of iCloud, or turn off iCloud Drive + Contacts: System Settings → Apple Account → iCloud (see docs/dev/HOST.md#headless). Silence: FLEET_DOCTOR_ICLOUD=0"
   else
     pass icloud "no iCloud sync daemon resident (bird / cloudd / fileproviderd)"
   fi
@@ -2755,7 +2755,7 @@ if [ "$nwchk" != 0 ]; then
     else
       nwfix="keep only one of them connected"
     fi
-    warn network "default route to $nwgw through $(printf '%s' "$nwifs" | sed 's/ / + /g') — two interfaces on one subnet: replies can leave by a different interface than the connection came in on (\"connected, but nothing answers\"); $nwfix; see docs/HOST.md#network. Silence: FLEET_DOCTOR_NETWORK=0"
+    warn network "default route to $nwgw through $(printf '%s' "$nwifs" | sed 's/ / + /g') — two interfaces on one subnet: replies can leave by a different interface than the connection came in on (\"connected, but nothing answers\"); $nwfix; see docs/dev/HOST.md#network. Silence: FLEET_DOCTOR_NETWORK=0"
   elif [ -n "$nwroutes" ]; then
     nwn=$(printf '%s\n' "$nwroutes" | grep -c .)
     pass network "$nwn default route(s), no gateway shared by two interfaces: $(printf '%s\n' "$nwroutes" | awk '{ printf "%s%s via %s", (NR>1 ? ", " : ""), $1, $2 }')"
@@ -2837,7 +2837,7 @@ if [ "$igchk" != 0 ] && [ -n "$ighost" ] && [ -n "$igprobe" ]; then
     # Everything that is neither a key line nor a keyscan `#` comment is the reason.
     igwhy=$(printf '%s\n' "$igrem" | grep -v '^#' | awk '$2!="ssh-ed25519" && NF' | head -2 | tr '\n' ' ' | sed 's/[[:space:]]*$//')
     [ -n "$igwhy" ] || { [ "$igrc" -eq 124 ] && igwhy="timed out after ${igcap}s"; }
-    igfix="check the router / firewall forward for port $igport and that sshd (Remote Login) is on; the probe is \`ssh $igprobe ssh-keyscan -p $igport $ighost\` (docs/HOST.md#ingress). Silence: FLEET_DOCTOR_INGRESS=0"
+    igfix="check the router / firewall forward for port $igport and that sshd (Remote Login) is on; the probe is \`ssh $igprobe ssh-keyscan -p $igport $ighost\` (docs/dev/HOST.md#ingress). Silence: FLEET_DOCTOR_INGRESS=0"
     if [ -n "$igrkey" ] && [ -z "$iglocal" ]; then
       igst=warn; igmsg="public entry $ighost:$igport answers from $igprobe, but no sshd answers on 127.0.0.1 here (port 22 or $igport) — cannot tell whether that is this host; turn on Remote Login (System Settings → General → Sharing) and re-run. Silence: FLEET_DOCTOR_INGRESS=0"
     elif [ -n "$igrkey" ] && [ "$igrkey" = "$iglocal" ]; then
@@ -2857,7 +2857,7 @@ fi
 
 # --- status line (optional: conf/statusline.sh is jq-gated) ---
 # The Claude Code status line (conf/statusline.sh, wired install-time into
-# settings.json's statusLine — docs/INSTALL.md step 8b) prints nothing since #1452
+# settings.json's statusLine — docs/dev/INSTALL.md step 8b) prints nothing since #1452
 # and stamps the context % / model / effort / rate limits onto the pane's window;
 # while the key is there Claude Code keeps one blank row at the bottom of every
 # pane. Since #1459 the fleet mod feeds the same script from inside the session,

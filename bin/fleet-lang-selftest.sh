@@ -105,13 +105,13 @@ grep -q 'NUDGE_MODEL_DEFAULT="${FLEET_MIGRATE_NUDGE_MODEL:-\$NUDGE_MODEL_BUILTIN
   || fail "FLEET_MIGRATE_NUDGE_MODEL must override the built-in, with the built-in as its default"
 ok "fleet-migrate.sh: the two nudges are conf keys that default to the built-ins"
 
-# Both keys must be REGISTERED in fleet.conf.example — that is what makes them
+# Both keys must be REGISTERED in conf/fleet.conf.reference — that is what makes them
 # visible in the prefix+c config modal instead of a knob only the source reveals.
 for k in FLEET_MIGRATE_NUDGE FLEET_MIGRATE_NUDGE_MODEL; do
-  grep -qE "^#?[[:space:]]*$k=" "$ROOT/fleet.conf.example" \
-    || fail "$k must be documented in fleet.conf.example (the config modal reads it from there)"
+  grep -qE "^#?[[:space:]]*$k=" "$ROOT/conf/fleet.conf.reference" \
+    || fail "$k must be documented in conf/fleet.conf.reference (the config modal reads it from there)"
 done
-ok "both migrate-nudge keys are registered in fleet.conf.example"
+ok "both migrate-nudge keys are registered in conf/fleet.conf.reference"
 
 # fleet-model-switch.sh pins its pure helpers the same way.
 out=$(probe "$BIN/fleet-model-switch.sh" 'printf "%s" "$NUDGE_DEFAULT"')

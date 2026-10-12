@@ -188,10 +188,7 @@ eq "J: a repo without the gate files is never read" 1 "$(filed | grep -c -e '--b
 contains "J: alerted on the fleet" "$(alerted)" "event -L fleet breakage"
 eq "J: nobody spawned" no "$(spawned)"
 lacks "J: the watcher has no spawner left" "$(cat "$W")" "dash-issue-session"
-D="$BIN/fleet-dispatch.sh"
-OUT=$(env PATH="$WORK/shim:$PATH" bash "$D" 2>&1); RC=$?
-eq "J: the retired dispatch shell exits 0" 0 "$RC"; eq "J: … and says nothing" "" "$OUT"
-eq "J: … and still spawns nobody" no "$(spawned)"
+eq "J: the retired dispatch shell is gone (#3576)" no "$([ -e "$BIN/fleet-dispatch.sh" ] && echo yes || echo no)"
 eq "J: no dispatch daemon template left" no "$([ -e "$BIN/../launchd/com.claude-fleet.dispatch.plist.tmpl" ] && echo yes || echo no)"
 
 printf 'fleet-macos-watch-selftest OK (%d checks)\n' "$CHECKS"

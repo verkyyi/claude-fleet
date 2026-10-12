@@ -10,3 +10,7 @@ __pycache__/
 
 # the web chat page build (issue #3637): dependencies stay local; dist/ is committed
 extras/web-chat/ui/node_modules/
+
+# stray files a shell slip once committed at the root (issue #3576)
+/trap
+/Authorization:*

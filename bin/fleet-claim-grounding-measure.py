@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reproducible, read-only Claude /fleet-claim measurements (issue #461).
 
-Method v1 is documented in docs/CLAIM-MEASUREMENT.md. It identifies command
+Method v1 is documented in docs/dev/CLAIM-MEASUREMENT.md. It identifies command
 shapes, not effects: no transcript command is ever executed. JSON reports only
 metrics and detection reasons, never issue bodies, commands or assistant text.
 """
@@ -284,7 +284,7 @@ def main():
     else:
         print(f"Claim measurement v1: {len(sessions)}/{matched} sessions selected; "
               f"{report['complete_sessions']} with a detected first write; {len(skipped)} files skipped.")
-        print("Turns = unique assistant requests. Write/phase detection is heuristic; see docs/CLAIM-MEASUREMENT.md.")
+        print("Turns = unique assistant requests. Write/phase detection is heuristic; see docs/dev/CLAIM-MEASUREMENT.md.")
         print("Medians exclude sessions without a detected write; missing metrics stay unknown.")
         print("\nmetric                              median      samples")
         for metric, value in report["medians"].items():

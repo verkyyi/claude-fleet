@@ -1929,7 +1929,7 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_config_06)         printf %s 'refresh now' ;;
     zh:keys_config_07)         printf %s '关闭' ;;
     en:keys_config_07)         printf %s 'close' ;;
-    # the decision format (issue #2669, bin/fleet_decision.py; docs/DECISIONS.md)
+    # the decision format (issue #2669, bin/fleet_decision.py; docs/dev/DECISIONS.md)
     zh:decision_suggest_fmt)    printf '建议：%s' "${1:-}" ;;
     en:decision_suggest_fmt)    printf 'suggested: %s' "${1:-}" ;;
     zh:decision_default_fmt)    printf '不答按：%s' "${1:-}" ;;

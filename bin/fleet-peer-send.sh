@@ -32,7 +32,7 @@
 # or several matches refuse. `--expect-issue` pins an @id / %pane target.
 #
 # `wid:<fleet UUID>/<key>` (issue #1420) is the address that survives a machine
-# boundary (docs/FLEET-HUB.md «Worker identity»); fleet_worker_locate resolves it.
+# boundary (docs/dev/FLEET-HUB.md «Worker identity»); fleet_worker_locate resolves it.
 # Since issue #1646 its lifelong form is `wid:<fleet UUID>/<fleet_id>` (the
 # window's @fleet_id — it survives a rename, a restore, a migrate and a move);
 # the key form stays an alias.

@@ -2,7 +2,7 @@
 """fleet-relay-check.py — the Singapore relay's local gate (claude-fleet#2048,
 EPIC #2119 C7). Caddy's forward_auth asks THIS process (127.0.0.1 only), and it
 asks the hub's GET /v1/relay/check — so the relay keeps forwarding while the hub
-restarts. docs/CRED-RELAY.md «入口重启时» is the runbook;
+restarts. docs/dev/CRED-RELAY.md «入口重启时» is the runbook;
 bin/fleet-break-it-cred-selftest.sh (`cred-relay-hub-restart`) drills it.
 
 The verdict, per (SHA-256 of the pass, route prefix):

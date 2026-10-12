@@ -1,6 +1,6 @@
 #!/bin/bash
 # client-log-selftest.sh — the client's own record (issue #2896, EPIC #2889 C7;
-# docs/CLIENT-LOGS.md): bin/fleet_clientlog.py and its sh twin fleet_clientlog
+# docs/dev/CLIENT-LOGS.md): bin/fleet_clientlog.py and its sh twin fleet_clientlog
 # (bin/fleet-client-lib.sh), and the four writers — bin/fleet-connect.py
 # (relay + ssh), bin/fleet-client-place.sh, the keeper in bin/fleet-shell.sh,
 # bin/fleet-login.py — against a sandbox HOME and a fake hub on 127.0.0.1.

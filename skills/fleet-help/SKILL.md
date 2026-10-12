@@ -21,7 +21,7 @@ device). Read `os`, `terminal`, `caps`, `via`, and `clients` when there are seve
 |---|---|
 | `os` iOS / iPadOS / Android, or `terminal` Termius / Blink, or `caps` only `link` | the **phone**: Termius taps — ⌃ is the Ctrl key on the extra-key row, then `]`, then a letter; a page is a link to tap |
 | `os` macOS with `terminal` iTerm2 (`caps` has `iterm2`) | the **Mac**: one key, ⌘P (everything else is a row in it); a page you can open for them with `mcp__fleet__open` |
-| another terminal (Terminal.app, ssh from elsewhere) | **prefix keys** (prefix /, prefix n …) — `docs/CLIENT.md` «The keys», right-hand column |
+| another terminal (Terminal.app, ssh from elsewhere) | **prefix keys** (prefix /, prefix n …) — `docs/dev/CLIENT.md` «The keys», right-hand column |
 | exit 3 (nobody connected) or the question names another device («用手机怎么…») | ask which device in one short question, or take the one they named |
 
 The question wins over the reading: «手机上怎么…» asked from the Mac is about the phone.
@@ -30,30 +30,30 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 
 | They ask about | Read |
 |---|---|
-| connecting from a phone, first time (Termius, keys page, the four things) | `docs/CLIENT.md` § 「手机：Termius 四样」 · `docs/MULTI-MACHINE-OPS.md` § 「一个人第一次从手机连」 |
-| their address, the entry port, what a connection with no command does | `docs/CLIENT.md` § 「Your address: no command = the 看台」 · `docs/MANAGED-NODE.md` § 「16. 入口端口」 |
-| device keys: add, revoke, lost phone | `docs/CLIENT.md` § 「手机：Termius 四样」 (step 4) |
-| changing the home machine | `docs/MULTI-MACHINE-OPS.md` § 「手动换家」 |
-| the address stopped working after the home's internet changed | `docs/MULTI-MACHINE-OPS.md` § 「宽带换了公网地址」 |
-| connecting from the Mac, which machine `fleet` picks, a named machine | `docs/CLIENT.md` § 「On a phone — the same road as the Mac」 · `docs/MULTI-MACHINE-OPS.md` § 「6. 速查」 |
-| ⌘P: what it lists, its row keys, the `>` commands | `docs/CLIENT.md` § 「⌘P — sessions and actions」 |
-| the one default key (⌘P · ⌃空格 · F12 · ⌃] p), getting another key back or changing one (`FLEET_KEYS_EXTRA` …) | `docs/CLIENT.md` § 「One key + the panel」 |
-| every key of the old client (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …) | `docs/CLIENT.md` § 「The keys」 |
-| the phone's keys (⌃空格 · F12 · ⌃] p, the letters you can add), tapping them in Termius or Blink | `docs/CLIENT.md` § 「The keys: one, to open the panel」 · `docs/CLIENT.md` § 「Termius (iPhone)」 |
-| a new session | `docs/CLIENT.md` § 「A new session」 · `docs/CLIENT.md` § 「A new session in one command」 |
-| 派一件事 / hand a task to a worker | `docs/CLIENT.md` § 「派一件事」 |
-| a session's state, who is waiting on them | `docs/CLIENT.md` § 「⌘P — sessions and actions」 (the 状态 column, the waiting ones first) · `docs/STATE.md` § 「The states」 |
-| the session's shell | `docs/CLIENT.md` § 「⌃\ — the session's shell, and back」 |
-| leaving, quitting, coming back to a session | `docs/CLIENT.md` § 「放到后台 and 退出 fleet」 · `docs/CLIENT.md` § 「会话结束了」 |
-| copying text out of a session | `docs/CLIENT.md` § 「复制」 |
-| quota and usage | `docs/CLIENT.md` § 「额度和用量在哪看」 |
-| cannot connect | `docs/CLIENT.md` § 「连不上」 |
-| Chinese shows as `_` or boxes | `docs/CLIENT.md` § 「中文乱码」 |
-| the list stopped updating, a row cannot be opened | `docs/CLIENT.md` § 「列表停住」 |
+| connecting from a phone, first time (Termius, keys page, the four things) | `docs/dev/CLIENT.md` § 「手机：Termius 四样」 · `docs/dev/MULTI-MACHINE-OPS.md` § 「一个人第一次从手机连」 |
+| their address, the entry port, what a connection with no command does | `docs/dev/CLIENT.md` § 「Your address: no command = the 看台」 · `docs/dev/MANAGED-NODE.md` § 「16. 入口端口」 |
+| device keys: add, revoke, lost phone | `docs/dev/CLIENT.md` § 「手机：Termius 四样」 (step 4) |
+| changing the home machine | `docs/dev/MULTI-MACHINE-OPS.md` § 「手动换家」 |
+| the address stopped working after the home's internet changed | `docs/dev/MULTI-MACHINE-OPS.md` § 「宽带换了公网地址」 |
+| connecting from the Mac, which machine `fleet` picks, a named machine | `docs/dev/CLIENT.md` § 「On a phone — the same road as the Mac」 · `docs/dev/MULTI-MACHINE-OPS.md` § 「6. 速查」 |
+| ⌘P: what it lists, its row keys, the `>` commands | `docs/dev/CLIENT.md` § 「⌘P — sessions and actions」 |
+| the one default key (⌘P · ⌃空格 · F12 · ⌃] p), getting another key back or changing one (`FLEET_KEYS_EXTRA` …) | `docs/dev/CLIENT.md` § 「One key + the panel」 |
+| every key of the old client (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …) | `docs/dev/CLIENT.md` § 「The keys」 |
+| the phone's keys (⌃空格 · F12 · ⌃] p, the letters you can add), tapping them in Termius or Blink | `docs/dev/CLIENT.md` § 「The keys: one, to open the panel」 · `docs/dev/CLIENT.md` § 「Termius (iPhone)」 |
+| a new session | `docs/dev/CLIENT.md` § 「A new session」 · `docs/dev/CLIENT.md` § 「A new session in one command」 |
+| 派一件事 / hand a task to a worker | `docs/dev/CLIENT.md` § 「派一件事」 |
+| a session's state, who is waiting on them | `docs/dev/CLIENT.md` § 「⌘P — sessions and actions」 (the 状态 column, the waiting ones first) · `docs/dev/STATE.md` § 「The states」 |
+| the session's shell | `docs/dev/CLIENT.md` § 「⌃\ — the session's shell, and back」 |
+| leaving, quitting, coming back to a session | `docs/dev/CLIENT.md` § 「放到后台 and 退出 fleet」 · `docs/dev/CLIENT.md` § 「会话结束了」 |
+| copying text out of a session | `docs/dev/CLIENT.md` § 「复制」 |
+| quota and usage | `docs/dev/CLIENT.md` § 「额度和用量在哪看」 |
+| cannot connect | `docs/dev/CLIENT.md` § 「连不上」 |
+| Chinese shows as `_` or boxes | `docs/dev/CLIENT.md` § 「中文乱码」 |
+| the list stopped updating, a row cannot be opened | `docs/dev/CLIENT.md` § 「列表停住」 |
 
 Read with a targeted range (`grep -n` the heading, then `sed -n` to the next one),
 not the whole file. Nothing in the table fits? `grep -n` across `docs/*.md` and
-`docs/TERMS.md` for the person's word. The docs do not say it either? Say so
+`docs/dev/TERMS.md` for the person's word. The docs do not say it either? Say so
 plainly — never invent a key, a menu item or a page — and file it bare with
 `mcp__fleet__file_issue` (a 「怎么用」 gap in `docs/`), no `spawn`.
 
@@ -87,7 +87,7 @@ link: the keys page `<入口>/fleet/keys`, 设备与 SSH `<入口>/connect`, 我
 | their first PR in their own repo, as a newcomer | `/fleet-onboard` |
 | Claude Code's own settings, permissions, hooks | `update-config` |
 | Claude Code's key bindings (`~/.claude/keybindings.json`) | `keybindings-help` |
-| which model / effort / MCP an agent gets, team and personal layers | `fleet config` (`docs/AGENT-CONFIG.md`) |
+| which model / effort / MCP an agent gets, team and personal layers | `fleet config` (`docs/dev/AGENT-CONFIG.md`) |
 | continue this conversation fresh, or in Codex | `/fleet-handoff` |
 | a closed session from earlier | `/fleet-history` |
 | fleet to behave differently | a new issue — this skill teaches what fleet does today |

@@ -8,7 +8,7 @@
 # bin/fleet-train-quarantine.sh plus fake tests whose colour a file sets:
 #   portability  the lint group — selected on every --changed run, touched by none
 #   alpha        names tool-a.sh — touched when tool-a.sh changes
-# Legs (TQ_LEG=<leg> runs one — docs/BREAK-IT.md's quarantine-* drills do):
+# Legs (TQ_LEG=<leg> runs one — docs/dev/BREAK-IT.md's quarantine-* drills do):
 #   one-red    red on ONE train only: a FAIL, the shard red, nothing quarantined
 #   two-red    red on the previous train (another sha) and again, untouched: QUARANTINE,
 #              the shard green; record files ONE issue and writes the entry (≤ 48 h,

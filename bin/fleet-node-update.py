@@ -140,7 +140,7 @@ Usage:
                                             the login's install an own copy again
                                             (`account release` runs it, issue #2774)
 
-Seams (sandbox tests, docs/BREAK-IT.md `node-update-half`): the supervisor's
+Seams (sandbox tests, docs/dev/BREAK-IT.md `node-update-half`): the supervisor's
 FLEET_NODE_STATE / FLEET_NODE_RUNTIME / FLEET_NODE_TEST / FLEET_NODE_PASSWD /
 FLEET_NODE_USERS, plus
   FLEET_NODE_ROOT            the runtime root (default: FLEET_NODE_RUNTIME's dir)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-seats-selftest.sh — the docs/BREAK-IT.md rows of who runs the
+# fleet-break-it-seats-selftest.sh — the docs/dev/BREAK-IT.md rows of who runs the
 # machine's services (issue #3556, EPIC #3500 C14 · 共同约定 11): each drill builds
 # a sandbox managed machine (FLEET_NODE_TEST=1 — a fake passwd, a unit directory, a
 # process table), puts the wrong thing back for real, and passes when

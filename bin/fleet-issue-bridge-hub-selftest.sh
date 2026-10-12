@@ -11,7 +11,7 @@
 #   E4 ELSEWHERE   no window on this node: exit 0, not seen, no forward, no revive.
 #   P1 BACKSTOP    the poll of a FLEET_TICKETS=hub repo asks the hub, never gh;
 #                  with the hub down it holds the watermark, and once the hub is
-#                  back the comment it missed is typed in (docs/BREAK-IT.md
+#                  back the comment it missed is typed in (docs/dev/BREAK-IT.md
 #                  ticket-hub-down) — then the watermark is the hub's own #max.
 #   R1 ROWS        fleet_bridge_rows: a hub-ticket repo is bridged by default,
 #                  FLEET_ISSUE_BRIDGE=0 still turns it off; a GitHub repo is not

@@ -2,7 +2,7 @@
 # fleet-tenant-scan.sh — run AS a freshly opened ordinary login: try every way
 # into the subscription, root and other people's sessions, and pass only when
 # each is refused (issue #2298, EPIC #2293 C7). bin/fleet-tenant-scan.py does
-# the work and documents the items; one table row per item, each a docs/BREAK-IT.md row.
+# the work and documents the items; one table row per item, each a docs/dev/BREAK-IT.md row.
 #
 #   fleet-tenant-scan.sh [--only a,b] [--json] [--hashes FILE] [--no-hub] [--no-drill] [--no-ports]
 #

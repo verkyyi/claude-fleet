@@ -12,7 +12,7 @@
 # It can also be run by hand on any fleet machine that is about to go down —
 # the planned-outage half of #1427: FIRST `fleet-node-maintenance.sh enter`
 # (so the hub stops placing on this machine and every `move plan` below
-# answers with another one), THEN this, once per login; docs/MULTI-MACHINE-OPS.md
+# answers with another one), THEN this, once per login; docs/dev/MULTI-MACHINE-OPS.md
 # is the runbook.
 #
 # What it does: for every live fleet of this login (fleet_sockets; or the

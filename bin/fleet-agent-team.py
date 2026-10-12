@@ -70,7 +70,7 @@ groups come from bin/fleet-hooks-emit.sh, the same source the launcher inlines,
 so the later `-c` carries the guards too. An event or tool Codex does not have
 is left out with a `note` line; with no personal hook not one line changes.
 Written badly, the personal layer never stops a session (issue #1862,
-docs/BREAK-IT.md): a cache that does not parse falls back to
+docs/dev/BREAK-IT.md): a cache that does not parse falls back to
 person-bundle.good.json; a server whose command is not on this machine is left
 out here (the item falls to the layer below; FLEET_PERSONAL_MCP_CHECK=0 skips
 the check); each is a `skip` line from apply and a `note` line from session (the

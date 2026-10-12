@@ -8,8 +8,8 @@ description: 入口端口（每人家机器上的第二个 sshd，默认 22022�
 占位：`<MAC>` 家机器 · `<NAME>` 这个人的地址名（`<NAME>.<入口给的子域>`）· `<PORT>` 路由器给这台的公网端口（机器节点路线
 `entry=<host>:<port>`，没有就是 22022）· `<LAN_IP>` 家机器有线网卡的内网地址 · `<STATE>` `/var/db/fleet-node`（Linux 节点照它的状态目录）·
 `<RT>` `/Library/Application Support/claude-fleet`。
-权威出处：`docs/MANAGED-NODE.md` §16「入口端口：只认入口登记的钥匙」及其两小节「外面能不能连上它」「你的地址指向你的家」；
-仓库根 `CLAUDE.md`「A fleet temp server binds 127.0.0.1」那一条的末段（唯一的例外）；`docs/BREAK-IT.md` 的 `entry-*` 行与
+权威出处：`docs/dev/MANAGED-NODE.md` §16「入口端口：只认入口登记的钥匙」及其两小节「外面能不能连上它」「你的地址指向你的家」；
+仓库根 `CLAUDE.md`「A fleet temp server binds 127.0.0.1」那一条的末段（唯一的例外）；`docs/dev/BREAK-IT.md` 的 `entry-*` 行与
 `linux-stale-lane-door-down`；`bin/fleet-node-supervisor.py entry …`。云上 Linux 节点本身见 [ack-linux-node]，机器入网见 [mac-node-enroll]。
 
 ## 什么时候用

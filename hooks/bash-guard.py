@@ -1221,7 +1221,7 @@ def check_direct(script, tool, masked_cmd, cwd):
     sys.stderr.write(
         "⛔ BLOCKED by ~/.claude/fleet/hooks/bash-guard.py: a worker session calls the "
         "fleet through its tools — use %s instead of %s (issue #1812).\n"
-        "Codex shows the same tool as `%s` → %s. Arguments: docs/FLEET-MCP.md.\n"
+        "Codex shows the same tool as `%s` → %s. Arguments: docs/dev/FLEET-MCP.md.\n"
         "Truly need the script itself? Prefix FLEET_ALLOW_DIRECT_SCRIPTS=1.\n"
         % ((tool, script) + tuple(tool[len("mcp__"):].split("__", 1)))
     )

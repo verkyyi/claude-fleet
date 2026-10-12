@@ -7,9 +7,9 @@ description: 在托管机器上给一个人开号、删号、回收备用登录�
 
 占位：`<HUB_URL>` 入口 · `<NODE>` 机器名 · `<LOGIN>` 登录名 · `<PRINCIPAL>` 入口里的人（如 `gh:<id>`）·
 `<ADMIN_LOGIN>` 机器的管理员登录。名字只用人给的，不猜。
-权威出处：`docs/SHARED-MACHINE.md` §1、§6、「The whole walk in one command (smoke test)」、「Offboarding a person」；
-`docs/MANAGED-NODE.md` §3（`spare_accounts`）、§6「删号要完全磁盘访问」「删号不再等这个授权：走本机 ssh」；
-Linux 机器见 `docs/MANAGED-LINUX.md`「Opening and closing a login from the hub」。
+权威出处：`docs/dev/SHARED-MACHINE.md` §1、§6、「The whole walk in one command (smoke test)」、「Offboarding a person」；
+`docs/dev/MANAGED-NODE.md` §3（`spare_accounts`）、§6「删号要完全磁盘访问」「删号不再等这个授权：走本机 ssh」；
+Linux 机器见 `docs/dev/MANAGED-LINUX.md`「Opening and closing a login from the hub」。
 
 ## 什么时候用
 

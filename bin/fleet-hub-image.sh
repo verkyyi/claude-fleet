@@ -4,7 +4,7 @@
 #   — which commit the hub (入口) image was built from, and how far it is from
 #   `refs/tags/stable` (issue #1696).
 #
-# The hub image is deployed by hand (docs/FLEET-HUB.md), and the only place its
+# The hub image is deployed by hand (docs/dev/FLEET-HUB.md), and the only place its
 # commit was written down was the image TAG (`prod-<sha>`), readable only with
 # cluster access — so "is the hub serving the client stable says it should?"
 # had no answer without kubectl, and #1692 guessed it wrong. The hub now serves

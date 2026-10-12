@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-thin-selftest.sh — docs/BREAK-IT.md rows thin-* (issue #3005,
+# fleet-break-it-thin-selftest.sh — docs/dev/BREAK-IT.md rows thin-* (issue #3005,
 # EPIC #2999 C8): a thin client has no loop of its own, so its home machine keeps
 # its lease and writes to its 看台's terminal itself. Its own file, like the
 # peerlink drills, on the cred runner (BREAK_CRED_LIB=1);

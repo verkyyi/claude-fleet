@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-cred-sep-selftest.sh — docs/BREAK-IT.md rows `cred-sep-proxy-off`
+# fleet-break-it-cred-sep-selftest.sh — docs/dev/BREAK-IT.md rows `cred-sep-proxy-off`
 # and `cred-sep-bootstrap-fails` (issue #2273): on 2026-10-07 m4's
 # `sudo -n bash …/fleet-credsep.sh machine install` moved the credentials before
 # the login's proxy was on, launchd refused the agent's new definition halfway,

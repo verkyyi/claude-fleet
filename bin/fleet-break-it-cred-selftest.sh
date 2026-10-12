@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-break-it-cred-selftest.sh — the cred-* rows of docs/BREAK-IT.md, done
+# fleet-break-it-cred-selftest.sh — the cred-* rows of docs/dev/BREAK-IT.md, done
 # for real (issue #1975, EPIC #1967 C8): the credential proxy breaking in every
 # way the batch added, and the session coming back.
 #
@@ -28,7 +28,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-DOC="$ROOT/docs/BREAK-IT.md"
+DOC="$ROOT/docs/dev/BREAK-IT.md"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-break-it-cred: python3 absent — SKIP\n'; exit 0; }
 command -v curl >/dev/null 2>&1 || { printf 'fleet-break-it-cred: curl absent — SKIP\n'; exit 0; }
 
@@ -507,7 +507,7 @@ cred_run_drills() {
 FAILS=0; PASSES=0
 for fn in $(sed -n 's/^\(drill_[a-z0-9_]*\)() *{.*/\1/p' "$1"); do
   r=$(printf '%s' "${fn#drill_}" | tr _ -)
-  grep -qF -- "| \`$r\` |" "$DOC" || { FAILS=$((FAILS + 1)); printf 'FAIL  lint: %s has no row in docs/BREAK-IT.md\n' "$fn"; continue; }
+  grep -qF -- "| \`$r\` |" "$DOC" || { FAILS=$((FAILS + 1)); printf 'FAIL  lint: %s has no row in docs/dev/BREAK-IT.md\n' "$fn"; continue; }
   if [ -n "${BREAK_ONLY:-}" ]; then case " $BREAK_ONLY " in *" $r "*) ;; *) continue ;; esac; fi
   SECS='' CAP='' WHY='' WHAT=''
   if "$fn" && [ -n "$SECS" ] && le "$SECS" "$CAP"; then

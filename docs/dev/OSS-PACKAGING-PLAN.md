@@ -1,7 +1,7 @@
 # claude-fleet + ccquota — 小团队开源方案打包计划
 
-> 数据快照 2026-09-12/13。调研底稿：[RESEARCH-TEAMCLI.md](RESEARCH-TEAMCLI.md)、
-> [RESEARCH-TEAM-AGENT-LANDSCAPE.md](RESEARCH-TEAM-AGENT-LANDSCAPE.md)。
+> 数据快照 2026-09-12/13。调研底稿 `RESEARCH-TEAMCLI.md`、
+> `RESEARCH-TEAM-AGENT-LANDSCAPE.md` 已随 #3576 删除（git 历史里还在）。
 
 ## 结论
 
@@ -62,6 +62,32 @@
 [成本对照](#风险登记--成本对照不阻塞设计)：按每美元额度算，席位制未必划算。
 
 ## 三、三块拆分
+
+> **定案（2026-10-12，发起人拍板，EPIC #3569 · 本章由 #3576 更新）** —— 下面 ①②③ 是
+> 2026-09 的原始分析，保留作来由；今天按这里执行：
+>
+> - **① ccquota 本批不拆仓**，和 claude-fleet 一起发更简单；等第一个只想要额度统计的
+>   外部用户出现再拆（拆的时候 `tokenledger/` 整目录搬走，路径约定不变）。
+> - **② 瘦身已执行（#3576）**：
+>   - 挪：写给开发者的文档全部进 `docs/dev/`；`docs/` 只留索引 `docs/README.md`
+>     与对外的 `docs/public/`（README 的配图在 `docs/public/img/`，对外文档由 #3575 起补）。
+>   - 删（git 历史里还在）：研究笔记 `RESEARCH-CRED-PROXY.md` · `RESEARCH-TEAMCLI.md` ·
+>     `RESEARCH-TEAM-AGENT-LANDSCAPE.md` · `SUBSCRIPTION-FAILOVER-PLAN.md`、一次性的
+>     验收 / 演练 / 审计记录 `ROLES-ACCEPTANCE.md` · `MANAGED-LINUX-DRILL.md` ·
+>     `DEFAULTS-AUDIT.md`（`tokenledger/docs/superpowers/` 随 #3659 删）；退役程序
+>     `extras/cred-proxy/`（研究原型，从不进安装包）与过了兼容期的安静壳
+>     `bin/fleet-orchestrator.sh` · `bin/fleet-steward.sh` · `bin/fleet-dispatch.sh`；
+>     根目录误入的 `trap`、`Authorization: FleetDebug drill-check`（并进 `.gitignore`）。
+>   - 短样例：191 KB 的 `fleet.conf.example` 改名 `conf/fleet.conf.reference`（仍是
+>     配置面板读的那一份全量清单），根目录的 `fleet.conf.example` 由
+>     `bin/fleet-conf-example.sh` 从它生成，只列常用项（约 2 KB）。
+>   - 守住：`bin/docs-links-selftest.sh` 每个 PR 读一遍所有文档链接；
+>     `conf-surface-selftest.sh` 核对短样例与全量清单一致。
+>   - 以后再拆的：`tokenledger/`（见 ①）；`extras/managed-node`、`extras/spot-node`
+>     这类只给托管运营者用的部件，随运维插件（#3586 / #3587）再定。
+> - **③ 团队层不走 git 仓库模型**：已经做成入口发的团队层（`/v1/fleet/team-bundle`，
+>   #1726，新版本由入口推送 #1899）——fleet 默认 < 团队 < 本机，手改的永远赢；
+>   teamai-cli 的 git 模式不采用。
 
 ### ① ccquota —— 立刻可独立发（成本最低、护城河最深）
 
@@ -263,7 +289,7 @@ N 份池化：任一份撞顶 → 新 spawn 落到还有余量的那份,fleet �
 
 #### ③ 跨 provider 溢出 —— 双 agent 的真正商业价值
 
-2026-09-17 源码复核与实施边界见[订阅额度续接方案](SUBSCRIPTION-FAILOVER-PLAN.md)：
+2026-09-17 源码复核与实施边界见订阅额度续接方案（`SUBSCRIPTION-FAILOVER-PLAN.md`，#3576 删除，git 历史里还在）：
 复用 ccquota、fleet-account、quotawatch、migrate、transfer 和 loop，扩展到运行中
 会话及 Claude ⇄ Codex 两个方向。以下是目标行为，跨类自动切换尚未完成。
 
@@ -732,7 +758,7 @@ ccquota 不需要等 fleet。它已经公开、已经有 `team --set` 的团队�
 | ~~[#598](https://github.com/verkyyi/claude-fleet/issues/598)~~ | ~~相位错开 `5h / N`~~ | ✅ **已完成并上线**（PR #617）—— 顺带挖出并修掉更根本的 bug，见下 |
 | [#600](https://github.com/verkyyi/claude-fleet/issues/600) | 池内 token 打标签 + 接 ccquota team 归因 | #598 要读它的窗口起点 |
 | [#601](https://github.com/verkyyi/claude-fleet/issues/601) | 争用策略：issue 优先级 + 人均熔断 | 独立 |
-| [#599](https://github.com/verkyyi/claude-fleet/issues/599) | **跨 provider 溢出；方案扩展为运行中会话双向续接** | 复用现有 transfer/loop，见[审查方案](SUBSCRIPTION-FAILOVER-PLAN.md) |
+| [#599](https://github.com/verkyyi/claude-fleet/issues/599) | **跨 provider 溢出；方案扩展为运行中会话双向续接** | 复用现有 transfer/loop，见审查方案（已删，git 历史） |
 | [#602](https://github.com/verkyyi/claude-fleet/issues/602) | Codex 侧多 home 池化：接入已有 ccquota profile/额度能力 | 完整双向“同类优先”策略的前置；认证与采集已有基础 |
 
 > 顺序调整：原定 18 先做（「其余都要读这个标签」），但查证发现 `@cc_account`
