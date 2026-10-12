@@ -57,7 +57,9 @@ change() {   # change <name> <edit> — a commit on top of base: this train's di
 red()   { : > "$T/red.$1"; }
 green() { rm -f "$T/red.$1"; }
 NOW=2026-10-11T08:00:00Z
-FUTURE=2026-10-12T08:00:00Z PAST=2026-10-10T08:00:00Z
+# FUTURE is read against the real clock too (a train run has no --now): far out,
+# never a date the suite outlives (2026-10-12T08:00Z went red the day it passed).
+FUTURE=2099-01-01T00:00:00Z PAST=2026-10-10T08:00:00Z
 
 # train <args…> — one shard of a train: --changed base + the given options
 train() {

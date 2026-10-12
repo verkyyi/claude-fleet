@@ -1306,8 +1306,21 @@ def full(screen, pane, session=""):
             query, at, top = query + key, 0, 0
 
 
+def set_locale():
+    """The environment's locale, else C.UTF-8, else C (issue #3514): a LANG that
+    names a locale this machine lacks (en_US.UTF-8 on a slim Linux image) made
+    setlocale raise — the 看台's key tables were never built and ⌘P / ⚡ died at
+    start, silently, on every thin client of the login."""
+    for name in ("", "C.UTF-8", "C.utf8", "C"):
+        try:
+            return locale.setlocale(locale.LC_ALL, name)
+        except locale.Error:
+            continue
+    return ""
+
+
 def main(argv):
-    locale.setlocale(locale.LC_ALL, "")
+    set_locale()
     if argv[:1] in (["view-keys"], ["go"], ["view-rows"], ["view-order"]) or "--view" in argv:
         # the 看台's half, on the home machine (issue #3000, EPIC #2999 C2) — the
         # client never comes here, and never ships fleet_view.py

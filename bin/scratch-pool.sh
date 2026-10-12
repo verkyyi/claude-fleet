@@ -81,7 +81,7 @@
 #
 # Config (per-fleet conf; a repo overlay overrides any of it):
 #   FLEET_SCRATCH_POOL       how many warm entries to keep per slot. Default 1
-#                            (issue #2233); 0 or "" = OFF, and then every command
+#                            (issue #2233), the HOME slot 2 (issue #3514); 0 or "" = OFF, and then every command
 #                            behaves as it did before the default changed.
 #   FLEET_POOL_MAX_AGE       seconds before an unclaimed entry is retired (1800).
 #                            A warm worktree is a snapshot of origin/<base> taken
@@ -150,7 +150,11 @@ POOL=$(fleet_pool_session "$SESS")
 # spawn or a diskguard tick in some unrelated test would otherwise warm real agent
 # sessions in the background, past that test's end. A test that wants the pool
 # sets FLEET_SCRATCH_POOL in its fleet conf, as the pool's own selftests do.
-POOL_DEFAULT=1; [ -n "${FLEET_SELFTEST_ROOT:-}" ] && POOL_DEFAULT=0
+# The HOME slot — a session of no repo, what ⚡ / ⌘N open — keeps 2 (issue #3514:
+# a claim takes one and the refill is a ~10 s warm-up, so a second ⌘N within it
+# went cold — 20 s on a loaded home). FLEET_SCRATCH_POOL still sets both.
+POOL_DEFAULT=1; POOL_HOME_DEFAULT=2
+[ -n "${FLEET_SELFTEST_ROOT:-}" ] && POOL_DEFAULT=0 && POOL_HOME_DEFAULT=0
 
 # REPO: the one slot this pass serves — a hosted repo, or `-` for HOME (#2233).
 # The pool is per repo, one road whatever the count (#1941). With no --repo,
@@ -165,7 +169,7 @@ if [ -z "$REPO_ARG" ]; then
       if [ "$CMD" = ensure ] && [ "$DELAY" = 1 ]; then
         while IFS= read -r _r; do
           [ -n "$_r" ] || continue
-          if [ "$_r" = - ]; then _w=${FLEET_SCRATCH_POOL-$POOL_DEFAULT}
+          if [ "$_r" = - ]; then _w=${FLEET_SCRATCH_POOL-$POOL_HOME_DEFAULT}
           else _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL-$POOL_DEFAULT}" ); fi
           case "$_w" in ''|*[!0-9]*|0) continue ;; esac
           sleep "${FLEET_POOL_REFILL_DELAY:-45}"; break
@@ -207,6 +211,7 @@ fi
 empty() { if [ "$CMD" = claim ] && [ "$NEWCLAIM" = 1 ]; then exit 3; fi; exit 0; }
 if [ "$REPO_ARG" = - ]; then
   REPO=-                                             # HOME: the fleet conf already loaded
+  POOL_DEFAULT=$POOL_HOME_DEFAULT
 else
   REPO=$(fleet_norm_repo "$REPO_ARG")
   [ -n "$REPO" ] || empty                            # no repo hosted: no repo pool

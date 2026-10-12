@@ -156,6 +156,7 @@ the next read. A lost row (`!`) sends nothing: 「<机器> 失联，做不了 ·
 """
 import curses
 import getpass
+import hashlib
 import importlib.util
 import shlex
 import json
@@ -271,13 +272,43 @@ def here_label(row):
 _WORDS = {}
 
 
+def words_key():
+    """What the language table's dump depends on (issue #3514): the table itself
+    and every input fleet_ui_lang reads — FLEET_UI_LANG, the person's choice
+    file, FLEET_VIEW_LANG (set or not), the locale. One file per answer."""
+    table = Path(__file__).absolute().parent / "fleet-ui-lang.sh"
+    person = os.environ.get("FLEET_UI_PERSON_FILE") or os.path.join(
+        os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "person-bundle.json")
+    parts = []
+    for f in (table, person):
+        try:
+            st = os.stat(f)
+            parts.append("%s:%d:%d" % (f, st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append("%s:-" % f)
+    for k in ("FLEET_UI_LANG", "FLEET_VIEW_LANG", "LC_ALL", "LC_MESSAGES", "LC_CTYPE", "LANG"):
+        parts.append("%s=%s" % (k, os.environ.get(k, "\1")))
+    return hashlib.sha1("\0".join(parts).encode("utf-8", "replace")).hexdigest()[:16]
+
+
 def say(key, *args):
     if not _WORDS:
+        # The dump is a shell run (~70 ms, seconds on a throttled box) the popup paid
+        # before its first frame on every ⌘P (issue #3514): kept per words_key().
+        kept = dash_global() / ("view-words-" + words_key())
         try:
-            raw = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "dump", "view_", "reap_menu_"],
-                                 capture_output=True, text=True, timeout=5).stdout.split("\0")
-        except (OSError, subprocess.TimeoutExpired):
-            raw = []
+            raw = kept.read_text(encoding="utf-8").split("\0")
+        except (OSError, ValueError):
+            raw = None
+        if not raw or len(raw) < 2:
+            try:
+                out = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "dump", "view_", "reap_menu_"],
+                                     capture_output=True, text=True, timeout=5).stdout
+            except (OSError, subprocess.TimeoutExpired):
+                out = ""
+            raw = out.split("\0")
+            if out:
+                atomic_write(kept, out)
         _WORDS.update({k: v.replace("\1", "%s") for k, v in zip(raw[0::2], raw[1::2])})
         _WORDS.setdefault("_", "")
     text = _WORDS.get(key, key)
@@ -450,20 +481,57 @@ def hub_reread(fleet):
         pass
 
 
-def produce(fleet):
+def rows_cache(fleet):
+    # a producer seam (FLEET_VIEW_ROWS_CMD, the selftests') keeps its own copy
+    seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
+    tag = "-" + hashlib.sha1(seam.encode("utf-8", "replace")).hexdigest()[:10] if seam else ""
+    return dash_global() / ("view-rows-" + re.sub(r"[^A-Za-z0-9_.@-]", "_", fleet) + tag)
+
+
+def atomic_write(path, text):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(".%s.%d" % (path.name, os.getpid()))
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def produce(fleet, kept=False):
     """tmux-dashboard-rows.sh --sidebar, every subtree open: the rows the old list
     drew, the same producer (it reads remote_<sess>, so other machines come too).
-    entries() runs hub_fresh before it, unless told not to (#3311)."""
+    entries() runs hub_fresh before it, unless told not to (#3311).
+    Every read is kept (view-rows-<fleet>); kept=True — the popup's first frame —
+    answers that copy when it is younger than FLEET_VIEW_ROWS_KEEP (600 s) instead
+    of running the producer (issue #3514: 150-350 ms, seconds on a throttled box,
+    before anything was drawn); the Refresh thread's first read, at once, replaces
+    it. FLEET_VIEW_ROWS_KEEP=0 always runs it — the default under a producer seam
+    (FLEET_VIEW_ROWS_CMD), whose rows a selftest changes between two popups."""
+    path = rows_cache(fleet)
+    if os.environ.get("FLEET_VIEW_ROWS_CMD") and "FLEET_VIEW_ROWS_KEEP" not in os.environ:
+        kept = False
+    if kept:
+        try:
+            if 0 <= time.time() - path.stat().st_mtime < fenv("FLEET_VIEW_ROWS_KEEP", 600):
+                text = path.read_text(encoding="utf-8", errors="replace")
+                if text:
+                    return text
+        except OSError:
+            pass
     env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--sidebar"]
     try:
         # a cell cut mid-character (bash slices bytes with no UTF-8 locale) is one
         # row's blemish, never the whole list's loss (issue #3444)
-        return subprocess.run(argv, env=env, capture_output=True, encoding="utf-8", errors="replace",
-                              timeout=10).stdout
+        out = subprocess.run(argv, env=env, capture_output=True, encoding="utf-8", errors="replace",
+                             timeout=10).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
+    if out:
+        atomic_write(path, out)
+    return out
 
 
 def windows(fleet):
@@ -692,7 +760,7 @@ def entries(vid, now=None, hub=True):
     section, repo = "", ""
     if hub:     # hub=False: the cache as it is — the popup's first paint (#3311)
         hub_fresh(fleet)
-    for line in produce(fleet).splitlines():
+    for line in produce(fleet, kept=not hub).splitlines():
         f = line.split(US)
         if f[0] == "hdr":
             kind = f[1] if len(f) > 1 else ""
@@ -2311,10 +2379,14 @@ def panel_commands():
     (issue #3327: the shell is the row's Tab, a blank session is ⚡ on no words)."""
     raw = os.environ.get("FLEET_PANEL_COMMANDS")
     if raw is None:
+        # fleet-conf.sh line's own grep, without its bash and fleet-lib.sh (issue
+        # #3514: ~50 ms before every ⌘P's first frame): the lines of fleet.conf
+        # that set it, the last one wins.
+        conf = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "fleet.conf")
         try:
-            line = subprocess.run(["bash", str(Path(__file__).absolute().parent / "fleet-conf.sh"), "line",
-                                   "FLEET_PANEL_COMMANDS"], capture_output=True, text=True, timeout=5).stdout
-        except (OSError, subprocess.TimeoutExpired):
+            with open(conf, encoding="utf-8", errors="replace") as fh:
+                line = "".join(l for l in fh if re.match(r"[ \t]*(export[ \t]+)?FLEET_PANEL_COMMANDS=", l))
+        except OSError:
             line = ""
         m = re.search(r"FLEET_PANEL_COMMANDS=(['\"]?)([^'\"\n]*)\1", line.strip().splitlines()[-1] if line.strip() else "")
         raw = m.group(2) if m else ""

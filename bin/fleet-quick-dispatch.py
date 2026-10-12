@@ -356,9 +356,22 @@ def opts(argv):
     return out
 
 
+def set_locale():
+    """The environment's locale, else C.UTF-8, else C (issue #3514): a LANG that
+    names a locale this machine lacks (en_US.UTF-8 on a slim Linux image) made
+    setlocale raise — the 看台's key tables were never built and ⌘P / ⚡ died at
+    start, silently, on every thin client of the login."""
+    for name in ("", "C.UTF-8", "C.utf8", "C"):
+        try:
+            return locale.setlocale(locale.LC_ALL, name)
+        except locale.Error:
+            continue
+    return ""
+
+
 def main(argv):
     global TEXT
-    locale.setlocale(locale.LC_ALL, "")
+    set_locale()
     TEXT = load_text()
     compose.TEXT = TEXT
     if argv[:1] == ["pick"]:

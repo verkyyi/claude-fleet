@@ -29,6 +29,7 @@
 #   R–X. the slots of #2233: the node's claim (`--repo <slug|-> --agent`, exit 3),
 #        old-config entries never handed out, no refill on a busy machine, shrink,
 #        pool off, `--status`, the claim's fast-forward to origin/<base>
+#   W2. default sizes: a repo slot 1, the HOME slot 2 (#3514)
 #   Y. a warm entry that never opens gives its admission back (#2502)
 #   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
 #
@@ -428,6 +429,14 @@ printf '%s\n' "$out" | grep -qx 'slot o/a agent=claude want=1 ready=1' \
   && printf '%s\n' "$out" | grep -qx 'slot HOME agent=claude want=1 ready=1' \
   && printf '%s\n' "$out" | grep -q '^@21 .* repo=HOME want=1$' || fail "W --status lists every slot" "$out"
 ok "W --status (no session): a slot line per repo and HOME"
+
+# W2: the default sizes (issue #3514) — no FLEET_SCRATCH_POOL, outside the gate:
+# a repo slot keeps 1, the HOME slot (⚡ / ⌘N) 2.
+reset_state; mkfleet; mkconf 1; sed -i.bak '/^FLEET_SCRATCH_POOL=/d' "$FLEET_CONF_DIR/fleets/tf/conf"
+out=$(env -u FLEET_SELFTEST_ROOT FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ' \
+  && printf '%s\n' "$out" | grep -q '^slot HOME agent=claude want=2 ' || fail "W2 default sizes: repo 1, HOME 2" "$out"
+ok "W2 default: a repo slot keeps 1, HOME keeps 2"
 
 # X: a warm worktree is brought to origin/<base> before it is handed out; one git
 # cannot fast-forward (commits of its own) is retired, never handed out.

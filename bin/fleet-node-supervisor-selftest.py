@@ -73,6 +73,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 SUP = os.path.join(BIN, "fleet-node-supervisor.py")
@@ -818,6 +819,14 @@ class H_Accounts(Sandbox):
         self.assertEqual(e["cmd"][4], "/dev/null")
         self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/base-sync.launchd.log")
         self.assertNotIn("__HOME__", json.dumps(e))
+        # The locale (issue #3514): the plists say en_US.UTF-8, which a slim Linux
+        # image lacks — there every account unit gets C.UTF-8; macOS keeps its own.
+        unit = dict(units["base-sync"], env=dict(units["base-sync"].get("env") or {},
+                                                 LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"))
+        for plat, want in (("linux", "C.UTF-8"), ("darwin", "en_US.UTF-8")):
+            with mock.patch.object(fns, "NODE_LANG", "en_US.UTF-8" if plat == "darwin" else "C.UTF-8"):
+                e = fns.account_entry(unit, "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
+                self.assertEqual((e["env"]["LANG"], e["env"]["LC_ALL"]), (want, want), plat)
 
     def test_runs_as_account_and_isolated(self):
         self.acct_script("alice", "probe.sh",
