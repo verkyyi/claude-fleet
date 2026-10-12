@@ -6,7 +6,8 @@
 #   fleet-conf.sh set-host 1|0           write FLEET_HOST (creates the file; drops an old FLEET_ROLE line)
 #   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak);
 #                                        fills CCQUOTA_FLEET / FLEET_HUB_URL from node.env (#2116);
-#                                        moves the role knobs into the person's layer (#2788)
+#                                        moves the role knobs into the person's layer (#2788);
+#                                        pins every hosted repo's FLEET_TICKETS (#3739)
 #   fleet-conf.sh set-hub <url> [--host] write FLEET_HUB_URL (+ FLEET_HOST=1 with --host)
 #   fleet-conf.sh line <KEY>             print KEY's assignment line(s) as written (exit 1 = none)
 #   fleet-conf.sh set-line <KEY> <line>  put <line> where KEY's line is, else under [common] (#2134)
@@ -61,7 +62,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 FLEET_SKIP_GLOBAL_CONF=1 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
-usage() { sed -n '4,14p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,17p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
@@ -712,6 +713,41 @@ EOF
   return 0
 }
 
+# ---- every repo's ticket home is written down (issue #3739) ----------------------
+# A NEW repo's tickets default to the hub on a login that reaches one
+# (fleet_repo_register), while an unset FLEET_TICKETS still reads github. So every
+# repo registered before that — a repos/<slug>.conf with no FLEET_TICKETS line — is
+# pinned to where its tickets live now (its fleet conf's value, else github): one
+# appended comment + line, the rest of the file byte for byte, and one line out.
+# Runs after migrate_repos, so an old-layout conf's repo is in repos/ by then.
+# Idempotent: a conf that has the line is never touched.
+TICKETS_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_TICKETS[[:space:]]*='
+migrate_tickets() {
+  local DRY="$1" QUIET="$2" s c f r home pinned=''
+  while IFS=$'\t' read -r s c; do
+    [ -n "$s" ] || continue
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      f=$(fleet_repo_conf_file "$s" "$r")
+      [ -f "$f" ] && ! grep -Eq "$TICKETS_RE" "$f" || continue
+      home=$(fleet_ticket_home "$r" "$s")
+      if [ "$DRY" = 1 ]; then
+        printf 'fleet-conf: would pin %s'\''s tickets to %s in %s\n' "$r" "$home" "${f#$CD/}"; continue
+      fi
+      { printf '# pinned by fleet-conf.sh migrate %s (issue #3739): hosted before new repos took the hub\n' \
+          "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'FLEET_TICKETS="%s"\n' "$home"; } >> "$f" || die "cannot write $f"
+      pinned="$pinned $r=$home"
+    done <<REPOS
+$(fleet_repos "$s")
+REPOS
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  [ -n "$pinned" ] && [ "$QUIET" = 0 ] && echo "fleet-conf: ticket home pinned for every existing repo:$pinned"
+  return 0
+}
+
 # ---- retired keys are commented out (issue #3120) --------------------------------
 # The autofill dispatcher is gone (EPIC #3111 C9), and with it FLEET_AUTOFILL,
 # FLEET_AUTOFILL_MAX_PER_TICK and FLEET_AUTOFILL_NODE. A line still setting one — in
@@ -766,6 +802,7 @@ case "$cmd" in
     rescue_stranded "$DRY" "$QUIET"
     hub_fill "$DRY" "$QUIET"
     migrate_repos "$DRY" "$QUIET"
+    migrate_tickets "$DRY" "$QUIET"
     migrate_retired "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;

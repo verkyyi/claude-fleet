@@ -2,7 +2,7 @@
 # fleet-repo.sh — the repos a fleet hosts (issue #788).
 #
 #   fleet-repo.sh list   [--session <sess>]
-#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>]
+#   fleet-repo.sh add    [--session <sess>] <owner/repo | git address> [<checkout-dir>] [--base <branch>] [--as <ns/name>] [--tickets hub|github]
 #   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
 #   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #   fleet-repo.sh fold   <from-session> --into <session> [--dry-run] [--wait]
@@ -19,9 +19,13 @@
 # `add` is fleet_repo_register (fleet-lib.sh, issue #1104) — the one implementation
 # fleet-up.sh shares: reuse the checkout if it already is that repo, else clone it;
 # resolve the base branch (#603); write the overlay; then the follow-through —
-# trust warning, daemon wake, collector kick. Its stdout is
+# trust warning, daemon wake, collector kick. Where its tickets (issues, comments,
+# labels, EPIC records — never its code or PRs) live (issue #3739): a login that
+# reaches a hub writes FLEET_TICKETS="hub", one that does not writes nothing
+# (github); `--tickets hub|github` says it outright. Its stdout is
 # ONE result token (added:<slug> · refused:hosted · refused:origin-mismatch ·
-# refused:not-a-checkout · refused:invalid-repo · failed:clone · failed:write);
+# refused:not-a-checkout · refused:invalid-repo · refused:invalid-tickets ·
+# failed:clone · failed:write);
 # every human line goes to stderr.
 #
 # `remove` deletes a repo's overlay — any repo, the last one too: one command, no
@@ -50,7 +54,7 @@ die()   { echo "fleet-repo: $*" >&2; exit 1; }
 usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
-SESS=""; REPO=""; DIR=""; BASE=""; AS=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
+SESS=""; REPO=""; DIR=""; BASE=""; AS=""; TICKETS=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
 INTO=""; DRY=0; WAIT=0
 if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi
 while [ $# -gt 0 ]; do
@@ -58,6 +62,7 @@ while [ $# -gt 0 ]; do
     --session) [ $# -ge 2 ] || usage; SESS="$2"; shift 2 ;;
     --base)    [ $# -ge 2 ] || usage; BASE="$2"; shift 2 ;;
     --as)      [ $# -ge 2 ] || usage; AS="$2"; shift 2 ;;
+    --tickets) [ $# -ge 2 ] || usage; TICKETS="$2"; shift 2 ;;
     --window)  [ $# -ge 2 ] || usage; WIN="$2"; shift 2 ;;
     --worktree) [ $# -ge 2 ] || usage; WT="$2"; shift 2 ;;
     --tsv)     TSV=1; shift ;;
@@ -364,7 +369,9 @@ PLAN
   if [ "$hosted" = 0 ]; then
     # No collector kick (fleet_repo_register): its restore snapshot would race the
     # side-store archive below. Its stdout token is for scripts.
-    _FLEET_REGISTER_NO_KICK=1 bash "$0" add --session "$SESS" "$SRC_REPO" "$src_main" --base "$src_base" >/dev/null \
+    # Its tickets stay where they were (issue #3739): never the new-repo default.
+    _FLEET_REGISTER_NO_KICK=1 bash "$0" add --session "$SESS" "$SRC_REPO" "$src_main" --base "$src_base" \
+      --tickets "$(fleet_ticket_home "$SRC_REPO" "$FROM")" >/dev/null \
       || die "add failed"
     if [ -n "$carry" ]; then
       local f; f=$(fleet_repo_conf_file "$SESS" "$SRC_REPO")
@@ -457,7 +464,8 @@ EOF
     [ -n "$REPO" ] || usage
     # One implementation (fleet_repo_register, issue #1104): stdout is its result
     # token, the human lines are on stderr.
-    fleet_repo_register "$SESS" "$REPO" ${DIR:+"$DIR"} ${BASE:+--base "$BASE"} ${AS:+--as "$AS"}
+    fleet_repo_register "$SESS" "$REPO" ${DIR:+"$DIR"} ${BASE:+--base "$BASE"} ${AS:+--as "$AS"} \
+      ${TICKETS:+--tickets "$TICKETS"}
     exit $?
     ;;
 

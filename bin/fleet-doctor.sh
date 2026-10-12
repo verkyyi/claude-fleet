@@ -3735,6 +3735,7 @@ fi
 #   trust   Claude Code's trust pre-grant for FLEET_MAIN (#563)
 #   deploy  FLEET_DEPLOY_REF / FLEET_DEPLOY_CHECK are usable (#541)
 #   labels  the canonical fleet label set is seeded on the repo (#333)
+#   tickets where its tickets live — the hub or GitHub (#3739)
 # — because the check used to read the fleet conf alone, so a broken checkout or a
 # missing trust grant for any OTHER hosted repo went unnoticed until a spawn hung.
 #
@@ -3936,6 +3937,17 @@ EOF
       warn labels "$r: missing fleet labels:$missing — filing an issue with one fails; fix: $(dirname "$0")/fleet-labels-seed.sh --repo $r"
     fi
   fi
+
+  # tickets — where this repo's issues / comments / labels live (issue #3739): the
+  # hub or GitHub (its code and PRs stay on its forge either way). Unset = github,
+  # which `fleet-conf.sh migrate` writes down for a repo hosted before the default.
+  rtk=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_TICKETS)
+  case "$rtk" in
+    hub)    pass tickets "$r: tickets on the hub (FLEET_TICKETS=hub) — change: FLEET_TICKETS in $rb_src" ;;
+    github) pass tickets "$r: tickets on GitHub (FLEET_TICKETS=github) — change: FLEET_TICKETS in $rb_src" ;;
+    '')     pass tickets "$r: tickets on GitHub (FLEET_TICKETS unset; \`fleet-conf.sh migrate\` writes it down)" ;;
+    *)      warn tickets "$r: FLEET_TICKETS=\"$rtk\" is neither hub nor github — read as github; fix it in $rb_src" ;;
+  esac
 
   rs_n=$((rs_n + 1))
   if [ -z "$rb_bad" ]; then rs_list="${rs_list:+$rs_list · }$r ✓"

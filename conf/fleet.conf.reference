@@ -181,10 +181,14 @@ FLEET_BASE_BRANCH="main"
 
 # Where a repo's tickets live (issue #3595, EPIC #3570): `hub` keeps them on the
 # hub (/v1/fleet/tickets — opened, read, commented, claimed and closed without
-# GitHub; ids read `hub:<owner/name>#<N>`), anything else (the default) on GitHub
-# as always. Set it in the repo's overlay before its first ticket: ONE repo has ONE
-# home, never two numberings. bin/fleet-ticket.sh is the door that reads it
-# (fleet_ticket_home).
+# GitHub; ids read `hub:<owner/name>#<N>`), anything else (unset) on GitHub. Only
+# the tickets move — code and PRs stay on the repo's forge. A repo added on a login
+# that reaches a hub (`fleet-repo.sh add`, fleet-up) is written `hub`; on one that
+# does not, nothing; `add --tickets hub|github` says it outright (issue #3739). A
+# repo hosted before that is pinned to its current home by `fleet-conf.sh migrate`.
+# Set it in the repo's overlay before its first ticket: ONE repo has ONE home,
+# never two numberings. bin/fleet-ticket.sh is the door that reads it
+# (fleet_ticket_home); `fleet doctor`'s tickets row shows each repo's.
 # @label=Where tickets live @group=bridge @tier=internal @scope=fleet @edit=no
 #FLEET_TICKETS=github
 
