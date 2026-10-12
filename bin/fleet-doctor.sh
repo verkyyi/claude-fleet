@@ -1954,6 +1954,17 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     1) fail tenants "a taken-over login can do what only an admin may — $tline. A tenant has no admin and no sudo: take it out of the admin group / sudoers (\`sudo dseditgroup -o edit -d <login> -t user admin\`), or, for an admin's own login, \`sudo fleet-node-supervisor.py account release <login>\`; detail: \`fleet-node-supervisor.py tenants\`" ;;
     3) warn tenants "$tline — run \`sudo fleet-node-supervisor.py tenants\` for the whole reading" ;;
   esac
+  # A personal account runs no fleet machine or management service (issue #3556,
+  # EPIC #3500 C14 · 共同约定 11): the daemon, the root core, the machine's node
+  # program, the shared credential proxy are root's or a role account's; the admin
+  # agent moves to _fleetadmin (C15). Read from the process table and the system's
+  # unit files. Not a managed machine ⇒ no row.
+  sline=$(python3 "$_nsup" seats --check 2>/dev/null); src=$?
+  case "$src" in
+    0) pass seats "$sline" ;;
+    1) fail seats "$sline. A person's login is never a machine service's: put it back under root / its role account (\`sudo fleet node install\` converges the daemon), or move the unit off that login; detail: \`fleet-node-supervisor.py seats --json\`" ;;
+    3) warn seats "$sline" ;;
+  esac
   # The entry port (issue #3070, EPIC #3067 C3): the second sshd the person's
   # address reaches — the hub's list version against this machine's, when it last
   # pulled. WARN: a list an hour behind, a config sshd refused, an sshd without

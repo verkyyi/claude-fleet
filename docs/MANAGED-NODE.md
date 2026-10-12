@@ -865,3 +865,24 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   `root-core-wrong-peer` · `root-core-unsigned-switch`（`bin/fleet-break-it-core-selftest.sh`）；
   `bin/fleet-node-core-selftest.sh`，`fleet-node-supervisor-selftest.py` 的 `T_RootCore`
   （有核心）与其余各组（无核心）。
+
+## 21. 个人账号不跑整机服务（EPIC #3500 C14，#3556）
+
+共同约定 11：接入口指令的、握凭据的、握 root 的是三个不同的账号，**个人账号不跑 fleet
+整机或管理服务**。`fleet doctor` 的 `seats` 行（`fleet-node-supervisor.py seats [--json] [--check]`）
+就是这句话的检查，只读人人可读的东西——进程表和系统的单元文件，从不看家目录：
+
+- **整机服务**：`/Library/LaunchDaemons`（Linux `/etc/systemd/system`）里 `UserName` / `User=`
+  是某个人的 `com.claude-fleet.*` 单元；或以某个人身份跑的节点守护
+  （`fleet-node-supervisor.py run`）、root 核心（`fleet-node-core.py serve`）、机器的节点程序
+  （`ccquota agent --machine`）、共享凭据代理（`fleet-credsep-launch.py shared`）、整机
+  memguard（`fleet-memguard.sh --daemon`）。有一个 ⇒ FAIL，写明是谁、哪个（单元文件 · pid）。
+- **管理服务**：管理员登录名下的 `com.ccquota.agent.*`（单元文件，含 credsep 启动器的
+  `agent <login>`）或在跑的 `ccquota agent`。它要搬进自己的角色账号 `_fleetadmin`（C15 #3557）：
+  那个账号建好之前只 WARN（退出 3），之后同样 FAIL。
+- 「个人账号」= uid ≥ 500（Linux 1000）、不是 root、不是 `_…` 系统账号、不是 fleet 的角色账号
+  （`_fleetnode` · `_fleetcred` · `_fleetadmin` 及其 Linux 名）。
+- 不是托管机器（没有 `com.claude-fleet.node`）⇒ 没有这一行。
+
+BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-selftest.sh`）。
+节点守护本身降成 `_fleetnode`、整机巡检只跑一份，是本单其余的部分（见 #3556 的子单）。
