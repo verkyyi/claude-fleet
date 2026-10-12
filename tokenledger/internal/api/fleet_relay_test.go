@@ -161,6 +161,15 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(childHome, "origin"), []byte(parentWID), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// …and nudges, as a real spawn's stamp does: fleet_control.py's heartbeat
+	// reads reuse the last answer until a nudge (claude-fleet#3514)
+	nudge := filepath.Join(childHome, ".config", "claude-fleet", "global", "hub-nudge")
+	if err := os.MkdirAll(filepath.Dir(nudge), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nudge, []byte("origin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// The map: the parent's machine learns its child runs elsewhere, and whose.
 	parentMap := filepath.Join(parentHome, "hub-workers.tsv")
