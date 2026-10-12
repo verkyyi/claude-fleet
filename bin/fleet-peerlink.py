@@ -32,6 +32,15 @@ to a standing key; the links already up go on (`peerlink-hub-down`).
                               (C4): rides the link, waits for it while it is down, and
                               lands each (re)connect on the window's @peer_want / @peer_cur
     status [--check|--json]   the doctor's `peerlink` row (rc 0 ok · 1 WARN · 2 no row)
+    exec <machine> [--login <l>] -- <words…>
+                              one command on <machine> over its healthy link (issue #3538:
+                              fleet-open hands a page to the thin client's HOME this way);
+                              stdout/stderr/rc are the command's; rc 3 = no link up
+    fwd <machine> <login> <rport> [--secs N]
+                              add `-L 127.0.0.1:P:127.0.0.1:<rport>` to that link's master and
+                              print P (issue #3538: a page on <machine>'s loopback, reached
+                              from here without a tailnet); cancelled after N s
+                              (FLEET_OPEN_PAGE_SECS, 1800) or with the master; rc 3 = no link
 
 What to connect, every beat (FLEET_PEERLINK_TICK, 2 s) — FLEET_PEERLINK_MODE, the
 environment else fleet.conf's line (issue #3482):
@@ -1129,6 +1138,97 @@ def cmd_status(args):
     return rc
 
 
+def link_for(machine, login=""):
+    """(machine, login, sock, host) of the UP link to <machine> — matched as named,
+    else by this machine's label rule; <login> picks one, else this login's name,
+    else the only one. None when no link is up."""
+    links = [l for l in read_json(STATE, {}).get("links") or [] if l.get("phase") == "up"]
+    want = (machine or "").lower()
+    cands = [l for l in links if (l.get("machine") or "").lower() == want] \
+        or [l for l in links if label(l.get("machine") or "") == label(machine)]
+    if login:
+        cands = [l for l in cands if l.get("login") == login]
+    elif len(cands) > 1:
+        cands = [l for l in cands if l.get("login") == me_login()] or cands[:1]
+    for l in cands:
+        s = l.get("sock") or ""
+        if s and os.path.exists(s):
+            return l["machine"], l["login"], s, l.get("host") or ssh_host(l["machine"])
+    return None
+
+
+def cmd_exec(args):
+    login, words = "", []
+    if "--" in args:
+        i = args.index("--")
+        args, words = args[:i], args[i + 1:]
+    if len(args) == 3 and args[1] == "--login":
+        login = args[2]
+        args = args[:1]
+    if len(args) != 1 or not words or not safe(args[0]) or (login and not safe(login)):
+        sys.stderr.write("usage: fleet-peerlink.py exec <machine> [--login <l>] -- <words…>\n")
+        return 2
+    hit = link_for(args[0], login)
+    if not hit:
+        sys.stderr.write("fleet-peerlink: no link up to %s\n" % args[0])
+        return 3
+    _, l, sock, host = hit
+    remote = " ".join(shlex.quote(w) for w in words)
+    return subprocess.call(ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-T", "-l", l, host, remote],
+                           stdin=subprocess.DEVNULL)
+
+
+def free_port():
+    so = socket.socket()
+    try:
+        so.bind(("127.0.0.1", 0))
+        return so.getsockname()[1]
+    finally:
+        so.close()
+
+
+def cmd_fwd(args):
+    secs = env("FLEET_OPEN_PAGE_SECS", "1800")
+    if len(args) == 5 and args[3] == "--secs":
+        secs, args = args[4], args[:3]
+    if len(args) != 3 or not (safe(args[0]) and safe(args[1])) or not args[2].isdigit() \
+            or not 0 < int(args[2]) < 65536 or not secs.isdigit():
+        sys.stderr.write("usage: fleet-peerlink.py fwd <machine> <login> <rport> [--secs N]\n")
+        return 2
+    hit = link_for(args[0], args[1])
+    if not hit:
+        sys.stderr.write("fleet-peerlink: no link up to %s@%s\n" % (args[1], args[0]))
+        return 3
+    _, l, sock, host = hit
+    for _ in range(3):
+        lport = free_port()
+        spec = "127.0.0.1:%d:127.0.0.1:%s" % (lport, args[2])
+        rc, _, err = ssh_run(["-S", sock, "-O", "forward", "-L", spec, "-l", l, host], timeout=5)
+        if rc == 0:
+            break
+    else:
+        sys.stderr.write("fleet-peerlink: the master refused the forward (%s)\n" % err.strip()[:160])
+        return 1
+    # the cancel, detached: a forward never outlives its deadline (the master's end ends it too)
+    try:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "unfwd", sock, host, l, spec, secs],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, cwd="/")
+    except OSError:
+        pass
+    print(lport)
+    return 0
+
+
+def cmd_unfwd(args):
+    if len(args) != 5 or not args[4].isdigit():
+        return 2
+    sock, host, l, spec, secs = args
+    time.sleep(int(secs))
+    ssh_run(["-S", sock, "-O", "cancel", "-L", spec, "-l", l, host], timeout=5)
+    return 0
+
+
 def main(argv):
     if not argv:
         sys.stderr.write(__doc__)
@@ -1142,6 +1242,12 @@ def main(argv):
         return cmd_pane(args)
     if cmd == "status":
         return cmd_status(args)
+    if cmd == "exec":
+        return cmd_exec(args)
+    if cmd == "fwd":
+        return cmd_fwd(args)
+    if cmd == "unfwd":
+        return cmd_unfwd(args)
     sys.stderr.write("fleet-peerlink: unknown command %r\n" % cmd)
     return 2
 

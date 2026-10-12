@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Render Markdown -> styled HTML and host it on this machine's Tailscale tailnet URL.
+# Render Markdown -> styled HTML and host it on this machine (its loopback server, which
+# fleet-open forwards to the operator's browser; and its Tailscale tailnet URL).
 #
 # Multi-session safe: all shares APPEND to one shared collection behind a FIXED URL.
 # A new share never removes existing shared docs or changes the URL; the index page
@@ -49,6 +50,8 @@
 #                so `tailscale serve` is refused: server.py binds this machine's tailscale
 #                IPv4 directly and the URL is http://<magicdns>:<port>/ — plain http, but
 #                only reachable inside the tailnet, whose link is WireGuard-encrypted.
+#                It binds 127.0.0.1 on the same port too (issue #3538), so fleet-open can
+#                forward the page to an operator with no tailnet.
 #                Sticky until --stop; public (Funnel) links need serve rights, so none here.
 #   tunnel       no tailnet at all (issue #1151): opt-in with --tunnel or DOC_PREVIEW_MODE=tunnel.
 #                server.py on loopback in its `public` mode, fronted by `cloudflared tunnel
@@ -62,8 +65,13 @@
 #                this machine alone, which is the point: bin/fleet-open.sh forwards it to the
 #                operator's browser over their ssh. A later share WITHOUT --local turns it
 #                into https (same loopback server, `tailscale serve` added). --local beside
-#                an https or tunnel share reuses their loopback server and only prints the
-#                loopback URL; beside http-direct (server on the tailnet IP) it refuses.
+#                an https, http-direct or tunnel share reuses their server and only prints
+#                the loopback URL.
+#
+# The PRIMARY link (READY / ADDED) is the loopback one in every mode but tunnel (issue
+# #3538): hand it to fleet-open (`mcp__fleet__open`), which forwards it over the
+# operator's own ssh — no tailnet on their computer. The tailnet URL of the same doc
+# follows as a `TAILNET <url>` line; DOC_PREVIEW_PRIMARY=tailnet restores the old order.
 #
 # tailscale: the CLI on PATH, else the App's own binary (called directly — a symlink to
 # it crashes on its bundleIdentifier); DOC_PREVIEW_TAILSCALE overrides. Every tailscale
@@ -140,16 +148,22 @@ ts_ip4() { ts ip -4 2>/dev/null | head -1; }
 # after share.sh had already recorded its pid/port (issue #1093).
 # SO_REUSEADDR as server.py's own bind() has it (allow_reuse_address): a port in TIME_WAIT
 # after our restart is free to it, a port another socket LISTENs on is not.
-port_free() { # <addr> <port>
+# <addr> may be a comma list (http-direct: the tailscale IP AND 127.0.0.1, issue #3538):
+# free = free on every one, up = accepting on every one.
+port_free() { # <addr[,addr…]> <port>
   python3 -c 'import socket,sys
-s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try: s.bind((sys.argv[1],int(sys.argv[2])))
-except OSError: sys.exit(1)' "$1" "$2"
+for a in [x for x in sys.argv[1].split(",") if x]:
+    s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try: s.bind((a,int(sys.argv[2])))
+    except OSError: sys.exit(1)
+    finally: s.close()' "$1" "$2"
 }
-port_up() { # <addr> <port> — is something accepting connections there?
+port_up() { # <addr[,addr…]> <port> — is something accepting connections there?
   python3 -c 'import socket,sys
-s=socket.socket(); s.settimeout(0.5)
-sys.exit(0 if s.connect_ex((sys.argv[1],int(sys.argv[2])))==0 else 1)' "$1" "$2"
+for a in [x for x in sys.argv[1].split(",") if x]:
+    s=socket.socket(); s.settimeout(0.5)
+    if s.connect_ex((a,int(sys.argv[2])))!=0: sys.exit(1)
+    s.close()' "$1" "$2"
 }
 # Start ONE server.py on <addr> at the first free port from [first port] (default
 # DOC_PREVIEW_PORT). pid/port are recorded only once it ANSWERS, so a failed start never
@@ -209,10 +223,13 @@ stray_servers() {
   done
 }
 # The address (and public flag) the server binds in <mode>; sets ADDR, PUB.
+# http-direct binds loopback TOO (issue #3538): fleet-open forwards 127.0.0.1:<port>
+# over the operator's own ssh, so their computer needs no tailnet.
 server_addr() { # <mode>
   PUB=""
   if [ "$1" = http-direct ]; then
     ADDR="$(ts_ip4)"; [ -n "$ADDR" ] || { echo "doc-preview: no tailscale IPv4 (tailscale ip -4)" >&2; return 1; }
+    [ "$ADDR" = 127.0.0.1 ] || ADDR="$ADDR,127.0.0.1"
   else
     ADDR=127.0.0.1
     [ "$1" = tunnel ] && PUB=public
@@ -533,12 +550,8 @@ if [ "$WANT_TUNNEL" = 1 ] && [ "$MODE" != tunnel ] && sharing; then
   exit 1
 fi
 [ "$WANT_TUNNEL" = 1 ] && MODE=tunnel
+# --local beside http-direct reuses its server: it binds 127.0.0.1 too (issue #3538).
 if [ "$WANT_LOCAL" = 1 ]; then
-  if [ "$MODE" = http-direct ]; then
-    echo "doc-preview: already sharing in http-direct mode — its server binds the tailscale IP, not 127.0.0.1, so --local has no loopback URL to give." >&2
-    echo "Share without --local (the tailnet URL works with fleet-open too), or run share.sh --stop first." >&2
-    exit 1
-  fi
   [ -n "$MODE" ] || MODE=local
 fi
 NO_TAILNET_HINT="no tailnet? share.sh --tunnel <file> hosts it on a PUBLIC https://*.trycloudflare.com URL instead (needs cloudflared; anyone with the link can read it)"
@@ -656,6 +669,7 @@ if [ "$WANT_LOCAL" = 0 ] && { [ "$MODE" = https ] || [ "$MODE" = local ] || [ -z
           # Fall back to http-direct — nothing proxies to the loopback server, so retire it.
           ADDR="$(ts_ip4)"
           [ -n "$ADDR" ] || { echo "doc-preview: tailscale serve refused ($err) and no tailscale IPv4 to fall back to" >&2; rollback; exit 1; }
+          [ "$ADDR" = 127.0.0.1 ] || ADDR="$ADDR,127.0.0.1"
           [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
           rm -f "$PIDFILE" "$PORTFILE" "$HTTPSFILE"
           start_server "$ADDR" || server_fail "$ADDR"
@@ -681,7 +695,15 @@ NOTE=""
 [ "$MODE" = local ] && NOTE="  (local: http on 127.0.0.1 only — open it on the operator's computer with fleet-open)"
 if [ "$TTL_SECS" = 0 ]; then LEFT="never expires"; else LEFT="expires in $TTL"; fi
 
-if [ "$WANT_LOCAL" = 1 ]; then URL="$(local_url)"; else URL="$(current_url)"; fi
+# The primary link is the LOOPBACK one (issue #3538): fleet-open forwards it over the
+# operator's own ssh, so it opens with no tailnet on their computer. The tailnet URL
+# follows as a TAILNET line; DOC_PREVIEW_PRIMARY=tailnet puts it first as before. A
+# tunnel's public URL stays primary — it needs neither.
+TS_URL=""
+if [ "$WANT_LOCAL" = 1 ] || [ "$MODE" = local ]; then URL="$(local_url)"
+elif [ "$MODE" = tunnel ] || [ "${DOC_PREVIEW_PRIMARY:-}" = tailnet ]; then URL="$(current_url)"
+else URL="$(local_url)"; TS_URL="$(current_url)"; NOTE="  (loopback: open it with fleet-open — it forwards over the operator's ssh, no tailnet needed)"
+fi
 BASE="${URL%/}"
 IDX_URL="${BASE}/i/$IDX/"
 # Lead with the specific doc URL when this share added exactly one doc; only show the
@@ -689,9 +711,11 @@ IDX_URL="${BASE}/i/$IDX/"
 if [ "${#new[@]}" -eq 1 ]; then
   echo "READY ${BASE}${new[0]}${NOTE}"   # direct link to the shared doc
   echo "INDEX ${IDX_URL}"         # full list (other shared docs), for reference
+  [ -z "$TS_URL" ] || echo "TAILNET ${TS_URL%/}${new[0]}"   # the same doc for a device on the tailnet
 else
   echo "READY ${IDX_URL}${NOTE}"         # index listing
   for h in ${new[@]+"${new[@]}"}; do echo "ADDED ${BASE}$h"; done
+  [ -z "$TS_URL" ] || echo "TAILNET ${TS_URL%/}/i/$IDX/"
 fi
 [ "${#new[@]}" -eq 0 ] || echo "TTL ${LEFT} (share.sh --ttl N[smhd]|0 to change)"
 

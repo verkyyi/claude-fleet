@@ -42,7 +42,8 @@ with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs interne
   has exactly one; `tailscale debug prefs` → `OperatorUser`) and has no root, so `tailscale
   serve` is refused. `server.py` binds the machine's tailscale IPv4 instead and the URL is
   `http://<magicdns>:<port>/` — plain http, but reachable only inside the tailnet, whose link
-  is WireGuard-encrypted. The `READY` line says so. Sticky until `--stop`. Public (Funnel)
+  is WireGuard-encrypted. It also listens on `127.0.0.1` at the same port (issue #3538), the
+  address `fleet-open` forwards. The `READY` line says so. Sticky until `--stop`. Public (Funnel)
   links need serve rights, so `--publish` refuses in this mode. `fleet-doctor`'s `docprev`
   row says which mode this login gets, and the one-time `sudo tailscale serve …` command to
   get HTTPS instead (then `--stop` and re-share — `share.sh` adopts an existing route to its
@@ -64,8 +65,8 @@ with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs interne
   in the operator's own browser over their ssh (the `fleet-open` skill). `share.sh --open
   [--local] <file>` does both and prints `OPEN <fleet-open's result>`. A later share without
   `--local` turns the same server into `https`; `--local` beside an `https`/`tunnel` share
-  reuses their loopback server and only prints the loopback URL; beside `http-direct` (server
-  on the tailnet IP) it refuses.
+  reuses their loopback server and only prints the loopback URL; beside `http-direct` too — that
+  server binds `127.0.0.1` on the same port as well (issue #3538).
 
 The local port is picked by a real `bind()` probe (not `lsof`, which can't see another
 login's server), and a server that fails to start leaves no `server.pid`/`server.port` and
@@ -102,9 +103,17 @@ Output and what to relay:
 - **Multiple docs shared** → prints `READY <index URL>` + one `ADDED <direct URL>` per doc.
   **Relay the `READY` index URL** (it lists all of them).
 
-In both cases the `READY` line is the primary URL to give the user — **whole**: the code
-is the key, so never shorten the URL to its host (it would 404). The code never goes into an
-issue, a comment, a commit or a log.
+In both cases the `READY` line is the primary URL — **whole**: the code is the key, so never
+shorten the URL to its host (it would 404). The code never goes into an issue, a comment, a
+commit or a log.
+
+**The `READY` URL is the LOOPBACK one** (`http://127.0.0.1:<port>/d/<code>/`, issue #3538)
+in every mode but `tunnel`: it opens with no Tailscale on the operator's computer, because
+`fleet-open` (`mcp__fleet__open`, or `share.sh --open`) forwards it over the operator's own
+ssh — even through a home machine (`经 mini2`). **Open it with `fleet-open`; never paste a
+loopback URL to the operator as a link.** The tailnet URL of the same doc follows as a
+`TAILNET <url>` line — give that one only to someone you know is on the tailnet.
+`DOC_PREVIEW_PRIMARY=tailnet` restores the old order.
 
 Other commands:
 
@@ -171,7 +180,8 @@ you share on behalf of a distinct task/session, pass a short label so the user c
 - The doc page is reading/print-first by design: GitHub-styled, auto light/dark, print-friendly
   tables. The only interactive control is the header **"公开链接" public-link switch** (tailnet
   view only); don't add other UX chrome (filter/sort/theme toggles).
-- A `READY http://…` URL with the `(http-direct: …)` note is a normal success — relay it as is.
+- A `READY http://127.0.0.1:…` URL is the normal success: open it with `fleet-open` and relay
+  its result (`opened` / `failed:<why>` / `unconfirmed`), not the URL.
 - A `READY https://….trycloudflare.com/…` URL carries the `(tunnel: PUBLIC …)` note — relay it
   and say it is public. Never switch to `--tunnel` on your own when tailscale is down: the
   error names it; ask the user first, since it makes the shared docs public.

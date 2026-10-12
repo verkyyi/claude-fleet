@@ -341,12 +341,21 @@ def make_user(t, full_name=''):
 
 
 # Machine-wide dev settings for every login (#3348), from the pod's environment
-# (render.py --github-proxy / --git-mirror / --cn-mirrors), rewritten at each start:
+# (render.py --github-proxy / --git-mirror / --cn-mirrors / --cluster-caches), rewritten at each start:
 # /etc/gitconfig sends git's github.com traffic through the relay and fetches a
 # mirrored repo from the in-cluster mirror (pushes still go to GitHub: the
 # identity pushInsteadOf); /etc/fleet-devnet.env is what every shell exports
 # (the image's /etc/profile.d/fleet-devnet.sh, a login's own value wins) and
 # where the image's gh wrapper finds the relay. Nothing set = neither file.
+# FLEET_EGRESS_PROXY (render.py --egress-proxy, #3547): the cluster's one egress
+# (deploy/k8s/egress) is every login's HTTPS_PROXY and git's proxy for every
+# host, the gh wrapper's road when no GitHub relay is named; the cluster and
+# loopback (the local credential proxy) stay direct.
+# FLEET_CLUSTER_CACHES (render.py --cluster-caches, #3548): the namespace whose
+# package caches (deploy/k8s/caches) every login installs from — npm, pnpm, yarn,
+# corepack through fleet-npm, pip and uv through fleet-pypi, Go through
+# fleet-goproxy with goproxy.cn after it (`|`: any error falls through), node
+# dists still npmmirror's. In place of the CN mirrors when both are set.
 DEVNET_MARK = '# written by fleet-node-linux.py at each start (#3348) - edits here are lost\n'
 CN_MIRRORS = (('npm_config_registry', 'https://registry.npmmirror.com'),
               ('YARN_REGISTRY', 'https://registry.npmmirror.com'),
@@ -356,7 +365,25 @@ CN_MIRRORS = (('npm_config_registry', 'https://registry.npmmirror.com'),
               ('FNM_NODE_DIST_MIRROR', 'https://npmmirror.com/mirrors/node'),
               ('GOPROXY', 'https://goproxy.cn,direct'),
               ('GOSUMDB', 'sum.golang.google.cn'))
+NS_RE = re.compile(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?')
+
+
+def cluster_caches(ns):
+    npm = 'http://fleet-npm.%s.svc.cluster.local:4873' % ns
+    pypi_host = 'fleet-pypi.%s.svc.cluster.local' % ns
+    pypi = 'http://%s:3141/root/pypi/+simple/' % pypi_host
+    return (('npm_config_registry', npm), ('YARN_REGISTRY', npm), ('COREPACK_NPM_REGISTRY', npm),
+            ('COREPACK_ENABLE_DOWNLOAD_PROMPT', '0'),
+            ('NVM_NODEJS_ORG_MIRROR', 'https://npmmirror.com/mirrors/node'),
+            ('FNM_NODE_DIST_MIRROR', 'https://npmmirror.com/mirrors/node'),
+            ('PIP_INDEX_URL', pypi), ('PIP_TRUSTED_HOST', pypi_host),
+            ('UV_DEFAULT_INDEX', pypi), ('UV_INSECURE_HOST', pypi_host),
+            ('GOPROXY', 'http://fleet-goproxy.%s.svc.cluster.local:3000|https://goproxy.cn|direct' % ns),
+            ('GOSUMDB', 'sum.golang.google.cn'))
+
+
 GH_PROXY_RE = re.compile(r'http://[A-Za-z0-9.-]+:[0-9]{1,5}')
+NO_PROXY = 'localhost,127.0.0.1,::1,.svc,.cluster.local'
 MIRROR_RE = re.compile(r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+')
 UPSTREAM_RE = re.compile(r'https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git')
 
@@ -366,7 +393,13 @@ def devnet_settings(env):
     proxy = env.get('FLEET_GITHUB_PROXY', '').strip().rstrip('/')
     if proxy and not GH_PROXY_RE.fullmatch(proxy):
         raise ValueError('FLEET_GITHUB_PROXY is http://HOST:PORT, not %r' % proxy)
+    egress = env.get('FLEET_EGRESS_PROXY', '').strip().rstrip('/')
+    if egress and not GH_PROXY_RE.fullmatch(egress):
+        raise ValueError('FLEET_EGRESS_PROXY is http://HOST:PORT, not %r' % egress)
     git = []
+    if egress:
+        git += ['[http]', '\tproxy = ' + egress]
+        proxy = proxy or egress
     if proxy:
         git += ['[http "https://github.com/"]', '\tproxy = ' + proxy]
     for item in env.get('FLEET_GIT_MIRRORS', '').split():
@@ -376,7 +409,15 @@ def devnet_settings(env):
         git += ['[url "%s"]' % mirror, '\tinsteadOf = ' + upstream,
                 '[url "%s"]' % upstream, '\tpushInsteadOf = ' + upstream]
     pairs = [('FLEET_GITHUB_PROXY', proxy)] if proxy else []
-    if env.get('FLEET_CN_MIRRORS', '') == '1':
+    if egress:
+        pairs += [(k, egress) for k in ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy')]
+        pairs += [(k, NO_PROXY) for k in ('NO_PROXY', 'no_proxy')]
+    caches = env.get('FLEET_CLUSTER_CACHES', '').strip()
+    if caches and not NS_RE.fullmatch(caches):
+        raise ValueError('FLEET_CLUSTER_CACHES is a namespace, not %r' % caches)
+    if caches:
+        pairs += list(cluster_caches(caches))
+    elif env.get('FLEET_CN_MIRRORS', '') == '1':
         pairs += list(CN_MIRRORS)
     return ('\n'.join(git) + '\n' if git else '', ''.join('%s=%s\n' % kv for kv in pairs))
 
@@ -392,9 +433,10 @@ def devnet(env=None, gitconfig='/etc/gitconfig', envfile='/etc/fleet-devnet.env'
             os.replace(tmp, p)
         elif p.is_file() and not p.is_symlink() and p.read_text().startswith(DEVNET_MARK):
             p.unlink()
-    print('devnet: github proxy %s · git mirrors %d · cn mirrors %s' % (
+    print('devnet: github proxy %s · git mirrors %d · packages %s · egress %s' % (
         'on' if 'FLEET_GITHUB_PROXY=' in shell else 'off', git.count('\tinsteadOf = '),
-        'on' if 'GOPROXY=' in shell else 'off'))
+        'cluster' if 'PIP_INDEX_URL=' in shell else 'cn' if 'GOPROXY=' in shell else 'off',
+        'on' if 'HTTPS_PROXY=' in shell else 'off'))
 
 
 def boot(a=None):
@@ -478,6 +520,8 @@ def machine_hub(paths, hub):
 
 def prepare(a):
     """compat-1v: 下一批删 — the old single-login verb; `login open` now."""
+    if not primary_login(a):
+        raise Refuse('prepare needs --login <login>')
     a.name, a.full_name, a.start = a.login, '', False
     return login_open(a)
 
@@ -551,14 +595,15 @@ def login_open(a):
         if not isinstance(token, str) or not token or '\n' in token:
             raise ValueError('hub returned no tenant token')
         ne = {'CCQUOTA_HUB_URL': hub, 'CCQUOTA_TOKEN': token,
-              'CCQUOTA_FLEET': '1', 'CCQUOTA_FLEET_COMPUTE': '1', 'CCQUOTA_FLEET_CREDS': '1'}
+              'CCQUOTA_FLEET': '1', 'CCQUOTA_FLEET_COMPUTE': '1', 'CCQUOTA_FLEET_CREDS': creds_flag()}
         private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), role.pw_uid, role.pw_gid)
     # The pool reaches a login only through its own lease (issue #3211): the node
     # program leases — into the shared proxy, the label marker into accounts/ —
     # only for a login whose env says CCQUOTA_FLEET_CREDS=1, as a Mac login's
     # does. A store written before this has none: add it, every other line kept.
-    if ne.get('CCQUOTA_FLEET_CREDS') != '1':
-        ne['CCQUOTA_FLEET_CREDS'] = '1'
+    # A pod that routes central (#3547) says 0: no token is leased into it.
+    if ne.get('CCQUOTA_FLEET_CREDS') != creds_flag():
+        ne['CCQUOTA_FLEET_CREDS'] = creds_flag()
         private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), role.pw_uid, role.pw_gid)
     route_settings(c, login, hub, a.relay)
     # machine install keeps every tenant the shared proxy already serves.
@@ -613,6 +658,9 @@ def route_settings(c, login, hub, relay):
     lib = Path(c.LIB)
     lib.mkdir(parents=True, exist_ok=True)
     route = {'FLEET_HUB_URL': hub, 'FLEET_CRED_RELAY_URL': relay}
+    if central_url():
+        # the cluster credential proxy (#3547): render.py --cred-central
+        route['FLEET_CRED_CENTRAL_URL'] = central_url()
     for value in route.values():
         if not value or any(x in value for x in ('\n', '\r')):
             raise ValueError('invalid route setting')
@@ -624,6 +672,8 @@ def route_settings(c, login, hub, relay):
     proxy.ALLOWED = proxy.allowed_hosts(route['FLEET_CRED_ALLOW_HOSTS'])
     if not all(proxy.loopback_ok(route[k]) for k in ('FLEET_HUB_URL', 'FLEET_CRED_RELAY_URL')):
         raise ValueError('hub/relay must use HTTPS to an allowed host; configure root allow-list first')
+    if 'FLEET_CRED_CENTRAL_URL' in route and not proxy.loopback_ok(route['FLEET_CRED_CENTRAL_URL'], cluster=True):
+        raise ValueError('the central proxy must be HTTPS, or http to a NAME.NS.svc.cluster.local Service')
     setting_path = lib / (login + '.conf')
     settings = env_read(setting_path)
     if all(settings.get(k) == v for k, v in route.items()):
@@ -635,9 +685,9 @@ def route_settings(c, login, hub, relay):
 
 def route_heal(a):
     """Container start, before the shared proxy: every enrolled login's route
-    settings back in the image layer (issue #3421). Only the primary login is
-    opened again at each start; one `login open` made (another person's) had
-    its relay route only from its create, so a recreated pod sent it `direct`
+    settings back in the image layer (issue #3421). Only the primary login (if
+    any — none since #3526) is opened again at each start; one `login open`
+    made (another person's) had its relay route only from its create, so a recreated pod sent it `direct`
     — `unsupported_region` from a CN egress, and the hub closes its compute.
     A login never enrolled (no token in its store) is its open's to write."""
     s = load('fleet-node-supervisor')
@@ -655,7 +705,82 @@ def route_heal(a):
         except (ValueError, OSError) as e:
             # one login's route never keeps the machine down
             print('route %s: not written (%s)' % (login, e), file=sys.stderr)
+        if central_url():
+            central_heal(s, paths, c, login)
     print('route: %d login(s) rewritten: %s' % (len(done), ' '.join(done) or '-'))
+    if central_url():
+        n = cred_purge(c, sorted(tenants(paths)))
+        print('central: %s — %d credential file(s) removed from the pod' % (central_url(), n))
+
+
+# A user pod that routes central (render.py --cred-central, #3547, EPIC #3500
+# 共同约定 3): its sessions hold a hub pass, the cluster credential proxy swaps it
+# for the account's token, and no subscription credential is ever in the pod —
+# not leased (CCQUOTA_FLEET_CREDS=0 for every login), not kept on the volume
+# (purged at every start: a store, and the shared proxy's pool, from before the
+# switch). The node token, the relay pass and the hub passes stay: they are the
+# login's identity, not a subscription's. Unset = byte for byte as before.
+def central_url():
+    return os.environ.get('FLEET_CRED_CENTRAL_URL', '').strip().rstrip('/')
+
+
+def creds_flag():
+    return '0' if central_url() else '1'
+
+
+def central_heal(s, paths, c, login):
+    """An enrolled login's lease turned off in its store and its node agent's
+    settings, every other line kept. -> whether anything changed."""
+    changed = False
+    role = pwd.getpwnam(c.ROLE)
+    token_path = Path(c.ROOT_BASE) / login / 'node.env'
+    ne = env_read(token_path)
+    if ne and ne.get('CCQUOTA_FLEET_CREDS') != '0':
+        ne['CCQUOTA_FLEET_CREDS'] = '0'
+        private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), role.pw_uid, role.pw_gid)
+        changed = True
+    le = env_read(s.login_env_path(paths, login))
+    if le and le.get('CCQUOTA_FLEET_CREDS') != '0':
+        le['CCQUOTA_FLEET_CREDS'] = '0'
+        s.write_login_env(paths, login, le)
+        changed = True
+    if changed:
+        print('central %s: lease off (CCQUOTA_FLEET_CREDS=0)' % login)
+    return changed
+
+
+def cred_purge(c, logins):
+    """Every subscription credential file the volume still holds: each store's
+    leased / pooled Claude tokens (accounts/) and hub-managed Codex homes
+    (codex/<label>/auth.json), its pool index, and the shared proxy's pool.
+    -> how many files went. Never follows a link out of the store."""
+    gone = 0
+
+    def drop(path):
+        nonlocal gone
+        if os.path.lexists(path) and not os.path.isdir(path):
+            os.unlink(path)
+            gone += 1
+    for login in logins:
+        store = Path(c.ROOT_BASE) / login
+        acc = store / 'accounts'
+        for d in sorted(os.listdir(acc)) if acc.is_dir() and not acc.is_symlink() else []:
+            p = acc / d
+            if (p.is_symlink() or p.is_file()) and not d.endswith('.conf'):
+                drop(p)                                  # a pool token (#2294)
+            elif p.is_dir():
+                drop(p / '.credentials.json')            # a leased <label>.hub
+        cx = store / 'codex'
+        for d in sorted(os.listdir(cx)) if cx.is_dir() and not cx.is_symlink() else []:
+            if (cx / d).is_dir() and not (cx / d).is_symlink():
+                drop(cx / d / 'auth.json')
+        drop(store / 'cred-proxy' / 'pool.json')
+    pool = Path(c.SHARED_DIR) / 'pool'
+    if pool.is_dir() and not pool.is_symlink():
+        for root, _dirs, files in os.walk(pool):
+            for f in files:
+                drop(Path(root) / f)
+    return gone
 
 
 def credsep_word(s, login, conf, wait):
@@ -877,6 +1002,8 @@ def activate(_a):
 
 
 def bootstrap(a):
+    if not primary_login(a):
+        raise Refuse('bootstrap needs --login <login>')
     s = load('fleet-node-supervisor')
     ctl = Path(os.environ.get('FLEET_CREDSEP_RUN_BASE', '/var/run/fleet-cred')) / '.shared/ctl.sock'
     for _ in range(60):
@@ -902,6 +1029,14 @@ def bootstrap(a):
             kept = snap
         print('bootstrap %s: session restore exit %d, not all pinned sessions came back; snapshot kept as %s'
               % (a.login, restored.returncode, kept), file=sys.stderr)
+
+
+def primary_login(a):
+    """The container's own login, or '' (issue #3526): FLEET_NODE_LOGIN empty or
+    `none` = a machine with no primary login — boot, route_heal and bootstrap
+    serve the declared logins (linux-tenants/) only, and nothing is opened."""
+    login = (getattr(a, 'login', '') or '').strip()
+    return '' if login in ('', 'none') else login
 
 
 def foreground(a):
@@ -936,8 +1071,10 @@ def foreground(a):
         # under /usr/local must be root's again before the shared proxy starts.
         lib_owner_heal()
         route_heal(a)
-        cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground',
-               '--login', a.login, '--login-join-file', a.join_file]
+        primary = primary_login(a)
+        cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground']
+        if primary:
+            cmd += ['--login', primary, '--login-join-file', a.join_file]
         if a.machine_join_file and Path(a.machine_join_file).exists():
             cmd += ['--join-file', a.machine_join_file]
         cmd += ['--release-key', '/etc/fleet-release.pub']
@@ -955,7 +1092,9 @@ def foreground(a):
         ready = Path('/run/fleet-node-ready')
         ready.unlink(missing_ok=True)
         s = load('fleet-node-supervisor')
-        logins = sorted(set(tenants(s.Paths())) | {a.login})
+        # Only what the volume declares — plus the primary login, when there is one:
+        # a machine with none never grows one back on a recreate (issue #3526).
+        logins = sorted(set(tenants(s.Paths())) | ({primary} if primary else set()))
         rc = 0
         try:
             loop.beat()
@@ -963,7 +1102,7 @@ def foreground(a):
                 try:
                     bootstrap(argparse.Namespace(login=login))
                 except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
-                    if login == a.login:
+                    if login == primary:
                         raise
                     # One person's broken home never keeps the others' sessions down.
                     print('bootstrap %s failed (%s); the other logins go on' % (login, e), file=sys.stderr)
@@ -1075,7 +1214,8 @@ def main():
         return guarded(lambda: login_cmd(sys.argv[2:]))
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready'))
-    ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'fleet'))
+    # `none` (the image's default since #3526) or empty: no primary login.
+    ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'none'))
     ap.add_argument('--uid', type=int, default=int(os.environ.get('FLEET_NODE_UID', '10002')))
     ap.add_argument('--hub', default=os.environ.get('FLEET_HUB_URL', ''))
     ap.add_argument('--relay', default=os.environ.get('FLEET_CRED_RELAY_URL', 'https://fleet-relay.24hw.cn'))

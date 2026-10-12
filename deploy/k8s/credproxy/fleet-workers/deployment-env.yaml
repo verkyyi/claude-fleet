@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-credproxy
+spec:
+  template:
+    metadata:
+      labels:
+        fleet/role: ops
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: credproxy
+          env:
+            # the hub's Service, across namespaces — never the public door
+            - name: CCQUOTA_CREDPROXY_HUB_URL
+              value: "http://ccquota-hub.new-deploy.svc.cluster.local"
+            # the hub knows ONE credproxy token: the same value as new-deploy's
+            # Secret ccquota/credproxy-token, copied into this namespace (README)
+            - name: CCQUOTA_FLEET_CREDPROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-credproxy
+                  key: credproxy-token
+            - name: CCQUOTA_CREDPROXY_RELAY_URL
+              value: "https://fleet-relay.24hw.cn"

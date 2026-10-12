@@ -44,7 +44,10 @@ Each connection:
      page's `rport` forwarded to the same port (else any free one). Each forward
      is one notification line (the port, the session, when it closes) + a line
      of forwards.log beside thin.log, and closes once the home's server is gone
-     or at its deadline (bin/fleet_open_fwd.py); none outlive this loop.
+     or at its deadline (bin/fleet_open_fwd.py); none outlive this loop. Then
+     the RECEIPT (issue #3538): the payload's `id` goes back as one ssh on the
+     same line — `fleet-open.sh --ack <id> ok|fail <why>` on the home — so the
+     session that asked says `opened` / `failed:<why>`, never a guess.
 
 When it ends: ⌘Q (quit) or ssh exit 0 (a detach) — the iTerm2 profile goes
 back (约定 11) and this exits 0. Anything else — the line dropped, the lid
@@ -99,6 +102,7 @@ import importlib.util
 import json
 import os
 import random
+import re
 import select
 import shlex
 import signal
@@ -664,14 +668,44 @@ class Thin:
             return None, "the forward did not come up"
         return close, ""
 
+    def ack(self, oid, ok, why=""):
+        """The receipt of open <oid> (issue #3538): `fleet-open.sh --ack` on the home —
+        one ssh on the line the loop already picked, or right here with --local."""
+        if not isinstance(oid, str) or not re.fullmatch(r"[a-f0-9]{1,64}", oid):
+            return
+        words = ["--ack", oid, "ok" if ok else "fail", (why or "")[:200]]
+        seam = os.environ.get("FLEET_THIN_ACK_CMD")
+        j = self.base or {}
+        if seam:
+            cmd = shlex.split(seam) + words
+        elif j.get("local"):
+            cmd = ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-open.sh")] + words
+        elif j.get("argv"):
+            rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
+            remote = " ".join(shlex.quote(w) for w in ["bash", rbin + "/fleet-open.sh"] + words)
+            cmd = self.command(j, ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-T"], remote)
+        else:
+            return
+        try:
+            subprocess.call(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def open_req(self, kv):
-        """`open` from the home: forward what needs it, then open it here."""
+        """`open` from the home: forward what needs it, open it here, say how it went."""
         try:
             d = json.loads(base64.b64decode(kv.get("j", "") + "==="))
         except (ValueError, TypeError):
             return
         if not isinstance(d, dict):
             return
+        oid = d.get("id")
+        ok, why = self.open_do(d)
+        self.ack(oid, ok, why)
+
+    def open_do(self, d):
+        """(opened, why not)."""
         fw = self.forwards()
         who, home = str(d.get("who") or "?")[:80], self.home or "?"
         ttl = d.get("ttl") if isinstance(d.get("ttl"), int) and d.get("ttl") > 0 else None
@@ -689,25 +723,26 @@ class Thin:
                 if not close:
                     fw.fail(rport, home, who, why)
                     self.queue_say("fleet · 没能转发 %s:%d（%s）" % (home, rport, why))
-                    return
+                    return False, "forward to %s:%d failed: %s" % (home, rport, why)
                 fw.add(rport, home, who, close, callback=False, lport=lport)
             url = "%s://127.0.0.1:%d%s" % (scheme, lport, path)
         elif cport and not local and not fw.held(cport):
             if not fw.mod.free(cport):
                 fw.fail(cport, home, who, "busy")
                 self.queue_say("fleet · 本机端口 %d 被占用，%s 的授权回调到不了会话，没有打开" % (cport, who))
-                return
+                return False, "local port %d is busy" % cport
             close, why = self.forward(cport, cport)
             if not close:
                 fw.fail(cport, home, who, why)
                 self.queue_say("fleet · 没能转发授权回调端口 %d（%s）" % (cport, why))
-                return
+                return False, "callback forward failed: %s" % why
             fw.add(cport, home, who, close, callback=True, ttl=ttl)
         if not url.startswith(("http://", "https://")):
-            return
+            return False, "not an http(s) address"
         ok = self.opener(url)
         tlog("open", self.home, "", "", "", "", 0 if ok else 1,
              "cport=%d" % cport if cport else ("rport=%d" % rport if rport else "url"))
+        return ok, "" if ok else "the browser opener failed"
 
     def ctrl_v(self):
         """⌃V: a picture on the clipboard → its path on the session's machine,

@@ -110,6 +110,7 @@ seed_transcript() {
 # Input rows are PIPE-delimited (matching tmux -F output); output rows are TAB.
 STEW_PATH="$WORK/main"; mkdir -p "$STEW_PATH"; seed_transcript "$STEW_PATH" "stew-abc123"
 WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PATH" "wrk-def456"
+WORK_PATH_B="$WORK/repo-issue-9b"; mkdir -p "$WORK_PATH_B"; seed_transcript "$WORK_PATH_B" "wrk-b9b9b9"
 
 # issue-9  : a bare 3-field row → the state trio (and origin, #503) defaults to '-'.
 # issue-9b : carries the @claude_state|@prci|@pfg trio (issue #153) → passed
@@ -117,7 +118,7 @@ WORK_PATH="$WORK/repo-issue-9"; mkdir -p "$WORK_PATH"; seed_transcript "$WORK_PA
 out=$(printf '%s|%s|-\n%s|%s|9\n%s|%s|9|working|✓|#9ece6a||issue-7\n%s|%s|-\n' \
         "__HUB__" "$STEW_PATH" \
         "issue-9" "$WORK_PATH" \
-        "issue-9b" "$WORK_PATH" \
+        "issue-9b" "$WORK_PATH_B" \
         "dash" "$WORK/whatever" \
       | python3 "$RESOLVE")
 
@@ -125,7 +126,7 @@ printf '%s\n' "$out" | grep -qxF "HUB	$STEW_PATH	stew-abc123" \
   || fail "resolver: __HUB__ should emit a HUB row with the newest id (got: $out)"
 printf '%s\n' "$out" | grep -qxF "WIN	issue-9	$WORK_PATH	wrk-def456	9	-	-	-	-" \
   || fail "resolver: a bare work window WIN row should default the state trio + origin to '-' (got: $out)"
-printf '%s\n' "$out" | grep -qxF "WIN	issue-9b	$WORK_PATH	wrk-def456	9	working	✓	#9ece6a	issue-7" \
+printf '%s\n' "$out" | grep -qxF "WIN	issue-9b	$WORK_PATH_B	wrk-b9b9b9	9	working	✓	#9ece6a	issue-7" \
   || fail "resolver: the @claude_state|@prci|@pfg trio + @origin should pass through onto the WIN row (got: $out)"
 printf '%s\n' "$out" | grep -q '^WIN	dash' \
   && fail "resolver: a panel (dash) must NOT emit a WIN row (got: $out)"
@@ -133,6 +134,18 @@ printf '%s\n' "$out" | grep -q '^WIN	dash' \
 noid=$(printf '__HUB__|%s|-\n' "$WORK/fresh" | python3 "$RESOLVE")
 [ "$noid" = "HUB	$WORK/fresh	-" ] \
   || fail "resolver: a hub pane with no transcript should resolve id '-' (got: $noid)"
+
+# One conversation is ONE row (issue #3543): two windows in one directory with no
+# id of their own guess the same newest transcript — the later window keeps it; a
+# window whose hooks recorded the id wins over a later guess.
+DUP_PATH="$WORK/home-dup"; mkdir -p "$DUP_PATH"
+DUP_SID=3543cccc-0000-4000-8000-000000003543; seed_transcript "$DUP_PATH" "$DUP_SID"
+dup=$(printf '%s|%s|-\n%s|%s|-\n' "older" "$DUP_PATH" "newer" "$DUP_PATH" | python3 "$RESOLVE")
+[ "$(printf '%s\n' "$dup" | grep -c '^WIN')" = 1 ] && printf '%s\n' "$dup" | grep -q '^WIN	newer	' \
+  || fail "resolver: two guesses of one conversation must leave ONE row, the newer window's (got: $dup)"
+dup=$(printf '%s|%s|%s|-\n|%s|%s|-\n' "$DUP_SID" "owner" "$DUP_PATH" "guess" "$DUP_PATH" | python3 "$RESOLVE" "" --sid)
+[ "$(printf '%s\n' "$dup" | grep -c '^WIN')" = 1 ] && printf '%s\n' "$dup" | grep -q '^WIN	owner	' \
+  || fail "resolver: the window that holds the id as its own must win over a later guess (got: $dup)"
 
 # ============================================================ 2. SNAPSHOT ======
 # A real fleet layout: a 'plan' window with a @hub pane + a work window.
@@ -155,7 +168,7 @@ tmux set-window-option -t snap:issue-9 @pfg "#9ece6a"
 FID9=0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f
 tmux set-window-option -t snap:issue-9 @fleet_id "$FID9"
 # issue-10 was parked at 'done' — captured too, but restore must NOT auto-continue it.
-tmux new-window -t snap: -n issue-10 -c "$WORK_PATH"
+tmux new-window -t snap: -n issue-10 -c "$WORK_PATH_B"   # its own worktree: one conversation, one row (#3543)
 tmux set-window-option -t snap:issue-10 @issue 10
 tmux set-window-option -t snap:issue-10 @claude_state "done"
 # the hub 'plan' window: dash pane + a split @hub pane rooted at the base checkout
@@ -454,6 +467,22 @@ bash "$RESTORE" --snapshot 2>/dev/null
   || fail "shrink-guard: a FRESH all-live-worktree map must still reject the shrink (map: $(cat "$SMAP"))"
 is_pos "$(cat "$SREJF" 2>/dev/null)" \
   || fail "reject-count: shrinky's rejection should be counted (got: '$(cat "$SREJF" 2>/dev/null)')"
+# … and what a rejected snapshot keeps is still put right (issue #3543): a session
+# the fleet retired that no window carries, and an older row of a conversation a
+# later row names again, leave the kept map — they are not "richer", they are wrong.
+RFID=1f0e0000-0000-4000-8000-00000003543a
+mkdir -p "$FLEET_CONF_DIR/global/retired"; : > "$FLEET_CONF_DIR/global/retired/$RFID"
+{ printf 'FLEET\tshrinky\tacme/widgets\t%s\tmain\n' "$STEW_PATH"
+  printf 'WIN\tissue-21\t%s\t-\t21\n' "$SA"
+  printf 'FID\t%s\nWIN\tissue-24\t%s\tsid-24\t24\n' "$RFID" "$SD"
+  printf 'WIN\tissue-25\t%s\tsid-dup\t25\n' "$SE"
+  printf 'WIN\tissue-26\t%s\tsid-dup\t26\n' "$SE"
+} > "$SMAP"
+bash "$RESTORE" --snapshot 2>/dev/null
+[ "$(win_rows)" = 2 ] && grep -q '^WIN	issue-26	' "$SMAP" && ! grep -qE '^WIN	issue-2[45]	' "$SMAP" \
+  || fail "shrink-guard: a rejected snapshot must still drop the retired and the duplicate rows (map: $(cat "$SMAP"))"
+rm -f "$FLEET_CONF_DIR/global/retired/$RFID"
+mkmap "$SA" "$SD" "$SE"
 # … but an over-age map is stale, not mid-restore — the live layout wins.
 touch -t 202001010000 "$SMAP" || fail "could not age the stored map"
 FLEET_RESTORE_STALE_MAP_AGE=3600 bash "$RESTORE" --snapshot 2>/dev/null

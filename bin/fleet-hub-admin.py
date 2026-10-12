@@ -12,9 +12,12 @@
     fleet hub accounts rekey <from> <to> hand an old identity's logins to <to>
                                          (gh:<id> or a bare GitHub ID); runs nothing
     fleet hub accounts forget <principal> drop a record that never reached a machine
-    fleet hub accounts assign <principal> --host <machine> [--login <login>]
-                                         open their login on <machine> (queued; --login
-                                         only checks it is theirs) — claude-fleet#3210
+    fleet hub accounts assign <principal> --host <machine> [--login <login>] [--own-name]
+                                         open their login on <machine>: a ready spare there
+                                         is theirs at once (fleetu<N>, claude-fleet#3501),
+                                         else their own name is queued; --own-name skips the
+                                         spare, --login only checks it is theirs (and skips
+                                         the spare too) — claude-fleet#3210
     fleet hub accounts remove <principal> --host <machine>
                                          close it there (the home is archived 30 days)
     fleet hub accounts relogin <principal> <machine> <login>
@@ -33,7 +36,8 @@
                                          by, expiry, today's uses; then the reports they
                                          sent: 送达 → 出结论 and the short link (claude-fleet#2893)
     fleet hub machines                   every machine: status, sessions, load, and its logins:
-                                         备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263)
+                                         备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263),
+                                         + 回收中 / 坏了 when any (claude-fleet#3501)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.entry fleet.entry_domain
@@ -356,6 +360,10 @@ def machines_main(a):
         acct = "、".join(sorted(logins.get(m.get("hostname", ""), ()))) or "-"
         if spare is not None:
             acct += " · 备用 %d · 已用 %s / 上限 %s" % (spare, m.get("logins_used", "?"), m.get("login_cap", "?"))
+            if m.get("spare_resetting"):
+                acct += " · 回收中 %d" % m["spare_resetting"]
+            if m.get("spare_failed"):
+                acct += " · 坏了 %d" % m["spare_failed"]
         links = m.get("links")
         print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load,
                      "-" if links is None else links, acct))
@@ -463,7 +471,10 @@ def accounts_main(a):
             if have.get(a.principal, a.login) != a.login:
                 die("%s's login is %s, not %s — a different name there is `fleet hub accounts relogin`"
                     % (a.principal, have[a.principal], a.login), 2)
-        resp = call(a, "POST", ACCOUNTS_PATH, {"action": a.action, "principal_id": a.principal, "hostname": a.host})
+        body = {"action": a.action, "principal_id": a.principal, "hostname": a.host}
+        if a.action == "assign" and (a.own_name or a.login):
+            body["own_name"] = True  # their own name, never a spare's fleetu<N>
+        resp = call(a, "POST", ACCOUNTS_PATH, body)
         if a.json:
             print(json.dumps(resp, indent=2, ensure_ascii=False))
             return
@@ -513,6 +524,8 @@ def main(argv):
     ac.add_argument("login", nargs="?", help="relogin: the new login")
     ac.add_argument("--host", help="forget: only the record on this machine · assign / remove: the machine")
     ac.add_argument("--login", dest="login", help="assign: the login they must have (checked, never set)")
+    ac.add_argument("--own-name", dest="own_name", action="store_true",
+                    help="assign: open their own login name there, skipping a ready spare")
     iv = sub.add_parser("invite", parents=[common], help="an install command that lets one new person in")
     iv.add_argument("login", nargs="?", help="only this GitHub user may use it")
     iv.add_argument("--list", action="store_true", help="every invite and its state")

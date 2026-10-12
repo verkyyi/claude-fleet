@@ -1593,7 +1593,9 @@ TOOLS = {
     "open": (tool_open, {
         "description": "Open a URL, a page served here (:port[/path], localhost) or a file in the OPERATOR's own "
                        "browser over their SSH connection (bin/fleet-open.sh) — never `open` on this machine. "
-                       "Prints sent:<how> or fallback:copied (exit 0), fallback:path (exit 2) — say the path.",
+                       "Waits for the far side's receipt and prints opened (exit 0), unconfirmed (exit 0: handed "
+                       "over, no receipt — stderr gives the link) or failed:<why> (exit 4; exit 2 for a file "
+                       "it could not send — say the path).",
         "inputSchema": {"type": "object", "properties": {
             "target": {"type": "string", "description": "A URL, :port[/path], or a file path."}},
             "required": ["target"], "additionalProperties": False}}),

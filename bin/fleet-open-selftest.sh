@@ -12,19 +12,29 @@
 #               · an external URL → {"kind":"url"} · a bad port / junk → exit 1
 #   • BYTES     the escape on the client is EXACTLY
 #               ESC ] 1337 ; Custom=id=<secret>:<base64 JSON> BEL, the JSON equals
-#               --print's minus ts, and stdout is the one line `sent:iterm2`
+#               --print's minus ts and id, and stdout is the one line `unconfirmed`
+#               (the escape has no receipt — issue #3538)
 #   • SECRET    made on first run at ~/.config/claude-fleet/open.secret, mode 0600,
 #               64 hex; a loose existing one is chmod'ed to 0600 and kept; the
 #               secret never appears on stdout/stderr or in the lock-command
 #   • CHANNEL   the newest client is picked · lock-command restored (unset stays
 #               unset) · no job/lock dir left
 #   • FALLBACK  active client not iTerm2 / FLEET_OPEN=0 / no tmux → open-url.sh gets
-#               the fallback URL, nothing written to the client, stdout is its
-#               token (`fallback:copied` / `sent:tunnel`) · a loopback page names the
-#               `ssh -L` it needs
+#               the fallback URL, nothing written to the client, stdout is
+#               `unconfirmed` · a loopback page names the `ssh -L` it needs
 #   • OPEN-URL  OPEN_URL_REPORT=1: a live tunnel port → `sent:tunnel`, the listener
 #               got the URL
-#   • FILE      a file → fleet-show (MultipartFile on the client), `sent:iterm2`
+#   • FILE      a file → fleet-show (MultipartFile on the client), `unconfirmed`
+#   • RECEIPT   (issue #3538) a thin 看台 here: 7502 open with the id; its loop's
+#               `--ack <id> ok` → `opened`, `fail <why>` → `failed:<why>` exit 4,
+#               none within FLEET_OPEN_ACK_WAIT → `unconfirmed` naming the link ·
+#               the hub's client done:opened → opened, failed → failed:<why>
+#   • VIA       the newest client is another home's 看台 (`-via-<home>`): the open is
+#               relayed to that home as `--from-peer <node>:<login> -- <loopback URL>`
+#               and its result is ours; a home that cannot be asked → the old roads
+#   • PEER      `--from-peer`: the home forwards the peer's port (FLEET_OPEN_FWD_CMD)
+#               and its 看台's loop gets the HOME's port, the receipt comes back
+#   • DOCPREV   doc-preview http-direct: its tailnet URL maps to the loopback port
 #   • RECORD    open.last holds the last result + kind, never the URL
 #   • DOCTOR    fleet-doctor's `open` line: no secret → INFO; secret 0600 + last
 #               result → PASS naming it; a loose secret → WARN
@@ -123,7 +133,8 @@ ts=$("$OPEN" --print ':1' | python3 -c 'import json,sys; print(json.load(sys.std
 clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyNEW|iTerm2 3.6.10' '200|/dev/ttyMID|xterm-256color'
 rm -f "$OUT" "$STATE/lockcmd" "$STATE/lockcmds"
 res=$("$OPEN" ':8765/d/x/' 2>"$WORK/err"); rc=$?
-[ "$rc" = 0 ] && [ "$res" = sent:iterm2 ] && ok "stdout is one line sent:iterm2" || bad "result ($rc): $res / $(cat "$WORK/err")"
+[ "$rc" = 0 ] && [ "$res" = unconfirmed ] && ok "stdout is one line unconfirmed (no receipt on the escape road)" || bad "result ($rc): $res / $(cat "$WORK/err")"
+grep -q '没有回执.*链接：http://127.0.0.1:8765/d/x/' "$WORK/err" && ok "unconfirmed gives the link on stderr" || bad "unconfirmed link: $(cat "$WORK/err")"
 [ "$(cat "$STATE/locked")" = /dev/ttyNEW ] && ok "CHANNEL newest iTerm2 client" || bad "CHANNEL locked $(cat "$STATE/locked")"
 [ -f "$SECRET" ] && ok "SECRET created at ~/.config/claude-fleet/open.secret" || bad "SECRET missing"
 perm=$(stat -c '%a' "$SECRET" 2>/dev/null || stat -f '%Lp' "$SECRET" 2>/dev/null)
@@ -137,7 +148,7 @@ m = re.fullmatch(rb'\x1b\]1337;Custom=id=([0-9a-f]+):([A-Za-z0-9+/=]+)\x07', s)
 if not m: print('shape', repr(s[:80])); sys.exit()
 if m.group(1).decode() != sys.argv[2]: print('id'); sys.exit()
 d = json.loads(base64.b64decode(m.group(2)))
-d.pop('ts')
+d.pop('ts'); d.pop('id')
 print('ok' if json.dumps(d, sort_keys=True, separators=(',', ':')) == sys.argv[3] else 'json ' + json.dumps(d))
 PY
 )
@@ -146,8 +157,8 @@ grep -qF "$sec" "$WORK/err" && bad "SECRET leaked to stderr" || ok "SECRET not o
 grep -qF "$sec" "$STATE/lockcmds" && bad "SECRET in the lock-command" || ok "SECRET not in the lock-command"
 [ ! -f "$STATE/lockcmd" ] && ok "CHANNEL lock-command restored (unset)" || bad "CHANNEL left $(cat "$STATE/lockcmd")"
 ls -d "$WORK"/fleet-show.* >/dev/null 2>&1 && bad "job/lock dir leaked" || ok "no job/lock dir left"
-[ "$(cut -f2,3 "$HOME/.config/claude-fleet/open.last")" = "sent:iterm2${TAB}forward" ] \
-  && ok "RECORD open.last = sent:iterm2 forward" || bad "RECORD: $(cat "$HOME/.config/claude-fleet/open.last")"
+[ "$(cut -f2,3 "$HOME/.config/claude-fleet/open.last")" = "unconfirmed${TAB}forward" ] \
+  && ok "RECORD open.last = unconfirmed forward" || bad "RECORD: $(cat "$HOME/.config/claude-fleet/open.last")"
 grep -q 8765 "$HOME/.config/claude-fleet/open.last" && bad "RECORD holds the address" || ok "RECORD holds no address"
 
 chmod 644 "$SECRET"; rm -f "$OUT"
@@ -166,16 +177,16 @@ fb() {  # <label> <expect stdout> <expect open-url arg> <cmd…>
   else bad "FALLBACK $label → rc $rc res=$res arg=$(cat "$STATE/openurl.argv" 2>/dev/null) out=$(wc -c < "$OUT" 2>/dev/null)"; fi
 }
 clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyPHONE|xterm-256color'
-fb 'active client not iTerm2' fallback:copied 'http://127.0.0.1:8765/d/x/' "$OPEN" ':8765/d/x/'
+fb 'active client not iTerm2' unconfirmed 'http://127.0.0.1:8765/d/x/' "$OPEN" ':8765/d/x/'
 grep -q 'ssh -L 8765:127.0.0.1:8765' "$WORK/err" && ok "FALLBACK names the ssh -L a loopback page needs" || bad "FALLBACK hint: $(cat "$WORK/err")"
 grep -q 'ttyPHONE 是 xterm-256color' "$WORK/err" && ok "FALLBACK says why (fleet-show's words)" || bad "FALLBACK why"
-fb 'tunnel took it' sent:tunnel 'https://github.com/x' env FAKE_OPENURL_SAYS=sent:tunnel "$OPEN" 'https://github.com/x'
+fb 'tunnel took it' unconfirmed 'https://github.com/x' env FAKE_OPENURL_SAYS=sent:tunnel "$OPEN" 'https://github.com/x'
 echo '{"Web":{"box.tail0.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
-fb 'tailnet page keeps its tailnet URL' fallback:copied 'https://box.tail0.ts.net:8446/d/a/' "$OPEN" 'https://box.tail0.ts.net:8446/d/a/'
+fb 'tailnet page keeps its tailnet URL' unconfirmed 'https://box.tail0.ts.net:8446/d/a/' "$OPEN" 'https://box.tail0.ts.net:8446/d/a/'
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
-fb 'FLEET_OPEN=0' fallback:copied 'https://github.com/x' env FLEET_OPEN=0 "$OPEN" 'https://github.com/x'
-fb 'no tmux' fallback:copied 'https://github.com/x' env -u TMUX "$OPEN" 'https://github.com/x'
-[ "$(cut -f2 "$HOME/.config/claude-fleet/open.last")" = fallback:copied ] && ok "RECORD fallback:copied" || bad "RECORD fallback"
+fb 'FLEET_OPEN=0' unconfirmed 'https://github.com/x' env FLEET_OPEN=0 "$OPEN" 'https://github.com/x'
+fb 'no tmux' unconfirmed 'https://github.com/x' env -u TMUX "$OPEN" 'https://github.com/x'
+[ "$(cut -f2 "$HOME/.config/claude-fleet/open.last")" = unconfirmed ] && ok "RECORD unconfirmed" || bad "RECORD fallback"
 
 # ---- OPEN-URL's report (the real script, a tunnel listener we own) ------------------
 LPORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
@@ -197,11 +208,112 @@ res=$(URL_OPENER_PORT="$LPORT" sh "$BIN/open-url.sh" '' 2>/dev/null)
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
 printf 'hello' > "$WORK/note.txt"; rm -f "$OUT"
 res=$("$OPEN" "$WORK/note.txt" 2>/dev/null); rc=$?
-[ "$rc" = 0 ] && [ "$res" = sent:iterm2 ] && grep -q 'MultipartFile=' "$OUT" && ok "FILE → fleet-show download, sent:iterm2" || bad "FILE ($rc): $res"
+[ "$rc" = 0 ] && [ "$res" = unconfirmed ] && grep -q 'MultipartFile=' "$OUT" && ok "FILE → fleet-show download, unconfirmed" || bad "FILE ($rc): $res"
 clients '300|/dev/ttyNEW|xterm-256color'
 res=$("$OPEN" "$WORK/note.txt" 2>/dev/null); rc=$?
-[ "$rc" = 2 ] && printf '%s' "$res" | grep -q "^PATH $WORK/note.txt" && [ "$(printf '%s\n' "$res" | tail -n 1)" = fallback:path ] \
-  && ok "FILE not iTerm2 → PATH + fallback:path, exit 2" || bad "FILE fallback ($rc): $res"
+[ "$rc" = 2 ] && printf '%s' "$res" | grep -q "^PATH $WORK/note.txt" && case "$(printf '%s\n' "$res" | tail -n 1)" in failed:*) true ;; *) false ;; esac \
+  && ok "FILE not iTerm2 → PATH + failed:…, exit 2" || bad "FILE fallback ($rc): $res"
+
+# ---- RECEIPT: a thin 看台 here, its loop's --ack (issue #3538) ---------------------------
+export FLEET_CONF_DIR="$HOME/.config/claude-fleet"
+RV="$FLEET_CONF_DIR/remote-views"; mkdir -p "$RV"
+ACKD="$FLEET_CONF_DIR/open-acks"
+printf '/dev/ttyTHIN\tfleet-x\tthin\t1\t1\tcur=-\troute=\tdevice=\ttoken=TOK1\tfuid=u\tnode=box\n' > "$RV/Mac-1"
+clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyTHIN|tmux'
+mkwhere() {  # <file> <via>
+  printf '#!/bin/sh\necho '"'"'{"state":"active","source":"hub","via":"%s"}'"'"'\n' "$2" > "$1"; chmod +x "$1"
+}
+mkwhere "$WORK/bin/where-thin" thin
+mkwhere "$WORK/bin/where-hub" local
+# the loop: reads the 7502 written to FLEET_THIN_OPEN_OUT, answers --ack as fleet-thin.py does
+loop() {  # <ok|fail|none> [why]
+  ( for _ in $(seq 1 60); do [ -s "$WORK/thin.out" ] && break; sleep 0.1; done
+    id=$(python3 -c 'import base64,json,re,sys
+m = re.search(rb"\x1b\]7502;open;token=TOK1;j=([A-Za-z0-9+/=]+)\x07", open(sys.argv[1],"rb").read())
+print(json.loads(base64.b64decode(m.group(1)))["id"])' "$WORK/thin.out" 2>/dev/null)
+    [ "$1" = none ] || [ -z "$id" ] || bash "$OPEN" --ack "$id" "$1" "${2:-}" ) &
+}
+thin() {  # <ok|fail|none> [why] → RES RC
+  rm -f "$WORK/thin.out" "$OUT"; loop "$@"
+  RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_THIN_OPEN_OUT="$WORK/thin.out" FLEET_OPEN_ACK_WAIT=3 \
+        "$OPEN" ':8765/d/x/' 2>"$WORK/err"); RC=$?; wait
+}
+payload() {  # <python condition on d> — the 7502 payload in thin.out
+  python3 -c 'import base64,json,re,sys
+m = re.search(rb"j=([A-Za-z0-9+/=]+)\x07", open(sys.argv[1],"rb").read()); d = json.loads(base64.b64decode(m.group(1)))
+sys.exit(0 if eval(sys.argv[2]) else 1)' "$WORK/thin.out" "$1" 2>/dev/null
+}
+thin ok
+[ "$RC" = 0 ] && [ "$RES" = opened ] && [ ! -s "$OUT" ] && ok "RECEIPT thin loop ack ok → opened (no escape written)" || bad "RECEIPT ok ($RC): $RES / $(cat "$WORK/err")"
+payload 'd["rport"] == 8765 and d["path"] == "/d/x/" and re.fullmatch("[0-9a-f]+", d["id"])' \
+  && ok "RECEIPT 7502 payload carries rport/path + a hex id" || bad "RECEIPT payload"
+thin fail 'the browser opener failed'
+[ "$RC" = 4 ] && [ "$RES" = 'failed:the browser opener failed' ] && ok "RECEIPT ack fail → failed:<why>, exit 4" || bad "RECEIPT fail ($RC): $RES"
+thin none
+[ "$RC" = 0 ] && [ "$RES" = unconfirmed ] && grep -q '没等到它的回执' "$WORK/err" && grep -q '链接：' "$WORK/err" \
+  && ok "RECEIPT no ack within the wait → unconfirmed + the link" || bad "RECEIPT none ($RC): $RES / $(cat "$WORK/err")"
+[ -n "$(find "$ACKD" -type f 2>/dev/null)" ] && bad "RECEIPT an ack file was left" || ok "RECEIPT ack files consumed"
+bash "$OPEN" --ack 'not-hex' ok >/dev/null 2>&1; [ $? = 1 ] && ok "RECEIPT --ack refuses a bad id" || bad "RECEIPT --ack bad id"
+
+# the hub's client: its done/failed answer is the receipt
+hubact() {  # <state> <result>
+  printf 'print(%s)\n' "'{\"state\":\"$1\",\"result\":\"$2\",\"client\":{\"device\":\"Mac\"}}'" > "$WORK/bin/actions"
+  chmod +x "$WORK/bin/actions"
+  RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-hub" FLEET_OPEN_ACTIONS_BIN="$WORK/bin/actions" "$OPEN" 'https://github.com/x' 2>"$WORK/err"); RC=$?
+}
+hubact 'done' opened; [ "$RC" = 0 ] && [ "$RES" = opened ] && ok "RECEIPT hub client done:opened → opened" || bad "RECEIPT hub done ($RC): $RES"
+hubact failed 'no browser'; [ "$RC" = 4 ] && [ "$RES" = 'failed:no browser' ] && ok "RECEIPT hub client failed → failed:<why>" || bad "RECEIPT hub failed ($RC): $RES"
+hubact 'done' 'link:tailnet'; [ "$RES" = unconfirmed ] && ok "RECEIPT hub client gave a link → unconfirmed" || bad "RECEIPT hub link: $RES"
+
+# ---- VIA: the person watches us through another machine's 看台 ---------------------------
+rm -f "$RV/Mac-1"
+printf '/dev/ttyVIA\tfleet-x\tthin\t1\t1\tcur=-\troute=\tdevice=\ttoken=\tfuid=u\tnode=box\n' > "$RV/Mac-1-via-home2"
+clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyVIA|tmux'
+cat > "$WORK/bin/relay" <<RELAY
+#!/bin/sh
+printf '%s\n' "\$*" > "$STATE/relay.argv"
+echo 'fleet-open: (the home) chatter' >&2
+echo "\${FAKE_RELAY_SAYS:-opened}"
+RELAY
+chmod +x "$WORK/bin/relay"
+echo '{"Web":{"box.tail0.ts.net:8446":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}' > "$STATE/serve.json"
+rm -f "$OUT"
+RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_RELAY_CMD="$WORK/bin/relay" \
+      "$OPEN" 'https://box.tail0.ts.net:8446/d/a/' 2>"$WORK/err"); RC=$?
+[ "$RC" = 0 ] && [ "$RES" = opened ] && [ ! -s "$OUT" ] && ok "VIA relayed to the home, its result is ours" || bad "VIA ($RC): $RES / $(cat "$WORK/err")"
+case "$(cat "$STATE/relay.argv")" in
+  "home2 bash .claude/fleet/bin/fleet-open.sh --from-peer box:$(id -un) -- http://127.0.0.1:8765/d/a/")
+    ok "VIA asks the home with --from-peer <node>:<login> and the LOOPBACK URL" ;;
+  *) bad "VIA argv: $(cat "$STATE/relay.argv")" ;;
+esac
+RES=$(FAKE_RELAY_SAYS='failed:no thin client of the person on the home' FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" \
+      FLEET_OPEN_RELAY_CMD="$WORK/bin/relay" "$OPEN" ':8765/' 2>/dev/null); RC=$?
+[ "$RC" = 4 ] && [ "$RES" = 'failed:no thin client of the person on the home' ] && ok "VIA the home's failure is ours" || bad "VIA fail ($RC): $RES"
+RES=$(FAKE_RELAY_SAYS='usage' FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" \
+      FLEET_OPEN_RELAY_CMD="$WORK/bin/relay" "$OPEN" ':8765/' 2>"$WORK/err"); RC=$?
+[ "$RES" = unconfirmed ] && grep -q '改走老路' "$WORK/err" && ok "VIA an older home → the old roads" || bad "VIA old home: $RES / $(cat "$WORK/err")"
+rm -f "$RV/Mac-1-via-home2"
+
+# ---- PEER: this machine is the home, asked by the session's machine ----------------------
+printf '/dev/ttyTHIN\tfleet-x\tthin\t1\t1\tcur=-\troute=\tdevice=\ttoken=TOK1\tfuid=u\tnode=home2\n' > "$RV/Mac-1"
+clients '300|/dev/ttyTHIN|tmux'
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/fwd.argv"\necho 41234\n' "$STATE" > "$WORK/bin/fwd"; chmod +x "$WORK/bin/fwd"
+rm -f "$WORK/thin.out"; loop ok
+RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_FWD_CMD="$WORK/bin/fwd" FLEET_THIN_OPEN_OUT="$WORK/thin.out" \
+      FLEET_OPEN_ACK_WAIT=3 "$OPEN" --from-peer macmini:verky -- 'http://127.0.0.1:8765/d/a/' 2>"$WORK/err"); RC=$?; wait
+[ "$RC" = 0 ] && [ "$RES" = opened ] && ok "PEER the home's 看台 loop opened it" || bad "PEER ($RC): $RES / $(cat "$WORK/err")"
+[ "$(cat "$STATE/fwd.argv" 2>/dev/null)" = "macmini verky 8765" ] && ok "PEER forwards the peer's port over the link" || bad "PEER fwd argv: $(cat "$STATE/fwd.argv" 2>/dev/null)"
+payload 'd["rport"] == 41234 and d["path"] == "/d/a/" and d["node"] == "macmini"' \
+  && ok "PEER the loop is handed the HOME's port" || bad "PEER payload"
+RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_FWD_CMD=false "$OPEN" --from-peer macmini:verky -- ':8765/' 2>/dev/null); RC=$?
+[ "$RC" = 4 ] && case "$RES" in failed:*) true ;; *) false ;; esac && ok "PEER no link to the peer → failed" || bad "PEER no link ($RC): $RES"
+rm -f "$RV/Mac-1"
+
+# ---- DOCPREV http-direct: the tailnet URL is the loopback port too ------------------------
+echo '{}' > "$STATE/serve.json"; rm -f "$WORK/docprev/https.port"
+echo http-direct > "$WORK/docprev/mode"; echo 8801 > "$WORK/docprev/server.port"
+chk 'tailnet via doc-preview http-direct' 'http://box.tail0.ts.net:8801/d/q/' '{"v":1,"kind":"forward","rport":8801,"path":"/d/q/","scheme":"http","host":""}'
+clients '300|/dev/ttyNEW|iTerm2 3.6.10'
 
 # ---- DOCTOR's open line ---------------------------------------------------------------
 doctor_open() {
@@ -210,7 +322,7 @@ doctor_open() {
 }
 mkdir -p "$WORK/conf"
 l=$(doctor_open)
-case "$l" in *PASS*fallback:path*) ok "DOCTOR PASS names the last result" ;; *) bad "DOCTOR pass: $l" ;; esac
+case "$l" in *PASS*failed*) ok "DOCTOR PASS names the last result" ;; *) bad "DOCTOR pass: $l" ;; esac
 chmod 644 "$SECRET"
 case "$(doctor_open)" in *WARN*0600*) ok "DOCTOR loose secret → WARN" ;; *) bad "DOCTOR loose: $(doctor_open)" ;; esac
 rm -f "$SECRET" "$HOME/.config/claude-fleet/open.last"

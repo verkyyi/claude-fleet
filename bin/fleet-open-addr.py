@@ -17,7 +17,9 @@ the port with — and empty when there is none (or the address is not a page her
              https://<this machine's tailnet name or IP>[:P]/…  → the loopback port
                `tailscale serve` proxies P to (longest mount first); failing that,
                doc-preview's own record (~/.cache/claude-doc-preview: https.port →
-               server.port). No loopback port found → sent as a plain `url`.
+               server.port; http-direct: its own port, bound on 127.0.0.1 too — #3538);
+               failing that, an http port something accepts on at 127.0.0.1 here.
+               No loopback port found → sent as a plain `url`.
   url      anything else, as is — the operator's browser opens it.
 
 Payload fields (the contract #1380's laptop side reads): v=1, kind, rport, path,
@@ -114,12 +116,32 @@ def via_serve(dns, port, path):
 
 
 def via_docpreview(port, path):
-    """doc-preview's record: its tailnet HTTPS port fronts its loopback server.py."""
+    """doc-preview's record: its tailnet HTTPS port fronts its loopback server.py;
+    in http-direct the tailnet port IS the server's, which binds 127.0.0.1 too
+    (issue #3538)."""
     hp, sp = read(f"{DOCPREV}/https.port") or "", read(f"{DOCPREV}/server.port")
     mode = read(f"{DOCPREV}/mode") or ("https" if hp else "")
     if mode == "https" and sp.isdigit() and str(port) == (hp or "443"):
         return int(sp), "http", path
+    if mode == "http-direct" and sp.isdigit() and str(port) == sp:
+        return int(sp), "http", path
     return None
+
+
+def loopback_listens(port):
+    """Something accepts on 127.0.0.1:<port> here (issue #3538): a page this machine
+    serves on its tailnet name AND loopback is forwarded, never sent as a tailnet URL."""
+    if os.environ.get("FLEET_OPEN_PROBE_LOOPBACK", "1") == "0":
+        return False
+    import socket
+    s = socket.socket()
+    s.settimeout(0.5)
+    try:
+        return s.connect_ex(("127.0.0.1", int(port))) == 0
+    except (OSError, ValueError):
+        return False
+    finally:
+        s.close()
 
 
 def tailnet_link(dns, rport, path):
@@ -149,6 +171,8 @@ def tailnet_link(dns, rport, path):
     if mode == "https" and sp == str(rport):
         port = hp or "443"
         return f"https://{dns}{'' if port == '443' else ':' + port}{path}"
+    if mode == "http-direct" and sp == str(rport):
+        return f"http://{dns}:{sp}{path}"
     return ""
 
 
@@ -204,6 +228,8 @@ def main():
     dns, names = self_names()
     if host in names:
         hit = via_serve(dns, port, path) or via_docpreview(port, path)
+        if not hit and scheme == "http" and loopback_listens(port):
+            hit = port, "http", path
         if hit:
             rport, fscheme, fpath = hit
             return emit(forward(rport, fpath, fscheme), raw, raw)

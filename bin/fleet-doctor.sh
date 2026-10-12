@@ -536,8 +536,32 @@ else
   fail fzf "not found — need ≥ 0.45 for the prefix+g dashboard"
 fi
 
+# --- GitHub rows only when a repo is GitHub's (issue #3600) ---
+# A repo added from any other git address carries FLEET_FORGE="none" and no fleet
+# step calls gh for it, so the gh / github rows (and each repo's labels row) speak
+# only when SOME hosted repo is GitHub's — or when nothing is hosted yet (a new
+# login is still told what gh does). Read straight off the confs (doctor is /bin/sh,
+# no fleet-lib): a repo overlay without FLEET_FORGE="none", or an old-layout fleet
+# conf still naming FLEET_REPO, is GitHub's — every repo before #3600.
+_gh_wanted=1
+if [ -d "$conf_dir/fleets" ]; then
+  _gh_total=0; _gh_none=0
+  for _ov in "$conf_dir"/fleets/*/repos/*.conf; do
+    [ -f "$_ov" ] || continue
+    _gh_total=$((_gh_total + 1))
+    grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_FORGE="?none"?[[:space:]]*$' "$_ov" && _gh_none=$((_gh_none + 1))
+  done
+  for _ov in "$conf_dir"/fleets/*/conf; do
+    [ -f "$_ov" ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO=..' "$_ov" && _gh_total=$((_gh_total + 1))
+  done
+  [ "$_gh_total" -gt 0 ] && [ "$_gh_total" = "$_gh_none" ] && _gh_wanted=0
+  unset _ov _gh_total _gh_none
+fi
+
 # --- gh + auth (backlog + PR/CI map) ---
-if command -v gh >/dev/null 2>&1; then
+if [ "$_gh_wanted" = 0 ]; then
+  :   # no GitHub repo hosted — gh is not this login's business (issue #3600)
+elif command -v gh >/dev/null 2>&1; then
   if gh auth status >/dev/null 2>&1; then pass gh "authed"
   else warn gh "installed but not authed — backlog + PR/CI panels stay empty (\`gh auth login\`)"; fi
   # PR status has its own fast daemon (decoupled from the 60s collector) so
@@ -556,6 +580,7 @@ fi
 # The lib is bash and this script is POSIX sh, so it runs in a bash child (as the
 # alerts row does), which also renders each row's HH:MM.
 _gh_lib="$(dirname "$0")/fleet-gh-lib.sh"
+[ "$_gh_wanted" = 0 ] && _gh_lib=/nonexistent/fleet-gh-lib.sh   # no GitHub repo: no row (#3600)
 _gh_rows=''; _gh_hour=''
 # shellcheck disable=SC2016
 [ -f "$_gh_lib" ] && _gh_rows=$(bash -c '. "$1" || exit 1
@@ -3693,7 +3718,7 @@ fi
 # from (2026-09-12: fleet-ccquota sat on 'dashboard-redesign' for a whole round).
 tr_sh="$(dirname "$0")/fleet-trust.sh"
 lib_sh="$(dirname "$0")/fleet-lib.sh"
-_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT"
+_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT FLEET_REMOTE FLEET_FORGE FLEET_LAND"
 
 # _norm_repo <url-or-slug> → owner/name (fleet_norm_repo, single-line case)
 _norm_repo() {
@@ -3724,6 +3749,10 @@ _repo_block() {
   bbase=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_BASE_BRANCH)
   dref=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_DEPLOY_REF)
   dchk=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_DEPLOY_CHECK)
+  # Not GitHub's (issue #3600): its origin is FLEET_REMOTE, its default branch is
+  # the remote's own HEAD, and nothing here asks gh.
+  rforge=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_FORGE)
+  rremote=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" FLEET_REMOTE)
 
   # main — the checkout every worktree for this repo branches from
   main_ok=0; rb_bad=''   # rb_bad: this repo's failing items, for the `repos` row
@@ -3736,6 +3765,10 @@ _repo_block() {
     warn main "$r: FLEET_MAIN $main is not a git checkout — no worktree can be cut from it"
   else
     morigin=$(_norm_repo "$(git -C "$main" remote get-url origin 2>/dev/null)")
+    if [ "$rforge" = none ] && [ -n "$rremote" ]; then
+      morigin=$(git -C "$main" config --get remote.origin.url 2>/dev/null)   # as written, not insteadOf'd
+      [ "$morigin" = "$rremote" ] && morigin=$r
+    fi
     if [ -z "$morigin" ]; then
       warn main "$r: $main has no origin remote — workers cannot push or open a PR"
     elif [ "$morigin" != "$r" ]; then
@@ -3753,8 +3786,13 @@ _repo_block() {
     rb_bad="${rb_bad:+$rb_bad, }base"
   fi
   gh_out=''
-  command -v gh >/dev/null 2>&1 \
-    && gh_out=$(gh repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
+  if [ "$rforge" = none ]; then
+    [ "$main_ok" = 1 ] && gh_out=$(git -C "$main" ls-remote --symref origin HEAD 2>/dev/null \
+                                    | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p' | head -n 1)
+  else
+    command -v gh >/dev/null 2>&1 \
+      && gh_out=$(gh repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
+  fi
   bdef=$(printf '%s\n' "$gh_out" | sed -n 1p)
   if [ -n "$bbase" ]; then
     if [ "$main_ok" = 1 ] && ! git -C "$main" rev-parse --verify -q "refs/heads/$bbase" >/dev/null 2>&1 \
@@ -3762,7 +3800,11 @@ _repo_block() {
       warn base "$r: base \"$bbase\" does not exist in $main — no worktree can branch from it"
       rb_bad="${rb_bad:+$rb_bad, }base"
     elif [ -z "$bdef" ]; then
-      printf '        note: %s: could not read the default branch (gh missing/unauthed/offline) — base "%s" left unverified.\n' "$r" "$bbase"
+      if [ "$rforge" = none ]; then
+        printf '        note: %s: could not read the default branch from %s — base "%s" left unverified.\n' "$r" "${rremote:-its origin}" "$bbase"
+      else
+        printf '        note: %s: could not read the default branch (gh missing/unauthed/offline) — base "%s" left unverified.\n' "$r" "$bbase"
+      fi
     elif [ "$bbase" = "$bdef" ]; then
       pass base "$r: base \"$bbase\" is the repo default"
     else
@@ -3842,7 +3884,7 @@ EOF
   fi
 
   # labels — the filer rejects any label outside the canonical set, and gh starts empty
-  if [ -n "$canon_labels" ] && [ -n "$bdef" ]; then
+  if [ -n "$canon_labels" ] && [ -n "$bdef" ] && [ "$rforge" != none ]; then
     have=$(printf '%s\n' "$gh_out" | sed 1d)
     # `repo view` returns the first 100 labels only; page the full list past that
     [ "$(printf '%s\n' "$have" | grep -c .)" -ge 100 ] \

@@ -1,0 +1,12 @@
+# Beside the user pods in fleet-workers. Applied by a person (../README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet-workers
+resources:
+  - ../base
+images:
+  # python3 is all it needs: the managed-node image, pinned by digest at apply
+  - name: fleet-python
+    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node
+patches:
+  - path: deployment-env.yaml

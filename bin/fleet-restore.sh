@@ -319,8 +319,22 @@ snapshot() {
     # shrink guard compares against whichever map currently holds recovery data —
     # the new-layout map, or a not-yet-migrated legacy one (issue #181).
     local prior; prior=$(restore_map_file "$sess")
+    # What the stored map still means (issue #3543): one row per conversation, and
+    # no session the fleet closed on purpose that no window carries now (a migrate
+# carries @fleet_id onto its new window; pullback_scan lifts such a mark). Those rows
+    # are not "richer", they are wrong — a reaped session reopened, one conversation
+    # resumed twice — so the guard counts without them, and a rejected snapshot still
+    # takes them out of the kept map.
+    local livefids; livefids=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}' 2>/dev/null | grep .)
     if [ -f "$prior" ]; then
-      local new_wins old_wins
+      local new_wins old_wins pruned="$sdir/.restore.$$.prior.map"
+      fleet_restore_map_prune "$prior" --retired "$livefids" > "$pruned" 2>/dev/null
+      if [ -s "$pruned" ] && ! cmp -s "$pruned" "$prior"; then
+        log "snapshot $sess: stored map pruned — $(awk -F'\t' '$1=="WIN"' "$prior" | wc -l | tr -d ' ')→$(awk -F'\t' '$1=="WIN"' "$pruned" | wc -l | tr -d ' ') WIN rows (duplicate conversation / retired session, issue #3543)"
+        mv "$pruned" "$prior" 2>/dev/null || rm -f "$pruned"
+      else
+        rm -f "$pruned"
+      fi
       new_wins=$(awk -F'\t' '$1=="WIN"' "$tmp"   2>/dev/null | wc -l | tr -d ' ')
       old_wins=$(awk -F'\t' '$1=="WIN"' "$prior" 2>/dev/null | wc -l | tr -d ' ')
       if [ "${new_wins:-0}" -lt "${old_wins:-0}" ]; then
@@ -393,7 +407,7 @@ pullback_file() { printf '%s/pullback.map' "$(fleet_state_dir "$1")"; }
 # pullback_scan <sess> <sock> <map> — append the vanished, unfinished, unretired
 # sessions of <map> to fleets/<sess>/pullback.map (FID + WIN rows, once each).
 pullback_scan() {
-  local sess="$1" sock="$2" mf="$3" live pb line fid wtag wname wpath wstate wsleep
+  local sess="$1" sock="$2" mf="$3" live pb line fid wtag wname wpath wsid wstate wsleep
   [ "${FLEET_PULLBACK:-1}" = 0 ] && return 0
   [ -f "$mf" ] && grep -q '^FID' "$mf" 2>/dev/null || return 0
   # Every session on this server, the warm pool included (a recycled scratch
@@ -401,6 +415,9 @@ pullback_scan() {
   live=$(fleet_lw '#{window_id} #{@fleet_id}' tmux -L "$sock")
   [ -n "$live" ] || return 0
   live=$(printf '%s\n' "$live" | awk 'NF > 1 { print $2 }')
+  # The conversations those windows run (issue #3543): a row whose conversation is
+  # open in another window is not a killed session — it is a duplicate.
+  local lsid; lsid=$(fleet_lw '#{@cc_session_id} #{@norepo_sid}' tmux -L "$sock" | tr ' ' '\n' | grep .)
   # A mark outlives its window only until the same identity is live again (a
   # history resume, a migrate's reopen): then it must not excuse the NEXT kill.
   # Two minutes of grace, so a closer's mark is never lifted before its kill lands.
@@ -417,8 +434,9 @@ pullback_scan() {
     fid=${wtag#WIN:}
     [ "$fid" != "$wtag" ] && fleet_is_fid "$fid" || continue   # no identity: never
     printf '%s\n' "$live" | grep -qxF "$fid" && continue
-    IFS=$'\t' read -r _ wname wpath _ _ wstate _ _ _ _ _ _ _ _ wsleep _ <<<"$line"
+    IFS=$'\t' read -r _ wname wpath wsid _ wstate _ _ _ _ _ _ _ _ wsleep _ <<<"$line"
     echo "$wname" | grep -qE "$PANEL_RE" && continue
+    [ -n "$wsid" ] && [ "$wsid" != - ] && printf '%s\n' "$lsid" | grep -qxF "$wsid" && continue
     case "$wstate" in done|exited) continue ;; esac            # finished: stays closed
     [ -z "$wsleep" ] || [ "$wsleep" = - ] || continue           # a sleeper has its record
     fleet_fid_retired "$fid" && continue                        # the fleet closed it
@@ -427,7 +445,7 @@ pullback_scan() {
     [ -f "$pb" ] || awk -F'\t' '$1=="FLEET"{print; exit}' "$mf" > "$pb"
     printf 'FID\t%s\n%s\n' "$fid" "WIN${line#"$wtag"}" >> "$pb"
     log "pullback: $sess/$wname ($fid) gone while ${wstate:--} — queued for the next tick"
-  done < <(fleet_restore_wins "$mf")
+  done < <(fleet_restore_wins <(fleet_restore_map_prune "$mf"))
   return 0
 }
 
@@ -478,6 +496,10 @@ pullback_run() {
       fid=${line%%$'\t'*}; fid=${fid#WIN:}
       IFS=$'\t' read -r _ wname wpath wsid wissue _ <<<"$line"
       if fleet_lw '#{@fleet_id}' tmux -L "$sock" | grep -qxF "$fid"; then continue; fi
+      if [ -n "$wsid" ] && [ "$wsid" != - ] \
+         && fleet_lw '#{@cc_session_id} #{@norepo_sid}' tmux -L "$sock" | tr ' ' '\n' | grep -qxF "$wsid"; then
+        log "pullback: $sess/$wname its conversation ${wsid%%-*}… is open in another window — not reopened (issue #3543)"; continue
+      fi
       fleet_fid_retired "$fid" && { log "pullback: $sess/$wname retired by the fleet since — not reopened"; continue; }
       pullback_merged "$repo" "$wissue" && { log "pullback: $sess/$wname issue #$wissue has a merged PR — not reopened"; continue; }
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
@@ -522,7 +544,7 @@ restore() {
     # the hub REBUILD and still reconcile the work windows below,
     # reopening any mapped WIN whose window isn't currently present.
     local sock; sock=$(fleet_socket "$sess")   # this fleet's own socket (== session, issue #159)
-    local live=0 livewins="" livewt="" livefid="" livebound="" healed
+    local live=0 livewins="" livewt="" livefid="" livebound="" livesid="" healed
     # A socket left by a dying server (issue #1729): clear it, and log that the
     # server died, before has-session reads it as down and fleet-up trips on it.
     if [ -z "$dry" ] && healed=$(fleet_socket_heal "$sock"); then say "$healed"; log "$healed"; fi
@@ -532,6 +554,8 @@ restore() {
       livewt=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{?@worktree,#{@worktree},#{pane_current_path}}' 2>/dev/null)
       livefid=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}' 2>/dev/null | grep .)
       livebound=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@worktree}' 2>/dev/null | grep .)
+      livesid=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@cc_session_id}
+#{@norepo_sid}' 2>/dev/null | grep .)
       say "▸ reconciling fleet $sess ($repo) — already up, checking for missing work windows"
     else
       say "▸ restoring fleet $sess ($repo)"
@@ -611,6 +635,14 @@ restore() {
           continue
         fi ;;
       esac
+      # One conversation, one window (issue #3543): a session id a live window
+      # already runs — or one this pass already reopened — is never resumed again;
+      # two agents on one transcript write over each other.
+      if [ -n "$wid" ] && [ "$wid" != - ] && printf '%s\n' "$livesid" | grep -qxF "$wid"; then
+        say "    · $wname: its conversation ${wid%%-*}… is already open — not reopened"
+        log "skip $sess/$wname conversation-live $wid"
+        continue
+      fi
       if [ ! -d "$wpath" ]; then
         say "    ⚠ $wname: worktree gone ($wpath) — skipped"
         log "skip $sess/$wname worktree-missing $wpath"
@@ -619,6 +651,8 @@ restore() {
       reopened=1
       livebound="${livebound:+$livebound
 }$wpath"
+      [ -n "$wid" ] && [ "$wid" != - ] && livesid="${livesid:+$livesid
+}$wid"
       # Never resume a HELPER's transcript (issue #1296). A map written before the
       # snapshot learned to skip them can name one — on 2026-10-03 four windows came
       # back on the status classifier's `claude -p` run, the newest file in their
@@ -857,7 +891,7 @@ restore() {
 " ;;
         esac
       fi
-    done < <(fleet_restore_wins "$mf")
+    done < <(fleet_restore_wins <(fleet_restore_map_prune "$mf"))
     [ "$live" = 1 ] && [ "$reopened" = 0 ] && say "· $sess fully up — no missing work windows"
   done < <(each_restore_map)
   [ "$found" = 0 ] && say "no restore maps under $FLEET_CONF_DIR/fleets/*/ — nothing to restore"

@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-egress
+spec:
+  template:
+    spec:
+      containers:
+        - name: egress
+          env:
+            # the hub's ACK cluster's pod range (docs/MANAGED-LINUX.md «Egress guard»)
+            - name: FLEET_EGRESS_SOURCES
+              value: "172.20.0.0/16"
+            # GitHub's git transport times out from the CN egress: through the
+            # Singapore gh-relay (extras/gh-relay), which takes the cluster egress only
+            - name: FLEET_EGRESS_VIA
+              value: ".github.com=47.131.114.67:3128 .githubusercontent.com=47.131.114.67:3128 ghcr.io=47.131.114.67:3128"

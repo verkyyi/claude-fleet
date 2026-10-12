@@ -198,6 +198,79 @@ class LinuxNode(unittest.TestCase):
         ia = (BIN / 'fleet-install-apply.sh').read_text()
         self.assertIn("grep -m1 ': FAILED'", ia)
 
+    def test_no_primary_login_never_grows_back(self):
+        """BREAK-IT linux-no-primary-regrows (#3526): FLEET_NODE_LOGIN=fleet made the
+        container open its own `fleet` login at every start — ~54 idle processes and
+        a warm pool nobody used. With `none` (the image's and the manifest's) a
+        recreated pod passes no --login to the install, bootstraps only the logins
+        linux-tenants/ declares, and opens nothing; one person's failed bootstrap
+        never stops the machine."""
+        m = module('fleet-node-linux')
+        for word in ('none', '', ' none '):
+            self.assertEqual(m.primary_login(Mock(login=word)), '')
+        self.assertEqual(m.primary_login(Mock(login='fleet')), 'fleet')
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('FLEET_NODE_LOGIN', None)
+            with patch.object(sys, 'argv', ['x', 'ready']), patch.object(m.os, 'geteuid', return_value=0), \
+                    patch.object(m.sys, 'platform', 'linux'), patch.object(m, 'probe', return_value=0) as pr:
+                m.main()
+            self.assertEqual(m.primary_login(pr.call_args.args[0]), '')
+        with self.assertRaises(m.Refuse):
+            m.bootstrap(Mock(login='none'))
+        with tempfile.TemporaryDirectory() as d:
+            state, run = Path(d, 'state'), Path(d, 'run')
+            run.mkdir()
+            real = m.Path
+
+            def path(*parts):
+                p = real(*parts)
+                return run / p.name if str(p).startswith('/run/') or str(p).startswith('/etc/ssh') else p
+
+            loop = Mock()
+            loop.bin.return_value = Path(d)
+            loop.tend.return_value = 0
+            booted, installs = [], []
+
+            def boot(ns):
+                booted.append(ns.login)
+                if ns.login == 'drill2':
+                    raise RuntimeError('broken home')
+
+            def run_cmd(cmd, **kw):
+                installs.append(cmd)
+                return Mock(returncode=0)
+
+            with patch.dict(os.environ, {'FLEET_NODE_STATE': str(state)}), \
+                    patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
+                    patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'), patch.object(m, 'devnet'), \
+                    patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
+                    patch.object(m, 'tenants', return_value={'24haowan': {}, 'drill2': {}}), \
+                    patch.object(m, 'bootstrap', side_effect=boot), patch.object(m, 'as_tenant'), \
+                    patch.object(m, 'login_open') as opened, patch.object(m, 'ensure_login') as ensured, \
+                    patch.object(m.subprocess, 'run', side_effect=run_cmd), patch.object(m.signal, 'signal'):
+                (state / 'ssh').mkdir(parents=True)
+                (state / 'ssh/ssh_host_ed25519_key').write_text('k')
+                m.foreground(Mock(login='none', hub='h', join_file='/run/fleet-join/login', machine_join_file=''))
+            self.assertEqual(booted, ['24haowan', 'drill2'])
+            install = [c for c in installs if any(str(x).endswith('fleet-node-install.sh') for x in c)]
+            self.assertEqual(len(install), 1)
+            self.assertNotIn('--login', install[0])
+            self.assertNotIn('--login-join-file', install[0])
+            opened.assert_not_called()
+            ensured.assert_not_called()
+            self.assertTrue(loop.tend.called)  # ready was reached, the loop ran
+        # the image and the manifest both say none
+        docker = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        self.assertIn('FLEET_NODE_LOGIN=none', docker)
+        self.assertNotIn('FLEET_NODE_LOGIN=fleet', docker)
+        raw = subprocess.check_output([sys.executable, str(BIN.parent / 'extras/managed-node/render.py'),
+                                       '--image', 'example/image@sha256:' + 'a' * 64,
+                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
+        env = {e['name']: e.get('value') for e in
+               json.loads(raw)['items'][-1]['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(env.get('FLEET_NODE_LOGIN'), 'none')
+        self.assertNotIn('FLEET_LOGIN_JOIN_FILE', env)
+
     def test_recreate_rewrites_every_logins_route(self):
         """BREAK-IT linux-recreate-route-lost (#3421): credsep's root settings
         (<LIB>/<login>.conf, the image layer) were written for a `login open`
@@ -563,6 +636,221 @@ class LinuxNode(unittest.TestCase):
                      'sha256sum -c', '/usr/local/bin/gh', 'fleet-devnet.sh'):
             self.assertIn(tool, df)
         self.assertIn('devnet', (BIN.parent / 'extras/managed-node/prepare-image.sh').read_text())
+
+    def test_cluster_caches(self):
+        """#3548 (EPIC #3500 C3): in the cluster layout every login installs npm /
+        pip / Go packages from the namespace's read-through caches
+        (deploy/k8s/caches: fleet-npm:4873, fleet-pypi:3141, fleet-goproxy:3000)
+        instead of the CN mirrors, Go falling through to goproxy.cn; the image
+        carries the default MCP servers so a session starts them from disk."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        pod = json.loads(subprocess.check_output(base + ['--cluster-caches']))['items'][-1]['spec']['template']['spec']
+        env = {e['name']: e['value'] for e in pod['containers'][0]['env']}
+        self.assertEqual(env['FLEET_CLUSTER_CACHES'], 'fleet-workers')
+        self.assertNotIn('FLEET_CN_MIRRORS', env)
+        for bad in (['--cluster-caches', '--cn-mirrors'], ['--cluster-caches', '--namespace', 'Bad_NS']):
+            r = subprocess.run(base + bad, capture_output=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+
+        n = module('fleet-node-linux')
+        _, shell = n.devnet_settings({'FLEET_CLUSTER_CACHES': 'fleet-workers', 'FLEET_CN_MIRRORS': '1'})
+        npm = 'http://fleet-npm.fleet-workers.svc.cluster.local:4873'
+        pypi = 'http://fleet-pypi.fleet-workers.svc.cluster.local:3141/root/pypi/+simple/'
+        goproxy = 'http://fleet-goproxy.fleet-workers.svc.cluster.local:3000|https://goproxy.cn|direct'
+        for line in ('npm_config_registry=' + npm, 'COREPACK_NPM_REGISTRY=' + npm, 'PIP_INDEX_URL=' + pypi,
+                     'PIP_TRUSTED_HOST=fleet-pypi.fleet-workers.svc.cluster.local', 'UV_DEFAULT_INDEX=' + pypi,
+                     'GOPROXY=' + goproxy, 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node'):
+            self.assertIn(line + '\n', shell)
+        self.assertNotIn('registry.npmmirror.com', shell)  # the caches win over the CN mirrors
+        with self.assertRaises(ValueError):
+            n.devnet_settings({'FLEET_CLUSTER_CACHES': 'x;rm -rf /'})
+        # every shell exports the `|` list whole
+        with tempfile.TemporaryDirectory() as d:
+            ef = os.path.join(d, 'devnet.env')
+            n.devnet({'FLEET_CLUSTER_CACHES': 'fleet-workers'}, os.path.join(d, 'gitconfig'), ef)
+            prof = (BIN.parent / 'extras/managed-node/devnet/profile.sh').read_text().replace('/etc/fleet-devnet.env', ef)
+            pf = os.path.join(d, 'profile.sh')
+            Path(pf).write_text(prof)
+            out = subprocess.check_output(['sh', '-c', '. "$1"; echo "$GOPROXY"', 'sh', pf],
+                                          env={'PATH': os.environ.get('PATH', '')}, text=True)
+            self.assertEqual(out.strip(), goproxy)
+        # the caches: read-only npm, devpi re-pointed at each start, two replicas a disk apiece
+        caches = BIN.parent / 'deploy/k8s/caches'
+        verdaccio = (caches / 'base/verdaccio.yaml').read_text()
+        self.assertEqual(verdaccio.count('    publish: $nobody'), 2)
+        self.assertIn('max_users: -1', verdaccio)
+        self.assertEqual(subprocess.run(['sh', '-n', str(caches / 'base/devpi-start.sh')]).returncode, 0)
+        self.assertIn('devpi index root/pypi "mirror_url=${FLEET_PYPI_UPSTREAM}"',
+                      (caches / 'base/devpi-start.sh').read_text())
+        pol = (BIN.parent / 'deploy/k8s/fleet-workers/networkpolicy.yaml').read_text()
+        for port in ('4873', '3141', '3000', '9418'):
+            self.assertIn('port: %s}' % port, pol)
+        kubectl = subprocess.run(['sh', '-c', 'command -v kubectl'], capture_output=True, text=True).stdout.strip()
+        if kubectl:
+            out = subprocess.check_output([kubectl, 'kustomize', str(BIN.parent / 'deploy/k8s/fleet-workers')], text=True)
+            docs = [x for x in out.split('\n---\n') if x.strip()]
+            for name, port in (('fleet-npm', 4873), ('fleet-pypi', 3141), ('fleet-goproxy', 3000)):
+                sts = [x for x in docs if '\nkind: StatefulSet' in '\n' + x and '\n  name: %s\n' % name in x]
+                self.assertEqual(len(sts), 1, name)
+                for want in ('replicas: 2', 'volumeClaimTemplates:', 'fleet/role: ops',
+                             'automountServiceAccountToken: false', 'containerPort: %d' % port):
+                    self.assertIn(want, sts[0], (name, want))
+                svc = [x for x in docs if '\nkind: Service' in '\n' + x and '\n  name: %s\n' % name in x]
+                self.assertIn('sessionAffinity: ClientIP', svc[0])
+                self.assertTrue([x for x in docs if 'kind: PodDisruptionBudget' in x and '  name: %s\n' % name in x])
+        # the default MCP servers ship in the image, pinned; uv by sha256
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        for want in ('@upstash/context7-mcp@', '@playwright/mcp@', '@modelcontextprotocol/server-github@',
+                     'mcp-server-fetch==', 'UV_SHA256', 'echo "$UV_SHA256  uv.tgz" | sha256sum -c -'):
+            self.assertIn(want, df)
+
+    def test_central_pod_holds_no_credential(self):
+        """BREAK-IT cred-in-user-pod (#3547, EPIC #3500 C2): a user pod in the
+        cluster routes every session to the cluster credential proxy
+        (fleet-credproxy:80) and fetches the outside through the one egress
+        (fleet-egress:3128); no subscription credential is leased into it or
+        kept on its volume, and its own guard rejects the public internet."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        central = 'http://fleet-credproxy.fleet-workers.svc.cluster.local'
+        egress = 'http://fleet-egress.fleet-workers.svc.cluster.local:3128'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        items = json.loads(subprocess.check_output(base + [
+            '--cred-central', central, '--egress-proxy', egress, '--egress-closed',
+            '--egress-allow', '172.21.3.4:80', '--egress-allow', '172.21.3.5:3128',
+            '--egress-allow', '203.0.113.9:443']))['items']
+        sts = items[-1]['spec']
+        self.assertEqual(sts['template']['metadata']['labels']['fleet/role'], 'user')
+        self.assertNotIn('fleet/role', sts['selector']['matchLabels'])   # a selector never changes
+        env = {e['name']: e.get('value', '') for e in sts['template']['spec']['containers'][0]['env']}
+        self.assertEqual(env['FLEET_CRED_CENTRAL_URL'], central)
+        self.assertEqual(env['FLEET_EGRESS_PROXY'], egress)
+        self.assertFalse([k for k in env if re.search(r'TOKEN|SECRET|PASSWORD|CREDENTIAL', k)], env)
+        script = sts['template']['spec']['initContainers'][0]['command'][-1]
+        v4 = script.split("V4='", 1)[1].split("'", 1)[0].splitlines()
+        v6 = script.split("V6='", 1)[1].split("'", 1)[0].splitlines()
+        self.assertEqual(v4[-2:], ['-A OUTPUT -j REJECT', 'COMMIT'])      # closed: the last word
+        self.assertEqual(v6[-2:], ['-A OUTPUT -j REJECT', 'COMMIT'])
+        for want in ('-A OUTPUT -d 172.21.3.4/32 -p tcp -m tcp --dport 80 -j ACCEPT',
+                     '-A OUTPUT -d 203.0.113.9/32 -p tcp -m tcp --dport 443 -j ACCEPT'):
+            self.assertLess(v4.index(want), v4.index('-A OUTPUT -d 172.21.0.0/20 -j REJECT'))
+        # open (no flag): byte for byte as before — no catch-all
+        plain = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']
+        self.assertNotIn('-A OUTPUT -j REJECT', plain['spec']['initContainers'][0]['command'][-1])
+        self.assertFalse([e for e in plain['spec']['containers'][0]['env']
+                          if e['name'] in ('FLEET_CRED_CENTRAL_URL', 'FLEET_EGRESS_PROXY')])
+        for bad in (['--egress-closed'], ['--cred-central', 'http://credproxy.example'],
+                    ['--cred-central', 'http://x.svc.cluster.local.evil.example'],
+                    ['--egress-proxy', 'socks5://x:1'], ['--cred-central', central + '/x y']):
+            r = subprocess.run(base + bad, capture_output=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+
+        # the local proxy takes plain http to a cluster Service for the central
+        # route only — never for the hub, never to another host
+        px = module('fleet-cred-proxy')
+        self.assertTrue(px.loopback_ok(central, cluster=True))
+        self.assertFalse(px.loopback_ok(central))
+        self.assertFalse(px.loopback_ok('http://credproxy.example', cluster=True))
+        self.assertFalse(px.loopback_ok('http://svc.cluster.local', cluster=True))
+        px.ALLOWED = px.allowed_hosts('')
+        self.assertFalse(px.loopback_ok(central, cluster=True))           # separated: an allowed host only
+        px.ALLOWED = px.allowed_hosts('fleet-credproxy.fleet-workers.svc.cluster.local')
+        self.assertTrue(px.loopback_ok(central, cluster=True))
+        px.ALLOWED = None
+
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            state, cred, lib, logins = d / 'state', d / 'cred', d / 'lib', d / 'logins'
+            (state / 'linux-tenants').mkdir(parents=True)
+            logins.mkdir()
+            (state / 'machine.env').write_text('CCQUOTA_HUB_URL=https://hub.example/\n')
+            store = cred / 'arvin'
+            (state / 'linux-tenants' / 'arvin.json').write_text(json.dumps({'login': 'arvin', 'uid': 10003, 'gid': 10003}))
+            for f, text in (('node.env', 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET_CREDS=1\n'),
+                            ('accounts/max1.hub/.credentials.json', '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}'),
+                            ('accounts/pooled', 'sk-ant-oat01-y'), ('accounts/max1.conf', 'label=max1\n'),
+                            ('codex/team/auth.json', '{"tokens":{}}'), ('cred-proxy/pool.json', '{}'),
+                            ('cred-proxy/relay.token', 'frl1.z\n'), ('cred-proxy/hub-passes.json', '{}')):
+                (store / f).parent.mkdir(parents=True, exist_ok=True)
+                (store / f).write_text(text)
+            pool = cred / '.shared/pool/claude/' / ('a' * 32)
+            pool.mkdir(parents=True)
+            (pool / '.credentials.json').write_text('{"claudeAiOauth":{}}')
+            (logins / 'arvin.env').write_text('CCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET_CREDS=1\nFLEET_CONF_DIR=/home/arvin/.config/claude-fleet\n')
+            lib.mkdir()
+            s = Mock()
+            s.Paths.return_value = Mock(state=str(state))
+            s.login_env_path.side_effect = lambda _p, login: str(logins / (login + '.env'))
+            s.write_login_env.side_effect = lambda _p, login, kv: (logins / (login + '.env')).write_text(
+                ''.join('%s=%s\n' % (k, kv[k]) for k in sorted(kv)))
+            c = Mock(ROOT_BASE=str(cred), LIB=str(lib), SHARED_DIR=str(cred / '.shared'), ROLE='fleetcred')
+            c.proxy_mod.return_value = px
+
+            def write(path, data, uid=0, gid=0):
+                Path(path).write_text(data)
+            me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid())
+            with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
+                    patch.object(m, 'private_write', side_effect=write), patch.object(m.pwd, 'getpwnam', return_value=me), \
+                    patch.dict(os.environ, {'FLEET_CRED_CENTRAL_URL': central}):
+                self.assertEqual(m.creds_flag(), '0')
+                m.route_heal(Mock(hub='', relay='https://relay.example'))
+                conf = m.env_read(lib / 'arvin.conf')
+                self.assertEqual(conf['FLEET_CRED_CENTRAL_URL'], central)
+                self.assertIn('fleet-credproxy.fleet-workers.svc.cluster.local', conf['FLEET_CRED_ALLOW_HOSTS'].split())
+                self.assertEqual(m.env_read(store / 'node.env')['CCQUOTA_FLEET_CREDS'], '0')
+                self.assertEqual(m.env_read(store / 'node.env')['CCQUOTA_TOKEN'], 'node-tok')
+                self.assertEqual(m.env_read(logins / 'arvin.env')['CCQUOTA_FLEET_CREDS'], '0')
+                self.assertEqual(m.env_read(logins / 'arvin.env')['FLEET_CONF_DIR'], '/home/arvin/.config/claude-fleet')
+                left = sorted(str(f.relative_to(cred)) for f in cred.rglob('*') if f.is_file())
+                self.assertEqual(left, ['arvin/accounts/max1.conf', 'arvin/cred-proxy/hub-passes.json',
+                                        'arvin/cred-proxy/relay.token', 'arvin/node.env'])
+                for f in cred.rglob('*'):
+                    if f.is_file():
+                        self.assertNotIn('sk-ant-', f.read_text(), f)
+                # a second start finds nothing to do
+                with patch.object(m, 'private_write') as pw:
+                    self.assertFalse(m.central_heal(s, s.Paths(), c, 'arvin'))
+                    pw.assert_not_called()
+                self.assertEqual(m.cred_purge(c, ['arvin']), 0)
+                # the dev network: the egress is every login's proxy, the cluster direct
+                git, shell = m.devnet_settings({'FLEET_EGRESS_PROXY': egress})
+                self.assertIn('[http]\n\tproxy = ' + egress, git)
+                for line in ('HTTPS_PROXY=' + egress, 'https_proxy=' + egress, 'FLEET_GITHUB_PROXY=' + egress,
+                             'NO_PROXY=localhost,127.0.0.1,::1,.svc,.cluster.local'):
+                    self.assertIn(line + '\n', shell)
+                with self.assertRaises(ValueError):
+                    m.devnet_settings({'FLEET_EGRESS_PROXY': 'http://x:1 -c core.sshCommand=sh'})
+            # unset: the lease stays on, nothing is purged
+            with patch.dict(os.environ, {'FLEET_CRED_CENTRAL_URL': ''}):
+                self.assertEqual(m.creds_flag(), '1')
+        # the egress itself: a host allow-list, the pod range only, GitHub via its parent
+        r = subprocess.run([sys.executable, '-I', str(BIN.parent / 'deploy/k8s/egress/base/fleet-egress.py'),
+                            '--selftest'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # the cluster's shared layer renders: one of each, two replicas, a PDB, no
+        # public path, no Kubernetes token (kubectl where the runner has it)
+        kubectl = subprocess.run(['sh', '-c', 'command -v kubectl'], capture_output=True, text=True).stdout.strip()
+        if kubectl:
+            out = subprocess.check_output([kubectl, 'kustomize', str(BIN.parent / 'deploy/k8s/fleet-workers')], text=True)
+            docs = [x for x in out.split('\n---\n') if x.strip()]
+            kinds = [(re.search(r'^kind: (\S+)', x, re.M).group(1), re.search(r'^  name: (\S+)', x, re.M).group(1))
+                     for x in docs]
+            for want in (('Service', 'fleet-credproxy'), ('Service', 'fleet-egress'), ('Deployment', 'fleet-credproxy'),
+                         ('Deployment', 'fleet-egress'), ('PodDisruptionBudget', 'fleet-credproxy'),
+                         ('PodDisruptionBudget', 'fleet-egress'), ('NetworkPolicy', 'default-deny')):
+                self.assertIn(want, kinds)
+            self.assertNotIn('Ingress', [k for k, _ in kinds])
+            for x in docs:
+                if x.startswith('apiVersion: apps/v1') or '\nkind: Deployment' in x:
+                    self.assertIn('replicas: 2', x)
+                    self.assertIn('automountServiceAccountToken: false', x)
+                    self.assertIn('namespace: fleet-workers', x)
+            svc = [x for x in docs if 'kind: Service\n' in x and 'name: fleet-credproxy' in x][0]
+            self.assertIn('port: 80', svc)
+            self.assertIn('port: 3128', [x for x in docs if 'kind: Service\n' in x and 'name: fleet-egress' in x][0])
 
     def test_entry_door_is_the_entry_port_only(self):
         """BREAK-IT linux-entry-weak-door (#3213): the public Service carries 22022
