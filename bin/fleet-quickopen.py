@@ -974,6 +974,9 @@ def popup(screen, pane, session="", target="", switch=False):
     # `>` (issue #1952): the row menu's items for the row in view (or the one
     # --target names), read once, the first time `>` is typed
     cmds, cmd_reader = [], None
+    # a ↵ typed while those items are still being read (`>pin` ↵ typed in one go)
+    # is held, and runs the line it lands on once they arrive — never dropped
+    held_enter = False
     def fetch_cmds():
         sess = session or session_of()
         title, items = menu_items(sess, target or current)
@@ -1081,10 +1084,14 @@ def popup(screen, pane, session="", target="", switch=False):
         except curses.error:
             pass
         screen.refresh()
-        try:
-            key = screen.get_wch()
-        except curses.error:
-            continue  # a timeout: look for the full rows again
+        if held_enter and command and shown is not None:
+            key, held_enter = "\n", False
+        else:
+            try:
+                key = screen.get_wch()
+            except curses.error:
+                continue  # a timeout: look for the full rows again
+            held_enter = False
         flash[0] = ""
         if key == curses.KEY_RESIZE:
             # a new size (issue #2362): the whole popup again from a cleared
@@ -1120,6 +1127,9 @@ def popup(screen, pane, session="", target="", switch=False):
             continue
         if key in ("\n", "\r") or key == curses.KEY_ENTER:
             if command:
+                if shown is None:
+                    held_enter = True   # the items are still being read
+                    continue
                 if not shown:
                     continue
                 if shown[at][1].startswith("-") or not shown[at][3]:
