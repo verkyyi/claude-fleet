@@ -406,6 +406,34 @@ func TestRelayOwnerBoundary(t *testing.T) {
 	}
 }
 
+// An admin login that is also a person's account relays to that person's other
+// logins (claude-fleet#3520): the orchestrator on the admin login placed a
+// worker on the person's managed Linux login — /v1/node/place allows it — and
+// the hub then answered NOT_FOUND to every message between the two. A
+// colleague's login stays out.
+func TestRelayOwnerAdminIsAlsoAPerson(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.FleetAdmins = []string{"verky"}
+	accts := []store.FleetAccount{
+		{PrincipalID: "p1", Hostname: "macmini", Login: "verky", State: store.AccountActive},
+		{PrincipalID: "p1", Hostname: "fleet-linux-0", Login: "verky2", State: store.AccountActive},
+		{PrincipalID: "p2", Hostname: "fleet-linux-0", Login: "zhang", State: store.AccountActive},
+	}
+	orch := h.srv.relayOwners("e1", "macmini", "verky", accts)
+	worker := h.srv.relayOwners("e2", "fleet-linux-0", "verky2", accts)
+	colleague := h.srv.relayOwners("e3", "fleet-linux-0", "zhang", accts)
+	if !sameRelayOwner(orch, worker) {
+		t.Fatalf("the person's admin login %v and their Linux login %v are different owners", orch, worker)
+	}
+	if sameRelayOwner(orch, colleague) || sameRelayOwner(worker, colleague) {
+		t.Fatalf("a colleague's login %v shares an owner with %v / %v", colleague, orch, worker)
+	}
+	// Another admin login with no account stays the operator's.
+	if !sameRelayOwner(orch, h.srv.relayOwners("e4", "mini2", "verky", accts)) {
+		t.Fatal("the operator's two admin logins are different owners")
+	}
+}
+
 // A relay waits for its RECIPIENT, by identity, and its sender hears what
 // became of it (claude-fleet#1647): pushed once, answered "not now", it is not
 // pushed again while the target fleet's inventory lacks that worker — however

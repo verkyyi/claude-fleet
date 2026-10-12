@@ -10,6 +10,9 @@
 #   fleet-peer-queue.sh wait   -L <sess> --rid <id> [--secs <n>]    → 0 DELIVERED · 1 FAILED/EXPIRED
 #                                                                     · 3 nothing yet (prints the state)
 #   fleet-peer-queue.sh status -L <sess>                            → one line per queued item
+#   fleet-peer-queue.sh pending -L <sess> --to <label>              → how many sends to <label>
+#                                                                     still read QUEUED (issue #3520:
+#                                                                     the sender's 「第 N 条」)
 #
 # A child's report or a message whose recipient is on THIS machine but cannot take
 # it right now — a window with no live Claude under it, an inbox that will not
@@ -136,8 +139,30 @@ print("%s\t%s → %s\tqueued %dm ago" % (d.get("rid", "?"), d.get("kind", "?"), 
     done
     exit 0 ;;
 
+  pending)
+    # Every send to --to whose LAST row is QUEUED and younger than the TTL — the
+    # queue that send joined, counted from the book (local and hub alike).
+    [ -n "$TO" ] || die 2 "pending needs --to"
+    python3 - "$BOOK" "$TO" "$TTL" <<'PY' 2>/dev/null || echo 0
+import json, sys, time
+last = {}
+try:
+    for line in open(sys.argv[1], encoding="utf-8"):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("to") == sys.argv[2] and r.get("rid"):
+            last[r["rid"]] = r
+except OSError:
+    pass
+cut = time.time() - int(sys.argv[3])
+print(sum(1 for r in last.values() if r.get("state") == "QUEUED" and (r.get("ts") or 0) >= cut))
+PY
+    exit 0 ;;
+
   drain) ;;
-  *) die 2 "usage: fleet-peer-queue.sh put|drain|note|wait|status -L <sess> …" ;;
+  *) die 2 "usage: fleet-peer-queue.sh put|drain|note|wait|status|pending -L <sess> …" ;;
 esac
 
 # --- drain -------------------------------------------------------------------------

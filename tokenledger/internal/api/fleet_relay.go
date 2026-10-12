@@ -93,6 +93,38 @@ func (s *Server) relayOwner(endpointID, hostname, osUser string, accounts []stor
 	return "endpoint:" + endpointID
 }
 
+// relayOwners is every owner a login answers to: relayOwner's, plus the person
+// whose managed account it is (claude-fleet#3520). An admin login that is also
+// a person's account answers "operator" AND that person, so the person's
+// orchestrator on an admin login and a worker placed on another of their
+// logins — which /v1/node/place already allows (nodePrincipal) — relay to each
+// other. Before, the two were "operator" and "person:X": the hub answered
+// NOT_FOUND to every message and left the worker off the parent's map.
+func (s *Server) relayOwners(endpointID, hostname, osUser string, accounts []store.FleetAccount) []string {
+	out := []string{s.relayOwner(endpointID, hostname, osUser, accounts)}
+	for _, a := range accounts {
+		if a.State == store.AccountActive && a.Hostname == hostname && a.Login == osUser {
+			if o := "person:" + a.PrincipalID; o != out[0] {
+				out = append(out, o)
+			}
+			break
+		}
+	}
+	return out
+}
+
+// sameRelayOwner reports whether two logins share an owner (relayOwners).
+func sameRelayOwner(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Server) activeAccounts() []store.FleetAccount {
 	if len(s.FleetAdmins) == 0 {
 		return nil
@@ -238,7 +270,7 @@ func (s *Server) checkRelay(ep store.Endpoint, m control.Message) (store.FleetRe
 		return store.FleetRelay{}, fault("NOT_FOUND", "no such fleet on any machine")
 	}
 	accts := s.activeAccounts()
-	if s.relayOwner(ep.ID, from.Hostname, from.OSUser, accts) != s.relayOwner(to.EndpointID, to.Hostname, to.OSUser, accts) {
+	if !sameRelayOwner(s.relayOwners(ep.ID, from.Hostname, from.OSUser, accts), s.relayOwners(to.EndpointID, to.Hostname, to.OSUser, accts)) {
 		return store.FleetRelay{}, fault("NOT_FOUND", "no such fleet on any machine")
 	}
 	now := time.Now()
@@ -433,11 +465,11 @@ func (s *Server) workerMap(endpointID, hostname, osUser string, now time.Time) [
 		return nil
 	}
 	accts := s.activeAccounts()
-	owner := s.relayOwner(endpointID, hostname, osUser, accts)
+	owner := s.relayOwners(endpointID, hostname, osUser, accts)
 	avail := s.nodeAvailability(now)
 	out := []control.WorkerLoc{}
 	for _, r := range rows {
-		if !r.Present || s.relayOwner(r.EndpointID, r.Hostname, r.OSUser, accts) != owner {
+		if !r.Present || !sameRelayOwner(s.relayOwners(r.EndpointID, r.Hostname, r.OSUser, accts), owner) {
 			continue
 		}
 		var ws []struct {

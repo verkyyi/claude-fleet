@@ -284,6 +284,10 @@ type Agent struct {
 	// sleeping personal machine tells its person (claude-fleet#1721).
 	lastSessions atomic.Int64
 
+	// fleetMID is this login's fleet-control machine_id once a discover has
+	// said it (claude-fleet#3520, fleetMachineID): not asked again per request.
+	fleetMID atomic.Pointer[string]
+
 	// lastNodeEnv is the newest node.env reading that succeeded: what the
 	// login's own word stays while neither node.env nor node.pub.env can be
 	// read (claude-fleet#2661).

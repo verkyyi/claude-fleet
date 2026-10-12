@@ -549,6 +549,10 @@ func workerIDs(v any) []string {
 // tmux: one fleet, an issue worker and a scratch session.
 func installFakeFleetControl(t *testing.T, py, src, home, session, repo string) string {
 	t.Helper()
+	// The heartbeat reads' cache (claude-fleet#3514) holds an answer up to 15 s
+	// unless a state change nudges it; these tests swap the fake adapter's
+	// output mid-test with no nudge, so every read is fresh (claude-fleet#3520).
+	t.Setenv("FLEET_CONTROL_READ_CACHE", "0")
 	dir := filepath.Join(home, ".claude", "fleet", "bin")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
