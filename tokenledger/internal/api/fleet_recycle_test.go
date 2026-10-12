@@ -25,11 +25,11 @@ const recycleJoin = "fj_aaaaaaaaaaaaaaaaaaaaaaaaaa"
 // fitness) and every op its admin is sent is one the test made.
 func recycleFleet(t *testing.T, h *harness, caps ...string) *fleetNode {
 	t.Helper()
-	h.srv.FleetAdmins = []string{"verkyyi"}
+	h.srv.FleetAdmins = []string{"bob"}
 	if caps == nil {
 		caps = []string{control.CapCredsep, control.CapRecycle}
 	}
-	n := connectCaps(t, h, "m8-op", "m8", "verkyyi", true, caps...)
+	n := connectCaps(t, h, "m8-op", "m8", "bob", true, caps...)
 	if _, _, err := h.srv.enterMaintenance("m8", "test", "test", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func plantPerson(t *testing.T, h *harness, person, login string) *fleetNode {
 	t.Helper()
 	now := time.Now()
 	n := connectCaps(t, h, "m8-"+login, "m8", login, false)
-	if err := h.srv.Store.SetFleetSetting(relayKey("m8"), login+":"+HashToken("relay-"+login)+" verkyyi:"+HashToken("relay-admin"), now); err != nil {
+	if err := h.srv.Store.SetFleetSetting(relayKey("m8"), login+":"+HashToken("relay-"+login)+" bob:"+HashToken("relay-admin"), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: person, Machine: "m8", Login: login, SetBy: "test", SetAt: now}); err != nil {
@@ -125,7 +125,7 @@ func TestRemoveRecyclesLoginIntoSpare(t *testing.T) {
 		t.Fatalf("the person's node %s = %+v, %v; want retired", person.id, ep, err)
 	}
 	settings, _ := h.srv.Store.FleetSettings()
-	if e := relayEntries(settings[relayKey("m8")]); e[login] != "" || e["verkyyi"] == "" {
+	if e := relayEntries(settings[relayKey("m8")]); e[login] != "" || e["bob"] == "" {
 		t.Fatalf("relay entries = %v; want %s's gone, the admin's kept", e, login)
 	}
 	if _, ok, _ := h.srv.Store.EntryHomeOf(p); ok {
