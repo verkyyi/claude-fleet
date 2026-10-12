@@ -1,0 +1,328 @@
+#!/bin/bash
+# docs-build.sh — render the public docs to static HTML (issue #3575, EPIC #3569 C5).
+#
+#   docs-build.sh                 docs/public/{zh,en}/**/*.md → tokenledger/web/docs/
+#   docs-build.sh --out <dir>     the same, into <dir> (the selftest's sandbox)
+#
+# docs/public/ is the ONE home of the documentation for people who USE fleet
+# (EPIC #3569 共同约定 4); docs/dev/ is for the people who build it and is never
+# linked from here. The output, beside each page's HTML, keeps the page's own
+# Markdown under the same name, so a reader (or an AI) can fetch either:
+#
+#   <out>/zh/<reader>/<slug>.html + .md     served as /docs/<reader>/<slug>[.md]
+#   <out>/en/<reader>/<slug>.html + .md     served as /en/docs/<reader>/<slug>[.md]
+#   <out>/zh/index.html + index.md          /docs/  (same for /en/docs/)
+#   <out>/pages.tsv                         lang · path · title · state (page|pending)
+#
+# A page links to another by its relative .md path (so GitHub and
+# docs-links-selftest read the same link); the build drops the extension, and the
+# server answers /docs/<p> with <p>.html — the mount and the embed are C13's
+# (#3583), the sitemap and llms-full are C15's, read off pages.tsv.
+#
+# Chinese leads: a zh page with no en twin still gets an en page — 「English
+# version in preparation」 with a link to the Chinese one (state `pending`) — never
+# a 404. An en page with no zh twin is an error (exit 1). Every page needs a
+# `# ` title (exit 1 otherwise). No framework, no CDN: the CSS below is inlined,
+# its colours the entry's own app.css variables.
+#
+# Output is a build input like fleetclient/pack: gitignored, rebuilt every time
+# (the directory is emptied first). Exit: 0 built · 1 a page is wrong · 2 usage.
+set -uo pipefail
+real="$0"
+while [ -L "$real" ]; do
+  link="$(readlink "$real")"
+  case "$link" in /*) real="$link" ;; *) real="$(dirname "$real")/$link" ;; esac
+done
+REPO="$(cd "$(dirname "$real")/.." && pwd)"
+SRC="$REPO/docs/public"
+OUT="$REPO/tokenledger/web/docs"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) [ $# -ge 2 ] || { echo "docs-build: --out needs a directory" >&2; exit 2; }; OUT="$2"; shift 2 ;;
+    --src) [ $# -ge 2 ] || { echo "docs-build: --src needs a directory" >&2; exit 2; }; SRC="$2"; shift 2 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    *) echo "docs-build: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+[ -d "$SRC/zh" ] || { echo "docs-build: no $SRC/zh" >&2; exit 2; }
+
+exec python3 - "$SRC" "$OUT" <<'PY'
+import html, os, re, shutil, sys
+
+SRC, OUT = sys.argv[1], sys.argv[2]
+LANGS = ('zh', 'en')
+# The three roads, in the order the index tells them; a page outside these
+# directories is shared by all three (faq, troubleshooting, security).
+READERS = ('self-host', 'hosted', 'member')
+UI = {
+    'zh': {'readers': {'self-host': '自托管团队', 'hosted': '托管客户的管理员', 'member': '成员'},
+           'common': '都会用到', 'home': '文档首页', 'other': 'English', 'pending': '',
+           'source': '本页 Markdown'},
+    'en': {'readers': {'self-host': 'Self-hosting team', 'hosted': 'Hosted admin', 'member': 'Member'},
+           'common': 'For everyone', 'home': 'Docs home', 'other': '中文',
+           'pending': 'English version in preparation. The Chinese page is complete:',
+           'source': 'Markdown of this page'},
+}
+
+def pages(lang):
+    root = os.path.join(SRC, lang)
+    found = {}
+    if not os.path.isdir(root):
+        return found
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            if f.endswith('.md'):
+                rel = os.path.relpath(os.path.join(d, f), root)[:-3].replace(os.sep, '/')
+                found[rel] = os.path.join(d, f)
+    return found
+
+def title_of(text):
+    for line in text.split('\n'):
+        m = re.match(r'#\s+(.+?)\s*#*\s*$', line)
+        if m:
+            return m.group(1)
+    return None
+
+# ---- Markdown, the subset these pages use -----------------------------------
+def slug(s):
+    s = re.sub(r'<[^>]+>', '', s).strip().lower()
+    s = re.sub(r'[^\w一-鿿\- ]', '', s)
+    return re.sub(r'\s+', '-', s) or 'section'
+
+def link_target(t):
+    if re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', t) or t.startswith('#') or t.startswith('/'):
+        return t
+    path, _, frag = t.partition('#')
+    if path.endswith('.md'):
+        path = path[:-3]
+        if path == 'index' or path.endswith('/index'):
+            path = path[:-5] or './'
+    return path + ('#' + frag if frag else '')
+
+def inline(s):
+    out, i = [], 0
+    for m in re.finditer(r'`([^`]+)`', s):
+        out.append(inline_text(s[i:m.start()]))
+        out.append('<code>%s</code>' % html.escape(m.group(1)))
+        i = m.end()
+    out.append(inline_text(s[i:]))
+    return ''.join(out)
+
+def inline_text(s):
+    s = html.escape(s, quote=False)
+    s = re.sub(r'\[([^\]]+)\]\(([^)\s]+)\)',
+               lambda m: '<a href="%s">%s</a>' % (html.escape(link_target(m.group(2))), m.group(1)), s)
+    s = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', s)
+    s = re.sub(r'(?<![\w*])\*([^*\s][^*]*)\*(?!\w)', r'<em>\1</em>', s)
+    return s
+
+def render(text):
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.S)  # a marker such as docs-links-ok
+    lines = text.split('\n')
+    out, i, n = [], 0, len(lines)
+    def para_end(l):
+        return (not l.strip() or re.match(r'\s*(#{1,6}\s|```|>|[-*]\s|\d+\.\s|\|)', l) or l.strip() == '---')
+    while i < n:
+        l = lines[i]
+        if not l.strip():
+            i += 1; continue
+        m = re.match(r'(#{1,6})\s+(.+?)\s*#*\s*$', l)
+        if m:
+            lvl, t = len(m.group(1)), m.group(2)
+            out.append('<h%d id="%s">%s</h%d>' % (lvl, slug(t), inline(t), lvl))
+            i += 1; continue
+        if l.lstrip().startswith('```'):
+            lang = l.strip()[3:].strip()
+            body = []
+            i += 1
+            while i < n and not lines[i].lstrip().startswith('```'):
+                body.append(lines[i]); i += 1
+            i += 1
+            cls = ' class="lang-%s"' % html.escape(lang) if lang else ''
+            out.append('<pre><code%s>%s</code></pre>' % (cls, html.escape('\n'.join(body))))
+            continue
+        if l.strip() == '---':
+            out.append('<hr>'); i += 1; continue
+        if l.lstrip().startswith('>'):
+            body = []
+            while i < n and lines[i].lstrip().startswith('>'):
+                body.append(re.sub(r'^\s*>\s?', '', lines[i])); i += 1
+            out.append('<blockquote>%s</blockquote>' % render('\n'.join(body)))
+            continue
+        if l.lstrip().startswith('|') and i + 1 < n and re.match(r'\s*\|[\s:|-]+\|\s*$', lines[i + 1]):
+            cells = lambda r: [c.strip() for c in r.strip().strip('|').split('|')]
+            head = cells(l); i += 2
+            rows = []
+            while i < n and lines[i].lstrip().startswith('|'):
+                rows.append(cells(lines[i])); i += 1
+            t = '<table><thead><tr>%s</tr></thead><tbody>' % ''.join('<th>%s</th>' % inline(c) for c in head)
+            t += ''.join('<tr>%s</tr>' % ''.join('<td>%s</td>' % inline(c) for c in r) for r in rows)
+            out.append(t + '</tbody></table>')
+            continue
+        m = re.match(r'(\s*)([-*]|\d+\.)\s+', l)
+        if m:
+            i = render_list(lines, i, out)
+            continue
+        body = []
+        while i < n and not para_end(lines[i]):
+            body.append(lines[i].strip()); i += 1
+        out.append('<p>%s</p>' % inline(' '.join(body)))
+    return '\n'.join(out)
+
+def render_list(lines, i, out):
+    first = re.match(r'(\s*)([-*]|\d+\.)\s+', lines[i])
+    indent, ordered = len(first.group(1)), first.group(2)[0].isdigit()
+    tag = 'ol' if ordered else 'ul'
+    items = []
+    while i < len(lines):
+        l = lines[i]
+        m = re.match(r'(\s*)([-*]|\d+\.)\s+(.*)', l)
+        if m and len(m.group(1)) == indent:
+            items.append([m.group(3)]); i += 1; continue
+        if not l.strip():
+            # a blank line ends the list unless the next line continues it
+            nxt = lines[i + 1] if i + 1 < len(lines) else ''
+            if nxt.strip() and len(nxt) - len(nxt.lstrip()) > indent:
+                items[-1].append(''); i += 1; continue
+            break
+        if len(l) - len(l.lstrip()) > indent and items:
+            items[-1].append(l[indent + 2:] if l[:indent + 2].strip() == '' else l.strip()); i += 1; continue
+        break
+    out.append('<%s>' % tag)
+    for it in items:
+        body = render('\n'.join(it))
+        if body.startswith('<p>') and body.count('<p>') == 1:
+            body = body[3:].replace('</p>', '', 1)
+        out.append('<li>%s</li>' % body)
+    out.append('</%s>' % tag)
+    return i
+
+# ---- the page frame --------------------------------------------------------
+CSS = """
+:root{--bg:#f4f6f5;--panel:#fff;--ink:#15201d;--ink-2:#3c4945;--muted:#6a7773;--line:#e0e6e3;--line-2:#ecf0ee;
+--brand:#0e6e5e;--brand-soft:#e1f1ec;--term:#0d1513;--term-ink:#cfe3dd;--warn-soft:#fbefd6;
+--f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;
+--f-ui:"IBM Plex Sans","PingFang SC","Segoe UI",system-ui,sans-serif;--f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1412;--panel:#151d1b;--ink:#e5ece9;--ink-2:#c1ccc8;--muted:#8b9894;--line:#26302d;--line-2:#1e2725;
+--brand:#3fc2a6;--brand-soft:#16302a;--term:#080c0b;--warn-soft:#33290f;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15.5px/1.7 var(--f-ui);-webkit-font-smoothing:antialiased}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
+header .brand{font:600 17px var(--f-display);color:var(--ink)}
+header nav{display:flex;flex-wrap:wrap;gap:4px}header nav a{padding:4px 10px;border-radius:7px;color:var(--ink-2);font-size:14px}
+header nav a.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
+header .lang{margin-left:auto;font-size:14px}
+.wrap{display:grid;grid-template-columns:220px minmax(0,760px);gap:40px;max-width:1080px;margin:0 auto;padding:28px 24px 80px}
+aside{font-size:14px}aside h4{margin:18px 0 6px;font-size:12px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+aside a{display:block;padding:3px 0;color:var(--ink-2)}aside a.on{color:var(--brand);font-weight:600}
+main{min-width:0}main h1{font:650 30px/1.25 var(--f-display);margin:0 0 18px}main h2{font:620 21px/1.3 var(--f-display);margin:34px 0 10px;padding-top:8px;border-top:1px solid var(--line-2)}
+main h3{font-size:17px;margin:24px 0 8px}main p,main ul,main ol{margin:0 0 14px}main li{margin:4px 0}
+code{font-family:var(--f-mono);font-size:.88em;background:var(--line-2);padding:1px 5px;border-radius:5px}
+pre{background:var(--term);color:var(--term-ink);padding:14px 16px;border-radius:9px;overflow:auto;line-height:1.55}
+pre code{background:none;padding:0;color:inherit}
+blockquote{margin:0 0 14px;padding:10px 14px;border-left:3px solid var(--brand);background:var(--brand-soft);border-radius:0 8px 8px 0}
+blockquote p:last-child{margin:0}
+table{border-collapse:collapse;width:100%;margin:0 0 16px;font-size:14.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--line-2)}
+.pending{padding:12px 16px;background:var(--warn-soft);border-radius:9px;margin:0 0 18px}
+footer{margin-top:48px;font-size:13px;color:var(--muted)}
+@media (max-width:820px){.wrap{grid-template-columns:minmax(0,1fr);gap:12px;padding:18px 16px 60px}aside{order:2;border-top:1px solid var(--line);padding-top:8px}
+header{padding:10px 16px}main h1{font-size:25px}}
+"""
+
+def url_prefix(lang):
+    return '/docs/' if lang == 'zh' else '/en/docs/'
+
+def rel(from_page, to_page):
+    """A relative href from one page's URL to another's (both no extension)."""
+    base = os.path.dirname(from_page)
+    if to_page == 'index' or to_page.endswith('/index'):
+        target = to_page[:-5]
+        r = os.path.relpath(target or '.', base or '.')
+        return (r + '/') if r != '.' else './'
+    return os.path.relpath(to_page, base or '.')
+
+def reader_of(p):
+    head = p.split('/', 1)[0]
+    return head if head in READERS and '/' in p else None
+
+def frame(lang, page, title, body, all_titles, pending=False):
+    ui = UI[lang]
+    cur = reader_of(page)
+    nav = ''.join('<a href="%s"%s>%s</a>' % (html.escape(rel(page, r + '/quickstart')),
+                  ' class="on"' if r == cur else '', ui['readers'][r]) for r in READERS)
+    side = ['<a href="%s"%s>%s</a>' % (html.escape(rel(page, 'index')), ' class="on"' if page == 'index' else '', ui['home'])]
+    def group(name, members):
+        if not members:
+            return
+        side.append('<h4>%s</h4>' % name)
+        for p in members:
+            side.append('<a href="%s"%s>%s</a>' % (html.escape(rel(page, p)), ' class="on"' if p == page else '',
+                                                   html.escape(all_titles[p])))
+    order = lambda p: (0 if p.endswith('/quickstart') else 1, p)
+    if cur:
+        group(ui['readers'][cur], sorted((p for p in all_titles if reader_of(p) == cur), key=order))
+    group(ui['common'], sorted(p for p in all_titles if p != 'index' and not reader_of(p)))
+    other = 'en' if lang == 'zh' else 'zh'
+    other_url = url_prefix(other) + ('' if page == 'index' else page)
+    src = os.path.basename(page) + '.md'
+    head_lang = 'zh-CN' if lang == 'zh' else 'en'
+    return ('<!doctype html><html lang="%s"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>%s · fleet</title><link rel="alternate" type="text/markdown" href="%s">'
+            '<link rel="alternate" hreflang="%s" href="%s"><style>%s</style></head><body>'
+            '<header><a class="brand" href="%s">fleet</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
+            '<div class="wrap"><aside>%s</aside><main>%s<footer><a href="%s">%s</a></footer></main></div></body></html>\n') % (
+        head_lang, html.escape(title), html.escape(src), 'en' if other == 'en' else 'zh-CN', other_url, CSS,
+        html.escape(rel(page, 'index')), nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
+
+# ---- build -----------------------------------------------------------------
+src = {l: pages(l) for l in LANGS}
+errors = []
+for p in src['en']:
+    if p not in src['zh']:
+        errors.append('en/%s.md has no Chinese page (zh/%s.md)' % (p, p))
+texts, titles = {}, {}
+for l in LANGS:
+    for p, f in src[l].items():
+        t = open(f, encoding='utf-8').read()
+        texts[(l, p)] = t
+        titles[(l, p)] = title_of(t)
+        if not titles[(l, p)]:
+            errors.append('%s/%s.md has no "# " title' % (l, p))
+for p in ('index',) + tuple(r + '/quickstart' for r in READERS):
+    if p not in src['zh']:
+        errors.append('zh/%s.md is missing (every reader needs a quickstart)' % p)
+if errors:
+    for e in errors:
+        print('docs-build: ' + e, file=sys.stderr)
+    sys.exit(1)
+
+if os.path.isdir(OUT):
+    shutil.rmtree(OUT)
+rows = []
+for l in LANGS:
+    all_titles = {}
+    for p in src['zh']:
+        all_titles[p] = titles.get((l, p)) or titles[('zh', p)]
+    for p in sorted(src['zh']):
+        dest = os.path.join(OUT, l, p)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if (l, p) in texts:
+            md, body, state = texts[(l, p)], render(texts[(l, p)]), 'page'
+        else:
+            zh_url = url_prefix('zh') + ('' if p == 'index' else p)
+            md = texts[('zh', p)]
+            body = ('<div class="pending">%s <a href="%s">%s</a></div>' % (UI[l]['pending'], zh_url, html.escape(titles[('zh', p)]))
+                    + '<h1>%s</h1>' % html.escape(titles[('zh', p)]))
+            state = 'pending'
+        with open(dest + '.html', 'w', encoding='utf-8') as fh:
+            fh.write(frame(l, p, all_titles[p], body, all_titles, state == 'pending'))
+        with open(dest + '.md', 'w', encoding='utf-8') as fh:
+            fh.write(md)
+        rows.append('%s\t%s\t%s\t%s' % (l, p, all_titles[p], state))
+with open(os.path.join(OUT, 'pages.tsv'), 'w', encoding='utf-8') as fh:
+    fh.write('\n'.join(rows) + '\n')
+print('docs-build: %d pages (%d zh, %d en of which %d pending) → %s' % (
+    len(rows), len(src['zh']), len(src['zh']), sum(r.endswith('\tpending') for r in rows), OUT))
+PY

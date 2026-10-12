@@ -14,8 +14,9 @@ Do not install from memory: read the doc and work from it.
 
 ## Where the docs live
 
-`docs/README.md` is the index. `docs/public/` is for people who USE fleet (C5 of
-EPIC #3569 fills it); `docs/dev/` is for people who build it — design, protocols,
+`docs/README.md` is the index. `docs/public/{zh,en}/` is for people who USE fleet
+(split by reader: self-host · hosted · member; `bin/docs-build.sh` renders it to
+`tokenledger/web/docs/` for `/docs/`, issue #3575); `docs/dev/` is for people who build it — design, protocols,
 runbooks, BREAK-IT. A public page never links into `docs/dev/`. Research notes and
 one-off drill / audit records do not go in the repo (issue #3576).
 `bin/docs-links-selftest.sh` reads every link on every PR. Settings: every key is
