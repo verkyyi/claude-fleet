@@ -87,6 +87,10 @@ while [ \$# -gt 0 ]; do
     --token) token=\$2; shift ;; --device|--route) shift ;;
   esac; shift
 done
+# the home's tmux restarting (thin-home-restart-new-session): no fleet for N resumes
+n=\$(cat "$R/nofleet.\$HOST_NAME" 2>/dev/null || echo 0)
+if [ -n "\$resume" ] && [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$R/nofleet.\$HOST_NAME"
+  echo "fleet-remote-view: no fleet session is live on \$HOST_NAME" >&2; exit 3; fi
 mkdir -p "$R/views"; st="$R/views/\$HOST_NAME.\$view"
 if [ -n "\$want" ]; then w=\$want; elif [ -n "\$resume" ] && [ -f "\$st" ]; then w=\$(cat "\$st"); else w=orch; fi
 echo "\$w" > "\$st"
@@ -347,6 +351,26 @@ drill_thin_home_down() {
   grep -aq 'rehome' "$R/thin.log" || { WHY="thin.log has no rehome line"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="家机器 m1 停了、入口在：连续 3 次连不上后 ${SECS}s 换到 m2，新的看台（没有 --resume，仍按 --want 打开 s1），thin.log 记了 rehome"
+}
+
+drill_thin_home_restart_new_session() {
+  CAP=8   # the home's tmux back → the same session, never a new one asked for
+  local t0
+  tc_rig
+  ( THIN_ARGS='["--home", "m1", "s1"]' FLEET_THIN_HOME_RESTART_POLL=0.3 FLEET_THIN_PLACE_CMD="sh -c 'echo asked >> $R/place.log; exit 4'" \
+      tc_drive hr '[["expect", "VIEW s1 ON m1"], ["linger", 40]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.hr" || { WHY="the view never came up: $(cat "$R/res.hr")"; tc_done; return 1; }
+  # save · kill-server: the next three attaches find no fleet (rc 3), then restore
+  echo 3 > "$R/nofleet.m1"; t0=$(now); tc_drop_view
+  until_ok "$CAP" sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="not back on s1: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  grep -aq '家机器 m1 在重启' "$R/term.out" || { WHY="the screen never said the home is restarting"; tc_done; return 1; }
+  [ -s "$R/place.log" ] && { WHY="the loop asked the hub for a NEW session while the home restarted"; tc_done; return 1; }
+  grep -aq '下没有 fleet\|没开出来' "$R/term.out" && { WHY="it told the person there is no fleet"; tc_done; return 1; }
+  [ "$(grep -c '^m1 attach --thin .*--resume' "$R/rv.log")" -ge 4 ] || { WHY="an attach after the drop was not --resume: $(cat "$R/rv.log")"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="家机器的 tmux 重启（save · kill-server · restore）：连着的看台连续 3 次 rc 3，屏幕说「家机器 m1 在重启，稍等」，${SECS}s 后 --resume 回到同一个 s1，没向入口要新会话"
 }
 
 drill_thin_home_login_no_fleet() {
