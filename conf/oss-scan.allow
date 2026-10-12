@@ -14,3 +14,4 @@ bin/oss-scan-selftest.sh	private-ipv4	自测在沙箱仓库里放一行假的私
 LICENSE	person	版权人署名（MIT 许可证要求写明版权人）
 .claude-plugin/*.json	gh-owner	插件市场 / 插件清单的 owner、author 字段：公开发布的署名
 plugins/*/.claude-plugin/plugin.json	gh-owner	插件清单的 author 字段：公开发布的署名
+extras/web-chat/ui/dist/assets/*.js	machine	打包产物（#3637）：图标库的 SVG 路径数据 `m5 12`、`m4.9 …` 撞上机器名规则，不是机器名

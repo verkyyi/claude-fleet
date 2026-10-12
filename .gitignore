@@ -7,3 +7,6 @@ fleet.conf
 *.sock
 /fake
 __pycache__/
+
+# the web chat page build (issue #3637): dependencies stay local; dist/ is committed
+extras/web-chat/ui/node_modules/
