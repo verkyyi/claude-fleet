@@ -42,6 +42,11 @@
 #      which runs fleet-restore-pick.sh --select (a #543 question: exit 4, then
 #      --answer); ⌘↓ never walks onto one; the read is cached, single-flight,
 #      in the background (view-gone waits for it)
+#   K  issue #3731: 已结束 · 还开着 (a window still up, ↵ on its last row reaps
+#      them all through fleet-view-reap-all.sh — dash-reap.sh --yes each, a dirty
+#      worktree kept and said) above 已关闭 (the last FLEET_VIEW_CLOSED_HOURS, 48,
+#      by the close time fleet-history.sh appends; the older ones one line,
+#      「更早的 N 个 → /fleet-history」), both folded until → / ↵
 #   G  a phone (issue #3006, C9): the ⌃] letters (dash-keymap.sh --panel switch
 #      view: p list · n / b · c · t · q, one letter each, every one a switch-table
 #      action); a 40-column client: ⌃] p opens the list on the whole screen, ⌃] n
@@ -165,7 +170,7 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q '等你 1' "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '已结束 1 个'; do
+for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '已结束 · 还开着 1 个'; do
   grep -qF "$want" "$W/popup.txt" || fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
@@ -473,10 +478,12 @@ fv.produce = lambda fleet, **kw: open_rows
 fv.gone_text = lambda fleet: gone
 it = fv.entries("v1")
 sec = [e for e in it if e["kind"] == "sec"]
-assert len(sec) == 1 and sec[0]["n"] == 4, sec
-ended = [e for e in it if e.get("sec") == "ended" and e["kind"] == "sess"]
+# issue #3731: the open one under 已结束 · 还开着, the reaped ones under 已关闭
+assert [(e["sec"], e["n"]) for e in sec] == [("ended", 1), ("gone", 3)], sec
+ended = [e for e in it if e.get("sec") in ("ended", "gone") and e["kind"] == "sess"]
 assert [e["target"] for e in ended] == ["@9", "landed:3278@o/claude-fleet", "landed:scratch:scratch-23@o/claude-fleet",
                                         "landed:issue:7@o/claude-fleet"], [e["target"] for e in ended]
+assert [e["sec"] for e in ended] == ["ended", "gone", "gone", "gone"], ended
 g = ended[1]
 assert g["gone"] and g["text"] == "Mac 新登录租凭据 + 演练认看台" and g["issue"] == "#3276" and g["right"] == "32 mins", g
 assert g["sym"] == "done" and ended[2]["sym"] == "fail" and g["word"] == "已合并 · 窗口已回收", g
@@ -485,7 +492,9 @@ assert "PR #3278" in g["foot"] and "↵ 恢复" in g["foot"], g["foot"]
 v = fv.visible(it, "", set())
 assert not any(e.get("gone") for e in v), v
 v = fv.visible(it, "", {"ended"})
-assert [e["target"] for e in v if e.get("sec") == "ended" and e["kind"] == "sess"][1:] == [e["target"] for e in ended[1:]]
+assert not any(e.get("gone") for e in v), v
+v = fv.visible(it, "", {"gone"})
+assert [e["target"] for e in v if e.get("sec") == "gone" and e["kind"] == "sess"] == [e["target"] for e in ended[1:]]
 # a query finds one
 assert [e["target"] for e in fv.visible(it, "演练认看台", set())] == ["landed:3278@o/claude-fleet"]
 # ⌘↓ ⌘↑ never walk onto a reaped one
@@ -549,7 +558,139 @@ printf 'landed:2@o/r\037k\037y\n' > "$W/gone.txt"
 python3 "$BIN/fleet-quickopen.py" view-gone --view v1 || fail "J: view-gone"
 grep -q '^landed:2@o/r' "$G" || fail "J: view-gone did not read: $(cat "$G" 2>&1)"
 : > "$W/gone.txt"
-pass "J  已结束 lists the reaped sessions (fleet-history.sh rows) after the open ones; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
+pass "J  已关闭 lists the reaped sessions (fleet-history.sh rows) below 已结束 · 还开着; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
+
+# --- K: 已结束 · 还开着 and 已关闭 (issue #3731) ----------------------------------------
+mkdir -p "$W/kstub"
+cat > "$W/kstub/fleet-view-reap-all.sh" <<'EOF'
+printf 'reap-all|%s\n' "$*" >> "$KLOG"
+echo '回收了 2 个'
+EOF
+cat > "$W/leg-k.py" <<'PYK'
+import importlib.util, os, sys, time
+from pathlib import Path
+B = sys.argv[1]
+spec = importlib.util.spec_from_file_location("fv", B + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+US, E = "\x1f", "\x1b["
+TX, GY, R = E + "38;2;169;177;214m", E + "38;2;86;95;137m", E + "0m"
+now = int(time.time())
+def led(n, hours, act):
+    # fleet-history.sh cmd_rows' shape, and the close time FLEET_HISTORY_EPOCH appends
+    return "landed:%d@o/r" % (900 + n) + US + "key" + US + "✓ " + ("#%d" % n).ljust(5) + " " + GY + "  " + R + " " + \
+        TX + ("w%d" % n).ljust(26) + R + " " + TX + "关了的 %d" % n + R + "   " + GY + act.ljust(8) + R + " " + \
+        ("#%d" % (900 + n)).ljust(7) + " " + "·".ljust(4) + US + str(now - int(hours * 3600))
+# 3 closed in the last 48 h, 5 before — the words lie on purpose: the epoch decides
+gone = "\n".join([led(1, 1, "9 yrs"), led(2, 10, "9 yrs"), led(3, 47, "9 yrs"),
+                  led(4, 49, "now"), led(5, 72, "now"), led(6, 200, "now"), led(7, 2000, "now"), led(8, 9000, "now")]) + "\n"
+def row(*f): return US.join(f)
+open_rows = "\n".join([
+    row("hdr", "o/r", "", "r (1)", " "),
+    row("@1", "working", "⠹", "alpha", " ", "", "0", "", "", "#11", "—", "50%", "ok", "Alpha", "merged"),
+    row("hdr", "ended", "", "▸ 已结束 · 还开着 (2)", " "),
+    row("@8", "done", "✓", "eight", " ", "", "0", "", "", "", "—", "·", "ok", "做完的八", "merged"),
+    row("@9", "exited", "x", "nine", " ", "", "0", "", "", "", "—", "·", "ok", "退出的九", "merged"),
+]) + "\n"
+fv.view_row = lambda vid: {}
+fv.view_fleet = lambda vid, row=None: "fl"
+fv.here_label = lambda row: "nodeA"
+fv.fleet_logins = lambda: {}
+fv.windows = lambda fleet: {}
+fv.produce = lambda fleet, **kw: open_rows
+fv.gone_text = lambda fleet: gone
+os.environ.pop("FLEET_VIEW_CLOSED_HOURS", None)
+os.environ["FLEET_CONF_DIR"] = sys.argv[2]          # no fleet.conf there: the default, 48
+it = fv.entries("v1")
+sec = [e for e in it if e["kind"] == "sec"]
+assert [(e["sec"], e["n"]) for e in sec] == [("ended", 2), ("gone", 3)], sec
+assert sec[0]["text"] == "已结束 · 还开着 2 个" and sec[1]["text"] == "已关闭 3 个", sec
+assert sec[1]["older"] == 5, sec[1]
+# the order: the open ones (heading · rows · 回收 row) above the closed ones (heading ·
+# newest first · 更早的 5 个)
+tail = [(e["kind"], e.get("target") or e.get("cmd") or e.get("sec")) for e in it[it.index(sec[0]):]]
+assert tail == [("sec", "ended"), ("sess", "@8"), ("sess", "@9"), ("cmd", "reapall"),
+                ("sec", "gone"), ("sess", "landed:901@o/r"), ("sess", "landed:902@o/r"), ("sess", "landed:903@o/r"),
+                ("cmd", "history")], tail
+more = it[-1]
+assert more["text"] == "更早的 5 个 → /fleet-history" and more["sec"] == "gone", more
+ra = next(e for e in it if e.get("cmd") == "reapall")
+assert ra["row"]["targets"] == ["@8", "@9"] and "回收这 2 个" in ra["text"], ra
+assert "Tab → 回收" in next(e for e in it if e.get("target") == "@8")["foot"]
+# folded by default: both headings, none of their rows; → opens one, ← shuts it
+v = fv.visible(it, "", set())
+assert [(e["kind"], e.get("sec")) for e in v if e.get("sec")] == [("sec", "ended"), ("sec", "gone")], v
+assert all(e.get("closed") for e in v if e["kind"] == "sec")
+opened = fv.sec_fold(set(), "gone", True)
+v = fv.visible(it, "", opened)
+assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
+    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "history"], v
+assert not any(e.get("sec") == "ended" and e["kind"] != "sec" for e in v), v
+assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
+# the panel (view-panel's rows): the same lines, ⚡ and ⏻ after them
+p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])
+kinds = [e.get("cmd") or e.get("target") for e in p if e["kind"] in ("cmd", "sess")]
+h = kinds.index("history")
+assert kinds[h - 1:h + 2] == ["landed:903@o/r", "history", "new"] and kinds[-1] == "quit", kinds
+# the window is a setting: 1.5 h ⇒ one listed, seven older; fleet.conf's line when no env
+Path(sys.argv[2], "fleet.conf").write_text("FLEET_VIEW_CLOSED_HOURS=1.5\n")
+it2 = fv.entries("v1")
+s2 = [e for e in it2 if e["kind"] == "sec" and e["sec"] == "gone"][0]
+assert (s2["n"], s2["older"]) == (1, 7) and it2[-1]["text"] == "更早的 7 个 → /fleet-history", s2
+os.environ["FLEET_VIEW_CLOSED_HOURS"] = "100"
+s3 = [e for e in fv.entries("v1") if e["kind"] == "sec" and e["sec"] == "gone"][0]
+assert (s3["n"], s3["older"]) == (5, 3), s3
+os.environ.pop("FLEET_VIEW_CLOSED_HOURS")
+Path(sys.argv[2], "fleet.conf").unlink()
+# nothing older ⇒ no 更早 line; nothing closed ⇒ no 已关闭 heading
+fv.gone_text = lambda fleet: "\n".join(gone.split("\n")[:3]) + "\n"
+it3 = fv.entries("v1")
+assert not any(e.get("cmd") == "history" for e in it3) and it3[-1]["target"] == "landed:903@o/r", it3[-1]
+fv.gone_text = lambda fleet: ""
+assert [e["sec"] for e in fv.entries("v1") if e["kind"] == "sec"] == ["ended"]
+# a copy written before the epoch rode along: the words, read as the least they mean
+assert fv.gone_age(None, "47 mins", now) == 47 * 60 and fv.gone_age(None, "1 day", now) == 86400
+assert fv.gone_age(None, "2 days", now) == 172800 and fv.gone_age(None, "now", now) == 0
+assert fv.gone_age(None, "-", now) is None and fv.gone_age(now - 5, "9 yrs", now) == 5
+t = fv.gone_rows(led(1, 1, "3 hours") + "\n" + led(2, 1, "3 hours").rpartition(US)[0] + "\n")
+assert t[0][7] == now - 3600 and t[1][7] is None and t[1][5] == "3 hours", t
+# ↵ on the 回收 row: y/N first (one key), then fleet-view-reap-all.sh <fleet> <every target>
+a = fv.ACTION["reapall"]
+assert fv.act_ask(a, ra["row"]) == "key" and a.get("yes") and "回收这 2 个" in a["prompt"](ra["row"]), a
+rc, said, went = fv.act_run(None, "v1", "fl", a, ra["row"], "y")
+assert rc == 0 and not went and "回收了 2 个" in said, (rc, said)
+assert Path(os.environ["KLOG"]).read_text().splitlines() == ["reap-all|fl @8 @9"], Path(os.environ["KLOG"]).read_text()
+assert fv.ACTION["history"]["local"]({}, "", "fl") == "history"
+assert "reapall" in fv.ROWLESS and "history" in fv.ROWLESS
+PYK
+mkdir -p "$W/kconf"
+( KLOG="$W/k.log" FLEET_VIEW_ACT_BIN="$W/kstub" FLEET_UI_LANG=zh python3 "$W/leg-k.py" "$BIN" "$W/kconf" ) \
+  || fail "K: 已结束 · 还开着 / 已关闭"
+# the helper itself: each target through dash-reap.sh --yes, one line for the person
+mkdir -p "$W/kreap"
+cp "$BIN/fleet-view-reap-all.sh" "$BIN/fleet-ui-lang.sh" "$W/kreap/"
+cat > "$W/kreap/dash-reap.sh" <<'EOF'
+printf 'dash-reap|%s\n' "$*" >> "$KLOG2"
+case "$1" in
+  @8) echo reaped:full ;;
+  @9) echo reaped:keep ;;
+  @7) echo 'agent still working' >&2; echo skip:live; exit 3 ;;
+esac
+EOF
+cat > "$W/kreap/fleet-sidebar-remote.sh" <<'EOF'
+printf 'remote|%s\n' "$*" >> "$KLOG2"
+echo '✓ reaped'
+EOF
+out=$(KLOG2="$W/k2.log" FLEET_UI_LANG=zh bash "$W/kreap/fleet-view-reap-all.sh" fl @8 @9 @7 wid:u/f1); rc=$?
+[ "$rc" = 0 ] || fail "K: reap-all rc $rc: $out"
+[ "$out" = "回收了 2 个 · 1 个有未提交改动：窗口已关，worktree 保留 · 1 个没收（还在忙或要确认） — agent still working" ] \
+  || fail "K: reap-all said: $out"
+[ "$(cat "$W/k2.log")" = "$(printf 'dash-reap|@8 --yes\ndash-reap|@9 --yes\ndash-reap|@7 --yes\nremote|reap fl wid:u/f1')" ] \
+  || fail "K: reap-all calls: $(cat "$W/k2.log")"
+# the history rows carry the close time only when asked (every other reader byte for byte)
+grep -qF '[ "${FLEET_HISTORY_EPOCH:-0}" = 1 ] && lbuf+="${US}${ep:-}"' "$BIN/fleet-history.sh" \
+  || fail "K: fleet-history.sh rows no longer appends the close time under FLEET_HISTORY_EPOCH"
+grep -qF 'FLEET_HISTORY_EPOCH="1"' "$BIN/fleet_view.py" || fail "K: the 已回收 read does not ask for the close time"
+pass "K  已结束 · 还开着 (回收这 N 个 → fleet-view-reap-all.sh) above 已关闭 (last 48 h, 更早的 N 个 → /fleet-history), folded (#3731)"
 
 # --- F: the old client's road ----------------------------------------------------------------
 grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"

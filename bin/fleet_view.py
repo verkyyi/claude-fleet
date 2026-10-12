@@ -675,7 +675,8 @@ def gone_read(fleet, wait=True):
     prod = os.environ.get("FLEET_VIEW_LANDED_CMD") or 'bash "$1" rows'
     script = '(%s) > "$2.$$" 2>/dev/null && mv -f "$2.$$" "$2"; rm -f "$2.$$"; rmdir "$3"' % prod
     argv = ["sh", "-c", script, "sh", str(Path(__file__).absolute().parent / "fleet-history.sh"), str(out), str(lock)]
-    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240")
+    # FLEET_HISTORY_EPOCH: each row also carries its close time (issue #3731)
+    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240", FLEET_HISTORY_EPOCH="1")
     try:
         if wait:
             subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -708,23 +709,53 @@ def gone_text(fleet):
 
 
 def gone_rows(text, now=None):
-    """fleet-history.sh rows → (target, glyph, label, name, title, act, pr), one per
-    `landed:…` target, the first (newest) of a key the ledger lists twice. Its
-    fixed columns (cmd_rows): glyph · issue (5) · tree · window (26), then the
-    title in its own colour, and the 21 right cells act (8) · PR (7) · dep (4)."""
+    """fleet-history.sh rows → (target, glyph, label, name, title, act, pr, when),
+    one per `landed:…` target, the first (newest) of a key the ledger lists twice.
+    Its fixed columns (cmd_rows): glyph · issue (5) · tree · window (26), then the
+    title in its own colour, and the 21 right cells act (8) · PR (7) · dep (4);
+    `when` is the close time a FLEET_HISTORY_EPOCH read appends (issue #3731), else
+    None."""
     out, seen = [], set()
     for line in (text or "").split("\n"):
         parts = line.split(US, 2)
         if len(parts) < 3 or not parts[0].startswith("landed:") or parts[0] in seen:
             continue
         seen.add(parts[0])
+        when = None
+        if US in parts[2]:
+            parts[2], _, ep = parts[2].rpartition(US)
+            when = int(ep) if ep.strip().isdigit() else None
         plain = ANSI.sub("", parts[2]).rstrip("\n")
         tx = [t.strip() for t in GONE_TX.findall(parts[2])]
         name = tx[0] if tx else plain[11:37].strip()
         title = tx[1] if len(tx) > 1 else ""
         tail = plain[-21:] if len(plain) >= 59 else ""
-        out.append((parts[0], plain[:1], plain[2:7].strip(), name, title, tail[:8].strip(), tail[9:16].strip()))
+        out.append((parts[0], plain[:1], plain[2:7].strip(), name, title, tail[:8].strip(), tail[9:16].strip(), when))
     return out
+
+
+RELTIME = {"min": 60, "hour": 3600, "day": 86400, "wk": 604800, "mo": 2592000, "yr": 31536000}
+
+
+def gone_age(when, act, now):
+    """How long ago a closed session closed: its epoch, else the history row's own
+    words (fleet_reltime: `now` · `3 mins` · `1 day` …), read as the least it can
+    mean — a copy written before the epoch rode along still splits. None: unknown."""
+    if when:
+        return max(0, now - when)
+    m = re.match(r"^(now|(\d+) (min|hour|day|wk|mo|yr)s?)$", (act or "").strip())
+    if not m:
+        return None
+    return 0 if m.group(1) == "now" else int(m.group(2)) * RELTIME[m.group(3)]
+
+
+def closed_secs():
+    """FLEET_VIEW_CLOSED_HOURS (the environment, else fleet.conf's line; default 48):
+    how far back the 已关闭 group lists (issue #3731) — older ones only counted."""
+    try:
+        return max(0.0, float(conf_word("FLEET_VIEW_CLOSED_HOURS") or 48)) * 3600
+    except ValueError:
+        return 48 * 3600.0
 
 
 def entries(vid, now=None, hub=True):
@@ -847,6 +878,7 @@ def entries(vid, now=None, hub=True):
             e["right"] = say("view_ago_fmt", dur(now - act)) if act and local else ""
             e["sec"] = "ended"
             e["depth"] = 0
+            e["foot"] = " · ".join(x for x in (e["foot"], say("view_ended_reap_hint")) if x)
             ended.append(e)
             continue
         # indented under its parent only while the parent sits in the same group
@@ -859,18 +891,26 @@ def entries(vid, now=None, hub=True):
     # one an open row already shows (its issue, restored since) left out
     open_issues = {e["issue"] for g in groups.values() for e in g if e.get("issue")} | \
         {e["issue"] for e in ended if e.get("issue")}
-    for target, glyph, label, name, title, act, pr in gone_rows(gone_text(fleet)):
+    # issue #3731: they are their own group, 已关闭 — only the last
+    # FLEET_VIEW_CLOSED_HOURS of them listed, the older ones a count that opens
+    # /fleet-history; a row whose age cannot be read counts as older
+    gone, older, keep = [], 0, closed_secs()
+    for target, glyph, label, name, title, act, pr, when in gone_rows(gone_text(fleet)):
         if label.startswith("#") and label in open_issues:
+            continue
+        age = gone_age(when, act, now)
+        if age is None or age >= keep:
+            older += 1
             continue
         grepo = target.rpartition("@")[2] if "@" in target else ""
         word = say("view_ended_gone_merged") if glyph == "✓" else say("view_ended_gone")
-        ended.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
-                      "state": "landed", "text": title or name, "name": name, "reap": "", "issue": label,
-                      "depth": 0, "detail": "", "group": "ended", "sec": "ended",
-                      "sym": "done" if glyph == "✓" else "fail", "lost": False, "lost_secs": None, "ask": "",
-                      "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
-                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
-                                                     word, say("view_gone_hint")) if x)})
+        gone.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
+                     "state": "landed", "text": title or name, "name": name, "reap": "", "issue": label,
+                     "depth": 0, "detail": "", "group": "ended", "sec": "gone",
+                     "sym": "done" if glyph == "✓" else "fail", "lost": False, "lost_secs": None, "ask": "",
+                     "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
+                     "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
+                                                    word, say("view_gone_hint")) if x)})
     if held != held0:
         names_save(fleet, held)
     multi = len(set(repos)) >= 2
@@ -885,12 +925,31 @@ def entries(vid, now=None, hub=True):
             out.append(e)
             if e["ask"]:
                 out.append({"kind": "ask", "of": e["target"], "text": e["ask"], "depth": e["depth"]})
+    # 已结束 · 还开着 (windows still up, each one costs memory) above 已关闭 (a
+    # record only), both folded until opened (issue #3731)
     if ended:
         out.append({"kind": "sec", "sec": "ended", "text": say("view_sec_ended_fmt", len(ended)), "n": len(ended)})
         for e in ended:
             if multi and e["repo"]:
                 e["tags"].append(e["repo"])
             out.append(e)
+        many = [e for e in ended if not e.get("lost")]
+        if many:
+            # ↵ reaps them all through dash-reap.sh --yes, its own gate each: a
+            # dirty worktree is kept (only the window goes), a live one is skipped
+            out.append({"kind": "cmd", "cmd": "reapall", "act": "reapall", "sec": "ended", "n": len(many),
+                        "row": {"targets": [("wid:" if e["far"] else "") + e["target"] for e in many]},
+                        "text": say("view_cmd_reapall_fmt", len(many))})
+    if gone or older:
+        out.append({"kind": "sec", "sec": "gone", "text": say("view_sec_gone_fmt", len(gone)), "n": len(gone),
+                    "older": older})
+        for e in gone:
+            if multi and e["repo"]:
+                e["tags"].append(e["repo"])
+            out.append(e)
+        if older:
+            out.append({"kind": "cmd", "cmd": "history", "act": "history", "sec": "gone", "n": older, "row": {},
+                        "text": say("view_cmd_older_fmt", older)})
     return out
 
 
@@ -1989,7 +2048,7 @@ def live(r):
 
 
 def ended(r):
-    return r.get("sec") == "ended"
+    return r.get("sec") in ("ended", "gone")
 
 
 def other_agent(r):
@@ -2115,6 +2174,17 @@ ACTIONS = [
     {"id": "lang", "label": lambda r: say("view_lang_row"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "lang", "far": None, "ask": None,
      "choices": lambda r, f: [("zh", "中文"), ("en", "English"), ("auto", say("view_lang_auto"))]},
+    # the 已结束 · 还开着 group's last row (issue #3731): every session in it, each
+    # through its own row's reap (dash-reap.sh --yes: a dirty worktree kept, a live
+    # one skipped) — off the screen's thread, the line it prints said after
+    {"id": "reapall", "label": lambda r: say("view_act_reapall"), "when": lambda r: True, "rowless": True,
+     "local": lambda r, a, f: sh("fleet-view-reap-all.sh", f, *r["targets"]), "far": None, "ask": "key",
+     "prompt": lambda r: say("view_ask_reapall_fmt", len(r["targets"])), "keys": "yYnN", "yes": True,
+     "slow": True, "thread": True},
+    # the 已关闭 group's last row: the older ones are /fleet-history's — its list,
+    # in this terminal (fleet-restore-pick.sh --pick: ↵ there restores one)
+    {"id": "history", "label": lambda r: say("view_act_history"), "when": lambda r: True, "rowless": True,
+     "local": lambda r, a, f: "history", "far": None, "ask": None},
 ]
 ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
@@ -2123,7 +2193,8 @@ ACTION = {a["id"]: a for a in ACTIONS}
 SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub", "wake": "wake",
                    "awake": "awake", "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
                    "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
-ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "lang": "#3329"}
+ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "lang": "#3329",
+           "reapall": "#3731", "history": "#3731"}
 
 
 def act_env(fleet):
@@ -2162,6 +2233,22 @@ def menu_of(r):
 def act_ask(a, r):
     ask = a["ask"]
     return ask(r) if callable(ask) else ask
+
+
+def history_pick(screen, fleet):
+    """/fleet-history's list in the popup's own terminal (issue #3731): curses
+    steps aside, fleet-restore-pick.sh --pick runs (fzf over every closed session;
+    ↵ restores one, esc comes back), curses resumes. Its rc: 0 = a session was
+    restored (and is current now)."""
+    curses.def_prog_mode()
+    curses.endwin()
+    try:
+        rc = subprocess.run(sh("fleet-restore-pick.sh", "--pick", "--session", fleet), env=act_env(fleet)).returncode
+    except OSError:
+        rc = 1
+    curses.reset_prog_mode()
+    screen.clear()
+    return rc
 
 
 def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
@@ -2395,26 +2482,31 @@ def pin_row(items, query, cur):
 PANEL_WORDS = ("new", "quit", "landed")
 
 
+def conf_word(key):
+    """A setting the panel reads: the environment, else fleet.conf's line —
+    fleet-conf.sh line's own grep, without its bash and fleet-lib.sh (issue #3514:
+    ~50 ms before every ⌘P's first frame): the lines of fleet.conf that set it,
+    the last one wins. '' when neither has it."""
+    raw = os.environ.get(key)
+    if raw is not None:
+        return raw
+    conf = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "fleet.conf")
+    try:
+        with open(conf, encoding="utf-8", errors="replace") as fh:
+            line = "".join(l for l in fh if re.match(r"[ \t]*(export[ \t]+)?%s=" % key, l))
+    except OSError:
+        line = ""
+    m = re.search(r"%s=(['\"]?)([^'\"\n]*)\1" % key, line.strip().splitlines()[-1] if line.strip() else "")
+    return m.group(2) if m else ""
+
+
 def panel_commands():
     """FLEET_PANEL_COMMANDS (the environment, else fleet.conf's line; default
     `new quit`): new (the ⚡ row and its cells) and quit (⏻) are always there —
     the words are accepted, in any order —, landed moves the 刚落地 group first,
     `none` takes ⚡ and ⏻ away. The old `shell` / `newsess` are read and dropped
     (issue #3327: the shell is the row's Tab, a blank session is ⚡ on no words)."""
-    raw = os.environ.get("FLEET_PANEL_COMMANDS")
-    if raw is None:
-        # fleet-conf.sh line's own grep, without its bash and fleet-lib.sh (issue
-        # #3514: ~50 ms before every ⌘P's first frame): the lines of fleet.conf
-        # that set it, the last one wins.
-        conf = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "fleet.conf")
-        try:
-            with open(conf, encoding="utf-8", errors="replace") as fh:
-                line = "".join(l for l in fh if re.match(r"[ \t]*(export[ \t]+)?FLEET_PANEL_COMMANDS=", l))
-        except OSError:
-            line = ""
-        m = re.search(r"FLEET_PANEL_COMMANDS=(['\"]?)([^'\"\n]*)\1", line.strip().splitlines()[-1] if line.strip() else "")
-        raw = m.group(2) if m else ""
-    words = raw.replace(",", " ").split()
+    words = conf_word("FLEET_PANEL_COMMANDS").replace(",", " ").split()
     if "none" in words:
         return []
     return ["new", "quit"] + (["landed"] if "landed" in words else [])
@@ -2764,7 +2856,7 @@ def popup(screen, qo, vid, client, forward=""):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
         nonlocal items, shown, msg, mode, pend, line, msg_until
-        if r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell"):
+        if (r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell")) or a.get("thread"):
             def far_run():
                 landed.append(act_run(qo, vid, fleet, a, r, ans, client)[1])
             threading.Thread(target=far_run, daemon=True).start()
@@ -3037,6 +3129,18 @@ def popup(screen, qo, vid, client, forward=""):
                     if pick(ACTION["pin"], act_row(fleet, e["row"])):
                         return 0
                     continue
+                if e["act"] == "reapall":
+                    # 已结束 · 还开着 (issue #3731): y/N first, then all of them
+                    pick(ACTION["reapall"], e["row"])
+                    continue
+                if e["act"] == "history":
+                    # 已关闭's 「更早的 X 个」 (issue #3731): the history list here
+                    if history_pick(screen, fleet) == 0:
+                        return 0
+                    heal.resized(screen)
+                    items = entries(vid)
+                    shown = listing()
+                    continue
                 rc, msg, went = act_run(qo, vid, fleet, ACTION[e["act"]], e["row"], "", client)
                 if went:
                     return 0
@@ -3148,7 +3252,7 @@ def main(argv, qo):
         # the popup's lines with its ⚡ / ⏻ rows (issues #3180, #3327): kind · cmd · text
         q = " ".join(a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                      and argv[i - 1] not in ("--view", "--client"))
-        for e in panel_rows(entries(vid), q, {"ended"}, bolt=bolt_new(grid_read(vid)), cur=current(vid)):
+        for e in panel_rows(entries(vid), q, {"ended", "gone"}, bolt=bolt_new(grid_read(vid)), cur=current(vid)):
             print("\t".join((e["kind"], e.get("cmd") or e.get("target") or e.get("group") or e["kind"], e.get("text") or "")))
         return 0
     if argv[:1] == ["view-gone"]:
@@ -3158,8 +3262,8 @@ def main(argv, qo):
         rest = [a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                 and argv[i - 1] not in ("--view", "--client")]
         gl = glyphs()
-        for e in visible(entries(vid), " ".join(rest), {"ended"}):
-            print("\t".join((e["kind"], e.get("target") or e.get("of") or e.get("sec") or e.get("group") or "",
+        for e in visible(entries(vid), " ".join(rest), {"ended", "gone"}):
+            print("\t".join((e["kind"], e.get("target") or e.get("of") or e.get("cmd") or e.get("sec") or e.get("group") or "",
                              e.get("word") or "", e.get("text") or "", e.get("right") or "", e.get("foot") or "",
                              gl.get(e.get("sym") or "", "") if e["kind"] == "sess" else "",
                              e.get("group") or "", " ".join(e.get("tags") or ()))))

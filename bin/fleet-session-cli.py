@@ -7,6 +7,9 @@
                                          回收方式 (the same rows ⌘P lists; 在问 only
                                          when one asks — issue #2538); --all adds the
                                          已结束 ones (done / exited, no issue — #2565)
+                                         under 「已结束 · 还开着 N」, the sidebar's and
+                                         ⌘P's group (issue #3731: a window still up;
+                                         the closed ones are /fleet-history's)
     fleet ls --services [--json]         every background service and scheduled
                                          task registered on your machines: 机器 ·
                                          登录 · 名称 · 类型 · 状态 · 上次 · 下次 ·
@@ -596,18 +599,26 @@ def cmd_ls(args):
     rs = attach_bus(rs)
     if "--json" in args:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test",
-                "worker_id", "fleet_id")
+                "worker_id", "fleet_id", "ended")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"), ("ask_kind", "ask_kind"), ("ask", "ask"))
-        print(json.dumps([dict({k: r.get(k, False if k == "test" else "") for k in keep}, **{k: r.get(v, "") for k, v in bus},
+        print(json.dumps([dict({k: r.get(k, False if k == "test" else "") for k in keep if k != "ended"},
+                               **({"ended": True} if r.get("ended") else {}), **{k: r.get(v, "") for k, v in bus},
                                **{k: f(r) for k, f in derived})
                           for r in rs], ensure_ascii=False))
         return 0
     if not rs:
         say("没有会话（客户端还没拿到列表时也是这样：稍等再试）")
         return 0
-    table(rs)
+    live = [r for r in rs if not r.get("ended")]
+    over = [r for r in rs if r.get("ended")]
+    if live:
+        table(live)
+    if over:
+        # the same group, the same words as the sidebar's and ⌘P's (issue #3731)
+        print(("\n" if live else "") + "已结束 · 还开着 %d 个" % len(over))
+        table(over)
     return 0
 
 

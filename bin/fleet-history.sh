@@ -1119,7 +1119,12 @@ cmd_rows() {
     # the tree cell is exactly one cell of source text (glyph, or a space on a
     # root/orphan) and a CONSTANT width inside LEFTW, never a ${#} count — `└`/`▸`/`▾`
     # are East-Asian AMBIGUOUS, so a CJK-wide terminal may draw them 2 cells.
-    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${GY}${treed:- } ${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"$'\n'
+    lbuf+="${target}${US}${fzfkey}${US}${glyph_c}${glyph}${R} ${icol}${f_iss}${R} ${GY}${treed:- } ${R} ${TX}${f_name}${R} ${tagpfx}${TX}${dsmry}${R}${gap}${GY}${f_act}${R} ${IN}${f_pr}${R} ${depcol}${f_ctx}${R}"
+    # the close time as an epoch, one more field (issue #3731): only the 看台's
+    # 已关闭 group asks for it (FLEET_HISTORY_EPOCH=1) — it keeps the last 48 h and
+    # counts the rest; every other reader of these rows gets them byte for byte
+    [ "${FLEET_HISTORY_EPOCH:-0}" = 1 ] && lbuf+="${US}${ep:-}"
+    lbuf+=$'\n'
   done <<< "$out"
 
   # Emit newest-first, nested: the group slot first (a root's own position, which a
