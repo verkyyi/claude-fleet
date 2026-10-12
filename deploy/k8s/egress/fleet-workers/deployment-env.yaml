@@ -11,7 +11,10 @@ spec:
             # the hub's ACK cluster's pod range (docs/MANAGED-LINUX.md «Egress guard»)
             - name: FLEET_EGRESS_SOURCES
               value: "172.20.0.0/16"
-            # GitHub's git transport times out from the CN egress: through the
-            # Singapore gh-relay (extras/gh-relay), which takes the cluster egress only
+            # Claude auxiliary traffic and GitHub use the authenticated US parent.
+            # No direct fallback if it becomes unavailable.
             - name: FLEET_EGRESS_VIA
-              value: ".github.com=47.131.114.67:3128 .githubusercontent.com=47.131.114.67:3128 ghcr.io=47.131.114.67:3128"
+              value: ".anthropic.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 .claude.ai=fleet-us-egress.fleet-workers.svc.cluster.local:3128 .claude.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 .claudeusercontent.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 .claudemcpcontent.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 http-intake.logs.us5.datadoghq.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 browser-intake-us5-datadoghq.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 storage.googleapis.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 registry.npmjs.org=fleet-us-egress.fleet-workers.svc.cluster.local:3128 formulae.brew.sh=fleet-us-egress.fleet-workers.svc.cluster.local:3128 .github.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 .githubusercontent.com=fleet-us-egress.fleet-workers.svc.cluster.local:3128 ghcr.io=fleet-us-egress.fleet-workers.svc.cluster.local:3128"
+            # Fail startup if a Claude domain loses its mandatory parent route.
+            - name: FLEET_EGRESS_REQUIRE_VIA
+              value: ".anthropic.com .claude.ai .claude.com .claudeusercontent.com .claudemcpcontent.com http-intake.logs.us5.datadoghq.com browser-intake-us5-datadoghq.com storage.googleapis.com registry.npmjs.org formulae.brew.sh"

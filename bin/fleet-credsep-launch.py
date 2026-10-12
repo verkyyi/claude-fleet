@@ -44,7 +44,7 @@ import json, os, pwd, re, shutil, signal, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROLE = "_fleetcred" if sys.platform == "darwin" else "fleetcred"
 CRED_KEYS = re.compile(r"^(FLEET_CRED_(PROXY_PORT|PROXY_TTL|PROXY_SWITCH_SECS|PROXY_TIMEOUT|PROXY_TRUST_SECS|"
-                       r"RELAY_URL|RELAY_TOKEN|CENTRAL_URL|ANTHROPIC_URL|CODEX_URL|ALLOW_HOSTS)|FLEET_HUB_URL|"
+                       r"RELAY_URL|RELAY_TOKEN|CENTRAL_URL|ANTHROPIC_URL|ANTHROPIC_PROXY|CODEX_URL|ALLOW_HOSTS)|FLEET_HUB_URL|"
                        r"FLEET_PROBE_FORCE_UNREACHABLE)$")
 # the only CRED_KEYS a login's own files may set (issue #2290): its proxy's port
 # and timings. Everything that says WHERE a credential or the node token goes —

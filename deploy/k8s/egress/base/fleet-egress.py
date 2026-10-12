@@ -32,7 +32,10 @@ import socket
 import sys
 import time
 
-ALLOW = ('.anthropic.com .claude.ai .claude.com .openai.com .chatgpt.com '
+ANTHROPIC_HOSTS = ('.anthropic.com .claude.ai .claude.com .claudeusercontent.com '
+                   '.claudemcpcontent.com http-intake.logs.us5.datadoghq.com '
+                   'browser-intake-us5-datadoghq.com storage.googleapis.com registry.npmjs.org formulae.brew.sh')
+ALLOW = (ANTHROPIC_HOSTS + ' .openai.com .chatgpt.com '
          '.github.com .githubusercontent.com ghcr.io '
          'registry.npmjs.org .npmmirror.com pypi.org files.pythonhosted.org '
          'proxy.golang.org sum.golang.org goproxy.cn sum.golang.google.cn')
@@ -69,6 +72,14 @@ def config(env=os.environ):
         if not sep or not host or not port.isdigit():
             raise ValueError('FLEET_EGRESS_VIA takes PATTERN=HOST:PORT, not %r' % item)
         via.append((pat.lower().rstrip('.'), (host, int(port))))
+    mandatory = patterns(env.get('FLEET_EGRESS_REQUIRE_VIA', ''))
+    # Refuse an incomplete policy at startup. An ancestor mapping covers a
+    # whole suffix; an exact mapping cannot cover a required suffix.
+    for pat in mandatory:
+        covers = any(p == pat or (p.startswith('.') and match(pat.lstrip('.'), (p,)))
+                     for p, parent in via)
+        if not covers:
+            raise ValueError('FLEET_EGRESS_REQUIRE_VIA has no parent mapping for %s' % pat)
     return allow, sources, ports, via
 
 
@@ -268,6 +279,20 @@ def selftest():
             raise AssertionError('took %r' % b)
         except ValueError:
             pass
+    for required, mappings in (('.claude.com', 'platform.claude.com=us:3128'),
+                               ('.anthropic.com', '.claude.com=us:3128')):
+        try:
+            config({'FLEET_EGRESS_REQUIRE_VIA': required, 'FLEET_EGRESS_VIA': mappings})
+            raise AssertionError('incomplete mandatory route accepted')
+        except ValueError:
+            pass
+    _, _, _, us_via = config({'FLEET_EGRESS_REQUIRE_VIA': ANTHROPIC_HOSTS,
+                             'FLEET_EGRESS_VIA': ' '.join(p + '=us:3128' for p in ANTHROPIC_HOSTS.split())})
+    for host in ('api.anthropic.com', 'platform.claude.com', 'claude.ai',
+                 'downloads.claude.ai', 'bridge.claudeusercontent.com',
+                 'http-intake.logs.us5.datadoghq.com', 'storage.googleapis.com'):
+        assert parent_for(host, us_via) == ('us', 3128), host
+    assert parent_for('api.anthropic.com.evil.test', us_via) is None
     for a in ('127.0.0.1', '10.0.0.1', '172.21.0.1', '100.100.100.200', '::1', 'fd00::1'):
         assert not public(a), a
     assert public('140.82.112.3')
@@ -288,6 +313,11 @@ def selftest():
             asked.append(head.split(b'\r\n', 1)[0])
             if b'denied.github.com' in head:
                 w.write(b'HTTP/1.1 403 host_not_allowed\r\n\r\n')
+                await w.drain()
+                w.close()
+                return
+            if b'api.anthropic.com' in head:
+                w.write(b'HTTP/1.1 502 no_us_connector\r\n\r\n')
                 await w.drain()
                 w.close()
                 return
@@ -324,6 +354,15 @@ def selftest():
             return out
         out = await ask(b'CONNECT files.pythonhosted.org:443 HTTP/1.1\r\n\r\n')
         assert out.startswith(b'HTTP/1.1 502 upstream_failed'), out
+        # A required US route failing must never invoke the direct resolver.
+        p.via.append(('.anthropic.com', ('127.0.0.1', 3128)))
+        async def forbidden_dns(host, port):
+            raise AssertionError('mandatory parent fell back to direct DNS')
+        p.resolver = forbidden_dns
+        out = await ask(b'CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n')
+        assert out.startswith(b'HTTP/1.1 502 upstream_failed'), out
+        p.via.pop()
+        p.resolver = fake
         out = await ask(b'CONNECT example.com:443 HTTP/1.1\r\n\r\n')
         assert out.startswith(b'HTTP/1.1 403 host_not_allowed'), out
         out = await ask(b'CONNECT pypi.org:443 HTTP/1.1\r\n\r\n')

@@ -159,7 +159,8 @@ if d.get("relay") is True:
       [ -z "$peer" ] || rloc=$("$CURL" -fsS --max-time 8 "https://ipinfo.io/$peer/country" 2>/dev/null | head -n 1 | up)
       case "$rloc" in ??) ;; *) rloc="" ;; esac
       route=relay loc_local="$loc" loc="$rloc"
-      reason="route relay — local: $reason; relay egress ${rloc:-unknown} (${peer:-?}); anthropic via relay $ra ($rac); openai via relay $ro ($roc)"
+      aroute=$(printf '%s' "$rp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("anthropic_route", "relay"))' 2>/dev/null) || aroute=relay
+      reason="route relay — local: $reason; relay egress ${rloc:-unknown} (${peer:-?}); anthropic via $aroute $ra ($rac); openai via relay $ro ($roc)"
       case " $UNSUPPORTED " in *" ${rloc:-none} "*) bad_rloc=1 ;; *) bad_rloc="" ;; esac
       if [ -n "$bad_rloc" ] || [ "$ra" = unsupported_region ] || [ "$ro" = unsupported_region ]; then
         verdict=unsupported_region
@@ -205,7 +206,7 @@ if [ "$laptop" = true ]; then
   [ "${sleep_min:-0}" -gt 0 ] 2>/dev/null && note="${note}（睡眠设置 ${sleep_min} 分钟）"
 fi
 if [ "$route" = relay ]; then
-  via="本机出口 ${loc_local:-未知}，会话经新加坡转发"
+  via="本机出口 ${loc_local:-未知}，会话经受控转发"
   case "$verdict" in
     ok) echo "本机判断：合适 — ${via}（转发出口 ${loc:-未知}），Anthropic / OpenAI 经转发都能连${note}" ;;
     unsupported_region) echo "本机判断：不合适 — ${via}，转发出口 ${loc:-未知} 不在 Claude / OpenAI 支持范围（经转发 Anthropic $(word "$anthropic")，OpenAI $(word "$openai")）；不在本机跑会话${note}" ;;

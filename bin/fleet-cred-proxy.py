@@ -172,6 +172,28 @@ HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
 PUBLIC = {"/api/hello"}
 
 
+def parse_connect_proxy(value):
+    u = urlsplit(value)
+    if (u.scheme != "http" or not u.hostname or u.username or u.password
+            or u.path not in ("", "/") or u.query or u.fragment
+            or any(c.isspace() for c in value) or not u.port):
+        raise ValueError("FLEET_CRED_ANTHROPIC_PROXY requires http://HOST:PORT without credentials")
+    # Validate the port during configuration, before any credential is read.
+    return u.hostname, u.port
+
+
+def upstream_https(target, timeout, proxy=""):
+    if target.scheme != "https":
+        raise ValueError("CONNECT upstream must use HTTPS")
+    context = ssl._create_default_https_context()
+    if proxy:
+        host, port = parse_connect_proxy(proxy)
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=context)
+        conn.set_tunnel(target.hostname, target.port or 443)
+        return conn
+    return http.client.HTTPSConnection(target.hostname, target.port or 443, timeout=timeout, context=context)
+
+
 class Server(ThreadingHTTPServer):
     """http.server's bind looks its own address up (socket.getfqdn): a machine
     whose /etc/hosts lost `127.0.0.1 localhost` waits out a DNS timeout there —
@@ -788,8 +810,15 @@ class Router:
         with self.lock:
             trust, twhy = self.trust or "unknown", self.trust_why
         relay = bool(self.cfg.relay_url and relay_pass(self.cfg))
+        if provider == "claude" and getattr(self.cfg, "anthropic_proxy", "") and trust != "trusted":
+            return [], "%s (%s): mandatory Anthropic egress requires a trusted node" % (trust, twhy)
         if trust != "trusted":
             return ["central"], "%s (%s) → central, no credential file is read" % (trust, twhy)
+        if provider == "claude" and getattr(self.cfg, "anthropic_proxy", ""):
+            # "direct" selects the official API endpoint. Its TCP connection
+            # MUST use the configured CONNECT gateway below, with no relay or
+            # central fallback that could change the final provider egress.
+            return ["direct"], "trusted + mandatory Anthropic CONNECT egress"
         p = self.probe(provider)
         if relay and self.probe_route() == "relay":
             # the probe judged this login by the relay (issue #3364): this
@@ -1229,6 +1258,8 @@ class Proxy(BaseHTTPRequestHandler):
         if not order:
             # permanent: 403, which neither client retries (never a 503)
             self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no usable route")
+            if provider == "claude" and getattr(self.cfg, "anthropic_proxy", ""):
+                return self.fail(403, "mandatory Anthropic egress has no trusted credential route", "permission_error")
             return self.fail(403, "this machine routes central (untrusted) and this session has no "
                              "hub session credential (or no central proxy is configured)", "permission_error")
         last, tried = None, list(skipped)
@@ -1290,11 +1321,13 @@ class Proxy(BaseHTTPRequestHandler):
         upstream's bare "Request not allowed"."""
         u = urlsplit(base)
         out["Host"] = u.netloc
+        proxy = getattr(self.cfg, "anthropic_proxy", "") if provider == "claude" and route == "direct" else ""
+        if proxy and u.scheme != "https":
+            return self.fail(502, "mandatory Anthropic egress requires an HTTPS upstream", "api_error")
         if u.scheme == "http":
             conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=self.cfg.timeout)
         else:
-            conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=self.cfg.timeout,
-                                               context=ssl._create_default_https_context())  # fleet_tls's when it loaded
+            conn = upstream_https(u, self.cfg.timeout, proxy)
         try:
             conn.connect()
         except OSError as e:
@@ -2159,18 +2192,22 @@ def relay_probe(cfg, router):
     out, peer = {"relay": True}, ""
     for prov, method, path, body in (("anthropic", "POST", "/anthropic/v1/messages", b"{}"),
                                      ("openai", "GET", "/chatgpt/wham/usage", None)):
-        u = urlsplit(cfg.relay_url + path)
+        proxy = getattr(cfg, "anthropic_proxy", "") if prov == "anthropic" else ""
+        u = urlsplit(cfg.anthropic_url + "/v1/messages" if proxy else cfg.relay_url + path)
         hdrs = {"Host": u.netloc, "X-Fleet-Relay": tok, "content-type": "application/json",
                 "anthropic-version": "2023-06-01"}
+        if proxy:
+            hdrs.pop("X-Fleet-Relay")
+            out["anthropic_route"] = "mandatory-connect"
         word, code = "unreachable", "000"
         try:
             if u.scheme == "http":
                 conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=10)
             else:
-                conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=10,
-                                                   context=ssl._create_default_https_context())
+                conn = upstream_https(u, 10, proxy)
             conn.connect()
-            peer = peer or conn.sock.getpeername()[0]
+            if not proxy:
+                peer = peer or conn.sock.getpeername()[0]
             conn.request(method, u.path, body=body, headers=hdrs)
             r = conn.getresponse()
             text = r.read(65536).decode("utf-8", "replace").lower()
@@ -2220,6 +2257,9 @@ def tenant_cfg(base, spec):
     c.node_env, c.probe_path = spec["node_env"], spec.get("probe") or ""
     c.relay_url = (st.get("FLEET_CRED_RELAY_URL") or "").rstrip("/")
     c.relay_token = st.get("FLEET_CRED_RELAY_TOKEN") or ""
+    c.anthropic_proxy = st.get("FLEET_CRED_ANTHROPIC_PROXY") or getattr(base, "anthropic_proxy", "")
+    if c.anthropic_proxy:
+        parse_connect_proxy(c.anthropic_proxy)
     ne = node_env(c.node_env)
     c.central_url = (st.get("FLEET_CRED_CENTRAL_URL") or ne.get("CCQUOTA_HUB_URL")
                      or st.get("FLEET_HUB_URL") or "").rstrip("/")
@@ -2264,6 +2304,9 @@ def serve(a):
         sys.stderr.write("fleet-cred-proxy: already running (%s/lock)\n" % st)
         sys.exit(0)
     cfg.anthropic_url = env("FLEET_CRED_ANTHROPIC_URL", "https://api.anthropic.com").rstrip("/")
+    cfg.anthropic_proxy = env("FLEET_CRED_ANTHROPIC_PROXY")
+    if cfg.anthropic_proxy:
+        parse_connect_proxy(cfg.anthropic_proxy)
     cfg.codex_url = env("FLEET_CRED_CODEX_URL", "https://chatgpt.com/backend-api/codex").rstrip("/")
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
@@ -2321,6 +2364,8 @@ def serve(a):
     if shared or cfg.store:
         ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"))
     for c in [cfg] + everyone:
+        if getattr(c, "anthropic_proxy", "") and urlsplit(c.anthropic_url).scheme != "https":
+            sys.exit("fleet-cred-proxy: mandatory Anthropic CONNECT requires an HTTPS upstream")
         for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
             v = getattr(c, name, "")
             if v and not loopback_ok(v, cluster=name == "central_url"):

@@ -127,7 +127,7 @@ def entry_annotations(spec):
 
 
 def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_mirrors, cred_central,
-             egress_proxy, egress_closed, cn_mirrors=False, cluster_caches=False, namespace=''):
+             egress_proxy, egress_closed, cn_mirrors=False, cluster_caches=False, namespace='', anthropic_proxy=''):
     """The checks both templates share; returns the egress guard's (dns, blocked, metadata, allow)."""
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
@@ -159,6 +159,10 @@ def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_
                          % cred_central)
     if egress_proxy and not re.fullmatch(EGRESS_PROXY_RE, egress_proxy):
         raise ValueError('--egress-proxy is http://HOST:PORT (deploy/k8s/egress), not %r' % egress_proxy)
+    if anthropic_proxy and not re.fullmatch(EGRESS_PROXY_RE, anthropic_proxy):
+        raise ValueError('--anthropic-proxy is http://HOST:PORT, without credentials')
+    if anthropic_proxy and cred_central:
+        raise ValueError('--anthropic-proxy requires local credential routing; configure US egress on the central proxy before using --cred-central')
     if cluster_caches and cn_mirrors:
         raise ValueError('--cluster-caches replaces --cn-mirrors: name one')
     if cluster_caches and not re.fullmatch(NS_RE, namespace):
@@ -169,7 +173,7 @@ def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_
 
 
 def _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches=False,
-                namespace=''):
+                namespace='', anthropic_proxy=''):
     env = []
     if github_proxy:
         env.append({'name': 'FLEET_GITHUB_PROXY', 'value': github_proxy})
@@ -184,6 +188,8 @@ def _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_prox
         env.append({'name': 'FLEET_CRED_CENTRAL_URL', 'value': cred_central})
     if egress_proxy:
         env.append({'name': 'FLEET_EGRESS_PROXY', 'value': egress_proxy})
+    if anthropic_proxy:
+        env.append({'name': 'FLEET_ANTHROPIC_PROXY', 'value': anthropic_proxy})
     return env
 
 
@@ -213,10 +219,10 @@ VOLUMES = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred')
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
               entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
               github_proxy='', git_mirrors=(), cn_mirrors=False, cred_central='', egress_proxy='',
-              egress_closed=False, cluster_caches=False):
+              egress_closed=False, cluster_caches=False, anthropic_proxy=''):
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
-                                             cn_mirrors, cluster_caches, namespace)
+                                             cn_mirrors, cluster_caches, namespace, anthropic_proxy)
     if entry_host and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', entry_host):
         raise ValueError('--entry-host is the load balancer address (an IP or a DNS name)')
     if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
@@ -235,7 +241,7 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
            {'name': 'FLEET_ENTRY', 'value': '1'},
            {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)}]
     env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
-                       namespace)
+                       namespace, anthropic_proxy)
     if entry_host:
         # the door's address: on ACK the egress the hub sees is the NAT's, so the
         # entry reach report must name the load balancer (fleet_entry_reach.go)
@@ -330,7 +336,7 @@ def _user_pod_container_resources(limits):
 
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
-                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False):
+                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, anthropic_proxy=''):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
     (ReadWriteOncePod). Inside: one login (the hub's account op opens it — a
@@ -339,7 +345,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
     fleet/principal label — the provisioner writes that once the pod is ready."""
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
-                                             cn_mirrors, cluster_caches, namespace)
+                                             cn_mirrors, cluster_caches, namespace, anthropic_proxy)
     if not re.fullmatch(USER_POD_RE, name):
         raise ValueError('--user-pod is u-<nonce> (4-20 of a-z0-9), not %r' % name)
     if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
@@ -357,7 +363,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
            # the machine hello says CapUserPod: the hub's machine is this pod
            {'name': 'FLEET_USER_POD', 'value': '1'}]
     env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
-                       namespace)
+                       namespace, anthropic_proxy)
     container = dict({
         'name': 'fleet', 'image': image, 'env': env,
         'resources': _user_pod_container_resources(limits),
@@ -436,6 +442,8 @@ if __name__ == '__main__':
                         'every session routes central, no subscription credential is leased into or kept in the pod')
     p.add_argument('--egress-proxy', default='', metavar='URL',
                    help="every login's HTTPS_PROXY: the cluster's one egress (http://fleet-egress.fleet-workers.svc.cluster.local:3128)")
+    p.add_argument('--anthropic-proxy', default='', metavar='URL',
+                   help='mandatory US CONNECT path for trusted Anthropic credential traffic; no route fallback')
     p.add_argument('--egress-closed', action='store_true',
                    help='the guard rejects the public internet too: out only through --egress-allow destinations '
                         "(the egress and credproxy Services' ClusterIPs, the hub's address)")
@@ -466,14 +474,14 @@ if __name__ == '__main__':
                                        github_proxy=args.github_proxy, git_mirrors=args.git_mirror,
                                        cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
                                        egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
-                                       cluster_caches=args.cluster_caches)
+                                       cluster_caches=args.cluster_caches, anthropic_proxy=args.anthropic_proxy)
         else:
             items = resources(args.image, args.hub, args.storage_class, args.namespace,
                               entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
                               pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
                               git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors,
                               cred_central=args.cred_central, egress_proxy=args.egress_proxy,
-                              egress_closed=args.egress_closed, cluster_caches=args.cluster_caches)
+                              egress_closed=args.egress_closed, cluster_caches=args.cluster_caches, anthropic_proxy=args.anthropic_proxy)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))

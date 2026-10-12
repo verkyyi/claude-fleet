@@ -238,7 +238,7 @@ FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=403 FLEET_PROBE_RELAY_CMD="prin
 if [ "$(rc)" = 0 ] && J k | grep -q '"loc":"SG","anthropic":"unsupported_region","openai":"unsupported_region",' \
    && J k | grep -q '"route":"relay","loc_local":"CN","relay_anthropic":"reachable","relay_openai":"reachable",' \
    && J k | grep -q '"verdict":"ok"' && J k | grep -q 'route relay — local: egress CN' \
-   && grep -q '^本机判断：合适 — 本机出口 CN，会话经新加坡转发（转发出口 SG）' "$SB/out" \
+   && grep -q '^本机判断：合适 — 本机出口 CN，会话经受控转发（转发出口 SG）' "$SB/out" \
    && grep -q 'ipinfo.io/203.0.113.9/country' "$SB/curl.log"; then
   ok "K relay login, egress CN → judged by the relay (SG): ok, route relay, loc_local CN"
 else bad "K relay ok: rc=$(rc) json=$(J k) out=$(out)"; fi

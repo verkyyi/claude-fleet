@@ -422,7 +422,33 @@ def devnet_settings(env):
     return ('\n'.join(git) + '\n' if git else '', ''.join('%s=%s\n' % kv for kv in pairs))
 
 
-def devnet(env=None, gitconfig='/etc/gitconfig', envfile='/etc/fleet-devnet.env'):
+def claude_proxy_settings(shell, path):
+    """Root managed env reaches Claude's background supervisor as well as shells."""
+    pairs = dict(line.split('=', 1) for line in shell.splitlines() if '=' in line)
+    if not pairs.get('HTTPS_PROXY'):
+        return
+    p = Path(path)
+    if p.is_symlink():
+        raise ValueError('Claude managed settings must not be a symlink')
+    if p.exists():
+        st = p.stat()
+        if os.geteuid() == 0 and (st.st_uid != 0 or st.st_mode & 0o022):
+            raise ValueError('Claude managed settings must be root-owned')
+        data = json.loads(p.read_text())
+        if not isinstance(data, dict) or not isinstance(data.get('env', {}), dict):
+            raise ValueError('invalid Claude managed settings')
+    else:
+        data = {}
+    data.setdefault('env', {}).update({k: pairs[k] for k in
+        ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy')})
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + '.tmp-us-egress')
+    tmp.write_text(json.dumps(data, indent=2) + '\n')
+    tmp.chmod(0o644)
+    os.replace(tmp, p)
+
+
+def devnet(env=None, gitconfig='/etc/gitconfig', envfile='/etc/fleet-devnet.env', managedfile=None):
     git, shell = devnet_settings(os.environ if env is None else env)
     for path, text in ((gitconfig, git), (envfile, shell)):
         p = Path(path)
@@ -433,6 +459,8 @@ def devnet(env=None, gitconfig='/etc/gitconfig', envfile='/etc/fleet-devnet.env'
             os.replace(tmp, p)
         elif p.is_file() and not p.is_symlink() and p.read_text().startswith(DEVNET_MARK):
             p.unlink()
+    if managedfile:
+        claude_proxy_settings(shell, managedfile)
     print('devnet: github proxy %s · git mirrors %d · packages %s · egress %s' % (
         'on' if 'FLEET_GITHUB_PROXY=' in shell else 'off', git.count('\tinsteadOf = '),
         'cluster' if 'PIP_INDEX_URL=' in shell else 'cn' if 'GOPROXY=' in shell else 'off',
@@ -664,6 +692,10 @@ def route_settings(c, login, hub, relay):
     if central_url():
         # the cluster credential proxy (#3547): render.py --cred-central
         route['FLEET_CRED_CENTRAL_URL'] = central_url()
+    anthropic_proxy = os.environ.get('FLEET_ANTHROPIC_PROXY', '').strip()
+    if anthropic_proxy:
+        c.proxy_mod().parse_connect_proxy(anthropic_proxy)
+        route['FLEET_CRED_ANTHROPIC_PROXY'] = anthropic_proxy
     for value in route.values():
         if not value or any(x in value for x in ('\n', '\r')):
             raise ValueError('invalid route setting')
@@ -1064,7 +1096,7 @@ def foreground(a):
         Path('/etc/ssh/sshd_config.d/90-fleet-container.conf').write_text(
             'HostKey ' + str(key) + '\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n')
         try:
-            devnet()
+            devnet(managedfile='/etc/claude-code/managed-settings.json')
         except (ValueError, OSError) as e:
             # a bad setting costs the dev conveniences, never the machine
             print('devnet: not written (%s)' % e, file=sys.stderr)

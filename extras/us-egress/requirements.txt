@@ -1,0 +1,1 @@
+websockets==12.0 --hash=sha256:dc284bbc8d7c78a6c69e0c7325ab46ee5e40bb4d50e494d8131a07ef47500e9e
