@@ -84,12 +84,13 @@ FLEET_BASE_BRANCH="main"
 # this command in the session's worktree (queued on the machine's heavy-job slots,
 # killed after FLEET_CHECK_TIMEOUT seconds) and fast-forwards the base only when it
 # exits 0. Unset = no check: it lands anyway and the landing record says 没跑检查;
-# FLEET_CHECK_REQUIRED=1 refuses that (BLOCKED). Set them in the repo's overlay.
-# @label=Landing check command @group=identity @tier=advanced @scope=fleet @edit=no
+# a required check (FLEET_CHECK_REQUIRED set to 1) refuses that (BLOCKED). Set
+# them in the repo's overlay.
+# @label=Landing check command @group=identity @tier=internal @scope=fleet @edit=no
 #FLEET_CHECK_CMD=""
-# @label=Landing check timeout @group=identity @tier=advanced @scope=fleet @edit=int @unit=s
+# @label=Landing check timeout @group=identity @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_CHECK_TIMEOUT=480
-# @label=Refuse to land without a check @group=identity @tier=advanced @scope=fleet @edit=bool
+# @label=Refuse to land without a check @group=identity @tier=internal @scope=fleet @edit=bool
 #FLEET_CHECK_REQUIRED=0
 
 # --- Public SSH entry (issue #1195) ---------------------------------------
