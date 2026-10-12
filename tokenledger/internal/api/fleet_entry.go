@@ -446,10 +446,8 @@ func (s *Server) entryEnsureNames(now time.Time) {
 // fits or someone else has it.
 func (s *Server) entrySuggestedName(person string) string {
 	var cands []string
-	if gid, ok := githubIDOf(person); ok {
-		if u, err := s.Store.HubUserByID(gid); err == nil && u != nil {
-			cands = append(cands, u.Login)
-		}
+	if l := s.personLogin(person); l != "" {
+		cands = append(cands, l)
 	}
 	if p, err := s.Store.Principal(person); err == nil {
 		cands = append(cands, p.Login)
@@ -796,6 +794,7 @@ func (s *Server) broadcastEntry(v int, hosts ...string) {
 	if !s.entryOn() || len(hosts) == 0 {
 		return
 	}
+	hosts = s.withDoors(hosts)
 	// The machine reports how the outside reaches it right after it applies
 	// the list (claude-fleet#3199): that report is checked, never answered
 	// from the last check.

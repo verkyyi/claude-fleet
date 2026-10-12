@@ -77,6 +77,13 @@ entry_fp() {
   printf '%s\n' "$line" | ssh-keygen -l -f /dev/stdin 2>/dev/null | awk '{ print $2; exit }'
 }
 FP="$(entry_fp)"
+# Through the cluster's door (issue #3549): the key sshd saw here is the door's;
+# the person's own key, its label and their address come as the door saw them
+# (FLEET_DOOR_*, which only a user pod's sshd accepts — and only from the door's key).
+if [ -n "${FLEET_DOOR_FP:-}" ]; then
+  case "$FLEET_DOOR_FP" in *[!A-Za-z0-9+/=:]*) ;; *) FP="$FLEET_DOOR_FP" ;; esac
+  case "${FLEET_DOOR_SRC:-}" in ''|*[!0-9A-Fa-f.:]*) ;; *) SRC="$FLEET_DOOR_SRC" ;; esac
+fi
 
 entry_log() {   # <how>
   mkdir -p "$C/logs" 2>/dev/null || return 0
@@ -120,20 +127,25 @@ export PATH
 # view id · device: one python3, no key text anywhere but the fingerprint
 ENTRY_PY='
 import base64, hashlib, json, re, sys
-fp, book, login, src, host = sys.argv[1:6]
+fp, book, login, src, host, door_name = sys.argv[1:7]
 name = ""
 try:
     ent = (json.load(open(book)).get("logins") or {}).get(login) or {}
     name = str((ent.get("names") or {}).get(fp) or "")
 except Exception:
     pass
+if not name and door_name:
+    try:
+        name = re.sub(r"[\x00-\x1f\x7f]", "", base64.b64decode(door_name).decode("utf-8"))[:64]
+    except Exception:
+        pass
 slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")[:16].strip("-") or "key"
 tail = hashlib.sha256(fp.encode()).hexdigest()[:6] if fp else "000000"
 dev = {"device": name or ("key " + fp[7:15] if fp.startswith("SHA256:") else "entry"), "os": "",
        "terminal": "ssh", "via": "entry", "host": host, "caps": ["link"], "src": src}
 print("e-%s-%s %s" % (slug, tail, base64.b64encode(json.dumps(dev, ensure_ascii=False, sort_keys=True).encode()).decode()))
 '
-OUT=$(python3 -c "$ENTRY_PY" "$FP" "${FLEET_ENTRY_BOOK:-}" "$(id -un 2>/dev/null)" "$SRC" "$(hostname -s 2>/dev/null)" 2>/dev/null)
+OUT=$(python3 -c "$ENTRY_PY" "$FP" "${FLEET_ENTRY_BOOK:-}" "$(id -un 2>/dev/null)" "$SRC" "$(hostname -s 2>/dev/null)" "${FLEET_DOOR_NAME:-}" 2>/dev/null)
 VIEW=${OUT%% *}; DEV=${OUT#* }
 case "${VIEW:-}" in ''|*[!A-Za-z0-9-]*) VIEW=e-key-000000 ;; esac
 case "${DEV:-}" in ''|*[!A-Za-z0-9+/=]*) DEV=$(printf '{"via":"entry"}' | base64 | tr -d '\n') ;; esac

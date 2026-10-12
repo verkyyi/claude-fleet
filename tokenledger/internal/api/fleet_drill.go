@@ -150,15 +150,15 @@ func (s *Server) handleAdminDrill(w http.ResponseWriter, r *http.Request) {
 	s.createDrill(w, r, req, id.Principal)
 }
 
-// principalIsAdmin: a GitHub person CCQUOTA_GITHUB_ADMINS names, or a person
+// principalIsAdmin: a person the deploy names admin (personRole), or a person
 // whose login is a fleet admin login (CCQUOTA_FLEET_ADMIN_USERS — the
 // operator's own). A drill person never is.
 func (s *Server) principalIsAdmin(pid string) bool {
 	if pid == "" || s.Store.IsDrill(pid) {
 		return false
 	}
-	if gid, ok := githubIDOf(pid); ok {
-		role, err := s.githubRole(gid)
+	if isPerson(pid) {
+		role, err := s.personRole(pid)
 		return err == nil && role == roleAdmin
 	}
 	p, err := s.Store.Principal(pid)

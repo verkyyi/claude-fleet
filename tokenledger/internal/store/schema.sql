@@ -454,15 +454,20 @@ CREATE TABLE IF NOT EXISTS finding_mutes (
 
 CREATE INDEX IF NOT EXISTS idx_finding_mutes_expiry ON finding_mutes(expires_at);
 
--- Who may sign in with GitHub (claude-fleet#1984). A person is their GitHub
--- numeric ID, never their username: a username can be freed and taken by
--- someone else, an ID cannot. role is 'admin' (copied from the deploy's
--- CCQUOTA_GITHUB_ADMINS -- the row records them, the deploy decides) or
--- 'user' (added on the web). machine_login is the OS login that is theirs on
--- every machine, '' when none yet. Removing a row signs them out on their
--- next request: the gate reads this table on every request.
+-- The people on the hub (claude-fleet#1984, #3603). A person is their
+-- principal_id, never a username or one way of signing in: gh:<GitHub ID> for
+-- everyone who came in through GitHub before #3603 (kept as it was -- the key
+-- never changes), p:<uuid> for anyone since who came in another way. github_id
+-- is the GitHub numeric ID behind a gh: person (NULL for a person with none);
+-- how a person may sign in is hub_identities. role is 'admin' (copied from the
+-- deploy -- the row records them, the deploy decides) or 'user' (added on the
+-- web). machine_login is the OS login that is theirs on every machine, '' when
+-- none yet. Removing a row signs them out on their next request: the gate
+-- reads this table on every request. An older database's table (keyed on
+-- github_id) is rebuilt into this shape by numbered migration 2.
 CREATE TABLE IF NOT EXISTS hub_users (
-  github_id     INTEGER PRIMARY KEY,
+  principal_id  TEXT PRIMARY KEY,
+  github_id     INTEGER,
   login         TEXT NOT NULL,
   role          TEXT NOT NULL,
   machine_login TEXT NOT NULL DEFAULT '',
@@ -470,6 +475,22 @@ CREATE TABLE IF NOT EXISTS hub_users (
   added_at      TEXT NOT NULL,
   last_seen     TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hub_users_github ON hub_users(github_id);
+
+-- The ways a person signs in (claude-fleet#3603): one row per (kind, subject)
+-- -- kind github (subject: the numeric GitHub ID), email (the address,
+-- lower-cased), wechat (the unionid), ... -- each naming the ONE person it
+-- lets in. A person keeps at least one. verified_at is when the hub last saw
+-- them prove it (a sign-in through it, or an admin vouching for it).
+CREATE TABLE IF NOT EXISTS hub_identities (
+  kind         TEXT NOT NULL,
+  subject      TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  verified_at  TEXT NOT NULL,
+  added_by     TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (kind, subject)
+);
+CREATE INDEX IF NOT EXISTS idx_hub_identities_principal ON hub_identities(principal_id);
 
 -- The pin (claude-fleet#1984): the first time the hub learns which GitHub ID
 -- holds a username, it keeps the pair, and from then on the name means that ID
@@ -497,12 +518,14 @@ CREATE INDEX IF NOT EXISTS idx_hub_audit_created ON hub_audit(created);
 
 -- Invites (claude-fleet#2261): one code lets one new person onto the list at
 -- their GitHub sign-in. Only the code's SHA-256 is kept; id names it on the
--- admin's list. github_login, when set, is the only username it admits.
+-- admin's list. github_login, when set, is the only username it admits;
+-- email, when set, the only address (claude-fleet#3603) -- at most one of them.
 -- Times are unix seconds; 0 = not yet.
 CREATE TABLE IF NOT EXISTS fleet_invites (
   id           TEXT PRIMARY KEY,
   code_hash    TEXT NOT NULL UNIQUE,
   github_login TEXT NOT NULL DEFAULT '',
+  email        TEXT NOT NULL DEFAULT '',
   created_by   TEXT NOT NULL DEFAULT '',
   created_at   INTEGER NOT NULL,
   expires_at   INTEGER NOT NULL,

@@ -29,6 +29,7 @@ type migration struct {
 // that has shipped: a database records the number it ran.
 var migrations = []migration{
 	{ID: 1, Name: "remove-company-business", Run: removeCompanyBusiness},
+	{ID: 2, Name: "hub-users-principal", Run: hubUsersPrincipal},
 }
 
 // RemovedSources are the usage sources migration 1 deleted (claude-fleet#1987):
@@ -291,4 +292,61 @@ func (s *Store) Migrations() ([]Migration, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// hubUsersPrincipal re-keys the people list on the principal
+// (claude-fleet#3603): a database from before has hub_users keyed on
+// github_id, and every row becomes principal_id gh:<github_id> -- the same
+// string every other table already names that person by, so nothing else
+// moves -- plus a github identity row. A database schema.sql created in the
+// new shape only gets the identity rows (none: nobody has signed in yet).
+func hubUsersPrincipal(d dialect, tx *sql.Tx) (map[string]int64, error) {
+	done := map[string]int64{}
+	cols, err := d.columns(tx, "hub_users")
+	if err != nil {
+		return nil, err
+	}
+	rekeyed := false
+	for _, c := range cols {
+		if c.name == "principal_id" {
+			rekeyed = true
+		}
+	}
+	if !rekeyed {
+		if _, err := tx.Exec(d.ddl(`CREATE TABLE hub_users_v2 (
+  principal_id  TEXT PRIMARY KEY,
+  github_id     INTEGER,
+  login         TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  machine_login TEXT NOT NULL DEFAULT '',
+  added_by      TEXT NOT NULL DEFAULT '',
+  added_at      TEXT NOT NULL,
+  last_seen     TEXT
+)`)); err != nil {
+			return nil, fmt.Errorf("create hub_users_v2: %w", err)
+		}
+		res, err := tx.Exec(`INSERT INTO hub_users_v2 (principal_id, github_id, login, role, machine_login, added_by, added_at, last_seen)
+			SELECT 'gh:' || CAST(github_id AS TEXT), github_id, login, role, machine_login, added_by, added_at, last_seen FROM hub_users`)
+		if err != nil {
+			return nil, fmt.Errorf("copy hub_users: %w", err)
+		}
+		done["hub_users.rekeyed"], _ = res.RowsAffected()
+		if _, err := tx.Exec(`DROP TABLE hub_users`); err != nil {
+			return nil, fmt.Errorf("drop old hub_users: %w", err)
+		}
+		if _, err := tx.Exec(`ALTER TABLE hub_users_v2 RENAME TO hub_users`); err != nil {
+			return nil, fmt.Errorf("rename hub_users_v2: %w", err)
+		}
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_hub_users_github ON hub_users(github_id)`); err != nil {
+		return nil, fmt.Errorf("index hub_users.github_id: %w", err)
+	}
+	res, err := tx.Exec(d.insertIgnore(`INSERT OR IGNORE INTO hub_identities (kind, subject, principal_id, verified_at, added_by)
+		SELECT 'github', CAST(github_id AS TEXT), principal_id, COALESCE(last_seen, added_at), 'migration 2' FROM hub_users
+		WHERE github_id IS NOT NULL`))
+	if err != nil {
+		return nil, fmt.Errorf("github identities: %w", err)
+	}
+	done["hub_identities.github"], _ = res.RowsAffected()
+	return done, nil
 }

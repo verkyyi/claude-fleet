@@ -119,6 +119,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.Join(hosts, ","), ""
 		}},
+	DoorKey: {def: "", help: "the cluster's one public door (claude-fleet#3549): its machine name(s); a person whose home is their own pod u-<nonce> is reached through it",
+		check: doorCheck},
 	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines (default on when the hub writes address records: CCQUOTA_DNS_*)",
 		check: onOff(EntryKey, "off"),
 		deploy: func(s *Server) string {
@@ -206,7 +208,7 @@ func isHubSettingKey(key string) bool {
 	if _, ok := hubSettings[key]; ok {
 		return true
 	}
-	if _, ok := langKeyID(key); ok {
+	if _, ok := langKeyPerson(key); ok {
 		return true
 	}
 	if _, ok := poolPausedKey(key); ok {
@@ -262,23 +264,25 @@ func machineLoginKey(key string) (principal string, ok bool) {
 	return pid, true
 }
 
-// langKeyID parses user.<GitHub ID>.lang — the account language C9 reads
-// (pagelang.go's langSettingKey).
-func langKeyID(key string) (int64, bool) {
+// langKeyPerson parses user.<GitHub ID>.lang (or user.gh:<id>.lang) and
+// user.<person>.lang — the account language C9 reads (pagelang.go's
+// langSettingKey) — into the person it is about.
+func langKeyPerson(key string) (string, bool) {
 	rest, ok := strings.CutPrefix(key, userSettingPrefix)
 	if !ok {
-		return 0, false
+		return "", false
 	}
-	num, ok := strings.CutSuffix(rest, ".lang")
+	who, ok := strings.CutSuffix(rest, ".lang")
 	if !ok {
-		return 0, false
+		return "", false
 	}
-	num = strings.TrimPrefix(num, githubPrincipalPrefix)
-	id, err := strconv.ParseInt(num, 10, 64)
-	if err != nil || id <= 0 {
-		return 0, false
+	if id, err := strconv.ParseInt(who, 10, 64); err == nil && id > 0 {
+		who = githubPrincipal(id)
 	}
-	return id, true
+	if !isPerson(who) {
+		return "", false
+	}
+	return who, true
 }
 
 func machineLoginSettingKey(principal string) string {
@@ -526,10 +530,7 @@ func (s *Server) checkMachineLogin(pid, v string) (string, string) {
 // id), which takeOverLegacyLogin re-keys to them (claude-fleet#2094). Another
 // GitHub person — or a non-GitHub pid — never takes anything over.
 func (s *Server) legacyHolder(pid, holder string) bool {
-	if _, ok := githubIDOf(pid); !ok {
-		return false
-	}
-	if _, gh := githubIDOf(holder); gh {
+	if !isPerson(pid) || isPerson(holder) {
 		return false
 	}
 	return s.Store == nil || !s.Store.IsDrill(holder)
@@ -602,7 +603,7 @@ func (s *Server) DropLegacyMachineLogins(now time.Time) error {
 	} else {
 		for _, u := range users {
 			if u.MachineLogin != "" {
-				ghMapped[u.MachineLogin] = githubPrincipal(u.GitHubID)
+				ghMapped[u.MachineLogin] = u.PrincipalID
 			}
 		}
 	}
@@ -616,7 +617,7 @@ func (s *Server) DropLegacyMachineLogins(now time.Time) error {
 		if !ok {
 			continue
 		}
-		if _, gh := githubIDOf(pid); gh || s.Store.IsDrill(pid) {
+		if isPerson(pid) || s.Store.IsDrill(pid) {
 			continue
 		}
 		login := settings[k]
@@ -625,7 +626,7 @@ func (s *Server) DropLegacyMachineLogins(now time.Time) error {
 		case ghMapped[login] != "":
 			why = "login " + login + " is " + ghMapped[login] + "'s"
 		case err == nil:
-			if _, gh := githubIDOf(p.ID); gh {
+			if isPerson(p.ID) {
 				why = "login " + login + " is " + p.ID + "'s"
 			} else if !strings.EqualFold(p.ID, pid) {
 				why = "login " + login + " is " + p.ID + "'s, not " + pid + "'s"
@@ -661,7 +662,7 @@ func (s *Server) machineLoginOwner(login string) string {
 		if users, err := s.Store.HubUsers(); err == nil {
 			for _, u := range users {
 				if u.MachineLogin == login {
-					return githubPrincipal(u.GitHubID)
+					return u.PrincipalID
 				}
 			}
 		}
@@ -729,7 +730,7 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 		s.settingAudit(actor, key, settings[key], stored, now)
 		return http.StatusOK, ""
 	}
-	if id, ok := langKeyID(key); ok {
+	if who, ok := langKeyPerson(key); ok {
 		// The account language (claude-fleet#2033): zh-CN | en, or "".
 		stored := ""
 		if strings.TrimSpace(value) != "" {
@@ -737,7 +738,7 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 				return http.StatusBadRequest, "user.<id>.lang is zh-CN | en, or \"\" for none"
 			}
 		}
-		key = langSettingKey(id)
+		key = langSettingKey(who)
 		if err := s.Store.SetFleetSetting(key, stored, now); err != nil {
 			return http.StatusInternalServerError, err.Error()
 		}
@@ -770,8 +771,8 @@ func (s *Server) putMachineLogin(actor, pid, value string, settings map[string]s
 // putMachineLoginMoved is putMachineLogin, also returning the login it moved
 // off an old identity onto the person (claude-fleet#2094), nil when none.
 func (s *Server) putMachineLoginMoved(actor, pid, value string, settings map[string]string, now time.Time) (int, string, *store.RekeyResult) {
-	if id, ok := githubIDOf(pid); ok {
-		if u, err := s.Store.HubUserByID(id); err != nil {
+	if isPerson(pid) {
+		if u, err := s.personRow(pid); err != nil {
 			return http.StatusInternalServerError, err.Error(), nil
 		} else if u == nil {
 			return http.StatusNotFound, pid + " is not on the list — add them first (fleet users add <name>)", nil
@@ -784,14 +785,14 @@ func (s *Server) putMachineLoginMoved(actor, pid, value string, settings map[str
 			return http.StatusBadRequest, why, nil
 		}
 	}
-	if _, gh := githubIDOf(pid); !gh {
+	if !isPerson(pid) {
 		// Any other principal is case-insensitive (claude-fleet#1472): one key
 		// per person, whichever way it was typed.
 		pid = strings.ToLower(pid)
 	}
 	key := machineLoginSettingKey(pid)
-	if id, ok := githubIDOf(pid); ok {
-		u, err := s.Store.HubUserByID(id)
+	if isPerson(pid) {
+		u, err := s.personRow(pid)
 		if err != nil {
 			return http.StatusInternalServerError, err.Error(), nil
 		}

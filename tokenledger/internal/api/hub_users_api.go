@@ -87,11 +87,11 @@ func (s *Server) writeFleetUsers(w http.ResponseWriter, status int, extra map[st
 	logins := s.personLogins(accts)
 	out := make([]hubUserView, 0, len(users))
 	for _, u := range users {
-		v := hubUserView{HubUser: u, Principal: githubPrincipal(u.GitHubID)}
+		v := hubUserView{HubUser: u, Principal: u.PrincipalID}
 		if v.Logins = logins[v.Principal]; v.Logins == nil {
 			v.Logins = []PersonLogin{}
 		}
-		if role, err := s.githubRole(u.GitHubID); err == nil && role == roleAdmin {
+		if role, err := s.personRole(u.PrincipalID); err == nil && role == roleAdmin {
 			v.Deploy = true
 		}
 		out = append(out, v)
@@ -139,7 +139,8 @@ func userRequest(w http.ResponseWriter, r *http.Request) (login, machineLogin st
 	if login == "" {
 		login = strings.TrimPrefix(strings.TrimSpace(r.URL.Query().Get("login")), "@")
 	}
-	if !githubLoginRE.MatchString(login) {
+	// A person with no GitHub is named by their principal (claude-fleet#3603).
+	if !githubLoginRE.MatchString(login) && !personPrincipalRE.MatchString(login) {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("%q is not a GitHub username", login))
 		return "", "", false
 	}
@@ -152,6 +153,10 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, now := actorOf(r), time.Now()
+	if personPrincipalRE.MatchString(login) {
+		httpError(w, http.StatusBadRequest, "someone with no GitHub comes in on an invite bound to their address (POST /v1/fleet/invites {\"email\": …})")
+		return
+	}
 	if s.GitHub.isAdminName(login) {
 		httpError(w, http.StatusConflict, login+" is an admin the deploy names (CCQUOTA_GITHUB_ADMINS) — read-only here")
 		return
@@ -166,8 +171,13 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadGateway, "could not ask GitHub who "+login+" is: "+err.Error())
 		return
 	}
-	target := canonical + " (" + githubPrincipal(id) + ")"
-	if role, err := s.githubRole(id); err != nil {
+	pid, err := s.githubPersonOf(id)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	target := canonical + " (" + pid + ")"
+	if role, err := s.personRole(pid); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	} else if role == roleAdmin {
@@ -187,18 +197,26 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	existing, err := s.Store.HubUserByID(id)
+	existing, err := s.Store.HubUserByPrincipal(pid)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	created := existing == nil
-	row := store.HubUser{GitHubID: id, Login: canonical, Role: roleUser, AddedBy: actor, AddedAt: now}
+	row := store.HubUser{PrincipalID: pid, GitHubID: id, Login: canonical, Role: roleUser, AddedBy: actor, AddedAt: now}
+	if _, isGH := githubIDOf(pid); !isGH {
+		row.GitHubID = 0 // someone who came in another way and hung this GitHub on
+	}
 	if existing != nil {
 		row = *existing
 		row.Login, row.Role = canonical, roleUser
 	}
 	if err := s.Store.UpsertHubUser(row); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.Store.AddHubIdentity(store.HubIdentity{Kind: store.IdentityGitHub, Subject: fmt.Sprint(id),
+		PrincipalID: pid, VerifiedAt: now, AddedBy: actor}); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -213,7 +231,7 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		code, why, m := s.putMachineLoginMoved(actor, githubPrincipal(id), machineLogin, settings, now)
+		code, why, m := s.putMachineLoginMoved(actor, pid, machineLogin, settings, now)
 		if code != http.StatusOK {
 			httpError(w, code, "added "+canonical+", but the machine login was refused: "+why)
 			return
@@ -244,7 +262,22 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !known {
+	var pid string
+	if personPrincipalRE.MatchString(login) {
+		u, err := s.Store.HubUserByPrincipal(login)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if u != nil {
+			pid, known = u.PrincipalID, true
+		}
+	} else if known {
+		if pid, err = s.githubPersonOf(id); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else {
 		// A row whose name was never pinned under this spelling: find it by
 		// the username it carries.
 		users, err := s.Store.HubUsers()
@@ -254,7 +287,7 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, u := range users {
 			if strings.EqualFold(u.Login, login) {
-				id, known = u.GitHubID, true
+				id, pid, known = u.GitHubID, u.PrincipalID, true
 				break
 			}
 		}
@@ -263,8 +296,8 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, login+" is not on the list")
 		return
 	}
-	target := login + " (" + githubPrincipal(id) + ")"
-	if role, err := s.githubRole(id); err != nil {
+	target := login + " (" + pid + ")"
+	if role, err := s.personRole(pid); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	} else if role == roleAdmin || s.GitHub.isAdminName(login) {
@@ -272,7 +305,7 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusForbidden, login+" is an admin the deploy names (CCQUOTA_GITHUB_ADMINS) — read-only here")
 		return
 	}
-	removed, err := s.Store.DeleteHubUser(id)
+	removed, err := s.Store.DeleteHubPrincipal(pid)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -281,7 +314,7 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, login+" is not on the list")
 		return
 	}
-	revoked := s.revokePersonDevices(githubPrincipal(id), actor, now)
+	revoked := s.revokePersonDevices(pid, actor, now)
 	_ = s.Store.HubAudit(actor, "user.remove", target, "ok", fmt.Sprintf("%d device(s) revoked", revoked), now)
 	log.Printf("hub users: %s removed by %s (%d device(s) revoked)", target, actor, revoked)
 	s.writeFleetUsers(w, http.StatusOK, map[string]any{"removed": login, "github_id": id, "devices_revoked": revoked})

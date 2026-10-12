@@ -79,7 +79,8 @@ var routeAccess = map[string]string{
 	"/v1/node/credentials": accessSelf,
 	// The direct door (claude-fleet#3068): a machine's own list and record.
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,
-	control.EntryReachNodePath: accessSelf,
+	// … its reach, and the cluster door's table (claude-fleet#3549).
+	control.EntryReachNodePath: accessSelf, control.EntryRoutesNodePath: accessSelf,
 	// … and a person's own keys, name and home; the handler scopes them.
 	control.EntryKeysPath: accessUser, control.EntryKeysPath + "/": accessUser,
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,
@@ -147,7 +148,7 @@ var routeAccess = map[string]string{
 
 	// A user's own: scoped to their machine login, their principal, or
 	// FleetScope.
-	"/": accessUser, "/v1/me": accessUser,
+	"/": accessUser, "/v1/me": accessUser, "/v1/me/identities": accessUser,
 	// 我的额度 (claude-fleet#2517): the page stays until it folds into /usage
 	// (EPIC #3225 C4); its API reads the pool's windows, an admin's
 	// (claude-fleet#3227).
@@ -211,8 +212,8 @@ func (s *Server) machineLoginOf(principal string) (string, error) {
 	if s.Store == nil || principal == "" {
 		return "", nil
 	}
-	if id, ok := githubIDOf(principal); ok {
-		u, err := s.Store.HubUserByID(id)
+	if isPerson(principal) {
+		u, err := s.personRow(principal)
 		if err != nil || u == nil {
 			return "", err
 		}

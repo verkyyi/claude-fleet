@@ -61,6 +61,12 @@ type Server struct {
 	// changes.
 	GitHub *GitHubAuth
 
+	// Admins is CCQUOTA_ADMINS (claude-fleet#3603): people the deploy names
+	// admin by principal (p:<uuid>, gh:<id>) or by an address they sign in
+	// with — the admins CCQUOTA_GITHUB_ADMINS cannot name, who have no
+	// GitHub. Empty: only CCQUOTA_GITHUB_ADMINS makes admins, as before.
+	Admins []string
+
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
 
@@ -464,6 +470,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryAuditNodePath, s.handleNodeEntryAudit)
 		// …and says how the outside could reach its entry port (claude-fleet#3072).
 		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
+		// …and the cluster's one door reads its table (claude-fleet#3549).
+		mux.HandleFunc(control.EntryRoutesNodePath, s.handleNodeEntryRoutes)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
@@ -728,6 +736,7 @@ func (s *Server) routes() *routeMux {
 	// Who the gate admitted, for the shared page header (claude-fleet#1467).
 	// Unconditional: the header is on every hub's dashboard, fleet module or not.
 	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
+	mux.Handle("/v1/me/identities", s.viewerOnly(http.HandlerFunc(s.handleMeIdentities)))
 	// 我的额度 (claude-fleet#2517): the API and its page. The subscriptions'
 	// windows are the pool's, an admin's only since claude-fleet#3227 — a
 	// person reads their own limit on /v1/me/usage.
@@ -870,7 +879,7 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 		}
 		// A GitHub session (claude-fleet#1984), re-checked against the list
 		// on every request: someone taken off it is refused here, now.
-		if ctx, ok, handled := s.githubAdmit(w, r); handled {
+		if ctx, ok, handled := s.personAdmit(w, r); handled {
 			return
 		} else if ok {
 			next.ServeHTTP(w, r.WithContext(ctx))
