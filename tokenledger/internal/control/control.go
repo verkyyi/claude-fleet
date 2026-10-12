@@ -221,6 +221,15 @@ const CapLoginJoin = "login_join"
 // cannot route.
 const CapMachine = "machine"
 
+// CapUserPod is listed by a MACHINE link (CapMachine) that is one person's
+// pod (claude-fleet#3550, EPIC #3500 C5): extras/managed-node/render.py
+// --user-pod sets FLEET_USER_POD=1, the pod's stable name u-<nonce> is its
+// hostname, and it carries exactly one login. The hub treats it as a machine
+// like any other — the roster marks it user_pod — and the person's ceiling is
+// the fleet setting fleet.user_pod_limits.<principal>. A link that does not
+// list it is byte for byte as before.
+const CapUserPod = "user_pod"
+
 // CodeWrongLogin refuses a message on a machine link whose Login is not one
 // that link carries, or a login hello whose token belongs to another login or
 // another machine (claude-fleet#2333) — an op never runs as the wrong login.

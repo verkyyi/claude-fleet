@@ -478,6 +478,9 @@ def ensure_login(s, paths, login, uid=None, full_name='', op=''):
         raise Refuse('login %r: 2-16 of a-z0-9, at least one letter' % login)
     declared = tenants(paths)
     t = declared.get(login)
+    if t is None and os.environ.get('FLEET_NODE_PROFILE') == 'user-pod' and declared:
+        # One person's pod (#3550): a second login never moves in beside the first.
+        raise Refuse('this pod is one person\'s: %s already lives here' % ' '.join(sorted(declared)), rc=3)
     if t is None:
         try:
             p = pwd.getpwnam(login)

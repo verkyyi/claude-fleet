@@ -51,12 +51,12 @@ func identify(t *testing.T, h *harness, label, hostname, osUser string) {
 	}
 }
 
-func dialMachine(t *testing.T, h *harness, token string) *machNode {
+func dialMachine(t *testing.T, h *harness, token string, caps ...string) *machNode {
 	t.Helper()
 	c := dialNode(t, h, token)
 	off := false
 	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
-		Capabilities: []string{control.CapMachine}, Compute: &off})
+		Capabilities: append([]string{control.CapMachine}, caps...), Compute: &off})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := wsjson.Write(ctx, c, m); err != nil {

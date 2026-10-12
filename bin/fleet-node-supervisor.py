@@ -238,6 +238,8 @@ NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "F
                  "FLEET_NODE_USERS", "FLEET_NODE_SERVICE", "FLEET_NODE_UPDATE_OWNER", "FLEET_NODE_BOOT_ID",
                  "FLEET_CREDSEP_LIB", "FLEET_CREDSEP_ROOT_BASE", "FLEET_CREDSEP_RUN_BASE",
                  "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD", "FLEET_ENTRY", "FLEET_ENTRY_PORT",
+                 # one person's pod (#3550): its profile, and the hello's CapUserPod
+                 "FLEET_NODE_PROFILE", "FLEET_USER_POD",
                  # a container's entry= route (#3213): `entry reach` runs under the node
                  # program, and the hub must knock on the load balancer, not the NAT
                  "CCQUOTA_FLEET_NODE_ROUTES")
@@ -629,7 +631,22 @@ def default_table(paths):
                                        "machine", "pool-sync"]})
     if not MAC and env("FLEET_NODE_RUN_SSHD", "0") == "1":
         table["children"].append({"name": "sshd", "cmd": ["/usr/sbin/sshd", "-D", "-e"]})
+    if user_pod():
+        # One person's pod (#3550, EPIC #3500 C5): the machine-level loops are
+        # the cluster's (its one ops copy) — only the updater that moves this
+        # pod's own runtime stays. Its children are its own (agent, proxy, sshd).
+        table["tasks"] = [t for t in table["tasks"] if t["name"] in USER_POD_TASKS]
     return table
+
+
+# A user pod keeps only these machine tasks (#3550): the rest run once for the
+# cluster, never once per person.
+USER_POD_TASKS = ("update", "credential-pool")
+
+
+def user_pod():
+    """FLEET_NODE_PROFILE=user-pod (extras/managed-node/render.py --user-pod)."""
+    return not MAC and env("FLEET_NODE_PROFILE", "") == "user-pod"
 
 
 def load_table(paths):

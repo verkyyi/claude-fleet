@@ -2017,6 +2017,17 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case strings.HasPrefix(body.Key, UserPodLimitsPrefix) && principalKeyRE.MatchString(body.Key[len(UserPodLimitsPrefix):]):
+			// A person's pod ceiling (claude-fleet#3550): cpu=…,memory=…,disk=…;
+			// "" removes it (= the template's default).
+			if body.Value != "" {
+				l, err := ParseUserPodLimits(body.Value)
+				if err != nil {
+					httpError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				body.Value = l.String()
+			}
 		case strings.HasPrefix(body.Key, PersonBudgetPrefix) && principalKeyRE.MatchString(body.Key[len(PersonBudgetPrefix):]):
 			// A person's budget (claude-fleet#1977): 5h=<tokens>,week=<tokens>;
 			// "" removes it (= no limit).
