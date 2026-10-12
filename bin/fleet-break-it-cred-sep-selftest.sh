@@ -501,7 +501,7 @@ drill_cred_new_login_not_tenant() {
 }
 
 # #3561 / #3700: on a managed machine a login the daemon took over but never
-# separated (mini2's 24haowan, 2026-10-12) — its sessions `cat node.env` and
+# separated (an old login on one machine, 2026-10-12) — its sessions `cat node.env` and
 # hold the machine's node token; the doctor said nothing and the hub's gate
 # counted it «not separated» with no name and no fix.
 drill_cred_managed_unseparated() {
