@@ -18,7 +18,7 @@ func TestSession_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("our own signature does not verify: %v", err)
 	}
-	if s.Sub != "github" || s.UID != "gh:7" || s.Name != "lee" || s.Role != "admin" || s.Principal() != "gh:7" {
+	if s.Sub != "github" || s.UID != "gh:7" || s.Name != "lee" || s.Role != "admin" || s.Principal() != "gh:7" || s.Iat != t0.Unix() {
 		t.Fatalf("session = %+v", s)
 	}
 }

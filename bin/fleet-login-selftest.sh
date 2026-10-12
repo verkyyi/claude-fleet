@@ -36,6 +36,9 @@
 #                roster no longer names: the check (a signed `get` on the client
 #                lease) answers 401 「names no one」 → exit 3, scan again; a hub
 #                with no lease door (404) leaves the renewal at exit 0
+#   U. on-use    `renew --on-use WHY` asks only under 20% of 12h, prints `left N`,
+#                counts the renewal (login.log why=, cert-renew.last) and the ssh
+#                section renews before a fleet machine (#3701)
 #   K. if-under  `renew --if-under SECS` asks nothing while more is left (and
 #                with no certificate at all), renews when less is; --quiet
 #                orphan → exit 3 and silent (the client keeper's call)
@@ -298,6 +301,26 @@ mv "$HOME/.ssh/fleet-cert-cert.pub" "$SB/cert.bak"
 out="$(python3 "$BIN/fleet-login.py" renew --quiet --if-under 3600 --hub "http://127.0.0.1:1" 2>&1)"; rc=$?
 mv "$SB/cert.bak" "$HOME/.ssh/fleet-cert-cert.pub"
 [ "$rc" = 0 ] && ok "K no certificate (signed in another way) → exit 0, nothing asked" || bad "K nocert rc=$rc: $out"
+
+# ── U — --on-use: renewed only when used, and the day's count (#3701) ──
+rm -f "$SB/renew.json"
+start_hub
+out="$(FLEET_CLIENT_LOG_DIR="$SB/ulog" python3 "$BIN/fleet-login.py" renew --quiet --on-use hub 2>/dev/null)"; rc=$?
+stop_hub
+case "$out" in "left "[0-9]*) l=${out#left } ;; *) l=0 ;; esac
+[ "$rc" = 0 ] && [ ! -e "$SB/renew.json" ] && [ "$l" -gt 8640 ] && [ ! -e "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" ] \
+  && ok "U above 20% of 12h → nothing asked, prints left $l" || bad "U early rc=$rc out=$out renew.json=$([ -e "$SB/renew.json" ] && echo yes)"
+start_hub
+out="$(FLEET_RENEW_BELOW_SECS=86400 FLEET_CLIENT_LOG_DIR="$SB/ulog" python3 "$BIN/fleet-login.py" renew --quiet --on-use ssh 2>"$SB/u.err")"; rc=$?
+stop_hub
+[ "$rc" = 0 ] && [ -s "$SB/renew.json" ] && ok "U under the margin → renewed" || bad "U due rc=$rc: $out $(cat "$SB/u.err")"
+urc= uwhy=; read -r _ urc uwhy < "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" 2>/dev/null
+[ "$urc" = 0 ] && [ "$uwhy" = ssh ] && ok "U cert-renew.last says rc 0 · ssh" || bad "U last: $(cat "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" 2>/dev/null)"
+grep -q 'why=ssh' "$SB/ulog/login.log" 2>/dev/null && ok "U login.log counts it why=ssh" || bad "U login.log: $(cat "$SB/ulog/login.log" 2>/dev/null)"
+grep -q '^Match originalhost fleet-\*.* exec ".*fleet-login.py.* renew --quiet --on-use ssh >/dev/null 2>&1; exit 1"$' "$HOME/.ssh/fleet-ssh-config" \
+  && grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" \
+  && ok "U the ssh section renews before a fleet machine, then the hub's Host blocks" || bad "U ssh section: $(head -5 "$HOME/.ssh/fleet-ssh-config")"
+python3 "$BIN/fleet-login.py" renew --on-use 'no way' >/dev/null 2>&1 && bad "U a bad --on-use word was taken" || ok "U --on-use takes a word only"
 
 # ── G — a 5xx between two polls is a blip, not a «no» (#1901) ──
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/blip"

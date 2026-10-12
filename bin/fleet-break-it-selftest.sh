@@ -140,8 +140,8 @@
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
 #   hub-refused-cert                                fleet-client-lease.py where, fleet-client-where.sh,
 #                                                   fleet-client-badge.sh
-#   cert-expiry-keeper                              bin/fleet-shell.sh (keeper), fleet-login.py renew --if-under
-#   cert-expiry-no-client                           bin/fleet-diskguard.sh (cert_watch, --cert), fleet-connect.py --cert-check
+#   cert-expiry-keeper                              bin/fleet-shell.sh (keeper), fleet-login.py renew --on-use hub
+#   cert-expiry-no-client                           bin/fleet-login.py (renew --on-use ssh, use_section), fleet-diskguard.sh --cert, fleet-connect.py --cert-check
 #   offline-list-moves                              tmux-dashboard-rows.sh (lost rows stay put), fleet-sidebar.py
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
@@ -2142,8 +2142,10 @@ drill_hub_refused_cert() {
 # connection (`fleet-connect.py --enter`) renewed it — a client left overnight
 # went 401 at that minute. The real client (bin/fleet → keeper) with a
 # certificate 30 minutes from its end and a fake hub that renews: the keeper
-# renews it (fleet-login.py renew --if-under 3600); then the hub stops naming the
-# key id, and the keeper's renew exit 3 is the one thing the person is told.
+# renews it before its hub read (fleet-login.py renew --on-use hub, #3701 — no
+# timer); then the hub stops naming the key id, the replaced certificate file
+# makes the keeper look again at once, and its renew exit 3 is the one thing
+# the person is told.
 drill_cert_expiry_keeper() {
   CAP=20; local t0 s="${CSESS}k" sc="$WORK/cek" port left
   client_setup
@@ -2157,7 +2159,7 @@ drill_cert_expiry_keeper() {
   case "$left" in "valid "*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="the 30-minute certificate did not take: [$left]"; return 1 ;; esac
   t0=$(now)
   if ! client_start "$s" FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_CLIENT_IDENTITY=test \
-       FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_CERT_CHECK_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
+       FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
     kill "$CHUB_PID" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
   fi
   for _ in $(seq 1 $((CAP * 10))); do
@@ -2184,31 +2186,47 @@ drill_cert_expiry_keeper() {
 # No client open for 12 hours (issue #3455): only an open client's keeper (#2112)
 # or a new `fleet` renewed the connection certificate, so a hosting login nobody
 # opened a client on woke to an expired one — the doctor's cert row red, the
-# person's cross-machine ssh refused. An EXPIRED certificate, no client at all:
-# the doctor says WARN 已过期 (never FAIL), then the hosting login's own tick
-# (fleet-diskguard.sh's cert_watch, --cert alone here) renews it by the device
-# key, and the row shows the time left.
+# person's cross-machine ssh refused. #3455 renewed it on the diskguard tick;
+# #3701 renews it only when USED. An EXPIRED certificate, no client at all: the
+# doctor says PASS 已过期 · 用到时续 (never red), the hosting login's tick
+# (`fleet-diskguard.sh --cert`) renews nothing, and the person's ssh to a fleet
+# machine — through the `Match exec` fleet-login.py writes — renews it by the
+# device key first: login.log says why=ssh, the row shows the time left.
 drill_cert_expiry_no_client() {
   CAP=20; local t0 sc="$WORK/cenc" port left cc
-  mkdir -p "$sc"; rm -f "$sc/orphan"
+  mkdir -p "$sc"; rm -f "$sc/orphan" "$sc/log"
   cert_hub "$sc" $((CAP * 2 + 60)) || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
   read -r port < "$sc/port"
   ( client_env; mkdir -p "$HOME/.ssh"; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub" \
-      "$FLEET_CONF_DIR/diskguard/last-cert-check" "$FLEET_CONF_DIR/diskguard/cert-renew.last"
+      "$FLEET_CONF_DIR/cert-renew.last" "$FLEET_CONF_DIR/diskguard/cert-renew.last" "$FLEET_SHELL_CACHE/logs/login.log"
     ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
     ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n verk -V -13h:-1h "$HOME/.ssh/fleet-cert.pub" )
   cc=$( client_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
-  case "$cc" in "WARN"$'\t'*已过期*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="an expired certificate is not the doctor's WARN 已过期: [$cc]"; return 1 ;; esac
-  t0=$(now)
+  case "$cc" in "PASS"$'\t'*已过期*用到时*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="an expired, unused certificate is not the doctor's PASS 已过期 · 用到时续: [$cc]"; return 1 ;; esac
+  # the tick renews nothing any more
   ( client_env; FLEET_HUB_URL="http://127.0.0.1:$port" bash "$BIN/fleet-diskguard.sh" --cert ) >/dev/null 2>&1
+  if [ -s "$sc/log" ]; then
+    kill "$CHUB_PID" 2>/dev/null; WHY="the diskguard tick still asked the hub: $(tr '\n' ' ' < "$sc/log")"; return 1
+  fi
+  # the use: ssh to a fleet machine, through the section fleet-login.py writes
+  ( client_env; python3 - "$BIN/fleet-login.py" > "$sc/ssh_config" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fleet_login", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sys.stdout.write(m.use_section([("m1.example", "m1")]) + "Host m1 fleet-m1\n  HostName 192.0.2.10\n")
+PY
+  )
+  t0=$(now)
+  ( client_env; FLEET_HUB_URL="http://127.0.0.1:$port" ssh -F "$sc/ssh_config" -G fleet-m1 ) >/dev/null 2>&1
   SECS=$(since "$t0")
   kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
   left=$( client_env; python3 "$BIN/fleet-login.py" check ); left=${left#valid }
   case "$left" in ''|*[!0-9.]*) left=0 ;; esac
-  [ "${left%.*}" -gt 39600 ] || { WHY="the hosting login's tick did not renew an expired certificate with no client open (left ${left}s; hub saw: $(tr '\n' ' ' 2>/dev/null < "$sc/log"))"; return 1; }
+  [ "${left%.*}" -gt 39600 ] || { WHY="ssh to a fleet machine did not renew an expired certificate first (left ${left}s; hub saw: $(tr '\n' ' ' 2>/dev/null < "$sc/log"))"; return 1; }
+  grep -q 'why=ssh' "$WORK/ccache/logs/login.log" 2>/dev/null || { WHY="login.log does not say why=ssh: $(tail -2 "$WORK/ccache/logs/login.log" 2>/dev/null)"; return 1; }
   cc=$( client_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
   case "$cc" in "PASS"$'\t'*" · 剩 11h"*) ;; *) WHY="the renewed certificate's row does not say the time left: [$cc]"; return 1 ;; esac
-  WHAT="没开客户端、证书已过期：doctor 报 WARN「已过期」，承载登录的 diskguard 一拍就用设备钥匙续成 12 小时，cert 行写「剩 11h…」"
+  WHAT="没开客户端、证书已过期：doctor 报 PASS「已过期 · 用到时续」，diskguard 一拍不再续；ssh 到 fleet 机器前用设备钥匙续成 12 小时（login.log why=ssh），cert 行写「剩 11h…」"
 }
 
 # The list does not move while a line is down (issue #1882): the real client on

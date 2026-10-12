@@ -2,7 +2,7 @@
 """fleet-login.py — `fleet login`: one click in the browser, a 12-hour SSH certificate.
 
     fleet login [--hub URL] [--invert] [--no-include] [--qr]
-    fleet login renew [--hub URL] [--quiet] [--if-under SECS]
+    fleet login renew [--hub URL] [--quiet] [--if-under SECS] [--on-use WHY]
     fleet login status
     fleet login check
     fleet login hub [--hub URL]                  print the hub URL it would use
@@ -49,9 +49,17 @@ lease (POST /v1/fleet/client) — and that refusal (or 「not signed by this hub
 is exit 3: scan again, not a renewal. A hub without the lease door, or one out
 of reach for the check, leaves the renewal as it was. `--if-under SECS` renews
 only when the certificate has less than SECS left (exit 0, nothing asked,
-otherwise — and when there is no certificate at all): the client keeper's
-hourly-margin call (fleet-shell.sh keeper), so a shell left open overnight never
-reaches the 12-hour end.
+otherwise — and when there is no certificate at all).
+
+A certificate is renewed only when it is about to be USED (claude-fleet#3701):
+`--on-use WHY` is `--if-under` at FLEET_RENEW_BELOW_SECS (20% of 12 hours,
+8640) and says why — `connect` (`fleet`, fleet-connect.py), `hub` (the client
+keeper, just before it reads the hub), `ssh` (the `Match exec` this writes into
+~/.ssh/fleet-ssh-config, run by ssh before it reaches a fleet machine). It
+prints `left <secs>` (`left none`: no certificate) on stdout once done. Every
+renewal it ASKS for is one login.log line with `why=<WHY>`, and its result is
+`<conf>/cert-renew.last` (`<epoch> <rc> <why>`) for the doctor's cert row —
+nothing renews on a timer.
 
 `node` is the scan half of `fleet node join` (claude-fleet#1627): the same key,
 start, QR, page and poll, with purpose=node — the page reads 「把 <机器名> 加为
@@ -108,6 +116,8 @@ CERT = KEY + "-cert.pub"
 WHO_FILE = KEY + "-who"   # <key id>\t<GitHub login>, from the hub's answer (#2577)
 SSH_CONFIG_SNIPPET = os.path.join(SSH_DIR, "fleet-ssh-config")
 SSH_CONFIG = os.path.join(SSH_DIR, "config")
+# What a use renews below (claude-fleet#3701): 20% of the 12-hour certificate.
+RENEW_BELOW_DEFAULT = 8640
 HUB_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "claude-fleet", "hub.json")
 
 
@@ -489,8 +499,8 @@ def write_cert(res, include):
         # badge names the person by this — only while the key id still matches
         # the certificate's, so a hub that does not send it leaves no stale name.
         write_file(WHO_FILE, "%s\t%s\n" % (res["key_id"], res["name"]), 0o644)
-    snippet = res["ssh_config"]
     machines = cert_machines(res)
+    snippet = use_section(machines) + res["ssh_config"]
     if machines:
         os.makedirs(PEER_DIR, mode=0o700, exist_ok=True)
         write_file(MACHINES_FILE, "".join("%s %s\n" % m for m in machines), 0o644)
@@ -507,6 +517,50 @@ def write_cert(res, include):
     if peer:
         NOTES.append("✓ 到其它机器的 ssh 段已写好（%d 台，每次连接先向入口要 5 分钟证书）" % peer.count("\nMatch "))
     return added
+
+
+def renew_below():
+    """FLEET_RENEW_BELOW_SECS, else 20% of 12 hours — the ONE margin every
+    use (connect, the keeper's hub read, ssh) renews below."""
+    try:
+        v = float(os.environ.get("FLEET_RENEW_BELOW_SECS", ""))
+        if v >= 0:
+            return v
+    except ValueError:
+        pass
+    return float(RENEW_BELOW_DEFAULT)
+
+
+def renew_last_path():
+    """Where the last on-use renewal's result goes: the login's fleet conf dir."""
+    d = conf_dir_env() or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "claude-fleet")
+    return os.path.join(d, "cert-renew.last")
+
+
+def renew_said_last(rc, why):
+    try:
+        os.makedirs(os.path.dirname(renew_last_path()), exist_ok=True)
+        write_file(renew_last_path(), "%d %d %s\n" % (int(time.time()), rc, why or "-"), 0o644)
+    except OSError:
+        pass
+
+
+def use_section(machines):
+    """One Match ahead of the hub's Host blocks (claude-fleet#3701): ssh to a
+    fleet machine — its alias, a route, `fleet-<alias>…` — first runs
+    `renew --on-use ssh`, which renews only under the margin. The exec always
+    says no (`exit 1`), so the Match applies nothing: it is there for the
+    renewal alone, and its failure never stops the ssh."""
+    pats = ["fleet-*"]
+    for host, alias in machines:
+        for p in (alias, alias + "-*", host):
+            if p and p not in pats:
+                pats.append(p)
+    me = os.path.abspath(__file__)
+    return ("# Renewed when used (claude-fleet#3701): under 20%% of its 12 hours, the\n"
+            "# certificate is renewed by the device key before ssh reaches the machine.\n"
+            "Match originalhost %s exec \"python3 '%s' renew --quiet --on-use ssh >/dev/null 2>&1; exit 1\"\n\n"
+            % (",".join(pats), me))
 
 
 def cert_remaining(cert=CERT):
@@ -562,14 +616,17 @@ def llog(event, hub, ms, result, reason):
         fleet_clientlog.write("login", event, hub, "-", str(int(ms)), result, reason)
 
 
-def renew(hub, quiet=False, include=True):
+def renew(hub, quiet=False, include=True, why=""):
     """Renew by the device key. Returns 0 renewed · NEEDS_SCAN (3) when the hub
     says this device must scan again · 1 for anything else (hub unreachable,
-    a refused clock, no key yet). Each call is one line in login.log."""
+    a refused clock, no key yet). Each call is one line in login.log, `why=`
+    first when a use asked for it (claude-fleet#3701: the day's count)."""
     t0, said = time.time(), []
     rc = _renew(hub, quiet, include, said)
     llog("renew", hub, (time.time() - t0) * 1000, {0: "ok", NEEDS_SCAN: "scan"}.get(rc, "fail"),
-         " | ".join(said[-2:] + [tls_sources()]))
+         " | ".join((["why=" + why] if why else []) + said[-2:] + [tls_sources()]))
+    if why:
+        renew_said_last(rc, why)
     return rc
 
 
@@ -1054,7 +1111,7 @@ def cmd_hub(argv):
 
 
 def cmd_renew(argv):
-    hub_arg, quiet, include, under = "", False, True, None
+    hub_arg, quiet, include, under, why = "", False, True, None, ""
     it = iter(argv)
     for a in it:
         if a == "--hub":
@@ -1066,6 +1123,10 @@ def cmd_renew(argv):
             if not v.isdigit():
                 die("--if-under needs a number of seconds")
             under = int(v)
+        elif a == "--on-use" or a.startswith("--on-use="):
+            why = a.split("=", 1)[1] if "=" in a else next(it, "")
+            if not re.match(r"^[a-z][a-z0-9-]{0,31}$", why):
+                die("--on-use needs a word: connect · hub · ssh")
         elif a in ("-q", "--quiet"):
             quiet = True
         elif a == "--no-include":
@@ -1074,13 +1135,18 @@ def cmd_renew(argv):
             qr = True
         else:
             die("unknown option " + a)
-    if under is not None:
-        # the keeper's margin call: nothing to do while there is time left, and
-        # nothing to renew on a machine signed in another way (no certificate)
+    if why and under is None:
+        under = renew_below()
+    rc = 0
+    # a margin call: nothing to do while there is time left, and nothing to
+    # renew on a machine signed in another way (no certificate)
+    left = cert_remaining() if under is not None else None
+    if under is None or (left is not None and left < under):
+        rc = renew(hub_url(hub_arg), quiet, include, why)
+    if why:
         left = cert_remaining()
-        if left is None or left >= under:
-            return 0
-    return renew(hub_url(hub_arg), quiet, include)
+        print("left none" if left is None else "left %d" % max(0, left))
+    return rc
 
 
 def cmd_status(_argv):

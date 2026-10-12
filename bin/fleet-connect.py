@@ -13,8 +13,9 @@
 `fleet` with nothing after it (claude-fleet#1470; `bin/fleet` runs this file
 with --enter) is the whole way in, in one go:
 
-  1. the certificate — none, expired, or under FLEET_RENEW_BELOW_SECS (6h)
-     left: renew it by this device's key (fleet-login.py renew, no scan);
+  1. the certificate — none, expired, or under FLEET_RENEW_BELOW_SECS (20%
+     of its 12 hours, 2.4h — claude-fleet#3701) left: renew it by this
+     device's key (fleet-login.py renew, no scan; login.log says why=connect);
      the hub says this device must scan (never registered, revoked, seven
      idle days): the browser opens here, or the QR (fleet-login.py);
   2. the machine — POST /v1/fleet/home: the hub picks the machine this device
@@ -1628,13 +1629,13 @@ def ensure_cert(login, hub, verbose, force=False):
     "kept" | "renewed" | "scanned"; exits through fleet-login.py's die() when
     the scan itself fails."""
     say = sys.stderr.write
-    below = env_num("FLEET_RENEW_BELOW_SECS", 6 * 3600.0)
+    below = login.renew_below()
     left = login.cert_remaining()
     if left is not None and left > below and not force:
         if verbose:
             say("fleet · 证书还有 %s\n" % fmt_left(left))
         return "kept"
-    rc = login.renew(hub, quiet=not verbose)
+    rc = login.renew(hub, quiet=not verbose, why="connect")
     if rc == 0:
         if not verbose:
             say("fleet · 证书已续期（12 小时）\n")
@@ -1821,22 +1822,42 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
 CERT_WARN_UNDER = 3600  # the doctor's cert row WARNs inside the certificate's last hour
 
 
-def renew_said():
-    """What the hosting login's automatic renewal last did (claude-fleet#3455):
-    fleet-diskguard.sh's cert_watch writes `<epoch> <rc>` to diskguard/cert-renew.last."""
+def renew_last():
+    """(rc, minutes ago, why) of the last renewal a use asked for
+    (claude-fleet#3701: fleet-login.py renew --on-use writes `<epoch> <rc> <why>`
+    to <conf>/cert-renew.last), or None. The diskguard tick's old file
+    (#3455, `<epoch> <rc>`) is read for one version. # compat-1v: 下一批删"""
     conf = os.environ.get("FLEET_CONF_DIR") or os.path.join(
         os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "claude-fleet")
-    try:
-        with open(os.path.join(conf, "diskguard", "cert-renew.last")) as f:
-            ts, rc = f.read().split()[:2]
-        ago = max(0, int(time.time()) - int(ts)) // 60
-    except (OSError, ValueError):
-        return "没有自动续（没开客户端、这个登录也不承载）— 跑 `fleet login renew`"
+    for path in (os.path.join(conf, "cert-renew.last"), os.path.join(conf, "diskguard", "cert-renew.last")):
+        try:
+            with open(path) as f:
+                parts = f.read().split()
+            ago = max(0, int(time.time()) - int(parts[0])) // 60
+            return parts[1], ago, (parts[2] if len(parts) > 2 else "tick")
+        except (OSError, ValueError, IndexError):
+            continue
+    return None
+
+
+def renew_said():
+    """What the last renewal said, for the doctor's cert row."""
+    last = renew_last()
+    if last is None:
+        return "用到时（fleet 连接 / ssh 到机器 / 客户端读入口）用设备钥匙续"
+    rc, ago, why = last
     if rc == "3":
-        return "自动续被入口拒绝（%d 分钟前）：这台设备要重新扫码 — 跑 `fleet login`" % ago
+        return "上次续被入口拒绝（%d 分钟前，因 %s）：这台设备要重新扫码 — 跑 `fleet login`" % (ago, why)
     if rc != "0":
-        return "自动续失败（%d 分钟前，exit %s）— 跑 `fleet login renew` 看原因" % (ago, rc)
-    return "自动续在跑（上次 %d 分钟前）" % ago
+        return "上次续失败（%d 分钟前，因 %s，exit %s）— 跑 `fleet login renew` 看原因" % (ago, why, rc)
+    return "用到时续（上次 %d 分钟前，因 %s）" % (ago, why)
+
+
+def renew_blocked():
+    """True when the last renewal a use asked for could not renew — the one
+    case a short or expired certificate is the person's to act on."""
+    last = renew_last()
+    return last is not None and last[0] != "0"
 
 
 def cert_check(hub, timeout=6):
@@ -1867,15 +1888,15 @@ def cert_check(hub, timeout=6):
         except ValueError:
             left = None
     what = "principal %s · 有效至 %s" % (principals, until)
-    # Expired is a WARN, not a FAIL (claude-fleet#3455): the next `fleet`, an open
-    # client's keeper or a hosting login's diskguard tick renews it by the device
-    # key — no scan — unless the hub says this device must scan again (rc 3).
+    # Nothing renews on a timer (claude-fleet#3701): an unused certificate runs
+    # out and the next use (`fleet`, ssh to a fleet machine, an open client's
+    # hub read) renews it by the device key — no scan. So short or expired is a
+    # PASS saying so, and a WARN only when the last such renewal failed (rc 3:
+    # this device must scan again). Never a FAIL (#3455).
     if left is not None and left <= 0:
-        return "WARN", "%s（已过期）— %s" % (what, renew_said())
-    # Inside its last hour (claude-fleet#2630): a running client's keeper renews it
-    # by now (#2112), and so does a hosting login's tick (#3455).
+        return ("WARN" if renew_blocked() else "PASS"), "%s（已过期）— %s" % (what, renew_said())
     if left is not None and left < CERT_WARN_UNDER:
-        return "WARN", "%s（剩 %d 分钟）— %s" % (what, max(1, int(left // 60)), renew_said())
+        return ("WARN" if renew_blocked() else "PASS"), "%s（剩 %d 分钟）— %s" % (what, max(1, int(left // 60)), renew_said())
     if left is not None:
         what += " · 剩 %dh%02dm" % (int(left // 3600), int(left % 3600 // 60))
     if not hub:

@@ -132,7 +132,7 @@ func (g *GitHubAuth) ready() bool {
 
 func (g *GitHubAuth) ttl() time.Duration {
 	if g.TTL <= 0 {
-		return 7 * 24 * time.Hour
+		return sessionTTLDefault
 	}
 	return g.TTL
 }
@@ -254,6 +254,14 @@ func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
 	if err != nil || !store.KnownIdentityKind(sess.Sub) || !isPerson(sess.UID) {
 		return nil, "", false
 	}
+	// Cut off with «sign out everywhere» (claude-fleet#3701): a value signed
+	// at or before the person's cut-off is worth nothing. A list that cannot
+	// be read admits no one, like personRole.
+	if s.Store != nil {
+		if nb, err := s.Store.SessionCutoff(sess.UID); err != nil || (nb > 0 && sess.Iat <= nb) {
+			return nil, "", false
+		}
+	}
 	return sess, sess.UID, true
 }
 
@@ -280,10 +288,28 @@ func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx contex
 		s.githubDeny(w, r, denyRemoved, sess.Name)
 		return nil, true, true
 	}
+	s.slideSession(w, r, sess, role)
 	sub := sess.Principal()
 	ctx = context.WithValue(withViewer(r.Context(), sub), principalKey{}, sub)
 	ctx = withRole(withDoor(withSession(ctx, sess), doorGitHub), role)
 	return ctx, true, false
+}
+
+// slideSession re-signs a person's cookie once less than sessionSlide of its
+// life is left (claude-fleet#3701): a browser in use never reaches the end of
+// its 24 hours, one left alone for a day signs in again. Only the cookie the
+// browser sent — a CLI's bearer is not re-issued here.
+func (s *Server) slideSession(w http.ResponseWriter, r *http.Request, sess *authz.Session, role string) {
+	c, err := r.Cookie(authz.CookieName)
+	if err != nil || c.Value == "" {
+		return
+	}
+	now := time.Now()
+	ttl := s.sessionTTL()
+	if time.Unix(sess.Exp, 0).Sub(now) >= time.Duration(float64(ttl)*sessionSlide) {
+		return
+	}
+	http.SetCookie(w, s.personCookie(r, sess.Sub, sess.UID, sess.Name, role, now))
 }
 
 // personCookie is the session cookie for a person signed in by kind.

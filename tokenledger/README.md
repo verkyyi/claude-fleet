@@ -850,6 +850,16 @@ admin only.) A name GitHub does not know is refused, never added; a deploy
 admin is listed but read-only — it cannot be added as a user or removed. Every
 add, remove and refusal is a `hub_audit` row.
 
+**A web session lives a day and slides while it is used** (claude-fleet#3701).
+The `ccq_sess` cookie is signed for 24 hours; a request carrying one with less
+than 20% (4.8 h) left gets a fresh day back as `Set-Cookie`, so a page in use
+never signs out and a browser left alone for a day signs in again. An admin
+signs one person out everywhere — every browser, every `FLEET_HUB_SESSION` —
+with `POST /v1/fleet/users/sessions {login}` (a GitHub username or `p:<uuid>`):
+every session value signed up to that second is refused from then on
+(`hub_session_cutoffs`, one row per person), and removing someone cuts theirs
+the same way, so adding them back revives no old cookie.
+
 **An account is not a GitHub account** (claude-fleet#3603). A person is one
 principal, kept forever — `gh:<GitHub ID>` for everyone who came in through
 GitHub (unchanged by the upgrade: migration 2 re-keys `hub_users` on it and
