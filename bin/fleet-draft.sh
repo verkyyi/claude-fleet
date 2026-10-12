@@ -48,6 +48,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-gh-lib.sh"   # PRs through the GitHub layer; the ticket through the door
 
 MARK='<!-- fleet:draft-only -->'
 NOTE_BEGIN='<!-- fleet:pr-note:begin -->'
@@ -85,19 +87,33 @@ resolve_repo() {
   [ -n "$repo" ] || die 2 "no repo resolved (pass --repo)"
 }
 
-body_of() { gh issue view "$1" --repo "$repo" --json body --jq '.body // ""'; }
+tid() { bash "$BIN/fleet-ticket.sh" id "$repo" "$1"; }
+body_of() {   # a live read through the ticket door
+  local id j
+  id=$(tid "$1") || return 1
+  j=$(bash "$BIN/fleet-ticket.sh" read "$id" --json body --max-age 0) || return 1
+  printf '%s' "$j" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")'
+}
+set_body() {  # $1 = issue; the new body on stdin
+  local id tf rc
+  id=$(tid "$1") || return 1
+  tf=$(mktemp "${TMPDIR:-/tmp}/fleet-draft.XXXXXX") || return 1
+  cat > "$tf"
+  bash "$BIN/fleet-ticket.sh" edit "$id" --body-file "$tf" >/dev/null; rc=$?
+  rm -f "$tf"; return "$rc"
+}
 
 # Rewrite the mark line of issue $1 to $2 (the whole new line).
 restamp() {
   local n="$1" line="$2" b nb
   b=$(body_of "$n") || die 1 "could not read #$n in $repo"
   nb=$(printf '%s\n' "$b" | awk -v l="$line" 'index($0, "<!-- fleet:draft-only") && !done { print l; done = 1; next } { print }')
-  printf '%s\n' "$nb" | gh issue edit "$n" --repo "$repo" --body-file - >/dev/null \
+  printf '%s\n' "$nb" | set_body "$n" \
     || die 1 "could not rewrite #$n's body in $repo"
 }
 
 open_pr() {   # $1 = issue → "<number> <isDraft>" of the open PR on issue-<N>, or nothing
-  gh pr list --repo "$repo" --head "issue-$1" --state open --json number,isDraft \
+  fleet_gh_run graphql draft pr list --repo "$repo" --head "issue-$1" --state open --json number,isDraft \
     --jq '.[0] | select(.) | "\(.number) \(.isDraft)"' 2>/dev/null
 }
 
@@ -138,7 +154,7 @@ case "$cmd" in
     if [ "$(printf '%s\n' "$b" | scan | head -1)" != none ]; then
       printf 'fleet-draft: #%s is already draft-only\n' "$num" >&2; exit 0
     fi
-    { printf '%s\n\n' "$b"; block "$note"; } | gh issue edit "$num" --repo "$repo" --body-file - >/dev/null \
+    { printf '%s\n\n' "$b"; block "$note"; } | set_body "$num" \
       || die 1 "could not mark #$num in $repo"
     printf 'fleet-draft: #%s marked draft-only — its worker opens a draft PR and waits for approve\n' "$num" >&2
     ;;
@@ -149,7 +165,7 @@ case "$cmd" in
   gate)
     # $num is a PR here. Its head names the ticket: issue-<N>. Not one of ours, or
     # nothing readable ⇒ not this gate's to refuse (the verdict still is).
-    head=$(gh pr view "$num" --repo "$repo" --json headRefName --jq .headRefName 2>/dev/null) || exit 0
+    head=$(fleet_gh_run graphql draft pr view "$num" --repo "$repo" --json headRefName --jq .headRefName 2>/dev/null) || exit 0
     case "$head" in issue-[0-9]*) n="${head#issue-}" ;; *) exit 0 ;; esac
     case "$n" in *[!0-9]*) exit 0 ;; esac
     st=$(body_of "$n" 2>/dev/null | scan | head -1)
@@ -168,7 +184,7 @@ case "$cmd" in
     [ -n "$pr" ] || die 3 "no open PR on issue-$num yet — the worker has not opened its draft"
     prn="${pr%% *}"
     if [ "${pr#* }" = true ]; then
-      gh pr ready "$prn" --repo "$repo" >/dev/null || die 1 "gh pr ready #$prn failed"
+      fleet_gh_write pr ready "$prn" --repo "$repo" >/dev/null || die 1 "could not make PR #$prn ready"
     fi
     [ "$st" = approved ] || restamp "$num" "<!-- fleet:draft-only approved=$(stamp_now) by=$(who_default) -->"
     printf '批准（草稿单）：PR #%s 已转正。按常规门禁合并（pr_verdict wait → pr_merge），然后 report merged。\n' "$prn" \
@@ -186,8 +202,8 @@ case "$cmd" in
     [ "$st" = draft ] || [ "$st" = approved ] || die 4 "#$num is not a draft-only ticket ($st)"
     pr=$(open_pr "$num")
     if [ -n "$pr" ]; then
-      gh pr close "${pr%% *}" --repo "$repo" --comment "不做（草稿单被拒）：$reason" >/dev/null \
-        || die 1 "gh pr close #${pr%% *} failed"
+      fleet_gh_write pr close "${pr%% *}" --repo "$repo" --comment "不做（草稿单被拒）：$reason" >/dev/null \
+        || die 1 "could not close PR #${pr%% *}"
     fi
     restamp "$num" "<!-- fleet:draft-only rejected=$(stamp_now) by=$(who_default) -->"
     printf '拒绝（草稿单）：%s%s\n' "$reason" "${pr:+ — PR #${pr%% *} 已关闭}" \

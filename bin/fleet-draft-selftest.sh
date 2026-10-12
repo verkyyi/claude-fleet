@@ -46,8 +46,8 @@ cat > "$FB/gh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$ST/gh.log"
 case "\$1 \$2" in
-  "issue view") cat "$ST/body" ;;
-  "issue edit") cat > "$ST/body" ;;
+  "issue view") python3 -c 'import json,sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$ST/body" ;;
+  "issue edit") while [ "\$#" -gt 0 ]; do [ "\$1" = --body-file ] && { cp "\$2" "$ST/body"; break; }; shift; done ;;
   "pr view")    echo "\${HEAD:-issue-7}" ;;
   "pr list")    if [ -f "$ST/ready" ]; then echo "12 false"; else echo "12 true"; fi ;;
   "pr ready")   : > "$ST/ready" ;;
