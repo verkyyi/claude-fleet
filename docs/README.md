@@ -24,6 +24,7 @@
 - [FLEET-MCP.md](dev/FLEET-MCP.md) — 会话用的 `fleet` 工具服务
 - [STATE.md](dev/STATE.md) — 窗口上的 Claude 状态怎么刷新
 - [CLEANUP.md](dev/CLEANUP.md) · [REAP-SAFETY.md](dev/REAP-SAFETY.md) — 合并后的回收与回收安全
+- [DRAFT-PR.md](dev/DRAFT-PR.md) — 草稿单：worker 只开草稿 PR，批准后再合
 - [WORKER-SLEEP.md](dev/WORKER-SLEEP.md) — worker 休眠与唤醒
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
