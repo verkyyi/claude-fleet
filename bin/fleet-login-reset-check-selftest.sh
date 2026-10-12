@@ -114,7 +114,7 @@ unplant() {
 
 NCAT=''
 for P in darwin linux; do
-  eval "EXP=\$EXPECT_$P"
+  case "$P" in darwin) EXP=$EXPECT_darwin ;; *) EXP=$EXPECT_linux ;; esac
   # The table and this list in lockstep: a category the checker loses or gains is red.
   got=$(python3 "$CHECK" --list --platform "$P" | cut -f1 | paste -sd' ' -)
   [ "$got" = "$EXP" ] && ok "$P: --list is the expected table ($(printf '%s\n' $EXP | grep -c .) categories)" \
