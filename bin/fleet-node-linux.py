@@ -478,6 +478,8 @@ def machine_hub(paths, hub):
 
 def prepare(a):
     """compat-1v: 下一批删 — the old single-login verb; `login open` now."""
+    if not primary_login(a):
+        raise Refuse('prepare needs --login <login>')
     a.name, a.full_name, a.start = a.login, '', False
     return login_open(a)
 
@@ -635,9 +637,9 @@ def route_settings(c, login, hub, relay):
 
 def route_heal(a):
     """Container start, before the shared proxy: every enrolled login's route
-    settings back in the image layer (issue #3421). Only the primary login is
-    opened again at each start; one `login open` made (another person's) had
-    its relay route only from its create, so a recreated pod sent it `direct`
+    settings back in the image layer (issue #3421). Only the primary login (if
+    any — none since #3526) is opened again at each start; one `login open`
+    made (another person's) had its relay route only from its create, so a recreated pod sent it `direct`
     — `unsupported_region` from a CN egress, and the hub closes its compute.
     A login never enrolled (no token in its store) is its open's to write."""
     s = load('fleet-node-supervisor')
@@ -877,6 +879,8 @@ def activate(_a):
 
 
 def bootstrap(a):
+    if not primary_login(a):
+        raise Refuse('bootstrap needs --login <login>')
     s = load('fleet-node-supervisor')
     ctl = Path(os.environ.get('FLEET_CREDSEP_RUN_BASE', '/var/run/fleet-cred')) / '.shared/ctl.sock'
     for _ in range(60):
@@ -902,6 +906,14 @@ def bootstrap(a):
             kept = snap
         print('bootstrap %s: session restore exit %d, not all pinned sessions came back; snapshot kept as %s'
               % (a.login, restored.returncode, kept), file=sys.stderr)
+
+
+def primary_login(a):
+    """The container's own login, or '' (issue #3526): FLEET_NODE_LOGIN empty or
+    `none` = a machine with no primary login — boot, route_heal and bootstrap
+    serve the declared logins (linux-tenants/) only, and nothing is opened."""
+    login = (getattr(a, 'login', '') or '').strip()
+    return '' if login in ('', 'none') else login
 
 
 def foreground(a):
@@ -936,8 +948,10 @@ def foreground(a):
         # under /usr/local must be root's again before the shared proxy starts.
         lib_owner_heal()
         route_heal(a)
-        cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground',
-               '--login', a.login, '--login-join-file', a.join_file]
+        primary = primary_login(a)
+        cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground']
+        if primary:
+            cmd += ['--login', primary, '--login-join-file', a.join_file]
         if a.machine_join_file and Path(a.machine_join_file).exists():
             cmd += ['--join-file', a.machine_join_file]
         cmd += ['--release-key', '/etc/fleet-release.pub']
@@ -955,7 +969,9 @@ def foreground(a):
         ready = Path('/run/fleet-node-ready')
         ready.unlink(missing_ok=True)
         s = load('fleet-node-supervisor')
-        logins = sorted(set(tenants(s.Paths())) | {a.login})
+        # Only what the volume declares — plus the primary login, when there is one:
+        # a machine with none never grows one back on a recreate (issue #3526).
+        logins = sorted(set(tenants(s.Paths())) | ({primary} if primary else set()))
         rc = 0
         try:
             loop.beat()
@@ -963,7 +979,7 @@ def foreground(a):
                 try:
                     bootstrap(argparse.Namespace(login=login))
                 except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
-                    if login == a.login:
+                    if login == primary:
                         raise
                     # One person's broken home never keeps the others' sessions down.
                     print('bootstrap %s failed (%s); the other logins go on' % (login, e), file=sys.stderr)
@@ -1075,7 +1091,8 @@ def main():
         return guarded(lambda: login_cmd(sys.argv[2:]))
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready'))
-    ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'fleet'))
+    # `none` (the image's default since #3526) or empty: no primary login.
+    ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'none'))
     ap.add_argument('--uid', type=int, default=int(os.environ.get('FLEET_NODE_UID', '10002')))
     ap.add_argument('--hub', default=os.environ.get('FLEET_HUB_URL', ''))
     ap.add_argument('--relay', default=os.environ.get('FLEET_CRED_RELAY_URL', 'https://fleet-relay.24hw.cn'))

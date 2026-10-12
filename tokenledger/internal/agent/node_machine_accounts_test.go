@@ -316,3 +316,16 @@ func hasEnv(env []string, kv string) bool {
 	}
 	return false
 }
+
+// A machine with no primary login (FLEET_NODE_LOGIN empty or `none`,
+// claude-fleet#3526) still never touches `fleet`, and `none` is no login's name.
+func TestLinuxAccountOpNoServiceLogin(t *testing.T) {
+	for _, service := range []string{"", "none"} {
+		if err := validateLinuxAccountOp(control.AccountOp{Op: control.AccountRemove, Login: "fleet"}, service); err == nil {
+			t.Errorf("service %q: removing fleet was allowed", service)
+		}
+		if err := validateLinuxAccountOp(control.AccountOp{Op: control.AccountRemove, Login: "drill2"}, service); err != nil {
+			t.Errorf("service %q: removing drill2 refused: %v", service, err)
+		}
+	}
+}

@@ -148,7 +148,9 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
     mounts = [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in volumes]
     env = [{'name': 'FLEET_HUB_URL', 'value': hub},
            {'name': 'FLEET_MACHINE_JOIN_FILE', 'value': '/run/fleet-join/machine'},
-           {'name': 'FLEET_LOGIN_JOIN_FILE', 'value': '/run/fleet-join/login'},
+           # no primary login (#3526): every login is a person's, opened by the
+           # hub's account op and rebuilt from linux-tenants/ at each start
+           {'name': 'FLEET_NODE_LOGIN', 'value': 'none'},
            # the entry port's sshd (keys from the hub's list only, #3070)
            {'name': 'FLEET_ENTRY', 'value': '1'},
            {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)}]

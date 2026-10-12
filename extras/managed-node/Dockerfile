@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     FLEET_NODE_SEED=/opt/claude-fleet/seed \
     FLEET_NODE_LOG=/var/log/fleet-node FLEET_NODE_USERS=/home \
     FLEET_NODE_SERVICE=foreground FLEET_NODE_UPDATE_OWNER=node \
-    FLEET_NODE_LOGIN=fleet FLEET_NODE_UID=10002 \
+    FLEET_NODE_LOGIN=none \
     PATH=/var/db/fleet-node/runtime/current/tools/bin:/var/db/fleet-node/runtime/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     ca-certificates curl git gh python3 zsh tini procps openssh-client openssh-server \

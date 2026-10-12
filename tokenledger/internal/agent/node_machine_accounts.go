@@ -51,7 +51,9 @@ func validateLinuxAccountOp(op control.AccountOp, service string) error {
 	if linuxReserved[op.Login] {
 		return errors.New("refusing a reserved login: " + op.Login)
 	}
-	if service == "" {
+	// No primary login (FLEET_NODE_LOGIN empty or `none`, claude-fleet#3526):
+	// `fleet` stays refused all the same — the hub reserves it.
+	if service == "" || service == "none" {
 		service = "fleet"
 	}
 	if op.Login == service {

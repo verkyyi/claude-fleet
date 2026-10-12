@@ -5,8 +5,10 @@ A managed Linux machine hosts several non-sudo logins on one persistent volume
 the existing Singapore relay forwards Anthropic requests. macOS continues to
 use its existing installer and launchd services.
 
-The Linux bootstrap opens the first login. Every later login is opened and
-removed on the machine by ONE road, `fleet-node-linux.py login` (root) — the
+An ACK node has **no primary login** (issue #3526): every login on it is a
+person's, assigned on the hub and rebuilt from the volume at each start
+(«No primary login» below). A native install may still open a first login with
+`--login`. Every login is opened and removed on the machine by ONE road, `fleet-node-linux.py login` (root) — the
 Linux twin of `fleet-login-new.sh` / `fleet-login-remove.sh`, with the same
 steps, exit codes and last line; nothing else on the machine runs `useradd` /
 `userdel`:
@@ -81,7 +83,8 @@ fleet hub accounts remove gh:2987262 --host fleet-linux-0
   `python3 -I <current>/bin/fleet-node-linux.py login open <login> [--full-name N]`
   and `… login remove <login> --keep-home|--delete-home`. The join code
   (`FLEET_LOGIN_JOIN_CODE`) and the op (`FLEET_LOGIN_OP_ID`) travel in its
-  environment. Anything else — another op, `root`, the service login (`fleet`),
+  environment. Anything else — another op, `root`, `fleet` (the hub reserves it;
+  the old primary login's name, refused with or without one),
   `fleetcred` or a reserved name, an all-digit or flag-shaped name, a full name
   with a control character, a malformed join code — is refused `BAD_ARGS` with
   one log line and nothing runs (BREAK-IT `linux-hub-other-root-op`). A digit
@@ -96,6 +99,37 @@ fleet hub accounts remove gh:2987262 --host fleet-linux-0
   holds a node-program reload while an op in it runs, and an answer the hub has
   not acked goes out again on the next connection.
 
+## No primary login
+
+(issue #3526) The image used to open its own login, `fleet` (UID 10002), at
+every start (`FLEET_NODE_LOGIN=fleet`). Nothing dispatched to it — the hub
+reserves the name and never assigns it (#3417) — yet it ran a full fleet of its
+own (~54 processes and a warm pool on fleet-linux-0) beside the people's logins.
+
+Now `FLEET_NODE_LOGIN` empty or `none` means the machine has none, and both the
+image (`Dockerfile`) and the manifest (`render.py`) say `none`. A container start
+is machine-level work only — `boot` (every login `linux-tenants/` declares, with
+its number), `lib_owner_heal`, `route_heal`, `fleet node install` with no
+`--login` (machine join, the shared credential proxy, the entry sshd, the
+supervisor) — then each declared login's `bootstrap`, one person's failure never
+the machine's. Nothing is opened: a login exists only because the hub's account
+op (or `login open`) declared it. The machine's own identity is root's
+`machine.env` token, never a login's; readiness reads the machine's children
+(node agent, shared proxy, sshd), never a login. BREAK-IT `linux-no-primary-regrows`.
+
+Taking an old node's `fleet` login away, once it runs a release with this:
+
+```sh
+R=/var/db/fleet-node/runtime/current/bin
+sudo python3 -I $R/fleet-node-linux.py login remove fleet --keep-home   # home → /home/.attic/fleet-<UTC>.tar.gz
+sudo python3 -I $R/fleet-node-linux.py login list                       # fleet gone; the others ok
+```
+
+`login remove` takes it off the hub (`node leave`) too. Then recreate the pod
+once (`kubectl -n fleet-workers delete pod fleet-linux-0` — about a minute
+offline for everyone on it, so pick a time nobody is) and check `id fleet` fails
+and `ps -u 10002` is empty: nothing brings it back.
+
 ## Native Linux
 
 Use Debian 12 or Ubuntu with systemd, Python 3.9+, curl, git, zsh, openssh-server,
@@ -107,7 +141,8 @@ The entry port (`FLEET_ENTRY=1`) also needs OpenSSH 9.8+ (`PerSourcePenalties`):
 Debian 12's 9.2 runs everything else, but its entry never listens — use Debian 13.
 
 Generate **two trusted join codes** using the hub's operator endpoint
-`POST /v1/fleet/nodes/join-codes`: one for the machine, one for its worker login.
+`POST /v1/fleet/nodes/join-codes`: one for the machine, one for its first login
+(native only — an ACK node needs the machine's alone).
 The default managed code is trusted, one-use, and expires in one hour. Keep
 codes in private temporary files, not shell history or source control. The
 machine registers as `root`; the login registers as `fleet`. Their tokens must
@@ -184,18 +219,19 @@ with the password-free ACR plugin the Secret is the plugin's own,
 `acr-credential-<hash>` — find it with
 `kubectl -n fleet-workers get secret | grep acr-credential`; a wrong name leaves
 the pod in `ImagePullBackOff` (issue #3290). Elsewhere, provision it through your
-normal registry credential workflow. Put the two newly issued join codes into a Secret
-from private files, then apply the reviewed resources:
+normal registry credential workflow. Put the newly issued machine join code into a Secret
+from a private file (no login code: the pod opens no login of its own — «No
+primary login»), then apply the reviewed resources:
 
 ```sh
 kubectl create namespace fleet-workers
 kubectl -n fleet-workers create secret generic fleet-linux-join \
-  --from-file=machine=/private/machine-code --from-file=login=/private/login-code
+  --from-file=machine=/private/machine-code
 kubectl apply -f /tmp/fleet-linux.json
 kubectl -n fleet-workers rollout status statefulset/fleet-linux --timeout=15m
 ```
 
-After both identities are registered and the pod is ready, delete the join-code
+After the machine's identity is registered and the pod is ready, delete the join-code
 Secret and private code files. The volume holds the issued identities, so a
 replacement pod does not need a fresh join code. A failed verification of a
 persisted identity stops bootstrap; it never silently registers another node.
