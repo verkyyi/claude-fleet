@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +85,7 @@ func TestGitHubSignIn_SessionSlides(t *testing.T) {
 // sessions — every value signed before is refused, a new sign-in works, and
 // another person is untouched. Removing a person cuts theirs too.
 func TestGitHubSignIn_CutSessions(t *testing.T) {
-	h := newGitHubHarness(t, ghAdmin.Login)
+	h := newUsersHarness(t)
 	h.addUser(t, ghAlice)
 	h.addUser(t, ghMallory)
 	_, admin := h.signIn(t, ghAdmin)
@@ -96,15 +95,8 @@ func TestGitHubSignIn_CutSessions(t *testing.T) {
 	aliceOld := h.mintSession(ghAlice, "user", time.Now().Add(-3*time.Hour))
 
 	cut := func(who string, sess *http.Cookie) int {
-		req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/users/sessions", strings.NewReader(`{"login":"`+who+`"}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.AddCookie(sess)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		return resp.StatusCode
+		code, _ := h.call(t, http.MethodPost, "/v1/fleet/users/sessions", `{"login":"`+who+`"}`, sess)
+		return code
 	}
 	if code := cut(ghAdmin.Login, alice); code != http.StatusForbidden {
 		t.Fatalf("a user cutting = %d; want 403", code)
@@ -114,6 +106,9 @@ func TestGitHubSignIn_CutSessions(t *testing.T) {
 	}
 	if code := cut("alice", admin); code != http.StatusOK {
 		t.Fatalf("admin cutting alice = %d", code)
+	}
+	if !h.auditHas(t, "user.sessions.cut", "ok", "alice") {
+		t.Errorf("no audit row for the cut: %+v", h.audit(t))
 	}
 	for name, c := range map[string]*http.Cookie{"alice": alice, "alice's older browser": aliceOld} {
 		if code, _ := h.me(t, c); code == http.StatusOK {
@@ -132,15 +127,8 @@ func TestGitHubSignIn_CutSessions(t *testing.T) {
 	}
 
 	// Removing mallory cuts hers: added back, the old cookie stays dead.
-	req, _ := http.NewRequest(http.MethodDelete, h.http.URL+"/v1/fleet/users?login=mallory", nil)
-	req.AddCookie(admin)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("remove mallory = %d", resp.StatusCode)
+	if code, body := h.call(t, http.MethodDelete, "/v1/fleet/users?login=mallory", "", nil); code != http.StatusOK {
+		t.Fatalf("remove mallory = %d %v", code, body)
 	}
 	h.addUser(t, ghMallory)
 	if code, _ := h.me(t, mallory); code == http.StatusOK {
