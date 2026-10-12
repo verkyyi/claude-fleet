@@ -66,6 +66,7 @@ ln -s "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # fleet-issue-file.sh
 # just the one faked `gh issue create` — no label list, no spawn from within it);
 # dash-issue-new.sh still owns the background spawn + optimistic row.
 ln -s "$BIN/fleet-issue-file.sh" "$WORK/bin/fleet-issue-file.sh"
+ln -s "$BIN/fleet-ticket.sh" "$WORK/bin/fleet-ticket.sh"   # its write step: the ticket door (issue #3595)
 cat > "$WORK/bin/dash-issue-session.sh" <<SPAWNSTUB
 #!/bin/bash
 printf '%s\n' "\$*" >> "$SPAWN_LOG"

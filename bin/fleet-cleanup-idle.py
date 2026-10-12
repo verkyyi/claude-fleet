@@ -413,6 +413,15 @@ class Cleaner:
                                "idle-land", str(BIN), cwd or self.args.main, tip, "origin/" + self.args.base],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode == 0
 
+    def on_base(self, tip, cwd):
+        """Nothing of <tip>'s is missing from origin/<base>: it IS the base or an
+        ancestor of it (issue #3677). fleet_land_check says `open` for a tip that
+        never moved off the base — right for "did it land", wrong for "is there
+        anything to lose", so the drop asks both."""
+        return bool(tip) and subprocess.run(["git", "-C", cwd, "merge-base", "--is-ancestor", tip,
+                                             "origin/" + self.args.base], stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, timeout=15).returncode == 0
+
     def no_pr(self, window, snap):
         """A finished session that no PR will close (issue #1832): done (or
         exited, or its agent gone) for done_no_pr_secs(), its issue CLOSED (a
@@ -564,7 +573,7 @@ class Cleaner:
             fate = "worktree=gone"
         elif dirty or run("git", "-C", wt, "status", "--porcelain"):
             fate = "worktree=kept:dirty"
-        elif not self.landed(head, wt):
+        elif not (self.on_base(head, wt) or self.landed(head, wt)):
             fate = "worktree=kept:unpushed"
         else:
             out = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_worktree_drop "$2" "$3"',

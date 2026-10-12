@@ -176,12 +176,22 @@ cache_key() {
 # is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
 fetch_issues_for() {
   local rp="$1" sg="$2" force="${3:-0}" FD its raw ttl owner name
-  command -v gh >/dev/null 2>&1 || return 0
-  # A repo not on GitHub has no GitHub backlog to fetch (issue #3600): never gh.
-  [ "$(fleet_repo_forge "$rp")" = none ] && return 0
   ttl="${GH_TTL:-${FLEET_GH_TTL:-90}}"
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   its=$(cat "$FD/issues.ts" 2>/dev/null || echo 0)
+  [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ] || return 0
+  # A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3595): the
+  # same three caches, in the same shape, from the hub's list (共同约定 6). A hub
+  # that does not answer leaves the last good copy and its stamp — the next tick
+  # asks again. No gh needed, no GitHub share.
+  if [ "$(fleet_ticket_home "$rp")" = hub ]; then
+    ( _fleet_hub_env; exec python3 "$BIN/fleet_ticket.py" --backend hub cache --repo "$rp" --dir "$FD" ) 2>/dev/null \
+      && now > "$FD/issues.ts"
+    return 0
+  fi
+  command -v gh >/dev/null 2>&1 || return 0
+  # A repo not on GitHub has no GitHub backlog to fetch (issue #3600): never gh.
+  [ "$(fleet_repo_forge "$rp")" = none ] && return 0
   if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
     # A follower (issue #1271) takes the leader's fresh copy instead of asking
     # GitHub; no fresh copy (leader wedged / not polling this repo) → fetch below.

@@ -830,7 +830,9 @@ class HubTests(HubFixture):
             self.call("gh_issue_view", {"fleet_id": str(uuid.uuid4()), "number": 7}, reader)
 
     def test_gh_comment_goes_through_the_write_queue(self):
-        shutil.copy2(BIN / "fleet-comment.sh", self.node.bin / "fleet-comment.sh")
+        # fleet-comment.sh posts through the ticket door (issue #3595)
+        for f in ("fleet-comment.sh", "fleet-ticket.sh", "fleet_ticket.py"):
+            shutil.copy2(BIN / f, self.node.bin / f)
         request = dict(fleet_id=self.fleet, idempotency_key="ipad-1", params={"issue": 7, "body": "从 iPad 发的评论"})
         with self.assertRaises(Fault) as refused:
             self.call("gh_comment", request, self.gh_grant("gh:read"))

@@ -20,7 +20,7 @@
 #   E. a desk repo this fleet does not host → no ticket, said on stderr
 #   F. hub off → the ticket is filed, NOT registered, said on stderr
 #   G. a slash-command seed → ticketed, but its seed is left as typed
-#   H. fleet-ticket.sh: parse · hub:N refused · read · comment · state · children ·
+#   H. fleet-ticket.sh: parse · hub:N (no repo) refused · read · comment · state · children ·
 #      evidence · the `desk` label in the canonical taxonomy
 #   T. --task T<n> (issue #3325): the hub's record owns it — no desk ticket, @task
 #   I. (n) adding a repo to the fleet changes nothing for a desk spawn: the same
@@ -206,8 +206,9 @@ T() { env -u CCQUOTA_HUB_URL -u CCQUOTA_TOKEN FLEET_CONF_DIR="$WORK/conf" PATH="
         bash "$WORK/bin/fleet-ticket.sh" "$@"; }
 : > "$LOG"
 [ "$(T parse 'gh:acme/desk#7')" = "acme/desk	7" ] || fail "H parse"
-T parse 'hub:7' 2>"$WORK/err"; [ $? = 2 ] || fail "H hub:N is reserved — exit 2"
-grep -q 'reserved' "$WORK/err" || fail "H hub:N says it is reserved" "$(cat "$WORK/err")"
+T parse 'hub:7' 2>"$WORK/err"; [ $? = 2 ] || fail "H hub:N (no repo) is not an id — exit 2 (EPIC #3570 共同约定 1)"
+grep -q 'hub:<owner/name>#<N>' "$WORK/err" || fail "H hub:N says the id carries its repo" "$(cat "$WORK/err")"
+[ "$(T parse 'hub:acme/desk#7')" = "acme/desk	7" ] || fail "H parse hub:<repo>#N (issue #3595)"
 T parse 'acme/desk#7' 2>/dev/null; [ $? = 2 ] || fail "H a bare owner/name#N is not an id"
 T read 'gh:acme/desk#7' --json title >/dev/null
 grep -qx 'fleet-gh.sh \[issue\] \[view\] \[7\] \[--repo\] \[acme/desk\] \[--json\] \[title\]' "$LOG" || fail "H read → fleet-gh.sh issue view" "$(cat "$LOG")"
@@ -231,7 +232,7 @@ import sys
 for l in sys.stdin:
     n, _, d = l.rstrip("\n").split("|", 2)
     if n == "desk" and len(d) > 100: sys.exit(1)' || fail "H the desk label description fits GitHub's 100 characters"
-ok "H fleet-ticket.sh: parse · hub: reserved · read · comment · state · children · evidence · label"
+ok "H fleet-ticket.sh: parse · hub:N refused · read · comment · state · children · evidence · label"
 
 # ============================ I: (n) another repo ==============================
 add_repo acme/third
