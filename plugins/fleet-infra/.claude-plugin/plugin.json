@@ -1,6 +1,6 @@
 {
   "name": "fleet-infra",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "claude-fleet for the people who run the machines and the hub: runbooks as skills — prepare a Mac, enroll it, open and delete logins, a cloud Linux node, an overseas relay, deploy the hub, the release rules, three incident runbooks (a stuck macOS permission dialog, the entry port down, the release train stuck) and how to read `fleet doctor` row by row. Each says when to use it, what to check first, the steps, how to verify, how to roll back. Admins only: never installed by default, never handed out by the hub (EPIC #3569).",
   "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
   "homepage": "https://github.com/verkyyi/claude-fleet",

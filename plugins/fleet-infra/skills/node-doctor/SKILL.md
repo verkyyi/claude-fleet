@@ -97,6 +97,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `cred` | node | [sg-relay-setup] [login-lifecycle] | 会话凭据走哪条路：照行内的 trust × probe 结论修中转或代理 |
 | `credpool` | machine | [login-lifecycle] | 共享凭据池：照行内修 |
 | `credsep` | node · machine | [mac-node-enroll] | 凭据隔离：照行内（代理没起 / 该并入整机共享代理）；整机的代码不是这一版 ⇒ `fleet-credsep.py machine refresh`（更新器每轮也做） |
+| `credsep-all` | node | [mac-node-enroll] | 托管登录都做了凭据隔离：FAIL 点名没隔离的、WARN 点名还跑自己代理的；管理员一条 `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine install --logins managed` |
 | `daemon` | machine | [mac-node-enroll] [release-rules] | 整机守护没装 / 没在跑 / 没重启到 current：重跑 `sudo fleet node install` |
 | `daemons` | node | [mac-node-enroll] | 某个守护没加载：重跑安装，或看它的 launchd 日志 |
 | `deploy` | node | [node-doctor] | 仓库配置：`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK` 写错了 |
