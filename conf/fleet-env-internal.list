@@ -298,6 +298,7 @@ FLEET_HANDOFF_MANIFEST             handoff: the handoff manifest a relaunch resu
 FLEET_HANDOFF_MARGIN_MIN           knob: internal pacing/limit, safe in-code default (fleet-handoff-invariant.sh)
 FLEET_HANDOFF_PICKUP_CMD           seam: an injectable command/path for tests (fleet-handoff-cycle.sh)
 FLEET_HANDOFF_POLL                 knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
+FLEET_HISTORY_EPOCH                handoff: fleet_view.py asks `fleet-history.sh rows` for each row's close time (the 已关闭 group, #3731)
 FLEET_HANDOFF_RETRY_AFTER          knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
 FLEET_HANDOFF_VERIFY_TIMEOUT       knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
 FLEET_HEAVY_BIN                    seam: the fleet-heavy.sh path bash-guard.py prefixes (fleet-heavy-selftest.sh)
