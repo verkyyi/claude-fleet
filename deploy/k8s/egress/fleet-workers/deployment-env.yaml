@@ -14,4 +14,4 @@ spec:
             # GitHub's git transport times out from the CN egress: through the
             # Singapore gh-relay (extras/gh-relay), which takes the cluster egress only
             - name: FLEET_EGRESS_VIA
-              value: ".github.com=47.131.114.67:3128 .githubusercontent.com=47.131.114.67:3128 ghcr.io=47.131.114.67:3128"
+              value: ".github.com=47.131.114.67:3128 .githubusercontent.com=47.131.114.67:3128 ghcr.io=47.131.114.67:3128"  # oss-ok: the hub egress must name the gh-relay it rides (extras/gh-relay)

@@ -133,9 +133,9 @@ func TestDoorDNSPointsPodHomesAtTheDoor(t *testing.T) {
 	if err := h.srv.Store.SetFleetSetting(DoorKey, "fleet-door", now); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "fleet-door", now, true, "120.24.204.160")
+	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
 	h.srv.EntryDNSTick(ctx, now.Add(time.Minute))
-	if got, want := dnsZone(f), "A alice.cf 120.24.204.160"; got != want {
+	if got, want := dnsZone(f), "A alice.cf 203.0.113.10"; got != want {
 		t.Fatalf("zone: %s\nwant %s", got, want)
 	}
 	if p := h.srv.entryPublicPort("u-alice1", now); p != entryPort {
