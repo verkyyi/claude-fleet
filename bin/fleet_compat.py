@@ -33,3 +33,14 @@ def default(key, hub, path=None):
     if not host or host not in c.get("FLEET_COMPAT_HUB_HOSTS", "").lower().split():
         return ""
     return c.get(key, "")
+
+
+def hosts(path=None):
+    """Every host the file names — the hubs and the relay's — for a check that
+    used to have them built in (fleet-credsep's adopt)."""
+    c = read(path)
+    out = set(c.get("FLEET_COMPAT_HUB_HOSTS", "").lower().split())
+    h = (urlsplit(c.get("FLEET_CRED_RELAY_URL", "")).hostname or "").lower()
+    if h:
+        out.add(h)
+    return sorted(out)
