@@ -92,6 +92,7 @@
 #   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
+#   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -5013,6 +5014,23 @@ _login_remove_selftest() {
     if LOGIN_REMOVE_ST_OUT=$(bash "$ROOT/bin/fleet-login-remove-selftest.sh" 2>&1); then LOGIN_REMOVE_ST=ok; else LOGIN_REMOVE_ST=red; fi
   }
   [ "$LOGIN_REMOVE_ST" = ok ]
+}
+
+# ---- spare-reuse-leaks (#3507, EPIC #3500 C11): a login washed for the next
+# person still held the last one's crontab, own services, entry keys file,
+# credsep store, onboarding kit, keychain and git/ssh credentials — and nobody
+# looked. Now one category table (fleet-login-reset-check.py) is the list: the
+# selftest plants one thing per category in a sandbox, every one is reported,
+# clearing one drops exactly that one, and a category the table lost is red.
+drill_spare_reuse_leaks() {
+  CAP=60; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/bin/fleet-login-reset-check.py" ] \
+    || { WHY="no bin/fleet-login-reset-check.py: nobody checks what the last person left on a reused login"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-reset-check-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-reset-check-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  WHAT="每类种一样 → reset: dirty 报出全部 $(printf '%s\n' "$out" | sed -n 's/^categories: //p') 类；清掉一类只少一类；--since 只认早于洗号的；表里少一类即红（沙盒真跑检查器）"
+  SECS=$(since "$t0")
 }
 
 # ---- login-remove-record-left (#2728): sysadminctl -deleteUser took the home
