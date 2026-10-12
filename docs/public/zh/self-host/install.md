@@ -43,6 +43,7 @@ docker push registry.example.com/fleet/ccquota:$TAG
 - `bin/fleet-client-pack.sh` 把客户端和机器要下载的文件装进镜像；少了这一步 `docker build` 会拒绝。
 - `VERSION` 是入口在 `/version` 上报的版本名，用提交号最方便对照。
 - 镜像里带着 macOS 与 Linux（amd64 / arm64）机器要下载的程序，构建要几分钟。只在一台机器上跑入口时，镜像推不推仓库都行。
+- 构建默认经 `goproxy.cn` 拉 Go 依赖（境内直连官方代理常会卡住）。在境外构建、或不想经过它，加 `--build-arg GOPROXY=https://proxy.golang.org,direct`。
 
 ### 1.2 生成钥匙
 
@@ -468,7 +469,7 @@ ln -sfn ~/.claude/fleet.versions/<上一版> ~/.claude/fleet
 
 ## 6. 卸载
 
-- **成员的客户端**：`fleet quit`，再 `fleet logout`；删掉 `~/.local/bin/fleet`、`~/.claude/fleet`、`~/.claude/fleet.versions`，以及安装时加进 shell 配置文件的那一行 PATH。
+- **成员的客户端**：`fleet quit`，再 `fleet logout`；删掉 `~/.local/bin/fleet`、`~/.claude/fleet`、`~/.claude/fleet.versions`、`~/.local/share/claude-fleet-vendor`（安装时带的 tmux），以及安装时加进 shell 配置文件的那一行 PATH。
 - **机器**：先在控制台 **维护**、等会话跑完，再 **移除**。机器上的运行时目前没有一键卸载命令。
 - **入口**：停掉容器（`docker rm -f fleet-hub`）或删掉命名空间（`kubectl delete namespace fleet-hub`）。数据在 `/srv/fleet/data` 或数据盘 / 数据库里，你决定留不留。
 
