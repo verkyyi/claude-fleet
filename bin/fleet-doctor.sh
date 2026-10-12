@@ -2400,6 +2400,7 @@ EOF
     pass memory "$rtxt"
   fi
 fi
+# doctor-rows: files pty
 for rk in files pty; do
   rrow=$(printf '%s\n' "$res" | awk -v k="$rk" '$1 == k { print $2, $3; exit }')
   if [ "$rk" = files ]; then
