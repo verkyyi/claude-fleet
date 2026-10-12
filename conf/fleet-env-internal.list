@@ -136,6 +136,7 @@ FLEET_DEBUG_PROMPT_TTY             seam: 1 = fleet-debug-prompt.sh acts as if st
 FLEET_DEBUG_PROMPT_WINDOW          knob: the window the failures are counted in (1800 s, #2894)
 FLEET_DEBUG_STALL_SECS             knob: how long the reconnect page waits with no session before it offers 按 d (60 s, #2894)
 FLEET_DIST_SOURCE                  knob: `github` = the one-version fallback to fetching versions from GitHub (EPIC #2770 C3); fleet doctor's dist row WARNs on it (fleet-dist-source.sh, #2776)
+FLEET_RAW_AGENT                    knob: 1 = a session shell's `codex` / `claude` runs the bare agent instead of pointing back to the session (fleet-session-shell-agent.sh, #3463)
 FLEET_RELEASE_KEY_TIMEOUT          knob: internal pacing, seconds fleet-release-key.sh waits for the hub's /v1/fleet/release/key (default 10, #2773)
 FLEET_ORPHAN_ALL_USERS             handoff: fleet-node-supervisor.py sets it on its root orphan watchdog task (every login's orphans, #2331)
 FLEET_DRILL_INSTALL_INVITE         handoff: an invite code for the clock's /i/<code> line, never an argv (fleet-onboard-clock.sh, #2267)
@@ -335,6 +336,8 @@ FLEET_VIEW_SHELL_WAIT              knob: seconds ⌃\'s far shell waits for C5's
 FLEET_WRAP_LAUNCH_ID               handoff: one launch of fleet-session-wrap.sh, the session a personal hook's strikes count in (fleet-hook-personal.sh)
 FLEET_SESSION_SHELL_CMD            seam: the login shell ⌃\'s shell-here execs instead of $SHELL (fleet-remote-view-selftest S, #2744)
 FLEET_SESSION_SHELL_WATCH          knob: seconds between shell-here's checks that its session's window still lives (default 5, #2744)
+FLEET_SESSION_SHELL_SOCK           handoff: the fleet socket label of the session a ⌃\ shell belongs to (shell-here → fleet-session-shell-agent.sh, #3463)
+FLEET_SESSION_SHELL_WIN            handoff: the window id of the session a ⌃\ shell belongs to (shell-here / fleet_view here-shell → fleet-session-shell-agent.sh, #3463)
 FLEET_SESSION_WRAP                 handoff: the pid of the fleet-session-wrap.sh holding this pane, read by session-end-hook.sh
 FLEET_SLEEPWATCH_SELFTEST          seam: fleet-node-sleepwatch.sh posts one sleep + one wake to itself and exits (#1721)
 FLEET_MACHINE_SESSIONS_DIR         path: the machine-wide per-login session-count dir (default /Users/Shared/claude-fleet/sessions)

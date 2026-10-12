@@ -38,9 +38,10 @@ w="${FLEET_SESSION_SHELL_WIN:-}"
 [ -n "$w" ] || pass "$@"
 case "${1:-}" in --version|-V|--help|-h) pass "$@" ;; esac
 T() { tmux ${FLEET_SESSION_SHELL_SOCK:+-L "$FLEET_SESSION_SHELL_SOCK"} "$@"; }
-us=$(printf '\037')   # not whitespace: an empty @cc_agent stays its own field
-info=$(T display-message -p -t "$w" "#{window_id}$us#{@cc_agent}$us#{@claude_state}$us#{window_name}" 2>/dev/null) || pass "$@"
-IFS=$us read -r wid agent state wname <<< "$info"
+# `|`, not a tab (IFS whitespace folds an empty @cc_agent away) nor a control
+# byte (tmux rewrites those): none of the first three holds one, the name is last
+info=$(T display-message -p -t "$w" '#{window_id}|#{@cc_agent}|#{@claude_state}|#{window_name}' 2>/dev/null) || pass "$@"
+IFS='|' read -r wid agent state wname <<< "$info"
 [ "$wid" = "$w" ] || pass "$@"                     # that window is gone
 [ "$agent" = codex ] || agent=claude
 [ "$agent" = "$name" ] || pass "$@"                # not this session's agent
