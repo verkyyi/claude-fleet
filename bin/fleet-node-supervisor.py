@@ -386,6 +386,9 @@ def update_verify_due(paths, t, since):
 
 
 def update_now_path(paths):
+    # the node program running as the seat (#3669) writes it where the seat may
+    if seat_agent_on(paths):
+        return os.path.join(paths.state, "node", "update-now")
     return os.path.join(paths.state, "update-now")
 
 
@@ -637,6 +640,10 @@ def default_table(paths):
              # …and, book or none, the account scripts still running under it
              # (#2927: the release's ccquota predated the book, nothing held)
              "hold_argv": ["fleet-login-new.sh", "fleet-login-remove.sh"],
+             # the seat runs it as itself once root switched it there (`install
+             # --seat --agent`, #3669): never a job of the core's, which only
+             # stops the root copy an older daemon left
+             "seat_agent": True,
              "note": "C5 #2333"},
         ],
         "tasks": [
@@ -1825,8 +1832,10 @@ class Supervisor(object):
             op, args, follow = "run-as", {"login": ent["account"], "job": job}, True
         elif ent.get("core"):
             op, args, follow = ent["core"]["op"], ent["core"]["args"], False
-        elif self.seated and ent.get("seat"):
-            return None     # the seat's own job (#3670): it runs as the seat, asking the core itself
+        elif self.seated and (ent.get("seat") or self.seat_runs(ent)):
+            # the seat's own job (#3670), or the node program once root switched it
+            # onto the seat (#3669): it runs as the seat, asking the core itself
+            return None
         elif self.seated:
             # a machine job by its name in the core's table (#3668): root's, so the
             # seated daemon only asks — start, and this child stands in for it
@@ -1847,6 +1856,11 @@ class Supervisor(object):
         if cc:
             return subprocess.Popen(cc, stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                     env=self.child_env(None), start_new_session=True, close_fds=True)
+        if self.seated and self.seat_runs(ent):
+            # the node program as the seat itself (#3669): what it does as a login
+            # it asks the core (--core: exec-as), its books are the seat's
+            return subprocess.Popen(seat_agent_cmd(ent["cmd"]), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                                    env=self.seat_agent_env(), start_new_session=True, close_fds=True)
         if self.seated and not (ent.get("seat") and not ent.get("account")):
             # nothing here may be done as the seat: no core, no road (#3668)
             raise OSError(errno.EPERM, "seated daemon: the root core does not answer — %s waits for it" % ent["name"])
@@ -1933,6 +1947,19 @@ class Supervisor(object):
             os.rename(path, path + ".not-a-file")
         raise OSError(errno.EIO, "log %s: not a regular file" % path)
 
+    def seat_runs(self, ent):
+        """A machine child the seat runs as itself (#3669): the node program, once
+        root switched it onto the seat (<state>/seat-agent) — else the core's job,
+        as since #3668."""
+        return bool(ent.get("seat_agent")) and seat_agent_on(self.p)
+
+    def seat_agent_env(self):
+        own = os.path.join(self.p.state, "node")
+        e = self.child_env(None)
+        e.update({"FLEET_NODE_ROOT": env("FLEET_NODE_ROOT", DEFAULT_ROOT), "FLEET_NODE_STATE": self.p.state,
+                  "CCQUOTA_MACHINE_UPDATE_NOW": os.path.join(own, "update-now")})
+        return e
+
     def child_env(self, extra):
         if self.seated:
             # the seat's children are only its asks of the core: its own directory
@@ -1956,6 +1983,16 @@ class Supervisor(object):
             cs = self.state["children"].get(c["name"]) or {}
             pid = cs.get("pid")
             if pid and pid_alive(pid) and cs.get("cmd") and pid_cmd(pid) == cs["cmd"]:
+                if self.seated and self.seat_runs(c) and SEAT_AGENT_FLAG not in cs["cmd"].split():
+                    # the root copy (#3669): the core's job, or the old daemon's — it
+                    # goes, and the seat starts its own below; never two at once
+                    # (the seat's stand-in `call machine start --follow`, or a stray):
+                    # the core stops the job by its name, the stand-in exits with it
+                    self.seat_stop(c["name"], int(pid))
+                    cs.update(pid=None, status="stopped")
+                    self.dirty = True
+                    self.log("child %s pid %s ran as root — stopped; the seat runs it now (#3669)" % (c["name"], pid))
+                    continue
                 self.adopted[c["name"]] = int(pid)
                 self.log("adopted child %s pid %s" % (c["name"], pid))
 
@@ -2015,7 +2052,7 @@ class Supervisor(object):
             if c.get("reload") and (name in self.procs or name in self.adopted) \
                     and cs.get("reload_sig") != reload_sig(c["reload"]):
                 cpid = self.procs[name].pid if name in self.procs else self.adopted.get(name)
-                held = self.seat_held(c) if self.seated else reload_held(c, cpid)
+                held = self.seat_held(c) if self.seated and not self.seat_runs(c) else reload_held(c, cpid)
                 since = cs.get("reload_held_since")
                 if held and (since is None or t - since < env_num("FLEET_NODE_RELOAD_HOLD", 960)):
                     if since is None:
@@ -3428,6 +3465,16 @@ def account_services(paths, login, uid, home):
 AGENT_ENV_KEYS = re.compile(r"^(CCQUOTA_[A-Z0-9_]+|FLEET_CONF_DIR)$")
 
 
+def seat_state_owner(path):
+    """(the seat's uid,) for machine.env / logins/*.env while the node program runs
+    as the seat (#3669) — the seat owns them then; () otherwise."""
+    p = Paths()
+    d = os.path.dirname(os.path.abspath(path))
+    if d not in (os.path.abspath(p.state), os.path.abspath(p.logins)) or not seat_agent_on(p):
+        return ()
+    return (seat_ident()[0],)
+
+
 def _env_file(path, uid, also=()):
     """KEY=VALUE lines of a node.env, PARSED (never sourced). Root reads a file in a
     login's home: never through a symlink, only one that login (or root) owns —
@@ -3438,6 +3485,7 @@ def _env_file(path, uid, also=()):
         return None
     with os.fdopen(fd) as f:
         st = os.fstat(f.fileno())
+        also = tuple(also) + seat_state_owner(path)
         if st.st_uid not in (uid, 0) + tuple(also) and (env("FLEET_NODE_TEST", "") != "1"
                                                          or env("FLEET_NODE_OWNER_CHECK", "") == "1"):
             return None
@@ -3663,7 +3711,9 @@ def write_login_env(paths, login, kv):
     """<state>/logins/<login>.env: root 0600, written whole by one rename."""
     if not os.path.isdir(paths.logins):
         os.makedirs(paths.logins)
-    os.chmod(paths.logins, 0o700)
+    if seat_ident() is None:
+        os.chmod(paths.logins, 0o700)
+    # else root:seat 0750 (seat_share): the seat lists the names (#3668)
     dst = login_env_path(paths, login)
     tmp = "%s.tmp-%d" % (dst, os.getpid())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -3679,6 +3729,9 @@ def write_login_env(paths, login, kv):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
+        if seat_agent_on(paths) and os.geteuid() == 0:
+            # the node program reads it as the seat (#3669)
+            os.chown(tmp, *seat_ident())
         os.replace(tmp, dst)
     except BaseException:
         try:
@@ -6111,9 +6164,83 @@ def seat_layout(paths, seat):
     _seat_dir(paths.log, 0, 0, 0o755)
     _seat_dir(os.path.join(paths.log, "node"), 0, gid, 0o770)
     seat_share(paths, seat)
+    seat_agent_own(paths, seat=seat)    # the token files: whoever runs the node program (#3669)
     sock = core.sock_path() if core is not None else ""
     if sock and os.path.exists(sock) and os.geteuid() == 0:
         os.chown(sock, 0, gid)
+
+
+# The node program on the seat (issue #3669, C14·b): `install --seat --agent` (root)
+# writes <state>/seat-agent (root 0644 — the seat cannot write it, so it cannot
+# switch itself onto the token files) and hands machine.env, logins/*.env (0600)
+# and the node program's books agent/ (0700) to the seat; the seated daemon then
+# runs `ccquota agent --machine --core <sock>` as itself, and every command it
+# starts as a login goes through the core's exec-as. `install --seat --no-agent`
+# is the way back (root's again, the core's job again). No marker ⇒ #3668's road,
+# byte for byte.
+SEAT_AGENT = "seat-agent"
+SEAT_AGENT_FLAG = "--core"
+
+
+def seat_agent_marker(paths):
+    return os.path.join(paths.state, SEAT_AGENT)
+
+
+def seat_agent_on(paths):
+    """True when root switched the node program onto the seat: its marker a
+    regular file root's, and the seat account there."""
+    try:
+        st = os.lstat(seat_agent_marker(paths))
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or (st.st_uid != 0 and env("FLEET_NODE_TEST", "") != "1"):
+        return False
+    return seat_ident() is not None
+
+
+def seat_agent_cmd(cmd):
+    """The node program's argv as the seat runs it: --core <the core's socket>."""
+    return list(cmd) + [SEAT_AGENT_FLAG, core.sock_path() if core is not None else "/var/run/fleet-node-core.sock"]
+
+
+def seat_agent_own(paths, on=None, seat=None):
+    """machine.env + logins/*.env (0600) and agent/ (0700, its tree) the seat's
+    while the node program runs as it, root's otherwise. Root only; idempotent;
+    never through a link."""
+    seat = seat or seat_ident()
+    on = seat_agent_on(paths) if on is None else on
+    if seat is None or (os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1"):
+        return
+    uid, gid = seat if on else (0, 0)
+    files = [os.path.join(paths.state, "machine.env")]
+    if os.path.isdir(paths.logins) and not os.path.islink(paths.logins):
+        files += [os.path.join(paths.logins, n) for n in sorted(os.listdir(paths.logins)) if n.endswith(".env")]
+    for f in files:
+        if os.path.isfile(f) and not os.path.islink(f):
+            _seat_put(f, uid, gid, 0o600)
+    top = os.path.join(paths.state, "agent")
+    if not os.path.isdir(top) or os.path.islink(top):
+        return
+    _seat_put(top, uid, gid, 0o700)
+    for root, dirs, names in os.walk(top):
+        for n in dirs + names:
+            f = os.path.join(root, n)
+            st = os.lstat(f)
+            if not stat.S_ISLNK(st.st_mode) and (st.st_uid, st.st_gid) != (uid, gid) and os.geteuid() == 0:
+                os.lchown(f, uid, gid)
+
+
+def seat_agent_switch(paths, on):
+    """Root's switch: the marker written / removed, the files handed over / back.
+    → True when it changed."""
+    m = seat_agent_marker(paths)
+    was = os.path.lexists(m)
+    if on and not was:
+        write_json(m, {"at": now(), "seat": seat_name(), "issue": 3669}, 0o644)
+    elif not on and was:
+        _unlink(m)
+    seat_agent_own(paths, on=on)
+    return was != on
 
 
 def seat_make():
@@ -6201,7 +6328,7 @@ def systemctl(*args):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def install(paths, make_seat=False):
+def install(paths, make_seat=False, agent=None):
     if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
         print("fleet-node-supervisor: install writes %s — run it as root (sudo)" % paths.plist, file=sys.stderr)
         return 1
@@ -6235,6 +6362,13 @@ def install(paths, make_seat=False):
         print("seat: %s %s (uid %d)" % (seat_name(), "made" if made else "found", seat_ident()[0]))
     if seated:
         seat_layout(paths, seat_ident())
+        # the node program onto the seat (--agent) or back to root (--no-agent),
+        # #3669; neither = as it was
+        if agent is not None and seat_agent_switch(paths, agent):
+            print("seat: the node program runs as %s" % (seat_name() if agent else "root (the core's job)"))
+    elif agent:
+        print("fleet-node-supervisor: --agent needs the seat (--seat)", file=sys.stderr)
+        return 1
     if not MAC:
         os.makedirs(paths.daemon_dir, exist_ok=True)
         tmp = paths.plist + ".tmp-node"
@@ -6907,7 +7041,8 @@ def main(argv):
         print(__doc__)
         return 0
     if cmd == "install":
-        return install_check(paths) if "--check" in rest else install(paths, make_seat="--seat" in rest)
+        agent = True if "--agent" in rest else False if "--no-agent" in rest else None
+        return install_check(paths) if "--check" in rest else install(paths, make_seat="--seat" in rest, agent=agent)
     if cmd == "uninstall":
         return uninstall(paths)
     if cmd == "service":

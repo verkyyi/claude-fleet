@@ -46,7 +46,11 @@
 #             makes _fleetnode / fleetnode, the core takes requests from it alone
 #             from that moment, the root daemon hands its children over and the
 #             seat adopts them — nothing restarts. An account already there
-#             keeps the daemon on it; none = root, byte for byte
+#             keeps the daemon on it; none = root, byte for byte.
+#             FLEET_NODE_SEAT_AGENT=1 (on a seated machine) runs the node program
+#             as the seat too (#3669: `install --seat --agent` — machine.env,
+#             logins/*.env and agent/ become the seat's, its tenant commands go
+#             through the core's exec-as); =0 puts it back on root
 #             — whose `spotlight` task turns Spotlight off at its start (#3402,
 #             docs/MANAGED-NODE.md §19)
 #   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
@@ -117,6 +121,9 @@ DEFAULT_ROOT='/Library/Application Support/claude-fleet'
 ROOT="${FLEET_NODE_ROOT:-$DEFAULT_ROOT}"
 CUR="$ROOT/current"
 ENVF="$STATE/machine.env"
+SEAT=_fleetnode; [ "$OS" = linux ] && SEAT=fleetnode
+# machine.env is the seat's while the node program runs as it (#3669)
+seat_env_own() { [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$ENVF" 2>/dev/null; return 0; }
 PUB="$STATE/release.pub"
 EXP="$STATE/expected.json"
 CURL="${FLEET_NODE_INSTALL_CURL:-curl}"
@@ -222,6 +229,7 @@ else
   { [ -r "$ENVF" ] && grep -Ev '^(CCQUOTA_HUB_URL|CCQUOTA_TOKEN)=' "$ENVF"
     printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_TOKEN=%s\n' "$HUB" "$TOKEN"; } > "$WORK/machine.env"
   put "$WORK/machine.env" "$ENVF" 600 || { rm -f "$WORK/machine.env"; fail 加入 "写不了 ${ENVF}（入口那边已登记 ${epid:-这台}，重跑需要新码）"; }
+  seat_env_own
   rm -f "$WORK/machine.env"
   joined=1
   ok 加入 "${epid:-?} · 可信与角色记在入口发的身份上（令牌在 ${ENVF}，root 600）"
@@ -459,10 +467,20 @@ case "${FLEET_NODE_CORE:-}" in
 esac
 
 # ---------------------------------------------------------------- 守护 ----------
-mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins" || fail 守护 "建不了 $STATE/logins"
+# a seated machine's logins/ is root:seat 0750 (the seat lists its names, #3668)
+if id -u "$SEAT" >/dev/null 2>&1; then mkdir -p "$STATE/logins"; else mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins"; fi \
+  || fail 守护 "建不了 $STATE/logins"
 SUP="$CUR/bin/fleet-node-supervisor.py"
-SEAT=_fleetnode; [ "$OS" = linux ] && SEAT=fleetnode
-if [ "${FLEET_NODE_SEAT:-}" = 1 ] && ! id -u "$SEAT" >/dev/null 2>&1; then
+# the node program onto the seat (=1) or back to root (=0), #3669
+agentflag=""
+case "${FLEET_NODE_SEAT_AGENT:-}" in
+  1) [ -f "$STATE/seat-agent" ] || agentflag=--agent ;;
+  0) [ -f "$STATE/seat-agent" ] && agentflag=--no-agent ;;
+esac
+if [ -n "$agentflag" ] && id -u "$SEAT" >/dev/null 2>&1; then
+  out="$("$PY" -I "$SUP" install --seat "$agentflag" 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
+  ok 守护 "$(printf '%s' "$out" | tail -n 1)"
+elif [ "${FLEET_NODE_SEAT:-}" = 1 ] && ! id -u "$SEAT" >/dev/null 2>&1; then
   # the daemon's own account (#3668): made and moved onto in ONE step — the core
   # takes requests from it alone the moment it exists
   out="$("$PY" -I "$SUP" install --seat 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
@@ -494,7 +512,7 @@ else
     if [ "$ewant" = on ]; then echo FLEET_ENTRY=1; [ -z "$eport" ] || echo "FLEET_ENTRY_PORT=$eport"
     elif [ "$ewant" = keep ]; then grep -E '^(FLEET_ENTRY|FLEET_ENTRY_PORT)=' "$ENVF"; fi; } > "$WORK/machine.env"
   echanged=""
-  cmp -s "$WORK/machine.env" "$ENVF" || { put "$WORK/machine.env" "$ENVF" 600 || fail 入口 "写不了 $ENVF"; echanged=1; }
+  cmp -s "$WORK/machine.env" "$ENVF" || { put "$WORK/machine.env" "$ENVF" 600 || fail 入口 "写不了 $ENVF"; seat_env_own; echanged=1; }
   rm -f "$WORK/machine.env"
   if [ "$ewant" = off ]; then
     if [ -n "$echanged" ]; then ok 入口 "关了（machine.env 去掉 FLEET_ENTRY；守护停掉入口 sshd）"
@@ -523,6 +541,7 @@ if [ "$OS" = linux ]; then
     else skip 开号 "没开"; fi
   else
     put "$WORK/machine.env" "$ENVF" 600 || fail 开号 "写不了 $ENVF"
+    seat_env_own
     rm -f "$WORK/machine.env"
     if [ "$awant" = 1 ]; then ok 开号 "开了（machine.env FLEET_NODE_ACCOUNT_OPS=1）"
     else ok 开号 "关了（machine.env 去掉 FLEET_NODE_ACCOUNT_OPS）"; fi

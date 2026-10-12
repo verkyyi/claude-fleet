@@ -41,6 +41,10 @@ func main() {
 		} else {
 			err = runAgent(os.Args[2:])
 		}
+	case "core-exec": // agent.CoreExecCmd
+		// The seated node program's tenant command, through the root core's
+		// exec-as (claude-fleet#3669): exits with the job's code.
+		os.Exit(runCoreExec(os.Args[2:]))
 	case "hub":
 		err = runHub(os.Args[2:])
 	case "enroll":

@@ -980,6 +980,14 @@ Do not install from memory: read the doc and work from it.
   it writes only `<state>/node` (state.json's link target), `<state>/locks`,
   `<log>/node` and the register's run/runs/alerts (`seat_layout` / `seat_share`).
   No seat ⇒ the root daemon, byte for byte. §22, BREAK-IT `fleetnode-compromised`.
+  **The node program can follow it** (issue #3669, C14·b): `FLEET_NODE_SEAT_AGENT=1
+  fleet node install` → `install --seat --agent` writes root's `<state>/seat-agent` and
+  hands machine.env / logins/*.env / agent/ to the seat, which runs `ccquota agent
+  --machine --core <sock>` itself (a `"seat_agent"` job: the core only stops its root copy);
+  `--core` turns every login command into `ccquota core-exec` — exec-as on the
+  caller's own stdio (SCM_RIGHTS, 3 fds, stopped when the caller goes). Off until the
+  agent's in-process home I/O moves (#3691); no marker / no `--core` ⇒ byte
+  for byte. BREAK-IT `node-program-seat`.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
   (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves

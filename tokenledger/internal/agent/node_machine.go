@@ -102,8 +102,12 @@ type MachineConfig struct {
 	// the opener's declarations (linux-tenants/).
 	AccountOpener string
 	AccountState  string
-	ServiceLogin  string
-	LinuxTenants  string
+	// Core is the root core's socket when the node program runs as the seat
+	// (`--core`, claude-fleet#3669): every tenant command goes through its
+	// exec-as (prepCoreCmd). "" = root, byte for byte as before.
+	Core         string
+	ServiceLogin string
+	LinuxTenants string
 	// UserPod is a machine that is one person's pod (claude-fleet#3550,
 	// FLEET_USER_POD=1): its hello lists CapUserPod. false = as before.
 	UserPod bool
@@ -536,6 +540,10 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 	}
 	machineStrict.Add(1)
 	defer machineStrict.Add(-1)
+	if mc.Core != "" {
+		setCoreSock(mc.Core)
+		defer setCoreSock("")
+	}
 	ml := newMachineLink(mc)
 	ml.acct = newMachineAccounts(mc)
 	for _, a := range agents {

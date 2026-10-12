@@ -840,7 +840,7 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   |---|---|---|
   | `run-as` | login, job | 以该登录身份起它的一个任务：账号任务表（运行时的 launchd 模板）里的名字，或 `svc:<name>`（登记表）——从不收 argv；同一连接先回 `{"ok", "pid"}`，结束时回 `{"exit": rc}`；每个 (login, job) 一份 |
   | `stop-as` | login, job | 停核心自己起的那个任务（进程组 TERM，5 秒后 KILL） |
-  | `exec-as` | login, argv | 以该登录身份跑一次，回 rc 与输出；argv[0] 必须是 `<current>/bin/` 下 root 的文件（runas.go prepCmd 的规矩搬进核心） |
+  | `exec-as` | login, argv | 以该登录身份跑一次，回 rc 与输出；argv[0] 必须是 `<current>/bin/` 下 root 的文件（runas.go prepCmd 的规矩搬进核心）。请求行随带调用方的 stdin / stdout / stderr（SCM_RIGHTS，恰好 3 个，#3669）时就在它们上跑：先回 `{ok, pid}`、结束回 `{exit}`，连接一断即停整个进程组 |
   | `kill` | pid | 只限受管登录的进程或核心自己的任务 |
   | `memguard` | level | `fleet-memguard.sh --once`（once · report） |
   | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`） |
@@ -937,3 +937,33 @@ BREAK-IT：`fleetnode-compromised`（`bin/fleet-break-it-core-selftest.sh`）；
 更新器降权（#3670）：BREAK-IT `root-core-seat-stage` · `root-core-update-step`；同一文件的 N（seat 跑一轮：
 staging → 核心复制、填工具缓存、签名、切换 → `update` 各步 → 下一轮提交）。入口地址是 root 从
 `machine.env` 抄出的 `<state>/hub-url`（0644，只有地址）——seat 读不了 machine.env。
+
+### 节点程序也以 `_fleetnode` 跑（#3669 · C14·b）
+
+- **开关**：`sudo FLEET_NODE_SEAT_AGENT=1 fleet node install`（已坐席的机器）跑
+  `install --seat --agent`：root 写 `<state>/seat-agent`（root 0644——坐席自己写不了它，也就没法
+  自己把令牌文件要过去），把 `machine.env`、`logins/*.env`（0600）与节点程序的账本 `agent/`
+  （0700，整棵）交给 `_fleetnode`。之后 root 再写它们（`fleet node install` 的 machine.env、
+  adopt 的 `<login>.env`）都随手交过去。`FLEET_NODE_SEAT_AGENT=0`（`--no-agent`）原路退回：
+  文件归 root、节点程序回到核心的 machine 任务。
+- **坐席守护自己起它**：表里 `node-agent` 标了 `"seat_agent": true`，开关在时守护以自己的身份起
+  `ccquota agent --machine … --core /var/run/fleet-node-core.sock`；接管时见到 root 那份
+  （核心的任务、或旧守护留下的）先经核心 `machine stop` 停掉再起自己的，不会两份同在。核心在开关开着时对
+  它只许 stop / held，从不以 root 起它（关着＝#3668 的路，核心的任务）。`update-now` 改写在 `<state>/node/` 下。
+- **登录身份的命令一律经核心**：`--core` 下 `prepCmd` 不再 setuid，把命令改写成
+  `ccquota core-exec --sock … --login <L> -- <argv>`——同一个二进制，带着自己的
+  stdin / stdout / stderr 请 `exec-as`，退出码即那条命令的（被信号杀为 128+N，核心拒绝为 126
+  并在 stderr 写一句为什么）。所以 fleet-control 的 rpc、relay deliver、sleepwatch 的逐行输出、
+  超时与退出码都照旧；调用方加在 `cmd.Env` 上的变量不过去（坐席不能给登录递环境），解释器
+  （`/bin/bash <脚本>`、`python3 -I <脚本>`）由核心按后缀补。argv[0] 不在 `<current>/bin/`
+  下的（`git remote get-url`、`/bin/sh -c`）被核心拒绝——仓库识别在坐席下读不到；本机 tailnet
+  名不是哪个登录的事，以坐席自己跑。
+- **不归它的**：开号 / 删号（Linux 的 `AccountOpener`）是 C15 #3557 `_fleetadmin` 的；入口钥匙
+  拉取是守护的 `entry` 一轮（经核心）——`--core` 下这两样关掉、各记一行。
+- **还缺的（#3669 之外）**：节点程序在进程内直接读写各登录家里的东西——转录扫描
+  （`~/.claude/projects`）、`~/.claude.json`、凭据、`~/.ccquota`、Codex 的 auth、relay 发件箱、
+  凭据租约写入——`_fleetnode` 读不到也写不了；这一片是 #3691，开关在它合上之前不在任何机器上打开。
+- **没有 `seat-agent` / 没有 `--core` ⇒ 今天的路，字节不变**（Go `TestPrepCmdNoCoreUnchanged`）。
+
+BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
+`internal/agent/runas_core_unix_test.go`。
