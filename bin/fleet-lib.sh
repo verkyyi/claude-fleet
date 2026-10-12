@@ -6638,11 +6638,13 @@ fleet_restore_wins() {
 # Every other row (FLEET, HUB, DESK, OWID, PIN, …) prints byte for byte; a map
 # with neither prints exactly itself.
 fleet_restore_map_prune() {
-  local mf="${1:-}" rl='' rd
+  local mf="${1:-}" rl='' rd t
   [ -f "$mf" ] || return 0
   if [ "${2:-}" = --retired ]; then
     rd=$(fleet_retired_dir)
-    [ -d "$rd" ] && rl=$(ls "$rd" 2>/dev/null | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+    for t in "$rd"/*; do
+      [ -f "$t" ] && fleet_is_fid "${t##*/}" && rl="$rl ${t##*/}"
+    done
   fi
   # Space-joined: BSD awk refuses a newline inside a -v value.
   awk -F'\t' -v rl="$(printf '%s' "$rl" | tr '\n' ' ')" -v live="$(printf '%s' "${3:-}" | tr '\n' ' ')" '
