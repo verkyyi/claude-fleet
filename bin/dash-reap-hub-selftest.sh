@@ -16,7 +16,7 @@
 #   D  a key live HERE never goes to the hub, hub on or not; FLEET_REAP_LOCAL=1
 #      (the node's own adapter) never bounces a reap back to the hub; a fleet conf
 #      line CCQUOTA_FLEET=1 turns the branch on with the login env silent (#1539).
-#   E  the sidebar's remote 回收 (fleet-sidebar-remote.sh reap) goes through
+#   E  the sidebar's remote 回收 (fleet-row-remote.sh reap) goes through
 #      fleet_hub_reap: one worker_reap write, no error.
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
@@ -147,7 +147,7 @@ printf '#ts\037%s\nwid:%s/issue-9\037mac-a\037\037\037\037\037\037issue-9\037\03
 date +%s > "$G/hub_ok"
 n=$(nwrites)
 TMPDIR="$SBT" TMUX="$SP,0,0" FLEET_HUB_WRITE_CMD="$STUB" CCQUOTA_FLEET=1 \
-  bash "$BIN/fleet-sidebar-remote.sh" reap "$L" "wid:$MAC_A/issue-9" >/dev/null 2>"$WORK/err"; RC=$?
+  bash "$BIN/fleet-row-remote.sh" reap "$L" "wid:$MAC_A/issue-9" >/dev/null 2>"$WORK/err"; RC=$?
 ok; [ "$RC" = 0 ] && [ "$(nwrites)" = $((n + 1)) ] && [ "$(tail -1 "$WRITES" | cut -f1)" = worker_reap ] \
   || fail "E: the sidebar's 回收 is one worker_reap write" "rc=$RC $(cat "$WORK/err")"
 

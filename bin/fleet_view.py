@@ -149,7 +149,7 @@ shows the copy it has.
 
 A ROW ON ANOTHER MACHINE (issue #3182, EPIC #3178 C4): 回答 · 发一句话 · 改名 ·
 改回收方式 · 停 · 回收 · 恢复 are each `far` — the hub write the old sidebar made for
-that row, through the same fleet-sidebar-remote.sh (FLEET_REMOTE_SAY=print: its
+that row, through the same fleet-row-remote.sh (FLEET_REMOTE_SAY=print: its
 outcome line, the hub's refusal verbatim, comes back as the bottom line). Run off
 the screen's thread, then one hub cache --refresh, so a reaped row leaves within
 the next read. A lost row (`!`) sends nothing: 「<机器> 失联，做不了 · 正在重连」.
@@ -504,7 +504,7 @@ def atomic_write(path, text):
 
 
 def produce(fleet, kept=False):
-    """tmux-dashboard-rows.sh --sidebar, every subtree open: the rows the old list
+    """tmux-dashboard-rows.sh --rows, every subtree open: the rows the old list
     drew, the same producer (it reads remote_<sess>, so other machines come too).
     entries() runs hub_fresh before it, unless told not to (#3311).
     Every read is kept (view-rows-<fleet>); kept=True — the popup's first frame —
@@ -526,7 +526,7 @@ def produce(fleet, kept=False):
             pass
     env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
-    argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--sidebar"]
+    argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--rows"]
     try:
         # a cell cut mid-character (bash slices bytes with no UTF-8 locale) is one
         # row's blemish, never the whole list's loss (issue #3444)
@@ -2035,7 +2035,7 @@ def facts(fleet, e):
     t = e.get("target") or ""
     if e.get("far"):
         # another machine's: what it asks is all the panel needs to know (a
-        # permission prompt is y / n; fleet-sidebar-remote.sh reads the rest)
+        # permission prompt is y / n; fleet-row-remote.sh reads the rest)
         return {"needs": ("perm" if e.get("detail") == "perm" else "ask") if e.get("state") == "needs" else "",
                 "pin": e.get("group") == "pin"}
     if not t.startswith("@"):
@@ -2112,9 +2112,9 @@ def reappol_local(r, ans, fleet):
 
 def far(action):
     """Another machine's row: the hub write the old sidebar made for it
-    (fleet-sidebar-remote.sh <action> <fleet> wid:<worker_id>); the answer rides
+    (fleet-row-remote.sh <action> <fleet> wid:<worker_id>); the answer rides
     FLEET_SIDEBAR_TEXT (act_run)."""
-    return lambda r, a, f: sh("fleet-sidebar-remote.sh", action, f, "wid:" + r["target"])
+    return lambda r, a, f: sh("fleet-row-remote.sh", action, f, "wid:" + r["target"])
 
 
 def far_live(r):
@@ -2148,7 +2148,7 @@ ACTIONS = [
     {"id": "pin", "label": lambda r: say("view_act_unpin" if r.get("pin") else "view_act_pin"),
      "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: sh("dash-pin-toggle.sh", r["target"]),
-     "far": lambda r, a, f: sh("fleet-sidebar-remote.sh", "pin", f, "wid:" + r["target"]), "ask": None},
+     "far": lambda r, a, f: sh("fleet-row-remote.sh", "pin", f, "wid:" + r["target"]), "ask": None},
     {"id": "reappol", "label": lambda r: say("view_act_reappol"), "when": lambda r: not r.get("gone"),
      "local": reappol_local, "far": far("reappol"), "ask": "choice", "choices": reap_choices,
      "then": {"at": ("text", lambda r: say("view_ask_at"))}},
@@ -2318,7 +2318,7 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         return rc, say("view_act_done_fmt", label) if rc == 0 else say("view_act_failed_fmt", label, ""), went
     env = act_env(fleet)
     if r.get("far"):
-        # a hub write (fleet-sidebar-remote.sh): nothing goes out for a lost row
+        # a hub write (fleet-row-remote.sh): nothing goes out for a lost row
         if r.get("lost"):
             return 1, say("view_lost_act_fmt", r.get("machine") or "?"), False
         env.update(FLEET_SIDEBAR_TEXT=ans, FLEET_REMOTE_SAY="print")

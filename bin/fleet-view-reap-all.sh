@@ -5,7 +5,7 @@
 #   a session here      dash-reap.sh <target> --yes — its own gate: a dirty
 #                       worktree is KEPT (only the window closes), a live / young
 #                       agent or a reap hold is skipped (skip:live)
-#   wid:<worker_id>     another machine's — fleet-sidebar-remote.sh reap, the hub's
+#   wid:<worker_id>     another machine's — fleet-row-remote.sh reap, the hub's
 #                       worker_reap, which is the same dash-reap.sh --yes there
 # Prints ONE line for the person: how many were reaped, how many worktrees were
 # kept for their uncommitted changes, how many were left (and why, the first one).
@@ -21,7 +21,7 @@ full=0 kept=0 left=0 bad=0 why=''
 for tg in "$@"; do
   case "$tg" in
     wid:*)
-      out=$(FLEET_REMOTE_SAY=print bash "$BIN/fleet-sidebar-remote.sh" reap "$FLEET" "$tg" 2>&1); rc=$?
+      out=$(FLEET_REMOTE_SAY=print bash "$BIN/fleet-row-remote.sh" reap "$FLEET" "$tg" 2>&1); rc=$?
       if [ "$rc" = 0 ]; then full=$((full + 1)); else bad=$((bad + 1)); [ -n "$why" ] || why=$(printf '%s\n' "$out" | tail -1); fi
       continue ;;
   esac

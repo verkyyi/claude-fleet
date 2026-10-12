@@ -14,7 +14,7 @@
 #
 # The arrival HOOKS are gone (issue #1714: a node binds none of a person's keys
 # and runs none of their hooks), so this pins the reader — summary, dedup,
-# trimming, the `record` verb hub-zoom.sh still calls — on hand-made logs, and
+# trimming, the `record` verb (hub-zoom.sh, its last caller, left with #3732) — on hand-made logs, and
 # that the node conf drops the [73] hooks from a live server.
 #
 # tmux absent → SKIP (exit 0).
@@ -50,7 +50,7 @@ mkdir -p "$FLEET_CONF_DIR/fleets/t"
 # a bar-less window tries the picker popup first, and since issue #1611 that
 # parent pre-reads the row producer BEFORE the popup opens — whose @wid backfill
 # hands every window a handle, and leg 3's "from the window id, no @wid" would
-# read a handle instead. The branch itself is hub-zoom-home-selftest.sh's and
+# read a handle instead. The branch itself was hub-zoom-home-selftest.sh's and
 # task-pick-selftest.sh's to cover.
 printf 'FLEET_DASH_WINDOW=1\nFLEET_HOME_SIDEBAR_FIRST=0\n' > "$FLEET_CONF_DIR/fleets/t/conf"
 LOG="$WORK/logs/hub-visits-t.log"
@@ -86,7 +86,7 @@ last_from()  { tail -n 1 "$LOG" | cut -f2; }
 # The [73] hooks that wrote one line per hub arrival left the node with the
 # person's keys (EPIC #1710 C4): a client looks through a view session and the
 # full-screen hub is FLEET_DASH_WINDOW=1's alone. What stays is the reader and
-# the `record` verb hub-zoom.sh still calls — the legs below.
+# the `record` verb (hub-zoom.sh, its last caller, left with #3732) — the legs below.
 grep -Eq '^set-hook -g [a-z-]+\[73\] ' "$CONF" && fail "static: the node conf still sets a [73] hook"
 grep -Eq '^set-hook -gu session-window-changed\[73\]$' "$CONF" \
   || fail "static: the node conf must drop a live server's session-window-changed[73] hook"

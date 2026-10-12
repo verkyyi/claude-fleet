@@ -151,7 +151,7 @@ FLEET_PUBLISH_AUDIENCE             knob: the OIDC audience fleet-release-publish
 FLEET_PUBLISH_TOKEN                env handoff: the hub's publish-only fallback bearer for fleet-release-publish.sh outside Actions (a secret; never a file or argv — #2772)
 FLEET_REMOTE_GONE_SECS             knob: how long a proxy pane waits for a session not live on its machine (restart) before saying it is gone (fleet-remote-view.sh, #2484)
 FLEET_REMOTE_GONE_STEP             knob: seconds between those asks (fleet-remote-view.sh, #2484)
-FLEET_REMOTE_SAY                   handoff: `print` = fleet-sidebar-remote.sh says its outcome on stdout + a real exit, for the 看台's Tab menu (fleet_view.py far, #3182)
+FLEET_REMOTE_SAY                   handoff: `print` = fleet-row-remote.sh says its outcome on stdout + a real exit, for the 看台's Tab menu (fleet_view.py far, #3182)
 FLEET_SESSIONS_STATE_CMD           seam: prints OPEN/CLOSED for <repo> <issue> instead of fleet-gh.sh (fleet-sessions-snapshot.sh restore, #2484)
 FLEET_SESSION_CLI_ROAD             seam: client | here | home — the road `fleet ls / open …` takes, instead of looking (fleet-session-cli.py, #3004)
 FLEET_SPOTLIGHT_HOT_PCT            knob: fleet-spotlight.sh status — the CPU % a Spotlight / fsevents process counts as hot (50, #3402)
@@ -367,8 +367,6 @@ FLEET_HISTORY_LEDGER               path: state/log location override (fleet-hist
 FLEET_HOST                         doc: the machine's 承载 switch in fleet.conf [common], written by `fleet host on|off` (fleet-host.sh) — read as the orchestrator's default (#1957)
 FLEET_HOST_TUNE_MAXFILES_PLIST     seam: the maxfiles LaunchDaemon plist path (fleet-host-tune.sh)
 FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
-FLEET_HOME_TRACE                   knob: 0 switches the ⌂ latency trace off (fleet-trace-lib.sh, #1611)
-FLEET_HOME_MS                      handoff: the ⌂ latency trace's marks, hub-zoom.sh → the picker inside the popup (fleet-trace-lib.sh, #1611)
 FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
 FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
 FLEET_INSTALL_BIN                  path: where `curl <hub>/install | sh` (fleet-install.sh) puts the fleet client — ~/.local/bin by default; the installer runs before any fleet.conf exists (#1470)
@@ -525,7 +523,7 @@ FLEET_SESSION                      handoff: the fleet session a pane/popup belon
 FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
 FLEET_SIDEBAR_CURRENT_ROW          handoff: the row key that window stands for (a proxy's wid:…, #1697)
-FLEET_SIDEBAR_TEXT                 handoff: the text the sidebar input line asked for, to fleet-sidebar-remote.sh (#1620)
+FLEET_SIDEBAR_TEXT                 handoff: the text the sidebar input line asked for, to fleet-row-remote.sh (#1620)
 FLEET_SIDEBAR_NODE                 seam: 1 lets fleet-sidebar.sh draw the list in a node fleet session — the drawer's selftests drive it on a fleet socket; the list is the client's only (#1713)
 FLEET_SKIP_GLOBAL_CONF             seam: fleet-lib skips the install fleet.conf (tests / isolated tools)
 FLEET_SMOKE_ONBOARD_SECS           knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)

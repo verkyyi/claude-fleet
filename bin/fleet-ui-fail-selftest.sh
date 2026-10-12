@@ -50,7 +50,7 @@ trap 'exit 130' INT TERM HUP
 width() { python3 -c 'import sys,unicodedata as u; s=sys.argv[1]; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in s))' "$1"; }
 if command -v python3 >/dev/null 2>&1; then
   for lang in zh en; do
-    for pair in 'sidebar_narrow_why sidebar_narrow_next' 'sidebar_save_failed sidebar_save_next' \
+    for pair in 'sidebar_save_failed sidebar_save_next' \
                 'ui_already_open_fmt:1618 ui_already_open_next'; do
       set -- $pair; k1=${1%%:*}; a1=''; case "$1" in *:*) a1=${1#*:} ;; esac
       line=$(FLEET_UI_LANG=$lang sh "$LANGSH" t ui_fail_next_fmt \
@@ -63,7 +63,7 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 # --- D. lint ---------------------------------------------------------------------
-SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh dash-issue-new.sh dash-new-session.sh fleet-sidebar.sh hub-zoom.sh"
+SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh dash-issue-new.sh dash-new-session.sh fleet-sidebar.sh"
 hits=''
 for f in $SCRIPTS; do
   h=$(grep -nE 'display-message[^|]*(✓|spawned|reaped|closed scratch|filed|checking #|spawning #)' "$BIN/$f" \
@@ -79,11 +79,7 @@ done
 raw=$(grep -nE 'toast_(sidebar_focus|sidebar_home|shell_sidebar)' "$BIN"/*.sh "$ROOT"/conf/*.conf \
         | grep -v -- '-selftest\.sh:' | grep -v '/fleet-ui-lang\.sh:' \
         | grep -Ev 'fleet_ui_hint_once|fleet-ui-lang\.sh"? hint ' | grep -Ev ':[0-9]+:[[:space:]]*#')
-# fleet-sidebar.sh's display line sits right under its gate: allow exactly that shape
-raw=$(printf '%s\n' "$raw" | grep -v 'fleet-sidebar\.sh:.*tmux display-message .*fleet_ui_t toast_sidebar_focus' | grep . || :)
 [ -z "$raw" ] || fail "D a sidebar how-to toast bypasses the once-a-day gate" "$raw"
-grep -B1 'fleet_ui_t toast_sidebar_focus' "$BIN/fleet-sidebar.sh" | grep -q 'fleet_ui_hint_once toast_sidebar_focus' \
-  || fail "D fleet-sidebar.sh's focus help must sit behind fleet_ui_hint_once"
 [ "$fails" = 0 ] && ok "D no success toast in the spawn / reap / file / sidebar scripts; how-to help is once a day"
 
 # --- A / B on a live isolated server -------------------------------------------------

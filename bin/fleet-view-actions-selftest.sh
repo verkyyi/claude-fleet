@@ -24,7 +24,7 @@
 #      and Esc again closes with NOTHING run; Tab → 回收 → n does nothing, → y
 #      runs dash-reap.sh once; 改名 asks on the bottom line, Esc cancels it
 #   E  another machine's row (issue #3182, EPIC #3178 C4): each `far` action runs
-#      fleet-sidebar-remote.sh ONCE with (action, fleet, wid:<worker_id>) and makes
+#      fleet-row-remote.sh ONCE with (action, fleet, wid:<worker_id>) and makes
 #      ONE hub write (FLEET_HUB_WRITE_CMD) naming that worker_id and the answer;
 #      the outcome names the machine; the hub's refusal comes back verbatim with a
 #      non-zero exit; a lost row (`!`) runs nothing and says 失联，做不了; every
@@ -57,7 +57,7 @@ LOG="$W/calls.log"; : > "$LOG"
 # --- the stubs: one line per call, `name|arg|arg|…` ----------------------------------
 for s in dash-open-pr.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
          fleet-reap-policy.sh fleet-worker-stop.sh fleet-sleep.sh fleet-manual-sub.sh dash-migrate.sh \
-         fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-sidebar-remote.sh; do
+         fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-row-remote.sh; do
   cat > "$W/stub/$s" <<EOF
 #!/bin/bash
 { printf '%s' "$s"; for a in "\$@"; do printf '|%s' "\$a"; done; printf '\n'; } >> "$LOG"
@@ -65,7 +65,7 @@ case "$s:\$*" in
   dash-open-pr.sh:*--probe*) printf '#41\n' ;;
   fleet-manual-sub.sh:list*) printf 'account\t5h\t7d\tstate\nacct1\t20%%\t40%%\t可迁入\nacct2\t5%%\t9%%\t可迁入\n' ;;
   dash-rename.sh:*) exec bash "$BIN/dash-rename.sh" "\$@" ;;
-  fleet-sidebar-remote.sh:*) exec bash "$BIN/fleet-sidebar-remote.sh" "\$@" ;;
+  fleet-row-remote.sh:*) exec bash "$BIN/fleet-row-remote.sh" "\$@" ;;
   dash-reap.sh:*) printf 'reaped:clean\n' ;;
 esac
 exit 0
@@ -260,7 +260,7 @@ if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
 fi
 pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 📌 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
-# the sidebar's own cache (fleet-sidebar-remote.sh reads $FLEET_C/global, FLEET_C
+# the sidebar's own cache (fleet-row-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
 export TMPDIR="$W/t"; G="$TMPDIR/.claude-dash/global"; mkdir -p "$G"
 export FLEET_STATUS_G="$G" CCQUOTA_FLEET=1
@@ -287,7 +287,7 @@ far() {   # <id> <action> <tool> <json fragment> [view-act args…]
   local id=$1 act=$2 tool=$3 frag=$4; shift 4
   reset; : > "$WRITES"; : > "$HS"
   out=$(qo view-act --view fl@view-v1 "$MU/$id" "$act" "$@" 2>"$W/err") || fail "E: $act failed: $out $(cat "$W/err")"
-  [ "$(calls)" = "fleet-sidebar-remote.sh|$act|fl|wid:$MU/$id" ] || fail "E: $act ran «$(calls)»"
+  [ "$(calls)" = "fleet-row-remote.sh|$act|fl|wid:$MU/$id" ] || fail "E: $act ran «$(calls)»"
   [ "$(grep -c . "$WRITES")" = 1 ] && [ "$(cut -f1 "$WRITES")" = "$tool" ] || fail "E: $act wrote «$(cat "$WRITES")»"
   body=$(cut -f2 "$WRITES")
   case "$body" in *"\"worker_id\":\"$MU/$id\""*) ;; *) fail "E: $act's write names no worker_id: $body" ;; esac
@@ -346,6 +346,6 @@ for _ in $(seq 1 6); do to send-keys -t o Down; done
 waitfor '▶ 停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
 to send-keys -t o Enter
 waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
-[ "$(calls)" = "fleet-sidebar-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
-pass "E  another machine's row: each far action one sidebar-remote call + one hub write (worker_id, answer, pin on/off), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
+[ "$(calls)" = "fleet-row-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
+pass "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
 echo "PASS fleet-view-actions-selftest"

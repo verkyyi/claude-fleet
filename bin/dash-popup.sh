@@ -130,9 +130,6 @@ cmd=$(printf '%q ' "$@")
 # inherits THIS pane's id — the dash pane the popup was opened from, which is the
 # identity its command is acting as.
 [ -n "${TMUX_PANE:-}" ] && cmd="TMUX_PANE=$(printf '%q' "$TMUX_PANE") $cmd"
-# The ⌂ latency trace (issue #1611) crosses the same way — the popup's command
-# starts from the SERVER's environment, not ours. No trace ⇒ nothing added.
-. "$BIN/fleet-trace-lib.sh"
 
 # This pane's session. `display-message -p` PRINTS (it does not need a client of
 # its own), so this resolves even when nothing is attached — which is the case we
@@ -200,11 +197,9 @@ if [ -n "$client" ]; then
   # proves the popup opened and started running. the popup blocks until the
   # popup closes, so the check below is not racing it. (Kept as its own tmux call:
   # dash-popup-selftest.sh's shims dispatch on the subcommand.)
-  fleet_home_mark popup
   # shellcheck disable=SC2034  # read by fleet_popup_thaw (the trap)
   FPOP_FROZEN=''
   [ -z "$FREEZE" ] || fleet_popup_freeze "$client"
-  [ -z "${FLEET_HOME_MS:-}" ] || cmd="FLEET_HOME_MS=$(printf '%q' "$FLEET_HOME_MS") $cmd"
   fleet_popup_draw "$client" "$cw" "$title" "$(printf 'printf 1 > %q; ' "$marker")$cmd" "$W" "$H"
   # Ran ⇒ done. NB we test the MARKER, never tmux's exit status: a refused popup
   # exits 0 too, and trusting that is exactly the bug (issue #454).

@@ -676,7 +676,7 @@ case "$1" in
   @7) echo 'agent still working' >&2; echo skip:live; exit 3 ;;
 esac
 EOF
-cat > "$W/kreap/fleet-sidebar-remote.sh" <<'EOF'
+cat > "$W/kreap/fleet-row-remote.sh" <<'EOF'
 printf 'remote|%s\n' "$*" >> "$KLOG2"
 echo '✓ reaped'
 EOF

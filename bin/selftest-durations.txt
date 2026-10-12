@@ -406,7 +406,6 @@
 3.3 hub-sessions-cert-scope-selftest.sh
 15.6 hub-sessions-loop-selftest.sh
 0.1 hub-visits-selftest.sh
-6.1 hub-zoom-home-selftest.sh
 5.9 install-apply-selftest.sh
 30.6 install-follow-selftest.sh
 27.6 install-sync-selftest.sh
@@ -475,8 +474,6 @@
 1.1 statusline-selftest.sh
 16.3 sync-logins-selftest.sh
 0.4 task-line-selftest.sh
-15.1 task-pick-latency-selftest.sh
-1.6 task-pick-selftest.sh
 0.1 tmux-conf-reload-selftest.sh
 50.4 tmux-config-selftest.sh
 0.0 tmux-guard-selftest.sh

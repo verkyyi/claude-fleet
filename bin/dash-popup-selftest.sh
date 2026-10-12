@@ -276,7 +276,7 @@ untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 
   | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -Ev 'Path\(.*"dash-popup\.sh"\)' | grep -v -- '--title')
 [ -z "$untitled" ] || fail "one frame: a popup without --title:
 $untitled"
-for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar.py fleet-task-pick.sh; do
+for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar.py; do
   grep -q 'dash-popup' "$BIN/$f" || fail "one door: $f opens no popup through dash-popup.sh"
 done
 echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh, titled"
@@ -308,7 +308,7 @@ kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT
   || fail "kept popups: want dispatch keys quickopen repo_add rescan route tasks (7), got: $kept_hub (all, the hub too: $kept)"
 # the one-field popups that moved onto the sidebar's line open no popup at all
 for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
-         dash-migrate.sh open-url.sh dash-repo-add.sh fleet-sidebar-remote.sh; do
+         dash-migrate.sh open-url.sh dash-repo-add.sh fleet-row-remote.sh; do
   grep -Ev '^[[:space:]]*#' "$BIN/$f" | grep -q 'dash-popup\.sh\|fleet_popup ' \
     && fail "kept popups: $f still opens a popup"
 done
