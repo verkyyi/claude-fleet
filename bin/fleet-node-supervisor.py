@@ -1695,6 +1695,11 @@ def task_summary(paths, svc, ts):
 
 # --------------------------------------------------------------- the daemon -----
 class Supervisor(object):
+    # the old road unless __init__ finds the seat (#3668) — also for a reader
+    # that builds one without it (the Linux node's selftest)
+    seated = False
+    logroot = None
+
     def __init__(self, paths, table):
         self.p = paths
         self.table = table
@@ -1886,7 +1891,8 @@ class Supervisor(object):
         return bool(label) and os.path.exists(os.path.join(self.p.daemon_dir, label + ".plist"))
 
     def logfile(self, name, sub=""):
-        d = os.path.join(self.logroot, sub) if sub else self.logroot
+        root = self.logroot or self.p.log
+        d = os.path.join(root, sub) if sub else root
         path = os.path.join(d, name + ".log")
         try:
             if os.path.getsize(path) > 1 << 20:
