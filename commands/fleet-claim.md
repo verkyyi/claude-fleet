@@ -58,15 +58,18 @@ Act on the exit code it returns — these are the rails, one code each, each pri
   pane or a stray shell. Refuse in one line and stop.
 - **4 `FAIL`** — no issue bound (no `@issue`, and cwd isn't an `issue-<N>`
   worktree). Say so in one line and stop. Never guess a number.
-- **5** — the fleet + charter half printed, but the `gh` read failed (gh missing /
-  auth / no such issue). Fix or report that; never implement off a half-read issue.
+- **5** — the fleet + charter half printed, but the issue read failed (gh missing /
+  auth / no such issue, or the hub not reachable for a hub ticket). Fix or report that; never implement off a half-read issue.
 
 Two lines in the brief want something from you:
 
-- **`claim:`** — the assignee IS the claim (issue #283), and the spawn already
-  pre-claimed the issue for you, so this normally reads `HELD` ⇒ **do nothing,
-  never re-assign**. On the rare `UNCLAIMED`, run the exact
-  `gh issue edit … --add-assignee @me` the brief prints.
+- **`claim:`** — the claim goes through the ticket door, `fleet-ticket.sh claim`
+  (issue #3598): a repo whose tickets live on the hub takes the hub's atomic claim
+  (a second session gets exit 3), a GitHub repo's claim is still the assignee
+  (issue #283). The spawn already pre-claimed the issue for you, so this normally
+  reads `HELD` ⇒ **do nothing, never re-claim**. On the rare `UNCLAIMED`, run the
+  exact command the brief prints (`fleet-ticket.sh claim …` for a hub ticket,
+  `gh issue edit … --add-assignee @me` for a GitHub one).
 - **the charter layers** — the built-in contract (step 2 below) is the base; the
   gated repo charter (`$FLEET_MAIN/.fleet/worker.md`, printed only when the fleet
   sets `FLEET_REPO_CHARTER=1` — it's an injection surface, so it's fail-closed)

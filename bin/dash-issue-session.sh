@@ -394,6 +394,12 @@ MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit "$RC_INFRA"; }
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
+# A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3598, EPIC #3570
+# C5): every read, claim and release below goes through the ticket door and never
+# runs gh; an open-PR probe runs only where the repo has GitHub (FLEET_FORGE). Any
+# other repo: TK_HUB=0 and each step is the gh call it always was, byte for byte.
+TK_HUB=0; [ -n "$REPO" ] && fleet_ticket_hub "$REPO" "$SESS" && TK_HUB=1
+TK_ID="hub:$(fleet_norm_repo "$REPO")#$num"
 
 # --- Which agent (issue #2562) ------------------------------------------------
 # No --agent: the issue's `agent:codex` / `agent:claude` label picks one; no label
@@ -415,15 +421,22 @@ for l in d.get("labels") or []:
     print(l.get("name","") if isinstance(l,dict) else l)'
 if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
   if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
-  elif [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
-       && command -v gh >/dev/null 2>&1; then
+  elif [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
+       && { [ "$TK_HUB" = 1 ] || { [ "${CCQUOTA_FLEET:-0}" != 1 ] && command -v gh >/dev/null 2>&1; }; }; then
     GATE_AT=$(date +%s)
-    GATE_CS=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
-          --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || GATE_CS=''
+    if [ "$TK_HUB" = 1 ]; then
+      GATE_CS=$(fleet_ticket_view "$REPO" "$num" assignees,state,number,title,url,body,labels,comments \
+            '"\(.assignees|length)\t\(.state)", tojson') || GATE_CS=''
+    else
+      GATE_CS=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
+            --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || GATE_CS=''
+    fi
     case "$GATE_CS" in
       *$'\n'*) _lbl=$(printf '%s\n' "${GATE_CS#*$'\n'}" | python3 -c "$_lbl_names" 2>/dev/null) ;;
       *) GATE_CS=''; _lbl='' ;;
     esac
+  elif [ "$TK_HUB" = 1 ]; then
+    _lbl=$(fleet_ticket_view "$REPO" "$num" labels | python3 -c "$_lbl_names" 2>/dev/null)
   else
     _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
            | python3 -c "$_lbl_names" 2>/dev/null)
@@ -466,7 +479,10 @@ _spawn_back() {  # EXIT: a non-zero exit gives back what this spawn took
   local rc=$?
   if [ "$rc" != 0 ]; then
     [ "$LEASE_HELD" = 1 ] && fleet_hub_lease release "$SESS" "$REPO" "$num" >/dev/null 2>&1
-    if [ "$CLAIMED_HERE" = 1 ] && [ -n "$REPO" ] \
+    if [ "$CLAIMED_HERE" = 1 ] && [ "$TK_HUB" = 1 ]; then
+      bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1 \
+        && printf 'dash-issue-session: #%s 的认领已撤回 — 再派不用 --force\n' "$num" >&2
+    elif [ "$CLAIMED_HERE" = 1 ] && [ -n "$REPO" ] \
        && gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
       printf 'dash-issue-session: #%s 的 GitHub 认领已撤回 — 再派不用 --force\n' "$num" >&2
     fi
@@ -560,7 +576,14 @@ if [ "$PLACING" = 1 ]; then
     # refused start's claim be withdrawn: an assignee that predates us is not
     # ours to take. Sync only — an --async ask hears no refusal to act on.
     _pre_asg=''
-    if [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
+    if [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$TK_HUB" = 1 ]; then
+      _pre_asg=$(fleet_ticket_view "$REPO" "$num" assignees '.assignees|length')
+      if [ "${_pre_asg:-0}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && _stale_claim \
+         && bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1; then
+        printf 'dash-issue-session: #%s 的认领是上次派活留下的死认领（没开成、哪台都没有会话）— 已收回，不用 --force\n' "$num" >&2
+        _pre_asg=0
+      fi
+    elif [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
       _pre_asg=$(gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
       # A claim an earlier send left with no session behind it (issue #1610).
       if [ "${_pre_asg:-0}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && _stale_claim \
@@ -678,7 +701,7 @@ if ! { [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; 
 fi
 issue_json=''; issue_fetched_at=0
 if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
-   && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
+   && [ -n "$REPO" ] && { [ "$TK_HUB" = 1 ] || command -v gh >/dev/null 2>&1; }; then
   # One issue read (assignee count · state) + one cheap open-PR probe. THE ASSIGNEE
   # IS THE CLAIM (issue #283): we no longer read or write a "▶ claiming" comment — its
   # substring match false-fired on any comment that merely MENTIONED the marker string
@@ -694,11 +717,17 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   # The open-PR probe runs beside the issue read (issue #2237): two reads, one wait.
   _prf=$(mktemp "${TMPDIR:-/tmp}/dis-pr.XXXXXX") || _prf=''
   _prp=''
+  # A repo with no GitHub has no PR to look for (FLEET_FORGE=none, issue #3598).
+  _nopr=0; [ "$(fleet_repo_forge "$REPO" "$SESS")" = none ] && _nopr=1
+  if [ "$_nopr" = 1 ]; then rm -f "$_prf"; _prf=''; fi
   if [ -n "$_prf" ]; then
     gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' </dev/null >"$_prf" 2>/dev/null &
     _prp=$!
   fi
   if [ -n "$GATE_CS" ]; then cs=$GATE_CS
+  elif [ "$TK_HUB" = 1 ]; then
+    cs=$(fleet_ticket_view "$REPO" "$num" assignees,state,number,title,url,body,labels,comments \
+          '"\(.assignees|length)\t\(.state)", tojson') || cs=''
   else
     cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
           --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
@@ -709,12 +738,19 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
   n_assignee="${n_assignee//[^0-9]/}"
   if [ -n "$_prp" ]; then wait "$_prp" 2>/dev/null; n_open_pr=$(cat "$_prf" 2>/dev/null)
+  elif [ "$_nopr" = 1 ]; then n_open_pr=0
   else n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null); fi
   [ -n "$_prf" ] && rm -f "$_prf"
-  unset _prf _prp
+  unset _prf _prp _nopr
   n_open_pr="${n_open_pr//[^0-9]/}"
   why=''
-  if [ "${n_assignee:-0}" -gt 0 ]; then why='assigned'
+  if [ "$TK_HUB" = 1 ]; then
+    # The hub's claim is atomic (C1): no assignee test here — the claim below
+    # answers it, and our own earlier claim is ours again, not a conflict.
+    if [ -n "$st" ] && [ "$st" != OPEN ]; then why="state $st"
+    elif [ "${n_open_pr:-0}" -gt 0 ]; then why="open PR on $slug"
+    fi
+  elif [ "${n_assignee:-0}" -gt 0 ]; then why='assigned'
   elif [ -n "$st" ] && [ "$st" != OPEN ]; then why="state $st"
   elif [ "${n_open_pr:-0}" -gt 0 ]; then why="open PR on $slug"
   fi
@@ -729,7 +765,16 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   fi
   # Free → claim NOW by assigning @me so a peer's check sees it within ~1s.
   # /fleet-claim stays and no-ops idempotently when it finds this pre-claim.
-  if gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; then
+  if [ "$TK_HUB" = 1 ]; then
+    _co=$(bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" 2>&1); _crc=$?
+    case "$_crc" in
+      0) [ "${n_assignee:-0}" = 0 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; } ;;
+      3) refuse "#$num already claimed elsewhere (${_co#fleet-ticket: }) — not spawning; --force overrides a stale claim"
+         exit "$RC_CLAIMED" ;;
+      *) issue_json='' ;;   # the hub did not answer: spawn anyway, as a gh outage does
+    esac
+    unset _co _crc
+  elif gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; then
     # Hub off ⇒ today's path, byte for byte (EPIC #1645 rule 6): no take-back.
     [ "${CCQUOTA_FLEET:-0}" = 1 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; }
   else
@@ -758,7 +803,8 @@ fi
 if [ -z "$title" ]; then
   ISSUES=$(fleet_cache issues "$SESS")
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
-  [ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
+  if [ -z "$title" ] && [ "$TK_HUB" = 1 ]; then title=$(fleet_ticket_view "$REPO" "$num" title .title) || title=''
+  elif [ -z "$title" ]; then title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); fi
 fi
 # An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue
 # #2355): fleet_issue_win_name reads it off the body the gate just read, one

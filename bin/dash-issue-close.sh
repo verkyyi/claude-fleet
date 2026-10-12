@@ -23,7 +23,13 @@ FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 # In a 2+ repo fleet: the row's repo, else CF_REPO, else nothing (refused).
 REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot close #$num"; exit 1; }
-command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot close #$num"; exit 1; }
+# A hub repo's ticket closes through the door (issue #3598, EPIC #3570 C5): no gh.
+CLOSE_CMD="gh issue close '$num' --repo '$REPO'"
+if fleet_ticket_hub "$REPO" "$FLEET_SESSION"; then
+  CLOSE_CMD="bash '$BIN/fleet-ticket.sh' state 'hub:$(fleet_norm_repo "$REPO")#$num' closed"
+else
+  command -v gh >/dev/null 2>&1 || { tmux display-message "gh not found — cannot close #$num"; exit 1; }
+fi
 
 # ask, then close.
 printf '\n  Close issue \033[1m#%s\033[0m in %s?\n\n  [y] close    [n] cancel ' "$num" "$REPO"
@@ -48,7 +54,7 @@ rm -f "$FD/issues.ts" "$C/issues_$(fleet_slug "$REPO").ts" "$C/issues.ts"  # for
 # keypress; it surfaces via display-message and the same refetch RESTORES the
 # optimistically-dropped row (the issue is still open + reversible via `gh issue
 # reopen`). GH_TTL=0 forces the refetch regardless of cache age.
-fleet_bg "if gh issue close '$num' --repo '$REPO' >/dev/null 2>&1; then \
+fleet_bg "if $CLOSE_CMD >/dev/null 2>&1; then \
     GH_TTL=0 bash '$BIN/tmux-dash-collect.sh' >/dev/null 2>&1; \
     tmux display-message 'issue #$num closed ✓'; \
   else \
