@@ -477,6 +477,8 @@ pass "P  ⌘P's one entry (方案 B): sessions then ⚡ (cells 仓库 · Agent) 
 # The person's choice is kept on the hub (a seam: GET/PUT the state file) and read back
 # at once into person-bundle.json; the 看台 said no language (FLEET_VIEW_LANG empty) ⇒
 # Chinese, and the row's footer says how to bring one (D9). FLEET_UI_LANG auto here.
+# The footer names this machine; a GitHub macOS runner's 60-odd-char hostname pushed
+# the LANG= half past the popup's width (issue #3545), so the name is pinned short.
 printf '{"version":1,"bundle":{}}' > "$W/person.json"
 cat > "$W/person-hub.sh" <<EOF
 #!/bin/sh
@@ -491,7 +493,7 @@ if b.get("base") != cur["version"]:
 new = {"version": cur["version"] + 1, "prev": cur["version"], "bundle": b["bundle"]}
 json.dump(new, open(st, "w")); print(json.dumps(new))' "\$body" "\$st"
 EOF
-for k in FLEET_UI_LANG=auto FLEET_VIEW_LANG= "FLEET_PERSON_HUB_CMD=sh $W/person-hub.sh \"\$@\"" "FLEET_PERSON_BUNDLE_CMD=cat $W/person.json"; do
+for k in FLEET_UI_LANG=auto FLEET_VIEW_LANG= FLEET_SIDEBAR_HOST=c7host "FLEET_PERSON_HUB_CMD=sh $W/person-hub.sh \"\$@\"" "FLEET_PERSON_BUNDLE_CMD=cat $W/person.json"; do
   ti set-environment -t 'fl@view-v1' "${k%%=*}" "${k#*=}"
 done
 lshot() { to capture-pane -p -t o:view | grep -v '^$'; }
@@ -500,7 +502,7 @@ waitfor 20 listed || fail "I: ⌘P listed nothing"
 to send-keys -t o:view -l '语言'; sleep 0.5
 waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '▶ ◐ 语言 / Language　中文 ✓ · English'" \
   || fail "I: typing 语言 did not light the language row: $(lshot)"
-lshot | grep -q 'Termius → Hosts → .* → Environment 加 LANG=en_US.UTF-8' || fail "I: no language came, yet the footer does not say how (D9): $(lshot)"
+lshot | grep -q 'Termius → Hosts → c7host → Environment 加 LANG=en_US.UTF-8' || fail "I: no language came, yet the footer does not say how (D9): $(lshot)"
 [ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.zh.txt"
 to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'Language: English · saved to your account'" \
