@@ -256,7 +256,10 @@ eta_rises() { awk 'NR > 1 && $1 + 0 > p + 0 { print p "→" $1; exit } { p = $1 
 #   pass <what>   onboarded, or the pinned guide window is up
 #   fail <why>    onboard.stuck — the guide stopped (its own line)
 #   skip <why>    onboarding is off on that login, or the person closed the guide
-#   wait <why>    still pending (the last failed open's line, when there is one)
+#   wait <why>    still pending (the last failed open's line, when there is one),
+#                 or no answer (the probe's stderr, when it said anything)
+#   fail <why>    also: the login has no fleet-thin.py to ask the home with
+#                 (nohelper — fleet-onboard-drill.sh's login_bin, issue #3499)
 # An unreadable answer is wait: the step's own deadline turns it into a FAIL.
 guide_state() {
   local k rest
@@ -268,6 +271,8 @@ guide_state() {
     off)       printf 'skip onboarding off on the home (no onboard.pending)\n' ;;
     dismissed) printf 'skip the guide window was closed (onboard.dismissed)\n' ;;
     pending)   printf 'wait %s\n' "${rest:-pending}" ;;
+    nohelper)  printf 'fail %s\n' "${rest:-no fleet-thin.py for the login}" ;;
+    noanswer)  printf 'wait no answer from the home: %s\n' "${rest:-}" ;;
     *)         printf 'wait no answer from the home%s\n' "${k:+: $k $rest}" ;;
   esac
 }

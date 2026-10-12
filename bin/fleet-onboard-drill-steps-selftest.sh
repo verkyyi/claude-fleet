@@ -24,6 +24,9 @@
 #      restarts the node over the login's client (--run --home remotebox)
 #   O  (issue #3467) B again with a thin client's list: the home's own rows (`@N`
 #      keys + fleet_id) — step 10 locates and restarts by the row's @fleet_id
+#   N  (issue #3499) B again on a NODE-install login (~/.claude/fleet/bin only, no
+#      FLEET_DRILL_THIN): the drill finds its fleet-thin.py — 8b and 10 PASS
+#   M  neither install: 8b and 10 FAIL at once naming both places, nothing run
 #   C  --home elsewhere, the session lands on remotebox: step 8 FAILs naming both
 #   D  a mint the hub refuses: exit 2, nothing run
 #   E  THE THIN CLIENT (issue #3445): step 8 + 8a through the REAL key path — the
@@ -242,7 +245,7 @@ for s in scratch attach-attachment node-restart-resume; do
   else bad "B: step $s: $(printf '%s\n' "$out" | grep -E "^(PASS|FAIL) +$s " | head -n 1) [rc $rc]"; fi
 done
 [ "$rc" = 0 ] && ok 'B: exit 0' || { bad "B: exit $rc"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/     │ /'; }
-if [ "$(sort -u "$T/thin.args" 2>/dev/null)" = remotebox ] && [ "$(grep -c . "$T/thin.args")" = 2 ]; then ok 'B: save and restore went over --run --home remotebox'
+if [ "$(sort -u "$T/thin.args" 2>/dev/null)" = remotebox ] && [ "$(grep -c . "$T/thin.args")" = 3 ]; then ok 'B: the guide probe, save and restore went over --run --home remotebox'
 else bad "B: thin calls: $(tr '\n' ' ' < "$T/thin.args" 2>/dev/null)"; fi
 grep -q '^restore: ' "$RH/restore.log" 2>/dev/null && ok 'B: the remote node server was restored for real' || bad 'B: no restore ran on the remote node'
 printf '%s\n' "$out" | grep -q 'restarted' && printf '%s\n' "$out" | grep -q 'on remotebox restarted' \
@@ -262,6 +265,39 @@ done
 [ "$rc" = 0 ] && ok 'O: exit 0' || { bad "O: exit $rc"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/     │ /'; }
 grep -q '^restore: ' "$RH/restore.log" 2>/dev/null && ok 'O: the home was restarted by the own row'"'"'s @fleet_id' || bad 'O: no restore ran on the home'
 rm -f "$T/ls.own"
+
+# --- N: the home helper on a node-install login (issue #3499) -------------------
+# Drill 39 ran ON its --home (macmini = mini2): the login had the node install
+# only (~/.claude/fleet/bin), no client one, and the drill's hard-wired
+# ~/.local/share/claude-fleet/bin/fleet-thin.py made step 10 «can't open file»
+# and hid onboard-guide as 240s of «no answer». No FLEET_DRILL_THIN here: the
+# drill finds the login's own fleet-thin.py (login_bin), node install first.
+mkdir -p "$T/homes/$LOGIN/.claude/fleet/bin" "$RH/.config/claude-fleet/global"
+cp "$T/thin.py" "$T/homes/$LOGIN/.claude/fleet/bin/fleet-thin.py"
+: > "$RH/.config/claude-fleet/global/onboarded"
+: > "$T/thin.args"; rm -f "$RH/restore.log"
+start_client "$RH" remotebox
+out=$(drill env FLEET_DRILL_INVITE_SH="$T/invite.sh" bash "$DRILL" --login "$LOGIN" --home remotebox --name first 2>&1); rc=$?
+for s in scratch onboard-guide attach-attachment node-restart-resume; do
+  if printf '%s\n' "$out" | grep -Eq "^PASS +$s "; then ok "N: node-install login: step $s PASS"
+  else bad "N: node-install login: step $s: $(printf '%s\n' "$out" | grep -E "^(PASS|FAIL|SKIP) +$s " | head -n 1) [rc $rc]"; fi
+done
+[ "$rc" = 0 ] && ok 'N: exit 0' || { bad "N: exit $rc"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/     │ /'; }
+if [ "$(sort -u "$T/thin.args" 2>/dev/null)" = remotebox ] && [ "$(grep -c . "$T/thin.args")" -ge 3 ]; then ok 'N: guide · save · restore went over the node install'"'"'s fleet-thin.py'
+else bad "N: thin calls: $(tr '\n' ' ' < "$T/thin.args" 2>/dev/null)"; fi
+grep -q '^restore: ' "$RH/restore.log" 2>/dev/null && ok 'N: the home was restarted for real' || bad 'N: no restore ran on the home'
+
+# --- M: neither install: both steps say so at once, never a silent timeout ----
+rm -rf "$T/homes/$LOGIN/.claude"; : > "$T/thin.args"
+start_client "$RH" remotebox
+out=$(drill env FLEET_DRILL_INVITE_SH="$T/invite.sh" FLEET_DRILL_GUIDE_SECS=60 bash "$DRILL" --login "$LOGIN" --home remotebox --name first 2>&1); rc=$?
+nf="no fleet-thin.py for $LOGIN: neither $T/homes/$LOGIN/.claude/fleet/bin nor $T/homes/$LOGIN/.local/share/claude-fleet/bin has it"
+printf '%s\n' "$out" | grep -Eq "^FAIL +onboard-guide +cannot ask the home: " && printf '%s\n' "$out" | grep -qF -- "$nf" \
+  && ok 'M: onboard-guide FAILs naming both places' || bad "M: onboard-guide: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP) +onboard-guide ' | head -n 1)"
+printf '%s\n' "$out" | grep -Eq "^FAIL +node-restart-resume +snapshot save as $LOGIN on remotebox: no fleet-thin.py for " \
+  && ok 'M: step 10 FAILs naming the missing helper' || bad "M: step 10: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL) +node-restart-resume ' | head -n 1)"
+[ ! -s "$T/thin.args" ] && ok 'M: nothing ran' || bad "M: thin ran: $(cat "$T/thin.args")"
+rm -f "$RH/.config/claude-fleet/global/onboarded"
 
 # --- C: --home elsewhere, placed on remotebox: step 8 says so -------------------
 start_client "$RH" remotebox
