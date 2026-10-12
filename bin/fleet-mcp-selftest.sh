@@ -192,8 +192,9 @@ assert tools["comment"]["inputSchema"]["required"] == ["issue", "body"]
 assert tools["ask"]["inputSchema"]["required"] == ["question"]
 for n in ("report", "evidence", "handoff"):
     assert len(tools[n]["inputSchema"]["required"]) == 1, n
-for n in ("pr_verdict", "pr_merge"):
-    assert tools[n]["inputSchema"]["required"] == ["pr"], n
+for n in ("pr_verdict", "pr_merge"):       # pr is optional since #3602 (FLEET_LAND=fleet)
+    assert "required" not in tools[n]["inputSchema"], n
+    assert tools[n]["inputSchema"]["properties"]["pr"]["minimum"] == 1, n
 PY
 ok "A server \`fleet\`, the twenty-three core tools, every schema closed"
 

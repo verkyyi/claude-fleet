@@ -26,6 +26,18 @@ under a fake passwd); nothing touches /var, /Library or a real login.
      named no socket; the updater's as_login goes through exec-as when a core answers
   J  verify_release on a staged tree: tools links into <root>/tools by artifact digest
      (a helper beside its tool), bin/ccquota = its artifact
+  K  the seat's ops (#3668): machine start / stop / held / hup by a NAME in the core's
+     own table — a child and a task, one copy, the stand-in's TERM stops it, a root
+     process the old daemon left is found by its command and stopped; a name outside
+     the table, a job with its own op, an action outside the list, an extra key are
+     refused; sweep / entry / report answer, a kind outside the list is refused
+  L  the peer is re-read per connection: no seat ⇒ root only; the seat made ⇒ it is
+     taken at once, with no restart of the core (its book kept)
+  M  the seated daemon (FLEET_NODE_SEATED=1): its machine child runs as the core's
+     job (op=machine in the core's log), state.json through <state>/state.json's
+     link into node/; the handover — a root daemon told seat-handover.json exits
+     leaving its child up, and the seat adopts it (nothing restarts); seat_layout's
+     modes: the register shared 0750/0640, creds/ and a .env untouched
 """
 import base64
 import hashlib
@@ -428,6 +440,177 @@ class J_Staged(Sandbox):
                            env=self.env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 1)
         self.assertIn("tools/bin/claude-helper", r.stdout)
+
+
+class K_Machine(Sandbox):
+    def machine_table(self):
+        for n, body in (("fleet-loop.sh", "trap 'exit 0' TERM; echo up; while :; do sleep 0.2; done\n"),
+                        ("fleet-once.sh", "echo once $(id -u) HOME=$HOME; exit 4\n")):
+            with open(os.path.join(self.bin, n), "w") as f:
+                f.write("#!/bin/bash\n" + body)
+            os.chmod(os.path.join(self.bin, n), 0o755)
+        self.loop = ["/bin/bash", os.path.join(self.bin, "fleet-loop.sh")]
+        with open(os.path.join(self.d, "table.json"), "w") as f:
+            json.dump({"children": [{"name": "looper", "cmd": self.loop}],
+                       "tasks": [{"name": "once", "every": 60, "cmd": ["/bin/bash", os.path.join(self.bin, "fleet-once.sh")]},
+                                 {"name": "memguard", "every": 10, "cmd": ["/bin/true"],
+                                  "core": {"op": "memguard", "args": {"level": "once"}}}],
+                       "account": []}, f)
+
+    def test_machine_ops(self):
+        self.machine_table()
+        self.serve()
+        r = self.call("machine", json.dumps({"job": "once", "action": "start"}), "--follow")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("once %d HOME=%s" % (os.getuid(), os.path.join(self.state, "home")),
+                      open(os.path.join(self.d, "log", "tasks", "once.log")).read())
+        p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call", "machine",
+                              json.dumps({"job": "looper", "action": "start"}), "--follow"], env=self.env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.procs.append(p)
+        first = json.loads(p.stdout.readline().decode())
+        self.assertTrue(first.get("ok") and first.get("pid"), first)
+        self.assertEqual(self.req("machine", {"job": "looper", "action": "start"}).get("error"), "running")
+        self.assertEqual(self.req("machine", {"job": "looper", "action": "held"}), {"ok": True, "held": ""})
+        self.assertIn("refused", self.req("machine", {"job": "looper", "action": "hup"}))
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=20)
+        self.assertTrue(until(10, lambda: subprocess.call(["kill", "-0", str(first["pid"])],
+                                                          stderr=subprocess.DEVNULL) != 0), "the job outlived its stand-in")
+        # what the root daemon left: found by its command, never by a pid it is handed
+        left = subprocess.Popen(self.loop, stdout=subprocess.DEVNULL, start_new_session=True)
+        self.procs.append(left)
+        time.sleep(0.3)
+        r = self.req("machine", {"job": "looper", "action": "start"})
+        self.assertEqual((r.get("error"), r.get("pid")), ("running (left by the root daemon)", left.pid), r)
+        r = self.req("machine", {"job": "looper", "action": "stop"})
+        self.assertEqual((r.get("ok"), r.get("strays")), (True, 1), r)
+        self.assertIsNotNone(left.wait(timeout=10))
+        marker = os.path.join(self.d, "ran")
+        for args in ({"job": "/bin/sh", "action": "start"}, {"job": "nope", "action": "start"},
+                     {"job": "memguard", "action": "start"}, {"job": "looper", "action": "exec"},
+                     {"job": "looper", "action": "start", "argv": ["touch", marker]}, {"job": "looper"}):
+            self.assertIn("refused", self.req("machine", args), args)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_sweep_entry_report(self):
+        self.machine_table()
+        self.serve()
+        r = self.req("sweep", {})
+        self.assertTrue(r.get("ok") and isinstance(r.get("result"), dict), r)
+        self.assertEqual(self.req("entry", {}), {"ok": True, "result": None, "audit": None})
+        t = self.req("report", {"kind": "table"})
+        self.assertEqual([c["name"] for c in t["table"]["children"]], ["looper"], t)
+        self.assertIn("ok", self.req("report", {"kind": "fda"}).get("reading", {}))
+        self.assertIn("bad", self.req("report", {"kind": "tenants"}).get("reading", {}))
+        self.assertIsInstance(self.req("report", {"kind": "lanes"}).get("reading"), dict)
+        for line in ({"op": "report", "args": {"kind": "file:/etc/sudoers"}}, {"op": "sweep", "args": {"dry": True}},
+                     {"op": "entry", "args": {"keys": "ssh-ed25519 AAAA"}}):
+            self.assertIn("refused", self.raw((json.dumps(line) + "\n").encode()), line)
+
+
+class L_PeerPerConnection(Sandbox):
+    def test_seat_taken_at_once(self):
+        env = {k: v for k, v in self.env.items() if k != "FLEET_NODE_CORE_PEER_UID"}
+        self.env = env
+        self.serve()
+        self.assertIsNone(self.req("report", {"kind": "lanes"}), "no seat: anyone but root was answered")
+        pw = json.load(open(env["FLEET_NODE_PASSWD"]))
+        pw["_fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
+        pw["fleetnode"] = pw["_fleetnode"]
+        with open(env["FLEET_NODE_PASSWD"], "w") as f:
+            json.dump(pw, f)
+        self.assertEqual(self.req("report", {"kind": "lanes"}).get("ok"), True, self.log())
+        self.assertEqual(len(self.procs), 1)
+        self.assertIsNone(self.procs[0].poll(), "the core restarted")
+
+
+class M_Seated(Sandbox):
+    def sup(self, args, extra=None, **kw):
+        e = dict(self.env, FLEET_NODE_TICK="0.2", FLEET_NODE_LAUNCHCTL="", FLEET_NODE_WATCHDOG_SECS="0",
+                 FLEET_NODE_TENANT_EVERY="100000", FLEET_NODE_SWEEP_EVERY="100000", **(extra or {}))
+        return subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-supervisor.py")] + args, env=e,
+                                stdout=subprocess.DEVNULL, stderr=open(os.path.join(self.d, "sup.err"), "a"), **kw)
+
+    def st(self):
+        try:
+            return json.load(open(os.path.join(self.state, "state.json")))
+        except (IOError, ValueError):
+            return {}
+
+    def test_seated_daemon_and_handover(self):
+        K_Machine.machine_table(self)
+        with open(os.path.join(self.d, "table.json")) as f:
+            t = json.load(f)
+        t["tasks"] = []
+        with open(os.path.join(self.d, "table.json"), "w") as f:
+            json.dump(t, f)
+        # a root daemon (no seat) runs the child itself
+        root = self.sup(["run"])
+        self.procs.append(root)
+        pid = until(15, lambda: (self.st().get("children", {}).get("looper") or {}).get("pid"))
+        self.assertTrue(pid, open(os.path.join(self.d, "sup.err")).read())
+        # the handover: the root daemon goes, its child stays
+        with open(os.path.join(self.state, "seat-handover.json"), "w") as f:
+            json.dump({"at": time.time()}, f)
+        root.send_signal(signal.SIGTERM)
+        root.wait(timeout=20)
+        self.assertEqual(subprocess.call(["kill", "-0", str(pid)], stderr=subprocess.DEVNULL), 0,
+                         "the handover stopped the child")
+        os.remove(os.path.join(self.state, "seat-handover.json"))
+        # the layout, then the seat comes up and adopts it — no restart
+        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
+        pw["_fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
+        pw["fleetnode"] = pw["_fleetnode"]
+        with open(self.env["FLEET_NODE_PASSWD"], "w") as f:
+            json.dump(pw, f)
+        sd = os.path.join(self.state, "logins", "alice", "services")
+        os.makedirs(os.path.join(self.state, "logins", "alice", "creds"))
+        os.makedirs(sd)
+        with open(os.path.join(sd, "web.json"), "w") as f:
+            f.write("{}\n")
+        with open(os.path.join(self.state, "logins", "alice.env"), "w") as f:
+            f.write("CCQUOTA_NODE_TOKEN=x\n")
+        for d, m in ((os.path.join(self.state, "logins"), 0o700), (os.path.join(self.state, "logins", "alice"), 0o700),
+                     (os.path.join(self.state, "logins", "alice", "creds"), 0o700), (sd, 0o700)):
+            os.chmod(d, m)
+        os.chmod(os.path.join(sd, "web.json"), 0o600)
+        os.chmod(os.path.join(self.state, "logins", "alice.env"), 0o600)
+        self.serve()
+        lay = subprocess.run([sys.executable, "-c", "import importlib.util, sys; sp = importlib.util.spec_from_file_location"
+                              "('s', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); "
+                              "m.seat_layout(m.Paths(), m.seat_ident())", os.path.join(self.bin, "fleet-node-supervisor.py")],
+                             env=self.env, capture_output=True, text=True)
+        self.assertEqual(lay.returncode, 0, lay.stderr)
+        mode = lambda *p: stat.S_IMODE(os.stat(os.path.join(self.state, *p)).st_mode)
+        self.assertTrue(os.path.islink(os.path.join(self.state, "state.json")))
+        self.assertEqual((mode("logins"), mode("logins", "alice"), mode("logins", "alice", "services"),
+                          mode("logins", "alice", "services", "web.json"), mode("logins", "alice", "creds"),
+                          mode("logins", "alice.env"), mode("logins", "alice", "runs")),
+                         (0o750, 0o750, 0o750, 0o640, 0o700, 0o600, 0o770))
+        seat = self.sup(["run"], {"FLEET_NODE_SEATED": "1"})
+        self.procs.append(seat)
+        self.assertTrue(until(15, lambda: "adopted child looper pid %d" % pid in open(os.path.join(self.d, "sup.err")).read()),
+                        open(os.path.join(self.d, "sup.err")).read())
+        # it dies: the seat starts it again — through the core, as a machine job
+        os.kill(pid, signal.SIGTERM)
+        self.assertTrue(until(20, lambda: "op=machine" in self.log() and "ok pid" in self.log()), self.log())
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "node", "state.json")))
+        self.assertTrue(until(10, lambda: (self.st().get("children", {}).get("looper") or {}).get("status") == "supervised"))
+        # the seat asks the core for a login's job: it needs no root to name one
+        spec = importlib.util.spec_from_file_location("fns_seat", os.path.join(self.bin, "fleet-node-supervisor.py"))
+        fns = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fns)
+        other = {"uid": os.getuid() + 7, "script": None}
+        self.assertIsNone(fns.account_runnable(other, True))
+        if os.getuid() != 0:
+            self.assertIn("needs root", fns.account_runnable(other))
+        seat.send_signal(signal.SIGTERM)
+        seat.wait(timeout=30)
+        # the seat's stop took the core's job with it (a TERM to its stand-in)
+        self.assertTrue(until(10, lambda: "op=machine args=" in self.log() and
+                              subprocess.run(["pgrep", "-f", "fleet-loop.sh"], capture_output=True).returncode != 0),
+                        "the core's job outlived the seat's stop")
 
 
 if __name__ == "__main__":

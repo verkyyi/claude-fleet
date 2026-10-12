@@ -79,6 +79,23 @@ FLEET_BASE_BRANCH="main"
 #FLEET_FORGE="github"
 # @label=How work lands (pr · fleet) @group=identity @tier=internal @scope=identity @edit=no
 #FLEET_LAND="pr"
+# A repo the fleet lands itself (FLEET_LAND=fleet — issue #3602, EPIC #3570 C9):
+# bin/fleet-land.sh rebases the session's branch onto the base's newest commit, runs
+# this command in the session's worktree (queued on the machine's heavy-job slots,
+# killed after FLEET_CHECK_TIMEOUT seconds) and fast-forwards the base only when it
+# exits 0. Unset = no check: it lands anyway and the landing record says 没跑检查;
+# a required check (FLEET_CHECK_REQUIRED set to 1) refuses that (BLOCKED). Set
+# them in the repo's overlay.
+# @label=Landing check command @group=identity @tier=internal @scope=fleet @edit=no
+#FLEET_CHECK_CMD=""
+# @label=Landing check timeout @group=identity @tier=internal @scope=fleet @edit=int @unit=s
+#FLEET_CHECK_TIMEOUT=480
+# @label=Refuse to land without a check @group=identity @tier=internal @scope=fleet @edit=bool
+#FLEET_CHECK_REQUIRED=0
+# How long a landing waits for another landing of the same repo (its land lease)
+# before it answers PENDING — call pr_merge again.
+# @label=Landing lease wait @group=identity @tier=internal @scope=fleet @edit=int @unit=s
+#FLEET_LAND_LEASE_WAIT=300
 
 # --- Public SSH entry (issue #1195) ---------------------------------------
 # How a NEWCOMER reaches this machine from outside — the host and port that the
@@ -153,7 +170,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.

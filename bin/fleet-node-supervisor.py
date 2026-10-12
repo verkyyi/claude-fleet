@@ -162,6 +162,10 @@ Usage:
                                                the login-level register (#2525; writes as root,
                                                ls / logs as anyone who may read them)
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
+  fleet-node-supervisor.py install --seat      make the daemon's own account (_fleetnode /
+                                               fleetnode) and move the daemon onto it in the
+                                               same step, its children handed over (#3668);
+                                               needs the root core answering
   fleet-node-supervisor.py install --check     exit 0 = already installed as install writes it
                                                and loaded (fleet-node-install.sh, #2330)
   fleet-node-supervisor.py account [list | adopt <login> | release <login> [--force] | manages <login>]
@@ -212,6 +216,10 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   FLEET_ENTRY_TEST_SETENV  (FLEET_NODE_TEST only) more `K=V …` for the entry's SetEnv
   FLEET_NODE_BREW_PREFIX  __BREW_PREFIX__ in the templates (default /opt/homebrew, or
                         /usr/local when that is where brew is)
+  FLEET_NODE_SEAT_NAME  the seat account's name (default _fleetnode / fleetnode; a
+                        seam names an existing user)  FLEET_NODE_SEAT_CMD  (tests) run
+                        in place of each account-making command
+  FLEET_NODE_SEATED=1   (FLEET_NODE_TEST only) this process is the seated daemon
 """
 from __future__ import print_function
 
@@ -343,9 +351,19 @@ def ago(t):
 
 
 def write_json(path, obj, mode=0o644):
+    # state.json is a link into the seat's own directory on a seated machine
+    # (#3668): the write lands where the link points, and the temporary file is
+    # created fresh, never through a name someone else planted
+    if os.path.islink(path):
+        path = os.path.join(os.path.dirname(path), os.readlink(path))
     d = os.path.dirname(path)
     tmp = os.path.join(d, ".%s.%d" % (os.path.basename(path), os.getpid()))
-    with open(tmp, "w") as f:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(obj, f, indent=1, sort_keys=True)
         f.write("\n")
     os.chmod(tmp, mode)
@@ -1238,11 +1256,12 @@ def demote(login, uid, gid, home):
     return f
 
 
-def account_runnable(ent):
-    """Why an account entry must not start, or None."""
+def account_runnable(ent, seated=False):
+    """Why an account entry must not start, or None. The seat starts nothing as a
+    login itself — the core does (#3668) — so it needs no root for one."""
     if ent["uid"] == 0:
         return "refused — uid 0"
-    if os.geteuid() != 0 and ent["uid"] != os.geteuid():
+    if os.geteuid() != 0 and ent["uid"] != os.geteuid() and not seated:
         return "needs root (to run as uid %d)" % ent["uid"]
     if ent.get("script") and not os.path.exists(ent["script"]):
         return "missing %s" % ent["script"]
@@ -1649,6 +1668,7 @@ def task_entry(paths, svc, ident, day, attempt, manual=None):
     lg = service_log(paths, login, name)
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-task-run.sh")
     return {"name": "task:%s/%s" % (login, name), "account": login, "service": name, "window": win,
+            "task": {"slot": day, "attempt": attempt, "manual": manual or ""},
             "uid": uid, "gid": gid, "home": home, "env": e, "creds": list(svc.get("creds") or []),
             "script": runner, "logdir": os.path.dirname(lg),
             "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-task", lg, lg, "/bin/bash", runner]}
@@ -1691,6 +1711,11 @@ def task_summary(paths, svc, ts):
 
 # --------------------------------------------------------------- the daemon -----
 class Supervisor(object):
+    # the old road unless __init__ finds the seat (#3668) — also for a reader
+    # that builds one without it (the Linux node's selftest)
+    seated = False
+    logroot = None
+
     def __init__(self, paths, table):
         self.p = paths
         self.table = table
@@ -1715,6 +1740,13 @@ class Supervisor(object):
         self.last_save = 0
         self.units = None
         self.units_at = 0
+        # the seat (#3668): this daemon runs as _fleetnode and asks the root core
+        # for everything root's — no seat = every branch below is the old road
+        self.seated = seated_self()
+        self.table_at = 0
+        self.restart_seen = None
+        # the seat writes its own logs under <log>/node; root's stay root's
+        self.logroot = os.path.join(self.p.log, "node") if self.seated else self.p.log
 
     # -- the account half (#2332): entries built from the one table, per managed login
     def account_entries(self):
@@ -1752,7 +1784,26 @@ class Supervisor(object):
                 out.append(service_entry(self.p, svc, path, ident))
         return out
 
+    def seat_table(self):
+        """The machine half as the core sees it (#3668): the seated daemon cannot
+        read machine.env (is the entry on?) — the core's `report table` says, with
+        the entry, its revocation follower and the test runner already in it.
+        Re-asked every minute; the last answer stands while the core is away."""
+        t = now()
+        if t - self.table_at >= 60:
+            r = core_ask("report", {"kind": "table"}, 30)
+            if isinstance(r.get("table"), dict):
+                self.table = r["table"]
+                self.table_at = t
+            elif self.table_at == 0:
+                self.log("seat: no table from the core (%s) — the built-in one stands" % (r.get("error") or r))
+                self.table_at = t
+        return self.table
+
     def all_children(self):
+        if self.seated:
+            return (list(self.seat_table()["children"]) + [e for e in self.account_entries() if e.get("keepalive")]
+                    + self.service_entries())
         # the entry port (#3070) only where it is switched on — off, no child at all
         entry = [entry_child(self.p)] if entry_settings(self.p)[0] else []
         # the test runner (#3144) only where ci.env is — off, no child at all
@@ -1761,6 +1812,8 @@ class Supervisor(object):
                 + self.service_entries())
 
     def all_tasks(self):
+        if self.seated:
+            self.seat_table()
         return list(self.table["tasks"]) + [e for e in self.account_entries() if not e.get("keepalive")]
 
     def core_cmd(self, ent):
@@ -1769,11 +1822,16 @@ class Supervisor(object):
         TERM to it stops the job), a machine task by its "core" request. None = the
         old road — no core answering here, or nothing the core's table holds."""
         if ent.get("account"):
-            if not ent.get("job"):
+            job = ent.get("job") or (task_job(ent) if self.seated else None)
+            if not job:
                 return None
-            op, args, follow = "run-as", {"login": ent["account"], "job": ent["job"]}, True
+            op, args, follow = "run-as", {"login": ent["account"], "job": job}, True
         elif ent.get("core"):
             op, args, follow = ent["core"]["op"], ent["core"]["args"], False
+        elif self.seated:
+            # a machine job by its name in the core's table (#3668): root's, so the
+            # seated daemon only asks — start, and this child stands in for it
+            op, args, follow = "machine", {"job": ent["name"], "action": "start"}, True
         else:
             return None
         script = os.path.join(self.p.runtime, "bin", "fleet-node-core.py")
@@ -1790,6 +1848,9 @@ class Supervisor(object):
         if cc:
             return subprocess.Popen(cc, stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                     env=self.child_env(None), start_new_session=True, close_fds=True)
+        if self.seated:
+            # nothing here may be done as the seat: no core, no road (#3668)
+            raise OSError(errno.EPERM, "seated daemon: the root core does not answer — %s waits for it" % ent["name"])
         if ent.get("account"):
             e = ent["env"]
             if ent.get("service"):
@@ -1803,6 +1864,13 @@ class Supervisor(object):
 
     # -- plumbing
     def ensure_dirs(self):
+        if self.seated:
+            # root made the seat's layout (`install --seat`); the seat makes only
+            # its own log directories
+            for d in (self.logroot, os.path.join(self.logroot, "tasks"), os.path.join(self.logroot, "accounts")):
+                if not os.path.isdir(d):
+                    os.makedirs(d, 0o755)
+            return
         for d, m in ((self.p.state, 0o755), (self.p.locks, 0o755), (self.p.attic, 0o700),
                      (self.p.log, 0o755), (os.path.join(self.p.log, "tasks"), 0o755),
                      (os.path.join(self.p.log, "accounts"), 0o755),
@@ -1839,7 +1907,8 @@ class Supervisor(object):
         return bool(label) and os.path.exists(os.path.join(self.p.daemon_dir, label + ".plist"))
 
     def logfile(self, name, sub=""):
-        d = os.path.join(self.p.log, sub) if sub else self.p.log
+        root = self.logroot or self.p.log
+        d = os.path.join(root, sub) if sub else root
         path = os.path.join(d, name + ".log")
         try:
             if os.path.getsize(path) > 1 << 20:
@@ -1866,17 +1935,14 @@ class Supervisor(object):
         raise OSError(errno.EIO, "log %s: not a regular file" % path)
 
     def child_env(self, extra):
-        e = {
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin",
-            "HOME": os.path.join(self.p.state, "home"),
-            "FLEET_CONF_DIR": os.path.join(self.p.state, "conf"),
-            "TMPDIR": os.path.join(self.p.state, "tmp"),
-            "LANG": NODE_LANG,
-            "FLEET_NODE": "1",
-        }
-        e.update(node_environment())
-        e.update(extra or {})
-        return e
+        if self.seated:
+            # the seat's children are only its asks of the core: its own directory
+            own = os.path.join(self.p.state, "node")
+            e = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": own, "TMPDIR": own, "LANG": NODE_LANG,
+                 "FLEET_NODE": "1"}
+            e.update(node_environment())
+            return e
+        return machine_env(self.p, extra)
 
     def script_of(self, cmd):
         return script_of(cmd)
@@ -1896,8 +1962,8 @@ class Supervisor(object):
 
     def child_status(self, c):
         if c.get("account"):
-            why = account_runnable(c)
-            if not why and c.get("creds"):
+            why = account_runnable(c, self.seated)
+            if not why and c.get("creds") and not self.seated:
                 missing = service_creds(self.p, c)[1]
                 why = "missing credential %s" % ", ".join(missing) if missing else None
             return why or "supervised"
@@ -1950,7 +2016,8 @@ class Supervisor(object):
             if c.get("reload") and (name in self.procs or name in self.adopted) \
                     and cs.get("reload_sig") != reload_sig(c["reload"]):
                 cpid = self.procs[name].pid if name in self.procs else self.adopted.get(name)
-                held, since = reload_held(c, cpid), cs.get("reload_held_since")
+                held = self.seat_held(c) if self.seated else reload_held(c, cpid)
+                since = cs.get("reload_held_since")
                 if held and (since is None or t - since < env_num("FLEET_NODE_RELOAD_HOLD", 960)):
                     if since is None:
                         cs["reload_held_since"] = t
@@ -1959,11 +2026,16 @@ class Supervisor(object):
                 elif c.get("reload_signal") and cpid:
                     # a child that re-reads its config on a signal keeps its pid and its
                     # live connections (the entry's sshd: SIGHUP re-execs on the new file)
-                    try:
-                        os.kill(cpid, getattr(signal, "SIG" + c["reload_signal"]))
-                        self.log("child %s: %s changed — SIG%s" % (name, c["reload"], c["reload_signal"]))
-                    except OSError:
-                        pass
+                    if self.seated:
+                        # the seat's child is only the stand-in: the core signals the job
+                        if self.seat_hup(c):
+                            self.log("child %s: %s changed — SIG%s (the core)" % (name, c["reload"], c["reload_signal"]))
+                    else:
+                        try:
+                            os.kill(cpid, getattr(signal, "SIG" + c["reload_signal"]))
+                            self.log("child %s: %s changed — SIG%s" % (name, c["reload"], c["reload_signal"]))
+                        except OSError:
+                            pass
                     cs["reload_sig"] = reload_sig(c["reload"])
                     self.dirty = True
                     continue
@@ -2014,6 +2086,11 @@ class Supervisor(object):
     def stop_one(self, name, why="no longer in the table"):
         p = self.procs.pop(name, None)
         pid = p.pid if p is not None else self.adopted.pop(name, None)
+        if pid and p is None and self.seated and not own_pid(pid):
+            # adopted from the root daemon before the seat (#3668): not the seat's
+            # to signal — the core stops it by its job, never by a pid it is handed
+            self.seat_stop(name, pid)
+            pid = None
         if pid:
             try:
                 os.killpg(pid, signal.SIGTERM)
@@ -2066,6 +2143,14 @@ class Supervisor(object):
         self.log("child %s started pid %d" % (c["name"], p.pid))
 
     def stop_children(self):
+        if self.handover():
+            # the seat takes over (#3668): the children stay up for it to adopt —
+            # their pids are in state.json, saved below
+            self.log("handover to the seat: %d child(ren) left running for it to adopt"
+                     % (len(self.procs) + len(self.adopted)))
+            self.procs.clear()
+            self.adopted.clear()
+            return
         pids = [p.pid for p in self.procs.values()] + list(self.adopted.values())
         for pid in pids:
             try:
@@ -2111,7 +2196,7 @@ class Supervisor(object):
 
     def task_runnable(self, tk):
         if tk.get("account"):
-            return account_runnable(tk)
+            return account_runnable(tk, self.seated)
         if tk.get("scope") == "account" or not tk.get("cmd"):
             return "deferred"
         if not trusted(self.script_of(tk["cmd"])):
@@ -2129,7 +2214,12 @@ class Supervisor(object):
             return False
         if name in self.running:
             return False
-        lf = os.open(os.path.join(self.p.locks, name.replace("/", "@") + ".lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        lpath = os.path.join(self.p.locks, name.replace("/", "@") + ".lock")
+        try:
+            lf = os.open(lpath, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        except PermissionError:
+            # a lock file root made (a hand-run tick) — flock needs no write (#3668)
+            lf = os.open(lpath, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -2167,6 +2257,14 @@ class Supervisor(object):
             rc = p.poll()
             limit = float(tk.get("timeout", min(600, max(30, float(tk.get("every", 60)) * 5))))
             if rc is None and t - t0 > limit:
+                if self.seated:
+                    # the stand-in forwards a TERM to the core (stop); a KILL would
+                    # leave the root job running without it (#3668)
+                    try:
+                        os.killpg(p.pid, signal.SIGTERM)
+                        p.wait(timeout=15)
+                    except Exception:
+                        pass
                 try:
                     os.killpg(p.pid, signal.SIGKILL)
                 except OSError:
@@ -2257,8 +2355,8 @@ class Supervisor(object):
 
     def start_agent(self, key, ts, svc, ident, t):
         ent = task_entry(self.p, svc, ident, ts["slot"], ts["attempt"], ts.get("manual") or None)
-        why = account_runnable(ent)
-        if not why and ent["creds"]:
+        why = account_runnable(ent, self.seated)
+        if not why and ent["creds"] and not self.seated:
             missing = service_creds(self.p, ent)[1]
             why = "missing credential %s" % ", ".join(missing) if missing else None
         ts.update(last_run=task_clock(), window=ent["window"], pid=None)
@@ -2372,7 +2470,18 @@ class Supervisor(object):
     def tend_lanes(self):
         """The logins whose lane the hub refuses, from each tenant's lane.json
         (root's to read) into state.json (anyone's): status and the doctor."""
-        cur = lane_refusals(self.p)
+        if self.seated:
+            # root's to read: the core's report, once a minute (#3668)
+            t = now()
+            if t - getattr(self, "lanes_at", 0) < 60:
+                return
+            self.lanes_at = t
+            r = core_ask("report", {"kind": "lanes"}, 30)
+            if not isinstance(r.get("reading"), dict):
+                return
+            cur = r["reading"]
+        else:
+            cur = lane_refusals(self.p)
         if cur != (self.state.get("lanes") or {}):
             for login in sorted(set(cur) - set(self.state.get("lanes") or {})):
                 self.log("login %s: the hub refuses its lane — %s (fix: account adopt %s --rejoin)"
@@ -2387,8 +2496,19 @@ class Supervisor(object):
         last = self.state.get("tenants") or {}
         if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
             return
-        cur = tenants_reading(self.p)
-        for login in logins_creds_backfill(self.p):
+        if self.seated:
+            # sudo -l -U and the sudoers files are root's to read: the core's
+            # report (#3668); the creds backfill (#3276) stays a root daemon's
+            r = core_ask("report", {"kind": "tenants"}, 120)
+            if not isinstance(r.get("reading"), dict):
+                self.log("tenants: the core did not report (%s)" % (r.get("error") or r.get("why") or r))
+                self.state["tenants"] = dict(last, at=t)
+                self.dirty = True
+                return
+            cur = r["reading"]
+        else:
+            cur = tenants_reading(self.p)
+        for login in ([] if self.seated else logins_creds_backfill(self.p)):
             self.log("tenant %s: logins/%s.env had no CCQUOTA_FLEET_CREDS — added =1, its node program now "
                      "leases its accounts (issue #3276)" % (login, login))
         for login in sorted(set(cur["bad"]) - set(last.get("bad") or {})):
@@ -2405,21 +2525,22 @@ class Supervisor(object):
         if not force and t - (self.state.get("entry_at") or 0) < env_num("FLEET_ENTRY_EVERY", 15 if door_on(self.p) else 60):
             return
         self.state["entry_at"] = t
-        me = _env_file(os.path.join(self.p.state, "machine.env"), 0) or {}
-        if door_on(self.p) and me.get("CCQUOTA_HUB_URL") and me.get("CCQUOTA_TOKEN"):
-            # the door has no node program to hear a push: it pulls its table
-            # (a revoked key gone from the door within one pass)
-            with open(os.devnull, "w") as quiet:
-                old = sys.stdout
-                sys.stdout = quiet
-                try:
-                    entry_pull(self.p)
-                finally:
-                    sys.stdout = old
-        b = entry_converge(self.p)
+        if self.seated:
+            # the host key, the keys files, sshd -t, com.apple.access_ssh: root's —
+            # one pass of the core's (#3668); the revocation follower is a machine
+            # job of the core's table, not a thread of the seat
+            r = core_ask("entry", {}, 300)
+            b = r.get("result") if r.get("ok") else None
+            if b is None:
+                if r.get("error") or r.get("refused"):
+                    self.log("entry: the core: %s" % (r.get("error") or r.get("why")))
+                return
+        else:
+            door_pull(self.p)
+            b = entry_converge(self.p)
         if b is None:
             return
-        if not getattr(self, "rev_thread", None):
+        if not self.seated and not getattr(self, "rev_thread", None):
             # the door's revocation list (issue #3560): only once the entry is on
             self.rev_thread = threading.Thread(target=self.follow_revocations, name="revocations", daemon=True)
             self.rev_thread.start()
@@ -2430,10 +2551,73 @@ class Supervisor(object):
             self.log("entry: %s" % b["error"])
         self.state["entry_error"] = b.get("error") or ""
         self.dirty = True
+        if self.seated:
+            return   # the core's pass ran the audit too
         try:
             entry_audit(self.p)
         except Exception as e:  # the record must never take the entry pass down
             self.log("entry audit: %s" % e)
+
+    # -- the seat (#3668): what the seated daemon asks the core instead
+    def seat_held(self, c):
+        """What holds a seated child's reload (#2918) — read by the core: the
+        node program's books are root's."""
+        if not c.get("hold") and not c.get("hold_argv"):
+            return ""
+        r = core_ask("machine", {"job": c["name"], "action": "held"}, 30)
+        return r.get("held") or ""
+
+    def seat_stop(self, name, pid):
+        """Stop a child the root daemon left running (adopted at the handover): an
+        account job by its (login, job) — a login's own process by the core's
+        `kill` — a machine job by its name. Waits for it to go."""
+        c = next((x for x in self.all_children() if x["name"] == name), None)
+        if c is not None and c.get("account"):
+            if c.get("job"):
+                core_ask("stop-as", {"login": c["account"], "job": c["job"]}, 30)
+            if pid_alive(pid):
+                core_ask("kill", {"pid": int(pid)}, 30)
+        else:
+            r = core_ask("machine", {"job": name, "action": "stop"}, 60)
+            if not r.get("ok"):
+                self.log("child %s: the core did not stop pid %s: %s" % (name, pid, r.get("error") or r.get("why")))
+        end = now() + 10
+        while pid_alive(pid) and now() < end:
+            time.sleep(0.1)
+        if pid_alive(pid):
+            self.log("child %s: pid %s still runs — not the seat's to signal; left to the core" % (name, pid))
+
+    def seat_hup(self, c):
+        r = core_ask("machine", {"job": c["name"], "action": "hup"}, 30)
+        return bool(r.get("ok"))
+
+    def handover(self):
+        """The root daemon is being replaced by the seat (`install --seat` wrote
+        <state>/seat-handover.json): exit leaving the children up."""
+        if self.seated:
+            return False
+        h = read_json(os.path.join(self.p.state, "seat-handover.json"), None)
+        return isinstance(h, dict) and now() - float(h.get("at") or 0) < 900
+
+    def tend_fda_seated(self, t):
+        """The core's Full Disk Access reading (#3668): the program that deletes a
+        user is the core's chain now, not the seat's."""
+        last = self.state.get("fda") or {}
+        if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
+            return
+        r = core_ask("report", {"kind": "fda"}, fda_timeout() + 30)
+        cur = r.get("reading")
+        if not isinstance(cur, dict):
+            self.state["fda"] = dict(fda_probe_result(None), error=str(r.get("error") or r.get("why") or r))
+            self.dirty = True
+            return
+        if cur.get("timeout"):
+            cur["stuck"] = (last.get("stuck") or 0) + 1
+        if cur.get("ok") is False and last.get("ok") is not False:
+            self.log("no Full Disk Access for %s: the hub's account removes will be refused (issue #2973)"
+                     % cur.get("program"))
+        self.state["fda"] = cur
+        self.dirty = True
 
     def follow_revocations(self):
         """The door's revocation list (issue #3560), as a thread of the daemon."""
@@ -2444,6 +2628,8 @@ class Supervisor(object):
         """Every FLEET_NODE_TENANT_EVERY (300 s), as root only: can this daemon's
         process chain delete a login (TCC lets nothing without Full Disk Access
         delete a user record)? Into state.json for every login's doctor."""
+        if self.seated:
+            return self.tend_fda_seated(t)
         if os.geteuid() != 0 and not os.environ.get("FLEET_NODE_TCC_DB"):
             return   # a non-root reader is kept out of TCC.db anyway (the seam is a sandbox's)
         last = self.state.get("fda") or {}
@@ -2489,7 +2675,17 @@ class Supervisor(object):
         return t - (self.state["sweep"].get("last") or 0) >= env_num("FLEET_NODE_SWEEP_EVERY", 3600)
 
     def do_sweep(self, dry=False):
-        res = sweep(self.p, dry=dry)
+        if self.seated and not dry:
+            # /Library/LaunchDaemons, every login's LaunchAgents, launchctl bootout:
+            # root's — the core's sweep (#3668)
+            r = core_ask("sweep", {}, env_num("FLEET_NODE_WATCHDOG_SWEEP_SECS", 900) - 30)
+            res = r.get("result")
+            if not isinstance(res, dict):
+                self.state["sweep"]["last"] = now()   # not again every pass: the next hour
+                self.dirty = True
+                raise RuntimeError("the core's sweep: %s" % (r.get("error") or r.get("why") or r))
+        else:
+            res = sweep(self.p, dry=dry)
         if not dry:
             sw = self.state["sweep"]
             sw.update(last=now(), moved=len(res["moved"]), extra=len(res["extra"]), handwritten=res["handwritten"],
@@ -2503,7 +2699,7 @@ class Supervisor(object):
     # -- loops
     def run(self):
         self.ensure_dirs()
-        lk = os.open(self.p.main_lock, os.O_RDWR | os.O_CREAT, 0o644)
+        lk = open_main_lock(self.p, self.seated)
         try:
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -2659,7 +2855,10 @@ class Supervisor(object):
             try:
                 os.remove(req)
             except OSError:
-                pass
+                # the seat may not remove root's file (#3668): said once, then quiet
+                if self.restart_seen == to:
+                    return False
+                self.restart_seen = to
             self.log("restart request for %s %s" % ((to or "?")[:12], "done" if to == mine else "stale — current did not move"))
             return False
         self.log("restart requested: current is %s — stopping to come back on it" % (to or "?")[:12])
@@ -2667,7 +2866,7 @@ class Supervisor(object):
 
     def tick_once(self):
         self.ensure_dirs()
-        lk = os.open(self.p.main_lock, os.O_RDWR | os.O_CREAT, 0o644)
+        lk = open_main_lock(self.p, self.seated)
         try:
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -2719,7 +2918,7 @@ class attic_lock(object):
         d = os.path.dirname(self.path)
         if not os.path.isdir(d):
             os.makedirs(d)
-        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
         fcntl.flock(self.fd, fcntl.LOCK_EX)
         return self
 
@@ -4153,6 +4352,21 @@ def entry_sshd():
 DOOR_GROUP = "fleet-door"
 DOOR_GECOS = "fleet-door"
 DOOR_SERVICE_RE = r"^u-[a-z0-9]{4,20}$"   # render.py USER_POD_RE
+
+
+def door_pull(paths):
+    """The door has no node program to hear a push: it pulls its table each pass
+    (a revoked key gone from the door within one pass). Quiet; root's (it reads
+    machine.env) — the root daemon's pass, or the core's `entry` op (#3668)."""
+    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    if door_on(paths) and me.get("CCQUOTA_HUB_URL") and me.get("CCQUOTA_TOKEN"):
+        with open(os.devnull, "w") as quiet:
+            old = sys.stdout
+            sys.stdout = quiet
+            try:
+                entry_pull(paths)
+            finally:
+                sys.stdout = old
 
 
 def door_on(paths):
@@ -5678,10 +5892,240 @@ def entry_cli(paths, rest):
     return 2
 
 
+
+# --------------------------------------------------------------- the seat -------
+# The node daemon's own account (issue #3668, EPIC #3500 C14 · 共同约定 11):
+# `_fleetnode` (macOS: UID/GID 450-499, shell /usr/bin/false, home /var/empty, a
+# role account — never an admin) / `fleetnode` (Linux, useradd --system). The
+# daemon runs as it once `install --seat` made it; everything root's it asks the
+# root core for (bin/fleet-node-core.py): an account job (run-as / stop-as), a
+# machine job by its NAME in the core's own table (`machine`), the sweep, one
+# entry pass, a read-only report (table · fda · tenants). The core takes requests
+# from the seat the moment the account exists (its peer is read per connection),
+# so making the account and moving the daemon onto it is ONE step. No seat ⇒ the
+# root daemon, byte for byte.
+#
+# What the seat may write (root made it, `seat_layout`): <state>/node (state.json —
+# <state>/state.json is a link to it), <state>/locks, <log>/node, and each login's
+# register books (run/ runs/ alerts/, root:seat 0770 inside a root dir it cannot
+# rename). What it may read beyond the world-readable: the register's entries
+# (services/*.json root:seat 0640) and the names in logins/ (0750) — never a .env,
+# a credential (creds/ stays root 0700), machine.env or the node program's books.
+SEAT_NAME = "_fleetnode" if MAC else "fleetnode"
+SEAT_HANDOVER = "seat-handover.json"
+TASK_JOB_RE = re.compile(r"^task:([a-z0-9][a-z0-9._-]{0,47})@(\d{4}-\d{2}-\d{2})#([1-9][0-9]?)(?:~([0-9]{4}))?$")
+
+
+def seat_name():
+    return env("FLEET_NODE_SEAT_NAME", SEAT_NAME)
+
+
+def seat_ident():
+    """(uid, gid) of the seat account, or None (no account: the root daemon)."""
+    fake = os.environ.get("FLEET_NODE_PASSWD")
+    if fake and env("FLEET_NODE_TEST", "") == "1":
+        e = (read_json(fake, {}) or {}).get(seat_name())
+        return (int(e["uid"]), int(e["gid"])) if e else None
+    try:
+        pw = pwd.getpwnam(seat_name())
+    except KeyError:
+        return None
+    return None if pw.pw_uid == 0 else (pw.pw_uid, pw.pw_gid)
+
+
+def seated_self():
+    """True when THIS process runs as the seat."""
+    if env("FLEET_NODE_TEST", "") == "1" and env("FLEET_NODE_SEATED", "") == "1":
+        return True
+    s = seat_ident()
+    return s is not None and os.geteuid() == s[0]
+
+
+def core_ask(op, args, timeout=60):
+    """One request to the root core, its reply; {"error"} when none answers."""
+    if core is None or not core.available():
+        return {"error": "no root core answering"}
+    try:
+        return core.call(op, args, timeout=timeout)
+    except (OSError, ValueError) as e:
+        return {"error": "the core: %s" % e}
+
+
+def own_pid(pid):
+    """True when this process may signal <pid> (it runs as us)."""
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return False
+    return True
+
+
+def open_main_lock(paths, seated):
+    # flock needs no write: the seat holds root's lock file read-only
+    if seated:
+        return os.open(paths.main_lock, os.O_RDONLY | os.O_NOFOLLOW)
+    return os.open(paths.main_lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+
+
+def task_job(ent):
+    """An agent task's attempt as the core's job name: task:<name>@<day>#<n>[~HHMM]."""
+    t = ent.get("task") or {}
+    if not ent.get("service") or not t.get("slot"):
+        return None
+    job = "task:%s@%s#%d%s" % (ent["service"], t["slot"], int(t.get("attempt") or 1),
+                               "~" + t["manual"] if t.get("manual") else "")
+    return job if TASK_JOB_RE.match(job) else None
+
+
+def machine_env(paths, extra):
+    """A machine job's environment: root's own home under the state dir."""
+    e = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin",
+        "HOME": os.path.join(paths.state, "home"),
+        "FLEET_CONF_DIR": os.path.join(paths.state, "conf"),
+        "TMPDIR": os.path.join(paths.state, "tmp"),
+        "LANG": NODE_LANG,
+        "FLEET_NODE": "1",
+    }
+    e.update(node_environment())
+    e.update(extra or {})
+    return e
+
+
+def revocations_child(paths):
+    """The entry's revocation follower as a machine job (#3560): a thread of the
+    root daemon, a child of the core's once the daemon is seated."""
+    return {"name": "entry-revocations",
+            "cmd": ["/usr/bin/python3", "-I", os.path.join(paths.runtime, "bin", "fleet-node-supervisor.py"),
+                    "entry", "revocations", "follow"],
+            "note": "#3560 · #3668"}
+
+
+def machine_table(paths):
+    """The machine half as root sees it — what the core's `machine` op runs by
+    name and its `report table` hands the seat: the table's children and tasks,
+    the entry's listener + revocation follower while the entry is on, the test
+    runner while ci.env is there."""
+    t = load_table(paths)
+    ch = list(t["children"])
+    if entry_settings(paths)[0]:
+        ch += [entry_child(paths), revocations_child(paths)]
+    if ci_on(paths):
+        ch.append(ci_child(paths))
+    return {"children": ch, "tasks": list(t["tasks"]), "account": t.get("account")}
+
+
+def _seat_put(path, uid, gid, mode):
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode):
+        raise OSError(errno.ELOOP, "%s is a link — not touched" % path)
+    if (st.st_uid, st.st_gid) != (uid, gid) and os.geteuid() == 0:
+        os.lchown(path, uid, gid)
+    if stat.S_IMODE(st.st_mode) != mode:
+        os.chmod(path, mode)
+
+
+def _seat_dir(path, uid, gid, mode):
+    if not os.path.lexists(path):
+        os.makedirs(path, mode)
+    _seat_put(path, uid, gid, mode)
+
+
+def seat_share(paths, seat=None):
+    """The register, readable by the seat (root runs this after every `fleet
+    service` write and in the layout): logins/ and each login's dir root:seat
+    0750 (names only — a .env stays root 0600, creds/ root 0700), services/
+    root:seat 0750 with its entries 0640, run/ runs/ alerts/ root:seat 0770."""
+    seat = seat or seat_ident()
+    if seat is None or (os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1") or not os.path.isdir(paths.logins):
+        return
+    gid = seat[1]
+    _seat_put(paths.logins, 0, gid, 0o750)
+    for login in sorted(os.listdir(paths.logins)):
+        d = os.path.join(paths.logins, login)
+        if not LOGIN_RE.match(login) or os.path.islink(d) or not os.path.isdir(d):
+            continue
+        _seat_put(d, 0, gid, 0o750)
+        sd = os.path.join(d, "services")
+        if not os.path.isdir(sd) or os.path.islink(sd):
+            continue
+        _seat_put(sd, 0, gid, 0o750)
+        for n in os.listdir(sd):
+            f = os.path.join(sd, n)
+            if n.endswith(".json") and not os.path.islink(f) and os.path.isfile(f):
+                _seat_put(f, 0, gid, 0o640)
+        for sub in ("run", "runs", "alerts"):
+            _seat_dir(os.path.join(d, sub), 0, gid, 0o770)
+
+
+def seat_layout(paths, seat):
+    """What the seat may write, made by root (idempotent): <state>/node with
+    state.json in it and <state>/state.json a link to it, <state>/locks (its lock
+    files the seat's), <log>/node, the register shared (seat_share), the main lock
+    present, the core's socket in the seat's group."""
+    uid, gid = seat
+    own = os.path.join(paths.state, "node")
+    _seat_dir(own, 0, gid, 0o770)
+    sf = paths.state_file
+    if not os.path.islink(sf):
+        dst = os.path.join(own, "state.json")
+        if os.path.exists(sf):
+            os.rename(sf, dst)
+        tmp = sf + ".seat-link"
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        os.symlink(os.path.join("node", "state.json"), tmp)
+        os.rename(tmp, sf)
+    _seat_dir(paths.locks, 0, gid, 0o770)
+    for n in os.listdir(paths.locks):
+        f = os.path.join(paths.locks, n)
+        if not os.path.islink(f) and os.path.isfile(f):
+            _seat_put(f, uid, gid, 0o644)
+    if not os.path.exists(paths.main_lock):
+        os.close(os.open(paths.main_lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644))
+    _seat_dir(paths.log, 0, 0, 0o755)
+    _seat_dir(os.path.join(paths.log, "node"), 0, gid, 0o770)
+    seat_share(paths, seat)
+    sock = core.sock_path() if core is not None else ""
+    if sock and os.path.exists(sock) and os.geteuid() == 0:
+        os.chown(sock, 0, gid)
+
+
+def seat_make():
+    """Create the seat account (fleet-credsep.py ensure_role's way): True when
+    made, False when it was already there. FLEET_NODE_SEAT_CMD (tests) is a
+    program run in place of each system command."""
+    if seat_ident() is not None:
+        return False
+    if "FLEET_NODE_SEAT_NAME" in os.environ and not os.environ.get("FLEET_NODE_SEAT_CMD"):
+        raise SystemExit("fleet-node-supervisor: FLEET_NODE_SEAT_NAME=%s does not exist (a seam names an existing user)"
+                         % seat_name())
+    name = seat_name()
+    if MAC:
+        used = {p.pw_uid for p in pwd.getpwall()} | {g.gr_gid for g in grp.getgrall()}
+        free = [i for i in range(499, 449, -1) if i not in used]
+        if not free:
+            raise SystemExit("fleet-node-supervisor: no free id in 450-499 for %s" % name)
+        i = str(free[0])
+        cmds = [["dseditgroup", "-o", "create", "-i", i, "-r", "claude-fleet node daemon", name],
+                ["sysadminctl", "-addUser", name, "-fullName", "claude-fleet node daemon", "-UID", i, "-GID", i,
+                 "-shell", "/usr/bin/false", "-home", "/var/empty", "-roleAccount"]]
+    else:
+        cmds = [["useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent",
+                 "--shell", "/usr/sbin/nologin", "--comment", "claude-fleet node daemon", name]]
+    for c in cmds:
+        argv = [os.environ["FLEET_NODE_SEAT_CMD"]] + c if os.environ.get("FLEET_NODE_SEAT_CMD") else c
+        if subprocess.call(argv, stdout=subprocess.DEVNULL) != 0:
+            raise SystemExit("fleet-node-supervisor: %s failed" % " ".join(c))
+    return True
+
+
 # --------------------------------------------------------------- install --------
-def plist_body(paths):
+def plist_body(paths, seat=False):
     script = os.path.join(paths.runtime, "bin", "fleet-node-supervisor.py")
-    return {
+    body = {
         "Label": LABEL,
         "ProgramArguments": ["/usr/bin/python3", "-I", script, "run"],
         "RunAtLoad": True,
@@ -5694,6 +6138,12 @@ def plist_body(paths):
         "StandardOutPath": os.path.join(paths.log, "supervisor.log"),
         "StandardErrorPath": os.path.join(paths.log, "supervisor.log"),
     }
+    if seat:
+        # the seat (#3668): its own account, its log in its own directory
+        body.update(UserName=seat_name(), GroupName=seat_name(),
+                    StandardOutPath=os.path.join(paths.log, "node", "supervisor.log"),
+                    StandardErrorPath=os.path.join(paths.log, "node", "supervisor.log"))
+    return body
 
 
 def launchctl(*args):
@@ -5703,7 +6153,7 @@ def launchctl(*args):
     return subprocess.call([lc] + list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def systemd_body(paths):
+def systemd_body(paths, seat=False):
     # JSON quoting is also valid systemd quoted-word escaping; reject newlines.
     values = node_environment()
     values.update(FLEET_NODE_ROOT=env("FLEET_NODE_ROOT", DEFAULT_ROOT),
@@ -5716,9 +6166,11 @@ def systemd_body(paths):
     return ("[Unit]\nDescription=Fleet managed node\nAfter=network-online.target\nWants=network-online.target\n\n"
             "[Service]\nType=simple\n" +
             "".join("Environment=%s\n" % json.dumps(k + "=" + v) for k, v in sorted(values.items())) +
-            "ExecStart=%s\nRestart=always\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=120\n"
+            ("User=%s\nGroup=%s\n" % (seat_name(), seat_name()) if seat else "") +
+            # the seat's children are the core's: a stop takes only the stand-ins
+            "ExecStart=%s\nRestart=always\nRestartSec=5\nKillMode=%s\nTimeoutStopSec=120\n"
             "LimitNOFILE=65536\nUMask=0022\n\n[Install]\nWantedBy=multi-user.target\n"
-            % " ".join(json.dumps(a) for a in args))
+            % (" ".join(json.dumps(a) for a in args), "process" if seat else "mixed"))
 
 
 def systemctl(*args):
@@ -5726,7 +6178,7 @@ def systemctl(*args):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def install(paths):
+def install(paths, make_seat=False):
     if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
         print("fleet-node-supervisor: install writes %s — run it as root (sudo)" % paths.plist, file=sys.stderr)
         return 1
@@ -5739,25 +6191,57 @@ def install(paths):
     if env("FLEET_NODE_SERVICE", "") == "foreground":
         print("foreground: the container starts the supervisor")
         return 0
+    # The seat (#3668): once its account exists the core takes requests from it
+    # alone, so the daemon goes onto it in the same step — `--seat` makes it; an
+    # account already there keeps the daemon on it. The root daemon being
+    # replaced is told to leave its children up (the handover), and the seat
+    # adopts them: nothing restarts.
+    handover = os.path.join(paths.state, SEAT_HANDOVER)
+    seated = seat_ident() is not None
+    if make_seat and not seated:
+        if core is None or not core.available():
+            print("fleet-node-supervisor: --seat needs the root core answering (FLEET_NODE_CORE=1 "
+                  "fleet node install) — the seat asks it for everything root's", file=sys.stderr)
+            return 1
+        write_json(handover, {"at": now(), "seat": seat_name()}, 0o600)
+        made = seat_make()
+        seated = seat_ident() is not None
+        if not seated:
+            print("fleet-node-supervisor: made %s but cannot find it" % seat_name(), file=sys.stderr)
+            return 1
+        print("seat: %s %s (uid %d)" % (seat_name(), "made" if made else "found", seat_ident()[0]))
+    if seated:
+        seat_layout(paths, seat_ident())
     if not MAC:
         os.makedirs(paths.daemon_dir, exist_ok=True)
         tmp = paths.plist + ".tmp-node"
         with open(tmp, "w") as f:
-            f.write(systemd_body(paths))
+            f.write(systemd_body(paths, seated))
         os.chmod(tmp, 0o644)
         os.replace(tmp, paths.plist)
         if systemctl("daemon-reload") or systemctl("enable", "--now", SYSTEMD_UNIT):
             return 1
-        return systemctl("restart", SYSTEMD_UNIT)
+        rc = systemctl("restart", SYSTEMD_UNIT)
+        _unlink(handover)
+        return rc
     tmp = paths.plist + ".tmp-node"
     with open(tmp, "wb") as f:
-        plistlib.dump(plist_body(paths), f)
+        plistlib.dump(plist_body(paths, seated), f)
     os.chmod(tmp, 0o644)
     launchctl("bootout", "system/" + LABEL)
     os.rename(tmp, paths.plist)
     rc = launchctl("bootstrap", "system", paths.plist)
-    print("installed %s%s" % (paths.plist, "" if rc == 0 else " (launchctl bootstrap rc=%d)" % rc))
+    _unlink(handover)
+    print("installed %s%s%s" % (paths.plist, " as %s" % seat_name() if seated else "",
+                                "" if rc == 0 else " (launchctl bootstrap rc=%d)" % rc))
     return 0 if rc == 0 else 1
+
+
+def _unlink(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def install_check(paths):
@@ -5765,17 +6249,18 @@ def install_check(paths):
     loaded (`fleet node install`'s 守护 step skips); 1 = install would change it."""
     if env("FLEET_NODE_SERVICE", "") == "foreground":
         return 0
+    seated = seat_ident() is not None
     if not MAC:
         try:
             with open(paths.plist) as f:
-                if f.read() != systemd_body(paths):
+                if f.read() != systemd_body(paths, seated):
                     return 1
         except OSError:
             return 1
         return systemctl("is-active", "--quiet", SYSTEMD_UNIT)
     try:
         with open(paths.plist, "rb") as f:
-            if plistlib.load(f) != plist_body(paths):
+            if plistlib.load(f) != plist_body(paths, seated):
                 return 1
     except Exception:
         return 1
@@ -6494,11 +6979,16 @@ def main(argv):
         print(__doc__)
         return 0
     if cmd == "install":
-        return install_check(paths) if "--check" in rest else install(paths)
+        return install_check(paths) if "--check" in rest else install(paths, make_seat="--seat" in rest)
     if cmd == "uninstall":
         return uninstall(paths)
     if cmd == "service":
-        return service_cli(paths, rest)
+        rc = service_cli(paths, rest)
+        try:
+            seat_share(paths)   # the seat reads the register (#3668)
+        except OSError as e:
+            print("fleet-node-supervisor: seat share: %s" % e, file=sys.stderr)
+        return rc
     if cmd == "entry":
         return entry_cli(paths, rest)
     if cmd == "account":
@@ -6510,12 +7000,19 @@ def main(argv):
             return 0
         if sub == "manages" and len(rest) > 1:
             return 0 if (accounts_read(paths).get(rest[1]) or {}).get("managed") else 1
+        rc = None
         if sub == "adopt" and len(rest) > 1:
-            return account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
-        if sub == "release" and len(rest) > 1:
-            return account_release(paths, rest[1], force="--force" in rest)
-        if sub == "forget" and len(rest) > 1:
-            return account_forget(paths, rest[1], force="--force" in rest)
+            rc = account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
+        elif sub == "release" and len(rest) > 1:
+            rc = account_release(paths, rest[1], force="--force" in rest)
+        elif sub == "forget" and len(rest) > 1:
+            rc = account_forget(paths, rest[1], force="--force" in rest)
+        if rc is not None:
+            try:
+                seat_share(paths)   # they write logins/ 0700; the seat lists its names (#3668)
+            except OSError as e:
+                print("fleet-node-supervisor: seat share: %s" % e, file=sys.stderr)
+            return rc
     if cmd == "tenants":
         cur = tenants_now(paths, read_json(paths.state_file, {}))
         bad = cur["bad"]

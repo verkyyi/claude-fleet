@@ -6932,6 +6932,37 @@ drill_chat_home_moved() {
   WHAT="A 家说一句、停掉、状态目录照 service move 搬到 B 家：B 上同一个 session、历史在、下一轮 resume 它，A 下面不剩服务；空闲到点退出 75（有页面连着不退），再起同一条对话"
 }
 
+# land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
+# land at once through fleet-land.sh — both land, one after the other, the second
+# rebased onto the first and checked again; a red check never moves the base; gh 0 times.
+drill_land_race() {
+  CAP=60; local d="$WORK/lr" t0 out
+  mkdir -p "$d/fake" "$d/conf/fleets/fl/repos"
+  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.log"; exit 1\n' "$d" > "$d/fake/gh"; chmod +x "$d/fake/gh"; : > "$d/gh.log"
+  : > "$d/conf/fleets/fl/conf"
+  t0=$(now)
+  out=$(cd "$d" && PATH="$d/fake:$PATH" FLEET_CONF_DIR="$d/conf" TMPDIR="$d" LAND_LEASE_DIR="$d/leases" FLEET_HEAVY=0 \
+    GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t bash -c '
+    B=$1 d=$PWD
+    git init -q --bare o.git; git clone -q o.git m 2>/dev/null; cd m; git checkout -q -B main
+    echo a > f; git add f; git commit -q -m base; git push -q origin main
+    printf "FLEET_REPO=\"o/r\"\nFLEET_MAIN=\"%s\"\nFLEET_BASE_BRANCH=\"main\"\nFLEET_FORGE=\"none\"\nFLEET_LAND=\"fleet\"\n" "$d/m" > "$d/conf/fleets/fl/repos/o-r.conf"
+    printf "FLEET_CHECK_CMD=%s\n" "\"sleep 1; test ! -e BAD\"" >> "$d/conf/fleets/fl/repos/o-r.conf"
+    for n in 1 2 3; do git worktree add -q -b issue-$n ../w$n main 2>/dev/null; echo $n > ../w$n/x$n; git -C ../w$n add x$n; git -C ../w$n commit -q -m x$n; done
+    touch ../w3/BAD; git -C ../w3 add BAD; git -C ../w3 commit -q -m bad
+    "$B/fleet-land.sh" -q o/r issue-1 > ../r1 2>/dev/null & a=$!
+    "$B/fleet-land.sh" -q o/r issue-2 > ../r2 2>/dev/null & b=$!
+    "$B/fleet-land.sh" -q o/r issue-3 > ../r3 2>/dev/null & c=$!
+    wait $a; wait $b; wait $c
+    printf "%s %s %s " "$(cat ../r1)" "$(cat ../r2)" "$(cat ../r3)"
+    git -C ../o.git ls-tree --name-only main | grep -c "^x[12]$" | tr -d "\n"
+    printf " %s" "$(git -C ../o.git ls-tree --name-only main | grep -c "^BAD$")"' _ "$BIN" 2>/dev/null)
+  SECS=$(since "$t0")
+  [ "$out" = "MERGED MERGED FAILING 2 0" ] || { WHY="three landings at once read [$out], want [MERGED MERGED FAILING 2 0]"; return 1; }
+  [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
+  WHAT="三个会话同时自己落地：两个依次并进（后者变基后再检查），检查红的那个不进主干，gh 0 次"
+}
+
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

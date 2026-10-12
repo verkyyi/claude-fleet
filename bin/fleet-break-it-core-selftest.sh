@@ -15,6 +15,12 @@
 #   root-core-unsigned-switch bin/fleet-node-core.py verify_release + op_switch: a
 #                             staged release signed by another key, or with a file
 #                             changed after signing
+#   fleetnode-compromised     bin/fleet-node-core.py op_machine / op_sweep / op_entry /
+#                             op_report / op_exec_as / op_kill + bin/fleet-node-supervisor.py
+#                             seat_make (#3668): the node daemon's account _fleetnode
+#                             taken over — everything but the table's start / stop /
+#                             end-a-process is refused, and the account itself can do
+#                             nothing more (no admin, no shell, no home)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -170,6 +176,71 @@ drill_root_core_unsigned_switch() {
   [ "$rc" = 0 ] && [ "$cur" = "$bad" ] || { WHY="a correctly signed release did not switch (rc $rc): $out"; return 1; }
   SECS=$(since "$t0")
   WHAT="staging 里放别的钥匙签的版本、签完又改了文件的版本，请核心 switch：都拒绝、current 不动、staging 留作证据；签对的才切过去"
+}
+
+# fleetnode-compromised (#3668): whoever runs as the node daemon's account asks the
+# core for everything a root shell would give — a program outside <current>/bin, a
+# machine job that is not in the table, a sweep / entry / report with an argument,
+# a kill of pid 1 or of someone who is not a managed login. Each is refused and
+# nothing runs; what is left is the table: a job started and stopped by its name.
+# The account itself: made with no admin group, shell false / nologin, no home —
+# and on a machine that has it (root here), it reads no one's home, no credential
+# store, and sudo says no.
+drill_fleetnode_compromised() {
+  CAP=30
+  local sb t0 out rc mark line sleeper
+  sb="$WORK/seat"; core_sandbox "$sb"; mark="$sb/PWNED"
+  printf '#!/bin/bash\ntrap "exit 0" TERM; while :; do sleep 0.2; done\n' > "$sb/root/rt/bin/fleet-loop.sh"
+  chmod 755 "$sb/root/rt/bin/fleet-loop.sh"
+  printf '{"children": [{"name": "looper", "cmd": ["/bin/bash", "%s"]}], "tasks": [], "account": []}\n' \
+    "$sb/root/rt/bin/fleet-loop.sh" > "$sb/table.json"
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  t0=$(now)
+  out=$(core_call "$sb" exec-as "{\"login\": \"alice\", \"argv\": [\"/bin/sh\", \"-c\", \"touch $mark\"]}"); rc=$?
+  [ "$rc" = 2 ] || { WHY="exec-as of a program outside bin/ was not refused (rc $rc): $out"; return 1; }
+  for line in "{\"op\": \"machine\", \"args\": {\"job\": \"/bin/sh\", \"action\": \"start\"}}" \
+              '{"op": "machine", "args": {"job": "sudo", "action": "start"}}' \
+              "{\"op\": \"machine\", \"args\": {\"job\": \"looper\", \"action\": \"start\", \"argv\": [\"touch\", \"$mark\"]}}" \
+              '{"op": "machine", "args": {"job": "looper", "action": "exec"}}' \
+              '{"op": "sweep", "args": {"path": "/etc/sudoers"}}' \
+              '{"op": "entry", "args": {"keys": "ssh-ed25519 AAAA root"}}' \
+              '{"op": "report", "args": {"kind": "file:/var/db/fleet-cred/.shared.json"}}' \
+              '{"op": "kill", "args": {"pid": 1}}' \
+              '{"op": "run-as", "args": {"login": "root", "job": "looper"}}'; do
+    out=$(core_raw "$sb" "$line")
+    printf '%s' "$out" | grep -q '"refused"' || { WHY="not refused: $line → $out"; return 1; }
+  done
+  # a process that is not a managed login's: the seat cannot end it
+  sleep 60 & sleeper=$!
+  printf '{}\n' > "$sb/db/accounts.json"
+  out=$(core_call "$sb" kill "{\"pid\": $sleeper}"); rc=$?
+  kill -0 "$sleeper" 2>/dev/null && [ "$rc" = 2 ] \
+    || { kill "$sleeper" 2>/dev/null; WHY="the seat ended an unmanaged process (rc $rc): $out"; return 1; }
+  kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null
+  [ ! -e "$mark" ] || { WHY="a refused request RAN something ($mark exists)"; return 1; }
+  # what is left: the table's start / stop by name
+  out=$(core_raw "$sb" '{"op": "machine", "args": {"job": "looper", "action": "stop"}}')
+  printf '%s' "$out" | grep -q '"ok": true' || { WHY="stop of a table job was not answered: $out"; return 1; }
+  # the account: no admin, no shell, no home (its creation, recorded)
+  printf '#!/bin/sh\necho "$*" >> %s/seat-cmds\n' "$sb" > "$sb/rec.sh"; chmod 755 "$sb/rec.sh"
+  # shellcheck disable=SC2046
+  env $(core_env "$sb") FLEET_NODE_SEAT_CMD="$sb/rec.sh" python3 -c '
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(sp)
+sp.loader.exec_module(m); m.seat_make()' "$sb/root/rt/bin/fleet-node-supervisor.py" \
+    || { WHY="seat_make did not run"; return 1; }
+  grep -Eq -- '-shell /usr/bin/false .*-home /var/empty -roleAccount|--home-dir /nonexistent --shell /usr/sbin/nologin' \
+    "$sb/seat-cmds" || { WHY="the account is not shell-less and homeless: $(cat "$sb/seat-cmds")"; return 1; }
+  ! grep -Eqw 'admin|wheel|sudo|staff' "$sb/seat-cmds" \
+    || { WHY="the account is put in an admin group: $(cat "$sb/seat-cmds")"; return 1; }
+  if [ "$(id -u)" = 0 ] && id -u _fleetnode >/dev/null 2>&1; then
+    local who; who=$(stat -f %Su /dev/console 2>/dev/null || echo nobody)
+    ! sudo -n -u _fleetnode ls "/Users/$who" >/dev/null 2>&1 || { WHY="_fleetnode reads /Users/$who"; return 1; }
+    ! sudo -n -u _fleetnode ls /var/db/fleet-cred >/dev/null 2>&1 || { WHY="_fleetnode reads /var/db/fleet-cred"; return 1; }
+    ! sudo -n -u _fleetnode sudo -n true >/dev/null 2>&1 || { WHY="_fleetnode can sudo"; return 1; }
+  fi
+  SECS=$(since "$t0")
+  WHAT="以 _fleetnode 身份：exec-as bin/ 外的程序、表外的 machine 任务、带参数的 sweep / entry / report、结束 pid 1 或非受管登录的进程——全部 refused、什么都没执行；只剩表里的按名启停；账号本身无管理员组、无 shell、无家目录"
 }
 
 cred_run_drills "$0"

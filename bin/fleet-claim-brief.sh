@@ -133,8 +133,14 @@ printf '===== fleet =====\n'
 printf 'session=%s  seat=%s  repo=%s  base=%s\n' "$sess" "$seat" "$repo" "$base"
 printf 'main=%s   (READ-ONLY base checkout — edit only in this worktree)\n' "${main:-?}"
 printf 'worktree=%s\n' "$cwd"
-printf 'merge=%s  (how you land: fleet-pr-merge.sh <PR> on a READY verdict — gh pr merge --%s --delete-branch, REST when GraphQL is rate-limited)\n' \
+if [ "$(fleet_repo_land "$repo" "$sess")" = fleet ]; then
+  # A repo the fleet lands itself (issue #3602): no PR, no gh — the land line instead.
+  printf 'land: fleet  (no PR: pr_verdict → pr_merge with no pr — bin/fleet-land.sh rebases onto %s, runs the repo check %s, fast-forwards)\n' \
+    "$base" "$(c=$(fleet_repo_conf_get "$sess" "$repo" FLEET_CHECK_CMD); [ -n "$c" ] && printf '`%s`' "$c" || printf '(none registered — 没跑检查)')"
+else
+  printf 'merge=%s  (how you land: fleet-pr-merge.sh <PR> on a READY verdict — gh pr merge --%s --delete-branch, REST when GraphQL is rate-limited)\n' \
   "$(fleet_merge_method)" "$(fleet_merge_method)"
+fi
 printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
   "$issue" "${at_issue:-none}" "${wt_issue:-none}" \
   "$([ -n "$issue_arg" ] && printf ' --issue=%s' "$issue_arg")"

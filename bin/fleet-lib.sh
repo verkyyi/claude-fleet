@@ -1121,7 +1121,7 @@ fleet_load_repo_conf() {
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +
 # the caller's environment): the baseline _fleet_repo_keys_reset restores. A key set
@@ -1980,6 +1980,26 @@ fleet_repo_forge() {
   v=''
   [ -f "$f" ] && v=$( unset FLEET_FORGE; . "$f" >/dev/null 2>&1; printf '%s' "${FLEET_FORGE:-}" )
   case "$v" in none) echo none ;; *) echo github ;; esac
+}
+
+# fleet_repo_land <repo> [<sess>] → pr · fleet: who lands <repo>'s work (issue
+# #3602, EPIC #3570 C9). FLEET_LAND=fleet, or a repo with no GitHub
+# (FLEET_FORGE=none), is landed by bin/fleet-land.sh — rebase, the repo's own
+# FLEET_CHECK_CMD, a fast-forward push; anything else (unset = every repo before
+# #3600) through a pull request. The one reader the merge-gate scripts ask.
+fleet_repo_land() {
+  local repo="${1:-}" sess="${2:-${FLEET_SESSION:-}}" f v slug
+  [ -n "$repo" ] || { echo pr; return 0; }
+  slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  f=''
+  [ -n "$sess" ] && f="$FLEET_CONF_DIR/fleets/$sess/repos/$slug.conf"
+  if [ -z "$f" ] || [ ! -f "$f" ]; then
+    for f in "$FLEET_CONF_DIR"/fleets/*/repos/"$slug".conf; do [ -f "$f" ] && break; done
+  fi
+  v=''
+  [ -f "$f" ] && v=$( unset FLEET_FORGE FLEET_LAND; . "$f" >/dev/null 2>&1
+                      [ "${FLEET_FORGE:-}" = none ] && echo fleet || printf '%s' "${FLEET_LAND:-}" )
+  case "$v" in fleet) echo fleet ;; *) echo pr ;; esac
 }
 
 # ---- adding a repo: the ONE implementation (issue #1104) ---------------------
