@@ -49,6 +49,7 @@
 **记录与计划**
 
 - [OSS-PACKAGING-PLAN.md](dev/OSS-PACKAGING-PLAN.md) — 开源打包计划（第三章是瘦身定案）
+- [OSS-INVENTORY.md](dev/OSS-INVENTORY.md) — 仓库里的内部名字和地址 · 清单（`bin/oss-scan.sh`）
 - [USAGE-EVIDENCE.md](dev/USAGE-EVIDENCE.md) — 使用实证
 - [CLAIM-MEASUREMENT.md](dev/CLAIM-MEASUREMENT.md) — 认领与摸底的测量方法
 
