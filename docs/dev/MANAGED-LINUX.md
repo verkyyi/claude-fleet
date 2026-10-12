@@ -268,7 +268,7 @@ In order:
 | reject the cloud metadata address | `100.100.100.200/32` | `--egress-metadata` |
 | reject the pod range | `172.20.0.0/16` | `--egress-pod-cidr` |
 | reject the service range (`kubernetes` is `172.21.0.1`) | `172.21.0.0/20` | `--egress-service-cidr` |
-| reject the VPC / private ranges (the node is `10.0.1.240`) | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16` | `--egress-private` |
+| reject the VPC / private ranges (the node's own included) | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16` | `--egress-private` |
 | everything else — the public internet — is allowed | | |
 
 IPv6 gets the same loopback / reply rules and rejects `fc00::/7` (the pod has no

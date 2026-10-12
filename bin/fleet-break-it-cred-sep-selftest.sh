@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-break-it-cred-sep-selftest.sh — docs/dev/BREAK-IT.md rows `cred-sep-proxy-off`
-# and `cred-sep-bootstrap-fails` (issue #2273): on 2026-10-07 m4's
+# and `cred-sep-bootstrap-fails` (issue #2273): on 2026-10-07 mac-a's
 # `sudo -n bash …/fleet-credsep.sh machine install` moved the credentials before
 # the login's proxy was on, launchd refused the agent's new definition halfway,
 # and the login's every session and its node agent were down until a person put
@@ -254,7 +254,7 @@ PY
   WHAT="credsep 把节点代理改成 root 启动时，日志从 ~/.ccquota/agent.log 移到 \$LOG_BASE/<登录>/agent.log：同一根软链，旧写法 root 写进目标文件，新写法写不到"
 }
 
-# 2026-10-08 m4 (#2298's drill, issue #2418): `fleet-login-remove.sh tscan1008
+# 2026-10-08 mac-a (#2298's drill, issue #2418): `fleet-login-remove.sh tscan1008
 # --delete-home --apply` deleted a login separated at open (#2294) and left its
 # credsep proxy running as the role account, the store with the pool tokens,
 # root's <LIB>/<login>.conf and its logs. The offboarding now purges them before
@@ -347,7 +347,7 @@ drill_cred_sep_rejoin_plain() {
   WHAT="隔离登录再 join：没有免密 sudo 先拒（什么都没花）；有则令牌经 credsep setenv 进存储，家目录无明文、node.env 仍是软链；无码重跑认作已登记"
 }
 
-# 2026-10-08 m4: `fleet host off` on a separated login — as the login, "not
+# 2026-10-08 mac-a: `fleet host off` on a separated login — as the login, "not
 # registered"; as root, setenv's mv swapped the link for a plain file holding
 # the token (#2426). Now credsep edits the store's copy in place.
 drill_cred_sep_compute_unlinks() {
@@ -373,7 +373,7 @@ drill_cred_sep_compute_unlinks() {
   WHAT="隔离登录 compute off：存储那份原地改成 0（属主、权限不变、令牌在），node.env 仍是软链，家目录无令牌；status 读 node.pub.env"
 }
 
-# 2026-10-09 macmini: `fleet host on --shared` from before #2316 had replaced the
+# 2026-10-09 mac-c: `fleet host on --shared` from before #2316 had replaced the
 # separated login's node.env link with a plain file (COMPUTE=1 / PERSONAL=0) —
 # the token in the home again, the store's copy older, and the agent reading the
 # switches live from the plain one (#2649). The doctor names the fix, a writer
@@ -431,7 +431,7 @@ drill_cred_sep_plain_node_env() {
   WHAT="隔离登录的 node.env 又成了普通文件：doctor 说清哪份在用和修法；写入方先拒；reconcile 以较新的家目录那份为准合并、保留库里独有键、原件进 backup/、软链复位、重跑无事；之后 compute on 软链仍在"
 }
 
-# 2026-10-09 macmini (#2661 → #2663): the login's agent from before the
+# 2026-10-09 mac-c (#2661 → #2663): the login's agent from before the
 # separation (PPID=1, under no launchd job) kept running beside the one credsep's
 # launcher started — one node token, two hub links replacing each other, each
 # hello with its own compute value: placement flapped. The launcher now stops
@@ -477,7 +477,7 @@ EOF
   WHAT="分离时留着一个旧 agent（孤儿）：经启动器起新 agent 前先停掉同登录、同 --state 的旧的，切换后只剩一个"
 }
 
-# 2026-10-11 (#3155, C9's 20th run): the hub opened drill10110804 on mini2, whose
+# 2026-10-11 (#3155, C9's 20th run): the hub opened drill10110804 on mac-d, whose
 # shared proxy served one login. fleet-login-new.sh 7b's `install --fresh` gave
 # the new login a proxy of its OWN, the shared one's tenants file never named it,
 # and the newcomer's first claude answered «Please run /login».
