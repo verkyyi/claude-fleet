@@ -133,6 +133,22 @@ eq "A ls --json: an own row is named by #me, a hub row keeps its node" "@7|mini2
   "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-me" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin)))')"
 eq "A ls --json: no #me (no hub) leaves an own row's node empty" "@7|;" \
   "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
+# ...and its hub identity (issue #3467): the cache's local=1 row for window @7 is
+# wid:F/scratch-9, so `fleet ls --json` carries worker_id + fleet_id for the own
+# row — the drill's locate finds its window by it — and a write by the own key
+# goes through the hub; no hub ⇒ the window's own @fleet_id off this machine's tmux
+{ cat "$W/remote-me"; printf '%s\n' "wid:F/scratch-9${U}mini2${U}online${U}${U}${U}done${U}claude${U}我的会话${U}${U}${U}1${U}@7${U}hub${U}${U}${U}ok"; } > "$W/remote-own"
+eq "A ls --json: an own row carries the hub's worker_id + fleet_id (#3467)" "@7|F/scratch-9|scratch-9;wid:F/issue-12|F/issue-12|issue-12;" \
+  "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-own" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"]) for r in json.load(sys.stdin)[:2]))')"
+FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-own" FLEET_SESSION_CLI_WRITE="$W/write" \
+  python3 "$BIN/fleet-session-cli.py" rename @7 看图 >/dev/null 2>&1
+eq "A rename by an own key → worker_rename by its hub worker_id (#3467)" 'worker_rename {"worker_id": "F/scratch-9", "name": "看图"}' "$(tail -1 "$W/writes" 2>/dev/null)"
+tmux -L "$L" -f /dev/null new-session -d -s "$L" -x 80 -y 20 2>/dev/null
+WID=$(tmux -L "$L" display-message -p -t "=$L" '#{window_id}' 2>/dev/null)
+tmux -L "$L" set-option -w -t "=$L" @fleet_id fid-own-7 2>/dev/null
+sed "s/^@7/$WID/" "$W/rows-own.tsv" > "$W/rows-own-tmux.tsv"
+eq "A ls --json: no hub ⇒ an own row's fleet_id is its window's @fleet_id (#3467)" "$WID||fid-own-7;" \
+  "$(FLEET_SESSION="$L" FLEET_SESSION_CLI_ROWS="$W/rows-own-tmux.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s;" % (r["key"], r["worker_id"], r["fleet_id"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
 
 # --- B. the resolver -----------------------------------------------------------------
 eq "B by key" "名称      随便聊聊" "$(cli show wid:F/scratch-3 | head -1)"

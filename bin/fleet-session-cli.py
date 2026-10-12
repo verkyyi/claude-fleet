@@ -121,11 +121,11 @@ def rows():
     seam = os.environ.get("FLEET_SESSION_CLI_ROWS")
     if seam:
         try:
-            return own_node(qo.parse_rows(Path(seam).read_text()))
+            return own_ids(own_node(qo.parse_rows(Path(seam).read_text())))
         except OSError:
             return []
     got = qo.full_rows(os.environ.get("FLEET_SESSION", ""), timeout=15)
-    return own_node(got if got is not None else qo.read_rows())
+    return own_ids(own_node(got if got is not None else qo.read_rows()))
 
 
 def own_node(rs):
@@ -140,6 +140,46 @@ def own_node(rs):
             if not r.get("node") and not str(r.get("key", "")).startswith("wid:"):
                 r["node"] = me
     return rs
+
+
+def own_ids(rs):
+    """Every row's hub identity (issue #3467): `worker_id` + `fleet_id`. A `wid:`
+    row's is its key; a row of THIS machine's own (`@7`, a window id — what a
+    thin client's `fleet ls` gets back from its home, #3454) is the hub cache's
+    local=1 row for that window, else — no hub — only the window's own
+    @fleet_id. So every road that takes a key from `fleet ls` (locate in the
+    drill, rename / reap / answer) reaches the same session by either key."""
+    local = {}
+    for f in cache_lines():
+        f += [""] * (12 - len(f))
+        if f[0].startswith("wid:") and f[10] == "1" and f[11].startswith("@"):
+            local[f[11]] = f[0][4:]
+    fids = None
+    for r in rs:
+        k = str(r.get("key", ""))
+        wid = k[4:] if k.startswith("wid:") else local.get(k, "")
+        if wid:
+            r["worker_id"] = wid
+            r["fleet_id"] = wid.split("/", 1)[1] if "/" in wid else ""
+        elif k.startswith("@"):
+            if fids is None:
+                fids = window_fids()
+            r["fleet_id"] = fids.get(k, "")
+    return rs
+
+
+def window_fids():
+    """{window id: @fleet_id} of this machine's fleet session ({} = none)."""
+    sess = os.environ.get("FLEET_SESSION", "")
+    if not sess:
+        return {}
+    try:
+        got = subprocess.run(["tmux", "-L", sess, "list-windows", "-t", "=" + sess,
+                              "-F", "#{window_id}\t#{@fleet_id}"],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    return {a: b for a, _, b in (l.partition("\t") for l in got.splitlines()) if b}
 
 
 # --- the measurement bus (issue #2431) ---------------------------------------------
@@ -169,15 +209,19 @@ def cache_path():
                         "remote_" + os.environ.get("FLEET_SESSION", ""))
 
 
-def me_label():
-    """This machine's label as the hub names it: the cache's `#me` line ('' = none)."""
+def cache_lines():
+    """The hub cache's lines, each split on its unit separator ([] = none)."""
     path = cache_path()
     try:
-        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines() if path else []
+        text = Path(path).read_text(encoding="utf-8", errors="replace") if path else ""
     except OSError:
-        return ""
-    for line in lines:
-        f = line.split("\x1f")
+        return []
+    return [line.split("\x1f") for line in text.splitlines()]
+
+
+def me_label():
+    """This machine's label as the hub names it: the cache's `#me` line ('' = none)."""
+    for f in cache_lines():
         if f[0] == "#me":
             return (f[1] if len(f) > 1 else "").strip()
     return ""
@@ -380,7 +424,9 @@ def table(rs, out=sys.stdout):
 # --- writes --------------------------------------------------------------------------
 
 def worker_id(row):
-    return row["key"][4:] if row["key"].startswith("wid:") else ""
+    """The hub's id of the row — a `wid:` key's, or an own row's off the hub
+    cache (own_ids, issue #3467); '' = not a session the hub knows."""
+    return row.get("worker_id") or (row["key"][4:] if row["key"].startswith("wid:") else "")
 
 
 def hub_write(tool, args, wait=30):
@@ -446,7 +492,8 @@ def cmd_ls(args):
         rs = [r for r in rs if not r.get("ended")]
     rs = attach_bus(rs)
     if "--json" in args:
-        keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test")
+        keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test",
+                "worker_id", "fleet_id")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"), ("ask_kind", "ask_kind"), ("ask", "ask"))

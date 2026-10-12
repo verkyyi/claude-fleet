@@ -1016,7 +1016,7 @@ step_attach() {
 # `fleet ls` still has its key, and the right pane shows its text again. Only
 # a session on THIS machine can be restarted from here — elsewhere is a FAIL
 # that says so (the drill runs on the machine the hub places on, m4).
-SL='' SLH='' SFLEET='' SKEY='' SNODE='' SFID=''
+SL='' SLH='' SFLEET='' SKEY='' SNODE='' SFID='' SFID_K=''
 # as_sess <cmd…>: run as the session's login, its own HOME / conf dir / TMPDIR
 as_sess() {
   ( cd / && sudo -n -u "$SL" -H env -i HOME="$SLH" USER="$SL" LOGNAME="$SL" LANG=en_US.UTF-8 \
@@ -1032,8 +1032,10 @@ locate() {
   local r fid d s
   r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls.json" | ls_row "$1")
   [ -n "$r" ] || { printf 'no row %s in `fleet ls --json` (%s)' "$1" "$(head -c 160 "$RUN/ls.err")"; return 1; }
-  SKEY=$(printf '%s' "$r" | cut -f2) fid=$(printf '%s' "$r" | cut -f3)
-  [ "$fid" != - ] || { printf '%s has no hub key (%s) — not a session of the hub'"'"'s' "$1" "$SKEY"; return 1; }
+  SKEY=$(printf '%s' "$r" | cut -f2) fid=$(printf '%s' "$r" | cut -f3); SFID_K=$fid
+  # an own row of the home (`@7`, issue #3467) is as good as a wid: key — only a
+  # row with no @fleet_id at all (a fleet ls older than #3467) cannot be found
+  [ "$fid" != - ] || { printf '%s (%s) has no @fleet_id in `fleet ls --json` — cannot find its window (fleet ls older than #3467?)' "$1" "$SKEY"; return 1; }
   for d in "$HOMES"/*; do
     [ -d "$d" ] && [ "$d" != "$H" ] || continue
     for s in $( ( cd / && sudo -n ls "$d/.config/claude-fleet/fleets" ) 2>/dev/null); do
@@ -1143,9 +1145,11 @@ step_restart() {
     row "机器 tmux 重启后：客户端没回到 $RESUME_NAME" "等" "是 — 重启后要重新打开会话"
     failstep node-restart-resume "the client did not come back on $RESUME_NAME within ${STEP_SECS}s:"; tail_pane; return 1
   fi
-  if ! as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row "$RESUME_NAME" | cut -f2 | grep -qxF -- "$SKEY"; then
+  # the same session = the same @fleet_id: an own row's key is a window id, which
+  # a restored server hands out afresh (issue #3467)
+  if ! as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row "$RESUME_NAME" | cut -f3 | grep -qxF -- "$SFID_K"; then
     row "机器 tmux 重启后：列表里 $RESUME_NAME 换了一个" "等" "是 — 回来的不是同一个会话"
-    failstep node-restart-resume "$RESUME_NAME came back under another key (was $SKEY)"; return 1
+    failstep node-restart-resume "$RESUME_NAME came back as another session (was $SKEY, @fleet_id $SFID_K)"; return 1
   fi
   row "会话那台机器${SNODE:+ $SNODE} tmux 重启（save · kill-server · restore）：右边回到 ${RESUME_NAME}，还是同一个会话" "等" 否
   pass node-restart-resume "$SL's tmux${SNODE:+ on $SNODE} restarted: $back session(s) back, the client on $RESUME_NAME ($SKEY) again · $(elapsed)"

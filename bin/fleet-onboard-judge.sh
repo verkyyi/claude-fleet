@@ -110,8 +110,10 @@ attach_answer() { sed -n '/\/attachments\//,$p' | grep -Eo -- "$ATTACH_RED" | he
 # to share the words. Without it: the first session whose name — or title (issue
 # #3445: a session the thin client's ⚡ row opens is 「我的会话」, its words the
 # title) — starts with <name>. A hub row's key is wid:<fleet UUID>/<fleet_id> —
-# the window's lifelong @fleet_id is what finds it on its machine; a row of this
-# computer's own has none (-).
+# the window's lifelong @fleet_id is what finds it on its machine. A row of the
+# listing machine's own (a window id, `@7` — a thin client's list comes from its
+# home, issue #3467) carries it as the list's `fleet_id` field; a list older than
+# that leaves it unknown (-).
 ls_row() {
   python3 -c '
 import json, sys
@@ -131,7 +133,7 @@ if sys.argv[2]:
 if not named:
     sys.exit(1)
 k = str(named[0].get("key", ""))
-fid = k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-"
+fid = str(named[0].get("fleet_id") or "") or (k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-")
 print("%s\t%s\t%s" % (named[0].get("node", "") or "-", k, fid or "-"))' "$1" "${2:-}"
 }
 # ls_keys (`fleet ls --json` on stdin): every session's key, one a line; rc 1 when

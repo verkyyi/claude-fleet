@@ -125,6 +125,11 @@ r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row 看图)
 [ "$r" = "$(printf 'm4\twid:8f0c-uuid/5a1e-fid\t5a1e-fid')" ] && ok 'restart: ls_row gives node · key · @fleet_id' || bad "restart: ls_row got '$r'"
 r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row first)
 [ "$(printf '%s' "$r" | cut -f3)" = - ] && ok 'restart: a local row has no @fleet_id (-)' || bad "restart: local row got '$r'"
+# a thin client's list comes from its home (issue #3467): the session is the home's
+# own row (`@7`), its identity the list's fleet_id field — locate finds it by that
+LSO='[{"key":"@7","name":"我的会话 · first","title":"first","node":"mini2","worker_id":"U/f7","fleet_id":"f7"}]'
+r=$(printf '%s' "$LSO" | bash "$DRILL" --ls-row first)
+[ "$r" = "$(printf 'mini2\t@7\tf7')" ] && ok 'restart: an own row of the home gives its @fleet_id (#3467)' || bad "restart: own row got '$r'"
 if printf '%s' "$LS" | bash "$DRILL" --ls-row nope >/dev/null; then bad 'restart: ls_row found a row that is not there'; else ok 'restart: no such row is rc 1'; fi
 # step 8 by IDENTITY (issue #3464): the thin client's ⚡ session is 「我的会话」, its
 # words the title — the new row is the key that was not in the list before ↵, never
