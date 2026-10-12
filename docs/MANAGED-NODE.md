@@ -971,3 +971,28 @@ staging → 核心复制、填工具缓存、签名、切换 → `update` 各步
 
 BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
 `internal/agent/runas_core_unix_test.go`。
+
+## 23. 管理员 agent 只能开号删号，而且只认入口签的单（EPIC #3500 C15，#3557 · 迁移步 E）
+
+共同约定 11：开号删号由一个专门的角色账号做（`_fleetadmin` / `fleetadmin`），它的 sudoers
+只有两行——`/var/db/fleet-node/admin/fleet-login-new.sh` 和 `fleet-login-remove.sh`（回收是删号的
+`--recycle`，不加第三行）——而这两个脚本**只执行入口签过的单**。这一节是「单」那一半（C15·a）；
+账号、sudoers、核心放副本、agent 的座位模式和交接是 C15·b（#3696）。
+
+- **单**：入口用账号操作专用钥匙（`CCQUOTA_FLEET_ACCOUNT_KEY`，自己的 Secret，不是发布钥匙）签
+  `{op, login, machine, nonce, exp}`——nonce 就是那单的 op_id，exp 十分钟；编码 `v1.<payload>.<sig>`
+  （base64url），签的是 `fleet-account-ticket-v1\0` + payload 原样字节。Go 是
+  `control.SignAccountTicket` / `VerifyAccountTicket`，机器上是 `bin/fleet_admin_ticket.py`
+  （纯 Python 的 `fleet_ed25519.py`）；两边对同一张单逐字节一致（Go 测试钉着 Python 做的那张）。
+- **入口改派**：hello 里有 `CapAdminSeat` 的 agent 优先拿这台机器的开号删号，管理员登录的旧 agent
+  做完手上那单就再也收不到新单；发给它的每一单都带 `AccountOp.Ticket`，重问（re-ask）换一张同 nonce 的新单。
+  公钥在 `GET /v1/fleet/account-key`（公开，同发布公钥的一行格式），由 root 安装步钉在门旁边。
+- **门**：两个名字是同一份 `bin/fleet-admin-gate.sh` 的 root 副本，名字定操作；只认 agent 拼的那几种
+  参数（`accountArgv`），旁边的 `admin.conf`（`bin=` 发布的 bin/、`pub=`、`used=`、`machine=`，逐行读、
+  从不 source）说东西在哪；验单通过、nonce 在已用簿里 O_EXCL 记下，才 exec 发布里的同名脚本。以 root
+  跑时钥匙、已用簿、门自己和 admin.conf、发布脚本都必须是 root 独有，否则拒。
+- **没有钥匙 / 没有 `CapAdminSeat` 的 agent ⇒ 今天的路，字节不变**（Go `TestAccountTicketOffAddsNothing`：
+  不签、不派给座位、`/v1/fleet/account-key` 404）。
+
+BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；Go
+`internal/control/account_ticket_test.go`、`internal/api/fleet_account_ticket_test.go`。

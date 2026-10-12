@@ -700,11 +700,11 @@ func (s *Server) dispatchAccounts() {
 		if err != nil {
 			continue
 		}
-		msg, err := control.New(control.TypeAccountOp, op)
+		now := time.Now()
+		msg, err := s.accountMessage(op, control.NewOpID(), epID, a.Hostname, now)
 		if err != nil {
 			continue
 		}
-		now := time.Now()
 		sent, err := s.Store.MarkAccountSent(a.PrincipalID, a.Hostname, from, to, msg.OpID, epID, now)
 		if err != nil || !sent {
 			continue
@@ -798,11 +798,12 @@ func (s *Server) reaskAccounts(now time.Time) {
 		if err != nil {
 			continue
 		}
-		msg, err := control.New(control.TypeAccountOp, op)
+		// A seat's re-ask carries a fresh ticket under the same nonce: one
+		// that ran it answers from its book, one that never got it runs it once.
+		msg, err := s.accountMessage(op, a.OpID, a.EndpointID, a.Hostname, now)
 		if err != nil {
 			continue
 		}
-		msg.OpID = a.OpID
 		s.accountAsked[a.OpID] = now
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		err = s.SendNodeWrite(ctx, a.EndpointID, msg)
