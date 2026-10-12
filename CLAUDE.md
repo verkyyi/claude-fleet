@@ -419,7 +419,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
 - **A draft-only ticket lands only after an approval** (issue #3715,
-  docs/DRAFT-PR.md). `<!-- fleet:draft-only -->` in the issue body (the filer's
+  docs/dev/DRAFT-PR.md). `<!-- fleet:draft-only -->` in the issue body (the filer's
   `--draft` / `--pr-note`, the `file_issue` · `task` · `spawn` tools' `draft` /
   `pr_note`, `fleet-draft.sh mark`) makes the brief print a `draft-only` section:
   the worker opens a DRAFT PR, reports `waiting` and stops; `fleet-pr-merge.sh`
