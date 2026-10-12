@@ -143,6 +143,13 @@ Usage:
                                                taken-over login · 3 the sudo half unread (not
                                                root, no daemon reading yet). `account adopt`
                                                refuses (5) a login that can.
+  fleet-node-supervisor.py seats [--json] [--check]
+                                               a personal account runs no fleet machine or
+                                               management service (issue #3556): the process
+                                               table + the system's unit files. --check: exit 0
+                                               none · 1 one does (the doctor's FAIL, named) ·
+                                               2 not a managed machine · 3 only the admin agent,
+                                               before its role account _fleetadmin exists (C15)
   fleet-node-supervisor.py entry pull [--version N] | apply <file|-> [--force] | ensure | status [--check]
                                                the entry port (#3070): pull the hub's list
                                                (0 applied · 1 the hub did not answer, the
@@ -938,6 +945,174 @@ def tenants_now(paths, state):
             cur["bad"][login] = sorted(set(cur["bad"].get(login, [])) | set(why))
     cur["daemon_at"] = last.get("at")
     return cur
+
+
+# -- seats (issue #3556, EPIC #3500 C14 · 共同约定 11): a personal account runs no
+# fleet machine or management service. The machine's daemon, its root core, the
+# machine's node program, the shared credential proxy and memguard are the
+# machine's — root's or a role account's (_fleet*), never a person's login; the
+# admin agent (today com.ccquota.agent.<admin login>, a management service) moves
+# to its own role account _fleetadmin (C15 #3557). Read from what anyone can see:
+# the process table and the system's unit files — never a home directory.
+SEAT_ROLES = ("_fleetnode", "_fleetcred", "_fleetadmin", "fleetnode", "fleetcred", "fleetadmin")
+SEAT_ADMIN_ROLE = "_fleetadmin" if MAC else "fleetadmin"
+SEAT_PROGRAMS = (
+    (re.compile(r"fleet-node-supervisor\.py\s+run(\s|$)"), "节点守护 fleet-node-supervisor"),
+    (re.compile(r"fleet-node-core\.py\s+serve(\s|$)"), "root 核心 fleet-node-core"),
+    (re.compile(r"ccquota\s+agent\s.*--machine(\s|$)"), "机器的节点程序 ccquota agent --machine"),
+    (re.compile(r"fleet-credsep-launch\.py\s+shared(\s|$)"), "共享凭据代理 cred-proxy-shared"),
+    (re.compile(r"fleet-memguard\.sh\s+--daemon(\s|$)"), "整机 memguard"),
+)
+SEAT_ADMIN_AGENT = re.compile(r"(^|/)ccquota\s+agent(\s|$)")
+
+
+def _seat_passwd():
+    fake = os.environ.get("FLEET_NODE_PASSWD")
+    return (read_json(fake, {}) or {}) if fake and env("FLEET_NODE_TEST", "") == "1" else None
+
+
+def seat_uid(user):
+    """A user's uid, or None."""
+    fake = _seat_passwd()
+    if fake is not None:
+        e = fake.get(user)
+        return int(e["uid"]) if e else None
+    try:
+        return pwd.getpwnam(user).pw_uid
+    except KeyError:
+        return None
+
+
+def seat_personal(user):
+    """A person's login: a real account (uid ≥ 500 / 1000), never root, a system
+    account (`_…`) or one of the fleet's role accounts."""
+    if not user or user.startswith("_") or user in SEAT_ROLES:
+        return False
+    uid = seat_uid(user)
+    return uid is not None and uid >= (500 if MAC else 1000)
+
+
+def seat_admin(user):
+    """An admin login — whose ccquota agent is the machine's admin node (#2997)."""
+    return bool(tenant_privileges(user)[0])
+
+
+def _seat_units(paths):
+    """[(label, user, path)] of the system's fleet units a non-root user runs as."""
+    out = []
+    d = paths.daemon_dir
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(d, n)
+        if MAC or n.endswith(".plist"):
+            if not (n.endswith(".plist") and FLEET_PLIST_RE.match(n)):
+                continue
+            try:
+                with open(p, "rb") as fh:
+                    pl = plistlib.loads(re.sub(rb"<!--.*?-->", b"", fh.read(), flags=re.S))
+            except Exception:
+                continue
+            user = str(pl.get("UserName") or "")
+            argv = [str(a) for a in pl.get("ProgramArguments") or []]
+            label = str(pl.get("Label") or n[:-len(".plist")])
+        else:
+            if not (n.endswith(".service") and re.match(r"^(claude-fleet-|fleet-node-|ccquota-agent-)", n)):
+                continue
+            try:
+                with open(p, errors="replace") as fh:
+                    body = fh.read()
+            except OSError:
+                continue
+            m = re.search(r"^User=(\S+)", body, re.M)
+            user = m.group(1) if m else ""
+            m = re.search(r"^ExecStart=(.*)$", body, re.M)
+            argv = (m.group(1) if m else "").split()
+            label = n[:-len(".service")]
+        # the credsep launcher starts a login's agent demoted to that login
+        for i, a in enumerate(argv):
+            if a.endswith("fleet-credsep-launch.py") and argv[i + 1:i + 2] == ["agent"] and len(argv) > i + 2:
+                user = argv[i + 2]
+        if user and user != "root":
+            out.append((label, user, p))
+    return out
+
+
+def _seat_procs():
+    """[(user, pid, command)] — one `ps`; FLEET_NODE_SEATS_PS is the selftests'
+    seam (a file of `user pid command` lines, FLEET_NODE_TEST only)."""
+    seam = os.environ.get("FLEET_NODE_SEATS_PS") if env("FLEET_NODE_TEST", "") == "1" else None
+    try:
+        if seam:
+            with open(seam) as f:
+                text = f.read()
+        else:
+            text = subprocess.check_output(["ps", "-axww", "-o", "user=,pid=,command="],
+                                           stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = []
+    for ln in text.splitlines():
+        f = ln.split(None, 2)
+        if len(f) == 3 and f[1].isdigit():
+            out.append((f[0], int(f[1]), f[2]))
+    return out
+
+
+def seats_reading(paths):
+    """{"machine": [{login, what, where}], "admin": [...], "admin_role": bool}: every
+    fleet machine service (machine) and admin agent (admin) a personal account runs."""
+    found = {"machine": {}, "admin": {}}
+    personal, admin = {}, {}
+
+    def put(kind, login, what, where):
+        found[kind].setdefault((login, what), []).append(where)
+
+    def is_personal(u):
+        if u not in personal:
+            personal[u] = seat_personal(u)
+        return personal[u]
+
+    def is_admin(u):
+        if u not in admin:
+            admin[u] = seat_admin(u)
+        return admin[u]
+
+    for label, user, path in _seat_units(paths):
+        if not is_personal(user):
+            continue
+        if label.startswith("com.ccquota.agent") or label.startswith("ccquota-agent"):
+            if is_admin(user):
+                put("admin", user, "管理员 agent", path)
+        else:
+            put("machine", user, label, path)
+    for user, pid, cmd in _seat_procs():
+        if not is_personal(user):
+            continue
+        for rx, what in SEAT_PROGRAMS:
+            if rx.search(cmd):
+                put("machine", user, what, "pid %d" % pid)
+                break
+        else:
+            if SEAT_ADMIN_AGENT.search(cmd) and is_admin(user):
+                put("admin", user, "管理员 agent", "pid %d" % pid)
+    rows = lambda k: [{"login": l, "what": w, "where": sorted(found[k][(l, w)])}
+                      for l, w in sorted(found[k])]
+    return {"at": now(), "machine": rows("machine"), "admin": rows("admin"),
+            "admin_role": seat_uid(SEAT_ADMIN_ROLE) is not None}
+
+
+def seats_check(cur):
+    """(exit code, line): 0 none · 1 FAIL (a machine service, or an admin agent once
+    its role account exists) · 3 WARN (an admin agent before C15 made _fleetadmin)."""
+    say = lambda rs: "; ".join("%s: %s（%s）" % (r["login"], r["what"], " · ".join(r["where"])) for r in rs)
+    if cur["machine"] or (cur["admin"] and cur["admin_role"]):
+        return 1, "个人账号在跑 fleet 整机 / 管理服务 — " + say(cur["machine"] + (cur["admin"] if cur["admin_role"] else []))
+    if cur["admin"]:
+        return 3, "管理员 agent 还在个人账号名下（%s 还没建，C15 #3557 把它搬过去）— %s" % (SEAT_ADMIN_ROLE, say(cur["admin"]))
+    return 0, "没有个人账号在跑 fleet 整机或管理服务"
 
 
 def expected_accounts(paths):
@@ -6044,6 +6219,17 @@ def main(argv):
         else:
             for login in cur["logins"]:
                 print("%-16s %s" % (login, "FAIL " + "; ".join(bad[login]) if login in bad else "ok"))
+        return code if "--check" in rest else 0
+    if cmd == "seats":
+        if not installed(paths):
+            print("not a managed machine (no com.claude-fleet.node)")
+            return 2 if "--check" in rest else 0
+        cur = seats_reading(paths)
+        code, line = seats_check(cur)
+        if "--json" in rest:
+            print(json.dumps(cur, indent=1, sort_keys=True))
+        else:
+            print(line)
         return code if "--check" in rest else 0
     table = load_table(paths)
     if cmd == "run":
