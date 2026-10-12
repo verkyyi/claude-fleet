@@ -33,6 +33,11 @@ fallback — a login that is not tailscale's operator cannot `tailscale serve`, 
 the server listens on the tailnet address itself (issue #1093). Either way
 another login reaching the port gets 404 without a code.
 
+bind_addr may be a comma list (issue #3538): http-direct passes
+`<tailscale IPv4>,127.0.0.1`, so the same port also answers on loopback — what
+fleet-open forwards over the operator's own ssh, with no tailnet on their side.
+Every address is bound before any serves; one that cannot be bound fails the start.
+
 `public` is share.sh's tunnel mode (issue #1151): a cloudflared quick tunnel fronts
 this loopback server on a public https://*.trycloudflare.com URL, so EVERY request
 is a public one. The control API is then 404 (there is no private origin to toggle
@@ -242,6 +247,7 @@ PORT = int(sys.argv[1])
 SERVE_DIR = sys.argv[2]
 SKILL_DIR = sys.argv[3]
 BIND_ADDR = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else "127.0.0.1"
+BIND_ADDRS = list(dict.fromkeys(a for a in BIND_ADDR.split(",") if a)) or ["127.0.0.1"]
 PUBLIC = len(sys.argv) > 5 and sys.argv[5] == "public"
 ROOT = os.path.dirname(os.path.abspath(SERVE_DIR))
 SHARE = os.path.join(SKILL_DIR, "share.sh")
@@ -424,8 +430,12 @@ class Server(ThreadingHTTPServer):
 
 
 if __name__ == "__main__":
-    srv = Server((BIND_ADDR, PORT), Handler)
+    srvs = [Server((a, PORT), Handler) for a in BIND_ADDRS]
     # One line to server.log once accepting — share.sh's failure path tails this file,
     # and an EMPTY log then means "never reached listen()", not "nothing happened".
-    print("listening on http://%s:%d/%s" % (BIND_ADDR, PORT, " (public)" if PUBLIC else ""), flush=True)
-    srv.serve_forever()
+    for a in BIND_ADDRS:
+        print("listening on http://%s:%d/%s" % (a, PORT, " (public)" if PUBLIC else ""), flush=True)
+    import threading
+    for extra in srvs[1:]:
+        threading.Thread(target=extra.serve_forever, daemon=True).start()
+    srvs[0].serve_forever()

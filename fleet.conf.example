@@ -65,12 +65,20 @@ FLEET_BASE_BRANCH="main"
 # @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
 #FLEET_SEED=0
 
-# Where the repo lives (EPIC #3570): github (the default) or none — a repo with no
-# GitHub. none = no step of the fleet calls gh for it; whether a branch's work landed
-# is git's answer (fleet_landed, issue #3601) and the janitor cleans it by branch.
-# Written when the repo is added; readers ask fleet_repo_forge.
-# @label=Code host @group=identity @tier=internal @scope=identity @edit=no
-#FLEET_FORGE=github
+# Where a repo lives and whether GitHub is in it (issue #3600). `fleet repo add`
+# takes any git address — GitHub, GitLab, Gitee, a self-hosted forge, an
+# ssh-reachable bare repo, file:// or a local path — and fills these in its repo's
+# overlay; a GitHub repo writes none of them (unset = github · pr, every repo
+# before #3600). The address is kept as given (what it was cloned from); a forge
+# of `none` means no fleet step calls gh for it (fleet_repo_forge is the one
+# reader); landing by `fleet` means the fleet lands its work itself (forge `none`
+# can only land that way).
+# @label=Repo address @group=identity @tier=internal @scope=identity @edit=no
+#FLEET_REMOTE=""
+# @label=Repo forge (github · none) @group=identity @tier=internal @scope=identity @edit=no
+#FLEET_FORGE="github"
+# @label=How work lands (pr · fleet) @group=identity @tier=internal @scope=identity @edit=no
+#FLEET_LAND="pr"
 
 # --- Public SSH entry (issue #1195) ---------------------------------------
 # How a NEWCOMER reaches this machine from outside — the host and port that the

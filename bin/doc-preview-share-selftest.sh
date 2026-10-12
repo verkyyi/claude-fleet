@@ -8,6 +8,9 @@
 #                  and READY is `http://<magicdns>:<port>/d/<id>/`, the line says
 #                  it is plain http inside the tailnet, $ROOT/mode = http-direct,
 #                  and --list / a second share keep that URL. Never the cert hint.
+#                  By default (issue #3538) READY is the LOOPBACK URL, serving the
+#                  doc, the tailnet one a TAILNET line (the sections run with
+#                  DOC_PREVIEW_PRIMARY=tailnet otherwise).
 #   • CERT         any OTHER serve failure → the HTTPS-cert hint, exit 1, and the
 #                  entries it rendered are rolled back (--list: nothing shared).
 #   • HTTPS        serve succeeds → https URL, mode = https (unchanged behaviour).
@@ -28,7 +31,8 @@
 #                  http://127.0.0.1:<port>/d/<id>/, server on loopback, mode = local,
 #                  tailscale never asked; a later plain share upgrades it to https on
 #                  the SAME server; --local beside https keeps https and prints the
-#                  loopback URL; beside http-direct refuses; --local --tunnel refuses;
+#                  loopback URL; beside http-direct (it binds 127.0.0.1 too, #3538)
+#                  prints the loopback URL; --local --tunnel refuses;
 #                  --open hands the doc URL to fleet-open (FLEET_OPEN_BIN stub) and
 #                  prints OPEN <its result>. Sections 1-7 run with no --local and are
 #                  the "behaviour unchanged" half.
@@ -154,7 +158,11 @@ echo 127.0.0.1 > "$WORK/ts.ip"
 
 # a free start port for this run (bind-probed), so a live doc-preview can't collide
 BASEPORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
-share() { HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$BASEPORT" DOC_PREVIEW_SESSION=t "$SH" "$@" 2>&1; }
+# The sections below read the tailnet URL off READY: they run with the pre-#3538 order
+# (DOC_PREVIEW_PRIMARY=tailnet); section 1d checks the default — loopback first.
+export DOC_PREVIEW_PRIMARY=tailnet
+share() { HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$BASEPORT" DOC_PREVIEW_SESSION=t \
+  DOC_PREVIEW_PRIMARY="${PRIMARY-tailnet}" "$SH" "$@" 2>&1; }
 reset_state() {
   # kill is asynchronous: wait for each process to be gone, or the next case's
   # port-holder races the dying server for BASEPORT (EADDRINUSE on a slow
@@ -194,6 +202,15 @@ has "READY http://box.tailnet.ts.net:$PORT/d/" "$out" "1b: a second share must k
 ok [ ! -s "$WORK/serve.argv" ]
 out="$(share --publish "$(ls "$ROOT/entries" | head -1 | sed "s/\.json$//")")"
 has "not tailscale's operator" "$out" "1c: --publish in http-direct must say why public links are unavailable"
+# 1d (issue #3538): by default READY is the LOOPBACK URL — fleet-open forwards it over
+# the operator's ssh, no tailnet on their side — and the tailnet one follows as TAILNET
+out="$(PRIMARY='' share "$WORK/a.md")"
+has "READY http://127.0.0.1:$PORT/d/" "$out" "1d: READY must be the loopback URL by default"
+has "fleet-open" "$out" "1d: the READY note must point at fleet-open"
+has "TAILNET http://box.tailnet.ts.net:$PORT/d/" "$out" "1d: the tailnet URL must follow as TAILNET"
+url="$(printf '%s\n' "$out" | sed -n 's/^READY \(http:[^ ]*\).*/\1/p')"
+code="$(python3 -c 'import sys,urllib.request;print(urllib.request.urlopen(sys.argv[1]).status)' "$url" 2>&1)"
+has 200 "$code" "1d: the loopback READY URL must serve the doc"
 
 # --- 2. any other serve failure → cert hint + rollback ---------------------
 reset_state; echo cert > "$WORK/serve.mode"
@@ -336,12 +353,14 @@ chmod +x "$WORK/fake/fleet-open"
 out="$(FLEET_OPEN_BIN="$WORK/fake/fleet-open" share --open --local "$WORK/a.md")"
 has "OPEN sent:iterm2" "$out" "8d: --open must print fleet-open's result"
 has "http://127.0.0.1:$PORT/d/" "$(cat "$WORK/fo.argv")" "8d: --open must hand fleet-open the doc URL"
-# beside http-direct: no loopback server to point at → refuse
+# beside http-direct: its server binds 127.0.0.1 too (issue #3538) → the loopback URL
 reset_state; echo operator > "$WORK/serve.mode"
 share "$WORK/a.md" >/dev/null
+PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
 out="$(share --local "$WORK/b.md")"; rc=$?
-[ "$rc" = 1 ] || fail "8e: --local beside http-direct must refuse (rc=$rc)" "$out"
-has "http-direct" "$out" "8e: the refusal must say why"
+[ "$rc" = 0 ] || fail "8e: --local beside http-direct must share (rc=$rc)" "$out"
+has "READY http://127.0.0.1:$PORT/d/" "$out" "8e: --local beside http-direct must print the loopback URL"
+ok [ "$(cat "$ROOT/mode")" = http-direct ]
 
 # --- 9. server.py must come up with reverse DNS unavailable (issue #1500) -----
 # Run server.py itself with socket.getfqdn / gethostbyaddr / getnameinfo raising: a

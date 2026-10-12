@@ -1,0 +1,31 @@
+# conf/oss-scan.rules — the ONE table of what an internal name or address looks
+# like in this repo (issue #3571, EPIC #3569 共同约定 1). Every reader reads
+# THIS file, never a copy of a pattern: bin/oss-scan.sh (the inventory, C1),
+# the commit gate (C2), the config / placeholder acceptance (C7 / C8), the
+# fleet-infra plugin check (C16 / C17).
+#
+# One rule per line: <rule-id><TAB><ERE><TAB><说明>. The ERE goes to
+# `git grep -E` and to awk as written, so it must mean the same to both:
+# no \b \d \s \w (spell a boundary out: (^|[^A-Za-z0-9_])), no {m,n}, no (?i)
+# — case goes in brackets. A rule id never changes meaning (C2 counts by it).
+#
+# `#@keep<TAB><text>` — a match whose text (boundary characters trimmed) is
+# exactly <text> is not a hit: the repo's own name and the shared placeholder
+# words below are what new text is SUPPOSED to say. Where a hit may stay is
+# conf/oss-scan.allow (path-glob · rule · reason), never a pattern here.
+#
+# Shared placeholders for new text (EPIC #3569 共同约定 1): mac-a mac-b linux-a ·
+# hub.example.com · relay.example.com · alice bob · example.ts.net.
+
+tailnet	tail435588	our tailscale tailnet's name
+ts-net	[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net	a tailscale MagicDNS name (a machine on a tailnet)
+corp-domain	24haowan|24hw\.cn	our company's domains, image namespace and monorepo name
+cloud	aliyuncs\.com|cn-shenzhen|1720148580188583|cff10a18030a74894a0bbc765e21779ef	our cloud: Alibaba registry, region, account id, ACK cluster id
+machine	(^|[^A-Za-z0-9_-])(macmini|mini2|fleet-linux-0|m4|m5)([^A-Za-z0-9_-]|$)	our machines' names and their aliases (mini2=m4, macmini=m5)
+user-home	/(Users|home)/(verky|verkyyi|verk|victor|arvin|24haowan)([^A-Za-z0-9_.-]|$)	a real login's home directory
+person	(^|[^A-Za-z0-9_])([Vv]erky|[Vv]erk|[Vv]ictor|[Aa]rvin)([^A-Za-z0-9_]|$)	a real person's name or login
+gh-owner	verkyyi(/[A-Za-z0-9_-]+)?	the owner's GitHub handle (the repo's own name is kept below)
+private-ipv4	(^|[^0-9.])(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))\.[0-9]+\.[0-9]+	a private / tailnet (CGNAT) IPv4 address
+
+#@keep	verkyyi/claude-fleet
+#@keep	example.ts.net

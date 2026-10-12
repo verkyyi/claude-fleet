@@ -441,7 +441,7 @@ fi
 _mforge=github
 if [ "$STATE" = merged ] && [ -z "${PR//[^0-9]/}" ] && [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
   _mr=$(fleet_window_repo "$sess" "$selfwin")
-  [ -n "$_mr" ] && _mforge=$(fleet_repo_forge "$sess" "$_mr")
+  [ -n "$_mr" ] && _mforge=$(fleet_repo_forge "$_mr" "$sess")
 fi
 if [ "$STATE" = merged ] && { [ -n "${PR//[^0-9]/}" ] || [ "$_mforge" = none ]; }; then
   _prepo=''

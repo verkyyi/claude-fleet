@@ -276,7 +276,7 @@ def settings_conf(login, conf, install_dir, adopt=False):
     for k, v in sorted(login_settings(conf, install_dir).items()):
         if k == "FLEET_CRED_ALLOW_HOSTS":
             say("settings: NOT taken %s from the login (only root adds a host: edit %s)" % (k, path))
-        elif k in URL_KEYS and not m.loopback_ok(v):
+        elif k in URL_KEYS and not m.loopback_ok(v, cluster=k == "FLEET_CRED_CENTRAL_URL"):
             say("settings: NOT taken %s=%s from the login (not https to an allowed host)" % (k, v))
         else:
             vals[k] = v

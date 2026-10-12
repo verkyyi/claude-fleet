@@ -180,6 +180,17 @@ brief() {
   # the repos and the GitHub login are the developer walk's only.
   if [ "$dev" = 1 ]; then
     echo "===== developer walk ====="
+    # The GitHub login is asked for only when a repo is GitHub's (issue #3600): a
+    # fleet whose repos all came from other git addresses never needs gh.
+    if [ "$gh" = 1 ] && [ -n "$(fleet_repos "$sess")" ]; then
+      gh=0
+      while IFS= read -r r; do
+        [ -n "$r" ] && [ "$(fleet_repo_forge "$r" "$sess")" = github ] && { gh=1; break; }
+      done <<EOF
+$(fleet_repos "$sess")
+EOF
+      [ "$gh" = 0 ] && echo "gh=not-needed (no repo on GitHub)"
+    fi
     if [ "$gh" = 1 ]; then
       me=$(gh api user --jq .login 2>/dev/null)
       echo "gh=${me:-NOT-LOGGED-IN}"

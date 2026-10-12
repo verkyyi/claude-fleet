@@ -800,9 +800,10 @@ export FLEET_BASE_BRANCH="*) return 0 ;; esac
 
 # Keys that describe ONE repo, so they must not leak into another repo's view when
 # its overlay is applied: identity, where it deploys, and whether it is the login's
-# seed repo (FLEET_SEED, issue #1167), and whether it lives on GitHub at all
-# (FLEET_FORGE=github|none, EPIC #3570). They live only in a repo's overlay.
-_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT FLEET_SEED FLEET_FORGE"
+# seed repo (FLEET_SEED, issue #1167). They live only in a repo's overlay.
+# Where it lives and how it lands (issue #3600) are its own too: FLEET_REMOTE ·
+# FLEET_FORGE · FLEET_LAND (fleet_repo_forge).
+_FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT FLEET_SEED FLEET_REMOTE FLEET_FORGE FLEET_LAND"
 
 # _fleet_repo_first_file <sess> — sets _FLEET_FIRST_F to the fleet's first overlay
 # (repos/.order, else the first repos/*.conf); rc 1 (empty) when it has none. A
@@ -1820,14 +1821,21 @@ fleet_worker_charter() {
 # Args: $1=owner/repo  $2=checkout dir  $3=explicit --base ('' when not given)
 # Prints ONE tab-separated line: <branch> <TAB> <source> <TAB> <authoritative-default>
 # where <source> is one of the five tags above and <authoritative-default> is '' when
-# gh could not answer (missing / unauthed / offline). Branch names cannot contain a
+# gh could not answer (missing / unauthed / offline). A 4th arg other than `github`
+# (FLEET_FORGE, issue #3600) asks the checkout's origin instead (`git ls-remote
+# --symref`) and never runs gh; the tags are the same. Branch names cannot contain a
 # tab, so the caller can split on it:
 #   IFS=$'\t' read -r base src default < <(fleet_resolve_base_branch "$repo" "$dir" "$flag")
 # This function NEVER warns or prompts — that is the caller's job (fleet-up.sh), the
 # only place that knows whether a human is watching.
 fleet_resolve_base_branch() {
-  local repo="${1:-}" dir="${2:-}" flag="${3:-}" default='' b=''
-  if command -v gh >/dev/null 2>&1; then
+  local repo="${1:-}" dir="${2:-}" flag="${3:-}" forge="${4:-github}" default='' b=''
+  if [ "$forge" != github ]; then
+    # Not on GitHub (issue #3600): the remote itself says which branch HEAD
+    # points at — `ls-remote --symref`, never gh.
+    default=$(git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null \
+                | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p' | head -n 1)
+  elif command -v gh >/dev/null 2>&1; then
     default=$(gh repo view "$repo" --json defaultBranchRef \
                 -q .defaultBranchRef.name 2>/dev/null) || default=''
   fi
@@ -1885,6 +1893,95 @@ fleet_write_conf() {
   mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
 }
 
+# ---- a repo is any git address (issue #3600) ----------------------------------
+# A repo is named `ns/name` everywhere (keys, slugs, @repo, the ledgers), whatever
+# hosts it; WHERE it lives is its conf's FLEET_REMOTE (the address as given) and
+# whether GitHub is involved its FLEET_FORGE (github · none). These two readers run
+# only when a repo is added — fleet_norm_repo, the hot path's normalizer of names,
+# is unchanged (forkless-hotpath-selftest pins it to the sed).
+#
+# _fleet_addr_split <addr> — sets _FA_HOST (no user, no port; '' for a local path),
+# _FA_PATH (no leading or trailing `/`, no `.git`) and _FA_LOCAL (1 for file:// or
+# a path). rc 1 when <addr> is not an address (a bare `ns/name`, or nothing).
+_fleet_addr_split() {
+  local a="${1:-}"
+  _FA_HOST='' _FA_PATH='' _FA_LOCAL=0
+  case "$a" in
+    *"
+"*|'') return 1 ;;
+    file://*) _FA_PATH="${a#file://}"; _FA_LOCAL=1 ;;
+    /*) _FA_PATH="$a"; _FA_LOCAL=1 ;;
+    [A-Za-z]*://*) a="${a#*://}"; _FA_HOST="${a%%/*}"
+                   case "$a" in */*) _FA_PATH="${a#*/}" ;; esac ;;
+    *@*:*) _FA_HOST="${a%%:*}"; _FA_PATH="${a#*:}" ;;
+    *:*) _FA_HOST="${a%%:*}"
+         case "$_FA_HOST" in */*) return 1 ;; esac
+         _FA_PATH="${a#*:}" ;;
+    *) return 1 ;;
+  esac
+  _FA_HOST="${_FA_HOST##*@}"; _FA_HOST="${_FA_HOST%%:*}"
+  while :; do case "$_FA_PATH" in */) _FA_PATH="${_FA_PATH%/}" ;; *) break ;; esac; done
+  _FA_PATH="${_FA_PATH%.git}"
+  while :; do case "$_FA_PATH" in /*) _FA_PATH="${_FA_PATH#/}" ;; *) break ;; esac; done
+  return 0
+}
+
+# fleet_forge_of <addr|ns/name> → github · none. A bare `ns/name` and any address
+# on github.com is GitHub's; every other host, an ssh bare repo, a local path is not.
+fleet_forge_of() {
+  _fleet_addr_split "${1:-}" || { echo github; return 0; }
+  case "$_FA_HOST" in github.com|www.github.com) echo github ;; *) echo none ;; esac
+}
+
+# fleet_repo_name_of <addr|ns/name> → the repo's two-part name: GitHub's own
+# owner/name; elsewhere the path's last two parts (`gitlab.com/g/sub/p` → `sub/p`).
+# A path of one part — or a home path (`~`), whose folders name no owner — takes
+# the host's first label as its namespace (`ssh://macmini/~/repos/demo.git` →
+# `macmini/demo`), `local` for a local path. A bare name passes through
+# fleet_norm_repo. Nothing printed when there is no name to take.
+fleet_repo_name_of() {
+  local p n ns q
+  _fleet_addr_split "${1:-}" || { fleet_norm_repo "${1:-}"; return 0; }
+  p="$_FA_PATH"
+  case "$_FA_HOST" in github.com|www.github.com)
+    ns="${p%%/*}"; q="${p#*/}"; n="${q%%/*}"
+    [ "$ns" != "$p" ] && [ -n "$ns" ] && [ -n "$n" ] && printf '%s/%s' "$ns" "$n"
+    return 0 ;;
+  esac
+  n="${p##*/}"
+  [ -n "$n" ] || return 0
+  ns="${_FA_HOST%%.*}"; [ "$_FA_LOCAL" = 1 ] && ns=local
+  case "/$p/" in
+    */\~*) ;;
+    *?/?*) q="${p%/*}"; ns="${q##*/}" ;;
+  esac
+  [ -n "$ns" ] && printf '%s/%s' "$ns" "$n"
+}
+
+# _fleet_conf_q <value> — <value> as a conf line's right-hand side: "…" when that
+# reads back literally, else %q.
+_fleet_conf_q() {
+  case "${1:-}" in *[\"\$\`\\]*) printf '%q' "$1" ;; *) printf '"%s"' "${1:-}" ;; esac
+}
+
+# fleet_repo_forge <repo> [<sess>] → github · none, as <repo>'s conf says
+# (FLEET_FORGE; unset = github, every repo before #3600). <sess> defaults to the
+# fleet this runs in, else the fleet hosting <repo>. The one reader: a step that
+# would call gh for a repo asks here first.
+fleet_repo_forge() {
+  local repo="${1:-}" sess="${2:-${FLEET_SESSION:-}}" f v slug
+  [ -n "$repo" ] || { echo github; return 0; }
+  slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
+  f=''
+  [ -n "$sess" ] && f="$FLEET_CONF_DIR/fleets/$sess/repos/$slug.conf"
+  if [ -z "$f" ] || [ ! -f "$f" ]; then
+    for f in "$FLEET_CONF_DIR"/fleets/*/repos/"$slug".conf; do [ -f "$f" ] && break; done
+  fi
+  v=''
+  [ -f "$f" ] && v=$( unset FLEET_FORGE; . "$f" >/dev/null 2>&1; printf '%s' "${FLEET_FORGE:-}" )
+  case "$v" in none) echo none ;; *) echo github ;; esac
+}
+
 # ---- adding a repo: the ONE implementation (issue #1104) ---------------------
 # fleet-up.sh (a fleet's first repo) and fleet-repo.sh add (every further one) used
 # to hand-write the checkout step twice, and only fleet-up followed it through: the
@@ -1896,8 +1993,29 @@ fleet_write_conf() {
 # checkout, else clone it there. Progress on stdout, the reason on stderr as
 # "<tag>: …". rc 0 ok · 3 <dir> is another repo's checkout · 4 <dir> exists but is
 # not a checkout · 5 the clone failed.
+#
+# fleet_repo_checkout <repo> <dir> [tag] [<remote> <forge>] — with a <forge> other
+# than github (issue #3600) the checkout is <remote>'s: reused when its origin IS
+# <remote> (or names <repo>), else `git clone <remote>` — never gh.
 fleet_repo_checkout() {
-  local repo="${1:-}" dir="${2:-}" tag="${3:-fleet}" have
+  local repo="${1:-}" dir="${2:-}" tag="${3:-fleet}" remote="${4:-}" forge="${5:-github}" have url
+  if [ "$forge" != github ] && [ -n "$remote" ]; then
+    if [ -d "$dir/.git" ]; then
+      # the address as written (`remote get-url` applies url.*.insteadOf)
+      url=$(git -C "$dir" config --get remote.origin.url 2>/dev/null)
+      if [ "$url" != "$remote" ] && [ "$(fleet_repo_name_of "$url")" != "$repo" ]; then
+        echo "$tag: $dir is a checkout of '${url:-no origin}', not '$remote'" >&2; return 3
+      fi
+      echo "$tag: reusing existing checkout $dir"
+    elif [ -e "$dir" ]; then
+      echo "$tag: $dir exists but is not a git checkout" >&2; return 4
+    else
+      echo "$tag: cloning $remote → $dir"
+      mkdir -p "$(dirname "$dir")"
+      git clone "$remote" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
+    fi
+    return 0
+  fi
   if [ -d "$dir/.git" ]; then
     have=$(fleet_norm_repo "$(git -C "$dir" remote get-url origin 2>/dev/null)")
     [ "$have" = "$repo" ] || { echo "$tag: $dir is a checkout of '$have', not '$repo'" >&2; return 3; }
@@ -1907,7 +2025,12 @@ fleet_repo_checkout() {
   else
     echo "$tag: cloning $repo → $dir"
     mkdir -p "$(dirname "$dir")"
-    if command -v gh >/dev/null 2>&1; then gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
+    # An address given (issue #3600) is cloned as itself when gh cannot (missing,
+    # or no GitHub login): an ssh key reaches a GitHub repo without gh.
+    if [ -n "$remote" ] && [ "$remote" != "$repo" ]; then
+      { command -v gh >/dev/null 2>&1 && gh repo clone "$repo" "$dir" 2>/dev/null; } \
+        || { rm -rf "$dir"; git clone "$remote" "$dir"; } || { echo "$tag: clone failed" >&2; return 5; }
+    elif command -v gh >/dev/null 2>&1; then gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
     else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
   fi
   return 0
@@ -1952,14 +2075,24 @@ fleet_repo_trust_warn() {
 # Nothing is written unless the token is added:*.
 fleet_repo_register() {
   local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc seed=0
+  local as="" remote="" forge=github had
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      --as) as="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --seed) seed=1; shift ;;
       *) if [ -z "$sess" ]; then sess="$1"; elif [ -z "$repo" ]; then repo="$1"
          elif [ -z "$dir" ]; then dir="$1"; fi; shift ;;
     esac
   done
+  # Any git address (issue #3600): the name is taken from it (or --as), the
+  # address kept as FLEET_REMOTE when the repo is not GitHub's. A bare owner/name
+  # is GitHub's, exactly as before.
+  if _fleet_addr_split "$repo"; then
+    remote="$repo"; forge=$(fleet_forge_of "$remote")
+    repo=$(fleet_repo_name_of "$remote")
+  fi
+  [ -n "$as" ] && repo="$as"
   repo=$(fleet_norm_repo "$repo")
   case "$repo" in
     *[!A-Za-z0-9_./-]* | */*/* | /* | */) repo="" ;;
@@ -1970,10 +2103,16 @@ fleet_repo_register() {
     echo "fleet-repo: invalid repo — expected owner/repo" >&2; echo "refused:invalid-repo"; return 1
   fi
   if fleet_repo_hosted "$sess" "$repo"; then
-    echo "fleet-repo: $sess already hosts $repo" >&2; echo "refused:hosted"; return 1
+    had=$(fleet_repo_conf_get "$sess" "$repo" FLEET_REMOTE)
+    if [ -n "$remote" ] && [ "$forge" != github ] && [ "$had" != "$remote" ]; then
+      echo "fleet-repo: the name $repo is taken in $sess (by ${had:-a GitHub repo}) — add $remote under another name: --as <ns/name>" >&2
+    else
+      echo "fleet-repo: $sess already hosts $repo" >&2
+    fi
+    echo "refused:hosted"; return 1
   fi
   dir="${dir:-$HOME/projects/$(basename "$repo")}"
-  fleet_repo_checkout "$repo" "$dir" fleet-repo >&2; rc=$?
+  fleet_repo_checkout "$repo" "$dir" fleet-repo "$remote" "$forge" >&2; rc=$?
   case "$rc" in
     0) : ;;
     3) echo "refused:origin-mismatch"; return 1 ;;
@@ -1984,7 +2123,7 @@ fleet_repo_register() {
   # Split base<TAB>source<TAB>default by hand: this file must stay POSIX-sh parseable,
   # so no `read … < <(…)` here.
   tab=$(printf '\t')
-  base=$(fleet_resolve_base_branch "$repo" "$dir" "$base")
+  base=$(fleet_resolve_base_branch "$repo" "$dir" "$base" "$forge")
   base_default=${base#*"$tab"}; base=${base%%"$tab"*}
   base_src=${base_default%%"$tab"*}; base_default=${base_default#*"$tab"}
   case "$base_src" in
@@ -1992,7 +2131,11 @@ fleet_repo_register() {
     flag) if [ -n "$base_default" ] && [ "$base" != "$base_default" ]; then
             echo "fleet-repo: WARNING — --base '$base' is NOT $repo's default branch ('$base_default')." >&2
           fi ;;
-    *) echo "fleet-repo: WARNING — could not read $repo's default branch from GitHub; using '$base' ($base_src) — verify it is the trunk." >&2 ;;
+    *) if [ "$forge" = github ]; then
+         echo "fleet-repo: WARNING — could not read $repo's default branch from GitHub; using '$base' ($base_src) — verify it is the trunk." >&2
+       else
+         echo "fleet-repo: WARNING — could not read $repo's default branch from $remote; using '$base' ($base_src) — verify it is the trunk." >&2
+       fi ;;
   esac
   f=$(fleet_repo_conf_file "$sess" "$repo")
   if ! mkdir -p "$(dirname "$f")" 2>/dev/null || ! {
@@ -2003,6 +2146,13 @@ fleet_repo_register() {
       printf 'FLEET_REPO="%s"\n' "$repo"
       printf 'FLEET_MAIN="%s"\n' "$dir"
       printf 'FLEET_BASE_BRANCH="%s"\n' "$base"
+      # Not GitHub's (issue #3600): where it lives, and no gh step ever — it lands
+      # by the fleet (FLEET_LAND, C9). A GitHub repo writes none of these (unset =
+      # github · pr), so its conf is byte for byte what it was.
+      if [ "$forge" != github ]; then
+        printf 'FLEET_REMOTE=%s\n' "$(_fleet_conf_q "$remote")"
+        printf 'FLEET_FORGE="none"\nFLEET_LAND="fleet"\n'
+      fi
       # The seed only looks (issue #1167): marked in the same write, so no daemon
       # tick ever reads it unmarked; its switches are its own, never the fleet's.
       if [ "$seed" = 1 ]; then
@@ -2013,7 +2163,7 @@ fleet_repo_register() {
   fi
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
-  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base) — $f" >&2
+  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )) — $f" >&2
   [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
@@ -3300,13 +3450,6 @@ fleet_landed_note() {
   [ -n "${3:-}" ] && [ -n "${4:-}" ] || return 1
   mkdir -p "$(dirname "$bk")" 2>/dev/null
   printf '%s\t%s\t%s\t%s\t%s\n' "${1:-}" "${2:-}" "$3" "$4" "${5:-$(date +%s)}" >> "$bk"
-}
-
-# fleet_repo_forge <sess> <repo> → `github` | `none` (FLEET_FORGE, issue #3570
-# 共同约定 3): `none` = no step of the fleet calls gh for that repo. Unset ⇒ github.
-fleet_repo_forge() {
-  local f; f=$(fleet_repo_conf_get "${1:-}" "${2:-}" FLEET_FORGE 2>/dev/null)
-  case "$f" in none) echo none ;; *) echo github ;; esac
 }
 
 # fleet_landed <repo> <branch|sha> [<checkout> [<base-branch>]] → `landed <sha>
@@ -6792,6 +6935,41 @@ fleet_restore_wins() {
     { f = "" }' "${1:-/dev/null}" 2>/dev/null
 }
 
+# fleet_restore_map_prune <restore.map> [--retired <live fleet_ids, newline list>]
+# → the map as a restore may trust it (issue #3543). One conversation is ONE row:
+# a WIN whose session id (column 4, not `-`) a LATER row names again goes, with the
+# REAP / FID rows that lead it — the later row is the newer window. On 2026-10-12
+# three rows named one id and restore opened two windows resuming it at once.
+# --retired also drops a session the fleet closed on purpose (fleet_win_retire)
+# that no live window carries now (the list) — the snapshot's shrink guard kept
+# reaped sessions in the map for good, ready for the next restore to reopen.
+# Every other row (FLEET, HUB, DESK, OWID, PIN, …) prints byte for byte; a map
+# with neither prints exactly itself.
+fleet_restore_map_prune() {
+  local mf="${1:-}" rl='' rd t
+  [ -f "$mf" ] || return 0
+  if [ "${2:-}" = --retired ]; then
+    rd=$(fleet_retired_dir)
+    for t in "$rd"/*; do
+      [ -f "$t" ] && fleet_is_fid "${t##*/}" && rl="$rl ${t##*/}"
+    done
+  fi
+  # Space-joined: BSD awk refuses a newline inside a -v value.
+  awk -F'\t' -v rl="$(printf '%s' "$rl" | tr '\n' ' ')" -v live="$(printf '%s' "${3:-}" | tr '\n' ' ')" '
+    BEGIN { n = split(live, a, " "); for (i = 1; i <= n; i++) up[a[i]] = 1
+            n = split(rl, a, " "); for (i = 1; i <= n; i++) if (a[i] != "" && !(a[i] in up)) ret[a[i]] = 1 }
+    NR == FNR { if ($1 == "WIN" && $4 != "" && $4 != "-") last[$4] = FNR; next }
+    function flush() { if (buf != "") printf "%s", buf; buf = ""; f = "" }
+    $1 == "REAP" || $1 == "FID" { if ($1 == "FID") f = $2; buf = buf $0 "\n"; next }
+    $1 == "WIN" {
+      drop = ($4 != "" && $4 != "-" && last[$4] != FNR) || (f != "" && (f in ret))
+      if (drop) { buf = ""; f = ""; next }
+      flush(); print; next
+    }
+    { flush(); print }
+    END { flush() }' "$mf" "$mf" 2>/dev/null
+}
+
 # fleet_origin_heal <sess> [<sock>] — keep every child's @origin the key its
 # parent answers to NOW (issue #1646). The parent is found by the child's
 # @origin_fid; when that window's key is no longer what @origin says (a scratch
@@ -7280,7 +7458,7 @@ fleet_reap_record() {
   # PR number — the emit runs even on installs where fleet-history.sh is absent.
   # A repo with no GitHub (FLEET_FORGE=none) has no PR to ask after (issue #3601).
   local forge=github
-  [ -n "$repo" ] && [ -n "$sess" ] && forge=$(fleet_repo_forge "$sess" "$repo")
+  [ -n "$repo" ] && [ -n "$sess" ] && forge=$(fleet_repo_forge "$repo" "$sess")
   if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
     case "$outcome" in
       merged-pr|merged-PR|merged|landed)
@@ -10066,7 +10244,7 @@ fleet_pr_merge_state() {
   case "$repo" in ?*/?*) ;; *) printf 'unknown\n'; return 0 ;; esac
   if [ -n "$br" ]; then
     for s in ${FLEET_SESSION:-} $(fleet_each_conf | cut -f1); do
-      fleet_repo_hosted "$s" "$repo" && { forge=$(fleet_repo_forge "$s" "$repo"); break; }
+      fleet_repo_hosted "$s" "$repo" && { forge=$(fleet_repo_forge "$repo" "$s"); break; }
     done
   fi
   if [ -n "$n" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then

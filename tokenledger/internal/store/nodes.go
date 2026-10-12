@@ -86,8 +86,8 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
-	// The ticket registry (claude-fleet#2676).
-	if err := s.ensureFleetTicketIndex(); err != nil {
+	// Tickets (claude-fleet#2677), grown out of the registry of #2676.
+	if err := s.ensureFleetTickets(); err != nil {
 		return err
 	}
 	// The task record (claude-fleet#3325).

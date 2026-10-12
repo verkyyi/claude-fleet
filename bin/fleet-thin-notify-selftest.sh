@@ -22,8 +22,9 @@
 #              takes the armed jump: the 看台 goes to the window of that worker.
 #   E. beat    fleet_notify.beat hands an 在问你 row to the sender it is given.
 #   F. open    fleet-open.sh with the lease via thin: no hub action, no spool —
-#              OSC 1337 Custom on the newest 看台's pty; for the -via- client the
-#              escape is wrapped as tmux passthrough.
+#              OSC 7502 open with the 看台's token on the newest 看台's pty,
+#              `unconfirmed` when no loop answers (#3538); for the -via- client
+#              whose home cannot be asked the escape is wrapped as tmux passthrough.
 #   G. where   no hub: fleet-client-where.sh answers the device off the thin row
 #              (no fleet-shell server anywhere).
 #   H. release a 看台 whose client left: its lease is released, the book drops it.
@@ -242,14 +243,15 @@ chmod +x "$W/actions.sh"
 openit() {
   env TMUX="$S/fl,0,0" TMUX_PANE="$P0" PATH="$W/bin:$PATH" FLEET_OPEN_WHERE_CMD="$WHERE" \
     FLEET_OPEN_ACTIONS_BIN="$W/actions.sh" FLEET_OPEN_SECRET_FILE="$W/open.secret" FLEET_OPEN_URL_BIN=/usr/bin/false \
+    FLEET_OPEN_ACK_WAIT=1 \
     bash "$BIN/fleet-open.sh" https://example.com/x 2>"$W/open.err"
 }
 : > "$W/out-a"; : > "$W/out-b"; : > "$W/out-x"
 printf 'z' > "$W/ctl-a"; sleep 0.5            # 看台 a is the newest client
 r=$(openit); sleep 1
-[ "$r" = sent:iterm2 ] && ok "F fleet-open → sent:iterm2" || bad "F fleet-open said '$r' ($(cat "$W/open.err"))"
+[ "$r" = unconfirmed ] && ok "F fleet-open → unconfirmed (no loop answered)" || bad "F fleet-open said '$r' ($(cat "$W/open.err"))"
 [ ! -f "$W/actions.called" ] && ok "F no hub action for a thin lease (nobody polls one)" || bad "F the hub action road was taken"
-grep -aq $'\033]1337;Custom=id=' "$W/out-a" && ok "F OSC 1337 Custom on 看台 a's terminal" || bad "F a got no OSC 1337"
+grep -aq $'\033]7502;open;token=t;j=' "$W/out-a" && ok "F OSC 7502 open with its token on 看台 a's terminal (#3538)" || bad "F a got no 7502 open"
 spool_made "$W/conf/remote-views" && bad "F a spool dir was made" || ok "F no spool for a thin 看台"
 : > "$W/out-x"
 printf 'z' > "$W/ctl-x"; sleep 0.5            # now the -via- client is the newest

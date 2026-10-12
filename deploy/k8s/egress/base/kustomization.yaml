@@ -1,0 +1,16 @@
+# The cluster's one way out for user pods — 统一出口 (claude-fleet#3547, EPIC
+# #3500 C2): fleet-egress.py, a CONNECT proxy with a host allow-list, as its own
+# Deployment. Environment-free; ../fleet-workers adds the namespace, the image
+# and the Singapore parent for GitHub.
+#
+# Applied by a person (README.md), never by hub-deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+configMapGenerator:
+  - name: fleet-egress
+    files:
+      - fleet-egress.py

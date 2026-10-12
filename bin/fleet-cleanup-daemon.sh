@@ -322,7 +322,7 @@ cleanup_fleet() { (
   if ! command -v gh >/dev/null 2>&1; then
     _nf=0
     while IFS= read -r _r; do
-      [ -n "$_r" ] && [ "$(fleet_repo_forge "$sess" "$_r")" = none ] && { _nf=1; break; }
+      [ -n "$_r" ] && [ "$(fleet_repo_forge "$_r" "$sess")" = none ] && { _nf=1; break; }
     done <<EOF_FORGE
 $(fleet_repos "$sess")
 EOF_FORGE

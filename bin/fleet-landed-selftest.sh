@@ -147,8 +147,8 @@ expect 'E2 dash-reap: reaps with no confirm'                "$tok" reaped:full
 # and the branch-keyed janitor all answer from git, and gh runs 0 times.
 mkdir -p "$FLEET_CONF_DIR/fleets/fl/repos"; : > "$FLEET_CONF_DIR/fleets/fl/conf"
 printf 'FLEET_REPO=o/r\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=main\nFLEET_FORGE=none\n' "$D" > "$FLEET_CONF_DIR/fleets/fl/repos/o-r.conf"
-expect 'F1 FLEET_FORGE=none read per repo' "$(fleet_repo_forge fl o/r)" none
-expect 'F2 an unset forge is github'       "$(fleet_repo_forge fl other/x)" github
+expect 'F1 FLEET_FORGE=none read per repo' "$(fleet_repo_forge o/r fl)" none
+expect 'F2 an unset forge is github'       "$(fleet_repo_forge other/x fl)" github
 : > "$GHLOG"
 expect 'F3 「已合并」 by git: squash → merged' "$(FLEET_SESSION=fl fleet_pr_merge_state o/r '' sq)" merged
 expect 'F4 「已合并」 by git: wip → open'      "$(FLEET_SESSION=fl fleet_pr_merge_state o/r '' wip)" open

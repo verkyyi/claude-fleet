@@ -234,7 +234,7 @@ declare -a Q_FORGE
 i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; se="${Q_SESS[$i]}"; i=$((i+1))
-  fg=github; [ -n "$se" ] && fg=$(fleet_repo_forge "$se" "$rp")
+  fg=github; [ -n "$se" ] && fg=$(fleet_repo_forge "$rp" "$se")
   Q_FORGE[$((i-1))]=$fg
   if [ "$fg" = none ]; then
     FD=$(fleet_cache_dir "$sg")

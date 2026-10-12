@@ -1,0 +1,139 @@
+# fleet-goproxy (#3548): Athens, a read-through Go module cache on its disk; it
+# fetches through the overlay's GOPROXY (goproxy.cn). A user pod's GOPROXY lists
+# goproxy.cn after it with `|`, so fleet-goproxy down = slower, never failing.
+# Two replicas, each its own disk.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-goproxy
+  labels:
+    app: fleet-goproxy
+spec:
+  type: ClusterIP
+  # a user pod keeps asking the same replica, so its second install is a hit
+  sessionAffinity: ClientIP
+  selector:
+    app: fleet-goproxy
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fleet-goproxy
+  labels:
+    app: fleet-goproxy
+spec:
+  serviceName: fleet-goproxy
+  replicas: 2
+  revisionHistoryLimit: 2
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Delete
+  selector:
+    matchLabels:
+      app: fleet-goproxy
+  template:
+    metadata:
+      labels:
+        app: fleet-goproxy
+        fleet/role: ops
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: fleet-goproxy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: athens
+          image: fleet-go-cache:set-by-person
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: ATHENS_PORT
+              value: ":3000"
+            - name: ATHENS_STORAGE_TYPE
+              value: disk
+            - name: ATHENS_DISK_STORAGE_ROOT
+              value: /var/lib/athens
+            - name: ATHENS_LOG_LEVEL
+              value: warning
+            # what Athens' own `go mod download` uses; the overlay sets it
+            - name: ATHENS_GO_BINARY_ENV_VARS
+              value: "GOPROXY=https://proxy.golang.org,direct"
+            - name: HOME
+              value: /tmp
+            - name: GOCACHE
+              value: /tmp/gocache
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3000
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/athens
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+  # each replica its own disk: a read-through cache shares nothing (the cluster's
+  # default StorageClass; ../README.md for another)
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: fleet-goproxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fleet-goproxy

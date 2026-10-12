@@ -115,6 +115,13 @@ const (
 	// still only moves forward. The node answers nothing; a push it misses is
 	// caught by its own clock (5 / 30 minutes). No stable → never sent.
 	TypeRelease = "release"
+	// TypeTicket is the hub's word that one of a person's hub tickets moved
+	// (claude-fleet#2677, EPIC #3570 C1): a comment, a state change, a claim
+	// or an edit. Sent the moment it happens to every connected node that
+	// listed CapTicket and whose login belongs to the ticket's owner — never
+	// to anyone else's. The payload names the ticket and the change, never its
+	// words: the node reads them by number. Nothing moves → never sent.
+	TypeTicket = "ticket"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -142,6 +149,10 @@ const CapTeam = "team"
 // (claude-fleet#2784). An older agent never says it, so it is never sent one
 // and keeps reading the personal layer on install-sync's tick.
 const CapPerson = "person"
+
+// CapTicket is the hello capability a node lists when it follows TypeTicket
+// (claude-fleet#2677). An older agent never says it and is never sent one.
+const CapTicket = "ticket"
 
 // CapRelease is the hello capability a node lists when it wakes its update on
 // TypeRelease (claude-fleet#3146): a machine link whose node daemon runs the
@@ -305,6 +316,14 @@ type Team struct {
 type Person struct {
 	Principal string `json:"principal"`
 	Version   int    `json:"version"`
+}
+
+// Ticket is the payload of TypeTicket: which ticket, and what happened to it.
+type Ticket struct {
+	Repo      string `json:"repo"`
+	Number    int64  `json:"number"`
+	Kind      string `json:"kind"` // comment | state | claim | edit
+	CommentID int64  `json:"comment_id,omitempty"`
 }
 
 // Release is the payload of TypeRelease: the stable release and its signed

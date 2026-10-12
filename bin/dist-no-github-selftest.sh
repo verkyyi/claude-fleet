@@ -31,6 +31,11 @@
 #   node-follow   bin/fleet-node-update.py follow <login> (FLEET_NODE_TEST=1):
 #                 a managed login at A linked to the runtime's B (link-tree,
 #                 issue #2774 — no fetch at all)
+#   node-join     bin/fleet-node-join.sh run as `curl … | bash` (from stdin, so
+#                 its release lib comes from the hub's /install/bin/) on a fresh
+#                 login: ccquota from the hub's /v1/node/dist, ~/.claude/fleet the
+#                 hub's signed stable as one commit (issue #2862) — the agent a
+#                 stub, run detached, killed after
 # A leg is GREEN when the install reads DIST-MARK=B AND the recorder saw no
 # GitHub host while it ran. Otherwise RED, with the hits and the last lines.
 # One more leg runs only by name (BREAK-IT `dist-bad-signature`, issue #2773):
@@ -63,16 +68,17 @@ STRICT=0 LEGS=''
 for a in "$@"; do
   case "$a" in
     --strict) STRICT=1 ;;
-    install-sync|client|bootstrap|bootstrap-hub|node-follow|bad-signature) LEGS="$LEGS $a" ;;
+    install-sync|client|bootstrap|bootstrap-hub|node-follow|node-join|bad-signature) LEGS="$LEGS $a" ;;
     *) printf 'dist-no-github: unknown arg %s\n' "$a" >&2; exit 2 ;;
   esac
 done
-[ -n "$LEGS" ] || LEGS="install-sync client bootstrap bootstrap-hub node-follow"
+[ -n "$LEGS" ] || LEGS="install-sync client bootstrap bootstrap-hub node-follow node-join"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dist-nogh.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 SRV_PID='' RELHUB_PID=''
 cleanup() {
+  [ -f "$WORK/nj/.ccquota/agent.pid" ] && kill "$(cat "$WORK/nj/.ccquota/agent.pid")" 2>/dev/null
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null
   [ -n "$RELHUB_PID" ] && kill "$RELHUB_PID" 2>/dev/null
   [ -n "${DIST_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
@@ -151,6 +157,7 @@ import hashlib, json, os, sys, threading, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 work, repo = sys.argv[1:3]
+NODE_TOKEN = "ccq_distfixturetoken0123456789"
 
 
 def log(name, line):
@@ -183,11 +190,39 @@ class Hub(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        log("hub.log", "POST " + self.path)
+        n = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(n) or b"{}")
+        if self.path == "/v1/node/join":
+            # the node-join leg (issue #2862): the way tokenledger answers
+            return self.send(200, json.dumps({
+                "endpoint_id": "ep_1", "label": "%s-%s" % (body.get("hostname"), body.get("os_user")),
+                "token": NODE_TOKEN, "hub": "x", "admin": False, "ssh_ca": "",
+                "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"],
+                "kind": "fixed"}, separators=(",", ":")))
+        return self.send(404, "")
+
     def do_GET(self):
         log("hub.log", self.path)
         host = "http://%s" % self.headers.get("Host")
         p = self.path.split("?")[0]
         stable = open(os.path.join(work, "rel", "stable")).read().strip()
+        authed = self.headers.get("Authorization") == "Bearer " + NODE_TOKEN
+        if p.startswith("/v1/node/dist/") and authed:
+            return self.send(200, open(os.path.join(work, "nj-ccquota"), "rb").read(),
+                             "application/octet-stream", sha=True)
+        if p == "/fake/hello" and authed:
+            open(os.path.join(work, "nj-online"), "w").close()
+            return self.send(200, "{}")
+        if p == "/v1/node/self" and authed:
+            st = "online" if os.path.exists(os.path.join(work, "nj-online")) else "never"
+            return self.send(200, json.dumps({"endpoint_id": "ep_1", "status": st}, separators=(",", ":")))
+        if p.startswith("/install/bin/"):
+            # what the hub's /install/<path> serves: the client manifest's files
+            f = os.path.join(repo, "bin", p[len("/install/bin/"):])
+            if "/" not in p[len("/install/bin/"):] and os.path.isfile(f):
+                return self.send(200, open(f, "rb").read(), "text/plain")
         if p == "/version":
             return self.send(200, json.dumps({
                 "commit": "hub-image", "stable": stable, "client_version": stable,
@@ -387,6 +422,40 @@ leg_node_follow() {
     https_proxy="$REC" HTTPS_PROXY="$REC" ALL_PROXY="$REC" NO_PROXY=127.0.0.1,localhost \
     python3 "$BIN/fleet-node-update.py" follow "$me" 2>&1 | tail -3)
   [ "$(mark_of "$co")" = B ] || WHY="the managed login's install reads $(mark_of "$co"): $(grep "install $me" "$d/log/update.log" 2>/dev/null | tail -1 | cut -c1-200)"
+}
+
+leg_node_join() {
+  local h="$WORK/nj" conf co
+  blackhole "$h"; conf="$h/.config/claude-fleet"; co="$h/.claude/fleet"
+  mkdir -p "$WORK/fakebin-bs"
+  printf '#!/bin/sh\necho "2.1.1 (Claude Code)"\n' > "$WORK/fakebin-bs/claude"; chmod +x "$WORK/fakebin-bs/claude"
+  # the ccquota the hub's /v1/node/dist serves: its agent checks in, then sleeps
+  cat > "$WORK/nj-ccquota" <<'EOF'
+#!/bin/sh
+case "$1" in
+  version) echo "ccquota dist fixture" ;;
+  agent) curl -fsS -H "Authorization: Bearer $CCQUOTA_TOKEN" "$CCQUOTA_HUB_URL/fake/hello" >/dev/null
+         exec sleep 30 ;;
+esac
+EOF
+  # from stdin, as `curl -fsSL <hub>/install/bin/fleet-node-join.sh | bash -s -- …`
+  OUT=$(HOME="$h" FLEET_CONF_DIR="$conf" TMPDIR="$WORK" PATH="$WORK/fakebin-bs:$WORK/fakebin:$PATH" \
+    FLEET_SKIP_GLOBAL_CONF=1 FLEET_NODE_ROOT="$WORK/no-runtime" FLEET_JOIN_SUDO='' FLEET_JOIN_POLL=1 \
+    FLEET_BOOTSTRAP_CACHE=off FLEET_CLAUDE_INSTALL_CMD=true FLEET_INSTALL_PLATFORM=none \
+    GIT_TERMINAL_PROMPT=0 bash -s -- --hub "$HUB" --token fj_abcdefghijklmnopqrstuvwxyz --no-admin \
+      --no-deps --service detached --wait 20 < "$BIN/fleet-node-join.sh" 2>&1 | grep -E '^(agent|fleet|online|done):|FAIL' | tail -8)
+  [ -f "$h/.ccquota/agent.pid" ] && kill "$(cat "$h/.ccquota/agent.pid")" 2>/dev/null
+  if ! printf '%s\n' "$OUT" | grep -q '^agent: ccquota-.* from the hub'; then
+    WHY="ccquota did not come from the hub: $(printf '%s' "$OUT" | grep -m1 '^agent:')"
+  elif [ "$(mark_of "$co")" != B ]; then
+    WHY="the joined login's install reads [$(mark_of "$co")]: $(printf '%s' "$OUT" | grep -m1 '^fleet:')"
+  elif ! git -C "$co" log -1 --format=%s 2>/dev/null | grep -q "^fleet-release: $B "; then
+    WHY="the install is not the hub's release imported as one commit: $(git -C "$co" log -1 --format=%s 2>&1)"
+  elif [ -n "$(git -C "$co" remote 2>/dev/null)" ]; then
+    WHY="the install has a remote: $(git -C "$co" remote -v | head -1)"
+  elif ! grep -q '^/install/bin/fleet-release-lib.sh' "$WORK/hub.log"; then
+    WHY="the release lib was not taken from the hub's /install/bin/"
+  fi
 }
 
 # ------------------------------------------------------------------- the run
