@@ -29,6 +29,7 @@
 #   R–X. the slots of #2233: the node's claim (`--repo <slug|-> --agent`, exit 3),
 #        old-config entries never handed out, no refill on a busy machine, shrink,
 #        pool off, `--status`, the claim's fast-forward to origin/<base>
+#   T2. a cgroup CPU limit (#3542): the cgroup's own reading, not the host load
 #   W2. default sizes: a repo slot 1, the HOME slot 2 (#3514)
 #   Y. a warm entry that never opens gives its admission back (#2502)
 #   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
@@ -53,6 +54,9 @@ MAIN="$WORK/main"; mkdir -p "$MAIN"
 
 # ---- per-fleet conf ---------------------------------------------------------
 export FLEET_CONF_DIR="$WORK/conf"
+# No cgroup CPU limit unless a leg says so (a runner in a container must not
+# swap the load rule under the legs that stub it) — issue #3542.
+export FLEET_CPU_MAX_FILE="$WORK/no-cpu.max" FLEET_CPU_STAT_FILE="$WORK/no-cpu.stat"
 mkdir -p "$FLEET_CONF_DIR/fleets/tf"
 mkconf() {  # mkconf <pool-size> [max-age] — a one-repo fleet (o/a): the pool is per repo (#1941)
   cat > "$FLEET_CONF_DIR/fleets/tf/conf" <<EOF
@@ -406,6 +410,40 @@ grep -q "new-window\|new-session" "$STATE/log" && fail "T a disk under the warn 
 FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
 grep -q "new-session -d -s tf-pool .* -n warm-home" "$STATE/log" || fail "T a quiet machine warms" "$(cat "$STATE/log")"
 ok "T load over 1/core or a low disk: no refill (status: hold=…); quiet: refill"
+
+# T2: a container with a cgroup CPU limit (issue #3542) — the host's loadavg is
+# not this pod's: a high load with an idle cgroup still refills; a throttled or
+# near-limit cgroup holds, whatever the load says. Then the real counters: two
+# samples of cpu.stat against cpu.max, taken once by the fan-out.
+reset_state; mkfleet; mkconf 1
+FLEET_POOL_CPU_READING='0 1.10 4.00' FLEET_LOAD_PROBE_CMD='echo 2.20' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-session -d -s tf-pool .* -n warm-home" "$STATE/log" || fail "T2 an idle cgroup refills under a high host load" "$(cat "$STATE/log")"
+reset_state; mkfleet; mkconf 1
+FLEET_POOL_CPU_READING='35 1.90 2.00' FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-window\|new-session" "$STATE/log" && fail "T2 a throttled cgroup must not warm" "$(cat "$STATE/log")"
+out=$(FLEET_POOL_CPU_READING='35 1.90 2.00' FLEET_LOAD_PROBE_CMD='echo 0.10' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ready=0 hold=cpu throttled 35% >= 10%$' || fail "T2 status names the throttle hold" "$out"
+out=$(FLEET_POOL_CPU_READING='2 3.60 4.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ready=0 hold=cpu 3.60 of 4.00 cores > 0.8$' || fail "T2 status names the near-limit hold" "$out"
+out=$(FLEET_POOL_CPU_READING=- FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ready=0 hold=load 3.00/core > 1$' || fail "T2 no limit: the load rule" "$out"
+# The real reader: 4 cores (400000/100000); 1 s of wall over 10 periods, 1.1 cores
+# used, none throttled — then 5 of 10 throttled.
+printf '400000 100000\n' > "$WORK/cpu.max"
+cpu_stat() { printf 'usage_usec %s\nuser_usec 1\nsystem_usec 1\nnr_periods %s\nnr_throttled %s\nthrottled_usec 0\n' "$1" "$2" "$3" > "$WORK/cpu.stat"; }
+reset_state; mkfleet; mkconf 1; cpu_stat 1000000 100 0
+( sleep 0.4; cpu_stat 2100000 110 0 ) &
+FLEET_CPU_MAX_FILE="$WORK/cpu.max" FLEET_CPU_STAT_FILE="$WORK/cpu.stat" FLEET_POOL_CPU_SAMPLE_SECS=1 \
+  FLEET_LOAD_PROBE_CMD='echo 2.20' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+wait
+grep -q "new-session -d -s tf-pool .* -n warm-home" "$STATE/log" || fail "T2 real counters: 1.1 of 4 cores refills" "$(cat "$STATE/log")"
+reset_state; mkfleet; mkconf 1; cpu_stat 1000000 100 0
+( sleep 0.4; cpu_stat 2100000 110 5 ) &
+out=$(FLEET_CPU_MAX_FILE="$WORK/cpu.max" FLEET_CPU_STAT_FILE="$WORK/cpu.stat" FLEET_POOL_CPU_SAMPLE_SECS=1 \
+  FLEET_LOAD_PROBE_CMD='echo 0.10' bash "$POOL" status tf 2>&1)
+wait
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ready=0 hold=cpu throttled 50% >= 10%$' || fail "T2 real counters: 50% throttled holds" "$out"
+ok "T2 cgroup limit: high host load + idle cgroup refills; throttled / near-limit holds; no limit = load rule"
 
 # U: shrink — a slot holding more than FLEET_SCRATCH_POOL retires the excess.
 reset_state; mkfleet; mkconf 1

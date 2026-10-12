@@ -5142,6 +5142,31 @@ _fleet_load_per_core() {
   awk -v l="$l" -v c="${c:-1}" 'BEGIN{ printf "%.2f", l / c }'
 }
 
+# _fleet_cgroup_cpu [secs] → "<throttled %> <cores used> <cores limit>" off this
+# cgroup's own counters (issue #3542), sampled over <secs> (default 1), or nothing
+# when there is no cgroup CPU limit (a Mac, a VM, `max`) — the caller then reads the
+# load as before. Inside a container /proc/loadavg is the whole HOST's: two idle
+# logins on fleet-linux-0 read 1.4–2.2/core while the pod used 1.1 of 4 cores, 0%
+# throttled. Same reading as fleet-doctor.sh's `cpu` row (a /bin/sh script that
+# cannot source this file) — KEEP IN SYNC. FLEET_CPU_STAT_FILE / FLEET_CPU_MAX_FILE
+# point it elsewhere (a selftest).
+_fleet_cgroup_cpu() {
+  local st="${FLEET_CPU_STAT_FILE:-/sys/fs/cgroup/cpu.stat}" mx="${FLEET_CPU_MAX_FILE:-/sys/fs/cgroup/cpu.max}"
+  local secs="${1:-1}" q p s0 s1
+  [ -r "$st" ] && [ -r "$mx" ] || return 0
+  read -r q p < "$mx" 2>/dev/null || return 0
+  case "$q$p" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$p" -gt 0 ] && [ "$q" -gt 0 ] || return 0
+  case "$secs" in ''|*[!0-9.]*) secs=1 ;; esac
+  s0=$(awk '/^(usage_usec|nr_periods|nr_throttled) /{printf "%s ", $2}' "$st")
+  sleep "$secs"
+  s1=$(awk '/^(usage_usec|nr_periods|nr_throttled) /{printf "%s ", $2}' "$st")
+  printf '%s %s %s %s\n' "$s0" "$s1" "$q" "$p" | awk 'NF==8 {
+    dp=$5-$2; dt=$6-$3; du=$4-$1
+    s=(dp>0 ? dp*$8 : 0)
+    printf "%d %.2f %.2f\n", (dp>0 ? 100*dt/dp : 0), (s>0 ? du/s : 0), $7/$8 }'
+}
+
 # path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or
 # empty when the argument is not a scratch identity (issue #466).
 #
