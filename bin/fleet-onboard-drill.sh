@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-onboard-drill.sh [--login <name>] [--invite <code>] [--home <machine>] [--hub <url>]
 #                        [--scan-cmd <cmd>] [--keep] [--timeout <secs>] [--ssh-host <h>]
-#                        [--ssh-port <p>] [--name <scratch>] | --teardown <login> [--invite <code>]
+#                        [--ssh-port <p>] [--name <scratch>] | --teardown <login> [--invite <code>] [--home <machine>]
 #   — a new colleague's first time, from nothing, as ONE command (issue #1901,
 #     EPIC #1906 C8): a throwaway OS login gets only the hub's install line,
 #     answers what it asks with Enter, joins, opens the client and starts a
@@ -111,10 +111,23 @@
 #               With --invite: the drill person deletes ITSELF instead — person,
 #               device, node (DELETE /v1/self, signed by the login's own
 #               certificate, else the code) — no operator token needed.
-#  12 residue   no login record, home, process, access group entry, nor any login
+#               Every OTHER machine the login was put on (issue #3471 — drill 33
+#               left drill10120108 on mini2 under a PASS): --home, and each
+#               machine the hub's roster (GET /v1/fleet/accounts, the operator's
+#               token) lists a login of that name on — the hub is asked to close
+#               it (POST action remove) and the roster read until it is removed;
+#               one still there after FLEET_DRILL_REMOVE_SECS is a FAIL naming
+#               the machine, its state and the node's words.
+#  12 residue   no login record, home, process, access or share group entry
+#               (com.apple.sharepoint.group.*, its Public Folder), nor any login
 #               made during the run (the hub's for the drill person); the device
 #               revoked on the hub. With --invite: the hub no longer knows the
-#               drill person (its answer is kept as hub-residue.txt).
+#               drill person (its answer is kept as hub-residue.txt). The same
+#               look on EVERY other machine of step 11 (issue #3471), over ssh
+#               (the hub's five-minute certificate, else plain ssh), read-only:
+#               a machine that cannot be read is a FAIL, never a clean one
+#               (residue-<machine>.txt). Never a PASS from this machine alone
+#               when the login went elsewhere.
 #
 # The reading: 「要人帮的步骤」 = the FAILs a person would have had to be asked
 # about. The scan is the colleague's own and is not counted. A run cut short
@@ -124,6 +137,8 @@
 # taken for 「a person scans」.
 #
 # --teardown <login>: steps 11–12 only, for a run left up (--keep) or cut short.
+# --home <machine> beside it names the machine the run's login was opened on
+# (issue #3471): it is cleaned and checked even when this machine has none.
 #
 # --runs N: the 60-second standard instead (bin/fleet-onboard-clock.sh, #2267) —
 # `fleet-onboard-drill.sh --hub prod --runs 3`: sandbox HOMEs, no new login.
@@ -213,9 +228,9 @@ if [ -n "$INVITE" ]; then
 fi
 if [ -n "$HOME_M" ]; then
   printf '%s' "$HOME_M" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' || die2 "--home: a machine name (got '$HOME_M')"
-  [ "$TEARDOWN" = 0 ] || die2 '--home is for a run, not a --teardown'
   # the drill mints its own drill person for the home: a drill login's name
-  if [ -z "$INVITE" ]; then
+  # (a --teardown --home only names the machine its steps 11–12 must clean, #3471)
+  if [ -z "$INVITE" ] && [ "$TEARDOWN" = 0 ]; then
     [ -n "$LOGIN" ] || LOGIN="drill$(date +%m%d%H%M)"
     printf '%s' "$LOGIN" | grep -Eq '^drill[a-z0-9]{1,11}$' \
       || die2 "--home without --invite mints a drill person: --login must be drill + 1-11 lowercase letters or digits (got '$LOGIN')"
@@ -267,12 +282,14 @@ elif [ "$TEARDOWN" = 0 ]; then
   fi
   [ ! -e "$H" ] || { printf '%s: %s already exists (no such login) — refusing\n' "$PROG" "$H" >&2; exit 3; }
 else
-  id "$LOGIN" >/dev/null 2>&1 || [ -e "$H" ] || die2 "--teardown: no login $LOGIN and no $H — nothing to clean"
+  # with --home the login may be left on THAT machine alone (#3471)
+  id "$LOGIN" >/dev/null 2>&1 || [ -e "$H" ] || [ -n "$HOME_M" ] \
+    || die2 "--teardown: no login $LOGIN and no $H — nothing to clean (left on another machine? --home <machine>)"
 fi
 
 # --home with no --invite: this run's own drill person, its login opened on the
 # home (issue #3432) — minted before anything is changed, so a refusal is exit 2
-if [ -n "$HOME_M" ] && [ -z "$INVITE" ]; then
+if [ -n "$HOME_M" ] && [ -z "$INVITE" ] && [ "$TEARDOWN" = 0 ]; then
   inv=$(bash "$INVITE_SH" invite --login "$LOGIN" --home "$HOME_M" --json 2>&1) \
     || die2 "--home: the hub did not mint a drill person for $HOME_M: $(printf '%s' "$inv" | tail -n 1)"
   INVITE=$(printf '%s' "$inv" | python3 -c '
@@ -1155,6 +1172,119 @@ step_restart() {
   pass node-restart-resume "$SL's tmux${SNODE:+ on $SNODE} restarted: $back session(s) back, the client on $RESUME_NAME ($SKEY) again · $(elapsed)"
 }
 
+# --- every machine the login was put on (issue #3471) -----------------------------
+# Drill 33's login stayed on mini2 (its --home) while steps 11–12 read PASS: both
+# looked at this machine only. Now the machines are the run's --home plus every
+# machine the hub's roster lists a login of that name on (GET /v1/fleet/accounts,
+# the operator's token); step 11 has the hub close each one and step 12 looks
+# at each one itself.
+THIS_M=$(hostname -s 2>/dev/null || hostname)
+# hub_auth <method> <path> [json]: as hub_json, with the operator's token
+hub_auth() {
+  local out code
+  out=$(mktemp "$RUN/hub.XXXXXX") || return 1
+  code=$(printf '%s' "${3:-}" | curl -sS --max-time 20 -o "$out" -w '%{http_code}' -X "$1" \
+         -H "Authorization: Bearer $VIEWER" -H 'Content-Type: application/json' \
+         $([ -n "${3:-}" ] && printf -- '--data-binary @-') "$HUB$2" 2>/dev/null)
+  cat "$out"; rm -f "$out"
+  printf '\n%s' "$code"
+}
+# hub_roster: the hub's rows for a login named $LOGIN on another machine, one
+# per line — host · state · principal · detail; rc 1 = no token, or no answer
+hub_roster() {
+  local resp
+  [ -n "$VIEWER" ] || return 1
+  resp=$(hub_auth GET /v1/fleet/accounts)
+  [ "$(hub_code "$resp")" = 200 ] || return 1
+  hub_body "$resp" > "$RUN/hub-accounts.json"
+  python3 -c '
+import json, sys
+login, me = sys.argv[1], sys.argv[2].split(".")[0].lower()
+d = json.load(open(sys.argv[3]))
+for a in (d.get("accounts") or []) + (d.get("spares") or []):
+    h = a.get("hostname") or ""
+    if a.get("login") != login or a.get("op") == "login" or h.split(".")[0].lower() == me:
+        continue
+    print("\t".join([h, a.get("state") or "", a.get("principal_id") or "", " ".join((a.get("detail") or "").split())[:200]]))
+' "$LOGIN" "$THIS_M" "$RUN/hub-accounts.json"
+}
+# other_machines: --home, then the roster's, one per line, once each (the roster
+# read leaves $RUN/hub-accounts.json behind: that is how a caller tells it was read)
+other_machines() {
+  local rows
+  rows=$(hub_roster) || rows=''
+  { [ -z "$HOME_M" ] || same_machine "$HOME_M" "$THIS_M" || printf '%s\n' "$HOME_M"
+    printf '%s\n' "$rows" | cut -f1; } | awk 'NF && !seen[tolower($0)]++'
+}
+# The residue on another machine, read-only and as nobody in particular (no
+# sudo there): the record, the home, the processes, every access and share
+# group naming the login. `probe-ok` last = the machine was read.
+RESIDUE_PROBE='L=$1
+u=$(id -u "$L" 2>/dev/null) && echo "left: login record (uid $u)"
+if command -v dscl >/dev/null 2>&1; then
+  [ -n "$u" ] || ! dscl . -read "/Users/$L" UniqueID >/dev/null 2>&1 || echo "left: directory record /Users/$L"
+  [ ! -e "/Users/$L" ] || echo "left: home /Users/$L"
+  for g in $(dscl . -list /Groups 2>/dev/null | grep -E "^com[.]apple[.](access_|sharepoint[.]group[.])"); do
+    dscl . -read "/Groups/$g" GroupMembership 2>/dev/null | tr " " "\n" | grep -Fxq -- "$L" && echo "left: $g lists $L"
+  done
+else
+  [ ! -e "/home/$L" ] || echo "left: home /home/$L"
+fi
+if [ -n "$u" ]; then n=$(ps -axo uid= 2>/dev/null | awk -v u="$u" "\$1 == u" | wc -l | tr -d " ")
+else n=$(ps -axo user= 2>/dev/null | awk -v l="$L" "\$1 == l" | wc -l | tr -d " "); fi
+[ "$n" = 0 ] || echo "left: $n process(es) of $L"
+echo probe-ok'
+# home_probe <machine>: what is left of $LOGIN there, one per line; rc 1 = the
+# machine could not be read (said on stdout) — never taken for clean. The way in
+# is the hub's five-minute certificate (fleet-peer-cert.sh), else plain ssh;
+# FLEET_DRILL_HOME_SSH <machine> <cmd…> is the selftest's seam.
+home_probe() {
+  local m=$1 out o rc opts=()
+  if [ -n "${FLEET_DRILL_HOME_SSH:-}" ]; then
+    out=$(printf '%s\n' "$RESIDUE_PROBE" | sh -c "$FLEET_DRILL_HOME_SSH \"\$@\"" _ "$m" sh -s -- "$LOGIN" 2>&1)
+  else
+    o=$(bash "$BIN/fleet-peer-cert.sh" "$m" view 2>"$RUN/peer-cert-$m.err"); rc=$?
+    case $rc in
+      0) while IFS= read -r x; do [ -z "$x" ] || opts+=("$x"); done <<EOF
+$o
+EOF
+         ;;
+      3) ;;
+      *) printf 'could not read %s: no way in (%s)' "$m" "$(tail -n 1 "$RUN/peer-cert-$m.err")"; return 1 ;;
+    esac
+    out=$(printf '%s\n' "$RESIDUE_PROBE" | ssh -o BatchMode=yes -o ConnectTimeout=15 ${opts[@]+"${opts[@]}"} "$m" sh -s -- "$LOGIN" 2>&1)
+  fi
+  printf '%s\n' "$out" > "$RUN/residue-$m.txt"
+  if ! printf '%s\n' "$out" | grep -qx 'probe-ok'; then
+    printf 'could not read %s: %s' "$m" "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n 1 | head -c 160)"
+    return 1
+  fi
+  printf '%s\n' "$out" | sed -n 's/^left: //p'
+}
+# close_remote: step 11 on the other machines — the operator's remove on every
+# roster row still holding the login there (the drill person's self-delete has
+# already asked for its own), then the roster read until each is removed or
+# gone, FLEET_DRILL_REMOVE_SECS. Prints what stayed (login@host state: detail).
+close_remote() {
+  local rows t0 h st pid det body
+  rows=$(hub_roster) || return 0
+  printf '%s\n' "$rows" | while IFS="$(printf '\t')" read -r h st pid det; do
+    [ -n "$h" ] || continue
+    case "$st" in active|failed|unknown)
+      body=$(python3 -c 'import json,sys; print(json.dumps({"action":"remove","principal_id":sys.argv[1],"hostname":sys.argv[2]}))' "$pid" "$h")
+      # to stderr: this function's stdout is what stayed
+      note "asked the hub to close $LOGIN@$h ($st): HTTP $(hub_code "$(hub_auth POST /v1/fleet/accounts "$body")")" >&2 ;;
+    esac
+  done
+  t0=$SECONDS
+  while :; do
+    rows=$(hub_roster | awk -F'\t' '$2 != "removed"') || rows=''
+    [ -n "$rows" ] && [ $((SECONDS - t0)) -lt "$REMOVE_SECS" ] || break
+    keep_sudo; sleep "$POLL"
+  done
+  printf '%s\n' "$rows" | awk -F'\t' -v l="$LOGIN" 'NF {printf " · %s@%s still %s%s", l, $1, $2, ($4 != "" ? ": " $4 : "")}'
+}
+
 # --- 11 offboard ---------------------------------------------------------------------
 hub_revoke() {
   local fp=$1 out
@@ -1201,7 +1331,7 @@ hub_self_delete() {
   return 1
 }
 step_offboard() {
-  local fp rc warn='' out
+  local fp rc warn='' out remote_left
   # what to take back on the hub, read off the login before it goes
   fp=$(as_login ssh-keygen -lf "$H/.ssh/fleet-cert.pub" 2>/dev/null | awk '{print $2}')
   FPR=${fp:-$FPR}
@@ -1218,7 +1348,16 @@ step_offboard() {
     if out=$(hub_revoke "$FPR"); then note "device $FPR revoked on the hub: $out"
     else warn="$warn · device $FPR not revoked ($out)"; fi
   fi
-  ( cd "$HOME" && bash "$RM_SH" "$LOGIN" --delete-home --apply ) > "$RUN/login-remove.log" 2>&1; rc=$?
+  if id "$LOGIN" >/dev/null 2>&1 || [ -e "$H" ]; then
+    ( cd "$HOME" && bash "$RM_SH" "$LOGIN" --delete-home --apply ) > "$RUN/login-remove.log" 2>&1; rc=$?
+  else
+    printf 'no login %s on this machine (%s): nothing to remove here\n' "$LOGIN" "$THIS_M" > "$RUN/login-remove.log"; rc=0
+  fi
+  # the other machines (issue #3471): the hub closes the login it put there
+  remote_left=$(close_remote)
+  if [ -z "$VIEWER" ] && [ -n "$HOME_M" ] && [ -z "$INVITE" ]; then
+    warn="$warn · no operator token: the hub was not asked to close $LOGIN on $HOME_M (CCQUOTA_VIEWER_TOKEN, or --invite <code>)"
+  fi
   # The node: fleet-login-remove.sh's own `fleet node leave` (#1928), else the
   # operator's retire — never a step inside the cluster.
   if [ -n "$EPID" ]; then
@@ -1234,7 +1373,11 @@ step_offboard() {
     fi
   fi
   if [ "$rc" != 0 ]; then
-    failstep offboard "fleet-login-remove.sh $LOGIN --delete-home --apply: exit $rc — $(tail -n 1 "$RUN/login-remove.log")$warn"
+    failstep offboard "fleet-login-remove.sh $LOGIN --delete-home --apply: exit $rc — $(tail -n 1 "$RUN/login-remove.log")$warn$remote_left"
+    return 1
+  fi
+  if [ -n "$remote_left" ]; then
+    failstep offboard "the hub did not close $LOGIN everywhere within ${REMOVE_SECS}s:$remote_left$warn"
     return 1
   fi
   if [ -n "$warn" ]; then
@@ -1266,7 +1409,7 @@ step_residue() {
     n=$(ps -axo uid= 2>/dev/null | awk -v u="$UIDN" '$1 == u' | grep -c .)
     [ "$n" = 0 ] || left="$left · $n process(es) of uid $UIDN"
   fi
-  for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.access_' || :); do
+  for g in $(dscl . -list /Groups 2>/dev/null | grep -E '^com\.apple\.(access_|sharepoint\.group\.)' || :); do
     dscl . -read "/Groups/$g" GroupMembership 2>/dev/null | tr ' ' '\n' | grep -Fxq -- "$LOGIN" && left="$left · $g lists $LOGIN"
     [ -z "$GUID" ] || { dscl . -read "/Groups/$g" GroupMembers 2>/dev/null | tr ' ' '\n' | grep -Fxq -- "$GUID" && left="$left · $g lists its GUID"; }
   done
@@ -1299,8 +1442,21 @@ else: print("gone")' "$FPR" 2>/dev/null)
       *)   left="$left · the hub's answer on the drill person: HTTP $(hub_code "$resp")" ;;
     esac
   fi
+  # every other machine the login was put on (issue #3471): looked at, never assumed
+  local m ms seen='' got
+  rm -f "$RUN/hub-accounts.json"
+  ms=$(other_machines)
+  for m in $ms; do
+    if got=$(home_probe "$m"); then
+      [ -z "$got" ] || left="$left$(printf '%s\n' "$got" | sed "s/^/ · on $m: /" | tr -d '\n')"
+      seen="$seen $m"
+    else
+      left="$left · $got"
+    fi
+  done
+  [ -s "$RUN/hub-accounts.json" ] || note "the hub's roster was not read (no operator token, or no answer) — machines checked: $THIS_M${seen}"
   if [ -z "$left" ]; then
-    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && [ -n "$VIEWER" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
+    pass residue "none on $THIS_M${seen}: no login, no home, no process, no access- or share-group entry$([ -n "$FPR" ] && [ -n "$VIEWER" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
   else
     failstep residue "left behind:$left"
     return 1
@@ -1314,7 +1470,7 @@ finish() {
   if [ "$KEEP" = 1 ] && [ "$TEARDOWN" = 0 ]; then
     kill_own_tmux
     skip offboard "--keep: $LOGIN stays up — clean it with: $0 --teardown $LOGIN"
-  elif id "$LOGIN" >/dev/null 2>&1 || [ -e "$H" ]; then
+  elif id "$LOGIN" >/dev/null 2>&1 || [ -e "$H" ] || [ -n "$HOME_M" ]; then
     step_offboard || :
     step_residue || :
   else
