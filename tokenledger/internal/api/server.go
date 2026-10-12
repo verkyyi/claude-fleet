@@ -96,6 +96,9 @@ type Server struct {
 	// sessionsChanged fires on every recorded fleet heartbeat: a held
 	// fleet_sessions long poll (claude-fleet#1526) wakes and reads again.
 	sessionsChanged changeBroadcast
+	// revChanged fires on every change of the revocation list: a held
+	// list request answers at once (claude-fleet#3560).
+	revChanged changeBroadcast
 	// nodesChanged fires on every recorded node heartbeat: the app's push
 	// channel (/v1/fleet/stream, claude-fleet#2794) reads its nodes topic.
 	nodesChanged changeBroadcast
@@ -164,6 +167,10 @@ type Server struct {
 	// call POST /v1/fleet/session-cred/verify
 	// (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]); empty = the operator only.
 	SessionCredVerifyToken string
+	// RevocationsToken admits the Singapore relay's sidecar to the
+	// revocation list (claude-fleet#3560,
+	// CCQUOTA_FLEET_REVOCATIONS_TOKEN[_FILE]); empty = the list is off.
+	RevocationsToken string
 	// CredProxyToken admits the cluster credential proxy (`ccquota
 	// credproxy`, claude-fleet#1973) to POST /v1/fleet/credproxy/resolve
 	// (CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]); empty = the route answers 503.
@@ -606,6 +613,11 @@ func (s *Server) routes() *routeMux {
 		// asks the check, which authenticates the pass it carries.
 		mux.HandleFunc("/v1/node/relay-credential", s.handleNodeRelayCredential)
 		mux.HandleFunc(RelayCheckPath, s.handleRelayCheck)
+		// The revocation list the relay and the doors refuse by themselves
+		// (claude-fleet#3560): 404 while CCQUOTA_FLEET_REVOCATIONS_TOKEN is unset.
+		mux.HandleFunc(RelayRevocationsPath, s.handleRelayRevocations)
+		mux.HandleFunc(NodeRevocationsPath, s.handleNodeRevocations)
+		mux.Handle("/v1/fleet/revocations", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevocations))))
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.

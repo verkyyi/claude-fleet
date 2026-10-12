@@ -597,12 +597,17 @@ func (s *Server) handleFleetRevoke(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		audit.Action = store.CredUnrevoke
+		s.revLift(revCredSrc(req.Hostname, req.PrincipalID))
 	} else {
-		if err := s.Store.Revoke(req.Hostname, req.PrincipalID, req.Reason, time.Now()); err != nil {
+		now := time.Now()
+		if err := s.Store.Revoke(req.Hostname, req.PrincipalID, req.Reason, now); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		audit.Action = store.CredRevoke
+		if s.revOn() {
+			s.revRecord(s.revForCredRevoke(req.Hostname, req.PrincipalID, req.Reason, now), now)
+		}
 	}
 	s.relayCacheReset() // a revoked machine's relay pass stops now (#1974)
 	audit.Detail = joinDetail(audit.Detail, "by "+actorOf(r))

@@ -120,7 +120,9 @@ func (s *Server) revokeNodeRest(ep *store.Endpoint, now time.Time, closeLink boo
 		} else {
 			key := relayKey(host)
 			entries := relayEntries(settings[key])
-			if _, ok := entries[osUser]; ok {
+			if h, ok := entries[osUser]; ok {
+				s.revRecord([]store.Revocation{{JTI: "frl1:" + h, Machine: revMachine(host), Login: osUser,
+					Exp: now.Add(revFrl1Keep).Unix(), Src: "node:" + ep.ID}}, now)
 				delete(entries, osUser)
 				if err := s.Store.SetFleetSetting(key, relayValue(entries), now); err != nil {
 					log.Printf("node %s: revoke: drop relay credential: %v", ep.ID, err)
@@ -131,6 +133,7 @@ func (s *Server) revokeNodeRest(ep *store.Endpoint, now time.Time, closeLink boo
 		}
 	}
 	s.relayCacheReset()
+	s.revNodePasses(ep, now)
 	if closeLink && s.nodes.get(ep.ID) != nil {
 		s.nodes.closeRevoked(ep.ID)
 		linkClosed = true
@@ -156,4 +159,25 @@ func (n *nodeConns) closeRevoked(id string) {
 func (s *Server) nodeTokenLive(hash string) bool {
 	_, err := s.Store.EndpointByTokenHash(hash)
 	return !errors.Is(err, sql.ErrNoRows)
+}
+
+// revNodePasses puts the session passes a retired endpoint issued (revoked
+// in the retire's transaction) on the revocation list, when it is on.
+func (s *Server) revNodePasses(ep *store.Endpoint, now time.Time) {
+	if !s.revOn() {
+		return
+	}
+	creds, err := s.Store.SessionCreds(false, now, 1000)
+	if err != nil {
+		log.Printf("node %s: revoke: list its passes: %v", ep.ID, err)
+		return
+	}
+	out := []store.Revocation{}
+	for _, c := range creds {
+		if c.EndpointID == ep.ID && c.RevokedAt != nil && c.ExpiresAt.After(now) {
+			out = append(out, store.Revocation{JTI: "fcp:" + c.ID, Machine: revMachine(c.Machine),
+				Principal: c.PrincipalID, Exp: c.ExpiresAt.Unix(), Src: "node:" + ep.ID})
+		}
+	}
+	s.revRecord(out, now)
 }

@@ -622,6 +622,8 @@ func (s *Server) revokeSessionCred(w http.ResponseWriter, r *http.Request, id st
 	}
 	s.sessCred.drop(id)
 	if ok {
+		s.revRecord([]store.Revocation{{JTI: "fcp:" + id, Machine: revMachine(row.Machine), Principal: row.PrincipalID,
+			Exp: row.ExpiresAt.Unix(), Src: "session:" + id, Reason: reason}}, now)
 		if err := s.Store.FleetAuditWorker(actor, row.WorkerID, row.WorkerKey, "session_cred", row.FleetID,
 			"revoked "+id+optional(" ("+reason+")", reason != ""), "", now); err != nil {
 			log.Printf("fleet audit: %v", err)

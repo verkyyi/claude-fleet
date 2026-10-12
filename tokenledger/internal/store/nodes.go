@@ -82,6 +82,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetCerts(); err != nil {
 		return err
 	}
+	// The revocation list relays and doors refuse by (claude-fleet#3560).
+	if err := s.ensureFleetRevocations(); err != nil {
+		return err
+	}
 	// Machine-to-machine certificates (claude-fleet#1626).
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
