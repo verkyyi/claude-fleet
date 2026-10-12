@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2154  # _rd assigns its field variables through eval (issue #3522)
 # tmux-spinner.sh — frame-driver for the Claude session status animation.
 # The animated element is the GLYPH's FONT COLOR only (spinner fades cyan while
 # working, "!" fades blue for needs — #1238). The window NAME is calm static text — no

@@ -189,7 +189,8 @@ kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; SPIN_PID=''
 # A frame writes no file: the window table and the frame's commands stay in the
 # shell, and no here-document runs (macOS bash 3.2 puts each one in a fresh
 # /var/tmp/sh-thd-* file — at 8 frames/s per login, fseventsd's largest load).
-left=$(cd "$WORK/tmp" && ls -A 2>/dev/null | grep -F ".$LBL" | tr '\n' ' ')
+left=''
+for f in "$WORK/tmp"/.*"$LBL"* "$WORK/tmp"/*"$LBL"*; do [ -e "$f" ] && left="$left${f##*/} "; done
 if [ -z "$left" ]; then ok "FILES: no per-fleet table / command file under \$TMPDIR"
 else fail "FILES: the frame loop still writes per-fleet files" "found: $left"; fi
 hd=$(grep -nE '<<-?[[:space:]]*['"'"'"]?[A-Za-z_]+['"'"'"]?[[:space:]]*$|<<<' "$SPIN_SRC" | grep -vE '^[0-9]+:[[:space:]]*#')
