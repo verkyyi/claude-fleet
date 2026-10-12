@@ -129,6 +129,7 @@ def newest_sid(path, hook_sid=""):
     return thin or "-"
 
 
+groups = []
 for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
@@ -186,7 +187,7 @@ for line in sys.stdin:
     if not name or not path:
         continue
     if name == HUB:
-        print(f"HUB\t{path}\t{newest_sid(path)}")
+        groups.append(("-", False, [f"HUB\t{path}\t{newest_sid(path)}"]))
         continue
     if name in PANELS:
         continue
@@ -252,8 +253,30 @@ for line in sys.stdin:
         row += "\t-" * (14 - len(row.split("\t"))) + "\t" + sleep_record
     if lead:
         row += "\t-" * (15 - len(row.split("\t"))) + "\t" + lead
+    group = []
     if fid and reap:
-        print(f"REAP\t{fid}\t{reap}")
+        group.append(f"REAP\t{fid}\t{reap}")
     if fid:
-        print(f"FID\t{fid}")
-    print(row)
+        group.append(f"FID\t{fid}")
+    group.append(row)
+    # Its own id (the pane's hooks, a no-repo stamp, a loop, a sleep record) or a
+    # guess by mtime — two windows in one directory guess the same newest file.
+    own = sid != "-" and (sid == hook_sid or norepo_sid is not None
+                          or bool(loop_record) or bool(retained) or agent == "codex")
+    groups.append((sid, own, group))
+
+# One conversation is ONE row (issue #3543): two windows naming the same session id
+# would both `--resume` it — two agents writing one transcript. The window that
+# holds the id as its own wins over a guess; among equals the later window (the
+# newer one). The others are left out of the map.
+keep = {}
+for i, (sid, own, _) in enumerate(groups):
+    if sid == "-":
+        continue
+    j = keep.get(sid)
+    if j is None or own or not groups[j][1]:
+        keep[sid] = i
+for i, (sid, _, group) in enumerate(groups):
+    if sid != "-" and keep[sid] != i:
+        continue
+    print("\n".join(group))

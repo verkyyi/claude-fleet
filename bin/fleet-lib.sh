@@ -6652,6 +6652,41 @@ fleet_restore_wins() {
     { f = "" }' "${1:-/dev/null}" 2>/dev/null
 }
 
+# fleet_restore_map_prune <restore.map> [--retired <live fleet_ids, newline list>]
+# → the map as a restore may trust it (issue #3543). One conversation is ONE row:
+# a WIN whose session id (column 4, not `-`) a LATER row names again goes, with the
+# REAP / FID rows that lead it — the later row is the newer window. On 2026-10-12
+# three rows named one id and restore opened two windows resuming it at once.
+# --retired also drops a session the fleet closed on purpose (fleet_win_retire)
+# that no live window carries now (the list) — the snapshot's shrink guard kept
+# reaped sessions in the map for good, ready for the next restore to reopen.
+# Every other row (FLEET, HUB, DESK, OWID, PIN, …) prints byte for byte; a map
+# with neither prints exactly itself.
+fleet_restore_map_prune() {
+  local mf="${1:-}" rl='' rd t
+  [ -f "$mf" ] || return 0
+  if [ "${2:-}" = --retired ]; then
+    rd=$(fleet_retired_dir)
+    for t in "$rd"/*; do
+      [ -f "$t" ] && fleet_is_fid "${t##*/}" && rl="$rl ${t##*/}"
+    done
+  fi
+  # Space-joined: BSD awk refuses a newline inside a -v value.
+  awk -F'\t' -v rl="$(printf '%s' "$rl" | tr '\n' ' ')" -v live="$(printf '%s' "${3:-}" | tr '\n' ' ')" '
+    BEGIN { n = split(live, a, " "); for (i = 1; i <= n; i++) up[a[i]] = 1
+            n = split(rl, a, " "); for (i = 1; i <= n; i++) if (a[i] != "" && !(a[i] in up)) ret[a[i]] = 1 }
+    NR == FNR { if ($1 == "WIN" && $4 != "" && $4 != "-") last[$4] = FNR; next }
+    function flush() { if (buf != "") printf "%s", buf; buf = ""; f = "" }
+    $1 == "REAP" || $1 == "FID" { if ($1 == "FID") f = $2; buf = buf $0 "\n"; next }
+    $1 == "WIN" {
+      drop = ($4 != "" && $4 != "-" && last[$4] != FNR) || (f != "" && (f in ret))
+      if (drop) { buf = ""; f = ""; next }
+      flush(); print; next
+    }
+    { flush(); print }
+    END { flush() }' "$mf" "$mf" 2>/dev/null
+}
+
 # fleet_origin_heal <sess> [<sock>] — keep every child's @origin the key its
 # parent answers to NOW (issue #1646). The parent is found by the child's
 # @origin_fid; when that window's key is no longer what @origin says (a scratch
