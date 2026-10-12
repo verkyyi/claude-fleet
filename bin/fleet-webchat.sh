@@ -82,8 +82,8 @@ start() {
      FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$claude" \
      FLEET_WEBCHAT_SESSION_CRED="$BIN/fleet-session-cred.sh" \
      nohup "$NODE" "$APP/server.mjs" >>"$STATE/server.out" 2>&1 </dev/null &)
-  local i
-  for i in $(seq 1 50); do healthy && break; sleep 0.2; done
+  local _
+  for _ in $(seq 1 50); do healthy && break; sleep 0.2; done
   healthy || die "the server did not come up (see $STATE/server.out)"
   echo "fleet-webchat: on · http://127.0.0.1:$(port)/ · pid $(cat "$STATE/pid")"
 }
