@@ -1024,7 +1024,7 @@ BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
   的 UserName，或以它跑的 `ccquota agent`）之后 FAIL；只建了账号仍是 WARN。
 
 还没做（各自的单）：脚本在门下以 root 跑（#3723）、`_fleetadmin` 的令牌与 `com.claude-fleet.admin-agent`（#3724）、
-旧 agent 交接进 attic 与 macmini 演练（#3725）。
+旧 agent 交接进 attic 与真机切换演练（#3725）。
 
 BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
 `bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `internal/agent/node_accounts_seat_test.go`。
