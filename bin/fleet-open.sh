@@ -117,14 +117,14 @@ if [ "${1:-}" = --ack ]; then
   exit 0
 fi
 
-target=""; client=""; print=0; browser=0; from_peer=""
+target=""; client=""; print=0; from_peer=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --from-peer) from_peer="${2:-}"; shift ;;
     --client) client="${2:-}"; shift ;;
     --client=*) client="${1#--client=}" ;;
     --print) print=1 ;;
-    --browser) browser=1; export FLEET_OPEN_CALLBACK=1 ;;
+    --browser) export FLEET_OPEN_CALLBACK=1 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; target="${1:-}"; break ;;
     -*) printf 'fleet-open: unknown option %s\n' "$1" >&2; usage >&2; exit 1 ;;

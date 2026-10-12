@@ -252,7 +252,7 @@ thin fail 'the browser opener failed'
 thin none
 [ "$RC" = 0 ] && [ "$RES" = unconfirmed ] && grep -q '没等到它的回执' "$WORK/err" && grep -q '链接：' "$WORK/err" \
   && ok "RECEIPT no ack within the wait → unconfirmed + the link" || bad "RECEIPT none ($RC): $RES / $(cat "$WORK/err")"
-ls "$ACKD" 2>/dev/null | grep -q . && bad "RECEIPT an ack file was left" || ok "RECEIPT ack files consumed"
+[ -n "$(find "$ACKD" -type f 2>/dev/null)" ] && bad "RECEIPT an ack file was left" || ok "RECEIPT ack files consumed"
 bash "$OPEN" --ack 'not-hex' ok >/dev/null 2>&1; [ $? = 1 ] && ok "RECEIPT --ack refuses a bad id" || bad "RECEIPT --ack bad id"
 
 # the hub's client: its done/failed answer is the receipt
@@ -261,9 +261,9 @@ hubact() {  # <state> <result>
   chmod +x "$WORK/bin/actions"
   RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-hub" FLEET_OPEN_ACTIONS_BIN="$WORK/bin/actions" "$OPEN" 'https://github.com/x' 2>"$WORK/err"); RC=$?
 }
-hubact done opened; [ "$RC" = 0 ] && [ "$RES" = opened ] && ok "RECEIPT hub client done:opened → opened" || bad "RECEIPT hub done ($RC): $RES"
+hubact 'done' opened; [ "$RC" = 0 ] && [ "$RES" = opened ] && ok "RECEIPT hub client done:opened → opened" || bad "RECEIPT hub done ($RC): $RES"
 hubact failed 'no browser'; [ "$RC" = 4 ] && [ "$RES" = 'failed:no browser' ] && ok "RECEIPT hub client failed → failed:<why>" || bad "RECEIPT hub failed ($RC): $RES"
-hubact done 'link:tailnet'; [ "$RES" = unconfirmed ] && ok "RECEIPT hub client gave a link → unconfirmed" || bad "RECEIPT hub link: $RES"
+hubact 'done' 'link:tailnet'; [ "$RES" = unconfirmed ] && ok "RECEIPT hub client gave a link → unconfirmed" || bad "RECEIPT hub link: $RES"
 
 # ---- VIA: the person watches us through another machine's 看台 ---------------------------
 rm -f "$RV/Mac-1"
