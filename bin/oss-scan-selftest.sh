@@ -196,7 +196,7 @@ else bad "K r1=$r1 s1=$s1 args=$(cat "$WORK/args" 2>/dev/null)"; fi
 miss=""
 while IFS="$T" read -r id ere _; do
     case "$id" in ''|'#'*) continue ;; esac
-    grep -q "^$id$T[0-9][0-9]*\$" "$BIN/../conf/oss-scan.baseline" || miss="$miss $id"
+    grep -q "^${id}${T}[0-9][0-9]*\$" "$BIN/../conf/oss-scan.baseline" || miss="$miss $id"
 done < "$BIN/../conf/oss-scan.rules"
 if [ -z "$miss" ]; then ok L; else bad "L conf/oss-scan.baseline lacks:$miss"; fi
 
