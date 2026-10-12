@@ -210,6 +210,9 @@ HOOK_EVENTS = {"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "Subagen
                "SessionStart", "SessionEnd", "Notification", "PreCompact"}
 CLAUDE_DENIED = {"model", "hooks", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper"}
 CODEX_DENIED = {"model", "mcp_servers", "model_providers"}
+# A plugin never turned on from the hub (issue #3586): fleet-infra is the machine
+# admins' runbook, installed by hand where one is wanted.
+PLUGINS_DENIED = {"fleet-infra"}
 # The hub's rules (tokenledger/internal/api/fleet_team_bundle.go), kept in step.
 SECRET_KEY = re.compile(r"(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key|authorization"
                         r"|(^|[_-])auth($|[_-])|cookie|session[_-]?key)")
@@ -330,6 +333,11 @@ def validate(b, layer="team"):
     for k in b.get("claude_settings", {}):
         if k in CLAUDE_DENIED or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", k):
             return "bundle.claude_settings.%s is never handed out" % k
+    ep = b.get("claude_settings", {}).get("enabledPlugins")
+    if isinstance(ep, dict):
+        for pid in ep:
+            if str(pid).split("@", 1)[0] in PLUGINS_DENIED:
+                return "bundle.claude_settings.enabledPlugins.%s is never handed out (fleet-infra is installed by hand)" % pid
     for n, t in b.get("hook_scripts", {}).items():
         if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", n) or not isinstance(t, str) or not t.strip():
             return "bundle.hook_scripts.%s needs a name [a-z0-9._-] and the program's text" % n

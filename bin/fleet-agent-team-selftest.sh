@@ -243,10 +243,11 @@ rm -f "$CONF/agent-overrides.json"
 out=$(team sync)
 [ "$(j "$H/.claude.json" "'brand-new' in d['mcpServers']")" = true ] && ok "F back on: v6 applies" || bad "F back on: $out"
 
-# ── G — a credential is refused ───────────────────────────────────────────────
+# ── G — a credential (or fleet-infra, #3586) is refused ───────────────────────────────────────────────
 for b in '{"mcp":{"gh":{"command":"x","env":{"GITHUB_TOKEN":"abc123"}}}}' \
          '{"mcp":{"gh":{"command":"x","args":["ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}}' \
-         '{"claude_settings":{"apiKeyHelper":"/bin/echo"}}' '{"accounts":{}}'; do
+         '{"claude_settings":{"apiKeyHelper":"/bin/echo"}}' '{"accounts":{}}' \
+         '{"claude_settings":{"enabledPlugins":{"fleet-infra@claude-fleet":true}}}'; do
   before=$(snap)
   resp "{\"version\":7,\"prev\":6,\"bundle\":$b}"
   out=$(team sync); rc=$?

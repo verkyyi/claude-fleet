@@ -131,6 +131,7 @@ func TestTeamBundleRefusesSecretsAndUnknownKeys(t *testing.T) {
 		"unknown key":      {"accounts": map[string]any{}},
 		"model":            {"codex_config": map[string]any{"model": "gpt-5"}},
 		"apiKeyHelper":     {"claude_settings": map[string]any{"apiKeyHelper": "/bin/echo"}},
+		"fleet-infra":      {"claude_settings": map[string]any{"enabledPlugins": map[string]any{"fleet-infra@claude-fleet": true}}},
 		"server no cmd":    {"mcp": map[string]any{"x": map[string]any{"args": []string{}}}},
 		"bad hook event":   {"hooks": map[string]any{"OnBoot": []any{map[string]any{"command": "x"}}}},
 	} {
