@@ -42,11 +42,11 @@ claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issu
 | Git | 分支、worktree 和代码交付 |
 | tmux ≥ 3.2 | 承载多个会话、窗口和状态栏 |
 | [fzf](https://github.com/junegunn/fzf) ≥ 0.45 | 交互式看板和弹窗 |
-| [GitHub CLI（gh）](https://cli.github.com/)，已登录 | 读取和管理 Issues、PR、CI 状态 |
+| [GitHub CLI（gh）](https://cli.github.com/)，已登录 | 只有放在 GitHub 上的仓库才要：读取和管理 Issues、PR、CI 状态 |
 | Python 3 | 部分脚本和 hooks |
 | [Claude Code](https://claude.com/claude-code)（`claude` 命令） | 执行开发任务，也用于辅助安装 |
 
-可用 `gh auth status` 检查 GitHub 登录状态；未登录时先运行 `gh auth login`。核心功能不要求单独安装 `jq`；可选的 Claude Code 状态行需要它。Perl 的 `Time::HiRes` 也是可选依赖，用于更平滑的转动动画。
+仓库在 GitHub 上时，可用 `gh auth status` 检查 GitHub 登录状态，未登录时先运行 `gh auth login`；仓库在别处（其他代码托管、ssh 上的裸仓库、本机文件夹）就不需要 `gh`——单子放在入口，fleet 自己并主干。核心功能不要求单独安装 `jq`；可选的 Claude Code 状态行需要它。Perl 的 `Time::HiRes` 也是可选依赖，用于更平滑的转动动画。
 
 ### 2. 让 Claude 按安装手册完成安装
 

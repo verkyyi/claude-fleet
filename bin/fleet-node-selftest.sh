@@ -189,7 +189,7 @@ else bad "A peer section: $(cat "$SNIP" 2>/dev/null) / $(cat "$SB/h1/.config/cla
 norm <"$SB/out" >"$SB/node.out"
 cat >"$SB/node.want" <<'EOF'
 
-用手机扫码，用 GitHub 登录后点「确认签发」（验证码 BCDF-GHJK）：
+用手机扫码，登录（微信、邮箱或 GitHub）后点「确认签发」（验证码 BCDF-GHJK）：
 
 <QR>
 

@@ -6505,7 +6505,24 @@ drill_forge_none_gh_call() {
   grep -qx 'FLEET_BASE_BRANCH="trunk"' "$sb/conf/fleets/fn/repos/"*.conf \
     || { WHY="the base branch was not read off the remote: $(grep BASE "$sb/conf/fleets/fn/repos/"*.conf)"; return 1; }
   grep -qx 'FLEET_FORGE="none"' "$sb/conf/fleets/fn/repos/"*.conf || { WHY="the conf does not say FLEET_FORGE=none"; return 1; }
-  SECS=$(since "$t0"); WHAT="file:// 裸仓库：克隆 + 主干解析 gh 0 次；conf 记 FLEET_REMOTE / FLEET_FORGE=none，主干 trunk 来自 ls-remote"
+  # Its tickets can only be the hub's (issue #3605): written so, and a conf from
+  # before the line (C7's) reads hub all the same — never GitHub's, never gh.
+  grep -qx 'FLEET_TICKETS="hub"' "$sb/conf/fleets/fn/repos/"*.conf || { WHY="the conf does not put its tickets on the hub"; return 1; }
+  sed -i.bak '/^FLEET_TICKETS=/d' "$sb/conf/fleets/fn/repos/"*.conf
+  local home
+  home=$(HOME="$sb/home" FLEET_CONF_DIR="$sb/conf" PATH="$sb/shim:$PATH" bash "$BIN/fleet-ticket.sh" home "$(sed -n 's/^FLEET_REPO="\(.*\)"$/\1/p' "$sb/conf/fleets/fn/repos/"*.conf)")
+  [ "$home" = hub ] || { WHY="a pre-#3605 conf of a repo with no GitHub says its tickets are [$home]'s — gh would be asked"; return 1; }
+  # And the road stays shut (issue #3605): one gh call slipped into a script on the
+  # no-GitHub road (bin/fleet-land.sh, the lander) turns the one-door count red.
+  local nb="$sb/root"; mkdir -p "$nb/bin" "$nb/hooks"
+  cp "$BIN"/*.sh "$BIN"/*.py "$BIN/no-direct-gh.baseline" "$nb/bin/" 2>/dev/null; cp "$ROOT"/hooks/* "$nb/hooks/" 2>/dev/null
+  NO_DIRECT_GH_ROOT="$nb" bash "$BIN/no-direct-gh-selftest.sh" >/dev/null 2>&1 \
+    || { WHY="the one-door count is red before anything was slipped in"; return 1; }
+  printf 'x=$(gh issue view 1 --repo "$repo")\n' >> "$nb/bin/fleet-land.sh"
+  local out; out=$(NO_DIRECT_GH_ROOT="$nb" bash "$BIN/no-direct-gh-selftest.sh" 2>&1) \
+    && { WHY="a gh call slipped into fleet-land.sh passed the one-door count"; return 1; }
+  case "$out" in *bin/fleet-land.sh*) ;; *) WHY="the count went red without naming fleet-land.sh: $out"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="file:// 裸仓库：克隆 + 主干解析 gh 0 次；conf 记 FLEET_REMOTE / FLEET_FORGE=none / FLEET_TICKETS=hub（缺这行也读作 hub），主干 trunk 来自 ls-remote；往落地脚本里偷加一处 gh，一扇门计数立刻红"
 }
 
 drill_cred_migration_client() {

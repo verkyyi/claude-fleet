@@ -20,7 +20,7 @@
      confirmation page in this computer's browser (`open` / `xdg-open`) —
      otherwise, with --qr, when the browser will not open, or on `q` while
      waiting, it draws the QR code here;
-  3. you sign in with GitHub on that page (or scan the QR with a phone) and
+  3. you sign in on that page (WeChat, mail or GitHub) (or scan the QR with a phone) and
      click 「确认签发」; the page then says 已登录，可以回到终端. The wait says
      what it is waiting for every FLEET_LOGIN_NUDGE_SECS (15) and stops after
      FLEET_LOGIN_TIMEOUT_SECS (120) with why — never a silent wait;
@@ -876,7 +876,7 @@ def env_secs(name, default):
 
 
 def show_qr(st, invert):
-    show("\n用手机扫码，用 GitHub 登录后点「确认签发」（验证码 %s）：\n" % st["user_code"])
+    show("\n用手机扫码，登录（微信、邮箱或 GitHub）后点「确认签发」（验证码 %s）：\n" % st["user_code"])
     draw_qr(st.get("qr") or [], invert)
     show("\n  链接：%s" % st["verification_uri"])
     show("  密钥指纹 %s\n" % st.get("key_fingerprint", ""))
@@ -910,7 +910,7 @@ def scan(hub, invert, purpose="", qr=False):
         # the release's 「正在更新」 backend (claude-fleet#2052) answers for the hub
         die("入口正在更新，一分钟内回来 — 稍后再敲一次", 1)
     if code == 404:
-        die("this hub does not issue certificates (no CA or no GitHub sign-in configured)", 1)
+        die("this hub does not issue certificates (no CA or no sign-in way configured)", 1)
     if code != 200:
         die("start refused (HTTP %d): %s" % (code, st.get("error", "")), 1)
     if not purpose:
@@ -930,7 +930,7 @@ def wait_confirm(hub, st, invert, qr, keys):
     if not qr and has_gui():
         browser = open_browser(st["verification_uri"])
         if browser:
-            show("\n已在浏览器里打开 GitHub 授权页（验证码 %s）：在那里点「确认签发」，然后回到这里。"
+            show("\n已在浏览器里打开授权页（验证码 %s）：在那里点「确认签发」，然后回到这里。"
                  % st["user_code"])
             if newcomer():
                 # the phone is the fallback: the 15 s nudge below offers it (#2347)
@@ -980,8 +980,8 @@ def wait_confirm(hub, st, invert, qr, keys):
             next_nudge += nudge
     mins = "%d 分钟" % (timeout // 60) if timeout >= 60 and timeout % 60 == 0 else "%d 秒" % timeout
     if browser:
-        die("%s内浏览器里没有完成授权，已停下 — 浏览器可能开在了别的窗口、没登 GitHub，"
-            "或网络拦了 GitHub。再运行 fleet login；想用手机扫码：fleet login --qr" % mins, 1)
+        die("%s内浏览器里没有完成授权，已停下 — 浏览器可能开在了别的窗口、还没登录，"
+            "或网络拦住了那一页。再运行 fleet login；想用手机扫码：fleet login --qr" % mins, 1)
     die("%s内没有完成扫码确认，已停下 — 再运行 fleet login（手机打不开链接时，换电脑浏览器打开同一链接）" % mins, 1)
 
 

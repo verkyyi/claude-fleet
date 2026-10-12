@@ -1135,7 +1135,12 @@ func otherWaysFromEnv(getenv func(string) string) (*api.WeChatAuth, *api.EmailAu
 		return nil, nil, err
 	}
 	if webID != "" || mpID != "" {
-		wx = &api.WeChatAuth{WebAppID: webID, WebSecret: webSecret, MPAppID: mpID, MPSecret: mpSecret}
+		// CCQUOTA_WECHAT_AUTHORIZE_BASE / _API_BASE: WeChat's two endpoints,
+		// for a stand-in on 127.0.0.1 — the no-GitHub e2e (claude-fleet#3605).
+		// Unset is the real open.weixin.qq.com / api.weixin.qq.com.
+		wx = &api.WeChatAuth{WebAppID: webID, WebSecret: webSecret, MPAppID: mpID, MPSecret: mpSecret,
+			AuthorizeBase: strings.TrimSpace(getenv("CCQUOTA_WECHAT_AUTHORIZE_BASE")),
+			APIBase:       strings.TrimSpace(getenv("CCQUOTA_WECHAT_API_BASE"))}
 		log.Printf("wechat sign-in: on (scan on a computer: %v, inside WeChat: %v)", webID != "", mpID != "")
 	}
 	mailIn, err := api.NewEmailAuth(getenv("CCQUOTA_SMTP_URL"), getenv("CCQUOTA_SMTP_FROM"))
