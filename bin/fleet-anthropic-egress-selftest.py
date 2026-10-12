@@ -106,7 +106,12 @@ class MandatoryEgress(unittest.TestCase):
             thread.join(6)
             self.assertFalse(thread.is_alive())
             self.assertFalse(errors, errors)
-            self.assertIn(('connect', b'CONNECT api.anthropic.com:443 HTTP/1.0'), observed)
+            # Python 3.12 uses HTTP/1.1 for CONNECT; older runtimes use HTTP/1.0.
+            connects = [value.split() for kind, value in observed if kind == 'connect']
+            self.assertEqual([line[:2] for line in connects], [
+                [b'CONNECT', b'api.anthropic.com:443'],
+                [b'CONNECT', b'wrong.claude.ai:443']])
+            self.assertTrue(all(line[2] in (b'HTTP/1.0', b'HTTP/1.1') for line in connects))
             self.assertIn(('sni', 'api.anthropic.com'), observed)
             self.assertIn(('sni', 'wrong.claude.ai'), observed)
             # An absent gateway raises rather than resolving the provider locally.
