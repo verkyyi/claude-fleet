@@ -741,7 +741,11 @@ def cli_call(rest):
     except OSError as e:
         print("fleet-node-core: no core at %s (%s)" % (wire.sock_path(), e), file=sys.stderr)
         return 1
-    r = c.reply() or {"error": "the core closed the connection"}
+    try:
+        r = c.reply()
+    except OSError:      # cut off (a peer it does not take): a reset on Linux
+        r = None
+    r = r or {"error": "the core closed the connection"}
     print(json.dumps(r, sort_keys=True))
     sys.stdout.flush()
     if "refused" in r:

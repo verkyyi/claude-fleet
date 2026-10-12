@@ -159,7 +159,10 @@ class Sandbox(unittest.TestCase):
         s.sendall(line)
         buf = b""
         while b"\n" not in buf:
-            got = s.recv(4096)
+            try:
+                got = s.recv(4096)
+            except ConnectionResetError:   # Linux: closed with our request unread = cut off
+                got = b""
             if not got:
                 break
             buf += got
