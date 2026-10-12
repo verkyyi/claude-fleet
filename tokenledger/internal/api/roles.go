@@ -42,6 +42,8 @@ const (
 
 // routeAccess is every pattern Handler mounts and who may use it. A route
 // added to Handler without a row here fails roles_test.go.
+// A console page keeps its row at its old path: app_mount.go serves it under
+// /app (claude-fleet#3583) and TestAppPagesAreRoutes holds the two together.
 var routeAccess = map[string]string{
 	// The way in, and what a signed-out machine must reach.
 	"/logout": accessPublic, "/signin": accessPublic,
@@ -68,7 +70,7 @@ var routeAccess = map[string]string{
 	control.Path: accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/attachment/": accessSelf,
-	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf,
+	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf, "/v1/node/gate": accessSelf,
 	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/orchestrator": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
 	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
@@ -89,6 +91,7 @@ var routeAccess = map[string]string{
 	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,
+	RelayRevocationsPath: accessSelf, NodeRevocationsPath: accessSelf,
 	// The team layer is read by every machine that applies it — a node's
 	// token, a client's certificate — and its PUT is refused to anyone but an
 	// admin by the handler itself.
@@ -119,8 +122,9 @@ var routeAccess = map[string]string{
 	FleetNodesPrefix: accessAdmin, "/v1/node/desired": accessSelf, // claude-fleet#2214
 	CIRunnersPath:        accessAdmin, // claude-fleet#3144
 	"/v1/fleet/spot":     accessAdmin,
-	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/invites": accessAdmin,
+	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/gate": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/invites": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
+	"/v1/fleet/revocations":       accessAdmin,
 	NodeRevokePath:                accessAdmin,
 	"/v1/fleet/credentials/audit": accessAdmin,
 	CredPolicyPath:                accessAdmin,

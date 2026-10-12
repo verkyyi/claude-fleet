@@ -296,7 +296,7 @@ func TestMeIdentities(t *testing.T) {
 	if to := h.srv.githubLink(b, 1001, "alice-gh", time.Now()); !strings.Contains(to, "e=taken") {
 		t.Fatalf("linking alice's GitHub to bo went to %q", to)
 	}
-	if to := h.srv.githubLink(b, 4242, "bo-gh", time.Now()); to != "/config#logins" {
+	if to := h.srv.githubLink(b, 4242, "bo-gh", time.Now()); to != AppPrefix+"/config#logins" {
 		t.Fatalf("link = %q", to)
 	}
 	if pid, _ := h.srv.githubPersonOf(4242); pid != b {

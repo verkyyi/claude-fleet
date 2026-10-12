@@ -42,6 +42,8 @@ place that asks.
             name J holds is never touched again — a person who disabled or
             uninstalled it keeps it that way through every upgrade. A name the
             login already had installed is recorded and left as it is.
+            NEVER_DEFAULT (fleet-infra, issue #3586 — the admins' runbook) is
+            refused as a --default: installed by hand only.
           Never installs anything else. Exit 0 ok · 1 a step failed · 2 usage.
   doctor  --root R [--claude C]
           one line for fleet-doctor's `plugins` row: each of our plugins installed
@@ -195,6 +197,11 @@ def carried(root, plugs, gone, cdir):
     return sorted(want)
 
 
+# A plugin no managed login gets by default (issue #3586): fleet-infra is the
+# machine admins' runbook, installed by hand where one is wanted.
+NEVER_DEFAULT = ("fleet-infra",)
+
+
 def defaulted_path(a):
     if a.defaulted:
         return a.defaulted
@@ -287,6 +294,9 @@ def cmd_ensure(a):
         dpath = defaulted_path(a)
         done = defaulted_load(dpath)
         for name in a.default:
+            if name in NEVER_DEFAULT:
+                print("plugins: %s is never a managed default — installed by hand only (#3586)" % name)
+                continue
             if name not in plugs or name in done:
                 continue
             pid = "%s@%s" % (name, mname)

@@ -13,12 +13,16 @@
 //      that credential (= the pool's usage record), and the sid was revoked
 //   E  the credential and the admin token appear in no response, no log, no file
 //   F  one conversation: a restart resumes the same session; the stop key stops
+//   G  the page (issue #3637) is the built UI in extras/web-chat/ui/dist: served only
+//      with the cookie, its own files only (CSP self, no other origin in it), gzip when
+//      asked, nothing outside dist; a question names the tool step it gates
 import { spawn } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 const BIN = dirname(fileURLToPath(import.meta.url));
@@ -79,7 +83,7 @@ export async function* query({ prompt, options }) {
   yield { type: "stream_event", session_id: SID, event: { type: "content_block_delta", delta: { type: "text_delta", text: "你好，" + ${JSON.stringify(SECRET)} } } };
   yield { type: "assistant", session_id: SID, message: { content: [{ type: "tool_use", id: "tu1", name: "Bash", input: { command: "date" } }], usage: { input_tokens: 5 } } };
   yield { type: "user", session_id: SID, message: { content: [{ type: "tool_result", tool_use_id: "tu1", content: "Mon" }] } };
-  const r = await options.canUseTool("AskUserQuestion", { questions: [{ question: "猫还是狗？", options: [{ label: "猫" }, { label: "狗" }] }] }, {});
+  const r = await options.canUseTool("AskUserQuestion", { questions: [{ question: "猫还是狗？", options: [{ label: "猫" }, { label: "狗" }] }] }, { toolUseID: "tu-ask" });
   yield { type: "assistant", session_id: SID, message: { content: [{ type: "text", text: "你选了" + (r.updatedInput?.answers?.["猫还是狗？"] || "?") }] } };
   appendFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "你选了" }] } }) + "\\n");
   yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1, modelUsage: { m: { contextWindow: 1000000 } } };
@@ -170,6 +174,7 @@ const kinds = lines.map((o) => o.t);
 ok(st === 200 && kinds.includes("text") && kinds.includes("tool") && kinds.includes("tool_result") && kinds.includes("ask") && kinds.at(-1) === "done", `C the turn streams text · tool · ask · done (${kinds.join(",")})`);
 ok(lines.some((o) => o.t === "text" && /你选了猫/.test(o.d)), "C the button's answer reached the agent");
 ok(lines.find((o) => o.t === "tool")?.summary === "Bash · date", "C the tool step is one folded line");
+ok(lines.find((o) => o.t === "ask")?.id === "tu-ask", "G a question names the tool step it gates (the page hangs it there)");
 const envSeen = JSON.parse(readFileSync(ENVLOG, "utf8"));
 ok(envSeen.base === `http://127.0.0.1:${PPORT}` && envSeen.token === SECRET, "D the agent ran on the proxy's port with the minted session credential");
 ok(envSeen.tmux === "", "D no tmux pane leaks into the agent's environment");
@@ -178,6 +183,29 @@ ok(proxyHits.length === 1 && proxyHits[0].auth === "Bearer " + SECRET, "D the se
 const credCalls = readFileSync(CREDLOG, "utf8");
 const mintSid = (credCalls.match(/mint --provider claude --sid (web-\d+-\d+)/) || [])[1];
 ok(!!mintSid && credCalls.includes(`revoke --sid ${mintSid}`), `D the turn's sid (${mintSid}) was minted and revoked`);
+
+// ---- G: the page -------------------------------------------------------------------
+const page = await req("/", { headers: me });
+const csp = String(page.headers["content-security-policy"] || "");
+ok(/default-src 'self'/.test(csp) && /connect-src 'self'/.test(csp) && /font-src 'self'/.test(csp), "G the page says: nothing from another origin (CSP self)");
+ok(/<div id="root">/.test(page.body) && !/(src|href)="https?:\/\//.test(page.body), "G the page is the built UI and loads nothing from another origin");
+const assets = [...page.body.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]);
+ok(assets.some((a) => a.endsWith(".js")) && assets.some((a) => a.endsWith(".css")), `G it names its own script and styles (${assets.join(" ")})`);
+const js = assets.find((a) => a.endsWith(".js"));
+ok((await req(js)).status === 403, "G an asset without the cookie is refused");
+const jsOk = await req(js, { headers: me });
+ok(jsOk.status === 200 && /javascript/.test(jsOk.headers["content-type"] || "") && /immutable/.test(jsOk.headers["cache-control"] || ""), "G with the cookie: the script, cached for good (its name is its hash)");
+const gz = await new Promise((resolve, reject) => {
+  const r = http.request({ host: "127.0.0.1", port: PORT, path: js, headers: { Host: `127.0.0.1:${PORT}`, ...me, "Accept-Encoding": "gzip" } }, (res) => {
+    const parts = []; res.on("data", (d) => parts.push(d)); res.on("end", () => resolve({ enc: res.headers["content-encoding"], body: Buffer.concat(parts) }));
+  });
+  r.on("error", reject); r.end();
+});
+ok(gz.enc === "gzip" && gunzipSync(gz.body).toString() === jsOk.body, "G gzip when the browser asks for it");
+const out = await req("/assets/..%2f..%2fserver.mjs", { headers: me });
+ok(out.status === 404 && !/createServer/.test(out.body), "G nothing outside dist is served");
+const fonts = readdirSync(join(BIN, "../extras/web-chat/ui/dist/assets")).filter((f) => /\.woff2$/.test(f));
+ok(fonts.length >= 3, `G the site's fonts ship with the page (${fonts.length} woff2), no font service`);
 
 // ---- F ----------------------------------------------------------------------------
 const conv1 = JSON.parse((await req("/api/conversation", { headers: me })).body);

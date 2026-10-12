@@ -39,7 +39,7 @@ function row(r) {
 
 function draw(ctx, rows, svcs, at) {
   const body = rows.length ? rows.map(row).join('')
-    : `<tr><td colspan="5"><div class="empty">${ic('server')}<b>${esc(t('ui.my.none'))}</b><span>${esc(t('ui.my.noneSub'))}</span><a class="btn" href="/connect">${esc(t('ui.nav.devices'))}</a></div></td></tr>`;
+    : `<tr><td colspan="5"><div class="empty">${ic('server')}<b>${esc(t('ui.my.none'))}</b><span>${esc(t('ui.my.noneSub'))}</span><a class="btn" href="/app/connect">${esc(t('ui.nav.devices'))}</a></div></td></tr>`;
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.my.sub'))}</p></div>${freshTag(at)}</div>` +
     `<div class="panel"><div class="tw"><table class="t" id="mymachines"><thead><tr><th>${esc(t('ui.col.machine'))}</th><th>${esc(t('ui.my.colLogin'))}</th><th>${esc(t('ui.my.colTakes'))}</th><th>${esc(t('ui.my.colLoad'))}</th><th class="r">${esc(t('ui.my.colSessions'))}</th></tr></thead><tbody>${body}</tbody></table></div></div>` +
     servicesSection(svcs);

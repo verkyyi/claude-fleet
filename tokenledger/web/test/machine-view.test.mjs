@@ -24,12 +24,12 @@ test('freshness: N 秒前, yellow past a minute, grey past five, 时间未知 wi
 });
 
 test('machineHref is the short name; from the admin list it says so; back goes there', () => {
-  assert.equal(machineHref('macmini.tail435588.ts.net'), '/machines/macmini');
-  assert.equal(machineHref('m4', true), '/machines/m4?from=nodes');
-  assert.equal(backHref('?from=nodes'), '/nodes');
-  assert.equal(backHref(''), '/machines');
-  assert.equal(clientRedirect(false), '/connect');
-  assert.equal(clientRedirect(true), '/nodes?tab=clients');
+  assert.equal(machineHref('mac-a.example.com'), '/app/machines/mac-a');
+  assert.equal(machineHref('mac-b', true), '/app/machines/mac-b?from=nodes');
+  assert.equal(backHref('?from=nodes'), '/app/nodes');
+  assert.equal(backHref(''), '/app/machines');
+  assert.equal(clientRedirect(false), '/app/connect');
+  assert.equal(clientRedirect(true), '/app/nodes?tab=clients');
 });
 
 test('the machine page is allowed to whoever has either machine list, and is no menu item', () => {

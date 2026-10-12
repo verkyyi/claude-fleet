@@ -5,7 +5,7 @@ import { settingValue } from '../lib/admin.js';
 import { t } from '../lib/i18n.js';
 
 export default Shell.mount('subscription-settings', async (ctx) => {
-  ctx.el.innerHTML = `<div class="pagehead"><div><a class="sub" href="/subscriptions">← ${esc(t('ui.nav.subscriptions'))}</a><h2>${esc(t('ui.policy.global'))}</h2></div></div><section class="panel" id="global-policy"></section><section class="panel" id="pool-settings"></section>`;
+  ctx.el.innerHTML = `<div class="pagehead"><div><a class="sub" href="/app/subscriptions">← ${esc(t('ui.nav.subscriptions'))}</a><h2>${esc(t('ui.policy.global'))}</h2></div></div><section class="panel" id="global-policy"></section><section class="panel" id="pool-settings"></section>`;
   await Promise.all([mountGlobalPolicy(ctx,ctx.el.querySelector('#global-policy')),mountPool(ctx,ctx.el.querySelector('#pool-settings'))]);
 });
 

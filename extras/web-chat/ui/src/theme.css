@@ -1,0 +1,132 @@
+/* theme.css — the web chat wears ClaudeFleet's site v2 (issue #3637).
+ *
+ * The ONE place its look is set. The --fleet-* values are the site v2 design
+ * variables, copied from the v2 pages' own :root (官网设计稿 v2 / 宣传页):
+ * colour, type, radius. shadcn/ui and assistant-ui read their standard tokens
+ * (--background, --primary, …), mapped here onto those values — no second
+ * palette. The site is dark only; the light set below is the same family
+ * (clay accent, ink #19182a as text, sand as the tint) for a phone in light mode.
+ */
+:root {
+  /* site v2, verbatim */
+  --fleet-bg: #19182a;
+  --fleet-bg-2: #141322;
+  --fleet-surface: #211f35;
+  --fleet-surface-2: #2a2841;
+  --fleet-line: #33304d;
+  --fleet-line-2: #26243b;
+  --fleet-ink: #f3ede6;
+  --fleet-ink-2: #c4bdcc;
+  --fleet-muted: #8d87a0;
+  --fleet-clay: #d9765a;
+  --fleet-clay-hi: #e88d71;
+  --fleet-clay-deep: #b65d44;
+  --fleet-clay-soft: rgba(217, 118, 90, 0.12);
+  --fleet-clay-line: rgba(217, 118, 90, 0.35);
+  --fleet-sand: #ecd3b8;
+  --fleet-ok: #7fcf9f;
+  --fleet-bad: #ef8c7a;
+  --fleet-warn: #e6c26e;
+  --fleet-term: #0f0e1a;
+  --fleet-on-clay: #1b1310;
+  --f-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --f-ui: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, "PingFang SC", monospace;
+
+  /* light — the same family on paper */
+  --background: #fbf8f4;
+  --foreground: #19182a;
+  --card: #ffffff;
+  --card-foreground: #19182a;
+  --popover: #ffffff;
+  --popover-foreground: #19182a;
+  --primary: var(--fleet-clay);
+  --primary-foreground: var(--fleet-on-clay);
+  --secondary: #f3ede6;
+  --secondary-foreground: #19182a;
+  --muted: #f3ede6;
+  --muted-foreground: #6b6580;
+  --accent: #f6e9dc;
+  --accent-foreground: #19182a;
+  --destructive: #c4513c;
+  --border: #e6ddd2;
+  --input: #e6ddd2;
+  --ring: var(--fleet-clay);
+  --link: var(--fleet-clay-deep);
+  --code-bg: #f3ede6;
+  --code-fg: #8a3f2b;
+  --radius: 0.75rem;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: var(--fleet-bg);
+    --foreground: var(--fleet-ink);
+    --card: var(--fleet-surface);
+    --card-foreground: var(--fleet-ink);
+    --popover: var(--fleet-surface);
+    --popover-foreground: var(--fleet-ink);
+    --secondary: var(--fleet-surface);
+    --secondary-foreground: var(--fleet-ink-2);
+    --muted: var(--fleet-surface-2);
+    --muted-foreground: var(--fleet-muted);
+    --accent: var(--fleet-surface-2);
+    --accent-foreground: var(--fleet-ink);
+    --destructive: var(--fleet-bad);
+    --border: var(--fleet-line);
+    --input: var(--fleet-line);
+    --link: var(--fleet-clay);
+    --code-bg: var(--fleet-surface-2);
+    --code-fg: var(--fleet-sand);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-clay: var(--fleet-clay);
+  --color-clay-soft: var(--fleet-clay-soft);
+  --color-clay-line: var(--fleet-clay-line);
+  --color-sand: var(--fleet-sand);
+  --font-sans: var(--f-ui);
+  --font-display: var(--f-display);
+  --font-mono: var(--f-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  h1, h2, h3, h4 { font-family: var(--f-display); }
+  a { color: var(--link); }
+  ::selection { background: var(--fleet-clay-line); }
+}

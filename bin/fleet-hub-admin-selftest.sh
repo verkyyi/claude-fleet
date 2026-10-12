@@ -19,7 +19,8 @@
 #      on, a hint while off; fleet hub accounts lists spares apart (claude-fleet#2263)
 #   N  fleet hub accounts assign zx --host fleet-linux-0 --login zx → POST {assign};
 #      prints `login · host · state · credsep`; a --login that is not theirs →
-#      exit 2, nothing sent; remove → POST {remove}; the list carries
+#      exit 2, nothing sent; remove → POST {remove}, --delete adds delete: true
+#      (claude-fleet#3504); the list carries
 #      host:state:separated (claude-fleet#3210)
 #   T  fleet hub debug-ticket @arvin --hours 48 → POST {github_login, hours}; prints
 #      the one `fleet-debug ticket …` line once; --list → one row per ticket
@@ -273,12 +274,15 @@ run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assi
 n2=$(wc -l <"$LOG")
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 >"$WORK/out3" 2>&1; rc3=$?
 r3=$(last)
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host linux-a --delete >"$WORK/out4" 2>&1; rc4=$?
+r4=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "fleet-linux-0", "own_name": true}' ] \
    && grep -q '^zx · fleet-linux-0 · pending · -$' "$WORK/out" \
    && [ "$rc2" = 2 ] && [ "$((n2 - n1))" = 1 ] && grep -q 'relogin' "$WORK/err2" \
-   && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0"}' ]; then
-  ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare); a --login not theirs is refused before the POST"
-else bad "N rc=$rc/$rc2/$rc3 req=$r req3=$r3 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
+   && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0"}' ] \
+   && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-a", "delete": true}' ]; then
+  ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare; remove --delete ⇒ delete: never recycled, #3504); a --login not theirs is refused before the POST"
+else bad "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 
 # L — fleet hub invite (claude-fleet#2261): mint, list, revoke
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite @alice >"$WORK/out" 2>"$WORK/err"; rc=$?

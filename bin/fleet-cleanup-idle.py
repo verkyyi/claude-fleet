@@ -346,8 +346,7 @@ class Cleaner:
             return False
         head = run("git", "-C", wt, "rev-parse", "HEAD")
         branch = run("git", "-C", wt, "symbolic-ref", "--short", "HEAD")
-        prs = json.loads(run("gh", "pr", "list", "--repo", self.args.repo, "--head", branch,
-                             "--state", "all", "--limit", "100", "--json", "state"))
+        prs = self.branch_prs(branch, head)
         if not isinstance(prs, list) or any(not isinstance(p, dict) or p.get("state") not in ("OPEN", "CLOSED", "MERGED") for p in prs):
             return False
         if pol is None and any(p["state"] == "MERGED" for p in prs):
@@ -395,6 +394,24 @@ class Cleaner:
         self.tm("kill-window", "-t", window)
         print("reaped-idle:" + window + ("" if pol is None else " policy=" + snap["@reap_policy"]))
         return True
+
+    def branch_prs(self, branch, head):
+        """The PRs on <branch> as `[{"state": …}]`. A repo with no GitHub (issue
+        #3601, FLEET_FORGE=none) has none — git stands in: one MERGED when the
+        branch's work is on the base (fleet_land_check), else none; gh is never run."""
+        if self.args.forge == "none":
+            return [{"state": "MERGED"}] if self.landed(head or branch) else []
+        return json.loads(run("gh", "pr", "list", "--repo", self.args.repo, "--head", branch,
+                              "--state", "all", "--limit", "100", "--json", "state"))
+
+    def landed(self, tip, cwd=None):
+        """git's word on whether <tip>'s work is on origin/<base> (fleet_land_check:
+        an ancestor, or its whole change squashed / rebased in) — no fetch, no gh."""
+        if not tip:
+            return False
+        return subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_land_check "$2" "$3" "$4" >/dev/null',
+                               "idle-land", str(BIN), cwd or self.args.main, tip, "origin/" + self.args.base],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode == 0
 
     def no_pr(self, window, snap):
         """A finished session that no PR will close (issue #1832): done (or
@@ -487,20 +504,25 @@ class Cleaner:
         if issue:
             # The fleet's local copy first (fleet-gh.sh): an OPEN issue answers
             # from the collector's list, so a waiting worker costs no gh a tick.
-            try:
-                got = json.loads(run("bash", str(BIN / "fleet-gh.sh"), "issue", "view", issue,
-                                     "--repo", self.args.repo, "--json", "state", "--max-age", "600"))
-                state = got.get("state", "")
-            except (ValueError, AttributeError, subprocess.CalledProcessError):
-                state = ""
+            if self.args.forge == "none":
+                # No GitHub, no issue to ask (issue #3601): its branch landing is the
+                # stand-in until the ticket door answers (EPIC #3570 C2).
+                # compat-1v: 下一批删 — once fleet-ticket.sh says the ticket's state.
+                state = "CLOSED" if branch and self.landed(head or branch) else "OPEN"
+            else:
+                try:
+                    got = json.loads(run("bash", str(BIN / "fleet-gh.sh"), "issue", "view", issue,
+                                         "--repo", self.args.repo, "--json", "state", "--max-age", "600"))
+                    state = got.get("state", "")
+                except (ValueError, AttributeError, subprocess.CalledProcessError):
+                    state = ""
             if state != "CLOSED":
                 self.say(window, "skip:issue-open" if state == "OPEN" else "skip:issue-unknown",
                          "%s #%s" % (key, issue))
                 return False
         prs = []
         if branch:
-            prs = json.loads(run("gh", "pr", "list", "--repo", self.args.repo, "--head", branch,
-                                 "--state", "all", "--limit", "100", "--json", "state"))
+            prs = self.branch_prs(branch, head)
             if not isinstance(prs, list):
                 return False
             # A PR's head is fleet-cleanup.sh's (merged / closed) or still open —
@@ -542,9 +564,7 @@ class Cleaner:
             fate = "worktree=gone"
         elif dirty or run("git", "-C", wt, "status", "--porcelain"):
             fate = "worktree=kept:dirty"
-        elif subprocess.run(["git", "-C", wt, "merge-base", "--is-ancestor", head,
-                             "origin/" + self.args.base], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, timeout=15).returncode != 0:
+        elif not self.landed(head, wt):
             fate = "worktree=kept:unpushed"
         else:
             out = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_worktree_drop "$2" "$3"',
@@ -605,6 +625,8 @@ def main():
     for name in ("session", "socket-name", "main", "repo", "base"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--limit", type=int, default=4)
+    p.add_argument("--forge", default="github", choices=("github", "none"),
+                   help="none = the repo is not on GitHub: no gh, git says what landed (issue #3601)")
     p.add_argument("--window-repo", action="store_true",
                    help="only windows whose @repo is --repo (multi-repo fleet)")
     p.add_argument("--dry-run", action="store_true")

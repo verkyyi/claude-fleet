@@ -64,6 +64,8 @@ type fleetProbe struct {
 	ready readyProbe
 	// credsep is the login's credential separation (claude-fleet#2295).
 	credsep credsepProbe
+	// gate is this machine's half of the public gate (claude-fleet#3574).
+	gate gateProbe
 }
 
 // fleetVersionWire is the script's JSON as it arrives. Kept separate from

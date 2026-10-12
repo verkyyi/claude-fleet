@@ -653,26 +653,50 @@ func (s *Server) dispatchAccounts() {
 	s.accountsMu.Lock()
 	defer s.accountsMu.Unlock()
 	s.reaskAccounts(time.Now())
-	rows, err := s.Store.FleetAccountsInState(store.AccountPending, store.AccountRemovePending)
+	rows, err := s.Store.FleetAccountsInState(store.AccountPending, store.AccountRemovePending, store.AccountResetPending)
 	if err != nil {
 		log.Printf("fleet: read queued account ops: %v", err)
 		return
 	}
 	for _, a := range rows {
 		// A create goes only to an admin that hands the login its join code
-		// (claude-fleet#3032); a remove to any admin of the machine.
-		epID, ok := s.nodes.openerFor(a.Hostname)
-		if a.State == store.AccountRemovePending {
+		// (claude-fleet#3032); a remove to any admin of the machine; a reset
+		// to one that can recycle (claude-fleet#3504).
+		var epID string
+		var ok bool
+		from, to := a.State, store.AccountCreating
+		switch a.State {
+		case store.AccountRemovePending:
 			epID, ok = s.nodes.adminFor(a.Hostname)
+			to = store.AccountRemoving
+		case store.AccountResetPending:
+			epID, ok = s.nodes.recyclerFor(a.Hostname)
+			to = store.AccountResetting
+			if !ok {
+				// The admin there now cannot recycle (an older node, or
+				// one whose logins are not separated): close it the old way.
+				if _, has := s.nodes.adminFor(a.Hostname); has {
+					if moved, err := s.Store.ResetToRemove(a.PrincipalID, a.Hostname,
+						"this machine's admin cannot recycle a login: removed instead", time.Now()); err == nil && moved {
+						log.Printf("fleet: reset %s on %s: no recycler there — removing it instead", a.Login, a.Hostname)
+					}
+				}
+				continue
+			}
+		default:
+			epID, ok = s.nodes.openerFor(a.Hostname)
 		}
 		if !ok {
 			continue
 		}
-		from, to := store.AccountPending, store.AccountCreating
-		if a.State == store.AccountRemovePending {
-			from, to = store.AccountRemovePending, store.AccountRemoving
+		if a.State == store.AccountResetPending {
+			// The person's hub-side pieces go before the wash starts: the
+			// reset re-joins the login with a fresh code, and nothing of
+			// theirs may stand beside the spare's new node.
+			s.recycleClear(a, time.Now())
 		}
-		op, err := s.accountOpFor(a, a.State == store.AccountRemovePending)
+		op, err := s.accountOpFor(a, map[string]string{store.AccountRemovePending: control.AccountRemove,
+			store.AccountResetPending: control.AccountReset}[a.State])
 		if err != nil {
 			continue
 		}
@@ -699,15 +723,19 @@ func (s *Server) dispatchAccounts() {
 	}
 }
 
-// accountOpFor is the op a row sends: its remove, else its create (with a
-// fresh join code).
-func (s *Server) accountOpFor(a store.FleetAccount, remove bool) (control.AccountOp, error) {
+// accountOpFor is the op a row sends: kind (control.AccountRemove or
+// AccountReset — a reset with a fresh join code the washed login re-joins
+// with, claude-fleet#3504), else ("") its create (with a fresh join code).
+func (s *Server) accountOpFor(a store.FleetAccount, kind string) (control.AccountOp, error) {
 	op := control.AccountOp{Op: control.AccountCreate, Login: a.Login}
-	if remove {
-		op.Op = control.AccountRemove
+	if kind == control.AccountRemove || kind == control.AccountReset {
+		op.Op = kind
 		// A drill person's login is throwaway: no archive (#2652).
 		if d, err := s.Store.Drill(a.PrincipalID); err == nil && d != nil && !d.OwnComputer(a) {
 			op.DropHome = true
+		}
+		if kind == control.AccountReset {
+			op.JoinCode = s.loginJoinCode(a, time.Now())
 		}
 		return op, nil
 	}
@@ -766,7 +794,7 @@ func (s *Server) reaskAccounts(now time.Time) {
 		if at, ok := s.accountAsked[a.OpID]; ok && now.Sub(at) < accountReaskEvery {
 			continue
 		}
-		op, err := s.accountOpFor(a, a.Op == "remove")
+		op, err := s.accountOpFor(a, map[string]string{"remove": control.AccountRemove, "reset": control.AccountReset}[a.Op])
 		if err != nil {
 			continue
 		}
@@ -852,7 +880,15 @@ func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID str
 		// adopts it if it is this person's.
 		detail = existsDetail + detail
 	}
-	applied, err := s.Store.FinishAccountOp(m.OpID, epID, state, truncate(detail, 4000), time.Now())
+	var applied bool
+	var err error
+	if res.Op == control.AccountReset {
+		// A clean wash is a new spare, anything else a failed row
+		// (claude-fleet#3504).
+		state, applied, err = s.applyReset(m.OpID, epID, res, time.Now())
+	} else {
+		applied, err = s.Store.FinishAccountOp(m.OpID, epID, state, truncate(detail, 4000), time.Now())
+	}
 	if err != nil {
 		log.Printf("fleet: record account result %s: %v", m.OpID, err)
 		return // no ack: the node re-sends it on the next connection
@@ -938,7 +974,10 @@ type FleetAccountsView struct {
 //	        else queue their own login there (creates the person if new);
 //	        own_name skips the spare
 //	retry   re-queue a create that failed, went unknown or was removed
-//	remove  close the login on hostname (the home is archived, not deleted)
+//	remove  close the login on hostname (the home is archived, not deleted).
+//	        Where spares are on and the machine's admin can recycle, the
+//	        login is washed into a new spare instead of deleted (reset,
+//	        claude-fleet#3504); delete: true closes it the old way
 //	adopt   record a login that already exists there as theirs; runs nothing
 //	forget  drop the hub's record: the account row on hostname, or — with no
 //	        hostname — the person and every row of theirs. Only rows that
@@ -960,6 +999,9 @@ type FleetAccountRequest struct {
 	// OwnName (assign only, claude-fleet#3501): skip the machine's ready
 	// spares and open the person's own login name there, as before spares.
 	OwnName bool `json:"own_name,omitempty"`
+	// Delete (remove only, claude-fleet#3504): delete the OS login even where
+	// it would be recycled into a spare.
+	Delete bool `json:"delete,omitempty"`
 }
 
 // handleFleetAccounts is the operator's view and control of every account.
@@ -1203,6 +1245,9 @@ func (s *Server) changeAccount(req FleetAccountRequest, actor string) error {
 		}
 		return s.Store.AdoptAccount(p, req.Hostname, now)
 	case "remove":
+		if !req.Delete && s.recycleOn(req.PrincipalID, req.Hostname) {
+			return s.Store.RequestAccountReset(req.PrincipalID, req.Hostname, now)
+		}
 		return s.Store.RequestAccountRemoval(req.PrincipalID, req.Hostname, now)
 	case "forget":
 		return s.Store.ForgetPrincipal(req.PrincipalID, req.Hostname)

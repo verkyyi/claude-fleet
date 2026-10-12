@@ -9,6 +9,8 @@
 #                                              MacBook · macOS · iTerm2 3.6 · 能：… · 也开着：verkyyi-iphone
 #   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source","hub",
 #                                    "clients","primary"[,"hub_why"][,"node_token"]}
+#   fleet-client-where.sh --max-age <secs>   the same, but this login's last
+#                                    --max-age answer when younger (the mod's poll, #3544)
 #
 # A person may hold several clients at once (issue #1932, EPIC #1906 C13): where
 # they are is the PRIMARY — the one typed into or tapped last (a client idle past
@@ -56,13 +58,39 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-json=0
-case "${1:-}" in
-  --json) json=1 ;;
-  '') ;;
-  -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  *) printf 'usage: fleet-client-where.sh [--json]\n' >&2; exit 2 ;;
-esac
+json=0 maxage=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) json=1 ;;
+    --max-age) maxage=${2:-}; shift
+      case "$maxage" in ''|*[!0-9]*) printf 'usage: fleet-client-where.sh [--json] [--max-age <secs>]\n' >&2; exit 2 ;; esac ;;
+    -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) printf 'usage: fleet-client-where.sh [--json] [--max-age <secs>]\n' >&2; exit 2 ;;
+  esac
+  shift
+done
+
+# --max-age <secs> (issue #3544): every Claude session's mod polls this every
+# 15 s — each poll a hub request and a python start — and on one login they all
+# get the same answer. So a caller that can wait takes the answer another such
+# caller of this login read less than <secs> ago (kept in $TMPDIR, this login's);
+# without it (a person, a skill) every call reads afresh, exactly as before.
+if [ -n "$maxage" ] && [ "$maxage" -gt 0 ]; then
+  SHARED="${TMPDIR:-/tmp}/.fleet-client-where-${UID:-0}.$json"
+  _now=$(date +%s)
+  if { IFS=' ' read -r _at _rc; } 2>/dev/null < "$SHARED" \
+     && case "$_at$_rc" in ''|*[!0-9]*) false ;; esac \
+     && [ $(( _now - _at )) -ge 0 ] && [ $(( _now - _at )) -lt "$maxage" ]; then
+    case "$_rc" in 0|3) sed 1d "$SHARED"; exit "$_rc" ;; esac
+  fi
+  if [ "$json" = 1 ]; then _out=$(bash "$0" --json); _rc=$?; else _out=$(bash "$0"); _rc=$?; fi
+  case "$_rc" in
+    0|3) umask 077; { printf '%s %s\n' "$_now" "$_rc"; printf '%s\n' "$_out"; } 2>/dev/null > "$SHARED.$$" \
+           && mv -f "$SHARED.$$" "$SHARED" 2>/dev/null ;;
+  esac
+  [ -z "$_out" ] || printf '%s\n' "$_out"
+  exit "$_rc"
+fi
 
 HUBREAD=''
 hrc=0

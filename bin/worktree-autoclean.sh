@@ -20,9 +20,10 @@
 #     one last time by fleet_worktree_drop, which refuses a dirty worktree the same
 #     way plain `git worktree remove` (no -f) does
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
-#     tip is a strict ancestor of origin/<base> (equal tips need a merged PR)
+#     tip is a strict ancestor of origin/<base> (equal tips need a merged PR), OR
+#     git finds its whole change on the base (squash / rebase merge, issue #3601)
 #   * for an `issue-<N>` worktree, the bound issue #N is no longer OPEN (issue
-#     #1156). A merged branch is not a finished task: a worker can ship a side-fix
+#     #1156; a repo with no GitHub — FLEET_FORGE=none — has no issue to ask). A merged branch is not a finished task: a worker can ship a side-fix
 #     PR from its own branch while #N stays open. Unknown state (gh failed) KEEPs.
 # The janitor never closes an issue (issue #1156 removed the old "auto-close #N
 # on prune" net): GitHub closes a properly linked issue on merge, and the only
@@ -196,7 +197,7 @@ reap_detached() {   # $1=worktree-dir  $2=branch
 
 removed=0; kept=0
 dir=""; head=""; branch=""
-REPO_ROOT=""; REPO=""; BASE=""; PROTECTED_RE=""; MASTER=""; MERGED_PRS=""
+REPO_ROOT=""; REPO=""; BASE=""; PROTECTED_RE=""; MASTER=""; MERGED_PRS=""; FORGE=github
 
 process() {
   [ -z "$dir" ] && return
@@ -314,6 +315,7 @@ process() {
       fi
       merged="ancestor-of-$BASE" ;;   # restore base-qualified label for the log/comment
     merged-pr) merged="merged-PR" ;;
+    landed) ;;   # git's word: a squash / rebase merge, or a booked landing (#3601)
   esac
   # Past the gate: this is a clean+no-unmerged-work scratch NOBODY used (silently) OR
   # a clean+merged (issue or escalated scratch) worktree → prune below.
@@ -322,7 +324,9 @@ process() {
   case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac
   # The bound-issue gate (issue #1156): prune an issue worktree only once #N is
   # CLOSED. One `gh issue view`, spent only on a candidate every gate above let by.
-  if [ -n "$inum" ]; then
+  # A repo with no GitHub (FLEET_FORGE=none, issue #3601) has no issue to ask: gh is
+  # never called for it, and the landing the gate saw is the evidence.
+  if [ -n "$inum" ] && [ "$FORGE" != none ]; then
     local ist=""
     [ -n "$REPO" ] && ist="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
     if [ "$ist" != CLOSED ]; then
@@ -376,8 +380,9 @@ process() {
   fi
 }
 
-clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re  $5=scratch-max-idle  $6=worktree root
+clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re  $5=scratch-max-idle  $6=worktree root  $7=forge
   REPO_ROOT="$1"; REPO="$2"; BASE="${3:-main}"; WT_ROOT="${6:-}"
+  case "${7:-}" in none) FORGE=none ;; *) FORGE=github ;; esac
   PROTECTED_RE="${4:-^(master|main|develop|test)$}"
   SCRATCH_MAX_IDLE="${5:-0}"
   case "$SCRATCH_MAX_IDLE" in ''|*[!0-9]*) SCRATCH_MAX_IDLE=0 ;; esac
@@ -387,7 +392,7 @@ clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protecte
     || git -C "$REPO_ROOT" rev-parse --verify -q "$BASE")"
   [ -z "$MASTER" ] && { say "SKIP  $REPO_ROOT (cannot resolve base $BASE)"; return; }
   MERGED_PRS=""
-  [ -n "$REPO" ] && MERGED_PRS="$(gh -R "$REPO" pr list \
+  [ -n "$REPO" ] && [ "$FORGE" != none ] && MERGED_PRS="$(gh -R "$REPO" pr list \
     --state merged --limit 400 --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)"
   say "fleet $REPO_ROOT  (repo=${REPO:-·} base=$BASE)"
   dir=""; head=""; branch=""
@@ -414,7 +419,7 @@ EOF
 # --- enumerate fleets: the global/default fleet, then each per-fleet conf ---
 DEFAULT_MAIN="${FLEET_MAIN:-}"
 [ -n "$DEFAULT_MAIN" ] && clean_fleet "$DEFAULT_MAIN" "${FLEET_REPO:-}" \
-  "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}"
+  "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" "${FLEET_FORGE:-}"
 # Every repo every fleet hosts (issues #791, #1941), each with its own MAIN/base
 # read through its overlay; a checkout is cleaned once, however many fleets or
 # the global default name it.
@@ -425,14 +430,14 @@ while IFS=$'\t' read -r _s cf; do
     [ -n "$_r" ] || continue
     # 0x1f, not a tab: a tab is IFS WHITESPACE, so an empty field would collapse and
     # slide every later one (the worktree root, usually empty, is last) into its slot.
-    IFS=$'\037' read -r rm rr rb rp rx rw < <( fleet_load_repo_conf "$_s" "$_r" >/dev/null 2>&1
-      printf '%s\037%s\037%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
+    IFS=$'\037' read -r rm rr rb rp rx rw rf < <( fleet_load_repo_conf "$_s" "$_r" >/dev/null 2>&1
+      printf '%s\037%s\037%s\037%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
         "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
-        "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" )
+        "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" "${FLEET_FORGE:-}" )
     [ -n "$rm" ] || continue
     case "$_seen_mains" in *" $rm "*) continue ;; esac
     _seen_mains="$_seen_mains$rm "
-    clean_fleet "$rm" "$rr" "$rb" "$rp" "$rx" "$rw"
+    clean_fleet "$rm" "$rr" "$rb" "$rp" "$rx" "$rw" "$rf"
   done <<EOF
 $(fleet_repos "$_s")
 EOF

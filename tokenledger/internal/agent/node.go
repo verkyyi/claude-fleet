@@ -225,6 +225,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// Every login this node's create op opens is separated (claude-fleet#2294).
 		caps = append(caps, control.CapCredsep)
 	}
+	if a.cfg.FleetAdmin && recycleCapable(a.cfg.Home) {
+		// Its remove script washes a login for the next person (claude-fleet#3504).
+		caps = append(caps, control.CapRecycle)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
@@ -427,7 +431,8 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	// The first beat of the process has no earlier reading to fall back on,
 	// so it waits for the read (as every beat did before #2798): a beat that
 	// says no fleets would read a busy login as idle.
-	fp, at, _ := a.fleetRd.get(ctx, 0, fleetBeatBudget, true, func(ctx context.Context) (fleetPart, bool) {
+	fp, at, _ := a.fleetRd.get(ctx, a.fleetReuse(), fleetBeatBudget, true, func(ctx context.Context) (fleetPart, bool) {
+		a.fleetRdNudge.Store(a.fleetNudgeMtime())
 		return a.readFleetPart(ctx, probe)
 	})
 	fp.fill(&hb, at)

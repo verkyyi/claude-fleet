@@ -1,0 +1,29 @@
+# conf/public-gate.tsv — 公开前必须先完成的安全项（issue #3574, EPIC #3569 C4）
+#
+# The ONE copy of the gate. Read by bin/fleet-gate-check.sh (the doctor's `gate`
+# rows, a machine's half sent to the hub on its heartbeat) and by the hub's
+# /v1/fleet/gate (packed into the client manifest, so the hub reads these bytes).
+# The design is EPIC #3500 v3 「安全模型 / 凭据生命周期」 — this table only names
+# which items stand between us and going public, and how each is judged.
+#
+# A #3500 member that finishes its item makes ITS judge go green (the function
+# named in `judge`) — it never edits a row. Columns, TAB-separated:
+#   n       the item's number (stable, never reused)
+#   id      its key (the judge is gate_<id with - as _> in fleet-gate-check.sh,
+#           or gateJudge["<id>"] in the hub's fleet_gate.go)
+#   where   node — each machine judges it from what it runs (ps, users, groups)
+#           hub  — the hub judges it from its own settings and every login's beat
+#   before  推广 = must be green before public promotion; 客户 = before the
+#           first hosted customer (推广,客户 = both)
+#   source  the #3500 member that delivers it
+#   title   the item, as the person reads it
+#   judge   what makes it PASS (for people; the code is the judge function)
+#
+# n	id	where	before	source	title	judge
+1	release-key	hub	推广,客户	#3500 C17 (#3559)	发布签名私钥只在发布列车里，有离线根钥匙能作废	入口的环境与挂载里没有发布签名私钥（CCQUOTA_FLEET_RELEASE_KEY、/etc/ccquota-release）
+2	root-core	node	客户	#3500 C13 (#3555)	root 只剩最小核心，只认写死的动作表	ps 里 root 名下的 fleet 程序 ⊆ 核心（fleet-node-core）
+3	node-daemon	node	客户	#3500 C14 (#3556)	节点守护不是 root；个人账号里不跑整机服务	整机服务（node supervisor · ccquota agent --machine · memguard · credsep machine）只以 _fleetnode/fleetnode 跑
+4	admin-seat	node	客户	#3500 C15 (#3557)	开号删号的管理员程序搬出个人账号，只认入口签过的单	没有一个带管理员权限（admin/sudo/wheel）的个人账号在跑 ccquota agent；管理员程序只以 _fleetadmin/fleetadmin 跑
+5	cloud-perms	hub	客户	#3500 C16 (#3558)	云上每个服务只有它要的权限	入口在集群里跑，且它的 pod 没挂服务账号令牌（automountServiceAccountToken: false）
+6	revocations	hub	客户	#3500 C18 (#3560)	中转和门在本地拿吊销名单，10 秒内生效	入口发吊销名单（/v1/relay/revocations），每个中转和门 10 分钟内取过
+7	cred-ttl	hub	客户	#3500 C19 (#3561)	会话读得到的凭据 ≤ 12 小时（通行证 4 小时），所有托管登录做凭据隔离	入口签的每种凭据有效期 ≤ 12h，且每台托管机器的每个登录心跳里 credsep = separated

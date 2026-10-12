@@ -375,16 +375,16 @@ func (s *Server) githubLink(pid string, id int64, login string, now time.Time) s
 	target := login + " (github " + fmt.Sprint(id) + ")"
 	if errors.Is(err, store.ErrIdentityTaken) {
 		_ = s.Store.HubAudit(pid, "identity.add", target, "refused", "another person signs in with it", now)
-		return "/config?e=taken#logins"
+		return AppPrefix + "/config?e=taken#logins"
 	}
 	if err != nil {
 		log.Printf("github link for %s: %v", pid, err)
-		return "/config?e=github#logins"
+		return AppPrefix + "/config?e=github#logins"
 	}
 	// Their username is pinned to the ID like any GitHub sign-in's.
 	if err := s.pinName(login, id, pid, now); err != nil && !errors.Is(err, store.ErrPinConflict) {
 		log.Printf("github link for %s: pin %s: %v", pid, login, err)
 	}
 	_ = s.Store.HubAudit(pid, "identity.add", target, "ok", "github, by signing in with it", now)
-	return "/config#logins"
+	return AppPrefix + "/config#logins"
 }

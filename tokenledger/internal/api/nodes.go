@@ -114,6 +114,9 @@ type nodeConn struct {
 	// canLoginJoin is an admin hello's CapLoginJoin (claude-fleet#3032): its
 	// create hands the login its join code. Set once, before publish.
 	canLoginJoin bool
+	// canRecycle is an admin hello's CapRecycle (claude-fleet#3504): its
+	// remove script washes a login for the next person. Set once, before publish.
+	canRecycle bool
 	// machineOpener: a machine link whose hello listed CapLoginJoin
 	// (claude-fleet#3210) — a Linux managed machine has no admin login, so its
 	// root node program opens and closes its own logins. It is that machine's
@@ -126,6 +129,9 @@ type nodeConn struct {
 	// canServiceLog is the hello's CapServiceLog: this machine program's lane
 	// reads its login's service logs (claude-fleet#2797).
 	canServiceLog bool
+	// userPod is a machine link that is one person's pod (CapUserPod,
+	// claude-fleet#3550).
+	userPod bool
 	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
 	// one token refresh to the provider from its own network and hands the
 	// answer back (claude-fleet#1490). Set once, before the conn is published.
@@ -347,6 +353,24 @@ func (n *nodeConns) credsepAdminFor(hostname string) bool {
 	return c != nil && c.canCredsep
 }
 
+// recyclerFor returns hostname's account-op node (openerFor's pick) when it
+// can wash a login back into a spare (claude-fleet#3504): its hello listed
+// CapRecycle, its logins open credential-separated, and the machine is no
+// person's own computer.
+func (n *nodeConns) recyclerFor(hostname string) (string, bool) {
+	id, ok := n.openerFor(hostname)
+	if !ok {
+		return "", false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	if c == nil || !c.canRecycle || !c.canCredsep || c.personal {
+		return "", false
+	}
+	return id, true
+}
+
 // ErrNodeOffline is returned when a write is addressed to a node with no open
 // control channel.
 var ErrNodeOffline = errors.New("node has no open control channel")
@@ -491,9 +515,11 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket),
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
+		canRecycle:    hp.HasCap(control.CapRecycle),
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
+		userPod: hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
 		helloAt: time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
@@ -746,6 +772,9 @@ type NodeView struct {
 	// login with its own link (or none).
 	MachineLink bool   `json:"machine_link,omitempty"`
 	Via         string `json:"via,omitempty"`
+	// UserPod is a machine link that is one person's pod (claude-fleet#3550):
+	// its hostname is the pod's u-<nonce>. Absent everywhere else.
+	UserPod bool `json:"user_pod,omitempty"`
 	// SSHCA is an admin node's last answer to the SSH user CA install
 	// (claude-fleet#1412): sent | trusted… | failed….
 	SSHCA string `json:"ssh_ca,omitempty"`
@@ -832,6 +861,10 @@ type NodeView struct {
 	// routes every session central.
 	Credsep     string `json:"credsep,omitempty"`
 	CredsepGate string `json:"credsep_gate,omitempty"`
+	// Gate is the login's newest machine half of the public gate
+	// (claude-fleet#3574): conf/public-gate.tsv's where=node rows as
+	// fleet-gate-check.sh --local judged them; absent from an older agent.
+	Gate []control.GateItem `json:"gate,omitempty"`
 }
 
 // DesiredView is one node's 期望 / 实际 pair on the roster.
@@ -1073,6 +1106,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.Connected, v.Admin = true, c.admin
 			v.LoginJoin = c.accountNode() && c.canLoginJoin
 			v.MachineLink, v.Via = c.machineLink, c.wire.machine()
+			v.UserPod = c.userPod
 			if v.MachineLink {
 				v.Via = ""
 			}
@@ -1084,6 +1118,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			// the same. The CA answer is that replica's to keep.
 			v.Connected, v.Admin = true, pc.Admin
 			v.LoginJoin = (pc.Admin || pc.HasCap(control.CapMachine)) && pc.HasCap(control.CapLoginJoin)
+			v.UserPod = pc.HasCap(control.CapMachine) && pc.HasCap(control.CapUserPod)
 		}
 		out.Nodes = append(out.Nodes, v)
 
@@ -1279,6 +1314,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		v.Credsep = hb.Credsep
+		v.Gate = hb.Gate
 		v.LoginsRefused = hb.LoginsRefused
 		v.SysAt, v.SysUnread, v.FleetAt = hb.SysAt, hb.SysUnread, hb.FleetAt
 		v.Versions, v.VersionsAt = hb.Versions, hb.VersionsAt

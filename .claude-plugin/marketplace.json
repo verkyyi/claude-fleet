@@ -35,6 +35,11 @@
       "name": "fleet-feedback",
       "source": "./plugins/fleet-feedback",
       "description": "/fleet-feedback 一句话: tell the fleet's maintainers something from any session — preview first, logs and screen only if you say so, a feedback number back."
+    },
+    {
+      "name": "fleet-infra",
+      "source": "./plugins/fleet-infra",
+      "description": "For the machine and hub admins only: runbooks as skills — prepare and enroll a Mac, logins, a cloud Linux node, an overseas relay, hub deploy. Never installed by default, never handed out by the hub."
     }
   ]
 }

@@ -15,6 +15,7 @@ import (
 func meterServer(t *testing.T) *Server {
 	t.Helper()
 	s := badgeServer(t, false)
+	s.Site = true // the public site at "/" (claude-fleet#3583)
 	s.UI = fstest.MapFS{
 		"index.html":   {Data: []byte("<title>app</title>APP-SHELL")},
 		"landing.html": {Data: []byte("<title>claudefleet</title>FRONT-PAGE")},
@@ -44,10 +45,14 @@ func TestLanding_SignedOutRootIsTheFrontPage(t *testing.T) {
 		t.Errorf("CSP = %q; the front page must send nothing to a third party", csp)
 	}
 
-	// Signed in: the app, never the front page.
+	// Signed in: the app at /app (claude-fleet#3583), never the front page.
 	rec = meterGet(t, s, "/", map[string]string{"Authorization": "Bearer viewer-secret"})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != AppPrefix {
+		t.Fatalf("signed-in / = %d → %q, want 302 → /app", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = meterGet(t, s, AppPrefix, map[string]string{"Authorization": "Bearer viewer-secret"})
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "APP-SHELL") {
-		t.Fatalf("signed-in / = %d %.60q, want the app", rec.Code, rec.Body.String())
+		t.Fatalf("signed-in /app = %d %.60q, want the app", rec.Code, rec.Body.String())
 	}
 
 	// Only "/" is public: every other file of the app is still behind the
@@ -58,7 +63,7 @@ func TestLanding_SignedOutRootIsTheFrontPage(t *testing.T) {
 			t.Errorf("signed-out %s = %d, want 401", p, rec.Code)
 		}
 	}
-	for _, p := range []string{"/app.js", "/sessions"} {
+	for _, p := range []string{"/app.js", "/app/sessions"} {
 		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusNotFound {
 			t.Errorf("signed-out %s (not in this hub's UI) = %d, want 404", p, rec.Code)
 		}

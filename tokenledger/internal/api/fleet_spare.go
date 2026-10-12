@@ -392,9 +392,18 @@ func (s *Server) claimSpareOn(principal, displayName, actor, host string, now ti
 	switch _, perr := s.Store.Principal(principal); {
 	case errors.Is(perr, store.ErrNoPrincipal):
 		a, err = s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now)
-		if errors.Is(err, store.ErrRekeyTarget) {
+		switch {
+		case errors.Is(err, store.ErrRekeyTarget):
 			// Recorded between the two reads: the recorded person's road.
 			a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
+		case errors.Is(err, store.ErrSpareNameHeld):
+			// A recycled spare whose name a person's record still holds
+			// (claude-fleet#3504): record them under a name of their own,
+			// then hand them its login.
+			if _, err = s.Store.EnsurePrincipal(principal, s.spareDisplayName(principal, displayName),
+				control.MaxLoginLen, control.ValidLogin, now); err == nil {
+				a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
+			}
 		}
 	case perr != nil:
 		log.Printf("fleet: claim a spare on %s for %s: %v", host, principal, perr)

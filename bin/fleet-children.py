@@ -381,7 +381,9 @@ def prmap_lookup(key, a, cache={}):
                 for line in fh:
                     p = line.rstrip('\n').split('\t')
                     if len(p) >= 3 and p[0] not in m:
-                        m[p[0]] = (p[1].lstrip('#'), p[2])
+                        # `-`: a repo with no GitHub, the row is git's landing
+                        # (tmux-pr-refresh.sh, issue #3601) — MERGED, no PR number
+                        m[p[0]] = ('' if p[1] == '-' else p[1].lstrip('#'), p[2])
         except OSError:
             pass
         cache[f] = m

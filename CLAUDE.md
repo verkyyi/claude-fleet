@@ -499,7 +499,11 @@ Do not install from memory: read the doc and work from it.
   or relayed to a new session (`chain`), never a list. Each turn's `claude` gets a
   `fleet-session-cred.sh mint` session credential in its environment only — the
   pool's proxy picks and meters, as for `fleet-claude.sh`. The model allowlist is
-  `lib.mjs`'s `MODELS`, enforced by the server. `fleet-webchat-selftest.sh`.
+  `lib.mjs`'s `MODELS`, enforced by the server. The page (issue #3637) is
+  `extras/web-chat/ui` — React + shadcn/ui + assistant-ui, stock components only,
+  the site v2 look in ONE file (`src/theme.css`); its build `ui/dist` is committed
+  and served as is (CSP self, no CDN), and CI `web-chat-ui` rebuilds it from the
+  lockfile and reds on a stale dist. `fleet-webchat-selftest.sh`.
 - **Orchestrating is a role a session TAKES, one holder per role** (issue #3114,
   EPIC #3111 C3). `/fleet-orchestrate` (the fleet-orchestrate plugin's skill) first
   calls the dispatch group's `take_role` (`bin/fleet-role-take.sh <role>

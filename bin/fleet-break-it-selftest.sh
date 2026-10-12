@@ -95,6 +95,8 @@
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
 #   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
+#   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
+#                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -270,7 +272,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -1486,6 +1488,19 @@ drill_window_killed() {
   grep -q 'sid-1.*reason=killed-window' "$led" 2>/dev/null || { WHY="/fleet-history has no reason=killed-window row: [$(cat "$led" 2>/dev/null)]"; return 1; }
   auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # a second tick: nothing doubles
   [ "$(nt list-windows -t oc -F '#{window_name}' | grep -c '^issue-1$')" = 1 ] || { WHY="a second tick opened issue-1 twice"; return 1; }
+  # The marks' sweep is one pass (issue #3544): a pile of old marks stays, the
+  # mark of a session live again (issue-1, back now) is lifted.
+  local rdir="$WORK/econf/global/retired" i
+  mkdir -p "$rdir"
+  i=0; while [ "$i" -lt 300 ]; do : > "$rdir/2f0e0000-0000-4000-8000-$(printf '%012d' "$i")"; i=$((i + 1)); done
+  : > "$rdir/$f1"
+  python3 -c 'import os, sys, time
+t = time.time() - 600
+for n in os.listdir(sys.argv[1]): os.utime(os.path.join(sys.argv[1], n), (t, t))' "$rdir"
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"
+  [ ! -e "$rdir/$f1" ] || { WHY="the mark of issue-1, live again, was not lifted"; return 1; }
+  i=$(find "$rdir" -name '2f0e0000-*' | grep -c .)
+  [ "$i" = 300 ] || { WHY="the sweep removed marks of sessions that are not live: $i of 300 left"; return 1; }
   WHAT="被删的 issue-1 下一拍以原对话回来，/fleet-history 记 reason=killed-window；fleet 自己关的 issue-2 不拉回（节拍 60s 另计）"
 }
 
@@ -5074,6 +5089,25 @@ drill_spare_reuse_leaks() {
   SECS=$(since "$t0")
 }
 
+# ---- spare-recycle-dirty (#3504, EPIC #3500 C12): a removed person's login is
+# washed into a spare for the next person — and the hub still held the last
+# person's node token, relay credential, leases, 家 or a join code for it, or a
+# wash that said dirty / not separated / nothing was handed out all the same.
+# Now: cleared before the reset is sent, checked again before the spare is
+# recorded, and anything unclean leaves the row failed, never handed out.
+drill_spare_recycle_dirty() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
+  t0=$(now)
+  grep -q 'recycleLeftovers(\*a, now)' "$f" \
+    || { WHY="applyReset no longer checks the hub's half before recording the spare"; return 1; }
+  grep -q 'case res.Reset != control.ResetClean:' "$f" \
+    || { WHY="applyReset no longer refuses a wash that did not say reset: clean"; return 1; }
+  _drill_go_tests 'TestRemoveRecyclesLoginIntoSpare TestRecycleNeverHandsOutAnUncleanWash TestRecycleLeftoversNamesEachHubPiece TestRecycleNoAnswerFailsAfterThirtyMinutes TestRemoveOldRoadWhenNotRecycling' \
+    "$ROOT/tokenledger/internal/api/fleet_recycle_test.go" \
+    '删号发 reset、洗净且隔离才成备用（spare.recycle）；dirty / 没隔离 / 没结论 / 跑失败 / 30 分钟无回音都 failed 不发出；入口侧节点令牌·中转·租约·家·未用 join code 先清后查；delete / 备用关 / 老 admin 走老路（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 # ---- login-remove-record-left (#2728): sysadminctl -deleteUser took the home
 # and left the record (drill10092046 on macmini), and the script said done —
 # the hub read removed and the OS login was nobody's. Now step 6 reads the
@@ -5237,7 +5271,9 @@ drill_heartbeat_sys_blocked() {
   t0=$(now)
   grep -q 'fillSys(&hb, processSys)' "$ag/node.go" \
     || { WHY="nodeHeartbeat no longer takes the sampler's load"; return 1; }
-  grep -q 'a.fleetRd.get(ctx, 0, fleetBeatBudget' "$ag/node.go" \
+  # the max age is 0, or fleetReuse() — the last read kept only while hub-nudge
+  # has not moved (issue #3544); the budget is what this guards
+  grep -qE 'a\.fleetRd\.get\(ctx, (0|a\.fleetReuse\(\)), fleetBeatBudget' "$ag/node.go" \
     || { WHY="nodeHeartbeat waits on the fleet read with no budget again"; return 1; }
   if grep -q 'readSysInfo()' "$ag/node.go" "$ag/node_machine.go"; then
     WHY="a beat reads the kernel inline again instead of the sampler"; return 1
@@ -6458,6 +6494,24 @@ drill_cred_migration_client() {
   SECS=$(since "$t0")
 }
 
+# ---- site-console-indexed (#3583, EPIC #3569 共同约定 6): the console and the
+# intro page shared one address, so a crawler that read the intro page walked
+# straight into the console's pages. Now: the console is /app, every answer
+# under it says X-Robots-Tag: noindex, the old addresses 301 there, and "/" is
+# the site (signed out) or /app (signed in) — the client's paths untouched.
+drill_site_console_indexed() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/app_mount.go"
+  t0=$(now)
+  grep -q 'X-Robots-Tag", "noindex' "$f" \
+    || { WHY="app_mount.go no longer marks the console noindex"; return 1; }
+  grep -q 's.appMount(s.routes())' "$ROOT/tokenledger/internal/api/server.go" \
+    || { WHY="the router is no longer behind appMount: the console is back at the root"; return 1; }
+  _drill_go_tests 'TestAppIsNoindex TestAppOldPathsMoveUnderApp TestAppRoot TestClientPathsUnchanged' \
+    "$ROOT/tokenledger/internal/api/app_mount_test.go" \
+    '控制台在 /app、每页 noindex；旧地址 301 过去；/ 未登录是官网、登录了 302 /app；客户端路径逐字节不变（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_db_move_policy_seed() {
   CAP=120; local t0
   t0=$(now)
@@ -6782,6 +6836,32 @@ print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))
 }
 
 # ================================================================ run ====}
+
+# A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
+# failing, a squash-merged session read `unmerged` — never reaped, never landed in
+# history. git alone says it now: fleet_land_check's patch-id match → `landed`, and
+# a repo with FLEET_FORGE=none never runs gh at all.
+drill_land_squash_unseen() {
+  CAP=30; local d="$WORK/lsu" t0 out
+  mkdir -p "$d/fake"
+  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.log"; exit 1\n' "$d" > "$d/fake/gh"; chmod +x "$d/fake/gh"; : > "$d/gh.log"
+  t0=$(now)
+  out=$(cd "$d" && PATH="$d/fake:$PATH" FLEET_CONF_DIR="$d/conf" TMPDIR="$d" \
+    GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t bash -c '
+    . "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_sockets() { :; }
+    git init -q --bare o.git; git clone -q o.git m 2>/dev/null; cd m; git checkout -q -B main
+    echo a > f; git add f; git commit -q -m base; git push -q origin main
+    git checkout -q -b issue-7; echo b >> g; git add g; git commit -q -m one; echo c >> g; git commit -q -am two
+    tip=$(git rev-parse HEAD); git checkout -q main; echo z >> f; git commit -q -am moved
+    git merge -q --squash issue-7 >/dev/null 2>&1; git commit -q -m "squash (#7)"; git push -q origin main
+    git worktree add -q ../wt issue-7 2>/dev/null
+    printf "%s " "$(fleet_reap_ok ../wt . issue-7 "$tip" origin/main "")"
+    fleet_landed acme/app issue-7 . main | cut -d" " -f1' _ "$BIN" 2>/dev/null)
+  SECS=$(since "$t0")
+  [ "$out" = "landed landed" ] || { WHY="a squash merge with gh failing reads [$out], not landed"; return 1; }
+  [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
+  WHAT="压成一个提交的合并、gh 一律失败：回收门判 landed，fleet_landed 认得落地，gh 0 次"
+}
 
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0

@@ -147,6 +147,40 @@ journalctl -u fleet-relay-check --since '-15 min' | grep ' refused-unavailable '
 journalctl -u fleet-relay-check --since '-15 min' | grep -E ' hub-(down|up) '         # 入口停了多久
 ```
 
+## 吊销名单（issue #3560，EPIC #3500 C18）
+
+上一节的表只在入口说「不」之后才拒：吊销要等缓存到期，入口停着时还按宽限放行。打开吊销名单后，入口记下的
+每一次吊销都同时写进一份带版本号的名单，核验进程**先查本地这份**，再走上一节的表：
+
+- 入口：`CCQUOTA_FLEET_REVOCATIONS_TOKEN[_FILE]` 设了就开（不设 = 关，下面的路由一律 404，入口什么都不多写）。
+  `GET /v1/relay/revocations?since=<v>&wait=25`（Bearer 这个令牌）——版本不是 `<v>` 就立刻回整份名单，
+  是就挂着等，名单一动立刻回，到点 304。条目 `{jti, exp}`（`frl1:<sha256>` 中转通行证、`fcp:<id>` 会话通行证、
+  `ssh:<serial>` 连接证书）或 `{machine|principal|login, before, exp}`（这一范围在 before 之前签的一律作废）。
+  写名单的：删中转通行证（`fleet.node_relay.<m>` 置空）、吊销会话通行证、收回入场证、
+  `POST /v1/fleet/credentials/revoke`（解除时只撤它写的那几条）、`POST /v1/fleet/revocations {serial}`（单张证书）。
+  条目过了 exp 就从名单里删，名单不会越来越长。
+- 核验进程：有令牌文件就开（`FLEET_RELAY_REVOCATIONS_TOKEN_FILE`，默认 systemd 的
+  `$CREDENTIALS_DIRECTORY/revocations-token`），一个线程跟着名单，存进 `$STATE_DIRECTORY/revocations.json`
+  （重启后先读它，再按版本续拉）。名单上的通行证**立刻** 403，日志 `revoked`——不管缓存、不管宽限；
+  入口停着时照样按手上那份拒。名单超过 `RELAY_REVOCATIONS_STALE_S`（600 秒）没刷新只记 `list-stale`，不拒。
+  会话通行证按它自己的 claims（不验签，只用来拒）对 `fcp:<id>` 与范围条目。
+- 过渡期**双验**：名单只加拒绝，上一节「每个请求问入口」照旧（frl2 / fcp-h2 能在本地验签之后由 C19 切掉）。
+- 门：托管机器的入口 sshd 按同一份名单（`/v1/node/revocations`，节点令牌）生成 OpenSSH KRL 装上
+  `RevokedKeys`（docs/MANAGED-NODE.md §16）。
+
+打开（转发机上）：
+
+```sh
+sudo install -d -m 0700 /etc/fleet-relay
+sudo sh -c 'umask 077; cat > /etc/fleet-relay/revocations-token'      # 粘贴入口的 CCQUOTA_FLEET_REVOCATIONS_TOKEN，^D
+sudo install -D -m 0755 fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
+sudo systemctl edit fleet-relay-check     # [Service] LoadCredential=revocations-token:/etc/fleet-relay/revocations-token
+sudo systemctl restart fleet-relay-check
+journalctl -u fleet-relay-check -n 5 | grep -E ' start .*revocations=on| list v='
+```
+
+演练：docs/BREAK-IT.md `cred-revoked-still-works`、`relay-revocations-hub-down`。
+
 ## 凭据在哪
 
 | 东西 | 在哪 | 谁能看到 |

@@ -22,7 +22,16 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := regexp.MustCompile(`\{ id: '[^']+',[^}]*?(group: 'admin', )?href: '([^']+)'([^}]*)\}`).FindAllStringSubmatch(string(src), -1)
+	// A console page's href is APP + its path (claude-fleet#3583); the hub's
+	// own pages keep a plain string.
+	rows := regexp.MustCompile(`\{ id: '[^']+',[^}]*?(group: 'admin', )?href: (APP(?: \+ '[^']*')?|'[^']+')([^}]*)\}`).FindAllStringSubmatch(string(src), -1)
+	for _, m := range rows {
+		h := m[2]
+		if strings.HasPrefix(h, "APP") {
+			h = AppPrefix + strings.Trim(strings.TrimPrefix(strings.TrimPrefix(h, "APP"), " + "), "'")
+		}
+		m[2] = strings.Trim(h, "'")
+	}
 	if len(rows) < 10 {
 		t.Fatalf("found %d PAGES rows in lib/shell.js; the table moved", len(rows))
 	}
@@ -43,7 +52,7 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 	h.srv.UI = ui
 	get := func(sess *http.Cookie, path string) (int, string) {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, h.http.URL+path, nil)
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+pagePath(path), nil)
 		req.Header.Set("Accept", "text/html")
 		if sess != nil {
 			req.AddCookie(sess)

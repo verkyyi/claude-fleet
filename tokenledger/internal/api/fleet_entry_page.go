@@ -711,7 +711,7 @@ ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 {{else}}<p class="hint" style="margin-top:6px">请管理员打开它（设置里的 <code>fleet.entry</code>），打开后再来这一页。</p>{{end}}</div>
 {{else if .NoPerson}}
 <div class="card"><p>这一页给每个人管自己的钥匙。请用你自己的 GitHub 登录打开它（管理员的口令不代表任何人）。</p>
-<a class="btn wide" href="/signin">用 GitHub 登录</a></div>
+<a class="btn wide" href="/app/signin">用 GitHub 登录</a></div>
 {{else if .Conn}}
 <div class="card" id="addr"><h2>你的地址</h2>
 <div class="row"><span class="k">地址</span>{{if .Address}}<span class="v">{{.Address}}</span><button class="cp" type="button" data-cp="{{.Address}}">复制</button>{{else}}<span class="v miss">{{if .NeedName}}还没起名{{else}}地址还没配好{{end}}</span>{{end}}</div>

@@ -208,6 +208,12 @@ const CapCredsep = "credsep"
 // newcomer only on a machine that has one.
 const CapLoginJoin = "login_join"
 
+// CapRecycle is the hello capability an admin node lists when its remove
+// script has the --recycle mode (claude-fleet#3504): the hub may then wash a
+// person's login back into a spare (AccountReset) instead of deleting it. An
+// admin without it is sent a remove, as before.
+const CapRecycle = "recycle"
+
 // CapMachine is the hello capability of a MACHINE link (claude-fleet#2333,
 // EPIC #2329 C5): one connection, dialled by `ccquota agent --machine` with
 // the machine's own node token, that carries every login of the machine. Each
@@ -221,6 +227,15 @@ const CapLoginJoin = "login_join"
 // cannot route.
 const CapMachine = "machine"
 
+// CapUserPod is listed by a MACHINE link (CapMachine) that is one person's
+// pod (claude-fleet#3550, EPIC #3500 C5): extras/managed-node/render.py
+// --user-pod sets FLEET_USER_POD=1, the pod's stable name u-<nonce> is its
+// hostname, and it carries exactly one login. The hub treats it as a machine
+// like any other — the roster marks it user_pod — and the person's ceiling is
+// the fleet setting fleet.user_pod_limits.<principal>. A link that does not
+// list it is byte for byte as before.
+const CapUserPod = "user_pod"
+
 // CodeWrongLogin refuses a message on a machine link whose Login is not one
 // that link carries, or a login hello whose token belongs to another login or
 // another machine (claude-fleet#2333) — an op never runs as the wrong login.
@@ -230,6 +245,14 @@ const CodeWrongLogin = "WRONG_LOGIN"
 // it ended (revoked, superseded, malformed): the node drops that login and
 // says its hello again after a backoff. Never sent on a plain link.
 const CodeLinkClosed = "LINK_CLOSED"
+
+// GateItem is one public-gate item's verdict (claude-fleet#3574): its id in
+// conf/public-gate.tsv, PASS or not, and why in the judge's words.
+type GateItem struct {
+	ID   string `json:"id"`
+	Pass bool   `json:"pass"`
+	Why  string `json:"why,omitempty"`
+}
 
 // CredsepSeparated is AccountResult.Credsep for a login opened separated.
 const CredsepSeparated = "separated"
@@ -683,6 +706,13 @@ type Heartbeat struct {
 	// #2295 — the hub reads that as not separated for a role=user person.
 	Credsep string `json:"credsep,omitempty"`
 
+	// Gate is this machine's half of the public gate (claude-fleet#3574,
+	// EPIC #3569 C4): every conf/public-gate.tsv row judged where=node, as
+	// `fleet-gate-check.sh --local` reads them on this machine. The hub's
+	// /v1/fleet/gate folds every machine's into one verdict per item. Absent
+	// from an agent older than #3574 or a login without the script.
+	Gate []GateItem `json:"gate,omitempty"`
+
 	// Ready says whether this login can take a NEW session
 	// (claude-fleet#1475): gh is logged in, a Claude or Codex credential is
 	// usable and every hosted repo's checkout exists. nil on an agent older
@@ -984,13 +1014,26 @@ type Fleet struct {
 //
 //	create  fleet-login-new.sh <login> --full-name <name> --share-pool --apply
 //	remove  fleet-login-remove.sh <login> --keep-home --apply
+//	reset   fleet-login-remove.sh <login> --recycle --keep-home --apply
 //
 // The hub chooses only the login and the display name, and both are checked
 // against ValidCreateLogin / ValidFullName on the node before anything runs.
+//
+// reset (claude-fleet#3504, EPIC #3500 C12) washes a person's login for the
+// next one instead of deleting it: the remove script's --recycle mode keeps the
+// OS user, empties what the person left, re-joins the login with the op's
+// fresh join code and ends with two lines — `reset: clean|dirty …` then
+// `credsep: separated|…` (AccountResult.Reset / .Credsep). Sent only to an
+// admin whose hello lists CapRecycle.
 const (
 	AccountCreate = "create"
 	AccountRemove = "remove"
+	AccountReset  = "reset"
 )
+
+// ResetClean is AccountResult.Reset for a login the reset check found clean
+// (bin/fleet-login-reset-check.py's last line `reset: clean`).
+const ResetClean = "clean"
 
 // RemoveExitNoLogin is fleet-login-remove.sh's exit when the machine has no
 // such login (claude-fleet#2696): nothing to remove, so the hub records the
@@ -1040,6 +1083,10 @@ type AccountResult struct {
 	// CredsepSeparated when no token is readable from it. Absent from a node
 	// that does not separate — a spare it opened is never handed out.
 	Credsep string `json:"credsep,omitempty"`
+	// Reset is a reset's verdict (claude-fleet#3504): ResetClean when the
+	// script's `reset:` line said clean, else what it said ("dirty home,…").
+	// Absent on any other op. Only a clean, separated reset is handed out.
+	Reset string `json:"reset,omitempty"`
 }
 
 // MaxLoginLen bounds a hub-generated login. macOS allows longer short names;

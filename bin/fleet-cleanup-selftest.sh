@@ -80,6 +80,10 @@ case "\${1:-}" in
            : ;;          # git pull --ff-only
   symbolic-ref) printf '%s\n' "\${FAKE_BASE_ON:-master}" ;;   # base checkout's branch (#1044)
   status)  [ "\${FAKE_DIRTY:-0}" = 1 ] && printf ' M some/file\n'; : ;;
+  # a tip moved past its merged head (any FAKE_TIP but the defaults) is not on the
+  # base (issue #3601: the
+  # janitor asks git whether a tip past the merged head still landed)
+  merge-base) case "\${FAKE_TIP:-}" in ''|deadbeef|cafe1234) : ;; *) exit 1 ;; esac ;;
   rev-parse)
     case "\$*" in *origin/*) printf '%s\n' "\${FAKE_BASE_TIP:-deadbeef}"; exit 0 ;; esac
     printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;

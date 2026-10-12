@@ -377,6 +377,7 @@ func (s *Server) revokeRelay(machine string, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	s.revRecord(revRelayHashes(machine, settings, "relay:"+strings.ToLower(firstLabel(machine)), now), now)
 	n := 0
 	for k, v := range settings {
 		if strings.HasPrefix(k, NodeRelayPrefix) && v != "" &&

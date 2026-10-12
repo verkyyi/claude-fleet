@@ -69,8 +69,8 @@ func TestAssets_MovedPagesStillStart(t *testing.T) {
 	assets := Assets()
 	router := string(mustRead(t, assets, "lib/router.js"))
 	for _, m := range []struct{ html, script, move string }{
-		{"admin/devices.html", "admin/devices.js", `'/admin/devices': '/nodes?tab=clients'`},
-		{"quota.html", "quota.js", `'/quota': '/usage'`},
+		{"admin/devices.html", "admin/devices.js", `[APP + '/admin/devices']: APP + '/nodes?tab=clients'`},
+		{"quota.html", "quota.js", `[APP + '/quota']: APP + '/usage'`},
 	} {
 		html := string(mustRead(t, assets, m.html))
 		if !strings.Contains(html, `<script type="module" src="/`+m.script+`"`) {
@@ -99,7 +99,18 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html", "/admin/feedback": "admin/feedback.html",
 		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",
 	}
-	hrefs := regexp.MustCompile(`href: '([^']+)'`).FindAllStringSubmatch(src, -1)
+	// A console page's href is APP + its path under /app (claude-fleet#3583):
+	// read it as that path; the hub's own pages keep a plain string.
+	hrefs := regexp.MustCompile(`href: (APP(?: \+ '[^']*')?|'[^']+')`).FindAllStringSubmatch(src, -1)
+	for _, m := range hrefs {
+		h := m[1]
+		if strings.HasPrefix(h, "APP") {
+			if h = strings.Trim(strings.TrimPrefix(strings.TrimPrefix(h, "APP"), " + "), "'"); h == "" {
+				h = "/"
+			}
+		}
+		m[1] = strings.Trim(h, "'")
+	}
 	if len(hrefs) < 4 {
 		t.Fatalf("found %d menu hrefs in lib/shell.js; the PAGES table moved", len(hrefs))
 	}
@@ -134,7 +145,7 @@ func TestAssets_AppDocumentRoutesEveryPage(t *testing.T) {
 		t.Error("app-start.js does not start the shell")
 	}
 	src := string(mustRead(t, assets, "lib/shell.js"))
-	rows := regexp.MustCompile(`\{ id: '([^']+)'[^}]*href: '([^']+)', module: '/([^']+)' \}`).FindAllStringSubmatch(src, -1)
+	rows := regexp.MustCompile(`\{ id: '([^']+)'[^}]*href: (APP(?: \+ '[^']*')?|'[^']+'), module: '/([^']+)' \}`).FindAllStringSubmatch(src, -1)
 	if len(rows) != len(appPages) {
 		t.Fatalf("%d PAGES rows carry a module; want %d (one per page)", len(rows), len(appPages))
 	}

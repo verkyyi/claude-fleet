@@ -31,7 +31,7 @@ import (
 //
 //   - only when started with CCQUOTA_FLEET_ADMIN=1 (Config.FleetAdmin); any
 //     other agent refuses every account op with NOT_ADMIN;
-//   - only two ops, each one fixed argv — the hub picks the login and the
+//   - only three ops (create · remove · reset, claude-fleet#3504), each one fixed argv — the hub picks the login and the
 //     display name, and both must pass control.ValidCreateLogin / ValidFullName
 //     (a create the hub marks existing may reuse a digit-leading login the
 //     person already holds elsewhere — macOS only, claude-fleet#2105);
@@ -123,6 +123,32 @@ func credsepCapable(home string) bool {
 	return err == nil && bytes.Contains(b, []byte(credsepScriptMark)) && bytes.Contains(b, []byte(credsepMark))
 }
 
+// recycleScriptMark is what a remove script with the --recycle mode carries
+// (claude-fleet#3504): the hello's CapRecycle. Without it the hub sends only
+// removes here.
+const recycleScriptMark = "--recycle"
+
+// recycleCapable reports whether this login's fleet-login-remove.sh can wash
+// a login for the next person (its --recycle mode).
+func recycleCapable(home string) bool {
+	b, err := os.ReadFile(filepath.Join(home, loginRemoveScript))
+	return err == nil && bytes.Contains(b, []byte(recycleScriptMark))
+}
+
+// resetResult is AccountResult.Reset for a reset's output: the LAST
+// `reset: <verdict>` line's verdict ("clean", or "dirty home,…"); "" when the
+// script never said one — never read as clean.
+func resetResult(out string) string {
+	lines := strings.Split(strings.TrimRight(out, " \t\r\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if v, ok := strings.CutPrefix(l, "reset: "); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 // credsepResult is AccountResult.Credsep for a create's output: "separated"
 // only when its LAST non-empty line says so (a pending / off / failed open says
 // something else, and is never handed out as a spare).
@@ -142,10 +168,13 @@ var accountCommand = exec.CommandContext
 
 // accountArgv is the ONE place the argv of an account op is decided.
 func accountArgv(home string, op control.AccountOp) (string, []string) {
-	if op.Op == control.AccountRemove {
+	if op.Op == control.AccountRemove || op.Op == control.AccountReset {
 		keep := "--keep-home"
 		if op.DropHome {
 			keep = "--delete-home"
+		}
+		if op.Op == control.AccountReset {
+			return filepath.Join(home, loginRemoveScript), []string{op.Login, "--recycle", keep, "--apply"}
 		}
 		return filepath.Join(home, loginRemoveScript), []string{op.Login, keep, "--apply"}
 	}
@@ -189,8 +218,8 @@ func tccDisclaimed(home, script string, args []string) (string, []string) {
 // op's): a script that predates them ignores them. nil = the agent's own
 // environment.
 func accountEnv(hub, opID string, op control.AccountOp) []string {
-	if op.Op != control.AccountCreate {
-		return nil
+	if op.Op != control.AccountCreate && op.Op != control.AccountReset {
+		return nil // a reset re-joins the washed login with its own code
 	}
 	var env []string
 	if op.JoinCode != "" && hub != "" {
@@ -445,7 +474,7 @@ func cutOffResult(f accountInflight, exists bool) control.AccountResult {
 	res := control.AccountResult{Op: f.Op, Login: f.Login, Exit: -1}
 	why := "the node agent (pid " + strconv.Itoa(f.PID) + ") stopped while this op ran (started " + f.Started + "); "
 	switch {
-	case f.Op == control.AccountRemove && !exists:
+	case (f.Op == control.AccountRemove || f.Op == control.AccountReset) && !exists:
 		res.Exit = control.RemoveExitNoLogin
 		res.Detail = why + "the login is gone from this machine"
 	case exists:
@@ -515,8 +544,8 @@ func (a *Agent) validAccountOp(op control.AccountOp) error {
 }
 
 func validateAccountOp(op control.AccountOp, self string) error {
-	if op.Op != control.AccountCreate && op.Op != control.AccountRemove {
-		return errors.New("op must be create or remove")
+	if op.Op != control.AccountCreate && op.Op != control.AccountRemove && op.Op != control.AccountReset {
+		return errors.New("op must be create, remove or reset")
 	}
 	existing := op.Op == control.AccountCreate && op.Existing
 	if !control.ValidCreateLogin(op.Login, existing) {
@@ -530,8 +559,8 @@ func validateAccountOp(op control.AccountOp, self string) error {
 		// leading letter or _; fleet-login-new.sh is macOS-only anyway.
 		return errors.New("a login starting with a digit can only be opened on macOS, not " + accountGOOS)
 	}
-	if op.JoinCode != "" && (op.Op != control.AccountCreate || !joinCodeRE.MatchString(op.JoinCode)) {
-		return errors.New("join_code must be fj_ + 26 base32 characters, on a create")
+	if op.JoinCode != "" && (op.Op == control.AccountRemove || !joinCodeRE.MatchString(op.JoinCode)) {
+		return errors.New("join_code must be fj_ + 26 base32 characters, on a create or a reset")
 	}
 	if self != "" && self == op.Login {
 		return errors.New("refusing to touch this agent's own login")
@@ -585,7 +614,7 @@ func (a *Agent) ownsCreate(login, opID string) bool {
 // runAccountScript runs op's script once and reads its exit.
 func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.AccountOp) control.AccountResult {
 	res := control.AccountResult{Op: op.Op, Login: op.Login, Exit: -1}
-	if op.Op == control.AccountRemove {
+	if op.Op == control.AccountRemove || op.Op == control.AccountReset {
 		defer holdLogin(op.Login)()
 	}
 	script, args := accountArgv(a.cfg.Home, op)
@@ -616,8 +645,11 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 	switch {
 	case err == nil:
 		res.OK, res.Exit = true, 0
-		if op.Op == control.AccountCreate {
+		if op.Op == control.AccountCreate || op.Op == control.AccountReset {
 			res.Credsep = credsepResult(out.String())
+		}
+		if op.Op == control.AccountReset {
+			res.Reset = resetResult(out.String())
 		}
 	case errors.As(err, &ee):
 		res.Exit = ee.ExitCode()

@@ -76,6 +76,13 @@ type Server struct {
 	// read-only (Store.SetReadOnly), which catches the writes no request makes.
 	ReadOnly bool
 
+	// Site turns the public site on at "/" (CCQUOTA_SITE=on,
+	// claude-fleet#3583): a stranger reads it, someone signed in is sent to
+	// the console at /app. Off — a self-hoster's default — "/" is /app.
+	Site bool
+	// SiteFS is the built public site (web/site); nil = the landing page.
+	SiteFS fs.FS
+
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,
 	// so it is recomputed on a timer rather than per push.
@@ -102,6 +109,9 @@ type Server struct {
 	// sessionsChanged fires on every recorded fleet heartbeat: a held
 	// fleet_sessions long poll (claude-fleet#1526) wakes and reads again.
 	sessionsChanged changeBroadcast
+	// revChanged fires on every change of the revocation list: a held
+	// list request answers at once (claude-fleet#3560).
+	revChanged changeBroadcast
 	// nodesChanged fires on every recorded node heartbeat: the app's push
 	// channel (/v1/fleet/stream, claude-fleet#2794) reads its nodes topic.
 	nodesChanged changeBroadcast
@@ -170,6 +180,10 @@ type Server struct {
 	// call POST /v1/fleet/session-cred/verify
 	// (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]); empty = the operator only.
 	SessionCredVerifyToken string
+	// RevocationsToken admits the Singapore relay's sidecar to the
+	// revocation list (claude-fleet#3560,
+	// CCQUOTA_FLEET_REVOCATIONS_TOKEN[_FILE]); empty = the list is off.
+	RevocationsToken string
 	// CredProxyToken admits the cluster credential proxy (`ccquota
 	// credproxy`, claude-fleet#1973) to POST /v1/fleet/credproxy/resolve
 	// (CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]); empty = the route answers 503.
@@ -314,7 +328,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.readOnlyGate(s.routes()))
+	return s.logRequests(s.readOnlyGate(s.appMount(s.routes())))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is
@@ -418,6 +432,10 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/join", s.handleNodeJoin)
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
+		// The public gate (claude-fleet#3574): the hub's own items for a
+		// machine's doctor; the operator reads every item and machine.
+		mux.HandleFunc("/v1/node/gate", s.handleNodeGate)
+		mux.Handle("/v1/fleet/gate", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetGate))))
 		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
 		// A managed machine (claude-fleet#2214): trusted join codes and each
 		// machine's desired state are the operator's; the node reads its own.
@@ -612,6 +630,11 @@ func (s *Server) routes() *routeMux {
 		// asks the check, which authenticates the pass it carries.
 		mux.HandleFunc("/v1/node/relay-credential", s.handleNodeRelayCredential)
 		mux.HandleFunc(RelayCheckPath, s.handleRelayCheck)
+		// The revocation list the relay and the doors refuse by themselves
+		// (claude-fleet#3560): 404 while CCQUOTA_FLEET_REVOCATIONS_TOKEN is unset.
+		mux.HandleFunc(RelayRevocationsPath, s.handleRelayRevocations)
+		mux.HandleFunc(NodeRevocationsPath, s.handleNodeRevocations)
+		mux.Handle("/v1/fleet/revocations", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevocations))))
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.
@@ -793,13 +816,14 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/meter.json", s.handleMeter)
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
-	// Signed out, "/" is the front page; signed in, the app. Every page under
-	// it settles its language first (claude-fleet#2023). Every other path that
-	// reaches here is one of the app's own files or a 404 -- for everyone,
-	// before the gate: the file list is the repository's web/dist, so whether
-	// a path exists tells a stranger nothing, and a removed route answers 404
-	// rather than the app's index (claude-fleet#1987).
-	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))))
+	// "/" here is the console's overview, /app (appMount answers the public
+	// "/" itself, claude-fleet#3583). Every page under it settles its language
+	// first (claude-fleet#2023). Every other path that reaches here is one of
+	// the app's own files or a 404 -- for everyone, before the gate: the file
+	// list is the repository's web/dist, so whether a path exists tells a
+	// stranger nothing, and a removed route answers 404 rather than the app's
+	// index (claude-fleet#1987).
+	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOnly(http.HandlerFunc(s.serveUI)))))
 
 	return mux
 }
@@ -866,7 +890,7 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 		// send them to GitHub's page when it is wired up. Everything else gets
 		// the honest 401.
 		if s.GitHub.ready() && wantsHTML(r) {
-			http.Redirect(w, r, "/signin", http.StatusFound)
+			http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 			return
 		}
 
@@ -883,6 +907,8 @@ func stripToken(r *http.Request) string {
 	if u.Path == "" {
 		u.Path = "/"
 	}
+	// Under /app the browser's address carries the prefix (claude-fleet#3583).
+	u.Path, u.RawPath = appPath(r, u.Path), ""
 	return u.RequestURI()
 }
 

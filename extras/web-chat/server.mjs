@@ -25,9 +25,10 @@
 //   * It is Claude Code's own transcript (~/.claude/projects/…): the terminal can
 //     read it — `claude --resume <id>` from its directory.
 import http from "node:http";
+import { gzipSync } from "node:zlib";
 import { execFile } from "node:child_process";
 import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, extname, normalize, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed } from "./lib.mjs";
@@ -47,7 +48,35 @@ const SDK_PATH = E.FLEET_WEBCHAT_SDK || "";
 const ASK_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_ASK_SECS || 1800) * 1000;
 const COMPACT_AT = Number(E.FLEET_WEBCHAT_COMPACT_AT || 0.8);  // the context share that triggers a compact
 const PROJECTS = join(E.CLAUDE_CONFIG_DIR || join(E.HOME || "", ".claude"), "projects");
-const PAGE = readFileSync(join(HERE, "index.html"));
+// The page is the built UI (issue #3637): ui/dist, made by `npm run build` in
+// extras/web-chat/ui and committed — served from here, every byte local.
+const UI = E.FLEET_WEBCHAT_UI || join(HERE, "ui", "dist");
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".json": "application/json", ".png": "image/png" };
+// nothing from another origin, ever: no CDN, no font service, no beacon
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
+  "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+const staticCache = new Map();                           // path → { body, gz, type }
+function uiFile(rel) {
+  const full = normalize(join(UI, rel));
+  if (full !== UI && !full.startsWith(UI + sep)) return null;
+  let f = staticCache.get(full);
+  if (!f) {
+    let body;
+    try { body = readFileSync(full); } catch { return null; }
+    const type = MIME[extname(full)] || "application/octet-stream";
+    f = { body, type, gz: /^(text|application\/json|image\/svg)/.test(type) && body.length > 1024 ? gzipSync(body) : null };
+    staticCache.set(full, f);
+  }
+  return f;
+}
+function sendFile(req, res, f, cache) {
+  const gz = f.gz && /\bgzip\b/.test(req.headers["accept-encoding"] || "");
+  res.writeHead(200, { "Content-Type": f.type, "Cache-Control": cache, "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY", "Content-Security-Policy": CSP,
+    ...(gz ? { "Content-Encoding": "gzip", Vary: "Accept-Encoding" } : {}) });
+  res.end(gz ? f.gz : f.body);
+}
 
 // ---- the state dir: admin token, cookies (hashed), log ----------------------
 const ADMIN = newSecret();
@@ -253,9 +282,10 @@ function emitAll(o) {
   for (const res of live.listeners) if (!res.writableEnded) res.write(line);
 }
 function askEvent(rid, a) {
+  const id = a.toolUseID ? { id: a.toolUseID } : {};      // the tool step it gates (the page hangs it there)
   return a.name === "AskUserQuestion"
-    ? { t: "ask", rid, kind: "question", questions: a.input.questions || [] }
-    : { t: "ask", rid, kind: "permission", tool: a.name, summary: toolSummary(a.name, a.input) };
+    ? { t: "ask", rid, ...id, kind: "question", questions: a.input.questions || [] }
+    : { t: "ask", rid, ...id, kind: "permission", tool: a.name, summary: toolSummary(a.name, a.input) };
 }
 
 async function turn(req, res) {
@@ -281,7 +311,7 @@ async function turn(req, res) {
     const t = live;
     const done = (v) => { clearTimeout(timer); t.asks.delete(rid); resolve(v); };
     const timer = setTimeout(() => done({ behavior: "deny", message: "no answer from the web page in time" }), ASK_TIMEOUT_MS);
-    t.asks.set(rid, { name, input, done });
+    t.asks.set(rid, { name, input, done, toolUseID: typeof opts.toolUseID === "string" ? opts.toolUseID : "" });
     opts.signal?.addEventListener?.("abort", () => done({ behavior: "deny", message: "aborted" }));
     emitAll(askEvent(rid, t.asks.get(rid)));
   });
@@ -396,7 +426,15 @@ async function handle(req, res) {
   // a state-changing call must come from the page itself (fetch sets this; a form cannot)
   if (req.method === "POST" && req.headers["x-fleet-webchat"] !== "1") return send(res, 403, { error: "forbidden" });
 
-  if (p === "/" && req.method === "GET") return send(res, 200, PAGE, "text/html; charset=utf-8");
+  if (req.method === "GET" && (p === "/" || p === "/index.html")) {
+    const f = uiFile("index.html");
+    return f ? sendFile(req, res, f, "no-store") : send(res, 503, { error: "the page is not built (extras/web-chat/ui: npm run build)" });
+  }
+  if (req.method === "GET" && (p.startsWith("/assets/") || p === "/logo.svg")) {
+    const f = uiFile(decodeURIComponent(p.slice(1)));
+    if (f) return sendFile(req, res, f, p.startsWith("/assets/") ? "private, max-age=31536000, immutable" : "private, max-age=3600");
+    return send(res, 404, { error: "not found" });
+  }
   if (p === "/api/conversation" && req.method === "GET") {
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",

@@ -18,8 +18,12 @@
                                          else their own name is queued; --own-name skips the
                                          spare, --login only checks it is theirs (and skips
                                          the spare too) — claude-fleet#3210
-    fleet hub accounts remove <principal> --host <machine>
-                                         close it there (the home is archived 30 days)
+    fleet hub accounts remove <principal> --host <machine> [--delete]
+                                         close it there (the home is archived 30 days);
+                                         where spares are on and the machine can recycle,
+                                         the login is washed into a spare for the next
+                                         person instead (claude-fleet#3504) — --delete
+                                         deletes the OS login as before
     fleet hub accounts relogin <principal> <machine> <login>
                                          give them a new login there (the old one stays)
     fleet hub accounts rename <principal> <machine>
@@ -474,6 +478,8 @@ def accounts_main(a):
         body = {"action": a.action, "principal_id": a.principal, "hostname": a.host}
         if a.action == "assign" and (a.own_name or a.login):
             body["own_name"] = True  # their own name, never a spare's fleetu<N>
+        if a.action == "remove" and a.delete:
+            body["delete"] = True  # delete the OS login, never recycle it
         resp = call(a, "POST", ACCOUNTS_PATH, body)
         if a.json:
             print(json.dumps(resp, indent=2, ensure_ascii=False))
@@ -526,6 +532,8 @@ def main(argv):
     ac.add_argument("--login", dest="login", help="assign: the login they must have (checked, never set)")
     ac.add_argument("--own-name", dest="own_name", action="store_true",
                     help="assign: open their own login name there, skipping a ready spare")
+    ac.add_argument("--delete", action="store_true",
+                    help="remove: delete the OS login even where it would be recycled into a spare")
     iv = sub.add_parser("invite", parents=[common], help="an install command that lets one new person in")
     iv.add_argument("login", nargs="?", help="only this GitHub user may use it")
     iv.add_argument("--list", action="store_true", help="every invite and its state")

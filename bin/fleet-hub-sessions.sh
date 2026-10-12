@@ -568,9 +568,39 @@ rows_user() {
   else id -un 2>/dev/null; fi
 }
 
+# inv_cached <sess> <now> <mf> — the fleet's kept line on stdout and its kept
+# window rows appended to <mf>, rc 0; rc 1 (nothing written) when there is none,
+# it is older than the TTL, or hub-nudge moved since the round that read it
+# (issue #3544). The kept file carries that round's START mtime (inv_keep), so a
+# nudge that landed while the inventory was being read is never masked.
+INV_TTL="${FLEET_HUB_SESSIONS_INV_TTL:-15}"; case "$INV_TTL" in ''|*[!0-9]*) INV_TTL=15 ;; esac
+INV_ON=0     # set by loop() only: a one-shot --refresh always reads afresh
+inv_cached() {
+  local f="$G/hubsess.inv.$1" n="$FLEET_CONF_DIR/global/hub-nudge" at line row
+  [ "$INV_ON" = 1 ] && [ "$INV_TTL" -gt 0 ] && [ -f "$n" ] && [ "$f" -nt "$n" ] || return 1
+  {
+    IFS= read -r at && IFS= read -r line || return 1
+    case "$at" in ''|*[!0-9]*) return 1 ;; esac
+    [ $(( $2 - at )) -ge 0 ] && [ $(( $2 - at )) -lt "$INV_TTL" ] || return 1
+    printf '%s\n' "$line"
+    while IFS= read -r row; do printf '%s\n' "$row"; done >> "$3"
+  } < "$f"
+}
+# inv_keep <sess> <now> <line> <rows> — keep this round's read for inv_cached,
+# only when hub-nudge is strictly older than the round's start (same second on a
+# filesystem test that reads seconds = not kept: read again next round).
+inv_keep() {
+  local f="$G/hubsess.inv.$1" n="$FLEET_CONF_DIR/global/hub-nudge" st="$G/hubsess.inv.start"
+  [ "$INV_ON" = 1 ] || return 0
+  [ "$INV_TTL" -gt 0 ] && [ -f "$n" ] && [ "$st" -nt "$n" ] || { rm -f "$f" 2>/dev/null; return 0; }
+  { printf '%s\n%s\n' "$2" "$3"; [ -z "$4" ] || printf '%s\n' "$4"; } > "$f.new" 2>/dev/null \
+    && touch -r "$st" "$f.new" 2>/dev/null && mv -f "$f.new" "$f" 2>/dev/null
+  return 0
+}
+
 refresh() {
   hub_on || return 0
-  local json sess _c u lf mf repos m rc now ok
+  local json sess _c u lf mf repos m rc now ok inv_line inv_rows
   mkdir -p "$G" 2>/dev/null || return 1
   json=$(mktemp "$G/hubsess.json.XXXXXX") || return 1
   lf=$(mktemp "$G/hubsess.local.XXXXXX") || { rm -f "$json"; return 1; }
@@ -583,18 +613,30 @@ refresh() {
   # whether every cache the hub's answer would replace exists, which is what
   # makes a 304 safe to take.
   : > "$mf"
+  if [ "$INV_ON" = 1 ] && [ -z "$CLIENT" ]; then now=$(date +%s); : > "$G/hubsess.inv.start" 2>/dev/null; fi
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
     if [ -n "$CLIENT" ]; then
       # the shell's pseudo-fleet (#1484): no UUID, no repos, no windows to map
       printf '%s\t\t0\t\n' "$sess"; continue
     fi
+    # The fleet's line + its window inventory, kept between a loop's rounds (issue
+    # #3544): a watched loop asks every 2 s and the inventory is ~25 processes a round,
+    # but it only changes on a spawn, a close or a state change — each of which
+    # touches hub-nudge. So the last one is reused while it is younger than
+    # FLEET_HUB_SESSIONS_INV_TTL (15 s, the agent's own `workers` cache) AND
+    # strictly newer than hub-nudge; a one-shot --refresh, no nudge file (no hub
+    # nudges here) or 0 ⇒ read every round, byte for byte as before.
+    inv_cached "$sess" "${now:-0}" "$mf" && continue
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
     m=1   # every key carries its repo (issue #1939) — the bit stays for an older reader
-    printf '%s\t%s\t%s\t%s\n' "$sess" "$u" "$m" "$repos"
-    bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
-      | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done >> "$mf"
+    inv_line=$(printf '%s\t%s\t%s\t%s' "$sess" "$u" "$m" "$repos")
+    inv_rows=$(bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
+      | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done)
+    printf '%s\n' "$inv_line"
+    [ -z "$inv_rows" ] || printf '%s\n' "$inv_rows" >> "$mf"
+    inv_keep "$sess" "${now:-0}" "$inv_line" "$inv_rows"
   done > "$lf" <<EOF
 $(local_fleets)
 EOF
@@ -1568,6 +1610,7 @@ loop() {
     exec python3 -c "$LOCK_PY" "$LOCKF" 0 bash "$BIN/fleet-hub-sessions.sh" --loop
   fi
   unset FLEET_HUBSESS_LOCKED FLEET_HUBSESS_GUARD
+  INV_ON=1
   printf '%s\n' "$$" > "$PIDF"
   printf '%s\n' "$MAPCODE" > "$LOOPCODEF.new" 2>/dev/null && mv -f "$LOOPCODEF.new" "$LOOPCODEF"
   end=$(( $(date +%s) + LOOP_SECS ))
