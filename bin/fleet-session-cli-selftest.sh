@@ -123,6 +123,16 @@ eq "A ls --json" "wid:F/issue-12|12|#75✓|merged;wid:F/issue-13|13||done:2h;wid
 eq "A ls --json: the bus" "Claude|62|ok|Opus 5.5|high;Codex|47|watch|gpt-6-astra|medium;Claude||||;" \
   "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s|%s;" % (r["agent"], r["ctx_left"], r["ctx_band"], r["model"], r["effort"]) for r in json.load(sys.stdin)))')"
 eq "A no cache at all: every row still listed, the bus —" 3 "$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls | grep -c '—')"
+# A thin client's `fleet ls` runs ON its home (issue #3464): the session it just
+# opened is a row of that machine's own (an @ key, no node) — named by the cache's
+# `#me`, never left blank (the onboard drill read it as «-»). A hub row keeps its own.
+printf '@7\tdone\t●\t我的会话 · first\t\t\t\t—\t—\t\tfirst\t\t\n' > "$W/rows-own.tsv"
+cat "$W/rows.tsv" >> "$W/rows-own.tsv"
+{ printf '#ts%s%s\n#me%smini2\n' "$U" "$NOW" "$U"; cat "$W/remote"; } > "$W/remote-me"
+eq "A ls --json: an own row is named by #me, a hub row keeps its node" "@7|mini2;wid:F/issue-12|m4;wid:F/issue-13|m5;wid:F/scratch-3|m4;" \
+  "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-me" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin)))')"
+eq "A ls --json: no #me (no hub) leaves an own row's node empty" "@7|;" \
+  "$(FLEET_SESSION_CLI_ROWS="$W/rows-own.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["node"]) for r in json.load(sys.stdin) if r["key"][0] == "@"))')"
 
 # --- B. the resolver -----------------------------------------------------------------
 eq "B by key" "名称      随便聊聊" "$(cli show wid:F/scratch-3 | head -1)"

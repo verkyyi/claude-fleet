@@ -9,7 +9,8 @@
 #   list_row_named <name>   the list row carrying <name>, never the input line
 #   qr_state <login>        qr · none · wait — where the installer's scan stands
 #   attach_state            lost · answered · path · wait (the attachment step)
-#   ls_row <name>           <node> TAB <key> TAB <fleet_id> from `fleet ls --json`
+#   ls_row <name> [<keys>]  <node> TAB <key> TAB <fleet_id> from `fleet ls --json`
+#   ls_keys                 every key in `fleet ls --json` (the before-set ls_row takes)
 #   drill_png <file>        the attach step's solid red PNG
 #   agent_state <word>      exited · answered · up · wait — a `fleet claude` view
 #   curl_noise              how many `curl: (` lines the screen carries
@@ -101,12 +102,16 @@ attach_state() {
   else echo path; fi
 }
 attach_answer() { sed -n '/\/attachments\//,$p' | grep -Eo -- "$ATTACH_RED" | head -n 1 | tr -d ' '; }
-# ls_row <name> (`fleet ls --json` on stdin): <node> TAB <key> TAB <fleet_id> of
-# the first session whose name — or title (issue #3445: a session the thin
-# client's ⚡ row opens is 「我的会话」, its words the title) — starts with
-# <name>. A hub row's key is
-# wid:<fleet UUID>/<fleet_id> — the window's lifelong @fleet_id is what finds it
-# on its machine; a row of this computer's own has none (-).
+# ls_row <name> [<keys before>] (`fleet ls --json` on stdin): <node> TAB <key>
+# TAB <fleet_id> of the session. With <keys before> (a file, one key a line: the
+# list just before the session was asked for — issue #3464) the row is found by
+# IDENTITY: only a key that was not there counts — the one whose name or title
+# starts with <name>, else the only new one; never an older session that happens
+# to share the words. Without it: the first session whose name — or title (issue
+# #3445: a session the thin client's ⚡ row opens is 「我的会话」, its words the
+# title) — starts with <name>. A hub row's key is wid:<fleet UUID>/<fleet_id> —
+# the window's lifelong @fleet_id is what finds it on its machine; a row of this
+# computer's own has none (-).
 ls_row() {
   python3 -c '
 import json, sys
@@ -114,13 +119,34 @@ try:
     rows = json.load(sys.stdin)
 except ValueError:
     sys.exit(1)
+name = sys.argv[1]
+named = [r for r in rows if str(r.get("name", "")).startswith(name) or str(r.get("title") or "").startswith(name)]
+if sys.argv[2]:
+    try:
+        before = set(l.strip() for l in open(sys.argv[2]) if l.strip())
+    except OSError:
+        sys.exit(1)
+    new = [r for r in rows if str(r.get("key", "")) not in before]
+    named = [r for r in named if r in new] or (new if len(new) == 1 else [])
+if not named:
+    sys.exit(1)
+k = str(named[0].get("key", ""))
+fid = k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-"
+print("%s\t%s\t%s" % (named[0].get("node", "") or "-", k, fid or "-"))' "$1" "${2:-}"
+}
+# ls_keys (`fleet ls --json` on stdin): every session's key, one a line; rc 1 when
+# the list is not JSON (nothing to compare against — ls_row then goes by name)
+ls_keys() {
+  python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+if not isinstance(rows, list):
+    sys.exit(1)
 for r in rows:
-    if str(r.get("name", "")).startswith(sys.argv[1]) or str(r.get("title") or "").startswith(sys.argv[1]):
-        k = str(r.get("key", ""))
-        fid = k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-"
-        print("%s\t%s\t%s" % (r.get("node", "") or "-", k, fid or "-"))
-        sys.exit(0)
-sys.exit(1)' "$1"
+    print(r.get("key", ""))'
 }
 
 # agent_state <word> (a screen on stdin): the one-session view `fleet claude

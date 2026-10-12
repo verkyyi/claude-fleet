@@ -126,6 +126,24 @@ r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row 看图)
 r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row first)
 [ "$(printf '%s' "$r" | cut -f3)" = - ] && ok 'restart: a local row has no @fleet_id (-)' || bad "restart: local row got '$r'"
 if printf '%s' "$LS" | bash "$DRILL" --ls-row nope >/dev/null; then bad 'restart: ls_row found a row that is not there'; else ok 'restart: no such row is rc 1'; fi
+# step 8 by IDENTITY (issue #3464): the thin client's ⚡ session is 「我的会话」, its
+# words the title — the new row is the key that was not in the list before ↵, never
+# an older session sharing the words; its node is the home's (#me), never «-»
+LS0='[{"key":"@4","name":"test-我的会话 · first","title":"first","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"}]'
+printf '%s' "$LS0" | bash "$DRILL" --ls-keys > "$T/before.keys"
+[ "$(tr '\n' ' ' < "$T/before.keys")" = '@4 wid:U/old ' ] && ok 'step 8: --ls-keys lists the keys before ↵' || bad "step 8: ls-keys got '$(cat "$T/before.keys")'"
+LS1='[{"key":"@4","name":"test-我的会话 · first","title":"first","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"},{"key":"@7","name":"我的会话 · first","title":"first","node":"mini2"}]'
+r=$(printf '%s' "$LS1" | bash "$DRILL" --ls-row first "$T/before.keys")
+[ "$r" = "$(printf 'mini2\t@7\t-')" ] && ok 'step 8: the new row is found by key, not by an older row of the same words' || bad "step 8: by identity got '$r'"
+r=$(printf '%s' "$LS1" | bash "$DRILL" --ls-row first)
+[ "$(printf '%s' "$r" | cut -f2)" = @4 ] && ok 'step 8: by name alone an older row answers (why the before-set)' || bad "step 8: by name got '$r'"
+LS2='[{"key":"@4","name":"test-我的会话","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"},{"key":"@8","name":"我的会话","title":"","node":"mini2"}]'
+r=$(printf '%s' "$LS2" | bash "$DRILL" --ls-row first "$T/before.keys")
+[ "$r" = "$(printf 'mini2\t@8\t-')" ] && ok 'step 8: the only new row answers even with no title yet' || bad "step 8: only-new got '$r'"
+if printf '%s' "$LS0" | bash "$DRILL" --ls-row first "$T/before.keys" >/dev/null; then bad 'step 8: nothing new still found a row'; else ok 'step 8: nothing new is rc 1'; fi
+LS3='[{"key":"@4","name":"x","node":"mini2"},{"key":"wid:U/old","name":"first","node":"m4"},{"key":"@8","name":"a"},{"key":"@9","name":"b"}]'
+if printf '%s' "$LS3" | bash "$DRILL" --ls-row first "$T/before.keys" >/dev/null; then bad 'step 8: two unnamed new rows were guessed'; else ok 'step 8: two new rows, neither named: rc 1, never a guess'; fi
+if printf 'nope' | bash "$DRILL" --ls-keys >/dev/null; then bad 'step 8: a list that is not JSON gave keys'; else ok 'step 8: a list that is not JSON is rc 1 (then by name)'; fi
 # the client's bar alone (C9 run 2: 「⌘N 编排」, no 新任务 row) is the client
 st=$(printf '%s\n' "$P0" '用时 9 秒' '  drill1007c  │ ⌘N 编排 · ⌘P 会话与动作' | qrs)
 [ "$st" = none ] && ok 'qr: the client by its bar keys (no 新任务) reads none' || bad "qr: bar-only client read '$st'"
