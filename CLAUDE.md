@@ -967,7 +967,9 @@ Do not install from memory: read the doc and work from it.
   `{"refused"}`, nothing runs, one line in `/var/log/fleet-node-core.log`, one alert
   past 10 a minute. With it answering, the supervisor's account jobs and the
   core-held tasks are asked of it (`fleet-node-core.py call … --follow`), the updater's
-  switch / rollback / `as_login` too; no core (or `FLEET_NODE_CORE=0`) ⇒ the old road,
+  switch / rollback / `as_login` too — and a seated updater runs as `_fleetnode`
+  (#3670): it stages into `<state>/staging`, the core copies, fills the tools cache,
+  signs ccquota and switches, its root half is `update {step}`; no core (or `FLEET_NODE_CORE=0`) ⇒ the old road,
   byte for byte. A new privileged op is a BREAK-IT row first (`root-core-*`), then a
   line in the table. docs/MANAGED-NODE.md §20. **The daemon itself runs as
   `_fleetnode`** (issue #3668, C14): `FLEET_NODE_SEAT=1 fleet node install` →

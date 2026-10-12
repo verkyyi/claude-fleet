@@ -38,6 +38,14 @@ under a fake passwd); nothing touches /var, /Library or a real login.
      link into node/; the handover — a root daemon told seat-handover.json exits
      leaving its child up, and the seat adopts it (nothing restarts); seat_layout's
      modes: the register shared 0750/0640, creds/ and a .env untouched
+  N  the seated updater (#3670): `tick` as the seat stages into <state>/staging (no
+     root cache, no signature), the core copies it, fills <root>/tools from the
+     staged.json map, verifies, signs bin/ccquota with the machine identity (fake
+     codesign / security / openssl), switches; `update outside` links the login,
+     the next tick commits and `update prune` runs as root; a refused switch keeps
+     current and the evidence; a step outside the list, a staged.json naming a
+     non-artifact, a staged ccquota that is not the artifact — refused, nothing
+     signed; install-state / sessions run as the login
 """
 import base64
 import hashlib
@@ -55,11 +63,12 @@ import time
 import unittest
 
 BIN = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(BIN)
 sys.path.insert(0, BIN)
 import fleet_ed25519  # noqa: E402
 
 CORE_FILES = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py",
-              "fleet-node-update.py")
+              "fleet-node-update.py", "fleet_node_codesign.py")
 SECRET = hashlib.sha256(b"fleet-node-core-selftest").digest()
 OTHER = hashlib.sha256(b"someone else").digest()
 
@@ -576,6 +585,10 @@ class M_Seated(Sandbox):
             os.chmod(d, m)
         os.chmod(os.path.join(sd, "web.json"), 0o600)
         os.chmod(os.path.join(self.state, "logins", "alice.env"), 0o600)
+        with open(os.path.join(self.state, "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_NODE_TOKEN=secret\n")
+        with open(os.path.join(self.state, "update.json"), "w") as f:
+            f.write('{"phase": "idle"}\n')
         self.serve()
         lay = subprocess.run([sys.executable, "-c", "import importlib.util, sys; sp = importlib.util.spec_from_file_location"
                               "('s', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); "
@@ -584,6 +597,13 @@ class M_Seated(Sandbox):
         self.assertEqual(lay.returncode, 0, lay.stderr)
         mode = lambda *p: stat.S_IMODE(os.stat(os.path.join(self.state, *p)).st_mode)
         self.assertTrue(os.path.islink(os.path.join(self.state, "state.json")))
+        # the updater's files go with it (#3670): links into node/, its staging, the hub's address
+        for n in ("update.json", "update-restart.json", "fetch.progress"):
+            self.assertEqual(os.readlink(os.path.join(self.state, n)), os.path.join("node", n))
+        self.assertEqual(json.load(open(os.path.join(self.state, "node", "update.json"))), {"phase": "idle"})
+        self.assertEqual(mode("staging"), 0o770)
+        self.assertEqual(open(os.path.join(self.state, "hub-url")).read(), "https://hub.example\n")
+        self.assertEqual(mode("hub-url"), 0o644)
         self.assertEqual((mode("logins"), mode("logins", "alice"), mode("logins", "alice", "services"),
                           mode("logins", "alice", "services", "web.json"), mode("logins", "alice", "creds"),
                           mode("logins", "alice.env"), mode("logins", "alice", "runs")),
@@ -613,6 +633,199 @@ class M_Seated(Sandbox):
                         "the core's job outlived the seat's stop")
 
 
+FAKE_FETCH = """#!/bin/sh
+# ccquota release fetch … <sha> <dest> — a copy of $FAKE_REL/<sha>
+[ "$1 $2" = "release fetch" ] || exit 2
+for a; do :; done
+dest=$a
+sha=$(eval echo \\${$(($#-1))})
+[ -d "$FAKE_REL/$sha" ] || { echo "no release $sha" >&2; exit 1; }
+cp -R "$FAKE_REL/$sha" "$dest"
+"""
+
+FAKE_CODESIGN = """#!/bin/sh
+# --force --sign … <file>: marks it; --verify … <file>: the mark is there
+for a; do :; done
+echo "$*" >> "$FAKE_SIGN_LOG"
+case "$*" in
+  *--force*) [ -e "$FAKE_SIGN_FAIL" ] && exit 1; printf 'SIGNED\\n' >> "$a" ;;
+  *--verify*) tail -1 "$a" | grep -q '^SIGNED$' ;;
+esac
+"""
+
+
+class N_SeatedUpdate(Sandbox):
+    A = "a" * 40
+    B = "b" * 40
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        write_pub(os.path.join(self.state, "release.pub"))
+        self.rel = os.path.join(self.d, "rel")
+        spec = importlib.util.spec_from_file_location("fnu_n", os.path.join(self.bin, "fleet-node-update.py"))
+        saved = dict(os.environ)
+        try:
+            os.environ.clear()
+            os.environ.update(self.env)
+            self.fnu = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(self.fnu)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        with open(os.path.join(REPO, "release.json"), "rb") as f:
+            self.spec_bytes = f.read()
+        self.names = self.fnu.pinned_artifacts(json.loads(self.spec_bytes.decode()), ["darwin-arm64"])
+        self.signed_release(self.root, self.A)
+        os.symlink(os.path.join(self.root, self.A), os.path.join(self.root, "current"))
+        self.signed_release(self.rel, self.B)
+        fake = os.path.join(self.d, "ccquota")
+        with open(fake, "w") as f:
+            f.write(FAKE_FETCH)
+        os.chmod(fake, 0o755)
+        # the seat reads the hub's address root copied out of machine.env
+        with open(os.path.join(self.state, "hub-url"), "w") as f:
+            f.write("https://hub.invalid\n")
+        tools = os.path.join(self.d, "cs")
+        os.makedirs(tools)
+        for n, body in (("codesign", FAKE_CODESIGN), ("security", "#!/bin/sh\nexit 0\n"), ("openssl", "#!/bin/sh\nexit 0\n")):
+            with open(os.path.join(tools, n), "w") as f:
+                f.write(body)
+            os.chmod(os.path.join(tools, n), 0o755)
+        idd = os.path.join(self.state, "codesign")
+        os.makedirs(idd)
+        for n, b in (("identity.json", json.dumps({"sha1": "f" * 40, "cn": "fleet test"})),
+                     ("identity.keychain-db", "k"), ("keychain.pass", "p")):
+            with open(os.path.join(idd, n), "w") as f:
+                f.write(b)
+        self.signlog = os.path.join(self.d, "sign.log")
+        self.env.update({
+            "FLEET_NODE_CODESIGN_FORCE": "1",
+            "FLEET_NODE_CODESIGN_CODESIGN": os.path.join(tools, "codesign"),
+            "FLEET_NODE_CODESIGN_SECURITY": os.path.join(tools, "security"),
+            "FLEET_NODE_CODESIGN_OPENSSL": os.path.join(tools, "openssl"),
+            "FAKE_SIGN_LOG": self.signlog, "FAKE_SIGN_FAIL": os.path.join(self.d, "sign.fail"),
+            "FAKE_REL": self.rel,
+            "FLEET_NODE_CREDSEP_WAIT": "0",
+            "FLEET_CREDSEP_ROOT_BASE": os.path.join(self.d, "cred"),
+            "FLEET_BOOTSTRAP_CACHE": "off",
+        })
+
+    def signed_release(self, where, sha):
+        files = {"release.json": self.spec_bytes}
+        for n in CORE_FILES:
+            with open(os.path.join(BIN, n), "rb") as f:
+                files["bin/" + n] = f.read()
+        arts = {n: ("#!/bin/sh\necho %s %s\n" % (n, sha[:7])).encode() for n in self.names}
+        return make_release(where, sha, files, artifacts=arts)
+
+    def tick(self, **extra):
+        e = dict(self.env, FLEET_NODE_SEATED="1", FLEET_NODE_CCQUOTA=os.path.join(self.d, "ccquota"),
+                 FLEET_NODE_UPDATE_TARGET=self.B, FLEET_NODE_UPDATE_PLATFORM="darwin-arm64",
+                 FLEET_NODE_UPDATE_SETTLE="0", FLEET_NODE_UPDATE_LIB=os.path.join(self.d, "no-lib.sh"), **extra)
+        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-update.py"), "tick"], env=e,
+                           capture_output=True, text=True, timeout=120)
+        try:
+            with open(os.path.join(self.state, "update.json")) as f:
+                return r, json.load(f)
+        except IOError:
+            return r, {}
+
+    def cur(self):
+        return os.path.basename(os.readlink(os.path.join(self.root, "current")))
+
+    def test_seated_tick_switches_through_the_core(self):
+        self.serve()
+        r, st = self.tick()
+        self.assertEqual((r.returncode, st.get("phase")), (0, "switched"), r.stdout + r.stderr + self.log())
+        self.assertEqual(self.cur(), self.B)
+        rel = os.path.join(self.root, self.B)
+        self.assertFalse(os.path.exists(os.path.join(self.state, "staging", self.B)), "staging left behind")
+        self.assertFalse([e for e in os.listdir(self.root) if e.startswith(".incoming")], "the core's copy left")
+        # the tools the seat could not write: the core filled the cache from the staged map
+        claude = [n for n in self.names if n.startswith("claude-")][0]
+        out = subprocess.run([os.path.join(rel, "tools", "bin", "claude")], capture_output=True, text=True).stdout
+        self.assertEqual(out.strip(), "%s %s" % (claude, self.B[:7]))
+        helper = os.path.join(rel, "tools", "bin", "codex-code-mode-host")
+        self.assertTrue(os.path.isfile(os.path.realpath(helper)), "the helper did not land in the cache")
+        self.assertTrue(os.path.realpath(helper).startswith(os.path.realpath(os.path.join(self.root, "tools")) + os.sep))
+        # ccquota: the artifact, signed by the core (the seat signs nothing)
+        cq = open(os.path.join(rel, "bin", "ccquota")).read()
+        self.assertTrue(cq.endswith("SIGNED\n"), cq)
+        self.assertEqual(open(self.signlog).read().count("--force"), 1, open(self.signlog).read())
+        # the root half: update outside linked the login's tools
+        self.assertIn("op=update", self.log())
+        link = os.path.join(self.home, ".local", "bin", "claude")
+        self.assertEqual(os.readlink(link), os.path.join(self.root, "current", "tools", "bin", "claude"))
+        # a re-check of the signed release (the rollback's) takes the identity's signature
+        r2 = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify", rel],
+                            env=self.env, capture_output=True, text=True)
+        self.assertEqual(r2.stdout.strip(), "ok", r2.stdout + r2.stderr)
+        # the verify: committed, and prune ran as root through the core
+        with open(os.path.join(self.state, "state.json"), "w") as f:
+            json.dump({"supervisor": {"pid": os.getpid(), "heartbeat": time.time(), "runtime": self.B}}, f)
+        r, st = self.tick()
+        self.assertEqual(st.get("result"), "committed", r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.state, "update-root.json")))
+        self.assertGreaterEqual(self.log().count("op=update"), 3, self.log())
+
+    def test_sign_failure_refuses_the_switch(self):
+        self.serve()
+        open(os.path.join(self.d, "sign.fail"), "w").close()
+        r, st = self.tick()
+        self.assertEqual(st.get("result"), "failed", r.stdout + r.stderr)
+        self.assertIn("codesign", st.get("reason", ""))
+        self.assertEqual(self.cur(), self.A)
+        self.assertTrue(os.path.isdir(os.path.join(self.state, "staging", self.B)), "evidence gone")
+        self.assertFalse(os.path.exists(os.path.join(self.root, self.B)))
+
+    def test_seated_no_core_switches_nothing(self):
+        r, _ = self.tick()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("root core does not answer", r.stderr)
+        self.assertEqual(self.cur(), self.A)
+
+    def stage_by_hand(self):
+        """What a fooled seat could put in staging: B fetched, its map written."""
+        d = os.path.join(self.state, "staging", self.B)
+        shutil.copytree(os.path.join(self.rel, self.B), d)
+        return d
+
+    def test_seat_cannot_steer_the_root_half(self):
+        self.serve()
+        for args in ({"step": "rm -rf /"}, {"step": "outside", "argv": ["sh"]}, {"step": "../x"}):
+            self.assertIn("refused", self.req("update", args), args)
+        # a staged.json naming a file that is no artifact of the release
+        d = self.stage_by_hand()
+        h = hashlib.sha256(open(os.path.join(d, ".release", "artifacts", self.names[1]), "rb").read()).hexdigest()
+        with open(os.path.join(d, ".release", "staged.json"), "w") as f:
+            json.dump({"tools": {"claude/%s/claude" % h: "../../../etc/passwd"}}, f)
+        r = self.req("switch", {"sha": self.B})
+        self.assertIn("not an artifact", r.get("why", ""), r)
+        with open(os.path.join(d, ".release", "staged.json"), "w") as f:
+            json.dump({"tools": {"claude/../../x/claude": self.names[1]}}, f)
+        self.assertIn("refused", self.req("switch", {"sha": self.B}))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "tools")), "a refused stage wrote the root cache")
+        # a ccquota of the seat's own making: refused, and never signed
+        with open(os.path.join(d, ".release", "staged.json"), "w") as f:
+            f.write("{}")
+        os.makedirs(os.path.join(d, "bin"), exist_ok=True)
+        with open(os.path.join(d, "bin", "ccquota"), "w") as f:
+            f.write("#!/bin/sh\necho mine\n")
+        r = self.req("switch", {"sha": self.B})
+        self.assertIn("bin/ccquota", r.get("why", ""), r)
+        self.assertFalse(os.path.exists(self.signlog) and "--force" in open(self.signlog).read(), "the core signed it")
+        self.assertEqual(self.cur(), self.A)
+
+    def test_login_side_commands(self):
+        e = dict(self.env, USER="alice")
+        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-update.py"), "install-state", self.root],
+                           env=e, capture_output=True, text=True)
+        self.assertEqual(json.loads(r.stdout), {"exists": False, "linked": None, "escapes": False, "at": None})
+        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-update.py"), "sessions", "save", "../x"],
+                           env=e, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--make-release":
         # the BREAK-IT drill's seam: <root> <sha> [other] — a release under the
@@ -620,6 +833,14 @@ if __name__ == "__main__":
         root, sha = sys.argv[2], sys.argv[3]
         make_release(root, sha, {"bin/x": sha.encode() + b"\n"},
                      secret=OTHER if sys.argv[4:5] == ["other"] else SECRET)
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--make-staged":
+        # the seat-stage drill's seam (#3670): <dir> <sha> — a release with a claude
+        # and a ccquota artifact under the selftest key; prints the claude digest
+        d = make_release(sys.argv[2], sys.argv[3], {"bin/x": b"x\n"},
+                         artifacts={"claude-1-darwin-arm64": b"#!/bin/sh\necho claude\n",
+                                    "ccquota-darwin-arm64": b"#!/bin/sh\necho ccquota\n"})
+        print(hashlib.sha256(b"#!/bin/sh\necho claude\n").hexdigest())
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "--write-pub":
         write_pub(sys.argv[2])

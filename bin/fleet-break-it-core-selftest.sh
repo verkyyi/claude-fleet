@@ -21,6 +21,13 @@
 #                             taken over — everything but the table's start / stop /
 #                             end-a-process is refused, and the account itself can do
 #                             nothing more (no admin, no shell, no home)
+#   root-core-seat-stage      bin/fleet-node-core.py private_copy / install_tools /
+#                             sign_ccquota (#3670): the seated updater's staging steers
+#                             the root tools cache at a non-artifact, or offers its own
+#                             ccquota to be signed with the machine's identity
+#   root-core-update-step     bin/fleet-node-core.py op_update (#3670): the seated
+#                             updater's root half asked with a step outside the list,
+#                             an argv, a key too many
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -35,7 +42,8 @@ trap core_cleanup EXIT
 core_sandbox() {
   local sb="$1"
   mkdir -p "$sb/root/rt/bin" "$sb/db" "$sb/Users/alice"
-  for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-node-supervisor.py; do
+  for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-node-supervisor.py fleet-node-update.py \
+      fleet_node_codesign.py; do
     cp "$BIN/$f" "$sb/root/rt/bin/"
   done
   printf '{"alice": {"uid": %d, "gid": %d, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
@@ -241,6 +249,82 @@ sp.loader.exec_module(m); m.seat_make()' "$sb/root/rt/bin/fleet-node-supervisor.
   fi
   SECS=$(since "$t0")
   WHAT="以 _fleetnode 身份：exec-as bin/ 外的程序、表外的 machine 任务、带参数的 sweep / entry / report、结束 pid 1 或非受管登录的进程——全部 refused、什么都没执行；只剩表里的按名启停；账号本身无管理员组、无 shell、无家目录"
+}
+
+# root-core-seat-stage (#3670): the updater runs as _fleetnode now and stages into
+# <state>/staging; fooled, it names a non-artifact for the root tools cache, or puts
+# a ccquota of its own making there for the core to sign with the machine's ONE
+# identity (TCC grants follow it). The core works on its own copy, fills the cache
+# only from signed artifacts by their digests and signs only the artifact's bytes:
+# each refused, nothing written to <root>/tools, nothing signed, current stays. The
+# release as fetched switches, its ccquota signed by the core.
+drill_root_core_seat_stage() {
+  CAP=20
+  local sb t0 out rc cur good bad h d
+  sb="$WORK/core-stage"; core_sandbox "$sb"
+  good=$(printf 'a%.0s' $(seq 40)); bad=$(printf 'b%.0s' $(seq 40))
+  python3 "$BIN/fleet-node-core-selftest.py" --write-pub "$sb/db/release.pub"
+  python3 "$BIN/fleet-node-core-selftest.py" --make-release "$sb/root" "$good"
+  ln -s "$sb/root/$good" "$sb/root/current"
+  mkdir -p "$sb/cs" "$sb/db/codesign"
+  printf '#!/bin/sh\nfor a; do :; done\necho "$*" >> %s/sign.log\ncase "$*" in *--force*) echo SIGNED >> "$a";; *--verify*) tail -1 "$a" | grep -q SIGNED;; esac\n' \
+    "$sb" > "$sb/cs/codesign"
+  printf '#!/bin/sh\nexit 0\n' > "$sb/cs/security"; cp "$sb/cs/security" "$sb/cs/openssl"
+  chmod 755 "$sb/cs/"*
+  printf '{"sha1": "%s"}\n' "$(printf 'f%.0s' $(seq 40))" > "$sb/db/codesign/identity.json"
+  : > "$sb/db/codesign/identity.keychain-db"; echo p > "$sb/db/codesign/keychain.pass"
+  FLEET_NODE_CODESIGN_FORCE=1 FLEET_NODE_CODESIGN_CODESIGN="$sb/cs/codesign" \
+    FLEET_NODE_CODESIGN_SECURITY="$sb/cs/security" FLEET_NODE_CODESIGN_OPENSSL="$sb/cs/openssl" \
+    core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  t0=$(now)
+  h=$(python3 "$BIN/fleet-node-core-selftest.py" --make-staged "$sb/db/staging" "$bad"); d="$sb/db/staging/$bad"
+  for map in "{\"claude/$h/claude\": \"../../../etc/passwd\"}" "{\"claude/../../x/claude\": \"claude-1-darwin-arm64\"}" \
+             "{\"claude/$h/claude\": \"ccquota-darwin-arm64\"}"; do
+    printf '{"tools": %s}\n' "$map" > "$d/.release/staged.json"
+    out=$(core_call "$sb" switch "{\"sha\": \"$bad\"}"); rc=$?
+    [ "$rc" = 2 ] || { WHY="a staged map $map was not refused (rc $rc): $out"; return 1; }
+  done
+  [ ! -e "$sb/root/tools" ] || { WHY="a refused stage wrote the root tools cache: $(find "$sb/root/tools")"; return 1; }
+  printf '{}\n' > "$d/.release/staged.json"
+  printf '#!/bin/sh\necho mine\n' > "$d/bin/ccquota"
+  out=$(core_call "$sb" switch "{\"sha\": \"$bad\"}"); rc=$?
+  cur=$(basename "$(readlink "$sb/root/current")")
+  [ "$rc" = 2 ] && [ "$cur" = "$good" ] && printf '%s' "$out" | grep -q 'bin/ccquota' \
+    || { WHY="the seat's own ccquota: rc $rc, current $cur: $out"; return 1; }
+  ! grep -q -- --force "$sb/sign.log" 2>/dev/null || { WHY="the core signed the seat's own ccquota"; return 1; }
+  [ -d "$d" ] || { WHY="the refused stage was not kept as evidence"; return 1; }
+  cp "$d/.release/artifacts/ccquota-darwin-arm64" "$d/bin/ccquota"
+  out=$(core_call "$sb" switch "{\"sha\": \"$bad\"}"); rc=$?
+  cur=$(basename "$(readlink "$sb/root/current")")
+  [ "$rc" = 0 ] && [ "$cur" = "$bad" ] && tail -1 "$sb/root/$bad/bin/ccquota" | grep -q SIGNED \
+    || { WHY="the release as fetched did not switch signed (rc $rc, current $cur): $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="降权更新器的 staging 把根工具缓存指向清单外、或放自制 ccquota 请核心签：都拒绝、根缓存不写、什么也不签、current 不动；原样的发布版切过去、ccquota 由核心签"
+}
+
+# root-core-update-step (#3670): the seated updater's root half is ONE op with a
+# step name. Asked with a step outside the list, an argv, a path, a key too many:
+# refused, nothing runs; a listed step runs <current>/bin/fleet-node-update.py.
+drill_root_core_update_step() {
+  CAP=15
+  local sb t0 out line mark
+  sb="$WORK/core-update"; core_sandbox "$sb"; mark="$sb/PWNED"
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  t0=$(now)
+  for line in "{\"op\": \"update\", \"args\": {\"step\": \"touch $mark\"}}" \
+              '{"op": "update", "args": {"step": "../../bin/sh"}}' \
+              "{\"op\": \"update\", \"args\": {\"step\": \"prune\", \"argv\": [\"touch\", \"$mark\"]}}" \
+              '{"op": "update", "args": {}}' \
+              '{"op": "update", "args": {"step": 1}}'; do
+    out=$(core_raw "$sb" "$line")
+    printf '%s' "$out" | grep -q '"refused"' || { WHY="not refused: $line → $out"; return 1; }
+  done
+  [ ! -e "$mark" ] || { WHY="a refused update step RAN something"; return 1; }
+  out=$(core_raw "$sb" '{"op": "update", "args": {"step": "prune"}}')
+  printf '%s' "$out" | grep -q '"ok": true' || { WHY="a listed step was not answered: $out"; return 1; }
+  grep -q 'op=update .*refused' "$sb/core.log" || { WHY="no refused update line: $(cat "$sb/core.log")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="请核心做更新器的 root 一半时塞表外 step、argv、多一个键：全部 refused、什么都没执行、记一行；表里的 step 照常跑"
 }
 
 cred_run_drills "$0"

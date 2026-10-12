@@ -844,8 +844,9 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   | `kill` | pid | 只限受管登录的进程或核心自己的任务 |
   | `memguard` | level | `fleet-memguard.sh --once`（once · report） |
   | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`） |
-  | `switch` | sha | `<state>/staging/<sha>/`（非 root 更新器放的）或 `<root>/<sha>/`：用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；staging 改归 root、移进 `<root>/<sha>/`，再 `.prev` = 旧、`current` = 新 |
+  | `switch` | sha | `<state>/staging/<sha>/`（降权更新器放的，#3670）或 `<root>/<sha>/`：staging 先**整份复制**成 root 自己的 `<root>/.incoming-<sha>`（新 inode、权限重置），按它 `staged.json` 的表从已验的工件填 `<root>/tools/`，再用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；`bin/ccquota` 用机器的固定身份签（`fleet_node_codesign.py`），移进 `<root>/<sha>/`，再 `.prev` = 旧、`current` = 新 |
   | `rollback` | — | `current` ⇄ `.prev`，目标同样复核 |
+  | `update` | step | 降权更新器的 root 一半（#3670）：`<current>/bin/fleet-node-update.py root <step>` 以 root 跑——`outside`（启动缓存、管理员 agent 的 ccquota 与重启、各登录的工具链接）· `credsep`（代码副本刷新 + 池同步）· `prune`（清旧版本）；只收名字，不收 argv |
 
   登录必须在 `accounts.json` 里受管、不是 uid 0。表外一律回 `{"refused": op}`、什么都不执行，
   `/var/log/fleet-node-core.log` 记一行（时间 · 对端 uid · op · 参数摘要 · 为什么）；一分钟
@@ -859,8 +860,10 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
 - **装与卸**：`sudo FLEET_NODE_CORE=1 fleet node install`（第「核心」步，在「守护」之前）装上，
   `FLEET_NODE_CORE=0` 卸掉；`fleet-node-core.py status [--check]` 看它。**没有核心的机器走
   今天的路，字节不变**（共同约定 11）：`FLEET_NODE_CORE=0` 也一样。
-- **已知的缺口**：Mac 上 `bin/ccquota` 在 stage 时被机器身份重签，字节不再等于工件，核心
-  只能认「codesign 通过」；C14 让更新器离开 root 前，重签这一步要搬进核心。
+- **重签在核心里**（#3670，原来的已知缺口）：降权的更新器只放工件原样的 `bin/ccquota`，核心
+  验过它就是清单里的 ccquota 工件再用机器的固定身份签；复核（回滚、已签的旧版本）时只认
+  「满足这个身份的要求」——身份的钥匙在 root 的钥匙串里，seat 签不了，所以「随便一个 codesign
+  过得去的程序」不再算数。没有身份（建不出来）⇒ 如前，原样（ad-hoc）切过去，体检 `codesign` 行说为什么。
 - 新加一个特权动作 = 先加 BREAK-IT 行看它红，再进表。BREAK-IT：`root-core-off-list` ·
   `root-core-wrong-peer` · `root-core-unsigned-switch`（`bin/fleet-break-it-core-selftest.sh`）；
   `bin/fleet-node-core-selftest.sh`，`fleet-node-supervisor-selftest.py` 的 `T_RootCore`
@@ -903,8 +906,9 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
   child …`）。以后要停一个接管来的 root 子进程，守护不碰 pid：账号任务请核心 `stop-as`
   （登录自己的进程请 `kill`），机器任务请 `machine stop`——核心按**自己表里那个任务的命令行**
   找 root 进程，从不收一个 pid。Linux 上 systemd 换单元仍会收掉子进程（迁移判据在托管 Mac 上）。
-- **它能写的**（root 布置，`seat_layout`，可重跑）：`<state>/node/`（`state.json` 在这里，
-  `<state>/state.json` 是指向它的链接，读的人不用改）、`<state>/locks/`、`<log>/node/`
+- **它能写的**（root 布置，`seat_layout`，可重跑）：`<state>/node/`（`state.json`、更新器的
+  `update.json` · `update-restart.json` · `fetch.progress` 在这里，`<state>/` 下同名的是指向它们的链接，
+  读的人不用改）、`<state>/staging/`（更新器放发布版的地方，#3670）、`<state>/locks/`、`<log>/node/`
   （守护自己的日志，`supervisor.log` 也在这），各登录登记表的 `run/ runs/ alerts/`
   （root:_fleetnode 0770，父目录 root 的、它挪不走）。**能多读的**：登记表条目
   （`services/*.json` 0640）与 `logins/` 里的名字（0750）——`.env`、`creds/`、`machine.env`、
@@ -916,11 +920,12 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
   | 今天 root 直接做的 | 降权后 |
   |---|---|
   | 账号任务、登记表服务、定时 agent 任务 | `run-as`（agent 任务的一次尝试是 `task:<名>@<日>#<次>[~HHMM]`，核心从登记表重建；缺凭据由核心回错） |
-  | 机器的子进程与任务：节点程序（#3669 前）、共享凭据代理启动器、测试机、diskguard、orphans（跨用户结束失控进程）、shared-dirs、更新器（#3670 前）、入口 sshd 与吊销跟随 | `machine {job, action}`：按核心**自己**算的表（`machine_table`：表的 children / tasks + 入口开着时的 sshd 与 `entry-revocations` + `ci.env` 在时的测试机）里的名字，start（以 root、一份）· stop · held（重载被谁挡着，只读）· hup（只限表里写着 SIGHUP 重载的） |
+  | 机器的子进程与任务：节点程序（#3669 前）、共享凭据代理启动器、测试机、diskguard、orphans（跨用户结束失控进程）、shared-dirs、入口 sshd 与吊销跟随 | `machine {job, action}`：按核心**自己**算的表（`machine_table`：表的 children / tasks + 入口开着时的 sshd 与 `entry-revocations` + `ci.env` 在时的测试机）里的名字，start（以 root、一份）· stop · held（重载被谁挡着，只读）· hup（只限表里写着 SIGHUP 重载的） |
   | sweep / attic（挪 plist、`launchctl bootout`） | `sweep {}` |
   | 入口：host key、`<state>/entry/keys/*`、`sshd -t`、`com.apple.access_ssh`、审计 | `entry {}`（一次 converge + audit） |
   | FDA 探针、tenants 的 sudo 读、各登录 lane 的拒绝 | `report {kind}`：`table` · `fda`（核心这条链有没有完全磁盘访问——删号的是它）· `tenants` · `lanes`，只读、不收参数 |
   | memguard、Spotlight | 已在表里（`memguard` · `power`） |
+  | 更新器（#3670） | 以 `_fleetnode` 自己跑（任务表里 `"seat": true`）：取发布、验签进 `<state>/staging/<sha>/`（工具不进根缓存，`staged.json` 记下每个工具链接要哪个工件），切换 / 回滚请核心 `switch` / `rollback`；root 的一半——启动缓存、管理员 agent 的 ccquota 副本与 kickstart、各登录的工具链接、credsep 代码副本、清理旧版本——请 `update {step}`；各登录的 link-tree、会话快照、读登录家里的安装状态经 `exec-as`（`link-tree` · `sessions` · `install-state`）；没有核心就一轮都不跑 |
   | account adopt / release / forget | 不在表里，维持：只有人用 sudo 做 |
 
   守护自己只排班、记账、读人人可读的东西；`report table` 每分钟取一次（核心不在时用上一份）。
@@ -929,3 +934,6 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
 
 BREAK-IT：`fleetnode-compromised`（`bin/fleet-break-it-core-selftest.sh`）；
 `bin/fleet-node-core-selftest.py` 的 K（新动作）· L（对端按连接重读）· M（坐席守护、交接、布局）。
+更新器降权（#3670）：BREAK-IT `root-core-seat-stage` · `root-core-update-step`；同一文件的 N（seat 跑一轮：
+staging → 核心复制、填工具缓存、签名、切换 → `update` 各步 → 下一轮提交）。入口地址是 root 从
+`machine.env` 抄出的 `<state>/hub-url`（0644，只有地址）——seat 读不了 machine.env。

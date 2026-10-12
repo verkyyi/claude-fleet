@@ -45,6 +45,16 @@ names — or leaves every part where it was:
              the tick asks it to restart (<state>/update-restart.json) and
              launchd's KeepAlive starts the new one
 
+Seated (#3670, EPIC #3500 C14): on a machine whose daemon runs as _fleetnode the
+tick runs as that seat (the task table's "seat"), never as root. It fetches and
+checks into <state>/staging/<sha>/ — no root cache, no signature: staged.json
+names each tools/bin link's artifact — and asks the root core for the rest:
+`switch` / `rollback` (the core copies staging, fills <root>/tools, re-verifies,
+signs bin/ccquota with the machine identity), `update {step}` for the root half
+(`root outside|credsep|prune`, below), `exec-as` for what runs as a login
+(link-tree, link-account, sessions, install-state). The hub's address is
+<state>/hub-url (machine.env is root's). Seated with no core: nothing runs.
+
 All of them hang off ONE link: `current` → <sha> moves by one rename(2), and
 `.prev` names the version before. So a machine is never half old, half new.
 
@@ -114,6 +124,11 @@ Usage:
   fleet-node-update.py pinned-artifacts <file|-> [<os>-<arch>…]
                                             the artifact names it pins, one a line
                                             (default darwin-arm64; fleet-stable.sh gate 7)
+  fleet-node-update.py root outside|credsep|prune
+                                            (internal: the root core's `update {step}`, #3670 —
+                                            the seated updater's root half; state in update-root.json)
+  fleet-node-update.py install-state <root> [--at] · sessions save|restore <sha>
+                                            (internal, AS the login through exec-as, #3670)
   fleet-node-update.py link-account <login> (internal: run demoted to <login>)
   fleet-node-update.py link-tree <sha> [--no-apply]
                                             (internal, run AS the login: its install →
@@ -154,9 +169,11 @@ import importlib.util
 import json
 import os
 import platform
+import pwd
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -301,10 +318,18 @@ def wanted(spec):
 
 
 # --------------------------------------------------------------- paths ----------
+def seated():
+    """This updater runs as the node daemon's seat (_fleetnode, #3668) with the root
+    core answering (#3670): it downloads and checks into <state>/staging/ and asks
+    the core for everything root's. Seated with no core: nothing (tick refuses)."""
+    return fns.seated_self()
+
+
 class P(object):
     def __init__(self):
         self.sup = fns.Paths()
         self.state = self.sup.state
+        self.seated = seated()
         self.root = env("FLEET_NODE_ROOT", os.path.dirname(self.sup.runtime.rstrip("/")))
         self.current = os.path.join(self.root, "current")
         self.prev = os.path.join(self.root, ".prev")
@@ -324,9 +349,21 @@ class P(object):
         self.fetch_cache = os.path.join(self.root, ".fetch")
         self.progress = os.path.join(self.state, "fetch.progress")
         self.log = os.path.join(self.sup.log, "update.log")
+        # the root half's own record (#3670: `root <step>` run by the core), so the
+        # seat's update.json and root's writes never overwrite each other
+        self.root_file = os.path.join(self.state, "update-root.json")
+        # where a seated updater stages (#3670): the core takes it from there
+        self.staging = os.path.join(self.state, "staging")
+        if self.seated:
+            self.fetch_cache = os.path.join(self.staging, ".fetch")
+            self.log = os.path.join(self.sup.log, "node", "update.log")
 
     def rel(self, sha):
         return os.path.join(self.root, sha)
+
+    def stage_dir(self, sha):
+        """Where <sha> is staged: <root>/<sha> as root, <state>/staging/<sha> seated."""
+        return os.path.join(self.staging, sha) if self.seated else self.rel(sha)
 
 
 def credsep_rec():
@@ -435,6 +472,11 @@ def hub_url(p):
     for line in _read_lines(p.machine_env):
         if line.startswith("CCQUOTA_HUB_URL="):
             return line.split("=", 1)[1].strip().strip('"\'')
+    # machine.env is root 0600: the seat reads the address root copied out of it
+    # (fleet-node-supervisor.py seat_layout, #3670) — an address, no secret
+    for line in _read_lines(os.path.join(p.state, "hub-url"))[:1]:
+        if line.strip():
+            return line.strip()
     return env("FLEET_HUB_URL", "")
 
 
@@ -630,10 +672,46 @@ def run(cmd, timeout=600, **kw):
 
 
 # --------------------------------------------------------------- the state ------
+ROOT_KEYS = ("admin_agents", "helpers", "retired")
+
+
+def read_nofollow(path):
+    """A JSON file whose last component is never a link (root reading what the
+    seat writes, #3670): <state>/update.json is root's own link into the seat's
+    dir, followed once; whatever the seat put there is opened O_NOFOLLOW."""
+    if os.path.islink(path):
+        path = os.path.join(os.path.dirname(path), os.readlink(path))
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd) as f:
+            fd = None
+            return json.loads(f.read(1 << 20))
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 class Updater(object):
-    def __init__(self, p):
+    def __init__(self, p, root=False):
         self.p = p
-        self.st = read_json(p.file, {}) or {}
+        # root=True: `root <step>`, the core's (#3670) — the seat's state read, only
+        # ROOT_KEYS kept, in update-root.json
+        self.root = root
+        self.seated = p.seated and not root
+        if root:
+            self.st = read_nofollow(p.file) or {}
+            mine = read_json(p.root_file, {}) or {}
+            for k in ROOT_KEYS:
+                self.st[k] = mine.get(k) if isinstance(mine.get(k), dict) else {}
+        else:
+            self.st = read_json(p.file, {}) or {}
         self.st.setdefault("phase", "idle")
         self.st.setdefault("skip", {})
         self.st.setdefault("failed", {})
@@ -642,6 +720,9 @@ class Updater(object):
         self.follow_held = False
 
     def save(self):
+        if self.root:
+            write_json(self.p.root_file, {k: self.st.get(k) or {} for k in ROOT_KEYS})
+            return
         if not os.path.isdir(self.p.state):
             os.makedirs(self.p.state)
         write_json(self.p.file, self.st)
@@ -761,6 +842,10 @@ class Updater(object):
                     "本批之后新开的 worker 在新版本上起。"
                     % (socket.gethostname().split(".")[0], held // 60, cap // 60, iso(now()), cur[:12], target[:12]))
             uid, gid, home = ident
+            if self.seated:
+                # posted AS the login, which the seat cannot be (#3670): logged only
+                self.log("hold note on %s#%s: not posted — the seated updater does not run as %s" % (repo, n, login))
+                continue
             cmd = env("FLEET_EPIC_HOLD_NOTE_CMD", "") or "/bin/bash %s" % os.path.join(
                 home, ".claude", "fleet", "bin", "fleet-comment.sh")
             try:
@@ -824,7 +909,15 @@ class Updater(object):
 
     # -- staging: fetch, check, install the pinned tools; `staged.json` = whole
     def stage(self, sha):
-        d = self.p.rel(sha)
+        d = self.p.stage_dir(sha)
+        if self.seated:
+            have = os.path.join(self.p.rel(sha), STAGED)
+            if os.path.exists(have):
+                # already root's (a release rolled back from, the previous one):
+                # the core re-checks it there, nothing is staged again
+                return read_json(have, {})
+            os.makedirs(self.p.staging, exist_ok=True)
+            self.prune_staging(keep=sha)
         mark = os.path.join(d, STAGED)
         if os.path.exists(mark):
             return read_json(mark, {})
@@ -853,7 +946,8 @@ class Updater(object):
             os.chmod(dst + ".tmp", 0o755)
             os.rename(dst + ".tmp", dst)
             got["ccquota"] = arts[name]["sha256"]
-            sig = self.sign_ccquota(dst)
+            # seated (#3670): the core signs it at the switch, with root's identity
+            sig = None if self.seated else self.sign_ccquota(dst)
             if sig:
                 got["codesign"] = sig
             # claude / codex / tmux: the root cache, content-addressed; the release links it
@@ -865,6 +959,19 @@ class Updater(object):
                 h = arts[name]["sha256"]
                 tdir = os.path.join(self.p.tools, tool, h)
                 tbin = os.path.join(tdir, tool)
+                if self.seated:
+                    # the root cache is root's: the core fills it at the switch from
+                    # the verified artifacts this map names (#3670)
+                    want = got.setdefault("tools", {})
+                    want["%s/%s/%s" % (tool, h, tool)] = name
+                    swap_link(os.path.join(bind, tool), tbin)
+                    for hname, htmpl in helpers(comps, tool):
+                        hart = artifact_name(htmpl, comps[tool]["version"])
+                        self.art(d, arts, hart)
+                        want["%s/%s/%s" % (tool, h, hname)] = hart
+                        swap_link(os.path.join(bind, hname), os.path.join(tdir, hname))
+                    got[tool] = comps[tool]["version"]
+                    continue
                 if not (os.path.exists(tbin) and sha256_file(tbin) == h):
                     os.makedirs(tdir, exist_ok=True)
                     shutil.copyfile(src, tbin + ".tmp")
@@ -971,8 +1078,30 @@ class Updater(object):
             raise StageError("%s: digest does not match the signed manifest" % name)
         return src
 
+    # -- the seated updater's root half (#3670): one step, asked of the core
+    def root_step(self, step):
+        r = core_ask("update", {"step": step}, timeout=1000)
+        if not r.get("ok"):
+            return ["root %s: the root core said %s" % (step, r.get("why") or r.get("error") or r)]
+        notes = [l[5:] for l in (r.get("out") or "").splitlines() if l.startswith("NOTE ")]
+        if r.get("rc", 0) not in (0,):
+            notes.append("root %s: rc %s %s" % (step, r.get("rc"), ((r.get("out") or "").strip().splitlines()
+                                                                     or [""])[-1][:160]))
+        return notes
+
+    def prune_staging(self, keep=None):
+        """The seat's staging: anything but <keep> (the release being staged) and
+        the fetch cache goes — a refused switch's evidence stays one stage long."""
+        if not os.path.isdir(self.p.staging):
+            return
+        for e in os.listdir(self.p.staging):
+            if e != keep and e != ".fetch":
+                shutil.rmtree(os.path.join(self.p.staging, e), ignore_errors=True)
+
     # -- the parts outside `current`: the bootstrap cache + account links
     def sync_outside(self):
+        if self.seated:
+            return self.root_step("outside")
         notes = self.ensure_helpers()
         spec = read_json(os.path.join(self.p.current, RELEASE_FILE), None)
         try:
@@ -1089,6 +1218,10 @@ class Updater(object):
                 .get("artifacts") or [] if isinstance(a, dict)}
         tmp = None
         if not all(n in arts and os.path.exists(os.path.join(base, ".release", "artifacts", n)) for _, _, n in todo):
+            if self.root:
+                # root reads nothing from the hub under the core (#3670): a release
+                # staged without its helpers is completed by its next stage
+                return ["helpers: %s missing under %s — not fetched as root" % (", ".join(h for _, h, _ in todo), cur[:12])]
             t = self.st.get("helpers") or {}
             if t.get("sha") == cur and now() - (t.get("at") or 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
                 return ["helpers: %s missing under %s (%s)" % (", ".join(h for _, h, _ in todo), cur[:12], t.get("said", ""))]
@@ -1125,6 +1258,11 @@ class Updater(object):
             if (only and login != only) or why or ident is None:
                 continue
             uid, gid, home = ident
+            if uid != 0 and self.seated:
+                rc, out, err = as_login(login, ["link-account", login], timeout=60, root=self.p.root)
+                if rc != 0:
+                    notes.append("%s: %s" % (login, (err or out)[:120]))
+                continue
             if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
                 notes.append("%s: needs root to link" % login)
                 continue
@@ -1169,12 +1307,15 @@ class Updater(object):
                 continue
             uid, gid, home = ident
             path = os.path.join(home, ".claude", "fleet")
-            if not os.path.lexists(path):
+            if uid == 0:
+                continue
+            ist = self.install_state(login, ident, path)
+            if ist is None:
+                continue
+            if not ist["exists"]:
                 tried.pop(login, None)
                 continue
-            if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
-                continue
-            if linked_sha(path, self.p.root) == sha and not _copy_escapes(os.path.realpath(path)):
+            if ist["linked"] == sha and not ist["escapes"]:
                 tried.pop(login, None)
                 continue
             t = tried.get(login) or {}
@@ -1189,11 +1330,11 @@ class Updater(object):
                 return notes + ["install %s: not linked to %s yet — an EPIC batch with work: %s"
                                 % (", ".join(t[0] for t in todo), sha[:12], hold)]
         for login, ident, path in todo:
-            was = account_install_sha(login, ident, path, self.p.root)
+            was = (self.install_state(login, ident, path, at=True) or {}).get("at")
             rc, out, err = as_login(login, ["link-tree", sha], timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200),
                                     root=self.p.root)
             said = ((out + "\n" + err).strip().splitlines() or ["rc %d" % rc])[-1][:200]
-            now_at = linked_sha(path, self.p.root)
+            now_at = (self.install_state(login, ident, path) or {}).get("linked")
             self.log("install %s: %s → %s · rc %d · %s" % (login, (was or "unreadable")[:12],
                                                           (now_at or "not linked")[:12], rc, said))
             if now_at == sha:
@@ -1202,6 +1343,28 @@ class Updater(object):
                 tried[login] = {"at": now(), "to": sha, "rc": rc, "said": said}
                 notes.append("install %s: not linked to %s (rc %d %s)" % (login, sha[:12], rc, said))
         return notes
+
+    def install_state(self, login, ident, path, at=False):
+        """{exists, linked, escapes, at} of a login's ~/.claude/fleet — read here
+        when this process may (root, the login itself, a home it can read), else
+        asked of the login through the core (`install-state`, exec-as — the seat
+        reads no one's home, #3670). None: neither."""
+        uid = ident[0]
+        mine = os.geteuid() == 0 or uid == os.geteuid()
+        if mine or not self.seated:
+            if not mine:
+                return None
+            return install_state(login, ident, path, self.p.root, at=at)
+        rc, out, err = as_login(login, ["install-state", self.p.root] + (["--at"] if at else []), timeout=60,
+                                root=self.p.root)
+        try:
+            r = json.loads(out.strip().splitlines()[-1]) if rc == 0 else None
+        except (ValueError, IndexError):
+            r = None
+        if not isinstance(r, dict):
+            self.log("install %s: its state could not be read (rc %d %s)" % (login, rc, (err or out).strip()[-120:]))
+            return None
+        return r
 
     def linked_releases(self):
         """The releases a login stands on (issue #2774; any login, #3248): the tree its
@@ -1232,6 +1395,8 @@ class Updater(object):
     def sync_credsep(self):
         """`<current>/bin/fleet-credsep.py machine refresh`: LIB's copy = this
         release's, and the proxy restarted on it when the bytes moved. -> notes."""
+        if self.seated:
+            return self.root_step("credsep")
         cs = os.path.join(self.p.current, "bin", "fleet-credsep.py")
         if not credsep_rec() or not os.path.exists(cs):
             return []
@@ -1266,6 +1431,12 @@ class Updater(object):
         pinned before the switch, brought back and checked after. -> notes."""
         if env_num("FLEET_NODE_UPDATE_SESSIONS", 1) == 0 or not sha:
             return []
+        if self.seated and not os.path.isdir(self.p.rel(sha)):
+            # the target is still the seat's staging, which never runs as a login
+            # (#3670): the snapshot is taken with the release that stands
+            sha = link_sha(self.p.current)
+            if not sha:
+                return []
         sc = os.path.join(self.p.rel(sha), "bin", "fleet-sessions-snapshot.sh")
         if not os.path.exists(sc):
             return []
@@ -1276,14 +1447,17 @@ class Updater(object):
             if why or ident is None:
                 continue
             uid, gid, home = ident
-            if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
+            if uid != 0 and self.seated:
+                rc, out, err = as_login(login, ["sessions", verb, sha], timeout=600, root=self.p.root)
+            elif uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
                 continue
-            rc, out, err = run(["/bin/sh", "-c", SESSIONS_SH, "fleet-sessions",
-                                "/bin/bash", sc, verb],
-                               timeout=600, preexec_fn=fns.demote(login, uid, gid, home),
-                               env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
-                                    "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
-                                    "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet")})
+            else:
+                rc, out, err = run(["/bin/sh", "-c", SESSIONS_SH, "fleet-sessions",
+                                    "/bin/bash", sc, verb],
+                                   timeout=600, preexec_fn=fns.demote(login, uid, gid, home),
+                                   env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
+                                        "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
+                                        "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet")})
             if verb == "save":
                 msg = (out.strip().splitlines() or [""])[-1]
             else:
@@ -1410,6 +1584,12 @@ class Updater(object):
         been retired FLEET_NODE_UPDATE_KEEP_SECS (1 h). A version dir the record
         never named (staged, skipped, from an older updater) starts its clock
         now — so the root holds a bounded handful, never a week of releases."""
+        if self.seated:
+            # the release last asked for stays: switching, or the evidence of a refusal
+            self.prune_staging(keep=self.st.get("to"))
+            for n in self.root_step("prune"):
+                self.log("prune: %s" % n)
+            return []
         if not os.path.isdir(self.p.root):
             return []
         keep = self.keep_set()
@@ -2114,6 +2294,16 @@ def linked_mark(d):
     return m if isinstance(m, dict) and SHA_RE.match(str(m.get("sha") or "")) and m.get("root") else None
 
 
+def install_state(login, ident, path, root, at=False):
+    """What follow_installs needs of <path> (a login's ~/.claude/fleet); with <at>
+    also the release it is at (account_install_sha — may run git as the login)."""
+    if not os.path.lexists(path):
+        return {"exists": False, "linked": None, "escapes": False, "at": None}
+    ls = linked_sha(path, root)
+    return {"exists": True, "linked": ls, "escapes": bool(ls) and _copy_escapes(os.path.realpath(path)),
+            "at": account_install_sha(login, ident, path, root) if at else None}
+
+
 def linked_sha(path, root):
     """The release <path> (a login's ~/.claude/fleet) is LINKED to under <root>,
     or None: a plain checkout, an own copy, a tree of another root's."""
@@ -2469,7 +2659,14 @@ def release_copy():
     return 0
 
 
+# `root <step>`: this process IS the core's (#3670) — it never asks the core
+# (which answers only the seat) and demotes by itself, as a root updater did
+ROOT_MODE = False
+
+
 def core_answers():
+    if ROOT_MODE:
+        return False
     c = getattr(fns, "core", None)
     return c is not None and c.available()
 
@@ -2480,6 +2677,13 @@ def core_ask(op, args, timeout=None):
         return fns.core.call(op, args, timeout=timeout)
     except (OSError, ValueError) as e:
         return {"error": "the root core: %s" % e}
+
+
+def pwd_name():
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:
+        return env("USER", "")
 
 
 def as_login(login, args, timeout=1200, root=None):
@@ -2544,7 +2748,48 @@ def main(argv):
         return link_tree(rest[0], apply="--no-apply" not in rest[1:])
     if cmd == "release-copy":
         return release_copy()
+    if cmd == "install-state" and rest:
+        # (internal, AS the login, #3670) what the seat may not read in its home
+        login = env("USER", "") or pwd_name()
+        ident = fns.account_ident(login) or (os.geteuid(), os.getegid(), os.path.expanduser("~"))
+        print(json.dumps(install_state(login, ident, os.path.join(ident[2], ".claude", "fleet"), rest[0],
+                                       at="--at" in rest[1:]), sort_keys=True))
+        return 0
+    if cmd == "sessions" and len(rest) == 2:
+        # (internal, AS the login, #3670) one release's session snapshot save|restore
+        verb, sha = rest
+        root = env("FLEET_NODE_ROOT", os.path.dirname(fns.Paths().runtime.rstrip("/")))
+        sc = os.path.join(root, sha, "bin", "fleet-sessions-snapshot.sh")
+        if verb not in ("save", "restore") or not SHA_RE.match(sha) or not os.path.isfile(sc):
+            print("fleet-node-update: sessions save|restore <a release under %s>" % root, file=sys.stderr)
+            return 2
+        e = dict(os.environ, PATH="%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+                 % os.path.join(root, sha, "tools", "bin"))
+        os.execve("/bin/bash", ["/bin/bash", sc, verb], e)
     p = P()
+    if cmd == "root" and len(rest) == 1:
+        # the seated updater's root half (#3670): run by the root core's `update
+        # {step}` from the release it switched to — never by the seat itself
+        if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+            print("fleet-node-update: root <step> is the root core's to run", file=sys.stderr)
+            return 1
+        global ROOT_MODE
+        ROOT_MODE = True
+        p.seated = False
+        u = Updater(p, root=True)
+        if rest[0] == "outside":
+            notes = u.sync_outside()
+        elif rest[0] == "credsep":
+            notes = u.sync_credsep()
+        elif rest[0] == "prune":
+            notes = ["removed %s" % x[:12] for x in u.prune()]
+        else:
+            print("fleet-node-update: root outside|credsep|prune", file=sys.stderr)
+            return 2
+        u.save()
+        for n in notes:
+            print("NOTE %s" % n)
+        return 0
     if cmd == "follow" and rest:
         # `account adopt` (issue #2714): the login's links and install onto the
         # release at once, not on the next tick; the tick's state is not written
@@ -2622,7 +2867,13 @@ def main(argv):
             return 1 if bad else 0
         return 0
     if cmd == "tick":
-        if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        if p.seated:
+            # the seat (#3670): download + check into staging; the switch is the core's
+            if not core_answers():
+                print("fleet-node-update: seated, and the root core does not answer — nothing switches until it "
+                      "does", file=sys.stderr)
+                return 1
+        elif os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
             print("fleet-node-update: tick swaps the root runtime — the machine daemon runs it as root",
                   file=sys.stderr)
             return 1

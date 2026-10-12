@@ -44,12 +44,20 @@ holds the wire half). The table, written here and nowhere else:
                           refused lanes in the node program's books)
   memguard {level}        fleet-memguard.sh --once as root (once · report)
   power    {profile}      spotlight-off (macOS): fleet-spotlight.sh off --tick
-  switch   {sha}          the release in <state>/staging/<sha>/ (a non-root
-                          updater's) or <root>/<sha>/ (today's root updater's):
-                          ITS signature re-checked with the core's own key
-                          (<state>/release.pub) and every file's digest, staging
-                          moved in as root's, then `.prev` = old, `current` = new
+  switch   {sha}          the release in <state>/staging/<sha>/ (the seated
+                          updater's, #3670) or <root>/<sha>/ (a root updater's):
+                          staging is first COPIED to root's own <root>/.incoming-<sha>
+                          (new inodes, modes reset), the pinned tools its staged.json
+                          names put into <root>/tools/ from the release's verified
+                          artifacts, ITS signature re-checked with the core's own key
+                          (<state>/release.pub) and every file's digest, bin/ccquota
+                          signed with the machine's identity (fleet_node_codesign.py),
+                          moved in, then `.prev` = old, `current` = new
   rollback {}             `current` ↔ `.prev`, the target re-checked the same way
+  update   {step}         the seated updater's root half (#3670): <current>/bin/
+                          fleet-node-update.py root <step> as root — outside (cache,
+                          admin agents, account links) · credsep (its code copy) ·
+                          prune (retired releases); a step name, never an argv
 
 A login must be a managed one (<state>/accounts.json); never uid 0. Anything else —
 another op, an extra key, a wrong type, an argv outside bin/, an unsigned release —
@@ -114,6 +122,14 @@ _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.
 sup = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sup)
 
+# the machine's fixed signing identity (issue #3433): the core signs a staged
+# ccquota with it (#3670); a tree without the sibling signs nothing
+codesign = None
+if os.path.exists(os.path.join(HERE, "fleet_node_codesign.py")):
+    _cspec = importlib.util.spec_from_file_location("fleet_node_codesign", os.path.join(HERE, "fleet_node_codesign.py"))
+    codesign = importlib.util.module_from_spec(_cspec)
+    _cspec.loader.exec_module(codesign)
+
 # the supervisor's word, so a Linux sandbox with a fake launchctl is a Mac to both
 MAC = sup.MAC
 DARWIN = sys.platform == "darwin"   # the kernel's: which peer-credential call answers
@@ -125,6 +141,12 @@ MACHINE_ACTIONS = ("start", "stop", "held", "hup")
 REPORTS = ("table", "fda", "tenants", "lanes")
 MACHINE = "@machine"     # the book's login for a machine job: no login is spelled so
 PROFILES = ("spotlight-off",)
+# the seated updater's root half (#3670): `fleet-node-update.py root <step>`,
+# step -> its time limit
+UPDATE_STEPS = {"outside": 900, "credsep": 400, "prune": 600}
+TOOLS = ("claude", "codex", "tmux")
+TOOL_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EXEC_TIMEOUT = 1800
 OUT_MAX = 65536
 CORE_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || '
@@ -357,32 +379,47 @@ def read_pub(path):
     return raw if kind == "ed25519" and len(raw) == 32 else None
 
 
-def verify_release(paths, d, sha):
-    """None when <d> is release <sha> exactly as its signed manifest says, by the
-    core's own key; else why not. Every listed file present with its size and
-    digest, every artifact present likewise, nothing unlisted but the updater's
-    own products: bin/ccquota (the release's ccquota artifact, or on macOS that
-    artifact re-signed with the machine's identity — codesign must accept it) and
-    tools/ links into <root>/tools/<tool>/<sha256>/ (an artifact's digest) whose
-    bytes are an artifact of the release."""
+def signed_manifest(paths, d, sha):
+    """(manifest, None) when <d>/.release/manifest.json is release <sha>'s, signed
+    by the core's own key; else (None, why)."""
     pub = read_pub(paths.pubkey)
     if pub is None:
-        return "no release key at %s" % paths.pubkey
+        return None, "no release key at %s" % paths.pubkey
     try:
         with open(os.path.join(d, ".release", "manifest.json"), "rb") as f:
             mb = f.read()
         with open(os.path.join(d, ".release", "manifest.sig")) as f:
             sig = base64.b64decode(f.read().strip())
     except (OSError, ValueError, TypeError) as e:
-        return "no signed manifest: %s" % e
+        return None, "no signed manifest: %s" % e
     if not fleet_ed25519.verify(pub, mb, sig):
-        return "the signature is not the machine's release key's"
+        return None, "the signature is not the machine's release key's"
     try:
         m = json.loads(mb.decode("utf-8"))
     except ValueError:
-        return "manifest is not JSON"
-    if m.get("schema") != 1 or m.get("sha") != sha:
-        return "manifest names %s, not %s" % (m.get("sha"), sha)
+        return None, "manifest is not JSON"
+    if not isinstance(m, dict) or m.get("schema") != 1 or m.get("sha") != sha:
+        return None, "manifest names %s, not %s" % (m.get("sha") if isinstance(m, dict) else None, sha)
+    return m, None
+
+
+def identity(paths):
+    """The machine's fixed signing identity (issue #3433), or None: signing off."""
+    return codesign.Identity(paths.state) if codesign and codesign.enabled() else None
+
+
+def verify_release(paths, d, sha):
+    """None when <d> is release <sha> exactly as its signed manifest says, by the
+    core's own key; else why not. Every listed file present with its size and
+    digest, every artifact present likewise, nothing unlisted but the updater's
+    own products: bin/ccquota (the release's ccquota artifact, or that artifact
+    re-signed with the machine's identity — the signature must satisfy the
+    identity's requirement, #3670: the identity's key is root's, so only the core
+    or a root updater made it) and tools/ links into <root>/tools/<tool>/<sha256>/
+    (an artifact's digest) whose bytes are an artifact of the release."""
+    m, why = signed_manifest(paths, d, sha)
+    if why:
+        return why
     listed = set()
     for fl in m.get("files") or []:
         p = str(fl.get("path", ""))
@@ -430,16 +467,126 @@ def verify_release(paths, d, sha):
                     return "%s: not a link to a release artifact in %s" % (rel, tools)
                 continue
             if rel == "bin/ccquota":
-                h = sha256_file(full)
-                if h in digests and any(k.startswith("ccquota-") for k, a in arts.items() if a.get("sha256") == h):
+                if os.path.islink(full) or not os.path.isfile(full):
+                    return "bin/ccquota: not a regular file"
+                if ccquota_artifact(arts, sha256_file(full)):
                     continue
-                if DARWIN and subprocess.call(["/usr/bin/codesign", "--verify", "--strict", full],
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+                ident = identity(paths)
+                if ident and ident.info() and ident.satisfies(full)[0]:
                     continue
-                return "bin/ccquota: not the release's ccquota artifact"
+                return "bin/ccquota: not the release's ccquota artifact, nor signed with the machine's identity"
             if rel in STAGE_EXTRAS:
+                if os.path.islink(full) or not os.path.isfile(full):
+                    return "%s: not a regular file" % rel
                 continue
             return "%s: not in the signed manifest" % rel
+    return None
+
+
+def ccquota_artifact(arts, h):
+    """The name of the release's ccquota artifact with digest <h>, or None."""
+    for k, a in sorted(arts.items()):
+        if k.startswith("ccquota-") and a.get("sha256") == h:
+            return k
+    return None
+
+
+def private_copy(src, dst):
+    """<src> (the seat's staging, #3670) copied to <dst> as root's own: new inodes
+    — no file the seat still holds open is ever the one checked — links kept as
+    links (verify judges them), a FIFO / device refused, every mode reset (no
+    setuid, no group or other write)."""
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(src, dst, symlinks=True)
+    for top, dirs, files in os.walk(dst):
+        for n in [top] + [os.path.join(top, x) for x in dirs + files]:
+            st = os.lstat(n)
+            if stat.S_ISLNK(st.st_mode):
+                if os.geteuid() == 0:
+                    os.lchown(n, 0, 0)
+                continue
+            if os.geteuid() == 0:
+                os.chown(n, 0, 0)
+            if stat.S_ISDIR(st.st_mode):
+                os.chmod(n, 0o755)
+            else:
+                os.chmod(n, 0o755 if st.st_mode & 0o111 else 0o644)
+
+
+def install_tools(paths, d, sha):
+    """The pinned tools a seated updater staged (#3670): it cannot write the root
+    cache, so its .release/staged.json names each `tools/bin` link's target
+    `<tool>/<digest>/<file>` and the artifact that fills it. Each is checked
+    against the signed manifest — <digest> an artifact's, the tool's own file
+    exactly that artifact, a helper any artifact of the release — and copied into
+    <root>/tools/ from <d>'s verified artifacts. None, or why not."""
+    m, why = signed_manifest(paths, d, sha)
+    if why:
+        return why
+    sj = os.path.join(d, ".release", "staged.json")
+    if not os.path.lexists(sj):
+        return None
+    if os.path.islink(sj) or not os.path.isfile(sj):
+        return ".release/staged.json: not a regular file"
+    try:
+        with open(sj) as f:
+            want = (json.load(f) or {}).get("tools") or {}
+    except (OSError, ValueError, AttributeError):
+        return ".release/staged.json: not JSON"
+    if not isinstance(want, dict):
+        return ".release/staged.json: tools is not a map"
+    arts = {str(a.get("name")): a for a in m.get("artifacts") or [] if isinstance(a, dict)}
+    digests = set(a.get("sha256") for a in arts.values())
+    for key, name in sorted(want.items()):
+        parts = str(key).split("/")
+        if len(parts) != 3 or parts[0] not in TOOLS or not SHA256_RE.match(parts[1]) \
+                or not TOOL_FILE_RE.match(parts[2]):
+            return "staged tool %r" % key
+        tool, h, fname = parts
+        a = arts.get(str(name))
+        if a is None or h not in digests:
+            return "staged tool %s: %r is not an artifact of the release" % (key, name)
+        if fname == tool and a.get("sha256") != h:
+            return "staged tool %s: %s is not that digest" % (key, name)
+        src = os.path.join(d, ".release", "artifacts", str(name))
+        if os.path.islink(src) or not os.path.isfile(src) or sha256_file(src) != a.get("sha256"):
+            return "staged tool %s: artifact %s does not match the manifest" % (key, name)
+        tdir = os.path.join(paths.root, "tools", tool, h)
+        dst = os.path.join(tdir, fname)
+        if os.path.isfile(dst) and not os.path.islink(dst) and sha256_file(dst) == a.get("sha256"):
+            continue
+        os.makedirs(tdir, 0o755, exist_ok=True)
+        tmp = "%s.tmp-core-%d" % (dst, os.getpid())
+        shutil.copyfile(src, tmp)
+        os.chmod(tmp, 0o755)
+        os.rename(tmp, dst)
+    return None
+
+
+def sign_ccquota(paths, d, sha, log):
+    """The staged ccquota signed with the machine's ONE identity (issue #3433), as
+    the stage did before the updater left root (#3670) — only the artifact's own
+    bytes are signed. None, or why the switch is refused (a signature that does not
+    satisfy the identity); no identity can be made ⇒ ad-hoc, as before."""
+    ident = identity(paths)
+    cq = os.path.join(d, "bin", "ccquota")
+    if not ident or not os.path.isfile(cq):
+        return None
+    m, why = signed_manifest(paths, d, sha)
+    if why:
+        return why
+    arts = {str(a.get("name")): a for a in m.get("artifacts") or [] if isinstance(a, dict)}
+    if not ccquota_artifact(arts, sha256_file(cq)):
+        return None     # signed already (a root updater's stage)
+    try:
+        info = ident.ensure()
+    except (codesign.CodesignError, OSError) as e:
+        log("codesign: no identity — %s; ccquota switched ad-hoc (its TCC grant will not survive)" % e)
+        return None
+    try:
+        ident.sign(cq, info)
+    except (codesign.CodesignError, OSError) as e:
+        return "codesign: %s" % e
     return None
 
 
@@ -816,17 +963,29 @@ class Core(object):
             raise Refused(None, "sha %r is not a commit sha" % sha)
         staged = os.path.join(self.p.staging, sha)
         dest = self.p.rel(sha)
-        src = staged if os.path.isdir(staged) and not os.path.islink(staged) else dest
-        if not os.path.isdir(src) or os.path.islink(src):
-            raise Refused(None, "no staged release %s" % sha[:12])
-        why = verify_release(self.p, src, sha)
-        if why:
-            raise Refused(None, "%s: %s — current stays; the staged copy is kept as evidence" % (sha[:12], why))
-        if src == staged:
+        if os.path.isdir(staged) and not os.path.islink(staged):
             if os.path.lexists(dest):
                 raise Refused(None, "%s already exists beside the staged copy" % dest)
-            chown_root(staged)
-            os.rename(staged, dest)
+            # the seat's staging is never the copy checked: root's own, first (#3670)
+            inc = os.path.join(self.p.root, ".incoming-%s" % sha)
+            try:
+                private_copy(staged, inc)
+            except (OSError, shutil.Error) as e:
+                shutil.rmtree(inc, ignore_errors=True)
+                raise Refused(None, "%s: cannot copy the staged release: %s — current stays" % (sha[:12], e))
+            why = install_tools(self.p, inc, sha) or verify_release(self.p, inc, sha) or \
+                sign_ccquota(self.p, inc, sha, lambda m: self.log(self.tl.uid, "switch", a, m))
+            if why:
+                shutil.rmtree(inc, ignore_errors=True)
+                raise Refused(None, "%s: %s — current stays; the staged copy is kept as evidence" % (sha[:12], why))
+            os.rename(inc, dest)
+            shutil.rmtree(staged, ignore_errors=True)
+        else:
+            if not os.path.isdir(dest) or os.path.islink(dest):
+                raise Refused(None, "no staged release %s" % sha[:12])
+            why = verify_release(self.p, dest, sha)
+            if why:
+                raise Refused(None, "%s: %s — current stays" % (sha[:12], why))
         old = link_target(self.p.current)
         if old and old != sha and os.path.isdir(self.p.rel(old)):
             swap_link(self.p.prev, self.p.rel(old))
@@ -846,6 +1005,17 @@ class Core(object):
             swap_link(self.p.prev, self.p.rel(cur))
         self.maybe_restart()
         return {"ok": True, "from": cur, "to": prev}
+
+    def op_update(self, conn, a):
+        """The seated updater's root half (#3670): <current>/bin/fleet-node-update.py
+        root <step> as root — the cache, the admin agents' ccquota, the account
+        links (outside), credsep's code copy (credsep), the retired releases
+        (prune). A step NAME, never an argv; the code is the release the core
+        itself switched to."""
+        step = a["step"]
+        if step not in UPDATE_STEPS:
+            raise Refused(None, "step %r — one of %s" % (step, ", ".join(sorted(UPDATE_STEPS))))
+        return self.root_script("fleet-node-update.py", ["root", step], {}, UPDATE_STEPS[step])
 
     def maybe_restart(self):
         """A switch that brought new core code: exit once the reply is out, and

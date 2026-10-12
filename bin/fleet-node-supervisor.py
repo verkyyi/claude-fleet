@@ -389,16 +389,26 @@ def update_now_path(paths):
     return os.path.join(paths.state, "update-now")
 
 
+# the update-now file a seated daemon already took (#3670): <state> is root's, so
+# the seat cannot unlink it — the same file never wakes the update twice
+_UPDATE_NOW_TAKEN = [None]
+
+
+def _update_now_key(st):
+    return (st.st_ino, st.st_mtime, st.st_size)
+
+
 def update_now_due(paths):
     """True when a pushed release asked for the update now (issue #3146): the
     machine's node program (`ccquota agent --machine`, root) wrote
     <state>/update-now on the hub's `release {sha}`. Only a regular file root's
-    (or this daemon's own user's) counts."""
+    (or this daemon's own user's) counts, and not one already taken."""
     try:
         st = os.lstat(update_now_path(paths))
     except OSError:
         return False
-    return stat.S_ISREG(st.st_mode) and st.st_uid in (0, os.geteuid())
+    return stat.S_ISREG(st.st_mode) and st.st_uid in (0, os.geteuid()) \
+        and _update_now_key(st) != _UPDATE_NOW_TAKEN[0]
 
 
 def update_now_take(paths):
@@ -413,6 +423,7 @@ def update_now_take(paths):
     except OSError:
         sha = ""
     try:
+        _UPDATE_NOW_TAKEN[0] = _update_now_key(os.lstat(p))
         os.unlink(p)
     except OSError:
         pass
@@ -659,7 +670,9 @@ def default_table(paths):
             # release, or none. A switch ends in a restart request (below). A new
             # stable the hub pushes (issue #3146: the node program writes
             # <state>/update-now) runs it at once — task_due; the clock stays.
-            {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800,
+            # "seat": a seated daemon runs it AS ITSELF (#3670) — it downloads and
+            # checks into <state>/staging and asks the root core to switch
+            {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800, "seat": True,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-node-update.py"), "tick"]},
         ],
         # None = the runtime's launchd templates (account_units); a table file may
@@ -1812,6 +1825,8 @@ class Supervisor(object):
             op, args, follow = "run-as", {"login": ent["account"], "job": job}, True
         elif ent.get("core"):
             op, args, follow = ent["core"]["op"], ent["core"]["args"], False
+        elif self.seated and ent.get("seat"):
+            return None     # the seat's own job (#3670): it runs as the seat, asking the core itself
         elif self.seated:
             # a machine job by its name in the core's table (#3668): root's, so the
             # seated daemon only asks — start, and this child stands in for it
@@ -1832,7 +1847,7 @@ class Supervisor(object):
         if cc:
             return subprocess.Popen(cc, stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                     env=self.child_env(None), start_new_session=True, close_fds=True)
-        if self.seated:
+        if self.seated and not (ent.get("seat") and not ent.get("account")):
             # nothing here may be done as the seat: no core, no road (#3668)
             raise OSError(errno.EPERM, "seated daemon: the root core does not answer — %s waits for it" % ent["name"])
         if ent.get("account"):
@@ -2825,7 +2840,9 @@ class Supervisor(object):
         if runtime_sha(self.p) == mine:
             # done (this process is the new one), or stale (nothing moved): never a loop
             try:
-                os.remove(req)
+                # a seated machine's is root's link into node/ (#3670): the request
+                # itself is the file it names, the seat's own
+                os.remove(os.path.join(self.p.state, os.readlink(req)) if os.path.islink(req) else req)
             except OSError:
                 # the seat may not remove root's file (#3668): said once, then quiet
                 if self.restart_seen == to:
@@ -6030,6 +6047,35 @@ def seat_share(paths, seat=None):
             _seat_dir(os.path.join(d, sub), 0, gid, 0o770)
 
 
+# <state> files the seat writes, each a link into <state>/node (#3668, #3670)
+SEAT_LINKS = ("state.json", "update.json", "update-restart.json", "fetch.progress")
+
+
+def seat_hub_url(paths):
+    """<state>/hub-url: the hub's address out of machine.env (root 0600), for the
+    seated updater (#3670) — an address, root's 0644, nothing else of the file."""
+    url = ""
+    try:
+        with open(os.path.join(paths.state, "machine.env")) as f:
+            for line in f.read().splitlines():
+                if line.startswith("CCQUOTA_HUB_URL="):
+                    url = line.split("=", 1)[1].strip().strip('"\'')
+    except OSError:
+        return
+    if not re.match(r"^https?://[A-Za-z0-9._:/@%-]+$", url):
+        return
+    dst = os.path.join(paths.state, "hub-url")
+    tmp = dst + ".seat-tmp"
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(url + "\n")
+    os.rename(tmp, dst)
+
+
 def seat_layout(paths, seat):
     """What the seat may write, made by root (idempotent): <state>/node with
     state.json in it and <state>/state.json a link to it, <state>/locks (its lock
@@ -6038,18 +6084,23 @@ def seat_layout(paths, seat):
     uid, gid = seat
     own = os.path.join(paths.state, "node")
     _seat_dir(own, 0, gid, 0o770)
-    sf = paths.state_file
-    if not os.path.islink(sf):
-        dst = os.path.join(own, "state.json")
+    # what the daemon and its updater (#3670) write in <state>: each a link into node/
+    for n in SEAT_LINKS:
+        sf = os.path.join(paths.state, n)
+        if os.path.islink(sf):
+            continue
         if os.path.exists(sf):
-            os.rename(sf, dst)
+            os.rename(sf, os.path.join(own, n))
         tmp = sf + ".seat-link"
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        os.symlink(os.path.join("node", "state.json"), tmp)
+        os.symlink(os.path.join("node", n), tmp)
         os.rename(tmp, sf)
+    # the seated updater's staging (#3670): the core copies a release out of it
+    _seat_dir(os.path.join(paths.state, "staging"), 0, gid, 0o770)
+    seat_hub_url(paths)
     _seat_dir(paths.locks, 0, gid, 0o770)
     for n in os.listdir(paths.locks):
         f = os.path.join(paths.locks, n)
