@@ -908,3 +908,4 @@ FLEET_DOOR_NAMESPACE               env handoff: the namespace of the user pods' 
 FLEET_DOOR_TEST_TARGETS            test seam: u-<nonce>=127.0.0.1:<port>,… — the door-wrong-pod drill's stand-in pods, only under FLEET_NODE_TEST through FLEET_ENTRY_TEST_SETENV (#3549)
 FLEET_TICKET_BACKEND               handoff: fleet-ticket.sh comment → fleet-comment.sh, the id's backend (hub|gh) so the post goes to the same home (#3595)
 FLEET_TICKET_BY                    seam: who a hub ticket claim names (fleet_ticket_claimant, default <login>@<host>) — a selftest's second machine (#3598)
+FLEET_DRAFT_GATE                   knob: 0 lets fleet-pr-merge.sh merge a draft-only ticket's PR without its approval — the operator's hatch (fleet-draft.sh gate, #3715)
