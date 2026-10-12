@@ -5,11 +5,29 @@
 
 ## 用
 
+对话服务是这个登录的**登记后台服务**（docs/MANAGED-NODE.md §10），只听一个 unix socket
+`$FLEET_CONF_DIR/webchat/chat.sock`（socket 0600，目录 0700）——不开任何 TCP 端口，不发 cookie、
+不要登录链接、不写 `admin.token`。能连上这个 socket 的只有本登录；到达它的是节点程序的转发
+（EPIC #3642 C2：入口认人、找家、经控制链路转发，`X-Fleet-Person` 由节点验签，这里只记进日志）。
+
 ```sh
+bin/fleet-webchat.sh enable           # fleet service add webchat --path <状态目录> -- fleet-webchat.sh serve
+bin/fleet-webchat.sh serve            # 服务跑的就是它：前台、只听 socket（第一次装好锁定版本的 Agent SDK）
+bin/fleet-webchat.sh status           # on · socket … · pid，或 off
+bin/fleet-webchat.sh disable          # fleet service rm webchat
+```
+
+### 本机直连（开发 / 排障用，默认关）
+
+原来的 127.0.0.1 + 一次性链接模式还在，但**默认关**（#3642 D3）：`FLEET_WEBCHAT_LOCAL=1` 才能用下面几条，
+不设时它们退 2，`server.mjs` 不带 `--socket` 也不起。
+
+```sh
+export FLEET_WEBCHAT_LOCAL=1
 bin/fleet-webchat.sh start            # 第一次会把锁定版本的 Agent SDK 装进 $FLEET_CONF_DIR/webchat/deps
 bin/fleet-webchat.sh link             # 一次性登录链接（10 分钟），经 fleet-open 开到你自己电脑的浏览器
 bin/fleet-webchat.sh link --tailnet   # 给手机：https://<本机 tailnet 名>:18961/login?c=…（只在 tailnet 里能开）
-bin/fleet-webchat.sh status | stop
+bin/fleet-webchat.sh stop
 ```
 
 `--tailnet` 需要 `tailscale serve`。这个登录不是 tailscale 的 operator 时，由管理员跑一次
@@ -93,10 +111,20 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 记到这个登录对应的人名下（`POST /v1/node/usage`），额度满了切号 —— 和 `bin/fleet-claude.sh` 一模一样。
 代理关着（`fleet-session-cred.sh on` ≠ 0，或 mint 返回 3/4）时，按 CLI 的老路，用这个登录本身的身份。
 
+**额度**：人的额度（`fleet.person_budget`）到顶时，凭据代理把这一轮拒成 403 `person_budget_exceeded`
+（带入口给的 `reset_at`）。Claude Code 会把它当成一句「API Error: 403 …」交回来；服务认出它，流里只发一行
+`{t:"error", code:"budget", msg, until?}`，原话不上页面；`GET /api/conversation` 带
+`budget: {blocked, msg?, until?}`，记在 `budget.json`（重启也在），一轮真走通才放开。
+
 凭据只在子进程的环境变量里：不进响应、不进 `server.log`、不进任何文件，也不出现在 argv 里。
 另外，响应和日志写出去前都会过一遍 `redact()`，`fcp1.` / `sk-ant-` / `Bearer …` 形状的串会被替换掉。
 
 ## 只有本人能进
+
+socket 模式（默认）：门就是 socket 本身——0600、在本登录 0700 的状态目录里，同机别的登录连不上；
+旧 socket 先删再建（umask 0177 下诞生），已有活的服务在答就不起第二个（exit 3）。BREAK-IT `chat-socket-other-login`。
+
+本机直连模式（`FLEET_WEBCHAT_LOCAL=1`）：
 
 - 只绑 `127.0.0.1`，没有改它的选项。
 - 进门要一次性链接，由 `fleet-webchat.sh link` 生成：它要出示 `admin.token`，这个文件是 0600，放在本登录 0700 的状态目录里，
@@ -110,6 +138,10 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 只绑 127.0.0.1、没有链接的人被拒、白名单由服务端执行、这一轮的请求带着发下来的会话凭据到了代理（池子在代理那里计量）、
 sid 用完被 revoke、凭据和 admin token 不出现在任何响应、日志或文件里、重启后还是同一条对话、停止键；
 以及页面本身（G）：没有 cookie 拿不到页面和资源、CSP 只许同源、gzip、`dist/` 以外的文件出不去、提问带着它卡住的那一步。
+A–G 在 `FLEET_WEBCHAT_LOCAL=1` 下跑。H：socket 0600 / 目录 0700（放一个 0666 的旧 socket 也会被换掉），能免密
+`sudo -u nobody` 的机器上另一个 uid 连不上（放开时它连得上，作对照），没有 TCP 监听、没有 `admin.token`，
+不带 `--socket` 也没开本机模式就不起。I：代理的预算 403 → 一行 `code:"budget"` + `until`，`/api/conversation` 说被挡，
+走通一轮放开（BREAK-IT `chat-budget-bypass`）。`--only=socket|budget|local` 只跑其中几段（演练用）。
 
 ## 不在这一版
 

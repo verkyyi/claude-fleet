@@ -2,14 +2,28 @@
 // server.mjs — talk to a Claude session from a browser, the smallest version
 // (issue #3567). Run by bin/fleet-webchat.sh as THIS login, never anyone else's.
 //
-//   * Binds 127.0.0.1 only — there is no option to widen it (CLAUDE.md: a temp
-//     server binds loopback). The person reaches it over their own ssh forward
-//     (fleet-open) or the tailnet name they put in front of it (tailscale serve).
-//   * Only this login's person comes in: a ONE-TIME login link (10 min) minted by
-//     `fleet-webchat.sh link`, which proves itself with admin.token — a 0600 file
-//     in this login's 0700 state dir, so another login on the machine cannot mint
-//     one. The link sets an HttpOnly SameSite=Strict cookie; everything else
-//     without it is 403. A Host the server does not know is refused (rebinding).
+//   * Two ways in, one at a time (issue #3643, EPIC #3642 C1):
+//     - `--socket` (the default road — `fleet-webchat.sh serve`, a registered
+//       service): listens ONLY on <state>/chat.sock — the socket 0600 in the
+//       login's 0700 state dir, so no other login on the machine can connect —
+//       and trusts what comes in on it: no cookie, no login link, no admin.token,
+//       no TCP port at all. What reaches it is the node program's relay (C2),
+//       which checks the person's signed X-Fleet-Person before it dials; here
+//       that header is read for the log only, never as a credential.
+//     - the local mode (FLEET_WEBCHAT_LOCAL=1 only — off by default, D3: a
+//       developer's / a debugger's road): 127.0.0.1 only, no option to widen it
+//       (CLAUDE.md: a temp server binds loopback), reached over the person's own
+//       ssh forward (fleet-open) or the tailnet name in front of it. Only this
+//       login's person comes in: a ONE-TIME login link (10 min) minted by
+//       `fleet-webchat.sh link`, which proves itself with admin.token — a 0600
+//       file in the 0700 state dir. The link sets an HttpOnly SameSite=Strict
+//       cookie; everything else without it is 403. A Host the server does not
+//       know is refused (rebinding).
+//   * The pool's per-person budget (fleet.person_budget): the credential proxy
+//     refuses a turn 403 person_budget_exceeded; the page gets that as ONE
+//     stream line {t:"error", code:"budget", msg, until?} — never the raw API
+//     error as the assistant's words — and /api/conversation says `budget`
+//     (blocked or not) until a turn goes through again.
 //   * Each turn runs the Agent SDK's query() on this login's own `claude`, with a
 //     SESSION credential minted for that turn by bin/fleet-session-cred.sh — the
 //     pool's credential proxy picks the account and meters the usage, the same
@@ -27,11 +41,13 @@
 import http from "node:http";
 import { gzipSync } from "node:zlib";
 import { execFile } from "node:child_process";
-import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync } from "node:fs";
+import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync, unlinkSync } from "node:fs";
 import { join, dirname, extname, normalize, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
-  hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed } from "./lib.mjs";
+  hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
+  budgetRefusal, personName } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -39,6 +55,12 @@ const STATE = E.FLEET_WEBCHAT_STATE;
 if (!STATE) { console.error("fleet-webchat: FLEET_WEBCHAT_STATE is not set"); process.exit(2); }
 mkdirSync(STATE, { recursive: true, mode: 0o700 });
 chmodSync(STATE, 0o700);
+const SOCKET = process.argv.includes("--socket");
+const SOCK = join(STATE, "chat.sock");
+if (!SOCKET && E.FLEET_WEBCHAT_LOCAL !== "1") {
+  console.error("fleet-webchat: the local mode (127.0.0.1 + a login link) is off — FLEET_WEBCHAT_LOCAL=1 turns it on; the service runs `server.mjs --socket`");
+  process.exit(2);
+}
 const BIND = "127.0.0.1";                              // never configurable
 const HOSTS = (E.FLEET_WEBCHAT_HOSTS || "").split(",").map((s) => s.trim()).filter(Boolean);
 const CWD = E.FLEET_WEBCHAT_CWD || E.HOME;
@@ -79,15 +101,30 @@ function sendFile(req, res, f, cache) {
 }
 
 // ---- the state dir: admin token, cookies (hashed), log ----------------------
-const ADMIN = newSecret();
-writeFileSync(join(STATE, "admin.token"), ADMIN + "\n", { mode: 0o600 });
-chmodSync(join(STATE, "admin.token"), 0o600);
+// the socket mode has no admin token and writes none: nobody mints a link there
+const ADMIN = SOCKET ? "" : newSecret();
+if (!SOCKET) {
+  writeFileSync(join(STATE, "admin.token"), ADMIN + "\n", { mode: 0o600 });
+  chmodSync(join(STATE, "admin.token"), 0o600);
+}
 const COOKIES_FILE = join(STATE, "cookies.json");
 let cookies = {};                                        // sha256(cookie) → expiry ms
 try { cookies = JSON.parse(readFileSync(COOKIES_FILE, "utf8")) || {}; } catch { cookies = {}; }
 const saveCookies = () => writeFileSync(COOKIES_FILE, JSON.stringify(cookies), { mode: 0o600 });
 const codes = new Map();                                 // sha256(code) → expiry ms (memory only)
 const liveCreds = new Set();                             // what redact() must also catch
+const BUDGET_FILE = join(STATE, "budget.json");
+let budget = null;                                       // the last refusal: { msg, until, at } — cleared by a turn that goes through
+try { budget = JSON.parse(readFileSync(BUDGET_FILE, "utf8")) || null; } catch { budget = null; }
+function setBudget(b) {
+  budget = b;
+  try { if (b) writeFileSync(BUDGET_FILE, JSON.stringify(b), { mode: 0o600 }); else if (existsSync(BUDGET_FILE)) writeFileSync(BUDGET_FILE, "null", { mode: 0o600 }); } catch { /* memory still holds it */ }
+}
+function budgetView() {
+  if (!budget) return { blocked: false };
+  if (budget.until && Date.parse(budget.until) <= Date.now()) return { blocked: false };
+  return { blocked: true, msg: budget.msg, ...(budget.until ? { until: budget.until } : {}) };
+}
 
 function log(ev, f = {}) {
   const line = redact(JSON.stringify({ ts: new Date().toISOString(), ev, ...f }), [...liveCreds, ADMIN]);
@@ -288,7 +325,7 @@ function askEvent(rid, a) {
     : { t: "ask", rid, ...id, kind: "permission", tool: a.name, summary: toolSummary(a.name, a.input) };
 }
 
-async function turn(req, res) {
+async function turn(req, res, person) {
   const body = await readJson(req);
   const text = String(body.text || "").trim();
   const model = body.model == null || body.model === "" ? DEFAULT_MODEL : String(body.model);
@@ -305,6 +342,7 @@ async function turn(req, res) {
   // a page that goes away (a phone in a pocket) does not stop the turn — only the stop key does
   res.on("close", () => live?.listeners.delete(res));
   emitAll({ t: "turn", id: tid, model });
+  log("turn", { person, model });
 
   const canUseTool = (name, input, opts = {}) => new Promise((resolve) => {
     const rid = `r${++ridSeq}-${newSecret(6)}`;
@@ -324,6 +362,12 @@ async function turn(req, res) {
       if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") { sawDelta = true; emitAll({ t: "text", d: ev.delta.text }); }
       return;
     }
+    if (m.type === "assistant" || m.type === "result") {
+      // the credential proxy's 403 comes back as Claude Code's own "API Error: 403 …"
+      // line — never the assistant's words on the page; the turn ends on it
+      const b = budgetRefusal(m.type === "result" ? [m.result, m.errors] : m.message?.content);
+      if (b) throw Object.assign(new Error(b.msg), { budget: b });
+    }
     if (m.type === "assistant") {
       // its text already went out as deltas when the partial stream carried them
       for (const b of blocks(m.message?.content)) {
@@ -341,6 +385,7 @@ async function turn(req, res) {
     }
     if (m.type === "result") {
       if (m.subtype !== "success" && TOO_LONG.test(JSON.stringify(m.errors || m.result || ""))) throw Object.assign(new Error("too long"), { tooLong: true });
+      if (m.subtype === "success" && !m.is_error && budget) setBudget(null);
       emitAll({ t: "done", subtype: m.subtype, ms: m.duration_ms });
     }
   };
@@ -362,8 +407,15 @@ async function turn(req, res) {
       }
     }
   } catch (e) {
-    emitAll(live.ac.signal.aborted ? { t: "stopped" } : { t: "error", msg: String(e?.message || e).slice(0, 500) });
-    log("turn_error", { msg: String(e?.message || e).slice(0, 300) });
+    const b = e?.budget || budgetRefusal([String(e?.message || "")]);
+    if (b && !live.ac.signal.aborted) {
+      setBudget({ msg: b.msg, ...(b.until ? { until: b.until } : {}), at: new Date().toISOString() });
+      emitAll({ t: "error", code: "budget", msg: b.msg, ...(b.until ? { until: b.until } : {}) });
+      log("budget", { person, until: b.until || "" });
+    } else {
+      emitAll(live.ac.signal.aborted ? { t: "stopped" } : { t: "error", msg: String(e?.message || e).slice(0, 500) });
+      log("turn_error", { msg: String(e?.message || e).slice(0, 300) });
+    }
   } finally {
     for (const a of [...live.asks.values()]) a.done({ behavior: "deny", message: "turn ended" });
     const ls = live.listeners;
@@ -391,12 +443,17 @@ function answer(body) {
 
 // ---- routes -------------------------------------------------------------------
 async function handle(req, res) {
-  const port = server.address().port;
-  if (!hostAllowed(req.headers.host, port, HOSTS)) return send(res, 421, { error: "unknown host" });
-  const u = new URL(req.url, `http://${BIND}:${port}`);
+  const port = SOCKET ? 0 : server.address().port;
+  if (!SOCKET && !hostAllowed(req.headers.host, port, HOSTS)) return send(res, 421, { error: "unknown host" });
+  const u = new URL(req.url, `http://${BIND}:${port || 80}`);
   const p = u.pathname;
+  // who it is, for the log only: the relay (C2) verified it before it dialled
+  const person = SOCKET ? personName(req.headers["x-fleet-person"]) : "";
 
-  if (p === "/api/link" && req.method === "POST") {
+  if (SOCKET) {
+    // the socket is the gate: 0600 in a 0700 dir — whoever reached it is this login
+    if (p === "/healthz") return send(res, 200, { ok: true });
+  } else if (p === "/api/link" && req.method === "POST") {
     if (!sameSecret(req.headers["x-fleet-webchat-admin"], ADMIN)) { log("link_refused"); return send(res, 403, { error: "forbidden" }); }
     const code = newSecret(24);
     codes.set(sha(code), Date.now() + CODE_TTL_MS);
@@ -417,9 +474,9 @@ async function handle(req, res) {
     return send(res, 302, "", "text/plain", { Location: "/",
       "Set-Cookie": `${COOKIE}=${c}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${COOKIE_TTL_S}${secure}` });
   }
-  if (p === "/healthz") return send(res, 200, { ok: true });
+  if (!SOCKET && p === "/healthz") return send(res, 200, { ok: true });
 
-  if (!authed(req)) {
+  if (!SOCKET && !authed(req)) {
     log("refused", { path: p });
     return p === "/" ? send(res, 403, DENY_PAGE, "text/html; charset=utf-8") : send(res, 403, { error: "forbidden" });
   }
@@ -439,9 +496,9 @@ async function handle(req, res) {
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",
       asks: live ? [...live.asks.entries()].map(([rid, a]) => askEvent(rid, a)) : [],
-      models: MODELS, default: DEFAULT_MODEL, items: items.slice(-600) });
+      models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600) });
   }
-  if (p === "/api/turn" && req.method === "POST") return turn(req, res);
+  if (p === "/api/turn" && req.method === "POST") return turn(req, res, person);
   if (p === "/api/stop" && req.method === "POST") {
     const ok = !!live && String((await readJson(req)).turn || "") === live.tid;
     if (ok) live.ac.abort();
@@ -460,11 +517,42 @@ const server = http.createServer((req, res) => {
     if (!res.headersSent) send(res, 500, { error: "internal error" }); else res.end();
   });
 });
-server.listen(Number(E.FLEET_WEBCHAT_PORT || 0), BIND, () => {
-  const { port } = server.address();
-  writeFileSync(join(STATE, "port"), `${port}\n`);
-  writeFileSync(join(STATE, "pid"), `${process.pid}\n`);
-  log("listen", { bind: BIND, port });
-  console.log(`fleet-webchat: listening on http://${BIND}:${port}/`);
+// A socket left by a server that is gone is replaced; one a live server answers
+// on is not — two servers would share one conversation.json.
+function sockLive() {
+  return new Promise((resolve) => {
+    const c = net.connect(SOCK);
+    c.on("connect", () => { c.destroy(); resolve(true); });
+    c.on("error", () => resolve(false));
+  });
+}
+if (SOCKET) {
+  if (existsSync(SOCK)) {
+    if (await sockLive()) { console.error(`fleet-webchat: another server already answers on ${SOCK}`); process.exit(3); }
+    unlinkSync(SOCK);
+  }
+  // born 0600: no window in which another login could connect
+  const old = process.umask(0o177);
+  server.listen(SOCK, () => {
+    process.umask(old);
+    chmodSync(SOCK, 0o600);
+    try { unlinkSync(join(STATE, "port")); } catch { /* none */ }
+    writeFileSync(join(STATE, "pid"), `${process.pid}\n`);
+    log("listen", { socket: SOCK });
+    console.log(`fleet-webchat: listening on ${SOCK}`);
+  });
+} else {
+  server.listen(Number(E.FLEET_WEBCHAT_PORT || 0), BIND, () => {
+    const { port } = server.address();
+    writeFileSync(join(STATE, "port"), `${port}\n`);
+    writeFileSync(join(STATE, "pid"), `${process.pid}\n`);
+    log("listen", { bind: BIND, port });
+    console.log(`fleet-webchat: listening on http://${BIND}:${port}/`);
+  });
+}
+for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => {
+  log("stop");
+  server.close();
+  if (SOCKET) { try { unlinkSync(SOCK); } catch { /* gone */ } }
+  process.exit(0);
 });
-for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => { log("stop"); server.close(); process.exit(0); });

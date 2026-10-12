@@ -440,6 +440,13 @@ class Budget:
                 return self.state.get("message") or "已达个人额度（%s）" % BUDGET_CODE
         return ""
 
+    def reset_at(self):
+        """-> the hub's reset_at (ISO time) for the window the person is over, or "" —
+        handed on in the 403 so a client can say until when (issue #3643)."""
+        with self.lock:
+            r = self.state.get("reset_at")
+            return r if isinstance(r, str) else ""
+
     def miss(self, why):
         with self.lock:
             self.misses, self.miss_why = self.misses + 1, why
@@ -1049,10 +1056,11 @@ class Proxy(BaseHTTPRequestHandler):
             return None
         return cls.tenants.get(tok_login(tok) or "")
 
-    def fail(self, code, msg, typ="authentication_error", ecode=""):
+    def fail(self, code, msg, typ="authentication_error", ecode="", extra=None):
         err = {"type": typ, "message": "cred-proxy: " + msg}
         if ecode:
             err["code"] = ecode
+        err.update(extra or {})
         body = json.dumps({"type": "error", "error": err}, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("content-type", "application/json")
@@ -1222,7 +1230,8 @@ class Proxy(BaseHTTPRequestHandler):
         if over:
             # the person is over their budget (issue #1977): 403, never retried
             self.log(ev="deny", sid=sid, acct=acct, path=path.split("?")[0], why=BUDGET_CODE)
-            return self.fail(403, over, "permission_error", BUDGET_CODE)
+            ra = self.budget.reset_at()
+            return self.fail(403, over, "permission_error", BUDGET_CODE, {"reset_at": ra} if ra else None)
         order, skipped = self.plan(order, sid)
         order = [r for r in order
                  if (r != "relay" or (self.cfg.relay_url and relay_pass(self.cfg))) and (r != "central" or (self.cfg.central_url and hubcred))]

@@ -16,11 +16,22 @@
 //   G  the page (issue #3637) is the built UI in extras/web-chat/ui/dist: served only
 //      with the cookie, its own files only (CSP self, no other origin in it), gzip when
 //      asked, nothing outside dist; a question names the tool step it gates
-import { spawn } from "node:child_process";
+//   A–G run in the local mode, FLEET_WEBCHAT_LOCAL=1 (issue #3643: off by default).
+//   H  the socket mode (issue #3643, EPIC #3642 C1): <state>/chat.sock 0600 in a 0700
+//      dir — even a socket planted 0666 in a 0755 dir comes back so; another uid
+//      cannot connect (when `sudo -n -u nobody` works here); no admin.token, no port,
+//      no TCP listener; with neither --socket nor FLEET_WEBCHAT_LOCAL=1 it does not
+//      start; a second server on a live socket refuses (BREAK-IT chat-socket-other-login)
+//   I  the budget: the credential proxy's 403 person_budget_exceeded is ONE stream line
+//      {t:"error", code:"budget", until}, never the raw API error as the assistant's
+//      words; /api/conversation says blocked until a turn goes through
+//      (BREAK-IT chat-budget-bypass)
+//   --only=socket|budget|local (comma list) runs those parts only — the drills' road.
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, chmodSync, unlinkSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
@@ -32,6 +43,8 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,local").split(",");
+const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
 process.on("exit", () => { try { server?.kill("SIGKILL"); } catch { /* gone */ } rmSync(T, { recursive: true, force: true }); });
@@ -76,6 +89,12 @@ export async function* query({ prompt, options }) {
   const tr = join(dir, SID + ".jsonl");
   appendFileSync(tr, JSON.stringify({ type: "user", message: { role: "user", content: prompt } }) + "\\n");
   yield { type: "system", subtype: "init", session_id: SID };
+  if (prompt === "budget") {          // what Claude Code hands on from the proxy's 403
+    const api = 'API Error: 403 {"type":"error","error":{"type":"permission_error","message":"cred-proxy: 已达个人额度：近 5 小时已用 250k / 上限 200k token（person_budget_exceeded）","code":"person_budget_exceeded","reset_at":"2030-01-01T05:00:00Z"}}';
+    yield { type: "assistant", session_id: SID, message: { content: [{ type: "text", text: api }] } };
+    yield { type: "result", subtype: "success", is_error: true, result: api, session_id: SID, duration_ms: 1 };
+    return;
+  }
   if (prompt === "slow") {
     const sig = options.abortController.signal;
     await new Promise((res, rej) => { if (sig.aborted) rej(new Error("aborted")); sig.addEventListener("abort", () => rej(new Error("aborted"))); });
@@ -93,7 +112,7 @@ export async function* query({ prompt, options }) {
 // ---- the server, as bin/fleet-webchat.sh starts it ------------------------------
 function start() {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env, FLEET_WEBCHAT_STATE: STATE, FLEET_WEBCHAT_PORT: "0", FLEET_WEBCHAT_SDK: sdk,
+    const env = { ...process.env, FLEET_WEBCHAT_LOCAL: "1", FLEET_WEBCHAT_STATE: STATE, FLEET_WEBCHAT_PORT: "0", FLEET_WEBCHAT_SDK: sdk,
       FLEET_WEBCHAT_SESSION_CRED: credSh, FLEET_WEBCHAT_CWD: T, CLAUDE_CONFIG_DIR: CFG, TMUX: "/tmp/should-not-pass,1,1" };
     server = spawn(process.execPath, [APP], { env, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
@@ -105,6 +124,127 @@ function start() {
 }
 function stop() { return new Promise((r) => { if (!server || server.exitCode !== null) return r(); server.removeAllListeners("exit"); server.on("exit", r); server.kill("SIGTERM"); }); }
 
+// ---- H + I: the socket mode ---------------------------------------------------------
+const SSTATE = join(T, "sstate");
+const SOCK = join(SSTATE, "chat.sock");
+let sserver = null;
+process.on("exit", () => { try { sserver?.kill("SIGKILL"); } catch { /* gone */ } });
+function sstart(args = ["--socket"], extra = {}) {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, FLEET_WEBCHAT_STATE: SSTATE, FLEET_WEBCHAT_SDK: sdk, FLEET_WEBCHAT_SESSION_CRED: credSh,
+      FLEET_WEBCHAT_CWD: T, CLAUDE_CONFIG_DIR: CFG, FLEET_WEBCHAT_PORT: "0", ...extra };
+    delete env.FLEET_WEBCHAT_LOCAL;
+    const p = spawn(process.execPath, [APP, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", (d) => { out += d; if (/listening on/.test(out)) resolve({ p, out }); });
+    p.stderr.on("data", (d) => { err += d; });
+    p.on("exit", (c) => resolve({ p, code: c, out, err }));
+    setTimeout(() => reject(new Error("socket server did not start")), 10000);
+  });
+}
+function sstop(p) { return new Promise((r) => { if (!p || p.exitCode !== null) return r(); p.removeAllListeners("exit"); p.on("exit", r); p.kill("SIGTERM"); }); }
+function sreq(path, { method = "GET", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const r = http.request({ socketPath: SOCK, path, method, headers: { Host: "webchat", ...headers } }, (res) => {
+      let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => { seen.push(b); resolve({ status: res.statusCode, body: b }); });
+    });
+    r.on("error", reject);
+    if (body != null) r.write(typeof body === "string" ? body : JSON.stringify(body));
+    r.end();
+  });
+}
+function sturn(text) {
+  return new Promise((resolve, reject) => {
+    const lines = [];
+    const r = http.request({ socketPath: SOCK, path: "/api/turn", method: "POST",
+      headers: { Host: "webchat", "X-Fleet-Webchat": "1", "X-Fleet-Person": "alice@example.com", "Content-Type": "application/json" } }, (res) => {
+      let buf = "", all = "";
+      res.on("data", (d) => { buf += d; all += d; let i; while ((i = buf.indexOf("\n")) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l) {
+        const o = JSON.parse(l); lines.push(o);
+        if (o.t === "ask") sreq("/api/answer", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: { rid: o.rid, answers: { "猫还是狗？": "狗" } } });
+      } } });
+      res.on("end", () => { seen.push(all); resolve({ status: res.statusCode, lines }); });
+    });
+    r.on("error", reject); r.end(JSON.stringify({ text }));
+  });
+}
+const mode = (f) => statSync(f).mode & 0o777;
+// can another uid connect? → true / false, or null when this box cannot say (no sudo, or root)
+function otherUidConnects() {
+  if (process.getuid?.() === 0) return null;
+  if (spawnSync("sudo", ["-n", "-u", "nobody", "true"], { stdio: "ignore" }).status !== 0) return null;
+  const r = spawnSync("sudo", ["-n", "-u", "nobody", process.execPath, "-e",
+    `const s=require("net").connect(${JSON.stringify(SOCK)});s.on("connect",()=>{console.log("CONNECTED");process.exit(0)});s.on("error",(e)=>{console.log(e.code);process.exit(0)})`],
+  { encoding: "utf8", timeout: 10000 });
+  if (/CONNECTED/.test(r.stdout || "")) return true;
+  return /EACCES|EPERM|ENOENT/.test(r.stdout || "") ? false : null;   // anything else: it could not even try
+}
+
+if (part("socket") || part("budget")) {
+  // neither --socket nor FLEET_WEBCHAT_LOCAL=1: the local mode is off by default
+  const off = await sstart([]);
+  ok(off.code === 2 && /FLEET_WEBCHAT_LOCAL=1/.test(off.err) && !existsSync(join(SSTATE, "port")), "H no --socket, no FLEET_WEBCHAT_LOCAL=1: it does not start (no TCP by default)");
+  // the break: a stale socket left 0666 in a 0755 dir
+  mkdirSync(SSTATE, { recursive: true });
+  writeFileSync(SOCK, "");
+  chmodSync(SOCK, 0o666); chmodSync(SSTATE, 0o755);
+  const st = await sstart();
+  sserver = st.p;
+  ok(!st.code && existsSync(SOCK) && statSync(SOCK).isSocket(), "H --socket listens on <state>/chat.sock");
+  ok(mode(SOCK) === 0o600, `H the socket is 0600 (${mode(SOCK).toString(8)}) — a planted 0666 one was replaced`);
+  ok(mode(SSTATE) === 0o700, `H its dir is 0700 (${mode(SSTATE).toString(8)})`);
+  ok(!existsSync(join(SSTATE, "admin.token")) && !existsSync(join(SSTATE, "port")), "H no admin.token, no port file");
+  const lsof = spawnSync("lsof", ["-nP", "-a", "-p", String(sserver.pid), "-iTCP", "-sTCP:LISTEN"], { encoding: "utf8" });
+  if (lsof.error) console.log("note H: no lsof here to list TCP listeners");
+  else ok(!/LISTEN/.test(lsof.stdout || ""), "H no TCP listener at all");
+  ok((await sreq("/healthz")).status === 200, "H the socket answers");
+  const c0 = await sreq("/api/conversation");
+  ok(c0.status === 200 && JSON.parse(c0.body).budget?.blocked === false, "H trusted on the socket: no cookie needed; budget not blocked");
+  ok((await sreq("/api/turn", { method: "POST", headers: { "Content-Type": "application/json" }, body: { text: "hi" } })).status === 403, "H a POST without the page's header is still refused");
+  const lk = await sreq("/api/link", { method: "POST", headers: { "X-Fleet-Webchat": "1", "X-Fleet-Webchat-Admin": "x" } });
+  ok(lk.status === 404 && !/login\?c=/.test(lk.body), "H no login link on the socket");
+  const other = otherUidConnects();
+  if (other === null) console.log("note H: cannot try another uid here (no passwordless sudo, or root)");
+  else {
+    ok(other === false, "H another uid cannot connect (dir 0700)");
+    chmodSync(SSTATE, 0o711); chmodSync(T, 0o711);           // only the socket's own mode left in the way
+    ok(otherUidConnects() === false, "H another uid cannot connect even through an open dir (socket 0600)");
+    chmodSync(SOCK, 0o666);                                   // the break, for real: the probe is not vacuous
+    ok(otherUidConnects() === true, "H (control) a 0666 socket in an open dir: another uid DOES connect");
+    chmodSync(SOCK, 0o600);
+    chmodSync(SSTATE, 0o700); chmodSync(T, 0o700);
+  }
+  const second = await sstart();
+  ok(second.code === 3 && mode(SOCK) === 0o600 && (await sreq("/healthz")).status === 200, "H a second server on a live socket refuses; the first keeps it");
+}
+if (part("budget")) {
+  const b = await sturn("budget");
+  const errs = b.lines.filter((o) => o.t === "error");
+  ok(b.status === 200 && errs.length === 1 && errs[0].code === "budget" && errs[0].until === "2030-01-01T05:00:00Z" && /已达个人额度/.test(errs[0].msg),
+    `I the proxy's 403 is one {t:"error", code:"budget", until} line (${JSON.stringify(errs)})`);
+  ok(!b.lines.some((o) => o.t === "text" || o.t === "done") && !JSON.stringify(b.lines).includes("API Error"), "I the raw API error never reaches the page as the assistant's words");
+  const cb = JSON.parse((await sreq("/api/conversation")).body).budget;
+  ok(cb?.blocked === true && cb.until === "2030-01-01T05:00:00Z", `I /api/conversation says blocked, until (${JSON.stringify(cb)})`);
+  await sstop(sserver);
+  sserver = (await sstart()).p;
+  ok(JSON.parse((await sreq("/api/conversation")).body).budget?.blocked === true, "I still blocked after a restart");
+  const g = await sturn("again");
+  ok(g.lines.at(-1)?.t === "done", "I a turn under budget goes through");
+  ok(JSON.parse((await sreq("/api/conversation")).body).budget?.blocked === false, "I … and the block is lifted");
+}
+if (sserver) await sstop(sserver);
+if (part("budget")) {
+  const log = existsSync(join(SSTATE, "server.log")) ? readFileSync(join(SSTATE, "server.log"), "utf8") : "";
+  ok(/"ev":"budget"/.test(log) && /"person":"alice@example.com"/.test(log), "I the log says budget, and whose (X-Fleet-Person, for the log only)");
+  ok(!log.includes(SECRET), "I the credential is not in the socket server's log");
+}
+if (!part("local")) {
+  proxy.close();
+  console.log(fails ? `FAIL ${fails}` : "PASS fleet-webchat-selftest");
+  process.exit(fails ? 1 : 0);
+}
+
+proxyHits.length = 0;                                     // A–G count their own
 let PORT = await start();
 function req(path, { method = "GET", headers = {}, body, host } = {}) {
   return new Promise((resolve, reject) => {

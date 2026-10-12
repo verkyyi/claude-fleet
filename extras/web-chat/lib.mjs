@@ -97,3 +97,37 @@ export function toolSummary(name, input) {
   const s = typeof pick === "string" ? pick : JSON.stringify(i);
   return `${name}${s ? " · " + s.replace(/\s+/g, " ").slice(0, 160) : ""}`;
 }
+
+// The pool's per-person budget refusal (fleet.person_budget, issue #1977): the
+// credential proxy answers 403 {"error":{"code":"person_budget_exceeded",
+// "message":"cred-proxy: 已达个人额度…", "reset_at"?}} and Claude Code hands it on
+// as its own "API Error: 403 …" text. -> { msg, until? } when <x> (a string, an
+// SDK content array, or a list of either) carries it, else null.
+export const BUDGET_CODE = "person_budget_exceeded";
+export function budgetRefusal(x) {
+  const flat = (v) => typeof v === "string" ? v : Array.isArray(v) ? v.map(flat).join("\n")
+    : v && typeof v === "object" ? (typeof v.text === "string" ? v.text : JSON.stringify(v)) : "";
+  const s = flat(x);
+  if (!s.includes(BUDGET_CODE)) return null;
+  let msg = "", until = "";
+  const j = s.indexOf("{");
+  if (j >= 0) {
+    try {
+      const err = JSON.parse(s.slice(j, s.lastIndexOf("}") + 1)).error || {};
+      msg = String(err.message || "");
+      until = String(err.reset_at || "");
+    } catch { /* not the proxy's JSON — fall back to the text */ }
+  }
+  if (!until) until = (s.match(/"reset_at"\s*:\s*"([^"]+)"/) || [])[1] || "";
+  if (until && Number.isNaN(Date.parse(until))) until = "";
+  msg = (msg.replace(/^cred-proxy:\s*/, "") || "已达个人额度").slice(0, 300);
+  return until ? { msg, until } : { msg };
+}
+
+// X-Fleet-Person, for the log only (the relay verified it before it dialled the
+// socket — C2): its first field, and only when it is name-shaped (≤ 64 of
+// [A-Za-z0-9@._+-]) — a signature-length value is never written down.
+export function personName(h) {
+  const v = String(h || "").split(/[;,\s]/)[0];
+  return /^[A-Za-z0-9@._+-]{1,64}$/.test(v) ? v : "";
+}
