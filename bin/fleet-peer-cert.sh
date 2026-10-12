@@ -3,6 +3,7 @@
 # other machine, and print the ssh options that use it (issue #1626, EPIC #1615 C9).
 #
 #   fleet-peer-cert.sh <machine> <view|upgrade|move>
+#   fleet-peer-cert.sh --peers      the same owner's logins elsewhere + their routes (#3482)
 #
 # Machine-to-machine ssh (fleet-remote-view.sh, fleet-node-upgrade.sh --host,
 # fleet-move.sh) no longer rides a key the target keeps in authorized_keys
@@ -64,6 +65,28 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN/fleet-ui-lang.sh"
 
 die() { printf 'fleet-peer-cert: %s\n' "$2" >&2; exit "$1"; }
+
+# --peers (issue #3482): this login's OWNER's logins on the other machines, as the
+# hub lists them (GET /v1/node/peers — {"peers":[{hostname, alias, login, status,
+# routes[{name, host, port}]}]}), the JSON on stdout. fleet-peerlink.py keeps one
+# standing connection to each and dials them by these routes (tailnet first, then
+# the entry), never by a name it assumes resolves. Exit 0 · 1 the hub is down or
+# refused · 3 no hub here / a hub that predates it (404).
+if [ "${1:-}" = --peers ]; then
+  [ $# -eq 1 ] || die 2 'usage: fleet-peer-cert.sh --peers'
+  [ "${FLEET_PEER_CERT:-1}" != 0 ] || exit 3
+  _fleet_hub_creds_missing >/dev/null && exit 3
+  resp=$(_fleet_hub_env
+    "${FLEET_HUB_CURL:-curl}" -sS --connect-timeout "${FLEET_PEER_CERT_CONNECT_SECS:-0.8}" --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
+      -H "Authorization: Bearer $CCQUOTA_TOKEN" "${CCQUOTA_HUB_URL%/}/v1/node/peers" 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "入口不在（curl exit ${rc}）"
+  code=$(printf '%s\n' "$resp" | tail -n 1)
+  case "$code" in
+    200) printf '%s\n' "$resp" | sed '$d'; exit 0 ;;
+    404|405) exit 3 ;;
+    *) die 1 "入口拒绝了列出本人的其他登录（HTTP ${code}）" ;;
+  esac
+fi
 
 [ $# -eq 2 ] || die 2 'usage: fleet-peer-cert.sh <machine> <view|upgrade|move>'
 MACHINE=$1 PURPOSE=$2

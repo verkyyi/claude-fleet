@@ -6,10 +6,11 @@ socket at its `-S` path, and every other call talks to that socket, as ssh's own
 multiplexing does.
 
   -M -N -S <sock> -l <login> [-o CertificateFile=<f>] <host>   a master: refuses when
-        $FAKESSH_DIR/down/<host> exists or the certificate file holds an epoch already
+        $FAKESSH_DIR/down/<host> exists (`Could not resolve hostname` when
+        $FAKESSH_DIR/noname/<host> does) or the certificate file holds an epoch already
         past (checked ONCE, at the handshake — like sshd); answers `id -un` with
         $FAKESSH_DIR/login/<host> when that exists (a master logged in as someone
-        else), else <login>. Logs `master <host> <login> <pid>` to $FAKESSH_DIR/log.
+        else), else <login>. Logs `master <host> <login> <pid> <port>` to $FAKESSH_DIR/log.
   -S <sock> -O check|exit <host>      ssh's control commands
   -S <sock> [...] <host> <cmd...>     a channel on the master (`id -un`, `true`, anything)
 """
@@ -80,6 +81,10 @@ def talk(sock, msg):
 def master(o):
     host, sock = o.get("host", ""), o.get("S", "")
     login = o.get("l") or os.environ.get("USER", "")
+    log("dial %s %s %s" % (host, o.get("p") or "22", login))
+    if os.path.exists(d("noname", host)):
+        sys.stderr.write("ssh: Could not resolve hostname %s: nodename nor servname provided, or not known\n" % host)
+        return 255
     if os.path.exists(d("down", host)):
         sys.stderr.write("ssh: connect to host %s port 22: Connection refused\n" % host)
         return 255
@@ -103,7 +108,7 @@ def master(o):
     srv.bind(sock)
     srv.listen(16)
     ino = os.stat(sock).st_ino
-    log("master %s %s %d" % (host, login, os.getpid()))
+    log("master %s %s %d %s" % (host, login, os.getpid(), o.get("p") or "22"))
 
     def bye(*_):
         try:

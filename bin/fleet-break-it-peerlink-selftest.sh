@@ -19,6 +19,11 @@
 #   peerlink-hostkey-unknown bin/fleet-peer-cert.sh (issue #3050): the other machine's
 #                          host key is in no known_hosts this login has — a REAL
 #                          BatchMode ssh to a REAL sshd (`sshd -i` as a ProxyCommand)
+#   peerlink-name-unresolved bin/fleet-peerlink.py routes (issue #3482): the other
+#                          machine's name resolves nowhere — only its entry (门) works
+#   peerlink-standing-reaped bin/fleet-peerlink.py mode all (issue #3482): no view for a
+#                          while, the keeper restarted, the master killed — the
+#                          standing link is still there (the same master), or back
 #   peer-window-ssh-killed bin/fleet-peerlink.py pane (C4, issue #2751): the ssh under a
 #                          看台's window onto another machine dies with its link
 #   peer-window-left-behind bin/fleet-remote-view.sh rv_peer_sweep (C4): a 看台 reaped
@@ -56,8 +61,11 @@ python3 -c 'import sys, time; print(time.time() + float(sys.argv[1]))' "\${PL_CE
 printf '%s\n' -i "$B/key" -o "CertificateFile=$B/cert-\$1" -o IdentitiesOnly=yes -l hubsays
 EOF
   chmod +x "$B/cert.sh"
+  # the hub's list of your logins elsewhere (fleet-peer-cert.sh --peers, #3482): $B/peers.json, else none
+  printf '#!/bin/bash\n[ -f "%s/peers.json" ] || exit 3\ncat "%s/peers.json"\n' "$B" "$B" > "$B/peers.sh"; chmod +x "$B/peers.sh"
   export FLEET_CONF_DIR="$B/conf" TMPDIR="$B/t" FAKESSH_DIR="$B/fs" FLEET_PEERLINK_HOME=home \
-    FLEET_PEERLINK_SSH="python3 $BIN/fleet-peerlink-fake-ssh.py" FLEET_PEERLINK_CERT_CMD="$B/cert.sh"
+    FLEET_PEERLINK_SSH="python3 $BIN/fleet-peerlink-fake-ssh.py" FLEET_PEERLINK_CERT_CMD="$B/cert.sh" \
+    FLEET_PEERLINK_PEERS_CMD="$B/peers.sh"
   unset FLEET_C
 }
 # pl_row <machine:login> — one session of yours there (its fleet UUID → that login)
@@ -207,6 +215,50 @@ drill_peerlink_hub_down() {
   python3 "$PL" status --check >/dev/null || { WHY="still WARN after the hub came back: $(python3 "$PL" status --check)"; pl_stop; return 1; }
   pl_stop
   WHAT="入口不在：已有的 m4 照用（同一 pid），新来的 m5 不开、不退回长期钥匙，doctor 写明 入口不在；入口回来后退避内开好 m5"
+}
+
+drill_peerlink_name_unresolved() {
+  CAP=6   # the hub's list (asked off the beat), one failed route, the entry's handshake
+  local t0
+  pl_box nu
+  rm -f "$B/conf/remote-views/a"   # no view: the hub's list alone asks for it
+  mkdir -p "$B/fs/noname"; touch "$B/fs/noname/fleet-linux-0"
+  printf '{"peers":[{"hostname":"fleet-linux-0","login":"fleet","status":"online","routes":[{"name":"tailnet","host":"fleet-linux-0.tail.ts.net"},{"name":"entry","host":"120.24.204.160","port":22022}]}]}\n' > "$B/peers.json"
+  touch "$B/fs/noname/fleet-linux-0.tail.ts.net"   # on no tailnet either
+  t0=$(now); pl_start
+  until_ok 8 pl_up fleet-linux-0@fleet || { WHY="never up: $(python3 "$PL" status --check) · $(tail -2 "$B/run.err")"; pl_stop; return 1; }
+  SECS=$(since "$t0")
+  [ "$(pl_link fleet-linux-0@fleet 'l["route"]')" = "120.24.204.160:22022" ] || { WHY="not on the entry: route $(pl_link fleet-linux-0@fleet 'l["route"]')"; pl_stop; return 1; }
+  grep -q '^master 120.24.204.160 fleet [0-9]* 22022$' "$B/fs/log" || { WHY="the master is not on the entry's port: $(grep master "$B/fs/log")"; pl_stop; return 1; }
+  grep -q '^dial fleet-linux-0 ' "$B/fs/log" && { WHY="the bare name was dialled before the entry"; pl_stop; return 1; }
+  python3 "$PL" pane fleet-linux-0 fleet v1 </dev/null 2>&1 | grep -q 'ran bash .*attach --thin' || { WHY="a 看台 pane cannot ride the link"; pl_stop; return 1; }
+  pl_stop
+  WHAT="fleet-linux-0 的名字和 tailnet 名都解析不了：按入口给的路线换到门 120.24.204.160:22022，证书照旧，主连接与看台窗格都走这条"
+}
+
+drill_peerlink_standing_reaped() {
+  CAP=6   # the killed master: one beat to see it, one handshake
+  local t0 pid
+  pl_box sr
+  rm -f "$B/conf/remote-views/a"
+  printf '{"peers":[{"hostname":"m4","login":"bob","status":"online","routes":[{"name":"entry","host":"203.0.113.4","port":22023}]}]}\n' > "$B/peers.json"
+  export FLEET_PEERLINK_LINGER=1
+  pl_start
+  until_ok 8 pl_up m4@bob || { WHY="the standing link never came up: $(tail -2 "$B/run.err")"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  pid=$(pl_pid m4@bob)
+  sleep 3   # no view, past the linger
+  pl_up m4@bob && [ "$(pl_pid m4@bob)" = "$pid" ] || { WHY="closed with nobody looking: $(tail -2 "$B/run.err")"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  kill "$KP" 2>/dev/null; wait "$KP" 2>/dev/null; pl_start   # the keeper restarts
+  until_ok 8 grep -q 'm4@bob adopted' "$B/run.err" || { WHY="the next keeper did not take the master over: $(tail -3 "$B/run.err")"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  [ "$(pl_pid m4@bob)" = "$pid" ] || { WHY="the keeper's restart rebuilt the link (pid $(pl_pid m4@bob), was $pid)"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  t0=$(now); kill "$pid"
+  until_ok 8 sh -c 'p=$(python3 -c "import json,sys; print([l[\"pid\"] for l in json.load(open(sys.argv[1]))[\"links\"] if l[\"phase\"] == \"up\"][0])" "$1" 2>/dev/null); [ -n "$p" ] && [ "$p" != "$2" ]' _ "$B/conf/peerlink/state.json" "$pid" \
+    || { WHY="the killed master was not rebuilt: $(python3 "$PL" status --check)"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  SECS=$(since "$t0")
+  grep -q '关闭：没人要了' "$B/run.err" && { WHY="a standing link was reaped for being unused"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  python3 "$PL" status --check | grep -q 'm4@bob 已连上' || { WHY="the doctor does not say 已连上: $(python3 "$PL" status --check)"; pl_stop; unset FLEET_PEERLINK_LINGER; return 1; }
+  pl_stop; unset FLEET_PEERLINK_LINGER
+  WHAT="没有看台、过了保留期、管理者重启：同一条主连接（同一 pid）一直在、被下一个管理者接管；主进程被杀后一拍内重建"
 }
 
 drill_peerlink_hostkey_unknown() {

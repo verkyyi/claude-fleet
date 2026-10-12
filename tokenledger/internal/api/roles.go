@@ -70,6 +70,7 @@ var routeAccess = map[string]string{
 	"/v1/node/attachment/": accessSelf,
 	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf,
 	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/orchestrator": accessSelf, "/v1/node/peer-cert": accessSelf,
+	"/v1/node/peers":  accessSelf,
 	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,

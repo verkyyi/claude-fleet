@@ -33,21 +33,39 @@ to a standing key; the links already up go on (`peerlink-hub-down`).
                               lands each (re)connect on the window's @peer_want / @peer_cur
     status [--check|--json]   the doctor's `peerlink` row (rc 0 ok · 1 WARN · 2 no row)
 
-What to connect, every beat (FLEET_PEERLINK_TICK, 2 s): while this machine has a
-thin view with a client attached — a row of $FLEET_CONF_DIR/remote-views/ whose kind
-is `thin` and whose attach pid lives (C1) — one link per (machine, login) the hub's
-session table (global/remote_<sess>) shows your sessions on, this machine's own login
-excepted; a lost machine is not asked. A link no longer wanted closes
-FLEET_PEERLINK_LINGER (600 s) after it last was.
+What to connect, every beat (FLEET_PEERLINK_TICK, 2 s) — FLEET_PEERLINK_MODE
+(fleet.conf; issue #3482):
 
-state.json (peerlink/): {v, pid, ts, me, views, hub_down, links[{machine, login, host,
-route, sock, pid, phase up|connecting|verifying|down, since, last_check, rtt_ms, fails,
-err, bad_since, want_ts}], events[{ts, machine, login, what}]} — C1's top line, the
-doctor and C10 read it.
+  all (the default)  one standing link to EVERY login of the same person on the other
+                     machines — the hub's `/v1/node/peers` (`fleet-peer-cert.sh --peers`,
+                     re-asked every FLEET_PEERLINK_PEERS_SECS, 60 s; a hub that does not
+                     answer keeps the last list), never anyone else's. Never closed for
+                     being unused: a link that breaks is rebuilt with backoff, and a
+                     keeper that exits hands its masters to the next one (they are
+                     adopted after `id -un`, not rebuilt).
+  demand             (and, in `all`, on top of the list) while this machine has a thin
+                     view with a client attached — a row of $FLEET_CONF_DIR/remote-views/
+                     whose kind is `thin` and whose attach pid lives (C1) — one link per
+                     (machine, login) the hub's session table (global/remote_<sess>) shows
+                     your sessions on, this machine's own login excepted; a lost machine
+                     is not asked. A link no longer wanted closes FLEET_PEERLINK_LINGER
+                     (600 s) after it last was.
+
+Where to dial (issue #3482): never a name assumed to resolve. FLEET_REMOTE_SSH
+`<machine>=<host>` is the operator's word; else the hub's routes for that machine — a
+tailnet name first, then its entry (门, `<addr>:<port>`), then the rest it lists — and
+the machine's own name last. A connect that fails moves to the next route at once; a
+whole round that fails backs off 1 → FLEET_PEERLINK_BACKOFF_MAX (30) s.
+
+state.json (peerlink/): {v, pid, ts, me, mode, views, hub_down, peers_err, links[{machine,
+login, host, port, route, routes, sock, pid, phase up|connecting|verifying|down, since,
+last_check, rtt_ms, fails, err, bad_since, want_ts, standing}], events[{ts, machine, login,
+what}]} — C1's top line, the doctor and C10 read it. peers.json beside it is the hub's
+last list.
 
 Seams: FLEET_PEERLINK_SSH (else FLEET_REMOTE_SSH_CMD, else ssh) · FLEET_PEERLINK_CERT_CMD
-(else `bash fleet-peer-cert.sh`) · FLEET_PEERLINK_HOME (this machine's label) ·
-FLEET_PEERLINK=0 keeps `run` idle.
+(else `bash fleet-peer-cert.sh`) · FLEET_PEERLINK_PEERS_CMD (else `bash fleet-peer-cert.sh
+--peers`) · FLEET_PEERLINK_HOME (this machine's label) · FLEET_PEERLINK=0 keeps `run` idle.
 """
 import errno
 import fcntl
@@ -81,6 +99,7 @@ def fenv(k, d):
 CONF = env("FLEET_CONF_DIR", os.path.join(os.path.expanduser("~"), ".config", "claude-fleet"))
 D = os.path.join(CONF, "peerlink")
 STATE = os.path.join(D, "state.json")
+PEERS = os.path.join(D, "peers.json")
 LOCK = os.path.join(D, ".lock")
 RUNS = os.path.join(D, "runs")
 VIEWS = os.path.join(CONF, "remote-views")
@@ -95,6 +114,7 @@ CONNECT = fenv("FLEET_PEERLINK_CONNECT_SECS", 15)
 BACKOFF_MAX = fenv("FLEET_PEERLINK_BACKOFF_MAX", 30)
 STALE = fenv("FLEET_PEERLINK_STALE", 30)          # state older than this: the keeper is not running
 BAD_WARN = fenv("FLEET_PEERLINK_BAD_WARN", 60)    # a link failing its check this long: WARN
+PEERS_SECS = fenv("FLEET_PEERLINK_PEERS_SECS", 60)
 MAX_EVENTS = 50
 
 
@@ -109,6 +129,16 @@ def ssh_cmd():
 def cert_cmd():
     c = env("FLEET_PEERLINK_CERT_CMD")
     return shlex.split(c) if c else ["bash", os.path.join(BIN, "fleet-peer-cert.sh")]
+
+
+def peers_cmd():
+    c = env("FLEET_PEERLINK_PEERS_CMD")
+    return shlex.split(c) if c else ["bash", os.path.join(BIN, "fleet-peer-cert.sh"), "--peers"]
+
+
+def mode():
+    """`all` (default, issue #3482) or `demand` (the pre-#3482 on-demand links)."""
+    return "demand" if env("FLEET_PEERLINK_MODE", "all").lower() in ("demand", "ondemand", "0", "off") else "all"
 
 
 def aliases():
@@ -129,13 +159,66 @@ def home_label():
     return aliases().get(h, h)
 
 
-def ssh_host(machine):
-    """FLEET_REMOTE_SSH `m4=m4-lan m5=macmini`, else the label itself (the route)."""
+def label(hostname):
+    """A hub hostname as this login's machine label — fleet-hub-sessions.sh's
+    `label`: FLEET_NODE_ALIASES, else its first label, lowercased."""
+    h = (hostname or "").lower()
+    short = h.split(".")[0]
+    a = aliases()
+    return a.get(h) or a.get(short) or short
+
+
+def conf_host(machine):
+    """FLEET_REMOTE_SSH `m4=m4-lan m5=macmini`: the operator's own route, or ""."""
     for w in env("FLEET_REMOTE_SSH").split():
         n, _, h = w.partition("=")
         if n == machine and h:
             return h
-    return machine
+    return ""
+
+
+def ssh_host(machine):
+    """The operator's route, else the label itself."""
+    return conf_host(machine) or machine
+
+
+def host_ok(h):
+    return safe(h) or (":" in h and all(c in "0123456789abcdefABCDEF:." for c in h))
+
+
+def route_rank(r):
+    n = (r.get("name") or "").lower()
+    if "tail" in n or n == "ts" or n.endswith("-ts"):
+        return 0
+    if n.startswith("entry"):
+        return 1
+    return 2
+
+
+def routes_for(machine, peers):
+    """[(name, host, port)] to dial, in order (issue #3482): the operator's
+    FLEET_REMOTE_SSH alone when it names one; else the hub's routes — tailnet,
+    then the entry (门), then the rest — and the machine's own name last."""
+    h = conf_host(machine)
+    if h:
+        return [("conf", h, 0)]
+    out = []
+    for p in peers:
+        if label(p.get("hostname")) != machine:
+            continue
+        rs = [r for r in (p.get("routes") or []) if isinstance(r, dict)]
+        for r in sorted(rs, key=route_rank):     # stable: the hub's order within a rank
+            host = str(r.get("host") or "")
+            try:
+                port = int(r.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if host_ok(host) and 0 <= port <= 65535 and (host, port) not in [(x[1], x[2]) for x in out]:
+                out.append((str(r.get("name") or "route"), host, port))
+        break
+    if (machine, 0) not in [(x[1], x[2]) for x in out]:
+        out.append(("name", machine, 0))
+    return out
 
 
 def sock_path(machine, login):
@@ -253,6 +336,42 @@ def wanted_targets():
     return out
 
 
+def read_peers():
+    """The hub's last list (peers.json): [{hostname, alias, login, status, routes}]."""
+    st = read_json(PEERS, {})
+    return [p for p in (st.get("peers") or []) if isinstance(p, dict)]
+
+
+def fetch_peers():
+    """(peers | None, err): ask the hub; None when it did not answer (keep the last)."""
+    try:
+        r = subprocess.run(peers_cmd(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, "入口不在：%s" % e
+    if r.returncode == 3:
+        return [], ""
+    if r.returncode != 0:
+        why = (r.stderr.decode("utf-8", "replace").strip().splitlines() or ["the hub did not answer"])[-1]
+        return None, why.replace("fleet-peer-cert: ", "")
+    try:
+        d = json.loads(r.stdout.decode("utf-8", "replace") or "{}")
+    except ValueError:
+        return None, "入口的回答读不了"
+    return [p for p in (d.get("peers") or []) if isinstance(p, dict)], ""
+
+
+def standing_targets(peers):
+    """{(machine, login)} of the same person's logins elsewhere (mode all)."""
+    me, mine = home_label(), me_login()
+    out = set()
+    for p in peers:
+        m, lg = label(p.get("hostname")), str(p.get("login") or "")
+        if safe(m) and safe(lg) and not (m == me and lg == mine):
+            out.add((m, lg))
+    return out
+
+
 # --- ssh -----------------------------------------------------------------------------
 def ssh_run(args, timeout=5, capture=False):
     try:
@@ -342,7 +461,11 @@ class Link:
     def __init__(self, machine, login, prev=None):
         prev = prev or {}
         self.machine, self.login = machine, login
-        self.host = ssh_host(machine)
+        self.routes = [("name", ssh_host(machine), 0)]
+        self.ri = 0
+        self.host, self.port, self.route = ssh_host(machine), 0, "name"
+        self.standing = False
+        self.round_errs = []
         self.sock = sock_path(machine, login)
         self.pid = 0
         self.proc = None            # our own master, when we started it
@@ -365,6 +488,30 @@ class Link:
     def name(self):
         return "%s@%s" % (self.machine, self.login)
 
+    def set_routes(self, routes):
+        """New candidates; the one in use is kept while it is still among them."""
+        if routes == self.routes:
+            return
+        cur = (self.host, self.port)
+        self.routes = routes
+        idx = [i for i, r in enumerate(routes) if (r[1], r[2]) == cur]
+        if self.phase != "down" and idx:
+            self.ri = idx[0]
+            return
+        # down (or its route is gone): the next dial starts at the best way in
+        self.ri = 0
+        if self.phase == "down":
+            self.pick()
+
+    def pick(self):
+        self.route, self.host, self.port = self.routes[self.ri % len(self.routes)]
+
+    def port_args(self):
+        return ["-p", str(self.port)] if self.port else []
+
+    def where(self):
+        return "%s:%d" % (self.host, self.port) if self.port else self.host
+
     def alive(self):
         # our own master is our child: a dead one is a zombie kill(0) still finds
         if self.proc is not None:
@@ -372,10 +519,13 @@ class Link:
         return pid_alive(self.pid)
 
     def dump(self):
-        return {"machine": self.machine, "login": self.login, "host": self.host, "route": self.host,
+        return {"machine": self.machine, "login": self.login, "host": self.host, "port": self.port,
+                "route": self.where(), "route_name": self.route,
+                "routes": ["%s %s" % (r[0], "%s:%d" % (r[1], r[2]) if r[2] else r[1]) for r in self.routes],
                 "sock": self.sock, "pid": self.pid, "phase": self.phase, "since": self.since,
                 "last_check": self.last_check, "rtt_ms": self.rtt_ms, "fails": self.fails,
-                "err": self.err, "bad_since": self.bad_since, "want_ts": self.want_ts}
+                "err": self.err, "bad_since": self.bad_since, "want_ts": self.want_ts,
+                "standing": self.standing}
 
 
 class Keeper:
@@ -385,6 +535,11 @@ class Keeper:
         self.hub_down = ""
         self.lock_fd = None
         self.views = []
+        self.mode = mode()
+        self.peers = read_peers()
+        self.peers_err = ""
+        self.peers_at = 0.0
+        self.peers_job = None
         prev = read_json(STATE, {})
         self.events = list(prev.get("events") or [])[-MAX_EVENTS:]
         self.prev = {(l.get("machine"), l.get("login")): l for l in prev.get("links") or []
@@ -424,19 +579,33 @@ class Keeper:
         sys.stderr.write("fleet-peerlink: %s %s\n" % (l.name(), what))
         sys.stderr.flush()
 
-    def fail(self, l, why, now):
+    def fail(self, l, why, now, rotate=False):
         l.fails += 1
         l.err = why
         if not l.bad_since:
             l.bad_since = now
+        l.phase = "down"
+        if rotate:
+            l.round_errs.append(why)
+        if rotate and l.ri + 1 < len(l.routes):
+            # the next way in at once; the backoff is for a whole round that failed
+            l.ri += 1
+            l.pick()
+            l.next_try = now
+            return
+        if rotate:
+            # a whole round failed: its reasons, best way in first
+            l.err = " / ".join(l.round_errs)
+            l.round_errs = []
+            l.ri = 0
+            l.pick()
         l.backoff = min(BACKOFF_MAX, max(1.0, l.backoff * 2 if l.backoff else 1.0))
         l.next_try = now + l.backoff
-        l.phase = "down"
 
     def drop(self, l, why, now, exit_master=True):
         """Kill the master, clear the path, rebuild on the next beat."""
         if exit_master and os.path.exists(l.sock):
-            ssh_run(["-S", l.sock, "-O", "exit", l.host], timeout=3)
+            ssh_run(["-S", l.sock] + l.port_args() + ["-O", "exit", l.host], timeout=3)
         if l.proc is not None:
             kill_pid(l.proc.pid)
             l.proc = None
@@ -479,10 +648,13 @@ class Keeper:
         argv = ssh_cmd() + opts + ["-M", "-N", "-o", "ControlPersist=no", "-o", "ServerAliveInterval=2",
                                    "-o", "ServerAliveCountMax=3", "-o", "BatchMode=yes",
                                    "-o", "ConnectTimeout=%d" % max(1, int(CONNECT)),
-                                   "-S", l.sock, "-l", l.login, l.host]
+                                   "-S", l.sock] + l.port_args() + ["-l", l.login, l.host]
         try:
             errf = open(l.sock[:-5] + ".err", "w")
-            l.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errf)
+            # its own session: a keeper that exits (launchd stops its process group)
+            # leaves a standing master for the next keeper to adopt (issue #3482)
+            l.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errf,
+                                      start_new_session=True)
             errf.close()
         except OSError as e:
             self.fail(l, "ssh did not start: %s" % e, now)
@@ -506,14 +678,14 @@ class Keeper:
                 why = self.last_err(l) or "ssh exited %s" % l.proc.returncode
                 l.proc = None
                 self.drop(l, "", now, exit_master=False)
-                self.fail(l, why, now)
+                self.fail(l, "%s（%s）" % (why, l.where()), now, rotate=True)
                 return
             ok, pid = master_check(l.sock, l.host)
             if ok:
                 if pid and l.pid and pid != l.pid and l.proc is not None:
                     pass   # an ssh wrapper's child: trust what the master says
                 l.pid = pid or l.pid
-                cmd = ssh_cmd() + ["-S", l.sock, "-o", "ControlMaster=no", "-l", l.login, l.host, "id", "-un"]
+                cmd = ssh_cmd() + ["-S", l.sock, "-o", "ControlMaster=no"] + l.port_args() + ["-l", l.login, l.host, "id", "-un"]
                 try:
                     l.verify = (subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                                  stderr=subprocess.DEVNULL), now)
@@ -524,7 +696,7 @@ class Keeper:
                 return
             if now - l.since > CONNECT:
                 self.drop(l, "", now)
-                self.fail(l, self.last_err(l) or "no master after %ds" % CONNECT, now)
+                self.fail(l, "%s（%s）" % (self.last_err(l) or "no master after %ds" % CONNECT, l.where()), now, rotate=True)
             return
         if l.phase == "verifying":
             p, t0 = l.verify
@@ -589,7 +761,7 @@ class Keeper:
             # a channel opened on the master, timed: the round trip, and the proof
             # a new channel still opens (the certificate is long gone by now)
             res = []
-            cmd = ["-S", l.sock, "-o", "ControlMaster=no", "-l", l.login, l.host, "true"]
+            cmd = ["-S", l.sock, "-o", "ControlMaster=no"] + l.port_args() + ["-l", l.login, l.host, "true"]
 
             def probe(res=res, cmd=cmd):
                 t = time.time()
@@ -610,7 +782,18 @@ class Keeper:
             m, _, lg = n[:-5].rpartition("@")
             if not (safe(m) and safe(lg)) or (m, lg) in self.links:
                 continue
-            l = Link(m, lg, self.prev.get((m, lg)))
+            prev = self.prev.get((m, lg)) or {}
+            l = Link(m, lg, prev)
+            l.set_routes(routes_for(m, self.peers))
+            try:
+                host, port = str(prev.get("host") or ""), int(prev.get("port") or 0)
+            except (TypeError, ValueError):
+                host, port = "", 0
+            if host_ok(host):
+                # the route the last keeper opened it on: what its channels name
+                l.host, l.port, l.route = host, port, str(prev.get("route_name") or "name")
+                idx = [i for i, r in enumerate(l.routes) if (r[1], r[2]) == (host, port)]
+                l.ri = idx[0] if idx else 0
             if not l.want_ts:
                 l.want_ts = time.time()
             self.links[(m, lg)] = l
@@ -618,23 +801,61 @@ class Keeper:
     def save(self, now):
         links = [self.links[k].dump() for k in sorted(self.links)]
         write_json(STATE, {"v": 1, "pid": os.getpid(), "ts": round(now, 3), "me": home_label(),
-                           "login": me_login(), "views": self.views, "hub_down": self.hub_down,
-                           "links": links, "events": self.events})
+                           "login": me_login(), "mode": self.mode, "views": self.views,
+                           "hub_down": self.hub_down, "peers_err": self.peers_err,
+                           "peers": len(self.peers), "links": links, "events": self.events})
+
+    def refresh_peers(self, now):
+        """mode all: the hub's list, asked off the beat's thread every PEERS_SECS."""
+        if self.peers_job is not None:
+            res, t0 = self.peers_job
+            if not res and now - t0 < 30:
+                return
+            self.peers_job = None
+            if res:
+                peers, err = res
+                self.peers_err = err
+                if peers is not None:
+                    self.peers = peers
+                    try:
+                        write_json(PEERS, {"ts": round(now, 3), "peers": peers})
+                    except OSError:
+                        pass
+            else:
+                self.peers_err = "入口没回答"
+        if now - self.peers_at < PEERS_SECS:
+            return
+        self.peers_at = now
+        res = []
+
+        def ask(res=res):
+            res.extend(fetch_peers())
+        threading.Thread(target=ask, daemon=True).start()
+        self.peers_job = (res, now)
 
     def beat(self, now):
         self.views = live_thin_views()
         want = wanted_targets() if self.views else set()
+        standing = set()
+        if self.mode == "all":
+            self.refresh_peers(now)
+            standing = standing_targets(self.peers)
+            want |= standing
         for k in want:
             if k not in self.links:
                 self.links[k] = Link(k[0], k[1], self.prev.get(k))
             self.links[k].want_ts = now
         for k in list(self.links):
             l = self.links[k]
+            was = l.standing
+            if k in want:
+                l.standing = k in standing
             if k not in want and now - l.want_ts > LINGER:
                 if l.phase != "down" or os.path.exists(l.sock):
-                    self.drop(l, "关闭：没人要了", now)
+                    self.drop(l, "关闭：不再是你的登录" if was else "关闭：没人要了", now)
                 del self.links[k]
                 continue
+            l.set_routes(routes_for(l.machine, self.peers))
             self.step(l, now)
         if not any(l.phase == "down" and l.err.startswith("入口") for l in self.links.values()):
             self.hub_down = ""
@@ -642,6 +863,12 @@ class Keeper:
     def close_all(self):
         now = time.time()
         for l in self.links.values():
+            if l.phase == "up" and l.standing and self.mode == "all":
+                # a standing link outlives its keeper: the next one adopts it
+                # after `id -un` (adopt_leftovers), nobody reconnects (issue #3482)
+                self.event(l, "交给下一个管理者")
+                l.proc = None
+                continue
             if l.phase != "down":
                 self.drop(l, "关闭：管理者退出", now)
         self.save(now)
@@ -673,8 +900,9 @@ class Keeper:
                 if env("FLEET_PEERLINK", "1") != "0":
                     self.beat(now)
                 self.save(now)
-                busy = any(l.phase in ("connecting", "verifying") or (l.phase == "down" and l.next_try - now < TICK)
-                           for l in self.links.values())
+                busy = self.peers_job is not None or any(
+                    l.phase in ("connecting", "verifying") or (l.phase == "down" and l.next_try - now < TICK)
+                    for l in self.links.values())
                 end = time.time() + (0.2 if busy else TICK)
                 while not stop and time.time() < end:
                     time.sleep(0.1)
@@ -690,14 +918,33 @@ class Keeper:
 
 
 # --- readers -----------------------------------------------------------------------------
-def healthy_sock(machine, login):
+def healthy_link(machine, login):
+    """The state row of a HEALTHY link (up, `-O check` answers), else None."""
     st = read_json(STATE, {})
     for l in st.get("links") or []:
         if l.get("machine") == machine and l.get("login") == login and l.get("phase") == "up":
             s = l.get("sock") or ""
             if s and master_check(s, l.get("host") or ssh_host(machine))[0]:
-                return s
-    return ""
+                return l
+    return None
+
+
+def healthy_sock(machine, login):
+    l = healthy_link(machine, login)
+    return l.get("sock") if l else ""
+
+
+def link_dest(l, machine):
+    """(port args, host) a channel on link row l names — the route its master
+    was opened on (a name that may not resolve is never put back)."""
+    host = str(l.get("host") or "") if l else ""
+    if not host_ok(host):
+        host = ssh_host(machine)
+    try:
+        port = int((l or {}).get("port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    return (["-p", str(port)] if port else []), host
 
 
 def cmd_sock(args):
@@ -709,6 +956,19 @@ def cmd_sock(args):
         return 1
     print(s)
     return 0
+
+
+def mux_dest(machine, login):
+    """[-p <port>] <host> — what a channel on the (machine, login) link names in
+    place of the bare host: the route its master was opened on (issue #3482), so
+    nothing is ever put back to a machine name that may not resolve."""
+    row = None
+    for l in read_json(STATE, {}).get("links") or []:
+        if l.get("machine") == machine and l.get("login") == login:
+            row = l
+            break
+    pargs, host = link_dest(row, machine)
+    return pargs + [host]
 
 
 def up_sock(machine, login):
@@ -763,7 +1023,8 @@ def cmd_pane(args):
     base = "bash %s/fleet-remote-view.sh attach --thin --view %s" % (remote_bin(), shlex.quote(via_view(view)))
     said, pause = False, 0.5
     while True:
-        s = healthy_sock(machine, login)
+        lk = healthy_link(machine, login)
+        s = lk.get("sock") if lk else ""
         if not s:
             if not said:
                 sys.stdout.write("\r\n正在连 %s（%s）…\r\n" % (machine, login))
@@ -780,8 +1041,9 @@ def cmd_pane(args):
             pane_opt("@peer_cur", want)
             pane_opt("@peer_want", "")
         t0 = time.time()
-        rc = subprocess.call(ssh_cmd() + ["-S", s, "-o", "ControlMaster=no", "-tt", "-l", login,
-                                          ssh_host(machine), remote])
+        pargs, dest = link_dest(lk, machine)
+        rc = subprocess.call(ssh_cmd() + ["-S", s, "-o", "ControlMaster=no", "-tt", "-l", login]
+                             + pargs + [dest, remote])
         if rc == 0:
             return 0
         sys.stdout.write("\r\n到 %s 的连接断了，等它回来…\r\n" % machine)
@@ -829,20 +1091,30 @@ def judge():
         name = "%s@%s" % (l.get("machine"), l.get("login"))
         if l.get("phase") == "up":
             rtt = l.get("rtt_ms")
-            parts.append("%s 路线 %s · %s · 往返 %s · 失败 %d" % (
+            parts.append("%s 已连上 · 路线 %s · %s · 往返 %s · 失败 %d" % (
                 name, l.get("route") or l.get("host"), ago(now - float(l.get("since") or now)),
                 "%dms" % rtt if isinstance(rtt, int) else "—", int(l.get("fails") or 0)))
             continue
         err = l.get("err") or l.get("phase")
-        parts.append("%s %s · 失败 %d" % (name, err, int(l.get("fails") or 0)))
         bad = float(l.get("bad_since") or 0)
+        lost = (err or "").startswith(("登录不符", "入口")) or (bad and now - bad > BAD_WARN)
+        if lost:
+            parts.append("%s 连不上：%s · 失败 %d" % (name, err, int(l.get("fails") or 0)))
+        else:
+            parts.append("%s 重连中%s · 失败 %d" % (name, "（%s）" % err if err and err != l.get("phase") else "",
+                                                 int(l.get("fails") or 0)))
         if (err or "").startswith("登录不符"):
             warns.append("%s 登录不符" % name)
         elif (err or "").startswith("入口"):
             warns.append("%s 开不了新连接：%s" % (name, err))
-        elif bad and now - bad > BAD_WARN:
-            warns.append("%s 核对失败已 %s：%s" % (name, ago(now - bad), err))
-    head = "%d 条常开连接" % len(links) if links else "没有常开连接（无看台）" if not st.get("views") else "没有常开连接"
+        elif lost:
+            warns.append("%s 连不上已 %s：%s" % (name, ago(now - bad), err))
+    if st.get("peers_err") and st.get("mode") == "all":
+        parts.append("入口的登录列表没拿到：%s（按上次的列表连）" % st.get("peers_err"))
+    if st.get("mode") == "all":
+        head = "全连 · %d 台对端" % len(links)
+    else:
+        head = "按需 · %d 条常开连接" % len(links) if links else "按需 · 没有常开连接（无看台）" if not st.get("views") else "按需 · 没有常开连接"
     line = head + ("：" + " ; ".join(parts) if parts else "")
     if warns:
         return 1, "；".join(warns) + " — " + line, st

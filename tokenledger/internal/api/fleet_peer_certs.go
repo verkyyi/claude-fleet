@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ type PeerCertResponse struct {
 	// an unknown host. No keys listed ⇒ both omitted, ssh checks as before.
 	Alias    string   `json:"alias,omitempty"`
 	HostKeys []string `json:"host_keys,omitempty"`
+
 }
 
 // errPeer carries an HTTP status with the refusal.
@@ -208,11 +210,11 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 		if n.Hostname != tHost || !active[n.EndpointID] || n.OSUser == "" {
 			continue
 		}
-		who, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
-		if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		mine, err := s.peerSameOwner(owner, srcUser, n)
+		if err != nil {
 			return nil, err
 		}
-		if (owner != "" && who == owner) || (owner == "" && who == "" && n.OSUser == srcUser) {
+		if mine {
 			hit = n
 			break
 		}
@@ -246,6 +248,17 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 	return resp, nil
 }
 
+// peerSameOwner: is the login on roster row n the same person's as the
+// asking node's (owner; "" = a login no person owns, which reaches only the
+// same name on a machine where no person owns it either)?
+func (s *Server) peerSameOwner(owner, srcUser string, n *store.Node) (bool, error) {
+	who, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
+	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		return false, err
+	}
+	return (owner != "" && who == owner) || (owner == "" && who == "" && n.OSUser == srcUser), nil
+}
+
 // peerHostKeys is the target's host keys as the machine list carries them
 // (claude-fleet#2983) and the alias they go under; ("", nil) when none.
 func (s *Server) peerHostKeys(host string) (string, []string) {
@@ -260,6 +273,120 @@ func (s *Server) peerHostKeys(host string) (string, []string) {
 		return alias, m.HostKeys
 	}
 	return "", nil
+}
+
+// peerRoutes is every way in to host (claude-fleet#3482): its machine-list
+// routes plus the entry (门) the hub can vouch for; nil when none is known.
+func (s *Server) peerRoutes(host string, now time.Time) []FleetRoute {
+	for _, m := range s.fleetMachines() {
+		if strings.EqualFold(m.Hostname, host) {
+			if rs := s.withEntryReach(m, now).Routes; len(rs) > 0 {
+				return rs
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// PeerLogin is one of the asking login's own logins on another machine.
+type PeerLogin struct {
+	Hostname string       `json:"hostname"`
+	Alias    string       `json:"alias,omitempty"`
+	Login    string       `json:"login"`
+	Status   string       `json:"status"` // online | maintenance | lost
+	Routes   []FleetRoute `json:"routes,omitempty"`
+}
+
+// handleNodePeers serves GET /v1/node/peers (claude-fleet#3482): every login
+// of the asking node's OWNER on the other machines — an active enrollment the
+// same person owns (peerSameOwner, the rule a peer certificate is issued by),
+// never anyone else's — with its status and its ways in. fleet-peerlink.py
+// keeps one standing connection to each.
+func (s *Server) handleNodePeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		httpError(w, http.StatusMethodNotAllowed, "GET")
+		return
+	}
+	ep, ok := s.nodeEndpoint(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	out, err := s.peerLogins(ep, time.Now())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
+}
+
+func (s *Server) peerLogins(ep *store.Endpoint, now time.Time) ([]PeerLogin, error) {
+	srcHost, srcUser := s.peerSelf(ep)
+	owner, err := s.principalOnNode(ep.ID, srcHost, srcUser)
+	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		return nil, err
+	}
+	snap, err := s.Nodes(now)
+	if err != nil {
+		return nil, err
+	}
+	live, err := s.Store.ListEndpoints("")
+	if err != nil {
+		return nil, err
+	}
+	active := map[string]bool{}
+	for _, e := range live {
+		active[e.ID] = true
+	}
+	rows, err := s.Store.Nodes()
+	if err != nil {
+		return nil, err
+	}
+	status := map[string]string{}
+	for _, n := range snap.Nodes {
+		status[n.EndpointID] = n.Status
+	}
+	alias := map[string]string{}
+	for _, m := range s.fleetMachines() {
+		if m.Alias != "" && sshToken(m.Alias) {
+			alias[strings.ToLower(m.Hostname)] = m.Alias
+		}
+	}
+	out := []PeerLogin{}
+	seen := map[string]bool{}
+	for i := range rows {
+		n := &rows[i]
+		if !active[n.EndpointID] || n.OSUser == "" || n.Hostname == "" || strings.EqualFold(n.Hostname, srcHost) {
+			continue
+		}
+		key := strings.ToLower(n.Hostname) + "\x00" + n.OSUser
+		if seen[key] {
+			continue
+		}
+		mine, err := s.peerSameOwner(owner, srcUser, n)
+		if err != nil {
+			return nil, err
+		}
+		if !mine {
+			continue
+		}
+		seen[key] = true
+		st := status[n.EndpointID]
+		if st == "" {
+			st = "lost"
+		}
+		out = append(out, PeerLogin{Hostname: n.Hostname, Alias: alias[strings.ToLower(n.Hostname)],
+			Login: n.OSUser, Status: st, Routes: s.peerRoutes(n.Hostname, now)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Hostname != out[j].Hostname {
+			return out[i].Hostname < out[j].Hostname
+		}
+		return out[i].Login < out[j].Login
+	})
+	return out, nil
 }
 
 // handleFleetPeerCerts lists the issuances — the operator's audit view.

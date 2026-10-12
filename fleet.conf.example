@@ -1879,6 +1879,17 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # ~/.ssh/config names it) unless mapped here, `label=host` pairs.
 # @label=Machine ssh hosts @group=accounts @tier=internal @scope=fleet @edit=str
 #FLEET_REMOTE_SSH="m4=m4 m5=m5"
+# The standing connections to your other machines (bin/fleet-peerlink.py, issue
+# #3482). `all` (the default): one ssh master to EVERY login of yours the hub lists
+# on the other machines, kept open — never closed for being unused, rebuilt with
+# backoff when it breaks — so switching to a session there needs no new connection.
+# Dialled by the hub's routes (tailnet name first, then the machine's entry 门),
+# never by a name assumed to resolve; FLEET_REMOTE_SSH above still wins.
+# `demand`: the old way — a link only while a thin view wants one, closed 10
+# minutes after it no longer does. Read by bin/fleet-peerlink.sh at the keeper's
+# start; restart the keeper (launchd KeepAlive / the node supervisor) to apply.
+# @label=Standing connections @group=accounts @tier=advanced @scope=global @edit=str
+#FLEET_PEERLINK_MODE="all"
 # Where the sidebar's LIST comes from (issue #1480, EPIC #1479 C1). `local`:
 # this machine's windows from tmux, plus your sessions on the other machines from
 # the hub's cache above — today's path. `hub`: the WHOLE list is the hub's

@@ -260,3 +260,40 @@ func TestPeerCertCarriesTargetHostKeys(t *testing.T) {
 		t.Fatalf("HTTP %d alias %q keys %v %s; want m5's key under m5", st, got.Alias, got.HostKeys, raw)
 	}
 }
+
+// claude-fleet#3482: GET /v1/node/peers lists the asking login's OWNER's
+// logins on the other machines — never another person's, never its own
+// machine — each with its status and its routes; an unowned login sees the
+// same name only.
+func TestNodePeersSameOwnerOnly(t *testing.T) {
+	h, _, n := peerHarness(t)
+	get := func(tok string) (int, []PeerLogin) {
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/node/peers", nil)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		res, err := h.http.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out struct {
+			Peers []PeerLogin `json:"peers"`
+		}
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out.Peers
+	}
+	st, ps := get(n["alice5"].token)
+	if st != 200 || len(ps) != 1 || ps[0].Hostname != "macmini-m4" || ps[0].Login != "alice" || ps[0].Alias != "m4" || ps[0].Status != "online" || len(ps[0].Routes) != 2 {
+		t.Fatalf("alice@m5: HTTP %d %+v; want alice on macmini-m4 (m4, online, two routes)", st, ps)
+	}
+	if st, ps = get(n["bob4"].token); st != 200 || len(ps) != 0 {
+		t.Fatalf("bob@m4: HTTP %d %+v; want none (bob has no other login, alice's is not his)", st, ps)
+	}
+	if st, ps = get(n["verk4"].token); st != 200 || len(ps) != 1 || ps[0].Hostname != "macmini" || ps[0].Login != "verk" {
+		t.Fatalf("verk@m4: HTTP %d %+v; want verk on macmini only", st, ps)
+	}
+	if st, _ = get(""); st != 401 {
+		t.Fatalf("no token: HTTP %d; want 401", st)
+	}
+}

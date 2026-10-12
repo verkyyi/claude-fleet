@@ -1222,8 +1222,8 @@ def peer_select(machine, login, sock, target, vid):
     cmd = "bash %s/fleet-remote-view.sh select %s %s" % (pl.remote_bin(), shlex.quote(target),
                                                          shlex.quote(pl.via_view(vid)))
     try:
-        return subprocess.run(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-l", login,
-                                              pl.ssh_host(machine), cmd],
+        return subprocess.run(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-l", login]
+                              + pl.mux_dest(machine, login) + [cmd],
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                               timeout=fenv("FLEET_VIEW_PEER_SECS", 3)).returncode
     except (OSError, subprocess.TimeoutExpired):
@@ -1618,8 +1618,8 @@ def shell_pane(vid, prog, m, l, wid):
             wait_key(say("view_shell_nolink_fmt", m))
             return 1
         cmd = "bash %s/fleet-remote-view.sh shell-here %s" % (pl.remote_bin(), shlex.quote(wid))
-        rc = subprocess.call(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-tt", "-l", l,
-                                             pl.ssh_host(m), cmd], env=env)
+        rc = subprocess.call(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-tt", "-l", l]
+                             + pl.mux_dest(m, l) + [cmd], env=env)
         if rc == 3:
             wait_key(say("view_shell_gone_fmt", m))
         elif rc == 255:
