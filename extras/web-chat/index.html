@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>fleet 对话</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1d1d1f; --mute:#6e6e73; --line:#e5e5ea; --me:#0a84ff; --card:#f2f2f7; --warn:#ff9f0a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#000; --fg:#f5f5f7; --mute:#98989d; --line:#2c2c2e; --card:#1c1c1e; } }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:16px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; -webkit-text-size-adjust:100%; }
+  header { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:.5em; padding:calc(env(safe-area-inset-top) + .6em) .9em .6em; background:var(--bg); border-bottom:1px solid var(--line); }
+  header h1 { flex:1; margin:0; font-size:1.05em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  button { font:inherit; border:0; border-radius:10px; padding:.55em .9em; background:var(--card); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--me); color:#fff; }
+  button:disabled { opacity:.45; }
+  #chat { padding:.6em .7em 1em; }
+  main { padding-bottom:6em; }
+  .msg { margin:.5em 0; white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere; }
+  .user { margin-left:15%; padding:.55em .8em; border-radius:14px; background:var(--me); color:#fff; }
+  .text { padding:.1em .1em; }
+  details.tool { margin:.3em 0; border:1px solid var(--line); border-radius:10px; font-size:.85em; }
+  details.tool summary { padding:.45em .7em; color:var(--mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; list-style:none; }
+  details.tool summary::before { content:"▸ "; }
+  details.tool[open] summary::before { content:"▾ "; }
+  details.tool pre { margin:0; padding:.5em .7em; max-height:40vh; overflow:auto; white-space:pre-wrap; border-top:1px solid var(--line); font-size:.95em; }
+  details.tool.err summary { color:#ff453a; }
+  .ask { margin:.6em 0; padding:.7em; border-radius:12px; background:var(--card); border:1px solid var(--warn); }
+  .ask .q { font-weight:600; margin-bottom:.4em; }
+  .ask .opts { display:flex; flex-direction:column; gap:.4em; }
+  .ask .opts button { text-align:left; background:var(--bg); border:1px solid var(--line); }
+  .ask .opts button small { display:block; color:var(--mute); }
+  .ask.done { opacity:.6; border-color:var(--line); }
+  .note { color:var(--mute); font-size:.8em; text-align:center; margin:.6em 0; }
+  .resume { font-family:ui-monospace, Menlo, monospace; font-size:.75em; color:var(--mute); padding:.4em .9em; word-break:break-all; }
+  form { position:fixed; left:0; right:0; bottom:0; display:flex; gap:.5em; padding:.6em .7em calc(env(safe-area-inset-bottom) + .6em); background:var(--bg); border-top:1px solid var(--line); }
+  select { font:inherit; font-size:14px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--fg); max-width:7.5em; }
+  #stopbtn { background:#ff453a; color:#fff; }
+  textarea { flex:1; font:inherit; font-size:16px; resize:none; border:1px solid var(--line); border-radius:12px; padding:.5em .7em; background:var(--bg); color:var(--fg); max-height:30vh; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">fleet 对话</h1>
+</header>
+<main>
+  <div id="chat"></div>
+  <div id="resume" class="resume hidden"></div>
+</main>
+<form id="form">
+  <select id="model" aria-label="模型"></select>
+  <textarea id="input" rows="1" placeholder="说点什么…" enterkeyhint="send"></textarea>
+  <button id="sendbtn" class="primary" type="submit">发送</button>
+  <button id="stopbtn" class="hidden" type="button">停止</button>
+</form>
+<script>
+"use strict";
+// One conversation, always this one (issue #3567): history above, the next line below.
+const $ = (id) => document.getElementById(id);
+const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
+let running = false;
+let turnId = null;           // the running turn (the stop key's target)
+let textEl = null;           // the assistant bubble deltas append to
+const tools = new Map();     // tool_use id → <details>
+const asked = new Set();     // ask ids already on the page
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function scroll() { window.scrollTo(0, document.body.scrollHeight); }
+function setRunning(on) {
+  running = on;
+  $("sendbtn").classList.toggle("hidden", on); $("stopbtn").classList.toggle("hidden", !on);
+  if (!on) { turnId = null; textEl = null; }
+}
+function setResume(id, cwd) {
+  const r = $("resume");
+  if (!id) { r.classList.add("hidden"); return; }
+  r.textContent = `终端里接着用：cd ${cwd || "~"} && claude --resume ${id}`;
+  r.classList.remove("hidden");
+}
+
+async function load() {
+  const r = await fetch("/api/conversation", { headers: H });
+  const j = await r.json();
+  if (!r.ok) { $("chat").append(el("div", "note", j.error || "读不到对话")); return; }
+  if (!$("model").options.length) {
+    const saved = localStorage.getItem("fwc-model");
+    for (const m of j.models || []) { const o = el("option", "", m.label); o.value = m.id; $("model").append(o); }
+    $("model").value = (j.models || []).some((m) => m.id === saved) ? saved : j.default;
+  }
+  $("chat").textContent = ""; tools.clear(); asked.clear(); textEl = null;
+  if (!j.items.length) $("chat").append(el("div", "note", "说第一句话吧"));
+  for (const it of j.items) render(it, true);
+  textEl = null;
+  setResume(j.session, j.cwd);
+  for (const a of j.asks || []) render(a, true);
+  setRunning(j.busy); turnId = j.turn || null;
+  scroll();
+  if (j.busy) setTimeout(load, 2500);     // a turn this page did not start (or lost): follow it
+}
+
+function toolBox(it) {
+  const d = el("details", "tool"); d.append(el("summary", "", it.summary || it.name));
+  $("chat").append(d); tools.set(it.id, d); textEl = null; return d;
+}
+function render(it, history) {
+  const chat = $("chat");
+  switch (it.t) {
+    case "user": chat.append(el("div", "msg user", it.text)); textEl = null; break;
+    case "text":
+      if (!textEl) { textEl = el("div", "msg text"); chat.append(textEl); }
+      textEl.textContent += it.d; break;
+    case "tool": toolBox(it); break;
+    case "tool_result": {
+      const d = tools.get(it.id) || toolBox({ id: it.id, summary: "工具结果" });
+      d.append(el("pre", "", it.text || "(空)")); if (it.error) d.classList.add("err"); break;
+    }
+    case "session": setResume(it.id, it.cwd); break;
+    case "turn": turnId = it.id; break;
+    case "ask": if (!asked.has(it.rid)) { asked.add(it.rid); askBox(it); } textEl = null; break;
+    case "done": textEl = null; break;
+    case "stopped": chat.append(el("div", "note", "已停止")); textEl = null; break;
+    case "error": chat.append(el("div", "note", "出错：" + it.msg)); textEl = null; break;
+  }
+  if (!history) scroll();
+}
+
+function askBox(it) {
+  const box = el("div", "ask");
+  const finish = async (payload, label) => {
+    box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    box.classList.add("done"); box.append(el("div", "note", "已答：" + label));
+    await fetch("/api/answer", { method: "POST", headers: H, body: JSON.stringify({ rid: it.rid, ...payload }) });
+  };
+  if (it.kind === "question") {
+    const answers = {}; const qs = it.questions || [];
+    const complete = () => Object.keys(answers).length === qs.length;
+    qs.forEach((q) => {
+      box.append(el("div", "q", (q.header ? q.header + " · " : "") + q.question));
+      const opts = el("div", "opts"); const picked = new Set();
+      for (const o of q.options || []) {
+        const b = el("button"); b.type = "button"; b.append(o.label); if (o.description) b.append(el("small", "", o.description));
+        b.onclick = () => {
+          if (q.multiSelect) { picked.has(o.label) ? picked.delete(o.label) : picked.add(o.label); b.style.borderColor = picked.has(o.label) ? "var(--me)" : ""; if (picked.size) answers[q.question] = [...picked].join(", "); else delete answers[q.question]; return; }
+          answers[q.question] = o.label;
+          opts.querySelectorAll("button").forEach((x) => (x.disabled = true));
+          if (complete()) finish({ answers }, Object.values(answers).join(" / "));
+        };
+        opts.append(b);
+      }
+      box.append(opts);
+      if (q.multiSelect) { const ok = el("button", "primary", "确定"); ok.type = "button"; ok.onclick = () => { if (complete()) finish({ answers }, Object.values(answers).join(" / ")); }; box.append(ok); }
+    });
+  } else {
+    box.append(el("div", "q", "要用工具：" + (it.summary || it.tool)));
+    const opts = el("div", "opts");
+    const yes = el("button", "", "允许"); yes.type = "button"; yes.onclick = () => finish({ allow: true }, "允许");
+    const no = el("button", "", "拒绝"); no.type = "button"; no.onclick = () => finish({ allow: false }, "拒绝");
+    opts.append(yes, no); box.append(opts);
+  }
+  $("chat").append(box);
+}
+
+async function sendTurn(text) {
+  setRunning(true);
+  const first = $("chat").querySelector(".note:only-child"); if (first) first.remove();
+  render({ t: "user", text });
+  let lost = false;
+  try {
+    const r = await fetch("/api/turn", { method: "POST", headers: H, body: JSON.stringify({ text, model: $("model").value }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); render({ t: "error", msg: j.error || r.status }); return; }
+    const rd = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await rd.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (line) render(JSON.parse(line)); }
+    }
+  } catch (e) { lost = true; }
+  finally { setRunning(false); }
+  if (lost) load();                        // the line dropped; the turn goes on — pick it back up
+}
+
+$("form").onsubmit = (e) => { e.preventDefault(); const v = $("input").value.trim(); if (!v || running) return; $("input").value = ""; sendTurn(v); };
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(pointer:fine)").matches) { e.preventDefault(); $("form").requestSubmit(); } });
+$("stopbtn").onclick = () => { if (turnId) fetch("/api/stop", { method: "POST", headers: H, body: JSON.stringify({ turn: turnId }) }); };
+$("model").onchange = () => localStorage.setItem("fwc-model", $("model").value);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !running) load(); });
+load();
+</script>
+</body>
+</html>
