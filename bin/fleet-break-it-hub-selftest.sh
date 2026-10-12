@@ -41,6 +41,9 @@
 #                                                   (DNSPod; go test, when a toolchain is here), deploy/k8s/overlays/prod
 #   entry-name-unclaimed                            tokenledger/internal/api fleet_entry.go (entryEnsureName) +
 #                                                   fleet_entry_dns.go (the *.cf guard); go test, when a toolchain is here
+#   account-gh-only-check                           tokenledger/internal/api person.go (isPerson, personRow,
+#                                                   personRole, admitPerson) + internal/store hub_users.go
+#                                                   (hub_identities, migration 2); go test, when a toolchain is here
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
@@ -1972,6 +1975,36 @@ drill_pool_usage_node_dropped() {
       0:*) WHAT='节点代理的用量：无主登录告警不丢、按会话分行且 repo/issue 取自租约、个人上限累计与旧汇总相等（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- account-gh-only-check (#3603, EPIC #3570 C10): a person was a GitHub
+# account — every "is this a person" asked `gh:`, so someone with only an
+# address was nobody: no invite, no machine, no certificate. Now one isPerson,
+# a principal any way of signing in leads to, and the old gh: people kept.
+drill_account_gh_only_check() {
+  CAP=120; local t0 out rc tests tl="$ROOT/tokenledger/internal"
+  tests='TestNoGHPrefixOutsideIdentity TestPAccountInviteMachineCert TestMigrationKeepsGitHubPerson TestMeIdentities TestAdminsByPrincipalOrAddress'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$tl/api/person_test.go" 2>/dev/null || { WHY="the hub half's test $out is not in internal/api/person_test.go"; return 1; }
+  done
+  grep -q '^func isPerson(principal string) bool' "$tl/api/person.go" 2>/dev/null \
+    || { WHY="there is no one isPerson any more"; return 1; }
+  # "gh:" outside tests, ticket ids (共同约定 1) and comments
+  out=$(grep -n '"gh:"' "$tl"/api/*.go | grep -v '_test.go:' | grep -v 'fleet_tickets.go:' | grep -v '^[^:]*:[0-9]*:[[:space:]]*//')
+  [ -z "$out" ] || { WHY="a principal is judged by its gh: spelling again: $(printf '%s' "$out" | head -2 | sed "s|$tl/||" | tr '\n' ' ')"; return 1; }
+  WHAT='没有 GitHub 的人：邀请（绑邮箱）→ 登录 → 绑机器 → 发证书 → 自己的 /v1/me；老 GitHub 人迁移前后快照一致；「是不是一个人」只问 isPerson（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='没有 GitHub 的人走完邀请 → 绑机器 → 发证书；老 GitHub 人迁移前后会话 / 机器 / 证书 / 单子快照一致；全仓 "gh:" 只剩 GitHub 身份一处（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   fi
   SECS=$(since "$t0")

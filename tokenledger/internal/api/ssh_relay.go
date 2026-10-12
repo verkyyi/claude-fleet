@@ -190,12 +190,12 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	}
 	// A GitHub person (claude-fleet#1984), on the list right now — the
 	// session as a cookie, or (a CLI holds no cookie jar) as a bearer.
-	sess, id, ok := s.githubSession(r)
+	sess, pid, ok := s.personSession(r)
 	if !ok {
-		sess, id, ok = s.githubSessionValue(bearer(r))
+		sess, pid, ok = s.personSessionValue(bearer(r))
 	}
 	if ok {
-		if role, err := s.githubRole(id); err == nil && role == roleAdmin {
+		if role, err := s.personRole(pid); err == nil && role == roleAdmin {
 			// An admin sees every machine, as the operator's doors do
 			// (claude-fleet#1985).
 			return sshRelayIdentity{Operator: true, Actor: sess.UID, Admin: true}, true

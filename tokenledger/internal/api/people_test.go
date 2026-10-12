@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,15 +35,28 @@ func enablePeople(t *testing.T, h *harness, principals ...string) {
 	}
 }
 
-// listPerson adds principal (gh:<id>) to the list as a user named login.
+// listPerson adds principal (gh:<id>, or p:<uuid>) to the list as a user
+// named login. A p: person already on the list keeps their row.
 func listPerson(t *testing.T, h *harness, principal, login string) {
 	t.Helper()
 	id, ok := githubIDOf(principal)
 	if !ok {
-		t.Fatalf("%q is not a gh:<id> principal", principal)
+		if !isPerson(principal) {
+			t.Fatalf("%q is not a person's principal", principal)
+		}
+		if u, _ := h.srv.Store.HubUserByPrincipal(principal); u != nil {
+			return
+		}
+		if login == "" {
+			login = "person"
+		}
+		if err := h.srv.Store.UpsertHubUser(store.HubUser{PrincipalID: principal, Login: login, Role: store.RoleUser, AddedBy: "test", AddedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 	if login == "" {
-		login = "user" + principal[len(githubPrincipalPrefix):]
+		login = "user" + strconv.FormatInt(id, 10)
 	}
 	if err := h.srv.Store.UpsertHubUser(store.HubUser{GitHubID: id, Login: login, Role: store.RoleUser, AddedBy: "test", AddedAt: time.Now()}); err != nil {
 		t.Fatal(err)
@@ -51,7 +65,7 @@ func listPerson(t *testing.T, h *harness, principal, login string) {
 
 // personSession is the session value GitHub sign-in mints for principal.
 func personSession(principal, name string) string {
-	return authz.SignRole(githubSessionSub, principal, name, roleUser,
+	return authz.SignRole(store.IdentityGitHub, principal, name, roleUser,
 		(&GitHubAuth{ClientSecret: testGitHubSecret}).sessionKey(), time.Now(), time.Hour)
 }
 

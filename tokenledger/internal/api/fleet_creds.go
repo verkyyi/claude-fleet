@@ -115,16 +115,14 @@ const (
 
 // credsepGated says whether principal's login must be refused real tokens
 // because it is not credential-separated (claude-fleet#2295, EPIC #2293).
-// Only a GitHub person whose role is user is held to it — an admin, the
-// operator's own principals and anyone not signed in through GitHub lease as
-// before (共同约定 4). credsep is the login's newest heartbeat's word; ""
+// Only a person whose role is user is held to it — an admin, the operator's
+// own principals and anyone who is not a person lease as before (共同约定 4). credsep is the login's newest heartbeat's word; ""
 // (an agent older than #2295) counts as not separated.
 func (s *Server) credsepGated(principal, credsep string) (bool, error) {
-	id, ok := githubIDOf(principal)
-	if !ok {
+	if !isPerson(principal) {
 		return false, nil
 	}
-	role, err := s.githubRole(id)
+	role, err := s.personRole(principal)
 	if err != nil {
 		return false, err
 	}

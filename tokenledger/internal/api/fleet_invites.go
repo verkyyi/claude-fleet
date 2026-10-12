@@ -18,7 +18,7 @@ import (
 // newcomer one install command, and their GitHub sign-in lets them in — on
 // the list, the invite spent, their login opened — with no admin at hand.
 //
-//	POST   /v1/fleet/invites {github_login?}   an admin mints one; the code is
+//	POST   /v1/fleet/invites {github_login? | email?}  an admin mints one; the code is
 //	                                          in this answer and nowhere else
 //	GET    /v1/fleet/invites                   the admin's list (no codes)
 //	DELETE /v1/fleet/invites?id=<id>           revoke an unused one
@@ -100,13 +100,29 @@ func takeInviteCookie(w http.ResponseWriter, r *http.Request) string {
 	return c.Value
 }
 
-// admitInvite spends invite for a person the list does not name and puts
-// them on it. refusal is denyInvitePrefix + the reason when it cannot be used.
+// admitInvite spends invite for a GitHub person the list does not name and
+// puts them on it. refusal is denyInvitePrefix + the reason when it cannot be
+// used.
 func (s *Server) admitInvite(id int64, login, invite string, now time.Time) (refusal string, err error) {
-	actor := githubPrincipal(id)
-	target := login + " (" + actor + ")"
+	pid, err := s.githubPersonOf(id)
+	if err != nil {
+		return "", err
+	}
+	return s.admitInviteAs(pid, store.IdentityGitHub, fmt.Sprint(id), login, invite, now)
+}
+
+// admitInviteAs spends invite for pid, signing in by kind + subject under
+// name, and puts them on the list (claude-fleet#3603: any way of signing in).
+// A bound invite admits its own GitHub username or its own address only.
+func (s *Server) admitInviteAs(pid, kind, subject, name, invite string, now time.Time) (refusal string, err error) {
+	actor := pid
+	target := name + " (" + actor + ")"
 	hash := inviteHash(invite)
-	inv, err := s.Store.UseInvite(hash, login, actor, now)
+	bound := subject // an address binds by itself …
+	if kind == store.IdentityGitHub {
+		bound = name // … a GitHub invite by the username
+	}
+	inv, err := s.Store.UseInviteAs(hash, kind, bound, actor, now)
 	if reason := store.InviteReason(err); reason != "" {
 		detail := "invite " + reason
 		if old, _ := s.Store.InviteByHash(hash); old != nil {
@@ -118,9 +134,17 @@ func (s *Server) admitInvite(id int64, login, invite string, now time.Time) (ref
 	if err != nil {
 		return "", err
 	}
-	if err := s.Store.UpsertHubUser(store.HubUser{GitHubID: id, Login: login, Role: roleUser,
-		AddedBy: "invite " + inv.ID + " by " + orDefault(inv.CreatedBy, "?"), AddedAt: now}); err != nil {
+	row := store.HubUser{PrincipalID: pid, Login: name, Role: roleUser,
+		AddedBy: "invite " + inv.ID + " by " + orDefault(inv.CreatedBy, "?"), AddedAt: now}
+	if gid, ok := githubIDOf(pid); ok && kind == store.IdentityGitHub {
+		row.GitHubID = gid
+	}
+	if err := s.Store.UpsertHubUser(row); err != nil {
 		_ = s.Store.UnuseInvite(hash)
+		return "", err
+	}
+	if err := s.Store.AddHubIdentity(store.HubIdentity{Kind: kind, Subject: subject, PrincipalID: pid,
+		VerifiedAt: now, AddedBy: "invite " + inv.ID}); err != nil {
 		return "", err
 	}
 	_ = s.Store.HubAudit(actor, "invite", target, "ok", "邀请已使用 · invite used ("+inv.ID+", made by "+orDefault(inv.CreatedBy, "?")+")", now)
@@ -268,10 +292,11 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, now time.T
 	}
 	var req struct {
 		GitHubLogin string `json:"github_login"`
+		Email       string `json:"email"`
 	}
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			httpError(w, http.StatusBadRequest, "the body must be {\"github_login\": \"<optional GitHub username>\"}")
+			httpError(w, http.StatusBadRequest, "the body must be {\"github_login\": \"<optional GitHub username>\"} or {\"email\": \"<optional address>\"}")
 			return
 		}
 	}
@@ -280,13 +305,24 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, now time.T
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("%q is not a GitHub username", gl))
 		return
 	}
+	// An invite for someone with no GitHub (claude-fleet#3603): bound to the
+	// address they will sign in with.
+	email := store.NormIdentitySubject(store.IdentityEmail, req.Email)
+	if email != "" && !validEmail(email) {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("%q is not an email address", req.Email))
+		return
+	}
+	if gl != "" && email != "" {
+		httpError(w, http.StatusBadRequest, "an invite is for one GitHub username or one address, not both")
+		return
+	}
 	code, err1 := randomToken(18)
 	id, err2 := randomToken(6)
 	if err1 != nil || err2 != nil {
 		httpError(w, http.StatusInternalServerError, "no randomness")
 		return
 	}
-	inv := store.Invite{ID: "inv_" + id, CodeHash: inviteHash(code), GitHubLogin: gl, CreatedBy: actorOf(r),
+	inv := store.Invite{ID: "inv_" + id, CodeHash: inviteHash(code), GitHubLogin: gl, Email: email, CreatedBy: actorOf(r),
 		CreatedAt: now, ExpiresAt: now.Add(store.InviteTTL)}
 	if err := s.Store.CreateInvite(inv); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
@@ -295,6 +331,8 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, now time.T
 	detail := "for anyone, until " + inv.ExpiresAt.Format(time.RFC3339)
 	if gl != "" {
 		detail = "for GitHub user " + gl + ", until " + inv.ExpiresAt.Format(time.RFC3339)
+	} else if email != "" {
+		detail = "for " + email + ", until " + inv.ExpiresAt.Format(time.RFC3339)
 	}
 	_ = s.Store.HubAudit(inv.CreatedBy, "invite", inv.ID, "created", detail, now)
 	u := s.hubURL(r) + InvitePath + code

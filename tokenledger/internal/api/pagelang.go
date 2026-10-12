@@ -35,8 +35,15 @@ const (
 )
 
 // langSettingKey is the account setting that carries a person's choice, in
-// the hub's settings table (EPIC #1982 C4's user.<id>.* family).
-func langSettingKey(id int64) string { return "user." + strconv.FormatInt(id, 10) + ".lang" }
+// the hub's settings table (EPIC #1982 C4's user.<id>.* family): a GitHub
+// person's bare GitHub ID, as it always was; anyone else's principal
+// (claude-fleet#3603).
+func langSettingKey(pid string) string {
+	if id, ok := githubIDOf(pid); ok {
+		return "user." + strconv.FormatInt(id, 10) + ".lang"
+	}
+	return "user." + pid + ".lang"
+}
 
 // parseLang reads a ?lang= or cookie value: zh / zh-CN / en and friends.
 // Anything this build has no dictionary for is "" — not a choice.
@@ -64,13 +71,13 @@ func (s *Server) pageLocale(w http.ResponseWriter, r *http.Request) string {
 		return loc // withPageLang already settled it, cookie and all
 	}
 	var account string
-	var id int64
+	var pid string
 	var signedIn bool
 	if s.GitHub.ready() && s.Store != nil {
-		if _, gid, ok := s.githubSession(r); ok {
-			id, signedIn = gid, true
+		if _, p, ok := s.personSession(r); ok {
+			pid, signedIn = p, true
 			if set, err := s.Store.FleetSettings(); err == nil {
-				account = parseLang(set[langSettingKey(id)])
+				account = parseLang(set[langSettingKey(pid)])
 			}
 		}
 	}
@@ -83,7 +90,7 @@ func (s *Server) pageLocale(w http.ResponseWriter, r *http.Request) string {
 		if signedIn && q != account {
 			// Through the settings store, so the change is audited like
 			// every other setting (claude-fleet#1986).
-			_, _ = s.putHubSetting(githubPrincipal(id), langSettingKey(id), q, time.Now())
+			_, _ = s.putHubSetting(pid, langSettingKey(pid), q, time.Now())
 		}
 		if q != cookie {
 			setLangCookie(w, r, q)
