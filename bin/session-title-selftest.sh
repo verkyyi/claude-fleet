@@ -118,7 +118,7 @@ if [ -n "$REAL_TMUX" ]; then
   # row ends at orphanrep= (column 31, issue #3369), empty with no orphan report
   T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:draft" @orch_queue 3
   oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: an old seat's @orch_queue → no orchq=, the row ends at orphanrep= (issues #3118, #3369)" "31|orphanrep=" \
+  eq "A: an old seat's @orch_queue → no orchq=, the row ends at pin= (issues #3118, #3369, #3517)" "32|pin=" \
      "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { print NF "|" $NF }')"
   for o in @orch_queue @fleet_role; do T set-option -wu -t "=$S:draft" "$o"; done
   # column 31 (issue #3369): the login's unread orphan reports, the same cell on every row
@@ -155,7 +155,7 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mini2 的日志" "$(col17 "$out5" '我的会话')"
   eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
   eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
-  eq "A: …and the line moves no other column (31 columns, #3369)" "19 reap= detail= role= epic=" \
+  eq "A: …and the line moves no other column (32 columns, #3369, #3517)" "20 reap= detail= role= epic=" \
      "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 12, $18, $19, $20, $21 }')"
   # A3 (issue #3317): a name the person gave the window beats the issue title and
   # the first sentence — both rename roads stamp @name_manual, and the inventory
