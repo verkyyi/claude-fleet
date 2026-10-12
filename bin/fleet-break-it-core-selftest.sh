@@ -348,8 +348,8 @@ drill_node_program_seat() {
   printf '{"children": [{"name": "node-agent", "cmd": ["/bin/bash", "%s"], "seat_agent": true}], "tasks": [], "account": []}\n' \
     "$sb/root/rt/bin/fleet-loop.sh" > "$sb/table.json"
   # the switch on: root's marker, the seat account there (this uid)
-  printf '{"alice": {"uid": %d, "gid": %d, "home": "%s"}, "_fleetnode": {"uid": %d, "gid": %d, "home": "/var/empty"}}\n' \
-    "$(id -u)" "$(id -g)" "$sb/Users/alice" "$(id -u)" "$(id -g)" > "$sb/passwd.json"
+  printf '{"alice": {"uid": %d, "gid": %d, "home": "%s"}, "_fleetnode": {"uid": %d, "gid": %d, "home": "/var/empty"}, "fleetnode": {"uid": %d, "gid": %d, "home": "/var/empty"}}\n' \
+    "$(id -u)" "$(id -g)" "$sb/Users/alice" "$(id -u)" "$(id -g)" "$(id -u)" "$(id -g)" > "$sb/passwd.json"
   printf '{}\n' > "$sb/db/seat-agent"
   core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
   t0=$(now)
