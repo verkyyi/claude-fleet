@@ -789,6 +789,9 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   doctor 的 `feedback` 行：开 ⇒ PASS，托管登录被关 ⇒ 一行 INFO（不 WARN：人可以关），自己的电脑没开 ⇒ 没有这行。
   反馈进了入口却没变成 GitHub 单（状态「待转」），是入口那侧的 GitHub App 没配，不是这台机器的事。
 - 测试：`fleet-plugins-selftest.sh` J。
+- **反过来的一个**：`fleet-infra`（管机器和入口的人用的运维技能，#3586）**永远不是**托管默认——
+  `--default fleet-infra` 被 `fleet-plugins.py` 拒绝，入口的团队配置也不许在 `enabledPlugins` 里下发它
+  （入口与本机两侧都拒）；要用的管理员自己 `claude plugin install fleet-infra@claude-fleet`。测试：同上 K。
 
 ## 19. 托管 Mac 关掉 Spotlight（#3402）
 
