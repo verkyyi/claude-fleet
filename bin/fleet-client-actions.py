@@ -675,7 +675,15 @@ class Client:
                 if not url:
                     return False, why
                 ok, out = self.run_script("FLEET_CLIENT_FLEET_OPEN", "fleet-open.sh", [url])
-                return (ok and out.startswith("sent:iterm2")), "iterm2" if out.startswith("sent:iterm2") else out
+                # its result word (issue #3538): opened · unconfirmed · failed:<why>;
+                # an older copy's sent:iterm2 is unconfirmed — the escape has no receipt
+                if out == "opened":
+                    return True, "opened"
+                if out.startswith("failed:"):
+                    return False, out[len("failed:"):] or "fleet-open failed"
+                if out == "unconfirmed" or out.startswith("sent:iterm2"):
+                    return True, "unconfirmed"
+                return False, out or "fleet-open failed"
             link, src = self.link_for(a, via)
             if not link:
                 return self.later("这个网页", "%s:%s%s" % (a.get("machine"), a.get("rport"), a.get("path") or ""))

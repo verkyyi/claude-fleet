@@ -11,7 +11,7 @@
 # fleet-open on the client are recorders, `ssh` and the master's connect are fakes,
 # `tailscale` answers nothing.
 #   A. another machine  — fleet-open.sh on a node with no tmux and no terminal of
-#                         the person's → `sent:client`; the client's opener ran
+#                         the person's → `opened`; the client's opener ran
 #                         ONCE with the URL; actions.log has the line
 #   B. loopback page    — `:8765/d/x/` → the client opens a master to that machine,
 #                         forwards a local port to its 127.0.0.1:8765, and only
@@ -20,8 +20,8 @@
 #                         lease's, a stale one, a replay → never run, each logged
 #                         `refused: …`
 #   D. no hub           — the client runs on this screen → `open` here,
-#                         `sent:local`; nobody connected → the old road, byte for
-#                         byte (open-url.sh's `fallback:copied`)
+#                         `opened`; nobody connected → the old road (open-url.sh),
+#                         `unconfirmed` (issue #3538)
 #   E. iTerm2           — caps iterm2 (no open_url): a note is OSC 9 to the
 #                         terminal; a page goes through fleet-open.sh's escape
 #   F. link only        — a phone: the page's tailnet address (via tailnet), the
@@ -211,7 +211,7 @@ where '["open_url","show_file","notify"]' local
 reset; client_start
 r=$(OPEN https://example.com/report)
 client_stop
-eq "A fleet-open → sent:client" "sent:client" "$r"
+eq "A fleet-open → opened (the client's done is the receipt)" "opened" "$r"
 eq "A the client's opener ran once, with the URL" "https://example.com/report" "$(cat "$WORK/opened" 2>/dev/null)"
 has "A the operator-facing line names the device" "$(cat "$WORK/open.err")" "客户端 MacBook"
 has "A actions.log: one line, opened" "$(cat "$CL/actions.log" 2>/dev/null)" "open_url	opened"
@@ -221,7 +221,7 @@ eq "A actions.log has ONE line" "1" "$(wc -l < "$CL/actions.log" 2>/dev/null | t
 reset; client_start
 r=$(OPEN :8765/d/x/)
 client_stop
-eq "B → sent:client" "sent:client" "$r"
+eq "B → opened" "opened" "$r"
 sshlog=$(cat "$WORK/ssh.log" 2>/dev/null)
 has "B a master to the page's machine" "$sshlog" "connect otherbox -o ControlMaster=yes"
 has "B a local port forwarded to its 127.0.0.1:8765" "$sshlog" ":127.0.0.1:8765 otherbox"
@@ -274,7 +274,7 @@ printf '#!/bin/sh\necho %s\nexit 3\n' "'{\"state\":\"none\",\"source\":\"local\"
 chmod +x "$WORK/fakebin/where-local" "$WORK/fakebin/where-none"
 reset
 r=$(FLEET_OPEN_WHERE_CMD="$WORK/fakebin/where-local" FLEET_OPEN_LOCAL_CMD="$WORK/fakebin/rec-open" OPEN :5173/app)
-eq "D no hub, client here → sent:local" "sent:local" "$r"
+eq "D no hub, client here → opened" "opened" "$r"
 eq "D opened right here, on the loopback" "http://127.0.0.1:5173/app" "$(cat "$WORK/opened" 2>/dev/null)"
 reset
 cat > "$WORK/fakebin/rec-openurl" <<EOF
@@ -284,12 +284,12 @@ echo fallback:copied
 EOF
 chmod +x "$WORK/fakebin/rec-openurl"
 r=$(FLEET_OPEN_WHERE_CMD="$WORK/fakebin/where-none" FLEET_OPEN_URL_BIN="$WORK/fakebin/rec-openurl" bash "$BIN/fleet-open.sh" https://example.com/x 2>/dev/null)
-eq "D nobody connected → the old road (open-url.sh)" "fallback:copied" "$r"
+eq "D nobody connected → the old road (open-url.sh), unconfirmed" "unconfirmed" "$r"
 eq "D … with the URL as before" "https://example.com/x" "$(cat "$WORK/openurl" 2>/dev/null)"
 # and the real reader with no hub and no client anywhere: the same old road
 rm -f "$WORK/openurl"
 r=$(FLEET_OPEN_URL_BIN="$WORK/fakebin/rec-openurl" bash "$BIN/fleet-open.sh" https://example.com/y 2>/dev/null)
-eq "D degenerate (no hub, no client) → old road" "fallback:copied" "$r"
+eq "D degenerate (no hub, no client) → old road" "unconfirmed" "$r"
 mv "$WORK/node.env.away" "$FLEET_CONF_DIR/node.env"
 
 # --- signed actions handed straight to one client round --------------------------------
@@ -314,7 +314,7 @@ eq "E … not the system notifier" "" "$(cat "$WORK/notified" 2>/dev/null)"
 reset; signed '{"kind":"open_url","url":"https://example.com/pr"}'
 has "E a page → fleet-open.sh's iTerm2 escape" "$(cat "$WORK/fleetopen" 2>/dev/null)" "https://example.com/pr"
 has "E … with the client road off (no loop)" "$(cat "$WORK/fleetopen" 2>/dev/null)" "FLEET_OPEN_CLIENT=0"
-has "E logged iterm2" "$(cat "$CL/actions.log")" "open_url	iterm2"
+has "E logged unconfirmed (the escape has no receipt)" "$(cat "$CL/actions.log")" "open_url	unconfirmed"
 where '["open_url","show_file","notify"]' local
 reset; signed '{"kind":"notify","title":"t","body":"b"}'
 eq "E no iterm2, a computer → the system notifier" "t|b" "$(cat "$WORK/notified" 2>/dev/null)"
@@ -344,11 +344,11 @@ has "G fleet-show → SENT to the client" "$r" "SENT shot.png → 客户端 MacB
 eq "G fetched into Downloads" "PNGDATA" "$(cat "$WORK/Downloads/shot.png" 2>/dev/null)"
 eq "G … and opened there" "$WORK/Downloads/shot.png" "$(cat "$WORK/opened" 2>/dev/null)"
 has "G fetched with cat over the master" "$(cat "$WORK/ssh.log" 2>/dev/null)" "cat -- $WORK/shot.png"
-# fleet-open on a file says sent:client too
+# fleet-open on a file: handed to the client, no receipt for a file yet (#3541)
 reset; client_start
 r=$(env FLEET_SHOW_CLIENT_WAIT=8 bash "$BIN/fleet-open.sh" "$WORK/shot.png" 2>/dev/null)
 client_stop
-eq "G fleet-open <file> → sent:client" "sent:client" "$r"
+eq "G fleet-open <file> → unconfirmed" "unconfirmed" "$r"
 where '["link"]' tailnet
 reset; signed "{\"kind\":\"show_file\",\"file\":\"$WORK/shot.png\",\"name\":\"shot.png\"}"
 has "G a phone: the file waits for the computer" "$(cat "$CL/links.shown" 2>/dev/null)" "文件 shot.png（在 otherbox 上）：回到电脑上再看"
