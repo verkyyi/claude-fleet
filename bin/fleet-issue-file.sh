@@ -250,7 +250,9 @@ if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
   if [ -z "${FLEET_BASE_BRANCH:-}" ] && [ -n "$_fs" ]; then
     fleet_load_repo_conf "$_fs" "$repo" 2>/dev/null
   fi
-  _probe=$(fleet_breakage_probe "$repo" "${FLEET_BASE_BRANCH:-}"); _prc=$?
+  # The probe reads GitHub's runs: only a repo with that forge has any (issue #3599).
+  if [ "$(fleet_repo_forge "$repo" "$_fs")" = none ]; then _probe=''; _prc=9
+  else _probe=$(fleet_breakage_probe "$repo" "${FLEET_BASE_BRANCH:-}"); _prc=$?; fi
   _row=''
   if [ "$_prc" = 0 ]; then
     # The row this filing is about: a red check its text names, else (the base
@@ -268,6 +270,7 @@ EOF
   elif [ "$bk_auto" = 0 ]; then
     case "$_prc" in
       0|1) printf 'fleet-issue-file: --breakage: no workflow on %s is red (its last finished run) — filing an ordinary issue\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
+      9)   printf 'fleet-issue-file: --breakage: %s has no forge (FLEET_FORGE=none), so no runs to fingerprint — filing without one\n' "$repo" >&2 ;;
       *)   printf 'fleet-issue-file: --breakage: gh could not read the runs of %s — filing without a fingerprint\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
     esac
   fi

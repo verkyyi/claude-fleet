@@ -133,9 +133,18 @@ if [ -n "$repo_arg" ] && [ -n "$conf_repo" ] && [ "$repo_arg" != "$conf_repo" ];
   note "--repo overrides the repo only: base/deploy/slots/quota below are still fleet $sess's (conf repo $conf_repo). Use --session for the other fleet's own knobs."
 fi
 
+# Where the repo's tickets live and whether it has a forge (issue #3599, EPIC
+# #3570 共同约定 1/3): a FLEET_TICKETS=hub repo's EPIC is hub tickets (parent field,
+# free labels) — read through the ticket door below, never `gh`; a FLEET_FORGE=none
+# repo has no GitHub at all, so no row below asks it. Both unset ⇒ today's rows.
+tk_home=$(fleet_ticket_home "$repo" "$sess")
+forge=$(fleet_repo_forge "$repo" "$sess")
+
 # --- gh: everything downstream is a gh call ------------------------------------
 gh_ok=0
-if ! command -v gh >/dev/null 2>&1; then
+if [ "$forge" = none ]; then
+  pass gh "not needed — $repo has no forge (FLEET_FORGE=none): tickets on the hub, landing by fleet"
+elif ! command -v gh >/dev/null 2>&1; then
   fail gh "not on PATH — an EPIC is issues, sub-issues and PRs end to end; none of it works without gh"
 elif ! gh auth status >/dev/null 2>&1; then
   fail gh "installed but NOT authed — \`gh auth login\` (cannot file, label, link or land)"
@@ -191,7 +200,14 @@ fi
 # but a different plan, so the operator has to agree to it. Hence: blocker.
 # Probing read-only means probing against an issue that already exists; the POST
 # side is covered by `perm` above.
-if [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
+if [ "$tk_home" = hub ]; then
+  # The hub's tickets: one read through the door answers reachability + scope.
+  if tk_err=$(bash "$BIN/fleet-ticket.sh" list --repo "$repo" --state all --limit 1 2>&1 >/dev/null); then
+    pass subissue "$repo's tickets live on the hub — the EPIC and its members are hub tickets, linked by the parent field"
+  else
+    fail subissue "$repo's tickets live on the hub, and the hub did not answer (${tk_err##*fleet-ticket: }) — no EPIC can be filed or read until it does"
+  fi
+elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ "$hasissues" = false ]; then
     fail subissue "$repo has ISSUES DISABLED — an EPIC is one parent issue plus a sub-issue per slice; turn issues on first"
   else
@@ -241,7 +257,9 @@ labels_missing() {  # rc 1 = the label list could not be read under a GraphQL li
   done
   printf '%s' "${miss# }"
 }
-if [ "$gh_ok" = 1 ] && [ -n "$perm" ] && ! missing=$(labels_missing); then
+if [ "$tk_home" = hub ]; then
+  pass labels "$(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') — a hub ticket's labels are free text, nothing to seed"
+elif [ "$gh_ok" = 1 ] && [ -n "$perm" ] && ! missing=$(labels_missing); then
   warn labels "GitHub rate-limited$(gh_until) — could not list $repo's labels over REST either; $(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') unverified"
 elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ -n "$missing" ] && [ "$do_fix" = 1 ]; then
@@ -291,6 +309,10 @@ done
 
 # --- base branch: an EPIC is a whole batch aimed at one branch (#603) ----------
 cbase="${FLEET_BASE_BRANCH:-}"
+# No forge to ask: the checkout's own origin says its default branch.
+if [ "$forge" = none ] && [ -z "$defbranch" ] && [ -n "${FLEET_MAIN:-}" ]; then
+  defbranch=$(git -C "$FLEET_MAIN" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) && defbranch=${defbranch#origin/}
+fi
 if [ -z "$cbase" ]; then
   warn base "this fleet's conf has no FLEET_BASE_BRANCH — every EPIC slice would branch from a guess; set it (dash prefix+c)"
 elif [ -z "$defbranch" ]; then

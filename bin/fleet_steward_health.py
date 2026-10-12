@@ -257,18 +257,14 @@ def find_open(repo, key):
     if r is not None:
         n = (r.stdout or "").strip()
         return n if n.isdigit() else ""
-    try:
-        out = subprocess.run(["gh", "api", "repos/%s/issues?state=open&per_page=100&sort=created&direction=desc" % repo,
-                              "--jq", '.[] | select(.pull_request == null) | "\\(.number)\\t\\(.body // "" | gsub("[\\r\\n]"; " "))"'],
+    try:   # the open ticket carrying the marker, through the ticket door (issue #3599)
+        out = subprocess.run(["bash", str(BIN / "fleet-ticket.sh"), "find", "--repo", repo, "--marker", mk],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True,
                              timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
-    for line in out.splitlines():
-        n, _, body = line.partition("\t")
-        if mk in body and n.isdigit():
-            return n
-    return ""
+    n = out.split("\t", 1)[0].rsplit("#", 1)[-1].strip()
+    return n if n.isdigit() else ""
 
 
 def file_issue(repo, title, body):

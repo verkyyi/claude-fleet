@@ -56,6 +56,12 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   PARENT's; a member's own repo is `$MREPO` (§1 «Members are (repo, issue)»).
   Every `gh` call names its repo with `--repo` — the hub pane of a multi-repo
   fleet sits in `$HOME`, where a bare `gh` has no repo to infer.
+  A **ticket** (the parent, a member, its state, labels, comments) is read and
+  written through the ticket door only — `~/.claude/fleet/bin/fleet-ticket.sh
+  read|edit|label|children|comment <id>`, the id from `fleet-ticket.sh id
+  <repo> <N>` (issue #3599): `gh:<repo>#N` for a repo on GitHub, `hub:<repo>#N`
+  for a `FLEET_TICKETS=hub` repo, which has no GitHub issue at all; the
+  `mcp__fleet__gh` tool's `kind: issue` and `fleet_sub_issues` answer for both.
 - **The charter's `<!-- fleet:epic repo=… -->` marker** (an EPIC planned since
   #803 has one) must equal `$FLEET_REPO`; a mismatch means this run resolved the
   wrong repo — stop and say so, spawn nothing. No marker: an older EPIC; go on.
@@ -392,7 +398,7 @@ treatment:
 
 - **A failed worker** (PR red, conflicted, or the window died) → **retry once**,
   seeding the new worker with what went wrong. Second failure: label the member
-  `blocked` (`gh issue edit <N> --repo "$MREPO" --add-label blocked`), write the
+  `blocked` (`~/.claude/fleet/bin/fleet-ticket.sh label add "$(~/.claude/fleet/bin/fleet-ticket.sh id "$MREPO" <N>)" blocked`), write the
   reason on the parent, free the slot.
 
 One caution on red: a red check is not always the code's fault. This suite carries

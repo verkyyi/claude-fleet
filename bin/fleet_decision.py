@@ -53,6 +53,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 
 import fleet_iso   # the one ISO reader for bin/ (issue #2024)
+import fleet_ticket   # the ticket door (issue #3599)
 
 BIN = Path(__file__).resolve().parent
 V = "1"
@@ -61,9 +62,11 @@ ASK_RE = re.compile(r"<!-- fleet:ask v=(\d+) ([^>]*?) ?-->")
 ANSWER_RE = re.compile(r"<!-- fleet:answer row=([A-Za-z0-9-]+)")
 RECORD_RE = re.compile(r"<!-- fleet:default-decided row=([A-Za-z0-9-]+)")
 RECORD_FIELDS_RE = re.compile(r"<!-- fleet:default-decided ([^>]*?) ?-->")
-TICKET_RE = re.compile(r"^(?:gh:)?([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#(\d+)$")
+TICKET_RE = re.compile(r"^(?:gh:|hub:)?([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#(\d+)$")
 FROM_MARK = "<!-- fleet:from "
 URL_RE = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/issues/(\d+)")
+# a hub ticket's page (fleet_ticket_url, issue #3599): <hub>/fleet/tickets/<owner>/<name>/<N>
+HUB_URL_RE = re.compile(r"/fleet/tickets/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/(\d+)")
 WAIT = None          # a row whose default is WAIT reads 「等你」 and is never defaulted
 DUE_DEFAULT_S = 4 * 3600
 NIGHT_FROM, NIGHT_TO, MORNING = 23, 8, 9
@@ -296,6 +299,12 @@ def _src(url, repo=None, number=None):
     m = URL_RE.search(url or "")
     if m:
         repo, number = m.group(1), m.group(2)
+    else:
+        m = HUB_URL_RE.search(url or "")
+        if m:
+            return "hub:%s#%s" % (m.group(1), m.group(2))
+    if repo and number:
+        return fleet_ticket.tid(repo, number)
     return "gh:%s#%s" % (repo or "?", number or "?")
 
 
@@ -487,7 +496,7 @@ def _seam(name, argv, **kw):
 def fetch_comments(repo, number):
     r = _seam("FLEET_DECISION_COMMENTS_CMD", [repo, str(number)])
     if r is None:
-        r = subprocess.run(["bash", str(BIN / "fleet-ticket.sh"), "read", "gh:%s#%s" % (repo, number),
+        r = subprocess.run(["bash", str(BIN / "fleet-ticket.sh"), "read", fleet_ticket.tid(repo, number),
                             "--json", "comments", "--max-age", "60"],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
     if r.returncode != 0:
@@ -513,20 +522,21 @@ def post(repo, number, body, mode="note"):
 def parent_of(repo, number):
     r = _seam("FLEET_DECISION_PARENT_CMD", [repo, str(number)])
     if r is None:
-        r = subprocess.run(["gh", "api", "repos/%s/issues/%s/parent" % (repo, number), "--jq",
-                            '.repository_url + "#" + (.number|tostring)'],
+        # the ticket door (issue #3599): GitHub's sub-issue parent, or the hub's
+        r = subprocess.run(["bash", str(BIN / "fleet-ticket.sh"), "parent", fleet_ticket.tid(repo, number)],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
         if r.returncode != 0:
             return None
-        out = r.stdout.strip()
-        m = re.match(r"https://api\.github\.com/repos/([^/]+/[^/#]+)#(\d+)$", out)
-        return (m.group(1), m.group(2)) if m else None
+        try:
+            return fleet_ticket.split(r.stdout.strip())
+        except ValueError:
+            return None
     m = re.match(r"([^\s#]+)#(\d+)$", r.stdout.strip())
     return (m.group(1), m.group(2)) if m else None
 
 
 def split_src(src):
-    m = re.match(r"gh:([^#]+)#(\d+)$", src or "")
+    m = re.match(r"(?:gh|hub):([^#]+)#(\d+)$", src or "")
     if not m:
         raise ValueError("not a gh:owner/repo#N source: %r" % src)
     return m.group(1), m.group(2)
@@ -646,7 +656,7 @@ def day_epics(day, repos):
             continue
         e, rp = kv.get("epic", "").strip(), kv.get("repo", "").strip()
         if e.isdigit() and "/" in rp:
-            out.append("gh:%s#%s" % (rp, e))
+            out.append(fleet_ticket.tid(rp, e))
     return out
 
 
@@ -658,7 +668,7 @@ def decided(day, epics):
             continue
         seen.add((m.group(1), m.group(2)))
         try:
-            got = decided_rows(fetch_comments(m.group(1), m.group(2)), "gh:%s#%s" % (m.group(1), m.group(2)), day)
+            got = decided_rows(fetch_comments(m.group(1), m.group(2)), fleet_ticket.tid(m.group(1), m.group(2)), day)
         except (RuntimeError, ValueError, subprocess.SubprocessError) as err:
             failed.append("%s: %s" % (e, err))
             continue
@@ -675,7 +685,7 @@ def decided_md(rows, day):
     for x in rows:
         hm = parse_time(x["at"]).strftime("%H:%M")
         if x["item"]:
-            src = x["src"][3:] if x["src"].startswith("gh:") else x["src"]
+            src = re.sub(r"^(gh|hub):", "", x["src"])
             what = tr("decision_digest_line_fmt", src, x["item"], x["default"])
         else:
             what = x["line"]

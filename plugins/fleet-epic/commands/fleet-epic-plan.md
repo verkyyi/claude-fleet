@@ -101,9 +101,15 @@ set.
 ## 2. Read the backlog inside the theme
 
 ```sh
-gh issue list --repo "$FLEET_REPO" --state open --limit 100 \
-  --json number,title,labels,createdAt,body
+T=~/.claude/fleet/bin/fleet-ticket.sh      # the ONE door to a ticket (EPIC #3570)
+"$T" list --repo "$FLEET_REPO" --state open --limit 100 |
+  while IFS=$'\t' read -r id _; do "$T" read "$id" --json number,title,labels,createdAt,body; done
 ```
+
+The door answers for every repo the same way — GitHub's issues, or the hub's
+tickets for a repo whose `FLEET_TICKETS=hub` (issue #3599) — so nothing below
+spells `gh issue`: an id is `gh:<repo>#N` / `hub:<repo>#N`, and
+`"$T" id <repo> <N>` mints it from the repo's home.
 
 A theme that reaches into another hosted repo (`fleet_repos "$S"` lists them —
 *"活页里显示 fleet 状态"* touches claude-fleet and the monorepo at once) reads
@@ -116,8 +122,8 @@ Select the ones the theme actually covers. Two rules:
   (`bug`, `robustness`), not batch. Read the titles and enough of each body to
   know what the work IS.
 - **Exclude anything already claimed.** An issue with an assignee, or with an
-  open PR, is someone's live work — `gh issue view <N> --json assignee` and the
-  repo-wide `gh pr list`. Re-planning live work is how two workers implement the
+  open PR, is someone's live work — `"$T" read <id> --json assignees` and the
+  repo-wide open-PR list (`gh pr list`, a repo on GitHub only). Re-planning live work is how two workers implement the
   same fix.
 
 For each survivor, note in one line: what it is, and whether it is one worker's
@@ -382,7 +388,7 @@ bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / �
 right shape; keep free text for what they want changed.
 
 Then **stop and wait**. No issue is created, no label is seeded, no worker is
-spawned until the operator answers — `gh issue list` must show nothing new. If
+spawned until the operator answers — `"$T" list` must show nothing new. If
 they change the list, **edit the same file and re-render the same URL**:
 
 ```sh
@@ -464,9 +470,12 @@ the bodies they always did. Only now, and in this order:
    `/fleet-epic-run` parses.
 
    ```sh
-   gh issue create --repo "$FLEET_REPO" --label epic \
-     --title "EPIC: <theme>" --body-file <charter.md>
+   ~/.claude/fleet/bin/fleet-issue-file.sh --repo "$FLEET_REPO" --label epic --no-breakage \
+     --title "EPIC: <theme>" --body "$(cat <charter.md>)"
    ```
+
+   The filer files through the ticket door: a GitHub issue, or a hub ticket for
+   a `FLEET_TICKETS=hub` repo — its URL either way, the number its last segment.
 
    The `fleet:epic repo=` marker records which repo the PARENT is in
    (issue #803): `/fleet-epic-run` and `/fleet-epic-report` check it against the
@@ -547,24 +556,22 @@ the bodies they always did. Only now, and in this order:
      markdown inside stops being parsed as markdown.
 
    - A **proposed split** (`new`) is created with this body **in its card's repo**
-     (`gh issue create --repo <the member's repo>`; titles in the repo's own
+     (`fleet-issue-file.sh --repo <the member's repo> --no-breakage`; titles in the repo's own
      language — CJK titles survive into window names, issue #579 — and the
      title is the card's 名称: the member's use from the person's side, ≤ 20 汉字,
      no script names or flags, the mechanism in the body — issue #2545), then its
-     number replaces `#new` in the parent's list (`gh issue edit <P> --repo "$PREPO"
-     --body-file`) — as `owner/name#N` when that repo is not the parent's.
+     number replaces `#new` in the parent's list (`"$T" edit <the parent's id>
+     --body-file <f>`) — as `owner/name#N` when that repo is not the parent's.
    - An **existing issue** keeps its own body: **append** the section below it
-     (`gh issue view <N> --repo <its repo> --json body -q .body`, append,
-     `gh issue edit <N> --repo <its repo> --body-file`). The `<!-- fleet:epic-member … -->` marker makes a second
+     (`"$T" read <its id> --json body`, append, `"$T" edit <its id> --body-file <f>`). The `<!-- fleet:epic-member … -->` marker makes a second
      round replace the section rather than stack another one — never overwrite
      an issue somebody else wrote.
-5. **Link every member** as a real sub-issue. The API takes the child's database
-   **id**, not its number — read it from the CHILD's repo, post it to the
-   PARENT's (the same call links across repos, issue #1942):
+5. **Link every member** under the parent — on GitHub a real sub-issue (the door
+   reads the child's database id itself, across repos too, issue #1942), on the
+   hub the member's parent field:
 
    ```sh
-   cid=$(gh api "repos/<the member's repo>/issues/<child>" --jq .id)
-   gh api --method POST "repos/$PREPO/issues/<parent>/sub_issues" -F sub_issue_id="$cid"
+   "$T" link "$("$T" id "$PREPO" <parent>)" "$("$T" id <the member's repo> <child>)"
    ```
 
    **GitHub refuses a cross-repo link** (an Enterprise without it, a repo in an

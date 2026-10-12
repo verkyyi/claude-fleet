@@ -46,6 +46,14 @@ if [ -z "$repo" ]; then
   _r=$(fleet_repo_cached "$(fleet_current_session)" 2>/dev/null); [ -n "$_r" ] && repo="$_r"
 fi
 [ -z "$repo" ] && { printf 'fleet-labels-seed: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
+# A FLEET_TICKETS=hub repo (issue #3599): its tickets' labels are the fleet's
+# fixed table itself (fleet_labels_allowed, which the filer checks) — the hub
+# keeps no per-repo label list, so there is nothing to seed and gh is never asked.
+if [ "$(fleet_ticket_home "$repo")" = hub ]; then
+  printf 'fleet-labels-seed: %s keeps its tickets on the hub — its %s labels are the fleet'"'"'s table, nothing to seed\n' \
+    "$repo" "$(fleet_labels_allowed | grep -c .)" >&2
+  exit 0
+fi
 command -v gh >/dev/null 2>&1 || { printf 'fleet-labels-seed: gh not on PATH\n' >&2; exit 1; }
 
 # Create-or-update each canonical label. `--force` is the idempotency rail. A

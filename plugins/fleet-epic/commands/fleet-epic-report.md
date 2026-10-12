@@ -60,6 +60,12 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - From here on **every** `$FLEET_REPO` below is the resolved repo, and every
   `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
   `$HOME`, where a bare `gh` has no repo to infer.
+  A **ticket** (the parent, a member, its state, labels, comments) is read and
+  written through the ticket door only — `~/.claude/fleet/bin/fleet-ticket.sh
+  read|edit|label|children|comment <id>`, the id from `fleet-ticket.sh id
+  <repo> <N>` (issue #3599): `gh:<repo>#N` for a repo on GitHub, `hub:<repo>#N`
+  for a `FLEET_TICKETS=hub` repo, which has no GitHub issue at all; the
+  `mcp__fleet__gh` tool's `kind: issue` and `fleet_sub_issues` answer for both.
 - **The charter's `<!-- fleet:epic repo=… -->` marker**, when present, must equal
   `$FLEET_REPO` — else stop: a report built from the wrong repo's issue #N is
   a page about someone else's batch.

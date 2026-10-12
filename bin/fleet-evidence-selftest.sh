@@ -45,6 +45,8 @@ hasnt(){ case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2" "${ERR:-}" ;; *
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/fevsess" "$WORK/src"
 cp "$SRC" "$WORK/bin/fleet-evidence.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
+# the ticket door the script reads parents and bodies through (issue #3599)
+for f in fleet-ticket.sh fleet_ticket.py fleet-gh.sh fleet-gh-lib.sh; do cp "$BIN/$f" "$WORK/bin/$f"; done
 chmod +x "$WORK/bin/fleet-evidence.sh"
 printf 'FLEET_REPO=o/r\n' > "$WORK/conf/fleets/fevsess/conf"
 CONF="$WORK/conf/fleets/fevsess"
@@ -66,7 +68,8 @@ case "$*" in
                      [ -n "$l" ] || continue
                      case "$l" in *$'\t'*) printf '%s\n' "$l" ;; *) printf '%s\t%s\topen\n' "$r" "$l" ;; esac
                    done; exit 0 ;;
-  "issue view"*)   printf '%b' "${GH_BODY:-}"; exit 0 ;;
+  "issue view"*)   GH_BODY="$(printf '%b' "${GH_BODY:-}")" python3 -c 'import json,os; print(json.dumps({"body": os.environ["GH_BODY"]}))'
+                   exit 0 ;;
 esac
 exit 0
 GHFAKE

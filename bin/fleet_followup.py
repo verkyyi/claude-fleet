@@ -56,6 +56,8 @@ import sys
 import time
 from pathlib import Path
 
+import fleet_ticket   # the ticket door (issue #3599)
+
 BIN = Path(__file__).resolve().parent
 KINDS = ("stable", "hub-deploy", "human")
 MARK_RE = re.compile(r"<!-- fleet:followup ((?:(?!-->).)*?) ?-->")
@@ -167,7 +169,7 @@ def watch(st, ref, now):
 def read_issue(repo, n):
     cmd = os.environ.get("FLEET_STEWARD_ISSUE_CMD")
     argv = (cmd.split() + [repo, str(n)]) if cmd else \
-        ["bash", str(BIN / "fleet-gh.sh"), "issue", "view", str(n), "--repo", repo,
+        ["bash", str(BIN / "fleet-ticket.sh"), "read", fleet_ticket.tid(repo, n),
          "--json", "state,closedAt,comments", "--max-age", "300"]
     r = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
     if r.returncode != 0:
@@ -301,7 +303,7 @@ def decision_row(fs, st, item, now, delta, kind, text, suggest):
     src = item["sources"][0] if item["sources"] else {"epic": "?#0", "url": ""}
     repo, _, n = src["epic"].partition("#")
     rid = "%s-%d" % (item["id"], item.get("runs", 0))
-    row = {"id": rid, "src": "gh:%s#%s" % (repo, n), "url": src.get("url", ""), "item": text, "suggest": suggest,
+    row = {"id": rid, "src": fleet_ticket.tid(repo, n) if repo and n.isdigit() else "gh:%s#%s" % (repo, n), "url": src.get("url", ""), "item": text, "suggest": suggest,
            "default": "", "kind": kind, "asked": fs.fd.iso(fs.fd.now_local()), "due": "", "state": "open",
            "followup": item["id"], "v": "1"}
     st.d["rows"][rid] = row
@@ -448,7 +450,7 @@ def desk(fs, st, now, delta):
                     "--origin", "steward"])
         st.spend(1)
         got = (r.stdout or "").split()
-        if r.returncode == 0 and got and got[0].startswith("gh:"):
+        if r.returncode == 0 and got and got[0].startswith(("gh:", "hub:")):
             t["desk"], t["desk_url"], t["desk_sha"] = got[0], (got[1] if len(got) > 1 else ""), sha
         return
     r = ticket(["edit", t["desk"], "--body-file", "-"], body)

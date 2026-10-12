@@ -113,6 +113,7 @@ import uuid
 from pathlib import Path
 
 import fleet_decision as fd
+import fleet_ticket
 import fleet_needs_detail as nd
 import fleet_followup as fu
 import fleet_park
@@ -539,7 +540,7 @@ def stuck_driver_row(m, ref, w, now_t):
     epic = "#" + m["epic"]
     where = w.get("name") or w["wid"]
     asked = fd.iso(now_t)
-    base = {"asked": asked, "src": "gh:" + ref,
+    base = {"asked": asked, "src": fleet_ticket.tid(*ref.rsplit("#", 1)) if "#" in ref else "gh:" + ref,
             "url": "", "state": "open", "epic": ref, "wid": w["wid"], "window": where, "v": str(fd.V)}
     if w["state"] == "needs":
         d = dialog_of(w) if w.get("needs") == "ask" else None
