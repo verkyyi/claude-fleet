@@ -137,7 +137,8 @@ fi
 # FLEET_LAND=fleet (issue #3602, EPIC #3570 C9): no PR and no gh — git's verdict,
 # same words (READY · BEHIND · CONFLICT · FAILING · BLOCKED · MERGED).
 if [ "$(fleet_repo_land "$repo" "$_sess")" = fleet ]; then
-  exec "$BIN/fleet-land.sh" --verdict ${PR:+--issue "$PR"} $([ "$quiet" = 1 ] && echo -q) "$repo"
+  _lq=""; [ "$quiet" = 1 ] && _lq=-q
+  exec "$BIN/fleet-land.sh" --verdict ${PR:+--issue "$PR"} ${_lq:+"$_lq"} "$repo"
 fi
 command -v gh >/dev/null 2>&1 || { printf 'fleet-pr-verdict: gh not on PATH\n' >&2; exit 2; }
 

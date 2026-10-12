@@ -73,7 +73,8 @@ fi
 # FLEET_LAND=fleet (issue #3602, EPIC #3570 C9): the fleet lands it — rebase, the
 # repo's check, a fast-forward push — never a PR, never gh.
 if [ "$(fleet_repo_land "$repo" "$sess")" = fleet ]; then
-  exec "$BIN/fleet-land.sh" ${PR:+--issue "$PR"} $([ "$quiet" = 1 ] && echo -q) "$repo"
+  _lq=""; [ "$quiet" = 1 ] && _lq=-q
+  exec "$BIN/fleet-land.sh" ${PR:+--issue "$PR"} ${_lq:+"$_lq"} "$repo"
 fi
 if [ -z "$method" ]; then
   [ -n "$sess" ] && fleet_load_conf "$sess" >/dev/null 2>&1
