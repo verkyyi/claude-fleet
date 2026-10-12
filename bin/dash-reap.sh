@@ -178,7 +178,7 @@ describe_target() {
 
 # Settle the bound issue (issue #1542). A reap disposes of a WINDOW and a
 # WORKTREE; whether the issue is done is not its call:
-#   landed (merged-pr | ancestor) → untouched. A merged PR's `Closes #N` already
+#   landed (merged-pr | ancestor | landed) → untouched. A merged PR's `Closes #N` already
 #       closed it; one still OPEN is a worker that said "keep open until the
 #       read-back" (#1309), and the cleanup daemon never closed issues either.
 #   not landed (unmerged | dirty) → stays OPEN, the claim is released and one
@@ -188,6 +188,7 @@ describe_target() {
 #   no verdict (a pre-#471 dispatch in flight) → untouched: never guess.
 settle_issue() {
   command -v gh >/dev/null 2>&1 || return 0
+  [ "${FLEET_FORGE:-github}" != none ] || return 0   # no GitHub: no gh (issue #3601)
   case "${reason:-}" in unmerged|dirty) ;; *) return 0 ;; esac
   local st; st="$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)"
   [ "$st" = OPEN ] || return 0
@@ -332,7 +333,7 @@ shift || true
 if [ "${1:-}" = --exec ]; then
   [ "$#" -ge 2 ] && [ "$#" -le 4 ] || refuse bad-args "--exec needs one action, optional verdict and merge epoch"
   case "$2" in full|keep) ;; *) refuse bad-args "invalid reap action" ;; esac
-  case "${3:-}" in ''|merged-pr|ancestor|unmerged|dirty) ;; *) refuse bad-args "invalid reap verdict" ;; esac
+  case "${3:-}" in ''|merged-pr|ancestor|landed|unmerged|dirty) ;; *) refuse bad-args "invalid reap verdict" ;; esac
   case "${4:-}" in *[!0-9]*) refuse bad-args "invalid merge epoch" ;; esac
 else
   for a in "$@"; do case "$a" in
@@ -483,7 +484,8 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   SMASTER="$(git -C "$MAIN" rev-parse --verify -q "origin/$SBASE" 2>/dev/null \
     || git -C "$MAIN" rev-parse --verify -q "$SBASE" 2>/dev/null)"
   SMERGED=""
-  command -v gh >/dev/null 2>&1 && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" --sha 2>/dev/null)"
+  [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 \
+    && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" --sha 2>/dev/null)"
   # The target was vetted by guard_live above; the worktree probe looks at the
   # OTHER windows only (issue #3352 — its own panes are not another user).
   sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED" "" "$target")"
@@ -550,7 +552,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
   # The initial keypress (no `confirm` arg) decides which.
   if [ "$confirm" = 0 ]; then
     case "$sreason" in
-      merged-pr|ancestor)
+      merged-pr|ancestor|landed)
         scratch_dispose ;;
       *)   # dirty | unmerged — confirm before disposing / closing
         # --yes takes the confirm branch unasked (#596); with no client attached a
@@ -654,7 +656,7 @@ branch="issue-$iss"
 # what lets the gate tell a worker that shipped its own PR — young (#1248) or
 # still stamped `looping` (#1356) — from one that is genuinely still working.
 MERGED_PRS=""; MERGED_AT=""
-if command -v gh >/dev/null 2>&1; then
+if [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1; then
   while IFS=$'\t' read -r mref miso msha; do
     [ "$mref" = "$branch" ] || continue
     # Each PR's head sha rides along (issue #1842): fleet_reap_ok keeps a branch
@@ -664,6 +666,13 @@ if command -v gh >/dev/null 2>&1; then
     mep="$(fleet_epoch_from_iso "$miso")"
     case "$mep" in ''|*[!0-9]*) ;; *) [ "$mep" -gt "${MERGED_AT:-0}" ] && MERGED_AT="$mep" ;; esac
   done < <(fleet_gh_merged_heads "$REPO" "$branch" --at --sha 2>/dev/null)
+fi
+# No merged-PR answer — a repo with no GitHub, or GitHub silent (issue #3601): the
+# merge time is git's, read off the locally-known base (no fetch on the ⌃x path).
+if [ -z "$MERGED_AT" ] && [ -n "${FLEET_MAIN:-}" ] && [ -d "${FLEET_MAIN}/.git" ]; then
+  _land="$(fleet_land_check "$FLEET_MAIN" "$branch" "origin/${FLEET_BASE_BRANCH:-main}" 2>/dev/null)"
+  case "$_land" in landed\ *) mep="${_land##* }"
+    case "$mep" in ''|*[!0-9]*) ;; *) MERGED_AT="$mep" ;; esac ;; esac
 fi
 guard_live
 
@@ -693,7 +702,7 @@ describe_target "$reason" "$wtdir"
 
 # --- ⌃x (issue #289): clean+merged reaps straight away; anything else confirms -
 # first, then force-reaps. The initial keypress (no `confirm` arg) decides which:
-#   merged-pr | ancestor → reap_full now (the cleanup daemon reaps these anyway);
+#   merged-pr | ancestor | landed → reap_full now (the cleanup daemon reaps these anyway);
 #   dirty | unmerged     → ask y/n on the status line (ask_yes), whose y re-invokes
 #                          us --yes. (`confirm` is the same question in a terminal.)
 if [ "$confirm" = 0 ]; then

@@ -51,6 +51,7 @@ while IFS= read -r repo; do
     python3 "$BIN/fleet-cleanup-idle.py" --session "$FLEET_SESSION" \
       --socket-name "$(fleet_socket "$FLEET_SESSION")" --main "${FLEET_MAIN:-}" \
       --repo "$repo" --base "${FLEET_BASE_BRANCH:-master}" --window-repo \
+      ${FLEET_FORGE:+--forge "$( [ "$FLEET_FORGE" = none ] && echo none || echo github )"} \
       --limit "$limit" ${rest[@]+"${rest[@]}"} )
   rc=$?
   [ -z "$out" ] || printf '%s\n' "$out"

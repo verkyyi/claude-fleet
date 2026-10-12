@@ -239,7 +239,10 @@ reap_repo_prs() {
     # its progress notes go to stderr → this daemon's log. Pass FLEET_SESSION so it
     # resolves THIS fleet's repo/main/socket (it has no $TMUX) — via `env`, because
     # fleet_timebox runs its argv directly (no eval, so no VAR=val prefix).
-    tok=$(fleet_timebox "$cto" env FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" "$pr" --auto \
+    # A `-` PR is a repo with no GitHub (issue #3601): pr-refresh wrote the row from
+    # git, and the janitor is driven by the branch.
+    if [ "$pr" = - ]; then target=(--branch "$branch"); else target=("$pr"); fi
+    tok=$(fleet_timebox "$cto" env FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" ${target[@]+"${target[@]}"} --auto \
       ${repo_args[@]+"${repo_args[@]}"})
     rc=$?
     if [ "$rc" = 124 ]; then
@@ -284,6 +287,9 @@ cleanup_repo() { (
   repo="$1"
   fleet_load_repo_conf "$sess" "$repo" || { log "$sess: $repo is not hosted — skip"; echo 0; exit 0; }
   [ "${FLEET_CLEANUP:-1}" != 0 ] || { log "$sess: [$repo] cleanup off (FLEET_CLEANUP=0) — skip"; echo 0; exit 0; }
+  # gh is needed only for a repo on GitHub (issue #3601: FLEET_FORGE=none needs none)
+  [ "${FLEET_FORGE:-github}" = none ] || command -v gh >/dev/null 2>&1 \
+    || { log "$sess: [$repo] gh not on PATH — skip"; echo 0; exit 0; }
   main="${FLEET_MAIN:-}"
   [ -d "$main/.git" ] || { log "$sess: [$repo] FLEET_MAIN is not a git checkout — skip"; echo 0; exit 0; }
   slug=$(fleet_slug "$repo")
@@ -311,7 +317,17 @@ cleanup_fleet() { (
   fleet_load_conf "$sess"
   # Cleanup is switched per repo (issue #978) — in cleanup_repo, where each
   # repo's overlay may override the fleet's FLEET_CLEANUP.
-  command -v gh >/dev/null 2>&1 || { log "$sess: gh not on PATH — skip"; exit 0; }
+  # No gh: nothing to do unless a repo here has no GitHub at all (issue #3601) —
+  # with every repo on GitHub this is the historic skip, byte for byte.
+  if ! command -v gh >/dev/null 2>&1; then
+    _nf=0
+    while IFS= read -r _r; do
+      [ -n "$_r" ] && [ "$(fleet_repo_forge "$_r" "$sess")" = none ] && { _nf=1; break; }
+    done <<EOF_FORGE
+$(fleet_repos "$sess")
+EOF_FORGE
+    [ "$_nf" = 1 ] || { log "$sess: gh not on PATH — skip"; exit 0; }
+  fi
 
   # Rate-limit: at most K reaps this tick. 0 → skip.
   k="${FLEET_CLEANUP_MAX_PER_TICK:-4}"

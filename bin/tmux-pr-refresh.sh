@@ -213,10 +213,37 @@ emit_pr_transitions() {
   return 0
 }
 
+# --- a repo with no GitHub (FLEET_FORGE=none, issue #3601) ---------------------
+# It has no PRs, so its prmap is git's: one MERGED row per worktree branch whose
+# work fleet_landed finds on the base — the same shape, the PR column `-`, the
+# landing commit as the sha — and nothing for one still open. gh is never called.
+landed_prmap() {   # $1=repo $2=fleet session → rows on stdout; rc 1 = no checkout
+  local rp="$1" se="$2" mn bs b
+  mn=$(fleet_repo_conf_get "$se" "$rp" FLEET_MAIN); bs=$(fleet_repo_conf_get "$se" "$rp" FLEET_BASE_BRANCH)
+  [ -n "$mn" ] && [ -d "$mn/.git" ] || return 1
+  git -C "$mn" worktree list --porcelain 2>/dev/null | sed -n 's#^branch refs/heads/##p' |
+  while IFS= read -r b; do
+    case "$b" in issue-[0-9]*|scratch-[0-9]*) ;; *) continue ;; esac
+    land=$(fleet_landed "$rp" "$b" "$mn" "${bs:-main}") || continue
+    printf '%s\t-\tMERGED\t\t\t%s\n' "$b" "$(printf '%s' "$land" | cut -d' ' -f2)"
+  done
+}
+
 # --- per-repo PR map (TTL-gated) — the ONLY writer of prmap_<slug> ---
+declare -a Q_FORGE
 i=0
 while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   rp="${Q_REPO[$i]}"; sg="${Q_SLUG[$i]}"; se="${Q_SESS[$i]}"; i=$((i+1))
+  fg=github; [ -n "$se" ] && fg=$(fleet_repo_forge "$rp" "$se")
+  Q_FORGE[$((i-1))]=$fg
+  if [ "$fg" = none ]; then
+    FD=$(fleet_cache_dir "$sg")
+    # no session.pr facts: the PR column is `-` for every row, there is no PR
+    if landed_prmap "$rp" "$se" > "$FD/prmap.$$"; then
+      mv "$FD/prmap.$$" "$FD/prmap"; now > "$FD/prmap.ts"
+    fi
+    continue
+  fi
   command -v gh >/dev/null 2>&1 || break
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   pts=0; [ -f "$FD/prmap.ts" ] && IFS= read -r pts < "$FD/prmap.ts" 2>/dev/null   # no `cat` (#888)
@@ -430,6 +457,8 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
   [ -s "$FD/prmap" ] || continue
   deploy_conf_for "$rp"
   [ -n "$DEP_REF$DEP_CHECK" ] || continue
+  # actions mode reads GitHub's runs: a repo with no GitHub has none (issue #3601)
+  [ "${Q_FORGE[$((i-1))]:-github}" = none ] && [ -z "$DEP_REF" ] && continue
   cands=$(awk -F'\t' '$3=="MERGED" && $6!="" {n=$2; sub(/^#/,"",n); print n "\t" $6}' "$FD/prmap" 2>/dev/null \
           | sort -t"$(printf '\t')" -k1,1nr | head -20 | cut -f2)
   [ -f "$C/deploy-live.$$" ] && cands="$cands"$'\n'"$(awk -F'\t' -v d="$FD" '$1==d{print $2}' "$C/deploy-live.$$" 2>/dev/null)"

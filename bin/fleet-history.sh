@@ -39,9 +39,10 @@
 # listable even if its PR metadata or transcript can't be resolved.
 #
 # Subcommands:
-#   record  --repo R --main M --pr N --key K --worktree W [--win ID] [--session S] [--summary S] [--title T]
+#   record  --repo R --main M --pr N --key K --worktree W [--win ID] [--session S] [--summary S] [--title T] [--branch B]
 #           Append one LANDED ledger row. Derives title/sha/mergedAt from `gh pr
-#           view` (--title is a fallback for when the PR doesn't resolve), and
+#           view` (--title is a fallback for when the PR doesn't resolve; with no
+#           PR answer, --branch lets git name the landing commit + time), and
 #           transcript-dir + session-id from the worktree path. Run it
 #           BEFORE `git worktree remove` in the cleanup teardown step.
 #   record-closed --repo R --key K --worktree W [--win ID] [--session S] [--title T] [--summary S] [--sha SHA]
@@ -421,10 +422,12 @@ task_title() {
 task_mark() { case "${1:-}" in T[1-9]*) printf '%s ' "$1" ;; esac; }
 
 cmd_record() {
-  local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin="" win="" agent="" identity="" owner=""
+  local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin="" win="" agent="" identity="" owner="" branch=""
   HIST_TASK=''; HIST_TASK_LINE=''
   while [ $# -gt 0 ]; do
     case "$1" in
+      # the reaped branch (issue #3601): with no PR answer, git names the landing
+      --branch) branch="${2:-}"; shift 2;;
       # the hub task record (issue #3387): the caller's capture, else the window's
       --task) HIST_TASK="${2:-}"; shift 2;;
       --task-line) HIST_TASK_LINE="${2:-}"; shift 2;;
@@ -470,6 +473,19 @@ cmd_record() {
       IFS=$'\t' read -r title mergedat_gh sha <<<"$meta"
       [ -z "$mergedat" ] && mergedat="$mergedat_gh"
     fi
+  fi
+  # No PR answer — a repo with no GitHub, or GitHub silent (issue #3601): the landing
+  # commit and its time are git's (fleet_landed), so the row says when it landed.
+  if [ -z "$sha" ] && [ -n "$branch" ] && [ -n "$repo" ] && command -v fleet_landed >/dev/null 2>&1; then
+    local _land _lsha _lep
+    _land=$(fleet_landed "$repo" "$branch" "$main" 2>/dev/null) || _land=''
+    case "$_land" in
+      landed\ *)
+        _lsha=$(printf '%s' "$_land" | cut -d' ' -f2); _lep=$(printf '%s' "$_land" | cut -d' ' -f3)
+        sha="$_lsha"
+        case "$_lep" in ''|*[!0-9]*) ;; *)
+          [ -n "$mergedat" ] || mergedat=$(date -u -r "$_lep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$_lep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ;; esac ;;
+    esac
   fi
   # mergedAt fallback: now (UTC). date is fine here — this is a shell tool.
   [ -z "$mergedat" ] && mergedat=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)

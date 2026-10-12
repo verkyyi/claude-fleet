@@ -1,6 +1,7 @@
 #!/bin/bash
 # fleet-cleanup.sh <PR> [--auto] [--dry-run] — the no-LLM, no-merge janitor
-# (issue #277). THIS script never merges: the worker that shipped the PR merges it
+# (issue #277). `--branch <issue-N|scratch-N>` instead of a PR (issue #3601): the
+# state comes from git (fleet_landed) — a repo with no GitHub is cleaned that way. THIS script never merges: the worker that shipped the PR merges it
 # itself on a green gate (issue #441), or a human clicks Merge on the web, or a
 # collaborator does; this script is what runs AFTER a merge to clean up and keep the
 # session resumable. It is the
@@ -111,10 +112,12 @@ CLOSED_GRACE="${FLEET_CLEANUP_CLOSED_GRACE:-900}"
 case "$CLOSED_GRACE" in ''|*[!0-9]*) CLOSED_GRACE=900 ;; esac   # tolerate a garbled conf
 
 # --- args ---------------------------------------------------------------------
-PR=""; DRY=0; AUTO=0; REPO_ARG=""
+PR=""; DRY=0; AUTO=0; REPO_ARG=""; BRANCH_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pr) shift; PR="${1:-}"; PR="${PR//[^0-9]/}" ;;
+    # --branch <issue-N|scratch-N> (issue #3601): no PR — git says whether it landed
+    --branch) shift; BRANCH_ARG="${1:-}" ;;
     --repo) shift; REPO_ARG="${1:-}" ;;
     --dry-run|-n) DRY=1 ;;
     --auto) AUTO=1 ;;
@@ -124,7 +127,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-[ -z "$PR" ] && { printf 'fleet-cleanup: a PR number is required (fleet-cleanup.sh <PR>).\n' >&2; exit 2; }
+[ -z "$PR" ] && [ -z "$BRANCH_ARG" ] && { printf 'fleet-cleanup: a PR number is required (fleet-cleanup.sh <PR>).\n' >&2; exit 2; }
+case "$BRANCH_ARG" in ''|issue-[0-9]*|scratch-[0-9]*) ;; *)
+  printf 'fleet-cleanup: --branch takes an issue-<N> or scratch-<N> branch.\n' >&2; exit 2 ;; esac
 
 # All human-facing progress goes to STDERR so the caller can capture the single
 # result token off stdout (the land-train #68 lesson).
@@ -150,7 +155,12 @@ MAIN="${FLEET_MAIN:-}"
 BASE="${FLEET_BASE_BRANCH:-master}"
 [ -z "$REPO" ] && { note "fleet-cleanup: no repo resolved — run inside a fleet."; done_token "error:no-repo"; exit 2; }
 [ -d "$MAIN/.git" ] || { note "fleet-cleanup: FLEET_MAIN is not a git checkout."; done_token "error:no-main"; exit 2; }
-command -v gh >/dev/null 2>&1 || { note "fleet-cleanup: gh not on PATH."; done_token "error:no-gh"; exit 2; }
+# A repo with no GitHub (FLEET_FORGE=none, issue #3601) is cleaned by branch, from git.
+if [ "${FLEET_FORGE:-github}" = none ] && [ -z "$BRANCH_ARG" ]; then
+  note "fleet-cleanup: $REPO has no GitHub (FLEET_FORGE=none) — clean it by --branch, not by PR."
+  done_token "error:no-forge"; exit 2
+fi
+[ -n "$BRANCH_ARG" ] || command -v gh >/dev/null 2>&1 || { note "fleet-cleanup: gh not on PATH."; done_token "error:no-gh"; exit 2; }
 
 # tmux dividing line (issue #159): in a pane $TMUX carries the right socket → bare
 # tmux; a daemon has no $TMUX → target the fleet's OWN socket by label.
@@ -178,8 +188,35 @@ pr_fields() {
             | if length == 0 then "-" else join(",") end)] | @tsv' 2>/dev/null
 }
 
-fields=$(pr_fields "$PR")
-[ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
+# land_fields <branch> → the same TSV from git (issue #3601): MERGED at the landing
+# fleet_landed finds (head = the branch's tip, merged/closed = the landing time),
+# OPEN when its work is not on the base. No PR, so no closing references: a landed
+# issue-<N> branch on a repo with no GitHub is the issue's own work (one worktree,
+# one issue), and gh is never asked about it.
+land_fields() {
+  local land rc tip ep iso cl='-'
+  land=$(fleet_landed "$REPO" "$1" "$MAIN" "$BASE"); rc=$?
+  [ "$rc" = 2 ] && return 2
+  tip=$(git -C "$MAIN" rev-parse --verify -q "refs/heads/$1^{commit}" 2>/dev/null)
+  [ -n "$tip" ] || return 1
+  if [ "$rc" != 0 ]; then printf 'OPEN\t%s\t%s\t-\t-\t-\n' "$tip" "$1"; return 0; fi
+  ep=$(printf '%s' "$land" | cut -d' ' -f3)
+  iso=$(date -u -r "$ep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$ep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+  case "$1" in issue-[0-9]*) [ "${FLEET_FORGE:-github}" = none ] && cl="$(fleet_norm_repo "$REPO")#${1#issue-}" ;; esac
+  printf 'MERGED\t%s\t%s\t%s\t%s\t%s\n' "$tip" "$1" "${iso:--}" "${iso:--}" "$cl"
+}
+
+# REC_PR / REC_OUT are what the history row is told: no PR, and git's `landed`.
+REC_PR="$PR"; REC_OUT=merged-pr
+if [ -n "$BRANCH_ARG" ]; then
+  PR="-"; REC_PR=""; REC_OUT=landed
+  fields=$(land_fields "$BRANCH_ARG"); _lf=$?
+  [ "$_lf" = 2 ] && { note "fleet-cleanup: cannot fetch $REPO's $BASE — not deciding."; done_token "error:no-remote"; exit 2; }
+  [ -z "$fields" ] && { note "fleet-cleanup: no branch $BRANCH_ARG in $MAIN."; done_token "skip:nothing"; exit 0; }
+else
+  fields=$(pr_fields "$PR")
+  [ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
+fi
 IFS=$'\t' read -r st oid href closed_at merged_at closes <<<"$fields"
 # BRANCH is what the teardown addresses; ISSUE stays the issue-<N> identity (the
 # @issue window binding, the ledger key, the branch name). They coincide for a
@@ -369,7 +406,10 @@ scratch_head_gate() {
   # was pushed after the merge and was never merged. WT_HEAD is that tip already
   # (the porcelain HEAD of the worktree this branch is attached to), so this costs
   # no extra git call.
-  if [ -n "$oid" ] && [ -n "$WT_HEAD" ] && [ "$WT_HEAD" != "$oid" ]; then
+  # A tip past the head still passes when git finds its whole change on the base
+  # (issue #3601: fleet_land_check's ① / ②) — nothing of it is left unmerged.
+  if [ -n "$oid" ] && [ -n "$WT_HEAD" ] && [ "$WT_HEAD" != "$oid" ] \
+     && ! fleet_land_check "$MAIN" "$WT_HEAD" "origin/$BASE" >/dev/null; then
     note "  refusing $BRANCH: local tip $WT_HEAD != merged head $oid (commits past the merge)."
     done_token "skip:unmerged"; return 1
   fi
@@ -515,7 +555,8 @@ auto_cleanup_gate() {
       elif ! current_head=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null); then
         why="local tip unavailable"
       elif [ "$st" = MERGED ]; then
-        if [ -z "$oid" ] || [ "$current_head" != "$oid" ]; then
+        if { [ -z "$oid" ] || [ "$current_head" != "$oid" ]; } \
+           && ! fleet_land_check "$MAIN" "$current_head" "origin/$BASE" >/dev/null; then
           why="local tip differs from the merged PR head"; token="skip:unmerged"
         fi
       elif ! base_head=$(git -C "$WT" rev-parse --verify "origin/${FLEET_BASE_BRANCH:-master}^{commit}" 2>/dev/null) \
@@ -663,7 +704,7 @@ if [ "$st" = CLOSED ]; then
     done_token "skip:nothing"; exit 0
   fi
   if [ -n "$BRANCH" ] && [ -n "$WT" ]; then
-    fleet_reap_record "unmerged" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$PR" "$BRANCH" || true
+    fleet_reap_record "unmerged" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$REC_PR" "$BRANCH" || true
   fi
   note "  #$PR closed-unmerged — reaping the orphan (no merge, no base pull, no force-drop)."
   DROP_FORCE=""
@@ -688,7 +729,7 @@ fi
 # A non-issue head has no issue number, so the helper keys the row by the branch's
 # `scratch-<N>` slug instead (issue #466) — the session stays in /fleet-history.
 if [ -n "$BRANCH" ] && [ -n "$WT" ]; then
-  fleet_reap_record "merged-pr" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$PR" "$BRANCH" || true
+  fleet_reap_record "$REC_OUT" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$REC_PR" "$BRANCH" || true
 fi
 
 # Base fast-forward under the SHARED land lease — serialize base movers. We take

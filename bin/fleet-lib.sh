@@ -3275,7 +3275,9 @@ fleet_sleep_dispose() {
 #   merged-pr   (rc 0) — clean AND a MERGED PR exists for the branch
 #   ancestor    (rc 0) — clean AND the tip is a STRICT ancestor of the base ref
 #   dirty       (rc 1) — has uncommitted/untracked changes (untracked counts)
-#   unmerged    (rc 1) — clean but no merged PR or strict ancestry (includes tip == base)
+#   landed      (rc 0) — clean AND git says the work is on the base all the same:
+#                        a squash / rebase merge, or a booked landing (issue #3601)
+#   unmerged    (rc 1) — clean but no merged PR, strict ancestry or landing (includes tip == base)
 # Args: <worktree-dir> <repo-root> <branch> <head-sha> <base-ref> <merged-branches>
 # <merged-branches> is a newline-separated list of merged PR head-ref names (the
 # caller's `gh pr list --state merged` output). A line may carry the PR's head sha
@@ -3334,6 +3336,12 @@ fleet_reap_ok() {
      && git -C "$root" merge-base --is-ancestor "$head_commit" "$base_commit" 2>/dev/null; then
     printf 'ancestor'; return 0
   fi
+  # No merged PR said so and the tip is not on the base — git's own word (issue
+  # #3601): a squash / rebase merge, or a landing this machine booked. A repo with
+  # no GitHub, or a GitHub answer that never came, still reaps a landed branch.
+  if [ -n "$head" ] && [ -n "$base" ] && fleet_land_check "$root" "$head" "$base" >/dev/null; then
+    printf 'landed'; return 0
+  fi
   printf 'unmerged'; return 1
 }
 
@@ -3364,6 +3372,130 @@ EOF
     git -C "$root" merge-base --is-ancestor "$tip" "$tok" 2>/dev/null && return 0
   done
   [ -n "$base" ] && git -C "$root" merge-base --is-ancestor "$tip" "$base" 2>/dev/null && return 0
+  return 1
+}
+
+# ---- did the work land? git says (issue #3601, EPIC #3570 C8) ----------------
+# The ONE answer to "is this branch's work on the base branch", from git alone —
+# so a repo with no GitHub (FLEET_FORGE=none), or a GitHub one under a spent API
+# budget, still reaps, records and reports a landed session. Three ways it lands:
+#   ① the tip is an ancestor of the base (fast-forward, merge commit, a branch
+#     rebased then merged) — the landing commit is the tip itself when it sits on
+#     the base's first-parent line, else the first-parent commit that brought it in;
+#   ② the branch's WHOLE change since its fork point has the same patch-id as one
+#     commit on the base after the fork (a squash merge) — or every commit of the
+#     branch has its twin there (GitHub's «rebase and merge», commits rewritten);
+#   ③ this machine wrote it down when it merged it (fleet_landed_note; C9's own merge).
+# A branch changed again after that landing is `open` (its whole change no longer
+# matches) — when in doubt, keep it. Tip == the base's head is `open` too: a branch
+# just cut from the base has exactly that shape (#565); ③ covers a fresh ff landing.
+
+# fleet_land_check <checkout> <tip> <base-ref> → `landed <sha> <epoch>` (rc 0) or
+# `open` (rc 1). Local refs only: no fetch, no cache, no gh — the reap gate's half.
+fleet_land_check() {
+  local root="${1:-}" tip="${2:-}" base="${3:-}" t b mb c pid ct ids own l
+  [ -n "$root" ] && [ -n "$tip" ] && [ -n "$base" ] || { echo open; return 1; }
+  t=$(git -C "$root" rev-parse --verify -q "$tip^{commit}" 2>/dev/null) || { echo open; return 1; }
+  l=$(_fleet_landed_noted "$t") && { printf 'landed %s\n' "$l"; return 0; }
+  b=$(git -C "$root" rev-parse --verify -q "$base^{commit}" 2>/dev/null) || { echo open; return 1; }
+  [ "$t" != "$b" ] || { echo open; return 1; }
+  if git -C "$root" merge-base --is-ancestor "$t" "$b" 2>/dev/null; then
+    c=$(git -C "$root" rev-list --first-parent --ancestry-path "$t..$b" 2>/dev/null | tail -n 1)
+    # ff: the oldest first-parent descendant's first parent IS the tip
+    if [ -z "$c" ] || [ "$(git -C "$root" rev-parse -q --verify "$c^1" 2>/dev/null)" = "$t" ]; then c=$t; fi
+    printf 'landed %s %s\n' "$c" "$(git -C "$root" log -1 --format=%ct "$c" 2>/dev/null)"
+    return 0
+  fi
+  mb=$(git -C "$root" merge-base "$t" "$b" 2>/dev/null) || { echo open; return 1; }
+  pid=$(git -C "$root" diff --no-color --no-ext-diff --no-renames "$mb" "$t" 2>/dev/null \
+    | git -C "$root" patch-id --stable 2>/dev/null | cut -d' ' -f1)
+  [ -n "$pid" ] || { echo open; return 1; }            # no net change: nothing to land
+  # The base's commits since the fork, from a day before the tip was committed (a
+  # squash or a rebase-merge is committed after it), as `<patch-id> <commit>`.
+  ct=$(git -C "$root" log -1 --format=%ct "$t" 2>/dev/null)
+  case "$ct" in ''|*[!0-9]*) ct=0 ;; esac
+  ids=$(git -C "$root" log --first-parent --no-merges --no-color --no-ext-diff --no-renames \
+    --since="@$((ct > 86400 ? ct - 86400 : 0))" -p "$mb..$b" 2>/dev/null \
+    | git -C "$root" patch-id --stable 2>/dev/null)
+  [ -n "$ids" ] || { echo open; return 1; }
+  c=$(printf '%s\n' "$ids" | awk -v p="$pid" '$1==p{print $2; exit}')
+  if [ -z "$c" ]; then
+    # every own commit has its twin on the base (newest first: the tip's twin lands it)
+    own=$(git -C "$root" log --no-merges --no-color --no-ext-diff --no-renames -p "$mb..$t" 2>/dev/null \
+      | git -C "$root" patch-id --stable 2>/dev/null | cut -d' ' -f1)
+    # awk, not a `for f in $own`: zsh (a skill's sourced lib) never splits a $var
+    c=$(printf '%s\n--\n%s\n' "$ids" "$own" | awk '
+      $0=="--"{own=1; next}
+      !own{if(!($1 in at))at[$1]=$2; next}
+      $1==""{next}
+      {n++; if(!($1 in at)){miss=1; exit} if(n==1)c=at[$1]}
+      END{if(!miss && n>0)print c}')
+  fi
+  [ -n "$c" ] || { echo open; return 1; }
+  printf 'landed %s %s\n' "$c" "$(git -C "$root" log -1 --format=%ct "$c" 2>/dev/null)"
+}
+
+# ③ the local landing book: one `<repo>\t<branch>\t<tip>\t<sha>\t<epoch>` row per
+# landing this machine made itself (fleet_landed_note — C9's merge writes it).
+_fleet_landed_book() { printf '%s/landed.tsv' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
+# _fleet_landed_noted <tip-sha> → `<sha> <epoch>` from the book, rc 1 when absent.
+_fleet_landed_noted() {
+  local bk; bk=$(_fleet_landed_book)
+  [ -f "$bk" ] || return 1
+  awk -F'\t' -v t="${1:-}" '$3==t{r=$4" "$5} END{if(r=="")exit 1; print r}' "$bk"
+}
+# fleet_landed_note <repo> <branch> <tip> <landed-sha> [<epoch>] — book a landing.
+fleet_landed_note() {
+  local bk; bk=$(_fleet_landed_book)
+  [ -n "${3:-}" ] && [ -n "${4:-}" ] || return 1
+  mkdir -p "$(dirname "$bk")" 2>/dev/null
+  printf '%s\t%s\t%s\t%s\t%s\n' "${1:-}" "${2:-}" "$3" "$4" "${5:-$(date +%s)}" >> "$bk"
+}
+
+# fleet_landed <repo> <branch|sha> [<checkout> [<base-branch>]] → `landed <sha>
+# <epoch>` (rc 0) · `open` (rc 1) · nothing, rc 2 = the remote base could not be
+# fetched. Fetches origin/<base> (at most once per FLEET_LANDED_FETCH_SECS, 60;
+# FLEET_LANDED_FETCH=0 reads the local ref as it stands) and caches the verdict
+# per (repo, tip): a landing for good, an `open` until the base moves. The
+# checkout and base default to the repo's FLEET_MAIN / FLEET_BASE_BRANCH in the
+# fleet ($FLEET_SESSION, else the first configured fleet hosting <repo>).
+fleet_landed() {
+  local repo="${1:-}" ref="${2:-}" root="${3:-}" base="${4:-}" s t b slug cdir hit st now v
+  [ -n "$repo" ] && [ -n "$ref" ] || { echo open; return 1; }
+  if [ -z "$root" ] || [ -z "$base" ]; then
+    for s in ${FLEET_SESSION:-} $(fleet_each_conf | cut -f1); do
+      fleet_repo_hosted "$s" "$repo" || continue
+      [ -n "$root" ] || root=$(fleet_repo_conf_get "$s" "$repo" FLEET_MAIN)
+      [ -n "$base" ] || base=$(fleet_repo_conf_get "$s" "$repo" FLEET_BASE_BRANCH)
+      break
+    done
+  fi
+  base="${base:-main}"
+  [ -n "$root" ] && git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || return 2
+  slug=$(fleet_slug "$(fleet_norm_repo "$repo")"); cdir=$(fleet_cache_global)
+  if [ "${FLEET_LANDED_FETCH:-1}" != 0 ]; then
+    st="$cdir/landed-$slug.fetch"; now=$(date +%s)
+    v=$(cat "$st" 2>/dev/null); case "$v" in ''|*[!0-9]*) v=0 ;; esac
+    if [ $((now - v)) -ge "${FLEET_LANDED_FETCH_SECS:-60}" ]; then
+      GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=10}" \
+        git -C "$root" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=15 \
+        fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" >/dev/null 2>&1 || return 2
+      printf '%s\n' "$now" > "$st" 2>/dev/null
+    fi
+  fi
+  b=$(git -C "$root" rev-parse --verify -q "origin/$base^{commit}" 2>/dev/null) || return 2
+  t=$(git -C "$root" rev-parse --verify -q "refs/heads/$ref^{commit}" 2>/dev/null \
+    || git -C "$root" rev-parse --verify -q "origin/$ref^{commit}" 2>/dev/null \
+    || git -C "$root" rev-parse --verify -q "$ref^{commit}" 2>/dev/null) || { echo open; return 1; }
+  hit=$(awk -F'\t' -v t="$t" -v b="$b" '$1==t && ($3 ~ /^landed / || $2==b){r=$3} END{print r}' \
+    "$cdir/landed-$slug.tsv" 2>/dev/null)
+  if [ -z "$hit" ]; then
+    hit=$(fleet_land_check "$root" "$t" "$b")
+    case "$hit" in landed\ ?*|open)
+      printf '%s\t%s\t%s\n' "$t" "$b" "$hit" >> "$cdir/landed-$slug.tsv" 2>/dev/null ;; esac
+  fi
+  printf '%s\n' "$hit"
+  case "$hit" in landed\ *) return 0 ;; esac
   return 1
 }
 
@@ -7268,7 +7400,7 @@ fleet_scratch_gen_new() {
 # Idempotent: it drives fleet-history.sh record / record-closed, which BOTH dedup on
 # the session/transcript key, so two reapers recording the same reap yield ONE row.
 #
-#   $1 outcome   reap verdict — merged-pr|merged-PR|merged → a LANDED row;
+#   $1 outcome   reap verdict — merged-pr|merged-PR|merged|landed → a LANDED row;
 #                ancestor|ancestor-of-*|unmerged|dirty → a CLOSED-UNLANDED row;
 #                anything else no-ops. The unmerged|dirty verdicts index a KEPT (not
 #                removed) worktree so a hand-closed worker is browsable + resumable
@@ -7324,9 +7456,12 @@ fleet_reap_record() {
   # (worktree-autoclean knows the branch, not the PR number). Hoisted out of the
   # record case below so the lifecycle emit and the ledger row report the same
   # PR number — the emit runs even on installs where fleet-history.sh is absent.
-  if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
+  # A repo with no GitHub (FLEET_FORGE=none) has no PR to ask after (issue #3601).
+  local forge=github
+  [ -n "$repo" ] && [ -n "$sess" ] && forge=$(fleet_repo_forge "$repo" "$sess")
+  if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
     case "$outcome" in
-      merged-pr|merged-PR|merged)
+      merged-pr|merged-PR|merged|landed)
         pr="$(gh -R "$repo" pr list --head "$branch" --state merged \
                 --json number -q '.[0].number' 2>/dev/null)" ;;
     esac
@@ -7343,7 +7478,7 @@ fleet_reap_record() {
   # written below, whatever this does).
   local _oc=''
   case "$outcome" in
-    merged-pr|merged-PR|merged)             _oc=landed ;;
+    merged-pr|merged-PR|merged|landed)      _oc=landed ;;
     ancestor|ancestor-of-*|unmerged|dirty|live)  _oc=closed-unlanded ;;
   esac
   if [ -n "$_oc" ] && [ -n "$_bin" ] && [ -f "$_bin/fleet-emit.sh" ]; then
@@ -7356,10 +7491,12 @@ fleet_reap_record() {
   hist="$_bin/fleet-history.sh"
   [ -f "$hist" ] || return 0
   case "$outcome" in
-    merged-pr|merged-PR|merged)
+    merged-pr|merged-PR|merged|landed)
+      # --branch (issue #3601): with no PR answer, the landing commit and its time
+      # come from git (fleet_landed), not from "now".
       bash "$hist" record --repo "$repo" --main "$main" --session "$sess" \
         --pr "$pr" --key "$key" --worktree "$wt" --win "$win" \
-        --title "$title" --origin "$origin" >/dev/null 2>&1 || return 0
+        --title "$title" --origin "$origin" ${branch:+--branch "$branch"} >/dev/null 2>&1 || return 0
       ;;
     ancestor|ancestor-of-*|unmerged|dirty|live)
       # No landed PR (clean tip is an ancestor of base; or a KEPT unmerged/dirty
@@ -10098,19 +10235,35 @@ fleet_window_reeval() {
 #   closed   closed without merging
 #   unknown  gh missing / failed / timed out — undetermined, never "merged"
 # REST (the core budget), not GraphQL: a GraphQL-exhausted account still answers.
+# [<branch>] (issue #3601): when GitHub cannot answer — no PR, gh missing or failing,
+# or a repo with no GitHub at all (FLEET_FORGE=none: gh is never run) — git does:
+# fleet_landed finds the branch's work on the base ⇒ merged; not there ⇒ open for a
+# repo with no GitHub (unknown on GitHub); the remote unreachable ⇒ unknown. No branch ⇒ the answers above, byte for byte.
 fleet_pr_merge_state() {
-  local repo="${1:-}" n="${2//[^0-9]/}" raw
+  local repo="${1:-}" n="${2//[^0-9]/}" br="${3:-}" raw st=unknown forge=github s
   case "$repo" in ?*/?*) ;; *) printf 'unknown\n'; return 0 ;; esac
-  [ -n "$n" ] && command -v gh >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
-  raw=$(fleet_timebox 10 gh api "repos/$repo/pulls/$n" \
-          --jq '"\(.merged) \(.state) \(.auto_merge != null)"' 2>/dev/null)
-  case "$raw" in
-    'true '*)          printf 'merged\n' ;;
-    'false open true') printf 'armed\n' ;;
-    'false open '*)    printf 'open\n' ;;
-    'false closed '*)  printf 'closed\n' ;;
-    *)                 printf 'unknown\n' ;;
-  esac
+  if [ -n "$br" ]; then
+    for s in ${FLEET_SESSION:-} $(fleet_each_conf | cut -f1); do
+      fleet_repo_hosted "$s" "$repo" && { forge=$(fleet_repo_forge "$repo" "$s"); break; }
+    done
+  fi
+  if [ -n "$n" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
+    raw=$(fleet_timebox 10 gh api "repos/$repo/pulls/$n" \
+            --jq '"\(.merged) \(.state) \(.auto_merge != null)"' 2>/dev/null)
+    case "$raw" in
+      'true '*)          st=merged ;;
+      'false open true') st=armed ;;
+      'false open '*)    st=open ;;
+      'false closed '*)  st=closed ;;
+    esac
+  fi
+  if [ "$st" = unknown ] && [ -n "$br" ]; then
+    fleet_landed "$repo" "$br" >/dev/null
+    # git's `open` can only stand for a repo with no GitHub: on GitHub a squash
+    # merge followed by one more commit still reads open here, so it stays unknown
+    case $? in 0) st=merged ;; 1) [ "$forge" = none ] && st=open ;; esac
+  fi
+  printf '%s\n' "$st"
 }
 
 # fleet_cc_session_json <pid> — path of the registry record for a Claude pid.

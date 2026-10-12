@@ -29,6 +29,8 @@
 # Decision table (the crux: committed ≠ merged) — verdict from the shared gate:
 #   merged-pr  reap: record landed         → remove wt+branch → close issue*→ close window
 #   ancestor   reap: record closed-unlanded→ remove wt+branch →               close window
+#   landed     reap: record landed         → remove wt+branch →               close window
+#              (git saw a squash / rebase merge with no merged-PR answer, #3601)
 #   tip==base  keep: no merged PR → unmerged; keep wt + issue,                close window
 #   unmerged   keep: record closed-unlanded, keep wt + issue,                 close window
 #   dirty      keep: record closed-unlanded, keep wt (git refuses --forceless),close window
@@ -199,7 +201,7 @@ if [ "${1:-}" = "--exec" ]; then
         MASTER=$(git -C "$MAIN" rev-parse --verify -q "origin/$BASE" 2>/dev/null \
           || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)
       fi
-      command -v gh >/dev/null 2>&1 && [ -n "$REPO" ] && MERGED_PRS=$(gh -R "$REPO" pr list \
+      [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 && [ -n "$REPO" ] && MERGED_PRS=$(gh -R "$REPO" pr list \
         --state merged --head "$key" --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)
       verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$key" "$whead" "$MASTER" "$MERGED_PRS")
       # No issue → pass an empty one; fleet_reap_record derives the scratch key from
@@ -273,8 +275,10 @@ if [ "${1:-}" = "--exec" ]; then
 
   # merged PR head-refs for this branch (a --head filter keeps it to one branch),
   # each with its head sha: a commit made AFTER the merge keeps the branch (#1842).
+  # A repo with no GitHub (FLEET_FORGE=none, issue #3601): no gh — git's landing
+  # check inside fleet_reap_ok answers alone.
   MERGED_PRS=""
-  command -v gh >/dev/null 2>&1 && MERGED_PRS=$(gh -R "$REPO" pr list \
+  [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 && MERGED_PRS=$(gh -R "$REPO" pr list \
     --state merged --head "$branch" --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)
 
   verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")
@@ -308,7 +312,7 @@ if [ "${1:-}" = "--exec" ]; then
 
   act="$verdict"; [ -n "$parking" ] && act=parking
   case "$act" in
-    merged-pr|ancestor)
+    merged-pr|ancestor|landed)
       if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
         # Reap any detached proc anchored to this worktree first (#151), then a PLAIN
         # remove (no --force): git refuses a dirty worktree, so even a TOCTOU race
@@ -342,8 +346,8 @@ if [ "${1:-}" = "--exec" ]; then
   # q on an issue whose work did not land: release the claim so it can be
   # dispatched again (issue #1842). A merged PR closed it above; `live` is a
   # window still working it — neither is released.
-  case "$act" in merged-pr|live|parking) ;; *)
-    if [ "$how" = recycle ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
+  case "$act" in merged-pr|landed|live|parking) ;; *)
+    if [ "$how" = recycle ] && [ -n "$REPO" ] && [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 \
        && [ "$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)" = OPEN ]; then
       what="its work did not land"
       [ "$verdict" = dirty ] && what="$what; its dirty worktree is kept"
