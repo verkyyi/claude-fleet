@@ -8395,6 +8395,62 @@ EOF
   [ "$g_avail" -gt "$g_floor" ]
 }
 
+# _fleet_admit_room_advice <tight> <headroom line> — rc 0 when a room below 1 is
+# only ADVICE (issue #3479, see fleet_machine_admit): FLEET_ADMIT_ROOM is not
+# `hold`, the kernel's pressure is not holding, and available memory is still
+# above the kept-back floor once the sessions admitted-but-not-yet-counted are
+# paid for. The new session's own estimate and the hysteresis are waived; the
+# reserved ones are not, so a burst still stops at the floor.
+_fleet_admit_room_advice() {
+  [ "${FLEET_ADMIT_ROOM:-advice}" != hold ] || return 1
+  [ "$1" = 0 ] || return 1
+  local a_room a_cost a_avail a_floor a_res a_more
+  read -r a_room a_cost a_avail a_floor a_res a_more <<EOF
+$2
+EOF
+  : "${a_room:-}${a_more:-}"
+  case "$a_cost$a_avail$a_floor$a_res" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( a_avail - a_floor - a_res * a_cost )) -gt 0 ]
+}
+# fleet_admit_room_advised <headroom line> — how many more sessions the advice
+# rule admits one after another: each pays its own cost as a reservation, so k
+# fit while avail − floor − (reserved + k − 1) × cost > 0. The capacity read's
+# `room` when the gate admits (the hub reads room < 1 as full) — never above
+# what the strict room already says. FLEET_ADMIT_ROOM=hold → the strict room.
+fleet_admit_room_advised() {
+  local v_room v_cost v_avail v_floor v_res v_more v_left
+  read -r v_room v_cost v_avail v_floor v_res v_more <<EOF
+$1
+EOF
+  : "${v_more:-}"
+  case "$v_room$v_cost$v_avail$v_floor$v_res" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$v_cost" -gt 0 ] || return 1
+  if [ "${FLEET_ADMIT_ROOM:-advice}" != hold ]; then
+    v_left=$(( v_avail - v_floor - v_res * v_cost ))
+    if [ "$v_left" -gt 0 ] && [ $(( (v_left + v_cost - 1) / v_cost )) -gt "$v_room" ]; then
+      v_room=$(( (v_left + v_cost - 1) / v_cost ))
+    fi
+  fi
+  printf '%s\n' "$v_room"
+}
+# _fleet_admit_advice_note <headroom line> — the advice admission, written down:
+# one line in global/admit-advice.log (the last 200 kept) for the doctor's row.
+# Written by fleet_session_cap_ok (a real admission), never by a read.
+_fleet_admit_advice_note() {
+  local f="$FLEET_C/global/admit-advice.log" n_room n_cost n_avail n_floor n_res n_more
+  read -r n_room n_cost n_avail n_floor n_res n_more <<EOF
+$1
+EOF
+  : "${n_more:-}"
+  mkdir -p "${f%/*}" 2>/dev/null || return 0
+  printf '%s room %s at ~%s MB each, %s MB available, %s MB kept back, %s admitted not yet counted — admitted at normal pressure (advice)\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$n_room" "$n_cost" "$n_avail" "$n_floor" "$n_res" >> "$f" 2>/dev/null
+  if [ "$(wc -l < "$f" 2>/dev/null | tr -d ' ')" -gt 400 ] 2>/dev/null; then
+    tail -n 200 "$f" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null
+  fi
+  return 0
+}
+
 # fleet_machine_admit [--short] — may the machine take ONE MORE session right now
 # (issue #1090, EPIC #1291 C4; the only gate by default since #1831)? Exit 0 =
 # admit (prints nothing). Exit 1 = hold, and stdout says why — the full line, or
@@ -8405,6 +8461,9 @@ EOF
 #   memory room      fleet_machine_headroom < 1 — the cost of one more session
 #                    does not fit above the floor once the reserved ones are paid
 #                    for (block above). Unreadable total → the old avail% rule.
+#                    At normal pressure it is ADVICE (issue #3479): it holds only
+#                    when available memory is at or under the floor plus the
+#                    reserved sessions' cost; otherwise it admits and notes it.
 #   CPU load         1-min load/core > FLEET_ADMIT_LOAD_PER_CORE (0 = off). Defaults
 #                    to FLEET_LOADGEN_LOAD_PER_CORE when the operator set one, else
 #                    1.5 — a healthy 20-session afternoon reads 1.3/core (measured
@@ -8422,6 +8481,18 @@ EOF
 # absolute, only the one-more-session estimate is waived. It is bounded: a login
 # has one pinned guide, opened only while none runs. FLEET_ADMIT_GUIDE_PASS=0
 # turns the waiver off.
+# Every spawn gets most of that since #3479: on mini2 (drill 35) a newcomer's
+# SECOND ordinary session read «room for 0 more at ~882 MB each» at 25 % free,
+# floor 15 %, pressure normal — and 51 % free right after. The base estimate
+# alone left room for one; what took it to 0 was the hysteresis an earlier hold
+# had left (+1024 MB) and the reservations of windows the drill had just opened,
+# whose agents were already in the reading. A guess about the NEXT session's
+# growth is no reason to turn a person away while the kernel says normal and the
+# floor holds, so at normal pressure the room estimate is advice: it admits while
+# avail − floor − reserved × cost > 0 (the reserved sessions still bind, so a
+# burst stops at the floor), and writes the admission to global/admit-advice.log.
+# FLEET_ADMIT_ROOM=hold restores the strict room ≥ 1 rule. The guide's waiver
+# above is wider still (no reservation is charged to it).
 # FLEET_ADMIT=0 switches it off. A hold is transient by design: every caller of
 # fleet_session_cap_ok already treats a refusal as "retry later" (dispatch's next
 # tick, the epic run's next refill), so spawns resume when the reading drops.
@@ -8429,7 +8500,7 @@ fleet_machine_admit() {
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local short=0 free_min="${FLEET_ADMIT_MEM_FREE_PCT:-15}" pres="${FLEET_ADMIT_PRESSURE:-warn}"
   local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-1.5}}" plim m lvl avail per pname
-  local hr='' room=1 tight=0 waived=0 why
+  local hr='' room=1 tight=0 waived=0 advised=0 why
   [ "${1:-}" = --short ] && short=1
   case "$free_min" in ''|*[!0-9]*) free_min=15 ;; esac
   case "$lmax" in ''|*[!0-9.]*) lmax=1.5 ;; esac
@@ -8443,7 +8514,9 @@ fleet_machine_admit() {
       if hr=$(fleet_machine_headroom "$avail"); then
         room=${hr%% *}
         if [ "$room" -lt 1 ]; then
-          if _fleet_admit_guide_pass "$tight" "$hr"; then waived=1; else tight=1; fi
+          if _fleet_admit_guide_pass "$tight" "$hr"; then waived=1
+          elif _fleet_admit_room_advice "$tight" "$hr"; then advised=1
+          else tight=1; fi
         fi
       elif [ "$free_min" -gt 0 ] && [ "$avail" -lt "$free_min" ]; then
         tight=1
@@ -8476,8 +8549,12 @@ EOF
       "$per" "$lmax"
     return 1
   fi
-  # a waived guide is no recovery: the hold (and its hysteresis) stays for the rest
-  [ -n "$hr" ] && [ "$waived" = 0 ] && rm -f "$FLEET_ADMIT_HELD_FILE" 2>/dev/null
+  # a waived guide or an advised room is no recovery: the hold (and its
+  # hysteresis) stays for the strict reading
+  [ -n "$hr" ] && [ "$waived" = 0 ] && [ "$advised" = 0 ] && rm -f "$FLEET_ADMIT_HELD_FILE" 2>/dev/null
+  # the advice is noted by the admission that took it (fleet_session_cap_ok),
+  # never by a read (the doctor, the capacity beat)
+  _fleet_admit_advised=''; [ "$advised" = 1 ] && _fleet_admit_advised=$hr
   return 0
 }
 
@@ -8634,8 +8711,10 @@ fleet_session_cap_ok() {
     [ "$i" -ge 50 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
     sleep 0.2 2>/dev/null || sleep 1
   done
+  _fleet_admit_advised=''
   fleet_machine_admit; rc=$?
   [ "$rc" = 0 ] && fleet_admit_reserve "$sess"
+  [ "$rc" = 0 ] && [ -n "${_fleet_admit_advised:-}" ] && _fleet_admit_advice_note "$_fleet_admit_advised"
   rmdir "$lk" 2>/dev/null
   return "$rc"
 }

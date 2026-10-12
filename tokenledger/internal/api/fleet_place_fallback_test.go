@@ -197,3 +197,30 @@ func mustLeases(t *testing.T, h *harness) []store.Lease {
 	}
 	return ls
 }
+
+// A machine the person named and that is full (claude-fleet#3479) is never
+// swapped for another — and the line says it was pinned: the node's own
+// capacity no (its spawn's RC_CAP, exit 2) and the hub's all-full alike.
+func TestClientPlaceNamedFullSaysPinned(t *testing.T) {
+	h, _, m4, m3, _, f4, _ := threeNodes(t)
+	lease, key := clientLeaseFor(t, h)
+	full := "machine memory tight — 暂停开新：内存紧张 (pressure warn, 9% free, floor 15%)"
+	m4.setOpGet(declines(2, full))
+	st, out := clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "issue", "issue": 61, "node": "m4", "wait": 5})
+	if st != 200 || out.Exit != 5 || m3.count() != 0 || len(out.Attempts) != 0 ||
+		!strings.HasPrefix(out.Line, "DECLINED m4 "+out.OperationID+" 2\tpinned to m4, which is full: ") ||
+		!strings.Contains(out.Line, full) {
+		t.Fatalf("named full m4 = %d %+v (m3 writes %d); want its decline, pinned, nothing else tried", st, out, m3.count())
+	}
+	m4.setOpGet(declines(1, discoverFail))
+	st, out = clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "issue", "issue": 62, "node": "m4", "wait": 5})
+	if st != 200 || out.Exit != 5 || strings.Contains(out.Line, "pinned to") {
+		t.Fatalf("named m4's non-capacity decline = %d %+v; want it as it was, no «pinned»", st, out)
+	}
+	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(false), "内存紧张", 0, f4)
+	st, out = clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "issue", "issue": 63, "node": "m4", "wait": 5})
+	if st != 200 || out.Exit != 4 || m3.count() != 0 ||
+		!strings.HasPrefix(out.Line, "REFUSED AT_CAPACITY\tall-full: pinned to m4, which is full — m4: 机器暂停接新：内存紧张") {
+		t.Fatalf("named paused m4 = %d %+v; want REFUSED AT_CAPACITY, pinned to m4", st, out)
+	}
+}

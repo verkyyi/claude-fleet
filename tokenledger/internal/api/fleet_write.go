@@ -1617,6 +1617,11 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			if paused {
 				msg = "all-full: every machine is at its session cap or pausing new sessions — " + strings.Join(reasons, "; ")
 			}
+			if node != "auto" {
+				// The person pinned the machine (claude-fleet#3479): nothing
+				// else was tried, so the refusal says so.
+				msg = "all-full: " + pinnedFull(pl.Candidates[0].Machine) + " — " + strings.Join(reasons, "; ")
+			}
 		}
 		if sp := s.spot(); sp != nil && node == "auto" {
 			// Peak: every fixed machine is out. Ask for a SPOT node
@@ -1633,6 +1638,13 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 	pl.Machine, pl.FleetID = c.Machine, c.FleetID
 	pl.Reason = placementReason(c, pl.Candidates)
 	return pl, nil
+}
+
+// pinnedFull is how a refusal reads when the person named the machine and it
+// is full (claude-fleet#3479): an auto start is tried on the next machine with
+// room (claude-fleet#1610), a pinned one never is.
+func pinnedFull(machine string) string {
+	return "pinned to " + machine + ", which is full"
 }
 
 // unplacedMachines is "<machine>: <why>" for every machine the hub could place
