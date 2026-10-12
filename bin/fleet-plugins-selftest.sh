@@ -47,7 +47,8 @@
 #      under fleet_node_manages; `fleet feedback on|off|status` is the switch
 #      (fleet-feedback-switch.sh) and the doctor has a never-WARN `feedback` row
 #   K  fleet-infra (issue #3586, EPIC #3569 C16): its six runbooks each carry
-#      什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚; no hooks, no MCP;
+#      什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚 and an evals/<skill>-triggers
+#      case; no hooks, no MCP;
 #      oss-scan over it = 0; --default fleet-infra is refused, install-apply
 #      never defaults it, the team bundle refuses to hand it out
 # Exit 0 = pass.
@@ -460,6 +461,10 @@ for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-
     什么时候用\|先查什么\|步骤\|怎么验收\|怎么回滚*) ok ;;
     *) fail "K $sk: headings are «$heads», want 什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚" ;;
   esac
+  # and a trigger case for `claude plugin eval` (run on an admin's own signed-in computer)
+  grep -q "tool: Skill" "$FI/evals/$sk-triggers/graders/skill-fired.md" 2>/dev/null \
+    && grep -q "$sk" "$FI/evals/$sk-triggers/graders/skill-fired.md" && [ -s "$FI/evals/$sk-triggers/prompt.md" ] && ok \
+    || fail "K $sk: no evals/$sk-triggers case (prompt.md + graders/skill-fired.md)"
 done
 [ ! -e "$FI/hooks" ] && [ ! -e "$FI/.mcp.json" ] && ok || fail "K fleet-infra runs nothing on its own: no hooks, no MCP server"
 # no internal name or address in it — the ONE rule table (EPIC #3569 共同约定 1)
