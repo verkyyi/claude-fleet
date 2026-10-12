@@ -13,6 +13,8 @@
 #   sa-token-in-user-pod     extras/managed-node/render.py + deploy/k8s/fleet-workers
 #   provisioner-off-template bin/fleet-provisioner.py + bin/fleet_cluster_ticket.py
 #   spare-pod-leaks          bin/fleet-provisioner.py + tokenledger/internal/api/fleet_spare_pods.go
+#   root-in-user-pod         extras/managed-node/render.py + bin/fleet-provisioner.py +
+#                            bin/fleet-node-linux.py pod-etc (issue #3757)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -27,7 +29,8 @@ D64=$(printf 'a%.0s' $(seq 1 64))
 templates() {
   local d="$1"
   python3 "$RENDER" --image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi \
-    --user-pod u-drill1 > "$d/user-pod.json" || return 1
+    --user-pod u-drill1 --login drill1 --uid 10002 \
+    --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local > "$d/user-pod.json" || return 1
   python3 "$RENDER" --door --image "x@sha256:$D64" --hub https://hub.example.com > "$d/door.json" || return 1
   python3 "$RENDER" --image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi > "$d/node.json" || return 1
   python3 "$RENDER" --job u-drill1 --image "x@sha256:$D64" --job-repo o/r \
@@ -179,7 +182,8 @@ drill_provisioner_off_template() {
   python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
   cat > "$d/template.json" <<EOF
 {"cluster": "drill", "namespace": "fleet-workers",
- "user_pod": {"image": "x@sha256:$D64", "hub": "https://hub.example.com", "storage_class": "csi"},
+ "user_pod": {"image": "x@sha256:$D64", "hub": "https://hub.example.com", "storage_class": "csi",
+              "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local"},
  "job": {"image": "x@sha256:$D64"}}
 EOF
   export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
@@ -189,7 +193,7 @@ EOF
     python3 "$BIN/fleet_cluster_ticket.py" sign "$1" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(nonce=sys.argv[2], exp=int(sys.argv[3])); print(json.dumps(f))' "$2" "${3:-$n}" "${4:-$exp}")"
   }
   prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
-  local up='{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}'
+  local up='{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"fj_abcdefghijklmnopqrstuvwxyz"}'
   local ref job_none job_good
   ref=$(printf 'b%.0s' $(seq 1 40))
   job_none='{"op":"create-job","cluster":"drill","pod":"u-none1","repo":"o/r","ref":"'"$ref"'"}'
@@ -200,16 +204,18 @@ EOF
   done <<EOF
 no ticket|
 forged|$(tk "$d/other" "$up")
-another cluster|$(tk "$d/key" '{"op":"create-user-pod","cluster":"prod","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}')
+another cluster|$(tk "$d/key" '{"op":"create-user-pod","cluster":"prod","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"fj_abcdefghijklmnopqrstuvwxyz"}')
 expired|$(tk "$d/key" "$up" "$n" "$(( $(date +%s) - 1 ))")
 an account ticket|v1.$(tk "$d/key" "$up" | cut -d. -f2-)
-a field the template has not got|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz","privileged":true}')
-a create with no join code|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":""}' 66666666666666666666666666666666)
-a join code off its grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"x; rm -rf /"}' 77777777777777777777777777777777)
+a field the template has not got|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"fj_abcdefghijklmnopqrstuvwxyz","privileged":true}')
+a create with no join code|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","login":"drill1","uid":10002}' 66666666666666666666666666666666)
+a join code off its grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"x; rm -rf /"}' 77777777777777777777777777777777)
 a bind of somebody else's object|$(tk "$d/key" '{"op":"bind-user-pod","cluster":"drill","pod":"u-door1","principal":"gh.1"}' 88888888888888888888888888888888)
 an op it has not got|$(tk "$d/key" '{"op":"create-pod","cluster":"drill","pod":"u-drill1"}')
-a name that is not a person's pod|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"fleet-door","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}')
-limits off the grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"cpu=0","join":"fj_abcdefghijklmnopqrstuvwxyz"}' 55555555555555555555555555555555)
+a name that is not a person's pod|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"fleet-door","limits":"","login":"drill1","uid":10002,"join":"fj_abcdefghijklmnopqrstuvwxyz"}')
+limits off the grammar|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"cpu=0","login":"drill1","uid":10002,"join":"fj_abcdefghijklmnopqrstuvwxyz"}' 55555555555555555555555555555555)
+no login|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","join":"fj_abcdefghijklmnopqrstuvwxyz"}' 99999999999999999999999999999999)
+a root login|$(tk "$d/key" '{"op":"create-user-pod","cluster":"drill","pod":"u-drill1","limits":"","login":"root","uid":0,"join":"fj_abcdefghijklmnopqrstuvwxyz"}' abababababababababababababababab)
 somebody else's object|$(tk "$d/key" '{"op":"destroy-user-pod","cluster":"drill","pod":"u-door1"}' fedcba9876543210fedcba9876543210)
 a Job for no pod|$(tk "$d/key" "$job_none" 11111111111111111111111111111111)
 EOF
@@ -219,13 +225,15 @@ import importlib.util, json, sys, copy
 spec = importlib.util.spec_from_file_location("p", sys.argv[1] + "/fleet-provisioner.py")
 p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
 r = p.render()
-base = r.user_pod_resources("x@sha256:" + sys.argv[2], "https://hub.example.com", "csi", "u-drill1")
+base = r.user_pod_resources("x@sha256:" + sys.argv[2], "https://hub.example.com", "csi", "u-drill1",
+                            login="drill1", uid=10002,
+                            cred_central="http://fleet-credproxy.fleet-workers.svc.cluster.local")
 dep = [o for o in base if o["kind"] == "Deployment"][0]
 svc = [o for o in base if o["kind"] == "Service"][0]
 assert all(p.off_template(o, "fleet-workers") is None for o in base), [p.off_template(o, "fleet-workers") for o in base]
 def mut(o, f):
     o = copy.deepcopy(o); f(o); return o
-c0 = lambda o: o["spec"]["template"]["spec"]["containers"][0]
+c0 = lambda o: [c for c in o["spec"]["template"]["spec"]["containers"] if c["name"] == "sshd"][0]
 cases = {
     "privileged": mut(dep, lambda o: c0(o)["securityContext"].update(privileged=True)),
     "escalation": mut(dep, lambda o: c0(o)["securityContext"].update(allowPrivilegeEscalation=True)),
@@ -290,7 +298,7 @@ drill_spare_pod_leaks() {
   printf 'drill-token\n' > "$d/sa/token"
   head -c 32 /dev/urandom > "$d/key"
   python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
-  printf '{"cluster": "drill", "namespace": "fleet-workers", "user_pod": {"image": "x@sha256:%s", "hub": "https://hub.example.com", "storage_class": "csi"}}\n' \
+  printf '{"cluster": "drill", "namespace": "fleet-workers", "user_pod": {"image": "x@sha256:%s", "hub": "https://hub.example.com", "storage_class": "csi", "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local"}}\n' \
     "$D64" > "$d/template.json"
   export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
     FLEET_PROVISIONER_API="$api" FLEET_PROVISIONER_SA_DIR="$d/sa"
@@ -299,7 +307,7 @@ drill_spare_pod_leaks() {
     python3 "$BIN/fleet_cluster_ticket.py" sign "$d/key" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(exp=int(sys.argv[2])); print(json.dumps(f))' "$1" "$exp")"
   }
   prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
-  jia='{"op":"create-user-pod","cluster":"drill","pod":"u-jia0001","limits":"","join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"a0000000000000000000000000000001"}'
+  jia='{"op":"create-user-pod","cluster":"drill","pod":"u-jia0001","limits":"","login":"jia","uid":10002,"join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"a0000000000000000000000000000001"}'
   prov "$(tk "$jia")"
   [ "$RC" = 0 ] && [ "$(grep -c '^POST ' "$d/writes")" = 4 ] || { WHY="甲's create: rc $RC: $(cat "$d/writes"): $OUT"; return 1; }
   prov "$(tk '{"op":"bind-user-pod","cluster":"drill","pod":"u-jia0001","principal":"gh.7001","nonce":"a0000000000000000000000000000002"}')"
@@ -335,7 +343,7 @@ PY
   [ "$RC" = 3 ] || { WHY="a replay of 甲's create: rc $RC: $OUT"; return 1; }
   # 乙's pod: a new name, a new empty claim, its own join code
   : > "$d/writes"
-  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-yi000002","limits":"","join":"fj_bbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"b0000000000000000000000000000001"}')"
+  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-yi000002","limits":"","login":"yi","uid":10002,"join":"fj_bbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"b0000000000000000000000000000001"}')"
   [ "$RC" = 0 ] && grep -q '^POST /api/v1/namespaces/fleet-workers/persistentvolumeclaims/u-yi000002$' "$d/writes" \
     && ! grep -q 'jia' "$d/writes" || { WHY="乙's create: rc $RC: $(cat "$d/writes"): $OUT"; return 1; }
   # a bind aimed at 甲's gone pod is refused
@@ -358,6 +366,94 @@ PY
   fi
   SECS=$(since "$t0")
   WHAT="甲的 pod 建（join Secret · PVC · Service · Deployment）、打标签、删：四样全删、API 上一样不剩；重放甲的建被拒；乙拿到新名字、新的空盘、自己的 join 码；把甲已删的 pod 绑给乙被拒；${gohalf}"
+}
+
+# root-in-user-pod (#3757): a person's pod with root anywhere but sshd's login
+# step. The template: the fleet container runs as the pod's one login (non-root,
+# ALL dropped, nothing added), sshd adds only its five, the pod-etc init is
+# neither root nor the login; a user pod with no login is not rendered at all.
+# The provisioner's guard refuses each way back to root. pod-etc writes the
+# login's passwd line from the image's own (never a second uid 0, never root's
+# name or number for the login). The kind half runs the pod and reads `ps`.
+drill_root_in_user_pod() {
+  CAP=30
+  local d="$WORK/root" t0 out why
+  mkdir -p "$d/base" "$d/etc"; t0=$(now)
+  out=$(python3 "$RENDER" --image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi \
+    --user-pod u-drill1 --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local 2>&1) \
+    && { WHY="a user pod with no login rendered: $(printf '%s' "$out" | head -c 200)"; return 1; }
+  why=$(python3 - "$BIN" "$D64" <<'PY'
+import copy, importlib.util, sys
+spec = importlib.util.spec_from_file_location("p", sys.argv[1] + "/fleet-provisioner.py")
+p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
+r = p.render()
+objs = r.user_pod_resources("x@sha256:" + sys.argv[2], "https://hub.example.com", "csi", "u-drill1",
+                            login="drill1", uid=10002,
+                            cred_central="http://fleet-credproxy.fleet-workers.svc.cluster.local")
+dep = [o for o in objs if o["kind"] == "Deployment"][0]
+ps = dep["spec"]["template"]["spec"]
+bad = []
+if ps.get("shareProcessNamespace"):
+    bad.append("the pod shares its process namespace")
+names = sorted(c["name"] for c in ps["containers"])
+if names != ["fleet", "sshd"]:
+    bad.append("containers %s, not fleet + sshd" % names)
+SSHD = {"CHOWN", "SETUID", "SETGID", "SYS_CHROOT", "KILL"}
+for c in ps["containers"] + ps.get("initContainers", []):
+    sc = c.get("securityContext") or {}
+    add = set((sc.get("capabilities") or {}).get("add") or [])
+    uid = sc.get("runAsUser", (ps.get("securityContext") or {}).get("runAsUser"))
+    if c["name"] == "sshd":
+        if add - SSHD:
+            bad.append("sshd adds %s" % sorted(add - SSHD))
+    elif c["name"] == "egress-guard":
+        if add - {"NET_ADMIN", "NET_RAW"}:
+            bad.append("egress-guard adds %s" % sorted(add - {"NET_ADMIN", "NET_RAW"}))
+    else:
+        if not sc.get("runAsNonRoot") or not uid:
+            bad.append("%s may run as root (runAsUser %r)" % (c["name"], uid))
+        if add:
+            bad.append("%s adds %s" % (c["name"], sorted(add)))
+        if c["name"] == "fleet" and uid != 10002:
+            bad.append("fleet runs as %r, not the login's 10002" % uid)
+        if c["name"] == "pod-etc" and uid == 10002:
+            bad.append("pod-etc runs as the login: it would write its own passwd")
+assert p.off_template(dep, "fleet-workers") is None, p.off_template(dep, "fleet-workers")
+def mut(f):
+    o = copy.deepcopy(dep); f(o["spec"]["template"]["spec"]); return o
+fl = lambda s: [c for c in s["containers"] if c["name"] == "fleet"][0]
+sd = lambda s: [c for c in s["containers"] if c["name"] == "sshd"][0]
+cases = {
+    "fleet as root": mut(lambda s: fl(s)["securityContext"].update(runAsUser=0, runAsNonRoot=False)),
+    "fleet runAsNonRoot off": mut(lambda s: fl(s)["securityContext"].pop("runAsNonRoot")),
+    "fleet adds CHOWN": mut(lambda s: fl(s)["securityContext"]["capabilities"].update(add=["CHOWN"])),
+    "sshd adds DAC_OVERRIDE": mut(lambda s: sd(s)["securityContext"]["capabilities"]["add"].append("DAC_OVERRIDE")),
+    "another root container": mut(lambda s: s["containers"].append(dict(copy.deepcopy(sd(s)), name="helper"))),
+}
+let = [k for k, o in cases.items() if not p.off_template(o, "fleet-workers")]
+if let:
+    bad.append("the guard lets through: " + ", ".join(let))
+print("; ".join(bad))
+PY
+) || { WHY="template check crashed: $why"; return 1; }
+  [ -z "$why" ] || { WHY="$why"; return 1; }
+  printf 'root:x:0:0:root:/root:/bin/bash\nsshd:x:100:65534::/run/sshd:/usr/sbin/nologin\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n' > "$d/base/passwd"
+  printf 'root:x:0:\nnogroup:x:65534:\n' > "$d/base/group"
+  FLEET_POD_LOGIN=drill1 FLEET_POD_UID=10002 python3 -I "$BIN/fleet-node-linux.py" pod-etc --base "$d/base" --out "$d/etc" \
+    >"$d/pod-etc.log" 2>&1 || { WHY="pod-etc: $(tail -n 3 "$d/pod-etc.log")"; return 1; }
+  grep -qx 'drill1:\*:10002:10002::/home/drill1:/bin/zsh' "$d/etc/passwd" && grep -qx 'drill1:x:10002:' "$d/etc/group" \
+    || { WHY="pod-etc passwd/group: $(cat "$d/etc/passwd" "$d/etc/group")"; return 1; }
+  [ "$(awk -F: '$3 == 0' "$d/etc/passwd" | wc -l | tr -d ' ')" = 1 ] || { WHY="a second uid 0 in pod-etc's passwd"; return 1; }
+  local l u
+  for l in 'root 10002' 'drill1 0' 'sshd 10002' 'drill1 100' 'drill1 65534'; do
+    # shellcheck disable=SC2086  # two words: login uid
+    set -- $l
+    FLEET_POD_LOGIN=$1 FLEET_POD_UID=$2 python3 -I "$BIN/fleet-node-linux.py" pod-etc --base "$d/base" --out "$d/bad" \
+      >/dev/null 2>&1 && { WHY="pod-etc wrote a login $1 uid $2"; return 1; }
+  done
+  [ ! -e "$d/bad/passwd" ] || { WHY="a refused pod-etc left a passwd behind"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="用户 pod 模板：fleet 容器以登录的 UID 跑（非 root、drop ALL、不加能力），sshd 只加 CHOWN SETUID SETGID SYS_CHROOT KILL，pod-etc 既不是 root 也不是登录；没给登录不渲染；执行器拒 root 的 fleet · 关掉 runAsNonRoot · fleet 加能力 · sshd 加 DAC_OVERRIDE · 多一个 root 容器；pod-etc 只加该登录一行，拒 root 名 / uid 0 / 系统号"
 }
 
 cred_run_drills "$0"

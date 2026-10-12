@@ -13,11 +13,19 @@
 #   sa-token-in-user-pod      the user pod the provisioner made, a pod naming
 #                             fleet-user with no automount line, and a Job: no
 #                             token in any, the API server out of reach / 401
+#   root-in-user-pod          a person's pod running: `id` and `ps` in its fleet
+#                             container are the login alone, in sshd root alone
+#                             until a login, then root + the login; /etc/passwd
+#                             read-only; a real ssh login with the door's key
+#                             lands as the login, root's is refused (#3757)
 #
 #   kind-drill.sh <registry host:port>      (kind-action's LOCAL_REGISTRY)
 #
-# The user pod and the Job run stand-in images (alpine): the managed-node image
-# needs a signed hub release. Needs kubectl on the kind context, docker, python3.
+# The user pod and the Job run stand-in images: the managed-node image needs a
+# signed hub release. The user pod's is debian with python3, openssh-server and
+# procps, fleet-node-linux.py at the seed's place (its pod-etc init runs for
+# real) and a stand-in node that only writes a fleet-entry.sh on the disk and
+# sleeps — as the login. Needs kubectl on the kind context, docker, python3, ssh.
 set -euo pipefail
 [ $# = 1 ] || { sed -n '2,20p' "$0" >&2; exit 2; }
 REG=$1
@@ -45,7 +53,27 @@ cp "$ROOT/extras/managed-node/render.py" "$tmp/prov/t/extras/managed-node/"
 # the managed-node image's layout: python3 at /usr/bin, the tree at the seed's current
 printf 'FROM python:3.12-slim\nRUN ln -sf /usr/local/bin/python3 /usr/bin/python3\nCOPY t/ /opt/claude-fleet/seed/current/\n' \
   > "$tmp/prov/Dockerfile"
-printf 'FROM alpine:3.20\nRUN apk add --no-cache iptables ip6tables curl\nCMD ["sleep", "infinity"]\n' > "$tmp/user/Dockerfile"
+mkdir -p "$tmp/user/t/bin"
+cp "$ROOT/bin/fleet-node-linux.py" "$tmp/user/t/bin/"
+# the stand-in node: as the login, on its own disk, the ForceCommand a login
+# lands in (it says who it is and what runs in its container), then sleep
+cat > "$tmp/user/standin.sh" <<'SH'
+#!/bin/sh
+set -e
+b=/var/db/fleet-node/runtime/current/bin
+mkdir -p "$b" "$HOME"
+printf '#!/bin/bash\necho "ENTRY $(id -un) $(id -u) | $(ps -o user= -e | sort -u | tr "\\n" " ")"\n' > "$b/fleet-entry.sh"
+exec sleep infinity
+SH
+cat > "$tmp/user/Dockerfile" <<'DF'
+FROM debian:trixie-slim
+RUN apt-get update -qq && apt-get install -y --no-install-recommends python3 openssh-server procps iptables zsh \
+    && rm -rf /var/lib/apt/lists/* && mkdir -p /run/sshd
+COPY t/ /opt/claude-fleet/seed/current/
+COPY standin.sh /standin.sh
+RUN chmod 755 /standin.sh
+CMD ["/standin.sh"]
+DF
 cat > "$tmp/job/probe.sh" <<'EOF'
 #!/bin/sh
 t=absent; [ -e /var/run/secrets/kubernetes.io/serviceaccount/token ] && t=present
@@ -73,6 +101,7 @@ import json, sys
 user, job, dns, svc = sys.argv[1:]
 print(json.dumps({"cluster": "kind", "namespace": "fleet-workers",
     "user_pod": {"image": user, "hub": "https://hub.example.com", "storage_class": "standard",
+                 "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local",
                  "egress": {"dns": dns, "service_cidr": svc, "pod_cidr": "10.244.0.0/16"}},  # oss-ok: kind's own default pod range
     "job": {"image": job}}))
 EOF
@@ -105,7 +134,9 @@ import copy, json, sys
 root, tmp, user, job, dns = sys.argv[1:]
 sys.path.insert(0, root + "/extras/managed-node")
 import render as r
-objs = r.user_pod_resources(user, "https://hub.example.com", "standard", "u-dryrun1", egress={"dns": dns})
+CENTRAL = "http://fleet-credproxy.fleet-workers.svc.cluster.local"
+objs = r.user_pod_resources(user, "https://hub.example.com", "standard", "u-dryrun1", egress={"dns": dns},
+                            login="dryrun1", uid=10002, cred_central=CENTRAL)
 dep = [o for o in objs if o["kind"] == "Deployment"][0]
 svc = [o for o in objs if o["kind"] == "Service"][0]
 jb = r.job_resources(job, "u-dryrun1", "o/r", "b" * 40, "d" * 32)[0]
@@ -113,11 +144,26 @@ def w(name, o): json.dump(o, open("%s/%s.json" % (tmp, name), "w"))
 def mut(o, f):
     o = copy.deepcopy(o); f(o); return o
 c0 = lambda o: o["spec"]["template"]["spec"]["containers"][0]
+sd = lambda o: [c for c in o["spec"]["template"]["spec"]["containers"] if c["name"] == "sshd"][0]
+fl = lambda o: [c for c in o["spec"]["template"]["spec"]["containers"] if c["name"] == "fleet"][0]
 ps = lambda o: o["spec"]["template"]["spec"]
 w("good-dep", dep); w("good-svc", svc); w("good-job", jb)
+# root-in-user-pod (#3757): the way back to root, as the provisioner's account
+w("bad-root-fleet", mut(dep, lambda o: fl(o)["securityContext"].update(runAsUser=0, runAsNonRoot=False)))
+w("bad-fleet-caps", mut(dep, lambda o: fl(o)["securityContext"]["capabilities"].update(add=["CHOWN"])))
+w("bad-sshd-caps", mut(dep, lambda o: sd(o)["securityContext"]["capabilities"]["add"].append("DAC_OVERRIDE")))
+# a person's pod that runs (applied by the admin, not the provisioner): kind's
+# disks take no ReadWriteOncePod, so its claim says ReadWriteOnce — every other
+# byte is the template's
+live = r.user_pod_resources(user, "https://hub.example.com", "standard", "u-live1", egress={"dns": dns},
+                            login="live1", uid=10002, cred_central=CENTRAL)
+for o in live:
+    if o["kind"] == "PersistentVolumeClaim":
+        o["spec"]["accessModes"] = ["ReadWriteOnce"]
+json.dump({"apiVersion": "v1", "kind": "List", "items": live}, open(tmp + "/live.json", "w"))
 w("bad-privileged", mut(dep, lambda o: c0(o)["securityContext"].update(privileged=True)))
 w("bad-escalation", mut(dep, lambda o: c0(o)["securityContext"].update(allowPrivilegeEscalation=True)))
-w("bad-sysadmin", mut(dep, lambda o: c0(o)["securityContext"]["capabilities"]["add"].append("SYS_ADMIN")))
+w("bad-sysadmin", mut(dep, lambda o: sd(o)["securityContext"]["capabilities"]["add"].append("SYS_ADMIN")))
 w("bad-hostpath", mut(dep, lambda o: ps(o)["volumes"].append({"name": "h", "hostPath": {"path": "/"}})))
 w("bad-hostnetwork", mut(dep, lambda o: ps(o).update(hostNetwork=True)))
 w("bad-token", mut(dep, lambda o: ps(o).update(automountServiceAccountToken=True)))
@@ -180,10 +226,10 @@ for _ in $(seq 1 50); do curl -fsS -m 2 http://127.0.0.1:18790/healthz >/dev/nul
 tk() { python3 "$ROOT/bin/fleet_cluster_ticket.py" sign "$1" "$2"; }
 post() { curl -s -m 30 -o "$tmp/resp" -w '%{http_code}' --data-binary "$1" http://127.0.0.1:18790/v1/op; }
 exp=$(( $(date +%s) + 300 ))
-good=$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')
+good=$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')
 head -c 32 /dev/urandom > "$tmp/other"
 [ "$(post 'not a ticket')" = 403 ] || fail "an unsigned body: $(cat "$tmp/resp")"
-[ "$(post "$(tk "$tmp/other" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')")" = 403 ] \
+[ "$(post "$(tk "$tmp/other" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill1","limits":"","login":"drill1","uid":10002,"join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"0123456789abcdef0123456789abcdef","exp":'"$exp"'}')")" = 403 ] \
   || fail "a forged ticket: $(cat "$tmp/resp")"
 K get deploy u-drill1 >/dev/null 2>&1 && fail "a refused ticket made a pod"
 [ "$(post "$good")" = 200 ] || fail "the hub's ticket: $(cat "$tmp/resp")"
@@ -242,11 +288,44 @@ for _ in $(seq 1 120); do
   [ -z "$left" ] && break; sleep 1
 done
 [ -z "$left" ] || fail "the destroy left: $left"
-[ "$(post "$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill2","limits":"","join":"fj_bbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"a3333333333333333333333333333333","exp":'"$exp"'}')")" = 200 ] \
+[ "$(post "$(tk "$tmp/key" '{"op":"create-user-pod","cluster":"kind","pod":"u-drill2","limits":"","login":"drill2","uid":10002,"join":"fj_bbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"a3333333333333333333333333333333","exp":'"$exp"'}')")" = 200 ] \
   || fail "the next spare's create: $(cat "$tmp/resp")"
 K get pvc u-drill2 -o json | python3 -c 'import json,sys; s=json.load(sys.stdin)["spec"]; sys.exit("the new claim has a data source" if s.get("dataSource") or s.get("dataSourceRef") else 0)' \
   || fail "u-drill2's claim"
 [ "$(K get secret u-drill2-join -o jsonpath='{.data.machine}' | base64 -d)" = fj_bbbbbbbbbbbbbbbbbbbbbbbbbb ] || fail "u-drill2's join Secret"
 echo "u-drill1 bound, destroyed (Deployment · Service · PVC · join Secret gone); u-drill2: a new empty claim, its own join code"
 { echo; echo "### spare-pod-leaks"; echo "u-drill1: bound → destroyed, nothing left; u-drill2: new claim, new join Secret"; } | summary
-echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · spare-pod-leaks (kind)"
+
+step "root-in-user-pod: a person's pod, running"
+ssh-keygen -q -t ed25519 -N '' -f "$tmp/door" -C door
+K create secret generic fleet-door-pub --from-file=door.pub="$tmp/door.pub" >/dev/null
+K apply -f "$tmp/live.json" >/dev/null
+for _ in $(seq 1 90); do lpod=$(K get pod -l fleet/pod=u-live1 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) && [ -n "$lpod" ] && break; sleep 1; done
+[ -n "${lpod:-}" ] || fail "the live user pod never appeared"
+K wait --for=jsonpath='{.status.containerStatuses[?(@.name=="sshd")].ready}'=true "pod/$lpod" --timeout=300s >/dev/null \
+  || { K describe pod "$lpod" | tail -30; K logs "$lpod" -c pod-etc 2>&1 | tail -5; fail "the live user pod's sshd never came up"; }
+users() { K exec "$lpod" -c "$1" -- sh -c 'ps -o user= -e | sort -u | tr "\n" " "'; }
+fid=$(K exec "$lpod" -c fleet -- id -un):$(K exec "$lpod" -c fleet -- id -u)
+[ "$fid" = live1:10002 ] || fail "the fleet container runs as $fid, not live1:10002"
+fu=$(users fleet); su=$(users sshd)
+[ "$fu" = "live1 " ] || fail "ps in the fleet container: '$fu' (want the login alone)"
+[ "$su" = "root " ] || fail "ps in the sshd container before a login: '$su' (want root alone)"
+if K exec "$lpod" -c fleet -- sh -c 'echo "x:x:0:0::/:/bin/sh" >> /etc/passwd' 2>/dev/null; then
+  fail "the login wrote /etc/passwd"
+fi
+K exec "$lpod" -c sshd -- /usr/sbin/sshd -t -f /etc/ssh/sshd_config || fail "the pod's sshd config does not check"
+K port-forward "pod/$lpod" 12222:2222 >/dev/null 2>&1 & pf2=$!
+for _ in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/12222) 2>/dev/null && break; sleep 0.2; done
+sshp() { ssh -i "$tmp/door" -p 12222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -o LogLevel=ERROR -o BatchMode=yes "$@"; }
+landed=$(sshp live1@127.0.0.1 2>&1 || true)
+asroot=$(sshp root@127.0.0.1 true 2>&1 && echo IN || true)
+kill "$pf2" 2>/dev/null || true
+echo "$landed"
+case "$landed" in "ENTRY live1 10002 | "*) ;; *) fail "an ssh login with the door's key: '$landed'" ;; esac
+case "$landed" in *"| live1 root "*|*"| root live1 "*) ;; *) fail "ps in sshd during a login: '$landed' (want root + live1)" ;; esac
+case "$asroot" in *IN) fail "root logged in over ssh" ;; esac
+out="fleet: $fid · ps fleet: $fu· ps sshd: $su· a login: $landed"
+echo "$out"
+{ echo; echo "### root-in-user-pod"; echo '```'; echo "$out"; echo '```'; } | summary
+echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · spare-pod-leaks · root-in-user-pod (kind)"

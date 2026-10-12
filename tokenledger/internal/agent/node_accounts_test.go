@@ -439,6 +439,10 @@ func TestCredsepCapableNeedsTheScript(t *testing.T) {
 	if credsepResult("x\ncredsep: separated\n\n") != control.CredsepSeparated || credsepResult("credsep: separated\nmore") != "" {
 		t.Fatal("credsepResult reads the wrong line")
 	}
+	// the one login of a person's own pod (claude-fleet#3757)
+	if credsepResult("prepared\ncredsep: central\n") != control.CredsepCentral || credsepResult("credsep: central\nmore") != "" {
+		t.Fatal("credsepResult misreads a pod's central login")
+	}
 }
 
 // On macOS an account script runs through fleet-tcc-disclaim.py when the login's

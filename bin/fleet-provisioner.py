@@ -13,7 +13,8 @@ nonce is spent in the ConfigMap fleet-provisioner-nonces before anything is
 done. The ops are typed, never a manifest:
 
   create-user-pod  pod limits join render.py's user pod (PVC · Service · Deployment)
-                                  and its join Secret u-<nonce>-join (#3553)
+                   login uid      built for its one login (#3757), and its join
+                                  Secret u-<nonce>-join (#3553)
   destroy-user-pod pod             those three, each only if it is a user pod's,
                                    and the join Secret
   set-limits       pod limits      that pod's Deployment, nobody else's
@@ -64,9 +65,11 @@ MAX_BODY = 8192
 # keep the two in step.
 ROLES = ('user', 'job')
 SERVICE_ACCOUNT = {'Deployment': 'fleet-user', 'Job': 'fleet-job'}
-# the user pod's container caps (render.NODE_SECURITY) and its egress guard's
-CAPS = {'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT',
-        'AUDIT_WRITE', 'NET_ADMIN', 'NET_RAW'}
+# A person's pod runs as its login (#3757): root only in `sshd`, with only these
+# (render.POD_SSHD_CAPS), and in the `egress-guard` init with only its two; every
+# other container is runAsNonRoot, not uid 0, and adds nothing.
+ROOT_CAPS = {'sshd': {'CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL'},
+             'egress-guard': {'NET_ADMIN', 'NET_RAW'}}
 DIGEST = re.compile(r'^[^\s]+@sha256:[a-f0-9]{64}$')
 PATHS = {
     'PersistentVolumeClaim': '/api/v1/namespaces/%s/persistentvolumeclaims',
@@ -150,8 +153,16 @@ def off_template(o, ns):
         add = set(caps.get('add') or [])
         if kind == 'Job' and add:
             return 'a Job adds no capability'
-        if add - CAPS:
-            return 'container %s: capability %s is not the template\'s' % (c.get('name'), ' '.join(sorted(add - CAPS)))
+        if kind == 'Deployment' and c.get('name') in ROOT_CAPS:
+            if add - ROOT_CAPS[c['name']]:
+                return 'container %s: capability %s is not the template\'s' % (
+                    c['name'], ' '.join(sorted(add - ROOT_CAPS[c['name']])))
+        elif kind == 'Deployment':
+            if add:
+                return 'container %s adds a capability: only sshd\'s login step and the egress guard do' % c.get('name')
+            if not (sc.get('runAsNonRoot', psc.get('runAsNonRoot'))) \
+                    or (sc.get('runAsUser', psc.get('runAsUser')) or 0) == 0:
+                return 'container %s may run as root: a person\'s pod is root only in sshd' % c.get('name')
         if kind == 'Job':
             if not (sc.get('runAsNonRoot') or psc.get('runAsNonRoot')) or not sc.get('readOnlyRootFilesystem'):
                 return 'a Job runs non-root on a read-only root'
@@ -257,7 +268,8 @@ def act(t, conf, api, r=None):
         kw = dict(conf.get('user_pod') or {})
         kw['pull_secrets'] = tuple(kw.get('pull_secrets') or ('acr-pull',))
         try:
-            objs = r.user_pod_resources(name=pod, namespace=ns, limits=r.user_pod_limits(t['limits']), **kw)
+            objs = r.user_pod_resources(name=pod, namespace=ns, limits=r.user_pod_limits(t['limits']),
+                                        login=t['login'], uid=t['uid'], **kw)
         except (ValueError, TypeError) as e:
             raise Refused('cannot render the user pod: %s' % e)
         # the join Secret first: the pod mounts it at its start

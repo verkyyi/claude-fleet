@@ -13,9 +13,10 @@ ever stand in for the other:
 
 The payload is exactly {op, cluster, nonce, exp} plus the op's own fields:
 
-  create-user-pod   pod, limits, join  a person's pod (render.py --user-pod) and
-                                       its join Secret (the pod's one-time
-                                       machine join code, #3553)
+  create-user-pod   pod, limits,       a person's pod (render.py --user-pod), built for
+                    login, uid, join   its one login — that name and UID, never root
+                                       (#3757) — and its join Secret (the pod's
+                                       one-time machine join code, #3553)
   destroy-user-pod  pod                those, and the join Secret
   set-limits        pod, limits        only that pod's Deployment rolls
   create-job        pod, repo, ref     a throwaway Job for that pod's session
@@ -43,14 +44,14 @@ PREFIX = "c1."
 DOMAIN = b"fleet-cluster-ticket-v1\x00"
 COMMON = ("op", "cluster", "nonce", "exp")
 OPS = {
-    "create-user-pod": ("pod", "limits", "join"),
+    "create-user-pod": ("pod", "limits", "login", "uid", "join"),
     "destroy-user-pod": ("pod",),
     "set-limits": ("pod", "limits"),
     "create-job": ("pod", "repo", "ref"),
     "bind-user-pod": ("pod", "principal"),
 }
 # the Go struct's field order (json.Marshal): what sign() writes, so the bytes match
-ORDER = ("op", "cluster", "pod", "limits", "repo", "ref", "join", "principal", "nonce", "exp")
+ORDER = ("op", "cluster", "pod", "limits", "login", "uid", "repo", "ref", "join", "principal", "nonce", "exp")
 GRAMMAR = {
     "cluster": re.compile(r"^[a-z0-9][a-z0-9.-]{0,62}$"),
     "pod": re.compile(r"^u-[a-z0-9]{4,20}$"),
@@ -63,7 +64,11 @@ GRAMMAR = {
     # a Kubernetes label value (the hub writes gh:12345 as gh.12345)
     "principal": re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$"),
     "nonce": re.compile(r"^[0-9a-f]{32}$"),
+    # fleet-node-linux.py valid_name: 2-16 of a-z0-9, a letter among them
+    "login": re.compile(r"^(?=[a-z0-9]*[a-z])[a-z0-9]{2,16}$"),
 }
+# the pod's one login runs as this number: a person's, never root or a system one
+UID_RANGE = (1000, 60000)
 
 
 def check(pub, ticket, cluster, now):
@@ -96,6 +101,9 @@ def check(pub, ticket, cluster, now):
     for k, v in t.items():
         if k in GRAMMAR and not (isinstance(v, str) and GRAMMAR[k].match(v)):
             raise Refused("ticket %s %r is off its grammar" % (k, v))
+    if "uid" in t and not (isinstance(t["uid"], int) and not isinstance(t["uid"], bool)
+                           and UID_RANGE[0] <= t["uid"] < UID_RANGE[1]):
+        raise Refused("ticket uid %r is not a login's number (%d-%d)" % ((t["uid"],) + UID_RANGE))
     if t["cluster"] != cluster:
         raise Refused("ticket is for cluster %r, not %r" % (t["cluster"], cluster))
     return t

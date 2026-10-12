@@ -160,6 +160,87 @@ def hub_ops(state, tool, hub, made):
         pass
 
 
+def pod_login(d, runtime, hub, made):
+    """#3757: a person's own pod for real — the install and `login open` run AS
+    the pod's login (a fresh uid, no capability, no_new_privs, as the pod's
+    `fleet` container is), on a state dir the kubelet would hand it (root's, the
+    login's group, 2775). The machine enrolls, the login opens central with no
+    root step, another name is 3, a remove is refused, root may not run it."""
+    import ctypes
+    name, uid = 'fleetpod1', 31100
+    for n in (name,):
+        try:
+            pwd.getpwnam(n)
+            raise SystemExit('fixture login %s already exists' % n)
+        except KeyError:
+            pass
+    subprocess.run(['groupadd', '--gid', str(uid), name], check=True)
+    subprocess.run(['useradd', '--uid', str(uid), '--gid', str(uid), '--no-create-home', '--home-dir',
+                    str(d / 'pod/homes' / name), '--shell', '/bin/bash', '--password', '*', name], check=True)
+    made.append(name)
+    for sub in ('pod', 'pod/state', 'pod/homes', 'pod/logs'):
+        (d / sub).mkdir()
+        os.chown(d / sub, 0, uid)
+        (d / sub).chmod(0o2775)
+    code = d / 'pod/machine-join'
+    code.write_text('fj_' + 'd' * 26)
+    lcode = d / 'pod/login-join'
+    lcode.write_text('fj_' + 'e' * 26)
+    for f in (code, lcode):
+        os.chown(f, 0, uid)
+        f.chmod(0o440)
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    def as_pod():
+        # the pod's fleet container: drop ALL (the bounding set too), no_new_privs, the login
+        for cap in range(64):
+            libc.prctl(24, cap, 0, 0, 0)          # PR_CAPBSET_DROP
+        if libc.prctl(38, 1, 0, 0, 0):            # PR_SET_NO_NEW_PRIVS
+            raise OSError(ctypes.get_errno(), 'no_new_privs')
+        os.setgroups([])
+        os.setgid(uid)
+        os.setuid(uid)
+        os.chdir('/')
+    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(d / 'pod/homes' / name),
+           'FLEET_NODE_PROFILE': 'user-pod', 'FLEET_USER_POD': '1', 'FLEET_POD_LOGIN': name,
+           'FLEET_POD_UID': str(uid), 'FLEET_NODE_UPDATE_OWNER': 'image', 'FLEET_NODE_SERVICE': 'foreground',
+           'FLEET_ENTRY': '0', 'FLEET_NODE_STATE': str(d / 'pod/state'), 'FLEET_NODE_USERS': str(d / 'pod/homes'),
+           'FLEET_NODE_LOG': str(d / 'pod/logs'), 'FLEET_NODE_ROOT': str(d / 'runtime'),
+           'FLEET_NODE_RUNTIME': str(d / 'runtime/current'),
+           'FLEET_CRED_CENTRAL_URL': 'http://fleet-credproxy.fleet-workers.svc.cluster.local'}
+
+    def run(argv, rc=0, root=False):
+        r = subprocess.run(argv, env=env, capture_output=True, text=True, preexec_fn=None if root else as_pod)
+        assert r.returncode == rc, '%s: rc %d (want %d)\n%s%s' % (argv, r.returncode, rc, r.stdout, r.stderr)
+        return r.stdout
+    joins = Hub.joins
+    out = run(['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', hub, '--service', 'foreground',
+               '--join-file', str(code), '--release-key', str(d / 'release.pub')])
+    assert '跳过 角色用户' in out and '跳过 ssh CA' in out, out
+    assert (d / 'pod/state/machine.env').stat().st_uid == uid, 'machine.env is not the login\'s'
+    tool = [sys.executable, '-I', str(runtime / 'bin/fleet-node-linux.py')]
+    out = run(tool + ['login', 'open', name, '--no-start', '--hub', hub, '--join-file', str(lcode)])
+    assert out.strip().splitlines()[-1] == 'credsep: central', out
+    assert Hub.joins == joins + 2, 'one machine + one login join expected'
+    conf = d / 'pod/homes' / name / '.config/claude-fleet'
+    ne = (conf / 'node.env').read_text().splitlines()
+    assert 'CCQUOTA_FLEET_CREDS=0' in ne and (conf / 'node.env').stat().st_uid == uid
+    fc = (conf / 'fleet.conf').read_text()
+    assert 'FLEET_CRED_SEPARATE=0' in fc and 'FLEET_CRED_CENTRAL_URL=http://fleet-credproxy' in fc, fc
+    assert json.loads((d / 'pod/state/accounts.json').read_text())[name]['managed']
+    assert (d / 'pod/state/logins' / (name + '.env')).stat().st_uid == uid
+    assert not (d / 'cred' / name).exists(), 'a pod login got a fleetcred store'
+    run(tool + ['login', 'open', 'drill9', '--no-start', '--hub', hub], rc=3)
+    run(tool + ['login', 'open', name, '--no-start', '--hub', hub])            # a re-ask goes on
+    run(tool + ['login', 'remove', name, '--keep-home'], rc=2)
+    run(tool + ['login', 'open', name, '--no-start', '--hub', hub], rc=2, root=True)   # root is not the login
+    found = [l for l in subprocess.run(['find', str(d / 'pod'), '-user', '0', '!', '-path', str(d / 'pod'),
+                                        '!', '-path', str(d / 'pod/state'), '!', '-path', str(d / 'pod/homes'),
+                                        '!', '-path', str(d / 'pod/logs'), '!', '-name', '*-join'],
+                                       capture_output=True, text=True).stdout.splitlines()]
+    assert not found, 'root-owned files in the pod: %s' % found[:5]
+
+
 def main():
     if os.geteuid() != 0 or not sys.platform.startswith('linux') or os.environ.get('CI') != 'true':
         raise SystemExit('only run as root on an ephemeral Linux CI machine (CI=true)')
@@ -328,6 +409,9 @@ def main():
             multi_login(d, state, runtime, args.hub, login, s, m, made)
             print('PASS several logins: legacy declaration migrated; 24haowan + drill2 opened; numbers and homes '
                   'kept across a passwd wipe; drill2 removed whole; drill3 got a fresh number')
+            pod_login(d, runtime, args.hub, made)
+            print('PASS a person\'s pod as its login (#3757): install + login open with no capability, no root '
+                  'step; credsep central; another name 3, remove refused, root refused; nothing root-owned written')
         finally:
             if proc:
                 proc.terminate()

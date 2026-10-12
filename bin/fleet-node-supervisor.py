@@ -268,8 +268,12 @@ NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "F
                  "FLEET_NODE_USERS", "FLEET_NODE_SERVICE", "FLEET_NODE_UPDATE_OWNER", "FLEET_NODE_BOOT_ID",
                  "FLEET_CREDSEP_LIB", "FLEET_CREDSEP_ROOT_BASE", "FLEET_CREDSEP_RUN_BASE",
                  "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD", "FLEET_ENTRY", "FLEET_ENTRY_PORT",
-                 # one person's pod (#3550): its profile, and the hello's CapUserPod
-                 "FLEET_NODE_PROFILE", "FLEET_USER_POD",
+                 # one person's pod (#3550): its profile, and the hello's CapUserPod;
+                 # the one login it is made for (#3757) and the cluster credential
+                 # proxy every session routes to — read by `login open` under the
+                 # node program
+                 "FLEET_NODE_PROFILE", "FLEET_USER_POD", "FLEET_POD_LOGIN", "FLEET_POD_UID",
+                 "FLEET_CRED_CENTRAL_URL",
                  # the cluster's one door (#3549): its switch and where its keys are mounted
                  "FLEET_DOOR", "FLEET_DOOR_NAMESPACE", "FLEET_DOOR_SECRET",
                  # a container's entry= route (#3213): `entry reach` runs under the node
@@ -720,6 +724,13 @@ def default_table(paths):
         # the cluster's (its one ops copy) — only the updater that moves this
         # pod's own runtime stays. Its children are its own (agent, proxy, sshd).
         table["tasks"] = [t for t in table["tasks"] if t["name"] in USER_POD_TASKS]
+    if pod_own():
+        # …and once it runs as its login (#3757): no task at all — the runtime is
+        # the image's, nothing is leased — and of the children the node program
+        # alone: no shared proxy (the login's own is an account unit), sshd is
+        # the pod's other container
+        table["tasks"] = []
+        table["children"] = [c for c in table["children"] if c["name"] == "node-agent"]
     if door_profile():
         # The cluster's one door (#3549, EPIC #3500 C4): its sshd (the entry child)
         # and its pull, nothing else — no node program, no login, no machine loop.
@@ -735,6 +746,18 @@ USER_POD_TASKS = ("update", "credential-pool")
 def user_pod():
     """FLEET_NODE_PROFILE=user-pod (extras/managed-node/render.py --user-pod)."""
     return not MAC and env("FLEET_NODE_PROFILE", "") == "user-pod"
+
+
+def pod_own():
+    """A person's pod run as its one login (render.py --user-pod --login, #3757):
+    the whole daemon is that login, nothing in it is root."""
+    return user_pod() and bool(env("FLEET_POD_LOGIN", ""))
+
+
+def pod_self_uid(login):
+    """The pod's login's uid when <login> is it and this daemon runs as it, else None."""
+    ident = account_ident(login) if pod_own() and login == env("FLEET_POD_LOGIN", "") else None
+    return ident[0] if ident and ident[0] == os.geteuid() and os.geteuid() != 0 else None
 
 
 def door_profile():
@@ -892,6 +915,10 @@ def tenant_privileges(login):
     reader could not look at all of it: the sudo rules and the sudoers files are
     root's to read, the groups anyone's. Test mode reads the fake passwd entry's
     `groups` / `sudo` instead."""
+    if pod_self_uid(login) is not None:
+        # a person's own pod (#3757): this process IS the login, and the kernel
+        # says what it may become — no capability, no_new_privs (no setuid sudo)
+        return pod_privileges(), True
     fake = os.environ.get("FLEET_NODE_PASSWD")
     if fake and env("FLEET_NODE_TEST", "") == "1":
         e = (read_json(fake, {}) or {}).get(login) or {}
@@ -927,6 +954,20 @@ def tenant_privileges(login):
         except OSError:
             pass
     return why, True
+
+
+def pod_privileges():
+    """[why] this process could become anything but itself (fleet-node-linux.py's twin)."""
+    try:
+        with open("/proc/self/status") as f:
+            st = dict(l.split(":", 1) for l in f.read().splitlines() if ":" in l)
+    except OSError:
+        return ["/proc/self/status unreadable"]
+    why = ["%s %s" % (k, st[k].strip()) for k in ("CapPrm", "CapEff", "CapBnd", "CapAmb")
+           if int((st.get(k) or "0").strip() or "0", 16)]
+    if (st.get("NoNewPrivs") or "").strip() != "1":
+        why.append("NoNewPrivs off (a setuid program could raise it)")
+    return why
 
 
 def tenant_logins(paths):
@@ -4116,7 +4157,7 @@ def account_adopt(paths, login, dry=False, rejoin=False):
     if ident is None:
         print("fleet-node-supervisor: %s is not a login this daemon may run as" % login, file=sys.stderr)
         return 2
-    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1" and pod_self_uid(login) is None:
         print("fleet-node-supervisor: account adopt boots out %s's services — run it as root (sudo)" % login,
               file=sys.stderr)
         return 1
