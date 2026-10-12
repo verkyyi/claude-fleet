@@ -27,6 +27,17 @@ pass by `fcp:<id>` or a {machine, principal, before} scope against its own
 (600) is logged `list-stale`, never a reason to refuse. Off (no token) ⇒ byte
 for byte as before.
 
+An frl2 relay pass (claude-fleet#3561, EPIC #3500 C19 — four hours, signed by
+the hub) is verified HERE once the key is known — the list's `relay_pub`, else
+FLEET_RELAY_PUB (base64): signature, exp, then the list (`frl2:<jti>`, or a
+{machine|login|principal, before} scope against its signed claims). A good one is
+200 and remembered like a hub 2xx (a list entry still refuses it first); a bad
+one is 403. The hub is never asked about it — so the hub's /v1/relay/check sees
+no frl2 traffic, and a hub that is down changes nothing for it. The signature is
+checked with the `cryptography` package when python3 has it, else with
+bin/fleet_ed25519.py installed beside this file (FLEET_RELAY_ED25519 names another).
+No key known ⇒ an frl2 goes to the hub like any other pass.
+
 What it keeps is the pass's hash and two timestamps, in memory only — never the
 pass, never an Authorization (Caddy strips it before asking, and this process
 forwards only X-Fleet-Relay + X-Forwarded-Uri/-Method to the hub). The log has
@@ -44,6 +55,8 @@ Environment (none is a secret):
   FLEET_RELAY_REVOCATIONS_FILE   where the list is kept (default
       $STATE_DIRECTORY/revocations.json; none ⇒ memory only)
   RELAY_REVOCATIONS_WAIT_S 25    RELAY_REVOCATIONS_STALE_S 600    RELAY_REVOCATIONS_BACKOFF_S 5
+  FLEET_RELAY_PUB            the hub's relay pass key (base64), when no list hands it over
+  FLEET_RELAY_ED25519        fleet_ed25519.py's path (default: beside this file)
 """
 import base64
 import hashlib
@@ -88,8 +101,95 @@ REV_STALE_S = env_num("RELAY_REVOCATIONS_STALE_S", 600)
 # reconnect within this long: a hub that comes back is heard inside the 10 s promise
 REV_BACKOFF_S = env_num("RELAY_REVOCATIONS_BACKOFF_S", 5)
 # the list as last fetched: version, when (wall clock), the jti set, the scopes
-_rev = {"on": False, "v": None, "at": 0.0, "jti": {}, "scopes": [], "file": ""}
+_rev = {"on": False, "v": None, "at": 0.0, "jti": {}, "scopes": [], "file": "", "pub": b""}
 _rev_lock = threading.Lock()
+_verify = None      # (pub, msg, sig) -> bool, loaded on first need
+
+
+def b64any(s):
+    s = str(s or "").strip()
+    try:
+        if "-" in s or "_" in s:
+            return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+        return base64.b64decode(s + "=" * (-len(s) % 4))
+    except (ValueError, TypeError):
+        return b""
+
+
+def ed25519_verify():
+    """The signature check: the cryptography package, else fleet_ed25519.py."""
+    global _verify
+    if _verify is not None:
+        return _verify
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
+
+        def v(pub, msg, sig):
+            try:
+                Ed25519PublicKey.from_public_bytes(pub).verify(sig, msg)
+                return True
+            except (InvalidSignature, ValueError):
+                return False
+        _verify = v
+    except ImportError:
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        path = os.environ.get("FLEET_RELAY_ED25519") or next(
+            (p for p in (os.path.join(here, "fleet_ed25519.py"),                  # installed beside it
+                         os.path.join(here, "..", "..", "bin", "fleet_ed25519.py"))  # the repo's
+             if os.path.exists(p)), os.path.join(here, "fleet_ed25519.py"))
+        try:
+            spec = importlib.util.spec_from_file_location("fleet_ed25519", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _verify = lambda pub, msg, sig: bool(mod.verify(pub, msg, sig))
+        except (OSError, ImportError, AttributeError) as e:
+            log("ed25519-missing", path=path, why=type(e).__name__)
+            _verify = False
+    return _verify
+
+
+def relay_pub():
+    with _rev_lock:
+        if _rev["pub"]:
+            return _rev["pub"]
+    k = b64any(os.environ.get("FLEET_RELAY_PUB", ""))
+    return k if len(k) == 32 else b""
+
+
+def frl2_claims(tok):
+    """An frl2 pass's claims, unverified (the list's matcher), or None."""
+    parts = tok.split(".")
+    if len(parts) != 3 or parts[0] != "frl2":
+        return None
+    c = b64any(parts[1])
+    try:
+        c = json.loads(c)
+    except (ValueError, TypeError):
+        return None
+    return c if isinstance(c, dict) else None
+
+
+def frl2_check(tok):
+    """'' when this frl2 pass is good, else why not; None when no key is known
+    here (the hub's road then)."""
+    pub = relay_pub()
+    if not pub:
+        return None
+    v = ed25519_verify()
+    if not v:
+        return None
+    body, _, sig = tok.rpartition(".")
+    c = frl2_claims(tok)
+    if c is None or not body or not v(pub, body.encode(), b64any(sig)):
+        return "bad signature"
+    try:
+        if int(c.get("v") or 0) != 2 or not c.get("jti") or time.time() >= int(c.get("exp") or 0):
+            return "expired"
+    except (TypeError, ValueError):
+        return "malformed"
+    return ""
 
 
 def log(event, **kv):
@@ -144,7 +244,8 @@ def rev_index(lst, fetched_at):
         elif e.get("machine") or e.get("principal"):
             scopes.append((str(e.get("machine") or ""), str(e.get("principal") or ""),
                            str(e.get("login") or ""), int(e.get("before") or 0), e["exp"]))
-    return {"v": lst["v"], "at": fetched_at, "jti": jti, "scopes": scopes}
+    pub = b64any(lst.get("relay_pub"))
+    return {"v": lst["v"], "at": fetched_at, "jti": jti, "scopes": scopes, "pub": pub if len(pub) == 32 else b""}
 
 
 def rev_set(lst, fetched_at, persist=True):
@@ -193,20 +294,26 @@ def revoked(tok):
     if tok.startswith("frl1."):
         exp = jti.get("frl1:" + hashlib.sha256(tok.encode()).hexdigest())
         return "frl1" if exp is not None and exp > now else ""
-    c = pass_claims(tok)
-    if c is None:
-        return ""
-    exp = jti.get("fcp:" + str(c.get("id") or ""))
-    if c.get("id") and exp is not None and exp > now:
-        return "fcp"
+    if tok.startswith("frl2."):
+        c, kind, lg = frl2_claims(tok), "frl2", None
+        if c is None:
+            return ""
+        lg = str(c.get("login") or "")
+    else:
+        c, kind, lg = pass_claims(tok), "fcp", None
+        if c is None:
+            return ""
+    exp = jti.get(kind + ":" + str(c.get("jti" if kind == "frl2" else "id") or ""))
+    if exp is not None and exp > now:
+        return kind
     m, p = machine_of(str(c.get("machine") or "")), str(c.get("principal") or "")
     try:
         iat = int(c.get("iat") or 0)
     except (TypeError, ValueError):
         iat = 0
     for sm, sp, sl, before, sexp in scopes:
-        if sexp <= now or sl or (sm and sm != m) or (sp and sp != p):
-            continue   # a login scope cannot be told from a pass's claims
+        if sexp <= now or (sl and lg is None) or (sl and sl != lg) or (sm and sm != m) or (sp and sp != p):
+            continue   # a login scope cannot be told from a session pass's claims (an frl2 names its login)
         if iat < before:
             return "scope"
     return ""
@@ -310,6 +417,19 @@ class H(BaseHTTPRequestHandler):
             with _lock:
                 t = _ok.get(key)
             if t is not None and now - t < CACHE_S:
+                return self.reply(200)
+        if tok.startswith("frl2.") and pre:
+            why = frl2_check(tok)
+            if why is not None:   # verified here; the hub is not asked (#3561)
+                if why:
+                    with _lock:
+                        _ok.pop(key, None)
+                    log("refused", prefix=pre, kind="frl2", why=why.replace(" ", "-"))
+                    return self.reply(403, json.dumps({"error": "relay_refused", "message": "relay pass: " + why}).encode())
+                with _lock:
+                    if key not in _ok and len(_ok) >= MAX_ENTRIES:
+                        self.prune(now)
+                    _ok[key] = now
                 return self.reply(200)
         hdrs = {k: self.headers[k] for k in FORWARD if self.headers.get(k) is not None}
         status, body = ask_hub(hdrs)

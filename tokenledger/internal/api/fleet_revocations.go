@@ -110,6 +110,9 @@ func revRelayHashes(machine string, settings map[string]string, src string, now 
 			continue
 		}
 		for login, h := range relayEntries(v) {
+			if strings.HasPrefix(h, relayPass2Word) {
+				continue // an frl2 jti: revRelayPass2's
+			}
 			out = append(out, store.Revocation{JTI: "frl1:" + h, Machine: revMachine(m), Login: login,
 				Exp: now.Add(revFrl1Keep).Unix(), Src: src})
 		}
@@ -155,6 +158,10 @@ type RevocationList struct {
 	// SSHCA is the certificate authority an `ssh:<serial>` entry is of — what
 	// a door builds its KRL against. Empty when the hub signs no certificates.
 	SSHCA string `json:"ssh_ca,omitempty"`
+	// RelayPub is the Ed25519 key frl2 relay passes are signed with
+	// (claude-fleet#3561) — what the relay verifies them by without asking.
+	// Empty when the hub mints frl1.
+	RelayPub string `json:"relay_pub,omitempty"`
 }
 
 func (s *Server) handleRelayRevocations(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +251,7 @@ func (s *Server) serveRevocations(w http.ResponseWriter, r *http.Request) {
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()
 	}
+	out.RelayPub = s.RelayPub()
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -98,7 +98,7 @@ the renewing. An fcp1. minted with --wrap PID stays good past its exp while that
 process (the session's wrapper) lives and the sid is not revoked, at most
 FLEET_CRED_PROXY_RENEW_MAX_SECS (7 days) past it. A hub pass (fcp-h1.) is
 renewed with the hub (POST /v1/fleet/session-cred/renew, the node token) once
-it reaches its renew point — 2h before exp, or half-life for a short one — on
+it reaches its renew point — 20 % of its life left (#3561; a pass lives 4h) — on
 the session's next request or the background tick, whichever comes first; the
 session keeps sending the pass it was born with and the proxy forwards the
 newest one it holds for that id (<state>/hub-passes.json, 0600). A pass that
@@ -186,6 +186,14 @@ LOCAL_TAG, HUB_TAG, NODE_TAG = "fcp1", "fcp-h1", "fcpn1"
 # how long past its newest expiry the hub still renews a never-revoked pass —
 # SessionCredRenewGrace in tokenledger/internal/api/fleet_session_cred.go (#2012)
 HUB_RENEW_GRACE = 7 * 86400
+# the relay pass (issue #3561): renewed when used with < 1/RELAY_RENEW_LEFT of
+# its life left, or past RELAY_RENEW_AT of it; a request unanswered is made
+# again after RELAY_REASK_SECS; a missing pass asked for on a doubling clock
+RELAY_RENEW_LEFT = 5
+RELAY_RENEW_AT = 0.8
+RELAY_REASK_SECS = int(os.environ.get("FLEET_CRED_RELAY_REASK_SECS") or 300)
+RELAY_MISSING_SECS = int(os.environ.get("FLEET_CRED_RELAY_RETRY_SECS") or 60)
+RELAY_MISSING_MAX_SECS = int(os.environ.get("FLEET_CRED_RELAY_RETRY_MAX_SECS") or 120)
 # never through the hub broker (EPIC #1967 route ④): the subscription pool
 HUB_DENY = ("/v1/node/credentials",)
 REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
@@ -612,8 +620,10 @@ class HubPasses:
 
     @staticmethod
     def renew_at(c):
+        # 20 % of its life left (issue #3561 — the hub's renew_after); a pass
+        # with no iat: the last 48 minutes of a four-hour one
         iat, exp = int(c.get("iat") or 0), int(c["exp"])
-        return max(exp - 7200, iat + (exp - iat) // 2) if iat else exp - 7200
+        return exp - (exp - iat) // 5 if iat else exp - 2880
 
     def save(self):
         try:
@@ -704,6 +714,126 @@ class HubPasses:
         if gone:
             with self.lock:
                 self.save()
+
+
+class RelayKeep:
+    """The relay pass is renewed only when it is needed (issue #3561, EPIC #3500
+    C19). An frl2 pass carries its own iat / exp (read, not verified — the proxy
+    only needs the clock): used with less than 1/RELAY_RENEW_LEFT of its life
+    left, or past RELAY_RENEW_AT of it, the proxy ASKS for a new one — it writes
+    `relay-want[.<login>]` (one line: reason, time, jti) in its run directory;
+    the login's launcher (a proxy of its own) or the node daemon (the shared
+    proxy: the login's `cred-relay` job, run as the login) mints it with
+    fleet-relay-cred.sh and hands it back over `relay`. A missing pass is asked
+    for on the short doubling clock (#3423: 60 s → 120 s), and a pass the relay
+    refused (relay_refused) at once, then at most once a minute. No pass, no
+    relay configured, or an frl1 pass (it has no end) ⇒ no request on a clock.
+    Every request and every new pass is a line in the proxy's log (ev=relay_want
+    reason=…, ev=relay_pass_new reason=…) — the renewals' book."""
+
+    def __init__(self, cfg, log=None):
+        self.cfg, self.log = cfg, log or (lambda **kv: None)
+        self.lock = threading.Lock()
+        self.asked = {}          # jti -> (reason, time) of the request made for it
+        self.missing_at, self.missing_wait = 0.0, 0
+        self.refused_at = 0.0
+        self.seen = None         # the jti (or "frl1") last seen held
+        self.pending = ""        # the reason of the last request not yet answered
+
+    @staticmethod
+    def claims(tok):
+        parts = (tok or "").split(".")
+        if len(parts) != 3 or parts[0] != "frl2":
+            return None
+        try:
+            c = json.loads(b64d(parts[1]))
+            iat, exp = int(c.get("iat") or 0), int(c.get("exp") or 0)
+            return c if c.get("jti") and 0 < iat < exp else None
+        except Exception:
+            return None
+
+    def ask(self, reason, jti=""):
+        path = getattr(self.cfg, "relay_want", "")
+        if not path:
+            return False
+        try:
+            tmp = "%s.%d.tmp" % (path, os.getpid())
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+            with os.fdopen(fd, "w") as f:
+                f.write("%s %d %s\n" % (reason, int(time.time()), jti or "-"))
+            os.chmod(tmp, 0o644)   # the asker reads it as another uid
+            os.replace(tmp, path)
+        except OSError as e:
+            self.log(ev="relay_want_err", reason=reason, err=type(e).__name__)
+            return False
+        self.pending = reason
+        self.log(ev="relay_want", reason=reason, jti=(jti or "-")[:8])
+        return True
+
+    def _due(self, c, now, used):
+        """The reason this frl2 pass should be renewed now, or ''."""
+        life = c["exp"] - c["iat"]
+        if used and now >= c["exp"] - life / RELAY_RENEW_LEFT:
+            return "used"
+        if now >= c["iat"] + life * RELAY_RENEW_AT:
+            return "80%"
+        return ""
+
+    def _renew(self, c, reason, now):
+        jti = str(c["jti"])
+        with self.lock:
+            prev = self.asked.get(jti)
+            # one request per pass; asked again only when it went unanswered
+            if prev and now - prev[1] < RELAY_REASK_SECS:
+                return
+            self.asked = {jti: (reason, now)}
+        self.ask(reason, jti)
+
+    def used(self, tok):
+        """The relay road is about to carry tok: renew it if little is left."""
+        c = self.claims(tok)
+        if c:
+            now = time.time()
+            why = self._due(c, now, True)
+            if why:
+                self._renew(c, why, now)
+
+    def refused(self):
+        """The relay's gate refused this login's pass: a new one, once a minute."""
+        now = time.time()
+        if now - self.refused_at >= 60:
+            self.refused_at = now
+            self.ask("refused")
+
+    def tick(self):
+        if not getattr(self.cfg, "relay_url", "") or getattr(self.cfg, "relay_token", ""):
+            return
+        now = time.time()
+        tok = relay_pass(self.cfg)
+        if not tok:
+            if now >= self.missing_at:
+                self.missing_wait = RELAY_MISSING_SECS if not self.missing_wait else min(
+                    self.missing_wait * 2, RELAY_MISSING_MAX_SECS)
+                self.missing_at = now + self.missing_wait
+                self.ask("missing")
+            return
+        self.missing_wait, self.missing_at = 0, 0.0
+        c = self.claims(tok)
+        cur = str(c["jti"]) if c else "frl1"
+        if cur != self.seen:
+            if self.seen is not None:
+                self.log(ev="relay_pass_new", reason=self.pending or "-", kind="frl2" if c else "frl1",
+                         jti=cur[:8], exp=c["exp"] if c else "-")
+                self.pending = ""
+                try:
+                    os.unlink(self.cfg.relay_want)
+                except (OSError, AttributeError):
+                    pass
+            self.seen = cur
+        if c:
+            why = self._due(c, now, False)
+            if why:
+                self._renew(c, why, now)
 
 
 def read_lines(p):
@@ -849,6 +979,7 @@ class Tenant:
         self.keys = Keys(cfg.state)
         self.router = Router(cfg)
         self.passes = HubPasses(cfg.state, cfg, self.log)
+        self.relay = cfg.relay_keep = RelayKeep(cfg, self.log)
         self.budget = Budget(cfg)
         self.extended = set()   # sids whose fcp1 is past its stamp, kept by a live session
         self.skip = {}          # sid -> {route: (until, why)}: a route that refused this session
@@ -1223,6 +1354,9 @@ class Proxy(BaseHTTPRequestHandler):
         put, drop = {}, {"authorization", "x-api-key"}
         if route == "relay":
             put["X-Fleet-Relay"] = relay_pass(c)
+            keep = getattr(c, "relay_keep", None)
+            if keep:
+                keep.used(put["X-Fleet-Relay"])
         if public:
             return base, upath, put, set(), "none"
         if route == "central":
@@ -1354,6 +1488,8 @@ class Proxy(BaseHTTPRequestHandler):
                 return ("acct", nxt)
         if r.status == 403:
             first = r.read(65536)
+            if route == "relay" and b"relay_refused" in first and getattr(self.cfg, "relay_keep", None):
+                self.cfg.relay_keep.refused()   # the relay's gate, not the provider (#3561)
             if any(m in first.decode("utf-8", "replace").lower() for m in REGION_MARKS):
                 if can_switch:
                     conn.close()
@@ -1988,6 +2124,10 @@ def ctl_handle(req, t):
             return {"ok": False, "err": "relay: one pass on stdin"}
         write_private(os.path.join(cfg.state, "relay.token"), tok.encode() + b"\n")
         t.log(ev="relay_pass")
+        try:
+            t.relay.tick()   # the request it answers is done: logged, its file gone (#3561)
+        except Exception:
+            pass
         return {"ok": True}
     if op == "node-token":
         if not cfg.broker:
@@ -2347,6 +2487,8 @@ def serve(a):
         cfg.uid = cfg.ctl_uid
         ctld = env("FLEET_CRED_CTL_DIR", st)
         everyone = [cfg]
+    for c in everyone:   # where this proxy asks for a new relay pass (#3561)
+        c.relay_want = os.path.join(ctld, "relay-want." + c.name if shared else "relay-want")
     global ALLOWED
     if shared or cfg.store:
         ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"), configured_urls([cfg] + everyone))
@@ -2477,6 +2619,10 @@ def serve(a):
                 for t in tenants:
                     try:
                         t.passes.tick()
+                    except Exception:
+                        pass
+                    try:
+                        t.relay.tick()
                     except Exception:
                         pass
     threading.Thread(target=tick, daemon=True).start()

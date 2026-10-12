@@ -186,6 +186,8 @@ type NodeRelayCredential struct {
 	Machine  string    `json:"machine"`
 	Login    string    `json:"login"`
 	IssuedAt time.Time `json:"issued_at"`
+	// ExpiresAt is an frl2 pass's end (claude-fleet#3561); frl1 never ends.
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // handleNodeRelayCredential mints this login's relay credential.
@@ -236,22 +238,44 @@ func (s *Server) handleNodeRelayCredential(w http.ResponseWriter, r *http.Reques
 		refuse(http.StatusForbidden, LeaseUntrusted, untrustedWhy(host, src)+" — an untrusted machine's sessions go through the central proxy, never the relay with their own credential")
 		return
 	}
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+	// frl2 only for a caller that asks for it ({"kind":"frl2"}, claude-fleet#3561):
+	// an older node's fleet-relay-cred.sh keeps nothing but frl1. # compat-1v
+	var ask struct {
+		Kind string `json:"kind"`
 	}
-	tok := relayTokenPrefix + base64.RawURLEncoding.EncodeToString(b[:])
+	_ = readOptionalJSON(r, &ask)
+	var tok, word string
+	var exp time.Time
+	if len(s.RelaySignKey) > 0 && ask.Kind == "frl2" {
+		// frl2 (claude-fleet#3561): signed, four hours, verified by the relay itself
+		tok, word, exp, err = s.mintRelayPass2(machine, osUser, principal, now)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else {
+		var b [32]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		tok = relayTokenPrefix + base64.RawURLEncoding.EncodeToString(b[:])
+		word = HashToken(tok)
+	}
 	key := relayKey(host)
 	entries := relayEntries(settings[key])
-	entries[osUser] = HashToken(tok)
+	entries[osUser] = word
 	if err := s.Store.SetFleetSetting(key, relayValue(entries), now); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.relayCacheReset()
 	s.leaseAudit(osUser+"@"+machine, "relay_cred", "machine:"+machine, "ISSUE "+osUser, now)
-	writeJSON(w, http.StatusOK, NodeRelayCredential{Token: tok, Machine: machine, Login: osUser, IssuedAt: now.UTC()})
+	ans := NodeRelayCredential{Token: tok, Machine: machine, Login: osUser, IssuedAt: now.UTC()}
+	if !exp.IsZero() {
+		ans.ExpiresAt = exp.UTC()
+	}
+	writeJSON(w, http.StatusOK, ans)
 }
 
 // handleRelayCheck is the forwarder's forward_auth: 200 lets the request
@@ -307,6 +331,8 @@ func tokPrefix(tok string) string {
 		return hubRelayPassPrefix
 	case strings.HasPrefix(tok, hubQuotaPassPrefix):
 		return hubQuotaPassPrefix
+	case strings.HasPrefix(tok, relayPass2Prefix):
+		return relayPass2Prefix
 	}
 	return ""
 }
@@ -326,6 +352,10 @@ func (s *Server) relayVerdictFor(tok, uri string, now time.Time) relayVerdict {
 	}
 	if strings.HasPrefix(tok, hubQuotaPassPrefix) {
 		return s.verifyHubQuotaPass(tok, uri, now)
+	}
+	if strings.HasPrefix(tok, relayPass2Prefix) {
+		// a signature check, no cache: cheap, and a revoke is seen at once
+		return s.relayJudge2(tok, now)
 	}
 	hash := HashToken(tok)
 	c := s.relayCache()
@@ -377,7 +407,8 @@ func (s *Server) revokeRelay(machine string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	s.revRecord(revRelayHashes(machine, settings, "relay:"+strings.ToLower(firstLabel(machine)), now), now)
+	src := "relay:" + strings.ToLower(firstLabel(machine))
+	s.revRecord(append(revRelayHashes(machine, settings, src, now), revRelayPass2(machine, settings, src, now)...), now)
 	n := 0
 	for k, v := range settings {
 		if strings.HasPrefix(k, NodeRelayPrefix) && v != "" &&

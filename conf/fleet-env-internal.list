@@ -210,8 +210,8 @@ FLEET_CREDSEP_RUN_BASE             seam: fleet-credsep sandbox — the proxy's r
 FLEET_CREDSEP_SUDO                 seam: fleet-credsep — the privilege prefix (default `sudo -n`; empty = run directly, the sandbox)
 FLEET_CREDSEP_SVC                  seam: fleet-credsep sandbox — 0 = print launchctl/systemctl commands instead of running them
 FLEET_CREDSEP_TEST                 seam: fleet-credsep sandbox — allow a non-root install/launch into the sandbox paths
-FLEET_CRED_RELAY_RECHECK_SECS      knob: how often the proxy launcher re-checks / re-mints its relay pass (1800, #1974)
-FLEET_CRED_RELAY_RETRY_SECS        knob: first re-ask for a relay pass the hub refused, doubling (60, #3423)
+FLEET_CRED_RELAY_REASK_SECS        knob: the proxy asks again for a relay pass renewal nobody answered (300, #3561)
+FLEET_CRED_RELAY_RETRY_SECS        knob: first ask for a relay pass the proxy has none of, doubling (60, #3423/#3561)
 FLEET_CRED_RELAY_RETRY_MAX_SECS    knob: cap of that doubling — the bound on a new login's pass (120, #3423)
 FLEET_CRED_REPROBE_CMD             test seam: what a newly issued relay pass re-runs instead of fleet-node-probe.sh (#3423)
 FLEET_CRED_RELAY_TOKEN             handoff: a hand-set relay pass, read from secrets.env only — never a setting; unset = the one fleet-relay-cred.sh mints (#1970, #1974)

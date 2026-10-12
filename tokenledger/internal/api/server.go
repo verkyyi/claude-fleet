@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"io/fs"
 	"log"
@@ -196,6 +197,10 @@ type Server struct {
 	// revocation list (claude-fleet#3560,
 	// CCQUOTA_FLEET_REVOCATIONS_TOKEN[_FILE]); empty = the list is off.
 	RevocationsToken string
+	// RelaySignKey signs frl2 relay passes (claude-fleet#3561,
+	// CCQUOTA_FLEET_RELAY_SIGN_KEY[_FILE], an Ed25519 seed); its public half
+	// rides the revocation list. Nil: relay credentials are frl1, as before.
+	RelaySignKey ed25519.PrivateKey
 	// CredProxyToken admits the cluster credential proxy (`ccquota
 	// credproxy`, claude-fleet#1973) to POST /v1/fleet/credproxy/resolve
 	// (CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]); empty = the route answers 503.

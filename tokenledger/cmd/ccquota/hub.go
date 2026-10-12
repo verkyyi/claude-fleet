@@ -817,6 +817,16 @@ func runHub(args []string) error {
 		if rt != "" {
 			log.Printf("fleet: revocation list on (%s, %s)", api.RelayRevocationsPath, api.NodeRevocationsPath)
 		}
+		// frl2 relay passes (claude-fleet#3561): four hours, signed, verified by
+		// the relay itself; unset = frl1 as before.
+		rk, ok, err := api.LoadRelaySignKey(os.Getenv)
+		if err != nil {
+			return err
+		}
+		if ok {
+			srv.RelaySignKey = rk
+			log.Printf("fleet: relay passes are frl2 (%s each)", api.RelayPassTTL)
+		}
 		// After the session pass key: the relay path signs its pass with it.
 		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err

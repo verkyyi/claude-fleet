@@ -7,6 +7,8 @@
 # its token is a credential: put the hub's CCQUOTA_FLEET_REVOCATIONS_TOKEN in
 # /etc/fleet-relay/revocations-token (root 0600) and uncomment LoadCredential
 # (a missing file would stop the unit) — docs/CRED-RELAY.md «吊销名单».
+# frl2 passes (claude-fleet#3561) are verified here with the list's key: install
+# bin/fleet_ed25519.py beside the script (python3 without `cryptography`).
 [Unit]
 Description=fleet relay check — forward_auth cache in front of the hub's /v1/relay/check
 After=network-online.target

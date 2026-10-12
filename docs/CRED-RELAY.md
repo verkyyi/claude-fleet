@@ -164,7 +164,7 @@ journalctl -u fleet-relay-check --since '-15 min' | grep -E ' hub-(down|up) '   
   （重启后先读它，再按版本续拉）。名单上的通行证**立刻** 403，日志 `revoked`——不管缓存、不管宽限；
   入口停着时照样按手上那份拒。名单超过 `RELAY_REVOCATIONS_STALE_S`（600 秒）没刷新只记 `list-stale`，不拒。
   会话通行证按它自己的 claims（不验签，只用来拒）对 `fcp:<id>` 与范围条目。
-- 过渡期**双验**：名单只加拒绝，上一节「每个请求问入口」照旧（frl2 / fcp-h2 能在本地验签之后由 C19 切掉）。
+- 过渡期**双验**：名单只加拒绝，上一节「每个请求问入口」照旧（frl2 在本地验签，见下一节）。
 - 门：托管机器的入口 sshd 按同一份名单（`/v1/node/revocations`，节点令牌）生成 OpenSSH KRL 装上
   `RevokedKeys`（docs/MANAGED-NODE.md §16）。
 
@@ -180,6 +180,40 @@ journalctl -u fleet-relay-check -n 5 | grep -E ' start .*revocations=on| list v=
 ```
 
 演练：docs/BREAK-IT.md `cred-revoked-still-works`、`relay-revocations-hub-down`。
+
+## 只活四小时的中转通行证 frl2（issue #3561，EPIC #3500 C19）
+
+frl1 是一串随机数，入口只存它的哈希，**不过期**：会话里抄走一张，能一直经新加坡出公网，直到被发现、吊销。
+入口有中转签名钥匙（`CCQUOTA_FLEET_RELAY_SIGN_KEY[_FILE]`，32 字节 Ed25519 种子，base64；Secret `ccquota`
+的 `relay-sign-key`）后，`POST /v1/node/relay-credential {"kind":"frl2"}` 发的是
+
+    frl2.<base64url claims>.<base64url Ed25519 签名>     claims = {v:2, jti, machine, login, principal, iat, exp = iat + 4h}
+
+- 入口只在 `fleet.node_relay.<m>` 里记 `<login>:frl2@<jti>`（不是通行证本身）；重新领一张就顶掉这个登录的上一张，
+  置空就是吊销（名单写 `frl2:<jti>`）。不问 kind 的老节点照旧拿 frl1（# compat-1v）。
+- 核验进程从名单拿公钥（`relay_pub`，或 `FLEET_RELAY_PUB`），**自己验签**、看 exp、查名单（`frl2:<jti>` 或
+  按机器 / 登录 / 人的范围），不问入口：入口 `/v1/relay/check` 上不再有 frl2 的请求，入口停着照常。
+  验签用 python3 的 `cryptography`，没有就用装在它旁边的 `fleet_ed25519.py`（仓库 `bin/`）。没有公钥 ⇒ 照旧问入口。
+- 续：没有定时任务。代理挂通行证时看剩余，**用到时剩不到 20%**、或**到了 80% 处**，在自己的运行目录写
+  `relay-want[.<login>]`（一行：原因 · 时间 · jti）；登录自己的 launcher、或共享代理时节点守护（`cred-relay`，
+  以该登录身份、按请求跑一次）答它：`fleet-relay-cred.sh fetch --force`，交回代理。没有通行证（`missing`，
+  60 → 120 秒翻倍问）和中转拒了（`refused`）也走这条。代理日志里每次请求一行 `relay_want reason=…`、
+  每张新通行证一行 `relay_pass_new reason=…`——这就是续签的账：
+
+```sh
+sudo grep -hE '"ev": "relay_(want|pass_new)"' /var/log/fleet-cred/*.log | tail   # 每次续签的原因：used / 80% / missing / refused
+```
+
+打开（入口先、转发机后都行——没公钥的核验进程照旧问入口）：
+
+```sh
+openssl rand -base64 32    # 存进 Secret ccquota 的 relay-sign-key，重启入口：日志 "relay passes are frl2 (4h0m0s each)"
+sudo install -m 0644 bin/fleet_ed25519.py /usr/local/lib/fleet-relay/fleet_ed25519.py   # 转发机，核验进程旁
+sudo install -m 0755 extras/cred-relay/fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
+sudo systemctl restart fleet-relay-check
+```
+
+演练：docs/BREAK-IT.md `cred-leaked-from-session`。
 
 ## 凭据在哪
 
@@ -202,7 +236,7 @@ FLEET_CRED_RELAY_URL=https://fleet-relay.24hw.cn
 
 本机代理的启动器（`fleet-cred-proxy.sh run` / `ensure`）发现配了转发、又没有
 `FLEET_CRED_RELAY_TOKEN` 时，自己跑 `fleet-relay-cred.sh fetch`：入口还认就保留（`KEPT`），
-不认了就重领；之后每 `FLEET_CRED_RELAY_RECHECK_SECS`（1800）复核一次。代理每个请求现读这个文件，
+不认了就重领；之后只在代理请求时再领（`relay-want`：没有、快用完、到 80%、被中转拒，#3561——不再定时复核）。代理每个请求现读这个文件，
 重领不用重启。没有通行证时 relay 路不参与选路（`route` 的说明里写「no relay pass」）。
 
 ```sh

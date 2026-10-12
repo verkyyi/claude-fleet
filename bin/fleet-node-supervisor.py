@@ -25,8 +25,9 @@ machine's work ONCE, however many logins the machine carries:
                 is opened by the demoted process, never by root. One account's
                 failing task never touches another's. An account on the machine's
                 shared credential proxy (credsep.json "shared") runs no resident
-                `cred-proxy`: its relay pass is the one-minute task `cred-relay`
-                (`fleet-cred-proxy.sh relay-tick`, issue #3524).
+                `cred-proxy`: its relay pass is renewed by `cred-relay`
+                (`fleet-cred-proxy.sh relay-tick`, issue #3524) — run only when
+                the shared proxy asks (`relay-want.<login>`, issue #3561).
                 An account becomes managed by `account adopt <login>`: its own
                 fleet LaunchAgents / LaunchDaemons are booted out and moved to the
                 attic (kept until released); one that will not unload puts every
@@ -1227,40 +1228,65 @@ def account_entry(unit, login, ident, brew):
     if unit.get("keepalive"):
         ent["keepalive"] = True
     else:
-        ent["every"] = unit.get("every", 60)
+        if unit.get("want"):
+            # run on request, never on a clock (issue #3561): the file's mtime
+            ent["want"] = fill(unit["want"].replace("{login}", login), home, brew)
+        else:
+            ent["every"] = unit.get("every", 60)
         if unit.get("timeout"):
             ent["timeout"] = unit["timeout"]
     return ent
 
 
-def on_shared_proxy(home):
-    """True when this login's sessions go through the machine's ONE shared
-    credential proxy (`fleet-credsep.py machine join`: credsep.json "shared")."""
+def shared_proxy_run(home):
+    """The shared credential proxy's run dir when this login's sessions go
+    through the machine's ONE shared proxy (`fleet-credsep.py machine join`:
+    credsep.json "shared"), else ""."""
     try:
         with open(os.path.join(home, ".config", "claude-fleet", "credsep.json")) as f:
             rec = json.load(f)
-        return rec.get("shared") is True or os.path.basename(str(rec.get("run") or "")) == ".shared"
+        run = str(rec.get("run") or "")
+        if rec.get("shared") is True or os.path.basename(run) == ".shared":
+            return run or "/var/run/fleet-cred/.shared"
     except (OSError, ValueError, AttributeError):
-        return False
+        pass
+    return ""
+
+
+def on_shared_proxy(home):
+    return bool(shared_proxy_run(home))
 
 
 def account_unit_for(unit, home):
     """The unit as this login runs it. A login on the shared proxy keeps no
     resident `fleet-cred-proxy.sh run` (issue #3524): the shared proxy already
     answers its sessions — on its old port too (#2217) — so all that launcher did
-    there was keep the login's relay pass. That pass is kept by a one-minute task
-    instead (`relay-tick`, as the login); leaving the shared proxy brings the
-    resident unit back on the next tick."""
-    if unit["name"] != "cred-proxy" or not unit.get("keepalive") or not on_shared_proxy(home):
+    there was keep the login's relay pass. That pass is renewed only when it is
+    needed (issue #3561, EPIC #3500 C19): the shared proxy writes
+    `<run>/relay-want.<login>` — the pass is missing, was used with < 20 % of its
+    life left, or reached 80 % of it — and the daemon runs `cred-relay`
+    (`relay-tick`, as the login) once per request. No clock: an idle login costs
+    nothing. Leaving the shared proxy brings the resident unit back on the next
+    tick."""
+    run = shared_proxy_run(home) if unit["name"] == "cred-proxy" and unit.get("keepalive") else ""
+    if not run:
         return unit
     argv = list(unit["argv"])
     if argv and argv[-1] == "run":
         argv[-1] = "relay-tick"
     else:
         argv.append("relay-tick")
-    u = dict((k, v) for k, v in unit.items() if k != "keepalive")
-    u.update(name="cred-relay", argv=argv, every=60, timeout=600)
+    u = dict((k, v) for k, v in unit.items() if k not in ("keepalive", "every"))
+    u.update(name="cred-relay", argv=argv, want=os.path.join(run, "relay-want.{login}"), timeout=600)
     return u
+
+
+def want_stamp(path):
+    """A request file's mtime (ns), 0 when there is none."""
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
 
 
 def demote(login, uid, gid, home):
@@ -2234,6 +2260,10 @@ class Supervisor(object):
     # -- tasks
     def task_due(self, tk, t):
         ts = self.state["tasks"].get(tk["name"]) or {}
+        if tk.get("want"):
+            # on request only (issue #3561): a request newer than the last one run
+            w = want_stamp(tk["want"])
+            return w > 0 and w != ts.get("want_seen")
         since = t - (ts.get("last_start") or 0)
         if since >= float(tk.get("every", 60)):
             return True
@@ -2300,6 +2330,8 @@ class Supervisor(object):
             return False
         self.running[name] = (p, lf, t, fh, tk)
         ts.update(last_start=t, result="running", pid=p.pid)
+        if tk.get("want"):
+            ts["want_seen"] = want_stamp(tk["want"])
         self.dirty = True
         return True
 
