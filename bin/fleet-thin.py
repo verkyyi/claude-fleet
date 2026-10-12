@@ -531,6 +531,8 @@ class Thin:
         self.clip = None
         self.saying = False     # a first-session line is being written over (#3054)
         self.firsts = 0         # first-session roads taken (FLEET_THIN_FIRST_ROUNDS)
+        self.up_home = ""       # the home this loop was last up on (issue #3511)
+        self.restart_end = 0.0  # waiting for that home's fleet to come back until then
         self.fwd = None         # the forwards `open` made (issue #3236)
         self.said = []          # lines a forward's thread queued for the terminal
         self.said_lock = threading.Lock()
@@ -1114,6 +1116,22 @@ class Thin:
                 if self.quit or (rc == 0 and not why):
                     tlog("quit", self.home, "", "", "", "", rc, "quit" if self.quit else "detach")
                     return 0
+                if not up and rc == NO_FLEET and self.home and self.home == self.up_home and not self.local:
+                    # the home we were just on has no fleet now: its tmux is restarting
+                    # (an update, fleet-sessions-snapshot.sh save → kill-server → restore,
+                    # issue #3511) — wait for it, bounded, and reconnect to the same view
+                    # (--resume finds the session by its @fleet_id); never the
+                    # first-session road, which asks the hub for a NEW session
+                    now = time.time()
+                    self.restart_end = self.restart_end or now + env_num("FLEET_THIN_HOME_RESTART_SECS", 300)
+                    if now < self.restart_end:
+                        self.mute()
+                        write_out(("fleet · %s\r\n" % tr("thin_home_restart_fmt", self.home,
+                                                           "%d" % (self.restart_end - now))).encode("utf-8", "replace"))
+                        tlog("restart", self.home, "", "", "", "", rc, "no fleet on the home we were on: waiting")
+                        time.sleep(env_num("FLEET_THIN_HOME_RESTART_POLL", 3))
+                        continue
+                    self.up_home = ""   # it did not come back: the old road below
                 if not up and not self.local and (why == OPENING or rc == NO_FLEET):
                     # no fleet of yours there (rc 3) or none yet (the hub is opening
                     # one): the first session, never a backoff against it (#3054)
@@ -1132,6 +1150,7 @@ class Thin:
                     continue
                 if up:
                     fails, k, self.firsts = 0, 0, 0
+                    self.up_home, self.restart_end = self.home, 0.0
                 else:
                     fails += 1
                 k += 1

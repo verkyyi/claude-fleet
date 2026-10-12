@@ -34,6 +34,9 @@
 #      the hub's opening progress), then the first connection lands on that
 #      session on the machine it opened on; failed → three lines naming who to
 #      ask and exit 1, never a backoff against a machine with no session
+#   R  the home restarts its tmux under a connected client (issue #3511): rc 3 from
+#      the home it was just up on → 「家机器 … 在重启」, wait, --resume back on the
+#      same session, no new session asked; past the bound, the old road
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/fthin.XXXXXX")"; T="$(cd "$T" && pwd -P)"
@@ -120,6 +123,10 @@ while [ \$# -gt 0 ]; do
     --token) token=\$2; shift ;; --device|--route) shift ;;
   esac; shift
 done
+# R: the home's tmux restarting — no fleet there for the next N reconnects (rc 3)
+n=\$(cat "$T/nofleet.\$HOST_NAME" 2>/dev/null || echo 0)
+if [ -n "\$resume" ] && [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$T/nofleet.\$HOST_NAME"
+  echo "fleet-remote-view: no fleet session is live on \$HOST_NAME" >&2; exit 3; fi
 mkdir -p "$T/views"; st="$T/views/\$HOST_NAME.\$view"
 if [ -n "\$want" ]; then w=\$want; elif [ -n "\$resume" ] && [ -f "\$st" ]; then w=\$(cat "\$st"); else w=orch; fi
 echo "\$w" > "\$st"
@@ -535,6 +542,43 @@ case $out in *'下一步：稍后再敲 ~/.local/bin/fleet'*) ok "J5: 下一步 
 case $out in *'这个终端还找不到 fleet 命令：先敲 exec '*) ok "J5: the exit says how to get fleet on this terminal's PATH" ;; *) fail "J5: no PATH hint" ;; esac
 grep -q '^m2 ' "$T/rv.log" && fail "J5: connected to m2 with no session placed" || ok "J5: no connection"
 rm -f "$T/j.settle" "$T/j.acct"
+
+# ---------------------------------------------------------------------------
+# R — the home restarts its tmux under a connected client (issue #3511)
+# ---------------------------------------------------------------------------
+renv() { FLEET_CLIENT_LEASE_CMD="$T/lease.sh" FLEET_THIN_PLACE_CMD="$T/place.sh" \
+         FLEET_THIN_ACCOUNT_CMD="$T/acct.sh" FLEET_THIN_FIRST_RETRY=0.3 "$@"; }
+# R1: up on m1, the connection drops, m1 has no fleet for two attaches → the loop
+# says the home is restarting and waits, then --resume lands on the same session;
+# never the first-session road (no place asked)
+: > "$T/rv.log"; : > "$T/place.log"; echo 2 > "$T/nofleet.m1"
+THIN_ARGS='["s1"]' FLEET_THIN_HOME_RESTART_POLL=0.2 renv drive restart '[
+ ["expect", "VIEW s1 ON m1"],
+ ["send", "drop\n"],
+ ["expect", "VIEW s1 ON m1[\\s\\S]*VIEW s1 ON m1", 20],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+out=$(cat "$T/out.restart")
+case $(cat "$T/res.restart") in *'RC 0'*) ok "R1: home restarting → back on s1, ⌘Q → exit 0" ;;
+  *) fail "R1: $(cat "$T/res.restart") / $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+case $out in *'家机器 m1 在重启，稍等'*) ok "R1: 「家机器 m1 在重启，稍等」 on the screen" ;; *) fail "R1: no restarting line" ;; esac
+[ "$(grep -c '^m1 attach --thin .*--resume' "$T/rv.log")" -ge 3 ] && ok "R1: every attach after the drop is --resume on the same view" \
+  || fail "R1: rv: $(cat "$T/rv.log")"
+[ -s "$T/place.log" ] && fail "R1: the first-session road asked for a new session: $(cat "$T/place.log")" || ok "R1: no new session asked"
+case $out in *'下没有 fleet'*|*'没开出来'*) fail "R1: told the person there is no fleet" ;; *) ok "R1: no 「没有 fleet」 / 「没开出来」" ;; esac
+# R2: the home never comes back → past FLEET_THIN_HOME_RESTART_SECS the old road
+echo 1000 > "$T/nofleet.m1"; : > "$T/rv.log"; : > "$T/place.log"
+THIN_ARGS='["s1"]' FLEET_THIN_HOME_RESTART_POLL=0.2 FLEET_THIN_HOME_RESTART_SECS=1 renv drive restart2 '[
+ ["expect", "VIEW s1 ON m1"],
+ ["send", "drop\n"],
+ ["expect", "VIEW fu/fid9 ON m2", 20],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+grep -q -- '- home --agent claude' "$T/place.log" && ok "R2: a home that never comes back → the first-session road, bounded" \
+  || fail "R2: place: $(cat "$T/place.log") / $(tr -d '\r' < "$T/out.restart2" | tail -5)"
+rm -f "$T/nofleet.m1"
 
 echo
 [ "$FAILS" = 0 ] && { echo "fleet-thin-selftest: PASS"; exit 0; }

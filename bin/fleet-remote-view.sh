@@ -739,6 +739,15 @@ rv_within() {
 # `--resume` comes back to it — the same session when it is still kept, else a
 # new one on `cur=` — and lands, with no `cur=` to go back to, on the
 # orchestrator's window, else the fleet's current one.
+# rv_restoring — a restore of this login holds its lock right now (a live pid in
+# fleet-restore's $FLEET_CONF_DIR/restore/.auto.lock, which the snapshot restore
+# takes too): sessions are being reopened.
+rv_restoring() {
+  local pid
+  pid=$(cat "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/restore/.auto.lock/pid" 2>/dev/null)
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null
+}
 rv_thin_kept() {   # <row file> — still inside its keep window (left=, else its mtime)
   local t keep="${FLEET_VIEW_KEEP_SECS:-600}"
   case "$keep" in ''|*[!0-9]*) keep=600 ;; esac
@@ -886,6 +895,16 @@ rv_attach_thin() {
       case "$want" in */*) wfar=${want#wid:} ;; esac
       note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere${wfar:+, then there}"
     fi
+  fi
+  # A resumed 看台 whose session is not here YET, while a restore holds the lock
+  # (fleet-sessions-snapshot.sh restore / fleet-restore.sh --auto — the home's tmux
+  # was restarted, issue #3511): the fleet is back, its windows are still coming.
+  # Landing now would put the person on the home window and ask for a NEW session;
+  # say no fleet yet (3) and the thin loop waits for the same session instead.
+  if [ -n "$resume" ] && [ -n "$cur" ] && [ -z "$w" ] && ! T has-session -t "=$g" 2>/dev/null \
+     && [ -z "$(rv_thin_window "$s" "$cur")" ] && rv_restoring; then
+    note "attach --thin: $(hostname -s) is restarting — its sessions are coming back"
+    return 3
   fi
   kept=''
   T has-session -t "=$g" 2>/dev/null && gid=$(T display-message -p -t "=$g:" '#{session_id}' 2>/dev/null) && kept=1

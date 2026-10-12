@@ -5,10 +5,12 @@
 # bin/fleet-sessions-snapshot.sh and the fleet-restore.sh it drives running from a
 # sandbox install (fleet-up.sh a stub that builds the session the way the real one
 # leaves it, `claude` a stub that records its argv):
-#   A  save pins the unfinished sessions only (a `done` one is not pinned), with
-#      their reap policy, in global/sessions.snapshot + a per-fleet map copy
+#   A  save pins every session still open — a `done` one and a no-repo `done`
+#      one too (issue #3511), never an `exited` one — with their reap policy, in
+#      global/sessions.snapshot + a per-fleet map copy
 #   B  kill-server → restore: every pinned session is back, same name, same cwd,
-#      resumed on its own transcript; one whose issue was CLOSED meanwhile is not
+#      resumed on its own transcript — the `done` ones and the no-repo one (in
+#      $HOME) included; one whose issue was CLOSED meanwhile is not
 #      reopened; restore exits 0 and prints `back` / `closed` per session
 #   C  restore again → nothing duplicated
 #   D  a worktree deleted while the server was down is never woken (`gone`)
@@ -81,6 +83,17 @@ win issue-2 2 idle    sid-2 f0000000-0000-4000-8000-000000000002
 win issue-4 4 "done"  sid-4 f0000000-0000-4000-8000-000000000004
 win issue-5 5 working sid-5 f0000000-0000-4000-8000-000000000005
 win scratch-3 - idle  sid-3 f0000000-0000-4000-8000-000000000003
+win issue-6 6 exited  sid-6 f0000000-0000-4000-8000-000000000006
+# a newcomer's no-repo session (issue #3511): it answered (`done`), lives in $HOME
+nt new-window -d -t oc: -n 我的会话 -c "$WORK/home" 'exec sleep 600'
+nt set-window-option -t oc:我的会话 @norepo 1
+nt set-window-option -t oc:我的会话 @claude_state "done"
+nt set-window-option -t oc:我的会话 @cc_session_id 70000000-0000-4000-8000-000000000007
+nt set-window-option -t oc:我的会话 @norepo_sid 70000000-0000-4000-8000-000000000007
+nt set-window-option -t oc:我的会话 @fleet_id f0000000-0000-4000-8000-000000000007
+nt set-window-option -t oc:我的会话 @reap_policy done:15m
+NPD="$WORK/home/.claude/projects/$(printf '%s' "$WORK/home" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$NPD"; printf '{"type":"user","message":{"content":"work"}}\n' > "$NPD/70000000-0000-4000-8000-000000000007.jsonl"
 nt set-window-option -t oc:issue-1 @reap_policy merged:48h
 
 # ---- A. save ---------------------------------------------------------------
@@ -88,8 +101,11 @@ out=$(ss save) || fail "A: save exited non-zero ($out)"
 SNAP="$WORK/conf/global/sessions.snapshot"
 [ -s "$SNAP" ] || fail "A: no snapshot written"
 rows=$(grep -v '^#' "$SNAP")
-[ "$(printf '%s\n' "$rows" | grep -c .)" = 4 ] || fail "A: want 4 pinned sessions (got: $rows)"
-printf '%s\n' "$rows" | grep -q $'\tissue-4\t' && fail "A: a done session was pinned ($rows)"
+[ "$(printf '%s\n' "$rows" | grep -c .)" = 6 ] || fail "A: want 6 pinned sessions (got: $rows)"
+printf '%s\n' "$rows" | grep -q $'\tissue-4\t' || fail "A: a done session was not pinned ($rows)"
+printf '%s\n' "$rows" | grep -q $'^oc\t我的会话\t'"$WORK/home"$'\t70000000-0000-4000-8000-000000000007\tdone:15m\t' \
+  || fail "A: the no-repo done session was not pinned ($rows)"
+printf '%s\n' "$rows" | grep -q $'\tissue-6\t' && fail "A: an exited session was pinned ($rows)"
 printf '%s\n' "$rows" | grep -q $'^oc\tissue-1\t'"$WORK/wt-issue-1"$'\tsid-1\tmerged:48h\t' \
   || fail "A: issue-1's row lacks cwd / sid / reap policy ($rows)"
 grep -q $'^WIN\tissue-2\t' "$WORK/conf/global/sessions.snapshot.d/oc.map" || fail "A: no map copy"
@@ -100,16 +116,22 @@ nt kill-server
 : > "$WORK/claude-argv"
 out=$(ss restore); rc=$?
 [ "$rc" = 0 ] || fail "B: restore exit $rc ($out)"
-for k in issue-1 issue-2 scratch-3; do
+for k in issue-1 issue-2 scratch-3 issue-4; do
   printf '%s\n' "$out" | grep -q "^back	oc	$k	" || fail "B: $k not reported back ($out)"
   cwd=$(nt display-message -p -t "oc:$k" '#{pane_current_path}' 2>/dev/null)
   [ "$cwd" = "$WORK/wt-$k" ] || fail "B: $k came back in '$cwd', not $WORK/wt-$k"
 done
 printf '%s\n' "$out" | grep -q "^closed	oc	issue-5	" || fail "B: closed issue-5 not reported closed ($out)"
-nt list-windows -t oc -F '#{window_name}' | grep -qxE 'issue-5|issue-4' && fail "B: a closed / done session was reopened"
+nt list-windows -t oc -F '#{window_name}' | grep -qxE 'issue-5|issue-6' && fail "B: a closed / exited session was reopened"
+printf '%s\n' "$out" | grep -q "^back	oc	我的会话	" || fail "B: the no-repo done session not reported back ($out)"
+cwd=$(nt display-message -p -t "oc:我的会话" '#{pane_current_path}' 2>/dev/null)
+[ "$cwd" = "$WORK/home" ] || fail "B: the no-repo session came back in '$cwd', not \$HOME"
+[ "$(nt show-window-options -v -t oc:我的会话 @fleet_id)" = f0000000-0000-4000-8000-000000000007 ] \
+  || fail "B: the no-repo session came back as another session (@fleet_id)"
 [ "$(nt show-window-options -v -t oc:issue-1 @reap_policy)" = merged:48h ] || fail "B: reap policy not stamped back"
 until_ok 15 grep -q -- '--resume sid-1' "$WORK/claude-argv" || fail "B: issue-1 not resumed on sid-1 ($(cat "$WORK/claude-argv"))"
 until_ok 15 grep -q -- '--resume sid-3' "$WORK/claude-argv" || fail "B: scratch-3 not resumed on sid-3"
+until_ok 15 grep -q -- '--resume 70000000-0000-4000-8000-000000000007' "$WORK/claude-argv" || fail "B: the no-repo session not resumed on its sid ($(cat "$WORK/claude-argv"))"
 
 # ---- C. idempotent -----------------------------------------------------------
 ss restore >/dev/null || fail "C: second restore not all back"
@@ -152,4 +174,4 @@ rm -f "$SNAP"
 ss restore >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] || fail "F: restore with no snapshot exit $rc, want 3"
 
-echo "selftest PASS: fleet-sessions-snapshot — save pins unfinished sessions; kill-server → restore brings each back (same name, cwd, transcript, reap policy); closed / gone / down stay closed; nothing skipped still restores; idempotent"
+echo "selftest PASS: fleet-sessions-snapshot — save pins every open session (done + no-repo too, never exited); kill-server → restore brings each back (same name, cwd, transcript, reap policy); closed / gone / down stay closed; nothing skipped still restores; idempotent"

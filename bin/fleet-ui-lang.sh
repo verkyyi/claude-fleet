@@ -1159,6 +1159,8 @@ fleet_ui_t() {
     en:thin_no_home_fmt)        printf 'cannot reach the home machine: %s' "${1:-}" ;;
     zh:thin_no_fleet_fmt)       printf '%s 这台机器的登录 %s 下没有 fleet' "${1:-}" "${2:-}" ;;
     en:thin_no_fleet_fmt)       printf 'no fleet on %s under login %s' "${1:-}" "${2:-}" ;;
+    zh:thin_home_restart_fmt)   printf '家机器 %s 在重启，稍等 — 回来就接回刚才的会话（最多再等 %s 秒）' "${1:-}" "${2:-}" ;;
+    en:thin_home_restart_fmt)   printf 'home %s is restarting — waiting to reconnect to the same session (up to %ss more)' "${1:-}" "${2:-}" ;;
     zh:thin_first_start)        printf '你还没有 fleet 会话：正在为你开第一个…' ;;
     en:thin_first_start)        printf 'no fleet session of yours yet: opening your first one…' ;;
     zh:thin_first_opening_fmt)  printf '正在为你开机器（%s），约 %s 秒 — 开好后自动接着开你的第一个会话' "${1:-}" "${2:-}" ;;
