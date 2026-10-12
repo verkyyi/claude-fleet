@@ -98,6 +98,7 @@
 #   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
 #                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
 #   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
+#   spare-wash-no-fda                               bin/fleet-login-reset.sh wash → bin/fleet-login-remove-ssh.sh wash (#3508)
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -5279,6 +5280,22 @@ print(m.fda_line({"fda": {"ok": False, "program": "/x/Python"}}))' 2>&1)
   got=$(bash "$ROOT/bin/fleet-login-remove-ssh-selftest.sh" 2>&1) \
     || { WHY="fleet-login-remove-ssh-selftest.sh is red: $(printf '%s\n' "$got" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='守护读出自己没有完全磁盘访问 → status --check 4、医生 node 行 WARN 点名要授权的程序；没有完全磁盘访问时删号先走本机 ssh（强制命令只认 delete <登录名>），走不通说清原因再直删；dscl 被拒时删号脚本最后一行说清（真跑 shim 化的 remove）'
+  SECS=$(since "$t0")
+}
+
+# ---- spare-wash-no-fda (#3508): the admin agent has no Full Disk Access, and
+# macOS refuses even root's rename of a home without it — every recycle on
+# macmini ended `reset: dirty wash` at `sudo mv /Users/<login> …`, the login
+# failed and never went back to the spares. Now the wash rides the remove
+# script's local ssh road (forced `wash <login> <stamp>`), as its delete does.
+drill_spare_wash_no_fda() {
+  CAP=60; local t0 got
+  t0=$(now)
+  grep -q '"$RM_SSH" wash "$LOGIN"' "$ROOT/bin/fleet-login-reset.sh" \
+    || { WHY="fleet-login-reset.sh's wash no longer takes the local ssh road with no Full Disk Access"; return 1; }
+  got=$(bash "$ROOT/bin/fleet-login-remove-ssh-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-remove-ssh-selftest.sh is red: $(printf '%s\n' "$got" | grep -m1 'selftest FAIL')"; return 1; }
+  WHAT='没有完全磁盘访问时洗号经本机 ssh：强制命令 wash <登录名> <时间戳> 把家目录挪进存档目录并删掉（同删号的检查：普通登录、非 admin、非自己；没有完全磁盘访问退 7），走不通再直接 mv'
   SECS=$(since "$t0")
 }
 

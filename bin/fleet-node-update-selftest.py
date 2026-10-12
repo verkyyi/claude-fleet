@@ -1697,6 +1697,35 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(len(self.kicks()), 2)
         self.assertIn("PASS", self.rows()[0])
 
+    def gui_meta(self, login, prog):
+        """A Mac admin whose agent was a LaunchAgent: credsep keeps that in
+        meta.json for `release` and runs it as LaunchDaemon com.ccquota.agent.<login>."""
+        mp = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], login, "meta.json")
+        self.wj(mp, {"login": login, "agent": {"kind": "launchd-gui", "label": "com.ccquota.agent",
+                                               "path": "/Users/%s/Library/LaunchAgents/com.ccquota.agent.plist" % login},
+                     "agent_argv": [prog, "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
+        os.chmod(mp, 0o600)
+
+    def test_converted_gui_agent_is_followed(self):
+        # issue #3508: macmini's verkyyi stayed on its own ccquota (no login_join) because
+        # its meta.json said launchd-gui — the LaunchDaemon credsep made in its place runs it
+        dd = self.env["FLEET_CREDSEP_DAEMON_DIR"]
+        if not os.path.isdir(dd):
+            os.makedirs(dd)
+        self.gui_meta("verky", self.own)
+        self.install(V1)
+        self.assertEqual(self.argv0("verky"), self.own)            # no daemon there: not ours to restart
+        self.assertEqual(self.kicks(), [])
+        self.assertEqual(self.rows(), [])
+        open(os.path.join(dd, "com.ccquota.agent.verky.plist"), "w").close()
+        self.assertTrue(self.rows() and "WARN" in self.rows()[0], self.rows())
+        self.tick(V1)
+        self.assertEqual(self.argv0("verky"), os.path.join(self.root, "agent", "ccquota"))
+        self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.verky"])
+        meta = self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json"))
+        self.assertEqual(meta["agent"]["kind"], "launchd-gui")     # release still puts the original back
+        self.assertIn("PASS", self.rows()[0])
+
     def test_no_admin_agent_no_row(self):
         shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky"))
         self.install(V1)
@@ -1934,6 +1963,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent":
         # BREAK-IT admin-agent-stale (issue #3034): an admin's own agent follows the release
         unittest.main(argv=[sys.argv[0], "Q_AdminAgent"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent-gui":
+        # BREAK-IT admin-agent-gui-converted (issue #3508)
+        unittest.main(argv=[sys.argv[0], "Q_AdminAgent.test_converted_gui_agent_is_followed"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-codesign":
         # BREAK-IT codesign-identity-switch (issue #3433): the identity survives a version switch
         unittest.main(argv=[sys.argv[0], "T_Codesign"], verbosity=1)

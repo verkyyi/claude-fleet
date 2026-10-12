@@ -46,7 +46,8 @@
 # Env (tests): FLEET_LOGIN_HOMES · FLEET_INSTALL_DAEMON_DIR · FLEET_NODE_STATE ·
 #   FLEET_CREDSEP_ROOT_BASE · FLEET_OFFBOARD_ARCHIVE_DIR — as the remove script's;
 #   FLEET_LOGIN_RESET_ROOT prefixes the outside dirs and is the check's --root;
-#   FLEET_LOGIN_RESET_{REMOVE,NEW,CHECK} — the three scripts.
+#   FLEET_LOGIN_RESET_{REMOVE,NEW,CHECK} — the three scripts; FLEET_LOGIN_REMOVE_SSH
+#   (the wash's road with no Full Disk Access, `0` = none) · FLEET_LOGIN_REMOVE_TCC_DB.
 set -uo pipefail
 
 PROG=fleet-login-reset
@@ -89,6 +90,8 @@ RROOT=${FLEET_LOGIN_RESET_ROOT:-}; RROOT=${RROOT%/}
 REMOVE_SH=${FLEET_LOGIN_RESET_REMOVE:-$BIN/fleet-login-remove.sh}
 NEW_SH=${FLEET_LOGIN_RESET_NEW:-$BIN/fleet-login-new.sh}
 CHECK_PY=${FLEET_LOGIN_RESET_CHECK:-$BIN/fleet-login-reset-check.py}
+RM_SSH=${FLEET_LOGIN_REMOVE_SSH:-$BIN/fleet-login-remove-ssh.sh}
+TCC_DB=${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}
 OPDIR="$HOME/$LOGIN-reset" OPF="$HOME/$LOGIN-reset/op"
 cd / || die 'cannot cd / (every step runs from there; issue #1216)'
 [ ! -L "$H" ] || refuse "symlinked home '$H'"
@@ -166,6 +169,22 @@ if [ "$DONE_REJOIN" = 0 ]; then
   # (macOS privacy protection can keep root's rm out of ~/Library), and the old
   # home leaves the person's path at once. Then deleted; what macOS keeps from
   # this process stays in the admin's 700 archive dir, said once.
+  # No Full Disk Access here (the admin agent, unless a person granted it)
+  # ⇒ macOS refuses even root's rename of a home: the wash rides the remove
+  # script's local ssh road (issue #3508, as its delete does — #2994), and the
+  # direct road below runs only when that one cannot.
+  if [ "$APPLY" = 1 ] && [ -e "$H" ] && [ "$RM_SSH" != 0 ] && [ -f "$RM_SSH" ] \
+     && [ "$H" = "/Users/$LOGIN" ] && [ "$ARCHIVE_DIR" = /Users/Shared/offboarded ] \
+     && ! sudo head -c 1 "$TCC_DB" >/dev/null 2>&1; then
+    ME_ADMIN=$(id -un 2>/dev/null)
+    printf '  (no Full Disk Access here: washing through a local ssh session as %s)\n' "$ME_ADMIN"
+    show sudo bash "$RM_SSH" setup --admin "$ME_ADMIN"
+    sudo bash "$RM_SSH" setup --admin "$ME_ADMIN" 2>&1 | sed 's/^/    /'
+    WSTAMP=$(date -u +%Y%m%d%H%M%S)
+    show sudo bash "$RM_SSH" wash "$LOGIN" --admin "$ME_ADMIN" --stamp "$WSTAMP"
+    sudo bash "$RM_SSH" wash "$LOGIN" --admin "$ME_ADMIN" --stamp "$WSTAMP" 2>&1 | sed 's/^/    /'
+    [ ! -e "$H" ] || printf '%s: WARN the local ssh road did not wash %s (why above) — trying directly\n' "$PROG" "$H" >&2
+  fi
   if [ -e "$H" ]; then
     ASIDE="$ARCHIVE_DIR/$LOGIN-$STAMP.wash"
     wrun wash sudo install -d -m 700 -o "$ADMIN_UID" "$ARCHIVE_DIR"
