@@ -188,6 +188,9 @@ conf/tmux-shell-stage.conf
 conf/fleet-palette.conf
 conf/vendor-tmux.lock
 conf/secret-shapes.list
+# 公开前的安全门槛 (#3574): the ONE table — the hub's /v1/fleet/gate reads it
+# from this pack, bin/fleet-gate-check.sh from the checkout
+conf/public-gate.tsv
 # --- agent bundle: generated from conf/agent-bundle.manifest by bin/fleet-client-mirror.sh — do not edit (#1725) ---
 conf/agent-bundle.manifest
 hooks/settings-hooks.json

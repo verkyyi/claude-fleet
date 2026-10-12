@@ -829,6 +829,10 @@ type NodeView struct {
 	// routes every session central.
 	Credsep     string `json:"credsep,omitempty"`
 	CredsepGate string `json:"credsep_gate,omitempty"`
+	// Gate is the login's newest machine half of the public gate
+	// (claude-fleet#3574): conf/public-gate.tsv's where=node rows as
+	// fleet-gate-check.sh --local judged them; absent from an older agent.
+	Gate []control.GateItem `json:"gate,omitempty"`
 }
 
 // DesiredView is one node's 期望 / 实际 pair on the roster.
@@ -1269,6 +1273,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		v.Credsep = hb.Credsep
+		v.Gate = hb.Gate
 		v.LoginsRefused = hb.LoginsRefused
 		v.SysAt, v.SysUnread, v.FleetAt = hb.SysAt, hb.SysUnread, hb.FleetAt
 		v.Versions, v.VersionsAt = hb.Versions, hb.VersionsAt

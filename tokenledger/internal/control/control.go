@@ -220,6 +220,14 @@ const CodeWrongLogin = "WRONG_LOGIN"
 // says its hello again after a backoff. Never sent on a plain link.
 const CodeLinkClosed = "LINK_CLOSED"
 
+// GateItem is one public-gate item's verdict (claude-fleet#3574): its id in
+// conf/public-gate.tsv, PASS or not, and why in the judge's words.
+type GateItem struct {
+	ID   string `json:"id"`
+	Pass bool   `json:"pass"`
+	Why  string `json:"why,omitempty"`
+}
+
 // CredsepSeparated is AccountResult.Credsep for a login opened separated.
 const CredsepSeparated = "separated"
 
@@ -663,6 +671,13 @@ type Heartbeat struct {
 	// CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
 	// #2295 — the hub reads that as not separated for a role=user person.
 	Credsep string `json:"credsep,omitempty"`
+
+	// Gate is this machine's half of the public gate (claude-fleet#3574,
+	// EPIC #3569 C4): every conf/public-gate.tsv row judged where=node, as
+	// `fleet-gate-check.sh --local` reads them on this machine. The hub's
+	// /v1/fleet/gate folds every machine's into one verdict per item. Absent
+	// from an agent older than #3574 or a login without the script.
+	Gate []GateItem `json:"gate,omitempty"`
 
 	// Ready says whether this login can take a NEW session
 	// (claude-fleet#1475): gh is logged in, a Claude or Codex credential is

@@ -412,6 +412,10 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/join", s.handleNodeJoin)
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
+		// The public gate (claude-fleet#3574): the hub's own items for a
+		// machine's doctor; the operator reads every item and machine.
+		mux.HandleFunc("/v1/node/gate", s.handleNodeGate)
+		mux.Handle("/v1/fleet/gate", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetGate))))
 		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
 		// A managed machine (claude-fleet#2214): trusted join codes and each
 		// machine's desired state are the operator's; the node reads its own.

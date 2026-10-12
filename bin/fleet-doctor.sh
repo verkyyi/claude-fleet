@@ -485,6 +485,20 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   esac
 fi
 
+# --- gate: 公开前必须先完成的安全项 (issue #3574, EPIC #3569 C4) ---------------------
+# One INFO row per item of conf/public-gate.tsv, PASS / FAIL in its words, then the
+# count. INFO on purpose: the gate is red until EPIC #3500 lands, and a red gate is
+# a release decision, not this machine's fault — it never counts toward the doctor's
+# FAILs (nor the steward's health watch, which reads WARN/FAIL rows).
+if [ -f "$(dirname "$0")/fleet-gate-check.sh" ] && [ -f "$(dirname "$0")/../conf/public-gate.tsv" ]; then
+  FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-gate-check.sh" 2>&1 | while IFS= read -r _gl; do
+    case "$_gl" in
+      'gate: '*) info gate "${_gl#gate: } — 公开前必须先完成的安全项；全绿才对外推广、接第一家托管客户（conf/public-gate.tsv）" ;;
+      *)         info gate "$_gl" ;;
+    esac
+  done
+fi
+
 # --- rootlog: no root service writes its log in a home (issue #2296) --------------
 # launchd / systemd open a root job's stdout file AS ROOT and follow a symlink:
 # a log in a home is a root write its login aims. Only on a machine the fleet put
