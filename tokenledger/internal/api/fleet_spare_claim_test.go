@@ -59,7 +59,7 @@ func TestSpareHandedToARecordedPerson(t *testing.T) {
 		t.Fatalf("assign took %v; want ≤ 3s", took)
 	}
 	if a.State != store.AccountActive || a.Login != m5[0] {
-		t.Fatalf("account on m5 = %+v; want active under the spare's %s in the same request", a)
+		t.Fatalf("account on m5 = %+v; want active under the spare's %s in the same request", a, m5[0])
 	}
 	// Nothing for the person is sent: m5's next op is the refill's.
 	if _, op := expectAccountOp(t, nodes["m5"].tnode); op.Op != control.AccountCreate ||
