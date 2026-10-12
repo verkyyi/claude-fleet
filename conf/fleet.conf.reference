@@ -2865,3 +2865,43 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # An unset hub-side key is said once at the hub's start: 「未配置 <键>」.
 # compat-1v (下一批删): a machine of ours pointed at one of the hubs
 # conf/compat-ours.conf names keeps that file's old relay until it sets the key.
+#
+# --- The hub's own settings (issue #3748) -----------------------------------
+# What a self-hosting team sets on its hub (入口): its environment, a k8s
+# Secret / ConfigMap, a deploy overlay. Read by tokenledger/cmd/ccquota/hub.go;
+# docs/public/zh/self-host/install.md §1.3 / §1.4 is the reader's table of
+# these same rows. Each row: purpose · 必填 | 可选 | 成对 · 密钥 (= the value is
+# a secret: the env or a Secret only, never a ConfigMap, a commit or a log).
+# The address rows are the block above.
+# Keys (files mounted from their own Secrets; the key itself is the secret):
+#   CCQUOTA_FLEET_SSH_CA_KEY      path of the connection-certificate CA key · 必填 · 密钥
+#                                 (unset = connection certificates off)
+#   CCQUOTA_FLEET_CRED_KEY_FILE   path of the credential-vault key · 必填 · 密钥
+#                                 (or CCQUOTA_FLEET_CRED_KEY inline, or
+#                                 CCQUOTA_FLEET_CRED_KMS_KEY_ID; none = vault off)
+#   CCQUOTA_FLEET_RELEASE_KEY     path of the release signing key · 可选 · 密钥
+#                                 (unset = no node releases, machines never update)
+#   CCQUOTA_FLEET_RELEASE_DIR     where releases are kept · 成对: required once
+#                                 RELEASE_KEY is set (the hub refuses to start)
+# Admins:
+#   CCQUOTA_GITHUB_ADMINS         admins by GitHub username, comma-separated · 必填
+#                                 unless CCQUOTA_ADMINS names them
+#   CCQUOTA_ADMINS                admins by principal or e-mail address (no GitHub) · 可选
+#   CCQUOTA_FLEET_ADMIN_USERS     the machines' admin login name(s): the only
+#                                 agent account opens / deletes go to · 必填
+# Sign-in (at least one way; a half-set pair refuses to start):
+#   CCQUOTA_GITHUB_CLIENT_ID / CCQUOTA_GITHUB_CLIENT_SECRET   GitHub OAuth app · 成对 · SECRET 密钥
+#   CCQUOTA_SMTP_URL / CCQUOTA_SMTP_FROM   e-mail code sign-in · URL 密钥 (carries the password)
+#   CCQUOTA_WECHAT_WEB_APPID / CCQUOTA_WECHAT_WEB_SECRET      WeChat scan (website app) · 成对 · SECRET 密钥
+#   CCQUOTA_WECHAT_MP_APPID / CCQUOTA_WECHAT_MP_SECRET        WeChat in-app (service account) · 成对 · SECRET 密钥
+#   CCQUOTA_SESSION_SECRET        signs sessions on a hub without GitHub · 必填 then · 密钥
+# Other:
+#   CCQUOTA_FLEET                 1 = fleet on · 必填
+#   CCQUOTA_VIEWER_TOKEN          the read-only viewer token · 必填 (else --no-auth) · 密钥
+#   CCQUOTA_FLEET_OAUTH_REFRESH_VIA   node | relay | direct — who refreshes a
+#                                 subscription's sign-in · 可选 (relay needs
+#                                 CCQUOTA_FLEET_CRED_RELAY_URL + CCQUOTA_FLEET_SESSION_CRED_KEY)
+#   CCQUOTA_FLEET_STABLE_REPO     owner/name whose stable the clients follow;
+#                                 off = never ask GitHub · 可选
+#   CCQUOTA_DB_URL                postgres://… instead of SQLite · 可选 · 密钥
+#   CCQUOTA_SITE                  on = the public site at "/" · 可选 (unset = off)
