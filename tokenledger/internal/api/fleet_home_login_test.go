@@ -49,6 +49,19 @@ func homeLoginFleet(t *testing.T) (*harness, string, *writeNode, control.Fleet) 
 		l, live, err := h.srv.homeLoginFor(p.ID, "m4")
 		return err == nil && live && l == "verky"
 	})
+	// every machine's beat recorded, not only the first's (on Postgres a later one can land late — claude-fleet#3703)
+	waitFor(t, 3*time.Second, "both machines reported", func() bool {
+		out, err := h.srv.homePick(p.ID, "", time.Now())
+		if err != nil || len(out.Candidates) < len(h.srv.FleetRoutes) {
+			return false
+		}
+		for _, c := range out.Candidates {
+			if !c.Online {
+				return false
+			}
+		}
+		return true
+	})
 	return h, p.ID, m4v, f
 }
 

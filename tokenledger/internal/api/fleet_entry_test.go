@@ -72,14 +72,22 @@ func nextEntry(t *testing.T, c *websocket.Conn, v int, what string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var m control.Message
-	if err := wsjson.Read(ctx, c, &m); err != nil {
-		t.Fatalf("%s: no message: %v", what, err)
-	}
-	var e control.EntryKeys
-	_ = json.Unmarshal(m.Payload, &e)
-	if m.Type != control.TypeEntryKeys || e.Version != v {
-		t.Fatalf("%s: got %s %s, want entry_keys v%d", what, m.Type, m.Payload, v)
+	for {
+		var m control.Message
+		if err := wsjson.Read(ctx, c, &m); err != nil {
+			t.Fatalf("%s: no message: %v", what, err)
+		}
+		var e control.EntryKeys
+		_ = json.Unmarshal(m.Payload, &e)
+		// an earlier version's push may still be in flight (the connect's, a previous
+		// change's — claude-fleet#3703): pass over it; a newer one or anything else is wrong
+		if m.Type == control.TypeEntryKeys && e.Version < v {
+			continue
+		}
+		if m.Type != control.TypeEntryKeys || e.Version != v {
+			t.Fatalf("%s: got %s %s, want entry_keys v%d", what, m.Type, m.Payload, v)
+		}
+		return
 	}
 }
 

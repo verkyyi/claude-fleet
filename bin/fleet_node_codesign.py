@@ -154,7 +154,7 @@ class Identity(object):
 
     def _make(self, work):
         host = socket.gethostname().split(".")[0] or "mac"
-        cn = "claude-fleet node %s" % host
+        cn = ("claude-fleet node %s" % host)[:64]   # X.509 caps a CN at 64 (a CI runner's hostname is longer)
         cnf = os.path.join(work, "req.cnf")
         with open(cnf, "w") as f:
             f.write("[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=%s\n"
