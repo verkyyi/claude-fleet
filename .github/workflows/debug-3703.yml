@@ -1,0 +1,35 @@
+name: debug-3703 (throwaway, never merged)
+on: pull_request
+jobs:
+  codesign:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: walk the identity by hand
+        run: |
+          set -x
+          sw_vers; /usr/bin/openssl version; hostname
+          W=$(mktemp -d); cd "$W"
+          printf '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=claude-fleet node x\n[ext]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\nsubjectKeyIdentifier=hash\n' > req.cnf
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 36500 -config req.cnf
+          PW=$(/usr/bin/openssl rand -hex 24)
+          echo "$PW" | /usr/bin/openssl pkcs12 -export -inkey key.pem -in cert.pem -out id.p12 -name x -passout stdin
+          KC=$W/fleet.keychain-db
+          security list-keychains -d user
+          security create-keychain -p "$PW" "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p "$PW" "$KC"
+          security import id.p12 -k "$KC" -P "$PW" -T /usr/bin/codesign || true
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$PW" "$KC" >/dev/null || true
+          security find-identity -p codesigning "$KC" || true
+          security find-identity -v -p codesigning "$KC" || true
+          security find-identity "$KC" || true
+          SHA=$(/usr/bin/openssl x509 -in cert.pem -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')
+          echo "sha=$SHA"
+          cp /bin/ls ./prog
+          codesign --force --sign "$SHA" --keychain "$KC" --identifier x --timestamp=none ./prog || echo "RC=$? with --keychain only"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          codesign --force --sign "$SHA" --keychain "$KC" --identifier x --timestamp=none ./prog && echo "OK once in the search list" || echo "RC=$? even in the search list"
+      - name: the test itself
+        if: always()
+        run: python3 bin/fleet-node-update-selftest.py T_Codesign 2>&1 | tail -30
