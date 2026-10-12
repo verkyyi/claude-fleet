@@ -11,7 +11,8 @@ A request is one line of JSON, {"op": <name>, "args": {…}} — no other key, a
 each op takes exactly its own args. A reply is one line: {"ok": true, …},
 {"refused": <op>, "why": …} (outside the table: nothing ran) or {"error": …}
 (inside the table, but it could not be done). `run-as` answers twice on the same
-connection: {"ok": true, "pid": N} when the job starts, {"exit": rc} when it ends.
+connection: {"ok": true, "pid": N} when the job starts, {"exit": rc} when it ends;
+so does `machine` with action start.
 
 FLEET_NODE_CORE=0 makes `available()` false everywhere: every caller then takes
 its old road, byte for byte (共同约定 11).
@@ -33,6 +34,13 @@ OPS = {
     "power": {"profile": str},
     "switch": {"sha": str},
     "rollback": {},
+    # the seated daemon's root half (#3668, EPIC #3500 C14): a machine job by its
+    # NAME in the core's own table (start · stop · reload), the leftover sweep,
+    # one entry-port pass, and a read-only report (table · fda · tenants · lanes)
+    "machine": {"job": str, "action": str},
+    "sweep": {},
+    "entry": {},
+    "report": {"kind": str},
 }
 
 

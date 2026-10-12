@@ -885,4 +885,47 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
 - 不是托管机器（没有 `com.claude-fleet.node`）⇒ 没有这一行。
 
 BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-selftest.sh`）。
-节点守护本身降成 `_fleetnode`、整机巡检只跑一份，是本单其余的部分（见 #3556 的子单）。
+节点守护本身降成 `_fleetnode` 见 §22（#3668）；整机巡检只跑一份是 #3671。
+
+## 22. 节点守护以 `_fleetnode` 跑（EPIC #3500 C14，#3668 · 迁移步 C）
+
+守护降成一个没有 sudo 的服务账号：它被骗，拿到的只有核心表里的启停和结束进程。
+
+- **一步**：`sudo FLEET_NODE_CORE=1 FLEET_NODE_SEAT=1 fleet node install`（「守护」那一步，核心
+  必须在答）跑 `fleet-node-supervisor.py install --seat`：写 `<state>/seat-handover.json` →
+  建账号（Mac `_fleetnode`：UID/GID 450-499、shell `/usr/bin/false`、home `/var/empty`、
+  `-roleAccount`，不进任何管理员组；Linux `fleetnode`，`useradd --system`）→ 布置它能写的
+  地方 → LaunchDaemon 改 `UserName _fleetnode`（Linux `User=fleetnode`、`KillMode=process`）、
+  bootout 旧的、bootstrap 新的。核心**每个连接重读对端**：账号一建好它就只认 `_fleetnode`，
+  root 守护同一刻被拒——所以建账号和守护切过去是同一步，核心不重启、它的任务簿还在。
+- **交接不重启**：被换下的 root 守护看到 handover，退出时**不停**子进程（它们各自一个会话，
+  launchd 的 bootout 只收主进程组），pid 留在 state.json；新守护按命令行接管（`adopted
+  child …`）。以后要停一个接管来的 root 子进程，守护不碰 pid：账号任务请核心 `stop-as`
+  （登录自己的进程请 `kill`），机器任务请 `machine stop`——核心按**自己表里那个任务的命令行**
+  找 root 进程，从不收一个 pid。Linux 上 systemd 换单元仍会收掉子进程（迁移判据在托管 Mac 上）。
+- **它能写的**（root 布置，`seat_layout`，可重跑）：`<state>/node/`（`state.json` 在这里，
+  `<state>/state.json` 是指向它的链接，读的人不用改）、`<state>/locks/`、`<log>/node/`
+  （守护自己的日志，`supervisor.log` 也在这），各登录登记表的 `run/ runs/ alerts/`
+  （root:_fleetnode 0770，父目录 root 的、它挪不走）。**能多读的**：登记表条目
+  （`services/*.json` 0640）与 `logins/` 里的名字（0750）——`.env`、`creds/`、`machine.env`、
+  节点程序的账本仍是 root 0600 / 0700。`fleet service …`、`account adopt|release|forget`
+  写完都再跑一遍 `seat_share`。root 往这些目录里写（手跑的 `tick`、核心的 sweep）一律
+  `O_NOFOLLOW` / `O_EXCL`，不跟它种的链接。
+- **要 root 的事，逐个的去处**（共同约定 11：每个新动作先有 BREAK-IT 行）：
+
+  | 今天 root 直接做的 | 降权后 |
+  |---|---|
+  | 账号任务、登记表服务、定时 agent 任务 | `run-as`（agent 任务的一次尝试是 `task:<名>@<日>#<次>[~HHMM]`，核心从登记表重建；缺凭据由核心回错） |
+  | 机器的子进程与任务：节点程序（#3669 前）、共享凭据代理启动器、测试机、diskguard、orphans（跨用户结束失控进程）、shared-dirs、更新器（#3670 前）、入口 sshd 与吊销跟随 | `machine {job, action}`：按核心**自己**算的表（`machine_table`：表的 children / tasks + 入口开着时的 sshd 与 `entry-revocations` + `ci.env` 在时的测试机）里的名字，start（以 root、一份）· stop · held（重载被谁挡着，只读）· hup（只限表里写着 SIGHUP 重载的） |
+  | sweep / attic（挪 plist、`launchctl bootout`） | `sweep {}` |
+  | 入口：host key、`<state>/entry/keys/*`、`sshd -t`、`com.apple.access_ssh`、审计 | `entry {}`（一次 converge + audit） |
+  | FDA 探针、tenants 的 sudo 读、各登录 lane 的拒绝 | `report {kind}`：`table` · `fda`（核心这条链有没有完全磁盘访问——删号的是它）· `tenants` · `lanes`，只读、不收参数 |
+  | memguard、Spotlight | 已在表里（`memguard` · `power`） |
+  | account adopt / release / forget | 不在表里，维持：只有人用 sudo 做 |
+
+  守护自己只排班、记账、读人人可读的东西；`report table` 每分钟取一次（核心不在时用上一份）。
+- **没有 `_fleetnode` / 没有核心 ⇒ 今天的路，字节不变**：守护是否「坐席」只看它自己的 uid
+  是不是那个账号；不是就一行都不走新路。坐着却等不到核心，要 root 的事一律不做、写日志等它。
+
+BREAK-IT：`fleetnode-compromised`（`bin/fleet-break-it-core-selftest.sh`）；
+`bin/fleet-node-core-selftest.py` 的 K（新动作）· L（对端按连接重读）· M（坐席守护、交接、布局）。

@@ -2262,7 +2262,8 @@ class Q_RootReads(Sandbox):
             with open(err) as f:
                 return f.read()
         self.assertTrue(until(5, lambda: "most recent call first" in text()), "no stack after SIGUSR1")
-        self.assertIn("in run", text())
+        # the dump is written thread by thread: wait for the main thread's, not one read
+        self.assertTrue(until(5, lambda: "in run" in text()), text())
         n = self.task("ok").get("runs") or 0
         self.assertTrue(until(5, lambda: (self.task("ok").get("runs") or 0) > n), "the loop stopped after SIGUSR1")
         self.assertIsNone(p.poll())
