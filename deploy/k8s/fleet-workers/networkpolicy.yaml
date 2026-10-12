@@ -1,0 +1,112 @@
+# fleet-workers' network rules (EPIC #3500 共同约定 6): deny by default; a user
+# pod (fleet/role=user) reaches kube-dns, the shared services (fleet/role=ops:
+# fleet-credproxy, fleet-egress) and the hub — nothing else, not another user
+# pod, not the internet. The shared services take requests from user pods only
+# and go out on their own.
+#
+# ⚠️ ACK's flannel does not ENFORCE NetworkPolicy (docs/MANAGED-LINUX.md «Egress
+# guard»). On this cluster the walls that hold are the user pod's own egress
+# guard (render.py --egress-closed) and fleet-egress's source check; these rules
+# are the same contract written for the day the CNI enforces them (Terway with
+# its policy engine, Calico) — keep them in step with render.py.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: fleet-workers
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: user-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: user
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # the shared services, at their pods' ports (policy sees the pod, not the Service)
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: ops
+      ports:
+        - {protocol: TCP, port: 8788}   # fleet-credproxy
+        - {protocol: TCP, port: 3128}   # fleet-egress
+    # the hub's public address (the node link, passes, the relay check): the
+    # load balancer's IP, the same one render.py's --egress-allow names. The
+    # TEST-NET placeholder allows nothing — replace it at apply (README.md).
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.1/32
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: user-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: user
+  policyTypes: [Ingress]
+  ingress:
+    # the door (the entry port, from outside through the load balancer) and the
+    # in-cluster sshd; never another user pod's other ports
+    - ports:
+        - {protocol: TCP, port: 22022}
+        - {protocol: TCP, port: 22}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ops-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: ops
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: user
+      ports:
+        - {protocol: TCP, port: 8788}
+        - {protocol: TCP, port: 3128}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ops-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: ops
+  policyTypes: [Egress]
+  egress:
+    # out to the hub's Service, the Singapore relays and the allowed hosts:
+    # anywhere but the cloud metadata address
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 100.100.100.200/32

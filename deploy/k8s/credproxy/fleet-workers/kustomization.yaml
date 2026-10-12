@@ -1,0 +1,39 @@
+# The cluster credential proxy a second time, beside the user pods in
+# fleet-workers (claude-fleet#3547, EPIC #3500 C2): Service fleet-credproxy:80,
+# reached from inside the cluster only — no Ingress. A user pod's sessions hold
+# a hub pass (fcp-h1.) and nothing else; this proxy swaps it for the account's
+# short-lived token, so no subscription credential ever enters a user pod.
+# Applied by a person (../README.md «fleet-workers»), never by hub-deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet-workers
+resources:
+  - ../base
+images:
+  - name: ccquota
+    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/ccquota
+patches:
+  - path: deployment-env.yaml
+  # in-cluster only: the base's Ingress is new-deploy's public path, not this one's
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ccquota-credproxy
+  # the names the fleet-workers contract uses (EPIC #3500 C2: fleet-credproxy:80)
+  - target: {kind: Deployment, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy
+  - target: {kind: Service, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy
+  - target: {kind: PodDisruptionBudget, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy
