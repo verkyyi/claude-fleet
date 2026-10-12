@@ -811,3 +811,47 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   `off` 也拒绝——人自己的 Mac 归人自己。
 - **要留着**：`sudo touch /var/db/fleet-node/spotlight.keep`，守护不再动它，体检读 PASS「kept on」。
 - BREAK-IT `spotlight-on`；`fleet-spotlight-selftest.sh`。
+
+## 20. root 只剩一个最小核心（EPIC #3500 C13，#3555）
+
+节点守护连入口、巡检、更新，今天整个跑在 root 下：它任何一处被骗，整台机器就没了。
+这一步（迁移步 B）把「要 root 才能做的事」收进**一个**程序，`bin/fleet-node-core.py`
+（Mac `com.claude-fleet.node-core`，Linux 主机 `fleet-node-core.service`，同一个程序），
+守护的特权动作逐个改成请它做，先和 root 守护并存；C14（#3556）再把守护降成
+`_fleetnode`。
+
+- **只听本机节点守护**：不开网络端口、不读入口发来的任何东西；本地 socket
+  `/var/run/fleet-node-core.sock`（0660，组是节点守护的），每个连接先由内核报对端 uid
+  （macOS `LOCAL_PEERCRED`，Linux `SO_PEERCRED`）——不是节点守护（`FLEET_NODE_CORE_PEER`；
+  默认 `_fleetnode` / `fleetnode`，C14 之前没有这个账号时是 root）就在读请求前断开、记一行。
+- **写死的动作表**（请求一行 `{op, args}`，多一个键也拒，协议在 `bin/fleet_node_core.py`）：
+
+  | op | args | 做什么 |
+  |---|---|---|
+  | `run-as` | login, job | 以该登录身份起它的一个任务：账号任务表（运行时的 launchd 模板）里的名字，或 `svc:<name>`（登记表）——从不收 argv；同一连接先回 `{"ok", "pid"}`，结束时回 `{"exit": rc}`；每个 (login, job) 一份 |
+  | `stop-as` | login, job | 停核心自己起的那个任务（进程组 TERM，5 秒后 KILL） |
+  | `exec-as` | login, argv | 以该登录身份跑一次，回 rc 与输出；argv[0] 必须是 `<current>/bin/` 下 root 的文件（runas.go prepCmd 的规矩搬进核心） |
+  | `kill` | pid | 只限受管登录的进程或核心自己的任务 |
+  | `memguard` | level | `fleet-memguard.sh --once`（once · report） |
+  | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`） |
+  | `switch` | sha | `<state>/staging/<sha>/`（非 root 更新器放的）或 `<root>/<sha>/`：用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；staging 改归 root、移进 `<root>/<sha>/`，再 `.prev` = 旧、`current` = 新 |
+  | `rollback` | — | `current` ⇄ `.prev`，目标同样复核 |
+
+  登录必须在 `accounts.json` 里受管、不是 uid 0。表外一律回 `{"refused": op}`、什么都不执行，
+  `/var/log/fleet-node-core.log` 记一行（时间 · 对端 uid · op · 参数摘要 · 为什么）；一分钟
+  超过 `FLEET_NODE_CORE_ALERT_N`（10）次只写一份 `<state>/core/alert.json`，守护的
+  `status` 的 `core` 行带出。账号接管 / 放回不在表里：只有人用 sudo 做。
+- **谁请它**：核心答应时，守护的账号任务（`run-as`）和 memguard / spotlight（表里
+  `"core"` 一项）由守护起一个只会「请」的子进程 `fleet-node-core.py call … --follow`——
+  它的退出码就是任务的，给它 TERM 就先请核心 `stop-as`；更新器的切换、回滚和以登录身份
+  跑的那几步（`as_login`）也请核心。仍在老路上的：定时 agent 任务、诊断与清理、凭据代理的
+  root 部分、ccquota agent 的开窗——随 C14 逐个搬。
+- **装与卸**：`sudo FLEET_NODE_CORE=1 fleet node install`（第「核心」步，在「守护」之前）装上，
+  `FLEET_NODE_CORE=0` 卸掉；`fleet-node-core.py status [--check]` 看它。**没有核心的机器走
+  今天的路，字节不变**（共同约定 11）：`FLEET_NODE_CORE=0` 也一样。
+- **已知的缺口**：Mac 上 `bin/ccquota` 在 stage 时被机器身份重签，字节不再等于工件，核心
+  只能认「codesign 通过」；C14 让更新器离开 root 前，重签这一步要搬进核心。
+- 新加一个特权动作 = 先加 BREAK-IT 行看它红，再进表。BREAK-IT：`root-core-off-list` ·
+  `root-core-wrong-peer` · `root-core-unsigned-switch`（`bin/fleet-break-it-core-selftest.sh`）；
+  `bin/fleet-node-core-selftest.sh`，`fleet-node-supervisor-selftest.py` 的 `T_RootCore`
+  （有核心）与其余各组（无核心）。
