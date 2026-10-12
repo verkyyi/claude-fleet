@@ -6,8 +6,8 @@ description: 把一台新 Mac 准备成能无人值守跑会话的机器——�
 # mac-node-prep — 新 Mac 上架前的准备
 
 占位：`<NODE>` 这台机器的名字 · `<ADMIN_LOGIN>` 它的管理员登录。没有值就问人，不猜。
-权威出处：`docs/HOST.md`「An unattended Mac」「All at once: fleet-host-tune.sh」「Verify」；
-`docs/MANAGED-NODE.md` §6（完全磁盘访问、远程登录）、§19（Spotlight）；`docs/BREAK-IT.md` 行
+权威出处：`docs/dev/HOST.md`「An unattended Mac」「All at once: fleet-host-tune.sh」「Verify」；
+`docs/dev/MANAGED-NODE.md` §6（完全磁盘访问、远程登录）、§19（Spotlight）；`docs/dev/BREAK-IT.md` 行
 `tcc-prompt-wedge`、`node-fda-probe-hang`。这里只列顺序和判据，细节以它们为准。
 
 ## 什么时候用
@@ -38,7 +38,7 @@ systemsetup -getremotelogin                # 需要 sudo
 2. **一条命令做能用命令做的**（已装 fleet 时）：
    `bash ~/.claude/fleet/bin/fleet-host-tune.sh --apply`（逐项问 y/N；`--yes` 不问）——
    spotlight · nofile · sleep · siri · network（双网卡只留有线）。每个 CHANGE 行打印它的撤销命令，**记下来**。
-   还没装 fleet：照 `docs/HOST.md` 手动执行同样几条：
+   还没装 fleet：照 `docs/dev/HOST.md` 手动执行同样几条：
    ```sh
    sudo pmset -a sleep 0 autorestart 1 womp 1
    sudo systemsetup -setrestartfreeze on
@@ -53,7 +53,7 @@ systemsetup -getremotelogin                # 需要 sudo
    - 锁屏 / 屏保：显示器可以睡，但别让「需要密码」把无人值守的 GUI 授权步骤挡在锁屏后。
    - 系统设置 › 通用 › 登录项：去掉会开窗口的程序；控制台只跑 fleet 的 tmux。
 4. **授权弹窗——先点掉，别等它卡住**：开号脚本碰到受保护的东西时 macOS 弹框，屏幕前没人点，整机经 sandboxd 的检查会挂住（BREAK-IT `tcc-prompt-wedge`）。
-   上架时人在场，把需要的授权一次给齐：入网（`mac-node-enroll`）装完后照 `docs/MANAGED-NODE.md` §6「要人做一次（每台机器）」给管理员 agent 加「完全磁盘访问」，给守护的 python3 加同样的授权。
+   上架时人在场，把需要的授权一次给齐：入网（`mac-node-enroll`）装完后照 `docs/dev/MANAGED-NODE.md` §6「要人做一次（每台机器）」给管理员 agent 加「完全磁盘访问」，给守护的 python3 加同样的授权。
 5. 托管机器上 Spotlight 由守护的 `spotlight` 任务每小时关一次；要保留：`sudo touch /var/db/fleet-node/spotlight.keep`。
 
 ## 怎么验收

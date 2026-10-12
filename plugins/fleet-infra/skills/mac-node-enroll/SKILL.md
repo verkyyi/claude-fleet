@@ -7,7 +7,7 @@ description: 让一台准备好的 Mac 加入入口、成为托管机器——�
 
 占位：`<HUB_URL>` 入口地址（机器上读 `grep FLEET_HUB_URL ~/.config/claude-fleet/fleet.conf`，或问人）·
 `<NODE>` 机器名 · `<LOGIN>` 要交给守护的登录 · `<ADMIN_LOGIN>` 管理员登录。
-权威出处：`docs/MANAGED-NODE.md` §2 加入码、§6 一个节点程序（`account adopt` / `release`）、§7「机器体检」、
+权威出处：`docs/dev/MANAGED-NODE.md` §2 加入码、§6 一个节点程序（`account adopt` / `release`）、§7「机器体检」、
 §8 一条命令装成托管机器、§15 破坏能力 = 登录的能力。下面不复述步骤表，以 §8 为准。
 
 ## 什么时候用
