@@ -223,6 +223,9 @@ func migrate(db *sql.DB) error {
 		{"endpoints", "prev_token_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "prev_token_until", "TEXT"},
 		{"endpoints", "token_rotated_at", "TEXT"},
+		// An invite bound to an email address (claude-fleet#3603): '' on every
+		// invite made before, which binds none.
+		{"fleet_invites", "email", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)

@@ -225,15 +225,12 @@ var reservedLogins = map[string]bool{
 // username another principal already holds falls back there too, in the
 // store). Only a GitHub principal: any other id has no username to borrow.
 func (s *Server) preferredLogin(principal, displayName string) string {
-	id, ok := githubIDOf(principal)
-	if !ok {
+	if !isPerson(principal) {
 		return ""
 	}
 	name := displayName
-	if s.Store != nil {
-		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.Login != "" {
-			name = u.Login
-		}
+	if l := s.personLogin(principal); l != "" {
+		name = l
 	}
 	name = strings.ToLower(strings.TrimSpace(name))
 	if len(name) > control.MaxLoginLen || !control.ValidLogin(name) || reservedLogins[name] {
@@ -483,7 +480,7 @@ func hasFold(list []string, v string) bool {
 // (handOverLegacyMap, claude-fleet#2108): an old map entry naming the old
 // identity gives way, and the re-key drops it.
 func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string, now time.Time, remap bool) (*store.RekeyResult, error) {
-	if _, ok := githubIDOf(principal); !ok {
+	if !isPerson(principal) {
 		return nil, nil
 	}
 	owner, err := s.Store.PrincipalByLogin(login)
@@ -496,8 +493,8 @@ func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string
 	if strings.EqualFold(owner.ID, principal) {
 		return nil, nil
 	}
-	if _, gh := githubIDOf(owner.ID); gh {
-		return nil, &errLoginHeld{login: login, owner: s.personName(owner.ID)}
+	if isPerson(owner.ID) {
+		return nil, &errLoginHeld{login: login, word: personWord(owner.ID), owner: s.personName(owner.ID)}
 	}
 	if l, ok := s.principalLogins()[strings.ToLower(owner.ID)]; ok && l == login && !remap {
 		// The operator still maps the old identity to it: their word stands
@@ -515,19 +512,17 @@ func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string
 }
 
 // errLoginHeld: the mapped login is another GitHub person's on the hub.
-type errLoginHeld struct{ login, owner string }
+type errLoginHeld struct{ login, word, owner string }
 
 func (e *errLoginHeld) Error() string {
-	return fmt.Sprintf("login %s belongs to another GitHub person, %s", e.login, e.owner)
+	return fmt.Sprintf("login %s belongs to another %s, %s", e.login, e.word, e.owner)
 }
 
-// personName is how a principal reads to a person: a GitHub person's
-// username and id, else the id.
+// personName is how a principal reads to a person: a person's name on the
+// list and id, else the id.
 func (s *Server) personName(pid string) string {
-	if id, ok := githubIDOf(pid); ok && s.Store != nil {
-		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.Login != "" {
-			return u.Login + " (" + pid + ")"
-		}
+	if l := s.personLogin(pid); l != "" {
+		return l + " (" + pid + ")"
 	}
 	if s.Store != nil {
 		if p, err := s.Store.Principal(pid); err == nil && p.DisplayName != "" && !strings.EqualFold(p.DisplayName, pid) {
@@ -567,10 +562,8 @@ func (s *Server) ensurePerson(r *http.Request) string {
 // by hand, and two spellings of one principal are one person here. The map
 // is a handful of entries; a scan is fine.
 func (s *Server) mappedLoginFor(principal string) (string, bool) {
-	if id, ok := githubIDOf(principal); ok && s.Store != nil {
-		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.MachineLogin != "" {
-			return u.MachineLogin, true
-		}
+	if u, err := s.personRow(principal); err == nil && u != nil && u.MachineLogin != "" {
+		return u.MachineLogin, true
 	}
 	for pid, login := range s.principalLogins() {
 		if strings.EqualFold(pid, principal) {

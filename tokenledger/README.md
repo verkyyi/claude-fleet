@@ -850,6 +850,21 @@ admin only.) A name GitHub does not know is refused, never added; a deploy
 admin is listed but read-only — it cannot be added as a user or removed. Every
 add, remove and refusal is a `hub_audit` row.
 
+**An account is not a GitHub account** (claude-fleet#3603). A person is one
+principal, kept forever — `gh:<GitHub ID>` for everyone who came in through
+GitHub (unchanged by the upgrade: migration 2 re-keys `hub_users` on it and
+adds each one a `github` row in `hub_identities`), `p:<uuid>` for anyone since
+who came in another way. GitHub, an address, WeChat are ways of signing in
+hung on that one account; a person keeps at least one, and the hub's 配置 page
+lists them under 「登录方式」 (`/v1/me/identities`: add GitHub by signing in
+with it, an admin adds an address of their own, remove any but the last). An
+invite can be bound to an address instead of a GitHub username
+(`POST /v1/fleet/invites {"email": …}`) — the way someone with no GitHub gets
+in; nobody becomes a new account without an invite. `CCQUOTA_ADMINS` names
+admins the GitHub list cannot: comma-separated principals or addresses, beside
+`CCQUOTA_GITHUB_ADMINS`. In the code "is this a person" is `isPerson` and
+nothing else (`TestNoGHPrefixOutsideIdentity`, BREAK-IT `account-gh-only-check`).
+
 The settings that used to be variables are in the database too, read through
 `Server.setting(key)` (the stored value, else the default) and changed with `fleet hub set <key> <value>`
 (`PUT /v1/fleet/settings`); `fleet hub settings` lists what applies and where

@@ -43,7 +43,7 @@ func (s *Server) credPolicyReview(settings map[string]string) (policyMigration, 
 		return review, err
 	}
 	for _, u := range registered {
-		peopleByID[githubPrincipal(u.GitHubID)] = u.Login
+		peopleByID[u.PrincipalID] = u.Login
 	}
 	for id, label := range peopleByID {
 		k := credUserKey(id)

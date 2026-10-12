@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -105,7 +106,7 @@ func TestMigration1_RemovesOnlyTheCompanyBusiness(t *testing.T) {
 		t.Errorf("%d shipper enrollments still authenticate", n)
 	}
 	ms, err := s.Migrations()
-	if err != nil || len(ms) != 1 || ms[0].ID != 1 {
+	if err != nil || len(ms) != len(migrations) || ms[0].ID != 1 {
 		t.Fatalf("hub_migrations = %+v, %v", ms, err)
 	}
 	for _, want := range []string{`"deleted.usage_events":6`, `"dropped.repo_issues":2`, `"retired.shippers":3`} {
@@ -119,7 +120,7 @@ func TestMigration1_RemovesOnlyTheCompanyBusiness(t *testing.T) {
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if count(`SELECT COUNT(*) FROM usage_events`) != again || count(`SELECT COUNT(*) FROM hub_migrations`) != 1 {
+	if count(`SELECT COUNT(*) FROM usage_events`) != again || count(`SELECT COUNT(*) FROM hub_migrations`) != len(migrations) {
 		t.Error("the migration ran twice")
 	}
 }
@@ -129,7 +130,7 @@ func TestMigration1_RemovesOnlyTheCompanyBusiness(t *testing.T) {
 func TestMigration1_FreshDatabase(t *testing.T) {
 	s := newStore(t)
 	ms, err := s.Migrations()
-	if err != nil || len(ms) != 1 || ms[0].Detail != "{}" {
+	if err != nil || len(ms) != len(migrations) || ms[0].Detail != "{}" {
 		t.Fatalf("hub_migrations on a fresh database = %+v, %v", ms, err)
 	}
 }
@@ -217,5 +218,108 @@ func TestMigration1_ForeignKeysHold(t *testing.T) {
 	}
 	if n := count(`SELECT COUNT(*) FROM pragma_foreign_key_check`); n != 0 {
 		t.Errorf("%d foreign key violations after the migration", n)
+	}
+}
+
+// Migration 2 (claude-fleet#3603): a people list keyed on github_id becomes
+// one keyed on the principal, every person the same gh:<id> they were — row
+// for row, field for field — with a github identity each, and nothing else
+// on the list moves. Twice is once.
+func TestMigration2_HubUsersKeepEveryone(t *testing.T) {
+	s := newStore(t)
+	db := s.DB()
+	last := "2026-10-01T08:00:00Z"
+	for _, q := range []string{
+		`DROP TABLE hub_users`,
+		s.d.ddl(`CREATE TABLE hub_users (
+  github_id     INTEGER PRIMARY KEY,
+  login         TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  machine_login TEXT NOT NULL DEFAULT '',
+  added_by      TEXT NOT NULL DEFAULT '',
+  added_at      TEXT NOT NULL,
+  last_seen     TEXT
+)`),
+		`INSERT INTO hub_users VALUES (100, 'verkyyi', 'admin', 'verky', 'deploy', '2026-01-02T03:04:05Z', '` + last + `')`,
+		`INSERT INTO hub_users VALUES (3002, 'vincentgh', 'user', '', 'verkyyi (gh:100)', '2026-02-03T04:05:06Z', NULL)`,
+		`DELETE FROM hub_migrations WHERE id = 2`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	type snap struct {
+		Login, Role, Machine, AddedBy, Added string
+		Last                                 bool
+	}
+	want := map[int64]snap{
+		100:  {"verkyyi", "admin", "verky", "deploy", "2026-01-02T03:04:05Z", true},
+		3002: {"vincentgh", "user", "", "verkyyi (gh:100)", "2026-02-03T04:05:06Z", false},
+	}
+	for i := 0; i < 2; i++ {
+		if err := runMigrations(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, w := range want {
+		u, err := s.HubUserByID(id)
+		if err != nil || u == nil {
+			t.Fatalf("GitHub ID %d after the migration: %+v, %v", id, u, err)
+		}
+		pid := fmt.Sprintf("gh:%d", id)
+		got := snap{u.Login, u.Role, u.MachineLogin, u.AddedBy, u.AddedAt.UTC().Format(time.RFC3339), u.LastSeen != nil}
+		if u.PrincipalID != pid || got != w {
+			t.Errorf("GitHub ID %d: %s %+v, want %s %+v", id, u.PrincipalID, got, pid, w)
+		}
+		if by, _ := s.HubUserByPrincipal(pid); by == nil || by.GitHubID != id {
+			t.Errorf("%s by principal: %+v", pid, by)
+		}
+		if owner, err := s.IdentityPrincipal(IdentityGitHub, fmt.Sprint(id)); err != nil || owner != pid {
+			t.Errorf("github identity %d lets in %q (%v), want %s", id, owner, err, pid)
+		}
+	}
+	if users, _ := s.HubUsers(); len(users) != 2 {
+		t.Errorf("the list has %d people after the migration, want 2", len(users))
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM hub_identities`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("%d identities (%v), want one per person", n, err)
+	}
+	// The new shape takes a person with no GitHub.
+	if err := s.UpsertHubUser(HubUser{PrincipalID: "p:0f0f0f0f-0000-4000-8000-000000000001", Login: "Alice", Role: RoleUser}); err != nil {
+		t.Fatalf("a person with no GitHub: %v", err)
+	}
+}
+
+// Identities: one way lets in one person; a person keeps at least one.
+func TestHubIdentities(t *testing.T) {
+	s := newStore(t)
+	a, b := "p:0f0f0f0f-0000-4000-8000-00000000000a", "p:0f0f0f0f-0000-4000-8000-00000000000b"
+	if err := s.AddHubIdentity(HubIdentity{Kind: IdentityEmail, Subject: "Alice@Example.com ", PrincipalID: a}); err != nil {
+		t.Fatal(err)
+	}
+	if pid, _ := s.IdentityPrincipal(IdentityEmail, "alice@example.COM"); pid != a {
+		t.Fatalf("the address lets in %q, want %s (case folds)", pid, a)
+	}
+	if err := s.AddHubIdentity(HubIdentity{Kind: IdentityEmail, Subject: "alice@example.com", PrincipalID: b}); err != ErrIdentityTaken {
+		t.Fatalf("another person took the same address: %v", err)
+	}
+	if _, err := s.RemoveHubIdentity(a, IdentityEmail, "alice@example.com"); err != ErrLastIdentity {
+		t.Fatalf("removed the only way in: %v", err)
+	}
+	if err := s.AddHubIdentity(HubIdentity{Kind: IdentityGitHub, Subject: "777", PrincipalID: a}); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := s.HubIdentities(a); len(ids) != 2 || ids[0].Kind != IdentityEmail || ids[1].Kind != IdentityGitHub {
+		t.Fatalf("identities = %+v", ids)
+	}
+	if ok, err := s.RemoveHubIdentity(a, IdentityEmail, "ALICE@example.com"); !ok || err != nil {
+		t.Fatalf("remove one of two: %v %v", ok, err)
+	}
+	if ok, err := s.RemoveHubIdentity(b, IdentityGitHub, "777"); ok || err != nil {
+		t.Fatalf("someone else removed a's GitHub: %v %v", ok, err)
+	}
+	if err := s.AddHubIdentity(HubIdentity{Kind: "myspace", Subject: "x", PrincipalID: a}); err == nil {
+		t.Fatal("an unknown kind was taken")
 	}
 }

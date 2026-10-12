@@ -446,10 +446,8 @@ func (s *Server) entryEnsureNames(now time.Time) {
 // fits or someone else has it.
 func (s *Server) entrySuggestedName(person string) string {
 	var cands []string
-	if gid, ok := githubIDOf(person); ok {
-		if u, err := s.Store.HubUserByID(gid); err == nil && u != nil {
-			cands = append(cands, u.Login)
-		}
+	if l := s.personLogin(person); l != "" {
+		cands = append(cands, l)
 	}
 	if p, err := s.Store.Principal(person); err == nil {
 		cands = append(cands, p.Login)

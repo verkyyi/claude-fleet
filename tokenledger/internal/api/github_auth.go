@@ -101,10 +101,10 @@ const (
 	githubTokenURL     = "https://github.com/login/oauth/access_token"
 	githubAPIBase      = "https://api.github.com"
 
-	// githubPrincipalPrefix makes a GitHub person's principal: gh:<id>.
-	githubPrincipalPrefix = "gh:"
-	// githubSessionSub is the session's subject: the issuer.
-	githubSessionSub = "github"
+	// githubPrincipalPrefix makes a GitHub person's principal: gh:<id> —
+	// the GitHub identity's spelling, made and parsed only here
+	// (githubPrincipal / githubIDOf); "is a person" is isPerson.
+	githubPrincipalPrefix = store.GitHubPrincipalPrefix
 	// githubFlowCookie carries the state and the PKCE verifier from start to
 	// callback, and nowhere else.
 	githubFlowCookie = "ccq_gh_flow"
@@ -228,69 +228,44 @@ func roleOf(ctx context.Context) string {
 	return ""
 }
 
-// githubRole is what the list says about id RIGHT NOW: admin when id is
-// pinned to a name in CCQUOTA_GITHUB_ADMINS, user when it has a user row,
-// "" when neither — refused. A hub_users row saying admin for an ID the
-// deploy no longer names grants nothing: the deploy decides who is admin.
-func (s *Server) githubRole(id int64) (string, error) {
-	for _, name := range s.githubAdmins() {
-		pinned, ok, err := s.Store.PinnedID(name)
-		if err != nil {
-			return "", err
-		}
-		if ok && pinned == id {
-			return roleAdmin, nil
-		}
-	}
-	u, err := s.Store.HubUserByID(id)
-	if err != nil {
-		return "", err
-	}
-	if u != nil && u.Role == roleUser {
-		return roleUser, nil
-	}
-	return "", nil
-}
-
-// githubSession is the GitHub session behind r, if its cookie verifies. It
-// says nothing about the list; viewerOnly asks githubRole.
-func (s *Server) githubSession(r *http.Request) (*authz.Session, int64, bool) {
+// personSession is the signed-in person behind r, if its cookie verifies.
+// It says nothing about the list; viewerOnly asks personRole.
+func (s *Server) personSession(r *http.Request) (*authz.Session, string, bool) {
 	if !s.GitHub.ready() {
-		return nil, 0, false
+		return nil, "", false
 	}
 	c, err := r.Cookie(authz.CookieName)
 	if err != nil {
-		return nil, 0, false
+		return nil, "", false
 	}
-	return s.githubSessionValue(c.Value)
+	return s.personSessionValue(c.Value)
 }
 
-// githubSessionValue verifies one session value — a cookie's, or a CLI's
-// bearer (sshRelayHTTPIdentity) — and parses the person's ID out of it.
-func (s *Server) githubSessionValue(v string) (*authz.Session, int64, bool) {
+// personSessionValue verifies one session value — a cookie's, or a CLI's
+// bearer (sshRelayHTTPIdentity) — and reads the person out of it: the
+// session's UID is their principal, its Sub the way they signed in
+// (claude-fleet#3603). A cookie from before says Sub "github" and UID
+// gh:<id> — exactly a GitHub sign-in's today, so it reads as one.
+func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
 	if !s.GitHub.ready() || v == "" {
-		return nil, 0, false
+		return nil, "", false
 	}
 	sess, err := authz.VerifySession(v, s.GitHub.sessionKey(), time.Now())
-	if err != nil || sess.Sub != githubSessionSub {
-		return nil, 0, false
+	if err != nil || !store.KnownIdentityKind(sess.Sub) || !isPerson(sess.UID) {
+		return nil, "", false
 	}
-	id, ok := githubIDOf(sess.UID)
-	if !ok {
-		return nil, 0, false
-	}
-	return sess, id, true
+	return sess, sess.UID, true
 }
 
-// githubAdmit is viewerOnly's GitHub branch: ok=false when r carries no
-// GitHub session (the gate goes on to its other doors); handled=true when
-// it answered the request itself (a refusal or an error).
-func (s *Server) githubAdmit(w http.ResponseWriter, r *http.Request) (ctx context.Context, ok, handled bool) {
-	sess, id, ok := s.githubSession(r)
+// personAdmit is viewerOnly's signed-in-person branch: ok=false when r
+// carries no person's session (the gate goes on to its other doors);
+// handled=true when it answered the request itself (a refusal or an error).
+func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx context.Context, ok, handled bool) {
+	sess, pid, ok := s.personSession(r)
 	if !ok {
 		return nil, false, false
 	}
-	role, err := s.githubRole(id)
+	role, err := s.personRole(pid)
 	if err != nil {
 		// Fail closed: a list that cannot be read admits no one.
 		httpError(w, http.StatusInternalServerError, "could not read the people list")
@@ -311,6 +286,20 @@ func (s *Server) githubAdmit(w http.ResponseWriter, r *http.Request) (ctx contex
 	return ctx, true, false
 }
 
+// personCookie is the session cookie for a person signed in by kind.
+func (s *Server) personCookie(r *http.Request, kind, pid, name, role string, now time.Time) *http.Cookie {
+	return &http.Cookie{
+		Name:  authz.CookieName,
+		Value: authz.SignRole(kind, pid, name, role, s.GitHub.sessionKey(), now, s.GitHub.ttl()),
+		Path:  "/",
+		// Host-only: no Domain.
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isHTTPS(r),
+		MaxAge:   int(s.GitHub.ttl().Seconds()),
+	}
+}
+
 // handleSignin is the sign-in page. Public: it is the way in.
 func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 	if !s.GitHub.ready() {
@@ -323,8 +312,8 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Already in: the page has nothing to offer.
-	if _, id, ok := s.githubSession(r); ok {
-		if role, err := s.githubRole(id); err == nil && role != "" {
+	if _, pid, ok := s.personSession(r); ok {
+		if role, err := s.personRole(pid); err == nil && role != "" {
 			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
@@ -360,7 +349,15 @@ func (s *Server) handleGitHubStart(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "could not start sign-in")
 		return
 	}
-	flow, _ := json.Marshal(githubFlow{State: state, Verifier: verifier, Exp: time.Now().Add(githubFlowTTL).Unix()})
+	f := githubFlow{State: state, Verifier: verifier, Exp: time.Now().Add(githubFlowTTL).Unix()}
+	if r.URL.Query().Get("link") == "1" {
+		// 登录方式 · 加 GitHub (claude-fleet#3603): the account this comes
+		// back with is hung on the person signed in now, not signed in as.
+		if _, pid, ok := s.personSession(r); ok {
+			f.Link = pid
+		}
+	}
+	flow, _ := json.Marshal(f)
 	http.SetCookie(w, &http.Cookie{
 		Name: githubFlowCookie, Value: signBlob(flow, s.GitHub.sessionKey()), Path: githubFlowPath,
 		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
@@ -388,6 +385,9 @@ type githubFlow struct {
 	State    string `json:"s"`
 	Verifier string `json:"v"`
 	Exp      int64  `json:"e"`
+	// Link is the person a ?link=1 start was made by: the GitHub account
+	// is added to them (githubLink) instead of signing anyone in.
+	Link string `json:"l,omitempty"`
 }
 
 // handleGitHubCallback finishes the sign-in: state, code exchange, who it
@@ -430,8 +430,18 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	if flow.Link != "" {
+		// Still the same person, still on the list — else it is an ordinary
+		// sign-in.
+		if _, pid, ok := s.personSession(r); ok && pid == flow.Link {
+			if role, err := s.personRole(pid); err == nil && role != "" {
+				http.Redirect(w, r, s.githubLink(pid, id, login, now), http.StatusFound)
+				return
+			}
+		}
+	}
 	invite := takeInviteCookie(w, r)
-	role, refusal, err := s.githubAdmitSignIn(id, login, now, invite)
+	principal, role, refusal, err := s.githubAdmitSignIn(id, login, now, invite)
 	if err != nil {
 		log.Printf("github sign-in of %s (%d): %v", login, id, err)
 		httpError(w, http.StatusInternalServerError, "could not read the people list")
@@ -447,17 +457,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		s.githubDeny(w, r, refusal, login)
 		return
 	}
-	principal := githubPrincipal(id)
-	http.SetCookie(w, &http.Cookie{
-		Name:  authz.CookieName,
-		Value: authz.SignRole(githubSessionSub, principal, login, role, s.GitHub.sessionKey(), now, s.GitHub.ttl()),
-		Path:  "/",
-		// Host-only: no Domain.
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   isHTTPS(r),
-		MaxAge:   int(s.GitHub.ttl().Seconds()),
-	})
+	http.SetCookie(w, s.personCookie(r, store.IdentityGitHub, principal, login, role, now))
 	// The first sign-in records the person and places their logins: the
 	// machine login an admin set for them (claude-fleet#1986), adopted on
 	// every machine that runs it.
@@ -478,12 +478,21 @@ const (
 )
 
 // githubAdmitSignIn decides a sign-in by GitHub ID and username, pins the
-// name the first time it is seen, and audits the outcome. role "" is a
-// refusal, named by the second result. invite is the code the sign-in
+// name the first time it is seen, and audits the outcome. The person is the
+// one whose github identity the ID is, else gh:<id> (claude-fleet#3603).
+// role "" is a refusal, named by refusal. invite is the code the sign-in
 // carried (claude-fleet#2261), "" for none: it lets in a person the list does
 // not name yet, and is never spent on one it does.
-func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time, invite string) (role, refusal string, err error) {
-	actor := githubPrincipal(id)
+func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time, invite string) (pid, role, refusal string, err error) {
+	pid, err = s.githubPersonOf(id)
+	if err != nil {
+		return "", "", "", err
+	}
+	role, refusal, err = s.githubAdmitAs(pid, id, login, now, invite)
+	return pid, role, refusal, err
+}
+
+func (s *Server) githubAdmitAs(actor string, id int64, login string, now time.Time, invite string) (role, refusal string, err error) {
 	target := login + " (" + actor + ")"
 	pinned, known, err := s.Store.PinnedID(login)
 	if err != nil {
@@ -508,12 +517,12 @@ func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time, invite
 		}
 		known = true
 	}
-	role, err = s.githubRole(id)
+	role, err = s.personRole(actor)
 	if err != nil {
 		return "", "", err
 	}
 	if role == "" && invite != "" {
-		if refusal, err := s.admitInvite(id, login, invite, now); err != nil || refusal != "" {
+		if refusal, err := s.admitInviteAs(actor, store.IdentityGitHub, fmt.Sprint(id), login, invite, now); err != nil || refusal != "" {
 			return "", refusal, err
 		}
 		role = roleUser
@@ -530,11 +539,22 @@ func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time, invite
 		}
 	}
 	if role == roleAdmin {
-		if err := s.recordAdmin(id, login, now); err != nil {
+		if err := s.recordAdminAs(actor, id, login, now); err != nil {
 			return "", "", err
 		}
 	}
-	if err := s.Store.TouchHubUser(id, login, now); err != nil {
+	if err := s.Store.AddHubIdentity(store.HubIdentity{Kind: store.IdentityGitHub, Subject: fmt.Sprint(id),
+		PrincipalID: actor, VerifiedAt: now, AddedBy: "signin"}); err != nil {
+		return "", "", err
+	}
+	if _, isGH := githubIDOf(actor); isGH {
+		err = s.Store.TouchHubUser(id, login, now)
+	} else {
+		// Someone who came in another way and hung GitHub on: their name
+		// on the list is theirs, not GitHub's.
+		err = s.Store.TouchHubPrincipal(actor, "", now)
+	}
+	if err != nil {
 		return "", "", err
 	}
 	_ = s.Store.HubAudit(actor, "signin", target, "ok", "as "+role, now)
@@ -556,19 +576,35 @@ func (s *Server) pinName(login string, id int64, actor string, now time.Time) er
 	return nil
 }
 
-// recordAdmin keeps an admin's row on the list, for the people page: the
-// deploy decides who is admin (githubRole), the row records them.
+// recordAdmin keeps a GitHub admin's row on the list, for the people page:
+// the deploy decides who is admin (personRole), the row records them.
 func (s *Server) recordAdmin(id int64, login string, now time.Time) error {
-	u, err := s.Store.HubUserByID(id)
+	pid, err := s.githubPersonOf(id)
 	if err != nil {
 		return err
 	}
-	row := store.HubUser{GitHubID: id, Login: login, Role: roleAdmin, AddedBy: "deploy", AddedAt: now}
+	return s.recordAdminAs(pid, id, login, now)
+}
+
+// recordAdminAs is recordAdmin for the person pid; id is their GitHub ID, 0
+// for none.
+func (s *Server) recordAdminAs(pid string, id int64, login string, now time.Time) error {
+	u, err := s.Store.HubUserByPrincipal(pid)
+	if err != nil {
+		return err
+	}
+	row := store.HubUser{PrincipalID: pid, Login: login, Role: roleAdmin, AddedBy: "deploy", AddedAt: now}
+	if gid, ok := githubIDOf(pid); ok && gid == id {
+		row.GitHubID = id
+	}
 	if u != nil {
-		if u.Role == roleAdmin && u.Login == login {
+		if u.Role == roleAdmin && (u.Login == login || login == "") {
 			return nil
 		}
 		row.MachineLogin, row.AddedBy, row.AddedAt = u.MachineLogin, u.AddedBy, u.AddedAt
+		if _, isGH := githubIDOf(pid); login == "" || !isGH {
+			row.Login = u.Login // a name they chose is theirs, not GitHub's
+		}
 	}
 	return s.Store.UpsertHubUser(row)
 }

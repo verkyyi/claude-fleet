@@ -137,7 +137,7 @@ func TestFleetUsers_DeployAdminReadOnly(t *testing.T) {
 	if code, body := h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"VerkyYi"}`, nil); code != http.StatusConflict {
 		t.Fatalf("add deploy admin = %d %v", code, body)
 	}
-	if role, _ := h.srv.githubRole(ghAdmin.ID); role != roleAdmin {
+	if role, _ := h.srv.personRole(githubPrincipal(ghAdmin.ID)); role != roleAdmin {
 		t.Fatalf("admin's role = %q after the attempts", role)
 	}
 	code, body := h.call(t, http.MethodGet, "/v1/fleet/users", "", nil)
@@ -430,8 +430,8 @@ func TestHubSettings_LangAndBareID(t *testing.T) {
 	if code, body := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"user.200.lang","value":"zh"}`, nil); code != http.StatusOK {
 		t.Fatalf("lang = %d %v", code, body)
 	}
-	if set, _ := h.srv.Store.FleetSettings(); set[langSettingKey(200)] != "zh-CN" {
-		t.Fatalf("stored lang = %q", set[langSettingKey(200)])
+	if set, _ := h.srv.Store.FleetSettings(); set[langSettingKey(githubPrincipal(200))] != "zh-CN" {
+		t.Fatalf("stored lang = %q", set[langSettingKey(githubPrincipal(200))])
 	}
 	if code, _ := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"user.200.lang","value":"klingon"}`, nil); code != http.StatusBadRequest {
 		t.Fatalf("bad lang = %d", code)

@@ -359,10 +359,8 @@ func (s *Server) spareDisplayName(principal, displayName string) string {
 	if strings.TrimSpace(displayName) != "" {
 		return displayName
 	}
-	if id, ok := githubIDOf(principal); ok {
-		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.Login != "" {
-			return u.Login
-		}
+	if l := s.personLogin(principal); l != "" {
+		return l
 	}
 	return principal
 }
