@@ -700,7 +700,7 @@ answer is a person's steps, the reasons live in the sections it points to.
 看哪一行红；在 Mac 上 `fleet login` 续证书、`fleet update` 跟上 stable。
 
 **会话结束了**（`/exit`、⌃C、进程被杀）——窗口留在恢复页：↵ 用同一段对话续上 · r 新开 ·
-q 回收（`docs/dev/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（m5）。fleet 可以恢复。」
+q 回收（`docs/dev/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（mac-a）。fleet 可以恢复。」
 时，下一次 `fleet` 就回到那个恢复页。⌃D / 关终端只是**放到后台**，会话照跑（上一节）。
 
 **额度和用量在哪看**——入口网页：`<入口>/quota`「我的额度」：每个订阅的 5 小时 / 7 天窗、

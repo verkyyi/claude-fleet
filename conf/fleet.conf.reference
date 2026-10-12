@@ -630,7 +630,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # every spawn (issue #563). Claude Code keys trust on the resolved project root — a
 # worktree resolves to its MAIN checkout — so when FLEET_MAIN is not trusted in
 # ~/.claude.json every dispatched worker parks on the dialog with nobody to answer
-# (macmini, 2026-09-12: 7+ min, slot "filled", nothing running). The launcher
+# (mac-a, 2026-09-12: 7+ min, slot "filled", nothing running). The launcher
 # (bin/fleet-claude.sh → bin/fleet-trust.sh) writes
 # projects[FLEET_MAIN].hasTrustDialogAccepted=true (and the worktree's) — SCOPED to
 # the fleet's own checkout, atomic (temp + rename, race-checked against a claude
@@ -1098,7 +1098,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Collector GIT-PHASE budget (issue #552). The git phase reads each live
 # worktree's branch (+ahead/-behind) into global/git_<key>. It used to also run
 # `git status --porcelain` per worktree — a full working-tree scan measured at
-# 4m42s on one 24haowan-monorepo worktree, feeding a dirty flag NO reader ever
+# 4m42s on one a large monorepo worktree, feeding a dirty flag NO reader ever
 # consumed — which pushed the whole tick past its own 60s StartInterval. launchd
 # does not overlap a StartInterval job, so the collector's real cadence decayed
 # to "one tick's duration" (5.3 min observed) and every cache went stale. The
@@ -1906,11 +1906,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # fleet_sessions (bin/fleet-hub-sessions.sh — never on the dash's render path) and
 # the dash mixes those rows in with this machine's, nested under their parents,
 # drawn exactly like the local ones (issue #1475: no machine tag — the row menu's
-# title, `侧边栏 · 在 m4`, names the machine); the top line of the
-# sidebar is the machine status line, `● m5 22 · ● m4 3` (online ●, lost ○ with
+# title, `侧边栏 · 在 mac-b`, names the machine); the top line of the
+# sidebar is the machine status line, `● mac-a 22 · ● mac-b 3` (online ●, lost ○ with
 # how long it has been silent); a machine the hub has lost — or a cache gone
 # stale — keeps its rows, dimmed, in their own group at the bottom,
-# `─ m4 失联 3 分钟 ─`. Read-only: no key acts on them.
+# `─ mac-b 失联 3 分钟 ─`. Read-only: no key acts on them.
 # WHO the hub shows you (issue #1475): your own connection certificate
 # (~/.ssh/fleet-cert, from `fleet login`) first — the hub then lists exactly the
 # machines your active accounts are on, no token needed; without one (or past
@@ -1921,16 +1921,16 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # The machine label is the hostname's first label unless named here, `host=label`
 # pairs.
 # @label=Machine labels @group=accounts @tier=internal @scope=global @edit=str
-#FLEET_NODE_ALIASES="macmini=m5 mini2=m4"
+#FLEET_NODE_ALIASES="mac-a=a mac-b=b"
 # Enter on one of those rows steps INTO it (issue #1424): a proxy window here,
-# `m4 <name>` (its pane header says the same), attached over ssh to that
-# session's window on m4 — typing and
+# `mac-b <name>` (its pane header says the same), attached over ssh to that
+# session's window on mac-b — typing and
 # scrolling are the remote's; closing it only drops the connection; a drop
 # reconnects (through the hub relay, `fleet connect --proxy`, when one is set up).
 # One proxy window per machine. The ssh host is the machine label itself (as your
 # ~/.ssh/config names it) unless mapped here, `label=host` pairs.
 # @label=Machine ssh hosts @group=accounts @tier=internal @scope=fleet @edit=str
-#FLEET_REMOTE_SSH="m4=m4 m5=m5"
+#FLEET_REMOTE_SSH="b=mac-b a=mac-a"
 # The standing connections (bin/fleet-peerlink.py, issue #3482): `all` (the
 # default) keeps one ssh master from this login to every other login of yours the
 # hub lists, held whether or not a view is attached and never closed for want of
@@ -1942,7 +1942,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # this machine's windows from tmux, plus your sessions on the other machines from
 # the hub's cache above — today's path. `hub`: the WHOLE list is the hub's
 # fleet_sessions (that same cache, which since #1480 also holds this machine's
-# rows, each with the window it lives in) — so m5 and m4 show one list, in one
+# rows, each with the window it lives in) — so mac-a and mac-b show one list, in one
 # order, with one set of marks; this machine's rows are simply the ones whose
 # machine is this one. A local row is still painted off its own tmux window —
 # state, needs, glyph, fold, pin, Enter are exactly today's — only WHICH rows is
@@ -1952,7 +1952,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # else `hub` behaves as `local`. `hub` also switches the STATUS BAR (issue
 # #1482): its left part becomes the machine the current window's session is on
 # (this one, or the proxy window's), that window's account quota and the hub
-# (`m4 ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ●`), and the
+# (`mac-b ● │ CPU 16% │ MEM 4.0G/16.0G │ ◉ icloud 5h 63% 周 65% │ 入口 ●`), and the
 # window list goes blank — back to today's bar, and the list restored, on `local`.
 # @label=Sidebar list source @group=status @tier=internal @scope=fleet @edit=str
 #FLEET_SIDEBAR_SOURCE=local
