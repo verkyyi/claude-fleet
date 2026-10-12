@@ -273,7 +273,7 @@ comment there, so the public-repo reason for "off" does not apply.
   comments, and the watermark becomes the hub's newest time (`#max`). The hub
   down ⇒ `入口不通` in the log and the watermark held; what an event missed (the
   hub or this node away, the worker busy) is typed in on the tick after it is
-  back — `docs/BREAK-IT.md` `ticket-hub-down`, `bin/fleet-issue-bridge-hub-selftest.sh`.
+  back — `docs/dev/BREAK-IT.md` `ticket-hub-down`, `bin/fleet-issue-bridge-hub-selftest.sh`.
 
 ## Cost
 
