@@ -1,0 +1,14 @@
+# conf/oss-scan.baseline — the tree's internal-name hits per rule (issue #3572,
+# EPIC #3569 C2): bin/oss-scan.sh --gate reds a PR that raises any of them.
+# A count only goes DOWN: a PR that removes hits (C7 / C8) lowers its line, written
+# by `bin/oss-scan.sh --baseline > conf/oss-scan.baseline`. Allowed (oss-scan.allow)
+# and exempt (`# oss-ok: <理由>`) lines are not counted here.
+tailnet	15
+ts-net	106
+corp-domain	344
+cloud	68
+machine	5084
+user-home	22
+person	676
+gh-owner	595
+private-ipv4	185
