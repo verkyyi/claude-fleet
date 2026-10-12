@@ -65,11 +65,11 @@ func TestAdminAgentRunsFixedResetArgv(t *testing.T) {
 
 func TestRecycleCapableNeedsTheMode(t *testing.T) {
 	home := t.TempDir()
-	if recycleCapable(home) {
+	if recycleCapable(filepath.Join(home, loginRemoveScript)) {
 		t.Fatal("no script, yet recycle capable")
 	}
 	fakeLoginScripts(t, home, "0")
-	if recycleCapable(home) {
+	if recycleCapable(filepath.Join(home, loginRemoveScript)) {
 		t.Fatal("a remove script without --recycle counted as recycling")
 	}
 	if err := validateAccountOp(control.AccountOp{Op: control.AccountReset, Login: "alice", JoinCode: "fj_abcdefghijklmnopqrstuvwxyz"}, ""); err != nil {

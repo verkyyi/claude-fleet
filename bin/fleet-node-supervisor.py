@@ -1068,6 +1068,8 @@ SEAT_PROGRAMS = (
     (re.compile(r"fleet-memguard\.sh\s+--daemon(\s|$)"), "整机 memguard"),
 )
 SEAT_ADMIN_AGENT = re.compile(r"(^|/)ccquota\s+agent(\s|$)")
+# the seat's own unit (#3696): com.claude-fleet.admin-agent, UserName _fleetadmin
+SEAT_ADMIN_UNITS = ("com.claude-fleet.admin-agent", "fleet-admin-agent.service")
 
 
 def _seat_passwd():
@@ -1167,8 +1169,12 @@ def _seat_procs():
 
 def seats_reading(paths):
     """{"machine": [{login, what, where}], "admin": [...], "admin_role": bool}: every
-    fleet machine service (machine) and admin agent (admin) a personal account runs."""
+    fleet machine service (machine) and admin agent (admin) a personal account runs.
+    admin_role: the admin seat is UP — its role account runs the admin agent (its
+    unit's UserName, or a `ccquota agent` process as it, #3696) — so an admin agent
+    still under a person's login is no longer the only one there is."""
     found = {"machine": {}, "admin": {}}
+    seat_up = [False]
     personal, admin = {}, {}
 
     def put(kind, login, what, where):
@@ -1185,6 +1191,8 @@ def seats_reading(paths):
         return admin[u]
 
     for label, user, path in _seat_units(paths):
+        if user == SEAT_ADMIN_ROLE and label in SEAT_ADMIN_UNITS:
+            seat_up[0] = True
         if not is_personal(user):
             continue
         if label.startswith("com.ccquota.agent") or label.startswith("ccquota-agent"):
@@ -1193,6 +1201,8 @@ def seats_reading(paths):
         else:
             put("machine", user, label, path)
     for user, pid, cmd in _seat_procs():
+        if user == SEAT_ADMIN_ROLE and SEAT_ADMIN_AGENT.search(cmd):
+            seat_up[0] = True
         if not is_personal(user):
             continue
         for rx, what in SEAT_PROGRAMS:
@@ -1205,17 +1215,18 @@ def seats_reading(paths):
     rows = lambda k: [{"login": l, "what": w, "where": sorted(found[k][(l, w)])}
                       for l, w in sorted(found[k])]
     return {"at": now(), "machine": rows("machine"), "admin": rows("admin"),
-            "admin_role": seat_uid(SEAT_ADMIN_ROLE) is not None}
+            "admin_role": seat_up[0] and seat_uid(SEAT_ADMIN_ROLE) is not None}
 
 
 def seats_check(cur):
     """(exit code, line): 0 none · 1 FAIL (a machine service, or an admin agent once
-    its role account exists) · 3 WARN (an admin agent before C15 made _fleetadmin)."""
+    its role account runs the seat's agent) · 3 WARN (an admin agent before the seat
+    is up — C15·b #3696)."""
     say = lambda rs: "; ".join("%s: %s（%s）" % (r["login"], r["what"], " · ".join(r["where"])) for r in rs)
     if cur["machine"] or (cur["admin"] and cur["admin_role"]):
         return 1, "个人账号在跑 fleet 整机 / 管理服务 — " + say(cur["machine"] + (cur["admin"] if cur["admin_role"] else []))
     if cur["admin"]:
-        return 3, "管理员 agent 还在个人账号名下（%s 还没建，C15 #3557 把它搬过去）— %s" % (SEAT_ADMIN_ROLE, say(cur["admin"]))
+        return 3, "管理员 agent 还在个人账号名下（%s 的 agent 还没起来，C15 #3696 把它搬过去）— %s" % (SEAT_ADMIN_ROLE, say(cur["admin"]))
     return 0, "没有个人账号在跑 fleet 整机或管理服务"
 
 

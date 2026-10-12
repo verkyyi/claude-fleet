@@ -118,6 +118,16 @@ type Config struct {
 	// account op is refused.
 	FleetAdmin bool
 
+	// FleetAdminSeat (CCQUOTA_FLEET_ADMIN_SEAT=1, claude-fleet#3696) says this
+	// admin agent runs as the machine's admin ROLE account (_fleetadmin /
+	// fleetadmin), not a person's login: its hello lists CapAdminSeat, it takes
+	// an account op only with the hub's signed ticket, and it runs one only as
+	// `sudo -n <AdminGateDir>/<script> --ticket <t> …` — the two root copies of
+	// bin/fleet-admin-gate.sh its sudoers file names. Only with FleetAdmin.
+	FleetAdminSeat bool
+	// AdminGateDir is where those copies live; "" = /var/db/fleet-node/admin.
+	AdminGateDir string
+
 	// LinuxOpener, set only on the account half of a Linux managed machine's
 	// node program (claude-fleet#3210), is the root runtime's
 	// fleet-node-linux.py: account ops run its `login open|remove` as root
@@ -451,7 +461,7 @@ func New(cfg Config) (*Agent, error) {
 		// Account ops outlive this process (claude-fleet#2918): results the
 		// hub has not acked go out again, and one a restart cut off is
 		// settled with what the machine shows now.
-		a.acct.home = cfg.Home
+		a.acct.home = a.markRoot()
 		a.acct.load(filepath.Join(cfg.StateDir, accountOpsFile))
 		if len(a.acct.resume) > 0 {
 			// cut-off creates whose own run made the login: settled from

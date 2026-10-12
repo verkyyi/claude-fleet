@@ -193,6 +193,13 @@ if os.path.exists(os.path.join(HERE, "fleet_node_codesign.py")):
     codesign = importlib.util.module_from_spec(_cspec)
     _cspec.loader.exec_module(codesign)
 
+# the admin seat's gate copies follow a switch this updater makes itself (#3696)
+admin_seat = None
+if os.path.exists(os.path.join(HERE, "fleet_admin_seat.py")):
+    _aspec = importlib.util.spec_from_file_location("fleet_admin_seat", os.path.join(HERE, "fleet_admin_seat.py"))
+    admin_seat = importlib.util.module_from_spec(_aspec)
+    _aspec.loader.exec_module(admin_seat)
+
 env = fns.env
 env_num = fns.env_num
 read_json = fns.read_json
@@ -1492,6 +1499,7 @@ class Updater(object):
             if frm and os.path.isdir(self.p.rel(frm)):
                 swap_link(self.p.prev, self.p.rel(frm))
             swap_link(self.p.current, self.p.rel(to))
+            self.place_admin_gate(to)
         # every managed login moves WITH the machine (issue #2774): its install is
         # a tree of links into the release, re-pointed in the same tick
         notes = self.sync_outside() + self.sync_credsep() + self.follow_installs(sha=to, force=True)
@@ -1502,6 +1510,17 @@ class Updater(object):
         self.save()
         self.log("switched %s → %s%s" % ((frm or "none")[:12], to[:12], (" · " + "; ".join(notes)) if notes else ""))
         self.request_restart(to)
+
+    def place_admin_gate(self, sha):
+        """With no root core the switch is this (root) updater's, so the admin seat's
+        gate copies follow it here (#3696) — the core's switch does it otherwise."""
+        if admin_seat is None or os.geteuid() != 0:
+            return
+        try:
+            for n in admin_seat.place(self.p.rel(sha), self.p.state, self.p.root):
+                self.log(n)
+        except OSError as e:
+            self.log("admin gate: %s" % e)
 
     def rollback(self, why):
         frm, to = self.st.get("from"), self.st["to"]
@@ -1518,6 +1537,7 @@ class Updater(object):
         else:
             swap_link(self.p.current, self.p.rel(frm))
             swap_link(self.p.prev, self.p.rel(to))
+            self.place_admin_gate(frm)
         self.sync_outside()
         self.sync_credsep()
         self.follow_installs(sha=frm, force=True)     # the logins go back with it

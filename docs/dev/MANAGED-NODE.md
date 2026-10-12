@@ -997,6 +997,38 @@ BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
 BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；Go
 `internal/control/account_ticket_test.go`、`internal/api/fleet_account_ticket_test.go`。
 
+### 23.1 座位的机器半边和 agent 的座位模式（C15·b，#3696）
+
+- **角色账号 + sudoers**：`FLEET_ADMIN_SEAT=1 sudo fleet node install` 的「管理员座位」步
+  （`bin/fleet_admin_seat.py ensure`，`--check` 幂等）建 `_fleetadmin` / `fleetadmin`（同 `_fleetnode` 的配方），
+  `/var/db/fleet-node/admin/`（root 0755）里放门的两个名字、`admin.conf`（`bin=<root>/current/bin`、`hub=`）、
+  `account.pub`（从入口 `/v1/fleet/account-key` 钉一次；入口换了钥匙安装步拒绝，`FLEET_ADMIN_KEY_REPIN=1` 才换），
+  最后写 `/etc/sudoers.d/fleet-admin`：只一条规则、两个路径，新文本先过 `visudo -c -f` 才换上（root 0440）。
+  `FLEET_ADMIN_SEAT=0` 拿掉 sudoers 文件和 admin/（账号留着）；没设过的机器这一步一行都不打，字节不变。
+  `fleet_admin_seat.py status --check` 对任何偏差报 DRIFT。
+- **核心放门**：核心的 `switch` / `rollback`（没核心时 root 更新器自己的切换）每次从**刚验过签的发布版**把
+  `bin/fleet-admin-gate.sh` 以 root 0755 一次 rename 放成两个名字、重写 `admin.conf`（保留 `hub=`）、`used/` 是链接就重建；
+  没有 admin/ 什么都不放；发布版没有门（回滚到更早）就留着现有副本（它们没有验单程序就拒）。
+- **门给脚本的环境**：sudo 本就清掉调用者的环境；门用 `env -i` 只给 `PATH` `LANG` `HOME`、
+  `FLEET_LOGIN_OP_ID`（单的 nonce）、`FLEET_LOGIN_HUB`（`admin.conf` 的 `hub=`）、`FLEET_LOGIN_ADMIN_DIR`（门目录），
+  开号 / 回收再加 `FLEET_LOGIN_JOIN_CODE`——只从 stdin 收**一行** `FLEET_LOGIN_JOIN_CODE=fj_…`，多一行、别的内容都拒。
+- **回滚由门自己做**（二选一里选了这个：入口不必为一单签两张）：开号的脚本失败（不是 0、不是 3「已存在」），
+  登录在、`admin/<login>-onboard/op` 写的是本单的 nonce ⇒ 门跑发布版的 `fleet-login-remove.sh <login> --keep-home --apply`，
+  打一行 `rolled back: …` / `rollback FAILED …`，退出码仍是开号的。座位的 agent 不再自己回滚；一单被切断在半路
+  （agent 重启、标记没 done）它答失败并写明「没有删号单，请删掉」，不越权。
+- **agent 的座位模式**：`CCQUOTA_FLEET_ADMIN=1 CCQUOTA_FLEET_ADMIN_SEAT=1`（门目录 `CCQUOTA_FLEET_ADMIN_GATE_DIR`，默认
+  `/var/db/fleet-node/admin`）⇒ hello 加 `CapAdminSeat`；没 ticket 的单 `BAD_ARGS` 拒、什么都不跑；
+  `accountArgv` 前面加 `sudo -n <门目录>/<脚本名> --ticket <t>`，join code 走 stdin；`CapCredsep` / `CapRecycle`
+  读 `admin.conf` 的 `bin=` 下的发布版脚本；`settleOwnCreate` / `ownsCreate` 读 `<门目录>/<login>-onboard/op`。
+- **`seats` 行**：管理员 agent 还在个人账号名下，只在 `_fleetadmin` 自己的 agent 起来（`com.claude-fleet.admin-agent`
+  的 UserName，或以它跑的 `ccquota agent`）之后 FAIL；只建了账号仍是 WARN。
+
+还没做（各自的单）：脚本在门下以 root 跑（#3723）、`_fleetadmin` 的令牌与 `com.claude-fleet.admin-agent`（#3724）、
+旧 agent 交接进 attic 与真机切换演练（#3725）。
+
+BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
+`bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `internal/agent/node_accounts_seat_test.go`。
+
 ## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）
 
 一台托管机器上每个登录原来各自探一遍同一台机器：内存压力、总内存、每核负载，每次 capacity 读、每次开新会话的准入都探。

@@ -1485,6 +1485,10 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		// Only meaningful with the fleet module on: the admin agent is a
 		// role on the control channel.
 		FleetAdmin: fleet && getenv("CCQUOTA_FLEET_ADMIN") == "1",
+		// The admin role account's agent (claude-fleet#3696): ops only with
+		// the hub's ticket, run through the root gate's sudo.
+		FleetAdminSeat: fleet && getenv("CCQUOTA_FLEET_ADMIN") == "1" && getenv("CCQUOTA_FLEET_ADMIN_SEAT") == "1",
+		AdminGateDir:   getenv("CCQUOTA_FLEET_ADMIN_GATE_DIR"),
 		// Coordinate only (claude-fleet#1719): no placement, no lease. Only
 		// an explicit 0 — a node joined before #1719 has no line and runs.
 		FleetComputeOff: fleet && getenv("CCQUOTA_FLEET_COMPUTE") == "0",

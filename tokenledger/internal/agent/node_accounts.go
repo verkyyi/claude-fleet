@@ -115,11 +115,12 @@ const (
 	credsepScriptMark = "--no-credsep"
 )
 
-// credsepCapable reports whether this login's fleet-login-new.sh opens every
-// login separated — the hello's CapCredsep. A script from before #2294 (or none)
-// does not: the hub then opens no spare login here (claude-fleet#2263).
-func credsepCapable(home string) bool {
-	b, err := os.ReadFile(filepath.Join(home, loginNewScript))
+// credsepCapable reports whether this login's fleet-login-new.sh (at script)
+// opens every login separated — the hello's CapCredsep. A script from before
+// #2294 (or none) does not: the hub then opens no spare login here
+// (claude-fleet#2263).
+func credsepCapable(script string) bool {
+	b, err := os.ReadFile(script)
 	return err == nil && bytes.Contains(b, []byte(credsepScriptMark)) && bytes.Contains(b, []byte(credsepMark))
 }
 
@@ -128,10 +129,10 @@ func credsepCapable(home string) bool {
 // removes here.
 const recycleScriptMark = "--recycle"
 
-// recycleCapable reports whether this login's fleet-login-remove.sh can wash
-// a login for the next person (its --recycle mode).
-func recycleCapable(home string) bool {
-	b, err := os.ReadFile(filepath.Join(home, loginRemoveScript))
+// recycleCapable reports whether this login's fleet-login-remove.sh (at
+// script) can wash a login for the next person (its --recycle mode).
+func recycleCapable(script string) bool {
+	b, err := os.ReadFile(script)
 	return err == nil && bytes.Contains(b, []byte(recycleScriptMark))
 }
 
@@ -179,6 +180,74 @@ func accountArgv(home string, op control.AccountOp) (string, []string) {
 		return filepath.Join(home, loginRemoveScript), []string{op.Login, keep, "--apply"}
 	}
 	return filepath.Join(home, loginNewScript), []string{op.Login, "--full-name", op.FullName, "--share-pool", "--apply"}
+}
+
+// The admin seat (claude-fleet#3696): an admin agent that runs as the machine's
+// admin role account reaches root only through the two copies of
+// bin/fleet-admin-gate.sh its sudoers file names, each op with the hub's
+// signed ticket. The gate makes the script's environment itself (the ticket's
+// nonce as FLEET_LOGIN_OP_ID, its admin.conf's hub), takes the join code on
+// stdin, keeps the op's mark under its own directory and rolls back a create
+// that failed after making the login — so the seat never needs a second ticket.
+const defaultAdminGateDir = "/var/db/fleet-node/admin"
+
+// accountSudo is the sudo the seat runs the gate with; a test seam.
+var accountSudo = "/usr/bin/sudo"
+
+// adminSeat says this agent is the admin role account's.
+func (a *Agent) adminSeat() bool { return a.cfg.FleetAdmin && a.cfg.FleetAdminSeat }
+
+// adminGateDir is where the seat's two gate copies live.
+func (a *Agent) adminGateDir() string {
+	if a.cfg.AdminGateDir != "" {
+		return a.cfg.AdminGateDir
+	}
+	return defaultAdminGateDir
+}
+
+// adminGateBin is the release bin/ the gate runs (its admin.conf's bin=), ""
+// when unreadable.
+func (a *Agent) adminGateBin() string {
+	b, err := os.ReadFile(filepath.Join(a.adminGateDir(), "admin.conf"))
+	if err != nil {
+		return ""
+	}
+	bin := ""
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(l, "bin="); ok {
+			bin = v
+		}
+	}
+	return bin
+}
+
+// accountScript is where rel (loginNewScript / loginRemoveScript) is for this
+// agent: the admin login's install, or — for the seat — the release the gate
+// runs.
+func (a *Agent) accountScript(rel string) string {
+	if a.adminSeat() {
+		if bin := a.adminGateBin(); bin != "" {
+			return filepath.Join(bin, filepath.Base(rel))
+		}
+		return ""
+	}
+	return filepath.Join(a.cfg.Home, rel)
+}
+
+// markRoot is where fleet-login-new.sh leaves <login>-onboard/op: the admin
+// login's home, or the seat's gate directory (a root run's).
+func (a *Agent) markRoot() string {
+	if a.adminSeat() {
+		return a.adminGateDir()
+	}
+	return a.cfg.Home
+}
+
+// seatArgv is accountArgv through the gate: sudo -n <gate dir>/<script>
+// --ticket <t> <the same argv>.
+func (a *Agent) seatArgv(op control.AccountOp) (string, []string) {
+	script, args := accountArgv("", op)
+	return accountSudo, append([]string{"-n", filepath.Join(a.adminGateDir(), filepath.Base(script)), "--ticket", op.Ticket}, args...)
 }
 
 // tccDisclaimed wraps a macOS account script so it is its OWN responsible
@@ -505,6 +574,13 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 		refuse(control.CodeBadArgs, "malformed account op")
 		return
 	}
+	if a.adminSeat() && op.Ticket == "" {
+		// The gate would refuse it anyway; say so before anything runs
+		// (claude-fleet#3696).
+		log.Printf("control channel: refused account op %s: no ticket (this agent is an admin seat)", m.OpID)
+		refuse(control.CodeBadArgs, "this admin seat runs an account op only with the hub's signed ticket")
+		return
+	}
 	if err := a.validAccountOp(op); err != nil {
 		log.Printf("control channel: refused account op %s: %v", m.OpID, err)
 		refuse(control.CodeBadArgs, err.Error())
@@ -589,7 +665,8 @@ func (a *Agent) runAccountOp(opID string, op control.AccountOp) control.AccountR
 		}
 	}
 	res := a.runAccountScript(ctx, opID, op)
-	if op.Op == control.AccountCreate && !res.OK && !res.Exists && accountLoginExists(op.Login) &&
+	// The seat's gate rolls a failed create back itself (claude-fleet#3696).
+	if op.Op == control.AccountCreate && !res.OK && !res.Exists && !a.adminSeat() && accountLoginExists(op.Login) &&
 		a.ownsCreate(op.Login, opID) {
 		res = a.rollbackOwnCreate(ctx, op.Login, res)
 	}
@@ -607,7 +684,7 @@ func (a *Agent) ownsCreate(login, opID string) bool {
 	if a.cfg.LinuxOpener != "" {
 		return linuxDeclaredOp(a.cfg.LinuxTenants, login) == opID
 	}
-	mk, ok := readOpMark(a.cfg.Home, login)
+	mk, ok := readOpMark(a.markRoot(), login)
 	return ok && mk.op == opID
 }
 
@@ -618,9 +695,13 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 		defer holdLogin(op.Login)()
 	}
 	script, args := accountArgv(a.cfg.Home, op)
-	if a.cfg.LinuxOpener != "" {
+	seat := a.adminSeat()
+	switch {
+	case a.cfg.LinuxOpener != "":
 		script, args = linuxAccountArgv(a.cfg.LinuxOpener, op)
-	} else {
+	case seat:
+		script, args = a.seatArgv(op)
+	default:
 		script, args = tccDisclaimed(a.cfg.Home, script, args)
 	}
 	cmd := accountCommand(ctx, script, args...)
@@ -628,6 +709,14 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 	// them never inherits a cwd the new login cannot read.
 	cmd.Dir = "/"
 	cmd.Env = accountEnv(a.cfg.HubURL, opID, op)
+	if seat {
+		// sudo hands the gate none of this environment: the gate makes the
+		// script's own, and the join code travels on its stdin.
+		cmd.Env = nil
+		if op.JoinCode != "" && op.Op != control.AccountRemove {
+			cmd.Stdin = strings.NewReader("FLEET_LOGIN_JOIN_CODE=" + op.JoinCode + "\n")
+		}
+	}
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	var err error
@@ -727,10 +816,11 @@ func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (contro
 		// running it again settles it (claude-fleet#3210).
 		return control.AccountResult{}, false
 	}
-	if a.cfg.Home == "" || !accountLoginExists(login) {
+	root := a.markRoot()
+	if root == "" || !accountLoginExists(login) {
 		return control.AccountResult{}, false
 	}
-	mk, ok := readOpMark(a.cfg.Home, login)
+	mk, ok := readOpMark(root, login)
 	if !ok || mk.op != opID {
 		return control.AccountResult{}, false
 	}
@@ -743,7 +833,7 @@ func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (contro
 			return res, true
 		case <-time.After(accountMarkPoll):
 		}
-		if mk, ok = readOpMark(a.cfg.Home, login); !ok || mk.op != opID {
+		if mk, ok = readOpMark(root, login); !ok || mk.op != opID {
 			return control.AccountResult{}, false
 		}
 	}
@@ -764,6 +854,15 @@ func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (contro
 // services behind. Its home is kept (archived by fleet-login-remove.sh). The
 // result stays a failure, saying what was done.
 func (a *Agent) rollbackOwnCreate(ctx context.Context, login string, res control.AccountResult) control.AccountResult {
+	if a.adminSeat() {
+		// The seat holds no remove ticket for it: its gate rolls back a create
+		// it saw fail, and one cut off half way is the person's (claude-fleet#3696).
+		verdict := "NOT rolled back: this admin seat has no ticket to remove login " + login + " — remove it"
+		log.Printf("account ops: create %s stopped half way: %s", login, verdict)
+		res.OK, res.Exists, res.Credsep = false, false, ""
+		res.Detail = tail(res.Detail+"\n"+verdict, accountDetailMax)
+		return res
+	}
 	// On a Linux managed machine the half-made login's home goes with it
 	// (claude-fleet#3210): nothing in it was ever the person's.
 	rm := a.runAccountScript(ctx, "", control.AccountOp{Op: control.AccountRemove, Login: login,

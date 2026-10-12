@@ -19,6 +19,12 @@ FLEET_ACCOUNT_PAUSED_CMD           seam: prints the hub client-settings JSON ins
 FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
+FLEET_ADMIN_KEY_REPIN              switch: 1 on `fleet node install` re-pins the hub's account-op key in <state>/admin/account.pub (fleet_admin_seat.py ensure, #3696)
+FLEET_ADMIN_ROLE                   seam: an existing user standing in for _fleetadmin / fleetadmin (fleet_admin_seat.py, #3696)
+FLEET_ADMIN_ROLE_CMD               seam: run in place of each account-making command (fleet_admin_seat.py, #3696)
+FLEET_ADMIN_SEAT                   switch: 1 on `fleet node install` sets up the admin role account, its two sudo-able gate copies and sudoers (#3696); 0 takes them away
+FLEET_ADMIN_SUDOERS                seam: the sudoers file fleet_admin_seat.py writes (/etc/sudoers.d/fleet-admin, #3696)
+FLEET_ADMIN_VISUDO                 seam: the visudo the new sudoers text is checked with; '' = none (#3696)
 FLEET_ADMIT_GUIDE                  handoff: dash-raw-session tells its own admission this is the pinned /fleet-onboard guide (#3472)
 FLEET_ADMIT_OWNER                  handoff: whose admission reservation this process holds (default $$; fleet_admit_*, #2502)
 FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
