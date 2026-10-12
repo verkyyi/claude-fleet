@@ -20,6 +20,7 @@ its old road, byte for byte (共同约定 11).
 import json
 import os
 import socket
+import struct
 
 SOCK = "/var/run/fleet-node-core.sock"
 MAX_LINE = 65536
@@ -96,6 +97,38 @@ def read_line(s, limit=MAX_LINE):
             raise ValueError("reply longer than %d bytes" % limit)
     line, _, rest = buf.partition(b"\n")
     return line, rest
+
+
+# exec-as may carry the caller's stdin, stdout and stderr with its request line
+# (SCM_RIGHTS, issue #3669): the job then runs on them, its {"ok","pid"} and
+# {"exit"} come back as run-as's do, and the caller going away stops it — what
+# the node program (`ccquota core-exec`) needs for a command that reads its input
+# or streams its output. Exactly FDS_EXEC of them, and only on exec-as.
+FDS_EXEC = 3
+
+
+def read_request(s, limit=MAX_LINE):
+    """(line, fds) of one request: the fds that came with its bytes (none on a
+    Python without recvmsg — then a request carrying them is refused unread)."""
+    buf, fds = b"", []
+    while b"\n" not in buf:
+        if hasattr(s, "recvmsg"):
+            got, anc, _flags, _addr = s.recvmsg(4096, socket.CMSG_SPACE(8 * 4))
+            for level, kind, data in anc:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    n = len(data) - len(data) % 4
+                    fds.extend(struct.unpack("%di" % (n // 4), data[:n]))
+        else:
+            got = s.recv(4096)
+        if not got:
+            break
+        buf += got
+        if len(buf) > limit:
+            for fd in fds:
+                os.close(fd)
+            raise ValueError("request longer than %d bytes" % limit)
+    line, _, _rest = buf.partition(b"\n")
+    return line, fds
 
 
 class Conn(object):

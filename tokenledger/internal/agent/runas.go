@@ -69,6 +69,9 @@ var errNoLogin = errors.New("machine agent: no login to run this command as (ref
 // (claude-fleet#2471): with them every fleet-control.py on m4 died opening its
 // store under root's conf dir, and the hub read only «INTERNAL: Local
 // controller failed». A value the caller put on cmd.Env itself is kept.
+//
+// On the seat (--core, claude-fleet#3669) a login's command is the root core's
+// to run (prepCoreCmd); one with no login runs as the seat itself.
 func prepCmd(ctx context.Context, cmd *exec.Cmd) error {
 	ra := runAsOf(ctx)
 	if ra == nil {
@@ -79,6 +82,9 @@ func prepCmd(ctx context.Context, cmd *exec.Cmd) error {
 	}
 	if loginClosing(ra.Login) {
 		return fmt.Errorf("machine agent: login %s is being removed: nothing more runs as it", ra.Login)
+	}
+	if sock := coreSockOf(); sock != "" {
+		return prepCoreCmd(cmd, ra, sock)
 	}
 	setCredential(cmd, ra)
 	env := cmd.Env

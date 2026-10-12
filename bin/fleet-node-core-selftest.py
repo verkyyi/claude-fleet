@@ -46,6 +46,13 @@ under a fake passwd); nothing touches /var, /Library or a real login.
      current and the evidence; a step outside the list, a staged.json naming a
      non-artifact, a staged ccquota that is not the artifact — refused, nothing
      signed; install-state / sessions run as the login
+  O  the node program on the seat (#3669): exec-as with the caller's three fds runs
+     the job on them ({"ok","pid"}, then {"exit"}), the caller going away stops it;
+     fds on another op, or not three, are refused; a "seat_agent" machine job is never
+     started by the core while the switch is on (stop only; off = the core's, as before); `install --seat --agent`'s switch hands
+     machine.env / logins/*.env / agent/ over and back, update-now moves into node/;
+     the seated daemon runs that job ITSELF with --core <sock>, and a root copy it
+     finds is stopped through the core before its own starts
 """
 import base64
 import hashlib
@@ -824,6 +831,172 @@ class N_SeatedUpdate(Sandbox):
         r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-update.py"), "sessions", "save", "../x"],
                            env=e, capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
+class O_SeatAgent(Sandbox):
+    def tool(self, name, body):
+        path = os.path.join(self.bin, name)
+        with open(path, "w") as f:
+            f.write("#!/bin/bash\n" + body)
+        os.chmod(path, 0o755)
+        return path
+
+    def stream(self, op, args, fds):
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(30)
+        s.connect(self.env["FLEET_NODE_CORE_SOCK"])
+        line = (json.dumps({"op": op, "args": args}) + "\n").encode()
+        s.sendmsg([line], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, b"".join(fd.to_bytes(4, sys.byteorder) for fd in fds))])
+        return s
+
+    @staticmethod
+    def replies(s, n):
+        buf, out = b"", []
+        while len(out) < n:
+            got = s.recv(4096)
+            if not got:
+                break
+            buf += got
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                out.append(json.loads(line.decode()))
+        return out
+
+    def test_exec_as_on_the_callers_fds(self):
+        self.serve()
+        tool = self.tool("fleet-cat.sh", 'echo "as $USER $PWD"; cat; echo oops >&2; exit 4\n')
+        i_r, i_w = os.pipe()
+        o_r, o_w = os.pipe()
+        e_r, e_w = os.pipe()
+        s = self.stream("exec-as", {"login": "alice", "argv": [tool]}, [i_r, o_w, e_w])
+        for fd in (i_r, o_w, e_w):
+            os.close(fd)
+        os.write(i_w, b"hello\n")
+        os.close(i_w)
+        r = self.replies(s, 2)
+        s.close()
+        self.assertTrue(r and r[0].get("ok") and r[0].get("pid"), r)
+        self.assertEqual(r[1:], [{"exit": 4}], r)
+        out = os.fdopen(o_r).read()
+        self.assertEqual(out, "as alice %s\nhello\n" % os.path.realpath(self.home), out)
+        self.assertEqual(os.fdopen(e_r).read(), "oops\n")
+        self.assertIn("(stream)", self.log())
+        # the same three on another op, or two on exec-as: refused, nothing ran
+        nul = [os.open(os.devnull, os.O_RDWR) for _ in range(3)]
+        for op, args, fds in (("kill", {"pid": 1}, nul), ("exec-as", {"login": "alice", "argv": [tool]}, nul[:2])):
+            s = self.stream(op, args, fds)
+            r = self.replies(s, 1)
+            s.close()
+            self.assertIn("refused", r[0], (op, r))
+            self.assertIn("descriptor", r[0]["why"])
+        # bin/ only, as without fds
+        s = self.stream("exec-as", {"login": "alice", "argv": ["/bin/sh", "-c", "id"]}, nul)
+        self.assertIn("refused", self.replies(s, 1)[0])
+        s.close()
+        for fd in nul:
+            os.close(fd)
+
+    def test_caller_gone_stops_the_job(self):
+        self.serve()
+        tool = self.tool("fleet-wait.sh", "exec sleep 60\n")
+        nul = [os.open(os.devnull, os.O_RDWR) for _ in range(3)]
+        s = self.stream("exec-as", {"login": "alice", "argv": [tool]}, nul)
+        for fd in nul:
+            os.close(fd)
+        pid = self.replies(s, 1)[0]["pid"]
+        alive = lambda: subprocess.call(["kill", "-0", str(pid)], stderr=subprocess.DEVNULL) == 0
+        self.assertTrue(alive())
+        s.close()
+        self.assertTrue(until(15, lambda: not alive()), "the job outlived its caller")
+
+    def seat_table(self):
+        self.agent_args = os.path.join(self.d, "agent.args")
+        agent = self.tool("fleet-agentish.sh", 'echo "$*" >> %s; trap "exit 0" TERM; while :; do sleep 0.2; done\n'
+                          % self.agent_args)
+        self.agent_cmd = ["/bin/bash", agent]
+        with open(os.path.join(self.d, "table.json"), "w") as f:
+            json.dump({"children": [{"name": "node-agent", "cmd": self.agent_cmd, "seat_agent": True}],
+                       "tasks": [], "account": []}, f)
+
+    def seat_passwd(self):
+        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
+        pw["_fleetnode"] = pw["fleetnode"] = {"uid": os.getuid(), "gid": os.getgid(), "home": "/var/empty"}
+        with open(self.env["FLEET_NODE_PASSWD"], "w") as f:
+            json.dump(pw, f)
+
+    def test_seat_job_is_never_the_cores(self):
+        self.seat_table()
+        self.seat_passwd()
+        self.serve()
+        # the switch off (#3668's seat): still the core's job, started as root
+        r = self.req("machine", {"job": "node-agent", "action": "start"})
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(self.req("machine", {"job": "node-agent", "action": "stop"}).get("ok"), True)
+        with open(os.path.join(self.state, "seat-agent"), "w") as f:
+            f.write("{}\n")
+        r = self.req("machine", {"job": "node-agent", "action": "start"})
+        self.assertIn("refused", r)
+        self.assertIn("runs as the seat", r["why"])
+        self.assertEqual(self.req("machine", {"job": "node-agent", "action": "stop"}).get("ok"), True)
+
+    def sup_py(self, code):
+        r = subprocess.run([sys.executable, "-c", "import importlib.util, json, os, sys; "
+                            "sp = importlib.util.spec_from_file_location('s', sys.argv[1]); "
+                            "m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); p = m.Paths(); " + code,
+                            os.path.join(self.bin, "fleet-node-supervisor.py")],
+                           env=self.env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_switch_hands_the_token_files_over(self):
+        self.seat_passwd()
+        os.makedirs(os.path.join(self.state, "logins"))
+        os.makedirs(os.path.join(self.state, "agent", "alice"))
+        for f, m in (("machine.env", 0o644), (os.path.join("logins", "alice.env"), 0o640)):
+            with open(os.path.join(self.state, f), "w") as fh:
+                fh.write("CCQUOTA_TOKEN=x\n")
+            os.chmod(os.path.join(self.state, f), m)
+        os.chmod(os.path.join(self.state, "agent"), 0o755)
+        self.assertEqual(self.sup_py("print(m.seat_agent_on(p), m.update_now_path(p))"),
+                         "False %s" % os.path.join(self.state, "update-now"))
+        self.assertEqual(self.sup_py("print(m.seat_agent_switch(p, True), m.seat_agent_on(p))"), "True True")
+        mode = lambda *q: stat.S_IMODE(os.stat(os.path.join(self.state, *q)).st_mode)
+        self.assertEqual((mode("machine.env"), mode("logins", "alice.env"), mode("agent")), (0o600, 0o600, 0o700))
+        self.assertEqual(self.sup_py("print(m.update_now_path(p))"), os.path.join(self.state, "node", "update-now"))
+        self.assertIn("--core %s" % self.env["FLEET_NODE_CORE_SOCK"],
+                      self.sup_py("print(' '.join(m.seat_agent_cmd(['ccquota', 'agent', '--machine'])))"))
+        self.assertEqual(self.sup_py("print(m.seat_agent_switch(p, False), m.seat_agent_on(p), m.update_now_path(p))"),
+                         "True False %s" % os.path.join(self.state, "update-now"))
+        self.assertFalse(os.path.exists(os.path.join(self.state, "seat-agent")))
+        # no seat account: never on, whatever the marker says
+        with open(os.path.join(self.state, "seat-agent"), "w") as f:
+            f.write("{}\n")
+        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
+        del pw["_fleetnode"], pw["fleetnode"]
+        with open(self.env["FLEET_NODE_PASSWD"], "w") as f:
+            json.dump(pw, f)
+        self.assertEqual(self.sup_py("print(m.seat_agent_on(p))"), "False")
+
+    def test_seated_daemon_runs_the_node_program_itself(self):
+        self.seat_table()
+        self.seat_passwd()
+        self.serve()
+        # the root copy an older daemon left (the core finds it by its command)
+        stray = subprocess.Popen(self.agent_cmd, start_new_session=True)
+        self.procs.append(stray)
+        self.assertTrue(until(10, lambda: os.path.exists(self.agent_args)))
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", str(stray.pid)], capture_output=True, text=True).stdout.strip()
+        with open(os.path.join(self.state, "state.json"), "w") as f:
+            json.dump({"children": {"node-agent": {"pid": stray.pid, "cmd": cmd}}}, f)
+        self.sup_py("m.seat_layout(p, m.seat_ident()); m.seat_agent_switch(p, True)")
+        seat = M_Seated.sup(self, ["run"], {"FLEET_NODE_SEATED": "1"})
+        self.procs.append(seat)
+        err = lambda: open(os.path.join(self.d, "sup.err")).read()
+        self.assertTrue(until(20, lambda: stray.poll() is not None), "the root copy was not stopped: " + err())
+        self.assertTrue(until(20, lambda: "the seat runs it now" in err()), err())
+        self.assertTrue(until(20, lambda: "--core %s" % self.env["FLEET_NODE_CORE_SOCK"]
+                              in open(self.agent_args).read()), err())
+        self.assertNotIn('"action": "start"', self.log())   # never asked of the core
+        seat.send_signal(signal.SIGTERM)
+        seat.wait(timeout=30)
 
 
 if __name__ == "__main__":

@@ -98,7 +98,8 @@ var tailnetSelfName = func(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	tcmd := exec.CommandContext(ctx, bin, "status", "--json", "--peers=false")
-	if prepCmd(ctx, tcmd) != nil {
+	// the machine's own name: on the seat it asks as itself, not as a login (#3669)
+	if prepCmd(seatSelf(ctx), tcmd) != nil {
 		return ""
 	}
 	out, err := tcmd.Output()

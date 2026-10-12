@@ -50,9 +50,14 @@ func runAgentMachine(args []string) error {
 	liveEvery := fs.Duration("live-interval", agent.DefaultLiveInterval, "how often to report running sessions")
 	scanEvery := fs.Duration("scan-interval", agent.DefaultScanInterval, "how often to scan transcripts")
 	limitsEvery := fs.Duration("limits-interval", agent.DefaultLimitsInterval, "how often to read account-wide limits")
+	core := fs.String("core", "", "the root core's `socket`: run as the node daemon's seat (_fleetnode), every\n"+
+		"command a login runs going through the core's exec-as (claude-fleet#3669)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// The files that hold tokens are root's 0600 — or, on the seat, the seat's
+	// own 0600 (install --seat --agent hands them over).
+	strict := os.Geteuid() == 0 || *core != ""
 	if *token == "" {
 		t, err := tokenFromFD(os.Getenv("CCQUOTA_TOKEN_FD"))
 		if err != nil {
@@ -66,7 +71,7 @@ func runAgentMachine(args []string) error {
 	service := os.Getenv("FLEET_NODE_LOGIN")
 	userPod := os.Getenv("FLEET_USER_POD")
 	if *machineEnv != "" {
-		env, err := readLoginEnv(*machineEnv, os.Geteuid() == 0)
+		env, err := readLoginEnv(*machineEnv, strict)
 		if err != nil {
 			return err
 		}
@@ -96,7 +101,7 @@ func runAgentMachine(args []string) error {
 	// carried in every beat it and its logins send: machine.env
 	// FLEET_MAX_CPU_BUSY, else the environment's; neither = the hub's.
 	agent.SetMaxCPUBusy(maxBusy)
-	tenants, err := machineTenants(*logins, *state, os.Geteuid() == 0)
+	tenants, err := machineTenants(*logins, *state, strict)
 	if err != nil {
 		return err
 	}
@@ -121,20 +126,31 @@ func runAgentMachine(args []string) error {
 		Updater: envOr("CCQUOTA_MACHINE_UPDATER", machineScript("fleet-node-update.py")),
 		// …and, where the entry port is on (claude-fleet#3070), the daemon's
 		// script again for its `entry pull`.
-		EntryCtl: entryCtl(entryOn),
+		EntryCtl: seatDrops(*core, "the entry's key pull (the daemon's entry pass, through the core)", entryCtl(entryOn)),
 		// …and a pushed release wakes the daemon's update through its
 		// <state>/update-now (claude-fleet#3146) — only where the updater is.
 		UpdateNow:      updateNow(filepath.Dir(filepath.Clean(*state))),
 		CurrentRelease: filepath.Join(envOr("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet"), "current"),
 		// …and, on a Linux managed machine with FLEET_NODE_ACCOUNT_OPS=1,
 		// the opener of its own logins (claude-fleet#3210).
-		AccountOpener: accountOpener(acctOn),
+		AccountOpener: seatDrops(*core, "account ops (C15 #3557: _fleetadmin)", accountOpener(acctOn)),
 		AccountState:  filepath.Join(filepath.Clean(*state), "_machine"),
 		ServiceLogin:  service,
 		LinuxTenants:  filepath.Join(filepath.Dir(filepath.Clean(*state)), "linux-tenants"),
 		// …and, in one person's pod, CapUserPod (claude-fleet#3550).
 		UserPod: userPod == "1",
+		Core:    *core,
 	})
+}
+
+// seatDrops is v, except on the seat (core != ""): what only root can do is not
+// the seat's — logged once, and "" (claude-fleet#3669).
+func seatDrops(core, what, v string) string {
+	if core == "" || v == "" {
+		return v
+	}
+	fmt.Fprintf(os.Stderr, "ccquota agent --machine: on the seat, %s is not this program's — off\n", what)
+	return ""
 }
 
 // accountOpener is fleet-node-linux.py beside this binary when this Linux
@@ -262,8 +278,13 @@ func readLoginEnv(path string, strict bool) (map[string]string, error) {
 		if fi.Mode().Perm()&0o077 != 0 {
 			return nil, fmt.Errorf("%s: mode %o — it holds a token; only root may read it (chmod 600)", path, fi.Mode().Perm())
 		}
-		if uid, ok := fileUID(fi); ok && uid != 0 {
-			return nil, fmt.Errorf("%s: owned by uid %d, not root", path, uid)
+		if uid, ok := fileUID(fi); ok && uid != uint32(os.Geteuid()) {
+			if os.Geteuid() == 0 {
+				return nil, fmt.Errorf("%s: owned by uid %d, not root", path, uid)
+			}
+			// the seat's own (claude-fleet#3669): handed over by install --seat --agent
+			return nil, fmt.Errorf("%s: owned by uid %d, not this program's (uid %d) — install --seat --agent hands it over",
+				path, uid, os.Geteuid())
 		}
 	}
 	f, err := os.Open(path)
@@ -334,4 +355,17 @@ func machineScript(name string) string {
 		return ""
 	}
 	return p
+}
+
+// runCoreExec is `ccquota core-exec --sock S --login L -- argv…`: what prepCmd
+// turns a login's command into on the seat (claude-fleet#3669). Not for people.
+func runCoreExec(args []string) int {
+	fs := flag.NewFlagSet(agent.CoreExecCmd, flag.ContinueOnError)
+	sock := fs.String("sock", "", "the root core's socket")
+	login := fs.String("login", "", "the login to run as")
+	if err := fs.Parse(args); err != nil || *sock == "" || *login == "" || fs.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ccquota core-exec --sock <socket> --login <login> -- <argv…>")
+		return 2
+	}
+	return agent.CoreExec(*sock, *login, fs.Args())
 }

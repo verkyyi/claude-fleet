@@ -745,6 +745,7 @@ FLEET_NODE_PYTHON                  seam: the python3 fleet-node-install.sh runs 
 FLEET_NODE_SSH_DIR                 seam: where fleet-node-install.sh writes the hub's ssh CA + sshd_config.d drop-in (default /etc/ssh, #2330)
 FLEET_NODE_SSHD                    seam: the sshd fleet-node-install.sh checks with (`-t` / `-T`; default /usr/sbin/sshd, '' = no check, #2330)
 FLEET_NODE_SEAT                    switch: 1 on `fleet node install` moves the node daemon onto its own account _fleetnode / fleetnode (install --seat, #3668)
+FLEET_NODE_SEAT_AGENT              switch: 1 on `fleet node install` runs the node program as the seat too (install --seat --agent, #3669); 0 puts it back on root
 FLEET_NODE_SEAT_CMD                seam: a program run in place of each account-making command (seat_make, #3668)
 FLEET_NODE_SEAT_NAME               seam: the seat account's name (an existing user; default _fleetnode / fleetnode, #3668)
 FLEET_NODE_SEATED                  seam: (FLEET_NODE_TEST only) this supervisor is the seated daemon (#3668)

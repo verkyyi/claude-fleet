@@ -28,6 +28,11 @@
 #   root-core-update-step     bin/fleet-node-core.py op_update (#3670): the seated
 #                             updater's root half asked with a step outside the list,
 #                             an argv, a key too many
+#   node-program-seat         bin/fleet-node-core.py op_exec_as / exec_stream / op_machine
+#                             + bin/fleet_node_core.py read_request (#3669): the node
+#                             program on the seat — a login's job started on the
+#                             caller's fds outlives the caller; the node program asked
+#                             of root as a machine job; fds riding another op
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -325,6 +330,66 @@ drill_root_core_update_step() {
   grep -q 'op=update .*refused' "$sb/core.log" || { WHY="no refused update line: $(cat "$sb/core.log")"; return 1; }
   SECS=$(since "$t0")
   WHAT="请核心做更新器的 root 一半时塞表外 step、argv、多一个键：全部 refused、什么都没执行、记一行；表里的 step 照常跑"
+}
+
+# node-program-seat (#3669): the node program runs as the seat and hands each
+# login's command to the core with its own stdin / stdout / stderr. Three ways that
+# goes wrong: its helper killed and the login's job runs on with no one to stop it;
+# the seat (or whoever holds it) asking root to start the node program as root
+# again; descriptors riding an op that takes none. The core stops a streamed job
+# the moment its caller's connection goes, refuses `machine start` of the "seat_agent" job while
+# the switch is on (stop only), refuses fds on anything but exec-as.
+drill_node_program_seat() {
+  CAP=30
+  local sb t0 out pid
+  sb="$WORK/seatagent"; core_sandbox "$sb"
+  printf '#!/bin/bash\ntrap "exit 0" TERM; while :; do sleep 0.2; done\n' > "$sb/root/rt/bin/fleet-loop.sh"
+  chmod 755 "$sb/root/rt/bin/fleet-loop.sh"
+  printf '{"children": [{"name": "node-agent", "cmd": ["/bin/bash", "%s"], "seat_agent": true}], "tasks": [], "account": []}\n' \
+    "$sb/root/rt/bin/fleet-loop.sh" > "$sb/table.json"
+  # the switch on: root's marker, the seat account there (this uid)
+  printf '{"alice": {"uid": %d, "gid": %d, "home": "%s"}, "_fleetnode": {"uid": %d, "gid": %d, "home": "/var/empty"}, "fleetnode": {"uid": %d, "gid": %d, "home": "/var/empty"}}\n' \
+    "$(id -u)" "$(id -g)" "$sb/Users/alice" "$(id -u)" "$(id -g)" "$(id -u)" "$(id -g)" > "$sb/passwd.json"
+  printf '{}\n' > "$sb/db/seat-agent"
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  t0=$(now)
+  # the caller goes: ask, read the pid, drop the connection
+  pid=$(python3 - "$sb/core.sock" "$sb/root/rt/bin/fleet-loop.sh" <<'PY'
+import json, os, socket, sys
+s = socket.socket(socket.AF_UNIX); s.settimeout(20); s.connect(sys.argv[1])
+fds = [os.open(os.devnull, os.O_RDWR) for _ in range(3)]
+line = (json.dumps({"op": "exec-as", "args": {"login": "alice", "argv": [sys.argv[2]]}}) + "\n").encode()
+s.sendmsg([line], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, b"".join(f.to_bytes(4, sys.byteorder) for f in fds))])
+buf = b""
+while b"\n" not in buf:
+    buf += s.recv(4096)
+print(json.loads(buf.split(b"\n")[0]).get("pid", ""))
+s.close()
+PY
+)
+  [ -n "$pid" ] || { WHY="exec-as on the caller's fds did not start: $(tail -n 3 "$sb/core.log" 2>/dev/null)"; return 1; }
+  local i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  ! kill -0 "$pid" 2>/dev/null || { kill "$pid" 2>/dev/null; WHY="the login's job $pid outlived its caller"; return 1; }
+  # the node program as root: refused; stop of a root copy: answered
+  out=$(core_raw "$sb" '{"op": "machine", "args": {"job": "node-agent", "action": "start"}}')
+  printf '%s' "$out" | grep -q '"refused"' || { WHY="root started the seat's node program: $out"; return 1; }
+  out=$(core_raw "$sb" '{"op": "machine", "args": {"job": "node-agent", "action": "stop"}}')
+  printf '%s' "$out" | grep -q '"ok": true' || { WHY="stop of the root copy was not answered: $out"; return 1; }
+  # descriptors on an op that takes none
+  out=$(python3 - "$sb/core.sock" <<'PY'
+import json, os, socket, sys
+s = socket.socket(socket.AF_UNIX); s.settimeout(20); s.connect(sys.argv[1])
+fds = [os.open(os.devnull, os.O_RDWR) for _ in range(3)]
+line = (json.dumps({"op": "kill", "args": {"pid": 1}}) + "\n").encode()
+s.sendmsg([line], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, b"".join(f.to_bytes(4, sys.byteorder) for f in fds))])
+print(s.recv(4096).decode().strip())
+PY
+)
+  printf '%s' "$out" | grep -q '"refused"' && printf '%s' "$out" | grep -q descriptor \
+    || { WHY="fds on kill were not refused: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="节点程序以 _fleetnode 跑：它的 core-exec 被杀，登录身份的活随连接断开即停；请 root 把节点程序当 machine 任务起——拒绝（只许停 root 那份）；描述符搭在别的动作上——拒绝"
 }
 
 cred_run_drills "$0"

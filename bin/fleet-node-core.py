@@ -24,13 +24,19 @@ holds the wire half). The table, written here and nowhere else:
   stop-as  {login, job}   stop that job (its process group: TERM, 5 s, KILL)
   exec-as  {login, argv}  run argv as <login> and answer its rc + output; argv[0]
                           must be a file under <current>/bin/ (runas.go's
-                          prepCmd rule, moved here), root-owned, nobody else may write
+                          prepCmd rule, moved here), root-owned, nobody else may write.
+                          With the caller's stdin / stdout / stderr on the request
+                          (SCM_RIGHTS, exactly 3 — #3669: the seated node program's
+                          `ccquota core-exec`) it runs on them instead: {"ok","pid"}
+                          then {"exit": rc}, stopped when the caller's connection goes
   kill     {pid}          TERM, 5 s, KILL — only a process of a managed login or a
                           job this core started
   machine  {job, action}  a machine job (#3668) by its NAME in the core's own table
                           (fleet-node-supervisor.py machine_table: the table's
                           children and tasks, the entry's listener + revocation
-                          follower, the test runner) — never an argv. action start
+                          follower, the test runner) — never an argv; a "seat_agent" job
+                          (the node program, #3669) while <state>/seat-agent is on is the
+                          seat's own to start: stop / held only, for its root copy. action start
                           (as root, one copy; {"ok","pid"} then {"exit"}) · stop
                           (its job, or the root process running exactly that job's
                           command — what the root daemon left at the handover) ·
@@ -317,6 +323,14 @@ def bin_file(paths, argv0):
     if not sup.trusted(real):
         raise Refused(None, "argv[0] %s is not root-owned, or someone else may write it" % argv0)
     return real
+
+
+def close_fds(fds):
+    for fd in fds or ():
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def interp(path):
@@ -671,17 +685,23 @@ class Core(object):
             return
         conn.settimeout(10)
         try:
-            line, _ = wire.read_line(conn)
+            line, fds = wire.read_request(conn)
         except (OSError, ValueError, socket.timeout):
             self.refused(uid, "?", None, "no request line")
             conn.close()
             return
+        # the caller's stdio for exec-as (#3669): handed on to the job, else closed
+        self.tl.fds = fds
         if not line.strip():
+            close_fds(fds)
             conn.close()     # the client's `available()` knock: nothing asked, nothing logged
             return
         op, args = "?", None
         try:
             op, args = check_request(line)
+            if fds and (op != "exec-as" or len(fds) != wire.FDS_EXEC):
+                raise Refused(op, "%d descriptor(s) with %s — only exec-as takes them, exactly %d"
+                              % (len(fds), op, wire.FDS_EXEC))
             conn.settimeout(None)
             self.dispatch(conn, uid, op, args)
         except Refused as e:
@@ -693,6 +713,8 @@ class Core(object):
             self.log(uid, op, args, "error: %s" % e)
             self.send(conn, {"error": str(e)[:300]})
         finally:
+            close_fds(self.tl.fds)
+            self.tl.fds = []
             conn.close()
 
     @staticmethod
@@ -772,6 +794,9 @@ class Core(object):
              "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet"),
              "FLEET_NODE_ROOT": self.p.root, "FLEET_NODE_STATE": self.p.state}
         e.update(sup.node_environment())
+        fds, self.tl.fds = list(self.tl.fds or []), []
+        if fds:
+            return self.exec_stream(conn, a, real, e, uid, gid, home, fds)
         try:
             r = subprocess.run(["/bin/sh", "-c", CORE_SH, "fleet-core"] + interp(real) + argv[1:],
                                stdin=subprocess.DEVNULL, capture_output=True, env=e, timeout=EXEC_TIMEOUT,
@@ -781,6 +806,34 @@ class Core(object):
             rc, out, err = 124, x.stdout or b"", (x.stderr or b"") + b"\n(timed out)"
         return {"ok": True, "rc": rc, "out": out[-OUT_MAX:].decode("utf-8", "replace"),
                 "err": err[-OUT_MAX:].decode("utf-8", "replace")}
+
+    def exec_stream(self, conn, a, real, e, uid, gid, home, fds):
+        """exec-as on the caller's own stdin / stdout / stderr (#3669): the node
+        program's tenant command, demoted the same way. {"ok","pid"} at the start,
+        {"exit": rc} at the end; the caller's connection closing first (its helper
+        killed, its deadline past) stops the job's process group. No deadline of
+        the core's own: the caller's is the one."""
+        try:
+            p = subprocess.Popen(["/bin/sh", "-c", CORE_SH, "fleet-core"] + interp(real) + a["argv"][1:],
+                                 stdin=fds[0], stdout=fds[1], stderr=fds[2], env=e, start_new_session=True,
+                                 close_fds=True, preexec_fn=sup.demote(a["login"], uid, gid, home))
+        finally:
+            close_fds(fds)
+        self.log(self.tl.uid, "exec-as", a, "ok pid %d (stream)" % p.pid)
+        self.send(conn, {"ok": True, "pid": p.pid})
+
+        def caller_gone():
+            try:
+                while conn.recv(64):
+                    pass
+            except OSError:
+                pass
+            if p.poll() is None:
+                stop_group(p.pid)
+        threading.Thread(target=caller_gone, daemon=True).start()
+        rc = p.wait()
+        self.send(conn, {"exit": rc})
+        return None
 
     # -- the seated daemon's root half (#3668)
     def machine_job(self, name):
@@ -838,6 +891,10 @@ class Core(object):
         if a["action"] not in MACHINE_ACTIONS:
             raise Refused(None, "action %r — one of %s" % (a["action"], ", ".join(MACHINE_ACTIONS)))
         ent, task = self.machine_job(a["job"])
+        if ent.get("seat_agent") and a["action"] in ("start", "hup") and sup.seat_agent_on(sup.Paths()):
+            # the node program once root switched it onto the seat (#3669): the seat
+            # runs it as itself, root only ever stops the copy it ran before
+            raise Refused(None, "job %s runs as the seat, never as root — only stop / held" % a["job"])
         key = (MACHINE, a["job"])
         with self.lock:
             p = self.jobs.get(key)
