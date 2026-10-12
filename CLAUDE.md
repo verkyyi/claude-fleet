@@ -491,6 +491,15 @@ Do not install from memory: read the doc and work from it.
   callback server is gone or at `FLEET_OPEN_CALLBACK_SECS` (`bin/fleet_open_fwd.py`,
   the one bookkeeping). Off = no BROWSER, no cport, byte for byte.
   `fleet-browser-selftest.sh`.
+- **A person talks to ONE conversation from a browser: `bin/fleet-webchat.sh`**
+  (issue #3567, docs/WEB-CHAT.md). `extras/web-chat/server.mjs` runs the Claude
+  Agent SDK as the login, on 127.0.0.1 only (no option widens it), behind a
+  one-time link minted with a 0600 `admin.token` → an HttpOnly cookie; one
+  conversation per person (`webchat/conversation.json`), compacted between turns
+  or relayed to a new session (`chain`), never a list. Each turn's `claude` gets a
+  `fleet-session-cred.sh mint` session credential in its environment only — the
+  pool's proxy picks and meters, as for `fleet-claude.sh`. The model allowlist is
+  `lib.mjs`'s `MODELS`, enforced by the server. `fleet-webchat-selftest.sh`.
 - **Orchestrating is a role a session TAKES, one holder per role** (issue #3114,
   EPIC #3111 C3). `/fleet-orchestrate` (the fleet-orchestrate plugin's skill) first
   calls the dispatch group's `take_role` (`bin/fleet-role-take.sh <role>
@@ -936,6 +945,22 @@ Do not install from memory: read the doc and work from it.
   (BREAK-IT `release-ccquota-stale`). The pinned
   Claude Code is the hub's to fetch (npm, sha512 integrity), never a person's upload. `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
   `credsep-stale-after-switch`.
+- **Root is ONE small core with a fixed table** (issue #3555, EPIC #3500 C13).
+  `bin/fleet-node-core.py` (`com.claude-fleet.node-core` / `fleet-node-core.service`,
+  root) opens no port and reads nothing from the hub: one socket,
+  `/var/run/fleet-node-core.sock` 0660, the peer's uid checked by the kernel
+  (only the node daemon's: `_fleetnode`, root until C14), one line `{op, args}`
+  with no extra key, and only `run-as` · `stop-as` · `exec-as` · `kill` · `memguard`
+  · `power` · `switch` · `rollback` (`bin/fleet_node_core.py` is the wire + client).
+  A job is a NAME of the account task table, never an argv; exec-as's argv[0] lives
+  under `<current>/bin/`; `switch` re-checks the release with the core's own key
+  (`bin/fleet_ed25519.py`, plain Python) and every digest. Off the table ⇒
+  `{"refused"}`, nothing runs, one line in `/var/log/fleet-node-core.log`, one alert
+  past 10 a minute. With it answering, the supervisor's account jobs and the
+  core-held tasks are asked of it (`fleet-node-core.py call … --follow`), the updater's
+  switch / rollback / `as_login` too; no core (or `FLEET_NODE_CORE=0`) ⇒ the old road,
+  byte for byte. A new privileged op is a BREAK-IT row first (`root-core-*`), then a
+  line in the table. docs/MANAGED-NODE.md §20.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
   (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves

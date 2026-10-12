@@ -26,6 +26,23 @@ history: 0 处未确认 · 0 个提交
 - **历史：0 处未确认**（改动前 28 处）。28 处已逐条判定、逐条写进 `.gitleaks.toml`
   （见下「历史里像密钥的 28 处」）：**0 处真密钥**。
 
+## 门禁：新提交不再混进来（C2，#3572）
+
+`.github/workflows/oss-scan.yml` 每个 PR 都跑（不设路径过滤），红了这样改：
+
+- **`文件:行 规则 — 改成配置项或换成占位`**：这个 PR 新增的这一行命中了规则表。运行时用到的值
+  改成配置项（我们自己的值放机器上的 `fleet.conf` 或部署覆盖层）；文档、测试、注释里的换成占位词
+  （`mac-a` `mac-b` `linux-a` · `hub.example.com` · `relay.example.com` · `alice` `bob` · `example.ts.net`）。
+- **确需保留的一行**：行尾写 `# oss-ok: <理由>`（`// oss-ok:`、`<!-- oss-ok:` 同样认），放行，
+  但计数——`--summary` 的「豁免」行和门禁最后一行都报。
+- **「基线只许降」**：全树每条规则的命中数比 `conf/oss-scan.baseline` 多。C7 / C8 删掉命中后，
+  用 `bin/oss-scan.sh --baseline > conf/oss-scan.baseline` 把数调低（门禁会提示「请把 … 调低」）。
+- **gitleaks**：钉住版本、按 sha256 校验的 gitleaks 扫这个 PR 的提交（`bin/oss-scan.sh --commits
+  <base>..HEAD`，用 `.gitleaks.toml`）；先对一个带假 GitHub 令牌的提交跑一次，必须红。
+
+本地先看一眼：`bin/oss-scan.sh --gate origin/master`。演练：`docs/BREAK-IT.md` 的
+`oss-internal-name-committed`。
+
 ## 规则表与允许清单（唯一一份）
 
 - `conf/oss-scan.rules` —— 每行 `<rule-id>\t<ERE>\t<说明>`，外加 `#@keep`（仓库自己的名字

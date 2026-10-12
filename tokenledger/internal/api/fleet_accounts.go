@@ -169,13 +169,14 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 	if len(hosts) == 0 {
 		return nil
 	}
-	if claimed := s.claimSpare(principal, displayName, actor, hosts, now); claimed != "" {
-		// A ready spare on one of their machines is theirs now
-		// (claude-fleet#2263); any other machine opens the same name.
+	// A ready spare on a machine where they have no login yet is theirs now
+	// (claude-fleet#2263; a person already recorded too, claude-fleet#3501);
+	// a machine with none ready opens their own name.
+	for _, claimed := range s.claimSpares(principal, displayName, actor, hosts, now) {
 		hosts = dropHost(hosts, claimed)
-		if len(hosts) == 0 {
-			return nil
-		}
+	}
+	if len(hosts) == 0 {
+		return nil
 	}
 	p, err := s.Store.EnsurePrincipalAs(principal, displayName, s.preferredLogin(principal, displayName),
 		control.MaxLoginLen, control.ValidLogin, now)
@@ -932,7 +933,10 @@ type FleetAccountsView struct {
 
 // FleetAccountRequest is the body of POST /v1/fleet/accounts.
 //
-//	assign  queue the person's login on hostname (creates the person if new)
+//	assign  hand the person a ready spare on hostname when it holds one
+//	        (active at once, login fleetu<N>, nothing sent — claude-fleet#3501),
+//	        else queue their own login there (creates the person if new);
+//	        own_name skips the spare
 //	retry   re-queue a create that failed, went unknown or was removed
 //	remove  close the login on hostname (the home is archived, not deleted)
 //	adopt   record a login that already exists there as theirs; runs nothing
@@ -953,6 +957,9 @@ type FleetAccountRequest struct {
 	Login         string `json:"login,omitempty"`
 	DisplayName   string `json:"display_name,omitempty"`
 	ToPrincipalID string `json:"to_principal_id,omitempty"`
+	// OwnName (assign only, claude-fleet#3501): skip the machine's ready
+	// spares and open the person's own login name there, as before spares.
+	OwnName bool `json:"own_name,omitempty"`
 }
 
 // handleFleetAccounts is the operator's view and control of every account.
@@ -1012,7 +1019,7 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 				httpError(w, code, err.Error())
 				return
 			}
-		} else if err := s.changeAccount(req); err != nil {
+		} else if err := s.changeAccount(req, actorOf(r)); err != nil {
 			code := http.StatusBadRequest
 			if errors.Is(err, store.ErrAccountState) {
 				code = http.StatusConflict
@@ -1160,10 +1167,17 @@ func (s *Server) relogin(req FleetAccountRequest, actor string) error {
 	return nil
 }
 
-func (s *Server) changeAccount(req FleetAccountRequest) error {
+func (s *Server) changeAccount(req FleetAccountRequest, actor string) error {
 	now := time.Now()
 	switch req.Action {
 	case "assign", "retry":
+		if req.Action == "assign" && !req.OwnName {
+			// A ready spare there first (claude-fleet#3501): active in this
+			// request, nothing sent to the machine.
+			if s.claimSpareOn(req.PrincipalID, req.DisplayName, actor, req.Hostname, now) != nil {
+				return nil
+			}
+		}
 		p, err := s.Store.EnsurePrincipal(req.PrincipalID, req.DisplayName, control.MaxLoginLen, control.ValidLogin, now)
 		if err != nil {
 			return err

@@ -36,6 +36,9 @@
 #             `sshd -t` and `sshd -T` must agree or both go back (no hub CA ⇒ 跳过)
 #   删号通道  root's key on the admin who ran sudo, loopback + a forced command
 #             (fleet-login-remove-ssh.sh setup, #2994) — no admin ⇒ 跳过
+#   核心      the root core (#3555): FLEET_NODE_CORE=1 on the command installs
+#             com.claude-fleet.node-core (fleet-node-core.py install), 0 removes it;
+#             neither: an installed one is kept converged, none = no line at all
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3)
 #             — whose `spotlight` task turns Spotlight off at its start (#3402,
@@ -424,6 +427,30 @@ if [ -n "$LOGIN" ]; then
   "$PY" -I "$CUR/bin/fleet-node-linux.py" login open "$LOGIN" --no-start --hub "$HUB" ${FLEET_NODE_UID:+--uid "$FLEET_NODE_UID"} \
     ${LOGIN_CODE_FILE:+--join-file "$LOGIN_CODE_FILE"} || fail 账号 "Linux tenant preparation failed"
 fi
+
+# ---------------------------------------------------------------- 核心 ----------
+# The root core (issue #3555, EPIC #3500 C13): the one root program with a fixed
+# action table the daemon asks instead of doing it as root. FLEET_NODE_CORE=1 on
+# this command installs it (before the daemon, so the daemon finds it), 0 takes it
+# out (every caller back on its old road); otherwise an installed one is kept
+# converged and a machine without one prints nothing — byte for byte as before.
+CORE="$CUR/bin/fleet-node-core.py"
+cst=2; [ -f "$CORE" ] && { "$PY" -I "$CORE" status --check >/dev/null 2>&1; cst=$?; }
+case "${FLEET_NODE_CORE:-}" in
+  0) if [ "$cst" != 2 ]; then
+       out="$("$PY" -I "$CORE" uninstall 2>&1)" || fail 核心 "$(printf '%s' "$out" | tail -n 1)"
+       ok 核心 "卸了（各处走老路）"
+     else skip 核心 "没装"; fi ;;
+  *) if [ "${FLEET_NODE_CORE:-}" = 1 ] || [ "$cst" != 2 ]; then
+       [ -f "$CORE" ] || fail 核心 "这个版本没有 fleet-node-core.py — 先让运行时跟上发布版"
+       if "$PY" -I "$CORE" install --check >/dev/null 2>&1; then
+         skip 核心 "com.claude-fleet.node-core 已装好、在答"
+       else
+         out="$("$PY" -I "$CORE" install 2>&1)" || fail 核心 "$(printf '%s' "$out" | tail -n 1)"
+         ok 核心 "$(printf '%s' "$out" | tail -n 1)"
+       fi
+     fi ;;
+esac
 
 # ---------------------------------------------------------------- 守护 ----------
 mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins" || fail 守护 "建不了 $STATE/logins"

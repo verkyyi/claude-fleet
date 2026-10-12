@@ -262,6 +262,21 @@ check "FLEET_ENTRY=0 → 入口 off, the lines out, the token kept" \
 run
 check "  … and again: 跳过 入口 (没开)" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '$QUIET -入口 ' ]"
 
+echo "H  the root core (#3555): FLEET_NODE_CORE=1 installs it, 0 takes it out, neither on a machine without one = no line"
+sandbox
+run --join "$CODE1"
+check "no core asked, none here: no 核心 line" sh -c "[ $RC = 0 ] && ! printf '%s' \"\$OUT\" | grep -q 核心"
+CUR_BIN="$SB/root/current/bin"
+for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py; do cp "$BIN/$f" "$CUR_BIN/"; done
+OUT="$(FLEET_NODE_CORE=1 ${FNI_BASH:-bash} "$INST" --hub https://hub.test 2>&1)"; RC=$?
+check "FLEET_NODE_CORE=1 → ✓ 核心, its LaunchDaemon written" \
+  sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 核心' && [ -f '$SB/LaunchDaemons/com.claude-fleet.node-core.plist' ]"
+OUT="$(FLEET_NODE_CORE=0 ${FNI_BASH:-bash} "$INST" --hub https://hub.test 2>&1)"; RC=$?
+check "FLEET_NODE_CORE=0 → ✓ 核心 卸了, the LaunchDaemon gone" \
+  sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 核心 卸了' && [ ! -e '$SB/LaunchDaemons/com.claude-fleet.node-core.plist' ]"
+run
+check "  … and again: no core, no 核心 line" sh -c "[ $RC = 0 ] && ! printf '%s' \"\$OUT\" | grep -q 核心"
+
 echo "F  the old roads on a managed machine"
 OUT="$(FLEET_CONF_DIR="$SB/conf" bash "$BIN/fleet-node.sh" join --help 2>&1 >/dev/null)"
 check "fleet node join points at fleet node install" sh -c "printf '%s' \"\$OUT\" | grep -q '托管机器.*sudo fleet node install --join'"

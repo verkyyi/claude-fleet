@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"sort"
@@ -17,9 +18,12 @@ import (
 // that already exists — ready in the time a database write takes, instead of
 // 「正在为你开机器，约 60 秒」.
 //
-//   - How many: per machine, min(fleet.spare_max (default 5),
+//   - How many: per machine (or cluster — a place is one hostname on the
+//     roster, whatever stands behind it), the machine's own desired state
+//     spare_accounts when the operator wrote one, else fleet.spare_max
+//     (default 2, claude-fleet#3501) — and never more than
 //     fleet.node_user_cap.<machine> (default 10) − the logins already handed
-//     out there). A spare runs no session and holds no subscription; measured
+//     out there. A spare runs no session and holds no subscription; measured
 //     on m5 (2026-10-08, idle fleet logins zx / vincent / victor) one costs
 //     about 9 processes, 60–75 MB resident and 0.25–0.9 GB of disk.
 //   - Refill rides the admin node's heartbeat (at most once per
@@ -32,13 +36,19 @@ import (
 //   - Shrink needs no fitness: a machine holding more than its count (the cap
 //     lowered, logins handed out) closes the newest ready spares and drops the
 //     ones that never reached it. 维护中 / under pressure ⇒ only shrinks.
-//   - Claim is placePrincipal's first move for a person the hub has never
-//     recorded: a ready spare on one of their machines becomes theirs — the
-//     hub records 「this GitHub person → that login」, nothing is renamed and
-//     nothing is sent (store.ClaimSpare). Ready means its create came back
-//     credential-separated, so there is no window in which the newcomer can
-//     read a token. No ready spare, or a person already recorded: their own
-//     login is opened as before, and the doors say 「正在开」 with its ETA.
+//   - Claim is the first move of placePrincipal and of the operator's
+//     assign, for anyone with no login on that machine yet: a ready spare
+//     there becomes theirs — the hub records 「this person → that login」,
+//     nothing is renamed and nothing is sent. A person never recorded takes
+//     the spare's principal row (store.ClaimSpare, their login is fleetu<N>
+//     from then on); one already recorded takes only its account row, so
+//     their login there is the spare's fleetu<N> while it stays their own
+//     name elsewhere (store.ClaimSpareFor, claude-fleet#3501) — which is why
+//     every 「person → login on a machine」 reads fleet_accounts. Ready means
+//     its create came back credential-separated, so there is no window in
+//     which the newcomer can read a token. No ready spare, or the operator's
+//     assign with own_name: their own login is opened as before, and the
+//     doors say 「正在开」 with its ETA.
 //   - A spare is nobody in every people, budget and usage view
 //     (store.Principals leaves it out).
 //
@@ -58,7 +68,7 @@ const (
 // login cap when fleet.node_user_cap.<machine> is unset.
 const (
 	spareMaxCeiling    = 20
-	defaultSpareMax    = 5
+	defaultSpareMax    = 2
 	defaultNodeUserCap = 10
 )
 
@@ -69,7 +79,7 @@ var spareScanEvery = 30 * time.Second
 func checkSpareMax(_ *Server, v string) (string, string) {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 || n > spareMaxCeiling {
-		return "", SpareMaxKey + " is an integer 0–" + strconv.Itoa(spareMaxCeiling) + ", or \"\" for the default (5)"
+		return "", SpareMaxKey + " is an integer 0–" + strconv.Itoa(spareMaxCeiling) + ", or \"\" for the default (2)"
 	}
 	return strconv.Itoa(n), ""
 }
@@ -104,13 +114,15 @@ func nodeUserCap(hostname string, settings map[string]string) int {
 
 // spareMachine is one machine's spare picture.
 type spareMachine struct {
-	Ready  int  // spares handed out at the next sign-in (active)
-	Held   int  // spares in any state but closed / on their way out
-	Used   int  // logins handed out (anyone's but a spare's, not closed)
-	Cap    int  // the machine's login cap
-	Target int  // spares it should hold
-	Failed bool // a spare's create failed
-	spares []store.FleetAccount
+	Ready     int  // spares handed out at the next sign-in (active)
+	Held      int  // spares in any state but closed / on their way out
+	Used      int  // logins handed out (anyone's but a spare's, not closed)
+	Cap       int  // the machine's login cap
+	Target    int  // spares it should hold
+	Failed    bool // a spare's create failed
+	Resetting int  // spares being washed for the next person (never ready)
+	FailedN   int  // spares that failed (never ready)
+	spares    []store.FleetAccount
 }
 
 func (m *spareMachine) aim(max int) {
@@ -175,14 +187,57 @@ func (s *Server) sparePicture(machines ...string) (map[string]*spareMachine, err
 			m.Ready++
 		case store.AccountFailed:
 			m.Failed = true
+			m.FailedN++
+		case store.AccountResetPending, store.AccountResetting:
+			m.Resetting++
 		}
 		m.Held++
 	}
 	max := s.spareMax()
-	for _, m := range out {
-		m.aim(max)
+	desired := s.desiredSpares()
+	for k, m := range out {
+		if n, ok := desired[k]; ok {
+			m.aim(n)
+		} else {
+			m.aim(max)
+		}
 	}
 	return out, nil
+}
+
+// desiredSpares is, per machine (lower-cased), the spare_accounts its desired
+// state names (claude-fleet#3501) — the one per-machine source, ahead of
+// fleet.spare_max. A machine whose desired state never wrote the key is not
+// in it; 0 written is 0. Several endpoints of one machine: the newest write.
+func (s *Server) desiredSpares() map[string]int {
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		log.Printf("fleet: spares: roster: %v", err)
+		return nil
+	}
+	out, at := map[string]int{}, map[string]time.Time{}
+	for _, n := range nodes {
+		d, err := s.Store.DesiredOf(n.EndpointID)
+		if err != nil || d.Version == 0 {
+			continue
+		}
+		var body struct {
+			Spares *int `json:"spare_accounts"`
+		}
+		if json.Unmarshal([]byte(d.Body), &body) != nil || body.Spares == nil {
+			continue
+		}
+		k := strings.ToLower(n.Hostname)
+		if prev, ok := at[k]; ok && !d.UpdatedAt.After(prev) {
+			continue
+		}
+		v := *body.Spares
+		if v < 0 {
+			v = 0
+		}
+		out[k], at[k] = v, d.UpdatedAt
+	}
+	return out
 }
 
 // spareFitMachines is every machine a spare may be opened on right now.
@@ -323,33 +378,72 @@ func (s *Server) isSpareOp(opID string) bool {
 	return err == nil && store.IsSparePrincipal(a.PrincipalID)
 }
 
-// claimSpare hands principal a ready spare on one of hosts, when the hub
-// has never recorded them. It returns the machine it claimed on, "" for none.
-func (s *Server) claimSpare(principal, displayName, actor string, hosts []string, now time.Time) string {
+// claimSpareOn hands principal a ready spare on host — whether or not the
+// hub has recorded them yet (claude-fleet#3501): a person never recorded
+// takes the spare whole (store.ClaimSpare), one already recorded takes its
+// account row (store.ClaimSpareFor). nil when it handed none: spares off, a
+// drill, no ready spare there, or a login of theirs already on host.
+func (s *Server) claimSpareOn(principal, displayName, actor, host string, now time.Time) *store.FleetAccount {
 	if !s.sparesOn() || store.IsSparePrincipal(principal) || s.Store.IsDrill(principal) {
-		return ""
+		return nil
 	}
-	if _, err := s.Store.Principal(principal); !errors.Is(err, store.ErrNoPrincipal) {
-		return "" // recorded already: their login is theirs, opened the usual way
+	var a *store.FleetAccount
+	var err error
+	switch _, perr := s.Store.Principal(principal); {
+	case errors.Is(perr, store.ErrNoPrincipal):
+		a, err = s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now)
+		if errors.Is(err, store.ErrRekeyTarget) {
+			// Recorded between the two reads: the recorded person's road.
+			a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
+		}
+	case perr != nil:
+		log.Printf("fleet: claim a spare on %s for %s: %v", host, principal, perr)
+		return nil
+	default:
+		a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
 	}
+	switch {
+	case errors.Is(err, store.ErrNoSpare), errors.Is(err, store.ErrAccountState):
+		return nil
+	case err != nil:
+		log.Printf("fleet: claim a spare on %s for %s: %v", host, principal, err)
+		return nil
+	}
+	log.Printf("fleet: %s: handed spare login %s on %s", principal, a.Login, host)
+	go func() {
+		if s.replenishSpares(time.Now(), true) {
+			s.dispatchAccounts()
+		}
+	}()
+	return a
+}
+
+// claimSpares runs claimSpareOn on every one of hosts where principal holds
+// no account row at all (a closed one stays closed: reopening it is the
+// operator's assign), and returns the hosts it claimed on.
+func (s *Server) claimSpares(principal, displayName, actor string, hosts []string, now time.Time) []string {
+	if !s.sparesOn() || len(hosts) == 0 {
+		return nil
+	}
+	have := map[string]bool{}
+	if as, err := s.Store.FleetAccounts(principal); err == nil {
+		for _, a := range as {
+			have[strings.ToLower(a.Hostname)] = true
+		}
+	} else {
+		log.Printf("fleet: accounts of %s: %v", principal, err)
+		return nil
+	}
+	var out []string
 	for _, host := range hosts {
-		a, err := s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now)
-		if errors.Is(err, store.ErrNoSpare) {
+		if have[strings.ToLower(host)] {
 			continue
 		}
-		if err != nil {
-			log.Printf("fleet: claim a spare on %s for %s: %v", host, principal, err)
-			return ""
+		if s.claimSpareOn(principal, displayName, actor, host, now) != nil {
+			out = append(out, host)
 		}
-		log.Printf("fleet: first sign-in of %s: handed spare login %s on %s", principal, a.Login, host)
-		go func() {
-			if s.replenishSpares(time.Now(), true) {
-				s.dispatchAccounts()
-			}
-		}()
-		return host
 	}
-	return ""
+	return out
 }
 
 // spareDisplayName is the name a claimed spare's principal row takes: the
@@ -403,6 +497,8 @@ func (s *Server) stampSpares(snap *NodesSnapshot) {
 		m := pic[strings.ToLower(mv.Hostname)]
 		ready, used, cap := m.Ready, m.Used, m.Cap
 		mv.Spare, mv.LoginsUsed, mv.LoginCap = &ready, &used, &cap
+		resetting, failed, target := m.Resetting, m.FailedN, m.Target
+		mv.SpareResetting, mv.SpareFailed, mv.SpareTarget = &resetting, &failed, &target
 	}
 }
 

@@ -103,7 +103,7 @@ class H(BaseHTTPRequestHandler):
                   {"hostname": "mini2", "status": "maintenance", "sessions": None, "load1": 0, "ncpu": 0}]
             if spare:
                 ms[0].update(spare=1, logins_used=2, login_cap=10)
-                ms[1].update(spare=0, logins_used=9, login_cap=9)
+                ms[1].update(spare=0, logins_used=9, login_cap=9, spare_resetting=1, spare_failed=2)
             # m5 behind one machine link carrying two logins (claude-fleet#2333)
             ns = [{"hostname": "macmini", "os_user": "root", "machine_link": True},
                   {"hostname": "macmini", "os_user": "zx", "via": "ep_mach"},
@@ -273,11 +273,11 @@ run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts assi
 n2=$(wc -l <"$LOG")
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts remove zx --host fleet-linux-0 >"$WORK/out3" 2>&1; rc3=$?
 r3=$(last)
-if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "fleet-linux-0"}' ] \
+if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id": "zx", "hostname": "fleet-linux-0", "own_name": true}' ] \
    && grep -q '^zx · fleet-linux-0 · pending · -$' "$WORK/out" \
    && [ "$rc2" = 2 ] && [ "$((n2 - n1))" = 1 ] && grep -q 'relogin' "$WORK/err2" \
    && [ "$rc3" = 0 ] && [ "$(field "$r3" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "fleet-linux-0"}' ]; then
-  ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname}; a --login not theirs is refused before the POST"
+  ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare); a --login not theirs is refused before the POST"
 else bad "N rc=$rc/$rc2/$rc3 req=$r req3=$r3 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 
 # L — fleet hub invite (claude-fleet#2261): mint, list, revoke
@@ -311,7 +311,7 @@ if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ "$(field "$r" method)" = GET ] && [ "$(
    && printf '%s\n' "$off" | grep -q '备用账号没开' && ! printf '%s\n' "$off" | grep -q '备用 [0-9]' \
    && printf '%s\n' "$on" | grep -q '^m5 (macmini) .*online .*4 .*0\.25 *1 *verkyyi、zx · 备用 1 · 已用 2 / 上限 10$' \
    && printf '%s\n' "$off" | grep -q '^m5 (macmini) .*0\.25 *1 *verkyyi、zx$' && ! printf '%s\n' "$off" | grep -q 'root' \
-   && printf '%s\n' "$on" | grep -q '^mini2 .*maintenance .*? .*备用 0 · 已用 9 / 上限 9$' \
+   && printf '%s\n' "$on" | grep -q '^mini2 .*maintenance .*? .*备用 0 · 已用 9 / 上限 9 · 回收中 1 · 坏了 2$' \
    && printf '%s\n' "$acc" | grep -q '^spare:macmini:abcd1234 .*macmini · flk2m9qa (active)$'; then
   ok "M fleet hub machines → GET /v1/nodes, 连接 N + its logins (not the link) per machine, 备用 N (hint while off); accounts lists spares apart"
 else bad "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi

@@ -165,7 +165,7 @@ var hubSettings = map[string]hubSetting{
 		}},
 	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
 		check: onOff(SparesKey, "off")},
-	SpareMaxKey: {def: "5", help: "at most this many spare logins per machine, within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
+	SpareMaxKey: {def: "2", help: "at most this many spare logins per machine, within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
 		check: checkSpareMax},
 	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (macmini=m5, mini2=m4)",
 		check: func(_ *Server, v string) (string, string) {

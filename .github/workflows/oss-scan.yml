@@ -1,0 +1,64 @@
+name: oss-scan
+
+# The repo is public: nothing a PR adds may name our machines, our addresses or a
+# secret (issue #3572, EPIC #3569 C2). Two steps, every PR, NO path filter — the
+# hits live as much in docs/, deploy/ and tokenledger/ as in bin/, which is why
+# this is not a selftest inside selftests.yml (whose paths skip those trees):
+#
+#   1. bin/oss-scan.sh --gate: every line the PR ADDS is matched against the ONE
+#      rule table (conf/oss-scan.rules + conf/oss-scan.allow, C1). A hit is red,
+#      printed `file:line rule — 改成配置项或换成占位，见 docs/dev/OSS-INVENTORY.md`;
+#      a line that must stay ends in `# oss-ok: <理由>` (counted). The tree's count
+#      per rule may only go down against conf/oss-scan.baseline.
+#   2. gitleaks over the PR's commits only (--log-opts <base>..HEAD, --redact),
+#      with the repo's .gitleaks.toml — a pinned release, checked by its sha256.
+#      Before it, a canary: the same binary on a throwaway commit holding a fake
+#      GitHub token must go red, so a broken download or config can never pass
+#      a PR by finding nothing.
+
+on:
+  pull_request:
+
+concurrency:
+  group: oss-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oss-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: internal names in the lines this PR adds
+        run: bin/oss-scan.sh --gate "origin/${{ github.base_ref }}"
+
+      - name: install gitleaks (pinned)
+        run: |
+          set -eu
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: gitleaks canary — a fake GitHub token must be red
+        run: |
+          set -u
+          d="$RUNNER_TEMP/canary"; git init -q "$d"
+          tok="ghp_$(python3 -c 'import random,string; print("".join(random.choice(string.ascii_letters+string.digits) for _ in range(36)))')"
+          printf 'token = "%s"\n' "$tok" > "$d/conf.py"
+          git -C "$d" add -A
+          git -C "$d" -c user.name=ci -c user.email=ci@example.com commit -qm canary
+          rc=0; bin/oss-scan.sh --root "$d" --commits HEAD || rc=$?
+          [ "$rc" = 1 ] || { echo "gitleaks did not flag a fake GitHub token (rc $rc)"; exit 1; }
+          echo "canary: red as it must be"
+
+      - name: gitleaks on this PR's commits
+        run: bin/oss-scan.sh --commits "origin/${{ github.base_ref }}..HEAD"

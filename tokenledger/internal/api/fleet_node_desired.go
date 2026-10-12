@@ -41,9 +41,10 @@ type DesiredBody struct {
 	// Components pins each part's version: ccquota, claude, codex, runtime, …
 	Components map[string]string `json:"components,omitempty"`
 	// Accounts are the system logins the machine should have; Spares how
-	// many empty ones it keeps ready.
+	// many empty ones it keeps ready — the machine's own spare count
+	// (claude-fleet#3501), nil when never written so 0 stays a choice.
 	Accounts []string `json:"accounts,omitempty"`
-	Spares   int      `json:"spare_accounts,omitempty"`
+	Spares   *int     `json:"spare_accounts,omitempty"`
 }
 
 // DesiredState is GET's answer: the body plus who the machine is.
@@ -78,7 +79,7 @@ func (b DesiredBody) validate() error {
 			return errors.New("accounts: system login names")
 		}
 	}
-	if b.Spares < 0 || b.Spares > 32 {
+	if b.Spares != nil && (*b.Spares < 0 || *b.Spares > 32) {
 		return errors.New("spare_accounts: 0 to 32")
 	}
 	return nil

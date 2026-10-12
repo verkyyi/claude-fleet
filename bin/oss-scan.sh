@@ -14,13 +14,27 @@
 #   oss-scan.sh --history [--summary] [--root DIR]
 #       `gitleaks git --redact` over every commit with the repo's .gitleaks.toml:
 #       one line per finding the allowlist has not confirmed (commit:path:line:rule).
+#   oss-scan.sh --commits <range> [--root DIR]
+#       the same, over `git log <range>` only — the PR gate's second half (C2)
+#   oss-scan.sh --baseline [--root DIR]
+#       the tree's hit count per rule, in conf/oss-scan.baseline's format
+#   oss-scan.sh --gate <base> [--root DIR]
+#       the PR gate (issue #3572, EPIC #3569 C2): red when a line ADDED since the
+#       merge base with <base> holds a hit, or when a rule's tree count rose above
+#       conf/oss-scan.baseline (it only ever goes down). One line per new hit:
+#       `file:line rule — 改成配置项或换成占位，见 docs/dev/OSS-INVENTORY.md`.
 #
-#   --rules F / --allow F   another table (the selftest's seam)
+#   --rules F / --allow F / --baseline-file F   another table (the selftest's seam)
+#
+# A line that ends in `# oss-ok: <理由>` (or `// oss-ok:` / `<!-- oss-ok:`) is
+# exempt, like `# bash32-ok:` — class `ok`, kept out of the gate and the
+# baseline, and still counted (--summary's 豁免 line, the gate's last line).
 #
 # Exit: 0 nothing found · 1 something found · 2 usage / a tool missing.
 #
 # The class of a hit is what to DO with it (the inventory's three words):
 #   allow        conf/oss-scan.allow names its file + rule, with the reason
+#   ok           the line itself says `oss-ok: <理由>`
 #   placeholder  a test, a doc or a comment — swap in a placeholder word (C8)
 #   config       anything else: code or deploy that runs with the value — make
 #                it a setting, our own value outside the repo (C7)
@@ -32,11 +46,14 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 ROOT=""
 RULES=""
 ALLOW=""
+BASEFILE=""
+GATE=""
+COMMITS=""
 MODE=hits
 HISTORY=0
 SHOW_ALL=0
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -45,6 +62,10 @@ while [ $# -gt 0 ]; do
         --inventory) MODE=inventory ;;
         --all) SHOW_ALL=1 ;;
         --history) HISTORY=1 ;;
+        --baseline) MODE=baseline ;;
+        --gate) GATE=${2:-}; shift; [ -n "$GATE" ] || { echo "oss-scan: --gate needs a base" >&2; exit 2; } ;;
+        --commits) COMMITS=${2:-}; HISTORY=1; shift; [ -n "$COMMITS" ] || { echo "oss-scan: --commits needs a range" >&2; exit 2; } ;;
+        --baseline-file) BASEFILE=${2:-}; shift ;;
         --root) ROOT=${2:-}; shift ;;
         --rules) RULES=${2:-}; shift ;;
         --allow) ALLOW=${2:-}; shift ;;
@@ -59,6 +80,7 @@ done
 [ -n "$ROOT" ] && [ -d "$ROOT" ] || { echo "oss-scan: not in a git repo (--root DIR)" >&2; exit 2; }
 [ -n "$RULES" ] || RULES="$BIN/../conf/oss-scan.rules"
 [ -n "$ALLOW" ] || ALLOW="$BIN/../conf/oss-scan.allow"
+[ -n "$BASEFILE" ] || BASEFILE="$BIN/../conf/oss-scan.baseline"
 
 # ---- history ----------------------------------------------------------------
 if [ "$HISTORY" = 1 ]; then
@@ -67,6 +89,7 @@ if [ "$HISTORY" = 1 ]; then
     tmp=$(mktemp "${TMPDIR:-/tmp}/oss-scan.XXXXXX") || exit 2
     cfg=()
     [ -f "$ROOT/.gitleaks.toml" ] && cfg=(--config "$ROOT/.gitleaks.toml")
+    [ -n "$COMMITS" ] && cfg+=(--log-opts "$COMMITS")
     gitleaks git --redact --no-banner --log-level error \
         ${cfg[@]+"${cfg[@]}"} --report-format json --report-path "$tmp" \
         --exit-code 0 "$ROOT" >/dev/null 2>&1
@@ -95,6 +118,77 @@ fi
 
 # ---- current tree -----------------------------------------------------------
 [ -f "$RULES" ] || { echo "oss-scan: no rule table: $RULES" >&2; exit 2; }
+
+# ---- baseline / gate --------------------------------------------------------
+# Both read the full hit list (--all) of this same script, so the classes, the
+# keep words, the allow list and the oss-ok exemption are decided in ONE place.
+all_hits() { bash "$0" --all --root "$ROOT" --rules "$RULES" --allow "$ALLOW"; }
+
+# baseline_counts — `<rule>\t<n>` for every rule of the table, 0 included:
+# the tree's hits that are neither allowed nor exempt.
+baseline_counts() {
+    { all_hits; echo; } | awk -F: -v rules="$RULES" '
+        BEGIN { while ((getline l < rules) > 0) {
+                    if (l ~ /^#/ || l == "") continue
+                    split(l, f, "\t"); if (f[2] != "") { ord[++n] = f[1]; c[f[1]] = 0 } } }
+        NF >= 4 && $4 != "allow" && $4 != "ok" { c[$3]++ }
+        END { for (i = 1; i <= n; i++) printf "%s\t%d\n", ord[i], c[ord[i]] }'
+}
+
+if [ "$MODE" = baseline ] && [ -z "$GATE" ]; then
+    cat <<'EOF'
+# conf/oss-scan.baseline — the tree's internal-name hits per rule (issue #3572,
+# EPIC #3569 C2): bin/oss-scan.sh --gate reds a PR that raises any of them.
+# A count only goes DOWN: a PR that removes hits (C7 / C8) lowers its line, written
+# by `bin/oss-scan.sh --baseline > conf/oss-scan.baseline`. Allowed (oss-scan.allow)
+# and exempt (`# oss-ok: <理由>`) lines are not counted here.
+EOF
+    baseline_counts
+    exit 0
+fi
+
+if [ -n "$GATE" ]; then
+    # The merge base, never the base's tip: a PR is judged on what IT adds.
+    mb=$(git -C "$ROOT" merge-base "$GATE" HEAD 2>/dev/null) \
+        || { echo "oss-scan: --gate: '$GATE' has no merge base with HEAD" >&2; exit 2; }
+    # path:line of every line the PR adds — renames detected, so a moved file
+    # (C6) adds only the lines it changed
+    addf=$(mktemp "${TMPDIR:-/tmp}/oss-gate.XXXXXX") || exit 2
+    trap 'rm -f "$addf"' EXIT
+    git -C "$ROOT" diff -M --no-color --no-ext-diff -U0 "$mb" HEAD 2>/dev/null | awk '
+        /^\+\+\+ / { p = substr($0, 5); sub(/^b\//, "", p); if (p == "/dev/null") p = ""; next }
+        /^@@ / { split($3, a, ","); ln = substr(a[1], 2) + 0; next }
+        /^\+/ && p != "" { print p ":" ln; ln++ }' > "$addf"
+    hits=$(all_hits)
+    rc=0
+    new=$(printf '%s\n' "$hits" | awk -F: -v addf="$addf" '
+        BEGIN { while ((getline l < addf) > 0) is[l] = 1 }
+        NF >= 4 && $4 != "allow" && $4 != "ok" && (($1 ":" $2) in is) {
+            print $1 ":" $2 " " $3 " — 改成配置项或换成占位，见 docs/dev/OSS-INVENTORY.md" }')
+    if [ -n "$new" ]; then
+        printf '%s\n' "$new"
+        echo "oss-gate: 新增 $(printf '%s\n' "$new" | wc -l | tr -d ' ') 处内部名字或地址（确需保留的一行在行尾写 # oss-ok: <理由>）"
+        rc=1
+    fi
+    [ -f "$BASEFILE" ] || { echo "oss-scan: no baseline: $BASEFILE" >&2; exit 2; }
+    cmp=$(baseline_counts | awk -F'\t' -v bf="$BASEFILE" '
+        BEGIN { while ((getline l < bf) > 0) { if (l ~ /^#/ || l == "") continue
+                    split(l, f, "\t"); b[f[1]] = f[2] + 0; has[f[1]] = 1 } }
+        { if (!($1 in has)) { b[$1] = 0 }
+          if ($2 > b[$1]) printf "UP\t%s\t%d\t%d\n", $1, b[$1], $2
+          else if ($2 < b[$1]) printf "DOWN\t%s\t%d\t%d\n", $1, b[$1], $2 }')
+    up=$(printf '%s\n' "$cmp" | awk -F'\t' '$1 == "UP" { printf "%s %d → %d · ", $2, $3, $4 }')
+    down=$(printf '%s\n' "$cmp" | awk -F'\t' '$1 == "DOWN" { printf "%s %d → %d · ", $2, $3, $4 }')
+    if [ -n "$up" ]; then
+        echo "oss-gate: 基线只许降，这些规则的全树命中数升了：${up% · }（conf/oss-scan.baseline）"
+        rc=1
+    fi
+    [ -n "$down" ] && echo "oss-gate: 降了：${down% · } — 请把 conf/oss-scan.baseline 调低（bin/oss-scan.sh --baseline > conf/oss-scan.baseline）"
+    ok=$(printf '%s\n' "$hits" | awk -F: 'NF >= 4 && $4 == "ok"' | wc -l | tr -d ' ')
+    [ "$rc" = 0 ] && echo "oss-gate: 绿 — 新增 0 处 · 基线没有升 · 豁免 ${ok} 处（oss-ok）" \
+                  || echo "oss-gate: 红 · 豁免 ${ok} 处（oss-ok）"
+    exit "$rc"
+fi
 
 # Every rule's matching lines, tagged `<rule>\t<path>:<line>:<text>`.
 grep_all() {
@@ -159,9 +253,9 @@ BEGIN {
     cls = ""
     for (i = 1; i <= na; i++)
         if ((arule[i] == "*" || arule[i] == id) && path ~ agl[i]) { cls = "allow"; break }
+    if (cls == "" && text ~ /(#|\/\/|<!--)[ \t]*oss-ok:[ \t]*[^ \t]/) cls = "ok"
     if (cls == "") cls = (testfile(path) || docfile(path) || comment(text)) ? "placeholder" : "config"
-    if (cls == "allow" && !all && mode == "hits") next
-    if (cls == "allow" && !all && mode == "files") next
+    if ((cls == "allow" || cls == "ok") && !all && (mode == "hits" || mode == "files")) next
     print path ":" ln ":" id ":" cls
 }
 ' | {
@@ -176,6 +270,7 @@ BEGIN {
             {
                 f = $1; r = $3; c = $4
                 if (c == "allow") { af[f] = 1; next }
+                if (c == "ok") { ok++; next }
                 h++; files[f] = 1; fr[f, r]++; fc[f, c] = 1; nf[f]++
                 rh[r]++; if (!((f, r) in rf)) { rf[f, r] = 1; rn[r]++ }
                 d = f; sub(/\/.*/, "", d); if (d == f) d = "(根)"
@@ -193,6 +288,7 @@ BEGIN {
                     nc = 0; np = 0
                     for (f in files) { if ((f, "config") in fc) nc++; else np++ }
                     printf "  by class: config %d 个文件 · placeholder %d 个文件（含 config 的文件记 config）\n", nc, np
+                    printf "  豁免:     %d 处（行尾 oss-ok:，不进门禁与基线）\n", ok
                 } else {
                     printf "| 文件 | 处 | 规则 | 归类 |\n|---|---:|---|---|\n"
                     for (f in files) {
@@ -223,7 +319,7 @@ BEGIN {
                     | { IFS= read -r h1; IFS= read -r h2; printf '%s\n%s\n' "$h1" "$h2"; LC_ALL=C sort | cut -f2-; }
             else cat; fi ;;
     esac
-    [ -z "$(printf '%s\n' "$hits" | awk -F: 'NF >= 4 && $4 != "allow"')" ]
+    [ -z "$(printf '%s\n' "$hits" | awk -F: 'NF >= 4 && $4 != "allow" && $4 != "ok"')" ]
 }
 rc=${PIPESTATUS[2]:-1}
 [ "$rc" = 0 ] || exit 1

@@ -1303,9 +1303,21 @@ class Updater(object):
 
     def switch(self):
         frm, to = self.st.get("from"), self.st["to"]
-        if frm and os.path.isdir(self.p.rel(frm)):
-            swap_link(self.p.prev, self.p.rel(frm))
-        swap_link(self.p.current, self.p.rel(to))
+        if core_answers():
+            # the root core re-checks the signature with its own key and moves the
+            # links itself (#3555); a refusal leaves current where it is
+            r = core_ask("switch", {"sha": to})
+            if not r.get("ok") and link_sha(self.p.current) != to:
+                why = "the root core refused the switch: %s" % (r.get("why") or r.get("error") or r)
+                self.st["failed"] = {to: {"at": now(), "reason": why}}
+                self.st.update(phase="idle")
+                self.record("failed", frm, to, why)
+                self.end("failed", "%s: %s" % (to[:12], why), current=frm)
+                return
+        else:
+            if frm and os.path.isdir(self.p.rel(frm)):
+                swap_link(self.p.prev, self.p.rel(frm))
+            swap_link(self.p.current, self.p.rel(to))
         # every managed login moves WITH the machine (issue #2774): its install is
         # a tree of links into the release, re-pointed in the same tick
         notes = self.sync_outside() + self.sync_credsep() + self.follow_installs(sha=to, force=True)
@@ -1319,8 +1331,19 @@ class Updater(object):
 
     def rollback(self, why):
         frm, to = self.st.get("from"), self.st["to"]
-        swap_link(self.p.current, self.p.rel(frm))
-        swap_link(self.p.prev, self.p.rel(to))
+        if core_answers() and link_sha(self.p.current) != frm:
+            r = core_ask("rollback", {})
+            if not r.get("ok") and link_sha(self.p.current) != frm:
+                # still on the rejected release: the state says rolling-back, the
+                # next tick asks again (a refused rollback is the core's log line)
+                self.st.update(phase="rolling-back", rollback_reason=why)
+                self.save()
+                self.log("rollback to %s: the root core said %s — retried next tick" % (
+                    frm[:12], r.get("why") or r.get("error") or r))
+                return 1
+        else:
+            swap_link(self.p.current, self.p.rel(frm))
+            swap_link(self.p.prev, self.p.rel(to))
         self.sync_outside()
         self.sync_credsep()
         self.follow_installs(sha=frm, force=True)     # the logins go back with it
@@ -2446,9 +2469,30 @@ def release_copy():
     return 0
 
 
+def core_answers():
+    c = getattr(fns, "core", None)
+    return c is not None and c.available()
+
+
+def core_ask(op, args, timeout=None):
+    """One request to the root core (#3555) -> its reply; an error dict when it went."""
+    try:
+        return fns.core.call(op, args, timeout=timeout)
+    except (OSError, ValueError) as e:
+        return {"error": "the root core: %s" % e}
+
+
 def as_login(login, args, timeout=1200, root=None):
     """`fleet-node-update.py <args…>` demoted to <login> (its HOME / USER /
-    TMPDIR / FLEET_CONF_DIR, the runtime's tools first on PATH) -> (rc, out, err)."""
+    TMPDIR / FLEET_CONF_DIR, the runtime's tools first on PATH) -> (rc, out, err).
+    With the root core answering, the core runs it (exec-as, #3555): this file
+    must then be the one under its <current>/bin/."""
+    if core_answers():
+        r = core_ask("exec-as", {"login": login, "argv": [os.path.abspath(__file__)] + list(args)},
+                     timeout=timeout + 60)
+        if r.get("ok"):
+            return r.get("rc", 1), r.get("out", ""), r.get("err", "")
+        return 1, "", "the root core: %s" % (r.get("why") or r.get("error") or r)
     ident = fns.account_ident(login)
     if ident is None:
         return 1, "", "no such account %s" % login
