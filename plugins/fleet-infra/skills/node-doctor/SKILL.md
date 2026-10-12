@@ -166,6 +166,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `rootlog` | node | [mac-node-enroll] | root 服务的日志写在家目录里：重跑安装把日志挪出去 |
 | `runtime` | machine | [release-rules] [mac-node-enroll] | 没有 root 运行时（未托管）或 current 不是一个发布版：`sudo fleet node install` |
 | `rview` | node | [node-doctor] | 远端客户端挂在 fleet 会话上：让它们各用自己的视图会话 |
+| `seats` | node | [mac-node-enroll] | 个人账号在跑整机或管理服务：`sudo fleet node install` 收回到 root / 角色账号；`fleet-node-supervisor.py seats --json` 看是哪个 |
 | `seed` | node | [node-doctor] | 只报状态：新会话的第一句 |
 | `services` | node | [mac-node-enroll] | 登记的服务挂了 / 有手写的 launchd 启动项：`fleet ls --services` |
 | `settings` | node | [release-rules] | Claude 设置缺键：下一次同步补（只补不改） |
