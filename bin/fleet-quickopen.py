@@ -100,6 +100,8 @@ substring of the machine / state / group, then the letters in order with word
 starts and runs scored (`crr` finds 「Codex: reap rules」) — ties broken by
 recency, then list order.
 """
+import time
+T_START = time.time()   # the 看台's ⌘P clock starts here where /proc cannot say (#3551)
 import curses
 import json
 import locale
@@ -108,7 +110,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unicodedata
 
 from pathlib import Path

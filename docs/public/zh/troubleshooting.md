@@ -787,6 +787,13 @@ fleet debug report
 - **是什么**：在 ⌘P 里回车派一件事，到能开始打字要多久。
 - **WARN / FAIL 怎么办**：超过 3 秒：`fleet-compose-latency.sh --last 20` 看慢在哪一段，发给管理员。
 
+#### `timing`
+
+来自 `fleet doctor`。
+
+- **是什么**：最近 10 次按 ⌘P 到面板弹出、开新会话到能打字，各要多久（中位数）。面板该在 0.5 秒内，新会话该在 3 秒内（预热池里有会话时）。
+- **WARN / FAIL 怎么办**：`fleet_timing.py table` 看慢在哪一段，发给管理员；如果说「新会话全是冷启」，是预热池空了，`scratch-pool.sh status` 看它为什么补不上。
+
 #### `oldkeys`
 
 来自 `fleet doctor`。

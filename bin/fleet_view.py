@@ -170,6 +170,11 @@ import threading
 import time
 from pathlib import Path
 
+# a sibling, found beside this file however it was loaded (a selftest loads it by path)
+if str(Path(__file__).absolute().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).absolute().parent))
+import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
+
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
@@ -1553,6 +1558,9 @@ def go_new(qo, vid, client="", repo="", agent="", prompt=""):
     tries = [["--warm-only"], []] if warm else [[]]
     rc, w, why = 1, "", ""
     secs = fenv("FLEET_VIEW_NEW_SECS", 60)
+    # the session's clock (issue #3551): a warm window bound (`claim`), else one
+    # started now (`cold` — the run counts apart), then the view onto it (`go`)
+    clock = fleet_timing.Clock("session")
     for extra in tries:
         try:
             p = subprocess.run(argv + ["--origin", "hub"] + named + ["--no-desk"] + extra + ["--print", fleet],
@@ -1564,10 +1572,15 @@ def go_new(qo, vid, client="", repo="", agent="", prompt=""):
             rc, w, why = 1, "", say("view_new_timeout_fmt", "%g" % secs)
         except OSError as error:
             rc, w, why = 1, "", str(error)
+        clock.mark("claim" if extra else "cold")
         if not (extra and rc == 3):
             break
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
-        return go(qo, vid, w, "new", client)
+        went = go(qo, vid, w, "new", client)
+        clock.mark("go")
+        if went == 0:
+            clock.done()
+        return went
     # the reason travels (issue #3458): the toast, and stderr — the ⚡ row's popup
     # shows `do new`'s last line, which was nothing, so the panel said no why
     said = say("view_new_failed_fmt", why or say("view_new_exit_fmt", rc))
@@ -2799,7 +2812,12 @@ def popup(screen, qo, vid, client, forward=""):
     # check is the Refresh thread's first read, at once. FLEET_VIEW_REFRESH=0 (no
     # Refresh) keeps the old blocking read.
     bg = fenv("FLEET_VIEW_REFRESH", 2) > 0
+    # the panel's clock (issue #3551): the process start (Linux) or the module's
+    # import → loaded → the rows read → the first frame, in timing/panel.ndjson
+    clock = fleet_timing.Clock("panel", fleet_timing.proc_start() or getattr(qo, "T_START", None))
+    clock.mark("boot")
     items = entries(vid, hub=not bg)
+    clock.mark("read")
     order_save(vid, items)
     cur = current(vid)
     # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it
@@ -3048,6 +3066,9 @@ def popup(screen, qo, vid, client, forward=""):
                 else keys if busy or bolt["focus"] else say("view_keys_short")
         screen.addnstr(height - 1, 0, qo.clip(keys, width - 1), width - 1, attr(("dim",)))
         screen.refresh()
+        if not clock.written:
+            clock.mark("frame")
+            clock.done()
         screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
                            max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
         try:

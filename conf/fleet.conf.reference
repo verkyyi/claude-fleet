@@ -2749,6 +2749,21 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Warm pool refill delay (s) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_POOL_REFILL_DELAY=45
 
+# The HOME slot's floor — the warm sessions ⚡ / ⌘N take, so a new session is
+# typeable in ≤ 3 s (issue #3551, EPIC #3500 C6). It lifts a lower
+# FLEET_SCRATCH_POOL for HOME (never a repo slot) and sizes an unset one; a pool
+# switched off (FLEET_SCRATCH_POOL=0) stays off.
+# @label=Warm sessions kept for ⚡ (min) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_POOL_MIN=2
+
+# The doctor's `timing` row (issue #3551): the median of the last 10 ⌘P → panel
+# and ⌘N / ⚡ → typeable (warm opens) against these, in ms. The runs are
+# $FLEET_CONF_DIR/timing/*.ndjson; `fleet_timing.py table` prints the segments.
+# @label=⌘P panel limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_TIMING_PANEL_MS=500
+# @label=New session limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_TIMING_SESSION_MS=3000
+
 # --- Dash prompt-line paste guard (bin/dash-enter.sh, issue #531) -----------------
 # The dash's always-visible prompt line ("type a task, ↵ → scratch session") is an
 # fzf input, and a terminal delivers a MULTI-LINE PASTE as one Enter PER LINE (fzf

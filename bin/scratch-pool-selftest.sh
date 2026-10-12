@@ -31,6 +31,7 @@
 #        pool off, `--status`, the claim's fast-forward to origin/<base>
 #   T2. a cgroup CPU limit (#3542): the cgroup's own reading, not the host load
 #   W2. default sizes: a repo slot 1, the HOME slot 2 (#3514)
+#   W3. FLEET_POOL_MIN, the HOME slot's floor (#3551)
 #   Y. a warm entry that never opens gives its admission back (#2502)
 #   Z. one ensure pass reads the account once (#3544)
 #   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
@@ -476,6 +477,24 @@ out=$(env -u FLEET_SELFTEST_ROOT FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" s
 printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ' \
   && printf '%s\n' "$out" | grep -q '^slot HOME agent=claude want=2 ' || fail "W2 default sizes: repo 1, HOME 2" "$out"
 ok "W2 default: a repo slot keeps 1, HOME keeps 2"
+
+# W3: FLEET_POOL_MIN (issue #3551) is the HOME slot's floor — it lifts a lower
+# FLEET_SCRATCH_POOL, sizes an unset one, never touches a repo slot, and a pool
+# switched off stays off.
+reset_state; mkfleet; mkconf 1
+out=$(FLEET_POOL_MIN=3 FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ' \
+  && printf '%s\n' "$out" | grep -q '^slot HOME agent=claude want=3 ' || fail "W3 FLEET_POOL_MIN lifts HOME only" "$out"
+mkconf 4
+out=$(FLEET_POOL_MIN=3 FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot HOME agent=claude want=4 ' || fail "W3 a bigger FLEET_SCRATCH_POOL stands" "$out"
+sed -i.bak '/^FLEET_SCRATCH_POOL=/d' "$FLEET_CONF_DIR/fleets/tf/conf"
+out=$(env -u FLEET_SELFTEST_ROOT FLEET_POOL_MIN=1 FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot HOME agent=claude want=1 ' || fail "W3 FLEET_POOL_MIN sizes an unset pool" "$out"
+mkconf 0
+out=$(FLEET_POOL_MIN=3 FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot HOME agent=claude want=0' || fail "W3 a pool off stays off" "$out"
+ok "W3 FLEET_POOL_MIN: HOME's floor; repo slots and a pool off untouched"
 
 # X: a warm worktree is brought to origin/<base> before it is handed out; one git
 # cannot fast-forward (commits of its own) is retired, never handed out.

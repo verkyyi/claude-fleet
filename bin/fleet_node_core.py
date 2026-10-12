@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import struct
+import sys
 
 SOCK = "/var/run/fleet-node-core.sock"
 MAX_LINE = 65536
@@ -172,3 +173,61 @@ def call(op, args, timeout=None):
     finally:
         c.close()
     return r if r is not None else {"error": "the core closed the connection"}
+
+
+# -- a release's bytecode (issue #3318, EPIC #3500 C6) ---------------------------
+# A login imports the release's modules (fleet_view, fleet_keys, …) from root's
+# <root>/<sha>/bin, where it cannot write a .pyc: every ⌘P compiled fleet_view.py
+# again (283 ms against 89 ms with one). So root compiles a release's bin/ ONCE,
+# after it is verified and before current points at it — the directory is
+# content-addressed, the bytecode never goes stale. A .pyc is no file of the signed
+# manifest: verify_release takes one only beside a listed .py, a regular file of
+# the release's own owner nobody else may write (`pyc_source`); a seat never makes
+# one (the core drops its __pycache__ on the copy, `private_copy`).
+
+def pythons():
+    """The interpreters that compile: this one, and /usr/bin/python3 when it is a
+    different one root owns (a login's `python3` on a Mac) — never a binary another
+    login could have replaced."""
+    out, seen = [], set()
+    for p in (sys.executable, "/usr/bin/python3"):
+        try:
+            real = os.path.realpath(p)
+            st = os.stat(real)
+        except (OSError, TypeError):
+            continue
+        if real in seen or (p != sys.executable and (st.st_uid != 0 or st.st_mode & 0o022)):
+            continue
+        seen.add(real)
+        out.append(p)
+    return out
+
+
+def compile_release(d):
+    """Compile <d>/bin with every interpreter of `pythons` -> None, or why not (the
+    release stands either way: a missing .pyc is only slower)."""
+    import subprocess
+    b = os.path.join(d, "bin")
+    if not os.path.isdir(b):
+        return None
+    why = []
+    for py in pythons():
+        try:
+            p = subprocess.run([py, "-I", "-m", "compileall", "-q", b], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+            if p.returncode != 0:
+                why.append("%s: %s" % (py, (p.stdout or b"").decode("utf-8", "replace").strip()[-200:]))
+        except (OSError, subprocess.SubprocessError) as e:
+            why.append("%s: %s" % (py, e))
+    return "; ".join(why) or None
+
+
+def pyc_source(rel):
+    """`<dir>/__pycache__/<mod>.<tag>.pyc` -> `<dir>/<mod>.py`, else None."""
+    parts = rel.split("/")
+    if len(parts) < 2 or parts[-2] != "__pycache__" or not parts[-1].endswith(".pyc"):
+        return None
+    mod = parts[-1][:-4].split(".")
+    if len(mod) < 2 or not mod[0]:
+        return None
+    return "/".join(parts[:-2] + [".".join(mod[:-1]) + ".py"])

@@ -21,6 +21,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -64,6 +65,10 @@ def stage(src, root):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(dest / file.relative_to(src), target)
         target.chmod(0o755)
+    # the logins' bytecode, made here as root (issue #3318): a login cannot write
+    # it beside root's modules, so without it every ⌘P compiled fleet_view.py again
+    subprocess.run([sys.executable, '-I', '-m', 'compileall', '-q', str(dest / 'bin')],
+                   stdin=subprocess.DEVNULL, check=False)
     (dest / '.release/staged.json').write_text(json.dumps(got) + '\n')
     (root / 'current').symlink_to(sha)
     print('image runtime: ' + sha)
