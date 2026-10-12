@@ -41,6 +41,9 @@ OPS = {
     "sweep": {},
     "entry": {},
     "report": {"kind": str},
+    # the seated updater's root half (#3670): one step of `fleet-node-update.py
+    # root <step>` from <current>/bin — outside · credsep · prune, never an argv
+    "update": {"step": str},
 }
 
 
