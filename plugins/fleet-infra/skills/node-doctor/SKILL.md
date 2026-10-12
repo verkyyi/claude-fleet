@@ -7,7 +7,7 @@ description: 读懂 `fleet doctor`（和机器那半 `fleet doctor --machine`）
 
 占位：`<RT>` 运行时根目录（macOS `/Library/Application Support/claude-fleet`）· `<ROW>` 体检里的行名（第二列）。
 权威出处：`bin/fleet-doctor.sh`（每一行的判据和行内修法都写在它旁边的注释里）· `bin/fleet-node-update.py doctor`（`--machine` 那半，
-更新器的回滚判据）· `bin/fleet-doctor-rows.py`（行表：两半能打出的全部行名）· `docs/MANAGED-NODE.md` §7「机器体检」。
+更新器的回滚判据）· `bin/fleet-doctor-rows.py`（行表：两半能打出的全部行名）· `docs/dev/MANAGED-NODE.md` §7「机器体检」。
 
 **分工**：本页给**机器管理员**——一台机器体检不绿时从哪一行下手、去哪本手册。对外的故障排查页给**成员和管理员**——按症状
 （「连不上」「会话没反应」）写，不按行名。两份都从同一张体检行表来，不各抄一份。

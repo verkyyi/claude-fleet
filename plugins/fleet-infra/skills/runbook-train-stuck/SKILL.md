@@ -7,7 +7,7 @@ description: 发布列车卡住或一直红时的故障手册——看它卡在�
 
 占位：`<RUN>` 列车的 run id · `<TRAIN_SHA>` 这趟上车的提交 · `<HUB_URL>` 入口地址。仓库是 `verkyyi/claude-fleet`
 （或你的派生仓库）。
-权威出处：`.github/workflows/release-train.yml` 头注释；`docs/BREAK-IT.md` 行 `train-push-cancels` ·
+权威出处：`.github/workflows/release-train.yml` 头注释；`docs/dev/BREAK-IT.md` 行 `train-push-cancels` ·
 `train-red-holds-lane` · `train-shard-timeout` · `train-macos-slow-not-hung` · `train-own-runner-silent` ·
 `train-own-runners-gone` · `train-superseded-red` · `train-hub-backwards` · `train-hub-stable-split` ·
 `train-derived-red` · `train-quarantine` · `macos-red-to-stable`；脚本 `bin/fleet-train-{board,plan,macos,failfast,hub,superseded,quarantine}.sh`。
