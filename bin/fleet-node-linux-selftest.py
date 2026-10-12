@@ -558,7 +558,8 @@ class LinuxNode(unittest.TestCase):
         pod = dep['spec']['template']['spec']
         self.assertEqual(pod['hostname'], 'u-drill1')
         self.assertFalse(pod['automountServiceAccountToken'])
-        self.assertNotIn('serviceAccountName', pod)
+        # its own account, no token (#3558): no Kubernetes credential in a person's pod
+        self.assertEqual(pod['serviceAccountName'], 'fleet-user')
         self.assertEqual(pod['volumes'][0], {'name': 'data', 'persistentVolumeClaim': {'claimName': 'u-drill1'}})
         c = pod['containers'][0]
         env = {e['name']: e['value'] for e in c['env']}
@@ -896,7 +897,7 @@ class LinuxNode(unittest.TestCase):
                 for want in ('replicas: 2', 'volumeClaimTemplates:', 'fleet/role: ops',
                              'automountServiceAccountToken: false', 'containerPort: %d' % port):
                     self.assertIn(want, sts[0], (name, want))
-                svc = [x for x in docs if '\nkind: Service' in '\n' + x and '\n  name: %s\n' % name in x]
+                svc = [x for x in docs if '\nkind: Service\n' in '\n' + x and '\n  name: %s\n' % name in x]
                 self.assertIn('sessionAffinity: ClientIP', svc[0])
                 self.assertTrue([x for x in docs if 'kind: PodDisruptionBudget' in x and '  name: %s\n' % name in x])
         # the default MCP servers ship in the image, pinned; uv by sha256
@@ -1045,6 +1046,10 @@ class LinuxNode(unittest.TestCase):
             for x in docs:
                 if x.startswith('apiVersion: apps/v1') or '\nkind: Deployment' in x:
                     self.assertIn('replicas: 2', x)
+                    if '\n  name: fleet-provisioner\n' in x:
+                        # the one writer carries its own account's token, by design (#3558)
+                        self.assertIn('serviceAccountName: fleet-provisioner', x)
+                        continue
                     self.assertIn('automountServiceAccountToken: false', x)
                     self.assertIn('namespace: fleet-workers', x)
             svc = [x for x in docs if 'kind: Service\n' in x and 'name: fleet-credproxy' in x][0]
