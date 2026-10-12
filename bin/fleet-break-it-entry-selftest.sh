@@ -38,6 +38,13 @@
 #                         drill's real entry sshd (go test, when a toolchain is here)
 #                         and a closed one; the node half reports for real and the
 #                         doctor's `public` row says 连不上 + which port to forward
+#   door-wrong-pod        the cluster's one door (issue #3549, EPIC #3500 C4):
+#                         fleet-node-supervisor.py's door mode + bin/fleet-door.sh —
+#                         each login lands in the ONE pod its route names (two
+#                         stand-in pod sshds that take the door's key alone), a
+#                         command / SetEnv naming another pod changes nothing, a key
+#                         not on the login's list and a key straight at a pod are
+#                         refused, a login two pods claim goes nowhere
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -623,6 +630,113 @@ c = socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3); c.settimeout(3
   sys_same || { edown; return 1; }
   edown
   WHAT="入口只放到本机的转发：-W / -L 到 127.0.0.1 通，到 192.0.2.1 / 10.255.255.1 被入口拒（request was denied），-R 被拒；经入口拖进来的文件（fleet-client-upload.py recv）只落进那个登录的 inbox"
+}
+
+# dlist <version> <login>=<key>@<pod>[ …] → $E/list-<version>.json, the door's
+# table (GET /v1/node/entry-routes): routes + each login's keys
+dlist() {
+  local v="$1"; shift
+  python3 - "$E" "$v" "$@" <<'PY'
+import base64, hashlib, json, sys
+d, v, specs = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+out = {"version": v, "routes": [], "logins": {}}
+for spec in specs:
+    login, rest = spec.split("=", 1)
+    k, pod = rest.split("@", 1)
+    t, b = open("%s/%s.pub" % (d, k)).read().split()[:2]
+    fp = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(b)).digest()).decode().rstrip("=")
+    out["routes"].append({"login": login, "principal": "gh:%s" % login, "service": pod})
+    out["logins"].setdefault(login, {"person": "gh:%s" % login, "keys": []})["keys"].append(
+        {"fp": fp, "type": t, "b64": b, "name": "drill-%s" % k})
+json.dump(out, open("%s/list-%d.json" % (d, v), "w"))
+PY
+  printf '%s/list-%s.json' "$E" "$v"
+}
+# podsshd <u-nonce> → a stand-in pod on $PODPORT: an sshd that takes the door's key
+# alone and says which pod it is, what was asked, and whose key the door saw
+podsshd() {
+  local pod="$1" d="$E/$1"
+  mkdir -p "$d"; ssh-keygen -q -t ed25519 -N '' -f "$d/hk"
+  cp "$E/door/id_ed25519.pub" "$d/keys"; chmod 644 "$d/keys"
+  PODPORT="$(free_port)"
+  {
+    printf 'Port %s\nListenAddress 127.0.0.1\nHostKey %s/hk\nPidFile %s/pid\nAuthorizedKeysFile %s/keys\n' \
+      "$PODPORT" "$d" "$d" "$d"
+    printf 'UsePAM no\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n'
+    printf 'AcceptEnv FLEET_DOOR_FP FLEET_DOOR_SRC FLEET_DOOR_NAME\n'
+    # shellcheck disable=SC2016  # expanded by the pod's shell, not here
+    printf 'ForceCommand printf "pod=%%s cmd=%%s fp=%%s\\n" %s "$SSH_ORIGINAL_COMMAND" "$FLEET_DOOR_FP"\n' "$pod"
+  } > "$d/cfg"
+  "$SSHD_BIN" -D -e -f "$d/cfg" 2>>"$d/log" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 10 python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "$PODPORT" \
+    || { WHY="the stand-in pod $pod never listened: $(tail -2 "$d/log")"; return 1; }
+}
+
+# ddown: the stand-in pods and the door down, the door's variables gone
+ddown() {
+  pkill -f "$E/u-" 2>/dev/null
+  edown
+  unset FLEET_DOOR FLEET_DOOR_SECRET
+}
+
+drill_door_wrong_pod() {
+  CAP=30   # two stand-in pods, the door, six arrivals
+  local t0 out pa pb fp1; local -a eopts
+  erig door
+  mkdir -p "$E/rt/bin" "$E/door"; ln -s "$BIN/fleet-door.sh" "$E/rt/bin/fleet-door.sh"
+  # the door's Secret: its host key and its key to the pods
+  ssh-keygen -q -t ed25519 -N '' -f "$E/door/host_ed25519_key"
+  ssh-keygen -q -t ed25519 -N '' -C fleet-door -f "$E/door/id_ed25519"
+  # this login is a door account (the door made it); `other` is a login the machine had
+  python3 - "$E/passwd" "$ME" <<'PY'
+import json, sys
+p, me = sys.argv[1:]
+d = json.load(open(p)); d[me]["gecos"] = "fleet-door"; json.dump(d, open(p, "w"))
+PY
+  podsshd u-aaaa1 || { ddown; return 1; }; pa=$PODPORT
+  podsshd u-bbbb2 || { ddown; return 1; }; pb=$PODPORT
+  export FLEET_DOOR=1 FLEET_DOOR_SECRET="$E/door" \
+    FLEET_ENTRY_TEST_SETENV="FLEET_NODE_TEST=1 FLEET_DOOR_TEST_TARGETS=u-aaaa1=127.0.0.1:$pa,u-bbbb2=127.0.0.1:$pb"
+  fp1=$(ssh-keygen -l -f "$E/k1.pub" | awk '{ print $2 }')
+  eapply "$(dlist 1 "$ME=k1@u-aaaa1" "other=k2@u-bbbb2")" || { WHY="door apply failed: $(tail -2 "$E/apply.out")"; ddown; return 1; }
+  grep -q "^ForceCommand /bin/bash $E/rt/bin/fleet-door.sh\$" "$E/db/entry/sshd_config" \
+    && grep -q '^DisableForwarding yes$' "$E/db/entry/sshd_config" \
+    || { WHY="the door's config: $(grep -iE 'force|forward' "$E/db/entry/sshd_config")"; ddown; return 1; }
+  grep -q "^AllowUsers $ME\$" "$E/db/entry/sshd_config" \
+    || { WHY="a login the machine had went on the door: $(grep AllowUsers "$E/db/entry/sshd_config")"; ddown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the door's sshd never listened"; ddown; return 1; }
+  eopts=(-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no
+         -o UserKnownHostsFile="$E/known_hosts" -o ConnectTimeout=5 -o LogLevel=ERROR -p "$EPORT")
+  # 1. this login, its own key ⇒ its own pod, the person's key seen there
+  out=$(ssh "${eopts[@]}" -i "$E/k1" "$ME@127.0.0.1" hostname </dev/null 2>"$E/ssh.err")
+  [ "$out" = "pod=u-aaaa1 cmd=hostname fp=$fp1" ] || { WHY="1: [$out] $(cat "$E/ssh.err")"; ddown; return 1; }
+  # 2. asking for the other pod — by command, by SetEnv — changes nothing
+  out=$(ssh "${eopts[@]}" -i "$E/k1" -o "SetEnv=FLEET_DOOR_TEST_TARGETS=u-aaaa1=127.0.0.1:$pb FLEET_DOOR_FP=forged" \
+          "$ME@127.0.0.1" u-bbbb2 </dev/null 2>"$E/ssh.err")
+  [ "$out" = "pod=u-aaaa1 cmd=u-bbbb2 fp=$fp1" ] || { WHY="2: [$out] $(cat "$E/ssh.err")"; ddown; return 1; }
+  # 3. a key not on this login's list (it is `other`'s) ⇒ refused at the door
+  out=$(ssh "${eopts[@]}" -i "$E/k2" "$ME@127.0.0.1" hostname </dev/null 2>"$E/ssh.err") \
+    && { WHY="3: another person's key got through: [$out]"; ddown; return 1; }
+  case "$out" in *pod=*) WHY="3: a pod answered [$out]"; ddown; return 1 ;; esac
+  # 4. the person's key straight at a pod ⇒ refused (a pod takes the door's key alone)
+  ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR -p "$pa" -i "$E/k1" "$ME@127.0.0.1" true \
+    </dev/null >/dev/null 2>&1 && { WHY="4: a person's own key opened a pod without the door"; ddown; return 1; }
+  # 5. the home moves ⇒ the door follows
+  eapply "$(dlist 2 "$ME=k1@u-bbbb2")" || { WHY="5: apply: $(tail -2 "$E/apply.out")"; ddown; return 1; }
+  out=$(ssh "${eopts[@]}" -i "$E/k1" "$ME@127.0.0.1" hostname </dev/null 2>"$E/ssh.err")
+  [ "$out" = "pod=u-bbbb2 cmd=hostname fp=$fp1" ] || { WHY="5: [$out] $(cat "$E/ssh.err")"; ddown; return 1; }
+  # 6. a login two pods claim ⇒ neither: the door lets it nowhere
+  eapply "$(dlist 3 "$ME=k1@u-aaaa1" "$ME=k1@u-bbbb2")" || :
+  out=$(ssh "${eopts[@]}" -i "$E/k1" "$ME@127.0.0.1" hostname </dev/null 2>"$E/ssh.err") \
+    && { WHY="6: a login two pods claim got in: [$out]"; ddown; return 1; }
+  case "$out" in *pod=*) WHY="6: a pod answered [$out]"; ddown; return 1 ;; esac
+  SECS=$(since "$t0")
+  sys_same || { ddown; return 1; }
+  ddown
+  WHAT="门把每个登录送进表里它自己的 pod（u-aaaa1，指纹是本人的钥匙），命令 / SetEnv 点名别的 pod 不改去向；别人的钥匙在门口被拒、本人钥匙直连 pod 被拒；家搬到 u-bbbb2 门跟着走；两个 pod 认领同一登录则哪个也不去"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

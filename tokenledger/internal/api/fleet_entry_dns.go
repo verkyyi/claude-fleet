@@ -207,7 +207,8 @@ func (s *Server) entryDNSTargets(sub string, now time.Time) (map[string]entryDNS
 			continue
 		}
 		t := entryDNSTarget{person: n.Person, machine: h.Machine}
-		reach, err := s.EntryReachable(h.Machine, now)
+		// a person's pod is reached at the door's address (claude-fleet#3549)
+		reach, err := s.EntryReachable(s.entryAddrMachine(h.Machine, now), now)
 		if err != nil || len(reach) == 0 {
 			t.hold = true
 			out[host] = t
@@ -252,6 +253,7 @@ func (s *Server) entryPublicPort(machine string, now time.Time) int {
 	if machine == "" {
 		return entryPort
 	}
+	machine = s.entryAddrMachine(machine, now)
 	if reach, err := s.EntryReachable(machine, now); err == nil && len(reach) > 0 && reach[0].Port > 0 {
 		return reach[0].Port // IPv4 first: the A's port, else the AAAA's
 	}

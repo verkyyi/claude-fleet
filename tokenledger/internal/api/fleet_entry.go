@@ -796,6 +796,7 @@ func (s *Server) broadcastEntry(v int, hosts ...string) {
 	if !s.entryOn() || len(hosts) == 0 {
 		return
 	}
+	hosts = s.withDoors(hosts)
 	// The machine reports how the outside reaches it right after it applies
 	// the list (claude-fleet#3199): that report is checked, never answered
 	// from the last check.

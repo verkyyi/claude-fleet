@@ -536,6 +536,74 @@ it omits are the defaults); a bigger `disk` is a re-render (the claim grows if
 the StorageClass allows expansion). The machine join code goes in the Secret
 `u-<nonce>-join` (key `machine`), as `fleet-linux-join` does for the shared node.
 
+## The door
+
+(issue #3549, EPIC #3500 C4) The cluster has ONE public way in for everyone whose
+home is their own pod: the door. A person connects as always —
+`ssh <login>@<name>.cf.24haowan.com -p 22022`, their phone or their computer — and
+the door hands them to their own pod. `render.py --door` renders it:
+
+| Object | What |
+|---|---|
+| `Service fleet-door` | `LoadBalancer`, 22022 alone, `externalTrafficPolicy: Local` (the client's own address for `PerSourcePenalties` and the record) |
+| `Deployment fleet-door` | 2 replicas of the image with `FLEET_NODE_PROFILE=door`: no disk, no login, no node program, no Kubernetes token — the supervisor with its entry child in **door mode** |
+
+Door mode is the entry port (#3070) with three changes
+(`fleet-node-supervisor.py`, `FLEET_DOOR=1`):
+
+- its table is `GET /v1/node/entry-routes` — every person whose home is a pod
+  `u-<nonce>`: the login, that person's own keys, and the pod's Service. Only a
+  machine the hub setting `fleet.door` names reads it (403 for any other, 404 with
+  no setting). A login two pods claim is in neither row: the door never guesses.
+  The door pulls it every `FLEET_ENTRY_EVERY` (15 s in door mode) — it has no node
+  program to hear the push;
+- each login is a **door account** it makes itself (no home, shell `/bin/bash`,
+  group `fleet-door`, GECOS `fleet-door`); a login the machine already had is never
+  taken;
+- its `ForceCommand` is `bin/fleet-door.sh`: it reads the ONE Service the table
+  names for the login sshd let in and runs
+  `ssh <login>@u-<nonce>.<ns>.svc.cluster.local` with the door's own key — the
+  command, sftp and a terminal go on as they came, the person's key fingerprint,
+  label and address ride along (`FLEET_DOOR_*`). Nothing the person sends picks
+  the pod, and the door forwards nothing (`DisableForwarding yes`).
+
+A user pod's sshd takes the door's key alone (`05-fleet-door.conf`,
+`fleet-node-linux.py`): `AuthorizedKeysFile none`, `AuthorizedKeysCommand /bin/cat
+/run/fleet-door/door.pub` (the Secret `fleet-door-pub`, read at each login — a new
+key works the moment the Secret changes, no pod restarts), no CA, no forwarding,
+and every arrival is `bin/fleet-entry.sh` — no command on a terminal is the 看台,
+as on a home's entry port. The network rules let only the door reach a pod's 22
+(`deploy/k8s/fleet-workers/networkpolicy.yaml`: `user-in`, `door-in`, `door-out`).
+
+DNS: a person whose home is a pod gets the door's address — the hub's entry-dns
+loop points `<name>.cf` at the first door the outside can reach (`entry reach`,
+as any home). Every arrival is the door sshd's own log line, sent to the hub as the
+entry's record (`POST /v1/node/entry-audit`).
+
+Setting it up (once):
+
+```sh
+NS=fleet-workers
+ssh-keygen -q -t ed25519 -N '' -C fleet-door-host -f door-host
+ssh-keygen -q -t ed25519 -N '' -C fleet-door -f door-key
+# the door's node token: a join code for a machine named fleet-door, redeemed as root
+TOKEN=$(curl -fsS -X POST "$HUB/v1/node/join" -H 'Content-Type: application/json' \
+  -d '{"code":"<码>","hostname":"fleet-door","os_user":"root"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+kubectl -n $NS create secret generic fleet-door --from-file=host_ed25519_key=door-host \
+  --from-file=id_ed25519=door-key --from-literal=token="$TOKEN"
+kubectl -n $NS create secret generic fleet-door-pub --from-file=door.pub=door-key.pub
+unset TOKEN; rm -f door-host door-key       # the Secret is the only copy
+# the hub: this machine is the door
+curl -fsS -X PUT "$HUB/v1/fleet/settings" -H "Authorization: Bearer $ADMIN" \
+  -d '{"key":"fleet.door","value":"fleet-door"}'
+python3 extras/managed-node/render.py --door --image "$IMAGE" --hub "$HUB" | kubectl apply -f -
+```
+
+Changing the door's key to the pods: a new pair, both Secrets updated (`kubectl
+create secret … --dry-run=client -o yaml | kubectl apply -f -`), then
+`kubectl -n $NS rollout restart deploy/fleet-door` — every pod takes only the new
+key from its next login. BREAK-IT `door-wrong-pod` drills the door on a real sshd.
+
 ## Upgrade and recovery
 
 The machine follows `stable` by itself, with the same updater as a Mac

@@ -376,7 +376,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
         'securityContext': NODE_SECURITY,
         'ports': [{'name': 'ssh', 'containerPort': 22}],
         'volumeMounts': [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in VOLUMES]
-                        + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
+                        + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True},
+                           {'name': 'door', 'mountPath': '/run/fleet-door', 'readOnly': True}],
     }, **_probes())
     return [
         {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': meta,
@@ -398,7 +399,87 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                       'volumes': [{'name': 'data', 'persistentVolumeClaim': {'claimName': name}},
                                   {'name': 'join', 'secret': {'secretName': name + '-join',
                                                            'optional': True, 'defaultMode': 256}},
+                                  # the door's public key (C4, #3549): the one key this
+                                  # pod's sshd takes, read at each login — a rotated
+                                  # Secret is the new key, no restart
+                                  {'name': 'door', 'secret': {'secretName': DOOR_PUB_SECRET,
+                                                           'optional': True, 'defaultMode': 0o444}},
                                   {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}}]}}}},
+    ]
+
+
+# The cluster's one door (#3549, EPIC #3500 C4): ONE load balancer for every
+# person whose home is their own pod. Two replicas of the image in door mode —
+# the entry port's sshd (keys only, the hub's list, PerSourcePenalties) whose
+# ForceCommand hands each login to its own pod's Service (bin/fleet-door.sh).
+# Its Secret (DOOR_SECRET) holds what every replica shares: the host key, the
+# key to the pods and the node token; the pods mount DOOR_PUB_SECRET (the key's
+# public half alone).
+DOOR_NAME = 'fleet-door'
+DOOR_SECRET = 'fleet-door'
+DOOR_PUB_SECRET = 'fleet-door-pub'
+
+
+def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec='slb.s1.small',
+                   pull_secrets=('acr-pull',)):
+    """The door: its LoadBalancer Service (22022 alone, externalTrafficPolicy
+    Local — the client's own address for PerSourcePenalties and the record) and
+    its Deployment. No disk, no login, no Kubernetes credential."""
+    if not image or not hub:
+        raise ValueError('--door needs --image and --hub')
+    if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
+        raise ValueError('pin the deployed image by sha256 digest')
+    if not re.fullmatch(r'https://[^\s/]+(/[^\s]*)?', hub):
+        raise ValueError('--hub is https://…')
+    if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
+        raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    if not 1 <= replicas <= 5:
+        raise ValueError('--door-replicas is 1-5')
+    if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
+        raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
+    labels = {'app.kubernetes.io/name': 'fleet-door', 'fleet/role': 'door'}
+    meta = {'name': DOOR_NAME, 'namespace': namespace, 'labels': labels}
+    env = [{'name': 'FLEET_HUB_URL', 'value': hub},
+           {'name': 'FLEET_NODE_PROFILE', 'value': 'door'},
+           {'name': 'FLEET_NODE_LOGIN', 'value': 'none'},
+           {'name': 'FLEET_DOOR', 'value': '1'},
+           {'name': 'FLEET_ENTRY', 'value': '1'},
+           {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)},
+           {'name': 'FLEET_DOOR_NAMESPACE', 'value': namespace},
+           {'name': 'FLEET_DOOR_SECRET', 'value': '/run/fleet-door'}]
+    tcp = {'tcpSocket': {'port': ENTRY_PORT}}
+    container = {
+        'name': 'door', 'image': image, 'env': env,
+        'resources': {'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '512Mi'}},
+        'securityContext': NODE_SECURITY,
+        'ports': [{'name': 'entry', 'containerPort': ENTRY_PORT}],
+        'volumeMounts': [{'name': 'state', 'mountPath': '/var/db/fleet-node'},
+                         {'name': 'logs', 'mountPath': '/var/log/fleet-node'},
+                         {'name': 'secret', 'mountPath': '/run/fleet-door', 'readOnly': True}],
+        'startupProbe': dict(tcp, periodSeconds=5, failureThreshold=60),
+        'readinessProbe': dict(tcp, periodSeconds=10),
+        'livenessProbe': {'exec': {'command': ['python3', '-I', '/usr/local/lib/fleet-image-stage.py', 'live']},
+                          'periodSeconds': 30, 'failureThreshold': 4},
+    }
+    return [
+        {'apiVersion': 'v1', 'kind': 'Service', 'metadata': dict(meta, annotations=entry_annotations(entry_spec)),
+         'spec': {'type': 'LoadBalancer', 'externalTrafficPolicy': 'Local', 'selector': {'fleet/role': 'door'},
+                  'ports': [{'name': 'entry', 'protocol': 'TCP', 'port': ENTRY_PORT, 'targetPort': ENTRY_PORT}]}},
+        {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': meta,
+         'spec': {'replicas': replicas, 'revisionHistoryLimit': 2,
+                  'selector': {'matchLabels': {'fleet/role': 'door'}},
+                  'template': {'metadata': {'labels': labels}, 'spec': {
+                      'automountServiceAccountToken': False, 'enableServiceLinks': False,
+                      'terminationGracePeriodSeconds': 30,
+                      'imagePullSecrets': [{'name': n} for n in pull_secrets],
+                      # two replicas, two machines when the cluster has them
+                      'affinity': {'podAntiAffinity': {'preferredDuringSchedulingIgnoredDuringExecution': [
+                          {'weight': 100, 'podAffinityTerm': {'topologyKey': 'kubernetes.io/hostname',
+                                                              'labelSelector': {'matchLabels': {'fleet/role': 'door'}}}}]}},
+                      'containers': [container],
+                      'volumes': [{'name': 'state', 'emptyDir': {}},
+                                  {'name': 'logs', 'emptyDir': {}},
+                                  {'name': 'secret', 'secret': {'secretName': DOOR_SECRET, 'defaultMode': 0o400}}]}}}},
     ]
 
 
@@ -459,6 +540,10 @@ if __name__ == '__main__':
     p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
                    help="the pod's ceiling: the hub's fleet.user_pod_limits.<principal> value (default %s)"
                         % ','.join('%s=%s' % kv for kv in USER_POD_LIMITS.items()))
+    # the cluster's one door (#3549; docs/MANAGED-LINUX.md «The door»)
+    p.add_argument('--door', action='store_true',
+                   help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
+    p.add_argument('--door-replicas', type=int, default=2)
     p.add_argument('--limits-patch', action='store_true',
                    help='print only the patch that moves --limits on a running pod (rolls that pod alone)')
     args = p.parse_args()
@@ -469,6 +554,11 @@ if __name__ == '__main__':
     try:
         if args.limits_patch:
             print(json.dumps(user_pod_limits_patch(user_pod_limits(args.limits)), indent=2))
+            raise SystemExit(0)
+        if args.door:
+            items = door_resources(args.image, args.hub, args.namespace, args.door_replicas, args.entry_lb_spec,
+                                   pull_secrets=args.pull_secrets or ['acr-pull'])
+            print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         missing = [f for f in ('image', 'hub', 'storage_class') if not getattr(args, f)]
         if missing:

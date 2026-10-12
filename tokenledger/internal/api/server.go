@@ -464,6 +464,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryAuditNodePath, s.handleNodeEntryAudit)
 		// …and says how the outside could reach its entry port (claude-fleet#3072).
 		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
+		// …and the cluster's one door reads its table (claude-fleet#3549).
+		mux.HandleFunc(control.EntryRoutesNodePath, s.handleNodeEntryRoutes)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
