@@ -474,6 +474,6 @@ ln -sfn ~/.claude/fleet.versions/<上一版> ~/.claude/fleet
 
 ## 下一步
 
-- 接订阅、开号、配额、看机器：[管理员手册](../hosted/admin.md)
+- 接订阅、开号、配额、看机器：[管理员手册](../admin/index.md)
 - 卡住了：[故障排查](../troubleshooting.md)
 - 隔离与凭据：[安全与隔离](../security.md)
