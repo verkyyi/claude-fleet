@@ -8295,6 +8295,20 @@ fleet_admit_reserved() {
   [ "${i:-0}" -gt "${r:-0}" ] 2>/dev/null && r=$i
   printf '%s\n' "${r:-0}"
 }
+# fleet_admit_pending → of those, the ones whose window is NOT open yet: a spawn
+# still running unconfirmed (live), or an in-flight marker (#531) — whichever is
+# more. A confirmed reservation (ok) is a window whose agent is booting or already
+# in the memory reading, so the advice rule (issue #3487) does not charge it a
+# second time: on mini2 (drill 36) the guide and the warm pool's fresh windows
+# held three ok reservations — 4751 − 2457 − 3 × 822 < 0 refused a newcomer's
+# first session at normal pressure with 29 % free, all three already in `avail`.
+fleet_admit_pending() {
+  local r i
+  r=$(_fleet_admit_rows | awk -F'\t' '$1 == "live"' | grep -c .)
+  i=$(fleet_inflight_count)
+  [ "${i:-0}" -gt "${r:-0}" ] 2>/dev/null && r=$i
+  printf '%s\n' "${r:-0}"
+}
 # fleet_admit_reserve [sess] — hold ONE session's cost for the settle time; a
 # second admission by the same owner holds nothing more.
 fleet_admit_reserve() {
@@ -8356,9 +8370,10 @@ EOF
 
 # fleet_machine_headroom [avail_pct] — how many MORE sessions this machine takes
 # right now. One line, space-separated, or nothing (rc 1) when memory is unreadable:
-#   <room> <cost_mb> <avail_mb> <floor_mb> <reserved> <hyst_mb> <median_mb> <agents>
+#   <room> <cost_mb> <avail_mb> <floor_mb> <reserved> <hyst_mb> <median_mb> <agents> <pending>
+# (pending: the reserved ones whose window is not open yet — fleet_admit_pending)
 fleet_machine_headroom() {
-  local ap="${1:-}" total c cost med agents pct rmb hyst=0 floor avail res room
+  local ap="${1:-}" total c cost med agents pct rmb hyst=0 floor avail res pend room
   [ -n "$ap" ] || ap=$(fleet_mem_probe 2>/dev/null | awk 'NF>=2{print $2+0; exit}')
   total=$(fleet_mem_total_mb 2>/dev/null)
   case "$ap" in ''|*[!0-9]*) return 1 ;; esac
@@ -8374,9 +8389,10 @@ fleet_machine_headroom() {
   avail=$(( total * ap / 100 ))
   floor=$(( total * pct / 100 )); [ "$rmb" -gt "$floor" ] && floor=$rmb
   res=$(fleet_admit_reserved)
+  pend=$(fleet_admit_pending); [ "${pend:-0}" -gt "$res" ] 2>/dev/null && pend=$res
   room=$(( (avail - floor - hyst - res * cost) / cost ))
   [ "$room" -lt 0 ] && room=0
-  printf '%s %s %s %s %s %s %s %s\n' "$room" "$cost" "$avail" "$floor" "$res" "$hyst" "${med:-0}" "${agents:-0}"
+  printf '%s %s %s %s %s %s %s %s %s\n' "$room" "$cost" "$avail" "$floor" "$res" "$hyst" "${med:-0}" "${agents:-0}" "${pend:-0}"
 }
 
 # _fleet_admit_guide_pass <tight> <headroom line> — rc 0 when the onboarding
@@ -8398,23 +8414,33 @@ EOF
 # _fleet_admit_room_advice <tight> <headroom line> — rc 0 when a room below 1 is
 # only ADVICE (issue #3479, see fleet_machine_admit): FLEET_ADMIT_ROOM is not
 # `hold`, the kernel's pressure is not holding, and available memory is still
-# above the kept-back floor once the sessions admitted-but-not-yet-counted are
-# paid for. The new session's own estimate and the hysteresis are waived; the
-# reserved ones are not, so a burst still stops at the floor.
+# above the kept-back floor once the spawns still opening their window are paid
+# for. The new session's own estimate and the hysteresis are waived; the pending
+# spawns are not, so a burst still stops at the floor — but a window already open
+# is in the reading and is not charged again (issue #3487, fleet_admit_pending).
 _fleet_admit_room_advice() {
   [ "${FLEET_ADMIT_ROOM:-advice}" != hold ] || return 1
   [ "$1" = 0 ] || return 1
-  local a_room a_cost a_avail a_floor a_res a_more
-  read -r a_room a_cost a_avail a_floor a_res a_more <<EOF
-$2
+  local a_left
+  a_left=$(_fleet_admit_advice_left "$2") || return 1
+  [ "$a_left" -gt 0 ]
+}
+# _fleet_admit_advice_left <headroom line> → avail − floor − pending × cost, the
+# one number the advice rule admits on (a line with no pending field — an older
+# caller's — charges every reserved one, as #3480 did).
+_fleet_admit_advice_left() {
+  local l_room l_cost l_avail l_floor l_res l_hyst l_med l_ag l_pend l_more
+  read -r l_room l_cost l_avail l_floor l_res l_hyst l_med l_ag l_pend l_more <<EOF
+$1
 EOF
-  : "${a_room:-}${a_more:-}"
-  case "$a_cost$a_avail$a_floor$a_res" in ''|*[!0-9]*) return 1 ;; esac
-  [ $(( a_avail - a_floor - a_res * a_cost )) -gt 0 ]
+  : "${l_room:-}${l_hyst:-}${l_med:-}${l_ag:-}${l_more:-}"
+  [ -n "${l_pend:-}" ] || l_pend=$l_res
+  case "$l_cost$l_avail$l_floor$l_pend" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' $(( l_avail - l_floor - l_pend * l_cost ))
 }
 # fleet_admit_room_advised <headroom line> — how many more sessions the advice
 # rule admits one after another: each pays its own cost as a reservation, so k
-# fit while avail − floor − (reserved + k − 1) × cost > 0. The capacity read's
+# fit while avail − floor − (pending + k − 1) × cost > 0. The capacity read's
 # `room` when the gate admits (the hub reads room < 1 as full) — never above
 # what the strict room already says. FLEET_ADMIT_ROOM=hold → the strict room.
 fleet_admit_room_advised() {
@@ -8425,8 +8451,7 @@ EOF
   : "${v_more:-}"
   case "$v_room$v_cost$v_avail$v_floor$v_res" in ''|*[!0-9]*) return 1 ;; esac
   [ "$v_cost" -gt 0 ] || return 1
-  if [ "${FLEET_ADMIT_ROOM:-advice}" != hold ]; then
-    v_left=$(( v_avail - v_floor - v_res * v_cost ))
+  if [ "${FLEET_ADMIT_ROOM:-advice}" != hold ] && v_left=$(_fleet_admit_advice_left "$1"); then
     if [ "$v_left" -gt 0 ] && [ $(( (v_left + v_cost - 1) / v_cost )) -gt "$v_room" ]; then
       v_room=$(( (v_left + v_cost - 1) / v_cost ))
     fi
@@ -8437,14 +8462,14 @@ EOF
 # one line in global/admit-advice.log (the last 200 kept) for the doctor's row.
 # Written by fleet_session_cap_ok (a real admission), never by a read.
 _fleet_admit_advice_note() {
-  local f="$FLEET_C/global/admit-advice.log" n_room n_cost n_avail n_floor n_res n_more
-  read -r n_room n_cost n_avail n_floor n_res n_more <<EOF
+  local f="$FLEET_C/global/admit-advice.log" n_room n_cost n_avail n_floor n_res n_hyst n_med n_ag n_pend n_more
+  read -r n_room n_cost n_avail n_floor n_res n_hyst n_med n_ag n_pend n_more <<EOF
 $1
 EOF
-  : "${n_more:-}"
+  : "${n_hyst:-}${n_med:-}${n_ag:-}${n_more:-}"
   mkdir -p "${f%/*}" 2>/dev/null || return 0
-  printf '%s room %s at ~%s MB each, %s MB available, %s MB kept back, %s admitted not yet counted — admitted at normal pressure (advice)\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$n_room" "$n_cost" "$n_avail" "$n_floor" "$n_res" >> "$f" 2>/dev/null
+  printf '%s room %s at ~%s MB each, %s MB available, %s MB kept back, %s admitted not yet counted (%s still opening) — admitted at normal pressure (advice)\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$n_room" "$n_cost" "$n_avail" "$n_floor" "$n_res" "${n_pend:-$n_res}" >> "$f" 2>/dev/null
   if [ "$(wc -l < "$f" 2>/dev/null | tr -d ' ')" -gt 400 ] 2>/dev/null; then
     tail -n 200 "$f" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null
   fi
@@ -8489,8 +8514,9 @@ EOF
 # whose agents were already in the reading. A guess about the NEXT session's
 # growth is no reason to turn a person away while the kernel says normal and the
 # floor holds, so at normal pressure the room estimate is advice: it admits while
-# avail − floor − reserved × cost > 0 (the reserved sessions still bind, so a
-# burst stops at the floor), and writes the admission to global/admit-advice.log.
+# avail − floor − pending × cost > 0 (the spawns still opening their window bind,
+# so a burst stops at the floor; one whose window is open is in `avail` already —
+# issue #3487), and writes the admission to global/admit-advice.log.
 # FLEET_ADMIT_ROOM=hold restores the strict room ≥ 1 rule. The guide's waiver
 # above is wider still (no reservation is charged to it).
 # FLEET_ADMIT=0 switches it off. A hold is transient by design: every caller of
@@ -8500,7 +8526,7 @@ fleet_machine_admit() {
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local short=0 free_min="${FLEET_ADMIT_MEM_FREE_PCT:-15}" pres="${FLEET_ADMIT_PRESSURE:-warn}"
   local lmax="${FLEET_ADMIT_LOAD_PER_CORE:-${FLEET_LOADGEN_LOAD_PER_CORE:-1.5}}" plim m lvl avail per pname
-  local hr='' room=1 tight=0 waived=0 advised=0 why
+  local hr='' room=1 tight=0 waived=0 advised=0 advice_held=0 why
   [ "${1:-}" = --short ] && short=1
   case "$free_min" in ''|*[!0-9]*) free_min=15 ;; esac
   case "$lmax" in ''|*[!0-9.]*) lmax=1.5 ;; esac
@@ -8516,7 +8542,10 @@ fleet_machine_admit() {
         if [ "$room" -lt 1 ]; then
           if _fleet_admit_guide_pass "$tight" "$hr"; then waived=1
           elif _fleet_admit_room_advice "$tight" "$hr"; then advised=1
-          else tight=1; fi
+          else
+            [ "$tight" = 0 ] && [ "${FLEET_ADMIT_ROOM:-advice}" != hold ] && advice_held=1
+            tight=1
+          fi
         fi
       elif [ "$free_min" -gt 0 ] && [ "$avail" -lt "$free_min" ]; then
         tight=1
@@ -8529,14 +8558,18 @@ fleet_machine_admit() {
     case "$lvl" in 4) pname=critical ;; 2) pname=warn ;; *) pname=normal ;; esac
     why=''
     if [ -n "$hr" ]; then   # `read`, not `set -- $hr`: zsh (a skill's shell) does not split
-      local h_room h_cost h_avail h_floor h_res h_hyst h_more
-      read -r h_room h_cost h_avail h_floor h_res h_hyst h_more <<EOF
+      local h_room h_cost h_avail h_floor h_res h_hyst h_med h_ag h_pend h_more h_left
+      read -r h_room h_cost h_avail h_floor h_res h_hyst h_med h_ag h_pend h_more <<EOF
 $hr
 EOF
-      : "${h_more:-}"   # median + agents: the doctor's, not this line's
+      : "${h_med:-}${h_ag:-}${h_more:-}"   # median + agents: the doctor's, not this line's
       why="; room for $h_room more at ~$h_cost MB each: $h_avail MB available, $h_floor MB kept back"
       [ "${h_hyst:-0}" -gt 0 ] && why="$why + $h_hyst MB until it recovers"
-      why="$why, $h_res admitted not yet counted"
+      why="$why, $h_res admitted not yet counted (${h_pend:-$h_res} still opening)"
+      # the numbers the advice rule actually weighed when it was the one that held
+      if [ "$advice_held" = 1 ] && h_left=$(_fleet_admit_advice_left "$hr"); then
+        why="$why; at normal pressure it admits while $h_avail − $h_floor − ${h_pend:-$h_res} × $h_cost > 0, and that is $h_left"
+      fi
     fi
     printf 'machine memory tight — 暂停开新：内存紧张 (pressure %s, %s%% free, floor %s%%%s): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
       "$pname" "${avail:-?}" "$free_min" "$why"

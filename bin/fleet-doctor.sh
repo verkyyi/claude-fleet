@@ -2217,13 +2217,13 @@ else
   if [ -z "$_ad" ] || [ "$_ad_h" = - ]; then
     info admit "admission on, but this machine's memory is unreadable here — it admits by load alone"
   else
-    # <room> <cost> <avail> <floor> <reserved> <hyst> <median> <agents>
-    read -r _r _c _a _f _rs _hy _md _ag <<EOF
+    # <room> <cost> <avail> <floor> <reserved> <hyst> <median> <agents> <pending>
+    read -r _r _c _a _f _rs _hy _md _ag _pd <<EOF
 $_ad_h
 EOF
     _ad_txt="room for ~$_r more session(s) now at ~$_c MB each (median $_md MB × growth over $_ag live agent(s)) — $_a MB available, $_f MB kept back"
     [ "$_hy" -gt 0 ] && _ad_txt="$_ad_txt + $_hy MB until it recovers"
-    [ "$_rs" -gt 0 ] && _ad_txt="$_ad_txt, $_rs admitted not yet counted${_ad_who:+ ($_ad_who)}"
+    [ "$_rs" -gt 0 ] && _ad_txt="$_ad_txt, $_rs admitted not yet counted, ${_pd:-$_rs} still opening${_ad_who:+ ($_ad_who)}"
     # room < 1 with the gate open: the estimate is advice at normal pressure (#3479)
     [ "$_ad_w" = ok ] && [ "$_r" -lt 1 ] 2>/dev/null \
       && _ad_txt="$_ad_txt — at normal pressure that is advice: it still admits while above the floor (global/admit-advice.log)"

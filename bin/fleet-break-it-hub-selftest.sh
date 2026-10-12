@@ -74,6 +74,8 @@
 #   admit-room-advice                               fleet_machine_admit / _fleet_admit_room_advice /
 #                                                   fleet_admit_room_advised (fleet-lib.sh), fleet-control-read.sh
 #                                                   capacity; the hub half is fleet_client_place.go pinnedFull (go test)
+#   admit-open-window-twice                         fleet_machine_admit / fleet_admit_pending / _fleet_admit_advice_left
+#                                                   (fleet-lib.sh), dash-raw-session.sh (the hub's worker_start)
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
 #                                                   steward's beat (bin/fleet_steward.py)
@@ -1252,18 +1254,62 @@ drill_admit_room_advice() {
   [ "$out" = '|rc=0' ] || { WHY="room 0 at normal pressure, 757 MB above the floor + reserved, refused the second session: $out"; return 1; }
   grep -q 'admitted at normal pressure (advice)' "$g/admit-advice.log" 2>/dev/null \
     || { WHY="the advice admission was not noted in global/admit-advice.log"; return 1; }
+  # spawns still opening their window bind (an open one is in avail — #3487)
+  local sa sb; sleep 30 & sa=$!; sleep 30 & sb=$!
+  : > "$g/admit-reserve/x.$sa.1"; : > "$g/admit-reserve/y.$sb.2"
   out=$(adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
-  case "$out" in *'room for 0 more'*'2 admitted'*'|rc=1') ;; *) WHY="a third session past the floor + 2 reserved must still be held: $out"; return 1 ;; esac
+  kill "$sa" "$sb" 2>/dev/null; wait "$sa" "$sb" 2>/dev/null
+  case "$out" in *'room for 0 more'*'(2 still opening)'*'|rc=1') ;; *) WHY="a session past the floor + 2 spawns still opening must still be held: $out"; return 1 ;; esac
   setup; out=$(P=2 adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
   case "$out" in *'pressure warn'*'|rc=1') ;; *) WHY="warn pressure must still hold: $out"; return 1 ;; esac
   setup; out=$(A=14 adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
   case "$out" in *'内存紧张'*'|rc=1') ;; *) WHY="below the kept-back floor must still hold: $out"; return 1 ;; esac
   setup; out=$(adm bash "$BIN/fleet-control-read.sh" capacity)
-  case "$out" in *'"admit":true'*'"room":1}'*) ;; *) WHY="the capacity beat under mini2's reading must say admit:true room 1 (the hub reads room < 1 as full): $out"; return 1 ;; esac
+  case "$out" in *'"admit":true'*'"room":2}'*) ;; *) WHY="the capacity beat under mini2's reading must say admit:true room 2 (the hub reads room < 1 as full): $out"; return 1 ;; esac
   grep -q '^func TestClientPlaceNamedFullSaysPinned(' "$ROOT/tokenledger/internal/api/fleet_place_fallback_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestClientPlaceNamedFullSaysPinned is not in fleet_place_fallback_test.go"; return 1; }
   SECS=$(since "$t0")
-  WHAT="mini2 的数（25% 空闲、保底 15%、约 882 MB/会话、残留 hold + 1 个刚开的窗口）：普通第二个会话放行并记下；容量拍子报 room 1；再多一个预留、压力 warn、低于保底线仍拦；FLEET_ADMIT_ROOM=hold 复现原拒绝"
+  WHAT="mini2 的数（25% 空闲、保底 15%、约 882 MB/会话、残留 hold + 1 个刚开的窗口）：普通第二个会话放行并记下；容量拍子报 room 2；两个还在开的 spawn、压力 warn、低于保底线仍拦；FLEET_ADMIT_ROOM=hold 复现原拒绝"
+}
+
+# admit-open-window-twice (issue #3487): after #3480 mini2 still refused a
+# newcomer's FIRST ordinary session (drill 36, 2026-10-12T04:02:09Z): pressure
+# normal, 29 % free, «room for 0 more at ~822 MB each: 4751 MB available, 2457 MB
+# kept back, 3 admitted not yet counted» — 4751 − 2457 − 3 × 822 = −172. The three
+# were the guide's and the warm pool's windows, open and confirmed, their agents
+# already in `avail`: charged twice. For real on a sandbox state dir with those
+# numbers (16384 MB, 3 agents of 274 MB × 3 = 822, 29 %, three .ok reservations):
+# the spawn gate admits and notes «0 still opening»; three spawns still running
+# unconfirmed hold, the message giving the sum it weighed; warn pressure holds.
+drill_admit_open_window_twice() {
+  CAP=30; local t0 d="$WORK/aow" out g sp1 sp2 sp3
+  t0=$(now); g="$d/tmp/.claude-dash/global"
+  setup() { rm -rf "$d"; mkdir -p "$g/admit-reserve" "$d/conf"
+    for k in guide.ok.1 pool-a.ok.2 pool-b.ok.3; do : > "$g/admit-reserve/$k"; done; }
+  adm() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MEM_TOTAL_MB=16384 \
+            FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 280576 01:00 claude\n102 1 $(id -u) 280576 01:00 claude\n103 1 $(id -u) 280576 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD="echo ${P:-1} 29 0 0" FLEET_LOAD_PROBE_CMD='echo 0.5' \
+            FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 FLEET_MACHINE_MAX_SESSIONS=0 "$@" 2>&1; }
+  setup
+  out=$(adm FLEET_ADMIT_ROOM=hold bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  case "$out" in *'room for 0 more at ~822 MB each: 4751 MB available, 2457 MB kept back, 3 admitted not yet counted'*'|rc=1') ;;
+    *) WHY="the strict rule does not reproduce drill 36's refusal: $out"; return 1 ;; esac
+  setup
+  out=$(adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  [ "$out" = '|rc=0' ] || { WHY="three open windows charged again refused the first session at 29 % free: $out"; return 1; }
+  grep -q '3 admitted not yet counted (0 still opening) — admitted at normal pressure (advice)' "$g/admit-advice.log" 2>/dev/null \
+    || { WHY="the advice admission was not noted with what it weighed: $(cat "$g/admit-advice.log" 2>/dev/null)"; return 1; }
+  rm -rf "$g/admit-reserve"; mkdir -p "$g/admit-reserve"
+  sleep 30 & sp1=$!; sleep 30 & sp2=$!; sleep 30 & sp3=$!
+  : > "$g/admit-reserve/a.$sp1.1"; : > "$g/admit-reserve/b.$sp2.2"; : > "$g/admit-reserve/c.$sp3.3"
+  out=$(adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  kill "$sp1" "$sp2" "$sp3" 2>/dev/null; wait "$sp1" "$sp2" "$sp3" 2>/dev/null
+  case "$out" in *'(3 still opening)'*'4751 − 2457 − 3 × 822 > 0, and that is -172'*'|rc=1') ;;
+    *) WHY="three spawns still opening must hold, naming the sum it weighed: $out"; return 1 ;; esac
+  setup; out=$(P=2 adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  case "$out" in *'pressure warn'*'|rc=1') ;; *) WHY="warn pressure must still hold: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="drill 36 的数（29% 空闲、保底 2457 MB、约 822 MB/会话、3 个已开的窗口）：第一个普通会话放行并记「0 still opening」；3 个还在开的 spawn 仍拦且写出 4751 − 2457 − 3 × 822 = -172；压力 warn 仍拦"
 }
 
 # hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and
