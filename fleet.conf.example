@@ -92,6 +92,10 @@ FLEET_BASE_BRANCH="main"
 #FLEET_CHECK_TIMEOUT=480
 # @label=Refuse to land without a check @group=identity @tier=internal @scope=fleet @edit=bool
 #FLEET_CHECK_REQUIRED=0
+# How long a landing waits for another landing of the same repo (its land lease)
+# before it answers PENDING — call pr_merge again.
+# @label=Landing lease wait @group=identity @tier=internal @scope=global @edit=int @unit=s
+#FLEET_LAND_LEASE_WAIT=300
 
 # --- Public SSH entry (issue #1195) ---------------------------------------
 # How a NEWCOMER reaches this machine from outside — the host and port that the
