@@ -68,4 +68,4 @@
 
 ## 发现安全问题怎么报告
 
-请不要开公开 issue。走 GitHub 的私密漏洞报告（仓库页 → Security → Report a vulnerability），或发邮件——地址、回复时限和支持的版本见仓库根目录的 [SECURITY.md](https://github.com/verkyyi/claude-fleet/blob/master/SECURITY.md)。
+请不要开公开 issue。只走 GitHub 的私密漏洞报告：仓库页 → Security → [Report a vulnerability](https://github.com/verkyyi/claude-fleet/security/advisories/new)，不设邮箱。回复时限和支持的版本见仓库根目录的 [SECURITY.md](https://github.com/verkyyi/claude-fleet/blob/master/SECURITY.md)。

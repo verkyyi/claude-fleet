@@ -2,16 +2,13 @@
 
 ## 报告漏洞 · Reporting a vulnerability
 
-**请不要开公开 issue。** 私下报告，任选一条路：
-
-1. **GitHub 私密漏洞报告**（首选）：仓库页 → Security → [Report a vulnerability](https://github.com/verkyyi/claude-fleet/security/advisories/new)。只有你和维护者看得到。
-2. **邮件**：`security@<待定>` <!-- 发起人填写真实地址；收信经 AWS SES（EPIC #3569 规则 15） -->——没有 GitHub 账号时用这条。
+**请不要开公开 issue。** 只有一条路：**GitHub 私密漏洞报告**——仓库页 → Security → [Report a vulnerability](https://github.com/verkyyi/claude-fleet/security/advisories/new)。只有你和维护者看得到。我们不设报告邮箱。
 
 请写上：影响哪个组件（客户端、托管机器、入口）、哪个版本（`fleet doctor` 里 `fleet` 那一行写的版本）、怎么复现、你看到的后果。有利用代码的话附上，但请只在你自己的机器和账号上试。
 
 **Please do not open a public issue.** Report privately through GitHub's
 [private vulnerability reporting](https://github.com/verkyyi/claude-fleet/security/advisories/new)
-(preferred), or by mail to the address above if you have no GitHub account.
+— it is the only channel; there is no security mailbox.
 Include the component (client, managed machine, hub), the version (the
 `fleet` row of `fleet doctor`), steps to reproduce and the impact.
 
