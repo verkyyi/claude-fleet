@@ -16,6 +16,10 @@
 #      login's own cluster/ wins
 #   E  the daemon's machine-reading task (15 s, the seat's), kept off a user pod;
 #      install-apply writes and takes back the switch
+#   G  a user pod's copy (#3734): the file the node program writes from fleet-ops'
+#      reading (tokenledger/internal/agent/node_cluster_reading.go
+#      renderMachineReading) is fleet-machine-tasks.py's render, byte for byte,
+#      and the reader takes it
 #   F  class session (#3671): spinner and webhook serve only a login's sessions — the
 #      daemon runs them only while it has one; a session row on a machine-table task
 #      is red; bin/fleet-node-supervisor-selftest.py V (session units, a restart
@@ -128,10 +132,10 @@ if [ "$(uname -s)" = Linux ]; then
 fi
 grep -q "_seat_dir(os.path.join(paths.state, \"cluster\"), 0, gid, 0o775)" "$BIN/fleet-node-supervisor.py" \
   && ok "E the seat's layout makes cluster/ root's, the seat's group may write" || bad "E no cluster/ in the seat layout"
-grep -q "fleet_node_manages \"\$LOGIN\"; then" "$BIN/fleet-install-apply.sh" \
+grep -q 'fleet_node_manages "$LOGIN" || \[ "${FLEET_USER_POD:-}" = 1 \]; then' "$BIN/fleet-install-apply.sh" \
   && grep -q "set-line FLEET_MACHINE_TASKS 'FLEET_MACHINE_TASKS=off'" "$BIN/fleet-install-apply.sh" \
   && grep -q "drop-line FLEET_MACHINE_TASKS" "$BIN/fleet-install-apply.sh" \
-  && ok "E install-apply writes the switch for a managed login and takes it back" || bad "E install-apply's switch lines missing"
+  && ok "E install-apply writes the switch for a managed login or a user pod's (#3734) and takes it back" || bad "E install-apply's switch lines missing"
 # set-line / drop-line on a real fleet.conf, as install-apply calls them
 cd_="$WORK/cfg"; mkdir -p "$cd_"; printf '# fleet.conf\n# ---- [common] ----\nFLEET_HOST=1\n' > "$cd_/fleet.conf"
 FLEET_CONF_DIR="$cd_" bash "$BIN/fleet-conf.sh" set-line FLEET_MACHINE_TASKS 'FLEET_MACHINE_TASKS=off' >/dev/null 2>&1
@@ -155,6 +159,21 @@ out=$(python3 "$MT" table --check "$fake" 2>&1)
 printf '%s' "$out" | grep -q "orphans: only a launchd unit serves a login's sessions" && ok "F a machine-table task marked session is red" || bad "F session on a machine task unflagged: $out"
 out=$(python3 "$BIN/fleet-node-supervisor-selftest.py" V_SessionUnits 2>&1) && ok "F the daemon: session units, adopt after a restart, strays stop, no doubled task" \
   || bad "F fleet-node-supervisor-selftest.py V_SessionUnits: $(printf '%s' "$out" | grep -E '^(FAIL|ERROR|AssertionError)' | head -3 | tr '\n' ' ')"
+
+# ---- G: a user pod's copy (#3734) ------------------------------------------------
+GO="$ROOT/tokenledger/internal/agent/node_cluster_reading.go"
+want=$(python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("mt", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+sys.stdout.write(m.render({"v": 1, "ts": 1760000000, "mem_probe": "1 60 0 0", "mem_total_mb": "6144", "load_per_core": "0.25"}))' "$MT")
+# the literal the Go side's test holds its render to (node_cluster_reading_test.go)
+lit=$(printf '{\n"v": 1,\n"ts": 1760000000,\n"mem_probe": "1 60 0 0",\n"mem_total_mb": "6144",\n"load_per_core": "0.25"\n}')
+[ "$want" = "$lit" ] && grep -q 'func renderMachineReading' "$GO" \
+  && grep -qF '"{\n\"v\": 1,\n\"ts\": 1760000000,\n\"mem_probe\": \"1 60 0 0\",\n\"mem_total_mb\": \"6144\",\n\"load_per_core\": \"0.25\"\n}\n"' "${GO%.go}_test.go" \
+  && ok "G the node program's copy is fleet-machine-tasks.py's render, byte for byte" || bad "G render drift between Python and Go"
+rm -rf "$WORK/conf/cluster" "$cl/machine.json"
+mkdir -p "$WORK/conf/cluster"
+printf '{\n"v": 1,\n"ts": %s,\n"mem_probe": "2 9 0 0",\n"mem_total_mb": "8192",\n"load_per_core": "0.80"\n}\n' "$(date +%s)" > "$WORK/conf/cluster/machine.json"
+[ "$(rd off)" = "0.80|2 9 0 0|8192" ] && ok "G a user pod with no machine reading of its own reads fleet-ops' copy" || bad "G pod copy: $(rd off)"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

@@ -563,7 +563,9 @@ fi
 # Quiet unless it changes something; nothing else on any other machine.
 if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" ]; then
   _mt=$(bash "$ROOT/bin/fleet-conf.sh" line FLEET_MACHINE_TASKS 2>/dev/null </dev/null)
-  if fleet_node_manages "$LOGIN"; then
+  # a person's pod (FLEET_USER_POD=1) reads its own: fleet-ops' reading of the
+  # pod, pushed into $FLEET_CONF_DIR/cluster/ (issue #3734)
+  if fleet_node_manages "$LOGIN" || [ "${FLEET_USER_POD:-}" = 1 ]; then
     [ -n "$_mt" ] || { bash "$ROOT/bin/fleet-conf.sh" set-line FLEET_MACHINE_TASKS 'FLEET_MACHINE_TASKS=off' >/dev/null 2>&1 </dev/null \
       && say 'conf: FLEET_MACHINE_TASKS=off — memory and load come from the machine'; }
   elif [ "$_mt" = 'FLEET_MACHINE_TASKS=off' ]; then

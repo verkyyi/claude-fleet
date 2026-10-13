@@ -1548,6 +1548,8 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		// …and reads a throwaway Job back for the hub (claude-fleet#3552).
 		FleetKubeAPI:   getenv("CCQUOTA_FLEET_KUBE_API"),
 		FleetKubeSADir: getenv("CCQUOTA_FLEET_KUBE_SA_DIR"),
+		// A user pod's login writes its pod's reading here (claude-fleet#3734).
+		FleetConfDir: getenv("FLEET_CONF_DIR"),
 		// An admin agent carries the hub's token refreshes unless refused
 		// (claude-fleet#1490); the endpoint overrides are for a fake provider.
 		FleetOAuthRefresh: fleet && getenv("CCQUOTA_FLEET_OAUTH_REFRESH") != "0",

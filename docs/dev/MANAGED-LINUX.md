@@ -742,7 +742,7 @@ exactly the permission it needs — for almost all of them, none:
 | `fleet-job` | a throwaway Job (`render.py --job`) | none, no token |
 | `fleet-door` · `fleet-linux` | the door · the shared node | none, no token |
 | `fleet-credproxy` · `fleet-egress` · `fleet-npm` · `fleet-pypi` · `fleet-goproxy` | the shared services | none, no token |
-| `fleet-ops` | the central patrol (#3734) | read: pods and their metrics |
+| `fleet-ops` | the central patrol (`render.py --ops`, «fleet-ops» below, #3734) | read: pods and their metrics, Jobs and their logs |
 | `fleet-provisioner` | `bin/fleet-provisioner.py` | write — Deployments · Jobs · Services · PVCs in fleet-workers, held to the template |
 
 Each account AND each pod says `automountServiceAccountToken: false`
@@ -783,6 +783,52 @@ and `provisioner-off-template` drill both halves — on this machine
 (`bin/fleet-break-it-cluster-selftest.sh`) and on kind, with every account's
 `kubectl auth can-i --list` on the run's summary page
 (`.github/workflows/cluster-perms.yml`).
+
+## fleet-ops
+
+(issue #3734, EPIC #3500 C1's cloud half) A cluster has ONE fleet-ops — the
+managed-node image's own `ccquota` run as a plain agent (no boot, no supervisor,
+not root, no disk), one replica. It is the cluster's link to the hub
+(`cluster_ops`): it carries the provisioner's tickets (Spare pods), reads Jobs
+back (Throwaway Jobs) and patrols — every 15 s it reads each running user pod's
+`fleet` container from `metrics.k8s.io` against that container's own limits and
+sends the readings up the link. Of the node task table's `machine` rows
+(`conf/node-tasks.tsv`) only `machine-reading` has a meaning for a cluster, and
+this is it, per pod: a pod's reading is its own cgroup's, never the host's
+`/proc` (#3542, #3733) — memory used of its memory limit (`mem_probe`
+`<level> <free%> 0 0`, `mem_total_mb` = the limit), CPU used of its CPU limit
+(`load_per_core`); a pod with no limit gets that half empty and its login probes
+for itself.
+
+The hub keeps a reading only from a link whose hello listed `cluster_ops`, only
+for a pod `fleet_cluster_pods` puts in THAT cluster (the link's hostname) and
+still stands, and only digits, dots and spaces; it stores the last one per pod
+(`fleet_cluster_readings`, so a pod linked to the other replica gets it on its
+next beat) and pushes it as `cluster_reading` to that pod's login — a non-root
+agent with `FLEET_USER_POD=1` lists the capability and writes
+`$FLEET_CONF_DIR/cluster/machine.json`, the file `fleet_machine_reading`
+(bin/fleet-lib.sh) reads first, in `fleet-machine-tasks.py`'s shape; install-apply
+writes `FLEET_MACHINE_TASKS=off` for a user pod's login. A pod the hub did not
+make (moved in by hand, `fleet-move-to-pod.sh`) gets no reading and probes for
+itself, as before. BREAK-IT `cluster-reading-wrong-pod`.
+
+Setting it up (once, after the fleet-workers layer — its account, Role and
+`control-out` rule):
+
+```sh
+NS=fleet-workers CLUSTER=<the name fleet.clusters says>
+# its node token: a join code redeemed with the cluster's name as the hostname
+TOKEN=$(curl -fsS -X POST "$HUB/v1/node/join" -H 'Content-Type: application/json' \
+  -d "{\"code\":\"<码>\",\"hostname\":\"$CLUSTER\",\"os_user\":\"fleet-ops\"}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+kubectl -n $NS create secret generic fleet-ops --from-literal=token="$TOKEN"
+unset TOKEN
+python3 extras/managed-node/render.py --ops "$CLUSTER" --image "$IMAGE" --hub "$HUB" | kubectl apply -f -
+```
+
+Its pod's hostname is the cluster's name (what the hub's `opsFor` looks for); the
+token reaches the agent down a pipe (`CCQUOTA_TOKEN_FD`), never its environment.
+`--provisioner` overrides `http://fleet-provisioner.<ns>.svc.cluster.local:8790`.
 
 ## Spare pods
 

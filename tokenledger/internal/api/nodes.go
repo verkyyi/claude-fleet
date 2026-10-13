@@ -154,6 +154,14 @@ type nodeConn struct {
 	// fleet-ops, the one that carries provisioner tickets (claude-fleet#3553).
 	// Its hostname is the cluster's name. Set once, before publish.
 	clusterOps bool
+	// readingDropped is the count of pod readings this ops link's last
+	// cluster_readings had dropped: logged only when it changes (claude-fleet#3734).
+	readingDropped atomic.Int64
+	// canClusterReading is the hello's CapClusterReading: a user pod's login
+	// that writes its pod's reading (claude-fleet#3734); readingSent is the ts
+	// of the last one sent on this link.
+	canClusterReading bool
+	readingSent       atomic.Int64
 	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
 	// one token refresh to the provider from its own network and hands the
 	// answer back (claude-fleet#1490). Set once, before the conn is published.
@@ -580,9 +588,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
-		userPod:    hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
-		clusterOps: hp.HasCap(control.CapClusterOps),
-		helloAt:    time.Now().UTC(), agentVersion: hp.AgentVersion}
+		userPod:           hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
+		clusterOps:        hp.HasCap(control.CapClusterOps),
+		canClusterReading: hp.HasCap(control.CapClusterReading),
+		helloAt:           time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
@@ -746,6 +755,11 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				// The stable this link has not heard yet (claude-fleet#3146).
 				go s.pushRelease(ep.ID, nc, stablePointer{})
 			}
+			if nc.canClusterReading {
+				// Its pod's reading, when fleet-ops is on the other
+				// replica (claude-fleet#3734).
+				go s.pushClusterReading(ep.ID, nc, nil)
+			}
 			if nc.accountNode() {
 				// Each admin beat is a chance to send what is queued for
 				// this machine: a person assigned while it was offline
@@ -773,6 +787,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			// (claude-fleet#3553), or a Job read back (claude-fleet#3552),
 			// goes to its waiter.
 			nc.pending.deliver(m)
+		case control.TypeClusterReadings:
+			// Every user pod's own reading, from the cluster's fleet-ops
+			// (claude-fleet#3734).
+			s.acceptClusterReadings(ctx, wire, *ep, nc, m)
 		case control.TypeOAuthRefreshResult:
 			// A relayed token refresh's answer (claude-fleet#1490) goes to
 			// the lease that is waiting on it; nothing of it is kept here.

@@ -200,6 +200,11 @@ type Config struct {
 	FleetKubeAPI   string
 	FleetKubeSADir string
 
+	// FleetConfDir is this login's $FLEET_CONF_DIR: a user pod's login writes
+	// the hub's reading of its pod into <it>/cluster/machine.json
+	// (claude-fleet#3734). Empty = <home>/.config/claude-fleet.
+	FleetConfDir string
+
 	// FleetSSHRelay lets the hub relay SSH connections to this machine
 	// (claude-fleet#1413): the agent splices a data stream it dials to the
 	// hub onto the local sshd at 127.0.0.1:22. On by default with Fleet;
@@ -287,7 +292,9 @@ const spoolFraction = 4
 
 // Agent is a running collector.
 type Agent struct {
-	cfg Config
+	// clusterReadingEvery overrides control.ClusterReadingEvery (tests).
+	clusterReadingEvery time.Duration
+	cfg                 Config
 	// signer is KeyFile once the hub took it (claude-fleet#3710); nil = the
 	// bearer token.
 	signer atomic.Pointer[nodesig.Signer]

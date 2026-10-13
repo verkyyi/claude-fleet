@@ -46,6 +46,7 @@
 2.9 client-unversioned-drift
 1.0 client-update-silent-fail
 0.8 client-verify-no-ccquota
+1.5 cluster-reading-wrong-pod
 5.5 cmdn-waits-orch
 0.1 codesign-identity-switch
 3.0 codex-helper-missing

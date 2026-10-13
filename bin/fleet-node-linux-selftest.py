@@ -696,6 +696,42 @@ class LinuxNode(unittest.TestCase):
             with patch.object(lin.sys, 'platform', 'linux'), patch.object(lin.os, 'geteuid', return_value=0):
                 self.assertTrue(lin.own_seat())           # a shared node: root, as before
 
+    def test_ops_template(self):
+        """#3734 (EPIC #3500 C1's cloud half): the cluster's ONE fleet-ops — one
+        replica, Recreate, its hostname the cluster's name, the read-only
+        fleet-ops account (the one pod here that mounts a token), fleet/role
+        control (the provisioner's only caller); the image's own ccquota as a
+        plain agent, not root, read-only root, the token down a pipe from its
+        Secret — never the environment."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        img = 'example/image@sha256:' + 'a' * 64
+        items = json.loads(subprocess.check_output([sys.executable, str(render), '--ops', 'ack-sz', '--image', img,
+                                                    '--hub', 'https://hub.example']))['items']
+        self.assertEqual([(i['kind'], i['metadata']['name']) for i in items], [('Deployment', 'fleet-ops')])
+        dep = items[0]
+        self.assertEqual((dep['spec']['replicas'], dep['spec']['strategy']['type']), (1, 'Recreate'))
+        self.assertEqual(dep['metadata']['labels']['fleet/role'], 'control')
+        pod = dep['spec']['template']['spec']
+        self.assertEqual(dep['spec']['template']['metadata']['labels']['fleet/role'], 'control')
+        self.assertEqual((pod['hostname'], pod['serviceAccountName'], pod['automountServiceAccountToken']),
+                         ('ack-sz', 'fleet-ops', True))
+        c = pod['containers'][0]
+        sec = c['securityContext']
+        self.assertTrue(sec['runAsNonRoot'] and sec['readOnlyRootFilesystem'] and sec['runAsUser'] != 0)
+        self.assertEqual(sec['capabilities'], {'drop': ['ALL']})
+        env = {e['name']: e.get('value') for e in c['env']}
+        self.assertEqual((env['CCQUOTA_FLEET'], env['CCQUOTA_FLEET_COMPUTE'], env['CCQUOTA_FLEET_PROVISIONER']),
+                         ('1', '0', 'http://fleet-provisioner.fleet-workers.svc.cluster.local:8790'))
+        self.assertNotIn('CCQUOTA_TOKEN', env)
+        self.assertIn('CCQUOTA_TOKEN_FD=3', c['command'][-1])
+        self.assertIn('/run/fleet-ops/token', c['command'][-1])
+        self.assertNotIn('persistentVolumeClaim', json.dumps(pod))
+        for bad in (['ack-sz', '--image', 'example/image:latest', '--hub', 'https://hub.example'],
+                    ['ack-sz', '--image', img, '--hub', 'http://hub.example'],
+                    ['Not_A_Name', '--image', img, '--hub', 'https://hub.example'],
+                    ['ack-sz', '--image', img, '--hub', 'https://hub.example', '--provisioner', 'file:///x']):
+            self.assertNotEqual(subprocess.run([sys.executable, str(render), '--ops'] + bad, capture_output=True).returncode, 0, bad)
+
     def test_door_template(self):
         """#3549 (EPIC #3500 C4): the cluster's one door — ONE LoadBalancer
         (22022 alone, externalTrafficPolicy Local) in front of a 2-replica
