@@ -36,8 +36,21 @@ defaults:
     working-directory: tokenledger
 
 jobs:
+  # Sharded like the Postgres leg below (claude-fleet#4067): internal/api ran
+  # ~570-600s under -race on a runner (go test's 10m default timed it out,
+  # claude-fleet#3146), then grew past the 20m cap on a slow one (1200s on
+  # dd2107b2). `rest` runs gofmt + vet + every package but internal/api; each
+  # `api-K` runs every API_SHARDS-th test of `go test -list` (sorted,
+  # round-robin, so the union is the whole package by construction). Adding a
+  # shard = one more `api-K` in `part` AND API_SHARDS raised to match.
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [rest, api-1, api-2, api-3]
+    env:
+      API_SHARDS: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -48,11 +61,33 @@ jobs:
       # The client /install serves lives once, in the repo's bin/ conf/ …
       # (claude-fleet#1803); a build packs it into fleetclient/pack/ first.
       - run: ../bin/fleet-client-pack.sh
-      - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
-      - run: go vet ./...
-      # internal/api alone runs ~570-600s under -race on a runner: go test's
-      # 10m default timed it out (claude-fleet#3146) — the pg leg's #2479 bound.
-      - run: go test -race -timeout 20m ./...
+      - if: matrix.part == 'rest'
+        run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
+      - if: matrix.part == 'rest'
+        run: go vet ./...
+      - name: pick this part's tests
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          set -eo pipefail
+          case "$PART" in
+            rest)
+              pkgs=$(go list ./... | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/internal/api' | paste -sd' ')
+              echo "PKGS=$pkgs" >> "$GITHUB_ENV"
+              echo 'RUN=' >> "$GITHUB_ENV" ;;
+            api-*)
+              k=${PART#api-}
+              [ "$k" -ge 1 ] && [ "$k" -le "$API_SHARDS" ] || { echo "::error::$PART is outside API_SHARDS=$API_SHARDS"; exit 1; }
+              go test -race -list '.*' ./internal/api/ > /tmp/list.txt
+              grep -E '^(Test|Example|Fuzz)' /tmp/list.txt | sort | awk -v n="$API_SHARDS" -v k="$k" 'NR % n == k % n' > /tmp/mine.txt
+              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) internal/api tests"
+              [ -s /tmp/mine.txt ] || { echo "::error::$PART picked no test"; exit 1; }
+              echo 'PKGS=./internal/api/' >> "$GITHUB_ENV"
+              echo "RUN=^($(paste -sd'|' /tmp/mine.txt))\$" >> "$GITHUB_ENV" ;;
+            *) echo "::error::unknown part $PART"; exit 1 ;;
+          esac
+      - name: tests (${{ matrix.part }})
+        run: go test -race -timeout 20m ${RUN:+-run "$RUN"} $PKGS
 
   # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
   # internal/store AND internal/api tests — the api ones are where the fleet

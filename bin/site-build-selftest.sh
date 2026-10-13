@@ -4,7 +4,10 @@
 # Builds site/ with bin/site-build.sh into a sandbox and reads the result:
 #
 #   A  no drill result: both pages build, and neither says a number of seconds
-#      anywhere — the try button reads 「免费试用」 / "Try it free"
+#      anywhere — the try button reads 「立即体验」 / "Try it", the hero's second
+#      button 「申请使用」 → /apply, and neither page says anyone can start right
+#      away (免费试用 · 登录就能 · 马上 · 现在就试 / Free trial · Start now · Try it now ·
+#      sign in and — issue #4049)
 #   B  each page's head: <html lang>, title, description, canonical, hreflang
 #      zh-CN · en · x-default (→ /en/), og:* and twitter:* with a 1200×630 card
 #      that exists, every absolute URL on the __ORIGIN__ placeholder
@@ -54,14 +57,18 @@ def text(page):
     body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', page, flags=re.S)
     return html.unescape(' '.join([metas, ld, re.sub(r'<[^>]+>', ' ', body)]))
 
-for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '免费试用'), ('en', 'en/index.html', '/en/', 'Try it free')):
+for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '立即体验'), ('en', 'en/index.html', '/en/', 'Try it')):
     p = open(os.path.join(OUT, rel), encoding='utf-8').read()
     t = text(p)
-    # A
-    for m in SECS.finditer(t):
+    # A — the trial's length (15 分钟 / 15 minutes, #4049) is a rule, not a timing
+    for m in SECS.finditer(re.sub(r'15\s*(分钟|minutes)', ' ', t)):
         bad.append('A %s: says "%s" with no drill' % (rel, t[max(0, m.start() - 15):m.end() + 5].strip()))
     if tryw not in t:
         bad.append('A %s: no "%s" button' % (rel, tryw))
+    if 'href="/apply" data-out>' not in p:
+        bad.append('A %s: no 申请使用 → /apply button in the hero' % rel)
+    for m in re.finditer(r'免费试用|登录就能|马上|现在就试|free trial|start now|try it now|sign in and', p, re.I):
+        bad.append('A %s: says "%s" — access is limited (#4049)' % (rel, m.group(0)))
     # B
     head = p.split('</head>')[0]
     need = ['<html lang="%s">' % lang, '<title>ClaudeFleet', '<meta name="description" content="',
@@ -109,7 +116,7 @@ for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '免费试用'), ('en'
     # H
     for u in re.findall(r'(?:href|src)="(/[^"]*)"', p):
         u = u.split('?')[0].split('#')[0]
-        if u in ('/', '/en/', '/app', '/app/try') or u.startswith(('/docs/', '/en/docs/')):
+        if u in ('/', '/en/', '/app', '/app/try', '/apply') or u.startswith(('/docs/', '/en/docs/')):
             continue
         f = {'/favicon.svg': 'logo.svg'}.get(u) or (u[len('/site/'):] if u.startswith('/site/') else u.lstrip('/'))
         if u not in ('/favicon.ico', '/favicon.svg', '/apple-touch-icon.png') and not u.startswith('/site/'):
@@ -130,10 +137,10 @@ PY
 printf '{"date":"2026-10-10","runs":[{"total":44,"steps":{"login":7,"machine":5,"first":32}},{"total":46.2,"steps":{"login":8.1,"machine":6,"first":32.1}}]}\n' > "$T/fast.json"
 if out="$("$BUILD" --out "$T/d" --drill "$T/fast.json" --now "$NOW" 2>&1)"; then
   miss=""
-  for s in '<b>60 秒</b>' '<em>60 秒</em>' '>8 秒<' '>6 秒<' '>32 秒<' '00:46' '2026-10-10' '60 秒试用'; do
+  for s in '<em>60 秒</em>' '>8 秒<' '>6 秒<' '>32 秒<' '00:46' '2026-10-10' '立即体验'; do
     grep -qF "$s" "$T/d/index.html" || miss="$miss $s"
   done
-  for s in 'Start in 60 seconds.' '>8 s<' 'Try in 60 seconds' 'slowest of 2 runs'; do
+  for s in '<em>60 seconds</em>' '>8 s<' 'Try it<' 'slowest of 2 runs'; do
     grep -qF "$s" "$T/d/en/index.html" || miss="$miss $s"
   done
   [ -z "$miss" ] && ok "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"

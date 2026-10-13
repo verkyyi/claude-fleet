@@ -90,13 +90,15 @@ type signinWaysPage struct {
 	// Email is offered; Code is the second step: type the six digits.
 	Email, Code bool
 	GitHub      bool
+	// Apply: the person came to apply (?next=/apply, claude-fleet#4049).
+	Apply bool
 }
 
 // renderSigninWays draws /signin with every way that is on, in the one order.
 func (s *Server) renderSigninWays(w http.ResponseWriter, r *http.Request, loc, note string) {
 	page := signinWaysPage{pageView: newPageView(r, loc), Note: note,
 		WeChat: s.WeChat.ready() && (s.WeChat.webReady() || inWeChat(r)), InWeChat: inWeChat(r) && s.WeChat.mpReady(),
-		Email: s.Email.ready(), GitHub: s.GitHub.ready()}
+		Email: s.Email.ready(), GitHub: s.GitHub.ready(), Apply: toApply(r)}
 	page.Code = page.Email && r.URL.Query().Get("step") == "code"
 	writeAuthPage(w, http.StatusOK, signinWaysTmpl, loc, page)
 }
@@ -111,8 +113,8 @@ var signinWayNotes = map[string]bool{
 
 var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
 <title>{{t "signin.title"}}</title></head><body><div class="page">` + entryTop + `
-<main class="col"><h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
-<p class="lead">{{if .Code}}{{t "signin.code.lead"}}{{else}}{{t "signin.ways.lead"}}{{end}}</p>
+<main class="col">` + limitedPill + `<h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
+<p class="lead">{{if .Code}}{{t "signin.code.lead"}}{{else if .Apply}}{{t "signin.lead.apply"}}{{else}}{{t "signin.ways.lead"}}{{end}}</p>
 {{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
 {{if .Code}}<form class="stack" method="post" action="/auth/email/code">
 <label for="code">{{t "signin.code.label"}}</label>
@@ -125,19 +127,31 @@ var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i
 <input class="input" type="email" id="email" name="email" autocomplete="email" required placeholder="{{t "signin.email.placeholder"}}">
 <button class="btn outline" type="submit">{{t "signin.email.button"}}</button></form>{{end}}
 {{if .GitHub}}{{if or .WeChat .Email}}<div class="or">{{t "signin.or"}}</div>{{end}}<a class="btn {{if or .WeChat .Email}}outline{{else}}primary{{end}}" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>{{end}}
-<p class="fine">{{t "signin.ways.fine"}}</p>{{end}}
+<p class="fine">{{if .WeChat}}{{t "signin.ways.fine.wechat"}}{{else}}{{t "signin.ways.fine"}}{{end}}</p>{{end}}
 </main></div></body></html>`))
 
 // signinWaysText is the words the page with several ways adds; merged into
 // pageText at start.
 var signinWaysText = map[string]i18n.Text{
 	"signin.ways.lead": {
-		i18n.EN:   "Pick up your chats and sessions.",
-		i18n.ZhCN: "继续你的对话和会话。",
+		i18n.EN:   "Pick up your chats and sessions. Not on the list yet? Sign in, then try it and apply right there.",
+		i18n.ZhCN: "继续你的对话和会话。还不在名单上的，登录后可以先试用、当场申请。",
 	},
 	"signin.ways.fine": {
-		i18n.EN:   "No account yet? Ask an admin for an invite.",
-		i18n.ZhCN: "还没有账号？向管理员要一条邀请。",
+		i18n.EN:   "No account yet? Sign in and apply, or ask an admin for an invite.",
+		i18n.ZhCN: "还没有账号？登录后申请，或向管理员要一条邀请。",
+	},
+	"signin.pill": {
+		i18n.EN:   "Limited access for now",
+		i18n.ZhCN: "目前限定开放",
+	},
+	"signin.lead.apply": {
+		i18n.EN:   "Sign in first, then fill in the application.",
+		i18n.ZhCN: "先登录，再填申请。",
+	},
+	"signin.ways.fine.wechat": {
+		i18n.EN:   "Once you follow the account, we only send what concerns your account: review results and service changes.",
+		i18n.ZhCN: "关注公众号后，我们只发和你账号有关的通知：审核结果、服务变动。",
 	},
 	"signin.wechat":      {i18n.EN: "Sign in with WeChat", i18n.ZhCN: "微信登录"},
 	"signin.wechat.in":   {i18n.EN: "Continue with WeChat", i18n.ZhCN: "用微信继续"},

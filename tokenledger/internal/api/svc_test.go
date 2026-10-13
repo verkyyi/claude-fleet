@@ -234,7 +234,9 @@ func TestSvcExpired(t *testing.T) {
 func TestSvcOnlyHashStored(t *testing.T) {
 	h := newFleetHarness(t)
 	tok := svcSetup(t, h, "hashed", "runs:read")
-	secret := tok[strings.LastIndex(tok, "_")+1:]
+	// The secret is base64url, which may itself hold a "_": cut after the
+	// prefix, never at the last "_" (a one-letter tail matched "svc:hashed").
+	secret := tok[len(svcTokenWord)+svcPrefixLen+1:]
 	rows, err := h.srv.Store.DB().Query(`SELECT prefix, sha256, principal, created, expires, revoked_at, last_used FROM svc_tokens`)
 	if err != nil {
 		t.Fatal(err)
