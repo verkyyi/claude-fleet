@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The hub half of the chat relay (claude-fleet#3644, EPIC #3642 C2). The entry's
@@ -210,4 +211,42 @@ func (c *chatRelayConn) Close() error {
 	err := c.Conn.Close()
 	c.end("closed")
 	return err
+}
+
+// chatRelayPeer is the other replica to hand a person's whole /v1/chat request
+// to (claude-fleet#3847, the SSH relay's #2151 half the chat routes lacked):
+// only when this one holds no link to login on host able to carry a chat relay
+// and another replica holds one that offered CapChat. That replica serves it as
+// its own — it signs the person in again, opens the relay and audits it — and a
+// request already handed over (the replicas' token) is never handed on again.
+// Off — a single hub — it is never asked.
+func (s *Server) chatRelayPeer(r *http.Request, host, login string) (store.NodeConn, bool) {
+	if s.Replica == nil || s.relayHopped(r) {
+		return store.NodeConn{}, false
+	}
+	if _, _, err := s.chatRelayNode(host, login); err == nil {
+		return store.NodeConn{}, false
+	}
+	peers := s.peerConns()
+	if len(peers) == 0 {
+		return store.NodeConn{}, false
+	}
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		log.Printf("fleet: read nodes for the chat relay: %v", err)
+		return store.NodeConn{}, false
+	}
+	var l []store.NodeConn
+	for _, n := range nodes {
+		pc, ok := peers[n.EndpointID]
+		if !ok || n.Hostname != host || n.OSUser != login || !pc.HasCap(control.CapChat) || !control.Compatible(n.Proto) {
+			continue
+		}
+		l = append(l, pc)
+	}
+	if len(l) == 0 {
+		return store.NodeConn{}, false
+	}
+	sort.Slice(l, func(i, j int) bool { return l[i].EndpointID < l[j].EndpointID })
+	return l[0], true
 }
