@@ -1621,7 +1621,9 @@ drill_restore_role_lost() {
   env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
     BREAK_SOCK="$BREAK_SOCK" SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 \
     bash "$WORK/inst/bin/fleet-restore.sh" >/dev/null 2>&1
-  grep -q -- "--resume $sid" "$WORK/claude-argv" && { WHY="restore opened the hand-resumed conversation a second time"; return 1; }
+  # counted by windows, not argv lines: the first half's killed wrapper may still log a late relaunch
+  [ "$(nt list-windows -t oc -F x | grep -c .)" = 2 ] \
+    || { WHY="restore opened the hand-resumed conversation a second time: [$(nt list-windows -t oc -F '#{window_name}' | tr '\n' ' ')]"; return 1; }
   [ "$(o "$w" @fleet_role_def)" = orchestrator ] || { WHY="the hand-resumed window did not get the role back"; return 1; }
   grep -q "^orchestrator	oc	1f0e0000-0000-4000-8000-000000038293	$w	" "$held" \
     || { WHY="roles.held does not follow the conversation to its new window: $(cat "$held")"; return 1; }
