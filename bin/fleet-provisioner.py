@@ -14,14 +14,18 @@ done. The ops are typed, never a manifest:
 
   create-user-pod  pod limits join render.py's user pod (PVC · Service · Deployment)
                    login uid      built for its one login (#3757), and its join
-                                  Secret u-<nonce>-join (#3553)
+                                  Secret u-<nonce>-join (#3553); the template's
+                                  user_pod.private_mirrors reach it only when
+                                  their list names that login (#4002)
   destroy-user-pod pod             those three, each only if it is a user pod's,
                                    and the join Secret
   set-limits       pod limits      that pod's Deployment, nobody else's
   create-job       pod repo ref    render.py's throwaway Job for that pod: the
                    kind cmd        ticket's kind and command line, the template's
                                    job.{image, git_mirror, caches, egress_proxy,
-                                   deadline, ttl} (#3552)
+                                   deadline, ttl} (#3552); refused for a repo of
+                                   user_pod.private_mirrors whose list does not
+                                   name the pod's login (#4002)
   bind-user-pod    pod principal   a claimed pod's fleet/principal label (#3553)
 
 Everything it would send is first held to the template here (off_template —
@@ -246,6 +250,16 @@ def user_pod_of(api, ns, kind, name):
     return o
 
 
+def pod_login_of(dep):
+    """The one login a user pod's Deployment was rendered for (#3757), or ''."""
+    for c in ((dep.get('spec') or {}).get('template') or {}).get('spec', {}).get('containers') or []:
+        if c.get('name') == 'fleet':
+            for e in c.get('env') or []:
+                if e.get('name') == 'FLEET_POD_LOGIN':
+                    return e.get('value') or ''
+    return ''
+
+
 def create(api, ns, objs):
     for o in objs:
         why = off_template(o, ns)
@@ -278,8 +292,20 @@ def act(t, conf, api, r=None):
         # the join Secret first: the pod mounts it at its start
         return create(api, ns, [join_secret(pod, ns, t['join'])] + objs)
     if op == 'create-job':
-        if user_pod_of(api, ns, 'Deployment', pod) is None:
+        owner = user_pod_of(api, ns, 'Deployment', pod)
+        if owner is None:
             raise Refused('no user pod %s to run a Job for' % pod)
+        # a repo only a list may read from its mirror (#4002): no Job of it for a
+        # pod whose login is not on that list
+        try:
+            private = r.private_mirrors_checked((conf.get('user_pod') or {}).get('private_mirrors') or [])
+        except ValueError as e:
+            raise Refused('the template\'s private_mirrors: %s' % e)
+        login = pod_login_of(owner)
+        upstream = ('https://github.com/%s.git' % t['repo']).lower()  # dist-ok: a ticket's repo as an upstream URL, compared, never fetched
+        for m in private:
+            if m['upstream'].lower() == upstream and login not in m['logins']:
+                raise Refused('%s is mirrored for a list, and %s (login %r) is not on it' % (t['repo'], pod, login))
         job = conf.get('job') or {}
         try:
             objs = r.job_resources(job.get('image', ''), pod, t['repo'], t['ref'], t['nonce'], ns,

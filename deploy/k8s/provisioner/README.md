@@ -61,3 +61,57 @@ Check it: `kubectl -n $NS auth can-i --list --as system:serviceaccount:$NS:<acco
 for each account — only `fleet-provisioner` lists a write. The user pods, the
 door and the shared node (render.py) name their accounts too: apply this layer
 before them.
+
+## Private mirrors — a repo only a list of people may read (#4002)
+
+The in-cluster git mirrors speak `git://` with no login, and ACK's flannel
+enforces no NetworkPolicy, so whoever can reach a mirror's address can clone it.
+For a public repo that is fine (`git_mirrors` + `egress.allow`, every pod). For an
+internal repo the wall is each user pod's own egress guard: `private_mirrors`
+lists the mirror, its Service's ClusterIP and the logins that may read it, and
+render.py gives a pod the guard's allow line, the `insteadOf` and the label
+`fleet/mirror-<repo>` **only when its login is on that list**. Anyone else's pod
+gets none of the three: the guard rejects the address and git fetches GitHub
+through the egress with the person's own credentials — GitHub decides. A private
+mirror's address in the open `egress.allow`, or its upstream in `git_mirrors`, is
+refused at render.
+
+**The list lives in the cluster only** — never in this repo (it names internal
+repos and people): ConfigMap `fleet-private-mirrors` in fleet-workers, key
+`private-mirrors.json`, a JSON list:
+
+```json
+[{"mirror": "git://git-mirror.arc-runners:9418/acme-monorepo.git",
+  "upstream": "https://github.com/acme-org/acme-monorepo.git",
+  "allow": "172.21.x.y:9418",
+  "logins": ["alice", "bob"]}]
+```
+
+`allow` is the mirror Service's ClusterIP (`kubectl -n arc-runners get svc <mirror>`),
+`logins` the pod logins (`FLEET_POD_LOGIN` of a user pod, the `--login` it was
+rendered with) — a person is on the list by login, nothing else.
+
+```sh
+NS=fleet-workers
+# read / edit the list (an admin, from the cluster's kubectl)
+kubectl -n $NS get cm fleet-private-mirrors -o jsonpath='{.data.private-mirrors\.json}' > private-mirrors.json
+$EDITOR private-mirrors.json        # add or remove a login in "logins"
+kubectl -n $NS create cm fleet-private-mirrors --from-file=private-mirrors.json --dry-run=client -o yaml | kubectl apply -f -
+# a NEW pod: the provisioner's template carries the same list, and a hand render takes the file
+jq --slurpfile pm private-mirrors.json '.user_pod.private_mirrors = $pm[0]' template.json > t && mv t template.json
+python3 extras/managed-node/render.py … --user-pod u-… --login <name> --uid <n> --private-mirrors private-mirrors.json
+# a RUNNING pod (its access follows the list; the pod restarts, the home disk stays)
+kubectl -n $NS get deploy u-<nonce> -o json \
+  | python3 extras/managed-node/render.py --mirror-grant private-mirrors.json > grant.json
+kubectl -n $NS patch deploy u-<nonce> --type=json --patch-file grant.json
+```
+
+`--mirror-grant` touches only the template's `fleet/mirror-*` labels,
+`FLEET_GIT_MIRRORS` and the guard's allow lines, and tests the Deployment's
+resourceVersion (a Deployment changed in between is refused, re-run it). Check a
+pod: `kubectl -n $NS exec deploy/u-<nonce> -c fleet -- git ls-remote <mirror URL> HEAD`
+answers for a listed login and is refused (`Connection refused`, the guard's
+REJECT) for anyone else. The provisioner also refuses a Job of a listed repo for a
+pod whose login is not on its list (#4002). What the guard does not cover: a pod
+with no egress guard (a Job, the shared node, another namespace's workload) can
+still reach the mirror while the CNI enforces no NetworkPolicy.

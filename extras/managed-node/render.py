@@ -4,6 +4,7 @@ import argparse
 import ipaddress
 import json
 import re
+import sys
 
 # the disk runtime the machine updater moves (#3212; the image only seeds it)
 RUNTIME = '/var/db/fleet-node/runtime'
@@ -36,6 +37,126 @@ EGRESS6_BLOCK = ['fc00::/7']
 # /etc/fleet-devnet.env for every login at each start.
 GH_PROXY_RE = r'http://[A-Za-z0-9.-]+:[0-9]{1,5}'
 GIT_MIRROR_RE = r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+=https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git'
+
+# A mirror only the people on its list may read (#4002): an internal repo. The
+# mirror speaks git:// with no login and flannel enforces no NetworkPolicy, so the
+# wall is each user pod's own egress guard: the mirror's address let through, its
+# insteadOf (FLEET_GIT_MIRRORS) and the pod label fleet/mirror-<repo> are rendered
+# ONLY into the pod of a login on that mirror's list. Anyone else's pod gets none
+# of the three — the guard rejects the address, and git fetches GitHub through the
+# egress with the person's own credentials (GitHub decides). One entry:
+#   {"mirror": "git://HOST:PORT/PATH.git", "upstream": "https://github.com/OWNER/REPO.git",
+#    "allow": "IP:PORT" (the mirror Service's ClusterIP), "logins": ["name", ...]}
+# The list lives in the provisioner template's user_pod.private_mirrors (ConfigMap
+# fleet-provisioner) or a hand render's --private-mirrors file; a running pod
+# follows an edit through --mirror-grant (deploy/k8s/provisioner/README.md).
+PRIVATE_MIRROR_KEYS = ('mirror', 'upstream', 'allow', 'logins')
+MIRROR_LABEL = 'fleet/mirror-'
+
+
+def private_mirrors_checked(entries):
+    """The entries, checked: [{pair, upstream, dest, allow_rule, logins, label}]."""
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError('private_mirrors is a list of {%s}' % ', '.join(PRIVATE_MIRROR_KEYS))
+    out, seen = [], set()
+    for e in entries:
+        if not isinstance(e, dict) or sorted(e) != sorted(PRIVATE_MIRROR_KEYS):
+            raise ValueError('a private mirror is {%s}, not %r' % (', '.join(PRIVATE_MIRROR_KEYS), e))
+        pair = '%s=%s' % (e['mirror'], e['upstream'])
+        if not all(isinstance(e[k], str) for k in ('mirror', 'upstream', 'allow')) \
+                or not re.fullmatch(GIT_MIRROR_RE, pair):
+            raise ValueError('a private mirror is git://HOST/PATH + https://github.com/OWNER/REPO.git, not %r' % pair)
+        cidr, port = egress_allow(e['allow'])
+        if not cidr.endswith('/32'):
+            raise ValueError("a private mirror's allow is its one address IP:PORT, not %r" % e['allow'])
+        logins = e['logins']
+        if not isinstance(logins, list) or not all(isinstance(x, str) and re.fullmatch(POD_LOGIN_RE, x)
+                                                   for x in logins):
+            raise ValueError("a private mirror's logins are a list of login names, not %r" % (logins,))
+        repo = e['upstream'].rsplit('/', 1)[1][:-len('.git')].lower()
+        label = MIRROR_LABEL + repo
+        if not re.fullmatch(r'[a-z0-9]([a-z0-9._-]{0,61}[a-z0-9])?', label.split('/', 1)[1]):
+            raise ValueError('cannot make a pod label of the repo name %r' % repo)
+        if e['upstream'] in seen:
+            raise ValueError('the upstream %s has two private mirrors' % e['upstream'])
+        seen.add(e['upstream'])
+        out.append({'pair': pair, 'upstream': e['upstream'], 'dest': (cidr, port), 'logins': set(logins),
+                    'allow_rule': '-A OUTPUT -d %s -p tcp -m tcp --dport %d -j ACCEPT' % (cidr, port),
+                    'label': label})
+    return out
+
+
+def _private_conflicts(checked, git_mirrors, allow):
+    """A private mirror the open settings would hand everyone: refused."""
+    for m in checked:
+        for g in git_mirrors:
+            if g.partition('=')[2] == m['upstream']:
+                raise ValueError('%s is a private mirror\'s upstream: it cannot be in --git-mirror too' % m['upstream'])
+        net = ipaddress.IPv4Network(m['dest'][0])
+        for cidr, port in allow:
+            if port == m['dest'][1] and net.overlaps(ipaddress.IPv4Network(cidr)):
+                raise ValueError('--egress-allow %s:%d opens the private mirror of %s to every pod'
+                                 % (cidr, port, m['upstream']))
+
+
+def private_mirror_grant(checked, login):
+    """What the pod of `login` gets: the entries whose list names it."""
+    return [m for m in checked if login in m['logins']]
+
+
+def mirror_grant_patch(dep, entries):
+    """A running user pod's Deployment -> the JSON patch that makes its mirror
+    access what `entries` now say for its login (#4002): the template's
+    fleet/mirror-* labels, FLEET_GIT_MIRRORS in each container that carries the
+    login, the egress guard's allow lines. Anything not a private mirror's is left
+    byte for byte; the patch tests the resourceVersion, so a Deployment changed in
+    between is refused by the API server rather than overwritten."""
+    checked = private_mirrors_checked(entries)
+    if (dep.get('kind') != 'Deployment'
+            or ((dep.get('metadata') or {}).get('labels') or {}).get('fleet/role') != 'user'):
+        raise ValueError("--mirror-grant reads one user pod's Deployment (kubectl get deploy u-… -o json)")
+    tpl = dep['spec']['template']
+    spec = tpl['spec']
+    login = ''
+    for c in spec.get('containers') or []:
+        for e in c.get('env') or []:
+            if c['name'] == 'fleet' and e['name'] == 'FLEET_POD_LOGIN':
+                login = e.get('value', '')
+    if not re.fullmatch(POD_LOGIN_RE, login):
+        raise ValueError('the Deployment names no pod login (FLEET_POD_LOGIN): not a #3757 user pod')
+    granted = private_mirror_grant(checked, login)
+    ours = {m['label'] for m in checked}
+    labels = {k: v for k, v in (tpl['metadata'].get('labels') or {}).items() if k not in ours}
+    labels.update({m['label']: '1' for m in granted})
+    upstreams = {m['upstream'] for m in checked}
+    ops = [{'op': 'test', 'path': '/metadata/resourceVersion', 'value': dep['metadata']['resourceVersion']},
+           {'op': 'replace', 'path': '/spec/template/metadata/labels', 'value': labels}]
+    for kind in ('initContainers', 'containers'):
+        for i, c in enumerate(spec.get(kind) or []):
+            env = c.get('env') or []
+            if c['name'] == 'egress-guard':
+                ops.append({'op': 'replace', 'path': '/spec/template/spec/%s/%d/command' % (kind, i),
+                            'value': c['command'][:-1] + [_guard_regrant(c['command'][-1], checked, granted)]})
+            if not any(e['name'] == 'FLEET_POD_LOGIN' for e in env):
+                continue
+            pairs = []
+            for e in env:
+                if e['name'] == 'FLEET_GIT_MIRRORS':
+                    pairs = [t for t in e.get('value', '').split() if t.partition('=')[2] not in upstreams]
+            pairs += [m['pair'] for m in granted]
+            new = [e for e in env if e['name'] != 'FLEET_GIT_MIRRORS']
+            if pairs:
+                new.append({'name': 'FLEET_GIT_MIRRORS', 'value': ' '.join(pairs)})
+            ops.append({'op': 'replace', 'path': '/spec/template/spec/%s/%d/env' % (kind, i), 'value': new})
+    return ops
+
+
+def _guard_regrant(script, checked, granted):
+    lines = [ln for ln in script.split('\n') if ln not in {m['allow_rule'] for m in checked}]
+    cut = next((i for i, ln in enumerate(lines) if re.fullmatch(r'-A OUTPUT -d \S+ -j REJECT', ln)), None)
+    if cut is None:
+        raise ValueError("the egress guard's script has no REJECT line to put an allow before")
+    return '\n'.join(lines[:cut] + [m['allow_rule'] for m in granted] + lines[cut:])
 
 # The cluster's shared services (#3547, EPIC #3500 C2): the credential proxy's
 # in-cluster Service (deploy/k8s/credproxy/fleet-workers) and the one egress
@@ -398,17 +519,21 @@ def _etc_mounts(names):
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
                        cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay='',
-                       login='', uid=0):
+                       login='', uid=0, private_mirrors=()):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
     (ReadWriteOncePod). Inside: one login, the one it was made for (--login /
     --uid; the hub's account op opens it, any other name is refused), tmux, the
     node program as that login, sshd for the login step; the machine-level loops
     are the cluster's (FLEET_NODE_PROFILE=user-pod). No Kubernetes credential, no
-    fleet/principal label — the provisioner writes that once the pod is ready."""
+    fleet/principal label — the provisioner writes that once the pod is ready.
+    `private_mirrors` (#4002): the mirrors only their lists may read; this pod
+    gets the ones whose list names its login, and nothing of the others."""
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
                                              cn_mirrors, cluster_caches, namespace)
+    private = private_mirrors_checked(private_mirrors)
+    _private_conflicts(private, git_mirrors, allow)
     if not re.fullmatch(USER_POD_RE, name):
         raise ValueError('--user-pod is u-<nonce> (4-20 of a-z0-9), not %r' % name)
     if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
@@ -416,6 +541,9 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
     if not login:
         raise ValueError('--user-pod needs --login and --uid: a person\'s pod is built for its one login (#3757)')
     login, uid = pod_login(login, uid)
+    granted = private_mirror_grant(private, login)
+    git_mirrors = list(git_mirrors) + [m['pair'] for m in granted]
+    allow = list(allow) + [m['dest'] for m in granted]
     if not cred_central:
         raise ValueError('--user-pod needs --cred-central: the pod holds no subscription credential (#3757)')
     limits = limits or dict(USER_POD_LIMITS)
@@ -493,7 +621,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
          # Recreate: the home disk is ReadWriteOncePod — the old pod lets go first
          'spec': {'replicas': 1, 'strategy': {'type': 'Recreate'}, 'revisionHistoryLimit': 2,
                   'selector': {'matchLabels': select},
-                  'template': {'metadata': {'labels': labels}, 'spec': {
+                  'template': {'metadata': {'labels': dict(labels, **{m['label']: '1' for m in granted})}, 'spec': {
                       'hostname': name, 'enableServiceLinks': False,
                       'serviceAccountName': SA_USER,
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
@@ -811,6 +939,12 @@ if __name__ == '__main__':
     p.add_argument('--github-proxy', default='', help="git's and gh's road to GitHub: http://RELAY:3128 (extras/gh-relay)")
     p.add_argument('--git-mirror', action='append', default=[], metavar='MIRROR=UPSTREAM',
                    help='fetch UPSTREAM (https://github.com/OWNER/REPO.git) from MIRROR; pushes stay on GitHub (repeatable)')
+    p.add_argument('--private-mirrors', default='', metavar='FILE',
+                   help='a JSON list of mirrors only their logins may read (#4002): '
+                        '[{"mirror", "upstream", "allow": "IP:PORT", "logins": [...]}] - --user-pod only')
+    p.add_argument('--mirror-grant', default='', metavar='FILE',
+                   help="read a running user pod's Deployment (kubectl get deploy u-... -o json) on stdin and print "
+                        'the JSON patch that makes its private-mirror access what FILE says for its login')
     p.add_argument('--cn-mirrors', action='store_true',
                    help='npmmirror / goproxy.cn / node dist mirror for every login (a pod outside the cluster '
                         'layout; in it, --cluster-caches)')
@@ -862,6 +996,16 @@ if __name__ == '__main__':
               'private': [c.strip() for c in args.egress_private.split(',') if c.strip()],
               'allow': args.egress_allow}
     try:
+        private = []
+        for path in (args.mirror_grant, args.private_mirrors):
+            if path:
+                with open(path) as f:
+                    private = json.load(f)
+        if args.mirror_grant:
+            print(json.dumps(mirror_grant_patch(json.load(sys.stdin), private), indent=2))
+            raise SystemExit(0)
+        if private and not args.user_pod:
+            raise ValueError('--private-mirrors is per login: a --user-pod only (a shared node has many logins)')
         if args.limits_patch:
             print(json.dumps(user_pod_limits_patch(user_pod_limits(args.limits)), indent=2))
             raise SystemExit(0)
@@ -893,7 +1037,7 @@ if __name__ == '__main__':
                                        cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
                                        egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
                                        cluster_caches=args.cluster_caches, relay=args.relay,
-                                       login=args.login, uid=args.uid)
+                                       login=args.login, uid=args.uid, private_mirrors=private)
         else:
             items = resources(args.image, args.hub, args.storage_class, args.namespace,
                               entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
@@ -901,6 +1045,6 @@ if __name__ == '__main__':
                               git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors,
                               cred_central=args.cred_central, egress_proxy=args.egress_proxy,
                               egress_closed=args.egress_closed, cluster_caches=args.cluster_caches, relay=args.relay)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
