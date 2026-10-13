@@ -1,0 +1,65 @@
+name: web-console
+
+# The new console (EPIC #3923, issue #3926) is built from extras/web-console and
+# its output, dist/<side>, is committed: bin/web-console-pack.sh copies it into
+# the hub image as is, so no machine builds it and the page never reaches a CDN.
+# This job rebuilds it from the lockfile and fails when the committed dist is
+# not exactly what the sources make, or when it loads from another origin.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'extras/web-console/**'
+      - 'extras/fleet-theme/**'
+      - 'bin/web-console-pack.sh'
+      - '.github/workflows/web-console.yml'
+  pull_request:
+    paths:
+      - 'extras/web-console/**'
+      - 'extras/fleet-theme/**'
+      - 'bin/web-console-pack.sh'
+      - '.github/workflows/web-console.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extras/web-console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extras/web-console/package-lock.json
+      - name: Install (lockfile only)
+        run: npm ci --no-audit --no-fund
+      - name: Build
+        run: npm run build
+      - name: The committed dist is the build
+        run: |
+          git add -N dist
+          if ! git diff --exit-code --stat -- dist; then
+            echo "::error::extras/web-console/dist is stale — run: cd extras/web-console && npm ci && npm run build, then commit dist/"
+            exit 1
+          fi
+      - name: Nothing from another origin, no review mock
+        run: |
+          for side in dist/*/; do
+            if grep -rEn '(src|href)="https?://' "$side/index.html"; then echo "::error::$side/index.html loads from another origin"; exit 1; fi
+          done
+          if grep -rEn 'fonts\.(googleapis|gstatic)\.com|cdn\.jsdelivr|unpkg\.com|cdnjs' dist; then echo "::error::a CDN in dist"; exit 1; fi
+          # the review build's mock API never ships (src/proto, --mode proto)
+          if grep -rq 'dash-w41' dist; then echo "::error::the review mock is in dist"; exit 1; fi
+      - name: The pack takes it
+        run: |
+          ../../bin/web-console-pack.sh --out "$RUNNER_TEMP/console" --theme-out "$RUNNER_TEMP/theme"
+          grep -q 'src="/app/assets/' "$RUNNER_TEMP/console/app/index.html" || { echo "::error::the member side is not under /app/"; exit 1; }
+          grep -rq '/v1/chat' "$RUNNER_TEMP/console/app/assets" || { echo "::error::the member side does not talk to /v1/chat"; exit 1; }
+      - name: The review build still builds
+        run: npm run build:proto

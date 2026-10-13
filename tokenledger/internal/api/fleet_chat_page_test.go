@@ -34,23 +34,20 @@ func TestChatPage(t *testing.T) {
 		return resp, string(b)
 	}
 
-	// A hub built without the pack says so.
-	if resp, body := page("/chat/", alice); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "web-chat-pack") {
-		t.Fatalf("no pack: %d %s", resp.StatusCode, body)
-	}
-
+	// The page itself moved to /app, the new console's front page
+	// (claude-fleet#3926): one 301, signed in or not — the gate is /app's.
 	h.srv.UI = chatPageUI()
-	resp, body := page("/chat/", alice)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "CHAT-PAGE") {
-		t.Fatalf("the page: %d %s", resp.StatusCode, body)
+	for _, c := range []*http.Cookie{alice, nil} {
+		if resp, _ := page("/chat/", c); resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix {
+			t.Fatalf("/chat/ (cookie %v): %d → %q; want 301 %s", c != nil, resp.StatusCode, resp.Header.Get("Location"), AppPrefix)
+		}
 	}
-	csp := resp.Header.Get("Content-Security-Policy")
-	if !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "connect-src 'self'") || strings.Contains(csp, "http") {
-		t.Errorf("CSP %q; want same origin only", csp)
+	if resp, _ := page("/chat/?x=1", alice); resp.Header.Get("Location") != AppPrefix+"?x=1" {
+		t.Errorf("/chat/?x=1 → %q; want the query kept", resp.Header.Get("Location"))
 	}
-	if resp.Header.Get("Cache-Control") != "no-cache" {
-		t.Errorf("the page's Cache-Control %q; want no-cache", resp.Header.Get("Cache-Control"))
-	}
+	// Its files stay where they were until the old build goes (C16).
+	var resp *http.Response
+	var body string
 	resp, body = page("/chat/assets/index-x.js", alice)
 	if resp.StatusCode != http.StatusOK || body != "console.log(1)" || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
 		t.Errorf("an asset: %d %q %q", resp.StatusCode, body, resp.Header.Get("Cache-Control"))
@@ -64,20 +61,7 @@ func TestChatPage(t *testing.T) {
 		}
 	}
 
-	// Signed out: to the sign-in, and back here after it.
-	resp, _ = page("/chat/", nil)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
-		t.Fatalf("signed out: %d → %q; want 302 /app/signin", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	back := ""
-	for _, c := range resp.Cookies() {
-		if c.Name == entryReturnCookie {
-			back = c.Value
-		}
-	}
-	if back != ChatPagePath {
-		t.Errorf("the return cookie %q; want %s", back, ChatPagePath)
-	}
+	// A return cookie a sign-in left before the move still lands (and moves on).
 	r := httptest.NewRequest(http.MethodGet, "/auth/github/callback", nil)
 	r.AddCookie(&http.Cookie{Name: entryReturnCookie, Value: ChatPagePath})
 	if got := loginReturn(httptest.NewRecorder(), r); got != ChatPagePath {

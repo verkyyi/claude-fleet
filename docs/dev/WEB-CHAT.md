@@ -189,6 +189,8 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 
 ### 官网上的 `/chat`（#3646，EPIC #3642 C4）
 
+> **搬到了 `/app`（#3926，EPIC #3923 C3）**：对话现在是新控制台 `extras/web-console` 的首页——同一套界面（`src/app/chat/chat.ts` · `src/app/pages/chat.tsx`），接口仍是 `/v1/chat/*`，服务与中继不动。`consolePages` 里 `/chat/` 一行已打开：GET `/chat/` 301 到 `/app`（带 query）；`/chat/assets/*` 和下面的官网版构建留到 C16 拆旧时一起删。本机服务那份（`dist/`）照旧。
+
 同一份源码打第二个版本：`npm run build:site`（`vite build --mode site`）—— `base: /chat/`，接口前缀换成入口的
 `/v1/chat`（`src/site.ts` 的 `SITE` / `API`），顶栏换成官网的（`src/SiteBar.tsx`：ClaudeFleet 字标、官网几页
 加亮「对话」、家的状态点（在线 / 连不上 / 维护中，不写机器名）、额度小条、头像——家 `机器 · 登录` 和「终端里接着用」那行默认不在页面上，收在头像菜单里），按钮是官网胶囊形（`theme.css` 里 `html[data-site]` 一行）。

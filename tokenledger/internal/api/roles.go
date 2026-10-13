@@ -194,7 +194,9 @@ var routeAccess = map[string]string{
 	// 我的机器 (claude-fleet#2518): the page reads only /v1/nodes and /v1/me.
 	"/machines": accessUser, "/machines/": accessUser,
 	// 我的用量 (claude-fleet#2519): reads /v1/fleet/person-usage, cut to them.
-	"/usage":            accessUser,
+	"/usage": accessUser,
+	// 我的 (claude-fleet#3926): a page of the new console only, each person their own
+	mePagePath:          accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 	// Take a machine off the hub (claude-fleet#1928): a user only their own.
 	NodeRetirePath: accessUser,

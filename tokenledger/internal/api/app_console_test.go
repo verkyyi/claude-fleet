@@ -387,3 +387,61 @@ func TestConsoleTableNamesRoutes(t *testing.T) {
 		}
 	}
 }
+
+// The member side (claude-fleet#3926, C3): the conversation is /app itself,
+// 我的 is /app/me — both the console's index.html for a signed-in person, with
+// the console's own-origin policy; /chat/ is one 301 to /app; a page whose own
+// row is not live yet (/app/usage, where the live /app/quota row points) is
+// still the old page; a stranger is asked to sign in; and a hub with no
+// console build serves /app as it always did.
+func TestConsoleMemberSide(t *testing.T) {
+	h, admin, user := rolesHarness(t)
+	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("OLD-APP")}}
+	h.srv.ConsoleFS = fstest.MapFS{
+		"app/index.html":     {Data: []byte("APP-ENTRY")},
+		"app/assets/main.js": {Data: []byte("APP-CODE")},
+	}
+	hd := h.srv.Handler()
+	for _, who := range []*http.Cookie{user, admin} {
+		for _, p := range []string{AppPrefix, AppPrefix + "/", AppPrefix + mePagePath, AppPrefix + "?x=1"} {
+			got := consoleDo(hd, http.MethodGet, p, who)
+			if got.Code != http.StatusOK || got.Body.String() != "APP-ENTRY" {
+				t.Errorf("GET %s = %d %.60q; want the console's page", p, got.Code, got.Body.String())
+				continue
+			}
+			if csp := got.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") || strings.Contains(csp, "http") {
+				t.Errorf("GET %s CSP %q; want same origin only", p, csp)
+			}
+			if got.Header().Get("Cache-Control") != "no-store" {
+				t.Errorf("GET %s Cache-Control %q; want no-store", p, got.Header().Get("Cache-Control"))
+			}
+		}
+	}
+	if got := consoleDo(hd, http.MethodGet, ChatPagePath, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix {
+		t.Errorf("GET /chat/ = %d → %q; want 301 %s", got.Code, got.Header().Get("Location"), AppPrefix)
+	}
+	if got := consoleDo(hd, http.MethodGet, mePagePath, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+mePagePath {
+		t.Errorf("GET /me = %d → %q; want 301 %s", got.Code, got.Header().Get("Location"), AppPrefix+mePagePath)
+	}
+	for _, p := range []string{AppPrefix + "/usage", AppPrefix + "/sessions"} {
+		if got := consoleDo(hd, http.MethodGet, p, user); got.Body.String() == "APP-ENTRY" {
+			t.Errorf("GET %s is the console's page; its own row is not live yet", p)
+		}
+	}
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/quota", user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+"/usage" {
+		t.Errorf("GET /app/quota = %d → %q; want 301 /app/usage", got.Code, got.Header().Get("Location"))
+	}
+	for _, p := range []string{AppPrefix, AppPrefix + mePagePath} {
+		if got := consoleDo(hd, http.MethodGet, p, nil); got.Code == http.StatusOK {
+			t.Errorf("stranger GET %s = 200; want the gate", p)
+		}
+	}
+	// no build: /app is the old overview, /app/me has nothing to show
+	h.srv.ConsoleFS = nil
+	if got := consoleDo(hd, http.MethodGet, AppPrefix, user); got.Body.String() != "OLD-APP" {
+		t.Errorf("no console build: GET /app = %d %.60q; want the old page", got.Code, got.Body.String())
+	}
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+mePagePath, user); got.Code != http.StatusNotFound {
+		t.Errorf("no console build: GET /app/me = %d; want 404", got.Code)
+	}
+}
