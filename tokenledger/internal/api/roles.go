@@ -129,6 +129,10 @@ var routeAccess = map[string]string{
 	control.ChatRelayDataPath: accessSelf,
 	// The web chat (claude-fleet#3645): each person their own conversation.
 	ChatPathPrefix: accessUser, ChatPagePath: accessUser,
+	// The 60-second trial (claude-fleet#3590): the start mints a trial
+	// invite for a stranger; the claim and the timing are the person's own.
+	TryStartPath: accessPublic, TryClaimPath: accessUser, TryTimingPath: accessUser,
+	TryStatsPath: accessAdmin,
 	// The ticket registry (claude-fleet#2676): a node registers with its token.
 	FleetTicketRegisterPath: accessSelf,
 	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.
