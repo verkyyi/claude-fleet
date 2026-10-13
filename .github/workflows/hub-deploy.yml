@@ -99,11 +99,15 @@ concurrency:
 permissions:
   contents: read
 
+# Where the image goes and the hub's addresses are the deployment's, not the
+# code's (claude-fleet#3630): repo variables HUB_PUSH_REPO (registry/ns/name) and
+# HUB_URLS (space-separated https:// addresses, the first one probed). The deploy
+# job refuses to start without them.
 env:
   NS: new-deploy
-  PUSH_REPO: registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota
+  PUSH_REPO: ${{ vars.HUB_PUSH_REPO }}
   PLACEHOLDER: set-by-hub-deploy
-  HUB_URLS: https://claudefleet.24haowan.com https://ccquota.24haowan.com
+  HUB_URLS: ${{ vars.HUB_URLS }}
 
 jobs:
   check:
@@ -117,68 +121,25 @@ jobs:
       - run: node .github/actions/hub-kubeconfig/oidc.js --selftest
       - run: node .github/actions/hub-acr/acr.js --selftest
       - run: .github/actions/hub-release/release.sh --selftest
-      - name: The prod overlay renders, with exactly one placeholder tag
-        run: |
-          set -euo pipefail
-          kubectl kustomize deploy/k8s/overlays/prod > "$RUNNER_TEMP/hub.yaml"
-          n=$(grep -c ":$PLACEHOLDER\$" "$RUNNER_TEMP/hub.yaml" || true)
-          [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
-          for k in Deployment Service Ingress ConfigMap; do
-            grep -q "^kind: $k\$" "$RUNNER_TEMP/hub.yaml" || { echo "::error::render has no $k"; exit 1; }
-          done
-          # Nothing beyond what Role claudefleet-deployer may touch (the
-          # PodDisruptionBudget only once switched — deploy/k8s/README.md).
-          extra=$(grep '^kind: ' "$RUNNER_TEMP/hub.yaml" | grep -vE '^kind: (Deployment|Service|Ingress|PersistentVolumeClaim|PodDisruptionBudget|ConfigMap)$' || true)
-          [ -z "$extra" ] || { echo "::error::the deploy role cannot apply: $extra"; exit 1; }
+      # The deployment's own overlays (prod · updating · credproxy) render as
+      # one whole shape with one placeholder tag (issues #2125, #1973) —
+      # render-check.sh. Production's live in FLEET_DEPLOY_OVERLAY_REPO
+      # (claude-fleet#3630): a PR has no access to it, so here the check runs on
+      # whatever this tree still carries (none ⇒ only the base), and the deploy
+      # job runs it again, required, on the tree with the overlay laid over it.
+      - name: The base and this tree's prod overlays render
+        run: .github/actions/hub-release/render-check.sh deploy/k8s
       - name: The example overlay renders and names nothing of ours
         run: |
           set -euo pipefail
           # the shape a deployment's own overlay takes (claude-fleet#3577)
           kubectl kustomize deploy/k8s/overlays/example > "$RUNNER_TEMP/example.yaml"
           bin/oss-scan.sh -- deploy/k8s/overlays/example
-      # Issue #2125: every render is one of the two shapes, never a mix — two
-      # pods on one SQLite file is a corrupt database. Prod as it is (the
-      # sqlite component), prod as the switch leaves it (the component line
-      # deleted), and the base.
-      - name: Each render is one whole shape (sqlite · postgres)
-        run: |
-          set -euo pipefail
-          shape() { yq -o=json '.' "$1" | .github/actions/hub-release/release.sh shape -; }
-          echo "prod: $(shape "$RUNNER_TEMP/hub.yaml")"
-          kubectl kustomize deploy/k8s/base > "$RUNNER_TEMP/base.yaml"
-          [ "$(shape "$RUNNER_TEMP/base.yaml")" = mode=postgres ] || { shape "$RUNNER_TEMP/base.yaml"; echo "::error::the base is not the rolling shape"; exit 1; }
-          sw=$(mktemp -d); cp -R deploy/k8s "$sw/"
-          grep -q '^components:$' "$sw/k8s/overlays/prod/kustomization.yaml" && {
-            sed -i '/^components:$/,/^  - sqlite$/d' "$sw/k8s/overlays/prod/kustomization.yaml"
-            kubectl kustomize "$sw/k8s/overlays/prod" > "$RUNNER_TEMP/switched.yaml"
-            [ "$(shape "$RUNNER_TEMP/switched.yaml")" = mode=postgres ] || { shape "$RUNNER_TEMP/switched.yaml"; echo "::error::prod without the sqlite component is not the rolling shape"; exit 1; }
-            echo "prod after the switch: mode=postgres"
-          }
-          rm -rf "$sw"
-      - name: The 正在更新 page renders, and the Ingress names its Service
-        run: |
-          set -euo pipefail
-          kubectl kustomize deploy/k8s/updating/prod > "$RUNNER_TEMP/updating.yaml"
-          svc=$(yq 'select(.kind == "Service") | .metadata.name' "$RUNNER_TEMP/updating.yaml")
-          want=$(yq 'select(.kind == "Ingress") | .metadata.annotations."nginx.ingress.kubernetes.io/default-backend"' "$RUNNER_TEMP/hub.yaml")
-          [ "$svc" = "$want" ] || { echo "::error::the hub Ingress's default-backend ($want) is not the updating Service ($svc)"; exit 1; }
-          for f in nginx.conf updating.html updating.json; do
-            grep -q "^  $f: " "$RUNNER_TEMP/updating.yaml" || { echo "::error::the updating ConfigMap has no $f"; exit 1; }
-          done
       - name: The base names no environment
         run: |
           if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base deploy/k8s/updating/base; then
             echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
           fi
-      # The cluster credential proxy (#1973) is applied by a person, never by
-      # the deploy job (deploy/k8s/credproxy/README.md) — but it must render.
-      - name: The credential proxy renders, with one placeholder tag
-        run: |
-          set -euo pipefail
-          kubectl kustomize deploy/k8s/credproxy/prod > "$RUNNER_TEMP/credproxy.yaml"
-          n=$(grep -c ":$PLACEHOLDER\$" "$RUNNER_TEMP/credproxy.yaml" || true)
-          [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
-          grep -q 'value: https://' "$RUNNER_TEMP/credproxy.yaml" || { echo "::error::no relay URL in the prod render"; exit 1; }
 
   # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and the
   # release train's call deploys nothing — this job goes green, says 已暂停 on the
@@ -232,6 +193,44 @@ jobs:
         with:
           ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
           fetch-depth: 0   # the summary's commit list runs from the live commit to this one
+
+      - name: The deployment's settings are here
+        run: |
+          [ -n "$PUSH_REPO" ] || { echo "::error::repo variable HUB_PUSH_REPO is not set (the image registry/ns/name)"; exit 1; }
+          [ -n "$HUB_URLS" ] || { echo "::error::repo variable HUB_URLS is not set (the hub's https:// addresses)"; exit 1; }
+
+      # The deployment's own overlays (claude-fleet#3630): repo variable
+      # FLEET_DEPLOY_OVERLAY_REPO (owner/name) names a private repo whose k8s/ is
+      # laid over deploy/k8s/, so every path below is unchanged; the prod
+      # environment's secret FLEET_DEPLOY_OVERLAY_SSH_KEY is its read-only deploy
+      # key. Not set ⇒ the overlays this tree still carries (# compat-1v: 下一批删).
+      - name: Fetch the deployment's overlays
+        if: vars.FLEET_DEPLOY_OVERLAY_REPO != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FLEET_DEPLOY_OVERLAY_REPO }}
+          ssh-key: ${{ secrets.FLEET_DEPLOY_OVERLAY_SSH_KEY }}
+          persist-credentials: false
+          path: .deploy-overlay
+
+      - name: Lay the deployment's overlays over deploy/k8s
+        id: overlay
+        run: |
+          set -euo pipefail
+          if [ -d .deploy-overlay ]; then
+            [ -d .deploy-overlay/k8s ] || { echo "::error::$OVERLAY_REPO has no k8s/ directory"; exit 1; }
+            sha=$(git -C .deploy-overlay rev-parse HEAD)
+            cp -R .deploy-overlay/k8s/. deploy/k8s/
+            rm -rf .deploy-overlay
+            echo "from=$OVERLAY_REPO@${sha:0:7}" >> "$GITHUB_OUTPUT"
+            echo "overlays: $OVERLAY_REPO@$sha"
+          else
+            echo "from=this tree" >> "$GITHUB_OUTPUT"
+            echo "::notice::FLEET_DEPLOY_OVERLAY_REPO not set — deploying the overlays this tree carries"
+          fi
+          .github/actions/hub-release/render-check.sh --need-prod deploy/k8s
+        env:
+          OVERLAY_REPO: ${{ vars.FLEET_DEPLOY_OVERLAY_REPO }}
 
       - name: Which image
         id: tag
@@ -643,6 +642,7 @@ jobs:
           HEALTH: ${{ steps.health.outcome }}
           ROLLBACK: ${{ steps.rollback.outcome }}
           CREDPROXY: ${{ steps.credproxy.outputs.result || steps.credproxy.outcome }}
+          OVERLAY_FROM: ${{ steps.overlay.outputs.from }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -674,6 +674,7 @@ jobs:
             echo "|---|---|"
             echo "| 线上旧版本 | \`${PREV_TAG:-（无）}\` |"
             echo "| 新版本 | \`$NEW_TAG\` |"
+            echo "| 覆盖层 | ${OVERLAY_FROM:-（没走到这一步）} |"
             echo "| 快照 | $snap |"
             if [ "$SHAPE" = postgres ]; then
               echo "| 启动检查 | 不需要（滚动发布：新 pod 不就绪，旧 pod 不下） |"
