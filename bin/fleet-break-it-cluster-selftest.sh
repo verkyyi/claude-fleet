@@ -21,6 +21,8 @@
 #   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
 #                            tokenledger/internal/api/fleet_jobs.go
+#   mirror-private-unlisted  extras/managed-node/render.py (private_mirrors, --mirror-grant) +
+#                            bin/fleet-provisioner.py + bin/fleet-node-linux.py devnet (issue #4002)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -652,6 +654,160 @@ PY
   fi
   SECS=$(since "$t0")
   WHAT="集群只有一个 fleet-ops：只读账号（Role 只有 get/list/watch，能读 pod 指标）、fleet/role control、非 root、令牌走管道、出站只有 control-out；${gohalf}"
+}
+
+# mirror-private-unlisted (#4002): an internal repo's in-cluster mirror speaks
+# git:// with no login and flannel enforces no NetworkPolicy, so a user pod
+# reaches it exactly when its own egress guard lets the mirror's address through.
+# The machine half: a pod rendered for a login on the mirror's list gets the
+# guard's allow line, the insteadOf and the fleet/mirror-<repo> label; one for
+# any other login gets none of the three (and pod-etc writes it no insteadOf); an
+# open --egress-allow / --git-mirror that would hand the mirror to everyone is
+# refused; --mirror-grant moves a running pod both ways and touches nothing else;
+# the provisioner makes the same pods from its template and refuses a Job of the
+# repo for a pod whose login is not listed, writing nothing.
+drill_mirror_private_unlisted() {
+  CAP=30
+  local d="$WORK/pmirror" t0 out api exp
+  mkdir -p "$d/sa" "$d/etc-in" "$d/etc-out"; t0=$(now)
+  cat > "$d/pm.json" <<'JSON'
+[{"mirror": "git://git-mirror.arc-runners:9418/acme-monorepo.git",
+  "upstream": "https://github.com/acme-org/acme-monorepo.git",
+  "allow": "172.21.9.190:9418", "logins": ["listed1"]}]
+JSON
+  local base=(--image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi --user-pod u-drill1
+              --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local
+              --git-mirror git://fleet-git-mirror.arc-runners:9418/claude-fleet.git=https://github.com/o/claude-fleet.git
+              --egress-allow 172.21.6.7:9418 --private-mirrors "$d/pm.json")
+  python3 "$RENDER" "${base[@]}" --login listed1 --uid 10002 > "$d/in.json" || { WHY="render (listed) failed"; return 1; }
+  python3 "$RENDER" "${base[@]}" --login other1 --uid 10003 > "$d/out.json" || { WHY="render (unlisted) failed"; return 1; }
+  for bad in '--egress-allow 172.21.9.0/24:9418' \
+             '--git-mirror git://m:9418/x.git=https://github.com/acme-org/acme-monorepo.git'; do
+    # shellcheck disable=SC2086  # one flag + its value
+    out=$(python3 "$RENDER" "${base[@]}" --login other1 --uid 10003 $bad 2>&1) \
+      && { WHY="an open setting that hands the private mirror to everyone rendered: $bad"; return 1; }
+  done
+  out=$(python3 "$RENDER" --image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi \
+        --private-mirrors "$d/pm.json" 2>&1) && { WHY="a shared node took a per-login private mirror"; return 1; }
+  out=$(python3 - "$RENDER" "$d" <<'PY'
+import copy, importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("r", sys.argv[1]); r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+d = sys.argv[2]
+RULE = "-A OUTPUT -d 172.21.9.190/32 -p tcp -m tcp --dport 9418 -j ACCEPT"
+UP = "https://github.com/acme-org/acme-monorepo.git"
+LABEL = "fleet/mirror-acme-monorepo"
+def dep(f):
+    return [o for o in json.load(open(f))["items"] if o["kind"] == "Deployment"][0]
+def access(o):
+    t = o["spec"]["template"]; s = t["spec"]
+    guard = [c for c in s["initContainers"] if c["name"] == "egress-guard"][0]["command"][-1]
+    env = {c["name"]: {e["name"]: e.get("value", "") for e in c.get("env", [])} for c in s["initContainers"] + s["containers"]}
+    mir = {n: any(x.endswith("=" + UP) for x in v.get("FLEET_GIT_MIRRORS", "").split()) for n, v in env.items()
+           if "FLEET_POD_LOGIN" in v}
+    return {"label": t["metadata"]["labels"].get(LABEL) == "1", "guard": RULE in guard.split("\n"),
+            "mirror": sorted(n for n, m in mir.items() if m), "open": "172.21.6.7/32" in guard}
+bad = []
+a_in, a_out = access(dep(d + "/in.json")), access(dep(d + "/out.json"))
+if a_in != {"label": True, "guard": True, "mirror": ["fleet", "pod-etc"], "open": True}:
+    bad.append("the listed login's pod lacks its access: %s" % a_in)
+if a_out != {"label": False, "guard": False, "mirror": [], "open": True}:
+    bad.append("the unlisted login's pod reaches the private mirror: %s" % a_out)
+def apply(o, ops):
+    o = copy.deepcopy(o)
+    for op in ops:
+        if op["op"] == "test":
+            continue
+        parts = op["path"].strip("/").split("/"); cur = o
+        for k in parts[:-1]:
+            cur = cur[int(k)] if isinstance(cur, list) else cur[k]
+        cur[int(parts[-1]) if isinstance(cur, list) else parts[-1]] = op["value"]
+    return o
+pm = json.load(open(d + "/pm.json"))
+for name, f, lst, want in (("revoke", "/in.json", [dict(pm[0], logins=[])], False),
+                           ("grant", "/out.json", [dict(pm[0], logins=["other1"])], True)):
+    o = dep(d + f); o["metadata"]["resourceVersion"] = "7"
+    ops = r.mirror_grant_patch(o, lst)
+    if ops[0] != {"op": "test", "path": "/metadata/resourceVersion", "value": "7"}:
+        bad.append(name + ": the patch does not test the resourceVersion")
+    got = access(apply(o, ops))
+    exp = {"label": want, "guard": want, "mirror": ["fleet", "pod-etc"] if want else [], "open": True}
+    if got != exp:
+        bad.append("%s: --mirror-grant left %s" % (name, got))
+    again = r.mirror_grant_patch(apply(o, ops), lst)
+    if apply(apply(o, ops), again) != apply(o, ops):
+        bad.append(name + ": --mirror-grant is not idempotent")
+for c in dep(d + "/in.json")["spec"]["template"]["spec"]["containers"]:
+    if c["name"] == "fleet":
+        open(d + "/in.env", "w").write("".join("%s=%s\n" % (e["name"], e.get("value", "")) for e in c["env"]))
+for c in dep(d + "/out.json")["spec"]["template"]["spec"]["containers"]:
+    if c["name"] == "fleet":
+        open(d + "/out.env", "w").write("".join("%s=%s\n" % (e["name"], e.get("value", "")) for e in c["env"]))
+print("\n".join(bad))
+PY
+) || { WHY="the template check crashed: $out"; return 1; }
+  [ -z "$out" ] || { WHY="$out"; return 1; }
+  # pod-etc's /etc/gitconfig: the insteadOf only for the listed login
+  local io
+  for io in in out; do
+    python3 -I -c 'import importlib.util,sys
+spec = importlib.util.spec_from_file_location("n", sys.argv[1]); n = importlib.util.module_from_spec(spec); spec.loader.exec_module(n)
+env = dict(l.rstrip("\n").split("=", 1) for l in open(sys.argv[2]) if "=" in l)
+print(n.devnet_settings(env)[0])' "$BIN/fleet-node-linux.py" "$d/$io.env" > "$d/etc-$io/gitconfig" \
+      || { WHY="devnet_settings ($io) failed"; return 1; }
+  done
+  grep -q 'insteadOf = https://github.com/acme-org/acme-monorepo.git' "$d/etc-in/gitconfig" \
+    || { WHY="the listed login's gitconfig has no insteadOf: $(cat "$d/etc-in/gitconfig")"; return 1; }
+  ! grep -q 'acme-monorepo' "$d/etc-out/gitconfig" \
+    || { WHY="the unlisted login's gitconfig names the private mirror: $(cat "$d/etc-out/gitconfig")"; return 1; }
+  # the provisioner: the same pods from its template; no Job of the repo for the unlisted
+  api=$(stub_api "$d") || { WHY="no stand-in API"; return 1; }
+  printf 'drill-token\n' > "$d/sa/token"
+  head -c 32 /dev/urandom > "$d/key"
+  python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
+  python3 - "$d" "$D64" <<'PY' > "$d/template.json"
+import json, sys
+print(json.dumps({"cluster": "drill", "namespace": "fleet-workers",
+                  "user_pod": {"image": "x@sha256:" + sys.argv[2], "hub": "https://hub.example.com", "storage_class": "csi",
+                               "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local",
+                               "private_mirrors": json.load(open(sys.argv[1] + "/pm.json"))},
+                  "job": {"image": "x@sha256:" + sys.argv[2], "git_mirror": "git://fleet-git-mirror.arc-runners:9418/{repo}.git"}}))
+PY
+  export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
+    FLEET_PROVISIONER_API="$api" FLEET_PROVISIONER_SA_DIR="$d/sa"
+  exp=$(( $(date +%s) + 300 ))
+  tk() { python3 "$BIN/fleet_cluster_ticket.py" sign "$d/key" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(exp=int(sys.argv[2])); print(json.dumps(f))' "$1" "$exp")"; }
+  prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
+  local ref; ref=$(printf 'b%.0s' $(seq 1 40))
+  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-pmin0001","limits":"","login":"listed1","uid":10002,"join":"fj_cccccccccccccccccccccccccc","nonce":"e0000000000000000000000000000001"}')"
+  [ "$RC" = 0 ] || { WHY="the listed pod's create: rc $RC: $OUT"; return 1; }
+  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-pmout001","limits":"","login":"other1","uid":10003,"join":"fj_dddddddddddddddddddddddddd","nonce":"e0000000000000000000000000000002"}')"
+  [ "$RC" = 0 ] || { WHY="the unlisted pod's create: rc $RC: $OUT"; return 1; }
+  out=$(python3 - "$api" <<'PY'
+import json, sys, urllib.request
+bad = []
+for pod, want in (("u-pmin0001", True), ("u-pmout001", False)):
+    q = urllib.request.Request(sys.argv[1] + "/apis/apps/v1/namespaces/fleet-workers/deployments/" + pod,
+                               headers={"Authorization": "Bearer drill-token"})
+    t = json.load(urllib.request.urlopen(q))["spec"]["template"]
+    g = [c for c in t["spec"]["initContainers"] if c["name"] == "egress-guard"][0]["command"][-1]
+    got = ("172.21.9.190/32" in g, t["metadata"]["labels"].get("fleet/mirror-acme-monorepo") == "1",
+           "acme-monorepo" in json.dumps(t["spec"]["containers"]))
+    if got != (want,) * 3:
+        bad.append("%s from the template: guard/label/insteadOf %s, want all %s" % (pod, got, want))
+print("\n".join(bad))
+PY
+) || { WHY="reading the provisioner's pods crashed: $out"; return 1; }
+  [ -z "$out" ] || { WHY="$out"; return 1; }
+  : > "$d/writes"
+  prov "$(tk '{"op":"create-job","cluster":"drill","pod":"u-pmout001","repo":"acme-org/acme-monorepo","ref":"'"$ref"'","kind":"test","cmd":"true","nonce":"e0000000000000000000000000000003"}')"
+  [ "$RC" = 3 ] || { WHY="a Job of the private repo for an unlisted pod: rc $RC: $OUT"; return 1; }
+  [ ! -s "$d/writes" ] || { WHY="the refused Job wrote: $(cat "$d/writes")"; return 1; }
+  prov "$(tk '{"op":"create-job","cluster":"drill","pod":"u-pmin0001","repo":"acme-org/acme-monorepo","ref":"'"$ref"'","kind":"test","cmd":"true","nonce":"e0000000000000000000000000000004"}')"
+  [ "$RC" = 0 ] || { WHY="a Job of the private repo for the listed pod: rc $RC: $OUT"; return 1; }
+  unset FLEET_PROVISIONER_CONF FLEET_PROVISIONER_PUB FLEET_PROVISIONER_API FLEET_PROVISIONER_SA_DIR
+  SECS=$(since "$t0")
+  WHAT="私有镜像（git:// 无认证、flannel 不执行 NetworkPolicy）只对名单内登录的 pod 渲染出 egress-guard 放行行 · insteadOf · fleet/mirror-<仓库> 标签；名单外的 pod 三样都没有、pod-etc 不写 insteadOf；把它开给所有人的 --egress-allow / --git-mirror 被拒；--mirror-grant 两个方向都改得对、幂等、带 resourceVersion 检验；执行器按模板建的 pod 一样，名单外 pod 的该仓库 Job 被拒且什么都没写"
 }
 
 cred_run_drills "$0"
