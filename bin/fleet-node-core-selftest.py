@@ -394,6 +394,25 @@ class G_Switch(Sandbox):
         self.assertEqual(self.req("rollback", {}), {"ok": True, "from": self.B, "to": self.A})
         self.assertEqual(self.cur(), self.A)
 
+    def test_switch_with_a_changed_sibling_restarts_the_core(self):
+        # issue #3959: bf32f003 → 58c7df7 changed only fleet-node-supervisor.py
+        # (the sweep the core runs as `sup`); a core that hashed only its own file
+        # stayed up on the old sweep, which then booted the core out of launchd
+        p = self.serve()
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
+        with open(os.path.join(self.bin, "fleet-node-supervisor.py"), "a") as f:
+            f.write("\n# the release that fixed the sweep\n")
+        self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
+        self.assertTrue(until(10, lambda: p.poll() is not None), "the core kept the old sibling code running")
+        self.assertEqual(p.returncode, 0)
+
+    def test_switch_with_the_same_code_keeps_the_core(self):
+        p = self.serve()
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
+        self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
+        time.sleep(2)
+        self.assertIsNone(p.poll(), "the core restarted though no code it runs changed")
+
     def test_switch_and_rollback_place_the_admin_gate(self):
         # the admin seat (#3696): each release's bin/fleet-admin-gate.sh becomes
         # the two sudo-able names in <state>/admin/, admin.conf follows current

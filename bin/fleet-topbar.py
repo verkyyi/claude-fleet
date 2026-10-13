@@ -355,8 +355,11 @@ def cache_lines(gdir, sess):
 
 def peer_down(conf_dir, node, login):
     """Whether the machine-to-machine link C5 keeps to <node> as <login> is
-    down, off peerlink/state.json: its entry says not ok, or failures since its
-    last good check. No file / no entry = not known = not down."""
+    down, off peerlink/state.json: its entry's phase is not `up`. `fails` is the
+    link's LIFETIME count (fleet-peerlink.py never resets it on a rebuild), so
+    an up link that once failed is up — reading it as down drew 「mac-a 连不上」
+    on a healthy link (issue #3959); only an entry with no phase falls back to
+    it. No file / no entry = not known = not down."""
     try:
         with open(os.path.join(conf_dir, "peerlink", "state.json")) as f:
             d = json.load(f)
@@ -369,6 +372,8 @@ def peer_down(conf_dir, node, login):
         if not isinstance(e, dict):
             continue
         if (e.get("machine") or e.get("node")) == node and (not login or e.get("login") in (login, None)):
+            if e.get("phase"):
+                return e.get("phase") != "up"
             fails = e.get("fails") or e.get("failures") or 0
             return e.get("ok") is False or e.get("up") is False or (isinstance(fails, int) and fails > 0)
     return False

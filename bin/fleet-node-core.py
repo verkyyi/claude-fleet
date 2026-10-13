@@ -399,6 +399,33 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def code_files():
+    """Every file of bin/ this process runs: itself, the siblings it imported
+    (fleet_node_core, fleet_ed25519, …) and the ones it exec'd as modules
+    (fleet-node-supervisor.py, fleet-release-verify.py, …). A switch that changed
+    only a sibling still brings new core code — the sweep that booted the core
+    out lives in the supervisor's file, and a core that hashed only itself kept
+    the old one in memory after the release that fixed it (issue #3959)."""
+    names = {os.path.basename(os.path.abspath(__file__))}
+    for m in list(sys.modules.values()) + [relverify, sup, codesign, admin_seat]:
+        f = getattr(m, "__file__", None) if m is not None else None
+        if f and os.path.dirname(os.path.abspath(f)) == HERE:
+            names.add(os.path.basename(f))
+    return sorted(names)
+
+
+def code_digest(bindir, names):
+    """One digest over <bindir>/<name> for each name; a missing file counts."""
+    h = hashlib.sha256()
+    for n in names:
+        try:
+            d = sha256_file(os.path.join(bindir, n))
+        except OSError:
+            d = "-"
+        h.update(("%s %s\n" % (n, d)).encode())
+    return h.hexdigest()
+
+
 def read_pub(path):
     try:
         with open(path) as f:
@@ -708,7 +735,8 @@ class Core(object):
         self.alerted = 0
         self.stop = False
         self.tl = threading.local()     # the peer uid of the connection this thread serves
-        self.me = sha256_file(os.path.abspath(__file__))
+        self.code = code_files()        # what this process runs, hashed at start (#3959)
+        self.me = code_digest(HERE, self.code)
 
     # -- the log: one line a request (the refused ones are the evidence)
     def log(self, uid, op, args, verdict):
@@ -1178,14 +1206,11 @@ class Core(object):
         return self.root_script("fleet-node-update.py", ["root", step], {}, UPDATE_STEPS[step])
 
     def maybe_restart(self):
-        """A switch that brought new core code: exit once the reply is out, and
-        launchd / systemd start the new one (the jobs keep running: own sessions)."""
-        mine = os.path.join(self.p.runtime, "bin", os.path.basename(__file__))
-        try:
-            if sha256_file(mine) != self.me:
-                threading.Timer(1.0, self.quit).start()
-        except OSError:
-            pass
+        """A switch that brought new core code — this file or any sibling it
+        loaded (#3959): exit once the reply is out, and launchd / systemd start
+        the new one (the jobs keep running: own sessions)."""
+        if code_digest(os.path.join(self.p.runtime, "bin"), self.code) != self.me:
+            threading.Timer(1.0, self.quit).start()
 
     def quit(self):
         self.stop = True

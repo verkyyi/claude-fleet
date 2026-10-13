@@ -12,6 +12,9 @@
 #   node-core-swept       bin/fleet-node-supervisor.py _sweep / _retire_unit (CORE_LABEL) +
 #                         tend_core (#3857): the hourly sweep, run by the core itself under a
 #                         seated daemon, booted the core out — it vanished hours after a start
+#   node-core-old-code    bin/fleet-node-core.py maybe_restart / code_files (#3959): a switch
+#                         that changed only a sibling the core loaded (the supervisor's sweep)
+#                         left the core on the old code — the old sweep booted the core out
 #   node-supervisor-dead  bin/fleet-node-supervisor.py (install's KeepAlive +
 #                         ThrottleInterval, run's adopt + state.json, status --check),
 #                         bin/fleet-doctor.sh's `node` row
@@ -1245,6 +1248,23 @@ drill_node_core_swept() {
     || { WHY="the sweep still boots the core out, or a gone core stays gone: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="expected.json 不列 labels 的托管机：每小时的清理不再把 com.claude-fleet.node-core 当多余单元卸掉、也不进 attic；核心不在 launchd 里，守护记一行、root 守护自己 bootstrap 回来，status 写出不答多久了"
+}
+
+# node-core-old-code (#3959): bf32f003 → 58c7df7 changed only fleet-node-supervisor.py
+# — the sweep the core runs as `sup`, where #3857's fix lives. The core hashed only
+# its own file, so it stayed up on the old sweep after the switch, and that sweep
+# booted the core out of launchd minutes later (mac-a, 4 h of every account task
+# waiting). Now the core hashes every bin/ file it runs and restarts on any change.
+drill_node_core_old_code() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-core-selftest.py" \
+          G_Switch.test_switch_with_a_changed_sibling_restarts_the_core \
+          G_Switch.test_switch_with_the_same_code_keeps_the_core 2>&1) \
+    || { WHY="a switch that changed only a sibling left the core on old code: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="切换只改了核心加载的同目录文件（守护的 sweep）：核心回完话就退出、launchd 用新代码拉起；代码没变的切换不重启核心"
 }
 
 # managed-login-install-stale (#2688): the machine moved to a release, a managed
