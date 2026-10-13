@@ -167,10 +167,11 @@ func (s *Server) svcOnly(scope string, next http.Handler) http.Handler {
 	})
 }
 
-// svcMux is the service door's routes; C2 (runs) mounts its own here.
+// svcMux is the service door's routes: whoami and the runs (svc_runs.go).
 func (s *Server) svcMux() http.Handler {
 	m := http.NewServeMux()
 	m.Handle(SvcWhoamiPath, s.svcOnly("", http.HandlerFunc(s.handleSvcWhoami)))
+	s.svcRunsMux(m)
 	return s.svcGate(m)
 }
 
@@ -281,12 +282,16 @@ func SvcCreate(st *store.Store, name, scopes, actor string, now time.Time) (stor
 
 // SvcAdminRequest is POST /v1/fleet/svc: one op on a principal or a token.
 type SvcAdminRequest struct {
-	Op        string `json:"op"` // create | issue | revoke | disable | enable
+	Op        string `json:"op"` // create | issue | revoke | disable | enable | callback
 	Principal string `json:"principal,omitempty"`
 	Scopes    string `json:"scopes,omitempty"`
 	Days      *int   `json:"days,omitempty"`
 	Prefix    string `json:"prefix,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// op callback (claude-fleet#4004): the prefix every run's callback_url
+	// must sit under; a secret is minted the first time or with rotate.
+	CallbackPrefix string `json:"callback_prefix,omitempty"`
+	Rotate         bool   `json:"rotate,omitempty"`
 }
 
 // SvcPrincipalView is one principal with its tokens, as GET lists it.
@@ -366,8 +371,19 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 				s.revRecord([]store.Revocation{e}, now)
 			}
 			writeJSON(w, http.StatusOK, p)
+		case "callback":
+			secret, c, err := SvcSetCallback(s.Store, req.Principal, req.CallbackPrefix, req.Rotate, actor, now)
+			if err != nil {
+				svcAdminError(w, err)
+				return
+			}
+			out := map[string]any{"principal": c.Principal, "callback_prefix": c.URLPrefix}
+			if secret != "" {
+				out["secret"] = secret // shown once
+			}
+			writeJSON(w, http.StatusOK, out)
 		default:
-			httpError(w, http.StatusBadRequest, "op is one of create, issue, revoke, disable, enable")
+			httpError(w, http.StatusBadRequest, "op is one of create, issue, revoke, disable, enable, callback")
 		}
 	default:
 		w.Header().Set("Allow", "GET, POST")

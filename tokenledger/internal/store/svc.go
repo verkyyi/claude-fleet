@@ -124,12 +124,12 @@ func SvcScopesParse(s string) ([]string, error) {
 	return out, nil
 }
 
-// EnsureSvc creates the two tables (idempotent).
+// EnsureSvc creates the principal tables and the runs' (idempotent).
 func (s *Store) EnsureSvc() error {
 	if _, err := s.write.Exec(s.d.ddl(svcSchema)); err != nil {
 		return fmt.Errorf("create svc tables: %w", err)
 	}
-	return nil
+	return s.ensureSvcRuns()
 }
 
 func svcTimeOpt(v string) *time.Time {

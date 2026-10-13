@@ -322,6 +322,12 @@ type Server struct {
 	// SQLite — leads everything, exactly as before.
 	Elector *leader.Elector
 
+	// SvcRunner starts the environment a service run executes in
+	// (claude-fleet#4004, C3 fills it); nil dispatches nothing — runs queue
+	// and expire. SvcHTTP sends their callbacks (nil: a 10 s client).
+	SvcRunner SvcRunner
+	SvcHTTP   *http.Client
+
 	// nodes holds the open node control channels.
 	nodes nodeConns
 	// Replica is this process as one of several hub replicas
