@@ -683,7 +683,7 @@ grep -q '"keep"' "$WORK/node/attic/index.json" && fail 'the attic copy is still 
 has "$WORK/out" 'forgot alice: its tasks stopped, 1 service(s) left in the attic' 'the forget did not report what it did'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'managed login: not deleted'
 # --quick (issue #4044): the forget does not wait up to 20 s for the daemon's
-# own tick (12.3 s on macmini) — one second, then the runs are stopped
+# own tick (12.3 s on a managed Mac) — one second, then the runs are stopped
 reset_fixture; cs_fixture own
 printf '{"alice": {"managed": true, "since": 1}}\n' > "$WORK/node/accounts.json"; : > "$WORK/node/logins/alice.env"
 : > "$FLEET_TEST_LOG"

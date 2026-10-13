@@ -302,7 +302,7 @@ EOF
 # $TMPDIR, issue #4044): the uid outlives the wash, and so did this dir. Its
 # C / T / 0 skeleton stays (macOS makes it per uid), and so does X — macOS's
 # code-signing clones of app bundles it ran, SIP-protected: even root's rm is
-# refused there (macmini, fleetu4) — app copies, not the person's files.
+# refused there (a managed Mac, fleetu4) — app copies, not the person's files.
 # Everything else in it goes; what rm
 # still cannot take is a WARN, never the wash's verdict — the check judges.
 folders_clear() {

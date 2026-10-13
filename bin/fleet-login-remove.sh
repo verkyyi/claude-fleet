@@ -134,7 +134,11 @@ GUID_TARGET=$(dscl . -read "/Users/$LOGIN" GeneratedUID 2>/dev/null | awk '$1=="
 # acl_values <group> <attr>: one value per line (dscl prints them on the attr
 # line, or one per indented line when a value holds a space).
 acl_values() { dscl . -read "/Groups/$1" "$2" 2>/dev/null | awk -v a="$2:" '$1==a {for (i = 2; i <= NF; i++) print $i; f = 1; next} f && /^ / {print $1; next} {f = 0}'; }
-ACL_BY_NAME=() ACL_BY_GUID=()
+ACL_BY_NAME=() ACL_BY_GUID=() SHARE_GROUPS=()
+# The group scan is for steps 7 / 7b, after the login is gone: a recycle stop
+# never gets there, and two dscl reads a group were 5 s of its clock on a managed Mac
+# (issue #4044)
+if [ "$STOPONLY" = 0 ]; then
 for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.access_' || :); do
   acl_values "$g" GroupMembership | grep -Fxq -- "$LOGIN" && ACL_BY_NAME+=("$g")
   [ -n "$GUID_TARGET" ] && acl_values "$g" GroupMembers | grep -Fxq -- "$GUID_TARGET" && ACL_BY_GUID+=("$g")
@@ -145,7 +149,6 @@ done
 # group whose members are this login alone (by name, by GUID) is the login's;
 # one that lists anyone else is a share someone made and stays. Its share point
 # (/SharePoints, sharepoint_group_id = the group's GeneratedUID) goes with it.
-SHARE_GROUPS=()
 for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.sharepoint\.group\.' || :); do
   names=$(acl_values "$g" GroupMembership) guids=$(acl_values "$g" GroupMembers)
   [ -n "$names$guids" ] || continue
@@ -153,6 +156,7 @@ for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.sharepoint\.gro
   { [ -z "$guids" ] || { [ -n "$GUID_TARGET" ] && [ "$guids" = "$GUID_TARGET" ]; }; } || continue
   SHARE_GROUPS+=("$g")
 done
+fi
 
 show() { local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
 run() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || { printf '%s: failed; stopped before deleting the login\n' "$PROG" >&2; exit 1; }; }
@@ -331,7 +335,7 @@ fi
 step 1c "take $LOGIN out of the machine daemon (account forget)"
 if [ -f "$NODE_SUP" ] && [ "$QUICK" = 1 ]; then
   # --quick (issue #4044): no waiting up to 20 s for the daemon's own tick to
-  # drop the login's runs (12.3 s on macmini) — one second, then they are
+  # drop the login's runs (12.3 s on a managed Mac) — one second, then they are
   # stopped (TERM, KILL after a second); the wash kills the uid's every
   # process anyway
   run sudo env FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1 /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
