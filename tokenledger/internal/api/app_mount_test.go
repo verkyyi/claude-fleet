@@ -59,7 +59,10 @@ func TestAppOldPathsMoveUnderApp(t *testing.T) {
 			t.Errorf("GET %s = %d → %q; want 301 → %s", p, resp.StatusCode, resp.Header.Get("Location"), want)
 		}
 		resp = appGet(t, h, http.MethodHead, p, nil)
-		if isAdminPath(p) {
+		// a live row that sends a member elsewhere than an admin (one
+		// machine, claude-fleet#3934) asks who it is first, like an admin page
+		c, ok := consoleRow(AppPrefix + p)
+		if isAdminPath(p) || (ok && c.live && c.forUser != "") {
 			if resp.StatusCode == http.StatusMovedPermanently {
 				t.Errorf("stranger HEAD %s = 301 → %q; an admin page's way on is an admin's", p, resp.Header.Get("Location"))
 			}
