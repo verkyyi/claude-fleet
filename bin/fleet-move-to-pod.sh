@@ -432,10 +432,18 @@ phase_verify() {
   want=$(wc -l < "$STATE/pinned" | tr -d ' ')
   local have
   have=$(kc exec "deploy/$POD" -c fleet -- sh -c 'for s in /tmp/tmux-$(id -u)/*; do [ -S "$s" ] &&
-      tmux -S "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null; done' | sort -u)  # view-ok: runs in the pod (no fleet-lib there); sort -u drops a view session's duplicate rows
+      tmux -S "$s" list-windows -a -F "#{@fleet_id} #{window_name} #{@pin}" 2>/dev/null; done' | sort -u)  # view-ok: runs in the pod (no fleet-lib there); sort -u drops a view session's duplicate rows
   while read -r fid key; do
     [ -n "$fid" ] || continue
-    if printf '%s\n' "$have" | grep -qx "$fid"; then say "  back: $key"; else say "  MISSING: $key ($fid)"; missing=$((missing + 1)); fi
+    if printf '%s\n' "$have" | awk -v f="$fid" '$1 == f {ok=1} END {exit !ok}'; then
+      say "  back: $key"
+    elif [ "$key" = guide ] && printf '%s\n' "$have" | awk '$2 == "guide" && $3 == 1 {ok=1} END {exit !ok}'; then
+      # the onboarding guide of a login that never finished it is reopened by the
+      # fleet itself (fleet_guide_open) as a NEW pinned window — same guide, new id
+      say "  back: guide (reopened by onboarding)"
+    else
+      say "  MISSING: $key ($fid)"; missing=$((missing + 1))
+    fi
   done < "$STATE/pinned"
   mark verify "sessions=$((want - missing))/$want"
   [ "$missing" = 0 ] || die 1 "$missing pinned session(s) did not come back on $POD"
