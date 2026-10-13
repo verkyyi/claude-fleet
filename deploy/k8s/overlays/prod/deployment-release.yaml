@@ -1,8 +1,6 @@
-# Node releases (#2366): the signing key from its own Secret
-# `ccquota-release-key` (key `release-key`, made by `ccquota release keygen`,
-# by a person — never here), read-only, group-readable like the base's other
-# Secret volumes (fsGroup 10001); the releases on the OSS volume
-# (release-volume.yaml). Roll back: delete this patch and its resources line.
+# Node releases (#2366): the releases on the OSS volume (release-volume.yaml).
+# No signing key here since #3559 — the release train signs; the hub hands out
+# the offline root (CCQUOTA_FLEET_RELEASE_ROOT). Roll back: delete this patch and its resources line.
 #
 # CCQUOTA_FLEET_RELEASE_ARTIFACTS (#2398): the pinned installers every release
 # carries beside ccquota — one file per release.json component, named as its
@@ -31,11 +29,9 @@ spec:
       containers:
         - name: ccquota
           env:
-            - name: CCQUOTA_FLEET_RELEASE_KEY
-              value: /etc/ccquota-release/release-key
-            # The offline root (#3559, docs/dev/FLEET-HUB.md «发布签名»): machines
-            # re-pin to it through conf/release-keys/chain.json; the hub key above
-            # still signs until step B drops it and the train signs.
+            # The offline root (#3559, docs/dev/FLEET-HUB.md «发布签名»): the hub
+            # holds no signing key — it builds each release unsigned and the
+            # release train (the release-sign environment) signs it.
             - name: CCQUOTA_FLEET_RELEASE_ROOT
               value: "ed25519 11ctkqmqgbV7p6eGdLqIInA00aZ4wbBBaM5aHO+gFVc="
             - name: CCQUOTA_FLEET_RELEASE_DIR
@@ -48,19 +44,9 @@ spec:
             - name: CCQUOTA_FLEET_RELEASE_PLATFORMS
               value: darwin-arm64 linux-amd64
           volumeMounts:
-            - name: release-key
-              mountPath: /etc/ccquota-release
-              readOnly: true
             - name: releases
               mountPath: /releases
       volumes:
-        - name: release-key
-          secret:
-            secretName: ccquota-release-key
-            defaultMode: 0440
-            items:
-              - key: release-key
-                path: release-key
         - name: releases
           persistentVolumeClaim:
             claimName: ccquota-releases

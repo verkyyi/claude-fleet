@@ -320,9 +320,9 @@ kubectl -n new-deploy label secret ccquota-ssh-ca ccquota-fleet-cred-key app=ccq
 |---|---|---|
 | OSS 桶 + RAM 用户 `svc-fleet-release-oss`（策略 `fleet-release-oss-rw`，只此一桶） | 人，控制台 | — |
 | Secret `ccquota-release-oss` | 人 | 键 `akId` / `akSecret`（OSS CSI 的 nodePublishSecretRef 格式） |
-| Secret `ccquota-release-key` | 人 | 键 `release-key`：`ccquota release keygen` 产出的 ed25519 私钥文件；只读挂到 `/etc/ccquota-release`（0440，fsGroup 10001） |
+| （无签名私钥） | — | 自 #3559 起入口不持签名私钥：发布列车（`release-sign` 环境的 `RELEASE_SIGN_KEY`）签名，入口只带离线根的公钥 `CCQUOTA_FLEET_RELEASE_ROOT`（docs/dev/FLEET-HUB.md「发布签名」）；旧的 Secret `ccquota-release-key` 已删 |
 | PV `ccquota-releases-oss` + PVC `ccquota-releases` | 人，一次 | `overlays/prod/release-volume.yaml`——部署 Role 建不了 PV / PVC，所以它不在 kustomization 里 |
-| 环境变量 + 两个挂载 | hub-deploy | `overlays/prod/deployment-release.yaml` |
+| 环境变量 + 一个挂载 | hub-deploy | `overlays/prod/deployment-release.yaml` |
 
 ```sh
 kubectl apply -n new-deploy -f deploy/k8s/overlays/prod/release-volume.yaml
