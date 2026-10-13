@@ -123,6 +123,11 @@ type sessionCredClaims struct {
 	Providers []string `json:"providers"`
 	Iat       int64    `json:"iat"`
 	Exp       int64    `json:"exp"`
+	// A service run's pass (claude-fleet#4006): the service, the tenant and
+	// the run its usage is filed under. Empty on a person's pass.
+	Svc    string `json:"svc,omitempty"`
+	Tenant string `json:"tenant,omitempty"`
+	Run    string `json:"run,omitempty"`
 }
 
 // LoadSessionCredKey reads the pass signing key:

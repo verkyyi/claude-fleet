@@ -2049,7 +2049,7 @@ person's session.
   terminal state is written once, so a runner's late word after a cancel or a
   timeout changes nothing. Error codes (only the code leaves the hub):
   `queue_timeout` · `run_timeout` · `template_invalid` · `output_invalid` ·
-  `infra_error` · `cancelled` (`quota_exceeded` / `tenant_limit` are C4's).
+  `infra_error` · `cancelled` · `quota_exceeded` / `tenant_limit` (C4, below).
 - **The queue.** Per principal at most `fleet.svc.<name>.max_running` running
   (default 4) and at most ONE per tenant, oldest first, claimed in one write
   transaction; queued past 30 minutes ⇒ expired, running past `deadline_s` +
@@ -2082,6 +2082,27 @@ person's session.
   (run as `<cmd> "<message>"`, the node's convention; empty ⇒ log and record
   only); at most one an hour per principal; cleared on the first pass that
   finds it well. The message names codes and counts, never what a run wrote.
+- **Usage by tenant, with a ceiling** (claude-fleet#4006, `svc_usage.go`). A
+  run's model pass carries `svc` · `tenant` · `run`; the cluster credential
+  proxy reports each call with it and the hub files the row under the
+  principal AND that tenant (`pool_usage.tenant`, '' on every person's row).
+  Two ceilings, fleet settings in tokens (input + cache writes + output) over a
+  rolling 24 h / 7 days: `fleet.svc_budget.<name>` (the whole service) and
+  `fleet.svc_tenant_budget.<name>` (each tenant), `"day=…,week=…"`. Over one:
+  a submit is 429 `quota_exceeded` (the service's) / `tenant_limit` (the
+  tenant's) and nothing is queued (a used idempotency key still replays); a
+  queued run ends with the code at dispatch, never started; mid-run the proxy's
+  resolve refuses it like a person over budget (`person_budget_exceeded`, never
+  retried) and the run's failure ends with the budget's code instead of its
+  retry. A person is never held to a service's ceiling. A tight pool: a
+  service session is never first bound to an account at or past
+  `fleet.svc.<name>.yield_pct` (default 80) of its 5 h or 7 d window — all
+  tight ⇒ it waits (the run fails `infra_error`), people keep the headroom.
+  `GET /v1/svc/usage?tenant=&since=today|YYYY-MM-DD|RFC3339&until=&tz=`
+  (`runs:read`, the day cut in Asia/Shanghai by default) answers per tenant the
+  runs that ended in the window, the sum of their callbacks' `usage`
+  (`input_tokens` · `output_tokens` · `wall_s`), what the proxy `metered`, and
+  each ceiling where it stands — SPACE's daily reconciliation.
 - **The callback.** On a terminal state the hub POSTs the run's own GET body to
   `callback_url`, signed `X-Fleet-Signature: t=<unix>,v1=<hex
   hmac-sha256(secret, t + "." + body)>` (+ `X-Fleet-Run: R<n>`); a non-2xx is

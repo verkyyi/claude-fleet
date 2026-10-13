@@ -2088,6 +2088,27 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				body.Value = b.String()
 			}
+		case (strings.HasPrefix(body.Key, SvcBudgetPrefix) && svcLabelRE.MatchString(body.Key[len(SvcBudgetPrefix):])) ||
+			(strings.HasPrefix(body.Key, SvcTenantBudgetPrefix) && svcLabelRE.MatchString(body.Key[len(SvcTenantBudgetPrefix):])):
+			// A service's budget, whole or per tenant (claude-fleet#4006):
+			// day=<tokens>,week=<tokens>; "" removes it (= no limit).
+			if body.Value != "" {
+				b, err := ParseSvcBudget(body.Value)
+				if err != nil {
+					httpError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				body.Value = b.String()
+			}
+		case strings.HasPrefix(body.Key, "fleet.svc.") && strings.HasSuffix(body.Key, ".yield_pct") &&
+			svcLabelRE.MatchString(strings.TrimSuffix(strings.TrimPrefix(body.Key, "fleet.svc."), ".yield_pct")):
+			// When a service yields the pool to people (claude-fleet#4006).
+			if body.Value != "" {
+				if n, err := strconv.Atoi(body.Value); err != nil || n < 1 || n > 100 {
+					httpError(w, http.StatusBadRequest, "a service's yield threshold is a percent 1–100, or \"\" for the default (80)")
+					return
+				}
+			}
 		case body.Key == SpotWeightKey:
 			// The SPOT placement weight (claude-fleet#1428): 0–2, or ""
 			// for CCQUOTA_FLEET_SPOT_WEIGHT's value.
@@ -2146,7 +2167,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()
@@ -2188,6 +2209,12 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 		}
 		if strings.HasPrefix(k, PersonBudgetPrefix) {
 			if b, err := parsePersonBudget(v); err == nil {
+				eff[k] = b
+			}
+			continue
+		}
+		if strings.HasPrefix(k, SvcBudgetPrefix) || strings.HasPrefix(k, SvcTenantBudgetPrefix) {
+			if b, err := ParseSvcBudget(v); err == nil {
 				eff[k] = b
 			}
 			continue
