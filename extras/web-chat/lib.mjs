@@ -80,6 +80,17 @@ export function agentEnv(base, mint) {
   return env;
 }
 
+// How a turn's agent is allowed to act (issue #4031): like a fleet CLI session,
+// bypassPermissions — no tool waits for a 允许 on the page. The guards still hold:
+// the login's settings (settingSources "user") carry the fleet's PreToolUse hooks
+// (bash-guard, base-readonly-guard, …), and a hook's deny stops a tool in bypass
+// too. AskUserQuestion is not a permission: Claude Code still hands it to
+// canUseTool in bypass, so the question card still reaches the page.
+export const PERMISSIONS = Object.freeze({
+  permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
+  settingSources: Object.freeze(["user", "project", "local"]),
+});
+
 // `fleet-session-cred.sh mint` prints `<route> TAB <port> TAB <credential>`.
 export function parseMint(stdout) {
   const [route, port, cred] = String(stdout || "").trim().split("\t");
