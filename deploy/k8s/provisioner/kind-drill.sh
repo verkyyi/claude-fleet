@@ -388,7 +388,7 @@ step "svc-run-sees-keys: two service runs, one after the other (#4005)"
 svckey() { printf 'fsj_%s' "$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'a-z2-7' | head -c 52)"; }
 for run in R101 R102; do
   j=svc-$(printf '%s' "$run" | tr 'R' 'r')-a1
-  [ "$(post "$(tk "$tmp/key" '{"op":"create-svc-run","cluster":"kind","run":"'"$run"'","attempt":1,"svc":"livepage","deadline":120,"token":"'"$(svckey)"'","nonce":"5'"${run#R}"'00000000000000000000000000000","exp":'"$exp"'}')")" = 200 ] \
+  [ "$(post "$(tk "$tmp/key" '{"op":"create-svc-run","cluster":"kind","run":"'"$run"'","attempt":1,"svc":"livepage","deadline":120,"token":"'"$(svckey)"'","nonce":"'"$(printf '5%03d%028d' "${run#R}" 0)"'","exp":'"$exp"'}')")" = 200 ] \
     || fail "the hub's create-svc-run $run: $(cat "$tmp/resp")"
   K wait --for=condition=complete "job/$j" --timeout=240s >/dev/null || { K describe job "$j" | tail -20; K logs "job/$j" --all-containers || true; fail "$j never completed"; }
   K get secret "$j-token" -o jsonpath='{.metadata.ownerReferences[0].name}' | grep -qx "$j" || fail "$j's key is not owned by its Job"
