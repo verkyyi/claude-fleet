@@ -142,6 +142,7 @@ func (s *Server) nodesFor(r *http.Request, now time.Time) (NodesSnapshot, error)
 	snap.Account = s.accountStateOf(principalOf(r.Context()), now)
 	if visible == nil {
 		s.stampSpares(&snap)
+		s.stampDoors(&snap, now)
 	}
 	return snap, nil
 }

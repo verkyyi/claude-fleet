@@ -38,6 +38,8 @@ export type AdminTablePageProps<T> = {
   fetch: () => Promise<T[]>;
   // actions sit at the head's right; reload re-runs fetch
   actions?: (reload: () => void, rows: T[]) => React.ReactNode;
+  // nav sits under the head (a page's tabs, C11)
+  nav?: React.ReactNode;
   filters?: Filter<T>[];
   // the text a row is searched by
   searchText?: (row: T) => string;
@@ -99,6 +101,8 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
         </div>
         {p.actions && <div className="flex gap-2">{p.actions(reload, rows || [])}</div>}
       </div>
+
+      {p.nav}
 
       {p.kpis && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
