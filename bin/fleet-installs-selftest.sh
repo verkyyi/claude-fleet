@@ -62,7 +62,8 @@ mkdir -p "$H/carol"
 # the machine runtime at S1
 mkdir -p "$WORK/root/$S1"; ln -s "$WORK/root/$S1" "$WORK/root/current"
 
-run() { OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/root" FLEET_NODE_STATE="$WORK/state" sh "$IS" "$@" 2>&1); RC=$?; }
+run() { OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/root" FLEET_NODE_STATE="$WORK/state" \
+  FLEET_INSTALLS_HUB="${XHUB:-}" FLEET_CONF_DIR="$WORK/conf" sh "$IS" "$@" 2>&1); RC=$?; }
 
 # --- A/B. alice's install is the version S1; stable = S1 ----------------------------
 FLEET_INSTALLS_STABLE=$S1 run
@@ -217,5 +218,49 @@ ds FLEET_HUB_URL=https://hub.example
 has "H: a client with the hub → PASS" "$OUT" "PASS	"
 grep -q 'fleet-dist-source.sh' "$BIN/fleet-doctor.sh" && grep -q 'pass dist\|warn dist' "$BIN/fleet-doctor.sh" && ok || bad "H: the doctor does not print fleet-dist-source.sh as its dist row"
 
+# --- M. the Mac lane (issue #3868) ------------------------------------------------
+# no hub, no channel: no channel line, --channel prints nothing (byte for byte)
+FLEET_INSTALLS_STABLE=$S1 run
+case "$OUT" in *channel:*) bad "M: no lane, yet a channel line";; *) ok ;; esac
+FLEET_INSTALLS_STABLE=$S1 run --channel
+eq "M: --channel with no lane prints nothing" "" "$OUT"
+# a loopback hub naming stable S2 and the Mac lane S1, one release behind for 50 min
+mkdir -p "$WORK/hubd"
+python3 - "$WORK/hubd" "$WORK/hubport" <<'PY' >/dev/null 2>&1 &
+import functools, http.server, os, signal, sys
+signal.alarm(120)
+h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+h.func.log_message = lambda *a: None
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
+open(sys.argv[2] + ".tmp", "w").write(str(srv.server_address[1])); os.replace(sys.argv[2] + ".tmp", sys.argv[2])
+srv.serve_forever()
+PY
+HPID=$!
+for _ in $(seq 1 100); do [ -s "$WORK/hubport" ] && break; sleep 0.05; done
+XHUB="http://127.0.0.1:$(cat "$WORK/hubport")"
+NOWM=1800000000
+printf '{"stable":"%s","client_version_macos":"%s","stable_macos_behind":1,"stable_macos_behind_since":"%s"}' \
+  "$S2" "$S1" "$(python3 -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]) - 3000)))' "$NOWM")" > "$WORK/hubd/version"
+mkdir -p "$WORK/conf/global"; printf 'channel: stable-macos\n' > "$WORK/conf/global/install-sync.state"
+FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE=$S1 FLEET_INSTALLS_NOW=$NOWM run
+has "M: the header names the lane" "$OUT" "(stable-macos 1111111)"
+has "M: the channel line says both lanes" "$OUT" "channel: 本机 darwin 跟 stable-macos (1111111) · Linux"
+has "M: …Linux on stable, the Mac lane behind" "$OUT" "Linux 跟 stable 2222222 · Mac 跟 stable-macos 1111111 · Mac 通道落后 stable 1 版 50m"
+FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE=$S1 FLEET_INSTALLS_NOW=$NOWM run --channel
+has "M: --channel is the doctor's row" "$OUT" "	本机 darwin 跟 stable-macos"
+FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE=$S1 FLEET_INSTALLS_NOW=$((NOWM + 7200)) run --channel
+has "M: past 2 hours → WARN" "$OUT" "WARN	"
+has "M: …says why" "$OUT" "超过 2 小时"
+# a managed machine with no local tag: judged against the hub's word for its platform
+rm -f "$WORK/conf/global/install-sync.state"; ln -sfn "$WORK/root/$S1" "$WORK/root/current"
+FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE= run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["lane"], d["stable"][:7], d["runtime"]["at_stable"])')
+eq "M: a managed Mac, no tag → the hub's Mac lane" "stable-macos 1111111 True" "$J"
+FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=linux FLEET_INSTALLS_STABLE= run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["lane"], d["stable"][:7], d["runtime"]["at_stable"])')
+eq "M: a managed linux machine, no tag → the hub's stable" "stable 2222222 False" "$J"
+kill "$HPID" 2>/dev/null; XHUB=''; rm -f "$WORK/root/current"
+grep -q 'fleet-installs.sh" --channel' "$BIN/fleet-doctor.sh" && ok || bad "M: the doctor does not print fleet-installs.sh --channel as its channel row"
+
 if [ "$BAD" -gt 0 ]; then printf 'selftest FAIL: %d of %d\n' "$BAD" "$N" >&2; exit 1; fi
-printf 'selftest OK: fleet-installs (%d assertions — runtime, link/plain installs, follow/pinned shells, client, verdicts, json, doctor --installs, 来源)\n' "$N"
+printf 'selftest OK: fleet-installs (%d assertions — runtime, link/plain installs, follow/pinned shells, client, verdicts, json, doctor --installs, 来源, Mac lane)\n' "$N"

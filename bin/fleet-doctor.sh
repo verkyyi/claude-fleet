@@ -861,6 +861,17 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       *)        info install "could not read the stable tag — its distance from trunk is unknown, NOT 0" ;;
     esac
   fi
+  # The release lane (issue #3868, EPIC #3863 C5): which tag THIS machine
+  # follows and how far behind it is, beside the hub's two lanes — Linux on
+  # stable, a Mac on stable-macos. No row at all when no Mac lane is set.
+  if [ -f "$(dirname "$0")/fleet-installs.sh" ]; then
+    chl=$(sh "$(dirname "$0")/fleet-installs.sh" --channel 2>/dev/null | head -n 1)
+    case "${chl%%	*}" in
+      PASS) pass channel "${chl#*	}" ;;
+      INFO) info channel "${chl#*	}" ;;
+      WARN) warn channel "${chl#*	}" ;;
+    esac
+  fi
   # Is THIS login following stable, and are the others (issue #1123, EPIC #1117
   # C7)? The install-sync daemon (#1120) moves each login on its own, and when it
   # stops — refused, rolled back, deferred for a day, never ticked — nothing said
