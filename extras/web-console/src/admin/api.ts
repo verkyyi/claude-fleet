@@ -221,3 +221,44 @@ export type FleetSession = {
   worker: FleetWorker;
 };
 export type FleetSessions = { sessions: FleetSession[]; nodes?: FleetNode[] };
+// 入口设置 · 审计 · 反馈 (EPIC #3923 C15).
+
+// /v1/fleet/settings: every hub setting with what applies and where it comes from.
+export type HubSetting = { key: string; value: string; source: "set" | "legacy" | "deploy" | "default"; help?: string };
+export type SettingsAnswer = { settings?: Record<string, string>; hub?: HubSetting[] };
+
+// /v1/access (read-only here): which ways in the deploy configured.
+export type AccessAnswer = { hub?: { github?: boolean; github_admins?: number; wechat?: boolean; email?: boolean } };
+
+// /v1/fleet/team-bundle?history=1: the team layer and its versions.
+export type TeamVersion = { version: number; prev: number; actor?: string; note?: string; created?: string };
+export type TeamBundle = { version: number; prev: number; actor?: string; note?: string; created?: string; bundle?: Record<string, any>; history?: TeamVersion[] };
+
+// /v1/admin/audit: the merged audit, newest first.
+export type AuditKind = "sub" | "mach" | "dev" | "user" | "set" | "sess";
+export type AuditEvent = { at: string; kind: AuditKind; source: string; actor: string; action: string; target?: string; outcome?: string; detail?: string };
+export type AuditAnswer = { events: AuditEvent[]; counts: Record<string, number>; days: number; total: number };
+
+// /v1/admin/feedback: what /fleet-feedback brought in.
+export type FeedbackState = "received" | "filed" | "closed";
+export type Feedback = {
+  id: string;
+  text: string;
+  state: FeedbackState;
+  who: string;
+  principal?: string;
+  login: string;
+  host: string;
+  machine_kind?: string;
+  agent?: string;
+  attachments: number;
+  gh_number?: number;
+  gh_url?: string;
+  reply?: string;
+  filed_at?: string;
+  closed_at?: string;
+  replied_at?: string;
+  created_at: string;
+};
+export type FeedbackPage = { feedback: Feedback[]; next?: string; counts?: Record<string, number> };
+export type FeedbackDetail = Feedback & { endpoint_id?: string; ctx?: Record<string, string>; attach?: { name: string; size: number; url: string }[] };

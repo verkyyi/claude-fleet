@@ -146,7 +146,9 @@ func (h *loadHistory) series(host string, now time.Time) []float64 {
 // fleet audit, the credential audit, the device audit and the hub's own
 // (people, settings, sign-ins) merged, newest first, each row sorted into the
 // page's filters. ?kind= keeps one filter, ?days= the window (default and
-// at most auditDays), ?format=csv answers a download.
+// at most auditDays), ?actor= one person (the actor as the page names it, its
+// "(gh:…)" left off, or whole; claude-fleet#3938), ?since= an RFC 3339 time the
+// rows start at (inside the window), ?format=csv answers a download.
 const AuditPath = "/v1/admin/audit"
 
 // auditDays is how far back the page reads: the prototype's 「保留 60 天」.
@@ -336,7 +338,19 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	all, err := s.auditEvents(now.Add(-time.Duration(days) * 24 * time.Hour))
+	from := now.Add(-time.Duration(days) * 24 * time.Hour)
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, "since is an RFC 3339 time")
+			return
+		}
+		if t.After(from) {
+			from = t
+		}
+	}
+	actor := strings.TrimSpace(q.Get("actor"))
+	all, err := s.auditEvents(from)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -344,6 +358,9 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 	counts := map[string]int{}
 	events := []AuditEvent{}
 	for _, e := range all {
+		if actor != "" && !auditActorIs(e.Actor, actor) {
+			continue
+		}
 		counts[e.Kind]++
 		if kind == "" || kind == "all" || e.Kind == kind {
 			events = append(events, e)
@@ -363,6 +380,20 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events, "counts": counts, "days": days, "total": len(all)})
+}
+
+// auditActorIs says whether a row's actor is who: the actor whole, or the
+// name before its "(gh:…)" / "(p:…)", or the principal inside it — the way
+// the page names a person.
+func auditActorIs(actor, who string) bool {
+	if strings.EqualFold(actor, who) {
+		return true
+	}
+	name, rest, ok := strings.Cut(actor, " (")
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(name), who) || strings.EqualFold(strings.TrimSuffix(rest, ")"), who)
 }
 
 // csvSafe keeps a spreadsheet from reading a cell as a formula: a value an

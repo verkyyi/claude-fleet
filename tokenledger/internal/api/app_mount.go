@@ -178,9 +178,9 @@ var consolePages = []consolePage{
 	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13", live: true},
 	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13", live: true},
 	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14", live: true},
-	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15"},
-	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15"},
-	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15"},
+	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15", live: true},
+	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15", live: true},
+	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15", live: true},
 }
 
 // consoleRow is the row for path p: an exact old first, else the longest

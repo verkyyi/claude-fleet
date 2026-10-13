@@ -228,6 +228,10 @@ func TestConsoleTableOneHop(t *testing.T) {
 		"/admin/overview?since=7d":       AdminPrefix + "/usage?since=7d",
 		AppPrefix + "/admin/sessions":    AdminPrefix + "/usage?tab=sessions",
 		"/admin/sessions?q=a":            AdminPrefix + "/usage?tab=sessions&q=a",
+		// 入口设置 · 审计 · 反馈 (claude-fleet#3938)
+		AppPrefix + "/admin/settings":         AdminPrefix + "/settings",
+		AppPrefix + "/admin/audit?kind=set":   AdminPrefix + "/audit?kind=set",
+		AppPrefix + "/admin/feedback?state=a": AdminPrefix + "/feedback?state=a",
 	} {
 		if got := consoleDo(hd, http.MethodGet, p, admin); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != want {
 			t.Errorf("admin GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)
