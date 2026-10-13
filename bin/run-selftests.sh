@@ -60,6 +60,9 @@
 #   --durations F pack by table F instead: a bare name is a file beside this script
 #               (the release train's own Macs use selftest-durations-fleet-ci.txt,
 #               issue #3145); a missing one falls back to selftest-durations.txt.
+#   --solo S    (with --shard; the release train in the cluster — issue #3865) a test
+#               costed over S seconds gets a slice of its own: it is dealt into an
+#               empty slice and nothing joins it, while a slice is left for the rest.
 #   --changed B run only the tests related to what changed since B (see below).
 #   --quarantine LIST   (with --changed; the RELEASE TRAIN only — issue #3243) skip a
 #               test LIST holds in force (bin/fleet-train-quarantine.sh, the one
@@ -240,7 +243,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
-retry_red=0 drill_flaky=''
+retry_red=0 drill_flaky='' solo=0
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -265,6 +268,8 @@ while [ "$#" -gt 0 ]; do
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
     --plan)  plan=1; shift; continue ;;
+    --solo)  case "${2:-}" in ''|*[!0-9]*) echo "run-selftests: --solo needs whole seconds" >&2; exit 2 ;; esac
+             solo=$2; shift 2; continue ;;
     --durations) [ "$#" -ge 2 ] && [ -n "$2" ] \
                    || { echo "run-selftests: --durations needs a table file" >&2; exit 2; }
                  dur_spec=$2; shift 2; continue ;;
@@ -552,7 +557,7 @@ for t in "$@"; do
 done
 # "<shard> <cost> <test>" per test, in the original (name) order, then "= <K> <load>"
 # for every shard.
-deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" '
+deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" -v solo="$solo" '
   BEGIN {
     while ((getline l < tbl) > 0) {
       if (l ~ /^[[:space:]]*(#|$)/) continue
@@ -565,11 +570,19 @@ deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" '
   END {
     # Longest first; equal costs keep name order (insertion sort is stable).
     for (i = 2; i <= m; i++) { x = ord[i]; for (j = i - 1; j >= 1 && c[ord[j]] < c[x]; j--) ord[j + 1] = ord[j]; ord[j + 1] = x }
-    for (k = 1; k <= n; k++) load[k] = 0
+    for (k = 1; k <= n; k++) { load[k] = 0; cnt[k] = 0; shut[k] = 0 }
+    # --solo S (issue #3865): a test over S takes an empty slice and shuts it, as
+    # long as one slice stays open for the rest; with no slice left it packs as before.
+    nshut = 0
     for (i = 1; i <= m; i++) {
-      t = ord[i]; best = 1
-      for (k = 2; k <= n; k++) if (load[k] < load[best]) best = k
-      sh[t] = best; load[best] += c[t]
+      t = ord[i]; best = 0
+      if (solo > 0 && c[t] > solo && nshut < n - 1)
+        for (k = 1; k <= n; k++) if (!cnt[k]) { best = k; shut[k] = 1; nshut++; break }
+      if (!best) {
+        for (k = 1; k <= n; k++) if (!shut[k] && (!best || load[k] < load[best])) best = k
+        if (!best) { best = 1; for (k = 2; k <= n; k++) if (load[k] < load[best]) best = k }
+      }
+      sh[t] = best; load[best] += c[t]; cnt[best]++
     }
     for (i = 1; i <= m; i++) printf "%d %s %s\n", sh[i], c[i], name[i]
     for (k = 1; k <= n; k++) printf "= %d %.0f\n", k, load[k]

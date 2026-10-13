@@ -23,6 +23,9 @@
 #   train-shard-timeout  stable far behind, a near-full selection: the train sizes
 #                       its shards by the forecast and reruns a shard cut short
 #                       with no test red once — never one with a FAIL line (#3241)
+#   train-shards-over-slots  the train in the Shenzhen pool cut more shards than it
+#                       has free slots (or fewer than it needs): the plan sizes by the
+#                       pool's slots, ≤ 44, a test over 75 s alone (#3865)
 #   train-red-holds-lane    one Linux shard red while macOS runs on: the train's
 #                       fail-fast cancels the run at once (#3143)
 #   train-derived-red       a failed publish run and a failed move run on the
@@ -287,6 +290,67 @@ S
   ! pgrep -f 'sleep 31' >/dev/null || { WHY="the cut shard's process group was left running"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="stable 落后、近全量 4600 s：列车排 13 片、每次上限 710 s；截断且无红 ⇒ 同一片重跑一次变绿，有 FAIL 行不重跑，两次截断才红"
+}
+
+# The Shenzhen pool's width (issue #3865, EPIC #3863 C2): the train in the pool sizes
+# its Linux half by the free runner slots — ceil(total / 75 s), ≤ the slots, ≤ 44 —
+# not the PR's 12..20: a shard past the slots only queues for a second round, and 12
+# shards on 14 slots leave the slowest at 6 minutes.
+drill_train_shards_over_slots() {
+  CAP=60
+  local t0 d out wf sh n c
+  [ -x "$BIN/fleet-train-plan.sh" ] && [ -x "$BIN/fleet-train-runner.sh" ] \
+    || { WHY="no bin/fleet-train-plan.sh / bin/fleet-train-runner.sh"; return 1; }
+  wf="$BIN/../.github/workflows/release-train.yml"; sh="$BIN/../.github/workflows/selftests-shards.yml"
+  sed -n '/^  plan:/,/^  linux-pick:/p' "$wf" | grep -q 'needs: \[board, linux-pick\]' \
+    && grep -q 'fleet-train-plan.sh --base "$STABLE" --prefix linux ${SLOTS:+--slots "$SLOTS"}' "$wf" \
+    && [ "$(grep -c 'solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}' "$wf")" = 2 ] \
+    || { WHY="release-train.yml does not size the Linux half by the pick's slots (plan ← linux-pick, --slots, solo on linux + rescue)"; return 1; }
+  grep -q 'set -- --solo "$SHARD_SOLO_SECS"' "$sh" \
+    || { WHY="selftests-shards.yml does not pass --solo"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-slots.XXXXXX"); t0=$(now)
+  # 1) the pick counts the slots: 14 a node, nodes = ceil(online / 14) ≥ 1, ≤ 44
+  for c in 1:14 15:28 100:44; do
+    n=${c%%:*}
+    python3 -c 'import json,sys; n=int(sys.argv[1]); print(json.dumps({"runners":[{"name":"a%d"%i,"status":"online","busy":i>1,"labels":[{"name":"fleet-ack"}]} for i in range(n)]}))' "$n" > "$d/r.json"
+    out=$(FLEET_TRAIN_RUNNER=fleet-ack bash "$BIN/fleet-train-runner.sh" pick --runners-file "$d/r.json" 2>/dev/null)
+    case "$out" in *"linux_slots=${c#*:}"*) ;;
+      *) WHY="$n online fleet-ack runners were not ${c#*:} slots: $out"; rm -rf "$d"; return 1 ;; esac
+  done
+  out=$(FLEET_TRAIN_RUNNER='' bash "$BIN/fleet-train-runner.sh" pick 2>/dev/null)
+  case "$out" in *'linux_slots='|*'linux_slots='$'\n'*) ;;
+    *) WHY="GitHub's runners were given slots: $out"; rm -rf "$d"; return 1 ;; esac
+  # 2) the plan: N = clamp(ceil(total / 75), 1, slots ≤ 44); past 75 + 180 s a slot the pool's 44
+  cat > "$d/rs" <<'R'
+#!/bin/bash
+n=1 solo=''; while [ $# -gt 0 ]; do case $1 in --shard) n=${2#1/} ;; --solo) solo=$2 ;; esac; shift; done
+[ -n "$solo" ] || [ -z "$WANT_SOLO" ] || exit 9
+echo "plan tests=$T total=$TOT shards=$n heaviest=$(( TOT / n ))"
+R
+  chmod +x "$d/rs"
+  plan() { T=$1 TOT=$2 WANT_SOLO=${4:+1} FLEET_TRAIN_PLAN_CMD="$d/rs" bash "$BIN/fleet-train-plan.sh" --base x --prefix linux ${4:+--slots "$4"} 2>&1; }
+  for c in '10 120 2 14' '60 900 12 14' '175 2100 14 14' '175 2100 28 42' '496 5830 28 28' '496 5830 44 14' '496 5830 44 60' '0 0 1 14'; do
+    set -- $c
+    out=$(plan "$1" "$2" x "$4")
+    n=$(printf '%s\n' "$out" | sed -n 's/^linux_shards=\[\(.*\)\]$/\1/p' | tr ',' '\n' | grep -c .)
+    [ "$n" = "$3" ] && printf '%s\n' "$out" | grep -q '^linux_solo_secs=75$' \
+      && printf '%s\n' "$out" | grep -q "^linux_slots=$(( $4 > 44 ? 44 : $4 ))$" \
+      || { WHY="$2 s on $4 slots was not $3 shards with --solo 75 (got $n): $(printf '%s' "$out" | tr '\n' ' ')"; rm -rf "$d"; return 1; }
+  done
+  out=$(plan 10 120 x 14)
+  printf '%s\n' "$out" | grep -q '^linux_budget_secs=150$' && printf '%s\n' "$out" | grep -q '^linux_step_minutes=7$' \
+    || { WHY="a small train in the pool did not get 150 s an attempt: $(printf '%s' "$out" | tr '\n' ' ')"; rm -rf "$d"; return 1; }
+  # 3) GitHub's runners: no --slots, the PR's width and every line as before
+  out=$(plan 10 120 x '')
+  [ "$out" = "$(printf 'linux_shards=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]\nlinux_tests=10\nlinux_predicted=120\nlinux_heaviest=10\nlinux_budget_secs=480\nlinux_step_minutes=18\nlinux_job_minutes=28')" ] \
+    || { WHY="without --slots the plan changed: $(printf '%s' "$out" | tr '\n' ' ')"; rm -rf "$d"; return 1; }
+  # 4) a forecast that cannot be made in the pool: every slot, the PR's 8 minutes
+  printf '#!/bin/bash\nexit 3\n' > "$d/rs"
+  out=$(FLEET_TRAIN_PLAN_CMD="$d/rs" bash "$BIN/fleet-train-plan.sh" --base x --prefix p --slots 28 2>&1)
+  printf '%s\n' "$out" | grep -q '^p_budget_secs=480$' && [ "$(printf '%s\n' "$out" | sed -n 's/^p_shards=//p' | tr -cd , | wc -c | tr -d ' ')" = 27 ] \
+    || { WHY="an unpriceable train in the pool was not 28 × 480 s: $(printf '%s' "$out" | tr '\n' ' ')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="深圳池里：片数 = ⌈合计÷75⌉、不超空机位（14/台、≤44），一机位压过 255 s 才开满 44 让池子扩；单测超 75 s 独占一片、每次上限 150 s；GitHub 上一字不变"
 }
 
 # A near-full selection on GitHub's 2 Macs is slow, not hung (issue #3412): runs

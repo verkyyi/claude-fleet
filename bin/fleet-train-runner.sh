@@ -21,6 +21,11 @@
 #     linux_why      one line: which runners, or why GitHub's
 #     linux_mirror   the cluster's git mirror ($FLEET_TRAIN_GIT_MIRROR) on fleet-ack,
 #                    else empty — a shard fetches TRAIN_SHA there before GitHub
+#     linux_slots    on fleet-ack, how many shards the pool runs at once (issue #3865):
+#                    14 a node (a runner pod asks 1 vCPU of a 16-core spot node), the
+#                    nodes counted as ceil(online runners / 14), at least 1 — GitHub
+#                    names no node, and every online runner is a pod on one — at most
+#                    44 (the fleet-ci pool's 3 nodes); empty on GitHub's runners
 #
 # lost (after the Linux shards, when they ran on fleet-ack): which shards ended red
 #   because their RUNNER went away — a spot node reclaimed, a pod evicted — rather
@@ -62,7 +67,7 @@ pick() {
     shift
   done
   if [ -z "$runner" ]; then
-    emit 'linux_runs_on=ubuntu-latest' 'linux_where=github' 'linux_why=FLEET_TRAIN_RUNNER 未设：GitHub 的 ubuntu-latest' 'linux_mirror='
+    emit 'linux_runs_on=ubuntu-latest' 'linux_where=github' 'linux_why=FLEET_TRAIN_RUNNER 未设：GitHub 的 ubuntu-latest' 'linux_mirror=' 'linux_slots='
     printf 'Linux: github — FLEET_TRAIN_RUNNER is empty\n' >&2
     return 0
   fi
@@ -77,7 +82,7 @@ pick() {
     body=$(GH_TOKEN=$FLEET_TRAIN_RUNNER_TOKEN $gh api "repos/$repo/actions/runners?per_page=100" 2>&1) \
       || { why="GitHub did not answer the runner list: $(printf '%s' "$body" | head -1 | cut -c1-120)"; body=''; }
   fi
-  local out where say labels mirror=''
+  local out where say labels mirror='' online slots=''
   out=$(printf '%s' "$body" | NAME=$runner WHY="$why" python3 -c '
 import json, os, sys
 name, why = os.environ["NAME"], os.environ["WHY"]
@@ -98,17 +103,22 @@ if not why:
         why = "the runner list is not a list of runners"
 if up:
     busy = sum(1 for r in up if r.get("busy"))
-    print("fleet-ack"); print("%s: %d online (%d busy)" % (name, len(up), busy))
+    print("fleet-ack"); print("%s: %d online (%d busy)" % (name, len(up), busy)); print(len(up))
 else:
-    print("github"); print(why)
+    print("github"); print(why); print(0)
 ')
   where=$(printf '%s\n' "$out" | sed -n 1p) say=$(printf '%s\n' "$out" | sed -n 2p)
+  online=$(printf '%s\n' "$out" | sed -n 3p)
   if [ "$where" = fleet-ack ]; then
     labels="[\"$runner\"]" mirror=${FLEET_TRAIN_GIT_MIRROR:-}
+    slots=$(( (online + 13) / 14 * 14 ))
+    [ "$slots" -ge 14 ] || slots=14
+    [ "$slots" -le 44 ] || slots=44
+    say="$say · $slots 个机位"
   else
     where=github labels=ubuntu-latest say="深圳不可用，退回 GitHub（${say:-could not decide}）"
   fi
-  emit "linux_runs_on=$labels" "linux_where=$where" "linux_why=$say" "linux_mirror=$mirror"
+  emit "linux_runs_on=$labels" "linux_where=$where" "linux_why=$say" "linux_mirror=$mirror" "linux_slots=$slots"
   printf 'Linux: %s — %s\n' "$where" "$say" >&2
   return 0
 }

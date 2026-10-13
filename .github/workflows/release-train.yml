@@ -235,9 +235,16 @@ jobs:
     # minutes a shard, 12..20 wide. A shard cut short with no test red reruns once
     # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never
     # stops. The macOS half's plan is mac-follow.yml's (issue #3869).
+    # In the Shenzhen pool (issue #3865) the width follows its free slots instead
+    # (`Linux 选机器`'s linux_slots → --slots): ceil(total / 75 s), ≤ the slots, ≤ 44,
+    # a test over 75 s alone in its shard, 150 s an attempt. No pick (the variable
+    # empty, or GitHub's runners) ⇒ no --slots, byte for byte as before.
     name: plan
-    needs: board
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
+    needs: [board, linux-pick]
+    # !cancelled(): a skipped / red linux-pick only means GitHub's width
+    if: >-
+      !cancelled() && needs.board.result == 'success' &&
+      (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -245,6 +252,10 @@ jobs:
       linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
       linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
       linux_job_minutes: ${{ steps.plan.outputs.linux_job_minutes }}
+      linux_predicted: ${{ steps.plan.outputs.linux_predicted }}
+      linux_heaviest: ${{ steps.plan.outputs.linux_heaviest }}
+      linux_slots: ${{ steps.plan.outputs.linux_slots }}
+      linux_solo_secs: ${{ steps.plan.outputs.linux_solo_secs }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -254,13 +265,14 @@ jobs:
         id: plan
         env:
           STABLE: ${{ needs.board.outputs.stable_sha }}
+          SLOTS: ${{ needs.linux-pick.outputs.linux_where == 'fleet-ack' && needs.linux-pick.outputs.linux_slots || '' }}
         run: |
           {
             echo "### 预测（\`--changed ${STABLE:0:7}\`，按 bin/selftest-durations*.txt）"
             echo "| 段 | 选中 | 宽 | 最重一片 | 每次上限 | 步骤 |"
             echo "|---|---|---|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
-          bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux
+          bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux ${SLOTS:+--slots "$SLOTS"}
 
   linux-pick:
     # The Shenzhen cluster or GitHub (issue #3864): only when FLEET_TRAIN_RUNNER
@@ -279,6 +291,7 @@ jobs:
       linux_where: ${{ steps.pick.outputs.linux_where }}
       linux_why: ${{ steps.pick.outputs.linux_why }}
       linux_mirror: ${{ steps.pick.outputs.linux_mirror }}
+      linux_slots: ${{ steps.pick.outputs.linux_slots }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -320,6 +333,7 @@ jobs:
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
       step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
       job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
+      solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
       drill_red: ${{ inputs.drill_red || '' }}
@@ -372,6 +386,8 @@ jobs:
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
       step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
       job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
+      # the same deal as the shards it stands in for (issue #3865)
+      solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
       drill_red: ${{ inputs.drill_red || '' }}
@@ -516,7 +532,19 @@ jobs:
           GATE: ${{ needs.gate.result }}
           QUAR: ${{ needs.quarantine.result }}
           REC: ${{ needs.record.result }}
+          # 本趟片数 / 预计 / 实际最慢一片 (issue #3865)
+          GH_TOKEN: ${{ github.token }}
+          NSHARDS: ${{ needs.plan.outputs.linux_shards }}
+          PRED: ${{ needs.plan.outputs.linux_predicted }}
+          HEAVY: ${{ needs.plan.outputs.linux_heaviest }}
+          SLOTS: ${{ needs.plan.outputs.linux_slots }}
         run: |
+          # the slowest Linux shard of this run, rescues included, off its jobs
+          slow=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+                   --jq '.jobs[] | select(.name | test("^Linux( rescue)? / shard ")) | select(.started_at and .completed_at)
+                         | "\((.completed_at | fromdate) - (.started_at | fromdate)) \(.name)"' 2>/dev/null \
+                 | sort -n | tail -1)
+          nsh=$(printf '%s' "$NSHARDS" | tr -cd , | wc -c | tr -d ' '); [ -z "$NSHARDS" ] || nsh=$((nsh + 1))
           # a Linux half whose only reds were lost runners, rescued green (#3864)
           if [ "$LINUX" = failure ] && [ "$COVERS" = true ] && [ "$RESCUE" = success ]; then
             LINUX="success（补跑 $LOST）"; lok=success
@@ -529,6 +557,9 @@ jobs:
             echo "|---|---|"
             echo "| board | $BOARD |"
             echo "| Linux | ${LINUX}（${LWHERE}：${LWHY}） |"
+            echo "| 本趟片数 | ${nsh:-?} 片$([ -z "$SLOTS" ] || echo "（空机位 $SLOTS）") |"
+            echo "| 预计 | 合计 ${PRED:-?}s，最重一片 ${HEAVY:-?}s |"
+            echo "| 实际最慢一片 | $([ -n "$slow" ] && echo "${slow#* } · ${slow%% *}s" || echo '?') |"
             echo "| macOS | 发布之后由 mac-follow 跟（#3869） |"
             echo "| precheck | $GATE |"
             echo "| 隔离 | $QUAR · $REC |"

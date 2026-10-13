@@ -23,7 +23,9 @@
 #                    still holds for every N, a test with no row is still scheduled,
 #                    each shard prints its predicted load, and a heaviest shard past
 #                    400s WARNs; `--durations F` packs by table F instead (our own
-#                    Macs, issue #3145), a missing F falls back saying so.
+#                    Macs, issue #3145), a missing F falls back saying so;
+#                    `--solo S` (issue #3865) puts a test over S seconds in a slice
+#                    of its own while a slice is left for the rest.
 #   • DURATIONS      bin/selftest-durations.sh rewrites the table from runner output
 #                    (--drills: the BREAK-IT drills' table, which bin/fleet-break-it-part.py
 #                    slices the break-it tests by — issue #2694):
@@ -231,6 +233,29 @@ case "$out" in *WARN*) fail "--durations still read the default table's 450s row
 out=$(run --durations no-such.txt --shard 2/4) || fail "a missing --durations table went red" "$out"
 case "$out" in *"no durations table no-such.txt"*"WARN heaviest shard predicted ~450s"*) ok "a missing --durations table falls back to selftest-durations.txt" ;;
   *) fail "a missing --durations table must fall back to the default, saying so" "$out" ;; esac
+# --solo S (issue #3865): a test over S seconds runs alone in its slice, while one
+# slice is left for the rest. Table now: f01 450 · f05 f09 f13 100 · the rest 1.
+for k in 1 2 3; do
+  out=$(run --solo 75 --shard "$k/4") || fail "--solo shard $k/4 went red" "$out"
+  eq "--solo 75, N=4: slice $k holds one slow test and nothing else" 1 "$(ran "$out" | wc -l | tr -d ' ')"
+done
+out=$(run --solo 75 --shard 4/4)
+eq "--solo 75, N=4: the last open slice takes the fourth slow test and every light one" 10 "$(ran "$out" | wc -l | tr -d ' ')"
+out=$(run --shard 2/4)
+CHECKS=$((CHECKS + 1))
+[ "$(ran "$out" | wc -l | tr -d ' ')" -gt 1 ] || fail "without --solo a slow test's slice must still take light ones" "$out"
+ok "without --solo the deal is the old longest-first deal"
+union=''
+for k in 1 2 3 4 5 6; do
+  out=$(run --solo 75 --shard "$k/6") || fail "--solo shard $k/6 went red" "$out"
+  [ "$k" -gt 4 ] || [ "$(ran "$out" | wc -l | tr -d ' ')" = 1 ] || fail "--solo 75, N=6: slice $k is not one slow test" "$out"
+  union="$union$(ran "$out")
+"
+done
+eq "--solo 75, N=6 — four slices of one, and the shards still cover every test exactly once" \
+   "$ALL13" "$(printf '%s' "$union" | sed '/^$/d' | sort)"
+out=$(run --solo x --shard 1/4); rc=$?
+eq "--solo wants whole seconds (exit 2)" 2 "$rc"
 rm -f "$TABLE" "$WORK/bin/own-durations.txt"
 
 # The shipped width wider than the fixture (14 since issue #3243): grow the fixture

@@ -102,6 +102,14 @@ on:
         type: string
         required: false
         default: ''
+      # The release train in the Shenzhen pool (issue #3865): a test costed over this
+      # many seconds gets a shard of its own (run-selftests.sh --solo). Empty — the
+      # PR gate, GitHub's runners — deals as before.
+      solo_secs:
+        description: 'run-selftests.sh --solo <secs> — the train in the pool only'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   shard:
@@ -247,10 +255,12 @@ jobs:
           # Never a bare BUDGET: the step's env is every test's env, and a test
           # whose knob reads ${BUDGET:-5} got the shard's 519 s (issue #3371).
           SHARD_BUDGET_SECS: ${{ inputs.budget_secs }}
+          SHARD_SOLO_SECS: ${{ inputs.solo_secs }}
         run: |
           set -o pipefail
           set -- --shard "${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
           [ "$OURS" != true ] || set -- --durations selftest-durations-fleet-ci.txt "$@"
+          [ -z "$SHARD_SOLO_SECS" ] || set -- --solo "$SHARD_SOLO_SECS" "$@"
           if [ -n "$CHANGED_BASE" ] && [ -n "$QUARANTINE" ]; then
             printf '%s\n' "$QUARANTINE" > "$RUNNER_TEMP/quarantine.list"; set -- --quarantine "$RUNNER_TEMP/quarantine.list" "$@"
           fi
