@@ -115,8 +115,10 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 		t.Fatalf("found %d menu hrefs in lib/shell.js; the PAGES table moved", len(hrefs))
 	}
 	// The hub draws these itself (internal/api/fleet_entry_page.go,
-	// claude-fleet#3199): menu links, no embedded page.
-	hubDrawn := map[string]bool{"/fleet/keys": true, "/fleet/connection": true}
+	// claude-fleet#3199): menu links, no embedded page. /chat/ is the web chat's
+	// (claude-fleet#3646), packed in by bin/web-chat-pack.sh at build time —
+	// never in a checkout (internal/api/fleet_chat_page.go).
+	hubDrawn := map[string]bool{"/fleet/keys": true, "/fleet/connection": true, "/chat/": true}
 	for _, m := range hrefs {
 		if hubDrawn[m[1]] {
 			continue

@@ -104,6 +104,7 @@ export const en = {
   'ui.nav.sessions': 'Sessions',
   // 任务 (claude-fleet#3325).
   'ui.nav.tasks': 'Tasks',
+  'ui.nav.chat': 'Chat',
   'ui.task.band': '{today} today · {working} working · {waiting} waiting on you',
   'ui.task.waitingYou': 'Waiting on you',
   'ui.task.search': 'Search tasks',

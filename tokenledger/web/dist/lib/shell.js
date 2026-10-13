@@ -47,6 +47,7 @@ export const ICONS = Object.freeze({
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
   wrench: '<path d="M14.5 6.5a4 4 0 00-5.4 5L4 16.6 7.4 20l5.1-5.1a4 4 0 005-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
 });
 
 /** ic is one icon's <svg>. */
@@ -76,6 +77,10 @@ export const PAGES = Object.freeze([
   // machine list — no menu item of its own (`prefix`: the path under href;
   // `within`: shown to whoever's menu lists one of these).
   { id: 'machine', label: 'ui.nav.machine', icon: 'server', href: APP + '/machines/', prefix: true, within: ['mymachines', 'machines'], module: '/machine.js' },
+  // 对话 (claude-fleet#3646): the one conversation, on the person's home —
+  // its own page at /chat/ (extras/web-chat/ui, packed into the build), not a
+  // console module, so a click is a plain page load.
+  { id: 'chat', label: 'ui.nav.chat', icon: 'chat', href: '/chat/' },
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: APP + '/connect', module: '/connect.js' },
   // 从手机连 (claude-fleet#3199): the keys page, every role's. It is drawn by
   // the hub (fleet_entry_page.go), not the app — no module, so a click is a

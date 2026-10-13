@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { useLocale, fmtCompact, fmtDate, fmtAgo } from '../dist/lib/i18n.js';
 import { navFor, pageAllowed, isAdmin, viewer, fmtTokens, spark, ctxBar, liveLine, esc, titleOf, PAGES, otherView } from '../dist/lib/shell.js';
 
-const USER = ['overview', 'sessions', 'tasks', 'mymachines', 'devices', 'phone', 'connection', 'usage', 'config'];
+const USER = ['overview', 'sessions', 'tasks', 'mymachines', 'chat', 'devices', 'phone', 'connection', 'usage', 'config'];
 // 我的额度 moved into 我的用量 (claude-fleet#3229): the hub may still list
 // 'quota' for an admin; the menu has no item for it.
 const ADMIN = [...USER, 'quota', 'all-sessions', 'by-person', 'all-devices', 'subscriptions', 'machines', 'people', 'settings', 'audit'];
@@ -13,9 +13,9 @@ const ADMIN = [...USER, 'quota', 'all-sessions', 'by-person', 'all-devices', 'su
 test('a user sees their own pages and no Admin group', () => {
   const nav = navFor(USER);
   // 我的用量 right after Overview, and no 我的额度 (claude-fleet#3229).
-  assert.deepEqual(nav.map((x) => x.id), ['overview', 'usage', 'sessions', 'tasks', 'mymachines', 'devices', 'phone', 'connection', 'config']);
+  assert.deepEqual(nav.map((x) => x.id), ['overview', 'usage', 'sessions', 'tasks', 'mymachines', 'chat', 'devices', 'phone', 'connection', 'config']);
   assert.ok(!nav.some((x) => x.heading), 'no Admin heading for a user');
-  assert.deepEqual(nav.map((x) => x.href), ['/app', '/app/usage', '/app/sessions', '/app/tasks', '/app/machines', '/app/connect', '/fleet/keys', '/fleet/connection', '/app/config']);
+  assert.deepEqual(nav.map((x) => x.href), ['/app', '/app/usage', '/app/sessions', '/app/tasks', '/app/machines', '/chat/', '/app/connect', '/fleet/keys', '/fleet/connection', '/app/config']);
   assert.ok(!PAGES.some((p) => p.href === '/app/quota'), '/quota is no page of its own: it moves to /usage');
 });
 

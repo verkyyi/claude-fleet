@@ -265,6 +265,18 @@ jobs:
         if: steps.tag.outputs.build == 'true'
         run: bin/fleet-client-pack.sh
 
+      # The website's /chat page (issue #3646) is built from extras/web-chat/ui,
+      # its one source, into tokenledger/web/dist/chat/ — never a committed copy.
+      - uses: actions/setup-node@v4
+        if: steps.tag.outputs.build == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extras/web-chat/ui/package-lock.json
+      - name: Pack the chat page
+        if: steps.tag.outputs.build == 'true'
+        run: bin/web-chat-pack.sh
+
       # The website (/ and /en/) and its docs (/docs/) are build outputs the
       # image embeds (issue #3584); the site reads its FAQ off docs/public itself.
       # A RED: line (no fresh drill under 60 s) is a warning, not a failure.

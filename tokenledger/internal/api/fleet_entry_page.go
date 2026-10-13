@@ -583,6 +583,8 @@ func (s *Server) rememberEntryReturn(next http.Handler) http.Handler {
 				back = EntryConnPath
 			case ticketPageReturnRe.MatchString(r.URL.Path): // 我的单子 (claude-fleet#3596)
 				back = r.URL.Path
+			case strings.HasPrefix(r.URL.Path, ChatPagePath): // 对话 (claude-fleet#3646)
+				back = ChatPagePath
 			}
 			http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: back, Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r), MaxAge: int(loginCookieTTL.Seconds())})
@@ -600,7 +602,7 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	}
 	http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: "", Path: "/", MaxAge: -1})
 	switch c.Value { // the only places it may send anyone
-	case EntryPagePath, EntryConnPath:
+	case EntryPagePath, EntryConnPath, ChatPagePath:
 		return c.Value
 	}
 	if ticketPageReturnRe.MatchString(c.Value) {

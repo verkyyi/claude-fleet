@@ -19,3 +19,5 @@ tokenledger/web/docs/*
 # the website build (issue #3584): bin/site-build.sh writes it before the image build
 tokenledger/web/site/*
 !tokenledger/web/site/.gitkeep
+# the website's /chat page (issue #3646): bin/web-chat-pack.sh builds it from extras/web-chat/ui
+tokenledger/web/dist/chat/
