@@ -1,0 +1,261 @@
+name: mac follow
+
+# The macOS half, AFTER the release (issue #3869, EPIC #3863 C6).
+#
+# Until #3869 the release train ran the macOS shards on TRAIN_SHA and shipped
+# nothing until they were green — 12 of 24 red trains one day were red on macOS,
+# and a Mac-only red held every Linux machine for 11 hours. Now stable means
+# "Linux has verified it" and a Mac follows refs/tags/stable-macos (#3868):
+#
+#   * a release train that ends green starts this (workflow_run); a dispatch with
+#     `sha` re-runs it on that stable commit. concurrency `mac-follow`,
+#     cancel-in-progress false — one running, one waiting, a newer one replaces
+#     the waiting one, never the running one.
+#   * `board` reads refs/tags/stable (or the dispatch's sha, which must be stable
+#     or behind it) and refs/tags/stable-macos: the lane already there ⇒ `skip`,
+#     nothing runs. Else the shards test `--changed <lane>` on that commit (the
+#     whole suite while there is no lane), on OUR Macs first (bin/fleet-train-macos.sh
+#     pick, as the train did since #3145) and GitHub's otherwise, as wide as
+#     bin/fleet-train-plan.sh prices it.
+#   * `follow` leaves the verdict on the commit as the status `mac follow: macOS`
+#     (fleet-stable.sh gate 5 reads it), and on green moves the lane:
+#     `fleet-stable.sh move --ref stable-macos <sha> --train <this run>` (gates 1 · 2
+#     · M not ahead of stable · 5 this run's macOS jobs), then dispatches
+#     stable-publish.yml with ref=stable-macos — the hub's Mac lane, which only
+#     takes a release already on its stable chain.
+#   * our runner refusing the job (its job gate older than #3869, which a Mac only
+#     gets once this goes green — the lane carries it) is not a red: `follow` sees
+#     the gate's line in the failed shard's log, dispatches this workflow again on
+#     the same sha with `runners: github` and cancels this run (no verdict).
+#   * red ⇒ the lane stays: every Mac keeps the previous version (and a Mac whose
+#     switch fails its own doctor rolls back, #2334). bin/fleet-macos-watch.sh (the
+#     diskguard tick) reads THIS workflow's `macOS / shard *` jobs and files one
+#     breakage issue per fingerprint, and says once when the lane has been held
+#     back by a red for more than 2 hours (FLEET_MACOS_STALE_SECS).
+#
+# Never a gate of Linux: nothing here touches refs/tags/stable or the hub's stable.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('mac follow @ {0}', inputs.sha || 'stable') || 'mac follow' }}
+
+on:
+  workflow_run:
+    workflows: ['release train']
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'the stable commit to test and follow (default refs/tags/stable)'
+        type: string
+        required: false
+        default: ''
+      runners:
+        description: 'pick (our Macs first) or github (GitHub''s Macs only)'
+        type: choice
+        options: [pick, github]
+        default: pick
+
+concurrency:
+  group: mac-follow
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  board:
+    name: board
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.lane.outputs.sha }}
+      lane: ${{ steps.lane.outputs.lane }}
+      skip: ${{ steps.lane.outputs.skip }}
+      macos_runs_on: ${{ steps.macos.outputs.macos_runs_on }}
+      macos_shards: ${{ steps.macos.outputs.macos_shards }}
+      macos_where: ${{ steps.macos.outputs.macos_where }}
+      macos_why: ${{ steps.macos.outputs.macos_why }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: stable and the Mac lane
+        id: lane
+        env:
+          WANT: ${{ inputs.sha || '' }}
+        run: |
+          stable=$(git ls-remote origin refs/tags/stable | awk 'NF { print $1; exit }')
+          lane=$(git ls-remote origin refs/tags/stable-macos | awk 'NF { print $1; exit }')
+          [ -n "$stable" ] || { echo "::error::no refs/tags/stable — nothing to follow"; exit 1; }
+          sha=${WANT:-$stable}
+          git fetch -q origin "$sha" 2>/dev/null || true
+          sha=$(git rev-parse --verify "$sha^{commit}") || { echo "::error::unknown commit $WANT"; exit 1; }
+          git merge-base --is-ancestor "$sha" "$stable" || { echo "::error::${sha:0:7} is ahead of stable ${stable:0:7} — the Mac lane never leads stable"; exit 1; }
+          skip=false
+          if [ -n "$lane" ] && git merge-base --is-ancestor "$sha" "$lane" 2>/dev/null; then skip=true; fi
+          printf 'sha=%s\nlane=%s\nskip=%s\n' "$sha" "$lane" "$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = true ]; then
+            say="Mac 通道已在 \`${lane:0:7}\`（含 \`${sha:0:7}\`）——不用跟"
+          else
+            say="跟 \`${sha:0:7}\`：Mac 通道在 \`${lane:0:7}\`${lane:+，测 --changed ${lane:0:7}}${lane:-（还没有通道，测全量）}"
+          fi
+          echo "### 🍎 $say" >> "$GITHUB_STEP_SUMMARY"; echo "$say"
+      - name: pick the macOS runners
+        # issue #3145: our own Macs when the hub says one is there, else GitHub's.
+        if: steps.lane.outputs.skip == 'false'
+        id: macos
+        env:
+          FLEET_HUB_URL: ${{ inputs.runners != 'github' && 'https://claudefleet.24haowan.com' || '' }}
+          FLEET_HUB_CI_TOKEN: ${{ secrets.FLEET_HUB_VIEWER_TOKEN }}
+        run: |
+          bash bin/fleet-train-macos.sh pick 2> pick.err
+          echo "macOS → $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
+          cat pick.err
+
+  plan:
+    # How wide the macOS half runs (issue #3241 / #3412): our Macs keep board's
+    # width (one shard a machine) at their own table; GitHub's price at ×2.3 and
+    # pick 2..4 shards of ≤ 40 minutes. A forecast that cannot be made falls back.
+    name: plan
+    needs: board
+    if: needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      macos_shards: ${{ steps.plan.outputs.macos_shards }}
+      macos_budget_secs: ${{ steps.plan.outputs.macos_budget_secs }}
+      macos_step_minutes: ${{ steps.plan.outputs.macos_step_minutes }}
+      macos_job_minutes: ${{ steps.plan.outputs.macos_job_minutes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+          fetch-depth: 0
+      - name: fleet-train-plan.sh
+        id: plan
+        env:
+          LANE: ${{ needs.board.outputs.lane }}
+          WHERE: ${{ needs.board.outputs.macos_where }}
+          MACOS_SHARDS: ${{ needs.board.outputs.macos_shards }}
+        run: |
+          {
+            echo "### 预测（\`--changed ${LANE:0:7}\`，按 bin/selftest-durations*.txt）"
+            echo "| 段 | 选中 | 宽 | 最重一片 | 每次上限 | 步骤 |"
+            echo "|---|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          n=$(printf '%s' "$MACOS_SHARDS" | tr -cd ',' | wc -c); n=$((n + 1))
+          LANE=${LANE:-none}   # no lane yet: an unresolvable base ⇒ the full suite's plan
+          if [ "$WHERE" = fleet-ci ]; then
+            bash bin/fleet-train-plan.sh --base "$LANE" --prefix macos --shards "$n" \
+              --durations selftest-durations-fleet-ci.txt --floor 1320
+          else
+            # a free account runs 5 macOS jobs at once: 4 at most, one left for the nightly
+            bash bin/fleet-train-plan.sh --base "$LANE" --prefix macos --min "$n" --max 4 --target 2400 \
+              --scale 2.3 --floor 3000
+          fi
+
+  macos:
+    # Our Macs (fleet-ci, one shard each, ≤ 2) or GitHub's — as `board` picked.
+    name: macOS
+    needs: [board, plan]
+    if: needs.board.outputs.skip == 'false'
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      sha: ${{ needs.board.outputs.sha }}
+      base: ${{ needs.board.outputs.lane }}
+      runs_on: ${{ needs.board.outputs.macos_runs_on }}
+      shards: ${{ needs.plan.outputs.macos_shards || needs.board.outputs.macos_shards }}
+      budget_secs: ${{ needs.plan.outputs.macos_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.macos_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.macos_job_minutes }}
+      retry_red: '1'   # a red test reruns once, as on the train (issue #3866)
+
+  macos-wait:
+    # A job queued for a self-hosted label waits a day: this reports each shard's
+    # runner + queue time, and cancels the run when our runner left one queued 20
+    # minutes (issue #3145) — the next follow reads the heartbeat and picks GitHub's.
+    name: macOS 排队
+    needs: board
+    if: needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: write    # cancels this run when our runner never took it
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+      - name: watch the macOS shards start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHERE: ${{ needs.board.outputs.macos_where }}
+        run: bash bin/fleet-train-macos.sh watch --where "$WHERE" --deadline 1200
+
+  follow:
+    # The last job, so `--train` finds every macOS job of this run finished.
+    name: follow
+    needs: [board, macos, macos-wait]
+    if: always() && needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # refs/tags/stable-macos
+      statuses: write   # `mac follow: macOS` on the commit
+      actions: write    # --train reads this run's jobs; dispatches stable-publish.yml
+    env:
+      SHA: ${{ needs.board.outputs.sha }}
+      MACOS: ${{ needs.macos.result }}
+      WHERE: ${{ needs.board.outputs.macos_where }}
+      WHY: ${{ needs.board.outputs.macos_why }}
+      GH_TOKEN: ${{ github.token }}
+      URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: our runner refused it?
+        # an older job gate on our Mac (it admits release-train.yml only): not the
+        # BSD half's red — the same sha again on GitHub's Macs, this run cancelled
+        if: needs.board.outputs.macos_where == 'fleet-ci' && needs.macos.result == 'failure'
+        run: |
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select((.name | startswith("macOS / shard")) and .conclusion == "failure") | .id') || exit 0
+          for j in $ids; do
+            gh run view --job "$j" --log -R "$GITHUB_REPOSITORY" 2>/dev/null | grep -q 'fleet-ci: this runner takes only the merged train' || continue
+            echo "### 自家测试机拒了 mac-follow（它的任务门还是旧版）：同一提交改到 GitHub 的 Mac 上重跑，这趟取消" >> "$GITHUB_STEP_SUMMARY"
+            gh workflow run mac-follow.yml --repo "$GITHUB_REPOSITORY" --ref master -f "sha=$SHA" -f runners=github
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+            sleep 120; exit 1
+          done
+      - name: the verdict, on the commit
+        run: |
+          case "$MACOS" in
+            success) st=success ;;
+            failure) st=failure ;;
+            *)       st='' ;;      # cancelled / skipped: no verdict on the BSD half
+          esac
+          if [ -n "$st" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$st" \
+              -f context='mac follow: macOS' -f target_url="$URL" \
+              -f description="the macOS selftests after the release: $MACOS" >/dev/null \
+              || echo "::warning::could not leave the 'mac follow: macOS' status on $SHA"
+          fi
+          echo "### 🍎 macOS \`${SHA:0:7}\`: ${MACOS}（${WHERE}：${WHY}）" >> "$GITHUB_STEP_SUMMARY"
+          [ "$MACOS" = success ] || { echo "::error::macOS is $MACOS on ${SHA:0:7} — every Mac stays on the previous version; fleet-macos-watch.sh files it"; exit 1; }
+      - name: move the Mac lane
+        run: |
+          set +e
+          sh bin/fleet-stable.sh move "$SHA" --ref stable-macos --train "$GITHUB_RUN_ID" \
+            --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
+          rc=$?
+          cat out.txt
+          { echo "### stable-macos → \`${SHA:0:7}\`"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" = 0 ] || exit "$rc"
+          # the hub's Mac lane: the publishing workflow's own OIDC (the hub takes no other)
+          gh workflow run stable-publish.yml --repo "$GITHUB_REPOSITORY" --ref master -f "sha=$SHA" -f ref=stable-macos \
+            || { echo "::error::stable-macos moved but stable-publish.yml (ref=stable-macos) was not dispatched — run it by hand"; exit 1; }
+          echo "publish: dispatched stable-publish.yml (ref=stable-macos) for ${SHA:0:7}"

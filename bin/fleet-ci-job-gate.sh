@@ -1,7 +1,8 @@
 #!/bin/bash
 # fleet-ci-job-gate.sh — the test runner's job-started hook (claude-fleet#3144,
 # EPIC #3139 C5 · 共同约定 7): a job runs on this machine only when it is the
-# merged train's — never a pull request's.
+# merged train's, or the macOS follow after it (mac-follow.yml, issue #3869) —
+# never a pull request's.
 #
 # bin/fleet-ci-runner.py starts the runner with ACTIONS_RUNNER_HOOK_JOB_STARTED
 # pointing here (a root-owned file the test login cannot change). The runner
@@ -11,7 +12,7 @@
 # runner (GitHub matches labels whatever the event), so this is the rule:
 #
 #   GITHUB_REPOSITORY  = CI_GATE_REPO            (the one repo ci.env names)
-#   GITHUB_EVENT_NAME  ∈ CI_GATE_EVENTS          (push workflow_dispatch schedule)
+#   GITHUB_EVENT_NAME  ∈ CI_GATE_EVENTS          (push workflow_dispatch schedule workflow_run)
 #   GITHUB_REF         = CI_GATE_REF             (refs/heads/master)
 #   GITHUB_HEAD_REF    empty                     (set only on a pull request)
 #   GITHUB_WORKFLOW_REF = <repo>/.github/workflows/<w>@<ref>, w ∈ CI_GATE_WORKFLOWS
@@ -28,7 +29,7 @@ refuse() {
 
 repo="${CI_GATE_REPO:-}"
 ref="${CI_GATE_REF:-refs/heads/master}"
-events="${CI_GATE_EVENTS:-push workflow_dispatch schedule}"
+events="${CI_GATE_EVENTS:-push workflow_dispatch schedule workflow_run}"
 wfs="${CI_GATE_WORKFLOWS:-}"
 
 [ -n "$repo" ] || refuse "no CI_GATE_REPO"

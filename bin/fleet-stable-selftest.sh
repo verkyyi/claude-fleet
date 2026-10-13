@@ -40,7 +40,7 @@
 #                         release.json / artifacts only — red or pending CI and no
 #                         macOS run pass, nothing is pushed or dispatched; backward
 #                         and a bad release.json still refuse. A green
-#                         `release train: macOS` status on the target is its BSD
+#                         `mac follow: macOS` (or older `release train: macOS`) status on the target is its BSD
 #                         half (a red one refuses `macos:`), and the shared
 #                         matrix's `macOS / shard K` checks are gate 5's, not CI's
 #   O. --train <run>      (issue #3142) gates 3 and 5 read THAT run's jobs, never the
@@ -327,12 +327,12 @@ eq "N: precheck passes once fixed" 0 "$RC"
 printf 'completed success shard 1\nin_progress null macOS / shard 2\n' > "$WORK/checks"; : > "$WORK/macos"
 printf 'failure\n' > "$WORK/statuses"
 run move "$C21"
-eq "N: a red train macOS refuses" 3 "$RC"; contains "N: reason macos: + the status" "$OUT" 'release train: macOS'
+eq "N: a red train macOS refuses" 3 "$RC"; contains "N: reason macos: + the status" "$OUT" 'mac follow: macOS'
 case "$OUT" in *"not green: in_progress null macOS / shard 2"*) fail "N: the generic gate counted a train macOS shard" ;; esac
 printf 'success\nfailure\n' > "$WORK/statuses"; rm -f "$WORK/dispatched"
 run move "$C21"
 eq "N: a green train is the BSD half" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
-contains "N: says a train boarded it" "$OUT" "a release train boarded it"
+contains "N: says mac-follow / a train tested it" "$OUT" "mac-follow / a release train tested it"
 case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "N: dispatched a full macOS run past a green train" ;; esac
 
 # --- O. --train: this run's jobs are the CI and the BSD half (issue #3142) -----------------------
@@ -419,5 +419,24 @@ C25=$(commit twentyfive); push
 printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"
 run move "$C25"
 eq "Q: no lane → a red macOS refuses stable again" 3 "$RC"; contains "Q: reason macos:" "$OUT" "REFUSED — macos:"
+
+# --- R. --seed: the Mac lane's first value (issue #3869) ------------------------------------------
+# The train's stable move no longer asks macOS, so it seeds the lane — once, at stable
+# itself, never asking gate 5 (that stable passed it when it moved).
+printf '%s\tcompleted\tfailure\tpush\t33\tselftests (macOS)\n' "$C24" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"
+run move "$C21" --ref stable-macos --seed
+eq "R: --seed off stable is refused" 3 "$RC"; contains "R: reason M:" "$OUT" "REFUSED — M: --seed only starts the Mac lane at stable"
+eq "R: no lane yet" none "$(ltag)"
+run move --ref stable-macos --seed
+eq "R: --seed at stable exits 0 past a red macOS" 0 "$RC"; eq "R: the lane starts at stable" "$C24" "$(ltag)"
+contains "R: says where it starts" "$OUT" "seed: no Mac lane yet"
+case "$OUT" in *"REFUSED — macos:"*|*"macos: green"*|*"macos: no run"*) fail "R: --seed asked gate 5: $OUT" ;; esac
+run move --ref stable-macos --seed
+eq "R: a second --seed exits 0" 0 "$RC"; contains "R: …says already" "$OUT" "already at"; eq "R: lane unchanged" "$C24" "$(ltag)"
+run move "$C25"
+eq "R: with the seeded lane, stable moves past a red macOS" 0 "$RC"; eq "R: stable at C25" "$C25" "$(tag)"
+eq "R: the lane stays behind" "$C24" "$(ltag)"
+run move --seed
+eq "R: --seed without --ref stable-macos is usage" 2 "$RC"
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

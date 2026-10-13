@@ -68,9 +68,9 @@ drill_train_own_runners_gone() {
   CAP=30
   local t0 d out wf
   [ -x "$BIN/fleet-train-macos.sh" ] || { WHY="no bin/fleet-train-macos.sh"; return 1; }
-  wf="$BIN/../.github/workflows/release-train.yml"
+  wf="$BIN/../.github/workflows/mac-follow.yml"
   grep -q 'fleet-train-macos.sh pick' "$wf" && grep -q 'runs_on: ${{ needs.board.outputs.macos_runs_on }}' "$wf" \
-    || { WHY="release-train.yml does not take the macOS runner from board's pick"; return 1; }
+    || { WHY="mac-follow.yml does not take the macOS runner from board's pick"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-pick.XXXXXX"); t0=$(now)
   printf '%s' '{"runners":[{"machine":"mac-c","online":true,"runner":{"state":"idle"}},{"machine":"mac-d","online":true,"runner":{"state":"busy"}}]}' > "$d/up.json"
   printf '%s' '{"runners":[{"machine":"mac-c","online":true,"runner":{"state":"paused","why":"load"}},{"machine":"mac-d","online":false,"runner":{"state":"idle"}}]}' > "$d/down.json"
@@ -200,10 +200,10 @@ S
 drill_train_macos_slow_not_hung() {
   CAP=30
   local t0 d out wf sh
-  wf="$BIN/../.github/workflows/release-train.yml"; sh="$BIN/../.github/workflows/selftests-shards.yml"
+  wf="$BIN/../.github/workflows/mac-follow.yml"; sh="$BIN/../.github/workflows/selftests-shards.yml"
   grep -q -- '--prefix macos --min "$n" --max 4 --target 2400' "$wf" \
     && grep -q 'shards: ${{ needs.plan.outputs.macos_shards || needs.board.outputs.macos_shards }}' "$wf" \
-    || { WHY="release-train.yml's GitHub Macs do not take their width from the plan"; return 1; }
+    || { WHY="mac-follow.yml's GitHub Macs do not take their width from the plan"; return 1; }
   grep -q "grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' selftests.log > train-result.txt" "$sh" \
     || { WHY="selftests-shards.yml does not record a TIMEOUT line for the train"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-macos.XXXXXX"); t0=$(now)

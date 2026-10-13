@@ -73,7 +73,7 @@
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
-#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move --ref stable-macos (macos gate), .github/workflows/mac-follow.yml
 #   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
 #                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
@@ -4175,11 +4175,14 @@ drill_oldcfg_deleted_hook() {
   WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
 }
 
-# ---- macos-red-to-stable (#2286): the macOS selftests left the PR and run on
-# master after the merge. A BSD-only red there must (1) be filed once as a breakage
-# by the watcher and (2) stop `fleet-stable.sh move` with `macos:`; once the run on
-# the target goes green the same move goes through. Fake gh (the runs / check
-# runs), fake filer; a real bare repo + tag.
+# ---- macos-red-to-stable (#2286, rewritten by #3869): the macOS selftests run
+# AFTER the release (mac-follow.yml). A BSD-only red must hold the Mac lane, not
+# stable: (1) the release train's own move (`--train`, no macOS job in it) moves
+# stable past it, (2) the watcher files it once as a breakage reading mac-follow's
+# jobs, (3) `fleet-stable.sh move --ref stable-macos` refuses (`macos:`) on the
+# `mac follow: macOS` status, so every Mac stays on the previous version; once it
+# goes green the lane follows. Fake gh (runs / jobs / statuses), fake filer; a
+# real bare repo + both tags.
 drill_macos_red_to_stable() {
   CAP=30; local t0 d out rc c1 c2
   d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
@@ -4187,9 +4190,11 @@ drill_macos_red_to_stable() {
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*status=completed*) cat "$d/runs.watch" ;;
-  *actions/workflows/*) cat "$d/runs.stable" ;;
+  *actions/workflows/*) : ;;
+  *actions/runs/77/jobs*) printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null release\n' ;;
   *actions/runs/9/jobs*) printf '7\tfailure\tmacOS / shard 1\n' ;;
   *actions/runs/*/jobs*) printf '6\tsuccess\tmacOS / shard 1\n' ;;
+  *statuses*) cat "$d/status" ;;
   'run view'*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
   *) printf 'completed success shard 1\n' ;;
 esac
@@ -4200,36 +4205,41 @@ SH
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
     mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    echo 'name: mac follow' > "$d/seed/.github/workflows/mac-follow.yml"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm bsd && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c1"
     echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bsd-only break' && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable-macos "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; return 1; }
   c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
-  # The watcher reads id/sha/conclusion/event; the stable gate head_sha/status/
-  # conclusion/event/id/title.
-  printf '9\t%s\tfailure\tpush\n8\t%s\tsuccess\tpush\n' "$c2" "$c1" > "$d/runs.watch"
-  printf '%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' "$c2" > "$d/runs.stable"
+  printf '9\t%s\tfailure\tworkflow_run\n8\t%s\tsuccess\tworkflow_run\n' "$c2" "$c1" > "$d/runs.watch"
+  printf 'failure\n' > "$d/status"
   t0=$(now)
-  # red: the watcher files it as a breakage …
+  # the train (Linux green, no macOS job) moves stable past the BSD-only break …
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --train 77 --ignore-check release --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the train's stable move refused on macOS: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move (a Mac red held Linux)"; return 1; }
+  # … the watcher files mac-follow's red once as a breakage …
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" \
           bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
-  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red run was not filed with --breakage: $out"; return 1; }
+  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red follow was not filed with --breakage: $out"; return 1; }
   grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
-  # … and stable refuses to move onto it.
-  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — macos:'*) ;; *) WHY="the refusal is not prefixed macos: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a red macOS run"; return 1; }
-  # green: the fix's run on the same target is green → the move goes through.
-  printf '%s\tcompleted\tsuccess\tworkflow_dispatch\t10\tselftests (macOS) @ %s\n%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' \
-    "$c1" "$c2" "$c2" > "$d/runs.stable"
-  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the move after a green run failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" bash "$BIN/fleet-macos-watch.sh" --repo o/r --now >/dev/null 2>&1
+  [ "$(grep -c -- '--breakage' "$d/filed")" = 1 ] || { WHY="the same red follow was filed twice"; return 1; }
+  # … and the Mac lane refuses to follow it.
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="the lane move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — macos:'*'mac follow: macOS'*) ;; *) WHY="the refusal is not macos: on the mac-follow status: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the Mac lane followed a red macOS"; return 1; }
+  # green: mac-follow's status on the same commit → the lane follows.
+  printf 'success\n' > "$d/status"
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the lane move after a green follow failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
-  WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c2" ] || { WHY="the lane did not follow after macOS went green"; return 1; }
+  WHAT="macOS 红：列车照挪 stable（Linux 不等 Mac）、开一张带指纹的单（同一 run 不重开）、Mac 通道拒挪（macos:）停在上一版；同一提交跑绿后 Mac 通道跟上"
 }
 
 # ---- stable-macos-ahead (#3868, EPIC #3863 C5): a Mac follows refs/tags/stable-macos,
@@ -4305,7 +4315,8 @@ drill_train_push_cancels() {
       || { WHY="release-train.yml is not triggered by $v"; return 1; }
   done
   grep -q 'fleet-train-board.sh' "$wf" || { WHY="the train does not board through bin/fleet-train-board.sh"; return 1; }
-  grep -qE 'runs_on:.*macos' "$wf" || { WHY="the train runs no macOS tests of its own"; return 1; }
+  grep -qE 'runs_on:.*macos' "$wf" && { WHY="the train still waits on macOS tests (issue #3869: mac-follow.yml follows the release)"; return 1; }
+  grep -qE 'runs_on:.*macos' "$ROOT/.github/workflows/mac-follow.yml" || { WHY="nothing runs the macOS half after the release (mac-follow.yml)"; return 1; }
   # the per-merge macOS run is gone (the nightly full suite stays)
   awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$ROOT/.github/workflows/selftests-macos.yml" | grep -q '^[[:space:]]*push:' \
     && { WHY="selftests-macos.yml is still triggered by push — the next merge cancels it again"; return 1; }
@@ -6762,7 +6773,7 @@ drill_nothing_starts_by_itself() {
   for f in dash-issue-session.sh dash-raw-session.sh; do
     rm -f "$sb/bin/$f"; printf '#!/bin/sh\necho "$0 $*" >> "%s/spawned"\n' "$sb" > "$sb/bin/$f"; chmod +x "$sb/bin/$f"
   done
-  : > "$sb/mainA/.github/workflows/release-train.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
+  : > "$sb/mainA/.github/workflows/mac-follow.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
   # a backlog of autofill-labelled issues, and master's macOS run red
   cat > "$sb/shim/gh" <<SH
 #!/bin/sh
