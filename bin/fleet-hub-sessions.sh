@@ -871,6 +871,8 @@ def ask_of(w, state):
     m = re.sub(r"[\x00-\x1f\x7f]+", " ", m).strip()[:200]
     return (k, m) if k or m else None
 
+OFF_WORD = "已停用（管理员限制）"   # the hub's MachineDisabledWord (issue #3824)
+
 for s in sessions:
     w = s.get("worker") or {}
     wid = s.get("worker_id")
@@ -885,8 +887,14 @@ for s in sessions:
         here = local_fleet(s)
         if here is None:
             continue
+    # a machine the person's allowlist leaves out (issue #3824, availability
+    # "disabled"): never a row to enter — it dims as a lost one does, and its
+    # title says why
+    off = s.get("availability") == "disabled" and not here
+    if off:
+        w = dict(w, title=OFF_WORD, status_kind="", status_msg="", detail="")
     rows.append(dict(wid=wid, node=label(host) if here else label(s.get("machine_name")),
-                     av="online" if here else ("lost" if s.get("availability") == "lost" else "online"),
+                     av="online" if here else ("lost" if s.get("availability") == "lost" or off else "online"),
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],

@@ -724,6 +724,7 @@ func (s *Server) routes() *routeMux {
 		// Subscription allowlists (claude-fleet#3043): a machine's and a
 		// person's; the effective intersection and why one is denied.
 		mux.Handle(CredPolicyPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCredPolicy))))
+		mux.Handle(MachinePolicyPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleMachinePolicy))))
 		// Session passes for untrusted machines (claude-fleet#1969): issue /
 		// renew / revoke by the node's token, verify by the verifiers' token,
 		// the list by the operator — each route checks its own.

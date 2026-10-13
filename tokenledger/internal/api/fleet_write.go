@@ -902,6 +902,10 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 				if why := otherLoginExcluded(target.Hostname, target.OSUser, settings); why != "" {
 					return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+"/"+target.OSUser+": "+why)
 				}
+				// The person's machine allowlist (claude-fleet#3824), as placement.
+				if why := s.denyEndpoint(machineAllowOf(settings, p.Person), target.EndpointID, target.Hostname); why != "" {
+					return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+MachineDisabledWord+"："+why)
+				}
 			}
 		}
 	default:
@@ -1486,7 +1490,8 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 		}
 	}
 	weight := s.spotWeight(settings)
-	from := s.askedFrom(p, now) // claude-fleet#1721: who may land on a personal machine
+	from := s.askedFrom(p, now)                  // claude-fleet#1721: who may land on a personal machine
+	mallow := machineAllowOf(settings, p.Person) // claude-fleet#3824: the person's machine allowlist
 	// A login whose first fleet by name is down while another of its fleets
 	// is up (claude-fleet#2477: an old per-repo fleet left behind): the live
 	// one stands for the login, the down one is passed over.
@@ -1543,6 +1548,14 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			// A person's own computer (claude-fleet#1721): only what is
 			// asked from it lands there — auto or named.
 			c.Eligible, c.Excluded = false, excludedPersonal
+		}
+		if c.Eligible {
+			// A machine the person's allowlist leaves out (claude-fleet#3824):
+			// the operator's decision about the person — out for auto AND for
+			// a start that names it.
+			if why := s.denyEndpoint(mallow, r.EndpointID, r.Hostname); why != "" {
+				c.Eligible, c.Excluded = false, MachineDisabledWord+"："+why
+			}
 		}
 		if k := kinds[r.EndpointID]; k != "" {
 			c.Kind = k

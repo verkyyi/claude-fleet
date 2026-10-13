@@ -309,6 +309,65 @@ provider refuses anyway (401) is out of the proxy's pick for
 account. One credential proxy per machine: the doctor's `credproxy` row FAILs on
 any proxy beside the shared one (`fleet-credsep.sh machine proxies`).
 
+### 机器白名单 — which machines a person may use (issue #3824)
+
+The subscription lists above narrow what a session may spend; this one narrows
+**where a person may work at all**. One setting per person, on the hub:
+
+    fleet.machine_allow.user.<principal>   (gh:<id>)
+
+- **Values.** No key = every machine (the default — nothing changes); `"*"`
+  (`all`) = every machine, said explicitly; `[]` (`deny`) = none; a list = only
+  those machines; malformed = none (a broken restriction never reads as none).
+  A machine is the first label, lowercased, of the name its endpoint **joined**
+  as (`enrolled_host`) — never the hostname a heartbeat reports, which the login
+  on it could choose; a login with no endpoint by its account's machine.
+- **Nothing is deleted.** The person's login, home, worktrees and history on a
+  machine off the list stay as they are; `clear` / `all` puts it back.
+- **Where (every door, not one).** One reader (`machineDenied`, `fleet_machine_policy.go`):
+  - *connect* — `managedLoginsOf` leaves the machine out, so no certificate
+    login, route, ssh config, home pick or `/v1/fleet/connect` row there; the
+    routes / home answer lists it under `disabled` with why, and
+    `fleet <machine>` says it (「这台机器暂未对你开放，可用：…」); the ssh relay
+    refuses it; with every machine off, the refusal is the policy's (never
+    «no login» — which would open them a new one);
+  - *the entry door* — a home off the list keeps its login on the machine's
+    key list with **no** key; a list change pushes `entry_keys` at once;
+  - *placement* — `place_start` / `spawn` / a task, auto **and** named, a
+    `worker_start` at a named fleet, a history restore: out, the reason
+    `已停用（管理员限制）：…`;
+  - *the node* — the credential lease answers 200 with every account in
+    `withdrawn`, and every write pushes `creds` so a `CapCreds` node leases
+    at once and removes its copies (an older agent: its 15-min recheck); a
+    session pass is never minted (`machine_off`), and one already out is
+    refused at its next verify (≤ 30 s cache, dropped on every write) — not
+    revoked, so it works again once the list lets the machine back; the
+    relay credential and an frl2 relay pass are refused the same way;
+  - *the lists* — `fleet_sessions` marks such a session `availability:
+    "disabled"` + `disabled: <why>`; the client's cache (`fleet-hub-sessions.sh`)
+    dims it like a lost one (not a row to enter) and titles it
+    「已停用（管理员限制）」 — the sidebar, ⌘P, the 看台 and `fleet ls` read it.
+- **The operator** (no person) is never narrowed.
+
+```sh
+export CCQUOTA_VIEWER_TOKEN=…            # the operator's, from the environment only
+fleet-machine-policy.sh set gh:2987262 linux-a     # only that machine
+fleet-machine-policy.sh show gh:2987262                  # each machine: OPEN / OFF + why
+fleet-machine-policy.sh deny gh:2987262                  # no machine
+fleet-machine-policy.sh all gh:2987262                   # every machine, explicitly
+fleet-machine-policy.sh clear gh:2987262                 # no list: every machine
+```
+
+`GET/PUT /v1/fleet/machine-policy` (admin): PUT `{principal, allow: [names] | [] |
+null, all?}`; GET lists every list, with `?principal=` each machine's verdict.
+The generic settings PUT refuses the key; every write is a settings audit row.
+
+**Honestly.** A certificate already signed still names the person's logins
+until it expires; on a machine off the list it buys nothing the hub serves
+(no route, relay, entry key, lease or pass), but an sshd that trusts the CA
+and is reachable directly would still let it log in — the session there has
+no credential to run on. BREAK-IT `machine-policy-bypass`.
+
 ## 3. Enroll the login with the hub (admin, on the hub)
 
 One enrollment per login. Name it `<machine>-<login>` so the hub's endpoint

@@ -111,6 +111,9 @@ const (
 	// its sessions take the proxy's central route instead (/v1/node/self
 	// says so), so they still work but no token lands in the login's home.
 	LeaseNotSeparated = "not_separated"
+	// LeaseMachineOff: the person's machine allowlist leaves this machine
+	// out (claude-fleet#3824) — the login stays, nothing is issued to it.
+	LeaseMachineOff = "machine_off"
 )
 
 // credsepGated says whether principal's login must be refused real tokens
@@ -313,6 +316,26 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		creds = kept
 	}
+	// Machine allowlists (claude-fleet#3824): a person this machine is not
+	// open to leases nothing here, and every copy the node holds is withdrawn
+	// — a 200 that names them, so the node removes them and keeps rechecking;
+	// the login itself stays as it is.
+	mwhy, err := s.machineDeniedFor(ep.ID, host, principal)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if mwhy != "" {
+		for _, c := range creds {
+			isPool := c.PrincipalID == store.PoolPrincipal
+			withdrawn = append(withdrawn, NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool, Error: MachineDisabledWord + "：" + mwhy})
+		}
+		if err := s.Store.AddCredAudit(store.CredAudit{Action: store.CredDeny, PrincipalID: principal,
+			Hostname: host, OSUser: osUser, EndpointID: ep.ID, Detail: "machine policy: " + mwhy}); err != nil {
+			log.Printf("credentials: audit machine deny for %s@%s: %v", osUser, host, err)
+		}
+		creds = nil
+	}
 	paused := map[string]bool{}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		for _, a := range pausedAccounts(settings) {
@@ -332,7 +355,7 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}, Withdrawn: withdrawn}
-	if st, err := s.Store.FleetSettings(); err == nil && anyCredPolicy(st) {
+	if st, err := s.Store.FleetSettings(); err == nil && (anyCredPolicy(st) || anyMachinePolicy(st)) {
 		resp.RecheckSecs = int(credPolicyRecheck / time.Second)
 	}
 	for _, c := range creds {
