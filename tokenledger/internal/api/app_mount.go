@@ -142,7 +142,7 @@ var consolePages = []consolePage{
 	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3", live: true},
 	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3", live: true},
 	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3", live: true},
-	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
+	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4", live: true},
 	// 任务 and 我的单子 are one page (C5): the tickets a tab of it
 	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5", live: true},
 	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5", live: true},

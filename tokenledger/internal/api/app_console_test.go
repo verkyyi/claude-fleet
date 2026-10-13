@@ -464,10 +464,13 @@ func TestConsoleMemberSide(t *testing.T) {
 	if got := consoleDo(hd, http.MethodGet, mePagePath, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+mePagePath {
 		t.Errorf("GET /me = %d → %q; want 301 %s", got.Code, got.Header().Get("Location"), AppPrefix+mePagePath)
 	}
-	for _, p := range []string{AppPrefix + "/sessions"} {
-		if got := consoleDo(hd, http.MethodGet, p, user); got.Body.String() == "APP-ENTRY" {
-			t.Errorf("GET %s is the console's page; its own row is not live yet", p)
-		}
+	// 我的会话 is the console's own page (claude-fleet#3927, C4); the old
+	// /sessions moves there in one hop
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/sessions", user); got.Code != http.StatusOK || got.Body.String() != "APP-ENTRY" {
+		t.Errorf("GET /app/sessions = %d %.60q; want the console's page", got.Code, got.Body.String())
+	}
+	if got := consoleDo(hd, http.MethodGet, "/sessions", user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+"/sessions" {
+		t.Errorf("GET /sessions = %d → %q; want 301 /app/sessions", got.Code, got.Header().Get("Location"))
 	}
 	for _, p := range []string{AppPrefix + "/quota", "/quota", "/usage"} {
 		if got := consoleDo(hd, http.MethodGet, p+"?range=30d", user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+"/usage?range=30d" {

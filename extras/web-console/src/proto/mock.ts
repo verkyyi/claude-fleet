@@ -6,7 +6,7 @@
 // /v1/fleet/person-bundle, kept in memory so binding and importing can be clicked) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
-type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off"; page?: string;
+type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off" | "ask"; page?: string;
   // 我自己的订阅 (C21): none = the empty state; login = the dialog open at the sign-in; error = the read fails
   sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error";
   // unbound = a GitHub member the notices cannot find yet (claude-fleet#4057)
@@ -138,11 +138,53 @@ export async function install(): Promise<string> {
   const flows: Record<string, { provider: string; account: string; again: boolean }> = {};
   const subsAt = (b: { provider?: string; account?: string }) => subs.find((x) => x.provider === b.provider && x.account === b.account);
   if (subSc === "login") sc.page = (sc.page || "/usage") + (String(sc.page || "").includes("?") ? "&" : "?") + "connect=claude";
+  // 我的会话 (#3927): three live sessions on two machines, two ended ones
+  const H = 36e5, FLEET = "5b1e0000-0000-4000-8000-00000000f001", FLEET2 = "5b1e0000-0000-4000-8000-00000000f002";
+  const before = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const asking = state === "ask";
+  const sess = (machine: string, fleet: string, w: Record<string, unknown>, tokens = 0) =>
+    ({ worker_id: w.worker_id, machine_name: machine, os_user: me.login, fleet_id: fleet, fleet_name: "fleet", availability: "online", worker: w, observed_at: before(2e4), age_sec: 20, ...(tokens ? { tokens_today: tokens } : {}) });
+  let live = state === "empty" ? [] : [
+    sess("office-mac", FLEET, { worker_id: `${FLEET}/a91f`, key: "scratch-14", repo: "linxiao/event-signup", title: "活动报名页", state: asking ? "needs" : "working", agent: "claude", born: (Date.now() - 38 * 6e4) / 1e3,
+      ...(asking ? { status_kind: "question", status_msg: "报名页用哪套配色？陶土橙（和官网一致）还是墨蓝（更正式）" } : {}) }, 169200),
+    sess("office-mac", FLEET, { worker_id: `${FLEET}/77c0`, key: "issue-42", repo: "linxiao/sales-dash", title: "销售周报看板", state: "working", agent: "claude", born: (Date.now() - 2.2 * H) / 1e3 }, 186200),
+    sess("build-box", FLEET2, { worker_id: `${FLEET2}/0d3e`, key: "issue-7", repo: "linxiao/training-deck", title: "十月培训幻灯片", state: "done", agent: "codex", born: (Date.now() - 5 * H) / 1e3 }, 66400),
+  ];
+  let ended = state === "empty" ? [] : [
+    { worker_id: `${FLEET}/9c01`, resume_id: `${FLEET}/scratch-9`, key: "scratch-9", title: "新品发布 · 预告短片", repo: "linxiao/launch-video", machine_name: "office-mac", fleet_id: FLEET, state: "closed", ended_at: before(1.6 * 864e5) },
+    { worker_id: `${FLEET2}/3e02`, resume_id: `${FLEET2}/issue-3`, key: "issue-3", title: "客户名单去重", repo: "linxiao/crm-clean", machine_name: "build-box", fleet_id: FLEET2, state: "landed", ended_at: before(4 * 864e5) },
+  ];
+  const write = (tool: string, wid: string) => {
+    if (tool === "worker_reap") {
+      const s = live.find((x) => x.worker_id === wid);
+      if (!s) return ok({ error: { code: "NOT_FOUND", message: "no such session" } }, 404);
+      live = live.filter((x) => x !== s);
+      const w = s.worker as Record<string, string>;
+      ended = [{ worker_id: wid, resume_id: `${s.fleet_id}/${w.key}`, key: w.key, title: w.title, repo: w.repo, machine_name: s.machine_name, fleet_id: s.fleet_id, state: "closed", ended_at: new Date().toISOString() }, ...ended];
+    } else {
+      const e = ended.find((x) => x.resume_id === wid);
+      if (!e) return ok({ error: { code: "NOT_FOUND", message: "no such session" } }, 404);
+      ended = ended.filter((x) => x !== e);
+      live = [sess(e.machine_name, e.fleet_id, { worker_id: e.worker_id, key: e.key, repo: e.repo, title: e.title, state: "working", agent: "claude", born: Date.now() / 1e3 }), ...live];
+    }
+    return ok({ operation_id: "op-1", action: tool, status: "succeeded" });
+  };
+  // no push channel in review: the sessions page reads by its 10 s poll
+  (window as { EventSource?: unknown }).EventSource = undefined;
   const real = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const p = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
     await new Promise((r) => setTimeout(r, 120));
+    if (p === "/v1/fleet/sessions") {
+      if (state === "loading") return new Promise<Response>(() => {});
+      if (state === "error") return ok({ error: { code: "UNAVAILABLE", message: "演示：入口出错" } }, 503);
+      return url.includes("state=ended") ? ok({ sessions: ended, days: 14 }) : ok({ sessions: live, count: live.length, machines: [], nodes: [] });
+    }
+    if (p === "/v1/fleet/write") {
+      const b = JSON.parse(String(init?.body || "{}"));
+      return write(b.tool, JSON.parse(b.args_json || "{}").worker_id);
+    }
     // 加载中: the page's own reads never answer, so its loading state stays on screen
     if (state === "loading" && (/^\/v1\/fleet\/(tasks|tickets)/.test(p) || (sc.page === "/usage" && p === "/v1/me/usage"))) return new Promise<Response>(() => {});
     // 设备's reads in the review's loading / error / door-off states
