@@ -16,7 +16,8 @@
 #
 # Legs:
 #   A  the package: theme.css carries the fleet:tokens block, fonts.css names
-#      every file in fonts/, logo.svg is there
+#      every file in fonts/, logo.svg is there, the system-dark block and its
+#      data-theme="dark" twin carry the same lines (claude-fleet#3931)
 #   B  the repo: one source (the package), nothing outside it — prints the report
 #   C  the consumers take it from the package: site/template.html has the
 #      /*{{fleet_theme}}*/ slot, the web chat's theme.css and the console's
@@ -111,6 +112,11 @@ for v in $(grep -o -- '--fleet-[a-z0-9-]*:' "$THEME/theme.css" | tr -d : | sort 
   grep -q -- "\`$v\`" "$THEME/README.md" 2>/dev/null || missing="$missing $v"
 done
 [ -z "$missing" ] && ok "A README.md has a line for every --fleet- variable" || bad "A README.md lacks:$missing"
+# the console's 深浅色 (claude-fleet#3931): the chosen dark is the system's dark, line for line
+sysdark=$(awk '/:root:not\(\[data-theme="light"\]\) \{/{f=1;next} f&&/^  \}/{exit} f{sub(/^ +/,"");print}' "$THEME/theme.css")
+pickdark=$(awk '/^:root\[data-theme="dark"\] \{/{f=1;next} f&&/^\}/{exit} f{sub(/^ +/,"");print}' "$THEME/theme.css")
+if [ -n "$sysdark" ] && [ "$sysdark" = "$pickdark" ]; then ok "A the data-theme=\"dark\" block is the system dark block, line for line"
+else bad "A theme.css: the system dark block and :root[data-theme=\"dark\"] differ (or one is missing)"; fi
 
 # --- B: the repo --------------------------------------------------------------
 git -C "$REPO" ls-files > "$T/files" 2>/dev/null || find "$REPO" -type f | sed "s#^$REPO/##" > "$T/files"

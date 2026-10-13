@@ -85,9 +85,13 @@
   color-scheme: light;
 }
 
-/* shadcn — dark: the site itself */
+/* shadcn — dark: the site itself. It follows the system; a page that lets a
+ * person choose (the console's 设置, claude-fleet#3931) says so on <html>:
+ * data-theme="light" keeps paper under a dark system, data-theme="dark" puts
+ * the site's dark under a light one. The two blocks carry the same lines
+ * (bin/fleet-theme-selftest.sh A); a page with no data-theme is as before. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: var(--fleet-bg);
     --foreground: var(--fleet-ink);
     --card: var(--fleet-surface);
@@ -108,6 +112,27 @@
     --code-fg: var(--fleet-sand);
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --background: var(--fleet-bg);
+  --foreground: var(--fleet-ink);
+  --card: var(--fleet-surface);
+  --card-foreground: var(--fleet-ink);
+  --popover: var(--fleet-surface);
+  --popover-foreground: var(--fleet-ink);
+  --secondary: var(--fleet-surface);
+  --secondary-foreground: var(--fleet-ink-2);
+  --muted: var(--fleet-surface-2);
+  --muted-foreground: var(--fleet-muted);
+  --accent: var(--fleet-surface-2);
+  --accent-foreground: var(--fleet-ink);
+  --destructive: var(--fleet-bad);
+  --border: var(--fleet-line);
+  --input: var(--fleet-line);
+  --link: var(--fleet-clay);
+  --code-bg: var(--fleet-surface-2);
+  --code-fg: var(--fleet-sand);
+  color-scheme: dark;
 }
 
 @theme inline {

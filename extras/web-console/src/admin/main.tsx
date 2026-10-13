@@ -6,6 +6,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, createMemoryRouter, Navigate, RouterProvider } from "react-router";
 import "./admin.css";
+// dark or light on <html data-theme> (the system's, or a pick made on 设置 — claude-fleet#3931)
+import "@/shared/theme";
 import { AdminShell, NotFound } from "./AdminShell";
 import { PeoplePage } from "./pages/People";
 

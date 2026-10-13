@@ -498,3 +498,35 @@ func TestConsoleDevices(t *testing.T) {
 		t.Errorf("stranger GET /app/devices = 200; want the gate")
 	}
 }
+
+// 设置 (claude-fleet#3931, C8) took over /app/config: the old address (and the
+// bare /config before /app) is one 301 to /app/settings with its query, the
+// new one is the console's page for each signed-in person, a stranger is asked
+// to sign in, and a way of signing in that was just added comes back to it.
+func TestConsoleSettings(t *testing.T) {
+	h, admin, user := rolesHarness(t)
+	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("OLD-APP")}, "config.html": {Data: []byte("OLD-CONFIG")}}
+	h.srv.ConsoleFS = fstest.MapFS{"app/index.html": {Data: []byte("APP-ENTRY")}}
+	hd := h.srv.Handler()
+	for _, who := range []*http.Cookie{user, admin} {
+		if got := consoleDo(hd, http.MethodGet, AppPrefix+settingsPagePath, who); got.Code != http.StatusOK || got.Body.String() != "APP-ENTRY" {
+			t.Errorf("GET /app/settings = %d %.60q; want the console's page", got.Code, got.Body.String())
+		}
+		for from, to := range map[string]string{
+			AppPrefix + "/config":         AppPrefix + settingsPagePath,
+			AppPrefix + "/config?e=taken": AppPrefix + settingsPagePath + "?e=taken",
+			"/config":                     AppPrefix + settingsPagePath,
+			"/settings":                   AppPrefix + settingsPagePath,
+		} {
+			if got := consoleDo(hd, http.MethodGet, from, who); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != to {
+				t.Errorf("GET %s = %d → %q; want 301 %s", from, got.Code, got.Header().Get("Location"), to)
+			}
+		}
+	}
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+settingsPagePath, nil); got.Code == http.StatusOK {
+		t.Errorf("stranger GET /app/settings = 200; want the gate")
+	}
+	if got, want := settingsBack("wechat-taken"), AppPrefix+settingsPagePath+"?e=wechat-taken#logins"; got != want {
+		t.Errorf("settingsBack = %q; want %q", got, want)
+	}
+}

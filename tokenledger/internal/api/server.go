@@ -957,6 +957,8 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(ticketPagesPrefix, s.appSide())
 	// 设备 (claude-fleet#3930): the same, at /app/devices
 	mux.Handle(devicesPagePath, s.appSide())
+	// 设置 (claude-fleet#3931): the same — the page that took over /config.
+	mux.Handle(settingsPagePath, s.appSide())
 	// The new console's admin side (claude-fleet#3925): an admin's, and to
 	// anyone else what an unknown address answers (app_mount.go).
 	mux.Handle(AdminPrefix, s.adminSide(ui))

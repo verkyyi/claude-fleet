@@ -69,6 +69,8 @@ shadcn tokens (`--background`, `--foreground`, `--card`, `--popover`,
 `--primary`, `--secondary`, `--muted`, `--accent`, `--destructive`, `--border`,
 `--input`, `--ring`, `--radius`) plus `--link`, `--code-bg`, `--code-fg` are mapped
 onto the variables above, light by default and dark under
-`prefers-color-scheme: dark`. Tailwind's `@theme` adds `clay`, `clay-soft`,
+`prefers-color-scheme: dark`. A page that lets a person choose (the console's
+设置) sets `data-theme="light"` or `"dark"` on `<html>`, which wins over the
+system; with no `data-theme` a page follows the system as before. Tailwind's `@theme` adds `clay`, `clay-soft`,
 `clay-line`, `sand`, `ok`, `warn` as colours, `--radius-sm…xl` and
 `--spacing` (0.25rem, Tailwind's own scale).

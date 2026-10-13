@@ -89,15 +89,17 @@ export function useLoad<T>(url: string): Load<T> {
 }
 
 // sendJSON: one write — the answer's body, or the entry's own sentence when
-// it says no ({error: "…"} or {error: {message}}).
-export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+// it says no ({error: "…"} or {error: {message}}); status is the answer's
+// (0 = none), for a page whose words depend on it (设置: 202 · 409 · 429).
+export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<{ ok: true; data: T; status: number } | { ok: false; error: string; status: number }> {
   const r = await fetch(url, {
     method, headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }).catch(() => null);
-  if (r?.status === 401) { location.assign("/app/signin"); return { ok: false, error: "" }; }
+  if (r?.status === 401) { location.assign("/app/signin"); return { ok: false, error: "", status: 401 }; }
   const j = r ? await r.json().catch(() => null) : null;
-  if (r?.ok) return { ok: true, data: j as T };
+  const status = r?.status ?? 0;
+  if (r?.ok) return { ok: true, data: j as T, status };
   const e = j?.error;
-  return { ok: false, error: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : "" };
+  return { ok: false, error: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : "", status };
 }

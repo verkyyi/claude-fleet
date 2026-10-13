@@ -11,8 +11,9 @@
 @source "../shared";
 @source "../components";
 
-/* dark follows the system — no toggle, no script (issue #3637) */
-@custom-variant dark (@media (prefers-color-scheme: dark));
+/* dark is what <html data-theme> says: the system's, or the person's own pick
+ * on 设置 (src/shared/theme.ts, claude-fleet#3931) */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
