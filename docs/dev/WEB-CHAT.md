@@ -3,9 +3,47 @@
 一个人一条对话，在浏览器里（手机 Safari 也行）跟 Claude 说话。后端是 **Claude Agent SDK**，
 跑在这个人自己的登录上，走 fleet 额度池的凭据代理 —— 和 fleet 会话里的 claude 同一条路。
 
+## 经官网（EPIC #3642）
+
+人从官网 `/chat` 进来；**入口只认人、找家、转发，不跑对话**。对话跑在这个人的家登录上，入口和别的机器都碰不到内容。
+
+### 链路
+
+```
+浏览器 /chat/（只带官网的 ccq_sess）
+  → 入口 /v1/chat/*（viewerOnly：登录的人，只进自己的）
+  → EntryHomeOf(人) = 家机器 · 登录
+  → 控制消息 chat_relay_open {relay_id, secret, login}（只发给报了 CapChat 的那个登录）
+  → 节点回拨 wss /v1/node/chat-relay，第一帧 X-Fleet-Person（入口用该登录节点令牌的哈希签）
+  → 节点验过，以该登录连 $FLEET_CONF_DIR/webchat/chat.sock（目标写死）
+  → 对话服务 server.mjs --socket（该登录的登记后台服务）
+  → 每一轮 fleet-session-cred.sh mint → 凭据代理 → 池子 · /v1/node/usage
+```
+
+打开 `/chat` 时节点先跑 `service ensure --name webchat --wait 3`，服务没起就起（D1）。
+
+### 发起人的四个要求怎么落
+
+| 要求 | 落在哪 |
+|---|---|
+| 仅限已有账户的人 | `/chat/` 和 `/v1/chat/*` 都挂在 `viewerOnly` 后：没登录 302 / 401，不在名单 403，operator 口令 403；没有家 409 `no_home`，页面引去「我的连接」。没有注册入口（C3 · C4） |
+| 受同一限额 | 每一轮走凭据代理，按人计到 `fleet.person_budget`；到顶时代理 403 `person_budget_exceeded`，服务变成一行 `code:"budget"` + `until`，页面置灰到点自己重读；顶栏的额度条读的就是本人 `/v1/me/usage` 的 `limit`，和「我的用量」同一个数（C1 · C4，BREAK-IT `chat-budget-bypass`） |
+| 同一个 TOKEN | 浏览器只带官网的 `ccq_sess`，不另发 cookie、不要登录链接；对话里的 `claude` 拿的是这一轮 mint 的会话凭据（`fcp1.…`），池子里的号由代理挑，和 `fleet-claude.sh` 一样 |
+| 后台跑在这个人的家登录下 | 入口按人找家（`EntryHomeOf`），只给那个登录开转发；节点只在 `X-Fleet-Person` 验过才以该登录连它自己 0700 目录里的 0600 socket；服务是该登录的登记后台服务，家换了登录跟着搬（C1 · C2 · C5，BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` · `chat-home-moved`） |
+
+### 已定（发起人确认）
+
+- **D1** 按需起停：第一次打开 `/chat` 经 `service_control ensure` 登记并启动，空闲 2 小时退出 75（守护记 `idle`、不重起）。
+- **D2** 家机器连不上（离线 / 维护中 / 转发拨不通）：答 503 `home_down`，页面说「你的机器现在连不上」+「再试一次」，**不**在别的机器开新对话。
+- **D3** 本机直连（127.0.0.1 + 一次性链接）保留作开发 / 排障，**默认关**：`FLEET_WEBCHAT_LOCAL=1` 才开，不设时 `fleet-webchat.sh start|link|stop` 退 2，`server.mjs` 不带 `--socket` 不起。
+- **D4** 页面地址 `/chat`，官网菜单「对话」，每个角色都有。
+- **D5** 管理员也只能进自己的：入口只给登录的本人签 `X-Fleet-Person`，`?principal=` 点名别人答 403 `not_yours`，审计只记开 / 拒，不记内容。
+
+各段细节见下面「按需起停」（C5）、「节点上的转发」（C2）、「入口的路由」（C3）、「官网上的 `/chat`」（C4）。
+
 ## 用
 
-对话服务是这个登录的**登记后台服务**（docs/MANAGED-NODE.md §10），只听一个 unix socket
+对话服务是这个登录的**登记后台服务**（docs/dev/MANAGED-NODE.md §10），只听一个 unix socket
 `$FLEET_CONF_DIR/webchat/chat.sock`（socket 0600，目录 0700）——不开任何 TCP 端口，不发 cookie、
 不要登录链接、不写 `admin.token`。能连上这个 socket 的只有本登录；到达它的是节点程序的转发
 （EPIC #3642 C2：入口认人、找家、经控制链路转发，`X-Fleet-Person` 由节点验签，这里只记进日志）。
