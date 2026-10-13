@@ -204,7 +204,7 @@ drill_train_macos_slow_not_hung() {
   grep -q -- '--prefix macos --min "$n" --max 4 --target 2400' "$wf" \
     && grep -q 'shards: ${{ needs.plan.outputs.macos_shards || needs.board.outputs.macos_shards }}' "$wf" \
     || { WHY="release-train.yml's GitHub Macs do not take their width from the plan"; return 1; }
-  grep -q "grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt" "$sh" \
+  grep -q "grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' selftests.log > train-result.txt" "$sh" \
     || { WHY="selftests-shards.yml does not record a TIMEOUT line for the train"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-macos.XXXXXX"); t0=$(now)
   cat > "$d/rs" <<'R'
@@ -223,7 +223,7 @@ R
     *) WHY="a small selection did not keep 2 × 3000 s: $out"; rm -rf "$d"; return 1 ;; esac
   # a hung test is a TIMEOUT line by name; the train's record counts it red
   printf 'PASS  a-selftest.sh  1s\nTIMEOUT hung-selftest.sh  600.0s (limit 600s)\n' > "$d/selftests.log"
-  (cd "$d" && grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt)
+  (cd "$d" && grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' selftests.log > train-result.txt)
   mkdir -p "$d/res/train-result-macOS-1" && mv "$d/train-result.txt" "$d/res/train-result-macOS-1/"
   grep -q '^TIMEOUT hung-selftest.sh' "$d/res/train-result-macOS-1/train-result.txt" \
     && grep -q 'awk .$1 == "FAIL" || $1 == "TIMEOUT"' "$BIN/fleet-train-quarantine.sh" \

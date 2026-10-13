@@ -74,6 +74,17 @@ name: release train
 #       `隔离`      files each new one's breakage issue (--breakage-key, one per
 #                   test), writes the entry, uploads the state for the next train
 #                   and says 「隔离了 N 个：…」 on the summary (nothing when none).
+#   * a red test runs ONCE more before it counts (issue #3866, EPIC #3863 C3): the
+#     shards get --retry-red 1, so a test red then green on its rerun is `FLAKY`, its
+#     shard stays green and the train ships; `隔离` files it (--breakage-key
+#     flaky-<test>, label flaky — one issue a test, a later sighting a comment), keeps
+#     its sightings seven days in the state and quarantines it at the third (reason
+#     flaky), and the summary says 「重跑才过 N 个：…」. Red twice is red as before:
+#     `红灯即停` judges job conclusions, and only a red rerun reds a job
+#     (BREAK-IT train-flaky-retry-hides-red). The PR gate and the nightly never rerun.
+#     A workflow_dispatch with `drill_flaky: <test>` counts that test's FIRST run red
+#     on the Linux half: a whole train otherwise (it ships when there is a change),
+#     its flaky issue filed for real, the sighting never counted toward a quarantine.
 #     A workflow_dispatch with `drill_red: <test>` is the drill: that test counts red,
 #     the state is `train-quarantine-drill` (never the real trains'), no issue is
 #     filed (`drill_issue` stands in), and nothing past the tests runs — no gate, no
@@ -101,6 +112,11 @@ on:
         type: string
         required: false
         default: '3243'
+      drill_flaky:
+        description: 'the flaky drill (issue #3866): this test''s first Linux run counts red, its rerun is real; the train runs whole'
+        type: string
+        required: false
+        default: ''
   schedule:
     # hourly backstop (a push lost, a train red on a flake): off the top of the hour
     - cron: '41 * * * *'
@@ -130,6 +146,7 @@ jobs:
       macos_where: ${{ steps.macos.outputs.macos_where }}
       macos_why: ${{ steps.macos.outputs.macos_why }}
       drill: ${{ steps.drill.outputs.drill }}
+      flaky_drill: ${{ steps.drill.outputs.flaky_drill }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -155,6 +172,7 @@ jobs:
         id: drill
         env:
           DRILL_RED: ${{ inputs.drill_red || '' }}
+          DRILL_FLAKY: ${{ inputs.drill_flaky || '' }}
         run: |
           if [ -n "$DRILL_RED" ]; then
             echo drill=true >> "$GITHUB_OUTPUT"
@@ -162,6 +180,8 @@ jobs:
           else
             echo drill=false >> "$GITHUB_OUTPUT"
           fi
+          echo "flaky_drill=$DRILL_FLAKY" >> "$GITHUB_OUTPUT"
+          [ -z "$DRILL_FLAKY" ] || echo "### 演练：重跑（#3866）— $DRILL_FLAKY 第一次记红、重跑照实；整趟照跑" >> "$GITHUB_STEP_SUMMARY"
       - name: pick the macOS runners
         # issue #3145: our own Macs when the hub says one is there, else GitHub's.
         id: macos
@@ -178,7 +198,7 @@ jobs:
     # tests red on the newest earlier train on another sha.
     name: quarantine
     needs: board
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -189,6 +209,7 @@ jobs:
       active: ${{ steps.q.outputs.active }}
       prev_fails: ${{ steps.q.outputs.prev_fails }}
       prev_run: ${{ steps.q.outputs.prev_run }}
+      flaky_hist: ${{ steps.q.outputs.flaky_hist }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -208,6 +229,7 @@ jobs:
             echo 'active<<FLEET_TQ_EOF'; printf '%s\n' "$active"; echo 'FLEET_TQ_EOF'
             echo 'prev_fails<<FLEET_TQ_EOF'; cat q/prev-fails; echo 'FLEET_TQ_EOF'
             echo "prev_run=$(cat q/prev-run)"
+            echo 'flaky_hist<<FLEET_TQ_EOF'; cat q/flaky; echo 'FLEET_TQ_EOF'
           } >> "$GITHUB_OUTPUT"
           echo "in force: $(printf '%s' "$active" | grep -c . || true) · red on the previous train (run $(cat q/prev-run)): $(tr '\n' ' ' < q/prev-fails)"
 
@@ -223,7 +245,7 @@ jobs:
     # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never stops.
     name: plan
     needs: board
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -266,7 +288,7 @@ jobs:
   linux:
     name: Linux
     needs: [board, quarantine, plan]
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
@@ -279,6 +301,8 @@ jobs:
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
       drill_red: ${{ inputs.drill_red || '' }}
+      retry_red: '1'
+      drill_flaky: ${{ inputs.drill_flaky || '' }}
       record: true
 
   macos:
@@ -299,11 +323,14 @@ jobs:
       job_minutes: ${{ needs.plan.outputs.macos_job_minutes }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      retry_red: '1'
       record: true
 
   record:
     # New quarantines get their issue + entry; the state goes to the next train
     # (issue #3243). Red when a new one could not be filed — the train with it.
+    # Each FLAKY test (issue #3866) gets its issue (or a comment on it) and a
+    # sighting; a flaky filing that fails is said, never reds the train.
     name: 隔离
     needs: [board, quarantine, linux, macos]
     if: always() && needs.quarantine.result == 'success'
@@ -326,17 +353,20 @@ jobs:
           SHA: ${{ needs.board.outputs.train_sha }}
           RAW: ${{ needs.quarantine.outputs.raw }}
           PREV_RUN: ${{ needs.quarantine.outputs.prev_run }}
+          FLAKY_HIST: ${{ needs.quarantine.outputs.flaky_hist }}
+          FLAKY_DRILL: ${{ needs.board.outputs.flaky_drill }}
           DRILL: ${{ needs.board.outputs.drill }}
           DRILL_ISSUE: ${{ inputs.drill_issue || '3243' }}
         run: |
-          mkdir -p results; printf '%s\n' "$RAW" > raw.list
+          mkdir -p results; printf '%s\n' "$RAW" > raw.list; printf '%s\n' "$FLAKY_HIST" > flaky.hist
           set -- --results results --list raw.list --prev-run "${PREV_RUN:-0}" --run "$GITHUB_RUN_ID" \
-                 --sha "$SHA" --repo "$GITHUB_REPOSITORY" --out state
+                 --sha "$SHA" --repo "$GITHUB_REPOSITORY" --out state --flaky-hist flaky.hist
           [ "$DRILL" != true ] || set -- "$@" --issue "$DRILL_ISSUE"
+          [ -z "$FLAKY_DRILL" ] || set -- "$@" --drill-flaky "$FLAKY_DRILL"
           set +e
           sh bin/fleet-train-quarantine.sh record "$@"; rc=$?
-          sum=$(sh bin/fleet-train-quarantine.sh summary --expired raw.list state/list)
-          [ -z "$sum" ] || { echo "$sum"; printf '### 🧪 %s\n' "$sum" >> "$GITHUB_STEP_SUMMARY"; }
+          sum=$(sh bin/fleet-train-quarantine.sh summary --expired raw.list --flaky state/flaky-now state/list)
+          [ -z "$sum" ] || { echo "$sum"; printf '%s\n' "$sum" | sed 's/^/### 🧪 /' >> "$GITHUB_STEP_SUMMARY"; }
           exit $rc
       - name: hand the state to the next train
         if: always()

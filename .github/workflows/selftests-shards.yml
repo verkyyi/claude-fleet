@@ -52,8 +52,21 @@ on:
         type: string
         required: false
         default: ''
+      # The release train's one rerun (issue #3866): a red test runs once more; green
+      # then is FLAKY and the shard stays green. Empty — the PR gate, the nightly — never
+      # reruns anything: they want to see the real red.
+      retry_red:
+        description: 'run-selftests.sh --retry-red <n> (0 or 1) — the train only'
+        type: string
+        required: false
+        default: ''
+      drill_flaky:
+        description: 'a test whose FIRST run is counted red (the flaky drill) — the train only'
+        type: string
+        required: false
+        default: ''
       record:
-        description: 'upload each shard FAIL / QUARANTINE lines as train-result-<os>-<K> — the train only'
+        description: 'upload each shard FAIL / QUARANTINE / FLAKY lines as train-result-<os>-<K> — the train only'
         type: boolean
         required: false
         default: false
@@ -175,6 +188,9 @@ jobs:
           QUARANTINE: ${{ inputs.quarantine }}
           PREV_FAILS: ${{ inputs.prev_fails }}
           DRILL_RED: ${{ inputs.drill_red }}
+          # The train's one rerun (issue #3866): empty everywhere but the train.
+          RETRY_RED: ${{ inputs.retry_red }}
+          DRILL_FLAKY: ${{ inputs.drill_flaky }}
           # The train's per-attempt budget (issue #3241); empty on the PR gate.
           # Never a bare BUDGET: the step's env is every test's env, and a test
           # whose knob reads ${BUDGET:-5} got the shard's 519 s (issue #3371).
@@ -190,6 +206,8 @@ jobs:
             printf '%s\n' "$PREV_FAILS" > "$RUNNER_TEMP/prev-fails"; set -- --prev-fails "$RUNNER_TEMP/prev-fails" "$@"
           fi
           [ -z "$DRILL_RED" ] || set -- --drill-red "$DRILL_RED" "$@"
+          [ -z "$RETRY_RED" ] || set -- --retry-red "$RETRY_RED" "$@"
+          [ -z "$DRILL_FLAKY" ] || set -- --drill-flaky "$DRILL_FLAKY" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
           if [ -n "$SHARD_BUDGET_SECS" ]; then
             # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns
@@ -211,7 +229,7 @@ jobs:
             for c in selftests.log.cut-*; do
               [ -f "$c" ] || continue
               echo "attempt ${c##*.cut-} was cut short (no test red) and rerun — it was in:"
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/{h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
             done
             if grep -q '^-* slowest' selftests.log 2>/dev/null; then
               sed -n '/^-* slowest/,$p' selftests.log
@@ -219,7 +237,7 @@ jobs:
               echo 'nothing related landed in this shard'
             else
               echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/{h=""}
                    END{print "  " (h ? h : "(none identified — read the log)")}' \
                 selftests.log 2>/dev/null
             fi
@@ -229,15 +247,20 @@ jobs:
       - name: This shard's verdicts for the train
         # issue #3243: the train's record job reads every shard's FAIL / TIMEOUT /
         # QUARANTINE lines (a cut-short shard has none — that is C9's rerun, not a red
-        # to count). A TIMEOUT is a red test by name (issue #3412).
+        # to count). A TIMEOUT is a red test by name (issue #3412). A FLAKY line
+        # (issue #3866) brings the head of both its runs, for its issue.
         if: always() && inputs.record
-        run: grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt 2>/dev/null || true
+        run: |
+          grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' selftests.log > train-result.txt 2>/dev/null || true
+          sh bin/fleet-train-quarantine.sh heads --log selftests.log --out . || true
       - name: Upload this shard's verdicts
         if: always() && inputs.record
         uses: actions/upload-artifact@v4
         with:
           name: train-result-${{ runner.os }}-${{ matrix.shard }}
-          path: train-result.txt
+          path: |
+            train-result.txt
+            train-flaky-*.txt
           retention-days: 3
           if-no-files-found: ignore
 
