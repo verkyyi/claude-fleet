@@ -795,8 +795,12 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   one shard); no row ⇒ the table's median, no table ⇒ exactly the old stride —
   and `.github/workflows/selftests.yml` fans that over an 18-job matrix (8 until #2659, 12 until #3243, 14 until #3864), each
   shard printing its predicted load (WARN past 400s of the 480s step bound).
-  Refresh the table with `bin/selftest-durations.sh --run <run id>`. Edit the `shard:` list to change the width and nothing else:
-  the split reads `strategy.job-total`. The width is set by measured runner
+  Refresh the table with `bin/selftest-durations.sh --run <run id>`. Edit the `shard:` list to change the PR gate's width and nothing else:
+  the split reads `strategy.job-total`. The release train's width is not a list — its `plan` job computes it
+  (`bin/fleet-train-plan.sh`); in the Shenzhen pool (issue #3865) N = ⌈selected seconds ÷ 75⌉ capped by the
+  pool's free slots (14 a node, ≤ 44 — `fleet-train-runner.sh pick`'s `linux_slots`), a test over 75 s alone in
+  its shard (`run-selftests.sh --solo`), 150 s an attempt; on GitHub's runners the old 12..20 (BREAK-IT
+  `train-shards-over-slots`). The width is set by measured runner
   VARIANCE, not suite size — at 4 the same shard ran 2m36s and 4m2s on the same
   commit in sibling runs. In-runner concurrency was built, measured
   (196s vs 1428s of summed test time, 8-wide) and **rejected** — ~9 tests carry a

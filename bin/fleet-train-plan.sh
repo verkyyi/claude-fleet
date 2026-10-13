@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-train-plan.sh --base <rev> [--dir <repo>] [--prefix <name>] [--durations <table>]
 #                     [--scale <x>] [--shards <N> | --min <N> --max <N> --target <s>]
-#                     [--factor <x>] [--floor <s>]
+#                     [--factor <x>] [--floor <s>] [--slots <S>]
 #   — how wide one release train's test half runs, and how long a shard may take
 #   (issue #3241, EPIC #3139 C9).
 #
@@ -30,10 +30,25 @@
 #
 # Defaults (ubuntu): target 360 s (≤ 6 minutes a shard), min 12 — the PR's width —
 # max 20, factor 1.5, floor 480 s (the PR's 8 minutes), scale 1.
+#
+# --slots S — the Shenzhen pool's free runner slots (issue #3865, EPIC #3863 C2;
+# bin/fleet-train-runner.sh pick's linux_slots): the width follows the slots, not
+# the PR's 12. N = clamp(ceil(total × scale / 75), 1, S), S at most 44 (the pool's
+# 3 nodes); a shard past the free slots only queues for a second round, slower than
+# cutting fewer. Except when the selection is so big that the free slots would each
+# carry more than 75 s + 180 s (a node's 2–3 minutes from 0): then N goes up to 44
+# at once — the pods that do not fit yet stay pending, which is what grows the pool,
+# and the train never waits for the growth before it starts. A test over 75 s gets a
+# shard of its own (run-selftests.sh --solo 75). One attempt's floor is 150 s
+# instead of 480. Also prints <prefix>_slots and <prefix>_solo_secs (75). Without
+# --slots every line is byte for byte as before.
 # FLEET_TRAIN_PLAN_CMD replaces `bash bin/run-selftests.sh` (the drill's seam).
 set -uo pipefail
 
 dir=. base='' prefix=plan dur='' scale=1 fixed='' min=12 max=20 target=360 factor=1.5 floor=480
+slots='' solo=''
+# the Shenzhen pool (issue #3865): 75 s a shard, ≤ 44 wide, a node's 180 s to grow
+ACK_TARGET=75 ACK_CAP=44 ACK_GROW=180 ACK_FLOOR=150
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dir) dir=$2; shift 2 ;;
@@ -47,14 +62,20 @@ while [ "$#" -gt 0 ]; do
     --target) target=$2; shift 2 ;;
     --factor) factor=$2; shift 2 ;;
     --floor) floor=$2; shift 2 ;;
-    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+    --slots) slots=$2; shift 2 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "fleet-train-plan: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
 [ -n "$base" ] || { echo "fleet-train-plan: --base <rev> is required" >&2; exit 2; }
-for v in "$min" "$max" "$target" "$floor" ${fixed:+"$fixed"}; do
+for v in "$min" "$max" "$target" "$floor" ${fixed:+"$fixed"} ${slots:+"$slots"}; do
   case "$v" in ''|*[!0-9]*|0) echo "fleet-train-plan: '$v' is not a positive whole number" >&2; exit 2 ;; esac
 done
+
+if [ -n "$slots" ]; then
+  [ "$slots" -le "$ACK_CAP" ] || slots=$ACK_CAP
+  min=1 max=$slots target=$ACK_TARGET floor=$ACK_FLOOR solo=$ACK_TARGET
+fi
 
 # plan_line <N> — the runner's one `plan …` line for an N-wide deal, or nothing.
 plan_line() {
@@ -62,7 +83,7 @@ plan_line() {
   if [ -n "${FLEET_TRAIN_PLAN_CMD:-}" ]; then cmd=$FLEET_TRAIN_PLAN_CMD
   else cmd="bash bin/run-selftests.sh"; fi
   # shellcheck disable=SC2086  # $cmd is a command and its arguments
-  (cd "$dir" && FLEET_HEAVY=0 $cmd --plan --changed "$base" --shard "1/$1" ${dur:+--durations "$dur"} 2>/dev/null) \
+  (cd "$dir" && FLEET_HEAVY=0 $cmd --plan --changed "$base" --shard "1/$1" ${dur:+--durations "$dur"} ${solo:+--solo "$solo"} 2>/dev/null) \
     | grep '^plan ' | tail -1
 }
 field() { printf '%s\n' "$1" | tr ' ' '\n' | sed -n "s/^$2=//p"; }
@@ -80,11 +101,16 @@ fi
 
 if [ -n "$why" ]; then
   n=${fixed:-$min}; tests='?'; total='?'; heavy='?'; budget=$floor
-  echo "fleet-train-plan: $why — $n shard(s) at the ${floor}s floor" >&2
+  # in the pool: every free slot, at the PR's 8 minutes — no forecast to cut it by
+  [ -z "$slots" ] || { n=${fixed:-$slots}; budget=480; }
+  echo "fleet-train-plan: $why — $n shard(s) at the ${budget}s floor" >&2
 else
   tests=$(field "$first" tests); total=$(field "$first" total)
   if [ -n "$fixed" ]; then n=$fixed
   else
+    # more than a node's growth per free slot ⇒ open the pool's whole width now
+    [ -z "$slots" ] || ! awk -v t="$total" -v s="$scale" -v k="$slots" -v g="$((ACK_TARGET + ACK_GROW))" \
+      'BEGIN { exit !(t * s / k > g) }' || max=$ACK_CAP
     n=$(awk -v t="$total" -v s="$scale" -v g="$target" 'BEGIN { x = t * s / g; n = int(x); if (n < x) n++; print n }')
     [ "$n" -ge "$min" ] || n=$min
     [ "$n" -le "$max" ] || n=$max
@@ -108,11 +134,13 @@ ${prefix}_step_minutes=$step
 ${prefix}_job_minutes=$job
 EOF
 )
+[ -z "$slots" ] || out=$(printf '%s\n%s_slots=%s\n%s_solo_secs=%s' "$out" "$prefix" "$slots" "$prefix" "$solo")
 printf '%s\n' "$out"
 [ -z "${GITHUB_OUTPUT:-}" ] || printf '%s\n' "$out" >> "$GITHUB_OUTPUT"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   if [ -n "$why" ]; then note="预测不出（${why}），按下限"
   else note="选中 ${tests} 个测试、合计约 ${total}s（×${scale}）"; fi
+  [ -z "$slots" ] || note="$note · 空机位 ${slots}、单测超 ${solo}s 独占一片"
   printf '| %s | %s | %s 片 | 最重一片约 %ss | 每次上限 %ss（截断重跑一次）| 步骤 %s 分钟 |\n' \
     "$prefix" "$note" "$n" "$heavy" "$budget" "$step" >> "$GITHUB_STEP_SUMMARY"
 fi

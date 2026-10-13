@@ -371,6 +371,7 @@
 0.4 train-push-cancels
 4.2 train-red-holds-lane
 4.7 train-shard-timeout
+0.7 train-shards-over-slots
 0.2 train-superseded-red
 0.1 trust-name-borrowed
 0.1 two-hubs-double-refresh
