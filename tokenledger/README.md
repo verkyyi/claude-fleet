@@ -929,6 +929,7 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.spare_max` | 5 | spares per machine, at most — within `fleet.node_user_cap.<machine>` − the logins handed out there |
 | `fleet.clusters` | — | the clusters that keep spare **pods** (claude-fleet#3553): each one's name as its fleet-ops reports it (`CCQUOTA_FLEET_PROVISIONER` set, hello `cluster_ops`). With `fleet.spares` on and the account key set, a newcomer placed on a cluster (`fleet.auto_assign` or an assign naming it) is handed a ready pod of their own — bound, not started — and removing them destroys the pod and starts a fresh one; `docs/dev/MANAGED-LINUX.md` «Spare pods» |
 | `fleet.spare_max.<cluster>` | `fleet.spare_max` | spare pods one cluster keeps, within `fleet.node_user_cap.<cluster>` − the pods people hold |
+| `fleet.user_pod_split.<principal>` | — | `owner/name,…` (≤ 8): that person's SECOND pod in the cluster where they have one, for these repos — placement sends them there, the door adds `<login>.<repo>`; "" makes no more (a standing one is removed by hand) — claude-fleet#3562 |
 | `fleet.entry` | off | the direct door's book (claude-fleet#3068): people's keys, address names and homes, pushed to their home machines; the keys page `/fleet/keys` (claude-fleet#3069) |
 | `fleet.entry_domain` | — | the zone every address lives under, `cf.example.com` → `<name>.cf.example.com`; unset, the keys page says 「地址还没配好」 |
 | `fleet.node_user_cap.<machine>` | 10 | how many logins the machine may hold (handed out + spare) |

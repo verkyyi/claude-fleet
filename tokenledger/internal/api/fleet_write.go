@@ -1501,6 +1501,7 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			upOn[r.EndpointID] = true
 		}
 	}
+	split := s.splitPods() // claude-fleet#3562: a person's second pod takes its repos alone
 	seen := map[string]bool{}
 	// skipped says why a machine where the caller has a login gave no
 	// candidate (claude-fleet#2882): the refusal names it, never drops it.
@@ -1566,6 +1567,11 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			}
 			c.Score = math.Round(c.Score*weight*1000) / 1000
 		}
+		if sp, ok := split[strings.ToLower(firstLabel(r.Hostname))]; ok && node == "auto" && c.Eligible && !splitTakes(sp.Split, repo) {
+			// A second pod (claude-fleet#3562) is for its repos: auto
+			// passes it over for anything else, a name still asks.
+			c.Eligible, c.Excluded = false, excludedSplit+sp.Split
+		}
 		if r.State == fleetStateDown && c.Eligible {
 			c.Eligible, c.Excluded = false, excludedDown
 		}
@@ -1605,6 +1611,23 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 		if best < 0 || (pl.Candidates[best].FleetID == last && c.FleetID != last) ||
 			((c.FleetID == last) == (pl.Candidates[best].FleetID == last) && better(c, pl.Candidates[best])) {
 			best = i
+		}
+	}
+	if node == "auto" && repo != "" && len(split) > 0 {
+		// The repo is on a second pod's list and that pod can take it: there
+		// (claude-fleet#3562); it cannot — wherever it would have gone.
+		pick := -1
+		for i, c := range pl.Candidates {
+			sp, ok := split[strings.ToLower(firstLabel(c.Machine))]
+			if !ok || !c.Eligible || !splitTakes(sp.Split, repo) || (p.Person != "" && !strings.EqualFold(sp.PrincipalID, p.Person)) {
+				continue
+			}
+			if pick < 0 || better(c, pl.Candidates[pick]) {
+				pick = i
+			}
+		}
+		if pick >= 0 {
+			best = pick
 		}
 	}
 	if best < 0 && len(declined) > 0 {
@@ -1866,6 +1889,8 @@ const (
 	// (claude-fleet#2477) — its node reports the fleet `down`; a start sent
 	// there opens nothing.
 	excludedDown = "tmux 服务没在跑"
+	// excludedSplit: a person's second pod, for its own repos (claude-fleet#3562)
+	excludedSplit = "这个 pod 只开 "
 )
 
 // fleetStateDown is the state a node reports for a fleet whose tmux server is
@@ -2040,6 +2065,17 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				body.Value = l.String()
+			}
+		case strings.HasPrefix(body.Key, UserPodSplitPrefix) && principalKeyRE.MatchString(body.Key[len(UserPodSplitPrefix):]):
+			// A person's second pod (claude-fleet#3562): owner/name,…;
+			// "" makes no more (a standing one is removed by hand).
+			if body.Value != "" {
+				v, err := ParseUserPodSplit(body.Value)
+				if err != nil {
+					httpError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				body.Value = v
 			}
 		case strings.HasPrefix(body.Key, PersonBudgetPrefix) && principalKeyRE.MatchString(body.Key[len(PersonBudgetPrefix):]):
 			// A person's budget (claude-fleet#1977): 5h=<tokens>,week=<tokens>;

@@ -831,6 +831,27 @@ destroy (#3772). BREAK-IT `spare-pod-leaks` drills it on this machine (the
 provisioner against a stand-in API + the hub's Go test) and on kind
 (`deploy/k8s/provisioner/kind-drill.sh`).
 
+### A second pod for some repos
+
+(issue #3562, EPIC #3500 R1) One pod's ceiling only goes so far, and two big repos
+in one pod slow each other down. The hub setting
+`fleet.user_pod_split.<principal>` = `owner/name,…` (at most 8, `PUT /v1/fleet/settings`) gives that person a second pod in the cluster where
+they already hold one (`tokenledger/internal/api/fleet_user_pod_split.go`):
+
+| | What |
+|---|---|
+| Made | at the spare pass, once their first pod's login is ready: a pod of their own (the 「现开」 road) under the same principal and the **same login**, a new `u-<nonce>`, its `fleet_cluster_pods` row's `split` = the list; counted in `fleet.node_user_cap.<cluster>`. One second pod per person per cluster; a changed list moves the row's |
+| Placement | a start for a listed repo goes to the second pod when it can take it (else wherever it would have gone — never refused for this); auto never sends anything else there (「这个 pod 只开 …」 in the reason); naming the pod still asks it |
+| The door | each listed repo is one more name, `<login>.<repo>` (the repo's name lower-cased to `a-z 0-9 -`, the whole ≤ 32): routed to the second pod and logged in there as `<login>` (the route's `pod_login`, `bin/fleet-door.sh`). The person's own name stays their first pod; a name two rows claim (two repos of one name) routes neither |
+| The list | both pods are the same person's accounts, so the panel and every list show both pods' sessions — nothing to pick |
+
+The person adds the repos to the second pod as on any machine (添加仓库…). An
+emptied setting makes no new pod and destroys none: the second pod goes the way any
+pod does — `fleet hub accounts remove <principal> --host u-<nonce>`. No setting and
+no split row ⇒ placement and the door byte for byte as before
+(`TestUserPodSplitOffAddsNothing`). A door older than this change logs in as
+`<login>.<repo>`, which the pod refuses — nothing lands on the wrong pod.
+
 ## Throwaway Jobs
 
 (issue #3552, EPIC #3500 C7) A session in a person's pod hands a full test run,

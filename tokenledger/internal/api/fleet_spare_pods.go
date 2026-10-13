@@ -283,6 +283,15 @@ func (s *Server) replenishClusterSpares(now time.Time) bool {
 				queued = true
 			}
 		}
+		// A person's second pod (claude-fleet#3562): counted as people's
+		// pods before the spares are sized.
+		if s.ensureSplitPods(cluster, pic, settings, now) {
+			queued = true
+			if pic, err = s.clusterPicture(cluster); err != nil {
+				log.Printf("fleet: spare pods of %s: %v", cluster, err)
+				continue
+			}
+		}
 		target := s.clusterSpareTarget(cluster, settings, pic.used)
 		// Over: the newest ready spares go (a pod still on its way up is
 		// left to finish — its pod already stands).
@@ -438,7 +447,7 @@ func (s *Server) holdsClusterPod(principal, cluster string) bool {
 		return true // never hand a second one on a read that failed
 	}
 	for _, p := range pods {
-		if p.Held() && strings.EqualFold(p.PrincipalID, principal) {
+		if p.Held() && p.Split == "" && strings.EqualFold(p.PrincipalID, principal) {
 			return true
 		}
 	}
@@ -526,17 +535,22 @@ func (s *Server) placeOnCluster(p *store.Principal, cluster string, now time.Tim
 		return false
 	}
 	log.Printf("fleet: no spare pod ready on %s: starting %s for %s", cluster, a.Hostname, p.ID)
-	go func() {
-		s.startClusterPod(cluster, *a, strings.TrimSpace(s.setting(UserPodLimitsPrefix+p.ID)))
-		if l := podLabel(p.ID); l != "" {
-			if res, err := s.clusterOp(context.Background(), cluster, control.ClusterTicket{
-				Op: control.ClusterBindUserPod, Pod: a.Hostname, Principal: l}); err != nil || res.RC != 0 {
-				log.Printf("fleet: bind %s to %s: %s", a.Hostname, p.ID, clusterOpWhy(res, err))
-			}
-		}
-		s.dispatchAccounts()
-	}()
+	go s.startOwnClusterPod(cluster, *a, p.ID)
 	return true
+}
+
+// startOwnClusterPod starts a pod recorded as principal's own (the pool's
+// 「现开」, or their second pod — claude-fleet#3562) under their ceiling,
+// labels it theirs, and sends the login's create.
+func (s *Server) startOwnClusterPod(cluster string, a store.FleetAccount, principal string) {
+	s.startClusterPod(cluster, a, strings.TrimSpace(s.setting(UserPodLimitsPrefix+principal)))
+	if l := podLabel(principal); l != "" {
+		if res, err := s.clusterOp(context.Background(), cluster, control.ClusterTicket{
+			Op: control.ClusterBindUserPod, Pod: a.Hostname, Principal: l}); err != nil || res.RC != 0 {
+			log.Printf("fleet: bind %s to %s: %s", a.Hostname, principal, clusterOpWhy(res, err))
+		}
+	}
+	s.dispatchAccounts()
 }
 
 // clusterPodOf is the pod row behind host when host is a pod the hub made and

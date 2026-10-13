@@ -158,6 +158,11 @@ func (s *Server) entryRouteList() (control.EntryRouteList, error) {
 		byLogin[h.Login] = append(byLogin[h.Login], control.EntryRoute{
 			Login: h.Login, Principal: h.Person, Service: strings.ToLower(firstLabel(h.Machine))})
 	}
+	// A person's second pod (claude-fleet#3562): <login>.<repo> beside their
+	// own name — a name both claim routes neither.
+	for n, rs := range s.splitRoutes() {
+		byLogin[n] = append(byLogin[n], rs...)
+	}
 	logins := make([]string, 0, len(byLogin))
 	for l := range byLogin {
 		logins = append(logins, l)

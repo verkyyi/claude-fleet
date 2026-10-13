@@ -687,7 +687,7 @@ ddown() {
 }
 
 drill_door_wrong_pod() {
-  CAP=30   # two stand-in pods, the door, six arrivals
+  CAP=30   # two stand-in pods, the door, six arrivals, the second pod's name
   local t0 out pa pb fp1; local -a eopts
   erig door
   mkdir -p "$E/rt/bin" "$E/door"; ln -s "$BIN/fleet-door.sh" "$E/rt/bin/fleet-door.sh"
@@ -739,10 +739,25 @@ PY
   out=$(ssh "${eopts[@]}" -i "$E/k1" "$ME@127.0.0.1" hostname </dev/null 2>"$E/ssh.err") \
     && { WHY="6: a login two pods claim got in: [$out]"; ddown; return 1; }
   case "$out" in *pod=*) WHY="6: a pod answered [$out]"; ddown; return 1 ;; esac
+  # 7. a person's second pod (issue #3562): <login>.<repo> → that pod, logged in as <login>;
+  #    a bad pod_login in the book routes nowhere (the script itself, `id` / `ssh` shimmed)
+  mkdir -p "$E/shim"
+  printf '#!/bin/sh\necho "%s.web"\n' "$ME" > "$E/shim/id"
+  printf '#!/bin/sh\nfor a; do printf "%%s|" "$a"; done; echo\n' > "$E/shim/ssh"
+  chmod +x "$E/shim/id" "$E/shim/ssh"
+  printf '{"logins":{"%s.web":{"service":"u-bbbb2","pod_login":"%s"}}}' "$ME" "$ME" > "$E/book7.json"
+  out=$(PATH="$E/shim:$PATH" FLEET_ENTRY_BOOK="$E/book7.json" FLEET_DOOR_KEY="$E/door/id_ed25519" \
+          SSH_CONNECTION="127.0.0.1 1 127.0.0.1 2" SSH_ORIGINAL_COMMAND=hostname bash "$BIN/fleet-door.sh" 2>"$E/ssh.err")
+  case "$out" in *"|-l|$ME|"*"|u-bbbb2.fleet-workers.svc.cluster.local|"*) ;;
+    *) WHY="7: the second pod's name: [$out] $(cat "$E/ssh.err")"; ddown; return 1 ;; esac
+  printf '{"logins":{"%s.web":{"service":"u-bbbb2","pod_login":"x;y"}}}' "$ME" > "$E/book7.json"
+  out=$(PATH="$E/shim:$PATH" FLEET_ENTRY_BOOK="$E/book7.json" FLEET_DOOR_KEY="$E/door/id_ed25519" \
+          SSH_CONNECTION="127.0.0.1 1 127.0.0.1 2" bash "$BIN/fleet-door.sh" 2>"$E/ssh.err") \
+    && { WHY="7: a malformed pod_login went through: [$out]"; ddown; return 1; }
   SECS=$(since "$t0")
   sys_same || { ddown; return 1; }
   ddown
-  WHAT="门把每个登录送进表里它自己的 pod（u-aaaa1，指纹是本人的钥匙），命令 / SetEnv 点名别的 pod 不改去向；别人的钥匙在门口被拒、本人钥匙直连 pod 被拒；家搬到 u-bbbb2 门跟着走；两个 pod 认领同一登录则哪个也不去"
+  WHAT="门把每个登录送进表里它自己的 pod（u-aaaa1，指纹是本人的钥匙），命令 / SetEnv 点名别的 pod 不改去向；别人的钥匙在门口被拒、本人钥匙直连 pod 被拒；家搬到 u-bbbb2 门跟着走；两个 pod 认领同一登录则哪个也不去；第二个 pod 的门名 <登录>.<仓库> 以 <登录> 进那个 pod，坏的 pod_login 哪也不去"
 }
 
 drill_door_empty_table() {

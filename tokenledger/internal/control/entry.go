@@ -147,6 +147,10 @@ type EntryRoute struct {
 	Login     string `json:"login"`
 	Principal string `json:"principal"`
 	Service   string `json:"service"`
+	// PodLogin is the login the door logs in as on the pod when it is not
+	// Login: a person's second pod, reached as <login>.<repo>
+	// (claude-fleet#3562). "" = Login.
+	PodLogin string `json:"pod_login,omitempty"`
 }
 
 // EntryRouteList is EntryRoutesNodePath's answer: Routes the table, Logins

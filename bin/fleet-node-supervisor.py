@@ -4874,15 +4874,24 @@ def door_routes(lst):
     """{login: service} of a door list: one valid Service per login, never a
     login two rows name (the hub drops those; a list that still has one routes
     neither — door-wrong-pod)."""
+    return dict((l, v[0]) for l, v in door_route_rows(lst).items())
+
+
+def door_route_rows(lst):
+    """{login: (service, pod login)}: door_routes plus the login the door logs
+    in as on the pod — the row's own name, or a person's second pod's
+    `pod_login` (<login>.<repo> → <login>, issue #3562)."""
     seen, out = {}, {}
     for r in (lst or {}).get("routes") or []:
         if not isinstance(r, dict):
             continue
         login, svc = str(r.get("login") or ""), str(r.get("service") or "")
+        pl = str(r.get("pod_login") or "") or login
         seen[login] = seen.get(login, 0) + 1
-        if re.match(r"^[A-Za-z0-9._-]{1,64}$", login) and re.match(DOOR_SERVICE_RE, svc):
-            out[login] = svc
-    return dict((l, s) for l, s in out.items() if seen.get(l) == 1)
+        if re.match(r"^[A-Za-z0-9._-]{1,64}$", login) and re.match(DOOR_SERVICE_RE, svc) \
+                and re.match(r"^[A-Za-z0-9._-]{1,64}$", pl):
+            out[login] = (svc, pl)
+    return dict((l, v) for l, v in out.items() if seen.get(l) == 1)
 
 
 def door_account(login):
@@ -5412,7 +5421,8 @@ def _entry_converge(paths, ep, port, lst, force):
         book["error"] = why
         write_json(ep.book, book)
         return book
-    routes = door_routes(lst) if door else {}
+    rows = door_route_rows(lst) if door else {}
+    routes = dict((l, v[0]) for l, v in rows.items())
     verdict = door_eligible(sorted(lst["logins"]), routes) if door else entry_eligible(paths, sorted(lst["logins"]))
     want, logins_book, skipped = {}, {}, 0
     for login in sorted(lst["logins"]):
@@ -5438,6 +5448,8 @@ def _entry_converge(paths, ep, port, lst, force):
         logins_book[login] = {"person": str(ent.get("person") or ""), "fps": fps, "keys": len(lines)}
         if door:
             logins_book[login]["service"] = routes[login]
+            if rows[login][1] != login:
+                logins_book[login]["pod_login"] = rows[login][1]
         if names:
             logins_book[login]["names"] = names
     # the keys files: exactly <want>, each root 0644; what was there and is not
