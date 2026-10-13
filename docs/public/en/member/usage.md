@@ -91,7 +91,7 @@ Sessions run on fleet's machines: close the terminal, shut the laptop, switch to
 Everything you hand over on the ⚡ line is first written down by fleet, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
 
 - A task in a repository also gets a ticket (a number like `#128`), and the panel shows the ticket number; one tied to no repository shows its T number.
-- The hub's **任务** (Tasks) page lists all your task records; a record stays after its session ends.
+- The hub's **Tasks** page lists all your task records; a record stays after its session ends.
 - Tell a colleague "the T42 thing" and they can find it on the Tasks page.
 
 ## Reaping: when a session closes
