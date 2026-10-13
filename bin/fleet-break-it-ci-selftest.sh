@@ -146,6 +146,14 @@ drill_train_ack_down() {
     || { WHY="release-train.yml's Linux half does not fall back to ubuntu-latest without a pick"; return 1; }
   sed -n '/^  linux-pick:/,/^  linux:/p' "$wf" | grep -q "vars.FLEET_TRAIN_RUNNER != ''" \
     || { WHY="linux-pick runs with FLEET_TRAIN_RUNNER empty"; return 1; }
+  # a job after `train` reads train's verdict, never the implicit success(): train
+  # runs under always() beside jobs skipped on most trains (run 38375663311 went
+  # green and its hub plan / release were skipped)
+  out=$(awk 'function judge() { if (cond != "" && nd ~ /[[ ,]train[],]/ && cond !~ /always\(\)|cancelled\(\)/) print job; cond = "" }
+             /^  [a-z-]+:$/ { judge(); job = $1; nd = "" } /^    needs:/ { nd = $0 }
+             /^    if:/ { cond = $0; inif = 1; next } inif && /^      / { cond = cond $0; next } { inif = 0 }
+             END { judge() }' "$wf")
+  [ -z "$out" ] || { WHY="jobs after train with an implicit success(): $out"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-ack.XXXXXX"); t0=$(now)
   printf '%s' '{"runners":[{"name":"fleet-ack-cpvr9-runner-lflzh","status":"online","busy":true,"labels":[]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/up.json"
   printf '%s' '{"runners":[{"name":"fleet-ack-cpvr9-runner-lflzh","status":"offline","labels":[]},{"name":"fleet-acker-1","status":"online","labels":[{"name":"other"}]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/down.json"
