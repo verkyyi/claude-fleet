@@ -22,7 +22,8 @@ import (
 //
 //	POST  /v1/fleet/tickets                       {repo, title, body?, labels?, priority?,
 //	                                               parent?, origin?, number? (an import)}
-//	GET   /v1/fleet/tickets?repo=&state=&label=&parent=&since=&limit=
+//	GET   /v1/fleet/tickets?repo=&state=&label=&parent=&since=&limit=&mine=
+//	                                              (each ticket + `comments`, its thread's length)
 //	GET   /v1/fleet/tickets/<owner>/<name>/<N>    → {ticket, comments}
 //	PATCH /v1/fleet/tickets/<owner>/<name>/<N>    {title?, body?, state?, state_reason?,
 //	                                               labels?, priority?, parent?}
@@ -318,7 +319,24 @@ func (s *Server) ticketList(w http.ResponseWriter, r *http.Request, c ticketCall
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tickets": ts, "observed_at": time.Now().UTC().Format(time.RFC3339)})
+	// each with its thread's length, the list's 「N 条讨论」 (claude-fleet#3928)
+	counts, err := s.Store.TicketCommentCounts(ts)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]ticketListRow, len(ts))
+	for i, t := range ts {
+		out[i] = ticketListRow{FleetTicket: t, Comments: counts[store.TicketCountKey(t.Repo, t.Number)]}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tickets": out, "observed_at": time.Now().UTC().Format(time.RFC3339)})
+}
+
+// ticketListRow is one ticket of the list: the ticket and how many comments
+// its thread holds.
+type ticketListRow struct {
+	store.FleetTicket
+	Comments int `json:"comments"`
 }
 
 func (s *Server) ticketEdit(w http.ResponseWriter, r *http.Request, c ticketCaller, t store.FleetTicket) {

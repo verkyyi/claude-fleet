@@ -49,7 +49,7 @@ var appPagePaths = map[string]bool{
 
 // appPagePrefixes are the console's pages that carry one name under them
 // (/machines/<host>, /subscriptions/<id>, /admin/users/<principal>).
-var appPagePrefixes = []string{"/machines/", "/subscriptions/", "/admin/users/"}
+var appPagePrefixes = []string{"/machines/", "/subscriptions/", "/admin/users/", ticketPagesPrefix}
 
 // isAppPage says whether p (a path under AppPrefix, or an old one) is a
 // console page.
@@ -84,6 +84,11 @@ func isAppPage(p string) bool {
 // only: no old page answers at it.
 const mePagePath = "/me"
 
+// ticketPagesPrefix is one ticket's page under 任务 (C5, claude-fleet#3928):
+// /app/tasks/tickets/<owner>/<name>/<N>, where an old /fleet/tickets/… link
+// lands. A page of the new console only, as 我的 is.
+const ticketPagesPrefix = TasksPagePath + "/tickets/"
+
 // AdminPrefix is where the admin side of the new console is mounted.
 const AdminPrefix = "/admin"
 
@@ -116,9 +121,10 @@ var consolePages = []consolePage{
 	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3", live: true},
 	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3", live: true},
 	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
-	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
-	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5"},
-	{old: TicketsPagePath + "/", new: AppPrefix + TasksPagePath + "/tickets/", side: sideMe, owner: "C5", under: true},
+	// 任务 and 我的单子 are one page (C5): the tickets a tab of it
+	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5", live: true},
+	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5", live: true},
+	{old: TicketsPagePath + "/", new: AppPrefix + ticketPagesPrefix, side: sideMe, owner: "C5", live: true, under: true},
 	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6"},
 	// 我的额度 is folded into 我的用量 already; the page only moved on in
 	// the browser, a second hop.

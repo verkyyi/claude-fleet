@@ -930,6 +930,8 @@ func (s *Server) routes() *routeMux {
 	// 我的 (claude-fleet#3926): a page of the new console only — appMount
 	// serves it at /app/me; here is where it lands with no console build (404).
 	mux.Handle(mePagePath, s.appSide())
+	// one ticket under 任务 (claude-fleet#3928): the same, at /app/tasks/tickets/…
+	mux.Handle(ticketPagesPrefix, s.appSide())
 	// The new console's admin side (claude-fleet#3925): an admin's, and to
 	// anyone else what an unknown address answers (app_mount.go).
 	mux.Handle(AdminPrefix, s.adminSide(ui))

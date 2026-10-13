@@ -487,6 +487,45 @@ func (s *Store) TicketComments(repo string, n int64) ([]TicketComment, error) {
 	return out, rows.Err()
 }
 
+// TicketCommentCounts is how many comments each of ts has, keyed by
+// TicketCountKey (a ticket with none is absent) — the list's 「N 条讨论」 (claude-fleet#3928).
+func (s *Store) TicketCommentCounts(ts []FleetTicket) (map[string]int, error) {
+	out := map[string]int{}
+	for i := 0; i < len(ts); i += 200 {
+		part := ts[i:min(i+200, len(ts))]
+		where, args := make([]string, 0, len(part)), make([]any, 0, 2*len(part))
+		for _, t := range part {
+			where, args = append(where, "(repo = ? AND num = ?)"), append(args, NormRepo(t.Repo), t.Number)
+		}
+		rows, err := s.read.Query(`SELECT repo, num, COUNT(*) FROM fleet_ticket_comments WHERE `+
+			strings.Join(where, " OR ")+` GROUP BY repo, num`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var repo string
+			var n int64
+			var c int
+			if err := rows.Scan(&repo, &n, &c); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[TicketCountKey(repo, n)] = c
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// TicketCountKey is a ticket's key in TicketCommentCounts: <repo>#<N>.
+func TicketCountKey(repo string, n int64) string {
+	return NormRepo(repo) + "#" + strconv.FormatInt(n, 10)
+}
+
 func scanFleetTickets(rows *sql.Rows) ([]FleetTicket, error) {
 	defer rows.Close()
 	out := []FleetTicket{}

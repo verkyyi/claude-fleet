@@ -68,3 +68,32 @@ export function useDeviceCount() {
   }, []);
   return n;
 }
+
+// useLoad(url): one read a page draws from — loading, failed (the entry did
+// not answer, or answered no), retry. reload() re-reads in place, keeping
+// what is on screen until the answer comes.
+export type Load<T> = { data: T | null; loading: boolean; failed: boolean; reload: () => void };
+export function useLoad<T>(url: string): Load<T> {
+  const [s, set] = useState<{ data: T | null; loading: boolean; failed: boolean }>({ data: null, loading: true, failed: false });
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let live = true;
+    getJSON<T>(url).then((data) => live && set({ data, loading: false, failed: data === null }));
+    return () => { live = false; };
+  }, [url, n]);
+  return { ...s, reload: () => setN((x) => x + 1) };
+}
+
+// sendJSON: one write — the answer's body, or the entry's own sentence when
+// it says no ({error: "…"} or {error: {message}}).
+export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  const r = await fetch(url, {
+    method, headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }).catch(() => null);
+  if (r?.status === 401) { location.assign("/app/signin"); return { ok: false, error: "" }; }
+  const j = r ? await r.json().catch(() => null) : null;
+  if (r?.ok) return { ok: true, data: j as T };
+  const e = j?.error;
+  return { ok: false, error: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : "" };
+}
