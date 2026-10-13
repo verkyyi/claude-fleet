@@ -105,6 +105,9 @@ var routeAccess = map[string]string{
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,
 	RelayRevocationsPath: accessSelf, NodeRevocationsPath: accessSelf,
+	// The service door (claude-fleet#4003): a service principal's fcs_ token,
+	// scope by scope; nothing else opens it.
+	SvcPrefix: accessSelf,
 	// The team layer is read by every machine that applies it — a node's
 	// token, a client's certificate — and its PUT is refused to anyone but an
 	// admin by the handler itself.
@@ -141,6 +144,7 @@ var routeAccess = map[string]string{
 	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/gate": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/users/sessions": accessAdmin, "/v1/fleet/invites": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
 	"/v1/fleet/revocations":       accessAdmin,
+	SvcAdminPath:                  accessAdmin,
 	NodeRevokePath:                accessAdmin,
 	"/v1/fleet/credentials/audit": accessAdmin,
 	CredPolicyPath:                accessAdmin,
