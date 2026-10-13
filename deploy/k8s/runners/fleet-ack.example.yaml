@@ -155,7 +155,8 @@ spec:
         command:
         - /home/runner/run.sh
         # extras/ci-runner (fleet-ci-runner:<tag.sh>, built by ci-runner-image.yml):
-        # the ARC runner + the selftests' tools; buildctl stays for `node image`
+        # the official ARC runner (Ubuntu 24.04) + what ubuntu-latest carries for the
+        # selftests; buildctl for `node image`
         image: registry.example.com/acme/fleet-ci-runner:ci-TAG
         resources:
           limits:
@@ -166,9 +167,16 @@ spec:
             cpu: '1'
             ephemeral-storage: 2Gi
             memory: 2Gi
+        # the image's passwordless sudo, as on ubuntu-latest (root-only selftests);
+        # its job gate (ACTIONS_RUNNER_HOOK_JOB_STARTED) refuses any job but this
+        # repo's master push / dispatch / schedule runs of the workflows below
         securityContext:
-          allowPrivilegeEscalation: false
+          allowPrivilegeEscalation: true
         env:
+        - name: CI_GATE_REPO
+          value: verkyyi/claude-fleet
+        - name: CI_GATE_WORKFLOWS
+          value: release-train.yml selftests.yml ci-runner-image.yml
         - name: BUILDKIT_HOST
           value: tcp://buildkitd.arc-runners:1234
         - name: BUILDKIT_TLSDIR

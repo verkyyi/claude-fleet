@@ -1,23 +1,30 @@
 # fleet-ci-runner — the release train's Linux test runner in the Shenzhen cluster
 # (issue #3864, EPIC #3863 C1): the fleet-ack ARC scale set's image.
 #
-# The base is the cluster's own ARC runner image (Debian 12, the actions runner as
-# uid 1001 `runner`, bash 5 / python3 / jq / gh / node / git / buildctl — the last
-# keeps the train's `node image` job working on the same set). On top: what the
-# selftests reach for on GitHub's ubuntu-latest — tmux 3.5 (backports), zsh, fzf, shellcheck,
-# ssh-keygen, lsof, sqlite3, … — Go (its module cache pre-filled for
-# tokenledger/), Node 22, and the actions a shard uses, so a job neither installs
-# a tool nor crosses the Pacific for one.
+# The shards ran on GitHub's ubuntu-latest until now, and the selftests were written
+# against it: Ubuntu 24.04, tmux 3.4, Python 3.12, passwordless sudo, NO fzf (the
+# fzf checks skip there). So the base is the official ARC runner image — Ubuntu
+# 24.04 (noble), the actions runner as uid 1001 `runner` with passwordless sudo —
+# and on top only what ubuntu-latest carries that a selftest reaches for (zsh,
+# shellcheck, ssh-keygen, lsof, sqlite3, …), Go (its module cache pre-filled for
+# tokenledger/), Node 22, gh, buildctl (the train's `node image` job builds on the
+# cluster's buildkitd from the same set) and the actions a shard uses. A first
+# image on Debian 12 (tmux 3.3a, fzf 0.38, no sudo) went red on 19 selftests in a
+# full run on fleet-ack — every one an environment difference, none a bug.
 #
-# Built from the REPO ROOT (it reads tokenledger/go.{mod,sum}) by
-# extras/ci-runner/build.sh, tagged by extras/ci-runner/tag.sh: the same text ⇒
-# the same tag ⇒ nothing rebuilt.
-# BASE: the cluster's ARC runner image (build.sh's second argument, the repo
-# variable CI_RUNNER_BASE) — e.g. registry.example.com/acme/arc-runner:slimbase-…
-ARG BASE
-FROM ${BASE}
+# The job gate (bin/fleet-ci-job-gate.sh, as on our Macs) is the runner's
+# job-started hook: only this repo's master push / dispatch / schedule runs of the
+# named workflows, never a pull request — the scale set sets CI_GATE_REPO and
+# CI_GATE_WORKFLOWS.
+#
+# Built from the REPO ROOT by extras/ci-runner/build.sh, tagged by
+# extras/ci-runner/tag.sh: the same text ⇒ the same tag ⇒ nothing rebuilt.
+ARG RUNNER=ghcr.io/actions/actions-runner:2.338.0@sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807
+ARG BUILDKIT=docker.io/moby/buildkit:v0.16.0
+FROM ${BUILDKIT} AS buildkit
+FROM ${RUNNER}
 
-ARG DEBIAN_MIRROR=http://mirrors.aliyun.com/debian
+ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
 ARG GO_VERSION=1.25.14
 ARG GO_SHA256=a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712
 ARG GO_MIRROR=https://mirrors.aliyun.com/golang
@@ -29,23 +36,20 @@ ARG GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Debian's own packages, from the in-region mirror.
+# Ubuntu's own packages, from the in-region mirror — what ubuntu-latest has that
+# the selftests use. fzf deliberately absent (as there).
 RUN set -eux; \
-    for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
-      [ ! -f "$f" ] || sed -i -E "s#https?://(deb|security)\.debian\.org/debian(-security)?#${DEBIAN_MIRROR}\2#g" "$f"; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+      [ ! -f "$f" ] || sed -i -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu#${UBUNTU_MIRROR}#g" "$f"; \
     done; \
-    # tmux from bookworm-backports (3.5a, as on the Macs): bookworm's 3.3a does not
-    # open a mouse menu the sidebar selftest drives (#3864)
-    echo "deb ${DEBIAN_MIRROR} bookworm-backports main" > /etc/apt/sources.list.d/backports.list; \
     apt-get update; \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -t bookworm-backports tmux; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      zsh fzf shellcheck openssh-client openssh-server lsof sqlite3 rsync \
+      tmux zsh shellcheck openssh-client openssh-server lsof sqlite3 rsync \
       openssl procps psmisc iproute2 net-tools netcat-openbsd dnsutils bsdextrautils \
       util-linux file zip unzip zstd xz-utils bzip2 make gcc libc6-dev locales \
-      python3-cryptography python3-jwt python3-certifi python3-yaml \
-      ca-certificates curl git jq; \
-    sed -i 's/^# *\(en_US.UTF-8\)/\1/; s/^# *\(C.UTF-8\)/\1/' /etc/locale.gen; locale-gen; \
+      python3 python3-cryptography python3-jwt python3-certifi python3-yaml \
+      ca-certificates curl git jq gh time bc; \
+    locale-gen en_US.UTF-8 C.UTF-8 || true; \
     rm -rf /var/lib/apt/lists/*
 
 # Go, by its published sha256.
@@ -55,13 +59,20 @@ RUN set -eux; \
     tar -C /usr/local -xzf /tmp/go.tgz; rm /tmp/go.tgz; \
     ln -sf /usr/local/go/bin/go /usr/local/bin/go; ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
-# Node 22, by its published sha256 (the base's node 20 stays under it on PATH).
+# Node 22, by its published sha256.
 RUN set -eux; \
     curl -fsSL --retry 3 -o /tmp/node.txz "${NODE_MIRROR}/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz"; \
     echo "${NODE_SHA256}  /tmp/node.txz" | sha256sum -c -; \
     mkdir -p /opt/node22; tar -C /opt/node22 --strip-components=1 -xJf /tmp/node.txz; rm /tmp/node.txz; \
     for b in node npm npx; do ln -sf "/opt/node22/bin/$b" "/usr/local/bin/$b"; done; \
     node --version
+
+# buildctl, the same version as the cluster's buildkitd (the `node image` job).
+COPY --from=buildkit /usr/bin/buildctl /usr/local/bin/buildctl
+
+# The job gate: root's, read-only to the runner.
+COPY bin/fleet-ci-job-gate.sh /opt/fleet-ci/job-gate.sh
+RUN chown -R root:root /opt/fleet-ci && chmod 0755 /opt/fleet-ci /opt/fleet-ci/job-gate.sh
 
 ENV LANG=C.UTF-8 \
     GOPROXY=${GOPROXY} \
@@ -70,7 +81,8 @@ ENV LANG=C.UTF-8 \
     GOPATH=/home/runner/go \
     GOMODCACHE=/home/runner/go/pkg/mod \
     GOCACHE=/home/runner/.cache/go-build \
-    ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/home/runner/action-archive-cache
+    ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/home/runner/action-archive-cache \
+    ACTIONS_RUNNER_HOOK_JOB_STARTED=/opt/fleet-ci/job-gate.sh
 
 USER runner
 

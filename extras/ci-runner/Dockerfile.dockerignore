@@ -3,3 +3,4 @@
 !tokenledger/go.mod
 !tokenledger/go.sum
 !extras/ci-runner/actions.txt
+!bin/fleet-ci-job-gate.sh

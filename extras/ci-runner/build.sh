@@ -1,9 +1,7 @@
 #!/bin/bash
 # Build and push the fleet-ci-runner image (issue #3864) when its tag is new.
-# Usage: build.sh <image repo> <base image> [--force]
+# Usage: build.sh <image repo> [--force]
 #   <image repo>  e.g. registry.example.com/acme/fleet-ci-runner
-#   <base image>  the cluster's ARC runner image the Dockerfile builds on
-#                 (e.g. registry.example.com/acme/arc-runner:slimbase-…)
 #
 # Runs in the cluster, on a fleet-ack runner (.github/workflows/ci-runner-image.yml):
 # buildctl on $BUILDKIT_HOST (TLS from $BUILDKIT_TLSDIR), the repo root as the
@@ -17,9 +15,9 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-REPO=${1:-} BASE=${2:-} FORCE=${3:-}
-[ -n "$REPO" ] && [ -n "$BASE" ] && { [ -z "$FORCE" ] || [ "$FORCE" = --force ]; } \
-  || { echo 'usage: build.sh <image repo> <base image> [--force]' >&2; exit 2; }
+REPO=${1:-} FORCE=${2:-}
+[ -n "$REPO" ] && { [ -z "$FORCE" ] || [ "$FORCE" = --force ]; } \
+  || { echo 'usage: build.sh <image repo> [--force]' >&2; exit 2; }
 TAG=$(bash "$HERE/tag.sh" "$ROOT") || exit 1
 out() {
   printf '%s\n' "$@"
@@ -80,7 +78,6 @@ buildctl --addr "$BUILDKIT_HOST" ${tls[@]+"${tls[@]}"} build \
   --opt filename=Dockerfile \
   --opt platform=linux/amd64 \
   --opt build-arg:TAG="$TAG" \
-  --opt build-arg:BASE="$BASE" \
   --output "type=image,name=$REPO:$TAG,push=true" \
   --import-cache "type=registry,ref=$REPO:buildcache" \
   --export-cache "type=registry,ref=$REPO:buildcache,mode=max" \
