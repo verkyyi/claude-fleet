@@ -91,7 +91,8 @@ plant() {   # plant <category>
     processes) printf '%s 4242 01:02:03 /usr/bin/sleep\n1 1 9-00:00:00 launchd\n' "$U" > "$S/ps" ;;
     tmux) mkdir -p "$TT/tmux-$U"; : > "$TT/tmux-$U/default" ;;
     outside-files) printf 'x\n' > "$OUT1/leftover.txt" ;;
-    user-tmp) mkdir -p "$S/sys/private/var/folders/zz/abc123/T"; : > "$S/sys/private/var/folders/zz/abc123/T/prev.txt" ;;
+    user-tmp) mkdir -p "$S/sys/private/var/folders/zz/abc123/T" "$S/sys/private/var/folders/zz/abc123/X"
+              : > "$S/sys/private/var/folders/zz/abc123/T/prev.txt"; : > "$S/sys/private/var/folders/zz/abc123/X/clone" ;;
     *) fail "the selftest has no plant for category '$1' — add one"; return 1 ;;
   esac
 }

@@ -167,6 +167,7 @@ fixture() {   # a used login: one thing per category
   mkdir -p "$R/private/var/folders/zz/abc123/T" "$R/private/var/folders/zz/abc123/C" "$R/private/var/folders/zz/abc123/0"
   : > "$R/private/var/folders/zz/abc123/T/prev-tmp.txt"; : > "$R/private/var/folders/zz/abc123/C/cache.db"
   : > "$R/private/var/folders/zz/abc123/stray"
+  mkdir -p "$R/private/var/folders/zz/abc123/X/clone.app"; : > "$R/private/var/folders/zz/abc123/X/clone.app/bin"
   : > "$ARCH/older.tar.gz"
   sleep 1   # every plant predates the wash (the check reads ctime by the second)
 }
@@ -199,6 +200,7 @@ done
 [ -f "$FLEET_INSTALL_DAEMON_DIR/com.example.y.plist" ] && ok "B another login's daemon kept" || fail "B another login's daemon removed"
 [ -f "$ARCH/older.tar.gz" ] && ok 'B the archive dir kept' || fail 'B the archive dir was swept'
 [ -d "$R/private/var/folders/zz/abc123/T" ] && [ -d "$R/private/var/folders/zz/abc123/C" ] && ok 'B the uid dir keeps its C/T skeleton' || fail 'B the uid dir lost its skeleton'
+[ -f "$R/private/var/folders/zz/abc123/X/clone.app/bin" ] && ok "B the SIP-held X is left alone (root's rm is refused there) and the check passes" || fail 'B the wash went into X'
 has "$W/out" "archive=$ARCH/$L-" 'B the archive is named'
 TGZ=$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null | head -1)
 [ -n "$TGZ" ] && tar -tzf "$TGZ" | grep -q "^$L/notes.txt" && ok 'B the archive holds the old home as <login>/' || fail "B archive: '$TGZ' $(tar -tzf "$TGZ" 2>&1 | head -3 | tr '\n' ' ')"

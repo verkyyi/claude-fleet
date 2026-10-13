@@ -329,7 +329,13 @@ fi
 # in the attic, never loaded back for a login about to be gone. Idempotent: a
 # login it never took over prints "nothing". No daemon on this machine, no step.
 step 1c "take $LOGIN out of the machine daemon (account forget)"
-if [ -f "$NODE_SUP" ]; then
+if [ -f "$NODE_SUP" ] && [ "$QUICK" = 1 ]; then
+  # --quick (issue #4044): no waiting up to 20 s for the daemon's own tick to
+  # drop the login's runs (12.3 s on macmini) — one second, then they are
+  # stopped (TERM, KILL after a second); the wash kills the uid's every
+  # process anyway
+  run sudo env FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1 /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
+elif [ -f "$NODE_SUP" ]; then
   run sudo /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
 else
   printf '  (no machine daemon here: %s)\n' "$NODE_SUP"

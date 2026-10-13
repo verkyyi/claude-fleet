@@ -62,7 +62,7 @@ CATEGORIES = [
     ("processes", "both", "该 UID 的进程"),
     ("tmux", "both", "tmux 套接字（/tmp/tmux-<uid>）"),
     ("outside-files", "both", "家以外属该 UID 的文件（/tmp /var/tmp /Users/Shared，存档目录除外）"),
-    ("user-tmp", "darwin", "该 UID 的每用户临时与缓存目录（/private/var/folders/<xx>/<yy>/，它的 $TMPDIR）"),
+    ("user-tmp", "darwin", "该 UID 的每用户临时与缓存目录（/private/var/folders/<xx>/<yy>/，它的 $TMPDIR；SIP 管的 X 除外）"),
 ]
 
 # Paths under the home that belong to a category of their own (the most specific
@@ -347,11 +347,14 @@ class Check(object):
                     out.append(u)
         return out
 
-    def user_tmp(self, top):
+    def user_tmp(self, top, skip=()):
         """What is in a per-uid dir: macOS makes its C/T/0 skeleton (empty dirs)
-        for every uid, so only what is not a directory counts."""
+        for every uid, so only what is not a directory counts. X holds macOS's
+        code-signing clones of app bundles: SIP-protected (even root cannot
+        remove it), app copies rather than the person's files — skipped (#4044)."""
         errs = []
         for d, dirs, files in os.walk(top, onerror=errs.append):
+            dirs[:] = [n for n in dirs if os.path.join(d, n) not in skip]
             for n in dirs + files:
                 full = os.path.join(d, n)
                 try:
@@ -389,7 +392,7 @@ class Check(object):
                       skip=(tmux, archive, self.a.home))
         if self.plat == "darwin":
             for u in self.user_dirs():
-                self.user_tmp(u)
+                self.user_tmp(u, skip=(os.path.join(u, "X"),))
         return [c for c, plat, _ in CATEGORIES if c in self.found and c not in self.skipped]
 
 
