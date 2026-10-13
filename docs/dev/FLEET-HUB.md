@@ -2059,7 +2059,29 @@ person's session.
   environment) and reports back through `Server.SvcRunFinish(id, state, code,
   result, usage)`; a result off contract 5 (a report ≤ 1 MB, `meta.title`,
   `meta.summary` ≤ 60 characters) fails the run `output_invalid`. No runner ⇒
-  nothing is dispatched: runs wait and expire.
+  nothing is dispatched: runs wait and expire. `SvcRunFinishDetail` takes the
+  runner's own words on a failure (a stderr tail, the Job's events) — they go to
+  the hub's log and audit only; the caller sees the code.
+- **One retry** (claude-fleet#4007). A run that fails `infra_error` (a pod lost,
+  scheduling that never came, the credential proxy's 5xx, a result that could
+  not be handed back) on its FIRST attempt goes back in the queue under the same
+  `R<n>` — `attempt` 2, `queued_at` kept so it is first in line — inside what is
+  left of the deadline its first start fixed (`deadline_at`, kept on the retry;
+  less than a minute left ⇒ no retry). A retry that has not started by then ends
+  failed `infra_error`; one that runs past it ends `run_timeout`. No other code
+  is retried (`run_timeout` · `output_invalid` · `template_invalid` ·
+  `quota_*`), and never a second time. Audit `svc.run.retry`.
+- **`svc_degraded`** (claude-fleet#4007). The alert sweep (`RunNodeAlerts`,
+  leader `alerts`, a pass a minute) reads each principal's last 30 minutes:
+  more than 20 % of the runs that ended failed or expired (cancels count
+  neither way) and at least 3 did, or the p95 of queued → first start (a run
+  still queued counts until now) is over 10 minutes over at least 3 runs. Two
+  passes in a row ⇒ one `fleet_alerts` row (subject the principal, detail the
+  counts and codes), one `hub_audit` `svc.alert`, one log line `fleet alert:
+  svc_degraded <principal>: …` and one message to the hub's `FLEET_NOTIFY_CMD`
+  (run as `<cmd> "<message>"`, the node's convention; empty ⇒ log and record
+  only); at most one an hour per principal; cleared on the first pass that
+  finds it well. The message names codes and counts, never what a run wrote.
 - **The callback.** On a terminal state the hub POSTs the run's own GET body to
   `callback_url`, signed `X-Fleet-Signature: t=<unix>,v1=<hex
   hmac-sha256(secret, t + "." + body)>` (+ `X-Fleet-Run: R<n>`); a non-2xx is
@@ -2071,7 +2093,7 @@ person's session.
   principal, callback_prefix, rotate}` (https; http only for a loopback host);
   the signing secret (`fcb_…`) is printed once, at the first registration or a
   rotate, and lives in the caller's cluster Secret only.
-- **Audit.** `svc.run.submit` · `svc.run.start` · `svc.run.cancel` ·
+- **Audit.** `svc.run.submit` · `svc.run.start` · `svc.run.retry` · `svc.run.cancel` ·
   `svc.run.end` (with the state and code) · `svc.run.callback` (ok · retry ·
   failed) · `svc.callback`.
 

@@ -258,7 +258,13 @@ type Server struct {
 	// FLEET_USAGE_SILENT_ALERT_SECS, 30 min). Negative turns it off; zero is
 	// the default.
 	UsageSilentAfter time.Duration
-	usageSilent      usageSilentWatch
+	// NotifyCmd is the hub's FLEET_NOTIFY_CMD (claude-fleet#4007): a notifier
+	// run as `<cmd> "<message>"` — the node's convention — when svc_degraded
+	// is raised; empty = the alert is only logged and recorded. Notify, when
+	// set, replaces it (tests).
+	NotifyCmd   string
+	Notify      func(msg string)
+	usageSilent usageSilentWatch
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
@@ -375,6 +381,11 @@ type Server struct {
 	spareAlertMu    sync.Mutex
 	spareAlertAt    time.Time
 	spareEmptySince map[string]time.Time
+	// svcAlert* pace svc_degraded (claude-fleet#4007): when the last pass
+	// ran, and which principals were degraded on it (a raise needs two).
+	svcAlertMu   sync.Mutex
+	svcAlertAt   time.Time
+	svcAlertSeen map[string]bool
 
 	// relayLocks serialises relay dispatch per target endpoint
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
