@@ -4361,6 +4361,38 @@ def _account_running(paths, login):
     return False
 
 
+def _account_pids(paths, login):
+    st = read_json(paths.state_file, {})
+    return sorted(set(int(x["pid"]) for kind in ("children", "tasks")
+                      for name, x in (st.get(kind) or {}).items()
+                      if name.startswith(login + "/") and x.get("pid") and pid_alive(x["pid"])))
+
+
+def _account_stop(paths, login):
+    """Stop what still runs as <login> after the daemon dropped it (#3379): each
+    run is its own process group (start_new_session) — TERM it, then KILL after
+    FLEET_NODE_FORGET_KILL_WAIT seconds. True once nothing of it runs."""
+    for sig, wait in ((signal.SIGTERM, env_num("FLEET_NODE_FORGET_KILL_WAIT", 5)), (signal.SIGKILL, 5)):
+        pids = _account_pids(paths, login)
+        if not pids:
+            return True
+        for pid in pids:
+            for kill in (os.killpg, os.kill):
+                try:
+                    if kill is os.killpg and os.getpgid(pid) != pid:
+                        continue
+                    kill(pid, sig)
+                    break
+                except OSError:
+                    pass
+        print("fleet-node-supervisor: %s's run(s) %s did not end — sent %s"
+              % (login, " ".join(map(str, pids)), "TERM" if sig == signal.SIGTERM else "KILL"), file=sys.stderr)
+        end = now() + wait
+        while now() < end and _account_running(paths, login):
+            time.sleep(0.2)
+    return not _account_running(paths, login)
+
+
 def _node_agent_stale(paths):
     """The machine's node agent still runs on a logins/ it read before a change."""
     cs = (read_json(paths.state_file, {}).get("children") or {}).get("node-agent") or {}
@@ -4442,8 +4474,10 @@ def account_forget(paths, login, force=False):
         end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
         while now() < end and (_account_running(paths, login) or (gone_env and _node_agent_stale(paths))):
             time.sleep(0.2)
-        if _account_running(paths, login):
-            print("fleet-node-supervisor: %s's tasks still run %ss on — the daemon has not dropped them"
+        # a run the daemon dropped but that will not end by itself (a git fetch
+        # hung on the network, #3379) must not fail the removal: stop it
+        if _account_running(paths, login) and not _account_stop(paths, login):
+            print("fleet-node-supervisor: %s's tasks still run %ss on and did not stop on TERM/KILL"
                   % (login, env_num("FLEET_NODE_RELEASE_WAIT", 20)), file=sys.stderr)
             return 1
     agent_dir = _agent_dir_retire(paths, login)
