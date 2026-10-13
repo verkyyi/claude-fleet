@@ -668,7 +668,13 @@ class LinuxNode(unittest.TestCase):
         with patch.object(s, 'MAC', False), patch.dict(os.environ, dict(pod, FLEET_NODE_UPDATE_OWNER='image')):
             t = s.default_table(s.Paths())
             self.assertEqual(([c['name'] for c in t['children']], t['tasks']), (['node-agent'], []))
+            # …up with no login yet: the hub's create comes down its own link (#3554)
+            self.assertEqual(t['children'][0]['requires'], [str(Path(s.Paths().state, 'machine.env'))])
             self.assertEqual(s.node_environment().get('FLEET_POD_LOGIN'), 'fleetu7')
+        with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod'}):
+            os.environ.pop('FLEET_POD_LOGIN', None)
+            agent = [c for c in s.default_table(s.Paths())['children'] if c['name'] == 'node-agent'][0]
+            self.assertTrue(any(r.endswith('*.env') for r in agent['requires']))   # a shared node waits, as before
         with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod',
                                                                     'FLEET_POD_LOGIN': ''}):
             self.assertFalse(s.pod_own())
