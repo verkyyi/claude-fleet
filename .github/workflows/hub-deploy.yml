@@ -204,6 +204,20 @@ jobs:
       # laid over deploy/k8s/, so every path below is unchanged; the prod
       # environment's secret FLEET_DEPLOY_OVERLAY_SSH_KEY is its read-only deploy
       # key. Not set ⇒ the overlays this tree still carries (# compat-1v: 下一批删).
+      # A missing key must say so, not 404 (claude-fleet#3860): with no ssh-key,
+      # checkout asks the REST API with GITHUB_TOKEN, which never sees a private
+      # repo — "Not Found" named neither the repo nor the credential.
+      - name: The overlay repo's deploy key is here
+        if: vars.FLEET_DEPLOY_OVERLAY_REPO != ''
+        env:
+          OVERLAY_REPO: ${{ vars.FLEET_DEPLOY_OVERLAY_REPO }}
+          OVERLAY_KEY_SET: ${{ secrets.FLEET_DEPLOY_OVERLAY_SSH_KEY != '' }}
+        run: |
+          [ "$OVERLAY_KEY_SET" = true ] || {
+            echo "::error::cannot read $OVERLAY_REPO: secret FLEET_DEPLOY_OVERLAY_SSH_KEY (environment prod, the repo's read-only deploy key) is empty here — a release-train call must pass it (secrets: inherit)"
+            exit 1
+          }
+
       - name: Fetch the deployment's overlays
         if: vars.FLEET_DEPLOY_OVERLAY_REPO != ''
         uses: actions/checkout@v4

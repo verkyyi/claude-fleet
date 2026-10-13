@@ -512,6 +512,10 @@ jobs:
     uses: ./.github/workflows/hub-deploy.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
+    # A called workflow sees no secret the caller does not hand it — not even its
+    # own environment's (claude-fleet#3860: FLEET_DEPLOY_OVERLAY_SSH_KEY arrived
+    # empty and checkout asked the REST API for the private overlay repo, 404).
+    secrets: inherit
 
   release:
     # The last job, so `--train` finds every other job of this run finished.

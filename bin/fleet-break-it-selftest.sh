@@ -4352,6 +4352,9 @@ drill_train_hub_stable_split() {
   done
   printf '%s\n' "$v" | grep -q 'sha: \${{ needs.board.outputs.train_sha }}' \
     || { WHY="the hub deploy ($job) is not handed TRAIN_SHA"; return 1; }
+  # a called workflow sees no secret it is not handed — the overlay repo's deploy key (#3860)
+  printf '%s\n' "$v" | grep -Eq '^    secrets: inherit' \
+    || { WHY="the hub deploy ($job) passes no secrets — FLEET_DEPLOY_OVERLAY_SSH_KEY arrives empty (claude-fleet#3860)"; return 1; }
   grep -q 'fleet-release-publish.sh "\$TRAIN_SHA"' "$wf" || { WHY="the train does not publish TRAIN_SHA (bin/fleet-release-publish.sh \"\$TRAIN_SHA\")"; return 1; }
   grep -Eq 'fleet-stable.sh move "\$TRAIN_SHA" .*--train ' "$wf" || { WHY="the train does not move stable to TRAIN_SHA with --train"; return 1; }
   grep -Eq 'fleet-stable.sh .*--force' "$wf" && { WHY="--force is in the train"; return 1; }
