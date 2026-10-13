@@ -452,32 +452,32 @@ drill_service_failed_unseen() {
 }
 
 # ---- services-elsewhere-rollback (#3978): the hub hands this login the same
-# person's services on every machine; one of them down on m4 read FAIL in
-# macmini's doctor, and install-sync rolls back on a FAIL the old version lacked.
+# person's services on every machine; one of them down on mac-a read FAIL in
+# mac-b's doctor, and install-sync rolls back on a FAIL the old version lacked.
 drill_services_elsewhere_rollback() {
   CAP=15; local sb t0 d tags
   sb="$WORK/svcelse"; mkdir -p "$sb"
   cat > "$sb/hub.json" <<'EOF'
 {"ts": 1791529440, "machines": [
- {"hostname": "m4.example.ts.net", "label": "m4", "services": [
-  {"name": "webchat", "kind": "service", "login": "verky", "state": "down", "last_rc": 3, "last_log_line": "fleet-webchat: another server already answers"}]},
- {"hostname": "macmini.example.ts.net", "label": "macmini", "services": [
-  {"name": "webchat", "kind": "service", "login": "verkyyi", "state": "running"}]}]}
+ {"hostname": "mac-a.example.ts.net", "label": "mac-a", "services": [
+  {"name": "webchat", "kind": "service", "login": "alice", "state": "down", "last_rc": 3, "last_log_line": "fleet-webchat: another server already answers"}]},
+ {"hostname": "mac-b.example.ts.net", "label": "mac-b", "services": [
+  {"name": "webchat", "kind": "service", "login": "alice2", "state": "running"}]}]}
 EOF
-  sv() { FLEET_SERVICES_CACHE="$sb/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_HOST=macmini \
-         FLEET_SERVICES_LOGIN=verkyyi FLEET_SERVICES_NOW=1791529500 python3 "$BIN/fleet-services.py" --doctor; }
+  sv() { FLEET_SERVICES_CACHE="$sb/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_HOST=mac-b \
+         FLEET_SERVICES_LOGIN=alice2 FLEET_SERVICES_NOW=1791529500 python3 "$BIN/fleet-services.py" --doctor; }
   grep -q 'FAIL\\ \*) fail services' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh no longer maps the services line"; return 1; }
   t0=$(now)
   d=$(sv)
   # install-sync's ruler (doctor_fail_tags): the tags of the doctor's FAIL lines
   tags=$(case "$d" in (FAIL\ *) echo services ;; esac)
-  [ -z "$tags" ] || { WHY="m4's service is a FAIL tag in macmini's doctor — the switch would roll back: $d"; return 1; }
-  case "$d" in "WARN "*"verky/webchat@m4"*) ;; *) WHY="m4's failed service is no longer named: $d"; return 1 ;; esac
-  sed 's/"verkyyi", "state": "running"/"verkyyi", "state": "down"/' "$sb/hub.json" > "$sb/h2" && mv "$sb/h2" "$sb/hub.json"
+  [ -z "$tags" ] || { WHY="mac-a's service is a FAIL tag in mac-b's doctor — the switch would roll back: $d"; return 1; }
+  case "$d" in "WARN "*"alice/webchat@mac-a"*) ;; *) WHY="mac-a's failed service is no longer named: $d"; return 1 ;; esac
+  sed 's/"alice2", "state": "running"/"alice2", "state": "down"/' "$sb/hub.json" > "$sb/h2" && mv "$sb/h2" "$sb/hub.json"
   d=$(sv)
-  case "$d" in "FAIL 2/2 failed: verkyyi/webchat@macmini"*) ;; *) WHY="this login's own failed service here is not FAIL: $d"; return 1 ;; esac
+  case "$d" in "FAIL 2/2 failed: alice2/webchat@mac-b"*) ;; *) WHY="this login's own failed service here is not FAIL: $d"; return 1 ;; esac
   SECS=$(since "$t0")
-  WHAT="同一个人在 m4 的服务已退出：macmini 上 verkyyi 的体检 services 行只 WARN 点名它，不是 FAIL，安装跟随不因它回滚；本机本登录的服务挂了照旧 FAIL"
+  WHAT="同一个人在 mac-a 的服务已退出：mac-b 上 alice2 的体检 services 行只 WARN 点名它，不是 FAIL，安装跟随不因它回滚；本机本登录的服务挂了照旧 FAIL"
 }
 
 drill_service_handwritten() {
