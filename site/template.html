@@ -61,6 +61,9 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 /* signed in (claude-fleet#3798): 进入控制台 · 退出 instead of 登录 · 试用 */
 .nav-r [hidden]{display:none}
 .out{margin:0}.out button{font:inherit;font-size:15px;color:var(--fleet-ink-2);background:none;border:0;padding:0 6px;cursor:pointer;white-space:nowrap}
+.links{display:flex;gap:22px;margin-right:10px;font-size:15px}
+.links a{color:var(--fleet-ink-2)}
+.links a:hover{color:var(--fleet-ink)}
 
 /* hero */
 .hero{position:relative;padding:84px 0 48px;text-align:center;overflow:hidden}
@@ -197,8 +200,13 @@ html[lang=zh-CN] .sh h2{font-size:44px;line-height:1.25;letter-spacing:0}
 .trust li:first-child{border-left:0}
 .trust svg{width:24px;height:24px;color:var(--fleet-clay)}
 .trust b{font:600 17px/1.3 var(--fleet-font-ui)}
-.trust-l{text-align:center;margin-top:20px;font-size:15px;color:var(--fleet-ink-2)}
-.trust-l a{color:var(--fleet-sand);border-bottom:1px solid rgba(236,211,184,.35)}
+.price{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:820px;margin:0 auto}
+.price .pc{background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:18px;padding:26px 26px 24px}
+.price .pc.hl{border-color:var(--fleet-clay-line);background:linear-gradient(0deg,var(--fleet-clay-soft),var(--fleet-clay-soft)),var(--fleet-surface)}
+.price h3{font-family:var(--fleet-font-display);font-size:22px;margin:0 0 6px}
+.price .pp{font-family:var(--fleet-font-display);font-size:34px;font-weight:700;margin:4px 0 10px}
+.price p{margin:0;color:var(--fleet-ink-2);font-size:15.5px}
+.price-note{text-align:center;color:var(--fleet-muted);font-size:14px;margin-top:18px}
 
 /* faq */
 .faq{max-width:760px;margin:0 auto}
@@ -220,6 +228,9 @@ footer .wrap{display:flex;gap:24px;align-items:center;flex-wrap:wrap}
 footer nav{display:flex;gap:8px 20px;margin-left:auto;flex-wrap:wrap}
 footer nav a{padding:6px 0}
 footer a:hover{color:var(--fleet-ink)}
+.oss{flex-basis:100%;margin:6px 0 0;font-size:14px;color:var(--fleet-muted)}
+.oss b{color:var(--fleet-ink-2);font-weight:500;margin-right:8px}
+.oss a{color:var(--fleet-sand);border-bottom:1px solid rgba(236,211,184,.35);margin-left:6px}
 .disc{width:100%;font-size:12.5px}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -228,6 +239,7 @@ footer a:hover{color:var(--fleet-ink)}
   .wrap{padding:0 20px}
   .nav .wrap{height:58px;gap:8px}
   .signin{display:none}
+  .links{display:none}
   .out button{padding:0 2px}
   .brand{font-size:17px} .brand svg{width:28px;height:28px}
   .nav .btn{height:38px;padding:0 14px;font-size:14px}
@@ -254,6 +266,7 @@ footer a:hover{color:var(--fleet-ink)}
   .trust li{padding:20px 16px}
   .trust li:nth-child(3){border-left:0}
   .trust li:nth-child(n+3){border-top:1px solid var(--fleet-line-2)}
+  .price{grid-template-columns:1fr}
   .end{padding:20px 0 80px}
   .end h2,html[lang=zh-CN] .end h2{font-size:32px}
   footer nav{margin-left:0}
@@ -272,6 +285,7 @@ footer a:hover{color:var(--fleet-ink)}
 <header class="nav"><div class="wrap">
   <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>ClaudeFleet</a>
   <div class="nav-r">
+    <nav class="links" aria-label="{{links_group}}"><a href="#what">{{nav_what}}</a><a href="#start">{{nav_start}}</a><a href="#price">{{nav_price}}</a></nav>
     <nav class="lang" aria-label="{{lang_group}}"><a href="/" hreflang="zh-CN" lang="zh-CN" data-set="zh"{{cur_zh}}>中</a><a href="/en/" hreflang="en" lang="en" data-set="en"{{cur_en}}>EN</a></nav>
     <a class="signin" href="/app" data-out>{{signin}}</a>
     <a class="btn btn-p" href="/app/try" data-out>{{try}}</a>
@@ -286,7 +300,7 @@ footer a:hover{color:var(--fleet-ink)}
   <p class="sub">{{sub}}</p>
   <div class="cta">
     <a class="btn btn-p" href="/app/try"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg>{{try}}</a>
-    <a class="btn" href="https://github.com/verkyyi/claude-fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>GitHub</a>
+    <a class="btn" href="/app" data-out>{{signin}}</a>
   </div>
   <p class="fine">{{fine}}</p>
 
@@ -380,11 +394,19 @@ footer a:hover{color:var(--fleet-ink)}
 <section class="sec" id="open" style="padding-top:0"><div class="wrap">
   <ul class="trust">
     <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg><b>{{t1}}</b></li>
-    <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></svg><b>{{t2}}</b></li>
+    <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><b>{{t2}}</b></li>
     <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><b>{{t3}}</b></li>
     <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg><b>{{t4}}</b></li>
   </ul>
-  <p class="trust-l"><a href="https://github.com/verkyyi/claude-fleet">{{trust_link}}</a></p>
+</div></section>
+
+<section class="sec" id="price" style="padding-top:0" aria-labelledby="price-h"><div class="wrap">
+  <div class="sh"><h2 id="price-h">{{price_h}}</h2></div>
+  <div class="price">
+    <div class="pc hl"><h3>{{price_trial}}</h3><p class="pp">{{price_trial_p}}</p><p>{{price_trial_d}}</p></div>
+    <div class="pc"><h3>{{price_own}}</h3><p class="pp">{{price_own_p}}</p><p>{{price_own_d}}</p></div>
+  </div>
+  <p class="price-note">{{price_note}}</p>
 </div></section>
 
 <section class="sec" id="faq" style="padding-top:0" aria-labelledby="faq-h"><div class="wrap faq">
@@ -400,7 +422,8 @@ footer a:hover{color:var(--fleet-ink)}
 
 <footer><div class="wrap">
   <a class="brand" href="{{path}}" style="font-size:15px"><svg style="width:24px;height:24px" aria-hidden="true"><use href="#mk"/></svg>ClaudeFleet</a>
-  <nav aria-label="ClaudeFleet"><a href="{{docs_path}}">{{docs}}</a><a href="{{security_path}}">{{security}}</a><a href="https://github.com/verkyyi/claude-fleet">GitHub</a><a href="/app">{{signin}}</a></nav>
+  <nav aria-label="ClaudeFleet"><a href="{{docs_path}}">{{docs}}</a><a href="{{security_path}}">{{security}}</a><a href="https://github.com/verkyyi/claude-fleet">{{oss}}</a><a href="/app">{{signin}}</a></nav>
+  <p class="oss"><b>{{oss}}</b>{{oss_line}}<a href="https://github.com/verkyyi/claude-fleet">{{oss_github}}</a><a href="{{selfhost_path}}">{{oss_selfhost}}</a></p>
   <p class="disc">{{disc}}</p>
 </div></footer>
 

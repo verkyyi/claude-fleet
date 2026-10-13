@@ -268,7 +268,7 @@ def render(lang, S, items):
         {'@type': 'WebSite', '@id': origin + '/#website', 'name': 'ClaudeFleet', 'url': url,
          'inLanguage': S['lang'], 'publisher': {'@id': origin + '/#org'}},
         {'@type': 'SoftwareApplication', '@id': origin + '/#app', 'name': 'ClaudeFleet',
-         'applicationCategory': 'DeveloperApplication', 'operatingSystem': 'macOS, Linux',
+         'applicationCategory': 'BusinessApplication', 'operatingSystem': 'Web, iOS, Android, macOS',
          'description': v['description'], 'url': url, 'inLanguage': S['lang'],
          'image': origin + S['og_image'], 'license': 'https://opensource.org/licenses/MIT',
          'isAccessibleForFree': True, 'publisher': {'@id': origin + '/#org'},
@@ -577,7 +577,7 @@ def crawl_files():
                                                         blurb(z['md']), S['llms_in_zh']))
         out += ['', '## ' + S['llms_site_h'], '',
                 '- [%s](%s%s): %s' % (S['llms_site_home'], O, S['path'], S['description_untimed']),
-                '- [GitHub](%s): %s' % (REPO_URL, S['t2']),
+                '- [GitHub](%s): %s' % (REPO_URL, S['oss_line']),
                 '', '## ' + S['llms_other_h'], '',
                 '- [llms-full.txt](%s/llms-full.txt): %s' % (O, S['llms_full']),
                 '- [%s](%s/%s): %s' % (other, O, other, S['llms_other_lang']), '']
