@@ -108,10 +108,17 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 
 机器升级时装的每一样都来自入口的发布包：`fleet` 本身、`ccquota`，以及仓库根目录 `release.json` 钉住版本的 Claude Code、Codex、tmux。`ccquota` 就在你的镜像里；其余几样要放进 `CCQUOTA_FLEET_RELEASE_ARTIFACTS` 指的目录，文件名是 `<名字>-<版本>-<系统>-<架构>`，例如 `codex-0.162.1-darwin-arm64`、`tmux-3.7c-linux-amd64`（Codex 还要一个同版本的 `codex-code-mode-host-…`）。Claude Code 缺了入口会自己从 npm 拉（源见 `CCQUOTA_FLEET_RELEASE_NPM`）。
 
-缺一个，入口拒绝打这一版的包，报错写着缺哪几个名字和下面这条命令。最省事的来源是**任何一个已经有这一版发布包的入口**（例如你跟随的 `stable` 的发布方）：它在 `/v1/fleet/release/<提交号>/artifacts/<名字>` 公开提供每个文件，并在签了名的清单里写着每个文件的大小和 sha256。下面这条命令先用那个入口的公钥核清单的签名，再逐个核 sha256，对得上才放进目录：
+缺一个，入口拒绝打这一版的包，报错写着缺哪几个名字和下面这条命令。来源有两条，挑一条：
+
+- **从别的入口取**：你知道一个已经有这一版发布包的入口（同一个团队的另一个入口，或你跟随的 `stable` 的发布方给过你的地址）时用。官方**不**对外提供公共入口，没有这样一个地址就直接走下面「自己放」。
+- **自己放**：从 Codex 和 tmux 各自的官方发布页取，见本节最后一段。
+
+##### 从别的入口取
+
+那个入口在 `/v1/fleet/release/<提交号>/artifacts/<名字>` 公开提供每个文件，并在签了名的清单里写着每个文件的大小和 sha256。下面这条命令先用那个入口的公钥核清单的签名，再逐个核 sha256，对得上才放进目录：
 
 ```sh
-UP=https://upstream.example.com                     # 已经有这一版发布包的入口
+UP=https://upstream.example.com                     # 换成你知道的那个入口；没有就跳到「自己放」
 SHA=$(git rev-parse stable)                         # §1.1 构建镜像的那一个提交
 curl -fsS $UP/v1/fleet/release/key > upstream-release.pub   # 它的发布公钥，和发布方核对一次
 python3 bin/fleet-release-fetch.py --hub $UP --pubkey upstream-release.pub \
@@ -122,7 +129,52 @@ python3 bin/fleet-release-fetch.py --hub $UP --pubkey upstream-release.pub \
 - 目录是入口容器里的 `/data/release-artifacts`（§1.5 的数据盘下面），Kubernetes 上同样放在数据盘上。
 - `--platforms` 和 `CCQUOTA_FLEET_RELEASE_PLATFORMS` 写同一组。
 - 每次升级前（`stable` 换了提交）再跑一次，只会取新版本的文件。
-- 不想从别的入口取，也可以自己按上面的文件名放进去：Codex 来自它的官方发布页，tmux 照仓库的 `conf/vendor-tmux.lock` 构建。放好后 `curl -fsS https://hub.example.com/v1/fleet/release/artifacts` 列出入口现在有哪些。
+- 放好后 `curl -fsS https://hub.example.com/v1/fleet/release/artifacts` 列出入口现在有哪些。
+
+##### 自己放
+
+没有上游入口时用。在 §1.1 构建镜像的那份仓库里（`git checkout stable`，并且已经跑过 `bin/fleet-client-pack.sh`）执行，版本号都从 `release.json` 读：
+
+| 制品 | 从哪来 | 怎么变成目录里的文件 |
+|---|---|---|
+| `codex-<版本>-<系统>-<架构>` | Codex 官方发布页 `github.com/openai/codex/releases/tag/rust-v<版本>` 的 `codex-<triple>.tar.gz` | 解压，里面只有一个文件 `codex-<triple>`，改名 |
+| `codex-code-mode-host-<版本>-<系统>-<架构>` | 同一页的 `codex-code-mode-host-<triple>.tar.gz` | 同上：解出 `codex-code-mode-host-<triple>`，改名 |
+| `tmux-<版本>-<系统>-<架构>` | §1.1 的 `fleet-client-pack.sh` 已按 `conf/vendor-tmux.lock` 下载并核过 sha256，放在 `tokenledger/internal/api/fleetclient/pack/vendor/tmux-<平台>` | 直接复制改名，不用自己构建 |
+| `claude-<版本>-<系统>-<架构>` | 不用放：入口自己从 npm 拉 | — |
+
+系统 / 架构和两边名字的对应（用 Codex 的 musl 版：静态链接，哪个 Linux 都能跑）：
+
+| `<系统>-<架构>` | Codex 的 `<triple>` | tmux 的 `<平台>` |
+|---|---|---|
+| `darwin-arm64` | `aarch64-apple-darwin` | `macos-arm64` |
+| `darwin-amd64` | `x86_64-apple-darwin` | `macos-x86_64` |
+| `linux-amd64` | `x86_64-unknown-linux-musl` | `linux-x86_64` |
+| `linux-arm64` | `aarch64-unknown-linux-musl` | `linux-arm64` |
+
+一段做完（只留你 `CCQUOTA_FLEET_RELEASE_PLATFORMS` 里有的那几行；国内下 GitHub 常断，`--retry` 会自己重试）：
+
+```sh
+A=/srv/fleet/data/release-artifacts                 # 入口容器里的 /data/release-artifacts
+v() { python3 -c 'import json,sys;print(json.load(open("release.json"))["components"][sys.argv[1]]["version"])' "$1"; }
+CX=$(v codex) TM=$(v tmux) T=$(mktemp -d)
+mkdir -p "$A"
+while read -r plat triple tplat; do
+  for n in codex codex-code-mode-host; do
+    curl -fL --retry 8 --retry-delay 5 --retry-all-errors -o "$T/$n.tar.gz" \
+      "https://github.com/openai/codex/releases/download/rust-v$CX/$n-$triple.tar.gz" &&
+    tar xzf "$T/$n.tar.gz" -C "$T" && install -m 0755 "$T/$n-$triple" "$A/$n-$CX-$plat" || echo "失败：$n $plat"
+  done
+  install -m 0755 "tokenledger/internal/api/fleetclient/pack/vendor/tmux-$tplat" "$A/tmux-$TM-$plat" || echo "失败：tmux $plat"
+done <<'EOF'
+darwin-arm64 aarch64-apple-darwin      macos-arm64
+linux-amd64  x86_64-unknown-linux-musl linux-x86_64
+EOF
+rm -rf "$T"; ls -l "$A"
+```
+
+- 打出一行「失败：…」就是那一个没放上，重跑这一段即可（已放好的会被同样的文件覆盖）。
+- `pack/vendor/` 里缺某个平台的 tmux：`fleet-client-pack.sh` 下载那一个时失败了，重跑它（它也走 GitHub）。
+- 放好后 `curl -fsS https://hub.example.com/v1/fleet/release/artifacts` 应当列出你每个平台的三样（`codex` · `codex-code-mode-host` · `tmux`），入口就能给这一版签名打包了。每次升级（[§4.2](#42-一次升级怎么走)）前，`release.json` 里的版本变了就再跑一次。
 
 这两张表和 §1.4 的键都登记在仓库的设置总表 `conf/fleet.conf.reference` 末尾「The hub's own settings」一段（地址类在它上面一段），每键一行：用途、必填与否、是不是密钥。表与它不一致时以它为准。
 
