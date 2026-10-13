@@ -4,7 +4,7 @@
 #   — the hub image the release train builds BESIDE its tests (issue #3867, EPIC
 #   #3863 C4), and the check that the one it deploys is that one.
 #
-# The train's `hub / build` (hub-deploy.yml, phase build) starts the moment the
+# The train's `hub build` (hub-deploy.yml, phase build) starts the moment the
 # train boards, builds prod-<sha7> of TRAIN_SHA with the OCI label
 # org.opencontainers.image.revision=<TRAIN_SHA> and pushes it; `hub / deploy`
 # (phase deploy) runs only once the tests are green and builds nothing. Between

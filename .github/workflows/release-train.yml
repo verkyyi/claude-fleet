@@ -41,7 +41,7 @@ name: release train
 #       `hub plan`  right after board — bin/fleet-train-hub.sh: does the hub
 #                   already run TRAIN_SHA's Go source and deploy/k8s/? (发起人拍板 9
 #                   — no new image then)
-#       `hub / build`  when it does not: hub-deploy.yml phase build, beside the
+#       `hub build`  when it does not: hub-deploy.yml phase build, beside the
 #                   tests, on the Linux runner the train picked (fleet-ack's
 #                   buildkitd + the registry's layer cache, else ubuntu-latest):
 #                   prod-<sha7> labelled TRAIN_SHA, pushed — a red train's image
@@ -621,7 +621,7 @@ jobs:
   hub:
     # hub-deploy.yml's one deploy job, on TRAIN_SHA (its environment `prod` and
     # its OIDC role are the same as when it runs by itself) — phase deploy: the
-    # image `hub / build` pushed beside the tests, by its digest (issue #3867).
+    # image `hub build` pushed beside the tests, by its digest (issue #3867).
     name: hub
     needs: [board, linux, gate, train, hub-plan, hub-build]
     # !cancelled(): a Linux shard lost and rescued leaves `linux` red; `train` judged it
@@ -645,7 +645,8 @@ jobs:
     # The hub image of TRAIN_SHA, built BESIDE the tests (issue #3867): pushing it
     # changes nothing live — only `hub` above deploys it, once the train is green.
     # The Shenzhen cluster's buildkitd when the train's Linux half is there.
-    name: hub
+    # Its own stage in the ledger (`hub build / build`), apart from the deploy's.
+    name: hub build
     needs: [board, hub-plan, linux-pick]
     # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
     if: "!cancelled() && needs.hub-plan.outputs.deploy == 'true'"
@@ -880,7 +881,7 @@ jobs:
     # on the summary. Bookkeeping: it never reds — a red here would stop
     # mac-follow (it follows only a green train) — and the move ignores it.
     name: ledger
-    needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, record, fail-fast, gate, train, hub-plan, hub, release]
+    needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, record, fail-fast, gate, train, hub-plan, hub-build, hub, release-stage, release]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -893,9 +894,8 @@ jobs:
       STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
       MERGES: ${{ needs.board.outputs.merges_json }}
       MOVED: ${{ needs.release.outputs.moved }}
-      RESULTS: ${{ needs.quarantine.result }} ${{ needs.plan.result }} ${{ needs.linux.result }} ${{ needs.record.result }} ${{ needs.gate.result }} ${{ needs.train.result }} ${{ needs.hub-plan.result }} ${{ needs.hub.result }}
+      RESULTS: ${{ needs.quarantine.result }} ${{ needs.plan.result }} ${{ needs.linux.result }} ${{ needs.record.result }} ${{ needs.gate.result }} ${{ needs.train.result }} ${{ needs.hub-plan.result }} ${{ needs.hub-build.result }} ${{ needs.hub.result }}
       RELEASE: ${{ needs.release.result }}
-      FLEET_HUB_URL: https://claudefleet.24haowan.com   # oss-ok: the hub the train publishes to, as the release job spells it (#3870)
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4

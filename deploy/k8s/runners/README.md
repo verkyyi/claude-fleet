@@ -8,7 +8,7 @@ daemon — native amd64, the hub and the registry's VPC endpoint a hop away —
 instead of on a Mac across the Pacific (docs/dev/MANAGED-LINUX.md «The ACK
 image»); and, when the repo variable `FLEET_TRAIN_RUNNER=fleet-ack` asks, the
 train's **Linux test shards** (issue #3864, below), and on the same pick its
-`hub / build` (issue #3867): the hub image built beside the tests by `buildctl`
+`hub build` (issue #3867): the hub image built beside the tests by `buildctl`
 on that daemon, its layer cache `<repo>:buildcache` in the registry, pushed over
 the VPC endpoint the repo variable `HUB_BUILD_PUSH_REPO` names (empty = `HUB_PUSH_REPO`).
 
