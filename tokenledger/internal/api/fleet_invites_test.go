@@ -242,16 +242,16 @@ func TestInviteRefusals(t *testing.T) {
 	}
 }
 
-// No code: the list alone decides, as before — and the refusal says the one
-// line to send an admin. A listed person never spends an invite.
+// No code: the list alone decides, as before — and someone it does not
+// name is sent to apply (claude-fleet#4050). A listed person never spends an
+// invite.
 func TestInviteNoCodeIsTheListAsBefore(t *testing.T) {
 	h := inviteHarness(t)
-	cb, body := h.signInWith(t, ghMallory)
-	if cb.StatusCode != http.StatusForbidden || !strings.Contains(body, "Nobody has invited") ||
-		!strings.Contains(body, "Please invite GitHub user mallory") {
-		t.Fatalf("no invite = %d:\n%s", cb.StatusCode, body)
+	cb, _ := h.signInWith(t, ghMallory)
+	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != ApplyPath || cookieNamed(cb, applicantCookie) == nil {
+		t.Fatalf("no invite = %d → %q; want 302 /apply with the applicant note", cb.StatusCode, cb.Header.Get("Location"))
 	}
-	if !hasAudit(h.audit(t), "refused", "not on the list") {
+	if !hasAudit(h.audit(t), "refused", notListedAudit) {
 		t.Errorf("audit = %+v", h.audit(t))
 	}
 	inv := h.mintInvite(t, "")
@@ -350,7 +350,7 @@ func TestInviteRidesFleetLogin(t *testing.T) {
 }
 
 // A refused sign-in while `fleet login` waits: the terminal's next poll is
-// the refusal, in the page's words, not ten minutes of waiting.
+// the refusal — where to apply — not ten minutes of waiting.
 func TestInviteRefusalReachesTheTerminal(t *testing.T) {
 	h := inviteHarness(t)
 	st := h.deviceStart(t, "")
@@ -359,23 +359,26 @@ func TestInviteRefusalReachesTheTerminal(t *testing.T) {
 	if cb.StatusCode != http.StatusFound || !strings.HasPrefix(to, LoginRefusedPath+"?r=") {
 		t.Fatalf("callback = %d → %q; want the refusal hop", cb.StatusCode, to)
 	}
+	if c := cookieNamed(cb, applicantCookie); c == nil || c.Path != ApplyPath {
+		t.Fatalf("the refused browser got no applicant note: %+v", c)
+	}
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+to, nil)
 	req.Header.Set("Accept", "text/html")
 	req.Header.Set("Accept-Language", "en")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noFollow.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "Please invite GitHub user mallory") {
-		t.Fatalf("hop page = %d:\n%s", resp.StatusCode, b)
+	// The terminal is told; the browser goes on to where it can ask (#4050).
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != ApplyPath {
+		t.Fatalf("hop page = %d → %q; want 302 /apply", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	code, poll := postJSON(t, &harness{srv: h.srv, http: h.http}, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
 	var res map[string]string
 	_ = json.Unmarshal(poll, &res)
 	if code != http.StatusForbidden || res["code"] != codeInviteRefused ||
-		!strings.Contains(res["reason"], "Nobody has invited mallory") || !strings.Contains(res["reason"], "Please invite GitHub user mallory") {
+		!strings.Contains(res["reason"], "not on the list yet") || !strings.Contains(res["reason"], h.http.URL+ApplyPath) {
 		t.Fatalf("poll = %d %s", code, poll)
 	}
 

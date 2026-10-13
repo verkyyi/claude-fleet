@@ -157,6 +157,9 @@
 #   apply-flood                                     tokenledger/internal/store access_requests.go (the one-pending
 #                                                   partial unique index) + internal/api access_requests.go (409, the
 #                                                   per-address limit); go test, when a toolchain is here
+#   apply-reaches-app                               tokenledger/internal/api not_listed.go + applicant.go (the not-listed
+#                                                   sign-ins mint ccq_applicant, Path /apply, read only by
+#                                                   applicantFrom); go test, when a toolchain is here
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2272,6 +2275,23 @@ drill_apply_flood() {
   fi
   WHAT='同一登录一条待审：表上的部分唯一索引兜底，第二次提交 409 并显示原来那条，同一地址一小时 5 条（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='8 个并发提交只留 1 条待审；页面第二次提交 409 显示原来那条；冷却期内交不了、撤回后能重交；同一地址第 6 条 429（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- apply-reaches-app (#4050, EPIC #4048 C2): a person the list does not name
+# signs in (GitHub, WeChat, a proven mail) and gets only the applicant note —
+# no principal, no hub_users row, no session — and that note opens nothing but
+# /apply: /app, /v1/me, /admin answer it as they answer nobody.
+drill_apply_reaches_app() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'Name: applicantCookie, Value: v, Path: applicantPath,' "$tl/api/applicant.go" 2>/dev/null \
+    || { WHY="the applicant note is no longer kept to /apply (applicant.go)"; return 1; }
+  [ "$(grep -l 'r.Cookie(applicantCookie)' "$tl"/api/*.go 2>/dev/null | grep -v _test | wc -l | tr -d ' ')" = 1 ] \
+    || { WHY="something besides applicantFrom reads ccq_applicant (internal/api)"; return 1; }
+  c11_go_tests not_listed_test.go TestApplicantNoteReachesNothingElse TestNotListedEveryWayLandsOnApply TestRealRefusalsKeepTheDenyPage || return 1
+  WHAT='申请者 cookie 只给 /apply：Path 限在 /apply，只有 applicantFrom 读它（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='名单外的 GitHub / 微信 / 邮箱登录都 302 /apply、不建人不发会话；那张 cookie 打 /app、/v1/me、/admin 和没登录一样；removed、坏邀请仍是拒绝页（go test 三条）'
   SECS=$(since "$t0")
 }
 

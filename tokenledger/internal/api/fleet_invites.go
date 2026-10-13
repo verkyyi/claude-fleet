@@ -219,12 +219,18 @@ func (s *Server) handleLoginRefused(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loc := s.pageLocale(w, r)
-	why := denyText(loc, note.Why, note.Login)
+	why := denyText(loc, note.Why, note.Login, s.hubURL(r))
 	s.devices.withUser(note.Code, now, func(l *deviceLogin) {
 		if l.state == devicePending {
 			l.state, l.err, l.code = deviceDenied, why, codeInviteRefused
 		}
 	})
+	if notListed(note.Why) {
+		// The browser carries the applicant note already (notListedSignIn):
+		// it goes on to where it can ask (claude-fleet#4050).
+		http.Redirect(w, r, ApplyPath, http.StatusFound)
+		return
+	}
 	s.githubDeny(w, r, note.Why, note.Login)
 }
 
@@ -391,7 +397,7 @@ func (s *Server) handleInviteInstall(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK) // a 4xx would make `curl -f` print nothing
-		_, _ = w.Write([]byte("#!/bin/sh\necho " + shellQuote("✗ "+denyText(loc, denyInvitePrefix+reason, "")) + " >&2\nexit 1\n"))
+		_, _ = w.Write([]byte("#!/bin/sh\necho " + shellQuote("✗ "+denyText(loc, denyInvitePrefix+reason, "", s.hubURL(r))) + " >&2\nexit 1\n"))
 		return
 	}
 	if !s.installReady() {

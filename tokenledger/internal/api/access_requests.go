@@ -22,8 +22,10 @@ import (
 // the applicant note (applicant.go), or a signed-in trial person coming from
 // /app/try (?from=trial). A member is sent to /app, anyone else to sign in.
 //
-//	GET  /apply             the form, or where their request stands
-//	                        (?edit=1 the form again for a pending one,
+//	GET  /apply             nothing asked yet: the not-listed page
+//	                        (not_listed.go, #4050; ?invite=1 how an invite
+//	                        works); ?new=1 the form; else where their
+//	                        request stands (?edit=1 the form again for a pending one,
 //	                        ?withdraw=1 the confirmation, ?again=1 a new form
 //	                        after a refusal whose cooldown is over)
 //	POST /apply             submit: 303 → /apply; 409 and the existing one
@@ -196,6 +198,12 @@ func (s *Server) applyGet(w http.ResponseWriter, r *http.Request) {
 			if on, err := s.listed(a); err == nil && on {
 				// Let in another way since (an invite, an admin): sign in.
 				http.Redirect(w, r, appURL("/signin"), http.StatusFound)
+				return
+			}
+			if last == nil && q.Get("new") != "1" && !v.FromTrial {
+				// Just turned away at the door, nothing asked yet: where they
+				// stand and what they can do (not_listed.go, #4050).
+				s.applyNotListed(w, r, loc, a)
 				return
 			}
 		}
