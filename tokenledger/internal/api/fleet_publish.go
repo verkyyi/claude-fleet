@@ -344,6 +344,7 @@ func publishErr(code int, format string, a ...any) error {
 // publishForm is one publish request, read whole.
 type publishForm struct {
 	sha, prev, run string
+	ref            string // "" / "stable" = stable; RefStableMacOS = the Mac lane (claude-fleet#3868)
 	commits, tree  []byte
 	hasCommits     bool // an empty list is an answer: nothing between prev and sha
 	train          []byte
@@ -379,6 +380,8 @@ func readPublishForm(r *http.Request) (*publishForm, error) {
 			f.prev = strings.TrimSpace(string(b))
 		case "run":
 			f.run = firstLine(strings.TrimSpace(string(b)))
+		case "ref":
+			f.ref = firstLine(strings.TrimSpace(string(b)))
 		case "commits":
 			f.commits, f.hasCommits = b, true
 		case "tree":
@@ -392,6 +395,18 @@ func readPublishForm(r *http.Request) (*publishForm, error) {
 		case "sshsig":
 			f.sshsig = strings.TrimSpace(string(b))
 		}
+	}
+	switch f.ref {
+	case "", "stable":
+		f.ref = ""
+	case RefStableMacOS:
+		// the Mac lane names a release the hub holds already: the sha alone
+		if !release.ValidSHA(f.sha) {
+			return nil, publishErr(http.StatusBadRequest, "sha: want 40 hex, got %q", firstLine(f.sha))
+		}
+		return f, nil
+	default:
+		return nil, publishErr(http.StatusBadRequest, "ref: want stable or %s, got %q", RefStableMacOS, f.ref)
 	}
 	if f.sig != "" {
 		// the second half: the signatures over what the first half built
@@ -462,9 +477,12 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), releaseBuildTime)
 	defer cancel()
 	var out map[string]any
-	if f.sig != "" {
+	switch {
+	case f.ref == RefStableMacOS:
+		out, err = rs.moveMac(f.sha)
+	case f.sig != "":
 		out, err = rs.Sign(f.sha, f.sig, f.sshsig)
-	} else {
+	default:
 		out, err = rs.Accept(ctx, f)
 	}
 	if err != nil {
@@ -475,7 +493,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		done(pe.code, "REFUSED", pe.msg, nil)
 		return
 	}
-	if f.hasTrain {
+	if f.hasTrain && f.ref == "" {
 		// the ledger never gates the release: its answer rides beside it
 		out["train"] = s.recordTrain(f.sha, f.prev, f.train, time.Now())
 	}
@@ -483,7 +501,11 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	if out["status"] == "unsigned" {
 		code = http.StatusAccepted // the train signs it next (claude-fleet#3559)
 	}
-	done(code, strings.ToUpper(out["status"].(string)), fmt.Sprintf("stable #%v prev %v", out["seq"], short(fmt.Sprint(out["prev"]))), out)
+	what := "stable"
+	if f.ref != "" {
+		what = f.ref
+	}
+	done(code, strings.ToUpper(out["status"].(string)), fmt.Sprintf("%s #%v prev %v", what, out["seq"], short(fmt.Sprint(out["prev"]))), out)
 }
 
 func short(sha string) string {
