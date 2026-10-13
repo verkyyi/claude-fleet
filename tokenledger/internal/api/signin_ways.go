@@ -20,7 +20,7 @@ import (
 
 // signinOn reports whether any way in is configured: a person can sign in.
 func (s *Server) signinOn() bool {
-	return s.GitHub.ready() || s.WeChat.ready() || s.Email.ready()
+	return s.GitHub.ready() || s.WeChat.ready() || s.Email.ready() || s.wxScanOn()
 }
 
 // sessionKey signs the people's sessions and every short signed blob of a
@@ -38,6 +38,9 @@ func (s *Server) sessionKey() string {
 	}
 	if src == "" && s.Email != nil {
 		src = s.Email.SMTPURL
+	}
+	if src == "" && s.WxGW != nil {
+		src = s.WxGW.Token
 	}
 	m := hmac.New(sha256.New, []byte(src))
 	m.Write([]byte("ccquota session v1"))
@@ -61,9 +64,9 @@ func (s *Server) sessionTTL() time.Duration {
 	return sessionTTLDefault
 }
 
-// otherWaysOn: WeChat or a mail is offered, so /signin is the page with
-// several ways rather than GitHub's own.
-func (s *Server) otherWaysOn() bool { return s.WeChat.ready() || s.Email.ready() }
+// otherWaysOn: WeChat (either road) or a mail is offered, so /signin is the
+// page with several ways rather than GitHub's own.
+func (s *Server) otherWaysOn() bool { return s.WeChat.ready() || s.Email.ready() || s.wxScanOn() }
 
 // inviteCookiePath is where the invite a browser carries rides: to every way
 // in once there is more than GitHub's, else to GitHub's callback only, as it
@@ -107,6 +110,7 @@ func (s *Server) renderSigninWays(w http.ResponseWriter, r *http.Request, loc, n
 // set, so the page never reflects a query string.
 var signinWayNotes = map[string]bool{
 	"wechat": true, "wechat-cancelled": true, "wechat-app": true, "wechat-taken": true,
+	"wechat-expired": true, "wechat-down": true,
 	"email-expired": true, "email-device": true, "email-wrong": true, "email-void": true, "email-slow": true,
 	"email-bad": true,
 }
@@ -219,7 +223,7 @@ func init() {
 // identityWord names a way in for a person to read.
 func identityWord(loc, kind string) string {
 	switch kind {
-	case store.IdentityWeChat:
+	case store.IdentityWeChat, store.IdentityWeChatMP:
 		return pageT(loc, "way.wechat")
 	case store.IdentityEmail:
 		return pageT(loc, "way.email")

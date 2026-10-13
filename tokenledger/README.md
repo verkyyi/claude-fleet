@@ -890,6 +890,23 @@ offers every way that is configured, always in this order:
   (BREAK-IT `wechat-first-scan-autocreate`). The state is one use across both
   replicas (`hub_signin_spent`). Only the service account set (the website app
   still in WeChat's review) ⇒ WeChat works inside WeChat, and a computer is told so.
+- **Following the company service account** (claude-fleet#4054) — with
+  `CCQUOTA_WX_INTERNAL_URL` (workbench-api's in-cluster `/internal/wx`) and
+  `CCQUOTA_WX_INTERNAL_TOKEN` (its gate, workbench's `WX_INTERNAL_TOKEN`) set,
+  `/signin` puts one QR code up front — scan it to follow 「二四网络科技」, or just
+  scan when already following — and folds the mail and GitHub under 「其他方式登录」
+  (unfolded when WeChat is not answering); a phone's browser gets 「在微信里打开」
+  first. The hub holds no secret of the account: the access token comes from
+  workbench, who scanned from `GET /internal/wx/fleet-scan-login`, and both are
+  read in `wxgw.go` only. Codes are drawn only in ClaudeFleet's scene range
+  `[3000000, 4000000)`, kept in `hub_wx_scenes`, finish only in the browser that
+  drew them and only once (BREAK-IT `fleet-scene-cross`); the page polls
+  `/auth/wechat/poll` from `/app/assets/signin-poll.js` (the page's CSP allows
+  that one same-origin script; no script ⇒ `<meta refresh>`). The person is
+  `wechat` + the unionid, else `wechat-mp` + the openid until a unionid arrives;
+  someone not on the list becomes an applicant at `/apply`. The openid is kept as
+  where to reach them (`hub_reach`). Either variable unset ⇒ `/signin` is what it
+  was, byte for byte.
 - **A mail** — `CCQUOTA_SMTP_URL` (`smtp://user:pass@host:587` with STARTTLS, or
   `smtps://…:465`) and `CCQUOTA_SMTP_FROM`; today Amazon SES's SMTP interface, and
   another provider is another URL. `POST /auth/email/start` mails a link and six

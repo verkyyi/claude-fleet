@@ -836,6 +836,7 @@ func runHub(args []string) error {
 		// The ways in that need no GitHub (claude-fleet#3604).
 		WeChat:              wx,
 		Email:               mailIn,
+		WxGW:                wxGatewayFromEnv(os.Getenv),
 		SessionSecret:       os.Getenv("CCQUOTA_SESSION_SECRET"),
 		Pricing:             table,
 		ViewerToken:         *token,
@@ -1205,6 +1206,28 @@ func otherWaysFromEnv(getenv func(string) string) (*api.WeChatAuth, *api.EmailAu
 		log.Printf("mail sign-in: on, sent through %s as %s", mailIn.SMTPHost(), mailIn.From)
 	}
 	return wx, mailIn, nil
+}
+
+// wxGatewayFromEnv wires the company service account's road
+// (claude-fleet#4054, EPIC #4048 共同约定 3): CCQUOTA_WX_INTERNAL_URL (workbench's
+// in-cluster /internal/wx) and CCQUOTA_WX_INTERNAL_TOKEN (its gate, from Secret
+// ccquota). Both set ⇒ /signin puts the service account's code up front; either
+// missing ⇒ off, the page what it was — half set is logged by name, never the
+// value, and is not a refusal to start (the other ways still work).
+// CCQUOTA_WECHAT_API_BASE points the two WeChat calls at a stand-in, as it
+// does for the website app.
+func wxGatewayFromEnv(getenv func(string) string) *api.WxGateway {
+	u, tok := strings.TrimSpace(getenv("CCQUOTA_WX_INTERNAL_URL")), strings.TrimSpace(getenv("CCQUOTA_WX_INTERNAL_TOKEN"))
+	if u == "" && tok == "" {
+		return nil
+	}
+	if u == "" || tok == "" {
+		log.Printf("WARN wechat follow sign-in: off — CCQUOTA_WX_INTERNAL_URL and CCQUOTA_WX_INTERNAL_TOKEN are both required")
+		return nil
+	}
+	log.Printf("wechat follow sign-in: on, through %s", u)
+	return &api.WxGateway{URL: u, Token: tok, AppID: strings.TrimSpace(getenv("CCQUOTA_WX_APPID")),
+		APIBase: strings.TrimSpace(getenv("CCQUOTA_WECHAT_API_BASE"))}
 }
 
 // githubOAuthVia wires where the GitHub sign-in trades its code for a token

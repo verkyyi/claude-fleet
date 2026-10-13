@@ -30,10 +30,14 @@ const (
 	IdentityGitHub = "github" // subject: the numeric GitHub ID
 	IdentityEmail  = "email"  // subject: the address, lower-cased
 	IdentityWeChat = "wechat" // subject: the unionid
+	// IdentityWeChatMP is a WeChat known only by the service account's openid
+	// (claude-fleet#4054): a scan whose user/info carried no unionid. Once
+	// the unionid is known the person's wechat identity joins it.
+	IdentityWeChatMP = "wechat-mp" // subject: the service account's openid
 )
 
 // IdentityKinds is every kind the hub knows, in the order a page lists them.
-var IdentityKinds = []string{IdentityWeChat, IdentityEmail, IdentityGitHub}
+var IdentityKinds = []string{IdentityWeChat, IdentityWeChatMP, IdentityEmail, IdentityGitHub}
 
 // KnownIdentityKind reports whether kind is one of IdentityKinds.
 func KnownIdentityKind(kind string) bool {
