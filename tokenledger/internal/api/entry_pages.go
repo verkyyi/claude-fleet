@@ -165,8 +165,6 @@ h1+.alert{margin-top:24px}
 .gone h1{margin-top:12px;font-size:24px}
 .gone .lead{margin:8px 0 0}
 .gone .btn{width:auto;height:36px;margin-top:24px;padding:0 16px}
-.pill{display:inline-flex;align-items:center;gap:6px;width:max-content;margin-bottom:16px;padding:3px 10px;border:1px solid var(--fleet-clay-line);border-radius:9999px;background:var(--fleet-clay-soft);color:var(--fleet-clay);font-size:12px;line-height:1.5}
-.pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
 .col.lift{justify-content:flex-start;padding-top:16px;max-width:28rem}
 .who{display:flex;align-items:center;gap:12px;margin:0 0 24px;padding:12px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font-size:14px}
 .who .av{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--fleet-clay-soft);color:var(--fleet-clay);font-weight:600;flex:none}

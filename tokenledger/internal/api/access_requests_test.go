@@ -73,7 +73,7 @@ func TestApplyWhoMayOpen(t *testing.T) {
 	anon := newApplyClient(t, h, "", "", "", "")
 	for _, p := range []string{ApplyPath, ApplyPath + "?edit=1"} {
 		resp, _ := anon.do(http.MethodGet, p, nil)
-		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin?next=%2Fapply" {
+		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin?next=/apply" {
 			t.Fatalf("GET %s signed out = %d → %q; want 302 /app/signin?next=/apply", p, resp.StatusCode, resp.Header.Get("Location"))
 		}
 	}

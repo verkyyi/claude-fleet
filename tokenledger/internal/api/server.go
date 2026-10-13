@@ -483,8 +483,6 @@ func (s *Server) routes() *routeMux {
 	// when not configured, so whether the route exists never leaks whether
 	// the feature is on.
 	mux.HandleFunc("/signin", s.handleSignin)
-	// /apply (claude-fleet#4049): to sign-in first until its page lands.
-	mux.HandleFunc(ApplyPath, s.handleApply)
 	mux.HandleFunc("/auth/github/start", s.handleGitHubStart)
 	mux.HandleFunc("/auth/github/callback", s.handleGitHubCallback)
 	// The ways in that need no GitHub (claude-fleet#3604): each 404s when off.

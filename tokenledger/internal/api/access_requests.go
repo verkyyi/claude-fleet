@@ -74,7 +74,7 @@ func (s *Server) applyWho(r *http.Request) (a applicant, trialPID, to string) {
 	if a, ok := s.applicantFrom(r); ok {
 		return a, "", ""
 	}
-	return applicant{}, "", appURL("/signin") + "?next=" + url.QueryEscape(ApplyPath)
+	return applicant{}, "", appURL("/signin") + "?next=" + applyNext
 }
 
 // trialApplicant: pid came in through the trial (a fleet_trials row) and has
