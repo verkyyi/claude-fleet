@@ -115,7 +115,8 @@ if [ -f "$GATE_WF" ]; then
   # NB `tr -d '[:space:]'` would eat the newlines too and collapse the entries onto
   # one line, counting 6 shards as 1 — so split on commas and count the lines that
   # carry a digit, stripping nothing.
-  wf_n=$(sed -n "s/^[[:space:]]*shards:[[:space:]]*'\{0,1\}\[\(.*\)\].*/\1/p" "$GATE_WF" \
+  # (since #3864 the literal is a dispatch input's fallback: ${{ inputs.shards || '[…]' }})
+  wf_n=$(sed -n "s/^[[:space:]]*shards:[^[]*\[\([0-9, ]*\)\].*/\1/p" "$GATE_WF" \
            | tr ',' '\n' | grep -c '[0-9]')
   case "$wf_n" in
     ''|*[!0-9]*|0) fail "could not read the shards: matrix width out of $GATE_WF" ;;

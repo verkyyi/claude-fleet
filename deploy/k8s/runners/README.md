@@ -51,12 +51,12 @@ set from GitHub).
 |---|---|
 | node pool `fleet-ci` (`fleet-ci-nodepool.example.json`) | spot, 16 cores (several instance types against a stock-out), autoscaled **0–3** — the cluster's cap is 10 nodes and the rest is not ours; label + taint `fleet-ci=true`, so only fleet-ack's pods land there. A runner pod asks 1 vCPU / 2 GiB ⇒ about 14 a node |
 | image `fleet-ci-runner` (`extras/ci-runner/`) | the cluster's ARC runner image + what the selftests reach for (tmux, zsh, fzf, shellcheck, Go 1.25 with tokenledger's modules, Node 22, …) + the actions a shard uses; tag = `extras/ci-runner/tag.sh`, built and pushed by `.github/workflows/ci-runner-image.yml` on fleet-ack only when the tag is new (role `gha-claudefleet-ci-runner`, environment `ci-runner`) |
-| `fleet-git-mirror` (`fleet-ci.example.yaml`) | a read-only mirror of this repo on the always-on CI node; a shard fetches TRAIN_SHA there (repo variable `FLEET_TRAIN_GIT_MIRROR`, e.g. `git://fleet-git-mirror.arc-runners:9418/claude-fleet.git`), GitHub when it does not have it within ~30 s |
+| `fleet-git-mirror` (`fleet-ci.example.yaml`) | a read-only mirror of this repo on the always-on CI node; a shard fetches TRAIN_SHA there (repo variable `FLEET_TRAIN_GIT_MIRROR`, e.g. `git://fleet-git-mirror.arc-runners:9418/claude-fleet.git`), GitHub when it does not have it within ~60 s |
 | `fleet-ci-prepull` | the runner image pulled onto each fleet-ci node as it joins |
 | `fleet-ack-night` | minRunners 0 from 01:00 to 08:00 Beijing (the pool then empties to 0 by itself), 2 at 08:00 |
 | environment `fleet-ack-probe` | the train's `Linux 选机器` job: var `FLEET_RUNNERS_APP_ID` + secret `FLEET_RUNNERS_APP_KEY` (the runner app above, master only) — it reads the repo's runner list, nothing else |
 
-Switch: repo variable `FLEET_TRAIN_RUNNER` — empty = the Linux half on
+Switch: repo variable `FLEET_TRAIN_RUNNER` — unset = the Linux half on
 `ubuntu-latest` exactly as before; `fleet-ack` = the cluster first. No online
 fleet-ack runner (night, the set scaled to 0, the controller down, no token) ⇒
 `ubuntu-latest`, the summary says 「深圳不可用，退回 GitHub」 (BREAK-IT
@@ -74,5 +74,5 @@ aliyun cs POST /clusters/<cluster>/nodepools --body "$(cat fleet-ci-nodepool.jso
 kubectl apply -f k8s/runners/fleet-ci.yaml          # mirror, prepull, night schedule
 kubectl apply -f k8s/runners/fleet-ack.yaml         # the set on fleet-ci, the new image
 gh variable set FLEET_TRAIN_GIT_MIRROR --body 'git://fleet-git-mirror.arc-runners:9418/claude-fleet.git'
-gh variable set FLEET_TRAIN_RUNNER --body fleet-ack  # empty it to go back to GitHub's
+gh variable set FLEET_TRAIN_RUNNER --body fleet-ack  # back to GitHub's: gh variable delete FLEET_TRAIN_RUNNER
 ```

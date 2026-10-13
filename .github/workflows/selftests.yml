@@ -80,6 +80,22 @@ on:
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
       - '.github/workflows/selftests-shards.yml'
+  # The full suite on a runner set of our own, by hand (issue #3864): e.g. runs_on
+  # ["fleet-ack"] + the cluster mirror, before the release train is pointed there.
+  workflow_dispatch:
+    inputs:
+      runs_on:
+        description: 'runner labels: ubuntu-latest, or a JSON list (["fleet-ack"])'
+        type: string
+        default: ubuntu-latest
+      mirror:
+        description: 'a git URL holding the commit (the cluster mirror), or empty'
+        type: string
+        default: ''
+      shards:
+        description: 'the matrix, a JSON list 1..N (empty = the gate width)'
+        type: string
+        default: ''
 
 # A re-push to a PR makes its in-flight run stale; master runs always finish.
 concurrency:
@@ -128,5 +144,9 @@ jobs:
       # or on a master push the commit before it. An all-zero `before` (a new
       # branch) does not resolve, and the runner falls back to the full suite.
       base: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-      runs_on: ubuntu-latest
-      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]'
+      # a dispatch (issue #3864) names its runners, mirror and width; the PR gate and
+      # master's push run keep ubuntu-latest and the 18 below
+      sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
+      runs_on: ${{ inputs.runs_on || 'ubuntu-latest' }}
+      mirror: ${{ inputs.mirror || '' }}
+      shards: ${{ inputs.shards || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]' }}

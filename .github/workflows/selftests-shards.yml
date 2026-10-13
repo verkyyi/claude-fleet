@@ -133,9 +133,9 @@ jobs:
     timeout-minutes: ${{ inputs.job_minutes != '' && fromJSON(inputs.job_minutes) || contains(inputs.runs_on, 'fleet-ci') && 25 || contains(inputs.runs_on, 'macos') && 60 || 15 }}
     steps:
       - name: Fetch the commit from the cluster's git mirror
-        # issue #3864: GitHub is far from the Shenzhen cluster; its mirror polls
-        # GitHub every few seconds. Not there within ~30 s (or no mirror) ⇒ the
-        # GitHub checkout below, exactly as on any other runner.
+        # issue #3864: GitHub is far from the Shenzhen cluster; its mirror fetches
+        # GitHub every 5 s, now and then late. Not there within ~60 s (or no
+        # mirror) ⇒ the GitHub checkout below (~45 s from there), as anywhere else.
         id: mirror
         if: inputs.mirror != '' && inputs.sha != ''
         continue-on-error: true
@@ -146,7 +146,7 @@ jobs:
           set -u
           t0=$(date +%s)
           git init -q . && git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" || exit 1
-          for i in 1 2 3 4 5 6; do
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
             if timeout 60 git fetch -q --no-tags "$MIRROR" '+refs/heads/master:refs/remotes/origin/master' \
                && git cat-file -e "$SHA^{commit}" 2>/dev/null; then
               git checkout -q --detach "$SHA" || break
