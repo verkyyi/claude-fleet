@@ -5,7 +5,7 @@
 # endpoint both a hop away, nothing crossing the Pacific.
 #
 # Usage: train-build.sh <hub> <40-character sha> <image repo> <tools image>
-#   <image repo>   e.g. registry-vpc.cn-shenzhen.aliyuncs.com/acme/fleet-managed-node
+#   <image repo>   e.g. registry.example.com/acme/fleet-managed-node
 #   <tools image>  the Dockerfile's `tools` stage as the train pushed it
 #                  (<repo>:<tools-tag.sh>, best by digest)
 #

@@ -736,7 +736,7 @@ jobs:
       id-token: write
     env:
       TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
-      FLEET_HUB_URL: https://claudefleet.24haowan.com
+      HUB_URLS: ${{ vars.HUB_URLS }}   # the hub's addresses (hub-deploy's); the first is asked
       REPO: ${{ vars.NODE_IMAGE_REPO }}
       BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
       TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
@@ -770,7 +770,7 @@ jobs:
           role: gha-claudefleet-node-image
       - name: build and push (train-build.sh)
         id: build
-        run: bash extras/managed-node/train-build.sh "$FLEET_HUB_URL" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST"
+        run: bash extras/managed-node/train-build.sh "${HUB_URLS%% *}" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST"
       - name: summary
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
