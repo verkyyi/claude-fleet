@@ -106,9 +106,28 @@ func refreshTestAgent(t *testing.T, hub, provider string, admin bool) *Agent {
 	return a
 }
 
-func captureLog(t *testing.T) *bytes.Buffer {
+// lockedBuf is the log's capture: the agent's goroutines may still be logging
+// while the test reads it.
+type lockedBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func captureLog(t *testing.T) *lockedBuf {
 	t.Helper()
-	buf := &bytes.Buffer{}
+	buf := &lockedBuf{}
 	prev := log.Writer()
 	log.SetOutput(buf)
 	t.Cleanup(func() { log.SetOutput(prev) })
