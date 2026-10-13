@@ -118,7 +118,7 @@ eq 'b has the PR map a fetched'              "$(prmap a acme-a)" "$(prmap b acme
 eq 'b checked its own access once'           1 "$(calls b access)"
 eq 'shared dir is per repo'                  yes "$([ -d "$SHARED/acme-a/pub.a/issues" ] && echo yes)"
 eq 'shared repo dir is sticky (1777)'        yes "$([ -k "$SHARED" ] && [ -k "$SHARED/acme-a" ] && echo yes)"
-eq 'no claim left behind'                    '' "$(ls "$SHARED/acme-a" | grep '^fetch\.' || :)"
+eq 'no claim left behind'                    '' "$(for f in "$SHARED/acme-a"/fetch.*; do [ -e "$f" ] && echo "$f"; done)"
 # b's next due tick: b fetches now (a's copy too old) and a takes b's — still one fetch
 reset_logs
 due a; due b

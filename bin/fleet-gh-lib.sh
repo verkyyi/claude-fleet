@@ -586,7 +586,8 @@ EOF2
 _fleet_gh_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 
 _fleet_gh_share_mark() {  # <root> <kind> <ms> — write our claim
-  local f="$1/fetch.$2.$(fleet_gh_share_me)"
+  local f
+  f="$1/fetch.$2.$(fleet_gh_share_me)"
   printf '%s %s\n' "$$" "$3" > "$f.$$" 2>/dev/null && chmod 644 "$f.$$" 2>/dev/null \
     && mv -f "$f.$$" "$f" 2>/dev/null
   rm -f "$f.$$" 2>/dev/null
