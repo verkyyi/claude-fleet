@@ -177,7 +177,7 @@ var consolePages = []consolePage{
 	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12"},
 	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13"},
 	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13"},
-	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14"},
+	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14", live: true},
 	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15"},
 	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15"},
 	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15"},

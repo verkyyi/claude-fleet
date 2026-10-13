@@ -19,7 +19,7 @@ export const NAV: NavGroup[] = [
       { key: "page.usage", icon: BarChart3, href: "/app/admin/overview" },
     ],
   },
-  { key: "nav.release", items: [{ key: "page.release", icon: Rocket, href: "/app/trains" }] },
+  { key: "nav.release", items: [{ key: "page.release", icon: Rocket, to: "/release" }] },
   {
     key: "nav.entry",
     items: [
