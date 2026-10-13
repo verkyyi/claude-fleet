@@ -481,6 +481,49 @@ class TestIdentity(Rig):
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class EmptyReap(Rig):
+    """A no-repo session nobody ever typed into (issue #4000): opened with no words
+    (@prompt_track), never a turn (no @prompted) — closed after its done grace from
+    its birth; one that took a turn, holds a draft, is young, or predates the track
+    (no @prompt_track) is never closed this way."""
+    def norepo(self, screen="> ", **opts):
+        win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
+                      "-c", str(self.root), "printf %s " + shlex.quote(screen) + "; sleep 90").strip()
+        fid = "%08x-0000-4000-8000-000000000000" % int(win[1:])
+        for key, value in dict({"@norepo": "1", "@fleet_id": fid, "@reap_policy": "done:15m",
+                                "@origin": "hub", "@prompt_track": "1",
+                                "@born": str(int(time.time()) - 1200)}, **opts).items():
+            self.tm("set-option", "-w", "-t", win, key, value)
+        return win
+
+    def alive(self, win):
+        return win in self.tm("list-windows", "-t", self.label, "-F", "#{window_id}").split()
+
+    def test_closes_only_a_session_never_typed_into(self):
+        empty = self.norepo()
+        typed = self.norepo(**{"@prompted": "1", "@claude_state": "done",
+                               "@claude_state_ts": str(int(time.time()) - 1200)})
+        draft = self.norepo("> half a sentence")
+        young = self.norepo(**{"@born": str(int(time.time()) - 60)})
+        old = self.norepo(**{"@prompt_track": ""})                 # opened before the track
+        self.tm("set-option", "-wu", "-t", old, "@prompt_track")
+        time.sleep(0.5)                                            # the panes have drawn
+        out = self.clean()
+        self.assertIn("reaped-empty:" + empty + " policy=done:15m", out)
+        self.assertFalse(self.alive(empty))
+        for win in (typed, draft, young, old):
+            self.assertTrue(self.alive(win), win + " was closed: " + out)
+        self.assertNotIn("reaped-empty:" + typed, out)
+
+    def test_dry_run_closes_nothing(self):
+        empty = self.norepo()
+        time.sleep(0.5)
+        out = self.clean("--dry-run")
+        self.assertIn("would-reap-empty:" + empty, out)
+        self.assertTrue(self.alive(empty))
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
 class HomeReap(ReapPolicy):
     """A no-repo (home) session (issue #2565): `done:2h` closes it two hours after
     its agent EXITED — never on a finished turn (#2564 resumes that one), never

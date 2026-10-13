@@ -37,7 +37,7 @@ No. fleet is an independent open-source project (MIT) that runs the unmodified o
 There is no fixed limit by default: before a new session starts, fleet checks how much memory is left and how busy the machine is, and a session that does not fit waits; running sessions are never touched. For a hard limit, set `FLEET_GLOBAL_MAX_SESSIONS` in the configuration.
 
 ### If I close the terminal, do my sessions keep running?
-Yes. Sessions run on the machine, not in your terminal; type `fleet` again and everything is where you left it. `fleet quit` closes only the client.
+Yes. Sessions run on the machine, not in your terminal; type `fleet` again and everything is where you left it — you land on the session you looked at last (from any computer or phone), or on a new one if that session has been closed. `fleet quit` closes only the client.
 
 ### Can I use it without GitHub?
 Yes. Sessions that only chat or make pages and documents do not need GitHub; to let a session change code in a repository and open pull requests, install `gh` and run `gh auth login`.

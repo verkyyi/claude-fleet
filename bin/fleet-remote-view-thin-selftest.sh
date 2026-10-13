@@ -29,6 +29,10 @@
 #                   `--resume` then lands home (no cur= left); `--want` lands on
 #                   the worker it names — by its fleet_id or its key (#3463); home
 #                   is the orchestrator role's holder (@fleet_role_def) too
+#   H. last       — a plain attach (no --want / --resume) lands on the person's
+#                   last session, kept in remote-views/.last by the `cur` hook past
+#                   every 看台 (issue #4000): there from another device; gone ⇒
+#                   ⌘N's road; none ⇒ home as before; a bare window not kept
 #   G. language   — `--lang <locale>` (or the entry door's FLEET_CLIENT_LANG in the
 #                   environment) is recorded as the 看台's own @view_lang (issue
 #                   #3326); each 看台 its own; a resume re-records it (empty too);
@@ -288,12 +292,14 @@ eq "E: --resume with no cur= lands on the orchestrator" "$OW" "$(vcur dev1)"
 # first screen to ⌘N's road (`do new`), never a bare home shell (issue #3007)
 tn set-window-option -t "$OW" -u @fleet_role
 tt kill-window -t "=$TL:thin3"
+rm -f "$FLEET_CONF_DIR/remote-views/.last"   # a first use: no last session (H tests one)
 : > "$WORK/first.log"
 termf thin3b "--thin --view dev9 --device $DEV --route lan --token t9k"
 waitfor 5 sh -c "grep -q 'do new --view' '$WORK/first.log'" || fail "E: no orchestrator here → the first screen was not handed to ⌘N's road: $(cat "$WORK/first.log")"
 has "E: … for this 看台" "$(cat "$WORK/first.log")" "--view $RS@view-dev9"
 tn set-window-option -t "$OW" @fleet_role orchestrator
 tt kill-window -t "=$TL:thin3b"
+rm -f "$FLEET_CONF_DIR/remote-views/.last"
 termf thin3c "--thin --view dev8 --device $DEV --route lan --token t8k"
 sleep 1
 [ "$(grep -c 'dev8' "$WORK/first.log")" = 0 ] || fail "E: an orchestrator here, yet the first screen went to ⌘N's road"
@@ -315,6 +321,7 @@ tt kill-window -t "=$TL:thin4k"
 # the orchestrator is whoever HOLDS the role (@fleet_role_def, issue #3114) — an old
 # seat's @fleet_role is never written again: home is that window, not ⌘N's road
 tn set-window-option -t "$OW" -u @fleet_role \; set-window-option -t "$OW" @fleet_role_def orchestrator
+rm -f "$FLEET_CONF_DIR/remote-views/.last"
 : > "$WORK/first.log"
 termf thin4h "--thin --view dev5 --device $DEV --route lan --token t5k"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev5):' '#{window_id}' 2>/dev/null)\" = '$OW' ]"
@@ -323,6 +330,41 @@ sleep 1
 [ "$(grep -c 'dev5' "$WORK/first.log")" = 0 ] || fail "E: the holder is here, yet the first screen went to ⌘N's road"
 tt kill-window -t "=$TL:thin4h"
 tn set-window-option -t "$OW" -u @fleet_role_def \; set-window-option -t "$OW" @fleet_role orchestrator
+
+# ============================================================================
+# H. a plain `fleet` comes back to the LAST session (issue #4000): the `cur` hook
+# keeps `.last` past every 看台 — first use ⇒ home as before; last here ⇒ there,
+# from any device (another view id); last gone ⇒ ⌘N's road, not the orchestrator;
+# a bare window (no @fleet_id) is never remembered
+# ============================================================================
+LAST="$FLEET_CONF_DIR/remote-views/.last"
+lastis() { [ "$(cat "$LAST" 2>/dev/null)" = "$1" ]; }
+rm -f "$LAST"; : > "$WORK/first.log"
+termf lasth1 "--thin --view devh1 --device $DEV --route lan --token th1"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs devh1):' '#{window_id}' 2>/dev/null)\" = '$OW' ]"
+eq "H: first use (no last session) lands home, as before" "$OW" "$(vcur devh1)"
+waitfor 8 lastis "$U/fid-orch" || fail "H: the session in view was not kept as the last one" "$(cat "$LAST" 2>/dev/null)"
+tn select-window -t "=$(vs devh1):$W7"
+waitfor 5 lastis "$U/fid-7" || fail "H: a switch did not move the last session" "$(cat "$LAST" 2>/dev/null)"
+tn select-window -t "=$(vs devh1):home"
+sleep 1
+eq "H: a bare window is never the last session" "$U/fid-7" "$(cat "$LAST" 2>/dev/null)"
+tt kill-window -t "=$TL:lasth1"
+FLEET_VIEW_KEEP_SECS=0 env -u TMUX bash "$BIN/fleet-remote-view.sh" prune
+eq "H: the 看台 reaped, the last session kept" "$U/fid-7" "$(cat "$LAST" 2>/dev/null)"
+termf lasth2 "--thin --view devh2 --device $DEV --route lan --token th2"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs devh2):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
+eq "H: a new run, another device: lands on the last session — not the orchestrator" "$W7" "$(vcur devh2)"
+sleep 1
+eq "H: …and opens no new session" "0" "$(grep -c 'devh2' "$WORK/first.log")"
+tt kill-window -t "=$TL:lasth2"
+printf '%s/fid-gone\n' "$U" > "$LAST"
+termf lasth3 "--thin --view devh3 --device $DEV --route lan --token th3"
+waitfor 5 sh -c "grep -q 'do new --view $RS@view-devh3' '$WORK/first.log'" \
+  || fail "H: the last session is gone, yet no new session was opened" "$(cat "$WORK/first.log")"
+hasnt "H: …and not on the orchestrator" "$(vcur devh3)" "$OW"
+tt kill-window -t "=$TL:lasth3"
+rm -f "$LAST"   # the legs below are first uses
 
 # ============================================================================
 # G. the client's language, per 看台 (issue #3326)

@@ -63,6 +63,9 @@ esac
 if [ "$via" = 7501 ]; then
   case "${1:-}" in working|done|exited|needs7501) : ;; *) exit 0 ;; esac
 fi
+# A turn ever taken (issue #4000): before any rule below may leave the state alone —
+# an empty session (@prompt_track, never @prompted) is the idle reaper's to close.
+[ "${1:-}" = working ] && tmux set-option -wq -t "$TMUX_PANE" @prompted 1 2>/dev/null
 
 # The tree is still being checked out (issue #2237): dash-issue-session.sh opened
 # this window on a worktree whose files fill in beside the agent's start, and

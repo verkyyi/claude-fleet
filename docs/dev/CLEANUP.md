@@ -139,6 +139,18 @@ changes (`@reap_skip`): `cleaned:done-no-pr <win> <key> worktree=trashed|kept:di
 `skip:no-worktree`. `--dry-run` prints `would-clean:done-no-pr`. BREAK-IT row
 `done-no-pr-stranded`.
 
+**A session nobody ever typed into** (issue #4000). A no-repo session opened with
+no words — ⌘N, or a plain `fleet` whose last session is gone — is stamped
+`@prompt_track 1` by `dash-raw-session.sh`; its first turn stamps `@prompted 1`
+(`set-claude-state.sh working`, before any rule that may leave the state alone).
+One that is tracked and never prompted is closed by `fleet-cleanup-idle.py`'s
+`empty` rule once its `done` grace (15 minutes) has passed since its birth or its
+last state stamp — never while working / asking, while a client shows it, with a
+draft in its input box (`fleet-input.py`), or holding a job; nothing in it to keep,
+so no history row: stopped by identity (`fleet-worker-stop.sh fid:`). Token
+`reaped-empty:<win>`, `--dry-run` `would-reap-empty:`. A window from before the
+track has no `@prompt_track` and is never closed this way.
+
 The raw pass shares the daemon's lease, timeout and per-tick reap cap. It reads PR
 state through GitHub before declaring a branch PR-free; failed reads retain the
 window. An actual GitHub rate-limit response stops that tick without retrying.

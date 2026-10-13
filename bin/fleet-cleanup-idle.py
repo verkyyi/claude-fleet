@@ -85,7 +85,7 @@ class Cleaner:
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
-                 "@origin", "@origin_fid", "@epic")
+                 "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted")
         return {n: option(self.tm, window, n) for n in names}
 
     def ticket(self, snap):
@@ -322,10 +322,67 @@ class Cleaner:
         print("reaped-idle:" + window + " policy=" + snap["@reap_policy"] + " norepo " + (out or "no answer"))
         return out.startswith("stopped:")
 
+    def empty(self, window, snap):
+        """A no-repo session nobody ever typed into (issue #4000): opened with no
+        words (⌘N, a plain `fleet` whose last session was gone — dash-raw-session.sh
+        stamps @prompt_track) and never a turn since (no @prompted, set-claude-state.sh's
+        `working`). Its `done` policy's grace counted from its birth or its last state
+        stamp, whichever is later; never while working or asking, while a client
+        looks at it, with a draft in its input box or a job running. Nothing in it to
+        keep, so no history row — stopped by identity, test_session's road."""
+        pol = self.policy(snap)
+        if (pol is None or pol[0] != "done"
+                or snap["@worker_lifecycle"] not in ("", "sleeping")
+                or snap["@fleet_role"] not in ("", "worker")
+                or snap["window_name"] in ("dash", "plan", "backlog", "home")
+                or (snap["@claude_state"] not in ("", "done", "idle", "exited")
+                    and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")):
+            return False
+        stamps = [int(v) for v in (snap["@born"], snap["@claude_state_ts"]) if v.isdigit()]
+        if not stamps or max(stamps) + pol[1] > self.now:
+            return False
+        fid = snap["@fleet_id"]
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return False
+        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
+            if self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}") == window:
+                return False
+        try:
+            shown = self.tm("list-clients", "-F", "#{window_id}").split()
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if window in shown:
+            return False                      # someone is looking at it right now
+        if snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1":
+            try:
+                box = json.loads(subprocess.run(
+                    ["python3", str(BIN / "fleet-input.py"), "--socket", self.args.socket_name or "",
+                     "--pane", window], capture_output=True, text=True, timeout=15).stdout or "{}")
+            except (ValueError, OSError, subprocess.SubprocessError):
+                box = {}
+            if box.get("state") != "empty":
+                return False                  # a draft (or it cannot be read): someone typed
+        if self.busy(window, snap):
+            return False
+        print("reap-due:%s policy=%s empty" % (window, snap["@reap_policy"]), file=__import__("sys").stderr)
+        if self.args.dry_run:
+            print("would-reap-empty:" + window)
+            return False
+        if self.snapshot(window) != snap:
+            return False
+        self.retire(window)
+        out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
+                             env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=120).stdout.strip()
+        print("reaped-empty:" + window + " policy=" + snap["@reap_policy"] + " " + (out or "no answer"))
+        return out.startswith("stopped:")
+
     def candidate(self, window):
         snap = self.snapshot(window)
         if snap["@test_identity"] == "1" and snap["@norepo"] == "1":
             return self.test_session(window, snap)
+        if snap["@norepo"] == "1" and snap["@prompt_track"] == "1" and snap["@prompted"] != "1":
+            return self.empty(window, snap)
         if snap["@norepo"] == "1":
             return self.norepo(window, snap)
         if self.route(snap) == "no-pr":
