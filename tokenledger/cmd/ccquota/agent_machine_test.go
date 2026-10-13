@@ -82,3 +82,21 @@ func TestAccountOpenerOnlyOnLinuxWhenOn(t *testing.T) {
 		t.Fatal("linux, FLEET_NODE_ACCOUNT_OPS=1: no opener")
 	}
 }
+
+// From the command's own entry: an empty logins directory reaches
+// agent.RunMachine, which alone decides (claude-fleet#3554 — the read of the
+// directory refused it first, so a person's pod never started its link).
+// Without account ops it is RunMachine's refusal, not the directory read's.
+func TestAgentMachineEmptyLoginsReachesRunMachine(t *testing.T) {
+	t.Setenv("CCQUOTA_TOKEN", "mach-tok")
+	t.Setenv("FLEET_NODE_ACCOUNT_OPS", "")
+	t.Setenv("CCQUOTA_TOKEN_FD", "")
+	err := runAgentMachine([]string{"--machine", "--hub", "http://127.0.0.1:1",
+		"--logins", t.TempDir(), "--state", t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "no logins to serve") {
+		t.Fatalf("empty logins, no account ops: %v, want RunMachine's refusal", err)
+	}
+	if strings.Contains(err.Error(), "lists no") {
+		t.Fatalf("the directory read refused it before RunMachine: %v", err)
+	}
+}
