@@ -10,7 +10,7 @@
 // /v1/admin/overview · /v1/fleet/cred-policy · /v1/nodes · /v1/accounts/label.
 import * as React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowRight, Cpu, Pause, Pencil, Play, Settings2, ShieldAlert, User } from "lucide-react";
+import { ArrowRight, Bot, Cpu, Pause, Pencil, Play, Settings2, ShieldAlert, User } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -131,7 +131,7 @@ function whoText(world: World, s: Sub): string {
   if (!s.managed || !world.view) return t("pool.who.unknown");
   const uuid = uuidOf(s);
   const part = (scope: "user" | "node", all: MsgKey, none: MsgKey) => {
-    const ts = world.targets.filter((x) => x.scope === scope);
+    const ts = world.targets.filter((x) => x.scope === scope && !x.service);
     const ok = ts.map((x) => grantOf(world.view!, x, uuid)).filter((g) => g.allowed);
     if (ts.length && ok.length === ts.length) return t(all);
     if (!ok.length) return t(none);
@@ -537,17 +537,22 @@ function AccessEditor({ sub, view: first, targets, onChanged }: { sub: Sub; view
     }
   };
 
-  const group = (scope: "user" | "node") => {
-    const gs = grants.filter((g) => g.scope === scope).sort((a, b) => Number(b.allowed) - Number(a.allowed) || a.label.localeCompare(b.label));
-    const Icon = scope === "user" ? User : Cpu;
+  // three groups: people · services (svc:<name>, claude-fleet#4085 — a user scope of its own) · machines
+  const group = (scope: "user" | "service" | "node") => {
+    const gs = grants
+      .filter((g) => (scope === "service" ? !!g.service : g.scope === scope && !g.service))
+      .sort((a, b) => Number(b.allowed) - Number(a.allowed) || a.label.localeCompare(b.label));
+    if (scope === "service" && !gs.length) return null; // a hub with no service shows no such group
+    const Icon = scope === "user" ? User : scope === "service" ? Bot : Cpu;
     return (
       <div className="grid gap-1.5">
         <h4 className="flex items-center gap-2 text-sm font-medium">
-          {t(scope === "user" ? "pool.access.people" : "pool.access.machines")}
+          {t(scope === "user" ? "pool.access.people" : scope === "service" ? "pool.access.services" : "pool.access.machines")}
           <Badge variant="secondary" className="font-mono font-normal">
             {gs.filter((g) => g.allowed).length} / {gs.length}
           </Badge>
         </h4>
+        {scope === "service" && <p className="text-xs text-muted-foreground">{t("pool.access.servicesLead")}</p>}
         {gs.length ? (
           <ul className="grid gap-1">
             {gs.map((g) => {
@@ -560,7 +565,7 @@ function AccessEditor({ sub, view: first, targets, onChanged }: { sub: Sub; view
                     <span className="truncate text-sm">{g.label}</span>
                     <span className="text-xs text-muted-foreground">{t(`pool.access.${g.why}` as MsgKey)}</span>
                   </div>
-                  {fixed && g.why !== "unknown" ? (
+                  {fixed && g.why !== "unknown" && scope !== "service" ? (
                     scope === "user" ? (
                       <Button variant="link" size="sm" className="h-auto px-0 text-xs" asChild>
                         <Link to={`/people/${encodeURIComponent(g.id)}`}>{t("pool.access.editAll")}</Link>
@@ -605,6 +610,7 @@ function AccessEditor({ sub, view: first, targets, onChanged }: { sub: Sub; view
         </Alert>
       )}
       {group("user")}
+      {group("service")}
       {group("node")}
       <AlertDialog open={!!force} onOpenChange={(o) => !o && setForce(null)}>
         <AlertDialogContent>

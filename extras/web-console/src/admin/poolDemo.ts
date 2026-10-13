@@ -23,6 +23,11 @@ const policy: PolicyView = {
     { id: "p:7c1e", allow: [U.a, U.b] },
     { id: "p:9a2d", allow: [U.b] },
     { id: "gh:2002", allow: [U.a, U.x] },
+    { id: "svc:livepage", allow: [U.a] },
+  ],
+  services: [
+    { id: "svc:livepage", name: "livepage", enabled: true },
+    { id: "svc:digest", name: "digest", enabled: true },
   ],
   nodes: [
     { id: "m:mac-a", allow: [], all: true },
