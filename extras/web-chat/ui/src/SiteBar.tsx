@@ -65,7 +65,7 @@ export const SiteBar: FC<{ logo: ReactNode; me: Me | null; home: Home | null; qu
           <PopoverTrigger asChild>
             <button type="button" className="rounded-full" aria-label="我的账户">
               <Avatar>
-                <AvatarFallback className="bg-[var(--fleet-sand)] font-medium text-[#19182a]">{(name[0] || "·").toUpperCase()}</AvatarFallback>
+                <AvatarFallback className="bg-[var(--fleet-sand)] font-medium text-[var(--fleet-bg)]">{(name[0] || "·").toUpperCase()}</AvatarFallback>
               </Avatar>
             </button>
           </PopoverTrigger>

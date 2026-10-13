@@ -1,7 +1,7 @@
 #!/bin/bash
 # site-images.sh — draw the website's PNGs once (issue #3584): the two share
 # cards (1200×630, 中文 / English), the PNG icons and favicon.ico, all from
-# site/assets/logo.svg and the site's own colours and fonts. The output is
+# extras/fleet-theme's logo.svg, colours and fonts (the one theme, issue #3924). The output is
 # committed under site/assets/; bin/site-build.sh only copies it, so the build
 # needs no browser.
 #
@@ -14,6 +14,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 A="$REPO/site/assets"
+THEME="$REPO/extras/fleet-theme"
 pw="${PLAYWRIGHT_DIR:-}"
 if [ -z "$pw" ]; then
   pw="$(ls -dt "$HOME"/.npm/_npx/*/node_modules/playwright 2>/dev/null | head -1 || true)"
@@ -22,28 +23,27 @@ fi
 mkdir -p "$A/og"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-node - "$pw" "$A" "$tmp" <<'JS'
-const [pw, A, tmp] = process.argv.slice(2);
+node - "$pw" "$A" "$tmp" "$THEME" <<'JS'
+const [pw, A, tmp, THEME] = process.argv.slice(2);
 const { chromium } = require(pw);
 const fs = require('fs');
-const logo = fs.readFileSync(A + '/logo.svg', 'utf8').replace(/<title>.*?<\/title>/, '');
-const font = (f, w) => `@font-face{font-family:"${f[0]}";font-weight:${w};src:url(file://${A}/fonts/${f[1]})}`;
-const fonts = [font(['Bricolage Grotesque', 'bricolage-grotesque-800-latin.woff2'], 800),
-               font(['IBM Plex Sans', 'ibm-plex-sans-latin.woff2'], '400 600'),
-               font(['IBM Plex Mono', 'ibm-plex-mono-500-latin.woff2'], 500)].join('');
+const logo = fs.readFileSync(THEME + '/logo.svg', 'utf8').replace(/<title>.*?<\/title>/, '');
+// the theme's own @font-face rules and fleet:tokens block — no colour or family typed here
+const fonts = fs.readFileSync(THEME + '/fonts.css', 'utf8').replace(/url\(\.\/fonts\//g, `url(file://${THEME}/fonts/`)
+  + fs.readFileSync(THEME + '/theme.css', 'utf8').match(/\/\* fleet:tokens \*\/([\s\S]*?)\/\* \/fleet:tokens \*\//)[1];
 const card = (lang, h1, sub, chips) => `<!doctype html><html lang="${lang}"><meta charset="utf-8"><style>${fonts}
 *{box-sizing:border-box;margin:0}
-body{width:1200px;height:630px;background:#19182a;color:#f3ede6;font-family:"IBM Plex Sans","PingFang SC",sans-serif;position:relative;overflow:hidden;padding:84px 96px}
+body{width:1200px;height:630px;background:var(--fleet-bg);color:var(--fleet-ink);font-family:var(--fleet-font-ui);position:relative;overflow:hidden;padding:84px 96px}
 body::before{content:"";position:absolute;right:-220px;top:-160px;width:900px;height:900px;background:radial-gradient(closest-side,rgba(217,118,90,.26),transparent 70%)}
-.b{display:flex;align-items:center;gap:20px;font:800 40px "Bricolage Grotesque",sans-serif;position:relative}
+.b{display:flex;align-items:center;gap:20px;font:800 40px var(--fleet-font-display);position:relative}
 .b svg{width:76px;height:76px}
-h1{position:relative;margin-top:72px;font:800 ${lang === 'en' ? 76 : 70}px/1.12 "Bricolage Grotesque","PingFang SC",sans-serif;letter-spacing:${lang === 'en' ? '-.02em' : '0'}}
-h1 em{font-style:normal;color:#d9765a}
-p{position:relative;margin-top:28px;font-size:32px;color:#c4bdcc}
-.c{position:absolute;left:96px;bottom:72px;display:flex;gap:14px;font:500 22px "IBM Plex Mono","PingFang SC",monospace;color:#ecd3b8}
+h1{position:relative;margin-top:72px;font:800 ${lang === 'en' ? 76 : 70}px/1.12 var(--fleet-font-display);letter-spacing:${lang === 'en' ? '-.02em' : '0'}}
+h1 em{font-style:normal;color:var(--fleet-clay)}
+p{position:relative;margin-top:28px;font-size:32px;color:var(--fleet-ink-2)}
+.c{position:absolute;left:96px;bottom:72px;display:flex;gap:14px;font:500 22px var(--fleet-font-mono);color:var(--fleet-sand)}
 .c span{border:1px solid rgba(236,211,184,.3);background:rgba(236,211,184,.08);border-radius:999px;padding:8px 18px}
 </style><div class="b">${logo}ClaudeFleet</div><h1>${h1}</h1><p>${sub}</p><div class="c">${chips.map(c => `<span>${c}</span>`).join('')}</div></html>`;
-const icon = (size, rounded) => `<!doctype html><style>*{margin:0}body{width:${size}px;height:${size}px;background:${rounded ? 'transparent' : '#19182a'}}svg{width:${size}px;height:${size}px;display:block}</style>${rounded ? logo : logo.replace(/rx="15"/, 'rx="0"')}`;
+const icon = (size, rounded) => `<!doctype html><style>${fonts}*{margin:0}body{width:${size}px;height:${size}px;background:${rounded ? 'transparent' : 'var(--fleet-bg)'}}svg{width:${size}px;height:${size}px;display:block}</style>${rounded ? logo : logo.replace(/rx="15"/, 'rx="0"')}`;
 (async () => {
   const b = await chromium.launch();
   const shot = async (htmlText, w, h, out, transparent) => {

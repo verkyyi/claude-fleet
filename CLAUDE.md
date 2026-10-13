@@ -531,7 +531,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   pool's proxy picks and meters, as for `fleet-claude.sh`. The model allowlist is
   `lib.mjs`'s `MODELS`, enforced by the server. The page (issue #3637) is
   `extras/web-chat/ui` — React + shadcn/ui + assistant-ui, stock components only,
-  the site v2 look in ONE file (`src/theme.css`); its build `ui/dist` is committed
+  the look `@import`ed from the ONE theme package `extras/fleet-theme/`
+  (issue #3924: site, chat and console share it; `fleet-theme-selftest.sh` reds on a
+  colour / font family / logo defined elsewhere); its build `ui/dist` is committed
   and served as is (CSP self, no CDN), and CI `web-chat-ui` rebuilds it from the
   lockfile and reds on a stale dist. `fleet-webchat-selftest.sh`.
   **A person reaches it from the site's `/chat`, and the hub never runs it**

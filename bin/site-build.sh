@@ -17,13 +17,17 @@
 #   docs/public/<lang>/faq.md     the questions marked `<!-- faq: site -->`, through
 #                                 bin/docs-faq.py — the visible FAQ and the FAQPage
 #                                 JSON-LD are one list, word for word (check-html)
-#   site/assets/                  logo, icons, share cards (bin/site-images.sh makes
-#                                 the PNGs once), self-hosted Latin font subsets (OFL)
-#   site/fonts-src/               the fonts as published; --fonts cuts each to the
-#                                 characters both pages carry (Plex Sans fixed at
-#                                 400 / 500 / 600 from its variable font) into
-#                                 site/assets/fonts/ and lists them in glyphs.txt —
-#                                 every build fails on a page character not in it
+#   site/assets/                  icons, share cards (bin/site-images.sh makes
+#                                 the PNGs once)
+#   extras/fleet-theme/           the ONE theme (issue #3924): its fleet:tokens
+#                                 block and fonts.css are inlined into the page
+#                                 (the template's /*{{fleet_theme}}*/), logo.svg and
+#                                 fonts/ copied out. Its fonts-src/ are the fonts as
+#                                 published; --fonts cuts each to the characters both
+#                                 pages carry (Plex Sans fixed at 400 / 500 / 600 from
+#                                 its variable font) into its fonts/ and lists them in
+#                                 glyphs.txt — every build fails on a page character
+#                                 not in it
 #
 # Output (gitignored, built into the hub image by hub-deploy like the docs):
 #
@@ -180,8 +184,31 @@ def faq(lang):
         fail('%s: faq.md marks no question for the site' % lang)
     return [{'q': i['q'], 'a': i['a']} for i in items]
 
+# --- the theme (issue #3924) -------------------------------------------------
+# The page's colours and fonts are extras/fleet-theme's, inlined: its fleet:tokens
+# block and its fonts.css, comments out, whitespace folded, the font files at
+# /site/fonts/. The template defines none of its own (fleet-theme-selftest.sh).
+THEME = os.path.join(REPO, 'extras', 'fleet-theme')
+
+def theme_css():
+    def tidy(css):
+        css = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
+        return re.sub(r'\s*([{};:,])\s*', r'\1', ' '.join(css.split())).replace(';}', '}')
+    t = open(os.path.join(THEME, 'theme.css'), encoding='utf-8').read()
+    m = re.search(r'/\* fleet:tokens \*/(.*?)/\* /fleet:tokens \*/', t, re.S)
+    if not m:
+        fail('extras/fleet-theme/theme.css has no fleet:tokens block')
+        return '', ''
+    fonts = open(os.path.join(THEME, 'fonts.css'), encoding='utf-8').read().replace('url(./fonts/', 'url(/site/fonts/')
+    bg = re.search(r'--fleet-bg:\s*(#[0-9a-fA-F]{6})', m.group(1))
+    return '\n'.join(tidy(c) for c in re.findall(r'@font-face\s*\{[^}]*\}', fonts)) + '\n' + tidy(m.group(1)), bg.group(1) if bg else ''
+
 # --- one page ---------------------------------------------------------------
+THEME_CSS, THEME_BG = theme_css()
 tmpl = open(os.path.join(SITE, 'template.html'), encoding='utf-8').read()
+if '/*{{fleet_theme}}*/' not in tmpl:
+    fail('template.html has no /*{{fleet_theme}}*/ slot for the theme')
+tmpl = tmpl.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG)
 tables = {l: json.load(open(os.path.join(SITE, 'strings.%s.json' % l), encoding='utf-8')) for l, _ in LANGS}
 keys = set(tables['zh'])
 for l, _ in LANGS:
@@ -307,9 +334,10 @@ if errs:
 # --- the fonts (issue #3799) -------------------------------------------------
 # Each served font is cut down to the characters the two pages carry, so a slow
 # phone fetches ~55 KB of fonts instead of ~95 KB. The cut is made by --fonts
-# (fontTools) from site/fonts-src/ and committed; every build checks it still
+# (fontTools) from extras/fleet-theme/fonts-src/ into its fonts/ and committed; every build checks it still
 # covers both pages, or a new word would fall back to the system font unseen.
-FONT_SRC = os.path.join(SITE, 'fonts-src')
+FONT_SRC = os.path.join(THEME, 'fonts-src')
+FONT_OUT = os.path.join(THEME, 'fonts')
 GLYPHS = os.path.join(FONT_SRC, 'glyphs.txt')
 FONT_CUTS = (   # served file · its source · the weight a variable source is fixed at
     ('ibm-plex-sans-400-latin.woff2', 'ibm-plex-sans-var-latin.woff2', 400),
@@ -359,10 +387,10 @@ if FONTS:
         s.populate(unicodes=chars)
         s.subset(f)
         f.flavor = 'woff2'
-        f.save(os.path.join(SITE, 'assets', 'fonts', name))
+        f.save(os.path.join(FONT_OUT, name))
     with open(GLYPHS, 'w', encoding='utf-8') as fh:
         fh.write(''.join(chr(c) for c in sorted(chars)) + '\n')
-    print('site-build: fonts cut to %d characters → site/assets/fonts/' % len(chars))
+    print('site-build: fonts cut to %d characters → extras/fleet-theme/fonts/' % len(chars))
 
 have = set(open(GLYPHS, encoding='utf-8').read().rstrip('\n')) if os.path.isfile(GLYPHS) else set()
 lack = sorted(chr(c) for c in page_chars() if chr(c) not in have)
@@ -370,8 +398,8 @@ if lack:
     errs.append('the fonts lack %s (on the page now): run bin/site-build.sh --fonts (needs fontTools)'
                 % ' '.join('U+%04X %s' % (ord(c), c) for c in lack))
 for name, _, _ in FONT_CUTS:
-    if not os.path.isfile(os.path.join(SITE, 'assets', 'fonts', name)):
-        errs.append('site/assets/fonts/%s is missing: run bin/site-build.sh --fonts' % name)
+    if not os.path.isfile(os.path.join(FONT_OUT, name)):
+        errs.append('extras/fleet-theme/fonts/%s is missing: run bin/site-build.sh --fonts' % name)
 if errs:
     for e in errs:
         print('site-build: ' + e, file=sys.stderr)
@@ -389,13 +417,13 @@ for lang, (sub_dir, page) in pages.items():
 
 A = os.path.join(SITE, 'assets')
 for name in ('logo.svg', 'favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'):
-    src = os.path.join(A, name)
+    src = os.path.join(THEME if name == 'logo.svg' else A, name)
     if os.path.isfile(src):
         shutil.copy2(src, os.path.join(OUT, name))
     else:
-        errs.append('site/assets/%s is missing (bin/site-images.sh makes it)' % name)
+        errs.append('%s is missing (bin/site-images.sh makes it)' % os.path.relpath(src, REPO))
 for sub_dir, pat in (('fonts', r'\.(woff2|txt)$'), ('og', r'\.png$')):
-    src = os.path.join(A, sub_dir)
+    src = FONT_OUT if sub_dir == 'fonts' else os.path.join(A, sub_dir)
     os.makedirs(os.path.join(OUT, sub_dir), exist_ok=True)
     for name in sorted(os.listdir(src)) if os.path.isdir(src) else []:
         if re.search(pat, name):
