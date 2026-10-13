@@ -29,6 +29,22 @@ export function useMe(): MeState {
   }, []);
   return s;
 }
+// A write (POST / PUT / DELETE) to one of the entry's /v1/*, same origin: the
+// answer's status and body, an error's own words in `error` (httpError's
+// {"error": …}); status 0 = no answer at all.
+export type Sent<T> = { ok: boolean; status: number; body: T | null; error?: string };
+export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<Sent<T>> {
+  const r = await fetch(url, {
+    method, credentials: "same-origin",
+    headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }).catch(() => null);
+  if (!r) return { ok: false, status: 0, body: null };
+  if (r.status === 401) { location.assign("/app/signin"); return { ok: false, status: 401, body: null }; }
+  const j = (await r.json().catch(() => null)) as (T & { error?: string }) | null;
+  return { ok: r.ok, status: r.status, body: j, ...(!r.ok && j?.error ? { error: j.error } : {}) };
+}
+
 export const isAdmin = (me: Me | null) => !!me && me.role !== undefined && me.role !== "user" && me.role !== "";
 
 // The person's own limit (fleet.person_budget) off /v1/me/usage — the one the

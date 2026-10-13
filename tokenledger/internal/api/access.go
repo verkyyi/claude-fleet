@@ -192,7 +192,7 @@ func (s *Server) doors(f HubFacts) []Door {
 	return []Door{
 		{
 			ID: "dashboard", Name: "The dashboard", Via: "http",
-			Where:      []string{AppPrefix, AppPrefix + "/sessions", AppPrefix + "/machines", AppPrefix + "/connect", AppPrefix + "/usage", AppPrefix + "/config"},
+			Where:      []string{AppPrefix, AppPrefix + "/sessions", AppPrefix + "/machines", AppPrefix + "/connect", AppPrefix + "/usage", AppPrefix + settingsPagePath},
 			Credential: dashCred,
 			Can: "Read what the viewer's role lets them see (claude-fleet#1985, #1989): an admin every " +
 				"figure this hub holds, a user their own usage, sessions, devices and settings.",

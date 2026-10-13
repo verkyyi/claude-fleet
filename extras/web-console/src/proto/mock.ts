@@ -1,7 +1,8 @@
 // mock.ts — the review build's API (EPIC #3923 rule 14): the entry's real
 // response shapes (/v1/me, /v1/me/usage, /v1/fleet/devices, /v1/chat/*,
 // /v1/fleet/tasks, /v1/fleet/tickets*, and 设备's /v1/fleet/connect,
-// /v1/fleet/entry/*, /v1/nodes) with
+// /v1/fleet/entry/*, /v1/nodes; 设置's /v1/me/identities and
+// /v1/fleet/person-bundle, kept in memory so binding and importing can be clicked) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
 type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off"; page?: string };
@@ -67,6 +68,9 @@ export async function install(): Promise<string> {
     { t: "tool_result", id: "t2", text: "published dash-w41" },
     { t: "text", d: SALES_REPLY },
   ] : [];
+  const ids = [{ kind: "wechat", subject: "o-wx-" + me.login, label: "o-wx-" + me.login, verified_at: "2026-09-02T08:00:00Z" }];
+  let bundle = { version: 3, created: "2026-10-09T10:12:00Z", bundle: { mcp: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } }, ui_lang: "zh" } as Record<string, unknown> };
+  const idView = () => ({ person: me.person, identities: ids, can_add: ["email"] });
   const models = [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }];
   // 任务 and 单子 (C5): /v1/fleet/tasks, /v1/fleet/tickets
   const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
@@ -193,6 +197,28 @@ export async function install(): Promise<string> {
         { endpoint_id: "e1", hostname: "mac-mini", os_user: me.login, status: "online", load1: 1.9, ncpu: 8, sessions: 3, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
         { endpoint_id: "e2", hostname: "studio-2", os_user: me.login, status: "online", load1: 0.6, ncpu: 12, sessions: 0, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
       ], machines: [{ hostname: "mac-mini", alias: "mac-mini" }, { hostname: "studio-2", alias: "studio-2" }] });
+      case "/v1/me/identities": {
+        const m = (init?.method || "GET").toUpperCase();
+        if (m === "POST") {
+          const subject = JSON.parse(String(init?.body || "{}")).subject || "";
+          ids.push({ kind: "email", subject, label: subject, verified_at: new Date().toISOString() });
+          return ok({ mail_sent: true }, 202);
+        }
+        if (m === "DELETE") {
+          const q = new URL(url, location.href).searchParams;
+          if (ids.length <= 1) return ok({ error: "this is your only way of signing in — add another first" }, 409);
+          ids.splice(ids.findIndex((i) => i.kind === q.get("kind") && i.subject === q.get("subject")), 1);
+        }
+        return ok(idView());
+      }
+      case "/v1/fleet/person-bundle": {
+        if ((init?.method || "GET").toUpperCase() === "PUT") {
+          const req = JSON.parse(String(init?.body || "{}"));
+          if (req.base !== bundle.version) return ok({ error: "your personal configuration changed since that version — read it again" }, 409);
+          bundle = { version: bundle.version + 1, created: new Date().toISOString(), bundle: req.bundle };
+        }
+        return ok(bundle);
+      }
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
       case "/v1/chat/conversation":
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);

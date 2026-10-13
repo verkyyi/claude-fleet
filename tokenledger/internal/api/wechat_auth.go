@@ -315,14 +315,14 @@ func (s *Server) wechatLink(pid, union, name string, now time.Time) string {
 	target := orDefault(name, "?") + " (wechat)"
 	if errors.Is(err, store.ErrIdentityTaken) {
 		_ = s.Store.HubAudit(pid, "identity.add", target, "refused", "another person signs in with it", now)
-		return AppPrefix + "/config?e=wechat-taken#logins"
+		return settingsBack("wechat-taken")
 	}
 	if err != nil {
 		log.Printf("wechat link for %s: %v", pid, err)
-		return AppPrefix + "/config?e=wechat#logins"
+		return settingsBack("wechat")
 	}
 	_ = s.Store.HubAudit(pid, "identity.add", target, "ok", "wechat, by scanning it", now)
-	return AppPrefix + "/config#logins"
+	return settingsBack("")
 }
 
 func (s *Server) setWeChatBind(w http.ResponseWriter, r *http.Request, union, name string, now time.Time) {
