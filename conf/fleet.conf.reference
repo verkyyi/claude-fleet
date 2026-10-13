@@ -2419,7 +2419,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # (issue #3308): it holds when more than FLEET_ADMIT_CPU_SHARE of the limit is
 # used, or at least FLEET_ADMIT_CPU_THROTTLE % of the periods were throttled,
 # sampled over FLEET_ADMIT_CPU_SAMPLE_SECS. No limit ⇒ the load rule above.
-# FLEET_ADMIT_LOAD_PER_CORE=0 turns this reading off too.
+# Setting FLEET_ADMIT_LOAD_PER_CORE to 0 turns this reading off too.
 # @label=Admission container CPU share @group=disk @tier=internal @scope=global @edit=str
 #FLEET_ADMIT_CPU_SHARE=0.9          # hold above this share of the cgroup's cpu.max
 # @label=Admission container CPU throttled % @group=disk @tier=internal @scope=global @edit=int @unit=%
