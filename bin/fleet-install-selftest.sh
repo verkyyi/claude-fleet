@@ -386,6 +386,20 @@ ginstall() {  # <home> <args…> — the stable copy, no terminal; output in $ou
 GH="$WORK/nohub/home"; mkdir -p "$GH"
 ginstall "$GH"
 [ "$rc" = 0 ] && ok "G the stable copy (placeholder unfilled), no terminal → exit 0" || bad "G rc=$rc: $out"
+# --help (issue #4074): the arguments AND the env answers, exit 0, nothing installed
+hout=$(env HOME="$WORK/nohub/helphome" sh -s -- --help < "$BIN/fleet-install.sh" 2>&1); hrc=$?
+case "$hout" in *--no-hub*FLEET_INSTALL_HOST=0\|1*FLEET_INSTALL_HUB=0\|1*) hok=1 ;; *) hok=0 ;; esac
+[ "$hrc" = 0 ] && [ "$hok" = 1 ] && [ ! -e "$WORK/nohub/helphome" ] \
+  && ok "G --help lists the arguments and FLEET_INSTALL_HOST / _HUB, exit 0, installs nothing" || bad "G --help rc=$hrc: $hout"
+# no terminal and the client not skipped (issue #4074): not a failure — exit 0, one line
+if ( : </dev/tty ) 2>/dev/null; then
+  ok "G (no-terminal run skipped: this runner has a /dev/tty)"
+else
+  out=$(env -u FLEET_HUB_URL -u FLEET_INSTALL_NO_RUN HOME="$GH" XDG_CONFIG_HOME="$GH/.config" PATH="$SYSPATH" \
+        FLEET_INSTALL_SRC="file://$REPO" FLEET_INSTALL_NO_DEPS=1 sh -s < "$BIN/fleet-install.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] && echo "$out" | grep -q '没有终端，跳过打开客户端' \
+    && ok "G no terminal → the client skipped, said, exit 0" || bad "G no terminal: rc=$rc $out"
+fi
 GR="$GH/.claude/fleet"; gmiss=''
 while IFS= read -r f; do
   [ -n "$f" ] || continue

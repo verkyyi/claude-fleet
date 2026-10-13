@@ -22,6 +22,14 @@ curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fle
 
 装好后命令在 `~/.local/bin/fleet`。终端说找不到 `fleet` 的话，开一个新终端窗口再试。
 
+装完会在这个终端里直接打开客户端。没有终端的地方（管道、CI、远程脚本）装完说一句「没有终端，跳过打开客户端」，退出码是 0——之后在终端里敲 `fleet` 打开。
+
+全部参数和自动化用的环境变量（`FLEET_INSTALL_HOST=0|1` 等同 `--host`，`FLEET_INSTALL_HUB=0` 等同 `--no-hub`）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --help
+```
+
 ## 2. 打开客户端
 
 在终端里敲 `fleet`，回车。

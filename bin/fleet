@@ -171,13 +171,22 @@ fi
 managed() {
   [ "${FLEET_NODE_HOSTED:-0}" = 1 ] || return 0
   _me=$(hostname -s 2>/dev/null); _me=${_me%%.*}
-  echo "fleet · 客户端在 ${_me:-这台托管机器} 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。" >&2
+  # no hub for this login (本机模式, `fleet-install.sh --no-hub` — issue #4074):
+  # there is no 入口 to install from, so the line names none
+  _hub=${FLEET_HUB_URL:-}
+  [ -n "$_hub" ] || _hub=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_HUB_URL=//p' \
+    "${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+  if [ -n "$_hub" ]; then
+    echo "fleet · 客户端在 ${_me:-这台托管机器} 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。" >&2
+  else
+    echo "fleet · 客户端在 ${_me:-这台托管机器} 上运行（本机模式，不连入口）。" >&2
+  fi
   # a resident client from before #2702 still here: how to clear it
   _sc="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell"
   if [ -d "$_sc" ] || tmux -L fleet-shell has-session -t =fleet-shell 2>/dev/null; then
     echo "fleet · 这台上还留着旧的常驻客户端（${_sc}）：不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
   fi
-  unset _me _sc
+  unset _me _sc _hub
 }
 # client — the client, or one line on why it cannot open here and a non-zero exit
 client() {

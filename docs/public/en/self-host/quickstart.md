@@ -22,6 +22,14 @@ curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fle
 
 Once installed, the command is at `~/.local/bin/fleet`. If the terminal says it cannot find `fleet`, open a new terminal window and try again.
 
+When it is done it opens the client right in this terminal. Where there is no terminal (a pipe, CI, a remote script) it says 「没有终端，跳过打开客户端」 (no terminal, the client is not opened) and exits 0 — type `fleet` in a terminal later to open it.
+
+Every argument and the environment variables for automation (`FLEET_INSTALL_HOST=0|1` is `--host`, `FLEET_INSTALL_HUB=0` is `--no-hub`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --help
+```
+
 ## 2. Open the client
 
 Type `fleet` in the terminal and press Enter.

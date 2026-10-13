@@ -116,8 +116,32 @@ DEPS=1
 HOST_ANS="${FLEET_INSTALL_HOST:-}"
 HUB_ANS="${FLEET_INSTALL_HUB:-}"
 [ "${FLEET_INSTALL_NO_HUB:-}" = 1 ] && HUB_ANS=0
+usage() {
+  cat <<'USAGE'
+fleet-install.sh — 装 fleet（curl -fsSL <入口>/install | sh；参数跟在 sh -s -- 后面）
+
+参数：
+  --host       这台也承载：自己跑会话（之后也能 fleet host on / off）
+  --no-hub     本机模式：不连入口，即使知道入口地址
+  --no-deps    不顺手装依赖（tmux 等）
+  --no-node    接入口时不把这台登记为节点
+  -h, --help   打印这段说明
+
+环境变量（自动化预填答案，和参数等价）：
+  FLEET_INSTALL_HOST=0|1   承载：1 同 --host；0 不开
+  FLEET_INSTALL_HUB=0|1    接入口：0 同 --no-hub；1 要接（须知道地址）
+  FLEET_HUB_URL=https://…  入口地址（入口给的那条命令已填好）
+  FLEET_INSTALL_NO_DEPS=1  同 --no-deps
+  FLEET_INSTALL_NO_RUN=1   装完不打开客户端
+  FLEET_INSTALL_HOME=…     装到哪（默认 ~/.claude/fleet）
+  FLEET_INSTALL_BIN=…      fleet 命令放哪（默认 ~/.local/bin）
+
+装完在终端里接着打开 fleet；没有终端（管道、CI）时跳过这一步，以 0 退出。
+USAGE
+}
 for a in "$@"; do
   case "$a" in
+    -h|--help) usage; exit 0 ;;
     --no-deps) DEPS=0 ;;
     --host) HOST_ANS=1 ;;      # 承载 too: the part that runs sessions
     --no-hub) HUB_ANS=0 ;;     # 单机: no hub even when an address is known
@@ -832,6 +856,12 @@ if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
   exit 0
 fi
 export PATH="$BIN:$PATH"
+# no terminal (a pipe with no tty, CI): the client cannot open here, and that is
+# not a failed install (issue #4074) — say so and end 0
+if [ "$TTY" = 0 ]; then
+  say "没有终端，跳过打开客户端 — 在终端里敲 fleet 打开"
+  exit 0
+fi
 if [ "$TTY" = 1 ]; then
   # The terminal's own device, not /dev/tty (issue #1901): stdin opened as
   # /dev/tty has ttyname() «/dev/tty», which tmux refuses — `open terminal
@@ -840,4 +870,3 @@ if [ "$TTY" = 1 ]; then
   if [ -t 2 ]; then exec "$BIN/fleet" 0<&2; fi
   exec "$BIN/fleet" </dev/tty
 fi
-exec "$BIN/fleet"
