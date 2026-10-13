@@ -534,6 +534,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   the site v2 look in ONE file (`src/theme.css`); its build `ui/dist` is committed
   and served as is (CSP self, no CDN), and CI `web-chat-ui` rebuilds it from the
   lockfile and reds on a stale dist. `fleet-webchat-selftest.sh`.
+  **A person reaches it from the site's `/chat`, and the hub never runs it**
+  (EPIC #3642, docs/dev/WEB-CHAT.md «经官网»): `/chat/` + `/v1/chat/*` sit behind
+  `viewerOnly` (an account only, each person only their own — an admin too, D5);
+  the hub finds the person's home (`EntryHomeOf`; none ⇒ 409 `no_home`, down ⇒
+  503 `home_down`, never another machine — D2) and sends `chat_relay_open
+  {relay_id, secret, login}` to that login's agent only (`CapChat`), which dials
+  back, verifies the first frame's `X-Fleet-Person` (signed with the login's node
+  token hash) and only then connects THAT login's socket — the target is fixed.
+  The page is `npm run build:site`, packed into the hub image by
+  `bin/web-chat-pack.sh`; its budget bar reads the person's own `/v1/me/usage`.
+  BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` ·
+  `chat-budget-bypass` · `chat-home-moved`.
 - **Orchestrating is a role a session TAKES, one holder per role** (issue #3114,
   EPIC #3111 C3). `/fleet-orchestrate` (the fleet-orchestrate plugin's skill) first
   calls the dispatch group's `take_role` (`bin/fleet-role-take.sh <role>
