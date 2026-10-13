@@ -15,6 +15,7 @@ import { PeoplePage } from "./pages/People";
 import { PoolPage } from "./pages/Pool";
 import { PoolSettingsPage } from "./pages/PoolSettings";
 import { ReleasePage } from "./pages/Release";
+import { UsagePage } from "./pages/Usage";
 
 const routes = [
   {
@@ -31,6 +32,7 @@ const routes = [
       { path: "pool", element: <PoolPage /> },
       { path: "pool/settings", element: <PoolSettingsPage /> },
       { path: "pool/:id", element: <PoolPage /> },
+      { path: "usage", element: <UsagePage /> },
       { path: "*", element: <NotFound /> },
     ],
   },

@@ -152,3 +152,72 @@ export type ReleaseKeys = {
   revoked_version: number;
   overlap: boolean;
 };
+// 全队用量 (claude-fleet#3936): /v1/admin/usage is each person read as their
+// own /v1/me/usage reads them; ?principal= is that whole answer.
+export type MeUsageLimit = {
+  set: boolean;
+  limit_week?: number;
+  used_week: number;
+  remaining_week?: number;
+  reset_week?: string;
+  limit_5h?: number;
+  used_5h: number;
+  remaining_5h?: number;
+  reset_5h?: string;
+  over?: boolean;
+  window?: string;
+};
+export type UsagePerson = { principal: string; name: string; today: number; week: number; limit: MeUsageLimit };
+export type UsageModel = { name: string; provider: string; tokens: number };
+export type UsageMachine = { node: string; today: number; week: number; people: number };
+export type TeamUsage = { people: UsagePerson[]; models: UsageModel[]; machines: UsageMachine[] };
+export type UsageSession = { kind?: string; worker_id?: string; key?: string; repo?: string; issue?: number; today: number; week: number };
+export type MeUsage = { range: string; today: number; week: number; total: number; limit: MeUsageLimit; models: UsageModel[]; by_session: UsageSession[] };
+
+// /v1/admin/overview: who is on what, their sessions and logins.
+export type OverviewPerson = {
+  principal: string;
+  name: string;
+  today: number;
+  week: number;
+  doing?: { repo: string; issue?: number; tokens: number } | null;
+  sessions: number;
+  running: number;
+  logins: [string, string][];
+  subs: string[];
+};
+export type OverviewSub = { account: string; label: string };
+export type FleetNode = { machine_name: string; availability: string; disabled?: string };
+export type Overview = {
+  people: OverviewPerson[];
+  pool: OverviewSub[];
+  nodes: FleetNode[];
+  totals: { tokens: number; tokens_today: number; sessions: number; running: number; machines: number; machines_online: number };
+};
+
+// /v1/admin/sessions: fleet_sessions, every person's.
+export type FleetWorker = {
+  worker_id?: string;
+  key?: string;
+  name?: string;
+  repo?: string;
+  title?: string;
+  state?: string;
+  needs?: string;
+  status_kind?: string;
+  status_msg?: string;
+  detail?: string;
+  agent?: string;
+  worktree?: string;
+  born?: number | string;
+};
+export type FleetSession = {
+  worker_id?: string | null;
+  machine_name: string;
+  os_user: string;
+  availability: string;
+  observed_at?: string;
+  tokens_today?: number;
+  worker: FleetWorker;
+};
+export type FleetSessions = { sessions: FleetSession[]; nodes?: FleetNode[] };
