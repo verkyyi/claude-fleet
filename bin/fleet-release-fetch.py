@@ -39,6 +39,19 @@ missing or altered file is refused.
     re-pinned (the old kept as release.pub.prev) and said on stderr. No
     endorsement, or one that does not verify: refused, the pin unchanged.
 
+ARTIFACTS (issue #4009). `--artifacts <sha|stable> <dir>` takes the pinned
+programs a release carries (codex, tmux, Claude Code … — everything but the
+ccquota-* a hub's own image builds) into <dir>: a self-hosting team's
+CCQUOTA_FLEET_RELEASE_ARTIFACTS, filled from any hub that already carries that
+release. The manifest is checked exactly as above; each artifact by the size +
+sha256 it names, written whole (a temp file renamed), 0755. One already there
+with the right digest is kept; a wrong one is replaced. `--platforms "darwin-arm64
+linux-amd64"` keeps only those platforms' (default: every one the release has).
+Prints one line per artifact (`got` / `kept`).
+
+    fleet-release-fetch.py --hub <url> --pubkey <release.pub> --artifacts \
+        [--platforms "<os>-<arch> …"] <sha|stable> <dir>
+
 FORMAT. Frozen, only ever added to: a field this reader does not know is
 ignored. A release that needs a newer reader says so in `min_client_compat`
 (an integer > COMPAT): refused with what to do by hand.
@@ -64,7 +77,8 @@ COMPAT = 1                       # the release format this reader takes
 SCHEMA = 1
 NS, KEY_NS = "claude-fleet-release", "claude-fleet-release-key"
 SIG_HDR, SSHSIG_HDR = "X-Ccquota-Release-Signature", "X-Ccquota-Release-Sshsig"
-MANIFEST_MAX, TREE_MAX = 8 << 20, 512 << 20
+MANIFEST_MAX, TREE_MAX, ART_MAX = 8 << 20, 512 << 20, 1 << 30
+ART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("fleet_release_verify", os.path.join(HERE, "fleet-release-verify.py"))
@@ -318,6 +332,53 @@ class Fetch:
         return m, how
 
 
+def file_digest(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def fetch_artifacts(f, sha, dest, platforms):
+    """every pinned artifact of the release (no ccquota-*), each checked
+    against the signed manifest, into dest → [(name, 'got'|'kept')]"""
+    m = f.manifest(sha)[0]
+    at = m["sha"]
+    os.makedirs(dest, exist_ok=True)
+    out = []
+    for a in m.get("artifacts") or []:
+        n = a.get("name") if isinstance(a, dict) else None
+        if not isinstance(n, str) or not ART_RE.match(n):
+            raise Refused("manifest: bad artifact name %r" % (n,))
+        if n.startswith("ccquota-"):
+            continue  # the hub's own image carries these, built from its own commit
+        if platforms and not any(n.endswith("-" + p) for p in platforms):
+            continue
+        size, want = a.get("size"), a.get("sha256")
+        p = os.path.join(dest, n)
+        if os.path.isfile(p) and os.path.getsize(p) == size and file_digest(p) == want:
+            out.append((n, "kept"))
+            continue
+        b = f.get(at + "/artifacts/" + n, ART_MAX)[0]
+        if len(b) != size or hashlib.sha256(b).hexdigest() != want:
+            raise Refused("%s: digest does not match the manifest" % n)
+        tmp = p + ".partial.%d" % os.getpid()
+        try:
+            with open(tmp, "wb") as o:
+                o.write(b)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, p)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+        out.append((n, "got"))
+    if not out:
+        raise Refused("release %s carries no artifact%s to take" % (at[:12], " for " + " ".join(platforms) if platforms else ""))
+    return m, out
+
+
 def valid_path(p):
     return (isinstance(p, str) and p and not p.startswith("/") and os.path.normpath(p) == p
             and p not in (".", "..") and not p.startswith("../") and "\\" not in p and "\0" not in p)
@@ -353,15 +414,22 @@ def unpack(m, tb, d):
 def main(argv):
     hub = pub = None
     timeout = 60
+    arts, platforms = False, []
     pos = []
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--hub", "--pubkey", "--timeout") and i + 1 < len(argv):
+        if a == "--artifacts":
+            arts = True
+            i += 1
+            continue
+        if a in ("--hub", "--pubkey", "--timeout", "--platforms") and i + 1 < len(argv):
             if a == "--hub":
                 hub = argv[i + 1]
             elif a == "--pubkey":
                 pub = argv[i + 1]
+            elif a == "--platforms":
+                platforms = argv[i + 1].replace(",", " ").split()
             else:
                 timeout = float(argv[i + 1])
             i += 2
@@ -372,13 +440,27 @@ def main(argv):
         pos.append(a)
         i += 1
     if not hub or not pub or len(pos) != 2:
-        sys.stderr.write("usage: fleet-release-fetch.py --hub <url> --pubkey <file> <sha|stable> <dest>\n")
+        sys.stderr.write("usage: fleet-release-fetch.py --hub <url> --pubkey <file> [--artifacts [--platforms <list>]] <sha|stable> <dest>\n")
         return 2
     sha, dest = pos
     if sha != "stable" and not SHA_RE.match(sha):
         sys.stderr.write("bad sha %r\n" % sha)
         return 2
     t0 = time.time()
+    if arts:
+        try:
+            m, got = fetch_artifacts(Fetch(hub, pub, timeout), sha, dest, platforms)
+        except Refused as e:
+            sys.stderr.write("%s\n" % e)
+            return 1
+        except (OSError, ValueError) as e:
+            sys.stderr.write("artifact fetch failed: %s\n" % e)
+            return 1
+        for n, how in got:
+            print(how, n)
+        sys.stderr.write("fleet-release: %d artifact(s) of %s verified into %s in %.1fs\n"
+                         % (len(got), m["sha"][:12], dest, time.time() - t0))
+        return 0
     try:
         m, how = Fetch(hub, pub, timeout).run(sha, dest)
     except Refused as e:

@@ -470,6 +470,11 @@ func TestReleaseBuildRefusesMissingPinned(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "claude-9.9.9-darwin-arm64") {
 		t.Fatalf("Ensure = %v, want a refusal naming claude-9.9.9-darwin-arm64", err)
 	}
+	// and where to get it (claude-fleet#4009): the fetch that takes it from a
+	// hub already carrying the release
+	if !strings.Contains(err.Error(), "fleet-release-fetch.py") || !strings.Contains(err.Error(), "--artifacts "+shaA) {
+		t.Fatalf("Ensure = %v, want the way to fetch it", err)
+	}
 	if r.rs.Has(shaA) {
 		t.Fatal("a release missing a pinned artifact was kept")
 	}

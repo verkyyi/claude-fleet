@@ -376,9 +376,25 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]
 		// kept, never rebuilt, and every machine would sit in backoff on it
 		// (claude-fleet#2631). Unbuilt, the next request after the file lands
 		// builds the whole one.
-		return fmt.Errorf("release.json pins %s, which CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — put it there", strings.Join(missing, ", "))
+		return errors.New(rs.missingPinnedNote(sha, missing))
 	}
 	return rs.publish(sha, files, arts, time.Now(), seal)
+}
+
+// missingPinnedNote says which pinned artifacts a build of sha lacks, and
+// where a self-hosting team gets them (claude-fleet#4009): any hub already
+// carrying that release serves each at /v1/fleet/release/<sha>/artifacts/<n>,
+// and fleet-release-fetch.py --artifacts takes them sha256-checked against
+// that hub's signed manifest.
+func (rs *ReleaseStore) missingPinnedNote(sha string, missing []string) string {
+	dir := "CCQUOTA_FLEET_RELEASE_ARTIFACTS (" + rs.ArtifactsDir + ")"
+	if rs.ArtifactsDir == "" {
+		dir = "CCQUOTA_FLEET_RELEASE_ARTIFACTS (not set)"
+	}
+	return fmt.Sprintf("release.json pins %s, which %s does not hold — put it there: "+
+		"bin/fleet-release-fetch.py --hub <a hub carrying %s> --pubkey <its release key> --artifacts %s <that dir> "+
+		"fetches each from that hub, sha256-checked (self-host guide §1.3)",
+		strings.Join(missing, ", "), dir, sha[:min(len(sha), 7)], sha)
 }
 
 // buildArtifacts: rs.artifacts(), but a rebuild of the build in base keeps

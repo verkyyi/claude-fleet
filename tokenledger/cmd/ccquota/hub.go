@@ -990,6 +990,11 @@ func runHub(args []string) error {
 			}
 		}
 		go srv.RunEntryDNS(ctx)
+		// /install answers 503 until it can sign someone in (claude-fleet#4009):
+		// said once here too, so the log names the missing half.
+		if why := srv.InstallOffReason(); why != "" {
+			log.Printf("fleet: /install is off: %s", why)
+		}
 	}
 	// A deployment's own names (claude-fleet#3577): unset ⇒ the neutral default,
 	// said once.
