@@ -71,6 +71,9 @@ hub_url() {
 lanes() {
   if command -v fleet_stable_refs >/dev/null 2>&1; then fleet_stable_refs; else printf 'stable\n'; fi
 }
+# lane1 — the first of them: the lane this computer follows when it exists
+# shellcheck disable=SC2046  # the lanes are one word each
+lane1() { set -- $(lanes); printf '%s' "$1"; }
 
 # stable_sha — what stable names: the hub's word with a hub (and only its —
 # a hub that does not answer is «unknown», never GitHub behind it, issue #2773);
@@ -85,7 +88,7 @@ try:
     d = json.load(sys.stdin)
     print((sys.argv[1] == "stable-macos" and d.get("client_version_macos")) or d.get("stable") or "")
 except Exception:
-    pass' "$(set -- $(lanes); printf '%s' "$1")" 2>/dev/null)
+    pass' "$(lane1)" 2>/dev/null)
   else
     for ref in $(lanes); do
       url=$API

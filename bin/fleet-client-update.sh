@@ -188,6 +188,9 @@ except Exception:
 lanes() {
   if command -v fleet_stable_refs >/dev/null 2>&1; then fleet_stable_refs; else printf 'stable\n'; fi
 }
+# lane1 — the first of them: the lane this computer follows when it exists
+# shellcheck disable=SC2046  # the lanes are one word each
+lane1() { set -- $(lanes); printf '%s' "$1"; }
 # stable_sha — the commit GitHub's stable names (40 hex), or rc 1. A Mac asks
 # for stable-macos first (a 404/422 = no Mac lane: stable, as before).
 stable_sha() {
@@ -220,7 +223,7 @@ def s(k):
 ver = s("client_version")
 if sys.argv[2] == "stable-macos" and s("client_version_macos"):
     ver = s("client_version_macos")
-print("\t".join([ver, s("client_compat"), s("min_client_compat"), s("commit")]))' "$1" "$(set -- $(lanes); printf '%s' "$1")" 2>/dev/null
+print("\t".join([ver, s("client_compat"), s("min_client_compat"), s("commit")]))' "$1" "$(lane1)" 2>/dev/null
 }
 
 # write_defaults <json-file> — the team's defaults → hub-defaults.conf (atomic).

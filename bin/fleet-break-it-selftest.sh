@@ -4269,7 +4269,7 @@ SH
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the lane is not at stable"; return 1; }
   out=$( . "$BIN/fleet-versions-lib.sh"; printf '%s %s' "$(fleet_stable_ref_for darwin "$d/co" origin)" "$(fleet_stable_ref_for linux "$d/co" origin)")
   SECS=$(since "$t0")
-  [ "$out" = "stable-macos stable" ] || { WHY="the one reader names «$out», want «stable-macos stable»"; return 1; }
+  [ "$out" = "stable-macos stable" ] || { WHY="the one reader names «${out}», want «stable-macos stable»"; return 1; }
   WHAT="Mac 通道挪到 stable 之前的提交被拒（M:）；挪到 stable 本身照常；Mac 读 stable-macos、Linux 读 stable"
 }
 

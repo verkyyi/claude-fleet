@@ -103,6 +103,7 @@ fleet_stable_refs() {
 # ls-remote blinked would take a release its lane has not reached.
 fleet_stable_ref_for() {
   local sp="$1" sg="$2" sr="$3" sl st
+  # shellcheck disable=SC2046  # one refs/tags/<lane> word per lane
   sl=$(git -C "$sg" ls-remote --tags "$sr" $(for st in $(fleet_stable_refs "$sp"); do printf 'refs/tags/%s ' "$st"; done) 2>/dev/null </dev/null) || return 1
   for st in $(fleet_stable_refs "$sp"); do
     case "$sl" in *"refs/tags/$st"|*"refs/tags/$st"[!a-zA-Z0-9_-]*) printf '%s\n' "$st"; return 0 ;; esac
