@@ -83,7 +83,8 @@ name: release train
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
 # {sha, subject, committed}) · macos_runs_on (JSON) · macos_shards · macos_where
 # (fleet-ci | github) · macos_why.
-run-name: release train
+# A drill names itself in the title: fleet_breakage_probe skips such a run (issue #3372).
+run-name: ${{ inputs.drill_red != '' && format('release train (drill {0})', inputs.drill_red) || 'release train' }}
 
 on:
   push:

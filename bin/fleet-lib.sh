@@ -7909,12 +7909,14 @@ fleet_breakage_probe() {
   [ -n "$branch" ] || branch=master
   runs=$(gh api "repos/$owner/$name/actions/runs?branch=$branch&status=completed&per_page=100" \
            --jq '.workflow_runs[] | select((.event // "") | startswith("pull_request") | not)
-                 | "\(.workflow_id)\t\(.id)\t\(.head_sha)\t\(.conclusion // "")\t\(.created_at // "")\t\(.name // "")\t\(now - ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) | floor)"' 2>/dev/null) || return 2
+                 | "\(.workflow_id)\t\(.id)\t\(.head_sha)\t\(.conclusion // "")\t\(.created_at // "")\t\(.name // "")\t\(now - ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) | floor)\t\(.display_title // "" | gsub("\t"; " "))"' 2>/dev/null) || return 2
   # Newest first (the API's order): per workflow the first verdict decides; a red
   # one is walked back to the last success. Each red workflow's streak start,
-  # oldest first.
+  # oldest first. A drill run (its title says `(drill …)` — release-train.yml's
+  # run-name for `drill_red`, issue #3243) is red on purpose and no verdict on
+  # master at all (issue #3372).
   starts=$(printf '%s\n' "$runs" | awk -F'\t' -v maxage="${FLEET_BREAKAGE_MAX_AGE:-172800}" '
-      NF < 4 || done[$1] { next }
+      NF < 4 || done[$1] || $8 ~ /\(drill/ { next }
       $4 == "success" { done[$1] = 1; next }
       !($1 in st) && ($4 == "failure" || $4 == "timed_out" || $4 == "startup_failure") && $7 != "" && $7 + 0 > maxage + 0 { done[$1] = 1; next }
       $4 == "failure" || $4 == "timed_out" || $4 == "startup_failure" { if (!($1 in st)) ord[++n] = $1; st[$1] = $0 }

@@ -469,6 +469,9 @@ grep -q 'actions/runs/9002/jobs' "$GH_LOG"           || fail "R the jobs are the
 grep -q 'graphql' "$GH_LOG"                          && fail "R the probe must be REST only" "$(cat "$GH_LOG")"
 pg=$(probe "$FX/runs-green" "$WORK/log-a"); rcg=$?
 [ "$rcg" = 1 ] && [ -z "$pg" ]                       || fail "R no red workflow is rc 1 (not red)" "rc=$rcg [$pg]"
+{ printf '77\t9005\teeee555eeee555\tfailure\t2026-10-07T04:50:00Z\tselftests\t30\trelease train (drill portability-selftest.sh)\n'; cat "$FX/runs-green"; } > "$FX/runs-drill"
+pd=$(probe "$FX/runs-drill" "$WORK/log-a"); rcd=$?
+[ "$rcd" = 1 ] && [ -z "$pd" ]                       || fail "R a drill run (title «(drill …)», issue #3372) is no verdict on master" "rc=$rcd [$pd]"
 ps_=$(probe "$FX/runs-stale" "$WORK/log-a"); rcs=$?
 [ "$rcs" = 1 ] && [ -z "$ps_" ]                      || fail "R a red older than FLEET_BREAKAGE_MAX_AGE is not red now" "rc=$rcs [$ps_]"
 kk=$(env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$FX/runs-red" BRK_JOBS_DIR="$FX/jobs" BRK_LOG="$WORK/log-a" \
