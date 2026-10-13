@@ -941,6 +941,16 @@ rv_attach_thin() {
     [ -z "$hint" ] || T set-option -t "$gid" @view_flash "$hint" \; \
       set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 8 ))" 2>/dev/null
   fi
+  # the client's own version (issue #3826): fleet-thin.py brings it as
+  # FLEET_CLIENT_VER; when the hub hands out a newer one the top line says
+  # 「客户端不是最新 … 运行 fleet update」 for 20 s — off the attach's path. An older
+  # client brings none: nothing is said.
+  case "${FLEET_CLIENT_VER:-}" in ''|*[!0-9A-Za-z._-]*) ;; *)
+    ( ( behind=$( { [ -z "$setlang" ] || export FLEET_VIEW_LANG="$lang"; }
+                  python3 "$BIN/fleet-client-behind.py" "$FLEET_CLIENT_VER" </dev/null 2>/dev/null )
+        [ -z "$behind" ] || T set-option -t "$gid" @view_flash "$behind" \; \
+          set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 20 ))" 2>/dev/null ) </dev/null >/dev/null 2>&1 & ) ;;
+  esac
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm
   case "$view" in *-via-*) ;; *)

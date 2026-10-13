@@ -96,7 +96,9 @@ var routeAccess = map[string]string{
 	TicketsPagePath: accessUser, TicketsPagePath + "/": accessUser,
 	// … its pictures and the misspellings that lead to it (claude-fleet#3199).
 	EntryPagePath + "/": accessPublic, "/fleet/key": accessPublic, "/keys": accessPublic,
-	NodePoolPath: accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
+	// claude-fleet#2850: the pool manifest; #3826: which agents a login may
+	// start — any enrollment token, each.
+	NodePoolPath: accessSelf, NodeAgentsPath: accessSelf,
 	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,

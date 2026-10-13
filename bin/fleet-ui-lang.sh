@@ -655,6 +655,12 @@ fleet_ui_t() {
     en:view_grid_norepo) printf 'No repo' ;;
     zh:view_grid_agent) printf 'Agent' ;;
     en:view_grid_agent) printf 'Agent' ;;
+    zh:view_grid_only_fmt) printf '只开放了 %s，就用它' "${1:-}" ;;
+    en:view_grid_only_fmt) printf 'only %s is open to you — using it' "${1:-}" ;;
+    zh:view_new_agent_fmt) printf '%s — 这次用 %s 开' "${1:-}" "${2:-}" ;;
+    en:view_new_agent_fmt) printf '%s — opening %s instead' "${1:-}" "${2:-}" ;;
+    zh:view_client_behind_fmt) printf '客户端不是最新（%s，最新 %s）— 在你自己的电脑上运行 fleet update，再重开 fleet' "${1:-}" "${2:-}" ;;
+    en:view_client_behind_fmt) printf 'your client is not the latest (%s, latest %s) — run fleet update on your own computer, then reopen fleet' "${1:-}" "${2:-}" ;;
     zh:view_started_fmt) printf '已开工 · T%s' "${1:-}" ;;
     en:view_started_fmt) printf 'started · T%s' "${1:-}" ;;
     zh:view_lang_row) printf '语言 / Language　中文 ✓ · English' ;;
@@ -1483,6 +1489,8 @@ fleet_ui_t() {
     en:dispatch_agent_default)  printf '(default)' ;;
     zh:dispatch_agent_missing_fmt) printf '%s 这台没装 %s' "${1:-}" "${2:-}" ;;
     en:dispatch_agent_missing_fmt) printf '%s has no %s installed' "${1:-}" "${2:-}" ;;
+    zh:dispatch_agent_blocked_fmt) printf '%s：管理员暂未开放' "${1:-}" ;;
+    en:dispatch_agent_blocked_fmt) printf '%s: not opened to you by the admin yet' "${1:-}" ;;
     zh:dispatch_keys)           printf '↵ 建单并开工 · Tab 下一项 · ←→ 换仓库 / Agent · esc 关' ;;
     en:dispatch_keys)           printf '↵ file + start · Tab next · ←→ repo / agent · esc close' ;;
     zh:dispatch_norepo)         printf '还没有可派的仓库（入口还没说这台电脑的机器托管哪些仓库）' ;;

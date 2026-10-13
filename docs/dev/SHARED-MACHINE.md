@@ -222,6 +222,15 @@ an administrator reviews and activates the migration. Both grants live on the hu
   manifest (machine list only; the machine's sweep drops what it omits), and
   every session binding of the central proxy (first pick, a retained binding's
   re-check, an explicit bind, the 429 rebind).
+- **What the person sees** (issue #3826). `GET /v1/node/agents` (any node
+  token) answers, per agent, whether the lists leave that login none of its
+  subscriptions (`blocked`, reason `policy`); `bin/fleet_agent_allow.py` keeps it
+  60 s and fails open. The new-session pickers never hide the choice: ⌘P's ⚡
+  row and the ⌘T popup show the blocked agent grey, 「Claude：管理员暂未开放」, and
+  with one agent left say 「只开放了 Codex，就用它」; ⌘N opens the usable agent
+  and says why. A thin client older than the hub's `client_version` is told on
+  attach 「客户端不是最新 … 运行 fleet update」 (`bin/fleet-client-behind.py`).
+  `fleet-agent-allow-selftest.sh`.
 
 ```sh
 export CCQUOTA_VIEWER_TOKEN=…            # the operator's, from the environment only

@@ -493,6 +493,15 @@ def view_id():
     return "%s-%06x" % (dev[:24], random.getrandbits(24))
 
 
+def client_ver():
+    """The `version=` of the install's .client-version (the hub's client_version when
+    it was installed — stable's commit), "" when there is none."""
+    for ln in version().splitlines():
+        if ln.startswith("version="):
+            return ln[len("version="):].strip()
+    return ""
+
+
 def version():
     try:
         with open(os.path.join(BIN, "..", ".client-version")) as f:
@@ -561,6 +570,11 @@ class Thin:
         # the person's extra keys ride the command's environment, not an option: a
         # home on an older version runs the attach as before (issue #3185)
         env = ["FLEET_KEYS_EXTRA=" + shlex.quote(self.keys)] if self.keys else []
+        # which client this is (issue #3826): the home says 「请更新客户端」 when the
+        # hub hands out a newer one — an older home ignores the variable
+        cv = client_ver()
+        if re.fullmatch(r"[0-9A-Za-z._-]{1,64}", cv):
+            env.append("FLEET_CLIENT_VER=" + cv)
         return " ".join(env + [shlex.quote(w) for w in words])
 
     def command(self, j, extra, remote):

@@ -697,6 +697,9 @@ func (s *Server) routes() *routeMux {
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.
 		mux.HandleFunc("/v1/node/credentials", s.handleNodeCredentials)
+		// Which agents a login may start (claude-fleet#3826): the pickers grey
+		// one the allowlists leave nothing for — any enrollment token.
+		mux.HandleFunc(NodeAgentsPath, s.handleNodeAgents)
 		// The shared pool's manifest (claude-fleet#2850): fingerprint +
 		// expiry per pool token, never a secret — any enrollment token.
 		mux.HandleFunc(NodePoolPath, s.handleNodePool)

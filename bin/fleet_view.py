@@ -1552,6 +1552,10 @@ def go_new(qo, vid, client="", repo="", agent="", prompt=""):
     # none ready ⇒ the cold open, as a hub start does (fleet-control-read.sh).
     # FLEET_START_WARM=0 = cold only. A ⚡ open that names a repo, an agent or words
     # (issue #3327) is no HOME slot's: cold, with them.
+    if not agent:
+        agent, why = new_agent(fleet, vid)
+        if why:
+            toast(client, say("view_new_agent_fmt", why, agent.capitalize()))
     named = ["--repo", repo] if repo else ["--no-repo"]
     named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
     warm = os.environ.get("FLEET_START_WARM", "1") != "0" and named == ["--no-repo"]
@@ -1587,6 +1591,26 @@ def go_new(qo, vid, client="", repo="", agent="", prompt=""):
     toast(client, said)
     print(said, file=sys.stderr, flush=True)
     return 3
+
+
+def new_agent(fleet, vid):
+    """⌘N names no agent: ("", "") = the fleet's default, as always. Only when the
+    admin's allowlists block one (issue #3826 — fleet_agent_allow.py's cached
+    verdict, no hub on the fast path) is ⌘T's rule asked (fleet-quick-dispatch.py
+    agent): the default if usable, else the usable one + why, which ⌘N says."""
+    try:
+        sys.path.insert(0, str(Path(__file__).absolute().parent))
+        import fleet_agent_allow
+        if not fleet_agent_allow.blocked():
+            return "", ""
+        out = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"),
+                              "agent", "--view", "%s@view-%s" % (fleet, vid)], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=15).stdout
+        got = json.loads((out.strip().splitlines() or ["{}"])[-1])
+    except Exception:       # never let the check stop a new session
+        return "", ""
+    a, why = got.get("agent") or "", got.get("why") or ""
+    return (a, why) if why and a in AGENTS else ("", "")
 
 
 def new_why(err, rc):
@@ -2549,8 +2573,9 @@ AGENTS = ("claude", "codex")
 def grid_read(vid):
     """The ⚡ row's cells as fleet-quick-dispatch.py grid reads them — ⌘T's own
     rules: {repos (every repo the hub names), last (the last send's, else the only
-    one), agent (the fleet's default), missing ({agent: why} this machine lacks)}."""
-    g = {"repos": [], "last": "", "agent": "claude", "missing": {}}
+    one), agent (the fleet's default), missing ({agent: why} this machine lacks, or
+    the admin has not opened — issue #3826), blocked (those last ones)}."""
+    g = {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []}
     argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "grid",
             "--view", "%s@view-%s" % (view_fleet(vid), vid)]
     try:
@@ -2569,7 +2594,7 @@ def bolt_new(g=None):
     None is the fleet's default — and the cell Tab is on ('' · repo · agent).
     No `g` yet (the popup reads it off its thread): not `ready` — the repo cell
     says …, and a ↵ waits for the read rather than guess 不绑仓库."""
-    return {"g": g or {"repos": [], "last": "", "agent": "claude", "missing": {}},
+    return {"g": g or {"repos": [], "last": "", "agent": "claude", "missing": {}, "blocked": []},
             "repo": None, "agent": None, "focus": "", "ready": g is not None}
 
 
@@ -2616,7 +2641,12 @@ def bolt_cells(st, query):
     repo = bolt_repo(st, query) if st.get("ready", True) or st["repo"] is not None else "…"
     cells = [("%s ‹%s›" % (say("view_grid_repo"), repo or say("view_grid_norepo")), st["focus"] == "repo"),
              ("%s ‹%s›" % (say("view_grid_agent"), bolt_agent(st).capitalize()), st["focus"] == "agent")]
-    note = " · ".join(str(why) for why in (st["g"].get("missing") or {}).values())
+    miss = st["g"].get("missing") or {}
+    note = " · ".join(str(why) for why in miss.values())
+    use = [a for a in AGENTS if a not in miss]
+    if st["g"].get("blocked") and len(use) == 1:
+        # one agent left (issue #3826): it is the one, and the row says so
+        note += " · " + say("view_grid_only_fmt", use[0].capitalize())
     return cells, note
 
 
