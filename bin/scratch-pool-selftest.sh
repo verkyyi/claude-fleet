@@ -34,6 +34,7 @@
 #   W3. FLEET_POOL_MIN, the HOME slot's floor (#3551)
 #   Y. a warm entry that never opens gives its admission back (#2502)
 #   Z. one ensure pass reads the account once (#3544)
+#   AA. a remote that never answers: HOME fills first, the fetch is bounded (#3999)
 #   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
 #
 # Exit 0 = pass; non-zero = fail.
@@ -546,6 +547,38 @@ n=$(grep -c . "$WORK/acct-reads" 2>/dev/null || echo 0)
 [ "$n" = 1 ] || fail "Z one ensure pass must read the account once, read it $n times"
 ! grep -q 'new-session' "$STATE/log" || fail "Z both entries are usable: nothing to spawn" "$(cat "$STATE/log")"
 ok "Z one ensure pass reads the account once; its entries still pass"
+
+# AA: a remote that never answers (issue #3999) — a user pod had no egress to
+# GitHub, `git fetch` hung, and the tick (repo slots first) never reached HOME.
+# A repo whose origin is an ssh command that sleeps: one fan-out tick spawns the
+# HOME slot BEFORE the repo slot, every fetch gives up at FLEET_POOL_FETCH_SECS,
+# pool_fetch says so in one line, and the tick ends well inside the remote's sleep.
+HM="$WORK/hang"; mkdir -p "$HM"
+( cd "$HM" && git init -q -b master . && git config user.email t@t && git config user.name t \
+  && echo hi > f && git add f && git commit -qm init \
+  && git remote add origin ssh://fleet-no-such-host/x && git config core.sshCommand 'sleep 60 #' \
+  && git update-ref refs/remotes/origin/master HEAD ) || fail "AA setup failed"
+reset_state; mkfleet
+cat > "$FLEET_CONF_DIR/fleets/tf/conf" <<EOF
+FLEET_REPO="o/a"
+FLEET_MAIN="$HM"
+FLEET_BASE_BRANCH="master"
+FLEET_SCRATCH_POOL=1
+EOF
+aa_tick() { FLEET_POOL_FETCH_SECS=2 FLEET_POOL_FETCH_FRESH_MIN=0 FLEET_LOAD_PROBE_CMD='echo 0.10' \
+  FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf --tick 2>&1; }
+# tick 1, an empty repo slot: its spawn's fleet_scratch_alloc fetches.
+t0=$(date +%s); out=$(aa_tick); dt=$(( $(date +%s) - t0 ))
+[ "$dt" -lt 20 ] || fail "AA a hanging remote must not hold the tick (took ${dt}s)" "$out"
+h=$(grep -n -- "-n warm-home" "$STATE/log" | head -1 | cut -d: -f1)
+r=$(grep -n -- "-n warm-[0-9]" "$STATE/log" | head -1 | cut -d: -f1)
+[ -n "$h" ] && [ -n "$r" ] && [ "$h" -lt "$r" ] || fail "AA HOME must be spawned before the repo slot (home line ${h:-none}, repo line ${r:-none})" "$(cat "$STATE/log")"
+# tick 2, a repo slot holding an entry: pool_fetch fetches, and says so.
+reset_state; mkfleet; warm '@11' o/a "$WORK/wt-gone"
+t0=$(date +%s); out=$(aa_tick); dt=$(( $(date +%s) - t0 ))
+[ "$dt" -lt 20 ] || fail "AA a hanging remote must not hold the tick (took ${dt}s)" "$out"
+printf '%s\n' "$out" | grep -q "^scratch-pool: o/a: fetch origin master gave no answer in 2s" || fail "AA the timed-out fetch says one line" "$out"
+ok "AA remote that never answers: HOME first, every fetch bounded, the tick ends (${dt}s)"
 
 printf '\n%s tests passed\n' "$pass"
 exit 0

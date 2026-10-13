@@ -8734,6 +8734,28 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 # (tmux display-message); prints nothing when allowed. Both ceilings count AWAKE
 # workers only — a sleeper holds no slot (issue #1058, docs/dev/WORKER-SLEEP.md) —
 # and a sleeper's own wake reads them through fleet_cap_full below.
+# fleet_fetch_bounded <main> <base> — `git fetch origin <base>`, given at most
+# FLEET_POOL_FETCH_SECS seconds (default 20; 0 = no bound) — issue #3999. A remote
+# that never answers (a pod with no egress to GitHub) hung the fetch forever, and
+# the warm pool's tick, which fills its slots one after another, never reached the
+# HOME slot. The fetch runs in its own process group and the whole group is killed
+# at the deadline (git's transport helper / ssh with it); no terminal prompt.
+# Exit 124 = timed out: origin/<base> stays what it was, and the caller goes on
+# with the base it already has. Silent on both streams.
+fleet_fetch_bounded() {
+  local main="$1" base="$2" secs="${FLEET_POOL_FETCH_SECS:-20}"
+  case "$secs" in ''|*[!0-9]*) secs=20 ;; esac
+  if [ "$secs" = 0 ] || ! command -v perl >/dev/null 2>&1; then
+    git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1; return $?
+  fi
+  GIT_TERMINAL_PROMPT=0 perl -e '
+    my $s = shift; my $p = fork; defined $p or exit 1;
+    if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "TERM", -$p; select(undef, undef, undef, 0.5); kill "KILL", -$p; waitpid($p, 0); exit 124 };
+    alarm $s; waitpid($p, 0); exit($? & 127 ? 1 : $? >> 8)' \
+    "$secs" git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1
+}
+
 # ---- scratch worktree allocation (shared by the ⌃s spawner and the warm pool) --
 # fleet_scratch_alloc <main> <base> — allocate the next free `scratch-<N>` branch
 # and its worktree (fleet_worktree_dir) off origin/<base> (falling back to the local base ref
@@ -8744,7 +8766,7 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 # last scratch-<N> left in the child ledger is retired, never inherited.
 fleet_scratch_alloc() {
   local main="$1" base="$2" sess="${3:-}" cand cwt n=1
-  git -C "$main" fetch origin "$base" --quiet 2>/dev/null
+  fleet_fetch_bounded "$main" "$base"
   while [ "$n" -le 999 ]; do
     cand="scratch-$n"; cwt="$(fleet_worktree_dir "$main" "$cand")"
     if git -C "$main" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then

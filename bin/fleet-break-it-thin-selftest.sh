@@ -33,6 +33,8 @@
 #   pool-prompt-nbsp       bin/scratch-pool.sh warm_input (issue #3311): Claude
 #                          Code's `❯` + no-break space, read by a bash fallen back to
 #                          C (a Linux node) — no warm entry ever became ready
+#   pool-remote-hangs      bin/scratch-pool.sh + fleet_fetch_bounded (issue #3999):
+#                          a remote that never answers — the HOME slot still fills
 #
 # One isolated tmux server (-S under a short /tmp dir), the person's terminals
 # python ptys that answer DA / XTVERSION as iTerm2 and record every byte, the hub a
@@ -376,6 +378,16 @@ drill_pool_prompt_nbsp() {
   out=$(bash "$BIN/scratch-pool-live-selftest.sh" 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
   SECS=$(since "$t0")
   WHAT="提示符是 ❯ + 不换行空格、脚本跑在退回 C 的 locale 里（Linux 节点）：暖池照样有一个就绪的条目，⌘N 拿得到"
+}
+
+drill_pool_remote_hangs() {
+  CAP=90
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/scratch-pool-selftest.sh" 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  printf '%s\n' "$out" | grep -q '^ok   AA ' || { WHY="leg AA did not run"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="仓库的远端不答（pod 没有出网代理，git fetch 永远挂着）：一拍里 HOME 槽先补，每次 fetch 最多 FLEET_POOL_FETCH_SECS 秒，这一拍照样跑完"
 }
 
 th_cleanup() {

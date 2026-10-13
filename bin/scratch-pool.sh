@@ -206,13 +206,16 @@ EOF
       _pass=''
       [ "$TICK" = 1 ] && _pass="$_pass --tick"
       [ -n "$AGENT_ARG" ] && _pass="$_pass --agent $AGENT_ARG"
+      # HOME first (issue #3999): its slot is the one ⌘N / ⚡ claim, and a repo
+      # slot's pass reaches the network (fetch, worktree) — a remote that does not
+      # answer must never starve the slot that needs none.
       while IFS= read -r _r; do
         [ -n "$_r" ] || continue
         # shellcheck disable=SC2086
         bash "$0" "$CMD" "$SESS" --repo "$_r" $_pass
       done <<EOF
-$(fleet_repos "$SESS")
 -
+$(fleet_repos "$SESS")
 EOF
       exit 0 ;;
     *) REPO_ARG=$(fleet_repos "$SESS" | head -n1) ;;
@@ -596,7 +599,11 @@ pool_fetch() {
   if [ "$fresh" -gt 0 ] && [ -n "$(find "$MAIN/.git/FETCH_HEAD" -mmin "-$fresh" 2>/dev/null)" ]; then
     return 0
   fi
-  git -C "$MAIN" fetch origin "$BASE" --quiet >/dev/null 2>&1
+  # Bounded (issue #3999): a remote that never answers costs this slot at most
+  # FLEET_POOL_FETCH_SECS, says so in one line, and the entries align to the
+  # origin/<base> already here.
+  fleet_fetch_bounded "$MAIN" "$BASE"
+  [ "$?" = 124 ] && echo "scratch-pool: $REPO: fetch origin $BASE gave no answer in ${FLEET_POOL_FETCH_SECS:-20}s — using the local origin/$BASE" >&2
   return 0
 }
 
