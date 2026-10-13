@@ -56,10 +56,19 @@ jobs:
           if grep -rEn 'fonts\.(googleapis|gstatic)\.com|cdn\.jsdelivr|unpkg\.com|cdnjs' dist; then echo "::error::a CDN in dist"; exit 1; fi
           # the review build's mock API never ships (src/proto, --mode proto)
           if grep -rq 'dash-w41' dist; then echo "::error::the review mock is in dist"; exit 1; fi
+          # nor the admin side's demo data (src/admin/demo.ts, VITE_DEMO=1) — C10
+          if grep -rq 'designer@example.com' dist; then echo "::error::the admin demo data is in dist"; exit 1; fi
+      - name: No admin code in the member side (EPIC #3923 C10)
+        run: |
+          if grep -rEq '/v1/fleet/(invites|users|cred-policy)' dist/app; then echo "::error::the member side's bundle carries the admin side's code"; exit 1; fi
+          grep -rq '/v1/fleet/invites' dist/admin/assets || { echo "::error::no admin side in dist/admin"; exit 1; }
       - name: The pack takes it
         run: |
           ../../bin/web-console-pack.sh --out "$RUNNER_TEMP/console" --theme-out "$RUNNER_TEMP/theme"
           grep -q 'src="/app/assets/' "$RUNNER_TEMP/console/app/index.html" || { echo "::error::the member side is not under /app/"; exit 1; }
           grep -rq '/v1/chat' "$RUNNER_TEMP/console/app/assets" || { echo "::error::the member side does not talk to /v1/chat"; exit 1; }
-      - name: The review build still builds
-        run: npm run build:proto
+          grep -q 'src="/admin/assets/' "$RUNNER_TEMP/console/admin/index.html" || { echo "::error::the admin side is not under /admin/"; exit 1; }
+      - name: The review builds still build
+        run: |
+          npm run build:proto
+          VITE_DEMO=1 npx vite build --mode admin --outDir "$RUNNER_TEMP/admin-proto" --base ./

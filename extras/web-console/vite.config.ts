@@ -5,7 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 
 // One project, one build per side — the mode is the side (EPIC #3923 rule 3):
 //   vite build --mode app     app/index.html → dist/app, served at /app/ (C3)
-//   vite build --mode admin   admin/index.html → dist/admin, at /admin/ (C10)
+//   vite build --mode admin   admin/index.html → dist/admin, at /admin/ (C10);
+//                             VITE_DEMO=1 builds its review page over demo data
 // Separate builds, so no admin code ever rides in the member side's bundle.
 // bin/web-console-pack.sh copies dist/<side> into the hub image. Every byte is
 // local — no CDN, no font service (rule 4).
@@ -24,7 +25,9 @@ export default defineConfig(({ mode }) => {
     define: { __PROTO__: JSON.stringify(proto) },
     build: {
       outDir: path.resolve(import.meta.dirname, proto ? "dist-proto" : `dist/${side}`),
-      emptyOutDir: true, assetsInlineLimit: 0, chunkSizeWarningLimit: 2000,
+      emptyOutDir: true,
+      // the admin side's review page (VITE_DEMO=1, src/admin/demo.ts) is one file: inline every asset
+      assetsInlineLimit: process.env.VITE_DEMO === "1" ? 100_000_000 : 0, chunkSizeWarningLimit: 2000,
       // the review page is one file: no lazy chunks to fetch
       ...(proto ? { rollupOptions: { output: { codeSplitting: false } } } : {}),
     },

@@ -70,7 +70,17 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 			continue // a page the hub draws itself (从手机连, claude-fleet#3199)
 		}
 		path, adminOnly := m[2], m[1] != ""
-		if code, body := get(admin, path); code != http.StatusOK || !strings.Contains(body, doc) {
+		if to, moved := consoleTarget(pagePath(path), "", roleAdmin); moved {
+			// a page the console table already moves on (claude-fleet#3925):
+			// an admin goes on in one hop, anyone else as before
+			req, _ := http.NewRequest(http.MethodGet, h.http.URL+pagePath(path), nil)
+			req.AddCookie(admin)
+			if resp, err := noFollow.Do(req); err != nil || resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != to {
+				t.Errorf("admin GET %s: want 301 → %s", path, to)
+			} else {
+				resp.Body.Close()
+			}
+		} else if code, body := get(admin, path); code != http.StatusOK || !strings.Contains(body, doc) {
 			t.Errorf("admin GET %s = %d %q; want 200 and the app document", path, code, body)
 		}
 		code, body := get(user, path)

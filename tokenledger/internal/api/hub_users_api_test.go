@@ -107,6 +107,42 @@ func TestFleetUsers_AddThenSignInThenRemove(t *testing.T) {
 	}
 }
 
+// Each row says how the person signs in (claude-fleet#3933, the admin side's
+// 登录方式): their identity kinds in store.IdentityKinds order, GitHub too for
+// a GitHub ID with no identity row.
+func TestFleetUsers_Via(t *testing.T) {
+	h := newUsersHarness(t)
+	if code, body := h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"alice"}`, nil); code != http.StatusCreated {
+		t.Fatalf("add = %d %v", code, body)
+	}
+	if err := h.srv.Store.AddHubIdentity(store.HubIdentity{Kind: store.IdentityEmail, Subject: "alice@example.com",
+		PrincipalID: githubPrincipal(ghAlice.ID)}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := h.call(t, http.MethodGet, "/v1/fleet/users", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("list = %d %v", code, body)
+	}
+	users, _ := body["users"].([]any)
+	found := false
+	for _, u := range users {
+		row, _ := u.(map[string]any)
+		via, ok := row["via"].([]any)
+		if !ok {
+			t.Fatalf("row %v has no via list", row)
+		}
+		if row["login"] == "alice" {
+			found = true
+			if len(via) != 2 || via[0] != store.IdentityEmail || via[1] != store.IdentityGitHub {
+				t.Fatalf("alice via = %v, want [email github]", via)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("alice not listed: %v", body)
+	}
+}
+
 // A name GitHub does not know is refused, never added.
 func TestFleetUsers_UnknownNameRefused(t *testing.T) {
 	h := newUsersHarness(t)

@@ -1,0 +1,4 @@
+/* admin.css — the console's one stylesheet plus the admin side's own classes
+ * (src/shared/index.css scans the member side only) */
+@import "../shared/index.css";
+@source ".";
