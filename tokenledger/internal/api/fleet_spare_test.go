@@ -302,7 +302,7 @@ func TestSpareEmptyFallsBackToOpening(t *testing.T) {
 // A spare waits on whether a LOGIN can be opened, never on the session gate
 // (claude-fleet#4076): mac-d's login says admit=false / room=0 with a high load
 // average but a quiet CPU (cpu_busy first, as placement reads it) and memory
-// to spare — the macmini of 2026-10-13 — and still fills to its count; a lost
+// to spare — a managed machine on 2026-10-13 — and still fills to its count; a lost
 // login on mac-c whose last beat said admit=false holds nothing either.
 func TestSpareRefillIgnoresTheSessionGate(t *testing.T) {
 	h := newFleetHarness(t)
