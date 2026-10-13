@@ -58,7 +58,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
-  budgetRefusal, personName } from "./lib.mjs";
+  budgetRefusal, personName, PERMISSIONS } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -320,7 +320,7 @@ async function runQuery(prompt, { model, resume, cwd, ac, canUseTool }, onMsg) {
   try {
     const q = S.query({ prompt, options: {
       cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
-      permissionMode: "default", settingSources: ["user", "project", "local"], canUseTool,
+      ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources], canUseTool,
       abortController: ac, ...(CLAUDE ? { pathToClaudeCodeExecutable: CLAUDE } : {}),
       stderr: () => {},                    // the child's stderr is never relayed or logged
     } });
@@ -411,6 +411,8 @@ async function turn(req, res, person) {
   emitAll({ t: "turn", id: tid, model });
   log("turn", { person, model });
 
+  // In bypass (lib.mjs PERMISSIONS) this is reached for AskUserQuestion — the
+  // card the person picks from; any other tool runs without asking.
   const canUseTool = (name, input, opts = {}) => new Promise((resolve) => {
     const rid = `r${++ridSeq}-${newSecret(6)}`;
     const t = live;

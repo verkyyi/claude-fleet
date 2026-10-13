@@ -35,6 +35,12 @@
 //   K  idle (C5): with FLEET_WEBCHAT_IDLE_SECS it stays while a page holds a
 //      connection, exits 75 (the daemon's idle code) once nothing is open, its
 //      socket gone; started again it is the same conversation
+//   L  permissions (issue #4031): the agent runs bypassPermissions (+ the SDK's
+//      allowDangerouslySkipPermissions) with the login's settings loaded
+//      (settingSources user/project/local), so a tool step runs with no 允许 card;
+//      the fleet's bash-guard (hooks/settings-hooks.json's Bash entry) still denies
+//      `rm -rf x/.git` as a PreToolUse hook, outside tmux too — a hook's deny holds in
+//      bypass; AskUserQuestion still comes out as the question card (part C)
 //   --only=socket|budget|home|idle|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
@@ -92,7 +98,8 @@ const SID = ${JSON.stringify(SID)};
 export async function* query({ prompt, options }) {
   const env = options.env;
   writeFileSync(${JSON.stringify(ENVLOG)}, JSON.stringify({ base: env.ANTHROPIC_BASE_URL, token: env.CLAUDE_CODE_OAUTH_TOKEN,
-    tmux: env.TMUX || "", resume: options.resume || "", model: options.model }));
+    tmux: env.TMUX || "", resume: options.resume || "", model: options.model,
+    mode: options.permissionMode, skip: options.allowDangerouslySkipPermissions, sources: options.settingSources }));
   await fetch(env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", headers: { authorization: "Bearer " + env.CLAUDE_CODE_OAUTH_TOKEN } });
   const dir = join(env.CLAUDE_CONFIG_DIR || join(env.HOME, ".claude"), "projects", realpathSync(options.cwd).replace(/[^A-Za-z0-9]/g, "-"));
   mkdirSync(dir, { recursive: true });
@@ -402,6 +409,20 @@ ok(lines.some((o) => o.t === "text" && /你选了猫/.test(o.d)), "C the button'
 ok(lines.find((o) => o.t === "tool")?.summary === "Bash · date", "C the tool step is one folded line");
 ok(lines.find((o) => o.t === "ask")?.id === "tu-ask", "G a question names the tool step it gates (the page hangs it there)");
 const envSeen = JSON.parse(readFileSync(ENVLOG, "utf8"));
+ok(envSeen.mode === "bypassPermissions" && envSeen.skip === true, `L the agent runs bypassPermissions, like a fleet CLI session (${envSeen.mode})`);
+ok(["user", "project", "local"].every((x) => envSeen.sources?.includes(x)), "L the login's settings — and their PreToolUse guards — are loaded");
+ok(!lines.some((o) => o.t === "ask" && o.kind === "permission") && lines.find((o) => o.t === "ask")?.kind === "question",
+  "L the Bash step ran with no 允许 card; AskUserQuestion still came out as the question card");
+{
+  const HOOKS = join(BIN, "../hooks");
+  const reg = JSON.parse(readFileSync(join(HOOKS, "settings-hooks.json"), "utf8")).hooks.PreToolUse || [];
+  const onBash = reg.some((e) => e.matcher === "Bash" && e.hooks.some((h) => /bash-guard\.py/.test(h.command)));
+  const genv = { ...process.env }; for (const k of Object.keys(genv)) if (/^(TMUX|FLEET_)/.test(k)) delete genv[k];
+  const g = spawnSync("python3", [join(HOOKS, "bash-guard.py")], { env: genv, encoding: "utf8",
+    input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", permission_mode: "bypassPermissions",
+      cwd: T, tool_input: { command: `rm -rf ${join(T, "x", ".git")}` } }) });
+  ok(onBash && g.status === 2 && /bypass/.test(g.stderr), `L bash-guard still denies a guarded command in bypass, outside tmux (rc ${g.status})`);
+}
 ok(envSeen.base === `http://127.0.0.1:${PPORT}` && envSeen.token === SECRET, "D the agent ran on the proxy's port with the minted session credential");
 ok(envSeen.tmux === "", "D no tmux pane leaks into the agent's environment");
 ok(envSeen.model === "claude-haiku-5-5", "D the chosen model reached the agent");

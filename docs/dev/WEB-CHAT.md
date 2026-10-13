@@ -137,8 +137,14 @@ bin/fleet-webchat.sh stop
 ## 页面
 
 - 打开就是那一条对话，往上翻是历史；没有会话列表，不能新开或切换。
-- 回复流式显示；每个工具步骤折叠成一行，点开看结果；`AskUserQuestion` 和权限确认显示成按钮，
+- 回复流式显示；每个工具步骤折叠成一行，点开看结果；`AskUserQuestion` 显示成按钮，
   等你回答的那一步自己展开。
+- **权限模式与 fleet 的 CLI 会话一样是 `bypassPermissions`**（issue #4031，`lib.mjs` 的 `PERMISSIONS`）：
+  改文件、跑命令不再逐个等你点「允许」。护栏不变：SDK 读这个登录的设置（`settingSources`
+  user · project · local），fleet 的 PreToolUse 守卫（bash-guard、base-readonly-guard 等）照样跑，
+  守卫拒的命令在 bypass 下也被拒，拒绝理由作为工具结果回到对话里。`AskUserQuestion` 不是权限批准，
+  Claude Code 在 bypass 下仍把它交给 `canUseTool`，所以照旧出选项卡；允许·拒绝卡那条路留着，
+  SDK 再交来别的工具时仍走它。
 - 模型下拉只有白名单：Sonnet 5.5（默认）· Opus 5.5 · Haiku 5.5。白名单是 `extras/web-chat/lib.mjs` 的 `MODELS`，
   由服务端校验，名单外的请求返回 400。
 - 停止键停掉正在跑的这一轮。页面关掉或断线不会停掉这一轮，重新打开会接着显示，待答的按钮还在。
