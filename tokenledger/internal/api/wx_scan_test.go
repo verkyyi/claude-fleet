@@ -291,6 +291,13 @@ func TestWxScanNotListedApplies(t *testing.T) {
 	if got, _ := b.session(h.waysHarness); got != "" {
 		t.Fatalf("an applicant got a session as %s", got)
 	}
+	req := httptest.NewRequest(http.MethodGet, applicantPath, nil)
+	for _, c := range b.c.Jar.Cookies(mustURL(h.http.URL + applicantPath)) {
+		req.AddCookie(c)
+	}
+	if a, ok := h.srv.applicantFrom(req); !ok || a.Kind != store.IdentityWeChat || a.Subject != "union-new" {
+		t.Fatalf("applicant note = %+v %v; want wechat union-new", a, ok)
+	}
 	after, _ := h.srv.Store.HubUsers()
 	if pid, _ := h.srv.Store.IdentityPrincipal(store.IdentityWeChat, "union-new"); len(after) != len(before) || pid != "" {
 		t.Fatalf("a scan made a person: %d → %d users, identity %q", len(before), len(after), pid)
