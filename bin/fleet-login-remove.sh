@@ -7,7 +7,12 @@
 # washed for the next person by bin/fleet-login-reset.sh (handed every other
 # argument; the hub's reset op is this argv, #3504). The wash runs this script's
 # steps 1–5 through --recycle-stop: everything up to the archive, then it stops
-# — no sysadminctl, the user record and its UID stay.
+# — no sysadminctl, the user record and its UID stay. --quick (with
+# --recycle-stop, issue #4044) is what the wash runs: no fleet-down (1c makes
+# the daemon let go, the wash kills every process of the uid), the hub leave in
+# the background beside steps 1c–3, and no steps 4–5 — the wash quiesces and
+# moves the home aside itself (a rename: the archive is written after, off the
+# clock).
 #
 # Home policy (EPIC #1212 C5, issue #1217 — #1210 ⑤ is the diagnosis):
 #   --keep-home    default. The home is ARCHIVED first — a 600 tar.gz owned by
@@ -53,7 +58,7 @@ usage() { printf 'usage: %s <login> [--keep-home|--delete-home] [--archive-dir <
 die() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 refuse() { printf '%s: refusing %s\n' "$PROG" "$1" >&2; exit 3; }
 
-LOGIN='' APPLY=0 KEEP=1 ARCHIVE_DIR=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded} RECYCLE=0 STOPONLY=0
+LOGIN='' APPLY=0 KEEP=1 ARCHIVE_DIR=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded} RECYCLE=0 STOPONLY=0 QUICK=0
 ARGS=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -64,6 +69,7 @@ while [ $# -gt 0 ]; do
     --apply) APPLY=1; shift ;;
     --recycle) RECYCLE=1; shift ;;
     --recycle-stop) STOPONLY=1; shift ;;
+    --quick) QUICK=1; shift ;;
     -h|--help) usage ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$LOGIN" ] || usage; LOGIN=$1; shift ;;
@@ -72,6 +78,7 @@ done
 [ -n "$LOGIN" ] || usage
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "bad login name '$LOGIN'"
 [ "$RECYCLE" = 0 ] || [ "$STOPONLY" = 0 ] || die '--recycle and --recycle-stop: one or the other'
+[ "$QUICK" = 0 ] || [ "$STOPONLY" = 1 ] || die '--quick goes with --recycle-stop only'
 if [ "$RECYCLE" = 1 ]; then
   # the wash (issue #3505): the same arguments, minus --recycle
   FWD=()
@@ -273,10 +280,14 @@ fi
 # fleet_sockets lists only live, configured fleet servers. Capture the list before
 # stopping one; the last fleet-down disarms that login's crash restore.
 step 1 "stop $LOGIN's live fleet"
+if [ "$QUICK" = 1 ]; then
+  printf '  (skipped: --quick — the daemon lets go at 1c, the wash kills every process of uid %s)\n' "$UID_TARGET"
+else
 # shellcheck disable=SC2016 # $1/$2 are expanded by the target login's bash.
 show sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" --yes || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh"
 if [ "$APPLY" = 1 ]; then
   sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" --yes || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" || exit 1
+fi
 fi
 
 # Off the hub while the login's node token still exists (issue #1928). As the
@@ -289,15 +300,25 @@ LEAVE=(sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet
 [ -z "${FLEET_HUB_CURL:-}" ] || LEAVE+=("FLEET_HUB_CURL=$FLEET_HUB_CURL")   # the selftest's transport
 LEAVE_ARGS=(--hub-only --reason "login $LOGIN $([ "$STOPONLY" = 1 ] && echo recycled || echo removed)")
 show ${LEAVE[@]+"${LEAVE[@]}"} bash /tmp/fleet-node-leave.XXXXXX ${LEAVE_ARGS[@]+"${LEAVE_ARGS[@]}"}
-if [ "$APPLY" = 1 ]; then
-  LCOPY=''
-  if [ ! -f "$LEAVE_SH" ] || ! LCOPY=$(mktemp /tmp/fleet-node-leave.XXXXXX) \
-     || ! cp "$LEAVE_SH" "$LCOPY" || ! chmod 644 "$LCOPY"; then
+leave() {
+  local lcopy=''
+  if [ ! -f "$LEAVE_SH" ] || ! lcopy=$(mktemp /tmp/fleet-node-leave.XXXXXX) \
+     || ! cp "$LEAVE_SH" "$lcopy" || ! chmod 644 "$lcopy"; then
     printf '%s: WARN cannot stage %s — if %s was a node, remove it on the hub machines page (「移除」)\n' "$PROG" "$LEAVE_SH" "$LOGIN" >&2
-  elif ! ${LEAVE[@]+"${LEAVE[@]}"} bash "$LCOPY" ${LEAVE_ARGS[@]+"${LEAVE_ARGS[@]}"}; then
+  elif ! ${LEAVE[@]+"${LEAVE[@]}"} bash "$lcopy" ${LEAVE_ARGS[@]+"${LEAVE_ARGS[@]}"}; then
     printf '%s: WARN %s was not taken off the hub — an admin removes it on the machines page (「移除」), or: fleet-node-revoke.sh <machine>:%s\n' "$PROG" "$LOGIN" "$LOGIN" >&2
   fi
-  [ -z "$LCOPY" ] || rm -f "$LCOPY"
+  [ -z "$lcopy" ] || rm -f "$lcopy"
+}
+# --quick: a round trip to the hub, beside steps 1c–3 (it runs as the login,
+# so it is waited for before anything kills the uid's processes)
+LEAVE_PID=''
+if [ "$APPLY" = 1 ] && [ "$QUICK" = 1 ]; then
+  leave > "${TMPDIR:-/tmp}/fleet-login-remove.leave.$$" 2>&1 &
+  LEAVE_PID=$!
+  printf '  (in the background, beside steps 1c–3)\n'
+elif [ "$APPLY" = 1 ]; then
+  leave
 fi
 
 # A login the machine daemon took over (`account adopt`, #2332) has its tasks
@@ -366,6 +387,19 @@ run sudo python3 -I "$BIN/fleet-credsep.py" purge --login "$LOGIN"
 
 step 3 'remove the copied Claude account pool'
 run sudo rm -rf "$ACCOUNTS"
+
+if [ -n "$LEAVE_PID" ]; then
+  wait "$LEAVE_PID"
+  sed 's/^/  /' "${TMPDIR:-/tmp}/fleet-login-remove.leave.$$" 2>/dev/null
+  rm -f "${TMPDIR:-/tmp}/fleet-login-remove.leave.$$"
+fi
+
+if [ "$QUICK" = 1 ]; then
+  printf '\n'
+  if [ "$APPLY" = 1 ]; then printf '%s: stopped (steps 1b–3, --quick); the wash quiesces and moves the home aside\n' "$PROG"
+  else printf '%s: dry run complete\n' "$PROG"; fi
+  exit 0
+fi
 
 step 4 'stop remaining processes owned by the login'
 quiesce

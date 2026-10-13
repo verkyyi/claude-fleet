@@ -184,6 +184,9 @@ func (s *Server) applyReset(opID, epID string, res control.AccountResult, now ti
 		ok, err := s.Store.FinishAccountOp(opID, epID, store.AccountFailed, truncate(res.Detail, 4000), now)
 		return store.AccountFailed, ok, err
 	}
+	if t := resetTiming(res.Detail); t != "" {
+		log.Printf("fleet: reset %s on %s: %s", a.Login, a.Hostname, t)
+	}
 	why := ""
 	switch {
 	case !res.OK && res.Exit == control.RemoveExitNoLogin:
@@ -216,7 +219,7 @@ func (s *Server) applyReset(opID, epID string, res control.AccountResult, now ti
 		ok, err := s.Store.FinishAccountOp(opID, epID, store.AccountFailed, truncate(detail, 4000), now)
 		return store.AccountFailed, ok, err
 	}
-	spare, from, ok, err := s.Store.RecycleAccount(opID, epID, "hub", now)
+	spare, from, ok, err := s.Store.RecycleAccount(opID, epID, "hub", resetTiming(res.Detail), now)
 	if err != nil || !ok {
 		return store.AccountActive, ok, err
 	}
@@ -227,4 +230,17 @@ func (s *Server) applyReset(opID, epID string, res control.AccountResult, now ti
 		}
 	}()
 	return store.AccountActive, true, nil
+}
+
+// resetTiming is the wash's last `timing:` line (bin/fleet-login-reset.sh,
+// claude-fleet#4044: each phase's seconds, isolated = until the check said
+// clean, total), "" when the answer carries none — an older node.
+func resetTiming(detail string) string {
+	lines := strings.Split(detail, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); strings.HasPrefix(l, "timing: ") {
+			return truncate(l, 300)
+		}
+	}
+	return ""
 }
