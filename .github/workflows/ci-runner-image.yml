@@ -9,10 +9,10 @@ name: ci-runner image
 # (the private deploy repo's k8s/runners/fleet-ack.yaml, deploy/k8s/runners/README.md);
 # a shard on an older image says so on its summary and runs anyway.
 #
-# Repo variables: CI_RUNNER_REPO (the image repo, VPC endpoint) and
-# CI_RUNNER_BASE (the cluster's ARC runner image it builds on). Unset ⇒ the job is
+# Repo variable: CI_RUNNER_REPO (the image repo, VPC endpoint). Unset ⇒ the job is
 # skipped. Push credentials: OIDC → STS as gha-claudefleet-ci-runner (environment
-# ci-runner, master only; it pushes acme/fleet-ci-runner and pulls the base).
+# ci-runner, master only; it pushes acme/fleet-ci-runner). The base is the official
+# ARC runner image (ghcr.io, pinned by digest in the Dockerfile).
 
 on:
   push:
@@ -21,6 +21,7 @@ on:
       - extras/ci-runner/**
       - tokenledger/go.mod
       - tokenledger/go.sum
+      - bin/fleet-ci-job-gate.sh
       - .github/workflows/ci-runner-image.yml
   workflow_dispatch:
     inputs:
@@ -39,7 +40,7 @@ permissions:
 jobs:
   image:
     name: ci-runner image
-    if: vars.CI_RUNNER_REPO != '' && vars.CI_RUNNER_BASE != ''
+    if: vars.CI_RUNNER_REPO != ''
     runs-on: fleet-ack
     timeout-minutes: 45
     environment: ci-runner
@@ -48,7 +49,6 @@ jobs:
       id-token: write
     env:
       REPO: ${{ vars.CI_RUNNER_REPO }}
-      BASE: ${{ vars.CI_RUNNER_BASE }}
       FORCE: ${{ inputs.force && '--force' || '' }}
     steps:
       # GitHub from Shenzhen: a sparse, shallow checkout, tried twice
@@ -61,6 +61,7 @@ jobs:
             /extras/ci-runner/
             /tokenledger/go.mod
             /tokenledger/go.sum
+            /bin/fleet-ci-job-gate.sh
             /.github/actions/hub-acr/
             /.github/actions/hub-kubeconfig/
       - if: steps.co.outcome == 'failure'
@@ -71,6 +72,7 @@ jobs:
             /extras/ci-runner/
             /tokenledger/go.mod
             /tokenledger/go.sum
+            /bin/fleet-ci-job-gate.sh
             /.github/actions/hub-acr/
             /.github/actions/hub-kubeconfig/
       - uses: ./.github/actions/hub-acr
@@ -80,7 +82,7 @@ jobs:
         id: build
         run: |
           # shellcheck disable=SC2086  # $FORCE is one flag or nothing
-          bash extras/ci-runner/build.sh "$REPO" "$BASE" $FORCE
+          bash extras/ci-runner/build.sh "$REPO" $FORCE
       - name: summary
         env:
           IMAGE: ${{ steps.build.outputs.image }}
