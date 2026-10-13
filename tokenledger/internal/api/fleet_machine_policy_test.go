@@ -35,7 +35,7 @@ func TestMachinePolicyGrammar(t *testing.T) {
 		{`"*"`, "mac-a", false, ""},                           // explicit all
 		{`["mac-a","Mac-E.local"]`, "MAC-A.local", false, ""}, // first label, any case
 		{`["mac-a","Mac-E.local"]`, "mac-e", false, ""},       // the list's own first label
-		{`["mac-a"]`, "mac-b", true, "可用：mac-a"},            // off the list: names what is open
+		{`["mac-a"]`, "mac-b", true, "可用：mac-a"},              // off the list: names what is open
 		{`[]`, "mac-a", true, "暂未给你开放任何机器"},                   // none
 		{`{"x":1}`, "mac-a", true, "写坏了"},                     // malformed: none, never all
 		{`null`, "mac-a", true, "写坏了"},                        // null is not a list
