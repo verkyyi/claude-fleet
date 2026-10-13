@@ -128,7 +128,7 @@ ok; [ "$(nlines "$LEDGER")" = 2 ] && [ -z "$out" ] || fail "C: a pull from seq 0
 python3 "$BIN/fleet-children.py" dispatch --file "$DISP" --child acme-app:issue-42 --state accepted --node mac-a --op "$O1" >/dev/null
 ok; [ "$(kid)" = "1|▸|accepted|1" ] || fail "D: placed, nothing more ⇒ one working row, progress accepted" "$(kid)"
 txt=$(env -u TMUX FLEET_HUB_PROGRESS=0 bash "$BIN/fleet-children.sh" -L "$L" issue-7)
-ok; case "$txt" in *'↗ acme-app:issue-42'*) fail "D: no ↗ line of its own" "$txt" ;; *'▸ acme-app:issue-42'*'gone ↗mac-a'*'accepted'*'0/1 ✓') ;; *) fail "D: the text row says where and how far" "$txt" ;; esac
+ok; case "$txt" in *'↗ acme-app:issue-42'*) fail "D: no ↗ line of its own" "$txt" ;; *'▸ acme-app:issue-42'*'gone · mac-a'*'accepted'*'0/1 ✓') ;; *) fail "D: the text row says where and how far" "$txt" ;; esac
 step() { # <seq> <rid> <kind> <state> <event-json> <want kid()> <what>
   answer "$1" "$(ev "$1" "$2" "$U/issue-7" "$3" "$4" "$5")"; : > "$WORK/curl.log"; pull
   ok; [ "$(kid)" = "$6" ] || fail "D: $7" "$(kid) (rc=$rc $err)"
