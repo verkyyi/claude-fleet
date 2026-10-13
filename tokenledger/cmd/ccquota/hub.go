@@ -1006,7 +1006,17 @@ func runHub(args []string) error {
 		go srv.RunEntryDNS(ctx)
 		// A service run's throwaway environment (claude-fleet#4005): one Job
 		// per attempt in the cluster whose ops link this is. Unset: no runner.
-		if c := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_CLUSTER")); c != "" {
+		// Or (claude-fleet#4086) on the service logins fleet.svc.logins names —
+		// Claude Code runs only where its region allows. One runner per hub.
+		switch c, node := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_CLUSTER")), strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_RUNNER")); {
+		case node == "node" && c != "":
+			return errors.New("CCQUOTA_FLEET_SVC_RUNNER=node and CCQUOTA_FLEET_SVC_CLUSTER: one runner per hub — unset one")
+		case node == "node":
+			srv.SvcRunner = api.NewNodeSvcRunner(srv)
+			log.Printf("fleet: service runs start on the service logins %s names", api.SvcLoginsKey)
+		case node != "":
+			return fmt.Errorf("CCQUOTA_FLEET_SVC_RUNNER=%q: only node", node)
+		case c != "":
 			srv.SvcRunner = api.NewClusterSvcRunner(srv, c)
 			log.Printf("fleet: service runs start as Jobs in cluster %s", c)
 		}
@@ -1625,6 +1635,8 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		FleetSSHRelay: fleet && getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
 		// The chat relay likewise (claude-fleet#3644).
 		FleetChat: fleet && getenv("CCQUOTA_FLEET_CHAT") != "0",
+		// A service login (claude-fleet#4086): service run attempts, as it.
+		FleetSvc: fleet && getenv("CCQUOTA_FLEET_SVC") == "1",
 		// fleet-ops: the cluster's provisioner it hands tickets to (claude-fleet#3553).
 		FleetClusterOps: func() string {
 			if fleet {

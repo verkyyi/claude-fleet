@@ -695,10 +695,13 @@ if [ "$DONLY" = 0 ]; then
     fi
   fi
   # fleet-login-install.sh (issue #2775), staged world-readable: this install
-  # lives in the admin's home, which the login cannot read (#1213)
+  # lives in the admin's home, which the login cannot read (#1213). Under /tmp,
+  # never $TMPDIR: a login shell's is the admin's own 0700 /var/folders/…/T, so
+  # the login could not reach the stage (#4086 — the admin agent, a launchd job
+  # with no TMPDIR, always staged in /tmp and never saw it).
   ISTG="$BIN"
   if [ "$APPLY" = 1 ]; then
-    ISTG=$(mktemp -d "${TMPDIR:-/tmp}/fleet-login-install.XXXXXX") && chmod 755 "$ISTG" \
+    ISTG=$(mktemp -d /tmp/fleet-login-install.XXXXXX) && chmod 755 "$ISTG" \
       && cp "$BIN/fleet-login-install.sh" "$BIN/fleet-release-lib.sh" "$BIN/fleet-daemon-lib.sh" \
             "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$ISTG/" \
       && chmod 644 "$ISTG"/* \

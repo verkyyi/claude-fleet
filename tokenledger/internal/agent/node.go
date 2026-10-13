@@ -203,6 +203,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.cfg.FleetChat {
 		caps = append(caps, control.CapChat)
 	}
+	if a.svcRunCapable() {
+		// A service login takes service run attempts (claude-fleet#4086).
+		caps = append(caps, control.CapSvcRun)
+	}
 	if a.teamCapable() {
 		// The team layer follows the hub's push (claude-fleet#1899).
 		caps = append(caps, control.CapTeam)
@@ -370,6 +374,11 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			case control.TypeClusterOp:
 				// One provisioner ticket, carried as it came (claude-fleet#3553).
 				go a.answerClusterOp(ctx, conn, m)
+			case control.TypeSvcRun:
+				// One service run attempt, as this login (claude-fleet#4086).
+				go a.answerSvcRun(ctx, conn, m)
+			case control.TypeSvcRunCancel:
+				go a.answerSvcRunCancel(ctx, conn, m)
 			case control.TypeClusterJob:
 				// A throwaway Job's state and log, read back (claude-fleet#3552).
 				go a.answerClusterJob(ctx, conn, m)

@@ -168,3 +168,25 @@ func (s *Store) SvcTemplates(principal string) ([]SvcTemplate, error) {
 	}
 	return out, rows.Err()
 }
+
+// SvcRunJobsOpen counts, by where they run (svc_run_jobs.cluster), the
+// attempts whose environment is still open and whose run is still running —
+// what a slotted runner (claude-fleet#4086) holds busy.
+func (s *Store) SvcRunJobsOpen() (map[string]int, error) {
+	rows, err := s.write.Query(`SELECT j.cluster, COUNT(*) FROM svc_run_jobs j JOIN svc_runs r ON r.id = j.run_id
+		WHERE j.ended = '' AND r.state = 'running' AND r.attempt = j.attempt GROUP BY j.cluster`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var place string
+		var n int
+		if err := rows.Scan(&place, &n); err != nil {
+			return nil, err
+		}
+		out[place] = n
+	}
+	return out, rows.Err()
+}

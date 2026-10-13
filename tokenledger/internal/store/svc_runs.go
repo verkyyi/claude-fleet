@@ -261,6 +261,13 @@ func (s *Store) SvcRuns(f SvcRunFilter) ([]SvcRun, error) {
 // runs it moved (attempt counted, started_at stamped, deadline_at fixed at the
 // first start and kept on a retry).
 func (s *Store) ClaimSvcRuns(principal string, maxRunning int, now time.Time) ([]SvcRun, error) {
+	return s.ClaimSvcRunsUpTo(principal, maxRunning, -1, now)
+}
+
+// ClaimSvcRunsUpTo is ClaimSvcRuns moving at most maxNew runs (-1: no bound) —
+// a runner with a fixed number of free slots (claude-fleet#4086) claims no
+// more than it can start; the rest stay queued, oldest first.
+func (s *Store) ClaimSvcRunsUpTo(principal string, maxRunning, maxNew int, now time.Time) ([]SvcRun, error) {
 	tx, err := s.write.Begin()
 	if err != nil {
 		return nil, err
@@ -296,7 +303,7 @@ func (s *Store) ClaimSvcRuns(principal string, maxRunning int, now time.Time) ([
 	}
 	var out []SvcRun
 	for _, r := range live {
-		if running >= maxRunning {
+		if running >= maxRunning || (maxNew >= 0 && len(out) >= maxNew) {
 			break
 		}
 		if r.State != SvcRunQueued || busy[r.Tenant] {

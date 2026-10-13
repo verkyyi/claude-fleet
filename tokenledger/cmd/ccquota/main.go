@@ -83,6 +83,9 @@ func main() {
 		err = runDB(os.Args[2:])
 	case "release":
 		err = runRelease(os.Args[2:])
+	case "notify":
+		// The hub's FLEET_NOTIFY_CMD (claude-fleet#4086).
+		err = runNotify(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 		if SrcDigest != "" {
@@ -141,6 +144,8 @@ Usage:
                             check the copy (migrate | verify; deploy/k8s/RUNBOOK.md)
   ccquota release <cmd>     A node release from the hub, signature-checked
                             (fetch | verify | keygen | pubkey; never GitHub)
+  ccquota notify "<msg>"    Send one message where FLEET_NOTIFY_KF_* /
+                            FLEET_NOTIFY_WEBHOOK say (the hub's FLEET_NOTIFY_CMD)
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.

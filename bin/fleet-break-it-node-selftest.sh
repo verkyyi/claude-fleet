@@ -140,6 +140,9 @@
 #   managed-login-mod-escapes  bin/fleet-node-update.py _build_tree / _copy_heal +
 #                         follow_installs (#2964): the mod's files were links into the
 #                         runtime, Claude Code refused it (Path escapes plugin directory)
+#   svc-run-leaks-across-runs bin/fleet-svc-local.sh + bin/fleet-svc-runner.py (#4086,
+#                         bin/fleet-svc-local-selftest.sh): a service run on a Mac
+#                         service login reads, or leaves for, the next workspace's run
 #   spotlight-on          bin/fleet-spotlight.sh + the machine daemon's `spotlight` task +
 #                         bin/fleet-doctor.sh's `spotlight` row (#3402): Spotlight indexes
 #                         every worktree and a knowledge agent burns a core on a managed Mac
@@ -1669,6 +1672,23 @@ drill_per_login_machine_loops() {
   fi
   SECS=$(since "$t0")
   WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复"
+}
+
+# ---- svc-run-leaks-across-runs (#4086): service runs (svc:livepage, every
+# workspace's) run on a Mac's service login, one login for many tenants — a
+# run's files, processes, HOME or key reaching the next run is one workspace
+# reading another's. bin/fleet-svc-local.sh gives each attempt a fresh 0700
+# directory (HOME · work · out · tmp · key), kills everything carrying its tag
+# (a setsid() escape too) and removes the directory; `clean` does the same after
+# the agent's SIGKILL.
+drill_svc_run_leaks_across_runs() {
+  CAP=60; local t0
+  t0=$(now)
+  if ! bash "$BIN/fleet-svc-local-selftest.sh" >"$WORK/svc-local.out" 2>&1; then
+    WHY="a run left something for the next: $(grep FAIL "$WORK/svc-local.out" | head -3 | tr '\n' ' ')"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="同一个服务账号连跑两次：每次一个全新 0700 目录（HOME、work、out、tmp、钥匙都在里面），跑完目录没了、带本次标记的进程（含 setsid 逃出进程组的）全被杀；第二次看不到第一次任何东西；会话环境里没有钥匙、设置禁读钥匙和通行证；被 SIGKILL 的那次由 clean 收尾"
 }
 
 # this file runs part 1/3; the rest are its part files (issue #2694)

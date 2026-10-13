@@ -615,6 +615,12 @@ func (s *Server) SvcRunFinishDetail(id int64, state, code, detail string, res *S
 	return run, nil
 }
 
+// svcSlotted is a runner with a fixed number of places to run (the service
+// logins, claude-fleet#4086): FreeSlots is how many attempts it can start now.
+type svcSlotted interface {
+	FreeSlots(settings map[string]string) int
+}
+
 // svcMaxRunning is principal's cap on running runs.
 func (s *Server) svcMaxRunning(settings map[string]string, principal string) int {
 	if n, err := strconv.Atoi(strings.TrimSpace(settings[SvcMaxRunningKey(principal)])); err == nil && n >= 0 {
@@ -638,8 +644,20 @@ func (s *Server) svcDispatch(ctx context.Context, now time.Time) {
 		return
 	}
 	settings, _ := s.Store.FleetSettings()
+	// a runner with a fixed number of slots (claude-fleet#4086): claim no more
+	// than it can start now; the rest wait in the queue, oldest first
+	free := -1
+	if sl, ok := s.SvcRunner.(svcSlotted); ok {
+		free = sl.FreeSlots(settings)
+	}
 	for _, p := range principals {
-		claimed, err := s.Store.ClaimSvcRuns(p, s.svcMaxRunning(settings, p), now)
+		if free == 0 {
+			break
+		}
+		claimed, err := s.Store.ClaimSvcRunsUpTo(p, s.svcMaxRunning(settings, p), free, now)
+		if free > 0 {
+			free -= len(claimed)
+		}
 		if err != nil {
 			log.Printf("svc runs: claim for %s: %v", p, err)
 			continue
