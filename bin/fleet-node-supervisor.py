@@ -736,6 +736,11 @@ def default_table(paths):
         # the pod's other container
         table["tasks"] = []
         table["children"] = [c for c in table["children"] if c["name"] == "node-agent"]
+        # …which starts with no login: the hub's create for the pod's one login
+        # comes down this program's own machine link, so it may not wait for a
+        # logins/*.env only that create writes (#3554 — the pod sat pending)
+        for c in table["children"]:
+            c["requires"] = [r for r in c["requires"] if not r.endswith("*.env")]
     if door_profile():
         # The cluster's one door (#3549, EPIC #3500 C4): its sshd (the entry child)
         # and its pull, nothing else — no node program, no login, no machine loop.
