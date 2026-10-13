@@ -302,8 +302,9 @@ def act(t, conf, api, r=None):
         except ValueError as e:
             raise Refused('the template\'s private_mirrors: %s' % e)
         login = pod_login_of(owner)
+        upstream = ('https://github.com/%s.git' % t['repo']).lower()  # dist-ok: a ticket's repo as an upstream URL, compared, never fetched
         for m in private:
-            if m['upstream'].lower() == ('https://github.com/%s.git' % t['repo']).lower() and login not in m['logins']:
+            if m['upstream'].lower() == upstream and login not in m['logins']:
                 raise Refused('%s is mirrored for a list, and %s (login %r) is not on it' % (t['repo'], pod, login))
         job = conf.get('job') or {}
         try:

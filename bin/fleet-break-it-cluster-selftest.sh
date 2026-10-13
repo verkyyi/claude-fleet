@@ -673,15 +673,15 @@ drill_mirror_private_unlisted() {
   cat > "$d/pm.json" <<'JSON'
 [{"mirror": "git://git-mirror.arc-runners:9418/acme-monorepo.git",
   "upstream": "https://github.com/acme-org/acme-monorepo.git",
-  "allow": "172.21.9.190:9418", "logins": ["listed1"]}]
+  "allow": "192.0.2.90:9418", "logins": ["listed1"]}]
 JSON
   local base=(--image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi --user-pod u-drill1
               --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local
               --git-mirror git://fleet-git-mirror.arc-runners:9418/claude-fleet.git=https://github.com/o/claude-fleet.git
-              --egress-allow 172.21.6.7:9418 --private-mirrors "$d/pm.json")
+              --egress-allow 192.0.2.67:9418 --private-mirrors "$d/pm.json")
   python3 "$RENDER" "${base[@]}" --login listed1 --uid 10002 > "$d/in.json" || { WHY="render (listed) failed"; return 1; }
   python3 "$RENDER" "${base[@]}" --login other1 --uid 10003 > "$d/out.json" || { WHY="render (unlisted) failed"; return 1; }
-  for bad in '--egress-allow 172.21.9.0/24:9418' \
+  for bad in '--egress-allow 192.0.2.0/24:9418' \
              '--git-mirror git://m:9418/x.git=https://github.com/acme-org/acme-monorepo.git'; do
     # shellcheck disable=SC2086  # one flag + its value
     out=$(python3 "$RENDER" "${base[@]}" --login other1 --uid 10003 $bad 2>&1) \
@@ -694,7 +694,7 @@ import copy, importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("r", sys.argv[1]); r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
 d = sys.argv[2]
-RULE = "-A OUTPUT -d 172.21.9.190/32 -p tcp -m tcp --dport 9418 -j ACCEPT"
+RULE = "-A OUTPUT -d 192.0.2.90/32 -p tcp -m tcp --dport 9418 -j ACCEPT"
 UP = "https://github.com/acme-org/acme-monorepo.git"
 LABEL = "fleet/mirror-acme-monorepo"
 def dep(f):
@@ -706,7 +706,7 @@ def access(o):
     mir = {n: any(x.endswith("=" + UP) for x in v.get("FLEET_GIT_MIRRORS", "").split()) for n, v in env.items()
            if "FLEET_POD_LOGIN" in v}
     return {"label": t["metadata"]["labels"].get(LABEL) == "1", "guard": RULE in guard.split("\n"),
-            "mirror": sorted(n for n, m in mir.items() if m), "open": "172.21.6.7/32" in guard}
+            "mirror": sorted(n for n, m in mir.items() if m), "open": "192.0.2.67/32" in guard}
 bad = []
 a_in, a_out = access(dep(d + "/in.json")), access(dep(d + "/out.json"))
 if a_in != {"label": True, "guard": True, "mirror": ["fleet", "pod-etc"], "open": True}:
@@ -791,7 +791,7 @@ for pod, want in (("u-pmin0001", True), ("u-pmout001", False)):
                                headers={"Authorization": "Bearer drill-token"})
     t = json.load(urllib.request.urlopen(q))["spec"]["template"]
     g = [c for c in t["spec"]["initContainers"] if c["name"] == "egress-guard"][0]["command"][-1]
-    got = ("172.21.9.190/32" in g, t["metadata"]["labels"].get("fleet/mirror-acme-monorepo") == "1",
+    got = ("192.0.2.90/32" in g, t["metadata"]["labels"].get("fleet/mirror-acme-monorepo") == "1",
            "acme-monorepo" in json.dumps(t["spec"]["containers"]))
     if got != (want,) * 3:
         bad.append("%s from the template: guard/label/insteadOf %s, want all %s" % (pod, got, want))
