@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useState, type FC, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import {
-  Check, Copy, KeyRound, Laptop, LoaderCircle, Plus, RotateCw, Server, Smartphone, Trash2, type LucideIcon,
+  Check, Copy, KeyRound, Laptop, LoaderCircle, Plus, Server, Smartphone, Trash2, type LucideIcon,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -25,28 +25,32 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { lang, tr } from "@/shared/i18n";
-import { isAdmin, send, type Device, type Me } from "@/shared/api";
+import { isAdmin, sendJSON, useLoad, type Device, type Me } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
+import { ago as agoText, Failed, Loading, PageHeader } from "../parts";
 
 // ---- the reads ----------------------------------------------------------
 
 type Read<T> = { data: T | null; status: number; loading: boolean; retry: () => void };
 
-// useRead GETs url once (and again on retry / bump): its answer and its status
-// — a 404 is an answer here (the phone's door is off), not a failure.
-function useRead<T>(url: string, bump = 0): Read<T> {
+// useBook GETs the entry book (and again on bump): its answer and its status —
+// a 404 is an answer here (the phone's door is off on this hub), not a failure,
+// which useLoad cannot tell apart.
+function useBook<T>(url: string, bump = 0): Read<T> {
   const [n, setN] = useState(0);
   const [s, set] = useState<{ data: T | null; status: number; loading: boolean }>({ data: null, status: 0, loading: true });
   useEffect(() => {
     let live = true;
-    set((o) => ({ ...o, loading: true }));
-    send<T>("GET", url).then((r) => live && set({ data: r.status === 200 ? r.body : null, status: r.status, loading: false }));
+    fetch(url, { headers: { Accept: "application/json" } }).catch(() => null).then(async (r) => {
+      if (r?.status === 401) { location.assign("/app/signin"); return; }
+      const data = r?.ok ? ((await r.json().catch(() => null)) as T | null) : null;
+      if (live) set({ data, status: r ? r.status : 0, loading: false });
+    });
     return () => { live = false; };
   }, [url, n, bump]);
   return { ...s, retry: () => setN((x) => x + 1) };
@@ -77,16 +81,7 @@ const ENTRY_KEYS = "/v1/fleet/entry/keys";
 
 // ---- small parts ----------------------------------------------------------
 
-const ago = (iso?: string) => {
-  const t = iso ? Date.parse(iso) : NaN;
-  if (!Number.isFinite(t) || t <= 0) return tr("从没", "never");
-  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (m < 1) return tr("刚刚", "just now");
-  if (m < 60) return tr(`${m} 分钟前`, `${m} min ago`);
-  const h = Math.round(m / 60);
-  if (h < 24) return tr(`${h} 小时前`, `${h} h ago`);
-  return tr(`${Math.round(h / 24)} 天前`, `${Math.round(h / 24)} d ago`);
-};
+const ago = (iso?: string) => agoText(iso) || tr("从没", "never");
 const shortFP = (fp: string) => (fp.length > 22 ? `${fp.slice(0, 15)}…${fp.slice(-6)}` : fp);
 
 const CopyButton: FC<{ text: string; label?: string; className?: string }> = ({ text, label, className }) => {
@@ -104,17 +99,6 @@ const CopyLine: FC<{ text: string }> = ({ text }) => (
   <div className="bg-muted/60 flex min-w-0 items-center gap-1 rounded-lg border ps-3 pe-1">
     <code className="min-w-0 flex-1 overflow-x-auto py-2 font-mono text-[13px] whitespace-nowrap">{text}</code>
     <CopyButton text={text} />
-  </div>
-);
-
-const Loading: FC<{ n?: number }> = ({ n = 2 }) => (
-  <div className="flex flex-col gap-3">{Array.from({ length: n }, (_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
-);
-
-const Failed: FC<{ what: string; retry: () => void }> = ({ what, retry }) => (
-  <div className="text-muted-foreground flex items-center gap-3 text-sm">
-    <span className="flex-1">{tr(`${what}没读出来。`, `Couldn't load ${what}.`)}</span>
-    <Button size="sm" variant="outline" onClick={retry}><RotateCw />{tr("再试", "Retry")}</Button>
   </div>
 );
 
@@ -160,47 +144,38 @@ const Row: FC<{ icon: LucideIcon; title: ReactNode; sub?: ReactNode; end?: React
   </div>
 );
 
-// The hub says why it refused in Chinese; an English page says it plainly.
-const refusal = (status: number, body: { error?: string } | null) =>
-  lang === "zh" && body?.error ? body.error
-    : status === 409 ? tr("这把钥匙已经登记在别人名下。", "That key is registered to someone else.")
-    : status === 422 ? tr("看不懂这一行：贴以 ssh-ed25519 开头的一整行公钥。", "Paste one whole public key line, starting with ssh-ed25519.")
-    : status === 0 ? tr("连不上入口，稍后再试。", "Couldn't reach the hub; try again.")
-    : body?.error || tr("没成功，稍后再试。", "That didn't work; try again.");
+// The hub says why it refused, in Chinese; an English page says it plainly.
+const refusal = (error: string) => (lang === "zh" && error ? error : tr("没成功，稍后再试。", "That didn't work; try again."));
 
 // ---- 电脑 -------------------------------------------------------------------
 
 const PcTab: FC<{ setAsk: (a: Ask) => void }> = ({ setAsk }) => {
-  const conn = useRead<Connect>("/v1/fleet/connect");
-  const [bump, setBump] = useState(0);
-  const devs = useRead<{ devices?: Device[] }>("/v1/fleet/devices", bump);
+  const conn = useLoad<Connect>("/v1/fleet/connect");
+  const devs = useLoad<{ devices?: Device[] }>("/v1/fleet/devices");
   const c = conn.data;
   const list = (devs.data?.devices || []).filter((d) => !d.revoked_at && !d.host);
+  if (conn.loading && devs.loading) return <Loading n={2} />;
   return (
     <div className="flex flex-col gap-3">
-      <Card>
+      {conn.failed ? <Failed what={tr("安装命令", "the install command")} onRetry={conn.reload} /> : !c ? <Loading n={1} /> : <Card>
         <CardHeader>
           <CardTitle className="text-base">{tr("在电脑上装 fleet", "Install fleet on a computer")}</CardTitle>
           <CardDescription>{tr("打开终端，粘贴这一行；装好后输入 fleet，扫码登录就能看到你的会话。",
             "Open a terminal and paste this line; then type fleet and scan to sign in — your sessions are there.")}</CardDescription>
         </CardHeader>
         <CardContent>
-          {conn.loading ? <Loading n={1} />
-            : !c ? <Failed what={tr("安装命令", "the install command")} retry={conn.retry} />
-            : c.install_command && c.install_ready !== false ? <CopyLine text={c.install_command} />
+          {c.install_command && c.install_ready !== false ? <CopyLine text={c.install_command} />
             : <Note tone="warn">{c.problem || tr("这个入口还不能装客户端：要先有 SSH 证书和 GitHub 登录。", "This hub can't install the client yet: it needs its SSH CA and GitHub sign-in.")}</Note>}
         </CardContent>
-      </Card>
-      <Card>
+      </Card>}
+      {devs.failed ? <Failed what={tr("设备", "devices")} onRetry={devs.reload} /> : !devs.data ? <Loading n={1} /> : <Card>
         <CardHeader>
           <CardTitle className="text-base">{tr("已连上的电脑", "Connected computers")}</CardTitle>
           <CardDescription>{tr("扫码登录过的电脑。收回后它立刻断开，要再扫一次码才能连。",
             "Computers you scanned in from. Revoke one and it is cut off at once until it scans again.")}</CardDescription>
         </CardHeader>
         <CardContent>
-          {devs.loading && !devs.data ? <Loading />
-            : devs.status !== 200 ? <Failed what={tr("设备", "devices")} retry={devs.retry} />
-            : list.length ? (
+          {list.length ? (
               <div className="divide-y">
                 {list.map((d) => (
                   <Row key={d.fingerprint} icon={Laptop} title={d.name || shortFP(d.fingerprint)}
@@ -209,13 +184,13 @@ const PcTab: FC<{ setAsk: (a: Ask) => void }> = ({ setAsk }) => {
                       title: tr(`收回「${d.name || shortFP(d.fingerprint)}」？`, `Revoke “${d.name || shortFP(d.fingerprint)}”?`),
                       body: tr("这台电脑会立刻断开，之后要重新扫码登录才能连。", "This computer is cut off at once; it has to scan in again to connect."),
                       yes: tr("收回", "Revoke"),
-                      run: async () => { await send("POST", "/v1/fleet/devices/revoke", { fingerprint: d.fingerprint }); setBump((x) => x + 1); },
+                      run: async () => { await sendJSON("POST", "/v1/fleet/devices/revoke", { fingerprint: d.fingerprint }); devs.reload(); },
                     })}>{tr("收回", "Revoke")}</Button>} />
                 ))}
               </div>
             ) : <p className="text-muted-foreground text-sm">{tr("还没有电脑连上来。装好 fleet、扫码登录后会出现在这里。", "No computer yet. Install fleet and scan in; it shows up here.")}</p>}
         </CardContent>
-      </Card>
+      </Card>}
       {c?.ssh_config ? (
         <Card>
           <CardHeader>
@@ -242,9 +217,9 @@ const CertByHand: FC<{ ttl: number }> = ({ ttl }) => {
   const hours = Math.round(ttl / 3600);
   const issue = async () => {
     setBusy(true);
-    const r = await send<{ certificate?: string; valid_before?: string; error?: string }>("POST", "/v1/fleet/cert", { public_key: key.trim() });
+    const r = await sendJSON<{ certificate?: string; valid_before?: string }>("POST", "/v1/fleet/cert", { public_key: key.trim() });
     setBusy(false);
-    setOut(r.status === 200 && r.body?.certificate ? { cert: r.body.certificate, until: r.body.valid_before } : { err: refusal(r.status, r.body) });
+    setOut(r.ok && r.data?.certificate ? { cert: r.data.certificate, until: r.data.valid_before } : { err: refusal(r.ok ? "" : r.error) });
   };
   return (
     <Card>
@@ -329,9 +304,9 @@ const NameForm: FC<{ suggested?: string; domain?: string; done: () => void }> = 
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
-    const r = await send<{ error?: string }>("PUT", "/v1/fleet/entry/name", { name });
+    const r = await sendJSON("PUT", "/v1/fleet/entry/name", { name });
     setBusy(false);
-    if (r.status === 200) done(); else setErr(refusal(r.status, r.body));
+    if (r.ok) done(); else setErr(refusal(r.error));
   };
   return (
     <div className="flex flex-col gap-2">
@@ -349,9 +324,9 @@ const NameForm: FC<{ suggested?: string; domain?: string; done: () => void }> = 
 };
 
 const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = ({ entry, me, reload }) => {
-  if (entry.loading && !entry.data) return <Card><CardContent><Loading n={3} /></CardContent></Card>;
+  if (entry.loading && !entry.data) return <Loading n={1} />;
   if (entry.status === 404) return <DoorOff me={me} />;
-  if (!entry.data?.door) return <Card><CardContent><Failed what={tr("手机的连接方式", "the phone's way in")} retry={entry.retry} /></CardContent></Card>;
+  if (!entry.data?.door) return <Failed what={tr("手机的连接方式", "the phone's way in")} onRetry={entry.retry} />;
   const v = entry.data, d = entry.data.door;
   const rows: [string, string | number | undefined][] = [[tr("地址", "Host"), d.address], [tr("端口", "Port"), d.port], [tr("用户名", "User"), d.login]];
   return (
@@ -400,18 +375,21 @@ const KeysTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   if (entry.status === 404) return <DoorOff me={me} />;
+  if (entry.loading && !entry.data) return <Loading n={1} />;
+  if (!entry.data) return <Failed what={tr("公钥", "keys")} onRetry={entry.retry} />;
   const keys = (entry.data?.keys || []).filter((k) => !k.revoked_at);
   const add = async () => {
     // a private key never leaves the page
     if (/PRIVATE KEY|BEGIN OPENSSH/i.test(line)) { setMsg({ tone: "bad", text: tr("这是私钥：只贴公钥（以 ssh-ed25519 开头的一行）。私钥留在手机上。", "That's a private key: paste only the public one (the ssh-ed25519 line). Keep the private key on your phone.") }); return; }
     setBusy(true);
-    const r = await send<{ error?: string }>("POST", ENTRY_KEYS, { public_key: line.trim() });
+    const r = await sendJSON<EntryKey>("POST", ENTRY_KEYS, { public_key: line.trim() });
     setBusy(false);
-    if (r.status === 201 || r.status === 200) {
+    if (r.ok) {
       setLine("");
-      setMsg({ tone: "ok", text: r.status === 201 ? tr("已加上。家机器正在为你打开入口，约 1 分钟。", "Added. Your home machine is opening the door for you — about a minute.") : tr("这把钥匙已经在你的列表里了。", "That key is already yours.") });
+      // the same key again answers the one already there
+      setMsg({ tone: "ok", text: !keys.some((k) => k.id === r.data?.id) ? tr("已加上。家机器正在为你打开入口，约 1 分钟。", "Added. Your home machine is opening the door for you — about a minute.") : tr("这把钥匙已经在你的列表里了。", "That key is already yours.") });
       reload();
-    } else setMsg({ tone: "bad", text: refusal(r.status, r.body) });
+    } else setMsg({ tone: "bad", text: refusal(r.error) });
   };
   return (
     <Card>
@@ -420,9 +398,7 @@ const KeysTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
         <CardDescription>{tr("加在这里的公钥，可以从手机直接连进你的会话。", "A key added here connects straight into your sessions from a phone.")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {entry.loading && !entry.data ? <Loading n={1} />
-          : !entry.data ? <Failed what={tr("公钥", "keys")} retry={entry.retry} />
-          : keys.length ? (
+        {keys.length ? (
             <div className="divide-y">
               {keys.map((k) => (
                 <Row key={k.id} icon={KeyRound} title={k.name || tr("（没起名）", "(unnamed)")}
@@ -431,7 +407,7 @@ const KeysTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
                     title: tr(`删掉「${k.name || shortFP(k.fp)}」？`, `Delete “${k.name || shortFP(k.fp)}”?`),
                     body: tr("几秒内家机器不再认它；正用它连着的入口连接也会断开（会话本身不受影响）。", "Within seconds your home machine stops accepting it, and a connection using it is closed (your sessions are unaffected)."),
                     yes: tr("删掉", "Delete"),
-                    run: async () => { await send("DELETE", `${ENTRY_KEYS}/${encodeURIComponent(k.id)}`); reload(); },
+                    run: async () => { await sendJSON("DELETE", `${ENTRY_KEYS}/${encodeURIComponent(k.id)}`); reload(); },
                   })}><Trash2 className="size-4" /></Button>} />
               ))}
             </div>
@@ -504,7 +480,7 @@ const Stat: FC<{ label: string; value: string }> = ({ label, value }) => (
 );
 
 const HomeTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAsk: (a: Ask) => void }> = ({ entry, me, reload, setAsk }) => {
-  const nodes = useRead<Nodes>("/v1/nodes");
+  const nodes = useLoad<Nodes>("/v1/nodes");
   const [moved, setMoved] = useState("");
   const machines = myMachines(nodes.data, me);
   const home = entry.data?.home || null;
@@ -518,14 +494,14 @@ const HomeTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
       "Your address points to it within minutes and your conversation runs there; behind one router the port may change; your phone asks once to trust its new host key."),
     yes: tr("换过去", "Move"),
     run: async () => {
-      const r = await send<{ error?: string }>("PUT", "/v1/fleet/entry/home", { machine: c.machine, login: c.login });
-      setMoved(r.status === 200 ? tr("已换家。你的地址几分钟内指向它。", "Home moved. Your address points to it within minutes.") : refusal(r.status, r.body));
+      const r = await sendJSON("PUT", "/v1/fleet/entry/home", { machine: c.machine, login: c.login });
+      setMoved(r.ok ? tr("已换家。你的地址几分钟内指向它。", "Home moved. Your address points to it within minutes.") : refusal(r.error));
       reload();
     },
   });
   return (
     <div className="flex flex-col gap-3">
-      {entry.loading && !entry.data ? <Card><CardContent><Loading n={1} /></CardContent></Card>
+      {entry.loading && !entry.data ? <Loading n={1} />
         : home ? (
           <>
             <Card>
@@ -549,15 +525,13 @@ const HomeTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
             "You have no home yet: it is a machine with your login and fleet running on it. Start fleet on one and it shows here.")}</Note>
         ) : null}
       {moved ? <Note>{moved}</Note> : null}
-      <Card>
+      {nodes.failed ? <Failed what={tr("机器", "machines")} onRetry={nodes.reload} /> : !nodes.data ? <Loading n={1} /> : <Card>
         <CardHeader>
           <CardTitle className="text-base">{tr("我的机器", "My machines")}</CardTitle>
           <CardDescription>{tr("你有登录的机器。家之外的那台只在家离线时临时接你。", "Machines you have a login on. One other than your home takes you only while your home is away.")}</CardDescription>
         </CardHeader>
         <CardContent>
-          {nodes.loading && !nodes.data ? <Loading />
-            : nodes.status !== 200 ? <Failed what={tr("机器", "machines")} retry={nodes.retry} />
-            : machines.length ? (
+          {machines.length ? (
               <div className="divide-y">
                 {machines.map((m) => {
                   const isHome = !!home && same(m.hostname, home.machine);
@@ -572,7 +546,7 @@ const HomeTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
               </div>
             ) : <p className="text-muted-foreground text-sm">{tr("还没有你的机器：管理员给你开好登录后，它会出现在这里。", "No machine of yours yet: once an admin opens a login for you, it shows here.")}</p>}
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 };
@@ -594,14 +568,11 @@ export default function DevicesPage() {
   const [bump, setBump] = useState(0);
   const reload = useCallback(() => setBump((x) => x + 1), []);
   // the phone's door, the keys and the home are one book: read once, shared
-  const entry = useRead<Entry>(ENTRY_KEYS, bump);
+  const entry = useBook<Entry>(ENTRY_KEYS, bump);
   const [ask, setAsk] = useState<Ask>(null);
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-5 md:px-6 md:py-8">
-      <div>
-        <h1 className="font-display text-[22px] leading-tight font-semibold">{tr("设备", "Devices")}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{tr("在电脑和手机上连进来", "Connect from your computer and phone")}</p>
-      </div>
+    <div className="mx-auto flex w-full max-w-2xl flex-col px-4 py-5 md:px-6 md:py-8">
+      <PageHeader title={tr("设备", "Devices")} sub={tr("在电脑和手机上连进来", "Connect from your computer and phone")} />
       <Tabs value={tab} onValueChange={(v) => setQs((q) => { const n = new URLSearchParams(q); n.set("tab", v); return n; }, { replace: true })}>
         <TabsList className="mb-1 grid w-full grid-cols-4 sm:inline-flex sm:w-auto">
           {TABS.map((t) => <TabsTrigger key={t.id} value={t.id} className="px-2"><t.icon />{t.label}</TabsTrigger>)}

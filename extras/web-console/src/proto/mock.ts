@@ -1,9 +1,10 @@
 // mock.ts — the review build's API (EPIC #3923 rule 14): the entry's real
 // response shapes (/v1/me, /v1/me/usage, /v1/fleet/devices, /v1/chat/*,
-// /v1/fleet/tasks, /v1/fleet/tickets*) with
+// /v1/fleet/tasks, /v1/fleet/tickets*, and 设备's /v1/fleet/connect,
+// /v1/fleet/entry/*, /v1/nodes) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
-type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading"; page?: string };
+type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off"; page?: string };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -93,6 +94,25 @@ export async function install(): Promise<string> {
     ],
     "linxiao/training#7": [1, 2, 3, 4, 5].map((i) => ({ id: 10 + i, author: i % 2 ? "issue-7 (node:linxiao@mac-mini)" : me.person, body: i % 2 ? `第 ${i} 版改好了。` : "再短一点。", source: i % 2 ? "fleet" : "hub", created_at: ago(400 - i * 40) })),
   };
+  // 设备 (C7): one computer, one phone key, two machines, the home on the first
+  const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString();
+  const devices: { fingerprint: string; name: string; registered_at: string; last_used_at: string; renewals: number; revoked_at?: string }[] = state === "empty" ? [] : [
+    { fingerprint: "SHA256:a", name: "MacBook-Air", registered_at: day(9), last_used_at: day(0.02), renewals: 3 }];
+  const keys: { id: string; fp: string; type: string; name: string; created: string; last_used?: string }[] = state === "empty" ? [] : [
+    { id: "k_1", fp: "SHA256:q3VtR8mWfJ0aZpLx2Nc9xKc", type: "ssh-ed25519", name: "iPhone", created: day(6), last_used: day(0.1) }];
+  let home = { machine: "mac-mini", login: me.login, set_by: "auto", set_at: day(9) };
+  // a QR-shaped picture for the review: the three finder squares and a scatter, 29 modules
+  const qr = Array.from({ length: 29 }, (_, y) => Array.from({ length: 29 }, (_, x) => {
+    const f = (a: number, b: number) => x >= a && x < a + 7 && y >= b && y < b + 7 && (x === a || x === a + 6 || y === b || y === b + 6 || (x > a + 1 && x < a + 5 && y > b + 1 && y < b + 5));
+    const inF = (x < 8 && y < 8) || (x > 20 && y < 8) || (x < 8 && y > 20);
+    return f(0, 0) || f(22, 0) || f(0, 22) || (!inF && (x * 7 + y * 13 + x * y) % 5 < 2) ? "#" : ".";
+  }).join(""));
+  const entryView = () => ({
+    person: me.person, name: me.login, home, version: 4, keys,
+    home_choices: [{ machine: "mac-mini", login: me.login, online: true, name: "mac-mini" }, { machine: "studio-2", login: me.login, online: true, name: "studio-2" }],
+    door: { domain: "fleet.example.cn", address: `${me.login}.fleet.example.cn`, port: 22022, login: home.login, home_name: home.machine,
+      state: keys.length ? "ok" : "nokey", qr },
+  });
   const real = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -100,6 +120,17 @@ export async function install(): Promise<string> {
     await new Promise((r) => setTimeout(r, 120));
     // 加载中: the page's own reads never answer, so its loading state stays on screen
     if (state === "loading" && (/^\/v1\/fleet\/(tasks|tickets)/.test(p) || (sc.page === "/usage" && p === "/v1/me/usage"))) return new Promise<Response>(() => {});
+    // 设备's reads in the review's loading / error / door-off states
+    const devRead = /^\/v1\/(fleet\/(connect|devices|entry\/)|nodes)/.test(p);
+    if (devRead && state === "loading") return new Promise<Response>(() => {});
+    if (devRead && state === "error") return ok({ error: "演示：入口出错" }, 502);
+    if (p.startsWith("/v1/fleet/entry/") && state === "entry_off") return ok({ error: "the direct door is off on this hub (fleet.entry)" }, 404);
+    if (p.startsWith("/v1/fleet/entry/keys/")) {
+      const id = decodeURIComponent(p.slice("/v1/fleet/entry/keys/".length));
+      const i = keys.findIndex((k) => k.id === id);
+      if (i >= 0) keys.splice(i, 1);
+      return ok({ id });
+    }
     const tk = /^\/v1\/fleet\/tickets\/([^/]+)\/([^/]+)\/(\d+)(\/comments)?$/.exec(p);
     if (tk) {
       const t = tickets.find((x) => x.repo === `${tk[1]}/${tk[2]}` && x.number === Number(tk[3]));
@@ -130,7 +161,38 @@ export async function install(): Promise<string> {
       case "/v1/me/usage":
         if (state === "error" && sc.page === "/usage") return ok({ error: "unavailable" }, 503);
         return ok(usage(/[?&]range=([^&]+)/.exec(url)?.[1] || "7d"));
-      case "/v1/fleet/devices": return ok({ mine: true, idle_sec: 0, devices: [{ fingerprint: "SHA256:a", name: "MacBook-Air", registered_at: "", last_used_at: "", renewals: 3 }], audit: [] });
+      case "/v1/fleet/devices": return ok({ mine: true, idle_sec: 0, devices: devices.filter((d) => !d.revoked_at), audit: [] });
+      case "/v1/fleet/devices/revoke": {
+        const fp = JSON.parse(String(init?.body || "{}")).fingerprint;
+        devices.forEach((d) => { if (d.fingerprint === fp) d.revoked_at = new Date().toISOString(); });
+        return ok({ changed: true, fingerprint: fp });
+      }
+      case "/v1/fleet/connect": return ok({
+        hub: "https://fleet.example.cn", ca_enabled: true, cert_ttl_sec: 43200, signed_in: true, login: me.login,
+        install_command: "curl -fsSL https://fleet.example.cn/install | sh", install_ready: true,
+        config_path: "~/.ssh/fleet-ssh-config", machines: [], recent_certs: [],
+        ssh_config: `Host mac-mini fleet-mac-mini\n  HostName 203.0.113.5\n  Port 22022\n  User ${me.login}\n  IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub\n`,
+      });
+      case "/v1/fleet/entry/keys": {
+        if ((init?.method || "GET").toUpperCase() === "POST") {
+          const line = String(JSON.parse(String(init?.body || "{}")).public_key || "").trim().split(/\s+/);
+          if (!/^(ssh-ed25519|ecdsa-sha2-|ssh-rsa)/.test(line[0] || "")) return ok({ error: "看不懂这一行：贴 ssh-ed25519 / ecdsa-sha2-… / ssh-rsa 开头的一整行公钥" }, 422);
+          const k = { id: `k_${keys.length + 2}`, fp: "SHA256:" + (line[1] || "x").slice(-20), type: line[0], name: line.slice(2).join(" "), created: new Date().toISOString() };
+          keys.push(k);
+          return ok(k, 201);
+        }
+        return ok(entryView());
+      }
+      case "/v1/fleet/entry/home": {
+        const b = JSON.parse(String(init?.body || "{}"));
+        home = { ...home, machine: b.machine, login: b.login || home.login, set_by: "person" };
+        return ok({ home, version: 5 });
+      }
+      case "/v1/fleet/entry/name": return ok({ name: JSON.parse(String(init?.body || "{}")).name, version: 5 });
+      case "/v1/nodes": return ok({ nodes: [
+        { endpoint_id: "e1", hostname: "mac-mini", os_user: me.login, status: "online", load1: 1.9, ncpu: 8, sessions: 3, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
+        { endpoint_id: "e2", hostname: "studio-2", os_user: me.login, status: "online", load1: 0.6, ncpu: 12, sessions: 0, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
+      ], machines: [{ hostname: "mac-mini", alias: "mac-mini" }, { hostname: "studio-2", alias: "studio-2" }] });
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
       case "/v1/chat/conversation":
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);

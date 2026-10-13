@@ -58,18 +58,6 @@ export function useQuota(key: unknown = 0) {
   return q;
 }
 
-// send is one write (or a read whose refusal matters): the status and the
-// JSON answer — a 401 goes to the sign-in as for a read; status 0 = no answer.
-export async function send<T = Record<string, unknown>>(method: string, url: string, body?: unknown): Promise<{ status: number; body: T | null }> {
-  const r = await fetch(url, {
-    method, headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }).catch(() => null);
-  if (!r) return { status: 0, body: null };
-  if (r.status === 401) { location.assign("/app/signin"); return { status: 401, body: null }; }
-  return { status: r.status, body: (await r.json().catch(() => null)) as T | null };
-}
-
 // /v1/fleet/devices: the person's own registered computers (a revoked one, or
 // a hosting machine's own login, is not one of their devices).
 export type Device = {
