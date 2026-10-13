@@ -496,6 +496,12 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def release_platform():
+    """darwin | linux | … — the platform whose release lane this machine
+    follows (FLEET_PLATFORM overrides, as fleet_platform in fleet-versions-lib.sh)."""
+    return (env("FLEET_PLATFORM", "") or platform.system()).lower()
+
+
 def hub_url(p):
     for line in _read_lines(p.machine_env):
         if line.startswith("CCQUOTA_HUB_URL="):
@@ -796,10 +802,18 @@ class Updater(object):
             return None, "no hub (machine.env has no CCQUOTA_HUB_URL)"
         rc, out, err = run(["/usr/bin/curl", "-fsS", "--max-time", "20", hub.rstrip("/") + "/version"], timeout=30)
         try:
-            s = json.loads(out).get("stable") if rc == 0 else None
+            v = json.loads(out) if rc == 0 else {}
         except ValueError:
-            s = None
-        if s and SHA_RE.match(s):
+            v = {}
+        v = v if isinstance(v, dict) else {}
+        # a Mac follows the Mac lane when the hub names one (issue #3868, EPIC
+        # #3863 共同约定 3) — the hub's client_version_macos is that lane's one
+        # word; none (no lane, an older hub) ⇒ stable, as before
+        mac = v.get("client_version_macos")
+        if release_platform() == "darwin" and isinstance(mac, str) and SHA_RE.match(mac):
+            return mac, "hub stable-macos"
+        s = v.get("stable")
+        if isinstance(s, str) and SHA_RE.match(s):
             return s, "hub stable"
         return None, "the hub named no stable (%s)" % (err or out or "rc %d" % rc)[:120]
 
