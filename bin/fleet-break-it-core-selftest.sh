@@ -392,4 +392,27 @@ PY
   WHAT="节点程序以 _fleetnode 跑：它的 core-exec 被杀，登录身份的活随连接断开即停；请 root 把节点程序当 machine 任务起——拒绝（只许停 root 那份）；描述符搭在别的动作上——拒绝"
 }
 
+drill_seat_blind_to_homes() {
+  CAP=10
+  local sb t0 out
+  sb="$WORK/seatblind"; mkdir -p "$sb/Users/alice/.claude/fleet/bin"
+  printf '#!/bin/bash\n' > "$sb/Users/alice/.claude/fleet/bin/fleet-collect.sh"
+  chmod 700 "$sb/Users/alice"
+  t0=$(now)
+  # the seat (_fleetnode) cannot enter /Users/<login>: here, a home it may not search
+  chmod 000 "$sb/Users/alice"
+  out=$(python3 - "$BIN/fleet-node-supervisor.py" "$sb/Users/alice/.claude/fleet/bin/fleet-collect.sh" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1])
+sup = importlib.util.module_from_spec(spec); spec.loader.exec_module(sup)
+ent = {"uid": os.getuid() + 7, "script": sys.argv[2]}
+print("seated=%s" % sup.account_runnable(ent, True))
+PY
+)
+  chmod 700 "$sb/Users/alice"
+  [ "$out" = "seated=None" ] || { WHY="the seat judged a login's script it cannot see: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="入座的守护进不了登录的家：账号任务的脚本不由它判「缺」，交给核心以 root 再看"
+}
+
 cred_run_drills "$0"
