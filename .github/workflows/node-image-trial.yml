@@ -45,7 +45,7 @@ jobs:
         run: |
           tag=$(bash extras/managed-node/tools-tag.sh)
           if ! docker buildx imagetools inspect "$REPO:$tag" >/dev/null 2>&1; then
-            docker buildx build --platform linux/amd64 --target tools --push -t "$REPO:$tag" extras/managed-node
+            docker buildx build --platform linux/amd64 --target tools --provenance=false --sbom=false --push -t "$REPO:$tag" extras/managed-node
             note='pushed'
           else
             note='already there'

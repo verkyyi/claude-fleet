@@ -17,6 +17,7 @@ overlays/prod/     namespace new-deploy, ACR image, hostnames + TLS, production 
                    in the private deploy repo (below), not in this tree
 overlays/example/  the shape a deployment's own overlay takes (names nothing of ours)
 overlays/kind/     the rolling drill on a throwaway kind cluster (hub-rolling.yml)
+runners/           fleet-ack, this repo's Actions runner scale set in the cluster (#3855)
 updating/          the 「正在更新」 page the Ingress falls back to during a release (installed by a person)
 RUNBOOK.md         when the pod will not come up, the data disk, the two secrets
 ```
