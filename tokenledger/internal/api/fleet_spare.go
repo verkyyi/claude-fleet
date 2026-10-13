@@ -29,9 +29,12 @@ import (
 //   - Refill rides the admin node's heartbeat (at most once per
 //     spareScanEvery), and only on a fit machine: online (not 维护中, not
 //     lost), hosts sessions, not a person's own computer or a SPOT node,
-//     load per core and free memory inside the placement thresholds, the
-//     machine's own admit gate open — and an admin node that opens logins
-//     credential-separated (control.CapCredsep, claude-fleet#2294). A machine
+//     CPU (cpu_busy first, else load per core) and free memory inside the
+//     placement thresholds — and an admin node that opens logins
+//     credential-separated (control.CapCredsep, claude-fleet#2294). Never the
+//     logins' own admit / room: that is the gate for a new SESSION, and a
+//     spare runs none — waiting on it left a busy machine with no spare
+//     exactly when the next person most needs one (claude-fleet#4076). A machine
 //     with a failed spare gets no more until the operator forgets it.
 //   - Shrink needs no fitness: a machine holding more than its count (the cap
 //     lowered, logins handed out) closes the newest ready spares and drops the
@@ -246,22 +249,19 @@ func (s *Server) spareFitMachines(now time.Time) []string { return s.spareMachin
 // spareMachines is every machine that keeps spares: online (not 维护中, not
 // lost), hosting sessions, not a person's own computer, a SPOT node or one
 // person's pod, its admin node up and opening logins credential-separated.
-// fit adds what a refill needs right now: load per core and free memory
-// inside the placement thresholds, and the machine's own admit gate open.
+// fit adds what a refill needs right now: CPU (cpuVerdict — cpu_busy first)
+// and free memory inside the placement thresholds. It never reads a login's
+// admit / room (claude-fleet#4076): those hold new sessions, not a login.
 func (s *Server) spareMachines(now time.Time, fit bool) []string {
 	snap, err := s.Nodes(now)
 	if err != nil {
 		log.Printf("fleet: spares: roster: %v", err)
 		return nil
 	}
-	admin, paused := map[string]bool{}, map[string]bool{}
+	admin := map[string]bool{}
 	for _, n := range snap.Nodes {
-		h := strings.ToLower(n.Hostname)
 		if n.Admin && n.Connected && n.Status == "online" {
-			admin[h] = true
-		}
-		if (n.Admit != nil && !*n.Admit) || (n.Room != nil && *n.Room < 1) {
-			paused[h] = true // the machine's own gate holds new sessions
+			admin[strings.ToLower(n.Hostname)] = true
 		}
 	}
 	var out []string
@@ -274,9 +274,6 @@ func (s *Server) spareMachines(now time.Time, fit bool) []string {
 		}
 		if !fit {
 			out = append(out, m.Hostname)
-			continue
-		}
-		if paused[h] {
 			continue
 		}
 		var lpc *float64

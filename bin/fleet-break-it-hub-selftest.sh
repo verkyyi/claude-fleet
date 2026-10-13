@@ -66,6 +66,7 @@
 #                                                   go test, when a toolchain is here
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #   spare-stall-silent                              tokenledger/internal/api fleet_spare_alerts.go (SpareAlertTick)
+#   spare-refill-session-gate                       tokenledger/internal/api fleet_spare.go (spareMachines; go test, when here)
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
 #                                                   (/v1/node/self credsep_gate), internal/agent node_credsep.go,
@@ -1027,6 +1028,35 @@ drill_spare_stall_silent() {
     esac
   else
     WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- spare-refill-session-gate (#4076): a busy machine whose logins say
+# admit=false / room=0 (the session gate), or a lost login whose last beat said
+# so, must still get its spares — a spare runs no session. The refill's fit is
+# "can a login be opened": CPU via cpuVerdict (cpu_busy first) and memory.
+drill_spare_refill_session_gate() {
+  CAP=120; local t0 out rc tests f
+  tests='TestSpareRefillIgnoresTheSessionGate'
+  f="$ROOT/tokenledger/internal/api/fleet_spare_test.go"
+  t0=$(now)
+  grep -q "^func $tests(" "$f" 2>/dev/null || { WHY="the hub half's test $tests is not in ${f#$ROOT/}"; return 1; }
+  if awk '/^func \(s \*Server\) spareMachines\(/,/^}/' "$ROOT/tokenledger/internal/api/fleet_spare.go" | grep -q '\.Admit\|\.Room'; then
+    WHY="spareMachines reads a login's admit / room again — the session gate holds the spares"; return 1
+  fi
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test is not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='admit=false / room=0、负载均值高但 cpu_busy 低的机器照样补到目标；失联登录的旧 admit=false 不挡；CPU 真忙才停补（go test 一条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在、spareMachines 不读 admit / room' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在、spareMachines 不读 admit / room，Go 门（tokenledger.yml）跑它'
   fi
   SECS=$(since "$t0")
 }
