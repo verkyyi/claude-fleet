@@ -1628,6 +1628,8 @@ func sshRelayConfig(srv *api.Server) error {
 		{"CCQUOTA_FLEET_SSH_RELAY_RATE_BPS", func(n int64) { srv.SSHRelayRateBPS = n }},
 		{"CCQUOTA_FLEET_CHAT_RELAY_MAX", func(n int64) { srv.ChatRelayMaxPerLogin = int(n) }},
 		{"CCQUOTA_FLEET_CHAT_RELAY_RATE_BPS", func(n int64) { srv.ChatRelayRateBPS = n }},
+		{"CCQUOTA_FLEET_CHAT_PER_PERSON", func(n int64) { srv.ChatMaxPerPerson = int(n) }},
+		{"CCQUOTA_FLEET_CHAT_PER_MINUTE", func(n int64) { srv.ChatPerMinute = int(n) }},
 	} {
 		v := os.Getenv(kv.name)
 		if v == "" {

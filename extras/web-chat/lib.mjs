@@ -126,8 +126,9 @@ export function budgetRefusal(x) {
 
 // X-Fleet-Person, for the log only (the relay verified it before it dialled the
 // socket — C2): its first field, and only when it is name-shaped (≤ 64 of
-// [A-Za-z0-9@._+-]) — a signature-length value is never written down.
+// [A-Za-z0-9@._+:-] — the entry sends the principal, gh:<id> / p:<uuid>, #3645)
+// — a signature-length value is never written down.
 export function personName(h) {
   const v = String(h || "").split(/[;,\s]/)[0];
-  return /^[A-Za-z0-9@._+-]{1,64}$/.test(v) ? v : "";
+  return /^[A-Za-z0-9@._+:-]{1,64}$/.test(v) ? v : "";
 }

@@ -171,11 +171,19 @@ type Server struct {
 	// ChatRelayRateBPS bounds one login's chat relay bytes per second, both
 	// ways, across all of them (0: 1 MiB/s; negative: unlimited).
 	ChatRelayRateBPS int64
+	// ChatMaxPerPerson bounds one person's /v1/chat requests in flight (0: 4;
+	// negative: unlimited; claude-fleet#3645).
+	ChatMaxPerPerson int
+	// ChatPerMinute bounds how many chat relays one person opens a minute
+	// (0: 60; negative: unlimited).
+	ChatPerMinute int
 
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable
 	// chatRelays holds the chat relays in flight, admitted per login.
 	chatRelays sshRelayTable
+	// chatGate holds each person's /v1/chat bounds (claude-fleet#3645).
+	chatGate chatGate
 	// svcLogs are the service logs being followed (claude-fleet#2797): one
 	// node stream per service, however many viewers.
 	svcLogs svcLogHub
@@ -584,6 +592,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryKeysPath+"/", s.handleEntryKeys)
 		mux.HandleFunc(control.EntryNamePath, s.handleEntryName)
 		mux.HandleFunc(control.EntryHomePath, s.handleEntryHome)
+		// The web chat (claude-fleet#3645): a signed-in person's own
+		// conversation, relayed to their home login's service.
+		mux.Handle(ChatPathPrefix, s.viewerOnly(http.HandlerFunc(s.handleChat)))
 		// The keys page (claude-fleet#3069): a browser not signed in comes
 		// back here after GitHub's.
 		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))

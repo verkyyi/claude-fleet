@@ -55,6 +55,24 @@ bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move 
 `CCQUOTA_FLEET_CHAT=0` 让节点不报 `CapChat`。入口那半边给 C3 用的是 `dialChatRelay(ctx, 人, 机器, 登录)`，
 返回一条 `net.Conn`。BREAK-IT `chat-relay-wrong-person`（Go 测试：`tokenledger/internal/api/chat_relay_test.go`）。
 
+### 入口的路由（#3645，EPIC #3642 C3）
+
+页面只跟入口说话：`/v1/chat/conversation`（GET）· `/v1/chat/turn` · `/v1/chat/stop` · `/v1/chat/answer`（POST），
+各自转到对话服务的 `/api/<同名>`（`tokenledger/internal/api/fleet_chat.go`）。
+
+1. **认人**：挂在 `viewerOnly` 后，只认登录的人——普通用户或管理员，**各自只进自己的**（D5）；operator 口令
+   答 403 `operator`，请求里点名别人（`?principal=`）答 403 `not_yours`；没登录 401，不在名单 403。
+2. **找家**：`EntryHomeOf(人)` → 家机器 + 登录；没有家 409 `no_home`；家在维护中、或连不上（转发拨不通）
+   503 `home_down` —— **不**改派别的机器（D2）。
+3. **转发**：`httputil.ReverseProxy` 加一个只会拨 C2 `dialChatRelay(人, 机器, 登录)` 的 Transport，
+   `FlushInterval: -1`，NDJSON 一行一行到页面。浏览器的头只放过 `Content-Type` · `Accept` ·
+   `X-Fleet-Webchat`（cookie 一律不带过去），`X-Fleet-Person` 由入口按登录的人重写（只记日志；真凭据是 C2
+   第一帧里的签名声明）。POST 不带 `X-Fleet-Webchat: 1` 就 403。
+4. **上限**：每人同时最多 4 个请求（`CCQUOTA_FLEET_CHAT_PER_PERSON`），每分钟最多开 60 条转发
+   （`CCQUOTA_FLEET_CHAT_PER_MINUTE`），超了 429；负数不限。
+5. **审计**：每次开转发一行 `fleet_audit` `chat_relay`（`OPENED <路由> <机器>/<登录>`），每次拒绝一行
+   `chat_refused`（`<code> <路由>`）——从不记内容。
+
 ### 本机直连（开发 / 排障用，默认关）
 
 原来的 127.0.0.1 + 一次性链接模式还在，但**默认关**（#3642 D3）：`FLEET_WEBCHAT_LOCAL=1` 才能用下面几条，
