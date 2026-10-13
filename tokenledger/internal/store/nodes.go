@@ -86,6 +86,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetRevocations(); err != nil {
 		return err
 	}
+	// Service principals and their keys (claude-fleet#4003).
+	if err := s.EnsureSvc(); err != nil {
+		return err
+	}
 	// Machine-to-machine certificates (claude-fleet#1626).
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err

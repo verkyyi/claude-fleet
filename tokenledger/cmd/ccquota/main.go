@@ -65,6 +65,8 @@ func main() {
 		err = runBadge(os.Args[2:])
 	case "team":
 		err = runTeam(os.Args[2:])
+	case "svc":
+		err = runSvc(os.Args[2:])
 	case "plan":
 		err = runPlan(os.Args[2:])
 	case "codex":
@@ -119,6 +121,9 @@ Usage:
   ccquota badge  [flags]    Render this hub's totals as an SVG badge (local,
                             no network) or as shields.io endpoint JSON
   ccquota team   [flags]    Allocate an endpoint's spend to a team
+  ccquota svc    <cmd>      Service principals and their fcs_ tokens: /v1/svc/
+                            only, scope by scope (list | create | token issue |
+                            token revoke | disable | enable)
   ccquota plan   [flags]    Record what a subscription actually costs, and
                             report real (billed, not notional) spend
   ccquota codex  [command]  Manage Codex accounts, launch profiles and renew login
