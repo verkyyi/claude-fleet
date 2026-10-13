@@ -1163,16 +1163,24 @@ class Core(object):
             os.unlink(self.p.sock)
         except OSError:
             pass
+        # bound and listening under a private name first, then renamed in: the path
+        # never exists while a connect would be refused (issue #3793)
+        tmp = "%s.%d" % (self.p.sock, os.getpid())
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         old = os.umask(0o177)
         try:
-            s.bind(self.p.sock)
+            s.bind(tmp)
         finally:
             os.umask(old)
         if os.geteuid() == 0:
-            os.chown(self.p.sock, 0, self.peer[1])
-        os.chmod(self.p.sock, 0o660)
+            os.chown(tmp, 0, self.peer[1])
+        os.chmod(tmp, 0o660)
         s.listen(16)
+        os.rename(tmp, self.p.sock)
         signal.signal(signal.SIGTERM, lambda *_: self.quit())
         self.log(os.geteuid(), "serve", None, "listening on %s for uid %d" % (self.p.sock, self.peer[0]))
         while not self.stop:
