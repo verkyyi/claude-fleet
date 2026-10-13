@@ -24,7 +24,7 @@ ok() { printf 'ok   %s\n' "$1"; }
 L=fleetu7
 U=$(id -u)
 
-EXPECT_darwin='home keychain git-cred ssh authorized-keys fleet-conf credsep entry-keys task-state onboard crontab launchd processes tmux outside-files'
+EXPECT_darwin='home keychain git-cred ssh authorized-keys fleet-conf credsep entry-keys task-state onboard crontab launchd processes tmux outside-files user-tmp'
 EXPECT_linux='home git-cred ssh authorized-keys fleet-conf credsep entry-keys task-state onboard crontab systemd-user processes tmux outside-files'
 
 mkdir -p "$W/shim"
@@ -91,6 +91,7 @@ plant() {   # plant <category>
     processes) printf '%s 4242 01:02:03 /usr/bin/sleep\n1 1 9-00:00:00 launchd\n' "$U" > "$S/ps" ;;
     tmux) mkdir -p "$TT/tmux-$U"; : > "$TT/tmux-$U/default" ;;
     outside-files) printf 'x\n' > "$OUT1/leftover.txt" ;;
+    user-tmp) mkdir -p "$S/sys/private/var/folders/zz/abc123/T"; : > "$S/sys/private/var/folders/zz/abc123/T/prev.txt" ;;
     *) fail "the selftest has no plant for category '$1' — add one"; return 1 ;;
   esac
 }
@@ -112,6 +113,7 @@ unplant() {
     processes) : > "$S/ps" ;;
     tmux) rm -rf "$TT/tmux-$U" ;;
     outside-files) rm -f "$OUT1/leftover.txt" ;;
+    user-tmp) rm -f "$S/sys/private/var/folders/zz/abc123/T/prev.txt" ;;
   esac
 }
 

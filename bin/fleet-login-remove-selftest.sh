@@ -717,6 +717,19 @@ not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'recycle-stop edited the directory se
 has "$WORK/out" "archive=$ARCH/alice-" 'recycle-stop: the archive path is not printed'
 has "$WORK/out" 'the login is kept for the wash' 'recycle-stop: the end line is missing'
 [ ! -e "$CS/db/alice" ] || fail 'recycle-stop: credsep not purged'
+# --quick (issue #4044): what the wash runs — no fleet-down, no quiesce, no
+# archive (the wash moves the home aside itself), the hub leave still made.
+reset_fixture; : > "$FLEET_TEST_LOG"
+run alice --recycle-stop --quick --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "recycle-stop --quick: exit $RC"; }
+has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" 'quick: services not booted out'
+not_has "$FLEET_TEST_LOG" 'kill-session' 'quick: ran fleet-down'
+not_has "$FLEET_TEST_LOG" 'pkill' 'quick: quiesced (the wash does)'
+not_has "$FLEET_TEST_LOG" 'tar ' 'quick: archived (the wash does)'
+[ -d "$WORK/homes/alice" ] || fail 'quick: the home is gone'
+[ ! -e "$CS/db/alice" ] || fail 'quick: credsep not purged'
+has "$WORK/out" 'the wash quiesces and moves the home aside' 'quick: the end line is missing'
+run alice --quick --apply; [ "$RC" = 2 ] || fail '--quick without --recycle-stop was not refused'
 reset_fixture
 cat > "$WORK/reset-stub.sh" <<'EOF2'
 #!/bin/sh
