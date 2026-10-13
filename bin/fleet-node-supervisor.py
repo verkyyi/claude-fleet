@@ -6546,6 +6546,14 @@ def seat_layout(paths, seat):
             pass
         os.symlink(os.path.join("node", n), tmp)
         os.rename(tmp, sf)
+    # what root left in node/ before the seat (a fetch.progress the updater wrote as
+    # root, a state.json moved in on an earlier pass) goes to the seat too: else its
+    # every open('w') is EACCES and the update task fails each beat (#3556)
+    for n in os.listdir(own):
+        f = os.path.join(own, n)
+        st = os.lstat(f)
+        if stat.S_ISREG(st.st_mode) and (st.st_uid, st.st_gid) != (uid, gid) and os.geteuid() == 0:
+            os.lchown(f, uid, gid)
     # the seated updater's staging (#3670): the core copies a release out of it
     _seat_dir(os.path.join(paths.state, "staging"), 0, gid, 0o770)
     # the machine's one reading (#3546): the seat writes cluster/machine.json, every
