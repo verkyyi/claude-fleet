@@ -51,7 +51,7 @@ case "$verb" in
       *:tar\ -C\ /home*) printf 'TARBYTES' ;;
       *-seed:tar*) cat > /dev/null ;;
       *-seed:*"find \"\$1\""*) echo 7 ;;
-      fleet-linux-0:*find*) echo 10 ;;
+      node-a-0:*find*) echo 10 ;;
       deploy/*:*list-windows*) printf '%s\n' ${FAKE_BACK:-fid-1 fid-2} ;;
       *) echo "unexpected exec $target: $all" >&2; exit 9 ;;
     esac ;;
@@ -75,7 +75,7 @@ case "$*" in
     if [ -f "$FAKE/assigned" ]; then echo '{"accounts":[{"principal_id":"gh:7","hostname":"'"$(cat "$FAKE/assigned")"'","state":"active"}]}'
     else echo '{"accounts":[]}'; fi ;;
   *"accounts assign"*) set -- $*; while [ "$1" != --host ]; do shift; done; echo "$2" > "$FAKE/assigned" ;;
-  *"get fleet.cred_allow.node.fleet-linux-0"*) echo codex ;;
+  *"get fleet.cred_allow.node.node-a-0"*) echo codex ;;
 esac
 SH
 cat > "$T/curl" <<'SH'
@@ -91,7 +91,7 @@ export FAKE=$T FAKE_CODE=$CODE FLEET_MOVE_KUBECTL="$T/kubectl" FLEET_MOVE_HUB_AD
   FLEET_HUB_CURL="$T/curl" FLEET_MOVE_STATE="$T/state" FLEET_MOVE_WAIT=5 CCQUOTA_VIEWER_TOKEN=tok-xyz
 RARGS=(-- --image reg.example/fleet-managed-node@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --hub https://hub.example
        --storage-class essd --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local)
-mv() { "$BIN/fleet-move-to-pod.sh" "$@" --principal gh:7 --hub https://hub.example "${RARGS[@]}"; }
+mv() { "$BIN/fleet-move-to-pod.sh" "$@" --principal gh:7 --source node-a-0 --hub https://hub.example "${RARGS[@]}"; }
 
 # ── A. the order
 for args in "copy 24acme --pod u-test1" "start 24acme --pod u-test1" "retire 24acme --pod u-test1" "stop 24acme --pod u-test1"; do
@@ -148,7 +148,7 @@ ok
 
 # ── E. retire
 mv retire 24acme >/dev/null || fail 'E: retire failed'
-grep -q 'hubadm .*accounts remove gh:7 --host fleet-linux-0 --delete' "$LOG" || fail 'E: the source login was not closed'
+grep -q 'hubadm .*accounts remove gh:7 --host node-a-0 --delete' "$LOG" || fail 'E: the source login was not closed'
 ok
 
 printf 'fleet-move-to-pod selftest: OK (%d checks)\n' "$CHECKS"

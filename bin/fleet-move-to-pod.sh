@@ -29,7 +29,7 @@
 # Options:
 #   --principal <id>   the hub's person (gh:<n>) — required
 #   --pod u-<nonce>    the pod's name; default: the one `prepare` picked
-#   --source <pod>     the shared node it leaves (default fleet-linux-0)
+#   --source <pod>     the shared node's pod it leaves — required
 #   --source-machine <name>  the hub's name for it (default: --source)
 #   --ns <namespace>   default fleet-workers
 #   --limits <text>    the pod's ceiling (render.py --limits; default the template's)
@@ -65,7 +65,7 @@ die() { printf 'fleet-move-to-pod: %s\n' "$2" >&2; exit "$1"; }
 usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; }
 say() { printf '%s\n' "$*"; }
 
-PHASE='' LOGIN='' PRINCIPAL='' POD='' SOURCE=fleet-linux-0 SRC_MACHINE='' NS=fleet-workers LIMITS=''
+PHASE='' LOGIN='' PRINCIPAL='' POD='' SOURCE='' SRC_MACHINE='' NS=fleet-workers LIMITS=''
 HUB=${FLEET_HUB_URL:-}
 RENDER=()
 while [ $# -gt 0 ]; do
@@ -89,6 +89,7 @@ case "$PHASE" in
 esac
 [[ "$LOGIN" =~ ^[a-z0-9]{2,16}$ ]] || die 2 "a login of 2-16 a-z0-9 (got '$LOGIN')"
 [ -n "$PRINCIPAL" ] || die 2 '--principal <id> (the hub person, gh:<n>)'
+[[ "$SOURCE" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || die 2 '--source <pod> (the shared node it leaves)'
 [ -z "$POD" ] || [[ "$POD" =~ ^u-[a-z0-9]{4,20}$ ]] || die 2 "--pod is u-<4-20 of a-z0-9> (got '$POD')"
 SRC_MACHINE=${SRC_MACHINE:-$SOURCE}
 
