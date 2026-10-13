@@ -347,5 +347,21 @@ run_codex i2 FLEET_CRED_SID=sI2 FLEET_FAILOVER=1 FLEET_ACCOUNT_SELECTED=1 FLEET_
 OUT="$SB/out/i2"
 check "I: unseparated + failover — the pin still runs (and refuses here: no ccquota)" 1 "$(cat "$OUT/rc")"
 
+# ── J: a person's own pod routes CENTRAL under FLEET_FAILOVER=1 (issue #3554) ──
+# No credsep.json there (nothing is separated: the hub's central proxy picks), so
+# the launchers' «separated» test missed it: the failover planner ran, found no
+# login of its own on the pod and refused every new session («accounts · all
+# capped · login needed: codex/ no_credentials»). A central route is the proxy's
+# pick just the same.
+cp "$FLEET_CONF_DIR/node.env" "$SB/node.env.keep" 2>/dev/null || rm -f "$SB/node.env.keep"
+{ grep -sv '^CCQUOTA_FLEET_CREDS=' "$SB/node.env.keep"; echo CCQUOTA_FLEET_CREDS=0; } > "$FLEET_CONF_DIR/node.env"   # the pod's: nothing leased
+run_codex j FLEET_CRED_SID=sJ FLEET_FAILOVER=1 FLEET_CRED_CENTRAL_URL=http://127.0.0.1:9 FLEET_ACCOUNTS_DIR="$SB/no-accounts" FLEET_ACCOUNTS= CODEX_HOME="$HOME/.codex-accounts/cx1"
+OUT="$SB/out/j"
+check "J: central + failover (Codex) — no planner, no local pin" 0 "$(grep -c '^fleet-account:' "$OUT/stderr" | tr -d ' ')"
+run_claude j2 FLEET_CRED_SID=sJ2 FLEET_FAILOVER=1 FLEET_CRED_CENTRAL_URL=http://127.0.0.1:9 FLEET_ACCOUNTS_DIR="$SB/no-accounts" FLEET_ACCOUNTS=
+OUT="$SB/out/j2"
+check "J: central + failover (Claude) — no planner" 0 "$(grep -c '^fleet-account:' "$OUT/stderr" | tr -d ' ')"
+if [ -f "$SB/node.env.keep" ]; then cp "$SB/node.env.keep" "$FLEET_CONF_DIR/node.env"; else rm -f "$FLEET_CONF_DIR/node.env"; fi
+
 [ "$FAIL" = 0 ] && { echo "session-cred selftest: OK"; exit 0; }
 echo "session-cred selftest: FAILED"; exit 1

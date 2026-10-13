@@ -35,6 +35,8 @@
 #                              credproxy row (issue #3744)
 #   cred-sep-codex-failover-pin  bin/fleet-codex.sh (_fx_sep: no local profile pin through the
 #                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
+#   cred-central-failover-pin  bin/fleet-claude.sh / bin/fleet-codex.sh (a person's pod routes
+#                              central: no planner, no pin) — session-cred-selftest.sh leg J (#3554)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -565,6 +567,24 @@ drill_cred_sep_codex_failover_pin() {
     || { WHY="session-cred-selftest leg I: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|I:' | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="隔离登录在 FLEET_FAILOVER=1 下开 Codex：不钉本地 profile、直接经代理铸凭据；未隔离的照旧钉"
+}
+
+# ---- cred-central-failover-pin (#3554): a person's own pod (render.py
+# --cred-central) has no credsep.json and nothing leased into it — the hub's
+# central proxy picks — but FLEET_FAILOVER=1 (the hub pool's default) still ran
+# the planner, which found no subscription on the pod and refused every new
+# session: «accounts · all capped · login needed: codex/ no_credentials». arvin's
+# pod after his move could open nothing. Leg J launches Claude and Codex the
+# pod's way (central URL, CCQUOTA_FLEET_CREDS=0, no accounts) under failover.
+drill_cred_central_failover_pin() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/session-cred-selftest.sh" 2>&1)
+  printf '%s\n' "$out" | grep -q '^PASS J: central + failover (Codex) — no planner, no local pin$' \
+    && printf '%s\n' "$out" | grep -q '^PASS J: central + failover (Claude) — no planner$' \
+    || { WHY="session-cred-selftest leg J: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|J:' | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="个人 pod 走中心代理时在 FLEET_FAILOVER=1 下开 Claude / Codex：不跑换号规划、不钉本地 profile，直接经代理铸凭据"
 }
 
 # ---- cred-pool-delete-stale-proxy (#3744): on 2026-10-12 the hub deleted a dead
