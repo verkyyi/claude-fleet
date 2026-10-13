@@ -48,7 +48,8 @@
 #   T. two trees        (issue #2774) --tree-from/--tree-to: what moved is read by
 #                       comparing two version dirs (one of links into a runtime),
 #                       the same paths git diff names; logs/ tools/ .release not
-#                       counted; --tree-to must be the install; no --sync-logins
+#                       counted; --tree-to must be the install; no --sync-logins;
+#                       a skill lands as bytes, an install left as links heals (#3988)
 #   U. pure client      (issue #3534) 承载 off: only install-sync is added, a
 #                       session daemon never; the installed ones are set aside
 #                       in daemons-attic and come back once the computer hosts
@@ -751,6 +752,8 @@ sed -i.bak 's/^v2$/v3/' "$R/commands/fleet-claim.md"; rm -f "$R/commands/"*.bak
 printf '# /fleet-tree\n\n<!-- fleet skill · owner: either -->\n' > "$R/commands/fleet-tree.md"
 git -C "$R" rm -q "$R/commands/fleet-new.md"
 printf 'bind a run tree\n' > "$R/conf/tmux-attention.conf"
+mkdir -p "$R/skills/tsk"; printf '# tsk\n\n<!-- fleet skill -->\nt1\n' > "$R/skills/tsk/SKILL.md"
+printf '#!/bin/sh\necho t1\n' > "$R/skills/tsk/run.sh"; chmod +x "$R/skills/tsk/run.sh"
 T1=$(commit 'tree mode')
 TF="$WORK/tv.versions/$T0" RT="$WORK/runtime/$T1" TT="$WORK/tv.versions/$T1" TL="$WORK/tv"
 mkdir -p "$TF" "$RT" "$WORK/tv.versions/.shared/epic-pages"
@@ -770,6 +773,24 @@ ok 'T new command installed' "[ -f '$H/.claude/commands/fleet-tree.md' ]"
 ok 'T retired command removed' "[ ! -f '$H/.claude/commands/fleet-new.md' ]"
 ok 'T the conf reload gets --tree-from conf as its before-file' "grep -qx 'bind a run x' '$WORK/seen-before.conf' || grep -q 'bind b run y' '$WORK/seen-before.conf'"
 contains 'T final line' "$OUT" "apply: ok — ${T0:0:7}..${T1:0:7}"
+# issue #3988: the tree's files are links into the runtime's <sha>/ — a skill is
+# installed as its BYTES, never as those links (they dangle once the version is swept)
+ok 'T skill installed as bytes, not links into the runtime' "[ -f '$H/.claude/skills/tsk/run.sh' ] && [ ! -L '$H/.claude/skills/tsk/run.sh' ] && [ ! -L '$H/.claude/skills/tsk/SKILL.md' ] && grep -qx t1 '$H/.claude/skills/tsk/SKILL.md'"
+# an install an older pass left as links (dangling now) is re-copied on the next
+# apply even when no skills/ moved
+ln -sf "$WORK/swept/run.sh" "$H/.claude/skills/tsk/run.sh"
+mkdir -p "$H/.claude/skills/gone" "$H/.claude/skills/mylinks"
+ln -s "$WORK/swept/gone/SKILL.md" "$H/.claude/skills/gone/SKILL.md"
+ln -s "$WORK/swept/x/SKILL.md" "$H/.claude/skills/mylinks/SKILL.md"; echo mine > "$H/.claude/skills/mylinks/notes.md"
+printf '# /fleet-tree\n\n<!-- fleet skill · owner: either -->\nt2\n' > "$R/commands/fleet-tree.md"
+T2=$(commit 'no skill moved')
+run_ap --from "$T1" --to "$T2"
+eq 'T heal exit' 0 "$RC"
+ok 'T dangling skill link healed with no skills/ change' "[ -f '$H/.claude/skills/tsk/run.sh' ] && [ ! -L '$H/.claude/skills/tsk/run.sh' ] && grep -qx 'echo t1' '$H/.claude/skills/tsk/run.sh'"
+contains 'T heal counted' "$OUT" 'skills: installed 1'
+ok 'T a retired skill left as dangling links is removed' "[ ! -e '$H/.claude/skills/gone' ]"
+ok 'T one holding a file of its own stays' "[ -f '$H/.claude/skills/mylinks/notes.md' ]"
+contains 'T removal said' "$OUT" 'skills: removed 1 retired skill(s) left as dangling links'
 run_ap --tree-from "$TT" --tree-to "$TT" --root "$TL"
 contains 'T same tree: nothing to apply' "$OUT" 'apply: ok — install already at'
 run_ap --tree-from "$TF" --tree-to "$TF" --root "$TL"

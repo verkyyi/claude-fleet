@@ -54,6 +54,8 @@
 #                     a row is absent when the machine will not say.
 #   --orphan-listeners print the orphaned-listener reap candidates (dry run)
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
+#   --docprev-watch   run only the doc-preview revive: docs shared but its server.py
+#                     gone ⇒ share.sh --ensure (what --watch also does, issue #3988)
 #   --brew-watch      run only the Homebrew keg-permission pass (what --watch also
 #                     does, throttled by FLEET_BREW_PERMS_EVERY) — issue #2283
 #   --probe           capture an incident right now regardless of free space
@@ -904,6 +906,24 @@ feedback_watch() {
   return 0
 }
 
+# docprev_watch — this login's doc-preview server died (its session was reaped, the
+# machine rebooted) while docs are still shared: every link answers 502 until the
+# next share. share.sh --ensure starts it again on its old port (issue #3988);
+# nothing shared, or the skill not installed ⇒ nothing. FLEET_DOCPREV_TICK=0 off.
+docprev_watch() {
+  [ "${FLEET_DOCPREV_TICK:-1}" = 0 ] && return 0
+  local sh="${DOC_PREVIEW_SHARE:-$HOME/.claude/skills/doc-preview/share.sh}"
+  local root="$HOME/.cache/claude-doc-preview" pid out
+  [ -x "$sh" ] || return 0
+  ls "$root"/entries/*.json >/dev/null 2>&1 || return 0
+  pid="$(cat "$root/server.pid" 2>/dev/null || true)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  out="$("$sh" --ensure 2>&1)"
+  [ -n "$out" ] && printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$(printf '%s' "$out" | tr '\n' ' ')" >> "$GDIR/docprev.log" 2>/dev/null
+  return 0
+}
+
 # mem_watch — the --watch tick's share: one notice per edge, per kind.
 mem_watch() {
   local rows mem lvl av co sw top u m w word kind
@@ -1000,6 +1020,9 @@ case "${1:-}" in
   --listen-watch)
     listen_watch
     ;;
+  --docprev-watch)
+    docprev_watch
+    ;;
   --orphans)
     # No sustain filter and no state: "what is hot RIGHT NOW". A human (or the
     # doctor) asking this question wants the current truth, not a 5-minute-old
@@ -1035,6 +1058,7 @@ EOF2
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
     feedback_watch                                # /fleet-feedback's outbox: send what waited (#3358)
+    docprev_watch                                 # doc-preview's server gone with docs shared: restart it (#3988)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

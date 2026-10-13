@@ -23,6 +23,8 @@
 #   share.sh --pubstatus <id|substr>   # print whether a doc is public + its URL
 #   share.sh --health                  # one line for fleet-doctor: public mounts, their age, serve routes
 #   share.sh --upgrade [--check]       # restart a server.py older than this copy, same port (#2415)
+#   share.sh --ensure                  # docs shared but no server running: start it on its old port
+#                                        (the diskguard tick and install-apply run it, #3988)
 #   share.sh --stop                    # tear everything down (all sessions; public links off)
 #
 # Every link carries a code (issue #1153): a doc is /d/<128-bit random code>/, the
@@ -172,6 +174,13 @@ for a in [x for x in sys.argv[1].split(",") if x]:
 # bound-but-not-listening for ~34s each, and "busy or bind refused" sent the reader to the
 # wrong place for ten nightlies).
 START_FAIL=""
+# detach <dir> <cmd …>: exec <cmd> in <dir>, in a session of its own, SIGHUP ignored.
+DETACH=(python3 -c 'import os, signal, sys
+os.chdir(sys.argv[1])
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+try: os.setsid()
+except OSError: pass
+os.execvp(sys.argv[2], sys.argv[2:])')
 start_server() { # <addr> [public] [first port]; sets PORT
   local addr="$1" pub="${2:-}" p="${3:-${DOC_PREVIEW_PORT:-8765}}" end launches=0 pid
   end=$((p + 50))
@@ -182,10 +191,12 @@ start_server() { # <addr> [public] [first port]; sets PORT
       launches=$((launches + 1))
       # Its own session (setsid; macOS has no setsid(1)): a launchd job that restarts it
       # (install-apply's --upgrade, issue #2415) would otherwise take it down on exit.
-      nohup python3 -c 'import os, sys
-try: os.setsid()
-except OSError: pass
-os.execvp(sys.argv[1], sys.argv[1:])' python3 "$SRV" "$p" "$SERVE_DIR" "$HERE" "$addr" $pub >"$ROOT/server.log" 2>&1 &
+      # Run from $ROOT, never the caller's cwd (issue #3988): started from a worker's
+      # worktree it was that worktree's process, and the session's teardown
+      # (fleet_reap_worktree_procs) took every login's shared page down with it. No
+      # nohup: macOS's refuses outside a GUI session ("can't detach from console"),
+      # which kept the diskguard tick from bringing a dead server back.
+      "${DETACH[@]}" "$ROOT" python3 "$SRV" "$p" "$SERVE_DIR" "$HERE" "$addr" $pub </dev/null >"$ROOT/server.log" 2>&1 &
       pid=$!
       START_FAIL="server.py (pid $pid) exited before it accepted a connection on $addr:$p"
       for _ in $(seq 1 50); do
@@ -363,7 +374,7 @@ ensure_tunnel() { # <port>
     return 0
   fi
   stop_tunnel
-  nohup cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$port" >"$ROOT/tunnel.log" 2>&1 &
+  "${DETACH[@]}" "$ROOT" cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$port" </dev/null >"$ROOT/tunnel.log" 2>&1 &
   pid=$!
   for _ in $(seq 1 $(( ${DOC_PREVIEW_TUNNEL_WAIT:-30} * 5 ))); do
     kill -0 "$pid" 2>/dev/null || break
@@ -429,6 +440,30 @@ case "${1:-}" in
     rm -f "$PIDFILE" "$PORTFILE"
     echo "doc-preview: could not restart server.py — ${START_FAIL:-}; the next share starts one" >&2
     exit 1 ;;
+  --ensure)
+    # Docs are shared but nothing serves them — the server died with a session, a
+    # reboot, a kill (issue #3988). Start it on the port it last had, so the tailnet
+    # route (or the tunnel) in front of it keeps working and every old link answers
+    # again. Nothing shared ⇒ nothing started (--stop removed the entries).
+    ls "$ENTRIES_DIR"/*.json >/dev/null 2>&1 || exit 0
+    [ -n "$(mode)" ] || exit 0
+    for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && break || sleep 0.2; done
+    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+    if [ -f "$PIDFILE" ] && [ -f "$PORTFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      PORT="$(cat "$PORTFILE")"
+    else
+      _p="$(cat "$PORTFILE" 2>/dev/null || true)"
+      [ -n "$_p" ] || _p="$(tail -1 "$OWNEDFILE" 2>/dev/null || true)"
+      for _s in $(stray_servers); do kill "$_s" 2>/dev/null || true; done
+      server_addr "$(mode)" || exit 1
+      start_server "$ADDR" "$PUB" ${_p:+"$_p"} || { rm -f "$PIDFILE" "$PORTFILE"; echo "doc-preview: could not start server.py — ${START_FAIL:-}" >&2; exit 1; }
+      [ -z "$_p" ] || [ "$PORT" = "$_p" ] || echo "doc-preview: WARN port $_p was taken — serving on :$PORT; re-share once to re-point the route" >&2
+      echo "doc-preview: started server.py on :$PORT ($(ls "$ENTRIES_DIR"/*.json | wc -l | tr -d ' ') shared)"
+    fi
+    if [ "$(mode)" = tunnel ] && ! ensure_tunnel "$PORT"; then
+      echo "doc-preview: cloudflared quick tunnel did not come up — see $ROOT/tunnel.log" >&2; exit 1
+    fi
+    exit 0 ;;
   --pubstatus|--publish|--unpublish)
     act="$1"; arg=""; json=0; pttl="${DOC_PREVIEW_PUBLISH_TTL:-7d}"; shift
     while [ $# -gt 0 ]; do
