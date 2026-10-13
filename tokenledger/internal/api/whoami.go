@@ -102,6 +102,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// 反馈 (claude-fleet#3357): an admin's, only with the feature on.
 		out.Pages = append(out.Pages, feedbackPageID)
 	}
+	if s.Fleet && out.Role != roleUser && out.Role != "" {
+		// 发布列车 (claude-fleet#3870): the release ledger is the fleet module's.
+		out.Pages = append(out.Pages, trainsPageID)
+	}
 	out.Entry = s.entryOn()
 	if pid := principalOf(r.Context()); pid != "" {
 		login, err := s.machineLoginOf(pid)

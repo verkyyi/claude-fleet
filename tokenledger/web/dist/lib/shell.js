@@ -107,6 +107,9 @@ export const PAGES = Object.freeze([
   // 反馈 (claude-fleet#3357): every /fleet-feedback; /v1/me lists it only
   // when the hub takes feedback.
   { id: 'feedback', label: 'ui.nav.feedback', icon: 'alert', group: 'admin', href: APP + '/admin/feedback', module: '/admin/feedback.js' },
+  // 发布列车 (claude-fleet#3870): every release-train run as a time bar; /v1/me
+  // lists it only on a hub with the fleet module (its ledger lives there).
+  { id: 'trains', label: 'ui.nav.trains', icon: 'fleet', group: 'admin', href: APP + '/trains', module: '/admin/trains.js' },
 ]);
 
 /** navFor turns /v1/me's pages into the menu: [{heading}|{id,label,icon,href}].

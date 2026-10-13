@@ -205,6 +205,7 @@ jobs:
       contents: write   # refs/tags/stable-macos
       statuses: write   # `mac follow: macOS` on the commit
       actions: write    # --train reads this run's jobs; dispatches stable-publish.yml
+      id-token: write   # the train's ledger (#3870): its Mac stage, this run's OIDC
     env:
       SHA: ${{ needs.board.outputs.sha }}
       MACOS: ${{ needs.macos.result }}
@@ -259,3 +260,25 @@ jobs:
           gh workflow run stable-publish.yml --repo "$GITHUB_REPOSITORY" --ref master -f "sha=$SHA" -f ref=stable-macos \
             || { echo "::error::stable-macos moved but stable-publish.yml (ref=stable-macos) was not dispatched — run it by hand"; exit 1; }
           echo "publish: dispatched stable-publish.yml (ref=stable-macos) for ${SHA:0:7}"
+      # The Mac half onto the train run that started this (issue #3870): one
+      # `mac follow` stage on the /trains board — how long after the train the
+      # Macs got it, or that they did not. Bookkeeping: never reds the job.
+      - name: the Mac stage into the train's ledger
+        if: always() && github.event_name == 'workflow_run'
+        env:
+          TRAIN_RUN: ${{ github.event.workflow_run.id }}
+          JOB: ${{ job.status }}
+          FLEET_HUB_URL: https://claudefleet.24haowan.com
+        run: |
+          # the macOS half red, or green with the lane not moved ⇒ failure
+          case "$MACOS:$JOB" in
+            (success:success) concl=success ;;
+            (failure:*|success:*) concl=failure ;;
+            (*) concl=cancelled ;;
+          esac
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[]' > jobs.ndjson \
+            || { echo "::warning::could not read this run's jobs — no Mac stage on the board"; exit 0; }
+          python3 bin/fleet-train-ledger.py build --mac --train-run "$TRAIN_RUN" --jobs jobs.ndjson \
+            --run-id "$GITHUB_RUN_ID" --conclusion "$concl" > mac.json || { echo "::warning::no Mac stage: $(cat mac.json)"; exit 0; }
+          python3 bin/fleet-train-ledger.py post mac.json --hub "$FLEET_HUB_URL" \
+            || echo "::warning::the hub did not take the Mac stage (the board misses it; nothing else does)"

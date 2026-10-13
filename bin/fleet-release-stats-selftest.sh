@@ -8,6 +8,8 @@
 #      operator's bearer; the three rows, the stages, the last trains
 #   C  --days 3 --json → ?days=3, the hub's answer as JSON
 #   D  no credential → exit 3, nothing sent; --days 0 → exit 2
+#   E  a hub that keeps every run (claude-fleet#3870) → merge → stable p50 / p95,
+#      shipped of started, and each run's 「卡在…」 line; an older hub (A, B) none
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd -P)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/release-stats-selftest.XXXXXX")
@@ -115,6 +117,34 @@ run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" release stats --d
 if [ "$rc" = 3 ] && [ "$rc2" = 2 ] && [ "$(wc -l <"$LOG")" = "$n0" ] && grep -q 'no credential' "$WORK/err"; then
   ok "D no credential → exit 3, --days 0 → exit 2, nothing sent"
 else bad "D rc=$rc rc2=$rc2 err=$(cat "$WORK/err")"; fi
+
+# E — every run, shipped or not
+python3 - "$WORK/full.json" "$WORK/runs.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d.update({"merge_to_stable_n": 12, "merge_to_stable_p50": 250, "merge_to_stable_p95": 470,
+          "runs_started": 10, "runs_shipped": 9, "run_p50_secs": 190, "runs_slow": 2, "runs_slow_said": 2,
+          "lanes": {"stable": "2" * 40}, "runs": [
+  {"run_id": "902", "sha": "4" * 40, "conclusion": "success", "started_at": "2026-10-11T08:00:00Z", "total_secs": 360,
+   "bottleneck": {"stage": "Linux", "secs": 240, "why": "超预算 90 秒（预算 150 秒）"}},
+  {"run_id": "901", "sha": "5" * 40, "conclusion": "failure", "started_at": "2026-10-11T07:50:00Z", "total_secs": 100,
+   "bottleneck": {"stage": "Linux", "secs": 80, "why": "dash-marker-selftest.sh"}},
+  {"run_id": "900", "sha": "6" * 40, "conclusion": "success", "started_at": "2026-10-11T07:40:00Z", "total_secs": 170,
+   "bottleneck": None}]})
+json.dump(d, open(sys.argv[2], "w"), ensure_ascii=False)
+PY
+out=$(run "$BIN/fleet" release stats --from "$WORK/runs.json" 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '合并到 stable *中位 4 分 10 秒 · 最慢一成 7 分 50 秒 · 12 个合并$' \
+   && printf '%s\n' "$out" | grep -q '开跑后发出去 *9/10 · 一趟中位 3 分 10 秒$' \
+   && printf '%s\n' "$out" | grep -q '^  4444444  10-11 08:00  已发  6 分 00 秒  卡在「Linux」：4 分 00 秒——超预算 90 秒（预算 150 秒）$' \
+   && printf '%s\n' "$out" | grep -q '^  5555555  10-11 07:50  没发  1 分 40 秒  卡在「Linux」：1 分 20 秒——dash-marker-selftest.sh$' \
+   && printf '%s\n' "$out" | grep -q '^  6666666  10-11 07:40  已发  2 分 50 秒$'; then
+  ok "E every run: merge → stable, shipped of started, each run's 卡在… line"
+else bad "E rc=$rc out=$out"; fi
+out=$(run "$BIN/fleet" release stats --from "$WORK/full.json" 2>&1)
+if ! printf '%s\n' "$out" | grep -q -e '合并到 stable' -e '每一趟'; then
+  ok "E an older hub's answer prints as before"
+else bad "E old: $out"; fi
 
 echo "fleet-release-stats-selftest: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

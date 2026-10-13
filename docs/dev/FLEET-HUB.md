@@ -823,6 +823,33 @@ the macOS queue's median / p90, each stage and the last trains; `fleet release
 stats [--days N] [--json]` (`bin/fleet-release-stats.py`, on the client manifest)
 prints it.
 
+**…and every run, shipped or not** (issue #3870, EPIC #3863 C7 — 共同约定 7: the
+ledger is the one source of stage times). The train's last job, `ledger`
+(`if: always()`, so a run 红灯即停 cancelled writes too), folds the run's jobs into
+stages with `bin/fleet-train-ledger.py build` (the release step builds its `train`
+part with the same script), names the first FAIL test off the shards'
+`train-result-*` artifacts, and POSTs `{run_id, sha, conclusion:
+success|failure|cancelled|superseded, started_at, ended_at, merges, stages: [{name,
+started_at, ended_at, result, queue_secs}], first_fail}` to `POST
+/v1/fleet/release/train` — the publish's OIDC check (`PublishAuth.CheckFor`), with
+`mac-follow.yml` also taken: its `follow` job hangs one `mac follow` stage on the
+train run (`train_run_id`). One row per run in `fleet_release_runs`; a re-post
+rewrites it and keeps the Mac stage. The answer carries the run's **bottleneck** —
+the hub's one rule, `trainBottleneck`: red ⇒ its first red stage, why = the first
+red test; past 300 s ⇒ the longest stage over its budget (`stageBudget`; none over
+⇒ the longest), why = how far over and the runner wait in it; the watcher, the
+ledger, the node image and the Mac half (`stageOffPath`) never are — so the run's
+summary page prints the same 「卡在…」 line. The stats add `merge_to_stable_p50/p95`
+(a merge's commit → the end of the first shipped run carrying it),
+`runs_started` / `runs_shipped`, `run_p50_secs`, `runs_slow` / `runs_slow_said`,
+`lanes` (stable · stable-macos) and `runs[]` (each with its stages, offsets,
+budgets, `bottleneck`, `conclusion`, `mac`) — `trains` stays the count it was. The
+admin page `/trains` (`web/dist/admin/trains.js`, listed by `/v1/me` on a fleet hub)
+draws them: four KPIs, the two lanes, one time bar a run against the 5-minute line,
+a row's merges and stage table on a tap, phone-width. The ledger job never reds (a
+red would stop mac-follow) and the move ignores it (`--ignore-check ledger`);
+`fleet-train-ledger-selftest.sh`, `TestTrainBottleneck`, `TestReleaseTrainRunRoute`.
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `mac-a <name>` (its pane header carries the same `mac-a`, so a

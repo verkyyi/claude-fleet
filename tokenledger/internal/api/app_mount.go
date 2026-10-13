@@ -37,7 +37,7 @@ var appPagePaths = map[string]bool{
 	"/machines": true, "/connect": true, "/config": true, "/nodes": true,
 	"/subscriptions": true, "/subscriptions/settings": true,
 	"/admin/users": true, "/admin/settings": true, "/admin/audit": true, feedbackPagePath: true,
-	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true,
+	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 }
 

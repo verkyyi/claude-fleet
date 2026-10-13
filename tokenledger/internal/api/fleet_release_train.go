@@ -37,7 +37,8 @@ import (
 // gate: a malformed one is answered `"train": "refused: …"` and the publish
 // stands. No `train` part ⇒ no row, no response field — byte for byte as before.
 //
-//	GET /v1/fleet/release/stats?days=7   the operator's numbers (fleet release stats)
+//	GET /v1/fleet/release/stats?days=7   the operator's numbers (fleet release stats,
+//	                                     the /trains page — with every run, claude-fleet#3870)
 //
 // A machine that skips a train (it went straight to a later one) has its
 // merges all the same: a train counts as reached on a machine at the first
@@ -274,6 +275,8 @@ type trainStats struct {
 	MacOSQueue    durStats     `json:"macos_queue"`
 	Stages        []stageStats `json:"stages"`
 	Recent        []trainRow   `json:"recent"`
+	// every run, shipped or not (claude-fleet#3870)
+	runStats
 }
 
 type durStats struct {
@@ -328,7 +331,7 @@ func durOf(xs []float64) durStats {
 
 // computeTrainStats folds the trains published in [since, now] and their reach.
 func computeTrainStats(trains []store.ReleaseTrain, reach []store.ReleaseReach, days int, since, now time.Time) trainStats {
-	out := trainStats{Days: days, Since: since, Trains: len(trains), Stages: []stageStats{}, Recent: []trainRow{}}
+	out := trainStats{Days: days, Since: since, Trains: len(trains), Stages: []stageStats{}, Recent: []trainRow{}, runStats: runStats{Runs: []runRow{}}}
 	sort.SliceStable(trains, func(i, j int) bool { return trains[i].PublishedAt.Before(trains[j].PublishedAt) })
 	at := map[string]map[string]time.Time{}
 	for _, r := range reach {
@@ -461,6 +464,23 @@ func (s *Server) handleReleaseStats(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	runs, err := s.Store.ReleaseRunsSince(since)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := computeTrainStats(trains, reach, days, since, now)
+	repo := ""
+	if s.Releases != nil {
+		repo = s.Releases.Repo
+		if sha, ok := s.Releases.PublishedStable(); ok {
+			out.Lanes.Stable = sha
+		}
+		out.Lanes.StableMacOS = s.Releases.MacStableSHA()
+	}
+	lanes := out.Lanes
+	out.runStats = computeRunStats(runs, repo)
+	out.Lanes = lanes
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, computeTrainStats(trains, reach, days, since, now))
+	writeJSON(w, http.StatusOK, out)
 }
