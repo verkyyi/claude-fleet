@@ -61,6 +61,7 @@
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
 #                                                   (accountStateOf, closeDrillLogins; go test, when a toolchain is here)
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
+#   spare-stall-silent                              tokenledger/internal/api fleet_spare_alerts.go (SpareAlertTick)
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
 #                                                   (/v1/node/self credsep_gate), internal/agent node_credsep.go,
@@ -946,6 +947,36 @@ drill_spare_login_empty() {
     esac
   else
     WHAT='没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- spare-stall-silent (#3509, EPIC #3500 R3): a place's spare failed (its
+# refill stops) or none has been ready for half an hour, and nobody is told.
+# The alert sweep raises spare_empty / spare_failed (fleet_alerts) with one
+# hub_audit spare.alert line, once a day per place and reason.
+drill_spare_stall_silent() {
+  CAP=120; local t0 out rc tests f
+  tests='TestSpareEmptyAlertsOnceAfterThirtyMinutes TestSpareFailedAlertsAtOnceAndOncePerDay TestSpareFailedWashIsAlerted TestSpareFailedPodAlertsTheCluster TestSpareAlertsOffAddsNothing'
+  f="$ROOT/tokenledger/internal/api/fleet_spare_alerts_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 's.SpareAlertTick(since, now)' "$ROOT/tokenledger/internal/api/fleet_alerts.go" \
+    || { WHY="the alert sweep no longer looks at the spares (SpareAlertTick)"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='备用 0 就绪满 30 分钟记一次 spare_empty、有就绪就清；建坏的备用、洗坏的登录、集群里坏的预备 pod 立刻记 spare_failed、forget 完就清；一天内同地同因不再记；每次一行 spare.alert 审计；备用关着什么都不记（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

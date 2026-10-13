@@ -28,15 +28,17 @@ import (
 // its sessions held; the person's 家 (entry home) on that login, pushed to the
 // machine's entry; and every join code minted for it and not redeemed.
 //
-// Recycling only happens where spares are on, for a person (not a spare, not a
-// drill), on a machine whose account-op node lists CapRecycle with separated
-// logins and is no one's own computer. `remove` with delete: true, a spare
-// shrinking, a drill's teardown, spares off or an older admin: the old remove,
-// byte for byte.
+// Recycling only happens where spares are on, for a person or a drill
+// identity (not a spare), on a machine whose account-op node lists CapRecycle
+// with separated logins and is no one's own computer. A drill's teardown
+// recycles the logins the hub opened or handed it (claude-fleet#3509, #2947),
+// so a drill leaves the machine's spare count where it found it. `remove`
+// with delete: true, a spare shrinking, spares off or an older admin: the old
+// remove, byte for byte.
 
 // recycleOn says a remove of principal's login on host should be a reset.
 func (s *Server) recycleOn(principal, host string) bool {
-	if !s.Fleet || s.Store == nil || !s.sparesOn() || store.IsSparePrincipal(principal) || s.Store.IsDrill(principal) {
+	if !s.Fleet || s.Store == nil || !s.sparesOn() || store.IsSparePrincipal(principal) {
 		return false
 	}
 	if s.clusterPodOf(host) != nil {

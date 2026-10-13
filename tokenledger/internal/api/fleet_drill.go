@@ -466,7 +466,7 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) (left []s
 		handed = append(handed, a)
 	}
 	for _, a := range accts {
-		if d.OwnComputer(a) || (a.Op != control.AccountCreate && a.Op != control.AccountRemove) {
+		if d.OwnComputer(a) || (a.Op != control.AccountCreate && a.Op != control.AccountRemove && a.Op != control.AccountReset) {
 			continue // not one the hub opened: its own computer, a computer it signed in on (#2212)
 		}
 		where := a.Login + "@" + a.Hostname
@@ -480,13 +480,20 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) (left []s
 				continue
 			}
 		case store.AccountActive:
-			if err := s.Store.RequestAccountRemoval(a.PrincipalID, a.Hostname, now); err != nil {
-				log.Printf("fleet: drill %s: queue removal of %s: %v", d.PrincipalID, where, err)
+			// Where the machine recycles, the login goes back washed — a new
+			// ready spare, the count where the drill found it (#3509, #2947).
+			req, how := s.Store.RequestAccountRemoval, "removing"
+			if s.recycleOn(a.PrincipalID, a.Hostname) {
+				req, how = s.Store.RequestAccountReset, "washing back into a spare"
+			}
+			if err := req(a.PrincipalID, a.Hostname, now); err != nil {
+				log.Printf("fleet: drill %s: queue the close of %s: %v", d.PrincipalID, where, err)
 			} else {
-				log.Printf("fleet: drill %s: removing the login opened for it, %s", d.PrincipalID, where)
+				log.Printf("fleet: drill %s: %s the login opened for it, %s", d.PrincipalID, how, where)
 				queued = true
 			}
-		case store.AccountCreating, store.AccountRemovePending, store.AccountRemoving, store.AccountUnknown:
+		case store.AccountCreating, store.AccountRemovePending, store.AccountRemoving, store.AccountUnknown,
+			store.AccountResetPending, store.AccountResetting:
 			// A create nobody heard back on is never removed on a guess (the
 			// name may be someone else's login there), but neither is the
 			// person dropped at once: its node re-sends the answer when it
