@@ -1,6 +1,7 @@
 // chat.ts — the one conversation (issue #3567), as assistant-ui's external store
 // (issue #3637). The server's protocol is unchanged: GET /api/conversation for
-// the whole history, POST /api/turn streams NDJSON items, /api/stop, /api/answer.
+// the whole history, POST /api/turn streams NDJSON items, /api/stop, /api/answer
+// — on the website the same four under the entry's /v1/chat (issue #3646, API).
 // This file only turns those items into ThreadMessageLike[] for the components.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -9,6 +10,7 @@ import {
   type RespondToToolApprovalOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
+import { API, SITE } from "@/site";
 
 type Item =
   | { t: "user"; text: string }
@@ -16,7 +18,7 @@ type Item =
   | { t: "tool"; id: string; name: string; summary?: string }
   | { t: "tool_result"; id: string; text?: string; error?: boolean }
   | { t: "stopped" }
-  | { t: "error"; msg: string };
+  | { t: "error"; msg: string; code?: string };
 
 type Question = {
   question: string;
@@ -35,6 +37,12 @@ export type Ask = {
 };
 type Answered = { approved: boolean; answers?: Record<string, { optionIds: string[] }> };
 export type Model = { id: string; label: string };
+// The pool's per-person budget, as the service says it (fleet.person_budget).
+export type Budget = { blocked: boolean; msg?: string; until?: string };
+// Why there is no conversation to show: the entry's refusal (issue #3645) —
+// no_home, home_down, operator, … — or any other read that failed.
+export type Gate = { code: string; msg: string };
+const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
@@ -86,7 +94,8 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
         cur = null;
         break;
       case "error":
-        assistant(i).status = { type: "incomplete", reason: "error", error: it.msg };
+        // a budget refusal is the banner's to say, never a red bubble (issue #3646)
+        assistant(i).status = it.code === "budget" ? { type: "incomplete", reason: "other" } : { type: "incomplete", reason: "error", error: it.msg };
         cur = null;
         break;
     }
@@ -142,7 +151,9 @@ async function readLines(r: Response, onItems: (items: Record<string, unknown>[]
   }
 }
 
-export function useFleetChat() {
+// blockedBy: a limit the page knows of before the service refuses a turn (the
+// website reads the person's own off /v1/me/usage); onTurnEnd: a turn ended here.
+export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budget | null; onTurnEnd?: () => void } = {}) {
   const [items, setItems] = useState<Item[]>([]);
   const [asks, setAsks] = useState<Ask[]>([]);
   const [answered, setAnswered] = useState<Map<string, Answered>>(new Map());
@@ -152,16 +163,29 @@ export function useFleetChat() {
   const [model, setModelState] = useState("");
   const [resume, setResume] = useState<{ id: string; cwd: string } | null>(null);
   const [notice, setNotice] = useState("");
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [budget, setBudget] = useState<Budget>({ blocked: false });
+  const turnEnd = useRef(onTurnEnd);
+  turnEnd.current = onTurnEnd;
   const turnId = useRef<string | null>(null);
   const streaming = useRef(false);
   const follow = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     clearTimeout(follow.current);
-    const r = await fetch("/api/conversation", { headers: H });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) { setNotice(j.error || "读不到对话"); setLoaded(true); return; }
+    const r = await fetch(`${API}/conversation`, { headers: H }).catch(() => null);
+    const j = r ? await r.json().catch(() => ({})) : {};
+    if (!r || !r.ok) {
+      if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
+      const code = String(j.code || "");
+      if (SITE && GATES.has(code)) setGate({ code, msg: String(j.error || "") });
+      else setNotice(j.error || "读不到对话");
+      setLoaded(true);
+      return;
+    }
     setNotice("");
+    setGate(null);
+    setBudget(j.budget && typeof j.budget === "object" ? j.budget : { blocked: false });
     setModels(j.models || []);
     setModelState((m) => {
       if (m) return m;
@@ -197,9 +221,10 @@ export function useFleetChat() {
     setBusy(true);
     let lost = false;
     try {
-      const r = await fetch("/api/turn", { method: "POST", headers: H, body: JSON.stringify({ text, model }) });
+      const r = await fetch(`${API}/turn`, { method: "POST", headers: H, body: JSON.stringify({ text, model }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
+        if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
         setItems((xs) => [...xs, { t: "error", msg: String(j.error || r.status) }]);
         return;
       }
@@ -212,6 +237,10 @@ export function useFleetChat() {
             case "session": setResume({ id: String(o.id), cwd: String(o.cwd || "") }); break;
             case "ask": newAsks.push(o as unknown as Ask); break;
             case "done": break;
+            case "error":
+              if (o.code === "budget") setBudget({ blocked: true, ...(o.msg ? { msg: String(o.msg) } : {}), ...(o.until ? { until: String(o.until) } : {}) });
+              add.push(o as unknown as Item);
+              break;
             default: add.push(o as unknown as Item);
           }
         }
@@ -224,6 +253,7 @@ export function useFleetChat() {
       streaming.current = false;
       setBusy(false);
       turnId.current = null;
+      turnEnd.current?.();
     }
     // the line dropped; the turn goes on — pick it back up. A finished turn
     // reloads too: the transcript is the record, the stream was only its preview.
@@ -231,7 +261,7 @@ export function useFleetChat() {
   }, [model, load]);
 
   const onCancel = useCallback(async () => {
-    if (turnId.current) await fetch("/api/stop", { method: "POST", headers: H, body: JSON.stringify({ turn: turnId.current }) });
+    if (turnId.current) await fetch(`${API}/stop`, { method: "POST", headers: H, body: JSON.stringify({ turn: turnId.current }) });
   }, []);
 
   const onRespondToToolApproval = useCallback(async (o: RespondToToolApprovalOptions) => {
@@ -252,20 +282,32 @@ export function useFleetChat() {
       payload = { allow: o.approved };
     }
     setAnswered((m) => new Map(m).set(a.rid, { approved: a.kind === "question" ? true : o.approved, ...(answers ? { answers } : {}) }));
-    await fetch("/api/answer", { method: "POST", headers: H, body: JSON.stringify({ rid: a.rid, ...payload }) });
+    await fetch(`${API}/answer`, { method: "POST", headers: H, body: JSON.stringify({ rid: a.rid, ...payload }) });
   }, [asks]);
 
   const messages = useMemo(() => toMessages(items, asks, answered), [items, asks, answered]);
+
+  // a refusal with a time on it lifts by itself: read the conversation again then
+  const own = budget.blocked && !(budget.until && Date.parse(budget.until) <= Date.now());
+  useEffect(() => {
+    if (!own || !budget.until) return;
+    const ms = Date.parse(budget.until) - Date.now();
+    if (!(ms > 0) || ms > 2 ** 31 - 1) return;
+    const t = window.setTimeout(load, ms + 1000);
+    return () => clearTimeout(t);
+  }, [own, budget.until, load]);
+  const stop = own ? budget : blockedBy?.blocked ? blockedBy : null;
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages,
     convertMessage: (m) => m as ThreadMessageLike,
     isRunning: busy,
     isLoading: !loaded,
+    isDisabled: !!stop,
     onNew,
     onCancel,
     onRespondToToolApproval,
   });
 
-  return { runtime, models, model, setModel, resume, notice };
+  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load };
 }

@@ -120,7 +120,7 @@ var routeAccess = map[string]string{
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
 	control.ChatRelayDataPath: accessSelf,
 	// The web chat (claude-fleet#3645): each person their own conversation.
-	ChatPathPrefix: accessUser,
+	ChatPathPrefix: accessUser, ChatPagePath: accessUser,
 	// The ticket registry (claude-fleet#2676): a node registers with its token.
 	FleetTicketRegisterPath: accessSelf,
 	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.
@@ -470,9 +470,10 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 // show an admin — then Subscriptions, Machines, Users, Settings and Audit
 // (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517)
 // — the pool's windows, an admin's since #3227 — usage is 我的用量 (#2519).
+// chat is 对话 (#3646): the website's /chat/, every role's.
 var (
-	userPages  = []string{"overview", "sessions", "tasks", "mymachines", "devices", "phone", "connection", "usage", "config"}
-	adminPages = []string{"overview", "sessions", "tasks", "mymachines", "devices", "phone", "connection", "quota", "usage", "config",
+	userPages  = []string{"overview", "sessions", "tasks", "mymachines", "chat", "devices", "phone", "connection", "usage", "config"}
+	adminPages = []string{"overview", "sessions", "tasks", "mymachines", "chat", "devices", "phone", "connection", "quota", "usage", "config",
 		"all-sessions", "by-person", "all-devices",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )

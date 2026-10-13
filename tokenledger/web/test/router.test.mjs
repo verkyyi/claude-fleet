@@ -16,7 +16,7 @@ const click = (mods = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shift
 
 test('every page in the menu is a route, and its path is its href', () => {
   for (const p of PAGES) {
-    if (p.id === 'phone' || p.id === 'connection') continue; // the hub's own pages (below)
+    if (p.id === 'phone' || p.id === 'connection' || p.id === 'chat') continue; // the hub's own pages (below)
     assert.ok(p.module && p.module.startsWith('/') && p.module.endsWith('.js'), `${p.id} names its module`);
     assert.equal(routeFor(pathOf(p)), p, pathOf(p));
   }
@@ -39,6 +39,11 @@ test('从手机连 is the hub\'s page: in the menu, never opened in place (claud
   const c = PAGES.find((x) => x.id === 'connection');
   assert.ok(c.href === '/fleet/connection' && !c.module && !c.group);
   assert.equal(intercept(click(), anchor(ORIGIN + '/fleet/connection'), ORIGIN), null);
+  // 对话 (claude-fleet#3646): its own page under /chat/, every role's.
+  const chat = PAGES.find((x) => x.id === 'chat');
+  assert.ok(chat.href === '/chat/' && !chat.module && !chat.group);
+  assert.equal(routeFor('/chat/'), null);
+  assert.equal(intercept(click(), anchor(ORIGIN + '/chat/'), ORIGIN), null, 'the browser loads it');
 });
 
 test('an old address opens where it moved, never nothing (claude-fleet#3232)', () => {

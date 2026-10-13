@@ -595,6 +595,9 @@ func (s *Server) routes() *routeMux {
 		// The web chat (claude-fleet#3645): a signed-in person's own
 		// conversation, relayed to their home login's service.
 		mux.Handle(ChatPathPrefix, s.viewerOnly(http.HandlerFunc(s.handleChat)))
+		// Its page (claude-fleet#3646): a signed-in person's, back here after
+		// the sign-in.
+		mux.Handle(ChatPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleChatPage))))
 		// The keys page (claude-fleet#3069): a browser not signed in comes
 		// back here after GitHub's.
 		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))

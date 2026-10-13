@@ -129,6 +129,7 @@ export const zhCN = {
   'ui.nav.sessions': '会话',
   // 任务 (claude-fleet#3325).
   'ui.nav.tasks': '任务',
+  'ui.nav.chat': '对话',
   'ui.task.band': '今天 {today} 件 · 在干活 {working} · 等你 {waiting}',
   'ui.task.waitingYou': '等你',
   'ui.task.search': '搜索任务',

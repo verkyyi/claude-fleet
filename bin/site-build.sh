@@ -470,7 +470,7 @@ def crawl_files():
     en_docs = [d for d in docs if d['lang'] == 'en']
 
     # robots.txt
-    closed = ['/app/', '/app$', '/v1/', '/mcp', '/connect', '/fleet/', '/embed/', '/install',
+    closed = ['/app/', '/app$', '/v1/', '/mcp', '/connect', '/fleet/', '/embed/', '/chat/', '/install',
               '/auth', '/signin', '/logout', '/badge', '/healthz', '/readyz', '/version']
     ai = ['GPTBot', 'OAI-SearchBot', 'ChatGPT-User', 'ClaudeBot', 'Claude-User', 'Claude-SearchBot',
           'anthropic-ai', 'PerplexityBot', 'Perplexity-User', 'Google-Extended', 'Applebot-Extended',

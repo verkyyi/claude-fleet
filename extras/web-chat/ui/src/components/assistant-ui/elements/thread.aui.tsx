@@ -103,6 +103,8 @@ export type ThreadComponents = {
   ComposerStart?: ComponentType | undefined;
   /** fleet web chat (#3637): a line under the composer. */
   ComposerFooter?: ComponentType | undefined;
+  /** fleet web chat (#3646): a band right above the composer — the quota banner. */
+  ComposerTop?: ComponentType | undefined;
 };
 
 const messageGroupBy = groupPartByType({
@@ -138,6 +140,8 @@ const taskAwareGroupBy = (
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
+  /** fleet web chat (#3646): the composer's empty-input words. */
+  placeholder?: string | undefined;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -182,21 +186,23 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
+  placeholder = "说点什么…",
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
+      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} placeholder={placeholder} />
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
+const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean; placeholder: string }> = ({
   isEmpty,
   autoFocus,
+  placeholder,
 }) => {
-  const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
+  const { Welcome = ThreadWelcome, ComposerTop } = useContext(ThreadComponentsContext);
 
   return (
     <ThreadPrimitive.Root
@@ -247,7 +253,8 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
           >
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
-            <Composer autoFocus={autoFocus} />
+            {ComposerTop ? <ComposerTop /> : null}
+            <Composer autoFocus={autoFocus} placeholder={placeholder} />
             <ComposerFooterSlot />
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />
@@ -504,7 +511,7 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
+const Composer: FC<{ autoFocus: boolean; placeholder: string }> = ({ autoFocus, placeholder }) => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone asChild>
@@ -514,7 +521,7 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
         >
           <ComposerAttachments />
           <ComposerPrimitive.Input
-            placeholder="说点什么…"
+            placeholder={placeholder}
             className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
             rows={1}
             autoFocus={autoFocus}

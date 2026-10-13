@@ -230,7 +230,7 @@ def check(site, docs, tag):
     rb = open(os.path.join(site, 'robots.txt'), encoding='utf-8').read().splitlines()
     for need in ('User-agent: *', 'User-agent: GPTBot', 'User-agent: ClaudeBot', 'Allow: /', 'Allow: /docs/',
                  'Allow: /en/docs/', 'Disallow: /app/', 'Disallow: /v1/', 'Disallow: /mcp', 'Disallow: /connect',
-                 'Disallow: /fleet/', 'Disallow: /embed/', 'Sitemap: %s/sitemap.xml' % O):
+                 'Disallow: /fleet/', 'Disallow: /embed/', 'Disallow: /chat/', 'Sitemap: %s/sitemap.xml' % O):
         if need not in rb:
             bad.append('J%s robots.txt lacks %r' % (tag, need))
     for l in rb:

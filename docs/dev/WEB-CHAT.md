@@ -141,6 +141,29 @@ npm run dev       # 本地调：vite 在 127.0.0.1，/api 转给 127.0.0.1:18961
 
 CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不一样就红；也检查 `dist/` 里没有 CDN。
 
+### 官网上的 `/chat`（#3646，EPIC #3642 C4）
+
+同一份源码打第二个版本：`npm run build:site`（`vite build --mode site`）—— `base: /chat/`，接口前缀换成入口的
+`/v1/chat`（`src/site.ts` 的 `SITE` / `API`），顶栏换成官网的（`src/SiteBar.tsx`：ClaudeFleet 字标、官网几页
+加亮「对话」、家 `机器 · 登录`、额度小条、头像），按钮是官网胶囊形（`theme.css` 里 `html[data-site]` 一行）。
+本机服务那份照旧是 `dist/`，不受影响。
+
+- **打包**：`bin/web-chat-pack.sh` 把官网版构建进 `tokenledger/web/dist/chat/`（gitignore，先清空）；
+  `hub-deploy` 在 `docker build` 前跑它，做法同 `fleet-client-pack.sh` —— 仓库里只一份源，不提交拷贝。
+  没打包的入口 `/chat/` 答 404 并点名这个脚本。
+- **入口**：`/chat/`（`tokenledger/internal/api/fleet_chat_page.go`）挂在 `viewerOnly` 后，没登录 302
+  `/app/signin`，登录完回到 `/chat/`（`ccquota_return`）；`/chat` 301 到 `/chat/`；CSP 只许同源；
+  `/chat/assets/*` 按内容取名，长缓存。菜单「对话」：`web/dist/lib/shell.js` 的 `PAGES` + `roles.go`
+  `pagesFor`（每个角色都有），整页加载，不是控制台模块。robots.txt 不让爬 `/chat/`。
+- **家**：`GET /v1/chat/home` 入口自己答，不转发：`{machine, login, state}`，state 是 `ok` · `offline`
+  （那个登录没连着）· `maintenance` · `old_agent`（连着但没有对话转发）；没家 409 `no_home`。
+- **额度**：小条读本人的 `fleet.person_budget`（`/v1/me/usage` 的 `limit`，剩得最少的那个窗口；没设限额
+  就不画）—— `/v1/me/quota` 是订阅池的、只给管理员，不是这个人的额度。用完（这里说用完，或者服务
+  回了 `{t:"error", code:"budget"}` / 对话里的 `budget.blocked`）：输入框上方一条「这周的额度用完了，
+  <时间> 恢复」，输入框置灰（assistant-ui 的 `isDisabled`），到点自己重读。
+- **页面态**：对话读不到时整页换成一句话 + 一个动作 —— 没家「去「我的连接」」、家连不上「再试一次」
+  （不换机器，D2）、operator 口令「用自己的账号登录」；会话过期（401）回 `/app/signin`。
+
 ## 一条对话怎么一直连着
 
 - 「这个人 → 当前 session id」存在 `$FLEET_CONF_DIR/webchat/conversation.json`。每一轮都 resume 它，

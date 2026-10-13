@@ -41,6 +41,58 @@ var chatRoutes = map[string]string{
 	"answer":       http.MethodPost,
 }
 
+// chatHomeRoute is the one route the entry answers itself (claude-fleet#3646):
+// where the person's conversation runs, for the page's top bar — no relay.
+const chatHomeRoute = "home"
+
+// ChatHome is GET /v1/chat/home's answer. State: ok · offline (the login is
+// not connected) · maintenance · old_agent (connected, without the chat relay).
+type ChatHome struct {
+	Machine string `json:"machine"`
+	Login   string `json:"login"`
+	State   string `json:"state"`
+}
+
+// handleChatHome answers the person's home and whether a turn could reach it
+// now; no home is 409 no_home, as for every other route.
+func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		httpError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	person, status, code, msg := s.chatPerson(r)
+	if code != "" {
+		s.chatRefuse(w, person, chatHomeRoute, status, code, msg)
+		return
+	}
+	home, ok, err := s.Store.EntryHomeOf(person)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || home.Machine == "" || home.Login == "" {
+		refuseJSON(w, http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
+		return
+	}
+	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok"}
+	if settings, err := s.Store.FleetSettings(); err == nil {
+		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
+			out.State = "maintenance"
+		}
+	}
+	if out.State == "ok" {
+		if _, _, err := s.chatRelayNode(home.Machine, home.Login); err != nil {
+			out.State = "offline"
+			var re *sshRelayError
+			if errors.As(err, &re) && re.code == "NO_CHAT" {
+				out.State = "old_agent"
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 const (
 	// defaultChatPerPerson bounds one person's requests in flight: a page holds
 	// one conversation read or turn stream, plus a stop or an answer beside it.
@@ -148,10 +200,14 @@ func (s *Server) chatPerson(r *http.Request) (person string, status int, code, m
 	return person, 0, "", ""
 }
 
-// handleChat serves ChatPathPrefix + one of chatRoutes.
+// handleChat serves ChatPathPrefix + one of chatRoutes, or home.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	name := strings.TrimPrefix(r.URL.Path, ChatPathPrefix)
+	if name == chatHomeRoute {
+		s.handleChatHome(w, r)
+		return
+	}
 	method, ok := chatRoutes[name]
 	if !ok {
 		httpError(w, http.StatusNotFound, "no such chat route")
