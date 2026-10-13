@@ -82,6 +82,9 @@ type Me struct {
 	// Entry says the direct door's keys page (/fleet/keys, claude-fleet#3069)
 	// is there: fleet.entry is on. The overview links it only then.
 	Entry bool `json:"entry,omitempty"`
+	// Reach says whether the notices can find the person (claude-fleet#4057):
+	// present only for a person while the service account's road is on.
+	Reach *MeReach `json:"reach,omitempty"`
 	// CanLogout says a cookie THIS hub minted is behind the request, so
 	// POST /logout has something to clear. A bearer header has none.
 	CanLogout bool `json:"can_logout"`
@@ -115,6 +118,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Login = login
 		if out.Logins, err = s.loginPairsOf(pid); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if out.Reach, err = s.meReach(pid); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

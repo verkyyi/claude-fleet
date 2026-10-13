@@ -26,6 +26,7 @@ import { lang, tr } from "@/shared/i18n";
 import { isAdmin, sendJSON, useLoad } from "@/shared/api";
 import { setThemePick, themePick, type ThemePick } from "@/shared/theme";
 import { SignOut, usePage, useShell } from "../Shell";
+import { BindWeChatDialog, toastBound } from "../WeChatBind";
 import { Failed, PageHeader, ago } from "../parts";
 
 declare const __PROTO__: boolean;
@@ -59,6 +60,7 @@ const VIA: Record<string, [string, string]> = {
 
 const KINDS: Record<string, { icon: LucideIcon; label: () => string; tint?: string }> = {
   wechat: { icon: MessageCircle, label: () => tr("微信", "WeChat"), tint: "text-[#07c160]" },
+  "wechat-mp": { icon: MessageCircle, label: () => tr("微信", "WeChat"), tint: "text-[#07c160]" },
   email: { icon: Mail, label: () => tr("邮箱", "Email") },
   github: { icon: KeyRound, label: () => "GitHub" },
 };
@@ -160,6 +162,12 @@ const EmailDialog: FC<{ open: boolean; change: boolean; onClose: () => void; onS
 const SignInWays: FC = () => {
   const ids = useLoad<Identities>("/v1/me/identities");
   const reload = ids.reload;
+  const { me } = useShell();
+  // the service account's WeChat, bound here when the notices cannot find
+  // them yet (claude-fleet#4057); it then stands for the open-platform link
+  const [wxOpen, setWxOpen] = useState(false);
+  const [wxBound, setWxBound] = useState(false);
+  const wxUnbound = !!me?.reach && !me.reach.wechat && !wxBound;
   const [email, setEmail] = useState<{ open: boolean; change: boolean }>({ open: false, change: false });
   const [drop, setDrop] = useState<Identity | null>(null);
   const [note, setNote] = useState<Note>(() => {
@@ -193,7 +201,7 @@ const SignInWays: FC = () => {
         <div key={`${i.kind}:${i.subject}`} className="flex min-h-11 items-center gap-3 py-3 first:pt-0 last:pb-0">
           <k.icon className={`size-5 shrink-0 ${k.tint || "text-muted-foreground"}`} aria-hidden />
           <span className="min-w-0 flex-1 truncate">
-            {k.label()}{i.kind !== "wechat" ? <span className="text-muted-foreground"> {i.label || i.subject}</span> : null}
+            {k.label()}{!i.kind.startsWith("wechat") ? <span className="text-muted-foreground"> {i.label || i.subject}</span> : null}
           </span>
           {i.kind === "email" && can_add.includes("email") ? (
             <Button size="sm" variant="ghost" onClick={() => setEmail({ open: true, change: true })}>{tr("换一个", "Change")}</Button>
@@ -203,8 +211,18 @@ const SignInWays: FC = () => {
         </div>
       );
     });
+    if (wxUnbound) {
+      rows.push(
+        <div key="add:wechat-mp" className="flex min-h-11 items-center gap-3 py-3 first:pt-0 last:pb-0">
+          <MessageCircle className="size-5 shrink-0 text-[#07c160]" aria-hidden />
+          <span className="text-muted-foreground min-w-0 flex-1">{tr("微信 · 通知发到微信，也能扫码登录", "WeChat · notices there, and sign in by scanning")}</span>
+          <Button size="sm" variant="outline" onClick={() => setWxOpen(true)}>{tr("绑定微信", "Add WeChat")}</Button>
+        </div>,
+      );
+    }
     for (const k of can_add) {
       if (k === "email" && hasEmail) continue;
+      if (k === "wechat" && me?.reach) continue; // the service account's road stands for it
       const kk = kindOf(k);
       const label = k === "email" ? tr("绑定邮箱", "Add email") : k === "wechat" ? tr("绑定微信", "Add WeChat") : tr("绑定 GitHub", "Add GitHub");
       rows.push(
@@ -237,6 +255,8 @@ const SignInWays: FC = () => {
             : tr(`已绑上 ${a}。`, `${a} added.`) });
           reload();
         }} />
+      <BindWeChatDialog open={wxOpen} onClose={() => setWxOpen(false)}
+        onBound={() => { setWxOpen(false); setWxBound(true); toastBound(); reload(); }} />
       <AlertDialog open={!!drop} onOpenChange={(o) => !o && setDrop(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

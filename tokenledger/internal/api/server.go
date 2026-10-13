@@ -896,6 +896,10 @@ func (s *Server) routes() *routeMux {
 	// Unconditional: the header is on every hub's dashboard, fleet module or not.
 	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
 	mux.Handle("/v1/me/identities", s.viewerOnly(http.HandlerFunc(s.handleMeIdentities)))
+	// Bind the service account's WeChat to the signed-in person
+	// (claude-fleet#4057): 404 when its road is off.
+	mux.Handle(meWxBindQRPath, s.viewerOnly(http.HandlerFunc(s.handleMeWxBindQR)))
+	mux.Handle(meWxBindPollPath, s.viewerOnly(http.HandlerFunc(s.handleMeWxBindPoll)))
 	// 我的额度 (claude-fleet#2517): the API and its page. The subscriptions'
 	// windows are the pool's, an admin's only since claude-fleet#3227 — a
 	// person reads their own limit on /v1/me/usage.

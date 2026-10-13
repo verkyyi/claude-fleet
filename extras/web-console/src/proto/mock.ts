@@ -8,7 +8,9 @@
 // scenario comes from the review page in window.name.
 type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off"; page?: string;
   // 我自己的订阅 (C21): none = the empty state; login = the dialog open at the sign-in; error = the read fails
-  sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error" };
+  sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error";
+  // unbound = a GitHub member the notices cannot find yet (claude-fleet#4057)
+  wx?: "unbound" };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -25,6 +27,8 @@ export async function install(): Promise<string> {
   const me = admin
     ? { via: "wechat", role: "admin", person: "p:zhouning", name: "周宁", login: "zhouning", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true }
     : { via: "wechat", role: "user", person: "p:linxiao", name: "林晓", login: "linxiao", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true };
+  const wxBind = { unbound: sc.wx === "unbound", polls: 0 };
+  if (wxBind.unbound) Object.assign(me, { via: "github", reach: { wechat: false } });
   const limit = state === "unlimited" ? { set: false, used_week: 0, used_5h: 412000 } : {
     set: true, limit_week: 6_000_000, used_week: state === "over" ? 6_000_000 : state === "empty" ? 0 : 2_284_000,
     remaining_week: state === "over" ? 0 : state === "empty" ? 6_000_000 : 3_716_000, reset_week: reset.toISOString(),
@@ -71,7 +75,8 @@ export async function install(): Promise<string> {
     { t: "tool_result", id: "t2", text: "published dash-w41" },
     { t: "text", d: SALES_REPLY },
   ] : [];
-  const ids = [{ kind: "wechat", subject: "o-wx-" + me.login, label: "o-wx-" + me.login, verified_at: "2026-09-02T08:00:00Z" }];
+  const ids = wxBind.unbound ? [{ kind: "github", subject: "4242", label: me.login, verified_at: "2026-09-02T08:00:00Z" }]
+    : [{ kind: "wechat", subject: "o-wx-" + me.login, label: "o-wx-" + me.login, verified_at: "2026-09-02T08:00:00Z" }];
   // 新来的: one way in, no configuration written yet (the hub answers version 0)
   let bundle = state === "empty" ? { version: 0, bundle: {} as Record<string, unknown> } as { version: number; created?: string; bundle: Record<string, unknown> } : { version: 3, created: "2026-10-09T10:12:00Z", bundle: { mcp: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } }, ui_lang: "zh" } as Record<string, unknown> };
   const idView = () => ({ person: me.person, identities: ids, can_add: ["email"] });
@@ -210,6 +215,16 @@ export async function install(): Promise<string> {
       case "/v1/fleet/tasks": return state === "error" ? ok({ error: "down" }, 502) : ok({ tasks, observed_at: new Date().toISOString() });
       case "/v1/fleet/tickets": return state === "error" ? ok({ error: "down" }, 502) : ok({ tickets: tickets.map((t) => ({ ...t, comments: (comments[`${t.repo}#${t.number}`] || []).length })) });
       case "/v1/me": return ok(me);
+      // 绑微信 (claude-fleet#4057): the third ask finds it scanned
+      case "/v1/me/wechat/bind-qr":
+        wxBind.polls = 0;
+        return ok({ s: 3000042, expires_at: Math.floor(Date.now() / 1000) + 600,
+          qr: `<svg class="qr" viewBox="0 0 37 37" shape-rendering="crispEdges"><path d="${qr.flatMap((row, y) => [...row].map((c, x) => (c === "#" ? `M${x + 4} ${y + 4}h1v1h-1z` : ""))).join("")}"/></svg>` });
+      case "/v1/me/wechat/bind-poll":
+        if (++wxBind.polls < 3) return ok({ s: "wait" });
+        Object.assign(me, { reach: { wechat: true } });
+        ids.push({ kind: "wechat-mp", subject: "o-mp-" + me.login, label: "o-mp-" + me.login, verified_at: new Date().toISOString() });
+        return ok({ s: "bound" });
       case "/v1/me/usage":
         if (state === "error" && sc.page === "/usage") return ok({ error: "unavailable" }, 503);
         return ok(usage(/[?&]range=([^&]+)/.exec(url)?.[1] || "7d"));

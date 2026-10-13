@@ -907,6 +907,13 @@ offers every way that is configured, always in this order:
   someone not on the list becomes an applicant at `/apply`. The openid is kept as
   where to reach them (`hub_reach`). Either variable unset ⇒ `/signin` is what it
   was, byte for byte.
+  Someone already on the list binds it from the console (claude-fleet#4057):
+  `/v1/me` carries `reach: {wechat}` (whether a followed openid is kept for
+  them), the home shows a band until it is true (closed ⇒ 30 days away), and its
+  dialog draws a bind code with `POST /v1/me/wechat/bind-qr` and polls
+  `GET /v1/me/wechat/bind-poll?s=` (wait · expired · down · bound · taken). A
+  bound scan adds the WeChat as one more way in and its openid to `hub_reach`; a
+  WeChat that already signs someone else in is refused (`taken`), never moved.
 - **Inside WeChat, no scan** (claude-fleet#4055) — add `CCQUOTA_WX_RELAY_URL`
   (workbench's web-authorisation relay, `https://ac.ssl.24gmweb.com/node_w/wx/oauth/relay`)
   and WeChat's own browser skips the code: `/signin` → `/auth/wechat/start` →
