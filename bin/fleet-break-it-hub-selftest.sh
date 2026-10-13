@@ -2301,4 +2301,6 @@ PY
   SECS=$(since "$t0")
 }
 
+# this file runs part 1/2; the rest are its part files (issue #2694)
+: "${BREAK_PART:=1/2}"
 cred_run_drills "$0"

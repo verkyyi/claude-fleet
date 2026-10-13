@@ -1469,4 +1469,6 @@ drill_per_login_machine_loops() {
   WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复"
 }
 
+# this file runs part 1/3; the rest are its part files (issue #2694)
+: "${BREAK_PART:=1/3}"
 cred_run_drills "$0"

@@ -211,7 +211,9 @@
 # so do ids given as arguments (`fleet-break-it-selftest.sh cmdn-waits-orch …`).
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
-# ceiling). This file runs 1/2 by default, bin/fleet-break-it-2-selftest.sh 2/2 —
+# ceiling), balanced by each drill's wall time in bin/break-it-durations.txt
+# (fleet-break-it-part.py, issue #2694). This file runs 1/7 by default,
+# bin/fleet-break-it-{2..7}-selftest.sh the rest —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
 # across each other beyond lazy, idempotent rigs (client_setup, drive), so any
@@ -7294,7 +7296,7 @@ FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
-part=${BREAK_PART:-1/2}
+part=${BREAK_PART:-1/7}
 if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   case "$part" in
     [1-9]/[1-9]|[1-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
@@ -7303,16 +7305,16 @@ if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   [ "$pk" -le "$pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$part" >&2; exit 2; }
   mine=''
   for r in $IDS; do type "drill_${r//-/_}" >/dev/null 2>&1 && mine="$mine $r"; done
+  # contiguous slices balanced by each drill's measured wall time (issue #2694)
   # shellcheck disable=SC2086  # ids carry no whitespace
-  set -- $mine
-  pt=$#; lo=$(( (pk - 1) * pt / pn )); hi=$(( pk * pt / pn )); i=0
-  for r in $mine; do
-    [ "$i" -ge "$lo" ] && [ "$i" -lt "$hi" ] && PART_IDS="$PART_IDS $r"
-    i=$((i + 1))
-  done
-  PART_IDS="$PART_IDS "
-  printf 'fleet-break-it: part %s — drills %d..%d of %d\n' "$part" $((lo + 1)) "$hi" "$pt"
+  PART_IDS=" $(python3 "$BIN/fleet-break-it-part.py" "$part" "$BIN/break-it-durations.txt" $mine | tr '\n' ' ')"
+  # shellcheck disable=SC2086
+  set -- $mine; pt=$#
+  # shellcheck disable=SC2086
+  set -- $PART_IDS
+  printf 'fleet-break-it: part %s — %d of %d drills\n' "$part" "$#" "$pt"
 fi
+unset BREAK_PART
 while IFS= read -r r; do
   case "$r" in
     '@'*) [ "${pk:-1}" -gt 1 ] || printf 'REG   %-20s %s\n' '—' "${r#@}"; continue ;;
@@ -7322,14 +7324,14 @@ while IFS= read -r r; do
   if [ -n "$PART_IDS" ]; then case "$PART_IDS" in *" $r "*) ;; *) continue ;; esac; fi
   fn="drill_${r//-/_}"
   type "$fn" >/dev/null 2>&1 || continue
-  SECS='' CAP='' WHY='' WHAT=''
+  SECS='' CAP='' WHY='' WHAT='' T_D=$(now)
   if "$fn" && [ -n "$SECS" ] && le "$SECS" "$CAP"; then
     PASSES=$((PASSES + 1))
-    printf 'PASS  %-20s %5ss ≤%ss  %s\n' "$r" "$SECS" "$CAP" "$WHAT"
+    printf 'PASS  %-20s %5ss ≤%ss  %s  [wall %ss]\n' "$r" "$SECS" "$CAP" "$WHAT" "$(since "$T_D")"
   else
     FAILS=$((FAILS + 1))
     [ -n "$WHY" ] || WHY="recovered in ${SECS:-?}s, over the ${CAP}s bound"
-    printf 'FAIL  %-20s %s\n' "$r" "$WHY"
+    printf 'FAIL  %-20s %s  [wall %ss]\n' "$r" "$WHY" "$(since "$T_D")"
   fi
 done <<EOF
 $ROWS

@@ -1904,4 +1904,5 @@ class MCPTests(HubFixture):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
+    selftest_part.main()
