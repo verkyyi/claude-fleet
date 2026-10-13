@@ -82,6 +82,7 @@ GET 的回答：
 | `accounts` | 这台应有的系统账号 | ≤ 64，系统登录名 |
 | `spare_accounts` | 这台（或这个集群）备好的空账号数——入口补备用的唯一来源（claude-fleet#3501）；写了 0 就是 0，没写过按 `fleet.spare_max`（默认 2），都不超过登录上限剩下的空位 | 0–32 |
 | `trust` / `trust_source` / `role` | 所在机器的信任与身份上的角色（§1） | PUT 里可带 `trust`：`trusted` / `untrusted` / `""`（去掉，读不可信）——写到这台 endpoint 加入时的机器上 |
+| `cred_relay_url` | 入口的凭据中转（`CCQUOTA_FLEET_CRED_RELAY_URL`，claude-fleet#4010）：只在机器自己的 GET 里、只在入口配了时出现；`fleet node install` 把它留在 `expected.json`，Linux 上每个开出来的账号拿它当 `FLEET_CRED_RELAY_URL`（root 的 `credsep/<login>.conf`） | 入口给，不可写；没配 = 没这个键 |
 
 PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读到的版本；对不上 `409 version_conflict`，什么都不写）。
 未知字段 `400`——凭据不会有地方落脚。每次写审计一行（`node_desired`），改信任另记一行（`node_trust`，`machine:<机器>`）。

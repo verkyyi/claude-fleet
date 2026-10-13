@@ -140,27 +140,39 @@ different CLI version.
 The entry port (`FLEET_ENTRY=1`) also needs OpenSSH 9.8+ (`PerSourcePenalties`):
 Debian 12's 9.2 runs everything else, but its entry never listens — use Debian 13.
 
-Generate **two trusted join codes** using the hub's operator endpoint
-`POST /v1/fleet/nodes/join-codes`: one for the machine, one for its first login
-(native only — an ACK node needs the machine's alone).
-The default managed code is trusted, one-use, and expires in one hour. Keep
-codes in private temporary files, not shell history or source control. The
-machine registers as `root`; the login registers as `fleet`. Their tokens must
-remain different because the hub verifies each machine lane's login identity.
+One trusted, managed join code is enough (issue #4010): the machine joins with
+it and its node program — up with no login while `FLEET_NODE_ACCOUNT_OPS=1`,
+the installer's default — takes the hub's first create (an invitation, or
+`fleet hub accounts assign … --host <machine>`), as above. Keep the code in a
+private temporary file, not shell history or source control.
 
 ```sh
 sudo bash bin/fleet-node-install.sh --hub https://YOUR-HUB \
-  --join-file /private/machine-code --login fleet \
-  --login-join-file /private/login-code --service systemd
+  --join-file /private/machine-code --service systemd
 sudo systemctl status claude-fleet-node.service
 sudo /opt/claude-fleet/current/bin/fleet-node-supervisor.py status --check
 ```
 
-The installer's `--login` opens the first login through `login open`. Its
-UID/GID comes from the allocator (10002 on a fresh volume); `FLEET_NODE_UID`
-pins it on the first install, and its declaration refuses a different UID on
-subsequent runs. No login receives a sudo rule.
+With no login yet the installer does not say 「已收敛」: its last lines say the
+machine waits for the hub's first login and how to give it one. With account ops
+off (`FLEET_NODE_ACCOUNT_OPS=0`) nothing would ever arrive, so it fails `账号`
+and names the old road: a second trusted join code for the first login,
+`--login <login> --login-join-file <file>` (that login registers as itself; the
+two tokens must stay different because the hub verifies each machine lane's login
+identity). `login open`'s UID/GID comes from the allocator (10002 on a fresh
+volume); `FLEET_NODE_UID` pins it on the first install, and its declaration
+refuses a different UID on subsequent runs. No login receives a sudo rule.
 Root and the dedicated `fleetcred` account retain credentials outside HOME.
+
+The relay (issue #4010): a hub with `CCQUOTA_FLEET_CRED_RELAY_URL` hands it down
+in the machine's `GET /v1/node/desired` as `cred_relay_url`; the installer keeps
+it in `expected.json`, every `login open` without `--relay` writes it as the
+login's `FLEET_CRED_RELAY_URL` in root's `credsep/<login>.conf`, and a rerun of
+the installer (its `中转` step, `fleet-node-linux.py route`) brings the logins
+already here up to a relay the hub got later. A hub without one hands nothing
+down. The installer runs under `umask 022` whatever `sudo` passed in, and the
+credential proxy's directories are made 0755 explicitly (BREAK-IT
+`installer-umask-077`).
 
 The supervisor owns the shared credential proxy and machine agent. It reads
 the existing Fleet task templates and runs each account's jobs as that account.

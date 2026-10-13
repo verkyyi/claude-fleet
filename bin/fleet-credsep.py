@@ -71,7 +71,7 @@ account is still created unless FLEET_CREDSEP_ROLE names one),
 FLEET_CREDSEP_TEST=1 (allow a non-root install into the sandbox),
 FLEET_CREDSEP_HOMES / FLEET_CREDSEP_USERS (plan: the homes dir, a `name:home` list).
 """
-import argparse, glob, grp, json, os, plistlib, pwd, re, shlex, shutil, subprocess, sys, time
+import argparse, glob, grp, json, os, plistlib, pwd, re, shlex, shutil, stat, subprocess, sys, time
 
 MAC = sys.platform == "darwin"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -165,12 +165,45 @@ def chown(path, user, follow=True):
     (os.chown if follow else os.lchown)(path, pw.pw_uid, pw.pw_gid)
 
 
+def mkdirs(path, mode=0o755):
+    """Each missing directory of path made with mode, never the caller's umask:
+    under `umask 077` os.makedirs left /usr/local/lib/claude-fleet 0700, the
+    role account could not reach its code and the shared proxy exited every
+    second (issue #4010, BREAK-IT installer-umask-077)."""
+    missing, p = [], os.path.abspath(path)
+    while not os.path.isdir(p):
+        missing.append(p)
+        p = os.path.dirname(p)
+    for d in reversed(missing):
+        try:
+            os.mkdir(d, mode)
+        except FileExistsError:
+            continue
+        os.chmod(d, mode)
+
+
+def lib_open():
+    """LIB's own parent (…/claude-fleet) when an earlier umask made it 0700 — the
+    role account walks through it to the code. Only that one directory, only
+    root's, only the read / search bits added (#4010)."""
+    d = os.path.dirname(LIB)
+    try:
+        st = os.lstat(d)
+    except OSError:
+        return
+    if (os.path.basename(d) == "claude-fleet" and stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()
+            and stat.S_IMODE(st.st_mode) & 0o055 != 0o055):
+        os.chmod(d, stat.S_IMODE(st.st_mode) | 0o055)
+
+
 def mkdir(path, mode, owner):
     if DRY:
         return
-    os.makedirs(path, exist_ok=True)
+    mkdirs(path)
     os.chmod(path, mode)
     chown(path, owner)
+    if path == LIB:
+        lib_open()
 
 
 def put(path, data, mode, owner):

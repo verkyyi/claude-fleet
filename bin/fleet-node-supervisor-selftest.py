@@ -714,6 +714,38 @@ class F_Trust(Sandbox):
 
 
 class G_DefaultTable(Sandbox):
+    def test_linux_node_agent_starts_with_no_login(self):
+        """#4010: a Linux machine that opens its own logins runs its node program
+        with none — the hub's first create comes down that very link; with account
+        ops off it waits for a logins/*.env as before; a Mac's table is unchanged."""
+        db = os.path.join(self.d, "db")
+        os.makedirs(os.path.join(db, "logins"))
+        menv = os.path.join(db, "machine.env")
+        old, mac = dict(os.environ), fns.MAC
+        try:
+            os.environ["FLEET_NODE_STATE"] = db
+            os.environ.pop("FLEET_NODE_TABLE", None)
+
+            def agent():
+                return [x for x in fns.default_table(fns.Paths())["children"] if x["name"] == "node-agent"][0]
+            fns.MAC = True
+            self.assertTrue(all(isinstance(r, str) for r in agent()["requires"]), "a Mac's requirements unchanged")
+            fns.MAC = False
+            with open(menv, "w") as f:
+                f.write("CCQUOTA_TOKEN=t\n")
+            self.assertTrue(fns.requires_missing(agent()), "account ops off: waits for a login")
+            with open(menv, "w") as f:
+                f.write("CCQUOTA_TOKEN=t\nFLEET_NODE_ACCOUNT_OPS=1\n")
+            self.assertEqual(fns.requires_missing(agent()), [], "account ops on: runs with none")
+            with open(menv, "w") as f:
+                f.write("CCQUOTA_TOKEN=t\nFLEET_NODE_ACCOUNT_OPS=0\n")
+            open(os.path.join(db, "logins", "alice.env"), "w").close()
+            self.assertEqual(fns.requires_missing(agent()), [], "a login: runs, as ever")
+        finally:
+            fns.MAC = mac
+            os.environ.clear()
+            os.environ.update(old)
+
     def test_default_table(self):
         e = dict(self.env)
         del e["FLEET_NODE_TABLE"]

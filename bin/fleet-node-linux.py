@@ -769,17 +769,47 @@ def compat_default(key, hub):
         return ''
 
 
+def hub_relay():
+    """The hub's credential relay as its desired state handed it down (issue
+    #4010): expected.json's cred_relay_url, written by `fleet node install` from
+    GET /v1/node/desired; '' when the hub has none (or it is not https)."""
+    p = Path(os.environ.get('FLEET_NODE_STATE', '/var/db/fleet-node')) / 'expected.json'
+    try:
+        v = json.loads(p.read_text()).get('cred_relay_url') or ''
+    except (OSError, ValueError, AttributeError):
+        return ''
+    return v.rstrip('/') if isinstance(v, str) and v.startswith('https://') and not any(
+        x in v for x in ('\n', '\r', ' ')) else ''
+
+
+def mkdirs(path, mode=0o755):
+    """Each missing directory of path made with mode, never the caller's umask
+    (issue #4010: `umask 077` left /usr/local/lib/claude-fleet 0700)."""
+    missing, p = [], Path(path).absolute()
+    while not p.is_dir():
+        missing.append(p)
+        p = p.parent
+    for d in reversed(missing):
+        try:
+            os.mkdir(d, mode)
+        except FileExistsError:
+            continue
+        os.chmod(d, mode)
+
+
 def route_settings(c, login, hub, relay):
     """root's <LIB>/<login>.conf route keys — hub, relay and their hosts — every
     other line kept. These are root-authored route settings; a tenant cannot
     redirect its token. LIB is the image's layer, so a recreated pod has none:
     route_heal writes them again at every start (issue #3421)."""
     lib = Path(c.LIB)
-    lib.mkdir(parents=True, exist_ok=True)
-    # No relay given (--relay / FLEET_CRED_RELAY_URL): none — the relay road is
-    # optional. The code names no relay of its own (issue #3577); a pod of ours
-    # rendered before render.py --relay keeps the old one for a version.
-    relay = relay or compat_default('FLEET_CRED_RELAY_URL', hub)
+    mkdirs(lib)
+    # No relay given (--relay / FLEET_CRED_RELAY_URL): the hub's, as it handed it
+    # down (expected.json, #4010 — a pod routing central has its own road), else
+    # none — the relay road is optional. The code names no relay of its own
+    # (issue #3577); a pod of ours rendered before render.py --relay keeps the
+    # old one for a version.
+    relay = relay or ('' if central_url() else hub_relay()) or compat_default('FLEET_CRED_RELAY_URL', hub)
     route = {'FLEET_HUB_URL': hub}
     if relay:
         route['FLEET_CRED_RELAY_URL'] = relay
@@ -1672,7 +1702,9 @@ def main():
             return 2
         return guarded(lambda: pod_etc(a))
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready'))
+    # route: every enrolled login's route settings again — the hub's relay to the
+    # logins opened before it had one (`fleet node install`'s 中转 step, #4010)
+    ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready', 'route'))
     # `none` (the image's default since #3526) or empty: no primary login.
     ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'none'))
     ap.add_argument('--uid', type=int, default=int(os.environ.get('FLEET_NODE_UID', '10002')))
@@ -1686,7 +1718,7 @@ def main():
     if pod_own() and a.action in ('boot', 'prepare'):
         ap.error('%s is a shared node\'s: a person\'s pod has no useradd to do' % a.action)
     return guarded(lambda: {'boot': boot, 'prepare': prepare, 'activate': activate, 'bootstrap': bootstrap,
-                            'foreground': foreground, 'live': probe, 'ready': probe}[a.action](a) or 0)
+                            'foreground': foreground, 'live': probe, 'ready': probe, 'route': route_heal}[a.action](a) or 0)
 
 
 def guarded(fn):

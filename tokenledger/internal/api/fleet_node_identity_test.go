@@ -373,3 +373,22 @@ func TestDesiredAbsentAddsNothing(t *testing.T) {
 		t.Fatalf("an unmanaged, untrusted node grew fields: %s", b)
 	}
 }
+
+// The hub's credential relay rides the machine's own desired read
+// (claude-fleet#4010): none configured adds nothing, byte for byte; one
+// configured reaches the machine, never the operator's view of the body.
+func TestDesiredCredRelayURL(t *testing.T) {
+	h := newFleetHarness(t)
+	_, out := joinWith(t, h, mintManaged(t, h, nil).Code, "linux-r", "root")
+	if resp, nb := getWithToken(t, h, "/v1/node/desired", out.Token); resp.StatusCode != 200 || strings.Contains(string(nb), "cred_relay_url") {
+		t.Fatalf("no relay: %d %s", resp.StatusCode, nb)
+	}
+	h.srv.CredRelayURL = "https://relay.example.com"
+	resp, nb := getWithToken(t, h, "/v1/node/desired", out.Token)
+	if resp.StatusCode != 200 || !strings.Contains(string(nb), `"cred_relay_url":"https://relay.example.com"`) {
+		t.Fatalf("relay: %d %s", resp.StatusCode, nb)
+	}
+	if code, b := operatorDo(t, h, http.MethodGet, FleetNodesPrefix+out.EndpointID+"/desired", nil); code != 200 || strings.Contains(string(b), "cred_relay_url") {
+		t.Fatalf("operator view: %d %s", code, b)
+	}
+}
