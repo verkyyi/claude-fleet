@@ -85,6 +85,10 @@ const entryHead = `<!doctype html>
 const entryTop = `<header class="top"><span class="brand"><img src="` + themePrefix + `logo.svg" alt="" width="28" height="28">ClaudeFleet</span>
 <span class="end">` + langSwitch + `<a class="home" href="/">` + arrowLeftIcon + `{{t "entry.site"}}</a></span></header>`
 
+// limitedPill says, above a way-in page's heading, that the hub is open to a
+// limited few for now (claude-fleet#4049).
+const limitedPill = `<span class="pill"><i></i>{{t "signin.pill"}}</span>`
+
 // The lucide icons the pages use, as lucide draws them.
 const (
 	arrowLeftIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>`
@@ -120,6 +124,8 @@ p{margin:0}
 .lead{margin:8px 0 28px;color:var(--muted-foreground)}
 .fine{margin-top:32px;text-align:center;font-size:14px;color:var(--muted-foreground)}
 .fine a{color:var(--muted-foreground)}
+.pill{display:inline-flex;align-items:center;gap:6px;width:max-content;margin-bottom:16px;padding:3px 10px;border:1px solid var(--fleet-clay-line);border-radius:9999px;background:var(--fleet-clay-soft);color:var(--fleet-clay);font-size:12px;line-height:1.5}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;height:48px;padding:0 24px;border:1px solid transparent;border-radius:9999px;font:500 14px/1 var(--fleet-font-ui);white-space:nowrap;text-decoration:none;cursor:pointer;transition:background-color .15s,color .15s,box-shadow .15s}
 .btn.primary{background:var(--primary);color:var(--primary-foreground)}
 .btn.primary:hover{background:color-mix(in oklab,var(--primary) 90%,transparent)}
