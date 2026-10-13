@@ -756,6 +756,8 @@ FLEET_NODE_SEAT                    switch: 1 on `fleet node install` moves the n
 FLEET_NODE_SEAT_AGENT              switch: 1 on `fleet node install` runs the node program as the seat too (install --seat --agent, #3669); 0 puts it back on root
 FLEET_NODE_SEAT_CMD                seam: a program run in place of each account-making command (seat_make, #3668)
 FLEET_NODE_SEAT_NAME               seam: the seat account's name (an existing user; default _fleetnode / fleetnode, #3668)
+FLEET_NODE_PASSWD                  test seam: a JSON {login: {uid, gid, home}} read instead of this machine's accounts (fleet-node-supervisor.py seat_ident, fleet-node-install.sh seat_there — #3810)
+FLEET_NODE_CORE_WAIT               pacing: seconds `fleet-node-core.py install` waits for the new core's socket to answer before it puts the old unit back (default 15, #3810)
 FLEET_NODE_SEATED                  seam: (FLEET_NODE_TEST only) this supervisor is the seated daemon (#3668)
 FLEET_NODE_SERVICE                 handoff: installer selects systemd or foreground supervision on Linux (#3022)
 FLEET_NODE_ACCOUNT_OPS             knob: 1 = a Linux managed machine's node program opens / closes its own logins for the hub (CapLoginJoin); machine.env, written by fleet node install on Linux (#3210)
