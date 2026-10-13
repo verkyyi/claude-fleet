@@ -13,6 +13,7 @@
 
 **先读**
 
+- [PRODUCT-DIRECTION.md](dev/PRODUCT-DIRECTION.md) — 产品方向与设计原则（后续设计的依据）
 - [ARCHITECTURE.md](dev/ARCHITECTURE.md) — 整体设计
 - [INSTALL.md](dev/INSTALL.md) — 安装 / 卸载步骤（CLAUDE.md 让 agent 照它装）
 - [TERMS.md](dev/TERMS.md) — 术语表

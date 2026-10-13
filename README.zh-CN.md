@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-**设计蓝图：**[Fleet 产品方向与设计原则](docs/PRODUCT-DIRECTION.md)是后续产品设计的依据。下文介绍当前实现。
+**设计蓝图：**[Fleet 产品方向与设计原则](docs/dev/PRODUCT-DIRECTION.md)是后续产品设计的依据。下文介绍当前实现。
 
 **用 AI 订阅，让小团队多任务并行、快速迭代。**
 
