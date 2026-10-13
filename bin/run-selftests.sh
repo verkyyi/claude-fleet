@@ -64,6 +64,11 @@
 #               costed over S seconds gets a slice of its own: it is dealt into an
 #               empty slice and nothing joins it, while a slice is left for the rest.
 #   --changed B run only the tests related to what changed since B (see below).
+#   --list-only (with --changed — issue #3871) run nothing: print the names of the
+#               tests the selection picked, one per line (no `select:` lines; the
+#               full-suite fallback prints every test, a change that maps to none
+#               prints nothing), exit 0. The nightly's miss analysis
+#               (bin/fleet-nightly-miss.sh) asks it of every merge.
 #   --quarantine LIST   (with --changed; the RELEASE TRAIN only — issue #3243) skip a
 #               test LIST holds in force (bin/fleet-train-quarantine.sh, the one
 #               reader) unless this change touches it; prints `QUARANTINED <test> …`.
@@ -188,6 +193,8 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
     for a in "$@"; do
       case "$a" in -*|*'*'*|*'?'*|*'['*|'') light=0 ;; esac
     done
+    # --list-only runs nothing (issue #3871): never a slot of the queue
+    for a in "$@"; do [ "$a" = --list-only ] && light=1; done
   fi
   heavy=''
   if [ "$light" = 0 ] && [ "${FLEET_HEAVY:-1}" != 0 ] && [ -x "$script_dir/fleet-heavy.sh" ]; then
@@ -243,7 +250,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
-retry_red=0 drill_flaky='' solo=0
+retry_red=0 drill_flaky='' solo=0 list_only=0
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -268,6 +275,7 @@ while [ "$#" -gt 0 ]; do
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
     --plan)  plan=1; shift; continue ;;
+    --list-only) list_only=1; shift; continue ;;
     --solo)  case "${2:-}" in ''|*[!0-9]*) echo "run-selftests: --solo needs whole seconds" >&2; exit 2 ;; esac
              solo=$2; shift 2; continue ;;
     --durations) [ "$#" -ge 2 ] && [ -n "$2" ] \
@@ -360,6 +368,9 @@ hunk_ranges() {
 
 # --quarantine / --prev-fails judge "does this change touch the test?", which only
 # --changed can answer — the train's options, never a PR's or the nightly's.
+if [ "$list_only" = 1 ] && [ -z "$changed_base" ]; then
+  echo "run-selftests: --list-only needs --changed <base> (it lists what a change selects)" >&2; exit 2
+fi
 if [ -n "$q_list$q_prev" ] && [ -z "$changed_base" ]; then
   echo "run-selftests: --quarantine / --prev-fails need --changed <base> (the release train's run)" >&2; exit 2
 fi
@@ -442,6 +453,7 @@ if [ -n "$changed_base" ]; then
     done
   fi
   if [ -n "$full_reason" ]; then
+    [ "$list_only" = 1 ] && { ls *-selftest.sh 2>/dev/null; exit 0; }
     printf 'select: * ← full suite (%s)\n' "$full_reason"
     set -- *-selftest.sh
   else
@@ -452,9 +464,11 @@ if [ -n "$changed_base" ]; then
     picks="$picks$always$(parts_of "$always")$nl"
     picks=$(printf '%s' "$picks" | awk -F '\t' 'NF && !seen[$1]++' | sort)
     if [ -z "$picks" ]; then
+      [ "$list_only" = 1 ] && exit 0
       echo 'select: (none) ← no change maps to a selftest'
       exit 0
     fi
+    [ "$list_only" = 1 ] && { printf '%s\n' "$picks" | cut -f1; exit 0; }
     printf '%s\n' "$picks" | awk -F '\t' '{ printf "select: %s ← %s\n", $1, $2 }'
     # shellcheck disable=SC2046  # intentional: test names carry no whitespace
     set -- $(printf '%s\n' "$picks" | cut -f1)

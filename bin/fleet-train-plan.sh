@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-train-plan.sh --base <rev> [--dir <repo>] [--prefix <name>] [--durations <table>]
+# fleet-train-plan.sh --base <rev> | --full [--dir <repo>] [--prefix <name>] [--durations <table>]
 #                     [--scale <x>] [--shards <N> | --min <N> --max <N> --target <s>]
 #                     [--factor <x>] [--floor <s>] [--slots <S>]
 #   — how wide one release train's test half runs, and how long a shard may take
@@ -42,17 +42,20 @@
 # shard of its own (run-selftests.sh --solo 75). One attempt's floor is 150 s
 # instead of 480. Also prints <prefix>_slots and <prefix>_solo_secs (75). Without
 # --slots every line is byte for byte as before.
+# --full — price the WHOLE suite instead of a --changed selection (the nightly,
+# .github/workflows/selftests-nightly.yml, issue #3871): the same widths and bounds.
 # FLEET_TRAIN_PLAN_CMD replaces `bash bin/run-selftests.sh` (the drill's seam).
 set -uo pipefail
 
 dir=. base='' prefix=plan dur='' scale=1 fixed='' min=12 max=20 target=360 factor=1.5 floor=480
-slots='' solo=''
+slots='' solo='' full=0
 # the Shenzhen pool (issue #3865): 75 s a shard, ≤ 44 wide, a node's 180 s to grow
 ACK_TARGET=75 ACK_CAP=44 ACK_GROW=180 ACK_FLOOR=150
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dir) dir=$2; shift 2 ;;
     --base) base=$2; shift 2 ;;
+    --full) full=1; shift ;;
     --prefix) prefix=$2; shift 2 ;;
     --durations) dur=$2; shift 2 ;;
     --scale) scale=$2; shift 2 ;;
@@ -67,7 +70,9 @@ while [ "$#" -gt 0 ]; do
     *) echo "fleet-train-plan: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
-[ -n "$base" ] || { echo "fleet-train-plan: --base <rev> is required" >&2; exit 2; }
+[ -n "$base" ] || [ "$full" = 1 ] || { echo "fleet-train-plan: --base <rev> (or --full) is required" >&2; exit 2; }
+# the selection: what changed since <base>, or every test
+sel='--changed'; [ "$full" = 1 ] && sel='' && base=''
 for v in "$min" "$max" "$target" "$floor" ${fixed:+"$fixed"} ${slots:+"$slots"}; do
   case "$v" in ''|*[!0-9]*|0) echo "fleet-train-plan: '$v' is not a positive whole number" >&2; exit 2 ;; esac
 done
@@ -83,7 +88,7 @@ plan_line() {
   if [ -n "${FLEET_TRAIN_PLAN_CMD:-}" ]; then cmd=$FLEET_TRAIN_PLAN_CMD
   else cmd="bash bin/run-selftests.sh"; fi
   # shellcheck disable=SC2086  # $cmd is a command and its arguments
-  (cd "$dir" && FLEET_HEAVY=0 $cmd --plan --changed "$base" --shard "1/$1" ${dur:+--durations "$dur"} ${solo:+--solo "$solo"} 2>/dev/null) \
+  (cd "$dir" && FLEET_HEAVY=0 $cmd --plan ${sel:+$sel "$base"} --shard "1/$1" ${dur:+--durations "$dur"} ${solo:+--solo "$solo"} 2>/dev/null) \
     | grep '^plan ' | tail -1
 }
 field() { printf '%s\n' "$1" | tr ' ' '\n' | sed -n "s/^$2=//p"; }
@@ -92,10 +97,10 @@ why=''
 first=$(plan_line 1)
 if [ -z "$first" ]; then
   # `select: (none)` exits before planning: nothing related to test
-  if (cd "$dir" && FLEET_HEAVY=0 ${FLEET_TRAIN_PLAN_CMD:-bash bin/run-selftests.sh} --changed "$base" --shard 1/1 --plan 2>/dev/null) | grep -q '^select: (none)'; then
+  if [ "$full" = 0 ] && (cd "$dir" && FLEET_HEAVY=0 ${FLEET_TRAIN_PLAN_CMD:-bash bin/run-selftests.sh} --changed "$base" --shard 1/1 --plan 2>/dev/null) | grep -q '^select: (none)'; then
     first='plan tests=0 total=0 shards=1 heaviest=0'
   else
-    why="could not price the selection against $base"
+    why="could not price the selection against ${base:-the whole suite}"
   fi
 fi
 
