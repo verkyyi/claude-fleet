@@ -2,6 +2,9 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
+**Product blueprint:** [Fleet product direction and design principles (中文)](docs/dev/PRODUCT-DIRECTION.md)
+guides future product decisions. The rest of this README describes the current implementation.
+
 **Use your AI subscriptions to move a small team's development tasks forward
 in parallel.**
 

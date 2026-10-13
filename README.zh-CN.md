@@ -2,6 +2,8 @@
 
 [English](README.md) | **简体中文**
 
+**设计蓝图：**[Fleet 产品方向与设计原则](docs/dev/PRODUCT-DIRECTION.md)是后续产品设计的依据。下文介绍当前实现。
+
 **用 AI 订阅，让小团队多任务并行、快速迭代。**
 
 claude-fleet 把 **Claude Code / Codex CLI、tmux、Git worktree 和 GitHub Issues** 串成一套开发工作流：一个任务对应一个会话、一份独立工作目录；功能、修复、测试和文档各自推进，你在统一看板里分派任务、查看进度，通过 PR 汇合成果。
