@@ -98,6 +98,7 @@
 #   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
 #                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
 #   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
+#   login-remove-uid-leftovers                      bin/fleet-login-remove.sh step 5b (#3508)
 #   spare-wash-no-fda                               bin/fleet-login-reset.sh wash → bin/fleet-login-remove-ssh.sh wash (#3508)
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
@@ -5289,6 +5290,20 @@ print(m.fda_line({"fda": {"ok": False, "program": "/x/Python"}}))' 2>&1)
   got=$(bash "$ROOT/bin/fleet-login-remove-ssh-selftest.sh" 2>&1) \
     || { WHY="fleet-login-remove-ssh-selftest.sh is red: $(printf '%s\n' "$got" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='守护读出自己没有完全磁盘访问 → status --check 4、医生 node 行 WARN 点名要授权的程序；没有完全磁盘访问时删号先走本机 ssh（强制命令只认 delete <登录名>），走不通说清原因再直删；dscl 被拒时删号脚本最后一行说清（真跑 shim 化的 remove）'
+  SECS=$(since "$t0")
+}
+
+# ---- login-remove-uid-leftovers (#3508): a deleted login's files outside its
+# home (/private/tmp, /Users/Shared, its tmux dir) stayed, and macOS gave its
+# uid to the next login it made — that login owned the last person's files.
+drill_login_remove_uid_leftovers() {
+  CAP=60; local t0
+  t0=$(now)
+  grep -q 'step 5b "remove what $LOGIN owns outside its home' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh no longer clears the uid's files outside the home before deleting it"; return 1; }
+  _login_remove_selftest \
+    || { WHY="fleet-login-remove-selftest.sh is red: $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  WHAT='删号前删掉这个 uid 在 /private/tmp · /private/var/tmp · /Users/Shared 里的文件（存档目录除外），uid 被下一个登录复用时它拿不到上一个人的东西（真跑 shim 化的删号）'
   SECS=$(since "$t0")
 }
 

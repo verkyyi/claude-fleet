@@ -319,6 +319,8 @@ run alice --archive-dir "$WORK/homes/alice/backup" --apply; [ "$RC" = 3 ] || fai
 has "$WORK/out" 'into itself' 'archive-into-itself refusal not explained'
 [ ! -s "$FLEET_TEST_LOG" ] || fail 'refusal ran a command'
 
+mkdir -p "$WORK/outside/tmp" "$WORK/outside/shared"
+export FLEET_LOGIN_REMOVE_OUTSIDE_DIRS="$WORK/outside/tmp $WORK/outside/shared"
 # Default apply: pool out, home archived (a real tar.gz, 600, without the
 # pool), login deleted with a plain -deleteUser, then the group cleanup.
 run alice --apply
@@ -329,6 +331,9 @@ has "$FLEET_TEST_LOG" 'launchctl bootout gui/602' 'GUI daemon not booted out'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'account was not deleted'
 not_has "$FLEET_TEST_LOG" 'keepHome' 'apply passed -keepHome'
 has "$FLEET_TEST_LOG" 'pkill -TERM -U 602' 'remaining processes were not stopped'
+# issue #3508: what the uid owns outside its home goes before the uid can be reused
+has "$FLEET_TEST_LOG" "sudo find $WORK/outside/tmp -xdev -mindepth 1 -path $ARCH -prune -o -user 602 -prune -exec rm -rf {} +" 'files of the uid in /private/tmp were not removed'
+has "$FLEET_TEST_LOG" "sudo find $WORK/outside/shared -xdev -mindepth 1 -path $ARCH -prune -o -user 602" 'files of the uid in /Users/Shared were not removed'
 has "$FLEET_TEST_LOG" "install -d -m 700 -o 501 $ARCH" 'archive dir not prepared'
 has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'home was not archived'
 has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist" 'node agent LaunchDaemon not booted out (#1700)'
