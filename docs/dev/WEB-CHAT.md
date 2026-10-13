@@ -190,7 +190,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 
 同一份源码打第二个版本：`npm run build:site`（`vite build --mode site`）—— `base: /chat/`，接口前缀换成入口的
 `/v1/chat`（`src/site.ts` 的 `SITE` / `API`），顶栏换成官网的（`src/SiteBar.tsx`：ClaudeFleet 字标、官网几页
-加亮「对话」、家 `机器 · 登录`、额度小条、头像），按钮是官网胶囊形（`theme.css` 里 `html[data-site]` 一行）。
+加亮「对话」、家的状态点（在线 / 连不上 / 维护中，不写机器名）、额度小条、头像——家 `机器 · 登录` 和「终端里接着用」那行默认不在页面上，收在头像菜单里），按钮是官网胶囊形（`theme.css` 里 `html[data-site]` 一行）。
 本机服务那份照旧是 `dist/`，不受影响。
 
 - **打包**：`bin/web-chat-pack.sh` 把官网版构建进 `tokenledger/web/dist/chat/`（gitignore，先清空）；
@@ -218,7 +218,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - `/compact` 失败，或者某一轮报「上下文太长」，就**接力**：新开一个 session，把旧 session 的结尾带进第一句里
   （包在 `<fleet-webchat-relay>` 里，页面上不显示），旧 id 记进 `chain`。页面把整条 chain 的记录连起来显示。
 - 这些都是 Claude Code 自己的记录（`~/.claude/projects/<目录>/<id>.jsonl`）。在终端里用
-  `cd <目录> && claude --resume <id>` 可以读到、接着用，页面底部写着这条命令。
+  `cd <目录> && claude --resume <id>` 可以读到、接着用：本机页面底部写着这条命令，官网 `/chat` 收在头像菜单里。
 
 ## 认证和凭据
 

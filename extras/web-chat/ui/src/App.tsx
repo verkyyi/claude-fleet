@@ -151,7 +151,7 @@ export function App() {
       <AssistantRuntimeProvider runtime={runtime}>
       <TooltipProvider>
         <div className="flex flex-col overflow-hidden" style={{ height: "var(--app-h, 100dvh)" }}>
-          {SITE ? <SiteBar logo={<Logo className="size-7 shrink-0" />} me={me} home={home} quota={quota} /> : <header className="border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pt-[calc(env(safe-area-inset-top)+0.6rem)] pb-2.5 backdrop-blur-md">
+          {SITE ? <SiteBar logo={<Logo className="size-7 shrink-0" />} me={me} home={home} quota={quota} resume={chat.resume} /> : <header className="border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pt-[calc(env(safe-area-inset-top)+0.6rem)] pb-2.5 backdrop-blur-md">
             <Logo className="size-7 shrink-0" />
             <h1 className="font-display text-[17px] leading-none font-semibold tracking-tight">fleet 对话</h1>
             {notice ? <span className="text-destructive ms-auto truncate text-sm">{notice}</span> : null}
@@ -160,7 +160,7 @@ export function App() {
           <main className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
             {gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
               <Thread autoFocus={false} placeholder={chat.budget ? "额度恢复后可以继续" : undefined}
-                components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ModelPicker, ComposerFooter: Resume, ComposerTop: QuotaBanner }} />
+                components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ModelPicker, ComposerFooter: SITE ? undefined : Resume, ComposerTop: QuotaBanner }} />
             )}
           </main>
         </div>
