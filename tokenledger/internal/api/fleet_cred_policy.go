@@ -32,7 +32,9 @@ import (
 //	                                    (endpoints.enrolled_host) — pinned at
 //	                                    enrollment and shared by every login of the
 //	                                    machine; never the heartbeat's hostname
-//	fleet.cred_allow.user.<principal>   principal = the stable principal ID (gh:<id>)
+//	fleet.cred_allow.user.<principal>   principal = the stable principal ID (gh:<id>),
+//	                                    or a service principal (svc:<name>,
+//	                                    claude-fleet#4085)
 //
 // The value is a JSON list of subscription IDs: a Claude account's UUID, or a
 // Codex `codex:account:<32 hex>` — what Vault.AccountUUID reads off the sealed
@@ -48,6 +50,12 @@ import (
 //     secret the hub cannot open) never matches a list: record it with
 //     /v1/fleet/credentials action=bind;
 //   - node policies exist but this endpoint's machine is unknown ⇒ denied.
+//
+// A service principal (svc:<name>, claude-fleet#4003) runs in the hub's own
+// cluster, not on a machine: no machine list applies to it, and its own list
+// is required in EVERY mode — no key ⇒ denied, even under legacy — so a
+// service uses only the subscriptions an administrator listed for it
+// (claude-fleet#4085).
 //
 // GitHub tokens are not subscriptions: no allowlist touches them.
 //
@@ -84,8 +92,9 @@ const (
 
 // credAllow is one scope's allowance.
 type credAllow struct {
-	All bool            // explicit grant, including future subscriptions
-	Set bool            // this scope requires an explicit match or all grant
+	All  bool // explicit grant, including future subscriptions
+	Set  bool // this scope requires an explicit match or all grant
+	None bool // Set with no key at all: nothing listed yet
 	Bad string          // the key's value does not parse: deny all
 	IDs map[string]bool // normalised subscription IDs
 }
@@ -135,7 +144,8 @@ func parseCredAllow(raw string) (map[string]bool, error) {
 func credAllowOf(settings map[string]string, key string) credAllow {
 	raw, ok := settings[key]
 	if !ok {
-		return credAllow{Set: settings[CredPolicyModeKey] != "legacy"}
+		set := settings[CredPolicyModeKey] != "legacy"
+		return credAllow{Set: set, None: set}
 	}
 	if raw == `"*"` {
 		return credAllow{Set: true, All: true}
@@ -152,6 +162,16 @@ func credNodeKey(machine string) string {
 	return CredAllowNodePrefix + strings.ToLower(firstLabel(machine))
 }
 func credUserKey(principal string) string { return CredAllowUserPrefix + principal }
+
+// credUserAllowOf is a principal's own allowance: a service's is required
+// whatever the mode (claude-fleet#4085), a person's follows the mode.
+func credUserAllowOf(settings map[string]string, principal string) credAllow {
+	a := credAllowOf(settings, credUserKey(principal))
+	if isSvcPrincipal(principal) && !a.Set {
+		a.Set, a.None = true, true
+	}
+	return a
+}
 
 // anyNodePolicy says whether some machine has an allowlist.
 func anyNodePolicy(settings map[string]string) bool {
@@ -182,13 +202,18 @@ func anyCredPolicy(settings map[string]string) bool {
 // credPolicyOf is the policy for machine ("" = unknown) and principal.
 func credPolicyOf(settings map[string]string, machine, principal string) credPolicy {
 	p := credPolicy{Machine: machine, Principal: principal}
+	if isSvcPrincipal(principal) {
+		// a service runs on no machine: its own list is the whole policy
+		p.Machine, p.User = "", credUserAllowOf(settings, principal)
+		return p
+	}
 	if machine != "" {
 		p.Node = credAllowOf(settings, credNodeKey(machine))
 	} else if anyNodePolicy(settings) {
 		p.NodeUnknown = true
 	}
 	if principal != "" {
-		p.User = credAllowOf(settings, credUserKey(principal))
+		p.User = credUserAllowOf(settings, principal)
 	}
 	return p
 }
@@ -205,14 +230,20 @@ func (p credPolicy) check(provider, uuid string) string {
 		return "this machine's identity is unknown (no enrolled name) and machine allowlists are in force"
 	}
 	u := normSubID(uuid)
+	who := "person " + p.Principal
+	if isSvcPrincipal(p.Principal) {
+		who = "service " + p.Principal
+	}
 	for _, sc := range []struct {
 		what string
 		a    credAllow
-	}{{"machine " + p.Machine, p.Node}, {"person " + p.Principal, p.User}} {
+	}{{"machine " + p.Machine, p.Node}, {who, p.User}} {
 		if !sc.a.Set || sc.a.All {
 			continue
 		}
 		switch {
+		case sc.a.None:
+			return sc.what + " has no allowlist: every subscription denied until one is set"
 		case sc.a.Bad != "":
 			return sc.what + "'s allowlist is malformed (" + sc.a.Bad + "): denied"
 		case len(sc.a.IDs) == 0:
@@ -389,9 +420,24 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
-	out := map[string]any{"nodes": nodes, "users": users,
+	// the service principals a list can be written for (claude-fleet#4085)
+	type service struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+	services := []service{}
+	sps, err := s.Store.SvcPrincipals()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, p := range sps {
+		services = append(services, service{ID: p.ID, Name: p.Name, Enabled: p.Enabled})
+	}
+	out := map[string]any{"nodes": nodes, "users": users, "services": services,
 		"mode":        settings[CredPolicyModeKey],
-		"semantics":   "unconfigured = denied in strict mode; all = explicit grant including future subscriptions; both machine and user must allow; legacy mode requires reviewed migration",
+		"semantics":   "unconfigured = denied in strict mode (a service, svc:<name>: denied in every mode, and no machine list applies to it); all = explicit grant including future subscriptions; both machine and user must allow; legacy mode requires reviewed migration",
 		"propagation": "central proxy ≤ 30 s; a node lease rechecks every " + credPolicyRecheck.String() + " while any list exists (older agents, and the first list ever set: ≤ 6 h); tokens already on a machine live to their own expiry"}
 
 	if settings[CredPolicyModeKey] == "legacy" {
@@ -494,10 +540,21 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 		key, audit.Hostname = credNodeKey(req.ID), strings.ToLower(firstLabel(req.ID))
 	case "user":
 		if !principalKeyRE.MatchString(req.ID) || req.ID == store.PoolPrincipal {
-			httpError(w, http.StatusBadRequest, "user scope needs id: a principal ID (gh:<id>)")
+			httpError(w, http.StatusBadRequest, "user scope needs id: a principal ID (gh:<id>, or svc:<name> for a service)")
 			return
 		}
-		if _, err := s.Store.Principal(req.ID); err != nil {
+		if isSvcPrincipal(req.ID) {
+			// a service principal (claude-fleet#4085): it must exist; a
+			// disabled one may still be listed ahead of its re-enable
+			if _, err := s.Store.SvcPrincipal(req.ID); err != nil {
+				if errors.Is(err, store.ErrNoSvcPrincipal) {
+					httpError(w, http.StatusBadRequest, "unknown principal "+req.ID+" (no such service: POST /v1/fleet/svc creates one)")
+				} else {
+					httpError(w, http.StatusInternalServerError, err.Error())
+				}
+				return
+			}
+		} else if _, err := s.Store.Principal(req.ID); err != nil {
 			// Administrators can authorize an invited user before their first login.
 			known := false
 			if isPerson(req.ID) {
@@ -630,6 +687,9 @@ func (s *Server) credPolicyEmptied(scope, id string, settings map[string]string,
 	}
 	after := map[string]string{key: value, CredPolicyModeKey: settings[CredPolicyModeKey]}
 	oldA, newA := credAllowOf(settings, key), credAllowOf(after, key)
+	if scope == "user" {
+		oldA, newA = credUserAllowOf(settings, id), credUserAllowOf(after, id)
+	}
 	before, kept := map[string][]string{}, map[string]bool{}
 	for _, c := range rows {
 		if c.Provider == credvault.GitHub {
@@ -649,6 +709,9 @@ func (s *Server) credPolicyEmptied(scope, id string, settings map[string]string,
 	who := "machine " + strings.ToLower(firstLabel(id))
 	if scope == "user" {
 		who = "person " + id
+		if isSvcPrincipal(id) {
+			who = "service " + id
+		}
 	}
 	var lost []string
 	for _, p := range sessionCredProviders {

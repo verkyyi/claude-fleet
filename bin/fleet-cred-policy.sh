@@ -13,7 +13,7 @@
 # effective = eligible (the person's own + the shared pool, after revocation,
 # trust and separation) ∩ the machine's list ∩ the person's list. An OS login
 # is not a third list: it uses its hub owner's. <id> is a machine name (node)
-# or a principal ID such as gh:2718137 (user). A subscription ID is a Claude
+# or a principal ID such as gh:2718137 or svc:livepage (user — a service, #4085). A subscription ID is a Claude
 # account UUID or a Codex codex:account:<32 hex> — `effective` prints each
 # account's; an account label never matches. A credential with no recorded
 # UUID matches no list (record one: POST /v1/fleet/credentials action=bind).

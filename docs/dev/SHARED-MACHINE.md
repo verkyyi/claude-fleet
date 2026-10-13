@@ -216,6 +216,15 @@ an administrator reviews and activates the migration. Both grants live on the hu
   never more than the admin who minted it; minted with the operator's own token
   = all. The machine's list still applies; a list written for the drill wins
   (issue #3440).
+- **A service principal** (`svc:<name>`, issue #4003 — a hub-cluster run,
+  not a machine) has only its own list, under the person key
+  (`fleet-cred-policy.sh set user svc:livepage <uuid> …`, `all user svc:…`):
+  no machine list applies to it, and with no list it may use nothing — in
+  EVERY mode, legacy too. Only an administrator writes it (the same admin-only
+  `PUT /v1/fleet/cred-policy`); a name no service holds is refused 400. The
+  admin console's 订阅池 → 谁能用 lists the services as their own group, one
+  switch each (an `all` rule is shown, not switched). `GET` answers them as
+  `services` (issue #4085).
 - **Where.** One resolver in the hub: the node lease (a forbidden account is
   answered as `withdrawn`, and the agent removes its copy — on a shared proxy
   from that login's index only, `fleet-cred-proxy.py unstore`), the pool

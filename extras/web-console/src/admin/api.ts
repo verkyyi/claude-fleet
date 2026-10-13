@@ -92,7 +92,10 @@ export type Me = { role?: string; person?: string; name?: string; login?: string
 
 // cred-policy (claude-fleet#3713): who may use which subscription.
 export type PolicyEntry = { id: string; allow: string[]; all?: boolean; error?: string };
-export type PolicyView = { mode?: "legacy" | "strict"; users?: PolicyEntry[]; nodes?: PolicyEntry[] };
+// services: the service principals (svc:<name>) a list can be written for —
+// their lists are users entries keyed svc:<name> (claude-fleet#4085).
+export type PolicyService = { id: string; name: string; enabled: boolean };
+export type PolicyView = { mode?: "legacy" | "strict"; users?: PolicyEntry[]; nodes?: PolicyEntry[]; services?: PolicyService[] };
 export type Credential = { provider: string; account: string; account_uuid?: string; principal_id?: string };
 export type Limits = { per_account?: { account_uuid?: string; limits?: Record<string, any> }[] };
 

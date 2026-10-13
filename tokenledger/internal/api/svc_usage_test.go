@@ -217,6 +217,13 @@ func svcPassFor(t *testing.T, h *harness, tenant, run string) string {
 	_, _ = rand.Read(rnd[:])
 	now := time.Now().Truncate(time.Second)
 	worker := "svc/" + run + "/a1"
+	// a service uses only what is listed for it (claude-fleet#4085): these
+	// tests are about budgets and yield, so list the whole pool once
+	if set, _ := h.srv.Store.FleetSettings(); set[credUserKey("svc:livepage")] == "" {
+		if err := h.srv.Store.SetFleetSetting(credUserKey("svc:livepage"), `"*"`, now); err != nil {
+			t.Fatal(err)
+		}
+	}
 	c := sessionCredClaims{V: 1, ID: "sc_" + hex.EncodeToString(rnd[:]), Principal: "svc:livepage", WorkerID: worker,
 		Machine: "svc-run", Providers: []string{credvault.Claude}, Iat: now.Unix(), Exp: now.Add(time.Hour).Unix(),
 		Svc: "livepage", Tenant: tenant, Run: run}

@@ -336,7 +336,8 @@ export function leasesOf(live: LiveSession[], id: string, users: HubUser[]): Lea
 
 // ---- who may use a subscription (cred-policy, claude-fleet#3713) ----
 
-export type Target = { scope: "user" | "node"; id: string; label: string; error?: string };
+// service: a service principal (svc:<name>) — written as a user scope, shown apart (claude-fleet#4085).
+export type Target = { scope: "user" | "node"; id: string; label: string; error?: string; service?: boolean };
 export type Grant = Target & {
   entry?: PolicyEntry;
   allowed: boolean;
@@ -357,6 +358,9 @@ export function userTargets(view: PolicyView, users: HubUser[], admins: { login:
     const id = a.github_id ? `gh:${a.github_id}` : "";
     if (id && !out.has(id)) out.set(id, { scope: "user", id, label: a.login || id });
   }
+  // a service's list is a users entry too: it is listed as a service, not a person
+  for (const s of view.services || []) out.set(s.id, { scope: "user", id: s.id, label: s.name, service: true });
+  for (const [id, x] of out) if (id.startsWith("svc:") && !x.service) out.set(id, { ...x, label: id.slice(4), service: true });
   return [...out.values()];
 }
 
@@ -365,7 +369,8 @@ export function userTargets(view: PolicyView, users: HubUser[], admins: { login:
 export function grantOf(view: PolicyView, t: Target, uuid: string): Grant {
   if (t.error) return { ...t, allowed: false, why: "unknown" };
   const entry = entryOf(view, t.scope, t.id);
-  if (!entry) return view.mode === "legacy" ? { ...t, allowed: true, why: "legacy" } : { ...t, allowed: false, why: "notConfigured" };
+  // a service has no legacy grant: with no list it may use nothing, in every mode
+  if (!entry) return view.mode === "legacy" && !t.service ? { ...t, allowed: true, why: "legacy" } : { ...t, allowed: false, why: "notConfigured" };
   if (entry.error) return { ...t, entry, allowed: false, why: "invalid" };
   if (entry.all) return { ...t, entry, allowed: true, why: "viaAll" };
   if (uuid && entry.allow.includes(uuid)) return { ...t, entry, allowed: true, why: "viaSelected" };
