@@ -377,6 +377,12 @@ func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e
 	if mobileBrowser(r) {
 		page.Mode = "mobile"
 	}
+	if r.Method == http.MethodHead {
+		// Headers only: no code is asked of WeChat for nobody to see.
+		entryHeaders(w, loc)
+		w.Header().Set("Content-Security-Policy", signinScanCSP)
+		return
+	}
 	var c *store.WxScene
 	if n, err := strconv.ParseInt(r.URL.Query().Get("s"), 10, 64); err == nil && e == "" {
 		if got, _ := s.Store.WxSceneOf(n); got != nil && got.Purpose == wxPurposeLogin && got.QRURL != "" &&
@@ -405,9 +411,6 @@ func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e
 	w.Header().Set("Content-Security-Policy", signinScanCSP)
 	w.Header().Add("Vary", "Accept-Language, Cookie, User-Agent")
 	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodHead {
-		return
-	}
 	if t, err := signinScanTmpl.Clone(); err == nil {
 		_ = t.Funcs(pageFuncs(loc)).Execute(w, page)
 	}
