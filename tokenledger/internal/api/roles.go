@@ -50,6 +50,9 @@ var routeAccess = map[string]string{
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/auth/wechat/start": accessPublic, "/auth/wechat/callback": accessPublic, "/auth/wechat/bind": accessPublic,
 	"/auth/email/start": accessPublic, "/auth/email/link": accessPublic, "/auth/email/code": accessPublic,
+	// The applicant note (ccq_applicant) is its own credential, read only
+	// here (claude-fleet#4051).
+	ApplyPath: accessSelf, ApplyEditPath: accessSelf, ApplyWithdrawPath: accessSelf,
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/readyz": accessPublic, "/v1/deploy-probe": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,

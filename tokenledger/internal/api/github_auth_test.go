@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -380,11 +381,8 @@ func TestGitHubSignIn_SignedOutBrowserGoesToSignin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer page.Body.Close()
-	buf := new(strings.Builder)
-	b := make([]byte, 32<<10)
-	n, _ := page.Body.Read(b)
-	buf.Write(b[:n])
-	if page.StatusCode != http.StatusOK || !strings.Contains(buf.String(), `href="/auth/github/start"`) {
+	b, _ := io.ReadAll(page.Body)
+	if page.StatusCode != http.StatusOK || !strings.Contains(string(b), `href="/auth/github/start"`) {
 		t.Errorf("/signin = %d, no Continue with GitHub link", page.StatusCode)
 	}
 }

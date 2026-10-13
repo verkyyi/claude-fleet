@@ -492,6 +492,11 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/auth/email/start", s.handleEmailStart)
 	mux.HandleFunc("/auth/email/link", s.handleEmailLink)
 	mux.HandleFunc("/auth/email/code", s.handleEmailCode)
+	// 申请 (claude-fleet#4051): a person the list does not name asks to be
+	// let in; 404 when no way in is configured.
+	mux.HandleFunc(ApplyPath, s.handleApply)
+	mux.HandleFunc(ApplyEditPath, s.handleApplyEdit)
+	mux.HandleFunc(ApplyWithdrawPath, s.handleApplyWithdraw)
 	// Who may sign in with GitHub (claude-fleet#1986): the admin's, with or
 	// without the fleet module.
 	mux.Handle("/v1/fleet/users", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetUsers))))
