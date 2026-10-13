@@ -6,6 +6,8 @@
 #   site-build.sh --out <dir>     the same, into <dir> (the selftest's sandbox)
 #   site-build.sh --drill <file>  the live drill's result (default site/drill.json)
 #   site-build.sh --now <YYYY-MM-DD>   judge the drill's age against this day (tests)
+#   site-build.sh --fonts         first cut the fonts to the pages' characters
+#                                 (fontTools; issue #3799), then build
 #
 # One template, one string table per language, nothing typed twice:
 #
@@ -17,6 +19,11 @@
 #                                 JSON-LD are one list, word for word (check-html)
 #   site/assets/                  logo, icons, share cards (bin/site-images.sh makes
 #                                 the PNGs once), self-hosted Latin font subsets (OFL)
+#   site/fonts-src/               the fonts as published; --fonts cuts each to the
+#                                 characters both pages carry (Plex Sans fixed at
+#                                 400 / 500 / 600 from its variable font) into
+#                                 site/assets/fonts/ and lists them in glyphs.txt —
+#                                 every build fails on a page character not in it
 #
 # Output (gitignored, built into the hub image by hub-deploy like the docs):
 #
@@ -82,6 +89,7 @@ OUT="$REPO/tokenledger/web/site"
 DOCS="$REPO/docs/public"
 DRILL=""
 NOW=""
+FONTS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) [ $# -ge 2 ] || { echo "site-build: --out needs a directory" >&2; exit 2; }; OUT="$2"; shift 2 ;;
@@ -89,17 +97,18 @@ while [ $# -gt 0 ]; do
     --docs) [ $# -ge 2 ] || { echo "site-build: --docs needs a directory" >&2; exit 2; }; DOCS="$2"; shift 2 ;;
     --drill) [ $# -ge 2 ] || { echo "site-build: --drill needs a file" >&2; exit 2; }; DRILL="$2"; shift 2 ;;
     --now) [ $# -ge 2 ] || { echo "site-build: --now needs YYYY-MM-DD" >&2; exit 2; }; NOW="$2"; shift 2 ;;
-    -h|--help) sed -n '2,72p' "$0"; exit 0 ;;
+    --fonts) FONTS=1; shift ;;
+    -h|--help) sed -n '2,79p' "$0"; exit 0 ;;
     *) echo "site-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 [ -f "$SITE/template.html" ] || { echo "site-build: no $SITE/template.html" >&2; exit 2; }
 [ -n "$DRILL" ] || DRILL="$SITE/drill.json"
 
-exec python3 - "$SITE" "$OUT" "$DOCS" "$DRILL" "$NOW" "$REPO" <<'PY'
+exec python3 - "$SITE" "$OUT" "$DOCS" "$DRILL" "$NOW" "$REPO" "$FONTS" <<'PY'
 import datetime, html, json, math, os, re, shutil, subprocess, sys, tempfile
 
-SITE, OUT, DOCS, DRILL, NOW, REPO = sys.argv[1:7]
+SITE, OUT, DOCS, DRILL, NOW, REPO, FONTS = sys.argv[1:8]
 LANGS = (('zh', ''), ('en', 'en'))   # language · its directory under OUT
 STALE_DAYS = 7
 REPO_URL = 'https://github.com/verkyyi/claude-fleet'
@@ -290,6 +299,79 @@ for lang, sub_dir in LANGS:
     check_seconds(lang, page, allowed)
     pages[lang] = (sub_dir, page)
 
+if errs:
+    for e in errs:
+        print('site-build: ' + e, file=sys.stderr)
+    sys.exit(1)
+
+# --- the fonts (issue #3799) -------------------------------------------------
+# Each served font is cut down to the characters the two pages carry, so a slow
+# phone fetches ~55 KB of fonts instead of ~95 KB. The cut is made by --fonts
+# (fontTools) from site/fonts-src/ and committed; every build checks it still
+# covers both pages, or a new word would fall back to the system font unseen.
+FONT_SRC = os.path.join(SITE, 'fonts-src')
+GLYPHS = os.path.join(FONT_SRC, 'glyphs.txt')
+FONT_CUTS = (   # served file · its source · the weight a variable source is fixed at
+    ('ibm-plex-sans-400-latin.woff2', 'ibm-plex-sans-var-latin.woff2', 400),
+    ('ibm-plex-sans-500-latin.woff2', 'ibm-plex-sans-var-latin.woff2', 500),
+    ('ibm-plex-sans-600-latin.woff2', 'ibm-plex-sans-var-latin.woff2', 600),
+    ('ibm-plex-mono-400-latin.woff2', 'ibm-plex-mono-400-latin.woff2', None),
+    ('ibm-plex-mono-500-latin.woff2', 'ibm-plex-mono-500-latin.woff2', None),
+    ('bricolage-grotesque-600-latin.woff2', 'bricolage-grotesque-600-latin.woff2', None),
+    ('bricolage-grotesque-800-latin.woff2', 'bricolage-grotesque-800-latin.woff2', None),
+)
+
+def font_range(page):
+    # The @font-face unicode-range (one list, every face): only these characters
+    # are ever drawn with our fonts — the rest is the system's (中文 included).
+    m = re.search(r'unicode-range:([^;}]+)', page)
+    spans = []
+    for part in (m.group(1).split(',') if m else []):
+        a, _, b = part.strip()[2:].partition('-')
+        spans.append((int(a, 16), int(b or a, 16)))
+    return spans
+
+def page_chars():
+    spans = font_range(pages['en'][1])
+    chars = set(range(0x20, 0x7f))   # all of printable ASCII, used or not
+    for _, page in pages.values():
+        chars |= {ord(c) for c in html.unescape(page)
+                  if ord(c) >= 0x20 and any(a <= ord(c) <= b for a, b in spans)}
+    return chars
+
+if FONTS:
+    try:
+        from fontTools import subset
+        from fontTools.ttLib import TTFont
+        from fontTools.varLib import instancer
+        import brotli   # noqa: F401 — woff2
+    except ImportError:
+        print('site-build: --fonts needs fontTools + brotli (pip install fonttools brotli)', file=sys.stderr)
+        sys.exit(2)
+    chars = page_chars()
+    for name, src, wght in FONT_CUTS:
+        f = TTFont(os.path.join(FONT_SRC, src))
+        if wght is not None:
+            f = instancer.instantiateVariableFont(f, {'wght': wght})
+        o = subset.Options()
+        o.flavor, o.layout_features, o.name_IDs, o.notdef_outline = 'woff2', ['*'], ['*'], True
+        s = subset.Subsetter(o)
+        s.populate(unicodes=chars)
+        s.subset(f)
+        f.flavor = 'woff2'
+        f.save(os.path.join(SITE, 'assets', 'fonts', name))
+    with open(GLYPHS, 'w', encoding='utf-8') as fh:
+        fh.write(''.join(chr(c) for c in sorted(chars)) + '\n')
+    print('site-build: fonts cut to %d characters → site/assets/fonts/' % len(chars))
+
+have = set(open(GLYPHS, encoding='utf-8').read().rstrip('\n')) if os.path.isfile(GLYPHS) else set()
+lack = sorted(chr(c) for c in page_chars() if chr(c) not in have)
+if lack:
+    errs.append('the fonts lack %s (on the page now): run bin/site-build.sh --fonts (needs fontTools)'
+                % ' '.join('U+%04X %s' % (ord(c), c) for c in lack))
+for name, _, _ in FONT_CUTS:
+    if not os.path.isfile(os.path.join(SITE, 'assets', 'fonts', name)):
+        errs.append('site/assets/fonts/%s is missing: run bin/site-build.sh --fonts' % name)
 if errs:
     for e in errs:
         print('site-build: ' + e, file=sys.stderr)

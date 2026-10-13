@@ -169,6 +169,22 @@ if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'not a drill result'; then ok
 else bad "G the build took an unmeasured number of seconds (rc $rc): $out"; fi
 [ ! -e "$T/g/index.html" ] || bad "G a refused build still wrote its pages"
 
+# K — the fonts are cut to the pages' characters (issue #3799): every face the
+# page names is a built file, and a new character the cut lacks fails the build
+missing="$(grep -o 'url(/site/fonts/[^)]*)' "$T/a/index.html" | sed 's#url(/site/##; s#)$##' | sort -u |
+  while read -r f; do [ -f "$T/a/$f" ] || echo "$f"; done)"
+[ -z "$missing" ] && ok "K every @font-face file is built" || bad "K a face names a missing file: $missing"
+mkdir -p "$T/ksite" && cp -RL "$ROOT/site/." "$T/ksite/"
+python3 - "$T/ksite/strings.en.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p, encoding='utf-8'))
+d['fine'] = d['fine'] + ' · café'
+json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
+PY
+out="$("$BUILD" --site "$T/ksite" --out "$T/k" --drill "$T/none.json" --now "$NOW" 2>&1)"; rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'the fonts lack U+00E9'; then ok "K a character the font cut lacks (é) fails the build"
+else bad "K the build took a character its fonts lack (rc $rc): $out"; fi
+
 # J — robots.txt · sitemap.xml · llms.txt · llms-zh.txt · llms-full.txt
 "$ROOT/bin/docs-build.sh" --out "$T/docs" >/dev/null 2>"$T/docs.err" || bad "J docs-build failed: $(cat "$T/docs.err")"
 mkdir -p "$T/jdocs" && cp -RL "$ROOT/docs/public/." "$T/jdocs/"
