@@ -654,32 +654,9 @@ jobs:
         run: |
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[]' > jobs.ndjson \
             || { echo "::warning::could not read this run's jobs — publishing without the ledger"; exit 0; }
-          python3 - > train.json <<'PY' || { echo "::warning::no ledger: $(cat train.json)"; rm -f train.json; }
-          import json, os, datetime
-          jobs = [json.loads(l) for l in open("jobs.ndjson") if l.strip()]
-          def ts(s):
-              return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ") if s else None
-          now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None, microsecond=0)
-          stages, queue = {}, []
-          for j in jobs:
-              a = ts(j.get("started_at"))
-              if a is None or j.get("conclusion") == "skipped":
-                  continue
-              b = ts(j.get("completed_at")) or now   # this job: still running
-              stage = (j.get("name") or "").split(" / ")[0]   # "Linux / shard 3" -> Linux
-              lo, hi = stages.get(stage, (a, b))
-              stages[stage] = (min(lo, a), max(hi, b))
-              if stage == "macOS" and ts(j.get("created_at")):
-                  queue.append(round((a - ts(j["created_at"])).total_seconds(), 1))
-          iso = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
-          print(json.dumps({
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "prev_sha": os.environ.get("STABLE_SHA", ""),
-              "merges": [{"sha": m["sha"], "merged_at": m["committed"]} for m in json.loads(os.environ.get("MERGES") or "[]")],
-              "stages": [{"name": n, "started_at": iso(a), "ended_at": iso(b)} for n, (a, b) in sorted(stages.items(), key=lambda kv: kv[1][0])],
-              "macos_queue_secs": queue,
-          }))
-          PY
+          # the same builder as the ledger job's (bin/fleet-train-ledger.py, #3870)
+          python3 bin/fleet-train-ledger.py build --jobs jobs.ndjson --run-id "$GITHUB_RUN_ID" --sha "$TRAIN_SHA" \
+            --prev "$STABLE_SHA" > train.json || { echo "::warning::no ledger: $(cat train.json)"; rm -f train.json; }
           [ ! -s train.json ] || python3 -c 'import json; d=json.load(open("train.json")); print("ledger: %d merge(s), stages %s" % (len(d["merges"]), ", ".join(s["name"] for s in d["stages"])))'
 
       # The Mac lane's first value (issue #3869): this train's move no longer asks
@@ -746,8 +723,9 @@ jobs:
         run: |
           set +e
           # node tools / node image (#3855) build the node image beside the
-          # release, never gate it: a registry hiccup does not hold stable back
-          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image'
+          # release, never gate it: a registry hiccup does not hold stable back;
+          # nor does the ledger (#3870), which waits for this job
+          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image' --ignore-check ledger
           # a Linux shard whose cluster runner went away and that `Linux rescue`
           # reran green (issue #3864): its red job is not this train's verdict
           for k in $(printf '%s' "$LOST" | tr -c '0-9' ' '); do set -- "$@" --ignore-check "Linux / shard $k"; done
@@ -761,6 +739,65 @@ jobs:
           fi
           [ "$rc" != 0 ] || echo "moved=true" >> "$GITHUB_OUTPUT"
           exit $rc
+
+  ledger:
+    # Every run into the hub's ledger, shipped or not (issue #3870, EPIC #3863 C7 —
+    # 共同约定 7): until #3870 only `release` wrote one, as its publish's `train`
+    # part, so a red, cancelled or overtaken train left nothing and the board could
+    # not say where it stuck. This runs after everything else (if: always(), so a
+    # run 红灯即停 cancelled writes its row too), folds this run's jobs into stages
+    # (bin/fleet-train-ledger.py build — the release step's own builder), names the
+    # first FAIL test off the shards' train-result-* artifacts, POSTs it to
+    # /v1/fleet/release/train with this run's OIDC, and puts the hub's 「卡在…」 line
+    # on the summary. Bookkeeping: it never reds — a red here would stop
+    # mac-follow (it follows only a green train) — and the move ignores it.
+    name: ledger
+    needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, record, fail-fast, gate, train, hub-plan, hub, release]
+    if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read     # this run's jobs and its train-result-* artifacts
+      id-token: write   # the ledger's OIDC token (audience ccquota-fleet-release)
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
+      MERGES: ${{ needs.board.outputs.merges_json }}
+      MOVED: ${{ needs.release.outputs.moved }}
+      RESULTS: ${{ needs.quarantine.result }} ${{ needs.plan.result }} ${{ needs.linux.result }} ${{ needs.record.result }} ${{ needs.gate.result }} ${{ needs.train.result }} ${{ needs.hub-plan.result }} ${{ needs.hub.result }}
+      RELEASE: ${{ needs.release.result }}
+      FLEET_HUB_URL: https://claudefleet.24haowan.com   # oss-ok: the hub the train publishes to, as the release job spells it (#3870)
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout: bin/fleet-train-ledger.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: train-result-*
+          path: results
+      - name: the run into the ledger
+        run: |
+          # moved ⇒ shipped · release green but no move ⇒ overtaken (superseded) ·
+          # any stage red ⇒ failure · else (红灯即停 / a person cancelled) cancelled
+          case " $RESULTS $RELEASE " in
+            (*' failure '*) concl=failure ;;
+            (*) concl=cancelled ;;
+          esac
+          [ "$RELEASE" != success ] || concl=superseded
+          [ "$MOVED" != true ] || concl=success
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[]' > jobs.ndjson \
+            || { echo "::warning::could not read this run's jobs — no ledger row"; exit 0; }
+          python3 bin/fleet-train-ledger.py build --jobs jobs.ndjson --results results --run-id "$GITHUB_RUN_ID" \
+            --sha "$TRAIN_SHA" --prev "$STABLE_SHA" --conclusion "$concl" --exclude ledger > run.json \
+            || { echo "::warning::no ledger row: $(cat run.json)"; exit 0; }
+          python3 -c 'import json; d=json.load(open("run.json")); print("run %s: %s · %s" % (d["run_id"], d["conclusion"], ", ".join(s["name"] for s in d["stages"])))'
+          python3 bin/fleet-train-ledger.py post run.json --hub "$FLEET_HUB_URL" --summary "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning::the hub did not take this run's ledger row (the board misses it; nothing else does)"
 
   node-tools:
     # The managed node image's `tools` stage (extras/managed-node/Dockerfile),

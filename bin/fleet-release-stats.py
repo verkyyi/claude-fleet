@@ -19,6 +19,15 @@ days (default 7):
 then each stage's median / p90 and the last few trains. A publish without a
 train (from before the train) is in none of it.
 
+A hub that keeps every run (claude-fleet#3870) adds, shipped or not:
+
+    合并到 stable            median / slowest tenth from a merge to the stable
+                             that carries it
+    开跑后发出去             shipped of started · one train's median
+
+and each run's line — 「卡在 X 段：N 秒，原因」 for one past 5 minutes or one
+that shipped nothing (the hub's rule, the /trains page's words).
+
 Reads GET /v1/fleet/release/stats — the operator's: auth and hub as `fleet hub`
 (CCQUOTA_VIEWER_TOKEN, else FLEET_HUB_SESSION; --hub, else the configured hub).
 `--from <file>` reads that answer from a file instead (the selftest's seam).
@@ -74,6 +83,40 @@ def when(iso):
         return iso[:16]
 
 
+def ms(s):
+    """seconds as 3 分 05 秒 — a train's own scale."""
+    if s is None:
+        return "—"
+    n = int(round(s))
+    return "%d 分 %02d 秒" % (n // 60, n % 60) if n >= 60 else "%d 秒" % n
+
+
+RUN_WORD = {"success": "已发", "superseded": "已被超越", "failure": "没发", "cancelled": "没发（取消）"}
+
+
+def runs_lines(st):
+    """What the hub's run ledger adds (claude-fleet#3870); nothing on an older hub."""
+    if "runs_started" not in st:
+        return []
+    out = ["  " + pad("合并到 stable") + "中位 %s · 最慢一成 %s · %d 个合并"
+           % (ms(st.get("merge_to_stable_p50")), ms(st.get("merge_to_stable_p95")), st.get("merge_to_stable_n") or 0),
+           "  " + pad("开跑后发出去") + "%d/%d · 一趟中位 %s"
+           % (st.get("runs_shipped") or 0, st.get("runs_started") or 0, ms(st.get("run_p50_secs")))]
+    runs = (st.get("runs") or [])[:10]
+    if runs:
+        out.append("每一趟（超过 5 分钟或没发的，说出卡在哪段）")
+        for r in runs:
+            line = "  %s  %s  %s  %s" % (str(r.get("sha", ""))[:7], when(r.get("started_at")),
+                                         RUN_WORD.get(r.get("conclusion"), r.get("conclusion") or "?"), ms(r.get("total_secs")))
+            b = r.get("bottleneck")
+            if b and b.get("stage"):
+                line += "  卡在「%s」：%s——%s" % (b["stage"], ms(b.get("secs")), b.get("why") or "")
+            elif b:
+                line += "  没发出：%s" % (b.get("why") or "")
+            out.append(line)
+    return out
+
+
 def pad(label, width=26):
     # CJK counts two columns
     w = sum(2 if ord(c) > 0x2e80 else 1 for c in label)
@@ -100,6 +143,7 @@ def render(st):
     q = st.get("macos_queue") or {}
     out.append("  " + pad("macOS 测试排队") + "中位 %s · p90 %s · %d 次"
                % (dur(q.get("median_secs")), dur(q.get("p90_secs")), q.get("n") or 0))
+    out.extend(runs_lines(st))
     stages = st.get("stages") or []
     if stages:
         out.append("各段耗时（中位 / p90）")

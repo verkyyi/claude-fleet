@@ -43,6 +43,9 @@ var adminPageRoutes = []struct{ path, id, file string }{
 	{"/admin/sessions", "all-sessions", "admin/sessions.html"},
 	{"/admin/overview", "by-person", "admin/overview.html"},
 	{"/admin/devices", "all-devices", "admin/devices.html"},
+	// 发布列车 (claude-fleet#3870): the release ledger's runs; /v1/me lists it
+	// only with the fleet module on, where the ledger is.
+	{trainsPagePath, trainsPageID, "admin/trains.html"},
 }
 
 // adminUIPrefix is where every admin page's files sit in web/dist.

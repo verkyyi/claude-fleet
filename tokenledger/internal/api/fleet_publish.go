@@ -128,6 +128,16 @@ var errPublishAuth = errors.New("not the release CI")
 
 // Check reads the request's bearer: who it is, or errPublishAuth (wrapped).
 func (a *PublishAuth) Check(ctx context.Context, r *http.Request, repo string) (string, error) {
+	return a.CheckFor(ctx, r, repo, nil)
+}
+
+// CheckFor is Check for a route that takes other workflows than the publish
+// (the train's run ledger takes mac-follow.yml too — claude-fleet#3870); nil
+// = the publishing ones.
+func (a *PublishAuth) CheckFor(ctx context.Context, r *http.Request, repo string, workflows []string) (string, error) {
+	if workflows == nil {
+		workflows = a.workflows()
+	}
 	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok {
 		tok, ok = strings.CutPrefix(r.Header.Get("Authorization"), "bearer ")
@@ -156,7 +166,7 @@ func (a *PublishAuth) Check(ctx context.Context, r *http.Request, repo string) (
 		return "", fmt.Errorf("%w: ref %q, want %q", errPublishAuth, c.Ref, a.ref())
 	}
 	wf := ""
-	for _, w := range a.workflows() {
+	for _, w := range workflows {
 		if c.WorkflowRef == repo+"/.github/workflows/"+w+"@"+a.ref() {
 			wf = w
 		}

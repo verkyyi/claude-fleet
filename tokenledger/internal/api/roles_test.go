@@ -264,7 +264,8 @@ func TestRoleScope_UserSeesOwnRows(t *testing.T) {
 	}
 	_, b = rolesGet(t, h, admin, "/v1/me")
 	_ = json.Unmarshal(b, &m)
-	if m.Role != roleAdmin || !reflect.DeepEqual(m.Pages, adminPages) {
+	// a fleet hub adds 发布列车 (claude-fleet#3870), an admin's only
+	if m.Role != roleAdmin || !reflect.DeepEqual(m.Pages, append(append([]string(nil), adminPages...), trainsPageID)) {
 		t.Errorf("admin /v1/me = %+v", m)
 	}
 }
