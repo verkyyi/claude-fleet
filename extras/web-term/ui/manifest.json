@@ -1,0 +1,8 @@
+{
+  "name": "web-term",
+  "short_name": "web-term",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117"
+}

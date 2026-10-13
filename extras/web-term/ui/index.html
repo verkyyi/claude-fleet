@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<title>web-term</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <span id="dot" class="dot off" title="连接"></span>
+    <span id="title">web-term</span>
+    <span class="grow"></span>
+    <button id="font-dn" class="chip" type="button" aria-label="字小一点">A−</button>
+    <button id="font-up" class="chip" type="button" aria-label="字大一点">A+</button>
+    <button id="direct" class="chip" type="button" aria-pressed="false" title="直通：键盘直接打进终端（逐键）">直通</button>
+  </header>
+  <main id="term"></main>
+  <nav id="keys" aria-label="按键">
+    <button data-k="esc">Esc</button>
+    <button data-k="stab" title="Shift+Tab：切换模式">⇧Tab</button>
+    <button data-k="up">↑</button>
+    <button data-k="down">↓</button>
+    <button data-k="enter" title="回车">⏎</button>
+    <button data-t="1">1</button>
+    <button data-t="2">2</button>
+    <button data-t="3">3</button>
+    <button data-k="ctrlc" title="Ctrl+C">^C</button>
+    <button id="ctrl" title="Ctrl：下一个字母按 Ctrl">Ctrl</button>
+    <button data-k="tab">Tab</button>
+    <button data-k="left">←</button>
+    <button data-k="right">→</button>
+    <button data-t="/">/</button>
+    <button data-t="@">@</button>
+    <button id="fill" title="把输入框的字填进去，不回车">填入</button>
+  </nav>
+  <form id="compose" autocomplete="off">
+    <textarea id="input" rows="1" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在这里输入：中文、语音、粘贴都行"></textarea>
+    <button id="send" type="submit" aria-label="发送">发送</button>
+  </form>
+</div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="vendor/addon-unicode11.js"></script>
+<script src="keys.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
