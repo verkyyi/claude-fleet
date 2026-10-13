@@ -653,7 +653,7 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	case EntryPagePath, EntryConnPath, ChatPagePath, TryPagePath:
 		return c.Value
 	}
-	if ticketPageReturnRe.MatchString(c.Value) {
+	if ticketPageReturnRe.MatchString(c.Value) || adminRequestPageRe.MatchString(c.Value) {
 		return c.Value
 	}
 	return ""

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,25 @@ const (
 	// requestCooldownMaxDays bounds a refusal's cooldown.
 	requestCooldownMaxDays = 365
 )
+
+// adminRequestPageRe is the request page a notice links to
+// (/admin/requests/<id>, claude-fleet#4062): the one admin address a
+// signed-out browser is sent back to after signing in — WeChat's own browser
+// signs in by the service account with no page in between, so the admin who
+// tapped 「新申请待审核」 lands on that request's drawer, not the console's
+// front page.
+var adminRequestPageRe = regexp.MustCompile(`^/admin/requests(/rq-[A-Za-z0-9_-]{1,64})?$`)
+
+// rememberAdminReturn is adminGate's signed-out step: a request page asked
+// for before signing in is where loginReturn sends the browser after. Never
+// answers the request itself (the sign-in redirect still follows).
+func rememberAdminReturn(w http.ResponseWriter, r *http.Request) bool {
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && adminRequestPageRe.MatchString(r.URL.Path) {
+		http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: r.URL.Path, Path: "/",
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r), MaxAge: int(loginCookieTTL.Seconds())})
+	}
+	return false
+}
 
 // adminRequestRow is one request as the list shows it.
 type adminRequestRow struct {
