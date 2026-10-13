@@ -41,6 +41,12 @@ export type AdminTablePageProps<T> = {
   // nav sits under the head (a page's tabs, C11)
   nav?: React.ReactNode;
   filters?: Filter<T>[];
+  // the filter a page opens on (default all)
+  defaultFilter?: string;
+  onFilter?: (key: string) => void;
+  // a page's own narrowing on top (a person, a time range), and its controls
+  where?: (row: T) => boolean;
+  toolbar?: React.ReactNode;
   // the text a row is searched by
   searchText?: (row: T) => string;
   rowId: (row: T) => string;
@@ -57,7 +63,7 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
   const [rows, setRows] = React.useState<T[] | null>(null);
   const [error, setError] = React.useState<string>("");
   const [query, setQuery] = React.useState("");
-  const [filter, setFilter] = React.useState("all");
+  const [filter, setFilter] = React.useState(p.defaultFilter || "all");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const fetchRef = React.useRef(p.fetch);
   fetchRef.current = p.fetch;
@@ -70,8 +76,8 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
 
   const shown = React.useMemo(() => {
     const f = p.filters?.find((x) => x.key === filter);
-    return (rows || []).filter((r) => !f || f.test(r));
-  }, [rows, filter, p.filters]);
+    return (rows || []).filter((r) => (!f || f.test(r)) && (!p.where || p.where(r)));
+  }, [rows, filter, p.filters, p.where]);
 
   const table = useReactTable({
     data: shown,
@@ -156,7 +162,11 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
               </div>
             )}
             {p.filters && (
-              <ToggleGroup type="single" variant="outline" size="sm" value={filter} onValueChange={(v) => v && setFilter(v)}>
+              <ToggleGroup type="single" variant="outline" size="sm" value={filter} onValueChange={(v) => {
+                  if (!v) return;
+                  setFilter(v);
+                  p.onFilter?.(v);
+                }}>
                 <ToggleGroupItem value="all" className="px-3">
                   {t("filter.all")}
                 </ToggleGroupItem>
@@ -167,6 +177,7 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
                 ))}
               </ToggleGroup>
             )}
+            {p.toolbar}
             {rows && (
               <span className="ml-auto font-mono text-xs text-muted-foreground">
                 {t("table.rows", { n: visible.length, total: rows.length })}
@@ -227,13 +238,14 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
                   <TableRow className="hover:bg-transparent">
                     <TableCell colSpan={p.columns.length} className="h-32 text-center text-muted-foreground">
                       <p>{(!rows.length && p.emptyText) || t("table.empty")}</p>
-                      {(query || filter !== "all") && (
+                      {(query || filter !== (p.defaultFilter || "all")) && (
                         <Button
                           variant="link"
                           size="sm"
                           onClick={() => {
                             setQuery("");
-                            setFilter("all");
+                            setFilter(p.defaultFilter || "all");
+                            p.onFilter?.(p.defaultFilter || "all");
                           }}
                         >
                           {t("table.clear")}

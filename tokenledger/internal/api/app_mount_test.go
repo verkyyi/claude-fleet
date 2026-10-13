@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -54,6 +55,11 @@ func TestAppOldPathsMoveUnderApp(t *testing.T) {
 	sort.Strings(olds)
 	for _, p := range olds {
 		want, _ := consoleTarget(AppPrefix+p, "tab=a&b=c", roleAdmin)
+		if u, err := url.Parse(want); err == nil && u.Path == p {
+			// spelled like its new page (/admin/settings): it IS the new
+			// page now, the admin entry — TestConsoleTableOneHop serves it
+			continue
+		}
 		resp := appGet(t, h, http.MethodGet, p+"?tab=a&b=c", admin)
 		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != want {
 			t.Errorf("GET %s = %d → %q; want 301 → %s", p, resp.StatusCode, resp.Header.Get("Location"), want)

@@ -4,6 +4,7 @@
 import type { ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TeamUsage, TrainRun } from "./api";
 import { demoMachines } from "./machines/demo";
 import { demoPool, poolSettings } from "./poolDemo";
+import { entryDemo } from "./demo-entry";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -221,14 +222,26 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
   const method = init.method || (init.json !== undefined ? "POST" : "GET");
   const body = (init.json || {}) as Record<string, any>;
   const empty = scenario() === "empty";
+  if (u.pathname === "/v1/fleet/settings") {
+    // one settings table, three pages' rows: 入口设置 (C15) keeps the audit and
+    // its own rows; 订阅池 (C12) and 机器 (C11) keep theirs and win on a key
+    const mine = entryDemo(method, u, body) as { settings?: Record<string, string>; hub?: { key: string; value: string; source?: string }[] };
+    const pool = demoPool(method, u, body, empty, scenario(), users);
+    const machines = demoMachines(method, u, body, empty, init) as { hub?: { key: string; value: string }[] } | undefined;
+    if (method !== "GET") return pool ?? machines ?? mine;
+    const hub = new Map((mine.hub || []).map((h) => [h.key, h]));
+    for (const h of [...(machines?.hub || []), ...poolSettings()]) hub.set(h.key, { ...hub.get(h.key), ...h, source: hub.get(h.key)?.source || "set" });
+    return { settings: mine.settings, hub: [...hub.values()] };
+  }
   const pool = demoPool(method, u, body, empty, scenario(), users); // 订阅池 (C12)
   // /v1/admin/overview is both pages' read: 订阅池 lays its pool rows over 全队用量's people (C13)
   if (pool !== undefined && method === "GET" && u.pathname === "/v1/admin/overview")
     return { ...(usageOverview(empty) as object), pool: (pool as { pool: unknown[] }).pool };
   if (pool !== undefined) return pool;
   const machines = demoMachines(method, u, body, empty, init); // 机器与 pod (C11)
-  if (method === "GET" && u.pathname === "/v1/fleet/settings") return { hub: [...((machines as any)?.hub || []), ...poolSettings()] };
   if (machines !== undefined) return machines;
+  const entry = entryDemo(method, u, body);
+  if (entry !== undefined) return entry;
   switch (`${method} ${u.pathname}`) {
     case "GET /v1/me":
       return { role: "admin", person: "gh:1001", name: "周宁", login: "zhouning" };

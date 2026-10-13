@@ -11,11 +11,14 @@ import "@/shared/theme";
 import { AdminShell, NotFound } from "./AdminShell";
 import { MachineDetailPage } from "./pages/MachineDetail";
 import { MachinesPage } from "./pages/Machines";
-import { PeoplePage } from "./pages/People";
 import { PoolPage } from "./pages/Pool";
 import { PoolSettingsPage } from "./pages/PoolSettings";
 import { ReleasePage } from "./pages/Release";
 import { UsagePage } from "./pages/Usage";
+import { AuditPage } from "./pages/Audit";
+import { FeedbackPage } from "./pages/Feedback";
+import { PeoplePage } from "./pages/People";
+import { SettingsPage } from "./pages/Settings";
 
 const routes = [
   {
@@ -33,6 +36,11 @@ const routes = [
       { path: "pool/settings", element: <PoolSettingsPage /> },
       { path: "pool/:id", element: <PoolPage /> },
       { path: "usage", element: <UsagePage /> },
+      { path: "settings", element: <SettingsPage /> },
+      { path: "settings/:k", element: <SettingsPage /> },
+      { path: "audit", element: <AuditPage /> },
+      { path: "feedback", element: <FeedbackPage /> },
+      { path: "feedback/:id", element: <FeedbackPage /> },
       { path: "*", element: <NotFound /> },
     ],
   },
@@ -42,7 +50,7 @@ const routes = [
 // memory, the first one its frame's __DEMO_PAGE or ?page= (a review frame opens
 // each page by it).
 const router =
-  import.meta.env.VITE_DEMO === "1" ? createMemoryRouter(routes, { initialEntries: [(window as any).__DEMO_PAGE || new URLSearchParams(location.search).get("page") || "/people"] }) : createBrowserRouter(routes, { basename: "/admin" });
+  import.meta.env.VITE_DEMO === "1" ? createMemoryRouter(routes, { initialEntries: [(window as any).__DEMO_PAGE || (window as any).__DEMO_PATH || new URLSearchParams(location.search).get("page") || "/people"] }) : createBrowserRouter(routes, { basename: "/admin" });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

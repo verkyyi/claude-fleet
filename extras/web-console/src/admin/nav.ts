@@ -23,9 +23,9 @@ export const NAV: NavGroup[] = [
   {
     key: "nav.entry",
     items: [
-      { key: "page.settings", icon: Settings, href: "/app/admin/settings" },
-      { key: "page.audit", icon: ScrollText, href: "/app/admin/audit" },
-      { key: "page.feedback", icon: MessageSquareWarning, href: "/app/admin/feedback" },
+      { key: "page.settings", icon: Settings, to: "/settings" },
+      { key: "page.audit", icon: ScrollText, to: "/audit" },
+      { key: "page.feedback", icon: MessageSquareWarning, to: "/feedback" },
     ],
   },
 ];
