@@ -71,6 +71,8 @@
 | install §6 | 卸载客户端漏了安装时带的 tmux（`~/.local/share/claude-fleet-vendor`） | 文档补上（本单） |
 | hosted §4 · admin/index | 托管管理员要从浏览器开发者工具手抄 `ccq_sess` cookie 才能用 `fleet hub` | 已登记 #3745（「将改为」`fleet login` 的身份） |
 | member/usage | 截图还是占位文字 | 演练时补真截图（C10 #3580 交接） |
+| README.md · README.zh-CN.md | 外人从 GitHub 首页进来，安装指向 `docs/dev/INSTALL.md`（让 Claude 装），找不到 `docs/public/` 的三条快速开始 | 待修（本单）：首页顶部链到 `docs/public/zh/index.md` |
+| 演练入口 `/docs/` | drill-hub 跑旧镜像 `prod-1f1f594`，`/docs/` 404，托管管理员在自己的入口上看不到文档 | 演练前重部署演练入口（交 #3797） |
 
 ## 演练记录
 
