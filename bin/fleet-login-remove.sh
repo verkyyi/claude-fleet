@@ -412,6 +412,20 @@ if [ "$STOPONLY" = 1 ]; then
   exit 0
 fi
 
+# Files it owns outside its home — /tmp, /private/var/tmp, /Users/Shared (tmux
+# sockets among them) — outlive the account, and macOS hands its uid to the
+# next login it makes: on a managed Mac fleetu4 got fleetu1's uid 507 and with it the
+# last person's /private/tmp and /Users/Shared files (issue #3508). The wash
+# clears the same three (fleet-login-reset.sh); the archive dir is the admin's.
+step 5b "remove what $LOGIN owns outside its home (uid $UID_TARGET)"
+for d in ${FLEET_LOGIN_REMOVE_OUTSIDE_DIRS:-/private/tmp /private/var/tmp /Users/Shared}; do
+  [ -d "$d" ] || continue
+  FIND=(sudo find "$d" -xdev -mindepth 1 -path "$ARCHIVE_DIR" -prune -o -user "$UID_TARGET" -prune -exec rm -rf {} +)
+  show "${FIND[@]}"
+  [ "$APPLY" = 0 ] || "${FIND[@]}" 2>/dev/null \
+    || printf '%s: WARN could not clear every file of uid %s in %s — the next login with that uid would own them\n' "$PROG" "$UID_TARGET" "$d" >&2
+done
+
 step 6 'delete the OS login (and its home)'
 quiesce   # again: the archive took its time, and launchd may have relaunched one
 # No Full Disk Access here (the node program, #2973) ⇒ the delete rides a local

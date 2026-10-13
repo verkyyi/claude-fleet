@@ -403,6 +403,7 @@ FLEET_LIVE_DIR                     path: the live install checkout (default ~/.c
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOGIN_REMOVE_DELETE_SECS     knob: time limit (s) on sysadminctl -deleteUser before it is killed, default 120 (fleet-login-remove.sh, #2866)
+FLEET_LOGIN_REMOVE_OUTSIDE_DIRS    test seam: the dirs whose files of the login's uid fleet-login-remove.sh clears before the delete, default /private/tmp /private/var/tmp /Users/Shared (#3508)
 FLEET_LOGIN_REMOVE_SETTLE          knob: seconds watched for a respawned process after bootout + kill, default 3 (fleet-login-remove.sh, #2866)
 FLEET_LOGIN_REMOVE_TCC_DB          test seam: the TCC database probed for Full Disk Access when dscl is refused (fleet-login-remove.sh, #2973)
 FLEET_NODE_TCC_DB                  test seam: the TCC database the machine daemon reads for its Full Disk Access (fleet-node-supervisor.py, #2973)
