@@ -31,8 +31,8 @@ import (
 //	POST /v1/admin/requests/<id>/reject {reason, cooldown_days}
 //	                                    the reason goes to the person as written
 //
-// Telling the person is C5's Notify; until it lands a decision is the audit
-// rows and /apply's own page.
+// Each decision is told to the person (C5's notice desk, notify.go): once,
+// however often approve is pressed.
 
 const (
 	AdminRequestsPath   = "/v1/admin/requests"
@@ -302,6 +302,7 @@ func (s *Server) adminRequestApprove(w http.ResponseWriter, r *http.Request, id 
 		httpError(w, http.StatusInternalServerError, "approved, but putting them on the list failed — approve again: "+err.Error())
 		return
 	}
+	s.notifyResult(req)
 	s.writeRequestDetail(w, http.StatusOK, req)
 }
 
@@ -408,5 +409,6 @@ func (s *Server) adminRequestReject(w http.ResponseWriter, r *http.Request, id s
 		detail += " · again from " + until.UTC().Format("2006-01-02")
 	}
 	_ = s.Store.HubAudit(by, "request.reject", got.Display+" ("+got.Kind+")", "ok", detail, now)
+	s.notifyResult(got)
 	s.writeRequestDetail(w, http.StatusOK, got)
 }

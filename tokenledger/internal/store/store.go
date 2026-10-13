@@ -226,6 +226,9 @@ func migrate(db *sql.DB) error {
 		// An invite bound to an email address (claude-fleet#3603): '' on every
 		// invite made before, which binds none.
 		{"fleet_invites", "email", "TEXT NOT NULL DEFAULT ''"},
+		// The language the person asked in (claude-fleet#4053): their result
+		// is told in it. '' on every request made before = the hub's default.
+		{"hub_access_requests", "lang", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)

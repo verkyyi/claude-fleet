@@ -938,6 +938,35 @@ offers every way that is configured, always in this order:
   登录方式 by opening its mail.
 - **GitHub**, as above.
 
+**Telling people** (claude-fleet#4053, EPIC #4048 C5) goes through ONE desk,
+`notify.go`: a request's result to its person, new requests to every admin.
+The event writes a notice into `hub_notify_outbox`; every replica's desk
+(`RunNotify`, a lease per notice so it goes once) sends it down the first road
+that works — a **template message** to someone following 「二四网络科技」
+(`CCQUOTA_WX_TPL_REVIEW` / `CCQUOTA_WX_TPL_NEWREQ`), else a **customer-service
+message** within 48 hours of their last scan, else a **mail** (the address the
+request named, else their mail sign-in), else nothing but the page
+(`notify.undelivered`). WeChat's 43004 (they left the account) marks them
+unfollowed and sends the mail; a road that is down is tried three more times
+(15 s · 30 s · 60 s), every try in `hub_audit` (`notify.retry`, the errcode at
+most — BREAK-IT `notify-leaks-secret`). An admin hears of the first request at
+once; the ones in the next ten minutes come as one notice. The result is told
+in the language the person asked in. Both template variables name a template
+shaped 时间 · 内容 · 建议 — on 「二四网络科技」 that is 「提醒服务通知」
+(`2vnnKkz4i6TINyhXLv2UaZ2bLDodtuR__7qo7N1wZd0`, already approved, shared with
+space):
+
+| field | a result (`…_REVIEW`) | new requests (`…_NEWREQ`) |
+|---|---|---|
+| 时间 `keyword1` | when it was decided | when the first one came in |
+| 内容 `keyword2` | 「ClaudeFleet：你的使用申请已通过」 / 「…未通过：<理由>」 | 「ClaudeFleet：N 条新申请待审核（<第一位> 等）」 |
+| 建议 `keyword3` | 「打开 ClaudeFleet 开始使用」 / 「<日期> 起可以再申请」 | 「点开直接审核」 |
+| tap → | `/apply` | `/admin/requests/<the first one>` |
+
+`first` / `remark` are filled for the clients that still show them. A
+template unset ⇒ that kind skips straight to the customer-service message and
+the mail.
+
 With neither WeChat nor a mail configured, `/signin` is GitHub's page byte for
 byte. A hub with no GitHub at all signs its sessions with `CCQUOTA_SESSION_SECRET`
 (else the first other way's own secret). All of these live in Secret `ccquota`
