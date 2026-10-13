@@ -20,7 +20,7 @@
   → 每一轮 fleet-session-cred.sh mint → 凭据代理 → 池子 · /v1/node/usage
 ```
 
-打开 `/chat` 时节点先跑 `service ensure --name webchat --wait 3`，服务没起就起（D1）。
+转发到节点时 socket 没人听，节点就以本登录跑 `service ensure --name webchat --wait 3` 再拨一次，服务没起就起（D1，#3648）。
 
 ### 发起人的四个要求怎么落
 
@@ -59,11 +59,12 @@ bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move 
 
 ### 按需起停，家搬了跟着走（#3647，EPIC #3642 C5）
 
-- **按需**（D1）：人打开 `/chat` 时，节点用固定的命令跑整机守护的
+- **按需**（D1）：人打开 `/chat`、转发到了节点却连不上 socket 时（服务没起过、停着或空闲退了），节点的转发（`chatSockOrEnsure`，#3648）用固定的命令跑整机守护的
   `fleet-node-supervisor.py service ensure --login <这个人的家登录> --name webchat --wait 3`（`service_control`
   的 `ensure`，只认 `webchat`，入口给的是名字、不是命令）：没登记就按家目录登记
   （`~/.claude/fleet/bin/fleet-webchat.sh serve`，`paths[]` 是 `~/.config/claude-fleet/webchat`），停着或空闲就起，
-  然后等 socket 上的 `/healthz`，每次 15 秒（`FLEET_NODE_ENSURE_SECS`），最多 3 次，两次之间重起一次。
+  然后等 socket 上的 `/healthz`，每次 15 秒（`FLEET_NODE_ENSURE_SECS`），最多 3 次，两次之间重起一次；成功了再拨一次 socket。
+  只有整机节点程序能 ensure（登记表是 root 的），普通节点程序只拨一次。BREAK-IT `chat-first-open-cold`。
   页面在这期间先显示骨架屏（C4）。
 - **空闲退出**：没有在跑的一轮、没有页面连着、最后一次动静过去 `FLEET_WEBCHAT_IDLE_SECS`（默认 7200，0 = 不退）
   之后，服务自己退出、**退出码 75**。守护认这个码：记 `idle`（`fleet ls --services` 里「空闲·打开再起」），

@@ -156,7 +156,7 @@ func (a *Agent) openChatRelay(ctx context.Context, m control.Message) {
 		return
 	}
 
-	sock, err := dialChatSock(dctx)
+	sock, err := a.chatSockOrEnsure(ctx, dctx, login, ro.RelayID, dialChatSock)
 	if err != nil {
 		log.Printf("chat relay %s: %s's conversation socket: %v", short(ro.RelayID), login, err)
 		ws.Close(websocket.StatusInternalError, "the conversation service is not running for this login")
@@ -165,6 +165,31 @@ func (a *Agent) openChatRelay(ctx context.Context, m control.Message) {
 	cancel()
 	log.Printf("chat relay %s: %s → %s's conversation", short(ro.RelayID), who.Person, login)
 	splice(ctx, ws, sock)
+}
+
+// chatSockOrEnsure dials the login's socket; when nothing listens there yet it
+// starts the service on demand — the supervisor's `service ensure --name
+// webchat --wait 3` for THIS lane's login, the fixed argv service_control's
+// ensure runs (claude-fleet#3647 D1, wired in #3648: nothing called it, so a
+// first /chat answered «did not answer») — and dials once more. Only a machine
+// tenant can ensure (the register is root's); a plain agent dials once.
+func (a *Agent) chatSockOrEnsure(ctx, dctx context.Context, login, relay string,
+	dial func(context.Context) (io.ReadWriteCloser, error)) (io.ReadWriteCloser, error) {
+	sock, err := dial(dctx)
+	if err == nil || a.cfg.RunAs == nil || a.cfg.ServiceCtl == "" {
+		return sock, err
+	}
+	argv, aerr := serviceCtlArgv(a.cfg.ServiceCtl, login, map[string]any{"name": "webchat", "action": "ensure"})
+	if aerr != nil {
+		return nil, err
+	}
+	log.Printf("chat relay %s: %s's conversation socket: %v — starting it (service ensure)", short(relay), login, err)
+	if st, res := runServiceCtl(ctx, argv); st != "succeeded" {
+		return nil, fmt.Errorf("service ensure webchat: %v", res["error"])
+	}
+	rctx, cancel := context.WithTimeout(ctx, sshRelayDialTimeout)
+	defer cancel()
+	return dial(rctx)
 }
 
 // dialChatSock reaches ctx's login's socket. A plain agent IS the login and

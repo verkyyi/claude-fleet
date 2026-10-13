@@ -7079,6 +7079,35 @@ drill_chat_relay_wrong_person() {
   SECS=$(since "$t0")
 }
 
+# chat-first-open-cold (issue #3648, EPIC #3642 C6): the first /chat on a home
+# whose service never ran — the relay found no socket and nothing started it
+# (#3647's ensure had no caller): the page said «did not answer». The node's relay
+# now runs the fixed `service ensure --name webchat --wait 3` for its own login
+# and dials again. Go (internal/agent TestChatSockEnsuresOnDemand), run when a
+# toolchain is here.
+drill_chat_first_open_cold() {
+  CAP=120; local t0 out rc f="$ROOT/tokenledger/internal/agent/node_chat_relay.go"
+  t0=$(now)
+  grep -q '^func TestChatSockEnsuresOnDemand(' "$ROOT/tokenledger/internal/agent/node_chat_relay_test.go" 2>/dev/null \
+    || { WHY="the test TestChatSockEnsuresOnDemand is gone"; return 1; }
+  grep -q 'a.chatSockOrEnsure(ctx, dctx, login' "$f" 2>/dev/null \
+    || { WHY="openChatRelay dials the socket without chatSockOrEnsure: a cold home never starts"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestChatSockEnsuresOnDemand$' ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='没有 socket：机器节点以本登录跑 service ensure --name webchat --wait 3 再拨一次，起来了就接上；在跑的不 ensure；普通节点只拨一次' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在、转发经 chatSockOrEnsure' ;;
+      *) WHY="the cold open (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在、转发经 chatSockOrEnsure，Go 门（tokenledger.yml）跑它'
+  fi
+  SECS=$(since "$t0")
+}
+
 # land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
 # land at once through fleet-land.sh — both land, one after the other, the second
 # rebased onto the first and checked again; a red check never moves the base; gh 0 times.
