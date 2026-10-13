@@ -1552,7 +1552,7 @@ drill_restore_conversation_twice() {
   SECS=$(since "$t0"); WHAT="同一对话在地图里三行：restore 只开最新那一行一个窗口、第二拍不重开；回收过的会话从地图里删掉"
 }
 
-# A 看台's peer window (issue #3829): `@fleet-linux-0·fleet`, an ssh onto another
+# A 看台's peer window (issue #3829): `@linux-b·ops`, an ssh onto another
 # machine with no session of its own. The snapshot wrote it as a session row and
 # guessed its conversation by mtime — $HOME's newest, an old orchestrator one — so
 # a reboot's restore reopened that conversation under a deleted login's name.
@@ -1561,7 +1561,7 @@ drill_restore_peer_window() {
   local old=3829aaaa-0000-4000-8000-000000003829 fp=1f0e0000-0000-4000-8000-000000038291
   { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
     printf 'FID\t%s\n' "$fp"
-    printf 'WIN\t@fleet-linux-0·fleet\t%s\t%s\t-\tlooping\t-\t-\n' "$WORK/home" "$old"
+    printf 'WIN\t@linux-b·ops\t%s\t%s\t-\tlooping\t-\t-\n' "$WORK/home" "$old"
     printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
   } > "$mf"
   : > "$WORK/claude-argv"
