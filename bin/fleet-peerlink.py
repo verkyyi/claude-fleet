@@ -862,7 +862,13 @@ class Keeper:
                 self.links[k] = Link(k[0], k[1], self.prev.get(k))
             self.links[k].want_ts = now
         for k, l in self.links.items():
-            l.routes = (peers.get(k) or {}).get("routes") or []
+            routes = (peers.get(k) or {}).get("routes") or []
+            if routes != l.routes:
+                # new ways in: a down link tries them on this beat, not after the
+                # backoff the old ones built up (issue #3968)
+                if l.phase == "down" and l.next_try > now:
+                    l.route_i, l.backoff, l.next_try = 0, 0.0, now
+            l.routes = routes
         for k in list(self.links):
             l = self.links[k]
             if k not in want:
@@ -933,6 +939,9 @@ class Keeper:
                     # master is acted on at once, not at the next beat
                     if any(l.phase == "up" and (not os.path.exists(l.sock) or not l.alive())
                            for l in self.links.values()):
+                        break
+                    # the hub's answer is in: act on new routes now, not a beat later
+                    if self.peers_job and self.peers_job[0]:
                         break
         finally:
             unlink(os.path.join(RUNS, str(os.getpid())))

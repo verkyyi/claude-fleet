@@ -239,7 +239,7 @@
 3.2 peerlink-cert-expiry
 5.0 peerlink-hostkey-unknown
 5.3 peerlink-hub-down
-6.8 peerlink-name-unresolved
+1.4 peerlink-name-unresolved
 4.8 peerlink-reaped
 1.6 peerlink-sock-deleted
 3.3 peerlink-two-keepers
