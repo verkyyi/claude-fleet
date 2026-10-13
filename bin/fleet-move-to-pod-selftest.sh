@@ -13,6 +13,9 @@
 #      argv, not in the state dir); the shared-node files are cleared on the
 #      copy; the hub gets assign --own-name, the allow-list copy, the home PUT;
 #      the timeline has every phase
+#   F. the source machine has no subscription allow-list: open refuses (3)
+#      before the login exists; --allow-list-none moves anyway. In C the list
+#      is set AND read back before the assign
 #   D. a pinned session missing on the pod: verify exits 1 naming it
 #   E. retire after verify closes the SOURCE login with --delete
 set -uo pipefail
@@ -75,7 +78,9 @@ case "$*" in
     if [ -f "$FAKE/assigned" ]; then echo '{"accounts":[{"principal_id":"gh:7","hostname":"'"$(cat "$FAKE/assigned")"'","state":"active"}]}'
     else echo '{"accounts":[]}'; fi ;;
   *"accounts assign"*) set -- $*; while [ "$1" != --host ]; do shift; done; echo "$2" > "$FAKE/assigned" ;;
-  *"get fleet.cred_allow.node.node-a-0"*) echo codex ;;
+  *"get fleet.cred_allow.node.node-a-0"*) [ -n "${FAKE_NO_ALLOW:-}" ] && exit 1; echo codex ;;
+  *"set fleet.cred_allow.node."*) echo "${@: -1}" > "$FAKE/allow.set" ;;
+  *"get fleet.cred_allow.node."*) cat "$FAKE/allow.set" 2>/dev/null || exit 1 ;;
 esac
 SH
 cat > "$T/curl" <<'SH'
@@ -134,11 +139,25 @@ grep -q "rm -f /data/homes/24acme/.config/claude-fleet/node.env .*node.pub.env .
 grep -q -- "--exclude=./24acme/.codex/tmp" "$LOG" || fail 'C: the copy took .codex/tmp'
 grep -q "hubadm .*accounts assign gh:7 --host $POD --login 24acme --own-name" "$LOG" || fail 'C: no assign --own-name on the pod'
 grep -q "hubadm .*set fleet.cred_allow.node.$POD codex" "$LOG" || fail 'C: the allow-list was not copied'
+a_set=$(grep -n "hubadm .*set fleet.cred_allow.node.$POD" "$LOG" | head -1 | cut -d: -f1)
+a_get=$(grep -n "hubadm .*get fleet.cred_allow.node.$POD" "$LOG" | head -1 | cut -d: -f1)
+a_asg=$(grep -n "hubadm .*accounts assign" "$LOG" | head -1 | cut -d: -f1)
+[ -n "$a_get" ] && [ "$a_set" -lt "$a_asg" ] && [ "$a_get" -lt "$a_asg" ] ||
+  fail "C: the allow-list must be set and read back before the login opens (set $a_set · get $a_get · assign $a_asg)"
 grep -q "curl .*-X PUT .*/v1/fleet/entry/home?principal=gh:7" "$LOG" || fail 'C: the home was not moved'
 order=$(awk '{print $2}' "$T/state/24acme/timeline" | uniq | tr '\n' ' ')
 [ "$order" = "check prepare stop copy start open home verify " ] || fail "C: timeline order '$order'"
 grep -q ' verify sessions=2/2' "$T/state/24acme/timeline" || fail 'C: verify did not count 2/2'
 grep -q ' accounts remove' "$LOG" && fail 'C: all retired the source'
+ok
+
+# ── F. a source with no allow-list: open refuses (3) before any assign
+rm -f "$T/assigned" "$T/allow.set"; : > "$LOG"
+FAKE_NO_ALLOW=1 mv open 24acme > "$T/out" 2>&1; rc=$?
+[ "$rc" = 3 ] && grep -q 'no fleet.cred_allow.node list' "$T/out" || fail "F: no allow-list: rc $rc, $(cat "$T/out")"
+grep -q 'accounts assign' "$LOG" && fail 'F: the login was opened on an open machine'
+FAKE_NO_ALLOW=1 mv open 24acme --allow-list-none >/dev/null 2>&1 || fail 'F: --allow-list-none did not open'
+grep -q 'accounts assign' "$LOG" || fail 'F: --allow-list-none never assigned'
 ok
 
 # ── D. a session missing
