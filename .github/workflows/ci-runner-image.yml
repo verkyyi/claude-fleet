@@ -51,27 +51,48 @@ jobs:
       REPO: ${{ vars.CI_RUNNER_REPO }}
       FORCE: ${{ inputs.force && '--force' || '' }}
     steps:
-      # GitHub from Shenzhen: a sparse, shallow checkout, tried twice
+      # The cluster's git mirror first (vars.FLEET_TRAIN_GIT_MIRROR, issue #3864):
+      # github.com from Shenzhen now and then does not connect at all (run
+      # 38385017299: two checkouts of 130 s each, both failed)
+      - name: Fetch the commit from the cluster's git mirror
+        id: mirror
+        if: vars.FLEET_TRAIN_GIT_MIRROR != ''
+        continue-on-error: true
+        env:
+          MIRROR: ${{ vars.FLEET_TRAIN_GIT_MIRROR }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -u
+          git init -q . && git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" || exit 1
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if timeout 60 git fetch -q --no-tags "$MIRROR" '+refs/heads/master:refs/remotes/origin/master' \
+               && git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+              git checkout -q --detach "$SHA" && echo "ok=true" >> "$GITHUB_OUTPUT" && exit 0
+              break
+            fi
+            sleep 5
+          done
+          rm -rf .git; exit 1
+      # else GitHub: a sparse, shallow checkout, tried twice
       - uses: actions/checkout@v4
         id: co
+        if: steps.mirror.outputs.ok != 'true'
         continue-on-error: true
         with:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /extras/ci-runner/
-            /tokenledger/go.mod
-            /tokenledger/go.sum
+            /tokenledger/
             /bin/fleet-ci-job-gate.sh
             /.github/actions/hub-acr/
             /.github/actions/hub-kubeconfig/
-      - if: steps.co.outcome == 'failure'
+      - if: steps.mirror.outputs.ok != 'true' && steps.co.outcome == 'failure'
         uses: actions/checkout@v4
         with:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /extras/ci-runner/
-            /tokenledger/go.mod
-            /tokenledger/go.sum
+            /tokenledger/
             /bin/fleet-ci-job-gate.sh
             /.github/actions/hub-acr/
             /.github/actions/hub-kubeconfig/
