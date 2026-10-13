@@ -39,7 +39,7 @@ const QuotaPill: FC<{ quota: Quota | null }> = ({ quota }) =>
     <Button asChild size="sm" variant="outline"
       className={cn("h-6 rounded-full px-2.5 font-mono text-[11px] no-underline",
         quota.over ? "border-clay-line text-clay" : "text-foreground")}>
-      <a href="/app/usage" title={tr("我的用量", "My usage")}>{quotaWords(quota)}</a>
+      <Link to="/usage" title={tr("我的用量", "My usage")}>{quotaWords(quota)}</Link>
     </Button>
   ) : null;
 

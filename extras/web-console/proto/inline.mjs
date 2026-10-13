@@ -23,7 +23,7 @@ if (/(src|href)="\.\//.test(html)) throw new Error("inline.mjs: an asset was lef
 
 const page = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>原型 · /app 对话首页、「我的」与任务（#3926 · #3928）</title>
+<title>原型 · /app「我的」一侧（EPIC #3923）</title>
 <style>
   body{margin:0;background:#11101c;color:#e9e4f0;font:14px/1.5 system-ui,"PingFang SC",sans-serif}
   header{padding:16px 20px 8px}
@@ -36,19 +36,19 @@ const page = `<!doctype html>
   figure{margin:0} figcaption{color:#a59fb5;font-size:12px;margin:0 0 6px}
   iframe{border:1px solid #3a3752;border-radius:18px;background:#fff;display:block}
 </style></head><body>
-<header><h1>/app · 登录后的骨架，对话做首页，任务和单子 —— 原型（#3926 · #3928）</h1>
-<p>就是上线时的构建：共享主题包 + shadcn/ui 现成组件；接口是入口的真实字段，人和数字是演示的。左深右浅。点底栏 / 侧栏能切页；「会话 · 任务 · 用量 · 设备 · 设置」上线后先打开旧页，等各自的单换掉。</p></header>
+<header><h1>/app ·「我的」一侧 —— 原型（EPIC #3923：C3 骨架与对话 · C5 任务 · C6 用量）</h1>
+<p>就是上线时的构建：共享主题包 + shadcn/ui 现成组件；接口是入口的真实字段，人和数字是演示的。左深右浅。点底栏 / 侧栏能切页；还没换的格子上线后先打开旧页，等各自的单换掉。</p></header>
 <div class="bar" id="bar"></div>
 <div class="frames" id="frames"></div>
 <script>
 // each frame pins its scheme: the system's dark rule always on (dark) or never (light)
 const APP = { dark: ${JSON.stringify(html.replaceAll("@media (prefers-color-scheme: dark)", "@media all").replaceAll("@media (prefers-color-scheme:dark)", "@media all")).replace(/<\//g, "<\\/")},
   light: ${JSON.stringify(html.replaceAll("@media (prefers-color-scheme: dark)", "@media not all").replaceAll("@media (prefers-color-scheme:dark)", "@media not all")).replace(/<\//g, "<\\/")} };
-const S = { page: "/", role: "user", state: "normal", width: 390, lang: "zh" };
+const S = { page: ${JSON.stringify(process.env.PROTO_PAGE || "/")}, role: "user", state: "normal", width: 390, lang: "zh" };
 const OPTS = {
-  page: [["/", "对话"], ["/tasks", "任务"], ["/tasks?tab=tickets", "单子"], ["/tasks/tickets/linxiao/reports/42", "一张单子"], ["/me", "我的"]],
+  page: [["/", "对话"], ["/tasks", "任务"], ["/tasks?tab=tickets", "单子"], ["/tasks/tickets/linxiao/reports/42", "一张单子"], ["/usage", "用量"], ["/me", "我的"]],
   role: [["user", "成员 林晓"], ["admin", "管理员 周宁"]],
-  state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"], ["loading", "加载中"], ["error", "出错"]],
+  state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"], ["loading", "加载中"], ["error", "出错"], ["unlimited", "不限额"]],
   width: [[390, "手机 390"], [1280, "电脑 1280"]],
   lang: [["zh", "中文"], ["en", "English"]],
 };

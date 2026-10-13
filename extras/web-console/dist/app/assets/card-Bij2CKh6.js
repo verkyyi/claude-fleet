@@ -1,1 +1,0 @@
-import{$ as e,I as t,R as n}from"./index-B9v3N3LJ.js";e();var r=t();function i({className:e,...t}){return(0,r.jsx)(`div`,{"data-slot":`card`,className:n(`flex flex-col gap-6 rounded-xl border bg-card py-6 text-card-foreground shadow-sm`,e),...t})}function a({className:e,...t}){return(0,r.jsx)(`div`,{"data-slot":`card-content`,className:n(`px-6`,e),...t})}export{a as n,i as t};
