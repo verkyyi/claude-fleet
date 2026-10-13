@@ -7194,7 +7194,9 @@ fleet_restore_wins() {
 # --retired also drops a session the fleet closed on purpose (fleet_win_retire)
 # that no live window carries now (the list) — the snapshot's shrink guard kept
 # reaped sessions in the map for good, ready for the next restore to reopen.
-# Every other row (FLEET, HUB, DESK, OWID, PIN, …) prints byte for byte; a map
+# A 看台's peer window (a row named `@…` in $HOME, issue #3829) goes too: an ssh
+# onto another machine that an older snapshot wrote with a conversation guessed
+# by mtime. Every other row (FLEET, HUB, DESK, OWID, PIN, …) prints byte for byte; a map
 # with neither prints exactly itself.
 fleet_restore_map_prune() {
   local mf="${1:-}" rl='' rd t
@@ -7206,14 +7208,15 @@ fleet_restore_map_prune() {
     done
   fi
   # Space-joined: BSD awk refuses a newline inside a -v value.
-  awk -F'\t' -v rl="$(printf '%s' "$rl" | tr '\n' ' ')" -v live="$(printf '%s' "${3:-}" | tr '\n' ' ')" '
+  awk -F'\t' -v rl="$(printf '%s' "$rl" | tr '\n' ' ')" -v live="$(printf '%s' "${3:-}" | tr '\n' ' ')" -v home="${HOME:-}" '
     BEGIN { n = split(live, a, " "); for (i = 1; i <= n; i++) up[a[i]] = 1
             n = split(rl, a, " "); for (i = 1; i <= n; i++) if (a[i] != "" && !(a[i] in up)) ret[a[i]] = 1 }
     NR == FNR { if ($1 == "WIN" && $4 != "" && $4 != "-") last[$4] = FNR; next }
     function flush() { if (buf != "") printf "%s", buf; buf = ""; f = "" }
     $1 == "REAP" || $1 == "FID" { if ($1 == "FID") f = $2; buf = buf $0 "\n"; next }
     $1 == "WIN" {
-      drop = ($4 != "" && $4 != "-" && last[$4] != FNR) || (f != "" && (f in ret))
+      drop = ($4 != "" && $4 != "-" && last[$4] != FNR) || (f != "" && (f in ret)) \
+             || (substr($2, 1, 1) == "@" && home != "" && $3 == home)
       if (drop) { buf = ""; f = ""; next }
       flush(); print; next
     }
