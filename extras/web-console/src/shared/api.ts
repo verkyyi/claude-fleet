@@ -29,22 +29,6 @@ export function useMe(): MeState {
   }, []);
   return s;
 }
-// A write (POST / PUT / DELETE) to one of the entry's /v1/*, same origin: the
-// answer's status and body, an error's own words in `error` (httpError's
-// {"error": …}); status 0 = no answer at all.
-export type Sent<T> = { ok: boolean; status: number; body: T | null; error?: string };
-export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<Sent<T>> {
-  const r = await fetch(url, {
-    method, credentials: "same-origin",
-    headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }).catch(() => null);
-  if (!r) return { ok: false, status: 0, body: null };
-  if (r.status === 401) { location.assign("/app/signin"); return { ok: false, status: 401, body: null }; }
-  const j = (await r.json().catch(() => null)) as (T & { error?: string }) | null;
-  return { ok: r.ok, status: r.status, body: j, ...(!r.ok && j?.error ? { error: j.error } : {}) };
-}
-
 export const isAdmin = (me: Me | null) => !!me && me.role !== undefined && me.role !== "user" && me.role !== "";
 
 // The person's own limit (fleet.person_budget) off /v1/me/usage — the one the
@@ -105,15 +89,17 @@ export function useLoad<T>(url: string): Load<T> {
 }
 
 // sendJSON: one write — the answer's body, or the entry's own sentence when
-// it says no ({error: "…"} or {error: {message}}).
-export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+// it says no ({error: "…"} or {error: {message}}); status is the answer's
+// (0 = none), for a page whose words depend on it (设置: 202 · 409 · 429).
+export async function sendJSON<T>(method: string, url: string, body?: unknown): Promise<{ ok: true; data: T; status: number } | { ok: false; error: string; status: number }> {
   const r = await fetch(url, {
     method, headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }).catch(() => null);
-  if (r?.status === 401) { location.assign("/app/signin"); return { ok: false, error: "" }; }
+  if (r?.status === 401) { location.assign("/app/signin"); return { ok: false, error: "", status: 401 }; }
   const j = r ? await r.json().catch(() => null) : null;
-  if (r?.ok) return { ok: true, data: j as T };
+  const status = r?.status ?? 0;
+  if (r?.ok) return { ok: true, data: j as T, status };
   const e = j?.error;
-  return { ok: false, error: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : "" };
+  return { ok: false, error: typeof e === "string" ? e : typeof e?.message === "string" ? e.message : "", status };
 }

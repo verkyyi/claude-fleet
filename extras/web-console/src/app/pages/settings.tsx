@@ -6,8 +6,8 @@
 // Only the entry's existing reads and writes (rule 7): /v1/me,
 // /v1/me/identities, /v1/fleet/person-bundle, /auth/*/start?link=1, ?lang=,
 // POST /app/logout. Stock shadcn/ui only.
-import { useCallback, useEffect, useRef, useState, type FC, type FormEvent, type ReactNode } from "react";
-import { CircleAlert, Download, KeyRound, LogOut, Mail, MessageCircle, RefreshCw, Upload, type LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState, type FC, type FormEvent, type ReactNode } from "react";
+import { CircleAlert, Download, KeyRound, LogOut, Mail, MessageCircle, Upload, type LucideIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -23,9 +23,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { lang, tr } from "@/shared/i18n";
-import { isAdmin, sendJSON } from "@/shared/api";
+import { isAdmin, sendJSON, useLoad } from "@/shared/api";
 import { setThemePick, themePick, type ThemePick } from "@/shared/theme";
 import { SignOut, usePage, useShell } from "../Shell";
+import { Failed, PageHeader, ago } from "../parts";
 
 declare const __PROTO__: boolean;
 
@@ -36,59 +37,6 @@ type Identity = { kind: string; subject: string; label: string; verified_at?: st
 type Identities = { person: string; identities: Identity[]; can_add: string[] };
 // /v1/fleet/person-bundle (TeamBundleResponse)
 type Bundle = { version: number; created?: string; bundle: Record<string, unknown> | null };
-
-// A read that can be waiting, there, missing (404: this login has no person)
-// or failed — each drawn its own way.
-type Read<T> = { state: "loading" } | { state: "ok"; data: T } | { state: "none"; why: string } | { state: "failed" };
-
-function useRead<T>(url: string | null): [Read<T>, () => void] {
-  const [r, set] = useState<Read<T>>({ state: "loading" });
-  const [n, bump] = useState(0);
-  useEffect(() => {
-    if (!url) return;
-    let live = true;
-    set({ state: "loading" });
-    fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin" })
-      .then(async (res) => {
-        if (!live) return;
-        if (res.status === 401) { location.assign("/app/signin"); return; }
-        const j = await res.json().catch(() => null);
-        if (res.ok && j) set({ state: "ok", data: j as T });
-        else if (res.status === 404 || res.status === 403) set({ state: "none", why: (j && j.error) || "" });
-        else set({ state: "failed" });
-      })
-      .catch(() => live && set({ state: "failed" }));
-    return () => { live = false; };
-  }, [url, n]);
-  return [r, useCallback(() => bump((x) => x + 1), [])];
-}
-
-// ── pieces ─────────────────────────────────────────────────────────────────
-
-const Title: FC<{ children: ReactNode }> = ({ children }) => (
-  <h1 className="font-display mb-1 text-[26px] leading-tight font-semibold tracking-tight">
-    {children}<span className="text-clay">.</span>
-  </h1>
-);
-
-const Failed: FC<{ what: string; onRetry: () => void }> = ({ what, onRetry }) => (
-  <div className="flex items-start gap-3">
-    <CircleAlert className="text-destructive mt-0.5 size-5 shrink-0" aria-hidden />
-    <div className="min-w-0 flex-1">
-      <p className="font-medium">{tr(`读不到${what}`, `Couldn't load ${what}`)}</p>
-      <p className="text-muted-foreground text-sm">{tr("入口暂时没有回应，别的页面不受影响。", "The entry did not answer; other pages are unaffected.")}</p>
-    </div>
-    <Button size="sm" variant="outline" onClick={onRetry}><RefreshCw />{tr("重试", "Retry")}</Button>
-  </div>
-);
-
-const Lines: FC<{ n?: number }> = ({ n = 2 }) => (
-  <div className="space-y-3">
-    {Array.from({ length: n }, (_, i) => (
-      <div key={i} className="flex items-center gap-3"><Skeleton className="size-5 rounded-full" /><Skeleton className="h-4 w-2/5" /></div>
-    ))}
-  </div>
-);
 
 // A one-line outcome under a card's buttons: done, or what went wrong.
 type Note = { tone: "ok" | "bad"; text: string } | null;
@@ -177,7 +125,7 @@ const EmailDialog: FC<{ open: boolean; change: boolean; onClose: () => void; onS
           : r.error || tr("没发出去，再试一次。", "Could not send — try again."));
         return;
       }
-      onSent(a, r.status === 202 || !!r.body?.mail_sent);
+      onSent(a, r.status === 202 || !!r.data?.mail_sent);
     };
     return (
       <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -207,9 +155,11 @@ const EmailDialog: FC<{ open: boolean; change: boolean; onClose: () => void; onS
     );
   };
 
+// a token or an open door has no person, so no ways of its own and no
+// configuration: those two cards are a person's only
 const SignInWays: FC = () => {
-  const { me } = useShell();
-  const [ids, reload] = useRead<Identities>(me?.person ? "/v1/me/identities" : null);
+  const ids = useLoad<Identities>("/v1/me/identities");
+  const reload = ids.reload;
   const [email, setEmail] = useState<{ open: boolean; change: boolean }>({ open: false, change: false });
   const [drop, setDrop] = useState<Identity | null>(null);
   const [note, setNote] = useState<Note>(() => {
@@ -218,21 +168,22 @@ const SignInWays: FC = () => {
   });
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (location.hash === "#logins") ref.current?.scrollIntoView({ block: "start" }); }, []);
-  if (!me?.person) return null; // a token or an open door has no ways of its own
-
   const remove = async (i: Identity) => {
     setDrop(null);
     const r = await sendJSON("DELETE", `/v1/me/identities?kind=${encodeURIComponent(i.kind)}&subject=${encodeURIComponent(i.subject)}`);
     const what = `${kindOf(i.kind).label()} ${i.label || i.subject}`;
     setNote(r.ok ? { tone: "ok", text: tr(`已去掉 ${what}。`, `${what} taken off.`) }
-      : { tone: "bad", text: r.status === 409 ? tr("这是你唯一的登录方式，先加一种再去。", "It's your only way to sign in — add another first.") : r.error || tr("没去掉，再试一次。", "Could not take it off — try again.") });
+      : { tone: "bad", text: r.status === 409 ? tr("这是你唯一的登录方式，先加一种再去。", "It's your only way to sign in — add another first.") : (!r.ok && r.error) || tr("没去掉，再试一次。", "Could not take it off — try again.") });
     reload();
   };
 
+  if (ids.failed) return <Failed what={tr("登录方式", "your sign-in methods")} onRetry={reload} />;
   const body = () => {
-    if (ids.state === "loading") return <Lines />;
-    if (ids.state === "failed") return <Failed what={tr("登录方式", "sign-in methods")} onRetry={reload} />;
-    if (ids.state === "none") return <p className="text-muted-foreground text-sm">{tr("这个登录没有可管的登录方式。", "This sign-in has no methods to manage.")}</p>;
+    if (!ids.data) return (
+      <div className="space-y-3" aria-busy="true">
+        {[0, 1].map((i) => <div key={i} className="flex items-center gap-3"><Skeleton className="size-5 rounded-full" /><Skeleton className="h-4 w-2/5" /></div>)}
+      </div>
+    );
     const { identities, can_add } = ids.data;
     const only = identities.length <= 1;
     const hasEmail = identities.some((i) => i.kind === "email");
@@ -316,20 +267,16 @@ function readImport(text: string): Record<string, unknown> {
   return o.bundle && typeof o.bundle === "object" && !Array.isArray(o.bundle) ? (o.bundle as Record<string, unknown>) : o;
 }
 
-const when = (iso?: string) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(lang === "zh" ? "zh-CN" : "en", { year: "numeric", month: "short", day: "numeric" });
-};
 
 const MyConfig: FC = () => {
-  const [b, reload] = useRead<Bundle>("/v1/fleet/person-bundle");
+  const b = useLoad<Bundle>("/v1/fleet/person-bundle");
+  const reload = b.reload;
   const [note, setNote] = useState<Note>(null);
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
 
   const exportIt = () => {
-    if (b.state !== "ok") return;
+    if (!b.data) return;
     const url = URL.createObjectURL(new Blob([JSON.stringify({ version: b.data.version, bundle: b.data.bundle || {} }, null, 2) + "\n"], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url; a.download = EXPORT_NAME; document.body.appendChild(a); a.click(); a.remove();
@@ -337,14 +284,14 @@ const MyConfig: FC = () => {
     setNote({ tone: "ok", text: tr(`已导出 ${EXPORT_NAME}。`, `Exported ${EXPORT_NAME}.`) });
   };
   const importIt = async (f: File) => {
-    if (b.state !== "ok") return;
+    if (!b.data) return;
     setBusy(true);
     try {
       const bundle = readImport(await f.text());
       const r = await sendJSON("PUT", "/v1/fleet/person-bundle", { bundle, base: b.data.version || 0, note: `Imported ${f.name}` });
       if (r.ok) setNote({ tone: "ok", text: tr("已导入，下一个会话起生效。", "Imported — it applies from your next session.") });
       else setNote({ tone: "bad", text: r.status === 409 ? tr("配置刚在别处改过，已重新读取，请再导一次。", "It changed elsewhere a moment ago — reloaded; import again.")
-        : tr(`没导进去：${r.error || "入口没有回应"}`, `Not imported: ${r.error || "the entry did not answer"}`) });
+        : tr(`没导进去：${(!r.ok && r.error) || "入口没有回应"}`, `Not imported: ${(!r.ok && r.error) || "the hub did not answer"}`) });
     } catch (e) {
       setNote({ tone: "bad", text: tr(`没导进去：${(e as Error).message}`, `Not imported: ${(e as Error).message}`) });
     }
@@ -352,8 +299,9 @@ const MyConfig: FC = () => {
     reload();
   };
 
-  const meta = b.state === "ok" && b.data.version
-    ? `v${b.data.version}${b.data.created ? ` · ${tr("更新于", "updated")} ${when(b.data.created)}` : ""}` : "";
+  if (b.failed) return <Failed what={tr("我的配置", "your configuration")} onRetry={reload} />;
+  const meta = b.data?.version
+    ? `v${b.data.version}${b.data.created ? ` · ${tr("更新于", "updated")} ${ago(b.data.created)}` : ""}` : "";
   return (
     <Card>
       <CardHeader>
@@ -361,9 +309,7 @@ const MyConfig: FC = () => {
         <CardDescription>{tr("常用工具和提示语，跟着你到每台机器。团队配置由管理员维护。", "Your tools and prompts, on every machine you work from. The team's configuration is kept by admins.")}</CardDescription>
       </CardHeader>
       <CardContent>
-        {b.state === "loading" ? <Skeleton className="h-9 w-48" />
-          : b.state === "failed" ? <Failed what={tr("我的配置", "your configuration")} onRetry={reload} />
-          : b.state === "none" ? <p className="text-muted-foreground text-sm">{tr("这个登录没有绑定到一个人，没有个人配置。", "This sign-in is not bound to a person, so it has no configuration of its own.")}</p>
+        {!b.data ? <Skeleton className="h-9 w-48" />
           : (
             <>
               <div className="flex flex-wrap items-center gap-2">
@@ -427,10 +373,9 @@ export default function SettingsPage() {
   const { me } = useShell();
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-5 md:px-6 md:py-8">
-      <Title>{tr("设置", "Settings")}</Title>
+      <PageHeader title={tr("设置", "Settings")} />
       <Profile />
-      <SignInWays />
-      <MyConfig />
+      {me?.person ? <><SignInWays /><MyConfig /></> : null}
       <Look />
       {me?.can_logout ? (
         <SignOut>
