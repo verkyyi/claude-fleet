@@ -1021,7 +1021,11 @@ class Core(object):
     def root_script(self, name, args, extra_env, timeout):
         path = os.path.join(self.p.runtime, "bin", name)
         real = bin_file(self.p, path)
+        # launchd / systemd hand the core no HOME / TMPDIR: fill a machine job's own
+        # (root's home under the state dir), or `set -u` scripts die on $HOME (#3556)
         e = dict(os.environ)
+        for k, v in sup.machine_env(sup.Paths(), None).items():
+            e.setdefault(k, v)
         e.update(extra_env)
         try:
             r = subprocess.run(interp(real) + args, stdin=subprocess.DEVNULL, capture_output=True, env=e,

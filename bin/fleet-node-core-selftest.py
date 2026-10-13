@@ -331,6 +331,24 @@ class F_Fixed(Sandbox):
         self.assertEqual(got, ["fleet-memguard.sh --once kill", "fleet-memguard.sh --once report",
                                "fleet-spotlight.sh off --tick kill"])
 
+    def test_no_home(self):
+        # launchd starts the core with no HOME: a `set -u` script must still get one (#3556)
+        n = "fleet-memguard.sh"
+        with open(os.path.join(self.bin, n), "w") as f:
+            f.write('#!/bin/bash\nset -u\necho "home=$HOME" >> %s/home.log\n' % self.d)
+        os.chmod(os.path.join(self.bin, n), 0o755)
+        e = dict(self.env)
+        e.pop("HOME", None)
+        e.pop("TMPDIR", None)
+        p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "serve"], env=e,
+                             stdout=subprocess.DEVNULL, stderr=open(os.path.join(self.d, "core.err"), "a"))
+        self.procs.append(p)
+        self.assertTrue(until(10, lambda: os.path.exists(self.env["FLEET_NODE_CORE_SOCK"])), "the core never listened")
+        r = self.req("memguard", {"level": "once"})
+        self.assertEqual(r.get("rc"), 0, r)
+        got = open(os.path.join(self.d, "home.log")).read().strip()
+        self.assertEqual(got, "home=" + os.path.join(self.env["FLEET_NODE_STATE"], "home"))
+
 
 class G_Switch(Sandbox):
     A = "a" * 40
