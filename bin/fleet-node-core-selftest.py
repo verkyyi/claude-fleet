@@ -124,6 +124,26 @@ def write_pub(path, secret=SECRET):
         f.write("ed25519 %s\n" % base64.b64encode(fleet_ed25519.public_key(secret)).decode())
 
 
+def repin_extra(old=SECRET, new=OTHER, revoke=("0123456789abcdef",)):
+    """Manifest keys for a release signed by <new>, a ROOT the pinned <old> vouches
+    for directly (so a machine re-pins to it), carrying a revocation list <new>
+    signed (#3835)."""
+    rv = _rv()
+    ok, nk = rv.pub_of(old), rv.pub_of(new)
+    chain = [rv.make_doc(old, {"schema": 1, "kind": "release-key", "key": rv.key_line(nk), "role": "root",
+                               "by": rv.key_id(ok)})]
+    rev = rv.make_doc(new, {"schema": 1, "kind": "release-revoked", "version": 2, "keys": list(revoke),
+                            "by": rv.key_id(nk)})
+    return {"key": rv.key_id(nk), "key_chain": chain, "revoked": rev}
+
+
+def _rv():
+    spec = importlib.util.spec_from_file_location("rv_repin", os.path.join(BIN, "fleet-release-verify.py"))
+    rv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rv)
+    return rv
+
+
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="fnc.")
@@ -447,6 +467,45 @@ class G_Switch(Sandbox):
             json.dump({"version": 1, "keys": [rv.key_id(k1)]}, f)
         self.assertIn("revoked", self.refused_switch("a revoked key (the machine's memory)")["why"])
 
+    def test_switch_keeps_the_trust_anchor(self):
+        # issue #3835: the core — never the seat's fetch — moves the pin to a root
+        # the pin vouched for and keeps every revoked id, once the release verified
+        rv = _rv()
+        pin = os.path.join(self.state, "release.pub")
+        old = open(pin).read()
+        self.serve()
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
+                     extra=repin_extra())
+        self.assertEqual(self.req("switch", {"sha": self.B}), {"ok": True, "from": self.A, "to": self.B})
+        self.assertEqual(open(pin).read(), rv.key_line(rv.pub_of(OTHER)) + "\n")
+        self.assertEqual(open(pin + ".prev").read(), old)
+        self.assertEqual(json.load(open(pin + ".revoked")), {"version": 2, "keys": ["0123456789abcdef"]})
+        self.assertIn("trust: re-pinned to the root", self.log())
+        # the re-pinned machine still re-checks B with the new pin
+        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "verify",
+                            os.path.join(self.root, self.B)], env=self.env, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "ok", r.stdout + r.stderr)
+
+    def test_the_seat_cannot_move_the_anchor(self):
+        # issue #3835: a chain the pin does not vouch for (a key naming itself a
+        # root), an op or a key that would steer the pin — refused, the pin as it was
+        rv = _rv()
+        pin = os.path.join(self.state, "release.pub")
+        old = open(pin).read()
+        self.serve()
+        nk = rv.pub_of(OTHER)
+        self_made = [rv.make_doc(OTHER, {"schema": 1, "kind": "release-key", "key": rv.key_line(nk), "role": "root",
+                                         "by": rv.key_id(nk)})]
+        make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"}, secret=OTHER,
+                     extra={"key": rv.key_id(nk), "key_chain": self_made})
+        self.refused_switch("a self-made root")
+        for line in ('{"op": "repin", "args": {"key": "%s"}}' % rv.key_line(nk),
+                     '{"op": "switch", "args": {"sha": "%s", "pubkey": "/tmp/mine.pub"}}' % self.B,
+                     '{"op": "trust", "args": {}}'):
+            self.assertIn("refused", self.raw((line + "\n").encode()), line)
+        self.assertEqual(open(pin).read(), old)
+        self.assertFalse(os.path.exists(pin + ".prev") or os.path.exists(pin + ".revoked"))
+
     def test_unlisted_file(self):
         self.serve()
         d = make_release(os.path.join(self.state, "staging"), self.B, {"bin/x": b"new\n"})
@@ -758,6 +817,14 @@ dest=$a
 sha=$(eval echo \\${$(($#-1))})
 [ -d "$FAKE_REL/$sha" ] || { echo "no release $sha" >&2; exit 1; }
 cp -R "$FAKE_REL/$sha" "$dest"
+# what ccquota's Trust.Keep does with a chain that re-pins: writes beside --pubkey
+pub=; prev=
+for a; do [ "$prev" = --pubkey ] && pub=$a; prev=$a; done
+[ -n "${FAKE_PUB_LOG:-}" ] && echo "$pub" >> "$FAKE_PUB_LOG"
+if [ -n "${FAKE_KEEP:-}" ]; then
+  cp "$pub" "$pub.prev.tmp.$$" && mv "$pub.prev.tmp.$$" "$pub.prev" && echo "$FAKE_KEEP" > "$pub" \
+    || { echo "release verified, but $pub: permission denied" >&2; exit 1; }
+fi
 """
 
 FAKE_CODESIGN = """#!/bin/sh
@@ -827,13 +894,13 @@ class N_SeatedUpdate(Sandbox):
             "FLEET_BOOTSTRAP_CACHE": "off",
         })
 
-    def signed_release(self, where, sha):
+    def signed_release(self, where, sha, **kw):
         files = {"release.json": self.spec_bytes}
         for n in CORE_FILES:
             with open(os.path.join(BIN, n), "rb") as f:
                 files["bin/" + n] = f.read()
         arts = {n: ("#!/bin/sh\necho %s %s\n" % (n, sha[:7])).encode() for n in self.names}
-        return make_release(where, sha, files, artifacts=arts)
+        return make_release(where, sha, files, artifacts=arts, **kw)
 
     def tick(self, **extra):
         e = dict(self.env, FLEET_NODE_SEATED="1", FLEET_NODE_CCQUOTA=os.path.join(self.d, "ccquota"),
@@ -884,6 +951,29 @@ class N_SeatedUpdate(Sandbox):
         self.assertEqual(st.get("result"), "committed", r.stdout + r.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.state, "update-root.json")))
         self.assertGreaterEqual(self.log().count("op=update"), 3, self.log())
+
+    def test_seated_repin_kept_by_the_core(self):
+        # issue #3835: B's chain moves the pin to a new root. The seat's fetch
+        # checks against its own copy (ccquota writes there, never the anchor) and
+        # does not fail; the core re-pins the anchor at the switch, as root
+        rv = _rv()
+        shutil.rmtree(os.path.join(self.rel, self.B))
+        self.signed_release(self.rel, self.B, secret=OTHER, extra=repin_extra())
+        pin = os.path.join(self.state, "release.pub")
+        old = open(pin).read()
+        new = rv.key_line(rv.pub_of(OTHER))
+        os.chmod(pin, 0o444)  # the seat reads it; were it to write, the fetch would fail
+        plog = os.path.join(self.d, "pub.log")
+        self.serve()
+        r, st = self.tick(FAKE_KEEP=new, FAKE_PUB_LOG=plog)
+        self.assertEqual((r.returncode, st.get("phase")), (0, "switched"), r.stdout + r.stderr + self.log())
+        used = open(plog).read().split()
+        self.assertTrue(used and all(u.startswith(os.path.join(self.state, "staging") + os.sep) for u in used), used)
+        self.assertEqual(open(pin).read(), new + "\n")
+        self.assertEqual(open(pin + ".prev").read(), old)
+        self.assertEqual(json.load(open(pin + ".revoked"))["keys"], ["0123456789abcdef"])
+        self.assertIn("trust: re-pinned", self.log())
+        os.chmod(pin, 0o644)
 
     def test_sign_failure_refuses_the_switch(self):
         self.serve()
@@ -1124,6 +1214,12 @@ if __name__ == "__main__":
                          artifacts={"claude-1-darwin-arm64": b"#!/bin/sh\necho claude\n",
                                     "ccquota-darwin-arm64": b"#!/bin/sh\necho ccquota\n"})
         print(hashlib.sha256(b"#!/bin/sh\necho claude\n").hexdigest())
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--make-repin":
+        # the seat-repin drill's seam (#3835): <dir> <sha> — a release signed by a
+        # new root the selftest key vouches for (+ a revocation); prints its key line
+        make_release(sys.argv[2], sys.argv[3], {"bin/x": b"x\n"}, secret=OTHER, extra=repin_extra())
+        print(_rv().key_line(_rv().pub_of(OTHER)))
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "--write-pub":
         write_pub(sys.argv[2])

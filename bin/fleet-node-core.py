@@ -58,7 +58,9 @@ holds the wire half). The table, written here and nowhere else:
                           artifacts, ITS signature re-checked with the core's own key
                           (<state>/release.pub) and every file's digest, bin/ccquota
                           signed with the machine's identity (fleet_node_codesign.py),
-                          moved in, then `.prev` = old, `current` = new
+                          moved in, the trust anchor kept (a re-pin, revoked ids —
+                          the core is its only writer, #3835), then `.prev` = old,
+                          `current` = new
   rollback {}             `current` ↔ `.prev`, the target re-checked the same way
   update   {step}         the seated updater's root half (#3670): <current>/bin/
                           fleet-node-update.py root <step> as root — outside (cache,
@@ -436,6 +438,42 @@ def signed_manifest(paths, d, sha):
     if m.get("schema") != 1 or m.get("sha") != sha:
         return None, "manifest names %s, not %s" % (m.get("sha") if isinstance(m, dict) else None, sha)
     return m, None
+
+
+def keep_trust(paths, d, sha):
+    """What a release that just verified taught the machine's trust anchor
+    (issue #3835): every revoked id its chain's roots signed (<pin>.revoked only
+    ever grows) and a root the pin vouched for directly becoming the pin (the old
+    kept as <pin>.prev) — fleet-release-verify.py's one rule, the same ccquota's
+    Trust.Keep follows. The core is the ONLY writer of the anchor on a seated
+    machine: `_fleetnode` reads it and never writes it. Lines to log ([] = nothing
+    learned); an OSError is the caller's to log, never the switch's."""
+    m, why = signed_manifest(paths, d, sha)
+    if why:
+        return []
+    pub = read_pub(paths.pubkey)
+    revp = paths.pubkey + ".revoked"
+    _, t = relverify.signer_of(pub, m, known=relverify.load_revoked(revp)[0])
+    if not isinstance(t, tuple):
+        return []
+    _, rev, ver, repin = t
+    said = []
+    have, hver = relverify.load_revoked(revp)
+    if (rev - have) or ver > hver:
+        relverify.save_revoked(revp, rev, ver)
+        said.append("revoked %s (v%d)" % (" ".join(sorted(rev - have)) or "-", max(ver, hver)))
+    if repin is not None and repin != pub:
+        with open(paths.pubkey) as f:
+            cur = f.read()
+        for path, body in ((paths.pubkey + ".prev", cur), (paths.pubkey, relverify.key_line(repin) + "\n")):
+            tmp = "%s.tmp.%d" % (path, os.getpid())
+            with open(tmp, "w") as f:
+                f.write(body)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
+        said.append("re-pinned to the root %s (vouched for by %s; the old kept as %s.prev)"
+                    % (relverify.key_id(repin), relverify.key_id(pub), paths.pubkey))
+    return said
 
 
 def identity(paths):
@@ -1079,6 +1117,13 @@ class Core(object):
             if why:
                 raise Refused(None, "%s: %s — current stays" % (sha[:12], why))
             self.compile(dest, a)
+        # the trust anchor follows the release that just verified — here, as root,
+        # never in the seat's fetch (#3835)
+        try:
+            for n in keep_trust(self.p, dest, sha):
+                self.log(self.tl.uid, "switch", a, "trust: " + n)
+        except OSError as e:
+            self.log(self.tl.uid, "switch", a, "trust: not kept: %s" % e)
         old = link_target(self.p.current)
         if old and old != sha and os.path.isdir(self.p.rel(old)):
             swap_link(self.p.prev, self.p.rel(old))
