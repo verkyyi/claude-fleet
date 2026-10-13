@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -224,4 +225,48 @@ func TestAdminRequests_Reject(t *testing.T) {
 		t.Fatalf("reject 0 days = %d", st)
 	}
 	seedRequest(t, h, "rq-f2", store.IdentityEmail, "fay@example.com", "fay@example.com", now.Add(time.Second))
+}
+
+// claude-fleet#4062 (C14): the 「新申请待审核」 notice links to the request;
+// an admin not signed in there yet (WeChat's own browser) signs in and comes
+// back to that request, not the console's front page. Only a request page is
+// remembered, and only one spelled as a request id.
+func TestAdminRequests_NoticeLinkSurvivesSignIn(t *testing.T) {
+	h, _, _ := rolesHarness(t)
+	seedRequest(t, h, "rq-a", store.IdentityEmail, "dana@example.com", "dana@example.com", time.Now())
+	get := func(path string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+path, nil)
+		req.Header.Set("Accept", "text/html")
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	resp := get("/admin/requests/rq-a")
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
+		t.Fatalf("signed out: %d → %q; want 302 /app/signin", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	c := cookieNamed(resp, entryReturnCookie)
+	if c == nil || c.Value != "/admin/requests/rq-a" || !c.HttpOnly {
+		t.Fatalf("return cookie: %+v; want /admin/requests/rq-a, HttpOnly", c)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/auth/wechat/callback", nil)
+	r.AddCookie(c)
+	if got := loginReturn(httptest.NewRecorder(), r); got != "/admin/requests/rq-a" {
+		t.Fatalf("after sign-in: %q; want the request", got)
+	}
+	// Another admin page sets nothing; a value not a request page is refused.
+	if c := cookieNamed(get("/admin/people"), entryReturnCookie); c != nil {
+		t.Errorf("/admin/people left a return cookie %q", c.Value)
+	}
+	for _, v := range []string{"/admin/people", "/admin/requests/../people", "/admin/requests/x", "//evil.example/admin/requests/rq-a"} {
+		r := httptest.NewRequest(http.MethodGet, "/auth/wechat/callback", nil)
+		r.AddCookie(&http.Cookie{Name: entryReturnCookie, Value: v})
+		if got := loginReturn(httptest.NewRecorder(), r); got != AppPrefix {
+			t.Errorf("return %q → %q; want %s", v, got, AppPrefix)
+		}
+	}
 }

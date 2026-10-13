@@ -295,10 +295,13 @@ function RequestDrawer({ r, cooldownDays, close, reload }: { r: AccessRequest; c
         </section>
       </div>
       {r.state === "pending" && (
-        <SheetFooter className="mt-auto gap-2 border-t p-4">
-          <div className="flex justify-end gap-2">
+        // on a phone (the 「新申请待审核」 notice opens here, claude-fleet#4062)
+        // the drawer is the whole screen and the two buttons stay at its
+        // bottom, thumb-sized, above the home bar
+        <SheetFooter className="sticky bottom-0 mt-auto gap-2 border-t bg-background p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
             <RejectDialog r={r} cooldownDays={cooldownDays} close={close} reload={reload} />
-            <Button disabled={busy} onClick={approve}>
+            <Button className="h-11 sm:h-9" disabled={busy} onClick={approve}>
               {t("req.approve")}
             </Button>
           </div>
@@ -343,7 +346,9 @@ function RejectDialog({ r, cooldownDays, close, reload }: { r: AccessRequest; co
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger asChild>
-        <Button variant="outline">{t("req.rejectOpen")}</Button>
+        <Button variant="outline" className="h-11 sm:h-9">
+          {t("req.rejectOpen")}
+        </Button>
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>

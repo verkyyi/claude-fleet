@@ -313,15 +313,16 @@ func (s *Server) moveOn(w http.ResponseWriter, r *http.Request, serve http.Handl
 // adminGate answers a request on the admin side: to anyone who is not an
 // admin the 404 an unknown address gets (audited), else next. Mounted
 // behind viewerOnly, so a stranger is asked to sign in first, as for any
-// page, whatever the address.
+// page, whatever the address — and a request page asked for signed out is
+// where the sign-in comes back to (rememberAdminReturn).
 func (s *Server) adminGate(next http.Handler) http.Handler {
-	return s.viewerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.viewerOr(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if roleOf(r.Context()) == roleUser {
 			s.denyAdminPage(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
-	}))
+	}), rememberAdminReturn)
 }
 
 // adminSide is the router's AdminPrefix and below: the old console's own
