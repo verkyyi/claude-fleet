@@ -69,6 +69,9 @@
 #   login-remove-managed  bin/fleet-login-remove.sh step 1c + bin/fleet-node-supervisor.py
 #                         `account forget` (#2924): a login the daemon took over is deleted —
 #                         its demoted tasks came back after every kill, its entry stayed
+#   linux-remove-task-running  bin/fleet-node-supervisor.py `account forget` _account_stop
+#                         (#3379): a removed login's task hung in a git fetch outlived the
+#                         20 s wait and failed the whole removal
 #   account-release-gone-login  bin/fleet-node-supervisor.py `account release` (#2924):
 #                         release of a login no longer on the machine loaded its services back
 #   account-op-reload-cut bin/fleet-node-supervisor.py's node-agent `hold` (#2918) +
@@ -711,9 +714,45 @@ drill_login_remove_managed() {
   _forget_unset
   WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"
 }
+# linux-remove-task-running (#3379): `login remove verkyyi --host fleet-linux-0`
+# failed at [1c] — the daemon dropped the login, but its fleet-base-sync.sh sat
+# in a `git fetch` hung on the network, and `account forget` only WAITED
+# FLEET_NODE_RELEASE_WAIT (20 s) for it, then exit 1 «the daemon has not dropped
+# them». Now a run that outlives the wait is stopped: its process group TERM,
+# then KILL — this one ignores TERM — and the removal goes on.
+drill_linux_remove_task_running() {
+  CAP=20
+  local sb t0 tpid
+  sb="$WORK/forget-hung"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/LaunchDaemons"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 300\n' > "$sb/Users/alice/.claude/fleet/bin/hung.sh"
+  chmod +x "$sb/Users/alice/.claude/fleet/bin/hung.sh"
+  printf '{"children": [], "tasks": [], "account": [{"name": "base-sync", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/hung.sh"], "every": 1}]}\n' > "$sb/table.json"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
+    FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' \
+    FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1
+  python3 "$BIN/fleet-node-supervisor.py" account adopt alice >/dev/null 2>&1 || { WHY="adopt failed"; _forget_unset; return 1; }
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  _tp() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("tasks", {}).get(sys.argv[2]) or {}).get("pid") or "")' \
+           "$sb/db/state.json" "$1" 2>/dev/null; }
+  _has_tp() { [ -n "$(_tp alice/base-sync)" ]; }
+  until_ok 10 _has_tp || { WHY="alice's task never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
+  tpid=$(_tp alice/base-sync)
+  t0=$(now)
+  python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
+    || { WHY="account forget failed on a hung task: $(tail -1 "$sb/forget.out")"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
+  kill -0 "$tpid" 2>/dev/null && { WHY="alice's hung task still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
+  grep -q 'sent KILL' "$sb/forget.out" || { WHY="forget never said it killed the run: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
+  python3 -c 'import json,sys; sys.exit(0 if "alice" not in json.load(open(sys.argv[1])) else 1)' "$sb/db/accounts.json" \
+    || { WHY="accounts.json still holds alice"; _forget_unset; return 1; }
+  SECS=$(since "$t0")
+  _forget_unset
+  WHAT="删号时该登录有个挂住的任务（不理 TERM）：account forget 等不到就对它的进程组 TERM 再 KILL，删号照样完成"
+}
 _forget_unset() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
-    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD FLEET_NODE_RELEASE_WAIT FLEET_NODE_FORGET_KILL_WAIT
 }
 
 # account-release-gone-login (#2924): `account release` of a login already
