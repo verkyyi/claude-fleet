@@ -191,7 +191,7 @@ var routeAccess = map[string]string{
 	// 我自己的订阅 (claude-fleet#4035): each person their own rows only.
 	MeSubsPath: accessUser, MeSubsLoginPath: accessUser, MeSubsFinishPath: accessUser,
 	MeSubsPausePath: accessUser, MeSubsDeletePath: accessUser,
-	"/v1/usage":    accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
+	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
 	"/v1/user": accessUser, "/mcp": accessUser,
