@@ -463,8 +463,6 @@ const rotateIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9
 
 // signinScanCSS is what the page adds to entryCSS, as the prototype draws it.
 const signinScanCSS = `[hidden]{display:none!important}
-.pill{display:inline-flex;align-items:center;gap:6px;width:max-content;margin-bottom:16px;padding:3px 10px;border:1px solid var(--fleet-clay-line);border-radius:9999px;background:var(--fleet-clay-soft);color:var(--fleet-clay);font-size:12px;line-height:1.5}
-.pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
 .qrcard{padding:20px;border:1px solid var(--border);border-radius:calc(var(--radius) + 4px);background:var(--card);color:var(--card-foreground);text-align:center}
 .qrbox{position:relative;width:184px;height:184px;margin:0 auto 14px;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:#fff}
 .qrbox svg{width:100%;height:100%;stroke:none}
@@ -498,7 +496,7 @@ details.more .qrbox{margin-top:12px}
 var signinScanTmpl = template.Must(template.New("signin-scan").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `<style>` + signinScanCSS + `</style>
 <title>{{t "signin.title"}}</title>{{if .Scene}}<noscript><meta http-equiv="refresh" content="2;url=` + wxPollPath + `?s={{.Scene}}"></noscript>{{end}}</head><body><div class="page">` + entryTop + `
 <main class="col" id="wx"{{if .Scene}} data-s="{{.Scene}}"{{end}}>
-<span class="pill"><i></i>{{t "signin.wx.pill"}}</span><h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
+` + limitedPill + `<h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{if .Apply}}{{t "signin.wx.lead.apply"}}{{else}}{{t "signin.wx.lead"}}{{end}}</p>
 {{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
 {{if eq .Mode "mobile"}}<button class="btn wx" type="button" id="wxcopy" data-url="{{.PageURL}}">` + wechatIcon + `{{t "signin.wx.open"}}</button>
@@ -517,7 +515,7 @@ var signinScanTmpl = template.Must(template.New("signin-scan").Funcs(pageFuncs(i
 <button class="btn outline" type="submit">{{t "signin.wx.email.button"}}</button></form>{{end}}
 {{if .GitHub}}<div class="lk"><a href="/auth/github/start">{{t "signin.wx.github"}}</a></div>{{end}}
 </div></details>{{end}}
-<p class="fine">{{t "signin.wx.fine"}}</p>
+<p class="fine">{{t "signin.ways.fine.wechat"}}</p>
 </main></div><script src="` + signinPollScriptPath + `"></script></body></html>`))
 
 // serveSigninPollScript is the sign-in page's script.
@@ -566,8 +564,7 @@ const signinPollScript = `(function () {
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"wx.user":        {i18n.EN: "WeChat user", i18n.ZhCN: "微信用户"},
-		"signin.wx.pill": {i18n.EN: "Limited access for now", i18n.ZhCN: "目前限定开放"},
+		"wx.user": {i18n.EN: "WeChat user", i18n.ZhCN: "微信用户"},
 		"signin.wx.lead": {
 			i18n.EN:   "Scan with WeChat and follow 二四网络科技 to sign in. Not on the list yet? Sign in, then try it and apply right there.",
 			i18n.ZhCN: "用微信扫码关注「二四网络科技」登录。还不在名单上的，登录后可以先试用、当场申请。",
@@ -606,10 +603,6 @@ func init() {
 		},
 		"signin.wx.email.button": {i18n.EN: "Email me a code", i18n.ZhCN: "发验证码"},
 		"signin.wx.github":       {i18n.EN: "Sign in with GitHub", i18n.ZhCN: "用 GitHub 登录"},
-		"signin.wx.fine": {
-			i18n.EN:   "Once you follow the account, we only send what concerns your account: review results and service changes.",
-			i18n.ZhCN: "关注公众号后，我们只发和你账号有关的通知：审核结果、服务变动。",
-		},
 		"signin.note.wechat-expired": {
 			i18n.EN:   "That code has expired or was already used. Here's a new one.",
 			i18n.ZhCN: "那个二维码已过期或已用过，换了一个新的。",
