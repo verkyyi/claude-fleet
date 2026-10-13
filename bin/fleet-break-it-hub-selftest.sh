@@ -167,6 +167,9 @@
 #   apply-reaches-app                               tokenledger/internal/api not_listed.go + applicant.go (the not-listed
 #                                                   sign-ins mint ccq_applicant, Path /apply, read only by
 #                                                   applicantFrom); go test, when a toolchain is here
+#   notify-leaks-secret                             tokenledger/internal/api wxgw.go (the gate read in one place, errcode
+#                                                   only) + notify.go (the one way out: audit / outbox / mail / template
+#                                                   carry no secret); go test, when a toolchain is here
 #   svc-usage-crosses-tenant                        tokenledger/internal/api svc_usage.go (tenant on the run's pass and
 #                                                   pool_usage, fleet.svc_budget / svc_tenant_budget, svcYield,
 #                                                   GET /v1/svc/usage; go test, when a toolchain is here)
@@ -2368,6 +2371,26 @@ drill_apply_reaches_app() {
   c11_go_tests not_listed_test.go TestApplicantNoteReachesNothingElse TestNotListedEveryWayLandsOnApply TestRealRefusalsKeepTheDenyPage || return 1
   WHAT='申请者 cookie 只给 /apply：Path 限在 /apply，只有 applicantFrom 读它（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='名单外的 GitHub / 微信 / 邮箱登录都 302 /apply、不建人不发会话；那张 cookie 打 /app、/v1/me、/admin 和没登录一样；removed、坏邀请仍是拒绝页（go test 三条）'
+  SECS=$(since "$t0")
+}
+
+# ---- notify-leaks-secret (#4053, EPIC #4048 C5 · 共同约定 9): the gate to
+# workbench (CCQUOTA_WX_INTERNAL_TOKEN) mints the whole service account's
+# access token, so neither it nor the token it mints may reach a log, an audit
+# row, the outbox or a notice — whatever fails on the way.
+drill_notify_leaks_secret() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal" f; GO_RAN=0
+  t0=$(now)
+  [ -f "$tl/api/notify.go" ] || { WHY="there is no one way out for a notice (internal/api/notify.go)"; return 1; }
+  # the gate is read in wxgw.go alone
+  for f in $(grep -l 'x-internal-token' "$tl"/api/*.go 2>/dev/null | grep -v '_test\.go$'); do
+    [ "${f##*/}" = wxgw.go ] || { WHY="${f##*/} sends the workbench gate itself, not through wxgw.go"; return 1; }
+  done
+  grep -q 'errcode %d' "$tl/api/wxgw.go" 2>/dev/null \
+    || { WHY="a WeChat failure no longer says only its errcode (wxgw.go)"; return 1; }
+  c11_go_tests notify_test.go TestNotifyLeaksNoSecret || return 1
+  WHAT='口令只在 wxgw.go 读，失败只带 errcode；通知出口不带原文（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='502/连不上/换 token/取关/回显口令的 errmsg/SMTP 拒收全走一遍，日志、审计、发件箱、信和模板里没有口令也没有 access_token（go test）'
   SECS=$(since "$t0")
 }
 

@@ -27,9 +27,10 @@ import (
 // enters a log, an audit row, an error text or a page (BREAK-IT
 // notify-leaks-secret).
 //
-// The token itself is used against api.weixin.qq.com for two calls —
-// qrcode/create and user/info — and kept in memory until shortly before
-// workbench says it expires.
+// The token itself is used against api.weixin.qq.com — qrcode/create and
+// user/info for signing in, message/template/send and message/custom/send for
+// the notices (notify.go, #4053) — and kept in memory until shortly before
+// workbench says it expires. Every call gives up after three seconds.
 
 // WxGateway is the service account's road: CCQUOTA_WX_INTERNAL_URL (e.g.
 // http://workbench-backend.new-deploy.svc.cluster.local/internal/wx) and
@@ -43,8 +44,15 @@ type WxGateway struct {
 	// APIBase is WeChat's API; empty means https://api.weixin.qq.com. Tests
 	// point it at a fake.
 	APIBase string
-	// HTTP is the client; nil means one with a 10-second timeout.
+	// HTTP is the client; nil means one with a 3-second timeout.
 	HTTP *http.Client
+
+	// TplReview / TplNewReq are the template messages a request's result and
+	// an admin's new-request notice go out as (CCQUOTA_WX_TPL_REVIEW /
+	// CCQUOTA_WX_TPL_NEWREQ): a template shaped 时间 · 内容 · 建议
+	// (keyword1..3, notify.go). Empty = no template for that kind; the
+	// notice falls back to a customer-service message, then a mail.
+	TplReview, TplNewReq string
 
 	// The web-authorisation relay (claude-fleet#4055, wx_relay.go):
 	// RelayURL is workbench's GET /node_w/wx/oauth/relay (CCQUOTA_WX_RELAY_URL),
@@ -88,7 +96,7 @@ func (g *WxGateway) client() *http.Client {
 	if g.HTTP != nil {
 		return g.HTTP
 	}
-	return &http.Client{Timeout: 10 * time.Second}
+	return &http.Client{Timeout: wxTimeout}
 }
 
 func (g *WxGateway) now() time.Time {
@@ -97,6 +105,9 @@ func (g *WxGateway) now() time.Time {
 	}
 	return time.Now()
 }
+
+// wxTimeout bounds every call to workbench and to WeChat.
+const wxTimeout = 3 * time.Second
 
 // errWxDown is every failure to reach the service account, said the same
 // way: what the person sees is 「微信暂时不可用」, never why.
@@ -195,11 +206,26 @@ func (g *WxGateway) call(ctx context.Context, path string, body any, out interfa
 		}
 		if c := out.code(); c != 0 {
 			// The code only: WeChat's errmsg can echo the request, token included.
-			return fmt.Errorf("%w (errcode %d)", errWxDown, c)
+			return &wxCodeError{c}
 		}
 		return nil
 	}
 	return errWxDown
+}
+
+// wxCodeError is WeChat saying no: its errcode, never its errmsg.
+type wxCodeError struct{ Code int }
+
+func (e *wxCodeError) Error() string { return fmt.Sprintf("%v (errcode %d)", errWxDown, e.Code) }
+func (e *wxCodeError) Unwrap() error { return errWxDown }
+
+// wxCode is err's WeChat errcode, 0 when WeChat did not answer one.
+func wxCode(err error) int {
+	var c *wxCodeError
+	if errors.As(err, &c) {
+		return c.Code
+	}
+	return 0
 }
 
 type wxErr struct {
@@ -278,4 +304,34 @@ func (g *WxGateway) userInfo(ctx context.Context, openid string) (wxUser, error)
 	}
 	return wxUser{OpenID: openid, UnionID: strings.TrimSpace(out.UnionID), Followed: out.Subscribe == 1,
 		Nickname: strings.TrimSpace(out.Nickname)}, nil
+}
+
+// wxTplField is one value of a template message.
+type wxTplField struct {
+	Value string `json:"value"`
+}
+
+// templateSend sends template tpl to openid, opening link when tapped.
+// WeChat's errcode comes back in the error (wxCode): 43004 = they no longer
+// follow the account.
+func (g *WxGateway) templateSend(ctx context.Context, openid, tpl, link string, data map[string]string) error {
+	d := map[string]wxTplField{}
+	for k, v := range data {
+		d[k] = wxTplField{v}
+	}
+	body := map[string]any{"touser": openid, "template_id": tpl, "data": d}
+	if link != "" {
+		body["url"] = link
+	}
+	var out wxErr
+	return g.call(ctx, "/cgi-bin/message/template/send", body, &out)
+}
+
+// customSend sends text to openid as a customer-service message: allowed
+// only within 48 hours of their last interaction with the account (45015
+// otherwise).
+func (g *WxGateway) customSend(ctx context.Context, openid, text string) error {
+	body := map[string]any{"touser": openid, "msgtype": "text", "text": map[string]string{"content": text}}
+	var out wxErr
+	return g.call(ctx, "/cgi-bin/message/custom/send", body, &out)
 }

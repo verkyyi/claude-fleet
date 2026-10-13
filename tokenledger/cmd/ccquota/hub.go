@@ -975,6 +975,10 @@ func runHub(args []string) error {
 	go elector.Run(ctx)
 	// A replica's fleet_replicas row (claude-fleet#2190); a single hub: no-op.
 	go srv.RunReplica(ctx)
+	// The notice desk (claude-fleet#4053): a request's result to its person,
+	// new requests to the admins — WeChat, else a mail. Every replica runs
+	// it; a notice is claimed with a lease, so it goes out once.
+	go srv.RunNotify(ctx)
 	if srv.Spot != nil {
 		go srv.Spot.Run(ctx)
 	}
@@ -1248,6 +1252,13 @@ func wxGatewayFromEnv(getenv func(string) string) *api.WxGateway {
 		g.ComponentAppID = strings.TrimSpace(getenv("CCQUOTA_WX_COMPONENT_APPID"))
 		g.AuthorizeBase = strings.TrimSpace(getenv("CCQUOTA_WECHAT_AUTHORIZE_BASE"))
 		log.Printf("wechat in-app sign-in: on, through %s", relay)
+	}
+	// The notices' template messages (claude-fleet#4053): unset ⇒ a notice
+	// falls back to a customer-service message, then a mail.
+	g.TplReview = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_REVIEW"))
+	g.TplNewReq = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NEWREQ"))
+	if g.TplReview == "" || g.TplNewReq == "" {
+		log.Printf("wechat notices: CCQUOTA_WX_TPL_REVIEW / CCQUOTA_WX_TPL_NEWREQ not both set — that kind goes as a customer-service message or a mail")
 	}
 	return g
 }

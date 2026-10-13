@@ -277,6 +277,7 @@ func (s *Server) applyPost(w http.ResponseWriter, r *http.Request, path string) 
 			return
 		}
 		_ = s.Store.HubAudit(actor, "request.edit", target, "ok", got.ID, now)
+		_ = rq.SetLang(got.ID, loc)
 		http.Redirect(w, r, ApplyPath, http.StatusSeeOther)
 		return
 	}
@@ -316,6 +317,10 @@ func (s *Server) applyPost(w http.ResponseWriter, r *http.Request, path string) 
 		return
 	}
 	_ = s.Store.HubAudit(actor, "request.submit", target, "ok", got.ID, now)
+	// The result is told in the language they asked in; the admins hear of
+	// it now (C5, notify.go).
+	_ = rq.SetLang(got.ID, loc)
+	s.notifyAdmins(got)
 	http.Redirect(w, r, ApplyPath, http.StatusSeeOther)
 }
 

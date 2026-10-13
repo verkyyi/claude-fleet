@@ -614,7 +614,8 @@ CREATE TABLE IF NOT EXISTS fleet_invites (
 -- At most one pending request per (kind, subject): the partial unique index
 -- below, so a double submit on two replicas still leaves one. A rejection
 -- carries the reason and cooldown_until (unix seconds; 0 = none); ip_hash is
--- the submitting address hashed, what the per-address limit counts. Times
+-- the submitting address hashed, what the per-address limit counts; lang the
+-- language they asked in, which their result is told in (C5). Times
 -- are unix seconds; 0 = not yet.
 CREATE TABLE IF NOT EXISTS hub_access_requests (
   id             TEXT PRIMARY KEY,
@@ -632,9 +633,42 @@ CREATE TABLE IF NOT EXISTS hub_access_requests (
   decided_by     TEXT NOT NULL DEFAULT '',
   created_at     INTEGER NOT NULL,
   decided_at     INTEGER NOT NULL DEFAULT 0,
-  ip_hash        TEXT NOT NULL DEFAULT ''
+  ip_hash        TEXT NOT NULL DEFAULT '',
+  lang           TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_hub_access_requests_who ON hub_access_requests(kind, subject, created_at);
 CREATE INDEX IF NOT EXISTS idx_hub_access_requests_state ON hub_access_requests(state, created_at);
 CREATE INDEX IF NOT EXISTS idx_hub_access_requests_ip ON hub_access_requests(ip_hash, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hub_access_requests_pending ON hub_access_requests(kind, subject) WHERE state = 'pending';
+
+-- The notices the hub owes someone (claude-fleet#4053, EPIC #4048 C5 · 共同约定
+-- 9): a request's result to its person (kind review), new requests to an admin
+-- (kind newreq). owner is a principal or "applicant:<kind>:<subject>" — whose
+-- hub_reach rows say where; email / prefer are what the request asked for
+-- (prefer wechat | email | page, '' = WeChat first). refs are the requests it
+-- is about, comma-joined: an admin's notice gathers every request that comes
+-- in while it waits out the ten-minute window. state pending → sent |
+-- undelivered; due_at is the next try, lease_until keeps a second sender off a
+-- row being sent, attempts counts the failed tries (three retries, backing
+-- off). first_at is the first event the notice is about (what the latency
+-- metric measures from). No error text is kept: a failure is an audit row with
+-- an errcode at most (BREAK-IT notify-leaks-secret). Times are unix seconds.
+CREATE TABLE IF NOT EXISTS hub_notify_outbox (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,
+  owner       TEXT NOT NULL,
+  email       TEXT NOT NULL DEFAULT '',
+  prefer      TEXT NOT NULL DEFAULT '',
+  lang        TEXT NOT NULL DEFAULT '',
+  refs        TEXT NOT NULL DEFAULT '',
+  state       TEXT NOT NULL DEFAULT 'pending',
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  due_at      INTEGER NOT NULL,
+  lease_until INTEGER NOT NULL DEFAULT 0,
+  channel     TEXT NOT NULL DEFAULT '',
+  first_at    INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL,
+  done_at     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_hub_notify_outbox_due ON hub_notify_outbox(state, due_at);
+CREATE INDEX IF NOT EXISTS idx_hub_notify_outbox_owner ON hub_notify_outbox(owner, kind, state);
