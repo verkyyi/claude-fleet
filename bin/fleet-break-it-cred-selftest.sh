@@ -518,7 +518,7 @@ if [ -z "${BREAK_ONLY:-}" ] && [ "$_crd_part" != all ]; then
   esac
   [ "$_crd_pk" -le "$_crd_pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$_crd_part" >&2; exit 2; }
   # contiguous slices balanced by each drill's measured wall time (fleet-break-it-part.py)
-  # shellcheck disable=SC2086  # ids carry no whitespace
+  # shellcheck disable=SC2086,SC2046  # ids carry no whitespace
   _crd_ids=" $(python3 "$BIN/fleet-break-it-part.py" "$_crd_part" "$BIN/break-it-durations.txt" \
     $(printf '%s\n' $_crd_fns | sed 's/^drill_//' | tr _ -) | tr '\n' ' ')"
   _crd_sliced=1

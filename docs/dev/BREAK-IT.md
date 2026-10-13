@@ -4,7 +4,7 @@
 哪条演练在隔离环境里真做一遍（issue #1786，EPIC #1776 C10）。
 
 **规则：新发现一种弄坏 fleet 的方式，先在这张表加一行、在
-`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。主脚本的演练按表中顺序切成连续的六段跑（#2955、#2694，各自一个测试、各自的上限），按每条演练在 CI 上的墙钟（`bin/break-it-durations.txt`，`selftest-durations.sh --drills` 刷新）由 `bin/fleet-break-it-part.py` 均分：它自己跑第一段，`bin/fleet-break-it-{2..6}-selftest.sh` 跑其余，`BREAK_PART=all` 一次跑完；node、hub 两个分文件同样切段（`-node-2/-3`、`-hub-2`）。** 一条演练 =
+`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。主脚本的演练按表中顺序切成连续的七段跑（#2955、#2694，各自一个测试、各自的上限），按每条演练在 CI 上的墙钟（`bin/break-it-durations.txt`，`selftest-durations.sh --drills` 刷新）由 `bin/fleet-break-it-part.py` 均分：它自己跑第一段，`bin/fleet-break-it-{2..7}-selftest.sh` 跑其余，`BREAK_PART=all` 一次跑完；node、hub 两个分文件同样切段（`-node-2/-3`、`-hub-2`）。** 一条演练 =
 一个 `drill_<id>` 函数；`演练` 一列写它的 `id`。不在本仓库修的（别的仓库、别的单），
 `演练` 一列写 `登记：<单号>`，只登记不演练。
 
