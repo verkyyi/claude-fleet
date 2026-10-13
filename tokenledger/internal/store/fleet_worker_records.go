@@ -77,7 +77,12 @@ type WorkerRecordQuery struct {
 	Epic     int
 	Kind     string
 	WorkerID string
-	Content  bool // false: leave the bytes out (a listing)
+	// FleetIDs, when set, selects these fleets' records whatever their owner
+	// (a person's own fleets, already cut by FleetScope — claude-fleet#3927);
+	// Owner then narrows only when set too.
+	FleetIDs []string
+	Since    time.Time // zero: no lower bound on created_at
+	Content  bool      // false: leave the bytes out (a listing)
 	Limit    int
 }
 
@@ -111,8 +116,19 @@ func (s *Store) PutWorkerRecords(recs []FleetWorkerRecord) error {
 
 // WorkerRecords reads the records q selects, oldest first.
 func (s *Store) WorkerRecords(q WorkerRecordQuery) ([]FleetWorkerRecord, error) {
-	where := []string{"owner = ?"}
-	args := []any{q.Owner}
+	where, args := []string{}, []any{}
+	if q.Owner != "" || len(q.FleetIDs) == 0 {
+		where, args = append(where, "owner = ?"), append(args, q.Owner)
+	}
+	if len(q.FleetIDs) > 0 {
+		where = append(where, "fleet_id IN (?"+strings.Repeat(", ?", len(q.FleetIDs)-1)+")")
+		for _, id := range q.FleetIDs {
+			args = append(args, id)
+		}
+	}
+	if !q.Since.IsZero() {
+		where, args = append(where, "created_at >= ?"), append(args, q.Since.UTC().Format(rfc))
+	}
 	if q.Repo != "" {
 		where, args = append(where, "repo = ?"), append(args, q.Repo)
 	}

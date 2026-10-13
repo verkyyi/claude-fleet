@@ -23,7 +23,7 @@ export type PageDef = {
 
 export const PAGES: PageDef[] = [
   { id: "chat", path: "/", label: tr("对话", "Chat"), icon: MessageCircle, tab: true, side: true, page: ChatPage },
-  { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, tab: true, side: true, href: "/app/sessions" },
+  { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, tab: true, side: true, page: lazy(() => import("./pages/sessions")) },
   { id: "tasks", path: "/tasks", label: tr("任务", "Tasks"), icon: ListChecks, tab: true, side: true, page: lazy(() => import("./pages/tasks")) },
   // one ticket, under 任务 (C5); /tasks/tickets/ alone is the tickets tab
   { id: "ticket", path: "/tasks/tickets/:owner/:name/:n", label: tr("单子", "Ticket"), icon: ListChecks, page: lazy(() => import("./pages/ticket")) },

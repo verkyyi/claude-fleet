@@ -203,7 +203,9 @@ var routeAccess = map[string]string{
 	"/v1/user": accessUser, "/mcp": accessUser,
 	// The app's push channel (claude-fleet#2794): each topic cut like its route.
 	"/v1/fleet/stream": accessUser,
-	"/sessions":        accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
+	// 我的会话 (claude-fleet#3927): live and ended, cut to their own.
+	FleetSessionListPath: accessUser,
+	"/sessions":          accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
 	// 任务 (claude-fleet#3325): the viewer's own records.
 	"/tasks": accessUser, "/v1/fleet/tasks": accessUser, "/v1/fleet/tasks/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs

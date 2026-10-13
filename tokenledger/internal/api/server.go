@@ -686,6 +686,8 @@ func (s *Server) routes() *routeMux {
 		// The app's push channel (claude-fleet#2794): nodes, sessions and
 		// usage over one SSE connection, each cut like its own route.
 		mux.Handle(FleetStreamPath, s.viewerOnly(http.HandlerFunc(s.handleFleetStream)))
+		// 我的会话, the new console's (claude-fleet#3927): live and ended, the viewer's own.
+		mux.Handle(FleetSessionListPath, s.viewerOnly(http.HandlerFunc(s.handleFleetSessionList)))
 		// The sidebar's session list (claude-fleet#1475): the same doors,
 		// plus a connection certificate proven by a signed timestamp — so
 		// it authenticates itself, outside the viewer gate, like the routes.
