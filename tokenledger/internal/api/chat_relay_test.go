@@ -86,6 +86,15 @@ func startChatAgent(t *testing.T, h *harness, label string, chat bool) (*fakeCha
 	t.Helper()
 	conf := shortTemp(t)
 	sock := listenChatSock(t, conf)
+	nc, host, login := runChatAgentIn(t, h, label, chat, conf)
+	return sock, nc, host, login
+}
+
+// runChatAgentIn runs a real agent whose $FLEET_CONF_DIR is conf (the test put
+// whatever answers at conf/webchat/chat.sock); it returns the hub's link, the
+// machine and the login.
+func runChatAgentIn(t *testing.T, h *harness, label string, chat bool, conf string) (*nodeConn, string, string) {
+	t.Helper()
 	t.Setenv("FLEET_CONF_DIR", conf)
 	me, err := user.Current()
 	if err != nil {
@@ -111,7 +120,7 @@ func startChatAgent(t *testing.T, h *harness, label string, chat bool) (*fakeCha
 		nc = h.srv.nodes.get("ep_" + label)
 		return nc != nil && nc.hostname() == host && nc.user() == me.Username
 	})
-	return sock, nc, host, me.Username
+	return nc, host, me.Username
 }
 
 func TestChatRelayReachesTheLoginsSocket(t *testing.T) {
