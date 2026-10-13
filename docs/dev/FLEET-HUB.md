@@ -2170,6 +2170,67 @@ there is none and runs queue and expire as above.
 - **Audit.** `svc.run.job` (the ticket went out) · `svc.run.spec` (the pass and
   its expiry). BREAK-IT `svc-run-sees-keys`.
 
+### On the Mac mini's service logins (claude-fleet#4086)
+
+Claude Code runs only where its region allows — the Mac mini — so production
+does not run a service run in the cluster: `CCQUOTA_FLEET_SVC_RUNNER=node` makes
+the hub's runner `NodeSvcRunner` (`internal/api/svc_runner_node.go`; it and
+`CCQUOTA_FLEET_SVC_CLUSTER` together refuse to start — one runner per hub). The
+cluster road stays for a Codex-only service; nothing routes there today.
+
+- **Service logins, not people's.** A macOS login of its own (`fleetsvc1`, …),
+  never a person's, a spare or a trial's: root adds `CCQUOTA_FLEET_SVC=1` to its
+  `/var/db/fleet-node/logins/<login>.env`, so its agent lists `CapSvcRun` (only
+  when its install carries `bin/fleet-svc-local.sh`), and the hub setting
+  `fleet.svc.logins` = `<host>:<login>,…` names it. Both, or it is never sent a
+  run. `fleet.svc.per_login` (default 1, at most 4) is how many attempts one
+  login runs at once; the slots are logins × per_login.
+- **The queue.** Oldest first, as before; the dispatch claims only as many runs
+  as there are free slots (`svcSlotted`, `ClaimSvcRunsUpTo`) — the rest stay
+  queued and expire after 30 minutes as before. No service login linked ⇒ every
+  run waits.
+- **One attempt.** `Start` picks the least busy login, mints the `fsj_` key
+  (`svc_run_jobs.cluster` = `node:<host>/<login>`) and sends `svc_run {run,
+  attempt, deadline, token}`; the agent (`internal/agent/node_svc_run.go`) starts
+  the login's `bin/fleet-svc-local.sh run` in a process group of its own, the
+  key on its stdin only, and answers at once. The run reads its spec and hands
+  in its result over `/v1/node/svc-runs` itself — the Job's road, unchanged — and
+  its model calls go to `<hub>/v1/proxy/anthropic` with the run's pass (metered
+  by tenant). A dropped link is not a cancel; past the deadline + 2 minutes, or
+  on `svc_run_cancel`, the agent kills the group and runs `fleet-svc-local.sh
+  clean R<n> <k>` as the login.
+- **Nothing reaches the next run** (one login, many workspaces):
+  `fleet-svc-local.sh` gives each attempt a new 0700 `~/.fleet-svc-runs/R<n>-a<k>`
+  (HOME · work · out · tmp · the key; an existing one is refused), kills the
+  session's process group and every process carrying its `FLEET_RUN_TAG`, then
+  removes the directory; the session's environment holds neither the key nor the
+  hub's address and its settings deny reading the key, the pass and the login's
+  own dot directories. BREAK-IT `svc-run-leaks-across-runs`.
+- **The hub's `FLEET_NOTIFY_CMD`** in production is the image's
+  `/usr/local/bin/fleet-hub-notify` → `ccquota notify`: `FLEET_NOTIFY_KF_URL` +
+  `FLEET_NOTIFY_KF_KEY` (a kf-notify service: `POST /v1/notify`, dest
+  `FLEET_NOTIFY_KF_DEST`, recipient `FLEET_NOTIFY_KF_TO`, source
+  `FLEET_NOTIFY_KF_SOURCE`), else `FLEET_NOTIFY_WEBHOOK` (WeCom · Feishu · Bark ·
+  `{"text"}`); neither ⇒ nothing sent.
+
+Setting up a service login (once per login; an admin mints the code, root runs
+the rest on the Mac mini). It joins the hub as its own node like any login the
+hub opens, then is told it is a service login and that nothing else is placed
+on it (`CCQUOTA_FLEET_COMPUTE=0`); no `--share-pool` — it reaches a model only
+through the run's pass:
+
+```sh
+# the hub (an admin): a one-time join code for it
+#   POST /v1/fleet/join-codes {"label": "fleetsvc1"}  → {"code": "fj_…"}
+read -rs FLEET_LOGIN_JOIN_CODE && export FLEET_LOGIN_JOIN_CODE FLEET_LOGIN_HUB=https://claudefleet.24haowan.com
+sudo -E ~/.claude/fleet/bin/fleet-login-new.sh fleetsvc1 --full-name 'fleet service 1' --no-welcome \
+  --pubkey ~/.ssh/id_ed25519.pub --apply                      # joins, separates, adopts
+for f in /var/db/fleet-node/logins/fleetsvc1.env ~fleetsvc1/.config/claude-fleet/node.env; do
+  sudo sh -c "printf 'CCQUOTA_FLEET_SVC=1\nCCQUOTA_FLEET_COMPUTE=0\n' >> $f"
+done                                   # logins/ changed ⇒ the machine's node program reloads
+# the hub (an admin): PUT /v1/fleet/settings {"fleet.svc.logins": "macmini:fleetsvc1"}
+```
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:
