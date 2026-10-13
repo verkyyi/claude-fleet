@@ -200,6 +200,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.cfg.FleetSSHRelay {
 		caps = append(caps, control.CapSSHRelay)
 	}
+	if a.cfg.FleetChat {
+		caps = append(caps, control.CapChat)
+	}
 	if a.teamCapable() {
 		// The team layer follows the hub's push (claude-fleet#1899).
 		caps = append(caps, control.CapTeam)
@@ -343,6 +346,12 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				// (claude-fleet#1413).
 				if a.cfg.FleetSSHRelay {
 					go a.openSSHRelay(ctx, m)
+				}
+			case control.TypeChatRelayOpen:
+				// Same binding as the SSH relay; an agent that did not
+				// offer CapChat ignores it (claude-fleet#3644).
+				if a.cfg.FleetChat {
+					go a.openChatRelay(ctx, m)
 				}
 			case control.TypeServiceLog:
 				// One entry's log (claude-fleet#2797): a page, or a

@@ -118,6 +118,7 @@ var routeAccess = map[string]string{
 	// claude-fleet#2519).
 	CredProxyUsagePath: accessSelf, "/v1/node/usage": accessSelf, "/v1/fleet/person-usage": accessUser,
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
+	control.ChatRelayDataPath: accessSelf,
 	// The ticket registry (claude-fleet#2676): a node registers with its token.
 	FleetTicketRegisterPath: accessSelf,
 	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.

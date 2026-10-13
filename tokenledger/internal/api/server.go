@@ -165,8 +165,17 @@ type Server struct {
 	// across all their relays (0: 4 MiB/s; negative: unlimited).
 	SSHRelayRateBPS int64
 
+	// ChatRelayMaxPerLogin bounds one login's concurrent chat relays (0: 8;
+	// claude-fleet#3644).
+	ChatRelayMaxPerLogin int
+	// ChatRelayRateBPS bounds one login's chat relay bytes per second, both
+	// ways, across all of them (0: 1 MiB/s; negative: unlimited).
+	ChatRelayRateBPS int64
+
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable
+	// chatRelays holds the chat relays in flight, admitted per login.
+	chatRelays sshRelayTable
 	// svcLogs are the service logs being followed (claude-fleet#2797): one
 	// node stream per service, however many viewers.
 	svcLogs svcLogHub
@@ -729,6 +738,9 @@ func (s *Server) routes() *routeMux {
 		// its enrollment token.
 		mux.HandleFunc(control.SSHRelayPath, s.handleSSHRelayConnect)
 		mux.HandleFunc(control.SSHRelayDataPath, s.handleSSHRelayData)
+		// The data half of a chat relay (claude-fleet#3644): the agent, by
+		// its own signature or token, as for the SSH relay.
+		mux.HandleFunc(control.ChatRelayDataPath, s.handleChatRelayData)
 		// The route list `fleet connect` measures (claude-fleet#1414): it
 		// admits a certificate by a signed timestamp, so it authenticates
 		// itself, outside the viewer gate.

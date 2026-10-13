@@ -45,6 +45,10 @@ func main() {
 		// The seated node program's tenant command, through the root core's
 		// exec-as (claude-fleet#3669): exits with the job's code.
 		os.Exit(runCoreExec(os.Args[2:]))
+	case "chat-pipe": // agent.ChatPipeCmd
+		// A chat relay's last hop, run as the login (claude-fleet#3644):
+		// its own conversation socket on stdio, nothing else.
+		os.Exit(runChatPipe(os.Args[2:]))
 	case "hub":
 		err = runHub(os.Args[2:])
 	case "enroll":

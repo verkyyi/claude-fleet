@@ -389,11 +389,18 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 // handleSSHRelayData serves SSHRelayDataPath: an agent attaching the data half of
 // a relay the hub asked it for.
 func (s *Server) handleSSHRelayData(w http.ResponseWriter, r *http.Request) {
+	s.attachRelayData(w, r, &s.sshRelays)
+}
+
+// attachRelayData hands an agent's data stream to the relay in t it was asked
+// for (the SSH relay's table, or the chat relay's — claude-fleet#3644), and
+// holds it until that relay is over.
+func (s *Server) attachRelayData(w http.ResponseWriter, r *http.Request, t *sshRelayTable) {
 	ep, ok := s.nodeEndpoint(w, r) // its signature, else its token (claude-fleet#3710)
 	if !ok {
 		return
 	}
-	p := s.sshRelays.get(r.URL.Query().Get("id"))
+	p := t.get(r.URL.Query().Get("id"))
 	// The relay must be the one THIS endpoint was asked for, with the
 	// secret it was given: another login on the same machine holding its
 	// own token cannot step into someone else's stream.

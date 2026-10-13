@@ -7028,6 +7028,42 @@ drill_chat_home_moved() {
   WHAT="A 家说一句、停掉、状态目录照 service move 搬到 B 家：B 上同一个 session、历史在、下一轮 resume 它，A 下面不剩服务；空闲到点退出 75（有页面连着不退），再起同一条对话"
 }
 
+# chat-relay-wrong-person (issue #3644, EPIC #3642 C2): the node half of the chat
+# relay admits a stream only after the hub's X-Fleet-Person verifies with THIS
+# login's token hash, for this login and this relay, unexpired — anything else
+# closes it and the login's socket never sees a byte; nothing the hub sends can
+# change the target; an agent without CapChat is never sent an open. All of it is
+# Go (tokenledger/internal/api chat_relay_test.go, a real agent, a real unix
+# socket): held by name, run when a toolchain is here.
+drill_chat_relay_wrong_person() {
+  CAP=180; local t0 out rc api ctl agt
+  api='TestChatRelayWrongPersonNeverReachesTheSocket TestChatRelayTargetIsFixed TestChatRelayNotSentWithoutCapChat TestChatRelayReachesTheLoginsSocket'
+  ctl='TestChatPerson'; agt='TestChatPipe'
+  t0=$(now)
+  for out in $api; do
+    grep -q "^func $out(" "$ROOT/tokenledger/internal/api/chat_relay_test.go" 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+  done
+  grep -q "^func $ctl(" "$ROOT/tokenledger/internal/control/chat_relay_test.go" 2>/dev/null || { WHY="the statement's test $ctl is gone"; return 1; }
+  grep -q "^func $agt(" "$ROOT/tokenledger/internal/agent/node_chat_relay_test.go" 2>/dev/null || { WHY="the helper's test $agt is gone"; return 1; }
+  # the open carries no target: ChatRelayOpen is relay_id · secret · login, nothing more
+  out=$(awk '/^type ChatRelayOpen struct/,/^}/' "$ROOT/tokenledger/internal/control/chat_relay.go" | grep -c 'json:"')
+  [ "$out" = 3 ] || { WHY="ChatRelayOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/control ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='签错 / 过期 / 给别的转发 / 给别的登录 / 寿命过长 / 没有声明 / 先发字节 → 节点断开，socket 0 连接 0 字节；给别的登录的 open 不回拨；请求里塞 target/path/addr/port 只到本登录自己的 socket；没报 CapChat 的节点不收 open（NO_CHAT）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑这几条；测试按名核对在、open 没有目标字段' ;;
+      *) WHY="the chat relay (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v 'live/report' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在、open 没有目标字段，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
 # land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
 # land at once through fleet-land.sh — both land, one after the other, the second
 # rebased onto the first and checked again; a red check never moves the base; gh 0 times.
