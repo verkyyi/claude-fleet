@@ -512,7 +512,7 @@ func TestFleetNodeJoinByScan(t *testing.T) {
 
 	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pAlice, nil)
 	page := html.UnescapeString(string(raw))
-	if pc != 200 || !strings.Contains(page, "<title>Add newbox as a node</title>") || !strings.Contains(page, "<h1>Add newbox as a node</h1>") ||
+	if pc != 200 || !strings.Contains(page, "<title>Add newbox as a node</title>") || !strings.Contains(page, `<h1>Add newbox as a node<span class="dot">.</span></h1>`) ||
 		!strings.Contains(page, st.UserCode) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("node confirm page %d:\n%s", pc, page)
 	}

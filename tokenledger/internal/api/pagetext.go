@@ -129,8 +129,8 @@ var pageText = map[string]i18n.Text{
 
 	// ── /signin ───────────────────────────────────────────────────────
 	"signin.title":  {i18n.EN: "Sign in · claudefleet", i18n.ZhCN: "登录 · claudefleet"},
-	"signin.h1":     {i18n.EN: "Sign in to claudefleet", i18n.ZhCN: "登录 claudefleet"},
-	"signin.lead":   {i18n.EN: "This hub is private. Use the GitHub account an admin added.", i18n.ZhCN: "这个入口是私有的，请用管理员加过的 GitHub 账号登录。"},
+	"signin.h1":     {i18n.EN: "Sign in", i18n.ZhCN: "登录"},
+	"signin.lead":   {i18n.EN: "Pick up your chats and sessions — with the GitHub account an admin added.", i18n.ZhCN: "继续你的对话和会话。用管理员加过的 GitHub 账号登录。"},
 	"signin.button": {i18n.EN: "Continue with GitHub", i18n.ZhCN: "用 GitHub 继续"},
 	"signin.fine": {
 		i18n.EN:   "claudefleet asks GitHub only who you are. It gets no access to your repositories or organizations.",

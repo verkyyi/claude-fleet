@@ -910,10 +910,7 @@ func verifyBlob(v, key string) ([]byte, bool) {
 }
 
 func writeAuthPage(w http.ResponseWriter, status int, t *template.Template, loc string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Language", loc)
+	entryHeaders(w, loc)
 	w.Header().Add("Vary", "Accept-Language, Cookie")
 	w.WriteHeader(status)
 	if c, err := t.Clone(); err == nil {
@@ -938,72 +935,24 @@ type denyPage struct {
 	Heading string
 }
 
-// The two pages follow the prototype's sign-in and "can't use this hub"
-// cards (EPIC #1982): its palette, its fonts, its words.
-const authPageHead = `<!doctype html>
-<html lang="{{.Lang}}"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="icon" href="/favicon.ico" sizes="32x32">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<style>
-` + authPaletteCSS + `*{box-sizing:border-box}html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 var(--f-ui);-webkit-font-smoothing:antialiased}
-.pub{min-height:100%;display:grid;grid-template-rows:auto 1fr}
-nav{display:flex;align-items:center;padding:18px clamp(16px,4vw,48px);max-width:1180px;width:100%;margin:0 auto}
-.logo{display:inline-flex;align-items:center;gap:9px;font:700 18px var(--f-display);letter-spacing:-.01em;color:var(--ink);text-decoration:none}
-.mark{width:26px;height:26px;border-radius:7px;background:var(--brand);display:grid;place-items:center}
-.mark svg{width:16px;height:16px;stroke:var(--brand-ink);stroke-width:2.2;fill:none;stroke-linecap:round}
-.center{display:grid;place-items:center;padding:40px 16px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:30px;width:100%;max-width:420px;display:grid;gap:18px}
-h1{margin:0;font:700 1.5rem var(--f-display);letter-spacing:-.02em}
-p{margin:0}.lead{color:var(--ink-2)}.fine{font-size:12.5px;color:var(--muted)}
-.big{width:40px;height:40px;border-radius:10px;background:var(--brand);display:grid;place-items:center}
-.big svg{width:22px;height:22px;stroke:var(--brand-ink);stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round}
-.big.bad{width:46px;height:46px;border-radius:12px;background:var(--bad-soft)}.big.bad svg{stroke:var(--bad);stroke-width:2}
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:500 13.5px var(--f-ui);border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 13px;border-radius:7px;text-decoration:none;white-space:nowrap}
-.btn:hover{border-color:var(--muted)}.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2)}
-.btn.lg{padding:11px 18px;font-size:15px;border-radius:9px}
-.btn.gh{background:var(--gh);border-color:var(--gh);color:var(--gh-ink)}
-.btn svg{width:17px;height:17px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round}
-.note{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:9px 12px;font-size:13.5px}
-.row{display:flex;gap:8px;flex-wrap:wrap}
-.ask{background:var(--line-2);border-radius:8px;padding:10px 12px;user-select:all}.ask code{font:500 14px ui-monospace,Menlo,monospace}
-a.alt{color:var(--muted);font-size:13px}
-nav{justify-content:space-between;gap:12px}
-` + langSwitchCSS + zhTypeCSS + `</style>`
-
-// authPaletteCSS is the public pages' palette, light and dark: the sign-in
-// cards and the keys page (claude-fleet#3069) wear the same one.
-const authPaletteCSS = `:root{--bg:#f4f6f5;--panel:#fff;--ink:#15201d;--ink-2:#3c4945;--muted:#6a7773;--line:#e0e6e3;--line-2:#ecf0ee;--brand:#0e6e5e;--brand-ink:#fff;--bad:#b5361f;--bad-soft:#fbe6e1;--warn:#a86a00;--warn-soft:#fbefd6;
---shadow:0 1px 2px rgba(16,30,26,.06),0 4px 16px -6px rgba(16,30,26,.10);--f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;--f-ui:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;--gh:#1f2328;--gh-ink:#fff;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1412;--panel:#151d1b;--ink:#e5ece9;--ink-2:#c1ccc8;--muted:#8b9894;--line:#26302d;--line-2:#1e2725;--brand:#3fc2a6;--brand-ink:#062019;--bad:#f08a76;--bad-soft:#3a1c16;--warn:#e8b85a;--warn-soft:#33290f;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px -8px rgba(0,0,0,.5);--gh:#f0f3f6;--gh-ink:#1f2328;color-scheme:dark}}
-`
-
-const authNav = `<nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a>` + langSwitch + `</nav>`
-
-const gitIcon = `<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>`
+// The sign-in and refusal pages are way-in pages (entry_pages.go): the
+// theme, the header, one column.
+const authPageHead = entryHead
 
 var signinTmpl = template.Must(template.New("signin").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
-<title>{{t "signin.title"}}</title></head><body><div class="pub">` + authNav + `
-<div class="center"><main class="card">
-<div class="big"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></div>
-<div style="display:grid;gap:6px"><h1>{{t "signin.h1"}}</h1><p class="lead">{{t "signin.lead"}}</p></div>
-{{if .Note}}<p class="note" role="status">{{.Note}}</p>{{end}}
-<a class="btn gh lg" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>
+<title>{{t "signin.title"}}</title></head><body><div class="page">` + entryTop + `
+<main class="col"><h1>{{t "signin.h1"}}<span class="dot">.</span></h1><p class="lead">{{t "signin.lead"}}</p>
+{{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
+<a class="btn primary" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>
 <p class="fine">{{t "signin.fine"}}</p>
-</main></div></div></body></html>`))
+</main></div></body></html>`))
 
 var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
-<title>{{t "deny.title"}}</title></head><body><div class="pub">` + authNav + `
-<div class="center"><main class="card">
-<div class="big bad"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></div>
-<div style="display:grid;gap:6px"><h1>{{if .Heading}}{{.Heading}}{{else}}{{t "deny.h1"}}{{end}}</h1>
-<p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else if eq .Why "invite-expired"}}{{tb "deny.invite.expired" .Login}}{{else if eq .Why "invite-used"}}{{tb "deny.invite.used" .Login}}{{else if eq .Why "invite-revoked"}}{{tb "deny.invite.revoked" .Login}}{{else if eq .Why "invite-unknown"}}{{tb "deny.invite.unknown" .Login}}{{else if eq .Why "invite-other-user"}}{{tb "deny.invite.other-user" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p></div>
-{{if .Ask}}<p class="ask"><code>{{.Ask}}</code></p>{{end}}
-<div class="row"><a class="btn" href="/app/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/app">{{t "deny.back"}}</a></div>
+<title>{{t "deny.title"}}</title></head><body><div class="page">` + entryTop + `
+<main class="col"><div class="tile">` + lockIcon + `</div>
+<h1>{{if .Heading}}{{.Heading}}{{else}}{{t "deny.h1"}}{{end}}<span class="dot">.</span></h1>
+<p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else if eq .Why "invite-expired"}}{{tb "deny.invite.expired" .Login}}{{else if eq .Why "invite-used"}}{{tb "deny.invite.used" .Login}}{{else if eq .Why "invite-revoked"}}{{tb "deny.invite.revoked" .Login}}{{else if eq .Why "invite-unknown"}}{{tb "deny.invite.unknown" .Login}}{{else if eq .Why "invite-other-user"}}{{tb "deny.invite.other-user" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p>
+{{if .Ask}}<p class="ask">{{.Ask}}</p>{{end}}
+<div class="stack"><a class="btn primary" href="/app/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/app">{{t "deny.back"}}</a></div>
 <p class="fine">{{t "deny.fine"}}</p>
-</main></div></div></body></html>`))
+</main></div></body></html>`))

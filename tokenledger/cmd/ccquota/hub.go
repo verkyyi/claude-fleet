@@ -851,6 +851,7 @@ func runHub(args []string) error {
 		SiteFS:      web.Site(),
 		DocsFS:      web.Docs(),
 		ConsoleFS:   web.Console(),
+		ThemeFS:     web.Theme(),
 		FleetAdmins: splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
