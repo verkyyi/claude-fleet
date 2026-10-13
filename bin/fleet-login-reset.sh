@@ -13,7 +13,9 @@
 #              services booted out, its credsep purged, the pool copy gone,
 #              every process quiesced, the home archived (--keep-home, the
 #              default) into --archive-dir (/Users/Shared/offboarded).
-#   2 wash     the home moved aside into the archive dir and deleted, a fresh
+#   2 wash     the login quiesced again and only then the clock (--since)
+#              started (issue #3979); the home moved aside into the archive dir
+#              and deleted, quiesced once more, a fresh
 #              one from the template (createhomedir, 700); the admin's
 #              ~/<login>-onboard; its crontab; root's entry keys and task state
 #              for it (<node state>/entry/keys/<login>, logins/<login>/); a
@@ -109,6 +111,46 @@ failed() { printf '%s: %s\n' "$PROG" "$2" >&2; verdict "dirty $1" "${3:-1}"; }
 # wrun <phase> <argv…>: print, and under --apply run — a failure is that phase dirty
 wrun() { local ph=$1; shift; show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || failed "$ph" "failed: $*"; }
 
+# quiesce: no process of the login, and none coming back — as the remove
+# script's (issue #2866), run again here right before the wash's clock starts
+# and once more when the old home is gone (issue #3979). The stop quiesced at its
+# step 4, but its step 5 (the archive) takes its time, and launchd relaunched
+# /usr/sbin/distnoted for the uid in that gap (fleetu5, op a9a30fae): started
+# before --since, the check counted it as the last person's. Nothing is let
+# through by name — a relaunched LaunchAgent would ride the same pass. Still
+# running after three rounds ⇒ a WARN and on: the check names it (processes).
+SETTLE=${FLEET_LOGIN_RESET_SETTLE:-${FLEET_LOGIN_REMOVE_SETTLE:-3}}
+quiesce() {
+  show sudo launchctl bootout "user/$UIDT"
+  show sudo launchctl bootout "gui/$UIDT"
+  show sudo pkill -TERM -U "$UIDT"
+  [ "$APPLY" = 1 ] || return 0
+  local round s back
+  for round in 1 2 3; do
+    sudo launchctl bootout "user/$UIDT" >/dev/null 2>&1 || :   # none is normal
+    if sudo launchctl print "gui/$UIDT" >/dev/null 2>&1; then
+      sudo launchctl bootout "gui/$UIDT" >/dev/null 2>&1 || :
+    fi
+    sudo pkill -TERM -U "$UIDT" 2>/dev/null || :   # no processes is normal
+    if pgrep -U "$UIDT" >/dev/null 2>&1; then
+      sleep 1
+      if pgrep -U "$UIDT" >/dev/null 2>&1; then
+        sudo pkill -KILL -U "$UIDT" 2>/dev/null || :
+        sleep 1
+      fi
+    fi
+    back=0 s=0
+    while [ "$s" -lt "$SETTLE" ]; do
+      pgrep -U "$UIDT" >/dev/null 2>&1 && { back=1; break; }
+      sleep 1; s=$((s + 1))
+    done
+    [ "$back" = 1 ] || pgrep -U "$UIDT" >/dev/null 2>&1 || return 0
+    printf '%s: WARN a process of uid %s is back (round %s): %s\n' "$PROG" "$UIDT" "$round" \
+      "$(ps -o comm= -U "$UIDT" 2>/dev/null | head -3 | tr '\n' ' ')" >&2
+  done
+  printf '%s: WARN processes still run as uid %s after three rounds of bootout + kill — the check will name them\n' "$PROG" "$UIDT" >&2
+}
+
 # ---- the op file: where a cut-off run of the same op goes on from ----------
 DONE_STOP=0 DONE_REJOIN=0 ARCHIVE='' SINCE=''
 opget() { sed -n "s/^$1=//p" "$OPF" 2>/dev/null | tail -n 1; }
@@ -161,9 +203,12 @@ fi
 if [ "$DONE_REJOIN" = 0 ]; then
   # Only what predates this moment is the last person's (the check's --since):
   # set again on every wash — what a half rejoin made is washed with the rest.
+  # Taken only once the login is quiet again: whatever launchd relaunched since
+  # the stop's quiesce predates this moment and would read as the last person's.
+  step 2 "wash $LOGIN: a fresh home, nothing of the last person anywhere"
+  quiesce
   SINCE=$(date +%s)
   opput since "$SINCE" wash
-  step 2 "wash $LOGIN: a fresh home, nothing of the last person anywhere"
   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
   # The home is moved aside first: a rename needs no access to what is inside
   # (macOS privacy protection can keep root's rm out of ~/Library), and the old
@@ -195,6 +240,9 @@ if [ "$DONE_REJOIN" = 0 ]; then
         "$PROG" "$ASIDE" "$ARCHIVE_DIR" "$ASIDE" >&2
     fi
   fi
+  # Once more with the old home gone: anything relaunched between the clock and
+  # the move started after --since, and the check would let it through.
+  quiesce
   wrun wash sudo createhomedir -c -u "$LOGIN"
   wrun wash sudo chmod 700 "$H"
   if [ "$APPLY" = 1 ] && [ ! -d "$H" ]; then failed wash "createhomedir made no home at $H"; fi

@@ -13,9 +13,13 @@
 #      redone without a second archive, washed, set up, clean; once more ⇒ only
 #      the check. Another op ⇒ from the start.
 #   F  refusals: no such login (4), an admin (3), under root's uid as the caller
+#   G  launchd relaunched a process of the uid after the stop's quiesce, before
+#      the wash (distnoted, issue #3979) ⇒ the wash quiesces again before its
+#      clock starts: clean, and the bootout + kill sit between stop and wash
 # fleet-login-remove.sh and fleet-login-new.sh are stubs (each has its own
 # selftest); the check is the real fleet-login-reset-check.py. sudo, id,
-# createhomedir, crontab, ps and launchctl are PATH shims; every system path sits
+# createhomedir, crontab, ps, pgrep, pkill and launchctl are PATH shims (pkill
+# NEVER real: the login's uid is the runner's); every system path sits
 # under FLEET_LOGIN_RESET_ROOT. The login's uid is this runner's own (a file can
 # only be planted as it), so the outside-files sweep runs ONLY inside the root.
 set -uo pipefail
@@ -36,7 +40,7 @@ export FLEET_LOGIN_HOMES="$R/Users" FLEET_INSTALL_DAEMON_DIR="$R/Library/LaunchD
   FLEET_OFFBOARD_ARCHIVE_DIR="$R/Users/Shared/offboarded" \
   FLEET_LOGIN_RESET_REMOVE="$W/remove.sh" FLEET_LOGIN_RESET_NEW="$W/new.sh" \
   RS_LOG="$W/calls.log" RS_PS="$W/ps" RS_CRON="$W/cron" RS_U="$U" RS_ADMIN_DEF="$((U + 1000))" RS_TPL="$R/System/Library/User Template/Non_localized"
-export HOME="$R/Users/admin" PATH="$W/shim:$PATH"
+export HOME="$R/Users/admin" PATH="$W/shim:$PATH" FLEET_LOGIN_RESET_SETTLE=0
 H="$R/Users/$L" ARCH="$FLEET_OFFBOARD_ARCHIVE_DIR"
 S="$BIN/fleet-login-reset.sh"
 
@@ -85,6 +89,16 @@ cat > "$W/shim/ps" <<'EOF'
 #!/bin/sh
 cat "$RS_PS" 2>/dev/null; exit 0
 EOF
+# the uid's processes are RS_PS's lines; a kill takes them unless RS_PROC_STAYS
+cat > "$W/shim/pgrep" <<'EOF'
+#!/bin/sh
+[ -s "$RS_PS" ]
+EOF
+cat > "$W/shim/pkill" <<'EOF'
+#!/bin/sh
+printf 'pkill %s\n' "$*" >> "$RS_LOG"
+[ -n "${RS_PROC_STAYS:-}" ] || : > "$RS_PS"
+EOF
 cat > "$W/shim/launchctl" <<'EOF'
 #!/bin/sh
 printf 'launchctl %s\n' "$*" >> "$RS_LOG"
@@ -98,6 +112,8 @@ login=$1; keep=0; apply=0
 for a in "$@"; do case "$a" in --keep-home) keep=1 ;; --apply) apply=1 ;; esac; done
 [ "$apply" = 1 ] || { echo 'fleet-login-remove: dry run complete'; exit 0; }
 [ -n "${RS_PROC_STAYS:-}" ] || : > "$RS_PS"
+# launchd brings one back after the quiesce, while the archive runs (#3979)
+[ -z "${RS_RESPAWN:-}" ] || printf '%s 88669 00:00:30 distnoted\n' "$RS_U" > "$RS_PS"
 if [ "$keep" = 1 ]; then
   mkdir -p "$FLEET_OFFBOARD_ARCHIVE_DIR"; a="$FLEET_OFFBOARD_ARCHIVE_DIR/$login-$(date +%s%N).tar.gz"
   : > "$a"; echo "  archive=$a"
@@ -217,6 +233,20 @@ run ghost --apply; [ "$RC" = 4 ] && ok 'F no such login: 4' || fail "F ghost: $R
 run boss --apply; [ "$RC" = 3 ] && ok 'F an admin: 3' || fail "F boss: $RC"
 RS_ADMIN_UID=$U run "$L" --apply; [ "$RC" = 3 ] && ok 'F the caller itself: 3' || fail "F self: $RC"
 run "$L" --bogus; [ "$RC" = 2 ] && ok 'F a bad option: 2' || fail "F bogus: $RC"
+
+# ---- G: a process relaunched between the stop and the wash ----
+fixture
+RS_RESPAWN=1 run "$L" --apply
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'G a relaunch after the stop is quiesced before the clock: clean' || { tail -8 "$W/out"; fail "G: $(last2) rc $RC"; }
+python3 - "$RS_LOG" <<'PY' && ok 'G the wash boots out and kills before its clock, and again before the fresh home' || fail 'G no quiesce between stop and wash'
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+at = lambda s, f=0: next(i for i, l in enumerate(lines) if i >= f and s in l)
+r = at('remove ')
+k = at('pkill -TERM -U', at('launchctl bootout user/', r))
+k2 = at('pkill -TERM -U', at(' mv ', k))
+assert k2 < at('createhomedir', k2) < at('new ')
+PY
 
 [ "$FAILS" = 0 ] || { printf 'fleet-login-reset-selftest: %s FAILED\n' "$FAILS"; exit 1; }
 printf 'fleet-login-reset-selftest: PASS\n'

@@ -101,6 +101,7 @@
 #   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
 #   login-remove-uid-leftovers                      bin/fleet-login-remove.sh step 5b (#3508)
 #   spare-wash-no-fda                               bin/fleet-login-reset.sh wash → bin/fleet-login-remove-ssh.sh wash (#3508)
+#   spare-wash-respawn                              bin/fleet-login-reset.sh (quiesce before --since and after the home move, #3979)
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -5542,6 +5543,25 @@ drill_spare_wash_no_fda() {
   got=$(bash "$ROOT/bin/fleet-login-remove-ssh-selftest.sh" 2>&1) \
     || { WHY="fleet-login-remove-ssh-selftest.sh is red: $(printf '%s\n' "$got" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='没有完全磁盘访问时洗号经本机 ssh：强制命令 wash <登录名> <时间戳> 把家目录挪进存档目录并删掉（同删号的检查：普通登录、非 admin、非自己；没有完全磁盘访问退 7），走不通再直接 mv'
+  SECS=$(since "$t0")
+}
+
+# ---- spare-wash-respawn (#3979): the stop quiesced the login at its step 4,
+# then archived the home; in that gap launchd relaunched /usr/sbin/distnoted
+# for the uid (fleetu5, op a9a30fae), and the wash's clock (--since) started
+# after it — the check counted it as the last person's: `reset: dirty
+# processes`, now and then. Now the wash quiesces again before its clock and
+# once more after the old home is gone; nothing is let through by name.
+drill_spare_wash_respawn() {
+  CAP=90; local t0 out
+  t0=$(now)
+  grep -q 'quiesce$' "$ROOT/bin/fleet-login-reset.sh" \
+    || { WHY="fleet-login-reset.sh no longer quiesces the login before the wash's clock"; return 1; }
+  grep -q 'launchctl bootout "user/\$UIDT"' "$ROOT/bin/fleet-login-reset.sh" \
+    || { WHY="fleet-login-reset.sh's quiesce no longer boots out the login's user domain"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  WHAT='停完之后、洗号之前 launchd 又给该 uid 拉起 distnoted → 洗号记时钟前再 bootout + 杀一轮、旧家挪走后再一轮：reset: clean（沙盒真跑检查器，旧脚本此处报 dirty processes）'
   SECS=$(since "$t0")
 }
 
