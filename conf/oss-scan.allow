@@ -71,3 +71,4 @@ tokenledge?/README.md	cloud	阿里云 KMS 接入点的写法（区域已是占�
 deploy/k8s/RUNBOOK.md	cloud	阿里云 ACK 自带的系统镜像地址（供应商的仓库，区域已是占位）
 # C8 (#3578): pinned to a value the code still hard-codes — goes with C7's change
 tokenledge?/internal/api/meter_test.go	corp-domain	测 meter.go 写死的放行来源；C7 把它改成配置项时一起换
+site/strings.en.json	corp-domain	官网首屏真实案例写公司英文名 24haowan，发起人同意公开（#3593）
