@@ -27,7 +27,7 @@ const svc = (login: string, name: string, kind: "service" | "task", state: strin
 });
 
 let maint: Record<string, { reason: string; since: string; by: string } | undefined> = {
-  mini2: { reason: "换内存条", since: ago(95), by: "verky (gh:1001)" },
+  "mac-b": { reason: "换内存条", since: ago(95), by: "zhouning (gh:1001)" },
 };
 let spotOn = true;
 const retired = new Set<string>();
@@ -35,7 +35,7 @@ const retired = new Set<string>();
 function machines(): DemoMachine[] {
   const all: DemoMachine[] = [
     {
-      hostname: "macmini",
+      hostname: "mac-a",
       status: "online",
       sessions: 9,
       load1: 0.42 * 10,
@@ -55,19 +55,19 @@ function machines(): DemoMachine[] {
       login_cap: 8,
       door: { state: "open", port: 22022 },
       services: [
-        svc("verky", "doc-preview", "service", "running", "GET /d/0d734e 200 12ms"),
-        svc("verky", "daily-report", "task", "ok", "published 2026-10-13 · 18 items", { last_run: ago(60 * 9), next_run: new Date(now + 15 * 3600_000).toISOString() }),
+        svc("zhouning", "doc-preview", "service", "running", "GET /d/0d734e 200 12ms"),
+        svc("zhouning", "daily-report", "task", "ok", "published 2026-10-13 · 18 items", { last_run: ago(60 * 9), next_run: new Date(now + 15 * 3600_000).toISOString() }),
         svc("linxiao", "webchat", "service", "idle", "idle 2h, exited 75"),
       ],
       services_at: ago(0.5),
       _logins: [
-        { user: "verky", sessions: 6, max: 8 },
+        { user: "zhouning", sessions: 6, max: 8 },
         { user: "linxiao", sessions: 3, max: 6 },
       ],
       _comps: { ccquota: "0.94.2", claude: "2.1.301", codex: "0.61.0", tmux: "3.5a" },
     },
     {
-      hostname: "mini2",
+      hostname: "mac-b",
       status: "maintenance",
       sessions: 0,
       load1: 0.05 * 8,
@@ -95,7 +95,7 @@ function machines(): DemoMachine[] {
       _comps: { ccquota: "0.94.2", claude: "2.1.301", codex: "0.61.0", tmux: "3.5a" },
     },
     {
-      hostname: "fleet-linux-0",
+      hostname: "linux-a",
       status: "online",
       sessions: 6,
       load1: 0.81 * 16,
@@ -239,7 +239,7 @@ function detail(host: string): NodeDetail | null {
   const sessions = Array.from({ length: m.sessions || 0 }, (_, i) => ({
     machine_name: host,
     os_user: _logins[i % _logins.length].user,
-    worker: { key: names[i % names.length], title: titles[i % titles.length], state: states[i % states.length], repo: "verkyyi/claude-fleet", born: Math.floor((now - (i + 1) * 23 * 60_000) / 1000) },
+    worker: { key: names[i % names.length], title: titles[i % titles.length], state: states[i % states.length], repo: "acme/web", born: Math.floor((now - (i + 1) * 23 * 60_000) / 1000) },
   }));
   const behind = m.fleet_version === OLD;
   return {
@@ -266,17 +266,17 @@ function detail(host: string): NodeDetail | null {
 }
 
 let devices: FleetDevice[] = [
-  { fingerprint: "SHA256:q3Vn8pX2bL0eTzR4kW9mYc7fJ1sH6aD5uG2iO8nE4vQ", principal_id: "gh:1001", name: "verky-MacBook-Air", registered_at: ago(60 * 24 * 40), last_used_at: ago(2), last_machine: "macmini", renewals: 37 },
+  { fingerprint: "SHA256:q3Vn8pX2bL0eTzR4kW9mYc7fJ1sH6aD5uG2iO8nE4vQ", principal_id: "gh:1001", name: "zhouning-MacBook-Air", registered_at: ago(60 * 24 * 40), last_used_at: ago(2), last_machine: "mac-a", renewals: 37 },
   { fingerprint: "SHA256:Lm4Rt7Yb2Nc9Kx1Wq6Zp3Vf8Hd5Js0Ga2Ue7Io4Pe1A", principal_id: "p:7c1e", name: "linxiao-MacBook-Air", registered_at: ago(60 * 24 * 21), last_used_at: ago(3), last_machine: "u-7c1e9a", renewals: 19 },
   { fingerprint: "SHA256:Tx8Kd2Fw5Bn1Mq7Rv4Jz9Ls3Hc6Gy0Pe8Ua5Wi2Oe7B", principal_id: "p:7c1e", name: "linxiao-iPhone (Termius)", registered_at: ago(60 * 24 * 9), last_used_at: ago(60 * 48), last_machine: "u-7c1e9a", renewals: 4 },
-  { fingerprint: "SHA256:Hb5Nz1Qw8Xe4Vr7Ty2Uk6Io9Pa3Sd0Fg5Hj8Kl1Zx4C", principal_id: "gh:2002", name: "chenyu-thinkpad", registered_at: ago(60 * 24 * 60), last_used_at: ago(60 * 24 * 12), last_machine: "fleet-linux-0", renewals: 22, revoked_at: ago(60 * 24 * 11), revoked_by: "verky (gh:1001)" },
-  { fingerprint: "SHA256:Mk2Ws9Ex5Rc1Tv8Yb4Un7Iq3Op6Az0Sx2Dc9Fv5Gb1H", principal_id: "gh:1001", name: "macmini", registered_at: ago(60 * 24 * 90), last_used_at: ago(1), last_machine: "macmini", renewals: 88, host: true },
+  { fingerprint: "SHA256:Hb5Nz1Qw8Xe4Vr7Ty2Uk6Io9Pa3Sd0Fg5Hj8Kl1Zx4C", principal_id: "gh:2002", name: "chenyu-thinkpad", registered_at: ago(60 * 24 * 60), last_used_at: ago(60 * 24 * 12), last_machine: "linux-a", renewals: 22, revoked_at: ago(60 * 24 * 11), revoked_by: "zhouning (gh:1001)" },
+  { fingerprint: "SHA256:Mk2Ws9Ex5Rc1Tv8Yb4Un7Iq3Op6Az0Sx2Dc9Fv5Gb1H", principal_id: "gh:1001", name: "mac-a", registered_at: ago(60 * 24 * 90), last_used_at: ago(1), last_machine: "mac-a", renewals: 88, host: true },
 ];
 
 const runners: CIRunner[] = [
-  { machine: "macmini", online: true, heard_at: ago(0.3), runner: { state: "idle", runs: 214, failed: 9, since: ago(12) } },
-  { machine: "fleet-linux-0", online: true, heard_at: ago(0.2), runner: { state: "busy", runs: 1302, failed: 41, since: ago(3) } },
-  { machine: "mini2", online: true, heard_at: ago(0.4), runner: { state: "paused", why: "maintenance", runs: 77, failed: 2 } },
+  { machine: "mac-a", online: true, heard_at: ago(0.3), runner: { state: "idle", runs: 214, failed: 9, since: ago(12) } },
+  { machine: "linux-a", online: true, heard_at: ago(0.2), runner: { state: "busy", runs: 1302, failed: 41, since: ago(3) } },
+  { machine: "mac-b", online: true, heard_at: ago(0.4), runner: { state: "paused", why: "maintenance", runs: 77, failed: 2 } },
 ];
 
 let joinLabel = "";
@@ -287,7 +287,7 @@ export function demoMachines(method: string, u: URL, body: Record<string, any>, 
   const p = u.pathname;
   if (method === "GET" && p === "/v1/nodes") {
     const s = snapshot();
-    return empty ? { ...s, machines: s.machines.filter((m) => m.hostname === "macmini"), nodes: s.nodes.filter((n) => n.hostname === "macmini"), spot: { ...s.spot!, nodes: [] } } : s;
+    return empty ? { ...s, machines: s.machines.filter((m) => m.hostname === "mac-a"), nodes: s.nodes.filter((n) => n.hostname === "mac-a"), spot: { ...s.spot!, nodes: [] } } : s;
   }
   if (method === "GET" && p.startsWith("/v1/nodes/") && !p.includes("/services/")) {
     const d = detail(decodeURIComponent(p.slice("/v1/nodes/".length)));
@@ -303,7 +303,7 @@ export function demoMachines(method: string, u: URL, body: Record<string, any>, 
     if (key === "fleet.spot") spotOn = body.value === "on";
     else if (key.startsWith("fleet.node_maintenance.")) {
       const m = key.slice("fleet.node_maintenance.".length);
-      maint = { ...maint, [m]: body.value ? { reason: String(body.value), since: new Date().toISOString(), by: "verky (gh:1001)" } : undefined };
+      maint = { ...maint, [m]: body.value ? { reason: String(body.value), since: new Date().toISOString(), by: "zhouning (gh:1001)" } : undefined };
     }
     return { key, value: body.value };
   }
@@ -325,7 +325,7 @@ export function demoMachines(method: string, u: URL, body: Record<string, any>, 
   }
   if (method === "GET" && p === "/v1/admin/devices") return { mine: false, idle_sec: 2592000, devices: empty ? [] : devices, audit: [] };
   if (method === "POST" && p === "/v1/fleet/devices/revoke") {
-    devices = devices.map((d) => (d.fingerprint === body.fingerprint ? { ...d, revoked_at: new Date().toISOString(), revoked_by: "verky (gh:1001)" } : d));
+    devices = devices.map((d) => (d.fingerprint === body.fingerprint ? { ...d, revoked_at: new Date().toISOString(), revoked_by: "zhouning (gh:1001)" } : d));
     return { revoked: body.fingerprint };
   }
   if (method === "POST" && p === "/v1/fleet/service_control") return { status: body.action === "run_now" ? "succeeded" : "running", op_id: "op_" + Date.now().toString(36) };
