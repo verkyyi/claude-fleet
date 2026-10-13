@@ -516,6 +516,14 @@ def _read_lines(path):
         return []
 
 
+def _read_bytes(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except (IOError, OSError):
+        return None
+
+
 def ccquota_bin(p):
     c = env("FLEET_NODE_CCQUOTA", "")
     if c:
@@ -912,7 +920,8 @@ class Updater(object):
         if not os.path.exists(self.p.pubkey):
             raise StageError("no pinned release key (%s) — `fleet node install` pins it" % self.p.pubkey)
         os.makedirs(self.p.root, exist_ok=True)
-        cmd = [cq, "release", "fetch", "--hub", hub, "--pubkey", self.p.pubkey, "--artifacts"]
+        pin = self.fetch_pin()
+        cmd = [cq, "release", "fetch", "--hub", hub, "--pubkey", pin, "--artifacts"]
         resumable = fetch_resumable(cq)
         if resumable:
             # only what release.json pins for this machine, resumed from the cache
@@ -934,6 +943,28 @@ class Updater(object):
         if resumable:
             # every artifact now lives (hard-linked) in the release itself
             shutil.rmtree(self.p.fetch_cache, ignore_errors=True)
+        if pin != self.p.pubkey:
+            for n in ("", ".revoked"):
+                if _read_bytes(pin + n) != _read_bytes(self.p.pubkey + n):
+                    self.log("the release's chain moves the trust anchor (%s) — the root core keeps it at "
+                             "the switch; the seat never writes it" % ("re-pin" if not n else "revoked ids"))
+
+    def fetch_pin(self):
+        """The pin ccquota checks against. Root: the anchor itself (a verified chain
+        re-pins it / grows <pin>.revoked in place). Seated (#3835): a fresh private
+        copy under staging — `_fleetnode` never writes the machine's trust anchor
+        (BREAK-IT `seat-repin`); the core keeps what the release taught, as root, at
+        the switch, after re-checking it with the anchor itself."""
+        if not self.seated:
+            return self.p.pubkey
+        d = os.path.join(self.p.staging, ".pin")
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        pin = os.path.join(d, "release.pub")
+        for n in ("", ".revoked"):
+            if os.path.exists(self.p.pubkey + n):
+                shutil.copyfile(self.p.pubkey + n, pin + n)
+        return pin
 
     # -- staging: fetch, check, install the pinned tools; `staged.json` = whole
     def stage(self, sha):
