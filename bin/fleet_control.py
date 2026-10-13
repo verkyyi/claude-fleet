@@ -46,7 +46,16 @@ FEEDBACK_ACTOR = "feedback"
 # and ANY nudge ($FLEET_CONF_DIR/global/hub-nudge, written on every state change,
 # spawn, close and restore) makes the next read fresh. FLEET_CONTROL_READ_CACHE=0
 # reads every time, byte for byte as before; operations never use it.
-READ_CACHE_TTL = {"inventory": 60, "capacity": 20, "workers": 15}
+# Not every read changes with a nudge (issue #3530): one is written on every
+# @claude_state change, so on a busy login the nudge moved every beat and the
+# heartbeat re-read all three — ~4500 processes a minute on a 30-session
+# machine. The inventory is the fleet confs alone, so it is kept while their
+# files stand still (READ_CACHE_STAMP); the capacity count moves only on a spawn
+# or a close and the hub's gate re-checks on arrival, so a nudge refreshes it
+# only once the kept answer is READ_CACHE_FLOOR seconds old. The workers rows
+# ARE the state, and a nudge still makes them fresh at once.
+READ_CACHE_TTL = {"inventory": 300, "capacity": 20, "workers": 15}
+READ_CACHE_FLOOR = {"capacity": 10}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS operations (
@@ -116,21 +125,46 @@ class Control:
         return run(["bash", str(self.bin / "fleet-control-read.sh"), mode, *args],
                    payload=payload, env=env, timeout=timeout)
 
-    def cached(self, key, ttl, read):
+    def conf_stamp(self):
+        """What the inventory is read from, as one comparable value: the mtime of
+        each fleet conf, identity and repos overlay, the list of them so a new one
+        counts (issue #3530). A fleet's own state dir is left out — the collector
+        writes into it every minute. No fork: stat calls only."""
+        def mt(p):
+            try:
+                return p.stat().st_mtime_ns
+            except OSError:
+                return 0
+        c = self.conf_dir
+        paths = [c / "fleet.conf", c / "secrets.env", self.bin.parent / "fleet.conf"]
+        paths += sorted(c.glob("*.conf"))
+        for d in sorted(c.glob("fleets/*")):
+            paths += [d / "conf", d / "identity", d / "repos" / ".order"]
+            paths += sorted(d.glob("repos/*"))
+        return [[str(p), mt(p)] for p in paths]
+
+    def cached(self, key, ttl, read, stamp=None):
         """read() through the heartbeat cache (READ_CACHE_TTL): the last answer while
         younger than ttl AND no nudge came since it was read; else read() fresh,
-        kept for the next beat. A cache that cannot be read or written is simply
+        kept for the next beat. stamp (issue #3530): what the answer depends on, in
+        place of the nudge; READ_CACHE_FLOOR: how old an answer must be before a
+        nudge refreshes it. A cache that cannot be read or written is simply
         not used. Only JSON-able answers — a raise is never kept."""
         if not ttl or os.environ.get("FLEET_CONTROL_READ_CACHE", "1") == "0":
             return read()
         path = self.conf_dir / "control" / "read-cache" / (key + ".json")
-        try:
-            nudge = (self.conf_dir / "global" / "hub-nudge").stat().st_mtime_ns
-        except OSError:
-            nudge = 0
+        if stamp is not None:
+            nudge = stamp()
+        else:
+            try:
+                nudge = (self.conf_dir / "global" / "hub-nudge").stat().st_mtime_ns
+            except OSError:
+                nudge = 0
+        floor = READ_CACHE_FLOOR.get(key, 0)
         try:
             kept = json.loads(path.read_text())
-            if kept.get("nudge") == nudge and 0 <= time.time() - kept["at"] < ttl:
+            age = time.time() - kept["at"]
+            if 0 <= age < ttl and (kept.get("nudge") == nudge or age < floor):
                 return kept["value"]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
@@ -146,7 +180,8 @@ class Control:
 
     def inventory(self, cache=False):
         if cache:
-            return self.cached("inventory", READ_CACHE_TTL["inventory"], self.inventory)
+            return self.cached("inventory", READ_CACHE_TTL["inventory"], self.inventory,
+                               stamp=self.conf_stamp)
         code, output, _ = self.adapter("inventory")
         if code:
             raise Fault("UNAVAILABLE", "Cannot enumerate configured fleets")

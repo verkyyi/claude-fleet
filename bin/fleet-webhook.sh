@@ -473,7 +473,7 @@ wh_reconcile() { # [session...]
     [ -n "$repo" ] || continue
     slug=$(fleet_slug "$repo"); live="$live$slug "
     pidf="$FWD/$slug.pid"; base="$FWD/$slug"
-    pid=$(cat "$pidf" 2>/dev/null)
+    pid=''; read -r pid 2>/dev/null < "$pidf"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       rm -f "$base.fails" "$base.until" 2>/dev/null || :   # healthy ⇒ clear backoff state
       continue
@@ -501,7 +501,7 @@ EOF
 }
 
 # =============================== supervise =====================================
-wh_handler_alive() { local p; p=$(cat "$HANDLER_PIDF" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+wh_handler_alive() { local p=''; read -r p 2>/dev/null < "$HANDLER_PIDF"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 wh_start_handler() {
   "$0" --handler >>"$LOGP/webhook.handler.log" 2>&1 &
   echo $! > "$HANDLER_PIDF"
@@ -535,7 +535,11 @@ wh_sleep_or_wake() {
   local remaining="$RESCAN" tick t0 t1 delta
   while [ "$remaining" -gt 0 ]; do
     tick="$WH_TICK"; [ "$tick" -gt "$remaining" ] && tick="$remaining"
-    t0=$(now); "$WH_SLEEP_CMD" "$tick"; t1=$(now)
+    # $SECONDS is bash's own wall clock (a suspend shows in it, like `date`), so a
+    # chunk costs one fork — the sleep — not five (issue #3530). The selftest's
+    # scripted clock still goes through now().
+    if [ -n "${FLEET_WH_NOW_FILE:-}" ]; then t0=$(now); "$WH_SLEEP_CMD" "$tick"; t1=$(now)
+    else t0=$SECONDS; "$WH_SLEEP_CMD" "$tick"; t1=$SECONDS; fi
     delta=$(( t1 - t0 )); [ "$delta" -lt 0 ] && delta=0
     if wh_is_wake "$tick" "$delta"; then
       log "wake detected (slept ${tick}s, wall +${delta}s) — reconciling now"

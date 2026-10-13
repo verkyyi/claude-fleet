@@ -794,6 +794,9 @@ step=1
 # frame) — so a cached frame forks nothing and writes nothing.
 ANIM_SOCKS=''    # sockets whose last read showed an animated window  → stuck_check
 NEEDS_SOCKS=''   # sockets whose last read showed a `needs` window    → needs_check
+# The frame's three reads spell _lw_fmt's prefix out in front of it rather than
+# `$(_lw_fmt "$WFMT")`: a command substitution is a fork, 8 frames a second per
+# socket (issue #3530). fleet-view-session-selftest.sh A accepts that spelling.
 WFMT='#{session_name}:#{window_index} #{?@worker_lifecycle,#{@worker_lifecycle},#{?@claude_state,#{@claude_state},-}} #{?@claude_needs,#{@claude_needs},-} #{window_name}'
 
 i=1
@@ -930,7 +933,7 @@ while :; do
     # file rewritten every frame was a stream of file events for fseventsd.
     if [ "$c_anim" != 1 ]; then
       TMUX_N=$((TMUX_N + 1))
-      if ! _raw=$(command tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" 2>/dev/null); then
+      if ! _raw=$(command tmux -L "$sock" list-windows -a -F "#{window_id}:#{session_id}:#{session_name} $WFMT" 2>/dev/null); then
         # The server is gone (or going): forget the slot, and re-probe the socket
         # list on the next frame instead of the next refresh.
         eval "C_SOCK_$n=''"; SOCK_KNOWN=' '; socc=$SOCK_EVERY
@@ -1055,9 +1058,9 @@ while :; do
     if [ "$c_anim" = 1 ]; then
       TMUX_N=$((TMUX_N + 1))
       if [ "$changed" = 1 ]; then
-        _raw=$(command tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" ';' "$@" 2>/dev/null) || _wrc=1
+        _raw=$(command tmux -L "$sock" list-windows -a -F "#{window_id}:#{session_id}:#{session_name} $WFMT" ';' "$@" 2>/dev/null) || _wrc=1
       else
-        _raw=$(command tmux -L "$sock" list-windows -a -F "$(_lw_fmt "$WFMT")" 2>/dev/null)
+        _raw=$(command tmux -L "$sock" list-windows -a -F "#{window_id}:#{session_id}:#{session_name} $WFMT" 2>/dev/null)
       fi
       _lw_table "$_raw"
     elif [ "$changed" = 1 ]; then

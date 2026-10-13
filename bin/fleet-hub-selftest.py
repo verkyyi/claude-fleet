@@ -978,7 +978,10 @@ class HubTests(HubFixture):
             self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 0)   # kept
             nudge.parent.mkdir(parents=True, exist_ok=True)
             nudge.write_text("")
-            self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 5)   # a nudge reads fresh
+            # Issue #3530: a nudge refreshes the capacity only past its floor.
+            self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 0)   # under the floor: kept
+            with patch.dict(control.READ_CACHE_FLOOR, {"capacity": 0}):
+                self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 5)   # a nudge reads fresh
             # fleet_status: one adapter run for two beats; a nudge runs it again.
             calls = []
             real = ctl.adapter
@@ -995,6 +998,13 @@ class HubTests(HubFixture):
                 os.utime(nudge, ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
                 self.node.rpc("fleet_status", {"fleet_id": self.fleet})
                 self.assertEqual(calls.count("workers"), 2, calls)
+                # Issue #3530: the inventory is the fleet confs, not the state — a
+                # nudge keeps it; a conf that moved reads it again.
+                self.assertNotIn("inventory", calls)
+                fconf = sorted(Path(ctl.conf_dir).glob("fleets/*/conf"))[0]
+                os.utime(fconf, ns=(time.time_ns() + 2 * 10**9, time.time_ns() + 2 * 10**9))
+                self.node.rpc("fleet_status", {"fleet_id": self.fleet})
+                self.assertEqual(calls.count("inventory"), 1, calls)
                 # An operation's reads are always fresh.
                 ctl.fleet(self.fleet)
                 ctl.workers(ctl.fleet(self.fleet))

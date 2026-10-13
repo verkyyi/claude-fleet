@@ -1301,9 +1301,10 @@ ph_agentcfg() {
 # Durably record the live fleet layout (which fleets, work windows, worktrees,
 # Claude session ids) so fleet-restore.sh can rebuild every fleet and
 # `claude --resume` every session after a tmux-server-wide crash. Cheap; never
-# fatal to the collector.
+# fatal to the collector. --if-changed (issue #3530): a fleet whose windows did
+# not change is rewritten only every few ticks.
 ph_snapshot() {
-  bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1 || true
+  bash "$BIN/fleet-restore.sh" --snapshot --if-changed >/dev/null 2>&1 || true
 }
 
 # --- the other machines' sessions (issue #1423) -----------------------------------
