@@ -15,6 +15,9 @@
 # Modes:
 #   --snapshot        record the current live layout to the durable map (cheap;
 #                     the collector calls this every cycle). No tmux changes.
+#                     `--snapshot --if-changed` (the collector's, issue #3530)
+#                     skips a fleet whose windows did not change since the last
+#                     write, up to FLEET_RESTORE_SNAPSHOT_EVERY ticks.
 #   (no args)         restore: for every mapped fleet not currently live, rebuild
 #                     it and resume its work windows. Idempotent — a fleet that is
 #                     already up is left untouched.
@@ -140,6 +143,29 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >> "$LOG" 2>/dev/nu
 say() { [ -n "${QUIET:-}" ] || echo "$*"; }
 
 # ---------------------------------------------------------------- snapshot ----
+# snapshot_unchanged <sess> <sock> — the collector's every-minute snapshot
+# (--snapshot --if-changed, issue #3530) skips a fleet whose windows are what the
+# last written map saw: one list-windows of everything the map is built from
+# but the runtime state trio, compared with $sdir/.snapshot-key. A full snapshot
+# still runs every FLEET_RESTORE_SNAPSHOT_EVERY-th tick (default 5), so the
+# state trio and a transcript guessed by mtime are at most that many minutes
+# old, and the map's mtime never ages into the shrink guard's stale escape. A
+# deliberate snapshot (fleet-down, a planned restart) never skips. Sets SNAP_KEY
+# for the write to store; rc 0 = skip.
+SNAP_IF_CHANGED=0
+snapshot_unchanged() {
+  SNAP_KEY=''
+  [ "$SNAP_IF_CHANGED" = 1 ] || return 1
+  local sdir n=0 kept='' every="${FLEET_RESTORE_SNAPSHOT_EVERY:-5}"
+  case "$every" in ''|*[!0-9]*) every=5 ;; esac
+  sdir="$(fleet_state_dir "$1")"
+  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@remote,,#{window_name}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
+  [ -n "$SNAP_KEY" ] && [ -f "$sdir/restore.map" ] || return 1
+  { IFS= read -r n; IFS= read -r -d '' kept; } < "$sdir/.snapshot-key" 2>/dev/null
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$kept" = "$SNAP_KEY" ] && [ $((n + 1)) -lt "$every" ] || return 1
+  printf '%s\n%s' "$((n + 1))" "$SNAP_KEY" > "$sdir/.snapshot-key" 2>/dev/null
+}
 # Write one $RDIR/<session>.map per live fleet:
 #   FLEET   <TAB> session <TAB> repo <TAB> main-checkout-dir <TAB> base-branch
 #   WIN     <TAB> window-name <TAB> worktree-path <TAB> claude-session-id <TAB> issue
@@ -171,6 +197,7 @@ snapshot() {
     # --if-down saw as a fleet DOWN on every tick, and restore() would fleet-up it.
     fleet_is_pool_session "$sess" "$sock" && continue
     fleet_is_view_session "$sess" && continue      # a shell's view of this fleet (#1489)
+    snapshot_unchanged "$sess" "$sock" && continue
     local repo main base conf tmp
     conf=$(fleet_conf_file "$sess")
     repo=""; main=""; base=""
@@ -378,6 +405,8 @@ $rejects consecutive snapshots rejected by the shrink guard — the durable reco
     # (ENOSPC/read-only/EXDEV) must NOT leave the fleet with no recovery map at all.
     if mv "$tmp" "$dest" 2>/dev/null; then
       rm -f "$rejf" 2>/dev/null || true      # successful write breaks the reject streak
+      if [ -n "${SNAP_KEY:-}" ]; then printf '0\n%s' "$SNAP_KEY" > "$sdir/.snapshot-key" 2>/dev/null
+      else rm -f "$sdir/.snapshot-key" 2>/dev/null; fi
       [ "$dest" = "$RDIR/$sess.map" ] || rm -f "$RDIR/$sess.map" 2>/dev/null || true
     else
       rm -f "$tmp"
@@ -1122,7 +1151,7 @@ undo_down() {
 
 # ------------------------------------------------------------------- main -----
 case "${1:-}" in
-  --snapshot) snapshot ;;
+  --snapshot) [ "${2:-}" = --if-changed ] && SNAP_IF_CHANGED=1; snapshot ;;
   --arm)      mkdir -p "$RDIR"; : > "$ARM"; rm -f "$RDIR/autorestore.off"; echo "fleet-restore: auto-restore ARMED ($ARM)";;
   --disarm)   rm -f "$ARM"; mkdir -p "$RDIR"; : > "$RDIR/autorestore.off"; echo "fleet-restore: auto-restore DISARMED";;
   --auto)     auto_restore ;;

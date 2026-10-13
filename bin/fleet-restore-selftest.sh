@@ -211,6 +211,22 @@ grep -q '^WIN	plan	' "$MAP" \
   && fail "snapshot: the 'plan' panel must not be a WIN row (map: $(cat "$MAP"))"
 grep -q '^WIN	home	' "$MAP" \
   && fail "snapshot: the 'home' window must not be a WIN row (map: $(cat "$MAP"))"
+# --snapshot --if-changed (issue #3530, the collector's): a fleet whose windows did
+# not change is not rewritten, until every FLEET_RESTORE_SNAPSHOT_EVERY-th tick; a
+# change is written at once; a plain --snapshot always writes.
+ifc() { FLEET_RESTORE_SNAPSHOT_EVERY=3 bash "$RESTORE" --snapshot --if-changed 2>/dev/null; }
+mark() { printf 'SENTINEL\n' >> "$MAP"; }
+mark; ifc; grep -q SENTINEL "$MAP" && fail "if-changed: no key yet — must write the map"
+mark; ifc; grep -q SENTINEL "$MAP" || fail "if-changed: an unchanged fleet must not be rewritten"
+tmux set-window-option -t snap:issue-9 @pin 1
+ifc; grep -q SENTINEL "$MAP" && fail "if-changed: a changed window must rewrite the map"
+mark; ifc; grep -q SENTINEL "$MAP" || fail "if-changed: unchanged after the write — skipped (1)"
+ifc; grep -q SENTINEL "$MAP" || fail "if-changed: unchanged after the write — skipped (2)"
+ifc; grep -q SENTINEL "$MAP" && fail "if-changed: the EVERY-th tick must write the map in full"
+mark; bash "$RESTORE" --snapshot 2>/dev/null
+grep -q SENTINEL "$MAP" && fail "a plain --snapshot must always write"
+tmux set-window-option -u -t snap:issue-9 @pin
+bash "$RESTORE" --snapshot 2>/dev/null
 # issue #153: the per-window runtime state trio rides on the WIN row (trailing
 # field = @origin, '-' when unset — issue #503).
 grep -qE '^WIN	issue-9	.*	working	✓	#9ece6a	-$' "$MAP" \
