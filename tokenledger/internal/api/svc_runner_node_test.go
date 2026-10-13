@@ -169,7 +169,7 @@ func TestSvcLoginsSettings(t *testing.T) {
 		code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": k, "value": v})
 		return code
 	}
-	for v, want := range map[string]int{"macmini:fleetsvc1,mini2:fleetsvc2": 200, "": 200, "macmini": 400, "macmini:Bad Name": 400} {
+	for v, want := range map[string]int{"mac-a:fleetsvc1,mac-b:fleetsvc2": 200, "": 200, "mac-a": 400, "mac-a:Bad Name": 400} {
 		if got := put(SvcLoginsKey, v); got != want {
 			t.Errorf("%s=%q: %d, want %d", SvcLoginsKey, v, got, want)
 		}

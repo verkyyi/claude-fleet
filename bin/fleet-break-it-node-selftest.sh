@@ -141,7 +141,7 @@
 #                         follow_installs (#2964): the mod's files were links into the
 #                         runtime, Claude Code refused it (Path escapes plugin directory)
 #   svc-run-leaks-across-runs bin/fleet-svc-local.sh + bin/fleet-svc-runner.py (#4086,
-#                         bin/fleet-svc-local-selftest.sh): a service run on a macmini
+#                         bin/fleet-svc-local-selftest.sh): a service run on a Mac
 #                         service login reads, or leaves for, the next workspace's run
 #   spotlight-on          bin/fleet-spotlight.sh + the machine daemon's `spotlight` task +
 #                         bin/fleet-doctor.sh's `spotlight` row (#3402): Spotlight indexes
@@ -1675,7 +1675,7 @@ drill_per_login_machine_loops() {
 }
 
 # ---- svc-run-leaks-across-runs (#4086): service runs (svc:livepage, every
-# workspace's) run on a macmini service login, one login for many tenants — a
+# workspace's) run on a Mac's service login, one login for many tenants — a
 # run's files, processes, HOME or key reaching the next run is one workspace
 # reading another's. bin/fleet-svc-local.sh gives each attempt a fresh 0700
 # directory (HOME · work · out · tmp · key), kills everything carrying its tag

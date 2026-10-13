@@ -69,7 +69,7 @@ func svcLoginsSettingCheck(key, value string) string {
 	for _, f := range strings.Split(value, ",") {
 		h, l, ok := strings.Cut(strings.TrimSpace(f), ":")
 		if !ok || !nodeNameRE.MatchString(h) || !control.ValidCreateLogin(l, true) {
-			return SvcLoginsKey + " is <machine>:<login>,… (e.g. macmini:fleetsvc1), or \"\" for none"
+			return SvcLoginsKey + " is <machine>:<login>,… (e.g. mac-a:fleetsvc1), or \"\" for none"
 		}
 	}
 	return ""

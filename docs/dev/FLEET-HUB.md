@@ -2222,13 +2222,13 @@ through the run's pass:
 ```sh
 # the hub (an admin): a one-time join code for it
 #   POST /v1/fleet/join-codes {"label": "fleetsvc1"}  → {"code": "fj_…"}
-read -rs FLEET_LOGIN_JOIN_CODE && export FLEET_LOGIN_JOIN_CODE FLEET_LOGIN_HUB=https://claudefleet.24haowan.com
+read -rs FLEET_LOGIN_JOIN_CODE && export FLEET_LOGIN_JOIN_CODE FLEET_LOGIN_HUB=https://hub.example.com
 sudo -E ~/.claude/fleet/bin/fleet-login-new.sh fleetsvc1 --full-name 'fleet service 1' --no-welcome \
   --pubkey ~/.ssh/id_ed25519.pub --apply                      # joins, separates, adopts
 for f in /var/db/fleet-node/logins/fleetsvc1.env ~fleetsvc1/.config/claude-fleet/node.env; do
   sudo sh -c "printf 'CCQUOTA_FLEET_SVC=1\nCCQUOTA_FLEET_COMPUTE=0\n' >> $f"
 done                                   # logins/ changed ⇒ the machine's node program reloads
-# the hub (an admin): PUT /v1/fleet/settings {"key": "fleet.svc.logins", "value": "macmini:fleetsvc1"}
+# the hub (an admin): PUT /v1/fleet/settings {"key": "fleet.svc.logins", "value": "mac-a:fleetsvc1"}
 ```
 
 ## Validation and next increments
