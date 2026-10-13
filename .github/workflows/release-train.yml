@@ -767,7 +767,7 @@ jobs:
       MOVED: ${{ needs.release.outputs.moved }}
       RESULTS: ${{ needs.quarantine.result }} ${{ needs.plan.result }} ${{ needs.linux.result }} ${{ needs.record.result }} ${{ needs.gate.result }} ${{ needs.train.result }} ${{ needs.hub-plan.result }} ${{ needs.hub.result }}
       RELEASE: ${{ needs.release.result }}
-      FLEET_HUB_URL: https://claudefleet.24haowan.com
+      FLEET_HUB_URL: https://claudefleet.24haowan.com   # oss-ok: the hub the train publishes to, as the release job spells it (#3870)
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
