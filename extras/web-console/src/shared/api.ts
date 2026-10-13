@@ -15,6 +15,7 @@ export async function getJSON<T>(url: string): Promise<T | null> {
 export type Me = {
   via?: string; role?: string; person?: string; name?: string; login?: string;
   pages?: string[]; entry?: boolean; can_logout?: boolean;
+  logins?: { machine: string; login: string }[]; // the (machine, login) pairs that are theirs
 };
 export type MeState = { me: Me | null; loading: boolean };
 let meCache: Promise<Me | null> | null = null;
@@ -57,9 +58,24 @@ export function useQuota(key: unknown = 0) {
   return q;
 }
 
+// send is one write (or a read whose refusal matters): the status and the
+// JSON answer — a 401 goes to the sign-in as for a read; status 0 = no answer.
+export async function send<T = Record<string, unknown>>(method: string, url: string, body?: unknown): Promise<{ status: number; body: T | null }> {
+  const r = await fetch(url, {
+    method, headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }).catch(() => null);
+  if (!r) return { status: 0, body: null };
+  if (r.status === 401) { location.assign("/app/signin"); return { status: 401, body: null }; }
+  return { status: r.status, body: (await r.json().catch(() => null)) as T | null };
+}
+
 // /v1/fleet/devices: the person's own registered computers (a revoked one, or
 // a hosting machine's own login, is not one of their devices).
-export type Device = { fingerprint: string; name: string; revoked_at?: string; host?: boolean };
+export type Device = {
+  fingerprint: string; name: string; revoked_at?: string; host?: boolean;
+  registered_at?: string; last_used_at?: string; last_machine?: string;
+};
 export function useDeviceCount() {
   const [n, setN] = useState<number | null>(null);
   useEffect(() => {
