@@ -25,6 +25,11 @@ Codex), a bare shell, a session on another machine.
                                           ⌘P's ⚡ row's two cells (issue #3327), one
                                           JSON line: repos · last (the pick) · agent
                                           (the fleet's default) · missing {agent: why}
+                                          — not installed here, or 「管理员暂未开放」
+                                          (the hub's allowlists, issue #3826)
+    fleet-quick-dispatch.py agent [--view V]
+                                          the agent ⌘N opens with: {agent, why} —
+                                          the default, else the one usable agent
     … send … --toast                      the outcome also goes on the client as a
                                           message (⌘P's ⚡ runs send detached: esc
                                           closes the panel, the send still says how
@@ -163,13 +168,41 @@ def agent_here(agent):
     return any(os.access(os.path.join(d, agent), os.X_OK) for d in dirs)
 
 
+def agent_blocked():
+    """{agent: reason} the hub's subscription allowlists leave nothing for on this
+    login (issue #3826, fleet_agent_allow.py); {} when it cannot tell."""
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_agent_allow
+        return fleet_agent_allow.blocked()
+    except Exception:       # a picker never breaks on the check: unknown = usable
+        return {}
+
+
 def agent_missing(view):
     """{agent: why} of the agents a ↵ cannot use: in a 看台, the ones this machine
-    lacks; the old client cannot know the machine, so none."""
+    lacks, then the ones the admin has not opened to this person (issue #3826 —
+    「管理员暂未开放」, grey, never hidden); the old client cannot know the
+    machine, so none."""
     if not view:
         return {}
     host = socket.gethostname().split(".")[0]
-    return {a: tr("dispatch_agent_missing_fmt", host, a) for a in AGENTS if not agent_here(a)}
+    out = {a: tr("dispatch_agent_missing_fmt", host, a) for a in AGENTS if not agent_here(a)}
+    for a in agent_blocked():
+        out.setdefault(a, tr("dispatch_agent_blocked_fmt", a.capitalize()))
+    return out
+
+
+def agent_pick(view, session=""):
+    """The agent a new session with nothing chosen opens with, and why it is not the
+    default ("" when it is): the fleet's default while usable, else the first usable
+    one (⌘N, issue #3826 — a Codex-only person gets Codex, told so)."""
+    dflt = agent_default(fleet_of(view) if view else session)
+    missing = agent_missing(view)
+    usable = [a for a in AGENTS if a not in missing]
+    if dflt in usable or not usable:
+        return dflt, ""
+    return usable[0], missing.get(dflt, "")
 
 
 def payload(title, repo, codex=False, agent=None):
@@ -379,11 +412,16 @@ def main(argv):
         for r in repos():
             print(r)
         return 0
+    if argv[:1] == ["agent"]:
+        a, why = agent_pick(opts(argv[1:])["--view"])
+        print(json.dumps({"agent": a, "why": why}, ensure_ascii=False))
+        return 0
     if argv[:1] == ["grid"]:
         view = opts(argv[1:])["--view"]
         have = repos()
         print(json.dumps({"repos": have, "last": repo_pick(have), "agent": agent_default(fleet_of(view) if view else ""),
-                          "missing": agent_missing(view)}, ensure_ascii=False))
+                          "missing": agent_missing(view), "blocked": sorted(agent_blocked()) if view else []},
+                         ensure_ascii=False))
         return 0
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
     if argv[:1] in (["payload"], ["send"]):
