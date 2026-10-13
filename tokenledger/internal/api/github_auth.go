@@ -361,7 +361,7 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loc := s.pageLocale(w, r)
-	page := signinPage{pageView: newPageView(r, loc)}
+	page := signinPage{pageView: newPageView(r, loc), Apply: toApply(r)}
 	if e := r.URL.Query().Get("e"); signinNotes[e] {
 		page.Note = pageT(loc, "signin.note."+e)
 	}
@@ -922,6 +922,8 @@ type signinPage struct {
 	pageView
 	// Note is one of signinNotes, or "".
 	Note string
+	// Apply: the person came to apply (?next=/apply, claude-fleet#4049).
+	Apply bool
 }
 
 type denyPage struct {
@@ -941,7 +943,7 @@ const authPageHead = entryHead
 
 var signinTmpl = template.Must(template.New("signin").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
 <title>{{t "signin.title"}}</title></head><body><div class="page">` + entryTop + `
-<main class="col"><h1>{{t "signin.h1"}}<span class="dot">.</span></h1><p class="lead">{{t "signin.lead"}}</p>
+<main class="col">` + limitedPill + `<h1>{{t "signin.h1"}}<span class="dot">.</span></h1><p class="lead">{{if .Apply}}{{t "signin.lead.apply"}}{{else}}{{t "signin.lead"}}{{end}}</p>
 {{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
 <a class="btn primary" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>
 <p class="fine">{{t "signin.fine"}}</p>

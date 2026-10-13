@@ -62,6 +62,7 @@ CATEGORIES = [
     ("processes", "both", "该 UID 的进程"),
     ("tmux", "both", "tmux 套接字（/tmp/tmux-<uid>）"),
     ("outside-files", "both", "家以外属该 UID 的文件（/tmp /var/tmp /Users/Shared，存档目录除外）"),
+    ("user-tmp", "darwin", "该 UID 的每用户临时与缓存目录（/private/var/folders/<xx>/<yy>/，它的 $TMPDIR）"),
 ]
 
 # Paths under the home that belong to a category of their own (the most specific
@@ -91,6 +92,9 @@ OUTSIDE = {
     "linux": ["/tmp", "/var/tmp", "/dev/shm"],
 }
 TMUX_TMP = {"darwin": "/private/tmp", "linux": "/tmp"}
+# macOS keeps a per-uid temp + cache dir (confstr DARWIN_USER_DIR): the uid
+# outlives a wash, so this dir does too unless the wash empties it (#4044)
+USER_DIRS = "/private/var/folders"
 HOMES = {"darwin": "/Users", "linux": "/home"}
 ADMIN_HOMES = {"darwin": ["/var/root"], "linux": ["/root"]}
 MAX_ITEMS = 200
@@ -316,6 +320,49 @@ class Check(object):
                     continue
                 self.walk("onboard", c)
 
+    def user_dirs(self):
+        """The uid's /private/var/folders/<xx>/<yy>/ (one, in practice)."""
+        top = self.p(USER_DIRS)
+        out = []
+        try:
+            outer = sorted(os.listdir(top))
+        except FileNotFoundError:
+            return out
+        except OSError as e:
+            self.unknown("user-tmp", "%s: %s" % (top, e.strerror))
+            return out
+        for x in outer:
+            d = os.path.join(top, x)
+            try:
+                inner = sorted(os.listdir(d))
+            except OSError:
+                continue
+            for y in inner:
+                u = os.path.join(d, y)
+                try:
+                    st = os.lstat(u)
+                except OSError:
+                    continue
+                if stat.S_ISDIR(st.st_mode) and st.st_uid == self.a.uid:
+                    out.append(u)
+        return out
+
+    def user_tmp(self, top):
+        """What is in a per-uid dir: macOS makes its C/T/0 skeleton (empty dirs)
+        for every uid, so only what is not a directory counts."""
+        errs = []
+        for d, dirs, files in os.walk(top, onerror=errs.append):
+            for n in dirs + files:
+                full = os.path.join(d, n)
+                try:
+                    st = os.lstat(full)
+                except OSError:
+                    continue
+                if not stat.S_ISDIR(st.st_mode) and self.old(st):
+                    self.add("user-tmp", full)
+        for e in errs:
+            self.unknown("user-tmp", "%s: %s" % (getattr(e, "filename", top), e.strerror))
+
     def run(self):
         self.skipped = set(c for c, plat, _ in CATEGORIES if plat not in ("both", self.plat))
         st = self.a.node_state or self.p("/var/db/fleet-node")
@@ -340,6 +387,9 @@ class Check(object):
                 continue
             self.walk("outside-files", top, owner=self.a.uid,
                       skip=(tmux, archive, self.a.home))
+        if self.plat == "darwin":
+            for u in self.user_dirs():
+                self.user_tmp(u)
         return [c for c, plat, _ in CATEGORIES if c in self.found and c not in self.skipped]
 
 

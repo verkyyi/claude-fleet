@@ -46,7 +46,7 @@ const (
 // /app (claude-fleet#3583) and TestAppPagesAreRoutes holds the two together.
 var routeAccess = map[string]string{
 	// The way in, and what a signed-out machine must reach.
-	"/logout": accessPublic, "/signin": accessPublic,
+	"/logout": accessPublic, "/signin": accessPublic, ApplyPath: accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/auth/wechat/start": accessPublic, "/auth/wechat/callback": accessPublic, "/auth/wechat/bind": accessPublic,
 	"/auth/email/start": accessPublic, "/auth/email/link": accessPublic, "/auth/email/code": accessPublic,

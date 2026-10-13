@@ -138,8 +138,10 @@ func TestRemoveRecyclesLoginIntoSpare(t *testing.T) {
 		t.Fatalf("leases = %+v; want the person's released", ls)
 	}
 
+	const timing = "timing: stop=0.9 quiesce=0.3 aside=0.0 requiesce=0.2 home+sweep=0.7 check=0.6 rejoin=41.0 isolated=2.7 total=43.7"
 	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountReset, Login: login, OK: true,
-		Reset: control.ResetClean, Credsep: control.CredsepSeparated})
+		Reset: control.ResetClean, Credsep: control.CredsepSeparated,
+		Detail: "    steps: [1] 0.4s\n" + timing + "\n\nreset: clean\ncredsep: separated"})
 	waitFor(t, 3*time.Second, "the recycled spare to be ready", func() bool {
 		return h.srv.spareReadyHosts()["m8"] == 1
 	})
@@ -157,6 +159,13 @@ func TestRemoveRecyclesLoginIntoSpare(t *testing.T) {
 	}
 	if e := hubAuditHas(t, h, "spare.recycle", login); e == nil || !strings.Contains(e.Detail, p) || !strings.Contains(e.Detail, store.AccountActive) {
 		t.Fatalf("audit spare.recycle = %+v; want one line from %s to an active spare", e, p)
+	}
+	// The wash's clock travels into the audit and the spare's row (#4044).
+	if e := hubAuditHas(t, h, "spare.recycle", login); e == nil || !strings.HasSuffix(e.Detail, " · "+timing) {
+		t.Fatalf("audit spare.recycle = %+v; want the timing line at its end", e)
+	}
+	if !strings.Contains(sp.Detail, timing) {
+		t.Fatalf("spare detail = %q; want the timing line", sp.Detail)
 	}
 	if pr, err := h.srv.Store.Principal(p); err != nil || pr.Login != login {
 		t.Fatalf("the person's record = %+v, %v; want kept", pr, err)
@@ -330,5 +339,18 @@ func TestRemoveOldRoadWhenNotRecycling(t *testing.T) {
 				t.Fatal("the old road recycled")
 			}
 		})
+	}
+}
+
+func TestResetTiming(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"", ""},
+		{"reset: clean\ncredsep: separated", ""},
+		{"timing: stop=1.0 total=2.0\n\nreset: clean", "timing: stop=1.0 total=2.0"},
+		{"timing: old\n  timing: stop=3.1 total=9.9  \nreset: dirty check", "timing: stop=3.1 total=9.9"},
+	} {
+		if got := resetTiming(c.in); got != c.want {
+			t.Errorf("resetTiming(%q) = %q; want %q", c.in, got, c.want)
+		}
 	}
 }

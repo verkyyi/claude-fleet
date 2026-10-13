@@ -861,12 +861,14 @@ elif [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ]; then
     *) printf '%s: %s is NOT separated after step 7b (%s) — stopped: do not hand this login out\n' "$PROG" "$LOGIN" "$st" >&2
        say "credsep: not separated"; exit 1 ;;
   esac
+  # polled every 0.2 s (issue #4044: a recycle waits on it — whole seconds were
+  # up to one lost a run), for FLEET_LOGIN_CREDSEP_WAIT seconds at most
   wait=${FLEET_LOGIN_CREDSEP_WAIT:-15}; t=0
   while :; do
     ck=$("${AS[@]}" check 2>&1); rc=$?
     [ "$rc" = 0 ] && break
-    [ "$t" -ge "$wait" ] && break
-    sleep 1; t=$((t + 1))
+    [ "$t" -ge $((wait * 5)) ] && break
+    sleep 0.2; t=$((t + 1))
   done
   show "${AS[@]}" check
   say "  $ck"
