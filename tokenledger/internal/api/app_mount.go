@@ -317,7 +317,7 @@ func (s *Server) moveOn(w http.ResponseWriter, r *http.Request, serve http.Handl
 // where the sign-in comes back to (rememberAdminReturn).
 func (s *Server) adminGate(next http.Handler) http.Handler {
 	return s.viewerOr(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if roleOf(r.Context()) == roleUser {
+		if memberRole(roleOf(r.Context())) {
 			s.denyAdminPage(w, r)
 			return
 		}

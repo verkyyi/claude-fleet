@@ -1154,7 +1154,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	}
 	// An admin page's files are refused a user whole, by where they sit
 	// (claude-fleet#2516) -- the direct path as much as the route.
-	if isAdminUIFile(path) && roleOf(r.Context()) == roleUser {
+	if isAdminUIFile(path) && memberRole(roleOf(r.Context())) {
 		s.denyAdminPage(w, r)
 		return
 	}

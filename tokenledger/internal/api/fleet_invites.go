@@ -121,6 +121,12 @@ func (s *Server) admitInviteAs(pid, kind, subject, name, invite string, now time
 	actor := pid
 	target := name + " (" + actor + ")"
 	hash := inviteHash(invite)
+	if old, _ := s.Store.InviteByHash(hash); old != nil && old.CreatedBy == trialInviter {
+		// A trial invite from before claude-fleet#4058: the trial now takes a
+		// verified sign-in of its own, and puts no one on the list.
+		_ = s.Store.HubAudit(actor, "invite", target, "refused", "a trial invite admits no one ("+old.ID+")", now)
+		return denyInvitePrefix + "expired", nil
+	}
 	bound := subject // an address binds by itself …
 	if kind == store.IdentityGitHub {
 		bound = name // … a GitHub invite by the username
@@ -151,7 +157,6 @@ func (s *Server) admitInviteAs(pid, kind, subject, name, invite string, now time
 		return "", err
 	}
 	_ = s.Store.HubAudit(actor, "invite", target, "ok", "邀请已使用 · invite used ("+inv.ID+", made by "+orDefault(inv.CreatedBy, "?")+")", now)
-	s.trialAdmitted(pid, inv, now) // a trial invite: into the line (claude-fleet#3590)
 	return "", nil
 }
 

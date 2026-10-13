@@ -192,6 +192,12 @@ func (s *Server) personRole(pid string) (string, error) {
 	if u != nil && u.Role == roleUser {
 		return roleUser, nil
 	}
+	if t, err := s.Store.Trial(pid); err != nil {
+		return "", err
+	} else if t != nil {
+		// Came in through the trial, not on the list (claude-fleet#4058).
+		return roleTrial, nil
+	}
 	return "", nil
 }
 

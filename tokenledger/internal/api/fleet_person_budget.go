@@ -551,7 +551,7 @@ func (s *Server) handleFleetPersonUsage(w http.ResponseWriter, r *http.Request) 
 	}
 	now := s.budgetClock()
 	pid := principalOf(r.Context())
-	mine := roleOf(r.Context()) == roleUser || r.URL.Query().Get("mine") != ""
+	mine := memberRole(roleOf(r.Context())) || r.URL.Query().Get("mine") != ""
 	if mine && pid == "" {
 		// The operator's door asking for its own: it is nobody.
 		writeJSON(w, http.StatusOK, map[string]any{"people": []PersonBudgetState{}, "days": []PersonUsageDay{}})

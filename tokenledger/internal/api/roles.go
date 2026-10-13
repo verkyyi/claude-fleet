@@ -456,7 +456,7 @@ func isOwnView(ctx context.Context) bool {
 // user's, an admin's on a daily page's route, never the operator's.
 func cutToSelf(ctx context.Context) bool {
 	switch roleOf(ctx) {
-	case roleUser:
+	case roleUser, roleTrial:
 		return true
 	case roleAdmin:
 		return isOwnView(ctx) && principalOf(ctx) != ""
@@ -473,7 +473,7 @@ func cutToSelf(ctx context.Context) bool {
 // already-admitted request.
 func (s *Server) adminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if roleOf(r.Context()) == roleUser {
+		if memberRole(roleOf(r.Context())) {
 			s.auditRoleDenied(r)
 			httpError(w, http.StatusForbidden, "只有管理员可以使用这一项（only an admin can use this）")
 			return
@@ -524,6 +524,8 @@ func pagesFor(role string) []string {
 	switch role {
 	case roleUser:
 		return append([]string(nil), userPages...)
+	case roleTrial:
+		return []string{"chat"}
 	case "":
 		return []string{}
 	}

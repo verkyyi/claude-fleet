@@ -12,7 +12,12 @@ import (
 // It is the waitlist (waiting, in waiting_since order), the record of which
 // machine handed them a spare (placed), the last time they used it
 // (last_seen, the 7-day reclaim reads it) and whether their one timing was
-// recorded. The timings themselves are anonymous: fleet_trial_timings keeps
+// recorded. Since claude-fleet#4058 a row also names the verified way the
+// person signed in by (kind, subject — WeChat by unionid, else openid): one
+// trial per way, unique, so a second sign-in by it finds the first trial
+// instead of starting another. queue_reason is why they last waited (full ·
+// busy · load · quota), kept so the audit records a change, not every poll.
+// The timings themselves are anonymous: fleet_trial_timings keeps
 // when and how long, never who.
 const fleetTrialsSchema = `
 CREATE TABLE IF NOT EXISTS fleet_trials (
@@ -24,7 +29,10 @@ CREATE TABLE IF NOT EXISTS fleet_trials (
   host          TEXT NOT NULL DEFAULT '',
   last_seen     INTEGER NOT NULL DEFAULT 0,
   timed_at      INTEGER NOT NULL DEFAULT 0,
-  reclaimed_at  INTEGER NOT NULL DEFAULT 0
+  reclaimed_at  INTEGER NOT NULL DEFAULT 0,
+  kind          TEXT NOT NULL DEFAULT '',
+  subject       TEXT NOT NULL DEFAULT '',
+  queue_reason  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS fleet_trial_timings (
   at INTEGER NOT NULL,
@@ -49,11 +57,23 @@ type Trial struct {
 	LastSeen     time.Time
 	TimedAt      time.Time
 	ReclaimedAt  time.Time
+	Kind         string
+	Subject      string
+	QueueReason  string
 }
 
 func (s *Store) ensureFleetTrials() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetTrialsSchema)); err != nil {
 		return fmt.Errorf("create fleet trials tables: %w", err)
+	}
+	for _, col := range []string{"kind", "subject", "queue_reason"} {
+		if err := s.addColumn("fleet_trials", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if _, err := s.write.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_trials_way
+		ON fleet_trials(kind, subject) WHERE kind <> ''`); err != nil {
+		return fmt.Errorf("create fleet trials way index: %w", err)
 	}
 	return nil
 }
@@ -65,12 +85,12 @@ func unixOrZero(v int64) time.Time {
 	return time.Unix(v, 0).UTC()
 }
 
-const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at`
+const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at, kind, subject, queue_reason`
 
 func scanTrial(row interface{ Scan(...any) error }) (*Trial, error) {
 	var t Trial
 	var st, ws, pa, ls, ta, ra int64
-	if err := row.Scan(&t.Principal, &t.State, &st, &ws, &pa, &t.Host, &ls, &ta, &ra); err != nil {
+	if err := row.Scan(&t.Principal, &t.State, &st, &ws, &pa, &t.Host, &ls, &ta, &ra, &t.Kind, &t.Subject, &t.QueueReason); err != nil {
 		return nil, err
 	}
 	t.StartedAt, t.WaitingSince, t.PlacedAt = unixOrZero(st), unixOrZero(ws), unixOrZero(pa)
@@ -85,6 +105,82 @@ func (s *Store) StartTrial(pid string, now time.Time) error {
 		(principal, state, started_at, waiting_since, last_seen) VALUES (?, ?, ?, ?, ?)`),
 		pid, TrialWaiting, now.Unix(), now.Unix(), now.Unix())
 	return err
+}
+
+// ErrTrialWayTaken: another person's trial already holds this way.
+var ErrTrialWayTaken = errors.New("this way of signing in already has a trial")
+
+// StartTrialAs records pid as a trial person who signed in by kind + subject,
+// waiting from now. pid's own row, if any, is kept as it is; a way another
+// person's trial holds is ErrTrialWayTaken.
+func (s *Store) StartTrialAs(pid, kind, subject string, now time.Time) error {
+	if t, err := s.TrialByWay(kind, subject); err != nil {
+		return err
+	} else if t != nil && t.Principal != pid {
+		return ErrTrialWayTaken
+	}
+	_, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_trials
+		(principal, state, started_at, waiting_since, last_seen, kind, subject) VALUES (?, ?, ?, ?, ?, ?, ?)`),
+		pid, TrialWaiting, now.Unix(), now.Unix(), now.Unix(), kind, subject)
+	return err
+}
+
+// TrialByWay is the trial the way kind + subject started; nil, nil for none.
+func (s *Store) TrialByWay(kind, subject string) (*Trial, error) {
+	if kind == "" {
+		return nil, nil
+	}
+	t, err := scanTrial(s.write.QueryRow(`SELECT `+trialCols+` FROM fleet_trials WHERE kind = ? AND subject = ?`, kind, subject))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return t, err
+}
+
+// SetTrialQueueReason records why pid waits now; changed says it differs
+// from the last one recorded.
+func (s *Store) SetTrialQueueReason(pid, reason string) (changed bool, err error) {
+	res, err := s.write.Exec(`UPDATE fleet_trials SET queue_reason = ? WHERE principal = ? AND queue_reason <> ?`,
+		reason, pid, reason)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// TrialsHolding is how many trial people hold a machine now (placed).
+func (s *Store) TrialsHolding() (int, error) {
+	var n int
+	err := s.write.QueryRow(`SELECT COUNT(*) FROM fleet_trials WHERE state = ?`, TrialPlaced).Scan(&n)
+	return n, err
+}
+
+// TrialsStartedSince is how many trials were handed a machine at or after
+// since — the day's total counts each person's start once.
+func (s *Store) TrialsStartedSince(since time.Time) (int, error) {
+	var n int
+	err := s.write.QueryRow(`SELECT COUNT(*) FROM fleet_trials WHERE placed_at >= ?`, since.Unix()).Scan(&n)
+	return n, err
+}
+
+// TrialReleases are the last n times a trial's machine went back, newest first.
+func (s *Store) TrialReleases(n int) ([]time.Time, error) {
+	rows, err := s.write.Query(`SELECT reclaimed_at FROM fleet_trials WHERE reclaimed_at > 0
+		ORDER BY reclaimed_at DESC LIMIT ?`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []time.Time
+	for rows.Next() {
+		var v int64
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, unixOrZero(v))
+	}
+	return out, rows.Err()
 }
 
 // Trial is pid's trial row; nil, nil when pid is not a trial person.
@@ -134,7 +230,7 @@ func (s *Store) TrialsWaiting(fresh time.Time) (int, error) {
 
 // PlaceTrial records that pid was handed a login on host.
 func (s *Store) PlaceTrial(pid, host string, now time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = ?, host = ?, last_seen = ?
+	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = ?, host = ?, last_seen = ?, queue_reason = ''
 		WHERE principal = ?`, TrialPlaced, now.Unix(), host, now.Unix(), pid)
 	return err
 }
