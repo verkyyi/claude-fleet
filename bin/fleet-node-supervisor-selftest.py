@@ -2804,6 +2804,27 @@ os.unlink(s); sys.exit(75)
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
         self.assertIn("started · ready", r.stdout, r.stderr)
 
+    def test_start_races_a_service_call(self):
+        # #3648: `service ensure` made db/ between the daemon's look and its make —
+        # the daemon died on FileExistsError and nothing ever started webchat
+        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
+        try:
+            paths = fns.Paths()
+        finally:
+            for k in list(os.environ):
+                if k.startswith("FLEET_NODE_"):
+                    del os.environ[k]
+        os.makedirs(paths.state, exist_ok=True)
+        sup = fns.Supervisor.__new__(fns.Supervisor)
+        sup.seated, sup.p = False, paths
+        real = fns.os.path.isdir
+        fns.os.path.isdir = lambda d: False  # every dir "appears" after the look
+        try:
+            sup.ensure_dirs()
+        finally:
+            fns.os.path.isdir = real
+        self.assertTrue(os.path.isdir(os.path.join(paths.state, "tmp")))
+
     def test_ensure_not_ready(self):
         b = os.path.join(self.home, ".claude", "fleet", "bin")
         os.makedirs(b)

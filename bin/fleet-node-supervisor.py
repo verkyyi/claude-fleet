@@ -2097,8 +2097,7 @@ class Supervisor(object):
             # root made the seat's layout (`install --seat`); the seat makes only
             # its own log directories
             for d in (self.logroot, os.path.join(self.logroot, "tasks"), os.path.join(self.logroot, "accounts")):
-                if not os.path.isdir(d):
-                    os.makedirs(d, 0o755)
+                os.makedirs(d, 0o755, exist_ok=True)
             return
         for d, m in ((self.p.state, 0o755), (self.p.locks, 0o755), (self.p.attic, 0o700),
                      (self.p.log, 0o755), (os.path.join(self.p.log, "tasks"), 0o755),
@@ -2106,8 +2105,13 @@ class Supervisor(object):
                      (os.path.join(self.p.state, "home"), 0o700),
                      (os.path.join(self.p.state, "conf"), 0o700),
                      (os.path.join(self.p.state, "tmp"), 0o700)):
+            # a `service` call may make the state dir between the look and the
+            # make (#3648): theirs stands, never a FileExistsError at start
             if not os.path.isdir(d):
-                os.makedirs(d)
+                try:
+                    os.makedirs(d)
+                except FileExistsError:
+                    continue
                 os.chmod(d, m)
 
     def save(self, force=False):
