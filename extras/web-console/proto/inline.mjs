@@ -47,7 +47,7 @@ const APP = { dark: ${JSON.stringify(html.replaceAll("@media (prefers-color-sche
 const S = { page: "/", role: "user", state: "normal", width: 390, lang: "zh" };
 const OPTS = {
   page: [["/", "对话"], ["/me", "我的"]],
-  role: [["user", "成员 林晓"], ["admin", "管理员 verky"]],
+  role: [["user", "成员 林晓"], ["admin", "管理员 周宁"]],
   state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"]],
   width: [[390, "手机 390"], [1280, "电脑 1280"]],
   lang: [["zh", "中文"], ["en", "English"]],

@@ -17,7 +17,7 @@ export async function install(): Promise<string> {
   const state = sc.state || "normal";
   const reset = new Date(Date.now() + 3 * 864e5); reset.setHours(8, 0, 0, 0);
   const me = admin
-    ? { via: "wechat", role: "admin", person: "p:verky", name: "verky", login: "verky", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true }
+    ? { via: "wechat", role: "admin", person: "p:zhouning", name: "周宁", login: "zhouning", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true }
     : { via: "wechat", role: "user", person: "p:linxiao", name: "林晓", login: "linxiao", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true };
   const limit = { set: true, limit_week: 100, remaining_week: state === "over" ? 0 : 62, reset_week: reset.toISOString(), over: state === "over", window: "week" };
   const items: Record<string, string>[] = state === "normal" ? [
