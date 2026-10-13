@@ -66,8 +66,20 @@ jobs:
   # byte for byte (COLLATE "C") without help from how the database was made.
   # postgres:16 comes from mirror.gcr.io (Google's cache of Docker Hub): an
   # unauthenticated Docker Hub pull hit its rate limit (claude-fleet#2734).
+  #
+  # Sharded (claude-fleet#3856): internal/api is ~1000 serial tests, each
+  # paying ~1.3s for its own schema + migrations on Postgres under -race, so
+  # the package alone ran 650-1220s by the runner — past the 20m cap on a slow
+  # one. `store` runs store + leader + the migrate timing; each `api-K` runs
+  # every API_SHARDS-th test of `go test -list` (sorted, round-robin, so the
+  # union is the whole package by construction). Adding a shard = one more
+  # `api-K` in `part` AND API_SHARDS raised to match.
   tokenledger-pg:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [store, api-1, api-2, api-3]
     services:
       postgres:
         image: mirror.gcr.io/library/postgres:16
@@ -78,6 +90,7 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       CCQUOTA_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
+      API_SHARDS: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -86,16 +99,36 @@ jobs:
           cache: true
           cache-dependency-path: tokenledger/go.sum
       - run: ../bin/fleet-client-pack.sh
-      # claude-fleet#2640: internal/api alone takes 420-600s here, so go
-      # test's default 10m cap turned runner noise into a red run.
-      - name: store + api + leader tests on Postgres
-        # claude-fleet#2479: internal/api alone ran 584s of go test's 10m default.
+      - name: pick this part's tests
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          set -eo pipefail
+          case "$PART" in
+            store)
+              echo 'PKGS=./internal/store/... ./internal/leader/...' >> "$GITHUB_ENV"
+              echo 'RUN=' >> "$GITHUB_ENV" ;;
+            api-*)
+              k=${PART#api-}
+              [ "$k" -ge 1 ] && [ "$k" -le "$API_SHARDS" ] || { echo "::error::$PART is outside API_SHARDS=$API_SHARDS"; exit 1; }
+              go test -race -list '.*' ./internal/api/ > /tmp/list.txt
+              grep -E '^(Test|Example|Fuzz)' /tmp/list.txt | sort | awk -v n="$API_SHARDS" -v k="$k" 'NR % n == k % n' > /tmp/mine.txt
+              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) internal/api tests"
+              [ -s /tmp/mine.txt ] || { echo "::error::$PART picked no test"; exit 1; }
+              echo 'PKGS=./internal/api/' >> "$GITHUB_ENV"
+              echo "RUN=^($(paste -sd'|' /tmp/mine.txt))\$" >> "$GITHUB_ENV" ;;
+            *) echo "::error::unknown part $PART"; exit 1 ;;
+          esac
+      # claude-fleet#2640 / #2479: internal/api alone ran 420-600s, then up to
+      # 1220s (#3856), against go test's cap — hence the 20m and the shards.
+      - name: tests on Postgres (${{ matrix.part }})
         run: |
           set -o pipefail
-          go test -race -count=1 -v -timeout 20m ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
+          go test -race -count=1 -v -timeout 20m ${RUN:+-run "$RUN"} $PKGS 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
       # claude-fleet#2216: `ccquota db migrate` on a million usage_events
       # rows, without -race, each table's and phase's time in the summary.
       - name: db migrate timing (1M rows)
+        if: matrix.part == 'store'
         env:
           CCQUOTA_MOVE_SPEED_ROWS: '1000000'
         run: |
@@ -106,7 +139,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: pg-log
+          name: pg-log-${{ matrix.part }}
           path: /tmp/pg.log
           if-no-files-found: ignore
       - name: skip 0
@@ -119,7 +152,7 @@ jobs:
         if: always()
         run: |
           {
-            echo '### tokenledger-pg'
+            echo '### tokenledger-pg (${{ matrix.part }})'
             echo
             echo "passed: $(grep -c '^ *--- PASS' /tmp/pg.log) · failed: $(grep -c '^ *--- FAIL' /tmp/pg.log) · skipped: $(grep -cE '^ *(--- SKIP|SKIP-PG)' /tmp/pg.log)"
             echo
