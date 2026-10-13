@@ -682,6 +682,15 @@ PY2
 grep -q '"keep"' "$WORK/node/attic/index.json" && fail 'the attic copy is still kept for a forgotten login'
 has "$WORK/out" 'forgot alice: its tasks stopped, 1 service(s) left in the attic' 'the forget did not report what it did'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'managed login: not deleted'
+# --quick (issue #4044): the forget does not wait up to 20 s for the daemon's
+# own tick (12.3 s on a managed Mac) — one second, then the runs are stopped
+reset_fixture; cs_fixture own
+printf '{"alice": {"managed": true, "since": 1}}\n' > "$WORK/node/accounts.json"; : > "$WORK/node/logins/alice.env"
+: > "$FLEET_TEST_LOG"
+FLEET_NODE_TEST=1 run alice --recycle-stop --quick --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "quick forget: exit $RC"; }
+has "$FLEET_TEST_LOG" 'FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1' 'quick: the forget still waits for the daemon tick'
+grep -q '"alice"' "$WORK/node/accounts.json" && fail 'quick: alice not forgotten'
 rm -rf "${WORK:?}/rt" "${WORK:?}/node"
 
 # The local ssh road (issue #2994). A stub stands in for fleet-login-remove-ssh.sh:

@@ -300,14 +300,21 @@ EOF
 }
 # the uid's per-user temp + cache dir, /private/var/folders/<xx>/<yy>/ (its
 # $TMPDIR, issue #4044): the uid outlives the wash, and so did this dir. Its
-# C / T / 0 skeleton stays (macOS makes it per uid); everything in it goes.
+# C / T / 0 skeleton stays (macOS makes it per uid), and so does X — macOS's
+# code-signing clones of app bundles it ran, SIP-protected: even root's rm is
+# refused there (a managed Mac, fleetu4) — app copies, not the person's files.
+# Everything else in it goes; what rm
+# still cannot take is a WARN, never the wash's verdict — the check judges.
 folders_clear() {
   local vf="$RROOT/private/var/folders" u
   [ -d "$vf" ] || return 0
   for u in $(sudo find "$vf" -mindepth 2 -maxdepth 2 -type d -user "$UIDT" 2>/dev/null); do
-    sudo find "$u" -mindepth 1 -maxdepth 1 ! -name C ! -name T ! -name 0 -exec rm -rf {} + || return 1
-    sudo find "$u" -mindepth 2 -maxdepth 2 -exec rm -rf {} + || return 1
+    sudo find "$u" -mindepth 1 -maxdepth 1 ! -name C ! -name T ! -name 0 ! -name X -exec rm -rf {} + 2>&1 \
+      || printf 'WARN %s: not all of it could be removed (above); the check judges what is left\n' "$u"
+    sudo find "$u" -mindepth 2 -maxdepth 2 ! -path "$u/X/*" -exec rm -rf {} + 2>&1 \
+      || printf 'WARN %s: not all of it could be removed (above); the check judges what is left\n' "$u"
   done
+  return 0
 }
 # aside_later <dir> <tgz|"">: the old home, off the clock — archived when kept
 # (the tar.gz the stop used to write, Library/Caches left out, 600 the
@@ -400,7 +407,7 @@ if [ "$DONE_REJOIN" = 0 ]; then
     n=$((n + 1))
     job "outside-$n" sudo find "$d" -xdev -mindepth 1 -path "$ARCHIVE_DIR" -prune -o -user "$UIDT" -prune -exec rm -rf {} +
   done
-  show sudo find "$RROOT/private/var/folders" -mindepth 2 -maxdepth 2 -type d -user "$UIDT" "(then everything in it but its C/T/0 skeleton)"
+  show sudo find "$RROOT/private/var/folders" -mindepth 2 -maxdepth 2 -type d -user "$UIDT" "(then everything in it but its C/T/0 skeleton and the SIP-held X)"
   job user-tmp folders_clear
   jobs_wait
   lap home+sweep
