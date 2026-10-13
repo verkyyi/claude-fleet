@@ -4788,6 +4788,9 @@ def entry_sshd():
 # forwarding (it would land on the door, not the pod).
 DOOR_GROUP = "fleet-door"
 DOOR_GECOS = "fleet-door"
+# AllowUsers of a door whose table is empty (issue #3554): a `-` no login of the
+# hub's (2-16 of a-z0-9) can carry, so no door account is ever this name
+DOOR_NOBODY = "fleet-door-closed"
 DOOR_SERVICE_RE = r"^u-[a-z0-9]{4,20}$"   # render.py USER_POD_RE
 
 
@@ -4858,7 +4861,7 @@ def door_account(login):
 def door_eligible(logins, routes):
     out = {}
     for login in logins:
-        if login == "root" or not re.match(r"^[A-Za-z0-9._-]{1,64}$", login):
+        if login in ("root", DOOR_NOBODY) or not re.match(r"^[A-Za-z0-9._-]{1,64}$", login):
             out[login] = "not a login the door takes"
         elif login not in routes:
             out[login] = "no pod routed for it"
@@ -5422,7 +5425,11 @@ def _entry_converge(paths, ep, port, lst, force):
                 os.remove(p)
             _entry_put(p, text, 0o644)
     allow = sorted(want)
-    # the config: none (no listener) when no login has its home here
+    # the config: none (no listener) when no login has its home here — except at
+    # the door (issue #3554): its probe is tcp on the port, and its table is empty
+    # until the first person's home is a pod, so it listens letting nobody in
+    if not allow and door:
+        allow = [DOOR_NOBODY]
     book["missing"], book["refused"] = [], dict((l, w) for l, w in verdict.items() if w)
     if not allow:
         for f in (ep.cfg,):
