@@ -515,6 +515,7 @@ FLEET_RESTORE_PROBE_SECS           knob: how long restore watches a resumed wind
 FLEET_RESTORE_PROMPT_RE            knob: ERE for the agent input prompt = resumed (fleet-restore.sh, #1265)
 FLEET_RESTORE_REJECT_ALARM         knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_RESTORE_SESS                 handoff: the session a restore targets
+FLEET_RESTORE_SNAPSHOT_EVERY       knob: the collector's --if-changed snapshot rewrites an unchanged fleet every Nth tick (fleet-restore.sh, 5, #3530)
 FLEET_RESTORE_STALE_MAP_AGE        knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_RESTORE_TMP_MAX_MIN          knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_SEED_REPO                    knob: the starter repo a new login's first-login bootstrap brings its fleet up on; read before any conf exists (fleet-login-bootstrap.sh)
