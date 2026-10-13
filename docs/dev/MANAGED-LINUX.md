@@ -594,6 +594,31 @@ door's key landing as the login and root's refused
 (`deploy/k8s/provisioner/kind-drill.sh`); the install and `login open` as a real
 non-root uid with no capability on a Linux runner (`extras/managed-node/smoke.py`).
 
+### Moving a person onto their own pod
+
+(issue #3554, EPIC #3500 C10) A person who lives on the shared node moves to a pod
+of their own with their name, number, home and sessions as they were, and one
+interruption: `bin/fleet-move-to-pod.sh <phase> <login> --principal gh:<n> -- <render.py args>`,
+run by someone holding the cluster (KUBECONFIG) and the hub's operator token
+(`CCQUOTA_VIEWER_TOKEN`). Each phase can be run again; `all` runs check → verify.
+
+| Phase | What | The person |
+|---|---|---|
+| `check` | the source's declaration (UID, op), home size, pinned sessions, attached clients | — |
+| `prepare` | the pod's disk + Service (render.py with the login's OWN UID), a machine join code from the hub straight into `u-<nonce>-join` on kubectl's stdin, and a seeder pod on the disk (the login's UID, no capability, no token) | — |
+| `stop` | refused while any client is attached; `fleet-node-linux.py login stop <login>` on the source: snapshot save, `account forget`, every process of the UID stopped — the home, the declaration and the credential store stay. Never `fleet-down`: a fleet marked down (`restore.down`) is one the snapshot restore skips | **the interruption starts** |
+| `copy` | the home over two `kubectl exec` tars (numeric owners), without `.codex/tmp` and the proxy's throwaway Codex homes (links into the source's runtime); then `node.env` (a link into the shared node's credential store — `env_read`'s O_NOFOLLOW would refuse it), `node.pub.env` and `credsep.json` cleared, as a fresh pod has none; file counts compared | |
+| `start` | the seeder goes, the Deployment is applied, Ready waited for | |
+| `open` | `fleet hub accounts assign <p> --host u-<nonce> --login <login> --own-name`: the node program's create → `pod_login_open` (its own token, `credsep: central`); a digit-leading login is created as the person's existing one while the source row is still active. `fleet.cred_allow.node.<source>` is copied to the pod | |
+| `home` | `PUT /v1/fleet/entry/home?principal=…` → the door's table and the person's name follow | **ends** |
+| `verify` | every session the source pinned is a window (`@fleet_id`) on the pod | — |
+| `retire` | after acceptance only: `fleet hub accounts remove <p> --host <source> --delete` (the source archives the home in its attic; the source's disk is a retain class) | — |
+
+The timeline (`<UTC> <phase> <word>`, `~/.local/state/fleet-move-to-pod/<login>/timeline`)
+is what the issue records. Back out before `home`: the `login open` line `stop`
+printed (`FLEET_LOGIN_OP_ID=<op>`) brings the login back on the source; delete the
+`u-<nonce>` objects. Run it on a drill login first. `fleet-move-to-pod-selftest.sh`.
+
 ## The door
 
 (issue #3549, EPIC #3500 C4) The cluster has ONE public way in for everyone whose

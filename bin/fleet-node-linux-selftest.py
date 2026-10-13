@@ -1645,6 +1645,36 @@ class LinuxTenants(unittest.TestCase):
             with self.assertRaises(self.m.NoLogin):
                 f.remove('drill2')
 
+    def test_login_stop_keeps_the_home(self):
+        """login stop (C10, #3554): sessions pinned first, the daemon lets go,
+        every process stops — and the home, the declaration, the user and the
+        credential store all stay; never fleet-down (a fleet marked down is one
+        the pod's snapshot restore skips). A failed snapshot stops nothing."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            f.open('24acme')
+            home = Path(f.paths.users) / '24acme'
+            (home / 'work.txt').write_text('moves with the home')
+            self.m.as_tenant.return_value = Mock(returncode=1)
+            with self.assertRaises(RuntimeError):
+                self.m.login_stop(_ns(name='24acme'))
+            f.sup.account_forget.assert_not_called()
+            self.m.as_tenant.reset_mock()
+            self.m.as_tenant.return_value = Mock(returncode=0)
+            self.assertEqual(self.m.login_stop(_ns(name='24acme')), 0)
+            cmds = [c.args[2] for c in self.m.as_tenant.call_args_list]
+            self.assertEqual([c[-1] for c in cmds], ['save'])
+            self.assertTrue(cmds[0][1].endswith('fleet-sessions-snapshot.sh'))
+            self.assertNotIn('fleet-down.sh', ' '.join(' '.join(c) for c in cmds))
+            f.sup.account_forget.assert_called_once_with(f.paths, '24acme')
+            self.assertIn(['pkill', '-KILL', '-U', '10002'], f.calls)
+            self.assertIn('24acme', f.users)
+            self.assertEqual((home / 'work.txt').read_text(), 'moves with the home')
+            self.assertTrue(self.m.tenant_path(f.paths, '24acme').exists())
+            f.cred.purge.assert_not_called()
+            self.assertNotIn('userdel', [c[0] for c in f.calls])
+            with self.assertRaises(self.m.NoLogin):
+                self.m.login_stop(_ns(name='nobody9'))
+
     def test_tenant_cross_read(self):
         """linux-tenant-cross-read: every home is 0700 after open and boot, and a
         new login never takes over a home another number owns."""

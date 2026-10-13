@@ -11,7 +11,8 @@ store and login bootstrap; it never starts a second node agent.
 
 login open <login> [--full-name N] [--join-file F]   exit 0 · 2 bad argument ·
 login remove <login> --keep-home|--delete-home       3 exists already (open) ·
-login list   → <login> <uid> <home> <state>           4 no such login (remove) ·
+login stop <login>   (moving to its own pod, C10)     4 no such login (remove,
+login list   → <login> <uid> <home> <state>             stop) ·
                                                       5 an administrator already;
                                                       last line `credsep: <word>`
 A person's own pod (FLEET_POD_LOGIN, render.py --user-pod --login, #3757) is
@@ -1027,6 +1028,47 @@ def _login_remove(a):
     return 0
 
 
+def login_stop(a):
+    """A login on its way to its own pod (C10, #3554): its sessions pinned
+    (snapshot save, as it), its tasks and node lane taken off this machine's
+    daemon, every process of its UID stopped — and nothing else. The home, the
+    declaration and the credential store stay, so a copy of the home is
+    consistent and the login can come back here (`login open` with the
+    declaration's op). Never fleet-down: a fleet marked down is one the
+    snapshot restore skips, and the person's sessions would not come back on
+    the pod."""
+    if pod_own():
+        raise Refuse('a person\'s pod keeps its one login running; stop the pod instead', rc=2)
+    s = load('fleet-node-supervisor')
+    paths = s.Paths()
+    login = a.name
+    with tenants_lock(paths):
+        t = tenants(paths).get(login)
+        if t is None:
+            raise NoLogin('no login %s declared on this machine: nothing to stop' % login)
+        try:
+            pwd.getpwnam(login)
+            alive = True
+        except KeyError:
+            alive = False   # a boot that has not recreated it yet: nothing runs as it
+        if alive:
+            print('[1] pin %s\'s sessions (snapshot save)' % login)
+            snap = as_tenant(s, login, ['bash', str(HERE / 'fleet-sessions-snapshot.sh'), 'save'],
+                             check=False, stdin=subprocess.DEVNULL, timeout=60)
+            if snap.returncode:
+                raise RuntimeError('snapshot save for %s exited %d; nothing stopped' % (login, snap.returncode))
+        print('[2] take %s out of the machine daemon (account forget)' % login)
+        rc = s.account_forget(paths, login)
+        if rc:
+            return rc
+        print('[3] stop remaining processes of UID %d' % t['uid'])
+        kill_uid(t['uid'])
+    op = t.get('op', '')
+    print('stopped %s (UID %d); home %s kept; back here: %slogin open %s'
+          % (login, t['uid'], t['home'], 'FLEET_LOGIN_OP_ID=%s ' % op if op else '', login))
+    return 0
+
+
 def login_list(a):
     s = load('fleet-node-supervisor')
     paths = s.Paths()
@@ -1058,12 +1100,14 @@ def login_cmd(rest):
     hm = r.add_mutually_exclusive_group(required=True)
     hm.add_argument('--keep-home', dest='home', action='store_const', const='keep')
     hm.add_argument('--delete-home', dest='home', action='store_const', const='delete')
+    st = sub.add_parser('stop')
+    st.add_argument('name')
     sub.add_parser('list')
     try:
         a = lp.parse_args(rest)
     except SystemExit as e:
         return 2 if e.code else 0
-    return {'open': login_open, 'remove': login_remove, 'list': login_list}[a.verb](a)
+    return {'open': login_open, 'remove': login_remove, 'stop': login_stop, 'list': login_list}[a.verb](a)
 
 
 def lib_owner_heal(lib=None):
