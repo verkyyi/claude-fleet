@@ -42,7 +42,9 @@ import pwd
 import stat
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # id, platform (both | darwin | linux), what it is. The order is the verdict's.
 CATEGORIES = [
@@ -62,7 +64,7 @@ CATEGORIES = [
     ("processes", "both", "该 UID 的进程"),
     ("tmux", "both", "tmux 套接字（/tmp/tmux-<uid>）"),
     ("outside-files", "both", "家以外属该 UID 的文件（/tmp /var/tmp /Users/Shared，存档目录除外）"),
-    ("user-tmp", "darwin", "该 UID 的每用户临时与缓存目录（/private/var/folders/<xx>/<yy>/，它的 $TMPDIR；SIP 管的 X 除外）"),
+    ("user-tmp", "darwin", "该 UID 的每用户临时与缓存目录（/private/var/folders/<xx>/<yy>/，它的 $TMPDIR；SIP/TCC 管的系统项 X、0/com.apple.LaunchServices.dv 除外）"),
 ]
 
 # Paths under the home that belong to a category of their own (the most specific
@@ -95,6 +97,11 @@ TMUX_TMP = {"darwin": "/private/tmp", "linux": "/tmp"}
 # macOS keeps a per-uid temp + cache dir (confstr DARWIN_USER_DIR): the uid
 # outlives a wash, so this dir does too unless the wash empties it (#4044)
 USER_DIRS = "/private/var/folders"
+# What macOS keeps in that dir behind SIP / TCC — even root can neither read
+# nor remove it, and it holds the system's own state, not the person's files
+# (a managed Mac, #4044): X = code-signing clones of app bundles it ran,
+# 0/com.apple.LaunchServices.dv = its LaunchServices database. Relative paths.
+USER_DIR_SYSTEM = ("X", "0/com.apple.LaunchServices.dv")
 HOMES = {"darwin": "/Users", "linux": "/home"}
 ADMIN_HOMES = {"darwin": ["/var/root"], "linux": ["/root"]}
 MAX_ITEMS = 200
@@ -106,6 +113,7 @@ class Check(object):
         self.plat = a.platform
         self.since = a.since
         self.found = {}       # category → [item]
+        self.lock = threading.Lock()   # run() walks in threads
         self.now = time.time()
 
     def p(self, path):
@@ -113,9 +121,10 @@ class Check(object):
         return (self.a.root.rstrip("/") + path) if self.a.root else path
 
     def add(self, cat, item):
-        lst = self.found.setdefault(cat, [])
-        if len(lst) < MAX_ITEMS:
-            lst.append(item)
+        with self.lock:
+            lst = self.found.setdefault(cat, [])
+            if len(lst) < MAX_ITEMS:
+                lst.append(item)
 
     def unknown(self, cat, why):
         self.add(cat, "cannot read: " + why)
@@ -349,9 +358,9 @@ class Check(object):
 
     def user_tmp(self, top, skip=()):
         """What is in a per-uid dir: macOS makes its C/T/0 skeleton (empty dirs)
-        for every uid, so only what is not a directory counts. X holds macOS's
-        code-signing clones of app bundles: SIP-protected (even root cannot
-        remove it), app copies rather than the person's files — skipped (#4044)."""
+        for every uid, so only what is not a directory counts. USER_DIR_SYSTEM
+        (macOS's own state behind SIP / TCC, which even root cannot read or
+        remove) is skipped (#4044)."""
         errs = []
         for d, dirs, files in os.walk(top, onerror=errs.append):
             dirs[:] = [n for n in dirs if os.path.join(d, n) not in skip]
@@ -369,30 +378,30 @@ class Check(object):
     def run(self):
         self.skipped = set(c for c, plat, _ in CATEGORIES if plat not in ("both", self.plat))
         st = self.a.node_state or self.p("/var/db/fleet-node")
-        self.home()
-        self.walk("credsep", os.path.join(self.a.cred_base or self.p("/var/db/fleet-cred"), self.a.login))
-        self.walk("entry-keys", os.path.join(st, "entry", "keys", self.a.login))
-        self.walk("task-state", os.path.join(st, "logins", self.a.login))
-        self.onboard()
-        self.crontab()
-        if self.plat == "darwin":
-            self.launchd()
-        else:
-            self.linger()
-        self.processes()
+        jobs = [(self.home, ()),
+                (self.walk, ("credsep", os.path.join(self.a.cred_base or self.p("/var/db/fleet-cred"), self.a.login))),
+                (self.walk, ("entry-keys", os.path.join(st, "entry", "keys", self.a.login))),
+                (self.walk, ("task-state", os.path.join(st, "logins", self.a.login))),
+                (self.onboard, ()), (self.crontab, ()),
+                (self.launchd if self.plat == "darwin" else self.linger, ()),
+                (self.processes, ())]
         tmux = os.path.join(self.p(TMUX_TMP[self.plat]), "tmux-%d" % self.a.uid)
-        self.walk("tmux", tmux)
+        jobs.append((self.walk, ("tmux", tmux)))
         archive = self.a.archive_dir or self.p("/Users/Shared/offboarded")
         home = os.path.realpath(self.a.home)
         for top in OUTSIDE[self.plat]:
             top = self.p(top)
             if os.path.realpath(top) == home or home.startswith(os.path.realpath(top) + "/"):
                 continue
-            self.walk("outside-files", top, owner=self.a.uid,
-                      skip=(tmux, archive, self.a.home))
+            jobs.append((self.walk, ("outside-files", top, self.a.uid, (tmux, archive, self.a.home))))
         if self.plat == "darwin":
             for u in self.user_dirs():
-                self.user_tmp(u, skip=(os.path.join(u, "X"),))
+                jobs.append((self.user_tmp, (u, tuple(os.path.join(u, x) for x in USER_DIR_SYSTEM))))
+        # each category on its own: the walks are disk-bound, so in threads the
+        # check takes about its longest walk instead of their sum (#4044)
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for f in [ex.submit(fn, *args) for fn, args in jobs]:
+                f.result()
         return [c for c, plat, _ in CATEGORIES if c in self.found and c not in self.skipped]
 
 

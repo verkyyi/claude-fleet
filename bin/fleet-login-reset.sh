@@ -258,13 +258,18 @@ job() {
   local name=$1; shift
   [ "$(type -t "$1")" = function ] || show "$@"
   [ "$APPLY" = 1 ] || return 0
-  ( "$@" > "$JOBS/$name.out" 2>&1 || printf '%s\n' "$name" >> "$JOBS/failed" ) &
+  ( t=$(now); "$@" > "$JOBS/$name.out" 2>&1 || printf '%s\n' "$name" >> "$JOBS/failed"
+    printf '%s=%s\n' "$name" "$(secs "$t" "$(now)")" > "$JOBS/$name.secs" ) &
 }
 jobs_wait() {
   wait
   [ "$APPLY" = 1 ] || return 0
   local f
   for f in "$JOBS"/*.out; do [ -s "$f" ] && sed 's/^/    /' "$f"; done 2>/dev/null
+  # each job's own seconds: which one the home+sweep lap waited for
+  JOBT=$(cat "$JOBS"/*.secs 2>/dev/null | sort -t= -k2 -rn | paste -sd' ' -)
+  printf '  jobs: %s\n' "$JOBT"
+  opput jobs "$JOBT" wash
   [ ! -s "$JOBS/failed" ] || failed wash "could not $(tr '\n' ' ' < "$JOBS/failed" | sed 's/ $//') (above)"
 }
 fresh_home() { sudo createhomedir -c -u "$LOGIN" && sudo chmod 700 "$H" && [ -d "$H" ]; }
@@ -301,8 +306,10 @@ EOF
 # the uid's per-user temp + cache dir, /private/var/folders/<xx>/<yy>/ (its
 # $TMPDIR, issue #4044): the uid outlives the wash, and so did this dir. Its
 # C / T / 0 skeleton stays (macOS makes it per uid), and so does X — macOS's
-# code-signing clones of app bundles it ran, SIP-protected: even root's rm is
-# refused there (a managed Mac, fleetu4) — app copies, not the person's files.
+# code-signing clones of app bundles it ran, and 0/com.apple.LaunchServices.dv,
+# its LaunchServices database — SIP / TCC-protected: even root can neither read
+# nor remove them (a managed Mac, fleetu4 / fleetu5) — the system's own state,
+# not the person's files.
 # Everything else in it goes; what rm
 # still cannot take is a WARN, never the wash's verdict — the check judges.
 folders_clear() {
@@ -311,7 +318,7 @@ folders_clear() {
   for u in $(sudo find "$vf" -mindepth 2 -maxdepth 2 -type d -user "$UIDT" 2>/dev/null); do
     sudo find "$u" -mindepth 1 -maxdepth 1 ! -name C ! -name T ! -name 0 ! -name X -exec rm -rf {} + 2>&1 \
       || printf 'WARN %s: not all of it could be removed (above); the check judges what is left\n' "$u"
-    sudo find "$u" -mindepth 2 -maxdepth 2 ! -path "$u/X/*" -exec rm -rf {} + 2>&1 \
+    sudo find "$u" -mindepth 2 -maxdepth 2 ! -path "$u/X/*" ! -path "$u/0/com.apple.LaunchServices.dv" -exec rm -rf {} + 2>&1 \
       || printf 'WARN %s: not all of it could be removed (above); the check judges what is left\n' "$u"
   done
   return 0

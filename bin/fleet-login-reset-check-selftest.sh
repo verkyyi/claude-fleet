@@ -17,7 +17,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CHECK="$BIN/fleet-login-reset-check.py"
 W=$(mktemp -d "${TMPDIR:-/tmp}/reset-check.XXXXXX")
-trap 'rm -rf "$W"' EXIT
+trap 'chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"' EXIT
 FAILS=0
 fail() { FAILS=$((FAILS + 1)); printf 'selftest FAIL %s\n' "$1"; }
 ok() { printf 'ok   %s\n' "$1"; }
@@ -42,7 +42,7 @@ chmod +x "$W/shim/ps" "$W/shim/crontab"
 
 setup() {   # setup <platform> → a fresh sandbox $S with a skeleton-only home
   P=$1 S="$W/$1"
-  rm -rf "$S"; mkdir -p "$S/sys"
+  chmod -R u+rwx "$S" 2>/dev/null; rm -rf "$S"; mkdir -p "$S/sys"
   if [ "$P" = darwin ]; then
     HR="$S/sys/Users" SK="$S/sys/System/Library/User Template/Non_localized" TT="$S/sys/private/tmp"
     OUT1="$S/sys/Users/Shared" ADMIN="$S/sys/Users/admin"
@@ -91,8 +91,14 @@ plant() {   # plant <category>
     processes) printf '%s 4242 01:02:03 /usr/bin/sleep\n1 1 9-00:00:00 launchd\n' "$U" > "$S/ps" ;;
     tmux) mkdir -p "$TT/tmux-$U"; : > "$TT/tmux-$U/default" ;;
     outside-files) printf 'x\n' > "$OUT1/leftover.txt" ;;
-    user-tmp) mkdir -p "$S/sys/private/var/folders/zz/abc123/T" "$S/sys/private/var/folders/zz/abc123/X"
-              : > "$S/sys/private/var/folders/zz/abc123/T/prev.txt"; : > "$S/sys/private/var/folders/zz/abc123/X/clone" ;;
+    # X and 0/com.apple.LaunchServices.dv are macOS's own, behind SIP / TCC
+    # (unreadable even to root there — 000 here): never a verdict (#4044)
+    user-tmp) chmod 700 "$S/sys/private/var/folders/zz/abc123/0/com.apple.LaunchServices.dv" 2>/dev/null
+              mkdir -p "$S/sys/private/var/folders/zz/abc123/T" "$S/sys/private/var/folders/zz/abc123/X" \
+                "$S/sys/private/var/folders/zz/abc123/0/com.apple.LaunchServices.dv"
+              : > "$S/sys/private/var/folders/zz/abc123/T/prev.txt"; : > "$S/sys/private/var/folders/zz/abc123/X/clone"
+              : > "$S/sys/private/var/folders/zz/abc123/0/com.apple.LaunchServices.dv/db"
+              chmod 000 "$S/sys/private/var/folders/zz/abc123/0/com.apple.LaunchServices.dv" ;;
     *) fail "the selftest has no plant for category '$1' — add one"; return 1 ;;
   esac
 }
@@ -114,7 +120,7 @@ unplant() {
     processes) : > "$S/ps" ;;
     tmux) rm -rf "$TT/tmux-$U" ;;
     outside-files) rm -f "$OUT1/leftover.txt" ;;
-    user-tmp) rm -f "$S/sys/private/var/folders/zz/abc123/T/prev.txt" ;;
+    user-tmp) rm -f "$S/sys/private/var/folders/zz/abc123/T/prev.txt" ;;   # X, the .dv stay: skipped
   esac
 }
 
