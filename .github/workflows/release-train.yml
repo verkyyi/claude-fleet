@@ -48,6 +48,11 @@ name: release train
 #                   (#3140), then `fleet-stable.sh move TRAIN_SHA --train <run>`:
 #                   its CI and macOS gates read THIS run's jobs, its ccquota gate
 #                   holds the hub to TRAIN_SHA's source; no --force, ever.
+#       `node tools` / `node image` (issue #3855) the managed node image of that
+#                   release: the Dockerfile's tools stage pushed from a GitHub
+#                   runner when its tag is new, then the image built in the
+#                   Shenzhen cluster (runs-on: fleet-ack, its buildkitd) and pushed
+#                   as <NODE_IMAGE_REPO>:<TRAIN_SHA> — never a gate of the move.
 #     Any red stops the train where it is: a hub already rolled stays (it serves
 #     older machines too), a publish is idempotent, and the next train starts over
 #     (拍板 7 / 8 — the hub's rollback is still hub-deploy's dispatch with `tag`).
@@ -527,6 +532,8 @@ jobs:
     # release-sign environment's RELEASE_SIGN_KEY secret, read only by the
     # publish step below. Unset ⇒ the hub signs with its own key, as before.
     environment: release-sign
+    outputs:
+      moved: ${{ steps.move.outputs.moved }}
     permissions:
       contents: write   # the stable tag (GITHUB_TOKEN; a tag pushed so triggers nothing)
       id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
@@ -650,10 +657,14 @@ jobs:
           fi
 
       - name: move stable to TRAIN_SHA
+        id: move
         if: steps.sup.outputs.superseded != 'true' && steps.pub.outputs.superseded != 'true'
         run: |
           set +e
+          # node tools / node image (#3855) build the node image beside the
+          # release, never gate it: a registry hiccup does not hold stable back
           sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" --ignore-check release \
+            --ignore-check 'node tools' --ignore-check 'node image' \
             --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
           rc=$?
           cat out.txt
@@ -661,4 +672,114 @@ jobs:
           if [ "$rc" = 3 ] && grep -q 'does not descend from the current stable' out.txt; then
             bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" && exit 0
           fi
+          [ "$rc" != 0 ] || echo "moved=true" >> "$GITHUB_OUTPUT"
           exit $rc
+
+  node-tools:
+    # The managed node image's `tools` stage (extras/managed-node/Dockerfile),
+    # pushed once per text as <repo>:<tools-tag.sh> from here — outside CN, where
+    # GitHub's release assets and dl.k8s.io download (issue #3855). Already there
+    # = a look and nothing pushed, the usual case.
+    name: node tools
+    needs: [board, train]
+    if: needs.board.outputs.skip == 'false' && vars.NODE_IMAGE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: node-image
+    permissions:
+      contents: read
+      id-token: write   # OIDC → STS as gha-claudefleet-node-image (acme/fleet-managed-node only)
+    outputs:
+      tag: ${{ steps.tools.outputs.tag }}
+      digest: ${{ steps.tools.outputs.digest }}
+    env:
+      REPO: ${{ vars.NODE_IMAGE_REPO }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - uses: ./.github/actions/hub-acr
+        with:
+          role: gha-claudefleet-node-image
+      - uses: docker/setup-buildx-action@v3
+      - name: the tools image, pushed when its tag is new
+        id: tools
+        run: |
+          tag=$(bash extras/managed-node/tools-tag.sh)
+          if ! docker buildx imagetools inspect "$REPO:$tag" >/dev/null 2>&1; then
+            docker buildx build --platform linux/amd64 --target tools --push -t "$REPO:$tag" extras/managed-node
+            note='pushed'
+          else
+            note='already there'
+          fi
+          digest=$(docker buildx imagetools inspect "$REPO:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in (sha256:*) ;; (*) echo "::error::cannot read the digest of $REPO:$tag"; exit 1 ;; esac
+          printf 'tag=%s\ndigest=%s\n' "$tag" "$digest" >> "$GITHUB_OUTPUT"
+          echo "### 节点镜像工具层 \`$tag\`（$note）: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  node-image:
+    # The managed node image of the release this train just shipped (issue
+    # #3855): built in the Shenzhen cluster on the fleet-ack runner set (ARC,
+    # deploy/k8s/runners/) by its buildkitd, native amd64, pushed over ACR's VPC
+    # endpoint as <repo>:<TRAIN_SHA> — the image a person deploys by its digest.
+    # Red here is the image's alone: stable has already moved.
+    name: node image
+    needs: [board, release, node-tools]
+    if: >-
+      always() && needs.release.outputs.moved == 'true' &&
+      needs.node-tools.result == 'success'
+    runs-on: fleet-ack
+    timeout-minutes: 45
+    environment: node-image
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      FLEET_HUB_URL: https://claudefleet.24haowan.com
+      REPO: ${{ vars.NODE_IMAGE_REPO }}
+      BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
+      TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
+    steps:
+      # GitHub from Shenzhen: a sparse, shallow checkout, tried twice
+      - uses: actions/checkout@v4
+        id: co
+        continue-on-error: true
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /extras/managed-node/
+            /conf/release-keys/
+            /bin/fleet-release-verify.py
+            /.github/actions/hub-acr/
+            /.github/actions/hub-kubeconfig/
+      - if: steps.co.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /extras/managed-node/
+            /conf/release-keys/
+            /bin/fleet-release-verify.py
+            /.github/actions/hub-acr/
+            /.github/actions/hub-kubeconfig/
+      - uses: ./.github/actions/hub-acr
+        with:
+          role: gha-claudefleet-node-image
+      - name: build and push (train-build.sh)
+        id: build
+        run: bash extras/managed-node/train-build.sh "$FLEET_HUB_URL" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST"
+      - name: summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### 节点镜像 \`${TRAIN_SHA:0:7}\`"
+            echo '```'
+            echo "$REPO:$TRAIN_SHA"
+            echo "$REPO@$DIGEST"
+            echo '```'
+            echo "部署按 digest 引用（render.py --image $REPO@$DIGEST）。"
+          } >> "$GITHUB_STEP_SUMMARY"
