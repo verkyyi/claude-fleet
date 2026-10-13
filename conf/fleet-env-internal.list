@@ -286,7 +286,7 @@ FLEET_DEPS_NOW                     seam: a fixed clock for the deps retry backof
 FLEET_DEPS_TOOL_DIRS               seam: extra node/tool dirs the deps linker searches (fleet-deps-link.sh)
 FLEET_DISKGUARD_SOURCE             seam: source fleet-diskguard.sh as a library without running it
 FLEET_DISK_COOLDOWN                knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
-FLEET_DISK_TARGET                  path: the volume diskguard measures (default $TMPDIR)
+FLEET_DISK_TARGET                  path: the volume diskguard measures (default $TMPDIR, else $HOME)
 FLEET_DISPATCH_LEASE_DIR           path: state/log location override (fleet-issue-bridge.sh, fleet-ledger-watch.sh — the lease dir the retired dispatcher named, #3120)
 FLEET_EMIT_DIR                     path: state/log location override (fleet-emit.sh)
 FLEET_EMIT_QUEUE_MAX               knob: internal pacing/limit, safe in-code default (fleet-emit.sh)

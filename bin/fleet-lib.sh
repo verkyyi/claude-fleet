@@ -5631,6 +5631,19 @@ fleet_trash_sweep() {
   return 0
 }
 
+# fleet_disk_target → the directory whose volume the disk rails measure (diskguard's
+# warn/floor and its spawn gate, the warm pool's grow hold, the bar's disk alert):
+# FLEET_DISK_TARGET, else $TMPDIR, else $HOME, else /tmp. A Mac (and a demoted
+# account job) always has TMPDIR — byte for byte as before. A Linux pod has none,
+# and there /tmp is the NODE's shared root disk (issue #3974: 13 GB free of 61 GB
+# because of other tenants, while the login's own home volume had 46 GB) — the
+# pool held at `disk 13GB < 15GB`, every ⌘N cold-started, and the floor was 1 GB
+# from refusing every spawn. What the fleet writes (worktrees, transcripts, the
+# conf dir) lives under $HOME. fleet-alerts.sh keeps an inline copy — KEEP IN SYNC.
+fleet_disk_target() {
+  printf '%s' "${FLEET_DISK_TARGET:-${TMPDIR:-${HOME:-/tmp}}}"
+}
+
 # _fleet_load_per_core → the 1-minute load average divided by the core count, two
 # decimals, or empty when the load is unreadable (the caller then does not defer).
 # Same sources as fleet-diskguard.sh's machine_load/machine_cores (macOS sysctl,

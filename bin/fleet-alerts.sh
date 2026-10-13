@@ -443,7 +443,8 @@ fleet_alerts_compute() {
 
   # --- disk: the SAME volume + floor diskguard gates on (FLEET_STATUS_DISK=0 off).
   if [ "${FLEET_STATUS_DISK:-1}" != 0 ] && [ "${FLEET_ALERTS_DISK:-1}" != 0 ]; then
-    target="${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}"; floor="${FLEET_DISK_FLOOR_GB:-12}"
+    # inline copy of fleet_disk_target (fleet-lib.sh) — KEEP IN SYNC (#3974)
+    target="${FLEET_DISK_TARGET:-${TMPDIR:-${HOME:-/tmp}}}"; floor="${FLEET_DISK_FLOOR_GB:-12}"
     free=$(df -Pk "$target" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }')
     case "$free" in ''|*[!0-9]*) ;; *)
       if [ "$free" -le "$floor" ]; then

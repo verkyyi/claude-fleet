@@ -72,7 +72,7 @@
 #   FLEET_NOTIFY_CMD        notifier run as `$CMD "<markdown>"` on an incident
 # Internal constants (no longer surfaced in conf/fleet.conf.reference / the prefix+c modal
 # — issue #237 — but an override in an old conf is still honored for back-compat):
-#   FLEET_DISK_TARGET       dir whose volume to measure (default $TMPDIR)
+#   FLEET_DISK_TARGET       dir whose volume to measure (default $TMPDIR, else $HOME)
 #   FLEET_DISK_COOLDOWN     min seconds between captures (default 300)
 #   FLEET_RUNAWAY_CPU_PCT   %CPU that counts as "hot"    (default 0 = watchdog OFF)
 #   FLEET_RUNAWAY_CPU_SECS  seconds hot before it's a runaway (default 300)
@@ -134,7 +134,9 @@ case " $* " in *' --watch '*) [ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/fle
 
 FLOOR_GB="${FLEET_DISK_FLOOR_GB:-12}"
 WARN_GB="${FLEET_DISK_WARN_GB:-15}"
-TARGET="${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}"
+# fleet_disk_target (fleet-lib.sh): FLEET_DISK_TARGET, else $TMPDIR, else $HOME (#3974).
+if command -v fleet_disk_target >/dev/null 2>&1; then TARGET=$(fleet_disk_target)
+else TARGET="${FLEET_DISK_TARGET:-${TMPDIR:-${HOME:-/tmp}}}"; fi
 COOLDOWN="${FLEET_DISK_COOLDOWN:-300}"
 CPU_PCT="${FLEET_RUNAWAY_CPU_PCT:-0}"          # 0 = watchdog OFF (opt-in)
 CPU_SECS="${FLEET_RUNAWAY_CPU_SECS:-300}"
