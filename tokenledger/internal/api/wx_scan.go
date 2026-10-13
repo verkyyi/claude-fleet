@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"rsc.io/qr"
+
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -414,11 +416,24 @@ func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e
 // signinScanCSP is entryCSP with the page's one same-origin script allowed.
 const signinScanCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
-// qrSVG draws text as a QR code: one path, a four-module quiet zone.
+// qrSVG draws text as a QR code: one path, a four-module quiet zone, the
+// highest error correction — the WeChat mark sits on its middle.
 func qrSVG(text string) template.HTML {
-	rows := qrMatrix(text)
-	if len(rows) == 0 {
+	c, err := qr.Encode(text, qr.H)
+	if err != nil {
 		return ""
+	}
+	rows := make([]string, c.Size)
+	for y := range rows {
+		var b strings.Builder
+		for x := 0; x < c.Size; x++ {
+			if c.Black(x, y) {
+				b.WriteByte('#')
+			} else {
+				b.WriteByte('.')
+			}
+		}
+		rows[y] = b.String()
 	}
 	n := len(rows) + 8
 	var b strings.Builder
