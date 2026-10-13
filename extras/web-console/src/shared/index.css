@@ -4,8 +4,12 @@
 @import "../../../fleet-theme/theme.css";
 
 /* each side's vite root is its html's folder (app/, admin/): tell Tailwind
- * where the classes are — all of src/ */
-@source "..";
+ * where the classes are — the member side and what both share; the admin
+ * side adds its own folder (src/admin/admin.css), so no admin class name
+ * rides in the member side's stylesheet */
+@source "../app";
+@source "../shared";
+@source "../components";
 
 /* dark follows the system — no toggle, no script (issue #3637) */
 @custom-variant dark (@media (prefers-color-scheme: dark));

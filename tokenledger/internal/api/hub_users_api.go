@@ -41,6 +41,9 @@ type hubUserView struct {
 	// Logins are every machine·login pair the person holds
 	// (claude-fleet#3302) — machine_login is only the name a new login takes.
 	Logins []PersonLogin `json:"logins"`
+	// Via are the kinds of sign-in the person holds (wechat · email · github,
+	// store.IdentityKinds order) — the admin side's 登录方式 (claude-fleet#3933).
+	Via []string `json:"via"`
 }
 
 // deployAdminView is one name of CCQUOTA_GITHUB_ADMINS and whether it is
@@ -94,6 +97,7 @@ func (s *Server) writeFleetUsers(w http.ResponseWriter, status int, extra map[st
 		if role, err := s.personRole(u.PrincipalID); err == nil && role == roleAdmin {
 			v.Deploy = true
 		}
+		v.Via = s.personVia(u)
 		out = append(out, v)
 	}
 	admins := []deployAdminView{}
@@ -112,6 +116,27 @@ func (s *Server) writeFleetUsers(w http.ResponseWriter, status int, extra map[st
 		body[k] = v
 	}
 	writeJSON(w, status, body)
+}
+
+// personVia is the kinds of sign-in u holds, each once, in
+// store.IdentityKinds order; a GitHub ID with no identity row (a person added
+// before identities, claude-fleet#2955) still signs in with GitHub.
+func (s *Server) personVia(u store.HubUser) []string {
+	have := map[string]bool{}
+	ids, _ := s.Store.HubIdentities(u.PrincipalID)
+	for _, i := range ids {
+		have[i.Kind] = true
+	}
+	if u.GitHubID > 0 {
+		have[store.IdentityGitHub] = true
+	}
+	via := []string{}
+	for _, k := range store.IdentityKinds {
+		if have[k] {
+			via = append(via, k)
+		}
+	}
+	return via
 }
 
 // githubAdmins is CCQUOTA_GITHUB_ADMINS, nil without GitHub sign-in.

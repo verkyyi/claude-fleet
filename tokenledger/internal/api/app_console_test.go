@@ -215,7 +215,10 @@ func TestConsoleTableOneHop(t *testing.T) {
 		"/admin/devices?tab=x":          AppPrefix + "/nodes?tab=x",
 		AppPrefix + "/admin/devices?b=": AppPrefix + "/nodes?tab=clients&b=",
 		"/sessions?a=1":                 AppPrefix + "/sessions?a=1",
-		"/admin/users/gh:1":             AppPrefix + "/admin/users/gh:1",
+		"/admin/users/gh:1":             AdminPrefix + "/people/gh:1",
+		AppPrefix + "/admin/users?q=a":  AdminPrefix + "/people?q=a",
+		AppPrefix + "/admin/users/p:x":  AdminPrefix + "/people/p:x",
+		"/admin/users":                  AdminPrefix + "/people",
 	} {
 		if got := consoleDo(hd, http.MethodGet, p, admin); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != want {
 			t.Errorf("admin GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)

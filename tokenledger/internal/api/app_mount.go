@@ -136,8 +136,8 @@ var consolePages = []consolePage{
 	{old: AppPrefix + "/logout", new: AppPrefix + "/logout", side: sideEntry, owner: "C3"},
 	// 管理
 	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + "/devices?tab=home", under: true},
-	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10"},
-	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true},
+	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10", live: true},
+	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true, live: true},
 	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11"},
 	// All devices is the machines page's 客户端 tab already: one hop there,
 	// and on to the new page once that row is live.

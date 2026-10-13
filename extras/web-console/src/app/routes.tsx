@@ -30,9 +30,8 @@ export const PAGES: PageDef[] = [
   { id: "me", path: "/me", label: tr("我的", "Me"), icon: CircleUserRound, tab: true, page: lazy(() => import("./pages/me")) },
 ];
 
-// The admin side, for an admin only (EPIC #3923 rule 6): the new /admin once
-// C10 lands, the old console's people page until then.
-export const ADMIN_HREF = "/app/admin/users";
+// The admin side, for an admin only (EPIC #3923 rule 6; C10).
+export const ADMIN_HREF = "/admin";
 
 // Where a page lives: a route inside this app, or the old page's address.
 export const linkOf = (p: PageDef) => (p.page ? { to: p.path } : { href: p.href! });
