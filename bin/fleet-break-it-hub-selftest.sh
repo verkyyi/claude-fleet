@@ -151,6 +151,9 @@
 #                                                   session pass, relay cred, fleet_sessions; go test, when a toolchain
 #                                                   is here); bin/fleet-machine-policy.sh, fleet-hub-sessions.sh (the
 #                                                   disabled row), fleet-connect.py (disabled_die)
+#   svc-token-escalate                              tokenledger/internal/api svc.go (svcGate / svcOnly on /v1/svc/,
+#                                                   fcs_ tokens hash-only, revoke 401 at the next call; go test, when a
+#                                                   toolchain is here), cmd/ccquota/svc.go
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2341,6 +2344,28 @@ drill_machine_policy_bypass() {
     TestMachinePolicyEntryKeys || return 1
   WHAT='每扇门都问同一张机器白名单：连接 / 中转 / 选家 / 入口钥匙 / 选机（自动、点名、指定 fleet、恢复）/ 租约 / 通行证 / 中转凭据；客户端把那台的会话标「已停用（管理员限制）」；CLI 自测过（Go 测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='名单外的机器：租约全部 withdrawn、另一个人照常；通行证不签、已签的下次校验就拒（不算吊销，解禁照用）；选机自动换一台、点名拒并说原因；连接 / 中转拒、disabled 说原因，全禁时不当成「没登录」；入口钥匙清空、解禁恢复；操作员不受限（go test 八条 + CLI 自测）'
+  SECS=$(since "$t0")
+}
+
+# ---- svc-token-escalate (#4003, EPIC 24haowan-monorepo#12113 C1): SPACE's back
+# end holds a service token (fcs_<prefix8>_<secret>) that may dispatch, read and
+# cancel runs on /v1/svc/ and nothing else. The break: that token, with every
+# scope, against every /v1/fleet/* and /v1/node/* route the hub spells — and its
+# own admin road — must get nothing more than no credential gets; a token
+# without a route's scope is 403, a revoked one 401 at its very next call.
+drill_svc_token_escalate() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal/api"; GO_RAN=0
+  t0=$(now)
+  grep -q '^func (s \*Server) svcGate(' "$tl/svc.go" 2>/dev/null \
+    || { WHY="the hub has no service door (svc.go svcGate)"; return 1; }
+  grep -q 'mux.Handle(SvcPrefix, s.svcMux())' "$tl/server.go" \
+    || { WHY="/v1/svc/ is not mounted behind the service door (server.go)"; return 1; }
+  grep -q 'mux.Handle(SvcAdminPath, s.viewerOnly(s.adminOnly(' "$tl/server.go" \
+    || { WHY="the service admin road is not admin only (server.go)"; return 1; }
+  c11_go_tests svc_test.go TestSvcTokenEscalate TestSvcScopeForbidden TestSvcRevokedIs401 TestSvcRotationTwoLive \
+    TestSvcOnlyHashStored TestSvcDisable || return 1
+  WHAT='服务令牌只开 /v1/svc/：管理与节点路由、它自己的管理口都拒；缺 scope 403，吊销 / 停用后下一次调用 401（Go 测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='全 scope 的服务令牌对每条 /v1/fleet/* /v1/node/* 路由拿到的不多于无凭据；/v1/fleet/svc 401；缺 scope 403；吊销 / 停用即 401；轮换两把并存、不许第三把；库里只有哈希（go test 六条）'
   SECS=$(since "$t0")
 }
 

@@ -725,6 +725,11 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(RelayRevocationsPath, s.handleRelayRevocations)
 		mux.HandleFunc(NodeRevocationsPath, s.handleNodeRevocations)
 		mux.Handle("/v1/fleet/revocations", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevocations))))
+		// The service door (claude-fleet#4003): /v1/svc/ answers only a
+		// service principal's fcs_ token, scope by scope; the principals and
+		// their tokens are an admin's.
+		mux.Handle(SvcPrefix, s.svcMux())
+		mux.Handle(SvcAdminPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSvcAdmin))))
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.

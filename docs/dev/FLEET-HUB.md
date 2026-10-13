@@ -2000,6 +2000,36 @@ machine, which session and the attachments are read here, by an admin.
   C5's to deliver. Audited as `feedback_duplicate`.
 
 
+## Service principals: a caller that is not a person (claude-fleet#4003)
+
+A service principal is an identity for a back end that dispatches work for its
+own users — SPACE, which has no account here for any of them. It is
+`svc:<name>` in `svc_principals` (scopes, enabled) and holds bearer tokens
+`fcs_<prefix8>_<secret>` in `svc_tokens`; only the SHA-256 of the whole token
+and its prefix are stored, as for `ccq_`.
+
+- **One door.** `/v1/svc/` answers only a live service token (`svcGate`); each
+  route names its scope with `svcOnly(scope)` — `runs:write` · `runs:read` ·
+  `templates:write` — and a token without it is 403. `GET /v1/svc/whoami` needs
+  none. A service token is no viewer token, no person's session and no node
+  token, so every other route treats it as no credential (BREAK-IT
+  `svc-token-escalate`).
+- **Revoke, disable, rotate.** The rows are read on every call: a revoked or
+  expired token, or a disabled principal, is 401 at its next call, and the
+  revocation also goes on #3560's list (`fcs:<prefix>`) while that list is on.
+  A principal holds at most two live tokens — the old and the new during a
+  rotation.
+- **The admin's.** `ccquota svc list | create <name> --scopes … | token issue
+  <name> [--days N] | token revoke <prefix> | disable | enable` on the hub's
+  database, or `POST /v1/fleet/svc` `{op, principal, scopes, days, prefix,
+  reason}` (viewer + admin only; GET lists without secrets). The token is
+  printed once. Audit: `svc.create` · `svc.token.issue` · `svc.token.revoke` ·
+  `svc.disable` · `svc.enable` · `svc.call` (with its outcome: ok · FORBIDDEN ·
+  REVOKED · EXPIRED · DISABLED).
+- **Where the key lives.** In the caller's cluster Secret only (SPACE:
+  `space-fleet-svc`), read from the environment — never a repo, an issue, a
+  comment or a log.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:
