@@ -14,7 +14,10 @@
 #   E  each reader has a quickstart: index · self-host/quickstart.md ·
 #      hosted/quickstart.md · member/quickstart.md
 #   F  no public page links into docs/dev/ (EPIC #3569 共同约定 4)
-#   G  the build refuses: an en page with no zh twin, a page with no `# ` title
+#   G  the build refuses: an en page with no zh twin, a page with no `# ` title,
+#      a zh/en pair whose `##` … `######` outline differs (issue #4096) — a section
+#      missing on one side, or one at another level; a `#` line in a code block
+#      is not a heading
 #   H  generated blocks (issue #3580): the repo's pages are not stale (--check);
 #      the build fills `keys` / `keys-extra` from bin/fleet_keys.py's defaults,
 #      `dash-keymap.sh --panel switch view` and fleet-ui-lang.sh's view_keys;
@@ -111,6 +114,43 @@ if "$BUILD" --src "$T/g1" --out "$T/g1out" >/dev/null 2>"$T/g1.err"; then bad "G
 elif grep -q 'has no Chinese page' "$T/g1.err"; then ok "G en-only page refused"; else bad "G g1: $(cat "$T/g1.err")"; fi
 if "$BUILD" --src "$T/g2" --out "$T/g2out" >/dev/null 2>"$T/g2.err"; then bad "G a page with no title was built"
 elif grep -q 'has no "# " title' "$T/g2.err"; then ok "G untitled page refused"; else bad "G g2: $(cat "$T/g2.err")"; fi
+for d in g3 g4 g5; do
+  mk "$d/zh/index.md" "# home"; mk "$d/en/index.md" "# home"
+  for r in self-host hosted member; do mk "$d/zh/$r/quickstart.md" "# $r"; done
+done
+G_ZH='# 安装
+## 1. 入口
+### 1.1 镜像
+```sh
+# 代码块里的井号不算标题
+```
+### 1.2 国内部署
+## 2. 机器'
+mk g3/zh/self-host/install.md "$G_ZH"
+mk g3/en/self-host/install.md '# Install
+## 1. The hub
+### 1.1 The image
+## 2. Machines'
+mk g4/zh/self-host/install.md "$G_ZH"
+mk g4/en/self-host/install.md '# Install
+## 1. The hub
+### 1.1 The image
+## 1.2 In mainland China
+## 2. Machines'
+mk g5/zh/self-host/install.md "$G_ZH"
+mk g5/en/self-host/install.md '# Install
+## 1. The hub
+### 1.1 The image
+```sh
+# a hash in a code block is no heading
+```
+### 1.2 Deploying in mainland China
+## 2. Machines'
+if "$BUILD" --src "$T/g3" --out "$T/g3out" >/dev/null 2>"$T/g3.err"; then bad "G an en page missing a section was built"
+elif grep -q 'self-host/install.md: zh has 4 headings, en 3' "$T/g3.err" && grep -q '### 1.2 国内部署' "$T/g3.err"; then ok "G en page missing a zh section refused"; else bad "G g3: $(cat "$T/g3.err")"; fi
+if "$BUILD" --src "$T/g4" --out "$T/g4out" >/dev/null 2>"$T/g4.err"; then bad "G an en section at another level was built"
+elif grep -q 'outline must match' "$T/g4.err"; then ok "G en section at another level refused"; else bad "G g4: $(cat "$T/g4.err")"; fi
+if "$BUILD" --src "$T/g5" --out "$T/g5out" >/dev/null 2>"$T/g5.err"; then ok "G matching outlines build (code-block # ignored)"; else bad "G g5: $(cat "$T/g5.err")"; fi
 
 # D — a zh page with no en source still gets an en page, never a 404
 mk d1/zh/index.md "# home"

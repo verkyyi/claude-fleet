@@ -41,7 +41,8 @@
 # Chinese leads: a zh page with no en twin still gets an en page — 「English
 # version in preparation」 with a link to the Chinese one (state `pending`) — never
 # a 404. An en page with no zh twin is an error (exit 1). Every page needs a
-# `# ` title (exit 1 otherwise). No framework, no CDN: the CSS below is inlined,
+# `# ` title (exit 1 otherwise), and a page with both languages one outline — the
+# same `##` … `######` levels in the same order (exit 1 otherwise, issue #4096). No framework, no CDN: the CSS below is inlined,
 # its colours the entry's own app.css variables.
 #
 # Output is a build input like fleetclient/pack: gitignored, rebuilt every time
@@ -418,6 +419,27 @@ for l in LANGS:
         titles[(l, p)] = title_of(t)
         if not titles[(l, p)]:
             errors.append('%s/%s.md has no "# " title' % (l, p))
+# The two languages keep ONE outline (issue #4096): a section the Chinese page
+# grew and the English one has not is refused here, not found by a reader.
+def outline(text):
+    out, infence = [], False
+    for line in text.split('\n'):
+        if re.match(r'\s*(```|~~~)', line):
+            infence = not infence
+        elif not infence:
+            m = re.match(r'(#{2,6})\s+(.+?)\s*#*\s*$', line)
+            if m:
+                out.append((len(m.group(1)), m.group(2)))
+    return out
+for p in sorted(src['en']):
+    if p not in src['zh']:
+        continue
+    zo, eo = outline(texts[('zh', p)]), outline(texts[('en', p)])
+    if [h[0] for h in zo] != [h[0] for h in eo]:
+        i = next((k for k, (a, b) in enumerate(zip(zo, eo)) if a[0] != b[0]), min(len(zo), len(eo)))
+        at = lambda o: '%s %s' % ('#' * o[i][0], o[i][1]) if i < len(o) else '(none)'
+        errors.append('%s.md: zh has %d headings, en %d; they part at #%d: zh "%s" / en "%s" '
+                      '(the ## … ###### outline must match)' % (p, len(zo), len(eo), i + 1, at(zo), at(eo)))
 for p in ('index',) + tuple(r + '/quickstart' for r in READERS):
     if p not in src['zh']:
         errors.append('zh/%s.md is missing (every reader needs a quickstart)' % p)
