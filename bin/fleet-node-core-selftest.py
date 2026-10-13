@@ -738,6 +738,10 @@ class M_Seated(Sandbox):
         self.assertIsNone(fns.account_runnable(other, True))
         if os.getuid() != 0:
             self.assertIn("needs root", fns.account_runnable(other))
+        # nor to look inside the login's home: a script it cannot see is the core's to judge (#3556)
+        hidden = {"uid": os.getuid() + 7, "script": os.path.join(self.d, "no-such-home", "bin", "x.sh")}
+        self.assertIsNone(fns.account_runnable(hidden, True))
+        self.assertIn("missing", fns.account_runnable(dict(hidden, uid=os.getuid())))
         seat.send_signal(signal.SIGTERM)
         seat.wait(timeout=30)
         # the seat's stop took the core's job with it (a TERM to its stand-in)

@@ -1478,7 +1478,10 @@ def account_runnable(ent, seated=False):
         return "refused — uid 0"
     if os.geteuid() != 0 and ent["uid"] != os.geteuid() and not seated:
         return "needs root (to run as uid %d)" % ent["uid"]
-    if ent.get("script") and not os.path.exists(ent["script"]):
+    # seated, the login's home is not ours to look in (_fleetnode cannot enter
+    # /Users/<login>): every script read "missing" and no account task ever ran
+    # (#3556) — the core asks again as root before it starts one
+    if ent.get("script") and not seated and not os.path.exists(ent["script"]):
         return "missing %s" % ent["script"]
     return None
 
