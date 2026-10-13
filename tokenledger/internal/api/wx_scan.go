@@ -289,10 +289,10 @@ func (s *Server) wxFinishLogin(w http.ResponseWriter, r *http.Request, c *store.
 	}
 	if role == "" {
 		if refusal == denyNotListed {
-			s.scanNotListed(w, r, kind, subject, name, now)
+			s.notListedSignIn(w, r, kind, subject, name, now)
 			return
 		}
-		s.waySignedOut(w, r, kind, refusal, name, now)
+		s.waySignedOut(w, r, kind, refusal, subject, name, now)
 		return
 	}
 	s.signInAs(w, r, kind, pid, name, role, now)
@@ -324,18 +324,6 @@ func (s *Server) wxIdentity(u wxUser, now time.Time) (kind, subject string, err 
 		}
 	}
 	return store.IdentityWeChat, u.UnionID, nil
-}
-
-// scanNotListed sends someone whose scan worked but whom the list does not
-// name to apply: a waiting `fleet login` hears the refusal; a browser gets
-// the applicant note (C2 / C3) and /apply — no principal, no session.
-func (s *Server) scanNotListed(w http.ResponseWriter, r *http.Request, kind, subject, name string, now time.Time) {
-	if to := s.loginRefusedHop(w, r, denyNotListed, name, now); to != "" {
-		http.Redirect(w, r, to, http.StatusFound)
-		return
-	}
-	s.issueApplicant(w, r, kind, subject, name)
-	http.Redirect(w, r, applicantPath, http.StatusFound)
 }
 
 // ── the sign-in page with the code up front ───────────────────────────────
