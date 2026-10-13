@@ -23,6 +23,11 @@ The runner contract (the EPIC's 共同约定 5): /out/report.md (Markdown, ≤ 1
 20 the outputs are not the contract's · 30 past the deadline · anything else
 infra_error. The hub reads the code from the POST, never from the pod.
 
+On a service login (#4086) bin/fleet-svc-local.sh runs both halves in one fresh
+directory and adds FLEET_SVC_DENY_ROOTS (the top-level directories the session
+may not read) and FLEET_SVC_DENY_EXTRA (absolute paths: the key, the pass, the
+login's own dot directories).
+
 Environment (render.py's): FLEET_SVC_RUN · FLEET_SVC_ATTEMPT · FLEET_SVC_DEADLINE ·
 FLEET_SVC_HUB · FLEET_SVC_CENTRAL · FLEET_SVC_KEY_FILE · HTTPS_PROXY (the run
 egress: the hub and the open web) · NO_PROXY (the cluster). Seams for the
@@ -146,7 +151,7 @@ def fetch():
     return OK
 
 
-def prompt(inputs):
+def prompt(inputs, out='/out'):
     """The one prompt: the request and the previous report as DATA blocks."""
     def block(tag, text):
         text = str(text).replace('</%s>' % tag, '<\\/%s>' % tag)
@@ -158,8 +163,8 @@ def prompt(inputs):
         parts.append(block('previous_report', inputs['previous_report']))
     parts.append('现在：%s（%s），语言：%s' % (inputs.get('now', ''), inputs.get('tz', 'Asia/Shanghai'),
                                              inputs.get('locale', 'zh-CN')))
-    parts.append('产出两个文件：/out/report.md（Markdown，≤ 1 MB）与 /out/meta.json '
-                 '{"title", "summary"（≤ 60 字）, "sources": [{"url", "title"}], "items"}。')
+    parts.append('产出两个文件：%s/report.md（Markdown，≤ 1 MB）与 %s/meta.json '
+                 '{"title", "summary"（≤ 60 字）, "sources": [{"url", "title"}], "items"}。' % (out, out))
     return '\n\n'.join(parts)
 
 
@@ -189,7 +194,11 @@ def agent_args(claude, work):
 
 def settings(home, work, out):
     """The session's settings: files only under /work and /out, nothing else read."""
-    deny = ['Read(//%s/**)' % d for d in ('run', 'proc', 'sys', 'etc', 'var', 'tmp', 'opt', 'home', 'root')]
+    roots = [d.strip().strip('/') for d in env('FLEET_SVC_DENY_ROOTS', 'run,proc,sys,etc,var,tmp,opt,home,root').split(',')]
+    deny = ['Read(//%s/**)' % d for d in roots if d]
+    # a run on a service login (fleet-svc-local.sh, #4086): the key, the pass and
+    # the login's own dot directories, by absolute path
+    deny += ['Read(/%s)' % x.strip() for x in env('FLEET_SVC_DENY_EXTRA').split(',') if x.strip().startswith('/')]
     write(os.path.join(home, '.claude', 'settings.json'), json.dumps({
         'permissions': {'allow': ['WebSearch', 'WebFetch', 'Read(/%s/**)' % work, 'Read(/%s/**)' % out,
                                   'Write(/%s/**)' % out, 'Edit(/%s/**)' % out],
@@ -236,6 +245,37 @@ def usage_of(stdout, wall):
     return u, res if isinstance(res, dict) else {}
 
 
+def session_run(cmd, cwd, cenv, timeout):
+    """subprocess.run for the session, in a process group of its own: whatever
+    it started still in that group is killed when it ends (#4086 — a service
+    login runs the next workspace's run next). Its output goes to anonymous
+    files, so a child that kept the pipe open cannot hold the run past it."""
+    import signal
+    import tempfile
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=cenv, stdout=out, stderr=err, start_new_session=True)
+        if env('FLEET_SVC_PGID_FILE'):
+            # the group, for the after-kill clean of an attempt this runner never saw end
+            write(env('FLEET_SVC_PGID_FILE'), '%d\n' % proc.pid, 0o600)
+        expired = False
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            expired = True
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            proc.wait()
+        out.seek(0)
+        err.seek(0)
+        so, se = out.read().decode('utf-8', 'replace'), err.read().decode('utf-8', 'replace')
+    if expired:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=so, stderr=se)
+    return subprocess.CompletedProcess(cmd, proc.returncode, so, se)
+
+
 def run():
     t0 = time.time()
     p = paths()
@@ -272,13 +312,13 @@ def run():
             if not k.startswith('FLEET_SVC_') and k not in ('ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN')}
     cenv.update(HOME=home, ANTHROPIC_BASE_URL=env('FLEET_SVC_CENTRAL').rstrip('/') + '/v1/proxy/anthropic',
                 ANTHROPIC_AUTH_TOKEN=pass_)
-    cmd = [claude, '-p', prompt(inputs), '--output-format', 'json', '--tools', TOOLS,
+    cmd = [claude, '-p', prompt(inputs, p['out'].rstrip('/') or '/out'), '--output-format', 'json', '--tools', TOOLS,
            '--add-dir', p['out'], '--permission-mode', 'acceptEdits',
            '--allowedTools', 'WebSearch,WebFetch'] + extra
     left = max(10, deadline - int(time.time() - t0) - HAND_IN)
     say('run: claude -p (%ds left)' % left)
     try:
-        cp = subprocess.run(cmd, cwd=p['work'], env=cenv, capture_output=True, text=True, timeout=left)
+        cp = session_run(cmd, p['work'], cenv, left)
     except subprocess.TimeoutExpired as e:
         say('past the deadline')
         partial = e.stdout if isinstance(e.stdout, str) else ''
