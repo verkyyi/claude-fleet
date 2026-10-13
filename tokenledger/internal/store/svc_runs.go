@@ -15,6 +15,10 @@ import (
 // is a person's session; a run is a back end's one-shot job for one of ITS
 // users (tenant, subject), who has no account here.
 //
+// deadline_at is fixed at the FIRST start (started_at + deadline_s) and kept
+// when an infra_error puts the run back in the queue for its one retry
+// (claude-fleet#4007, RequeueSvcRun) — the retry lives inside what is left.
+//
 // States: queued → running → succeeded | failed | cancelled | expired. A
 // terminal state is written once (every finish is guarded on a live state), so
 // a runner's late word after a cancel or a timeout changes nothing.
@@ -50,6 +54,7 @@ CREATE TABLE IF NOT EXISTS svc_runs (
   callback_attempts INTEGER NOT NULL DEFAULT 0,
   callback_next     TEXT NOT NULL DEFAULT '',
   callback_last     TEXT NOT NULL DEFAULT '',
+  deadline_at       TEXT NOT NULL DEFAULT '',
   UNIQUE (principal, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS svc_runs_state ON svc_runs(state, queued_at);
@@ -129,6 +134,7 @@ type SvcRun struct {
 	CallbackAttempts int        `json:"callback_attempts"`
 	CallbackNext     *time.Time `json:"-"`
 	CallbackLast     string     `json:"-"`
+	DeadlineAt       *time.Time `json:"deadline_at,omitempty"`
 }
 
 // SvcRunRef is a run's number as SPACE writes it: R42.
@@ -151,21 +157,22 @@ func (r SvcRun) Ref() string { return SvcRunRef(r.ID) }
 
 const svcRunCols = `id, principal, tenant, subject, template, digest, inputs_json, idempotency_key, request_sha,
 	state, error_code, attempt, deadline_s, queued_at, started_at, finished_at, usage_json, result_json,
-	callback_url, callback_state, callback_attempts, callback_next, callback_last`
+	callback_url, callback_state, callback_attempts, callback_next, callback_last, deadline_at`
 
 func scanSvcRun(sc interface{ Scan(...any) error }) (SvcRun, error) {
 	var r SvcRun
-	var queued, started, finished, next string
+	var queued, started, finished, next, deadline string
 	if err := sc.Scan(&r.ID, &r.Principal, &r.Tenant, &r.Subject, &r.Template, &r.Digest, &r.InputsJSON,
 		&r.IdempotencyKey, &r.RequestSHA, &r.State, &r.ErrorCode, &r.Attempt, &r.DeadlineS, &queued, &started,
 		&finished, &r.UsageJSON, &r.ResultJSON, &r.CallbackURL, &r.CallbackState, &r.CallbackAttempts, &next,
-		&r.CallbackLast); err != nil {
+		&r.CallbackLast, &deadline); err != nil {
 		return r, err
 	}
 	if t := svcTimeRead(queued); t != nil {
 		r.QueuedAt = *t
 	}
 	r.StartedAt, r.FinishedAt, r.CallbackNext = svcTimeRead(started), svcTimeRead(finished), svcTimeRead(next)
+	r.DeadlineAt = svcTimeRead(deadline)
 	return r, nil
 }
 
@@ -173,7 +180,8 @@ func (s *Store) ensureSvcRuns() error {
 	if _, err := s.write.Exec(s.d.ddl(svcRunsSchema)); err != nil {
 		return fmt.Errorf("create svc_runs tables: %w", err)
 	}
-	return nil
+	// claude-fleet#4007: a database made by #4004's first version.
+	return s.addColumn("svc_runs", "deadline_at", "TEXT NOT NULL DEFAULT ''")
 }
 
 // CreateSvcRun queues r unless its principal already used its idempotency
@@ -250,7 +258,8 @@ func (s *Store) SvcRuns(f SvcRunFilter) ([]SvcRun, error) {
 // ClaimSvcRuns moves queued runs to running, oldest first, while fewer than
 // maxRunning of principal's runs run and none of the same tenant does — one
 // writer at a time, so two dispatchers never pass either limit. It returns the
-// runs it moved (attempt counted, started_at stamped).
+// runs it moved (attempt counted, started_at stamped, deadline_at fixed at the
+// first start and kept on a retry).
 func (s *Store) ClaimSvcRuns(principal string, maxRunning int, now time.Time) ([]SvcRun, error) {
 	tx, err := s.write.Begin()
 	if err != nil {
@@ -293,8 +302,12 @@ func (s *Store) ClaimSvcRuns(principal string, maxRunning int, now time.Time) ([
 		if r.State != SvcRunQueued || busy[r.Tenant] {
 			continue
 		}
-		if _, err := tx.Exec(`UPDATE svc_runs SET state = 'running', started_at = ?, attempt = attempt + 1
-			WHERE id = ? AND state = 'queued'`, svcTime(now), r.ID); err != nil {
+		if r.DeadlineAt == nil {
+			d := now.UTC().Add(time.Duration(r.DeadlineS) * time.Second)
+			r.DeadlineAt = &d
+		}
+		if _, err := tx.Exec(`UPDATE svc_runs SET state = 'running', started_at = ?, attempt = attempt + 1,
+			deadline_at = ? WHERE id = ? AND state = 'queued'`, svcTime(now), svcTime(*r.DeadlineAt), r.ID); err != nil {
 			return nil, err
 		}
 		r.State, r.Attempt = SvcRunRunning, r.Attempt+1
@@ -310,6 +323,43 @@ func (s *Store) ClaimSvcRuns(principal string, maxRunning int, now time.Time) ([
 // SvcRunsIn lists every run in state (queued / running: the sweep's input).
 func (s *Store) SvcRunsIn(state string) ([]SvcRun, error) {
 	rows, err := s.write.Query(`SELECT `+svcRunCols+` FROM svc_runs WHERE state = ? ORDER BY id`, state)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SvcRun
+	for rows.Next() {
+		r, err := scanSvcRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RequeueSvcRun puts a running run that failed for a back-end reason back in
+// the queue for its ONE retry (claude-fleet#4007): only from its first attempt,
+// only while at least minLeft of its deadline remains. requeued is false when
+// any of that does not hold — then the caller ends it as it would have.
+// queued_at is kept, so the retry is first in its principal's line.
+func (s *Store) RequeueSvcRun(id int64, now time.Time, minLeft time.Duration) (run SvcRun, requeued bool, err error) {
+	res, err := s.write.Exec(`UPDATE svc_runs SET state = 'queued', started_at = '', error_code = ''
+		WHERE id = ? AND state = 'running' AND attempt = 1 AND deadline_at > ?`, id, svcTime(now.Add(minLeft)))
+	if err != nil {
+		return SvcRun{}, false, err
+	}
+	n, _ := res.RowsAffected()
+	run, err = s.SvcRun(id)
+	return run, n == 1, err
+}
+
+// SvcRunsSince is every run that touched the window from since: still queued,
+// started at or after it, or ended at or after it — the alert sweep's input.
+func (s *Store) SvcRunsSince(since time.Time) ([]SvcRun, error) {
+	t := svcTime(since)
+	rows, err := s.write.Query(`SELECT `+svcRunCols+` FROM svc_runs WHERE state = 'queued' OR started_at >= ?
+		OR finished_at >= ? ORDER BY id`, t, t)
 	if err != nil {
 		return nil, err
 	}

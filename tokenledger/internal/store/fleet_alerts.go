@@ -46,6 +46,10 @@ const (
 	// Both are raised at most once a day per (kind, place).
 	AlertSpareEmpty  = "spare_empty"
 	AlertSpareFailed = "spare_failed"
+	// AlertSvcDegraded: a service principal's runs failing in a batch or
+	// waiting too long to start (claude-fleet#4007) — subject the principal
+	// (svc:<name>); raised at most once an hour.
+	AlertSvcDegraded = "svc_degraded"
 )
 
 // FleetAlert is one row.

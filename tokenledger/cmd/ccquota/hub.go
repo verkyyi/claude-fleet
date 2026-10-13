@@ -970,6 +970,8 @@ func runHub(args []string) error {
 		// Node-lost / lease-conflict alerts (claude-fleet#1630).
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
 		srv.UsageSilentAfter = api.UsageSilentAfterFromEnv()
+		// svc_degraded's notifier (claude-fleet#4007): empty ⇒ log + record only.
+		srv.NotifyCmd = api.NotifyCmdFromEnv()
 		go srv.RunNodeAlerts(ctx)
 		// Off (srv.HubQuota nil): returns at once.
 		go srv.RunHubQuota(ctx)

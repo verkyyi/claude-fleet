@@ -403,7 +403,7 @@ func TestSvcRunCallbackGivesUp(t *testing.T) {
 	req := svcReq("space:ws:a", "g1")
 	req.CallbackURL = space.URL + "/x"
 	ref := svcSubmit(t, h, tok, req)["run_id"].(string)
-	h.srv.SvcRunFinish(svcRunID(t, ref), store.SvcRunFailed, SvcErrInfra, nil, nil)
+	h.srv.SvcRunFinish(svcRunID(t, ref), store.SvcRunFailed, SvcErrRunTimeout, nil, nil) // not retried
 	t0 := time.Now()
 	for _, at := range []time.Duration{0, 2 * time.Minute, 8 * time.Minute, 40 * time.Minute, 3 * time.Hour} {
 		h.srv.SvcCallbacksTick(context.Background(), t0.Add(at))
@@ -412,7 +412,7 @@ func TestSvcRunCallbackGivesUp(t *testing.T) {
 	if n != 4 || run.CallbackState != store.SvcCallbackFailed {
 		t.Errorf("%d tries, state %s; want 4 and failed", n, run.CallbackState)
 	}
-	if v := svcState(t, h, tok, ref); v["state"] != "failed" || v["error_code"] != SvcErrInfra {
+	if v := svcState(t, h, tok, ref); v["state"] != "failed" || v["error_code"] != SvcErrRunTimeout {
 		t.Errorf("GET after the callback gave up: %v", v)
 	}
 }
@@ -429,8 +429,14 @@ func TestSvcRunOutputInvalid(t *testing.T) {
 	}
 	fr.failStart = true
 	ref2 := svcSubmit(t, h, tok, svcReq("space:ws:b", "o2"))["run_id"].(string)
-	if v := svcState(t, h, tok, ref2); v["state"] != "failed" || v["error_code"] != SvcErrInfra {
-		t.Errorf("runner start failed: %v", v)
+	// The first failed start is retried once (claude-fleet#4007) …
+	if v := svcState(t, h, tok, ref2); v["state"] != "queued" || v["attempt"] != float64(1) {
+		t.Errorf("runner start failed once: %v", v)
+	}
+	// … and the second ends it.
+	h.srv.SvcRunsTick(context.Background(), time.Now())
+	if v := svcState(t, h, tok, ref2); v["state"] != "failed" || v["error_code"] != SvcErrInfra || v["attempt"] != float64(2) {
+		t.Errorf("runner start failed twice: %v", v)
 	}
 }
 

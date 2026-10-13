@@ -49,8 +49,14 @@ import (
 // POST of the run's own GET body, signed
 // `X-Fleet-Signature: t=<unix>,v1=<hex hmac-sha256(secret, t + "." + body)>`,
 // retried at 1m / 5m / 30m. Lost anyway, GET /v1/svc/runs/R<n> answers the same
-// body. Audit: svc.run.submit · svc.run.start · svc.run.cancel · svc.run.end ·
-// svc.run.callback.
+// body. Audit: svc.run.submit · svc.run.start · svc.run.retry · svc.run.cancel ·
+// svc.run.end · svc.run.callback.
+//
+// A run that fails for a back-end reason (infra_error) is tried ONCE more under
+// the same R<n> (claude-fleet#4007): back in the queue, attempt 2, inside what
+// is left of the deadline its first start fixed (deadline_at). Nothing else is
+// retried. svc_runs_alert.go tells the person on duty when runs fail in a
+// batch or wait too long.
 
 const (
 	SvcRunsPath = "/v1/svc/runs"
@@ -514,8 +520,27 @@ func svcResultCheck(res *SvcRunResult) string {
 // SvcRunFinish is how a run's end reaches the hub — the runner (C3) calls it
 // with state succeeded (res = the outputs) or failed (code = why). A result
 // the contract refuses fails the run output_invalid. Ending a run that already
-// ended changes nothing and returns it as it is.
+// ended changes nothing and returns it as it is. A failure for a back-end
+// reason (infra_error) on the first attempt does not end the run: it goes back
+// in the queue for one retry (claude-fleet#4007) and comes back running →
+// queued, attempt 1.
 func (s *Server) SvcRunFinish(id int64, state, code string, res *SvcRunResult, usage json.RawMessage) (store.SvcRun, error) {
+	return s.SvcRunFinishDetail(id, state, code, "", res, usage)
+}
+
+// SvcRunRetryable is whether a run that failed with code is tried once more:
+// only a back-end failure (a pod lost, a schedule that never came, the
+// credential proxy's 5xx, a result that could not be handed back). A timeout,
+// a bad template, a bad output or a spent quota would fail the same way again.
+func SvcRunRetryable(code string) bool { return code == SvcErrInfra }
+
+// svcRetryMinLeft is the least of a run's deadline a retry must still have.
+const svcRetryMinLeft = time.Minute
+
+// SvcRunFinishDetail is SvcRunFinish with the runner's own words on a failure
+// (a stderr tail, the Job's events): they go to the hub's log and audit only —
+// the caller is told the error code and nothing else (contract 6).
+func (s *Server) SvcRunFinishDetail(id int64, state, code, detail string, res *SvcRunResult, usage json.RawMessage) (store.SvcRun, error) {
 	now := time.Now()
 	end := store.SvcRunEnd{State: state, ErrorCode: code}
 	if len(usage) > 0 && json.Valid(usage) {
@@ -524,7 +549,6 @@ func (s *Server) SvcRunFinish(id int64, state, code string, res *SvcRunResult, u
 			end.UsageJSON = b.String()
 		}
 	}
-	detail := code
 	switch state {
 	case store.SvcRunSucceeded:
 		if why := svcResultCheck(res); why != "" {
@@ -540,6 +564,22 @@ func (s *Server) SvcRunFinish(id int64, state, code string, res *SvcRunResult, u
 		if end.ErrorCode == "" {
 			end.ErrorCode, detail = SvcErrInfra, SvcErrInfra
 		}
+		if d := strings.TrimSpace(detail); d != "" && d != end.ErrorCode {
+			detail = end.ErrorCode + ": " + truncate(d, 300)
+		} else {
+			detail = end.ErrorCode
+		}
+		if SvcRunRetryable(end.ErrorCode) {
+			run, requeued, err := s.Store.RequeueSvcRun(id, now, svcRetryMinLeft)
+			if err != nil {
+				return run, err
+			}
+			if requeued {
+				log.Printf("svc run %s: attempt 1 failed (%s) — queued again for its one retry", run.Ref(), detail)
+				s.svcAudit(run.Principal, "svc.run.retry", run.Ref(), "queued", detail, now)
+				return run, nil
+			}
+		}
 	default:
 		return store.SvcRun{}, fmt.Errorf("a runner ends a run succeeded or failed, not %q", state)
 	}
@@ -549,6 +589,9 @@ func (s *Server) SvcRunFinish(id int64, state, code string, res *SvcRunResult, u
 	}
 	if changed {
 		s.svcAudit(run.Principal, "svc.run.end", run.Ref(), run.State, detail, now)
+		if detail != end.ErrorCode && end.ErrorCode != "" {
+			log.Printf("svc run %s: %s", run.Ref(), detail)
+		}
 	}
 	return run, nil
 }
@@ -605,6 +648,18 @@ func (s *Server) SvcRunsTick(ctx context.Context, now time.Time) {
 	}
 	if queued, err := s.Store.SvcRunsIn(store.SvcRunQueued); err == nil {
 		for _, run := range queued {
+			if run.Attempt > 0 && run.DeadlineAt != nil {
+				// A retry that never got to start before its deadline ends
+				// the way its first attempt did.
+				if now.Before(*run.DeadlineAt) {
+					continue
+				}
+				if r, changed, err := s.Store.FinishSvcRun(run.ID, store.SvcRunEnd{State: store.SvcRunFailed,
+					ErrorCode: SvcErrInfra}, now); err == nil && changed {
+					s.svcAudit(r.Principal, "svc.run.end", r.Ref(), r.State, SvcErrInfra+": retry never started before the deadline", now)
+				}
+				continue
+			}
 			if now.Sub(run.QueuedAt) < svcQueueTTL {
 				continue
 			}
@@ -616,7 +671,14 @@ func (s *Server) SvcRunsTick(ctx context.Context, now time.Time) {
 	}
 	if running, err := s.Store.SvcRunsIn(store.SvcRunRunning); err == nil {
 		for _, run := range running {
-			if run.StartedAt == nil || now.Sub(*run.StartedAt) < time.Duration(run.DeadlineS)*time.Second+svcRunGrace {
+			if run.StartedAt == nil {
+				continue
+			}
+			deadline := run.StartedAt.Add(time.Duration(run.DeadlineS) * time.Second)
+			if run.DeadlineAt != nil {
+				deadline = *run.DeadlineAt
+			}
+			if now.Before(deadline.Add(svcRunGrace)) {
 				continue
 			}
 			if r, changed, err := s.Store.FinishSvcRun(run.ID, store.SvcRunEnd{State: store.SvcRunFailed,
