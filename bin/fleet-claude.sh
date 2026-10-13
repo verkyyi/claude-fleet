@@ -120,7 +120,12 @@ fi
 # and the proxy picks one per request, moving it when it fills — so no pick, no
 # failover planner, no @cc_account here. Byte for byte as before anywhere else.
 _fc_sep=0
-[ -n "${FLEET_CRED_SID:-}" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] && _fc_sep=1
+# …and so does a person's own pod (render.py --cred-central): no credsep.json, and
+# nothing is ever leased into it (node.env CCQUOTA_FLEET_CREDS=0) — the hub's
+# central proxy picks, there is nothing here to plan over (#3554)
+[ -n "${FLEET_CRED_SID:-}" ] && { [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
+  || { [ -n "${FLEET_CRED_CENTRAL_URL:-}" ] && command -v _fleet_node_env_val >/dev/null 2>&1 \
+       && [ "$(_fleet_node_env_val CCQUOTA_FLEET_CREDS 2>/dev/null)" = 0 ]; }; } && _fc_sep=1
 # Opted-in fresh launches use the same strict subscription planner as recovery.
 # Native resume/model-specific calls retain their explicit provider contract.
 if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ "${FLEET_ACCOUNT_SELECTED:-0}" != 1 ] \

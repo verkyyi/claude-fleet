@@ -196,7 +196,12 @@ fi
 # skipped, as fleet-claude.sh's _fc_sep does (issue #3713: a credsep login's warm
 # Codex died on «no account on the login»). An explicit --codex-profile still runs.
 _fx_sep=0
-[ -n "${FLEET_CRED_SID:-}" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] && _fx_sep=1
+# …and so does a person's own pod (render.py --cred-central): no credsep.json, and
+# nothing is ever leased into it (node.env CCQUOTA_FLEET_CREDS=0) — the hub's
+# central proxy picks, there is nothing here to plan over (#3554)
+[ -n "${FLEET_CRED_SID:-}" ] && { [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
+  || { [ -n "${FLEET_CRED_CENTRAL_URL:-}" ] && command -v _fleet_node_env_val >/dev/null 2>&1 \
+       && [ "$(_fleet_node_env_val CCQUOTA_FLEET_CREDS 2>/dev/null)" = 0 ]; }; } && _fx_sep=1
 if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ "$_fx_sep" != 1 ]; then
   _profile=$(bash "$BIN/fleet-account.sh" profile --home "${CODEX_HOME:-$HOME/.codex}") || exit 1
   FLEET_CODEX_PROFILE=$(printf '%s' "$_profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["profile"])') || exit 1
