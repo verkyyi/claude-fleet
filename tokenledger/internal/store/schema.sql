@@ -533,6 +533,39 @@ CREATE TABLE IF NOT EXISTS hub_signin_spent (
   expires_at INTEGER NOT NULL
 );
 
+-- The service account's QR codes this hub handed out (claude-fleet#4054,
+-- EPIC #4048 共同约定 4): scene is a scene_id in ClaudeFleet's own range
+-- [3000000, 4000000), never another product's. browser_hash is the nonce of
+-- the browser it was drawn for — only that browser may finish it; purpose is
+-- login | bind | reach, owner who a bind / reach code was drawn for. A code
+-- trades for a session once (consumed_at); rows go an hour after they expire.
+CREATE TABLE IF NOT EXISTS hub_wx_scenes (
+  scene        INTEGER PRIMARY KEY,
+  browser_hash TEXT NOT NULL,
+  purpose      TEXT NOT NULL,
+  owner        TEXT NOT NULL DEFAULT '',
+  qr_url       TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  consumed_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_hub_wx_scenes_browser ON hub_wx_scenes(browser_hash, purpose);
+CREATE INDEX IF NOT EXISTS idx_hub_wx_scenes_created ON hub_wx_scenes(created_at);
+
+-- Where a person (or an applicant) can be reached (claude-fleet#4054, EPIC
+-- #4048 共同约定 5): the service account's openid, whether they follow it, and
+-- later a mail. owner is a principal, or "applicant:<kind>:<subject>" for one
+-- not on the list yet. One row per owner and channel.
+CREATE TABLE IF NOT EXISTS hub_reach (
+  owner      TEXT NOT NULL,
+  channel    TEXT NOT NULL,
+  addr       TEXT NOT NULL,
+  followed   INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (owner, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_hub_reach_addr ON hub_reach(channel, addr);
+
 -- The pin (claude-fleet#1984): the first time the hub learns which GitHub ID
 -- holds a username, it keeps the pair, and from then on the name means that ID
 -- only. A sign-in under a pinned name with another ID is refused and audited.

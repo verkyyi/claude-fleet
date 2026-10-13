@@ -461,6 +461,10 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 		case strings.HasPrefix(p, themePrefix):
 			// the theme the way-in pages wear (claude-fleet#3932)
 			s.serveTheme(w, r, strings.TrimPrefix(p, themePrefix))
+		case p == signinPollScriptPath && s.wxScanOn():
+			// the sign-in page's one script (claude-fleet#4054)
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+			serveSigninPollScript(w, r)
 		case strings.HasPrefix(p, AppPrefix+"/assets/"):
 			// the new console's member side (claude-fleet#3925)
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
