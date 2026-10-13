@@ -172,9 +172,9 @@ var consolePages = []consolePage{
 	// All devices is the machines page's 客户端 tab already: one hop there,
 	// and on to the new page once that row is live.
 	{old: AppPrefix + "/admin/devices", new: AppPrefix + "/nodes?tab=clients", side: sideAdmin, owner: "C2", live: true},
-	{old: AppPrefix + "/subscriptions", new: AdminPrefix + "/pool", side: sideAdmin, owner: "C12"},
-	{old: AppPrefix + "/subscriptions/", new: AdminPrefix + "/pool/", side: sideAdmin, owner: "C12", under: true},
-	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12"},
+	{old: AppPrefix + "/subscriptions", new: AdminPrefix + "/pool", side: sideAdmin, owner: "C12", live: true},
+	{old: AppPrefix + "/subscriptions/", new: AdminPrefix + "/pool/", side: sideAdmin, owner: "C12", under: true, live: true},
+	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12", live: true},
 	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13"},
 	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13"},
 	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14", live: true},

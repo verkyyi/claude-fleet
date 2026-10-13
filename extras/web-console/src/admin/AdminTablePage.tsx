@@ -48,7 +48,8 @@ export type AdminTablePageProps<T> = {
   openId?: string | null;
   onOpen?: (id: string | null) => void;
   drawer?: (row: T, ctx: { close: () => void; reload: () => void }) => React.ReactNode;
-  // a row with no data in a column; the frame never guesses one
+  // what an empty table says when there is no row at all (a filter that
+  // matches nothing says table.empty)
   emptyText?: string;
 };
 
@@ -225,7 +226,7 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
                 ) : (
                   <TableRow className="hover:bg-transparent">
                     <TableCell colSpan={p.columns.length} className="h-32 text-center text-muted-foreground">
-                      <p>{p.emptyText || t("table.empty")}</p>
+                      <p>{(!rows.length && p.emptyText) || t("table.empty")}</p>
                       {(query || filter !== "all") && (
                         <Button
                           variant="link"
