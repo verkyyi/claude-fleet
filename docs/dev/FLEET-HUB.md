@@ -2030,6 +2030,51 @@ and its prefix are stored, as for `ccq_`.
   `space-fleet-svc`), read from the environment — never a repo, an issue, a
   comment or a log.
 
+## Service runs: dispatch, read, cancel, be told (claude-fleet#4004)
+
+A service principal (above) dispatches ONE run at a time per request; the
+schedule that repeats it is the caller's (SPACE's `report_tasks`), never the
+hub's. A run is `R<n>` in `svc_runs` — not a `fleet_tasks` record, which is a
+person's session.
+
+- **Routes.** `POST /v1/svc/runs` (`runs:write`) `{template, template_digest,
+  tenant, subject, inputs{…}, idempotency_key, callback_url, deadline_s=900}` →
+  202 with the run (`run_id`, `state`, …); the same `idempotency_key` again is
+  the same run (`replayed: true`), with different words 409. `GET /v1/svc/runs`
+  (`?tenant= &since= &state= &limit=`), `GET /v1/svc/runs/R<n>` (`runs:read` —
+  the result and usage inline once it ended), `POST /v1/svc/runs/R<n>/cancel`
+  (`runs:write`, a queued or running run; an ended one is 409). Another
+  principal's run is 404.
+- **States.** queued → running → succeeded · failed · cancelled · expired; a
+  terminal state is written once, so a runner's late word after a cancel or a
+  timeout changes nothing. Error codes (only the code leaves the hub):
+  `queue_timeout` · `run_timeout` · `template_invalid` · `output_invalid` ·
+  `infra_error` · `cancelled` (`quota_exceeded` / `tenant_limit` are C4's).
+- **The queue.** Per principal at most `fleet.svc.<name>.max_running` running
+  (default 4) and at most ONE per tenant, oldest first, claimed in one write
+  transaction; queued past 30 minutes ⇒ expired, running past `deadline_s` +
+  2 minutes ⇒ failed `run_timeout` and the runner told to stop. The sweep
+  (`RunSvcRuns`, every 5 s, leader `svc-runs`) and a submit both dispatch.
+- **The runner** is `Server.SvcRunner` (`Start` / `Cancel`; C3's one-shot
+  environment) and reports back through `Server.SvcRunFinish(id, state, code,
+  result, usage)`; a result off contract 5 (a report ≤ 1 MB, `meta.title`,
+  `meta.summary` ≤ 60 characters) fails the run `output_invalid`. No runner ⇒
+  nothing is dispatched: runs wait and expire.
+- **The callback.** On a terminal state the hub POSTs the run's own GET body to
+  `callback_url`, signed `X-Fleet-Signature: t=<unix>,v1=<hex
+  hmac-sha256(secret, t + "." + body)>` (+ `X-Fleet-Run: R<n>`); a non-2xx is
+  tried again 1 m, 5 m and 30 m later, then given up (`callback_state:
+  failed`) — GET still answers. Each send is leased first (leader
+  `svc-callbacks`), so two replicas never send one twice. `callback_url` must
+  sit under the prefix registered for the principal — `ccquota svc callback
+  <name> --prefix https://… [--rotate]` or `POST /v1/fleet/svc {op: callback,
+  principal, callback_prefix, rotate}` (https; http only for a loopback host);
+  the signing secret (`fcb_…`) is printed once, at the first registration or a
+  rotate, and lives in the caller's cluster Secret only.
+- **Audit.** `svc.run.submit` · `svc.run.start` · `svc.run.cancel` ·
+  `svc.run.end` (with the state and code) · `svc.run.callback` (ok · retry ·
+  failed) · `svc.callback`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

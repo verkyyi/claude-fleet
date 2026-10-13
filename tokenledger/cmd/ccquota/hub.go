@@ -990,6 +990,9 @@ func runHub(args []string) error {
 			}
 		}
 		go srv.RunEntryDNS(ctx)
+		// Service runs (claude-fleet#4004): the queue's sweep and the
+		// callbacks; no runner ⇒ runs queue and expire.
+		go srv.RunSvcRuns(ctx)
 		// /install answers 503 until it can sign someone in (claude-fleet#4009):
 		// said once here too, so the log names the missing half.
 		if why := srv.InstallOffReason(); why != "" {

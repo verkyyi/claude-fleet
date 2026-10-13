@@ -24,6 +24,8 @@ func runSvc(args []string) error {
 	scopes := fs.String("scopes", "", "create: the scopes, comma separated ("+strings.Join(store.SvcScopes, ",")+")")
 	days := fs.Int("days", 365, "token issue: days until the token expires (0 = never)")
 	reason := fs.String("reason", "", "token revoke: why, for the audit")
+	prefix := fs.String("prefix", "", "callback: the URL prefix every run's callback_url must sit under")
+	rotate := fs.Bool("rotate", false, "callback: mint a new signing secret (the old one stops at once)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `Usage:
   ccquota svc list                                    every principal and its tokens
@@ -31,6 +33,8 @@ func runSvc(args []string) error {
   ccquota svc token issue <name> [--days N]           mint a token (printed once)
   ccquota svc token revoke <prefix> [--reason why]    refuse it from the next call
   ccquota svc disable <name> | enable <name>          switch every token of it off / on
+  ccquota svc callback <name> --prefix URL [--rotate] where its runs' callbacks may go;
+                                                      the signing secret is printed once
 
 A service token (fcs_<prefix8>_<secret>) opens /v1/svc/ only, route by route
 by scope; only its hash is stored. A principal holds at most two live tokens,
@@ -151,6 +155,22 @@ Flags:
 			return nil
 		}
 		return fmt.Errorf("svc token: issue or revoke, not %q", op)
+
+	case "callback":
+		name, err := arg(1)
+		if err != nil {
+			return err
+		}
+		secret, c, err := api.SvcSetCallback(st, name, *prefix, *rotate, actor, now)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%s calls back under %s\n", c.Principal, c.URLPrefix)
+		if secret != "" {
+			fmt.Fprintln(os.Stderr, "the callback signing secret is printed once, below")
+			fmt.Println(secret)
+		}
+		return nil
 
 	case "disable", "enable":
 		name, err := arg(1)
