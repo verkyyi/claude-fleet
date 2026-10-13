@@ -3,7 +3,7 @@
 #
 # fleet-peerlink.py's state.json keeps `fails` as the link's LIFETIME count — a
 # rebuild that comes back up clears err / bad_since, never fails. fleet-topbar.py's
-# peer_down read `fails > 0` as down, so a link that once failed drew 「macmini
+# peer_down read `fails > 0` as down, so a link that once failed drew 「mac-a
 # 连不上」 forever while it was up at 28 ms. Pinned:
 #   A. up + fails 9           → not down
 #   B. down (phase down)      → down
@@ -35,15 +35,15 @@ def case(name, links, node, login, want):
     print("%s %s (want %s, got %s)" % ("PASS" if got == want else "FAIL", name, want, got))
     bad += got != want
 
-up = {"machine": "macmini", "login": "verky", "phase": "up", "fails": 9, "bad_since": 0.0, "err": ""}
-case("A: up with lifetime fails", [up], "macmini", "verky", False)
-case("B: phase down", [dict(up, phase="down", err="Host key verification failed.")], "macmini", "verky", True)
-case("C: reconnecting", [dict(up, phase="starting")], "macmini", "verky", True)
-case("D: no phase, fails", [{"machine": "macmini", "login": "verky", "fails": 2}], "macmini", "verky", True)
-case("E1: another login", [dict(up, phase="down", login="other")], "macmini", "verky", False)
-case("E2: no entry", [], "macmini", "verky", False)
+up = {"machine": "mac-a", "login": "alice", "phase": "up", "fails": 9, "bad_since": 0.0, "err": ""}
+case("A: up with lifetime fails", [up], "mac-a", "alice", False)
+case("B: phase down", [dict(up, phase="down", err="Host key verification failed.")], "mac-a", "alice", True)
+case("C: reconnecting", [dict(up, phase="starting")], "mac-a", "alice", True)
+case("D: no phase, fails", [{"machine": "mac-a", "login": "alice", "fails": 2}], "mac-a", "alice", True)
+case("E1: another login", [dict(up, phase="down", login="other")], "mac-a", "alice", False)
+case("E2: no entry", [], "mac-a", "alice", False)
 os.remove(os.path.join(conf, "peerlink", "state.json"))
-got = tb.peer_down(conf, "macmini", "verky")
+got = tb.peer_down(conf, "mac-a", "alice")
 print("%s E3: no file" % ("PASS" if got is False else "FAIL"))
 bad += got is not False
 sys.exit(1 if bad else 0)

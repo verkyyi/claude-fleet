@@ -1253,7 +1253,7 @@ drill_node_core_swept() {
 # node-core-old-code (#3959): bf32f003 → 58c7df7 changed only fleet-node-supervisor.py
 # — the sweep the core runs as `sup`, where #3857's fix lives. The core hashed only
 # its own file, so it stayed up on the old sweep after the switch, and that sweep
-# booted the core out of launchd minutes later (macmini, 4 h of every account task
+# booted the core out of launchd minutes later (mac-a, 4 h of every account task
 # waiting). Now the core hashes every bin/ file it runs and restarts on any change.
 drill_node_core_old_code() {
   CAP=60
