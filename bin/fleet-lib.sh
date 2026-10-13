@@ -5677,6 +5677,21 @@ _fleet_cgroup_cpu() {
     printf "%d %.2f %.2f\n", (dp>0 ? 100*dt/dp : 0), (s>0 ? du/s : 0), $7/$8 }'
 }
 
+# _fleet_admit_cpu → the admission gate's cgroup reading (issue #3308):
+# "<throttled %> <cores used> <cores limit>", or nothing when there is no cgroup
+# CPU limit (the gate then reads the load). Sampled over
+# FLEET_ADMIT_CPU_SAMPLE_SECS (0.5 — the backlog header asks too). A
+# FLEET_LOAD_PROBE_CMD stub replaces the whole CPU reading, this one included;
+# FLEET_ADMIT_CPU_READING is the selftest seam (`-` = no limit).
+_fleet_admit_cpu() {
+  if [ -n "${FLEET_ADMIT_CPU_READING:-}" ]; then
+    [ "$FLEET_ADMIT_CPU_READING" = - ] || printf '%s' "$FLEET_ADMIT_CPU_READING"
+    return 0
+  fi
+  [ -n "${FLEET_LOAD_PROBE_CMD:-}" ] && return 0
+  _fleet_cgroup_cpu "${FLEET_ADMIT_CPU_SAMPLE_SECS:-0.5}"
+}
+
 # path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or
 # empty when the argument is not a scratch identity (issue #466).
 #
@@ -9202,7 +9217,33 @@ EOF
       "$pname" "${avail:-?}" "$free_min" "$why"
     return 1
   fi
-  per="$(_fleet_load_per_core)"
+  # Inside a container with a cgroup CPU limit the host's loadavg says nothing
+  # about this pod (issue #3308): ACK's /proc/loadavg read 6.29/core for the whole
+  # ECS node while the pod used a fraction of its 2 cores, so every new session
+  # there was held. There the CPU reading is the cgroup's own — throttled at least
+  # FLEET_ADMIT_CPU_THROTTLE % of the periods, or more than FLEET_ADMIT_CPU_SHARE of
+  # its limit used — and the load rule is skipped. No limit ⇒ the load rule, byte
+  # for byte. FLEET_ADMIT_LOAD_PER_CORE=0 turns the CPU reading off either way.
+  local cg cthr cused clim tmax="${FLEET_ADMIT_CPU_THROTTLE:-25}" smax="${FLEET_ADMIT_CPU_SHARE:-0.9}"
+  case "$tmax" in ''|*[!0-9]*) tmax=25 ;; esac
+  case "$smax" in ''|*[!0-9.]*) smax=0.9 ;; esac
+  cg=''; awk -v m="$lmax" 'BEGIN{ exit !(m > 0) }' && cg=$(_fleet_admit_cpu)
+  if [ -n "$cg" ]; then
+    read -r cthr cused clim <<EOF
+$cg
+EOF
+    case "$cthr" in ''|*[!0-9]*) cthr=0 ;; esac
+    if [ "$cthr" -ge "$tmax" ] \
+       || awk -v u="${cused:-0}" -v l="${clim:-0}" -v m="$smax" 'BEGIN{ exit !(l > 0 && u / l > m) }'; then
+      if [ "$short" = 1 ]; then printf '暂停开新：负载过高'; return 1; fi
+      printf 'container cpu busy — 暂停开新：负载过高 (%s of %s cores used, %s%% throttled; over FLEET_ADMIT_CPU_SHARE=%s or FLEET_ADMIT_CPU_THROTTLE=%s%%): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
+        "$cused" "$clim" "$cthr" "$smax" "$tmax"
+      return 1
+    fi
+    per=''
+  else
+    per="$(_fleet_load_per_core)"
+  fi
   if [ -n "$per" ] && awk -v p="$per" -v m="$lmax" 'BEGIN{ exit !(m > 0 && p > m) }'; then
     if [ "$short" = 1 ]; then printf '暂停开新：负载过高'; return 1; fi
     printf 'machine load high — 暂停开新：负载过高 (%s/core, over FLEET_ADMIT_LOAD_PER_CORE=%s): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \

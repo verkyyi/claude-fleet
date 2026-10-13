@@ -2414,6 +2414,18 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ADMIT_PRESSURE=warn          # warn (default) | critical | off — kernel pressure level that holds
 # @label=Admission load per core @group=disk @tier=internal @scope=global @edit=str
 #FLEET_ADMIT_LOAD_PER_CORE=1.5      # hold above this 1-min load/core; 0 = off (default: FLEET_LOADGEN_LOAD_PER_CORE if set, else 1.5)
+# In a container with a cgroup CPU limit (a pod: cpu.max is not `max`) the host's
+# load average is the whole node's, so the CPU reading there is the cgroup's own
+# (issue #3308): it holds when more than FLEET_ADMIT_CPU_SHARE of the limit is
+# used, or at least FLEET_ADMIT_CPU_THROTTLE % of the periods were throttled,
+# sampled over FLEET_ADMIT_CPU_SAMPLE_SECS. No limit ⇒ the load rule above.
+# FLEET_ADMIT_LOAD_PER_CORE=0 turns this reading off too.
+# @label=Admission container CPU share @group=disk @tier=internal @scope=global @edit=str
+#FLEET_ADMIT_CPU_SHARE=0.9          # hold above this share of the cgroup's cpu.max
+# @label=Admission container CPU throttled % @group=disk @tier=internal @scope=global @edit=int @unit=%
+#FLEET_ADMIT_CPU_THROTTLE=25        # hold at or above this % of throttled periods
+# @label=Admission container CPU sample @group=disk @tier=internal @scope=global @edit=str @unit=s
+#FLEET_ADMIT_CPU_SAMPLE_SECS=0.5    # how long the cgroup's cpu.stat is sampled
 # Since issue #1831 admission is the ONLY gate by default, so it answers "room for
 # one more?" in MB: one session's cost (the median RSS of the live agents × a
 # growth factor, never under a floor) must fit above the kept-back floor
