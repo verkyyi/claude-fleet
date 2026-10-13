@@ -9,7 +9,7 @@
 #   fleet-machine-policy.sh clear <principal>             no list: every machine (the default)
 #
 # <principal> is a principal ID such as gh:2987262; <machine> the name a machine
-# joined as (its first label: macmini, mini2, fleet-linux-0). A machine off the
+# joined as (its first label: mac-b, mac-e, linux-a). A machine off the
 # list keeps the person's login, home and history — it just cannot be used:
 # no route / certificate login / relay / entry key there, no placement there
 # (auto or named), no credential lease and no session pass there (a session

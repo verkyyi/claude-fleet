@@ -52,7 +52,7 @@ VIEWER='viewer-SECRET-3824'
 P=gh:2987262
 
 # A. usage
-for args in '' 'frob' 'set gh:1' 'deny gh:1 mini2' 'all' 'show gh:1 gh:2' 'show --frob'; do
+for args in '' 'frob' 'set gh:1' 'deny gh:1 mac-e' 'all' 'show gh:1 gh:2' 'show --frob'; do
   reset
   eval "CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test \"\$SUT\" $args" >/dev/null 2>"$WORK/err"; rc=$?
   [ "$rc" -eq 2 ] || fail "A: '$args' exit $rc, want 2: $(cat "$WORK/err")"
@@ -69,10 +69,10 @@ ok
 export CCQUOTA_VIEWER_TOKEN=$VIEWER CCQUOTA_HUB_URL=http://hub.test/
 
 # C. writes
-reset; fake '{"ok":true,"principal":"'$P'","allow":["fleet-linux-0"]}'
-out=$("$SUT" set "$P" fleet-linux-0); rc=$?
-[ "$rc" -eq 0 ] && [ "$out" = "machine-policy: SET $P: fleet-linux-0" ] || fail "C set: rc=$rc $out"
-grep -qF 'PUT http://hub.test/v1/fleet/machine-policy {"principal": "'$P'", "allow": ["fleet-linux-0"]}' "$STUB_BODY" \
+reset; fake '{"ok":true,"principal":"'$P'","allow":["linux-a"]}'
+out=$("$SUT" set "$P" linux-a); rc=$?
+[ "$rc" -eq 0 ] && [ "$out" = "machine-policy: SET $P: linux-a" ] || fail "C set: rc=$rc $out"
+grep -qF 'PUT http://hub.test/v1/fleet/machine-policy {"principal": "'$P'", "allow": ["linux-a"]}' "$STUB_BODY" \
   || fail "C set body: $(cat "$STUB_BODY")"
 ok
 reset; fake '{"ok":true,"allow":[]}'
@@ -92,9 +92,9 @@ out=$("$SUT" all "$P"); rc=$?
 ok
 
 # D. reads
-reset; fake '{"users":[{"principal":"gh:1","allow":["fleet-linux-0","mini2"]},{"principal":"gh:2","allow":[],"error":"not a JSON list"},{"principal":"gh:3","allow":[]},{"principal":"gh:4","allow":[],"all":true}]}'
+reset; fake '{"users":[{"principal":"gh:1","allow":["linux-a","mac-e"]},{"principal":"gh:2","allow":[],"error":"not a JSON list"},{"principal":"gh:3","allow":[]},{"principal":"gh:4","allow":[],"all":true}]}'
 out=$("$SUT" show)
-printf '%s\n' "$out" | grep -qx 'machine-policy: gh:1 fleet-linux-0 mini2' \
+printf '%s\n' "$out" | grep -qx 'machine-policy: gh:1 linux-a mac-e' \
   && printf '%s\n' "$out" | grep -qx 'machine-policy: gh:2 MALFORMED (no machine): not a JSON list' \
   && printf '%s\n' "$out" | grep -qx 'machine-policy: gh:3 (no machine)' \
   && printf '%s\n' "$out" | grep -qx 'machine-policy: gh:4 (every machine)' || fail "D show: $out"
@@ -102,19 +102,19 @@ ok
 reset; fake '{"users":[]}'
 out=$("$SUT" show)
 case "$out" in *"no lists — everyone may use every machine"*) ok ;; *) fail "D show none: $out" ;; esac
-reset; fake '{"users":[{"principal":"'$P'","allow":["fleet-linux-0"]}],"effective":{"principal":"'$P'","restricted":true,"machines":[
-  {"machine":"fleet-linux-0","allowed":true,"reason":""},
-  {"machine":"macmini","allowed":false,"reason":"这台机器暂未对你开放，可用：fleet-linux-0"}]}}'
+reset; fake '{"users":[{"principal":"'$P'","allow":["linux-a"]}],"effective":{"principal":"'$P'","restricted":true,"machines":[
+  {"machine":"linux-a","allowed":true,"reason":""},
+  {"machine":"mac-b","allowed":false,"reason":"这台机器暂未对你开放，可用：linux-a"}]}}'
 out=$("$SUT" show "$P")
-printf '%s\n' "$out" | grep -qx "machine-policy: $P fleet-linux-0" \
-  && printf '%s\n' "$out" | grep -qx '  OPEN  fleet-linux-0' \
-  && printf '%s\n' "$out" | grep -qx '  OFF   macmini — 这台机器暂未对你开放，可用：fleet-linux-0' \
+printf '%s\n' "$out" | grep -qx "machine-policy: $P linux-a" \
+  && printf '%s\n' "$out" | grep -qx '  OPEN  linux-a' \
+  && printf '%s\n' "$out" | grep -qx '  OFF   mac-b — 这台机器暂未对你开放，可用：linux-a' \
   && grep -qF 'GET http://hub.test/v1/fleet/machine-policy?principal=gh%3A2987262' "$STUB_BODY" || fail "D show principal: $out / $(cat "$STUB_BODY")"
 ok
 
 # E. refused / down
 reset; fake '{"error":"bad"}' 400
-"$SUT" set "$P" mini2 >/dev/null 2>&1; [ $? -eq 4 ] || fail "E 400"
+"$SUT" set "$P" mac-e >/dev/null 2>&1; [ $? -eq 4 ] || fail "E 400"
 ok
 reset; fake '' 404
 "$SUT" show >/dev/null 2>"$WORK/err"; rc=$?

@@ -33,9 +33,9 @@ func TestMachinePolicyGrammar(t *testing.T) {
 	}{
 		{"", "mac-a", false, ""},                              // no key
 		{`"*"`, "mac-a", false, ""},                           // explicit all
-		{`["mac-a","Mini2.local"]`, "MAC-A.local", false, ""}, // first label, any case
-		{`["mac-a","Mini2.local"]`, "mini2", false, ""},       // the list's own first label
-		{`["mac-a"]`, "macmini", true, "可用：mac-a"},            // off the list: names what is open
+		{`["mac-a","Mac-E.local"]`, "MAC-A.local", false, ""}, // first label, any case
+		{`["mac-a","Mac-E.local"]`, "mac-e", false, ""},       // the list's own first label
+		{`["mac-a"]`, "mac-b", true, "可用：mac-a"},            // off the list: names what is open
 		{`[]`, "mac-a", true, "暂未给你开放任何机器"},                   // none
 		{`{"x":1}`, "mac-a", true, "写坏了"},                     // malformed: none, never all
 		{`null`, "mac-a", true, "写坏了"},                        // null is not a list
@@ -71,19 +71,19 @@ func TestMachinePolicyOffAddsNothing(t *testing.T) {
 
 func TestMachinePolicyPutGet(t *testing.T) {
 	h, _, _ := policyRig(t)
-	out := setMachinePolicy(t, h, pAlice, map[string]any{"allow": []string{"Fleet-Linux-0.local", "mini2", "mini2"}})
+	out := setMachinePolicy(t, h, pAlice, map[string]any{"allow": []string{"Linux-A.local", "mac-e", "mac-e"}})
 	if out["key"] != MachineAllowUserPrefix+pAlice {
 		t.Fatalf("put: %v", out)
 	}
 	settings, _ := h.srv.Store.FleetSettings()
-	if v := settings[machineAllowKey(pAlice)]; v != `["fleet-linux-0","mini2"]` {
+	if v := settings[machineAllowKey(pAlice)]; v != `["linux-a","mac-e"]` {
 		t.Fatalf("stored %q; want the normalised, deduplicated, sorted list", v)
 	}
 	for _, bad := range []map[string]any{
-		{"principal": "not a principal!", "allow": []string{"mini2"}},
+		{"principal": "not a principal!", "allow": []string{"mac-e"}},
 		{"principal": pAlice, "allow": []string{"no such name!"}},
-		{"principal": pAlice, "allow": []string{"mini2"}, "all": true},
-		{"principal": "gh:424242", "allow": []string{"mini2"}},
+		{"principal": pAlice, "allow": []string{"mac-e"}, "all": true},
+		{"principal": "gh:424242", "allow": []string{"mac-e"}},
 	} {
 		if code, o := h.post(t, MachinePolicyPath, bad); code != http.StatusBadRequest {
 			t.Errorf("%v: %d %v; want 400", bad, code, o)
@@ -112,7 +112,7 @@ func TestMachinePolicyPutGet(t *testing.T) {
 		mm := m.(map[string]any)
 		if mm["machine"] == "mac-c" {
 			found = true
-			if mm["allowed"] != false || !strings.Contains(mm["reason"].(string), "可用：fleet-linux-0、mini2") {
+			if mm["allowed"] != false || !strings.Contains(mm["reason"].(string), "可用：linux-a、mac-e") {
 				t.Fatalf("mac-c: %v", mm)
 			}
 		}
@@ -133,13 +133,13 @@ func TestMachinePolicyPutGet(t *testing.T) {
 // everything comes back.
 func TestMachinePolicyLeaseWithdraws(t *testing.T) {
 	h, alice, bob := policyRig(t)
-	setMachinePolicy(t, h, pAlice, map[string]any{"allow": []string{"mini2"}})
+	setMachinePolicy(t, h, pAlice, map[string]any{"allow": []string{"mac-e"}})
 	got, wd, resp := leased(t, h, alice)
 	if len(got) != 0 || !eq(wd, "claude/gmail", "claude/icloud", "claude/legacy", "claude/own", "codex/default") {
 		t.Fatalf("alice off mac-c: leased %v withdrawn %v", got, wd)
 	}
 	for _, c := range resp.Withdrawn {
-		if !strings.Contains(c.Error, MachineDisabledWord) || !strings.Contains(c.Error, "可用：mini2") {
+		if !strings.Contains(c.Error, MachineDisabledWord) || !strings.Contains(c.Error, "可用：mac-e") {
 			t.Fatalf("withdrawal reason %q", c.Error)
 		}
 	}
@@ -229,8 +229,8 @@ func TestMachinePolicyPlacement(t *testing.T) {
 func TestMachinePolicyHomeAndRoutes(t *testing.T) {
 	h, _, _, _, _ := twoNodes(t)
 	h.srv.FleetRoutes = []FleetMachine{
-		{Hostname: "mac-d", Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.5"}}},
-		{Hostname: "mac-c", Routes: []FleetRoute{{Name: "lan", Host: "10.0.0.4"}}},
+		{Hostname: "mac-d", Routes: []FleetRoute{{Name: "lan", Host: "mac-d.lan"}}},
+		{Hostname: "mac-c", Routes: []FleetRoute{{Name: "lan", Host: "mac-c.lan"}}},
 	}
 	p, err := h.srv.Store.AdoptPrincipal("gh:1005", "frank", "Frank", time.Now())
 	if err != nil {

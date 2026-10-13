@@ -21,7 +21,7 @@
 每台机器上的登录都还在，只是暂时不让某个人用其中几台：管理员给这个人设一张**机器白名单**。
 
 ```sh
-fleet-machine-policy.sh set gh:2987262 fleet-linux-0   # 只许用 fleet-linux-0
+fleet-machine-policy.sh set gh:2987262 linux-a   # 只许用 linux-a
 fleet-machine-policy.sh show gh:2987262                # 每台机器：开放 / 停用 + 原因
 fleet-machine-policy.sh clear gh:2987262               # 撤掉名单：恢复全部机器
 ```

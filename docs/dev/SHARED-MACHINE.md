@@ -351,7 +351,7 @@ The subscription lists above narrow what a session may spend; this one narrows
 
 ```sh
 export CCQUOTA_VIEWER_TOKEN=…            # the operator's, from the environment only
-fleet-machine-policy.sh set gh:2987262 fleet-linux-0     # only that machine
+fleet-machine-policy.sh set gh:2987262 linux-a     # only that machine
 fleet-machine-policy.sh show gh:2987262                  # each machine: OPEN / OFF + why
 fleet-machine-policy.sh deny gh:2987262                  # no machine
 fleet-machine-policy.sh all gh:2987262                   # every machine, explicitly
