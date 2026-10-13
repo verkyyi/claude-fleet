@@ -14,11 +14,27 @@ base/              environment-free: Deployment (2 replicas, rolling, Postgres),
 components/sqlite-single/
                    the single SQLite shape: 1 replica, Recreate, the PVC, disk-watch
 overlays/prod/     namespace new-deploy, ACR image, hostnames + TLS, production settings;
-                   `components: [sqlite]` until the switch
+                   `components: [sqlite]` until the switch — moving to the private deploy repo
+overlays/example/  the shape a deployment's own overlay takes (names nothing of ours)
 overlays/kind/     the rolling drill on a throwaway kind cluster (hub-rolling.yml)
 updating/          the 「正在更新」 page the Ingress falls back to during a release (installed by a person)
 RUNBOOK.md         when the pod will not come up, the data disk, the two secrets
 ```
+
+## The deployment's own overlays live in a private repo
+
+`overlays/prod`, `updating/prod`, `credproxy/prod` and the `*/fleet-workers`
+layers name our addresses, registry, buckets and machines, so they live in a
+private deploy repo (claude-fleet#3630) whose `k8s/` mirrors this directory.
+hub-deploy lays it over `deploy/k8s/` right after checkout — repo variable
+`FLEET_DEPLOY_OVERLAY_REPO` (owner/name), its read-only deploy key in the `prod`
+environment's secret `FLEET_DEPLOY_OVERLAY_SSH_KEY` — and checks the renders
+there (`.github/actions/hub-release/render-check.sh --need-prod`); the image
+registry and the hub's addresses are the repo variables `HUB_PUSH_REPO` and
+`HUB_URLS`. A person applying one of those manifests by hand lays the private
+repo's `k8s/` over a checkout first (`cp -R <deploy repo>/k8s/. deploy/k8s/`).
+Your own deployment: copy `overlays/example` into a repo of yours and point the
+variable at it.
 
 ## Release = the release train
 
