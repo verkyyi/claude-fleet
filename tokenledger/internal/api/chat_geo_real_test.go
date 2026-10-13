@@ -7,12 +7,15 @@ import (
 )
 
 // TestChatGeoRealDB reads the pinned ip2region xdb the hub image carries
-// (claude-fleet#4039) when CCQUOTA_TEST_GEO_DB names a copy of it; skipped
-// otherwise — CI holds no 11 MB file.
+// (claude-fleet#4039) when CCQUOTA_TEST_GEO_DB names a copy of it — a bump of
+// the Dockerfile's pins runs it by hand. Unset (CI holds no 11 MB file) it
+// passes having read nothing: never t.Skip, the Postgres leg keeps skips at 0
+// (claude-fleet#2121).
 func TestChatGeoRealDB(t *testing.T) {
 	path := os.Getenv("CCQUOTA_TEST_GEO_DB")
 	if path == "" {
-		t.Skip("CCQUOTA_TEST_GEO_DB not set")
+		t.Log("CCQUOTA_TEST_GEO_DB not set — nothing read")
+		return
 	}
 	db, err := loadGeoDB(path)
 	if err != nil {
