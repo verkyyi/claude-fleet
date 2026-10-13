@@ -69,7 +69,8 @@ export async function install(): Promise<string> {
     { t: "text", d: SALES_REPLY },
   ] : [];
   const ids = [{ kind: "wechat", subject: "o-wx-" + me.login, label: "o-wx-" + me.login, verified_at: "2026-09-02T08:00:00Z" }];
-  let bundle = { version: 3, created: "2026-10-09T10:12:00Z", bundle: { mcp: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } }, ui_lang: "zh" } as Record<string, unknown> };
+  // 新来的: one way in, no configuration written yet (the hub answers version 0)
+  let bundle = state === "empty" ? { version: 0, bundle: {} as Record<string, unknown> } as { version: number; created?: string; bundle: Record<string, unknown> } : { version: 3, created: "2026-10-09T10:12:00Z", bundle: { mcp: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } }, ui_lang: "zh" } as Record<string, unknown> };
   const idView = () => ({ person: me.person, identities: ids, can_add: ["email"] });
   const models = [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }];
   // 任务 and 单子 (C5): /v1/fleet/tasks, /v1/fleet/tickets
@@ -128,6 +129,11 @@ export async function install(): Promise<string> {
     const devRead = /^\/v1\/(fleet\/(connect|devices|entry\/)|nodes)/.test(p);
     if (devRead && state === "loading") return new Promise<Response>(() => {});
     if (devRead && state === "error") return ok({ error: "演示：入口出错" }, 502);
+    // 设置's reads (#3931): the same two states
+    if ((p === "/v1/me/identities" || p === "/v1/fleet/person-bundle") && sc.page === "/settings") {
+      if (state === "loading") return new Promise<Response>(() => {});
+      if (state === "error") return ok({ error: "演示：入口出错" }, 502);
+    }
     if (p.startsWith("/v1/fleet/entry/") && state === "entry_off") return ok({ error: "the direct door is off on this hub (fleet.entry)" }, 404);
     if (p.startsWith("/v1/fleet/entry/keys/")) {
       const id = decodeURIComponent(p.slice("/v1/fleet/entry/keys/".length));
