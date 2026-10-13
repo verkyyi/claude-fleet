@@ -14,8 +14,6 @@ import (
 // claude-fleet#4055 (EPIC #4048 C7): open ClaudeFleet inside WeChat and be
 // in — through workbench's web-authorisation relay, no code to scan.
 
-const wechatUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 MicroMessenger/8.0.50 NetType/WIFI Language/zh_CN"
-
 const testRelayURL = "https://relay.example/node_w/wx/oauth/relay"
 
 // newRelayHarness: the service account's road with the relay on.
