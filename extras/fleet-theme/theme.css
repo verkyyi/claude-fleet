@@ -1,0 +1,152 @@
+/* theme.css — ClaudeFleet's ONE look (issue #3924, EPIC #3923 C1).
+ *
+ * The website, the web chat and the console take their colour, type, radius and
+ * spacing from here and nowhere else; bin/fleet-theme-selftest.sh reds on a
+ * theme colour or font family defined outside extras/fleet-theme/.
+ *
+ *   fleet:tokens   the site v2 design variables (--fleet-*), dark — the site's own
+ *                  values. bin/site-build.sh inlines this block (and fonts.css)
+ *                  into the website; it reads nothing else of this file.
+ *   shadcn         the standard shadcn/ui tokens (--background, --primary, …) mapped
+ *                  onto them: light by default, dark under prefers-color-scheme.
+ *   @theme         Tailwind v4: colours, radius, spacing, the three families.
+ *   @layer base    the page defaults every app shares.
+ *
+ * A Tailwind v4 app imports it after tailwindcss (extras/web-chat/ui/src/index.css):
+ *   @import "tailwindcss";
+ *   @import "../../../fleet-theme/theme.css";
+ * Each variable's use is one line in README.md.
+ */
+@import "./fonts.css";
+
+/* fleet:tokens */
+:root {
+  --fleet-bg: #19182a;
+  --fleet-bg-2: #141322;
+  --fleet-surface: #211f35;
+  --fleet-surface-2: #2a2841;
+  --fleet-line: #33304d;
+  --fleet-line-2: #26243b;
+  --fleet-ink: #f3ede6;
+  --fleet-ink-2: #c4bdcc;
+  --fleet-muted: #9a94ad;
+  --fleet-clay: #d9765a;
+  --fleet-clay-hi: #e88d71;
+  --fleet-clay-deep: #b65d44;
+  --fleet-clay-soft: rgba(217, 118, 90, 0.12);
+  --fleet-clay-line: rgba(217, 118, 90, 0.35);
+  --fleet-sand: #ecd3b8;
+  --fleet-ok: #7fcf9f;
+  --fleet-bad: #ef8c7a;
+  --fleet-warn: #e6c26e;
+  --fleet-blue: #7aa2f7;
+  --fleet-term: #0f0e1a;
+  --fleet-on-clay: #1b1310;
+  --fleet-font-display: "Bricolage Grotesque", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --fleet-font-ui: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --fleet-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, "PingFang SC", monospace;
+}
+/* /fleet:tokens */
+
+/* shadcn — light: the same family on paper (clay accent, ink as text, sand as the tint) */
+:root {
+  --background: #fbf8f4;
+  --foreground: var(--fleet-bg);
+  --card: #ffffff;
+  --card-foreground: var(--fleet-bg);
+  --popover: #ffffff;
+  --popover-foreground: var(--fleet-bg);
+  --primary: var(--fleet-clay);
+  --primary-foreground: var(--fleet-on-clay);
+  --secondary: var(--fleet-ink);
+  --secondary-foreground: var(--fleet-bg);
+  --muted: var(--fleet-ink);
+  --muted-foreground: #6b6580;
+  --accent: #f6e9dc;
+  --accent-foreground: var(--fleet-bg);
+  --destructive: #c4513c;
+  --border: #e6ddd2;
+  --input: #e6ddd2;
+  --ring: var(--fleet-clay);
+  --link: var(--fleet-clay-deep);
+  --code-bg: var(--fleet-ink);
+  --code-fg: #8a3f2b;
+  --radius: 0.75rem;
+  color-scheme: light;
+}
+
+/* shadcn — dark: the site itself */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: var(--fleet-bg);
+    --foreground: var(--fleet-ink);
+    --card: var(--fleet-surface);
+    --card-foreground: var(--fleet-ink);
+    --popover: var(--fleet-surface);
+    --popover-foreground: var(--fleet-ink);
+    --secondary: var(--fleet-surface);
+    --secondary-foreground: var(--fleet-ink-2);
+    --muted: var(--fleet-surface-2);
+    --muted-foreground: var(--fleet-muted);
+    --accent: var(--fleet-surface-2);
+    --accent-foreground: var(--fleet-ink);
+    --destructive: var(--fleet-bad);
+    --border: var(--fleet-line);
+    --input: var(--fleet-line);
+    --link: var(--fleet-clay);
+    --code-bg: var(--fleet-surface-2);
+    --code-fg: var(--fleet-sand);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-clay: var(--fleet-clay);
+  --color-clay-soft: var(--fleet-clay-soft);
+  --color-clay-line: var(--fleet-clay-line);
+  --color-sand: var(--fleet-sand);
+  --color-ok: var(--fleet-ok);
+  --color-warn: var(--fleet-warn);
+  --font-sans: var(--fleet-font-ui);
+  --font-display: var(--fleet-font-display);
+  --font-mono: var(--fleet-font-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --spacing: 0.25rem;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  h1, h2, h3, h4 { font-family: var(--fleet-font-display); }
+  a { color: var(--link); }
+  ::selection { background: var(--fleet-clay-line); }
+}

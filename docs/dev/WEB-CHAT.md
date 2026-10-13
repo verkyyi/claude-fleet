@@ -146,8 +146,9 @@ bin/fleet-webchat.sh stop
 ## 页面怎么做的（issue #3637）
 
 样子和官网 v2 是一套：配色、字体（Bricolage Grotesque / IBM Plex Sans / IBM Plex Mono，中文落到苹方）、
-圆角和 LOGO（一小一大两枚箭头）都取自官网 v2 页面自己的 `:root`，写在
-`extras/web-chat/ui/src/theme.css` 一个地方，再映射成 shadcn/ui 的标准变量。官网只有深色；
+圆角和 LOGO（一小一大两枚箭头）都取自全站共用的主题包 `extras/fleet-theme/`（issue #3924：官网、对话页、
+控制台都从它取，`bin/fleet-theme-selftest.sh` 守着），`extras/web-chat/ui/src/theme.css` 只 `@import` 它，
+颜色已在包里映射成 shadcn/ui 的标准变量。字体是包里 `fonts/` 的拉丁子集，打进 dist。官网只有深色；
 浅色是同一族颜色铺在纸色上，跟随系统切换（`prefers-color-scheme`，不用脚本）。
 
 界面全是现成组件：React + **shadcn/ui**（Radix + Tailwind）+ **assistant-ui**。

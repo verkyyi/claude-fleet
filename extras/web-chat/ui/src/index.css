@@ -1,12 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "tw-shimmer";
-@import "@fontsource-variable/bricolage-grotesque/opsz.css";
-@import "@fontsource/ibm-plex-sans/latin-400.css";
-@import "@fontsource/ibm-plex-sans/latin-500.css";
-@import "@fontsource/ibm-plex-sans/latin-600.css";
-@import "@fontsource/ibm-plex-mono/latin-400.css";
-@import "@fontsource/ibm-plex-mono/latin-500.css";
 @import "./theme.css";
 
 /* dark follows the system — no toggle, no script (issue #3637) */

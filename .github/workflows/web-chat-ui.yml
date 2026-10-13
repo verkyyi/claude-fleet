@@ -9,11 +9,13 @@ on:
     branches: [master]
     paths:
       - 'extras/web-chat/ui/**'
+      - 'extras/fleet-theme/**'
       - 'bin/web-chat-pack.sh'
       - '.github/workflows/web-chat-ui.yml'
   pull_request:
     paths:
       - 'extras/web-chat/ui/**'
+      - 'extras/fleet-theme/**'
       - 'bin/web-chat-pack.sh'
       - '.github/workflows/web-chat-ui.yml'
 
