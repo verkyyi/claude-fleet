@@ -3,6 +3,7 @@
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
 import type { ApiInit, Credential, HubUser, Invite, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TrainRun } from "./api";
 import { demoMachines } from "./machines/demo";
+import { demoPool, poolSettings } from "./poolDemo";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -145,7 +146,10 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
   const method = init.method || (init.json !== undefined ? "POST" : "GET");
   const body = (init.json || {}) as Record<string, any>;
   const empty = scenario() === "empty";
+  const pool = demoPool(method, u, body, empty, scenario(), users); // 订阅池 (C12)
+  if (pool !== undefined) return pool;
   const machines = demoMachines(method, u, body, empty, init); // 机器与 pod (C11)
+  if (method === "GET" && u.pathname === "/v1/fleet/settings") return { hub: [...((machines as any)?.hub || []), ...poolSettings()] };
   if (machines !== undefined) return machines;
   switch (`${method} ${u.pathname}`) {
     case "GET /v1/me":

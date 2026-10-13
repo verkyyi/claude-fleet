@@ -15,7 +15,7 @@ export const NAV: NavGroup[] = [
   {
     key: "nav.money",
     items: [
-      { key: "page.pool", icon: CreditCard, href: "/app/subscriptions" },
+      { key: "page.pool", icon: CreditCard, to: "/pool" },
       { key: "page.usage", icon: BarChart3, href: "/app/admin/overview" },
     ],
   },
