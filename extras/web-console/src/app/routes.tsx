@@ -29,7 +29,7 @@ export const PAGES: PageDef[] = [
   { id: "ticket", path: "/tasks/tickets/:owner/:name/:n", label: tr("单子", "Ticket"), icon: ListChecks, page: lazy(() => import("./pages/ticket")) },
   { id: "tickets", path: "/tasks/tickets", label: tr("单子", "Tickets"), icon: ListChecks, page: () => createElement(Navigate, { to: "/tasks?tab=tickets", replace: true }) },
   { id: "usage", path: "/usage", label: tr("用量", "Usage"), icon: Gauge, tab: true, side: true, page: lazy(() => import("./pages/usage")) },
-  { id: "devices", path: "/devices", label: tr("设备", "Devices"), icon: MonitorSmartphone, side: true, href: "/app/connect" },
+  { id: "devices", path: "/devices", label: tr("设备", "Devices"), icon: MonitorSmartphone, side: true, page: lazy(() => import("./pages/devices")) },
   { id: "settings", path: "/settings", label: tr("设置", "Settings"), icon: Settings, side: true, href: "/app/config" },
   { id: "me", path: "/me", label: tr("我的", "Me"), icon: CircleUserRound, tab: true, page: lazy(() => import("./pages/me")) },
 ];

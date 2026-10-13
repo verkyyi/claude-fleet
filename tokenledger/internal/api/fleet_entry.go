@@ -262,6 +262,9 @@ type EntryHomeChoice struct {
 	Machine string `json:"machine"`
 	Login   string `json:"login"`
 	Online  bool   `json:"online"`
+	// Name is the machine as a person knows it (entryMachineName), filled
+	// on GET EntryKeysPath's answer.
+	Name string `json:"name,omitempty"`
 }
 
 // EntryView is GET EntryKeysPath's answer.
@@ -273,6 +276,9 @@ type EntryView struct {
 	HomeChoices   []EntryHomeChoice `json:"home_choices"`
 	Keys          []store.EntryKey  `json:"keys"`
 	Version       int               `json:"version"`
+	// Door is how the person's way in stands (claude-fleet#3930): what the
+	// new console's 设备 draws; GET's answer only.
+	Door *EntryDoor `json:"door,omitempty"`
 }
 
 // entryHomeChoices is every (machine, login) of person's that has a live
@@ -392,6 +398,11 @@ func (s *Server) writeEntryView(w http.ResponseWriter, c entryCaller, now time.T
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	for i := range out.HomeChoices {
+		out.HomeChoices[i].Name = s.entryMachineName(out.HomeChoices[i].Machine)
+	}
+	d := s.entryDoorOf(out, now)
+	out.Door = &d
 	writeJSON(w, http.StatusOK, out)
 }
 

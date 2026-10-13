@@ -15,6 +15,7 @@ export async function getJSON<T>(url: string): Promise<T | null> {
 export type Me = {
   via?: string; role?: string; person?: string; name?: string; login?: string;
   pages?: string[]; entry?: boolean; can_logout?: boolean;
+  logins?: { machine: string; login: string }[]; // the (machine, login) pairs that are theirs
 };
 export type MeState = { me: Me | null; loading: boolean };
 let meCache: Promise<Me | null> | null = null;
@@ -59,7 +60,10 @@ export function useQuota(key: unknown = 0) {
 
 // /v1/fleet/devices: the person's own registered computers (a revoked one, or
 // a hosting machine's own login, is not one of their devices).
-export type Device = { fingerprint: string; name: string; revoked_at?: string; host?: boolean };
+export type Device = {
+  fingerprint: string; name: string; revoked_at?: string; host?: boolean;
+  registered_at?: string; last_used_at?: string; last_machine?: string;
+};
 export function useDeviceCount() {
   const [n, setN] = useState<number | null>(null);
   useEffect(() => {

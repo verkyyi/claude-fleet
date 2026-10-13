@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/dns"
 )
 
@@ -37,6 +39,8 @@ func keysPage(t *testing.T, h *harness, principal, query string, form url.Values
 			path, query = path[:i], path[i:]
 		}
 	}
+	// The page itself, not 设备 it moved to (claude-fleet#3930): its rows off.
+	defer oldPagesStay(EntryPagePath, EntryConnPath)()
 	req, _ := http.NewRequest(method, h.http.URL+path+query, body)
 	req.Header.Set("Accept", "text/html")
 	if form != nil {
@@ -66,6 +70,22 @@ func keysPost(t *testing.T, h *harness, principal string, kv ...string) (int, st
 		f.Set(kv[i], kv[i+1])
 	}
 	return keysPage(t, h, principal, "", f)
+}
+
+// oldPagesStay turns off the console rows that move olds on, so a test
+// reaches the old page they still serve; the returned func puts them back.
+func oldPagesStay(olds ...string) func() {
+	saved := consolePages
+	rows := append([]consolePage(nil), consolePages...)
+	for i := range rows {
+		for _, o := range olds {
+			if rows[i].old == o {
+				rows[i].live, rows[i].userLive = false, false
+			}
+		}
+	}
+	consolePages = rows
+	return func() { consolePages = saved }
 }
 
 // drawnFP is a fingerprint as the page draws it: shortened, its "+"
@@ -392,5 +412,44 @@ func TestEntryPageHelpers(t *testing.T) {
 	}
 	if entryKeyType("ecdsa-sha2-nistp256") != "ecdsa" || entryKeyType(ssh.KeyAlgoED25519) != "ed25519" {
 		t.Fatal("key types")
+	}
+}
+
+// 设备's phone tab (claude-fleet#3930) reads what this page shows through GET
+// EntryKeysPath's door: the address, the port, the home's login, the door's
+// state and the three as a QR code; each home choice carries its name.
+func TestEntryViewCarriesTheDoor(t *testing.T) {
+	h := entryHarness(t)
+	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.example.com", time.Now())
+	code, raw := entryCall(t, h, http.MethodGet, control.EntryKeysPath, asSession(pAlice), nil)
+	var v EntryView
+	if err := json.Unmarshal([]byte(raw), &v); code != 200 || err != nil || v.Door == nil {
+		t.Fatalf("GET keys: HTTP %d %v %s", code, err, raw)
+	}
+	d := v.Door
+	if d.Address != "user1001.cf.example.com" || d.Port != entryPort || d.Login != "alice" || d.State != "nokey" || d.HomeName == "" {
+		t.Fatalf("door %+v; want the address, %d, alice, nokey", d, entryPort)
+	}
+	if len(d.QR) < 21 || len(d.QR[0]) != len(d.QR) || strings.Trim(strings.Join(d.QR, ""), "#.") != "" {
+		t.Fatalf("door QR %v; want a square of # and .", d.QR)
+	}
+	if got := entrySSHURL(d.Login, d.Address, d.Port); got != "ssh://alice@user1001.cf.example.com:22022" {
+		t.Fatalf("ssh URL %q", got)
+	}
+	for _, c := range v.HomeChoices {
+		if c.Name == "" {
+			t.Errorf("home choice %+v has no name", c)
+		}
+	}
+	// a key: the door opens (or is opening), never nokey
+	line := entryKeyLine(t, "termius")
+	if code, raw := entryCall(t, h, http.MethodPost, control.EntryKeysPath, asSession(pAlice), map[string]any{"public_key": line}); code != http.StatusCreated {
+		t.Fatalf("add a key: HTTP %d %s", code, raw)
+	}
+	_, raw = entryCall(t, h, http.MethodGet, control.EntryKeysPath, asSession(pAlice), nil)
+	v = EntryView{}
+	_ = json.Unmarshal([]byte(raw), &v)
+	if v.Door == nil || v.Door.State == "nokey" || len(v.Keys) != 1 {
+		t.Fatalf("after a key: %s", raw)
 	}
 }

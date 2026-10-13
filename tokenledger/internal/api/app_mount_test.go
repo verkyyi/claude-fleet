@@ -63,6 +63,8 @@ func TestAppOldPathsMoveUnderApp(t *testing.T) {
 			if resp.StatusCode == http.StatusMovedPermanently {
 				t.Errorf("stranger HEAD %s = 301 → %q; an admin page's way on is an admin's", p, resp.Header.Get("Location"))
 			}
+		} else if c, ok := consoleRow(AppPrefix + p); ok && c.userLive && resp.StatusCode != http.StatusMovedPermanently {
+			// a member's way on differs from an admin's: the gate asks who first
 		} else if resp.StatusCode != http.StatusMovedPermanently {
 			t.Errorf("HEAD %s = %d; want 301", p, resp.StatusCode)
 		}
@@ -97,7 +99,8 @@ func TestAppIsNoindex(t *testing.T) {
 		code int
 	}{
 		{AppPrefix, admin, http.StatusOK}, {AppPrefix + "/", admin, http.StatusOK},
-		{AppPrefix + "/sessions", user, http.StatusOK}, {AppPrefix + "/machines/mac-a", user, http.StatusOK},
+		{AppPrefix + "/sessions", user, http.StatusOK}, {AppPrefix + "/machines/mac-a", admin, http.StatusOK},
+		{AppPrefix + "/machines/mac-a", user, http.StatusMovedPermanently}, // a member's own: 设备 (claude-fleet#3930)
 		{AppPrefix + "/nodes", user, http.StatusNotFound}, {AppPrefix + "/signin", nil, http.StatusOK},
 		{AppPrefix + "/sessions", nil, http.StatusFound},
 		{AppPrefix + "/v1/fleet/me", admin, http.StatusNotFound}, {AppPrefix + "/install", nil, http.StatusNotFound},
@@ -189,7 +192,7 @@ func TestClientPathsUnchanged(t *testing.T) {
 	mounted := h.srv.Handler()
 	for _, p := range []string{
 		"/v1/fleet/me", "/v1/me", "/v1/fleet/connect", "/v1/fleet/ssh-ca.pub", "/install", "/install/bin/fleet",
-		"/fleet/login", "/fleet/login?code=ABCD-EFGH", "/fleet/keys", "/mcp", "/badge/u/x", "/embed/u/x",
+		"/fleet/login", "/fleet/login?code=ABCD-EFGH", "/mcp", "/badge/u/x", "/embed/u/x",
 		"/healthz", "/version", "/v1/node/self", "/meter.json", "/i/nosuchcode",
 		"/app.css", "/no-such-page",
 	} {

@@ -319,6 +319,30 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 	if err != nil {
 		return err
 	}
+	s.fillEntryBook(v, now, page)
+	s.entrySteps(r, page)
+	q := r.URL.Query()
+	if id := q.Get("revoke"); id != "" && r.Method != http.MethodPost {
+		for i := range page.Keys {
+			if page.Keys[i].ID == id {
+				page.Revoke = &page.Keys[i]
+			}
+		}
+	}
+	if m := q.Get("move"); m != "" && r.Method != http.MethodPost {
+		for i := range page.Others {
+			if page.Others[i].Machine == m && (q.Get("login") == "" || q.Get("login") == page.Others[i].Login) {
+				page.Move = &page.Others[i]
+			}
+		}
+	}
+	return nil
+}
+
+// fillEntryBook lays the book v out as the page shows it: the address, the
+// keys, the home and the homes to move to, how the door stands. The new
+// console's 设备 reads the same through EntryView's door (entryDoorOf).
+func (s *Server) fillEntryBook(v EntryView, now time.Time, page *entryPageData) {
 	page.Name = v.Name
 	page.NeedName = v.Name == ""
 	if page.NameVal == "" {
@@ -383,23 +407,47 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 	}
 	page.State, page.Why = s.entryDoorState(page, changed, now)
 	page.Refresh = page.State == "opening"
-	s.entrySteps(r, page)
-	q := r.URL.Query()
-	if id := q.Get("revoke"); id != "" && r.Method != http.MethodPost {
-		for i := range page.Keys {
-			if page.Keys[i].ID == id {
-				page.Revoke = &page.Keys[i]
-			}
+}
+
+// EntryDoor is how a person's way in from a phone stands (claude-fleet#3930):
+// what Termius asks for — the address, the port, the login (the home's) — the
+// door's state as the keys page says it, and the three as a QR code the phone's
+// camera hands to the app (ssh://<login>@<address>:<port>).
+type EntryDoor struct {
+	Domain   string `json:"domain,omitempty"`
+	Address  string `json:"address,omitempty"` // <name>.<domain>; "" when either is missing
+	Port     int    `json:"port"`
+	Login    string `json:"login,omitempty"`     // the home's login: Termius's username
+	HomeName string `json:"home_name,omitempty"` // the home machine as a person knows it
+	HomeWhy  string `json:"home_why,omitempty"`
+	HomeDown string `json:"home_down,omitempty"` // the home not reachable: since when
+	// State: nokey | opening | ok | down | far | nohome; Why says where it is stuck (far).
+	State string `json:"state"`
+	Why   string `json:"why,omitempty"`
+	// QR: the ssh:// address as rows of '#' (dark) and '.', no quiet zone; none
+	// until there is an address and a home.
+	QR []string `json:"qr,omitempty"`
+}
+
+// entryDoorOf is v's door, as fillEntryBook lays it out.
+func (s *Server) entryDoorOf(v EntryView, now time.Time) EntryDoor {
+	var page entryPageData
+	page.Port = entryPort
+	s.fillEntryBook(v, now, &page)
+	d := EntryDoor{Domain: page.Domain, Address: page.Address, Port: page.Port, HomeWhy: page.HomeWhy,
+		HomeDown: page.HomeDown, State: page.State, Why: page.Why}
+	if page.Home != nil {
+		d.Login, d.HomeName = page.Home.Login, page.Home.Display
+		if d.Address != "" {
+			d.QR = qrMatrix(entrySSHURL(d.Login, d.Address, d.Port))
 		}
 	}
-	if m := q.Get("move"); m != "" && r.Method != http.MethodPost {
-		for i := range page.Others {
-			if page.Others[i].Machine == m && (q.Get("login") == "" || q.Get("login") == page.Others[i].Login) {
-				page.Move = &page.Others[i]
-			}
-		}
-	}
-	return nil
+	return d
+}
+
+// entrySSHURL is the address a phone's terminal app opens: ssh://login@host:port.
+func entrySSHURL(login, host string, port int) string {
+	return (&url.URL{Scheme: "ssh", User: url.User(login), Host: host + ":" + strconv.Itoa(port)}).String()
 }
 
 // entryDoorState is how the door stands for this person, said as a state

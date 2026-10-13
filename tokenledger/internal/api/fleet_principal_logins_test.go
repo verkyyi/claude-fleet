@@ -348,7 +348,8 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 		t.Fatalf("poll: %d %s", code, body)
 	}
 
-	// /connect and its data.
+	// /connect and its data — the old page, not 设备 it moved to (claude-fleet#3930).
+	defer oldPagesStay(AppPrefix + "/connect")()
 	h.srv.UI = fstest.MapFS{"connect.html": &fstest.MapFile{Data: []byte("<!doctype html><title>连接</title>")}}
 	if code, b := asUID(t, h, http.MethodGet, "/connect", pCao, "曹健", nil); code != 200 || !strings.Contains(string(b), "连接") {
 		t.Fatalf("/connect: %d %s", code, b)

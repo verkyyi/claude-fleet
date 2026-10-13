@@ -944,6 +944,8 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(mePagePath, s.appSide())
 	// one ticket under 任务 (claude-fleet#3928): the same, at /app/tasks/tickets/…
 	mux.Handle(ticketPagesPrefix, s.appSide())
+	// 设备 (claude-fleet#3930): the same, at /app/devices
+	mux.Handle(devicesPagePath, s.appSide())
 	// The new console's admin side (claude-fleet#3925): an admin's, and to
 	// anyone else what an unknown address answers (app_mount.go).
 	mux.Handle(AdminPrefix, s.adminSide(ui))

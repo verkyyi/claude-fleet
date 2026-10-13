@@ -36,7 +36,7 @@ const page = `<!doctype html>
   figure{margin:0} figcaption{color:#a59fb5;font-size:12px;margin:0 0 6px}
   iframe{border:1px solid #3a3752;border-radius:18px;background:#fff;display:block}
 </style></head><body>
-<header><h1>/app ·「我的」一侧 —— 原型（EPIC #3923：C3 骨架与对话 · C5 任务 · C6 用量）</h1>
+<header><h1>/app ·「我的」一侧 —— 原型（EPIC #3923：C3 骨架与对话 · C5 任务 · C6 用量 · C7 设备）</h1>
 <p>就是上线时的构建：共享主题包 + shadcn/ui 现成组件；接口是入口的真实字段，人和数字是演示的。左深右浅。点底栏 / 侧栏能切页；还没换的格子上线后先打开旧页，等各自的单换掉。</p></header>
 <div class="bar" id="bar"></div>
 <div class="frames" id="frames"></div>
@@ -46,9 +46,9 @@ const APP = { dark: ${JSON.stringify(html.replaceAll("@media (prefers-color-sche
   light: ${JSON.stringify(html.replaceAll("@media (prefers-color-scheme: dark)", "@media not all").replaceAll("@media (prefers-color-scheme:dark)", "@media not all")).replace(/<\//g, "<\\/")} };
 const S = { page: ${JSON.stringify(process.env.PROTO_PAGE || "/")}, role: "user", state: "normal", width: 390, lang: "zh" };
 const OPTS = {
-  page: [["/", "对话"], ["/tasks", "任务"], ["/tasks?tab=tickets", "单子"], ["/tasks/tickets/linxiao/reports/42", "一张单子"], ["/usage", "用量"], ["/me", "我的"]],
+  page: [["/", "对话"], ["/tasks", "任务"], ["/tasks?tab=tickets", "单子"], ["/tasks/tickets/linxiao/reports/42", "一张单子"], ["/usage", "用量"], ["/devices?tab=pc", "设备·电脑"], ["/devices?tab=phone", "设备·手机"], ["/devices?tab=keys", "设备·公钥"], ["/devices?tab=home", "设备·我的机器"], ["/me", "我的"]],
   role: [["user", "成员 林晓"], ["admin", "管理员 周宁"]],
-  state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"], ["loading", "加载中"], ["error", "出错"], ["unlimited", "不限额"]],
+  state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"], ["loading", "加载中"], ["error", "出错"], ["unlimited", "不限额"], ["entry_off", "直连没开"]],
   width: [[390, "手机 390"], [1280, "电脑 1280"]],
   lang: [["zh", "中文"], ["en", "English"]],
 };
@@ -71,7 +71,8 @@ function draw() {
     const i = document.createElement("iframe");
     i.width = S.width; i.height = S.width === 390 ? 844 : 800; i.style.colorScheme = scheme;
     i.name = JSON.stringify({ role: S.role, state: S.state, page: S.page });
-    i.srcdoc = APP[scheme].replace("<head>", "<head><script>document.cookie='cf_lang=${"$"}{S.lang}';<\\/script>".replace("${"$"}{S.lang}", S.lang));
+    // a srcdoc frame keeps no cookie: the language rides on navigator.language there too
+    i.srcdoc = APP[scheme].replace("<head>", "<head><script>document.cookie='cf_lang=" + S.lang + "';Object.defineProperty(navigator,'language',{value:'" + (S.lang === "zh" ? "zh-CN" : "en") + "'});<\\/script>");
     f.appendChild(i); fr.appendChild(f);
   }
 }

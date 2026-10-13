@@ -79,10 +79,10 @@ func TestLogout_ClearsTheHubsCookiesAndShowsTheSignedOutPage(t *testing.T) {
 		t.Errorf("退出页没有指向 /app/signin 的「重新登录」：%q", body)
 	}
 
-	// 没了 cookie 的浏览器再开 /connect：被送去登录，不是页面。
-	resp = h.raw(t, "/app/connect", map[string]string{"Accept": "text/html"})
+	// 没了 cookie 的浏览器再开「设备」（/connect 搬去了那里，claude-fleet#3930）：被送去登录，不是页面。
+	resp = h.raw(t, "/app/devices", map[string]string{"Accept": "text/html"})
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
-		t.Fatalf("退出后 /connect = %d → %q; want 302 → /app/signin", resp.StatusCode, resp.Header.Get("Location"))
+		t.Fatalf("退出后 /app/devices = %d → %q; want 302 → /app/signin", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }
 
