@@ -12,6 +12,7 @@ from pathlib import Path
 import pwd
 import shutil
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,47 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[2]
+# Every fixture login this run makes, written as it is made (issue #3970): the
+# release train's shard deadline TERMs then KILLs the run, and a fleet-ack runner
+# outlives it — the rerun on the same runner refused «fixture login already
+# exists». The next start removes exactly what an earlier run left listed here.
+LEFTOVER = Path('/var/tmp/fleet-linux-ci-smoke.made')
+
+
+class Made(list):
+    def append(self, name):
+        note_made(name)
+        super().append(name)
+
+
+def note_made(name):
+    with open(LEFTOVER, 'a') as f:
+        f.write(name + '\n')
+
+
+def drop_login(name):
+    subprocess.run(['pkill', '-KILL', '-u', name], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['userdel', name], check=False)
+    subprocess.run(['groupdel', name], check=False)
+
+
+def reclaim_leftovers():
+    if not LEFTOVER.is_file():
+        return
+    names = sorted({n for n in LEFTOVER.read_text().split() if n})
+    print('reclaim: an earlier run was stopped before its cleanup — removing %s' % ' '.join(names))
+    for name in names:
+        try:
+            pwd.getpwnam(name)
+        except KeyError:
+            continue
+        drop_login(name)
+    LEFTOVER.unlink()
+
+
+def _stopped(sig, _frame):
+    raise SystemExit(128 + sig)   # run the finally: the deadline TERMs, then KILLs 5 s later
 
 
 def load(name):
@@ -245,13 +287,17 @@ def main():
     if os.geteuid() != 0 or not sys.platform.startswith('linux') or os.environ.get('CI') != 'true':
         raise SystemExit('only run as root on an ephemeral Linux CI machine (CI=true)')
     os.umask(0o022)
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, _stopped)
+    reclaim_leftovers()
     login = 'fleetci3022'
     try:
         pwd.getpwnam(login)
         raise SystemExit('fixture login already exists')
     except KeyError:
         pass
-    made = []
+    note_made(login)
+    made = Made()
     hub = ThreadingHTTPServer(('127.0.0.1', 0), Hub)
     threading.Thread(target=hub.serve_forever, daemon=True).start()
     proc = None
@@ -417,8 +463,8 @@ def main():
                 proc.terminate()
                 proc.wait(timeout=10)
             for name in [login] + made:
-                subprocess.run(['userdel', name], check=False)
-                subprocess.run(['groupdel', name], check=False)
+                drop_login(name)
+            LEFTOVER.unlink(missing_ok=True)
             hub.shutdown()
             hub.server_close()
 

@@ -428,6 +428,18 @@ else
     || fail "selftests-shards.yml runs fleet-shard-run.sh without checking the tree has it"
   ok "an option the tested tree's run-selftests.sh lacks is left off, not passed (#3915)"
 
+  # The durations tables price a BREAK-IT drill's Go half as skipped (ubuntu has
+  # no module cache); a runner with one (the train's fleet-ack) ran it for real and
+  # two shards went past 150 s (issue #3970). The Go gate owns those tests.
+  CHECKS=$((CHECKS + 1))
+  grep -qE "^[[:space:]]*BREAK_GO:[[:space:]]*'0'" "$WF" \
+    || fail "selftests-shards.yml must set BREAK_GO: '0' — a runner with a Go module cache runs the drills' go test halves the forecast never priced (#3970)"
+  _cut=$(printf '=== a-selftest.sh ===\nPASS  a-selftest.sh 1s\n=== b-selftest.sh ===\nPASS  inner-drill 1s\n' \
+    | awk "$(grep -m1 -o "/^=== /{h=\$2}[^']*" "$WF")")
+  [ "$_cut" = '  b-selftest.sh' ] \
+    || fail "a cut-short shard's summary must name the test in flight past a drill's inner PASS line (#3970)" "$_cut"
+  ok "the shards run no unpriced go test, and a cut names its test (#3970)"
+
   if [ -f "$GATE_WF" ]; then
     CHECKS=$((CHECKS + 1))
     grep -qE '^[[:space:]]*uses:[[:space:]]*\./\.github/workflows/selftests-shards\.yml' "$GATE_WF" \
