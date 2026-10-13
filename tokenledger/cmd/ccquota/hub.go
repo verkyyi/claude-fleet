@@ -1003,7 +1003,17 @@ func runHub(args []string) error {
 		go srv.RunEntryDNS(ctx)
 		// A service run's throwaway environment (claude-fleet#4005): one Job
 		// per attempt in the cluster whose ops link this is. Unset: no runner.
-		if c := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_CLUSTER")); c != "" {
+		// Or (claude-fleet#4086) on the service logins fleet.svc.logins names —
+		// Claude Code runs only where its region allows. One runner per hub.
+		switch c, node := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_CLUSTER")), strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_RUNNER")); {
+		case node == "node" && c != "":
+			return errors.New("CCQUOTA_FLEET_SVC_RUNNER=node and CCQUOTA_FLEET_SVC_CLUSTER: one runner per hub — unset one")
+		case node == "node":
+			srv.SvcRunner = api.NewNodeSvcRunner(srv)
+			log.Printf("fleet: service runs start on the service logins %s names", api.SvcLoginsKey)
+		case node != "":
+			return fmt.Errorf("CCQUOTA_FLEET_SVC_RUNNER=%q: only node", node)
+		case c != "":
 			srv.SvcRunner = api.NewClusterSvcRunner(srv, c)
 			log.Printf("fleet: service runs start as Jobs in cluster %s", c)
 		}

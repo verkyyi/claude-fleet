@@ -138,6 +138,9 @@ type nodeConn struct {
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
+	// canSvcRun is the hello's CapSvcRun: a service login that takes service
+	// run attempts (claude-fleet#4086). Set once, before publish.
+	canSvcRun bool
 	// canChat is the hello's CapChat: this login's agent splices chat relays
 	// onto its conversation socket (claude-fleet#3644). Set once, before publish.
 	canChat bool
@@ -354,6 +357,40 @@ func (n *nodeConns) opsFor(cluster string) (string, *nodeConn) {
 		}
 	}
 	return "", nil
+}
+
+// svcLane is one service login's link (claude-fleet#4086).
+type svcLane struct {
+	id    string
+	conn  *nodeConn
+	host  string
+	login string
+}
+
+// place is how svc_run_jobs names where an attempt ran: node:<host>/<login>.
+func (l svcLane) place() string { return "node:" + l.host + "/" + l.login }
+
+// svcLanes are the connected links that listed CapSvcRun and that allowed
+// (host, login) names — by endpoint id, so the pick is stable.
+func (n *nodeConns) svcLanes(allowed func(host, login string) bool) []svcLane {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []svcLane
+	for _, id := range ids {
+		c := n.conns[id]
+		if !c.canSvcRun || !control.Compatible(int(c.proto.Load())) {
+			continue
+		}
+		if h, u := c.hostname(), c.user(); h != "" && u != "" && allowed(h, u) {
+			out = append(out, svcLane{id: id, conn: c, host: h, login: u})
+		}
+	}
+	return out
 }
 
 // isAdminSeat says endpointID's link is an admin seat (CapAdminSeat): its ops
@@ -578,7 +615,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
-		canChat: hp.HasCap(control.CapChat), tokHash: tokHash,
+		canChat: hp.HasCap(control.CapChat), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:    hp.HasCap(control.CapCredsep),
