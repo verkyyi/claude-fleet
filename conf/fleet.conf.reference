@@ -2932,6 +2932,17 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 (unset = no node releases, machines never update)
 #   CCQUOTA_FLEET_RELEASE_DIR     where releases are kept · 成对: required once
 #                                 RELEASE_KEY is set (the hub refuses to start)
+#   CCQUOTA_FLEET_RELEASE_NPM     npm registries a release's pinned Claude Code
+#                                 is fetched from, space-separated, tried in
+#                                 order · 可选 (unset = registry.npmjs.org, then
+#                                 registry.npmmirror.com — byte for byte as
+#                                 before). A hub in China lists the mirror
+#                                 first: "https://registry.npmmirror.com
+#                                 https://registry.npmjs.org". Every package is
+#                                 checked against its registry's sha512
+#                                 integrity whichever source served it; one
+#                                 that fails gives way to the next source, and
+#                                 when none passes the build is refused
 # Admins:
 #   CCQUOTA_GITHUB_ADMINS         admins by GitHub username, comma-separated · 必填
 #                                 unless CCQUOTA_ADMINS names them

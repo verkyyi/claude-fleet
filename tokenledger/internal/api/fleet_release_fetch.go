@@ -32,8 +32,12 @@ import (
 // CCQUOTA_FLEET_RELEASE_NPM lists the registries, tried in order for the
 // metadata (the first that answers names the integrity) and for the tarball
 // (the first whose bytes match it): npm's own first, then npmmirror, which the
-// cluster reaches at CDN speed. A name the hub cannot fetch stays missing and
-// the build is refused, as before.
+// cluster reaches at CDN speed. A hub in China lists npmmirror first
+// (claude-fleet#4011) — the source changes, the sha512 check does not: when no
+// tarball matches the first registry's integrity, the next registry's metadata
+// is asked and every tarball tried against ITS integrity, and when none matches
+// any the fetch fails and nothing is kept. A name the hub cannot fetch stays
+// missing and the build is refused, as before.
 
 // DefaultNPMRegistries: npm itself, then its mirror the cluster reaches.
 var DefaultNPMRegistries = []string{"https://registry.npmjs.org", "https://registry.npmmirror.com"}
@@ -77,80 +81,87 @@ type npmDist struct {
 	Tarball   string `json:"tarball"`
 }
 
-// npmResolve: the dist of one claude artifact's package version, from the first
-// registry that answers. An error = no registry has it (or none answered).
-func (rs *ReleaseStore) npmResolve(ctx context.Context, name string) (npmDist, error) {
+// npmResolve: the dist of one claude artifact's package version at one registry.
+func (rs *ReleaseStore) npmResolve(ctx context.Context, name, reg string) (npmDist, error) {
 	pkg, ver, ok := claudeNPM(name)
 	if !ok {
 		return npmDist{}, fmt.Errorf("%s: not a claude artifact", name)
 	}
-	var errs []string
-	for _, reg := range rs.npmRegistries() {
-		u := strings.TrimSuffix(reg, "/") + "/" + claudeNPMScope + "%2f" + pkg + "/" + url.PathEscape(ver)
-		d, err := func() (npmDist, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-			if err != nil {
-				return npmDist{}, err
-			}
-			req.Header.Set("Accept", "application/json")
-			resp, err := rs.npmClient(npmMetaTime).Do(req)
-			if err != nil {
-				return npmDist{}, err
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				return npmDist{}, fmt.Errorf("HTTP %d", resp.StatusCode)
-			}
-			var v struct {
-				Dist npmDist `json:"dist"`
-			}
-			if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&v); err != nil {
-				return npmDist{}, err
-			}
-			if !strings.HasPrefix(v.Dist.Integrity, "sha512-") {
-				return npmDist{}, fmt.Errorf("no sha512 integrity")
-			}
-			return v.Dist, nil
-		}()
-		if err == nil {
-			return d, nil
-		}
-		errs = append(errs, reg+": "+err.Error())
+	u := strings.TrimSuffix(reg, "/") + "/" + claudeNPMScope + "%2f" + pkg + "/" + url.PathEscape(ver)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return npmDist{}, err
 	}
-	return npmDist{}, fmt.Errorf("%s@%s: %s", claudeNPMScope+"/"+pkg, ver, strings.Join(errs, "; "))
+	req.Header.Set("Accept", "application/json")
+	resp, err := rs.npmClient(npmMetaTime).Do(req)
+	if err != nil {
+		return npmDist{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return npmDist{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var v struct {
+		Dist npmDist `json:"dist"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&v); err != nil {
+		return npmDist{}, err
+	}
+	if !strings.HasPrefix(v.Dist.Integrity, "sha512-") {
+		return npmDist{}, fmt.Errorf("no sha512 integrity")
+	}
+	return v.Dist, nil
 }
 
 // fetchClaude puts one claude artifact into the artifacts dir, or says why not.
+// Registry by registry: its metadata names an integrity, and the tarballs (its
+// own first, then every registry's) are tried against it; the first match is
+// kept. An integrity already tried is not tried again.
 func (rs *ReleaseStore) fetchClaude(ctx context.Context, name string) error {
 	if rs.ArtifactsDir == "" {
 		return errors.New("no CCQUOTA_FLEET_RELEASE_ARTIFACTS to put it in")
 	}
-	dist, err := rs.npmResolve(ctx, name)
-	if err != nil {
-		return err
+	pkg, ver, ok := claudeNPM(name)
+	if !ok {
+		return fmt.Errorf("%s: not a claude artifact", name)
 	}
-	want, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(dist.Integrity, "sha512-"))
-	if err != nil || len(want) != sha512.Size {
-		return fmt.Errorf("%s: bad integrity %q", name, dist.Integrity)
-	}
-	pkg, ver, _ := claudeNPM(name)
-	urls := []string{dist.Tarball}
+	var metaErrs, errs []string
+	tried := map[string]bool{}
 	for _, reg := range rs.npmRegistries() {
-		urls = append(urls, strings.TrimSuffix(reg, "/")+"/"+claudeNPMScope+"/"+pkg+"/-/"+pkg+"-"+url.PathEscape(ver)+".tgz")
+		dist, err := rs.npmResolve(ctx, name, reg)
+		if err != nil {
+			metaErrs = append(metaErrs, reg+": "+err.Error())
+			continue
+		}
+		if tried[dist.Integrity] {
+			continue
+		}
+		tried[dist.Integrity] = true
+		want, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(dist.Integrity, "sha512-"))
+		if err != nil || len(want) != sha512.Size {
+			errs = append(errs, fmt.Sprintf("%s: bad integrity %q", reg, dist.Integrity))
+			continue
+		}
+		urls := []string{dist.Tarball}
+		for _, r := range rs.npmRegistries() {
+			urls = append(urls, strings.TrimSuffix(r, "/")+"/"+claudeNPMScope+"/"+pkg+"/-/"+pkg+"-"+url.PathEscape(ver)+".tgz")
+		}
+		seen := map[string]bool{}
+		for _, u := range urls {
+			if u == "" || seen[u] {
+				continue
+			}
+			seen[u] = true
+			if err := rs.fetchClaudeFrom(ctx, u, want, name); err != nil {
+				errs = append(errs, err.Error())
+				continue
+			}
+			log.Printf("fleet: release artifact %s fetched from %s (integrity from %s)", name, u, reg)
+			return nil
+		}
 	}
-	seen := map[string]bool{}
-	var errs []string
-	for _, u := range urls {
-		if u == "" || seen[u] {
-			continue
-		}
-		seen[u] = true
-		if err := rs.fetchClaudeFrom(ctx, u, want, name); err != nil {
-			errs = append(errs, err.Error())
-			continue
-		}
-		log.Printf("fleet: release artifact %s fetched from %s", name, u)
-		return nil
+	if len(tried) == 0 {
+		return fmt.Errorf("%s@%s: %s", claudeNPMScope+"/"+pkg, ver, strings.Join(metaErrs, "; "))
 	}
 	return fmt.Errorf("%s: %s", name, strings.Join(errs, "; "))
 }
@@ -259,8 +270,11 @@ func (rs *ReleaseStore) fetchable(ctx context.Context, have map[string]string, n
 		if _, _, ok := claudeNPM(n); !ok {
 			continue
 		}
-		if _, err := rs.npmResolve(ctx, n); err == nil {
-			out = append(out, n)
+		for _, reg := range rs.npmRegistries() {
+			if _, err := rs.npmResolve(ctx, n, reg); err == nil {
+				out = append(out, n)
+				break
+			}
 		}
 	}
 	return out
