@@ -4,7 +4,7 @@
 # The base is the cluster's own ARC runner image (Debian 12, the actions runner as
 # uid 1001 `runner`, bash 5 / python3 / jq / gh / node / git / buildctl — the last
 # keeps the train's `node image` job working on the same set). On top: what the
-# selftests reach for on GitHub's ubuntu-latest — tmux, zsh, fzf, shellcheck,
+# selftests reach for on GitHub's ubuntu-latest — tmux 3.5 (backports), zsh, fzf, shellcheck,
 # ssh-keygen, lsof, sqlite3, … — Go (its module cache pre-filled for
 # tokenledger/), Node 22, and the actions a shard uses, so a job neither installs
 # a tool nor crosses the Pacific for one.
@@ -34,9 +34,13 @@ RUN set -eux; \
     for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
       [ ! -f "$f" ] || sed -i -E "s#https?://(deb|security)\.debian\.org/debian(-security)?#${DEBIAN_MIRROR}\2#g" "$f"; \
     done; \
+    # tmux from bookworm-backports (3.5a, as on the Macs): bookworm's 3.3a does not
+    # open a mouse menu the sidebar selftest drives (#3864)
+    echo "deb ${DEBIAN_MIRROR} bookworm-backports main" > /etc/apt/sources.list.d/backports.list; \
     apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -t bookworm-backports tmux; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      tmux zsh fzf shellcheck openssh-client openssh-server lsof sqlite3 rsync \
+      zsh fzf shellcheck openssh-client openssh-server lsof sqlite3 rsync \
       openssl procps psmisc iproute2 net-tools netcat-openbsd dnsutils bsdextrautils \
       util-linux file zip unzip zstd xz-utils bzip2 make gcc libc6-dev locales \
       python3-cryptography python3-jwt python3-certifi python3-yaml \

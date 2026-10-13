@@ -36,8 +36,8 @@ data:
   sync.sh: |
     #!/bin/sh
     # Keep /srv/git/claude-fleet.git a mirror of GitHub's master (a public repo: no
-    # credential). Seeded once onto the volume; then ls-remote every 10 s and a
-    # fetch only when master moved. SYNC_OK is the liveness probe's clock.
+    # credential). Seeded once onto the volume; then a fetch every 5 s.
+    # SYNC_OK is the liveness probe's clock.
     set -u
     D=/srv/git/claude-fleet.git
     URL=${MIRROR_URL:-https://github.com/verkyyi/claude-fleet.git}
@@ -56,20 +56,20 @@ data:
       mv "$D.tmp" "$D"
       log "seeded: master $(git -C "$D" rev-parse --short master)"
     fi
+    # GitHub from the cluster answers in 1-4 s, and now and then not at all: fetch
+    # (one ref advertisement when nothing moved) every 5 s, each try cut at 30 s
     last=$(git -C "$D" rev-parse master 2>/dev/null)
     n=0
     while :; do
-      head=$(timeout 20 git ls-remote "$URL" refs/heads/master 2>/dev/null | cut -f1)
-      if [ -n "$head" ] && [ "$head" != "$last" ]; then
-        if timeout 120 git -C "$D" fetch -q --prune origin; then
-          last=$(git -C "$D" rev-parse master); log "master → ${last%"${last#???????}"}"
+      if timeout 30 git -C "$D" fetch -q --prune origin; then
+        touch "$D/SYNC_OK"
+        head=$(git -C "$D" rev-parse master)
+        if [ "$head" != "$last" ]; then
+          last=$head; log "master → ${last%"${last#???????}"}"
           n=$((n + 1)); [ $((n % 200)) -ne 0 ] || git -C "$D" repack -adq
-        else
-          log "fetch failed"
         fi
       fi
-      [ -z "$head" ] || touch "$D/SYNC_OK"
-      sleep 10
+      sleep 5
     done
 ---
 apiVersion: apps/v1
