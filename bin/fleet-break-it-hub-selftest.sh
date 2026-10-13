@@ -60,6 +60,10 @@
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
 #                                                   (accountStateOf, closeDrillLogins; go test, when a toolchain is here)
+#   remove-pending-machine-gone                     tokenledger/internal/api fleet_account_gone.go (forget
+#                                                   machine_gone) + internal/store fleet_accounts.go
+#                                                   (CloseAccountMachineGone); bin/fleet-hub-admin.py --machine-gone;
+#                                                   go test, when a toolchain is here
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
@@ -914,6 +918,44 @@ drill_opened_login_no_fleet() {
     esac
   else
     WHAT='没有 go：标记按名核对在，Go 门（tokenledger.yml）跑三条测试；脚本一半是 fleet-login-new-selftest O'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- remove-pending-machine-gone (#3957): a remove queued for a machine that is
+# scaled away before the hub sends it. The row stays remove_pending (only a
+# connected admin is sent a remove) and a plain forget refuses it; the operator's
+# forget --machine-gone closes it as removed — refused while any link of that
+# machine is open, for a pod the hub made, and for a row whose op landed or is
+# running — the row and the audit saying the home was NOT archived there.
+drill_remove_pending_machine_gone() {
+  CAP=120; local t0 out rc tests f g="$ROOT/tokenledger/internal/api/fleet_account_gone.go"
+  tests='TestForgetMachineGoneClosesRemovePending TestForgetMachineGoneUnknownRemove'
+  f="$ROOT/tokenledger/internal/api/fleet_account_gone_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'if live := s.liveLinksOn(req.Hostname); len(live) > 0 {' "$g" 2>/dev/null \
+    || { WHY="forget --machine-gone no longer refuses a machine that is still connected"; return 1; }
+  grep -q '家目录未在源机归档' "$g" \
+    || { WHY="a row closed by hand no longer says the home was not archived on the source machine"; return 1; }
+  grep -q 'case AccountPending, AccountFailed, AccountRemoved:' "$ROOT/tokenledger/internal/store/fleet_accounts.go" \
+    || { WHY="a plain forget no longer keeps to rows that never reached a machine"; return 1; }
+  grep -q 'body\["machine_gone"\] = True' "$BIN/fleet-hub-admin.py" \
+    || { WHY="fleet hub accounts forget has no --machine-gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='删除没下发、机器没了：普通 forget 照旧拒；--machine-gone 在机器还连着时拒，回不来时标 removed、行里和审计写「家目录未在源机归档」，之后 forget 删得掉（go test 两条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；两条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：两条测试与 --machine-gone 的拒 / 记按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

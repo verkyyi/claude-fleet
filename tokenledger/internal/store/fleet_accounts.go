@@ -641,6 +641,39 @@ func (s *Store) ForgetPrincipal(principalID, hostname string) error {
 	return tx.Commit()
 }
 
+// CloseAccountMachineGone settles a remove that can never reach its machine
+// (claude-fleet#3957: the source was scaled away before the remove was sent,
+// and its node identity went with it): a remove_pending row — or an unknown
+// one whose op was a remove — becomes removed with detail(from) saying what
+// did NOT happen there. It runs nothing and sends nothing; the caller checks the
+// machine has no live admin and audits. from is the state it left.
+func (s *Store) CloseAccountMachineGone(principalID, hostname string, detail func(from string) string, at time.Time) (from string, err error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var op string
+	err = tx.QueryRow(`SELECT state, op FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ?`,
+		principalID, hostname).Scan(&from, &op)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: no account on %s", ErrAccountState, hostname)
+	}
+	if err != nil {
+		return "", err
+	}
+	if from != AccountRemovePending && !(from == AccountUnknown && op == "remove") {
+		return from, fmt.Errorf("%w: login on %s is %s (only a remove that never landed: remove_pending, or unknown after a remove)",
+			ErrAccountState, hostname, from)
+	}
+	if _, err := tx.Exec(`UPDATE fleet_accounts SET state = ?, op_id = '', endpoint_id = '', detail = ?, updated_at = ?
+		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ? AND state = ?`,
+		AccountRemoved, detail(from), at.UTC().Format(rfc), principalID, hostname, from); err != nil {
+		return from, err
+	}
+	return from, tx.Commit()
+}
+
 // RequestAccountRemoval queues closing p's login on hostname.
 func (s *Store) RequestAccountRemoval(principalID, hostname string, at time.Time) error {
 	ts := at.UTC().Format(rfc)

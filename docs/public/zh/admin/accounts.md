@@ -87,4 +87,5 @@ fleet hub accounts remove gh:1234567 --host mac-a
 - **邀请发错了人**：`fleet hub invite --list` 找到它，`--revoke <id>`。已经用掉的，按上面删号。
 - **他换了 GitHub 账号**：`fleet hub accounts rekey <旧 id> <新 id>`，旧身份的账号整个交给新身份，什么都不重开。
 - **开号卡住了，名单里有一行开不出来的记录**：`fleet hub accounts forget gh:1234567` 删掉这条从没到过机器的记录，再重新邀请。
+- **删号发出去之前机器就没了，那一行一直是 `remove_pending`**：先确认这台机器真的回不来，再 `fleet hub accounts forget gh:1234567 --host <机器> --machine-gone`。它把这一行标成 `removed`，并在记录和审计里写明「家目录未在源机归档」——那台机器上他的家目录没有打包，要留就去旧盘上找。机器还连着时会被拒：那时删除会自己落地。
 - **他离职又回来**：重新发邀请；身份还是原来那个，用量历史接得上，机器上是一个新账号。

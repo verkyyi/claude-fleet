@@ -1016,6 +1016,10 @@ type FleetAccountRequest struct {
 	// Delete (remove only, claude-fleet#3504): delete the OS login even where
 	// it would be recycled into a spare.
 	Delete bool `json:"delete,omitempty"`
+	// MachineGone (forget only, claude-fleet#3957): the operator says the
+	// machine will not come back — close a remove that never landed there
+	// (fleet_account_gone.go), refused while the machine is connected.
+	MachineGone bool `json:"machine_gone,omitempty"`
 }
 
 // handleFleetAccounts is the operator's view and control of every account.
@@ -1271,6 +1275,9 @@ func (s *Server) changeAccount(req FleetAccountRequest, actor string) error {
 		}
 		return s.Store.RequestAccountRemoval(req.PrincipalID, req.Hostname, now)
 	case "forget":
+		if req.MachineGone {
+			return s.closeAccountMachineGone(req, actor, now)
+		}
 		if err := s.podStillStands(req.PrincipalID, req.Hostname); err != nil {
 			return err
 		}

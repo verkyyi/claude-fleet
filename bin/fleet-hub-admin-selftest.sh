@@ -22,6 +22,9 @@
 #      exit 2, nothing sent; remove → POST {remove}, --delete adds delete: true
 #      (claude-fleet#3504); the list carries
 #      host:state:separated (claude-fleet#3210)
+#   G2 fleet hub accounts forget zx --host linux-a --machine-gone → POST {forget,
+#      hostname, machine_gone: true}; says the home was NOT archived; without
+#      --host → exit 2, nothing sent (claude-fleet#3957)
 #   T  fleet hub debug-ticket @bob --hours 48 → POST {github_login, hours}; prints
 #      the one `fleet-debug ticket …` line once; --list → one row per ticket
 #      (claude-fleet#2891)
@@ -283,6 +286,18 @@ if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "assign", "principal_id
    && [ "$rc4" = 0 ] && [ "$(field "$r4" body)" = '{"action": "remove", "principal_id": "zx", "hostname": "linux-a", "delete": true}' ]; then
   ok "N fleet hub accounts assign / remove → POST {assign|remove, hostname} (--login ⇒ own_name: never a spare; remove --delete ⇒ delete: never recycled, #3504); a --login not theirs is refused before the POST"
 else bad "N rc=$rc/$rc2/$rc3/$rc4 req=$r req3=$r3 req4=$r4 out=$(cat "$WORK/out") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
+
+# G2 — fleet hub accounts forget --machine-gone (claude-fleet#3957): the operator's
+# explicit end for a remove that never reached a machine that will not come back
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts forget zx --host linux-a --machine-gone >"$WORK/out" 2>"$WORK/err"; rc=$?
+r=$(last)
+n1=$(wc -l <"$LOG")
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts forget zx --machine-gone >"$WORK/out2" 2>"$WORK/err2"; rc2=$?
+n2=$(wc -l <"$LOG")
+if [ "$rc" = 0 ] && [ "$(field "$r" body)" = '{"action": "forget", "principal_id": "zx", "hostname": "linux-a", "machine_gone": true}' ] \
+   && grep -q 'NOT archived' "$WORK/out" && [ "$rc2" = 2 ] && [ "$n1" = "$n2" ] && grep -q -- '--host' "$WORK/err2"; then
+  ok "G2 fleet hub accounts forget --machine-gone → POST {forget, hostname, machine_gone}; says the home was not archived; no --host → exit 2, nothing sent"
+else bad "G2 rc=$rc/$rc2 req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") err2=$(cat "$WORK/err2") n=$n1/$n2"; fi
 
 # L — fleet hub invite (claude-fleet#2261): mint, list, revoke
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite @alice >"$WORK/out" 2>"$WORK/err"; rc=$?

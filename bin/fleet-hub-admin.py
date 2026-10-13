@@ -12,6 +12,11 @@
     fleet hub accounts rekey <from> <to> hand an old identity's logins to <to>
                                          (gh:<id> or a bare GitHub ID); runs nothing
     fleet hub accounts forget <principal> drop a record that never reached a machine
+    fleet hub accounts forget <principal> --host <machine> --machine-gone
+                                         the machine will not come back: close a remove that
+                                         never landed there (remove_pending) as removed — the
+                                         home was NOT archived there; refused while it is
+                                         connected (claude-fleet#3957)
     fleet hub accounts assign <principal> --host <machine> [--login <login>] [--own-name]
                                          open their login on <machine>: a ready spare there
                                          is theirs at once (fleetu<N>, claude-fleet#3501),
@@ -492,13 +497,19 @@ def accounts_main(a):
         print("%s %s on %s: queued" % (a.action, a.principal, a.host))
         return
     if not a.principal:
-        die("fleet hub accounts forget <principal> [--host <machine>]", 2)
+        die("fleet hub accounts forget <principal> [--host <machine> [--machine-gone]]", 2)
+    if a.machine_gone and not a.host:
+        die("--machine-gone closes one login on one machine: say --host <machine>", 2)
     body = {"action": "forget", "principal_id": a.principal}
     if a.host:
         body["hostname"] = a.host
+    if a.machine_gone:
+        body["machine_gone"] = True
     resp = call(a, "POST", ACCOUNTS_PATH, body)
     if a.json:
         print(json.dumps(resp, indent=2, ensure_ascii=False))
+    elif a.machine_gone:
+        print("closed %s on %s as removed — the home was NOT archived there (audited)" % (a.principal, a.host))
     else:
         print("forgot %s%s" % (a.principal, " on " + a.host if a.host else ""))
 
@@ -533,6 +544,9 @@ def main(argv):
     ac.add_argument("--login", dest="login", help="assign: the login they must have (checked, never set)")
     ac.add_argument("--own-name", dest="own_name", action="store_true",
                     help="assign: open their own login name there, skipping a ready spare")
+    ac.add_argument("--machine-gone", dest="machine_gone", action="store_true",
+                    help="forget: the machine will not come back — close its remove_pending row as removed "
+                         "(home not archived there; refused while it is connected)")
     ac.add_argument("--delete", action="store_true",
                     help="remove: delete the OS login even where it would be recycled into a spare")
     iv = sub.add_parser("invite", parents=[common], help="an install command that lets one new person in")
