@@ -256,18 +256,20 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "node is required (?node=<machine>)")
 		return
 	}
+	// Two replicas (claude-fleet#2151): the machine's link is held by the
+	// other one — hand it the whole websocket, before the upgrade here and
+	// before reading who asks (claude-fleet#3847: a node's signature is spent
+	// once, by the replica that serves it).
+	if peer, ok := s.sshRelayPeer(r, host); ok {
+		s.proxyRelay(w, r, peer, "a relay to "+host)
+		return
+	}
 	id, ok := s.sshRelayHTTPIdentity(r)
 	if !ok && len(s.sshRelayCAs()) == 0 {
 		// No certificate is ever accepted on this hub, so there is nothing
 		// to prove in-band: refuse before the upgrade.
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
 		httpError(w, http.StatusUnauthorized, "a session, a viewer token or a connection certificate is required")
-		return
-	}
-	// Two replicas (claude-fleet#2151): the machine's link is held by the
-	// other one — hand it the whole websocket, before the upgrade here.
-	if peer, ok := s.sshRelayPeer(r, host); ok {
-		s.proxyRelay(w, r, peer, "a relay to "+host)
 		return
 	}
 	conn, err := websocket.Accept(w, r, nil)
@@ -396,22 +398,27 @@ func (s *Server) handleSSHRelayData(w http.ResponseWriter, r *http.Request) {
 // for (the SSH relay's table, or the chat relay's — claude-fleet#3644), and
 // holds it until that relay is over.
 func (s *Server) attachRelayData(w http.ResponseWriter, r *http.Request, t *sshRelayTable) {
+	p := t.get(r.URL.Query().Get("id"))
+	if p == nil && s.Replica != nil && !s.relayHopped(r) {
+		// The agent's data half landed on the replica that did not ask for
+		// it (claude-fleet#2151): the one holding its link did. Handed on
+		// BEFORE it is verified (claude-fleet#3847): a signature's nonce is
+		// spent by the one replica that serves it, never here first — the
+		// holder verifies it, a claim that is not true is refused there.
+		if epID := s.claimedEndpoint(r); epID != "" {
+			if peer, ok := s.peerOf(r.Context(), epID); ok {
+				s.proxyRelay(w, r, peer, "the data half of a relay")
+				return
+			}
+		}
+	}
 	ep, ok := s.nodeEndpoint(w, r) // its signature, else its token (claude-fleet#3710)
 	if !ok {
 		return
 	}
-	p := t.get(r.URL.Query().Get("id"))
 	// The relay must be the one THIS endpoint was asked for, with the
 	// secret it was given: another login on the same machine holding its
 	// own token cannot step into someone else's stream.
-	if p == nil && s.Replica != nil && !s.relayHopped(r) {
-		// The agent's data half landed on the replica that did not ask for
-		// it (claude-fleet#2151): the one holding its link did.
-		if peer, ok := s.peerOf(r.Context(), ep.ID); ok {
-			s.proxyRelay(w, r, peer, "the data half of a relay")
-			return
-		}
-	}
 	if p == nil || p.endpointID != ep.ID || !constantTimeEqual(r.Header.Get("X-Relay-Secret"), p.secret) {
 		httpError(w, http.StatusNotFound, "no such relay for this node")
 		return

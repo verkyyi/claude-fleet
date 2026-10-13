@@ -7190,6 +7190,45 @@ drill_chat_first_open_cold() {
   SECS=$(since "$t0")
 }
 
+# chat-relay-replica-hop (issue #3847, EPIC #3642 C6 真机一轮): with two entry
+# replicas the person's /chat landed on the one not holding their login's link
+# («连不上»), and the node's data half, landing on the replica that did not open
+# the relay, was verified THERE first — its FleetSig nonce spent — and then
+# refused as a replay by the holder (401). Now a chat request is handed whole to
+# the holder (chatRelayPeer) and a data half is handed on BEFORE it is verified
+# (claimedEndpoint). Go (internal/api chat_relay_replica_test.go: two replicas, a
+# front splitting the halves, a real signing agent), run when a toolchain is here.
+drill_chat_relay_replica_hop() {
+  CAP=180; local t0 out rc tests f="$ROOT/tokenledger/internal/api/ssh_relay.go"
+  tests='TestChatRelayReplicaHop TestChatRelayReplicaNobodyHolds TestChatRelayReplicaSingleNeverProxies TestSSHRelayDataHalfOnOtherReplica'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/internal/api/*_test.go 2>/dev/null || { WHY="the test $out is gone"; return 1; }
+  done
+  # the data half is handed on before nodeEndpoint verifies (and spends) its signature
+  local cl vl
+  cl=$(awk '/^func \(s \*Server\) attachRelayData/,/^}/' "$f" | grep -n 'claimedEndpoint(r)' | head -1 | cut -d: -f1)
+  vl=$(awk '/^func \(s \*Server\) attachRelayData/,/^}/' "$f" | grep -n 's.nodeEndpoint(w, r)' | head -1 | cut -d: -f1)
+  [ -n "$cl" ] && [ -n "$vl" ] && [ "$cl" -lt "$vl" ] \
+    || { WHY="attachRelayData verifies before it hands a data half on (a replica spends the nonce the holder needs)"; return 1; }
+  grep -q 's.chatRelayPeer(r, home.Machine, home.Login)' "$ROOT/tokenledger/internal/api/fleet_chat.go" 2>/dev/null \
+    || { WHY="the chat routes never hand a request to the replica holding the login's link"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='两副本：人的 /chat 落在不持链的副本 → 整个请求交给持链副本；节点签名的回拨落在另一副本 → 验签前转过去，nonce 只花一次；没人持链照答 home_down；单入口不转' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer' ;;
+      *) WHY="the replica hop (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20[0-9][0-9]/' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
 # land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
 # land at once through fleet-land.sh — both land, one after the other, the second
 # rebased onto the first and checked again; a red check never moves the base; gh 0 times.

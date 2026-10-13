@@ -94,6 +94,12 @@ bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move 
 `CCQUOTA_FLEET_CHAT=0` 让节点不报 `CapChat`。入口那半边给 C3 用的是 `dialChatRelay(ctx, 人, 机器, 登录)`，
 返回一条 `net.Conn`。BREAK-IT `chat-relay-wrong-person`（Go 测试：`tokenledger/internal/api/chat_relay_test.go`）。
 
+入口跑多副本时（#3847，照 SSH 转发的 #2151）：人的 `/v1/chat/*`（含 `home`）落在不持该登录 CapChat 链的副本上，
+整个请求连同副本令牌交给持链副本（`chatRelayPeer`），由它认人、开转发、审计，不再二跳；节点的回拨落在没开这条
+转发的副本上，在**验签之前**按请求自称的身份（FleetSig keyid 或 bearer，`claimedEndpoint`）转给持链副本——签名的
+nonce 只在真正处理它的副本上花一次。单入口逐字节不变。BREAK-IT `chat-relay-replica-hop`
+（`tokenledger/internal/api/chat_relay_replica_test.go`）。
+
 ### 入口的路由（#3645，EPIC #3642 C3）
 
 页面只跟入口说话：`/v1/chat/conversation`（GET）· `/v1/chat/turn` · `/v1/chat/stop` · `/v1/chat/answer`（POST），
