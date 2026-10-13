@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +145,62 @@ func TestDoorDNSPointsPodHomesAtTheDoor(t *testing.T) {
 	// Any other home is still its own.
 	if m := h.srv.entryAddrMachine("home-a", now); m != "home-a" {
 		t.Fatalf("home-a is reached at %s", m)
+	}
+}
+
+// A person's pod is reached through the door in the route list too
+// (claude-fleet#3985): its `entry` route is the door's reachable address, with
+// the home entry port on or off, and it is offered no relay — the relay dials
+// the agent's loopback :22, which a pod's sshd (its own port, the door's key
+// alone) never answers. Any other home, and a pod with no door, as before.
+func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
+	h := entryHarness(t)
+	now := time.Now().UTC()
+	pod := FleetMachine{Hostname: "u-alice1"}
+	routes := func(m FleetMachine) string {
+		var rs []string
+		for _, r := range h.srv.withEntryReach(m, now).Routes {
+			rs = append(rs, r.Name+"="+r.Host+":"+strconv.Itoa(r.Port))
+		}
+		return strings.Join(rs, ",")
+	}
+
+	// No door: a pod is any machine, and nothing knows an address for it.
+	if h.srv.podBehindDoor("u-alice1") {
+		t.Fatal("no door: u-alice1 is behind no door")
+	}
+	if got := routes(pod); got != "" {
+		t.Fatalf("no door: %s", got)
+	}
+
+	if err := h.srv.Store.SetFleetSetting(DoorKey, "fleet-door", now); err != nil {
+		t.Fatal(err)
+	}
+	if !h.srv.podBehindDoor("u-alice1") || h.srv.podBehindDoor("home-a") || h.srv.podBehindDoor("fleet-door") {
+		t.Fatal("podBehindDoor: only a u-<nonce> pod is behind the door")
+	}
+	// The door not reached yet: no route (the person sees why on /entry).
+	if got := routes(pod); got != "" {
+		t.Fatalf("door unreached: %s", got)
+	}
+	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
+	if got, want := routes(pod), "entry=203.0.113.10:"+strconv.Itoa(entryPort); got != want {
+		t.Fatalf("pod: %s, want %s", got, want)
+	}
+	// A home that is not a pod gets nothing from the door's reach.
+	if got := routes(FleetMachine{Hostname: "home-a"}); got != "" {
+		t.Fatalf("home-a took the door's address: %s", got)
+	}
+	// A node that names its own entry= keeps it alone.
+	own := FleetMachine{Hostname: "u-alice1", Routes: []FleetRoute{{Name: "entry", Host: "door.example.com", Port: 22022}}}
+	if got := routes(own); got != "entry=door.example.com:22022" {
+		t.Fatalf("own entry=: %s", got)
+	}
+	// The home entry port off: the pod still goes through the door.
+	if err := h.srv.Store.SetFleetSetting(EntryKey, "off", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := routes(pod), "entry=203.0.113.10:"+strconv.Itoa(entryPort); got != want {
+		t.Fatalf("entry port off: %s, want %s", got, want)
 	}
 }

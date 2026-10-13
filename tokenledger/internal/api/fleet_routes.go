@@ -234,7 +234,8 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		lg, _ := loginOn(m.Hostname)
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: s.withEntryReach(m, now), Relay: relayReady(m.Hostname), Login: lg})
+		out.Machines = append(out.Machines, RouteMachine{FleetMachine: s.withEntryReach(m, now),
+			Relay: relayReady(m.Hostname) && !s.podBehindDoor(m.Hostname), Login: lg})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
