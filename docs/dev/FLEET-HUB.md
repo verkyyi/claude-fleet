@@ -2228,7 +2228,7 @@ sudo -E ~/.claude/fleet/bin/fleet-login-new.sh fleetsvc1 --full-name 'fleet serv
 for f in /var/db/fleet-node/logins/fleetsvc1.env ~fleetsvc1/.config/claude-fleet/node.env; do
   sudo sh -c "printf 'CCQUOTA_FLEET_SVC=1\nCCQUOTA_FLEET_COMPUTE=0\n' >> $f"
 done                                   # logins/ changed ⇒ the machine's node program reloads
-# the hub (an admin): PUT /v1/fleet/settings {"fleet.svc.logins": "macmini:fleetsvc1"}
+# the hub (an admin): PUT /v1/fleet/settings {"key": "fleet.svc.logins", "value": "macmini:fleetsvc1"}
 ```
 
 ## Validation and next increments

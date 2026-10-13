@@ -160,3 +160,23 @@ func TestSvcRunNoServiceLoginWaits(t *testing.T) {
 		t.Fatalf("free slots %d; want 3 (one login × per_login 3)", n)
 	}
 }
+
+// The two settings are the operator's, and refuse a value they cannot read.
+func TestSvcLoginsSettings(t *testing.T) {
+	h, _ := svcNodeRig(t, "")
+	put := func(k, v string) int {
+		t.Helper()
+		code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": k, "value": v})
+		return code
+	}
+	for v, want := range map[string]int{"macmini:fleetsvc1,mini2:fleetsvc2": 200, "": 200, "macmini": 400, "macmini:Bad Name": 400} {
+		if got := put(SvcLoginsKey, v); got != want {
+			t.Errorf("%s=%q: %d, want %d", SvcLoginsKey, v, got, want)
+		}
+	}
+	for v, want := range map[string]int{"2": 200, "": 200, "0": 400, "9": 400, "x": 400} {
+		if got := put(SvcPerLoginKey, v); got != want {
+			t.Errorf("%s=%q: %d, want %d", SvcPerLoginKey, v, got, want)
+		}
+	}
+}

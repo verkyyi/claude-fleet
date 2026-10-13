@@ -2166,8 +2166,14 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case body.Key == SvcLoginsKey || body.Key == SvcPerLoginKey:
+			// the service logins and their slots (claude-fleet#4086)
+			if why := svcLoginsSettingCheck(body.Key, body.Value); why != "" {
+				httpError(w, http.StatusBadRequest, why)
+				return
+			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()

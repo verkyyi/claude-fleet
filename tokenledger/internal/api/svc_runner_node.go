@@ -54,6 +54,27 @@ const (
 
 var errNoSvcLane = errors.New("no service login has a free slot")
 
+// svcLoginsSettingCheck says why a value of fleet.svc.logins / per_login is
+// refused; "" = fine ("" clears either).
+func svcLoginsSettingCheck(key, value string) string {
+	if value == "" {
+		return ""
+	}
+	if key == SvcPerLoginKey {
+		if n, err := strconv.Atoi(value); err != nil || n < 1 || n > svcPerLoginMax {
+			return SvcPerLoginKey + " is an integer 1–" + strconv.Itoa(svcPerLoginMax) + ", or \"\" for 1"
+		}
+		return ""
+	}
+	for _, f := range strings.Split(value, ",") {
+		h, l, ok := strings.Cut(strings.TrimSpace(f), ":")
+		if !ok || !nodeNameRE.MatchString(h) || !control.ValidCreateLogin(l, true) {
+			return SvcLoginsKey + " is <machine>:<login>,… (e.g. macmini:fleetsvc1), or \"\" for none"
+		}
+	}
+	return ""
+}
+
 // svcLoginsAllowed reads fleet.svc.logins into an allow function.
 func svcLoginsAllowed(settings map[string]string) func(host, login string) bool {
 	type hl struct{ host, login string }
