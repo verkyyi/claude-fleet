@@ -263,6 +263,9 @@ except ImportError:
 MAC = sys.platform == "darwin" or (os.environ.get("FLEET_NODE_TEST") == "1"
                                      and "FLEET_NODE_LAUNCHCTL" in os.environ)
 LABEL = "com.claude-fleet.node"
+# the root core (bin/fleet-node-core.py, #3555): installed beside this daemon,
+# never a leftover — the sweep booting it out was how it vanished (#3857)
+CORE_LABEL = "com.claude-fleet.node-core"
 SYSTEMD_UNIT = "claude-fleet-node.service"
 DEFAULT_ROOT = "/Library/Application Support/claude-fleet" if MAC else "/opt/claude-fleet"
 # Non-secret managed settings needed by root children AND demoted tenant jobs.
@@ -2843,6 +2846,37 @@ class Supervisor(object):
             self.log("task %s/%s: bark: %s" % (svc["login"], svc["name"], e))
         self.notifies = [p for p in self.notifies if p.poll() is None]
 
+    # -- the root core (issue #3857)
+    def tend_core(self):
+        """Watch the root core: one log line when it stops answering (and when it
+        is back), its down-since in state.json for status. Root (an unseated
+        daemon) puts an installed core that left launchd back itself; a seated
+        one cannot — the doctor's `node` row FAILs (#3810) until someone does."""
+        t = now()
+        if t - getattr(self, "core_at", 0) < 30:
+            return
+        self.core_at = t
+        reading = core_reading(self.p, seated=self.seated)
+        cs = self.state.setdefault("core", {})
+        if reading != "down":
+            if cs.get("down_since"):
+                self.log("core: answering again (down %s)" % ago(cs["down_since"]))
+                cs.pop("down_since", None)
+                self.dirty = True
+            return
+        if not cs.get("down_since"):
+            cs["down_since"] = t
+            self.dirty = True
+            self.log("core NOT ANSWERING — %s (%s)" % (core_down_why(), core.sock_path() if core else "-"))
+        unit = core_unit(self.p)
+        if self.seated or not MAC or not os.path.exists(unit):
+            return
+        target = "system/" + CORE_LABEL
+        if launchctl_loaded(target):
+            return
+        rc = launchctl_bootstrap("system", unit)
+        self.log("core: not in launchd — bootstrap %s rc=%s" % (unit, rc))
+
     # -- lanes (issue #2501)
     def tend_lanes(self):
         """The logins whose lane the hub refuses, from each tenant's lane.json
@@ -3146,6 +3180,11 @@ class Supervisor(object):
                 self.tend_agent_tasks()
             except Exception as e:  # one bad entry must never take the daemon down
                 self.log("agent tasks: %s" % e)
+            self.at("core")
+            try:
+                self.tend_core()
+            except Exception as e:  # a check must never take the daemon down
+                self.log("core: %s" % e)
             self.at("lanes")
             self.tend_lanes()
             self.at("tenants")
@@ -3618,6 +3657,11 @@ def _attic_id(paths, stamp, index, pending=0):
 def _retire_unit(paths, d, src, label, index, ident_, dry):
     """Boot one unit out and move it into the attic (7 days, `attic restore`).
     The attic entry, or a string: why it stays."""
+    if label in (LABEL, CORE_LABEL):
+        # this daemon and its root core are never a leftover (#3857): a seated
+        # sweep runs IN the core, and booting it out killed it mid-sweep — gone
+        # from launchd, its plist left, every child waiting on its socket
+        return "%s is this machine's own daemon — never retired" % label
     if d == paths.daemon_dir:
         domain = "system"
     else:
@@ -3699,7 +3743,7 @@ def _sweep(paths, dry=False):
                 # a managed machine (expected.json): what is not in its expected set
                 # goes to the attic, booted out first (issue #2981)
                 lb = _plist_label(src) or n[:-len(".plist")]
-                if lb in labels or lb == LABEL:
+                if lb in labels or lb in (LABEL, CORE_LABEL):
                     continue
                 go, why = _extra_verdict(paths, d, src, lb, legacy, managed)
                 if go is None:
@@ -4548,8 +4592,10 @@ def status_lines(paths, table, state):
               sv.get("starts") or 0)]
     if wedged_line(state):
         out.append(wedged_line(state))
-    if core_line(paths):
-        out.append(core_line(paths))
+    cl = core_line(paths)
+    if cl:
+        down = (state.get("core") or {}).get("down_since")
+        out.append(cl + (" · down %s (the daemon's word)" % ago(down) if down and "NOT ANSWERING" in cl else ""))
     sup = Supervisor.__new__(Supervisor)
     sup.p = paths
     for c in table["children"]:
