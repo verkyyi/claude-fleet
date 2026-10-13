@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -646,6 +647,13 @@ func TestBuildMailAndSMTPURL(t *testing.T) {
 	msg := string(buildMail(c.from, "x@example.com", "登录 claudefleet", "正文", time.Unix(0, 0)))
 	if !strings.Contains(msg, "Subject: =?utf-8?b?") || !strings.Contains(msg, "Content-Transfer-Encoding: base64") || !strings.HasSuffix(msg, "\r\n") {
 		t.Fatalf("mail:\n%s", msg)
+	}
+	// The footer: why this mail came, in both languages (claude-fleet#4056).
+	head, enc, _ := strings.Cut(msg, "\r\n\r\n")
+	text, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(enc, "\r\n", ""))
+	if err != nil || !strings.HasPrefix(string(text), "正文\n") || !strings.HasSuffix(string(text), mailFooter) ||
+		!strings.Contains(string(text), "为什么收到这封信") || !strings.Contains(string(text), "Why this mail") {
+		t.Fatalf("body = %q %v (head %q)", text, err, head)
 	}
 }
 

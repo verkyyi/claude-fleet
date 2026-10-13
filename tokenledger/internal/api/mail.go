@@ -137,8 +137,18 @@ func (c *smtpConf) send(ctx context.Context, to, subject, body string) error {
 	return cl.Quit()
 }
 
+// mailFooter ends every mail the hub sends, in both languages whatever the
+// reader's (claude-fleet#4056): why this address got it, and that nobody
+// reads a reply. A mail that says who sent it and why is less often filed
+// as spam, and a person who never asked knows what to do.
+const mailFooter = "\n--\n" +
+	"为什么收到这封信：有人在 ClaudeFleet 上填了这个邮箱（登录，或接收和这个账号有关的通知）。" +
+	"这封信由系统自动发出，请勿回复；如果不是你本人操作，忽略即可。\n" +
+	"Why this mail: this address was entered on ClaudeFleet (to sign in, or for notices about its account). " +
+	"It was sent automatically; please don't reply. If it wasn't you, just ignore it.\n"
+
 // buildMail is one RFC 5322 message: UTF-8 text, base64, a subject encoded
-// for any client.
+// for any client, the body ending with mailFooter.
 func buildMail(from *mail.Address, to, subject, body string, now time.Time) []byte {
 	var id [12]byte
 	_, _ = rand.Read(id[:])
@@ -154,7 +164,7 @@ func buildMail(from *mail.Address, to, subject, body string, now time.Time) []by
 	b.WriteString("Content-Transfer-Encoding: base64\r\n")
 	// Not a list, not a reply target: auto-responders stay quiet.
 	b.WriteString("Auto-Submitted: auto-generated\r\n\r\n")
-	enc := base64.StdEncoding.EncodeToString([]byte(body))
+	enc := base64.StdEncoding.EncodeToString([]byte(strings.TrimRight(body, "\n") + "\n" + mailFooter))
 	for len(enc) > 76 {
 		b.WriteString(enc[:76] + "\r\n")
 		enc = enc[76:]
