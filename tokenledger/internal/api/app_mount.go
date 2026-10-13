@@ -125,7 +125,7 @@ var consolePages = []consolePage{
 	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5", live: true},
 	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5", live: true},
 	{old: TicketsPagePath + "/", new: AppPrefix + ticketPagesPrefix, side: sideMe, owner: "C5", live: true, under: true},
-	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6"},
+	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6", live: true},
 	// 我的额度 is folded into 我的用量 already; the page only moved on in
 	// the browser, a second hop.
 	{old: AppPrefix + "/quota", new: AppPrefix + "/usage", side: sideMe, owner: "C2", live: true},

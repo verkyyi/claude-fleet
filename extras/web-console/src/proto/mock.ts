@@ -3,7 +3,7 @@
 // /v1/fleet/tasks, /v1/fleet/tickets*) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
-type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "error" | "loading"; page?: string };
+type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading"; page?: string };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -20,7 +20,44 @@ export async function install(): Promise<string> {
   const me = admin
     ? { via: "wechat", role: "admin", person: "p:zhouning", name: "周宁", login: "zhouning", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true }
     : { via: "wechat", role: "user", person: "p:linxiao", name: "林晓", login: "linxiao", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true };
-  const limit = { set: true, limit_week: 100, remaining_week: state === "over" ? 0 : 62, reset_week: reset.toISOString(), over: state === "over", window: "week" };
+  const limit = state === "unlimited" ? { set: false, used_week: 0, used_5h: 412000 } : {
+    set: true, limit_week: 6_000_000, used_week: state === "over" ? 6_000_000 : state === "empty" ? 0 : 2_284_000,
+    remaining_week: state === "over" ? 0 : state === "empty" ? 6_000_000 : 3_716_000, reset_week: reset.toISOString(),
+    limit_5h: 1_200_000, used_5h: state === "over" ? 1_200_000 : state === "empty" ? 0 : 312_400,
+    remaining_5h: state === "over" ? 0 : state === "empty" ? 1_200_000 : 887_600,
+    ...(state === "empty" ? {} : { reset_5h: new Date(Date.now() + 2.4 * 36e5).toISOString() }),
+    over: state === "over", ...(state === "over" ? { window: "week" } : {}),
+  };
+  const usage = (range: string) => {
+    const n = range === "30d" ? 30 : range === "14d" ? 14 : 7, today = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+    const per = [212, 380, 96, 455, 610, 288, 40, 0, 520, 702, 395, 468, 233, 421];
+    const quiet = state === "empty";
+    const days = Array.from({ length: n }, (_, i) => {
+      const t = per[(per.length - n + i + 28) % per.length] * 1000;
+      return { day: new Date(today - (n - 1 - i) * 864e5).toISOString().slice(0, 10), claude: quiet ? 0 : Math.round(t * 0.86), codex: quiet ? 0 : Math.round(t * 0.14) };
+    });
+    const k = range === "today" ? 1 : range === "30d" ? 3.6 : range === "14d" ? 1.9 : 1;
+    const w = (x: number) => (quiet ? 0 : Math.round(x * (range === "today" ? 0.19 : k)));
+    const item = (o: Record<string, unknown>, tokens: number) => ({ title: "", ...o, tokens: w(tokens) });
+    const issue = [
+      item({ kind: "issue", title: "销售周报看板", repo: "linxiao/sales-dash", issue: 42, epic: "linxiao/sales-dash#40", epic_title: "十月报表", sessions: ["issue-42 · 林晓的 MacBook-Air"], models: [["Opus 5.5", 802000], ["Sonnet 5.5", 100000]], node: "mac-mini", login: "linxiao" }, 902000),
+      item({ kind: "issue", title: "活动报名页", repo: "linxiao/event-signup", issue: 7, sessions: ["scratch-14"], models: [["Opus 5.5", 610000], ["GPT-5.4 Codex", 334000]], node: "mac-mini", login: "linxiao" }, 944000),
+      item({ kind: "orch", title: "" }, 98000),
+      item({ kind: "none", title: "", sessions: ["对话"], models: [["Sonnet 5.5", 340000]] }, 340000),
+    ];
+    const total = issue.reduce((a, r) => a + (r.tokens as number), 0);
+    return {
+      range, since: new Date(today).toISOString(), limit, since_first: "2026-08-01T00:00:00Z",
+      today: quiet ? 0 : 421_800, today_prev: quiet ? 0 : 388_200, week: quiet ? 0 : 2_284_000, week_prev: quiet ? 0 : 1_962_000, total,
+      days, by_session: [],
+      models: quiet ? [] : [{ name: "Opus 5.5", provider: "claude", tokens: w(1_412_000) }, { name: "Sonnet 5.5", provider: "claude", tokens: w(538_000) }, { name: "GPT-5.4 Codex", provider: "codex", tokens: w(334_000) }],
+      work: quiet ? { issue: [{ kind: "none", title: "", tokens: 0 }], repo: [{ kind: "none", title: "", tokens: 0 }], epic: [{ kind: "none", title: "", tokens: 0 }] } : {
+        issue,
+        repo: [item({ kind: "repo", title: "linxiao/sales-dash", repo: "linxiao/sales-dash" }, 902000), item({ kind: "repo", title: "linxiao/event-signup", repo: "linxiao/event-signup" }, 944000), item({ kind: "none" }, 438000)],
+        epic: [item({ kind: "epic", title: "十月报表", epic: "linxiao/sales-dash#40", epic_title: "十月报表" }, 902000), item({ kind: "none" }, 1_382_000)],
+      },
+    };
+  };
   const items: Record<string, string>[] = state === "normal" ? [
     { t: "user", text: "把 sales-w41.xlsx 做成看板，按区域分，发给团队" },
     { t: "tool", id: "t1", name: "Read", summary: "Read · sales-w41.xlsx" },
@@ -62,7 +99,7 @@ export async function install(): Promise<string> {
     const p = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
     await new Promise((r) => setTimeout(r, 120));
     // 加载中: the page's own reads never answer, so its loading state stays on screen
-    if (state === "loading" && /^\/v1\/fleet\/(tasks|tickets)/.test(p)) return new Promise<Response>(() => {});
+    if (state === "loading" && (/^\/v1\/fleet\/(tasks|tickets)/.test(p) || (sc.page === "/usage" && p === "/v1/me/usage"))) return new Promise<Response>(() => {});
     const tk = /^\/v1\/fleet\/tickets\/([^/]+)\/([^/]+)\/(\d+)(\/comments)?$/.exec(p);
     if (tk) {
       const t = tickets.find((x) => x.repo === `${tk[1]}/${tk[2]}` && x.number === Number(tk[3]));
@@ -90,7 +127,9 @@ export async function install(): Promise<string> {
       case "/v1/fleet/tasks": return state === "error" ? ok({ error: "down" }, 502) : ok({ tasks, observed_at: new Date().toISOString() });
       case "/v1/fleet/tickets": return state === "error" ? ok({ error: "down" }, 502) : ok({ tickets: tickets.map((t) => ({ ...t, comments: (comments[`${t.repo}#${t.number}`] || []).length })) });
       case "/v1/me": return ok(me);
-      case "/v1/me/usage": return ok({ limit });
+      case "/v1/me/usage":
+        if (state === "error" && sc.page === "/usage") return ok({ error: "unavailable" }, 503);
+        return ok(usage(/[?&]range=([^&]+)/.exec(url)?.[1] || "7d"));
       case "/v1/fleet/devices": return ok({ mine: true, idle_sec: 0, devices: [{ fingerprint: "SHA256:a", name: "MacBook-Air", registered_at: "", last_used_at: "", renewals: 3 }], audit: [] });
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
       case "/v1/chat/conversation":

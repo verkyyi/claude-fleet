@@ -37,8 +37,9 @@ import (
 //   - a batch is the task's parent issue (IssueMeta); unknown = not in one.
 
 // meUsageRanges are the ranges ?range= takes, and how many UTC days each
-// spans (today = since this UTC midnight).
-var meUsageRanges = map[string]int{"today": 1, "7d": 7, "30d": 30}
+// spans (today = since this UTC midnight). 14d is the new console's chart of
+// the last two weeks (claude-fleet#3929); the old page never offers it.
+var meUsageRanges = map[string]int{"today": 1, "7d": 7, "14d": 14, "30d": 30}
 
 // Kinds of a where-it-went row.
 const (
@@ -156,7 +157,7 @@ func (s *Server) handleMeUsage(w http.ResponseWriter, r *http.Request) {
 		rng = "7d"
 	}
 	if _, ok := meUsageRanges[rng]; !ok {
-		httpError(w, http.StatusBadRequest, "range is today, 7d or 30d")
+		httpError(w, http.StatusBadRequest, "range is today, 7d, 14d or 30d")
 		return
 	}
 	// Always the viewer's own: no ?principal=, whoever asks. The operator's

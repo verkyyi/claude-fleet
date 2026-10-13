@@ -197,6 +197,10 @@ func TestMeUsage_Totals_Days_Models(t *testing.T) {
 	if u, _ := readMeUsage(t, h, bob, "?range=today"); u.Total != 1640 || len(u.Days) != 7 {
 		t.Errorf("range=today: total %d, %d days; want 1640 over a week of bars", u.Total, len(u.Days))
 	}
+	// the new console's two weeks of bars (claude-fleet#3929)
+	if u, raw := readMeUsage(t, h, bob, "?range=14d"); len(u.Days) != 14 || u.Days[13].Day != "2026-10-14" || u.Total < 2140 || u.Total > 9140 {
+		t.Errorf("range=14d: total %d, %d days; want 14 ending today: %s", u.Total, len(u.Days), raw)
+	}
 	if u, _ := readMeUsage(t, h, bob, "?range=30d"); u.Total != 9140 || len(u.Days) != 30 {
 		t.Errorf("range=30d: total %d, %d days; want 9140 over 30", u.Total, len(u.Days))
 	}
