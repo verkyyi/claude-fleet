@@ -662,6 +662,9 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(TryClaimPath, s.viewerOnly(http.HandlerFunc(s.handleTryClaim)))
 		mux.Handle(TryTimingPath, s.viewerOnly(http.HandlerFunc(s.handleTryTiming)))
 		mux.Handle(TryStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTryStats))))
+		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.
+		mux.Handle(AdminRequestsPath, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
+		mux.Handle(adminRequestsPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
 		// Its page (claude-fleet#3646): a signed-in person's, back here after
 		// the sign-in.
 		mux.Handle(ChatPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleChatPage))))

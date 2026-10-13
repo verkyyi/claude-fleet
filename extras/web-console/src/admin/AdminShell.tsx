@@ -2,6 +2,7 @@
 // grouped 人 · 机器 · 钱 · 发布 · 入口, nav.ts) and the page beside it; 回到我的
 // 页面 at its foot goes to /app (EPIC #3923 拍板 3). On a phone the column
 // folds behind a trigger (rule 9: opens and reads, no layout of its own).
+import * as React from "react";
 import { ArrowLeft } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -23,11 +25,29 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Logo } from "@/shared/Logo";
+import { api } from "./api";
 import { t } from "./i18n";
 import { NAV } from "./nav";
 
+// useCounts reads every item's count, again on each move between pages (a
+// decision closes its drawer, so the count after it is fresh).
+function useCounts(pathname: string): Record<string, number> {
+  const [counts, setCounts] = React.useState<Record<string, number>>({});
+  React.useEffect(() => {
+    for (const it of NAV.flatMap((g) => g.items)) {
+      if (!it.count) continue;
+      api<{ pending: number }>(it.count).then(
+        (c) => setCounts((m) => ({ ...m, [it.key]: c.pending || 0 })),
+        () => {},
+      );
+    }
+  }, [pathname]);
+  return counts;
+}
+
 export function AdminShell() {
   const { pathname } = useLocation();
+  const counts = useCounts(pathname);
   return (
     <TooltipProvider>
       <SidebarProvider>
@@ -65,6 +85,7 @@ export function AdminShell() {
                               </a>
                             )}
                           </SidebarMenuButton>
+                          {!!counts[it.key] && <SidebarMenuBadge className="font-mono text-clay">{counts[it.key]}</SidebarMenuBadge>}
                         </SidebarMenuItem>
                       );
                     })}

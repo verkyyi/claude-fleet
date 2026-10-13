@@ -19,6 +19,7 @@ import { AuditPage } from "./pages/Audit";
 import { FeedbackPage } from "./pages/Feedback";
 import { PeoplePage } from "./pages/People";
 import { SettingsPage } from "./pages/Settings";
+import { RequestsPage } from "./pages/Requests";
 
 const routes = [
   {
@@ -30,6 +31,8 @@ const routes = [
       { path: "people/:p", element: <PeoplePage /> },
       { path: "machines", element: <MachinesPage /> },
       { path: "machines/:host", element: <MachineDetailPage /> },
+      { path: "requests", element: <RequestsPage /> },
+      { path: "requests/:id", element: <RequestsPage /> },
       { path: "release", element: <ReleasePage /> },
       { path: "release/:run", element: <ReleasePage /> },
       { path: "pool", element: <PoolPage /> },

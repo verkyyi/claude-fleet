@@ -1,7 +1,7 @@
 // demo.ts — the prototype's hub (EPIC #3923 rule 14): the real reads' shapes
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
-import type { ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TeamUsage, TrainRun } from "./api";
+import type { AccessRequest, ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, TeamUsage, TrainRun } from "./api";
 import { demoMachines } from "./machines/demo";
 import { demoPool, poolSettings } from "./poolDemo";
 import { entryDemo } from "./demo-entry";
@@ -212,6 +212,26 @@ const usageOverview = (empty: boolean) => {
   return empty ? { ...overview, people: [], totals: { ...overview.totals, running: 0, sessions: 0 } } : overview;
 };
 
+// 申请 (claude-fleet#4052): the prototype's six requests
+const rq = (id: string, kind: string, subject: string, display: string, mins: number, x: Partial<AccessRequest> = {}): AccessRequest => ({
+  id, kind, subject, display, use: "", team: "", referrer: "", notify_channel: kind.startsWith("wechat") ? "wechat" : "email", notify_addr: "",
+  state: "pending", reason: "", cooldown_until: ZERO, decided_by: "", created_at: ago(mins), decided_at: ZERO, trial: false, ...x,
+});
+let requests: AccessRequest[] = [
+  rq("rq-r1", "wechat", "oU7Q", "林小满", 120, { use: "给 5 个人的运营小组做每周销售看板，现在每周一手工拼 Excel 要半天。", team: "杭州一家电商公司 · 运营", trial: true, person: "p:51aa" }),
+  rq("rq-r2", "github", "93817402", "zhouyu-dev", 300, { use: "想让会话帮我维护两个开源小工具的 issue 和文档，晚上睡觉时它接着跑。", team: "独立开发者", notify_addr: "zhouyu@example.com" }),
+  rq("rq-r3", "email", "chen.ran@qq.com", "chen.ran@qq.com", 60 * 26, { use: "试试看能不能帮我整理论文的参考文献。", notify_addr: "chen.ran@qq.com" }),
+  rq("rq-r4", "wechat", "oK2m", "何以宁", 60 * 48, { use: "做活动落地页和每周的投放周报；同组的林思远在用，推荐我来。", team: "24好玩 · 市场部", referrer: "林思远（成员）" }),
+  rq("rq-r5", "github", "5521", "tomlee", 60 * 30, { use: "Evaluate it for a 3-person design team.", team: "Acme Studio", state: "approved", decided_by: "gh:1001", decided_at: ago(60 * 27) }),
+  rq("rq-r6", "wechat", "oZ9c", "阿杰", 60 * 24 * 5, { use: "看看这个东西到底能干什么用。", state: "rejected", reason: "用途写得还不够具体，可以补充你打算用它做什么后再申请。", cooldown_until: ahead(25), decided_by: "gh:1001", decided_at: ago(60 * 24 * 4) }),
+];
+const requestDetail = (r: AccessRequest): RequestDetail => ({
+  ...r,
+  signins: { count: r.trial ? 3 : 1, first: new Date(Date.parse(r.created_at) - 2 * 60_000).toISOString(), last: r.created_at },
+  ...(r.trial ? { trial_of: { state: "reclaimed", started_at: new Date(Date.parse(r.created_at) + 2 * 60_000).toISOString(), minutes: 15, messages: 14, ended: "reclaimed" }, convo_until: ahead(1) } : {}),
+  earlier: [],
+});
+
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 const scenario = () => (window as any).__DEMO_SCENARIO || new URLSearchParams(location.search).get("demo") || "";
 
@@ -242,9 +262,31 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
   if (machines !== undefined) return machines;
   const entry = entryDemo(method, u, body);
   if (entry !== undefined) return entry;
+  if (u.pathname.startsWith("/v1/admin/requests")) {
+    if (u.pathname === "/v1/admin/requests") {
+      const list = empty ? [] : requests;
+      const pending = list.filter((r) => r.state === "pending");
+      if (u.searchParams.get("count") === "1") return { pending: pending.length };
+      const decided = list.filter((r) => r.state === "approved" || r.state === "rejected");
+      return {
+        requests: list, pending: pending.length, oldest_pending: pending.map((r) => r.created_at).sort()[0],
+        decided_7d: decided.length + 7, approved_7d: decided.filter((r) => r.state === "approved").length + 5, cooldown_days: 30,
+      };
+    }
+    const [id, verb] = u.pathname.slice("/v1/admin/requests/".length).split("/");
+    const r = requests.find((x) => x.id === id);
+    if (!r) throw Object.assign(new Error("no such request"), { status: 404 });
+    if (verb === "approve" || verb === "reject") {
+      const done: AccessRequest = { ...r, state: verb === "approve" ? "approved" : "rejected", decided_by: "gh:1001", decided_at: new Date().toISOString(),
+        reason: verb === "reject" ? String(body.reason || "") : "", cooldown_until: verb === "reject" && body.cooldown_days ? ahead(Number(body.cooldown_days)) : ZERO };
+      requests = requests.map((x) => (x.id === id ? done : x));
+      return requestDetail(done);
+    }
+    return requestDetail(r);
+  }
   switch (`${method} ${u.pathname}`) {
     case "GET /v1/me":
-      return { role: "admin", person: "gh:1001", name: "周宁", login: "zhouning" };
+      return { role: "admin", person: "gh:1001", name: "周宁", login: "zhouning", ...(scenario() === "noreach" ? { reach: { wechat: false } } : {}) };
     case "GET /v1/fleet/users":
       return { users: empty ? users.slice(0, 1) : users, admins: [{ login: "zhouning", github_id: 1001, pinned: true, logins: [] }] };
     case "POST /v1/fleet/users": {

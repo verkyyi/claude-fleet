@@ -414,3 +414,46 @@ func (s *Store) HubAuditLog(limit int) ([]HubAuditEntry, error) {
 	}
 	return out, rows.Err()
 }
+
+// HubSignins is the sign-in rows (action "signin") one of actors made or one
+// of targets names, newest first, at most limit (≤ 0 = 50): what an admin
+// reads as 登录记录 beside a person the list does not name yet — a refused
+// sign-in is audited under the way it came by, not a principal
+// (claude-fleet#4052).
+func (s *Store) HubSignins(actors, targets []string, limit int) ([]HubAuditEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var or []string
+	args := []any{}
+	for _, a := range actors {
+		if a != "" {
+			or, args = append(or, "actor = ?"), append(args, a)
+		}
+	}
+	for _, t := range targets {
+		if t != "" {
+			or, args = append(or, "target = ?"), append(args, t)
+		}
+	}
+	out := []HubAuditEntry{}
+	if len(or) == 0 {
+		return out, nil
+	}
+	rows, err := s.read.Query(`SELECT id, created, actor, action, target, outcome, detail FROM hub_audit
+		WHERE action = 'signin' AND (`+strings.Join(or, " OR ")+`) ORDER BY id DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e HubAuditEntry
+		var created string
+		if err := rows.Scan(&e.ID, &created, &e.Actor, &e.Action, &e.Target, &e.Outcome, &e.Detail); err != nil {
+			return nil, err
+		}
+		e.Created, _ = time.Parse(rfc, created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

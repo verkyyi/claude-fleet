@@ -3,14 +3,22 @@
 // (`to`); one still on the old console links to its old address (`href`) until
 // its own ticket (C11–C15) lands it and swaps the line to `to`.
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, CreditCard, MessageSquareWarning, Rocket, ScrollText, Server, Settings, Users } from "lucide-react";
+import { BarChart3, CreditCard, Inbox, MessageSquareWarning, Rocket, ScrollText, Server, Settings, Users } from "lucide-react";
 import type { MsgKey } from "./i18n";
 
-export type NavItem = { key: MsgKey; icon: LucideIcon; to?: string; href?: string };
+// count: a read answering {pending: n}, drawn beside the item when n > 0
+export type NavItem = { key: MsgKey; icon: LucideIcon; to?: string; href?: string; count?: string };
 export type NavGroup = { key: MsgKey; items: NavItem[] };
 
 export const NAV: NavGroup[] = [
-  { key: "nav.people", items: [{ key: "page.people", icon: Users, to: "/people" }] },
+  {
+    key: "nav.people",
+    items: [
+      { key: "page.people", icon: Users, to: "/people" },
+      // 申请 (claude-fleet#4052, EPIC #4048 C4), with how many wait
+      { key: "page.requests", icon: Inbox, to: "/requests", count: "/v1/admin/requests?state=pending&count=1" },
+    ],
+  },
   { key: "nav.machines", items: [{ key: "page.machines", icon: Server, to: "/machines" }] },
   {
     key: "nav.money",

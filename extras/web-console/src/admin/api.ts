@@ -88,7 +88,8 @@ export type PersonBudget = {
 
 export type NodeMachine = { hostname?: string; spare?: number; spare_target?: number; logins_used?: number; login_cap?: number };
 
-export type Me = { role?: string; person?: string; name?: string; login?: string };
+// reach (claude-fleet#4057 C9): absent while the official account road is off
+export type Me = { role?: string; person?: string; name?: string; login?: string; reach?: { wechat: boolean } };
 
 // cred-policy (claude-fleet#3713): who may use which subscription.
 export type PolicyEntry = { id: string; allow: string[]; all?: boolean; error?: string };
@@ -265,3 +266,39 @@ export type Feedback = {
 };
 export type FeedbackPage = { feedback: Feedback[]; next?: string; counts?: Record<string, number> };
 export type FeedbackDetail = Feedback & { endpoint_id?: string; ctx?: Record<string, string>; attach?: { name: string; size: number; url: string }[] };
+
+// 申请 (GET /v1/admin/requests, claude-fleet#4052): what a person the list
+// does not name asked for at /apply, and the admin's decision.
+export type AccessRequest = {
+  id: string;
+  kind: string; // github · email · wechat · wechat-mp
+  subject: string;
+  display: string;
+  use: string;
+  team: string;
+  referrer: string;
+  notify_channel: "wechat" | "email" | "page" | string;
+  notify_addr: string;
+  state: "pending" | "approved" | "rejected" | "withdrawn";
+  reason: string;
+  cooldown_until: string;
+  decided_by: string;
+  created_at: string;
+  decided_at: string;
+  person?: string;
+  trial: boolean;
+};
+export type RequestsList = {
+  requests: AccessRequest[];
+  pending: number;
+  oldest_pending?: string;
+  decided_7d: number;
+  approved_7d: number;
+  cooldown_days: number;
+};
+export type RequestDetail = AccessRequest & {
+  signins: { count: number; first?: string; last?: string };
+  trial_of?: { state: string; started_at: string; placed_at?: string; last_seen?: string; reclaimed_at?: string; minutes: number; messages?: number; ended?: string };
+  convo_until?: string;
+  earlier: AccessRequest[];
+};

@@ -168,8 +168,9 @@ func TestRouteTable_UserCookieOnEveryRoute(t *testing.T) {
 		case accessAdmin:
 			admins++
 			want := http.StatusForbidden
-			// the signing keys' read hides itself too (claude-fleet#3937)
-			if isAppPage(path) || isAdminPath(path) || path == ReleaseKeysPath {
+			// the signing keys' read hides itself too (claude-fleet#3937), and the
+			// requests' (claude-fleet#4052)
+			if isAppPage(path) || isAdminPath(path) || path == ReleaseKeysPath || strings.HasPrefix(path, AdminRequestsPath) {
 				want = http.StatusNotFound
 			}
 			if code, b := rolesGet(t, h, user, path); code != want {
