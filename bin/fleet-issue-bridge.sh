@@ -112,12 +112,12 @@ case " $* " in *' --poll '*) [ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/flee
   fleet_daemon_stamp_tick issue-bridge "$BIN/.."; } ;; esac
 
 . "$BIN/fleet-lib.sh"
-# One account, one set of background reads (issue #1271) — guarded: without the
+# Background reads shared per repo (issues #1271, #3529) — guarded: without the
 # gh lib every login polls, as it always has.
 # shellcheck source=/dev/null
 _FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
-command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
+command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
 
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 STATE="${FLEET_ISSUE_BRIDGE_STATE_DIR:-$HOME/.config/claude-fleet/issue-bridge}"
@@ -702,21 +702,22 @@ poll_repo() {
   return 0
 }
 
-# Shared listing (issue #1271): the leader writes `comments` = a `#since <iso>`
-# line + the TSV rows it listed from that watermark; a follower whose watermark is
-# at or past that since takes the rows (sets $rows). rc 1 = no usable copy.
-bridge_publish_rows() {  # <slug> <since> <rows>
+# Shared listing (issues #1271, #3529): whoever lists a repo's comments writes
+# `comments` = a `#since <iso>` line + the TSV rows it listed from that watermark;
+# another login whose watermark is at or past that since takes the rows (sets
+# $rows) — only from a login it trusts (FLEET_GH_SHARE_TRUST). rc 1 = no usable copy.
+bridge_publish_rows() {  # <repo> <since> <rows>
   local d
-  d=$(mktemp -d "${TMPDIR:-/tmp}/bridge-pub.XXXXXX") || return 0
+  d=$(mktemp -d "${TMPDIR:-/tmp}/bridge-pub.XXXXXX") || { fleet_gh_share_put "$1" comments 0 /nonexistent comments; return 0; }
   { printf '#since %s\n' "$2"; [ -n "$3" ] && printf '%s\n' "$3"; } > "$d/comments"
-  fleet_gh_publish "$1" "$d" comments
+  fleet_gh_share_put "$1" comments 1 "$d" comments
   rm -rf "$d"
   return 0
 }
-bridge_adopt_rows() {  # <slug> <since>
+bridge_adopt_rows() {  # <repo> <since>
   local d head ls
   d=$(mktemp -d "${TMPDIR:-/tmp}/bridge-adopt.XXXXXX") || return 1
-  if ! fleet_gh_adopt "$1" "$(_fleet_gh_stale_secs)" "$d" comments || [ ! -f "$d/comments" ]; then
+  if ! fleet_gh_share_get "$1" comments $((BRIDGE_INT * 2)) "$d" comments || [ ! -f "$d/comments" ]; then
     rm -rf "$d"; return 1
   fi
   IFS= read -r head < "$d/comments"
@@ -757,17 +758,18 @@ poll_worker_channel() {
     rows=$(printf '%s\n' "$rows" | sed '1{/^#max /d;}')
   elif ! command -v gh >/dev/null 2>&1; then
     log "$slug: gh not on PATH — nothing to poll"; return 0
-  # A follower (issue #1271) reads the leader's listing instead — when it is fresh
-  # and began at or before OUR watermark, so it covers everything we have not seen
-  # (the seen-set skips the overlap). Else, and for the leader, list as before.
-  elif ! { fleet_gh_share_on && ! fleet_gh_should_fetch && bridge_adopt_rows "$slug" "$since"; }; then
+  # Shared (issue #3529): a trusted login's fresh listing that began at or before
+  # OUR watermark covers everything we have not seen (the seen-set skips the
+  # overlap). Else list as before — and publish it.
+  elif ! { fleet_gh_share_on && bridge_adopt_rows "$repo" "$since"; }; then
     # shellcheck disable=SC2016  # $-vars below are jq bindings, not shell
     rows=$(gh api -H "Accept: application/vnd.github+json" \
       "repos/$repo/issues/comments?since=$since&per_page=100&sort=updated&direction=asc" \
       --jq '.[] | [ (.id|tostring), .author_association, (.user.login // ""),
                     (.issue_url|split("/")|last), .updated_at, (.body|@base64) ] | @tsv' \
-      2>/dev/null) || { log "$slug: gh api failed — skip this tick"; return 0; }
-    fleet_gh_share_on && fleet_gh_should_fetch && bridge_publish_rows "$slug" "$since" "$rows"
+      2>/dev/null) || { fleet_gh_share_put "$repo" comments 0 /nonexistent comments
+                        log "$slug: gh api failed — skip this tick"; return 0; }
+    fleet_gh_share_on && bridge_publish_rows "$repo" "$since" "$rows"
   fi
 
   local cid assoc author num updated b64 body out rc

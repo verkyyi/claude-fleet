@@ -302,6 +302,7 @@ fcfg_label_i18n() {
     FLEET_ISSUE_TTL) printf 'Issue 缓存有效期' ;;
     FLEET_GH_TTL) printf 'GitHub 缓存有效期' ;;
     FLEET_GH_SHARE) printf '多个登录共享后台查询' ;;
+    FLEET_GH_SHARE_TRUST) printf '共享查询信任哪些登录' ;;
     FLEET_COLLECT_DEADLINE) printf 'Collector tick 截止时间' ;;
     FLEET_COLLECT_GIT_BUDGET) printf 'Collector git 预算' ;;
     FLEET_COLLECT_GIT_SLOW) printf 'Collector git 慢日志' ;;
