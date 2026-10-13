@@ -53,7 +53,8 @@ case "$verb" in
       *:*sessions.snapshot*) [ -f "$FAKE/stopped" ] && printf 'fid-1 probe\nfid-2 work\n' ;;
       *:*list-clients*) echo "${FAKE_ATTACHED:-0}" ;;
       *:*"login stop"*) touch "$FAKE/stopped"; echo "stopped 24acme (UID 10006); home /home/24acme kept" ;;
-      *-seed:mkdir*|*-seed:rm\ *) : ;;
+      *-seed:mkdir*) : ;;
+      *-seed:rm\ *) set -- ${all//\/data\/homes/$FAKE/dst}; "$@" ;;
       # the copy's two halves: the REAL python, run here, its paths in the sandbox
       *:"python3 -")
         side=recv; case "$target" in *-seed) ;; *) side=send ;; esac
@@ -69,8 +70,11 @@ open(sys.argv[1] + "/" + sys.argv[2] + ".py", "w").write(s)' "$FAKE" "$side" "${
         python3 "$FAKE/$side.py" ;;
       *:cat\ /tmp/.fleet-move-send.rc) cat "$FAKE/send.rc" ;;
       *:cat\ /data/.fleet-move-recv.rc) cat "$FAKE/recv.rc" ;;
-      *-seed:*"find \"\$1\""*) echo 7 ;;
-      node-a-0:*find*) echo 10 ;;
+      # the copy's count: the real find, run on the sandbox's two trees
+      *:"sh -c cd /home && find"*|*-seed:"sh -c cd /data/homes && find"*)
+        shift 2; scr=$1; shift
+        scr=${scr/cd \/home /cd \"$FAKE/src\" }; scr=${scr/cd \/data\/homes /cd \"$FAKE/dst\" }
+        sh -c "$scr" "$@" ;;
       deploy/*:*list-windows*) if [ -n "${FAKE_WINS:-}" ]; then printf '%b\n' "$FAKE_WINS"; else printf '%s\n' ${FAKE_BACK:-fid-1 fid-2}; fi ;;
       *) echo "unexpected exec $target: $all" >&2; exit 9 ;;
     esac ;;
@@ -150,6 +154,11 @@ ok
 rm -rf "$T/state" "$T/assigned" "$T/seeder" "$T/stopped" "$T/src" "$T/dst"; : > "$LOG"
 mkdir -p "$T/src/24acme/.codex/tmp" "$T/src/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1" "$T/dst"
 echo 'moves with the home' > "$T/src/24acme/work.txt"
+# the three files the copy clears on the pod (the source's own enrolment)
+mkdir -p "$T/src/24acme/.config/claude-fleet"
+for f in node.env node.pub.env credsep.json; do echo x > "$T/src/24acme/.config/claude-fleet/$f"; done
+# a live socket (a peerlink's): tar never carries one, so the count must not either
+python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$T/src/24acme/peer.sock"
 echo tmp > "$T/src/24acme/.codex/tmp/x"; echo tmp > "$T/src/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1/y"
 mv all 24acme > "$T/out" 2>&1 || fail "C: all failed: $(tail -5 "$T/out")"
 POD=$(cat "$T/state/24acme/pod")
