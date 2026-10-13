@@ -118,7 +118,7 @@ assert sidebar.fold_now(frows, 'wid:mac-a/x', 'collapse', '@9', fcache)[1] is No
 # bar's, for the highlighted row (detail_line → @fleet_hint_name).
 r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'mac-a', '#1532', '#1552✓', '45%', '', '', 'merged']))
 assert len(r12) == sidebar.ROW_FIELDS == 19 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902) · 17-18: ask (#2538) · 19: ctx (#2717, #2963)
-want = 'issue-1532 · #1532 · @mac-a · #1552✓ · 合并后回收 · 45%'
+want = 'issue-1532 · #1532 · mac-a · #1552✓ · 合并后回收 · 45%'   # the machine plain words (#3960)
 assert sidebar.detail_line(r12) == want, repr(sidebar.detail_line(r12))
 assert sidebar.bar_hint([r12], '@1', '@1', 30)[1] == want.replace('#', '##'), 'the bar: # doubled for tmux'
 assert sidebar.bar_hint([['hdr', 'o/a', '', 'a (1)', ' '], r12], 'hdr:o/a', '@1', 30)[1] == '', 'a heading: no detail'
@@ -166,6 +166,28 @@ assert sidebar.detail_line(titled).startswith('托管机器上旧版 fleet host 
 broken = r12[:12] + ['broken'] + r12[13:]
 assert sidebar.row_glyph(broken) == ('✗', 'broken') and sidebar.row_glyph(r12) == ('·', '')
 assert sidebar.row_glyph(r12[:8] + ['mac-a!'] + r12[9:]) == ('⊘', 'lost')
+# This machine's row and another's paint alike (issue #3960): same state ⇒ the
+# text attr and the glyph attr are cell for cell the same, online, lost (`!`) or
+# over the shell's own connection (`~`) — a lost one differs only in its ⊘
+# glyph, never a dimmed row; the bar names the machine as plain words.
+_cp = sidebar.curses.color_pair
+sidebar.curses.color_pair = lambda n: n << 8
+try:
+    for st, gl in (('working', '·'), ('done', '✓'), ('needs', '!'), ('idle', '○')):
+        for raised in (False, True):
+            for rich in (False, True):
+                paint = lambda node: sidebar.row_attrs(r12[:1] + [st, gl] + r12[3:8] + [node] + r12[9:], raised, rich, 5 << 8, 9 << 8)
+                here = paint('')
+                for node in ('mac-b', 'mac-a', 'mac-a!', 'mac-a~'):
+                    got = paint(node)
+                    assert got[:2] == here[:2], (st, raised, rich, node, got, here)
+                    assert got[2] == (sidebar.LOST_GLYPH if node.endswith('!') else here[2]), (node, got)
+    assert sidebar.row_attrs(r12[:1] + ['epicstale'] + r12[2:], False, True, 5 << 8, 9 << 8)[0] == 9 << 8, 'a batch nobody drives still dims'
+finally:
+    sidebar.curses.color_pair = _cp
+for node in ('mac-b', 'mac-a!', 'mac-a~'):
+    assert ' · ' + node.rstrip('!~') + ' · ' in sidebar.detail_line(r12[:8] + [node] + r12[9:]), node
+    assert '@' not in sidebar.detail_line(r12[:8] + [node] + r12[9:]) and '本机' not in sidebar.detail_line(r12[:8] + [node] + r12[9:])
 assert sidebar.detail_line(broken).endswith('· 会坏·需重开'), sidebar.detail_line(broken)
 # A warm start whose issue never got filed (issue #2235): field 16 `failed` — a red
 # ∅ in the glyph's cell, 单子没建上 on the bar; a broken configuration still wins.

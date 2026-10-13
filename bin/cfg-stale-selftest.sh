@@ -120,8 +120,8 @@ spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.
 assert m.ROW_FIELDS == 19   # 14: title (#1921), 15: reap (#1902), 16: backfill (#2235), 17-18: ask (#2538), 19: ctx (#2717, #2963)
 row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
 assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
-assert m.detail_line(row + ["stale"]) == "worker-one · @mac-a · 配置旧", m.detail_line(row + ["stale"])
-assert m.detail_line(row + ["ok"]) == m.detail_line(row) == "worker-one · @mac-a", m.detail_line(row + ["ok"])
+assert m.detail_line(row + ["stale"]) == "worker-one · mac-a · 配置旧", m.detail_line(row + ["stale"])
+assert m.detail_line(row + ["ok"]) == m.detail_line(row) == "worker-one · mac-a", m.detail_line(row + ["ok"])
 local = row[:8] + [""] + row[9:]
 assert m.detail_line(local + ["stale"]) == "worker-one · 配置旧"   # a local row: no @ mark, still 配置旧
 assert m.row_glyph(row + ["stale"]) == ("✓", ""), "stale is not urgent: the row keeps its glyph"

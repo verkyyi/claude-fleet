@@ -1746,8 +1746,9 @@ HERE = here_names()
 
 
 def machine_tag(node):
-    """The machine a session runs on, as the bar names it (issue #1780, moved off
-    the row by #2305): `@mac-a`; `@本机` when that is the computer this list runs
+    """The machine a session runs on, as the stage's top line names it
+    (bar_record; the list's bar names it as plain words since issue #3960):
+    `@mac-a`; `@本机` when that is the computer this list runs
     on; `@mac-a!` once that machine is lost; `@mac-b~` when the row came over the
     shell's own connection while the hub is silent (#1488). An empty field 9 —
     this machine's own row on a node's list — has none."""
@@ -1853,14 +1854,15 @@ def detail_line(row):
     """Everything the row no longer carries, for the bar (issue #2305, on
     #1328's whole-name line): its whole name — the issue's full title when the
     row has one (field 13), since the row shows only its short use (issue
-    #2545) — · #issue · @machine · PR · reap
+    #2545) — · #issue · machine · PR · reap
     policy · ctx% · the configuration word · 单子没建上 (#2235) — the empty ones
-    left out. A needs row that says what it asks leads with the whole of it
+    left out. The machine is plain words, no `@` / `!` / `~` and no 本机 for
+    this one (issue #3960): a row here and a row elsewhere read alike. A needs row that says what it asks leads with the whole of it
     (`在问你（权限）：…`, issue #2538). Which `!`
     it is and why a ↻ waits (row[7]) live in the worker pane's header,
     @title_info (issue #1377)."""
     field = lambda i: row[i] if len(row) > i else ""
-    parts = [ask_line(row), field(13).strip() or row[3], field(9), machine_tag(field(8)), field(10),
+    parts = [ask_line(row), field(13).strip() or row[3], field(9), field(8).rstrip("!~"), field(10),
              reap_tag(field(14)), field(11), cfg_tag(field(12)),
              tr("sidebar_backfill_failed") if field(15) == "failed" else ""]
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
@@ -2611,9 +2613,10 @@ def row_fields(line):
     tree field (5), a session row's carries the badge / depth / detail and, last,
     its machine — empty for a local row, `mac-a` for a row on another machine, `mac-a!`
     when that machine is lost (issue #1475), `mac-b~` when the row came over the
-    shell's own connection to it while the hub is silent (issue #1488). The view
-    ends the row in it as an `@` mark (`machine_tag`, issue #1780); `!` dims the
-    row too, and the menu titles it."""
+    shell's own connection to it while the hub is silent (issue #1488). The bar
+    names the machine as plain words, this machine's the same as another's
+    (detail_line, issue #3960); `!` takes the glyph's cell (`⊘`, row_glyph) and
+    never dims the row, and the menu titles it."""
     parts = line.split(US, ROW_FIELDS - 1)
     return parts + [""] * (ROW_FIELDS - len(parts))
 
@@ -2782,6 +2785,34 @@ PAIRS = {PAIR_SEL: ("PAL_FG", "PAL_SEL"), PAIR_TOAST: ("PAL_RED", None),
 for _state, _pair in STATE_PAIR.items():
     PAIRS[_pair] = (STATE_COLOR[_state], None)
     PAIRS[_pair + SEL_GLYPH] = (STATE_COLOR[_state], "PAL_SEL")
+
+
+def row_attrs(row, raised, rich, sel_attr, dim_attr):
+    """(text attr, glyph attr, glyph) for a session row. The text is one colour;
+    the glyph alone says the state (issue #1622). Where the session runs never
+    changes either (issue #3960): this machine's row and another's — online,
+    lost or reached over the shell's own connection — paint alike, and a lost
+    machine says so only in the glyph's cell (`⊘`, #2305). A batch nobody
+    drives (`epicstale`, #1916) is the one row the text dims. An urgent
+    condition takes the glyph's own cell: a red `✗` for a session that will
+    break on this install (#2076), `∅` for one whose issue never got filed
+    (#2235). The words — the machine, 配置旧 / 会坏·需重开, the reap policy —
+    are the bar's (detail_line)."""
+    state = row[1]
+    attr = sel_attr if raised else curses.color_pair(PAIR_FG)
+    stale = state == "epicstale" and not raised
+    if stale:
+        attr = dim_attr
+    pair = STATE_PAIR.get(state)
+    glyph_attr = (curses.color_pair(pair + SEL_GLYPH if rich else pair) | (0 if rich else curses.A_REVERSE)
+                  if raised else curses.color_pair(pair)) if pair else attr
+    if stale:
+        glyph_attr |= curses.A_DIM
+    glyph, why = row_glyph(row)
+    if why in ("broken", "backfill"):
+        glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised and rich else PAIR_BROKEN) | curses.A_BOLD \
+            | (curses.A_REVERSE if raised and not rich else 0)
+    return attr, glyph_attr, glyph
 
 
 def palette_colors(table, colors):
@@ -3483,25 +3514,8 @@ def ui(screen, session, worker, lock):
                 else:
                     put(y, heading_text(row, False, many), dim_attr | curses.A_BOLD)
                 continue
-            # The text is one colour; the glyph alone says the state (issue #1622).
             raised = wid == current_row or wid == selected
-            attr = sel_attr if raised else curses.color_pair(PAIR_FG)
-            lost = (node.endswith("!") or state == "epicstale") and not raised
-            if lost:
-                attr = dim_attr  # a lost machine's row (issue #1475); a batch nobody drives (#1916)
-            pair = STATE_PAIR.get(state)
-            glyph_attr = (curses.color_pair(pair + SEL_GLYPH if rich else pair) | (0 if rich else curses.A_REVERSE)
-                          if raised else curses.color_pair(pair)) if pair else attr
-            if lost:
-                glyph_attr |= curses.A_DIM
-            # An urgent condition takes the glyph's own cell (issue #2305): `⊘`
-            # on a lost machine's row (dim, the row is), a red `✗` for a session
-            # that will break on this install (#2076). The words — the machine,
-            # 配置旧 / 会坏·需重开, the reap policy — are the bar's (detail_line).
-            glyph, why = row_glyph(row)
-            if why in ("broken", "backfill"):
-                glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised and rich else PAIR_BROKEN) | curses.A_BOLD \
-                    | (curses.A_REVERSE if raised and not rich else 0)
+            attr, glyph_attr, glyph = row_attrs(row, raised, rich, sel_attr, dim_attr)
             marker = "▶" if wid == current_row else "›" if wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every

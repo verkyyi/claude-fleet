@@ -1043,7 +1043,7 @@ def cmd_show(a):
         if k.get('remote_state'):       # the machine's own word, not `remote` / `gone · mac-a` (#1607)
             live = '%s %s' % (k['remote_node'], k['remote_state'])
         elif k.get('node') and not k['live']:
-            live += (' ↗' if d else ' · ') + k['node']
+            live += ' · ' + k['node']   # the machine as plain words, placed or not (#3960)
         title = ('%s %s' % (k['task'], k['title'])).strip() if k.get('task') else k['title']
         print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep.strip(), title))
     print(text)
