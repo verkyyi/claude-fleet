@@ -714,7 +714,7 @@ drill_login_remove_managed() {
   _forget_unset
   WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"
 }
-# linux-remove-task-running (#3379): `login remove verkyyi --host fleet-linux-0`
+# linux-remove-task-running (#3379): `login remove <X> --host <linux machine>`
 # failed at [1c] — the daemon dropped the login, but its fleet-base-sync.sh sat
 # in a `git fetch` hung on the network, and `account forget` only WAITED
 # FLEET_NODE_RELEASE_WAIT (20 s) for it, then exit 1 «the daemon has not dropped
