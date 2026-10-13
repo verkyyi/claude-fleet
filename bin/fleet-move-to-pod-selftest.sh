@@ -16,6 +16,9 @@
 #   F. the source machine has no subscription allow-list: open refuses (3)
 #      before the login exists; --allow-list-none moves anyway. In C the list
 #      is set AND read back before the assign
+#      The pinned list is read AFTER stop: check sees 0, the stop's snapshot save 2.
+#   G. the copy is pod to pod (the real python halves, run here): a half that
+#      sends the wrong token gets nothing and the phase exits 1
 #   D. a pinned session missing on the pod: verify exits 1 naming it
 #   E. retire after verify closes the SOURCE login with --delete
 set -uo pipefail
@@ -47,12 +50,25 @@ case "$verb" in
       *:*linux-tenants/*) echo '{"gid": 10006, "home": "/home/24acme", "login": "24acme", "op": "fda2", "since": 1, "uid": 10006}' ;;
       *:du\ *) printf '3.8G\t/home/24acme\n' ;;
       *:find\ /home/*) : ;;
-      *:*sessions.snapshot*) printf 'fid-1 probe\nfid-2 work\n' ;;
+      *:*sessions.snapshot*) [ -f "$FAKE/stopped" ] && printf 'fid-1 probe\nfid-2 work\n' ;;
       *:*list-clients*) echo "${FAKE_ATTACHED:-0}" ;;
-      *:*"login stop"*) echo "stopped 24acme (UID 10006); home /home/24acme kept" ;;
+      *:*"login stop"*) touch "$FAKE/stopped"; echo "stopped 24acme (UID 10006); home /home/24acme kept" ;;
       *-seed:mkdir*|*-seed:rm\ *) : ;;
-      *:tar\ -C\ /home*) printf 'TARBYTES' ;;
-      *-seed:tar*) cat > /dev/null ;;
+      # the copy's two halves: the REAL python, run here, its paths in the sandbox
+      *:"python3 -")
+        side=recv; case "$target" in *-seed) ;; *) side=send ;; esac
+        python3 -c '
+import sys
+s = sys.stdin.read()
+for a, b in (("\"/home\"", "\"%s/src\"" % sys.argv[1]), ("\"/data/homes\"", "\"%s/dst\"" % sys.argv[1]),
+             ("/tmp/.fleet-move-send.rc", sys.argv[1] + "/send.rc"), ("/data/.fleet-move-recv.rc", sys.argv[1] + "/recv.rc")):
+    s = s.replace(a, b)
+if sys.argv[2] == "recv" and sys.argv[3]:
+    s = s.replace("TOKEN=b\"", "TOKEN=b\"x", 1)
+open(sys.argv[1] + "/" + sys.argv[2] + ".py", "w").write(s)' "$FAKE" "$side" "${FAKE_BADTOKEN:-}"
+        python3 "$FAKE/$side.py" ;;
+      *:cat\ /tmp/.fleet-move-send.rc) cat "$FAKE/send.rc" ;;
+      *:cat\ /data/.fleet-move-recv.rc) cat "$FAKE/recv.rc" ;;
       *-seed:*"find \"\$1\""*) echo 7 ;;
       node-a-0:*find*) echo 10 ;;
       deploy/*:*list-windows*) printf '%s\n' ${FAKE_BACK:-fid-1 fid-2} ;;
@@ -64,6 +80,7 @@ case "$verb" in
       secret) exit 1 ;;
       deploy) case "$*" in *readyReplicas*) echo 1 ;; *) exit 1 ;; esac ;;
       pod/*) [ -f "$FAKE/seeder" ] ;;
+      pod) echo 127.0.0.1 ;;   # -o jsonpath={.status.podIP}
     esac ;;
   create) cat > "$FAKE/secret.stdin"; touch "$FAKE/seeder" ;;
   wait|delete) : ;;
@@ -119,7 +136,10 @@ grep -q 'login stop' "$LOG" && fail 'B: login stop ran while someone was attache
 ok
 
 # ── C. all
-rm -rf "$T/state" "$T/assigned" "$T/seeder"; : > "$LOG"
+rm -rf "$T/state" "$T/assigned" "$T/seeder" "$T/stopped" "$T/src" "$T/dst"; : > "$LOG"
+mkdir -p "$T/src/24acme/.codex/tmp" "$T/src/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1" "$T/dst"
+echo 'moves with the home' > "$T/src/24acme/work.txt"
+echo tmp > "$T/src/24acme/.codex/tmp/x"; echo tmp > "$T/src/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1/y"
 mv all 24acme > "$T/out" 2>&1 || fail "C: all failed: $(tail -5 "$T/out")"
 POD=$(cat "$T/state/24acme/pod")
 [[ "$POD" =~ ^u-[a-z0-9]{10}$ ]] || fail "C: picked pod name '$POD'"
@@ -136,7 +156,14 @@ grep -q 'tok-xyz' "$LOG" && fail 'C: the operator token is in an argv'
 grep -q 'tok-xyz' "$T/curl.stdin" || fail 'C: the token did not go to curl on stdin'
 grep -q "rm -f /data/homes/24acme/.config/claude-fleet/node.env .*node.pub.env .*credsep.json" "$LOG" ||
   fail 'C: the shared-node files were not cleared on the copy'
-grep -q -- "--exclude=./24acme/.codex/tmp" "$LOG" || fail 'C: the copy took .codex/tmp'
+[ "$(cat "$T/dst/24acme/work.txt" 2>/dev/null)" = 'moves with the home' ] || fail 'C: the home did not arrive on the pod disk'
+[ ! -e "$T/dst/24acme/.codex/tmp/x" ] && [ ! -e "$T/dst/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1/y" ] ||
+  fail 'C: the copy took the throwaway trees'
+grep -q 'kubectl .* -- tar ' "$LOG" && fail 'C: a tar ran through kubectl exec — the home went through this machine'
+tokline=$(grep -h '^TOKEN=' "$T/send.py") && tok=${tokline#TOKEN=b\"} && tok=${tok%\"}
+[ "${#tok}" = 32 ] || fail "C: no one-time token in the source half ($tokline)"
+grep -q "$tok" "$LOG" && fail 'C: the copy token is in an argv'
+grep -rq "$tok" "$T/state" && fail 'C: the copy token was written to the state dir'
 grep -q "hubadm .*accounts assign gh:7 --host $POD --login 24acme --own-name" "$LOG" || fail 'C: no assign --own-name on the pod'
 grep -q "hubadm .*set fleet.cred_allow.node.$POD codex" "$LOG" || fail 'C: the allow-list was not copied'
 a_set=$(grep -n "hubadm .*set fleet.cred_allow.node.$POD" "$LOG" | head -1 | cut -d: -f1)
@@ -147,7 +174,9 @@ a_asg=$(grep -n "hubadm .*accounts assign" "$LOG" | head -1 | cut -d: -f1)
 grep -q "curl .*-X PUT .*/v1/fleet/entry/home?principal=gh:7" "$LOG" || fail 'C: the home was not moved'
 order=$(awk '{print $2}' "$T/state/24acme/timeline" | uniq | tr '\n' ' ')
 [ "$order" = "check prepare stop copy start open home verify " ] || fail "C: timeline order '$order'"
-grep -q ' verify sessions=2/2' "$T/state/24acme/timeline" || fail 'C: verify did not count 2/2'
+grep -q ' check uid=10006 sessions=0' "$T/state/24acme/timeline" || fail 'C: the fake snapshot leaked into check'
+grep -q ' verify sessions=2/2' "$T/state/24acme/timeline" ||
+  fail 'C: verify did not count the 2 sessions the stop pinned (the pinned list was read before the snapshot save)'
 grep -q ' accounts remove' "$LOG" && fail 'C: all retired the source'
 ok
 
@@ -158,6 +187,13 @@ FAKE_NO_ALLOW=1 mv open 24acme > "$T/out" 2>&1; rc=$?
 grep -q 'accounts assign' "$LOG" && fail 'F: the login was opened on an open machine'
 FAKE_NO_ALLOW=1 mv open 24acme --allow-list-none >/dev/null 2>&1 || fail 'F: --allow-list-none did not open'
 grep -q 'accounts assign' "$LOG" || fail 'F: --allow-list-none never assigned'
+ok
+
+# ── G. a pod half that does not know the token gets nothing, and copy says so
+rm -rf "$T/dst"/* "$T/send.rc" "$T/recv.rc"
+FAKE_BADTOKEN=1 mv copy 24acme > "$T/out" 2>&1; rc=$?
+[ "$rc" = 1 ] && grep -q 'source tar: badtoken' "$T/out" || fail "G: a wrong token: rc $rc, $(tail -2 "$T/out")"
+[ ! -e "$T/dst/24acme/work.txt" ] || fail 'G: a wrong token still got the home'
 ok
 
 # ── D. a session missing

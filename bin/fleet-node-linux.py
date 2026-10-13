@@ -1058,6 +1058,9 @@ def login_stop(a):
             if snap.returncode:
                 raise RuntimeError('snapshot save for %s exited %d; nothing stopped' % (login, snap.returncode))
         print('[2] take %s out of the machine daemon (account forget)' % login)
+        # a task of the login's that is mid-run (install-sync, collect) is let go
+        # only when it ends: 20 s was short for that on a busy node (#3554)
+        os.environ.setdefault('FLEET_NODE_RELEASE_WAIT', '120')
         rc = s.account_forget(paths, login)
         if rc:
             return rc

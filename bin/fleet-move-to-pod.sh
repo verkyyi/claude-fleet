@@ -13,7 +13,8 @@
 #   stop     ── the one interruption starts ── refused while a client is attached;
 #            `fleet-node-linux.py login stop <login>` on the source: sessions
 #            pinned, the daemon lets go, its processes stop; home kept
-#   copy     the home, tar over two kubectl execs (numeric owners, the UID kept),
+#   copy     the home, tar pod to pod inside the cluster (the seeder pulls from
+#            the source with a one-time token; numeric owners, the UID kept),
 #            then the shared-node-only files cleared (node.env · node.pub.env ·
 #            credsep.json); file counts compared
 #   start    the seeder goes, the person's pod is applied and waited for
@@ -240,16 +241,84 @@ phase_stop() {
   n=$(attached "$uid")
   [ "$n" = 0 ] || die 3 "$LOGIN has $n client(s) attached on $SOURCE — wait until nobody is, then run stop again"
   kc get "pod/$(SEEDER)" >/dev/null 2>&1 || die 3 "no seeder: run prepare first"
-  pinned > "$STATE/pinned"
   mark stop begin
   src python3 -I /var/db/fleet-node/runtime/current/bin/fleet-node-linux.py login stop "$LOGIN" 2>&1 |
     tee "$STATE/stop.out"
   [ "${PIPESTATUS[0]}" = 0 ] || die 1 "login stop on $SOURCE failed (above); nothing copied"
+  # read AFTER the stop: its snapshot save is what pins the sessions (check's
+  # count predates it — a login that never saved one reads 0 there)
+  pinned > "$STATE/pinned"
   mark stop "sessions=$(wc -l < "$STATE/pinned" | tr -d ' ')"
 }
 
 # the excluded paths: throwaway trees whose links point into the source's runtime
-EXCL=(--exclude="./$LOGIN/.codex/tmp" --exclude="./$LOGIN/.config/claude-fleet/cred-proxy/codex-homes")
+EXCL=(--exclude="$LOGIN/.codex/tmp" --exclude="$LOGIN/.config/claude-fleet/cred-proxy/codex-homes")
+
+# The copy never leaves the cluster (issue #3554: 387 MB of a drill's home
+# through the API server from the operator's machine broke 4 times out of 4;
+# a real home is 3.8 GB). The source's egress guard rejects pod addresses, so the
+# SEEDER pulls: the source listens once on its pod IP for one connection that
+# first sends a one-time token (written into the script on kubectl's stdin, never
+# an argv), and streams the tar into it; both halves run detached and each
+# leaves its exit code in a file the phase polls. No byte of the home passes
+# through this machine; a failed run starts over from an empty directory.
+SEND_PY='
+import hmac, os, socket, subprocess, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((IP, PORT)); s.listen(1); s.settimeout(WAIT)
+try:
+    os.unlink(RC)
+except OSError:
+    pass
+if os.fork():
+    print("listening %s:%d" % (IP, PORT)); sys.exit(0)
+os.setsid()
+fd = os.open(os.devnull, os.O_RDWR)
+for n in (0, 1, 2):
+    os.dup2(fd, n)
+rc = "timeout"
+try:
+    c, _ = s.accept(); s.close()
+    c.settimeout(30); got = b""
+    while len(got) < len(TOKEN):
+        b = c.recv(len(TOKEN) - len(got))
+        if not b:
+            break
+        got += b
+    if not hmac.compare_digest(got, TOKEN):
+        rc = "badtoken"
+    else:
+        c.settimeout(None)
+        rc = str(subprocess.call(["tar", "-C", "/home", "--numeric-owner"] + EXCL + ["-cpf", "-", LOGIN], stdout=c.fileno()))
+    c.shutdown(socket.SHUT_WR); c.close()
+except Exception as e:
+    rc = "error: %s" % e
+open(RC + ".tmp", "w").write(rc + "\n"); os.rename(RC + ".tmp", RC)
+'
+RECV_PY='
+import os, socket, subprocess, sys
+try:
+    os.unlink(RC)
+except OSError:
+    pass
+if os.fork():
+    sys.exit(0)
+os.setsid()
+fd = os.open(os.devnull, os.O_RDWR)
+for n in (0, 1, 2):
+    os.dup2(fd, n)
+try:
+    c = socket.create_connection((IP, PORT), 30); c.sendall(TOKEN); c.settimeout(None)
+    rc = str(subprocess.call(["tar", "-C", "/data/homes", "--numeric-owner", "-xpf", "-"], stdin=c.fileno()))
+    c.close()
+except Exception as e:
+    rc = "error: %s" % e
+open(RC + ".tmp", "w").write(rc + "\n"); os.rename(RC + ".tmp", RC)
+'
+SEND_RC=/tmp/.fleet-move-send.rc RECV_RC=/data/.fleet-move-recv.rc
+
+# rc_of <pod> [-c <container>] <file>: the half's exit code once it wrote one, else ""
+rc_of() { local f=${*: -1}; kc exec "${@:1:$#-1}" -- cat "$f" 2>/dev/null | head -n 1; }
 
 phase_copy() {
   need_pod
@@ -258,15 +327,28 @@ phase_copy() {
   kc exec "$(SEEDER)" -- mkdir -p /data/homes || die 1 'no /data/homes on the seeder'
   # a second run starts clean: whatever an interrupted one left goes first
   kc exec "$(SEEDER)" -- rm -rf "/data/homes/$LOGIN" || die 1 'cannot clear an earlier partial copy'
-  src tar -C /home --numeric-owner "${EXCL[@]}" -cpf - "$LOGIN" |
-    kc exec -i "$(SEEDER)" -- tar -C /data/homes --numeric-owner -xpf -
-  local rc=("${PIPESTATUS[@]}")
-  [ "${rc[0]}" = 0 ] && [ "${rc[1]}" = 0 ] || die 1 "copy failed (tar ${rc[0]} / ${rc[1]}); run copy again"
+  local ip port tok excl a b src_rc dst_rc end
+  ip=$(kc get pod "$SOURCE" -o jsonpath='{.status.podIP}') && [ -n "$ip" ] || die 1 "no pod IP for $SOURCE"
+  port=$((20000 + RANDOM % 20000))
+  tok=$(LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 32)
+  excl=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' ${EXCL[@]+"${EXCL[@]}"})
+  { printf 'IP="%s"\nPORT=%d\nTOKEN=b"%s"\nLOGIN="%s"\nEXCL=%s\nRC="%s"\nWAIT=%d\n' \
+      "$ip" "$port" "$tok" "$LOGIN" "$excl" "$SEND_RC" "$WAIT"; printf '%s' "$SEND_PY"; } |
+    kc exec -i "$SOURCE" -c fleet -- python3 - || die 1 "the source would not listen on $ip:$port"
+  { printf 'IP="%s"\nPORT=%d\nTOKEN=b"%s"\nRC="%s"\n' "$ip" "$port" "$tok" "$RECV_RC"; printf '%s' "$RECV_PY"; } |
+    kc exec -i "$(SEEDER)" -- python3 - || die 1 'the seeder would not start its half'
+  unset tok
+  end=$((SECONDS + WAIT))
+  until src_rc=$(rc_of "$SOURCE" -c fleet "$SEND_RC") && dst_rc=$(rc_of "$(SEEDER)" "$RECV_RC") &&
+        [ -n "$src_rc" ] && [ -n "$dst_rc" ]; do
+    [ "$SECONDS" -lt "$end" ] || die 1 "copy not done within ${WAIT}s (source: ${src_rc:-running}, pod: ${dst_rc:-running}); run copy again"
+    sleep 5
+  done
+  [ "$src_rc" = 0 ] && [ "$dst_rc" = 0 ] || die 1 "copy failed (source tar: $src_rc · pod tar: $dst_rc); run copy again"
   # what only a shared node has: its credential store link and record
   kc exec "$(SEEDER)" -- rm -f "/data/homes/$LOGIN/.config/claude-fleet/node.env" \
-    "/data/homes/$LOGIN/.config/claude-fleet/node.pub.env" "/data/homes/$LOGIN/.config/claude-fleet/credsep.json" ||
-    die 1 'clearing the shared-node files failed'
-  local a b
+    "/data/homes/$LOGIN/.config/claude-fleet/node.pub.env" "/data/homes/$LOGIN/.config/claude-fleet/credsep.json" \
+    "$RECV_RC" || die 1 'clearing the shared-node files failed'
   a=$(src sh -c 'cd /home && find "$1" -xdev ! -path "$1/.codex/tmp*" ! -path "$1/.config/claude-fleet/cred-proxy/codex-homes*" | wc -l' _ "$LOGIN")
   b=$(kc exec "$(SEEDER)" -- sh -c 'cd /data/homes && find "$1" | wc -l' _ "$LOGIN")
   # the three cleared files are the only difference allowed
