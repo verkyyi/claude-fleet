@@ -106,7 +106,7 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 
 #### 发布包要的程序
 
-机器升级时装的每一样都来自入口的发布包：`fleet` 本身、`ccquota`，以及仓库根目录 `release.json` 钉住版本的 Claude Code、Codex、tmux。`ccquota` 就在你的镜像里；其余几样要放进 `CCQUOTA_FLEET_RELEASE_ARTIFACTS` 指的目录，文件名是 `<名字>-<版本>-<系统>-<架构>`，例如 `codex-0.162.1-darwin-arm64`、`tmux-3.7c-linux-amd64`（Codex 还要一个同版本的 `codex-code-mode-host-…`）。Claude Code 缺了入口会自己从 npm 拉。
+机器升级时装的每一样都来自入口的发布包：`fleet` 本身、`ccquota`，以及仓库根目录 `release.json` 钉住版本的 Claude Code、Codex、tmux。`ccquota` 就在你的镜像里；其余几样要放进 `CCQUOTA_FLEET_RELEASE_ARTIFACTS` 指的目录，文件名是 `<名字>-<版本>-<系统>-<架构>`，例如 `codex-0.162.1-darwin-arm64`、`tmux-3.7c-linux-amd64`（Codex 还要一个同版本的 `codex-code-mode-host-…`）。Claude Code 缺了入口会自己从 npm 拉（源见 `CCQUOTA_FLEET_RELEASE_NPM`）。
 
 缺一个，入口拒绝打这一版的包，报错写着缺哪几个名字和下面这条命令。最省事的来源是**任何一个已经有这一版发布包的入口**（例如你跟随的 `stable` 的发布方）：它在 `/v1/fleet/release/<提交号>/artifacts/<名字>` 公开提供每个文件，并在签了名的清单里写着每个文件的大小和 sha256。下面这条命令先用那个入口的公钥核清单的签名，再逐个核 sha256，对得上才放进目录：
 
@@ -323,13 +323,14 @@ curl -sS  https://hub.example.com/install | head -1 # #!/bin/sh —— 客户端
 
 ### 1.8 国内部署
 
-入口和机器在国内时，有四处要多做一步：
+入口和机器在国内时，有几处要多做一步：
 
 | 什么 | 为什么 | 做法 |
 |---|---|---|
 | 构建拉 Go 依赖 | 直连官方代理常卡住 | 默认已经经 `goproxy.cn`（[§1.1](#11-构建镜像)） |
 | `stable` 是哪个提交 | 入口匿名问 GitHub 会被限流 | 把 `stable` 推给入口（[§4.4](#44-入口问不到-github-时)） |
 | 发布包要的程序 | 自己没有 Codex、tmux 的制品 | 从已有这一版的入口取（[§1.3](#13-必填配置)「发布包要的程序」） |
+| 发布包里的 Claude Code | 入口默认先从 registry.npmjs.org 拉 | 入口设 `CCQUOTA_FLEET_RELEASE_NPM="https://registry.npmmirror.com https://registry.npmjs.org"`，先走国内镜像（每个包都按 sha512 核过） |
 | 订阅流量 | Claude、ChatGPT 不服务国内 | 架一台海外**中转**，入口和机器都经它出去（本节下文） |
 
 中转是一台海外的小 Linux（Debian / Ubuntu，`python3`、systemd，Caddy 2.10 以上）。它不存任何凭据，只做两件事：凭入口签发的**通行证**放行，再把请求原样转给订阅商。放行与否每次都问入口（经本机一个核验进程，入口重启的几分钟里它记得刚放行过的通行证）。
