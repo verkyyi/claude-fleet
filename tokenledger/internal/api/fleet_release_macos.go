@@ -37,6 +37,10 @@ const releaseStableMacOS = "stable-macos"
 // RefStableMacOS is the publish form's `ref` that moves the Mac lane.
 const RefStableMacOS = "stable-macos"
 
+// ReleaseRefHeader names the lane …/stable?platform= served when it is not
+// stable itself (fleet-release-lib.sh's REL_REF).
+const ReleaseRefHeader = "X-Ccquota-Release-Ref"
+
 // macPointer reads <Dir>/stable-macos (zero when there is none).
 func (rs *ReleaseStore) macPointer() stablePointer {
 	var p stablePointer

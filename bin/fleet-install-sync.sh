@@ -58,6 +58,14 @@
 #              the remote is `none`. The + is deliberate: a clone auto-follows the
 #              tag once and a later plain fetch would refuse to move it
 #              ("would clobber existing tag"), leaving a stale local `stable`.
+#   lane       A Mac follows refs/tags/stable-macos when the remote carries it
+#              (issue #3868, EPIC #3863 C5): fleet_stable_ref_for (the versions
+#              lib, the one reader) picks the tag before the fetch, and the hub
+#              road asks /v1/fleet/release/stable?platform=darwin. The lane is
+#              never ahead of stable; behind HEAD (a Mac that took stable before
+#              the lane existed) it is `refused` like any backward stable, until
+#              the lane passes it. The state's `channel:` line names a lane that
+#              is not stable. Any other platform asks exactly as before.
 #   hub        WITH A HUB (FLEET_HUB_URL / CCQUOTA_HUB_URL; issue #2773, EPIC
 #              #2770 C3) the fetch above is not run: the hub's
 #              /v1/fleet/release/stable names stable (sha + seq, a hint), and only
@@ -342,6 +350,8 @@ write_state() { # $1 result $2 reason
     printf 'head: %s\n' "${HEAD_SHA:-?}"
     printf 'stable: %s\n' "${STABLE_SHA:-none}"
     printf 'stable_since: %s\n' "$ss"
+    # the lane this login follows, when it is not stable itself (issue #3868)
+    [ "$TAG" = stable ] || printf 'channel: %s\n' "$TAG"
     printf 'from: %s\n' "${FROM:-${HEAD_SHA:-?}}"
     printf 'to: %s\n' "${TO:-${HEAD_SHA:-?}}"
     printf 'reason: %s\n' "$2"
@@ -1035,11 +1045,16 @@ main() {
   # --- the hub's stable (issue #2773) ---------------------------------------------
   # A hint first — sha + seq, unsigned — so a tick with nothing new downloads
   # nothing; the release itself is fetched and verified only past every gate.
+  # Which lane (issue #3868): a platform with more than one tag to follow (a Mac:
+  # stable-macos, else stable — fleet_stable_refs) asks the hub for its platform
+  # and resolves its tag on the remote; any other asks exactly as before.
+  local lplat=''
+  case "$(fleet_stable_refs)" in *' '*) lplat=$(fleet_platform) ;; esac
   if [ "$DIST" = hub ]; then
     local hrc
-    fleet_rel_stable "$HUB" "$TIMEOUT"; hrc=$?
+    fleet_rel_stable "$HUB" "$TIMEOUT" "$lplat"; hrc=$?
     case "$hrc" in
-      0) STABLE_SHA=$REL_SHA STABLE_SEQ=$REL_SEQ SRCW=" from hub (seq $REL_SEQ)"
+      0) STABLE_SHA=$REL_SHA STABLE_SEQ=$REL_SEQ SRCW=" from hub (seq $REL_SEQ)" TAG=$REL_REF
          [ "$DRY" = 1 ] || fleet_rel_drop_origin "$ROOT" "$REMOTE" "$ORIGIN_BAK" ;;
       3) say "the hub ($HUB) keeps no releases (/v1/fleet/release/stable is 404) — following $TAG over git, as before"
          DIST=git ;;
@@ -1056,6 +1071,10 @@ main() {
     # it by sha, so the ancestry gate below can read it
     if [ -n "$HEAD_SEQ" ] && ! git -C "$ROOT" cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
       g fetch --no-tags -q "$REMOTE" "$HEAD_SHA" >/dev/null 2>&1 </dev/null || :
+    fi
+    if [ -n "$lplat" ]; then
+      TAG=$(GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=$TIMEOUT fleet_stable_ref_for "$lplat" "$ROOT" "$REMOTE") \
+        || finish fetch-failed "could not read $REMOTE's tags to pick this $lplat machine's lane (offline? timeout ${TIMEOUT}s) — not seen, not refused"
     fi
     if ! ferr=$(g fetch --no-tags -q "$REMOTE" "+refs/tags/$TAG:refs/tags/$TAG" 2>&1 </dev/null); then
       case "$ferr" in

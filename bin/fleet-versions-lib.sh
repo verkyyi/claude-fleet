@@ -67,3 +67,45 @@ fleet_versions_prune() {
   done
   return 0
 }
+
+# ---- the release lanes (issue #3868, EPIC #3863 C5, 共同约定 3) ---------------
+# stable means "Linux has verified it"; a Mac follows refs/tags/stable-macos —
+# never ahead of stable (fleet-stable.sh refuses that move), behind it while the
+# macOS half of a release runs. No stable-macos tag ⇒ every machine follows
+# stable, byte for byte as before. These two functions are the ONE place a
+# platform picks its tag (fleet-lib.sh sources this file, so they are its too);
+# the hub's /version says the same as client_version_macos. Never spell a
+# platform test anywhere else.
+
+# fleet_platform — this computer's release platform: darwin | linux | … (uname
+# -s in lower case). FLEET_PLATFORM overrides it (a selftest playing a Mac).
+fleet_platform() {
+  if [ -n "${FLEET_PLATFORM:-}" ]; then printf '%s\n' "$FLEET_PLATFORM"; return 0; fi
+  uname -s 2>/dev/null | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz'
+}
+
+# fleet_stable_refs [<platform>] — the tags a machine of <platform> (default
+# this one) follows, most preferred first: darwin → "stable-macos stable",
+# anything else → "stable". A reader that is not git (GitHub's API, the hub)
+# asks for each in turn and takes the first that exists.
+fleet_stable_refs() {
+  case "${1:-$(fleet_platform)}" in
+    darwin) printf 'stable-macos stable\n' ;;
+    *)      printf 'stable\n' ;;
+  esac
+}
+
+# fleet_stable_ref_for <platform> <git dir> <remote> — the ONE tag <platform>
+# follows on <remote>: the first of fleet_stable_refs that the remote carries
+# (git ls-remote, no fetch). rc 0 + the name (stable when the remote has neither:
+# the caller's own fetch then says "no stable yet"); rc 1 + nothing when the
+# remote could not be read — never "stable" on a guess, or a Mac whose
+# ls-remote blinked would take a release its lane has not reached.
+fleet_stable_ref_for() {
+  local sp="$1" sg="$2" sr="$3" sl st
+  sl=$(git -C "$sg" ls-remote --tags "$sr" $(for st in $(fleet_stable_refs "$sp"); do printf 'refs/tags/%s ' "$st"; done) 2>/dev/null </dev/null) || return 1
+  for st in $(fleet_stable_refs "$sp"); do
+    case "$sl" in *"refs/tags/$st"|*"refs/tags/$st"[!a-zA-Z0-9_-]*) printf '%s\n' "$st"; return 0 ;; esac
+  done
+  printf 'stable\n'
+}

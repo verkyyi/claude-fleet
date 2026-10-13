@@ -86,6 +86,9 @@ func TestMacLane(t *testing.T) {
 	if got := p.stableFor(t, "darwin"); got != a {
 		t.Fatalf("darwin served %s, want the lane's %s", got[:7], a[:7])
 	}
+	if resp, _ := getBody(t, p.h.http.URL+release.Path+"stable?platform=darwin"); resp.Header.Get(ReleaseRefHeader) != RefStableMacOS {
+		t.Fatalf("darwin answer carries no %s header", ReleaseRefHeader)
+	}
 	if got := p.stableFor(t, "linux"); got != b {
 		t.Fatalf("linux served %s, want stable %s", got[:7], b[:7])
 	}

@@ -840,8 +840,12 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	sha, sub, _ := strings.Cut(rest, "/")
 	if sha == "stable" && sub == "" {
-		// ?platform=darwin: the Mac lane when one is set (claude-fleet#3868)
+		// ?platform=darwin: the Mac lane when one is set (claude-fleet#3868),
+		// and the header says it was — the client's `channel` reads it
 		sha = rs.StableSHAFor(r.URL.Query().Get("platform"))
+		if r.URL.Query().Get("platform") == "darwin" && rs.MacStableSHA() != "" {
+			w.Header().Set(ReleaseRefHeader, RefStableMacOS)
+		}
 	}
 	if !release.ValidSHA(sha) {
 		http.NotFound(w, r)
