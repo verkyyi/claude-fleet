@@ -1,11 +1,14 @@
 // mock.ts — the review build's API (EPIC #3923 rule 14): the entry's real
 // response shapes (/v1/me, /v1/me/usage, /v1/fleet/devices, /v1/chat/*,
-// /v1/fleet/tasks, /v1/fleet/tickets*, and 设备's /v1/fleet/connect,
+// /v1/fleet/tasks, /v1/fleet/tickets*, 我自己的订阅's /v1/me/subscriptions*,
+// and 设备's /v1/fleet/connect,
 // /v1/fleet/entry/*, /v1/nodes; 设置's /v1/me/identities and
 // /v1/fleet/person-bundle, kept in memory so binding and importing can be clicked) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
-type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off"; page?: string };
+type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off"; page?: string;
+  // 我自己的订阅 (C21): none = the empty state; login = the dialog open at the sign-in; error = the read fails
+  sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error" };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -118,6 +121,18 @@ export async function install(): Promise<string> {
     door: { domain: "fleet.example.cn", address: `${me.login}.fleet.example.cn`, port: 22022, login: home.login, home_name: home.machine,
       state: keys.length ? "ok" : "nokey", qr },
   });
+  // 我自己的订阅 (C21): the person's own vault rows, with the two windows
+  const subSc = sc.sub || "none";
+  const hrs = (h: number) => new Date(Date.now() + h * 36e5).toISOString();
+  type Sub = Record<string, unknown> & { provider: string; account: string; state: string; paused?: boolean };
+  const subs: Sub[] = subSc === "none" || subSc === "login" ? [] : [
+    { provider: "claude", account: "my-max", account_uuid: "8e3f0c2a-4444-4d5e-8f60-3456789abcde", plan: "Max 5x",
+      state: subSc === "reauth" ? "reauth" : subSc === "paused" ? "paused" : "ok", paused: subSc === "paused",
+      five_hour: { used_pct: 46, resets_at: hrs(2.3) }, seven_day: { used_pct: 71, resets_at: hrs(80) }, observed_at: ago(2), created_at: ago(60 * 24 * 6), sessions: subSc === "connected" ? 2 : 0 },
+  ];
+  const flows: Record<string, { provider: string; account: string; again: boolean }> = {};
+  const subsAt = (b: { provider?: string; account?: string }) => subs.find((x) => x.provider === b.provider && x.account === b.account);
+  if (subSc === "login") sc.page = (sc.page || "/usage") + (String(sc.page || "").includes("?") ? "&" : "?") + "connect=claude";
   const real = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -163,6 +178,33 @@ export async function install(): Promise<string> {
       tickets.unshift(ticket(repo, n, t.title, `${t.title}\n\nhub 任务 ${t.id} 补建的单。`, "open", 0));
       Object.assign(t, { repo, issue: `${repo}#${n}` });
       return ok(t);
+    }
+    if (p.startsWith("/v1/me/subscriptions")) {
+      const b = JSON.parse(String(init?.body || "{}"));
+      if (p === "/v1/me/subscriptions") return subSc === "error" ? ok({ error: "演示：入口出错" }, 502) : ok({ subscriptions: subs, login: true });
+      if (p === "/v1/me/subscriptions/login") {
+        const flow = "fl_" + Math.random().toString(36).slice(2, 10);
+        flows[flow] = { provider: b.provider, account: b.account, again: !!b.again };
+        return b.provider === "codex"
+          ? ok({ flow, paste: "url", expires_at: hrs(1 / 6), authorize_url: "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&code_challenge=demo&code_challenge_method=S256&state=" + flow })
+          : ok({ flow, paste: "code", expires_at: hrs(1 / 6), authorize_url: "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=user%3Ainference&code_challenge=demo&code_challenge_method=S256&state=" + flow });
+      }
+      if (p === "/v1/me/subscriptions/login/finish") {
+        const f = flows[b.flow];
+        await new Promise((r) => setTimeout(r, 900));
+        if (!f) return ok({ error: "这次登录过期了，重新打开登录页再来一次" }, 410);
+        if (String(b.paste).trim().length < 6) return ok({ error: "没接上：贴的不像登录页给的代码。重新打开登录页，整串复制过来。" }, 422);
+        delete flows[b.flow];
+        const row = subsAt(f);
+        if (row) Object.assign(row, { state: "ok", paused: false, five_hour: { used_pct: 0 }, seven_day: { used_pct: 12, resets_at: hrs(120) } });
+        else subs.push({ provider: f.provider, account: f.account, plan: f.provider === "codex" ? "ChatGPT Plus" : "Pro", state: "unread",
+          five_hour: { used_pct: null }, seven_day: { used_pct: null }, created_at: new Date().toISOString(), sessions: 0 });
+        return ok({ provider: f.provider, account: f.account });
+      }
+      const row = subsAt(b);
+      if (!row) return ok({ error: "no such subscription of yours" }, 404);
+      if (p === "/v1/me/subscriptions/pause") { Object.assign(row, { paused: !!b.paused, state: b.paused ? "paused" : "ok", sessions: b.paused ? 0 : row.sessions }); return ok(row); }
+      if (p === "/v1/me/subscriptions/delete") { subs.splice(subs.indexOf(row), 1); return ok({ deleted: true }); }
     }
     switch (p) {
       case "/v1/fleet/tasks": return state === "error" ? ok({ error: "down" }, 502) : ok({ tasks, observed_at: new Date().toISOString() });

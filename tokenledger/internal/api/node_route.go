@@ -208,6 +208,7 @@ type nodeForward struct {
 
 	Provider string            `json:"provider,omitempty"`
 	Form     map[string]string `json:"form,omitempty"`
+	Encoding string            `json:"encoding,omitempty"` // oauth: control.OAuthRefresh.Encoding
 }
 
 // nodeForwardReply is the holder's answer.
@@ -328,7 +329,7 @@ func (s *Server) handleNodeRoute(w http.ResponseWriter, r *http.Request) {
 		go s.dispatchRelays(f.Endpoint)
 		answer(http.StatusOK, nodeForwardReply{Status: "dispatching"})
 	case "oauth":
-		ans, err := s.oauthRefreshOn(ctx, f.Endpoint, f.Provider, f.Form)
+		ans, err := s.oauthRefreshOn(ctx, f.Endpoint, f.Provider, f.Form, f.Encoding)
 		rep := nodeForwardReply{Via: ans.Via, HTTP: ans.Status, Body: ans.Body}
 		if err != nil {
 			rep.Error = fault("UNAVAILABLE", err.Error())
@@ -403,9 +404,9 @@ func (s *Server) forwardSend(ctx context.Context, peer store.NodeConn, msg contr
 }
 
 // forwardOAuth is a relayed refresh through a node another replica holds.
-func (s *Server) forwardOAuth(ctx context.Context, peer store.NodeConn, name, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
+func (s *Server) forwardOAuth(ctx context.Context, peer store.NodeConn, name, provider string, form map[string]string, encoding string) (credvault.ProxyAnswer, error) {
 	ans := credvault.ProxyAnswer{Via: name}
-	rep, err := s.forward(ctx, peer, nodeForward{Kind: "oauth", Endpoint: peer.EndpointID, Provider: provider, Form: form}, oauthRefreshTimeout)
+	rep, err := s.forward(ctx, peer, nodeForward{Kind: "oauth", Endpoint: peer.EndpointID, Provider: provider, Form: form, Encoding: encoding}, oauthRefreshTimeout)
 	if err != nil {
 		return ans, fmt.Errorf("%w: %s refresh via %s: %v", credvault.ErrRefreshUnavailable, provider, name, err)
 	}

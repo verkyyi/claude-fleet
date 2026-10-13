@@ -31,6 +31,11 @@ type Server struct {
 	Store   *store.Store
 	Pricing *Pricing
 
+	// OAuthExchange posts a member's own sign-in's code exchange
+	// (claude-fleet#4035, me_subs.go): direct, or through an admin node's
+	// relay — wired beside the vault's refresher. nil = no sign-in here.
+	OAuthExchange OAuthExchangeFunc
+
 	// ViewerToken guards the dashboard, the query API and MCP. Endpoint
 	// ingest uses per-endpoint enrollment tokens instead.
 	ViewerToken string
@@ -891,6 +896,13 @@ func (s *Server) routes() *routeMux {
 	// windows are the pool's, an admin's only since claude-fleet#3227 — a
 	// person reads their own limit on /v1/me/usage.
 	mux.Handle("/v1/me/quota", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleMeQuota))))
+	// 我自己的订阅 (claude-fleet#4035): a member's own subscriptions — connect
+	// one in their own browser, read, pause, disconnect; their rows only.
+	mux.Handle(MeSubsPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubs)))
+	mux.Handle(MeSubsLoginPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsLogin)))
+	mux.Handle(MeSubsFinishPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsFinish)))
+	mux.Handle(MeSubsPausePath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsPause)))
+	mux.Handle(MeSubsDeletePath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsDelete)))
 	mux.Handle("/quota", s.viewerOnly(http.HandlerFunc(s.serveQuotaPage)))
 	mux.Handle("/v1/collectors", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCollectors))))
 	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))

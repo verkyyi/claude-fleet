@@ -1,7 +1,7 @@
 // usage.tsx — 用量 (EPIC #3923 C6, issue #3929): what is left of the person's
 // own limit and when it resets, today and the last 7 days, two weeks of bars
 // (Claude / Codex), and where it went — by model, task, repo, batch — with a
-// row's detail. Only the person's own read, /v1/me/usage (me_usage.go; EPIC
+// row's detail — and 我自己的订阅 (C21, ../subs.tsx). Only the person's own read, /v1/me/usage (me_usage.go; EPIC
 // #3225's numbers, never the pool's windows); the range rides ?range= as on
 // the old page. Stock shadcn/ui only: Card, Progress, Chart, Tabs, Sheet.
 import { useMemo, useState, type FC, type ReactNode } from "react";
@@ -20,6 +20,7 @@ import { fmtTokens, fmtWhen, lang, tr } from "@/shared/i18n";
 import { useLoad } from "@/shared/api";
 import { Failed, PageHeader } from "../parts";
 import { useShell, usePage } from "../Shell";
+import { MySubsCard } from "../subs";
 
 // /v1/me/usage's answer (MeUsage, me_usage.go)
 type Limit = {
@@ -319,7 +320,7 @@ export default function UsagePage() {
   const dw = u ? delta(u.week, u.week_prev, fullFrom(u.since_first, now - 14 * DAY), ["比上周", "vs last week"], ["上周无完整数据", "No full data for last week"]) : null;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-5 md:px-6 md:py-8">
-      <PageHeader title={tr("用量", "Usage")} sub={tr("只算走订阅池的用量，记在租用它的人名下；你自己登录的 Claude 不在这里。", "Only usage that goes through the subscription pool, counted under the person who leased it. Claude you signed in to yourself is not here.")} />
+      <PageHeader title={tr("用量", "Usage")} sub={tr("只算走订阅池的用量，记在租用它的人名下；接上的自己的订阅在下面。", "Only usage that goes through the subscription pool, counted under the person who leased it. Your own connected subscriptions are below.")} />
       {main.failed && !u ? <Failed what={tr("用量", "your usage")} onRetry={main.reload} /> : !u ? (
         <>
           <Card><CardContent className="flex flex-col gap-3"><Skeleton className="h-4 w-20" /><Skeleton className="h-11 w-28" /><Skeleton className="h-2.5 w-full" /><Skeleton className="h-4 w-full" /></CardContent></Card>
@@ -334,6 +335,7 @@ export default function UsagePage() {
           </div>
         </>
       )}
+      <MySubsCard />
       <DaysCard days={two.data?.days ?? null} failed={two.failed} onRetry={two.reload} />
       {main.failed && !u ? null : <WhereCard u={u} range={range} setRange={(r) => set("range", r, "7d")} mode={mode} setMode={(m) => set("by", m, "model")}
         loading={main.loading} failed={main.failed} onRetry={main.reload} />}

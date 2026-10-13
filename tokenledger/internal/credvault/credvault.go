@@ -716,3 +716,24 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// SealNote / OpenNote seal a short-lived note to one principal under a kind —
+// never a credential: a member's own sign-in carries its PKCE half through
+// the browser this way (claude-fleet#4035), so any replica can finish it and
+// no table holds a half-done login. The kind is in the additional data, so a
+// note sealed for one purpose or person does not open as another.
+func (v *Vault) SealNote(note any, principal, kind string) ([]byte, error) {
+	sl, err := v.sealer()
+	if err != nil {
+		return nil, err
+	}
+	return sl.Seal(note, principal, "note", kind, "note")
+}
+
+func (v *Vault) OpenNote(blob []byte, note any, principal, kind string) error {
+	sl, err := v.sealer()
+	if err != nil {
+		return err
+	}
+	return sl.Open(blob, note, principal, "note", kind, "note")
+}

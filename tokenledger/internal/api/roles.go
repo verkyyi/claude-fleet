@@ -189,7 +189,10 @@ var routeAccess = map[string]string{
 	// 我的用量 in one answer (claude-fleet#3227): their limit, days, models
 	// and where it went, off pool_usage under their principal.
 	"/v1/me/usage": accessUser,
-	"/v1/usage":    accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
+	// 我自己的订阅 (claude-fleet#4035): each person their own rows only.
+	MeSubsPath: accessUser, MeSubsLoginPath: accessUser, MeSubsFinishPath: accessUser,
+	MeSubsPausePath: accessUser, MeSubsDeletePath: accessUser,
+	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
 	"/v1/user": accessUser, "/mcp": accessUser,

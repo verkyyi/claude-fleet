@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -67,26 +68,41 @@ func (a *Agent) answerOAuthRefresh(ctx context.Context, conn nodeLink, m control
 		fail(control.CodeBadArgs, "malformed oauth_refresh")
 		return
 	}
-	url := a.oauthTokenURL(req.Provider)
-	if url == "" || len(req.Form) == 0 {
+	endpoint := a.oauthTokenURL(req.Provider)
+	if endpoint == "" || len(req.Form) == 0 {
 		fail(control.CodeBadArgs, "oauth_refresh: unknown provider or empty form")
 		return
 	}
 	// The form is the secret. It is encoded straight into the request body;
 	// nothing below formats it, and the error paths carry only the error.
-	body, err := json.Marshal(req.Form)
-	if err != nil {
-		fail(control.CodeBadArgs, "oauth_refresh: form does not encode")
+	// Encoding picks the body's shape and nothing else (claude-fleet#4035).
+	var body []byte
+	ctype := "application/json"
+	switch req.Encoding {
+	case "":
+		var err error
+		if body, err = json.Marshal(req.Form); err != nil {
+			fail(control.CodeBadArgs, "oauth_refresh: form does not encode")
+			return
+		}
+	case control.OAuthEncodingForm:
+		v := url.Values{}
+		for k, x := range req.Form {
+			v.Set(k, x)
+		}
+		body, ctype = []byte(v.Encode()), "application/x-www-form-urlencoded"
+	default:
+		fail(control.CodeBadArgs, "oauth_refresh: unknown encoding")
 		return
 	}
 	rctx, cancel := context.WithTimeout(ctx, oauthRefreshTimeout)
 	defer cancel()
-	hreq, err := http.NewRequestWithContext(rctx, http.MethodPost, url, bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(rctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		fail(control.CodeBadArgs, "oauth_refresh: bad token endpoint")
 		return
 	}
-	hreq.Header.Set("Content-Type", "application/json")
+	hreq.Header.Set("Content-Type", ctype)
 	hreq.Header.Set("Accept", "application/json")
 	started := time.Now()
 	var res control.OAuthRefreshResult

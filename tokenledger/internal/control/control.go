@@ -1512,7 +1512,17 @@ type OAuthRefresh struct {
 	// have posted it itself (grant_type, refresh_token, client_id, scope).
 	// A secret: the node never logs or stores it.
 	Form map[string]string `json:"form"`
+	// Encoding is how the node encodes Form: "" = a JSON body (every
+	// refresh), "form" = application/x-www-form-urlencoded — OpenAI's token
+	// endpoint takes a sign-in's authorization_code only that way (a member
+	// connecting their own subscription, claude-fleet#4035). Never a URL or a
+	// header: the endpoint is still the node's own pick by Provider. An older
+	// node ignores it and posts JSON.
+	Encoding string `json:"encoding,omitempty"`
 }
+
+// OAuthEncodingForm is OAuthRefresh.Encoding for a urlencoded body.
+const OAuthEncodingForm = "form"
 
 // OAuthRefreshResult is the payload of TypeOAuthRefreshResult: what the
 // provider answered, verbatim, or why the node could not ask it.

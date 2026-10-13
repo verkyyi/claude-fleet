@@ -133,34 +133,45 @@ func (s *Server) pickOAuthRefreshNode(now time.Time) (refreshPick, error) {
 // that word, not a 403 page); the node's name is set on the answer whenever
 // one was asked, so the audit says which.
 func (s *Server) NodeOAuthRefresh(ctx context.Context, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
+	return s.nodeOAuth(ctx, provider, form, "")
+}
+
+// NodeOAuthExchange carries one sign-in's authorization_code exchange down
+// the same relay (claude-fleet#4035): the same node pick, the same endpoint
+// the node fixes by provider — only the body's encoding is the caller's.
+func (s *Server) NodeOAuthExchange(ctx context.Context, provider string, form map[string]string, encoding string) (credvault.ProxyAnswer, error) {
+	return s.nodeOAuth(ctx, provider, form, encoding)
+}
+
+func (s *Server) nodeOAuth(ctx context.Context, provider string, form map[string]string, encoding string) (credvault.ProxyAnswer, error) {
 	p, err := s.pickOAuthRefreshNode(time.Now())
 	if err != nil {
 		return credvault.ProxyAnswer{}, err
 	}
 	if p.peer != nil {
 		// Asked once, through the replica that holds it (claude-fleet#2124).
-		return s.forwardOAuth(ctx, *p.peer, p.name, provider, form)
+		return s.forwardOAuth(ctx, *p.peer, p.name, provider, form, encoding)
 	}
-	return s.oauthRefreshVia(ctx, p.c, p.name, provider, form)
+	return s.oauthRefreshVia(ctx, p.c, p.name, provider, form, encoding)
 }
 
 // oauthRefreshOn is a refresh another replica handed over, through the link
 // this one holds to endpointID.
-func (s *Server) oauthRefreshOn(ctx context.Context, endpointID, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
+func (s *Server) oauthRefreshOn(ctx context.Context, endpointID, provider string, form map[string]string, encoding string) (credvault.ProxyAnswer, error) {
 	c := s.nodes.get(endpointID)
 	if c == nil || !c.admin || !c.canOAuthRefresh {
 		return credvault.ProxyAnswer{}, fmt.Errorf("%w: %s no longer holds an admin link to %s", credvault.ErrRefreshUnavailable, s.Replica.Name, endpointID)
 	}
-	return s.oauthRefreshVia(ctx, c, c.user()+"@"+c.hostname(), provider, form)
+	return s.oauthRefreshVia(ctx, c, c.user()+"@"+c.hostname(), provider, form, encoding)
 }
 
 // oauthRefreshVia carries the refresh down c, named name in the audit.
-func (s *Server) oauthRefreshVia(ctx context.Context, c *nodeConn, name, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
+func (s *Server) oauthRefreshVia(ctx context.Context, c *nodeConn, name, provider string, form map[string]string, encoding string) (credvault.ProxyAnswer, error) {
 	ans := credvault.ProxyAnswer{Via: name}
 	unavailable := func(format string, a ...any) (credvault.ProxyAnswer, error) {
 		return ans, fmt.Errorf("%w: %s", credvault.ErrRefreshUnavailable, fmt.Sprintf(format, a...))
 	}
-	msg, err := control.New(control.TypeOAuthRefresh, control.OAuthRefresh{Provider: provider, Form: form})
+	msg, err := control.New(control.TypeOAuthRefresh, control.OAuthRefresh{Provider: provider, Form: form, Encoding: encoding})
 	if err != nil {
 		return unavailable("encode the request: %v", err)
 	}

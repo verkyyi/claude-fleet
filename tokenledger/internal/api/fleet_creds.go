@@ -337,10 +337,9 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		creds = nil
 	}
 	paused := map[string]bool{}
-	if settings, err := s.Store.FleetSettings(); err == nil {
-		for _, a := range pausedAccounts(settings) {
-			paused[a] = true
-		}
+	settings, _ = s.Store.FleetSettings()
+	for _, a := range pausedAccounts(settings) {
+		paused[a] = true
 	}
 	// Refusals first, so the lease below already answers with what replaced
 	// the refused token. Only a row this login may lease can be named.
@@ -360,7 +359,8 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range creds {
 		isPool := c.PrincipalID == store.PoolPrincipal
-		nc := NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool, Paused: isPool && paused[c.Account]}
+		nc := NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool,
+			Paused: isPool && paused[c.Account] || ownPaused(settings, c)} // a member's own, paused by them (#4035)
 		// The row is sealed to ITS principal — "pool" for a pool row — while
 		// the audit names the person who leased it.
 		acc, err := s.Vault.Lease(r.Context(), c.PrincipalID, c.Provider, c.Account)

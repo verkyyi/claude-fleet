@@ -120,11 +120,14 @@ function Bar({ w, skip, wide }: { w: Window | null; skip: number; wide?: boolean
 }
 
 const kindOf = (s: Sub) => s.plan || (s.prov === "codex" ? "Codex" : "Claude");
-const uuidOf = (s: Sub) => (s.id.startsWith("cred:") ? String(s.cred?.account_uuid || "").toLowerCase() : s.id.toLowerCase());
+// ownerName is a member's own subscription's owner as the people page names them (claude-fleet#4035).
+const ownerName = (w: World, principal: string) => w.users.find((u) => u.principal_id === principal)?.login || principal;
+const uuidOf = (s: Sub) => (s.id.startsWith("cred:") || s.id.startsWith("own:") ? String(s.cred?.account_uuid || "").toLowerCase() : s.id.toLowerCase());
 
 // whoText is the table's 谁能用: the people and the nodes the policy lets use
 // the subscription, in a few words.
 function whoText(world: World, s: Sub): string {
+  if (s.owner) return ownerName(world, s.owner); // a member's own: them alone
   if (!s.managed || !world.view) return t("pool.who.unknown");
   const uuid = uuidOf(s);
   const part = (scope: "user" | "node", all: MsgKey, none: MsgKey) => {
@@ -213,7 +216,16 @@ export function PoolPage() {
 
   const columns: ColumnDef<Row, any>[] = React.useMemo(
     () => [
-      { accessorKey: "label", header: () => t("pool.col.sub"), cell: ({ getValue }) => <span className="font-mono text-sm font-medium">{getValue()}</span> },
+      {
+        accessorKey: "label",
+        header: () => t("pool.col.sub"),
+        cell: ({ row, getValue }) => (
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-sm font-medium">{getValue()}</span>
+            {row.original.owner && <Badge variant="outline" className="font-normal text-muted-foreground">{t("pool.own.badge", { name: ownerName(world, row.original.owner) })}</Badge>}
+          </span>
+        ),
+      },
       { id: "kind", accessorFn: kindOf, header: () => t("pool.col.kind"), cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
       { id: "h5", accessorFn: (r) => r.h5?.p ?? undefined, sortUndefined: "last", header: () => t("pool.col.h5"), cell: ({ row }) => <Bar w={row.original.h5} skip={world.skip} /> },
       { id: "h7", accessorFn: (r) => r.h7?.p ?? undefined, sortUndefined: "last", header: () => t("pool.col.h7"), cell: ({ row }) => <Bar w={row.original.h7} skip={world.skip} /> },
@@ -234,7 +246,7 @@ export function PoolPage() {
       },
       { accessorKey: "state", header: () => t("pool.col.state"), cell: ({ row }) => <StateBadge s={row.original.state} /> },
     ],
-    [world.skip],
+    [world.skip, world.users],
   );
 
   const filters: Filter<Row>[] = React.useMemo(
@@ -264,13 +276,13 @@ export function PoolPage() {
         columns={columns}
         fetch={fetchRows}
         filters={filters}
-        searchText={(r) => [r.label, kindOf(r), r.who, r.people.join(" "), r.cred?.account, r.id].join(" ")}
+        searchText={(r) => [r.label, kindOf(r), r.who, r.people.join(" "), r.cred?.account, r.id, r.owner && ownerName(world, r.owner)].join(" ")}
         rowId={(r) => r.id}
         openId={id ? decodeURIComponent(id) : null}
         onOpen={(x) => nav(x ? `/pool/${encodeURIComponent(x)}` : "/pool")}
         emptyText={t("pool.empty")}
         kpis={(rows) => {
-          const managed = rows.filter((r) => r.managed);
+          const managed = rows.filter((r) => r.managed && !r.owner); // the pool's: a member's own is theirs
           const h5 = room(managed, "h5");
           const people = new Set<string>();
           for (const r of managed) for (const p of r.people) people.add(p);
@@ -345,7 +357,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
       <SheetHeader className="border-b p-6">
         <div className="flex items-center gap-2 pr-8">
           <SheetTitle className="font-mono text-xl">{r.label}</SheetTitle>
-          {!r.id.startsWith("cred:") && <RenameDialog r={r} onDone={reload} />}
+          {!r.id.startsWith("cred:") && !r.owner && <RenameDialog r={r} onDone={reload} />}
         </div>
         <SheetDescription className="flex items-center gap-2">
           {kindOf(r)} <StateBadge s={r.state} />
@@ -356,6 +368,11 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
         {!r.managed && (
           <Alert>
             <AlertDescription className="text-xs">{t("pool.unmanagedHint")}</AlertDescription>
+          </Alert>
+        )}
+        {r.owner && (
+          <Alert>
+            <AlertDescription className="text-xs">{t("pool.own.hint", { name: ownerName(world, r.owner) })}</AlertDescription>
           </Alert>
         )}
         <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2.5 text-sm">
@@ -381,7 +398,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
           </Field>
         </dl>
 
-        {r.managed && world.view && (
+        {r.managed && !r.owner && world.view && (
           <>
             <Separator />
             <AccessEditor sub={r} view={world.view} targets={world.targets} onChanged={reload} />
@@ -432,7 +449,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
       <SheetFooter className="mt-auto flex-row justify-end gap-2 border-t p-4">
         {r.cred ? (
           <>
-            {r.paused ? (
+            {r.owner ? null : r.paused ? (
               <Button variant="outline" onClick={() => setPaused(false)}>
                 <Play />
                 {t("pool.resume")}
@@ -464,7 +481,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
               ok={t("pool.revoke")}
               onConfirm={async () => {
                 try {
-                  await api("/v1/fleet/credentials", { json: { action: "delete", principal_id: "pool", provider: r.cred!.provider, account: r.cred!.account } });
+                  await api("/v1/fleet/credentials", { json: { action: "delete", principal_id: r.owner || "pool", provider: r.cred!.provider, account: r.cred!.account } });
                   if (r.paused) await api("/v1/fleet/settings", { method: "PUT", json: { key: `pool.paused.${r.cred!.account}`, value: "" } }).catch(() => {});
                   toast.success(t("pool.revoked", { label: r.label }));
                   close();

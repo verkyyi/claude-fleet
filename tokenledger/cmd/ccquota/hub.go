@@ -126,6 +126,13 @@ func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 // to the node path. Unset or "direct" keeps the hub posting from its own
 // network, exactly as before; anything else refuses to start rather than guess.
 func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
+	// A member's own sign-in (claude-fleet#4035) exchanges its code the way
+	// refreshes go: direct from here, else through an admin node (the relay
+	// route below is a Codex refresh's only).
+	if vault != nil {
+		srv.OAuthExchange = api.DirectOAuthExchange(map[string]string{
+			"claude": os.Getenv("CCQUOTA_FLEET_CLAUDE_TOKEN_URL"), "codex": os.Getenv("CCQUOTA_FLEET_CODEX_TOKEN_URL")})
+	}
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_OAUTH_REFRESH_VIA"))); v {
 	case "", "direct":
 		return nil
@@ -135,6 +142,7 @@ func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
 			return nil
 		}
 		node := &credvault.ProxyRefresher{Via: srv.NodeOAuthRefresh}
+		srv.OAuthExchange = srv.NodeOAuthExchangeFunc()
 		if v == "node" {
 			vault.Refresher = node
 			log.Printf("fleet: credential refreshes are relayed through an online admin node (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node); none online = refresh_unavailable")

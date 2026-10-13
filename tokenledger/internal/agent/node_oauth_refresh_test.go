@@ -223,3 +223,94 @@ func TestOAuthRefreshRefusesUnknownProviderAndReportsTransportError(t *testing.T
 		t.Fatal("the transport error or the log carried the token")
 	}
 }
+
+// A member's own sign-in (claude-fleet#4035): the hub sends the
+// authorization_code exchange with Encoding "form", and the node posts it
+// urlencoded — to the same endpoint it picks by provider, once.
+func TestOAuthExchangeFormEncodedToTheProvidersEndpoint(t *testing.T) {
+	shrinkBackoff(t)
+	var hits atomic.Int64
+	var got atomic.Value
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		r.ParseForm()
+		got.Store(r.PostForm.Encode())
+		w.Write([]byte(`{"access_token":"at","refresh_token":"rt","id_token":"id"}`))
+	}))
+	t.Cleanup(provider.Close)
+	hub := newRefreshHub(t, control.OAuthRefresh{Provider: "codex", Encoding: control.OAuthEncodingForm, Form: map[string]string{
+		"grant_type": "authorization_code", "code": "c-SECRET", "code_verifier": "v", "client_id": "app_x", "redirect_uri": "http://localhost:1455/auth/callback"}})
+	logs := captureLog(t)
+	runFor(t, refreshTestAgent(t, hub.srv.URL, provider.URL, true), 800*time.Millisecond)
+	_, results, errs := hub.snapshot()
+	if len(errs) != 0 || len(results) != 1 || hits.Load() != 1 {
+		t.Fatalf("results %d errors %+v hits %d, want one result from one POST", len(results), errs, hits.Load())
+	}
+	var res control.OAuthRefreshResult
+	json.Unmarshal(results[0].Payload, &res)
+	if res.Status != http.StatusOK {
+		t.Fatalf("result = %+v, want the provider's 200 (it refuses anything but a urlencoded body)", res)
+	}
+	if f, _ := got.Load().(string); !strings.Contains(f, "grant_type=authorization_code") || !strings.Contains(f, "code=c-SECRET") {
+		t.Fatalf("provider got %q, want the hub's form", f)
+	}
+	if strings.Contains(logs.String(), "c-SECRET") {
+		t.Fatalf("the code reached the agent log:\n%s", logs.String())
+	}
+}
+
+// The relay answers to exactly two endpoints, the providers' official token
+// URLs, and the hub can never name another (claude-fleet#4035 — the decision
+// that let the relay carry a sign-in's code exchange kept it that narrow): a
+// request that carries a url / endpoint of its own still goes to the node's
+// pick, an unknown provider or encoding is refused, and nothing reaches the
+// address the hub named.
+func TestOAuthRelayOnlyTheTwoOfficialEndpoints(t *testing.T) {
+	if control.OAuthTokenURL("claude") != "https://platform.claude.com/v1/oauth/token" ||
+		control.OAuthTokenURL("codex") != "https://auth.openai.com/oauth/token" {
+		t.Fatalf("token endpoints = %q, %q", control.OAuthTokenURL("claude"), control.OAuthTokenURL("codex"))
+	}
+	for _, p := range []string{"github", "", "http://evil.example", "openai"} {
+		if u := control.OAuthTokenURL(p); u != "" {
+			t.Fatalf("OAuthTokenURL(%q) = %q, want none", p, u)
+		}
+	}
+
+	shrinkBackoff(t)
+	var evil, official atomic.Int64
+	evilSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { evil.Add(1) }))
+	t.Cleanup(evilSrv.Close)
+	officialSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		official.Add(1)
+		w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(officialSrv.Close)
+	// a payload with fields the struct does not have: they are dropped unread
+	m := control.Message{Type: control.TypeOAuthRefresh, Proto: control.Proto, OpID: "op-evil",
+		Payload: json.RawMessage(`{"provider":"codex","url":"` + evilSrv.URL + `","endpoint":"` + evilSrv.URL + `","token_url":"` + evilSrv.URL + `","form":{"grant_type":"authorization_code","code":"x"},"encoding":"form"}`)}
+	hub := newRefreshHub(t, control.OAuthRefresh{})
+	hub.req = m
+	runFor(t, refreshTestAgent(t, hub.srv.URL, officialSrv.URL, true), 800*time.Millisecond)
+	if evil.Load() != 0 || official.Load() != 1 {
+		t.Fatalf("evil hit %d, official hit %d — the hub must never pick the endpoint", evil.Load(), official.Load())
+	}
+
+	for _, req := range []control.OAuthRefresh{
+		{Provider: "github", Form: map[string]string{"grant_type": "authorization_code"}},
+		{Provider: "codex", Encoding: "multipart", Form: map[string]string{"grant_type": "authorization_code"}},
+	} {
+		hub := newRefreshHub(t, req)
+		runFor(t, refreshTestAgent(t, hub.srv.URL, officialSrv.URL, true), 600*time.Millisecond)
+		_, results, errs := hub.snapshot()
+		if len(results) != 0 || len(errs) != 1 {
+			t.Fatalf("%+v: results %d errors %d, want one refusal", req, len(results), len(errs))
+		}
+	}
+	if official.Load() != 1 {
+		t.Fatalf("a refused request still posted (official hit %d)", official.Load())
+	}
+}
