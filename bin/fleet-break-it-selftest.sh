@@ -4385,7 +4385,7 @@ drill_train_flaky_retry_hides_red() { quarantine_leg retry-red "重跑还红是 
 # one TRAIN_SHA: after its tests and precheck it deploys the hub through
 # hub-deploy.yml's own job (workflow_call, sha) — or skips it when the hub already
 # runs TRAIN_SHA's Go, deploy/k8s, site/ and docs/public/ (bin/fleet-train-hub.sh) — then publishes
-# TRAIN_SHA and moves stable with --train (CI / macOS gates read this run's jobs).
+# TRAIN_SHA and moves stable with --train (the CI gate reads this run's jobs; macOS follows, #3869).
 # A rollback dispatched by hand still makes a split: the doctor's hub-image row
 # says so (bin/fleet-hub-image.sh `source: SPLIT`). The hub taking the train's
 # OIDC publish is its Go test, held by name. Rigs: a bare repo, a file:// hub, a
@@ -4404,7 +4404,7 @@ drill_train_hub_stable_split() {
   job=$(awk '/^  [a-z][a-z0-9_-]*:$/{j=$1} /uses: \.\/\.github\/workflows\/hub-deploy\.yml/{print j; exit}' "$wf")
   [ -n "$job" ] || { WHY="release-train.yml deploys no hub (no job uses ./.github/workflows/hub-deploy.yml)"; return 1; }
   v=$(awk -v j="  $job" '$0 == j {o=1; next} o && /^  [a-z]/{o=0} o' "$wf")
-  for need in linux macos gate; do
+  for need in linux gate; do   # macOS follows the release (mac-follow.yml, #3869)
     printf '%s\n' "$v" | grep -Eq "needs:.*[^a-z_]$need([^a-z_]|\$)" || { WHY="the hub deploy ($job) does not wait for $need"; return 1; }
   done
   printf '%s\n' "$v" | grep -q 'sha: \${{ needs.board.outputs.train_sha }}' \
