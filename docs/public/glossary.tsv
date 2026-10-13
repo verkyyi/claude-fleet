@@ -1,4 +1,6 @@
 zh	en	note
+# The words of the English pages under docs/public/en/. UI labels are quoted as the UI's own English says them:
+# the console's tokenledger/web/dist/lib/i18n/en.js, the client's bin/fleet-ui-lang.sh (en), the hub pages' tokenledger/internal/api/pagetext.go.
 会话	session	one running Claude Code or Codex doing a task; "Claude session" when a tmux session is also in play (docs/dev/TERMS.md)
 任务	task	one thing a person asked for; recorded as T<n>
 任务记录	task record	the hub's T<n> row
@@ -7,6 +9,7 @@ zh	en	note
 官网	website	the public site at the hub's / (our own hub only)
 控制台	console	the hub's web pages after sign-in
 设备 / 机器	device / machine	where sessions run; "machine" in admin and self-host pages
+服务节点	service node	the console's word for a machine (ui.nav.machines: Service nodes & clients)
 承载	host (capability)	this computer runs sessions: `fleet host on`; the protocol says node (docs/dev/TERMS.md)
 节点	node	the hub protocol's word for a hosting machine
 客户端	client	the `fleet` program on a person's own computer
@@ -17,6 +20,7 @@ zh	en	note
 用量	usage	tokens spent
 订阅	subscription	a Claude or ChatGPT plan; "bring your own subscription" is optional
 成员	member	a person invited to a hub
+使用者	user	the console's word for a member (ui.nav.people: Users)
 管理员	admin	a person who manages people, subscriptions and quota
 开号 / 删号	create an account / remove an account	on the hub, for a member
 邀请 / 邀请码	invite / invite code

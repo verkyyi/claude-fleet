@@ -5,7 +5,8 @@
 #   A  every row `fleet doctor` / `fleet doctor --machine` can print (read off
 #      bin/fleet-doctor.sh + bin/fleet-node-update.py by bin/fleet-doctor-rows.py)
 #      has its `#### `<row>`` section on docs/public/zh/troubleshooting.md, none a
-#      skeleton, none for a row the doctor no longer prints
+#      skeleton, none for a row the doctor no longer prints — and on its English
+#      twin docs/public/en/troubleshooting.md the same (issue #3592)
 #   B  in a sandbox doctor: a new row reds page-check and page-skeleton prints its
 #      section; a 「待写」 skeleton reds; a section for a gone row reds
 #   C  bin/docs-faq.py check passes for zh and en; both mark the same number of
@@ -20,6 +21,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROWS="$ROOT/bin/fleet-doctor-rows.py"
 FAQ="$ROOT/bin/docs-faq.py"
 PAGE="$ROOT/docs/public/zh/troubleshooting.md"
+PAGE_EN="$ROOT/docs/public/en/troubleshooting.md"
 T="$(mktemp -d "${TMPDIR:-/tmp}/docs-faq-st.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
 fail=0
@@ -31,6 +33,11 @@ if out="$(python3 "$ROWS" page-check "$PAGE" --root "$ROOT" 2>&1)"; then
   ok "A troubleshooting covers all $(python3 "$ROWS" names --root "$ROOT" | wc -l | tr -d ' ') doctor rows"
 else
   bad "A troubleshooting page vs the doctor's rows:"; printf '%s\n' "$out" | sed 's/^/     /'
+fi
+if out="$(python3 "$ROWS" page-check "$PAGE_EN" --root "$ROOT" 2>&1)"; then
+  ok "A the English troubleshooting page covers them too"
+else
+  bad "A en/troubleshooting.md vs the doctor's rows (translate the zh sections):"; printf '%s\n' "$out" | sed 's/^/     /'
 fi
 
 # B — a sandbox doctor with three rows
