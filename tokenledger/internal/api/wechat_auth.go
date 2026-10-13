@@ -136,16 +136,25 @@ func (s *Server) wechatCallbackURL(r *http.Request) string {
 	return s.hubURL(r) + "/auth/wechat/callback"
 }
 
-// handleWeChatStart sends the browser to WeChat: the service account inside
-// WeChat, the website app's QR code anywhere else.
+// handleWeChatStart sends the browser to WeChat: inside WeChat the service
+// account — through workbench's relay when it is configured (wx_relay.go),
+// else with the account's own secret — and the website app's QR code
+// anywhere else.
 func (s *Server) handleWeChatStart(w http.ResponseWriter, r *http.Request) {
-	if !s.WeChat.ready() {
+	relay := inWeChat(r) && s.wxRelayOn()
+	if !relay && !s.WeChat.ready() {
 		http.NotFound(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET")
 		httpError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	if relay {
+		// Inside WeChat through workbench's relay: no secret of ours, no
+		// prompt (claude-fleet#4055).
+		s.wxRelayStart(w, r)
 		return
 	}
 	road := wechatRoadWeb

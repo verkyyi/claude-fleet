@@ -260,6 +260,15 @@ func (s *Server) wxFinishLogin(w http.ResponseWriter, r *http.Request, c *store.
 		http.Redirect(w, r, appURL("/signin")+"?e=wechat-expired", http.StatusFound)
 		return
 	}
+	s.wxLand(w, r, u, now)
+}
+
+// wxLand signs in whoever the service account says u is — the scan's road
+// and the web-authorisation relay's (wx_relay.go) alike: someone on the list
+// comes in, someone not on it goes to /apply as an applicant, and the openid
+// is kept as where to reach them.
+func (s *Server) wxLand(w http.ResponseWriter, r *http.Request, u wxUser, now time.Time) {
+	openid := u.OpenID
 	kind, subject, err := s.wxIdentity(u, now)
 	if err != nil {
 		log.Printf("wechat scan: %v", err)

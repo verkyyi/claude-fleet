@@ -1234,8 +1234,19 @@ func wxGatewayFromEnv(getenv func(string) string) *api.WxGateway {
 		return nil
 	}
 	log.Printf("wechat follow sign-in: on, through %s", u)
-	return &api.WxGateway{URL: u, Token: tok, AppID: strings.TrimSpace(getenv("CCQUOTA_WX_APPID")),
+	g := &api.WxGateway{URL: u, Token: tok, AppID: strings.TrimSpace(getenv("CCQUOTA_WX_APPID")),
 		APIBase: strings.TrimSpace(getenv("CCQUOTA_WECHAT_API_BASE"))}
+	// Inside WeChat, no scan (claude-fleet#4055): workbench's web-authorisation
+	// relay, signed with the same gate token. Unset ⇒ WeChat's browser gets the
+	// code page, as before.
+	if relay := strings.TrimSpace(getenv("CCQUOTA_WX_RELAY_URL")); relay != "" {
+		g.RelayURL = relay
+		g.RelayTarget = strings.TrimSpace(getenv("CCQUOTA_WX_RELAY_TARGET"))
+		g.ComponentAppID = strings.TrimSpace(getenv("CCQUOTA_WX_COMPONENT_APPID"))
+		g.AuthorizeBase = strings.TrimSpace(getenv("CCQUOTA_WECHAT_AUTHORIZE_BASE"))
+		log.Printf("wechat in-app sign-in: on, through %s", relay)
+	}
+	return g
 }
 
 // githubOAuthVia wires where the GitHub sign-in trades its code for a token

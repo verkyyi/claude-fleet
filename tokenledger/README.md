@@ -907,6 +907,18 @@ offers every way that is configured, always in this order:
   someone not on the list becomes an applicant at `/apply`. The openid is kept as
   where to reach them (`hub_reach`). Either variable unset ⇒ `/signin` is what it
   was, byte for byte.
+- **Inside WeChat, no scan** (claude-fleet#4055) — add `CCQUOTA_WX_RELAY_URL`
+  (workbench's web-authorisation relay, `https://ac.ssl.24gmweb.com/node_w/wx/oauth/relay`)
+  and WeChat's own browser skips the code: `/signin` → `/auth/wechat/start` →
+  the service account's silent `snsapi_base` authorisation (authorised by the
+  company's third-party platform, `CCQUOTA_WX_COMPONENT_APPID`) → the relay,
+  which sends the openid back to `/auth/wechat/relay-cb` under our registered
+  name (`CCQUOTA_WX_RELAY_TARGET`, default `fleet`) signed with the same
+  `CCQUOTA_WX_INTERNAL_TOKEN`. The callback takes it only with that signature,
+  a time within five minutes, the nonce this browser started and once (BREAK-IT
+  `wx-relay-forged`); the person then lands exactly as a scan does — on the list
+  ⇒ in, not ⇒ `/apply`. Any failure is `/signin?e=…`, which also stops the hop.
+  Unset ⇒ WeChat's browser gets the code page, as before.
 - **A mail** — `CCQUOTA_SMTP_URL` (`smtp://user:pass@host:587` with STARTTLS, or
   `smtps://…:465`) and `CCQUOTA_SMTP_FROM`; today Amazon SES's SMTP interface, and
   another provider is another URL. `POST /auth/email/start` mails a link and six

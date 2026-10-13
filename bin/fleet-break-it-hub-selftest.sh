@@ -54,6 +54,9 @@
 #   fleet-scene-cross                               tokenledger/internal/api wx_scan.go (wxScene, wxScenePoll,
 #                                                   wxFinishLogin) + wxgw.go (wxSceneInRange) + internal/store
 #                                                   hub_wx_scenes.go; go test, when a toolchain is here
+#   wx-relay-forged                                 tokenledger/internal/api wx_relay.go (wxRelayStart,
+#                                                   handleWxRelayCB, wxRelaySig) + wx_scan.go (wxLand); go test,
+#                                                   when a toolchain is here
 #   email-link-replay                               tokenledger/internal/api email_auth.go (handleEmailLink /
 #                                                   handleEmailCode) + internal/store hub_signin.go; go test, when here
 #   node-token-replayed                             tokenledger/internal/api node_sig.go (nodeAuth) + store,
@@ -2293,6 +2296,25 @@ drill_fleet_scene_cross() {
   c11_go_tests wx_scan_test.go TestWxSceneCross TestWxScanNotListedApplies TestWxGatewayToken || return 1
   WHAT='入口只在 [3000000, 4000000) 出码、只问这一段；码只在出码的浏览器里换一次会话（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='40 个浏览器出的码全在本段；别的浏览器拿同一 scene 被拒且不问 workbench；段外 scene 不问；换过的码重放被拒；名单外的不建人（go test 三条）'
+  SECS=$(since "$t0")
+}
+
+# A forged or replayed return from workbench's web-authorisation relay signs
+# someone in inside WeChat (claude-fleet#4055, EPIC #4048 C7): the relay sends
+# the openid back on the browser's URL, so a callback is only as good as its
+# signature, its time, its nonce's binding to this browser and its one use.
+drill_wx_relay_forged() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'hmac.Equal(\[\]byte(sig), \[\]byte(wxRelaySig(s.WxGW.Token' "$tl/api/wx_relay.go" 2>/dev/null \
+    || { WHY="the relay callback no longer checks the signature with the gate token (wx_relay.go)"; return 1; }
+  grep -q '!constantTimeEqual(nonce, flow.State)' "$tl/api/wx_relay.go" \
+    || { WHY="the relay callback no longer ties the nonce to the browser that started the hop (wx_relay.go)"; return 1; }
+  grep -q 'SpendSigninValue(spentHash("wx-relay", nonce)' "$tl/api/wx_relay.go" \
+    || { WHY="a relay callback is no longer one use (wx_relay.go)"; return 1; }
+  c11_go_tests wx_relay_test.go TestWxRelayRefused TestWxRelaySignsInListed TestWxRelayNotListedApplies || return 1
+  WHAT='中转回跳只认：入口那把密钥的签名 · 5 分钟内的时间 · 本浏览器发起的 nonce · 只用一次（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='签名错 / 过期 / 来自未来 / 别的浏览器 / 没有发起 / 中转报错 / 重放全被拒且不发会话、不再自动跳；名单内的进、名单外的到 /apply（go test 三条）'
   SECS=$(since "$t0")
 }
 

@@ -348,7 +348,7 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 		e, step := r.URL.Query().Get("e"), r.URL.Query().Get("step")
 		// WeChat's own browser signs in by the service account, no scan:
 		// straight there, unless the page has something to say.
-		if inWeChat(r) && s.WeChat.mpReady() && e == "" && step == "" {
+		if inWeChat(r) && (s.WeChat.mpReady() || s.wxRelayOn()) && e == "" && step == "" {
 			http.Redirect(w, r, "/auth/wechat/start", http.StatusFound)
 			return
 		}
