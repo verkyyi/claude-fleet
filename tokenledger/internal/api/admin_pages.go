@@ -73,7 +73,7 @@ func (s *Server) adminPage(id, file string) http.Handler {
 func (s *Server) denyAdminPage(w http.ResponseWriter, r *http.Request) {
 	s.auditRoleDenied(r)
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow") // as under /app and /admin
-	http.NotFound(w, r)
+	s.notFoundPage(w, r)
 }
 
 // loadHistory is each machine's load per core, one bucket per five minutes

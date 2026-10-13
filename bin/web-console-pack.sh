@@ -20,6 +20,13 @@
 # script says so and leaves the directory empty — the hub then serves no new
 # console (404), the old one as before.
 #
+# The theme the way-in pages wear (/signin, /fleet/login, /i/, the 404 —
+# claude-fleet#3932) is packed every time, build or not: extras/fleet-theme's
+# theme.css, fonts.css, fonts/*.woff2 and logo.svg go to tokenledger/web/theme/
+# (gitignored but its .gitkeep), served at /app/assets/fleet-theme/.
+#
+#   web-console-pack.sh --theme-out <dir>   the theme into <dir>
+#
 # Exit: 0 ok (or nothing to pack) · 1 the build is broken · 2 usage.
 set -euo pipefail
 real="$0"
@@ -30,14 +37,32 @@ done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
 DIST="$REPO/extras/web-console/dist"
 OUT="$REPO/tokenledger/web/console"
+THEME="$REPO/extras/fleet-theme"
+THEME_OUT="$REPO/tokenledger/web/theme"
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) [ $# -ge 2 ] || { echo "web-console-pack: --out <dir>" >&2; exit 2; }; OUT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --theme-out) [ $# -ge 2 ] || { echo "web-console-pack: --theme-out <dir>" >&2; exit 2; }; THEME_OUT="$2"; shift 2 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "web-console-pack: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+case "$THEME_OUT" in /*) ;; *) THEME_OUT="$PWD/$THEME_OUT" ;; esac
+
+# the theme, first: the way-in pages need it whether or not the console is built
+mkdir -p "$THEME_OUT"
+find "$THEME_OUT" -mindepth 1 ! -name .gitkeep -exec rm -rf {} + 2>/dev/null || true
+mkdir -p "$THEME_OUT/fonts"
+for f in theme.css fonts.css logo.svg; do
+  [ -f "$THEME/$f" ] || { echo "web-console-pack: $THEME/$f is missing" >&2; exit 1; }
+  cp "$THEME/$f" "$THEME_OUT/$f"
+done
+cp "$THEME"/fonts/*.woff2 "$THEME_OUT/fonts/"
+if grep -Eq 'url\((["'"'"']?)https?:' "$THEME_OUT"/*.css; then
+  echo "web-console-pack: $THEME_OUT loads from another origin" >&2; exit 1
+fi
+echo "web-console-pack: theme → $THEME_OUT"
 
 mkdir -p "$OUT"
 find "$OUT" -mindepth 1 ! -name .gitkeep -exec rm -rf {} + 2>/dev/null || true

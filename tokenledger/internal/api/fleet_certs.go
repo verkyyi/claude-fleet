@@ -1101,42 +1101,25 @@ type loginPage struct {
 	Denied  bool
 }
 
-var loginTmpl = template.Must(template.New("login").Funcs(pageFuncs(i18n.EN)).Parse(`<!doctype html>
-<html lang="{{.Lang}}"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{.Title}}</title>
-<style>
-:root{--bg:#fff;--fg:#1f2328;--mut:#59636e;--card:#f6f8fa;--line:#d1d9e0;--ok:#1a7f37;--bad:#cf222e;--btn:#1f6feb;--ink:var(--fg);--ink-2:var(--mut)}
-@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--mut:#9198a1;--card:#151b23;--line:#3d444d;--ok:#3fb950;--bad:#f85149;--btn:#388bfd}}
-body{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
-:lang(zh) body{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;line-height:1.75}
-main{max-width:460px;margin:0 auto}
-.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin:0 0 16px}
-h1{font-size:20px;margin:0;line-height:1.3}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0;overflow-wrap:anywhere}
-.code{font:600 28px/1.2 ui-monospace,Menlo,monospace;letter-spacing:2px}
-.mut{color:var(--mut);font-size:14px}
-code{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-all}
-.row{display:flex;gap:12px;margin-top:16px}
-button{flex:1;font-size:16px;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-button.go{background:var(--btn);border-color:var(--btn);color:#fff}
-.ok{color:var(--ok)}.bad{color:var(--bad)}
-` + langSwitchCSS + `</style></head><body><main>
-<div class="top"><h1>{{.Title}}</h1>` + langSwitch + `</div>
-{{if .Error}}<div class="card bad">{{.Error}}</div>
-{{else if .Done}}{{if .Denied}}<div class="card">{{t "login.denied"}}</div>
-{{else}}<div class="card ok">{{.DoneHTML}}</div>{{end}}
+// loginTmpl is the page the QR opens — a way-in page (entry_pages.go). The
+// address, the form and its fields are what the client and the QR expect.
+var loginTmpl = template.Must(template.New("login").Funcs(pageFuncs(i18n.EN)).Parse(entryHead + `
+<title>{{.Title}}</title></head><body><div class="page">` + entryTop + `
+<main class="col"><h1>{{.Title}}<span class="dot">.</span></h1>
+{{if .Error}}<p class="alert bad" role="alert">` + alertIcon + `<span>{{.Error}}</span></p>
+{{else if .Done}}{{if .Denied}}<p class="alert" role="status">` + alertIcon + `<span>{{t "login.denied"}}</span></p>
+{{else}}<p class="alert ok" role="status">` + checkIcon + `<span>{{.DoneHTML}}</span></p>{{end}}
 {{else if .Confirm}}
-<p>{{t "login.confirm.lead"}}</p>
-<div class="card"><div class="mut">{{t "login.code"}}</div><div class="code">{{.Code}}</div></div>
-<div class="card"><div class="mut">{{t "login.for"}}</div><div>{{.Who}} · {{t "login.account"}} <b>{{.Login}}</b></div>
-<div class="mut" style="margin-top:8px">{{t "login.keyfp"}}</div><code>{{.KeyFP}}</code>
-<div class="mut" style="margin-top:8px">{{t "login.validity"}}</div>
-{{if .Node}}<div class="mut" style="margin-top:8px">{{.NodeNoteHTML}}</div>{{end}}</div>
+<p class="lead">{{t "login.confirm.lead"}}</p>
+<div class="card"><p class="label">{{t "login.code"}}</p><p class="big">{{.Code}}</p></div>
+<div class="card"><p class="label">{{t "login.for"}}</p><p>{{.Who}} · {{t "login.account"}} <b>{{.Login}}</b></p>
+<p class="label">{{t "login.keyfp"}}</p><p class="mono">{{.KeyFP}}</p>
+<p class="label">{{t "login.validity"}}</p>
+{{if .Node}}<p class="label">{{.NodeNoteHTML}}</p>{{end}}</div>
 <form method="post" action="/fleet/login"><input type="hidden" name="code" value="{{.Code}}">
-<div class="row"><button name="action" value="deny">{{t "login.btn.deny"}}</button><button class="go" name="action" value="approve">{{t "login.btn.approve"}}</button></div></form>
+<div class="row"><button class="btn outline" name="action" value="deny">{{t "login.btn.deny"}}</button><button class="btn primary" name="action" value="approve">{{t "login.btn.approve"}}</button></div></form>
 {{end}}
-</main></body></html>`))
+</main></div></body></html>`))
 
 // purposeNode is the device-flow purpose of `fleet node join` (#1627).
 const purposeNode = "node"
@@ -1189,10 +1172,7 @@ func renderLoginPage(w http.ResponseWriter, p loginPage) {
 	if p.Title == "" {
 		p.Title = pageT(p.Lang, "login.title")
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Language", p.Lang)
+	entryHeaders(w, p.Lang)
 	if c, err := loginTmpl.Clone(); err == nil {
 		_ = c.Funcs(pageFuncs(p.Lang)).Execute(w, p)
 	}

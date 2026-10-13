@@ -102,6 +102,10 @@ type Server struct {
 	// ConsoleFS is the new console's build (web/console, claude-fleet#3925):
 	// app/ for /app's entry and assets, admin/ for /admin's; nil = none yet.
 	ConsoleFS fs.FS
+	// ThemeFS is extras/fleet-theme as packed into web/theme
+	// (claude-fleet#3932), served at /app/assets/fleet-theme/ for the way-in
+	// pages; nil = none, and those pages draw in the browser's defaults.
+	ThemeFS fs.FS
 
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,

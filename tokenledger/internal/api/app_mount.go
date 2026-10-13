@@ -384,6 +384,9 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
+		case strings.HasPrefix(p, themePrefix):
+			// the theme the way-in pages wear (claude-fleet#3932)
+			s.serveTheme(w, r, strings.TrimPrefix(p, themePrefix))
 		case strings.HasPrefix(p, AppPrefix+"/assets/"):
 			// the new console's member side (claude-fleet#3925)
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
@@ -444,7 +447,7 @@ func (s *Server) serveAppPage(w http.ResponseWriter, r *http.Request, next http.
 		return
 	}
 	if !isAppPage(inner) {
-		http.NotFound(w, r)
+		s.notFoundPage(w, r)
 		return
 	}
 	r2 := r.WithContext(context.WithValue(r.Context(), appMountedKey{}, true))

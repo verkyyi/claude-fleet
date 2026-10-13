@@ -109,56 +109,44 @@ var signinWayNotes = map[string]bool{
 	"email-bad": true,
 }
 
-const wechatIcon = `<svg viewBox="0 0 24 24"><path d="M9 4C5.1 4 2 6.6 2 9.8c0 1.8 1 3.4 2.6 4.5L4 16.5l2.6-1.3c.8.2 1.6.4 2.4.4M15.5 9C12.5 9 10 11 10 13.6s2.5 4.6 5.5 4.6c.6 0 1.2-.1 1.8-.3l2.2 1.1-.5-1.9c1.2-.9 2-2.1 2-3.5C21 11 18.5 9 15.5 9z"/></svg>`
-const mailIcon = `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>`
-
-const signinWaysCSS = `<style>
-.btn.wx{background:#07c160;border-color:#07c160;color:#fff}
-.ways{display:grid;gap:12px}
-.ways form{display:grid;gap:8px}
-.ways input{font:15px var(--f-ui);padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink);width:100%}
-.ways input.code{font:600 22px ui-monospace,Menlo,monospace;letter-spacing:.35em;text-align:center}
-.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px}.or:before,.or:after{content:"";flex:1;border-top:1px solid var(--line)}
-</style>`
-
-var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + signinWaysCSS + `
-<title>{{t "signin.title"}}</title></head><body><div class="pub">` + authNav + `
-<div class="center"><main class="card">
-<div class="big"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></div>
-<div style="display:grid;gap:6px"><h1>{{t "signin.h1"}}</h1><p class="lead">{{if .Code}}{{t "signin.code.lead"}}{{else}}{{t "signin.ways.lead"}}{{end}}</p></div>
-{{if .Note}}<p class="note" role="status">{{.Note}}</p>{{end}}
-<div class="ways">
-{{if .Code}}<form method="post" action="/auth/email/code">
-<input class="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus aria-label="{{t "signin.code.label"}}">
-<button class="btn lg" type="submit">{{t "signin.code.button"}}</button></form>
-<a class="alt" href="/app/signin">{{t "signin.code.again"}}</a>
-{{else}}{{if .WeChat}}<a class="btn wx lg" href="/auth/wechat/start">` + wechatIcon + `{{if .InWeChat}}{{t "signin.wechat.in"}}{{else}}{{t "signin.wechat"}}{{end}}</a>{{end}}
-{{if .Email}}{{if .WeChat}}<div class="or">{{t "signin.or"}}</div>{{end}}<form method="post" action="/auth/email/start">
-<input type="email" name="email" autocomplete="email" required placeholder="{{t "signin.email.placeholder"}}" aria-label="{{t "signin.email.placeholder"}}">
-<button class="btn lg" type="submit">` + mailIcon + `{{t "signin.email.button"}}</button></form>{{end}}
-{{if .GitHub}}{{if or .WeChat .Email}}<div class="or">{{t "signin.or"}}</div>{{end}}<a class="btn gh lg" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>{{end}}
-{{end}}</div>
-<p class="fine">{{t "signin.ways.fine"}}</p>
-</main></div></div></body></html>`))
+var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
+<title>{{t "signin.title"}}</title></head><body><div class="page">` + entryTop + `
+<main class="col"><h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
+<p class="lead">{{if .Code}}{{t "signin.code.lead"}}{{else}}{{t "signin.ways.lead"}}{{end}}</p>
+{{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
+{{if .Code}}<form class="stack" method="post" action="/auth/email/code">
+<label for="code">{{t "signin.code.label"}}</label>
+<input class="input code" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus>
+<button class="btn primary" type="submit">{{t "signin.code.button"}}</button></form>
+<p class="fine"><a href="/app/signin">{{t "signin.code.again"}}</a></p>
+{{else}}{{if .WeChat}}<a class="btn wx" href="/auth/wechat/start">` + wechatIcon + `{{if .InWeChat}}{{t "signin.wechat.in"}}{{else}}{{t "signin.wechat"}}{{end}}</a>{{end}}
+{{if .Email}}{{if .WeChat}}<div class="or">{{t "signin.or"}}</div>{{end}}<form class="stack" method="post" action="/auth/email/start">
+<label for="email">{{t "signin.email.label"}}</label>
+<input class="input" type="email" id="email" name="email" autocomplete="email" required placeholder="{{t "signin.email.placeholder"}}">
+<button class="btn outline" type="submit">{{t "signin.email.button"}}</button></form>{{end}}
+{{if .GitHub}}{{if or .WeChat .Email}}<div class="or">{{t "signin.or"}}</div>{{end}}<a class="btn {{if or .WeChat .Email}}outline{{else}}primary{{end}}" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>{{end}}
+<p class="fine">{{t "signin.ways.fine"}}</p>{{end}}
+</main></div></body></html>`))
 
 // signinWaysText is the words the page with several ways adds; merged into
 // pageText at start.
 var signinWaysText = map[string]i18n.Text{
 	"signin.ways.lead": {
-		i18n.EN:   "This hub is private. Sign in the way an admin let you in — WeChat, your email, or GitHub.",
-		i18n.ZhCN: "这个入口是私有的。用管理员给你开的方式登录：微信、邮箱或 GitHub。",
+		i18n.EN:   "Pick up your chats and sessions.",
+		i18n.ZhCN: "继续你的对话和会话。",
 	},
 	"signin.ways.fine": {
-		i18n.EN:   "claudefleet learns only who you are — never your chats, contacts or repositories.",
-		i18n.ZhCN: "claudefleet 只知道你是谁，拿不到你的聊天、通讯录和仓库。",
+		i18n.EN:   "No account yet? Ask an admin for an invite.",
+		i18n.ZhCN: "还没有账号？向管理员要一条邀请。",
 	},
-	"signin.wechat":    {i18n.EN: "Scan with WeChat", i18n.ZhCN: "微信扫码登录"},
-	"signin.wechat.in": {i18n.EN: "Continue with WeChat", i18n.ZhCN: "用微信继续"},
-	"signin.or":        {i18n.EN: "or", i18n.ZhCN: "或"},
+	"signin.wechat":      {i18n.EN: "Sign in with WeChat", i18n.ZhCN: "微信登录"},
+	"signin.wechat.in":   {i18n.EN: "Continue with WeChat", i18n.ZhCN: "用微信继续"},
+	"signin.or":          {i18n.EN: "or", i18n.ZhCN: "或"},
+	"signin.email.label": {i18n.EN: "Email", i18n.ZhCN: "邮箱"},
 	"signin.email.placeholder": {
-		i18n.EN: "Your email", i18n.ZhCN: "你的邮箱",
+		i18n.EN: "you@example.com", i18n.ZhCN: "you@example.cn",
 	},
-	"signin.email.button": {i18n.EN: "Email me a sign-in link", i18n.ZhCN: "发登录邮件"},
+	"signin.email.button": {i18n.EN: "Email me a sign-in link", i18n.ZhCN: "发登录链接"},
 	"signin.code.lead": {
 		i18n.EN:   "If that address can sign in here, a mail is on its way: open its link in this browser, or type its six digits here. It lasts 15 minutes. Not there? Look in spam.",
 		i18n.ZhCN: "如果这个邮箱能登录本入口，信已经发出：在这个浏览器里点信里的链接，或在这里输入信里的 6 位数字。15 分钟内有效。没收到？看看垃圾箱。",

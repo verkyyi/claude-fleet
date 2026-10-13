@@ -191,14 +191,9 @@ func pageT(loc, key string) string {
 	return txt.In(loc)
 }
 
-// langSwitchCSS + langSwitch are the 中文 / EN pair on the public pages' top
-// bar. Plain links: the server does the remembering, so it works with no
-// script at all.
-const langSwitchCSS = `.langsw{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;flex:none}
-.langsw a{padding:4px 9px;font-size:12.5px;color:var(--ink-2);text-decoration:none;line-height:1.4}
-.langsw a[aria-current]{background:var(--ink);color:var(--bg)}
-`
-
+// langSwitch is the 中文 / EN pair on the public pages' top bar (styled by
+// entryCSS). Plain links: the server does the remembering, so it works with
+// no script at all.
 const langSwitch = `<span class="langsw" role="group" aria-label="{{t "lang.label"}}"><a href="{{.ZhHref}}" lang="zh-CN" hreflang="zh-CN"{{if .IsZh}} aria-current="true"{{end}}>中文</a><a href="{{.EnHref}}" lang="en" hreflang="en"{{if not .IsZh}} aria-current="true"{{end}}>EN</a></span>`
 
 // zhTypeCSS sets Chinese as Chinese: the system's Chinese faces (no web font —

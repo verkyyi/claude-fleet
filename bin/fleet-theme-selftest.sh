@@ -20,7 +20,8 @@
 #   B  the repo: one source (the package), nothing outside it — prints the report
 #   C  the consumers take it from the package: site/template.html has the
 #      /*{{fleet_theme}}*/ slot, the web chat's theme.css imports it, site-build.sh
-#      and site-images.sh read extras/fleet-theme
+#      and site-images.sh read extras/fleet-theme, the way-in pages link the
+#      packed copy (web-console-pack.sh copies it, claude-fleet#3932)
 #   D  the guard bites: a planted definition (a colour, a family, a logo) in a
 #      sandbox copy is red, naming the file
 set -uo pipefail
@@ -46,7 +47,7 @@ PKG = 'extras/fleet-theme/'
 EXEMPT = {   # a page the batch replaces, and the member that does
     'tokenledger/web/dist/app.css': 'C16 #3939 拆掉旧控制台',
     'tokenledger/web/dist/landing.html': 'C16 #3939 拆掉旧控制台',
-    'tokenledger/internal/api/github_auth.go': 'C9 #3932 登录页换样子',
+    'tokenledger/internal/api/oldpages_palette.go': 'C5 #3928 · C7 #3930 单子页、从手机连',
     'bin/docs-build.sh': 'C18 #3941 帮助文档',
     'plugins/fleet-epic/skills/epic-page/template.html': 'EPIC 设计页（doc-preview，不是产品页面）',
 }
@@ -123,6 +124,10 @@ grep -q '/\*{{fleet_theme}}\*/' "$REPO/site/template.html" && ok "C the website'
   || bad "C site/template.html has no /*{{fleet_theme}}*/ slot"
 grep -q '@import "../../../fleet-theme/theme.css"' "$REPO/extras/web-chat/ui/src/theme.css" && ok "C the web chat imports the package" \
   || bad "C extras/web-chat/ui/src/theme.css does not import extras/fleet-theme/theme.css"
+grep -q 'THEME="$REPO/extras/fleet-theme"' "$REPO/bin/web-console-pack.sh" \
+  && grep -q 'themePrefix + `theme.css' "$REPO/tokenledger/internal/api/entry_pages.go" \
+  && ok "C the way-in pages link the theme web-console-pack.sh packs" \
+  || bad "C the way-in pages (entry_pages.go) do not take extras/fleet-theme through web-console-pack.sh"
 for s in site-build.sh site-images.sh; do
   grep -q "extras.*fleet-theme\|'extras', 'fleet-theme'" "$REPO/bin/$s" && ok "C $s reads extras/fleet-theme" || bad "C $s does not read extras/fleet-theme"
 done

@@ -502,21 +502,17 @@ func (x *WeChatAuth) get(ctx context.Context, path string, out any) error {
 	return nil
 }
 
-var wechatBindTmpl = template.Must(template.New("wechat-bind").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + signinWaysCSS + `
-<title>{{t "wxbind.title"}}</title></head><body><div class="pub">` + authNav + `
-<div class="center"><main class="card">
-<div class="big" style="background:#07c160">` + wechatIcon + `</div>
-<div style="display:grid;gap:6px"><h1>{{t "wxbind.h1"}}</h1><p class="lead">{{t "wxbind.lead"}}</p></div>
-<div class="ways">
+var wechatBindTmpl = template.Must(template.New("wechat-bind").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
+<title>{{t "wxbind.title"}}</title></head><body><div class="page">` + entryTop + `
+<main class="col"><h1>{{t "wxbind.h1"}}<span class="dot">.</span></h1><p class="lead">{{t "wxbind.lead"}}</p>
 {{if eq .Mode "link"}}<form method="post" action="/auth/wechat/bind"><input type="hidden" name="action" value="link">
-<button class="btn wx lg" type="submit">{{tb "wxbind.link" .Person}}</button></form>
+<button class="btn wx" type="submit">` + wechatIcon + `{{tb "wxbind.link" .Person}}</button></form>
 {{else if eq .Mode "invite"}}<form method="post" action="/auth/wechat/bind"><input type="hidden" name="action" value="invite">
-<button class="btn wx lg" type="submit">{{t "wxbind.invite"}}</button></form>
-{{else}}<p class="note">{{t "wxbind.none"}}</p>
-<a class="btn lg" href="/app/signin">{{t "wxbind.other"}}</a>{{end}}
-</div>
+<button class="btn wx" type="submit">` + wechatIcon + `{{t "wxbind.invite"}}</button></form>
+{{else}}<p class="alert">` + alertIcon + `<span>{{t "wxbind.none"}}</span></p>
+<a class="btn outline" href="/app/signin">{{t "wxbind.other"}}</a>{{end}}
 <p class="fine">{{t "wxbind.fine"}}</p>
-</main></div></div></body></html>`))
+</main></div></body></html>`))
 
 func init() {
 	for k, v := range map[string]i18n.Text{

@@ -26,6 +26,12 @@ func consoleDo(h http.Handler, method, path string, sess *http.Cookie) *httptest
 }
 
 // sameAnswer says how a and b differ: status, every header but Date, body.
+// isNotFoundPage says whether body is 「页面不存在」 (entry_pages.go,
+// claude-fleet#3932): the 404 every address a member may not see answers.
+func isNotFoundPage(body string) bool {
+	return strings.Contains(body, `<p class="num">404</p>`) && strings.Contains(body, `href="`+themePrefix+`theme.css"`)
+}
+
 func sameAnswer(a, b *httptest.ResponseRecorder) string {
 	if a.Code != b.Code {
 		return "status"
@@ -83,7 +89,7 @@ func adminOlds() []string {
 
 // A member asking for any admin address — an old one under /app, a bare one
 // from before it, anything under /admin — gets exactly what /admin/no-such-page
-// gets them: the plain 404, byte for byte, headers and all (Date aside), and
+// gets them: 「页面不存在」, byte for byte, headers and all (Date aside), and
 // one role_denied audit row. Never a redirect: one would say the page is there.
 func TestAdminIs404ForMember(t *testing.T) {
 	h, admin, user := rolesHarness(t)
@@ -96,8 +102,8 @@ func TestAdminIs404ForMember(t *testing.T) {
 	}
 	hd := h.srv.Handler()
 	unknown := consoleDo(hd, http.MethodGet, AdminPrefix+"/no-such-page", user)
-	if unknown.Code != http.StatusNotFound || unknown.Body.String() != "404 page not found\n" {
-		t.Fatalf("member GET /admin/no-such-page = %d %q; want the plain 404", unknown.Code, unknown.Body.String())
+	if unknown.Code != http.StatusNotFound || !isNotFoundPage(unknown.Body.String()) {
+		t.Fatalf("member GET /admin/no-such-page = %d %.80q; want 「页面不存在」", unknown.Code, unknown.Body.String())
 	}
 	paths := adminOlds()
 	if len(paths) < 12 {

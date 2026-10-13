@@ -260,8 +260,8 @@ func TestAdminPages_UserRefusedWhole(t *testing.T) {
 		for _, accept := range []string{"text/html", "application/json"} {
 			code, body := get(user, "", p, accept)
 			refusals++
-			if code != http.StatusNotFound || body != "404 page not found\n" {
-				t.Errorf("user GET %s (%s) = %d %q; want the plain 404", p, accept, code, body)
+			if code != http.StatusNotFound || !isNotFoundPage(body) {
+				t.Errorf("user GET %s (%s) = %d %.80q; want 「页面不存在」", p, accept, code, body)
 			}
 			if strings.Contains(body, "skeleton") {
 				t.Errorf("user GET %s (%s) carries the page: %q", p, accept, body)

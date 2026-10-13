@@ -61,6 +61,16 @@ func Console() fs.FS {
 	return built(console, "console", "admin/index.html")
 }
 
+// The way-in pages' theme (claude-fleet#3932, EPIC #3923 C9): bin/web-console-pack.sh
+// copies extras/fleet-theme here — theme.css, fonts.css, fonts/, logo.svg —
+// served at /app/assets/fleet-theme/. Only .gitkeep is committed.
+
+//go:embed all:theme
+var theme embed.FS
+
+// Theme returns the packed theme, or nil when this binary carries none.
+func Theme() fs.FS { return built(theme, "theme", "theme.css") }
+
 func built(f embed.FS, dir, probe string) fs.FS {
 	sub, err := fs.Sub(f, dir)
 	if err != nil {
