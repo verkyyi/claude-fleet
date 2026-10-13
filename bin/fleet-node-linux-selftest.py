@@ -1702,7 +1702,13 @@ class LinuxTenants(unittest.TestCase):
             f.sup.account_forget.assert_not_called()
             self.m.as_tenant.reset_mock()
             self.m.as_tenant.return_value = Mock(returncode=0)
-            self.assertEqual(self.m.login_stop(_ns(name='24acme')), 0)
+            waits = []
+            f.sup.account_forget.side_effect = lambda *a: waits.append(os.environ.get('FLEET_NODE_RELEASE_WAIT')) or 0
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop('FLEET_NODE_RELEASE_WAIT', None)
+                self.assertEqual(self.m.login_stop(_ns(name='24acme')), 0)
+            # a task mid-run is let go only when it ends: 20 s was short (#3554)
+            self.assertEqual(waits, ['120'])
             cmds = [c.args[2] for c in self.m.as_tenant.call_args_list]
             self.assertEqual([c[-1] for c in cmds], ['save'])
             self.assertTrue(cmds[0][1].endswith('fleet-sessions-snapshot.sh'))

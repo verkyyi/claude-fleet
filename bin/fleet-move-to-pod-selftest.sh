@@ -16,6 +16,7 @@
 #   F. the source machine has no subscription allow-list: open refuses (3)
 #      before the login exists; --allow-list-none moves anyway. In C the list
 #      is set AND read back before the assign
+#      The pinned list is read AFTER stop: check sees 0, the stop's snapshot save 2.
 #   D. a pinned session missing on the pod: verify exits 1 naming it
 #   E. retire after verify closes the SOURCE login with --delete
 set -uo pipefail
@@ -47,9 +48,9 @@ case "$verb" in
       *:*linux-tenants/*) echo '{"gid": 10006, "home": "/home/24acme", "login": "24acme", "op": "fda2", "since": 1, "uid": 10006}' ;;
       *:du\ *) printf '3.8G\t/home/24acme\n' ;;
       *:find\ /home/*) : ;;
-      *:*sessions.snapshot*) printf 'fid-1 probe\nfid-2 work\n' ;;
+      *:*sessions.snapshot*) [ -f "$FAKE/stopped" ] && printf 'fid-1 probe\nfid-2 work\n' ;;
       *:*list-clients*) echo "${FAKE_ATTACHED:-0}" ;;
-      *:*"login stop"*) echo "stopped 24acme (UID 10006); home /home/24acme kept" ;;
+      *:*"login stop"*) touch "$FAKE/stopped"; echo "stopped 24acme (UID 10006); home /home/24acme kept" ;;
       *-seed:mkdir*|*-seed:rm\ *) : ;;
       *:tar\ -C\ /home*) printf 'TARBYTES' ;;
       *-seed:tar*) cat > /dev/null ;;
@@ -119,7 +120,7 @@ grep -q 'login stop' "$LOG" && fail 'B: login stop ran while someone was attache
 ok
 
 # ── C. all
-rm -rf "$T/state" "$T/assigned" "$T/seeder"; : > "$LOG"
+rm -rf "$T/state" "$T/assigned" "$T/seeder" "$T/stopped"; : > "$LOG"
 mv all 24acme > "$T/out" 2>&1 || fail "C: all failed: $(tail -5 "$T/out")"
 POD=$(cat "$T/state/24acme/pod")
 [[ "$POD" =~ ^u-[a-z0-9]{10}$ ]] || fail "C: picked pod name '$POD'"
@@ -147,7 +148,9 @@ a_asg=$(grep -n "hubadm .*accounts assign" "$LOG" | head -1 | cut -d: -f1)
 grep -q "curl .*-X PUT .*/v1/fleet/entry/home?principal=gh:7" "$LOG" || fail 'C: the home was not moved'
 order=$(awk '{print $2}' "$T/state/24acme/timeline" | uniq | tr '\n' ' ')
 [ "$order" = "check prepare stop copy start open home verify " ] || fail "C: timeline order '$order'"
-grep -q ' verify sessions=2/2' "$T/state/24acme/timeline" || fail 'C: verify did not count 2/2'
+grep -q ' check uid=10006 sessions=0' "$T/state/24acme/timeline" || fail 'C: the fake snapshot leaked into check'
+grep -q ' verify sessions=2/2' "$T/state/24acme/timeline" ||
+  fail 'C: verify did not count the 2 sessions the stop pinned (the pinned list was read before the snapshot save)'
 grep -q ' accounts remove' "$LOG" && fail 'C: all retired the source'
 ok
 

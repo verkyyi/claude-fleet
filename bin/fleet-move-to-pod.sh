@@ -240,11 +240,13 @@ phase_stop() {
   n=$(attached "$uid")
   [ "$n" = 0 ] || die 3 "$LOGIN has $n client(s) attached on $SOURCE — wait until nobody is, then run stop again"
   kc get "pod/$(SEEDER)" >/dev/null 2>&1 || die 3 "no seeder: run prepare first"
-  pinned > "$STATE/pinned"
   mark stop begin
   src python3 -I /var/db/fleet-node/runtime/current/bin/fleet-node-linux.py login stop "$LOGIN" 2>&1 |
     tee "$STATE/stop.out"
   [ "${PIPESTATUS[0]}" = 0 ] || die 1 "login stop on $SOURCE failed (above); nothing copied"
+  # read AFTER the stop: its snapshot save is what pins the sessions (check's
+  # count predates it — a login that never saved one reads 0 there)
+  pinned > "$STATE/pinned"
   mark stop "sessions=$(wc -l < "$STATE/pinned" | tr -d ' ')"
 }
 
