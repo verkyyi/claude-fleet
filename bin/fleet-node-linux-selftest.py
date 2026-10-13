@@ -1235,6 +1235,45 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), original)
             self.assertTrue(installed.stat().st_mode & 0o111)
 
+    def test_prepare_image_context_has_every_helper(self):
+        """#3554: a ccquota whose --pinned drops helpers (older than #3017) made
+        a context without codex-code-mode-host, and `docker build` died in
+        stage. prepare-image.sh checks the context against image-stage's own
+        `need` list, falls back to the whole release, and keeps only what the
+        image takes; it names buildx for the build."""
+        here = BIN.parent / 'extras/managed-node'
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d, 'ccquota')
+            fake.write_text(r'''#!/bin/bash
+[ "$1" = version ] && { echo "ccquota old-1"; exit 0; }
+dest=${@: -1}; mkdir -p "$dest/.release/artifacts"
+cat > "$dest/release.json" <<'J'
+{"components": {"ccquota": {"artifact": "ccquota-{os}-{arch}"},
+ "claude": {"version": "2", "artifact": "claude-{version}-{os}-{arch}"},
+ "codex": {"version": "9", "artifact": "codex-{version}-{os}-{arch}",
+           "helpers": {"codex-code-mode-host": "codex-code-mode-host-{version}-{os}-{arch}"}},
+ "tmux": {"version": "3", "artifact": "tmux-{version}-{os}-{arch}"}}}
+J
+echo "$*" >> "$(dirname "$0")/calls"
+for n in ccquota-linux-amd64 claude-2-linux-amd64 codex-9-linux-amd64 tmux-3-linux-amd64; do echo x > "$dest/.release/artifacts/$n"; done
+case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64 codex-9-darwin-arm64; do echo x > "$dest/.release/artifacts/$n"; done ;; esac
+''')
+            fake.chmod(0o755)
+            key = Path(d, 'release.pub')
+            key.write_text('ed25519 AAAA\n')
+            ctx = Path(d, 'ctx')
+            r = subprocess.run(['bash', str(here / 'prepare-image.sh'), 'https://hub.example', str(key), 'a' * 40,
+                                str(ctx)], env=dict(os.environ, CCQUOTA=str(fake)), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('codex-code-mode-host-9-linux-amd64', r.stderr)
+            arts = sorted(p.name for p in (ctx / 'runtime/.release/artifacts').iterdir())
+            self.assertEqual(arts, sorted(subprocess.run(
+                ['python3', str(here / 'image-stage.py'), 'need', str(ctx / 'runtime'), 'amd64'],
+                capture_output=True, text=True, check=True).stdout.split()))
+            self.assertNotIn('codex-9-darwin-arm64', arts)
+            self.assertEqual(len(Path(d, 'calls').read_text().splitlines()), 2)
+            self.assertIn('docker buildx build --platform linux/amd64 --load', r.stdout)
+
     # ---- #3212: the image only seeds; the disk runtime follows stable
     def stage_mod(self):
         spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
