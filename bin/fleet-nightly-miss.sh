@@ -93,11 +93,13 @@ else
 fi
 nmerges=$(printf '%s\n' "$merges" | grep -c . || true)
 
-# One scratch checkout, moved commit to commit.
+# One scratch checkout, moved commit to commit: a --shared clone (the objects stay
+# the checkout's, through alternates), never a worktree registered on <dir>.
 wt=$(mktemp -d "${TMPDIR:-/tmp}/fleet-nightly-miss.XXXXXX") || die "no temp dir"
-rmdir "$wt"
-git -C "$dir" worktree add -q --detach "$wt" "$sha" >/dev/null 2>&1 || die "could not check out $sha into a scratch worktree"
-cleanup() { git -C "$dir" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf "$wt"; }
+git clone -q --shared --no-checkout "$dir" "$wt" >/dev/null 2>&1 \
+  && git -C "$wt" checkout -q --detach "$sha" >/dev/null 2>&1 \
+  || { rm -rf "$wt"; die "could not check out $sha into a scratch copy"; }
+cleanup() { rm -rf "$wt"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM HUP
 at() { git -C "$wt" checkout -q --detach --force "$1" >/dev/null 2>&1; }
