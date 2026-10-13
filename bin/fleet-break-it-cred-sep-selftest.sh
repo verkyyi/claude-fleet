@@ -573,8 +573,8 @@ drill_cred_sep_codex_failover_pin() {
 # --cred-central) has no credsep.json and nothing leased into it — the hub's
 # central proxy picks — but FLEET_FAILOVER=1 (the hub pool's default) still ran
 # the planner, which found no subscription on the pod and refused every new
-# session: «accounts · all capped · login needed: codex/ no_credentials». arvin's
-# pod after his move could open nothing. Leg J launches Claude and Codex the
+# session: «accounts · all capped · login needed: codex/ no_credentials». A moved
+# person's pod could open nothing. Leg J launches Claude and Codex the
 # pod's way (central URL, CCQUOTA_FLEET_CREDS=0, no accounts) under failover.
 drill_cred_central_failover_pin() {
   CAP=60; local t0 out
