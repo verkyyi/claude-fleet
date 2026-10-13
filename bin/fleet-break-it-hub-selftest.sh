@@ -137,6 +137,11 @@
 #   cred-policy-empties-machine                     tokenledger/internal/api fleet_cred_policy.go (credPolicyEmptied,
 #                                                   force) + fleet_credproxy.go (noBindWhy); go test, when a toolchain
 #                                                   is here; bin/fleet-cred-policy.sh (exit 5, --force), the web editor
+#   machine-policy-bypass                           tokenledger/internal/api fleet_machine_policy.go (machineDenied at
+#                                                   every door: certs/routes/relay/home, entry keys, placement, lease,
+#                                                   session pass, relay cred, fleet_sessions; go test, when a toolchain
+#                                                   is here); bin/fleet-machine-policy.sh, fleet-hub-sessions.sh (the
+#                                                   disabled row), fleet-connect.py (disabled_die)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2132,6 +2137,38 @@ drill_cred_policy_empties_machine() {
   c11_go_tests fleet_cred_policy_test.go TestCredPolicyRefusesEmptyingAProvider TestCredPolicyNoBindSaysWhy || return 1
   WHAT='收空一台机器 / 一个人某个 provider 的白名单写入 409、不变；--force 照写；deny / clear 不拦；会话报错点名拒它的那张白名单（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='收空 claude / codex 的写入 409 点名、列表不变；force 照写；deny / clear 不拦；会话报错点名「not in machine … allowlist」（go test 两条）'
+  SECS=$(since "$t0")
+}
+
+# ---- machine-policy-bypass (#3824): an operator pausing one person on a few
+# machines — logins kept — had only subscription lists; a person's machine list
+# that one door honours and another does not is no list. Every door a person
+# meets a machine through asks the ONE reader (machineDenied): the connect side
+# (managedLoginsOf, the relay), the entry door's keys, placement (auto, named,
+# a named fleet, a restore), the node's lease (all withdrawn), the session pass
+# (mint refused, a live one refused at its next verify), the relay credential;
+# the client dims such a session and titles it 已停用（管理员限制）.
+drill_machine_policy_bypass() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal/api" f n out rc; GO_RAN=0
+  t0=$(now)
+  grep -q '^func machineDenied(' "$tl/fleet_machine_policy.go" 2>/dev/null     || { WHY="the hub has no machine allowlist reader (fleet_machine_policy.go machineDenied)"; return 1; }
+  # every door: <file> <how many readers it must call>
+  for f in fleet_certs.go:allow.deny fleet_creds.go:machineDeniedFor fleet_session_cred.go:machineDeniedFor            fleet_relay_cred.go:machineDeniedFor fleet_relay_frl2.go:machineDenied fleet_entry.go:machineDenied            ssh_relay.go:machineDeniedFor fleet_write.go:denyEndpoint fleet_client_place.go:denyEndpoint fleet.go:denyEndpoint            fleet_routes.go:disabledMachinesOf fleet_home.go:disabledMachinesOf; do
+    n=${f#*:}; f=${f%%:*}
+    grep -q "$n(" "$tl/$f" 2>/dev/null || { WHY="$f no longer asks the machine allowlist ($n) — a door left open"; return 1; }
+  done
+  [ "$(grep -c 'denyEndpoint(' "$tl/fleet_write.go")" -ge 2 ]     || { WHY="fleet_write.go judges placement but not a start named at a fleet (worker_start fleet_id)"; return 1; }
+  grep -q 'OFF_WORD = "已停用（管理员限制）"' "$BIN/fleet-hub-sessions.sh" && grep -q '"disabled" and not here' "$BIN/fleet-hub-sessions.sh" \
+    || { WHY="the client's session cache no longer marks a disabled machine's rows (fleet-hub-sessions.sh)"; return 1; }
+  grep -q '^def disabled_die' "$BIN/fleet-connect.py" && [ "$(grep -c 'disabled_die(info, want)' "$BIN/fleet-connect.py")" -ge 2 ] \
+    || { WHY="fleet <machine> no longer names why a disabled machine is refused (fleet-connect.py)"; return 1; }
+  out=$(bash "$BIN/fleet-machine-policy-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="fleet-machine-policy.sh: $out"; return 1; }
+  c11_go_tests fleet_machine_policy_test.go TestMachinePolicyGrammar TestMachinePolicyOffAddsNothing TestMachinePolicyPutGet \
+    TestMachinePolicyLeaseWithdraws TestMachinePolicySessionPass TestMachinePolicyPlacement TestMachinePolicyHomeAndRoutes \
+    TestMachinePolicyEntryKeys || return 1
+  WHAT='每扇门都问同一张机器白名单：连接 / 中转 / 选家 / 入口钥匙 / 选机（自动、点名、指定 fleet、恢复）/ 租约 / 通行证 / 中转凭据；客户端把那台的会话标「已停用（管理员限制）」；CLI 自测过（Go 测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='名单外的机器：租约全部 withdrawn、另一个人照常；通行证不签、已签的下次校验就拒（不算吊销，解禁照用）；选机自动换一台、点名拒并说原因；连接 / 中转拒、disabled 说原因，全禁时不当成「没登录」；入口钥匙清空、解禁恢复；操作员不受限（go test 八条 + CLI 自测）'
   SECS=$(since "$t0")
 }
 

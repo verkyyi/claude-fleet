@@ -774,11 +774,21 @@ func (s *Server) restoreTarget(p fleetPrincipal, repo, key, node string, now tim
 	hosting := map[string]store.FleetRow{}
 	owners := map[string]bool{}
 	accts := s.activeAccounts()
+	mallow, err := s.machineAllowFor(p.Person) // claude-fleet#3824
+	if err != nil {
+		return pl, store.FleetRow{}, err
+	}
 	for _, r := range rows {
 		if !r.Present || !hostsRepo(r, repo) {
 			continue
 		}
 		if node != "auto" && !sameMachine(r.Hostname, node) {
+			continue
+		}
+		if why := s.denyEndpoint(mallow, r.EndpointID, r.Hostname); why != "" {
+			if node != "auto" {
+				return pl, store.FleetRow{}, fault("NO_ELIGIBLE_NODE", r.Hostname+": "+MachineDisabledWord+"："+why)
+			}
 			continue
 		}
 		hosting[r.FleetID] = r

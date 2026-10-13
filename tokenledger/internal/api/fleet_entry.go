@@ -894,6 +894,10 @@ func (s *Server) entryNodeList(host string) (control.EntryNodeList, error) {
 	if err != nil {
 		return out, err
 	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return out, err
+	}
 	for _, h := range homes {
 		if !sameMachine(host, h.Machine) && !sameMachine(h.Machine, host) {
 			continue
@@ -905,11 +909,18 @@ func (s *Server) entryNodeList(host string) (control.EntryNodeList, error) {
 			log.Printf("entry: %s on %s is home to %s and %s; keeping %s", h.Login, host, prev.Person, h.Person, prev.Person)
 			continue
 		}
+		l := control.EntryNodeLogin{Person: h.Person, Keys: []control.EntryNodeKey{}}
+		if machineDenied(settings, host, h.Person) != "" {
+			// The person's machine allowlist leaves this home out
+			// (claude-fleet#3824): the login stays listed, with no key —
+			// the door lets nobody in as them until the list lets it back.
+			out.Logins[h.Login] = l
+			continue
+		}
 		keys, err := s.Store.EntryKeys(h.Person, false)
 		if err != nil {
 			return out, err
 		}
-		l := control.EntryNodeLogin{Person: h.Person, Keys: []control.EntryNodeKey{}}
 		for _, k := range keys {
 			l.Keys = append(l.Keys, control.EntryNodeKey{FP: k.FP, Type: k.Type, B64: k.B64, Name: k.Name})
 		}

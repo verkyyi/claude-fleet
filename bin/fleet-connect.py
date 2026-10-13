@@ -1375,6 +1375,7 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     machines = info.get("machines") or []
     m = pick_machine(machines, want, cache.get("last"))
     if m is None:
+        disabled_die(info, want)
         names = ", ".join(str(x.get("alias") or x.get("hostname")) for x in machines) or "（无）"
         die(("没有叫 %s 的机器；你能连：%s" % (want, names)) if want else "入口没有列出你能连的机器", 1)
     label = m.get("alias") or m.get("hostname")
@@ -1686,6 +1687,21 @@ def pick_json(m, info, reason=""):
     return 0
 
 
+def disabled_die(info, want):
+    """A machine the person keeps a login on but the hub's machine allowlist
+    leaves out (issue #3824): the hub lists it under `disabled` with why —
+    exit 1 with that line (「这台机器暂未对你开放，可用：…」), never «no such
+    machine». Nothing listed / no name asked → returns."""
+    if not want:
+        return
+    for d in info.get("disabled") or []:
+        if not isinstance(d, dict):
+            continue
+        if want.lower() in (str(d.get("alias") or "").lower(), str(d.get("hostname") or "").lower(),
+                            str(d.get("hostname") or "").split(".")[0].lower()):
+            die("%s：%s" % (want, d.get("reason") or "已停用（管理员限制）"), 1)
+
+
 def pick_named(want, hub, token):
     """--pick MACHINE: the name against the hub's route list (the snippet
     `fleet login` wrote when the hub is silent); unknown → exit 1, naming the
@@ -1706,6 +1722,7 @@ def pick_named(want, hub, token):
     machines = info.get("machines") or []
     m = pick_machine(machines, want, None)
     if m is None:
+        disabled_die(info, want)
         names = ", ".join(str(x.get("alias") or x.get("hostname")) for x in machines) or "（无）"
         die("没有叫 %s 的机器；你能连：%s" % (want, names), 1)
     return pick_json(m, info, "named")

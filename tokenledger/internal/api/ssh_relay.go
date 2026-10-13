@@ -445,6 +445,13 @@ func (s *Server) sshRelayAllowed(id sshRelayIdentity, host string) error {
 	}
 	for _, a := range accts {
 		if a.Hostname == host && a.State == store.AccountActive && a.Managed() {
+			// The person's machine allowlist (claude-fleet#3824): a login
+			// they keep there, on a machine not open to them now.
+			if why, err := s.machineDeniedFor("", host, id.Principal); err != nil {
+				return err
+			} else if why != "" {
+				return sshRelayRefusal("FORBIDDEN", "%s：%s", MachineDisabledWord, why)
+			}
 			return nil
 		}
 	}

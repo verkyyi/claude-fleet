@@ -161,6 +161,10 @@ type RoutesResponse struct {
 	// who brings their own).
 	Login    string         `json:"login,omitempty"`
 	Machines []RouteMachine `json:"machines"`
+	// Disabled are machines where the person keeps a login that their
+	// machine allowlist leaves out (claude-fleet#3824): never a route, only
+	// the reason a client names when the person asks for one.
+	Disabled []DisabledMachine `json:"disabled,omitempty"`
 }
 
 // handleFleetRoutes serves control.RoutesPath: the machines the caller may
@@ -215,6 +219,10 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Login, hosts = p.Login, h
 		if loginOn, err = s.homeLogins(id.Principal); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if out.Disabled, err = s.disabledMachinesOf(id.Principal); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

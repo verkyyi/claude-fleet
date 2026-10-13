@@ -263,6 +263,10 @@ type sessionCredCache struct {
 type sessionCredEntry struct {
 	row    store.SessionCred
 	revWhy string // a machine / person revocation, "" for none
+	// offWhy: the person's machine allowlist leaves this machine out
+	// (claude-fleet#3824) — not a revocation: the pass works again once the
+	// list lets the machine back.
+	offWhy string
 	at     time.Time
 }
 
@@ -359,6 +363,14 @@ func (s *Server) verifySessionCred(tok, wantPrincipal, wantProvider string, fres
 			}
 			e.revWhy += " was revoked at " + rev.RevokedAt.Format(time.RFC3339)
 		}
+		mwhy, err := s.machineDeniedFor(row.EndpointID, row.Machine, row.PrincipalID)
+		if err != nil {
+			v.Reason = "hub error: " + err.Error()
+			return v, c
+		}
+		if mwhy != "" {
+			e.offWhy = MachineDisabledWord + "：" + mwhy
+		}
 		s.sessCred.put(c.ID, e)
 	}
 	row := e.row
@@ -369,6 +381,8 @@ func (s *Server) verifySessionCred(tok, wantPrincipal, wantProvider string, fres
 		v.Revoked, v.Reason = true, "revoked at "+row.RevokedAt.Format(time.RFC3339)+optional(" by "+row.RevokedBy, row.RevokedBy != "")
 	case e.revWhy != "":
 		v.Revoked, v.Reason = true, e.revWhy
+	case e.offWhy != "":
+		v.Reason = e.offWhy
 	case wantPrincipal != "" && wantPrincipal != c.Principal:
 		v.Reason = "issued to another principal"
 	case wantProvider != "" && !hasString(c.Providers, wantProvider):
@@ -571,6 +585,14 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 	} else if rev != nil {
 		audit(c, fl.FleetID, "refused:"+LeaseRevoked)
 		sessionCredRefuse(w, http.StatusForbidden, LeaseRevoked, "revoked at "+rev.RevokedAt.Format(time.RFC3339))
+		return
+	}
+	if mwhy, err := s.machineDeniedFor(ep.ID, host, principal); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if mwhy != "" {
+		audit(c, fl.FleetID, "refused:"+LeaseMachineOff)
+		sessionCredRefuse(w, http.StatusForbidden, LeaseMachineOff, MachineDisabledWord+"："+mwhy)
 		return
 	}
 	var rnd [16]byte

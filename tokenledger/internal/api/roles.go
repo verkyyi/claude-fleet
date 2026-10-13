@@ -139,6 +139,7 @@ var routeAccess = map[string]string{
 	NodeRevokePath:                accessAdmin,
 	"/v1/fleet/credentials/audit": accessAdmin,
 	CredPolicyPath:                accessAdmin,
+	MachinePolicyPath:             accessAdmin,
 	"/v1/fleet/ssh-relays":        accessAdmin,
 	"/v1/accounts":                accessAdmin, "/v1/accounts/label": accessAdmin,
 	"/v1/me/quota":   accessAdmin, // the pool's windows (claude-fleet#3227)
