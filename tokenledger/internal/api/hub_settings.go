@@ -165,6 +165,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.TrimSpace(v), ""
 		}},
+	TrialKey: {def: "off", help: "the 60-second trial at /app/try: anyone may sign in and is handed a ready spare login (fleet.spares), or waits in line; unused for 7 days, the login goes back (claude-fleet#3590)",
+		check: onOff(TrialKey, "off")},
 	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
 		check: onOff(SparesKey, "off")},
 	ClustersKey: {def: "", help: "the clusters that keep spare pods (claude-fleet#3553): each one's name as its fleet-ops reports it, comma-separated; with fleet.spares on and the account key set, a newcomer placed there is handed a ready pod",

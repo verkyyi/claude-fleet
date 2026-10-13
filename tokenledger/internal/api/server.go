@@ -613,6 +613,11 @@ func (s *Server) routes() *routeMux {
 		// The web chat (claude-fleet#3645): a signed-in person's own
 		// conversation, relayed to their home login's service.
 		mux.Handle(ChatPathPrefix, s.viewerOnly(http.HandlerFunc(s.handleChat)))
+		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
+		mux.HandleFunc(TryStartPath, s.handleTryStart)
+		mux.Handle(TryClaimPath, s.viewerOnly(http.HandlerFunc(s.handleTryClaim)))
+		mux.Handle(TryTimingPath, s.viewerOnly(http.HandlerFunc(s.handleTryTiming)))
+		mux.Handle(TryStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTryStats))))
 		// Its page (claude-fleet#3646): a signed-in person's, back here after
 		// the sign-in.
 		mux.Handle(ChatPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleChatPage))))

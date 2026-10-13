@@ -157,8 +157,9 @@ async function readLines(r: Response, onItems: (items: Record<string, unknown>[]
 }
 
 // blockedBy: a limit the page knows of before the service refuses a turn (the
-// website reads the person's own off /v1/me/usage); onTurnEnd: a turn ended here.
-export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budget | null; onTurnEnd?: () => void } = {}) {
+// website reads the person's own off /v1/me/usage); onTurnEnd: a turn ended here;
+// onReply: the first text of a reply arrived (the trial's clock, issue #3590).
+export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blockedBy?: Budget | null; onTurnEnd?: () => void; onReply?: () => void } = {}) {
   const [items, setItems] = useState<Item[]>([]);
   const [asks, setAsks] = useState<Ask[]>([]);
   const [answered, setAnswered] = useState<Map<string, Answered>>(new Map());
@@ -172,6 +173,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
   const [budget, setBudget] = useState<Budget>({ blocked: false });
   const turnEnd = useRef(onTurnEnd);
   turnEnd.current = onTurnEnd;
+  const reply = useRef(onReply);
+  reply.current = onReply;
   const turnId = useRef<string | null>(null);
   const streaming = useRef(false);
   const follow = useRef<number | undefined>(undefined);
@@ -225,6 +228,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     setAsks([]);
     setBusy(true);
     let lost = false;
+    let replied = false;
     try {
       const r = await fetch(`${API}/turn`, { method: "POST", headers: H, body: JSON.stringify({ text, model }) });
       if (!r.ok) {
@@ -246,7 +250,9 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
               if (o.code === "budget") setBudget({ blocked: true, ...(o.msg ? { msg: String(o.msg) } : {}), ...(o.until ? { until: String(o.until) } : {}) });
               add.push(o as unknown as Item);
               break;
-            default: add.push(o as unknown as Item);
+            default:
+              if (o.t === "text" && !replied) { replied = true; reply.current?.(); }
+              add.push(o as unknown as Item);
           }
         }
         if (add.length) setItems((xs) => [...xs, ...add]);

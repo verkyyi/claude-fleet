@@ -477,6 +477,14 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 				}
 				next.ServeHTTP(w, r)
 			})).ServeHTTP(w, r)
+		case (p == TryPagePath || p == tryScriptPath) && s.trialOn():
+			// the 60-second trial (claude-fleet#3590): open to anyone
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+			if p == tryScriptPath {
+				serveTryScript(w, r)
+				return
+			}
+			s.serveTryPage(w, r)
 		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) {
@@ -506,9 +514,10 @@ func (s *Server) serveAppPage(w http.ResponseWriter, r *http.Request, next http.
 		inner = "/"
 	}
 	if inner == "/try" {
-		// The site's 「试用」 button; until the try page has its own
-		// road (C20, claude-fleet#3590) it opens the console, whose
-		// gate asks a stranger to sign in (claude-fleet#3584).
+		// The site's 「试用」 button with fleet.trial off: it opens the
+		// console, whose gate asks a stranger to sign in
+		// (claude-fleet#3584). On, appMount serves the try page
+		// (claude-fleet#3590).
 		http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
 		return
 	}

@@ -145,6 +145,11 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		s.adoptMappedLogins(now)
 		return moved
 	}
+	if s.trialPerson(principal) {
+		// Came in through the trial (claude-fleet#3590): placed only by
+		// its claim, in line order, and only into a ready spare.
+		return nil
+	}
 	own := s.drillComputer(principal) // never where a drill's login is opened (#2549)
 	var hosts []string
 	if home := s.drillHome(principal); home != "" {
