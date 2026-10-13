@@ -107,7 +107,7 @@ jobs:
         if: steps.lane.outputs.skip == 'false'
         id: macos
         env:
-          FLEET_HUB_URL: ${{ inputs.runners != 'github' && 'https://claudefleet.24haowan.com' || '' }}
+          FLEET_HUB_URL: ${{ inputs.runners != 'github' && 'https://claudefleet.24haowan.com' || '' }}   # oss-ok: the hub's address, as release-train.yml's board spelled it (#3145)
           FLEET_HUB_CI_TOKEN: ${{ secrets.FLEET_HUB_VIEWER_TOKEN }}
         run: |
           bash bin/fleet-train-macos.sh pick 2> pick.err
