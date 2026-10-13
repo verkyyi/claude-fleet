@@ -12,6 +12,9 @@
 #   B  a machine the hub has a word for is never read twice off the daemon
 #   C  the doctor line: FAIL names each failed entry and its last line · PASS
 #      when all run · INFO 无登记 when nothing is registered
+#   C2 only THIS machine's entries of THIS login are FAIL (issue #3978): the same
+#      person's failed service on another machine / another login is WARN — the
+#      install follow rolls back on a new FAIL, never on someone else's service
 #   D  --alerts: one line per failed entry, since = the hub's raised_at
 #   E  `fleet ls --services [--json]` (fleet-session-cli.py) prints that table
 #      without the client running; a stray argument is usage (exit 2)
@@ -102,6 +105,16 @@ json.dump(d, open(sys.argv[2], "w"))
 PY
 d=$(STATE='' CACHE="$WORK/ok.json" svc --doctor)
 has "C: all running is PASS" "PASS 2 registered, none failed: carol/daily-report@mac-d 运行中, carol/sms-watch@mac-d 运行中" "$d"
+
+# ------------------------------------------------------------------------ C2 ----
+d=$(STATE='' svc --doctor)
+eq "C2: another machine's failed entry alone is WARN, not FAIL" "WARN" "${d%% *}"
+has "C2: …naming it and saying it is elsewhere" "1/2 failed elsewhere (not $ME@box): carol/daily-report@mac-d 失败「give up: skill not found」" "$d"
+d=$(STATE='' HOST=mac-d svc --doctor)
+eq "C2: on that machine, another login's failed entry is WARN too" "WARN" "${d%% *}"
+d=$(STATE='' HOST=mac-d FLEET_SERVICES_LOGIN=carol FLEET_SERVICES_CACHE="$WORK/hub.json" FLEET_SERVICES_STATE='' \
+    FLEET_SERVICES_HOST=mac-d.example.ts.net FLEET_SERVICES_NOW=$NOW python3 "$BIN/fleet-services.py" --doctor)
+has "C2: …and FAIL for that login on that machine (the hub's FQDN matches the short name)" "FAIL 1/2 failed: carol/daily-report@mac-d" "$d"
 
 # ------------------------------------------------------------------------- D ----
 a=$(svc --alerts)
