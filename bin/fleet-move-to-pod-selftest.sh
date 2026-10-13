@@ -71,7 +71,7 @@ open(sys.argv[1] + "/" + sys.argv[2] + ".py", "w").write(s)' "$FAKE" "$side" "${
       *:cat\ /data/.fleet-move-recv.rc) cat "$FAKE/recv.rc" ;;
       *-seed:*"find \"\$1\""*) echo 7 ;;
       node-a-0:*find*) echo 10 ;;
-      deploy/*:*list-windows*) printf '%s\n' ${FAKE_BACK:-fid-1 fid-2} ;;
+      deploy/*:*list-windows*) if [ -n "${FAKE_WINS:-}" ]; then printf '%b\n' "$FAKE_WINS"; else printf '%s\n' ${FAKE_BACK:-fid-1 fid-2}; fi ;;
       *) echo "unexpected exec $target: $all" >&2; exit 9 ;;
     esac ;;
   apply) python3 -c 'import json,sys; [print("apply", i["kind"], i["metadata"]["name"], json.dumps(i)) for i in (lambda d: d.get("items",[d]))(json.load(sys.stdin))]' >> "$FAKE/calls.log" ;;
@@ -211,6 +211,17 @@ ok
 # ── D. a session missing
 FAKE_BACK=fid-1 mv verify 24acme > "$T/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && grep -q 'MISSING: work' "$T/out" || fail "D: a missing session: rc $rc, $(cat "$T/out")"
+ok
+
+# ── H. the onboarding guide comes back under a new id (fleet_guide_open reopens
+#      it, pinned): counted back; an unpinned window named guide is not it
+cp "$T/state/24acme/pinned" "$T/pinned.keep"
+printf 'fid-1 probe\nfid-9 guide\n' > "$T/state/24acme/pinned"
+FAKE_WINS='fid-1 probe \nfid-new guide 1' mv verify 24acme > "$T/out" 2>&1 ||
+  fail "H: a reopened guide was counted missing: $(cat "$T/out")"
+grep -q 'back: guide (reopened by onboarding)' "$T/out" || fail "H: $(cat "$T/out")"
+FAKE_WINS='fid-1 probe \nfid-new guide ' mv verify 24acme > "$T/out" 2>&1 && fail 'H: an unpinned guide counted as the guide'
+cp "$T/pinned.keep" "$T/state/24acme/pinned"
 ok
 
 # ── E. retire
