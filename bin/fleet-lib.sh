@@ -8066,6 +8066,7 @@ epic|8250DF|Tracking parent for a batch of sub-issues planned and run together b
 agent:codex|10A37F|claude-fleet starts this issue's worker in Codex instead of the fleet default
 agent:claude|D97757|claude-fleet starts this issue's worker in Claude Code instead of the fleet default
 desk|C5DEF5|No code to change (design page, research, release) — claude-fleet opens it with no workspace
+flaky|FBCA04|A selftest the release train saw red, then green on its one rerun — claude-fleet files one per test
 EOF
 }
 

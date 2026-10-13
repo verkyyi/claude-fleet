@@ -4322,6 +4322,7 @@ drill_quarantine_one_red()  { quarantine_leg one-red  "只红一趟（或上一�
 drill_quarantine_touched()  { quarantine_leg touched  "条目还在期内，但这趟改了它点名的文件（或它自己）：照跑；在这种列车上再红是 FAIL，不再隔离"; }
 drill_quarantine_expired()  { quarantine_leg expired  "过期条目视为不存在、测试照跑，摘要写「已过期，恢复」；没有隔离就不出「隔离了」那行"; }
 drill_quarantine_pr_skips() { quarantine_leg pr-skips "不带 --quarantine 什么都不跳；没有 --changed 就拒（exit 2）；PR 门和夜里全量的工作流不传隔离输入，只有列车传"; }
+drill_train_flaky_retry_hides_red() { quarantine_leg retry-red "重跑还红是 FAIL、这一片红（一个确定红的测试不能靠重跑发出）；--drill-red 重跑也记红；超时不重跑；--retry-red 只收 0 或 1；只有列车传 retry_red"; }
 
 # ---- train-hub-stable-split (#3142, EPIC #3139 C3): the hub image and stable come
 # from different commits — hub-deploy shipped the hub on its own clock, the

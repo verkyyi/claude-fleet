@@ -22,7 +22,10 @@
 # Only a job's CONCLUSION counts: a shard the release train's C9 cut short reruns
 # inside its own step (bin/fleet-shard-run.sh), so the job is still in progress
 # until its last attempt — never cancelled mid-rerun; a quarantined test (C10)
-# leaves its shard green. A cancelled job is no verdict (a newer push does not cancel a running train;
+# leaves its shard green, and so does a FLAKY one — red, then green on its one rerun
+# inside the step (run-selftests.sh --retry-red, issue #3866): only a test still red
+# after that rerun reds a job, so only that is judged here. A cancelled job is no
+# verdict (a newer push does not cancel a running train;
 # macOS 排队 cancels a run itself). gh reads $GH_TOKEN; $FLEET_TRAIN_GH is a test
 # seam for the gh command.
 #
@@ -44,7 +47,7 @@ while [ "$#" -gt 0 ]; do
     --deadline) shift; deadline="${1:-7200}" ;;
     --jobs-re)  shift; re="${1:-}" ;;
     --need)     shift; need="${1:-}" ;;
-    -h|--help)  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift

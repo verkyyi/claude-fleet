@@ -68,7 +68,14 @@
 #               train (another sha): one red again here, untouched by this change, is
 #               printed `QUARANTINE <test> …` and not counted as a failure — the train
 #               files its issue and writes the entry (record). One red never is.
-#   --drill-red TEST    count TEST as failed after it runs (the quarantine drill only).
+#   --drill-red TEST    count TEST as failed after it runs (the quarantine drill only;
+#               a --retry-red rerun is counted red too — a red the rerun cannot hide).
+#   --retry-red N   (the RELEASE TRAIN only — issue #3866) a test that FAILs runs ONCE
+#               more, alone, through the same prelude; green then ⇒ `FLAKY <test> …`
+#               and the shard stays green (the train ships and files it), red again ⇒
+#               the old verdict (QUARANTINE / FAIL). N is 0 or 1 — never more than one
+#               rerun; a TIMEOUT is never rerun. The PR gate and the nightly never pass it.
+#   --drill-flaky TEST  count TEST's FIRST run red; its rerun is its own (the flaky drill).
 #   --plan      run nothing: print ONE line `plan tests=<n> total=<s> shards=<N>
 #               heaviest=<s>` — the selection's recorded cost, and the heaviest of
 #               the N slices --shard K/N would deal (K is ignored). The release
@@ -233,6 +240,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
+retry_red=0 drill_flaky=''
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -247,6 +255,12 @@ while [ "$#" -gt 0 ]; do
     --drill-red)  [ "$#" -ge 2 ] && [ -n "$2" ] \
                     || { echo "run-selftests: --drill-red needs a test name" >&2; exit 2; }
                   drill_red=$2; shift 2; continue ;;
+    --drill-flaky) [ "$#" -ge 2 ] && [ -n "$2" ] \
+                    || { echo "run-selftests: --drill-flaky needs a test name" >&2; exit 2; }
+                  drill_flaky=$2; shift 2; continue ;;
+    --retry-red)  case "${2:-}" in 0|1) retry_red=$2 ;;
+                    *) echo "run-selftests: --retry-red takes 0 or 1 (one rerun at most)" >&2; exit 2 ;; esac
+                  shift 2; continue ;;
     --shard) [ "$#" -ge 2 ] || { echo "run-selftests: --shard needs K/N" >&2; exit 2; }
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
@@ -480,14 +494,19 @@ if [ -n "$q_list" ]; then
     for t in "$@"; do
       q_row=$(printf '%s\n' "$q_on" | awk -v t="$t" '$1 == t' | head -1)
       if [ -z "$q_row" ]; then keep="$keep $t"; continue; fi
-      read -r _ q_issue q_until q_run1 q_run2 <<EOF
+      q_why=''
+      read -r _ q_issue q_until q_run1 q_run2 q_why <<EOF
 $q_row
 EOF
       if in_list "$t" "$touched"; then
         printf 'quarantine: %s runs — this change touches it (#%s)\n' "$t" "$q_issue"
         keep="$keep $t"
       else
-        printf 'QUARANTINED %s skipped — #%s, until %s (red on runs %s and %s; untouched by this change)\n' "$t" "$q_issue" "$q_until" "$q_run1" "$q_run2"
+        if [ "$q_why" = flaky ]; then
+          printf 'QUARANTINED %s skipped — #%s, until %s (flaky: green only on its rerun, again and again — last on run %s; untouched by this change)\n' "$t" "$q_issue" "$q_until" "$q_run2"
+        else
+          printf 'QUARANTINED %s skipped — #%s, until %s (red on runs %s and %s; untouched by this change)\n' "$t" "$q_issue" "$q_until" "$q_run1" "$q_run2"
+        fi
       fi
     done
     # shellcheck disable=SC2086  # intentional: test names carry no whitespace
@@ -685,8 +704,21 @@ trap 'tt_sweep' EXIT
 trap 'tt_sweep; exit 130' INT HUP
 trap 'tt_sweep; exit 143' TERM
 
-total=0 passed=0 failed=0 quarantined=0
-failures='' timings='' quarantines=''
+total=0 passed=0 failed=0 quarantined=0 flaky=0
+failures='' timings='' quarantines='' flakies=''
+
+# run_test <test> → its exit code: the test under the supervisor (or bare), in its
+# own tmux socket dir, swept after.
+run_test() {
+  tt_dir=$(mktemp -d /tmp/selftest-tt.XXXXXX 2>/dev/null) || tt_dir=''
+  if [ "$supervise" -eq 1 ]; then
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" perl -e "$SUPERVISOR" "$test_timeout" "./$1" </dev/null; then rc=0; else rc=$?; fi
+  else
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" bash "./$1" </dev/null; then rc=0; else rc=$?; fi
+  fi
+  tt_sweep
+  return "$rc"
+}
 run_start=$(now_ms)
 
 # shellcheck disable=SC2086  # intentional: $tests is a space-separated list
@@ -694,23 +726,43 @@ for t in $tests; do
   total=$((total + 1))
   printf '\n=== %s ===\n' "$t"
   start_ms=$(now_ms)
-  tt_dir=$(mktemp -d /tmp/selftest-tt.XXXXXX 2>/dev/null) || tt_dir=''
-  if [ "$supervise" -eq 1 ]; then
-    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" perl -e "$SUPERVISOR" "$test_timeout" "./$t" </dev/null; then rc=0; else rc=$?; fi
-  else
-    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" bash "./$t" </dev/null; then rc=0; else rc=$?; fi
-  fi
+  if run_test "$t"; then rc=0; else rc=$?; fi
   ms=$(( $(now_ms) - start_ms ))
-  tt_sweep
   if [ "$t" = "$drill_red" ] && [ "$rc" -eq 0 ]; then
     rc=1; echo "run-selftests: drill — $t counted red (--drill-red)"
   fi
+  if [ "$t" = "$drill_flaky" ] && [ "$rc" -eq 0 ]; then
+    rc=1; echo "run-selftests: drill — $t's first run counted red (--drill-flaky)"
+  fi
   timings="$timings$ms $t
 "
+  timed_out=0
+  [ "$supervise" -eq 1 ] && [ "$rc" -eq 124 ] && [ "$ms" -ge $((test_timeout * 1000)) ] && timed_out=1
+  # THE TRAIN'S ONE RERUN (issue #3866): a red test — never a TIMEOUT, which would
+  # cost its whole ceiling again — runs once more, alone. Green ⇒ FLAKY (the shard
+  # stays green, the train files it); red again ⇒ the verdict below, as before.
+  if [ "$rc" -ne 0 ] && [ "$timed_out" = 0 ] && [ "$retry_red" -gt 0 ]; then
+    rc1=$rc
+    printf '\n=== %s (rerun: red, exit %s — once more, alone) ===\n' "$t" "$rc1"
+    r_ms=$(now_ms)
+    if run_test "$t"; then rc=0; else rc=$?; fi
+    r_ms=$(( $(now_ms) - r_ms ))
+    if [ "$t" = "$drill_red" ] && [ "$rc" -eq 0 ]; then
+      rc=1; echo "run-selftests: drill — $t counted red on its rerun too (--drill-red)"
+    fi
+    if [ "$rc" -eq 0 ]; then
+      printf 'FLAKY %s %ss (exit %s, then green in %ss on its one rerun)\n' "$t" "$(secs "$ms")" "$rc1" "$(secs "$r_ms")"
+      flaky=$((flaky + 1))
+      flakies="${flakies} ${t}"
+      continue
+    fi
+    ms=$((ms + r_ms))
+    [ "$supervise" -eq 1 ] && [ "$rc" -eq 124 ] && [ "$r_ms" -ge $((test_timeout * 1000)) ] && timed_out=1
+  fi
   if [ "$rc" -eq 0 ]; then
     printf 'PASS  %-46s %6ss\n' "$t" "$(secs "$ms")"
     passed=$((passed + 1))
-  elif [ "$supervise" -eq 1 ] && [ "$rc" -eq 124 ] && [ "$ms" -ge $((test_timeout * 1000)) ]; then
+  elif [ "$timed_out" = 1 ]; then
     printf 'TIMEOUT %-44s %6ss (limit %ss)\n' "$t" "$(secs "$ms")" "$test_timeout"
     failed=$((failed + 1))
     failures="${failures} ${t}"
@@ -745,6 +797,7 @@ fi
 printf '\n================ selftest summary ================\n'
 printf '%s test(s): %s passed, %s failed\n' "$total" "$passed" "$failed"
 [ "$quarantined" -eq 0 ] || printf 'quarantined (red twice in a row, the train files and skips them):%s\n' "$quarantines"
+[ "$flaky" -eq 0 ] || printf 'flaky (red, then green on their one rerun — the train ships and files them):%s\n' "$flakies"
 printf 'wall %ss\n' "$(secs "$(( $(now_ms) - run_start ))")"
 if [ "$failed" -ne 0 ]; then
   printf 'failed:%s\n' "$failures"

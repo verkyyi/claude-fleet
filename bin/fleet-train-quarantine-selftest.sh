@@ -22,6 +22,15 @@
 #              never selftests.yml (the PR gate) nor selftests-macos.yml (the nightly)
 #   fetch      the state comes from the previous train's artifact; the fails that
 #              count are the newest earlier train's on ANOTHER sha
+#   flaky      (issue #3866) --retry-red 1: red then green on its one rerun is FLAKY,
+#              the shard green; record files ONE flaky issue (--breakage-key
+#              flaky-<test>, label flaky) with both runs' heads, keeps the sighting
+#              seven days, quarantines at the third (reason flaky); a drill's sighting
+#              is filed, never counted; the summary says 「重跑才过 1 个」
+#   retry-red  (BREAK-IT train-flaky-retry-hides-red) a test red on its rerun too is
+#              a FAIL and the shard red; --drill-red stays red on the rerun; a TIMEOUT
+#              is never rerun; more than one rerun is refused; only the train passes
+#              retry_red — never the PR gate nor the nightly
 set -u
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd -- "$BIN/.." && pwd)
@@ -42,6 +51,8 @@ mk_test() {   # mk_test <name> <comment> — red when $T/red.<name> exists
   printf '#!/bin/sh\n# %s\n[ ! -f "%s/red.%s" ]\n' "$2" "$T" "$1" > "$R/bin/$1-selftest.sh"
 }
 mk_test portability 'lint: scans the whole tree'
+# beta: red on its next run only when $T/flip.beta exists (that run removes it)
+printf '#!/bin/sh\n# flips\necho "beta says hello"\nif [ -f "%s/flip.beta" ]; then rm -f "%s/flip.beta"; echo "beta went red"; exit 3; fi\n' "$T" "$T" > "$R/bin/beta-selftest.sh"
 mk_test alpha       'drives tool-a.sh'
 printf '#!/bin/sh\necho a\n' > "$R/bin/tool-a.sh"
 echo '# docs' > "$R/docs/guide.md"
@@ -244,8 +255,141 @@ EOF
     && [ ! -s "$T/f2/prev-fails" ] && ok "fetch: no artifacts list — no previous state, exit 0" || fail "fetch: a gh failure broke the train"
 }
 
+leg_flaky() {
+  change docs5 'echo f >> docs/guide.md'
+  # beta is touched by nothing; run it by name, --changed still given (the train's shape)
+  : > "$T/flip.beta"
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 \
+        sh "$R/bin/run-selftests.sh" beta </dev/null 2>&1); rc=$?
+  [ "$rc" -ne 0 ] && has '^FAIL  beta-selftest.sh' && ! has '^FLAKY ' \
+    && ok "flaky: without --retry-red (the PR gate, the nightly) a red is a FAIL — nothing reruns" \
+    || { fail "flaky: no-retry rc=$rc"; show; }
+  : > "$T/flip.beta"
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 \
+        sh "$R/bin/run-selftests.sh" --retry-red 1 beta </dev/null 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && has '^FLAKY beta-selftest.sh ' && has '^=== beta-selftest.sh \(rerun' && ! has '^FAIL ' \
+     && has '^flaky \(red, then green'; then
+    ok "flaky: red then green on its one rerun — FLAKY, the shard green"
+  else fail "flaky: retry rc=$rc"; show; fi
+  printf '%s\n' "$out" > "$T/flaky.log"
+  rm -rf "$T/resf"; mkdir -p "$T/resf/Linux-1"
+  printf '%s\n' "$out" | grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' > "$T/resf/Linux-1/train-result.txt"
+  sh "$R/bin/fleet-train-quarantine.sh" heads --log "$T/flaky.log" --out "$T/resf/Linux-1"
+  hf="$T/resf/Linux-1/train-flaky-beta-selftest.sh.txt"
+  [ -f "$hf" ] && grep -q 'beta went red' "$hf" && grep -q '^--- rerun (green) ---' "$hf" \
+    && ok "flaky: heads — the head of the red run and of the green rerun" || fail "flaky: heads [$(cat "$hf" 2>/dev/null)]"
+  # the drill: a green test whose first run is counted red
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 \
+        sh "$R/bin/run-selftests.sh" --retry-red 1 --drill-flaky alpha-selftest.sh alpha </dev/null 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && has '^FLAKY alpha-selftest.sh ' && ok "flaky: --drill-flaky — the first run red, the rerun its own: FLAKY" \
+    || { fail "flaky: drill rc=$rc"; show; }
+  # record: ONE issue, a sighting, nothing quarantined yet, not a fail for the next train
+  rm -f "$T/filed"
+  rec=$(FLEET_TQ_FILER=$FILER sh "$R/bin/fleet-train-quarantine.sh" record --results "$T/resf" --list /dev/null \
+          --prev-run 11 --run 12 --sha abc --repo o/r --out "$T/stf" --now "$NOW" 2>&1); rrc=$?
+  if [ "$rrc" -eq 0 ] && [ "$(wc -l < "$T/filed" | tr -d ' ')" = 1 ] && grep -q -- '--breakage-key flaky-beta ' "$T/filed" \
+     && grep -q -- '--label flaky' "$T/filed" && grep -q 'beta went red' "$T/filed" \
+     && [ "$(cat "$T/stf/flaky")" = "beta-selftest.sh $NOW 12 4242" ] && [ ! -s "$T/stf/list" ] && [ ! -s "$T/stf/fails" ]; then
+    ok "flaky: record filed ONE issue (flaky-beta, label flaky, both heads), kept the sighting, quarantined nothing"
+  else fail "flaky: record rc=$rrc filed=[$(cat "$T/filed" 2>/dev/null)] flaky=[$(cat "$T/stf/flaky" 2>/dev/null)] list=[$(cat "$T/stf/list")] fails=[$(cat "$T/stf/fails")] $rec"; fi
+  sum=$(sh "$R/bin/fleet-train-quarantine.sh" summary --now "$NOW" --flaky "$T/stf/flaky-now" "$T/stf/list")
+  [ "$sum" = '重跑才过 1 个：beta-selftest.sh（#4242）' ] && ok "flaky: summary — $sum" || fail "flaky: summary [$sum]"
+  # the third sighting in seven days quarantines (one older than seven days does not count)
+  printf 'beta-selftest.sh 2026-10-01T00:00:00Z 5 4242\nbeta-selftest.sh 2026-10-10T00:00:00Z 9 4242\nbeta-selftest.sh 2026-10-10T09:00:00Z 10 4242\n' > "$T/fh"
+  FLEET_TQ_FILER=$FILER sh "$R/bin/fleet-train-quarantine.sh" record --results "$T/resf" --list /dev/null \
+    --prev-run 11 --run 12 --sha abc --repo o/r --out "$T/stf3" --now "$NOW" --flaky-hist "$T/fh" >/dev/null 2>&1
+  want='beta-selftest.sh 4242 2026-10-13T08:00:00Z 10 12 flaky'
+  [ "$(cat "$T/stf3/list")" = "$want" ] && [ "$(wc -l < "$T/stf3/flaky" | tr -d ' ')" = 3 ] \
+    && ok "flaky: the third sighting in seven days quarantines — '$want'" \
+    || fail "flaky: third sighting list=[$(cat "$T/stf3/list")] flaky=[$(cat "$T/stf3/flaky")]"
+  sum=$(sh "$R/bin/fleet-train-quarantine.sh" summary --now "$NOW" "$T/stf3/list")
+  [ "$sum" = '隔离了 1 个：beta-selftest.sh（#4242，flaky，到期 2026-10-13T08:00:00Z）' ] \
+    && ok "flaky: the quarantine says why — $sum" || fail "flaky: quarantine summary [$sum]"
+  # (the lint group is what every --changed run selects untouched: stand it in)
+  printf 'portability-selftest.sh 4242 %s 10 12 flaky\n' "$FUTURE" > "$T/qf"
+  train --quarantine "$T/qf"
+  has "^QUARANTINED portability-selftest.sh skipped — #4242, until $FUTURE \\(flaky" \
+    && ok "flaky: the next train skips it, saying flaky" || { fail "flaky: next train"; show; }
+  # a drill's sighting is filed, never counted
+  FLEET_TQ_FILER=$FILER sh "$R/bin/fleet-train-quarantine.sh" record --results "$T/resf" --list /dev/null \
+    --prev-run 11 --run 12 --sha abc --repo o/r --out "$T/stfd" --now "$NOW" --flaky-hist "$T/fh" \
+    --drill-flaky beta-selftest.sh >/dev/null 2>&1
+  [ ! -s "$T/stfd/list" ] && [ "$(wc -l < "$T/stfd/flaky" | tr -d ' ')" = 2 ] && grep -q 'beta-selftest.sh 4242' "$T/stfd/flaky-now" \
+    && ok "flaky: a drill's sighting is filed and said, never counted toward a quarantine" \
+    || fail "flaky: drill counted list=[$(cat "$T/stfd/list")] flaky=[$(cat "$T/stfd/flaky")]"
+  # a filer that says no: the train still ships (record green), the sighting kept
+  printf '#!/bin/sh\nexit 1\n' > "$T/badfiler"; chmod +x "$T/badfiler"
+  FLEET_TQ_FILER=$T/badfiler sh "$R/bin/fleet-train-quarantine.sh" record --results "$T/resf" --list /dev/null \
+    --prev-run 11 --run 12 --sha abc --repo o/r --out "$T/stfb" --now "$NOW" >/dev/null 2>&1 \
+    && [ -s "$T/stfb/flaky" ] && ok "flaky: a flaky filing that fails never reds the train" \
+    || fail "flaky: a failed flaky filing redded record"
+  # fetch carries the newest earlier train's sightings
+  python3 - "$T/art.7.zip" <<'PY2'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w")
+z.writestr("sha", "OTHER\n"); z.writestr("run", "70\n"); z.writestr("fails", ""); z.writestr("list", "")
+z.writestr("flaky", "beta-selftest.sh 2026-10-10T00:00:00Z 70 4242\n"); z.close()
+PY2
+  mkdir -p "$T/ghbin"
+  cat > "$T/ghbin/gh" <<EOF
+#!/bin/sh
+case "\$2" in
+  *'artifacts?name='*) printf '7 71\n' ;;
+  */artifacts/*/zip) cat "$T/art.7.zip" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$T/ghbin/gh"
+  PATH="$T/ghbin:$PATH" sh "$R/bin/fleet-train-quarantine.sh" fetch --repo o/r --run 99 --sha SAME --out "$T/ff" 2>/dev/null
+  grep -q '^beta-selftest.sh 2026-10-10T00:00:00Z 70 4242$' "$T/ff/flaky" \
+    && ok "flaky: fetch carries the previous train's sightings" || fail "flaky: fetch flaky [$(cat "$T/ff/flaky" 2>/dev/null)]"
+}
+
+leg_retry_red() {
+  change docs6 'echo r >> docs/guide.md'
+  red alpha
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 \
+        sh "$R/bin/run-selftests.sh" --retry-red 1 alpha </dev/null 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && has '^=== alpha-selftest.sh \(rerun' && has '^FAIL  alpha-selftest.sh' && ! has '^FLAKY '; then
+    ok "retry-red: red on its rerun too — a FAIL, the shard red; a rerun never ships a real red"
+  else fail "retry-red: rc=$rc"; show; fi
+  green alpha
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 \
+        sh "$R/bin/run-selftests.sh" --retry-red 1 --drill-red alpha-selftest.sh alpha </dev/null 2>&1); rc=$?
+  [ "$rc" -ne 0 ] && has '^FAIL  alpha-selftest.sh' && ! has '^FLAKY ' \
+    && ok "retry-red: --drill-red stays red on the rerun (the old drill, as before)" || { fail "retry-red: drill-red rc=$rc"; show; }
+  # a red twice in a row on two trains still quarantines through the rerun
+  red portability; echo portability-selftest.sh > "$T/prev"
+  train --prev-fails "$T/prev" --retry-red 1
+  [ "$rc" -eq 0 ] && has '^QUARANTINE portability-selftest.sh' && ok "retry-red: red twice (rerun too) on the second train in a row — QUARANTINE as before" \
+    || { fail "retry-red: quarantine through the rerun rc=$rc"; show; }
+  green portability
+  # a TIMEOUT is never rerun
+  printf '#!/bin/sh\nsleep 30\n' > "$R/bin/slow-selftest.sh"
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 FLEET_HEAVY=0 FLEET_SELFTEST_TEST_TIMEOUT=1 \
+        sh "$R/bin/run-selftests.sh" --retry-red 1 slow </dev/null 2>&1); rc=$?
+  rm -f "$R/bin/slow-selftest.sh"
+  if command -v perl >/dev/null 2>&1; then
+    [ "$rc" -ne 0 ] && has '^TIMEOUT slow-selftest.sh' && ! has '\(rerun' \
+      && ok "retry-red: a TIMEOUT is never rerun" || { fail "retry-red: timeout rc=$rc"; show; }
+  fi
+  out=$(env -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_NO_SHADOW=1 sh "$R/bin/run-selftests.sh" --retry-red 2 alpha 2>&1); rc=$?
+  [ "$rc" = 2 ] && ok "retry-red: more than one rerun is refused (exit 2)" || { fail "retry-red: --retry-red 2 rc=$rc"; show; }
+  wf="$ROOT/.github/workflows"
+  for f in selftests.yml selftests-macos.yml; do
+    grep -nE '^[[:space:]]+(retry_red|drill_flaky):' "$wf/$f" \
+      && fail "retry-red: $f passes retry_red to the shards" || ok "retry-red: $f reruns nothing"
+  done
+  [ "$(grep -cE "^[[:space:]]+retry_red: '1'" "$wf/release-train.yml")" = 2 ] \
+    && ok "retry-red: release-train.yml passes retry_red to both halves" || fail "retry-red: release-train.yml does not pass retry_red twice"
+  awk '/^on:/,/^jobs:/' "$wf/selftests-shards.yml" | grep -A4 '^      retry_red:' | grep -q "default: ''" \
+    && ok "retry-red: the shards' input defaults to empty" || fail "retry-red: inputs.retry_red has no empty default"
+}
+
 case "${TQ_LEG:-all}" in
-  all)       leg_one_red; leg_two_red; leg_touched; leg_expired; leg_pr_skips; leg_fetch ;;
+  all)       leg_one_red; leg_two_red; leg_touched; leg_expired; leg_pr_skips; leg_fetch; leg_flaky; leg_retry_red ;;
+  flaky)     leg_flaky ;;
+  retry-red) leg_retry_red ;;
   one-red)   leg_one_red ;;
   two-red)   leg_two_red ;;
   touched)   leg_touched ;;
