@@ -781,6 +781,7 @@ FLEET_NODE_UPDATE_OWNER            handoff: image disables runtime self-updates 
 FLEET_NODE_PROFILE                 handoff: render.py sets user-pod / door on a cluster pod; fleet-node-install.sh reads it for a person's pod (#3550, #3757)
 FLEET_POD_LOGIN                    handoff: render.py --login — the one login a person's pod is made for; its node runs as it (#3757)
 FLEET_POD_UID                      handoff: render.py --uid — that login's number, the fleet container's runAsUser (#3757)
+FLEET_USER_POD                     handoff: render.py --user-pod sets 1 on a person's pod; install-apply writes FLEET_MACHINE_TASKS=off for its login (#3550, #3734)
 FLEET_NODE_RUN_SSHD                handoff: foreground supervisor owns the container SSH daemon (#3022)
 FLEET_NODE_SYSTEMCTL               seam: Linux systemd command for supervisor and SSH CA reload (#3022)
 FLEET_NODE_DAEMON_DIR              path: the LaunchDaemons dir fleet-node-drill.sh counts and the supervisor manages (selftests: a temp dir, #2336)
