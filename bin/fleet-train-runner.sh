@@ -6,9 +6,10 @@
 #
 # pick (the train's `board` job): the Shenzhen cluster's fleet-ack runners when the
 #   repo variable FLEET_TRAIN_RUNNER (--runner) says `fleet-ack` and the set is up,
-#   GitHub's ubuntu-latest otherwise. Up = a runner of that name is registered and
+#   GitHub's ubuntu-latest otherwise. Up = a runner of that set is registered and
 #   online right now (GitHub's runner list — ARC keeps minRunners idle ones
-#   registered while the set lives); the list is read with $FLEET_TRAIN_RUNNER_TOKEN
+#   registered while the set lives, named <set>-<hash>-runner-<id> with NO label;
+#   a classic runner by its label); the list is read with $FLEET_TRAIN_RUNNER_TOKEN
 #   (a token that may read the repo's self-hosted runners — the runner app's
 #   installation token, minted in the job; never an argv). No variable ⇒
 #   ubuntu-latest and nothing asked: the train is byte for byte as before. Asked and
@@ -86,7 +87,10 @@ if not why:
         rows = json.loads(sys.stdin.read())["runners"]
         if not isinstance(rows, list):
             raise ValueError
-        mine = [r for r in rows if name in [l.get("name") for l in (r.get("labels") or [])]]
+        # the runners of an ARC scale set carry no label in this list, only a name:
+        # <set>-<hash>-runner-<id>; a classic self-hosted runner carries the label
+        mine = [r for r in rows if name in [l.get("name") for l in (r.get("labels") or [])]
+                or (r.get("name") or "").startswith(name + "-")]
         up = [r for r in mine if r.get("status") == "online"]
         if not up:
             why = "no %s runner online (%d registered)" % (name, len(mine))

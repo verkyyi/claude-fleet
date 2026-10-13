@@ -144,8 +144,8 @@ drill_train_ack_down() {
   sed -n '/^  linux-pick:/,/^  linux:/p' "$wf" | grep -q "vars.FLEET_TRAIN_RUNNER != ''" \
     || { WHY="linux-pick runs with FLEET_TRAIN_RUNNER empty"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-ack.XXXXXX"); t0=$(now)
-  printf '%s' '{"runners":[{"name":"fleet-ack-a1","status":"online","busy":true,"labels":[{"name":"fleet-ack"}]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/up.json"
-  printf '%s' '{"runners":[{"name":"fleet-ack-a1","status":"offline","labels":[{"name":"fleet-ack"}]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/down.json"
+  printf '%s' '{"runners":[{"name":"fleet-ack-cpvr9-runner-lflzh","status":"online","busy":true,"labels":[]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/up.json"
+  printf '%s' '{"runners":[{"name":"fleet-ack-cpvr9-runner-lflzh","status":"offline","labels":[]},{"name":"fleet-acker-1","status":"online","labels":[{"name":"other"}]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/down.json"
   printf '%s' '{"total_count":0,"runners":[]}' > "$d/zero.json"
   pick() { GITHUB_OUTPUT="$d/out" FLEET_TRAIN_GIT_MIRROR=git://mirror/claude-fleet.git bash "$BIN/fleet-train-runner.sh" pick "$@" 2>/dev/null; }
   out=$(FLEET_TRAIN_RUNNER='' pick --runners-file "$d/up.json")
