@@ -34,6 +34,8 @@ let creds: (Credential & Record<string, unknown>)[] = [
   { provider: "claude", account: "max-a", account_uuid: U.a, principal_id: "pool", created_at: ago(60 * 24 * 60) },
   { provider: "claude", account: "max-b", account_uuid: U.b, principal_id: "pool", created_at: ago(60 * 24 * 41) },
   { provider: "claude", account: "max-c", account_uuid: U.c, principal_id: "pool", created_at: ago(60 * 24 * 9), secret_expires_at: ahead(12) },
+  // 林晓's own (C21, claude-fleet#4035): connected from her Usage page, hers alone
+  { provider: "claude", account: "my-max", account_uuid: "8e3f0c2a-4444-4d5e-8f60-3456789abcde", principal_id: "p:7c1e", created_at: ago(60 * 24 * 6) },
   { provider: "codex", account: "codex-1", account_uuid: U.x, principal_id: "pool", created_at: ago(60 * 24 * 20) },
 ];
 const paused = new Set<string>(["max-c"]);

@@ -32,7 +32,15 @@ fleet account add --provider claude --label team-max-1
 Run it on a computer with fleet installed and, as it asks, sign in once with that subscription's account (Claude asks you to paste a login code; Codex gives a link and a verification code). Once signed in, the credential goes straight into the hub and no copy stays on the computer; when the subscription appears on the page with a quota reading, it is added.
 
 - **Self-hosted**: run it on any hosting machine, after `export CCQUOTA_VIEWER_TOKEN=…` (the hub's operator token).
-- **Hosted**: today this command needs the operator token, which only we have; to connect your own subscription, book a time — we run the command and you complete that subscription's sign-in in your own browser (the account and password stay in your hands). Coming: you run it yourself on your own computer as an admin.
+- **Hosted**: this command needs the operator token, which only we have. To connect your own subscriptions there is no appointment to book — each person connects their own on their Usage page (next section).
+
+### Members connect their own
+
+Every member can connect **their own** Claude Pro / Max or ChatGPT Plus / Pro: Usage → "My own subscriptions" → **Connect my own subscription** → pick Claude or ChatGPT and name it → open the official sign-in page in **their own browser**, sign in and approve → paste back the code the page shows (Claude), or the whole address of the page it lands on that won't load (ChatGPT). The account's password is typed only on the provider's page; it never passes through the hub.
+
+- A connected subscription is **for them alone**: the credential is stored under them and no one else's session can get it; their sessions use it first and the pool once it is full. In strict mode the hub adds it to their own allowlist and their own machines', and touches no one else's.
+- In the same card they see its two windows (5 hours / week), pause / resume it, and disconnect it (typing its name); when its sign-in expires, one button signs in again. Every action is audited.
+- Admins see these on the Subscription pool page, marked "<name>'s own"; they cannot pause one for its owner, and can revoke it if they must.
 
 ### Who may use which subscription
 

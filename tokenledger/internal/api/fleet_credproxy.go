@@ -176,6 +176,10 @@ func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]s
 	if err != nil {
 		return nil, err
 	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return nil, err
+	}
 	var out []store.Credential
 	for _, who := range []string{principal, store.PoolPrincipal} {
 		rows, err := s.Store.Credentials(who)
@@ -184,7 +188,7 @@ func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]s
 		}
 		var mine []store.Credential
 		for _, c := range rows {
-			if c.Provider == provider {
+			if c.Provider == provider && !ownPaused(settings, c) { // paused by its owner (#4035)
 				mine = append(mine, c)
 			}
 		}

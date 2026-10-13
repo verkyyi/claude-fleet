@@ -289,3 +289,18 @@ func unauthorized(err error) bool {
 }
 
 func NeedsRefresh(result Result, err error) bool { return result.refreshRequired || unauthorized(err) }
+
+// AccountIDFromIDToken is the ChatGPT workspace an id_token names
+// (chatgpt_account_id), and PlanFromIDToken its plan (chatgpt_plan_type) —
+// "" when it does not say. A member's own sign-in (claude-fleet#4035) stores
+// the first as the credential's account_id; unsigned-checked, as above: the
+// token came straight from the provider's own answer.
+func AccountIDFromIDToken(idToken string) string {
+	meta, _ := decodeClaims(idToken)["https://api.openai.com/auth"].(map[string]any)
+	return str(meta["chatgpt_account_id"])
+}
+
+func PlanFromIDToken(idToken string) string {
+	meta, _ := decodeClaims(idToken)["https://api.openai.com/auth"].(map[string]any)
+	return str(meta["chatgpt_plan_type"])
+}

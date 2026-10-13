@@ -181,7 +181,7 @@ export async function install(): Promise<string> {
     }
     if (p.startsWith("/v1/me/subscriptions")) {
       const b = JSON.parse(String(init?.body || "{}"));
-      if (p === "/v1/me/subscriptions") return subSc === "error" ? ok({ error: "演示：入口出错" }, 502) : ok({ subscriptions: subs });
+      if (p === "/v1/me/subscriptions") return subSc === "error" ? ok({ error: "演示：入口出错" }, 502) : ok({ subscriptions: subs, login: true });
       if (p === "/v1/me/subscriptions/login") {
         const flow = "fl_" + Math.random().toString(36).slice(2, 10);
         flows[flow] = { provider: b.provider, account: b.account, again: !!b.again };

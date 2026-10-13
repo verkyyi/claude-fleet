@@ -72,6 +72,8 @@ export type Sub = {
   readAt: string;
   readVia: string;
   readNote: string;
+  // a member's own subscription (claude-fleet#4035): its owner's principal; "" = the pool's
+  owner: string;
   // from /v1/admin/overview when it answers
   people: string[];
   limited: boolean;
@@ -125,11 +127,13 @@ export function subscriptions(p: {
   const per = Array.isArray(p.limits?.per_account) ? p.limits!.per_account! : [];
   const accts = new Map((Array.isArray(p.accounts) ? p.accounts : []).map((a) => [a.account_uuid, a]));
   const pool = (p.creds?.credentials || []).filter((c) => c.principal_id === "pool" && c.provider !== "github");
+  // members' own (claude-fleet#4035): shown, each with its owner, never matched as the pool's
+  const own = (p.creds?.credentials || []).filter((c) => c.principal_id && c.principal_id !== "pool" && c.provider !== "github");
   const pausedSet = new Set((p.creds?.paused || p.paused || []).map(String));
   const n: Record<string, number> = {};
   for (const s of p.live?.sessions || []) if (s.account) n[s.account] = (n[s.account] || 0) + 1;
   const used = new Set<string>();
-  type R = { pa: AccountLimits; a: Account | Record<string, never>; label: string; prov: Prov; cred: PoolCredential | null };
+  type R = { pa: AccountLimits; a: Account | Record<string, never>; label: string; prov: Prov; cred: PoolCredential | null; owner?: string };
   const rows: R[] = per.map((pa) => {
     const a: any = accts.get(pa.account_uuid) || {};
     const label = pa.label || a.label || a.display_name || a.email || pa.account_uuid;
@@ -165,8 +169,14 @@ export function subscriptions(p: {
     const real = rows.filter((r) => r.prov === prov && !isStandIn(r.pa.account_uuid));
     if (cs.length === 1 && real.length === 1 && !used.has(credKey(cs[0])) && !real[0].cred) take(real[0], cs[0]);
   }
-  const base = { people: [] as string[], limited: false, reauth: false };
-  const out: Sub[] = rows.map(({ pa, label, prov, cred, a }) => {
+  // a member's own credential takes the usage row of its account, when the pool did not
+  const ownLeft = own.filter((c) => {
+    const r = c.account_uuid ? rows.find((x) => !x.cred && x.pa.account_uuid === c.account_uuid) : undefined;
+    if (r) Object.assign(r, { cred: c, owner: c.principal_id, label: c.account });
+    return !r;
+  });
+  const base = { people: [] as string[], limited: false, reauth: false, owner: "" };
+  const out: Sub[] = rows.map(({ pa, label, prov, cred, a, owner }) => {
     const w = windowsOf(pa.limits);
     return {
       ...base,
@@ -180,18 +190,19 @@ export function subscriptions(p: {
       reason: pa.limits?.reason || "",
       sessions: n[pa.account_uuid] || 0,
       cred,
-      paused: !!(cred && pausedSet.has(cred.account)),
+      owner: owner || "",
+      paused: !!(cred && !owner && pausedSet.has(cred.account)),
       managed: !!cred,
       readAt: pa.limits?.observed_at || "",
       readVia: pa.limits?.read_via || "",
       readNote: pa.limits?.read_note || "",
     };
   });
-  for (const c of pool) {
-    if (used.has(credKey(c))) continue;
+  for (const c of [...pool.filter((x) => !used.has(credKey(x))), ...ownLeft]) {
+    const mine = c.principal_id !== "pool";
     out.push({
       ...base,
-      id: "cred:" + credKey(c),
+      id: mine ? `own:${c.principal_id}/${credKey(c)}` : "cred:" + credKey(c),
       label: c.account,
       prov: credProv(c),
       plan: "",
@@ -201,7 +212,8 @@ export function subscriptions(p: {
       reason: "",
       sessions: 0,
       cred: c,
-      paused: pausedSet.has(c.account),
+      owner: mine ? c.principal_id || "" : "",
+      paused: !mine && pausedSet.has(c.account),
       managed: true,
       readAt: "",
       readVia: "",

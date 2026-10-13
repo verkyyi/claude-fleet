@@ -74,7 +74,7 @@ const STATE: Record<MySub["state"], [string, string, string]> = {
 };
 
 // ── one subscription: name, state, two windows, pause / resume, disconnect ──
-const SubRow: FC<{ s: MySub; onChange: () => void; onReconnect: (s: MySub) => void }> = ({ s, onChange, onReconnect }) => {
+const SubRow: FC<{ s: MySub; canLogin: boolean; onChange: () => void; onReconnect: (s: MySub) => void }> = ({ s, canLogin, onChange, onReconnect }) => {
   const [busy, setBusy] = useState(false);
   const [cut, setCut] = useState(false);
   const [typed, setTyped] = useState("");
@@ -113,7 +113,7 @@ const SubRow: FC<{ s: MySub; onChange: () => void; onReconnect: (s: MySub) => vo
           <CircleAlert className="text-destructive mt-0.5 size-4 shrink-0" aria-hidden />
           <div className="min-w-0 flex-1">
             <p>{tr("这份订阅的登录失效了（改过密码、或在别处退出了），会话暂时用不上它。", "This subscription's sign-in expired (a password change, or signed out elsewhere); sessions can't use it for now.")}</p>
-            <Button size="sm" className="mt-2" onClick={() => onReconnect(s)}><KeyRound />{tr("重新登录", "Sign in again")}</Button>
+            <Button size="sm" className="mt-2" onClick={() => onReconnect(s)} disabled={!canLogin}><KeyRound />{tr("重新登录", "Sign in again")}</Button>
           </div>
         </div>
       ) : (
@@ -331,11 +331,13 @@ function suggest(p: Prov, known: string[]) {
 
 // ── the card on 用量: the person's own subscriptions, or the way to connect one ──
 export const MySubsCard: FC = () => {
-  const subs = useLoad<{ subscriptions?: MySub[] }>("/v1/me/subscriptions");
+  const subs = useLoad<{ subscriptions?: MySub[]; login?: boolean }>("/v1/me/subscriptions");
   const [qs, setQs] = useSearchParams();
   const [open, setOpen] = useState(false);
   const [preset, setPreset] = useState<{ provider: Prov; account?: string } | undefined>();
   const list = subs.data?.subscriptions || [];
+  // the hub can exchange a sign-in's code (an admin node online, or its own network) — else no new connection
+  const canLogin = subs.data?.login !== false;
   const known = list.map((s) => `${s.provider}/${s.account}`);
   // ?connect=1 (or =claude / =codex) opens the dialog — the site's 「用自己的订阅」 links here
   useEffect(() => {
@@ -353,7 +355,7 @@ export const MySubsCard: FC = () => {
           <CardTitle className="text-base">{tr("我自己的订阅", "My own subscriptions")}</CardTitle>
           <CardDescription className="mt-1">{tr("你自己的 Claude / ChatGPT 订阅，只给你用", "Your own Claude / ChatGPT subscription, for you alone")}</CardDescription>
         </div>
-        {list.length ? <Button size="sm" variant="outline" className="shrink-0" onClick={connect}><Plus />{tr("再接一份", "Add another")}</Button> : null}
+        {list.length && canLogin ? <Button size="sm" variant="outline" className="shrink-0" onClick={connect}><Plus />{tr("再接一份", "Add another")}</Button> : null}
       </CardHeader>
       <CardContent>
         {subs.failed && !subs.data ? (
@@ -370,11 +372,12 @@ export const MySubsCard: FC = () => {
             <p className="text-muted-foreground mt-1 max-w-sm text-[13px]">
               {tr("已经有 Claude Pro / Max 或 ChatGPT Plus / Pro？接上以后你的会话先用它，只给你自己用；账号密码在你自己的浏览器里输入。", "Already pay for Claude Pro / Max or ChatGPT Plus / Pro? Connect it and your sessions use it first, for you alone; you sign in in your own browser.")}
             </p>
-            <Button className="mt-4" onClick={connect}><Plus />{tr("接上我自己的订阅", "Connect my own subscription")}</Button>
+            <Button className="mt-4" onClick={connect} disabled={!canLogin}><Plus />{tr("接上我自己的订阅", "Connect my own subscription")}</Button>
+            {canLogin ? null : <p className="text-muted-foreground mt-2 text-[12.5px]">{tr("这个入口还没开浏览器登录，请管理员看一下。", "This hub can't take a browser sign-in yet — ask an admin.")}</p>}
           </div>
         ) : (
           <div className="divide-y">
-            {list.map((s) => <SubRow key={`${s.provider}/${s.account}`} s={s} onChange={subs.reload}
+            {list.map((s) => <SubRow key={`${s.provider}/${s.account}`} s={s} canLogin={canLogin} onChange={subs.reload}
               onReconnect={(x) => { setPreset({ provider: x.provider, account: x.account }); setOpen(true); }} />)}
           </div>
         )}

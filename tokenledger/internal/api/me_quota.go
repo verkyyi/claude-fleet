@@ -139,17 +139,7 @@ func fillQuota(q *MyQuota, v *LimitsView) {
 	if v == nil {
 		return
 	}
-	var h5, h7 *WindowView
-	h5, h7 = v.FiveHour, v.SevenDay
-	for i := range v.Windows {
-		w := &v.Windows[i]
-		switch {
-		case w.Minutes > 0 && w.Minutes <= 5*60 && h5 == nil:
-			h5 = &w.WindowView
-		case w.Minutes >= 7*24*60 && h7 == nil:
-			h7 = &w.WindowView
-		}
-	}
+	h5, h7 := limitWindows(v)
 	pct := func(w *WindowView) *float64 {
 		if w == nil {
 			return nil
@@ -183,6 +173,22 @@ func fillQuota(q *MyQuota, v *LimitsView) {
 			q.ResetsAt = full
 		}
 	}
+}
+
+// limitWindows is v's 5-hour and 7-day windows: Claude's five_hour /
+// seven_day, or a Codex reading's windows by their length.
+func limitWindows(v *LimitsView) (h5, h7 *WindowView) {
+	h5, h7 = v.FiveHour, v.SevenDay
+	for i := range v.Windows {
+		w := &v.Windows[i]
+		switch {
+		case w.Minutes > 0 && w.Minutes <= 5*60 && h5 == nil:
+			h5 = &w.WindowView
+		case w.Minutes >= 7*24*60 && h7 == nil:
+			h7 = &w.WindowView
+		}
+	}
+	return h5, h7
 }
 
 func providerOf(a store.Account, v *LimitsView) string {
