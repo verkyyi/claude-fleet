@@ -110,7 +110,9 @@ func TestAppIsNoindex(t *testing.T) {
 }
 
 // "/" is the public site for a stranger and /app for someone signed in while
-// the site is on; off (a self-hoster's default) it is always /app.
+// the site is on; off (a self-hoster's default) it is always /app. A hub that
+// carries the built site shows it to someone signed in too — its nav then
+// offers 进入控制台 · 退出 (claude-fleet#3798).
 func TestAppRoot(t *testing.T) {
 	h, admin, _ := rolesHarness(t)
 	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, "app.html": {Data: []byte("APP")},
@@ -140,6 +142,13 @@ func TestAppRoot(t *testing.T) {
 	h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "SITE") || rec.Header().Get("X-Robots-Tag") != "" {
 		t.Errorf("site on, signed-out / = %d %q (robots %q); want 200 SITE, indexable", rec.Code, rec.Body.String(), rec.Header().Get("X-Robots-Tag"))
+	}
+	if resp := appGet(t, h, http.MethodGet, "/", admin); resp.StatusCode != http.StatusOK {
+		t.Errorf("built site, signed-in / = %d → %q; want 200 and the site", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	h.srv.Site = false
+	if resp := appGet(t, h, http.MethodGet, "/", admin); resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != AppPrefix {
+		t.Errorf("site off, signed-in / = %d → %q; want 302 → /app", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }
 

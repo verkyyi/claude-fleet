@@ -10,7 +10,7 @@
 // Settings, Audit.
 //
 // Every word goes through t() (lib/i18n.js), English and 简体中文 alike.
-import { t, fmtCompact, fmtAgo } from './i18n.js';
+import { t, fmtCompact, fmtAgo, locale } from './i18n.js';
 
 /** esc makes a value safe inside HTML text and attribute values. */
 export const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -170,6 +170,19 @@ export function viewer(me) {
   const role = t(isAdmin(me) ? 'ui.role.admin' : 'ui.role.user');
   const door = ['github', 'email', 'wechat', 'token', 'open'].includes(me.via) ? t('ui.door.' + me.via) : me.via || '';
   return { name, sub: door ? `${role} · ${door}` : role, initials: String(name).slice(0, 2).toUpperCase(), logout: !!me.can_logout };
+}
+
+/** signoutTo is the logout form's hidden field: back to the public site in
+ *  this language when the hub serves it, else the hub's signed-out page
+ *  (claude-fleet#3798; the hub honours it only while the site is on). */
+export const signoutTo = () => `<input type="hidden" name="to" value="${locale() === 'en' ? 'site-en' : 'site'}">`;
+
+/** topSignout is the top bar's 退出 — shown only at phone width (app.css
+ *  .top-out), where the sidebar and its 「我」 button are folded away
+ *  (claude-fleet#3798). Nothing when this door has no cookie to clear. */
+export function topSignout(v) {
+  if (!v || !v.logout) return '';
+  return `<form class="top-out" method="post" action="${APP}/logout">${signoutTo()}<button class="btn ghost sm" type="submit" title="${esc(t('ui.me.signout'))}">${ic('out')}<span>${esc(t('ui.me.signout'))}</span></button></form>`;
 }
 
 /** fmtTokens prints a token count the way the KPI tiles do: 212.4M / 2.12 亿. */

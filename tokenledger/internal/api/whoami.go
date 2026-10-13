@@ -162,7 +162,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		http.Redirect(w, r, appURL("/logout"), http.StatusSeeOther)
+		http.Redirect(w, r, s.logoutTo(r), http.StatusSeeOther)
 	case http.MethodGet:
 		page := logoutPage{Again: AppPrefix}
 		if s.signinOn() {
@@ -176,6 +176,22 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
 	}
+}
+
+// logoutTo is where a signed-out browser goes: the signed-out page, or — when
+// the form says to=site / site-en and this hub serves the public site — back to
+// the site's front page in that language (claude-fleet#3798). A fixed word,
+// never an address, so it is no open redirect.
+func (s *Server) logoutTo(r *http.Request) string {
+	if s.siteServed() {
+		switch r.PostFormValue("to") {
+		case "site":
+			return "/"
+		case "site-en":
+			return "/en/"
+		}
+	}
+	return appURL("/logout")
 }
 
 type logoutPage struct {

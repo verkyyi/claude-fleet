@@ -152,3 +152,32 @@ test('an admin switches between their own view and the admin view; a user cannot
   for (const p of USER) assert.equal(otherView(user, p), null, p);
   assert.equal(otherView(null, 'overview'), null);
 });
+
+// 手机宽度下也有退出（claude-fleet#3798）：侧栏收起时，顶栏自带「退出」，
+// 390 宽（≤900px）才露出来；表单带 to=site，退出后回官网。
+test('the top bar carries 退出 at phone width, and it goes back to the site (#3798)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { topSignout } = await import('../dist/lib/shell.js');
+  useLocale('zh-CN');
+  const f = topSignout(viewer({ login: 'alice', via: 'github', can_logout: true }));
+  assert.match(f, /<form class="top-out" method="post" action="\/app\/logout">/);
+  assert.match(f, /name="to" value="site"/);
+  assert.match(f, /退出/);
+  useLocale('en');
+  assert.match(topSignout(viewer({ login: 'alice', via: 'github', can_logout: true })), /value="site-en".*Sign out/s);
+  useLocale('zh-CN');
+  assert.equal(topSignout(viewer({ via: 'token' })), '', 'no cookie to clear ⇒ no button');
+  assert.equal(topSignout(null), '');
+  // CSS: hidden on a wide screen, shown inside the phone-width block that
+  // folds the sidebar away — the block a 390-wide screen falls in.
+  const css = readFileSync(new URL('../dist/app.css', import.meta.url), 'utf8');
+  assert.match(css, /^\.top-out \{ display: none;/m);
+  const m = css.match(/@media \(max-width: (\d+)px\) \{\n  \.app \{ grid-template-columns[\s\S]*?\n\}/);
+  assert.ok(m && Number(m[1]) >= 390, 'the sidebar folds at phone width');
+  assert.match(m[0], /\.top-out \{ display: inline-flex; \}/);
+  // the shell draws it in the top bar, and the sidebar's 「我」 form goes back to the site too
+  const shell = readFileSync(new URL('../dist/app-shell.js', import.meta.url), 'utf8');
+  assert.match(shell, /\$\{topSignout\(v\)\}<\/header>/);
+  assert.match(shell, /action="\/app\/logout">\$\{signoutTo\(\)\}/);
+  useLocale('en');
+});

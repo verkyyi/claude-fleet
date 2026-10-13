@@ -133,9 +133,10 @@ func TestSitePaths(t *testing.T) {
 			t.Errorf("GET %s = %d; want 404", path, rec.Code)
 		}
 	}
-	// Signed in: / is the console, /en/ and the docs stay readable.
-	if rec := do(http.MethodGet, "/", admin); rec.Code != http.StatusFound || rec.Header().Get("Location") != AppPrefix {
-		t.Errorf("signed-in / = %d → %q; want 302 → /app", rec.Code, rec.Header().Get("Location"))
+	// Signed in: / is still the site — its nav offers 进入控制台 · 退出
+	// (claude-fleet#3798) — and /en/ and the docs stay readable.
+	if rec := do(http.MethodGet, "/", admin); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `lang="zh-CN"`) {
+		t.Errorf("signed-in / = %d → %q; want 200 and the site", rec.Code, rec.Header().Get("Location"))
 	}
 	if rec := do(http.MethodGet, "/en/", admin); rec.Code != http.StatusOK {
 		t.Errorf("signed-in /en/ = %d; want 200", rec.Code)

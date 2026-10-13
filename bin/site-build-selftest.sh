@@ -139,6 +139,20 @@ if out="$("$BUILD" --out "$T/d" --drill "$T/fast.json" --now "$NOW" 2>&1)"; then
   [ -z "$miss" ] && ok "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"
 else bad "D build failed: $out"; fi
 
+# K — signed in, the nav says 进入控制台 · 退出 (#3798): both buttons are in the
+#     page (hidden), the 退出 form posts to /logout with to=site / site-en, and
+#     the script asks /v1/me who is looking
+if [ -f "$T/d/index.html" ]; then
+  miss=""
+  for s in 'id="to-app" hidden>进入控制台<' 'action="/logout" hidden><input type="hidden" name="to" value="site">' '>退出</button>' "fetch('/v1/me'" 'data-out>登录<'; do
+    grep -qF "$s" "$T/d/index.html" || miss="$miss [$s]"
+  done
+  for s in '>Open console<' 'name="to" value="site-en">' '>Sign out</button>'; do
+    grep -qF "$s" "$T/d/en/index.html" || miss="$miss [$s]"
+  done
+  [ -z "$miss" ] && ok "K signed in: 进入控制台 · 退出, back to the site" || bad "K missing:$miss"
+else bad "K no built page from D"; fi
+
 # E — a drill over 60 s
 printf '{"date":"2026-10-10","runs":[{"total":131,"steps":{"login":9,"machine":90,"first":32}}]}\n' > "$T/slow.json"
 if out="$("$BUILD" --out "$T/e" --drill "$T/slow.json" --now "$NOW" 2>&1)"; then
