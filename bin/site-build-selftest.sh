@@ -133,11 +133,39 @@ if out="$("$BUILD" --out "$T/d" --drill "$T/fast.json" --now "$NOW" 2>&1)"; then
   for s in '<b>60 秒</b>' '<em>60 秒</em>' '>8 秒<' '>6 秒<' '>32 秒<' '00:46' '2026-10-10' '60 秒试用'; do
     grep -qF "$s" "$T/d/index.html" || miss="$miss $s"
   done
-  for s in 'Working in 60 seconds.' '>8 s<' 'Try in 60 seconds' 'slowest of 2 runs'; do
+  for s in 'Start in 60 seconds.' '>8 s<' 'Try in 60 seconds' 'slowest of 2 runs'; do
     grep -qF "$s" "$T/d/en/index.html" || miss="$miss $s"
   done
   [ -z "$miss" ] && ok "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"
 else bad "D build failed: $out"; fi
+
+# S — the hero speaks of a service (#3940): no GitHub / 开源 / open source / MIT in
+#     the header, the first section or the meta description; the footer keeps
+#     the 开源 / 自托管 block with the GitHub link; the app is a BusinessApplication
+if [ -f "$T/d/index.html" ]; then
+  if out="$(python3 - "$T/d/index.html" "$T/d/en/index.html" <<'PY'
+import re, sys
+bad = []
+for f in sys.argv[1:]:
+    s = open(f, encoding='utf-8').read()
+    top = (re.search(r'<header.*?</header>', s, re.S).group(0) + re.search(r'<section.*?</section>', s, re.S).group(0)
+           + re.search(r'<meta name="description"[^>]*>', s).group(0))
+    hits = re.findall(r'github|开源|open source|\bMIT\b', top, re.I)
+    if hits:
+        bad.append('%s: hero / nav / description say %s' % (f, hits))
+    foot = re.search(r'<footer.*?</footer>', s, re.S).group(0)
+    if 'class="oss"' not in foot or 'https://github.com/verkyyi/claude-fleet' not in foot:
+        bad.append('%s: footer lost the open source / self-host block' % f)
+    if '"applicationCategory":"BusinessApplication"' not in s:
+        bad.append('%s: applicationCategory is not BusinessApplication' % f)
+    if 'id="price"' not in s:
+        bad.append('%s: no #price section' % f)
+print('; '.join(bad))
+sys.exit(1 if bad else 0)
+PY
+)"; then ok "S the hero is a service: no GitHub / 开源 up top, the footer keeps 开源 / 自托管"
+  else bad "S $out"; fi
+else bad "S no built page from D"; fi
 
 # K — signed in, the nav says 进入控制台 · 退出 (#3798): both buttons are in the
 #     page (hidden), the 退出 form posts to /logout with to=site / site-en, and
