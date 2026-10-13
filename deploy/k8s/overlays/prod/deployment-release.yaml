@@ -33,6 +33,11 @@ spec:
           env:
             - name: CCQUOTA_FLEET_RELEASE_KEY
               value: /etc/ccquota-release/release-key
+            # The offline root (#3559, docs/dev/FLEET-HUB.md «发布签名»): machines
+            # re-pin to it through conf/release-keys/chain.json; the hub key above
+            # still signs until step B drops it and the train signs.
+            - name: CCQUOTA_FLEET_RELEASE_ROOT
+              value: "ed25519 11ctkqmqgbV7p6eGdLqIInA00aZ4wbBBaM5aHO+gFVc="
             - name: CCQUOTA_FLEET_RELEASE_DIR
               value: /releases
             - name: CCQUOTA_FLEET_RELEASE_ARTIFACTS
