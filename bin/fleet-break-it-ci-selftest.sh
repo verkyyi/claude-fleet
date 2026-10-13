@@ -38,6 +38,11 @@
 #   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
 #                       before the deploy (another sha's build, a hand push): the
 #                       deploy phase refuses it — digest and revision (#3867)
+#   train-call-permissions  a caller job grants less than a job of the workflow it
+#                       calls asks (even one its `if:` skips): GitHub refuses the
+#                       whole train at parse time (startup_failure, #3908);
+#                       fleet-workflow-perms.py reds it — release-train.yml,
+#                       hub-deploy.yml, selftests-shards.yml and every caller
 #   oss-internal-name-committed  a PR adds a line holding a private address: the
 #                       oss-scan gate (the REAL rule table) reds it; `# oss-ok:` greens
 #                       it; .github/workflows/oss-scan.yml runs it on every PR (#3572)
@@ -641,6 +646,32 @@ IT
   case "$out" in *'reuse=false'*) ;; *) WHY="another revision's image was reused: $out"; rm -rf "$d"; return 1 ;; esac
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="测试期间预构建的入口镜像被别的提交 / 手动推送盖掉：部署段核对 digest 与 revision 不符即停、什么都不动；同一 sha 的镜像下趟直接复用，别的 revision 不复用"
+}
+
+drill_train_call_permissions() {
+  CAP=30
+  local t0 d out rc wfd
+  wfd="$BIN/../.github/workflows"; t0=$(now)
+  out=$(python3 "$BIN/fleet-workflow-perms.py" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the repo's own workflows ask more than their callers grant ($rc): $out"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-perms.XXXXXX"); mkdir -p "$d/.github/workflows"
+  cp "$wfd/release-train.yml" "$wfd/hub-deploy.yml" "$wfd/selftests-shards.yml" "$d/.github/workflows/"
+  # #3893's grant: hub-build without issues: write (hub-deploy's deploy asks it)
+  awk '/^  hub-build:/{b=1} /^  release-stage:/{b=0} !(b && /^      issues: write/)' \
+    "$wfd/release-train.yml" > "$d/.github/workflows/release-train.yml"
+  out=$(python3 "$BIN/fleet-workflow-perms.py" --root "$d" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'job hub-build → hub-deploy.yml job deploy: asks issues: write, granted none' \
+    || { WHY="#3893's short grant was not red ($rc): $out"; rm -rf "$d"; return 1; }
+  # a whole-workflow grant (no job permissions) counts too; the token's default is not judged
+  printf 'permissions:\n  contents: read\njobs:\n  t:\n    uses: ./.github/workflows/hub-deploy.yml\n' > "$d/.github/workflows/c.yml"
+  out=$(python3 "$BIN/fleet-workflow-perms.py" --root "$d" "$d/.github/workflows/c.yml" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'asks id-token: write, granted none' \
+    || { WHY="a top-level grant too short was not red ($rc): $out"; rm -rf "$d"; return 1; }
+  printf 'jobs:\n  t:\n    uses: ./.github/workflows/hub-deploy.yml\n' > "$d/.github/workflows/c.yml"
+  python3 "$BIN/fleet-workflow-perms.py" --root "$d" "$d/.github/workflows/c.yml" >/dev/null 2>&1 \
+    || { WHY="a caller with the token's default grant was judged"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="调用方 job 少给被调工作流某个 job 要的权限（#3893 的 hub-build 缺 issues: write）：fleet-workflow-perms.py 报出调用行与缺的那一项、exit 1；仓库自己的工作流全部通过"
 }
 
 drill_oss_internal_name_committed() {

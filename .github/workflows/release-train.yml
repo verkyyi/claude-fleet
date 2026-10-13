@@ -650,9 +650,14 @@ jobs:
     needs: [board, hub-plan, linux-pick]
     # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
     if: "!cancelled() && needs.hub-plan.outputs.deploy == 'true'"
+    # GitHub checks EVERY job of the called workflow against this grant at parse
+    # time — `deploy` too, though `phase: build` skips it. One scope short and the
+    # whole train is startup_failure (issue #3908): grant what `hub` grants.
+    # bin/fleet-workflow-perms.py holds every call to it.
     permissions:
       contents: read
       id-token: write
+      issues: write
     uses: ./.github/workflows/hub-deploy.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
