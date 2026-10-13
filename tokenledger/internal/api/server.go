@@ -720,6 +720,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.AccountKeyPath, s.handleAccountKey)
 		// The release ledger's numbers (claude-fleet#3140): the operator's.
 		mux.Handle(ReleaseStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleReleaseStats))))
+		// The signing keys' state (claude-fleet#3937): an admin's; anyone
+		// else gets the 404 an unknown release path gets.
+		mux.Handle(ReleaseKeysPath, s.viewerOnly(http.HandlerFunc(s.handleReleaseKeys)))
 		// A client's team defaults (claude-fleet#1722): whitelisted, never
 		// a credential, read by every client's start — public like /install.
 		mux.HandleFunc("/v1/fleet/client-settings", s.handleClientSettings)

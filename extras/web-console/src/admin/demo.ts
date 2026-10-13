@@ -1,7 +1,7 @@
 // demo.ts — the prototype's hub (EPIC #3923 rule 14): the real reads' shapes
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
-import type { ApiInit, Credential, HubUser, Invite, PersonBudget, PolicyView } from "./api";
+import type { ApiInit, Credential, HubUser, Invite, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TrainRun } from "./api";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -44,6 +44,95 @@ const limits = {
     { account_uuid: "6c1f9d2b-2222-4b3c-8d4e-123456789abc", limits: { five_hour: { utilization: 0.08 }, seven_day: { utilization: 0.22 } } },
   ],
 };
+
+// 发布 (C14): a week of release trains, built from the stages the ledger keeps
+const hex = (n: number) => Array.from({ length: 40 }, (_, i) => "0123456789abcdef"[(n * 7 + i * 13 + ((n * i) % 11)) % 16]).join("");
+const SUBJECTS = [
+  "管理侧的骨架，和成员与开号（#3933）", "doc-preview 不再随会话回收而死（#3988）", "个人 pod 的路由表给门的 entry 路由（#3985）",
+  "登录后的骨架，对话做首页（#3926）", "删号时 account forget 等不到就停掉该登录的任务（#3379）", "列车在深圳集群里跑 Linux 半边（#3864）",
+  "sidebar：远端会话行同一种样式（#3960）", "fleet-theme：一份颜色字体三处共用（#3924）", "hub：新地址和管理页守门（#3925）",
+  "bash32：空数组展开再收一处（#703）", "doctor：channel 行说清 Mac 线落后几趟（#3868）", "webchat：预算 403 一行说清（#3643）",
+];
+type Shape = { ago: number; merges: number; lin: number; hub: number; rel: number; queue?: number; end?: "failure" | "cancelled" | "superseded"; macAfter?: number; why?: string; stage?: string };
+const SHAPES: Shape[] = [
+  { ago: 38, merges: 2, lin: 148, hub: 61, rel: 22, queue: 9, macAfter: 1260 },
+  { ago: 95, merges: 1, lin: 139, hub: 0, rel: 19, macAfter: 1310 },
+  { ago: 160, merges: 3, lin: 236, hub: 74, rel: 25, queue: 41, macAfter: 1180, stage: "Linux", why: "等 fleet-ack 的空位 41 秒，第 7 片 2 分 30 秒" },
+  { ago: 300, merges: 1, lin: 151, hub: 58, rel: 0, end: "failure", stage: "Linux", why: "shard 4/14：fleet-pr-merge-selftest 红" },
+  { ago: 330, merges: 2, lin: 144, hub: 63, rel: 21, macAfter: 1240 },
+  { ago: 60 * 10, merges: 4, lin: 142, hub: 66, rel: 20, end: "superseded" },
+  { ago: 60 * 26, merges: 1, lin: 137, hub: 0, rel: 18, macAfter: 1400 },
+  { ago: 60 * 30, merges: 2, lin: 161, hub: 152, rel: 23, macAfter: 1290, stage: "hub", why: "入口镜像推送 2 分 32 秒（层缓存没命中）" },
+  { ago: 60 * 49, merges: 1, lin: 140, hub: 60, rel: 19, macAfter: 1205 },
+  { ago: 60 * 75, merges: 3, lin: 0, hub: 0, rel: 0, end: "cancelled", why: "红灯即停：board 之后 master 又红了" },
+  { ago: 60 * 98, merges: 2, lin: 146, hub: 64, rel: 21, macAfter: 1330 },
+  { ago: 60 * 122, merges: 1, lin: 138, hub: 0, rel: 20, macAfter: 1260 },
+  { ago: 60 * 147, merges: 2, lin: 150, hub: 59, rel: 22, macAfter: 1190 },
+];
+let subj = 0;
+const runs: TrainRun[] = SHAPES.map((x, i) => {
+  const board = 14;
+  const plan = { name: "hub plan", offset_secs: board, secs: 11, budget_secs: 30, result: "success" };
+  const stages = [
+    { name: "board", offset_secs: 0, secs: board, budget_secs: 20, result: "success" },
+    { ...plan, offset_secs: board },
+    { name: "Linux", offset_secs: board + 4, secs: x.lin, budget_secs: 150, queue_secs: x.queue, result: x.end === "failure" ? "failure" : x.lin ? "success" : "" },
+    { name: "hub", offset_secs: board + 4 + x.lin, secs: x.hub, budget_secs: 90, result: x.hub ? "success" : "skipped" },
+    { name: "release", offset_secs: board + 4 + x.lin + x.hub, secs: x.rel, budget_secs: 30, result: x.rel ? "success" : "" },
+    { name: "红灯即停", offset_secs: 0, secs: board + 4 + x.lin + x.hub + x.rel, budget_secs: 0, result: "success" },
+  ];
+  if (x.macAfter) stages.push({ name: "mac follow", offset_secs: board + 4 + x.lin + x.hub + x.rel + 20, secs: x.macAfter, budget_secs: 0, result: "success", off_path: true } as any);
+  const total = x.end === "cancelled" ? 31 : board + 4 + x.lin + x.hub + x.rel + 3;
+  const start = new Date(now - x.ago * 60_000);
+  const merges = Array.from({ length: x.merges }, (_, k) => ({ sha: hex(i * 10 + k + 1), merged_at: new Date(start.getTime() - (k + 1) * 240_000).toISOString(), subject: SUBJECTS[subj++ % SUBJECTS.length] }));
+  return {
+    run_id: String(18_840_000_000 + 7_431_207 - i * 211_337),
+    run_url: `https://github.com/verkyyi/claude-fleet/actions/runs/${18_840_000_000 + 7_431_207 - i * 211_337}`,
+    sha: hex(i * 10 + 1),
+    conclusion: x.end || "success",
+    started_at: start.toISOString(),
+    ended_at: new Date(start.getTime() + total * 1000).toISOString(),
+    total_secs: total,
+    merges,
+    stages: stages.filter((st) => st.secs > 0 || st.name === "hub"),
+    bottleneck: x.why ? { stage: x.stage || "", secs: x.stage === "hub" ? x.hub : x.stage === "Linux" ? x.lin : 0, why: x.why } : null,
+    ...(x.macAfter ? { mac: { conclusion: "success", secs: x.macAfter, after_secs: x.macAfter + 20 } } : {}),
+  };
+});
+const shipped = runs.filter((r) => r.conclusion === "success" || r.conclusion === "superseded");
+const stats = (empty: boolean): ReleaseStats => ({
+  days: 7,
+  merge_to_stable_n: empty ? 0 : 25,
+  merge_to_stable_p50: empty ? null : 468,
+  merge_to_stable_p95: empty ? null : 1104,
+  runs_started: empty ? 0 : runs.length,
+  runs_shipped: empty ? 0 : shipped.length,
+  run_p50_secs: empty ? null : 241,
+  runs_slow: empty ? 0 : runs.filter((r) => r.conclusion === "failure" || r.conclusion === "cancelled" || r.total_secs > 300).length,
+  runs_slow_said: empty ? 0 : runs.filter((r) => (r.conclusion === "failure" || r.conclusion === "cancelled" || r.total_secs > 300) && r.bottleneck).length,
+  lanes: { stable: runs[0].sha, stable_macos: runs[2].sha },
+  runs: empty ? [] : runs,
+});
+// key ids are hex fingerprints (release.KeyID); made here, never written as literals
+const [ROOT_ID, SIGN_ID, NEXT_ID] = [101, 202, 303].map((n) => hex(n).slice(0, 16));
+const keys = (bad: boolean): ReleaseKeys => ({
+  repo: "verkyyi/claude-fleet",
+  signer: "train",
+  anchor: ROOT_ID,
+  root: true,
+  stable: runs[0].sha,
+  stable_key: SIGN_ID,
+  stable_key_trusted: !bad,
+  stable_key_revoked: bad,
+  trusted: [
+    { id: ROOT_ID, role: "root" },
+    { id: SIGN_ID, role: "sign", by: ROOT_ID },
+    { id: NEXT_ID, role: "sign", by: ROOT_ID },
+  ],
+  revoked: bad ? 2 : 1,
+  revoked_version: bad ? 3 : 2,
+  overlap: false,
+});
 
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 const scenario = () => (window as any).__DEMO_SCENARIO || new URLSearchParams(location.search).get("demo") || "";
@@ -104,6 +193,16 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
       return { credentials: creds };
     case "GET /v1/limits":
       return limits;
+    case "GET /v1/fleet/release/stats":
+      return stats(empty);
+    case "GET /version":
+      return {
+        version: `prod-${runs[0].sha.slice(0, 7)}`, commit: runs[0].sha.slice(0, 7), stable: runs[0].sha, client_version: runs[0].sha,
+        ...(empty ? {} : { client_version_macos: runs[2].sha, stable_macos_behind: 2, stable_macos_behind_since: runs[1].started_at }),
+      };
+    case "GET /v1/fleet/release/keys":
+      if (scenario() === "keys_off") throw Object.assign(new Error("404 Not Found"), { status: 404 });
+      return keys(scenario() === "keys_bad");
   }
   throw Object.assign(new Error(`demo: no ${method} ${u.pathname}`), { status: 404 });
 }

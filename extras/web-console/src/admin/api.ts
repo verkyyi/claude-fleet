@@ -95,3 +95,60 @@ export type PolicyEntry = { id: string; allow: string[]; all?: boolean; error?: 
 export type PolicyView = { mode?: "legacy" | "strict"; users?: PolicyEntry[]; nodes?: PolicyEntry[] };
 export type Credential = { provider: string; account: string; account_uuid?: string; principal_id?: string };
 export type Limits = { per_account?: { account_uuid?: string; limits?: Record<string, any> }[] };
+
+// The release ledger (GET /v1/fleet/release/stats, claude-fleet#3870): every
+// run of the train, its stages, the hub's bottleneck line, and the two lanes.
+export type TrainStage = { name: string; offset_secs: number; secs: number; budget_secs: number; queue_secs?: number; result?: string; off_path?: boolean };
+export type TrainRun = {
+  run_id: string;
+  run_url?: string;
+  sha: string;
+  conclusion: "success" | "failure" | "cancelled" | "superseded" | string;
+  started_at: string;
+  ended_at: string;
+  total_secs: number;
+  merges: { sha: string; merged_at: string; subject?: string }[];
+  stages: TrainStage[];
+  bottleneck: { stage: string; secs: number; why: string } | null;
+  mac?: { conclusion: string; secs: number; after_secs: number };
+};
+export type ReleaseStats = {
+  days: number;
+  merge_to_stable_n: number;
+  merge_to_stable_p50: number | null;
+  merge_to_stable_p95: number | null;
+  runs_started: number;
+  runs_shipped: number;
+  run_p50_secs: number | null;
+  runs_slow: number;
+  runs_slow_said: number;
+  lanes: { stable?: string; stable_macos?: string };
+  runs: TrainRun[];
+};
+
+// GET /version (public): what Linux machines and Macs follow.
+export type HubVersion = {
+  version: string;
+  commit: string;
+  stable?: string;
+  client_version: string;
+  client_version_macos?: string;
+  stable_macos_behind?: number;
+  stable_macos_behind_since?: string;
+};
+
+// GET /v1/fleet/release/keys (claude-fleet#3937): ids and roles, no private material.
+export type ReleaseKeys = {
+  repo?: string;
+  signer: "hub" | "train";
+  anchor?: string;
+  root: boolean;
+  stable?: string;
+  stable_key?: string;
+  stable_key_trusted: boolean;
+  stable_key_revoked: boolean;
+  trusted: { id: string; role: string; by?: string }[];
+  revoked: number;
+  revoked_version: number;
+  overlap: boolean;
+};
