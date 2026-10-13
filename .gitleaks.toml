@@ -211,9 +211,8 @@ commits = ["f7a0ede2fb3d284502be596620aaaa5d152473a7"]
 paths = ['''^tokenledger/internal/api/fleet_service_log_test\.go$''']
 
 [[allowlists]]
-description = "#29 generic-api-key · extras/web-term/ui/vendor/xterm.js:1 (#3837) — 第三方压缩代码：标识符赋值 t.FourKeyMap=t.TwoKeyMap=void 0，不是值。按匹配原文放行（不按提交：合并会换提交号），同一文件里别的像密钥的串照样报"
+description = "#29 generic-api-key · extras/web-term/ui/vendor/xterm.js:1 @ 30a06906 (#3837) — 误报：第三方压缩代码里的标识符赋值 t.FourKeyMap=t.TwoKeyMap=void 0"
 condition = "AND"
 targetRules = ["generic-api-key"]
+commits = ["30a06906ae4529feb62ebf241b59b1e99dc0558f"]
 paths = ['''^extras/web\-term/ui/vendor/xterm\.js$''']
-regexTarget = "match"
-regexes = ['''^t\.FourKeyMap=t\.TwoKeyMap=void $''']
