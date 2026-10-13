@@ -18,8 +18,8 @@
 #            credsep.json); file counts compared
 #   start    the seeder goes, the person's pod is applied and waited for
 #   open     the hub opens <login> on the pod (`fleet hub accounts assign --own-name`,
-#            pod_login_open: its token, `credsep: central`), its credential
-#            allow-list copied from the source machine's
+#            pod_login_open: its token, `credsep: central`) — after the source
+#            machine's credential allow-list is copied to the pod and read back
 #   home     the person's home (the door's table, their name) moves to the pod
 #            ── the interruption ends ──
 #   verify   every pinned session of the source is a window on the pod
@@ -32,6 +32,8 @@
 #   --source <pod>     the shared node's pod it leaves — required
 #   --source-machine <name>  the hub's name for it (default: --source)
 #   --ns <namespace>   default fleet-workers
+#   --allow-list-none  move a login whose source machine has no subscription
+#                      allow-list (default: refuse — the pod would be open)
 #   --limits <text>    the pod's ceiling (render.py --limits; default the template's)
 #   --hub <url>        default $FLEET_HUB_URL
 #   -- <args>          handed to extras/managed-node/render.py (--image, --hub,
@@ -65,7 +67,7 @@ die() { printf 'fleet-move-to-pod: %s\n' "$2" >&2; exit "$1"; }
 usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; }
 say() { printf '%s\n' "$*"; }
 
-PHASE='' LOGIN='' PRINCIPAL='' POD='' SOURCE='' SRC_MACHINE='' NS=fleet-workers LIMITS=''
+PHASE='' LOGIN='' PRINCIPAL='' POD='' SOURCE='' SRC_MACHINE='' ALLOW_NONE=0 NS=fleet-workers LIMITS=''
 HUB=${FLEET_HUB_URL:-}
 RENDER=()
 while [ $# -gt 0 ]; do
@@ -76,6 +78,7 @@ while [ $# -gt 0 ]; do
     --source-machine) SRC_MACHINE=${2:-}; shift 2 ;;
     --ns) NS=${2:-}; shift 2 ;;
     --limits) LIMITS=${2:-}; shift 2 ;;
+    --allow-list-none) ALLOW_NONE=1; shift ;;
     --hub) HUB=${2:-}; shift 2 ;;
     --) shift; RENDER=("$@"); break ;;
     -h|--help) usage; exit 0 ;;
@@ -289,16 +292,24 @@ acct_active() { [ "$(account_state "$POD")" = active ]; }
 phase_open() {
   need_pod
   pod_ready || die 3 "$POD is not Ready: run start"
+  # the machine's subscription allow-list (fleet.cred_allow.node.<host>) is the
+  # source's, set BEFORE the login exists there: an unnamed key is an open
+  # machine, and the restored sessions ask for credentials at once
+  local allow got
+  allow=$(hubadm get "fleet.cred_allow.node.$SRC_MACHINE" 2>/dev/null | tail -n 1)
+  if [ -z "$allow" ] || [ "$allow" = '-' ]; then
+    [ "$ALLOW_NONE" = 1 ] || die 3 "$SRC_MACHINE has no fleet.cred_allow.node list: the pod would be open to every subscription (--allow-list-none to move anyway)"
+    allow=''
+  else
+    hubadm set "fleet.cred_allow.node.$POD" "$allow" >/dev/null ||
+      die 1 "could not copy the credential allow-list ($allow) to $POD"
+    got=$(hubadm get "fleet.cred_allow.node.$POD" 2>/dev/null | tail -n 1)
+    [ "$got" = "$allow" ] || die 1 "the allow-list on $POD reads '$got', not the source's '$allow'"
+  fi
   if ! acct_active; then
     hubadm accounts assign "$PRINCIPAL" --host "$POD" --login "$LOGIN" --own-name ||
       die 1 "the hub would not open $LOGIN on $POD"
     wait_for "$LOGIN active on $POD" acct_active || die 1 "$LOGIN is not active on $POD (fleet hub accounts)"
-  fi
-  local allow
-  allow=$(hubadm get "fleet.cred_allow.node.$SRC_MACHINE" 2>/dev/null | tail -n 1)
-  if [ -n "$allow" ] && [ "$allow" != '-' ]; then
-    hubadm set "fleet.cred_allow.node.$POD" "$allow" >/dev/null ||
-      die 1 "could not copy the credential allow-list ($allow) to $POD"
   fi
   mark open "active allow=${allow:-none}"
 }
