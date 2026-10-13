@@ -431,6 +431,9 @@ fcfg_label_i18n() {
     FLEET_ADMIT_MEM_FREE_PCT) printf '开新会话所需可用内存 %%' ;;
     FLEET_ADMIT_PRESSURE) printf '开新会话的内存压力上限' ;;
     FLEET_ADMIT_LOAD_PER_CORE) printf '开新会话的每核心负载上限' ;;
+    FLEET_ADMIT_CPU_SHARE) printf '开新会话的容器 CPU 用量上限' ;;
+    FLEET_ADMIT_CPU_THROTTLE) printf '开新会话的容器 CPU 限流 %%' ;;
+    FLEET_ADMIT_CPU_SAMPLE_SECS) printf '容器 CPU 采样秒数' ;;
     FLEET_ADMIT_RESERVE_MB) printf '开新会话保留内存 MB' ;;
     FLEET_ADMIT_HYST_MB) printf '暂停后恢复所需余量 MB' ;;
     FLEET_ADMIT_SESSION_MB) printf '单会话内存估计 MB（固定）' ;;
