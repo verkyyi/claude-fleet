@@ -647,6 +647,10 @@ Door mode is the entry port (#3070) with three changes
   no setting). A login two pods claim is in neither row: the door never guesses.
   The door pulls it every `FLEET_ENTRY_EVERY` (15 s in door mode) — it has no node
   program to hear the push;
+- an empty table (nobody's home is a pod yet — the first deploy) still listens:
+  its probes are tcp on 22022, so the config stays with `AllowUsers fleet-door-closed`,
+  a name no hub login can carry, and nobody gets in until the first route comes
+  (issue #3554, BREAK-IT `door-empty-table`);
 - each login is a **door account** it makes itself (no home, shell `/bin/bash`,
   group `fleet-door`, GECOS `fleet-door`); a login the machine already had is never
   taken;

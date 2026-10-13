@@ -45,6 +45,9 @@
 #                         command / SetEnv naming another pod changes nothing, a key
 #                         not on the login's list and a key straight at a pod are
 #                         refused, a login two pods claim goes nowhere
+#   door-empty-table      the door with an empty table (issue #3554): it still listens
+#                         (its startup probe is tcp :22022) and lets nobody in —
+#                         AllowUsers is a name no account can have — until a route comes
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -740,6 +743,49 @@ PY
   sys_same || { ddown; return 1; }
   ddown
   WHAT="门把每个登录送进表里它自己的 pod（u-aaaa1，指纹是本人的钥匙），命令 / SetEnv 点名别的 pod 不改去向；别人的钥匙在门口被拒、本人钥匙直连 pod 被拒；家搬到 u-bbbb2 门跟着走；两个 pod 认领同一登录则哪个也不去"
+}
+
+drill_door_empty_table() {
+  CAP=20   # the door, an empty table, two arrivals, a route
+  local t0 out; local -a eopts
+  erig doorempty
+  mkdir -p "$E/rt/bin" "$E/door"; ln -s "$BIN/fleet-door.sh" "$E/rt/bin/fleet-door.sh"
+  ssh-keygen -q -t ed25519 -N '' -f "$E/door/host_ed25519_key"
+  ssh-keygen -q -t ed25519 -N '' -C fleet-door -f "$E/door/id_ed25519"
+  python3 - "$E/passwd" "$ME" <<'PY'
+import json, sys
+p, me = sys.argv[1:]
+d = json.load(open(p)); d[me]["gecos"] = "fleet-door"; json.dump(d, open(p, "w"))
+PY
+  export FLEET_DOOR=1 FLEET_DOOR_SECRET="$E/door"
+  # nobody's home is a pod yet: the hub's table is empty
+  eapply "$(dlist 1)" || { WHY="door apply failed: $(tail -2 "$E/apply.out")"; ddown; return 1; }
+  [ -f "$E/db/entry/sshd_config" ] \
+    || { WHY="an empty table took the door's config away — no sshd, the startup probe fails, the pod restarts forever"; ddown; return 1; }
+  grep -q '^AllowUsers fleet-door-closed$' "$E/db/entry/sshd_config" \
+    || { WHY="the empty door lets someone in: $(grep AllowUsers "$E/db/entry/sshd_config")"; ddown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the empty door never listened on its port"; ddown; return 1; }
+  eopts=(-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no
+         -o UserKnownHostsFile="$E/known_hosts" -o ConnectTimeout=5 -o LogLevel=ERROR -p "$EPORT")
+  # listening is all it does: a door account's own key and the sentinel's name are refused
+  out=$(ssh "${eopts[@]}" -i "$E/k1" "$ME@127.0.0.1" hostname </dev/null 2>"$E/ssh.err") \
+    && { WHY="the empty door let $ME in: [$out]"; ddown; return 1; }
+  out=$(ssh "${eopts[@]}" -i "$E/k1" "fleet-door-closed@127.0.0.1" hostname </dev/null 2>"$E/ssh.err") \
+    && { WHY="the sentinel name got in: [$out]"; ddown; return 1; }
+  # a table naming the sentinel itself never routes it
+  eapply "$(dlist 2 "fleet-door-closed=k1@u-aaaa1")" || :
+  grep -q '^AllowUsers fleet-door-closed$' "$E/db/entry/sshd_config" && [ ! -e "$E/db/entry/keys/fleet-door-closed" ] \
+    || { WHY="a route named the sentinel and got keys: $(ls "$E/db/entry/keys")"; ddown; return 1; }
+  # the first route fills it in: the sentinel goes, the login is on
+  eapply "$(dlist 3 "$ME=k1@u-aaaa1")" || { WHY="route apply: $(tail -2 "$E/apply.out")"; ddown; return 1; }
+  grep -q "^AllowUsers $ME\$" "$E/db/entry/sshd_config" \
+    || { WHY="the first route did not replace the sentinel: $(grep AllowUsers "$E/db/entry/sshd_config")"; ddown; return 1; }
+  listening || { WHY="the door stopped listening when its first route came"; ddown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { ddown; return 1; }
+  ddown
+  WHAT="入口的表还是空的（还没有人的家在 pod 上）：门照样监听 22022、AllowUsers 只有永远不存在的 fleet-door-closed，谁都进不来；第一条路由一到，换成那个登录"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
