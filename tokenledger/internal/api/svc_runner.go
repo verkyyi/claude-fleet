@@ -284,7 +284,8 @@ func (s *Server) svcRunSpec(w http.ResponseWriter, r *http.Request, run store.Sv
 	}
 	worker := "svc/" + run.Ref() + "/a" + strconv.Itoa(j.Attempt)
 	claims := sessionCredClaims{V: v, ID: "sc_" + hex.EncodeToString(rnd[:]), Principal: run.Principal, WorkerID: worker,
-		Machine: "svc-run", Providers: []string{credvault.Claude}, Iat: iat.Unix(), Exp: exp.Unix()}
+		Machine: "svc-run", Providers: []string{credvault.Claude}, Iat: iat.Unix(), Exp: exp.Unix(),
+		Svc: svcName(run.Principal), Tenant: run.Tenant, Run: run.Ref()}
 	ok, err := s.Store.FetchSvcRunJob(run.ID, j.Attempt, claims.ID, now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

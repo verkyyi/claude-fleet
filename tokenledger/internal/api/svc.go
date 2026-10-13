@@ -172,6 +172,7 @@ func (s *Server) svcMux() http.Handler {
 	m := http.NewServeMux()
 	m.Handle(SvcWhoamiPath, s.svcOnly("", http.HandlerFunc(s.handleSvcWhoami)))
 	s.svcRunsMux(m)
+	m.Handle(SvcUsagePath, s.svcOnly(store.SvcRunsRead, http.HandlerFunc(s.handleSvcUsage)))
 	return s.svcGate(m)
 }
 

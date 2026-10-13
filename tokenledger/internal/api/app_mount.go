@@ -164,11 +164,11 @@ var consolePages = []consolePage{
 	{old: InvitePath, new: InvitePath, side: sideEntry, owner: "C9", under: true},
 	{old: AppPrefix + "/logout", new: AppPrefix + "/logout", side: sideEntry, owner: "C3"},
 	// 管理
-	// a member's branch is C7's (设备 · 我的机器), live already; an admin's is C11's
-	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + devicesPagePath + "?tab=home", under: true, userLive: true},
+	// a member's branch is C7's (设备 · 我的机器); an admin's is C11's
+	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + devicesPagePath + "?tab=home", under: true, userLive: true, live: true},
 	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10", live: true},
 	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true, live: true},
-	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11"},
+	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11", live: true},
 	// All devices is the machines page's 客户端 tab already: one hop there,
 	// and on to the new page once that row is live.
 	{old: AppPrefix + "/admin/devices", new: AppPrefix + "/nodes?tab=clients", side: sideAdmin, owner: "C2", live: true},

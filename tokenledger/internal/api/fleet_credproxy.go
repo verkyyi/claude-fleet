@@ -120,6 +120,13 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	// A service run over its service's or its tenant's budget
+	// (claude-fleet#4006): refused the same way — people are never held to it.
+	if st, over := s.svcBudgetRefusal(c.Principal, s.svcPassTenant(c), s.budgetClock()); over {
+		out.Valid, out.Error, out.Reason = false, PersonBudgetExceeded, st.Message
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now)
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
@@ -252,6 +259,12 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 	}
 	if len(choices) == 0 {
 		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one) that this machine's and this person's subscription allowlists permit" + s.noBindWhy(principal, endpointID, provider))
+	}
+	if isSvcPrincipal(principal) {
+		// a service yields a tight pool to people (claude-fleet#4006)
+		if choices = s.svcYield(principal, choices, now); len(choices) == 0 {
+			return b, errors.New("the pool is tight: " + principal + " yields every account near its limit to people")
+		}
 	}
 	choices = s.byHeadroom(choices, now) // one at its limit last (claude-fleet#2115)
 	pick := store.SessionBind{WorkerID: workerID, Provider: provider, Owner: choices[0].PrincipalID,

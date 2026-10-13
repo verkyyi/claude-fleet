@@ -524,6 +524,7 @@ func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 	if repo, issue, ok, err := s.Store.LeaseForWorker(c.WorkerID, now); err == nil && ok {
 		u.Repo, u.Issue = repo, issue
 	}
+	u.Tenant = s.svcPassTenant(c) // a service run's tenant (claude-fleet#4006)
 	if err := s.Store.AddPoolUsage(u); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

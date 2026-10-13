@@ -99,6 +99,29 @@ func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
 	return ""
 }
 
+// credPeak is the fuller of one vault account's two windows on its latest
+// reading, in percent — a window already reset reads 0; no reading is 0.
+func (s *Server) credPeak(c store.Credential, now time.Time) float64 {
+	uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
+	if err != nil || uuid == "" {
+		return 0
+	}
+	snap, err := s.Store.LatestLimits(uuid)
+	if err != nil || snap == nil {
+		return 0
+	}
+	peak := 0.0
+	for _, w := range []struct {
+		pct   float64
+		reset *time.Time
+	}{{snap.FiveHour.Utilization, snap.FiveHour.ResetsAt}, {snap.SevenDay.Utilization, snap.SevenDay.ResetsAt}} {
+		if (w.reset == nil || w.reset.After(now)) && w.pct > peak {
+			peak = w.pct
+		}
+	}
+	return peak
+}
+
 // byHeadroom is choices with every account known to be at its limit moved
 // after the rest, each part in its own order; all full ⇒ choices unchanged.
 func (s *Server) byHeadroom(choices []store.Credential, now time.Time) []store.Credential {
