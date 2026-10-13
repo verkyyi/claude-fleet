@@ -256,6 +256,13 @@ jobs:
           # whose knob reads ${BUDGET:-5} got the shard's 519 s (issue #3371).
           SHARD_BUDGET_SECS: ${{ inputs.budget_secs }}
           SHARD_SOLO_SECS: ${{ inputs.solo_secs }}
+          # A BREAK-IT drill's Go half (`go test`, GOPROXY=off) is the Go gate's
+          # (tokenledger.yml). ubuntu has no module cache, so it skips in 0.1 s and
+          # the durations tables price that; the train's fleet-ack runners carry a
+          # warm cache and ran it for real — the two hub BREAK-IT halves 51 s →
+          # 104–124 s, shards 5 and 6 cut at 150 s twice (issue #3970). Off here,
+          # every runner runs what the forecast priced.
+          BREAK_GO: '0'
         run: |
           set -o pipefail
           # This workflow is master's, the tree is `inputs.sha`'s: mac-follow tests a
@@ -287,7 +294,9 @@ jobs:
       - name: Per-test timings
         if: always()
         # On the run's summary page (#681): a test getting slower shows on the run
-        # that made it slower. A cut-short shard names the test in flight.
+        # that made it slower. A cut-short shard names the test in flight: only
+        # that test's own result line ends it — a drill's inner `PASS  <drill>`
+        # line used to clear it, «(none identified)» (issue #3970).
         run: |
           {
             echo "## selftests · ${{ runner.os }} · shard ${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
@@ -297,7 +306,7 @@ jobs:
             for c in selftests.log.cut-*; do
               [ -f "$c" ] || continue
               echo "attempt ${c##*.cut-} was cut short (no test red) and rerun — it was in:"
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/{h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/ && $2 == h {h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
             done
             if grep -q '^-* slowest' selftests.log 2>/dev/null; then
               sed -n '/^-* slowest/,$p' selftests.log
@@ -305,7 +314,7 @@ jobs:
               echo 'nothing related landed in this shard'
             else
               echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/{h=""}
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/ && $2 == h {h=""}
                    END{print "  " (h ? h : "(none identified — read the log)")}' \
                 selftests.log 2>/dev/null
             fi
