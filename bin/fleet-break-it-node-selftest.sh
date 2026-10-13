@@ -45,6 +45,9 @@
 #                         (#2529): a scheduled agent task's session will not open, every try
 #   service-failed-unseen bin/fleet-services.py (#2526): a registered service that
 #                         keeps dying reads red in the doctor + the alert bar
+#   services-elsewhere-rollback bin/fleet-services.py --doctor (#3978): the same person's
+#                         failed service on another machine read FAIL in this login's
+#                         doctor — a «new FAIL after the switch», so the install rolled back
 #   service-handwritten   bin/fleet-node-supervisor.py's sweep + bin/fleet-services.py --doctor
 #                         (#2530): a hand-written launchd plist runs as a login beside the
 #                         register — the doctor WARNs until it is registered and archived
@@ -446,6 +449,35 @@ drill_service_failed_unseen() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
   WHAT="登记的服务一启动就退：几秒内体检 services 行 FAIL、告警栏多一条 ✖ service · failed（入口另有 service_failed），不再是 40 小时没人知道"
+}
+
+# ---- services-elsewhere-rollback (#3978): the hub hands this login the same
+# person's services on every machine; one of them down on m4 read FAIL in
+# macmini's doctor, and install-sync rolls back on a FAIL the old version lacked.
+drill_services_elsewhere_rollback() {
+  CAP=15; local sb t0 d tags
+  sb="$WORK/svcelse"; mkdir -p "$sb"
+  cat > "$sb/hub.json" <<'EOF'
+{"ts": 1791529440, "machines": [
+ {"hostname": "m4.example.ts.net", "label": "m4", "services": [
+  {"name": "webchat", "kind": "service", "login": "verky", "state": "down", "last_rc": 3, "last_log_line": "fleet-webchat: another server already answers"}]},
+ {"hostname": "macmini.example.ts.net", "label": "macmini", "services": [
+  {"name": "webchat", "kind": "service", "login": "verkyyi", "state": "running"}]}]}
+EOF
+  sv() { FLEET_SERVICES_CACHE="$sb/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_HOST=macmini \
+         FLEET_SERVICES_LOGIN=verkyyi FLEET_SERVICES_NOW=1791529500 python3 "$BIN/fleet-services.py" --doctor; }
+  grep -q 'FAIL\\ \*) fail services' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh no longer maps the services line"; return 1; }
+  t0=$(now)
+  d=$(sv)
+  # install-sync's ruler (doctor_fail_tags): the tags of the doctor's FAIL lines
+  tags=$(case "$d" in (FAIL\ *) echo services ;; esac)
+  [ -z "$tags" ] || { WHY="m4's service is a FAIL tag in macmini's doctor — the switch would roll back: $d"; return 1; }
+  case "$d" in "WARN "*"verky/webchat@m4"*) ;; *) WHY="m4's failed service is no longer named: $d"; return 1 ;; esac
+  sed 's/"verkyyi", "state": "running"/"verkyyi", "state": "down"/' "$sb/hub.json" > "$sb/h2" && mv "$sb/h2" "$sb/hub.json"
+  d=$(sv)
+  case "$d" in "FAIL 2/2 failed: verkyyi/webchat@macmini"*) ;; *) WHY="this login's own failed service here is not FAIL: $d"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="同一个人在 m4 的服务已退出：macmini 上 verkyyi 的体检 services 行只 WARN 点名它，不是 FAIL，安装跟随不因它回滚；本机本登录的服务挂了照旧 FAIL"
 }
 
 drill_service_handwritten() {

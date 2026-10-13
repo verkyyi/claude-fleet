@@ -8,7 +8,9 @@ alert bar's `service · failed` rows.
                                    上次 · 下次 · 最近日志 (a failed row red on a
                                    terminal)
     fleet-services.py --doctor     one line, `<LEVEL> <text>`: FAIL when an
-                                   entry is failed, WARN when this login still
+                                   entry of THIS login on THIS machine is
+                                   failed (another machine's / login's failed
+                                   one is WARN — issue #3978), WARN when this login still
                                    has a hand-written launchd plist the daemon's
                                    sweep found (issue #2530), PASS when all run,
                                    INFO when nothing is registered
@@ -275,29 +277,45 @@ def cmd_table(as_json):
 
 
 def cmd_doctor():
+    """FAIL only for THIS machine's entries of THIS login (issue #3978): a failed
+    entry on another machine, or another login's here — the same person's, the
+    hub narrows to those — is named as WARN. The install follow rolls back on a
+    FAIL the switch brought; someone else's service is never the switch's."""
     rows, ts, _ = table_rows()
     n = now()
     age = ""
     if isinstance(ts, (int, float)) and n - ts > STALE_SECS:
         age = "（入口读数 %s）" % when(ts, n)
+    here, login = short(os.environ.get("FLEET_SERVICES_HOST") or socket.gethostname()), me()
+    def mine(h, r):
+        return short(h) == here and r.get("login") == login
+    def name(label, r):
+        return "%s/%s@%s" % (r.get("login") or "?", r.get("name") or "?", label)
+    def say(bad):
+        return " · ".join("%s %s%s" % (name(label, r), state_say(r),
+                                       ("「%s」" % r["last_log_line"]) if r.get("last_log_line") else "")
+                          for label, _h, r in bad)
+    bad = [x for x in rows if failed(x[2])]
+    own = [x for x in bad if mine(x[1], x[2])]
+    other = [x for x in bad if not mine(x[1], x[2])]
+    if own:
+        print("FAIL %d/%d failed: %s%s — fleet ls --services · fleet service|task logs <name>"
+              % (len(bad), len(rows), say(own + other), age))
+        return 0
     hand = local_handwritten()
-    if hand and not any(failed(r) for _l, _h, r in rows):
-        print("WARN %d 个手写启动项以本登录跑、不在登记表里: %s — fleet service|task add 登记，新的跑通一次后归档旧 plist"
-              "（docs/dev/MANAGED-NODE.md §13）" % (len(hand), " · ".join("%s (%s)" % (h.get("label"), h.get("path"))
-                                                                    for h in hand)))
+    parts = []
+    if hand:
+        parts.append("%d 个手写启动项以本登录跑、不在登记表里: %s — fleet service|task add 登记，新的跑通一次后归档旧 plist"
+                     "（docs/dev/MANAGED-NODE.md §13）" % (len(hand), " · ".join("%s (%s)" % (h.get("label"), h.get("path"))
+                                                                               for h in hand)))
+    if other:
+        parts.append("%d/%d failed elsewhere (not %s@%s): %s%s — fleet ls --services · fleet service|task logs <name>"
+                     % (len(other), len(rows), login, here, say(other), age))
+    if parts:
+        print("WARN " + " ； ".join(parts))
         return 0
     if not rows:
         print("INFO 无登记 — no background service or scheduled task registered (fleet service add)")
-        return 0
-    bad = [(label, r) for label, _h, r in rows if failed(r)]
-    def name(label, r):
-        return "%s/%s@%s" % (r.get("login") or "?", r.get("name") or "?", label)
-    if bad:
-        what = " · ".join("%s %s%s" % (name(label, r), state_say(r),
-                                       ("「%s」" % r["last_log_line"]) if r.get("last_log_line") else "")
-                          for label, r in bad)
-        print("FAIL %d/%d failed: %s%s — fleet ls --services · fleet service|task logs <name>"
-              % (len(bad), len(rows), what, age))
         return 0
     print("PASS %d registered, none failed: %s%s"
           % (len(rows), ", ".join("%s %s" % (name(label, r), STATE_SAY.get(r.get("state"), r.get("state")))
