@@ -56,6 +56,7 @@ var routeAccess = map[string]string{
 	"/v1/fleet/release/":   accessPublic, // signed node releases (claude-fleet#2335)
 	control.AccountKeyPath: accessPublic, // the admin seat's ticket key (claude-fleet#3557)
 	ReleaseStatsPath:       accessAdmin,  // the release ledger (claude-fleet#3140)
+	ReleaseKeysPath:        accessAdmin,  // the signing keys' state, 404 to a member (claude-fleet#3937)
 	trainsPagePath:         accessAdmin,  // its runs as a page (claude-fleet#3870)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
@@ -209,7 +210,10 @@ var routeAccess = map[string]string{
 	// one ticket under 任务 (claude-fleet#3928): the new console's, read off /v1/fleet/tickets
 	ticketPagesPrefix: accessUser,
 	// 设备 (claude-fleet#3930): a page of the new console only, each person their own
-	devicesPagePath:     accessUser,
+	devicesPagePath: accessUser,
+	// 设置 (claude-fleet#3931): reads /v1/me, /v1/me/identities and their own
+	// /v1/fleet/person-bundle — each person their own
+	settingsPagePath:    accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 	// Take a machine off the hub (claude-fleet#1928): a user only their own.
 	NodeRetirePath: accessUser,

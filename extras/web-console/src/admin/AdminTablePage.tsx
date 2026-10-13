@@ -32,6 +32,8 @@ export type AdminTablePageProps<T> = {
   lead?: string;
   // kpis are drawn from the loaded rows (and whatever else fetch carried)
   kpis?: (rows: T[]) => Kpi[];
+  // cards between the KPIs and the table (the 发布 page's lanes and keys, C14)
+  aside?: (rows: T[] | null) => React.ReactNode;
   columns: ColumnDef<T, any>[];
   fetch: () => Promise<T[]>;
   // actions sit at the head's right; reload re-runs fetch
@@ -119,6 +121,8 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
           ))}
         </div>
       )}
+
+      {p.aside?.(rows)}
 
       {error ? (
         <Alert variant="destructive">

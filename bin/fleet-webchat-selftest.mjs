@@ -35,7 +35,19 @@
 //   K  idle (C5): with FLEET_WEBCHAT_IDLE_SECS it stays while a page holds a
 //      connection, exits 75 (the daemon's idle code) once nothing is open, its
 //      socket gone; started again it is the same conversation
-//   --only=socket|budget|home|idle|local (comma list) runs those parts only — the drills' road.
+//   L  permissions (issue #4031): the agent runs bypassPermissions (+ the SDK's
+//      allowDangerouslySkipPermissions) with the login's settings loaded
+//      (settingSources user/project/local), so a tool step runs with no 允许 card;
+//      the fleet's bash-guard (hooks/settings-hooks.json's Bash entry) still denies
+//      `rm -rf x/.git` as a PreToolUse hook, outside tmux too — a hook's deny holds in
+//      bypass; AskUserQuestion still comes out as the question card (part C)
+//   M  the browser's context (issue #4034), in the socket mode: a phone's turn and a
+//      computer's turn each put ONE <fleet-webchat-context> line before the person's
+//      words (device · system · browser · language · width · local time · city from
+//      the entry's X-Fleet-Client) — never the IP — and only when it changed (same
+//      browser again: none; another city: again); the page never shows it; the
+//      browser_context tool answers the full IP and UA; neither is in server.log
+//   --only=socket|budget|context|home|idle|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -53,7 +65,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,home,idle,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -84,15 +96,25 @@ esac
 
 // ---- the stub Agent SDK: query() asks the proxy, asks a question, writes a transcript
 const ENVLOG = join(T, "env.json");
+const PROMPTLOG = join(T, "prompts.ndjson");                  // every prompt the agent got, and its MCP servers (M)
+const TOOLLOG = join(T, "tool.txt");                          // what browser_context answered (M)
 const sdk = join(T, "sdk.mjs");
 writeFileSync(sdk, `
 import { writeFileSync, appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 const SID = ${JSON.stringify(SID)};
+export const tool = (name, description, shape, handler) => ({ name, handler });
+export const createSdkMcpServer = (o) => ({ type: "sdk", name: o.name, tools: o.tools });
 export async function* query({ prompt, options }) {
   const env = options.env;
+  appendFileSync(${JSON.stringify(PROMPTLOG)}, JSON.stringify({ prompt, mcp: Object.keys(options.mcpServers || {}) }) + "\\n");
+  if (/ctxtool$/.test(prompt) && options.mcpServers?.fleet_browser) {
+    const t = options.mcpServers.fleet_browser.tools.find((x) => x.name === "browser_context");
+    writeFileSync(${JSON.stringify(TOOLLOG)}, (await t.handler({})).content[0].text);
+  }
   writeFileSync(${JSON.stringify(ENVLOG)}, JSON.stringify({ base: env.ANTHROPIC_BASE_URL, token: env.CLAUDE_CODE_OAUTH_TOKEN,
-    tmux: env.TMUX || "", resume: options.resume || "", model: options.model }));
+    tmux: env.TMUX || "", resume: options.resume || "", model: options.model,
+    mode: options.permissionMode, skip: options.allowDangerouslySkipPermissions, sources: options.settingSources }));
   await fetch(env.ANTHROPIC_BASE_URL + "/v1/messages", { method: "POST", headers: { authorization: "Bearer " + env.CLAUDE_CODE_OAUTH_TOKEN } });
   const dir = join(env.CLAUDE_CONFIG_DIR || join(env.HOME, ".claude"), "projects", realpathSync(options.cwd).replace(/[^A-Za-z0-9]/g, "-"));
   mkdirSync(dir, { recursive: true });
@@ -202,7 +224,7 @@ function othersReachHS() {
   }
 }
 
-if (part("socket") || part("budget")) {
+if (part("socket") || part("budget") || part("context")) {
   // neither --socket nor FLEET_WEBCHAT_LOCAL=1: the local mode is off by default
   const off = await sstart([]);
   ok(off.code === 2 && /FLEET_WEBCHAT_LOCAL=1/.test(off.err) && !existsSync(join(SSTATE, "port")), "H no --socket, no FLEET_WEBCHAT_LOCAL=1: it does not start (no TCP by default)");
@@ -255,6 +277,57 @@ if (part("budget")) {
   const g = await sturn("again");
   ok(g.lines.at(-1)?.t === "done", "I a turn under budget goes through");
   ok(JSON.parse((await sreq("/api/conversation")).body).budget?.blocked === false, "I … and the block is lifted");
+}
+if (part("context")) {
+  const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+  const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+  const phone = { ua: IPHONE, lang: "zh-CN", langs: ["zh-CN"], tz: "Asia/Shanghai", viewport: { w: 390, h: 844 }, screen: { w: 390, h: 844, dpr: 3 }, touch: 5 };
+  const mac = { ua: MAC, uaData: { platform: "macOS", mobile: false, brands: ["Chromium 140"] }, lang: "en-US", tz: "America/Los_Angeles",
+    viewport: { w: 1440, h: 900 }, net: { effectiveType: "4g", downlink: 10, rtt: 50 } };
+  const where = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const SZ = where({ ip: "203.0.113.9", country: "中国", province: "广东省", city: "深圳市" });
+  const SH = where({ ip: "198.51.100.7", country: "中国", province: "上海", city: "上海市" });
+  const cturn = (text, client, place) => new Promise((resolve, reject) => {
+    const r = http.request({ socketPath: SOCK, path: "/api/turn", method: "POST", headers: { Host: "webchat", "X-Fleet-Webchat": "1",
+      "X-Fleet-Person": "alice@example.com", "X-Fleet-Client": place, "Content-Type": "application/json" } }, (res) => {
+      let all = "";
+      res.on("data", (d) => {
+        all += d;
+        for (const l of String(d).split("\n")) if (/"t":"ask"/.test(l)) {
+          const o = JSON.parse(l);
+          sreq("/api/answer", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: { rid: o.rid, answers: {} } });
+        }
+      });
+      res.on("end", () => { seen.push(all); resolve(all); });
+    });
+    r.on("error", reject); r.end(JSON.stringify({ text, client }));
+  });
+  const last = () => JSON.parse(readFileSync(PROMPTLOG, "utf8").trim().split("\n").at(-1));
+  await cturn("从手机问", phone, SZ);
+  const p1 = last();
+  const head1 = (p1.prompt.match(/^<fleet-webchat-context>[\s\S]*?<\/fleet-webchat-context>/) || [""])[0];
+  ok(head1 && /手机 · iPhone/.test(head1) && /Safari/.test(head1) && /zh-CN/.test(head1) && /窄屏/.test(head1) && /Asia\/Shanghai/.test(head1)
+    && /广东省深圳市/.test(head1) && p1.prompt.endsWith("从手机问"), `M a phone's turn: one context line before the words (${head1.replace(/\n/g, " ")})`);
+  ok(!p1.prompt.includes("203.0.113.9") && !p1.prompt.includes("Mobile/15E148"), "M the line carries no IP and no raw UA");
+  ok(head1.length < 260, `M it is one short line (${head1.length} chars)`);
+  ok(p1.mcp.includes("fleet_browser"), "M the turn's agent has the browser_context tool");
+  await cturn("再问一句", phone, SZ);
+  ok(!/<fleet-webchat-context>/.test(last().prompt), "M the same browser again: no line (only when it changes)");
+  await cturn("换电脑问", mac, SZ);
+  const p3 = last().prompt;
+  ok(/^<fleet-webchat-context>/.test(p3) && /电脑 · Mac/.test(p3) && /Chrome/.test(p3) && /en-US/.test(p3) && /宽屏/.test(p3),
+    "M a computer's turn: the line again, saying computer · Mac · Chrome");
+  await cturn("同一台，换个城市 ctxtool", mac, SH);
+  const p4 = last().prompt;
+  ok(/^<fleet-webchat-context>/.test(p4) && /上海市/.test(p4) && !/深圳/.test(p4), "M another city: the line again");
+  const tl = existsSync(TOOLLOG) ? JSON.parse(readFileSync(TOOLLOG, "utf8")) : {};
+  ok(tl.ip === "198.51.100.7" && tl.ua === MAC && tl.net?.effectiveType === "4g" && tl.place?.city === "上海市",
+    `M browser_context answers the full IP, UA and network (${JSON.stringify(tl).slice(0, 160)})`);
+  const items = JSON.parse((await sreq("/api/conversation")).body).items;
+  ok(items.some((i) => i.t === "user" && i.text === "从手机问") && !items.some((i) => i.t === "user" && /fleet-webchat-context/.test(i.text)),
+    "M the page shows the person's words, never the context line");
+  const slog = readFileSync(join(SSTATE, "server.log"), "utf8");
+  ok(!slog.includes("203.0.113.9") && !slog.includes("198.51.100.7") && !slog.includes("Mobile/15E148"), "M neither the IP nor the UA is in server.log");
 }
 if (sserver) await sstop(sserver);
 if (part("budget")) {
@@ -402,6 +475,20 @@ ok(lines.some((o) => o.t === "text" && /你选了猫/.test(o.d)), "C the button'
 ok(lines.find((o) => o.t === "tool")?.summary === "Bash · date", "C the tool step is one folded line");
 ok(lines.find((o) => o.t === "ask")?.id === "tu-ask", "G a question names the tool step it gates (the page hangs it there)");
 const envSeen = JSON.parse(readFileSync(ENVLOG, "utf8"));
+ok(envSeen.mode === "bypassPermissions" && envSeen.skip === true, `L the agent runs bypassPermissions, like a fleet CLI session (${envSeen.mode})`);
+ok(["user", "project", "local"].every((x) => envSeen.sources?.includes(x)), "L the login's settings — and their PreToolUse guards — are loaded");
+ok(!lines.some((o) => o.t === "ask" && o.kind === "permission") && lines.find((o) => o.t === "ask")?.kind === "question",
+  "L the Bash step ran with no 允许 card; AskUserQuestion still came out as the question card");
+{
+  const HOOKS = join(BIN, "../hooks");
+  const reg = JSON.parse(readFileSync(join(HOOKS, "settings-hooks.json"), "utf8")).hooks.PreToolUse || [];
+  const onBash = reg.some((e) => e.matcher === "Bash" && e.hooks.some((h) => /bash-guard\.py/.test(h.command)));
+  const genv = { ...process.env }; for (const k of Object.keys(genv)) if (/^(TMUX|FLEET_)/.test(k)) delete genv[k];
+  const g = spawnSync("python3", [join(HOOKS, "bash-guard.py")], { env: genv, encoding: "utf8",
+    input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", permission_mode: "bypassPermissions",
+      cwd: T, tool_input: { command: `rm -rf ${join(T, "x", ".git")}` } }) });
+  ok(onBash && g.status === 2 && /bypass/.test(g.stderr), `L bash-guard still denies a guarded command in bypass, outside tmux (rc ${g.status})`);
+}
 ok(envSeen.base === `http://127.0.0.1:${PPORT}` && envSeen.token === SECRET, "D the agent ran on the proxy's port with the minted session credential");
 ok(envSeen.tmux === "", "D no tmux pane leaks into the agent's environment");
 ok(envSeen.model === "claude-haiku-5-5", "D the chosen model reached the agent");

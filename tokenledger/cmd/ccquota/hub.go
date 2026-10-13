@@ -970,6 +970,8 @@ func runHub(args []string) error {
 		// Node-lost / lease-conflict alerts (claude-fleet#1630).
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
 		srv.UsageSilentAfter = api.UsageSilentAfterFromEnv()
+		// svc_degraded's notifier (claude-fleet#4007): empty ⇒ log + record only.
+		srv.NotifyCmd = api.NotifyCmdFromEnv()
 		go srv.RunNodeAlerts(ctx)
 		// Off (srv.HubQuota nil): returns at once.
 		go srv.RunHubQuota(ctx)
@@ -1641,6 +1643,7 @@ func sshRelayConfig(srv *api.Server) error {
 			return fmt.Errorf("CCQUOTA_FLEET_SSH_CA_PUB: %w", err)
 		}
 	}
+	srv.ChatGeoDB = os.Getenv("CCQUOTA_FLEET_CHAT_GEO_DB")
 	for _, kv := range []struct {
 		name string
 		set  func(int64)

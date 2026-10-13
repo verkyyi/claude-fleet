@@ -6,8 +6,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, createMemoryRouter, Navigate, RouterProvider } from "react-router";
 import "./admin.css";
+// dark or light on <html data-theme> (the system's, or a pick made on 设置 — claude-fleet#3931)
+import "@/shared/theme";
 import { AdminShell, NotFound } from "./AdminShell";
 import { PeoplePage } from "./pages/People";
+import { ReleasePage } from "./pages/Release";
 
 const routes = [
   {
@@ -17,6 +20,8 @@ const routes = [
       { index: true, element: <Navigate to="/people" replace /> },
       { path: "people", element: <PeoplePage /> },
       { path: "people/:p", element: <PeoplePage /> },
+      { path: "release", element: <ReleasePage /> },
+      { path: "release/:run", element: <ReleasePage /> },
       { path: "*", element: <NotFound /> },
     ],
   },
@@ -24,7 +29,7 @@ const routes = [
 
 // The prototype (VITE_DEMO=1) is one file framed anywhere: its routes live in memory.
 const router =
-  import.meta.env.VITE_DEMO === "1" ? createMemoryRouter(routes, { initialEntries: ["/people"] }) : createBrowserRouter(routes, { basename: "/admin" });
+  import.meta.env.VITE_DEMO === "1" ? createMemoryRouter(routes, { initialEntries: [(window as any).__DEMO_PAGE || "/people"] }) : createBrowserRouter(routes, { basename: "/admin" });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

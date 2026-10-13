@@ -58,7 +58,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
-  budgetRefusal, personName } from "./lib.mjs";
+  budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
+  CTX_RE } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -234,7 +235,7 @@ async function readItems(id, cwd) {
     if ((m.type !== "user" && m.type !== "assistant") || m.isSidechain || m.isMeta || m.isCompactSummary) continue;
     for (const b of blocks(m.message?.content)) {
       if (m.type === "user" && b.type === "text" && b.text && !/^\s*<(command|local-command|system-reminder)/.test(b.text)) {
-        const text = b.text.replace(SEED_RE, "");
+        const text = b.text.replace(SEED_RE, "").replace(CTX_RE, "");
         if (text) out.push({ t: "user", text });
       } else if (m.type === "assistant" && b.type === "text" && b.text) out.push({ t: "text", d: b.text });
       else if (m.type === "assistant" && b.type === "tool_use") out.push({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
@@ -252,7 +253,7 @@ async function conversationItems() {
 
 // ---- the one conversation ------------------------------------------------------
 const CONV_FILE = join(STATE, "conversation.json");
-let conv = { session: "", cwd: CWD, chain: [], seed: "", ctx: { used: 0, window: 0 }, home: E.HOME || "" };
+let conv = { session: "", cwd: CWD, chain: [], seed: "", ctx: { used: 0, window: 0 }, home: E.HOME || "", ctxKey: "" };
 try { conv = { ...conv, home: "", ...JSON.parse(readFileSync(CONV_FILE, "utf8")) }; } catch { /* a first start */ }
 function saveConv() {
   writeFileSync(CONV_FILE + ".tmp", JSON.stringify(conv), { mode: 0o600 });
@@ -313,14 +314,15 @@ let maint = null;         // a compact / relay between turns (the next turn wait
 let ridSeq = 0;
 
 // One query() through a fresh session credential; onMsg sees every SDK message.
-async function runQuery(prompt, { model, resume, cwd, ac, canUseTool }, onMsg) {
+async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers }, onMsg) {
   const S = await sdk();
   const cred = await mintCred();
   log("query", { cred_sid: cred.sid, route: cred.route, model, resume: !!resume });
   try {
     const q = S.query({ prompt, options: {
       cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
-      permissionMode: "default", settingSources: ["user", "project", "local"], canUseTool,
+      ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources], canUseTool,
+      ...(mcpServers ? { mcpServers } : {}),
       abortController: ac, ...(CLAUDE ? { pathToClaudeCodeExecutable: CLAUDE } : {}),
       stderr: () => {},                    // the child's stderr is never relayed or logged
     } });
@@ -377,6 +379,17 @@ async function relay() {
   conv.ctx = { used: 0, window: conv.ctx.window };
   saveConv();
 }
+// The browser_context tool (issue #4034): an in-process MCP server made for ONE
+// turn, holding only that turn's browser — the person's own, nobody else's.
+function browserTools(S, details) {
+  if (typeof S.createSdkMcpServer !== "function" || typeof S.tool !== "function") return undefined;
+  const t = S.tool("browser_context",
+    "The browser the person is talking from right now: full IP address, approximate place, full user agent and " +
+    "client hints, languages, time zone, screen and viewport, touch, network type. Call it only when the answer needs a detail " +
+    "the one-line browser summary at the start of the conversation does not give.",
+    {}, async () => ({ content: [{ type: "text", text: JSON.stringify(details) }] }));
+  return { fleet_browser: S.createSdkMcpServer({ name: "fleet_browser", version: "1.0.0", tools: [t] }) };
+}
 const TOO_LONG = /prompt is too long|context (?:window|length)|too many tokens/i;
 
 // ---- a turn: NDJSON lines to every page that is watching ----------------------
@@ -401,6 +414,12 @@ async function turn(req, res, person) {
   if (live) return send(res, 409, { error: "还在回复上一句" });
   const S = await sdk().catch((e) => e);
   if (S instanceof Error) return send(res, 503, { error: S.message });
+  // where the person is talking from (issue #4034): the page's own report + the
+  // address and city the entry saw (socket mode: the relay is the only way in)
+  const browser = cleanBrowser(body.client);
+  const place = SOCKET ? parseClient(req.headers["x-fleet-client"]) : {};
+  const where = contextLine(browser, place);
+  const mcpServers = browser || place.ip ? browserTools(S, contextDetails(browser, place)) : undefined;
 
   const tid = newSecret(9);
   live = { tid, ac: new AbortController(), listeners: new Set([res]), asks: new Map(), model };
@@ -411,6 +430,8 @@ async function turn(req, res, person) {
   emitAll({ t: "turn", id: tid, model });
   log("turn", { person, model });
 
+  // In bypass (lib.mjs PERMISSIONS) this is reached for AskUserQuestion — the
+  // card the person picks from; any other tool runs without asking.
   const canUseTool = (name, input, opts = {}) => new Promise((resolve) => {
     const rid = `r${++ridSeq}-${newSecret(6)}`;
     const t = live;
@@ -461,9 +482,14 @@ async function turn(req, res, person) {
     if (maint) await maint;
     for (let attempt = 0; ; attempt++) {
       const seed = conv.session ? "" : conv.seed;
+      // the one-line context goes in on a session's first turn and again only when it changed
+      const head = where && (!conv.session || conv.ctxKey !== where.key) ? contextBlock(where.line) : "";
       try {
-        await runQuery(seed + text, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac, canUseTool }, onMsg);
-        if (seed) { conv.seed = ""; saveConv(); }
+        await runQuery(seed + head + text, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
+          canUseTool, mcpServers }, onMsg);
+        if (seed) conv.seed = "";
+        if (head) conv.ctxKey = where.key;
+        if (seed || head) saveConv();
         break;
       } catch (e) {
         if (attempt === 0 && !live.ac.signal.aborted && (e.tooLong || TOO_LONG.test(String(e?.message || e)))) {

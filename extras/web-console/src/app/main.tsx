@@ -5,6 +5,7 @@ import { StrictMode, Suspense, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes } from "react-router";
 import "@/shared/index.css";
+import "@/shared/theme";
 import { AppShell } from "./Shell";
 import { PAGES } from "./routes";
 

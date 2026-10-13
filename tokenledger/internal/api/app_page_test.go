@@ -85,6 +85,13 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 		} else if code, body := get(admin, path); code != http.StatusOK || !strings.Contains(body, doc) {
 			t.Errorf("admin GET %s = %d %q; want 200 and the app document", path, code, body)
 		}
+		if to, moved := consoleTarget(pagePath(path), "", roleUser); moved && !adminOnly {
+			// a page the new console took over (claude-fleet#3931): a member moves on too
+			if code, _ := get(user, path); code != http.StatusMovedPermanently {
+				t.Errorf("user GET %s = %d; want 301 → %s", path, code, to)
+			}
+			continue
+		}
 		code, body := get(user, path)
 		switch {
 		case adminOnly && (code != http.StatusNotFound || strings.Contains(body, doc)):

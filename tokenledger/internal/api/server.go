@@ -190,6 +190,12 @@ type Server struct {
 	// ChatPerMinute bounds how many chat relays one person opens a minute
 	// (0: 60; negative: unlimited).
 	ChatPerMinute int
+	// ChatGeoDB is an ip2region xdb (IPv4) the entry reads a chat request's
+	// city from, for the person's conversation (claude-fleet#4034;
+	// CCQUOTA_FLEET_CHAT_GEO_DB). "" ⇒ the address goes without a city.
+	ChatGeoDB   string
+	chatGeoOnce sync.Once
+	chatGeoDB   *geoDB
 
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable
@@ -258,7 +264,13 @@ type Server struct {
 	// FLEET_USAGE_SILENT_ALERT_SECS, 30 min). Negative turns it off; zero is
 	// the default.
 	UsageSilentAfter time.Duration
-	usageSilent      usageSilentWatch
+	// NotifyCmd is the hub's FLEET_NOTIFY_CMD (claude-fleet#4007): a notifier
+	// run as `<cmd> "<message>"` — the node's convention — when svc_degraded
+	// is raised; empty = the alert is only logged and recorded. Notify, when
+	// set, replaces it (tests).
+	NotifyCmd   string
+	Notify      func(msg string)
+	usageSilent usageSilentWatch
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
@@ -375,6 +387,11 @@ type Server struct {
 	spareAlertMu    sync.Mutex
 	spareAlertAt    time.Time
 	spareEmptySince map[string]time.Time
+	// svcAlert* pace svc_degraded (claude-fleet#4007): when the last pass
+	// ran, and which principals were degraded on it (a raise needs two).
+	svcAlertMu   sync.Mutex
+	svcAlertAt   time.Time
+	svcAlertSeen map[string]bool
 
 	// relayLocks serialises relay dispatch per target endpoint
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
@@ -723,6 +740,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.AccountKeyPath, s.handleAccountKey)
 		// The release ledger's numbers (claude-fleet#3140): the operator's.
 		mux.Handle(ReleaseStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleReleaseStats))))
+		// The signing keys' state (claude-fleet#3937): an admin's; anyone
+		// else gets the 404 an unknown release path gets.
+		mux.Handle(ReleaseKeysPath, s.viewerOnly(http.HandlerFunc(s.handleReleaseKeys)))
 		// A client's team defaults (claude-fleet#1722): whitelisted, never
 		// a credential, read by every client's start — public like /install.
 		mux.HandleFunc("/v1/fleet/client-settings", s.handleClientSettings)
@@ -960,6 +980,8 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(ticketPagesPrefix, s.appSide())
 	// 设备 (claude-fleet#3930): the same, at /app/devices
 	mux.Handle(devicesPagePath, s.appSide())
+	// 设置 (claude-fleet#3931): the same — the page that took over /config.
+	mux.Handle(settingsPagePath, s.appSide())
 	// The new console's admin side (claude-fleet#3925): an admin's, and to
 	// anyone else what an unknown address answers (app_mount.go).
 	mux.Handle(AdminPrefix, s.adminSide(ui))

@@ -44,7 +44,7 @@ var appPagePaths = map[string]bool{
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 	// the new console's own pages, with no old page behind them (EPIC #3923)
-	mePagePath: true, devicesPagePath: true,
+	mePagePath: true, devicesPagePath: true, settingsPagePath: true,
 }
 
 // appPagePrefixes are the console's pages that carry one name under them
@@ -94,6 +94,21 @@ const ticketPagesPrefix = TasksPagePath + "/tickets/"
 // It takes over 设备与 SSH, 从手机连, 我的连接 and 我的机器.
 const devicesPagePath = "/devices"
 
+// settingsPagePath is 设置 (C8, claude-fleet#3931): the person's name and ways
+// of signing in, their own configuration (export / import), light or dark and
+// the language, sign-out. It took over /app/config; the sign-in flows that
+// hang a new way on a person come back here (settingsBack).
+const settingsPagePath = "/settings"
+
+// settingsBack is where adding a way of signing in returns to: 设置's 登录方式
+// card, with ?e=<why> when it did not go through.
+func settingsBack(e string) string {
+	if e != "" {
+		return AppPrefix + settingsPagePath + "?e=" + e + "#logins"
+	}
+	return AppPrefix + settingsPagePath + "#logins"
+}
+
 // AdminPrefix is where the admin side of the new console is mounted.
 const AdminPrefix = "/admin"
 
@@ -141,7 +156,7 @@ var consolePages = []consolePage{
 	{old: EntryPagePath, new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C7", live: true},
 	{old: EntryConnPath, new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7", live: true},
 	{old: AppPrefix + "/machines", new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7", live: true},
-	{old: AppPrefix + "/config", new: AppPrefix + "/settings", side: sideMe, owner: "C8"},
+	{old: AppPrefix + "/config", new: AppPrefix + settingsPagePath, side: sideMe, owner: "C8", live: true},
 	// The way in: each keeps its address and changes only its look.
 	{old: AppPrefix + "/signin", new: AppPrefix + "/signin", side: sideEntry, owner: "C9"},
 	{old: "/fleet/login", new: "/fleet/login", side: sideEntry, owner: "C9"},
@@ -162,7 +177,7 @@ var consolePages = []consolePage{
 	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12"},
 	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13"},
 	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13"},
-	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14"},
+	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14", live: true},
 	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15"},
 	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15"},
 	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15"},

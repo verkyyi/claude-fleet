@@ -381,14 +381,14 @@ func (s *Server) emailFinish(w http.ResponseWriter, r *http.Request, addr string
 				}
 				if err == nil {
 					_ = s.Store.HubAudit(me, "identity.add", addr, "ok", "email, proven by its mail", now)
-					http.Redirect(w, r, AppPrefix+"/config#logins", http.StatusFound)
+					http.Redirect(w, r, settingsBack(""), http.StatusFound)
 					return
 				}
 				owner = "?"
 			}
 			if owner != me {
 				_ = s.Store.HubAudit(me, "identity.add", addr, "refused", "another person signs in with it", now)
-				http.Redirect(w, r, AppPrefix+"/config?e=taken#logins", http.StatusFound)
+				http.Redirect(w, r, settingsBack("taken"), http.StatusFound)
 				return
 			}
 			http.Redirect(w, r, loginReturn(w, r), http.StatusFound)

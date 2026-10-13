@@ -80,6 +80,17 @@ export function agentEnv(base, mint) {
   return env;
 }
 
+// How a turn's agent is allowed to act (issue #4031): like a fleet CLI session,
+// bypassPermissions — no tool waits for a 允许 on the page. The guards still hold:
+// the login's settings (settingSources "user") carry the fleet's PreToolUse hooks
+// (bash-guard, base-readonly-guard, …), and a hook's deny stops a tool in bypass
+// too. AskUserQuestion is not a permission: Claude Code still hands it to
+// canUseTool in bypass, so the question card still reaches the page.
+export const PERMISSIONS = Object.freeze({
+  permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
+  settingSources: Object.freeze(["user", "project", "local"]),
+});
+
 // `fleet-session-cred.sh mint` prints `<route> TAB <port> TAB <credential>`.
 export function parseMint(stdout) {
   const [route, port, cred] = String(stdout || "").trim().split("\t");
@@ -131,4 +142,110 @@ export function budgetRefusal(x) {
 export function personName(h) {
   const v = String(h || "").split(/[;,\s]/)[0];
   return /^[A-Za-z0-9@._+:-]{1,64}$/.test(v) ? v : "";
+}
+
+// ---- the browser's context (issue #4034) -------------------------------------
+// What the page says of itself (browser.ts) + where the entry saw it come from
+// (X-Fleet-Client, written by the entry — tokenledger/internal/api/chat_client.go)
+// → ONE short line for the model, put before the person's words on the first
+// turn and again only when it changes (another device, city or day) — never in
+// the system prompt, which would break its cache — and the full details for
+// the browser_context tool. Nothing of it is logged.
+const str = (v, n = 200) => (typeof v === "string" ? v.slice(0, n) : "");
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+// the page's report, bounded and typed — whatever else it carries is dropped
+export function cleanBrowser(o) {
+  if (!o || typeof o !== "object") return null;
+  const u = o.uaData && typeof o.uaData === "object" ? o.uaData : null;
+  const n = o.net && typeof o.net === "object" ? o.net : null;
+  const box = (b, ...k) => b && typeof b === "object" ? Object.fromEntries(k.map((x) => [x, num(b[x])])) : null;
+  return {
+    ua: str(o.ua, 512),
+    uaData: u ? { brands: (Array.isArray(u.brands) ? u.brands : []).slice(0, 8).map((b) => str(b, 64)),
+      mobile: u.mobile === true, platform: str(u.platform, 32), platformVersion: str(u.platformVersion, 32),
+      model: str(u.model, 64), architecture: str(u.architecture, 16) } : null,
+    lang: str(o.lang, 35),
+    langs: (Array.isArray(o.langs) ? o.langs : []).slice(0, 5).map((l) => str(l, 35)),
+    tz: str(o.tz, 64),
+    tzOffset: num(o.tzOffset),
+    screen: box(o.screen, "w", "h", "dpr"),
+    viewport: box(o.viewport, "w", "h"),
+    touch: num(o.touch),
+    net: n ? { type: str(n.type, 16), effectiveType: str(n.effectiveType, 16), downlink: num(n.downlink), rtt: num(n.rtt),
+      saveData: n.saveData === true } : null,
+    dark: o.dark === true,
+  };
+}
+
+// X-Fleet-Client: base64url JSON {ip, country, province, city}; {} when absent or bad
+export function parseClient(h) {
+  try {
+    const o = JSON.parse(Buffer.from(String(h || ""), "base64url").toString("utf8"));
+    if (!o || typeof o !== "object") return {};
+    return { ip: str(o.ip, 64), country: str(o.country, 32), province: str(o.province, 32), city: str(o.city, 32) };
+  } catch { return {}; }
+}
+
+// UA (+ Client Hints) → device · system · browser, in the person's words
+export function uaKind(b) {
+  const ua = b?.ua || "", h = b?.uaData || {};
+  const has = (re) => re.test(ua);
+  let os = "", device = "";
+  if (has(/iPhone|iPod/)) { os = "iPhone"; device = "手机"; }
+  else if (has(/iPad/) || (has(/Macintosh/) && (b?.touch || 0) > 1)) { os = "iPad"; device = "平板"; }
+  else if (has(/HarmonyOS|OpenHarmony/)) { os = "鸿蒙"; device = has(/Mobile|Phone/) ? "手机" : "平板"; }
+  else if (has(/Android/) || h.platform === "Android") { os = "安卓"; device = has(/Mobile/) || h.mobile ? "手机" : "平板"; }
+  else if (has(/Macintosh|Mac OS X/) || h.platform === "macOS") { os = "Mac"; device = "电脑"; }
+  else if (has(/Windows/) || h.platform === "Windows") { os = "Windows"; device = "电脑"; }
+  else if (has(/CrOS/) || h.platform === "Chrome OS") { os = "ChromeOS"; device = "电脑"; }
+  else if (has(/Linux/) || h.platform === "Linux") { os = "Linux"; device = "电脑"; }
+  if (h.mobile === true && device === "电脑") device = "手机";
+  const browser = has(/MicroMessenger/) ? "微信内置浏览器" : has(/DingTalk/) ? "钉钉内置浏览器"
+    : has(/Edg(?:A|iOS)?\//) ? "Edge" : has(/OPR\//) ? "Opera" : has(/SamsungBrowser/) ? "三星浏览器"
+    : has(/UCBrowser/) ? "UC" : has(/Quark/) ? "夸克" : has(/Firefox|FxiOS/) ? "Firefox"
+    : has(/CriOS|Chrome\//) ? "Chrome" : has(/Safari\//) ? "Safari" : "";
+  return { device, os, browser };
+}
+
+const WEEK = ["日", "一", "二", "三", "四", "五", "六"];
+function localTime(tz, now) {
+  let p;
+  try {
+    p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: tz || undefined, year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" }).formatToParts(now).map((x) => [x.type, x.value]));
+  } catch { return null; }                                // a zone Intl does not know
+  const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday);
+  const day = `${p.year}-${p.month}-${p.day}`;
+  return { day, text: `${day} 周${WEEK[wd] ?? "?"} ${p.hour}:${p.minute}` };
+}
+
+// → { key, line } — key is what a change is judged by (never the minute); null
+// when there is nothing to say
+export function contextLine(b, place = {}, now = new Date()) {
+  if (!b && !place.ip) return null;
+  const { device, os, browser } = uaKind(b);
+  const w = b?.viewport?.w || b?.screen?.w || 0;
+  const width = !w ? "" : w < 600 ? "窄屏" : w < 1024 ? "中屏" : "宽屏";
+  const t = localTime(b?.tz, now);
+  const pv = place.province || "", ct = place.city || "";
+  const where = (ct && pv && !ct.startsWith(pv.replace(/[省市]$/, "")) ? pv + ct : ct || pv) || place.country || "";
+  const parts = [
+    [device, os].filter(Boolean).join(" · "), browser, b?.lang || "", width,
+    t ? `本地时间 ${t.text}${b?.tz ? `（${b.tz}）` : ""}` : "",
+    where ? `大致位置 ${where}` : "",
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  const key = [device, os, browser, b?.lang || "", width, b?.tz || "", where, t?.day || ""].join("|");
+  return { key, line: `${parts.join(" · ")}（更多细节可调用 browser_context）` };
+}
+
+export const CTX_OPEN = "<fleet-webchat-context>";
+export const CTX_RE = /^<fleet-webchat-context>[\s\S]*?<\/fleet-webchat-context>\s*/;
+export const contextBlock = (line) => `${CTX_OPEN}\n用户此刻的浏览器：${line}\n</fleet-webchat-context>\n\n`;
+
+// the browser_context tool's answer: everything known of this turn's browser
+export function contextDetails(b, place = {}) {
+  return { ip: place.ip || "", place: { country: place.country || "", province: place.province || "", city: place.city || "" },
+    ...uaKind(b), ...(b || {}) };
 }

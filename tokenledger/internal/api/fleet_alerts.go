@@ -126,6 +126,7 @@ func (s *Server) NodeAlertTick(since, now time.Time) {
 	s.clearSettledConflicts(now)
 	s.UsageSilentTick(now, false)
 	s.SpareAlertTick(since, now)
+	s.SvcAlertTick(now)
 	if err := s.Store.PruneFleetAlerts(now.Add(-fleetAlertKeep)); err != nil {
 		log.Printf("fleet alerts: prune: %v", err)
 	}
