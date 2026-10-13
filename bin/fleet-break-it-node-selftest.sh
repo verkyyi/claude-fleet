@@ -4,6 +4,11 @@
 # the cred-shared drill whose runner it sources (BREAK_CRED_LIB=1);
 # bin/fleet-break-it-selftest.sh's lockstep lint reads the drill_* names here too.
 #
+#   node-core-bootstrap-lost bin/fleet-node-core.py install (serving_wait, the put-back) +
+#                         bin/fleet-node-supervisor.py install / install_check / status --check
+#                         (core_reading) + bin/fleet-node-install.sh 核心 + bin/fleet-doctor.sh
+#                         `node` row (#3810): the core re-bootstrapped under a seated daemon
+#                         answers EIO — no core, every child stopped, the install said done
 #   node-supervisor-dead  bin/fleet-node-supervisor.py (install's KeepAlive +
 #                         ThrottleInterval, run's adopt + state.json, status --check),
 #                         bin/fleet-doctor.sh's `node` row
@@ -1137,6 +1142,88 @@ drill_node_install_half() {
   )
   { read -r SECS; read -r WHY; } < "$WORK/fni.res"
   WHAT="装到一半（取运行时时）被 kill -9：没有 current、没有半个发布版；同一条命令不带码重跑，从断处做完、不再花加入码；之后删掉守护的服务定义，重跑只补它一件"
+}
+
+# node-core-bootstrap-lost (#3810): `fleet node install` re-installs the root core
+# under a daemon already on _fleetnode. launchd is still tearing the old core down
+# when the bootstrap comes, so it answers EIO (rc 5) — the run used to stop there
+# with the new plist in place and NO core loaded: every child of the seated daemon
+# waiting on a socket that was gone, and the doctor's node row still PASS. Now the
+# step waits the old job out and retries; a unit that never comes up puts the one
+# it replaced back and fails the run before the daemon step; a seated daemon whose
+# core does not answer is refused by its own install and is status --check 7 —
+# the doctor's FAIL.
+drill_node_core_bootstrap_lost() {
+  CAP=60
+  (
+    TMPDIR="$WORK" FNI_LIB=1 . "$BIN/fleet-node-install-selftest.sh"
+    sandbox
+    res() { printf '%s\n%s\n' "${1:-}" "${2:-}" > "$WORK/fncb.res"; [ -n "${LP:-}" ] && kill "$LP" 2>/dev/null; rm -rf "${SD:-}"; exit 0; }
+    run --join "$CODE1"
+    [ "$RC" = 0 ] || res "" "the sandbox did not converge: $(printf '%s' "$OUT" | grep '^✗' | head -n 1)"
+    for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-release-verify.py; do cp "$BIN/$f" "$SB/root/current/bin/"; done
+    SD="$(mktemp -d /tmp/fncb.XXXXXX)"; export FLEET_NODE_CORE_SOCK="$SD/core.sock" FLEET_NODE_CORE_WAIT=3 FLEET_NODE_BOOTOUT_WAIT=5
+    # the core "serving": something listening on its socket while launchd holds it
+    python3 -c 'import socket,sys
+s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
+while True: s.accept()[0].close()' "$FLEET_NODE_CORE_SOCK" &
+    LP=$!
+    until_ok 5 test -S "$FLEET_NODE_CORE_SOCK" || res "" "the stand-in core never listened"
+    # launchd: the core's job leaves only a few prints after its bootout, and a
+    # bootstrap before then is EIO; core.broken = the NEW unit never starts
+    cat > "$SB/fake/launchctl" <<SH
+#!/bin/bash
+echo "\$*" >> "$SB/launchctl.calls"
+case "\$*" in
+  *node-core*)
+    n=\$(cat "$SB/core.tearing" 2>/dev/null || echo 0)
+    case "\$1" in
+      bootout) [ -f "$SB/core.loaded" ] && { rm -f "$SB/core.loaded"; echo 3 > "$SB/core.tearing"; } ;;
+      print) if [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$SB/core.tearing"; exit 0; fi; [ -f "$SB/core.loaded" ] ;;
+      bootstrap) [ "\$n" -gt 0 ] && exit 5
+        [ -f "$SB/core.broken" ] && grep -q "$SB/root/current" "\$3" && exit 5
+        touch "$SB/core.loaded" ;;
+    esac ;;
+  *) case "\$1" in bootstrap) touch "$SB/loaded" ;; bootout) rm -f "$SB/loaded" ;; print) [ -f "$SB/loaded" ] ;; esac ;;
+esac
+SH
+    chmod +x "$SB/fake/launchctl"
+    stale() {
+      python3 -c 'import plistlib,sys; plistlib.dump({"Label": "com.claude-fleet.node-core", "ProgramArguments": ["/usr/bin/python3", "-I", "/old/runtime/bin/fleet-node-core.py", "serve"]}, open(sys.argv[1], "wb"))' \
+        "$SB/LaunchDaemons/com.claude-fleet.node-core.plist"
+      touch "$SB/core.loaded"; rm -f "$SB/core.tearing"
+    }
+    t0=$(now)
+    # 1. a core from an older runtime, loaded; the install replaces it while launchd is still tearing it down
+    stale
+    run
+    [ "$RC" = 0 ] && line '✓ 核心' && [ -f "$SB/core.loaded" ] \
+      || res "" "a bootstrap during the old core's teardown (EIO) left no core: rc $RC, $(printf '%s' "$OUT" | grep '核心' | head -n 1), loaded=$([ -f "$SB/core.loaded" ] && echo y || echo n)"
+    # 2. the new unit never starts: the old one back (bytes and loaded), the run stops before 守护
+    stale; before=$(shasum -a 256 < "$SB/LaunchDaemons/com.claude-fleet.node-core.plist"); touch "$SB/core.broken"
+    run
+    [ "$RC" = 1 ] && line '✗ 核心' && ! printf '%s' "$OUT" | grep -qE '^(✓|跳过|✗) 守护' \
+      || res "" "a core that never came up did not stop the run: rc $RC, $(printf '%s' "$OUT" | grep -E '核心|守护' | tr '\n' ' ')"
+    [ "$(shasum -a 256 < "$SB/LaunchDaemons/com.claude-fleet.node-core.plist")" = "$before" ] && [ -f "$SB/core.loaded" ] \
+      || res "" "the core it replaced was not put back (unit changed or not loaded)"
+    # 3. the daemon on its seat, the core gone: its own install refuses, status --check 7
+    printf '{"_fleetnode": {"uid": %d, "gid": %d, "home": "/var/empty"}}\n' "$(id -u)" "$(id -g)" > "$SB/passwd.json"
+    { kill "$LP"; wait "$LP"; } 2>/dev/null; LP=""; rm -f "$FLEET_NODE_CORE_SOCK" "$SB/core.loaded"
+    nbefore=$(shasum -a 256 < "$SB/LaunchDaemons/com.claude-fleet.node.plist")
+    out=$(python3 "$SB/root/current/bin/fleet-node-supervisor.py" install 2>&1); rc=$?
+    [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'root core does not answer' \
+      && [ "$(shasum -a 256 < "$SB/LaunchDaemons/com.claude-fleet.node.plist")" = "$nbefore" ] \
+      || res "" "a seated daemon was installed without its core (rc $rc): $out"
+    python3 -c 'import json,os,sys,time; json.dump({"supervisor":{"pid":int(sys.argv[2]),"heartbeat":time.time()}},open(sys.argv[1],"w"))' \
+      "$SB/db/state.json" "$$"
+    out=$(python3 "$SB/root/current/bin/fleet-node-supervisor.py" status --check 2>&1); rc=$?
+    [ "$rc" = 7 ] && printf '%s' "$out" | grep -q 'core NOT ANSWERING' \
+      || res "" "a seated daemon without its core reads healthy: status --check rc $rc: $out"
+    grep -q '^    7) fail node ' "$BIN/fleet-doctor.sh" || res "" "the doctor's node row does not FAIL on status --check 7"
+    res "$(since "$t0")" ""
+  )
+  { read -r SECS; read -r WHY; } < "$WORK/fncb.res"
+  WHAT="守护已降到 _fleetnode 时重装根核心：launchd 还在拆旧核心、bootstrap 回 EIO——等旧的走完再重试，装上且 socket 答了才算；新的起不来就放回旧的、不往守护那步走；核心不答时守护自己的 install 拒绝、status --check 7（体检 node 行 FAIL）"
 }
 
 # managed-login-install-stale (#2688): the machine moved to a release, a managed

@@ -42,6 +42,9 @@
 #   核心      the root core (#3555): FLEET_NODE_CORE=1 on the command installs
 #             com.claude-fleet.node-core (fleet-node-core.py install), 0 removes it;
 #             neither: an installed one is kept converged, none = no line at all
+#             (a seated daemon's core always is — it cannot do without it). It
+#             passes only once launchd / systemd holds it AND its socket answers;
+#             else the unit it replaced goes back and the run stops (#3810)
 #   管理员座位 the admin role account (#3696, C15·b): FLEET_ADMIN_SEAT=1 on the
 #             command makes _fleetadmin / fleetadmin, <state>/admin/ (the gate
 #             copied under its two names, admin.conf, the hub's account key pinned
@@ -57,7 +60,9 @@
 #             makes _fleetnode / fleetnode, the core takes requests from it alone
 #             from that moment, the root daemon hands its children over and the
 #             seat adopts them — nothing restarts. An account already there
-#             keeps the daemon on it; none = root, byte for byte.
+#             keeps the daemon on it; none = root, byte for byte. A seated
+#             daemon whose core does not answer is never skipped and never
+#             reinstalled: the step fails, nothing replaced (#3810).
 #             FLEET_NODE_SEAT_AGENT=1 (on a seated machine) runs the node program
 #             as the seat too (#3669: `install --seat --agent` — machine.env,
 #             logins/*.env and agent/ become the seat's, its tenant commands go
@@ -134,8 +139,17 @@ CUR="$ROOT/current"
 ENVF="$STATE/machine.env"
 MKEY="$STATE/machine.key"   # the machine's signing key (#3699), beside machine.env
 SEAT=_fleetnode; [ "$OS" = linux ] && SEAT=fleetnode
+SEAT="${FLEET_NODE_SEAT_NAME:-$SEAT}"
+# is the daemon's own account there (#3668)? A sandbox asks its passwd.json, the
+# supervisor's seam (seat_ident), never this machine's accounts
+seat_there() {
+  if [ "${FLEET_NODE_TEST:-}" = 1 ] && [ -n "${FLEET_NODE_PASSWD:-}" ]; then
+    "$PY" -c 'import json,sys; sys.exit(0 if sys.argv[2] in (json.load(open(sys.argv[1])) or {}) else 1)' \
+      "$FLEET_NODE_PASSWD" "$SEAT" 2>/dev/null
+  else id -u "$SEAT" >/dev/null 2>&1; fi
+}
 # machine.env is the seat's while the node program runs as it (#3669)
-seat_env_own() { [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$ENVF" 2>/dev/null; return 0; }
+seat_env_own() { [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && seat_there && chown "$SEAT" "$ENVF" 2>/dev/null; return 0; }
 PUB="$STATE/release.pub"
 EXP="$STATE/expected.json"
 CURL="${FLEET_NODE_INSTALL_CURL:-curl}"
@@ -406,12 +420,12 @@ else
     "$PY" -I "$SIG" keygen "$MKEY" >/dev/null 2>"$WORK/sig.err" || fail 机器钥匙 "生成不了 ${MKEY}：$(tail -n 1 "$WORK/sig.err")"
   fi
   chmod 600 "$MKEY" 2>/dev/null
-  [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$MKEY" 2>/dev/null
+  [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && seat_there && chown "$SEAT" "$MKEY" 2>/dev/null
   # <key>.ok = "<keyid> <hub>": the hub took it, so a request may be signed
   # (#3710 — the node program's nodesig.Ensure writes the same)
   mark_ok() {
     printf '%s %s\n' "$kid" "$HUB" > "$MKEY.ok" && chmod 600 "$MKEY.ok" 2>/dev/null
-    [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$MKEY.ok" 2>/dev/null
+    [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && seat_there && chown "$SEAT" "$MKEY.ok" 2>/dev/null
     return 0
   }
   kid="$("$PY" -I "$SIG" keyid "$MKEY" 2>"$WORK/sig.err")" || fail 机器钥匙 "读不了 ${MKEY}：$(tail -n 1 "$WORK/sig.err")"
@@ -535,7 +549,8 @@ case "${FLEET_NODE_CORE:-}" in
        out="$("$PY" -I "$CORE" uninstall 2>&1)" || fail 核心 "$(printf '%s' "$out" | tail -n 1)"
        ok 核心 "卸了（各处走老路）"
      else skip 核心 "没装"; fi ;;
-  *) if [ "${FLEET_NODE_CORE:-}" = 1 ] || [ "$cst" != 2 ]; then
+  # a seated daemon (#3668) cannot do without the core: its core is always converged (#3810)
+  *) if [ "${FLEET_NODE_CORE:-}" = 1 ] || [ "$cst" != 2 ] || { [ -z "$POD" ] && seat_there; }; then
        [ -f "$CORE" ] || fail 核心 "这个版本没有 fleet-node-core.py — 先让运行时跟上发布版"
        if "$PY" -I "$CORE" install --check >/dev/null 2>&1; then
          skip 核心 "com.claude-fleet.node-core 已装好、在答"
@@ -574,7 +589,7 @@ esac
 
 # ---------------------------------------------------------------- 守护 ----------
 # a seated machine's logins/ is root:seat 0750 (the seat lists its names, #3668)
-if id -u "$SEAT" >/dev/null 2>&1; then mkdir -p "$STATE/logins"; else mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins"; fi \
+if seat_there; then mkdir -p "$STATE/logins"; else mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins"; fi \
   || fail 守护 "建不了 $STATE/logins"
 SUP="$CUR/bin/fleet-node-supervisor.py"
 # the node program onto the seat (=1) or back to root (=0), #3669
@@ -583,16 +598,16 @@ case "${FLEET_NODE_SEAT_AGENT:-}" in
   1) [ -f "$STATE/seat-agent" ] || agentflag=--agent ;;
   0) [ -f "$STATE/seat-agent" ] && agentflag=--no-agent ;;
 esac
-if [ -n "$agentflag" ] && id -u "$SEAT" >/dev/null 2>&1; then
+if [ -n "$agentflag" ] && seat_there; then
   out="$("$PY" -I "$SUP" install --seat "$agentflag" 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
   ok 守护 "$(printf '%s' "$out" | tail -n 1)"
-elif [ "${FLEET_NODE_SEAT:-}" = 1 ] && ! id -u "$SEAT" >/dev/null 2>&1; then
+elif [ "${FLEET_NODE_SEAT:-}" = 1 ] && ! seat_there; then
   # the daemon's own account (#3668): made and moved onto in ONE step — the core
   # takes requests from it alone the moment it exists
   out="$("$PY" -I "$SUP" install --seat 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
   ok 守护 "$(printf '%s' "$out" | tail -n 1)（守护以 ${SEAT} 跑，要 root 的事经核心）"
 elif "$PY" -I "$SUP" install --check >/dev/null 2>&1; then
-  skip 守护 "com.claude-fleet.node 已装好、在跑$(id -u "$SEAT" >/dev/null 2>&1 && echo "（以 ${SEAT}）")"
+  skip 守护 "com.claude-fleet.node 已装好、在跑$(seat_there && echo "（以 ${SEAT}）")"
 else
   out="$("$PY" -I "$SUP" install 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
   ok 守护 "$(printf '%s' "$out" | tail -n 1)"

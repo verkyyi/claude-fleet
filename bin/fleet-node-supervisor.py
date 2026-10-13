@@ -142,6 +142,8 @@ Usage:
                                                timed out FLEET_NODE_TCC_STUCK times running —
                                                every user delete fails until sandboxd is
                                                restarted (issue #3167)
+                                               · 7 running, but the root core it has (or,
+                                               seated, needs) does not answer (issue #3810)
   fleet-node-supervisor.py tenants [--json] [--check]
                                                the taken-over logins' abilities (issue #2842):
                                                admin group · sudo rules · sudoers. --check: exit
@@ -4481,18 +4483,50 @@ def lanes_now(paths, state):
     return lane_refusals(paths) or state.get("lanes") or {}
 
 
+def core_unit(paths):
+    return os.path.join(paths.daemon_dir, "com.claude-fleet.node-core.plist" if MAC else "fleet-node-core.service")
+
+
+def core_reading(paths, seated=None):
+    """The root core as this reader can tell (#3810): None = no core here and none
+    needed · "serving" · "down" — installed (or under a seated daemon, which
+    cannot do without it) but its socket is absent or refuses · "unknown" — the
+    socket is there but not this reader's to try (a login's doctor), or a
+    sandbox that names no socket of its own."""
+    if core is None or core.off():
+        return None
+    if seated is None:
+        seated = seat_ident() is not None
+    sock = core.sock_path()
+    if not seated and not os.path.exists(core_unit(paths)) and not os.path.exists(sock):
+        return None
+    if env("FLEET_NODE_TEST", "") == "1" and not os.environ.get("FLEET_NODE_CORE_SOCK"):
+        return "unknown"
+    if not os.path.exists(sock):
+        return "down"
+    try:
+        core.connect(1.0).close()
+    except OSError as e:
+        return "unknown" if getattr(e, "errno", None) in (errno.EACCES, errno.EPERM) else "down"
+    return "serving"
+
+
+def core_down_why():
+    return ("the daemon runs as %s: every child waits for it" % seat_name() if seat_ident() is not None
+            else "every caller takes the old road")
+
+
 def core_line(paths):
     """The root core (#3555), when this machine has one: serving or not, and its
     last alert (more refusals in a minute than it allows). None = no core here —
     the status is what it was."""
-    if core is None:
-        return None
-    unit = os.path.join(paths.daemon_dir, "com.claude-fleet.node-core.plist" if MAC else "fleet-node-core.service")
+    reading = core_reading(paths)
     alert = read_json(os.path.join(paths.state, "core", "alert.json"), None)
-    if not os.path.exists(unit) and not os.path.exists(core.sock_path()) and not isinstance(alert, dict):
+    if reading is None and not isinstance(alert, dict):
         return None
-    line = "core        %s · %s" % ("serving" if core.available() else "NOT ANSWERING — every caller takes the old road",
-                                    core.sock_path())
+    word = {"serving": "serving", "unknown": "socket there (not this reader's to try)"}.get(
+        reading, "NOT ANSWERING — " + core_down_why())
+    line = "core        %s · %s" % (word, core.sock_path() if core is not None else "-")
     if isinstance(alert, dict):
         line += " · alert %s: %s refusals in a minute (last %s)" % (iso(alert.get("at")), alert.get("count"),
                                                                   alert.get("last"))
@@ -6717,6 +6751,14 @@ def install(paths, make_seat=False, agent=None):
             print("fleet-node-supervisor: made %s but cannot find it" % seat_name(), file=sys.stderr)
             return 1
         print("seat: %s %s (uid %d)" % (seat_name(), "made" if made else "found", seat_ident()[0]))
+    if seated and core_reading(paths, seated=True) == "down":
+        # a seated daemon asks the core for everything root's: without it every
+        # child stops (#3810) — refuse before anything is replaced
+        _unlink(handover)
+        print("fleet-node-supervisor: the daemon runs as %s and the root core does not answer at %s — "
+              "nothing changed; bring the core back first (sudo FLEET_NODE_CORE=1 fleet node install)"
+              % (seat_name(), core.sock_path()), file=sys.stderr)
+        return 1
     if seated:
         seat_layout(paths, seat_ident())
         # the node program onto the seat (--agent) or back to root (--no-agent),
@@ -6738,17 +6780,37 @@ def install(paths, make_seat=False, agent=None):
         rc = systemctl("restart", SYSTEMD_UNIT)
         _unlink(handover)
         return rc
+    try:
+        with open(paths.plist, "rb") as f:
+            old = f.read()
+    except OSError:
+        old = None
     tmp = paths.plist + ".tmp-node"
     with open(tmp, "wb") as f:
         plistlib.dump(plist_body(paths, seated), f)
     os.chmod(tmp, 0o644)
-    launchctl("bootout", "system/" + LABEL)
+    target = "system/" + LABEL
+    launchctl("bootout", target)
+    # bootout returns while launchd still tears the job down: a bootstrap right
+    # after it answers EIO (rc 5) — wait, and retry (#3810)
+    launchctl_gone(target)
     os.rename(tmp, paths.plist)
-    rc = launchctl("bootstrap", "system", paths.plist)
+    rc = launchctl_bootstrap("system", paths.plist)
     _unlink(handover)
-    print("installed %s%s%s" % (paths.plist, " as %s" % seat_name() if seated else "",
-                                "" if rc == 0 else " (launchctl bootstrap rc=%d)" % rc))
-    return 0 if rc == 0 else 1
+    if rc == 0:
+        print("installed %s%s" % (paths.plist, " as %s" % seat_name() if seated else ""))
+        return 0
+    # not taken: the one it replaced goes back (MANAGED-NODE §8)
+    back = "nothing to put back"
+    if old is not None:
+        with open(tmp, "wb") as f:
+            f.write(old)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, paths.plist)
+        brc = launchctl_bootstrap("system", paths.plist)
+        back = "put the one it replaced back%s" % ("" if brc == 0 else " (its bootstrap rc=%d)" % brc)
+    print("fleet-node-supervisor: launchctl bootstrap %s rc=%d — %s" % (paths.plist, rc, back), file=sys.stderr)
+    return 1
 
 
 def _unlink(path):
@@ -6764,6 +6826,8 @@ def install_check(paths):
     if env("FLEET_NODE_SERVICE", "") == "foreground":
         return 0
     seated = seat_ident() is not None
+    if seated and core_reading(paths, seated=True) == "down":
+        return 1    # a seated daemon without its core is not converged (#3810)
     if not MAC:
         try:
             with open(paths.plist) as f:
@@ -7571,6 +7635,12 @@ def main(argv):
             print(json.dumps({"health": code, "state": state,
                               "services": services_summary(paths, state, tail=True)}, indent=1, sort_keys=True))
         elif "--check" in rest:
+            # a core installed (or needed by a seated daemon) that does not answer
+            # is the doctor's FAIL (#3810): seated, every child waits for it
+            if code == 0 and core_reading(paths) == "down":
+                print("%s · core NOT ANSWERING at %s — %s; sudo fleet node install brings it back (its log: %s)"
+                      % (lines[0], core.sock_path(), core_down_why(), os.path.join(paths.log, "core.log")))
+                return 7
             refused = sorted(lanes_now(paths, state)) if code == 0 else []
             if refused:
                 print("%s · 令牌失效 · 需要 relogin: %s" % (lines[0], " ".join(refused)))

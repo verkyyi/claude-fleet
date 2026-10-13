@@ -1293,6 +1293,20 @@ def systemd_body(paths):
             "[Install]\nWantedBy=multi-user.target\n" % " ".join(json.dumps(x) for x in args))
 
 
+def serving_wait(paths):
+    """'' once the core answers on its socket, else why not (#3810): a unit that
+    launchd / systemd took but whose `serve` never listens is no core. A sandbox
+    that names no socket of its own reaches no core by design — nothing to wait on."""
+    if testing() and not os.environ.get("FLEET_NODE_CORE_SOCK"):
+        return ""
+    end = time.time() + sup.env_num("FLEET_NODE_CORE_WAIT", 15)
+    while not wire.available():
+        if time.time() >= end:
+            return "its socket %s does not answer" % wire.sock_path()
+        time.sleep(0.25)
+    return ""
+
+
 def install(paths):
     if os.geteuid() != 0 and not testing():
         print("fleet-node-core: install writes %s — run it as root (sudo)" % paths.unit, file=sys.stderr)
@@ -1301,23 +1315,64 @@ def install(paths):
         print("fleet-node-core: the runtime's fleet-node-core.py is missing or not root's", file=sys.stderr)
         return 1
     os.makedirs(paths.daemon_dir, exist_ok=True)
+    # the unit it replaces, to put back when the new one does not come up (#3810:
+    # a bootstrap answering EIO left no core at all under a seated daemon)
+    try:
+        with open(paths.unit, "rb") as f:
+            old = f.read()
+    except OSError:
+        old = None
     tmp = paths.unit + ".tmp-core"
+    target = "system/" + LABEL
     if not MAC:
         with open(tmp, "w") as f:
             f.write(systemd_body(paths))
         os.chmod(tmp, 0o644)
         os.replace(tmp, paths.unit)
-        if sup.systemctl("daemon-reload") or sup.systemctl("enable", "--now", SYSTEMD_UNIT):
-            return 1
-        return sup.systemctl("restart", SYSTEMD_UNIT)
-    with open(tmp, "wb") as f:
-        plistlib.dump(plist_body(paths), f)
-    os.chmod(tmp, 0o644)
-    sup.launchctl("bootout", "system/" + LABEL)
-    os.rename(tmp, paths.unit)
-    rc = sup.launchctl("bootstrap", "system", paths.unit)
-    print("installed %s%s" % (paths.unit, "" if rc == 0 else " (launchctl bootstrap rc=%d)" % rc))
-    return 0 if rc == 0 else 1
+        rc = sup.systemctl("daemon-reload") or sup.systemctl("enable", SYSTEMD_UNIT) \
+            or sup.systemctl("restart", SYSTEMD_UNIT)
+        why = "systemctl rc=%d" % rc if rc else serving_wait(paths)
+    else:
+        with open(tmp, "wb") as f:
+            plistlib.dump(plist_body(paths), f)
+        os.chmod(tmp, 0o644)
+        sup.launchctl("bootout", target)
+        # bootout returns while launchd still tears the old job down; a bootstrap
+        # then answers EIO (rc 5) — wait it out, and retry the bootstrap
+        sup.launchctl_gone(target)
+        os.rename(tmp, paths.unit)
+        rc = sup.launchctl_bootstrap("system", paths.unit)
+        why = "launchctl bootstrap rc=%d" % rc if rc else serving_wait(paths)
+    if not why:
+        print("installed %s" % paths.unit)
+        return 0
+    # it did not come up: the one it replaced goes back, and the step fails
+    if MAC:
+        sup.launchctl("bootout", target)
+        sup.launchctl_gone(target)
+    if old is None:
+        _unlink(paths.unit)
+        if not MAC:
+            sup.systemctl("disable", "--now", SYSTEMD_UNIT)
+            sup.systemctl("daemon-reload")
+        back = "removed it again"
+    else:
+        with open(tmp, "wb") as f:
+            f.write(old)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, paths.unit)
+        brc = sup.launchctl_bootstrap("system", paths.unit) if MAC else \
+            (sup.systemctl("daemon-reload") or sup.systemctl("restart", SYSTEMD_UNIT))
+        back = "put the one it replaced back%s" % ("" if brc == 0 else " (its start rc=%d)" % brc)
+    print("fleet-node-core: %s did not come up (%s) — %s" % (paths.unit, why, back), file=sys.stderr)
+    return 1
+
+
+def _unlink(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def install_check(paths):
