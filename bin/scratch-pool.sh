@@ -609,7 +609,7 @@ pool_free_gb() {
   if [ -n "${FLEET_POOL_DISK_PROBE_CMD:-}" ]; then
     sh -c "$FLEET_POOL_DISK_PROBE_CMD" 2>/dev/null | awk 'NF{print int($1); exit}'; return 0
   fi
-  df -Pk "${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }'
+  df -Pk "$(fleet_disk_target)" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }'
 }
 # On Linux with a cgroup CPU limit (a pod) the host's load average says nothing
 # about this container (issue #3542): the slot is held by the cgroup's own reading

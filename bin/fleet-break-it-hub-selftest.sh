@@ -98,6 +98,8 @@
 #                                                   (fleet-lib.sh), dash-raw-session.sh (the hub's worker_start)
 #   linux-admit-host-load                           fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu
 #                                                   (fleet-lib.sh) on a sandbox cgroup + machine reading
+#   pod-disk-node-tmp                               fleet_disk_target (fleet-lib.sh), fleet-diskguard.sh --free /
+#                                                   --gate, scratch-pool.sh pool_free_gb, fleet-alerts.sh (a df shim)
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
 #                                                   steward's beat (bin/fleet_steward.py)
@@ -1457,6 +1459,52 @@ drill_linux_admit_host_load() {
   [ "$out" = '|rc=0' ] || { WHY="FLEET_ADMIT_LOAD_PER_CORE=0 must turn the cgroup reading off too: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT="宿主 6.29/core（ACK 节点）、pod cpu.max 2 核：没有 cgroup 照旧拦；pod 闲时放行；pod 用 1.95/2 核或被限流 40% 时按容器自己的数拦；FLEET_ADMIT_LOAD_PER_CORE=0 一并关掉"
+}
+
+# pod-disk-node-tmp (issue #3974): a Linux pod has no TMPDIR, and its /tmp is the
+# NODE's shared root disk — 13 GB free of 61 on 2026-10-13 because of the other
+# tenants, while the login's own home volume had 46 GB. Every disk rail measured
+# /tmp: the warm pool held at `disk 13GB < 15GB` (every ⌘N cold-started Codex,
+# 4.8 s to a prompt), diskguard wrote an incident every 5 minutes, and its gate
+# was 1 GB from refusing every spawn. For real: a `df` shim answering per path
+# (/tmp 13 GB, the sandbox home 46 GB) under diskguard's --free / --gate 15 with
+# TMPDIR unset; TMPDIR set (a Mac) still measures TMPDIR; FLEET_DISK_TARGET wins;
+# the pool and the bar's alert read the same target.
+drill_pod_disk_node_tmp() {
+  CAP=15; local t0 d="$WORK/pdnt" out
+  t0=$(now)
+  rm -rf "$d"; mkdir -p "$d/home" "$d/mac-tmp" "$d/shim"
+  cat > "$d/shim/df" <<SH
+#!/bin/sh
+for a; do p=\$a; done
+case "\$p" in
+  $d/home*) k=48234496 ;;
+  $d/mac-tmp*) k=104857600 ;;
+  *) k=13631488 ;;
+esac
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf 'fake 1 1 %s 1%% /x\n' "\$k"
+SH
+  # A Linux pod: fleet-lib.sh gives a Mac with no TMPDIR launchd's per-user one.
+  printf '#!/bin/sh\necho Linux\n' > "$d/shim/uname"
+  chmod +x "$d/shim/df" "$d/shim/uname"
+  dg() { env -u TMPDIR -u FLEET_DISK_TARGET PATH="$d/shim:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" "$@"; }
+  out=$(dg bash "$BIN/fleet-diskguard.sh" --free 2>&1)
+  [ "$out" = 46 ] || { WHY="a pod with no TMPDIR must measure its home (46 GB), not the node's /tmp (13): got $out"; return 1; }
+  out=$(dg bash "$BIN/fleet-diskguard.sh" --gate 15 2>&1; echo "|rc=$?")
+  [ "$out" = '|rc=0' ] || { WHY="the spawn gate refused on the node's /tmp: $out"; return 1; }
+  out=$(dg TMPDIR="$d/mac-tmp" bash "$BIN/fleet-diskguard.sh" --free 2>&1)
+  [ "$out" = 100 ] || { WHY="with TMPDIR set (a Mac) the TMPDIR volume must still be measured: got $out"; return 1; }
+  out=$(dg TMPDIR="$d/mac-tmp" FLEET_DISK_TARGET=/tmp bash "$BIN/fleet-diskguard.sh" --free 2>&1)
+  [ "$out" = 13 ] || { WHY="FLEET_DISK_TARGET must win: got $out"; return 1; }
+  out=$(dg bash -c "source '$BIN/fleet-lib.sh'; fleet_disk_target")
+  [ "$out" = "$d/home" ] || { WHY="fleet_disk_target with no TMPDIR: $out"; return 1; }
+  grep -q 'df -Pk "$(fleet_disk_target)"' "$BIN/scratch-pool.sh" \
+    || { WHY="scratch-pool.sh's pool_free_gb must read fleet_disk_target"; return 1; }
+  grep -qF 'target="${FLEET_DISK_TARGET:-${TMPDIR:-${HOME:-/tmp}}}"' "$BIN/fleet-alerts.sh" \
+    || { WHY="fleet-alerts.sh's inline copy of fleet_disk_target drifted"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="pod 无 TMPDIR：/tmp（节点共享盘）13 GB、家 46 GB——diskguard --free 读 46、--gate 15 放行；有 TMPDIR（Mac）照读 TMPDIR；FLEET_DISK_TARGET 优先；预热池和侧栏告警读同一个目标"
 }
 
 # hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and

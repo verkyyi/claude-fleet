@@ -2223,8 +2223,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Disk warning GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
 # (The volume the guard measures and the min seconds between incident captures are
-# fixed internal constants now — the guard MUST measure the $TMPDIR volume the dash
-# cache writes to, and the capture cooldown is plumbing no one tunes. A stale
+# fixed internal constants now — the guard measures the $TMPDIR volume the dash
+# cache writes to, else $HOME's (a Linux pod has no TMPDIR and its /tmp is the
+# node's shared disk — issue #3974), and the capture cooldown is plumbing no one tunes. A stale
 # FLEET_DISK_TARGET / FLEET_DISK_COOLDOWN in an old conf is still honored by
 # bin/fleet-diskguard.sh but is no longer a surfaced knob — issue #237.)
 
