@@ -101,6 +101,30 @@ func (rs *ReleaseStore) StableSHAFor(platform string) string {
 	return rs.StableSHA()
 }
 
+// MacLag is how far the Mac lane trails stable: the releases stable has moved
+// past it, and when the first of them was made (its manifest's created) — zero
+// when the lane is at stable or unset.
+func (rs *ReleaseStore) MacLag() (int, time.Time) {
+	mac := rs.MacStableSHA()
+	if mac == "" {
+		return 0, time.Time{}
+	}
+	ch := rs.chain(rs.stable().SHA)
+	for i, sha := range ch {
+		if sha != mac {
+			continue
+		}
+		if i == 0 {
+			return 0, time.Time{}
+		}
+		if m := rs.manifest(ch[i-1]); m != nil {
+			return i, m.Created
+		}
+		return i, time.Time{}
+	}
+	return 0, time.Time{}
+}
+
 // moveMac makes sha the Mac lane: a release this store holds on stable's chain
 // (never ahead of stable), never behind the lane's current one.
 func (rs *ReleaseStore) moveMac(sha string) (map[string]any, error) {

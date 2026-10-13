@@ -99,6 +99,9 @@ func TestMacLane(t *testing.T) {
 	if v["client_version"] != b || v["client_version_macos"] != a || v["client_url_macos"] != p.h.http.URL+"/install/stable/"+a {
 		t.Fatalf("/version = %v", v)
 	}
+	if v["stable_macos_behind"] != float64(1) || v["stable_macos_behind_since"] == nil {
+		t.Fatalf("/version lag = %v %v", v["stable_macos_behind"], v["stable_macos_behind_since"])
+	}
 	if resp, _ := getBody(t, p.h.http.URL+"/install/stable/"+a+"/bin/fleet"); resp.StatusCode != 200 {
 		t.Fatalf("/install/stable/<lane>/bin/fleet: %d", resp.StatusCode)
 	}
@@ -115,6 +118,9 @@ func TestMacLane(t *testing.T) {
 	}
 	if got := p.stableFor(t, "darwin"); got != b {
 		t.Fatalf("darwin served %s after the lane caught up, want %s", got[:7], b[:7])
+	}
+	if v := p.version(t); v["client_version_macos"] != b || v["stable_macos_behind"] != nil {
+		t.Fatalf("lane at stable: /version = %v", v)
 	}
 	// a ref the hub does not know
 	var body bytes.Buffer

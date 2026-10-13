@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api/fleetclient"
 )
@@ -69,6 +70,13 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		if mac := s.Releases.MacStableSHA(); mac != "" && s.Stable.Seen(mac) {
 			out["client_version_macos"] = mac
 			out["client_url_macos"] = s.hubURL(r) + "/install/stable/" + mac
+			// how far it trails stable: `fleet doctor`'s channel row
+			if n, since := s.Releases.MacLag(); n > 0 {
+				out["stable_macos_behind"] = n
+				if !since.IsZero() {
+					out["stable_macos_behind_since"] = since.UTC().Format(time.RFC3339)
+				}
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
