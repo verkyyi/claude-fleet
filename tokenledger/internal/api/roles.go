@@ -59,6 +59,8 @@ var routeAccess = map[string]string{
 	trainsPagePath:         accessAdmin,  // its runs as a page (claude-fleet#3870)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
+	// The tab icon, a copy of the site's logo (claude-fleet#3946).
+	"/favicon.svg": accessPublic, "/favicon.ico": accessPublic, "/apple-touch-icon.png": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,
 	"/v1/fleet/login/start": accessPublic, "/v1/fleet/login/poll": accessPublic,
 	// Invites (claude-fleet#2261): the code in the path / the signed note
