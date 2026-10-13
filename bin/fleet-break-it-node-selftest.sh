@@ -94,6 +94,16 @@
 #                         release back as a «new FAIL» and skipped each sha for good
 #   node-install-half     bin/fleet-node-install.sh (#2330): `fleet node install`
 #                         killed half way through, then a part deleted afterwards
+#   linux-join-no-login   bin/fleet-node-install.sh (the last line) + bin/fleet-node-supervisor.py
+#                         default_table / requirement_met (#4010): a Linux machine joined with
+#                         the one public line said 「已收敛」 while its node program waited for a
+#                         logins/*.env only the hub's first create (down that program) writes
+#   linux-relay-not-handed  tokenledger/internal/api/fleet_node_desired.go (cred_relay_url) +
+#                         bin/fleet-node-install.sh 期望状态 / 中转 + bin/fleet-node-linux.py
+#                         route_settings / hub_relay (#4010): the hub's relay reached no login
+#   installer-umask-077   bin/fleet-node-install.sh (umask 022) + bin/fleet-credsep.py mkdirs /
+#                         lib_open + bin/fleet-node-linux.py mkdirs (#4010): under umask 077 the
+#                         runtime and /usr/local/lib/claude-fleet came out 0700
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
@@ -1219,6 +1229,107 @@ drill_node_install_half() {
   )
   { read -r SECS; read -r WHY; } < "$WORK/fni.res"
   WHAT="装到一半（取运行时时）被 kill -9：没有 current、没有半个发布版；同一条命令不带码重跑，从断处做完、不再花加入码；之后删掉守护的服务定义，重跑只补它一件"
+}
+
+# linux-join-no-login (#4010): the public §2.2 line joins a Linux machine and
+# printed 「已收敛」, but the supervisor held the node program until a
+# logins/*.env existed — which only the hub's first create, sent down that very
+# program's link, writes: the first login sat pending until it failed. Now the
+# program runs with none while FLEET_NODE_ACCOUNT_OPS=1, and the installer's last
+# line says what is still missing.
+drill_linux_join_no_login() {
+  CAP=40
+  (
+    TMPDIR="$WORK" FNI_LIB=1 . "$BIN/fleet-node-install-selftest.sh"
+    sandbox_linux
+    res() { printf '%s\n%s\n' "${1:-}" "${2:-}" > "$WORK/fni.res"; exit 0; }
+    t0=$(now)
+    run --join "$CODE1"
+    [ "$RC" = 0 ] || res "" "the install failed: $(printf '%s' "$OUT" | grep '^✗' | head -n 1)"
+    ! printf '%s' "$OUT" | grep -q 已收敛 || res "" "no login on the machine and it said 已收敛"
+    printf '%s' "$OUT" | grep -q 'fleet hub accounts assign' || res "" "the next step (the hub's first create) was not named"
+    python3 - "$BIN/fleet-node-supervisor.py" "$WORK/fni.why" <<'PY' || res "" "the node program still waits for a login: $(cat "$WORK/fni.why" 2>/dev/null)"
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1]); s = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(s)
+s.MAC = False
+agent = [c for c in s.default_table(s.Paths())["children"] if c["name"] == "node-agent"][0]
+miss = s.requires_missing(agent)
+if miss:
+    open(sys.argv[2], "w").write(", ".join(miss)); sys.exit(1)
+PY
+    res "$(since "$t0")" ""
+  )
+  { read -r SECS; read -r WHY; } < "$WORK/fni.res"
+  WHAT="Linux 照对外那一行加入、还没有账号：不再说「已收敛」，说出下一步（入口派第一个号）；machine.env 有 FLEET_NODE_ACCOUNT_OPS=1 时守护不再等 logins/*.env，节点程序起来接入口的开号"
+}
+
+# linux-relay-not-handed (#4010): sessions on a Linux machine go out through the
+# relay, each login's FLEET_CRED_RELAY_URL in root's credsep/<login>.conf — the hub
+# handed none down and the join asked for none, so it was written by hand. Now
+# /v1/node/desired carries the hub's CCQUOTA_FLEET_CRED_RELAY_URL as
+# cred_relay_url, the installer keeps it in expected.json and every login open
+# (and the installer's rerun, for the logins already here) writes it.
+drill_linux_relay_not_handed() {
+  CAP=40
+  (
+    TMPDIR="$WORK" FNI_LIB=1 . "$BIN/fleet-node-install-selftest.sh"
+    sandbox_linux
+    res() { printf '%s\n%s\n' "${1:-}" "${2:-}" > "$WORK/fni.res"; exit 0; }
+    grep -q 'st.CredRelayURL = s.CredRelayURL' "$BIN/../tokenledger/internal/api/fleet_node_desired.go" \
+      || res "" "the hub's /v1/node/desired hands no relay down"
+    python3 - "$HUBD/desired.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["cred_relay_url"] = "https://relay.example.com"
+json.dump(d, open(sys.argv[1], "w"))
+PY
+    t0=$(now)
+    run --join "$CODE1"
+    [ "$RC" = 0 ] || res "" "the install failed: $(printf '%s' "$OUT" | grep '^✗' | head -n 1)"
+    grep -q '"cred_relay_url": "https://relay.example.com"' "$SB/db/expected.json" || res "" "expected.json kept no relay"
+    out=$(python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_relay_handed_down_by_the_hub 2>&1) \
+      || res "" "a login opened here gets no relay: $(printf '%s' "$out" | grep -E 'Error|assert' | head -n 1)"
+    res "$(since "$t0")" ""
+  )
+  { read -r SECS; read -r WHY; } < "$WORK/fni.res"
+  WHAT="入口配了 CCQUOTA_FLEET_CRED_RELAY_URL：/v1/node/desired 带 cred_relay_url，装机写进 expected.json，开号（和重跑装机对已有账号）把它写成 FLEET_CRED_RELAY_URL；入口没配就一个字不多（go test TestDesiredCredRelayURL）"
+}
+
+# installer-umask-077 (#4010): `sudo` under umask 077 hands it to the installer —
+# the runtime and /usr/local/lib/claude-fleet came out 0700, fleetcred could not
+# reach the proxy's code and the shared proxy exited every second (rc=2).
+drill_installer_umask_077() {
+  CAP=40
+  (
+    TMPDIR="$WORK" FNI_LIB=1 . "$BIN/fleet-node-install-selftest.sh"
+    sandbox_linux
+    res() { printf '%s\n%s\n' "${1:-}" "${2:-}" > "$WORK/fni.res"; exit 0; }
+    t0=$(now)
+    OUT="$(umask 077; bash "$INST" --hub https://hub.test --join "$CODE1" 2>&1)"; RC=$?
+    [ "$RC" = 0 ] || res "" "the install failed: $(printf '%s' "$OUT" | grep '^✗' | head -n 1)"
+    bad=$(umask_free "$SB/root/$V1") || res "" "the runtime under umask 077: $bad"
+    lib="$SB/usr/local/lib/claude-fleet"
+    mkdir -p "$SB/usr/local/lib"
+    bad=$(umask 077; FLEET_CREDSEP_LIB="$lib/credsep" python3 - "$BIN/fleet-credsep.py" <<'PY'
+import importlib.util, os, pwd, stat, sys
+spec = importlib.util.spec_from_file_location("cs", sys.argv[1]); c = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(c)
+c.mkdir(c.LIB, 0o755, pwd.getpwuid(os.getuid()).pw_name)
+for d in (os.path.dirname(c.LIB), c.LIB):
+    m = stat.S_IMODE(os.stat(d).st_mode)
+    if m != 0o755:
+        print("%o %s" % (m, d)); sys.exit(1)
+os.chmod(os.path.dirname(c.LIB), 0o700)      # an earlier install's
+c.mkdir(c.LIB, 0o755, pwd.getpwuid(os.getuid()).pw_name)
+m = stat.S_IMODE(os.stat(os.path.dirname(c.LIB)).st_mode)
+if m & 0o055 != 0o055:
+    print("not repaired: %o" % m); sys.exit(1)
+PY
+) || res "" "the credential proxy's lib under umask 077: $bad"
+    res "$(since "$t0")" ""
+  )
+  { read -r SECS; read -r WHY; } < "$WORK/fni.res"
+  WHAT="umask 077 下装机：运行时的目录全是 0755、文件人人可读；凭据代理的 /usr/local/lib/claude-fleet 与 credsep 0755，旧的一次装出的 0700 重跑时补成可进"
 }
 
 # node-core-bootstrap-lost (#3810): `fleet node install` re-installs the root core

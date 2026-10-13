@@ -162,6 +162,12 @@ type Server struct {
 	// Empty by default: a fleet's caps are the operator's.
 	FleetPersonConfigKeys []string
 
+	// CredRelayURL is the credential relay a managed machine's sessions use
+	// (CCQUOTA_FLEET_CRED_RELAY_URL, claude-fleet#4010): GET /v1/node/desired
+	// hands it down as cred_relay_url, and the machine writes it into each
+	// login's route settings. Empty: nothing is handed down.
+	CredRelayURL string
+
 	// SSHRelayCA is the SSH CA whose user certificates admit a person to the
 	// relay (CCQUOTA_FLEET_SSH_CA_PUB, claude-fleet#1413). Empty means a
 	// relay needs a session or the viewer token.

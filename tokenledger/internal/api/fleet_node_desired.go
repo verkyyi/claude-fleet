@@ -57,6 +57,9 @@ type DesiredState struct {
 	Role        string     `json:"role,omitempty"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 	UpdatedBy   string     `json:"updated_by,omitempty"`
+	// CredRelayURL is the hub's credential relay (Server.CredRelayURL), on the
+	// machine's own GET only — not the operator's to write (claude-fleet#4010).
+	CredRelayURL string `json:"cred_relay_url,omitempty"`
 }
 
 func (b DesiredBody) validate() error {
@@ -240,5 +243,6 @@ func (s *Server) handleNodeDesired(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	st.CredRelayURL = s.CredRelayURL
 	writeJSON(w, http.StatusOK, st)
 }

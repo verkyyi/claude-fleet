@@ -869,6 +869,9 @@ func runHub(args []string) error {
 		if err := sshRelayConfig(srv); err != nil {
 			return err
 		}
+		// The relay a managed machine's sessions go out through
+		// (claude-fleet#4010): handed down in /v1/node/desired, unset = none.
+		srv.CredRelayURL = strings.TrimRight(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL")), "/")
 		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}

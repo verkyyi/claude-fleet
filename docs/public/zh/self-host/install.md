@@ -309,19 +309,35 @@ curl -fsS https://hub.example.com/install | head -1 # #!/bin/sh —— 客户端
 
 ### 2.2 Linux
 
-同一行命令。在控制台拿加入码，用一个能 `sudo` 的账号在 Linux 上粘贴：
+一台 Linux 机器从加入到开出第一个号，只要**一个**加入码：
 
-```sh
-curl -fsSL https://hub.example.com/install/bin/fleet-node-install.sh | sudo bash -s -- --hub https://hub.example.com --join <加入码>
-```
+1. **装好依赖**。要求：Debian 12 或 Ubuntu（带 systemd）、Python 3.9 以上，以及 `curl` `git` `zsh` `openssh-server` `sudo`。Debian / Ubuntu 上一次装齐：
 
-要求：Debian 12 或 Ubuntu（带 systemd）、Python 3.9 以上，以及 `curl` `git` `zsh` `openssh-server` `sudo`。Debian / Ubuntu 上一次装齐：
+   ```sh
+   sudo apt-get install -y python3 curl git zsh openssh-server sudo
+   ```
 
-```sh
-sudo apt-get install -y python3 curl git zsh openssh-server sudo
-```
+2. **拿加入码**：控制台 → **服务节点与客户端** → **加服务节点**，填一个名字（例如 `linux-a`）。页面给出一行命令，一次性加入码**一小时内有效**。
+3. **加入**：用一个能 `sudo` 的账号在这台 Linux 上粘贴那一行：
 
-运行时装在 `/opt/claude-fleet`，守护进程是 `claude-fleet-node.service`：
+   ```sh
+   curl -fsSL https://hub.example.com/install/bin/fleet-node-install.sh | sudo bash -s -- --hub https://hub.example.com --join <加入码>
+   ```
+
+   它和 Mac 一样一步一行地打印（Linux 上多「开号」「中转」两行，没有「删号通道」）。这台还没有任何账号，所以最后**不会**说「已收敛」，而是：
+
+   ```text
+   已加入，还没有账号：这台（linux-a）的节点程序在等入口派第一个号。下一步在入口做——
+     控制台「使用者」→ 生成邀请命令（设置「新使用者在哪些服务节点上开登录名」写 linux-a），或
+     fleet hub accounts assign <身份 id> --host linux-a
+     开号在这台上由节点程序自己做；账号开出来之前，这台不跑任何会话。
+   ```
+
+4. **开第一个号**：照那几行做（[开号与删号](../admin/accounts.md)）。入口把开号发给这台，这台的节点程序自己建账号，控制台上「排队开号」→「开号中」→ 完成，一般一两分钟。之后重跑第 3 步的命令，最后一行就是 `已收敛`。
+
+**中转**：入口配了 `CCQUOTA_FLEET_CRED_RELAY_URL`（[§1.3](#13-必填配置)）时，加入时入口把这个地址交给机器，之后在这台上开的每个账号都自动走它，不用到机器上手写。入口是加入以后才配的中转，就在这台上重跑第 3 步的命令（不用新加入码），「中转」一行会把它写进已有的账号。入口没配中转，这一行不出现。
+
+安装程序自己把目录设成 0755、文件 0644，不受你 shell 的 `umask` 影响。运行时装在 `/opt/claude-fleet`，守护进程是 `claude-fleet-node.service`：
 
 ```sh
 systemctl status claude-fleet-node.service

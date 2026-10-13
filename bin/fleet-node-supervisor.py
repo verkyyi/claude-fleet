@@ -510,11 +510,33 @@ def pid_cmd(pid):
         return ""
 
 
+def requirement_met(r):
+    """One requirement: a path that exists, a pattern (`*`) that matches something,
+    {"line": <file>, "is": "<KEY>=<value>"} — the file holds that very line (one
+    it cannot read holds none) — or {"any": [...]}, one of them (issue #4010)."""
+    if isinstance(r, dict):
+        if "any" in r:
+            return any(requirement_met(x) for x in r["any"])
+        try:
+            with open(r["line"]) as f:
+                return any(ln.rstrip("\n") == r["is"] for ln in f)
+        except (OSError, KeyError, UnicodeDecodeError):
+            return False
+    return bool(glob.glob(r)) if "*" in r else os.path.exists(r)
+
+
+def requirement_text(r):
+    if isinstance(r, dict):
+        if "any" in r:
+            return " or ".join(requirement_text(x) for x in r["any"])
+        return "%s in %s" % (r.get("is"), r.get("line"))
+    return r
+
+
 def requires_missing(c):
     """The child's requirements not met yet: a path that does not exist, or a
     pattern (`*`) that matches nothing — `logins/*.env` on an empty directory."""
-    return [r for r in c.get("requires") or []
-            if not (glob.glob(r) if "*" in r else os.path.exists(r))]
+    return [requirement_text(r) for r in c.get("requires") or [] if not requirement_met(r)]
 
 
 def dir_sig(d):
@@ -724,6 +746,19 @@ def default_table(paths):
                                        "machine", "pool-sync"]})
     if not MAC and env("FLEET_NODE_RUN_SSHD", "0") == "1":
         table["children"].append({"name": "sshd", "cmd": ["/usr/sbin/sshd", "-D", "-e"]})
+    if not MAC:
+        # A Linux machine that opens its own logins (FLEET_NODE_ACCOUNT_OPS=1,
+        # the installer's default) starts its node program with none: the hub's
+        # first create comes down this program's own link, so waiting for the
+        # logins/*.env only that create writes left a new machine's first login
+        # pending until it failed (#4010; the pod's #3554). The Go side runs a
+        # link with no tenant only there (RunMachine's AccountOpener).
+        for c in table["children"]:
+            if c["name"] == "node-agent":
+                c["requires"] = [{"any": [r, {"line": os.path.join(paths.state, "machine.env"),
+                                              "is": "FLEET_NODE_ACCOUNT_OPS=1"}]}
+                                 if isinstance(r, str) and r.endswith("*.env") else r
+                                 for r in c["requires"]]
     if user_pod():
         # One person's pod (#3550, EPIC #3500 C5): the machine-level loops are
         # the cluster's (its one ops copy) — only the updater that moves this
@@ -740,7 +775,7 @@ def default_table(paths):
         # comes down this program's own machine link, so it may not wait for a
         # logins/*.env only that create writes (#3554 — the pod sat pending)
         for c in table["children"]:
-            c["requires"] = [r for r in c["requires"] if not r.endswith("*.env")]
+            c["requires"] = [r for r in c["requires"] if isinstance(r, str) and not r.endswith("*.env")]
     if door_profile():
         # The cluster's one door (#3549, EPIC #3500 C4): its sshd (the entry child)
         # and its pull, nothing else — no node program, no login, no machine loop.

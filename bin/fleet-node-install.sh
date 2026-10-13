@@ -76,6 +76,17 @@
 #             machine's node program opens and closes its own logins for the hub
 #             (fleet-node-linux.py login open|remove); FLEET_NODE_ACCOUNT_OPS=0 on
 #             the command takes it out. A Mac writes nothing (its admin opens them).
+#   中转      Linux only (#4010): the hub's credential relay, handed down as
+#             expected.json's cred_relay_url when the hub has one
+#             (CCQUOTA_FLEET_CRED_RELAY_URL); every login `login open` makes gets
+#             it as FLEET_CRED_RELAY_URL in root's <lib>/<login>.conf, and a rerun
+#             writes it into the logins already here (fleet-node-linux.py route).
+#             No relay on the hub ⇒ no line, nothing written.
+#
+# The last line on Linux names what is still missing (#4010): no login yet ⇒ not
+# 「已收敛」 but the next step — the hub opens the first one through this
+# machine's node program (FLEET_NODE_ACCOUNT_OPS=1, the default), or, with that
+# off, the rerun with --login <账号> --login-join-file <file> (exit 1).
 #
 # On a managed machine the old roads (`fleet host on`, `fleet node join`) say to
 # use this command instead, and still work for one version.
@@ -92,6 +103,12 @@
 #   (/etc/ssh) · FLEET_NODE_SSHD (/usr/sbin/sshd; '' = no check) · FLEET_CREDSEP_ROLE
 # Exit: 0 converged · 1 a step failed (the line says which; rerun the same command) · 2 usage
 set -uo pipefail
+# Everything this makes for others to read — the runtime under <root>, the
+# credential proxy's code under /usr/local/lib/claude-fleet — is 0755 / 0644
+# whatever umask the caller's sudo handed over: under 077 the runtime came out
+# 0700, fleetcred could not read it and the shared proxy exited every second
+# (issue #4010, BREAK-IT installer-umask-077). A secret is chmod 600 by name.
+umask 022
 
 PROG=fleet-node-install
 CODE="" HUB="" TARGET="" RKEY="" CODE_FILE="" LOGIN="" LOGIN_CODE_FILE="" SERVICE=""
@@ -385,7 +402,7 @@ else
   tick_pid=$! seen=0
   while :; do
     alive=0; kill -0 "$tick_pid" 2>/dev/null && alive=1
-    n="$(wc -l <"$STATE/fetch.progress" 2>/dev/null | tr -d ' ')"
+    n="$( { wc -l <"$STATE/fetch.progress"; } 2>/dev/null | tr -d ' ')"
     if [ -n "$n" ] && [ "$n" -gt "$seen" ]; then
       # every new artifact line; of the running one's ticker, only the latest
       awk -v from="$seen" -v to="$n" 'NR <= from || NR > to {next} {sub(/^ +/, "")}
@@ -669,8 +686,48 @@ if [ "$OS" = linux ]; then
   fi
 fi
 
+# ---------------------------------------------------------------- 中转 ----------
+# The hub's credential relay (#4010): expected.json's cred_relay_url, which
+# `login open` writes into each new login's route settings by itself; here only
+# the logins already on this machine are brought up to it (a relay the hub got
+# after they were opened). No relay on the hub ⇒ no line at all.
+if [ "$OS" = linux ] && [ -z "$POD" ]; then
+  relay="$("$PY" -c 'import json,sys; v=json.load(open(sys.argv[1])).get("cred_relay_url") or ""; print(v if isinstance(v, str) else "")' "$EXP" 2>/dev/null)"
+  if [ -n "$relay" ]; then
+    if ! ls "$STATE"/logins/*.env >/dev/null 2>&1; then
+      skip 中转 "入口的中转 ${relay} — 开号时写进每个账号"
+    elif ! grep -q "'route'" "$CUR/bin/fleet-node-linux.py" 2>/dev/null; then
+      skip 中转 "运行时 $(cur_sha | cut -c1-12) 还不会改已有账号的中转（早于 #4010）"
+    else
+      out="$("$PY" -I "$CUR/bin/fleet-node-linux.py" route --hub "$HUB" 2>&1)" || fail 中转 "$(printf '%s' "$out" | tail -n 1)"
+      case "$out" in
+        *"rewritten: -"*) skip 中转 "入口的中转 ${relay}，每个账号都已是它" ;;
+        *) ok 中转 "入口的中转 ${relay} → $(printf '%s' "$out" | sed -n 's/.*rewritten: //p' | tail -n 1)" ;;
+      esac
+    fi
+  fi
+fi
+
 if [ -n "$LOGIN" ] && [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ]; then
   "$PY" -I "$CUR/bin/fleet-node-linux.py" bootstrap --login "$LOGIN" || fail 账号 "tenant bootstrap failed; rerun to resume"
+fi
+
+# A Linux machine with no login runs nobody's session (#4010): never 「已收敛」.
+# The node program is up with none (the supervisor no longer waits for one while
+# FLEET_NODE_ACCOUNT_OPS=1), so the hub's first create reaches it; with account
+# ops off nothing ever would — the rerun that opens one is the only way.
+if [ "$OS" = linux ] && [ -z "$POD" ] && [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ] \
+   && ! ls "$STATE"/logins/*.env >/dev/null 2>&1; then
+  me="$(hostname -s 2>/dev/null || hostname)"
+  if grep -q '^FLEET_NODE_ACCOUNT_OPS=1$' "$ENVF" 2>/dev/null; then
+    echo "已加入，还没有账号：这台（${me}）的节点程序在等入口派第一个号。下一步在入口做——"
+    echo "  控制台「使用者」→ 生成邀请命令（设置「新使用者在哪些服务节点上开登录名」写 ${me}），或"
+    echo "  fleet hub accounts assign <身份 id> --host ${me}"
+    echo "  开号在这台上由节点程序自己做；账号开出来之前，这台不跑任何会话。"
+    exit 0
+  fi
+  RERUN="sudo fleet node install --hub $HUB --login <账号> --login-join-file <第二张加入码的文件>"
+  fail 账号 "这台还没有账号，而且不自己开号（FLEET_NODE_ACCOUNT_OPS=0）：在入口再拿一张加入码存进一个文件，带 --login 重跑"
 fi
 
 if [ -n "$joined" ]; then

@@ -21,6 +21,13 @@
 #      machine.env and converges (host key, no config while nobody's home is here);
 #      the same command 跳过; FLEET_ENTRY=0 takes it out
 #   K  the machine's own key (#3699): made once 600, registered, kept on a rerun
+#   L  Linux with no login (#4010): never 「已收敛」 — with account ops on (the
+#      default) it says the hub opens the first one and how; with them off it
+#      fails 账号 naming the --login rerun
+#   U  under `umask 077` (#4010): the runtime it lays down is 0755 / 0644 all the same
+#   R  the hub's credential relay (#4010): cred_relay_url in /v1/node/desired lands
+#      in expected.json; with no login yet 跳过 中转 says it goes into each new one;
+#      a hub without one: no 中转 line
 #   F  the old roads on a managed machine: `fleet node join` / `fleet host on`
 #      point at `fleet node install`; `fleet node install` dispatches here
 #
@@ -134,6 +141,32 @@ SH
     FLEET_NODE_PYTHON="$PYBIN" FLEET_NODE_SSH_DIR="$SB/ssh" FLEET_NODE_SSHD="$SB/fake/sshd" \
     FLEET_CREDSEP_ROLE="$ME" \
     FLEET_NODE_UPDATE_PLATFORM=darwin-arm64 FLEET_NODE_UPDATE_SETTLE=0 FLEET_NODE_UPDATE_LIB=/nonexistent
+}
+
+# sandbox_linux — the same, as a Linux machine (systemd, useradd, …, all shims;
+# the daemon still the launchd seam): issue #4010's legs and drills
+sandbox_linux() {
+  sandbox
+  mkdir -p "$SB/fakebin"
+  for t in useradd groupadd ssh-keygen; do printf '#!/bin/sh\nexit 0\n' > "$SB/fakebin/$t"; done
+  printf '#!/bin/sh\nexit 1\n' > "$SB/fakebin/systemctl"
+  chmod +x "$SB/fakebin/"*
+  cp "$HUBD/dist/darwin-arm64" "$HUBD/dist/linux-arm64"
+  export PATH="$SB/fakebin:$PATH" FLEET_NODE_INSTALL_OS=linux FLEET_NODE_SYSTEMCTL="$SB/fakebin/systemctl"
+}
+# every directory under <dir> 0755 and every file 0644 / 0755: nothing a umask narrowed
+umask_free() {
+  python3 - "$1" <<'PY'
+import os, stat, sys
+for dp, dns, fns in os.walk(sys.argv[1]):
+    for n in [dp] + [os.path.join(dp, f) for f in fns]:
+        st = os.lstat(n)
+        if stat.S_ISLNK(st.st_mode):
+            continue
+        m = stat.S_IMODE(st.st_mode)
+        if (stat.S_ISDIR(st.st_mode) and m != 0o755) or (not stat.S_ISDIR(st.st_mode) and m & 0o044 != 0o044):
+            print("%o %s" % (m, n)); sys.exit(1)
+PY
 }
 
 run() { OUT="$(${FNI_BASH:-bash} "$INST" --hub https://hub.test "$@" 2>&1)"; RC=$?; }
@@ -310,6 +343,40 @@ rm -f "$HUBD/nodekey"
 run
 check "the hub forgot it: the signature's 401 falls back to the token, registered again with the same key" \
   sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 机器钥匙' && [ \"\$(cat '$HUBD/nodekey')\" = '$KID' ]"
+
+echo "L  Linux with no login (#4010): never 已收敛, the next step named"
+sandbox_linux
+run --join "$CODE1"
+check "account ops on (the default): exit 0, no 已收敛, the hub's first create named" \
+  sh -c "[ $RC = 0 ] && ! printf '%s' \"\$OUT\" | grep -q 已收敛 && printf '%s' \"\$OUT\" | grep -q '^已加入，还没有账号' && printf '%s' \"\$OUT\" | grep -q 'fleet hub accounts assign'"
+check "  … FLEET_NODE_ACCOUNT_OPS=1 written" grep -qx FLEET_NODE_ACCOUNT_OPS=1 "$SB/db/machine.env"
+OUT="$(FLEET_NODE_ACCOUNT_OPS=0 ${FNI_BASH:-bash} "$INST" --hub https://hub.test 2>&1)"; RC=$?
+check "account ops off: ✗ 账号, exit 1, the --login rerun named" \
+  sh -c "[ $RC = 1 ] && printf '%s' \"\$OUT\" | grep -q '^✗ 账号' && printf '%s' \"\$OUT\" | grep -q -- '--login <账号> --login-join-file'"
+printf 'CCQUOTA_TOKEN=t\n' > "$SB/db/logins/alice.env"
+run
+check "a login here: 已收敛" sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^已收敛'"
+
+echo "U  under umask 077 (#4010): the runtime is 0755 / 0644 all the same"
+sandbox_linux
+OUT="$(umask 077; ${FNI_BASH:-bash} "$INST" --hub https://hub.test --join "$CODE1" 2>&1)"; RC=$?
+check "installed" [ "$RC" = 0 ]
+OUT="$(umask_free "$SB/root/$V1")"
+check "every directory of the runtime 0755, every file readable by all" [ -z "$OUT" ]
+
+echo "R  the hub's credential relay (#4010) → expected.json, into every login"
+sandbox_linux
+run --join "$CODE1"
+check "a hub with no relay: no 中转 line, no cred_relay_url" \
+  sh -c "! printf '%s' \"\$OUT\" | grep -q 中转 && ! grep -q cred_relay_url '$SB/db/expected.json'"
+python3 - "$HUBD/desired.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["cred_relay_url"] = "https://relay.example.com"
+json.dump(d, open(sys.argv[1], "w"))
+PY
+run
+check "a hub with one: expected.json carries it, 跳过 中转 (no login yet: each new one gets it)" \
+  sh -c "[ $RC = 0 ] && grep -q '\"cred_relay_url\": \"https://relay.example.com\"' '$SB/db/expected.json' && printf '%s' \"\$OUT\" | grep -q '^跳过 中转：入口的中转 https://relay.example.com'"
 
 echo "F  the old roads on a managed machine"
 OUT="$(FLEET_CONF_DIR="$SB/conf" bash "$BIN/fleet-node.sh" join --help 2>&1 >/dev/null)"

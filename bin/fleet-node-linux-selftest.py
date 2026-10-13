@@ -323,6 +323,46 @@ class LinuxNode(unittest.TestCase):
         self.assertLess(fg.index('boot()'), fg.index('lib_owner_heal()'))
         self.assertLess(fg.index('route_heal(a)'), fg.index('fleet-node-install.sh'))
 
+    def test_relay_handed_down_by_the_hub(self):
+        """BREAK-IT linux-relay-not-handed (#4010): the hub's relay, in
+        expected.json (`fleet node install` from /v1/node/desired), is every
+        opened login's FLEET_CRED_RELAY_URL with no hand edit; one given wins; a
+        hub with none writes none; a pod routing central takes none; the lib dir
+        is 0755 under umask 077."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            c = Mock(LIB=str(d / 'usr' / 'claude-fleet' / 'credsep'))
+            c.proxy_mod.return_value = module('fleet-cred-proxy')
+            (d / 'db').mkdir()
+
+            def write(path, data, uid=0, gid=0):
+                Path(path).write_text(data)
+            old = os.umask(0o077)
+            try:
+                with patch.dict(os.environ, {'FLEET_NODE_STATE': str(d / 'db')}), \
+                        patch.object(m, 'private_write', side_effect=write), \
+                        patch.object(m, 'compat_default', return_value=''), \
+                        patch.object(m, 'central_url', return_value='') as cu:
+                    m.route_settings(c, 'alice', 'https://hub.example.org', '')
+                    self.assertNotIn('FLEET_CRED_RELAY_URL', m.env_read(Path(c.LIB) / 'alice.conf'))
+                    (d / 'db' / 'expected.json').write_text(json.dumps({'version': 1, 'cred_relay_url': 'https://relay.example.net/'}))
+                    m.route_settings(c, 'bob', 'https://hub.example.org', '')
+                    conf = m.env_read(Path(c.LIB) / 'bob.conf')
+                    self.assertEqual(conf['FLEET_CRED_RELAY_URL'], 'https://relay.example.net')
+                    self.assertIn('relay.example.net', conf['FLEET_CRED_ALLOW_HOSTS'].split())
+                    m.route_settings(c, 'carol', 'https://hub.example.org', 'https://relay.example.com')
+                    self.assertEqual(m.env_read(Path(c.LIB) / 'carol.conf')['FLEET_CRED_RELAY_URL'], 'https://relay.example.com')
+                    cu.return_value = 'http://fleet-credproxy.fleet-workers.svc.cluster.local'
+                    m.route_settings(c, 'dave', 'https://hub.example.org', '')
+                    self.assertNotIn('FLEET_CRED_RELAY_URL', m.env_read(Path(c.LIB) / 'dave.conf'))
+                    (d / 'db' / 'expected.json').write_text(json.dumps({'cred_relay_url': 'http://relay.example.net'}))
+                    self.assertEqual(m.hub_relay(), '', 'never a plain-http relay')
+            finally:
+                os.umask(old)
+            for p in (d / 'usr', d / 'usr' / 'claude-fleet', Path(c.LIB)):
+                self.assertEqual(p.stat().st_mode & 0o777, 0o755, p)
+
     def test_relay_is_configured_never_built_in(self):
         """issue #3577: the code names no relay of its own. No --relay /
         FLEET_CRED_RELAY_URL ⇒ no relay route; conf/compat-ours.conf's old value
@@ -674,7 +714,9 @@ class LinuxNode(unittest.TestCase):
         with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod'}):
             os.environ.pop('FLEET_POD_LOGIN', None)
             agent = [c for c in s.default_table(s.Paths())['children'] if c['name'] == 'node-agent'][0]
-            self.assertTrue(any(r.endswith('*.env') for r in agent['requires']))   # a shared node waits, as before
+            # a shared node waits for a login unless it opens its own (#4010)
+            self.assertTrue(any(isinstance(r, dict) and r['any'][0].endswith('*.env')
+                                and r['any'][1]['is'] == 'FLEET_NODE_ACCOUNT_OPS=1' for r in agent['requires']))
         with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod',
                                                                     'FLEET_POD_LOGIN': ''}):
             self.assertFalse(s.pod_own())
