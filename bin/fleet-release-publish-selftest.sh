@@ -24,6 +24,8 @@
 #      key, the SSHSIG with ssh-keygen); a manifest that is not the commit's
 #      bytes is never signed; the key is never on curl's argv; a 428 says the
 #      run has no key.
+#   G. --ref stable-macos (issue #3868): the Mac lane's move is sha + ref + run,
+#      nothing cut or signed; the hub's 409 is exit 1; --dry-run POSTs nothing.
 # Hermetic: a sandbox repo, a loopback hub. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -204,6 +206,22 @@ rm -f "$WORK/unsigned"; echo 428 > "$WORK/code"
 run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO"
 eq "F: 428 → exit 1" 1 "$RC"; has "F: says the run has no key" "$OUT" "no FLEET_RELEASE_SIGN_KEY"
 rm -f "$WORK/code"
+
+# --- G. the Mac lane (issue #3868) ---------------------------------------------------------
+# --ref stable-macos POSTs sha + ref + run only: no chain, no tree, no signer
+before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$B" --hub "$HUB" --dir "$REPO" --ref stable-macos
+eq "G: exit 0" 0 "$RC"; eq "G: one POST" "$((before + 1))" "$(posts)"
+eq "G: sha" "$B" "$(part sha)"; eq "G: ref" stable-macos "$(part ref)"
+eq "G: no tree, no commits, no signer" "" "$(part tree)$(part commits)$(part signer)"
+echo 409 > "$WORK/code"
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref stable-macos
+eq "G: the hub's 409 → exit 1" 1 "$RC"; has "G: its words" "$OUT" "answered 409"
+rm -f "$WORK/code"; before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref stable-macos --dry-run
+eq "G: dry-run POSTs nothing" "$before" "$(posts)"
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref other
+eq "G: --ref takes stable or stable-macos" 2 "$RC"
 
 printf 'fleet-release-publish-selftest: %d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" -eq 0 ]

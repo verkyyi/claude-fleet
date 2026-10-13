@@ -142,6 +142,10 @@ fi
 # from a clean slate (issue #1498).
 _FLEET_LIB_DIR="$_flib_here"
 unset _flib_here
+# The release lanes' one reader, fleet_stable_ref_for (issue #3868), lives in the
+# versions lib — POSIX, sourced by the client and the installer too.
+# shellcheck source=fleet-versions-lib.sh
+[ -f "$_FLEET_LIB_DIR/fleet-versions-lib.sh" ] && . "$_FLEET_LIB_DIR/fleet-versions-lib.sh"
 
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION

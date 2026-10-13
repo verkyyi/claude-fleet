@@ -179,6 +179,13 @@ fleet debug report
 - **是什么**：整机更新器最近一轮的结果。
 - **WARN / FAIL 怎么办**：看 `/var/log/fleet-node/update.log` 和 `sudo fleet doctor --machine`。换版后多出 FAIL 时，更新器会自己退回上一版，不用手动回退。
 
+#### `channel`
+
+来自 `fleet doctor`；只有入口设了 Mac 通道才出现。
+
+- **是什么**：这台机器跟哪条发布通道——Linux 跟 stable，Mac 跟 stable-macos（等于或落后 stable）——以及 Mac 通道比 stable 晚了几版、多久。
+- **WARN / FAIL 怎么办**：Mac 通道落后超过 2 小时，通常是 macOS 那半测试红了或没跑：等它绿了 Mac 自己跟上；红着就看那张 breakage 单。
+
 #### `install`
 
 来自 `fleet doctor` 和 `fleet doctor --machine`。

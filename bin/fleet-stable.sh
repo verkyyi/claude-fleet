@@ -1,5 +1,6 @@
 #!/bin/sh
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--precheck] [--allow-no-checks] [--force]
+#                 [--ref stable|stable-macos]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
 #                 [--ignore-check <name>]... [--train <run id>]
@@ -97,6 +98,25 @@
 #               already carry every tokenledger/ commit the target has (tests and
 #               *.md aside), else REFUSED `ccquota:` listing them. No hub
 #               address, or a target with no Go source / no updater: said, passes.
+#          Gate 5 is not stable's once a Mac lane exists (issue #3868, EPIC #3863
+#          共同约定 4): with refs/tags/stable-macos on the remote, stable means
+#          "Linux has verified it", a Mac follows the lane, and the BSD half gates
+#          the lane's move instead (below) — said, never waited for. No such tag ⇒
+#          gate 5 holds stable exactly as before.
+#
+#   move --ref stable-macos [<sha>]   the Mac lane (issue #3868): every Mac — a
+#          machine, a client on one — follows it (fleet_stable_ref_for). Default
+#          target: the current stable. Refuses unless gates 1 and 2 hold for the
+#          lane's own old value (on trunk, forward only), and:
+#            M. NEVER AHEAD OF STABLE — the target is stable or an ancestor of it
+#               (stable must exist): a Mac never runs what Linux has not verified;
+#            5. the BSD half is green on the target, as above (--train <run> reads
+#               that run's macOS jobs).
+#          Gates 3, 4, 6, 7, 8 are stable's and were passed when the target was
+#          stable. Pushes refs/tags/stable-macos with the same lease; outside CI it
+#          dispatches stable-publish.yml with ref=stable-macos (the hub's lane).
+#          --precheck runs 1, 2 and M.
+#
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -130,7 +150,8 @@
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
 #           green / release.json missing or invalid / a pinned artifact not on
-#           the hub / the hub's ccquota not the target's or behind it) · 4 push failed
+#           the hub / the hub's ccquota not the target's or behind it / a Mac lane
+#           ahead of stable) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
@@ -160,6 +181,8 @@ while [ "$#" -gt 0 ]; do
     --timeout)         shift; timeout="${1:-15}" ;;
     --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
     --ignore-check)    shift; ignore_check="$ignore_check${1:-}$US" ;;   # repeats
+    --ref)             shift
+                       case "${1:-}" in stable|stable-macos) TAG="$1" ;; *) die "--ref takes stable or stable-macos" ;; esac ;;
     --train)           shift; train_run="${1:-}"
                        case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -179,8 +202,9 @@ g() { git -C "$dir" -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$timeout" "
 
 # The remote tag's commit. Prints the sha, or nothing when the tag is absent;
 # returns 2 when the remote could not be read (which is NOT "absent").
-remote_stable() {
-  _ls=$(g ls-remote "$remote" "refs/tags/$TAG" "refs/tags/$TAG^{}" 2>/dev/null) || return 2
+remote_stable() {   # [<tag>] — default $TAG
+  _t=${1:-$TAG}
+  _ls=$(g ls-remote "$remote" "refs/tags/$_t" "refs/tags/$_t^{}" 2>/dev/null) || return 2
   # An annotated tag lists its peeled commit as ^{}; prefer that line.
   _peeled=$(printf '%s\n' "$_ls" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
   [ -n "$_peeled" ] && { printf '%s\n' "$_peeled"; return 0; }
@@ -532,18 +556,35 @@ PUBLISH_WF=${FLEET_STABLE_PUBLISH_WORKFLOW:-stable-publish.yml}
 publish_dispatch() {   # publish_dispatch <new> <slug>
   [ "${GITHUB_ACTIONS:-}" = true ] && return 0
   git -C "$dir" cat-file -e "$1:.github/workflows/$PUBLISH_WF" 2>/dev/null || return 0
-  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" >/dev/null 2>&1; then
-    printf 'publish: dispatched %s for %s — the hub takes the new stable from it\n' "$PUBLISH_WF" "$(short "$1")"
+  if [ "$TAG" = stable ]; then set -- "$1" "$2"; else set -- "$1" "$2" -f "ref=$TAG"; fi
+  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" ${3:+"$3"} ${4:+"$4"} >/dev/null 2>&1; then
+    printf 'publish: dispatched %s for %s (%s) — the hub takes it from there\n' "$PUBLISH_WF" "$(short "$1")" "$TAG"
   else
-    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s) — stable moved, the hub has not; run it by hand\n' "$PUBLISH_WF" "$2" "$1" >&2
+    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s%s) — %s moved, the hub has not; run it by hand\n' \
+      "$PUBLISH_WF" "$2" "$1" "${4:+ -f $4}" "$TAG" >&2
   fi
+}
+
+# M. The Mac lane never leads stable (issue #3868): <new> is stable or behind it.
+lane_gate() {   # lane_gate <new>
+  _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
+  [ -n "$_st" ] || refuse "M: no refs/tags/stable on $remote — the Mac lane only ever names a commit stable has reached"
+  have_commit "$_st" || die "could not fetch the stable commit $(short "$_st")"
+  git -C "$dir" merge-base --is-ancestor "$1" "$_st" ||
+    refuse "M: $(short "$1") is ahead of stable $(short "$_st") — the Mac lane never leads stable (a Mac never runs what Linux has not verified)"
+  printf 'lane: %s is %s stable %s\n' "$(short "$1")" "$([ "$1" = "$_st" ] && echo at || echo behind)" "$(short "$_st")"
 }
 
 do_move() {
   old=$(remote_stable) || die "could not read refs/tags/$TAG from $remote — not moving blind"
   fetch_trunk || die "could not fetch $remote/$branch"
   tip=$(git -C "$dir" rev-parse --verify "refs/remotes/$remote/$branch^{commit}") || die "no $remote/$branch"
-  if [ -z "$target" ]; then new="$tip"
+  if [ -z "$target" ] && [ "$TAG" = stable-macos ]; then
+    # the Mac lane's default target is stable itself (issue #3868)
+    new=$(remote_stable stable) || die "could not read refs/tags/stable from $remote — not moving the Mac lane blind"
+    [ -n "$new" ] || refuse "M: no refs/tags/stable on $remote — the Mac lane follows stable, and there is none"
+    have_commit "$new" || die "could not fetch the stable commit $(short "$new")"
+  elif [ -z "$target" ]; then new="$tip"
   else
     have_commit "$target" || :
     new=$(git -C "$dir" rev-parse -q --verify "$target^{commit}") || die "unknown commit $target"
@@ -560,6 +601,22 @@ do_move() {
       refuse "$(short "$new") does not descend from the current stable $(short "$old") — stable only moves FORWARD"
   fi
 
+  if [ "$TAG" = stable-macos ]; then
+    lane_gate "$new"
+    if [ "$precheck" -eq 1 ]; then
+      if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
+      printf 'precheck: %s %s -> %s passes on trunk / forward / not ahead of stable — no tag pushed\n' "$TAG" "$from" "$(short "$new")"
+      exit 0
+    fi
+    slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
+    if [ -n "$train_run" ]; then
+      runs=$(train_jobs "$slug" "$train_run") || die "could not read the jobs of train run $train_run on $slug (gh auth?)"
+      train_macos_gate "$old" "$new" "$(printf '%s\n' "$runs" | awk 'NF && $3 == "macOS"')"
+    else
+      macos_gate "$old" "$new" "$slug"
+    fi
+    push_tag
+  fi
   if [ "$precheck" -eq 1 ]; then
     release_gate "$old" "$new"
     artifacts_gate "$old" "$new"
@@ -604,14 +661,22 @@ do_move() {
   artifacts_gate "$old" "$new"
   ccquota_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
-  if [ -n "$train_run" ]; then train_macos_gate "$old" "$new" "$train_macos"
+  if lane=$(remote_stable stable-macos) && [ -n "$lane" ]; then
+    # a Mac lane exists (issue #3868): the BSD half gates IT, not stable
+    printf 'macos: a Mac lane exists (refs/tags/stable-macos at %s) — the BSD half gates that lane'"'"'s move, not stable (Linux-verified)\n' "$(short "$lane")"
+  elif [ -n "$train_run" ]; then train_macos_gate "$old" "$new" "$train_macos"
   else macos_gate "$old" "$new" "$slug"; fi
+  push_tag
+}
 
+# push_tag — <new> onto refs/tags/$TAG, the lease pinned to <old>; exits.
+push_tag() {
   # Lease: the tag must still hold exactly what we read ("" = must not exist).
   lease="refs/tags/$TAG:$old"
   if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
-  printf 'stable: %s -> %s  (%s)\n' "$from" "$(short "$new")" "$(subject "$new")"
-  if [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
+  printf '%s: %s -> %s  (%s)\n' "$TAG" "$from" "$(short "$new")" "$(subject "$new")"
+  if [ "$TAG" != stable ]; then :
+  elif [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
   else printf 'checks: %s green on %s\n' "$total" "$slug"; fi
   if [ "$old" ]; then printf 'forward: +%s commit(s)\n' "$(git -C "$dir" rev-list --count "$old..$new")"; fi
   if [ "$dry" -eq 1 ]; then
@@ -619,11 +684,12 @@ do_move() {
     exit 0
   fi
   if ! g push -q "--force-with-lease=$lease" "$remote" "$new:refs/tags/$TAG"; then
-    printf 'fleet-stable: push FAILED — stable moved under us (lease lost) or no push rights; re-run show and try again\n' >&2
+    printf 'fleet-stable: push FAILED — %s moved under us (lease lost) or no push rights; re-run show and try again\n' "$TAG" >&2
     exit 4
   fi
   printf 'moved: refs/tags/%s = %s\n' "$TAG" "$(short "$new")"
   publish_dispatch "$new" "$slug"
+  exit 0
 }
 
 case "$cmd" in

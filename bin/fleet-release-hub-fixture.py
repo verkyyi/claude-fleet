@@ -11,6 +11,9 @@ of a fake ccquota. Test-only; binds 127.0.0.1, dies with its alarm.
 <w>/rel/<sha>/.release/manifest.json   its seq / prev / artifacts (the rest is
                             computed: files, tree, key)
 <w>/rel/stable              the sha /v1/fleet/release/stable names
+<w>/rel/stable-macos        the Mac lane (issue #3868): what
+                            /v1/fleet/release/stable?platform=darwin names (+ the
+                            X-Ccquota-Release-Ref header) when present
 <w>/hubkey (+ .pub)         the signing key (made on first start); <w>/key is
                             its `ed25519 <base64>` line (written if absent —
                             a test may overwrite it to show another key)
@@ -177,9 +180,15 @@ class H(BaseHTTPRequestHandler):
                 return self.send(404)
             line = open(os.path.join(W, "key")).readline()
             return self.send(200, (line + sshsign(PREV, "claude-fleet-release-key", line.encode())).encode())
+        rest, _, query = rest.partition("?")
         sha, _, sub = rest.partition("/")
+        ref = []
         if sha == "stable" and not sub:
-            sha = open(os.path.join(W, "rel", "stable")).read().strip()
+            lane = os.path.join(W, "rel", "stable-macos")
+            if query == "platform=darwin" and os.path.exists(lane):
+                sha, ref = open(lane).read().strip(), [("X-Ccquota-Release-Ref", "stable-macos")]
+            else:
+                sha = open(os.path.join(W, "rel", "stable")).read().strip()
         if not os.path.isdir(os.path.join(W, "rel", sha)):
             return self.send(404)
         mb, tree, signer = build(sha)
@@ -195,7 +204,7 @@ class H(BaseHTTPRequestHandler):
         if sub == "":
             sig = sshsign(signer, "claude-fleet-release", mb)
             blob = "".join(l for l in sig.splitlines() if not l.startswith("-----"))
-            return self.send(200, mb, [("X-Ccquota-Release-Sshsig", blob)])
+            return self.send(200, mb, [("X-Ccquota-Release-Sshsig", blob)] + ref)
         if sub == "manifest.sshsig":
             return self.send(200, sshsign(signer, "claude-fleet-release", mb).encode())
         if sub == "tree.tar.gz":

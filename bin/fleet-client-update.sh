@@ -183,18 +183,34 @@ except Exception:
   printf '%s' "${u%/}"
 }
 
-# stable_sha — the commit GitHub's stable names (40 hex), or rc 1
+# lanes — the tags this computer follows, most preferred first (issue #3868:
+# a Mac "stable-macos stable", else "stable" — fleet_stable_refs, the one reader)
+lanes() {
+  if command -v fleet_stable_refs >/dev/null 2>&1; then fleet_stable_refs; else printf 'stable\n'; fi
+}
+# lane1 — the first of them: the lane this computer follows when it exists
+# shellcheck disable=SC2046  # the lanes are one word each
+lane1() { set -- $(lanes); printf '%s' "$1"; }
+# stable_sha — the commit GitHub's stable names (40 hex), or rc 1. A Mac asks
+# for stable-macos first (a 404/422 = no Mac lane: stable, as before).
 stable_sha() {
-  local s
-  s=$(curl -fsS --max-time "$TMO" -H 'Accept: application/vnd.github.sha' "$API" 2>/dev/null | tr -d ' \r\n' | cut -c1-40)
-  case "$s" in *[!0-9a-f]*|'') return 1 ;; esac
-  [ "${#s}" -eq 40 ] || return 1
-  printf '%s' "$s"
+  local s ref url
+  for ref in $(lanes); do
+    url=$API
+    case "$API" in */commits/stable) url="${API%/stable}/$ref" ;; *) [ "$ref" = stable ] || continue ;; esac
+    s=$(curl -fsS --max-time "$TMO" -H 'Accept: application/vnd.github.sha' "$url" 2>/dev/null | tr -d ' \r\n' | cut -c1-40)
+    case "$s" in *[!0-9a-f]*|'') continue ;; esac
+    [ "${#s}" -eq 40 ] || continue
+    printf '%s' "$s"; return 0
+  done
+  return 1
 }
 # short <version> — a commit as 7 hex; anything else as it is
 short() { case "$1" in *[!0-9a-f]*|'') printf '%s' "$1" ;; *) [ "${#1}" -eq 40 ] && printf '%.7s' "$1" || printf '%s' "$1" ;; esac; }
 
-# ver_fields <json-file> — `client_version<TAB>client_compat<TAB>min_client_compat<TAB>commit`
+# ver_fields <json-file> — `client_version<TAB>client_compat<TAB>min_client_compat<TAB>commit`;
+# a computer whose first lane is stable-macos reads client_version_macos when the
+# hub names one (issue #3868) — an older hub, or no Mac lane: client_version
 ver_fields() {
   python3 -c 'import json, sys
 try:
@@ -204,7 +220,10 @@ except Exception:
 def s(k):
     v = d.get(k)
     return "" if v is None else str(v)
-print("\t".join([s("client_version"), s("client_compat"), s("min_client_compat"), s("commit")]))' "$1" 2>/dev/null
+ver = s("client_version")
+if sys.argv[2] == "stable-macos" and s("client_version_macos"):
+    ver = s("client_version_macos")
+print("\t".join([ver, s("client_compat"), s("min_client_compat"), s("commit")]))' "$1" "$(lane1)" 2>/dev/null
 }
 
 # write_defaults <json-file> — the team's defaults → hub-defaults.conf (atomic).

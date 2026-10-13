@@ -754,7 +754,19 @@ one-off drill / audit records do not go in the repo (issue #3576).
   and `selftests-macos.yml` stays FULL nightly / on dispatch; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
   any `macOS shard *` an older PR still carries). It gates RELEASING instead:
   `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not
-  green and dispatches the full suite on a target with none, and a red macOS half
+  green and dispatches the full suite on a target with none — **once a Mac lane
+  exists that gate is the lane's, not stable's** (issue #3868, EPIC #3863 C5):
+  `refs/tags/stable-macos`, only forward and never ahead of stable
+  (`fleet-stable.sh move --ref stable-macos`: gates 1 · 2 · `M:` not ahead · 5),
+  is what every Mac follows — machine, login install, client — through ONE
+  reader, `fleet_stable_ref_for` / `fleet_stable_refs` (`bin/fleet-versions-lib.sh`,
+  sourced by fleet-lib.sh), and the hub's `/version` `client_version_macos` /
+  `…/release/stable?platform=darwin` (its pointer moves by a publish with
+  `ref=stable-macos`); stable then means "Linux has verified it" and its move
+  skips gate 5. No `stable-macos` tag ⇒ every reader reads stable and gate 5
+  holds stable, byte for byte (BREAK-IT `stable-macos-ahead`; the doctor's
+  `channel` row says which lane this machine follows and how far the Mac lane
+  trails). A red macOS half
   of the train (its `macOS / shard *` jobs — a train red on another stage is not
   the BSD half's) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
   `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert — no fixer

@@ -1935,6 +1935,58 @@ class T_Codesign(Sandbox):
                                  os.path.join(self.root, "current", "bin", "ccquota")).returncode, 0)
 
 
+class U_MacLane(Sandbox):
+    """issue #3868: with no target pinned, the machine follows what the hub's
+    /version names — a Mac its Mac lane (client_version_macos), a linux machine
+    stable; a hub that names no lane is stable for both."""
+
+    def hub(self, body):
+        import http.server
+        import threading
+        data = json.dumps(body).encode()
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\n" % srv.server_address[1])
+
+    def follow(self, plat):
+        e = dict(self.env, FLEET_PLATFORM=plat)
+        r = subprocess.run([sys.executable, UPD, "tick"], env=e, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return self.state()
+
+    def test_lane(self):
+        self.install(V1)
+        self.release(V2)
+        self.hub({"stable": V2, "client_version_macos": V1})
+        st = self.follow("darwin")
+        self.assertEqual(st["result"], "current", st)
+        self.assertIn("hub stable-macos", st["reason"])
+        self.assertEqual(self.current(), V1)
+        st = self.follow("linux")
+        self.assertEqual(st["target_seen"]["sha"], V2, st)
+        self.assertEqual(st["phase"], "switched", st)
+
+    def test_no_lane(self):
+        self.install(V1)
+        self.release(V2)
+        self.hub({"stable": V2})
+        st = self.follow("darwin")
+        self.assertEqual(st["target_seen"]["sha"], V2, st)
+        self.assertEqual(st["phase"], "switched", st)
+
+
 def sha256_of(path):
     with open(path, "rb") as f:
         return sh256(f.read())
