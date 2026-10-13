@@ -287,9 +287,16 @@ func RunChatPipe(args []string, stdin io.Reader, stdout io.Writer) error {
 	if _, err := stdout.Write([]byte{chatPipeReady}); err != nil {
 		return err
 	}
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(c, stdin); done <- struct{}{} }()
-	go func() { io.Copy(stdout, c); done <- struct{}{} }()
-	<-done
+	// stdin's end half-closes the socket; the answer still drains to stdout,
+	// and stdout is written by this goroutine alone.
+	go func() {
+		io.Copy(c, stdin)
+		if uc, ok := c.(*net.UnixConn); ok {
+			uc.CloseWrite()
+		} else {
+			c.Close()
+		}
+	}()
+	io.Copy(stdout, c)
 	return nil
 }
