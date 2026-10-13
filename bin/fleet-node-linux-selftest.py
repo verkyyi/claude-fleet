@@ -1385,9 +1385,12 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         self.assertEqual(c['livenessProbe']['exec']['command'][-2:], ['/usr/local/lib/fleet-image-stage.py', 'live'])
         self.assertIn('/var/db/fleet-node/runtime/current/bin/fleet-node-linux.py',
                       c['readinessProbe']['exec']['command'])
-        # stable cannot move to a release without Linux artifacts: the hub's platforms
-        rel = (BIN.parent / 'deploy/k8s/overlays/prod/deployment-release.yaml').read_text()
-        self.assertRegex(rel, r'CCQUOTA_FLEET_RELEASE_PLATFORMS\n\s+value: darwin-arm64 linux-amd64')
+        # stable cannot move to a release without Linux artifacts: the hub's platforms —
+        # in the deployment's own overlay (claude-fleet#3630: ours is in the private
+        # deploy repo; FLEET_DEPLOY_K8S names a tree with it laid over)
+        rel = Path(os.environ.get('FLEET_DEPLOY_K8S') or BIN.parent / 'deploy/k8s') / 'overlays/prod/deployment-release.yaml'
+        if rel.exists():
+            self.assertRegex(rel.read_text(), r'CCQUOTA_FLEET_RELEASE_PLATFORMS\n\s+value: darwin-arm64 linux-amd64')
 
     def test_image_update_never_resumes_saved_switch(self):
         u = module('fleet-node-update')

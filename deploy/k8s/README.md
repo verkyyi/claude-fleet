@@ -14,7 +14,7 @@ base/              environment-free: Deployment (2 replicas, rolling, Postgres),
 components/sqlite-single/
                    the single SQLite shape: 1 replica, Recreate, the PVC, disk-watch
 overlays/prod/     namespace new-deploy, ACR image, hostnames + TLS, production settings;
-                   `components: [sqlite]` until the switch — moving to the private deploy repo
+                   in the private deploy repo (below), not in this tree
 overlays/example/  the shape a deployment's own overlay takes (names nothing of ours)
 overlays/kind/     the rolling drill on a throwaway kind cluster (hub-rolling.yml)
 updating/          the 「正在更新」 page the Ingress falls back to during a release (installed by a person)

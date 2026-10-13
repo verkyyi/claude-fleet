@@ -8,10 +8,10 @@ spec:
       containers:
         - name: egress
           env:
-            # the hub's ACK cluster's pod range (docs/dev/MANAGED-LINUX.md «Egress guard»)
+            # the cluster's pod range (docs/dev/MANAGED-LINUX.md «Egress guard»)
             - name: FLEET_EGRESS_SOURCES
-              value: "172.20.0.0/16"
-            # GitHub's git transport times out from the CN egress: through the
-            # Singapore gh-relay (extras/gh-relay), which takes the cluster egress only
+              value: "198.18.0.0/16"
+            # a host the cluster cannot reach directly goes through a parent proxy
+            # (extras/gh-relay: GitHub's git transport from a CN egress)
             - name: FLEET_EGRESS_VIA
-              value: ".github.com=47.131.114.67:3128 .githubusercontent.com=47.131.114.67:3128 ghcr.io=47.131.114.67:3128"  # oss-ok: the hub egress must name the gh-relay it rides (extras/gh-relay)
+              value: ".github.com=192.0.2.10:3128 .githubusercontent.com=192.0.2.10:3128 ghcr.io=192.0.2.10:3128"
