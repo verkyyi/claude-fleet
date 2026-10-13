@@ -85,9 +85,9 @@ assert g["blocked"] == ["claude"] and g["agent"] == "claude", g
 PY
 a=$(FLEET_AGENTS_BLOCKED=claude python3 "$BIN/fleet-quick-dispatch.py" agent --view fl@view-v1)
 [ "$a" = '{"agent": "codex", "why": "Claude：管理员暂未开放"}' ] && ok "B: ⌘N's pick is Codex, with why" || fail "B: agent $a"
-a=$(FLEET_AGENTS_BLOCKED= python3 "$BIN/fleet-quick-dispatch.py" agent --view fl@view-v1)
+a=$(FLEET_AGENTS_BLOCKED='' python3 "$BIN/fleet-quick-dispatch.py" agent --view fl@view-v1)
 [ "$a" = '{"agent": "claude", "why": ""}' ] && ok "B: nothing blocked ⇒ the default, no why" || fail "B: unblocked agent $a"
-g=$(FLEET_AGENTS_BLOCKED= python3 "$BIN/fleet-quick-dispatch.py" grid --view fl@view-v1)
+g=$(FLEET_AGENTS_BLOCKED='' python3 "$BIN/fleet-quick-dispatch.py" grid --view fl@view-v1)
 case "$g" in *'"missing": {}'*'"blocked": []'*) ok "B: nothing blocked ⇒ the grid as before" ;; *) fail "B: unblocked grid $g" ;; esac
 
 # ---- C: fleet_view's ⚡ cells and ⌘N ---------------------------------------------
@@ -112,7 +112,7 @@ a, why = v.new_agent("fl", "v1")
 assert (a, why) == ("codex", "Claude：管理员暂未开放"), (a, why)
 assert v.say("view_new_agent_fmt", why, "Codex") == "Claude：管理员暂未开放 — 这次用 Codex 开"
 PY
-FLEET_AGENTS_BLOCKED= python3 - "$BIN" <<'PY' && ok "C: nothing blocked ⇒ ⌘N names no agent and runs nothing" || fail "C: unblocked ⌘N"
+FLEET_AGENTS_BLOCKED='' python3 - "$BIN" <<'PY' && ok "C: nothing blocked ⇒ ⌘N names no agent and runs nothing" || fail "C: unblocked ⌘N"
 import subprocess, sys
 sys.path.insert(0, sys.argv[1])
 import fleet_view as v
@@ -130,7 +130,7 @@ out=$(FLEET_HUB_CLIENT_VERSION=bbbbbbbbbb python3 "$BIN/fleet-client-behind.py" 
 case "$out" in *客户端不是最新*aaaaaaa*bbbbbbb*'fleet update'*) ok "D: behind ⇒ 「${out}」" ;; *) fail "D: behind said '$out'" ;; esac
 out=$(FLEET_HUB_CLIENT_VERSION=bbbbbbbbbb python3 "$BIN/fleet-client-behind.py" '')
 [ -z "$out" ] && ok "D: an older client (no version) ⇒ nothing said" || fail "D: no version said '$out'"
-out=$(FLEET_HUB_CLIENT_VERSION= python3 "$BIN/fleet-client-behind.py" aaaaaaaaaa)
+out=$(FLEET_HUB_CLIENT_VERSION='' python3 "$BIN/fleet-client-behind.py" aaaaaaaaaa)
 [ -z "$out" ] && ok "D: the hub names no client ⇒ nothing said" || fail "D: unknown latest said '$out'"
 
 # ---- E: the thin client carries it ------------------------------------------------
