@@ -60,8 +60,9 @@ func (s *Store) ResetToRemove(principalID, hostname, detail string, at time.Time
 // is recorded as a new ready spare there — principal spare:<machine>:<nonce>,
 // account active — with one hub_audit spare.recycle line. A stale or foreign
 // answer moves nothing (applied false). It returns the spare's row and the
-// person the login was taken from.
-func (s *Store) RecycleAccount(opID, endpointID, actor string, at time.Time) (spare *FleetAccount, from string, applied bool, err error) {
+// person the login was taken from. note (the wash's `timing:` line,
+// claude-fleet#4044) is appended to both when not empty.
+func (s *Store) RecycleAccount(opID, endpointID, actor, note string, at time.Time) (spare *FleetAccount, from string, applied bool, err error) {
 	if opID == "" {
 		return nil, "", false, nil
 	}
@@ -108,14 +109,18 @@ func (s *Store) RecycleAccount(opID, endpointID, actor string, at time.Time) (sp
 		return nil, "", false, err
 	}
 	detail := "spare: recycled from " + from
+	audit := fmt.Sprintf("%s on %s: %s → %s %s", from, host, state, id, AccountActive)
+	if note != "" {
+		detail += " · " + note
+		audit += " · " + note
+	}
 	if _, err := tx.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, op_id, endpoint_id, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'create', ?, ?, ?, ?, ?)`,
 		id, host, login, AccountActive, opID, endpointID, detail, ts, ts); err != nil {
 		return nil, "", false, err
 	}
 	if _, err := tx.Exec(`INSERT INTO hub_audit (created, actor, action, target, outcome, detail)
-		VALUES (?, ?, 'spare.recycle', ?, 'ok', ?)`, ts, actor, login,
-		fmt.Sprintf("%s on %s: %s → %s %s", from, host, state, id, AccountActive)); err != nil {
+		VALUES (?, ?, 'spare.recycle', ?, 'ok', ?)`, ts, actor, login, audit); err != nil {
 		return nil, "", false, err
 	}
 	if err := tx.Commit(); err != nil {

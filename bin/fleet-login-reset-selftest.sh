@@ -5,7 +5,10 @@
 #   A  dry run: the plan, nothing changed
 #   B  one thing planted per category the check knows (darwin), --apply ⇒ the
 #      last two lines are `reset: clean` · `credsep: separated`, exit 0, every
-#      plant gone, the archive dir kept, the login's home fresh
+#      plant gone (the uid's /private/var/folders dir emptied, its C/T/0 kept —
+#      issue #4044), the archive dir kept, the old home archived from where it
+#      was moved aside, the login's home fresh, the check BEFORE the rejoin, and
+#      a `timing:` line before the verdict (stop · quiesce · … · isolated · total)
 #   C  something the wash cannot take (a process quiesce left) ⇒ `reset: dirty
 #      processes`, exit 1
 #   D  the rejoin fails ⇒ `reset: dirty rejoin`, exit 1
@@ -13,6 +16,8 @@
 #      redone without a second archive, washed, set up, clean; once more ⇒ only
 #      the check. Another op ⇒ from the start.
 #   F  refusals: no such login (4), an admin (3), under root's uid as the caller
+#   H  the stop is --quick, and the old home's archive + delete run detached:
+#      the run is back before they are (FLEET_LOGIN_RESET_ASIDE unset)
 #   G  launchd relaunched a process of the uid after the stop's quiesce, before
 #      the wash (distnoted, issue #3979) ⇒ the wash quiesces again before its
 #      clock starts: clean, and the bootout + kill sit between stop and wash
@@ -40,7 +45,7 @@ export FLEET_LOGIN_HOMES="$R/Users" FLEET_INSTALL_DAEMON_DIR="$R/Library/LaunchD
   FLEET_OFFBOARD_ARCHIVE_DIR="$R/Users/Shared/offboarded" \
   FLEET_LOGIN_RESET_REMOVE="$W/remove.sh" FLEET_LOGIN_RESET_NEW="$W/new.sh" \
   RS_LOG="$W/calls.log" RS_PS="$W/ps" RS_CRON="$W/cron" RS_U="$U" RS_ADMIN_DEF="$((U + 1000))" RS_TPL="$R/System/Library/User Template/Non_localized"
-export HOME="$R/Users/admin" PATH="$W/shim:$PATH" FLEET_LOGIN_RESET_SETTLE=0
+export HOME="$R/Users/admin" PATH="$W/shim:$PATH" FLEET_LOGIN_RESET_SETTLE=0 FLEET_LOGIN_RESET_ASIDE=wait
 H="$R/Users/$L" ARCH="$FLEET_OFFBOARD_ARCHIVE_DIR"
 S="$BIN/fleet-login-reset.sh"
 
@@ -111,6 +116,7 @@ printf 'remove %s\n' "$*" >> "$RS_LOG"
 login=$1; keep=0; apply=0
 for a in "$@"; do case "$a" in --keep-home) keep=1 ;; --apply) apply=1 ;; esac; done
 [ "$apply" = 1 ] || { echo 'fleet-login-remove: dry run complete'; exit 0; }
+printf '\n[1b] off the hub\n\n[2] services out\n'
 [ -n "${RS_PROC_STAYS:-}" ] || : > "$RS_PS"
 # launchd brings one back after the quiesce, while the archive runs (#3979)
 [ -z "${RS_RESPAWN:-}" ] || printf '%s 88669 00:00:30 distnoted\n' "$RS_U" > "$RS_PS"
@@ -158,6 +164,9 @@ fixture() {   # a used login: one thing per category
   printf '%s 4242 01:00:00 distnoted\n' "$U" > "$RS_PS"
   mkdir -p "$R/private/tmp/tmux-$U"; : > "$R/private/tmp/tmux-$U/default"
   : > "$R/private/var/tmp/left.txt"; mkdir -p "$R/Users/Shared/stuff"; : > "$R/Users/Shared/stuff/a"
+  mkdir -p "$R/private/var/folders/zz/abc123/T" "$R/private/var/folders/zz/abc123/C" "$R/private/var/folders/zz/abc123/0"
+  : > "$R/private/var/folders/zz/abc123/T/prev-tmp.txt"; : > "$R/private/var/folders/zz/abc123/C/cache.db"
+  : > "$R/private/var/folders/zz/abc123/stray"
   : > "$ARCH/older.tar.gz"
   sleep 1   # every plant predates the wash (the check reads ctime by the second)
 }
@@ -171,7 +180,7 @@ fixture
 run "$L"
 [ "$RC" = 0 ] && ok 'A dry run exits 0' || { cat "$W/out"; fail "A dry run: exit $RC"; }
 has "$W/out" 'DRY RUN' 'A says DRY RUN'
-has "$RS_LOG" "remove $L --recycle-stop --keep-home --archive-dir $ARCH" 'A the stop is the remove script, dry'
+has "$RS_LOG" "remove $L --recycle-stop --quick --delete-home --archive-dir $ARCH" 'A the stop is the remove script, --quick, dry'
 has "$W/out" "sudo createhomedir -c -u $L" 'A the plan names the fresh home'
 [ -f "$H/notes.txt" ] && [ -s "$RS_CRON" ] && [ ! -e "$HOME/$L-reset" ] && ok 'A nothing changed' || fail 'A the dry run changed something'
 
@@ -182,13 +191,23 @@ FLEET_LOGIN_JOIN_CODE=fj_aaaaaaaaaaaaaaaaaaaaaaaaaa FLEET_LOGIN_HUB=https://hub.
 [ "$RC" = 0 ] && ok 'B exit 0' || fail "B exit $RC"
 for f in "$FLEET_CREDSEP_ROOT_BASE/$L" "$FLEET_NODE_STATE/entry/keys/$L" "$FLEET_NODE_STATE/logins/$L" "$HOME/$L-onboard/password.txt" \
          "$FLEET_INSTALL_DAEMON_DIR/com.example.x.plist" "$R/private/tmp/tmux-$U" "$R/private/var/tmp/left.txt" "$R/Users/Shared/stuff" \
-         "$H/notes.txt" "$H/Library/Keychains" "$H/.ssh/id_ed25519" "$H/.config/gh"; do
+         "$H/notes.txt" "$H/Library/Keychains" "$H/.ssh/id_ed25519" "$H/.config/gh" \
+         "$R/private/var/folders/zz/abc123/T/prev-tmp.txt" "$R/private/var/folders/zz/abc123/C/cache.db" "$R/private/var/folders/zz/abc123/stray"; do
   gone "$f" "B gone: ${f#"$R"/}"
 done
 [ ! -s "$RS_CRON" ] && ok 'B crontab emptied' || fail 'B crontab left'
 [ -f "$FLEET_INSTALL_DAEMON_DIR/com.example.y.plist" ] && ok "B another login's daemon kept" || fail "B another login's daemon removed"
 [ -f "$ARCH/older.tar.gz" ] && ok 'B the archive dir kept' || fail 'B the archive dir was swept'
-[ "$(grep -c "\.tar\.gz" "$W/out")" -ge 1 ] && has "$W/out" "archive=$ARCH/$L-" 'B the archive is named'
+[ -d "$R/private/var/folders/zz/abc123/T" ] && [ -d "$R/private/var/folders/zz/abc123/C" ] && ok 'B the uid dir keeps its C/T skeleton' || fail 'B the uid dir lost its skeleton'
+has "$W/out" "archive=$ARCH/$L-" 'B the archive is named'
+TGZ=$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null | head -1)
+[ -n "$TGZ" ] && tar -tzf "$TGZ" | grep -q "^$L/notes.txt" && ok 'B the archive holds the old home as <login>/' || fail "B archive: '$TGZ' $(tar -tzf "$TGZ" 2>&1 | head -3 | tr '\n' ' ')"
+[ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && ok 'B the moved-aside home is deleted after its archive' || fail 'B a .wash dir is left'
+grep -Eq '^timing: stop=[0-9.]+ quiesce=[0-9.]+ aside=[0-9.]+ requiesce=[0-9.]+ home\+sweep=[0-9.]+ check=[0-9.]+ rejoin=[0-9.]+ isolated=[0-9.]+ total=[0-9.]+$' "$W/out" \
+  && ok 'B one timing line' || { grep timing "$W/out"; fail 'B no timing line'; }
+[ "$(tail -n 4 "$W/out" | head -n 1 | cut -c1-7)" = 'timing:' ] && ok 'B the timing line sits right before the verdict' || fail 'B timing line misplaced'
+has "$HOME/$L-reset/op" 'timing=stop=' 'B the op file keeps the timing'
+grep -q 'steps: ' "$W/out" && ok 'B the children are stamped' || fail 'B no step stamps'
 grep -q 'ssh-ed25519 AAAA new' "$H/.ssh/authorized_keys" && [ -f "$H/.profile" ] && ok 'B a fresh home, set up again' || fail 'B the home was not set up again'
 has "$RS_LOG" "new $L --recycle --share-pool --apply op=abc1 code=fj_aaaaaaaaaaaaaaaaaaaaaaaaaa" 'B the opener gets --recycle, the op and the join code'
 has "$RS_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.example.x.plist" 'B the UserName daemon booted out'
@@ -196,14 +215,15 @@ python3 - "$RS_LOG" <<'PY' && ok 'B order: stop, wash, rejoin' || fail 'B wrong 
 import sys
 lines = open(sys.argv[1]).read().splitlines()
 at = lambda s: next(i for i, l in enumerate(lines) if s in l)
-assert at('remove ') < at('createhomedir') < at('new ') < at('fleet-login-reset-check.py')
+assert at('remove ') < at('createhomedir') < at('fleet-login-reset-check.py') < at('new ')
 PY
 has "$HOME/$L-reset/op" 'phase=rejoin' 'B the op file records the rejoin'
 
 # ---- C: something the wash cannot take ----
 fixture
 RS_PROC_STAYS=1 run "$L" --apply
-[ "$(last2)" = 'reset: dirty processes|credsep: separated' ] && [ "$RC" = 1 ] && ok 'C a process left ⇒ dirty, exit 1' || { tail -5 "$W/out"; fail "C: $(last2) rc $RC"; }
+[ "$(last2)" = 'reset: dirty processes|credsep: not reached' ] && [ "$RC" = 1 ] && ok 'C a process left ⇒ dirty, exit 1 (before any rejoin)'
+grep -q '^new ' "$RS_LOG" && fail 'C a dirty check still rejoined' || ok 'C a dirty check: never set up again, no join code spent' || { tail -5 "$W/out"; fail "C: $(last2) rc $RC"; }
 
 # ---- D: the rejoin fails ----
 fixture
@@ -217,7 +237,7 @@ RS_NEW_DIES=1 FLEET_LOGIN_OP_ID=beef run "$L" --apply
 : > "$RS_LOG"
 FLEET_LOGIN_OP_ID=beef run "$L" --apply
 [ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'E2 the same op goes on to clean' || { cat "$W/out"; fail "E2: $(last2) rc $RC"; }
-has "$RS_LOG" "remove $L --recycle-stop --delete-home" 'E2 the stop is redone without a second archive'
+has "$RS_LOG" "remove $L --recycle-stop --quick" 'E2 the stop is redone'
 [ "$(ls "$ARCH"/$L-*.tar.gz | wc -l | tr -d ' ')" = 1 ] && ok 'E2 one archive' || fail 'E2 a second archive'
 : > "$RS_LOG"
 FLEET_LOGIN_OP_ID=beef run "$L" --apply
@@ -226,7 +246,7 @@ grep -q '^new ' "$RS_LOG" && fail 'E3 the rejoin ran again' || ok 'E3 no second 
 grep -q 'createhomedir' "$RS_LOG" && fail 'E3 the home was washed again' || ok 'E3 no second wash'
 : > "$RS_LOG"
 FLEET_LOGIN_OP_ID=cafe run "$L" --apply
-has "$RS_LOG" "remove $L --recycle-stop --keep-home" 'E4 another op starts over'
+grep -q 'createhomedir' "$RS_LOG" && has "$W/out" "archive=$ARCH/$L-" 'E4 another op starts over, its own archive'
 
 # ---- F: refusals ----
 run ghost --apply; [ "$RC" = 4 ] && ok 'F no such login: 4' || fail "F ghost: $RC"
@@ -243,10 +263,28 @@ import sys
 lines = open(sys.argv[1]).read().splitlines()
 at = lambda s, f=0: next(i for i, l in enumerate(lines) if i >= f and s in l)
 r = at('remove ')
-k = at('pkill -TERM -U', at('launchctl bootout user/', r))
-k2 = at('pkill -TERM -U', at(' mv ', k))
+k = at('launchctl bootout user/', at('pkill -KILL -U', r))
+k2 = at('pkill -KILL -U', at(' mv ', k))
 assert k2 < at('createhomedir', k2) < at('new ')
 PY
+
+# ---- H: the old home's archive is off the clock ----
+fixture
+REAL_TAR=$(command -v tar)
+cat > "$W/shim/tar" <<EOF
+#!/bin/sh
+sleep 3; exec "$REAL_TAR" "\$@"
+EOF
+chmod +x "$W/shim/tar"
+t0=$(date +%s)
+FLEET_LOGIN_RESET_ASIDE='' run "$L" --apply
+t1=$(date +%s)
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && ok 'H clean' || { tail -8 "$W/out"; fail "H: $(last2)"; }
+[ $((t1 - t0)) -lt 3 ] && ok "H the run did not wait for the archive ($((t1 - t0))s)" || fail "H the run waited for the archive ($((t1 - t0))s)"
+n=0; while [ "$n" -lt 60 ] && [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ]; do sleep 0.2; n=$((n + 1)); done
+rm -f "$W/shim/tar"
+[ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -n "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
+  && ok 'H the detached job archived and deleted the old home' || fail 'H the detached job did not finish'
 
 [ "$FAILS" = 0 ] || { printf 'fleet-login-reset-selftest: %s FAILED\n' "$FAILS"; exit 1; }
 printf 'fleet-login-reset-selftest: PASS\n'
