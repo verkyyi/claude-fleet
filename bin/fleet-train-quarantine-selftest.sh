@@ -133,8 +133,11 @@ leg_two_red() {
   sum=$(sh "$R/bin/fleet-train-quarantine.sh" summary --now "$NOW" "$T/st2/list")
   [ "$sum" = '隔离了 1 个：portability-selftest.sh（#4242，到期 2026-10-13T08:00:00Z）' ] \
     && ok "two-red: summary — $sum" || fail "two-red: summary [$sum]"
-  # the next train holds the entry: the test is skipped, the shard green
-  train --quarantine "$T/st2/list"
+  # the next train holds the entry: the test is skipped, the shard green. A train
+  # run reads the real clock (no --now), so it gets the entry with a FUTURE expiry —
+  # the recorded one (NOW + 48 h) went red the moment the wall clock passed it.
+  sed "s/ 2026-10-13T08:00:00Z / $FUTURE /" "$T/st2/list" > "$T/st2/list.live"
+  train --quarantine "$T/st2/list.live"
   if [ "$rc" -eq 0 ] && has '^QUARANTINED portability-selftest.sh skipped — #4242' && ! has '=== portability'; then
     ok "two-red: the next train skips it"
   else fail "two-red: next train rc=$rc"; show; fi
