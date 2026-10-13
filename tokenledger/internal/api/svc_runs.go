@@ -342,6 +342,8 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 	if req.DeadlineS == 0 {
 		req.DeadlineS = svcDeadlineDefault
 	}
+	// a template registers under its bare hex (svc_templates.go)
+	req.TemplateDigest = strings.TrimPrefix(req.TemplateDigest, "sha256:")
 	switch {
 	case !svcWord(req.IdempotencyKey, 200):
 		svcRunError(w, http.StatusBadRequest, "", "idempotency_key is one word of at most 200 bytes")

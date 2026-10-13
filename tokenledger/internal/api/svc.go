@@ -167,11 +167,13 @@ func (s *Server) svcOnly(scope string, next http.Handler) http.Handler {
 	})
 }
 
-// svcMux is the service door's routes: whoami and the runs (svc_runs.go).
+// svcMux is the service door's routes: whoami, the runs (svc_runs.go) and
+// the templates (svc_templates.go).
 func (s *Server) svcMux() http.Handler {
 	m := http.NewServeMux()
 	m.Handle(SvcWhoamiPath, s.svcOnly("", http.HandlerFunc(s.handleSvcWhoami)))
 	s.svcRunsMux(m)
+	s.svcTemplatesMux(m)
 	m.Handle(SvcUsagePath, s.svcOnly(store.SvcRunsRead, http.HandlerFunc(s.handleSvcUsage)))
 	return s.svcGate(m)
 }

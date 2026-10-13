@@ -10,7 +10,7 @@ import (
 //
 // svc_templates is what a principal registered: an agent.md by its sha256,
 // immutable — a run names (template, digest) and only a registered digest is
-// ever started (the write half is claude-fleet#4032). svc_run_jobs is one row
+// ever started (POST /v1/svc/templates, claude-fleet#4032). svc_run_jobs is one row
 // per run attempt that got a Job: the sha256 of the Job's one-time key (the
 // key itself lives only in the Job's Secret), the cluster, the model pass it
 // fetched (minted once, at its first and only spec read) and when it ended —
@@ -143,4 +143,28 @@ func (s *Store) EndSvcRunJob(runID int64, attempt int, now time.Time) (bool, err
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// SvcTemplates is every template principal registered, newest first — the
+// list carries no agent.md (AgentMD is left empty).
+func (s *Store) SvcTemplates(principal string) ([]SvcTemplate, error) {
+	rows, err := s.write.Query(`SELECT principal, digest, name, created FROM svc_templates
+		WHERE principal = ? ORDER BY created DESC, digest`, principal)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SvcTemplate
+	for rows.Next() {
+		var t SvcTemplate
+		var created string
+		if err := rows.Scan(&t.Principal, &t.Digest, &t.Name, &created); err != nil {
+			return nil, err
+		}
+		if c := svcTimeRead(created); c != nil {
+			t.Created = *c
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }

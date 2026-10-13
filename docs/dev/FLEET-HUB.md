@@ -2044,7 +2044,18 @@ person's session.
   (`?tenant= &since= &state= &limit=`), `GET /v1/svc/runs/R<n>` (`runs:read` —
   the result and usage inline once it ended), `POST /v1/svc/runs/R<n>/cancel`
   (`runs:write`, a queued or running run; an ended one is 409). Another
-  principal's run is 404.
+  principal's run is 404. A `sha256:` prefix on `template_digest` is dropped.
+- **Templates** (claude-fleet#4032, `svc_templates.go`). Once a template merges,
+  the service's CI registers it: `POST /v1/svc/templates` (`templates:write`)
+  `{name, agent_md}` → `{name, digest, created}`. The digest is the hub's
+  sha256 of `agent_md` (lowercase hex), never the caller's word; the text is
+  UTF-8, at most 256 KiB, with a frontmatter `name` (`name` in the request, when
+  given, must equal it). The same text again is the same row (its first
+  `created`); a changed text is a new digest beside the old one, which stays and
+  still runs — a registered text never changes. `GET /v1/svc/templates`
+  (`runs:read`) lists the caller's own (`name · digest · created`, no text);
+  another principal's are neither listed nor runnable. Only a registered digest
+  is ever started. Audit `svc.template.put`.
 - **States.** queued → running → succeeded · failed · cancelled · expired; a
   terminal state is written once, so a runner's late word after a cancel or a
   timeout changes nothing. Error codes (only the code leaves the hub):
@@ -2125,8 +2136,8 @@ the hub's runner is `ClusterSvcRunner` (`internal/api/svc_runner.go`); unset,
 there is none and runs queue and expire as above.
 
 - **One Job per attempt.** `Start` checks the run's `template_digest` is one its
-  principal registered (`svc_templates`; none ⇒ `template_invalid`, no Job — the
-  registering half is claude-fleet#4032), mints a one-time key `fsj_…` (kept here
+  principal registered (`svc_templates`; none ⇒ `template_invalid`, no Job — it
+  registers through `POST /v1/svc/templates`, above), mints a one-time key `fsj_…` (kept here
   only as its sha256, `svc_run_jobs`) and signs a `create-svc-run` ticket {run,
   attempt, svc, deadline, token} down the ops link. The provisioner renders
   `render.py svc_run_resources` — Job `svc-r<n>-a<k>`, account `fleet-job`, no
