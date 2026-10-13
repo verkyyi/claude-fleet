@@ -241,9 +241,8 @@ func machineTenants(dir, state string, strict bool) ([]agent.Config, error) {
 		cfg.SpoolMaxBytes = 64 << 20
 		out = append(out, cfg)
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("logins directory %s lists no <login>.env", dir)
-	}
+	// None is not refused here: agent.RunMachine decides — a machine that
+	// opens its own logins runs its link with none yet (claude-fleet#3554)
 	return out, nil
 }
 

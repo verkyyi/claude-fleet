@@ -48,8 +48,10 @@ func TestMachineTenantsFromLoginsDir(t *testing.T) {
 	if _, err := machineTenants(dir, state, false); err == nil || !strings.Contains(err.Error(), "CCQUOTA_TOKEN") {
 		t.Fatalf("no token: %v", err)
 	}
-	if _, err := machineTenants(t.TempDir(), state, false); err == nil {
-		t.Fatal("an empty logins directory was accepted")
+	// An empty directory is no tenants, not an error: RunMachine refuses it
+	// unless the machine opens its own logins (claude-fleet#3554)
+	if ts, err := machineTenants(t.TempDir(), state, false); err != nil || len(ts) != 0 {
+		t.Fatalf("an empty logins directory: %v %v, want none and no error", ts, err)
 	}
 	// The machine's own token comes from its root-only file the same way.
 	me2 := filepath.Join(t.TempDir(), "machine.env")
