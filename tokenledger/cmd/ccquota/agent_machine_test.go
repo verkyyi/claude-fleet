@@ -48,8 +48,10 @@ func TestMachineTenantsFromLoginsDir(t *testing.T) {
 	if _, err := machineTenants(dir, state, false); err == nil || !strings.Contains(err.Error(), "CCQUOTA_TOKEN") {
 		t.Fatalf("no token: %v", err)
 	}
-	if _, err := machineTenants(t.TempDir(), state, false); err == nil {
-		t.Fatal("an empty logins directory was accepted")
+	// An empty directory is no tenants, not an error: RunMachine refuses it
+	// unless the machine opens its own logins (claude-fleet#3554)
+	if ts, err := machineTenants(t.TempDir(), state, false); err != nil || len(ts) != 0 {
+		t.Fatalf("an empty logins directory: %v %v, want none and no error", ts, err)
 	}
 	// The machine's own token comes from its root-only file the same way.
 	me2 := filepath.Join(t.TempDir(), "machine.env")
@@ -78,5 +80,23 @@ func TestAccountOpenerOnlyOnLinuxWhenOn(t *testing.T) {
 	}
 	if got := accountOpener("1"); got == "" {
 		t.Fatal("linux, FLEET_NODE_ACCOUNT_OPS=1: no opener")
+	}
+}
+
+// From the command's own entry: an empty logins directory reaches
+// agent.RunMachine, which alone decides (claude-fleet#3554 — the read of the
+// directory refused it first, so a person's pod never started its link).
+// Without account ops it is RunMachine's refusal, not the directory read's.
+func TestAgentMachineEmptyLoginsReachesRunMachine(t *testing.T) {
+	t.Setenv("CCQUOTA_TOKEN", "mach-tok")
+	t.Setenv("FLEET_NODE_ACCOUNT_OPS", "")
+	t.Setenv("CCQUOTA_TOKEN_FD", "")
+	err := runAgentMachine([]string{"--machine", "--hub", "http://127.0.0.1:1",
+		"--logins", t.TempDir(), "--state", t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "no logins to serve") {
+		t.Fatalf("empty logins, no account ops: %v, want RunMachine's refusal", err)
+	}
+	if strings.Contains(err.Error(), "lists no") {
+		t.Fatalf("the directory read refused it before RunMachine: %v", err)
 	}
 }
