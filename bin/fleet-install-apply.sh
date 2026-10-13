@@ -1145,7 +1145,8 @@ else
         fi
         if [ -d "$dst" ] && diff -rq "$src" "$dst" >/dev/null 2>&1; then continue; fi
         if [ "$DRY" = 1 ]; then inst=$((inst + 1)); say "codex-skills: would install $home/skills/$n"; continue; fi
-        mkdir -p "$dst" && cp -pR "$src"/. "$dst"/ && inst=$((inst + 1)) || fail codex-skills "install $dst"
+        find "$dst" -type l -exec rm -f {} + 2>/dev/null
+        mkdir -p "$dst" && cp -pRL "$src"/. "$dst"/ && inst=$((inst + 1)) || fail codex-skills "install $dst"
       done
     done <<EOF
 $homes
@@ -1160,6 +1161,24 @@ if [ "$COPY" = 1 ] && shielded claude.skills; then
   say "skills: skip — this login keeps its own (claude.skills in $OVR)"
 elif [ "$COPY" = 1 ]; then
   names=$(printf '%s\n' "$CHANGED" | sed -n 's#^skills/\([^/][^/]*\)/.*#\1#p' | sort -u)
+  # An installed fleet skill that still holds a symlink is re-copied whatever moved
+  # (issue #3988): a managed login's tree links every file into <root>/<sha>/, and an
+  # older pass copied those links verbatim — they dangled once that version was swept.
+  # One the repo no longer ships, left as nothing but dangling links, is removed.
+  heal_rm=0
+  for d in "$CDIR"/skills/*/; do
+    d=${d%/}; n=${d##*/}
+    [ -n "$(find "$d" -type l 2>/dev/null | head -1)" ] || continue
+    if [ ! -f "$ROOT/skills/$n/SKILL.md" ]; then
+      [ -L "$d/SKILL.md" ] && [ ! -e "$d/SKILL.md" ] && [ -z "$(find "$d" ! -type l ! -type d 2>/dev/null | head -1)" ] || continue
+      if [ "$DRY" = 1 ]; then say "skills: would remove $n (retired, only dangling links)"
+      else rm -rf "$d" && heal_rm=$((heal_rm + 1)); fi
+      continue
+    fi
+    is_skill "$ROOT/skills/$n" || continue
+    printf '%s\n' "$names" | grep -qx "$n" || names=$(printf '%s\n%s\n' "$names" "$n" | sed '/^$/d' | sort -u)
+  done
+  [ "$heal_rm" = 0 ] || say "skills: removed $heal_rm retired skill(s) left as dangling links"
   if [ -z "$names" ]; then
     say 'skills: skip — no skills/ changed'
   else
@@ -1178,9 +1197,12 @@ elif [ "$COPY" = 1 ]; then
         say "skills: WARN $n is a personal skill that diverges from the repo copy — left alone; reconcile by hand"
         continue
       fi
-      if [ -d "$dst" ] && diff -rq "$src" "$dst" >/dev/null 2>&1; then continue; fi   # already current
+      if [ -d "$dst" ] && [ -z "$(find "$dst" -type l 2>/dev/null | head -1)" ] \
+         && diff -rq "$src" "$dst" >/dev/null 2>&1; then continue; fi   # already current
       if [ "$DRY" = 1 ]; then say "skills: would install $n"; inst=$((inst + 1)); continue; fi
-      if mkdir -p "$dst" && cp -pR "$src"/. "$dst"/; then inst=$((inst + 1)); else fail skills "install $n"; fi
+      # -L: the bytes, never a link into a version directory that will be swept (#3988).
+      find "$dst" -type l -exec rm -f {} + 2>/dev/null
+      if mkdir -p "$dst" && cp -pRL "$src"/. "$dst"/; then inst=$((inst + 1)); else fail skills "install $n"; fi
     done
     say "skills: $([ "$DRY" = 1 ] && echo 'would install' || echo installed) $inst · $([ "$DRY" = 1 ] && echo 'would remove' || echo removed) $rem"
   fi
@@ -1196,6 +1218,12 @@ if [ -x "$dp_sh" ] && [ -d "$HOME/.cache/claude-doc-preview" ]; then
   elif dp_out=$("$dp_sh" --upgrade 2>&1); then
     say "docprev: $(printf '%s' "$dp_out" | sed 's/^doc-preview: //' | tr '\n' ';' | sed 's/;$//')"
   else
+    say "docprev: WARN $(printf '%s' "$dp_out" | tr '\n' ' ')"
+  fi
+  # Docs shared but no server (it died with a session, issue #3988): bring it back.
+  if [ "$DRY" != 1 ] && dp_out=$("$dp_sh" --ensure 2>&1) && [ -n "$dp_out" ]; then
+    say "docprev: $(printf '%s' "$dp_out" | sed 's/^doc-preview: //' | tr '\n' ';' | sed 's/;$//')"
+  elif [ "$DRY" != 1 ] && [ -n "$dp_out" ]; then
     say "docprev: WARN $(printf '%s' "$dp_out" | tr '\n' ' ')"
   fi
 fi
