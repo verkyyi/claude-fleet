@@ -2347,7 +2347,7 @@ drill_machine_policy_bypass() {
   SECS=$(since "$t0")
 }
 
-# ---- svc-token-escalate (#4003, EPIC 24haowan-monorepo#12113 C1): SPACE's back
+# ---- svc-token-escalate (#4003, the SPACE EPIC C1): SPACE's back
 # end holds a service token (fcs_<prefix8>_<secret>) that may dispatch, read and
 # cancel runs on /v1/svc/ and nothing else. The break: that token, with every
 # scope, against every /v1/fleet/* and /v1/node/* route the hub spells — and its

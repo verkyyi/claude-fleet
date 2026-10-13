@@ -16,7 +16,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// The service door (claude-fleet#4003, EPIC GuangZhouShanyouGame/24haowan-monorepo#12113 C1):
+// The service door (claude-fleet#4003, the SPACE EPIC C1):
 // /v1/svc/ answers ONLY a service principal's token, `fcs_<prefix8>_<secret>`,
 // and a service token opens nothing else — it is no viewer token, no person's
 // session and no node token, so every other gate treats it as no credential at

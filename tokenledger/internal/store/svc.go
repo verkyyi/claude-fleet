@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Service principals (claude-fleet#4003, EPIC GuangZhouShanyouGame/24haowan-monorepo#12113 C1):
+// Service principals (claude-fleet#4003, the SPACE EPIC C1):
 // an identity that is not a person and not a login — SPACE's back end, which
 // dispatches runs for its own users, who have no account here. A principal
 // holds a fixed set of scopes and nothing else: it is never an admin, never a
