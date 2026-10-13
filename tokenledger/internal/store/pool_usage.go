@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS pool_usage (
   requests    INTEGER NOT NULL DEFAULT 1,
   at_unix     INTEGER NOT NULL,
   repo        TEXT NOT NULL DEFAULT '',
-  issue       INTEGER NOT NULL DEFAULT 0
+  issue       INTEGER NOT NULL DEFAULT 0,
+  tenant      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS pool_usage_principal_at ON pool_usage(principal, at_unix);
 CREATE INDEX IF NOT EXISTS pool_usage_at ON pool_usage(at_unix);`
@@ -59,6 +60,9 @@ type PoolUsage struct {
 	At         time.Time `json:"at"`
 	Repo       string    `json:"repo,omitempty"`
 	Issue      int       `json:"issue,omitempty"`
+	// Tenant is a service run's tenant (claude-fleet#4006): the
+	// space:ws:<id> its pass was minted for; '' on every person's row.
+	Tenant string `json:"tenant,omitempty"`
 
 	// Read off the scan only (EventUsageSince, claude-fleet#3406): the
 	// endpoint and login that reported it, the machine it ran on, and the
@@ -80,7 +84,8 @@ func (s *Store) ensurePoolUsage() error {
 	if _, err := s.write.Exec(s.d.ddl(poolUsageSchema)); err != nil {
 		return fmt.Errorf("create pool usage table: %w", err)
 	}
-	return nil
+	// A service run's tenant (claude-fleet#4006).
+	return s.addColumn("pool_usage", "tenant", "TEXT NOT NULL DEFAULT ''")
 }
 
 // AddPoolUsage writes one row. A row with nothing in it is skipped.
@@ -95,10 +100,10 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 		u.Requests = 1
 	}
 	_, err := s.write.Exec(`INSERT INTO pool_usage (principal, worker_id, account, provider, model,
-		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.Principal, u.WorkerID, u.Account, u.Provider, u.Model,
-		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue)
+		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant)
 	return err
 }
 
@@ -106,7 +111,7 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 // principal "" is everyone, a zero until is now and onward.
 func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUsage, error) {
 	q := `SELECT principal, worker_id, account, provider, model, tokens_in, cache_write, cache_read,
-		tokens_out, requests, at_unix, repo, issue FROM pool_usage WHERE at_unix >= ?`
+		tokens_out, requests, at_unix, repo, issue, tenant FROM pool_usage WHERE at_unix >= ?`
 	args := []any{since.Unix()}
 	if !until.IsZero() {
 		q += ` AND at_unix < ?`
@@ -126,7 +131,7 @@ func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUs
 		var u PoolUsage
 		var at int64
 		if err := rows.Scan(&u.Principal, &u.WorkerID, &u.Account, &u.Provider, &u.Model, &u.In, &u.CacheWrite,
-			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue); err != nil {
+			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant); err != nil {
 			return nil, err
 		}
 		u.At = time.Unix(at, 0).UTC()

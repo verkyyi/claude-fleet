@@ -90,6 +90,7 @@ const (
 	SvcErrOutputInvalid   = "output_invalid"
 	SvcErrInfra           = "infra_error"
 	SvcErrCancelled       = "cancelled"
+	// quota_exceeded and tenant_limit: svc_usage.go.
 )
 
 // SvcMaxRunningKey is the fleet setting capping one principal's running runs.
@@ -383,6 +384,13 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// over the service's or the tenant's budget: refused, nothing queued
+	// (claude-fleet#4006); a key already used is its run's replay
+	if st, over := s.svcSubmitRefusal(p.ID, req.Tenant, req.IdempotencyKey, now); over {
+		s.svcAudit(p.ID, "svc.run.submit", req.Tenant, "REFUSED", st.ErrorCode+": "+st.Message, now)
+		svcRunError(w, http.StatusTooManyRequests, st.ErrorCode, "this run is over its budget")
+		return
+	}
 	sha := svcRequestSHA(req, inputs)
 	run, created, err := s.Store.CreateSvcRun(store.SvcRun{Principal: p.ID, Tenant: req.Tenant, Subject: req.Subject,
 		Template: req.Template, Digest: req.TemplateDigest, InputsJSON: inputs, IdempotencyKey: req.IdempotencyKey,
@@ -570,6 +578,15 @@ func (s *Server) SvcRunFinishDetail(id int64, state, code, detail string, res *S
 			detail = end.ErrorCode
 		}
 		if SvcRunRetryable(end.ErrorCode) {
+			// a run the budget now refuses (its proxy said so mid-run) ends
+			// with the budget's code, not a retry (claude-fleet#4006)
+			if cur, err := s.Store.SvcRun(id); err == nil && cur.State == store.SvcRunRunning {
+				if st, over := s.svcBudgetRefusal(cur.Principal, cur.Tenant, now); over {
+					end.ErrorCode, detail = st.ErrorCode, st.ErrorCode+": "+st.Message
+				}
+			}
+		}
+		if SvcRunRetryable(end.ErrorCode) {
 			run, requeued, err := s.Store.RequeueSvcRun(id, now, svcRetryMinLeft)
 			if err != nil {
 				return run, err
@@ -626,6 +643,11 @@ func (s *Server) svcDispatch(ctx context.Context, now time.Time) {
 			continue
 		}
 		for _, run := range claimed {
+			// over the service's or the tenant's budget: ended, never
+			// started (claude-fleet#4006)
+			if _, over := s.svcBudgetEnd(run, now); over {
+				continue
+			}
 			s.svcAudit(run.Principal, "svc.run.start", run.Ref(), "ok", "attempt "+strconv.Itoa(run.Attempt), now)
 			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), svcCallbackTimeout)
 			err := s.SvcRunner.Start(sctx, run)

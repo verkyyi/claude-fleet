@@ -157,6 +157,9 @@
 #   apply-flood                                     tokenledger/internal/store access_requests.go (the one-pending
 #                                                   partial unique index) + internal/api access_requests.go (409, the
 #                                                   per-address limit); go test, when a toolchain is here
+#   svc-usage-crosses-tenant                        tokenledger/internal/api svc_usage.go (tenant on the run's pass and
+#                                                   pool_usage, fleet.svc_budget / svc_tenant_budget, svcYield,
+#                                                   GET /v1/svc/usage; go test, when a toolchain is here)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2392,6 +2395,28 @@ drill_svc_token_escalate() {
     TestSvcOnlyHashStored TestSvcDisable || return 1
   WHAT='服务令牌只开 /v1/svc/：管理与节点路由、它自己的管理口都拒；缺 scope 403，吊销 / 停用后下一次调用 401（Go 测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='全 scope 的服务令牌对每条 /v1/fleet/* /v1/node/* 路由拿到的不多于无凭据；/v1/fleet/svc 401；缺 scope 403；吊销 / 停用即 401；轮换两把并存、不许第三把；库里只有哈希（go test 六条）'
+  SECS=$(since "$t0")
+}
+
+# ---- svc-usage-crosses-tenant (#4006, the SPACE EPIC C4): a service run's
+# usage lands on another tenant or a person, or one tenant (or the whole
+# service) uses up the pool for everyone. The break: two tenants' runs through
+# the real credential proxy, one tenant's ceiling, then the service's, then a
+# tight pool — each tenant is filed apart, a ceiling stops only what it names
+# and never a person, the service yields a tight pool, and /v1/svc/usage
+# agrees with what the callbacks carried.
+drill_svc_usage_crosses_tenant() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal/api"; GO_RAN=0
+  t0=$(now)
+  grep -q 'u.Tenant = s.svcPassTenant(c)' "$tl/fleet_person_budget.go" 2>/dev/null \
+    || { WHY="a proxy's usage row is no longer filed under its pass's tenant (fleet_person_budget.go)"; return 1; }
+  grep -q 's.svcBudgetRefusal(c.Principal, s.svcPassTenant(c)' "$tl/fleet_credproxy.go" 2>/dev/null \
+    || { WHY="the proxy's resolve no longer holds a service run to its budget (fleet_credproxy.go)"; return 1; }
+  c11_go_tests svc_usage_test.go TestSvcProxyFilesByTenantAndStops TestSvcTenantLimitStopsOnlyThatTenant \
+    TestSvcWholeBudgetStopsServiceNotPeople TestSvcOverBudgetFailureIsNotRetried TestSvcUsageMatchesCallbacks \
+    TestSvcYieldsTightPool || return 1
+  WHAT='服务运行的用量按通行证里的 tenant 记、人的行不带 tenant；单 tenant 到顶只挡它、整体到顶挡全部服务不挡人；池子紧时服务让；usage 接口与回调对得上（Go 测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='经真凭据代理：两 tenant 分开记（不混进人的）；ws:1 到顶 403、ws:2 与人照常；整体到顶两 tenant 都 403、人照常；派单 429 tenant_limit / quota_exceeded 不入队，队列里的派前结束，运行中超了不重试；池子紧时服务不选 ≥80% 的号、全紧就等、人照常；/v1/svc/usage 按 tenant 等于回调 usage 之和（go test 六条）'
   SECS=$(since "$t0")
 }
 
