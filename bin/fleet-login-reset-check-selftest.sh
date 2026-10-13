@@ -55,6 +55,9 @@ setup() {   # setup <platform> → a fresh sandbox $S with a skeleton-only home
     "$S/sys/var/db/fleet-node/logins" "$S/sys/var/db/fleet-cred" "$S/sys/Library/LaunchDaemons" \
     "$S/sys/var/lib/systemd/linger" "$S/sys/Users/Shared/offboarded"
   printf 'x\n' > "$SK/.profile"; printf 'x\n' > "$SK/Library/Preferences/.keep"
+  # plain files beside the homes, as a real Mac has (/Users/.localized): never a
+  # home to look in for an onboarding kit (issue #3508: ENOTDIR read as dirty)
+  : > "$HR/.localized"; : > "$ADMIN/../.forward"
   cp -R "$SK" "$H"
   : > "$S/ps"; : > "$S/cron"; rm -f "$S/cron.err"
 }

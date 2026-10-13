@@ -306,7 +306,10 @@ class Check(object):
             except OSError as e:
                 self.unknown("onboard", "%s: %s" % (r, e.strerror))
                 continue
-            cands = [os.path.join(r, n, self.a.login + "-onboard") for n in names]
+            # only a directory is a home to look in: /Users/.localized and root's
+            # dot-files are plain files, and their ENOTDIR read as dirty (#3508)
+            cands = [os.path.join(r, n, self.a.login + "-onboard") for n in names
+                     if os.path.isdir(os.path.join(r, n))]
             cands.append(os.path.join(r, self.a.login + "-onboard"))   # root's own home
             for c in cands:
                 if os.path.realpath(c).startswith(os.path.realpath(self.a.home) + "/"):
