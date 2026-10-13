@@ -191,7 +191,7 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
 assert m.cfg_tag("renew") == "待换新", m.cfg_tag("renew")
-assert m.detail_line(row + ["renew"]) == "worker-one · @mac-a · 待换新", m.detail_line(row + ["renew"])
+assert m.detail_line(row + ["renew"]) == "worker-one · mac-a · 待换新", m.detail_line(row + ["renew"])
 assert m.detail_line(row[:8] + [""] + row[9:] + ["renew"]) == "worker-one · 待换新"
 assert m.detail_line(row + ["stale"]).endswith("· 配置旧")
 assert m.row_glyph(row + ["renew"]) == ("✓", "") and m.row_need(row + ["renew"]) == m.row_need(row)

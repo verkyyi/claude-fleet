@@ -489,8 +489,9 @@ has 'J: the producer lists the node row' "$rows" 'issue-12'
 has 'J: …marked as heard over the connection (mac-b~)' "$rows" '|mac-b~'
 hasnt 'J: …never lost' "$rows" 'mac-b!'
 has 'J: the mac-a row still reads lost' "$rows" 'mac-a!'
-# the view: a `~` row's machine is `@mac-b~` (issue #1780; a name, never a ⇄,
-# #1621) — named in the bar (issue #2305), so the row asks no cells for it
+# the view: a `~` row's machine is `mac-b` (issue #1780; a name, never a ⇄,
+# #1621) — named in the bar (issue #2305) as plain words, like any other row's
+# (#3960), so the row asks no cells for it
 CHECKS=$((CHECKS + 1)); ( cd "$WORK/cache/bin" && python3 - <<'PY'
 import importlib.util
 spec = importlib.util.spec_from_file_location("sb", "fleet-sidebar.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -498,9 +499,9 @@ plain = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12"
 via = m.row_fields("\x1f".join(("wid:x/issue-12", "working", "●", "issue-12", " ", "", "0", "", "mac-b~")))
 assert (m.machine_tag("mac-b~"), m.machine_tag("mac-b"), m.machine_tag("mac-a!")) == ("@mac-b~", "@mac-b", "@mac-a!"), m.machine_tag("mac-b~")
 assert m.row_need(via) == m.row_need(plain), (m.row_need(via), m.row_need(plain))
-assert m.detail_line(via) == "issue-12 · @mac-b~", m.detail_line(via)
+assert m.detail_line(via) == m.detail_line(plain) == "issue-12 · mac-b", m.detail_line(via)
 PY
-) || fail 'J: a ~ row names @mac-b~ in the bar and asks the row no cells for it'
+) || fail 'J: a ~ row names mac-b in the bar, as a plain row, and asks the row no cells for it'
 # the hub answers again: its rows take the cache back, via=hub everywhere
 ( export TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_NODE_ALIASES='mac-c=mac-b mac-d=mac-a'
   bash "$WORK/cache/bin/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )

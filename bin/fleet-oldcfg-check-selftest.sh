@@ -263,7 +263,7 @@ assert m.row_glyph(row + ["broken"]) == ("✗", "broken"), m.row_glyph(row + ["b
 assert m.row_glyph(row + ["stale"]) == ("✓", "") and m.row_glyph(row + ["ok"]) == ("✓", "")
 assert m.row_glyph(["@1", "needs", "?"] + row[3:] + ["broken"]) == ("?", ""), "a question keeps its red ?"
 assert m.row_glyph(row[:8] + ["mac-a!"] + row[9:] + ["broken"])[1] == "lost", "a lost machine wins"
-assert m.detail_line(row + ["broken"]) == "worker-one · @mac-a · 会坏·需重开", m.detail_line(row + ["broken"])
+assert m.detail_line(row + ["broken"]) == "worker-one · mac-a · 会坏·需重开", m.detail_line(row + ["broken"])
 assert m.row_need(row + ["broken"]) == m.row_need(row) and w("✗") == w("✓")
 print("E-ok")
 PY

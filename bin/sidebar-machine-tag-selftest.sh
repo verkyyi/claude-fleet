@@ -6,7 +6,9 @@
 # bin/fleet-remote-view.sh's proxy title:
 #   A. three kinds   — another machine `@mac-a` · this computer `@本机` · a lost
 #                      machine `@mac-a!` · `@mac-b~` heard over the shell's own
-#                      connection — each in the bar's detail line
+#                      connection — machine_tag's words (the stage's top
+#                      line); the bar's detail line names every machine as
+#                      plain words, this one's too (issue #3960)
 #   B. the row       — state · name · N/N only: no mark at any width, row_need
 #                      asks nothing for it; a lost machine's row takes `⊘` as
 #                      its state glyph
@@ -42,9 +44,12 @@ if lang == "zh":
     check(m.machine_tag("mac-a!") == "@mac-a!", "A: a lost machine → @mac-a!")
     check(m.machine_tag("mac-b~") == "@mac-b~", "A: heard over the shell's connection → @mac-b~")
     row = m.row_fields("\x1f".join(("wid:x/issue-1", "working", "●", "issue-1", " ", "", "0", "", "mac-a", "#1")))
-    check(m.detail_line(row) == "issue-1 · #1 · @mac-a", "A: the bar names the machine: %r" % m.detail_line(row))
+    # the bar names the machine as plain words, this computer's the same way (#3960)
+    check(m.detail_line(row) == "issue-1 · #1 · mac-a", "A: the bar names the machine: %r" % m.detail_line(row))
     here = row[:8] + ["MacBook"] + row[9:]
-    check("@本机" in m.detail_line(here), "A: …@本机 for this computer's own: %r" % m.detail_line(here))
+    check(m.detail_line(here) == "issue-1 · #1 · MacBook", "A: …this computer's own by its name, no @本机: %r" % m.detail_line(here))
+    for odd in ("mac-a!", "mac-b~"):
+        check(m.detail_line(row[:8] + [odd] + row[9:]) == "issue-1 · #1 · " + odd[:-1], "A: …no !/~ mark in the bar: %r" % odd)
 
     # B. the row never carries the mark (issue #2305), at any width
     left = w(m.row_left(" ", "●", "└", ""))
