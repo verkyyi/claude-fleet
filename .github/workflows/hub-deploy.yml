@@ -20,6 +20,15 @@ name: hub-deploy
 #     image is `prod-<TRAIN_SHA>` built from that commit; the train then publishes
 #     the same commit and moves stable to it, so the hub and stable never come
 #     from two commits. The train's one lane is the batching.
+#     It calls it TWICE (issue #3867, EPIC #3863 C4): `phase: build` the moment
+#     the train boards — the `build` job alone, on the train's Linux runner (the
+#     Shenzhen cluster's fleet-ack and its buildkitd when the train picked it,
+#     else ubuntu-latest), pushes prod-<sha7> labelled with TRAIN_SHA while the
+#     tests run (`bin/fleet-train-prebuild.sh look`: an image of that sha already
+#     there is reused) — then `phase: deploy` once they are green, which builds
+#     nothing and deploys only the image that build reported (`verify`: the tag's
+#     digest and revision, BREAK-IT train-prebuild-wrong-sha). A red train
+#     deploys nothing; its image stays in the registry for the next.
 #   * `workflow_dispatch` is the repair road: this commit by hand, or an EXISTING
 #     `tag` (no build; the snapshot step still runs) — the rollback.
 # A merge no longer deploys by itself: the push trigger (and its quiet-master
@@ -61,10 +70,28 @@ on:
         description: "The release train's TRAIN_SHA — build, deploy and health-check exactly this commit"
         type: string
         required: true
+      phase:
+        description: "The train's half (issue #3867): build = only push prod-<sha7> of sha (beside the tests); deploy = deploy the image `digest` names, build nothing; empty = both, one job"
+        type: string
+        required: false
+        default: ''
+      runs_on:
+        description: "phase build: where it builds — ubuntu-latest, or the train's JSON label list (e.g. [\"fleet-ack\"]: the cluster's buildkitd)"
+        type: string
+        required: false
+        default: ubuntu-latest
+      digest:
+        description: "phase deploy: the digest the build phase pushed (or kept) — the deploy refuses any other image"
+        type: string
+        required: false
+        default: ''
     outputs:
       deployed:
         description: "success = the hub runs prod-<sha> and answers healthy; empty = nothing deployed (paused: HUB_DEPLOY_PAUSED=1)"
         value: ${{ jobs.deploy.outputs.deployed }}
+      digest:
+        description: "phase build: the digest of prod-<sha7> — built here, or the same sha's image already there"
+        value: ${{ jobs.build.outputs.digest }}
   workflow_dispatch:
     inputs:
       tag:
@@ -91,9 +118,10 @@ on:
 # One deploy at a time, never cancelled half-way (a cancelled Recreate rollout
 # leaves the hub down until the next one): a newer run waits, and replaces any
 # run that is still only waiting. The train's call (inputs.sha) and a dispatch
-# share `prod`.
+# share `prod`. The train's build phase (issue #3867) changes nothing live and
+# runs beside it in a group of its own sha, so it never holds or replaces a deploy.
 concurrency:
-  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || 'prod' }}
+  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || inputs.phase == 'build' && format('build-{0}', inputs.sha) || 'prod' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -111,6 +139,7 @@ env:
 
 jobs:
   check:
+    if: inputs.phase != 'build'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +176,7 @@ jobs:
   # needed the hub). A person's workflow_dispatch is never paused: that is how you
   # deploy (or roll back) by hand while automatic releases are off.
   gate:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && inputs.phase != 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -174,8 +203,136 @@ jobs:
             echo "paused=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # The train's hub image, built BESIDE its tests (issue #3867, EPIC #3863 C4):
+  # the same inputs as the deploy job's build steps — the client pack, the chat
+  # page, the website — then the image, labelled with TRAIN_SHA. On the cluster's
+  # fleet-ack runner it is the cluster's buildkitd (buildctl, native amd64, the
+  # registry's VPC endpoint, its layer cache `<repo>:buildcache` in the registry —
+  # no GitHub cache across the Pacific); on ubuntu-latest buildx with GitHub's
+  # cache as before. The same sha's image already in the registry (a red train's)
+  # is reused. Pushing a tag deploys nothing: the deploy phase does that, after
+  # the tests, and only this digest.
+  build:
+    if: inputs.phase == 'build'
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+    environment: prod
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    env:
+      TRAIN_SHA: ${{ inputs.sha }}
+      ACK: ${{ contains(inputs.runs_on, 'fleet-ack') }}
+      # the registry's VPC endpoint from inside the cluster (repo variable), else the public one
+      BUILD_REPO: ${{ contains(inputs.runs_on, 'fleet-ack') && vars.HUB_BUILD_PUSH_REPO || vars.HUB_PUSH_REPO }}
+    steps:
+      # GitHub from Shenzhen: a shallow checkout, tried twice
+      - uses: actions/checkout@v4
+        id: co
+        continue-on-error: true
+        with:
+          ref: ${{ inputs.sha }}
+      - if: steps.co.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: The deployment's settings are here
+        run: |
+          [[ "$TRAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the train's sha must be a full commit sha, got '$TRAIN_SHA'"; exit 1; }
+          [ -n "$PUSH_REPO" ] || { echo "::error::repo variable HUB_PUSH_REPO is not set (the image registry/ns/name)"; exit 1; }
+          [ -n "$BUILD_REPO" ] || BUILD_REPO=$PUSH_REPO
+          echo "BUILD_REPO=$BUILD_REPO" >> "$GITHUB_ENV"
+          echo "TAG=prod-${TRAIN_SHA:0:7}" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/hub-acr
+
+      - uses: docker/setup-buildx-action@v3
+        if: env.ACK != 'true'
+
+      - name: Already built? (fleet-train-prebuild.sh look)
+        id: look
+        run: bin/fleet-train-prebuild.sh look "$PUSH_REPO" "$TAG" "$TRAIN_SHA"
+
+      - name: Pack the client
+        if: steps.look.outputs.reuse != 'true'
+        run: bin/fleet-client-pack.sh
+      - uses: actions/setup-node@v4
+        if: steps.look.outputs.reuse != 'true' && env.ACK != 'true'   # fleet-ci-runner carries Node 22
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extras/web-chat/ui/package-lock.json
+      - name: Pack the chat page
+        if: steps.look.outputs.reuse != 'true'
+        env:
+          # the lockfile's packages from the CN mirror in the cluster (npm swaps the registry host)
+          npm_config_registry: ${{ env.ACK == 'true' && 'https://registry.npmmirror.com' || '' }}
+        run: |
+          [ -n "$npm_config_registry" ] || unset npm_config_registry
+          bin/web-chat-pack.sh
+      - name: Build the website and its docs
+        if: steps.look.outputs.reuse != 'true'
+        run: bin/docs-build.sh && bin/site-build.sh
+
+      - name: Build and push (buildx)
+        id: bx
+        if: steps.look.outputs.reuse != 'true' && env.ACK != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: tokenledger
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ env.PUSH_REPO }}:${{ env.TAG }}
+          labels: org.opencontainers.image.revision=${{ inputs.sha }}
+          build-args: |
+            VERSION=${{ env.TAG }}
+            GOPROXY=https://proxy.golang.org,direct
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push (the cluster's buildkitd)
+        id: bk
+        if: steps.look.outputs.reuse != 'true' && env.ACK == 'true'
+        run: |
+          set -euo pipefail
+          : "${BUILDKIT_HOST:?BUILDKIT_HOST is not set on this runner (the cluster buildkitd)}"
+          tls=(); [ -z "${BUILDKIT_TLSDIR:-}" ] || tls=(--tlsdir "$BUILDKIT_TLSDIR")
+          # Go modules: the Dockerfile's default GOPROXY (goproxy.cn) — inside CN
+          buildctl --addr "$BUILDKIT_HOST" ${tls[@]+"${tls[@]}"} build \
+            --frontend dockerfile.v0 \
+            --local context=tokenledger --local dockerfile=tokenledger \
+            --opt platform=linux/amd64 \
+            --opt build-arg:VERSION="$TAG" \
+            --opt label:org.opencontainers.image.revision="$TRAIN_SHA" \
+            --output "type=image,name=$BUILD_REPO:$TAG,push=true" \
+            --import-cache "type=registry,ref=$BUILD_REPO:buildcache" \
+            --export-cache "type=registry,ref=$BUILD_REPO:buildcache,mode=max" \
+            --metadata-file "$RUNNER_TEMP/meta.json" \
+            --progress plain
+          d=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("containerimage.digest") or "")' "$RUNNER_TEMP/meta.json")
+          [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::pushed, but buildctl named no digest"; exit 1; }
+          echo "digest=$d" >> "$GITHUB_OUTPUT"
+
+      - name: The digest
+        id: digest
+        env:
+          REUSED: ${{ steps.look.outputs.digest }}
+          BX: ${{ steps.bx.outputs.digest }}
+          BK: ${{ steps.bk.outputs.digest }}
+        run: |
+          d=${REUSED:-${BX:-$BK}}
+          [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $PUSH_REPO:$TAG"; exit 1; }
+          echo "digest=$d" >> "$GITHUB_OUTPUT"
+          how=built; [ -z "$REUSED" ] || how='reused (that sha'"'"'s image was there)'
+          where=ubuntu-latest; [ "$ACK" != true ] || where='fleet-ack · buildkitd'
+          echo "### 入口镜像 \`$TAG\`：$how · $where · \`$d\`" >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
-    if: github.event_name != 'pull_request' && needs.gate.outputs.go == 'true'
+    if: github.event_name != 'pull_request' && inputs.phase != 'build' && needs.gate.outputs.go == 'true'
     needs: [check, gate]
     runs-on: ubuntu-latest
     environment: prod
@@ -251,12 +408,19 @@ jobs:
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           TRAIN_SHA: ${{ inputs.sha }}
+          PHASE: ${{ inputs.phase }}
+          DIGEST: ${{ inputs.digest }}
         run: |
           set -euo pipefail
           if [ -n "$TRAIN_SHA" ]; then
             [[ "$TRAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the train's sha must be a full commit sha, got '$TRAIN_SHA'"; exit 1; }
             [ "$(git rev-parse HEAD)" = "$TRAIN_SHA" ] || { echo "::error::checked out $(git rev-parse HEAD), not the train's $TRAIN_SHA"; exit 1; }
             tag="prod-${TRAIN_SHA:0:7}" build=true
+            if [ "$PHASE" = deploy ]; then
+              # built beside the tests (issue #3867): deploy only what that build pushed
+              [ -n "$DIGEST" ] || { echo "::error::phase deploy without the build phase's digest — nothing to deploy"; exit 1; }
+              build=false
+            fi
           elif [ -n "$INPUT_TAG" ]; then
             [[ "$INPUT_TAG" =~ ^prod-[0-9a-f]{7,40}$ ]] || { echo "::error::tag must look like prod-<sha7>, got '$INPUT_TAG'"; exit 1; }
             tag=$INPUT_TAG build=false
@@ -314,6 +478,30 @@ jobs:
 
       - name: The image exists
         run: docker buildx imagetools inspect "$PUSH_REPO:${{ steps.tag.outputs.tag }}" >/dev/null
+
+      # The train planned this deploy when it boarded, minutes ago (issue #3867):
+      # a hub deployed past TRAIN_SHA by hand since is never rolled back
+      # (BREAK-IT train-hub-backwards) — this train stops, the next one plans again.
+      - name: The hub has not moved past the train
+        if: inputs.phase == 'deploy'
+        env:
+          TRAIN_SHA: ${{ inputs.sha }}
+        run: |
+          why=$(GITHUB_OUTPUT=/dev/null bin/fleet-train-hub.sh "$TRAIN_SHA" --dir . --hub "${HUB_URLS%% *}" | sed -n 's/^why=//p') || exit 1
+          echo "$why"
+          case "$why" in
+            ('hub superseded'*) echo "::error::$why — nothing deployed; the next train plans again"; exit 1 ;;
+          esac
+
+      # The train's prebuilt image (issue #3867, BREAK-IT train-prebuild-wrong-sha):
+      # the tag must still name the digest this run's build phase reported, and
+      # that image TRAIN_SHA's revision — else something pushed over it.
+      - name: The image is this run's build
+        if: inputs.phase == 'deploy'
+        env:
+          TRAIN_SHA: ${{ inputs.sha }}
+          DIGEST: ${{ inputs.digest }}
+        run: bin/fleet-train-prebuild.sh verify "$PUSH_REPO" "${{ steps.tag.outputs.tag }}" "$TRAIN_SHA" "$DIGEST"
 
       - uses: ./.github/actions/hub-kubeconfig
 

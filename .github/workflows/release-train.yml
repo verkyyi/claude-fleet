@@ -34,20 +34,38 @@ name: release train
 #     a train that can no longer ship gives the lane back at once instead of
 #     holding it while its other shards run on (BREAK-IT train-red-holds-lane).
 #   * then ONE commit goes out (issue #3142, C3) — the hub, the publish and stable
-#     all name TRAIN_SHA, so the hub can never be a commit the release is not:
-#       `hub plan`  bin/fleet-train-hub.sh: does the hub already run TRAIN_SHA's Go
-#                   source and deploy/k8s/? (发起人拍板 9 — no new image then)
-#       `hub`       hub-deploy.yml's own deploy job, called with sha=TRAIN_SHA:
-#                   image prod-<TRAIN_SHA>, snapshot / check / rollout, /version
-#                   must name TRAIN_SHA (its health step)
+#     all name TRAIN_SHA, so the hub can never be a commit the release is not.
+#     What can be made before the tests are green is made BESIDE them (issue
+#     #3867, EPIC #3863 C4), so a green train is left only signing, the rollout
+#     and the move; a red one releases none of it:
+#       `hub plan`  right after board — bin/fleet-train-hub.sh: does the hub
+#                   already run TRAIN_SHA's Go source and deploy/k8s/? (发起人拍板 9
+#                   — no new image then)
+#       `hub / build`  when it does not: hub-deploy.yml phase build, beside the
+#                   tests, on the Linux runner the train picked (fleet-ack's
+#                   buildkitd + the registry's layer cache, else ubuntu-latest):
+#                   prod-<sha7> labelled TRAIN_SHA, pushed — a red train's image
+#                   of the same sha is reused by the next (fleet-train-prebuild.sh)
+#       `hub / deploy`  once the train is green: phase deploy — no build; the
+#                   tag must still be that digest and that revision (BREAK-IT
+#                   train-prebuild-wrong-sha), the hub not moved past TRAIN_SHA,
+#                   then snapshot / check / rollout, /version must name TRAIN_SHA
+#       `发布包`     when the hub is not redeployed (a stage carries the hub's
+#                   ccquota, which must be TRAIN_SHA's source): beside the tests,
+#                   fleet-release-publish.sh --stage uploads the tree and chain and
+#                   keeps the hub's unsigned manifest (202, 30 minutes) as an
+#                   artifact; never red — no stage only means the whole publish
 #       `release`   bin/fleet-release-publish.sh TRAIN_SHA (this run's OIDC;
 #                   the hub takes release-train.yml) with the train's ledger
-#                   (#3140), then `fleet-stable.sh move TRAIN_SHA --train <run>`:
+#                   (#3140) — `--commit` the stage: check, sign, one POST; no
+#                   stage or an expired one ⇒ the whole publish — then
+#                   `fleet-stable.sh move TRAIN_SHA --train <run>`:
 #                   its CI gate reads THIS run's jobs (gate 5 is the Mac lane's), its ccquota gate
 #                   holds the hub to TRAIN_SHA's source; no --force, ever.
 #       `node tools` / `node image` (issue #3855) the managed node image of that
 #                   release: the Dockerfile's tools stage pushed from a GitHub
-#                   runner when its tag is new, then the image built in the
+#                   runner when its tag is new (from board on, beside the tests —
+#                   #3867), then — it needs the signed release — the image built in the
 #                   Shenzhen cluster (runs-on: fleet-ack, its buildkitd) and pushed
 #                   as <NODE_IMAGE_REPO>:<TRAIN_SHA> — never a gate of the move.
 #     Any red stops the train where it is: a hub already rolled stays (it serves
@@ -571,13 +589,10 @@ jobs:
 
   hub-plan:
     # Does the hub need TRAIN_SHA's image, or is it already TRAIN_SHA's source?
+    # Asked as the train boards (issue #3867): the image is built beside the tests.
     name: hub plan
-    needs: [board, train]
-    # !cancelled() + train's own verdict (issue #3864): `train` runs under always()
-    # beside jobs that are skipped on most trains (Linux 选机器, Linux 补跑?, Linux
-    # rescue), and a job reading the implicit success() after it was skipped too —
-    # run 38375663311 went green and released nothing.
-    if: "!cancelled() && needs.train.result == 'success' && needs.board.outputs.skip == 'false'"
+    needs: board
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -602,11 +617,12 @@ jobs:
 
   hub:
     # hub-deploy.yml's one deploy job, on TRAIN_SHA (its environment `prod` and
-    # its OIDC role are the same as when it runs by itself).
+    # its OIDC role are the same as when it runs by itself) — phase deploy: the
+    # image `hub / build` pushed beside the tests, by its digest (issue #3867).
     name: hub
-    needs: [board, linux, gate, train, hub-plan]
+    needs: [board, linux, gate, train, hub-plan, hub-build]
     # !cancelled(): a Linux shard lost and rescued leaves `linux` red; `train` judged it
-    if: "!cancelled() && needs.train.result == 'success' && needs.hub-plan.outputs.deploy == 'true'"
+    if: "!cancelled() && needs.train.result == 'success' && needs.hub-plan.outputs.deploy == 'true' && needs.hub-build.result == 'success'"
     permissions:
       contents: read
       deployments: read
@@ -615,18 +631,84 @@ jobs:
     uses: ./.github/workflows/hub-deploy.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
+      phase: deploy
+      digest: ${{ needs.hub-build.outputs.digest }}
     # A called workflow sees no secret the caller does not hand it — not even its
     # own environment's (claude-fleet#3860: FLEET_DEPLOY_OVERLAY_SSH_KEY arrived
     # empty and checkout asked the REST API for the private overlay repo, 404).
     secrets: inherit
 
+  hub-build:
+    # The hub image of TRAIN_SHA, built BESIDE the tests (issue #3867): pushing it
+    # changes nothing live — only `hub` above deploys it, once the train is green.
+    # The Shenzhen cluster's buildkitd when the train's Linux half is there.
+    name: hub
+    needs: [board, hub-plan, linux-pick]
+    # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
+    if: "!cancelled() && needs.hub-plan.outputs.deploy == 'true'"
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/hub-deploy.yml
+    with:
+      sha: ${{ needs.board.outputs.train_sha }}
+      phase: build
+      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+
+  release-stage:
+    # The release, staged BESIDE the tests (issue #3867): the tree and chain go up
+    # now and the hub's unsigned manifest is kept for `release` to sign. Only
+    # when the hub is not redeployed — a stage carries the RUNNING hub's ccquota,
+    # which then already is TRAIN_SHA's source — and only to a hub the train
+    # signs for (else exit 4, nothing sent). Never red: no stage means `release`
+    # publishes whole, as before.
+    name: 发布包
+    needs: [board, hub-plan]
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true' && needs.hub-plan.outputs.deploy == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # the signer's public half is computed from the key here; nothing is signed
+    environment: release-sign
+    permissions:
+      contents: read
+      id-token: write   # the publish's OIDC token
+    outputs:
+      staged: ${{ steps.stage.outputs.staged }}
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      FLEET_HUB_URL: https://claudefleet.24haowan.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          fetch-depth: 0
+      - name: fleet-release-publish.sh --stage
+        id: stage
+        env:
+          FLEET_RELEASE_SIGN_KEY: ${{ secrets.RELEASE_SIGN_KEY }}
+        run: |
+          set +e
+          bash bin/fleet-release-publish.sh "$TRAIN_SHA" --dir . --stage stage > st.txt 2>&1
+          rc=$?
+          cat st.txt
+          { echo "### 发布包 \`${TRAIN_SHA:0:7}\`（exit $rc）"; echo '```'; cat st.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" != 0 ] || echo "staged=true" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: steps.stage.outputs.staged == 'true'
+        with:
+          name: release-stage
+          path: stage/
+          retention-days: 1
+
   release:
     # The last job, so `--train` finds every other job of this run finished.
     name: release
-    needs: [board, train, hub-plan, hub, linux-rescue-plan]
+    needs: [board, train, hub-plan, hub-build, hub, release-stage, linux-rescue-plan]
     if: >-
       always() && needs.board.outputs.skip == 'false' &&
       needs.train.result == 'success' && needs.hub-plan.result == 'success' &&
+      (needs.hub-build.result == 'success' || needs.hub-build.result == 'skipped') &&
       (needs.hub.result == 'success' || needs.hub.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -710,6 +792,14 @@ jobs:
           sh bin/fleet-stable.sh move "$STABLE_SHA" --ref stable-macos --seed --dir . --repo "$GITHUB_REPOSITORY"
           echo "### Mac 通道起点：\`${STABLE_SHA:0:7}\`（之后由 mac-follow 跟）" >> "$GITHUB_STEP_SUMMARY"
 
+      # the stage `发布包` kept while the tests ran (issue #3867)
+      - uses: actions/download-artifact@v4
+        if: steps.sup.outputs.superseded != 'true' && needs.release-stage.outputs.staged == 'true'
+        continue-on-error: true   # none ⇒ the whole publish
+        with:
+          name: release-stage
+          path: stage
+
       - name: publish TRAIN_SHA to the hub
         id: pub
         if: steps.sup.outputs.superseded != 'true'
@@ -720,8 +810,10 @@ jobs:
         run: |
           set +e
           train=''; [ ! -s train.json ] || train='--train train.json'
-          # shellcheck disable=SC2086  # $train is one flag and its file, or nothing
-          bash bin/fleet-release-publish.sh "$TRAIN_SHA" --dir . $train > pub.txt 2>&1
+          # staged beside the tests: check + sign + one POST; none / expired ⇒ whole
+          commit=''; [ ! -s stage/answer.json ] || commit='--commit stage'
+          # shellcheck disable=SC2086  # $train / $commit are one flag and its path, or nothing
+          bash bin/fleet-release-publish.sh "$TRAIN_SHA" --dir . $train $commit > pub.txt 2>&1
           rc=$?
           cat pub.txt
           { echo "### publish \`${TRAIN_SHA:0:7}\` → hub"; echo '```'; cat pub.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -838,10 +930,11 @@ jobs:
     # The managed node image's `tools` stage (extras/managed-node/Dockerfile),
     # pushed once per text as <repo>:<tools-tag.sh> from here — outside CN, where
     # GitHub's release assets and dl.k8s.io download (issue #3855). Already there
-    # = a look and nothing pushed, the usual case.
+    # = a look and nothing pushed, the usual case. From board on, beside the
+    # tests (issue #3867): a tools layer deploys nothing.
     name: node tools
-    needs: [board, train]
-    if: "!cancelled() && needs.train.result == 'success' && needs.board.outputs.skip == 'false' && vars.NODE_IMAGE_REPO != ''"
+    needs: board
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true' && vars.NODE_IMAGE_REPO != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: node-image

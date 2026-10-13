@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-release-publish.sh <sha> [--hub <url>] [--dir <checkout>] [--train <json file>] [--dry-run]
-#                          [--ref stable-macos]
+#                          [--ref stable-macos] [--stage <dir> | --commit <dir>]
 #   — hand the hub a stable it then serves to every machine (issue #2772,
 #   EPIC #2770 C2). Run by CI: the release train's `release` job (before its
 #   move, issue #3142), and stable-publish.yml (dispatch only — the repair road,
@@ -33,6 +33,21 @@
 # ref and run only; the hub refuses (409) a sha ahead of its stable or behind
 # the lane. Nothing is cut, built or signed.
 #
+# --stage <dir> / --commit <dir> (issue #3867, EPIC #3863 C4): the publish in two
+# halves, so the train's release is ready by the time its tests are green.
+#   --stage   while the tests run: the commit, its chain and tree go up as above
+#             with the signer, and the hub's 202 (the unsigned manifest) is kept in
+#             <dir> (answer.json · sha · prev) — nothing is signed, nothing is
+#             stable. Only to a hub that says on /key that the TRAIN signs (a hub
+#             that signs itself would publish at once, before any test): another
+#             hub, or no FLEET_RELEASE_SIGN_KEY here, is exit 4, nothing POSTed.
+#   --commit  once they are green: the kept manifest is checked against the
+#             checkout, signed and its signatures POSTed (with --train's ledger) —
+#             the train's release step is then a check, two signatures and one
+#             POST. No stage in <dir> (another sha, none made), or the hub no longer
+#             waits for it (409: it expired after 30 minutes, or stable moved) ⇒
+#             the whole publish, exactly as without the flag, said in one line.
+#
 # The hub hashes the archive into a git tree and the commit objects into their
 # shas, so it needs no trust in this script — only in who runs it:
 #
@@ -49,7 +64,7 @@
 #      2 usage / git / no identity · 3 the hub could not be reached
 set -uo pipefail
 
-sha="" hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" dir="" dry=0 train="" ref=stable
+sha="" hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" dir="" dry=0 train="" ref=stable stage="" commit=""
 die() { printf 'fleet-release-publish: %s\n' "$*" >&2; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -57,8 +72,10 @@ while [ "$#" -gt 0 ]; do
     --dir) shift; dir="${1:-}" ;;
     --train) shift; train="${1:-}" ;;
     --ref) shift; case "${1:-}" in stable|stable-macos) ref="$1" ;; *) die "--ref takes stable or stable-macos" ;; esac ;;
+    --stage) shift; stage="${1:-}"; [ -n "$stage" ] || die "--stage takes a directory" ;;
+    --commit) shift; commit="${1:-}"; [ -n "$commit" ] || die "--commit takes a directory" ;;
     --dry-run|-n) dry=1 ;;
-    -h|--help) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [ -z "$sha" ] || die "one sha only"; sha="$1" ;;
   esac
@@ -67,12 +84,87 @@ done
 here="$(cd "$(dirname "$0")" && pwd)"
 [ -n "$dir" ] || dir="$(cd "$here/.." && pwd)"
 [ -z "$train" ] || [ -s "$train" ] || die "--train $train is not a file"
+[ -z "$stage" ] || [ -z "$commit" ] || die "--stage or --commit, not both"
+[ -z "$stage$commit" ] || [ "$ref" = stable ] || die "--stage / --commit publish stable, not $ref"
+[ -z "$stage" ] || [ -z "$train" ] || die "--train rides with --commit (the ledger is final only then)"
 [ -n "$hub" ] || die "no hub — pass --hub <url> or set FLEET_HUB_URL"
 hub="${hub%/}"
 sha=$(git -C "$dir" rev-parse -q --verify "${sha:-HEAD}^{commit}") || die "unknown commit ${sha:-HEAD} in $dir"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-publish.XXXXXX") || die "mktemp failed"
 trap 'rm -rf "$work"' EXIT
+
+# who: the run's OIDC token, else the fallback bearer — kept in a curl config
+# file (0600, removed on exit), never on an argv
+identity() {
+  [ ! -s "$work/auth.cfg" ] || return 0
+  local tok=""
+  ( umask 077; : > "$work/auth.cfg"; : > "$work/oidc.cfg" )
+  if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+    printf 'header = "Authorization: bearer %s"\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$work/oidc.cfg"
+    tok=$(curl -sS -m 30 -K "$work/oidc.cfg" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=${FLEET_PUBLISH_AUDIENCE:-ccquota-fleet-release}" |
+      sed -n 's/.*"value": *"\([^"]*\)".*/\1/p') || tok=""
+    [ -n "$tok" ] || die "no OIDC token from the Actions runtime (permissions: id-token: write?)"
+  elif [ -n "${FLEET_PUBLISH_TOKEN:-}" ]; then
+    tok="$FLEET_PUBLISH_TOKEN"
+  else
+    rm -f "$work/auth.cfg"
+    die "no identity: not a GitHub Actions run with id-token: write, and no FLEET_PUBLISH_TOKEN"
+  fi
+  printf 'header = "Authorization: Bearer %s"\n' "$tok" > "$work/auth.cfg"
+}
+run=""
+[ -z "${GITHUB_RUN_ID:-}" ] || run="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/$GITHUB_RUN_ID" # dist-ok: the run's link, for the hub's log
+
+# sign_staged <answer.json> <prev> [train]: check the 202's manifest against the checkout,
+# sign it and POST the two signatures (+ the ledger with `train`: --commit's, whose
+# first half carried none). Leaves the code in $code and
+# the hub's words in $answer; 0 = a POST was made, 1 = refused here (said why).
+sign_staged() {
+  local withtrain="${3:-}"
+  python3 -c 'import base64, json, sys; sys.stdout.buffer.write(base64.b64decode(json.load(open(sys.argv[1]))["manifest"]))' \
+    "$1" > "$work/manifest.json" || { printf 'fleet-release-publish: the hub answered 202 without a manifest: %s\n' "$(cat "$1")" >&2; return 1; }
+  python3 "$here/fleet-release-sign.py" check --key env:FLEET_RELEASE_SIGN_KEY --dir "$dir" --sha "$sha" --prev "$2" "$work/manifest.json" ||
+    { printf 'fleet-release-publish: NOT signed — the hub built something else than this commit\n' >&2; return 1; }
+  python3 "$here/fleet-release-sign.py" manifest --key env:FLEET_RELEASE_SIGN_KEY "$work/manifest.json" > "$work/sigs" ||
+    { printf 'fleet-release-publish: signing failed\n' >&2; return 1; }
+  set -- -F "sha=$sha" -F "prev=$2" -F "run=$run" -F "sig=$(sed -n 1p "$work/sigs")" -F "sshsig=$(sed -n 2p "$work/sigs")"
+  [ -z "$train" ] || [ "$withtrain" != train ] || set -- "$@" -F "train=@$train;type=application/json"
+  code=$(curl -sS -m 120 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' "$@" \
+    "$hub/v1/fleet/release/publish") || { printf 'fleet-release-publish: POST of the signature to %s failed\n' "$hub" >&2; exit 3; }
+  answer=$(cat "$work/answer" 2>/dev/null)
+}
+
+# --commit: the stage this train made, signed — else the whole publish below
+if [ -n "$commit" ]; then
+  if [ -s "$commit/answer.json" ] && [ "$(cat "$commit/sha" 2>/dev/null)" = "$sha" ]; then
+    sprev=$(cat "$commit/prev" 2>/dev/null)
+    [ -n "${FLEET_RELEASE_SIGN_KEY:-}" ] || die "--commit: a stage is kept in $commit but FLEET_RELEASE_SIGN_KEY is not set"
+    printf 'publish: %s → %s, staged — signing it\n' "${sprev:0:7}" "${sha:0:7}"
+    [ "$dry" -eq 0 ] || { printf 'dry-run: would sign the staged manifest and POST its signatures\n'; exit 0; }
+    identity
+    sign_staged "$commit/answer.json" "$sprev" train || exit 1
+    case "$code" in
+      200) printf 'published (staged, signed by the train): %s\n' "$answer"; exit 0 ;;
+      409) printf 'publish: the stage is gone (%s) — publishing whole\n' "$answer" ;;
+      5??) printf 'fleet-release-publish: the hub answered %s: %s\n' "$code" "$answer" >&2; exit 3 ;;
+      *)   printf 'fleet-release-publish: the hub answered %s: %s\n' "$code" "$answer" >&2; exit 1 ;;
+    esac
+  else
+    printf 'publish: no stage of %s in %s — publishing whole\n' "${sha:0:7}" "$commit"
+  fi
+fi
+
+# --stage: only to a hub the train signs for — one that signs itself would make
+# the release stable at once, before any test of it is green
+if [ -n "$stage" ]; then
+  [ -n "${FLEET_RELEASE_SIGN_KEY:-}" ] ||
+    { printf 'stage: nothing staged — no FLEET_RELEASE_SIGN_KEY here (the release step publishes whole)\n'; exit 4; }
+  who=$(curl -sS -m 30 -D - -o /dev/null "$hub/v1/fleet/release/key" 2>/dev/null | tr -d '\r' |
+    awk -F': ' 'tolower($1) == "x-ccquota-release-signer" { print $2 }')
+  [ "$who" = train ] ||
+    { printf 'stage: nothing staged — %s signs its own releases (signer: %s); the release step publishes whole\n' "$hub" "${who:-?}"; exit 4; }
+fi
 
 if [ "$ref" = stable-macos ]; then
   printf 'publish: stable-macos → %s to %s\n' "${sha:0:7}" "$hub"
@@ -116,25 +208,7 @@ if [ "$dry" -eq 1 ]; then
 fi
 fi
 
-# who: the run's OIDC token, else the fallback bearer — kept in a curl config
-# file (0600, removed on exit), never on an argv
-umask 077
-tok=""
-if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
-  printf 'header = "Authorization: bearer %s"\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$work/oidc.cfg"
-  tok=$(curl -sS -m 30 -K "$work/oidc.cfg" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=${FLEET_PUBLISH_AUDIENCE:-ccquota-fleet-release}" |
-    sed -n 's/.*"value": *"\([^"]*\)".*/\1/p') || tok=""
-  [ -n "$tok" ] || die "no OIDC token from the Actions runtime (permissions: id-token: write?)"
-elif [ -n "${FLEET_PUBLISH_TOKEN:-}" ]; then
-  tok="$FLEET_PUBLISH_TOKEN"
-else
-  die "no identity: not a GitHub Actions run with id-token: write, and no FLEET_PUBLISH_TOKEN"
-fi
-printf 'header = "Authorization: Bearer %s"\n' "$tok" > "$work/auth.cfg"
-tok=""
-
-run=""
-[ -z "${GITHUB_RUN_ID:-}" ] || run="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/$GITHUB_RUN_ID" # dist-ok: the run's link, for the hub's log
+identity
 if [ "$ref" = stable-macos ]; then
   code=$(curl -sS -m 120 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' \
     -F "sha=$sha" -F "ref=stable-macos" -F "run=$run" "$hub/v1/fleet/release/publish") ||
@@ -164,18 +238,17 @@ if [ "$code" = 200 ]; then
   printf 'published: %s\n' "$answer"
   exit 0
 fi
+if [ "$code" = 202 ] && [ -n "$stage" ]; then
+  # staged (issue #3867): kept for --commit, signed once the tests are green
+  { mkdir -p "$stage" && cp "$work/answer" "$stage/answer.json" && printf '%s\n' "$sha" > "$stage/sha" &&
+    printf '%s\n' "$prev" > "$stage/prev"; } || die "cannot write the stage into $stage"
+  printf 'staged: %s over %s, unsigned — sign it with --commit %s once the tests are green\n' "${sha:0:7}" "$from" "$stage"
+  exit 0
+fi
 if [ "$code" = 202 ]; then
   # the hub built it unsigned: look, then sign (issue #3559)
-  python3 -c 'import base64, json, sys; sys.stdout.buffer.write(base64.b64decode(json.load(open(sys.argv[1]))["manifest"]))' \
-    "$work/answer" > "$work/manifest.json" || { printf 'fleet-release-publish: the hub answered 202 without a manifest: %s\n' "$answer" >&2; exit 1; }
-  python3 "$here/fleet-release-sign.py" check --key env:FLEET_RELEASE_SIGN_KEY --dir "$dir" --sha "$sha" --prev "$prev" "$work/manifest.json" ||
-    { printf 'fleet-release-publish: NOT signed — the hub built something else than this commit\n' >&2; exit 1; }
-  python3 "$here/fleet-release-sign.py" manifest --key env:FLEET_RELEASE_SIGN_KEY "$work/manifest.json" > "$work/sigs" ||
-    { printf 'fleet-release-publish: signing failed\n' >&2; exit 1; }
-  code=$(curl -sS -m 120 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' -F "sha=$sha" \
-    -F "sig=$(sed -n 1p "$work/sigs")" -F "sshsig=$(sed -n 2p "$work/sigs")" \
-    "$hub/v1/fleet/release/publish") || { printf 'fleet-release-publish: POST of the signature to %s failed\n' "$hub" >&2; exit 3; }
-  answer=$(cat "$work/answer" 2>/dev/null)
+  cp "$work/answer" "$work/staged.json"
+  sign_staged "$work/staged.json" "$prev" || exit 1
   if [ "$code" = 200 ]; then
     printf 'published (signed by the train): %s\n' "$answer"
     exit 0

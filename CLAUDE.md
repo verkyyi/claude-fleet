@@ -739,7 +739,7 @@ runner else ubuntu-latest; TRAIN_SHA from the in-cluster git mirror; a shard who
 spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` /
 `train-ack-reclaimed`, deploy/k8s/runners/README.md); empty = ubuntu-latest, byte for byte;
   then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
-  with `sha=TRAIN_SHA` (skipped when `bin/fleet-train-hub.sh` finds the hub already
+  with `sha=TRAIN_SHA` (built BESIDE the tests since #3867: `hub plan` right after board, `hub / build` = phase build on the train's Linux runner — fleet-ack's buildkitd + the registry's layer cache — pushing `prod-<sha7>` labelled TRAIN_SHA; `hub / deploy` = phase deploy, no build, refuses a tag whose digest / revision is not that build's — `bin/fleet-train-prebuild.sh`, BREAK-IT `train-prebuild-wrong-sha`; a train that redeploys no hub stages its release meanwhile, `fleet-release-publish.sh --stage`, and `release` only `--commit`s it: check · sign · one POST, a stage lives 30 min; skipped when `bin/fleet-train-hub.sh` finds the hub already
   TRAIN_SHA's Go source and `deploy/k8s/`, and never backwards: a hub on a later or forked commit is left as `hub superseded`, an unreadable `/version` is red — #3319, BREAK-IT `train-hub-backwards`), `fleet-release-publish.sh TRAIN_SHA`,
   `fleet-stable.sh move TRAIN_SHA --train <run>` (gate 3 reads the run's jobs) —
   so the hub and stable never come from two commits; the doctor's `hub-image` row
