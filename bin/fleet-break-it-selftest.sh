@@ -4230,6 +4230,49 @@ SH
   WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
 }
 
+# ---- stable-macos-ahead (#3868, EPIC #3863 C5): a Mac follows refs/tags/stable-macos,
+# which must never lead stable — a Mac would run what Linux never verified. The way
+# it would happen is a lane move onto a commit stable has not reached (by hand, or a
+# train whose stable move failed after its macOS half went green). fleet-stable.sh
+# refuses it (`M:`), and a lane at stable moves; a darwin install's one reader
+# (fleet_stable_ref_for) then names the lane, a linux one stable.
+drill_stable_macos_ahead() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/macahead"; mkdir -p "$d/shim" "$d/seed"
+  cat > "$d/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *actions/workflows/*) printf '%s\tcompleted\tsuccess\tpush\t5\tselftests (macOS)\n%s\tcompleted\tsuccess\tpush\t6\tselftests (macOS)\n' "\$(cat "$d/c1")" "\$(cat "$d/c2")" ;;
+  *) printf 'completed success shard 1\n' ;;
+esac
+SH
+  chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm verified && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'not on stable yet' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="a lane move ahead of stable exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — M:'*) ;; *) WHY="the refusal is not prefixed M: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  git --git-dir="$d/origin.git" rev-parse -q --verify refs/tags/stable-macos >/dev/null \
+    && { WHY="the Mac lane was created ahead of stable"; return 1; }
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move --ref stable-macos --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the lane move onto stable failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the lane is not at stable"; return 1; }
+  out=$( . "$BIN/fleet-versions-lib.sh"; printf '%s %s' "$(fleet_stable_ref_for darwin "$d/co" origin)" "$(fleet_stable_ref_for linux "$d/co" origin)")
+  SECS=$(since "$t0")
+  [ "$out" = "stable-macos stable" ] || { WHY="the one reader names «$out», want «stable-macos stable»"; return 1; }
+  WHAT="Mac 通道挪到 stable 之前的提交被拒（M:）；挪到 stable 本身照常；Mac 读 stable-macos、Linux 读 stable"
+}
+
 # ---- train-push-cancels (#3141, EPIC #3139 C2): every merge used to start its own
 # macOS run, and the next merge cancelled it (17 of 20 one night) — so nothing was
 # ever green long enough to release. Now ONE lane: release-train.yml, a fixed
