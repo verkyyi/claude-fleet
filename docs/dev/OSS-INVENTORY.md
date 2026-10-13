@@ -37,6 +37,19 @@ tree: 21 个文件 · 62 处（允许清单另放过 60 个文件）
   by class: config 21 个文件 · placeholder 0 个文件（含 config 的文件记 config）
   豁免:     9 处（行尾 oss-ok:，不进门禁与基线）
 ```
+- **部署覆盖层搬进私有部署仓库之后（#3630，2026-10-13）**：`deploy/k8s` 的生产覆盖层
+  （overlays/prod · updating/prod · credproxy/prod）在私有部署仓库里，hub-deploy 用仓库变量
+  `FLEET_DEPLOY_OVERLAY_REPO` 把它叠到 `deploy/k8s/` 上；`*/fleet-workers` 三层留下的是占位值。
+  `deploy` 归零：
+
+```
+$ bin/oss-scan.sh --summary
+tree: 7 个文件 · 19 处（允许清单另放过 60 个文件）
+  by dir:   .github 6 · skills 1
+  by rule:  cloud 3 个文件/11 处 · corp-domain 3 个文件/6 处 · machine 1 个文件/2 处
+  by class: config 7 个文件 · placeholder 0 个文件（含 config 的文件记 config）
+  豁免:     8 处（行尾 oss-ok:，不进门禁与基线）
+```
 
 ## 门禁：新提交不再混进来（C2，#3572）
 
@@ -145,7 +158,7 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `.github/actions/hub-acr/acr.js` | 4 | cloud 4 | config |
 | `.github/actions/hub-kubeconfig/action.yml` | 2 | cloud 2 | config |
 | `.github/actions/hub-kubeconfig/oidc.js` | 5 | cloud 5 | config |
-| `.github/workflows/hub-deploy.yml` | 4 | cloud 1 · corp-domain 3 | config |
+| `.github/workflows/hub-deploy.yml` | 1 | corp-domain 1 | config |
 | `.github/workflows/release-train.yml` | 4 | corp-domain 4 | config |
 | `.github/workflows/stable-publish.yml` | 1 | corp-domain 1 | config |
 | `LICENSE` | — | — | allow |
@@ -174,27 +187,13 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `conf/oss-scan.rules` | — | — | allow |
 | `deploy/k8s/RUNBOOK.md` | — | — | allow |
 | `deploy/k8s/base/ccquota-pricing.yaml` | — | — | allow |
-| `deploy/k8s/caches/fleet-workers/kustomization.yaml` | 6 | cloud 3 · corp-domain 3 | config |
-| `deploy/k8s/credproxy/fleet-workers/deployment-env.yaml` | 1 | corp-domain 1 | config |
-| `deploy/k8s/credproxy/fleet-workers/kustomization.yaml` | 2 | cloud 1 · corp-domain 1 | config |
-| `deploy/k8s/credproxy/prod/deployment-env.yaml` | 1 | corp-domain 1 | config |
-| `deploy/k8s/credproxy/prod/ingress-hosts.yaml` | 5 | corp-domain 5 | config |
-| `deploy/k8s/credproxy/prod/kustomization.yaml` | 2 | cloud 1 · corp-domain 1 | config |
 | `deploy/k8s/egress/base/fleet-egress.py` | — | — | allow |
-| `deploy/k8s/egress/fleet-workers/deployment-env.yaml` | 1 | private-ipv4 1 | config |
-| `deploy/k8s/egress/fleet-workers/kustomization.yaml` | 2 | cloud 1 · corp-domain 1 | config |
-| `deploy/k8s/overlays/prod/debug-volume.yaml` | 1 | cloud 1 | config |
-| `deploy/k8s/overlays/prod/deployment-env.yaml` | 7 | corp-domain 4 · gh-owner 2 · machine 1 | config |
-| `deploy/k8s/overlays/prod/ingress-hosts.yaml` | 5 | corp-domain 5 | config |
-| `deploy/k8s/overlays/prod/kustomization.yaml` | 4 | cloud 2 · corp-domain 2 | config |
-| `deploy/k8s/overlays/prod/release-volume.yaml` | 1 | cloud 1 | config |
-| `deploy/k8s/updating/prod/kustomization.yaml` | 2 | cloud 1 · corp-domain 1 | config |
 | `docs/dev/MANAGED-LINUX.md` | — | — | allow |
 | `extras/gh-relay/README.md` | — | — | allow |
 | `extras/gh-relay/gh-relay.py` | — | — | allow |
 | `extras/gh-relay/gh-relay.service` | — | — | allow |
 | `extras/managed-node/render.py` | — | — | allow |
-| `extras/web-chat/ui/dist/assets/index-62DAmW9a.js` | — | — | allow |
+| `extras/web-chat/ui/dist/assets/index-Bqwz13YT.js` | — | — | allow |
 | `plugins/fleet-browser/.claude-plugin/plugin.json` | — | — | allow |
 | `plugins/fleet-epic/.claude-plugin/plugin.json` | — | — | allow |
 | `plugins/fleet-feedback/.claude-plugin/plugin.json` | — | — | allow |

@@ -1,5 +1,9 @@
 # deploy/k8s/credproxy — 中心代理（集群凭据代理）
 
+> 下文的 `overlays/prod` · `updating/prod` · `credproxy/prod` · `*/fleet-workers` 是部署自己的覆盖层，
+> 我们的在私有部署仓库里（#3630）：手工 `kubectl` 之前先把它的 `k8s/` 叠到本仓库的 `deploy/k8s/` 上
+> （`cp -R <部署仓库>/k8s/. deploy/k8s/`，[../README.md](../README.md)）。
+
 claude-fleet#1973（EPIC #1967 C6）。不可信机器上的会话手里只有入口签的会话通行证
 （`fcp-h1.`，C2），本机代理（C3）把请求连同通行证发到这里；中心代理问入口「这张通行证
 还算不算、是谁的会话、绑的哪个账号」，拿到该账号的短期 access token（入口保险箱的租约读），

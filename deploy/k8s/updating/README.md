@@ -1,5 +1,9 @@
 # deploy/k8s/updating — 「正在更新」页
 
+> 下文的 `overlays/prod` · `updating/prod` · `credproxy/prod` · `*/fleet-workers` 是部署自己的覆盖层，
+> 我们的在私有部署仓库里（#3630）：手工 `kubectl` 之前先把它的 `k8s/` 叠到本仓库的 `deploy/k8s/` 上
+> （`cp -R <部署仓库>/k8s/. deploy/k8s/`，[../README.md](../README.md)）。
+
 claude-fleet#2052（EPIC #1982）。入口是单副本 SQLite（`Recreate`），每次发布有几十秒没有
 就绪的 pod。以前这几十秒里 ingress-nginx 自己回一个光秃秃的 503；现在入口的 Ingress
 带 `nginx.ingress.kubernetes.io/default-backend: ccquota-hub-updating`

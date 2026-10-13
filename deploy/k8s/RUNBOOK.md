@@ -2,6 +2,9 @@
 
 > 2026-10-06 从 acme-monorepo `doc/k8s-yamls/ccquota/RUNBOOK.md` 搬来（EPIC #1982 C1，issue #1983）。
 > 发布见 [README.md](README.md)。
+> 下文的 `overlays/prod` · `updating/prod` · `credproxy/prod` · `*/fleet-workers` 是部署自己的覆盖层，
+> 我们的在私有部署仓库里（#3630）：手工 `kubectl` 之前先把它的 `k8s/` 叠到本仓库的 `deploy/k8s/` 上
+> （`cp -R <部署仓库>/k8s/. deploy/k8s/`，[README.md](README.md)）。
 
 入口有两种形态（#2125，EPIC #2119）：
 

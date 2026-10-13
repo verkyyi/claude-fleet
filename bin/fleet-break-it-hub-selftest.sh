@@ -23,7 +23,7 @@
 #                                                   (go test, when a toolchain is here); the kind drill is
 #                                                   .github/workflows/hub-rolling.yml
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single,
-#                                                   overlays/prod (only RWX OSS claims: release-volume.yaml)
+#                                                   overlays/prod (only RWX OSS claims) when FLEET_DEPLOY_K8S lays it here
 #   hub-shape-extra-volume                          .github/actions/hub-release/release.sh shape (the data disk is
 #                                                   the claim mounted at /data, not any PVC)
 #   hub-read-refused-silent                         bin/fleet-account.sh (quota_budget_json), fleet-lib.sh
@@ -150,6 +150,13 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
+# The deployment's own prod overlay (claude-fleet#3630): ours lives in a private
+# deploy repo that hub-deploy lays over deploy/k8s. FLEET_DEPLOY_K8S names such a
+# laid-over k8s/ tree; with none here the drills' prod clauses are skipped
+# (hub-deploy's render-check.sh --need-prod renders it on every release).
+PROD_K8S=${FLEET_DEPLOY_K8S:-$ROOT/deploy/k8s}
+PROD_OVL="$PROD_K8S/overlays/prod"
+PROD_GONE='生产覆盖层在私有部署仓库（#3630），这台没有：那一半由 hub-deploy 叠上后核对'
 
 # ---- release-unverified (#2483, EPIC #2482 C3): `fleet release` runs the whole
 # road — CI, the move, the hub, every machine, this machine — and stops at the
@@ -253,14 +260,17 @@ drill_hub_disk_attach_stuck() {
   grep -q 'kind: PersistentVolumeClaim' "$c/pvc.yaml" 2>/dev/null || { WHY="the single SQLite shape lost its disk (${c#$ROOT/}/pvc.yaml)"; return 1; }
   if command -v kubectl >/dev/null 2>&1 && r=$(kubectl kustomize "$b" 2>/dev/null); then
     case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="the base render mounts a disk"; return 1 ;; esac
-    r=$(kubectl kustomize "$ROOT/deploy/k8s/overlays/prod" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
+    if [ ! -f "$PROD_OVL/kustomization.yaml" ]; then
+      WHAT="base 的渲染没有盘（库在 Postgres），盘只在单份形态的组件里（回滚用）；$PROD_GONE"; SECS=$(since "$t0"); return 0
+    fi
+    r=$(kubectl kustomize "$PROD_OVL" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
     case "$r" in *"kind: PersistentVolumeClaim"*) WHY="prod still mounts a disk after the switch (the render creates a claim)"; return 1 ;; esac
     # A claim prod mounts is no cloud disk only when the overlay declares it as
     # an RWX OSS volume (ossfs: a network mount, nothing to detach/attach) — the
     # /releases volume of #2366; any other claim is a disk that can stick.
     local cl pv nr=0
     for cl in $(printf '%s\n' "$r" | sed -n 's/^[[:space:]]*claimName:[[:space:]]*//p'); do
-      pv=$(grep -l "^  name: $cl\$" "$ROOT/deploy/k8s/overlays/prod"/*.yaml 2>/dev/null | head -1)
+      pv=$(grep -l "^  name: $cl\$" "$PROD_OVL"/*.yaml 2>/dev/null | head -1)
       if [ -z "$pv" ] || ! grep -q 'ReadWriteMany' "$pv" || ! grep -q 'driver: ossplugin.csi.alibabacloud.com' "$pv" \
          || grep -q 'diskplugin' "$pv"; then
         WHY="prod still mounts a disk after the switch (claim $cl is not a declared RWX OSS volume)"; return 1
@@ -706,9 +716,13 @@ drill_github_signin_unreachable() {
     || { WHY="the relay's Caddyfile has no /github-oauth/login/oauth/access_token route"; return 1; }
   grep -q '"/github-oauth/"' "$ROOT/extras/cred-relay/fleet-relay-check.py" \
     || { WHY="the relay's checker does not know the /github-oauth/ prefix"; return 1; }
-  grep -A1 'name: CCQUOTA_GITHUB_OAUTH_VIA' "$ROOT/deploy/k8s/overlays/prod/deployment-env.yaml" | grep -q 'value: "relay"' \
-    || { WHY="the prod overlay does not set CCQUOTA_GITHUB_OAUTH_VIA=relay"; return 1; }
   WHAT='github.com 不通 ⇒ 换令牌经转发机成功、日志写经中转；转发机连不上 / 拒通行证 / 不答 ⇒ 直连再试一次；两条都不通 ⇒ 原来那句提示、有上限；/github-oauth/ 只开那一条路径、只认 frh1.'
+  if [ -f "$PROD_OVL/deployment-env.yaml" ]; then
+    grep -A1 'name: CCQUOTA_GITHUB_OAUTH_VIA' "$PROD_OVL/deployment-env.yaml" | grep -q 'value: "relay"' \
+      || { WHY="the prod overlay does not set CCQUOTA_GITHUB_OAUTH_VIA=relay"; return 1; }
+  else
+    WHAT="${WHAT}；$PROD_GONE"
+  fi
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
@@ -743,8 +757,10 @@ drill_entry_dns_follows() {
   grep -q '^func TestDNSPodProvider(' "$f" 2>/dev/null || { WHY="the provider test is not in ${f#$ROOT/}"; return 1; }
   grep -q 'Leader(ctx, "entry-dns")' "$ROOT/tokenledger/internal/api/fleet_entry_dns.go" \
     || { WHY="the address-record loop is not gated on the leader"; return 1; }
-  grep -q 'acme-dnspod' "$ROOT/deploy/k8s/overlays/prod/deployment-env.yaml" \
-    || { WHY="the hub's deployment no longer reads the DNSPod token from new-deploy/acme-dnspod"; return 1; }
+  if [ -f "$PROD_OVL/deployment-env.yaml" ]; then
+    grep -q 'acme-dnspod' "$PROD_OVL/deployment-env.yaml" \
+      || { WHY="the hub's deployment no longer reads the DNSPod token from new-deploy/acme-dnspod"; return 1; }
+  fi
   WHAT='地址变 ⇒ 下一拍改（同一条记录）；家连不上 ⇒ 一条不改；手动换家 ⇒ 指新家；手改 ⇒ 改回 + 「有人手改」；调用失败 ⇒ 不算写过、下一拍再试；没 token ⇒ 0 次调用；DNSPod 只认带 fleet 备注的 cf 记录，token 不进 URL / 错误；同一路由器后两个家：钥匙页端口 = 家的转发端口，换家说端口要改，别的端口上的 IPv6 不写 AAAA'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
