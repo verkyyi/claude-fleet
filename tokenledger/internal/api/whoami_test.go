@@ -126,11 +126,41 @@ func TestLogout_WithoutGitHubLinksHome(t *testing.T) {
 	}
 }
 
+// 退出后回官网（#3798）：表单的 to=site / site-en 只在入口挂着官网时才认，
+// 只认这两个词，别的一概回退出页——仍然没有开放重定向。
+func TestLogout_BackToTheSite(t *testing.T) {
+	h := newHarness(t)
+	enablePeople(t, h)
+	post := func(to string) string {
+		resp := h.postFormBody(t, "/logout", "to="+url.QueryEscape(to), map[string]string{"Origin": h.http.URL})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("POST /logout to=%s = %d; want 303", to, resp.StatusCode)
+		}
+		return resp.Header.Get("Location")
+	}
+	if loc := post("site"); loc != "/app/logout" {
+		t.Errorf("官网没开，to=site → %q; want /app/logout", loc)
+	}
+	h.srv.Site = true
+	h.srv.SiteFS = fstest.MapFS{"index.html": {Data: []byte("SITE")}}
+	for to, want := range map[string]string{"site": "/", "site-en": "/en/", "https://evil.example": "/app/logout", "": "/app/logout"} {
+		if loc := post(to); loc != want {
+			t.Errorf("官网开着，to=%q → %q; want %q", to, loc, want)
+		}
+	}
+}
+
 // postForm sends a form POST that does not follow redirects, so the test reads the
 // 303 and its Set-Cookie headers itself.
 func (h *harness) postForm(t *testing.T, path string, hdr map[string]string) *http.Response {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, h.http.URL+path, strings.NewReader(""))
+	return h.postFormBody(t, path, "", hdr)
+}
+
+// postFormBody is postForm with a form body (a=b&c=d).
+func (h *harness) postFormBody(t *testing.T, path, body string, hdr map[string]string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	for k, v := range hdr {
 		req.Header.Set(k, v)

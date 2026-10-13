@@ -28,7 +28,7 @@
 //
 // Fails closed: no /v1/me, no menu — the page says it could not tell who you
 // are and offers to sign in again, rather than drawing a menu that guesses.
-import { APP, esc, ic, ICONS, PAGES, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView, freshness, streamLine } from './lib/shell.js';
+import { APP, esc, ic, ICONS, PAGES, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView, freshness, streamLine, signoutTo, topSignout } from './lib/shell.js';
 import { createStream } from './lib/stream.js';
 import { routeFor, movedTo, intercept, timerBag, readCache, isRead, CACHE_TTL } from './lib/router.js';
 import { t, locale, chooseLocale } from './lib/i18n.js';
@@ -108,13 +108,13 @@ function frame(me, page) {
   const zh = locale() === 'zh-CN';
   const langsw = `<div class="langsw" role="group" aria-label="${esc(t('ui.lang'))}"><button type="button" data-shell="lang" data-lang="zh-CN" lang="zh-CN" aria-pressed="${zh}">中文</button><button type="button" data-shell="lang" data-lang="en" lang="en" aria-pressed="${!zh}">EN</button></div>`;
   const foot = v ? `<div class="side-foot">${langsw}${v.logout
-    ? `<form method="post" action="/app/logout"><button class="me" type="submit" title="${esc(t('ui.me.signout'))}"><span class="av" style="background:var(--brand)">${esc(v.initials)}</span><span class="who"><b>${esc(v.name)}</b><span>${esc(v.sub)}</span></span>${ic('out')}</button></form>`
+    ? `<form method="post" action="/app/logout">${signoutTo()}<button class="me" type="submit" title="${esc(t('ui.me.signout'))}"><span class="av" style="background:var(--brand)">${esc(v.initials)}</span><span class="who"><b>${esc(v.name)}</b><span>${esc(v.sub)}</span></span>${ic('out')}</button></form>`
     : `<div class="me"><span class="av" style="background:var(--brand)">${esc(v.initials)}</span><span class="who"><b>${esc(v.name)}</b><span>${esc(v.sub)}</span></span></div>`}</div>` : '';
   return `<div class="app" id="app">
     <aside class="side" id="side"><a class="logo" href="${APP}"><span class="logo-mark"><svg viewBox="0 0 24 24">${ICONS.fleet}</svg></span>claudefleet</a>
       <div class="fleet-sw"><b>${esc(t('ui.fleet', { name: v ? v.name : '' }))}</b><span>${esc(location.host)}</span></div>
       <nav class="nav" aria-label="${esc(t('ui.nav.label'))}">${nav}</nav>${foot}</aside>
-    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span><span id="viewslot">${viewSwitch(me, page)}</span><span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span><span class="live" id="streamst" hidden><span class="fresh"></span></span></header>
+    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span><span id="viewslot">${viewSwitch(me, page)}</span><span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span><span class="live" id="streamst" hidden><span class="fresh"></span></span>${topSignout(v)}</header>
       <div class="content" id="content" aria-live="polite"><div class="ghostrow">${esc(t('ui.loading'))}</div></div></div>
     <div class="scrim nav-scrim" data-shell="menu" hidden style="z-index:44"></div>
   </div>`;

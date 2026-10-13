@@ -73,6 +73,9 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .lang a[aria-current=page]{background:var(--surface-2);color:var(--ink)}
 .nav .btn{height:40px;padding:0 18px;font-size:15px}
 .signin{font-size:15px;color:var(--ink-2);padding:0 6px}
+/* signed in (claude-fleet#3798): 进入控制台 · 退出 instead of 登录 · 试用 */
+.nav-r [hidden]{display:none}
+.out{margin:0}.out button{font:inherit;font-size:15px;color:var(--ink-2);background:none;border:0;padding:0 6px;cursor:pointer;white-space:nowrap}
 
 /* hero */
 .hero{position:relative;padding:84px 0 48px;text-align:center;overflow:hidden}
@@ -240,6 +243,7 @@ footer a:hover{color:var(--ink)}
   .wrap{padding:0 20px}
   .nav .wrap{height:58px;gap:8px}
   .signin{display:none}
+  .out button{padding:0 2px}
   .brand{font-size:17px} .brand svg{width:28px;height:28px}
   .nav .btn{height:38px;padding:0 14px;font-size:14px}
   .lang a{padding:6px 8px}
@@ -269,6 +273,11 @@ footer a:hover{color:var(--ink)}
   .end h2,html[lang=zh-CN] .end h2{font-size:32px}
   footer nav{margin-left:0}
 }
+@media (max-width:440px){
+  /* signed in, a phone's nav holds 进入控制台 · 退出: the mark stands for the name */
+  html.in .brand{font-size:0;gap:0}
+  html.in .nav .btn{padding:0 12px}
+}
 </style>
 </head>
 <body>
@@ -279,8 +288,10 @@ footer a:hover{color:var(--ink)}
   <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>ClaudeFleet</a>
   <div class="nav-r">
     <nav class="lang" aria-label="{{lang_group}}"><a href="/" hreflang="zh-CN" lang="zh-CN" data-set="zh"{{cur_zh}}>中</a><a href="/en/" hreflang="en" lang="en" data-set="en"{{cur_en}}>EN</a></nav>
-    <a class="signin" href="/app">{{signin}}</a>
-    <a class="btn btn-p" href="/app/try">{{try}}</a>
+    <a class="signin" href="/app" data-out>{{signin}}</a>
+    <a class="btn btn-p" href="/app/try" data-out>{{try}}</a>
+    <a class="btn btn-p" href="/app" id="to-app" hidden>{{console}}</a>
+    <form class="out" id="sign-out" method="post" action="/logout" hidden><input type="hidden" name="to" value="{{logout_to}}"><button type="submit">{{signout}}</button></form>
   </div>
 </div></header>
 
@@ -422,6 +433,16 @@ footer a:hover{color:var(--ink)}
     try{localStorage.setItem(KEY,want)}catch(e){}
     if(want!==here){location.replace((want==='zh'?'/':'/en/')+location.search+location.hash);return}
   }
+
+  /* signed in: the nav says 进入控制台 · 退出 (claude-fleet#3798). The page is
+     the same for everyone (cached); who is looking is asked of /v1/me. */
+  if(window.fetch)fetch('/v1/me',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).then(function(me){
+    if(!me)return;
+    document.documentElement.classList.add('in');
+    document.querySelectorAll('[data-out]').forEach(function(e){e.hidden=true});
+    document.getElementById('to-app').hidden=false;
+    if(me.can_logout)document.getElementById('sign-out').hidden=false;
+  }).catch(function(){});
 
   var stage=document.getElementById('stage'),$=function(s){return document.querySelector(s)};
   function setDev(d){stage.dataset.dev=d;

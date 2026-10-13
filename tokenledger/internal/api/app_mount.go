@@ -137,9 +137,14 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 // serveRoot answers "/": the public site for someone signed out while the
 // site is on, else the console. The gate decides who is signed in — a
 // ?token= link is moved into its cookie on the way, as on every page, so the
-// token never rides on into /app's address.
+// token never rides on into /app's address. Signed in, the built site is
+// shown too (its nav then says 进入控制台 · 退出 — claude-fleet#3798), so the
+// front page is never a door that only leads in.
 func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 	toApp := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.siteServed() && s.serveSite(w, r) {
+			return
+		}
 		http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
 	})
 	signedOut := s.serveSite
@@ -147,6 +152,15 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 		signedOut = func(w http.ResponseWriter, r *http.Request) bool { toApp(w, r); return true }
 	}
 	s.withPageLang(s.viewerOr(toApp, signedOut)).ServeHTTP(w, r)
+}
+
+// siteServed: the site is on and this hub carries its built front page.
+func (s *Server) siteServed() bool {
+	if !s.Site || s.SiteFS == nil {
+		return false
+	}
+	_, err := fs.Stat(s.SiteFS, "index.html")
+	return err == nil
 }
 
 // serveSite is the public site's front page: SiteFS's index.html (中文; the
