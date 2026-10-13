@@ -1,11 +1,26 @@
-# fleet documentation
+# fleet help
 
-fleet lets a small team move many development tasks forward at once with its own AI subscriptions (Claude Code, Codex): one session and one separate copy of the code per task, every session in one place — who is working and who is waiting for your answer, at a glance.
+Sign in, say in a chat what you need done, and a session does it and tells you when it is finished — on your computer or your phone. Find where to start by who you are.
 
-The English pages are being written; until then each one links to its complete Chinese page. Pick the road that fits you:
+The English pages are being written; until then each one links to its complete Chinese page.
 
-| You are | Your situation | Start here |
-|---|---|---|
-| **A self-hosting team** | You run fleet on your own computers — one machine, or your own entry connecting several | [Self-host · Quickstart](self-host/quickstart.md) | <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
-| **A hosted admin** | You were given an entry set up for your team, and connect subscriptions and invite colleagues | [Hosted admin · Quickstart](hosted/quickstart.md) | <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
-| **A member** | Your admin sent you an invite and you want your first session | [Member · Quickstart](member/quickstart.md) | <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
+## Use it
+
+| You are | Start here |
+|---|---|
+| **A member**: you got an invite | [From first sign-in to your first session](member/quickstart.md) · then [Everyday use](member/usage.md) | <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
+| **An admin**: people, subscriptions and quota | [Invite people, connect subscriptions, see usage](hosted/quickstart.md) · then [Admin handbook](admin/index.md) | <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
+| **Continuing on your phone or another computer** | [Connecting from a computer or phone](member/connect.md) | <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
+
+A few words:
+
+- **Session**: an AI (Claude or Codex) doing the work for you. It keeps going when your computer is off.
+- **Task**: one thing you asked for. One session per task; you are told when it is done.
+- **Device**: the machine a session actually runs on. You don't pick it — fleet does.
+- **Quota**: how much of the subscription is left in the 5-hour / 7-day windows. The admin sets each person's share.
+
+Having trouble: [FAQ](faq.md) · [Troubleshooting](troubleshooting.md) <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->
+
+## Self-host and develop
+
+Want to run the whole thing on your own machines (entry, machines and subscriptions all yours)? This road is for self-hosting teams and developers: [Self-host · Quickstart](self-host/quickstart.md) · [Install and deploy](self-host/install.md) · [Security and isolation](security.md) <!-- docs-links-ok: docs-build.sh writes the en page while it is pending -->

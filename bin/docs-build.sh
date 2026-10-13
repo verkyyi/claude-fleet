@@ -76,15 +76,18 @@ import html, json, os, re, shutil, subprocess, sys
 
 SRC, OUT, REPO, MODE = sys.argv[1:5]
 LANGS = ('zh', 'en')
-# The three roads, in the order the index tells them; a page outside these
-# directories is shared by all three (faq, troubleshooting, security).
-READERS = ('self-host', 'hosted', 'member')
+# The three roads, in the order the index tells them (issue #3941): using it
+# first — member, admin — and self-hosting last, as the side road. A page outside
+# these directories is shared by the using roads (faq, troubleshooting, admin/),
+# except SELF_HOST_PAGES, which sit with self-host.
+READERS = ('member', 'hosted', 'self-host')
+SELF_HOST_PAGES = ('security',)
 UI = {
-    'zh': {'readers': {'self-host': '自托管团队', 'hosted': '托管客户的管理员', 'member': '成员'},
-           'common': '都会用到', 'home': '文档首页', 'other': 'English', 'pending': '',
+    'zh': {'readers': {'self-host': '自托管与开发', 'hosted': '管理员', 'member': '成员'},
+           'common': '都会用到', 'home': '帮助首页', 'other': 'English', 'pending': '',
            'source': '本页 Markdown'},
-    'en': {'readers': {'self-host': 'Self-hosting team', 'hosted': 'Hosted admin', 'member': 'Member'},
-           'common': 'For everyone', 'home': 'Docs home', 'other': '中文',
+    'en': {'readers': {'self-host': 'Self-host & develop', 'hosted': 'Admin', 'member': 'Member'},
+           'common': 'For everyone', 'home': 'Help home', 'other': '中文',
            'pending': 'English version in preparation. The Chinese page is complete:',
            'source': 'Markdown of this page'},
 }
@@ -235,7 +238,7 @@ a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
 header .brand{font:600 17px var(--f-display);color:var(--ink)}
 header nav{display:flex;flex-wrap:wrap;gap:4px}header nav a{padding:4px 10px;border-radius:7px;color:var(--ink-2);font-size:14px}
-header nav a.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
+header nav a.aux{margin-left:10px;color:var(--muted)}header nav a.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
 header .lang{margin-left:auto;font-size:14px}
 .wrap{display:grid;grid-template-columns:220px minmax(0,760px);gap:40px;max-width:1080px;margin:0 auto;padding:28px 24px 80px}
 aside{font-size:14px}aside h4{margin:18px 0 6px;font-size:12px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
@@ -274,8 +277,9 @@ def reader_of(p):
 def frame(lang, page, title, body, all_titles, pending=False):
     ui = UI[lang]
     cur = reader_of(page)
-    nav = ''.join('<a href="%s"%s>%s</a>' % (html.escape(rel(page, r + '/quickstart')),
-                  ' class="on"' if r == cur else '', ui['readers'][r]) for r in READERS)
+    nav = ''.join('<a href="%s" class="%s">%s</a>' % (html.escape(rel(page, r + '/quickstart')),
+                  ' '.join(c for c in ('on' if r == cur else '', 'aux' if r == 'self-host' else '') if c),
+                  ui['readers'][r]) for r in READERS).replace(' class=""', '')
     side = ['<a href="%s"%s>%s</a>' % (html.escape(rel(page, 'index')), ' class="on"' if page == 'index' else '', ui['home'])]
     def group(name, members):
         if not members:
@@ -284,10 +288,14 @@ def frame(lang, page, title, body, all_titles, pending=False):
         for p in members:
             side.append('<a href="%s"%s>%s</a>' % (html.escape(rel(page, p)), ' class="on"' if p == page else '',
                                                    html.escape(all_titles[p])))
-    order = lambda p: (0 if p.endswith('/quickstart') else 1, p)
-    if cur:
+    order = lambda p: (0 if p.endswith('/quickstart') or p.endswith('/index') else 1, p)
+    if cur and cur != 'self-host':
         group(ui['readers'][cur], sorted((p for p in all_titles if reader_of(p) == cur), key=order))
-    group(ui['common'], sorted(p for p in all_titles if p != 'index' and not reader_of(p)))
+    group(ui['common'], sorted((p for p in all_titles if p != 'index' and not reader_of(p)
+                                and p not in SELF_HOST_PAGES), key=order))
+    # the side road always last, so a page's first screen leads with using it
+    group(ui['readers']['self-host'], sorted((p for p in all_titles if reader_of(p) == 'self-host'), key=order)
+          + [p for p in SELF_HOST_PAGES if p in all_titles])
     other = 'en' if lang == 'zh' else 'zh'
     other_url = url_prefix(other) + ('' if page == 'index' else page)
     src = os.path.basename(page) + '.md'
