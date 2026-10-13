@@ -184,6 +184,7 @@ func TestWxRelayRefused(t *testing.T) {
 // callback does not exist.
 func TestWxRelayOff(t *testing.T) {
 	h := newWxHarness(t)
+	h.srv.WeChat.MPAppID, h.srv.WeChat.MPSecret = "", "" // the harness's own in-WeChat road, never set in prod
 	b := newBrowser(t, wechatUA)
 	if scene, _ := h.signinScene(t, b); !wxSceneInRange(scene) {
 		t.Fatalf("scene %d", scene)
