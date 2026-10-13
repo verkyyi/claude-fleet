@@ -927,6 +927,9 @@ func (s *Server) routes() *routeMux {
 	// index (claude-fleet#1987).
 	ui := s.uiPathOr404(s.withPageLang(s.viewerOnly(http.HandlerFunc(s.serveUI))))
 	mux.Handle("/", ui)
+	// 我的 (claude-fleet#3926): a page of the new console only — appMount
+	// serves it at /app/me; here is where it lands with no console build (404).
+	mux.Handle(mePagePath, s.appSide())
 	// The new console's admin side (claude-fleet#3925): an admin's, and to
 	// anyone else what an unknown address answers (app_mount.go).
 	mux.Handle(AdminPrefix, s.adminSide(ui))

@@ -43,6 +43,8 @@ var appPagePaths = map[string]bool{
 	"/admin/users": true, "/admin/settings": true, "/admin/audit": true, feedbackPagePath: true,
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
+	// the new console's own pages, with no old page behind them (EPIC #3923)
+	mePagePath: true,
 }
 
 // appPagePrefixes are the console's pages that carry one name under them
@@ -77,6 +79,11 @@ func isAppPage(p string) bool {
 // does not exist answers — a 404, one role_denied audit row — never a
 // redirect, which would itself say the page is there.
 
+// mePagePath is 我的 (C3): the person, their devices and settings, sign-out
+// and — for an admin — the way to the admin side. A page of the new console
+// only: no old page answers at it.
+const mePagePath = "/me"
+
 // AdminPrefix is where the admin side of the new console is mounted.
 const AdminPrefix = "/admin"
 
@@ -104,9 +111,10 @@ type consolePage struct {
 
 // consolePages is every page the console moves (EPIC #3923 «逐页去向»).
 var consolePages = []consolePage{
-	// 我的
-	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3"},
-	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3"},
+	// 我的 — the conversation is its front page, 我的 its own (C3)
+	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3", live: true},
+	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3", live: true},
+	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3", live: true},
 	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
 	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
 	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5"},
@@ -304,8 +312,15 @@ func (s *Server) adminSide(ui http.Handler) http.Handler {
 }
 
 // consoleNewLive says whether p is a live row's new page (so a bare old
-// address of the same spelling, /admin/settings, is the new page now).
+// address of the same spelling, /admin/settings, is the new page now) — and
+// not an old page still in place: /app/usage is where the live /app/quota
+// row goes, yet 我的用量 stays the old page until its own row is live.
 func consoleNewLive(p string) bool {
+	for _, c := range consolePages {
+		if c.old == p && !c.live {
+			return false
+		}
+	}
 	for _, c := range consolePages {
 		if !c.live {
 			continue
@@ -317,6 +332,29 @@ func consoleNewLive(p string) bool {
 	}
 	return false
 }
+
+// consoleBuilt says this hub carries a build of the console's side; without
+// one a page the table has moved stays the old page it was.
+func (s *Server) consoleBuilt(side string) bool {
+	if s.ConsoleFS == nil {
+		return false
+	}
+	_, err := fs.Stat(s.ConsoleFS, side+"/index.html")
+	return err == nil
+}
+
+// appSide is the member side's page: signed-in people only, its language
+// settled first (the cf_lang cookie the page reads), then the side's
+// index.html.
+func (s *Server) appSide() http.Handler {
+	return s.withPageLang(s.viewerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.serveConsole(w, r, "app", strings.TrimPrefix(r.URL.Path, AppPrefix))
+	})))
+}
+
+// consoleCSP is the console's policy: every byte its own — same origin only,
+// no CDN, no font or script from anywhere else (EPIC #3923 rule 4).
+const consoleCSP = chatCSP
 
 // serveConsole serves the new console's side ("app" or "admin"): a file
 // under assets/ as it is, any other path the side's index.html (its router
@@ -336,7 +374,12 @@ func (s *Server) serveConsole(w http.ResponseWriter, r *http.Request, side, rest
 		return
 	}
 	if strings.HasSuffix(name, "/index.html") {
-		w.Header().Set("Cache-Control", "no-store")
+		h := w.Header()
+		h.Set("Cache-Control", "no-store")
+		h.Set("Content-Security-Policy", consoleCSP)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("X-Content-Type-Options", "nosniff")
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
@@ -420,7 +463,14 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 			})).ServeHTTP(w, r)
 		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
-			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) { s.serveAppPage(w, r, next) })
+			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) {
+				if consoleNewLive(p) && s.consoleBuilt("app") {
+					// a page the new console has taken over (claude-fleet#3926)
+					s.appSide().ServeHTTP(w, r)
+					return
+				}
+				s.serveAppPage(w, r, next)
+			})
 		case p == "/":
 			s.serveRoot(w, r)
 		case s.serveSitePath(w, r):
