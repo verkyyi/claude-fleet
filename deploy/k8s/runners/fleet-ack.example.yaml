@@ -158,9 +158,11 @@ spec:
         # the official ARC runner (Ubuntu 24.04) + what ubuntu-latest carries for the
         # selftests; buildctl for `node image`
         image: registry.example.com/acme/fleet-ci-runner:ci-TAG
+        # a CPU REQUEST and no CPU limit (issue #3864): with cpu.max set the fleet
+        # reads the pod's cgroup as its machine (#3542), unlike ubuntu-latest's VM,
+        # and the load-gated selftests read another machine; spare cores are lent
         resources:
           limits:
-            cpu: '4'
             ephemeral-storage: 10Gi
             memory: 6Gi
           requests:

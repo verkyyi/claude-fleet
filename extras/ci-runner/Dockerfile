@@ -6,8 +6,8 @@
 # fzf checks skip there). So the base is the official ARC runner image — Ubuntu
 # 24.04 (noble), the actions runner as uid 1001 `runner` with passwordless sudo —
 # and on top only what ubuntu-latest carries that a selftest reaches for (zsh,
-# shellcheck, ssh-keygen, lsof, sqlite3, …), Go (its module cache pre-filled for
-# tokenledger/), Node 22, gh, buildctl (the train's `node image` job builds on the
+# shellcheck, ssh-keygen, lsof, sqlite3, gawk — ubuntu-latest's awk —, …), Go (its
+# module and build caches pre-filled for tokenledger/), Node 22, gh, buildctl (the train's `node image` job builds on the
 # cluster's buildkitd from the same set) and the actions a shard uses. A first
 # image on Debian 12 (tmux 3.3a, fzf 0.38, no sudo) went red on 19 selftests in a
 # full run on fleet-ack — every one an environment difference, none a bug.
@@ -48,7 +48,7 @@ RUN set -eux; \
       openssl procps psmisc iproute2 net-tools netcat-openbsd dnsutils bsdextrautils \
       util-linux file zip unzip zstd xz-utils bzip2 make gcc libc6-dev locales \
       python3 python3-cryptography python3-jwt python3-certifi python3-yaml \
-      ca-certificates curl git jq gh time bc; \
+      ca-certificates curl git jq gh time bc gawk; \
     locale-gen en_US.UTF-8 C.UTF-8 || true; \
     rm -rf /var/lib/apt/lists/*
 
@@ -86,9 +86,13 @@ ENV LANG=C.UTF-8 \
 
 USER runner
 
-# tokenledger's modules, so a selftest that builds ccquota downloads nothing.
-COPY --chown=runner:runner tokenledger/go.mod tokenledger/go.sum /tmp/tl/
-RUN set -eux; cd /tmp/tl; go mod download; rm -rf /tmp/tl
+# tokenledger's modules and a warm build cache, so a selftest that builds ccquota
+# downloads nothing and compiles only what changed since this image (a cold build
+# on one of these cores took a drill from 13 s to 53 s). The source is the build's
+# only; the tag does not follow it — a stale cache is only a slower first build.
+COPY --chown=runner:runner tokenledger/ /tmp/tl/
+RUN set -eux; cd /tmp/tl; go mod download; go build ./... || true; go vet ./... >/dev/null 2>&1 || true; \
+    cd /; rm -rf /tmp/tl; du -sh "$GOCACHE" "$GOMODCACHE"
 
 # The actions a shard names (the runner looks here by owner_repo/<sha>.tar.gz
 # before downloading). Best effort: a missing one is downloaded per job, as before.
