@@ -7116,6 +7116,32 @@ drill_chat_budget_bypass() {
   WHAT="凭据代理 403 person_budget_exceeded：流里一行 code:budget + until，原话不上页面；/api/conversation 说被挡（重启也记得），走通一轮后放开"
 }
 
+# chat-claude-bare-path (issue #3648, EPIC #3642 C6): the daemon starts the chat
+# service with a bare PATH (no ~/.local/bin); the SDK is installed without its
+# native binary, so a service that could not find the login's own claude failed
+# EVERY turn with «Native CLI binary for darwin-arm64 not found». serve now finds it
+# the way fleet_find_tool does (pin · PATH · ~/.local/bin · brew · /usr/local).
+drill_chat_claude_bare_path() {
+  CAP=20; local d="$WORK/ccb" t0 out
+  t0=$(now)
+  mkdir -p "$d/home/.local/bin" "$d/tools" "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk"
+  printf '#!/bin/sh\nexit 0\n' > "$d/home/.local/bin/claude"
+  printf '#!/bin/sh\nexit 0\n' > "$d/tools/npm"
+  printf '#!/bin/sh\nprintf %%s "$FLEET_WEBCHAT_CLAUDE" > "%s/claude.seen"\n' "$d" > "$d/tools/node"
+  chmod +x "$d/home/.local/bin/claude" "$d/tools/npm" "$d/tools/node"
+  : > "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+  cp "$ROOT/extras/web-chat/package-lock.json" "$d/conf/webchat/deps/"
+  env -i HOME="$d/home" PATH="$d/tools:/usr/bin:/bin" FLEET_CONF_DIR="$d/conf" \
+    bash "$ROOT/bin/fleet-webchat.sh" serve >/dev/null 2>&1
+  out=$(cat "$d/claude.seen" 2>/dev/null)
+  [ "$out" = "$d/home/.local/bin/claude" ] \
+    || { WHY="serve on a bare PATH handed the server claude=«${out}», not ~/.local/bin/claude"; return 1; }
+  out=$(env -i HOME="$d/home" PATH="/usr/bin:/bin" FLEET_CONF_DIR="$d/conf" bash "$ROOT/bin/fleet-webchat.sh" status 2>&1)
+  case "$out" in *"claude · $d/home/.local/bin/claude"*) ;; *) WHY="status does not name the claude it runs: $out"; return 1 ;; esac
+  WHAT='守护给的 PATH 里没有 ~/.local/bin：serve 照样把本登录的 claude 交给对话服务，status 写明用的哪个'
+  SECS=$(since "$t0")
+}
+
 drill_chat_home_moved() {
   CAP=40
   if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
