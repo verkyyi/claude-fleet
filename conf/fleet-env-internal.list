@@ -950,3 +950,5 @@ FLEET_MOVE_KUBECTL                 seam: the kubectl fleet-move-to-pod.sh runs (
 FLEET_MOVE_HUB_ADMIN               seam: the hub admin command fleet-move-to-pod.sh runs instead of fleet-hub-admin.py (#3554)
 FLEET_MOVE_STATE                   path: where fleet-move-to-pod.sh keeps each login's pod name, render and timeline (#3554)
 FLEET_MOVE_WAIT                    knob: seconds a fleet-move-to-pod.sh wait lasts (default 600, #3554)
+FLEET_INSTALLS_HUB                 seam: the hub address fleet-installs.sh asks for the release lanes ("" = none; #3868)
+FLEET_PLATFORM                     seam: the release platform fleet_platform answers (a selftest playing a Mac; #3868)
