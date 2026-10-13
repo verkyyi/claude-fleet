@@ -154,6 +154,9 @@
 #   svc-token-escalate                              tokenledger/internal/api svc.go (svcGate / svcOnly on /v1/svc/,
 #                                                   fcs_ tokens hash-only, revoke 401 at the next call; go test, when a
 #                                                   toolchain is here), cmd/ccquota/svc.go
+#   apply-flood                                     tokenledger/internal/store access_requests.go (the one-pending
+#                                                   partial unique index) + internal/api access_requests.go (409, the
+#                                                   per-address limit); go test, when a toolchain is here
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2246,6 +2249,29 @@ drill_email_link_replay() {
   c11_go_tests signin_ways_test.go TestEmailSignIn TestEmailCode TestEmailInviteAndAdd || return 1
   WHAT='登录邮件的链接只在发起的浏览器里用一次；码猜 5 次即废；未知邮箱答复相同（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='链接重放被拒、另一台设备打不开、码猜 5 次即废、未知邮箱同答同限流、邀请与加邮箱（go test 三条）'
+  SECS=$(since "$t0")
+}
+
+# ---- apply-flood (#4051, EPIC #4048 C3): one person refreshing /apply, double
+# clicking or racing two replicas must leave ONE pending request — the table holds
+# it (a partial unique index on (kind, subject) WHERE state = 'pending'), the page
+# answers a second submit 409 with the first, and one address sends at most five
+# an hour whoever it claims to be.
+drill_apply_flood() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal" out rc; GO_RAN=0
+  t0=$(now)
+  grep -q "CREATE UNIQUE INDEX IF NOT EXISTS idx_hub_access_requests_pending ON hub_access_requests(kind, subject) WHERE state = 'pending'" \
+    "$tl/store/schema.sql" 2>/dev/null || { WHY="nothing in the table holds one pending request per sign-in (schema.sql)"; return 1; }
+  grep -q '^func TestAccessRequestsOnePending(' "$tl/store/access_requests_test.go" 2>/dev/null \
+    || { WHY="the store's racing-submit test is gone (access_requests_test.go)"; return 1; }
+  c11_go_tests access_requests_test.go TestApplySubmitEditWithdraw TestApplyPerAddressLimit TestApplyCooldown || return 1
+  if [ "$GO_RAN" = 1 ]; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestAccessRequestsOnePending$' ./internal/store 2>&1); rc=$?
+    [ "$rc" = 0 ] || { WHY="eight racing submits did not leave one pending (go test): $(printf '%s' "$out" | head -4 | tr '\n' ' ')"; return 1; }
+  fi
+  WHAT='同一登录一条待审：表上的部分唯一索引兜底，第二次提交 409 并显示原来那条，同一地址一小时 5 条（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='8 个并发提交只留 1 条待审；页面第二次提交 409 显示原来那条；冷却期内交不了、撤回后能重交；同一地址第 6 条 429（go test）'
   SECS=$(since "$t0")
 }
 

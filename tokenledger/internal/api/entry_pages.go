@@ -165,6 +165,55 @@ h1+.alert{margin-top:24px}
 .gone h1{margin-top:12px;font-size:24px}
 .gone .lead{margin:8px 0 0}
 .gone .btn{width:auto;height:36px;margin-top:24px;padding:0 16px}
+.col.lift{justify-content:flex-start;padding-top:16px;max-width:28rem}
+.who{display:flex;align-items:center;gap:12px;margin:0 0 24px;padding:12px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font-size:14px}
+.who .av{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--fleet-clay-soft);color:var(--fleet-clay);font-weight:600;flex:none}
+.who .n{font-weight:500;overflow-wrap:anywhere}
+.who .m{color:var(--muted-foreground);font-size:13px;display:flex;align-items:center;gap:4px}
+.who .m svg{width:14px;height:14px}
+.who a{margin-inline-start:auto;font-size:13px;color:var(--muted-foreground);white-space:nowrap}
+.field{display:grid;gap:6px;margin-bottom:20px}
+.field label{margin:0}
+.field label small{font-weight:400;color:var(--muted-foreground);margin-inline-start:4px}
+.input.area{height:auto;min-height:112px;padding:10px 12px;line-height:1.6;resize:vertical}
+.hint{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:var(--muted-foreground)}
+.hint.bad{color:var(--destructive)}
+.input.bad{border-color:var(--destructive);box-shadow:0 0 0 3px color-mix(in oklab,var(--destructive) 20%,transparent)}
+.opts{display:grid;gap:8px}
+.opt{position:relative;display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:var(--background);cursor:pointer;font-size:14px;font-weight:400;line-height:1.6;margin:0}
+.opt input[type=radio]{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.opt .dot{width:16px;height:16px;margin-top:3px;border-radius:50%;border:1px solid var(--input);flex:none;display:grid;place-items:center}
+.opt:has(input:checked){border-color:var(--ring);box-shadow:0 0 0 1px var(--ring)}
+.opt:has(input:checked) .dot{border-color:var(--primary)}
+.opt:has(input:checked) .dot::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.opt:has(input:focus-visible){box-shadow:0 0 0 3px color-mix(in oklab,var(--ring) 50%,transparent)}
+.opt .b{flex:1;min-width:0;overflow-wrap:anywhere}
+.opt .s{font-size:13px;color:var(--muted-foreground)}
+.opt .ok{color:var(--fleet-ok);font-size:13px}
+.opt .input{margin-top:10px;height:40px}
+.tile.wait{background:var(--fleet-clay-soft);color:var(--fleet-clay)}
+.tile.ok{background:color-mix(in oklab,var(--fleet-ok) 16%,transparent);color:var(--fleet-ok)}
+.tile.mute{background:var(--muted);color:var(--muted-foreground)}
+.steps{list-style:none;margin:0 0 24px;padding:0;display:grid;gap:0}
+.steps li{position:relative;display:flex;gap:12px;padding:0 0 18px;font-size:14px}
+.steps li:last-child{padding-bottom:0}
+.steps li::before{content:"";position:absolute;left:7px;top:20px;bottom:0;width:2px;background:var(--border)}
+.steps li:last-child::before{display:none}
+.steps .k{width:16px;height:16px;margin-top:4px;border-radius:50%;flex:none;border:2px solid var(--border);background:var(--background);position:relative;z-index:1}
+.steps .done .k{background:var(--fleet-ok);border-color:var(--fleet-ok)}
+.steps .now .k{border-color:var(--fleet-clay);box-shadow:0 0 0 4px var(--fleet-clay-soft)}
+.steps .t{font-weight:500}
+.steps .s{color:var(--muted-foreground);font-size:13px}
+.steps .later .t{color:var(--muted-foreground);font-weight:400}
+.quote{margin:0 0 20px;padding:12px 16px;border-left:3px solid var(--fleet-clay);background:var(--muted);border-radius:0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0;font-size:14px;overflow-wrap:anywhere;white-space:pre-line}
+.card p.pre{white-space:pre-line}
+.twin{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.twin form{display:contents}
+.scrim{position:fixed;inset:0;z-index:10;background:rgb(0 0 0/.5);display:grid;place-items:center;padding:24px}
+.dlg{width:100%;max-width:24rem;padding:24px;border:1px solid var(--border);border-radius:calc(var(--radius) + 4px);background:var(--background)}
+.dlg h2{margin:0 0 8px;font:600 18px/1.4 var(--fleet-font-display)}
+.dlg p{color:var(--muted-foreground);font-size:14px;margin-bottom:20px}
+.dlg .twin .btn{height:40px}
 `
 
 // notFoundTmpl is 「页面不存在」. It reflects nothing of the request — no

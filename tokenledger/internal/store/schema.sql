@@ -574,3 +574,34 @@ CREATE TABLE IF NOT EXISTS fleet_invites (
   used_by      TEXT NOT NULL DEFAULT '',
   revoked_at   INTEGER NOT NULL DEFAULT 0
 );
+
+-- Access requests (claude-fleet#4051, EPIC #4048 C3): a person the list does
+-- not name asks to be let in, from /apply. Keyed by the way they signed in
+-- (kind, subject) — an applicant has no principal until an admin approves.
+-- At most one pending request per (kind, subject): the partial unique index
+-- below, so a double submit on two replicas still leaves one. A rejection
+-- carries the reason and cooldown_until (unix seconds; 0 = none); ip_hash is
+-- the submitting address hashed, what the per-address limit counts. Times
+-- are unix seconds; 0 = not yet.
+CREATE TABLE IF NOT EXISTS hub_access_requests (
+  id             TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL,
+  subject        TEXT NOT NULL,
+  display        TEXT NOT NULL DEFAULT '',
+  use_text       TEXT NOT NULL DEFAULT '',
+  team           TEXT NOT NULL DEFAULT '',
+  referrer       TEXT NOT NULL DEFAULT '',
+  notify_channel TEXT NOT NULL DEFAULT '',
+  notify_addr    TEXT NOT NULL DEFAULT '',
+  state          TEXT NOT NULL DEFAULT 'pending',
+  reason         TEXT NOT NULL DEFAULT '',
+  cooldown_until INTEGER NOT NULL DEFAULT 0,
+  decided_by     TEXT NOT NULL DEFAULT '',
+  created_at     INTEGER NOT NULL,
+  decided_at     INTEGER NOT NULL DEFAULT 0,
+  ip_hash        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_hub_access_requests_who ON hub_access_requests(kind, subject, created_at);
+CREATE INDEX IF NOT EXISTS idx_hub_access_requests_state ON hub_access_requests(state, created_at);
+CREATE INDEX IF NOT EXISTS idx_hub_access_requests_ip ON hub_access_requests(ip_hash, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hub_access_requests_pending ON hub_access_requests(kind, subject) WHERE state = 'pending';
