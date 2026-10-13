@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -481,11 +482,41 @@ func TestInstallServed(t *testing.T) {
 		t.Fatalf("connect info: %d %+v", code, ci)
 	}
 
+	// off, it says why — never a bare 404 (claude-fleet#4009)
 	h.srv.SSHCA = nil
 	for _, p := range []string{"/install", "/install/manifest", "/install/bin/fleet"} {
-		if resp, _ := get(p); resp.StatusCode != 404 {
-			t.Fatalf("%s without a CA: %d, want 404", p, resp.StatusCode)
+		resp, body := get(p)
+		if resp.StatusCode != 503 || !strings.Contains(string(body), "CCQUOTA_FLEET_SSH_CA_KEY") ||
+			strings.Contains(string(body), "登录方式") || !strings.Contains(string(body), "§1.3") {
+			t.Fatalf("%s without a CA: %d %q, want 503 naming the CA key", p, resp.StatusCode, body)
 		}
+	}
+}
+
+// TestInstallSaysWhyOff: a hub with no sign-in way answers /install with one
+// sentence a person can act on, not a 404 (claude-fleet#4009) — the install
+// guide's check step reads it.
+func TestInstallSaysWhyOff(t *testing.T) {
+	s := &Server{}
+	for _, p := range []string{"/install", "/install/manifest"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		if p == "/install" {
+			s.handleInstall(rec, req)
+		} else {
+			s.handleInstallFile(rec, req)
+		}
+		body := rec.Body.String()
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(body, "入口还没配登录方式") ||
+			!strings.Contains(body, "CCQUOTA_FLEET_SSH_CA_KEY") || !strings.HasPrefix(body, "# ") {
+			t.Fatalf("%s off: %d %q", p, rec.Code, body)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+			t.Fatalf("%s off: content-type %q", p, ct)
+		}
+	}
+	if why := s.InstallOffReason(); why == "" {
+		t.Fatal("no reason for an off /install")
 	}
 }
 

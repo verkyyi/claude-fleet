@@ -31,6 +31,10 @@ of a fake ccquota. Test-only; binds 127.0.0.1, dies with its alarm.
                             serves that key
 <w>/endorse                 present: /key-endorsement = <w>/key's line vouched
                             for by <w>/prevkey (namespace claude-fleet-release-key)
+<w>/arts/<sha>/<n>          an artifact of the release (issue #4009): named in
+                            the manifest's `artifacts` (unless its meta lists
+                            them) and served at <sha>/artifacts/<n>
+<w>/badart                  present: every artifact is served one byte altered
 <w>/hub.log                 every path asked, one per line
 <w>/port                    written once listening
 """
@@ -152,6 +156,12 @@ def build(sha):
               "key": LEGACY[2] if flag("legacy") else hashlib.sha256(raw_pub(signer)).hexdigest()[:16],
               "tree": {"name": "tree.tar.gz", "sha256": hashlib.sha256(tree).hexdigest(), "size": len(tree)},
               "files": files})
+    ad = os.path.join(W, "arts", sha)
+    if "artifacts" not in m and os.path.isdir(ad):
+        m["artifacts"] = []
+        for n in sorted(os.listdir(ad)):
+            b = open(os.path.join(ad, n), "rb").read()
+            m["artifacts"].append({"name": n, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b)})
     m.setdefault("artifacts", [])
     return json.dumps(m, indent=1).encode(), tree, signer
 
@@ -209,6 +219,14 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, sshsign(signer, "claude-fleet-release", mb).encode())
         if sub == "tree.tar.gz":
             return self.send(200, tree)
+        if sub.startswith("artifacts/") and "/" not in sub[10:]:
+            ap = os.path.join(W, "arts", sha, sub[10:])
+            if not os.path.isfile(ap):
+                return self.send(404)
+            b = open(ap, "rb").read()
+            if flag("badart"):
+                b = bytes([b[0] ^ 1]) + b[1:] if b else b"x"
+            return self.send(200, b)
         return self.send(404)
 
     def log_message(self, *a):

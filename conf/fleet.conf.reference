@@ -2943,6 +2943,19 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 integrity whichever source served it; one
 #                                 that fails gives way to the next source, and
 #                                 when none passes the build is refused
+#   CCQUOTA_FLEET_RELEASE_ARTIFACTS   dir of the pinned programs release.json names
+#                                 (codex, tmux, Claude Code …, `<name>-<version>-<os>-<arch>`)
+#                                 · 成对 with RELEASE_KEY: a build missing one is
+#                                 refused (422) naming it; fill it with
+#                                 bin/fleet-release-fetch.py --artifacts (issue #4009)
+#   CCQUOTA_FLEET_RELEASE_PLATFORMS   the <os>-<arch> list a release must carry
+#                                 those pins for · 可选 (default darwin-arm64)
+#   CCQUOTA_FLEET_PUBLISH_TOKEN   bearer that may push a stable to this hub
+#                                 (bin/fleet-release-publish.sh) · 可选 · 密钥 —
+#                                 once one push lands the hub never asks GitHub
+#                                 again (the way out of GitHub's rate limit)
+#   CCQUOTA_FLEET_RELEASE_ROOT    the offline root's public key (train-signed
+#                                 releases) · 可选
 # Admins:
 #   CCQUOTA_GITHUB_ADMINS         admins by GitHub username, comma-separated · 必填
 #                                 unless CCQUOTA_ADMINS names them
@@ -2958,6 +2971,18 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Other:
 #   CCQUOTA_FLEET                 1 = fleet on · 必填
 #   CCQUOTA_VIEWER_TOKEN          the read-only viewer token · 必填 (else --no-auth) · 密钥
+# The relay (a region the subscriptions do not serve — install.md «国内部署»;
+# the relay machine's own keys are the block above):
+#   CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]   signs the hub's and session passes
+#                                 through the relay · 32 bytes base64 · 密钥 ·
+#                                 required by OAUTH_REFRESH_VIA=relay
+#   CCQUOTA_FLEET_RELAY_SIGN_KEY[_FILE]     signs the machines' 4-hour relay
+#                                 passes (frl2) · Ed25519 seed base64 · 可选 · 密钥
+#                                 (unset = the older never-expiring frl1)
+#   CCQUOTA_FLEET_REVOCATIONS_TOKEN[_FILE]  lets the relay's checker follow the
+#                                 revocation list · 可选 · 密钥
+#   CCQUOTA_GITHUB_OAUTH_VIA      relay = GitHub sign-in's token exchange via the
+#                                 relay · 可选
 #   CCQUOTA_FLEET_OAUTH_REFRESH_VIA   node | relay | direct — who refreshes a
 #                                 subscription's sign-in · 可选 (relay needs
 #                                 CCQUOTA_FLEET_CRED_RELAY_URL + CCQUOTA_FLEET_SESSION_CRED_KEY)

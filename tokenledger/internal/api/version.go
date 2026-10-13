@@ -79,5 +79,10 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// why stable is not being followed, when the operator can fix it — GitHub's
+	// rate limit on a hub in China (claude-fleet#4009)
+	if p := s.Stable.Problem(); p != "" {
+		out["stable_problem"] = p
+	}
 	writeJSON(w, http.StatusOK, out)
 }

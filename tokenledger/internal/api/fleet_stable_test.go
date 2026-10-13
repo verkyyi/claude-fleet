@@ -32,6 +32,9 @@ type fakeGitHub struct {
 	tarball bool
 	tars    int
 	rawDown bool
+	// limited answers the stable lookup as GitHub's rate limit does
+	// (claude-fleet#4009: a hub in China, its egress shared).
+	limited bool
 }
 
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +45,11 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/repos/o/r/commits/stable" {
+		if g.limited {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			http.Error(w, `{"message":"API rate limit exceeded for 1.2.3.4."}`, http.StatusForbidden)
+			return
+		}
 		if r.Header.Get("Accept") != "application/vnd.github.sha" {
 			http.Error(w, "want the sha media type", http.StatusBadRequest)
 			return
@@ -167,6 +175,61 @@ func TestVersionFollowsStable(t *testing.T) {
 	_ = json.Unmarshal([]byte(body), &v)
 	if v["client_version"] != shaB {
 		t.Fatalf("GitHub down: /version %v, want the last known %s", v["client_version"], shaB)
+	}
+}
+
+// GitHub's rate limit (claude-fleet#4009): the lookup's error and /version's
+// stable_problem name it and the way out — push stable — and it goes once a
+// lookup answers again. Any other failure adds no stable_problem.
+func TestStableRateLimitSaysWhy(t *testing.T) {
+	h, g := stableRig(t)
+	version := func() map[string]any {
+		var v map[string]any
+		_, body := getBody(t, h.http.URL+"/version")
+		if err := json.Unmarshal([]byte(body), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if p, ok := version()["stable_problem"]; ok {
+		t.Fatalf("a hub following stable has no stable_problem: %v", p)
+	}
+	g.mu.Lock()
+	g.limited = true
+	g.mu.Unlock()
+	err := h.srv.Stable.Refresh(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "rate-limited") || !strings.Contains(err.Error(), "fleet-release-publish.sh") {
+		t.Fatalf("rate-limited lookup: %v", err)
+	}
+	v := version()
+	p, _ := v["stable_problem"].(string)
+	if !strings.Contains(p, "CCQUOTA_FLEET_PUBLISH_TOKEN") || !strings.Contains(p, "fleet-release-publish.sh") {
+		t.Fatalf("stable_problem = %q", p)
+	}
+	if v["stable"] != shaA {
+		t.Fatalf("the last stable is kept under a rate limit: %v", v["stable"])
+	}
+	g.mu.Lock()
+	g.limited, g.down = false, true
+	g.mu.Unlock()
+	if err := h.srv.Stable.Refresh(context.Background()); err == nil || strings.Contains(err.Error(), "rate-limited") {
+		t.Fatalf("GitHub down is not a rate limit: %v", err)
+	}
+	if p, ok := version()["stable_problem"]; ok {
+		t.Fatalf("a plain failure is no stable_problem: %v", p)
+	}
+	g.mu.Lock()
+	g.limited, g.down = true, false
+	g.mu.Unlock()
+	_ = h.srv.Stable.Refresh(context.Background())
+	g.mu.Lock()
+	g.limited = false
+	g.mu.Unlock()
+	if err := h.srv.Stable.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := version()["stable_problem"]; ok {
+		t.Fatalf("an answered lookup clears stable_problem: %v", p)
 	}
 }
 

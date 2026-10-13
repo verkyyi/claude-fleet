@@ -88,6 +88,7 @@ type StableSource struct {
 	sha        string
 	at         time.Time
 	refreshing bool
+	problem    string            // why the last lookup failed, when it is the operator's to fix
 	seen       []string          // the last few shas stable named (what /install/stable/ serves)
 	files      map[string][]byte // "<sha>/<path>" → bytes
 	size       int
@@ -200,19 +201,25 @@ func (s *StableSource) Refresh(ctx context.Context) error {
 	req.Header.Set("Accept", "application/vnd.github.sha")
 	resp, err := s.client().Do(req)
 	if err != nil {
-		s.touch()
+		s.fail("")
 		return err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 	sha := strings.TrimSpace(string(b))
 	if resp.StatusCode != http.StatusOK || !shaRe.MatchString(sha) {
-		s.touch()
-		return fmt.Errorf("%s: HTTP %d %q", req.URL, resp.StatusCode, firstLine(sha))
+		err := fmt.Errorf("%s: HTTP %d %q", req.URL, resp.StatusCode, firstLine(sha))
+		if githubRateLimited(resp, sha) {
+			err = fmt.Errorf("%w — %s", err, StableRateLimitedNote)
+			s.fail(StableRateLimitedNote)
+		} else {
+			s.fail("")
+		}
+		return err
 	}
 	s.mu.Lock()
 	moved := s.sha != sha
-	s.sha, s.at = sha, time.Now()
+	s.sha, s.at, s.problem = sha, time.Now(), ""
 	if !containsStr(s.seen, sha) {
 		s.seen = append(s.seen, sha)
 		if len(s.seen) > stableSeenMax {
@@ -227,11 +234,47 @@ func (s *StableSource) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// touch marks a failed lookup as an answer for one TTL, so a GitHub that is
-// down is asked once per TTL, not on every /version.
-func (s *StableSource) touch() {
+// StableRateLimitedNote is what the hub says when GitHub refuses its
+// anonymous stable lookup for the rate limit (claude-fleet#4009): a hub in
+// China shares its egress address with many others, so the 60 an hour run out.
+// The way out is to push stable to the hub — once one publish has landed, the
+// hub never asks GitHub again.
+const StableRateLimitedNote = "GitHub rate-limited this hub's anonymous stable lookup (403/429) — push stable to it instead: " +
+	"set CCQUOTA_FLEET_PUBLISH_TOKEN on the hub, then in a checkout run FLEET_PUBLISH_TOKEN=<the same> bin/fleet-release-publish.sh <sha> --hub <this hub> once " +
+	"(after one push the hub never asks GitHub again; self-host guide §4.3)"
+
+// githubRateLimited: GitHub's answer is its rate limit, not a missing ref.
+func githubRateLimited(resp *http.Response, body string) bool {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		return false
+	}
+	return resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "" ||
+		strings.Contains(strings.ToLower(body), "rate limit")
+}
+
+// Problem is why the last stable lookup failed, when that is something the
+// operator can act on ("" otherwise, and once a lookup succeeds): /version
+// carries it as stable_problem (claude-fleet#4009).
+func (s *StableSource) Problem() string {
+	if s == nil {
+		return ""
+	}
+	if s.Local != nil {
+		if _, on := s.Local.PublishedStable(); on {
+			return ""
+		}
+	}
 	s.mu.Lock()
-	s.at = time.Now()
+	defer s.mu.Unlock()
+	return s.problem
+}
+
+// fail marks a failed lookup as an answer for one TTL, so a GitHub that is
+// down is asked once per TTL, not on every /version — and keeps what it was,
+// for Problem.
+func (s *StableSource) fail(problem string) {
+	s.mu.Lock()
+	s.at, s.problem = time.Now(), problem
 	s.mu.Unlock()
 }
 

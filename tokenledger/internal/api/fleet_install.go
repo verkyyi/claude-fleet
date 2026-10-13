@@ -25,7 +25,9 @@ import (
 // Public on purpose, like the CA's public key: scripts anyone could read on
 // GitHub, carrying no credential. They are served only when the hub can
 // actually sign someone in without them having anything yet — a CA and GitHub
-// sign-in — because that is what the first `fleet` needs.
+// sign-in — because that is what the first `fleet` needs. Until then they
+// answer 503 with which half is missing (claude-fleet#4009): a bare 404 read
+// as "wrong address" to the person following the install guide.
 
 // InstallCommand is the line people copy, for this hub.
 func (s *Server) InstallCommand(r *http.Request) string {
@@ -36,6 +38,31 @@ func (s *Server) installReady() bool {
 	return s.SSHCA != nil && s.signinOn()
 }
 
+// InstallOffReason is why /install is not served yet, "" when it is
+// (claude-fleet#4009): the 503's body and one line at the hub's start.
+func (s *Server) InstallOffReason() string {
+	var miss []string
+	if !s.signinOn() {
+		miss = append(miss, "入口还没配登录方式（GitHub、邮箱或微信，至少一种）")
+	}
+	if s.SSHCA == nil {
+		miss = append(miss, "入口还没配连接证书钥匙（CCQUOTA_FLEET_SSH_CA_KEY）")
+	}
+	if len(miss) == 0 {
+		return ""
+	}
+	return strings.Join(miss, "；") + "，所以还不发客户端安装脚本 —— 见自托管 · 安装与部署 §1.3 / §1.4"
+}
+
+// installOff answers a request to /install or /install/<path> while it is off.
+func (s *Server) installOff(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte("# " + s.InstallOffReason() + "\n"))
+}
+
 // handleInstall serves GET /install: the installer, hub URL filled in.
 func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -44,7 +71,7 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.installReady() {
-		http.NotFound(w, r)
+		s.installOff(w)
 		return
 	}
 	body, ok := s.installerScript(w, r, "")
@@ -104,7 +131,7 @@ func (s *Server) handleInstallFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.installReady() {
-		http.NotFound(w, r)
+		s.installOff(w)
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/install/")

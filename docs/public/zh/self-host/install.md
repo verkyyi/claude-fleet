@@ -67,6 +67,8 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 
 `release keygen` 会把公钥打印出来，记下它，机器上看到的就是这一个。
 
+设了 `release-key`，入口每打一个发布包，还要有 `release.json` 钉住版本的几个程序（Codex、tmux 等）；没有就拒绝打包（422）。先照 [§1.3](#13-必填配置) 末尾「发布包要的程序」备好。
+
 > 今天签名钥匙放在入口里。以后会改成「签名钥匙只在发版流程里，另有一把离线保存的根钥匙能作废它」，到时这一节会更新。
 
 ### 1.3 必填配置
@@ -86,6 +88,8 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 | `CCQUOTA_FLEET_CRED_KEY_FILE` | `/secrets/cred-key` | 凭据保险箱钥匙的路径 |
 | `CCQUOTA_FLEET_RELEASE_KEY` | `/secrets/release-key` | 升级包签名钥匙的路径；不设则机器不会自动升级 |
 | `CCQUOTA_FLEET_RELEASE_DIR` | `/data/releases` | 升级包放哪；设了签名钥匙就必须设 |
+| `CCQUOTA_FLEET_RELEASE_ARTIFACTS` | `/data/release-artifacts` | 发布包要的程序放在哪个目录；设了签名钥匙就要有，见下面「发布包要的程序」 |
+| `CCQUOTA_FLEET_RELEASE_PLATFORMS` | `darwin-arm64 linux-amd64` | 你的机器是哪几种系统 / 架构，空格分隔；不设只备 `darwin-arm64` |
 | `CCQUOTA_FLEET_OAUTH_REFRESH_VIA` | `node` | 订阅的登录状态由机器去续，入口自己不连订阅商 |
 
 可选：
@@ -94,10 +98,31 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 |---|---|
 | `CCQUOTA_DB_URL` | 用 Postgres 而不是 SQLite：`postgres://用户:密码@主机:5432/库?sslmode=require` |
 | `CCQUOTA_FLEET_STABLE_REPO` | 跟哪个仓库的 `stable`；不设就跟官方仓库。见 [§4.3](#43-自己决定跟哪一版) |
-| `CCQUOTA_FLEET_CRED_RELAY_URL` | 订阅流量经过的中转地址（订阅商不服务你所在地区时才需要）；不设就直连 |
+| `CCQUOTA_FLEET_CRED_RELAY_URL` | 订阅流量经过的中转地址（订阅商不服务你所在地区时才需要，例如在国内）；不设就直连。中转怎么架见 [§1.8](#18-国内部署) |
+| `CCQUOTA_FLEET_PUBLISH_TOKEN` | 允许把 `stable` 推给入口的口令（密钥）。推过一次，入口就不再去 GitHub 问 `stable`；入口在国内时用得上，见 [§4.4](#44-入口问不到-github-时) |
 | `CCQUOTA_METER_ORIGINS` | 允许读用量的网页来源；不设就没有 |
 
 入口启动时，每个没配的地址类键会打一行「未配置 &lt;键&gt;」，照着补即可。
+
+#### 发布包要的程序
+
+机器升级时装的每一样都来自入口的发布包：`fleet` 本身、`ccquota`，以及仓库根目录 `release.json` 钉住版本的 Claude Code、Codex、tmux。`ccquota` 就在你的镜像里；其余几样要放进 `CCQUOTA_FLEET_RELEASE_ARTIFACTS` 指的目录，文件名是 `<名字>-<版本>-<系统>-<架构>`，例如 `codex-0.162.1-darwin-arm64`、`tmux-3.7c-linux-amd64`（Codex 还要一个同版本的 `codex-code-mode-host-…`）。Claude Code 缺了入口会自己从 npm 拉。
+
+缺一个，入口拒绝打这一版的包，报错写着缺哪几个名字和下面这条命令。最省事的来源是**任何一个已经有这一版发布包的入口**（例如你跟随的 `stable` 的发布方）：它在 `/v1/fleet/release/<提交号>/artifacts/<名字>` 公开提供每个文件，并在签了名的清单里写着每个文件的大小和 sha256。下面这条命令先用那个入口的公钥核清单的签名，再逐个核 sha256，对得上才放进目录：
+
+```sh
+UP=https://upstream.example.com                     # 已经有这一版发布包的入口
+SHA=$(git rev-parse stable)                         # §1.1 构建镜像的那一个提交
+curl -fsS $UP/v1/fleet/release/key > upstream-release.pub   # 它的发布公钥，和发布方核对一次
+python3 bin/fleet-release-fetch.py --hub $UP --pubkey upstream-release.pub \
+  --artifacts --platforms "darwin-arm64 linux-amd64" $SHA /srv/fleet/data/release-artifacts
+```
+
+- 每个文件打一行：`got <名字>` 刚取到，`kept <名字>` 已经在、核过没变。不对的文件会被换掉；签名或 sha256 对不上就整条拒绝，什么都不写。
+- 目录是入口容器里的 `/data/release-artifacts`（§1.5 的数据盘下面），Kubernetes 上同样放在数据盘上。
+- `--platforms` 和 `CCQUOTA_FLEET_RELEASE_PLATFORMS` 写同一组。
+- 每次升级前（`stable` 换了提交）再跑一次，只会取新版本的文件。
+- 不想从别的入口取，也可以自己按上面的文件名放进去：Codex 来自它的官方发布页，tmux 照仓库的 `conf/vendor-tmux.lock` 构建。放好后 `curl -fsS https://hub.example.com/v1/fleet/release/artifacts` 列出入口现在有哪些。
 
 这两张表和 §1.4 的键都登记在仓库的设置总表 `conf/fleet.conf.reference` 末尾「The hub's own settings」一段（地址类在它上面一段），每键一行：用途、必填与否、是不是密钥。表与它不一致时以它为准。
 
@@ -135,6 +160,8 @@ CCQUOTA_FLEET_SSH_CA_KEY=/secrets/ca
 CCQUOTA_FLEET_CRED_KEY_FILE=/secrets/cred-key
 CCQUOTA_FLEET_RELEASE_KEY=/secrets/release-key
 CCQUOTA_FLEET_RELEASE_DIR=/data/releases
+CCQUOTA_FLEET_RELEASE_ARTIFACTS=/data/release-artifacts
+CCQUOTA_FLEET_RELEASE_PLATFORMS=darwin-arm64 linux-amd64
 CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node
 EOF
 # 密钥类的值另放一个只有 root 能读的文件
@@ -197,6 +224,10 @@ spec:
               value: /etc/ccquota-release/key
             - name: CCQUOTA_FLEET_RELEASE_DIR
               value: /data/releases
+            - name: CCQUOTA_FLEET_RELEASE_ARTIFACTS
+              value: /data/release-artifacts
+            - name: CCQUOTA_FLEET_RELEASE_PLATFORMS
+              value: darwin-arm64 linux-amd64
           volumeMounts:
             - name: release-key
               mountPath: /etc/ccquota-release
@@ -235,7 +266,7 @@ patches:
         path: /metadata/annotations/nginx.ingress.kubernetes.io~1default-backend
 ```
 
-  - 要两副本 + Postgres：删掉 `components:` 两行；`/data/releases` 那时没有盘，给 `CCQUOTA_FLEET_RELEASE_DIR` 另挂一块小盘。
+  - 要两副本 + Postgres：删掉 `components:` 两行；`/data/releases` 那时没有盘，给 `CCQUOTA_FLEET_RELEASE_DIR` 和 `CCQUOTA_FLEET_RELEASE_ARTIFACTS` 另挂一块小盘。
   - 装了「正在更新」页（发布那几十秒里浏览器看到的提示页）就删掉最后一项。
   - 数据盘用集群默认的 storageclass（`kubectl get storageclass` 里标 `(default)` 的那个）。要用别的，在 `patches:` 里加一项：`target: {kind: PersistentVolumeClaim, name: ccquota-data}`，JSON patch `op: add`、`path: /spec/storageClassName`、`value: <你的 storageclass>`。
 
@@ -280,12 +311,86 @@ SQLite 形态必须是一个副本、`Recreate`：两个进程同时写一个文
 ```sh
 curl -fsS https://hub.example.com/healthz          # ok
 curl -fsS https://hub.example.com/version          # 镜像版本、stable 的提交号
-curl -fsS https://hub.example.com/install | head -1 # #!/bin/sh —— 客户端安装脚本
+curl -sS  https://hub.example.com/install | head -1 # #!/bin/sh —— 客户端安装脚本
 ```
+
+- `/install` 回的是一句以 `# ` 开头的话（HTTP 503）而不是脚本：入口还发不了客户端，原因就在那句话里——还没配任何登录方式（[§1.4](#14-登录方式)），或者没配 `CCQUOTA_FLEET_SSH_CA_KEY`。补上、重启入口即可。启动日志里也有同一句（`fleet: /install is off: …`）。
+- `/version` 里没有 `stable`、却有 `stable_problem`：入口问不到 GitHub 上的 `stable`，那句话说了原因和办法，见 [§4.4](#44-入口问不到-github-时)。
 
 然后用浏览器打开 `https://hub.example.com`，以 §1.3 里列的管理员身份登录：自托管的入口打开就是控制台（没有官网首页）。
 
 启动不起来时看容器日志（`docker logs fleet-hub` / `kubectl -n $NS logs deploy/ccquota-hub`）：缺钥匙、登录方式只配了一半，都会在第一屏说清楚是哪个键。
+
+### 1.8 国内部署
+
+入口和机器在国内时，有四处要多做一步：
+
+| 什么 | 为什么 | 做法 |
+|---|---|---|
+| 构建拉 Go 依赖 | 直连官方代理常卡住 | 默认已经经 `goproxy.cn`（[§1.1](#11-构建镜像)） |
+| `stable` 是哪个提交 | 入口匿名问 GitHub 会被限流 | 把 `stable` 推给入口（[§4.4](#44-入口问不到-github-时)） |
+| 发布包要的程序 | 自己没有 Codex、tmux 的制品 | 从已有这一版的入口取（[§1.3](#13-必填配置)「发布包要的程序」） |
+| 订阅流量 | Claude、ChatGPT 不服务国内 | 架一台海外**中转**，入口和机器都经它出去（本节下文） |
+
+中转是一台海外的小 Linux（Debian / Ubuntu，`python3`、systemd，Caddy 2.10 以上）。它不存任何凭据，只做两件事：凭入口签发的**通行证**放行，再把请求原样转给订阅商。放行与否每次都问入口（经本机一个核验进程，入口重启的几分钟里它记得刚放行过的通行证）。
+
+下面用 `relay.example.com` 代表中转的域名，`hub.example.com` 代表入口。
+
+**1. 中转机：先装核验进程。** 文件都在仓库的 `extras/cred-relay/`：
+
+```sh
+# 在中转机上，仓库副本里
+sudo install -D -m 0755 extras/cred-relay/fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
+sudo install -m 0644 bin/fleet_ed25519.py /usr/local/lib/fleet-relay/fleet_ed25519.py
+sudo install -m 0644 extras/cred-relay/fleet-relay-check.service /etc/systemd/system/
+sudo systemctl edit fleet-relay-check        # 写两行：[Service] 和 Environment=FLEET_HUB_URL=https://hub.example.com
+sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check
+curl -s http://127.0.0.1:2091/healthz        # ok
+```
+
+**2. 中转机：再装 Caddy 站点。** 顺序不能反：Caddy 先起来会去问一个还不存在的核验进程，所有请求都被拒。
+
+```sh
+sudo cp extras/cred-relay/Caddyfile /etc/caddy/Caddyfile
+sudo systemctl edit caddy                    # 写两行：[Service] 和 Environment=FLEET_RELAY_SITE=relay.example.com
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+用 `caddy` 用户校验：以 root 校验会建出 root 的日志文件，caddy 随后起不来。防火墙：80、443 对所有来源开放（门禁靠通行证，80 只为签证书），22 只对你自己。
+
+**3. 入口：打开中转。** 在 [§1.2](#12-生成钥匙) 的目录里再生成两把钥匙：
+
+```sh
+cd ~/fleet-secrets && umask 077
+openssl rand -base64 32 > session-cred-key   # 入口给自己和会话签中转通行证
+openssl rand -base64 32 > relay-sign-key     # 给机器签 4 小时有效的中转通行证
+```
+
+入口加这几个键（钥匙按 §1.5 / §1.6 的办法以文件挂进去，不写值）：
+
+| 键 | 值 | 说明 |
+|---|---|---|
+| `CCQUOTA_FLEET_CRED_RELAY_URL` | `https://relay.example.com` | 中转的地址 |
+| `CCQUOTA_FLEET_SESSION_CRED_KEY_FILE` | `/secrets/session-cred-key` | 密钥 |
+| `CCQUOTA_FLEET_RELAY_SIGN_KEY_FILE` | `/secrets/relay-sign-key` | 密钥；不设也能用，通行证就不会过期 |
+| `CCQUOTA_FLEET_OAUTH_REFRESH_VIA` | `relay` | 订阅的登录状态由入口经中转续（替代 §1.3 的 `node`） |
+| `CCQUOTA_GITHUB_OAUTH_VIA` | `relay` | 只在用 GitHub 登录、入口又连不上 github.com 时设 |
+
+设了 `…_VIA=relay` 却缺中转地址或 `SESSION_CRED_KEY`，入口拒绝启动并说出缺哪个。先升级中转，再部署入口。
+
+**4. 机器：经中转出去。** 机器要被入口标为**可信**才领得到中转通行证；每个跑会话的登录都要知道中转地址（`FLEET_CRED_RELAY_URL=https://relay.example.com`）。怎么在加机器时带上它，见 [§2](#2-加机器)。
+
+**5. 验收。** 不需要任何凭据：
+
+```sh
+curl -s https://relay.example.com/healthz                                                         # ok
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://relay.example.com/anthropic/v1/messages   # 403：没有通行证
+curl -s -o /dev/null -w '%{http_code}\n' https://relay.example.com/v1/models                       # 404：不是开放代理
+```
+
+中转机上 `sudo grep -rEc 'sk-ant-|eyJhbGci|Bearer ' /var/log/caddy/ /etc/caddy/` 应全为 0：日志只记路径前缀、状态和字节数。
+
+管理入口和中转的人可以照仓库里 `plugins/fleet-infra/skills/sg-relay-setup/SKILL.md` 一步步做（迁移、撤销、回滚也在里面）。
 
 ## 2. 加机器
 
@@ -415,6 +520,29 @@ CCQUOTA_FLEET_STABLE_REPO=<你的组织>/claude-fleet
 ```
 
 设成 `off` 则入口完全不问 GitHub，只发镜像里自带的那一版客户端，机器不会自动升级。
+
+### 4.4 入口问不到 GitHub 时
+
+没推过 `stable` 的入口，每 5 分钟匿名去问一次 `api.github.com`：「`stable` 现在是哪个提交」。入口在国内时，出口地址常和很多人共用，GitHub 给匿名请求的额度（每小时 60 次）很快被用完，答 403。这时：
+
+- `curl -fsS https://hub.example.com/version` 里没有 `stable`，`stable_problem` 写着「GitHub rate-limited …」；
+- 入口日志每 5 分钟一行 `fleet: stable lookup: … HTTP 403 … — GitHub rate-limited this hub's anonymous stable lookup`。
+
+办法是**把 `stable` 推给入口**，推过一次之后入口就只认推来的，再也不问 GitHub：
+
+1. 生成一个口令（`openssl rand -hex 32`），作为 `CCQUOTA_FLEET_PUBLISH_TOKEN` 放进入口的密钥（单机容器放 `hub.secret.env`，Kubernetes 放 Secret），重启入口。
+2. 在一份能访问入口的仓库副本里推：
+
+   ```sh
+   cd claude-fleet && git fetch origin --tags && git checkout stable
+   read -rs FLEET_PUBLISH_TOKEN && export FLEET_PUBLISH_TOKEN      # 粘贴同一个口令，不回显
+   bin/fleet-release-publish.sh $(git rev-parse HEAD) --hub https://hub.example.com
+   ```
+
+   入口自己核对提交和文件，不需要信任这台电脑；同一个提交再推一次答 `already`。
+3. `curl -fsS https://hub.example.com/version` 的 `stable` 就是这个提交，`stable_problem` 不见了。
+
+以后每次升级（[§4.2](#42-一次升级怎么走)）照第 2 步推新的提交即可。口令只从环境读，不要写进命令行或提交进仓库。
 
 ## 5. 回滚
 

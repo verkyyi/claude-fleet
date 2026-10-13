@@ -691,7 +691,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.HomePath, s.handleFleetHome)
 		// The one-line install (claude-fleet#1470): a script and three
 		// programs carrying no credential, public like the CA's public key;
-		// 404 until the hub can sign someone in with nothing in hand.
+		// 503 with the reason until the hub can sign someone in with nothing in
+		// hand (claude-fleet#4009).
 		mux.HandleFunc("/install", s.handleInstall)
 		mux.HandleFunc("/install/", s.handleInstallFile)
 		// Node releases (claude-fleet#2335): stable's files, binaries and

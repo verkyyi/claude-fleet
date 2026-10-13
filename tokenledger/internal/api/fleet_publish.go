@@ -627,7 +627,7 @@ func (rs *ReleaseStore) Accept(ctx context.Context, f *publishForm) (map[string]
 		}
 	}
 	if len(missing) > 0 {
-		return nil, publishErr(http.StatusUnprocessableEntity, "release.json pins %s, which CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — put it there", strings.Join(missing, ", "))
+		return nil, publishErr(http.StatusUnprocessableEntity, "%s", rs.missingPinnedNote(f.sha, missing))
 	}
 	if err := rs.distSrcCheck(release.SourceDigest(all), rs.artifacts()); err != nil {
 		// a new runtime with an old ccquota is how #2928 reran a login's
