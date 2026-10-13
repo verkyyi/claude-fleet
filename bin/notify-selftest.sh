@@ -149,8 +149,12 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -p -t "$LIST" @sidebar 1
   answer "$(row issue-1909 working)"; round
   answer "$(row issue-1909 needs ask '点我')"
+  logged=$(wc -l < "$WORK/notify.ndjson" | tr -d ' ')
   CLICK_IT=1 round; settle 10
   i=0; while [ "$i" -lt 30 ] && [ ! -s "$WORK/opened" ]; do sleep 0.1; i=$((i+1)); done
+  # the detached sender goes on after the click (the phone, then its log line):
+  # wait for that line, or H's clean slate below gets it late (issue #3881)
+  i=0; while [ "$i" -lt 100 ] && [ "$(wc -l < "$WORK/notify.ndjson" | tr -d ' ')" -le "$logged" ]; do sleep 0.1; i=$((i+1)); done
   eq "G: the click lands on the list as jump=wid:<worker>" "jump=wid:$F/issue-1909" "$(T show-options -pqv -t "$LIST" @sidebar_do | tr -d ' ')"
   has "G: …and with no terminal attached, one opens running fleet" "$(cat "$WORK/opened" 2>/dev/null)" fleet
 fi
