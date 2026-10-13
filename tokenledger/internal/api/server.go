@@ -898,6 +898,14 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/meter.json", s.handleMeter)
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
+	// The tab icon (claude-fleet#3946): the site's own logo, copied into
+	// web/dist, for everyone -- the sign-in page and a self-hoster's hub with
+	// the site off show it too. With the site on, appMount answers these
+	// paths from the built site first (site_serve.go), the same bytes.
+	for _, p := range appIconPaths {
+		mux.HandleFunc(p, s.serveAppIcon)
+	}
+
 	// "/" here is the console's overview, /app (appMount answers the public
 	// "/" itself, claude-fleet#3583). Every page under it settles its language
 	// first (claude-fleet#2023). Every other path that reaches here is one of

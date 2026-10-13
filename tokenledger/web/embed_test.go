@@ -1,7 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -186,4 +190,48 @@ func mustRead(t *testing.T, assets fs.FS, name string) []byte {
 		t.Fatalf("%s unreadable: %v", name, err)
 	}
 	return b
+}
+
+// The tab icon is the site's logo, one source -- extras/fleet-theme/logo.svg,
+// site/assets for its PNG / ICO renderings -- and every page
+// names it at the root (claude-fleet#3946): web/dist carries copies of the
+// three files, byte for byte, and no page inlines an icon of its own (the old
+// green one came back on 28 pages once; landing.html's had even been broken).
+func TestAssets_IconIsTheSiteLogo(t *testing.T) {
+	assets := Assets()
+	if assets == nil {
+		t.Fatal("no dashboard embedded")
+	}
+	for copyName, src := range map[string]string{
+		"favicon.svg":          "extras/fleet-theme/logo.svg",
+		"favicon.ico":          "site/assets/favicon.ico",
+		"apple-touch-icon.png": "site/assets/apple-touch-icon.png",
+	} {
+		want, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(src)))
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if got := mustRead(t, assets, copyName); !bytes.Equal(got, want) {
+			t.Errorf("web/dist/%s is not %s: cp %s tokenledger/web/dist/%s", copyName, src, src, copyName)
+		}
+	}
+	inlined := regexp.MustCompile(`rel="(?:icon|apple-touch-icon)"[^>]*href="data:|0e6e5e'|%230e6e5e|%232a78d6`)
+	err := fs.WalkDir(assets, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || path.Ext(p) != ".html" {
+			return err
+		}
+		html := string(mustRead(t, assets, p))
+		if loc := inlined.FindStringIndex(html); loc != nil {
+			t.Errorf("%s inlines an icon of its own: %.80q", p, html[loc[0]:])
+		}
+		// chat/ is the web-chat page bin/web-chat-pack.sh packs (gitignored):
+		// it names its own copy, /chat/logo.svg.
+		if !strings.HasPrefix(p, "chat/") && strings.Contains(html, "<head") && !strings.Contains(html, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`) {
+			t.Errorf("%s does not name /favicon.svg", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

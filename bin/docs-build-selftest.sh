@@ -62,12 +62,17 @@ for (lang, p), state in pages.items():
     if not os.path.isfile(base + '.html'):
         continue
     h = open(base + '.html', encoding='utf-8').read()
+    if '<link rel="icon" href="/favicon.svg" type="image/svg+xml">' not in h:
+        bad.append('C %s/%s names no /favicon.svg (the site logo, issue #3946)' % (lang, p))
     # B
     if not re.search(r'<title>[^<]+</title>', h) or not re.search(r'<h1[^>]*>[^<]+</h1>', h):
         bad.append('B %s/%s has no title' % (lang, p))
     # C
     for href in re.findall(r'href="([^"]+)"', h):
         if re.match(r'^[a-z]+:', href) or href.startswith('#'):
+            continue
+        # the tab icon is the hub's, at its root (issue #3946), not a docs page
+        if href in ('/favicon.ico', '/favicon.svg', '/apple-touch-icon.png'):
             continue
         target = resolve(urljoin('http://x' + url_of(lang, p), href))
         if target is None or not os.path.isfile(target):

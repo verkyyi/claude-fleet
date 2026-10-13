@@ -209,7 +209,9 @@ var logoutTmpl = template.Must(template.New("logout").Parse(`<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>已退出登录</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3' y='7' width='10' height='3' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
 :root{--bg:#f9f9f7;--fg:#0b0b0b;--mut:#85847e;--card:#fcfcfb;--line:#e3e2dd;--btn:#2a78d6}
 @media (prefers-color-scheme:dark){:root{--bg:#0d0d0d;--fg:#fff;--mut:#8b8a81;--card:#1a1a19;--line:#2f2f2c;--btn:#3987e5}}
