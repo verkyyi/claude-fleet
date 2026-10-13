@@ -102,7 +102,6 @@ fleet_ui_t() {
     en:pin_unpinned_fmt)        printf 'unpinned: %s' "${1:-}" ;;
     zh:pin_pinned_fmt)          printf '已置顶：%s' "${1:-}" ;;
     en:pin_pinned_fmt)          printf 'pinned to the top: %s' "${1:-}" ;;
-    # ⌂ / F9 / prefix g landing on the list (issue #1533, fleet-sidebar.sh home)
     # the one failure line (issue #1618, fleet_ui_fail): reason, then the next step
     zh:ui_fail_fmt)             printf '✗ %s' "${1:-}" ;;
     en:ui_fail_fmt)             printf '✗ %s' "${1:-}" ;;
@@ -116,10 +115,6 @@ fleet_ui_t() {
     en:ui_filed_no_worker_fmt)  printf '#%s filed, but no session started: %s' "${1:-}" "${2:-}" ;;
     zh:ui_filed_no_worker_next) printf '稍后在 backlog 里开' ;;
     en:ui_filed_no_worker_next) printf 'start it from the backlog' ;;
-    zh:sidebar_narrow_why)      printf '窗口太窄放不下任务栏' ;;
-    en:sidebar_narrow_why)      printf 'too narrow for the list' ;;
-    zh:sidebar_narrow_next)     printf '加宽终端，或 ⌘P 跳转' ;;
-    en:sidebar_narrow_next)     printf 'widen it, or ⌘P to jump' ;;
     zh:sidebar_save_next)       printf '配置目录只读？' ;;
     en:sidebar_save_next)       printf 'conf dir read-only?' ;;
     zh:sidebar_save_failed)     printf '任务栏设置没保存' ;;
@@ -839,8 +834,6 @@ fleet_ui_t() {
     en:panel_no_action_fmt)     printf 'this row cannot %s' "${1:-}" ;;
     zh:panel_no_waiting)        printf '没有在问你的会话' ;;
     en:panel_no_waiting)        printf 'nobody is waiting on you' ;;
-    zh:popup_tasks)             printf '任务' ;;
-    en:popup_tasks)             printf 'Tasks' ;;
     zh:popup_new_task)          printf '新建任务' ;;
     en:popup_new_task)          printf 'New task' ;;
     zh:popup_answer)            printf '回答' ;;
@@ -923,7 +916,7 @@ fleet_ui_t() {
     en:reap_refused_fmt)        printf 'fleet: not reaped — %s' "${1:-}" ;;
     zh:reap_none)               printf 'fleet: 回收没有返回结果 — 请查看 hub' ;;
     en:reap_none)               printf 'fleet: reap gave no result — check the hub' ;;
-    # a remote row's action, named for its toast / popup (fleet-sidebar-remote.sh)
+    # a remote row's action, named for its toast / popup (fleet-row-remote.sh)
     zh:remote_label_stop_fmt)    printf '停 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_stop_fmt)    printf 'stop %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_switch_fmt)  printf '%s 换订阅（在 %s）' "${1:-}" "${2:-}" ;;

@@ -1540,7 +1540,7 @@ def submit(ask, text, session, env):
     if ask.kind == "rename" and ask.arg.startswith("wid:"):
         # a row on another machine (issue #2358): a hub write, worker_rename —
         # its outcome (a refusal included) toasts
-        return start_job(["bash", str(BIN / "fleet-sidebar-remote.sh"), "rename", session, ask.arg],
+        return start_job(["bash", str(BIN / "fleet-row-remote.sh"), "rename", session, ask.arg],
                          dict(env, FLEET_SIDEBAR_TEXT=text), quiet)
     if ask.kind == "rename":
         run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
@@ -1557,7 +1557,7 @@ def submit(ask, text, session, env):
     if ask.kind == "repo":
         return start_job(["bash", str(BIN / "dash-repo-add.sh"), "--session", session, text], env, repo_added)
     if ask.kind in ("message", "answer"):
-        return start_job(["bash", str(BIN / "fleet-sidebar-remote.sh"), ask.kind, session, ask.arg],
+        return start_job(["bash", str(BIN / "fleet-row-remote.sh"), ask.kind, session, ask.arg],
                          dict(env, FLEET_SIDEBAR_TEXT=text), quiet)
     if ask.kind == "sub":
         return start_job(["bash", str(BIN / "dash-migrate.sh"), ask.arg, "to", text], env, failed)

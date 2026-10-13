@@ -51,7 +51,7 @@ the candidates on stderr and exit 4, never the first of them.
 were (fleet-open.sh / fleet-show.sh): an argument that is a URL, a `:port` or an
 existing file goes there, unchanged.
 
-The rows are the client's own — `tmux-dashboard-rows.sh --sidebar`, every
+The rows are the client's own — `tmux-dashboard-rows.sh --rows`, every
 folded row too (fleet-quickopen.py `full_rows`), run with the client server's
 environment, so the client must be running (it keeps running after ⌃D / prefix
 d). Started outside it (no FLEET_SHELL), this re-runs itself through

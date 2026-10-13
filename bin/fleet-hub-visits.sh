@@ -13,8 +13,9 @@
 #           one, else its tmux `@N` window id; `-` when unknown (attach)
 #   cause — WHY you landed there, one token:
 #             f9 / home / g  the key that sent you (F9, the ⌂ tap, prefix g) —
-#                            hub-zoom.sh / dash-zoom.sh stamp a one-shot
-#                            `@hub_nav_via` session option before they jump
+#                            hub-zoom.sh / dash-zoom.sh stamped a one-shot
+#                            `@hub_nav_via` session option before they jumped
+#                            (both deleted with #3732; old logs keep the token)
 #             closed         the window you were on no longer exists: you closed a
 #                            task and tmux dropped you on the hub
 #             closed-next    the same close, but the client was moved straight on
@@ -28,14 +29,14 @@
 #             home-sidebar / f9-sidebar
 #                            NOT an arrival: ⌂ / F9 put the keyboard on the task
 #                            bar and stayed in the task (issue #899). hub-zoom.sh
-#                            writes it directly — the trip the key used to cost.
+#                            wrote it directly (until #3732).
 #             home-pick / f9-pick
 #                            NOT an arrival either: the task had no bar on screen,
 #                            so ⌂ / F9 opened the task picker popup instead
-#                            (issue #902, fleet-task-pick.sh writes it).
+#                            (issue #902, fleet-task-pick.sh wrote it until #3732).
 #   ms=…  — OPTIONAL 4th column (issue #1611): where a ⌂ / F9 press spent its
 #           time, as the server saw it — `ms=<press→list> conf:21 side:48 …`,
-#           cumulative ms from run-shell's first line (bin/fleet-trace-lib.sh).
+#           cumulative ms from run-shell's first line (fleet-trace-lib.sh, until #3732).
 #           Only `*-pick` / `*-sidebar` lines carry it; every reader keys on the
 #           first three columns and ignores it.
 #

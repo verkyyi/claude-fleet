@@ -232,31 +232,10 @@ first/last row; with text they move the cursor. ↑↓ always switch tasks. The 
 keys are `dash-keymap.sh --panel sidebar` rows (`bol` `eol` `kill_word`
 `kill_eol`), so a tmux prefix on one of them moves it to its ⌥ fallback, which
 the conf rewrites to the ⌃ byte.
-With NO sidebar on screen — a window under ~111 columns hides it, prefix e turns
-it off — the same list opens as a popup: `bin/fleet-task-pick.sh` (issue #902),
-from `prefix Space`, from `prefix E`, and from ⌂ / F9 / prefix g in a window
-too narrow to draw the list (`fleet-sidebar.sh home`, issue #1533 — which
-otherwise unzooms, switches the list back on, moves to a window that can show it
-or builds `home`, and focuses it; with `FLEET_DASH_WINDOW=1` it is the no-bar
-branch of `hub-zoom.sh`'s task-bar-first, `FLEET_HOME_SIDEBAR_FIRST`, as before). Rows come
-from `tmux-dashboard-rows.sh --sidebar`, so the order, pins, folds and the
-panel exclusion are the bar's. The popup only WRITES an action line —
-`select <@id>` · `scratch <name>` · `hub` — and the `--popup` parent acts on it
-after the overlay closes: `select-window` by stable id, the bar's
-`dash-raw-session.sh --name … --origin hub` with `FLEET_SPAWN_FOCUS=1`, or
-`hub-zoom.sh --nav` (the second press). @popup_open brackets the popup like
-every modal bind. ⌂ / F9 opening it log `home-pick` / `f9-pick` to the hub-visit
-meter — kept out of the trip count like `*-sidebar` — with a 4th column, the ⌂
-latency trace (issue #1611, `bin/fleet-trace-lib.sh`): `ms=<press→list> conf:…
-side:… sync:… pick:… popup:… open:… keys:… rows:… fzf:… close:… done:…`,
-cumulative ms from run-shell's first line, so a slow ⌂ says which stage.
-The press itself is kept short the same way (#1611): hub-zoom.sh reads its one
-knob with a grep instead of loading the library and the conf (the sidebar
-loads both, once); a window too narrow for the list skips the python sync and
-goes straight to the popup; the parent starts the row producer and the keymap
-(cached per prefix) in the background BEFORE the popup opens and the picker
-takes them off a FIFO. `bin/task-pick-latency-selftest.sh` replays the tap from
-a 54x50 pty client and holds the median to 0.5 s on an idle box.
+The ⌂ / F9 / prefix g chain that landed on this list (`hub-zoom.sh`,
+`dash-zoom.sh`, `fleet-sidebar.sh home`, the narrow-window task picker
+`fleet-task-pick.sh` and its latency trace `fleet-trace-lib.sh`) lost its last
+key with #1714 and was deleted with #3732; ⌘P is the switcher.
 One dim ` ? 快捷键` row sits directly above the input line (issue #948; the
 operator's explicit exception to EPIC #894's no-resident-rows rule — on an iPad a
 whole row is a tap target). A tap on it (opened on the release, like the menu

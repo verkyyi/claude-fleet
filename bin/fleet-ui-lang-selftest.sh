@@ -52,8 +52,8 @@ ok 'fleet-keys.sh reads every row from the table'
 branchy=$(grep -nE '(case "\$\(fleet_ui_lang\)"|"\$\(fleet_ui_lang\)" = (zh|en))' "$BIN"/*.sh | grep -v '/fleet-ui-lang\.sh:' | grep -v -- '-selftest\.sh:')
 [ -z "$branchy" ] || fail 'a script branches on the language instead of using fleet_ui_t' "$branchy"
 ok 'no script branches on the language itself'
-grep -n "display-message[^|]*'Tasks:" "$ROOT"/conf/*.conf "$BIN/hub-zoom.sh" | grep -Ev ':[0-9]+:[[:space:]]*#' | grep -q . \
-  && fail 'a hardcoded English toast is back (hub-zoom.sh / conf)'
+grep -n "display-message[^|]*'Tasks:" "$ROOT"/conf/*.conf | grep -Ev ':[0-9]+:[[:space:]]*#' | grep -q . \
+  && fail 'a hardcoded English toast is back (conf)'
 ok 'the sidebar toasts are translated'
 
 # every key exists in BOTH languages

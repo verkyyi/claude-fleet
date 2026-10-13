@@ -155,6 +155,7 @@ bin/fleet_reap_policy.py
 bin/fleet-reap-policy.sh
 bin/fleet-sidebar-menu.sh
 bin/fleet-client-menu.sh
+bin/fleet-row-remote.sh
 bin/fleet-sidebar-remote.sh
 bin/tmux-dashboard-rows.sh
 bin/tmux-status.sh
@@ -163,7 +164,6 @@ bin/fleet-conf.sh
 bin/fleet-lang.sh
 bin/fleet-ui-lang.sh
 bin/fleet-status-lib.sh
-bin/fleet-trace-lib.sh
 bin/fleet-palette.sh
 bin/usage-lib.sh
 bin/fleet-daemon-lib.sh

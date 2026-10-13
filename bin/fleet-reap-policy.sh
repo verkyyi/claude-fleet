@@ -17,7 +17,7 @@
 #       the sidebar menu's submenu: the five choices, the current one marked.
 #   fleet-reap-policy.sh menu <sess> <wid:worker_id> [<client>]
 #       the same for a row on ANOTHER machine (issue #2368): each pick is a hub
-#       write — fleet-sidebar-remote.sh reappol (worker_reap_policy) — and the
+#       write — fleet-row-remote.sh reappol (worker_reap_policy) — and the
 #       mark is the policy the row's cache last carried (fleet-hub-sessions.sh's
 #       remote_<sess>, column 18).
 #
@@ -90,7 +90,7 @@ case "$sub" in
         fleet_load_conf "$SESS" 2>/dev/null
         cur=$(LC_ALL=C awk -F $'\037' -v w="$WIN" '$1 == w { print $18; exit }' \
               "${FLEET_C:-/nonexistent}/global/remote_$SESS" 2>/dev/null)
-        rmt=$(printf '%q' "$BIN/fleet-sidebar-remote.sh")
+        rmt=$(printf '%q' "$BIN/fleet-row-remote.sh")
         # the env the row menu handed this (a run-shell job sees the server's)
         env=''
         for v in FLEET_CONF_DIR FLEET_UI_LANG FLEET_SHELL; do

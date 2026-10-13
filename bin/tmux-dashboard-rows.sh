@@ -4,7 +4,7 @@
 # Line format:  <sess:idx>US<window-id>US<colored display>
 #   field1 = jump target · field2 = stable summary key (window-id) · field3 = display
 # Data: @claude_state (no LLM), everything slow from collector caches.
-# --sidebar emits wid US state US glyph US name US tree US badge US depth US detail
+# --rows emits wid US state US glyph US name US tree US badge US depth US detail
 # US node US issue US pr US ctx (issues #1328/#1475/#1532: the pieces, so the
 # view lays them out to its own width), without
 # a header. It shares the live hub's ordering/folds, but never follows its
@@ -29,7 +29,9 @@ BIN="$(cd "${BIN:-/}" && pwd)"
 [ -n "${FLEET_SESSION:-}" ] && fleet_load_conf "$FLEET_SESSION" 2>/dev/null || true
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
-SIDEBAR=0; [ "${1:-}" = --sidebar ] && SIDEBAR=1
+# --rows was --sidebar, named after the list that first drew them (issue #3732);
+# both mean the same. compat-1v: --sidebar stays while a caller still spells it.
+SIDEBAR=0; case "${1:-}" in --rows|--sidebar) SIDEBAR=1 ;; esac
 
 # live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
 # LANDED mode this producer hands off to the history ledger's row emitter, so

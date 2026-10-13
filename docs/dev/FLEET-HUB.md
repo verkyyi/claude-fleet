@@ -305,7 +305,7 @@ window's machine `mac-a ○ 失联 Nm` (nothing here can hear it; a machine the 
 already called lost keeps its own, longer silence) and a local window's chip its
 live readings; a remote row's menu is titled `… · 入口失联 Nm`, «新建到 mac-a…» is
 greyed with the reason, and every action on a remote row refuses with a toast
-(`fleet-sidebar-remote.sh`: 「入口失联 Nm，稍后再试」) instead of a 40-second
+(`fleet-row-remote.sh`: 「入口失联 Nm，稍后再试」) instead of a 40-second
 timeout — Enter on the row (the proxy, a direct ssh) still works. The next
 round that stands rewrites `hub_ok` and everything flips back on its own;
 nothing is restarted. Off hub mode nothing changes; with the hub off the file is
@@ -469,7 +469,7 @@ over one ssh to B.
 **…and acts on them** (issue #1487, EPIC #1479 C8). A remote row's menu (`.` /
 a second tap; `fleet-sidebar-menu.sh`) offers what a local row's does — 发消息 ·
 答授权 / 回答 · 停 · 继续 · 回收 — and every one is a hub WRITE: the item runs
-`bin/fleet-sidebar-remote.sh <action>` (the asking: a popup for the message text
+`bin/fleet-row-remote.sh <action>` (the asking: a popup for the message text
 and for the answer — `[y]` 批准 / `[n]` 拒绝 on a `⊘` row, the option number on a
 `?` row; a `confirm-before` on reap, naming the machine; a toast with the
 outcome, the node's refusal verbatim), which calls **`bin/fleet-hub-write.sh
@@ -1465,7 +1465,7 @@ with a code, never `unknown`:
   and nothing is sent; the node's adapter sets `FLEET_REAP_LOCAL=1` so its
   own run never bounces back. So `/fleet-epic-run`'s per-tick
   `dash-reap.sh <key> --yes` and the sidebar's 回收 on a remote row
-  (`fleet-sidebar-remote.sh reap`, the same toast as a local row's) reap
+  (`fleet-row-remote.sh reap`, the same toast as a local row's) reap
   another machine's merged window the way they reap one here. An older node
   that writes no fields back is read off its error message. Hub off: the
   branch never runs (`bin/dash-reap-hub-selftest.sh` leg A).

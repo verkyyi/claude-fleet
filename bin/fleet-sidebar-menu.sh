@@ -13,7 +13,7 @@
 #
 # A row on ANOTHER machine (`wid:<worker_id>`, issue #1487 / EPIC #1479 C8) gets
 # the actions too — message, answer, stop, resume, reap — each a hub WRITE through
-# bin/fleet-sidebar-remote.sh → bin/fleet-hub-write.sh (the one write client),
+# bin/fleet-row-remote.sh → bin/fleet-hub-write.sh (the one write client),
 # never a script of this machine aimed at a window it does not have; a local row's
 # items are untouched. And with the hub on, both menus list «new task on <m>…» for
 # every machine the sidebar's cache says is online (dash-issue-new.sh --node=<m>);
@@ -102,7 +102,7 @@ client=$(tmux list-clients -t "$sess" -F '#{client_activity} #{client_name}' 2>/
   | sort -rn | head -1 | cut -d' ' -f2-)
 
 if [ "$verb" = reap ]; then
-  if [ -n "$remote" ]; then bash "$BIN/fleet-sidebar-remote.sh" reap "$sess" "$wid" "$client"
+  if [ -n "$remote" ]; then bash "$BIN/fleet-row-remote.sh" reap "$sess" "$wid" "$client"
   else bash "$BIN/fleet-sidebar-reap.sh" "$sess" "$wid" "$client"; fi
   exit 0
 fi
@@ -111,7 +111,7 @@ fi
 # fleet-status-lib.sh — the sidebar's rows and the bar read the same file. Lost ⇒
 # a remote row's title carries 「入口失联 3m」 and «新建到 mac-a…» is greyed (a spawn
 # there is a hub placement); the row's actions stay listed — each refuses with a
-# toast of its own (fleet-sidebar-remote.sh), so a tap is never silent. No cache
+# toast of its own (fleet-row-remote.sh), so a tap is never silent. No cache
 # (the hub off): no word, nothing here runs.
 HUB_LOST=''; ME=''
 if [ -s "$FLEET_C/global/remote_$sess" ]; then
@@ -299,11 +299,11 @@ if [ -n "$remote" ]; then
   [ -n "${FLEET_CONF_DIR:-}" ] && ctx="$ctx FLEET_CONF_DIR=$(sq "$FLEET_CONF_DIR")"
   [ -n "${FLEET_UI_LANG:-}" ] && ctx="$ctx FLEET_UI_LANG=$(sq "$FLEET_UI_LANG")"
   sh_run() { printf 'run-shell -b %s' "$(sq "$ctx $1 >/dev/null 2>&1 || :")"; }
-  # The actions (issue #1487): every one a hub write through fleet-sidebar-remote.sh.
+  # The actions (issue #1487): every one a hub write through fleet-row-remote.sh.
   # The two that take input (message text, the answer) ask on the view's input
   # line (issue #1620); the others run detached and toast. Reap confirms first,
   # as a local row's does.
-  rmt="bash $(sq "$BIN/fleet-sidebar-remote.sh")"
+  rmt="bash $(sq "$BIN/fleet-row-remote.sh")"
   rargs="$(sq "$sess") $(sq "$wid")"; [ -n "$client" ] && rargs="$rargs $(sq "$client")"
   # 进入
   add "$(t menu_open_remote)" "$(mk open)" "$(sh_run "bash $(sq "$BIN/fleet-remote-view.sh") open $(sq "$wid")")"
