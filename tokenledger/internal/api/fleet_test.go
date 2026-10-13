@@ -654,9 +654,16 @@ func TestFleetConfigPage(t *testing.T) {
 		"index.html":  &fstest.MapFile{Data: []byte("<!doctype html><title>overview</title>")},
 		"user.html":   &fstest.MapFile{Data: []byte("<!doctype html><title>old user page</title>")},
 	}
-	resp, body := h.get(t, "/config")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "<title>Config") {
-		t.Fatalf("GET /config = %d %q; want config.html", resp.StatusCode, body)
+	// 设置 took it over (claude-fleet#3931): the old address is one 301 to it.
+	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/config", nil)
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix+settingsPagePath {
+		t.Fatalf("GET /config = %d → %q; want 301 %s", resp.StatusCode, resp.Header.Get("Location"), AppPrefix+settingsPagePath)
 	}
 	if _, body := h.get(t, "/u/alice"); strings.Contains(string(body), "old user page") {
 		t.Errorf("GET /u/alice still serves the old per-person page")
