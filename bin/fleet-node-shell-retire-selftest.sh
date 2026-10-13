@@ -45,6 +45,7 @@ fl() {
   local st=$1; shift
   out=$(env -u FLEET_CLIENT_IDENTITY -u FLEET_NODE_CLIENT HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
         FLEET_NODE_STATE="$st" FLEET_NODE_RUNTIME="$T/no-runtime" FLEET_CLIENT_UPDATED=1 \
+        FLEET_HUB_URL=https://hub.example \
         ${FL_ENV:-} sh "$FLEET" "$@" </dev/null 2>&1); rc=$?
 }
 for args in "" "mac-a"; do

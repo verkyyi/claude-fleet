@@ -114,10 +114,17 @@ fa() {
   out=$(env ${e[@]+"${e[@]}"} FLEET_NODE_RUNTIME="$W/fakert" FLEET_SHELL_NO_ATTACH=1 sh "$W/inst/bin/fleet" "$@" </dev/null 2>&1); rc=$?
   calls=$(cat "$W/calls")
 }
+# this login connects to no hub (本机模式, fleet-install.sh --no-hub — issue #4074):
+# the line names no 入口 to install from
 fa FLEET_CLIENT=shell -- ; me=$(hostname -s); me=${me%%.*}
+eq "A0 fleet, no hub → rc 0" "$rc" 0
+eq "A0 … one line: runs here, 本机模式 — no 入口 named" "$out" "fleet · 客户端在 $me 上运行（本机模式，不连入口）。"
+printf '# [common]\nFLEET_HUB_URL=https://hub.example\n' > "$W/conf/fleet.conf"
+fa FLEET_CLIENT=shell --
 eq "A fleet → rc 0" "$rc" 0
 eq "A … one line: the client runs on this machine" "$out" "fleet · 客户端在 $me 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。"
 eq "A … the runtime's fleet-shell.sh, hosted, the temp cache — no update asked" "$calls" "runtime fleet-shell.sh |hosted=1|cache=$NHC"
+rm -f "$W/conf/fleet.conf"
 fa -- mac-a
 eq "A fleet mac-a → the runtime's, with the machine" "$calls" "runtime fleet-shell.sh mac-a|hosted=1|cache=$NHC"
 fa -- quit
