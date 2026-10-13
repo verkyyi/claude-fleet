@@ -241,7 +241,14 @@ func (s *Server) desiredSpares() map[string]int {
 }
 
 // spareFitMachines is every machine a spare may be opened on right now.
-func (s *Server) spareFitMachines(now time.Time) []string {
+func (s *Server) spareFitMachines(now time.Time) []string { return s.spareMachines(now, true) }
+
+// spareMachines is every machine that keeps spares: online (not 维护中, not
+// lost), hosting sessions, not a person's own computer, a SPOT node or one
+// person's pod, its admin node up and opening logins credential-separated.
+// fit adds what a refill needs right now: load per core and free memory
+// inside the placement thresholds, and the machine's own admit gate open.
+func (s *Server) spareMachines(now time.Time, fit bool) []string {
 	snap, err := s.Nodes(now)
 	if err != nil {
 		log.Printf("fleet: spares: roster: %v", err)
@@ -261,8 +268,15 @@ func (s *Server) spareFitMachines(now time.Time) []string {
 	for _, m := range snap.Machines {
 		h := strings.ToLower(m.Hostname)
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
-			m.Sessions == nil || !admin[h] || paused[h] || !s.nodes.credsepAdminFor(m.Hostname) ||
+			m.Sessions == nil || !admin[h] || !s.nodes.credsepAdminFor(m.Hostname) ||
 			isUserPodName(m.Hostname) { // one person's pod holds one login (claude-fleet#3553)
+			continue
+		}
+		if !fit {
+			out = append(out, m.Hostname)
+			continue
+		}
+		if paused[h] {
 			continue
 		}
 		var lpc *float64
@@ -382,8 +396,10 @@ func (s *Server) isSpareOp(opID string) bool {
 // claimSpareOn hands principal a ready spare on host — whether or not the
 // hub has recorded them yet (claude-fleet#3501): a person never recorded
 // takes the spare whole (store.ClaimSpare), one already recorded takes its
-// account row (store.ClaimSpareFor). nil when it handed none: spares off, a
-// drill, no ready spare there, or a login of theirs already on host.
+// account row (store.ClaimSpareFor). A drill identity takes one too
+// (claude-fleet#3509, #2947) and gives it back washed when it deletes itself
+// (closeDrillLogins → a reset). nil when it handed none: spares off, no ready
+// spare there, or a login of theirs already on host.
 func (s *Server) claimSpareOn(principal, displayName, actor, host string, now time.Time) *store.FleetAccount {
 	if !s.sparesOn() || store.IsSparePrincipal(principal) {
 		return nil
@@ -393,9 +409,6 @@ func (s *Server) claimSpareOn(principal, displayName, actor, host string, now ti
 		// identity too: the pod is destroyed whole at its remove, so nothing
 		// of the drill is left for the next person.
 		return s.claimClusterSpare(principal, displayName, actor, host, now)
-	}
-	if s.Store.IsDrill(principal) {
-		return nil
 	}
 	a := s.claimSpareAt(principal, displayName, actor, host, now)
 	if a == nil {

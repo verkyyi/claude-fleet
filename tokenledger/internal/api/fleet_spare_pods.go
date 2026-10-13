@@ -283,13 +283,7 @@ func (s *Server) replenishClusterSpares(now time.Time) bool {
 				queued = true
 			}
 		}
-		target := nodeUserCap(cluster, settings) - pic.used
-		if m := s.clusterSpareMax(cluster, settings); target > m {
-			target = m
-		}
-		if target < 0 {
-			target = 0
-		}
+		target := s.clusterSpareTarget(cluster, settings, pic.used)
 		// Over: the newest ready spares go (a pod still on its way up is
 		// left to finish — its pod already stands).
 		over := len(pic.spares) - target
@@ -318,6 +312,20 @@ func (s *Server) replenishClusterSpares(now time.Time) bool {
 		}
 	}
 	return queued
+}
+
+// clusterSpareTarget is how many spare pods cluster should hold with used
+// pods already people's: fleet.spare_max.<cluster> (else fleet.spare_max),
+// never more than its login cap − used.
+func (s *Server) clusterSpareTarget(cluster string, settings map[string]string, used int) int {
+	target := nodeUserCap(cluster, settings) - used
+	if m := s.clusterSpareMax(cluster, settings); target > m {
+		target = m
+	}
+	if target < 0 {
+		target = 0
+	}
+	return target
 }
 
 // failSparePod fails a spare pod's login (detail says why) and destroys the

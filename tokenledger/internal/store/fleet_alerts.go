@@ -39,6 +39,13 @@ const (
 	// "<hostname>/<login>/<name>", raised and cleared off the machine link's
 	// beat.
 	AlertServiceFailed = "service_failed"
+	// AlertSpareEmpty: a machine or cluster that should hold spares has had
+	// none ready for spareEmptyAfter (claude-fleet#3509) — subject its
+	// hostname. AlertSpareFailed: a spare there was made or washed badly and
+	// waits for the operator — which stops its refill (claude-fleet#3509).
+	// Both are raised at most once a day per (kind, place).
+	AlertSpareEmpty  = "spare_empty"
+	AlertSpareFailed = "spare_failed"
 )
 
 // FleetAlert is one row.
@@ -95,6 +102,25 @@ func (s *Store) ClearFleetAlert(kind, subject string, at time.Time) (cleared boo
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// LastFleetAlertRaised is when (kind, subject) was last raised, open or
+// cleared — zero when never (or pruned).
+func (s *Store) LastFleetAlertRaised(kind, subject string) (time.Time, error) {
+	var raised sql.NullString
+	err := s.read.QueryRow(`SELECT raised_at FROM fleet_alerts WHERE kind = ? AND subject = ?
+		ORDER BY id DESC LIMIT 1`, kind, subject).Scan(&raised)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	if err != nil || !raised.Valid || raised.String == "" {
+		return time.Time{}, err
+	}
+	t, err := time.Parse(rfc, raised.String)
+	if err != nil {
+		return time.Time{}, nil
+	}
+	return t.UTC(), nil
 }
 
 // OpenFleetAlertSubjects lists the subjects of kind's open rows that start

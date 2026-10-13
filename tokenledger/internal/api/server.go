@@ -351,6 +351,11 @@ type Server struct {
 	// one scan per spareScanEvery, whichever beat comes first.
 	spareMu     sync.Mutex
 	spareScanAt time.Time
+	// spareAlert* pace the spare alerts (claude-fleet#3509): when the last
+	// pass ran, and since when each place has held no ready spare.
+	spareAlertMu    sync.Mutex
+	spareAlertAt    time.Time
+	spareEmptySince map[string]time.Time
 
 	// relayLocks serialises relay dispatch per target endpoint
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
