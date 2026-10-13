@@ -1,0 +1,26 @@
+# The run egress (claude-fleet#4005, the SPACE EPIC C3): fleet-egress.py a second
+# time, Service fleet-egress-run:3128, for a service run's Job alone. A report
+# reads pages nobody listed ahead, so its host list is `*` — any host, still on
+# 443 only and still only to an address that resolves PUBLIC (never the VPC, the
+# cluster, the metadata address or loopback: the same check as fleet-egress).
+# A run's own egress guard (render.py svc_run_resources, closed) lets the Job
+# reach this proxy and the credential proxy by ClusterIP and nothing else, so
+# the open list is the run's alone — a person's pod's guard never names it.
+# Example values (claude-fleet#3630), as ../fleet-workers: applied by a person
+# (../README.md «run egress»), never by hub-deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet-workers
+nameSuffix: -run
+resources:
+  - ../base
+labels:
+  - pairs:
+      app: fleet-egress-run
+      fleet/egress: run
+    includeSelectors: true
+images:
+  - name: fleet-python
+    newName: registry.example.com/acme/fleet-managed-node
+patches:
+  - path: deployment-env.yaml

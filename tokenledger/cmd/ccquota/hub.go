@@ -992,6 +992,12 @@ func runHub(args []string) error {
 			}
 		}
 		go srv.RunEntryDNS(ctx)
+		// A service run's throwaway environment (claude-fleet#4005): one Job
+		// per attempt in the cluster whose ops link this is. Unset: no runner.
+		if c := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SVC_CLUSTER")); c != "" {
+			srv.SvcRunner = api.NewClusterSvcRunner(srv, c)
+			log.Printf("fleet: service runs start as Jobs in cluster %s", c)
+		}
 		// Service runs (claude-fleet#4004): the queue's sweep and the
 		// callbacks; no runner ⇒ runs queue and expire.
 		go srv.RunSvcRuns(ctx)

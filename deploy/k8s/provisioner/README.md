@@ -18,7 +18,8 @@ cluster, five minutes, single-use; five typed ops: `create-user-pod` (pod,
 limits, the pod's one login + UID — #3757 — and its one-time machine join code,
 written into its join Secret) ·
 `destroy-user-pod` (the join Secret too) · `set-limits` · `create-job` ·
-`bind-user-pod` (a claimed spare pod's `fleet/principal` label — claude-fleet#3553)
+`bind-user-pod` (a claimed spare pod's `fleet/principal` label — claude-fleet#3553) ·
+`create-svc-run` / `delete-svc-run` (a service run's Job and its key Secret — claude-fleet#4005)
 (`bin/fleet_cluster_ticket.py`,
 its Go twin `tokenledger/internal/control/cluster_ticket.go`). No manifest ever
 crosses: the provisioner renders the pod itself and checks it again
@@ -115,3 +116,35 @@ REJECT) for anyone else. The provisioner also refuses a Job of a listed repo for
 pod whose login is not on its list (#4002). What the guard does not cover: a pod
 with no egress guard (a Job, the shared node, another namespace's workload) can
 still reach the mirror while the CNI enforces no NetworkPolicy.
+
+## Service runs — one Job per run, then nothing (#4005)
+
+`create-svc-run` {run, attempt, svc, deadline, token} renders `render.py
+svc_run_resources` from the template's `svc` section and makes the Job
+`svc-r<n>-a<k>`, then its key Secret `svc-r<n>-a<k>-token` (one key `token`, the
+hub's one-time key for this run) owned by the Job — the garbage collector takes
+it with the Job, `ttlSecondsAfterFinished` after it ends. `delete-svc-run` deletes
+that Job, only when its labels say it is a service run's. The policy lets a Job
+mount no Secret but a run's own key and no disk at all, and lets only a run's
+`egress-guard` init be root (NET_ADMIN NET_RAW, read-only root).
+
+```sh
+NS=fleet-workers
+# the two roads a run's closed guard lets through, by ClusterIP
+RUN_EGRESS_IP=$(kubectl -n $NS get svc fleet-egress-run -o jsonpath='{.spec.clusterIP}')
+CENTRAL_IP=$(kubectl -n $NS get svc fleet-credproxy -o jsonpath='{.spec.clusterIP}')
+jq --arg img "$IMAGE" --arg hub "$HUB" --arg a "$RUN_EGRESS_IP:3128" --arg b "$CENTRAL_IP:80" \
+  '.svc = {image: $img, hub: $hub, pull_secrets: ["acr-pull"], ttl: 300,
+           cred_central: "http://fleet-credproxy.fleet-workers.svc.cluster.local",
+           egress_proxy: "http://fleet-egress-run.fleet-workers.svc.cluster.local:3128",
+           egress: {allow: [$a, $b]}}' template.json > t && mv t template.json
+kubectl -n $NS create configmap fleet-provisioner --from-file=template.json --from-file=account.pub \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n $NS rollout restart deploy/fleet-provisioner
+```
+
+`$IMAGE` is the managed-node image by digest (python3, iptables, the runner and the
+pinned Claude Code in its seed). On the hub: `CCQUOTA_FLEET_SVC_CLUSTER=<the
+cluster's name>` (docs/dev/FLEET-HUB.md «A service run's environment»). Check a run:
+`kubectl -n $NS get jobs,pods -l fleet/svc=livepage` — while it runs, and nothing
+five minutes after it ends.

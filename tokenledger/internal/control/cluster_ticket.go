@@ -35,6 +35,12 @@ const (
 	ClusterSetLimits      = "set-limits"
 	ClusterCreateJob      = "create-job"
 	ClusterBindUserPod    = "bind-user-pod"
+	// A service run's throwaway environment (claude-fleet#4005): create-svc-run
+	// carries the run, its attempt, its principal's name, its deadline and the
+	// Job's one-time key to the hub (written into its Secret); delete-svc-run
+	// takes the Job (and that Secret) away.
+	ClusterCreateSvcRun = "create-svc-run"
+	ClusterDeleteSvcRun = "delete-svc-run"
 )
 
 // PodLoginUID is the number a fresh person's pod runs its one login as
@@ -69,6 +75,11 @@ type ClusterTicket struct {
 	Cmd       string `json:"cmd,omitempty"`
 	Join      string `json:"join,omitempty"`
 	Principal string `json:"principal,omitempty"`
+	Run       string `json:"run,omitempty"`
+	Attempt   int    `json:"attempt,omitempty"`
+	Svc       string `json:"svc,omitempty"`
+	Deadline  int    `json:"deadline,omitempty"`
+	Token     string `json:"token,omitempty"`
 	Nonce     string `json:"nonce"`
 	Exp       int64  `json:"exp"`
 }
@@ -79,7 +90,8 @@ func SignClusterTicket(key ed25519.PrivateKey, t ClusterTicket) (string, error) 
 		return "", errors.New("no account key")
 	}
 	switch t.Op {
-	case ClusterCreateUserPod, ClusterDestroyUserPod, ClusterSetLimits, ClusterCreateJob, ClusterBindUserPod:
+	case ClusterCreateUserPod, ClusterDestroyUserPod, ClusterSetLimits, ClusterCreateJob, ClusterBindUserPod,
+		ClusterCreateSvcRun, ClusterDeleteSvcRun:
 	default:
 		return "", errors.New("not a provisioner op: " + t.Op)
 	}

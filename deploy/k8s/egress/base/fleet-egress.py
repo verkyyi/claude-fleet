@@ -10,7 +10,7 @@ opens a tunnel ONLY:
   - from a source address in FLEET_EGRESS_SOURCES (the cluster's pod range —
     ACK's flannel enforces no NetworkPolicy, so this is the wall that holds),
   - to a host FLEET_EGRESS_ALLOW names (`name` exact, `.name` = it and every
-    subdomain),
+    subdomain, `*` = any host — the run egress, fleet-egress-run, #4005),
   - on a port in FLEET_EGRESS_PORTS (443),
   - to an address that resolves public (never the VPC, metadata or loopback) —
     or through the parent FLEET_EGRESS_VIA names for that host (GitHub's git
@@ -49,6 +49,8 @@ def patterns(text):
 
 def match(host, pats):
     for p in pats:
+        if p == '*':
+            return p
         if p.startswith('.'):
             if host == p[1:] or host.endswith(p):
                 return p
@@ -263,6 +265,11 @@ def selftest():
     assert decide('CONNECT', 'example.com', 443, allow, ports) == 'host_not_allowed'
     assert decide('CONNECT', 'github.com', 22, allow, ports) == 'port_not_allowed'
     assert decide('GET', 'github.com', 80, allow, ports) == 'method_not_allowed'
+    # the run egress (#4005): any host on 443, never another port or method
+    anyhost = patterns('*')
+    assert decide('CONNECT', 'example.com', 443, anyhost, ports) is None
+    assert decide('CONNECT', 'example.com', 22, anyhost, ports) == 'port_not_allowed'
+    assert decide('GET', 'example.com', 443, anyhost, ports) == 'method_not_allowed'
     assert parent_for('codeload.github.com', via) == ('198.51.100.7', 3128)
     assert parent_for('github.com', via) == ('198.51.100.7', 3128)
     assert parent_for('api.anthropic.com', via) is None

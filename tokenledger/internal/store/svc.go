@@ -129,7 +129,10 @@ func (s *Store) EnsureSvc() error {
 	if _, err := s.write.Exec(s.d.ddl(svcSchema)); err != nil {
 		return fmt.Errorf("create svc tables: %w", err)
 	}
-	return s.ensureSvcRuns()
+	if err := s.ensureSvcRuns(); err != nil {
+		return err
+	}
+	return s.ensureSvcEnvs()
 }
 
 func svcTimeOpt(v string) *time.Time {

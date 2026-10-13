@@ -2097,6 +2097,47 @@ person's session.
   `svc.run.end` (with the state and code) · `svc.run.callback` (ok · retry ·
   failed) · `svc.callback`.
 
+## A service run's environment: one Job, then nothing (claude-fleet#4005)
+
+With `CCQUOTA_FLEET_SVC_CLUSTER=<cluster>` (the name its fleet-ops link says)
+the hub's runner is `ClusterSvcRunner` (`internal/api/svc_runner.go`); unset,
+there is none and runs queue and expire as above.
+
+- **One Job per attempt.** `Start` checks the run's `template_digest` is one its
+  principal registered (`svc_templates`; none ⇒ `template_invalid`, no Job — the
+  registering half is claude-fleet#4032), mints a one-time key `fsj_…` (kept here
+  only as its sha256, `svc_run_jobs`) and signs a `create-svc-run` ticket {run,
+  attempt, svc, deadline, token} down the ops link. The provisioner renders
+  `render.py svc_run_resources` — Job `svc-r<n>-a<k>`, account `fleet-job`, no
+  token, emptyDirs `/work` `/out` `/tmp` only, its key Secret
+  `svc-r<n>-a<k>-token` owned by the Job, uid 10001 on a read-only root,
+  requests 250m / 512Mi, limits 1 CPU / 2Gi, `backoffLimit 0`,
+  `activeDeadlineSeconds = deadline_s`, `ttlSecondsAfterFinished 300` — and the
+  admission policy holds it to that. A closed egress guard lets the pod reach
+  DNS, the run egress (`deploy/k8s/egress/run`: any public host on 443) and the
+  credential proxy, and REJECTs the metadata address, the pod / service ranges
+  and every private range.
+- **The Job's road.** `GET /v1/node/svc-runs/R<n>/spec?attempt=k` with
+  `Authorization: Bearer fsj_…` — once: the agent.md, the inputs and a model
+  pass (`fcp-h1/2`, principal = the service, `worker_id svc/R<n>/a<k>`, Claude
+  only, good until the deadline + 2 minutes). `POST /v1/node/svc-runs/R<n>/result
+  {attempt, exit, report, meta, usage}` — once: exit 0 succeeded (contract 5
+  checked again), 20 `output_invalid`, 30 `run_timeout`, else `infra_error`
+  (its `detail`, the runner's stderr tail, stays in the hub's log) — which a
+  first attempt is retried for (#4007): a new Job `…-a2`, a new key, the time
+  left of `deadline_at` as its deadline. A key opens only its own run (another's is 401), an ended one nothing (410).
+  The result, a cancel and the sweep's `run_timeout` end the key and revoke the
+  pass; a cancel and a timeout also send `delete-svc-run`.
+- **What runs inside** is `bin/fleet-svc-runner.py` (`fetch` · `run`) from the
+  managed-node image's seed: `claude -p --agent report --output-format json`,
+  `--tools WebSearch,WebFetch,Read,Write`, files only under `/work` `/out`, the
+  model through `<central>/v1/proxy/anthropic` with the pass — the session never
+  sees the key or the hub's address. The pass is the service principal's: its
+  subscription comes from the shared pool, so `fleet.cred_allow.user.svc:<name>` must
+  allow one where the hub runs strict.
+- **Audit.** `svc.run.job` (the ticket went out) · `svc.run.spec` (the pass and
+  its expiry). BREAK-IT `svc-run-sees-keys`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

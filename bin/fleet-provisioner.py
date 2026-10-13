@@ -27,6 +27,13 @@ done. The ops are typed, never a manifest:
                                    user_pod.private_mirrors whose list does not
                                    name the pod's login (#4002)
   bind-user-pod    pod principal   a claimed pod's fleet/principal label (#3553)
+  create-svc-run   run attempt svc render.py's svc Job for one service run (#4005):
+                   deadline token  the template's svc.{image, hub, cred_central,
+                                   egress_proxy, egress, pull_secrets, ttl}; then
+                                   its key Secret svc-r<n>-a<k>-token, owned by
+                                   the Job (it goes with it)
+  delete-svc-run   run attempt     that Job, only if it is a svc run's (its
+                                   Secret and pod follow)
 
 Everything it would send is first held to the template here (off_template —
 the admission policy's own rules, deploy/k8s/provisioner/policy.yaml, which the
@@ -86,6 +93,7 @@ PATHS = {
     'Secret': '/api/v1/namespaces/%s/secrets',
 }
 JOIN_KEY = 'machine'
+SVC_KEY = 'token'
 
 
 def join_secret(pod, ns, code):
@@ -117,9 +125,21 @@ def off_template(o, ns):
         return '%s %s carries no fleet/role user|job label' % (kind, meta.get('name'))
     if kind == 'Secret':
         labels = meta['labels']
+        keys = set(o.get('stringData') or {}) | set(o.get('data') or {})
+        if labels.get('fleet/role') == 'job':
+            # a service run's key (#4005): svc-r<n>-a<k>-token, one key, owned by its Job alone
+            job = svc_job_name(labels)
+            if not job or meta.get('name') != job + '-token':
+                return 'a Job\'s Secret is a service run\'s key, svc-r<n>-a<k>-token'
+            if o.get('type', 'Opaque') != 'Opaque' or o.get('stringData') or keys != {SVC_KEY}:
+                return 'a run key is Opaque and holds only %r' % SVC_KEY
+            for ref in meta.get('ownerReferences') or []:
+                if ref.get('kind') != 'Job' or ref.get('name') != job:
+                    return 'a run key is owned by its own Job alone'
+            return None
         if labels.get('fleet/role') != 'user' or meta.get('name') != '%s-join' % labels.get('fleet/pod'):
             return 'a Secret the template makes is a user pod\'s join Secret, <fleet/pod>-join'
-        if o.get('type', 'Opaque') != 'Opaque' or set(o.get('stringData') or {}) | set(o.get('data') or {}) != {JOIN_KEY}:
+        if o.get('type', 'Opaque') != 'Opaque' or keys != {JOIN_KEY}:
             return 'a join Secret is Opaque and holds only %r' % JOIN_KEY
         return None
     s = o.get('spec') or {}
@@ -142,9 +162,16 @@ def off_template(o, ns):
         return 'a %s runs as %s, not %r' % (kind, SERVICE_ACCOUNT[kind], p.get('serviceAccountName'))
     if p.get('nodeName') or p.get('hostAliases') or p.get('ephemeralContainers'):
         return 'nodeName / hostAliases / ephemeralContainers are not the template\'s'
+    svc_job = kind == 'Job' and meta['labels'].get('fleet/job-kind') == 'svc'
+    if svc_job and svc_job_name(meta['labels']) != meta.get('name'):
+        return 'a service run\'s Job is svc-r<n>-a<k>, its fleet/run and fleet/attempt'
     for v in p.get('volumes') or []:
         if set(v) - {'name', 'emptyDir', 'persistentVolumeClaim', 'secret'}:
             return 'volume %s: only emptyDir, a claim or a Secret' % v.get('name')
+        if kind == 'Job' and 'persistentVolumeClaim' in v:
+            return 'volume %s: a Job mounts no disk' % v.get('name')
+        if kind == 'Job' and 'secret' in v and not (svc_job and (v['secret'] or {}).get('secretName') == meta['name'] + '-token'):
+            return 'volume %s: a Job mounts no Secret but a service run its own key' % v.get('name')
     psc = p.get('securityContext') or {}
     for c in (p.get('initContainers') or []) + (p.get('containers') or []):
         if not DIGEST.match(c.get('image') or ''):
@@ -158,8 +185,9 @@ def off_template(o, ns):
         if 'ALL' not in (caps.get('drop') or []):
             return 'container %s: drops ALL capabilities' % c.get('name')
         add = set(caps.get('add') or [])
-        if kind == 'Job' and add:
-            return 'a Job adds no capability'
+        guard = svc_job and c.get('name') == 'egress-guard'
+        if kind == 'Job' and add and not (guard and not add - ROOT_CAPS['egress-guard']):
+            return 'a Job adds no capability (a service run\'s egress guard its two)'
         if kind == 'Deployment' and c.get('name') in ROOT_CAPS:
             if add - ROOT_CAPS[c['name']]:
                 return 'container %s: capability %s is not the template\'s' % (
@@ -170,12 +198,23 @@ def off_template(o, ns):
             if not (sc.get('runAsNonRoot', psc.get('runAsNonRoot'))) \
                     or (sc.get('runAsUser', psc.get('runAsUser')) or 0) == 0:
                 return 'container %s may run as root: a person\'s pod is root only in sshd' % c.get('name')
-        if kind == 'Job':
+        if kind == 'Job' and not guard:
             if not (sc.get('runAsNonRoot') or psc.get('runAsNonRoot')) or not sc.get('readOnlyRootFilesystem'):
                 return 'a Job runs non-root on a read-only root'
             if (sc.get('runAsUser', psc.get('runAsUser')) or 0) == 0:
                 return 'a Job never runs as uid 0'
+        if guard and not sc.get('readOnlyRootFilesystem'):
+            return 'a run\'s egress guard runs on a read-only root'
     return None
+
+
+def svc_job_name(labels):
+    """svc-r<n>-a<k> from a run's fleet/run and fleet/attempt labels, or ''."""
+    run, att = labels.get('fleet/run') or '', labels.get('fleet/attempt') or ''
+    if labels.get('fleet/job-kind') != 'svc' or not re.fullmatch(r'R[1-9][0-9]{0,15}', run) \
+            or not re.fullmatch(r'[1-9]', att):
+        return ''
+    return 'svc-%s-a%s' % (run.lower(), att)
 
 
 class API(object):
@@ -280,7 +319,7 @@ def act(t, conf, api, r=None):
     """Run one checked ticket; the list of what was done."""
     r = r or render()
     ns = conf.get('namespace', 'fleet-workers')
-    op, pod = t['op'], t['pod']
+    op, pod = t['op'], t.get('pod', '')
     if op == 'create-user-pod':
         kw = dict(conf.get('user_pod') or {})
         kw['pull_secrets'] = tuple(kw.get('pull_secrets') or ('acr-pull',))
@@ -316,6 +355,22 @@ def act(t, conf, api, r=None):
         except (ValueError, TypeError) as e:
             raise Refused('cannot render the Job: %s' % e)
         return create(api, ns, objs)
+    if op == 'create-svc-run':
+        return create_svc_run(api, ns, conf.get('svc') or {}, t, r)
+    if op == 'delete-svc-run':
+        name = r.svc_run_name(t['run'], t['attempt'])
+        st, o = api.call('GET', (PATHS['Job'] % ns) + '/' + name)
+        if st == 404:
+            return ['Job %s gone' % name]
+        _ok(st, o, 'Job %s' % name)
+        if svc_job_name((o.get('metadata') or {}).get('labels') or {}) != name:
+            raise Refused('Job %s is not a service run\'s' % name)
+        st, out = api.call('DELETE', (PATHS['Job'] % ns) + '/' + name,
+                           {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'propagationPolicy': 'Background',
+                            'preconditions': {'uid': o['metadata']['uid']}})
+        if st != 404:
+            _ok(st, out, 'delete Job %s' % name)
+        return ['Job %s deleted' % name]
     if op == 'set-limits':
         try:
             patch = r.user_pod_limits_patch(r.user_pod_limits(t['limits']))
@@ -359,6 +414,40 @@ def act(t, conf, api, r=None):
     raise Refused('not a provisioner op: %s' % op)
 
 
+def create_svc_run(api, ns, svc, t, r):
+    """A service run's Job, then its key Secret owned by it (#4005)."""
+    try:
+        job = r.svc_run_resources(svc.get('image', ''), t['run'], t['attempt'], t['svc'], t['deadline'],
+                                  svc.get('hub', ''), svc.get('cred_central', ''), svc.get('egress_proxy', ''),
+                                  namespace=ns, egress=svc.get('egress') or {},
+                                  pull_secrets=tuple(svc.get('pull_secrets') or ('acr-pull',)),
+                                  ttl=int(svc.get('ttl', r.SVC_TTL)))[0]
+        key = r.svc_run_key_secret(job['metadata']['name'], ns, t['token'], 'uid')
+    except (ValueError, TypeError) as e:
+        raise Refused('cannot render the service run: %s' % e)
+    for o in (job, key):
+        why = off_template(o, ns)
+        if why:
+            raise Refused('off the template: ' + why)
+    name = job['metadata']['name']
+    st, out = api.call('POST', PATHS['Job'] % ns, job)
+    if st == 409:  # a replayed create: the Job that is there
+        st, out = api.call('GET', (PATHS['Job'] % ns) + '/' + name)
+        _ok(st, out, 'Job %s' % name)
+        if svc_job_name((out.get('metadata') or {}).get('labels') or {}) != name:
+            raise Refused('Job %s is not a service run\'s' % name)
+        done = ['Job %s exists' % name]
+    else:
+        _ok(st, out, 'create Job %s' % name)
+        done = ['Job %s' % name]
+    key['metadata']['ownerReferences'][0]['uid'] = (out.get('metadata') or {}).get('uid', '')
+    st, o = api.call('POST', PATHS['Secret'] % ns, key)
+    if st == 409:
+        return done + ['Secret %s exists' % key['metadata']['name']]
+    _ok(st, o, 'create Secret %s' % key['metadata']['name'])
+    return done + ['Secret %s' % key['metadata']['name']]
+
+
 def load_conf():
     path = os.environ.get('FLEET_PROVISIONER_CONF') or '/etc/fleet-provisioner/template.json'
     with open(path) as f:
@@ -383,7 +472,7 @@ def handle(text, conf=None, api=None, now=None):
         return 3, 'refused: %s' % e
     except (Failed, OSError) as e:
         return 1, 'failed: %s' % e
-    return 0, '%s %s: %s' % (t['op'], t['pod'], '; '.join(done) or 'nothing to do')
+    return 0, '%s %s: %s' % (t['op'], t.get('pod') or t.get('run', ''), '; '.join(done) or 'nothing to do')
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

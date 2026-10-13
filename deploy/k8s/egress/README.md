@@ -36,3 +36,11 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://example.com/                # 
 curl -sS --noproxy '*' -m3 https://registry.npmjs.org/                        # 拒绝（守卫，--egress-closed）
 kubectl -n fleet-workers logs deploy/fleet-egress | tail                      # 每请求一行
 ```
+
+## 运行出口（`run/`，#4005）
+
+服务运行（活页的报告任务）的 Job 要读事先列不出来的网页，所以有第二份同样的程序：Service
+`fleet-egress-run:3128`，`FLEET_EGRESS_ALLOW=*`——任何主机，但仍然只开 443、只 `CONNECT`、每个解析结果都得是**公网**地址（集群、元数据、VPC、回环一律拒）。
+它只给运行用：运行 Job 的守卫（`render.py svc_run_resources`，封闭）只放它和凭据代理两个 ClusterIP；用户 pod 的守卫从来不放它。
+随 `kubectl kustomize deploy/k8s/fleet-workers` 一起上（`run/` 是它的一份 overlay，名字加 `-run`，标签 `fleet/egress: run`）；
+`FLEET_EGRESS_SOURCES` 与 `../fleet-workers` 的同一个 pod 网段。

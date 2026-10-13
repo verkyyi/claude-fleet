@@ -22,6 +22,13 @@
 #                             credential, nothing mounted, not root; untrusted
 #                             never reaches the public internet; both deleted
 #                             by their TTL
+#   svc-run-sees-keys         two service runs' Jobs one after the other (#4005):
+#                             the second finds nothing the first left in /work,
+#                             /out or /tmp; neither reaches the metadata
+#                             address, the API server, another pod or a private
+#                             range (the closed guard); no token, not root; both
+#                             Jobs, their pods and their key Secrets gone by
+#                             their TTL
 #
 #   kind-drill.sh <registry host:port>      (kind-action's LOCAL_REGISTRY)
 #
@@ -93,10 +100,45 @@ EOF
 mkdir -p "$tmp/job/seed/bin"
 cp "$ROOT/bin/fleet-job-runner.sh" "$tmp/job/seed/bin/"
 printf 'FROM alpine:3.20\nRUN apk add --no-cache curl\nCOPY probe.sh /probe.sh\nCOPY seed/ /opt/claude-fleet/seed/current/\nRUN chmod 755 /probe.sh\nCMD ["/probe.sh"]\n' > "$tmp/job/Dockerfile"
+# a service run's stand-in (#4005): the Job's real template, a probe at the
+# runner's place — fetch lists what an earlier run could have left and marks
+# /work /out /tmp; run tries every way out the guard must cut
+mkdir -p "$tmp/svc/seed/bin"
+cat > "$tmp/svc/seed/bin/fleet-svc-runner.py" <<'EOF'
+import os, socket, sys
+mode, run = sys.argv[1], os.environ.get("FLEET_SVC_RUN", "?")
+dirs = ("/work", "/out", "/tmp")
+if mode == "fetch":
+    left = sorted(f for d in dirs for f in os.listdir(d) if f.startswith("mark-"))
+    for d in dirs:
+        open(os.path.join(d, "mark-" + run), "w").write(run)
+    print("PROBE-FETCH %s left=%s" % (run, ",".join(left) or "-"), flush=True)
+    sys.exit(0)
+def reach(host, port):
+    if not host:
+        return "closed"
+    try:
+        socket.create_connection((host, port), timeout=4).close()
+        return "open"
+    except OSError:
+        return "closed"
+try:
+    api = socket.gethostbyname("kubernetes.default.svc.cluster.local"); dns = "ok"
+except OSError:
+    api, dns = "", "fail"
+prov = socket.gethostbyname("fleet-provisioner.fleet-workers.svc.cluster.local") if dns == "ok" else ""
+token = "present" if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token") else "absent"
+keys = [k for k in os.environ if any(w in k.upper() for w in ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))]
+print("PROBE-RUN %s uid=%d token=%s keys=%d dns=%s meta=%s api=%s prov=%s private=%s net=%s" % (
+    run, os.getuid(), token, len(keys), dns, reach("100.100.100.200", 80), reach(api, 443), reach(prov, 8790),
+    reach("10.0.0.1", 80), reach("1.1.1.1", 443)), flush=True)  # oss-ok: a private address the guard must cut
+EOF
+printf 'FROM debian:trixie-slim\nRUN apt-get update -qq && apt-get install -y --no-install-recommends python3 iptables && rm -rf /var/lib/apt/lists/*\nCOPY seed/ /opt/claude-fleet/seed/current/\n' > "$tmp/svc/Dockerfile"
 PROV_IMG=$(push fleet-provisioner "$tmp/prov")
 USER_IMG=$(push fleet-user-standin "$tmp/user")
 JOB_IMG=$(push fleet-job-standin "$tmp/job")
-echo "provisioner $PROV_IMG"; echo "user pod    $USER_IMG"; echo "job         $JOB_IMG"
+SVC_IMG=$(push fleet-svc-standin "$tmp/svc")
+echo "provisioner $PROV_IMG"; echo "user pod    $USER_IMG"; echo "job         $JOB_IMG"; echo "svc run     $SVC_IMG"
 
 step "fleet-workers: accounts, fleet-ops' Role, network rules, the provisioner and its policy"
 kubectl create namespace "$NS"
@@ -108,14 +150,19 @@ head -c 32 /dev/urandom > "$tmp/key"
 python3 "$ROOT/bin/fleet_cluster_ticket.py" pub "$tmp/key" > "$tmp/account.pub"
 DNS=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
 SVC_CIDR=$(kubectl cluster-info dump 2>/dev/null | grep -m1 -o 'service-cluster-ip-range=[0-9./]*' | cut -d= -f2 || true)
-python3 - "$USER_IMG" "$JOB_IMG" "$DNS" "${SVC_CIDR:-10.96.0.0/12}" > "$tmp/template.json" <<'EOF'  # oss-ok: kind's own default service range
+python3 - "$USER_IMG" "$JOB_IMG" "$DNS" "${SVC_CIDR:-10.96.0.0/12}" "$SVC_IMG" > "$tmp/template.json" <<'EOF'  # oss-ok: kind's own default service range
 import json, sys
-user, job, dns, svc = sys.argv[1:]
+user, job, dns, svc, run = sys.argv[1:]
+eg = {"dns": dns, "service_cidr": svc, "pod_cidr": "10.244.0.0/16"}  # oss-ok: kind's own default pod range
 print(json.dumps({"cluster": "kind", "namespace": "fleet-workers",
     "user_pod": {"image": user, "hub": "https://hub.example.com", "storage_class": "standard",
-                 "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local",
-                 "egress": {"dns": dns, "service_cidr": svc, "pod_cidr": "10.244.0.0/16"}},  # oss-ok: kind's own default pod range
-    "job": {"image": job, "ttl": 30}}))
+                 "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local", "egress": eg},
+    "job": {"image": job, "ttl": 30},
+    # a service run (#4005): the guard's one allowed road is a TEST-NET address here
+    "svc": {"image": run, "hub": "https://hub.example.com",
+            "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local",
+            "egress_proxy": "http://fleet-egress-run.fleet-workers.svc.cluster.local:3128",
+            "egress": dict(eg, allow=["192.0.2.1:3128"]), "ttl": 30}}))
 EOF
 K create configmap fleet-provisioner --from-file=template.json="$tmp/template.json" --from-file=account.pub="$tmp/account.pub"
 K rollout status deploy/fleet-provisioner --timeout=180s
@@ -141,9 +188,9 @@ done | sort -u | tr '\n' ' ')
 echo "only fleet-provisioner may write"
 
 step "render the template the provisioner uses, and the ways off it"
-python3 - "$ROOT" "$tmp" "$USER_IMG" "$JOB_IMG" "$DNS" <<'EOF'
+python3 - "$ROOT" "$tmp" "$USER_IMG" "$JOB_IMG" "$DNS" "$SVC_IMG" <<'EOF'
 import copy, json, sys
-root, tmp, user, job, dns = sys.argv[1:]
+root, tmp, user, job, dns, run = sys.argv[1:]
 sys.path.insert(0, root + "/extras/managed-node")
 import render as r
 CENTRAL = "http://fleet-credproxy.fleet-workers.svc.cluster.local"
@@ -199,6 +246,23 @@ w("good-secret", sec)
 w("bad-secret-door", mut(sec, lambda o: o["metadata"].update(name="fleet-door")))
 w("bad-secret-twokeys", mut(sec, lambda o: o["data"].update(token="eA==")))
 w("bad-secret-unlabelled", mut(sec, lambda o: o["metadata"].update(labels={"fleet/pod": "u-dryrun1"})))
+# a service run's Job and its key (#4005) — and the ways off them
+sj = r.svc_run_resources(run, "R900", 1, "livepage", 900, "https://hub.example.com", CENTRAL,
+                         "http://fleet-egress-run.fleet-workers.svc.cluster.local:3128",
+                         egress={"dns": dns, "allow": ["192.0.2.1:3128"]})[0]
+sk = r.svc_run_key_secret("svc-r900-a1", "fleet-workers", "fsj_" + "a" * 52)
+w("good-svc-job", sj); w("good-svc-key", sk)
+w("bad-svc-other-secret", mut(sj, lambda o: ps(o)["volumes"].append({"name": "x", "secret": {"secretName": "u-dryrun1-join"}})))
+w("bad-svc-run-caps", mut(sj, lambda o: c0(o)["securityContext"]["capabilities"].update(add=["NET_ADMIN"])))
+w("bad-svc-run-root", mut(sj, lambda o: c0(o)["securityContext"].update(runAsUser=0, runAsNonRoot=False)))
+w("bad-svc-name", mut(sj, lambda o: o["metadata"].update(name="svc-r901-a1")))
+w("bad-svc-disk", mut(sj, lambda o: ps(o)["volumes"].append({"name": "d", "persistentVolumeClaim": {"claimName": "u-dryrun1"}})))
+w("bad-job-guard", mut(jb, lambda o: ps(o).setdefault("initContainers", []).append(
+    [c for c in ps(sj)["initContainers"] if c["name"] == "egress-guard"][0])))
+w("bad-svc-key-twokeys", mut(sk, lambda o: o["data"].update(x="eA==")))
+w("bad-svc-key-name", mut(sk, lambda o: o["metadata"].update(name="svc-r900-a1-key")))
+w("bad-svc-key-owner", mut(sk, lambda o: o["metadata"].update(ownerReferences=[{"apiVersion": "apps/v1",
+    "kind": "Deployment", "name": "fleet-door", "uid": "0d6c4b0e-0000-4000-8000-000000000000"}])))
 EOF
 
 step "provisioner-off-template: as $PROV"
@@ -320,6 +384,40 @@ gone=$(K get jobs -l fleet/role=job 2>&1)
 echo "$gone"
 { echo; echo "### job-sees-keys"; echo '```'; echo "$lt"; echo "$lu"; echo; echo '$ kubectl get jobs -l fleet/role=job'; echo "$gone"; echo '```'; } | summary
 
+step "svc-run-sees-keys: two service runs, one after the other (#4005)"
+svckey() { printf 'fsj_%s' "$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'a-z2-7' | head -c 52)"; }
+for run in R101 R102; do
+  j=svc-$(printf '%s' "$run" | tr 'R' 'r')-a1
+  [ "$(post "$(tk "$tmp/key" '{"op":"create-svc-run","cluster":"kind","run":"'"$run"'","attempt":1,"svc":"livepage","deadline":120,"token":"'"$(svckey)"'","nonce":"'"$(printf '5%03d%028d' "${run#R}" 0)"'","exp":'"$exp"'}')")" = 200 ] \
+    || fail "the hub's create-svc-run $run: $(cat "$tmp/resp")"
+  K wait --for=condition=complete "job/$j" --timeout=240s >/dev/null || { K describe job "$j" | tail -20; K logs "job/$j" --all-containers || true; fail "$j never completed"; }
+  K get secret "$j-token" -o jsonpath='{.metadata.ownerReferences[0].name}' | grep -qx "$j" || fail "$j's key is not owned by its Job"
+done
+f1=$(K logs job/svc-r101-a1 -c fetch); r1=$(K logs job/svc-r101-a1 -c run)
+f2=$(K logs job/svc-r102-a1 -c fetch); r2=$(K logs job/svc-r102-a1 -c run)
+echo "$f1"; echo "$r1"; echo "$f2"; echo "$r2"
+printf '%s' "$f1" | grep -q 'left=-$' || fail "the first run found files: $f1"
+printf '%s' "$f2" | grep -q 'left=-$' || fail "the second run found what the first left: $f2"
+for l in "$r1" "$r2"; do
+  printf '%s' "$l" | grep -q 'token=absent' || fail "a run found a token: $l"
+  printf '%s' "$l" | grep -q ' keys=0 ' || fail "a run found a credential in its environment: $l"
+  printf '%s' "$l" | grep -q 'uid=0 ' && fail "a run ran as root: $l"
+  printf '%s' "$l" | grep -q ' dns=ok ' || fail "a run has no DNS: $l"
+  for way in meta api prov private net; do
+    printf '%s' "$l" | grep -q " $way=closed" || fail "a run reached $way: $l"
+  done
+done
+echo "two runs: the second found nothing of the first; metadata · API server · another Service · private · the open internet (no egress here) all cut; no token, no key, not root"
+for _ in $(seq 1 150); do
+  left=$(K get jobs,pods,secrets -o name 2>/dev/null | grep -E 'svc-r10[12]-a1' || true)
+  [ -z "$left" ] && break; sleep 1
+done
+[ -z "$left" ] || fail "the finished runs were never deleted: $left"
+gone=$(K get jobs,pods -l fleet/svc=livepage 2>&1)
+echo "$gone"
+{ echo; echo "### svc-run-sees-keys"; echo '```'; echo "$f1"; echo "$r1"; echo "$f2"; echo "$r2"; echo;
+  echo '$ kubectl -n fleet-workers get jobs,pods -l fleet/svc=livepage   # after the TTL'; echo "$gone"; echo '```'; } | summary
+
 step "spare-pod-leaks: bind, destroy, a fresh pod"
 [ "$(post "$(tk "$tmp/key" '{"op":"bind-user-pod","cluster":"kind","pod":"u-drill1","principal":"gh.7001","nonce":"a1111111111111111111111111111111","exp":'"$exp"'}')")" = 200 ] \
   || fail "the hub's bind: $(cat "$tmp/resp")"
@@ -372,4 +470,4 @@ case "$asroot" in *IN) fail "root logged in over ssh" ;; esac
 out="fleet: $fid · ps fleet: $fu· ps sshd: $su· a login: $landed"
 echo "$out"
 { echo; echo "### root-in-user-pod"; echo '```'; echo "$out"; echo '```'; } | summary
-echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · job-sees-keys · spare-pod-leaks · root-in-user-pod (kind)"
+echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · job-sees-keys · svc-run-sees-keys · spare-pod-leaks · root-in-user-pod (kind)"

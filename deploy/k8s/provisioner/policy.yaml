@@ -21,7 +21,12 @@
 #                CHOWN SETUID SETGID SYS_CHROOT KILL) and the `egress-guard` init
 #                (NET_ADMIN NET_RAW), every other container runAsNonRoot, not
 #                uid 0, adding nothing (#3757); a Job adds none, runs non-root
-#                on a read-only root
+#                on a read-only root, mounts no disk and no Secret
+#   a service    (claude-fleet#4005) a Job labelled fleet/job-kind svc is named
+#   run          svc-r<n>-a<k> after its fleet/run · fleet/attempt; it alone may
+#                mount a Secret — its own key svc-r<n>-a<k>-token (labelled
+#                fleet/role job, Opaque, one key `token`) — and its egress-guard
+#                init alone may be root, adding NET_ADMIN NET_RAW, on a read-only root
 #
 # admissionregistration.k8s.io/v1: Kubernetes 1.30 or newer.
 apiVersion: admissionregistration.k8s.io/v1
@@ -56,6 +61,13 @@ spec:
       expression: "['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL']"
     - name: guardCaps
       expression: "['NET_ADMIN', 'NET_RAW']"
+    # a service run's Job (claude-fleet#4005) and the name its labels give it
+    - name: svcJob
+      expression: "variables.workload && variables.isJob && has(object.metadata.labels) && 'fleet/job-kind' in object.metadata.labels && object.metadata.labels['fleet/job-kind'] == 'svc'"
+    - name: svcName
+      expression: "has(variables.obj.metadata.labels) && 'fleet/run' in variables.obj.metadata.labels && 'fleet/attempt' in variables.obj.metadata.labels && variables.obj.metadata.labels['fleet/run'].matches('^R[1-9][0-9]{0,15}$') && variables.obj.metadata.labels['fleet/attempt'].matches('^[1-9]$') ? 'svc-' + variables.obj.metadata.labels['fleet/run'].lowerAscii() + '-a' + variables.obj.metadata.labels['fleet/attempt'] : ''"
+    - name: svcKey
+      expression: "request.kind.kind == 'Secret' && has(variables.obj.metadata.labels) && 'fleet/role' in variables.obj.metadata.labels && variables.obj.metadata.labels['fleet/role'] == 'job'"
   validations:
     - expression: "variables.book || (request.kind.group == 'apps' && request.kind.kind == 'Deployment') || (request.kind.group == 'batch' && request.kind.kind == 'Job') || (request.kind.group == '' && request.kind.kind in ['Service', 'PersistentVolumeClaim', 'Secret'])"
       messageExpression: "'the provisioner builds no ' + request.kind.kind"
@@ -65,10 +77,16 @@ spec:
       message: "the provisioner touches only objects labelled fleet/role user|job"
     - expression: "variables.book || request.operation != 'UPDATE' || (has(oldObject.metadata.labels) && 'fleet/role' in oldObject.metadata.labels && oldObject.metadata.labels['fleet/role'] in ['user', 'job'])"
       message: "the provisioner cannot relabel somebody else's object into its reach"
-    - expression: "request.kind.kind != 'Secret' || (request.operation != 'UPDATE' && has(variables.obj.metadata.labels) && 'fleet/pod' in variables.obj.metadata.labels && variables.obj.metadata.labels['fleet/role'] == 'user' && variables.obj.metadata.name == variables.obj.metadata.labels['fleet/pod'] + '-join')"
-      message: "the only Secret the provisioner makes or deletes is a user pod's join Secret, <fleet/pod>-join"
-    - expression: "request.operation == 'DELETE' || request.kind.kind != 'Secret' || ((!has(object.type) || object.type == 'Opaque') && (has(object.data) ? object.data.size() == 1 && 'machine' in object.data : false))"
-      message: "a join Secret is Opaque and holds only its machine join code"
+    - expression: "request.kind.kind != 'Secret' || (request.operation != 'UPDATE' && has(variables.obj.metadata.labels) && ((variables.svcKey && variables.svcName != '' && 'fleet/job-kind' in variables.obj.metadata.labels && variables.obj.metadata.labels['fleet/job-kind'] == 'svc' && variables.obj.metadata.name == variables.svcName + '-token') || ('fleet/pod' in variables.obj.metadata.labels && variables.obj.metadata.labels['fleet/role'] == 'user' && variables.obj.metadata.name == variables.obj.metadata.labels['fleet/pod'] + '-join')))"
+      message: "the only Secrets the provisioner makes or deletes are a user pod's join Secret, <fleet/pod>-join, and a service run's key, svc-r<n>-a<k>-token"
+    - expression: "request.operation == 'DELETE' || request.kind.kind != 'Secret' || ((!has(object.type) || object.type == 'Opaque') && !has(object.stringData) && (has(object.data) ? object.data.size() == 1 && ((variables.svcKey && 'token' in object.data) || (!variables.svcKey && 'machine' in object.data)) : false))"
+      message: "a join Secret holds only its machine join code, a run key only its token — Opaque, one key"
+    - expression: "request.operation == 'DELETE' || !variables.svcKey || !has(object.metadata.ownerReferences) || object.metadata.ownerReferences.all(r, r.kind == 'Job' && r.name == variables.svcName)"
+      message: "a run key is owned by its own Job alone"
+    - expression: "!variables.svcJob || object.metadata.name == variables.svcName"
+      message: "a service run's Job is svc-r<n>-a<k>, after its fleet/run and fleet/attempt"
+    - expression: "!variables.workload || !variables.isJob || !has(variables.pod.volumes) || variables.pod.volumes.all(v, !has(v.persistentVolumeClaim) && (!has(v.secret) || (variables.svcJob && has(v.secret.secretName) && v.secret.secretName == object.metadata.name + '-token')))"
+      message: "a Job mounts no disk and no Secret — a service run its own key alone"
     - expression: "request.operation == 'DELETE' || request.kind.kind != 'Service' || ((!has(object.spec.type) || object.spec.type == 'ClusterIP') && !has(object.spec.externalIPs) && !has(object.spec.externalName))"
       message: "a Service the provisioner makes is ClusterIP only"
     - expression: "request.operation == 'DELETE' || request.kind.kind != 'PersistentVolumeClaim' || (!has(object.spec.dataSource) && !has(object.spec.dataSourceRef))"
@@ -89,12 +107,12 @@ spec:
       message: "every image is pinned by digest"
     - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false && (!has(c.securityContext.privileged) || !c.securityContext.privileged))"
       message: "no privileged container, no privilege escalation"
-    - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && (!has(c.securityContext.capabilities.add) || c.securityContext.capabilities.add.all(a, !variables.isJob && ((c.name == 'sshd' && a in variables.sshdCaps) || (c.name == 'egress-guard' && a in variables.guardCaps)))))"
-      message: "every container drops ALL capabilities; only sshd and the egress guard add theirs (a Job adds none)"
+    - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && (!has(c.securityContext.capabilities.add) || c.securityContext.capabilities.add.all(a, !variables.isJob && ((c.name == 'sshd' && a in variables.sshdCaps) || (c.name == 'egress-guard' && a in variables.guardCaps)) || (variables.svcJob && c.name == 'egress-guard' && a in variables.guardCaps))))"
+      message: "every container drops ALL capabilities; only sshd and the egress guard add theirs (a Job adds none but a service run's guard)"
     - expression: "!variables.workload || variables.isJob || variables.containers.all(c, c.name in ['sshd', 'egress-guard'] || (has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot && has(c.securityContext.runAsUser) && c.securityContext.runAsUser != 0))"
       message: "a person's pod is root only in sshd's login step: every other container runs non-root (#3757)"
-    - expression: "!variables.workload || !variables.isJob || (has(variables.pod.securityContext) && has(variables.pod.securityContext.runAsNonRoot) && variables.pod.securityContext.runAsNonRoot && has(variables.pod.securityContext.runAsUser) && variables.pod.securityContext.runAsUser != 0 && variables.containers.all(c, has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem))"
-      message: "a Job runs non-root on a read-only root"
+    - expression: "!variables.workload || !variables.isJob || variables.containers.all(c, has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem && ((variables.svcJob && c.name == 'egress-guard') || (((has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot) || (has(variables.pod.securityContext) && has(variables.pod.securityContext.runAsNonRoot) && variables.pod.securityContext.runAsNonRoot)) && (has(c.securityContext.runAsUser) ? c.securityContext.runAsUser != 0 : (has(variables.pod.securityContext) && has(variables.pod.securityContext.runAsUser) && variables.pod.securityContext.runAsUser != 0)))))"
+      message: "a Job runs non-root on a read-only root (a service run's egress guard is root for its rules alone)"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-egress
+spec:
+  template:
+    spec:
+      containers:
+        - name: egress
+          env:
+            # the cluster's pod range (docs/dev/MANAGED-LINUX.md «Egress guard»)
+            - name: FLEET_EGRESS_SOURCES
+              value: "198.18.0.0/16"
+            # any public host on 443: a report's sources are not known ahead
+            - name: FLEET_EGRESS_ALLOW
+              value: "*"
+            - name: FLEET_EGRESS_VIA
+              value: ""
