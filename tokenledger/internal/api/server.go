@@ -99,6 +99,9 @@ type Server struct {
 	// DocsFS is the built documentation (web/docs) served at /docs/ and
 	// /en/docs/ while Site is on; nil = none.
 	DocsFS fs.FS
+	// ConsoleFS is the new console's build (web/console, claude-fleet#3925):
+	// app/ for /app's entry and assets, admin/ for /admin's; nil = none yet.
+	ConsoleFS fs.FS
 
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,
@@ -913,7 +916,12 @@ func (s *Server) routes() *routeMux {
 	// list is the repository's web/dist, so whether a path exists tells a
 	// stranger nothing, and a removed route answers 404 rather than the app's
 	// index (claude-fleet#1987).
-	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOnly(http.HandlerFunc(s.serveUI)))))
+	ui := s.uiPathOr404(s.withPageLang(s.viewerOnly(http.HandlerFunc(s.serveUI))))
+	mux.Handle("/", ui)
+	// The new console's admin side (claude-fleet#3925): an admin's, and to
+	// anyone else what an unknown address answers (app_mount.go).
+	mux.Handle(AdminPrefix, s.adminSide(ui))
+	mux.Handle(AdminPrefix+"/", s.adminSide(ui))
 
 	return mux
 }

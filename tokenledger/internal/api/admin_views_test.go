@@ -169,8 +169,12 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 
 	// The admin area refuses a user, data and page alike.
 	for _, p := range []string{AdminSessionsPath, AdminOverviewPath, AdminDevicesPath, "/admin/sessions", "/admin/overview", "/admin/devices"} {
-		if code, _ := rolesGet(t, h, user, p); code != http.StatusForbidden {
-			t.Errorf("user GET %s = %d; want 403", p, code)
+		want := http.StatusForbidden
+		if isAppPage(p) {
+			want = http.StatusNotFound // a page: as if there were none (claude-fleet#3925)
+		}
+		if code, _ := rolesGet(t, h, user, p); code != want {
+			t.Errorf("user GET %s = %d; want %d", p, code, want)
 		}
 	}
 

@@ -273,6 +273,9 @@ jobs:
         run: |
           [ -n "$npm_config_registry" ] || unset npm_config_registry
           bin/web-chat-pack.sh
+      - name: Pack the new console
+        if: steps.look.outputs.reuse != 'true'
+        run: bin/web-console-pack.sh
       - name: Build the website and its docs
         if: steps.look.outputs.reuse != 'true'
         run: bin/docs-build.sh && bin/site-build.sh
@@ -453,6 +456,11 @@ jobs:
       - name: Pack the chat page
         if: steps.tag.outputs.build == 'true'
         run: bin/web-chat-pack.sh
+
+      # The new console (issue #3925): its committed build, copied in.
+      - name: Pack the new console
+        if: steps.tag.outputs.build == 'true'
+        run: bin/web-console-pack.sh
 
       # The website (/ and /en/) and its docs (/docs/) are build outputs the
       # image embeds (issue #3584); the site reads its FAQ off docs/public itself.

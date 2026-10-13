@@ -150,9 +150,10 @@ func rolesGet(t *testing.T, h *ghHarness, sess *http.Cookie, path string) (int, 
 	return resp.StatusCode, b
 }
 
-// The completion table: every admin route answers a user 403 (and is
-// audited), every user route answers them something other than 403, and an
-// admin is refused nothing.
+// The completion table: every admin route answers a user 403 — an admin
+// page the 404 an unknown address gets (claude-fleet#3925) — and is audited,
+// every user route answers them something other than 403, and an admin is
+// refused nothing.
 func TestRouteTable_UserCookieOnEveryRoute(t *testing.T) {
 	h, admin, user := rolesHarness(t)
 	patterns := make([]string, 0, len(routeAccess))
@@ -166,8 +167,12 @@ func TestRouteTable_UserCookieOnEveryRoute(t *testing.T) {
 		switch routeAccess[p] {
 		case accessAdmin:
 			admins++
-			if code, b := rolesGet(t, h, user, path); code != http.StatusForbidden {
-				t.Errorf("user GET %s = %d %s; want 403", path, code, b)
+			want := http.StatusForbidden
+			if isAppPage(path) || isAdminPath(path) {
+				want = http.StatusNotFound
+			}
+			if code, b := rolesGet(t, h, user, path); code != want {
+				t.Errorf("user GET %s = %d %s; want %d", path, code, b, want)
 			}
 			if code, _ := rolesGet(t, h, admin, path); code == http.StatusForbidden || code == http.StatusUnauthorized {
 				t.Errorf("admin GET %s = %d; want it let through", path, code)
