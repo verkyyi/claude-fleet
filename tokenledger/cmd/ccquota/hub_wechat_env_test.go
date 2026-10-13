@@ -36,7 +36,16 @@ func TestWxGatewayFromEnv(t *testing.T) {
 	}
 	env["CCQUOTA_WX_INTERNAL_TOKEN"] = " t0k "
 	g := wxGatewayFromEnv(get)
-	if g == nil || g.URL != "http://workbench/internal/wx" || g.Token != "t0k" || g.AppID != "" {
+	if g == nil || g.URL != "http://workbench/internal/wx" || g.Token != "t0k" || g.AppID != "" || g.RelayURL != "" {
 		t.Fatalf("both set: %+v", g)
+	}
+	// The in-app relay (claude-fleet#4055) rides the same gateway.
+	env["CCQUOTA_WX_RELAY_URL"] = " https://ac.ssl.24gmweb.com/node_w/wx/oauth/relay "
+	if g := wxGatewayFromEnv(get); g == nil || g.RelayURL != "https://ac.ssl.24gmweb.com/node_w/wx/oauth/relay" || g.RelayTarget != "" {
+		t.Fatalf("relay set: %+v", g)
+	}
+	delete(env, "CCQUOTA_WX_INTERNAL_TOKEN")
+	if g := wxGatewayFromEnv(get); g != nil {
+		t.Fatal("the relay turned on without the gate token that checks its signature")
 	}
 }

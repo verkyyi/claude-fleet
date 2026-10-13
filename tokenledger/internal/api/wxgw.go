@@ -46,6 +46,14 @@ type WxGateway struct {
 	// HTTP is the client; nil means one with a 10-second timeout.
 	HTTP *http.Client
 
+	// The web-authorisation relay (claude-fleet#4055, wx_relay.go):
+	// RelayURL is workbench's GET /node_w/wx/oauth/relay (CCQUOTA_WX_RELAY_URL),
+	// empty = off; RelayTarget our name in its WX_OAUTH_RELAY_TARGETS (empty
+	// means "fleet"); ComponentAppID the third-party platform that authorises
+	// for the account (empty means the company's); AuthorizeBase WeChat's
+	// authorize host (empty means the real one; tests point it at a fake).
+	RelayURL, RelayTarget, ComponentAppID, AuthorizeBase string
+
 	mu      sync.Mutex
 	tok     string
 	tokExp  time.Time

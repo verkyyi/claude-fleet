@@ -493,6 +493,7 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/auth/wechat/start", s.handleWeChatStart)
 	mux.HandleFunc("/auth/wechat/callback", s.handleWeChatCallback)
 	mux.HandleFunc("/auth/wechat/bind", s.handleWeChatBind)
+	mux.HandleFunc(wxRelayCBPath, s.handleWxRelayCB)
 	// Follow the service account to sign in (claude-fleet#4054): 404 when off.
 	mux.HandleFunc(wxQRPath, s.handleWxQR)
 	mux.HandleFunc(wxPollPath, s.handleWxPoll)
