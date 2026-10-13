@@ -250,6 +250,21 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   只装这一轮这个人的浏览器：完整 IP、位置、UA、Client Hints、语言、时区、屏幕、网络。答在对话记录里，
   `server.log` 不记 IP、UA 或任何一项。
 
+### 城市库（#4039）
+
+- **怎么到入口**：烤进 hub 镜像。`tokenledger/Dockerfile` 的 `geo` 阶段在构建时取
+  `lionsoul2014/ip2region` 某个固定提交的 `data/ip2region_v4.xdb` 和 `LICENSE.md`，两者都要对上钉住的 sha256，
+  对不上就构建失败；镜像里放在 `/usr/share/ccquota/ip2region/`（旁边一个 `SOURCE` 写着来源提交）。
+  运行时从不下载。镜像来源先 jsDelivr（深圳的 buildkitd 够得着）、再 GitHub raw——哪个都行，哈希说了算；
+  `GEO_DB_MIRRORS` 构建参数可以换。`deploy/k8s/base/deployment.yaml` 设
+  `CCQUOTA_FLEET_CHAT_GEO_DB=/usr/share/ccquota/ip2region/ip2region_v4.xdb`。
+- **更新**：上游大约每月合一次社区修正。每季度一次（或有人报某段地址城市错了时），谁想换谁开一个 PR：
+  改 `geo` 阶段的 `GEO_DB_COMMIT` · `GEO_DB_SHA256` · `GEO_LICENSE_SHA256` 三个钉子，
+  本机拿新文件跑 `CCQUOTA_TEST_GEO_DB=<文件> go test ./internal/api -run TestChatGeoRealDB`
+  （格式变了这里先红），随下一班列车上线。
+- **许可**：ip2region 是 Apache-2.0 / MIT 双许可；它的 `LICENSE.md` 原样随库进镜像（同一目录），这一节就是署名处。
+- **验**：上线后在 `/chat` 问「我大概在哪」，模型那行上下文里有「大致位置 …」；`browser_context` 工具能给出完整的省市。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，

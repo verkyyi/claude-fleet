@@ -88,6 +88,11 @@ spec:
               value: "/secrets/ssh-ca/ca"
             - name: CCQUOTA_FLEET_OAUTH_REFRESH_VIA
               value: "node"
+            # The chat entry's city database, baked into the image at a pinned
+            # commit + sha256 (claude-fleet#4039; tokenledger/Dockerfile's geo
+            # stage). Unset ⇒ X-Fleet-Client carries the address alone.
+            - name: CCQUOTA_FLEET_CHAT_GEO_DB
+              value: "/usr/share/ccquota/ip2region/ip2region_v4.xdb"
             - name: CCQUOTA_DB_URL
               valueFrom:
                 secretKeyRef:
