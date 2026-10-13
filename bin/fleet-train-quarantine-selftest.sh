@@ -383,9 +383,9 @@ leg_retry_red() {
     grep -nE '^[[:space:]]+(retry_red|drill_flaky):' "$wf/$f" \
       && fail "retry-red: $f passes retry_red to the shards" || ok "retry-red: $f reruns nothing"
   done
-  # the Linux half on the train, the macOS half after it (mac-follow.yml, issue #3869)
-  [ "$(grep -cE "^[[:space:]]+retry_red: '1'" "$wf/release-train.yml")" = 1 ] && grep -qE "^[[:space:]]+retry_red: '1'" "$wf/mac-follow.yml" \
-    && ok "retry-red: release-train.yml + mac-follow.yml pass retry_red to both halves" || fail "retry-red: the train / mac-follow do not pass retry_red"
+  # the Linux half (and its rescue, #3864) on the train, the macOS half after it (mac-follow.yml, issue #3869)
+  [ "$(grep -cE "^[[:space:]]+retry_red: '1'" "$wf/release-train.yml")" = 2 ] && grep -qE "^[[:space:]]+retry_red: '1'" "$wf/mac-follow.yml" \
+    && ok "retry-red: release-train.yml (Linux + its rescue) + mac-follow.yml pass retry_red" || fail "retry-red: the train / mac-follow do not pass retry_red"
   awk '/^on:/,/^jobs:/' "$wf/selftests-shards.yml" | grep -A4 '^      retry_red:' | grep -q "default: ''" \
     && ok "retry-red: the shards' input defaults to empty" || fail "retry-red: inputs.retry_red has no empty default"
 }
