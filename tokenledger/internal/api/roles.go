@@ -174,6 +174,8 @@ var routeAccess = map[string]string{
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	AdminSessionsPath: accessAdmin, AdminOverviewPath: accessAdmin, AdminDevicesPath: accessAdmin,
 	"/admin/sessions": accessAdmin, "/admin/overview": accessAdmin, "/admin/devices": accessAdmin,
+	// 全队用量 reads each person as their own page does (claude-fleet#3936).
+	AdminUsagePath: accessAdmin,
 	// The new console's admin side (claude-fleet#3925): to anyone else, the
 	// 404 an unknown address gets.
 	AdminPrefix: accessAdmin, AdminPrefix + "/": accessAdmin,

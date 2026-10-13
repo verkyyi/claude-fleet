@@ -952,6 +952,7 @@ func (s *Server) routes() *routeMux {
 	}
 	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
 	mux.Handle(AdminOverviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminOverview))))
+	mux.Handle(AdminUsagePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminUsage))))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.

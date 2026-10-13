@@ -1,7 +1,7 @@
 // demo.ts — the prototype's hub (EPIC #3923 rule 14): the real reads' shapes
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
-import type { ApiInit, Credential, HubUser, Invite, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TrainRun } from "./api";
+import type { ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TeamUsage, TrainRun } from "./api";
 import { demoMachines } from "./machines/demo";
 import { demoPool, poolSettings } from "./poolDemo";
 
@@ -135,6 +135,81 @@ const keys = (bad: boolean): ReleaseKeys => ({
   revoked_version: bad ? 3 : 2,
   overlap: false,
 });
+// 全队用量 (C13): each person as their own /v1/me/usage says them.
+const resetIn = (h: number) => new Date(now + h * 3_600_000).toISOString();
+const lim = (week?: number, used = 0, h5?: number, used5 = 0): MeUsageLimit =>
+  week || h5
+    ? { set: true, limit_week: week, used_week: used, remaining_week: week ? Math.max(0, week - used) : undefined, reset_week: week ? resetIn(31) : undefined,
+        limit_5h: h5, used_5h: used5, remaining_5h: h5 ? Math.max(0, h5 - used5) : undefined, reset_5h: h5 ? resetIn(2) : undefined,
+        over: (!!week && used >= week) || (!!h5 && used5 >= h5), window: h5 && used5 >= h5 ? "5h" : week && used >= week ? "week" : undefined }
+    : { set: false, used_week: used, used_5h: used5 };
+// built on first use only: a top-level call would ride into the real build
+let usageDemoMemo: ReturnType<typeof makeUsageDemo> | null = null;
+const usageDemo = () => (usageDemoMemo ||= makeUsageDemo());
+function makeUsageDemo() {
+const teamUsage: TeamUsage = {
+  people: [
+    { principal: "p:9a2d", name: "阿梅", today: 612_400, week: 3_684_200, limit: lim(4_000_000, 3_680_000) },
+    { principal: "gh:1001", name: "周宁", today: 418_900, week: 2_461_700, limit: lim(6_000_000, 2_460_000) },
+    { principal: "p:7c1e", name: "林晓", today: 233_100, week: 2_279_400, limit: lim(6_000_000, 2_280_000, 900_000, 412_000) },
+    { principal: "gh:2002", name: "chenyu-dev", today: 0, week: 721_300, limit: lim(6_000_000, 720_000) },
+    { principal: "gh:3003", name: "test-drill-07", today: 0, week: 0, limit: lim() },
+  ],
+  models: [
+    { name: "Opus 5.5", provider: "claude", tokens: 5_902_300 },
+    { name: "Sonnet 5.5", provider: "claude", tokens: 2_081_400 },
+    { name: "GPT-5.4 Codex", provider: "codex", tokens: 802_700 },
+    { name: "Haiku 5.5", provider: "claude", tokens: 360_200 },
+  ],
+  machines: [
+    { node: "mac-mini", today: 652_000, week: 4_741_100, people: 2 },
+    { node: "mac-studio", today: 612_400, week: 3_684_200, people: 1 },
+    { node: "linux-01", today: 0, week: 721_300, people: 1 },
+  ],
+};
+const overview: Overview = {
+  people: [
+    { principal: "p:9a2d", name: "阿梅", today: 612_400, week: 3_684_200, doing: { repo: "acme/shop-web", issue: 418, tokens: 2_100_000 }, sessions: 3, running: 2, logins: [["mac-studio", "amei"]], subs: ["pool-max-1"] },
+    { principal: "gh:1001", name: "周宁", today: 418_900, week: 2_461_700, doing: { repo: "verkyyi/claude-fleet", issue: 3923, tokens: 1_400_000 }, sessions: 2, running: 1, logins: [["mac-mini", "zhouning"]], subs: ["pool-max-1", "pool-max-2"] },
+    { principal: "p:7c1e", name: "林晓", today: 233_100, week: 2_279_400, doing: { repo: "acme/data-pipe", tokens: 900_000 }, sessions: 2, running: 1, logins: [["mac-mini", "linxiao"]], subs: ["pool-max-2"] },
+    { principal: "gh:2002", name: "chenyu-dev", today: 0, week: 721_300, doing: { repo: "acme/infra", issue: 77, tokens: 600_000 }, sessions: 1, running: 0, logins: [["linux-01", "chenyu"]], subs: [] },
+  ],
+  pool: [{ account: "pool-max-1", label: "Max · 团队 1" }, { account: "pool-max-2", label: "Max · 团队 2" }, { account: "team-codex", label: "Codex · 团队" }],
+  nodes: [{ machine_name: "mac-mini", availability: "online" }, { machine_name: "mac-studio", availability: "online" }, { machine_name: "linux-01", availability: "maintenance" }],
+  totals: { tokens: 9_146_600, tokens_today: 1_264_400, sessions: 8, running: 4, machines: 3, machines_online: 2 },
+};
+const born = (min: number) => Math.floor((now - min * 60_000) / 1000);
+const sessions: FleetSessions = {
+  sessions: [
+    { machine_name: "mac-studio", os_user: "amei", availability: "online", tokens_today: 288_000, worker: { worker_id: "w-1", key: "issue-418", repo: "acme/shop-web", title: "结算页在手机上横着滚", state: "working", agent: "claude", worktree: "/Users/amei/projects/shop-web-issue-418", born: born(95) } },
+    { machine_name: "mac-studio", os_user: "amei", availability: "online", tokens_today: 201_500, worker: { worker_id: "w-2", key: "issue-421", repo: "acme/shop-web", title: "优惠券叠加规则", state: "waiting", needs: "perm", status_kind: "permission", status_msg: "要运行 npm run migrate:prod，允许吗？", agent: "claude", worktree: "/Users/amei/projects/shop-web-issue-421", born: born(52) } },
+    { machine_name: "mac-studio", os_user: "amei", availability: "online", tokens_today: 122_900, worker: { worker_id: "w-3", key: "scratch-4", repo: "", title: "", state: "idle", agent: "claude", born: born(60 * 5) } },
+    { machine_name: "mac-mini", os_user: "zhouning", availability: "online", tokens_today: 301_200, worker: { worker_id: "w-4", key: "issue-3936", repo: "verkyyi/claude-fleet", title: "全队用量和全部会话", state: "working", agent: "claude", worktree: "/Users/zhouning/projects/claude-fleet-issue-3936", born: born(40) } },
+    { machine_name: "mac-mini", os_user: "zhouning", availability: "online", tokens_today: 117_700, worker: { worker_id: "w-5", key: "scratch-30", repo: "", title: "", state: "done", agent: "claude", born: born(60 * 3) } },
+    { machine_name: "mac-mini", os_user: "linxiao", availability: "online", tokens_today: 233_100, worker: { worker_id: "w-6", key: "issue-52", repo: "acme/data-pipe", title: "夜间导入偶尔重复一行", state: "blocked", needs: "ask", status_kind: "question", status_msg: "重复行要删掉还是只做标记？", agent: "codex", worktree: "/Users/linxiao/projects/data-pipe-issue-52", born: born(130) } },
+    { machine_name: "mac-mini", os_user: "linxiao", availability: "online", worker: { worker_id: "w-7", key: "scratch-9", state: "idle", agent: "claude", born: born(60 * 26) } },
+    { machine_name: "linux-01", os_user: "chenyu", availability: "maintenance", worker: { worker_id: "w-8", key: "issue-77", repo: "acme/infra", title: "证书续期改成自动", state: "idle", agent: "claude", worktree: "/home/chenyu/projects/infra-issue-77", born: born(60 * 30) } },
+  ],
+  nodes: overview.nodes,
+};
+const personUsage = (p: string): MeUsage => {
+  const u = teamUsage.people.find((x) => x.principal === p)!;
+  const share = u.week / 9_146_600;
+  return {
+    range: "7d", today: u.today, week: u.week, total: u.week, limit: u.limit,
+    models: teamUsage.models.map((m) => ({ ...m, tokens: Math.round(m.tokens * share) })).filter((m) => m.tokens > 0),
+    by_session: sessions.sessions.filter((s) => overview.people.find((o) => o.principal === p)?.logins.some(([h, l]) => h === s.machine_name && l === s.os_user))
+      .map((s, i, a) => ({ key: s.worker.key, worker_id: s.worker.worker_id, today: s.tokens_today || 0, week: Math.round(u.week * (a.length - i) / ((a.length * (a.length + 1)) / 2) * 0.9) }))
+      .concat(u.week ? [{ kind: "none", today: 0, week: Math.round(u.week * 0.1) } as any] : []),
+  };
+};
+  return { teamUsage, overview, sessions, personUsage };
+}
+
+const usageOverview = (empty: boolean) => {
+  const { overview } = usageDemo();
+  return empty ? { ...overview, people: [], totals: { ...overview.totals, running: 0, sessions: 0 } } : overview;
+};
 
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 const scenario = () => (window as any).__DEMO_SCENARIO || new URLSearchParams(location.search).get("demo") || "";
@@ -147,6 +222,9 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
   const body = (init.json || {}) as Record<string, any>;
   const empty = scenario() === "empty";
   const pool = demoPool(method, u, body, empty, scenario(), users); // 订阅池 (C12)
+  // /v1/admin/overview is both pages' read: 订阅池 lays its pool rows over 全队用量's people (C13)
+  if (pool !== undefined && method === "GET" && u.pathname === "/v1/admin/overview")
+    return { ...(usageOverview(empty) as object), pool: (pool as { pool: unknown[] }).pool };
   if (pool !== undefined) return pool;
   const machines = demoMachines(method, u, body, empty, init); // 机器与 pod (C11)
   if (method === "GET" && u.pathname === "/v1/fleet/settings") return { hub: [...((machines as any)?.hub || []), ...poolSettings()] };
@@ -210,6 +288,18 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
     case "GET /v1/fleet/release/keys":
       if (scenario() === "keys_off") throw Object.assign(new Error("404 Not Found"), { status: 404 });
       return keys(scenario() === "keys_bad");
+    case "GET /v1/admin/usage": {
+      const { teamUsage, personUsage } = usageDemo();
+      const p = u.searchParams.get("principal");
+      if (p) return personUsage(p);
+      return empty ? { people: [], models: [], machines: [] } : teamUsage;
+    }
+    case "GET /v1/admin/overview":
+      return usageOverview(empty);
+    case "GET /v1/admin/sessions": {
+      const { overview, sessions } = usageDemo();
+      return empty ? { sessions: [], nodes: overview.nodes } : sessions;
+    }
   }
   throw Object.assign(new Error(`demo: no ${method} ${u.pathname}`), { status: 404 });
 }

@@ -207,25 +207,15 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 		out.SinceFirst = &first
 	}
 
-	weekCut, prevCut := now.Add(-budgetWindowWeek), now.Add(-2*budgetWindowWeek)
+	cnt := newMeUsageCount(now)
+	weekCut := cnt.weekCut
 	for i := 0; i < int(today.Sub(chart)/(24*time.Hour))+1; i++ {
 		out.Days = append(out.Days, MeUsageDay{Day: chart.AddDate(0, 0, i).Format("2006-01-02")})
 	}
 	var inRange []store.PoolUsage
 	for _, u := range rows {
 		n := u.Tokens()
-		switch {
-		case !u.At.Before(today):
-			out.Today += n
-		case !u.At.Before(today.AddDate(0, 0, -1)):
-			out.TodayPrev += n
-		}
-		switch {
-		case !u.At.Before(weekCut):
-			out.Week += n
-		case !u.At.Before(prevCut):
-			out.WeekPrev += n
-		}
+		cnt.add(u)
 		if i := int(u.At.Sub(chart) / (24 * time.Hour)); !u.At.Before(chart) && i < len(out.Days) {
 			if u.Provider == "codex" {
 				out.Days[i].Codex += n
@@ -238,10 +228,50 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 			out.Total += n
 		}
 	}
+	out.Today, out.TodayPrev, out.Week, out.WeekPrev = cnt.Today, cnt.TodayPrev, cnt.Week, cnt.WeekPrev
 	out.Models = meUsageModels(inRange)
 	out.Work = s.meUsageWork(ctx, inRange)
 	out.BySession = s.meUsageSessions(rows, today, weekCut)
 	return out, nil
+}
+
+// meUsageCount is how MeUsage counts today and this week against the period
+// before — the one rule, so 全队用量 (admin_usage.go) reads a person exactly
+// as their own page does: today since this UTC midnight, the week rolling
+// (budgetWindowWeek).
+type meUsageCount struct {
+	today, yesterday, weekCut, prevCut time.Time
+	Today, TodayPrev, Week, WeekPrev   int64
+}
+
+func newMeUsageCount(now time.Time) *meUsageCount {
+	today := now.UTC().Truncate(24 * time.Hour)
+	return &meUsageCount{today: today, yesterday: today.AddDate(0, 0, -1),
+		weekCut: now.Add(-budgetWindowWeek), prevCut: now.Add(-2 * budgetWindowWeek)}
+}
+
+// from is the oldest row the count reads.
+func (c *meUsageCount) from() time.Time {
+	if c.yesterday.Before(c.prevCut) {
+		return c.yesterday
+	}
+	return c.prevCut
+}
+
+func (c *meUsageCount) add(u store.PoolUsage) {
+	n := u.Tokens()
+	switch {
+	case !u.At.Before(c.today):
+		c.Today += n
+	case !u.At.Before(c.yesterday):
+		c.TodayPrev += n
+	}
+	switch {
+	case !u.At.Before(c.weekCut):
+		c.Week += n
+	case !u.At.Before(c.prevCut):
+		c.WeekPrev += n
+	}
 }
 
 // personEventUsage is principal's scan rows from `from` on: every row an
