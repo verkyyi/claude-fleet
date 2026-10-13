@@ -263,6 +263,9 @@ except ImportError:
 MAC = sys.platform == "darwin" or (os.environ.get("FLEET_NODE_TEST") == "1"
                                      and "FLEET_NODE_LAUNCHCTL" in os.environ)
 LABEL = "com.claude-fleet.node"
+# the root core (bin/fleet-node-core.py, #3555): installed beside this daemon,
+# never a leftover — the sweep booting it out was how it vanished (#3857)
+CORE_LABEL = "com.claude-fleet.node-core"
 SYSTEMD_UNIT = "claude-fleet-node.service"
 DEFAULT_ROOT = "/Library/Application Support/claude-fleet" if MAC else "/opt/claude-fleet"
 # Non-secret managed settings needed by root children AND demoted tenant jobs.
@@ -733,6 +736,11 @@ def default_table(paths):
         # the pod's other container
         table["tasks"] = []
         table["children"] = [c for c in table["children"] if c["name"] == "node-agent"]
+        # …which starts with no login: the hub's create for the pod's one login
+        # comes down this program's own machine link, so it may not wait for a
+        # logins/*.env only that create writes (#3554 — the pod sat pending)
+        for c in table["children"]:
+            c["requires"] = [r for r in c["requires"] if not r.endswith("*.env")]
     if door_profile():
         # The cluster's one door (#3549, EPIC #3500 C4): its sshd (the entry child)
         # and its pull, nothing else — no node program, no login, no machine loop.
@@ -1478,7 +1486,10 @@ def account_runnable(ent, seated=False):
         return "refused — uid 0"
     if os.geteuid() != 0 and ent["uid"] != os.geteuid() and not seated:
         return "needs root (to run as uid %d)" % ent["uid"]
-    if ent.get("script") and not os.path.exists(ent["script"]):
+    # seated, the login's home is not ours to look in (_fleetnode cannot enter
+    # /Users/<login>): every script read "missing" and no account task ever ran
+    # (#3556) — the core asks again as root before it starts one
+    if ent.get("script") and not seated and not os.path.exists(ent["script"]):
         return "missing %s" % ent["script"]
     return None
 
@@ -2840,6 +2851,37 @@ class Supervisor(object):
             self.log("task %s/%s: bark: %s" % (svc["login"], svc["name"], e))
         self.notifies = [p for p in self.notifies if p.poll() is None]
 
+    # -- the root core (issue #3857)
+    def tend_core(self):
+        """Watch the root core: one log line when it stops answering (and when it
+        is back), its down-since in state.json for status. Root (an unseated
+        daemon) puts an installed core that left launchd back itself; a seated
+        one cannot — the doctor's `node` row FAILs (#3810) until someone does."""
+        t = now()
+        if t - getattr(self, "core_at", 0) < 30:
+            return
+        self.core_at = t
+        reading = core_reading(self.p, seated=self.seated)
+        cs = self.state.setdefault("core", {})
+        if reading != "down":
+            if cs.get("down_since"):
+                self.log("core: answering again (down %s)" % ago(cs["down_since"]))
+                cs.pop("down_since", None)
+                self.dirty = True
+            return
+        if not cs.get("down_since"):
+            cs["down_since"] = t
+            self.dirty = True
+            self.log("core NOT ANSWERING — %s (%s)" % (core_down_why(), core.sock_path() if core else "-"))
+        unit = core_unit(self.p)
+        if self.seated or not MAC or not os.path.exists(unit):
+            return
+        target = "system/" + CORE_LABEL
+        if launchctl_loaded(target):
+            return
+        rc = launchctl_bootstrap("system", unit)
+        self.log("core: not in launchd — bootstrap %s rc=%s" % (unit, rc))
+
     # -- lanes (issue #2501)
     def tend_lanes(self):
         """The logins whose lane the hub refuses, from each tenant's lane.json
@@ -3143,6 +3185,11 @@ class Supervisor(object):
                 self.tend_agent_tasks()
             except Exception as e:  # one bad entry must never take the daemon down
                 self.log("agent tasks: %s" % e)
+            self.at("core")
+            try:
+                self.tend_core()
+            except Exception as e:  # a check must never take the daemon down
+                self.log("core: %s" % e)
             self.at("lanes")
             self.tend_lanes()
             self.at("tenants")
@@ -3615,6 +3662,11 @@ def _attic_id(paths, stamp, index, pending=0):
 def _retire_unit(paths, d, src, label, index, ident_, dry):
     """Boot one unit out and move it into the attic (7 days, `attic restore`).
     The attic entry, or a string: why it stays."""
+    if label in (LABEL, CORE_LABEL):
+        # this daemon and its root core are never a leftover (#3857): a seated
+        # sweep runs IN the core, and booting it out killed it mid-sweep — gone
+        # from launchd, its plist left, every child waiting on its socket
+        return "%s is this machine's own daemon — never retired" % label
     if d == paths.daemon_dir:
         domain = "system"
     else:
@@ -3696,7 +3748,7 @@ def _sweep(paths, dry=False):
                 # a managed machine (expected.json): what is not in its expected set
                 # goes to the attic, booted out first (issue #2981)
                 lb = _plist_label(src) or n[:-len(".plist")]
-                if lb in labels or lb == LABEL:
+                if lb in labels or lb in (LABEL, CORE_LABEL):
                     continue
                 go, why = _extra_verdict(paths, d, src, lb, legacy, managed)
                 if go is None:
@@ -4545,8 +4597,10 @@ def status_lines(paths, table, state):
               sv.get("starts") or 0)]
     if wedged_line(state):
         out.append(wedged_line(state))
-    if core_line(paths):
-        out.append(core_line(paths))
+    cl = core_line(paths)
+    if cl:
+        down = (state.get("core") or {}).get("down_since")
+        out.append(cl + (" · down %s (the daemon's word)" % ago(down) if down and "NOT ANSWERING" in cl else ""))
     sup = Supervisor.__new__(Supervisor)
     sup.p = paths
     for c in table["children"]:
@@ -4785,6 +4839,9 @@ def entry_sshd():
 # forwarding (it would land on the door, not the pod).
 DOOR_GROUP = "fleet-door"
 DOOR_GECOS = "fleet-door"
+# AllowUsers of a door whose table is empty (issue #3554): a `-` no login of the
+# hub's (2-16 of a-z0-9) can carry, so no door account is ever this name
+DOOR_NOBODY = "fleet-door-closed"
 DOOR_SERVICE_RE = r"^u-[a-z0-9]{4,20}$"   # render.py USER_POD_RE
 
 
@@ -4855,7 +4912,7 @@ def door_account(login):
 def door_eligible(logins, routes):
     out = {}
     for login in logins:
-        if login == "root" or not re.match(r"^[A-Za-z0-9._-]{1,64}$", login):
+        if login in ("root", DOOR_NOBODY) or not re.match(r"^[A-Za-z0-9._-]{1,64}$", login):
             out[login] = "not a login the door takes"
         elif login not in routes:
             out[login] = "no pod routed for it"
@@ -5419,7 +5476,11 @@ def _entry_converge(paths, ep, port, lst, force):
                 os.remove(p)
             _entry_put(p, text, 0o644)
     allow = sorted(want)
-    # the config: none (no listener) when no login has its home here
+    # the config: none (no listener) when no login has its home here — except at
+    # the door (issue #3554): its probe is tcp on the port, and its table is empty
+    # until the first person's home is a pod, so it listens letting nobody in
+    if not allow and door:
+        allow = [DOOR_NOBODY]
     book["missing"], book["refused"] = [], dict((l, w) for l, w in verdict.items() if w)
     if not allow:
         for f in (ep.cfg,):
@@ -6543,6 +6604,14 @@ def seat_layout(paths, seat):
             pass
         os.symlink(os.path.join("node", n), tmp)
         os.rename(tmp, sf)
+    # what root left in node/ before the seat (a fetch.progress the updater wrote as
+    # root, a state.json moved in on an earlier pass) goes to the seat too: else its
+    # every open('w') is EACCES and the update task fails each beat (#3556)
+    for n in os.listdir(own):
+        f = os.path.join(own, n)
+        st = os.lstat(f)
+        if stat.S_ISREG(st.st_mode) and (st.st_uid, st.st_gid) != (uid, gid) and os.geteuid() == 0:
+            os.lchown(f, uid, gid)
     # the seated updater's staging (#3670): the core copies a release out of it
     _seat_dir(os.path.join(paths.state, "staging"), 0, gid, 0o770)
     # the machine's one reading (#3546): the seat writes cluster/machine.json, every

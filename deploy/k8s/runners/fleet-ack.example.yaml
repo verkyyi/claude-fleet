@@ -1,0 +1,192 @@
+# The shape of a runner scale set for this repo on a cluster that already runs
+# Actions Runner Controller 0.14.x (controller in arc-systems, watching
+# arc-runners) and a BuildKit daemon (svc buildkitd:1234, client TLS in the
+# Secret buildkit-client-tls) — the release train's `node image` job (#3855) and its
+# Linux shards (#3864, beside fleet-ci.example.yaml) run on it (runs-on: fleet-ack). Ours, with our registry and pull secrets, is in the
+# private deploy repo (k8s/runners/fleet-ack.yaml); see README.md.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fleet-ack-gha-rs-manager
+  namespace: arc-runners
+  labels:
+    app.kubernetes.io/name: fleet-ack
+    app.kubernetes.io/instance: fleet-ack
+    app.kubernetes.io/version: 0.14.2
+    app.kubernetes.io/managed-by: claude-fleet
+    app.kubernetes.io/part-of: gha-rs
+    actions.github.com/scale-set-name: fleet-ack
+    actions.github.com/scale-set-namespace: arc-runners
+    app.kubernetes.io/component: manager-role
+  finalizers:
+  - actions.github.com/cleanup-protection
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+- apiGroups:
+  - ''
+  resources:
+  - pods/status
+  verbs:
+  - get
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+- apiGroups:
+  - ''
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fleet-ack-gha-rs-manager
+  namespace: arc-runners
+  labels:
+    app.kubernetes.io/name: fleet-ack
+    app.kubernetes.io/instance: fleet-ack
+    app.kubernetes.io/version: 0.14.2
+    app.kubernetes.io/managed-by: claude-fleet
+    app.kubernetes.io/part-of: gha-rs
+    actions.github.com/scale-set-name: fleet-ack
+    actions.github.com/scale-set-namespace: arc-runners
+    app.kubernetes.io/component: manager-role-binding
+  finalizers:
+  - actions.github.com/cleanup-protection
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fleet-ack-gha-rs-manager
+subjects:
+- kind: ServiceAccount
+  name: arc-gha-rs-controller
+  namespace: arc-systems
+
+---
+apiVersion: actions.github.com/v1alpha1
+kind: AutoscalingRunnerSet
+metadata:
+  name: fleet-ack
+  namespace: arc-runners
+  labels:
+    app.kubernetes.io/component: autoscaling-runner-set
+    app.kubernetes.io/name: fleet-ack
+    app.kubernetes.io/instance: fleet-ack
+    app.kubernetes.io/version: 0.14.2
+    app.kubernetes.io/managed-by: claude-fleet
+    app.kubernetes.io/part-of: gha-rs
+    actions.github.com/scale-set-name: fleet-ack
+    actions.github.com/scale-set-namespace: arc-runners
+  annotations:
+    actions.github.com/cleanup-manager-role-binding: fleet-ack-gha-rs-manager
+    actions.github.com/cleanup-manager-role-name: fleet-ack-gha-rs-manager
+spec:
+  githubConfigUrl: https://github.com/verkyyi/claude-fleet
+  githubConfigSecret: claude-fleet-runners-app
+  runnerScaleSetName: fleet-ack
+  # issue #3864: the release train's Linux shards. 2 idle by day (fleet-ack-night
+  # sets 0 from 01:00 to 08:00 Beijing), 64 at most — past the fleet-ci pool's
+  # ~14 slots a node × 3 nodes the rest queue.
+  maxRunners: 64
+  minRunners: 2
+  template:
+    spec:
+      # the fleet-ci node pool only (spot, 16 cores, 0–3 nodes, taint fleet-ci=true)
+      nodeSelector:
+        fleet-ci: 'true'
+      automountServiceAccountToken: false
+      imagePullSecrets:
+      - name: acr-pull
+      restartPolicy: Never
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+      - key: fleet-ci
+        operator: Equal
+        value: 'true'
+        effect: NoSchedule
+      serviceAccountName: fleet-ack-runner
+      containers:
+      - name: runner
+        command:
+        - /home/runner/run.sh
+        # extras/ci-runner (fleet-ci-runner:<tag.sh>, built by ci-runner-image.yml):
+        # the ARC runner + the selftests' tools; buildctl stays for `node image`
+        image: registry.example.com/acme/fleet-ci-runner:ci-TAG
+        resources:
+          limits:
+            cpu: '4'
+            ephemeral-storage: 10Gi
+            memory: 6Gi
+          requests:
+            cpu: '1'
+            ephemeral-storage: 2Gi
+            memory: 2Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+        env:
+        - name: BUILDKIT_HOST
+          value: tcp://buildkitd.arc-runners:1234
+        - name: BUILDKIT_TLSDIR
+          value: /etc/buildkit-client
+        volumeMounts:
+        - mountPath: /etc/buildkit-client
+          name: buildkit-client-tls
+          readOnly: true
+      volumes:
+      - name: buildkit-client-tls
+        secret:
+          defaultMode: 292
+          secretName: buildkit-client-tls
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet-ack-runner
+  namespace: arc-runners
+automountServiceAccountToken: false

@@ -1,0 +1,97 @@
+name: ci-runner image
+
+# The release train's Linux test runner image, fleet-ci-runner (issue #3864, EPIC
+# #3863 C1): extras/ci-runner/, built in the Shenzhen cluster on the fleet-ack
+# runner set by its buildkitd and pushed as <CI_RUNNER_REPO>:<tag.sh> — only when
+# that tag is new (the same text ⇒ the same tag ⇒ a look and nothing built).
+#
+# The image reaches the runners when a person points the scale set at the new tag
+# (the private deploy repo's k8s/runners/fleet-ack.yaml, deploy/k8s/runners/README.md);
+# a shard on an older image says so on its summary and runs anyway.
+#
+# Repo variables: CI_RUNNER_REPO (the image repo, VPC endpoint) and
+# CI_RUNNER_BASE (the cluster's ARC runner image it builds on). Unset ⇒ the job is
+# skipped. Push credentials: OIDC → STS as gha-claudefleet-ci-runner (environment
+# ci-runner, master only; it pushes acme/fleet-ci-runner and pulls the base).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - extras/ci-runner/**
+      - tokenledger/go.mod
+      - tokenledger/go.sum
+      - .github/workflows/ci-runner-image.yml
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'build and push even when the tag is already there'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-runner-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: ci-runner image
+    if: vars.CI_RUNNER_REPO != '' && vars.CI_RUNNER_BASE != ''
+    runs-on: fleet-ack
+    timeout-minutes: 45
+    environment: ci-runner
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REPO: ${{ vars.CI_RUNNER_REPO }}
+      BASE: ${{ vars.CI_RUNNER_BASE }}
+      FORCE: ${{ inputs.force && '--force' || '' }}
+    steps:
+      # GitHub from Shenzhen: a sparse, shallow checkout, tried twice
+      - uses: actions/checkout@v4
+        id: co
+        continue-on-error: true
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /extras/ci-runner/
+            /tokenledger/go.mod
+            /tokenledger/go.sum
+            /.github/actions/hub-acr/
+            /.github/actions/hub-kubeconfig/
+      - if: steps.co.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /extras/ci-runner/
+            /tokenledger/go.mod
+            /tokenledger/go.sum
+            /.github/actions/hub-acr/
+            /.github/actions/hub-kubeconfig/
+      - uses: ./.github/actions/hub-acr
+        with:
+          role: gha-claudefleet-ci-runner
+      - name: build and push when the tag is new (build.sh)
+        id: build
+        run: |
+          # shellcheck disable=SC2086  # $FORCE is one flag or nothing
+          bash extras/ci-runner/build.sh "$REPO" "$BASE" $FORCE
+      - name: summary
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          BUILT: ${{ steps.build.outputs.built }}
+        run: |
+          {
+            echo "### fleet-ci-runner \`${IMAGE##*:}\`（$([ "$BUILT" = true ] && echo 本次构建 || echo 已存在，未重建)）"
+            echo '```'
+            echo "$IMAGE"
+            echo "${IMAGE%:*}@$DIGEST"
+            echo '```'
+            echo "让 runner 用上它：把 fleet-ack 的 template image 改成这个 tag（deploy/k8s/runners/README.md）。"
+          } >> "$GITHUB_STEP_SUMMARY"

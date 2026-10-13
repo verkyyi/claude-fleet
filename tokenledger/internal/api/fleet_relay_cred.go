@@ -231,6 +231,13 @@ func (s *Server) handleNodeRelayCredential(w http.ResponseWriter, r *http.Reques
 		refuse(http.StatusForbidden, LeaseRevoked, "credentials for "+machine+" were revoked at "+rev.RevokedAt.Format(time.RFC3339))
 		return
 	}
+	if why, err := s.machineDeniedFor(ep.ID, host, principal); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if why != "" {
+		refuse(http.StatusForbidden, LeaseMachineOff, MachineDisabledWord+"："+why)
+		return
+	}
 	settings, err := s.trustSettings(now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

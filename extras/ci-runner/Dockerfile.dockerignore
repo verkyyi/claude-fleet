@@ -1,0 +1,5 @@
+# the build reads only these (context = the repo root)
+*
+!tokenledger/go.mod
+!tokenledger/go.sum
+!extras/ci-runner/actions.txt

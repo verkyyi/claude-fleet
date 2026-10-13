@@ -668,7 +668,13 @@ class LinuxNode(unittest.TestCase):
         with patch.object(s, 'MAC', False), patch.dict(os.environ, dict(pod, FLEET_NODE_UPDATE_OWNER='image')):
             t = s.default_table(s.Paths())
             self.assertEqual(([c['name'] for c in t['children']], t['tasks']), (['node-agent'], []))
+            # …up with no login yet: the hub's create comes down its own link (#3554)
+            self.assertEqual(t['children'][0]['requires'], [str(Path(s.Paths().state, 'machine.env'))])
             self.assertEqual(s.node_environment().get('FLEET_POD_LOGIN'), 'fleetu7')
+        with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod'}):
+            os.environ.pop('FLEET_POD_LOGIN', None)
+            agent = [c for c in s.default_table(s.Paths())['children'] if c['name'] == 'node-agent'][0]
+            self.assertTrue(any(r.endswith('*.env') for r in agent['requires']))   # a shared node waits, as before
         with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod',
                                                                     'FLEET_POD_LOGIN': ''}):
             self.assertFalse(s.pod_own())
@@ -1235,6 +1241,45 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), original)
             self.assertTrue(installed.stat().st_mode & 0o111)
 
+    def test_prepare_image_context_has_every_helper(self):
+        """#3554: a ccquota whose --pinned drops helpers (older than #3017) made
+        a context without codex-code-mode-host, and `docker build` died in
+        stage. prepare-image.sh checks the context against image-stage's own
+        `need` list, falls back to the whole release, and keeps only what the
+        image takes; it names buildx for the build."""
+        here = BIN.parent / 'extras/managed-node'
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d, 'ccquota')
+            fake.write_text(r'''#!/bin/bash
+[ "$1" = version ] && { echo "ccquota old-1"; exit 0; }
+dest=${@: -1}; mkdir -p "$dest/.release/artifacts"
+cat > "$dest/release.json" <<'J'
+{"components": {"ccquota": {"artifact": "ccquota-{os}-{arch}"},
+ "claude": {"version": "2", "artifact": "claude-{version}-{os}-{arch}"},
+ "codex": {"version": "9", "artifact": "codex-{version}-{os}-{arch}",
+           "helpers": {"codex-code-mode-host": "codex-code-mode-host-{version}-{os}-{arch}"}},
+ "tmux": {"version": "3", "artifact": "tmux-{version}-{os}-{arch}"}}}
+J
+echo "$*" >> "$(dirname "$0")/calls"
+for n in ccquota-linux-amd64 claude-2-linux-amd64 codex-9-linux-amd64 tmux-3-linux-amd64; do echo x > "$dest/.release/artifacts/$n"; done
+case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64 codex-9-darwin-arm64; do echo x > "$dest/.release/artifacts/$n"; done ;; esac
+''')
+            fake.chmod(0o755)
+            key = Path(d, 'release.pub')
+            key.write_text('ed25519 AAAA\n')
+            ctx = Path(d, 'ctx')
+            r = subprocess.run(['bash', str(here / 'prepare-image.sh'), 'https://hub.example', str(key), 'a' * 40,
+                                str(ctx)], env=dict(os.environ, CCQUOTA=str(fake)), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('codex-code-mode-host-9-linux-amd64', r.stderr)
+            arts = sorted(p.name for p in (ctx / 'runtime/.release/artifacts').iterdir())
+            self.assertEqual(arts, sorted(subprocess.run(
+                ['python3', str(here / 'image-stage.py'), 'need', str(ctx / 'runtime'), 'amd64'],
+                capture_output=True, text=True, check=True).stdout.split()))
+            self.assertNotIn('codex-9-darwin-arm64', arts)
+            self.assertEqual(len(Path(d, 'calls').read_text().splitlines()), 2)
+            self.assertIn('docker buildx build --platform linux/amd64 --load', r.stdout)
+
     # ---- #3212: the image only seeds; the disk runtime follows stable
     def stage_mod(self):
         spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
@@ -1325,6 +1370,42 @@ class LinuxNode(unittest.TestCase):
                     loop.child.wait()
                 self.assertEqual(loop.tend(), 1)   # a 4th death in the window: give up
 
+    def test_release_train_builds_the_image_in_the_cluster(self):
+        """#3855: the release train builds each release's node image in the
+        cluster (runs-on: fleet-ack, extras/managed-node/train-build.sh) and
+        never lets it gate the move; the Dockerfile's sha256-pinned toolchain is
+        its own `tools` stage, taken from TOOLS (default: the stage itself, so a
+        build by hand is unchanged), tagged by tools-tag.sh from the stage's text."""
+        me = BIN.parent / 'extras/managed-node'
+        df = (me / 'Dockerfile').read_text()
+        self.assertTrue(df.startswith('# Context'))
+        self.assertIn('\nARG TOOLS=tools\nFROM debian:trixie-slim AS tools\n', df)
+        self.assertIn('\nFROM ${TOOLS} AS toolsrc\n', df)
+        self.assertIn('COPY --from=toolsrc /opt/tools/usr/local/ /usr/local/', df)
+        stage = df.split(' AS tools\n', 1)[1].split('FROM ${TOOLS}', 1)[0]
+        for pin in ('NODE_SHA256', 'GO_SHA256', 'KUBECTL_SHA256', 'FNM_SHA256', 'ALIYUN_SHA256', 'UV_SHA256'):
+            self.assertIn(pin, stage)   # every downloaded tool is the stage's: the tag covers it
+        tag = subprocess.check_output(['bash', str(me / 'tools-tag.sh')], text=True).strip()
+        self.assertRegex(tag, r'^tools-[0-9a-f]{16}$')
+        with tempfile.TemporaryDirectory() as d:
+            moved = Path(d, 'Dockerfile')
+            moved.write_text(df.replace('ARG GO_VERSION=', 'ARG GO_VERSION=9'))
+            self.assertNotEqual(subprocess.check_output(['bash', str(me / 'tools-tag.sh'), str(moved)], text=True).strip(), tag)
+            moved.write_text(df.replace('COPY release.pub', 'COPY  release.pub'))   # outside the stage
+            self.assertEqual(subprocess.check_output(['bash', str(me / 'tools-tag.sh'), str(moved)], text=True).strip(), tag)
+        r = subprocess.run(['bash', str(me / 'train-build.sh'), 'https://hub', 'not-a-sha', 'r', 't'], capture_output=True)
+        self.assertEqual(r.returncode, 2)
+        tb = (me / 'train-build.sh').read_text()
+        for want in ('conf/release-keys/root.pub', 'fleet-release-verify.py', 'ccquota-linux-amd64',
+                     'prepare-image.sh', 'build-arg:TOOLS=', 'push=true', 'containerimage.digest'):
+            self.assertIn(want, tb)
+        wf = (BIN.parent / '.github/workflows/release-train.yml').read_text()
+        self.assertIn('runs-on: fleet-ack', wf)
+        self.assertIn('extras/managed-node/train-build.sh', wf)
+        self.assertIn("--ignore-check 'node tools' --ignore-check 'node image'", wf)
+        self.assertIn('role: gha-claudefleet-node-image', wf)
+        self.assertIn('--target tools --provenance=false', wf)   # ACR refuses an attestation manifest
+
     def test_image_self_updates_on_its_volume(self):
         """The image's defaults (#3212): the runtime on the PVC, owner node (the
         updater runs and the node program says CapRelease), a boot that seeds,
@@ -1346,9 +1427,12 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(c['livenessProbe']['exec']['command'][-2:], ['/usr/local/lib/fleet-image-stage.py', 'live'])
         self.assertIn('/var/db/fleet-node/runtime/current/bin/fleet-node-linux.py',
                       c['readinessProbe']['exec']['command'])
-        # stable cannot move to a release without Linux artifacts: the hub's platforms
-        rel = (BIN.parent / 'deploy/k8s/overlays/prod/deployment-release.yaml').read_text()
-        self.assertRegex(rel, r'CCQUOTA_FLEET_RELEASE_PLATFORMS\n\s+value: darwin-arm64 linux-amd64')
+        # stable cannot move to a release without Linux artifacts: the hub's platforms —
+        # in the deployment's own overlay (claude-fleet#3630: ours is in the private
+        # deploy repo; FLEET_DEPLOY_K8S names a tree with it laid over)
+        rel = Path(os.environ.get('FLEET_DEPLOY_K8S') or BIN.parent / 'deploy/k8s') / 'overlays/prod/deployment-release.yaml'
+        if rel.exists():
+            self.assertRegex(rel.read_text(), r'CCQUOTA_FLEET_RELEASE_PLATFORMS\n\s+value: darwin-arm64 linux-amd64')
 
     def test_image_update_never_resumes_saved_switch(self):
         u = module('fleet-node-update')
@@ -1660,7 +1744,13 @@ class LinuxTenants(unittest.TestCase):
             f.sup.account_forget.assert_not_called()
             self.m.as_tenant.reset_mock()
             self.m.as_tenant.return_value = Mock(returncode=0)
-            self.assertEqual(self.m.login_stop(_ns(name='24acme')), 0)
+            waits = []
+            f.sup.account_forget.side_effect = lambda *a: waits.append(os.environ.get('FLEET_NODE_RELEASE_WAIT')) or 0
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop('FLEET_NODE_RELEASE_WAIT', None)
+                self.assertEqual(self.m.login_stop(_ns(name='24acme')), 0)
+            # a task mid-run is let go only when it ends: 20 s was short (#3554)
+            self.assertEqual(waits, ['120'])
             cmds = [c.args[2] for c in self.m.as_tenant.call_args_list]
             self.assertEqual([c[-1] for c in cmds], ['save'])
             self.assertTrue(cmds[0][1].endswith('fleet-sessions-snapshot.sh'))

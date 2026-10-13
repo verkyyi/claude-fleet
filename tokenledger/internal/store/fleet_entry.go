@@ -155,6 +155,22 @@ func (s *Store) bumpEntry(tx *sql.Tx) (int, error) {
 	return v, err
 }
 
+// BumpEntryVersion moves the version up with nothing else changed: a rule
+// outside this book (a person's machine allowlist, claude-fleet#3824) changed
+// what a home machine's list says.
+func (s *Store) BumpEntryVersion() (int, error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck — a no-op after Commit
+	v, err := s.bumpEntry(tx)
+	if err != nil {
+		return 0, err
+	}
+	return v, tx.Commit()
+}
+
 // EntryVersion is the current version, 0 when nothing ever changed.
 func (s *Store) EntryVersion() (int, error) {
 	var v int

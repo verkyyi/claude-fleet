@@ -61,7 +61,7 @@ ci.env keys (each also from the environment, which wins — a test's seam):
   FLEET_CI_REPO         owner/name (default verkyyi/claude-fleet)
   FLEET_CI_LOGIN        the test login (fleet-ci)
   FLEET_CI_RUNNERS      0 = paused · 1 (default; more is 1)
-  FLEET_CI_WORKFLOWS    the workflow files a job may come from (release-train.yml)
+  FLEET_CI_WORKFLOWS    the workflow files a job may come from (release-train.yml mac-follow.yml)
   FLEET_CI_LABELS       extra labels (space separated) beside self-hosted · <OS> · <arch> · fleet-ci
   FLEET_CI_EVERY        seconds between beats (20)
   FLEET_CI_MAX_SECS     a job's cap (10800) · FLEET_CI_IDLE_SECS an idle runner's (3600)
@@ -162,7 +162,7 @@ def read_cfg(paths):
     if not sup.LOGIN_RE.match(c.login):
         return None, "FLEET_CI_LOGIN %r is not a login name" % c.login
     c.runners = min(int(_num(get("FLEET_CI_RUNNERS", "1"), 1, 0)), 1)
-    c.workflows = get("FLEET_CI_WORKFLOWS", "release-train.yml").split()
+    c.workflows = get("FLEET_CI_WORKFLOWS", "release-train.yml mac-follow.yml").split()
     base = ["self-hosted", "macOS" if sys.platform == "darwin" else "Linux",
             {"arm64": "ARM64", "aarch64": "ARM64"}.get(platform.machine().lower(), "X64"), "fleet-ci"]
     c.labels = base + [l for l in get("FLEET_CI_LABELS").split() if l not in base]

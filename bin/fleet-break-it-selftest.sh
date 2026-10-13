@@ -49,6 +49,7 @@
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   restore-conversation-twice                      bin/fleet-restore.sh (restore, snapshot), fleet_restore_map_prune,
 #                                                   bin/.fleet-restore-resolve.py (one row per conversation)
+#   restore-peer-window / restore-role-lost        bin/fleet-restore.sh (snapshot drops @peer windows; role_handback)
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
@@ -72,7 +73,7 @@
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
-#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move --ref stable-macos (macos gate), .github/workflows/mac-follow.yml
 #   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
 #                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
@@ -210,7 +211,9 @@
 # so do ids given as arguments (`fleet-break-it-selftest.sh cmdn-waits-orch …`).
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
-# ceiling). This file runs 1/2 by default, bin/fleet-break-it-2-selftest.sh 2/2 —
+# ceiling), balanced by each drill's wall time in bin/break-it-durations.txt
+# (fleet-break-it-part.py, issue #2694). This file runs 1/7 by default,
+# bin/fleet-break-it-{2..7}-selftest.sh the rest —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
 # across each other beyond lazy, idempotent rigs (client_setup, drive), so any
@@ -1523,7 +1526,7 @@ drill_restore_conversation_twice() {
   # a no-repo row (column 16 `-`): it resumes in $HOME, where a shared cwd let three windows guess one id
   ct_row() { printf 'FID\t%s\nWIN\t%s\t%s\t%s\t-\tworking\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$1" "$2" "$WORK/home" "$3"; }
   { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
-    ct_row "$f1" 'linux-a shell' "$sid"; ct_row "$f2" '@mac-c' "$sid"; ct_row "$f3" '@mac-c' "$sid"
+    ct_row "$f1" 'linux-a shell' "$sid"; ct_row "$f2" 'mac-c shell' "$sid"; ct_row "$f3" 'mac-c shell' "$sid"
   } > "$mf"
   : > "$WORK/claude-argv"
   t0=$(now)
@@ -1549,6 +1552,87 @@ drill_restore_conversation_twice() {
   grep -q 'fleet_restore_map_prune "$prior" --retired' "$BIN/fleet-restore.sh" \
     || { WHY="the snapshot's shrink guard does not prune the stored map before counting it"; return 1; }
   SECS=$(since "$t0"); WHAT="同一对话在地图里三行：restore 只开最新那一行一个窗口、第二拍不重开；回收过的会话从地图里删掉"
+}
+
+# A 看台's peer window (issue #3829): `@linux-b·ops`, an ssh onto another
+# machine with no session of its own. The snapshot wrote it as a session row and
+# guessed its conversation by mtime — $HOME's newest, an old orchestrator one — so
+# a reboot's restore reopened that conversation under a deleted login's name.
+drill_restore_peer_window() {
+  CAP=20; BREAK_SOCK="$WORK/sock-pw"; local t0 mf="$WORK/econf/fleets/oc/restore.map"
+  local old=3829aaaa-0000-4000-8000-000000003829 fp=1f0e0000-0000-4000-8000-000000038291
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$fp"
+    printf 'WIN\t@linux-b·ops\t%s\t%s\t-\tlooping\t-\t-\n' "$WORK/home" "$old"
+    printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
+  } > "$mf"
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  auto                                            # the break: a reboot's restore off an old map
+  until_ok "$CAP" grep -q -- '--resume sid-1' "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the sandbox fleet never came back with issue-1"; return 1; }
+  sleep 1
+  grep -q -- "--resume $old" "$WORK/claude-argv" \
+    && { WHY="the peer window's guessed conversation ${old%%-*}… was reopened"; return 1; }
+  nt list-windows -t oc -F '#{window_name}' | grep -q '^@' \
+    && { WHY="a peer window came back as a session: [$(nt list-windows -t oc -F '#{window_name}' | tr '\n' ' ')]"; return 1; }
+  # …and a live peer window never enters the map again
+  local pw; pw=$(nt new-window -d -P -F '#{window_id}' -t oc: -n '@mac-c' -c "$WORK/home" 'exec sleep 600')
+  nt set-option -w -t "$pw" @peer 'mac-c@me'; nt set-option -w -t "$pw" @fleet_role panel
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" bash "$WORK/inst/bin/fleet-restore.sh" --snapshot >/dev/null 2>&1
+  grep -q '^WIN.issue-1' "$mf" || { WHY="the snapshot did not run against the sandbox (no issue-1 row)"; return 1; }
+  grep -q '^WIN.@' "$mf" && { WHY="the snapshot wrote the peer window as a session: $(grep '^WIN.@' "$mf" | cut -f2-4)"; return 1; }
+  SECS=$(since "$t0"); WHAT="看台对端窗口（@机器·登录）不进恢复图；旧图里有也不按它猜的对话重开"
+}
+
+# A role's mark lives on its window (issue #3829): a reboot took the server and the
+# `@fleet_role_def` with it; restore stamped the identity back but nobody held the
+# orchestrator role until a person stole it in the restored window.
+drill_restore_role_lost() {
+  CAP=20; BREAK_SOCK="$WORK/sock-rl"; local t0 w h mf="$WORK/econf/fleets/oc/restore.map"
+  local sid=3829bbbb-0000-4000-8000-000000003829 fo=1f0e0000-0000-4000-8000-000000038292
+  local held="$WORK/econf/global/roles.held"
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\nWIN\t编排\t%s\t%s\t-\tlooping\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$fo" "$WORK/home" "$sid"
+  } > "$mf"
+  mkdir -p "$WORK/econf/global"
+  printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"   # the line from before the reboot
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  auto                                            # the break: the reboot's restore
+  until_ok "$CAP" grep -q -- "--resume $sid" "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the orchestrator's conversation was not resumed"; return 1; }
+  w=$(nt list-windows -t oc -F '#{window_id}|#{@fleet_id}' | awk -F'|' -v f="$fo" '$2 == f { print $1 }')
+  [ -n "$w" ] || { WHY="no window came back with the orchestrator's identity"; return 1; }
+  h=$(env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+      BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_role_holder orchestrator' _ "$WORK/inst/bin" 2>&1)
+  [ "$h" = "$w" ] || { WHY="the orchestrator role came back to [$h], not the restored window $w"; return 1; }
+  grep -q "^orchestrator	oc	$fo	$w	" "$held" || { WHY="roles.held still names the window from before: $(cat "$held")"; return 1; }
+  SECS=$(since "$t0")
+  # a person resumed the conversation by hand first (a new window, a new identity):
+  # restore leaves it open once and the role follows it there
+  nt kill-server 2>/dev/null
+  BREAK_SOCK="$WORK/sock-rl2"                     # its own server: nothing of the first half's answers
+  printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"
+  nt -f /dev/null new-session -d -s oc -n home -c "$WORK/emain" 'exec sleep 600'
+  nt new-window -d -t oc: -n 编排 -c "$WORK/home" 'exec sleep 600'
+  w=$(nt list-windows -t oc -F '#{window_id}|#{window_name}' | awk -F'|' '$2 == "编排" { print $1 }')
+  [ "$(printf '%s\n' "$w" | grep -c .)" = 1 ] || { WHY="the hand-resumed setup is not one window: [$w]"; return 1; }
+  nt set-option -w -t "$w" @fleet_id 1f0e0000-0000-4000-8000-000000038293
+  nt set-option -w -t "$w" @cc_session_id "$sid"
+  : > "$WORK/claude-argv"
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 \
+    bash "$WORK/inst/bin/fleet-restore.sh" >/dev/null 2>&1
+  # counted by windows, not argv lines: the first half's killed wrapper may still log a late relaunch
+  [ "$(nt list-windows -t oc -F x | grep -c .)" = 2 ] \
+    || { WHY="restore opened the hand-resumed conversation a second time: [$(nt list-windows -t oc -F '#{window_name}' | tr '\n' ' ')]"; return 1; }
+  [ "$(o "$w" @fleet_role_def)" = orchestrator ] || { WHY="the hand-resumed window did not get the role back"; return 1; }
+  grep -q "^orchestrator	oc	1f0e0000-0000-4000-8000-000000038293	$w	" "$held" \
+    || { WHY="roles.held does not follow the conversation to its new window: $(cat "$held")"; return 1; }
+  rm -f "$held"
+  WHAT="重启后 restore 把编排对话开回来，orchestrator 角色跟着它回到新窗口；人先手动接回的，角色也交给那一个窗口，不再开第二份"
 }
 
 # ---- /loop and fleet down (issue #1846) ------------------------------------------
@@ -4091,11 +4175,14 @@ drill_oldcfg_deleted_hook() {
   WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
 }
 
-# ---- macos-red-to-stable (#2286): the macOS selftests left the PR and run on
-# master after the merge. A BSD-only red there must (1) be filed once as a breakage
-# by the watcher and (2) stop `fleet-stable.sh move` with `macos:`; once the run on
-# the target goes green the same move goes through. Fake gh (the runs / check
-# runs), fake filer; a real bare repo + tag.
+# ---- macos-red-to-stable (#2286, rewritten by #3869): the macOS selftests run
+# AFTER the release (mac-follow.yml). A BSD-only red must hold the Mac lane, not
+# stable: (1) the release train's own move (`--train`, no macOS job in it) moves
+# stable past it, (2) the watcher files it once as a breakage reading mac-follow's
+# jobs, (3) `fleet-stable.sh move --ref stable-macos` refuses (`macos:`) on the
+# `mac follow: macOS` status, so every Mac stays on the previous version; once it
+# goes green the lane follows. Fake gh (runs / jobs / statuses), fake filer; a
+# real bare repo + both tags.
 drill_macos_red_to_stable() {
   CAP=30; local t0 d out rc c1 c2
   d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
@@ -4103,9 +4190,11 @@ drill_macos_red_to_stable() {
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*status=completed*) cat "$d/runs.watch" ;;
-  *actions/workflows/*) cat "$d/runs.stable" ;;
+  *actions/workflows/*) : ;;
+  *actions/runs/77/jobs*) printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null release\n' ;;
   *actions/runs/9/jobs*) printf '7\tfailure\tmacOS / shard 1\n' ;;
   *actions/runs/*/jobs*) printf '6\tsuccess\tmacOS / shard 1\n' ;;
+  *statuses*) cat "$d/status" ;;
   'run view'*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
   *) printf 'completed success shard 1\n' ;;
 esac
@@ -4116,36 +4205,84 @@ SH
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
     mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    echo 'name: mac follow' > "$d/seed/.github/workflows/mac-follow.yml"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm bsd && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c1"
     echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bsd-only break' && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable-macos "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  printf '9\t%s\tfailure\tworkflow_run\n8\t%s\tsuccess\tworkflow_run\n' "$c2" "$c1" > "$d/runs.watch"
+  printf 'failure\n' > "$d/status"
+  t0=$(now)
+  # the train (Linux green, no macOS job) moves stable past the BSD-only break …
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --train 77 --ignore-check release --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the train's stable move refused on macOS: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move (a Mac red held Linux)"; return 1; }
+  # … the watcher files mac-follow's red once as a breakage …
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" \
+          bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
+  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red follow was not filed with --breakage: $out"; return 1; }
+  grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
+  PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" bash "$BIN/fleet-macos-watch.sh" --repo o/r --now >/dev/null 2>&1
+  [ "$(grep -c -- '--breakage' "$d/filed")" = 1 ] || { WHY="the same red follow was filed twice"; return 1; }
+  # … and the Mac lane refuses to follow it.
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="the lane move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — macos:'*'mac follow: macOS'*) ;; *) WHY="the refusal is not macos: on the mac-follow status: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the Mac lane followed a red macOS"; return 1; }
+  # green: mac-follow's status on the same commit → the lane follows.
+  printf 'success\n' > "$d/status"
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the lane move after a green follow failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c2" ] || { WHY="the lane did not follow after macOS went green"; return 1; }
+  WHAT="macOS 红：列车照挪 stable（Linux 不等 Mac）、开一张带指纹的单（同一 run 不重开）、Mac 通道拒挪（macos:）停在上一版；同一提交跑绿后 Mac 通道跟上"
+}
+
+# ---- stable-macos-ahead (#3868, EPIC #3863 C5): a Mac follows refs/tags/stable-macos,
+# which must never lead stable — a Mac would run what Linux never verified. The way
+# it would happen is a lane move onto a commit stable has not reached (by hand, or a
+# train whose stable move failed after its macOS half went green). fleet-stable.sh
+# refuses it (`M:`), and a lane at stable moves; a darwin install's one reader
+# (fleet_stable_ref_for) then names the lane, a linux one stable.
+drill_stable_macos_ahead() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/macahead"; mkdir -p "$d/shim" "$d/seed"
+  cat > "$d/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *actions/workflows/*) printf '%s\tcompleted\tsuccess\tpush\t5\tselftests (macOS)\n%s\tcompleted\tsuccess\tpush\t6\tselftests (macOS)\n' "\$(cat "$d/c1")" "\$(cat "$d/c2")" ;;
+  *) printf 'completed success shard 1\n' ;;
+esac
+SH
+  chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm verified && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'not on stable yet' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
     git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; return 1; }
   c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
-  # The watcher reads id/sha/conclusion/event; the stable gate head_sha/status/
-  # conclusion/event/id/title.
-  printf '9\t%s\tfailure\tpush\n8\t%s\tsuccess\tpush\n' "$c2" "$c1" > "$d/runs.watch"
-  printf '%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' "$c2" > "$d/runs.stable"
   t0=$(now)
-  # red: the watcher files it as a breakage …
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" \
-          bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
-  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red run was not filed with --breakage: $out"; return 1; }
-  grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
-  # … and stable refuses to move onto it.
-  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — macos:'*) ;; *) WHY="the refusal is not prefixed macos: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a red macOS run"; return 1; }
-  # green: the fix's run on the same target is green → the move goes through.
-  printf '%s\tcompleted\tsuccess\tworkflow_dispatch\t10\tselftests (macOS) @ %s\n%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' \
-    "$c1" "$c2" "$c2" > "$d/runs.stable"
-  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the move after a green run failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="a lane move ahead of stable exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — M:'*) ;; *) WHY="the refusal is not prefixed M: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  git --git-dir="$d/origin.git" rev-parse -q --verify refs/tags/stable-macos >/dev/null \
+    && { WHY="the Mac lane was created ahead of stable"; return 1; }
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move --ref stable-macos --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the lane move onto stable failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the lane is not at stable"; return 1; }
+  out=$( . "$BIN/fleet-versions-lib.sh"; printf '%s %s' "$(fleet_stable_ref_for darwin "$d/co" origin)" "$(fleet_stable_ref_for linux "$d/co" origin)")
   SECS=$(since "$t0")
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
-  WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
+  [ "$out" = "stable-macos stable" ] || { WHY="the one reader names «${out}», want «stable-macos stable»"; return 1; }
+  WHAT="Mac 通道挪到 stable 之前的提交被拒（M:）；挪到 stable 本身照常；Mac 读 stable-macos、Linux 读 stable"
 }
 
 # ---- train-push-cancels (#3141, EPIC #3139 C2): every merge used to start its own
@@ -4178,7 +4315,8 @@ drill_train_push_cancels() {
       || { WHY="release-train.yml is not triggered by $v"; return 1; }
   done
   grep -q 'fleet-train-board.sh' "$wf" || { WHY="the train does not board through bin/fleet-train-board.sh"; return 1; }
-  grep -qE 'runs_on:.*macos' "$wf" || { WHY="the train runs no macOS tests of its own"; return 1; }
+  grep -qE 'runs_on:.*macos' "$wf" && { WHY="the train still waits on macOS tests (issue #3869: mac-follow.yml follows the release)"; return 1; }
+  grep -qE 'runs_on:.*macos' "$ROOT/.github/workflows/mac-follow.yml" || { WHY="nothing runs the macOS half after the release (mac-follow.yml)"; return 1; }
   # the per-merge macOS run is gone (the nightly full suite stays)
   awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$ROOT/.github/workflows/selftests-macos.yml" | grep -q '^[[:space:]]*push:' \
     && { WHY="selftests-macos.yml is still triggered by push — the next merge cancels it again"; return 1; }
@@ -4238,6 +4376,7 @@ drill_quarantine_one_red()  { quarantine_leg one-red  "只红一趟（或上一�
 drill_quarantine_touched()  { quarantine_leg touched  "条目还在期内，但这趟改了它点名的文件（或它自己）：照跑；在这种列车上再红是 FAIL，不再隔离"; }
 drill_quarantine_expired()  { quarantine_leg expired  "过期条目视为不存在、测试照跑，摘要写「已过期，恢复」；没有隔离就不出「隔离了」那行"; }
 drill_quarantine_pr_skips() { quarantine_leg pr-skips "不带 --quarantine 什么都不跳；没有 --changed 就拒（exit 2）；PR 门和夜里全量的工作流不传隔离输入，只有列车传"; }
+drill_train_flaky_retry_hides_red() { quarantine_leg retry-red "重跑还红是 FAIL、这一片红（一个确定红的测试不能靠重跑发出）；--drill-red 重跑也记红；超时不重跑；--retry-red 只收 0 或 1；只有列车传 retry_red"; }
 
 # ---- train-hub-stable-split (#3142, EPIC #3139 C3): the hub image and stable come
 # from different commits — hub-deploy shipped the hub on its own clock, the
@@ -4246,7 +4385,7 @@ drill_quarantine_pr_skips() { quarantine_leg pr-skips "不带 --quarantine 什�
 # one TRAIN_SHA: after its tests and precheck it deploys the hub through
 # hub-deploy.yml's own job (workflow_call, sha) — or skips it when the hub already
 # runs TRAIN_SHA's Go, deploy/k8s, site/ and docs/public/ (bin/fleet-train-hub.sh) — then publishes
-# TRAIN_SHA and moves stable with --train (CI / macOS gates read this run's jobs).
+# TRAIN_SHA and moves stable with --train (the CI gate reads this run's jobs; macOS follows, #3869).
 # A rollback dispatched by hand still makes a split: the doctor's hub-image row
 # says so (bin/fleet-hub-image.sh `source: SPLIT`). The hub taking the train's
 # OIDC publish is its Go test, held by name. Rigs: a bare repo, a file:// hub, a
@@ -4265,11 +4404,14 @@ drill_train_hub_stable_split() {
   job=$(awk '/^  [a-z][a-z0-9_-]*:$/{j=$1} /uses: \.\/\.github\/workflows\/hub-deploy\.yml/{print j; exit}' "$wf")
   [ -n "$job" ] || { WHY="release-train.yml deploys no hub (no job uses ./.github/workflows/hub-deploy.yml)"; return 1; }
   v=$(awk -v j="  $job" '$0 == j {o=1; next} o && /^  [a-z]/{o=0} o' "$wf")
-  for need in linux macos gate; do
+  for need in linux gate; do   # macOS follows the release (mac-follow.yml, #3869)
     printf '%s\n' "$v" | grep -Eq "needs:.*[^a-z_]$need([^a-z_]|\$)" || { WHY="the hub deploy ($job) does not wait for $need"; return 1; }
   done
   printf '%s\n' "$v" | grep -q 'sha: \${{ needs.board.outputs.train_sha }}' \
     || { WHY="the hub deploy ($job) is not handed TRAIN_SHA"; return 1; }
+  # a called workflow sees no secret it is not handed — the overlay repo's deploy key (#3860)
+  printf '%s\n' "$v" | grep -Eq '^    secrets: inherit' \
+    || { WHY="the hub deploy ($job) passes no secrets — FLEET_DEPLOY_OVERLAY_SSH_KEY arrives empty (claude-fleet#3860)"; return 1; }
   grep -q 'fleet-release-publish.sh "\$TRAIN_SHA"' "$wf" || { WHY="the train does not publish TRAIN_SHA (bin/fleet-release-publish.sh \"\$TRAIN_SHA\")"; return 1; }
   grep -Eq 'fleet-stable.sh move "\$TRAIN_SHA" .*--train ' "$wf" || { WHY="the train does not move stable to TRAIN_SHA with --train"; return 1; }
   grep -Eq 'fleet-stable.sh .*--force' "$wf" && { WHY="--force is in the train"; return 1; }
@@ -6631,7 +6773,7 @@ drill_nothing_starts_by_itself() {
   for f in dash-issue-session.sh dash-raw-session.sh; do
     rm -f "$sb/bin/$f"; printf '#!/bin/sh\necho "$0 $*" >> "%s/spawned"\n' "$sb" > "$sb/bin/$f"; chmod +x "$sb/bin/$f"
   done
-  : > "$sb/mainA/.github/workflows/release-train.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
+  : > "$sb/mainA/.github/workflows/mac-follow.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
   # a backlog of autofill-labelled issues, and master's macOS run red
   cat > "$sb/shim/gh" <<SH
 #!/bin/sh
@@ -7034,6 +7176,32 @@ drill_chat_budget_bypass() {
   WHAT="凭据代理 403 person_budget_exceeded：流里一行 code:budget + until，原话不上页面；/api/conversation 说被挡（重启也记得），走通一轮后放开"
 }
 
+# chat-claude-bare-path (issue #3648, EPIC #3642 C6): the daemon starts the chat
+# service with a bare PATH (no ~/.local/bin); the SDK is installed without its
+# native binary, so a service that could not find the login's own claude failed
+# EVERY turn with «Native CLI binary for darwin-arm64 not found». serve now finds it
+# the way fleet_find_tool does (pin · PATH · ~/.local/bin · brew · /usr/local).
+drill_chat_claude_bare_path() {
+  CAP=20; local d="$WORK/ccb" t0 out
+  t0=$(now)
+  mkdir -p "$d/home/.local/bin" "$d/tools" "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk"
+  printf '#!/bin/sh\nexit 0\n' > "$d/home/.local/bin/claude"
+  printf '#!/bin/sh\nexit 0\n' > "$d/tools/npm"
+  printf '#!/bin/sh\nprintf %%s "$FLEET_WEBCHAT_CLAUDE" > "%s/claude.seen"\n' "$d" > "$d/tools/node"
+  chmod +x "$d/home/.local/bin/claude" "$d/tools/npm" "$d/tools/node"
+  : > "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+  cp "$ROOT/extras/web-chat/package-lock.json" "$d/conf/webchat/deps/"
+  env -i HOME="$d/home" PATH="$d/tools:/usr/bin:/bin" FLEET_CONF_DIR="$d/conf" \
+    bash "$ROOT/bin/fleet-webchat.sh" serve >/dev/null 2>&1
+  out=$(cat "$d/claude.seen" 2>/dev/null)
+  [ "$out" = "$d/home/.local/bin/claude" ] \
+    || { WHY="serve on a bare PATH handed the server claude=«${out}», not ~/.local/bin/claude"; return 1; }
+  out=$(env -i HOME="$d/home" PATH="/usr/bin:/bin" FLEET_CONF_DIR="$d/conf" bash "$ROOT/bin/fleet-webchat.sh" status 2>&1)
+  case "$out" in *"claude · $d/home/.local/bin/claude"*) ;; *) WHY="status does not name the claude it runs: $out"; return 1 ;; esac
+  WHAT='守护给的 PATH 里没有 ~/.local/bin：serve 照样把本登录的 claude 交给对话服务，status 写明用的哪个'
+  SECS=$(since "$t0")
+}
+
 drill_chat_home_moved() {
   CAP=40
   if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
@@ -7079,6 +7247,74 @@ drill_chat_relay_wrong_person() {
   SECS=$(since "$t0")
 }
 
+# chat-first-open-cold (issue #3648, EPIC #3642 C6): the first /chat on a home
+# whose service never ran — the relay found no socket and nothing started it
+# (#3647's ensure had no caller): the page said «did not answer». The node's relay
+# now runs the fixed `service ensure --name webchat --wait 3` for its own login
+# and dials again. Go (internal/agent TestChatSockEnsuresOnDemand), run when a
+# toolchain is here.
+drill_chat_first_open_cold() {
+  CAP=120; local t0 out rc f="$ROOT/tokenledger/internal/agent/node_chat_relay.go"
+  t0=$(now)
+  grep -q '^func TestChatSockEnsuresOnDemand(' "$ROOT/tokenledger/internal/agent/node_chat_relay_test.go" 2>/dev/null \
+    || { WHY="the test TestChatSockEnsuresOnDemand is gone"; return 1; }
+  grep -q 'a.chatSockOrEnsure(ctx, dctx, login' "$f" 2>/dev/null \
+    || { WHY="openChatRelay dials the socket without chatSockOrEnsure: a cold home never starts"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestChatSockEnsuresOnDemand$' ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='没有 socket：机器节点以本登录跑 service ensure --name webchat --wait 3 再拨一次，起来了就接上；在跑的不 ensure；普通节点只拨一次' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在、转发经 chatSockOrEnsure' ;;
+      *) WHY="the cold open (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在、转发经 chatSockOrEnsure，Go 门（tokenledger.yml）跑它'
+  fi
+  SECS=$(since "$t0")
+}
+
+# chat-relay-replica-hop (issue #3847, EPIC #3642 C6 真机一轮): with two entry
+# replicas the person's /chat landed on the one not holding their login's link
+# («连不上»), and the node's data half, landing on the replica that did not open
+# the relay, was verified THERE first — its FleetSig nonce spent — and then
+# refused as a replay by the holder (401). Now a chat request is handed whole to
+# the holder (chatRelayPeer) and a data half is handed on BEFORE it is verified
+# (claimedEndpoint). Go (internal/api chat_relay_replica_test.go: two replicas, a
+# front splitting the halves, a real signing agent), run when a toolchain is here.
+drill_chat_relay_replica_hop() {
+  CAP=180; local t0 out rc tests f="$ROOT/tokenledger/internal/api/ssh_relay.go"
+  tests='TestChatRelayReplicaHop TestChatRelayReplicaNobodyHolds TestChatRelayReplicaSingleNeverProxies TestSSHRelayDataHalfOnOtherReplica'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/internal/api/*_test.go 2>/dev/null || { WHY="the test $out is gone"; return 1; }
+  done
+  # the data half is handed on before nodeEndpoint verifies (and spends) its signature
+  local cl vl
+  cl=$(awk '/^func \(s \*Server\) attachRelayData/,/^}/' "$f" | grep -n 'claimedEndpoint(r)' | head -1 | cut -d: -f1)
+  vl=$(awk '/^func \(s \*Server\) attachRelayData/,/^}/' "$f" | grep -n 's.nodeEndpoint(w, r)' | head -1 | cut -d: -f1)
+  [ -n "$cl" ] && [ -n "$vl" ] && [ "$cl" -lt "$vl" ] \
+    || { WHY="attachRelayData verifies before it hands a data half on (a replica spends the nonce the holder needs)"; return 1; }
+  grep -q 's.chatRelayPeer(r, home.Machine, home.Login)' "$ROOT/tokenledger/internal/api/fleet_chat.go" 2>/dev/null \
+    || { WHY="the chat routes never hand a request to the replica holding the login's link"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='两副本：人的 /chat 落在不持链的副本 → 整个请求交给持链副本；节点签名的回拨落在另一副本 → 验签前转过去，nonce 只花一次；没人持链照答 home_down；单入口不转' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer' ;;
+      *) WHY="the replica hop (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20[0-9][0-9]/' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在、回拨先转后验、对话路由经 chatRelayPeer，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
 # land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
 # land at once through fleet-land.sh — both land, one after the other, the second
 # rebased onto the first and checked again; a red check never moves the base; gh 0 times.
@@ -7115,7 +7351,7 @@ FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
-part=${BREAK_PART:-1/2}
+part=${BREAK_PART:-1/7}
 if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   case "$part" in
     [1-9]/[1-9]|[1-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
@@ -7124,16 +7360,16 @@ if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   [ "$pk" -le "$pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$part" >&2; exit 2; }
   mine=''
   for r in $IDS; do type "drill_${r//-/_}" >/dev/null 2>&1 && mine="$mine $r"; done
+  # contiguous slices balanced by each drill's measured wall time (issue #2694)
   # shellcheck disable=SC2086  # ids carry no whitespace
-  set -- $mine
-  pt=$#; lo=$(( (pk - 1) * pt / pn )); hi=$(( pk * pt / pn )); i=0
-  for r in $mine; do
-    [ "$i" -ge "$lo" ] && [ "$i" -lt "$hi" ] && PART_IDS="$PART_IDS $r"
-    i=$((i + 1))
-  done
-  PART_IDS="$PART_IDS "
-  printf 'fleet-break-it: part %s — drills %d..%d of %d\n' "$part" $((lo + 1)) "$hi" "$pt"
+  PART_IDS=" $(python3 "$BIN/fleet-break-it-part.py" "$part" "$BIN/break-it-durations.txt" $mine | tr '\n' ' ')"
+  # shellcheck disable=SC2086
+  set -- $mine; pt=$#
+  # shellcheck disable=SC2086
+  set -- $PART_IDS
+  printf 'fleet-break-it: part %s — %d of %d drills\n' "$part" "$#" "$pt"
 fi
+unset BREAK_PART
 while IFS= read -r r; do
   case "$r" in
     '@'*) [ "${pk:-1}" -gt 1 ] || printf 'REG   %-20s %s\n' '—' "${r#@}"; continue ;;
@@ -7143,14 +7379,14 @@ while IFS= read -r r; do
   if [ -n "$PART_IDS" ]; then case "$PART_IDS" in *" $r "*) ;; *) continue ;; esac; fi
   fn="drill_${r//-/_}"
   type "$fn" >/dev/null 2>&1 || continue
-  SECS='' CAP='' WHY='' WHAT=''
+  SECS='' CAP='' WHY='' WHAT='' T_D=$(now)
   if "$fn" && [ -n "$SECS" ] && le "$SECS" "$CAP"; then
     PASSES=$((PASSES + 1))
-    printf 'PASS  %-20s %5ss ≤%ss  %s\n' "$r" "$SECS" "$CAP" "$WHAT"
+    printf 'PASS  %-20s %5ss ≤%ss  %s  [wall %ss]\n' "$r" "$SECS" "$CAP" "$WHAT" "$(since "$T_D")"
   else
     FAILS=$((FAILS + 1))
     [ -n "$WHY" ] || WHY="recovered in ${SECS:-?}s, over the ${CAP}s bound"
-    printf 'FAIL  %-20s %s\n' "$r" "$WHY"
+    printf 'FAIL  %-20s %s  [wall %ss]\n' "$r" "$WHY" "$(since "$T_D")"
   fi
 done <<EOF
 $ROWS

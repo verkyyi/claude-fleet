@@ -502,21 +502,44 @@ EOF
 }
 
 # ================================================================ run ===========
-# cred_run_drills <file> — every drill_cred_* in <file>, each checked for its row
+# cred_run_drills <file> — every drill_* in <file>, each checked for its row.
+# BREAK_PART=K/N (unset = all) runs the K-th of N contiguous slices of them, in the
+# file's order, balanced by bin/break-it-durations.txt — a part file (`# selftest-part-of: <file>`) is its own test with its
+# own ceiling (issue #2694); every part still lints every drill's row.
 cred_run_drills() {
 FAILS=0; PASSES=0
-for fn in $(sed -n 's/^\(drill_[a-z0-9_]*\)() *{.*/\1/p' "$1"); do
+local _crd_fns _crd_part=${BREAK_PART:-all} _crd_pk=1 _crd_pn=1 _crd_ids='' _crd_sliced=0
+_crd_fns=$(sed -n 's/^\(drill_[a-z0-9_]*\)() *{.*/\1/p' "$1")
+unset BREAK_PART
+if [ -z "${BREAK_ONLY:-}" ] && [ "$_crd_part" != all ]; then
+  case "$_crd_part" in
+    [1-9]/[1-9]|[1-9]/[1-9][0-9]) _crd_pk=${_crd_part%/*} _crd_pn=${_crd_part#*/} ;;
+    *) printf 'fleet-break-it: BREAK_PART=%s is not K/N or all\n' "$_crd_part" >&2; exit 2 ;;
+  esac
+  [ "$_crd_pk" -le "$_crd_pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$_crd_part" >&2; exit 2; }
+  # contiguous slices balanced by each drill's measured wall time (fleet-break-it-part.py)
+  # shellcheck disable=SC2086,SC2046  # ids carry no whitespace
+  _crd_ids=" $(python3 "$BIN/fleet-break-it-part.py" "$_crd_part" "$BIN/break-it-durations.txt" \
+    $(printf '%s\n' $_crd_fns | sed 's/^drill_//' | tr _ -) | tr '\n' ' ')"
+  _crd_sliced=1
+  # shellcheck disable=SC2086
+  set -- "$1" $_crd_ids
+  printf '%s: part %s — %d drills\n' "$(basename "$1" -selftest.sh)" "$_crd_part" $(($# - 1))
+  set -- "$1"
+fi
+for fn in $_crd_fns; do
   r=$(printf '%s' "${fn#drill_}" | tr _ -)
   grep -qF -- "| \`$r\` |" "$DOC" || { FAILS=$((FAILS + 1)); printf 'FAIL  lint: %s has no row in docs/dev/BREAK-IT.md\n' "$fn"; continue; }
   if [ -n "${BREAK_ONLY:-}" ]; then case " $BREAK_ONLY " in *" $r "*) ;; *) continue ;; esac; fi
-  SECS='' CAP='' WHY='' WHAT=''
+  if [ "$_crd_sliced" = 1 ]; then case "$_crd_ids" in *" $r "*) ;; *) continue ;; esac; fi
+  SECS='' CAP='' WHY='' WHAT='' T_D=$(now)
   if "$fn" && [ -n "$SECS" ] && le "$SECS" "$CAP"; then
     PASSES=$((PASSES + 1))
-    printf 'PASS  %-20s %5ss ≤%ss  %s\n' "$r" "$SECS" "$CAP" "$WHAT"
+    printf 'PASS  %-20s %5ss ≤%ss  %s  [wall %ss]\n' "$r" "$SECS" "$CAP" "$WHAT" "$(since "$T_D")"
   else
     FAILS=$((FAILS + 1))
     [ -n "$WHY" ] || WHY="recovered in ${SECS:-?}s, over the ${CAP}s bound"
-    printf 'FAIL  %-20s %s\n' "$r" "$WHY"
+    printf 'FAIL  %-20s %s  [wall %ss]\n' "$r" "$WHY" "$(since "$T_D")"
   fi
 done
 if [ "$FAILS" -gt 0 ]; then

@@ -25,4 +25,4 @@ spec:
                   name: fleet-credproxy
                   key: credproxy-token
             - name: CCQUOTA_CREDPROXY_RELAY_URL
-              value: "https://fleet-relay.24hw.cn"
+              value: "https://relay.example.com"

@@ -9,6 +9,9 @@
 #                         (core_reading) + bin/fleet-node-install.sh 核心 + bin/fleet-doctor.sh
 #                         `node` row (#3810): the core re-bootstrapped under a seated daemon
 #                         answers EIO — no core, every child stopped, the install said done
+#   node-core-swept       bin/fleet-node-supervisor.py _sweep / _retire_unit (CORE_LABEL) +
+#                         tend_core (#3857): the hourly sweep, run by the core itself under a
+#                         seated daemon, booted the core out — it vanished hours after a start
 #   node-supervisor-dead  bin/fleet-node-supervisor.py (install's KeepAlive +
 #                         ThrottleInterval, run's adopt + state.json, status --check),
 #                         bin/fleet-doctor.sh's `node` row
@@ -1226,6 +1229,24 @@ SH
   WHAT="守护已降到 _fleetnode 时重装根核心：launchd 还在拆旧核心、bootstrap 回 EIO——等旧的走完再重试，装上且 socket 答了才算；新的起不来就放回旧的、不往守护那步走；核心不答时守护自己的 install 拒绝、status --check 7（体检 node 行 FAIL）"
 }
 
+# node-core-swept (#3857): a managed machine's core vanished hours after a reboot — the
+# hourly leftover sweep (a seated daemon has the core run it) took
+# com.claude-fleet.node-core for a machine unit the daemon does not run and booted
+# it out: the core died mid-sweep, gone from launchd, its plist left, every child
+# waiting on its socket. Now the core's label is the machine's own (never swept,
+# never retired), and a daemon that finds it gone says so once and — as root —
+# bootstraps it back.
+drill_node_core_swept() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-supervisor-selftest.py" \
+          O_SweepRemoves.test_the_root_core_is_never_swept O_SweepRemoves.test_a_core_gone_from_launchd_is_put_back 2>&1) \
+    || { WHY="the sweep still boots the core out, or a gone core stays gone: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="expected.json 不列 labels 的托管机：每小时的清理不再把 com.claude-fleet.node-core 当多余单元卸掉、也不进 attic；核心不在 launchd 里，守护记一行、root 守护自己 bootstrap 回来，status 写出不答多久了"
+}
+
 # managed-login-install-stale (#2688): the machine moved to a release, a managed
 # login's ~/.claude/fleet (what every account task runs) stayed on its old commit
 # — its install-sync tick answered `off · managed` and the updater never moved it.
@@ -1448,4 +1469,6 @@ drill_per_login_machine_loops() {
   WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复"
 }
 
+# this file runs part 1/3; the rest are its part files (issue #2694)
+: "${BREAK_PART:=1/3}"
 cred_run_drills "$0"

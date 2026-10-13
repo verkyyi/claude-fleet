@@ -109,6 +109,8 @@ type ReleaseStore struct {
 	pubAt     time.Time // when PublishedStable last read the disk
 	pubSHA    string
 	pubOn     bool
+	macAt     time.Time // when MacStableSHA last read the disk (fleet_release_macos.go)
+	macSHA    string
 }
 
 type releaseBuild struct {
@@ -691,7 +693,7 @@ func (rs *ReleaseStore) prune() {
 	// pointer, then the rest newest first: the kept links stay one unbroken
 	// run — every kept link's prev is kept too, but the oldest's. Never the
 	// stable, nor a release being built or promoted (its pointer moves after).
-	keep := map[string]bool{cur: true, ptr: true}
+	keep := map[string]bool{cur: true, ptr: true, rs.macPointer().SHA: true}
 	rs.mu.Lock()
 	for sha := range rs.pending {
 		keep[sha] = true
@@ -838,7 +840,12 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	sha, sub, _ := strings.Cut(rest, "/")
 	if sha == "stable" && sub == "" {
-		sha = rs.StableSHA()
+		// ?platform=darwin: the Mac lane when one is set (claude-fleet#3868),
+		// and the header says it was — the client's `channel` reads it
+		sha = rs.StableSHAFor(r.URL.Query().Get("platform"))
+		if r.URL.Query().Get("platform") == "darwin" && rs.MacStableSHA() != "" {
+			w.Header().Set(ReleaseRefHeader, RefStableMacOS)
+		}
 	}
 	if !release.ValidSHA(sha) {
 		http.NotFound(w, r)

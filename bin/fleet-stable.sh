@@ -1,5 +1,6 @@
 #!/bin/sh
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--precheck] [--allow-no-checks] [--force]
+#                 [--ref stable|stable-macos] [--seed]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
 #                 [--ignore-check <name>]... [--train <run id>]
@@ -62,10 +63,11 @@
 #               that does not finish in time refuses. --dry-run never dispatches or waits:
 #               no green run = refused. --force moves past it and logs one line,
 #               like gate 4. A target whose tree has no such workflow has no BSD
-#               half to wait for and passes. A green release train on the target
-#               (issue #3141: release-train.yml runs the BSD half now, and leaves
-#               the commit status `release train: macOS` on the commit it boarded)
-#               counts as its BSD half when no macOS workflow run is about it.
+#               half to wait for and passes. A green follower on the target
+#               (issue #3869: mac-follow.yml runs the BSD half on each stable after
+#               the release and leaves the commit status `mac follow: macOS`; a
+#               release train left `release train: macOS` before #3869) counts as
+#               its BSD half when no macOS workflow run is about it.
 #            6. a tree that ships the machine updater (bin/fleet-node-update.py,
 #               issue #2334) carries a release.json its one validator accepts
 #               (`fleet-node-update.py check-release`): what every managed machine
@@ -97,6 +99,31 @@
 #               already carry every tokenledger/ commit the target has (tests and
 #               *.md aside), else REFUSED `ccquota:` listing them. No hub
 #               address, or a target with no Go source / no updater: said, passes.
+#          Gate 5 is not stable's once a Mac lane exists (issue #3868, EPIC #3863
+#          共同约定 4): with refs/tags/stable-macos on the remote, stable means
+#          "Linux has verified it", a Mac follows the lane, and the BSD half gates
+#          the lane's move instead (below) — said, never waited for. No such tag ⇒
+#          gate 5 holds stable exactly as before.
+#
+#   move --ref stable-macos [<sha>]   the Mac lane (issue #3868): every Mac — a
+#          machine, a client on one — follows it (fleet_stable_ref_for). Default
+#          target: the current stable. Refuses unless gates 1 and 2 hold for the
+#          lane's own old value (on trunk, forward only), and:
+#            M. NEVER AHEAD OF STABLE — the target is stable or an ancestor of it
+#               (stable must exist): a Mac never runs what Linux has not verified;
+#            5. the BSD half is green on the target, as above (--train <run> reads
+#               that run's macOS jobs).
+#          Gates 3, 4, 6, 7, 8 are stable's and were passed when the target was
+#          stable. Pushes refs/tags/stable-macos with the same lease; outside CI it
+#          dispatches stable-publish.yml with ref=stable-macos (the hub's lane).
+#          --precheck runs 1, 2 and M.
+#          --seed (issue #3869, the release train's first lane): only while there is
+#          NO refs/tags/stable-macos, and only onto stable itself — gate 5 is not
+#          asked, because that stable passed it when it moved (before the lane, the
+#          BSD half gated stable). A lane already there ⇒ said, exit 0, nothing
+#          pushed. The train seeds it at the stable it boarded, before its stable
+#          move stops asking macOS: a Mac stays there until mac-follow.yml moves it.
+#
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -130,13 +157,14 @@
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
 #           green / release.json missing or invalid / a pinned artifact not on
-#           the hub / the hub's ccquota not the target's or behind it) · 4 push failed
+#           the hub / the hub's ccquota not the target's or behind it / a Mac lane
+#           ahead of stable) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run=""
+remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run="" seed=0
 cmd="" target=""
 TAG=stable
 US=$(printf '\037')   # joins the --ignore-check names (a name may hold spaces)
@@ -160,6 +188,9 @@ while [ "$#" -gt 0 ]; do
     --timeout)         shift; timeout="${1:-15}" ;;
     --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
     --ignore-check)    shift; ignore_check="$ignore_check${1:-}$US" ;;   # repeats
+    --ref)             shift
+                       case "${1:-}" in stable|stable-macos) TAG="$1" ;; *) die "--ref takes stable or stable-macos" ;; esac ;;
+    --seed)            seed=1 ;;
     --train)           shift; train_run="${1:-}"
                        case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -170,6 +201,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 [ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
+[ "$seed" -eq 0 ] || [ "$TAG" = stable-macos ] || die "--seed seeds the Mac lane: --ref stable-macos"
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
 case "$macos_timeout" in ''|*[!0-9]*) macos_timeout=5400 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
@@ -179,8 +211,9 @@ g() { git -C "$dir" -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$timeout" "
 
 # The remote tag's commit. Prints the sha, or nothing when the tag is absent;
 # returns 2 when the remote could not be read (which is NOT "absent").
-remote_stable() {
-  _ls=$(g ls-remote "$remote" "refs/tags/$TAG" "refs/tags/$TAG^{}" 2>/dev/null) || return 2
+remote_stable() {   # [<tag>] — default $TAG
+  _t=${1:-$TAG}
+  _ls=$(g ls-remote "$remote" "refs/tags/$_t" "refs/tags/$_t^{}" 2>/dev/null) || return 2
   # An annotated tag lists its peeled commit as ^{}; prefer that line.
   _peeled=$(printf '%s\n' "$_ls" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
   [ -n "$_peeled" ] && { printf '%s\n' "$_peeled"; return 0; }
@@ -452,13 +485,15 @@ macos_row() {   # macos_row <slug> <sha>
     NF < 5 || $4 ~ /^pull_request/ || $3 == "cancelled" { next }
     $1 == sha || $6 ~ ("@ " sha "$") { print $2 "\t" $3 "\t" $4 "\t" $5; exit }'
 }
-# A release train's verdict on <sha> (issue #3141): the commit status it leaves on
-# the commit it boarded, "release train: macOS" — the newest one wins. Prints a
+# A follower's verdict on <sha>: the commit status mac-follow.yml leaves on the
+# stable it tested, "mac follow: macOS" (issue #3869), or the one a release train
+# left before the macOS half moved out of it, "release train: macOS" (issue #3141)
+# — the newest of either wins (GitHub lists statuses newest first). Prints a
 # macos_row-shaped "completed<TAB>success|failure<TAB>train<TAB>-" or nothing.
-TRAIN_MACOS_CONTEXT="release train: macOS"
+TRAIN_MACOS_CONTEXT="mac follow: macOS"
 train_row() {   # train_row <slug> <sha>
   _st=$(gh api "repos/$1/commits/$2/statuses?per_page=100" \
-    --jq ".[] | select(.context == \"$TRAIN_MACOS_CONTEXT\") | .state" 2>/dev/null | head -n 1)
+    --jq ".[] | select(.context == \"$TRAIN_MACOS_CONTEXT\" or .context == \"release train: macOS\") | .state" 2>/dev/null | head -n 1)
   case "$_st" in
     success)       printf 'completed\tsuccess\ttrain\t-\n' ;;
     failure|error) printf 'completed\tfailure\ttrain\t-\n' ;;
@@ -494,11 +529,11 @@ macos_gate() {   # macos_gate <old> <new> <slug>
   done
   _concl=$(printf '%s' "$_row" | cut -f2) _ev=$(printf '%s' "$_row" | cut -f3) _id=$(printf '%s' "$_row" | cut -f4)
   if [ "$_concl" = success ]; then
-    if [ "$_ev" = train ]; then printf 'macos: green on %s (a release train boarded it)\n' "$(short "$2")"; return 0; fi
+    if [ "$_ev" = train ]; then printf 'macos: green on %s (mac-follow / a release train tested it)\n' "$(short "$2")"; return 0; fi
     printf 'macos: green on %s (run %s, %s)\n' "$(short "$2")" "$_id" "$_ev"; return 0
   fi
   [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "run $_id $_concl" "the BSD half ($_concl)"; return 0; }
-  [ "$_ev" != train ] || refuse "macos: the release train's macOS half on $(short "$2") is $_concl (status \"$TRAIN_MACOS_CONTEXT\") — fix it (its breakage issue), or --force to move anyway (logged)"
+  [ "$_ev" != train ] || refuse "macos: the macOS half on $(short "$2") is $_concl (status \"$TRAIN_MACOS_CONTEXT\") — fix it (its breakage issue), or --force to move anyway (logged)"
   refuse "macos: the newest macOS run on $(short "$2") is $_concl (run $_id, $_ev: https://github.com/$3/actions/runs/$_id) — fix it (its breakage issue), or --force to move anyway (logged)"
 }
 
@@ -532,18 +567,35 @@ PUBLISH_WF=${FLEET_STABLE_PUBLISH_WORKFLOW:-stable-publish.yml}
 publish_dispatch() {   # publish_dispatch <new> <slug>
   [ "${GITHUB_ACTIONS:-}" = true ] && return 0
   git -C "$dir" cat-file -e "$1:.github/workflows/$PUBLISH_WF" 2>/dev/null || return 0
-  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" >/dev/null 2>&1; then
-    printf 'publish: dispatched %s for %s — the hub takes the new stable from it\n' "$PUBLISH_WF" "$(short "$1")"
+  if [ "$TAG" = stable ]; then set -- "$1" "$2"; else set -- "$1" "$2" -f "ref=$TAG"; fi
+  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" ${3:+"$3"} ${4:+"$4"} >/dev/null 2>&1; then
+    printf 'publish: dispatched %s for %s (%s) — the hub takes it from there\n' "$PUBLISH_WF" "$(short "$1")" "$TAG"
   else
-    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s) — stable moved, the hub has not; run it by hand\n' "$PUBLISH_WF" "$2" "$1" >&2
+    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s%s) — %s moved, the hub has not; run it by hand\n' \
+      "$PUBLISH_WF" "$2" "$1" "${4:+ -f $4}" "$TAG" >&2
   fi
+}
+
+# M. The Mac lane never leads stable (issue #3868): <new> is stable or behind it.
+lane_gate() {   # lane_gate <new>
+  _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
+  [ -n "$_st" ] || refuse "M: no refs/tags/stable on $remote — the Mac lane only ever names a commit stable has reached"
+  have_commit "$_st" || die "could not fetch the stable commit $(short "$_st")"
+  git -C "$dir" merge-base --is-ancestor "$1" "$_st" ||
+    refuse "M: $(short "$1") is ahead of stable $(short "$_st") — the Mac lane never leads stable (a Mac never runs what Linux has not verified)"
+  printf 'lane: %s is %s stable %s\n' "$(short "$1")" "$([ "$1" = "$_st" ] && echo at || echo behind)" "$(short "$_st")"
 }
 
 do_move() {
   old=$(remote_stable) || die "could not read refs/tags/$TAG from $remote — not moving blind"
   fetch_trunk || die "could not fetch $remote/$branch"
   tip=$(git -C "$dir" rev-parse --verify "refs/remotes/$remote/$branch^{commit}") || die "no $remote/$branch"
-  if [ -z "$target" ]; then new="$tip"
+  if [ -z "$target" ] && [ "$TAG" = stable-macos ]; then
+    # the Mac lane's default target is stable itself (issue #3868)
+    new=$(remote_stable stable) || die "could not read refs/tags/stable from $remote — not moving the Mac lane blind"
+    [ -n "$new" ] || refuse "M: no refs/tags/stable on $remote — the Mac lane follows stable, and there is none"
+    have_commit "$new" || die "could not fetch the stable commit $(short "$new")"
+  elif [ -z "$target" ]; then new="$tip"
   else
     have_commit "$target" || :
     new=$(git -C "$dir" rev-parse -q --verify "$target^{commit}") || die "unknown commit $target"
@@ -551,6 +603,19 @@ do_move() {
 
   git -C "$dir" merge-base --is-ancestor "$new" "$tip" ||
     refuse "$(short "$new") is not on $remote/$branch — stable only ever names a trunk commit"
+  if [ "$seed" -eq 1 ]; then
+    # the Mac lane's first value (issue #3869): stable itself, which passed gate 5
+    # when it moved — never asked again, never anything else
+    if [ -n "$old" ]; then
+      printf 'seed: the Mac lane is already at %s — nothing to seed\n' "$(short "$old")"; exit 0
+    fi
+    _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
+    [ -n "$_st" ] && [ "$_st" = "$new" ] ||
+      refuse "M: --seed only starts the Mac lane at stable ($(short "${_st:-none}")), not $(short "$new")"
+    printf 'seed: no Mac lane yet — it starts at stable %s (that stable passed the BSD half when it moved)\n' "$(short "$new")"
+    slug=$(repo_slug)
+    push_tag
+  fi
   if [ -n "$old" ]; then
     have_commit "$old" || die "could not fetch the current stable commit $(short "$old")"
     if [ "$old" = "$new" ]; then
@@ -560,6 +625,22 @@ do_move() {
       refuse "$(short "$new") does not descend from the current stable $(short "$old") — stable only moves FORWARD"
   fi
 
+  if [ "$TAG" = stable-macos ]; then
+    lane_gate "$new"
+    if [ "$precheck" -eq 1 ]; then
+      if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
+      printf 'precheck: %s %s -> %s passes on trunk / forward / not ahead of stable — no tag pushed\n' "$TAG" "$from" "$(short "$new")"
+      exit 0
+    fi
+    slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
+    if [ -n "$train_run" ]; then
+      runs=$(train_jobs "$slug" "$train_run") || die "could not read the jobs of train run $train_run on $slug (gh auth?)"
+      train_macos_gate "$old" "$new" "$(printf '%s\n' "$runs" | awk 'NF && $3 == "macOS"')"
+    else
+      macos_gate "$old" "$new" "$slug"
+    fi
+    push_tag
+  fi
   if [ "$precheck" -eq 1 ]; then
     release_gate "$old" "$new"
     artifacts_gate "$old" "$new"
@@ -604,14 +685,22 @@ do_move() {
   artifacts_gate "$old" "$new"
   ccquota_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
-  if [ -n "$train_run" ]; then train_macos_gate "$old" "$new" "$train_macos"
+  if lane=$(remote_stable stable-macos) && [ -n "$lane" ]; then
+    # a Mac lane exists (issue #3868): the BSD half gates IT, not stable
+    printf 'macos: a Mac lane exists (refs/tags/stable-macos at %s) — the BSD half gates that lane'"'"'s move, not stable (Linux-verified)\n' "$(short "$lane")"
+  elif [ -n "$train_run" ]; then train_macos_gate "$old" "$new" "$train_macos"
   else macos_gate "$old" "$new" "$slug"; fi
+  push_tag
+}
 
+# push_tag — <new> onto refs/tags/$TAG, the lease pinned to <old>; exits.
+push_tag() {
   # Lease: the tag must still hold exactly what we read ("" = must not exist).
   lease="refs/tags/$TAG:$old"
   if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
-  printf 'stable: %s -> %s  (%s)\n' "$from" "$(short "$new")" "$(subject "$new")"
-  if [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
+  printf '%s: %s -> %s  (%s)\n' "$TAG" "$from" "$(short "$new")" "$(subject "$new")"
+  if [ "$TAG" != stable ]; then :
+  elif [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
   else printf 'checks: %s green on %s\n' "$total" "$slug"; fi
   if [ "$old" ]; then printf 'forward: +%s commit(s)\n' "$(git -C "$dir" rev-list --count "$old..$new")"; fi
   if [ "$dry" -eq 1 ]; then
@@ -619,11 +708,12 @@ do_move() {
     exit 0
   fi
   if ! g push -q "--force-with-lease=$lease" "$remote" "$new:refs/tags/$TAG"; then
-    printf 'fleet-stable: push FAILED — stable moved under us (lease lost) or no push rights; re-run show and try again\n' >&2
+    printf 'fleet-stable: push FAILED — %s moved under us (lease lost) or no push rights; re-run show and try again\n' "$TAG" >&2
     exit 4
   fi
   printf 'moved: refs/tags/%s = %s\n' "$TAG" "$(short "$new")"
   publish_dispatch "$new" "$slug"
+  exit 0
 }
 
 case "$cmd" in

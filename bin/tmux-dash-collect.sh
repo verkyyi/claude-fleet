@@ -84,12 +84,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"     # fleet_limit_banner (pure lib, no dispatch)
-# One account, one set of background reads (issue #1271): guarded — an install or
+# Background reads shared per repo (issues #1271, #3529): guarded — an install or
 # a sandbox without the gh lib just fetches, as it always has.
 # shellcheck source=/dev/null
 _FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
-command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
+command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 # Per-fleet cache layout (issue #181): slug-keyed fetches live under fleets/<slug>/
 # and machine-wide caches under global/. G is the global bucket.
@@ -193,16 +193,23 @@ fetch_issues_for() {
   # A repo not on GitHub has no GitHub backlog to fetch (issue #3600): never gh.
   [ "$(fleet_repo_forge "$rp")" = none ] && return 0
   if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
-    # A follower (issue #1271) takes the leader's fresh copy instead of asking
-    # GitHub; no fresh copy (leader wedged / not polling this repo) → fetch below.
+    # Shared per repo (issue #3529): a trusted login's copy younger than the TTL,
+    # or the one another login is fetching right now, instead of asking GitHub.
     # A webhook kick (force) still fetches: it was asked for NOW.
-    if [ "$force" != 1 ] && fleet_gh_share_on && ! fleet_gh_should_fetch \
-       && fleet_gh_adopt "$sg" $((ttl + $(_fleet_gh_stale_secs))) "$FD" issues.ts issues labels parents; then
+    if [ "$force" != 1 ] && fleet_gh_share_get "$rp" issues "$ttl" "$FD" issues.ts issues labels parents issues.json; then
       return 0
     fi
-    local fetched=0
+    local fetched=0 inc=''
     raw="$FD/issuesx.$$"
-    if gh issue list --repo "$rp" --state open --limit 300 \
+    # Shared, the list comes by increments (fleet_gh_issues.py: REST since + ETag;
+    # 0 changed · 3 not modified · else the full GraphQL list below).
+    if fleet_gh_share_on; then
+      python3 "$BIN/fleet_gh_issues.py" sync --repo "$rp" --dir "$FD" 2>/dev/null; inc=$?
+      case "$inc" in 0|3) fetched=1 ;; *) inc='' ;; esac
+    fi
+    if [ -n "$inc" ]; then
+      :
+    elif gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
       --jq '.[] | (.labels|map(.name)) as $l | ($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       2>/dev/null | utf8_scrub > "$raw"; then
@@ -227,7 +234,12 @@ fetch_issues_for() {
     # of repo B whose parent is A's #7 must not nest under B's own #7 — numbers
     # repeat across repos. Such a member renders flat in B's backlog.
     owner="${rp%%/*}"; name="${rp#*/}"
-    if gh api graphql --paginate \
+    # Nothing changed since the last increment ⇒ the links did not either — asked
+    # again only once the copy is FLEET_GH_PARENTS_TTL (600s) old.
+    if [ "$inc" = 3 ] && [ -f "$FD/parents" ] \
+       && [ $(( $(now) - $(_fleet_gh_mtime "$FD/parents" || echo 0) )) -lt "${FLEET_GH_PARENTS_TTL:-600}" ]; then
+      :
+    elif gh api graphql --paginate \
       -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number repository{nameWithOwner}}}}}}' \
       -F owner="$owner" -F name="$name" \
       --jq '.data.repository.issues.nodes[]|select(.parent!=null and ((.parent.repository.nameWithOwner // "")|ascii_downcase) == ("'"$rp"'"|ascii_downcase))|"\(.number)\t\(.parent.number)"' \
@@ -237,11 +249,9 @@ fetch_issues_for() {
       rm -f "$FD/parents.$$"
     fi
     now > "$FD/issues.ts"
-    # the leader publishes only what it really fetched; issues.ts goes last — it is
-    # the copy's freshness stamp (fleet_gh_adopt)
-    if [ "$fetched" = 1 ] && fleet_gh_share_on && fleet_gh_should_fetch; then
-      fleet_gh_publish "$sg" "$FD" issues labels parents issues.ts
-    fi
+    # publish only what was really fetched (issues.ts last — it is the copy's
+    # freshness) and drop the claim either way
+    fleet_gh_share_put "$rp" issues "$fetched" "$FD" issues.ts issues labels parents issues.json
   fi
 }
 
@@ -302,9 +312,6 @@ if [ -n "$opid" ] && [ "$opid" != "$$" ] && kill -0 "$opid" 2>/dev/null \
   kill_tree "$opid"
 fi
 printf '%s\t%s\n' "$$" "$(now)" > "$PIDF"
-# Leader heartbeat (issue #1271): the full collector tick IS the election tick —
-# after the idle gate, so a login with no live fleet never holds the lead for long.
-fleet_gh_share_on && fleet_gh_lead_tick >/dev/null
 
 # --- heartbeat (issue #551): where the tick is + how long each phase took ---------
 # global/collect.heartbeat, key=value lines, rewritten atomically at every phase

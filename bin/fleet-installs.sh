@@ -42,32 +42,58 @@
 # for a login without an install. stable is this login's LOCAL
 # refs/tags/stable (install-sync keeps it fetched) — no network.
 #
+# 通道 (issue #3868, EPIC #3863 C5): a Mac follows refs/tags/stable-macos when
+# there is one, so "stable" above is THIS machine's lane — the login's
+# install-sync `channel:` names it (none = stable), its local tag is the
+# commit; a managed machine with no local tag is judged against what its updater
+# targets (update.json `target_seen`, `hub stable-macos` in its reason = the Mac
+# lane). With a hub that names a Mac lane (/version client_version_macos), a
+# `channel` line says both lanes and how far the Mac one trails stable;
+# --channel prints only that line as `<PASS|INFO|WARN><TAB><text>` (the
+# doctor's channel row) — nothing at all when no Mac lane is set.
+#
 # Read-only. Exit: 0 every install found is at stable · 1 one is not · 2 no
 # local stable to judge against.
 #
 # Seams (selftest): FLEET_INSTALLS_HOMES (the homes root), FLEET_INSTALLS_SUDO
 # (the privilege prefix, default `sudo -n`; empty = none), FLEET_INSTALLS_STABLE
 # (the stable commit), FLEET_NODE_ROOT (the runtime root), FLEET_NODE_STATE (the
-# machine updater's state dir), FLEET_INSTALLS_NOW (the clock), FLEET_LIVE_DIR.
+# machine updater's state dir), FLEET_INSTALLS_NOW (the clock), FLEET_LIVE_DIR,
+# FLEET_INSTALLS_HUB (the hub's address; empty = none), FLEET_PLATFORM.
 set -u
 as_json=0
 case "${1:-}" in
   --json) as_json=1 ;;
+  --channel) as_json=2 ;;
   '') ;;
   -h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) printf 'fleet-installs: unknown argument %s\n' "$1" >&2; exit 2 ;;
 esac
 case "$(uname -s 2>/dev/null)" in Darwin) homes_default=/Users ;; *) homes_default=/home ;; esac
 live="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
+_here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=fleet-versions-lib.sh
+[ -f "$_here/fleet-versions-lib.sh" ] && . "$_here/fleet-versions-lib.sh"
+plat=$(command -v fleet_platform >/dev/null 2>&1 && fleet_platform)
+conf="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+# the lane this login follows (issue #3868): install-sync's channel: line, else stable
+lane=$(sed -n 's/^channel: //p' "$conf/global/install-sync.state" 2>/dev/null | head -n 1)
+case "$lane" in stable-macos) ;; *) lane=stable ;; esac
 stable="${FLEET_INSTALLS_STABLE-}"
-[ -n "$stable" ] || stable=$(git -C "$live" rev-parse -q --verify 'refs/tags/stable^{commit}' 2>/dev/null)
+[ -n "$stable" ] || stable=$(git -C "$live" rev-parse -q --verify "refs/tags/$lane^{commit}" 2>/dev/null)
+hub="${FLEET_INSTALLS_HUB-${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}}"
+[ -n "${FLEET_INSTALLS_HUB+x}" ] || [ -n "$hub" ] || \
+  hub=$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?FLEET_HUB_URL=//p' "$conf/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' ")
 
 exec python3 - "$as_json" "${FLEET_INSTALLS_HOMES:-$homes_default}" "${FLEET_INSTALLS_SUDO-sudo -n}" \
   "$stable" "${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}" \
-  "${FLEET_NODE_STATE:-/var/db/fleet-node}" "${FLEET_INSTALLS_LAG_WARN:-1800}" "${FLEET_INSTALLS_NOW:-}" <<'PY'
+  "${FLEET_NODE_STATE:-/var/db/fleet-node}" "${FLEET_INSTALLS_LAG_WARN:-1800}" "${FLEET_INSTALLS_NOW:-}" \
+  "$lane" "${plat:-?}" "${hub%/}" <<'PY'
 import json, os, re, socket, subprocess, sys, time
 
-as_json, homes, sudo, stable, root = sys.argv[1] == "1", sys.argv[2], sys.argv[3].split(), sys.argv[4], sys.argv[5]
+mode = sys.argv[1]
+as_json, homes, sudo, stable, root = mode == "1", sys.argv[2], sys.argv[3].split(), sys.argv[4], sys.argv[5]
+lane, plat, hub = sys.argv[9], sys.argv[10], sys.argv[11]
 node_state = sys.argv[6]
 try:
     lag_warn = int(sys.argv[7])
@@ -192,10 +218,51 @@ if os.path.islink(cur):
     b = os.path.basename(os.readlink(cur).rstrip("/"))
     runtime = b if re.match(r"^[0-9a-f]{40}$", b) else ""
 
+try:
+    upd = json.load(open(os.path.join(node_state, "update.json"))) or {}
+except (OSError, ValueError):
+    upd = {}
+upd = upd if isinstance(upd, dict) else {}
+# the hub's word (issue #3868): its stable, and its Mac lane when it names one
+hubv = {}
+if hub.startswith(("http://", "https://")):
+    try:
+        out = subprocess.run(["curl", "-fsS", "--max-time", "5", hub + "/version"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=10).stdout
+        hubv = json.loads(out.decode("utf-8", "replace") or "{}")
+    except Exception:
+        hubv = {}
+    hubv = hubv if isinstance(hubv, dict) else {}
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+chan = None
+if SHA40.match(str(hubv.get("client_version_macos") or "")):
+    chan = {"stable": hubv.get("stable"), "stable_macos": hubv.get("client_version_macos"),
+            "behind": int(hubv.get("stable_macos_behind") or 0), "behind_secs": None}
+    try:
+        import calendar
+        b = time.strptime(str(hubv.get("stable_macos_behind_since") or ""), "%Y-%m-%dT%H:%M:%SZ")
+        chan["behind_secs"] = max(0, clock - calendar.timegm(b))
+    except ValueError:
+        pass
+
+# a managed machine has no local tag: judged against what its updater follows —
+# its update.json target (the Mac lane when its reason says so), else the hub's
+# word for this platform (a login cannot always read the updater's state)
+if not stable and runtime is not None:
+    t = (upd.get("target_seen") or {}).get("sha") if isinstance(upd.get("target_seen"), dict) else None
+    if isinstance(t, str) and SHA40.match(t):
+        stable = t
+        if "hub stable-macos" in str(upd.get("reason") or ""):
+            lane = "stable-macos"
+    elif chan and plat == "darwin":
+        stable, lane = chan["stable_macos"], "stable-macos"
+    elif SHA40.match(str(hubv.get("stable") or "")):
+        stable = hubv["stable"]
+
 # when this machine first saw stable (issue #2934): the earliest record of it
 seen = []
 try:
-    ts = (json.load(open(os.path.join(node_state, "update.json"))) or {}).get("target_seen") or {}
+    ts = upd.get("target_seen") or {}
     if same(ts.get("sha"), stable) and int(ts.get("at") or 0) > 0:
         seen.append(int(ts["at"]))
 except (OSError, ValueError, TypeError, AttributeError):
@@ -254,21 +321,57 @@ for l in logins:
     judge(l["install"]); judge(l["shell"]); judge(l["client"])
 
 host = socket.gethostname().split(".")[0]
+
+def dur(secs):
+    m = secs // 60
+    return "%dm" % m if m < 120 else ("%dh%02dm" % (m // 60, m % 60) if m < 2880 else "%dd" % (m // 1440))
+
+def channel_line():
+    """(level, text) of the channel row, or None with no Mac lane (issue #3868)."""
+    if chan is None and lane == "stable":
+        return None
+    mine = "本机 %s 跟 %s" % (plat, lane)
+    if stable:
+        mine += " (%s)" % short(stable)
+    lv = "PASS"
+    behind = [o.get("behind_secs") for o in ([rt] + [x for l in logins for x in (l["install"], l["shell"], l["client"])])
+              if o and o.get("at_stable") is False]
+    if behind:
+        b = max([x for x in behind if x is not None] or [0])
+        mine += " · 本机落后它 %s" % (dur(b) if b else "?")
+        lv = "WARN" if late else "INFO"
+    if chan is None:
+        return lv, mine + " · 入口没报 Mac 通道"
+    lanes = "Linux 跟 stable %s · Mac 跟 stable-macos %s" % (short(chan["stable"] or ""), short(chan["stable_macos"]))
+    if chan["behind"]:
+        lanes += " · Mac 通道落后 stable %d 版" % chan["behind"]
+        if chan["behind_secs"] is not None:
+            lanes += " %s" % dur(chan["behind_secs"])
+            if chan["behind_secs"] > 7200:   # 「Mac 停在旧版超过 2 小时提醒」(EPIC #3863)
+                lv = "WARN"
+                lanes += "（超过 2 小时：macOS 那半红了或没跑）"
+    else:
+        lanes += " · Mac 通道与 stable 同版"
+    return lv, mine + " · " + lanes
+
+if mode == "2":
+    c = channel_line()
+    if c:
+        print("%s\t%s" % c)
+    sys.exit(0)
 if as_json:
-    print(json.dumps({"host": host, "stable": stable or None, "stable_seen": since, "lag_warn": lag_warn,
-                      "late": len(late), "runtime": rt, "logins": logins, "unreadable": unreadable},
+    print(json.dumps({"host": host, "stable": stable or None, "lane": lane, "platform": plat, "stable_seen": since,
+                      "lag_warn": lag_warn, "late": len(late), "runtime": rt, "logins": logins,
+                      "unreadable": unreadable, "channel": chan},
                      ensure_ascii=False))
 else:
-    def dur(secs):
-        m = secs // 60
-        return "%dm" % m if m < 120 else ("%dh%02dm" % (m // 60, m % 60) if m < 2880 else "%dd" % (m // 1440))
     def word(o):
         a = o.get("at_stable")
         w = "= stable" if a else ("≠ stable" if a is False else "? (unknown)")
         if a is False and o.get("behind_secs") is not None:
             w += " · 落后 %s%s" % (dur(o["behind_secs"]), " WARN" if o.get("late") else "")
         return "%s  来源 %s" % (w, o.get("source") or "?")
-    print("claude-fleet installs — %s (stable %s)" % (host, short(stable) if stable else "unknown: no local refs/tags/stable"))
+    print("claude-fleet installs — %s (%s %s)" % (host, lane, short(stable) if stable else "unknown: no local refs/tags/%s" % lane))
     if rt is None:
         print("  machine runtime  none (not a managed machine)")
     else:
@@ -297,6 +400,9 @@ else:
         print("WARN: %d install(s) behind stable for over %dm — stable %s first seen here %s"
               % (len(late), lag_warn // 60, short(stable),
                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since))))
+    c = channel_line()
+    if c:
+        print("channel: %s" % c[1])
     srcs = [o.get("source") for o in [rt] + [x for l in logins for x in (l["install"], l["shell"], l["client"])] if o]
     print("来源: %s · github %d" % (" · ".join("%s %d" % (k, srcs.count(k)) for k in ("hub", "runtime", "dev", "?") if srcs.count(k)) or "-",
                                    srcs.count("github")))

@@ -648,3 +648,47 @@ func TestBuildMailAndSMTPURL(t *testing.T) {
 		t.Fatalf("mail:\n%s", msg)
 	}
 }
+
+// A new deploy's first admin: CCQUOTA_ADMINS names an address nobody signs
+// in with yet and no invite exists. Its mail goes out, its code opens the
+// door, and the person it makes is admin; an address the list does not name
+// stays mailed nothing (claude-fleet#3852).
+func TestEmailFirstAdminFromList(t *testing.T) {
+	h := newWaysHarness(t)
+	h.srv.Admins = []string{" Boss@Example.com "}
+
+	h.startMail(t, newBrowser(t, ""), "stranger@example.com")
+	h.noMail(t)
+
+	pc := newBrowser(t, "")
+	if resp := h.startMail(t, pc, "boss@example.com"); !strings.Contains(resp.Header.Get("Location"), "step=code") {
+		t.Fatalf("start → %q", resp.Header.Get("Location"))
+	}
+	m := h.mail(t)
+	if m.to != "boss@example.com" {
+		t.Fatalf("mail went to %q", m.to)
+	}
+	code := mailCodeRE.FindStringSubmatch(m.body)[1]
+	pc.do(http.MethodPost, h.http.URL+"/auth/email/code", url.Values{"code": {code}})
+	pid, via := pc.session(h)
+	if pid == "" || via != store.IdentityEmail {
+		t.Fatalf("signed in %q via %q", pid, via)
+	}
+	if owner, _ := h.srv.Store.IdentityPrincipal(store.IdentityEmail, "boss@example.com"); owner != pid {
+		t.Fatalf("the address hangs on %q, not %q", owner, pid)
+	}
+	if role, err := h.srv.personRole(pid); err != nil || role != roleAdmin {
+		t.Fatalf("role %q (%v); want admin", role, err)
+	}
+	if u, _ := h.srv.Store.HubUserByPrincipal(pid); u == nil || u.Role != roleAdmin {
+		t.Fatalf("no admin row on the people list: %+v", u)
+	}
+	// Signing in again is the same person, not a second one.
+	if again, role, _, _ := h.srv.admitPerson(store.IdentityEmail, "BOSS@example.com", "", "", time.Now()); again != pid || role != roleAdmin {
+		t.Fatalf("again → %q %q", again, role)
+	}
+	// A WeChat way is never named by the list: still no account without an invite.
+	if p, role, why, _ := h.srv.admitPerson(store.IdentityWeChat, "boss@example.com", "", "", time.Now()); p != "" || role != "" || why != denyNotListed {
+		t.Fatalf("wechat → %q %q %q", p, role, why)
+	}
+}

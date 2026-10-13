@@ -200,7 +200,11 @@ func (e *Elector) Lock(ctx context.Context, name string) (func(), error) {
 	}, nil
 }
 
-// Close releases every lock this replica holds (its connections end).
+// Close releases every lock this replica holds (its connections end). Each
+// lock is released on the server first: ending a session only drops the
+// client's socket, and Postgres frees the lock once its backend notices — a
+// moment later, so the other replica's next Leader could still lose
+// (claude-fleet#3805). A clean stop hands over at once.
 func (e *Elector) Close() error {
 	if !e.Elected() {
 		return nil
@@ -208,6 +212,9 @@ func (e *Elector) Close() error {
 	e.mu.Lock()
 	for job, c := range e.jobs {
 		if c != nil {
+			uctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+			_, _ = c.ExecContext(uctx, `SELECT pg_advisory_unlock_all()`)
+			cancel()
 			discard(c)
 		}
 		e.jobs[job] = nil

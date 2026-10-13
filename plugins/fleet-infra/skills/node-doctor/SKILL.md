@@ -80,6 +80,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `cache` | machine | [release-rules] | 装机缓存的 claude 不是 release.json 的：更新器下一轮补 |
 | `ccquota` | machine | [hub-deploy] [release-rules] | 发布版带错了 ccquota：按 stable 重新部署入口镜像，再让列车发下一版 |
 | `cert` | node | [mac-node-enroll] | 连接证书入口不认：`fleet login` 重签，或重跑 `fleet node install --join` |
+| `channel` | node | [release-rules] | Mac 通道落后 stable 超过 2 小时：macOS 那半红了或没跑——看列车的 macOS 段，绿了再 `fleet-stable.sh move --ref stable-macos` |
 | `checkout` | node | [node-doctor] | 基础 checkout 不在 base 分支：照行内命令移走占着它的 worktree |
 | `child` | machine | [mac-node-enroll] | 守护的子进程挂了：看 `fleet-node-supervisor.py status` 与它的日志，重跑 `fleet node install` |
 | `ci-runner` | node | [runbook-train-stuck] | 自家测试机：`fleet-node-supervisor.py status` 的 ci-runner 行与 ci-runner.log |

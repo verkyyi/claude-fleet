@@ -23,7 +23,7 @@
 #                                                   (go test, when a toolchain is here); the kind drill is
 #                                                   .github/workflows/hub-rolling.yml
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single,
-#                                                   overlays/prod (only RWX OSS claims: release-volume.yaml)
+#                                                   overlays/prod (only RWX OSS claims) when FLEET_DEPLOY_K8S lays it here
 #   hub-shape-extra-volume                          .github/actions/hub-release/release.sh shape (the data disk is
 #                                                   the claim mounted at /data, not any PVC)
 #   hub-read-refused-silent                         bin/fleet-account.sh (quota_budget_json), fleet-lib.sh
@@ -137,6 +137,11 @@
 #   cred-policy-empties-machine                     tokenledger/internal/api fleet_cred_policy.go (credPolicyEmptied,
 #                                                   force) + fleet_credproxy.go (noBindWhy); go test, when a toolchain
 #                                                   is here; bin/fleet-cred-policy.sh (exit 5, --force), the web editor
+#   machine-policy-bypass                           tokenledger/internal/api fleet_machine_policy.go (machineDenied at
+#                                                   every door: certs/routes/relay/home, entry keys, placement, lease,
+#                                                   session pass, relay cred, fleet_sessions; go test, when a toolchain
+#                                                   is here); bin/fleet-machine-policy.sh, fleet-hub-sessions.sh (the
+#                                                   disabled row), fleet-connect.py (disabled_die)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -145,6 +150,13 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
+# The deployment's own prod overlay (claude-fleet#3630): ours lives in a private
+# deploy repo that hub-deploy lays over deploy/k8s. FLEET_DEPLOY_K8S names such a
+# laid-over k8s/ tree; with none here the drills' prod clauses are skipped
+# (hub-deploy's render-check.sh --need-prod renders it on every release).
+PROD_K8S=${FLEET_DEPLOY_K8S:-$ROOT/deploy/k8s}
+PROD_OVL="$PROD_K8S/overlays/prod"
+PROD_GONE='生产覆盖层在私有部署仓库（#3630），这台没有：那一半由 hub-deploy 叠上后核对'
 
 # ---- release-unverified (#2483, EPIC #2482 C3): `fleet release` runs the whole
 # road — CI, the move, the hub, every machine, this machine — and stops at the
@@ -248,14 +260,17 @@ drill_hub_disk_attach_stuck() {
   grep -q 'kind: PersistentVolumeClaim' "$c/pvc.yaml" 2>/dev/null || { WHY="the single SQLite shape lost its disk (${c#$ROOT/}/pvc.yaml)"; return 1; }
   if command -v kubectl >/dev/null 2>&1 && r=$(kubectl kustomize "$b" 2>/dev/null); then
     case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="the base render mounts a disk"; return 1 ;; esac
-    r=$(kubectl kustomize "$ROOT/deploy/k8s/overlays/prod" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
+    if [ ! -f "$PROD_OVL/kustomization.yaml" ]; then
+      WHAT="base 的渲染没有盘（库在 Postgres），盘只在单份形态的组件里（回滚用）；$PROD_GONE"; SECS=$(since "$t0"); return 0
+    fi
+    r=$(kubectl kustomize "$PROD_OVL" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
     case "$r" in *"kind: PersistentVolumeClaim"*) WHY="prod still mounts a disk after the switch (the render creates a claim)"; return 1 ;; esac
     # A claim prod mounts is no cloud disk only when the overlay declares it as
     # an RWX OSS volume (ossfs: a network mount, nothing to detach/attach) — the
     # /releases volume of #2366; any other claim is a disk that can stick.
     local cl pv nr=0
     for cl in $(printf '%s\n' "$r" | sed -n 's/^[[:space:]]*claimName:[[:space:]]*//p'); do
-      pv=$(grep -l "^  name: $cl\$" "$ROOT/deploy/k8s/overlays/prod"/*.yaml 2>/dev/null | head -1)
+      pv=$(grep -l "^  name: $cl\$" "$PROD_OVL"/*.yaml 2>/dev/null | head -1)
       if [ -z "$pv" ] || ! grep -q 'ReadWriteMany' "$pv" || ! grep -q 'driver: ossplugin.csi.alibabacloud.com' "$pv" \
          || grep -q 'diskplugin' "$pv"; then
         WHY="prod still mounts a disk after the switch (claim $cl is not a declared RWX OSS volume)"; return 1
@@ -701,9 +716,13 @@ drill_github_signin_unreachable() {
     || { WHY="the relay's Caddyfile has no /github-oauth/login/oauth/access_token route"; return 1; }
   grep -q '"/github-oauth/"' "$ROOT/extras/cred-relay/fleet-relay-check.py" \
     || { WHY="the relay's checker does not know the /github-oauth/ prefix"; return 1; }
-  grep -A1 'name: CCQUOTA_GITHUB_OAUTH_VIA' "$ROOT/deploy/k8s/overlays/prod/deployment-env.yaml" | grep -q 'value: "relay"' \
-    || { WHY="the prod overlay does not set CCQUOTA_GITHUB_OAUTH_VIA=relay"; return 1; }
   WHAT='github.com 不通 ⇒ 换令牌经转发机成功、日志写经中转；转发机连不上 / 拒通行证 / 不答 ⇒ 直连再试一次；两条都不通 ⇒ 原来那句提示、有上限；/github-oauth/ 只开那一条路径、只认 frh1.'
+  if [ -f "$PROD_OVL/deployment-env.yaml" ]; then
+    grep -A1 'name: CCQUOTA_GITHUB_OAUTH_VIA' "$PROD_OVL/deployment-env.yaml" | grep -q 'value: "relay"' \
+      || { WHY="the prod overlay does not set CCQUOTA_GITHUB_OAUTH_VIA=relay"; return 1; }
+  else
+    WHAT="${WHAT}；$PROD_GONE"
+  fi
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
@@ -738,8 +757,10 @@ drill_entry_dns_follows() {
   grep -q '^func TestDNSPodProvider(' "$f" 2>/dev/null || { WHY="the provider test is not in ${f#$ROOT/}"; return 1; }
   grep -q 'Leader(ctx, "entry-dns")' "$ROOT/tokenledger/internal/api/fleet_entry_dns.go" \
     || { WHY="the address-record loop is not gated on the leader"; return 1; }
-  grep -q 'acme-dnspod' "$ROOT/deploy/k8s/overlays/prod/deployment-env.yaml" \
-    || { WHY="the hub's deployment no longer reads the DNSPod token from new-deploy/acme-dnspod"; return 1; }
+  if [ -f "$PROD_OVL/deployment-env.yaml" ]; then
+    grep -q 'acme-dnspod' "$PROD_OVL/deployment-env.yaml" \
+      || { WHY="the hub's deployment no longer reads the DNSPod token from new-deploy/acme-dnspod"; return 1; }
+  fi
   WHAT='地址变 ⇒ 下一拍改（同一条记录）；家连不上 ⇒ 一条不改；手动换家 ⇒ 指新家；手改 ⇒ 改回 + 「有人手改」；调用失败 ⇒ 不算写过、下一拍再试；没 token ⇒ 0 次调用；DNSPod 只认带 fleet 备注的 cf 记录，token 不进 URL / 错误；同一路由器后两个家：钥匙页端口 = 家的转发端口，换家说端口要改，别的端口上的 IPv6 不写 AAAA'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
@@ -2135,6 +2156,38 @@ drill_cred_policy_empties_machine() {
   SECS=$(since "$t0")
 }
 
+# ---- machine-policy-bypass (#3824): an operator pausing one person on a few
+# machines — logins kept — had only subscription lists; a person's machine list
+# that one door honours and another does not is no list. Every door a person
+# meets a machine through asks the ONE reader (machineDenied): the connect side
+# (managedLoginsOf, the relay), the entry door's keys, placement (auto, named,
+# a named fleet, a restore), the node's lease (all withdrawn), the session pass
+# (mint refused, a live one refused at its next verify), the relay credential;
+# the client dims such a session and titles it 已停用（管理员限制）.
+drill_machine_policy_bypass() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal/api" f n out rc; GO_RAN=0
+  t0=$(now)
+  grep -q '^func machineDenied(' "$tl/fleet_machine_policy.go" 2>/dev/null     || { WHY="the hub has no machine allowlist reader (fleet_machine_policy.go machineDenied)"; return 1; }
+  # every door: <file> <how many readers it must call>
+  for f in fleet_certs.go:allow.deny fleet_creds.go:machineDeniedFor fleet_session_cred.go:machineDeniedFor            fleet_relay_cred.go:machineDeniedFor fleet_relay_frl2.go:machineDenied fleet_entry.go:machineDenied            ssh_relay.go:machineDeniedFor fleet_write.go:denyEndpoint fleet_client_place.go:denyEndpoint fleet.go:denyEndpoint            fleet_routes.go:disabledMachinesOf fleet_home.go:disabledMachinesOf; do
+    n=${f#*:}; f=${f%%:*}
+    grep -q "$n(" "$tl/$f" 2>/dev/null || { WHY="$f no longer asks the machine allowlist ($n) — a door left open"; return 1; }
+  done
+  [ "$(grep -c 'denyEndpoint(' "$tl/fleet_write.go")" -ge 2 ]     || { WHY="fleet_write.go judges placement but not a start named at a fleet (worker_start fleet_id)"; return 1; }
+  grep -q 'OFF_WORD = "已停用（管理员限制）"' "$BIN/fleet-hub-sessions.sh" && grep -q '"disabled" and not here' "$BIN/fleet-hub-sessions.sh" \
+    || { WHY="the client's session cache no longer marks a disabled machine's rows (fleet-hub-sessions.sh)"; return 1; }
+  grep -q '^def disabled_die' "$BIN/fleet-connect.py" && [ "$(grep -c 'disabled_die(info, want)' "$BIN/fleet-connect.py")" -ge 2 ] \
+    || { WHY="fleet <machine> no longer names why a disabled machine is refused (fleet-connect.py)"; return 1; }
+  out=$(bash "$BIN/fleet-machine-policy-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="fleet-machine-policy.sh: $out"; return 1; }
+  c11_go_tests fleet_machine_policy_test.go TestMachinePolicyGrammar TestMachinePolicyOffAddsNothing TestMachinePolicyPutGet \
+    TestMachinePolicyLeaseWithdraws TestMachinePolicySessionPass TestMachinePolicyPlacement TestMachinePolicyHomeAndRoutes \
+    TestMachinePolicyEntryKeys || return 1
+  WHAT='每扇门都问同一张机器白名单：连接 / 中转 / 选家 / 入口钥匙 / 选机（自动、点名、指定 fleet、恢复）/ 租约 / 通行证 / 中转凭据；客户端把那台的会话标「已停用（管理员限制）」；CLI 自测过（Go 测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='名单外的机器：租约全部 withdrawn、另一个人照常；通行证不签、已签的下次校验就拒（不算吊销，解禁照用）；选机自动换一台、点名拒并说原因；连接 / 中转拒、disabled 说原因，全禁时不当成「没登录」；入口钥匙清空、解禁恢复；操作员不受限（go test 八条 + CLI 自测）'
+  SECS=$(since "$t0")
+}
+
 # ---- release-key-outside-train (#3559, EPIC #3500 C17): the release signing
 # private key lives only in the release train. A seed of a key the pinned root
 # vouches for, planted in a sandbox conf dir (as an env file line) or set in the
@@ -2248,4 +2301,6 @@ PY
   SECS=$(since "$t0")
 }
 
+# this file runs part 1/2; the rest are its part files (issue #2694)
+: "${BREAK_PART:=1/2}"
 cred_run_drills "$0"

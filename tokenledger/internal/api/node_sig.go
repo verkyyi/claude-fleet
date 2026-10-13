@@ -173,6 +173,26 @@ func (s *Server) nodeAuth(r *http.Request) (*store.Endpoint, string, int, string
 	return ep, h, 0, ""
 }
 
+// claimedEndpoint is the endpoint r SAYS it is, unverified: its FleetSig key's,
+// else its bearer's ("" for neither). Only where to hand r on is decided by it
+// (claude-fleet#3847) — verifying spends a signature's nonce, so it is left to
+// the replica that serves r. It lives beside nodeAuth: it reads the same two
+// credentials, and is never an answer to «who is this».
+func (s *Server) claimedEndpoint(r *http.Request) string {
+	if f, ok := parseNodeSig(r.Header.Get("Authorization")); ok {
+		if k, err := s.Store.NodeKeyByID(f["keyid"]); err == nil {
+			return k.EndpointID
+		}
+		return ""
+	}
+	if tok := bearer(r); tok != "" {
+		if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
+			return ep.ID
+		}
+	}
+	return ""
+}
+
 // nodeAuthAnswer is one nodeAuth verdict, kept for its request's life.
 type nodeAuthAnswer struct {
 	ep   *store.Endpoint

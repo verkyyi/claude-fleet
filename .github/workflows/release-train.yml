@@ -17,15 +17,15 @@ name: release train
 #     re-run train got long ago. stable already at the head ⇒ `skip`, the train is
 #     empty and ends within the minute.
 #   * the tests are the shared matrix (selftests-shards.yml), `--changed <stable>`:
-#     Linux and macOS on TRAIN_SHA (发起人拍板 2 — the full suite stays nightly).
-#   * the macOS half goes to OUR Macs first (issue #3145, C6): `board` asks the hub's
-#     /v1/fleet/ci-runners (bin/fleet-train-macos.sh pick, secret
-#     FLEET_HUB_VIEWER_TOKEN) — a runner online and idle/busy ⇒ `[self-hosted, macOS,
-#     fleet-ci]`, one shard per machine (≤ 2); none, no secret or no answer ⇒
-#     `macos-latest`, 2 shards — the train runs either way. `macos-wait` reports each
-#     shard's runner and queue time, and a shard our runner left queued 20 minutes
-#     reds the train (「自家测试机没接」) and cancels it; the next board reads the
-#     heartbeat and picks GitHub's.
+#     Linux on TRAIN_SHA (发起人拍板 2 — the full suite stays nightly).
+#   * the macOS half is NOT the train's (issue #3869, EPIC #3863 C6): stable means
+#     "Linux has verified it", and a Mac follows refs/tags/stable-macos (#3868).
+#     mac-follow.yml runs the macOS shards on each stable after this train ends
+#     green and moves the Mac lane when they are green; red, a Mac stays on the
+#     previous version and fleet-macos-watch.sh files one issue. A train never
+#     waits for, nor reds on, a Mac. `release` seeds the lane at the stable it
+#     boarded the first time there is none (fleet-stable.sh move --ref stable-macos
+#     --seed), so no Mac is ever handed a version its BSD half has not seen.
 #   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
 #     oldcfg / release.json / artifacts, no tag pushed. Any red ⇒ this train is
 #     red and ships nothing; the next merge starts the next one (拍板 7).
@@ -33,9 +33,6 @@ name: release train
 #     shard, precheck or board cancels the whole run (bin/fleet-train-failfast.sh) —
 #     a train that can no longer ship gives the lane back at once instead of
 #     holding it while its other shards run on (BREAK-IT train-red-holds-lane).
-#   * `train` leaves the macOS verdict on TRAIN_SHA as the commit status
-#     `release train: macOS` — `fleet-stable.sh move` reads a green one as the BSD
-#     half on that commit.
 #   * then ONE commit goes out (issue #3142, C3) — the hub, the publish and stable
 #     all name TRAIN_SHA, so the hub can never be a commit the release is not:
 #       `hub plan`  bin/fleet-train-hub.sh: does the hub already run TRAIN_SHA's Go
@@ -46,8 +43,13 @@ name: release train
 #       `release`   bin/fleet-release-publish.sh TRAIN_SHA (this run's OIDC;
 #                   the hub takes release-train.yml) with the train's ledger
 #                   (#3140), then `fleet-stable.sh move TRAIN_SHA --train <run>`:
-#                   its CI and macOS gates read THIS run's jobs, its ccquota gate
+#                   its CI gate reads THIS run's jobs (gate 5 is the Mac lane's), its ccquota gate
 #                   holds the hub to TRAIN_SHA's source; no --force, ever.
+#       `node tools` / `node image` (issue #3855) the managed node image of that
+#                   release: the Dockerfile's tools stage pushed from a GitHub
+#                   runner when its tag is new, then the image built in the
+#                   Shenzhen cluster (runs-on: fleet-ack, its buildkitd) and pushed
+#                   as <NODE_IMAGE_REPO>:<TRAIN_SHA> — never a gate of the move.
 #     Any red stops the train where it is: a hub already rolled stays (it serves
 #     older machines too), a publish is idempotent, and the next train starts over
 #     (拍板 7 / 8 — the hub's rollback is still hub-deploy's dispatch with `tag`).
@@ -69,16 +71,40 @@ name: release train
 #       `隔离`      files each new one's breakage issue (--breakage-key, one per
 #                   test), writes the entry, uploads the state for the next train
 #                   and says 「隔离了 N 个：…」 on the summary (nothing when none).
+#   * a red test runs ONCE more before it counts (issue #3866, EPIC #3863 C3): the
+#     shards get --retry-red 1, so a test red then green on its rerun is `FLAKY`, its
+#     shard stays green and the train ships; `隔离` files it (--breakage-key
+#     flaky-<test>, label flaky — one issue a test, a later sighting a comment), keeps
+#     its sightings seven days in the state and quarantines it at the third (reason
+#     flaky), and the summary says 「重跑才过 N 个：…」. Red twice is red as before:
+#     `红灯即停` judges job conclusions, and only a red rerun reds a job
+#     (BREAK-IT train-flaky-retry-hides-red). The PR gate and the nightly never rerun.
+#     A workflow_dispatch with `drill_flaky: <test>` counts that test's FIRST run red
+#     on the Linux half: a whole train otherwise (it ships when there is a change),
+#     its flaky issue filed for real, the sighting never counted toward a quarantine.
 #     A workflow_dispatch with `drill_red: <test>` is the drill: that test counts red,
 #     the state is `train-quarantine-drill` (never the real trains'), no issue is
 #     filed (`drill_issue` stands in), and nothing past the tests runs — no gate, no
 #     hub, no release. Two drills on two different heads show the second quarantine.
 #
+#   * the Linux half goes to the Shenzhen cluster when asked (issue #3864, EPIC #3863
+#     C1): with the repo variable FLEET_TRAIN_RUNNER=fleet-ack, `linux-pick`
+#     (bin/fleet-train-runner.sh pick, environment fleet-ack-probe: the runner
+#     app's token, master only) looks for an online fleet-ack runner — there ⇒
+#     the shards run on it and fetch TRAIN_SHA from the cluster's git mirror
+#     (FLEET_TRAIN_GIT_MIRROR) before GitHub; not there ⇒ ubuntu-latest, the summary
+#     says 「深圳不可用，退回 GitHub」. A shard whose spot runner went away mid-job
+#     (GitHub's «lost communication» / «shutdown signal») is no red: `红灯即停`
+#     waits, `Linux 补跑?` names those shards and `Linux rescue` reruns exactly them
+#     on ubuntu-latest (--shard K/N kept); the train ships when the rescue is green
+#     (BREAK-IT train-ack-reclaimed). The variable empty ⇒ no pick, no rescue: the
+#     Linux half is ubuntu-latest exactly as before (BREAK-IT train-ack-down).
+#
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
-# {sha, subject, committed}) · macos_runs_on (JSON) · macos_shards · macos_where
-# (fleet-ci | github) · macos_why.
-run-name: release train
+# {sha, subject, committed}).
+# A drill names itself in the title: fleet_breakage_probe skips such a run (issue #3372).
+run-name: ${{ inputs.drill_red != '' && format('release train (drill {0})', inputs.drill_red) || 'release train' }}
 
 on:
   push:
@@ -95,6 +121,11 @@ on:
         type: string
         required: false
         default: '3243'
+      drill_flaky:
+        description: 'the flaky drill (issue #3866): this test''s first Linux run counts red, its rerun is real; the train runs whole'
+        type: string
+        required: false
+        default: ''
   schedule:
     # hourly backstop (a push lost, a train red on a flake): off the top of the hour
     - cron: '41 * * * *'
@@ -105,8 +136,7 @@ concurrency:
 
 permissions:
   contents: read
-  statuses: write   # `train` leaves `release train: macOS` on TRAIN_SHA
-  actions: write    # `macos-wait` reads this run's jobs and cancels it when our runner never took it
+  actions: write    # `红灯即停` reads this run's jobs and cancels it on the first red
 
 jobs:
   board:
@@ -119,11 +149,8 @@ jobs:
       skip: ${{ steps.board.outputs.skip }}
       merges: ${{ steps.board.outputs.merges }}
       merges_json: ${{ steps.board.outputs.merges_json }}
-      macos_runs_on: ${{ steps.macos.outputs.macos_runs_on }}
-      macos_shards: ${{ steps.macos.outputs.macos_shards }}
-      macos_where: ${{ steps.macos.outputs.macos_where }}
-      macos_why: ${{ steps.macos.outputs.macos_why }}
       drill: ${{ steps.drill.outputs.drill }}
+      flaky_drill: ${{ steps.drill.outputs.flaky_drill }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,6 +176,7 @@ jobs:
         id: drill
         env:
           DRILL_RED: ${{ inputs.drill_red || '' }}
+          DRILL_FLAKY: ${{ inputs.drill_flaky || '' }}
         run: |
           if [ -n "$DRILL_RED" ]; then
             echo drill=true >> "$GITHUB_OUTPUT"
@@ -156,23 +184,15 @@ jobs:
           else
             echo drill=false >> "$GITHUB_OUTPUT"
           fi
-      - name: pick the macOS runners
-        # issue #3145: our own Macs when the hub says one is there, else GitHub's.
-        id: macos
-        env:
-          FLEET_HUB_URL: https://claudefleet.24haowan.com
-          FLEET_HUB_CI_TOKEN: ${{ secrets.FLEET_HUB_VIEWER_TOKEN }}
-        run: |
-          bash bin/fleet-train-macos.sh pick 2> pick.err
-          echo "macOS → $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
-          cat pick.err
+          echo "flaky_drill=$DRILL_FLAKY" >> "$GITHUB_OUTPUT"
+          [ -z "$DRILL_FLAKY" ] || echo "### 演练：重跑（#3866）— $DRILL_FLAKY 第一次记红、重跑照实；整趟照跑" >> "$GITHUB_STEP_SUMMARY"
 
   quarantine:
     # What the previous trains left (issue #3243): the entries in force and the
     # tests red on the newest earlier train on another sha.
     name: quarantine
     needs: board
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -183,6 +203,7 @@ jobs:
       active: ${{ steps.q.outputs.active }}
       prev_fails: ${{ steps.q.outputs.prev_fails }}
       prev_run: ${{ steps.q.outputs.prev_run }}
+      flaky_hist: ${{ steps.q.outputs.flaky_hist }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -202,22 +223,21 @@ jobs:
             echo 'active<<FLEET_TQ_EOF'; printf '%s\n' "$active"; echo 'FLEET_TQ_EOF'
             echo 'prev_fails<<FLEET_TQ_EOF'; cat q/prev-fails; echo 'FLEET_TQ_EOF'
             echo "prev_run=$(cat q/prev-run)"
+            echo 'flaky_hist<<FLEET_TQ_EOF'; cat q/flaky; echo 'FLEET_TQ_EOF'
           } >> "$GITHUB_OUTPUT"
           echo "in force: $(printf '%s' "$active" | grep -c . || true) · red on the previous train (run $(cat q/prev-run)): $(tr '\n' ' ' < q/prev-fails)"
 
   plan:
-    # How wide each test half runs and how long a shard may take (issue #3241, C9):
+    # How wide the Linux half runs and how long a shard may take (issue #3241, C9):
     # the train tests everything changed since stable, close to the whole suite when
     # stable is behind, so it prices that selection off the durations table first
-    # (bin/fleet-train-plan.sh) instead of wearing the PR's 12 × 8 minutes. Linux
-    # picks its own width (≤ 6 minutes a shard, 12..20); our Macs keep board's width
-    # (one shard a machine) at their own table; GitHub's Macs price at ×2.3 and pick
-    # 2..4 shards of ≤ 40 minutes (issue #3412: a near-full selection on 2 ran ~90
-    # minutes a shard and was cancelled as "hung" while it was still moving). A shard cut short with no test red reruns once
-    # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never stops.
+    # (bin/fleet-train-plan.sh) instead of wearing the PR's 12 × 8 minutes: ≤ 6
+    # minutes a shard, 12..20 wide. A shard cut short with no test red reruns once
+    # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never
+    # stops. The macOS half's plan is mac-follow.yml's (issue #3869).
     name: plan
     needs: board
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -225,10 +245,6 @@ jobs:
       linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
       linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
       linux_job_minutes: ${{ steps.plan.outputs.linux_job_minutes }}
-      macos_shards: ${{ steps.plan.outputs.macos_shards }}
-      macos_budget_secs: ${{ steps.plan.outputs.macos_budget_secs }}
-      macos_step_minutes: ${{ steps.plan.outputs.macos_step_minutes }}
-      macos_job_minutes: ${{ steps.plan.outputs.macos_job_minutes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -238,8 +254,6 @@ jobs:
         id: plan
         env:
           STABLE: ${{ needs.board.outputs.stable_sha }}
-          WHERE: ${{ needs.board.outputs.macos_where }}
-          MACOS_SHARDS: ${{ needs.board.outputs.macos_shards }}
         run: |
           {
             echo "### 预测（\`--changed ${STABLE:0:7}\`，按 bin/selftest-durations*.txt）"
@@ -247,25 +261,61 @@ jobs:
             echo "|---|---|---|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
           bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux
-          n=$(printf '%s' "$MACOS_SHARDS" | tr -cd ',' | wc -c); n=$((n + 1))
-          if [ "$WHERE" = fleet-ci ]; then
-            bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --shards "$n" \
-              --durations selftest-durations-fleet-ci.txt --floor 1320
-          else
-            # a free account runs 5 macOS jobs at once: 4 at most, one left for the nightly
-            bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --min "$n" --max 4 --target 2400 \
-              --scale 2.3 --floor 3000
-          fi
+
+  linux-pick:
+    # The Shenzhen cluster or GitHub (issue #3864): only when FLEET_TRAIN_RUNNER
+    # names a runner set. Its token reads the repo's runner list — the runner app's
+    # (secret FLEET_RUNNERS_APP_KEY, var FLEET_RUNNERS_APP_ID) in an environment
+    # that admits master only. Red or skipped here never holds the train: Linux
+    # then runs on ubuntu-latest.
+    name: Linux 选机器
+    needs: board
+    if: (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '') && vars.FLEET_TRAIN_RUNNER != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: fleet-ack-probe
+    outputs:
+      linux_runs_on: ${{ steps.pick.outputs.linux_runs_on }}
+      linux_where: ${{ steps.pick.outputs.linux_where }}
+      linux_why: ${{ steps.pick.outputs.linux_why }}
+      linux_mirror: ${{ steps.pick.outputs.linux_mirror }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout: bin
+      - name: the runner app's token
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLEET_RUNNERS_APP_ID }}
+          private-key: ${{ secrets.FLEET_RUNNERS_APP_KEY }}
+      - name: fleet-train-runner.sh pick
+        id: pick
+        env:
+          FLEET_TRAIN_RUNNER: ${{ vars.FLEET_TRAIN_RUNNER }}
+          FLEET_TRAIN_RUNNER_TOKEN: ${{ steps.app.outputs.token }}
+          FLEET_TRAIN_GIT_MIRROR: ${{ vars.FLEET_TRAIN_GIT_MIRROR }}
+        run: |
+          bash bin/fleet-train-runner.sh pick 2> pick.err
+          cat pick.err
+          echo "### $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
 
   linux:
     name: Linux
-    needs: [board, quarantine, plan]
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    needs: [board, quarantine, plan, linux-pick]
+    # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
+    if: >-
+      !cancelled() && needs.board.result == 'success' && needs.quarantine.result == 'success' &&
+      needs.plan.result == 'success' &&
+      (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
-      runs_on: ubuntu-latest
+      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+      mirror: ${{ needs.linux-pick.outputs.linux_mirror }}
       shards: ${{ needs.plan.outputs.linux_shards }}
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
       step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
@@ -273,33 +323,70 @@ jobs:
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
       drill_red: ${{ inputs.drill_red || '' }}
+      retry_red: '1'
+      drill_flaky: ${{ inputs.drill_flaky || '' }}
       record: true
 
-  macos:
-    # Our Macs (fleet-ci, one shard each, ≤ 2) or GitHub's — as `board` picked
-    # (issue #3145); GitHub's width is the plan's, 2..4 (a free account runs at most
-    # 5 macOS jobs, and the nightly full suite needs the rest — issue #3412).
-    name: macOS
-    needs: [board, quarantine, plan]
-    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
+  linux-rescue-plan:
+    # Which Linux shards ended red because their runner went away (issue #3864):
+    # a reclaimed spot node, an evicted pod. Every red one of that kind ⇒ covers.
+    name: Linux 补跑?
+    needs: [board, linux]
+    if: "!cancelled() && vars.FLEET_TRAIN_RUNNER != '' && needs.linux.result == 'failure'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      lost: ${{ steps.lost.outputs.lost }}
+      total: ${{ steps.lost.outputs.total }}
+      covers: ${{ steps.lost.outputs.covers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout: bin
+      - name: fleet-train-runner.sh lost
+        id: lost
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash bin/fleet-train-runner.sh lost --prefix Linux 2> lost.err
+          cat lost.err
+          echo "### Linux 补跑：$(cat lost.err)" >> "$GITHUB_STEP_SUMMARY"
+
+  linux-rescue:
+    # Exactly the lost shards, on GitHub's runners, as K of the same N.
+    name: Linux rescue
+    needs: [board, quarantine, plan, linux-rescue-plan]
+    if: "!cancelled() && needs.linux-rescue-plan.outputs.covers == 'true'"
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
-      runs_on: ${{ needs.board.outputs.macos_runs_on }}
-      shards: ${{ needs.plan.outputs.macos_shards || needs.board.outputs.macos_shards }}
-      budget_secs: ${{ needs.plan.outputs.macos_budget_secs }}
-      step_minutes: ${{ needs.plan.outputs.macos_step_minutes }}
-      job_minutes: ${{ needs.plan.outputs.macos_job_minutes }}
+      runs_on: ubuntu-latest
+      shards: ${{ needs.linux-rescue-plan.outputs.lost }}
+      of: ${{ needs.linux-rescue-plan.outputs.total }}
+      budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      drill_red: ${{ inputs.drill_red || '' }}
+      retry_red: '1'
+      drill_flaky: ${{ inputs.drill_flaky || '' }}
       record: true
+
 
   record:
     # New quarantines get their issue + entry; the state goes to the next train
     # (issue #3243). Red when a new one could not be filed — the train with it.
+    # Each FLAKY test (issue #3866) gets its issue (or a comment on it) and a
+    # sighting; a flaky filing that fails is said, never reds the train.
     name: 隔离
-    needs: [board, quarantine, linux, macos]
+    needs: [board, quarantine, linux, linux-rescue]
     if: always() && needs.quarantine.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -320,17 +407,20 @@ jobs:
           SHA: ${{ needs.board.outputs.train_sha }}
           RAW: ${{ needs.quarantine.outputs.raw }}
           PREV_RUN: ${{ needs.quarantine.outputs.prev_run }}
+          FLAKY_HIST: ${{ needs.quarantine.outputs.flaky_hist }}
+          FLAKY_DRILL: ${{ needs.board.outputs.flaky_drill }}
           DRILL: ${{ needs.board.outputs.drill }}
           DRILL_ISSUE: ${{ inputs.drill_issue || '3243' }}
         run: |
-          mkdir -p results; printf '%s\n' "$RAW" > raw.list
+          mkdir -p results; printf '%s\n' "$RAW" > raw.list; printf '%s\n' "$FLAKY_HIST" > flaky.hist
           set -- --results results --list raw.list --prev-run "${PREV_RUN:-0}" --run "$GITHUB_RUN_ID" \
-                 --sha "$SHA" --repo "$GITHUB_REPOSITORY" --out state
+                 --sha "$SHA" --repo "$GITHUB_REPOSITORY" --out state --flaky-hist flaky.hist
           [ "$DRILL" != true ] || set -- "$@" --issue "$DRILL_ISSUE"
+          [ -z "$FLAKY_DRILL" ] || set -- "$@" --drill-flaky "$FLAKY_DRILL"
           set +e
           sh bin/fleet-train-quarantine.sh record "$@"; rc=$?
-          sum=$(sh bin/fleet-train-quarantine.sh summary --expired raw.list state/list)
-          [ -z "$sum" ] || { echo "$sum"; printf '### 🧪 %s\n' "$sum" >> "$GITHUB_STEP_SUMMARY"; }
+          sum=$(sh bin/fleet-train-quarantine.sh summary --expired raw.list --flaky state/flaky-now state/list)
+          [ -z "$sum" ] || { echo "$sum"; printf '%s\n' "$sum" | sed 's/^/### 🧪 /' >> "$GITHUB_STEP_SUMMARY"; }
           exit $rc
       - name: hand the state to the next train
         if: always()
@@ -341,25 +431,6 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  macos-wait:
-    # A job queued for a self-hosted label waits a day, and timeout-minutes only
-    # starts counting once it runs: this watches the shards start, writes each one's
-    # runner + queue time to the summary, and reds + cancels the train when our
-    # runner left one queued 20 minutes (issue #3145).
-    name: macOS 排队
-    needs: board
-    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.board.outputs.train_sha }}
-      - name: watch the macOS shards start
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WHERE: ${{ needs.board.outputs.macos_where }}
-        run: bash bin/fleet-train-macos.sh watch --where "$WHERE" --deadline 1200
 
   fail-fast:
     # A red stage cancels the run: the lane goes to the next train now (issue #3143).
@@ -382,12 +453,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LINUX_JOB: ${{ needs.plan.outputs.linux_job_minutes }}
-          MACOS_JOB: ${{ needs.plan.outputs.macos_job_minutes }}
+          # a Linux shard whose cluster runner went away waits for its rescue (#3864)
+          LOST_OK: ${{ vars.FLEET_TRAIN_RUNNER != '' && 'Linux' || '' }}
         run: |
           m=60
-          for v in "$LINUX_JOB" "$MACOS_JOB"; do case "$v" in ''|*[!0-9]*) ;; *) [ "$v" -le "$m" ] || m=$v ;; esac; done
+          case "$LINUX_JOB" in ''|*[!0-9]*) ;; *) [ "$LINUX_JOB" -le "$m" ] || m=$LINUX_JOB ;; esac
           d=$(( (m + 30) * 60 )); [ "$d" -le 21000 ] || d=21000   # under the job's 360 minutes
-          bash bin/fleet-train-failfast.sh --deadline "$d"
+          # no macOS shard in the train since #3869: never wait for one to show up
+          set -- --deadline "$d" --need 'precheck|Linux / shard'
+          [ -z "$LOST_OK" ] || set -- "$@" --lost-ok "$LOST_OK"
+          bash bin/fleet-train-failfast.sh "$@"
 
   gate:
     name: precheck
@@ -419,55 +494,47 @@ jobs:
           exit $rc
 
   train:
-    # The train's verdict: green only when every stage is. It also pins the macOS
-    # half's verdict to TRAIN_SHA (a commit status — a check run belongs to the
-    # commit that queued the run, which may not be TRAIN_SHA).
+    # The train's verdict: green only when every stage is. No macOS stage: that
+    # half follows the release (mac-follow.yml, issue #3869).
     name: train
     # fail-fast is waited for (not judged) so `release`'s --train move finds it done.
-    needs: [board, quarantine, plan, linux, macos, macos-wait, fail-fast, gate, record]
+    needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, fail-fast, gate, record]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: verdict
         env:
-          GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.board.outputs.train_sha }}
           BOARD: ${{ needs.board.result }}
           LINUX: ${{ needs.linux.result }}
-          MACOS: ${{ needs.macos.result }}
-          WAIT: ${{ needs.macos-wait.result }}
-          WHERE: ${{ needs.board.outputs.macos_where }}
-          WHY: ${{ needs.board.outputs.macos_why }}
+          LWHERE: ${{ needs.linux-pick.outputs.linux_where || 'github' }}
+          LWHY: ${{ needs.linux-pick.outputs.linux_why || 'FLEET_TRAIN_RUNNER 未设' }}
+          COVERS: ${{ needs.linux-rescue-plan.outputs.covers }}
+          LOST: ${{ needs.linux-rescue-plan.outputs.lost }}
+          RESCUE: ${{ needs.linux-rescue.result }}
           GATE: ${{ needs.gate.result }}
           QUAR: ${{ needs.quarantine.result }}
           REC: ${{ needs.record.result }}
-          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          case "$MACOS" in
-            success) st=success ;;
-            failure) st=failure ;;
-            *)       st='' ;;      # cancelled / skipped: no verdict on the BSD half
-          esac
-          if [ -n "$SHA" ] && [ -n "$st" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$st" \
-              -f context='release train: macOS' -f target_url="$URL" \
-              -f description="the release train's macOS selftests: $MACOS" >/dev/null \
-              || echo "::warning::could not leave the 'release train: macOS' status on $SHA"
+          # a Linux half whose only reds were lost runners, rescued green (#3864)
+          if [ "$LINUX" = failure ] && [ "$COVERS" = true ] && [ "$RESCUE" = success ]; then
+            LINUX="success（补跑 $LOST）"; lok=success
+          else
+            lok=$LINUX
           fi
           {
             echo "### 🚂 train \`${SHA:0:7}\`"
             echo "| stage | result |"
             echo "|---|---|"
             echo "| board | $BOARD |"
-            echo "| Linux | $LINUX |"
-            echo "| macOS | ${MACOS}（${WHERE}：${WHY}） |"
-            echo "| macOS 排队 | $WAIT |"
+            echo "| Linux | ${LINUX}（${LWHERE}：${LWHY}） |"
+            echo "| macOS | 发布之后由 mac-follow 跟（#3869） |"
             echo "| precheck | $GATE |"
             echo "| 隔离 | $QUAR · $REC |"
           } >> "$GITHUB_STEP_SUMMARY"
-          for r in "$BOARD" "$QUAR" "$LINUX" "$MACOS" "$WAIT" "$GATE" "$REC"; do
-            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · quarantine $QUAR · Linux $LINUX · macOS $MACOS · macOS 排队 $WAIT · precheck $GATE · 隔离 $REC) — it ships nothing; the next merge starts the next train"; exit 1; }
+          for r in "$BOARD" "$QUAR" "$lok" "$GATE" "$REC"; do
+            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · quarantine $QUAR · Linux $LINUX · precheck $GATE · 隔离 $REC) — it ships nothing; the next merge starts the next train"; exit 1; }
           done
           echo "train ${SHA:0:7} is green — the hub, the publish and stable follow"
 
@@ -502,8 +569,9 @@ jobs:
     # hub-deploy.yml's one deploy job, on TRAIN_SHA (its environment `prod` and
     # its OIDC role are the same as when it runs by itself).
     name: hub
-    needs: [board, linux, macos, gate, train, hub-plan]
-    if: needs.hub-plan.outputs.deploy == 'true'
+    needs: [board, linux, gate, train, hub-plan]
+    # !cancelled(): a Linux shard lost and rescued leaves `linux` red; `train` judged it
+    if: "!cancelled() && needs.train.result == 'success' && needs.hub-plan.outputs.deploy == 'true'"
     permissions:
       contents: read
       deployments: read
@@ -512,11 +580,15 @@ jobs:
     uses: ./.github/workflows/hub-deploy.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
+    # A called workflow sees no secret the caller does not hand it — not even its
+    # own environment's (claude-fleet#3860: FLEET_DEPLOY_OVERLAY_SSH_KEY arrived
+    # empty and checkout asked the REST API for the private overlay repo, 404).
+    secrets: inherit
 
   release:
     # The last job, so `--train` finds every other job of this run finished.
     name: release
-    needs: [board, train, hub-plan, hub]
+    needs: [board, train, hub-plan, hub, linux-rescue-plan]
     if: >-
       always() && needs.board.outputs.skip == 'false' &&
       needs.train.result == 'success' && needs.hub-plan.result == 'success' &&
@@ -527,6 +599,8 @@ jobs:
     # release-sign environment's RELEASE_SIGN_KEY secret, read only by the
     # publish step below. Unset ⇒ the hub signs with its own key, as before.
     environment: release-sign
+    outputs:
+      moved: ${{ steps.move.outputs.moved }}
     permissions:
       contents: write   # the stable tag (GITHUB_TOKEN; a tag pushed so triggers nothing)
       id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
@@ -537,6 +611,7 @@ jobs:
       PLANNED: ${{ needs.hub-plan.outputs.deploy }}
       HUB_WHY: ${{ needs.hub-plan.outputs.why }}
       DEPLOYED: ${{ needs.hub.outputs.deployed }}
+      LOST: ${{ needs.linux-rescue-plan.outputs.covers == 'true' && needs.linux-rescue-plan.outputs.lost || '' }}
       FLEET_HUB_URL: https://claudefleet.24haowan.com
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -607,6 +682,22 @@ jobs:
           PY
           [ ! -s train.json ] || python3 -c 'import json; d=json.load(open("train.json")); print("ledger: %d merge(s), stages %s" % (len(d["merges"]), ", ".join(s["name"] for s in d["stages"])))'
 
+      # The Mac lane's first value (issue #3869): this train's move no longer asks
+      # macOS, so before stable leaves the commit it boarded a Mac must have a lane
+      # of its own — the hub's first (else it would serve a Mac the new stable),
+      # then the tag, at the stable this train boarded (it passed the BSD half when
+      # it moved). A lane already there ⇒ nothing. Red ⇒ nothing published, the
+      # move never runs (with no lane it would refuse anyway: no macOS job here).
+      - name: seed the Mac lane (once)
+        if: steps.sup.outputs.superseded != 'true' && needs.board.outputs.stable_sha != ''
+        run: |
+          if git ls-remote --exit-code origin refs/tags/stable-macos >/dev/null; then
+            echo "Mac lane: refs/tags/stable-macos exists — mac-follow moves it"; exit 0
+          fi
+          bash bin/fleet-release-publish.sh "$STABLE_SHA" --dir . --ref stable-macos
+          sh bin/fleet-stable.sh move "$STABLE_SHA" --ref stable-macos --seed --dir . --repo "$GITHUB_REPOSITORY"
+          echo "### Mac 通道起点：\`${STABLE_SHA:0:7}\`（之后由 mac-follow 跟）" >> "$GITHUB_STEP_SUMMARY"
+
       - name: publish TRAIN_SHA to the hub
         id: pub
         if: steps.sup.outputs.superseded != 'true'
@@ -650,10 +741,17 @@ jobs:
           fi
 
       - name: move stable to TRAIN_SHA
+        id: move
         if: steps.sup.outputs.superseded != 'true' && steps.pub.outputs.superseded != 'true'
         run: |
           set +e
-          sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" --ignore-check release \
+          # node tools / node image (#3855) build the node image beside the
+          # release, never gate it: a registry hiccup does not hold stable back
+          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image'
+          # a Linux shard whose cluster runner went away and that `Linux rescue`
+          # reran green (issue #3864): its red job is not this train's verdict
+          for k in $(printf '%s' "$LOST" | tr -c '0-9' ' '); do set -- "$@" --ignore-check "Linux / shard $k"; done
+          sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" "$@" \
             --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
           rc=$?
           cat out.txt
@@ -661,4 +759,114 @@ jobs:
           if [ "$rc" = 3 ] && grep -q 'does not descend from the current stable' out.txt; then
             bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" && exit 0
           fi
+          [ "$rc" != 0 ] || echo "moved=true" >> "$GITHUB_OUTPUT"
           exit $rc
+
+  node-tools:
+    # The managed node image's `tools` stage (extras/managed-node/Dockerfile),
+    # pushed once per text as <repo>:<tools-tag.sh> from here — outside CN, where
+    # GitHub's release assets and dl.k8s.io download (issue #3855). Already there
+    # = a look and nothing pushed, the usual case.
+    name: node tools
+    needs: [board, train]
+    if: needs.board.outputs.skip == 'false' && vars.NODE_IMAGE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: node-image
+    permissions:
+      contents: read
+      id-token: write   # OIDC → STS as gha-claudefleet-node-image (acme/fleet-managed-node only)
+    outputs:
+      tag: ${{ steps.tools.outputs.tag }}
+      digest: ${{ steps.tools.outputs.digest }}
+    env:
+      REPO: ${{ vars.NODE_IMAGE_REPO }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - uses: ./.github/actions/hub-acr
+        with:
+          role: gha-claudefleet-node-image
+      - uses: docker/setup-buildx-action@v3
+      - name: the tools image, pushed when its tag is new
+        id: tools
+        run: |
+          tag=$(bash extras/managed-node/tools-tag.sh)
+          if ! docker buildx imagetools inspect "$REPO:$tag" >/dev/null 2>&1; then
+            docker buildx build --platform linux/amd64 --target tools --provenance=false --sbom=false --push -t "$REPO:$tag" extras/managed-node
+            note='pushed'
+          else
+            note='already there'
+          fi
+          digest=$(docker buildx imagetools inspect "$REPO:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in (sha256:*) ;; (*) echo "::error::cannot read the digest of $REPO:$tag"; exit 1 ;; esac
+          printf 'tag=%s\ndigest=%s\n' "$tag" "$digest" >> "$GITHUB_OUTPUT"
+          echo "### 节点镜像工具层 \`$tag\`（$note）: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  node-image:
+    # The managed node image of the release this train just shipped (issue
+    # #3855): built in the Shenzhen cluster on the fleet-ack runner set (ARC,
+    # deploy/k8s/runners/) by its buildkitd, native amd64, pushed over ACR's VPC
+    # endpoint as <repo>:<TRAIN_SHA> — the image a person deploys by its digest.
+    # Red here is the image's alone: stable has already moved.
+    name: node image
+    needs: [board, release, node-tools]
+    if: >-
+      always() && needs.release.outputs.moved == 'true' &&
+      needs.node-tools.result == 'success'
+    runs-on: fleet-ack
+    timeout-minutes: 45
+    environment: node-image
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      HUB_URLS: ${{ vars.HUB_URLS }}   # the hub's addresses (hub-deploy's); the first is asked
+      REPO: ${{ vars.NODE_IMAGE_REPO }}
+      BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
+      TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
+    steps:
+      # GitHub from Shenzhen: a sparse, shallow checkout, tried twice
+      - uses: actions/checkout@v4
+        id: co
+        continue-on-error: true
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /extras/managed-node/
+            /conf/release-keys/
+            /bin/fleet-release-verify.py
+            /.github/actions/hub-acr/
+            /.github/actions/hub-kubeconfig/
+      - if: steps.co.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /extras/managed-node/
+            /conf/release-keys/
+            /bin/fleet-release-verify.py
+            /.github/actions/hub-acr/
+            /.github/actions/hub-kubeconfig/
+      - uses: ./.github/actions/hub-acr
+        with:
+          role: gha-claudefleet-node-image
+      - name: build and push (train-build.sh)
+        id: build
+        run: bash extras/managed-node/train-build.sh "${HUB_URLS%% *}" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST"
+      - name: summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### 节点镜像 \`${TRAIN_SHA:0:7}\`"
+            echo '```'
+            echo "$REPO:$TRAIN_SHA"
+            echo "$REPO@$DIGEST"
+            echo '```'
+            echo "部署按 digest 引用（render.py --image $REPO@$DIGEST）。"
+          } >> "$GITHUB_STEP_SUMMARY"

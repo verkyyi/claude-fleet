@@ -445,6 +445,7 @@ class O_SweepRemoves(Sandbox):
         dd, la = self.dd, self.la
         return {
             "node": self.plist(dd, "com.claude-fleet.node"),
+            "core": self.plist(dd, "com.claude-fleet.node-core"),
             "own-proxy": self.plist(dd, "com.claude-fleet.credsep.alice"),
             "gone-proxy": self.plist(dd, "com.claude-fleet.credsep.ghost"),
             "machine": self.plist(dd, "com.claude-fleet.memguard"),
@@ -465,7 +466,7 @@ class O_SweepRemoves(Sandbox):
             f.write("# mine\ncom.claude-fleet.mine\n")
         p = self.lay()
         gone = ("gone-proxy", "machine", "legacy-ok", "alice-agent")
-        stay = ("node", "own-proxy", "kept", "legacy-waits", "carol-daemon", "bob-own", "carol-agent",
+        stay = ("node", "core", "own-proxy", "kept", "legacy-waits", "carol-daemon", "bob-own", "carol-agent",
                 "bob-daemon", "bob-agent", "bob-agent2")
         dry = self.run_sup("sweep", "--dry-run")
         self.assertEqual(dry.stdout.count("would boot out"), len(gone), dry.stdout)
@@ -487,7 +488,8 @@ class O_SweepRemoves(Sandbox):
         for t in ("bootout system/com.claude-fleet.memguard", "bootout system/com.claude-fleet.c-legacy",
                   "bootout gui/%d/com.claude-fleet.spinner" % uid):
             self.assertIn(t, calls)
-        for t in ("carol", "com.ccquota.agent.bob", "com.claude-fleet.x", "com.claude-fleet.dispatch"):
+        for t in ("carol", "com.ccquota.agent.bob", "com.claude-fleet.x", "com.claude-fleet.dispatch",
+                  "com.claude-fleet.node-core"):
             self.assertNotIn(t, calls)
         sw = self.state()["sweep"]
         self.assertEqual((sw["removed"], sw["extra"]), (len(gone), 3))
@@ -503,6 +505,39 @@ class O_SweepRemoves(Sandbox):
         # a second sweep finds only what it leaves named (the restored one goes again)
         r = self.run_sup("sweep")
         self.assertEqual(r.stdout.count("booted out"), 1, r.stdout)
+
+    def test_the_root_core_is_never_swept(self):
+        """issue #3857: expected.json naming no labels (a managed machine's usual
+        one) and the core's plist beside the daemon's — the sweep, which a seated
+        daemon has the core itself run, booted the core out: it died mid-sweep,
+        gone from launchd, its plist left. It is the machine's own unit."""
+        p = self.plist(self.dd, "com.claude-fleet.node-core")
+        r = self.run_sup("sweep")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.exists(p), r.stdout)
+        self.assertNotIn("node-core", r.stdout)
+        self.assertFalse(os.path.exists(self.lclog) and "node-core" in open(self.lclog).read(),
+                         "the sweep called launchctl on the core")
+        # and the one place that boots a unit out refuses it, whoever asks
+        self.assertIsInstance(fns._retire_unit(None, self.dd, p, "com.claude-fleet.node-core", [], "x", False), str)
+
+    def test_a_core_gone_from_launchd_is_put_back(self):
+        """issue #3857: the core's plist installed, launchd holding no such job,
+        its socket gone — an unseated (root) daemon bootstraps it back and says so
+        once; status names how long it has been down."""
+        self.plist(self.dd, "com.claude-fleet.node-core")
+        self.env["FLEET_NODE_CORE_SOCK"] = os.path.join(self.d, "core.sock")
+        self.env["FLEET_NODE_SWEEP_EVERY"] = "100000"
+        st = self.run_sup("status").stdout
+        self.assertIn("core        NOT ANSWERING", st)
+        self.start()
+        want = "bootstrap system %s" % os.path.join(self.dd, "com.claude-fleet.node-core.plist")
+        self.assertTrue(until(10, lambda: os.path.exists(self.lclog) and want in open(self.lclog).read()),
+                        "the daemon did not put the core back")
+        self.assertTrue(until(5, lambda: (self.state().get("core") or {}).get("down_since")))
+        self.assertIn("(the daemon's word)", self.run_sup("status").stdout)
+        log = open(os.path.join(self.d, "sup.err")).read()
+        self.assertEqual(log.count("core NOT ANSWERING"), 1, log)
 
     def test_one_that_will_not_unload_stays(self):
         p = self.plist(self.dd, "com.claude-fleet.memguard")
@@ -2964,4 +2999,5 @@ for _cls in (T_RootCore, V_SessionUnits):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
+    selftest_part.main()

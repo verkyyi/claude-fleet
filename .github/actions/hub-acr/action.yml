@@ -3,7 +3,8 @@ description: >
   Trade this job's GitHub OIDC token for a short-lived ACR login (Aliyun STS as
   RAM role gha-claudefleet-deploy → cr:GetAuthorizationToken), written into
   ~/.docker/config.json for both the public and the VPC registry endpoint.
-  The job must declare `environment: prod` and `permissions: id-token: write`.
+  The job must declare the role's environment (`prod`, or `node-image` for
+  role gha-claudefleet-node-image) and `permissions: id-token: write`.
 
 # EPIC #1982 C1 (issue #1983). Ported from acme-monorepo's acr-credentials
 # action. The role's ACR policy (gha-claudefleet-acr-push) pulls and pushes
@@ -13,6 +14,14 @@ inputs:
     description: "STS (= login) lifetime in seconds (900–7200); must cover the last push"
     required: false
     default: "3600"
+  role:
+    description: >
+      The RAM role to assume: gha-claudefleet-deploy (environment prod, the hub
+      image), gha-claudefleet-node-image (environment node-image, the managed
+      node image — #3855) or gha-claudefleet-ci-runner (environment ci-runner,
+      the train's Linux test runner image — #3864)
+    required: false
+    default: gha-claudefleet-deploy
 
 runs:
   using: composite
@@ -21,5 +30,6 @@ runs:
       shell: bash
       env:
         DURATION: ${{ inputs.duration }}
+        ROLE: ${{ inputs.role }}
         ACR_JS: ${{ github.action_path }}/acr.js
-      run: node "$ACR_JS" --duration "$DURATION"
+      run: node "$ACR_JS" --duration "$DURATION" --role "$ROLE"

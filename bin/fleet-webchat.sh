@@ -101,9 +101,21 @@ deps() { # the pinned SDK, installed once per lockfile into the state dir (no op
 
 # the environment both modes run the server with: no tmux pane, no fleet
 # credential of the caller, its cwd outside any worktree
+claude_bin() { # the login's own claude for the SDK (deps has no native binary). The daemon starts
+  # `serve` with a bare PATH, so look where fleet_find_tool does too (#3648: «Native CLI binary
+  # for darwin-arm64 not found» on every turn of a service the daemon started)
+  local d
+  [ -n "${FLEET_CLAUDE_BIN:-}" ] && [ -x "$FLEET_CLAUDE_BIN" ] && { printf '%s' "$FLEET_CLAUDE_BIN"; return 0; }
+  command -v claude 2>/dev/null && return 0
+  for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; do
+    [ -x "$d/claude" ] && { printf '%s' "$d/claude"; return 0; }
+  done
+  return 1
+}
+
 server_env() {
   env -u TMUX -u TMUX_PANE -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT \
-    FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(command -v claude 2>/dev/null || true)" \
+    FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(claude_bin || true)" \
     FLEET_WEBCHAT_SESSION_CRED="$BIN/fleet-session-cred.sh" "$@"
 }
 
@@ -208,7 +220,8 @@ case "${1:-status}" in
   status)
     if sock_healthy; then echo "on · socket $STATE/chat.sock · pid $(cat "$STATE/pid" 2>/dev/null)"
     elif pid_live && healthy; then echo "on · local http://127.0.0.1:$(port)/ · pid $(cat "$STATE/pid")$([ -f "$STATE/tailnet" ] && echo ' · tailnet')"
-    else echo off; fi ;;
+    else echo off; fi
+    c=$(claude_bin) && echo "claude · $c" || echo "claude · not found — a turn cannot start (FLEET_CLAUDE_BIN, or put claude on PATH)" ;;
   -h|--help|help) sed -n '2,54p' "$0" ;;
   *) die "usage: fleet-webchat.sh serve|enable|disable|ensure|move --to <login>|status   (FLEET_WEBCHAT_LOCAL=1: start|link [--tailnet|--print]|stop)" 2 ;;
 esac

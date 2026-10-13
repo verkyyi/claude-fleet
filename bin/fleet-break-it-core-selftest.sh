@@ -33,6 +33,11 @@
 #                             program on the seat — a login's job started on the
 #                             caller's fds outlives the caller; the node program asked
 #                             of root as a machine job; fds riding another op
+#   seat-repin                bin/fleet-node-core.py keep_trust / op_switch +
+#                             bin/fleet-node-update.py fetch_pin (#3835): a release
+#                             whose chain moves the pin to a new root, fetched by the
+#                             seated updater; a chain / op / key that would let the
+#                             seat move the machine's trust anchor itself
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -390,6 +395,101 @@ PY
     || { WHY="fds on kill were not refused: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT="节点程序以 _fleetnode 跑：它的 core-exec 被杀，登录身份的活随连接断开即停；请 root 把节点程序当 machine 任务起——拒绝（只许停 root 那份）；描述符搭在别的动作上——拒绝"
+}
+
+drill_seat_blind_to_homes() {
+  CAP=10
+  local sb t0 out
+  sb="$WORK/seatblind"; mkdir -p "$sb/Users/alice/.claude/fleet/bin"
+  printf '#!/bin/bash\n' > "$sb/Users/alice/.claude/fleet/bin/fleet-collect.sh"
+  chmod 700 "$sb/Users/alice"
+  t0=$(now)
+  # the seat (_fleetnode) cannot enter /Users/<login>: here, a home it may not search
+  chmod 000 "$sb/Users/alice"
+  out=$(python3 - "$BIN/fleet-node-supervisor.py" "$sb/Users/alice/.claude/fleet/bin/fleet-collect.sh" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1])
+sup = importlib.util.module_from_spec(spec); spec.loader.exec_module(sup)
+ent = {"uid": os.getuid() + 7, "script": sys.argv[2]}
+print("seated=%s" % sup.account_runnable(ent, True))
+PY
+)
+  chmod 700 "$sb/Users/alice"
+  [ "$out" = "seated=None" ] || { WHY="the seat judged a login's script it cannot see: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="入座的守护进不了登录的家：账号任务的脚本不由它判「缺」，交给核心以 root 再看"
+}
+
+drill_seat_root_leftovers() {
+  CAP=10
+  local sb t0 out
+  sb="$WORK/seatleft"; mkdir -p "$sb/db/node" "$sb/log"
+  : > "$sb/db/node/fetch.progress"; : > "$sb/db/update.json"
+  ln -s node/fetch.progress "$sb/db/fetch.progress"
+  t0=$(now)
+  # root's daemon wrote these before the seat; the layout pass must hand them over
+  out=$(FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_ROOT="$sb/root" \
+        python3 - "$BIN/fleet-node-supervisor.py" "$sb/db" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1])
+sup = importlib.util.module_from_spec(spec); spec.loader.exec_module(sup)
+got = []
+sup.os.geteuid = lambda: 0                       # as root, without being root
+sup.os.lchown = lambda p, u, g: got.append((os.path.basename(p), u, g))
+sup.os.chown = lambda p, u, g: None
+sup.seat_share = sup.seat_agent_own = sup.seat_hub_url = lambda *a, **k: None
+sup.seat_layout(sup.Paths(), (4242, 4243))
+print(" ".join(sorted("%s=%d:%d" % g for g in got if g[0] in ("fetch.progress", "update.json"))))
+PY
+)
+  case "$out" in
+    *"fetch.progress=4242:4243"*"update.json=4242:4243"*) ;;
+    *) WHY="root's files in node/ stayed root's: [$out]"; return 1 ;;
+  esac
+  SECS=$(since "$t0")
+  WHAT="守护入座：root 先前留在 node/ 的 fetch.progress、移进去的 update.json 一并转给 _fleetnode"
+}
+
+# seat-repin (#3835): the machine's trust anchor (<state>/release.pub + .revoked)
+# is root's and only the core writes it. A release whose chain re-pins: the seated
+# updater fetches against its own copy of the pin (ccquota writes there) and does
+# not fail; the core re-pins the anchor at the switch. A self-made root in a staged
+# chain, an op or a key that would steer the pin: refused, the anchor as it was.
+drill_seat_repin() {
+  CAP=60
+  local sb t0 out rc good new line old
+  sb="$WORK/seat-repin"; core_sandbox "$sb"
+  good=$(printf 'a%.0s' $(seq 40)); new=$(printf 'c%.0s' $(seq 40))
+  python3 "$BIN/fleet-node-core-selftest.py" --write-pub "$sb/db/release.pub"
+  python3 "$BIN/fleet-node-core-selftest.py" --make-release "$sb/root" "$good"
+  ln -s "$sb/root/$good" "$sb/root/current"
+  old=$(cat "$sb/db/release.pub")
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  t0=$(now)
+  # the seat steering the anchor: another key's self-signed release, an op, a key
+  python3 "$BIN/fleet-node-core-selftest.py" --make-release "$sb/db/staging" "$new" other
+  out=$(core_call "$sb" switch "{\"sha\": \"$new\"}"); rc=$?
+  [ "$rc" = 2 ] || { WHY="another key's release was not refused (rc $rc): $out"; return 1; }
+  rm -rf "${sb:?}/db/staging/$new"
+  for line in '{"op": "repin", "args": {"key": "ed25519 AAAA"}}' \
+              "{\"op\": \"switch\", \"args\": {\"sha\": \"$new\", \"pubkey\": \"$sb/mine.pub\"}}" \
+              '{"op": "trust", "args": {}}'; do
+    out=$(core_raw "$sb" "$line")
+    printf '%s' "$out" | grep -q '"refused"' || { WHY="not refused: $line → $out"; return 1; }
+  done
+  [ "$(cat "$sb/db/release.pub")" = "$old" ] && [ ! -e "$sb/db/release.pub.prev" ] \
+    || { WHY="a refused request moved the anchor"; return 1; }
+  # a release whose chain re-pins: the core keeps it, as root, at the switch
+  line=$(python3 "$BIN/fleet-node-core-selftest.py" --make-repin "$sb/db/staging" "$new")
+  out=$(core_call "$sb" switch "{\"sha\": \"$new\"}"); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$sb/db/release.pub")" = "$line" ] && [ "$(cat "$sb/db/release.pub.prev")" = "$old" ] \
+    && grep -q 0123456789abcdef "$sb/db/release.pub.revoked" \
+    || { WHY="the core did not keep the re-pin (rc $rc): $out / $(cat "$sb/db/release.pub" 2>&1)"; return 1; }
+  # the seated updater against such a chain: its fetch writes only its own copy
+  out=$(python3 "$BIN/fleet-node-core-selftest.py" N_SeatedUpdate.test_seated_repin_kept_by_the_core 2>&1) \
+    || { WHY="the seated updater: $(printf '%s' "$out" | tail -5)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="入座的更新器遇到要 re-pin 的链：拿自己那份 pin 副本校验、不失败；锚（release.pub / .revoked）只由核心在 switch 时改；seat 要改锚（自签的根、表外动作、多一个键）一律拒绝、锚不动"
 }
 
 cred_run_drills "$0"

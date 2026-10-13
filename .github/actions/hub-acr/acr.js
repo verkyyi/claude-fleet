@@ -6,12 +6,14 @@
 // gha-claudefleet-deploy (shared with ../hub-kubeconfig/oidc.js); ③ with the
 // STS, cr:GetAuthorizationToken (personal edition 2016-06-07 `GET /tokens`) for
 // `cr_temp_user` + a password that lives as long as the STS. What it may push is
-// the role's policy: acme/ccquota only.
+// the role's policy: acme/ccquota only (gha-claudefleet-deploy, the default) or
+// acme/fleet-managed-node only (gha-claudefleet-node-image, --role; #3855) or
+// acme/fleet-ci-runner only (gha-claudefleet-ci-runner, --role; #3864).
 //
 // Output: the auth for both registry endpoints merged into ~/.docker/config.json
 // (other entries kept; buildx reads it). Nothing is printed but masked values.
 //
-// Usage: node acr.js [--duration 3600]
+// Usage: node acr.js [--duration 3600] [--role gha-claudefleet-node-image]
 //        node acr.js --selftest
 'use strict';
 
@@ -23,18 +25,29 @@ const { githubOidcToken, assumeRoleWithOidc, oidcClaims, signV3 } = require('../
 
 const ACCOUNT = '1720148580188583';
 const REGION = 'cn-shenzhen';
-const ROLE = 'gha-claudefleet-deploy';
+// The roles a job may ask for, each with the one environment its trust admits
+// and what its policy pushes: the hub image (prod), the node image (#3855), the
+// release train's Linux test runner image (#3864; it also pulls the cluster's ARC
+// runner base, acme/arc-runner).
+const ROLES = {
+  'gha-claudefleet-deploy': { env: 'prod', pushes: 'acme/ccquota' },
+  'gha-claudefleet-node-image': { env: 'node-image', pushes: 'acme/fleet-managed-node' },
+  'gha-claudefleet-ci-runner': { env: 'ci-runner', pushes: 'acme/fleet-ci-runner' },
+};
+const DEFAULT_ROLE = 'gha-claudefleet-deploy';
 const PROVIDER = `acs:ram::${ACCOUNT}:oidc-provider/github-actions`;
 const ENDPOINTS = [`registry.${REGION}.aliyuncs.com`, `registry-vpc.${REGION}.aliyuncs.com`];
 
 function parseArgs(argv) {
-  const o = { duration: 3600 };
+  const o = { duration: 3600, role: DEFAULT_ROLE };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--duration') o.duration = Number(argv[++i]);
+    else if (a === '--role') o.role = argv[++i];
     else if (a === '--selftest') o.selftest = true;
     else throw new Error(`unknown arg: ${a}`);
   }
+  if (!Object.prototype.hasOwnProperty.call(ROLES, o.role)) throw new Error(`unknown role: ${o.role}`);
   return o;
 }
 
@@ -67,7 +80,9 @@ async function getAuthorizationToken(creds) {
 
 function selftest() {
   const assert = require('assert');
-  assert.deepStrictEqual(parseArgs(['--duration', '1200']), { duration: 1200 });
+  assert.deepStrictEqual(parseArgs(['--duration', '1200']), { duration: 1200, role: DEFAULT_ROLE });
+  assert.strictEqual(parseArgs(['--role', 'gha-claudefleet-node-image']).role, 'gha-claudefleet-node-image');
+  assert.throws(() => parseArgs(['--role', 'AliyunAdmin']), /unknown role/);
   const cfg = mergeDockerConfig({ auths: { 'ghcr.io': { auth: 'x' } }, credsStore: 'desktop' }, 'cr_temp_user', 'p');
   assert.strictEqual(cfg.auths['ghcr.io'].auth, 'x', 'other registries are kept');
   assert.strictEqual(cfg.credsStore, 'desktop');
@@ -82,6 +97,7 @@ async function main() {
   if (!(o.duration >= 900 && o.duration <= 7200)) throw new Error('--duration must be 900..7200');
 
   const oidcToken = await githubOidcToken();
+  const ROLE = o.role;
   console.log(`oidc: sub=${oidcClaims(oidcToken).sub} → role ${ROLE}`);
   let creds;
   try {
@@ -90,7 +106,7 @@ async function main() {
       oidcToken, durationSeconds: o.duration,
     });
   } catch (e) {
-    if (e.denied) throw new Error(`${e.message} — only a job in \`environment: prod\` (master only) gets push credentials`);
+    if (e.denied) throw new Error(`${e.message} — only a job in \`environment: ${ROLES[ROLE].env}\` (master only) gets ${ROLE}'s push credentials`);
     throw e;
   }
   for (const v of [creds.AccessKeyId, creds.AccessKeySecret, creds.SecurityToken]) console.log(`::add-mask::${v}`);

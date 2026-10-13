@@ -1,3 +1,5 @@
+# Example values (claude-fleet#3630): a deployment's own copy — ours is in its
+# private deploy repo — replaces this directory's files at deploy time.
 # The cluster credential proxy a second time, beside the user pods in
 # fleet-workers (claude-fleet#3547, EPIC #3500 C2): Service fleet-credproxy:80,
 # reached from inside the cluster only — no Ingress. A user pod's sessions hold
@@ -11,7 +13,7 @@ resources:
   - ../base
 images:
   - name: ccquota
-    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/ccquota
+    newName: registry.example.com/acme/ccquota
 patches:
   - path: deployment-env.yaml
   # in-cluster only: the base's Ingress is new-deploy's public path, not this one's

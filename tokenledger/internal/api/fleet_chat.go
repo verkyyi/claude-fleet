@@ -75,6 +75,12 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		refuseJSON(w, http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
 		return
 	}
+	// The person's login is linked to another replica (claude-fleet#3847):
+	// that one answers, as it would for a turn.
+	if peer, ok := s.chatRelayPeer(r, home.Machine, home.Login); ok {
+		s.proxyRelay(w, r, peer, "a chat home read for "+home.Machine+"/"+home.Login)
+		return
+	}
 	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok"}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
@@ -242,6 +248,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	where := home.Machine + "/" + home.Login
+	// The login's link ends in another replica (claude-fleet#3847): hand it
+	// the whole request, before any bound or audit here — it signs the person
+	// in again, opens the relay and audits it as its own.
+	if peer, ok := s.chatRelayPeer(r, home.Machine, home.Login); ok {
+		s.proxyRelay(w, r, peer, "a chat relay to "+where)
+		return
+	}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
 			s.chatRefuse(w, person, name+" "+where, http.StatusServiceUnavailable, "home_down", "你的机器在维护中，现在连不上")

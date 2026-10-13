@@ -58,12 +58,12 @@ if [ "$#" = 0 ] && command -v fleet_daemon_stamp_tick >/dev/null 2>&1; then
 fi
 
 . "$BIN/fleet-lib.sh"
-# One account, one set of background reads (issue #1271) — guarded, like the
+# Background reads shared per repo (issues #1271, #3529) — guarded, like the
 # collector: without the gh lib every login fetches, as it always has.
 # shellcheck source=/dev/null
 _FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
-command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
+command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 G="$C/global"                       # machine-wide caches (git_<key>) — issue #181
 # Sweep this run's PID-unique temps on exit (across the fleets/<slug>/ subdirs now;
@@ -262,11 +262,11 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     # program the dash, the merge gate's taxonomy and pr-refresh-jq-selftest.sh
     # share (issue #533) — it lived inline here and drifted from fleet-pr-verdict.sh
     # (no isDraft, only FAILURE was red, StatusContext never looked at).
-    # A follower (issue #1271) folds the leader's fresh prmap through the same
-    # transition/backoff path as its own fetch; no fresh copy → fetch as before.
-    # Its prmap.ts stays the copy's age, so it re-adopts on the next due tick.
-    if [ "$FORCE" != 1 ] && fleet_gh_share_on && ! fleet_gh_should_fetch \
-       && fleet_gh_adopt "$sg" $((PR_TTL + $(_fleet_gh_stale_secs))) "$FD/.adopt.$$" prmap.ts prmap \
+    # Shared per repo (issue #3529): a trusted login's prmap younger than PR_TTL —
+    # or the one another login is fetching right now — goes through the same
+    # transition path as our own fetch; none → fetch as before. Its prmap.ts stays
+    # the copy's age, so it is due again when the copy is.
+    if [ "$FORCE" != 1 ] && fleet_gh_share_get "$rp" prmap "$PR_TTL" "$FD/.adopt.$$" prmap.ts prmap \
        && [ -f "$FD/.adopt.$$/prmap" ]; then
       emit_pr_transitions "$FD/prmap" "$FD/.adopt.$$/prmap" "$rp" "$se"
       mv "$FD/.adopt.$$/prmap" "$FD/prmap"
@@ -287,8 +287,9 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
            fi
            mv "$FD/prmap.$$" "$FD/prmap"; pub=1; }
     now > "$FD/prmap.ts"
-    # the leader publishes what it really fetched; prmap.ts last = the freshness stamp
-    [ "$pub" = 1 ] && fleet_gh_share_on && fleet_gh_should_fetch && fleet_gh_publish "$sg" "$FD" prmap prmap.ts
+    # publish what was really fetched (prmap.ts last = the freshness stamp); the
+    # claim goes either way
+    fleet_gh_share_put "$rp" prmap "$pub" "$FD" prmap.ts prmap
   fi
 done
 

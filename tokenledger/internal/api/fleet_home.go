@@ -104,6 +104,9 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		if loginOn, err = s.homeLogins(pid); err != nil {
 			return out, err
 		}
+		if out.Disabled, err = s.disabledMachinesOf(pid); err != nil {
+			return out, err
+		}
 	}
 
 	// The person's session count per machine, from the fleet registry.
@@ -413,7 +416,7 @@ func (s *Server) handleFleetHome(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.homePick(pid, req.Last, now)
 	out.Hub = s.hubURL(r)
-	if err != nil && pid != "" {
+	if err != nil && pid != "" && !errors.Is(err, errMachineOff) {
 		// No active login (claude-fleet#2069): one being opened is "wait a
 		// minute", not "forbidden" — the client holds and asks again.
 		st := s.accountStateOf(pid, now)

@@ -168,21 +168,61 @@ Its systemd service starts at boot. Native runtime upgrades still use the
 signed hub release updater.
 After installing the hub SSH CA, native installs reload the active SSH service.
 
-## Build the ACK image
+## The ACK image
 
-Build from a **published signed release containing the Linux implementation**.
-Obtain the release public key through the established trusted distribution
-channel. `ccquota release fetch` verifies the signature and artifact digests;
-the image staging step checks the pinned artifact digests again.
+**The release train builds it** (issue #3855): every release it ships, its
+`node image` job builds that release's image in the cluster and pushes
+`<NODE_IMAGE_REPO>:<release commit>` — nobody builds one by hand. Read the
+digest off the train run's summary (「节点镜像」), or ask the registry:
+
+```sh
+docker buildx imagetools inspect registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT
+```
+
+How: the job runs on `fleet-ack`, an Actions Runner Controller scale set for
+this repo in the cluster's runner namespace (`deploy/k8s/runners/`), beside the
+cluster's BuildKit daemon — native amd64, the hub and the registry's VPC
+endpoint a hop away. `extras/managed-node/train-build.sh` checks the release's
+manifest against the checkout's `conf/release-keys/root.pub`, takes its
+`ccquota-linux-amd64` by the signed sha256, runs `prepare-image.sh` with it and
+builds with `buildctl` (CN package mirrors; the registry's layer cache
+`:buildcache`). GitHub's release assets and dl.k8s.io crawl from there, so the
+Dockerfile's `tools` stage (the sha256-pinned toolchain) is pushed separately by
+the train's `node tools` job from a GitHub-hosted runner, tagged
+`tools-<hash of the stage's text>` (`tools-tag.sh`) — once per pin change — and
+the cluster build takes it as `TOOLS=<repo>@<digest>`. Push credentials are the
+job's GitHub OIDC token traded for a short ACR login as a RAM role that may push
+this one repository (`.github/actions/hub-acr`, role
+`gha-claudefleet-node-image`, environment `node-image`, master only). The
+deployment names the repository in the repo variables `NODE_IMAGE_REPO` (public
+name) and `NODE_IMAGE_BUILD_REPO` (the VPC name the cluster pushes to); unset =
+the two jobs are skipped. A red `node image` never holds a release back — stable
+has already moved; the next train builds again, or build by hand (below).
+
+### By hand
+
+The same build anywhere outside CN, from a **published signed release
+containing the Linux implementation**. Obtain the release public key through
+the established trusted distribution channel (`conf/release-keys/root.pub` is
+the root every release chains to). `ccquota release fetch` verifies the
+signature and artifact digests; the image staging step checks the pinned
+artifact digests again.
 
 ```sh
 bash extras/managed-node/prepare-image.sh \
   https://YOUR-HUB /private/release.pub RELEASE_COMMIT /tmp/fleet-node-image linux-amd64
-docker build --platform linux/amd64 \
+docker buildx build --platform linux/amd64 --load \
   -t registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT \
   /tmp/fleet-node-image
 docker push registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT
 ```
+
+`buildx`, not the classic builder: on Apple Silicon the classic one takes a
+cached arm64 base for `--platform linux/amd64`, which Rosetta cannot run. The
+context holds every artifact the image's `stage` takes — each tool and its
+helpers (`image-stage.py need <dir> amd64` is the list); prepare-image.sh checks
+it and, when the caller's ccquota's `--pinned` left one out (a ccquota older than
+#3017 drops helpers), fetches the release whole and keeps only those (issue #3554).
 
 The image is Debian 13 (trixie, OpenSSH 10.0); its build fails unless
 `sshd -T` shows `persourcepenalties`, so an image whose entry port could not
@@ -607,9 +647,9 @@ run by someone holding the cluster (KUBECONFIG) and the hub's operator token
 | `check` | the source's declaration (UID, op), home size, pinned sessions, attached clients | — |
 | `prepare` | the pod's disk + Service (render.py with the login's OWN UID), a machine join code from the hub straight into `u-<nonce>-join` on kubectl's stdin, and a seeder pod on the disk (the login's UID, no capability, no token) | — |
 | `stop` | refused while any client is attached; `fleet-node-linux.py login stop <login>` on the source: snapshot save, `account forget`, every process of the UID stopped — the home, the declaration and the credential store stay. Never `fleet-down`: a fleet marked down (`restore.down`) is one the snapshot restore skips | **the interruption starts** |
-| `copy` | the home over two `kubectl exec` tars (numeric owners), without `.codex/tmp` and the proxy's throwaway Codex homes (links into the source's runtime); then `node.env` (a link into the shared node's credential store — `env_read`'s O_NOFOLLOW would refuse it), `node.pub.env` and `credsep.json` cleared, as a fresh pod has none; file counts compared | |
+| `copy` | the home pod to pod, never through the operator's machine (387 MB through the API server across the Pacific broke 4 runs in 4): the source's egress guard rejects pod addresses, so the seeder pulls — the source listens once on its pod IP for a connection that first sends a one-time token (in the script on kubectl's stdin), both tars run detached and leave their exit codes in files the phase polls; a rerun starts from an empty directory. Numeric owners, without `.codex/tmp` and the proxy's throwaway Codex homes (links into the source's runtime); then `node.env` (a link into the shared node's credential store — `env_read`'s O_NOFOLLOW would refuse it), `node.pub.env` and `credsep.json` cleared, as a fresh pod has none; file counts compared | |
 | `start` | the seeder goes, the Deployment is applied, Ready waited for | |
-| `open` | `fleet hub accounts assign <p> --host u-<nonce> --login <login> --own-name`: the node program's create → `pod_login_open` (its own token, `credsep: central`); a digit-leading login is created as the person's existing one while the source row is still active. First `fleet.cred_allow.node.<source>` is copied to `fleet.cred_allow.node.u-<nonce>` (the pod's endpoint enrolls by that hostname) and read back — before the login exists, since a machine with no key is open to every subscription; a source with no list is refused (3) unless `--allow-list-none` | |
+| `open` | `fleet hub accounts assign <p> --host u-<nonce> --login <login> --own-name`: the node program's create → `pod_login_open` (its own token, `credsep: central`); a digit-leading login is created as the person's existing one while the source row is still active. First the source's subscription allow-list (the hub's cred-policy, scope node — `fleet-cred-policy.sh`, not a hub setting) is copied to `u-<nonce>` (the pod's endpoint enrolls by that hostname) with `set --force` and read back — before the login exists, since a machine with no key is open to every subscription; a source with no list is refused (3) unless `--allow-list-none` | |
 | `home` | `PUT /v1/fleet/entry/home?principal=…` → the door's table and the person's name follow | **ends** |
 | `verify` | every session the source pinned is a window (`@fleet_id`) on the pod | — |
 | `retire` | after acceptance only: `fleet hub accounts remove <p> --host <source> --delete` (the source archives the home in its attic; the source's disk is a retain class) | — |
@@ -640,6 +680,10 @@ Door mode is the entry port (#3070) with three changes
   no setting). A login two pods claim is in neither row: the door never guesses.
   The door pulls it every `FLEET_ENTRY_EVERY` (15 s in door mode) — it has no node
   program to hear the push;
+- an empty table (nobody's home is a pod yet — the first deploy) still listens:
+  its probes are tcp on 22022, so the config stays with `AllowUsers fleet-door-closed`,
+  a name no hub login can carry, and nobody gets in until the first route comes
+  (issue #3554, BREAK-IT `door-empty-table`);
 - each login is a **door account** it makes itself (no home, shell `/bin/bash`,
   group `fleet-door`, GECOS `fleet-door`); a login the machine already had is never
   taken;

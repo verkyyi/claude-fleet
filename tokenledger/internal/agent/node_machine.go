@@ -527,7 +527,11 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 	if mc.HubURL == "" || mc.Token == "" {
 		return errors.New("machine agent: a hub URL and the machine's node token are required")
 	}
-	if len(mc.Tenants) == 0 {
+	// No login yet is a machine that waits — but only one that opens its own
+	// logins (AccountOpener): the hub sends the first create down this very
+	// link, so a person's own pod, made with none, never got it while this
+	// refused (claude-fleet#3554). Anywhere else nothing would ever arrive.
+	if len(mc.Tenants) == 0 && mc.AccountOpener == "" {
 		return errors.New("machine agent: no logins to serve")
 	}
 	seen := map[string]bool{}

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api/fleetclient"
 )
@@ -28,6 +29,10 @@ import (
 // beside `stable` (the same) and `client_url`, where its files are — so moving
 // stable upgrades every client without redeploying this hub (fleet_stable.go).
 // compat / min_client_compat stay this hub's own: the protocol it speaks.
+//
+// With a Mac lane set (claude-fleet#3868, fleet_release_macos.go) it also says
+// client_version_macos and client_url_macos — what a client on a Mac follows;
+// none set ⇒ the fields are absent and a Mac reads client_version, as before.
 
 var versionCommitRe = regexp.MustCompile(`(?:^|[-_.g])([0-9a-f]{7,40})(?:-dirty)?$`)
 
@@ -62,6 +67,17 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		out["client_version"] = sha
 		out["stable"] = sha
 		out["client_url"] = s.hubURL(r) + "/install/stable/" + sha
+		if mac := s.Releases.MacStableSHA(); mac != "" && s.Stable.Seen(mac) {
+			out["client_version_macos"] = mac
+			out["client_url_macos"] = s.hubURL(r) + "/install/stable/" + mac
+			// how far it trails stable: `fleet doctor`'s channel row
+			if n, since := s.Releases.MacLag(); n > 0 {
+				out["stable_macos_behind"] = n
+				if !since.IsZero() {
+					out["stable_macos_behind_since"] = since.UTC().Format(time.RFC3339)
+				}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

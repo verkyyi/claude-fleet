@@ -159,6 +159,9 @@ func (s *Server) relayJudge2(tok string, now time.Time) relayVerdict {
 	} else if rev != nil {
 		return relayVerdict{why: c.Machine + " was revoked"}
 	}
+	if why := machineDenied(settings, c.Machine, c.Principal); why != "" {
+		return relayVerdict{why: c.Machine + ": " + MachineDisabledWord + "：" + why}
+	}
 	return relayVerdict{ok: true, who: c.Login + "@" + c.Machine}
 }
 

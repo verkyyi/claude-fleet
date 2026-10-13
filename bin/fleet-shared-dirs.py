@@ -2,8 +2,9 @@
 """fleet-shared-dirs.py — the machine's shared dirs, each login's files its own (issue #2299).
 
 /Users/Shared/claude-fleet (/var/tmp/claude-fleet off macOS) holds what every
-login on the box shares: heavy/ (fleet-heavy.sh's machine-wide slots, #1295) and
-sessions/ (each login's live session count, #1301). Both stay 1777 — any login
+login on the box shares: heavy/ (fleet-heavy.sh's machine-wide slots, #1295),
+sessions/ (each login's live session count, #1301) and gh/<repo>/ (the GitHub reads
+the logins share per repo, #3529). All stay 1777 — any login
 may add its own file, the sticky bit keeps the others' — but that only holds
 when nobody but root OWNS the dirs (a sticky dir's owner may delete anything in
 it) and when no file is anyone's to rewrite. Before this the first login to run
@@ -21,8 +22,12 @@ This is the root half, the node supervisor's `shared-dirs` task (every 60 s):
   * the old shared heavy/events.log (0666, compat-1v) becomes root's 0644: an
     older fleet-heavy's append fails quietly, the new one writes events.<login>.log;
   * a squatter is swept: heavy/{hold,wait}.<login>.<pid> and events.<login>.log,
-    sessions/<login> — any such file not owned by <login> (or not a regular file)
-    is removed, and a hold/wait whose pid is gone with it.
+    sessions/<login>, gh/<repo>/fetch.<kind>.<login> — any such file not owned by
+    <login> (or not a regular file) is removed, and a hold/wait whose pid is gone
+    with it;
+  * gh/ and every gh/<repo>/ are root's 1777 too (the login that made one first
+    must not be able to delete the others' copies); a pub.<login>/ another login
+    made is left — the reader refuses it (fleet-gh-lib.sh _fleet_gh_owned_by).
 
 A login's file is its own when the file's owner is that account by name, or by
 its home dir's basename (fleet_machine_login keys on $HOME's basename).
@@ -46,6 +51,7 @@ ROOT = os.environ.get("FLEET_SHARED_ROOT") or ("/Users/Shared/claude-fleet" if M
 SLOTS = 16
 OWNED = re.compile(r"^(hold|wait)\.([A-Za-z0-9._-]+)\.(\d+)$")
 EVENTS = re.compile(r"^events\.([A-Za-z0-9._-]+)\.log$")
+CLAIM = re.compile(r"^fetch\.[a-z]+\.([A-Za-z0-9._-]+)$")
 TMP_AGE = 3600
 
 
@@ -188,6 +194,19 @@ class Pass:
             if not owned_by(st, n):
                 self.act("rm %s (not %s's — uid %d)" % (p, n, st.st_uid), os.unlink, p)
 
+    def sweep_gh_repo(self, d):
+        for n in sorted(os.listdir(d)):
+            m = CLAIM.match(n)
+            if not m:
+                continue
+            p = os.path.join(d, n)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if not owned_by(st, m.group(1)):
+                self.act("rm %s (not %s's — uid %d)" % (p, m.group(1), st.st_uid), os.unlink, p)
+
     def sweep_tmp(self, p):
         try:
             st = os.lstat(p)
@@ -234,6 +253,14 @@ def main(argv):
         ps.sweep_heavy(heavy)
     if os.path.isdir(sessions):
         ps.sweep_sessions(sessions)
+    gh = os.path.join(root, "gh")
+    if os.path.isdir(gh) and not os.path.islink(gh):
+        ps.ensure_dir(gh)
+        for n in sorted(os.listdir(gh)):
+            d = os.path.join(gh, n)
+            if os.path.isdir(d) and not os.path.islink(d):
+                ps.ensure_dir(d)
+                ps.sweep_gh_repo(d)
     for n in ps.notes:
         print(n)
     if check:

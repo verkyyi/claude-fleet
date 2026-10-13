@@ -341,6 +341,7 @@ type FleetView struct {
 	State        string    `json:"state"`
 	Count        int       `json:"count"`
 	Availability string    `json:"availability"` // online | lost
+	Disabled     string    `json:"disabled,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
 	AgeSec       float64   `json:"age_sec"`
 }
@@ -348,13 +349,17 @@ type FleetView struct {
 // FleetSession is one window of one fleet on one machine — the row of "my
 // sessions". The worker fields are fleet-control.py's, verbatim.
 type FleetSession struct {
-	WorkerID     *string        `json:"worker_id"`
-	MachineName  string         `json:"machine_name"`
-	OSUser       string         `json:"os_user"`
-	FleetID      string         `json:"fleet_id"`
-	FleetName    string         `json:"fleet_name"`
-	Availability string         `json:"availability"`
-	Worker       map[string]any `json:"worker"`
+	WorkerID     *string `json:"worker_id"`
+	MachineName  string  `json:"machine_name"`
+	OSUser       string  `json:"os_user"`
+	FleetID      string  `json:"fleet_id"`
+	FleetName    string  `json:"fleet_name"`
+	Availability string  `json:"availability"`
+	// Disabled is why the person's machine allowlist leaves this machine
+	// out (claude-fleet#3824; Availability "disabled"): the session is kept,
+	// it cannot be used — 已停用（管理员限制）.
+	Disabled string         `json:"disabled,omitempty"`
+	Worker   map[string]any `json:"worker"`
 	// ObservedAt is when the hub last heard this fleet's window list, so a
 	// lost machine's rows can say how old they are (claude-fleet#1429).
 	ObservedAt time.Time `json:"observed_at"`
@@ -373,6 +378,8 @@ type FleetSession struct {
 type FleetNode struct {
 	MachineName  string `json:"machine_name"`
 	Availability string `json:"availability"`
+	// Disabled: as FleetSession's (claude-fleet#3824).
+	Disabled string `json:"disabled,omitempty"`
 	// Sessions is nil when a fleet of the caller's on this machine could not
 	// be read (state "unknown", claude-fleet#1465): its rows are missing, so
 	// the count is unknown — the status line draws "?", never 0.
@@ -488,6 +495,20 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	if err != nil {
 		used = nil // the list stands without its counts
 	}
+	// The person's machine allowlist (claude-fleet#3824): a heard machine it
+	// leaves out reads "disabled", with the reason — never as one to enter.
+	mallow, err := s.machineAllowFor(p.Person)
+	if err != nil {
+		return nil, err
+	}
+	for i := range views {
+		if views[i].Availability == "lost" {
+			continue
+		}
+		if why := s.denyEndpoint(mallow, rows[i].EndpointID, rows[i].Hostname); why != "" {
+			views[i].Availability, views[i].Disabled = MachineAvailDisabled, MachineDisabledWord+"："+why
+		}
+	}
 	for i, r := range rows {
 		n := nodes[r.Hostname]
 		if n == nil {
@@ -498,7 +519,7 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 		if a := views[i].Availability; a != "lost" && n.Availability == "lost" {
 			// Heard through any login: online, or maintenance (#1427) — the
 			// flag is the machine's, so its heard logins all say the same.
-			n.Availability = a
+			n.Availability, n.Disabled = a, views[i].Disabled
 		}
 		if r.ObservedAt.After(n.ObservedAt) {
 			n.ObservedAt = r.ObservedAt
@@ -531,7 +552,7 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 				id = &v
 			}
 			fs := FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
-				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Worker: w,
+				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Disabled: views[i].Disabled, Worker: w,
 				ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()}
 			if id != nil {
 				fs.TokensToday = used[*id]

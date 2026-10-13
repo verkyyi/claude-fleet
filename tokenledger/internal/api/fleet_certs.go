@@ -216,10 +216,20 @@ func (s *Server) managedLoginsOf(pid string) ([]string, map[string]bool, map[str
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// A machine the person's machine allowlist leaves out (claude-fleet#3824)
+	// is not among their logins: no certificate principal, route, ssh config,
+	// relay or home there — the account itself stays.
+	allow, err := s.machineAllowFor(pid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	seen, hosts, byHost := map[string]bool{}, map[string]bool{}, map[string]string{}
 	var logins []string
 	for _, a := range accts {
 		if a.State != store.AccountActive || !a.Managed() || !control.ValidExistingLogin(a.Login) {
+			continue
+		}
+		if allow.deny(a.Hostname) != "" {
 			continue
 		}
 		hosts[a.Hostname] = true
@@ -248,6 +258,9 @@ func (s *Server) fleetLoginsOf(pid string) (*store.Principal, []string, map[stri
 		return nil, nil, nil, err
 	}
 	if len(logins) == 0 {
+		if off, derr := s.disabledMachinesOf(pid); derr == nil && len(off) > 0 {
+			return p, nil, hosts, &machineOffErr{off[0].Reason}
+		}
 		return p, nil, hosts, s.noAccountReason(pid)
 	}
 	return p, logins, hosts, nil

@@ -387,7 +387,7 @@ class T(unittest.TestCase):
         self.assertEqual(envs["ACTIONS_RUNNER_INPUT_JITCONFIG"], "JITCONFIG-1")
         self.assertEqual(envs["ACTIONS_RUNNER_HOOK_JOB_STARTED"], GATE)
         self.assertEqual(envs["HOME"], b.home)
-        self.assertEqual(envs["CI_GATE_WORKFLOWS"], "release-train.yml")
+        self.assertEqual(envs["CI_GATE_WORKFLOWS"], "release-train.yml mac-follow.yml")
         leaked = [k for k in envs if k.startswith(("FLEET_", "CCQUOTA_")) or k in ("GH_TOKEN", "GITHUB_TOKEN")]
         self.assertEqual(leaked, [])
         self.assertNotIn(TOKEN, open(os.path.join(b.home, "seen.env")).read())
@@ -471,6 +471,9 @@ class T(unittest.TestCase):
 
         self.assertEqual(gate(), 0)
         self.assertEqual(gate(GITHUB_EVENT_NAME="workflow_dispatch"), 0)
+        # the macOS follow after a release (issue #3869): its own workflow, workflow_run
+        self.assertEqual(gate(CI_GATE_WORKFLOWS="release-train.yml mac-follow.yml", GITHUB_EVENT_NAME="workflow_run",
+                              GITHUB_WORKFLOW_REF="o/r/.github/workflows/mac-follow.yml@refs/heads/master"), 0)
         for bad in ({"GITHUB_EVENT_NAME": "pull_request"}, {"GITHUB_EVENT_NAME": "pull_request_target"},
                     {"GITHUB_HEAD_REF": "evil"}, {"GITHUB_REF": "refs/heads/evil"},
                     {"GITHUB_REF": "refs/pull/1/merge"}, {"GITHUB_REPOSITORY": "x/r"},

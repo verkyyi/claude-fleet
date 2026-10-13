@@ -1,3 +1,5 @@
+# Example values (claude-fleet#3630): a deployment's own copy — ours is in its
+# private deploy repo — replaces this directory's files at deploy time.
 # Beside the user pods in fleet-workers (#3548). Applied by a person (../README.md):
 # pin each image by digest, and name the disks' class (an encrypted ESSD class).
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -9,10 +11,10 @@ images:
   # mirrored into the cluster's registry from docker.io (verdaccio/verdaccio:6,
   # gomods/athens:v0.19.2) and built from ../pypi-image — pinned by digest at apply
   - name: fleet-npm-cache
-    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/verdaccio
+    newName: registry.example.com/acme/verdaccio
   - name: fleet-pypi-cache
-    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/fleet-devpi
+    newName: registry.example.com/acme/fleet-devpi
   - name: fleet-go-cache
-    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/athens
+    newName: registry.example.com/acme/athens
 patches:
   - path: upstreams.yaml

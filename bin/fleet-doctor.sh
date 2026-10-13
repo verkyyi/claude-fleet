@@ -633,17 +633,21 @@ if [ -f "$_gh_lib" ] && [ -f "$_gh_log" ]; then
       if (mu > 0) printf " · X-RateLimit-Used max %d", mu
     }' "$_gh_log" 2>/dev/null)
 fi
-# One account, one set of background reads (issue #1271): which login of this
-# token fetches (leader) and which read its copy (follower). Off → no clause.
+# Background reads shared per repo (issues #1271, #3529): whose copies this login
+# takes, and which repos it may share at all (its own token reads them, public).
+# Off → no clause.
 _gh_share=''
 # shellcheck disable=SC2016
 [ -f "$_gh_lib" ] && _gh_share=$(bash -c '[ -f "$2" ] && . "$2" >/dev/null 2>&1; . "$1" || exit 1
   fleet_gh_share_on || exit 0
-  me=$(fleet_gh_share_me)
-  if lead=$(fleet_gh_leader); then
-    if [ "$lead" = "$me" ]; then echo "background reads: leader ($me)"
-    else echo "background reads: follower of $lead"; fi
-  else echo "background reads: no live leader — this login fetches"; fi' _ "$_gh_lib" "$(dirname "$0")/../fleet.conf" 2>/dev/null)
+  ok=0 no=0
+  for f in "$(fleet_gh_state_dir)"/gh-share/*.access; do
+    [ -f "$f" ] || continue
+    read -r _ v < "$f"; case "$v" in ok) ok=$((ok + 1)) ;; *) no=$((no + 1)) ;; esac
+  done
+  printf "background reads: shared per repo (%s shared · %s not)" "$ok" "$no"
+  if [ -n "${FLEET_GH_SHARE_TRUST:-}" ]; then printf " · takes copies from: %s\n" "$FLEET_GH_SHARE_TRUST"
+  else printf " · takes no copies (FLEET_GH_SHARE_TRUST empty)\n"; fi' _ "$_gh_lib" "$(dirname "$0")/../fleet.conf" 2>/dev/null)
 _gh_hour="${_gh_hour}${_gh_share:+${_gh_hour:+ · }$_gh_share}"
 if [ -n "$_gh_rows" ]; then
   _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
@@ -855,6 +859,17 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       NONE)     info install "no stable tag (refs/tags/stable) on the remote yet — nothing for installs to follow; set it with \`fleet-stable.sh move <sha>\`" ;;
       OFFTRUNK) info install "stable (refs/tags/stable) at $st_sha is not on ${st_trunk%% *} — the next \`fleet-stable.sh move\` must come from trunk" ;;
       *)        info install "could not read the stable tag — its distance from trunk is unknown, NOT 0" ;;
+    esac
+  fi
+  # The release lane (issue #3868, EPIC #3863 C5): which tag THIS machine
+  # follows and how far behind it is, beside the hub's two lanes — Linux on
+  # stable, a Mac on stable-macos. No row at all when no Mac lane is set.
+  if [ -f "$(dirname "$0")/fleet-installs.sh" ]; then
+    chl=$(sh "$(dirname "$0")/fleet-installs.sh" --channel 2>/dev/null | head -n 1)
+    case "${chl%%	*}" in
+      PASS) pass channel "${chl#*	}" ;;
+      INFO) info channel "${chl#*	}" ;;
+      WARN) warn channel "${chl#*	}" ;;
     esac
   fi
   # Is THIS login following stable, and are the others (issue #1123, EPIC #1117

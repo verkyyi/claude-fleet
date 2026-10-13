@@ -52,8 +52,33 @@ on:
         type: string
         required: false
         default: ''
+      # The release train's one rerun (issue #3866): a red test runs once more; green
+      # then is FLAKY and the shard stays green. Empty — the PR gate, the nightly — never
+      # reruns anything: they want to see the real red.
+      retry_red:
+        description: 'run-selftests.sh --retry-red <n> (0 or 1) — the train only'
+        type: string
+        required: false
+        default: ''
+      drill_flaky:
+        description: 'a test whose FIRST run is counted red (the flaky drill) — the train only'
+        type: string
+        required: false
+        default: ''
+      # The release train's Linux half in the Shenzhen cluster (issue #3864) — ONLY
+      # release-train.yml passes these; empty keeps every step as before.
+      mirror:
+        description: 'a git URL holding the commit (the cluster mirror): fetched there first, actions/checkout from GitHub when it fails — the train only'
+        type: string
+        required: false
+        default: ''
+      of:
+        description: 'N of --shard K/N when the matrix is a subset (a rescue of lost shards); empty = strategy.job-total'
+        type: string
+        required: false
+        default: ''
       record:
-        description: 'upload each shard FAIL / QUARANTINE lines as train-result-<os>-<K> — the train only'
+        description: 'upload each shard FAIL / QUARANTINE / FLAKY lines as train-result-<os>-<K> — the train only'
         type: boolean
         required: false
         default: false
@@ -99,11 +124,51 @@ jobs:
     # fleet-ci test comes first ("macOS" is among its labels).
     timeout-minutes: ${{ inputs.job_minutes != '' && fromJSON(inputs.job_minutes) || contains(inputs.runs_on, 'fleet-ci') && 25 || contains(inputs.runs_on, 'macos') && 60 || 15 }}
     steps:
+      - name: Fetch the commit from the cluster's git mirror
+        # issue #3864: GitHub is far from the Shenzhen cluster; its mirror polls
+        # GitHub every few seconds. Not there within ~30 s (or no mirror) ⇒ the
+        # GitHub checkout below, exactly as on any other runner.
+        id: mirror
+        if: inputs.mirror != '' && inputs.sha != ''
+        continue-on-error: true
+        env:
+          MIRROR: ${{ inputs.mirror }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -u
+          t0=$(date +%s)
+          git init -q . && git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" || exit 1
+          for i in 1 2 3 4 5 6; do
+            if timeout 60 git fetch -q --no-tags "$MIRROR" '+refs/heads/master:refs/remotes/origin/master' \
+               && git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+              git checkout -q --detach "$SHA" || break
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              echo "fetched ${SHA:0:7} from the cluster mirror in $(( $(date +%s) - t0 ))s (try $i)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::the cluster mirror ($MIRROR) has no ${SHA:0:7} after $(( $(date +%s) - t0 ))s — checking out from GitHub"
+          rm -rf .git
+          exit 1
+
       - uses: actions/checkout@v4
+        if: steps.mirror.outputs.ok != 'true'
         with:
           ref: ${{ inputs.sha }}
           # --changed diffs against <base>; it must be in the clone.
           fetch-depth: 0
+
+      - name: Which runner image
+        # issue #3864: the fleet-ack set's image (fleet-ci-runner) says the text it
+        # was built from; an older one runs anyway, the summary says so.
+        if: inputs.mirror != ''
+        run: |
+          [ -n "${FLEET_CI_RUNNER_TAG:-}" ] || { echo "runner $RUNNER_NAME · not a fleet-ci-runner image"; exit 0; }
+          want=$(bash extras/ci-runner/tag.sh 2>/dev/null || echo '?')
+          echo "runner $RUNNER_NAME · image $FLEET_CI_RUNNER_TAG · this commit's extras/ci-runner $want"
+          [ "$FLEET_CI_RUNNER_TAG" = "$want" ] \
+            || echo "::warning::this runner's image is $FLEET_CI_RUNNER_TAG, the commit's extras/ci-runner is $want — point fleet-ack at the new tag (deploy/k8s/runners/README.md)"
 
       - name: Assert a BSD toolchain
         # macOS only: the premise of the BSD half, checked rather than assumed
@@ -175,13 +240,16 @@ jobs:
           QUARANTINE: ${{ inputs.quarantine }}
           PREV_FAILS: ${{ inputs.prev_fails }}
           DRILL_RED: ${{ inputs.drill_red }}
+          # The train's one rerun (issue #3866): empty everywhere but the train.
+          RETRY_RED: ${{ inputs.retry_red }}
+          DRILL_FLAKY: ${{ inputs.drill_flaky }}
           # The train's per-attempt budget (issue #3241); empty on the PR gate.
           # Never a bare BUDGET: the step's env is every test's env, and a test
           # whose knob reads ${BUDGET:-5} got the shard's 519 s (issue #3371).
           SHARD_BUDGET_SECS: ${{ inputs.budget_secs }}
         run: |
           set -o pipefail
-          set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
+          set -- --shard "${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
           [ "$OURS" != true ] || set -- --durations selftest-durations-fleet-ci.txt "$@"
           if [ -n "$CHANGED_BASE" ] && [ -n "$QUARANTINE" ]; then
             printf '%s\n' "$QUARANTINE" > "$RUNNER_TEMP/quarantine.list"; set -- --quarantine "$RUNNER_TEMP/quarantine.list" "$@"
@@ -190,6 +258,8 @@ jobs:
             printf '%s\n' "$PREV_FAILS" > "$RUNNER_TEMP/prev-fails"; set -- --prev-fails "$RUNNER_TEMP/prev-fails" "$@"
           fi
           [ -z "$DRILL_RED" ] || set -- --drill-red "$DRILL_RED" "$@"
+          [ -z "$RETRY_RED" ] || set -- --retry-red "$RETRY_RED" "$@"
+          [ -z "$DRILL_FLAKY" ] || set -- --drill-flaky "$DRILL_FLAKY" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
           if [ -n "$SHARD_BUDGET_SECS" ]; then
             # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns
@@ -204,14 +274,14 @@ jobs:
         # that made it slower. A cut-short shard names the test in flight.
         run: |
           {
-            echo "## selftests · ${{ runner.os }} · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo "## selftests · ${{ runner.os }} · shard ${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
             echo
             echo '```'
             [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
             for c in selftests.log.cut-*; do
               [ -f "$c" ] || continue
               echo "attempt ${c##*.cut-} was cut short (no test red) and rerun — it was in:"
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/{h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
             done
             if grep -q '^-* slowest' selftests.log 2>/dev/null; then
               sed -n '/^-* slowest/,$p' selftests.log
@@ -219,7 +289,7 @@ jobs:
               echo 'nothing related landed in this shard'
             else
               echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT |FLAKY )/{h=""}
                    END{print "  " (h ? h : "(none identified — read the log)")}' \
                 selftests.log 2>/dev/null
             fi
@@ -229,23 +299,30 @@ jobs:
       - name: This shard's verdicts for the train
         # issue #3243: the train's record job reads every shard's FAIL / TIMEOUT /
         # QUARANTINE lines (a cut-short shard has none — that is C9's rerun, not a red
-        # to count). A TIMEOUT is a red test by name (issue #3412).
+        # to count). A TIMEOUT is a red test by name (issue #3412). A FLAKY line
+        # (issue #3866) brings the head of both its runs, for its issue.
         if: always() && inputs.record
-        run: grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt 2>/dev/null || true
+        run: |
+          grep -E '^(FAIL|TIMEOUT|QUARANTINE|FLAKY) ' selftests.log > train-result.txt 2>/dev/null || true
+          sh bin/fleet-train-quarantine.sh heads --log selftests.log --out . || true
       - name: Upload this shard's verdicts
         if: always() && inputs.record
         uses: actions/upload-artifact@v4
         with:
           name: train-result-${{ runner.os }}-${{ matrix.shard }}
-          path: train-result.txt
+          path: |
+            train-result.txt
+            train-flaky-*.txt
           retention-days: 3
+          # a rescue reruns a shard whose runner went away (issue #3864)
+          overwrite: true
           if-no-files-found: ignore
 
       - name: Name the failures as macOS-only
         if: failure() && runner.os == 'macOS'
         run: |
           {
-            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
             echo
             echo "A failure HERE that the Linux half does not share is a BSD-toolchain"
             echo "or bash-3.2 difference (issue #696) — not a broken test."

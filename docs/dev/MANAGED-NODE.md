@@ -722,7 +722,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 
 ## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
 
-每台托管 Mac 最多挂一台 GitHub Actions 测试机，给列车（`release-train.yml`）的 macOS 测试用，
+每台托管 Mac 最多挂一台 GitHub Actions 测试机，给发布之后的 macOS 跟随（`mac-follow.yml`，#3869；之前是列车 `release-train.yml`）用，
 PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不做：没有子进程、`state.json`
 没有 `ci_runner`、`status` 没有那一行，字节不变。
 
@@ -755,8 +755,8 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   `run.sh` 降权到 `fleet-ci`、`nice 10`、环境从零搭（没有 FLEET_* / CCQUOTA_* / gh 令牌，JIT 配置走
   `ACTIONS_RUNNER_INPUT_JITCONFIG` 不进 argv）。
 - **只接列车**：`ACTIONS_RUNNER_HOOK_JOB_STARTED` = root 名下的 `bin/fleet-ci-job-gate.sh`，在任务任何一步
-  之前核对 仓库 · 事件（push / workflow_dispatch / schedule）· `refs/heads/master` · 没有 `GITHUB_HEAD_REF` ·
-  workflow 在 `FLEET_CI_WORKFLOWS`（默认 `release-train.yml`）里，缺一项就拒。仓库设置仍保持
+  之前核对 仓库 · 事件（push / workflow_dispatch / schedule / workflow_run）· `refs/heads/master` · 没有 `GITHUB_HEAD_REF` ·
+  workflow 在 `FLEET_CI_WORKFLOWS`（默认 `release-train.yml mac-follow.yml`，#3869）里，缺一项就拒。仓库设置仍保持
   「外部贡献者的 workflow 需批准」。
 - **让路**：铸下一趟前看 内存压力（≥ warn）· 空闲内存够不够「底线（10% RAM，至少 2 GB）+ 一个会话 1.5 GB
   + 一趟 4 GB」· 每核负载 > 0.75 · 重活槽全满或有人排队——任一项就 `paused:<为什么>`，不铸；等活的空闲
@@ -769,7 +769,7 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   `GET /v1/fleet/ci-runners`（仓库密钥 `FLEET_HUB_VIEWER_TOKEN` = 入口的 viewer 令牌；不用 GitHub 管理员令牌）：
   在线且 idle / busy 的有 n 台 ⇒ macOS 段排 `[self-hosted, macOS, fleet-ci]`，min(n, 2) 片、每片 25 分钟上限，
   分片按 `bin/selftest-durations-fleet-ci.txt`（自家机器自己的耗时）；一台没有、入口不通、没设密钥 ⇒
-  `macos-latest` 2 片，车照开。`macos-wait`（`… watch`）把每片的机器名和排队时间写进这趟的摘要；
+  `macos-latest` 2 片，照样跑（#3869 起这一段在 `mac-follow.yml`，不挡发布）。`macos-wait`（`… watch`）把每片的机器名和排队时间写进这趟的摘要；
   排给自家机器 20 分钟没开的，写「自家测试机没接」、这趟红并取消。设密钥：
   `gh secret set FLEET_HUB_VIEWER_TOKEN --repo verkyyi/claude-fleet`（粘贴，不进命令行）。
   BREAK-IT：`train-own-runners-gone` · `train-own-runner-silent`。
@@ -848,7 +848,7 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   | `kill` | pid | 只限受管登录的进程或核心自己的任务 |
   | `memguard` | level | `fleet-memguard.sh --once`（once · report） |
   | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`） |
-  | `switch` | sha | `<state>/staging/<sha>/`（降权更新器放的，#3670）或 `<root>/<sha>/`：staging 先**整份复制**成 root 自己的 `<root>/.incoming-<sha>`（新 inode、权限重置），按它 `staged.json` 的表从已验的工件填 `<root>/tools/`，再用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；`bin/ccquota` 用机器的固定身份签（`fleet_node_codesign.py`），移进 `<root>/<sha>/`，再 `.prev` = 旧、`current` = 新 |
+  | `switch` | sha | `<state>/staging/<sha>/`（降权更新器放的，#3670）或 `<root>/<sha>/`：staging 先**整份复制**成 root 自己的 `<root>/.incoming-<sha>`（新 inode、权限重置），按它 `staged.json` 的表从已验的工件填 `<root>/tools/`，再用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；`bin/ccquota` 用机器的固定身份签（`fleet_node_codesign.py`），移进 `<root>/<sha>/`，信任锚按发布教的更新（链里锚直接担保的根 → 新锚、旧的留 `.prev`；吊销的 id 只增——锚只由核心写，#3835），再 `.prev` = 旧、`current` = 新 |
   | `rollback` | — | `current` ⇄ `.prev`，目标同样复核 |
   | `update` | step | 降权更新器的 root 一半（#3670）：`<current>/bin/fleet-node-update.py root <step>` 以 root 跑——`outside`（启动缓存、管理员 agent 的 ccquota 与重启、各登录的工具链接）· `credsep`（代码副本刷新 + 池同步）· `prune`（清旧版本）；只收名字，不收 argv |
 
@@ -938,7 +938,8 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
 
 BREAK-IT：`fleetnode-compromised`（`bin/fleet-break-it-core-selftest.sh`）；
 `bin/fleet-node-core-selftest.py` 的 K（新动作）· L（对端按连接重读）· M（坐席守护、交接、布局）。
-更新器降权（#3670）：BREAK-IT `root-core-seat-stage` · `root-core-update-step`；同一文件的 N（seat 跑一轮：
+更新器降权（#3670）：BREAK-IT `root-core-seat-stage` · `root-core-update-step` · `seat-repin`（#3835：
+seat 拉取时 `--pubkey` 指向自己 `<state>/staging/.pin/` 里锚的副本，re-pin / 吊销表由核心在 `switch` 写）；同一文件的 N（seat 跑一轮：
 staging → 核心复制、填工具缓存、签名、切换 → `update` 各步 → 下一轮提交）。入口地址是 root 从
 `machine.env` 抄出的 `<state>/hub-url`（0644，只有地址）——seat 读不了 machine.env。
 
