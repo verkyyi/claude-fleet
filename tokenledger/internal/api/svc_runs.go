@@ -565,7 +565,7 @@ func (s *Server) SvcRunFinishDetail(id int64, state, code, detail string, res *S
 			end.ErrorCode, detail = SvcErrInfra, SvcErrInfra
 		}
 		if d := strings.TrimSpace(detail); d != "" && d != end.ErrorCode {
-			detail = end.ErrorCode + ": " + truncate(d, 300)
+			detail = end.ErrorCode + ": " + truncate(strings.Join(strings.Fields(d), " "), 300) // one log line
 		} else {
 			detail = end.ErrorCode
 		}
