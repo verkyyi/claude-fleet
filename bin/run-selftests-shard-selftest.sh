@@ -418,6 +418,16 @@ else
     || fail "fail-fast must stay false: one red shard cancelling its siblings hides whether the rest were green, which is what makes people re-run instead of read"
   ok "a red shard does not cancel the others (fail-fast: false)"
 
+  # mac-follow runs THIS workflow on a stable that can predate an option master
+  # just started passing (issue #3915: `--retry-red` on an older stable, exit 2 in
+  # every shard). Every option but --shard / --changed is asked of the checked-out
+  # run-selftests.sh first (`has`), and a missing shard runner falls back.
+  _bad=$(awk '/set -- --[a-z-]+ / && !/set -- --(shard|changed) / && !/! has --/ && !(prev ~ /&& has --/) { print } { prev = $0 }' "$WF")
+  [ -z "$_bad" ] || fail "selftests-shards.yml passes an option without asking the tree's run-selftests.sh (has --<opt>)" "$_bad"
+  grep -qE '\[ -n "\$SHARD_BUDGET_SECS" \] && \[ -f bin/fleet-shard-run\.sh \]' "$WF" \
+    || fail "selftests-shards.yml runs fleet-shard-run.sh without checking the tree has it"
+  ok "an option the tested tree's run-selftests.sh lacks is left off, not passed (#3915)"
+
   if [ -f "$GATE_WF" ]; then
     CHECKS=$((CHECKS + 1))
     grep -qE '^[[:space:]]*uses:[[:space:]]*\./\.github/workflows/selftests-shards\.yml' "$GATE_WF" \

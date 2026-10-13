@@ -258,20 +258,26 @@ jobs:
           SHARD_SOLO_SECS: ${{ inputs.solo_secs }}
         run: |
           set -o pipefail
+          # This workflow is master's, the tree is `inputs.sha`'s: mac-follow tests a
+          # stable that can predate an option master just started passing (issue
+          # #3915 — `--retry-red` on a stable without it: exit 2 in 5 s, every Mac
+          # held). An option the checked-out runner does not know is left off, loudly.
+          has() { grep -qE -- "^[[:space:]]*$1\)" bin/run-selftests.sh && return 0
+                  echo "::warning::bin/run-selftests.sh at $(git rev-parse --short HEAD) has no $1 — running without it"; return 1; }
           set -- --shard "${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
-          [ "$OURS" != true ] || set -- --durations selftest-durations-fleet-ci.txt "$@"
-          [ -z "$SHARD_SOLO_SECS" ] || set -- --solo "$SHARD_SOLO_SECS" "$@"
-          if [ -n "$CHANGED_BASE" ] && [ -n "$QUARANTINE" ]; then
+          [ "$OURS" != true ] || ! has --durations || set -- --durations selftest-durations-fleet-ci.txt "$@"
+          [ -z "$SHARD_SOLO_SECS" ] || ! has --solo || set -- --solo "$SHARD_SOLO_SECS" "$@"
+          if [ -n "$CHANGED_BASE" ] && [ -n "$QUARANTINE" ] && has --quarantine; then
             printf '%s\n' "$QUARANTINE" > "$RUNNER_TEMP/quarantine.list"; set -- --quarantine "$RUNNER_TEMP/quarantine.list" "$@"
           fi
-          if [ -n "$CHANGED_BASE" ] && [ -n "$PREV_FAILS" ]; then
+          if [ -n "$CHANGED_BASE" ] && [ -n "$PREV_FAILS" ] && has --prev-fails; then
             printf '%s\n' "$PREV_FAILS" > "$RUNNER_TEMP/prev-fails"; set -- --prev-fails "$RUNNER_TEMP/prev-fails" "$@"
           fi
-          [ -z "$DRILL_RED" ] || set -- --drill-red "$DRILL_RED" "$@"
-          [ -z "$RETRY_RED" ] || set -- --retry-red "$RETRY_RED" "$@"
-          [ -z "$DRILL_FLAKY" ] || set -- --drill-flaky "$DRILL_FLAKY" "$@"
+          [ -z "$DRILL_RED" ] || ! has --drill-red || set -- --drill-red "$DRILL_RED" "$@"
+          [ -z "$RETRY_RED" ] || ! has --retry-red || set -- --retry-red "$RETRY_RED" "$@"
+          [ -z "$DRILL_FLAKY" ] || ! has --drill-flaky || set -- --drill-flaky "$DRILL_FLAKY" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
-          if [ -n "$SHARD_BUDGET_SECS" ]; then
+          if [ -n "$SHARD_BUDGET_SECS" ] && [ -f bin/fleet-shard-run.sh ]; then
             # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns
             bash bin/fleet-shard-run.sh --budget "$SHARD_BUDGET_SECS" --log selftests.log -- bash bin/run-selftests.sh "$@"
           else
