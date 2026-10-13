@@ -783,7 +783,14 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   jobs) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
   `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert, plus one
   more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
-  is spawned (issue #3120). So **don't run the
+  is spawned (issue #3120). **The selection's backstop is a nightly full run**
+  (issue #3871): `selftests-nightly.yml` runs the whole Linux suite on stable at
+  06:17 Beijing (the train's pick and `fleet-train-plan.sh --full`, no rerun, no
+  quarantine); each red test goes to `bin/fleet-nightly-miss.sh`, which bisects it
+  to the merge it went red at and asks `run-selftests.sh --changed <M^> --list-only`
+  there — not listed ⇒ ONE `selection-miss` issue (`--breakage-key nightly-<test>`)
+  naming the merge, its files and the fix (name the file in the test; BREAK-IT
+  `selection-miss-silent`). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
   gate or `--changed`. A new selftest is selected when its own file changes or

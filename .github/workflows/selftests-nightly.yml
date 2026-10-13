@@ -1,0 +1,288 @@
+name: selftests nightly
+
+# The whole Linux suite, once a day, on stable (issue #3871, EPIC #3863 C8).
+#
+# About 65 merges a day reach stable through the release train, and the train
+# tests only what each change SELECTS (`run-selftests.sh --changed <stable>`: a
+# test runs when its source names a changed file). A test that reads a file it
+# never names goes red with no train running it — and nothing said so. This is
+# the backstop:
+#
+#   * 22:17 UTC = 06:17 Beijing (and workflow_dispatch: `sha`, default
+#     refs/tags/stable; `since`, the window's start) — `board` resolves the commit
+#     and the window: since = the first-parent commit a day before it (stable as
+#     the previous night saw it).
+#   * the Linux shards run the FULL suite (no base) on that commit through the one
+#     shared matrix (selftests-shards.yml), in the Shenzhen pool when
+#     FLEET_TRAIN_RUNNER names it (bin/fleet-train-runner.sh pick, the train's
+#     own pick; else ubuntu-latest), as wide as bin/fleet-train-plan.sh --full
+#     prices it. Never retry_red, never a quarantine: the nightly wants the real
+#     red (共同约定 5). A shard lost with its spot node is rerun on GitHub's
+#     runners (bin/fleet-train-runner.sh lost) — a lost runner, not a red test.
+#   * `report` writes the run's 全量 line (shards · tests · wall time) and, for every
+#     red test, bin/fleet-nightly-miss.sh: since which merge it is red (a bisect
+#     over the window's merges), and whether the train's selection at that merge
+#     listed it (`run-selftests.sh --changed <M^> --list-only`) — not listed ⇒ one
+#     `selection-miss` issue naming the merge, its files and the one-line fix;
+#     one issue per test (--breakage-key nightly-<test>), a later night a comment.
+#
+# Nothing here moves stable, releases or touches a machine.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('selftests nightly @ {0}', inputs.sha || 'stable') || 'selftests nightly' }}
+
+on:
+  schedule:
+    - cron: '17 22 * * *'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'the commit to test (default refs/tags/stable)'
+        type: string
+        required: false
+        default: ''
+      since:
+        description: 'the window''s start for the miss analysis (default: a day before the commit)'
+        type: string
+        required: false
+        default: ''
+
+concurrency:
+  group: selftests-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  board:
+    name: board
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.board.outputs.sha }}
+      since: ${{ steps.board.outputs.since }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: the commit and the window
+        id: board
+        env:
+          SHA: ${{ inputs.sha || '' }}
+          SINCE: ${{ inputs.since || '' }}
+        run: |
+          set -u
+          git fetch -q --force origin 'refs/tags/stable:refs/tags/stable' || true
+          sha=$(git rev-parse --verify -q "${SHA:-refs/tags/stable}^{commit}") \
+            || { echo "::error::${SHA:-refs/tags/stable} is not a commit"; exit 1; }
+          if [ -n "$SINCE" ]; then
+            since=$(git rev-parse --verify -q "$SINCE^{commit}") || { echo "::error::$SINCE is not a commit"; exit 1; }
+          else
+            since=$(git rev-list -1 --first-parent --before="$(( $(git log -1 --format=%ct "$sha") - 86400 ))" "$sha")
+          fi
+          n=$( [ -z "$since" ] || git rev-list --first-parent --count "$since..$sha")
+          { echo "sha=$sha"; echo "since=$since"; } >> "$GITHUB_OUTPUT"
+          echo "### 🌙 全量：stable ${sha:0:7} · 窗口 ${since:0:7}..${sha:0:7}（${n:-0} 次合并）" >> "$GITHUB_STEP_SUMMARY"
+
+  linux-pick:
+    # The train's own pick (issue #3864): only when FLEET_TRAIN_RUNNER names a
+    # runner set; red or skipped ⇒ ubuntu-latest.
+    name: Linux 选机器
+    needs: board
+    if: vars.FLEET_TRAIN_RUNNER != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: fleet-ack-probe
+    outputs:
+      linux_runs_on: ${{ steps.pick.outputs.linux_runs_on }}
+      linux_where: ${{ steps.pick.outputs.linux_where }}
+      linux_mirror: ${{ steps.pick.outputs.linux_mirror }}
+      linux_slots: ${{ steps.pick.outputs.linux_slots }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+          sparse-checkout: bin
+      - name: the runner app's token
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLEET_RUNNERS_APP_ID }}
+          private-key: ${{ secrets.FLEET_RUNNERS_APP_KEY }}
+      - name: fleet-train-runner.sh pick
+        id: pick
+        env:
+          FLEET_TRAIN_RUNNER: ${{ vars.FLEET_TRAIN_RUNNER }}
+          FLEET_TRAIN_RUNNER_TOKEN: ${{ steps.app.outputs.token }}
+          FLEET_TRAIN_GIT_MIRROR: ${{ vars.FLEET_TRAIN_GIT_MIRROR }}
+        run: |
+          bash bin/fleet-train-runner.sh pick 2> pick.err
+          cat pick.err
+          echo "### $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
+
+  plan:
+    # The whole suite, priced off the durations table (bin/fleet-train-plan.sh
+    # --full): in the pool as wide as its free slots (≤ 44), else 12..20.
+    name: plan
+    needs: [board, linux-pick]
+    if: "!cancelled() && needs.board.result == 'success'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux_shards: ${{ steps.plan.outputs.linux_shards }}
+      linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
+      linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
+      linux_job_minutes: ${{ steps.plan.outputs.linux_job_minutes }}
+      linux_solo_secs: ${{ steps.plan.outputs.linux_solo_secs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+      - name: fleet-train-plan.sh --full
+        id: plan
+        env:
+          SLOTS: ${{ needs.linux-pick.outputs.linux_where == 'fleet-ack' && needs.linux-pick.outputs.linux_slots || '' }}
+        run: |
+          {
+            echo "### 预测（全量，按 bin/selftest-durations.txt）"
+            echo "| 段 | 选中 | 宽 | 最重一片 | 每次上限 | 步骤 |"
+            echo "|---|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bash bin/fleet-train-plan.sh --full --prefix linux ${SLOTS:+--slots "$SLOTS"}
+
+  linux:
+    name: Linux
+    needs: [board, plan, linux-pick]
+    if: "!cancelled() && needs.board.result == 'success' && needs.plan.result == 'success'"
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      sha: ${{ needs.board.outputs.sha }}
+      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+      mirror: ${{ needs.linux-pick.outputs.linux_mirror }}
+      shards: ${{ needs.plan.outputs.linux_shards }}
+      budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
+      solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}
+      record: true
+
+  linux-rescue-plan:
+    # Shards red only because their runner went away (a reclaimed spot node).
+    name: Linux 补跑?
+    needs: [board, linux]
+    if: "!cancelled() && vars.FLEET_TRAIN_RUNNER != '' && needs.linux.result == 'failure'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      lost: ${{ steps.lost.outputs.lost }}
+      total: ${{ steps.lost.outputs.total }}
+      covers: ${{ steps.lost.outputs.covers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+          sparse-checkout: bin
+      - name: fleet-train-runner.sh lost
+        id: lost
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash bin/fleet-train-runner.sh lost --prefix Linux 2> lost.err
+          cat lost.err
+          echo "### Linux 补跑：$(cat lost.err)" >> "$GITHUB_STEP_SUMMARY"
+
+  linux-rescue:
+    name: Linux rescue
+    needs: [board, plan, linux-rescue-plan]
+    if: "!cancelled() && needs.linux-rescue-plan.outputs.covers == 'true'"
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      sha: ${{ needs.board.outputs.sha }}
+      runs_on: ubuntu-latest
+      shards: ${{ needs.linux-rescue-plan.outputs.lost }}
+      of: ${{ needs.linux-rescue-plan.outputs.total }}
+      budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
+      solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}
+      record: true
+
+  report:
+    # The 全量 line, and every red test traced and filed (bin/fleet-nightly-miss.sh).
+    # Red only when a filing failed — the shards already carry the red.
+    name: 选漏分析
+    needs: [board, plan, linux, linux-rescue]
+    if: "!cancelled() && needs.board.result == 'success'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      issues: write     # one issue per red test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+          # the bisect walks the window's merges
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: train-result-*
+          path: results
+      - name: the run in one line
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANNED: ${{ needs.plan.outputs.linux_shards }}
+        run: |
+          set -u
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --paginate \
+            --jq '.jobs[] | [.name, (.conclusion // ""), (.started_at // ""), (.completed_at // "")] | @tsv' > jobs.tsv || true
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.run_started_at' 2>/dev/null || echo '')
+          python3 - "$started" "$PLANNED" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import datetime, json, sys
+          def t(s):
+              return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ") if s else None
+          rows = [l.rstrip("\n").split("\t") for l in open("jobs.tsv") if l.strip()]
+          shards = [r for r in rows if len(r) >= 4 and " / shard " in r[0] and r[0].startswith("Linux")]
+          ends = [t(r[3]) for r in shards if r[3]]
+          start = t(sys.argv[1])
+          wall = int((max(ends) - start).total_seconds()) if ends and start else None
+          red = sum(1 for r in shards if r[1] in ("failure", "timed_out"))
+          try:
+              planned = len(json.loads(sys.argv[2] or "[]"))
+          except ValueError:
+              planned = 0
+          print("### 全量：%d 片（计划 %d）· 红 %d 片 · 开始到最后一片跑完 %s" % (
+              len(shards), planned, red, "%dm%02ds" % divmod(wall, 60) if wall is not None else "?"))
+          PY
+          n=$(find results -name train-result.txt -exec cat {} + 2>/dev/null | grep -cE '^(FAIL|TIMEOUT) ' || true)
+          echo "红测试行：${n:-0}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: the label it files under
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          row=$(bash -c '. bin/fleet-lib.sh; fleet_labels_canonical' | grep '^selection-miss|') || exit 0
+          gh label create selection-miss --repo "$GITHUB_REPOSITORY" --force \
+            --color "$(printf '%s' "$row" | cut -d'|' -f2)" --description "$(printf '%s' "$row" | cut -d'|' -f3)" || true
+      - name: fleet-nightly-miss.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.board.outputs.sha }}
+          SINCE: ${{ needs.board.outputs.since }}
+        run: |
+          mkdir -p results
+          set -- --results results --sha "$SHA" --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" --dir .
+          [ -z "$SINCE" ] || set -- "$@" --since "$SINCE"
+          set +e
+          bash bin/fleet-nightly-miss.sh "$@" > miss.md; rc=$?
+          cat miss.md
+          if grep -q '^| [A-Za-z0-9._-]*-selftest\.sh ' miss.md; then
+            { echo; echo "### 选漏分析"; cat miss.md; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc
