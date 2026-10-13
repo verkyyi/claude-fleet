@@ -2,18 +2,19 @@
 # fleet-macos-watch.sh --repo <owner/name> [--session <fleet>] [--dry-run] [--now]
 #   — a red BSD half on master becomes ONE breakage issue and one alert (issues #2286, #3120).
 #
-# Since #2286 the macOS selftests no longer run on a pull request; since #3141 they
-# run in the release train (.github/workflows/release-train.yml, its `macOS / shard
-# K` jobs on the commit it boarded), and the full suite nightly
-# (selftests-macos.yml). A red BSD half means the train ships nothing, and nobody
+# Since #2286 the macOS selftests no longer run on a pull request; since #3869 they
+# run AFTER the release (.github/workflows/mac-follow.yml, its `macOS / shard K`
+# jobs on the stable it follows — #3141..#3868 they ran inside the release train),
+# and the full suite nightly (selftests-macos.yml). A red BSD half holds every Mac
+# on the previous version (refs/tags/stable-macos stays), never Linux, and nobody
 # watches the Actions tab. This script does (issue #3143, EPIC #3139 C4):
 #
-#   1. walks the workflow's (FLEET_MACOS_WORKFLOW, default release-train.yml)
+#   1. walks the workflow's (FLEET_MACOS_WORKFLOW, default mac-follow.yml)
 #      completed non-pull_request runs on master, newest first, and judges each by
 #      its macOS shard jobs only (`macOS / shard K`, the nightly's `macOS shard K`):
 #      one failed / timed out ⇒ red, all green ⇒ green, none or cancelled ⇒ no
-#      verdict (a train a red Linux shard stopped, one a newer push replaced). A
-#      train red for another stage is not the BSD half's;
+#      verdict (a follow with nothing to follow, one cancelled). A run red for
+#      another step is not the BSD half's;
 #   2. green → forgets what it filed, prints `green`, exit 0;
 #   3. red → names what is red (the failed job, the FAIL/TIMEOUT tests in its log)
 #      and since which commit (the red streak walked back to the last green run;
@@ -26,7 +27,11 @@
 #      #3120 (EPIC #3111 C9) no session starts by itself; sending a fixer is the
 #      person's, or a steward holder's (the fleet-steward plugin).
 #   4. remembers the run id it filed for, so the same red run is never re-filed
-#      (nor re-commented 「同一故障」) on every tick.
+#      (nor re-commented 「同一故障」) on every tick;
+#   5. the Mac lane held back (issue #3869): when the red streak began more than
+#      FLEET_MACOS_STALE_SECS ago (7200, 2 hours — the streak's first red run's
+#      created_at) with nothing green since, ONE more `breakage` alert says every
+#      Mac has sat on the previous version that long — once per streak.
 #
 # The walk reads at most FLEET_MACOS_WATCH_WALK (25) runs' jobs.
 #
@@ -37,7 +42,7 @@
 # FLEET_MACOS_WATCH=0 turns it off. --dry-run reads and prints the filing it
 # would make, files nothing and remembers nothing.
 #
-# State: $FLEET_CONF_DIR/global/macos-watch/<slug>.{stamp,filed}.
+# State: $FLEET_CONF_DIR/global/macos-watch/<slug>.{stamp,filed,stale}.
 # Exit: 0 green / filed / nothing to do · 1 the filing failed · 2 usage / unread.
 set -uo pipefail
 
@@ -63,12 +68,12 @@ done
 [ "${FLEET_MACOS_WATCH:-1}" = 0 ] && exit 0
 command -v gh >/dev/null 2>&1 || { printf 'fleet-macos-watch: gh not on PATH\n' >&2; exit 2; }
 
-WF="${FLEET_MACOS_WORKFLOW:-release-train.yml}"
+WF="${FLEET_MACOS_WORKFLOW:-mac-follow.yml}"
 BRANCH="${FLEET_MACOS_BRANCH:-master}"
 slug=$(fleet_slug "$repo")
 SD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/macos-watch"
 mkdir -p "$SD" 2>/dev/null
-stamp="$SD/$slug.stamp" memo="$SD/$slug.filed"
+stamp="$SD/$slug.stamp" memo="$SD/$slug.filed" stale="$SD/$slug.stale"
 log() { printf 'fleet-macos-watch: %s: %s\n' "$repo" "$*" >&2; }
 
 every="${FLEET_MACOS_WATCH_SECS:-600}"; case "$every" in ''|*[!0-9]*) every=600 ;; esac
@@ -79,11 +84,11 @@ if [ "$now" = 0 ] && [ "$dry" = 0 ]; then
 fi
 [ "$dry" = 1 ] || printf '%s\n' "$t" > "$stamp"
 
-# Completed non-PR runs, newest first: id<TAB>head_sha<TAB>conclusion<TAB>event.
+# Completed non-PR runs, newest first: id<TAB>head_sha<TAB>conclusion<TAB>event<TAB>created_at.
 rows=$(gh api "repos/$repo/actions/workflows/$WF/runs?branch=$BRANCH&status=completed&per_page=50" \
-         --jq '.workflow_runs[] | [(.id|tostring), .head_sha, (.conclusion // ""), .event] | @tsv' 2>/dev/null) \
+         --jq '.workflow_runs[] | [(.id|tostring), .head_sha, (.conclusion // ""), .event, (.created_at // "")] | @tsv' 2>/dev/null) \
   || { log "could not read the $WF runs"; exit 2; }
-rows=$(printf '%s\n' "$rows" | awk -F'\t' 'NF >= 4 && $4 !~ /^pull_request/ && $3 != "skipped"')
+rows=$(printf '%s\n' "$rows" | awk -F'\t' 'NF >= 4 && $4 !~ /^pull_request/ && $3 != "skipped" && $3 != "cancelled"')
 [ -n "$rows" ] || { log "no completed $WF run on $BRANCH yet"; exit 0; }
 
 # A run's BSD verdict from its macOS shard jobs: prints `green`, or `red` and then
@@ -100,25 +105,47 @@ mac_verdict() {
 }
 
 walk="${FLEET_MACOS_WATCH_WALK:-25}"; case "$walk" in ''|*[!0-9]*|0) walk=25 ;; esac
-rid='' rsha='' jobs='' start='' seen=0
-while IFS=$'\t' read -r id sha _ _; do
+rid='' rsha='' jobs='' start='' since='' seen=0
+while IFS=$'\t' read -r id sha _ _ created; do
   [ -n "$id" ] || continue
   seen=$((seen + 1)); [ "$seen" -le "$walk" ] || break
   v=$(mac_verdict "$id")
   case "$v" in
-    green*) [ -z "$rid" ] && { [ "$dry" = 1 ] || rm -f "$memo"; printf 'green\t%s\t%.7s\n' "$id" "$sha"; exit 0; }
+    green*) [ -z "$rid" ] && { [ "$dry" = 1 ] || rm -f "$memo" "$stale"; printf 'green\t%s\t%.7s\n' "$id" "$sha"; exit 0; }
             break ;;                       # the streak's first red is the one before it
     red*)   if [ -z "$rid" ]; then
               rid=$id rsha=$sha jobs=$(printf '%s\n' "$v" | sed 1d)
-              [ "$(cat "$memo" 2>/dev/null)" = "$rid" ] && { printf 'filed\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0; }
             fi
-            start=$sha ;;
+            start=$sha since=$created ;;
   esac
 done <<EOF
 $rows
 EOF
 [ -n "$rid" ] || { log "no macOS verdict in the newest $walk $WF run(s) on $BRANCH"; exit 0; }
 [ -n "$start" ] || start="$rsha"
+
+alert="${FLEET_MACOS_ALERT_CMD:-$BIN/fleet-alerts.sh}"
+sock=''; [ -n "$sess" ] && sock=$(fleet_socket "$sess" 2>/dev/null)
+
+# 5. Held back too long (issue #3869): the streak's first red run is older than
+# FLEET_MACOS_STALE_SECS — one alert per streak (keyed on the commit it began at).
+held=${FLEET_MACOS_STALE_SECS:-7200}; case "$held" in ''|*[!0-9]*) held=7200 ;; esac
+t0=''; [ -z "$since" ] || t0=$(fleet_epoch_from_iso "$since" 2>/dev/null)
+case "$t0" in ''|*[!0-9]*) t0='' ;; esac
+if [ -n "$t0" ] && [ $((t - t0)) -ge "$held" ] && [ "$(cat "$stale" 2>/dev/null)" != "$start" ]; then
+  hrs=$(( (t - t0) / 3600 ))
+  if [ "$dry" = 1 ]; then
+    printf 'would-alert\tstale\t%sh\t%.7s\n' "$hrs" "$start"
+  else
+    printf '%s\n' "$start" > "$stale"
+    printf 'stale\t%sh\t%.7s\n' "$hrs" "$start"
+    bash "$alert" event ${sock:+-L "$sock"} breakage \
+      "fleet: every Mac has stayed on the previous version for ${hrs}h+ — macOS is red since $(printf '%.7s' "$start") (stable-macos held back; Linux unaffected)" \
+      >/dev/null 2>&1 || log "the stale-lane alert failed"
+  fi
+fi
+
+[ "$(cat "$memo" 2>/dev/null)" = "$rid" ] && { printf 'filed\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0; }
 
 # What is red: the failed shards, and the FAIL / TIMEOUT tests in the first one's log.
 jid=$(printf '%s\n' "$jobs" | awk -F'\t' 'NF { print $1; exit }')
@@ -131,7 +158,7 @@ if [ -n "$jid" ]; then
 fi
 what="${tests:-${jnames:-$WF}}"
 s7=$(printf '%.7s' "$start")
-title="master 上 macOS 检查红了：${what}（${jnames:-$WF}）自 ${s7} 起"
+title="macOS 检查红了、Mac 停在上一版：${what}（${jnames:-$WF}）自 ${s7} 起"
 body="## master 上的 BSD 半边红了（issue #2286 的自动开单）
 
 - 工作流：\`$WF\` · 最新完成的一次：run ${rid}（$(printf '%.7s' "$rsha")）— https://github.com/$repo/actions/runs/$rid
@@ -139,8 +166,8 @@ body="## master 上的 BSD 半边红了（issue #2286 的自动开单）
 - 红的测试：${tests:-（日志里没有读出 FAIL/TIMEOUT 行，看上面的 run）}
 - 从哪个提交开始红：\`$s7\`（往回找到最后一次绿之后的第一个红）
 
-macOS 检查在合并后跑（#2286；#3141 起在发布列车里），所以它红着时列车不发、\`fleet-stable.sh move\` 会以 \`macos:\` 拒绝移 stable：这张单修好之前，master 上的新代码到不了任何机器。
-修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（BSD sed / bash 3.2 的差别最常见，见 CLAUDE.md「The gate has a BSD half」），修好后合并，下一趟列车的 macOS 绿了即可。"
+macOS 检查在发布之后跑（#2286；#3869 起是 \`mac-follow.yml\`，跟每个 stable），所以它红着时 Linux 照发，Mac 通道 \`refs/tags/stable-macos\` 停在上一版：这张单修好之前，每台 Mac（和 Mac 上的客户端）都换不上新版本。
+修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（BSD sed / bash 3.2 的差别最常见，见 CLAUDE.md「The gate has a BSD half」），修好后合并，下一趟列车发出、mac-follow 绿了，Mac 通道就跟上。"
 
 if [ "$dry" = 1 ]; then
   printf 'would-file\t%s\t%s\n' "$rid" "$title"; exit 0
@@ -159,9 +186,7 @@ else
 fi
 # The reminder: one alert per red run (the memo above keeps it to one), on the
 # fleet the tick named. Nobody is spawned for it (issue #3120).
-alert="${FLEET_MACOS_ALERT_CMD:-$BIN/fleet-alerts.sh}"
-sock=''; [ -n "$sess" ] && sock=$(fleet_socket "$sess" 2>/dev/null)
 bash "$alert" event ${sock:+-L "$sock"} breakage \
-  "fleet: master's macOS check is red since ${s7} — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
+  "fleet: macOS is red since ${s7}, every Mac stays on the previous version — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
   >/dev/null 2>&1 || log "filed ${url:-the breakage} but the alert failed"
 exit 0

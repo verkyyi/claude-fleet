@@ -722,7 +722,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 
 ## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
 
-每台托管 Mac 最多挂一台 GitHub Actions 测试机，给列车（`release-train.yml`）的 macOS 测试用，
+每台托管 Mac 最多挂一台 GitHub Actions 测试机，给发布之后的 macOS 跟随（`mac-follow.yml`，#3869；之前是列车 `release-train.yml`）用，
 PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不做：没有子进程、`state.json`
 没有 `ci_runner`、`status` 没有那一行，字节不变。
 
@@ -755,8 +755,8 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   `run.sh` 降权到 `fleet-ci`、`nice 10`、环境从零搭（没有 FLEET_* / CCQUOTA_* / gh 令牌，JIT 配置走
   `ACTIONS_RUNNER_INPUT_JITCONFIG` 不进 argv）。
 - **只接列车**：`ACTIONS_RUNNER_HOOK_JOB_STARTED` = root 名下的 `bin/fleet-ci-job-gate.sh`，在任务任何一步
-  之前核对 仓库 · 事件（push / workflow_dispatch / schedule）· `refs/heads/master` · 没有 `GITHUB_HEAD_REF` ·
-  workflow 在 `FLEET_CI_WORKFLOWS`（默认 `release-train.yml`）里，缺一项就拒。仓库设置仍保持
+  之前核对 仓库 · 事件（push / workflow_dispatch / schedule / workflow_run）· `refs/heads/master` · 没有 `GITHUB_HEAD_REF` ·
+  workflow 在 `FLEET_CI_WORKFLOWS`（默认 `release-train.yml mac-follow.yml`，#3869）里，缺一项就拒。仓库设置仍保持
   「外部贡献者的 workflow 需批准」。
 - **让路**：铸下一趟前看 内存压力（≥ warn）· 空闲内存够不够「底线（10% RAM，至少 2 GB）+ 一个会话 1.5 GB
   + 一趟 4 GB」· 每核负载 > 0.75 · 重活槽全满或有人排队——任一项就 `paused:<为什么>`，不铸；等活的空闲
@@ -769,7 +769,7 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   `GET /v1/fleet/ci-runners`（仓库密钥 `FLEET_HUB_VIEWER_TOKEN` = 入口的 viewer 令牌；不用 GitHub 管理员令牌）：
   在线且 idle / busy 的有 n 台 ⇒ macOS 段排 `[self-hosted, macOS, fleet-ci]`，min(n, 2) 片、每片 25 分钟上限，
   分片按 `bin/selftest-durations-fleet-ci.txt`（自家机器自己的耗时）；一台没有、入口不通、没设密钥 ⇒
-  `macos-latest` 2 片，车照开。`macos-wait`（`… watch`）把每片的机器名和排队时间写进这趟的摘要；
+  `macos-latest` 2 片，照样跑（#3869 起这一段在 `mac-follow.yml`，不挡发布）。`macos-wait`（`… watch`）把每片的机器名和排队时间写进这趟的摘要；
   排给自家机器 20 分钟没开的，写「自家测试机没接」、这趟红并取消。设密钥：
   `gh secret set FLEET_HUB_VIEWER_TOKEN --repo verkyyi/claude-fleet`（粘贴，不进命令行）。
   BREAK-IT：`train-own-runners-gone` · `train-own-runner-silent`。

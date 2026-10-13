@@ -732,11 +732,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   rides the release train (`release-train.yml`: ONE concurrency lane, a push never
   cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
   via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`
-  `--changed <stable>` on Linux and macOS, then `fleet-stable.sh move --precheck`;
+  `--changed <stable>` on Linux only (macOS follows the release — below), then `fleet-stable.sh move --precheck`;
   then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
   with `sha=TRAIN_SHA` (skipped when `bin/fleet-train-hub.sh` finds the hub already
   TRAIN_SHA's Go source and `deploy/k8s/`, and never backwards: a hub on a later or forked commit is left as `hub superseded`, an unreadable `/version` is red — #3319, BREAK-IT `train-hub-backwards`), `fleet-release-publish.sh TRAIN_SHA`,
-  `fleet-stable.sh move TRAIN_SHA --train <run>` (gates 3 / 5 read the run's jobs) —
+  `fleet-stable.sh move TRAIN_SHA --train <run>` (gate 3 reads the run's jobs) —
   so the hub and stable never come from two commits; the doctor's `hub-image` row
   WARNs 不同源 when a hand rollback splits them, BREAK-IT `train-hub-stable-split`;
   a red stage cancels the whole train at once, `bin/fleet-train-failfast.sh`, BREAK-IT
@@ -766,10 +766,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   skips gate 5. No `stable-macos` tag ⇒ every reader reads stable and gate 5
   holds stable, byte for byte (BREAK-IT `stable-macos-ahead`; the doctor's
   `channel` row says which lane this machine follows and how far the Mac lane
-  trails). A red macOS half
-  of the train (its `macOS / shard *` jobs — a train red on another stage is not
-  the BSD half's) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
-  `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert — no fixer
+  trails). **The macOS half runs AFTER the release** (issue #3869, C6): the train
+  never waits for nor reds on a Mac; `mac-follow.yml` (`workflow_run` on a green
+  train, concurrency `mac-follow`, our Macs first via `fleet-train-macos.sh pick`)
+  tests the new stable `--changed <lane>`, leaves the status `mac follow: macOS`
+  (gate 5 reads it) and on green moves the lane (`move --ref stable-macos <sha>
+  --train <run>`) and dispatches `stable-publish.yml ref=stable-macos`; red, every
+  Mac stays on the previous version. The train's `release` seeds the lane once at
+  the stable it boarded (`move --ref stable-macos --seed`: only while there is
+  none, only at stable, gate 5 not asked). A red follow (its `macOS / shard *`
+  jobs) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
+  `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert, plus one
+  more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
   is spawned (issue #3120). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
@@ -823,15 +831,16 @@ one-off drill / audit records do not go in the repo (issue #3576).
     (input `sha`: the full suite on that commit, named `… @ <sha>`); the per-merge
     `--changed` run moved into the release train (#3141, BREAK-IT
     `train-push-cancels` — the next push used to cancel it, 17 of 20 one night),
-    which leaves `release train: macOS` on its `TRAIN_SHA` for gate 5. **Since
+    and out of it again into `mac-follow.yml` after the release (#3869), which
+    leaves `mac follow: macOS` on the stable it tested for gate 5. **Since
     #2286 it runs AFTER the merge, not on the PR**: the queue for 5 macOS slots
     had made the merge gate wait a median 21 minutes (worst 56) on a check that
     guards releasing, not merging — master reaches a machine only when `stable`
     moves. So the BSD half's verdict lands in two places: `fleet-stable.sh move`
     (gate 5, `macos:`; no run on the target ⇒ dispatch + wait; `--force` logs) and
-    `bin/fleet-macos-watch.sh` (a red macOS half of the train ⇒ ONE breakage
-    issue + one alert, never a spawned fixer — #3120; it reads release-train.yml's
-    `macOS / shard *` jobs since #3143, `FLEET_MACOS_WORKFLOW`; on the diskguard
+    `bin/fleet-macos-watch.sh` (a red follow ⇒ ONE breakage issue + one alert,
+    never a spawned fixer — #3120; it reads mac-follow.yml's `macOS / shard *`
+    jobs since #3869, `FLEET_MACOS_WORKFLOW`; on the diskguard
     tick, only for a repo carrying that workflow and `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
     This is the half a lint structurally cannot do: **behaviour** differences.
     #703 (a bare `${a[@]}` on an empty array is fatal on bash 3.2, a no-op on

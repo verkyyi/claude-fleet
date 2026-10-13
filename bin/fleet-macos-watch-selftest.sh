@@ -24,6 +24,10 @@
 #   J. diskguard      fleet-diskguard.sh --watch's macos_watch drives it for a repo
 #                     carrying both gate files, files + alerts, spawns nobody; a
 #                     repo without them is never read; the dispatch shell is inert
+#   K. held back      (issue #3869) the red streak began > FLEET_MACOS_STALE_SECS
+#                     ago ⇒ ONE more alert «every Mac … previous version»; the next
+#                     tick in the same streak says nothing; green forgets it. The
+#                     default workflow is mac-follow.yml (the train no longer runs macOS)
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -66,7 +70,7 @@ SH
 chmod +x "$WORK/shim/gh" "$WORK/filer" "$WORK/alert" "$WORK/shim/dash-issue-session.sh"
 
 S1=1111111aaaaaaa S2=2222222bbbbbbb S3=3333333ccccccc
-row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4"; }
+row() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "${5:-}"; }
 # jobs <run> green|red|linux|none — a train's jobs: macOS green / one macOS shard red /
 # red on Linux only / no macOS job ran (a waiting train a newer push replaced)
 jobs() {
@@ -106,7 +110,7 @@ run --now --session fleet
 eq "B: red exits 0" 0 "$RC"; contains "B: says filed" "$OUT" "filed	30	https://github.com/o/r/issues/4242"
 F=$(filed)
 contains "B: filed with --breakage" "$F" "--breakage --repo o/r"
-contains "B: title names the test" "$F" "macOS 检查红了：dash-marker-selftest.sh"
+contains "B: title names the test" "$F" "macOS 检查红了、Mac 停在上一版：dash-marker-selftest.sh"
 lacks "B: a bare 'FAIL: a thing' line is not a test name" "$F" "红了：a,"
 contains "B: title names the job" "$F" "（macOS / shard 2）"
 contains "B: title names the streak's first red commit" "$F" "自 2222222 起"
@@ -167,7 +171,7 @@ eq "I: off exits 0" 0 "$RC"; eq "I: says nothing" "" "$OUT"; eq "I: nothing file
 # --- J. the diskguard tick drives it, files + alerts, spawns nobody (#3120) --------------
 reset; red_runs
 mkdir -p "$WORK/mainA/.github/workflows" "$WORK/mainA/bin" "$WORK/mainB"
-: > "$WORK/mainA/.github/workflows/release-train.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
+: > "$WORK/mainA/.github/workflows/mac-follow.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
 cat > "$WORK/dg.sh" <<SH
 FLEET_DISKGUARD_SOURCE=1 . "$BIN/fleet-diskguard.sh"
 BIN="$BIN" GDIR="$WORK/dg"
@@ -190,5 +194,25 @@ eq "J: nobody spawned" no "$(spawned)"
 lacks "J: the watcher has no spawner left" "$(cat "$W")" "dash-issue-session"
 eq "J: the retired dispatch shell is gone (#3576)" no "$([ -e "$BIN/fleet-dispatch.sh" ] && echo yes || echo no)"
 eq "J: no dispatch daemon template left" no "$([ -e "$BIN/../launchd/com.claude-fleet.dispatch.plist.tmpl" ] && echo yes || echo no)"
+
+# --- K. the Mac lane held back past FLEET_MACOS_STALE_SECS (#3869) ----------------------
+reset
+old=$(date -u -r $(( $(date +%s) - 3 * 3600 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - 3 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)  # portable-ok: BSD || GNU
+new=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+{ row 62 "$S3" failure workflow_run "$new"; row 61 "$S2" failure workflow_run "$old"; row 60 "$S1" success workflow_run "$old"; } > "$WORK/runs"
+jobs 62 red; jobs 61 red; jobs 60 green
+run --now --session fleet
+contains "K: says the lane is held back" "$OUT" "stale	3h	2222222"
+contains "K: the held-back alert" "$(alerted)" "every Mac has stayed on the previous version for 3h+"
+eq "K: two alerts (the filing + held back)" 2 "$(alerted | wc -l | tr -d ' ')"
+rm -f "$WORK/alerted"; { row 63 "$S3" failure workflow_run "$new"; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 63 red
+run --now --session fleet
+lacks "K: the same streak is not alerted twice" "$(alerted)" "previous version for"
+FLEET_MACOS_STALE_SECS=99999 run --now
+lacks "K: within the window nothing is said" "$OUT" "stale	"
+{ row 64 "$S3" success workflow_run "$new"; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 64 green
+run --now
+eq "K: green forgets the held-back mark" no "$([ -e "$WORK/conf/global/macos-watch/o-r.stale" ] && echo yes || echo no)"
+contains "K: the watched workflow is mac-follow.yml" "$(cat "$W")" 'FLEET_MACOS_WORKFLOW:-mac-follow.yml'
 
 printf 'fleet-macos-watch-selftest OK (%d checks)\n' "$CHECKS"

@@ -133,8 +133,11 @@ leg_two_red() {
   sum=$(sh "$R/bin/fleet-train-quarantine.sh" summary --now "$NOW" "$T/st2/list")
   [ "$sum" = '隔离了 1 个：portability-selftest.sh（#4242，到期 2026-10-13T08:00:00Z）' ] \
     && ok "two-red: summary — $sum" || fail "two-red: summary [$sum]"
-  # the next train holds the entry: the test is skipped, the shard green
-  train --quarantine "$T/st2/list"
+  # the next train holds the entry: the test is skipped, the shard green. A train
+  # run reads the real clock (no --now), so it gets the entry with a FUTURE expiry —
+  # the recorded one (NOW + 48 h) went red the moment the wall clock passed it.
+  sed "s/ 2026-10-13T08:00:00Z / $FUTURE /" "$T/st2/list" > "$T/st2/list.live"
+  train --quarantine "$T/st2/list.live"
   if [ "$rc" -eq 0 ] && has '^QUARANTINED portability-selftest.sh skipped — #4242' && ! has '=== portability'; then
     ok "two-red: the next train skips it"
   else fail "two-red: next train rc=$rc"; show; fi
@@ -380,8 +383,9 @@ leg_retry_red() {
     grep -nE '^[[:space:]]+(retry_red|drill_flaky):' "$wf/$f" \
       && fail "retry-red: $f passes retry_red to the shards" || ok "retry-red: $f reruns nothing"
   done
-  [ "$(grep -cE "^[[:space:]]+retry_red: '1'" "$wf/release-train.yml")" = 2 ] \
-    && ok "retry-red: release-train.yml passes retry_red to both halves" || fail "retry-red: release-train.yml does not pass retry_red twice"
+  # the Linux half on the train, the macOS half after it (mac-follow.yml, issue #3869)
+  [ "$(grep -cE "^[[:space:]]+retry_red: '1'" "$wf/release-train.yml")" = 1 ] && grep -qE "^[[:space:]]+retry_red: '1'" "$wf/mac-follow.yml" \
+    && ok "retry-red: release-train.yml + mac-follow.yml pass retry_red to both halves" || fail "retry-red: the train / mac-follow do not pass retry_red"
   awk '/^on:/,/^jobs:/' "$wf/selftests-shards.yml" | grep -A4 '^      retry_red:' | grep -q "default: ''" \
     && ok "retry-red: the shards' input defaults to empty" || fail "retry-red: inputs.retry_red has no empty default"
 }
