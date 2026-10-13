@@ -66,6 +66,12 @@ The hub records one line for every important action: who (a person, a machine or
 
 Each machine's entry port also records every entry: which login, from where, with which key.
 
+## What the web chat tells the model about your browser
+
+When you talk to your conversation at the site's `/chat`, the model is told what you are using right now: the kind of device (phone / tablet / computer), its system, the browser, the page language, how wide the screen is, your local time and time zone, and the rough city your IP address is in (the city only) — one line at the start of the conversation, and another only when the device, the city or the day changes. The full IP address, browser identifier and network type are given only when the model asks for them with its `browser_context` tool, and only within your own conversation.
+
+The address and the city are what the hub saw, worked out from an offline database on the hub — no outside service is asked. None of it is written to a log; it stays in your own conversation's record.
+
 ## Reporting a security problem
 
 Please do not open a public issue. Use only GitHub's private vulnerability reporting: the repository page → Security → [Report a vulnerability](https://github.com/verkyyi/claude-fleet/security/advisories/new); there is no email address. Response times and supported versions are in [SECURITY.md](https://github.com/verkyyi/claude-fleet/blob/master/SECURITY.md) at the repository root.

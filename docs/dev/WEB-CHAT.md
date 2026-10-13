@@ -229,6 +229,27 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 这些都是 Claude Code 自己的记录（`~/.claude/projects/<目录>/<id>.jsonl`）。在终端里用
   `cd <目录> && claude --resume <id>` 可以读到、接着用：本机页面底部写着这条命令，官网 `/chat` 收在头像菜单里。
 
+## 浏览器上下文（#4034）
+
+模型知道人此刻从哪儿、用什么在说话：
+
+- **页面报自己**（`ui/src/browser.ts`）：UA、UA Client Hints（高熵的 platformVersion / model / architecture 每页问一次）、
+  语言、时区与偏移、屏幕 / 视口、触点、`navigator.connection`、深色——随每个 `/api/turn` 的 `client` 一起发。
+  服务端 `cleanBrowser()` 只留这些字段、截长度，别的丢掉。
+- **入口报地址和城市**：入口转发时自己写一个 `X-Fleet-Client`（base64url JSON `{ip, country, province, city}`，
+  `tokenledger/internal/api/chat_client.go`），浏览器带来的同名头丢掉——和 `X-Fleet-Person` 一样只有入口能写；
+  它走在节点验过首帧签名之后才接到 socket 的那条流上，所以不改 `chat_relay_open`、首帧和节点。地址取最右一个
+  公网的 `X-Forwarded-For`（ingress 加的；副本转交加的是私网段，跳过），否则连接对端。城市来自入口本地的
+  ip2region IPv4 xdb（Apache-2.0，约 11 MB，中文地名）：`CCQUOTA_FLEET_CHAT_GEO_DB` 指向它，进程内只读一次；
+  不设或读不了就只有地址（逐字节照旧，日志说一次）。不调任何外部服务。本机直连模式没有入口，只有页面那一半。
+- **给模型一行**（`lib.mjs` `contextLine()`）：`手机 · iPhone · Safari · zh-CN · 窄屏 · 本地时间 2026-10-13 周二 14:05（Asia/Shanghai） · 大致位置 广东省深圳市`，
+  包在 `<fleet-webchat-context>` 里放在这一轮人的话**前面**（不进系统提示——那会破提示缓存），页面上剥掉。
+  只在一个 session 的第一轮、或这一行的键（设备 · 系统 · 浏览器 · 语言 · 屏宽档 · 时区 · 位置 · 本地日期——不含分钟）
+  变了时加；键记在 `conversation.json` 的 `ctxKey`。不含 IP、不含原始 UA。
+- **按需工具** `browser_context`：每一轮用 SDK 的 `createSdkMcpServer` 现做一个进程内 MCP 服务（`fleet_browser`），
+  只装这一轮这个人的浏览器：完整 IP、位置、UA、Client Hints、语言、时区、屏幕、网络。答在对话记录里，
+  `server.log` 不记 IP、UA 或任何一项。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，
@@ -274,7 +295,10 @@ sid 用完被 revoke、凭据和 admin token 不出现在任何响应、日志�
 A–G 在 `FLEET_WEBCHAT_LOCAL=1` 下跑。H：socket 0600 / 目录 0700（放一个 0666 的旧 socket 也会被换掉），能免密
 `sudo -u nobody` 的机器上另一个 uid 连不上（放开时它连得上，作对照），没有 TCP 监听、没有 `admin.token`，
 不带 `--socket` 也没开本机模式就不起。I：代理的预算 403 → 一行 `code:"budget"` + `until`，`/api/conversation` 说被挡，
-走通一轮放开（BREAK-IT `chat-budget-bypass`）。`--only=socket|budget|local` 只跑其中几段（演练用）。
+走通一轮放开（BREAK-IT `chat-budget-bypass`）。M：手机 UA 和电脑 UA 各一轮，各在人的话前面加一行上下文（带入口给的城市、不带 IP），
+同一浏览器再问不加、换城市再加，页面上看不到这一行，`browser_context` 答得出完整 IP 和 UA，`server.log` 里都没有。
+入口那一半（浏览器伪造的 `X-Fleet-Client` 被换掉、XFF 取哪一个、xdb 读法）是 Go 的 `chat_client_test.go`。
+`--only=socket|budget|context|local` 只跑其中几段（演练用）。
 
 ## 不在这一版
 

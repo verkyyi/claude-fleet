@@ -11,6 +11,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { API, SITE } from "@/site";
+import { browserContext, primeBrowser } from "@/browser";
 
 type Item =
   | { t: "user"; text: string }
@@ -204,6 +205,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
 
   useEffect(() => {
     load();
+    primeBrowser();
     const vis = () => { if (!document.hidden && !streaming.current) load(); };
     document.addEventListener("visibilitychange", vis);
     return () => document.removeEventListener("visibilitychange", vis);
@@ -221,7 +223,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     setBusy(true);
     let lost = false;
     try {
-      const r = await fetch(`${API}/turn`, { method: "POST", headers: H, body: JSON.stringify({ text, model }) });
+      await Promise.race([primeBrowser(), new Promise((r) => setTimeout(r, 300))]);
+      const r = await fetch(`${API}/turn`, { method: "POST", headers: H, body: JSON.stringify({ text, model, client: browserContext() }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });

@@ -44,6 +44,13 @@ const (
 	// ChatPersonHeader names the statement the first frame carries.
 	ChatPersonHeader = "X-Fleet-Person"
 
+	// ChatClientHeader is where the browser's address (and the city the
+	// entry's offline database puts it in) rides to the conversation service,
+	// base64url JSON written by the entry on the relayed request — never taken
+	// from the browser (claude-fleet#4034). It travels on the stream the agent
+	// opened after the first frame verified, like the request's X-Fleet-Person.
+	ChatClientHeader = "X-Fleet-Client"
+
 	chatPersonPrefix = "fpp1"
 	// ChatPersonMaxTTL bounds exp-iat: a statement is minted per relay, the
 	// moment the agent attaches, so minutes are plenty.

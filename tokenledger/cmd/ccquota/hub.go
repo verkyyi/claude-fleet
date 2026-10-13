@@ -1635,6 +1635,7 @@ func sshRelayConfig(srv *api.Server) error {
 			return fmt.Errorf("CCQUOTA_FLEET_SSH_CA_PUB: %w", err)
 		}
 	}
+	srv.ChatGeoDB = os.Getenv("CCQUOTA_FLEET_CHAT_GEO_DB")
 	for _, kv := range []struct {
 		name string
 		set  func(int64)
