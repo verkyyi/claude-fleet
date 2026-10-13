@@ -215,3 +215,19 @@ func writeSiteBody(w http.ResponseWriter, r *http.Request, b []byte, text bool) 
 	_, _ = zw.Write(b)
 	_ = zw.Close()
 }
+
+// appIconPaths are what a page's <link rel="icon"> names and a browser asks
+// the root for; web/dist carries each, a copy of extras/fleet-theme/logo.svg
+// and site/assets
+// (claude-fleet#3946, web/embed_test.go holds the copies to it).
+var appIconPaths = []string{"/favicon.svg", "/favicon.ico", "/apple-touch-icon.png"}
+
+// serveAppIcon answers one of appIconPaths from the console's own files,
+// with no sign-in: an icon tells a stranger nothing.
+func (s *Server) serveAppIcon(w http.ResponseWriter, r *http.Request) {
+	if s.UI == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		http.NotFound(w, r)
+		return
+	}
+	serveFSFile(w, r, s.UI, strings.TrimPrefix(r.URL.Path, "/"), "public, max-age=86400")
+}

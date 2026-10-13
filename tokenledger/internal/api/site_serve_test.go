@@ -183,3 +183,35 @@ func TestSitePathsOffAddNothing(t *testing.T) {
 		}
 	}
 }
+
+// The tab icon answers everyone from the console's own copy
+// (claude-fleet#3946): signed out, site off — the sign-in page and a
+// self-hoster's hub show the logo too — and with the site on, the site's.
+func TestAppIconPublic(t *testing.T) {
+	h, _, _ := rolesHarness(t)
+	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, "favicon.svg": {Data: []byte("<svg>dist</svg>")},
+		"favicon.ico": {Data: []byte("ICO-dist")}, "apple-touch-icon.png": {Data: []byte("PNG-dist")}}
+	get := func(method, p string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(method, p, nil))
+		return rec
+	}
+	for p, want := range map[string]string{"/favicon.svg": "<svg>dist</svg>", "/favicon.ico": "ICO-dist", "/apple-touch-icon.png": "PNG-dist"} {
+		if rec := get(http.MethodGet, p); rec.Code != http.StatusOK || rec.Body.String() != want {
+			t.Errorf("site off, signed out: GET %s = %d %q, want 200 %q", p, rec.Code, rec.Body.String(), want)
+		}
+		if rec := get(http.MethodPost, p); rec.Code != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404", p, rec.Code)
+		}
+	}
+	h.srv.Site = true
+	h.srv.SiteFS, h.srv.DocsFS = siteFixture()
+	if rec := get(http.MethodGet, "/favicon.svg"); rec.Body.String() != "<svg/>" {
+		t.Errorf("site on: /favicon.svg = %q, want the site's", rec.Body.String())
+	}
+	h.srv.UI = nil
+	h.srv.Site = false
+	if rec := get(http.MethodGet, "/favicon.svg"); rec.Code != http.StatusNotFound {
+		t.Errorf("no UI: /favicon.svg = %d, want 404", rec.Code)
+	}
+}

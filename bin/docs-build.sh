@@ -302,7 +302,9 @@ def frame(lang, page, title, body, all_titles, pending=False):
     head_lang = 'zh-CN' if lang == 'zh' else 'en'
     return ('<!doctype html><html lang="%s"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>%s · fleet</title><link rel="alternate" type="text/markdown" href="%s">'
+            '<title>%s · fleet</title><link rel="icon" href="/favicon.ico" sizes="32x32">'
+            '<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">'
+            '<link rel="alternate" type="text/markdown" href="%s">'
             '<link rel="alternate" hreflang="%s" href="%s"><style>%s</style></head><body>'
             '<header><a class="brand" href="%s">fleet</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
             '<div class="wrap"><aside>%s</aside><main>%s<footer><a href="%s">%s</a></footer></main></div></body></html>\n') % (
