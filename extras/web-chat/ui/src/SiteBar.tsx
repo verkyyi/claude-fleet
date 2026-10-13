@@ -25,7 +25,11 @@ const HOME_DOT: Record<Home["state"], string> = {
 };
 const HOME_WORD: Record<Home["state"], string> = { ok: "在线", offline: "连不上", maintenance: "维护中", old_agent: "需更新" };
 
-export const SiteBar: FC<{ logo: ReactNode; me: Me | null; home: Home | null; quota: Quota | null }> = ({ logo, me, home, quota }) => {
+// Where it runs (machine · login) and the terminal resume line are not on the
+// page by default: the bar shows only the home's state dot; both live in the
+// account menu for whoever wants them.
+export const SiteBar: FC<{ logo: ReactNode; me: Me | null; home: Home | null; quota: Quota | null;
+  resume?: { id: string; cwd: string } | null }> = ({ logo, me, home, quota, resume }) => {
   const pages = new Set([...(me?.pages || []), "chat"]);
   const name = me?.name || me?.login || "";
   return (
@@ -45,9 +49,8 @@ export const SiteBar: FC<{ logo: ReactNode; me: Me | null; home: Home | null; qu
       </nav>
       <div className="ms-auto flex items-center gap-2">
         {home ? (
-          <span className="text-muted-foreground hidden items-center gap-1.5 font-mono text-[12px] md:flex" title={`后台：${home.machine} 上 ${home.login} 的登录 · ${HOME_WORD[home.state]}`}>
+          <span className="flex items-center" title={HOME_WORD[home.state]} aria-label={HOME_WORD[home.state]}>
             <span className={cn("size-1.5 rounded-full", HOME_DOT[home.state])} aria-hidden />
-            {home.machine} · {home.login}
           </span>
         ) : null}
         {quota ? (
@@ -66,8 +69,14 @@ export const SiteBar: FC<{ logo: ReactNode; me: Me | null; home: Home | null; qu
               </Avatar>
             </button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-56 p-2">
+          <PopoverContent align="end" className="w-72 p-2">
             {name ? <p className="px-2 pt-1 pb-2 text-sm font-medium">{name}</p> : null}
+            {home ? (
+              <p className="text-muted-foreground px-2 pb-2 font-mono text-[11px] leading-snug break-all">
+                后台：{home.machine} · {home.login} 的登录 · {HOME_WORD[home.state]}
+                {resume ? <span className="mt-1 block select-all">终端里接着用：cd {resume.cwd || "~"} && claude --resume {resume.id}</span> : null}
+              </p>
+            ) : null}
             <div className="flex flex-col">
               <Button asChild variant="ghost" size="sm" className="text-foreground justify-start no-underline"><a href="/app">控制台</a></Button>
               <Button asChild variant="ghost" size="sm" className="text-foreground justify-start no-underline"><a href="/fleet/connection">我的连接</a></Button>
