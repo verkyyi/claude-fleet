@@ -1,4 +1,46 @@
 # Context: the directory produced by prepare-image.sh (a verified hub release).
+#
+# The dev toolchain every login gets (#3348) is its own stage, `tools`: fetched
+# and checked by sha256, nothing else. TOOLS names where the image takes it from
+# — this stage by default (a build anywhere outside CN); the release train's
+# in-cluster build (#3855, train-build.sh) names the copy the train pushed from
+# a GitHub-hosted runner, `<image>:<tools-tag.sh>`, because GitHub's release
+# assets and dl.k8s.io crawl from Shenzhen. The tag is this stage's own text, so
+# a pin moved here is a new tools image.
+ARG TOOLS=tools
+FROM debian:trixie-slim AS tools
+# Every tar runs --no-same-owner: as root tar keeps the archive's owner, and
+# node's uid 1001 on /usr/local/lib made the shared proxy's launcher `untrusted`
+# — the pod never went Ready (#3421; asserted below). Node versions a repo pins
+# (.nvmrc) come from fnm at run time through the CN mirrors /etc/fleet-devnet.env
+# names (fleet-node-linux.py). The tree lands under /opt/tools/usr/local and the
+# image copies it onto /usr/local.
+ARG NODE_VERSION=24.21.0 NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+ARG GO_VERSION=1.27.2 GO_SHA256=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+ARG KUBECTL_VERSION=1.37.1 KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
+ARG FNM_VERSION=1.39.0 FNM_SHA256=7807664f39d39fc518da1c35ba0181e4b3267603c4b1dedeb4b5fc6ae440a224
+ARG ALIYUN_VERSION=3.5.1 ALIYUN_SHA256=3a9a45b9c7899228074135612d2b7ebbf32abb97826d825787cb454cd3011bdc
+ARG UV_VERSION=0.13.0 UV_SHA256=1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154
+RUN apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl python3 xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; T=/opt/tools/usr/local; mkdir -p "$T/bin"; cd /tmp; \
+    get() { curl -fsSL --retry 3 -o "$1" "$2"; echo "$3  $1" | sha256sum -c -; }; \
+    get node.txz "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" "$NODE_SHA256"; \
+    tar --no-same-owner -xJf node.txz -C "$T" --strip-components=1 --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE'; \
+    get go.tgz "https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz" "$GO_SHA256"; \
+    tar --no-same-owner -xzf go.tgz -C "$T"; ln -sfn /usr/local/go/bin/go /usr/local/go/bin/gofmt "$T/bin/"; \
+    get kubectl "https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/linux/amd64/kubectl" "$KUBECTL_SHA256"; \
+    install -m 755 kubectl "$T/bin/kubectl"; \
+    get fnm.zip "https://github.com/Schniz/fnm/releases/download/v$FNM_VERSION/fnm-linux.zip" "$FNM_SHA256"; \
+    python3 -m zipfile -e fnm.zip fnm.d; install -m 755 fnm.d/fnm "$T/bin/fnm"; \
+    get aliyun.tgz "https://github.com/aliyun/aliyun-cli/releases/download/v$ALIYUN_VERSION/aliyun-cli-linux-$ALIYUN_VERSION-amd64.tgz" "$ALIYUN_SHA256"; \
+    tar --no-same-owner -xzf aliyun.tgz -C "$T/bin" aliyun; chmod 755 "$T/bin/aliyun"; \
+    curl -fsSL --retry 3 -o uv.tgz "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz"; \
+    echo "$UV_SHA256  uv.tgz" | sha256sum -c -; \
+    tar --no-same-owner -xzf uv.tgz --strip-components=1 -C "$T/bin" uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx; \
+    rm -rf /tmp/*
+FROM ${TOOLS} AS toolsrc
+
 # trixie: OpenSSH 10.0 — the entry port's sshd needs PerSourcePenalties (9.8+, #3092)
 FROM debian:trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 \
@@ -8,53 +50,38 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     FLEET_NODE_SERVICE=foreground FLEET_NODE_UPDATE_OWNER=node \
     FLEET_NODE_LOGIN=none \
     PATH=/var/db/fleet-node/runtime/current/tools/bin:/var/db/fleet-node/runtime/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+# Where packages come from at build time: unset = upstream. The in-cluster build
+# names CN mirrors (train-build.sh); apt checks its signatures either way, and
+# the installed bytes do not depend on the road.
+ARG DEBIAN_MIRROR= NPM_REGISTRY= PIP_INDEX=
+RUN [ -z "$DEBIAN_MIRROR" ] || sed -i "s#http://deb.debian.org/debian#$DEBIAN_MIRROR#g" /etc/apt/sources.list.d/debian.sources; \
+    apt-get update -qq && apt-get install -y --no-install-recommends \
     ca-certificates curl git gh python3 zsh tini procps openssh-client openssh-server \
     jq ripgrep less sudo passwd iptables xz-utils libevent-2.1-7t64 libncursesw6 locales tzdata \
     && rm -rf /var/lib/apt/lists/* \
+    && { [ -z "$DEBIAN_MIRROR" ] || sed -i "s#$DEBIAN_MIRROR#http://deb.debian.org/debian#g" /etc/apt/sources.list.d/debian.sources; } \
     && groupadd --gid 499 fleetcred \
     && useradd --uid 499 --gid 499 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin fleetcred \
     && ssh-keygen -q -t ed25519 -N '' -f /tmp/hk \
     && mkdir -p /run/sshd && /usr/sbin/sshd -T -f /dev/null -o HostKey=/tmp/hk \
        | grep -Ei '^persourcepenalties ' | grep -Eqv ' no$' \
     && rm -f /tmp/hk /tmp/hk.pub
-# The dev toolchain every login gets (#3348), fetched at BUILD time (outside CN)
-# and checked by sha256. Every tar runs --no-same-owner: as root tar keeps the
-# archive's owner, and node's uid 1001 on /usr/local/lib made the shared proxy's
-# launcher `untrusted` — the pod never went Ready (#3421; asserted below). Node versions a repo pins (.nvmrc) come from fnm at run
-# time through the CN mirrors /etc/fleet-devnet.env names (fleet-node-linux.py).
-ARG NODE_VERSION=24.21.0 NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
-ARG GO_VERSION=1.27.2 GO_SHA256=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
-ARG KUBECTL_VERSION=1.37.1 KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
-ARG FNM_VERSION=1.39.0 FNM_SHA256=7807664f39d39fc518da1c35ba0181e4b3267603c4b1dedeb4b5fc6ae440a224
-ARG ALIYUN_VERSION=3.5.1 ALIYUN_SHA256=3a9a45b9c7899228074135612d2b7ebbf32abb97826d825787cb454cd3011bdc
-RUN set -eu; cd /tmp; get() { curl -fsSL --retry 3 -o "$1" "$2"; echo "$3  $1" | sha256sum -c -; }; \
-    get node.txz "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" "$NODE_SHA256"; \
-    tar --no-same-owner -xJf node.txz -C /usr/local --strip-components=1 --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE'; \
-    corepack enable --install-directory /usr/local/bin; \
-    get go.tgz "https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz" "$GO_SHA256"; \
-    tar --no-same-owner -xzf go.tgz -C /usr/local; ln -sfn /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/; \
-    get kubectl "https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/linux/amd64/kubectl" "$KUBECTL_SHA256"; \
-    install -m 755 kubectl /usr/local/bin/kubectl; \
-    get fnm.zip "https://github.com/Schniz/fnm/releases/download/v$FNM_VERSION/fnm-linux.zip" "$FNM_SHA256"; \
-    python3 -m zipfile -e fnm.zip fnm.d; install -m 755 fnm.d/fnm /usr/local/bin/fnm; \
-    get aliyun.tgz "https://github.com/aliyun/aliyun-cli/releases/download/v$ALIYUN_VERSION/aliyun-cli-linux-$ALIYUN_VERSION-amd64.tgz" "$ALIYUN_SHA256"; \
-    tar --no-same-owner -xzf aliyun.tgz -C /usr/local/bin aliyun; chmod 755 /usr/local/bin/aliyun; \
-    rm -rf /tmp/*; node --version; go version; kubectl version --client; fnm --version; aliyun version; corepack --version
+COPY --from=toolsrc /opt/tools/usr/local/ /usr/local/
+RUN corepack enable --install-directory /usr/local/bin \
+    && node --version && go version && kubectl version --client && fnm --version && aliyun version \
+    && corepack --version && uv --version
 # The default MCP servers (conf/agent-defaults: context7 · playwright · github ·
 # fetch), preinstalled so a session starts them from disk (#3548): `npx -y <pkg>`
 # runs a global install with no registry round trip, mcp-github.sh finds
 # mcp-server-github's npx road the same way, and mcp-fetch.sh runs the uv tool's
-# mcp-server-fetch. A pin moves by editing these ARGs; `@latest` specs still ask
-# the registry — the cluster's fleet-npm (deploy/k8s/caches), never the internet.
-ARG UV_VERSION=0.13.0 UV_SHA256=1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154
+# mcp-server-fetch. A pin moves by editing these ARGs (uv's is the tools
+# stage's); `@latest` specs still ask the registry — the cluster's fleet-npm
+# (deploy/k8s/caches), never the internet.
 ARG MCP_NPM="@upstash/context7-mcp@4.3.0 @playwright/mcp@0.0.83 @modelcontextprotocol/server-github@2025.4.8"
 ARG MCP_FETCH_VERSION=2026.10.10
 RUN set -eu; cd /tmp; \
-    curl -fsSL --retry 3 -o uv.tgz "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz"; \
-    echo "$UV_SHA256  uv.tgz" | sha256sum -c -; \
-    tar --no-same-owner -xzf uv.tgz --strip-components=1 -C /usr/local/bin uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx; \
-    npm install -g --no-audit --no-fund $MCP_NPM; \
+    npm install -g --no-audit --no-fund ${NPM_REGISTRY:+--registry "$NPM_REGISTRY"} $MCP_NPM; \
+    export UV_DEFAULT_INDEX="${PIP_INDEX:-https://pypi.org/simple}"; \
     UV_TOOL_DIR=/usr/local/lib/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON=/usr/bin/python3 UV_PYTHON_DOWNLOADS=never \
       uv tool install --no-cache "mcp-server-fetch==$MCP_FETCH_VERSION"; \
     chown -R root:root /usr/local; chmod -R go-w /usr/local/lib/node_modules /usr/local/lib/uv-tools; \

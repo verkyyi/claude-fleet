@@ -168,12 +168,45 @@ Its systemd service starts at boot. Native runtime upgrades still use the
 signed hub release updater.
 After installing the hub SSH CA, native installs reload the active SSH service.
 
-## Build the ACK image
+## The ACK image
 
-Build from a **published signed release containing the Linux implementation**.
-Obtain the release public key through the established trusted distribution
-channel. `ccquota release fetch` verifies the signature and artifact digests;
-the image staging step checks the pinned artifact digests again.
+**The release train builds it** (issue #3855): every release it ships, its
+`node image` job builds that release's image in the cluster and pushes
+`<NODE_IMAGE_REPO>:<release commit>` — nobody builds one by hand. Read the
+digest off the train run's summary (「节点镜像」), or ask the registry:
+
+```sh
+docker buildx imagetools inspect registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT
+```
+
+How: the job runs on `fleet-ack`, an Actions Runner Controller scale set for
+this repo in the cluster's runner namespace (`deploy/k8s/runners/`), beside the
+cluster's BuildKit daemon — native amd64, the hub and the registry's VPC
+endpoint a hop away. `extras/managed-node/train-build.sh` checks the release's
+manifest against the checkout's `conf/release-keys/root.pub`, takes its
+`ccquota-linux-amd64` by the signed sha256, runs `prepare-image.sh` with it and
+builds with `buildctl` (CN package mirrors; the registry's layer cache
+`:buildcache`). GitHub's release assets and dl.k8s.io crawl from there, so the
+Dockerfile's `tools` stage (the sha256-pinned toolchain) is pushed separately by
+the train's `node tools` job from a GitHub-hosted runner, tagged
+`tools-<hash of the stage's text>` (`tools-tag.sh`) — once per pin change — and
+the cluster build takes it as `TOOLS=<repo>@<digest>`. Push credentials are the
+job's GitHub OIDC token traded for a short ACR login as a RAM role that may push
+this one repository (`.github/actions/hub-acr`, role
+`gha-claudefleet-node-image`, environment `node-image`, master only). The
+deployment names the repository in the repo variables `NODE_IMAGE_REPO` (public
+name) and `NODE_IMAGE_BUILD_REPO` (the VPC name the cluster pushes to); unset =
+the two jobs are skipped. A red `node image` never holds a release back — stable
+has already moved; the next train builds again, or build by hand (below).
+
+### By hand
+
+The same build anywhere outside CN, from a **published signed release
+containing the Linux implementation**. Obtain the release public key through
+the established trusted distribution channel (`conf/release-keys/root.pub` is
+the root every release chains to). `ccquota release fetch` verifies the
+signature and artifact digests; the image staging step checks the pinned
+artifact digests again.
 
 ```sh
 bash extras/managed-node/prepare-image.sh \

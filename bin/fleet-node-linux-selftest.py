@@ -1364,6 +1364,42 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
                     loop.child.wait()
                 self.assertEqual(loop.tend(), 1)   # a 4th death in the window: give up
 
+    def test_release_train_builds_the_image_in_the_cluster(self):
+        """#3855: the release train builds each release's node image in the
+        cluster (runs-on: fleet-ack, extras/managed-node/train-build.sh) and
+        never lets it gate the move; the Dockerfile's sha256-pinned toolchain is
+        its own `tools` stage, taken from TOOLS (default: the stage itself, so a
+        build by hand is unchanged), tagged by tools-tag.sh from the stage's text."""
+        me = BIN.parent / 'extras/managed-node'
+        df = (me / 'Dockerfile').read_text()
+        self.assertTrue(df.startswith('# Context'))
+        self.assertIn('\nARG TOOLS=tools\nFROM debian:trixie-slim AS tools\n', df)
+        self.assertIn('\nFROM ${TOOLS} AS toolsrc\n', df)
+        self.assertIn('COPY --from=toolsrc /opt/tools/usr/local/ /usr/local/', df)
+        stage = df.split(' AS tools\n', 1)[1].split('FROM ${TOOLS}', 1)[0]
+        for pin in ('NODE_SHA256', 'GO_SHA256', 'KUBECTL_SHA256', 'FNM_SHA256', 'ALIYUN_SHA256', 'UV_SHA256'):
+            self.assertIn(pin, stage)   # every downloaded tool is the stage's: the tag covers it
+        tag = subprocess.check_output(['bash', str(me / 'tools-tag.sh')], text=True).strip()
+        self.assertRegex(tag, r'^tools-[0-9a-f]{16}$')
+        with tempfile.TemporaryDirectory() as d:
+            moved = Path(d, 'Dockerfile')
+            moved.write_text(df.replace('ARG GO_VERSION=', 'ARG GO_VERSION=9'))
+            self.assertNotEqual(subprocess.check_output(['bash', str(me / 'tools-tag.sh'), str(moved)], text=True).strip(), tag)
+            moved.write_text(df.replace('COPY release.pub', 'COPY  release.pub'))   # outside the stage
+            self.assertEqual(subprocess.check_output(['bash', str(me / 'tools-tag.sh'), str(moved)], text=True).strip(), tag)
+        r = subprocess.run(['bash', str(me / 'train-build.sh'), 'https://hub', 'not-a-sha', 'r', 't'], capture_output=True)
+        self.assertEqual(r.returncode, 2)
+        tb = (me / 'train-build.sh').read_text()
+        for want in ('conf/release-keys/root.pub', 'fleet-release-verify.py', 'ccquota-linux-amd64',
+                     'prepare-image.sh', 'build-arg:TOOLS=', 'push=true', 'containerimage.digest'):
+            self.assertIn(want, tb)
+        wf = (BIN.parent / '.github/workflows/release-train.yml').read_text()
+        self.assertIn('runs-on: fleet-ack', wf)
+        self.assertIn('extras/managed-node/train-build.sh', wf)
+        self.assertIn("--ignore-check 'node tools' --ignore-check 'node image'", wf)
+        self.assertIn('role: gha-claudefleet-node-image', wf)
+        self.assertIn('--target tools --provenance=false', wf)   # ACR refuses an attestation manifest
+
     def test_image_self_updates_on_its_volume(self):
         """The image's defaults (#3212): the runtime on the PVC, owner node (the
         updater runs and the node program says CapRelease), a boot that seeds,
