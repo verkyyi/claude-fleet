@@ -19,9 +19,10 @@
 #      every file in fonts/, logo.svg is there
 #   B  the repo: one source (the package), nothing outside it — prints the report
 #   C  the consumers take it from the package: site/template.html has the
-#      /*{{fleet_theme}}*/ slot, the web chat's theme.css imports it, site-build.sh
-#      and site-images.sh read extras/fleet-theme, the way-in pages link the
-#      packed copy (web-console-pack.sh copies it, claude-fleet#3932)
+#      /*{{fleet_theme}}*/ slot, the web chat's theme.css and the console's
+#      index.css import it, site-build.sh and site-images.sh read
+#      extras/fleet-theme, the way-in pages link the packed copy
+#      (web-console-pack.sh copies it, claude-fleet#3932)
 #   D  the guard bites: a planted definition (a colour, a family, a logo) in a
 #      sandbox copy is red, naming the file
 set -uo pipefail
@@ -52,7 +53,7 @@ EXEMPT = {   # a page the batch replaces, and the member that does
     'plugins/fleet-epic/skills/epic-page/template.html': 'EPIC 设计页（doc-preview，不是产品页面）',
 }
 # built output (a Vite build of the package, committed), tests and their fixtures
-SKIP = re.compile(r'^extras/[\w-]+/ui/dist(-site)?/|(^|/)(node_modules|testdata)/|selftest|_test\.go$')
+SKIP = re.compile(r'^extras/([\w-]+/ui|web-console)/dist(-site)?/|(^|/)(node_modules|testdata)/|selftest|_test\.go$')
 EXT = re.compile(r'\.(css|html?|tsx?|jsx?|mjs|go|sh|py|svg)$')
 t = open(os.path.join(root, PKG, 'theme.css'), encoding='utf-8').read()
 m = re.search(r'/\* fleet:tokens \*/(.*?)/\* /fleet:tokens \*/', t, re.S)
@@ -128,6 +129,8 @@ grep -q 'THEME="$REPO/extras/fleet-theme"' "$REPO/bin/web-console-pack.sh" \
   && grep -q 'themePrefix + `theme.css' "$REPO/tokenledger/internal/api/entry_pages.go" \
   && ok "C the way-in pages link the theme web-console-pack.sh packs" \
   || bad "C the way-in pages (entry_pages.go) do not take extras/fleet-theme through web-console-pack.sh"
+grep -q '@import "../../../fleet-theme/theme.css"' "$REPO/extras/web-console/src/shared/index.css" && ok "C the console imports the package (#3926)" \
+  || bad "C extras/web-console/src/shared/index.css does not import extras/fleet-theme/theme.css"
 for s in site-build.sh site-images.sh; do
   grep -q "extras.*fleet-theme\|'extras', 'fleet-theme'" "$REPO/bin/$s" && ok "C $s reads extras/fleet-theme" || bad "C $s does not read extras/fleet-theme"
 done

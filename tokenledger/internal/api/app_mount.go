@@ -464,7 +464,7 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) {
-				if consoleNewLive(p) && s.consoleBuilt("app") {
+				if consoleNewLive(strings.TrimSuffix(p, "/")) && s.consoleBuilt("app") {
 					// a page the new console has taken over (claude-fleet#3926)
 					s.appSide().ServeHTTP(w, r)
 					return
