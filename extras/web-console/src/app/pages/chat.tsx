@@ -18,6 +18,7 @@ import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
+import { BindWeChatBanner } from "../WeChatBind";
 
 type Chat = ReturnType<typeof useFleetChat> & { home: Home | null; quota: Quota | null };
 const ChatCtx = createContext<Chat | null>(null);
@@ -146,7 +147,7 @@ const TryClock: FC<{ clock: ReturnType<typeof useTryClock> }> = ({ clock }) => {
 export default function ChatPage() {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
-  const { quota, bumpQuota } = useShell();
+  const { me, quota, bumpQuota } = useShell();
   const clock = useTryClock();
   const chat = useFleetChat({
     onReply: clock.stop,
@@ -160,6 +161,7 @@ export default function ChatPage() {
       <AssistantRuntimeProvider runtime={runtime}>
         <TooltipProvider>
           <div className="flex h-full flex-col">
+            <BindWeChatBanner unbound={!!me?.reach && !me.reach.wechat} />
             <TryClock clock={clock} />
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">

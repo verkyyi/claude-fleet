@@ -186,6 +186,7 @@ var routeAccess = map[string]string{
 	// A user's own: scoped to their machine login, their principal, or
 	// FleetScope.
 	"/": accessUser, "/v1/me": accessUser, "/v1/me/identities": accessUser,
+	meWxBindQRPath: accessUser, meWxBindPollPath: accessUser, // claude-fleet#4057
 	// 我的额度 (claude-fleet#2517): the page stays until it folds into /usage
 	// (EPIC #3225 C4); its API reads the pool's windows, an admin's
 	// (claude-fleet#3227).

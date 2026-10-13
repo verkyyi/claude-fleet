@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
+import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useQuota, type Me, type Quota } from "@/shared/api";
 import { ADMIN_HREF, PAGES, type PageDef } from "./routes";
 
@@ -170,6 +171,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
           <BottomBar />
         </div>
       </SidebarProvider>
+      <Toaster position="top-center" />
     </Ctx.Provider>
   );
 };

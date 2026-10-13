@@ -16,6 +16,7 @@ export type Me = {
   via?: string; role?: string; person?: string; name?: string; login?: string;
   pages?: string[]; entry?: boolean; can_logout?: boolean;
   logins?: { machine: string; login: string }[]; // the (machine, login) pairs that are theirs
+  reach?: { wechat: boolean }; // can the notices find them (claude-fleet#4057); absent = the service account's road is off
 };
 export type MeState = { me: Me | null; loading: boolean };
 let meCache: Promise<Me | null> | null = null;
