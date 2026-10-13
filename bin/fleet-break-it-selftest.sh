@@ -49,6 +49,7 @@
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   restore-conversation-twice                      bin/fleet-restore.sh (restore, snapshot), fleet_restore_map_prune,
 #                                                   bin/.fleet-restore-resolve.py (one row per conversation)
+#   restore-peer-window / restore-role-lost        bin/fleet-restore.sh (snapshot drops @peer windows; role_handback)
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
@@ -1523,7 +1524,7 @@ drill_restore_conversation_twice() {
   # a no-repo row (column 16 `-`): it resumes in $HOME, where a shared cwd let three windows guess one id
   ct_row() { printf 'FID\t%s\nWIN\t%s\t%s\t%s\t-\tworking\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$1" "$2" "$WORK/home" "$3"; }
   { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
-    ct_row "$f1" 'linux-a shell' "$sid"; ct_row "$f2" '@mac-c' "$sid"; ct_row "$f3" '@mac-c' "$sid"
+    ct_row "$f1" 'linux-a shell' "$sid"; ct_row "$f2" 'mac-c shell' "$sid"; ct_row "$f3" 'mac-c shell' "$sid"
   } > "$mf"
   : > "$WORK/claude-argv"
   t0=$(now)
@@ -1549,6 +1550,83 @@ drill_restore_conversation_twice() {
   grep -q 'fleet_restore_map_prune "$prior" --retired' "$BIN/fleet-restore.sh" \
     || { WHY="the snapshot's shrink guard does not prune the stored map before counting it"; return 1; }
   SECS=$(since "$t0"); WHAT="同一对话在地图里三行：restore 只开最新那一行一个窗口、第二拍不重开；回收过的会话从地图里删掉"
+}
+
+# A 看台's peer window (issue #3829): `@fleet-linux-0·fleet`, an ssh onto another
+# machine with no session of its own. The snapshot wrote it as a session row and
+# guessed its conversation by mtime — $HOME's newest, an old orchestrator one — so
+# a reboot's restore reopened that conversation under a deleted login's name.
+drill_restore_peer_window() {
+  CAP=20; BREAK_SOCK="$WORK/sock-pw"; local t0 mf="$WORK/econf/fleets/oc/restore.map"
+  local old=3829aaaa-0000-4000-8000-000000003829 fp=1f0e0000-0000-4000-8000-000000038291
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$fp"
+    printf 'WIN\t@fleet-linux-0·fleet\t%s\t%s\t-\tlooping\t-\t-\n' "$WORK/home" "$old"
+    printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
+  } > "$mf"
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  auto                                            # the break: a reboot's restore off an old map
+  until_ok "$CAP" grep -q -- '--resume sid-1' "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the sandbox fleet never came back with issue-1"; return 1; }
+  sleep 1
+  grep -q -- "--resume $old" "$WORK/claude-argv" \
+    && { WHY="the peer window's guessed conversation ${old%%-*}… was reopened"; return 1; }
+  nt list-windows -t oc -F '#{window_name}' | grep -q '^@' \
+    && { WHY="a peer window came back as a session: [$(nt list-windows -t oc -F '#{window_name}' | tr '\n' ' ')]"; return 1; }
+  # …and a live peer window never enters the map again
+  local pw; pw=$(nt new-window -d -P -F '#{window_id}' -t oc: -n '@mac-c' -c "$WORK/home" 'exec sleep 600')
+  nt set-option -w -t "$pw" @peer 'mac-c@me'; nt set-option -w -t "$pw" @fleet_role panel
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" bash "$WORK/inst/bin/fleet-restore.sh" --snapshot >/dev/null 2>&1
+  grep -q '^WIN.issue-1' "$mf" || { WHY="the snapshot did not run against the sandbox (no issue-1 row)"; return 1; }
+  grep -q '^WIN.@' "$mf" && { WHY="the snapshot wrote the peer window as a session: $(grep '^WIN.@' "$mf" | cut -f2-4)"; return 1; }
+  SECS=$(since "$t0"); WHAT="看台对端窗口（@机器·登录）不进恢复图；旧图里有也不按它猜的对话重开"
+}
+
+# A role's mark lives on its window (issue #3829): a reboot took the server and the
+# `@fleet_role_def` with it; restore stamped the identity back but nobody held the
+# orchestrator role until a person stole it in the restored window.
+drill_restore_role_lost() {
+  CAP=20; BREAK_SOCK="$WORK/sock-rl"; local t0 w h mf="$WORK/econf/fleets/oc/restore.map"
+  local sid=3829bbbb-0000-4000-8000-000000003829 fo=1f0e0000-0000-4000-8000-000000038292
+  local held="$WORK/econf/global/roles.held"
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\nWIN\t编排\t%s\t%s\t-\tlooping\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$fo" "$WORK/home" "$sid"
+  } > "$mf"
+  mkdir -p "$WORK/econf/global"
+  printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"   # the line from before the reboot
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  auto                                            # the break: the reboot's restore
+  until_ok "$CAP" grep -q -- "--resume $sid" "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the orchestrator's conversation was not resumed"; return 1; }
+  w=$(nt list-windows -t oc -F '#{window_id}|#{@fleet_id}' | awk -F'|' -v f="$fo" '$2 == f { print $1 }')
+  [ -n "$w" ] || { WHY="no window came back with the orchestrator's identity"; return 1; }
+  h=$(env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+      BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_role_holder orchestrator' _ "$WORK/inst/bin" 2>&1)
+  [ "$h" = "$w" ] || { WHY="the orchestrator role came back to [$h], not the restored window $w"; return 1; }
+  grep -q "^orchestrator	oc	$fo	$w	" "$held" || { WHY="roles.held still names the window from before: $(cat "$held")"; return 1; }
+  SECS=$(since "$t0")
+  # a person resumed the conversation by hand first (a new window, a new identity):
+  # restore leaves it open once and the role follows it there
+  nt kill-server 2>/dev/null
+  printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"
+  nt -f /dev/null new-session -d -s oc -n home -c "$WORK/emain" 'exec sleep 600'
+  nt new-window -d -t oc: -n 编排 -c "$WORK/home" 'exec sleep 600'
+  w=$(nt list-windows -t oc -F '#{window_id}|#{window_name}' | awk -F'|' '$2 == "编排" { print $1 }')
+  nt set-option -w -t "$w" @fleet_id 1f0e0000-0000-4000-8000-000000038293
+  nt set-option -w -t "$w" @cc_session_id "$sid"
+  : > "$WORK/claude-argv"
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+    BREAK_SOCK="$BREAK_SOCK" SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 \
+    bash "$WORK/inst/bin/fleet-restore.sh" >/dev/null 2>&1
+  grep -q -- "--resume $sid" "$WORK/claude-argv" && { WHY="restore opened the hand-resumed conversation a second time"; return 1; }
+  [ "$(o "$w" @fleet_role_def)" = orchestrator ] || { WHY="the hand-resumed window did not get the role back"; return 1; }
+  grep -q "^orchestrator	oc	1f0e0000-0000-4000-8000-000000038293	$w	" "$held" \
+    || { WHY="roles.held does not follow the conversation to its new window: $(cat "$held")"; return 1; }
+  rm -f "$held"
+  WHAT="重启后 restore 把编排对话开回来，orchestrator 角色跟着它回到新窗口；人先手动接回的，角色也交给那一个窗口，不再开第二份"
 }
 
 # ---- /loop and fleet down (issue #1846) ------------------------------------------
