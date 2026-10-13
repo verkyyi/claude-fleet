@@ -7322,14 +7322,14 @@ while IFS= read -r r; do
   if [ -n "$PART_IDS" ]; then case "$PART_IDS" in *" $r "*) ;; *) continue ;; esac; fi
   fn="drill_${r//-/_}"
   type "$fn" >/dev/null 2>&1 || continue
-  SECS='' CAP='' WHY='' WHAT=''
+  SECS='' CAP='' WHY='' WHAT='' T_D=$(now)
   if "$fn" && [ -n "$SECS" ] && le "$SECS" "$CAP"; then
     PASSES=$((PASSES + 1))
-    printf 'PASS  %-20s %5ss ≤%ss  %s\n' "$r" "$SECS" "$CAP" "$WHAT"
+    printf 'PASS  %-20s %5ss ≤%ss  %s  [wall %ss]\n' "$r" "$SECS" "$CAP" "$WHAT" "$(since "$T_D")"
   else
     FAILS=$((FAILS + 1))
     [ -n "$WHY" ] || WHY="recovered in ${SECS:-?}s, over the ${CAP}s bound"
-    printf 'FAIL  %-20s %s\n' "$r" "$WHY"
+    printf 'FAIL  %-20s %s  [wall %ss]\n' "$r" "$WHY" "$(since "$T_D")"
   fi
 done <<EOF
 $ROWS

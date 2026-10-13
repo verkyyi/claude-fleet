@@ -509,14 +509,14 @@ for fn in $(sed -n 's/^\(drill_[a-z0-9_]*\)() *{.*/\1/p' "$1"); do
   r=$(printf '%s' "${fn#drill_}" | tr _ -)
   grep -qF -- "| \`$r\` |" "$DOC" || { FAILS=$((FAILS + 1)); printf 'FAIL  lint: %s has no row in docs/dev/BREAK-IT.md\n' "$fn"; continue; }
   if [ -n "${BREAK_ONLY:-}" ]; then case " $BREAK_ONLY " in *" $r "*) ;; *) continue ;; esac; fi
-  SECS='' CAP='' WHY='' WHAT=''
+  SECS='' CAP='' WHY='' WHAT='' T_D=$(now)
   if "$fn" && [ -n "$SECS" ] && le "$SECS" "$CAP"; then
     PASSES=$((PASSES + 1))
-    printf 'PASS  %-20s %5ss ≤%ss  %s\n' "$r" "$SECS" "$CAP" "$WHAT"
+    printf 'PASS  %-20s %5ss ≤%ss  %s  [wall %ss]\n' "$r" "$SECS" "$CAP" "$WHAT" "$(since "$T_D")"
   else
     FAILS=$((FAILS + 1))
     [ -n "$WHY" ] || WHY="recovered in ${SECS:-?}s, over the ${CAP}s bound"
-    printf 'FAIL  %-20s %s\n' "$r" "$WHY"
+    printf 'FAIL  %-20s %s  [wall %ss]\n' "$r" "$WHY" "$(since "$T_D")"
   fi
 done
 if [ "$FAILS" -gt 0 ]; then
