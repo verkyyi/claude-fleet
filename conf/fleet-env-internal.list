@@ -934,6 +934,7 @@ FLEET_CPU_THROTTLE_WARN            knob: internal, % of CPU periods throttled at
 FLEET_HUB_SESSIONS_INV_TTL         knob: internal pacing, seconds the hub-sessions loop reuses this machine's window inventory between hub-nudges (default 15, 0 = every round, #3544)
 FLEET_POOL_FETCH_FRESH_MIN         knob: internal pacing, minutes a base-sync FETCH_HEAD spares the warm pool's own fetch (default 2, 0 = always fetch, #3544)
 FLEET_POOL_CPU_READING             env handoff: the cgroup CPU reading scratch-pool.sh's fan-out samples once and hands each slot's pass (`-` = no limit; also a test seam, #3542)
+FLEET_ADMIT_CPU_READING            test seam: replaces the cgroup CPU reading fleet_machine_admit samples (`-` = no limit, #3308)
 FLEET_POOL_CPU_SAMPLE_SECS         knob: internal pacing, seconds the pool's grow gate samples the cgroup over (default 1, #3542)
 FLEET_POOL_CPU_THROTTLE            knob: internal, % of CPU periods throttled at which a cgroup-limited pool stops growing (default 10, #3542)
 FLEET_POOL_CPU_SHARE               knob: internal, share of the cgroup CPU limit used above which the pool stops growing (default 0.8, #3542)
