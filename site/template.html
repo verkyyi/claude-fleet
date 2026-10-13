@@ -108,15 +108,10 @@ html[lang=zh-CN] .hero h1{font-size:66px;line-height:1.15;letter-spacing:0}
 .prompt kbd{font:500 12px var(--fleet-font-mono);border:1px solid #3a3753;border-radius:5px;padding:1px 6px;color:var(--fleet-ink-2)}
 .cursor{display:inline-block;width:8px;height:1.1em;background:var(--fleet-clay);vertical-align:-3px;animation:blink 1s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
-.card{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;border:1px solid #2c2a44;border-radius:10px;background:#17162a;padding:12px;max-width:520px;font-family:var(--fleet-font-ui)}
-.card .kp{display:flex;gap:14px;font-size:12px;color:var(--fleet-muted)}
+.card{display:grid;grid-template-columns:1fr;gap:10px;align-items:end;border:1px solid #2c2a44;border-radius:10px;background:#17162a;padding:12px;max-width:520px;font-family:var(--fleet-font-ui)}
+.card .kp{display:flex;flex-wrap:wrap;gap:6px 22px;white-space:nowrap;font-size:12px;color:var(--fleet-muted)}
 .card .kp b{display:block;font:650 17px var(--fleet-font-display);color:var(--fleet-ink)}
-.bars{display:flex;gap:5px;align-items:flex-end;height:52px;grid-column:1/-1}
-.bars span{flex:1;border-radius:3px 3px 1px 1px;background:linear-gradient(180deg,var(--fleet-clay),var(--fleet-clay-deep));transform-origin:bottom;transform:scaleY(0);transition:transform .6s cubic-bezier(.2,.8,.2,1)}
-.card.on .bars span{transform:scaleY(1)}
-.bars span:nth-child(even){opacity:.6}
 .link{font:400 12.5px var(--fleet-font-mono);color:var(--fleet-sand)}
-.stage[data-dev=phone] .card{grid-template-columns:1fr}
 /* ⌘P panel — same groups and words as fleet-quickopen.py */
 .panel{position:absolute;left:50%;top:92px;width:min(560px,86%);transform:translate(-50%,-8px) scale(.98);opacity:0;pointer-events:none;background:#1d1c30;border:1px solid #3a3753;border-radius:12px;box-shadow:0 30px 70px -20px #000;transition:.2s;font-size:.93em;overflow:hidden}
 .panel.on{opacity:1;transform:translate(-50%,0) scale(1)}
@@ -132,6 +127,10 @@ html[lang=zh-CN] .hero h1{font-size:66px;line-height:1.15;letter-spacing:0}
 .key.on{opacity:1;transform:none}
 .replay{justify-content:center;margin-top:14px;font:500 12px var(--fleet-font-mono);color:var(--fleet-muted);display:flex;gap:6px;align-items:center}
 .replay i{width:6px;height:6px;border-radius:50%;background:var(--fleet-clay)}
+.case{max-width:640px;margin:14px auto 0;color:var(--fleet-ink-2);font-size:15px;line-height:1.6}
+.case b{color:var(--fleet-clay);font-weight:600;margin-right:8px}
+.case .who{color:var(--fleet-ink);font-weight:600;margin-right:8px}
+.case a{color:var(--fleet-ink);white-space:nowrap}
 
 /* sections */
 section.sec{padding:120px 0}
@@ -319,9 +318,8 @@ footer a:hover{color:var(--fleet-ink)}
         <div class="ln" data-t="s2"><span class="okc">⏺</span> {{r_s2}}</div>
         <div class="ln" data-t="s3"><span class="okc">⏺</span> {{r_s3}}</div>
         <div class="ln card" data-t="card">
-          <div class="kp"><span>{{r_total}}<b>¥2.41M</b></span><span>{{r_orders}}<b>9,317</b></span><span class="okc" style="align-self:end">+8%</span></div>
-          <span class="link">example.com/s/w41 ↗</span>
-          <div class="bars"><span style="height:46%"></span><span style="height:72%"></span><span style="height:58%"></span><span style="height:92%"></span><span style="height:64%"></span><span style="height:80%"></span><span style="height:40%"></span></div>
+          <div class="kp"><span>{{r_total}}<b>+1,928 -19</b></span><span>{{r_orders}}<b>37</b></span><span class="okc" style="align-self:end">PR #3767 ✓</span></div>
+          <span class="link">github.com/verkyyi/claude-fleet/pull/3767 ↗</span>
         </div>
         <div class="prompt"><span>❯ <span class="cursor"></span></span><kbd class="kh">⌘P</kbd></div>
       </div>
@@ -340,6 +338,7 @@ footer a:hover{color:var(--fleet-ink)}
       </div>
     </div>
     <p class="replay"><i></i>{{replay_note}}</p>
+    <p class="case"><b>{{case_tag}}</b><span class="who">{{case_who}}</span>{{case_line}} <a href="https://github.com/verkyyi/claude-fleet/pull/3767">{{case_link}}</a></p>
   </div>
 </div></section>
 
