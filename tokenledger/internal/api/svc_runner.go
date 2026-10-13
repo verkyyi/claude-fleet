@@ -151,7 +151,7 @@ func (c *ClusterSvcRunner) Start(ctx context.Context, run store.SvcRun) error {
 // its first start fixed — never under the ticket's 60.
 func svcJobDeadline(run store.SvcRun, now time.Time) int {
 	d := run.DeadlineS
-	if run.DeadlineAt != nil {
+	if run.Attempt > 1 && run.DeadlineAt != nil {
 		if left := int(run.DeadlineAt.Sub(now).Seconds()); left < d {
 			d = left
 		}
