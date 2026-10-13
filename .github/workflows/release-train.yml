@@ -573,7 +573,11 @@ jobs:
     # Does the hub need TRAIN_SHA's image, or is it already TRAIN_SHA's source?
     name: hub plan
     needs: [board, train]
-    if: needs.board.outputs.skip == 'false'
+    # !cancelled() + train's own verdict (issue #3864): `train` runs under always()
+    # beside jobs that are skipped on most trains (Linux 选机器, Linux 补跑?, Linux
+    # rescue), and a job reading the implicit success() after it was skipped too —
+    # run 38375663311 went green and released nothing.
+    if: "!cancelled() && needs.train.result == 'success' && needs.board.outputs.skip == 'false'"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -837,7 +841,7 @@ jobs:
     # = a look and nothing pushed, the usual case.
     name: node tools
     needs: [board, train]
-    if: needs.board.outputs.skip == 'false' && vars.NODE_IMAGE_REPO != ''
+    if: "!cancelled() && needs.train.result == 'success' && needs.board.outputs.skip == 'false' && vars.NODE_IMAGE_REPO != ''"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: node-image
