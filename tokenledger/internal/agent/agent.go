@@ -206,6 +206,13 @@ type Config struct {
 	// CCQUOTA_FLEET_SSH_RELAY=0 turns it off, and the hello then never offers it.
 	FleetSSHRelay bool
 
+	// FleetChat lets the hub relay a person's browser to this login's one
+	// conversation service (claude-fleet#3644): the agent splices a data stream
+	// it dials to the hub onto $FLEET_CONF_DIR/webchat/chat.sock, as the login,
+	// after it verified the hub's X-Fleet-Person. On by default with Fleet;
+	// CCQUOTA_FLEET_CHAT=0 turns it off, and the hello then never offers it.
+	FleetChat bool
+
 	// FleetRoutes are this machine's ways in that the heartbeat advertises
 	// (CCQUOTA_FLEET_NODE_ROUTES, claude-fleet#1414) — typically the public
 	// port the gateway forwards here. `fleet connect` measures them.
@@ -287,6 +294,8 @@ type Agent struct {
 	// svcLogs are the service-log follows open on this login's lane
 	// (claude-fleet#2797), by the hub's op_id.
 	svcLogs svcLogFollows
+	// chatRelays counts the chat relays open on this login (claude-fleet#3644).
+	chatRelays chatSlots
 	// machine is the machine link this agent is a tenant of
 	// (claude-fleet#2333); nil for a plain agent with its own link.
 	machine *machineLink

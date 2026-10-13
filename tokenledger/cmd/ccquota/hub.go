@@ -1536,6 +1536,8 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		// The relay rides the control channel, so it is on wherever that is
 		// unless explicitly refused (claude-fleet#1413).
 		FleetSSHRelay: fleet && getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
+		// The chat relay likewise (claude-fleet#3644).
+		FleetChat: fleet && getenv("CCQUOTA_FLEET_CHAT") != "0",
 		// fleet-ops: the cluster's provisioner it hands tickets to (claude-fleet#3553).
 		FleetClusterOps: func() string {
 			if fleet {
@@ -1624,6 +1626,8 @@ func sshRelayConfig(srv *api.Server) error {
 	}{
 		{"CCQUOTA_FLEET_SSH_RELAY_MAX", func(n int64) { srv.SSHRelayMaxPerUser = int(n) }},
 		{"CCQUOTA_FLEET_SSH_RELAY_RATE_BPS", func(n int64) { srv.SSHRelayRateBPS = n }},
+		{"CCQUOTA_FLEET_CHAT_RELAY_MAX", func(n int64) { srv.ChatRelayMaxPerLogin = int(n) }},
+		{"CCQUOTA_FLEET_CHAT_RELAY_RATE_BPS", func(n int64) { srv.ChatRelayRateBPS = n }},
 	} {
 		v := os.Getenv(kv.name)
 		if v == "" {

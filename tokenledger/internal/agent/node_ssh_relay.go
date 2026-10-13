@@ -76,7 +76,7 @@ func (a *Agent) openSSHRelay(ctx context.Context, m control.Message) {
 // splice copies bytes both ways between ws and tcp until either side ends or
 // ctx does, then closes both. Each direction half-closes nothing: SSH ends its
 // own session, and a stream that has stopped in one direction is finished.
-func splice(ctx context.Context, ws *websocket.Conn, tcp net.Conn) {
+func splice(ctx context.Context, ws *websocket.Conn, tcp io.ReadWriteCloser) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	nc := websocket.NetConn(ctx, ws, websocket.MessageBinary)

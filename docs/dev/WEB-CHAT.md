@@ -36,6 +36,25 @@ bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move 
   projects 目录、cwd（记录里的也一起）改成新家，记一行 `home_moved`。新家上打开 `/chat` 还是同一条对话，
   旧登录下不留服务。BREAK-IT `chat-home-moved`。
 
+### 节点上的转发（#3644，EPIC #3642 C2）
+
+入口不跑对话，只把人的网页经节点已连着的控制链路转到他家登录的 socket，形状和 SSH 转发（#1413）一样：
+
+1. 入口发控制消息 `chat_relay_open {relay_id, secret, login}`，只发给报了能力位 `CapChat` 的那个登录的
+   节点程序（或它在整机连接上的车道）；没报就不发，入口答 `NO_CHAT`，连不上答 `NODE_OFFLINE`。
+2. 节点回拨 `wss /v1/node/chat-relay?id=…`（带 `X-Relay-Secret`，同 SSH 转发的门 `attachRelayData`）。
+3. 入口在这条流上发第一帧 `{"person": "fpp1.…"}` —— `X-Fleet-Person`：人 · 家登录 · 这条转发的 id ·
+   两分钟过期，HMAC-SHA256，钥匙是该登录节点令牌的哈希（入口存着、节点自己算得出；同 worker assertion，#1810）。
+4. 节点验过（签名、登录、转发 id、时间）才以该登录连 `$FLEET_CONF_DIR/webchat/chat.sock`：
+   普通节点程序本身就是这个登录，直接连；整机节点程序以该登录跑 `ccquota chat-pipe`（`prepCmd`，座位上经核心的
+   exec-as），连上先回一个就绪字节再双向拷贝。验不过就断开（policy violation），socket 一个字节都收不到；
+   给别的登录的 open 根本不回拨。
+
+目标写死：`chat_relay_open` 只有上面三个字段，`ccquota chat-pipe` 不收任何参数。每个登录同时最多 8 条
+（`CCQUOTA_FLEET_CHAT_RELAY_MAX`），合计 1 MiB/s（`CCQUOTA_FLEET_CHAT_RELAY_RATE_BPS`，负数不限）；节点自己也最多接 8 条。
+`CCQUOTA_FLEET_CHAT=0` 让节点不报 `CapChat`。入口那半边给 C3 用的是 `dialChatRelay(ctx, 人, 机器, 登录)`，
+返回一条 `net.Conn`。BREAK-IT `chat-relay-wrong-person`（Go 测试：`tokenledger/internal/api/chat_relay_test.go`）。
+
 ### 本机直连（开发 / 排障用，默认关）
 
 原来的 127.0.0.1 + 一次性链接模式还在，但**默认关**（#3642 D3）：`FLEET_WEBCHAT_LOCAL=1` 才能用下面几条，

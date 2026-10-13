@@ -138,6 +138,12 @@ type nodeConn struct {
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
+	// canChat is the hello's CapChat: this login's agent splices chat relays
+	// onto its conversation socket (claude-fleet#3644). Set once, before publish.
+	canChat bool
+	// tokHash is the token hash this link (or lane) proved its login with:
+	// what a chat relay's X-Fleet-Person is signed with. Set once.
+	tokHash string
 	// canServiceLog is the hello's CapServiceLog: this machine program's lane
 	// reads its login's service logs (claude-fleet#2797).
 	canServiceLog bool
@@ -564,6 +570,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
+		canChat: hp.HasCap(control.CapChat), tokHash: tokHash,
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:    hp.HasCap(control.CapCredsep),
@@ -601,6 +608,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	// has dropped its halves, and the client deserves a clean close, not a
 	// stream that silently stops moving.
 	defer s.sshRelays.closeNode(nc)
+	defer s.chatRelays.closeNode(nc)
 	// So do the service logs it was following (claude-fleet#2797): each
 	// viewer is told, and its page reconnects.
 	defer s.svcLogs.closeNode(nc)
