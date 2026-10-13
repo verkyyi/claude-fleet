@@ -173,14 +173,14 @@ func (s *Server) emailStart(w http.ResponseWriter, r *http.Request, addr string,
 }
 
 // emailOpens: a mail to addr from r could open something — the address is
-// someone's way in, the browser carries an invite, or a signed-in person is
+// someone's way in, CCQUOTA_ADMINS names it (claude-fleet#3852), the browser carries an invite, or a signed-in person is
 // adding it to themselves.
 func (s *Server) emailOpens(r *http.Request, addr string) bool {
 	pid, err := s.Store.IdentityPrincipal(store.IdentityEmail, addr)
 	if err != nil {
 		return false
 	}
-	if pid != "" {
+	if pid != "" || s.adminAddress(addr) {
 		return true
 	}
 	if c, err := r.Cookie(inviteCookie); err == nil && validInviteCode(c.Value) {
