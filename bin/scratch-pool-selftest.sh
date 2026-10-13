@@ -548,7 +548,7 @@ n=$(grep -c . "$WORK/acct-reads" 2>/dev/null || echo 0)
 ! grep -q 'new-session' "$STATE/log" || fail "Z both entries are usable: nothing to spawn" "$(cat "$STATE/log")"
 ok "Z one ensure pass reads the account once; its entries still pass"
 
-# AA: a remote that never answers (issue #3999) — arvin's pod had no egress to
+# AA: a remote that never answers (issue #3999) — a user pod had no egress to
 # GitHub, `git fetch` hung, and the tick (repo slots first) never reached HOME.
 # A repo whose origin is an ssh command that sleeps: one fan-out tick spawns the
 # HOME slot BEFORE the repo slot, every fetch gives up at FLEET_POOL_FETCH_SECS,
