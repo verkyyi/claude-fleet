@@ -733,6 +733,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
   via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`
   `--changed <stable>` on Linux only (macOS follows the release — below), then `fleet-stable.sh move --precheck`;
+with the repo variable `FLEET_TRAIN_RUNNER=fleet-ack` its Linux half runs in the
+Shenzhen cluster (issue #3864: `bin/fleet-train-runner.sh pick`, an online fleet-ack
+runner else ubuntu-latest; TRAIN_SHA from the in-cluster git mirror; a shard whose
+spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` /
+`train-ack-reclaimed`, deploy/k8s/runners/README.md); empty = ubuntu-latest, byte for byte;
   then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
   with `sha=TRAIN_SHA` (skipped when `bin/fleet-train-hub.sh` finds the hub already
   TRAIN_SHA's Go source and `deploy/k8s/`, and never backwards: a hub on a later or forked commit is left as `hub superseded`, an unreadable `/version` is red — #3319, BREAK-IT `train-hub-backwards`), `fleet-release-publish.sh TRAIN_SHA`,
@@ -788,7 +793,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   test's recorded cost — `bin/selftest-durations.txt`, longest first into the
   lightest slice (issue #1390: a stride once stacked the six slowest tests into
   one shard); no row ⇒ the table's median, no table ⇒ exactly the old stride —
-  and `.github/workflows/selftests.yml` fans that over a 14-job matrix (8 until #2659, 12 until #3243), each
+  and `.github/workflows/selftests.yml` fans that over an 18-job matrix (8 until #2659, 12 until #3243, 14 until #3864), each
   shard printing its predicted load (WARN past 400s of the 480s step bound).
   Refresh the table with `bin/selftest-durations.sh --run <run id>`. Edit the `shard:` list to change the width and nothing else:
   the split reads `strategy.job-total`. The width is set by measured runner

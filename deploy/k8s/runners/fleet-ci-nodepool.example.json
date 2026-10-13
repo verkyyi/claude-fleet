@@ -1,0 +1,25 @@
+{
+  "_comment": "The fleet-ci node pool (issue #3864): the release train's Linux shards only. POST /clusters/<cluster>/nodepools (aliyun cs POST … --body \"$(cat …)\" — fill vswitch / security group / key pair / RAM role from the cluster's other pools). Spot, 16 cores, 0–3 nodes (the cluster's cap leaves one spare); tainted so nothing else lands there.",
+  "nodepool_info": { "name": "fleet-ci" },
+  "auto_scaling": { "enable": true, "type": "spot", "min_instances": 0, "max_instances": 3 },
+  "scaling_group": {
+    "instance_charge_type": "PostPaid",
+    "spot_strategy": "SpotAsPriceGo",
+    "instance_types": ["ecs.u1-c1m2.4xlarge", "ecs.u1-c1m4.4xlarge", "ecs.c7a.4xlarge", "ecs.c6.4xlarge", "ecs.c7.4xlarge"],
+    "multi_az_policy": "COST_OPTIMIZED",
+    "scaling_policy": "release",
+    "image_type": "AliyunLinux3ContainerOptimized",
+    "system_disk_category": "cloud_essd",
+    "system_disk_size": 80,
+    "vswitch_ids": ["vsw-EXAMPLE"],
+    "security_group_ids": ["sg-EXAMPLE"],
+    "key_pair": "EXAMPLE",
+    "tags": [{ "key": "layer", "value": "ack" }, { "key": "purpose", "value": "claude-fleet-ci" }]
+  },
+  "kubernetes_config": {
+    "runtime": "containerd",
+    "node_name_mode": "nodeip",
+    "labels": [{ "key": "fleet-ci", "value": "true" }],
+    "taints": [{ "key": "fleet-ci", "value": "true", "effect": "NoSchedule" }]
+  }
+}

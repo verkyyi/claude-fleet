@@ -7,7 +7,8 @@
 // STS, cr:GetAuthorizationToken (personal edition 2016-06-07 `GET /tokens`) for
 // `cr_temp_user` + a password that lives as long as the STS. What it may push is
 // the role's policy: acme/ccquota only (gha-claudefleet-deploy, the default) or
-// acme/fleet-managed-node only (gha-claudefleet-node-image, --role; #3855).
+// acme/fleet-managed-node only (gha-claudefleet-node-image, --role; #3855) or
+// acme/fleet-ci-runner only (gha-claudefleet-ci-runner, --role; #3864).
 //
 // Output: the auth for both registry endpoints merged into ~/.docker/config.json
 // (other entries kept; buildx reads it). Nothing is printed but masked values.
@@ -25,10 +26,13 @@ const { githubOidcToken, assumeRoleWithOidc, oidcClaims, signV3 } = require('../
 const ACCOUNT = '1720148580188583';
 const REGION = 'cn-shenzhen';
 // The roles a job may ask for, each with the one environment its trust admits
-// and what its policy pushes: the hub image (prod), the node image (#3855).
+// and what its policy pushes: the hub image (prod), the node image (#3855), the
+// release train's Linux test runner image (#3864; it also pulls the cluster's ARC
+// runner base, acme/arc-runner).
 const ROLES = {
   'gha-claudefleet-deploy': { env: 'prod', pushes: 'acme/ccquota' },
   'gha-claudefleet-node-image': { env: 'node-image', pushes: 'acme/fleet-managed-node' },
+  'gha-claudefleet-ci-runner': { env: 'ci-runner', pushes: 'acme/fleet-ci-runner' },
 };
 const DEFAULT_ROLE = 'gha-claudefleet-deploy';
 const PROVIDER = `acs:ram::${ACCOUNT}:oidc-provider/github-actions`;

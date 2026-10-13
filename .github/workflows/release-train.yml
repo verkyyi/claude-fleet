@@ -87,6 +87,19 @@ name: release train
 #     filed (`drill_issue` stands in), and nothing past the tests runs — no gate, no
 #     hub, no release. Two drills on two different heads show the second quarantine.
 #
+#   * the Linux half goes to the Shenzhen cluster when asked (issue #3864, EPIC #3863
+#     C1): with the repo variable FLEET_TRAIN_RUNNER=fleet-ack, `linux-pick`
+#     (bin/fleet-train-runner.sh pick, environment fleet-ack-probe: the runner
+#     app's token, master only) looks for an online fleet-ack runner — there ⇒
+#     the shards run on it and fetch TRAIN_SHA from the cluster's git mirror
+#     (FLEET_TRAIN_GIT_MIRROR) before GitHub; not there ⇒ ubuntu-latest, the summary
+#     says 「深圳不可用，退回 GitHub」. A shard whose spot runner went away mid-job
+#     (GitHub's «lost communication» / «shutdown signal») is no red: `红灯即停`
+#     waits, `Linux 补跑?` names those shards and `Linux rescue` reruns exactly them
+#     on ubuntu-latest (--shard K/N kept); the train ships when the rescue is green
+#     (BREAK-IT train-ack-reclaimed). The variable empty ⇒ no pick, no rescue: the
+#     Linux half is ubuntu-latest exactly as before (BREAK-IT train-ack-down).
+#
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
 # {sha, subject, committed}).
@@ -249,16 +262,113 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux
 
+  linux-pick:
+    # The Shenzhen cluster or GitHub (issue #3864): only when FLEET_TRAIN_RUNNER
+    # names a runner set. Its token reads the repo's runner list — the runner app's
+    # (secret FLEET_RUNNERS_APP_KEY, var FLEET_RUNNERS_APP_ID) in an environment
+    # that admits master only. Red or skipped here never holds the train: Linux
+    # then runs on ubuntu-latest.
+    name: Linux 选机器
+    needs: board
+    if: (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '') && vars.FLEET_TRAIN_RUNNER != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: fleet-ack-probe
+    outputs:
+      linux_runs_on: ${{ steps.pick.outputs.linux_runs_on }}
+      linux_where: ${{ steps.pick.outputs.linux_where }}
+      linux_why: ${{ steps.pick.outputs.linux_why }}
+      linux_mirror: ${{ steps.pick.outputs.linux_mirror }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout: bin
+      - name: the runner app's token
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.FLEET_RUNNERS_APP_ID }}
+          private-key: ${{ secrets.FLEET_RUNNERS_APP_KEY }}
+      - name: fleet-train-runner.sh pick
+        id: pick
+        env:
+          FLEET_TRAIN_RUNNER: ${{ vars.FLEET_TRAIN_RUNNER }}
+          FLEET_TRAIN_RUNNER_TOKEN: ${{ steps.app.outputs.token }}
+          FLEET_TRAIN_GIT_MIRROR: ${{ vars.FLEET_TRAIN_GIT_MIRROR }}
+        run: |
+          bash bin/fleet-train-runner.sh pick 2> pick.err
+          cat pick.err
+          echo "### $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
+
   linux:
     name: Linux
-    needs: [board, quarantine, plan]
-    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
+    needs: [board, quarantine, plan, linux-pick]
+    # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
+    if: >-
+      !cancelled() && needs.board.result == 'success' && needs.quarantine.result == 'success' &&
+      needs.plan.result == 'success' &&
+      (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      sha: ${{ needs.board.outputs.train_sha }}
+      base: ${{ needs.board.outputs.stable_sha }}
+      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+      mirror: ${{ needs.linux-pick.outputs.linux_mirror }}
+      shards: ${{ needs.plan.outputs.linux_shards }}
+      budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
+      quarantine: ${{ needs.quarantine.outputs.active }}
+      prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      drill_red: ${{ inputs.drill_red || '' }}
+      retry_red: '1'
+      drill_flaky: ${{ inputs.drill_flaky || '' }}
+      record: true
+
+  linux-rescue-plan:
+    # Which Linux shards ended red because their runner went away (issue #3864):
+    # a reclaimed spot node, an evicted pod. Every red one of that kind ⇒ covers.
+    name: Linux 补跑?
+    needs: [board, linux]
+    if: "!cancelled() && vars.FLEET_TRAIN_RUNNER != '' && needs.linux.result == 'failure'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      lost: ${{ steps.lost.outputs.lost }}
+      total: ${{ steps.lost.outputs.total }}
+      covers: ${{ steps.lost.outputs.covers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          sparse-checkout: bin
+      - name: fleet-train-runner.sh lost
+        id: lost
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash bin/fleet-train-runner.sh lost --prefix Linux 2> lost.err
+          cat lost.err
+          echo "### Linux 补跑：$(cat lost.err)" >> "$GITHUB_STEP_SUMMARY"
+
+  linux-rescue:
+    # Exactly the lost shards, on GitHub's runners, as K of the same N.
+    name: Linux rescue
+    needs: [board, quarantine, plan, linux-rescue-plan]
+    if: "!cancelled() && needs.linux-rescue-plan.outputs.covers == 'true'"
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
       runs_on: ubuntu-latest
-      shards: ${{ needs.plan.outputs.linux_shards }}
+      shards: ${{ needs.linux-rescue-plan.outputs.lost }}
+      of: ${{ needs.linux-rescue-plan.outputs.total }}
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
       step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
       job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
@@ -276,7 +386,7 @@ jobs:
     # Each FLAKY test (issue #3866) gets its issue (or a comment on it) and a
     # sighting; a flaky filing that fails is said, never reds the train.
     name: 隔离
-    needs: [board, quarantine, linux]
+    needs: [board, quarantine, linux, linux-rescue]
     if: always() && needs.quarantine.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -343,11 +453,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LINUX_JOB: ${{ needs.plan.outputs.linux_job_minutes }}
+          # a Linux shard whose cluster runner went away waits for its rescue (#3864)
+          LOST_OK: ${{ vars.FLEET_TRAIN_RUNNER != '' && 'Linux' || '' }}
         run: |
           m=60
           case "$LINUX_JOB" in ''|*[!0-9]*) ;; *) [ "$LINUX_JOB" -le "$m" ] || m=$LINUX_JOB ;; esac
           d=$(( (m + 30) * 60 )); [ "$d" -le 21000 ] || d=21000   # under the job's 360 minutes
-          bash bin/fleet-train-failfast.sh --deadline "$d"
+          # no macOS shard in the train since #3869: never wait for one to show up
+          set -- --deadline "$d" --need 'precheck|Linux / shard'
+          [ -z "$LOST_OK" ] || set -- "$@" --lost-ok "$LOST_OK"
+          bash bin/fleet-train-failfast.sh "$@"
 
   gate:
     name: precheck
@@ -383,7 +498,7 @@ jobs:
     # half follows the release (mac-follow.yml, issue #3869).
     name: train
     # fail-fast is waited for (not judged) so `release`'s --train move finds it done.
-    needs: [board, quarantine, plan, linux, fail-fast, gate, record]
+    needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, fail-fast, gate, record]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -393,21 +508,32 @@ jobs:
           SHA: ${{ needs.board.outputs.train_sha }}
           BOARD: ${{ needs.board.result }}
           LINUX: ${{ needs.linux.result }}
+          LWHERE: ${{ needs.linux-pick.outputs.linux_where || 'github' }}
+          LWHY: ${{ needs.linux-pick.outputs.linux_why || 'FLEET_TRAIN_RUNNER 未设' }}
+          COVERS: ${{ needs.linux-rescue-plan.outputs.covers }}
+          LOST: ${{ needs.linux-rescue-plan.outputs.lost }}
+          RESCUE: ${{ needs.linux-rescue.result }}
           GATE: ${{ needs.gate.result }}
           QUAR: ${{ needs.quarantine.result }}
           REC: ${{ needs.record.result }}
         run: |
+          # a Linux half whose only reds were lost runners, rescued green (#3864)
+          if [ "$LINUX" = failure ] && [ "$COVERS" = true ] && [ "$RESCUE" = success ]; then
+            LINUX="success（补跑 $LOST）"; lok=success
+          else
+            lok=$LINUX
+          fi
           {
             echo "### 🚂 train \`${SHA:0:7}\`"
             echo "| stage | result |"
             echo "|---|---|"
             echo "| board | $BOARD |"
-            echo "| Linux | $LINUX |"
+            echo "| Linux | ${LINUX}（${LWHERE}：${LWHY}） |"
             echo "| macOS | 发布之后由 mac-follow 跟（#3869） |"
             echo "| precheck | $GATE |"
             echo "| 隔离 | $QUAR · $REC |"
           } >> "$GITHUB_STEP_SUMMARY"
-          for r in "$BOARD" "$QUAR" "$LINUX" "$GATE" "$REC"; do
+          for r in "$BOARD" "$QUAR" "$lok" "$GATE" "$REC"; do
             [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · quarantine $QUAR · Linux $LINUX · precheck $GATE · 隔离 $REC) — it ships nothing; the next merge starts the next train"; exit 1; }
           done
           echo "train ${SHA:0:7} is green — the hub, the publish and stable follow"
@@ -444,7 +570,8 @@ jobs:
     # its OIDC role are the same as when it runs by itself).
     name: hub
     needs: [board, linux, gate, train, hub-plan]
-    if: needs.hub-plan.outputs.deploy == 'true'
+    # !cancelled(): a Linux shard lost and rescued leaves `linux` red; `train` judged it
+    if: "!cancelled() && needs.train.result == 'success' && needs.hub-plan.outputs.deploy == 'true'"
     permissions:
       contents: read
       deployments: read
@@ -461,7 +588,7 @@ jobs:
   release:
     # The last job, so `--train` finds every other job of this run finished.
     name: release
-    needs: [board, train, hub-plan, hub]
+    needs: [board, train, hub-plan, hub, linux-rescue-plan]
     if: >-
       always() && needs.board.outputs.skip == 'false' &&
       needs.train.result == 'success' && needs.hub-plan.result == 'success' &&
@@ -484,6 +611,7 @@ jobs:
       PLANNED: ${{ needs.hub-plan.outputs.deploy }}
       HUB_WHY: ${{ needs.hub-plan.outputs.why }}
       DEPLOYED: ${{ needs.hub.outputs.deployed }}
+      LOST: ${{ needs.linux-rescue-plan.outputs.covers == 'true' && needs.linux-rescue-plan.outputs.lost || '' }}
       FLEET_HUB_URL: https://claudefleet.24haowan.com
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -619,8 +747,11 @@ jobs:
           set +e
           # node tools / node image (#3855) build the node image beside the
           # release, never gate it: a registry hiccup does not hold stable back
-          sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" --ignore-check release \
-            --ignore-check 'node tools' --ignore-check 'node image' \
+          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image'
+          # a Linux shard whose cluster runner went away and that `Linux rescue`
+          # reran green (issue #3864): its red job is not this train's verdict
+          for k in $(printf '%s' "$LOST" | tr -c '0-9' ' '); do set -- "$@" --ignore-check "Linux / shard $k"; done
+          sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" "$@" \
             --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
           rc=$?
           cat out.txt
