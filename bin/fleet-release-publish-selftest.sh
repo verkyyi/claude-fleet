@@ -26,6 +26,11 @@
 #      run has no key.
 #   G. --ref stable-macos (issue #3868): the Mac lane's move is sha + ref + run,
 #      nothing cut or signed; the hub's 409 is exit 1; --dry-run POSTs nothing.
+#   H. --stage / --commit (issue #3867): a stage is POSTed only to a hub whose /key
+#      says the train signs and only with the key here (else exit 4, nothing sent),
+#      carries no ledger and keeps the 202 in its dir; --commit signs that, one POST
+#      with the ledger and no tree; a stage the hub no longer waits for (409), or
+#      none in the dir, is the whole publish.
 # Hermetic: a sandbox repo, a loopback hub. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -71,6 +76,10 @@ class H(http.server.BaseHTTPRequestHandler):
             if os.path.exists(p):
                 return self.answer(200, '{\n  "schema": 1,\n  "sha": "%s",\n  "files": [{"sha256": "%s"}]\n}\n' % (open(p).read().strip(), "f" * 64))
             return self.answer(404, "404 page not found\n")
+        if u.path == "/v1/fleet/release/key":
+            who = open(os.path.join(W, "signer")).read().strip() if os.path.exists(os.path.join(W, "signer")) else "hub"
+            self.send_response(200); self.send_header("X-Ccquota-Release-Signer", who)
+            self.send_header("Content-Length", "0"); self.end_headers(); return
         if u.path == "/oidc":
             q = urllib.parse.parse_qs(u.query)
             if self.headers.get("Authorization") != "bearer RUNTIME-REQ":
@@ -87,6 +96,9 @@ class H(http.server.BaseHTTPRequestHandler):
         for part in msg.iter_parts():
             name = part.get_param("name", header="content-disposition")
             open(os.path.join(d, name), "wb").write(part.get_payload(decode=True) or b"")
+        if os.path.exists(os.path.join(d, "sig")) and os.path.exists(os.path.join(W, "sig409")):
+            os.remove(os.path.join(W, "sig409"))
+            return self.answer(409, '{"error":"the staged build expired"}')
         code = int(open(os.path.join(W, "code")).read()) if os.path.exists(os.path.join(W, "code")) else 200
         if os.path.exists(os.path.join(d, "signer")) and os.path.exists(os.path.join(W, "unsigned")):
             import base64
@@ -222,6 +234,43 @@ run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref stabl
 eq "G: dry-run POSTs nothing" "$before" "$(posts)"
 run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref other
 eq "G: --ref takes stable or stable-macos" 2 "$RC"
+
+# --- H. the stage, then the commit (issue #3867) --------------------------------------------
+mkman 0; echo "$A" > "$WORK/stable"; ST="$WORK/stage"
+before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --stage "$ST"
+eq "H: no key → exit 4" 4 "$RC"; has "H: says nothing staged" "$OUT" "nothing staged"
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --stage "$ST"
+eq "H: a hub that signs itself → exit 4" 4 "$RC"; has "H: says it signs its own" "$OUT" "signs its own releases"
+eq "H: nothing POSTed to either" "$before" "$(posts)"
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --stage "$ST" --train "$WORK/train.json"
+eq "H: --stage --train → exit 2" 2 "$RC"
+echo train > "$WORK/signer"
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --stage "$ST"
+eq "H: staged → exit 0" 0 "$RC"; has "H: says staged" "$OUT" "staged: ${C:0:7}"
+eq "H: one POST" "$((before + 1))" "$(posts)"
+eq "H: the stage carries the signer" "$(python3 "$SIGN" pub "$WORK/train.key")" "$(part signer)"
+eq "H: … and no ledger" "" "$(part train)"
+eq "H: the stage keeps sha + prev" "$C $A" "$(cat "$ST/sha") $(cat "$ST/prev")"
+has "H: … and the 202" "$(cat "$ST/answer.json")" '"unsigned"'
+before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --commit "$ST" --train "$WORK/train.json"
+eq "H: commit → exit 0" 0 "$RC"; has "H: says staged, signed" "$OUT" "staged, signed by the train"
+eq "H: one POST" "$((before + 1))" "$(posts)"
+eq "H: no tree" "" "$(part tree)"
+eq "H: the ledger rides the signature" '{"run_id":"77","merges":[]}' "$(part train)"
+python3 "$BIN/fleet-release-verify.py" <(python3 "$SIGN" pub "$WORK/train.key") "$WORK/unsigned" "$(part sig)" > /dev/null 2>&1
+eq "H: the signature verifies" 0 "$?"
+touch "$WORK/sig409"; before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --commit "$ST" --train "$WORK/train.json"
+eq "H: a stage gone → exit 0" 0 "$RC"; has "H: says publishing whole" "$OUT" "the stage is gone"
+eq "H: … sig, whole, sig: three POSTs" "$((before + 3))" "$(posts)"
+eq "H: the whole publish sent the tree" "$(git -C "$REPO" archive --format=tar "$C" | cksum)" "$(gunzip < "$WORK/post/$((before + 1))/tree" | cksum)"
+before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --commit "$WORK/no-stage"
+eq "H: no stage → exit 0" 0 "$RC"; has "H: says no stage" "$OUT" "no stage of ${C:0:7}"
+eq "H: the whole publish: two POSTs" "$((before + 2))" "$(posts)"
+rm -f "$WORK/signer" "$WORK/unsigned"
 
 printf 'fleet-release-publish-selftest: %d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" -eq 0 ]

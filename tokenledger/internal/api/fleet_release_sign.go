@@ -51,6 +51,13 @@ const (
 // releaseUnsigned names the build of <sha> waiting for the train's signature.
 const releaseUnsigned = "unsigned"
 
+// releaseStageTTL: how long a build waits for its signature (claude-fleet#3867).
+// The train stages its release while its tests run and signs it once they are
+// green; a build older than this was staged by a train that went red or away,
+// and its signature is refused — the train publishes whole again. A var for
+// the test.
+var releaseStageTTL = 30 * time.Minute
+
 // ReleaseSignerHeader says on /key who signs: hub | train.
 const ReleaseSignerHeader = "X-Ccquota-Release-Signer"
 
@@ -200,6 +207,15 @@ func (rs *ReleaseStore) Sign(sha, sig, sshsig string) (map[string]any, error) {
 			return map[string]any{"status": "already", "sha": sha, "seq": p.Seq}, nil
 		}
 		return nil, publishErr(http.StatusConflict, "%s is not waiting for a signature — publish it first", short(sha))
+	}
+	if m := buildIDRe.FindStringSubmatch(filepath.Base(base)); m != nil {
+		var at int64
+		_, _ = fmt.Sscan(m[1], &at)
+		if age := time.Since(time.Unix(at, 0)); age > releaseStageTTL {
+			_ = os.Remove(filepath.Join(rs.Dir, sha, releaseUnsigned))
+			return nil, publishErr(http.StatusConflict, "the staged build of %s expired (staged %s ago, a stage lasts %s) — publish again",
+				short(sha), age.Round(time.Second), releaseStageTTL)
+		}
 	}
 	mb, err := os.ReadFile(filepath.Join(base, release.ManifestName))
 	if err != nil {

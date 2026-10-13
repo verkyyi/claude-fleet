@@ -35,6 +35,9 @@
 #                       ends green saying superseded, not red on the 409 (#3143)
 #   train-hub-backwards     the hub was deployed by hand past TRAIN_SHA: the train's
 #                       hub plan skips the deploy (superseded), never rolls it back (#3319)
+#   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
+#                       before the deploy (another sha's build, a hand push): the
+#                       deploy phase refuses it — digest and revision (#3867)
 #   oss-internal-name-committed  a PR adds a line holding a private address: the
 #                       oss-scan gate (the REAL rule table) reds it; `# oss-ok:` greens
 #                       it; .github/workflows/oss-scan.yml runs it on every PR (#3572)
@@ -589,6 +592,57 @@ drill_train_hub_backwards() {
 # The repo is public (EPIC #3569): a PR that adds an internal address used to merge
 # like any other line. bin/oss-scan.sh --gate (issue #3572) reds it, read off the
 # REAL conf/oss-scan.rules + conf/oss-scan.allow, on every PR (oss-scan.yml, no paths).
+# The hub image built BESIDE the tests (issue #3867, EPIC #3863 C4): the deploy
+# phase deploys only the digest its build phase reported, of TRAIN_SHA's revision.
+drill_train_prebuild_wrong_sha() {
+  CAP=30
+  local t0 d out rc wf hd sha other good bad
+  wf="$BIN/../.github/workflows/release-train.yml" hd="$BIN/../.github/workflows/hub-deploy.yml"
+  sed -n '/^  hub:/,/^  hub-build:/p' "$wf" | grep -q 'digest: ${{ needs.hub-build.outputs.digest }}' \
+    && sed -n '/^  hub:/,/^  hub-build:/p' "$wf" | grep -q 'phase: deploy' \
+    && sed -n '/^  hub-build:/,/^  release-stage:/p' "$wf" | grep -q 'phase: build' \
+    || { WHY="release-train.yml does not build the hub in one phase and deploy that digest in the other"; return 1; }
+  [ "$(awk '/fleet-train-prebuild.sh verify/{print NR; exit}' "$hd")" -lt "$(awk '/- name: Apply$/{print NR; exit}' "$hd")" ] 2>/dev/null \
+    || { WHY="hub-deploy.yml's deploy does not verify the prebuilt image before Apply"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-prebuild.XXXXXX"); t0=$(now)
+  sha=$(printf 'a%.0s' $(seq 40)) other=$(printf 'b%.0s' $(seq 40))
+  good="sha256:$(printf '1%.0s' $(seq 64))" bad="sha256:$(printf '2%.0s' $(seq 64))"
+  # a fake `docker buildx imagetools`: the tag's digest + revision from $d/{digest,rev}
+  cat > "$d/it" <<'IT'
+#!/bin/bash
+[ -s "$FAKE/digest" ] || exit 1
+case "$*" in
+  *'.Manifest'*) printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"%s"}\n' "$(cat "$FAKE/digest")" ;;
+  *'.Image'*)    printf '{"architecture":"amd64","config":{"Labels":{"org.opencontainers.image.revision":"%s"}}}\n' "$(cat "$FAKE/rev")" ;;
+esac
+IT
+  chmod +x "$d/it"
+  pb() { out=$(FAKE=$d FLEET_IMAGETOOLS="$d/it" GITHUB_OUTPUT='' bash "$BIN/fleet-train-prebuild.sh" "$@" 2>&1); rc=$?; }
+  echo "$good" > "$d/digest"; echo "$sha" > "$d/rev"
+  pb verify r/hub prod-aaaaaaa "$sha" "$good"
+  [ "$rc" = 0 ] || { WHY="the image this run built was refused ($rc): $out"; rm -rf "$d"; return 1; }
+  echo "$bad" > "$d/digest"; echo "$other" > "$d/rev"
+  pb verify r/hub prod-aaaaaaa "$sha" "$good"
+  [ "$rc" = 1 ] && case "$out" in *'overtook'*) true ;; *) false ;; esac \
+    || { WHY="another sha's build pushed over the tag was not refused ($rc): $out"; rm -rf "$d"; return 1; }
+  echo "$good" > "$d/digest"
+  pb verify r/hub prod-aaaaaaa "$sha" "$good"
+  [ "$rc" = 1 ] && case "$out" in *"not the train's $sha"*) true ;; *) false ;; esac \
+    || { WHY="an image of another revision was not refused ($rc): $out"; rm -rf "$d"; return 1; }
+  : > "$d/digest"
+  pb verify r/hub prod-aaaaaaa "$sha" "$good"
+  [ "$rc" = 1 ] || { WHY="a tag that is gone was not refused ($rc): $out"; rm -rf "$d"; return 1; }
+  # the next train on the same sha reuses its image — never another revision's
+  echo "$good" > "$d/digest"; echo "$sha" > "$d/rev"
+  pb look r/hub prod-aaaaaaa "$sha"
+  case "$out" in *'reuse=true'*"digest=$good"*) ;; *) WHY="the same sha's image was not reused: $out"; rm -rf "$d"; return 1 ;; esac
+  echo "$other" > "$d/rev"
+  pb look r/hub prod-aaaaaaa "$sha"
+  case "$out" in *'reuse=false'*) ;; *) WHY="another revision's image was reused: $out"; rm -rf "$d"; return 1 ;; esac
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="测试期间预构建的入口镜像被别的提交 / 手动推送盖掉：部署段核对 digest 与 revision 不符即停、什么都不动；同一 sha 的镜像下趟直接复用，别的 revision 不复用"
+}
+
 drill_oss_internal_name_committed() {
   CAP=60
   local t0 d out rc wf ip

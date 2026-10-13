@@ -5,7 +5,7 @@
 # and exempt (`# oss-ok: <理由>`) lines are not counted here.
 tailnet	0
 ts-net	0
-corp-domain	5
+corp-domain	2
 cloud	11
 machine	2
 user-home	0

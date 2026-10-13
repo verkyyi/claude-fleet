@@ -62,6 +62,8 @@ var trainWorkflows = []string{"release-train.yml", "mac-follow.yml", "stable-pub
 var stageBudget = map[string]float64{
 	"board": 30, "quarantine": 60, "plan": 60, "Linux": 150, "隔离": 60,
 	"precheck": 120, "train": 30, "hub plan": 60, "hub": 180, "release": 90,
+	// built beside the tests (#3867): on the path only when the tests end first
+	"hub build": 300, "发布包": 120,
 }
 
 // stageOffPath never makes a train slow: a watcher spanning the run, the

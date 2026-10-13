@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 )
@@ -145,6 +146,22 @@ func TestReleaseTrainSigned(t *testing.T) {
 	if resp, _ := getBody(t, p.h.http.URL+release.Path+"stable"); p.rs.stable().SHA != a || resp.StatusCode != 200 {
 		t.Fatal("an unsigned build moved stable")
 	}
+	// a stage older than releaseStageTTL takes no signature (claude-fleet#3867):
+	// the train that staged it went red or away; staged again, it signs
+	ttl := releaseStageTTL
+	releaseStageTTL = -time.Second
+	if code, body := p.sign(tok, b, train, mb); code != http.StatusConflict || !strings.Contains(body, "expired") {
+		t.Fatalf("a signature over an expired stage: %d %s", code, body)
+	}
+	releaseStageTTL = ttl
+	if code, body := p.sign(tok, b, train, mb); code != http.StatusConflict {
+		t.Fatalf("an expired stage is still waiting: %d %s", code, body)
+	}
+	code, body = p.publishParts(tok, b, a, nil, nil, map[string]string{"signer": release.FormatPublicKey(trainPub)})
+	if code != http.StatusAccepted {
+		t.Fatalf("stage B again: %d %s", code, body)
+	}
+	mb = staged(t, body)
 	_, stranger := newKey(t)
 	if code, body := p.sign(tok, b, stranger, mb); code != http.StatusForbidden {
 		t.Fatalf("a signature by another key: %d %s", code, body)
