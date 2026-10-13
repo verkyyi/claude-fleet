@@ -39,7 +39,7 @@ func TestNodeAgentsFollowAllowlists(t *testing.T) {
 	if m := nodeAgents(t, h, alice); m["claude"].Blocked || m["codex"].Blocked {
 		t.Fatalf("no policy blocks nothing: %+v", m)
 	}
-	// alice: Codex only (the arvin case) — Claude greyed for the policy.
+	// alice: Codex only — Claude greyed for the policy.
 	setPolicy(t, h, "user", pAlice, []string{uuidCodex})
 	m := nodeAgents(t, h, alice)
 	if !m["claude"].Blocked || m["claude"].Reason != "policy" || m["codex"].Blocked {
