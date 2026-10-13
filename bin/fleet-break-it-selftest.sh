@@ -1611,10 +1611,12 @@ drill_restore_role_lost() {
   # a person resumed the conversation by hand first (a new window, a new identity):
   # restore leaves it open once and the role follows it there
   nt kill-server 2>/dev/null
+  BREAK_SOCK="$WORK/sock-rl2"                     # its own server: nothing of the first half's answers
   printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"
   nt -f /dev/null new-session -d -s oc -n home -c "$WORK/emain" 'exec sleep 600'
   nt new-window -d -t oc: -n 编排 -c "$WORK/home" 'exec sleep 600'
   w=$(nt list-windows -t oc -F '#{window_id}|#{window_name}' | awk -F'|' '$2 == "编排" { print $1 }')
+  [ "$(printf '%s\n' "$w" | grep -c .)" = 1 ] || { WHY="the hand-resumed setup is not one window: [$w]"; return 1; }
   nt set-option -w -t "$w" @fleet_id 1f0e0000-0000-4000-8000-000000038293
   nt set-option -w -t "$w" @cc_session_id "$sid"
   : > "$WORK/claude-argv"
