@@ -947,6 +947,7 @@ FLEET_JOB_POLL                     knob: seconds between `fleet job` reads of a 
 FLEET_CLUSTER_CACHES               env handoff: the namespace whose npm / pip / Go caches a pod or a Job uses (render.py → fleet-node-linux.py devnet_settings, the Job's runner; #3548 #3552)
 FLEET_EGRESS_PROXY                 env handoff: the cluster's one egress as HTTPS_PROXY (render.py → fleet-node-linux.py devnet_settings, an open-kind Job's runner; #3547 #3552)
 FLEET_MOVE_KUBECTL                 seam: the kubectl fleet-move-to-pod.sh runs (fake cluster in its selftest, #3554)
+FLEET_MOVE_CRED_POLICY             seam: the cred-policy command fleet-move-to-pod.sh runs instead of fleet-cred-policy.sh (#3554)
 FLEET_MOVE_HUB_ADMIN               seam: the hub admin command fleet-move-to-pod.sh runs instead of fleet-hub-admin.py (#3554)
 FLEET_MOVE_STATE                   path: where fleet-move-to-pod.sh keeps each login's pod name, render and timeline (#3554)
 FLEET_MOVE_WAIT                    knob: seconds a fleet-move-to-pod.sh wait lasts (default 600, #3554)
