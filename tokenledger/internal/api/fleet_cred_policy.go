@@ -92,11 +92,11 @@ const (
 
 // credAllow is one scope's allowance.
 type credAllow struct {
-	All  bool // explicit grant, including future subscriptions
-	Set  bool // this scope requires an explicit match or all grant
-	None bool // Set with no key at all: nothing listed yet
-	Bad string          // the key's value does not parse: deny all
-	IDs map[string]bool // normalised subscription IDs
+	All  bool            // explicit grant, including future subscriptions
+	Set  bool            // this scope requires an explicit match or all grant
+	None bool            // Set with no key at all: nothing listed yet
+	Bad  string          // the key's value does not parse: deny all
+	IDs  map[string]bool // normalised subscription IDs
 }
 
 // credPolicy is the allowance that applies to one (machine, person).
