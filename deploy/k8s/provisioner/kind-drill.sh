@@ -385,7 +385,7 @@ echo "$gone"
 { echo; echo "### job-sees-keys"; echo '```'; echo "$lt"; echo "$lu"; echo; echo '$ kubectl get jobs -l fleet/role=job'; echo "$gone"; echo '```'; } | summary
 
 step "svc-run-sees-keys: two service runs, one after the other (#4005)"
-svckey() { printf 'fsj_%s' "$(head -c 400 /dev/urandom | LC_ALL=C tr -dc 'a-z2-7' | head -c 52)"; }
+svckey() { printf 'fsj_%s' "$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'a-z2-7' | head -c 52)"; }
 for run in R101 R102; do
   j=svc-$(printf '%s' "$run" | tr 'R' 'r')-a1
   [ "$(post "$(tk "$tmp/key" '{"op":"create-svc-run","cluster":"kind","run":"'"$run"'","attempt":1,"svc":"livepage","deadline":120,"token":"'"$(svckey)"'","nonce":"5'"${run#R}"'00000000000000000000000000000","exp":'"$exp"'}')")" = 200 ] \
