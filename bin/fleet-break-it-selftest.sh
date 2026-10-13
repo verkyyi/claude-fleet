@@ -4285,6 +4285,67 @@ SH
   WHAT="Mac 通道挪到 stable 之前的提交被拒（M:）；挪到 stable 本身照常；Mac 读 stable-macos、Linux 读 stable"
 }
 
+# ---- stable-push-no-workflows (#3912): GitHub refuses a tag move whose range
+# changes .github/workflows/* from a credential without workflows permission —
+# GITHUB_TOKEN, the checkout's default. Stable stayed at one commit for a day while
+# every merge touched a workflow, and the move said only «lease lost». Now the
+# release / mac-follow checkouts take STABLE_PUSH_TOKEN when set, and fleet-stable.sh
+# names the refusal. Rig: a bare remote whose pre-receive refuses such a tag move
+# the way GitHub does; the Mac lane (at c1) is moved onto stable (c2, which changes
+# a workflow) → exit 4, the reason said as no workflows permission, the tag left.
+drill_stable_push_no_workflows() {
+  CAP=30; local t0 d out rc c1 f
+  for f in release-train.yml mac-follow.yml; do
+    grep -q 'token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}' "$ROOT/.github/workflows/$f" \
+      || { WHY="$f's checkout does not push with STABLE_PUSH_TOKEN"; return 1; }
+  done
+  d="$WORK/nowf"; mkdir -p "$d/shim" "$d/seed"
+  cat > "$d/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *actions/workflows/*) printf '%s\tcompleted\tsuccess\tpush\t5\tselftests (macOS)\n%s\tcompleted\tsuccess\tpush\t6\tselftests (macOS)\n' "\$(cat "$d/c1")" "\$(cat "$d/c2")" ;;
+  *) printf 'completed success shard 1\n' ;;
+esac
+SH
+  chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm one && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    echo 'name: release train' > "$d/seed/.github/workflows/release-train.yml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'touches a workflow' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c2")"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable-macos "$(cat "$d/c1")"
+    git clone -q "$d/origin.git" "$d/co" 2>/dev/null || exit 1
+    cat > "$d/origin.git/hooks/pre-receive" <<'HOOK'
+#!/bin/sh
+z=0000000000000000000000000000000000000000
+while read -r o n r; do
+  case "$r" in refs/tags/*) ;; *) continue ;; esac
+  if [ "$o" = "$z" ]; then w=$(git ls-tree -r --name-only "$n" .github/workflows)
+  else w=$(git diff --name-only "$o" "$n" -- .github/workflows); fi
+  [ -z "$w" ] && continue
+  echo "refusing to allow a GitHub App to create or update workflow $(echo "$w" | head -1) without \`workflows\` permission" >&2
+  exit 1
+done
+HOOK
+    chmod +x "$d/origin.git/hooks/pre-receive"
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1")
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 4 ] || { WHY="a push the remote refused for workflows exited $rc, want 4: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'no workflows permission'*STABLE_PUSH_TOKEN*) ;; *) WHY="the refusal is not said as missing workflows permission: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *'.github/workflows/release-train.yml'*) ;; *) WHY="the changed workflow is not named: $(printf '%s' "$out" | tail -1)"; return 1 ;; esac
+  case "$out" in *'lease lost'*) WHY="still blames a lost lease: $(printf '%s' "$out" | tail -1)"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the refused tag moved anyway"; return 1; }
+  WHAT="范围里改过工作流、凭据没有 workflows 权限：推 tag 被拒时 move 说「缺 workflows 权限」、点名改过的工作流和 STABLE_PUSH_TOKEN（退出 4、不说 lease lost、tag 不动）；release / mac-follow 的 checkout 用 STABLE_PUSH_TOKEN"
+}
+
 # ---- train-push-cancels (#3141, EPIC #3139 C2): every merge used to start its own
 # macOS run, and the next merge cancelled it (17 of 20 one night) — so nothing was
 # ever green long enough to release. Now ONE lane: release-train.yml, a fixed

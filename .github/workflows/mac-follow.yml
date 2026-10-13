@@ -201,8 +201,10 @@ jobs:
     if: always() && needs.board.outputs.skip == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # STABLE_PUSH_TOKEN may be the release-sign environment's secret (issue #3912)
+    environment: release-sign
     permissions:
-      contents: write   # refs/tags/stable-macos
+      contents: write   # refs/tags/stable-macos (STABLE_PUSH_TOKEN, else GITHUB_TOKEN)
       statuses: write   # `mac follow: macOS` on the commit
       actions: write    # --train reads this run's jobs; dispatches stable-publish.yml
       id-token: write   # the train's ledger (#3870): its Mac stage, this run's OIDC
@@ -214,10 +216,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      # The lane's tag push rides this credential: a range that changes
+      # .github/workflows/* needs workflows permission, which GITHUB_TOKEN never
+      # has (issue #3912) — STABLE_PUSH_TOKEN when set, else GITHUB_TOKEN.
       - uses: actions/checkout@v4
         with:
           ref: master
           fetch-depth: 0
+          token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}
       - name: our runner refused it?
         # an older job gate on our Mac (it admits release-train.yml only): not the
         # BSD half's red — the same sha again on GitHub's Macs, this run cancelled
