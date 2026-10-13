@@ -554,6 +554,14 @@ history), the first screen of a plain `fleet` is the last one you looked at, els
 a new session (⌘N's road, issue #3119) — not the hub's pick's own window, which stays for `fleet <machine>`,
 this computer's fleet, and a newcomer's first start (no history: their home page); a bare machine
 window an older start left on the stage is cleared at the next start.
+The thin client (`fleet-thin.py`, plain
+`fleet` since #3007) keeps the same rule on the HOME side (issue #4000): the
+home's `cur` hook writes the session in view to `remote-views/.last` (one line,
+per login — a worker id, never a bare window id), which outlives every 看台, so a
+new run from any device lands there (`attach --thin` with no `--want` / `--resume`);
+on another machine it goes there through the 看台's switch road; gone (not here,
+not live on the hub) ⇒ a new session; no `.last` yet ⇒ the orchestrator's window,
+else a new one. `fleet <session>` still goes where it says; `bin/fleet-remote-view-thin-selftest.sh` H pins it.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
 the line through the nested client, and the widths.
 

@@ -205,6 +205,14 @@ EOF
   if [ -n "${_pc:-}" ]; then _c=${_pc#wid:}
   elif [ -n "${_fid:-}" ] && [ -n "$_fu" ]; then _c="$_fu/$_fid"; fi
   [ "$(rv_row_get "$_f" cur)" = "$_c" ] || rv_row_set "$_f" cur "$_c"
+  # Issue #4000: and the person's LAST session, kept past this 看台 (`.last`, one
+  # line, this login's — every device that comes home here reads it): a plain
+  # `fleet` lands there next time. Only a session (a worker id), never a bare
+  # window id — tmux deals those out again after a restart; never a far 看台's.
+  case "$_v:$_c" in *-via-*:*|*:@*) ;; *)
+    [ "$(cat "${2:-}/.last" 2>/dev/null)" = "$_c" ] \
+      || { printf '%s\n' "$_c" > "${2:-}/.last.$$" && mv -f "${2:-}/.last.$$" "${2:-}/.last"; } 2>/dev/null ;;
+  esac
   # Issue #3489: and the thin loop on the person's computer is told, in the 7502
   # it already reads (`ESC ] 7502 ; cur ; token=… ; m= ; l= ; w= BEL`, on the tty
   # of the client attached to THIS 看台 — never a row's old tty, which another
@@ -737,8 +745,10 @@ rv_within() {
 # the attach's exit the row gets `left=<epoch>` and rv_prune (every attach, the
 # collector's `views` phase) takes row + session FLEET_VIEW_KEEP_SECS (600) later.
 # `--resume` comes back to it — the same session when it is still kept, else a
-# new one on `cur=` — and lands, with no `cur=` to go back to, on the
-# orchestrator's window, else the fleet's current one.
+# new one on `cur=`. A plain `fleet` (no --want, no --resume — a new run, any
+# device) lands on the person's LAST session (`.last`, the `cur` hook's, issue
+# #4000): here, or on another machine through the 看台's switch road; gone ⇒ a new
+# session (⌘N's road). Never seen one: the orchestrator's window, else a new one.
 # rv_restoring — a restore of this login holds its lock right now (a live pid in
 # fleet-restore's $FLEET_CONF_DIR/restore/.auto.lock, which the snapshot restore
 # takes too): sessions are being reopened.
@@ -852,7 +862,7 @@ rv_thin_dress() {
   return 0
 }
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp last lastgone
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
@@ -888,12 +898,21 @@ rv_attach_thin() {
     T detach-client -s "=$g" 2>/dev/null
     [ -n "$resume" ] || [ -n "$want" ] || [ -f "$f" ] || T kill-session -t "=$g" 2>/dev/null
   fi
-  wfar=''
+  wfar=''; lastgone=''
   if [ -n "$want" ]; then
     w=$(rv_thin_window "$s" "$want")
     if [ -z "$w" ]; then
       case "$want" in */*) wfar=${want#wid:} ;; esac
       note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere${wfar:+, then there}"
+    fi
+  elif [ -z "$resume" ] && last=$(head -n 1 "$VIEWS/.last" 2>/dev/null) && [ -n "$last" ]; then
+    # a plain `fleet` (issue #4000): the session this person looked at last
+    w=$(rv_thin_window "$s" "$last")
+    if [ -z "$w" ]; then
+      case "$last" in */*)
+        case "$(fleet_worker_locate "wid:$last" "$s" 2>/dev/null)" in remote\ *) wfar=$last ;; esac ;;
+      esac
+      [ -n "$wfar" ] || lastgone=1
     fi
   fi
   # A resumed 看台 whose session is not here YET, while a restore holds the lock
@@ -918,7 +937,10 @@ rv_attach_thin() {
   # through ⌘N's own road below (issue #3007: a home that is not the holder put the
   # person on a bare `home` shell, on the MacBook and on the phone alike)
   orchfar=''
-  if [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; then
+  if [ -n "$lastgone" ]; then
+    # the last one is gone: a new session, never the orchestrator in its place
+    w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null); orchfar=1
+  elif [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; then
     w=$(rv_thin_home "$s")
     # the holder wears @fleet_role_def (issue #3114), an old seat @fleet_role
     case "$(T display-message -p -t "$w" '#{@fleet_role}|#{@fleet_role_def}' 2>/dev/null)" in

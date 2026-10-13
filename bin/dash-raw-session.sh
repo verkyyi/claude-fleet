@@ -863,6 +863,12 @@ if [ -z "$REAP" ]; then
   case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
 fi
 [ -n "$REAP" ] && TM set-window-option -t "$win" @reap_policy "$REAP" 2>/dev/null
+# A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
+# gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's
+# `working`), so one nobody ever typed into is closed after its grace
+# (fleet-cleanup-idle.py `empty`) — never one resumed, seeded or given words.
+[ "$NOREPO" = 1 ] && [ -z "$PROMPT$RESUME_SID$SEED_FILE" ] && [ "$TEST_ID" = 0 ] \
+  && TM set-window-option -t "$win" @prompt_track 1 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
