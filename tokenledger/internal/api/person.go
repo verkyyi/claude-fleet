@@ -126,6 +126,22 @@ func (s *Server) isAdminPrincipal(pid string, ids []store.HubIdentity) bool {
 	return false
 }
 
+// adminAddress reports whether CCQUOTA_ADMINS names addr itself — a new
+// deploy's first admin signs in by mail before anyone could invite them
+// (claude-fleet#3852).
+func (s *Server) adminAddress(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return false
+	}
+	for _, a := range s.Admins {
+		if strings.EqualFold(strings.TrimSpace(a), addr) {
+			return true
+		}
+	}
+	return false
+}
+
 // personRole is what the list says about a person RIGHT NOW: admin when the
 // deploy names them — CCQUOTA_ADMINS (the principal, or an address they sign
 // in with), or CCQUOTA_GITHUB_ADMINS (a username pinned to a GitHub ID they
@@ -184,7 +200,8 @@ func (s *Server) personRole(pid string) (string, error) {
 // is the way, name what the person is called by it. The person is whoever
 // that way already lets in; a way nobody has yet lets someone in only with
 // an invite — the invite's person is then a NEW p:<uuid> with this way hung
-// on it. Never a new account without an invite (EPIC #3570 共同约定 11). role
+// on it — or, for an address, when CCQUOTA_ADMINS names it: a new admin.
+// Never a new account without either (EPIC #3570 共同约定 11). role
 // "" is a refusal, named by refusal.
 func (s *Server) admitPerson(kind, subject, name, invite string, now time.Time) (pid, role, refusal string, err error) {
 	if s.Store == nil {
@@ -206,6 +223,18 @@ func (s *Server) admitPerson(kind, subject, name, invite string, now time.Time) 
 		if role, err = s.personRole(pid); err != nil {
 			return "", "", "", err
 		}
+	}
+	if role == "" && pid == "" && kind == store.IdentityEmail && s.adminAddress(subject) {
+		// An address the deploy names as admin, nobody's yet: a new person,
+		// admin by the list (claude-fleet#3852). Only an address can be
+		// named there — a WeChat way still needs an invite or an admin.
+		if pid, err = newPersonPrincipal(); err != nil {
+			return "", "", "", err
+		}
+		if err := s.recordAdminAs(pid, 0, name, now); err != nil {
+			return "", "", "", err
+		}
+		role = roleAdmin
 	}
 	if role == "" && invite != "" {
 		if pid == "" {
