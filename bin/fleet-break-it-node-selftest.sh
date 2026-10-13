@@ -1229,7 +1229,7 @@ SH
   WHAT="守护已降到 _fleetnode 时重装根核心：launchd 还在拆旧核心、bootstrap 回 EIO——等旧的走完再重试，装上且 socket 答了才算；新的起不来就放回旧的、不往守护那步走；核心不答时守护自己的 install 拒绝、status --check 7（体检 node 行 FAIL）"
 }
 
-# node-core-swept (#3857): macmini's core vanished hours after a reboot — the
+# node-core-swept (#3857): a managed machine's core vanished hours after a reboot — the
 # hourly leftover sweep (a seated daemon has the core run it) took
 # com.claude-fleet.node-core for a machine unit the daemon does not run and booted
 # it out: the core died mid-sweep, gone from launchd, its plist left, every child
