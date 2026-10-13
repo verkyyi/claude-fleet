@@ -2,8 +2,9 @@ name: cluster-perms
 
 # The cluster half of BREAK-IT sa-token-in-user-pod, provisioner-off-template
 # (claude-fleet#3558, EPIC #3500 C16), root-in-user-pod (#3757: a person's pod
-# running, `ps` in both its containers) and job-sees-keys (#3552: a throwaway Job
-# of each trust): fleet-workers' accounts, fleet-ops' Role, the provisioner, its
+# running, `ps` in both its containers), job-sees-keys (#3552: a throwaway Job
+# of each trust) and svc-run-sees-keys (#4005: two service runs' Jobs, one after
+# the other): fleet-workers' accounts, fleet-ops' Role, the provisioner, its
 # Role and its admission policy on a throwaway kind
 # cluster in this runner (deploy/k8s/provisioner/kind-drill.sh). The run's
 # summary page carries `kubectl auth can-i --list` for every account. Nothing

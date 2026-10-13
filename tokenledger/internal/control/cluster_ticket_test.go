@@ -19,6 +19,10 @@ const pyBindTicket = "c1.eyJvcCI6ImJpbmQtdXNlci1wb2QiLCJjbHVzdGVyIjoiYWNrLXN6Iiw
 // (claude-fleet#3552).
 const pyJobTicket = "c1.eyJvcCI6ImNyZWF0ZS1qb2IiLCJjbHVzdGVyIjoiYWNrLXN6IiwicG9kIjoidS1hMWIyYzMiLCJyZXBvIjoiby9yIiwicmVmIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsImtpbmQiOiJ1bnRydXN0ZWQiLCJjbWQiOiJtYWtlIHRlc3QiLCJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwiZXhwIjo0MTAyNDQ0ODAwfQ.RIAGAEIYQuY7_ak4-CB1pExNo0dYknkp2luG0yMq_KlltkyZHzu9pZEBaAKHsMznwJRusjZhNnm8BvU4bZryAA"
 
+// pySvcRunTicket is the same for create-svc-run (claude-fleet#4005): the run,
+// its attempt, the principal's name, the deadline and the Job's key.
+const pySvcRunTicket = "c1.eyJvcCI6ImNyZWF0ZS1zdmMtcnVuIiwiY2x1c3RlciI6ImFjay1zeiIsInJ1biI6IlI0MiIsImF0dGVtcHQiOjEsInN2YyI6ImxpdmVwYWdlIiwiZGVhZGxpbmUiOjkwMCwidG9rZW4iOiJmc2pfYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm5vbmNlIjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJleHAiOjQxMDI0NDQ4MDB9.c2X_NYB3B2nayo_rW3n-acao1uwTEH1xvRb0_av1p1WXY9u6fUpn9dpKjtazQDcLMLEh7UDwMIOxncYFdxj6DQ"
+
 func TestClusterTicketMatchesTheProvisioner(t *testing.T) {
 	key := ticketKey()
 	got, err := SignClusterTicket(key, ClusterTicket{Op: ClusterCreateUserPod, Cluster: "ack-sz", Pod: "u-a1b2c3",
@@ -45,6 +49,12 @@ func TestClusterTicketMatchesTheProvisioner(t *testing.T) {
 		Nonce: "00112233445566778899aabbccddeeff", Exp: 4102444800})
 	if err != nil || job != pyJobTicket {
 		t.Fatalf("Go's job ticket\n%s\nis not the provisioner's\n%s (%v)", job, pyJobTicket, err)
+	}
+	svc, err := SignClusterTicket(key, ClusterTicket{Op: ClusterCreateSvcRun, Cluster: "ack-sz", Run: "R42",
+		Attempt: 1, Svc: "livepage", Deadline: 900, Token: "fsj_" + strings.Repeat("a", 52),
+		Nonce: "0123456789abcdef0123456789abcdef", Exp: 4102444800})
+	if err != nil || svc != pySvcRunTicket {
+		t.Fatalf("Go's svc run ticket\n%s\nis not the provisioner's\n%s (%v)", svc, pySvcRunTicket, err)
 	}
 }
 

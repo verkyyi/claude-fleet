@@ -24,6 +24,13 @@ The payload is exactly {op, cluster, nonce, exp} plus the op's own fields:
                                        cmd one line run by sh -c (#3552)
   bind-user-pod     pod, principal     a claimed spare pod's fleet/principal
                                        label (#3553)
+  create-svc-run    run, attempt, svc, one service run's throwaway environment
+                    deadline, token    (#4005): render.py's svc Job for run R<n>
+                                       attempt k of principal svc:<svc>, killed
+                                       at deadline seconds; token is the Job's
+                                       one-time key to the hub, written into
+                                       its Secret svc-r<n>-a<k>-token
+  delete-svc-run    run, attempt       that Job (its Secret goes with it)
 
 tokenledger/internal/control/cluster_ticket.go is the Go twin; its test pins one
 ticket both sides make byte for byte. check() refuses a ticket not the key's,
@@ -51,9 +58,12 @@ OPS = {
     "set-limits": ("pod", "limits"),
     "create-job": ("pod", "repo", "ref", "kind", "cmd"),
     "bind-user-pod": ("pod", "principal"),
+    "create-svc-run": ("run", "attempt", "svc", "deadline", "token"),
+    "delete-svc-run": ("run", "attempt"),
 }
 # the Go struct's field order (json.Marshal): what sign() writes, so the bytes match
-ORDER = ("op", "cluster", "pod", "limits", "login", "uid", "repo", "ref", "kind", "cmd", "join", "principal", "nonce", "exp")
+ORDER = ("op", "cluster", "pod", "limits", "login", "uid", "repo", "ref", "kind", "cmd", "join", "principal",
+         "run", "attempt", "svc", "deadline", "token", "nonce", "exp")
 GRAMMAR = {
     "cluster": re.compile(r"^[a-z0-9][a-z0-9.-]{0,62}$"),
     "pod": re.compile(r"^u-[a-z0-9]{4,20}$"),
@@ -71,7 +81,14 @@ GRAMMAR = {
     "nonce": re.compile(r"^[0-9a-f]{32}$"),
     # fleet-node-linux.py valid_name: 2-16 of a-z0-9, a letter among them
     "login": re.compile(r"^(?=[a-z0-9]*[a-z])[a-z0-9]{2,16}$"),
+    # a service run (#4005): R<n>, its principal's name (svc:<name>), the Job's
+    # one-time key to the hub (fsj_ + base32 of 32 bytes)
+    "run": re.compile(r"^R[1-9][0-9]{0,15}$"),
+    "svc": re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$"),
+    "token": re.compile(r"^fsj_[a-z2-7]{52}$"),
 }
+# the numbers a service run's ticket carries (#4005): its attempt, its deadline (s)
+INTS = {"attempt": (1, 10), "deadline": (60, 3601)}
 # the pod's one login runs as this number: a person's, never root or a system one
 UID_RANGE = (1000, 60000)
 
@@ -109,6 +126,9 @@ def check(pub, ticket, cluster, now):
     if "uid" in t and not (isinstance(t["uid"], int) and not isinstance(t["uid"], bool)
                            and UID_RANGE[0] <= t["uid"] < UID_RANGE[1]):
         raise Refused("ticket uid %r is not a login's number (%d-%d)" % ((t["uid"],) + UID_RANGE))
+    for k, (lo, hi) in INTS.items():
+        if k in t and not (isinstance(t[k], int) and not isinstance(t[k], bool) and lo <= t[k] < hi):
+            raise Refused("ticket %s %r is not %d-%d" % (k, t[k], lo, hi - 1))
     if t["cluster"] != cluster:
         raise Refused("ticket is for cluster %r, not %r" % (t["cluster"], cluster))
     return t

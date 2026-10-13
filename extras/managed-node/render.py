@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render a single managed ACK node. Output is a kubectl-compatible JSON List."""
 import argparse
+import base64
 import ipaddress
 import json
 import re
@@ -247,6 +248,21 @@ def entry_annotations(spec):
     return a
 
 
+def _egress_ranges(egress):
+    """The egress guard's (dns, blocked, metadata, allow) from an egress dict over EGRESS."""
+    eg = dict(EGRESS, **(egress or {}))
+    try:
+        dns = str(ipaddress.IPv4Address(eg['dns']))
+    except ValueError:
+        raise ValueError('--egress-dns is an IPv4 address, not %r' % eg['dns'])
+    metadata = _net(eg['metadata'], '--egress-metadata')
+    blocked = [metadata, _net(eg['pod_cidr'], '--egress-pod-cidr'),
+               _net(eg['service_cidr'], '--egress-service-cidr')]
+    blocked += [_net(c, '--egress-private') for c in eg['private']]
+    allow = [egress_allow(v) for v in eg.get('allow', ())]
+    return dns, blocked, metadata, allow
+
+
 def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_mirrors, cred_central,
              egress_proxy, egress_closed, cn_mirrors=False, cluster_caches=False, namespace=''):
     """The checks both templates share; returns the egress guard's (dns, blocked, metadata, allow)."""
@@ -260,16 +276,7 @@ def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_
     for name in pull_secrets:
         if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?', name):
             raise ValueError('--pull-secret is a Secret name in the namespace, not %r' % name)
-    eg = dict(EGRESS, **(egress or {}))
-    try:
-        dns = str(ipaddress.IPv4Address(eg['dns']))
-    except ValueError:
-        raise ValueError('--egress-dns is an IPv4 address, not %r' % eg['dns'])
-    metadata = _net(eg['metadata'], '--egress-metadata')
-    blocked = [metadata, _net(eg['pod_cidr'], '--egress-pod-cidr'),
-               _net(eg['service_cidr'], '--egress-service-cidr')]
-    blocked += [_net(c, '--egress-private') for c in eg['private']]
-    allow = [egress_allow(v) for v in eg.get('allow', ())]
+    dns, blocked, metadata, allow = _egress_ranges(egress)
     if github_proxy and not re.fullmatch(GH_PROXY_RE, github_proxy):
         raise ValueError('--github-proxy is http://HOST:PORT (extras/gh-relay), not %r' % github_proxy)
     for m in git_mirrors:
@@ -903,6 +910,145 @@ def job_resources(image, pod, repo, ref, nonce, namespace='fleet-workers', pull_
                           'volumes': volumes}}}}]
 
 
+# A service run's throwaway environment (#4005, the SPACE EPIC C3): one Job per
+# run attempt, for a service principal (svc:<name>) — never a person's pod. It
+# holds no key of anyone's: no token, no home, no PVC, not root; its only Secret
+# is its own one-time key to the hub (svc-r<n>-a<k>-token, owned by the Job, so it
+# goes with it). Three containers on one network namespace:
+#
+#   egress-guard  closed (render.py's guard): DNS and the template's allow lines
+#                 alone — the run egress proxy and the credential proxy by
+#                 ClusterIP; the metadata address, the pod / service ranges and
+#                 every private range are REJECTed, and so is the rest
+#   fetch         the runner's `fetch`: the template (agent.md, by digest) and the
+#                 inputs from the hub with the key, written under /work, and the
+#                 model pass (bound to this run, good until its deadline) on a
+#                 memory emptyDir
+#   run           the runner's `run`: Claude Code, -p --agent report, its tools
+#                 WebSearch / WebFetch / Read / Write and nothing else; /out goes
+#                 back to the hub (POST /v1/node/svc-runs/<R>/result, the same key)
+#
+# activeDeadlineSeconds is the run's deadline, backoffLimit 0 (a retry is the
+# hub's: a new attempt, a new Job), ttlSecondsAfterFinished 300 — five minutes
+# after it ends there is no Job, no pod, no file of it.
+SVC_RUNNER = '/opt/claude-fleet/seed/current/bin/fleet-svc-runner.py'
+SVC_RUN_RE = r'R[1-9][0-9]{0,15}'
+SVC_NAME_RE = r'[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?'
+SVC_TOKEN_RE = r'fsj_[a-z2-7]{52}'
+SVC_TOKEN_KEY = 'token'
+SVC_DEADLINE = (60, 3600)
+SVC_TTL = 300
+
+
+def svc_run_name(run, attempt):
+    """The Job of run R<n> attempt k: svc-r<n>-a<k>."""
+    if not re.fullmatch(SVC_RUN_RE, run or ''):
+        raise ValueError('a service run is R<n>, not %r' % run)
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or not 1 <= attempt <= 9:
+        raise ValueError('a run attempt is 1-9, not %r' % (attempt,))
+    return 'svc-%s-a%d' % (run.lower(), attempt)
+
+
+def svc_run_resources(image, run, attempt, svc, deadline, hub, cred_central, egress_proxy,
+                      namespace='fleet-workers', egress=None, pull_secrets=('acr-pull',), ttl=SVC_TTL,
+                      runner=SVC_RUNNER):
+    """[the Job] of one service run attempt. `egress['allow']` names the two
+    in-cluster roads the closed guard lets through (the run egress proxy and the
+    credential proxy, IP:PORT each); `egress_proxy` is the run egress proxy's URL
+    (the hub and the open web go through it), `cred_central` the credential proxy."""
+    name = svc_run_name(run, attempt)
+    if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
+        raise ValueError('pin the svc run image by sha256 digest')
+    if not re.fullmatch(SVC_NAME_RE, svc or ''):
+        raise ValueError('a service principal\'s name is a DNS label, not %r' % svc)
+    if isinstance(deadline, bool) or not isinstance(deadline, int) or not SVC_DEADLINE[0] <= deadline <= SVC_DEADLINE[1]:
+        raise ValueError('a run deadline is %d-%d seconds, not %r' % (SVC_DEADLINE + (deadline,)))
+    if not re.fullmatch(r'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?', hub or ''):
+        raise ValueError('the hub is https://HOST[:PORT], not %r' % hub)
+    if not re.fullmatch(CENTRAL_RE, cred_central or ''):
+        raise ValueError('the credential proxy is https://HOST or http://NAME.NS.svc.cluster.local[:PORT], not %r'
+                         % cred_central)
+    if not re.fullmatch(EGRESS_PROXY_RE, egress_proxy or ''):
+        raise ValueError('the run egress proxy is http://HOST:PORT, not %r' % egress_proxy)
+    if not re.fullmatch(NS_RE, namespace):
+        raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    if not re.fullmatch(r'/[A-Za-z0-9._/-]+', runner):
+        raise ValueError('the svc runner is an absolute path, not %r' % runner)
+    for n in pull_secrets:
+        if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?', n):
+            raise ValueError('a pull Secret is a Secret name, not %r' % n)
+    dns, blocked, metadata, allow = _egress_ranges(egress)
+    if not allow:
+        raise ValueError("a run's guard is closed: egress.allow names the run egress proxy and the "
+                         'credential proxy (IP:PORT) — with neither it reaches nothing')
+    labels = {'app.kubernetes.io/name': 'fleet-svc-run', 'fleet/role': 'job', 'fleet/job-kind': 'svc',
+              'fleet/job-net': 'svc', 'fleet/svc': svc, 'fleet/run': run, 'fleet/attempt': str(attempt)}
+    env = [{'name': 'FLEET_SVC_RUN', 'value': run}, {'name': 'FLEET_SVC_ATTEMPT', 'value': str(attempt)},
+           {'name': 'FLEET_SVC_DEADLINE', 'value': str(deadline)}, {'name': 'FLEET_SVC_HUB', 'value': hub},
+           {'name': 'FLEET_SVC_CENTRAL', 'value': cred_central},
+           {'name': 'FLEET_SVC_KEY_FILE', 'value': '/run/fleet-svc-key/' + SVC_TOKEN_KEY},
+           # the hub and the open web through the run egress proxy; the credential
+           # proxy straight (a cluster name)
+           {'name': 'HTTPS_PROXY', 'value': egress_proxy}, {'name': 'https_proxy', 'value': egress_proxy},
+           {'name': 'NO_PROXY', 'value': '.svc.cluster.local,.svc'}, {'name': 'no_proxy', 'value': '.svc.cluster.local,.svc'},
+           {'name': 'HOME', 'value': '/tmp/home'}, {'name': 'TMPDIR', 'value': '/tmp'},
+           {'name': 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'value': '1'},
+           {'name': 'DISABLE_AUTOUPDATER', 'value': '1'}]
+    sc = dict(JOB_SECURITY)
+    small = {'requests': {'cpu': '10m', 'memory': '32Mi'}, 'limits': {'cpu': '200m', 'memory': '128Mi'}}
+    mounts = [{'name': 'work', 'mountPath': '/work'}, {'name': 'out', 'mountPath': '/out'},
+              {'name': 'tmp', 'mountPath': '/tmp'}, {'name': 'pass', 'mountPath': '/run/fleet-svc'},
+              {'name': 'key', 'mountPath': '/run/fleet-svc-key', 'readOnly': True}]
+    fetch = {'name': 'fetch', 'image': image, 'command': ['/usr/bin/python3', '-I', runner, 'fetch'],
+             'env': env, 'resources': small, 'securityContext': sc, 'workingDir': '/work', 'volumeMounts': mounts}
+    main = {'name': 'run', 'image': image, 'command': ['/usr/bin/python3', '-I', runner, 'run'],
+            'env': env, 'resources': {'requests': {'cpu': '250m', 'memory': '512Mi'},
+                                      'limits': {'cpu': '1', 'memory': '2Gi'}},
+            'securityContext': sc, 'workingDir': '/work', 'volumeMounts': mounts}
+    guard = egress_guard(image, dns, blocked, metadata, allow, closed=True)
+    return [{'apiVersion': 'batch/v1', 'kind': 'Job',
+             'metadata': {'name': name, 'namespace': namespace, 'labels': labels},
+             'spec': {'backoffLimit': 0, 'activeDeadlineSeconds': deadline, 'ttlSecondsAfterFinished': int(ttl),
+                      'template': {'metadata': {'labels': labels}, 'spec': {
+                          'serviceAccountName': SA_JOB, 'automountServiceAccountToken': False,
+                          'enableServiceLinks': False, 'restartPolicy': 'Never',
+                          # the guard is root for its rules alone; every other
+                          # container says runAsNonRoot itself
+                          'securityContext': {'runAsUser': 10001, 'runAsGroup': 10001, 'fsGroup': 10001,
+                                              'seccompProfile': {'type': 'RuntimeDefault'}},
+                          'imagePullSecrets': [{'name': n} for n in pull_secrets],
+                          'initContainers': [guard, fetch],
+                          'containers': [main],
+                          'volumes': [{'name': 'work', 'emptyDir': {'sizeLimit': '1Gi'}},
+                                      {'name': 'out', 'emptyDir': {'sizeLimit': '64Mi'}},
+                                      {'name': 'tmp', 'emptyDir': {'sizeLimit': '2Gi'}},
+                                      {'name': 'pass', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
+                                      {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
+                                      # 0440 with fsGroup: the runner reads its key
+                                      {'name': 'key', 'secret': {'secretName': name + '-token', 'defaultMode': 0o440,
+                                                                 'items': [{'key': SVC_TOKEN_KEY,
+                                                                            'path': SVC_TOKEN_KEY}]}}]}}}}]
+
+
+def svc_run_key_secret(job, namespace, token, owner_uid=''):
+    """The Job's one Secret: its one-time key to the hub, owned by the Job (the
+    garbage collector takes it with it)."""
+    m = re.fullmatch(r'svc-(r[1-9][0-9]{0,15})-a([1-9])', job or '')
+    if not m:
+        raise ValueError('a run key belongs to a svc-r<n>-a<k> Job, not %r' % job)
+    if not re.fullmatch(SVC_TOKEN_RE, token or ''):
+        raise ValueError('a run key is fsj_ + 52 of base32, not the given one')
+    meta = {'name': job + '-token', 'namespace': namespace,
+            'labels': {'fleet/role': 'job', 'fleet/job-kind': 'svc', 'fleet/run': 'R' + m.group(1)[1:],
+                       'fleet/attempt': m.group(2)}}
+    if owner_uid:
+        meta['ownerReferences'] = [{'apiVersion': 'batch/v1', 'kind': 'Job', 'name': job, 'uid': owner_uid,
+                                    'blockOwnerDeletion': False}]
+    # data, not stringData: what admission sees is what was sent
+    return {'apiVersion': 'v1', 'kind': 'Secret', 'type': 'Opaque', 'metadata': meta,
+            'data': {SVC_TOKEN_KEY: base64.b64encode(token.encode()).decode()}}
+
+
 def user_pod_limits_patch(limits):
     """The patch that moves one pod's ceiling (kubectl patch deploy <name>
     --type strategic): only that Deployment rolls, nobody else's."""
@@ -988,6 +1134,13 @@ if __name__ == '__main__':
     p.add_argument('--job-kind', default='test', help='|'.join(JOB_KINDS))
     p.add_argument('--job-cmd', default='true', help='the one command line the Job runs (sh -c)')
     p.add_argument('--job-mirror', default='', help='where the commit is fetched from: git://HOST/…{repo}…')
+    # a service run's Job (#4005): the provisioner renders the same from a create-svc-run ticket
+    p.add_argument('--svc-run', default='', metavar='R<n>',
+                   help='render one service run attempt\'s Job (needs --image, --hub, --cred-central, '
+                        '--egress-proxy and the run egress / credential proxy as --egress-allow)')
+    p.add_argument('--svc-attempt', type=int, default=1)
+    p.add_argument('--svc-name', default='livepage', help="the service principal's name (svc:<name>)")
+    p.add_argument('--svc-deadline', type=int, default=900, help='seconds (%d-%d)' % SVC_DEADLINE)
     p.add_argument('--limits-patch', action='store_true',
                    help='print only the patch that moves --limits on a running pod (rolls that pod alone)')
     args = p.parse_args()
@@ -1017,6 +1170,12 @@ if __name__ == '__main__':
         if args.ops:
             items = ops_resources(args.image, args.hub, args.ops, args.namespace, args.provisioner,
                                   pull_secrets=args.pull_secrets or ['acr-pull'])
+            print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
+            raise SystemExit(0)
+        if args.svc_run:
+            items = svc_run_resources(args.image, args.svc_run, args.svc_attempt, args.svc_name, args.svc_deadline,
+                                      args.hub, args.cred_central, args.egress_proxy, args.namespace, egress=egress,
+                                      pull_secrets=args.pull_secrets or ['acr-pull'])
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         if args.job:

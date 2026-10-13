@@ -172,6 +172,15 @@ spec:
         - {protocol: TCP, port: 4873}
         - {protocol: TCP, port: 3141}
         - {protocol: TCP, port: 3000}
+    # a service run's Job (#4005): the run egress and the credential proxy
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: job
+              fleet/job-kind: svc
+      ports:
+        - {protocol: TCP, port: 3128}
+        - {protocol: TCP, port: 8788}
     # a Job of an open kind (#3552: build · test · browser · load): the egress
     # too. untrusted carries no fleet/job-net label and never matches.
     - from:
@@ -202,7 +211,8 @@ spec:
               - 100.100.100.200/32
 ---
 # A throwaway Job (#3558, C16; 共同约定 8): no public internet, the package caches
-# and the CI git mirror alone — and nothing comes in.
+# and the CI git mirror alone — and nothing comes in. A service run's Job
+# (fleet/job-kind svc) is not one of these: job-out-svc below is all it gets.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -212,6 +222,8 @@ spec:
   podSelector:
     matchLabels:
       fleet/role: job
+    matchExpressions:
+      - {key: fleet/job-kind, operator: NotIn, values: [svc]}
   policyTypes: [Ingress, Egress]
   egress:
     - to:
@@ -260,6 +272,47 @@ spec:
               fleet/role: ops
       ports:
         - {protocol: TCP, port: 3128}
+---
+# A service run's Job (#4005, the SPACE EPIC C3): kube-dns, the run egress
+# (fleet-egress-run:3128 — the hub and the open web, public addresses only) and
+# the credential proxy (8788: the model, with a pass bound to the run) — no
+# package cache, no git mirror, no other pod, nothing comes in. Its own egress
+# guard (render.py svc_run_resources, closed) is the wall that holds on ACK.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: job-out-svc
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: job
+      fleet/job-kind: svc
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: ops
+              fleet/egress: run
+      ports:
+        - {protocol: TCP, port: 3128}
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: ops
+      ports:
+        - {protocol: TCP, port: 8788}
 ---
 # The provisioner (#3558, C16): in from fleet-ops alone (fleet/role: control,
 # #3734), out to the API server alone (its address is the cluster's: any, on

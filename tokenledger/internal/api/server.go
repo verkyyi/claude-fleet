@@ -577,6 +577,9 @@ func (s *Server) routes() *routeMux {
 		// A throwaway Job for a session in a person's pod (claude-fleet#3552).
 		mux.HandleFunc(NodeJobsPath, s.handleNodeJobs)
 		mux.HandleFunc(NodeJobsPath+"/", s.handleNodeJobs)
+		// A service run's Job (claude-fleet#4005): with its own one-time key,
+		// its run's spec once and its result once — never a node token.
+		mux.HandleFunc(NodeSvcRunsPath+"/", s.handleNodeSvcRuns)
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
