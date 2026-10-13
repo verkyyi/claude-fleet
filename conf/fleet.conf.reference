@@ -2967,6 +2967,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   CCQUOTA_SMTP_URL / CCQUOTA_SMTP_FROM   e-mail code sign-in · URL 密钥 (carries the password)
 #   CCQUOTA_WECHAT_WEB_APPID / CCQUOTA_WECHAT_WEB_SECRET      WeChat scan (website app) · 成对 · SECRET 密钥
 #   CCQUOTA_WECHAT_MP_APPID / CCQUOTA_WECHAT_MP_SECRET        WeChat in-app (service account) · 成对 · SECRET 密钥
+#   CCQUOTA_WX_INTERNAL_URL / CCQUOTA_WX_INTERNAL_TOKEN       follow the company service account to sign in,
+#                                 through workbench's in-cluster /internal/wx · 成对 (half set = off) · TOKEN 密钥
 #   CCQUOTA_SESSION_SECRET        signs sessions on a hub without GitHub · 必填 then · 密钥
 # Other:
 #   CCQUOTA_FLEET                 1 = fleet on · 必填

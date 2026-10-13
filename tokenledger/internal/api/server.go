@@ -75,6 +75,10 @@ type Server struct {
 	// there is no sign-in at all, as before.
 	WeChat *WeChatAuth
 	Email  *EmailAuth
+	// WxGW is the company service account's road through workbench
+	// (claude-fleet#4054, CCQUOTA_WX_INTERNAL_URL / _TOKEN): sign in by
+	// following it. Nil means /signin is what it was.
+	WxGW *WxGateway
 	// SessionSecret (CCQUOTA_SESSION_SECRET) signs the sessions of a hub
 	// with no GitHub sign-in. With GitHub on, its client secret signs them,
 	// as it always has (sessionKey).
@@ -489,6 +493,9 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/auth/wechat/start", s.handleWeChatStart)
 	mux.HandleFunc("/auth/wechat/callback", s.handleWeChatCallback)
 	mux.HandleFunc("/auth/wechat/bind", s.handleWeChatBind)
+	// Follow the service account to sign in (claude-fleet#4054): 404 when off.
+	mux.HandleFunc(wxQRPath, s.handleWxQR)
+	mux.HandleFunc(wxPollPath, s.handleWxPoll)
 	mux.HandleFunc("/auth/email/start", s.handleEmailStart)
 	mux.HandleFunc("/auth/email/link", s.handleEmailLink)
 	mux.HandleFunc("/auth/email/code", s.handleEmailCode)

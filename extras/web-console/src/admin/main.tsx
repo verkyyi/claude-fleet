@@ -12,6 +12,8 @@ import { AdminShell, NotFound } from "./AdminShell";
 import { MachineDetailPage } from "./pages/MachineDetail";
 import { MachinesPage } from "./pages/Machines";
 import { PeoplePage } from "./pages/People";
+import { PoolPage } from "./pages/Pool";
+import { PoolSettingsPage } from "./pages/PoolSettings";
 import { ReleasePage } from "./pages/Release";
 
 const routes = [
@@ -26,6 +28,9 @@ const routes = [
       { path: "machines/:host", element: <MachineDetailPage /> },
       { path: "release", element: <ReleasePage /> },
       { path: "release/:run", element: <ReleasePage /> },
+      { path: "pool", element: <PoolPage /> },
+      { path: "pool/settings", element: <PoolSettingsPage /> },
+      { path: "pool/:id", element: <PoolPage /> },
       { path: "*", element: <NotFound /> },
     ],
   },

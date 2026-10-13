@@ -229,6 +229,24 @@ func TestConsoleTableOneHop(t *testing.T) {
 			t.Errorf("admin GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)
 		}
 	}
+	// 订阅池 (claude-fleet#3935): the list, one subscription, its settings —
+	// an admin on in one hop, a member the 404 an unknown address gets.
+	for p, want := range map[string]string{
+		AppPrefix + "/subscriptions":               AdminPrefix + "/pool",
+		AppPrefix + "/subscriptions?f=near":        AdminPrefix + "/pool?f=near",
+		AppPrefix + "/subscriptions/5b0e8c1a-1111": AdminPrefix + "/pool/5b0e8c1a-1111",
+		AppPrefix + "/subscriptions/settings":      AdminPrefix + "/pool/settings",
+		"/subscriptions":                           AdminPrefix + "/pool",
+		"/subscriptions/settings":                  AdminPrefix + "/pool/settings",
+		"/subscriptions/codex:account:0123?x=1":    AdminPrefix + "/pool/codex:account:0123?x=1",
+	} {
+		if got := consoleDo(hd, http.MethodGet, p, admin); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != want {
+			t.Errorf("admin GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)
+		}
+		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusNotFound {
+			t.Errorf("member GET %s = %d; want 404", p, got.Code)
+		}
+	}
 	// One machine (C11) is the admin's: a member goes to 设备 (C7).
 	for _, p := range []string{AppPrefix + "/machines/mac-a", "/machines/mac-a"} {
 		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+"/devices?tab=home" {

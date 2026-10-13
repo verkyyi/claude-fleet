@@ -353,6 +353,12 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		loc := s.pageLocale(w, r)
+		if s.wxScanOn() && step == "" {
+			// The service account's code up front, the rest folded
+			// (claude-fleet#4054).
+			s.renderSigninScan(w, r, loc, e)
+			return
+		}
 		note := ""
 		if signinNotes[e] || signinWayNotes[e] {
 			note = pageT(loc, "signin.note."+e)

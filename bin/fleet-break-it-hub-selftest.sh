@@ -51,6 +51,9 @@
 #                                                   (hub_identities, migration 2); go test, when a toolchain is here
 #   wechat-first-scan-autocreate                    tokenledger/internal/api wechat_auth.go (handleWeChatCallback,
 #                                                   handleWeChatBind) + signin_ways.go; go test, when a toolchain is here
+#   fleet-scene-cross                               tokenledger/internal/api wx_scan.go (wxScene, wxScenePoll,
+#                                                   wxFinishLogin) + wxgw.go (wxSceneInRange) + internal/store
+#                                                   hub_wx_scenes.go; go test, when a toolchain is here
 #   email-link-replay                               tokenledger/internal/api email_auth.go (handleEmailLink /
 #                                                   handleEmailCode) + internal/store hub_signin.go; go test, when here
 #   node-token-replayed                             tokenledger/internal/api node_sig.go (nodeAuth) + store,
@@ -2242,6 +2245,24 @@ drill_wechat_first_scan_autocreate() {
   c11_go_tests signin_ways_test.go TestWeChatFirstScanOpensNoAccount TestWeChatTwoRoadsOnePerson TestWeChatStateReplayRefused || return 1
   WHAT='第一次扫码进绑定页：不登录、不开号；按「挂上」或「按邀请进入」才动（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='第一次扫码不开号、只在按下时绑到已登录的人或邀请；两条路同一 unionid 同一人；state 重放被拒（go test 三条）'
+  SECS=$(since "$t0")
+}
+
+# ClaudeFleet's QR code taken by another product, or another product's by us
+# (claude-fleet#4054, EPIC #4048 共同约定 4/12): the company service account is
+# shared with space / 拓客 / 灵声, each owning a scene_id range in workbench.
+drill_fleet_scene_cross() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'wxSceneMin = 3000000' "$tl/api/wxgw.go" 2>/dev/null && grep -q 'wxSceneMax = 4000000' "$tl/api/wxgw.go" \
+    || { WHY="ClaudeFleet's scene range [3000000, 4000000) is no longer the hub's (wxgw.go)"; return 1; }
+  [ "$(grep -c 'if !wxSceneInRange(scene)' "$tl/api/wxgw.go")" -ge 2 ] \
+    || { WHY="drawing or reading a code no longer refuses a scene outside the range (wxgw.go)"; return 1; }
+  grep -q 'WHERE scene = ? AND browser_hash = ? AND consumed_at = 0' "$tl/store/hub_wx_scenes.go" 2>/dev/null \
+    || { WHY="a code is no longer traded once, by the browser that drew it (ConsumeWxScene)"; return 1; }
+  c11_go_tests wx_scan_test.go TestWxSceneCross TestWxScanNotListedApplies TestWxGatewayToken || return 1
+  WHAT='入口只在 [3000000, 4000000) 出码、只问这一段；码只在出码的浏览器里换一次会话（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='40 个浏览器出的码全在本段；别的浏览器拿同一 scene 被拒且不问 workbench；段外 scene 不问；换过的码重放被拒；名单外的不建人（go test 三条）'
   SECS=$(since "$t0")
 }
 

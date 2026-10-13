@@ -86,7 +86,7 @@ export function AdminShell() {
             </SidebarMenu>
           </SidebarFooter>
         </Sidebar>
-        <SidebarInset>
+        <SidebarInset className="min-w-0">
           <header className="flex h-12 items-center gap-2 border-b px-4 md:hidden">
             <SidebarTrigger />
             <span className="font-display text-sm font-semibold">ClaudeFleet · {t("brand.admin")}</span>
