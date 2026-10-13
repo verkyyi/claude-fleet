@@ -27,8 +27,9 @@ const ACCOUNT = '1720148580188583';
 const REGION = 'cn-shenzhen';
 // The roles a job may ask for, each with the one environment its trust admits
 // and what its policy pushes: the hub image (prod), the node image (#3855), the
-// release train's Linux test runner image (#3864; it also pulls the cluster's ARC
-// runner base, acme/arc-runner).
+// release train's Linux test runner image (#3864; it also PULLS the namespace's
+// other repositories — its base, the cluster's ARC runner image, carries layers
+// first pushed elsewhere, and the push mounts them from there).
 const ROLES = {
   'gha-claudefleet-deploy': { env: 'prod', pushes: 'acme/ccquota' },
   'gha-claudefleet-node-image': { env: 'node-image', pushes: 'acme/fleet-managed-node' },
