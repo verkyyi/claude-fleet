@@ -315,6 +315,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			out.Header.Set(control.ChatPersonHeader, person)
+			if c := s.chatClientHeader(pr.In); c != "" {
+				out.Header.Set(control.ChatClientHeader, c)
+			}
 		},
 		Transport: tr,
 		// NDJSON: each line reaches the page as the service writes it.

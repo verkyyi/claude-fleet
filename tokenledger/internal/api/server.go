@@ -190,6 +190,12 @@ type Server struct {
 	// ChatPerMinute bounds how many chat relays one person opens a minute
 	// (0: 60; negative: unlimited).
 	ChatPerMinute int
+	// ChatGeoDB is an ip2region xdb (IPv4) the entry reads a chat request's
+	// city from, for the person's conversation (claude-fleet#4034;
+	// CCQUOTA_FLEET_CHAT_GEO_DB). "" ⇒ the address goes without a city.
+	ChatGeoDB   string
+	chatGeoOnce sync.Once
+	chatGeoDB   *geoDB
 
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable

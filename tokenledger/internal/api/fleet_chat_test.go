@@ -28,6 +28,7 @@ import (
 type fakeChatService struct {
 	mu      sync.Mutex
 	hits    []string // "<method> <path> person=<X-Fleet-Person> cookie=<Cookie>"
+	clients []string // each request's X-Fleet-Client (claude-fleet#4034)
 	release chan struct{}
 }
 
@@ -50,6 +51,7 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.hits = append(f.hits, r.Method+" "+r.URL.Path+" person="+r.Header.Get("X-Fleet-Person")+" cookie="+r.Header.Get("Cookie"))
+		f.clients = append(f.clients, r.Header.Get("X-Fleet-Client"))
 		f.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/conversation":

@@ -66,6 +66,12 @@
 
 每台机器的入口端口另记一行每次进门：哪个登录、从哪里来、用的哪把钥匙。
 
+## 网页对话把你浏览器的什么交给模型
+
+在官网 `/chat` 和自己的对话说话时，模型会知道你此刻用的是什么：设备类型（手机 / 平板 / 电脑）、系统、浏览器、界面语言、屏幕宽窄、本地时间和时区，以及按 IP 推出的大致城市（只到城市）——一行字，放在对话开头，换了设备、城市或日子才再补一行。完整的 IP、浏览器标识、网络类型只在模型需要时用 `browser_context` 工具取，只在你自己的这条对话里。
+
+IP 和城市由入口看到、用入口本地的离线库推算，不问任何外部服务；这些都不写进日志，只留在你自己这条对话的记录里。
+
 ## 发现安全问题怎么报告
 
 请不要开公开 issue。只走 GitHub 的私密漏洞报告：仓库页 → Security → [Report a vulnerability](https://github.com/verkyyi/claude-fleet/security/advisories/new)，不设邮箱。回复时限和支持的版本见仓库根目录的 [SECURITY.md](https://github.com/verkyyi/claude-fleet/blob/master/SECURITY.md)。
