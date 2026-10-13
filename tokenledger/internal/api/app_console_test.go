@@ -210,19 +210,29 @@ func TestConsoleTableOneHop(t *testing.T) {
 	}
 	// The three that move today: 我的额度, All devices, and the bare ones.
 	for p, want := range map[string]string{
-		AppPrefix + "/quota?a=1":        AppPrefix + "/usage?a=1",
-		"/quota":                        AppPrefix + "/usage",
-		AppPrefix + "/admin/devices":    AppPrefix + "/nodes?tab=clients",
-		"/admin/devices?tab=x":          AppPrefix + "/nodes?tab=x",
-		AppPrefix + "/admin/devices?b=": AppPrefix + "/nodes?tab=clients&b=",
-		"/sessions?a=1":                 AppPrefix + "/sessions?a=1",
-		"/admin/users/gh:1":             AdminPrefix + "/people/gh:1",
-		AppPrefix + "/admin/users?q=a":  AdminPrefix + "/people?q=a",
-		AppPrefix + "/admin/users/p:x":  AdminPrefix + "/people/p:x",
-		"/admin/users":                  AdminPrefix + "/people",
+		AppPrefix + "/quota?a=1":         AppPrefix + "/usage?a=1",
+		"/quota":                         AppPrefix + "/usage",
+		AppPrefix + "/admin/devices":     AdminPrefix + "/machines?tab=clients",
+		"/admin/devices?tab=x":           AdminPrefix + "/machines?tab=x",
+		AppPrefix + "/admin/devices?b=":  AdminPrefix + "/machines?tab=clients&b=",
+		AppPrefix + "/nodes?tab=clients": AdminPrefix + "/machines?tab=clients",
+		"/nodes":                         AdminPrefix + "/machines",
+		AppPrefix + "/machines/mac-a":    AdminPrefix + "/machines/mac-a",
+		"/machines/mac-a?log=x":          AdminPrefix + "/machines/mac-a?log=x",
+		"/sessions?a=1":                  AppPrefix + "/sessions?a=1",
+		"/admin/users/gh:1":              AdminPrefix + "/people/gh:1",
+		AppPrefix + "/admin/users?q=a":   AdminPrefix + "/people?q=a",
+		AppPrefix + "/admin/users/p:x":   AdminPrefix + "/people/p:x",
+		"/admin/users":                   AdminPrefix + "/people",
 	} {
 		if got := consoleDo(hd, http.MethodGet, p, admin); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != want {
 			t.Errorf("admin GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)
+		}
+	}
+	// One machine (C11) is the admin's: a member goes to 设备 (C7).
+	for _, p := range []string{AppPrefix + "/machines/mac-a", "/machines/mac-a"} {
+		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+"/devices?tab=home" {
+			t.Errorf("member GET %s = %d → %q; want 301 → /app/devices?tab=home", p, got.Code, got.Header().Get("Location"))
 		}
 	}
 	// Live, one machine is a member's own: theirs goes to 设备, an admin's on.
@@ -483,9 +493,9 @@ func TestConsoleDevices(t *testing.T) {
 			t.Errorf("member GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)
 		}
 	}
-	// an admin's one machine is still the old page until C11's row is live
-	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/machines/x", admin); got.Code == http.StatusMovedPermanently {
-		t.Errorf("admin GET /app/machines/x = 301 → %q; want the old page", got.Header().Get("Location"))
+	// an admin's one machine is the admin side's (C11)
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/machines/x", admin); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AdminPrefix+"/machines/x" {
+		t.Errorf("admin GET /app/machines/x = %d → %q; want 301 → /admin/machines/x", got.Code, got.Header().Get("Location"))
 	}
 	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/connect", admin); got.Header().Get("Location") != AppPrefix+"/devices" {
 		t.Errorf("admin GET /app/connect → %q; want /app/devices", got.Header().Get("Location"))

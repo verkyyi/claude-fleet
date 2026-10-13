@@ -93,6 +93,13 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 			continue
 		}
 		code, body := get(user, path)
+		if to, moved := consoleTarget(pagePath(path), "", roleUser); moved && !adminOnly {
+			// a member's own way on (one machine → their list, claude-fleet#3934)
+			if code != http.StatusMovedPermanently || !strings.Contains(body, to) {
+				t.Errorf("user GET %s = %d %q; want 301 → %s", path, code, body, to)
+			}
+			continue
+		}
 		switch {
 		case adminOnly && (code != http.StatusNotFound || strings.Contains(body, doc)):
 			t.Errorf("user GET %s = %d %q; want the plain 404, none of the app", path, code, body)
@@ -104,16 +111,9 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 	if code, body := get(admin, "/no-such-page"); code != http.StatusNotFound || strings.Contains(body, doc) {
 		t.Errorf("admin GET /no-such-page = %d %q; want 404", code, body)
 	}
-	// One machine's page (claude-fleet#2796) is a deep link into the app, for
-	// a user too: the page's read, /v1/nodes/<host>, is what cuts.
-	for _, sess := range []*http.Cookie{admin, user} {
-		if code, body := get(sess, "/machines/mac-c"); code != http.StatusOK || !strings.Contains(body, doc) {
-			t.Errorf("GET /machines/mac-c = %d %q; want 200 and the app document", code, body)
-		}
-	}
 	// A build from before the app document: each page its own file.
 	delete(ui, appPage)
-	for _, p := range []string{"/", "/sessions", "/nodes"} {
+	for _, p := range []string{"/", "/sessions", "/machines"} {
 		if code, body := get(admin, p); code != http.StatusOK || !strings.Contains(body, "OWN-PAGE") {
 			t.Errorf("no app.html: admin GET %s = %d %q; want the page's own file", p, code, body)
 		}

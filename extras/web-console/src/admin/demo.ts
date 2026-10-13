@@ -2,6 +2,7 @@
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
 import type { ApiInit, Credential, HubUser, Invite, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, TrainRun } from "./api";
+import { demoMachines } from "./machines/demo";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -144,6 +145,8 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
   const method = init.method || (init.json !== undefined ? "POST" : "GET");
   const body = (init.json || {}) as Record<string, any>;
   const empty = scenario() === "empty";
+  const machines = demoMachines(method, u, body, empty, init); // 机器与 pod (C11)
+  if (machines !== undefined) return machines;
   switch (`${method} ${u.pathname}`) {
     case "GET /v1/me":
       return { role: "admin", person: "gh:1001", name: "周宁", login: "zhouning" };

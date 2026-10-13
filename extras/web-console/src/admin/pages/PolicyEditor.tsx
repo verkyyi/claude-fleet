@@ -69,7 +69,10 @@ function windows(lim: Record<string, any> | undefined) {
   return { h5: h5 ? pct(h5.utilization) : null, h7: h7 ? pct(h7.utilization) : null };
 }
 
-export function PolicyEditor({ id }: { id: string }) {
+// scope is whose rule: a person's (user) or a machine's (node, C11's machine
+// page — its id the hub's machine identity); bare drops the heading for a
+// page that gives the block its own.
+export function PolicyEditor({ id, scope = "user", bare = false }: { id: string; scope?: "user" | "node"; bare?: boolean }) {
   const [view, setView] = React.useState<PolicyView | null>(null);
   const [creds, setCreds] = React.useState<Credential[]>([]);
   const [limits, setLimits] = React.useState<Limits | null>(null);
@@ -79,14 +82,15 @@ export function PolicyEditor({ id }: { id: string }) {
   const [busy, setBusy] = React.useState(false);
   const [force, setForce] = React.useState<{ message: string; payload: unknown } | null>(null);
 
-  const entry = view?.users?.find((x) => x.id === id);
+  const listOf = (v: PolicyView | null | undefined) => (scope === "node" ? v?.nodes : v?.users);
+  const entry = listOf(view)?.find((x) => x.id === id);
   const legacyUnset = !!view && !entry && view.mode === "legacy";
 
   const load = React.useCallback(async () => {
     setErr("");
     try {
       const [v, c] = await Promise.all([api<PolicyView>(PATH), api<{ credentials: Credential[] }>("/v1/fleet/credentials")]);
-      const e = v.users?.find((x) => x.id === id);
+      const e = listOf(v)?.find((x) => x.id === id);
       setView(v);
       setCreds(c.credentials || []);
       setMode(!e && v.mode === "legacy" ? "legacy" : modeOf(e));
@@ -95,7 +99,7 @@ export function PolicyEditor({ id }: { id: string }) {
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, [id]);
+  }, [id, scope]);
   React.useEffect(() => {
     void load();
   }, [load]);
@@ -129,21 +133,23 @@ export function PolicyEditor({ id }: { id: string }) {
   const save = async () => {
     if (mode === "selected" && !selected.length) return toast.error(t("policy.chooseSome"));
     const latest = await api<PolicyView>(PATH).catch(() => null);
-    if (!latest || fingerprint(latest.users?.find((x) => x.id === id)) !== fingerprint(entry)) {
+    if (!latest || fingerprint(listOf(latest)?.find((x) => x.id === id)) !== fingerprint(entry)) {
       toast.error(t("policy.changed"));
       return load();
     }
     const allow = mode === "all" ? null : mode === "deny" ? [] : [...new Set(selected)].sort();
-    await put(mode === "all" ? { scope: "user", id, allow, all: true } : { scope: "user", id, allow });
+    await put(mode === "all" ? { scope, id, allow, all: true } : { scope, id, allow });
   };
 
   return (
     <section className="grid gap-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-display text-base font-semibold">{t("policy.title")}</h3>
-          <p className="text-xs text-muted-foreground">{t("policy.lead")}</p>
-        </div>
+      <div className={bare ? "flex justify-end" : "flex items-start justify-between gap-3"}>
+        {!bare && (
+          <div>
+            <h3 className="font-display text-base font-semibold">{t("policy.title")}</h3>
+            <p className="text-xs text-muted-foreground">{t("policy.lead")}</p>
+          </div>
+        )}
         <Badge variant="outline">{chip}</Badge>
       </div>
       {view.mode === "legacy" && (

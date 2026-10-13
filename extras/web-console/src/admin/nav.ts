@@ -11,7 +11,7 @@ export type NavGroup = { key: MsgKey; items: NavItem[] };
 
 export const NAV: NavGroup[] = [
   { key: "nav.people", items: [{ key: "page.people", icon: Users, to: "/people" }] },
-  { key: "nav.machines", items: [{ key: "page.machines", icon: Server, href: "/app/nodes" }] },
+  { key: "nav.machines", items: [{ key: "page.machines", icon: Server, to: "/machines" }] },
   {
     key: "nav.money",
     items: [

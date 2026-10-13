@@ -1067,6 +1067,10 @@ type MachineView struct {
 	SpareResetting *int `json:"spare_resetting,omitempty"`
 	SpareFailed    *int `json:"spare_failed,omitempty"`
 	SpareTarget    *int `json:"spare_target,omitempty"`
+	// Door is the machine's entry port on the operator's roster
+	// (claude-fleet#3934, stampDoors); absent elsewhere and while no entry
+	// port or door is set up.
+	Door *MachineDoor `json:"door,omitempty"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.
