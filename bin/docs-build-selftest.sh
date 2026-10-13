@@ -7,8 +7,10 @@
 #   B  every page has a title (<title> and an <h1>)
 #   C  every relative link in every HTML page resolves to a built page or file,
 #      read the way the server answers it (/docs/<p> → zh/<p>.html, /en/docs/…)
-#   D  the zh and en page sets are the same; an en page with no source says
-#      「English version in preparation」 and links to its Chinese page
+#   D  the zh and en page sets are the same, and every en page is written — none
+#      `pending` (issue #3592); in a sandbox, a zh page with no en source still
+#      gets an en page that says 「English version in preparation」 and links to
+#      its Chinese page
 #   E  each reader has a quickstart: index · self-host/quickstart.md ·
 #      hosted/quickstart.md · member/quickstart.md
 #   F  no public page links into docs/dev/ (EPIC #3569 共同约定 4)
@@ -77,12 +79,9 @@ for (lang, p), state in pages.items():
         target = resolve(urljoin('http://x' + url_of(lang, p), href))
         if target is None or not os.path.isfile(target):
             bad.append('C %s/%s: dead link %s' % (lang, p, href))
-    # D
+    # D — every page has its English source (issue #3592): translate the zh page
     if state == 'pending':
-        if 'English version in preparation' not in h:
-            bad.append('D en/%s is pending but says nothing' % p)
-        if 'href="%s"' % url_of('zh', p) not in h:
-            bad.append('D en/%s does not link its Chinese page' % p)
+        bad.append('D en/%s is pending: write docs/public/en/%s.md (terms: docs/public/glossary.tsv)' % (p, p))
     # F
     if 'docs/dev' in open(base + '.md', encoding='utf-8').read():
         bad.append('F %s/%s names docs/dev' % (lang, p))
@@ -112,6 +111,17 @@ if "$BUILD" --src "$T/g1" --out "$T/g1out" >/dev/null 2>"$T/g1.err"; then bad "G
 elif grep -q 'has no Chinese page' "$T/g1.err"; then ok "G en-only page refused"; else bad "G g1: $(cat "$T/g1.err")"; fi
 if "$BUILD" --src "$T/g2" --out "$T/g2out" >/dev/null 2>"$T/g2.err"; then bad "G a page with no title was built"
 elif grep -q 'has no "# " title' "$T/g2.err"; then ok "G untitled page refused"; else bad "G g2: $(cat "$T/g2.err")"; fi
+
+# D — a zh page with no en source still gets an en page, never a 404
+mk d1/zh/index.md "# home"
+for r in self-host hosted member; do mk "d1/zh/$r/quickstart.md" "# $r"; done
+mk d1/zh/faq.md "# 常见问题"
+mk d1/en/index.md "# help"
+if ! "$BUILD" --src "$T/d1" --out "$T/d1out" >/dev/null 2>"$T/d1.err"; then bad "D sandbox build: $(cat "$T/d1.err")"
+elif ! awk -F'\t' '$1 == "en" && $2 == "faq" && $4 == "pending" {f = 1} END {exit !f}' "$T/d1out/pages.tsv"; then bad "D sandbox: en/faq is not pending: $(cat "$T/d1out/pages.tsv")"
+elif ! grep -q 'English version in preparation' "$T/d1out/en/faq.html"; then bad "D sandbox: pending en/faq says nothing"
+elif ! grep -q 'href="/docs/faq"' "$T/d1out/en/faq.html"; then bad "D sandbox: pending en/faq does not link its Chinese page"
+else ok "D a missing en page is built pending, linking its Chinese page"; fi
 
 # H — generated blocks follow the key tables
 if "$BUILD" --check >"$T/h0.out" 2>&1; then ok "H docs/public is not stale"; else bad "H stale: $(cat "$T/h0.out")"; fi
