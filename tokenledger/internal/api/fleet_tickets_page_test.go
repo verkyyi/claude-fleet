@@ -43,10 +43,26 @@ func pageReq(t *testing.T, h *harness, principal, method, path string, form url.
 	return res.StatusCode, string(b), res.Header
 }
 
+// oldTicketsPage puts the page's rows of the console table back to not live
+// for the test: since 任务 took the list in (claude-fleet#3928) its GET moves
+// on, and the old page answers only its forms until C16 takes it down.
+func oldTicketsPage(t *testing.T) {
+	saved := consolePages
+	rows := append([]consolePage(nil), consolePages...)
+	for i := range rows {
+		if strings.HasPrefix(rows[i].old, TicketsPagePath) {
+			rows[i].live = false
+		}
+	}
+	consolePages = rows
+	t.Cleanup(func() { consolePages = saved })
+}
+
 // 我的单子 (claude-fleet#3596): a person reads their own tickets as a page,
 // writes a comment that reaches the session doing it, closes and reopens it,
 // opens a new one — and someone else's ticket is 404.
 func TestTicketsPage(t *testing.T) {
+	oldTicketsPage(t)
 	h, n := ticketHarness(t, control.CapTicket)
 	bob := asNode(n["bob4"].token)
 	const repo = "team/app"
@@ -176,6 +192,7 @@ func TestTicketsPage(t *testing.T) {
 // A ticket whose home is GitHub is listed with a link out and is not written
 // here; the GitHub link is the registry's own URL, untouched.
 func TestTicketsPageGitHubRow(t *testing.T) {
+	oldTicketsPage(t)
 	h, n := ticketHarness(t)
 	row := map[string]any{"id": "gh:verkyyi/claude-fleet#3017", "title": "Codex 会话能跑命令",
 		"url": "https://github.com/verkyyi/claude-fleet/issues/3017"}

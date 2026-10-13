@@ -46,9 +46,9 @@ const APP = { dark: ${JSON.stringify(html.replaceAll("@media (prefers-color-sche
   light: ${JSON.stringify(html.replaceAll("@media (prefers-color-scheme: dark)", "@media not all").replaceAll("@media (prefers-color-scheme:dark)", "@media not all")).replace(/<\//g, "<\\/")} };
 const S = { page: "/", role: "user", state: "normal", width: 390, lang: "zh" };
 const OPTS = {
-  page: [["/", "对话"], ["/me", "我的"]],
+  page: [["/", "对话"], ["/tasks", "任务"], ["/tasks?tab=tickets", "单子"], ["/tasks/tickets/linxiao/reports/42", "一张单子"], ["/me", "我的"]],
   role: [["user", "成员 林晓"], ["admin", "管理员 周宁"]],
-  state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"]],
+  state: [["normal", "平常"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"], ["error", "出错"]],
   width: [[390, "手机 390"], [1280, "电脑 1280"]],
   lang: [["zh", "中文"], ["en", "English"]],
 };
