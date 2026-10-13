@@ -16,9 +16,9 @@
 | 要什么 | 说明 |
 |---|---|
 | 一个域名和 HTTPS 证书 | 入口的地址，例如 `hub.example.com`。机器和客户端都只认 HTTPS。 |
-| 跑入口的地方 | 一台装了 Docker 的 Linux（单机容器），或一个带 ingress-nginx 的 Kubernetes 集群。入口很小：1 核、1 GB 内存够一个小团队。 |
-| 构建镜像的地方 | 一台有 Docker、`git` 的电脑，能拉 Go 依赖。 |
-| 至少一种登录方式 | GitHub OAuth 应用、一个能发信的 SMTP（邮箱登录），或微信开放平台的网站应用。见 [§1.4](#14-登录方式)。 |
+| 跑入口的地方 | 一台装了 Docker 的 Linux（单机容器，HTTPS 由反向代理接，见 [§1.5](#15-方式一单机容器)），或一个带 ingress-nginx 的 Kubernetes 集群。入口很小：1 核、1 GB 内存够一个小团队。 |
+| 构建镜像的地方 | 一台有 Docker（带 BuildKit / buildx）、`git` 的电脑，能拉基础镜像和 Go 依赖。Ubuntu 上：`sudo apt install docker.io docker-buildx`。 |
+| 至少一种登录方式 | **开工前就备好**：一样都没有，入口起不来，或者起来了管理员也登不进。三选一（可多选）：GitHub OAuth 应用（要 Client ID / secret，回调地址填入口地址）；能发信的 SMTP（要服务器、端口、账号密码，和一个**已在云上开通好**的发信地址——云厂商的邮件服务开通发信域名要先过验证）；微信开放平台的网站应用（要 AppID / AppSecret，审核要几天）。见 [§1.4](#14-登录方式)。 |
 | 跑会话的机器 | macOS 或 Linux（Debian 12 / Ubuntu，带 systemd），每台有一个能 `sudo` 的管理员账号。 |
 | 订阅 | Claude 订阅（Pro / Max / Team）或 ChatGPT 订阅。可以每人自带，也可以由管理员接进入口给大家共用。 |
 
@@ -43,6 +43,7 @@ docker push registry.example.com/fleet/ccquota:$TAG
 - `bin/fleet-client-pack.sh` 把客户端和机器要下载的文件装进镜像；少了这一步 `docker build` 会拒绝。
 - `VERSION` 是入口在 `/version` 上报的版本名，用提交号最方便对照。
 - 镜像里带着 macOS 与 Linux（amd64 / arm64）机器要下载的程序，构建要几分钟。只在一台机器上跑入口时，镜像推不推仓库都行。
+- 要 BuildKit：Dockerfile 用了 `--platform=$BUILDPLATFORM`，没有 buildx 的 `docker build` 会报 `"" is an invalid OS component`。Ubuntu 的 `docker.io` 不带它，另装 `docker-buildx`。
 - 构建默认经 `goproxy.cn` 拉 Go 依赖（境内直连官方代理常会卡住）。在境外构建、或不想经过它，加 `--build-arg GOPROXY=https://proxy.golang.org,direct`。
 
 ### 1.2 生成钥匙
@@ -50,7 +51,7 @@ docker push registry.example.com/fleet/ccquota:$TAG
 在一个只有你能读的目录里生成，**这些文件不进任何仓库**：
 
 ```sh
-mkdir -p ~/fleet-secrets && cd ~/fleet-secrets && umask 077
+umask 077 && mkdir -p ~/fleet-secrets && cd ~/fleet-secrets   # 先 umask，目录本身才是 0700
 ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca     # 连接证书的签发钥匙：ca + ca.pub
 openssl rand -base64 32 > cred-key                      # 订阅凭据保险箱的钥匙
 openssl rand -hex 24 > viewer-token                     # 用量页的只读口令
@@ -81,7 +82,7 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 | `CCQUOTA_FLEET_PUBLIC_URL` | `https://hub.example.com` | 入口的公开地址，机器和客户端都用它 |
 | `CCQUOTA_PUBLIC_URL` | `https://hub.example.com` | 同上，登录回跳用 |
 | `CCQUOTA_GITHUB_ADMINS` | `alice` | 管理员的 GitHub 用户名，逗号分隔 |
-| `CCQUOTA_ADMINS` | `alice@example.com` | 不用 GitHub 的管理员：邮箱地址，逗号分隔 |
+| `CCQUOTA_ADMINS` | `alice@example.com` | 不用 GitHub 的管理员：邮箱地址，逗号分隔。**填你真能收信的地址**——第一个管理员就靠发到这里的验证码进门；照抄 `example.com` 的占位，入口会说出来并拒绝启动 |
 | `CCQUOTA_FLEET_ADMIN_USERS` | `alice` | 机器上那个管理员账号的系统登录名：入口只把「开号」「删号」发给以它运行的机器程序 |
 | `CCQUOTA_VIEWER_TOKEN` | `viewer-token` 的内容 | 用量页的只读口令 |
 | `CCQUOTA_FLEET_SSH_CA_KEY` | `/secrets/ca` | 连接证书钥匙的路径 |
@@ -119,7 +120,7 @@ python3 bin/fleet-release-fetch.py --hub $UP --pubkey upstream-release.pub \
 ```
 
 - 每个文件打一行：`got <名字>` 刚取到，`kept <名字>` 已经在、核过没变。不对的文件会被换掉；签名或 sha256 对不上就整条拒绝，什么都不写。
-- 目录是入口容器里的 `/data/release-artifacts`（§1.5 的数据盘下面），Kubernetes 上同样放在数据盘上。
+- 目录是入口容器里的 `/data/release-artifacts`（§1.5 的数据盘下面），Kubernetes 上同样放在数据盘上。§1.5 之后数据盘归 uid 10001，再跑这条要 `sudo`，跑完 `sudo chown -R 10001 /srv/fleet/data/release-artifacts`。
 - `--platforms` 和 `CCQUOTA_FLEET_RELEASE_PLATFORMS` 写同一组。
 - 每次升级前（`stable` 换了提交）再跑一次，只会取新版本的文件。
 - 不想从别的入口取，也可以自己按上面的文件名放进去：Codex 来自它的官方发布页，tmux 照仓库的 `conf/vendor-tmux.lock` 构建。放好后 `curl -fsS https://hub.example.com/v1/fleet/release/artifacts` 列出入口现在有哪些。
@@ -144,10 +145,10 @@ python3 bin/fleet-release-fetch.py --hub $UP --pubkey upstream-release.pub \
 
 ### 1.5 方式一：单机容器
 
-适合一台 Linux 服务器。入口只听本机，HTTPS 由你已有的反向代理（Caddy、nginx）接到 `127.0.0.1:8787`：
+适合一台 Linux 服务器。入口只听本机，HTTPS 由反向代理（Caddy、nginx）接到 `127.0.0.1:8787`。新机器上还没有的话装一个 Caddy 最省事，证书它自己申请：Ubuntu / Debian 上 `sudo apt install caddy`，apt 里的 2.6 对入口够用（只有 [§1.8](#18-国内部署) 的中转要 2.10 以上）。
 
 ```sh
-mkdir -p /srv/fleet/data && sudo chown 10001 /srv/fleet/data     # 镜像以 uid 10001 运行
+sudo mkdir -p /srv/fleet/data/release-artifacts && sudo chown -R 10001 /srv/fleet/data   # 镜像以 uid 10001 运行
 sudo cp ~/fleet-secrets/{ca,cred-key,release-key} /srv/fleet/ && sudo chown 10001 /srv/fleet/{ca,cred-key,release-key}
 
 cat > /srv/fleet/hub.env <<'EOF'
@@ -190,7 +191,7 @@ hub.example.com {
 }
 ```
 
-nginx 的话关掉 `proxy_buffering`，`proxy_read_timeout` / `proxy_send_timeout` 设到 `3600s`，`client_max_body_size` 设到 `64m`，并转发 WebSocket 升级头。
+Caddy 的话这一段写进 `/etc/caddy/Caddyfile`，再 `sudo systemctl reload caddy`。nginx 的话关掉 `proxy_buffering`，`proxy_read_timeout` / `proxy_send_timeout` 设到 `3600s`，`client_max_body_size` 设到 `64m`，并转发 WebSocket 升级头。
 
 数据都在 `/srv/fleet/data/ccquota.db`。**不要在入口运行时直接复制这个文件**，备份见 [§5.1](#51-入口)。
 
@@ -318,7 +319,7 @@ curl -sS  https://hub.example.com/install | head -1 # #!/bin/sh —— 客户端
 - `/version` 里没有 `stable`、却有 `stable_problem`：入口问不到 GitHub 上的 `stable`，那句话说了原因和办法，见 [§4.4](#44-入口问不到-github-时)。
 - 云内网能打开、从外网 `curl` 却是 `Connection reset`，或者 HTTP 回的是云厂商的「Non-compliance ICP Filing」之类页面：入口在境内机房、域名没有备案，被云厂商按 SNI 拦了（换端口也一样），见 [§1.8](#18-国内部署) 第一行。
 
-然后用浏览器打开 `https://hub.example.com`，以 §1.3 里列的管理员身份登录：自托管的入口打开就是控制台（没有官网首页）。
+然后用浏览器打开 `https://hub.example.com`，以 §1.3 里列的管理员身份登录：自托管的入口打开就是控制台（没有官网首页）。未登录时浏览器会被带到 `/app/signin`；`curl` 这类非浏览器请求 `/` 得到的是 HTTP 401 和 `{"error":"a viewer token is required"}`，这是正常的，不是入口坏了。
 
 启动不起来时看容器日志（`docker logs fleet-hub` / `kubectl -n $NS logs deploy/ccquota-hub`）：缺钥匙、登录方式只配了一半，都会在第一屏说清楚是哪个键。
 
@@ -329,6 +330,7 @@ curl -sS  https://hub.example.com/install | head -1 # #!/bin/sh —— 客户端
 | 什么 | 为什么 | 做法 |
 |---|---|---|
 | 入口域名 | 境内机房按 SNI 拦没有备案的域名：外网访问 443（换任何端口都一样）只有 reset，HTTP 回云厂商的「未备案」页，云内网却正常 | 入口放在境内机房，域名必须已经 ICP 备案，并接入这家云（阿里云叫「接入备案」，在别家备过的也要再接入）；做不到，就把入口放在境外或港澳机房，机器照样放在国内 |
+| 构建拉基础镜像 | Docker Hub（`golang`、`alpine`）直连常拉不到 | 在构建机的 `/etc/docker/daemon.json` 配 `"registry-mirrors"`（你的云厂商的镜像加速地址），`sudo systemctl restart docker` 后再构建 |
 | 构建拉 Go 依赖 | 直连官方代理常卡住 | 默认已经经 `goproxy.cn`（[§1.1](#11-构建镜像)） |
 | `stable` 是哪个提交 | 入口匿名问 GitHub 会被限流 | 把 `stable` 推给入口（[§4.4](#44-入口问不到-github-时)） |
 | 发布包要的程序 | 自己没有 Codex、tmux 的制品 | 从已有这一版的入口取（[§1.3](#13-必填配置)「发布包要的程序」） |

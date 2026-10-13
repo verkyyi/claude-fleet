@@ -836,6 +836,9 @@ func runHub(args []string) error {
 		log.Printf("read-only (CCQUOTA_READONLY=1): writes answer 503 + Retry-After, reads as usual")
 	}
 
+	if bad := placeholderAdmins(splitList(os.Getenv("CCQUOTA_ADMINS"))); len(bad) > 0 {
+		return fmt.Errorf("CCQUOTA_ADMINS: %s is the docs' placeholder — put an address you can receive mail at: the first admin signs in with the code sent there", strings.Join(bad, ", "))
+	}
 	srv := &api.Server{
 		Store:  st,
 		GitHub: gh,
@@ -1282,6 +1285,27 @@ func githubOAuthVia(srv *api.Server, getenv func(string) string) error {
 	srv.GitHub.RelayPass = srv.HubRelayPass
 	log.Printf("github sign-in: the token exchange goes through the relay %s (CCQUOTA_GITHUB_OAUTH_VIA=relay); relay down = github.com directly", url)
 	return nil
+}
+
+// placeholderAdmins: the CCQUOTA_ADMINS entries still on a documentation
+// domain (example.com / .org / .net, RFC 2606) — copied from the install page,
+// they can never receive the sign-in code (claude-fleet#4070).
+func placeholderAdmins(admins []string) []string {
+	var bad []string
+	for _, a := range admins {
+		at := strings.LastIndex(a, "@")
+		if at < 0 {
+			continue
+		}
+		d := strings.ToLower(strings.TrimSuffix(a[at+1:], "."))
+		for _, ex := range []string{"example.com", "example.org", "example.net"} {
+			if d == ex || strings.HasSuffix(d, "."+ex) {
+				bad = append(bad, a)
+				break
+			}
+		}
+	}
+	return bad
 }
 
 func splitList(s string) []string {

@@ -155,3 +155,18 @@ func TestReleaseNPMUnsetSameURLs(t *testing.T) {
 		t.Fatalf("asked %v, want %v", rec.urls, want)
 	}
 }
+
+// claude-fleet#4070: a fresh data disk has no release-artifacts directory;
+// the fetch makes it instead of failing on «no such file or directory».
+func TestReleaseNPMMakesArtifactsDir(t *testing.T) {
+	npm := newFakeNPM(t)
+	npm.put(t, npmTestPkg, npmTestVer, []byte("CLAUDE"), false)
+	rs := npmTestStore(t, npm.srv.URL)
+	rs.ArtifactsDir = filepath.Join(rs.ArtifactsDir, "release-artifacts")
+	if err := rs.fetchClaude(context.Background(), npmTestName); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got := npmTestKept(t, rs); got != "CLAUDE" {
+		t.Fatalf("kept %q", got)
+	}
+}

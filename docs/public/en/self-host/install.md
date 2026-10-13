@@ -17,8 +17,8 @@ The addresses and names in the examples below are placeholders: the hub `https:/
 |---|---|
 | A domain name and an HTTPS certificate | The hub's address, for example `hub.example.com`. Machines and clients accept HTTPS only. |
 | Somewhere to run the hub | A Linux server with Docker (a single container), or a Kubernetes cluster with ingress-nginx. The hub is small: 1 core and 1 GB of memory is enough for a small team. |
-| Somewhere to build the image | A computer with Docker and `git` that can fetch Go dependencies. |
-| At least one sign-in method | A GitHub OAuth app, an SMTP server that can send mail (email sign-in), or a WeChat Open Platform website app. See [§1.4](#14-sign-in-methods). |
+| Somewhere to build the image | A computer with Docker (with BuildKit / buildx) and `git` that can fetch base images and Go dependencies. On Ubuntu: `sudo apt install docker.io docker-buildx`. |
+| At least one sign-in method | **Have it ready before you start**: with none, the hub does not start, or starts and the admin cannot get in. One or more of: a GitHub OAuth app (its Client ID / secret, callback set to the hub's address); an SMTP server that can send mail (host, port, user, password, and a sender address **already enabled** at your provider — a cloud mail service verifies the sending domain first); a WeChat Open Platform website app (AppID / AppSecret; review takes days). See [§1.4](#14-sign-in-methods). |
 | Machines to run sessions | macOS or Linux (Debian 12 / Ubuntu with systemd), each with an administrator account that can `sudo`. |
 | Subscriptions | A Claude subscription (Pro / Max / Team) or a ChatGPT subscription. Each person can bring their own, or an admin can connect some to the hub for everyone to share. |
 
@@ -43,6 +43,8 @@ docker push registry.example.com/fleet/ccquota:$TAG
 - `bin/fleet-client-pack.sh` packs the files clients and machines download into the image; without this step `docker build` refuses.
 - `VERSION` is the version name the hub reports at `/version`; a commit id is easiest to match up.
 - The image carries the programs macOS and Linux (amd64 / arm64) machines download, so the build takes a few minutes. With the hub on one machine only, you need not push the image to a registry.
+- It needs BuildKit: the Dockerfile uses `--platform=$BUILDPLATFORM`, and `docker build` without buildx fails with `"" is an invalid OS component`. Ubuntu's `docker.io` does not include it; install `docker-buildx`.
+- In mainland China Docker Hub's base images (`golang`, `alpine`) often cannot be pulled: set `"registry-mirrors"` (your cloud provider's mirror) in the build machine's `/etc/docker/daemon.json` and `sudo systemctl restart docker` first.
 - By default the build fetches Go dependencies through `goproxy.cn` (from mainland China the official proxy often stalls). Building elsewhere, or to avoid it, add `--build-arg GOPROXY=https://proxy.golang.org,direct`.
 
 ### 1.2 Generate the keys
@@ -50,7 +52,7 @@ docker push registry.example.com/fleet/ccquota:$TAG
 Generate them in a directory only you can read. **These files never go into any repository**:
 
 ```sh
-mkdir -p ~/fleet-secrets && cd ~/fleet-secrets && umask 077
+umask 077 && mkdir -p ~/fleet-secrets && cd ~/fleet-secrets   # umask first, so the directory itself is 0700
 ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca     # the key that signs connection certificates: ca + ca.pub
 openssl rand -base64 32 > cred-key                      # the key of the subscription credential vault
 openssl rand -hex 24 > viewer-token                     # the read-only password of the usage page
@@ -79,7 +81,7 @@ The hub reads only environment variables. A minimal working set:
 | `CCQUOTA_FLEET_PUBLIC_URL` | `https://hub.example.com` | The hub's public address, used by machines and clients |
 | `CCQUOTA_PUBLIC_URL` | `https://hub.example.com` | The same, for sign-in redirects |
 | `CCQUOTA_GITHUB_ADMINS` | `alice` | Admins' GitHub usernames, comma-separated |
-| `CCQUOTA_ADMINS` | `alice@example.com` | Admins who do not use GitHub: email addresses, comma-separated |
+| `CCQUOTA_ADMINS` | `alice@example.com` | Admins who do not use GitHub: email addresses, comma-separated. **Use an address you really receive mail at** — the first admin gets in with the code sent there; left on the `example.com` placeholder, the hub says so and refuses to start |
 | `CCQUOTA_FLEET_ADMIN_USERS` | `alice` | The system login name of the administrator account on the machines: the hub sends account creation and removal only to a machine program running as it |
 | `CCQUOTA_VIEWER_TOKEN` | the contents of `viewer-token` | The read-only password of the usage page |
 | `CCQUOTA_FLEET_SSH_CA_KEY` | `/secrets/ca` | Path of the connection certificate key |
@@ -119,10 +121,10 @@ Apart from the people listed as admins above, **everyone needs an invite to get 
 
 ### 1.5 Option one: a single container
 
-For one Linux server. The hub listens only on the machine itself, and your existing reverse proxy (Caddy, nginx) takes HTTPS to `127.0.0.1:8787`:
+For one Linux server. The hub listens only on the machine itself, and a reverse proxy (Caddy, nginx) takes HTTPS to `127.0.0.1:8787`. On a new server without one, Caddy is the least work and gets its own certificate: `sudo apt install caddy` on Ubuntu / Debian — apt's 2.6 is enough for the hub.
 
 ```sh
-mkdir -p /srv/fleet/data && sudo chown 10001 /srv/fleet/data     # the image runs as uid 10001
+sudo mkdir -p /srv/fleet/data/release-artifacts && sudo chown -R 10001 /srv/fleet/data   # the image runs as uid 10001
 sudo cp ~/fleet-secrets/{ca,cred-key,release-key} /srv/fleet/ && sudo chown 10001 /srv/fleet/{ca,cred-key,release-key}
 
 cat > /srv/fleet/hub.env <<'EOF'
@@ -163,7 +165,7 @@ hub.example.com {
 }
 ```
 
-With nginx, turn `proxy_buffering` off, set `proxy_read_timeout` / `proxy_send_timeout` to `3600s` and `client_max_body_size` to `64m`, and forward the WebSocket upgrade headers.
+For Caddy put this block in `/etc/caddy/Caddyfile` and `sudo systemctl reload caddy`. With nginx, turn `proxy_buffering` off, set `proxy_read_timeout` / `proxy_send_timeout` to `3600s` and `client_max_body_size` to `64m`, and forward the WebSocket upgrade headers.
 
 All the data is in `/srv/fleet/data/ccquota.db`. **Never copy this file while the hub is running**; for backups see [§5.1](#51-the-hub).
 
@@ -283,7 +285,7 @@ curl -fsS https://hub.example.com/version          # the image version, stable's
 curl -fsS https://hub.example.com/install | head -1 # #!/bin/sh — the client install script
 ```
 
-Then open `https://hub.example.com` in a browser and sign in as one of the admins listed in §1.3: a self-hosted hub opens straight onto the console (there is no website front page).
+Then open `https://hub.example.com` in a browser and sign in as one of the admins listed in §1.3: a self-hosted hub opens straight onto the console (there is no website front page). Signed out, a browser is taken to `/app/signin`; a non-browser request such as `curl` gets HTTP 401 and `{"error":"a viewer token is required"}` for `/` — that is expected, not a broken hub.
 
 If it does not start, read the container's log (`docker logs fleet-hub` / `kubectl -n $NS logs deploy/ccquota-hub`): a missing key, or a sign-in method only half configured, is named on the first screen, key and all.
 
