@@ -793,7 +793,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   test's recorded cost — `bin/selftest-durations.txt`, longest first into the
   lightest slice (issue #1390: a stride once stacked the six slowest tests into
   one shard); no row ⇒ the table's median, no table ⇒ exactly the old stride —
-  and `.github/workflows/selftests.yml` fans that over a 14-job matrix (8 until #2659, 12 until #3243), each
+  and `.github/workflows/selftests.yml` fans that over an 18-job matrix (8 until #2659, 12 until #3243, 14 until #3864), each
   shard printing its predicted load (WARN past 400s of the 480s step bound).
   Refresh the table with `bin/selftest-durations.sh --run <run id>`. Edit the `shard:` list to change the width and nothing else:
   the split reads `strategy.job-total`. The width is set by measured runner
