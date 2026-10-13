@@ -329,7 +329,7 @@ phase_verify() {
   want=$(wc -l < "$STATE/pinned" | tr -d ' ')
   local have
   have=$(kc exec "deploy/$POD" -c fleet -- sh -c 'for s in /tmp/tmux-$(id -u)/*; do [ -S "$s" ] &&
-      tmux -S "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null; done' | sort -u)
+      tmux -S "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null; done' | sort -u)  # view-ok: runs in the pod (no fleet-lib there); sort -u drops a view session's duplicate rows
   while read -r fid key; do
     [ -n "$fid" ] || continue
     if printf '%s\n' "$have" | grep -qx "$fid"; then say "  back: $key"; else say "  MISSING: $key ($fid)"; missing=$((missing + 1)); fi
