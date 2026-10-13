@@ -236,14 +236,19 @@ spec:
           - name: acr-pull
           containers:
           - name: patch
-            image: registry.example.com/acme/arc-runner:TAG   # any image with kubectl
+            image: registry.example.com/acme/arc-runner:TAG   # any image with curl
             command:
             - sh
             - -c
             - |
+              set -eu
               h=$(TZ=Asia/Shanghai date +%H)
               if [ "$h" -ge 1 ] && [ "$h" -lt 8 ]; then n=0; else n=2; fi
-              kubectl -n arc-runners patch autoscalingrunnerset fleet-ack --type merge -p "{\"spec\":{\"minRunners\":$n}}"
+              sa=/var/run/secrets/kubernetes.io/serviceaccount
+              curl -fsS --cacert "$sa/ca.crt" -H "Authorization: Bearer $(cat "$sa/token")" \
+                -X PATCH -H 'Content-Type: application/merge-patch+json' \
+                -d "{\"spec\":{\"minRunners\":$n}}" -o /dev/null \
+                https://kubernetes.default.svc/apis/actions.github.com/v1alpha1/namespaces/arc-runners/autoscalingrunnersets/fleet-ack
               echo "fleet-ack minRunners=$n (Beijing hour $h)"
             resources:
               requests: { cpu: 10m, memory: 32Mi }

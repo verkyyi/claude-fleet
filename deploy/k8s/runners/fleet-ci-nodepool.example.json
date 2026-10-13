@@ -5,7 +5,7 @@
   "scaling_group": {
     "instance_charge_type": "PostPaid",
     "spot_strategy": "SpotAsPriceGo",
-    "instance_types": ["ecs.u1-c1m2.4xlarge", "ecs.c7a.4xlarge", "ecs.c6.4xlarge", "ecs.g7a.4xlarge", "ecs.u1-c1m4.4xlarge"],
+    "instance_types": ["ecs.u1-c1m2.4xlarge", "ecs.u1-c1m4.4xlarge", "ecs.c7a.4xlarge", "ecs.c6.4xlarge", "ecs.c7.4xlarge"],
     "multi_az_policy": "COST_OPTIMIZED",
     "scaling_policy": "release",
     "image_type": "AliyunLinux3ContainerOptimized",
