@@ -15,6 +15,9 @@
 #   spare-pod-leaks          bin/fleet-provisioner.py + tokenledger/internal/api/fleet_spare_pods.go
 #   root-in-user-pod         extras/managed-node/render.py + bin/fleet-provisioner.py +
 #                            bin/fleet-node-linux.py pod-etc (issue #3757)
+#   cluster-reading-wrong-pod extras/managed-node/render.py (ops_resources) + deploy/k8s/fleet-workers +
+#                            tokenledger/internal/api/fleet_cluster_reading.go +
+#                            tokenledger/internal/agent/node_cluster_reading.go (issue #3734)
 #   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
 #                            tokenledger/internal/api/fleet_jobs.go
@@ -27,7 +30,7 @@ RENDER="$ROOT/extras/managed-node/render.py"
 D64=$(printf 'a%.0s' $(seq 1 64))
 
 # templates <dir> — every pod-carrying object the fleet ships into fleet-workers,
-# one JSON List per file: render.py's user pod, door, shared node and Job, and
+# one JSON List per file: render.py's user pod, door, fleet-ops (#3734), shared node and Job, and
 # (with kubectl, and yq or PyYAML) the kustomized fleet-workers layer
 templates() {
   local d="$1"
@@ -35,6 +38,7 @@ templates() {
     --user-pod u-drill1 --login drill1 --uid 10002 \
     --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local > "$d/user-pod.json" || return 1
   python3 "$RENDER" --door --image "x@sha256:$D64" --hub https://hub.example.com > "$d/door.json" || return 1
+  python3 "$RENDER" --ops drill-cluster --image "x@sha256:$D64" --hub https://hub.example.com > "$d/ops.json" || return 1
   python3 "$RENDER" --image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi > "$d/node.json" || return 1
   python3 "$RENDER" --job u-drill1 --image "x@sha256:$D64" --job-repo o/r \
     --job-ref "$(printf 'b%.0s' $(seq 1 40))" --job-nonce "$(printf 'c%.0s' $(seq 1 32))" > "$d/job.json" || return 1
@@ -105,7 +109,7 @@ sys.exit(1 if bad else 0)
 PY
 ) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT="每个 pod 模板（用户 pod · 门 · 共享节点 · Job${kz:+ · fleet-workers 共享服务}）都不挂集群令牌、各用自己的服务账号；只有 fleet-ops 与 fleet-provisioner 挂（${out}）"
+  WHAT="每个 pod 模板（用户 pod · 门 · fleet-ops · 共享节点 · Job${kz:+ · fleet-workers 共享服务}）都不挂集群令牌、各用自己的服务账号；只有 fleet-ops 与 fleet-provisioner 挂（${out}）"
 }
 
 # stub_api <dir> — a stand-in Kubernetes API on 127.0.0.1 (prints its URL):
@@ -586,6 +590,68 @@ PY
   fi
   SECS=$(since "$t0")
   WHAT="入口签的单为五种 kind 各建一个 Job：都以 fleet-job 跑、不挂令牌、只有 emptyDir、非 root 只读根、不从 Secret 取环境、没有像凭据的变量；untrusted 不带出口标签也没有 HTTPS_PROXY（job-out 没有任何公网地址）；kind / 命令不合语法、给不是用户 pod 的建 Job 一律拒、一个请求都没发；runner 照 untrusted 的环境跑，什么钥匙都找不到；${gohalf}"
+}
+
+# cluster-reading-wrong-pod (#3734, EPIC #3500 C1's cloud half): fleet-ops feeds
+# each user pod its own reading. Here: the one fleet-ops template is the read-only
+# account's, fleet/role control, not root, its token down a pipe; that account's
+# Role reads and never writes; control-out exists. The hub half (go test): a
+# reading reaches only its own pod, from its own cluster's ops link, never a
+# malformed value, never from a link without cluster_ops.
+drill_cluster_reading_wrong_pod() {
+  CAP=120
+  local d="$WORK/cr" t0 out gohalf
+  mkdir -p "$d"; t0=$(now)
+  python3 "$RENDER" --ops drill-cluster --image "x@sha256:$D64" --hub https://hub.example.com > "$d/ops.json" \
+    || { WHY="render --ops failed"; return 1; }
+  out=$(python3 - "$d/ops.json" "$ROOT/deploy/k8s/fleet-workers/serviceaccounts.yaml" "$ROOT/deploy/k8s/fleet-workers/networkpolicy.yaml" <<'PY'
+import json, re, sys
+bad = []
+items = json.load(open(sys.argv[1]))["items"]
+deps = [o for o in items if o["kind"] == "Deployment"]
+if len(deps) != 1 or deps[0]["spec"]["replicas"] != 1:
+    bad.append("not ONE fleet-ops of one replica")
+p = deps[0]["spec"]["template"]["spec"]
+c = p["containers"][0]
+if (p["serviceAccountName"], p["hostname"], deps[0]["spec"]["template"]["metadata"]["labels"].get("fleet/role")) != ("fleet-ops", "drill-cluster", "control"):
+    bad.append("account / hostname / role: %s %s" % (p["serviceAccountName"], p["hostname"]))
+if not c["securityContext"].get("runAsNonRoot") or c["securityContext"].get("runAsUser") in (None, 0):
+    bad.append("fleet-ops runs as root")
+if any(e["name"] == "CCQUOTA_TOKEN" for e in c["env"]) or "CCQUOTA_TOKEN_FD=3" not in c["command"][-1]:
+    bad.append("the node token is not down a pipe")
+sa = open(sys.argv[2]).read()
+m = re.search(r"kind: Role\nmetadata: \{name: fleet-ops,.*?\n---", sa, re.S)
+if not m:
+    bad.append("no fleet-ops Role")
+else:
+    verbs = set(re.findall(r"verbs: \[([^\]]*)\]", m.group(0)))
+    for v in verbs:
+        if set(x.strip() for x in v.split(",")) - {"get", "list", "watch"}:
+            bad.append("fleet-ops' Role writes: " + v)
+    if "metrics.k8s.io" not in m.group(0):
+        bad.append("fleet-ops' Role cannot read pod metrics")
+if "name: control-out" not in open(sys.argv[3]).read():
+    bad.append("no control-out network rule")
+print("\n".join(bad) if bad else "ok")
+sys.exit(1 if bad else 0)
+PY
+) || { WHY="$out"; return 1; }
+  gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestClusterReadingReachesItsPod"
+  grep -q '^func TestClusterReadingReachesItsPod(' "$ROOT/tokenledger/internal/api/fleet_cluster_reading_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestClusterReadingReachesItsPod is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestClusterReading' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 读数只到自己集群的自己的 pod、坏值和冒充的链路一律丢" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="集群只有一个 fleet-ops：只读账号（Role 只有 get/list/watch，能读 pod 指标）、fleet/role control、非 root、令牌走管道、出站只有 control-out；${gohalf}"
 }
 
 cred_run_drills "$0"

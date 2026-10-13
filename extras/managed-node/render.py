@@ -597,6 +597,85 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
     ]
 
 
+# The cluster's central patrol (#3734, EPIC #3500 C1's cloud half): ONE fleet-ops
+# for the whole cluster, the managed-node image's own ccquota as a plain agent —
+# no boot, no supervisor, no root, no disk. Its node token (a join code redeemed
+# with the cluster's name as the hostname, MANAGED-LINUX.md «fleet-ops») is the
+# Secret fleet-ops, handed to the agent down a pipe (CCQUOTA_TOKEN_FD), never its
+# environment. Its hostname IS the cluster's name — what the hub's fleet.clusters
+# and every fleet_cluster_pods row say — and its hello lists cluster_ops: it
+# carries provisioner tickets, reads Jobs back (#3552, #3553) and sends every
+# user pod's own reading up the link (#3734). The account is the read-only
+# fleet-ops (deploy/k8s/fleet-workers/serviceaccounts.yaml), so this is the one
+# pod here that mounts a token. Labelled fleet/role: control — the only caller
+# the provisioner lets in (networkpolicy.yaml provisioner-in / control-out).
+SA_OPS = 'fleet-ops'
+OPS_NAME = 'fleet-ops'
+OPS_SECRET = 'fleet-ops'
+OPS_UID = 10001
+OPS_CCQUOTA = '/opt/claude-fleet/seed/current/bin/ccquota'
+OPS_SECURITY = {'runAsNonRoot': True, 'runAsUser': OPS_UID, 'runAsGroup': OPS_UID,
+                'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True,
+                'capabilities': {'drop': ['ALL']}, 'seccompProfile': {'type': 'RuntimeDefault'}}
+CLUSTER_RE = r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'
+
+
+def ops_resources(image, hub, cluster, namespace='fleet-workers', provisioner='', pull_secrets=('acr-pull',)):
+    """fleet-ops: one Deployment (one replica, Recreate — two would be two ops
+    links for one cluster). Nothing listens; it only dials the hub."""
+    if not image or not hub or not cluster:
+        raise ValueError('--ops needs --image, --hub and the cluster name')
+    if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
+        raise ValueError('pin the deployed image by sha256 digest')
+    if not re.fullmatch(r'https://[^\s/]+(/[^\s]*)?', hub):
+        raise ValueError('--hub is https://…')
+    if not re.fullmatch(CLUSTER_RE, cluster):
+        raise ValueError('--ops is the cluster name the hub knows (a-z 0-9 -), not %r' % cluster)
+    if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
+        raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    provisioner = provisioner or 'http://fleet-provisioner.%s.svc.cluster.local:8790' % namespace
+    if not re.fullmatch(r'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?', provisioner):
+        raise ValueError('--provisioner is http://HOST[:PORT], not %r' % provisioner)
+    labels = {'app.kubernetes.io/name': 'fleet-ops', 'fleet/role': 'control'}
+    meta = {'name': OPS_NAME, 'namespace': namespace, 'labels': labels}
+    env = [{'name': 'CCQUOTA_HUB_URL', 'value': hub},
+           {'name': 'CCQUOTA_FLEET', 'value': '1'},
+           # coordinate only: nothing is placed on it, no session runs here
+           {'name': 'CCQUOTA_FLEET_COMPUTE', 'value': '0'},
+           {'name': 'CCQUOTA_FLEET_SSH_RELAY', 'value': '0'},
+           {'name': 'CCQUOTA_FLEET_CHAT', 'value': '0'},
+           {'name': 'CCQUOTA_FLEET_PROVISIONER', 'value': provisioner},
+           {'name': 'HOME', 'value': '/work'}]
+    # the token down a pipe, never the environment (claude-fleet#1971)
+    run = ('exec 3< /run/fleet-ops/token\n'
+           'CCQUOTA_TOKEN_FD=3 exec %s agent --state /work/state --sources claude' % OPS_CCQUOTA)
+    container = {
+        'name': 'ops', 'image': image, 'command': ['/bin/sh', '-ec', run], 'env': env,
+        'resources': {'requests': {'cpu': '20m', 'memory': '64Mi'}, 'limits': {'cpu': '500m', 'memory': '256Mi'}},
+        'securityContext': OPS_SECURITY,
+        'volumeMounts': [{'name': 'work', 'mountPath': '/work'}, {'name': 'tmp', 'mountPath': '/tmp'},
+                         {'name': 'secret', 'mountPath': '/run/fleet-ops', 'readOnly': True}],
+    }
+    return [
+        {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': meta,
+         'spec': {'replicas': 1, 'revisionHistoryLimit': 2, 'strategy': {'type': 'Recreate'},
+                  'selector': {'matchLabels': {'app.kubernetes.io/name': 'fleet-ops'}},
+                  'template': {'metadata': {'labels': labels}, 'spec': {
+                      # the hub knows this link by the cluster's name (opsFor)
+                      'hostname': cluster,
+                      'serviceAccountName': SA_OPS,
+                      'automountServiceAccountToken': True, 'enableServiceLinks': False,
+                      'securityContext': {'fsGroup': OPS_UID},
+                      'terminationGracePeriodSeconds': 10,
+                      'imagePullSecrets': [{'name': n} for n in pull_secrets],
+                      'containers': [container],
+                      'volumes': [{'name': 'work', 'emptyDir': {}},
+                                  {'name': 'tmp', 'emptyDir': {}},
+                                  {'name': 'secret', 'secret': {'secretName': OPS_SECRET, 'defaultMode': 0o440,
+                                                                'items': [{'key': 'token', 'path': 'token'}]}}]}}}},
+    ]
+
+
 # A throwaway Job (#3558, EPIC #3500 C16; its runner is C7's): no key, no home,
 # no token, not root. Named after the ticket's nonce, so a replayed create is
 # AlreadyExists; labelled fleet/owner (never fleet/pod — the owner pod's Service
@@ -761,6 +840,10 @@ if __name__ == '__main__':
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
     p.add_argument('--door-replicas', type=int, default=2)
+    p.add_argument('--ops', default='', metavar='CLUSTER',
+                   help="the cluster's one fleet-ops, named as the hub knows the cluster (#3734)")
+    p.add_argument('--provisioner', default='', metavar='URL',
+                   help="fleet-ops' provisioner (default http://fleet-provisioner.<namespace>.svc.cluster.local:8790)")
     # a throwaway Job (#3558; docs/dev/MANAGED-LINUX.md «Cluster permissions») — the
     # provisioner renders the same from a create-job ticket
     p.add_argument('--job', default='', metavar='u-NONCE',
@@ -785,6 +868,11 @@ if __name__ == '__main__':
         if args.door:
             items = door_resources(args.image, args.hub, args.namespace, args.door_replicas, args.entry_lb_spec,
                                    pull_secrets=args.pull_secrets or ['acr-pull'])
+            print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
+            raise SystemExit(0)
+        if args.ops:
+            items = ops_resources(args.image, args.hub, args.ops, args.namespace, args.provisioner,
+                                  pull_secrets=args.pull_secrets or ['acr-pull'])
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         if args.job:

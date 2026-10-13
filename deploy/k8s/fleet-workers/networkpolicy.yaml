@@ -300,3 +300,43 @@ spec:
       ports:
         - {protocol: TCP, port: 443}
         - {protocol: TCP, port: 6443}
+---
+# fleet-ops (#3734; render.py --ops): nothing comes in. Out to kube-dns, the
+# provisioner it hands tickets to, and on 443 / 6443 to the API server and the
+# hub (both the cluster's / the internet's addresses: any, never the cloud
+# metadata address).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: control
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: provisioner
+      ports:
+        - {protocol: TCP, port: 8790}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 100.100.100.200/32
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}

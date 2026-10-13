@@ -228,6 +228,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// The cluster's ops link: provisioner tickets (claude-fleet#3553).
 		caps = append(caps, control.CapClusterOps)
 	}
+	if a.clusterReadingCapable() {
+		// A user pod's login takes its pod's reading (claude-fleet#3734).
+		caps = append(caps, control.CapClusterReading)
+	}
 	if a.serviceLogCapable() {
 		// A service's log, live (claude-fleet#2797).
 		caps = append(caps, control.CapServiceLog)
@@ -369,6 +373,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			case control.TypeClusterJob:
 				// A throwaway Job's state and log, read back (claude-fleet#3552).
 				go a.answerClusterJob(ctx, conn, m)
+			case control.TypeClusterReading:
+				// This pod's own reading, from fleet-ops (claude-fleet#3734).
+				a.handleClusterReading(m)
 			case control.TypeError:
 				if relayOK && a.relayRefused(rp, m.OpID, m.Error) {
 					break
@@ -392,6 +399,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if relayOK {
 		go a.relayOutbox(ctx, conn, rp)
 	}
+	// fleet-ops: every user pod's reading, up this link (claude-fleet#3734).
+	go a.clusterReadingsLoop(ctx, conn)
 
 	probe := &fleetProbe{}
 	beat := func() error {

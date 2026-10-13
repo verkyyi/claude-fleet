@@ -53,4 +53,4 @@ shared-dirs	machine	machine	the shared dirs (heavy slots, session counts) kept r
 spotlight	machine	machine	Spotlight off on a managed Mac
 update	machine	machine	the one updater
 credential-pool	machine	machine	the subscription pool sync (an image-updated node)
-machine-reading	machine	machine	memory pressure, total memory and load per core, once every 15 s → cluster/machine.json
+machine-reading	machine	machine	memory pressure, total memory and load per core, once every 15 s → cluster/machine.json (in a cluster: fleet-ops reads each user pod against its own limits and the hub pushes it into the pod login's $FLEET_CONF_DIR/cluster/, #3734)
