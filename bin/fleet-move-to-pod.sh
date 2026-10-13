@@ -367,9 +367,10 @@ phase_copy() {
   kc exec "$(SEEDER)" -- rm -f "/data/homes/$LOGIN/.config/claude-fleet/node.env" \
     "/data/homes/$LOGIN/.config/claude-fleet/node.pub.env" "/data/homes/$LOGIN/.config/claude-fleet/credsep.json" \
     "$RECV_RC" || die 1 'clearing the shared-node files failed'
-  a=$(src sh -c 'cd /home && find "$1" -xdev ! -path "$1/.codex/tmp*" ! -path "$1/.config/claude-fleet/cred-proxy/codex-homes*" | wc -l' _ "$LOGIN")
-  b=$(kc exec "$(SEEDER)" -- sh -c 'cd /data/homes && find "$1" | wc -l' _ "$LOGIN")
-  # the three cleared files are the only difference allowed
+  a=$(src sh -c 'cd /home && find "$1" -xdev ! -type s ! -type p ! -path "$1/.codex/tmp*" ! -path "$1/.config/claude-fleet/cred-proxy/codex-homes*" | wc -l' _ "$LOGIN")
+  b=$(kc exec "$(SEEDER)" -- sh -c 'cd /data/homes && find "$1" ! -type s ! -type p | wc -l' _ "$LOGIN")
+  # the three cleared files are the only difference allowed; a socket or a
+  # fifo is never copied (tar skips it: a live peerlink's .sock), so neither side counts one
   [ $((a - b)) -ge 0 ] && [ $((a - b)) -le 3 ] || die 1 "file counts differ: $SOURCE $a, pod disk $b"
   mark copy "files=$b"
 }
