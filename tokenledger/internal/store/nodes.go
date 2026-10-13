@@ -165,6 +165,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetHomeCurrent(); err != nil {
 		return err
 	}
+	// The 60-second trial's waitlist and timings (claude-fleet#3590).
+	if err := s.ensureFleetTrials(); err != nil {
+		return err
+	}
 	// Per-person usage against a person's budget (claude-fleet#1977).
 	if err := s.ensureFleetPersonUsage(); err != nil {
 		return err

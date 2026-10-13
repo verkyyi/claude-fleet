@@ -225,6 +225,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	person, status, code, msg := s.chatPerson(r)
+	if code == "" {
+		_ = s.Store.TouchTrial(person, time.Now()) // a trial in use is not idle (claude-fleet#3590)
+	}
 	if code != "" {
 		if status == http.StatusUnauthorized {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)

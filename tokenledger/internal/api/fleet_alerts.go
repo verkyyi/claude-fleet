@@ -79,6 +79,7 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 			}
 			s.NodeAlertTick(start, now)
 			s.SweepDrills(now) // a drill person past its life (claude-fleet#2010)
+			s.SweepTrials(now) // a trial login unused for 7 days (claude-fleet#3590)
 		}
 	}
 }

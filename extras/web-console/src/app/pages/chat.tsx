@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { useFleetChat, type Gate } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
+import { fmtClock, useTryClock } from "@/app/chat/try";
 import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
@@ -130,11 +131,25 @@ const Welcome: FC = () => (
   </div>
 );
 
+// the trial's clock (issue #3590): running until the first reply, then the time
+const TryClock: FC<{ clock: ReturnType<typeof useTryClock> }> = ({ clock }) => {
+  if (!clock.running && clock.took === null) return null;
+  return (
+    <p role="status" className="text-muted-foreground px-4 pt-2 text-center font-mono text-[13px]">
+      {clock.took === null
+        ? <>{tr("试用计时 ", "Trial clock ")}<b className="text-foreground font-semibold tabular-nums">{fmtClock(clock.elapsed)}</b></>
+        : <>{tr("你用了 ", "You took ")}<b className="text-clay font-semibold tabular-nums">{fmtClock(clock.took)}</b>{tr("，从按下「60 秒试用」到第一句回复。", " from pressing “Try it in 60 seconds” to the first reply.")}</>}
+    </p>
+  );
+};
+
 export default function ChatPage() {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
   const { quota, bumpQuota } = useShell();
+  const clock = useTryClock();
   const chat = useFleetChat({
+    onReply: clock.stop,
     blockedBy: quota?.over ? { blocked: true, ...(quota.reset ? { until: quota.reset } : {}) } : null,
     onTurnEnd: bumpQuota,
   });
@@ -145,6 +160,7 @@ export default function ChatPage() {
       <AssistantRuntimeProvider runtime={runtime}>
         <TooltipProvider>
           <div className="flex h-full flex-col">
+            <TryClock clock={clock} />
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">
               {gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (

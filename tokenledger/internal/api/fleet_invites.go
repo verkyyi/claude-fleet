@@ -151,6 +151,7 @@ func (s *Server) admitInviteAs(pid, kind, subject, name, invite string, now time
 		return "", err
 	}
 	_ = s.Store.HubAudit(actor, "invite", target, "ok", "邀请已使用 · invite used ("+inv.ID+", made by "+orDefault(inv.CreatedBy, "?")+")", now)
+	s.trialAdmitted(pid, inv, now) // a trial invite: into the line (claude-fleet#3590)
 	return "", nil
 }
 

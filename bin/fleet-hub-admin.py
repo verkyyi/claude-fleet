@@ -49,7 +49,7 @@
                                          + 回收中 / 坏了 when any (claude-fleet#3501)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
-fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.entry fleet.entry_domain
+fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.trial fleet.entry fleet.entry_domain
 fleet.node_user_cap.<machine> user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
 
 Auth, read from the environment and never written down: CCQUOTA_VIEWER_TOKEN

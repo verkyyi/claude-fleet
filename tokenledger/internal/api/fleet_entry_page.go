@@ -650,7 +650,7 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	}
 	http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: "", Path: "/", MaxAge: -1})
 	switch c.Value { // the only places it may send anyone
-	case EntryPagePath, EntryConnPath, ChatPagePath:
+	case EntryPagePath, EntryConnPath, ChatPagePath, TryPagePath:
 		return c.Value
 	}
 	if ticketPageReturnRe.MatchString(c.Value) {
