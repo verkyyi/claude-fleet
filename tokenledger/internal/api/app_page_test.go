@@ -50,6 +50,8 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 	}
 	h, admin, user := rolesHarness(t)
 	h.srv.UI = ui
+	// the old pages 设备 took over (claude-fleet#3930), as they still are
+	defer oldPagesStay(AppPrefix+"/connect", AppPrefix+"/machines", AppPrefix+"/machines/")()
 	get := func(sess *http.Cookie, path string) (int, string) {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, h.http.URL+pagePath(path), nil)

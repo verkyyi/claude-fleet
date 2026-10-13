@@ -626,6 +626,7 @@ func TestFleetMachinesPage(t *testing.T) {
 		"machines.html": &fstest.MapFile{Data: []byte("<!doctype html><title>我的机器</title>")},
 		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>dashboard</title>")},
 	}
+	defer oldPagesStay(AppPrefix + "/machines")() // the old page, not 设备 it moved to (claude-fleet#3930)
 	resp, body := h.get(t, "/machines")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "我的机器") {
 		t.Fatalf("GET /machines = %d %q; want machines.html", resp.StatusCode, body)

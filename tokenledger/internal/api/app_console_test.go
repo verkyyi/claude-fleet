@@ -64,6 +64,7 @@ func withLive(t *testing.T, all bool, f func()) {
 	rows := append([]consolePage(nil), consolePages...)
 	for i := range rows {
 		rows[i].live = all
+		rows[i].userLive = all && rows[i].forUser != ""
 	}
 	consolePages = rows
 	defer func() { consolePages = saved }()
@@ -449,5 +450,51 @@ func TestConsoleMemberSide(t *testing.T) {
 	}
 	if got := consoleDo(hd, http.MethodGet, AppPrefix+mePagePath, user); got.Code != http.StatusNotFound {
 		t.Errorf("no console build: GET /app/me = %d; want 404", got.Code)
+	}
+}
+
+// 设备 (claude-fleet#3930, C7): /app/devices is the console's page; the four
+// old addresses it took over — 设备与 SSH, 从手机连, 我的连接, 我的机器 — are
+// one 301 to its tab, query kept; a member's one machine goes to its 我的机器
+// tab while an admin's still opens the old page (C11 moves that); a form still
+// reaches the keys page.
+func TestConsoleDevices(t *testing.T) {
+	h, admin, user := rolesHarness(t)
+	h.srv.ConsoleFS = fstest.MapFS{"app/index.html": {Data: []byte("APP-ENTRY")}}
+	hd := h.srv.Handler()
+	for _, who := range []*http.Cookie{user, admin} {
+		if got := consoleDo(hd, http.MethodGet, AppPrefix+devicesPagePath+"?tab=keys", who); got.Code != http.StatusOK || got.Body.String() != "APP-ENTRY" {
+			t.Errorf("GET /app/devices = %d %.60q; want the console's page", got.Code, got.Body.String())
+		}
+	}
+	for p, want := range map[string]string{
+		AppPrefix + "/connect":      AppPrefix + "/devices",
+		"/connect?x=1":              AppPrefix + "/devices?x=1",
+		EntryPagePath:               AppPrefix + "/devices?tab=phone",
+		EntryPagePath + "?step=3":   AppPrefix + "/devices?tab=phone&step=3",
+		EntryConnPath:               AppPrefix + "/devices?tab=home",
+		AppPrefix + "/machines":     AppPrefix + "/devices?tab=home",
+		"/machines":                 AppPrefix + "/devices?tab=home",
+		AppPrefix + "/machines/x":   AppPrefix + "/devices?tab=home",
+		"/machines/x":               AppPrefix + "/devices?tab=home",
+		AppPrefix + "/machines/x/y": AppPrefix + "/devices?tab=home",
+	} {
+		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != want {
+			t.Errorf("member GET %s = %d → %q; want 301 → %s", p, got.Code, got.Header().Get("Location"), want)
+		}
+	}
+	// an admin's one machine is still the old page until C11's row is live
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/machines/x", admin); got.Code == http.StatusMovedPermanently {
+		t.Errorf("admin GET /app/machines/x = 301 → %q; want the old page", got.Header().Get("Location"))
+	}
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/connect", admin); got.Header().Get("Location") != AppPrefix+"/devices" {
+		t.Errorf("admin GET /app/connect → %q; want /app/devices", got.Header().Get("Location"))
+	}
+	if got := consoleDo(hd, http.MethodPost, EntryPagePath, user); got.Code == http.StatusMovedPermanently {
+		t.Errorf("POST %s = 301; a form is not moved", EntryPagePath)
+	}
+	// a stranger is asked to sign in at the end, never shown the page
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+devicesPagePath, nil); got.Code == http.StatusOK {
+		t.Errorf("stranger GET /app/devices = 200; want the gate")
 	}
 }

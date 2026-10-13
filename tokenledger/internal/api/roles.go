@@ -202,7 +202,9 @@ var routeAccess = map[string]string{
 	// 我的 (claude-fleet#3926): a page of the new console only, each person their own
 	mePagePath: accessUser,
 	// one ticket under 任务 (claude-fleet#3928): the new console's, read off /v1/fleet/tickets
-	ticketPagesPrefix:   accessUser,
+	ticketPagesPrefix: accessUser,
+	// 设备 (claude-fleet#3930): a page of the new console only, each person their own
+	devicesPagePath:     accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 	// Take a machine off the hub (claude-fleet#1928): a user only their own.
 	NodeRetirePath: accessUser,

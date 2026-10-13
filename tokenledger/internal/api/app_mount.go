@@ -44,7 +44,7 @@ var appPagePaths = map[string]bool{
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 	// the new console's own pages, with no old page behind them (EPIC #3923)
-	mePagePath: true,
+	mePagePath: true, devicesPagePath: true,
 }
 
 // appPagePrefixes are the console's pages that carry one name under them
@@ -89,6 +89,11 @@ const mePagePath = "/me"
 // lands. A page of the new console only, as 我的 is.
 const ticketPagesPrefix = TasksPagePath + "/tickets/"
 
+// devicesPagePath is 设备 (C7): the computer's install, the phone's way in,
+// the keys and the person's own machines, one tab each (?tab=pc|phone|keys|home).
+// It takes over 设备与 SSH, 从手机连, 我的连接 and 我的机器.
+const devicesPagePath = "/devices"
+
 // AdminPrefix is where the admin side of the new console is mounted.
 const AdminPrefix = "/admin"
 
@@ -103,8 +108,9 @@ const (
 // under = old is everything below it, its rest carried over into a new that
 // ends in "/". new may carry a query, merged ahead of the request's. forUser
 // is where a member goes from an admin-side row that also shows a member
-// their own (one machine); empty = a member gets the 404. owner is the EPIC
-// member that moves it.
+// their own (one machine); empty = a member gets the 404. userLive moves a
+// member there while the row itself (an admin's way) is not live yet. owner
+// is the EPIC member that moves it.
 type consolePage struct {
 	old, new string
 	side     string
@@ -112,6 +118,7 @@ type consolePage struct {
 	live     bool
 	under    bool
 	forUser  string
+	userLive bool
 }
 
 // consolePages is every page the console moves (EPIC #3923 «逐页去向»).
@@ -129,10 +136,11 @@ var consolePages = []consolePage{
 	// 我的额度 is folded into 我的用量 already; the page only moved on in
 	// the browser, a second hop.
 	{old: AppPrefix + "/quota", new: AppPrefix + "/usage", side: sideMe, owner: "C2", live: true},
-	{old: AppPrefix + "/connect", new: AppPrefix + "/devices", side: sideMe, owner: "C7"},
-	{old: EntryPagePath, new: AppPrefix + "/devices?tab=phone", side: sideMe, owner: "C7"},
-	{old: EntryConnPath, new: AppPrefix + "/devices?tab=home", side: sideMe, owner: "C7"},
-	{old: AppPrefix + "/machines", new: AppPrefix + "/devices?tab=home", side: sideMe, owner: "C7"},
+	{old: AppPrefix + devicesPagePath, new: AppPrefix + devicesPagePath, side: sideMe, owner: "C7", live: true},
+	{old: AppPrefix + "/connect", new: AppPrefix + devicesPagePath, side: sideMe, owner: "C7", live: true},
+	{old: EntryPagePath, new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C7", live: true},
+	{old: EntryConnPath, new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7", live: true},
+	{old: AppPrefix + "/machines", new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7", live: true},
 	{old: AppPrefix + "/config", new: AppPrefix + "/settings", side: sideMe, owner: "C8"},
 	// The way in: each keeps its address and changes only its look.
 	{old: AppPrefix + "/signin", new: AppPrefix + "/signin", side: sideEntry, owner: "C9"},
@@ -141,7 +149,8 @@ var consolePages = []consolePage{
 	{old: InvitePath, new: InvitePath, side: sideEntry, owner: "C9", under: true},
 	{old: AppPrefix + "/logout", new: AppPrefix + "/logout", side: sideEntry, owner: "C3"},
 	// 管理
-	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + "/devices?tab=home", under: true},
+	// a member's branch is C7's (设备 · 我的机器), live already; an admin's is C11's
+	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + devicesPagePath + "?tab=home", under: true, userLive: true},
 	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10", live: true},
 	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true, live: true},
 	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11"},
@@ -220,11 +229,12 @@ func consoleTarget(p, q, role string) (string, bool) {
 	for i := 0; i <= len(consolePages); i++ {
 		pth, query, _ := strings.Cut(to, "?")
 		c, ok := consoleRow(pth)
-		if !ok || !c.live {
+		member := role == roleUser && c.forUser != ""
+		if !ok || !(c.live || (member && c.userLive)) {
 			break
 		}
 		dest := c.new
-		if role == roleUser && c.forUser != "" {
+		if member {
 			dest = c.forUser
 		}
 		if c.under && c.old != pth {
@@ -277,7 +287,7 @@ func (s *Server) moveOn(w http.ResponseWriter, r *http.Request, serve http.Handl
 		if p != AppPrefix && !strings.HasPrefix(p, AppPrefix+"/") && isAppPage(p) {
 			p = appURL(p)
 		}
-		if c, ok := consoleRow(p); ok && c.live && c.forUser != "" {
+		if c, ok := consoleRow(p); ok && (c.live || c.userLive) && c.forUser != "" {
 			s.viewerOnly(move).ServeHTTP(w, r)
 			return
 		}
