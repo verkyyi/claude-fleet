@@ -263,3 +263,11 @@ func (q RequestStore) after(res sql.Result, id, kind, subject string) (*AccessRe
 	}
 	return r, nil
 }
+
+// CountPending is how many requests wait for an admin: the 申请 item's count
+// in the admin side's left column (claude-fleet#4052).
+func (q RequestStore) CountPending() (int, error) {
+	var n int
+	err := q.s.write.QueryRow(`SELECT COUNT(*) FROM hub_access_requests WHERE state = ?`, RequestPending).Scan(&n)
+	return n, err
+}
