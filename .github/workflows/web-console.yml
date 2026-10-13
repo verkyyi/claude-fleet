@@ -58,7 +58,7 @@ jobs:
           if grep -rq 'dash-w41' dist; then echo "::error::the review mock is in dist"; exit 1; fi
       - name: The pack takes it
         run: |
-          ../../bin/web-console-pack.sh --out "$RUNNER_TEMP/console"
+          ../../bin/web-console-pack.sh --out "$RUNNER_TEMP/console" --theme-out "$RUNNER_TEMP/theme"
           grep -q 'src="/app/assets/' "$RUNNER_TEMP/console/app/index.html" || { echo "::error::the member side is not under /app/"; exit 1; }
           grep -rq '/v1/chat' "$RUNNER_TEMP/console/app/assets" || { echo "::error::the member side does not talk to /v1/chat"; exit 1; }
       - name: The review build still builds
