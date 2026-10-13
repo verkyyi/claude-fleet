@@ -823,6 +823,17 @@ class LinuxNode(unittest.TestCase):
             self.assertTrue(v['root'] and v['dave'])
             self.assertEqual(json.loads(Path(pw).read_text())['dana']['gecos'], 'fleet-door')
 
+    def test_door_second_pod_route(self):
+        """#3562: a person's second pod is <login>.<repo> on the door, logged in
+        there as <login> (pod_login); a bad pod_login routes nothing."""
+        s = module('fleet-node-supervisor')
+        lst = {'routes': [
+            {'login': 'dana', 'service': 'u-k3x9q2'},
+            {'login': 'dana.web', 'service': 'u-w2e9q1', 'pod_login': 'dana'},
+            {'login': 'eve.api', 'service': 'u-eeee1', 'pod_login': 'eve;rm'}]}
+        self.assertEqual(s.door_route_rows(lst), {'dana': ('u-k3x9q2', 'dana'), 'dana.web': ('u-w2e9q1', 'dana')})
+        self.assertEqual(s.door_routes(lst), {'dana': 'u-k3x9q2', 'dana.web': 'u-w2e9q1'})
+
     def test_pull_secret_is_a_flag(self):
         """#3290: ACK's password-free ACR plugin names its Secret acr-credential-<hash>;
         --pull-secret (repeatable) replaces the acr-pull default, a bad name refuses."""

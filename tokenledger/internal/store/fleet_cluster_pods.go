@@ -65,6 +65,9 @@ type ClusterPod struct {
 	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
 	DestroyedAt *time.Time `json:"destroyed_at,omitempty"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+	// Split is the repos a person's SECOND pod takes (claude-fleet#3562),
+	// comma-separated owner/name; "" for their one pod and for a spare.
+	Split string `json:"split,omitempty"`
 }
 
 // Held says the pod still stands (or is on its way up).
@@ -80,10 +83,12 @@ func (s *Store) ensureFleetClusterPods() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetClusterPodsSchema)); err != nil {
 		return fmt.Errorf("create fleet_cluster_pods table: %w", err)
 	}
-	return nil
+	// split (claude-fleet#3562): a person's second pod names the repos it
+	// takes; "" = their one pod (or a spare).
+	return s.addColumn("fleet_cluster_pods", "split", "TEXT NOT NULL DEFAULT ''")
 }
 
-const clusterPodColumns = `SELECT pod, cluster, principal_id, state, detail, created_at, claimed_at, destroyed_at, updated_at
+const clusterPodColumns = `SELECT pod, cluster, principal_id, state, detail, created_at, claimed_at, destroyed_at, updated_at, split
 	FROM fleet_cluster_pods`
 
 func scanClusterPods(rows *sql.Rows) ([]ClusterPod, error) {
@@ -93,7 +98,7 @@ func scanClusterPods(rows *sql.Rows) ([]ClusterPod, error) {
 		var p ClusterPod
 		var created, updated string
 		var claimed, destroyed sql.NullString
-		if err := rows.Scan(&p.Pod, &p.Cluster, &p.PrincipalID, &p.State, &p.Detail, &created, &claimed, &destroyed, &updated); err != nil {
+		if err := rows.Scan(&p.Pod, &p.Cluster, &p.PrincipalID, &p.State, &p.Detail, &created, &claimed, &destroyed, &updated, &p.Split); err != nil {
 			return nil, err
 		}
 		p.CreatedAt, _ = time.Parse(rfc, created)
@@ -235,9 +240,23 @@ func (s *Store) CreateClusterSpare(cluster string, valid func(string) bool, at t
 // empty — and queues p's login there under p's own name: account row pending
 // on the new pod, pod row provisioning, one transaction.
 func (s *Store) CreateClusterPodFor(cluster string, p *Principal, at time.Time) (*FleetAccount, error) {
-	cluster = strings.ToLower(strings.TrimSpace(cluster))
-	if cluster == "" || p == nil {
+	if p == nil {
 		return nil, errors.New("empty cluster or principal")
+	}
+	return s.CreateClusterPodSplit(cluster, p, p.Login, "", at)
+}
+
+// CreateClusterPodSplit is CreateClusterPodFor under login, for the repos
+// split names (claude-fleet#3562: a person's second pod — split non-empty);
+// split "" is their one pod.
+func (s *Store) CreateClusterPodSplit(cluster string, p *Principal, login, split string, at time.Time) (*FleetAccount, error) {
+	cluster = strings.ToLower(strings.TrimSpace(cluster))
+	if cluster == "" || p == nil || login == "" {
+		return nil, errors.New("empty cluster, principal or login")
+	}
+	detail := "cluster: a pod of their own (no spare was ready)"
+	if split != "" {
+		detail = "cluster: their second pod, for " + split
 	}
 	ts := fmtTime(at)
 	for i := 0; i < 5; i++ {
@@ -251,11 +270,11 @@ func (s *Store) CreateClusterPodFor(cluster string, p *Principal, at time.Time) 
 			return nil, err
 		}
 		_, err = tx.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
-			VALUES (?, ?, ?, ?, 'create', 'cluster: a pod of their own (no spare was ready)', ?, ?)`,
-			p.ID, pod, p.Login, AccountPending, ts, ts)
+			VALUES (?, ?, ?, ?, 'create', ?, ?, ?)`,
+			p.ID, pod, login, AccountPending, detail, ts, ts)
 		if err == nil {
-			_, err = tx.Exec(`INSERT INTO fleet_cluster_pods (pod, cluster, principal_id, state, created_at, claimed_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`, pod, cluster, p.ID, PodProvisioning, ts, ts, ts)
+			_, err = tx.Exec(`INSERT INTO fleet_cluster_pods (pod, cluster, principal_id, state, created_at, claimed_at, updated_at, split)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, pod, cluster, p.ID, PodProvisioning, ts, ts, ts, split)
 		}
 		if err != nil {
 			tx.Rollback()
@@ -267,10 +286,23 @@ func (s *Store) CreateClusterPodFor(cluster string, p *Principal, at time.Time) 
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		return &FleetAccount{PrincipalID: p.ID, Hostname: pod, Login: p.Login, State: AccountPending,
+		return &FleetAccount{PrincipalID: p.ID, Hostname: pod, Login: login, State: AccountPending,
 			Op: "create", RequestedAt: at.UTC(), UpdatedAt: at.UTC()}, nil
 	}
 	return nil, errors.New("no free pod name")
+}
+
+// SetClusterPodSplit moves a second pod's repo list (claude-fleet#3562).
+func (s *Store) SetClusterPodSplit(pod, split string, at time.Time) error {
+	res, err := s.write.Exec(`UPDATE fleet_cluster_pods SET split = ?, updated_at = ? WHERE pod = ?`,
+		split, fmtTime(at), strings.ToLower(pod))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoClusterPod
+	}
+	return nil
 }
 
 // FinishClusterPodRemoval closes the login on a destroyed pod: the account

@@ -49,17 +49,24 @@ svc = str(ent.get("service") or "")
 if not re.match(r"^u-[a-z0-9]{4,20}$", svc):
     sys.exit(1)
 name = str((ent.get("names") or {}).get(fp) or "")
-print(svc, base64.b64encode(name.encode("utf-8")).decode() or "-")
+pl = str(ent.get("pod_login") or "") or login
+if not re.match(r"^[A-Za-z0-9._-]{1,64}$", pl):
+    sys.exit(1)
+print(svc, base64.b64encode(name.encode("utf-8")).decode() or "-", pl)
 '
 OUT=$(python3 -I -c "$DOOR_PY" "$BOOK" "$LOGIN" "$FP" 2>/dev/null) || OUT=""
 SVC=${OUT%% *}
 NAME=${OUT#* }
+# a person's second pod (issue #3562): <login>.<repo> logs in there as <login>
+PODLOGIN=${NAME#* }
+NAME=${NAME%% *}
+[ -n "$PODLOGIN" ] || PODLOGIN="$LOGIN"
 [ "$NAME" = "-" ] && NAME=""
 case "$SVC" in
   u-[a-z0-9][a-z0-9][a-z0-9][a-z0-9]*) ;;
   *) say "${LOGIN} 在这扇门后没有自己的 pod（入口的表里没有它）"; exit 1 ;;
 esac
-case "$SVC$NAME$FP$SRC" in *[!A-Za-z0-9+/=:.-]*) say "refused: a malformed route"; exit 1 ;; esac
+case "$SVC$NAME$FP$SRC$PODLOGIN" in *[!A-Za-z0-9+/=:._-]*) say "refused: a malformed route"; exit 1 ;; esac
 [ -n "$KEY" ] && [ -r "$KEY" ] || { say "门的钥匙不在（${KEY:-unset}）"; exit 1; }
 
 HOST="$SVC.$NS.svc.cluster.local"
@@ -75,7 +82,7 @@ fi
 
 TTY=-T
 [ -n "${SSH_TTY:-}" ] && TTY=-tt
-set -- -F /dev/null -i "$KEY" -p "$PORT" -l "$LOGIN" "$TTY" \
+set -- -F /dev/null -i "$KEY" -p "$PORT" -l "$PODLOGIN" "$TTY" \
   -o IdentityAgent=none -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 \
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
   -o ClearAllForwardings=yes -o ForwardAgent=no -o ForwardX11=no \
