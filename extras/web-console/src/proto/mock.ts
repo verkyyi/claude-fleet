@@ -3,7 +3,7 @@
 // /v1/fleet/tasks, /v1/fleet/tickets*) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
-type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "error"; page?: string };
+type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "error" | "loading"; page?: string };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -61,6 +61,8 @@ export async function install(): Promise<string> {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const p = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
     await new Promise((r) => setTimeout(r, 120));
+    // 加载中: the page's own reads never answer, so its loading state stays on screen
+    if (state === "loading" && /^\/v1\/fleet\/(tasks|tickets)/.test(p)) return new Promise<Response>(() => {});
     const tk = /^\/v1\/fleet\/tickets\/([^/]+)\/([^/]+)\/(\d+)(\/comments)?$/.exec(p);
     if (tk) {
       const t = tickets.find((x) => x.repo === `${tk[1]}/${tk[2]}` && x.number === Number(tk[3]));
