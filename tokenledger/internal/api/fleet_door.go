@@ -94,6 +94,15 @@ func (s *Server) entryAddrMachine(machine string, now time.Time) string {
 	return doors[0]
 }
 
+// podBehindDoor says whether machine is a person's pod reached through this
+// hub's door. Such a pod's sshd takes the door's key alone and listens on the
+// pod's own port, so the relay through the hub (which dials the agent's
+// loopback :22) can never reach it: the route list offers the door's `entry`
+// route and no relay (claude-fleet#3985).
+func (s *Server) podBehindDoor(machine string) bool {
+	return isUserPodName(machine) && len(s.doorMachines()) > 0
+}
+
 // withDoors adds the doors to a push aimed at a person's pod: the door's
 // table changes with it.
 func (s *Server) withDoors(hosts []string) []string {

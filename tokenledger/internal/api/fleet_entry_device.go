@@ -81,9 +81,16 @@ func (s *Server) entryDeviceRevoke(pid, fp, actor string, now time.Time) {
 // hub actually reached it at, on the port the node reported — `entry`, then
 // `entry-2` … A machine whose node already names an `entry` route (its
 // `entry=<host>:<port>`, amendment 3) keeps that one alone; one never
-// reached gets none. The door off ⇒ the machine as it was.
+// reached gets none. The door off ⇒ the machine as it was. A person's pod
+// has no address of its own: its entry is the cluster door's address
+// (entryAddrMachine, as its DNS name and public port already are —
+// claude-fleet#3985), whether or not the home entry port is on.
 func (s *Server) withEntryReach(m FleetMachine, now time.Time) FleetMachine {
-	if s.Store == nil || !s.entryOn() {
+	if s.Store == nil {
+		return m
+	}
+	pod := s.podBehindDoor(m.Hostname)
+	if !pod && !s.entryOn() {
 		return m
 	}
 	for _, r := range m.Routes {
@@ -91,7 +98,7 @@ func (s *Server) withEntryReach(m FleetMachine, now time.Time) FleetMachine {
 			return m
 		}
 	}
-	addrs, err := s.EntryReachable(m.Hostname, now)
+	addrs, err := s.EntryReachable(s.entryAddrMachine(m.Hostname, now), now)
 	if err != nil || len(addrs) == 0 {
 		return m
 	}
