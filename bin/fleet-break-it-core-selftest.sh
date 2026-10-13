@@ -415,4 +415,34 @@ PY
   WHAT="入座的守护进不了登录的家：账号任务的脚本不由它判「缺」，交给核心以 root 再看"
 }
 
+drill_seat_root_leftovers() {
+  CAP=10
+  local sb t0 out
+  sb="$WORK/seatleft"; mkdir -p "$sb/db/node" "$sb/log"
+  : > "$sb/db/node/fetch.progress"; : > "$sb/db/update.json"
+  ln -s node/fetch.progress "$sb/db/fetch.progress"
+  t0=$(now)
+  # root's daemon wrote these before the seat; the layout pass must hand them over
+  out=$(FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_ROOT="$sb/root" \
+        python3 - "$BIN/fleet-node-supervisor.py" "$sb/db" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1])
+sup = importlib.util.module_from_spec(spec); spec.loader.exec_module(sup)
+got = []
+sup.os.geteuid = lambda: 0                       # as root, without being root
+sup.os.lchown = lambda p, u, g: got.append((os.path.basename(p), u, g))
+sup.os.chown = lambda p, u, g: None
+sup.seat_share = sup.seat_agent_own = sup.seat_hub_url = lambda *a, **k: None
+sup.seat_layout(sup.Paths(), (4242, 4243))
+print(" ".join(sorted("%s=%d:%d" % g for g in got if g[0] in ("fetch.progress", "update.json"))))
+PY
+)
+  case "$out" in
+    *"fetch.progress=4242:4243"*"update.json=4242:4243"*) ;;
+    *) WHY="root's files in node/ stayed root's: [$out]"; return 1 ;;
+  esac
+  SECS=$(since "$t0")
+  WHAT="守护入座：root 先前留在 node/ 的 fetch.progress、移进去的 update.json 一并转给 _fleetnode"
+}
+
 cred_run_drills "$0"
