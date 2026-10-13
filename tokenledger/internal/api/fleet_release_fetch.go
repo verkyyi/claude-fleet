@@ -121,6 +121,11 @@ func (rs *ReleaseStore) fetchClaude(ctx context.Context, name string) error {
 	if rs.ArtifactsDir == "" {
 		return errors.New("no CCQUOTA_FLEET_RELEASE_ARTIFACTS to put it in")
 	}
+	// a fresh data disk has no such directory yet: make it rather than fail
+	// every fetch on «no such file or directory» (claude-fleet#4070)
+	if err := os.MkdirAll(rs.ArtifactsDir, 0o755); err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_ARTIFACTS: %w", err)
+	}
 	pkg, ver, ok := claudeNPM(name)
 	if !ok {
 		return fmt.Errorf("%s: not a claude artifact", name)
