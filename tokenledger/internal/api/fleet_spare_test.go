@@ -299,6 +299,74 @@ func TestSpareEmptyFallsBackToOpening(t *testing.T) {
 	}
 }
 
+// A spare waits on whether a LOGIN can be opened, never on the session gate
+// (claude-fleet#4076): mac-d's login says admit=false / room=0 with a high load
+// average but a quiet CPU (cpu_busy first, as placement reads it) and memory
+// to spare — a managed machine on 2026-10-13 — and still fills to its count; a lost
+// login on mac-c whose last beat said admit=false holds nothing either.
+func TestSpareRefillIgnoresTheSessionGate(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	nodes := spareFleet(t, h)
+	busy := 0.40
+	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 25,
+		NCPU: 15, Load1: 47.2, CPUBusy: &busy, MemTotalBytes: 64 << 30, MemFreeBytes: 18 << 30,
+		Admit: boolp(false), AdmitWhy: "负载过高", Room: intp(0)})
+	// A second login on mac-c with a fast cadence: one beat with its gate
+	// shut, then silence until it is lost.
+	tok := h.enroll(t, "mac-c-bob")
+	ident := model.Identity{AccountUUID: "acct-mac-c-bob", Hostname: "mac-c", OSUser: "bob"}
+	if err := h.srv.Store.UpsertAccount(ident, "max", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.srv.Store.TouchEndpoint("ep_mac-c-bob", ident, "test", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	bob := dialHello(t, h, tok, control.Hello{HeartbeatMS: 100})
+	beat(t, bob.c, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "bob",
+		Admit: boolp(false), AdmitWhy: "内存紧张", Room: intp(0)})
+	waitFor(t, 5*time.Second, "mac-d's busy beat and bob lost", func() bool {
+		snap, err := h.srv.Nodes(time.Now())
+		if err != nil {
+			return false
+		}
+		seenBob, seenD := false, false
+		for _, n := range snap.Nodes {
+			if n.OSUser == "bob" && n.Admit != nil && !*n.Admit && n.Status == "lost" {
+				seenBob = true
+			}
+			if n.Hostname == "mac-d" && n.Admit != nil && !*n.Admit {
+				seenD = true
+			}
+		}
+		return seenBob && seenD
+	})
+	fit := h.srv.spareFitMachines(time.Now())
+	if strings.Join(fit, ",") != "mac-c,mac-d" && strings.Join(fit, ",") != "mac-d,mac-c" {
+		t.Fatalf("fit = %v; want mac-c and mac-d (session gate shut, a lost login's old verdict)", fit)
+	}
+	sparesOn(t, h, "2")
+	openSpares(t, nodes["mac-c"], 2, control.CredsepSeparated)
+	openSpares(t, nodes["mac-d"], 2, control.CredsepSeparated)
+	waitFor(t, 3*time.Second, "both machines at their count", func() bool {
+		r := h.srv.spareReadyHosts()
+		return r["mac-c"] == 2 && r["mac-d"] == 2
+	})
+
+	// CPU really busy still holds the refill: the gate that stays is the CPU's.
+	hot := 0.95
+	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 25,
+		NCPU: 15, Load1: 47.2, CPUBusy: &hot, MemTotalBytes: 64 << 30, MemFreeBytes: 18 << 30})
+	waitFor(t, 3*time.Second, "mac-d out of the fit list on a busy CPU", func() bool {
+		for _, m := range h.srv.spareFitMachines(time.Now()) {
+			if m == "mac-d" {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // Off (the default): nothing is created or claimed, and no answer changes.
 func TestSpareOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
