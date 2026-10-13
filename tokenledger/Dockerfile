@@ -73,9 +73,9 @@ COPY --from=build /out/ccquota /usr/local/bin/ccquota
 COPY --from=build /out/dist /usr/share/ccquota/dist
 ENV CCQUOTA_FLEET_DIST_DIR=/usr/share/ccquota/dist
 COPY --from=geo /out/ip2region /usr/share/ccquota/ip2region
-# The hub's FLEET_NOTIFY_CMD (claude-fleet#4086): busybox only — this image has
-# no python3 or curl, so the node's wecom-webhook-notify.sh cannot run here. The
-# address is the environment's FLEET_NOTIFY_WEBHOOK (a Secret key), never baked in.
+# The hub's FLEET_NOTIFY_CMD (claude-fleet#4086): one path that execs `ccquota
+# notify` — this image has no python3 or curl for the node's notifier. Where it
+# goes is the environment's FLEET_NOTIFY_KF_* / FLEET_NOTIFY_WEBHOOK (Secret keys).
 COPY notify/fleet-hub-notify.sh /usr/local/bin/fleet-hub-notify
 USER ccquota
 VOLUME /data
