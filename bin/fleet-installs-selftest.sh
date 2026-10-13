@@ -253,10 +253,10 @@ has "M: past 2 hours → WARN" "$OUT" "WARN	"
 has "M: …says why" "$OUT" "超过 2 小时"
 # a managed machine with no local tag: judged against the hub's word for its platform
 rm -f "$WORK/conf/global/install-sync.state"; ln -sfn "$WORK/root/$S1" "$WORK/root/current"
-FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE= run --json
+FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE='' run --json
 J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["lane"], d["stable"][:7], d["runtime"]["at_stable"])')
 eq "M: a managed Mac, no tag → the hub's Mac lane" "stable-macos 1111111 True" "$J"
-FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=linux FLEET_INSTALLS_STABLE= run --json
+FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=linux FLEET_INSTALLS_STABLE='' run --json
 J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["lane"], d["stable"][:7], d["runtime"]["at_stable"])')
 eq "M: a managed linux machine, no tag → the hub's stable" "stable 2222222 False" "$J"
 kill "$HPID" 2>/dev/null; XHUB=''; rm -f "$WORK/root/current"

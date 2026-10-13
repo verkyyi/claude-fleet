@@ -990,7 +990,7 @@ eq "U: …follows the tag, current on it" current "$(st2 result)"
 lane() { git --git-dir="$BARE" update-ref refs/tags/stable-macos "$1"; }
 unlane() { git --git-dir="$BARE" update-ref -d refs/tags/stable-macos; }
 xinst() { # <name> — a fresh install at C5 with its own conf dir
-  rm -rf "$WORK/$1" "$WORK/$1.versions" "$WORK/conf-$1"; mkdir -p "$WORK/conf-$1/fleets/f1"
+  rm -rf "${WORK:?}/${1:?}" "$WORK/$1.versions" "$WORK/conf-$1"; mkdir -p "$WORK/conf-$1/fleets/f1"
   printf 'FLEET_REPO=o/r\n' > "$WORK/conf-$1/fleets/f1/conf"
   git clone -q "$BARE" "$WORK/$1" 2>/dev/null; git -C "$WORK/$1" reset -q --hard "$C5"
 }
