@@ -1601,6 +1601,8 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		FleetSSHRelay: fleet && getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
 		// The chat relay likewise (claude-fleet#3644).
 		FleetChat: fleet && getenv("CCQUOTA_FLEET_CHAT") != "0",
+		// A service login (claude-fleet#4086): service run attempts, as it.
+		FleetSvc: fleet && getenv("CCQUOTA_FLEET_SVC") == "1",
 		// fleet-ops: the cluster's provisioner it hands tickets to (claude-fleet#3553).
 		FleetClusterOps: func() string {
 			if fleet {

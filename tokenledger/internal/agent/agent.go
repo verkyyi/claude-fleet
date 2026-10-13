@@ -218,6 +218,12 @@ type Config struct {
 	// CCQUOTA_FLEET_CHAT=0 turns it off, and the hello then never offers it.
 	FleetChat bool
 
+	// FleetSvc makes this login a service login (claude-fleet#4086): its hello
+	// lists CapSvcRun (when its install carries bin/fleet-svc-local.sh) and the
+	// hub may hand it service run attempts. CCQUOTA_FLEET_SVC=1 in the login's
+	// env file — root's decision on a managed machine; unset = never offered.
+	FleetSvc bool
+
 	// FleetRoutes are this machine's ways in that the heartbeat advertises
 	// (CCQUOTA_FLEET_NODE_ROUTES, claude-fleet#1414) — typically the public
 	// port the gateway forwards here. `fleet connect` measures them.
@@ -303,6 +309,8 @@ type Agent struct {
 	svcLogs svcLogFollows
 	// chatRelays counts the chat relays open on this login (claude-fleet#3644).
 	chatRelays chatSlots
+	// svcRuns are the service run attempts running on this login (claude-fleet#4086).
+	svcRuns svcRunTable
 	// machine is the machine link this agent is a tenant of
 	// (claude-fleet#2333); nil for a plain agent with its own link.
 	machine *machineLink

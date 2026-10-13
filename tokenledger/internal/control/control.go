@@ -278,6 +278,46 @@ type ClusterOpResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// A service run on a machine's service login (claude-fleet#4086). Claude Code
+// runs only where its region allows, so a service run (svc:<name>) is not a
+// cluster Job: the hub hands each attempt to ONE login whose agent lists
+// CapSvcRun — a login the operator made a service login (CCQUOTA_FLEET_SVC=1 in
+// its env, written by root) and the hub's fleet.svc.logins names. The agent
+// starts bin/fleet-svc-local.sh as that login (a fresh directory per attempt,
+// removed after it), answers TypeResult {ok} at once, and the run reads its spec
+// and hands in its result itself, with the one-time key, over the hub's HTTP
+// road (/v1/node/svc-runs) — the same road a cluster Job's runner takes.
+//
+//	hub ──TypeSvcRun {run, attempt, deadline, token}──▶ the service login's agent
+//	hub ◀──TypeResult {ok, line}── (started, or why not)
+//	hub ──TypeSvcRunCancel {run, attempt}──▶ (kill it, clean its directory)
+const (
+	CapSvcRun        = "svc_run"
+	TypeSvcRun       = "svc_run"
+	TypeSvcRunCancel = "svc_run_cancel"
+)
+
+// SvcRunStart is TypeSvcRun's payload: the attempt, its deadline in seconds and
+// its one-time key (fsj_…), which the agent hands the runner on its stdin only.
+type SvcRunStart struct {
+	Run      string `json:"run"`
+	Attempt  int    `json:"attempt"`
+	Deadline int    `json:"deadline"`
+	Token    string `json:"token"`
+}
+
+// SvcRunCancel is TypeSvcRunCancel's payload.
+type SvcRunCancel struct {
+	Run     string `json:"run"`
+	Attempt int    `json:"attempt"`
+}
+
+// SvcRunAck answers either: OK = started / stopped; Line says why not.
+type SvcRunAck struct {
+	OK   bool   `json:"ok"`
+	Line string `json:"line,omitempty"`
+}
+
 // A throwaway Job's state and log (claude-fleet#3552, EPIC #3500 C7). The
 // provisioner makes the Job from a create-job ticket; fleet-ops — read-only:
 // jobs, pods and their logs — reads it back for the hub, which relays it to
