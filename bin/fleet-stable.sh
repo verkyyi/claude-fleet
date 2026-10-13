@@ -159,7 +159,9 @@
 #           green / release.json missing or invalid / a pinned artifact not on
 #           the hub / the hub's ccquota not the target's or behind it / a Mac lane
 #           ahead of stable) · 4 push failed
-#           (lease lost to a concurrent move, or no push rights)
+#           (lease lost to a concurrent move, no push rights, or — said as
+#           such — no workflows permission for a range that changes
+#           .github/workflows, issue #3912)
 set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -707,8 +709,23 @@ push_tag() {
     printf 'dry-run: would run: git push --force-with-lease=%s %s %s:refs/tags/%s\n' "$lease" "$remote" "$new" "$TAG"
     exit 0
   fi
-  if ! g push -q "--force-with-lease=$lease" "$remote" "$new:refs/tags/$TAG"; then
-    printf 'fleet-stable: push FAILED — %s moved under us (lease lost) or no push rights; re-run show and try again\n' "$TAG" >&2
+  if ! perr=$(g push -q "--force-with-lease=$lease" "$remote" "$new:refs/tags/$TAG" 2>&1); then
+    [ -z "$perr" ] || printf '%s\n' "$perr" >&2
+    # Name the reason (issue #3912): GitHub refuses a tag move whose range changes
+    # .github/workflows/* unless the credential may write workflows — GITHUB_TOKEN
+    # never may. That is not a lost lease; retrying cannot fix it.
+    case "$perr" in
+      *'workflows` permission'*|*'workflows permission'*|*'`workflow` scope'*|*'workflow scope'*)
+        if [ -n "$old" ]; then
+          wfs=$(git -C "$dir" diff --name-only "$old" "$new" -- .github/workflows 2>/dev/null | head -3 | tr '\n' ' ' | sed 's/ $//')
+        else wfs=''; fi
+        printf 'fleet-stable: push FAILED — no workflows permission: GitHub refuses to move %s because %s changes .github/workflows/*%s, and this credential cannot write workflows (GITHUB_TOKEN never can). Give the push a token with Contents + Workflows write — in CI the STABLE_PUSH_TOKEN secret (the checkout'"'"'s token:) — and re-run\n' \
+          "$TAG" "${from}..$(short "$new")" "${wfs:+ ($wfs)}" >&2 ;;
+      *'stale info'*|*'fetch first'*)
+        printf 'fleet-stable: push FAILED — %s moved under us (lease lost); re-run show and try again\n' "$TAG" >&2 ;;
+      *)
+        printf 'fleet-stable: push FAILED — %s moved under us (lease lost) or no push rights; re-run show and try again\n' "$TAG" >&2 ;;
+    esac
     exit 4
   fi
   printf 'moved: refs/tags/%s = %s\n' "$TAG" "$(short "$new")"

@@ -727,7 +727,7 @@ jobs:
     outputs:
       moved: ${{ steps.move.outputs.moved }}
     permissions:
-      contents: write   # the stable tag (GITHUB_TOKEN; a tag pushed so triggers nothing)
+      contents: write   # the stable tag (STABLE_PUSH_TOKEN, else GITHUB_TOKEN)
       id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
       actions: read     # --train reads this run's jobs
     env:
@@ -739,10 +739,18 @@ jobs:
       LOST: ${{ needs.linux-rescue-plan.outputs.covers == 'true' && needs.linux-rescue-plan.outputs.lost || '' }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Both tag pushes below (the stable-macos seed and the stable move) ride the
+      # checkout's credential. GitHub refuses a tag move whose range changes
+      # .github/workflows/* from a token without workflows permission, which
+      # GITHUB_TOKEN never has (issue #3912) — so the push uses STABLE_PUSH_TOKEN
+      # (the release-sign environment's or the repo's secret: Contents + Workflows
+      # write) when it is set; unset ⇒ GITHUB_TOKEN, as before. A tag pushed with
+      # a PAT can trigger workflows; nothing here is triggered by a tag.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.board.outputs.train_sha }}
           fetch-depth: 0
+          token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}
 
       # A late train is not a red one (issue #3143, BREAK-IT train-superseded-red):
       # stable already at / past TRAIN_SHA (moved by hand, or by a later train) ⇒
