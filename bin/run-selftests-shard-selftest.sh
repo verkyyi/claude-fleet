@@ -24,7 +24,9 @@
 #                    each shard prints its predicted load, and a heaviest shard past
 #                    400s WARNs; `--durations F` packs by table F instead (our own
 #                    Macs, issue #3145), a missing F falls back saying so.
-#   • DURATIONS      bin/selftest-durations.sh rewrites the table from runner output:
+#   • DURATIONS      bin/selftest-durations.sh rewrites the table from runner output
+#                    (--drills: the BREAK-IT drills' table, which bin/fleet-break-it-part.py
+#                    slices the break-it tests by — issue #2694):
 #                    median of a test's observations, unseen rows kept, rows for a
 #                    deleted test dropped, the header comment kept.
 #   • GROWTH         adding a test re-deals the shards by itself: no width to bump,
@@ -272,6 +274,42 @@ eq "the table: median of observations, unseen kept, deleted test dropped, header
 9.0 f03-selftest.sh
 240.0 f04-selftest.sh" "$(cat "$TABLE")"
 rm -f "$TABLE" "$WORK/bin/selftest-durations.sh"
+
+# --drills (issue #2694): each BREAK-IT drill's `[wall Xs]` into its own table,
+# keyed by the drill_* functions of the break-it files that exist now
+ln -s "$UPD" "$WORK/bin/selftest-durations.sh"
+printf 'drill_kept_one() {\n:\n}\ndrill_seen_two() {\n:\n}\n' > "$WORK/bin/fleet-break-it-x-selftest.sh"
+DT="$WORK/bin/break-it-durations.txt"
+{ echo '# drills'; echo '4.0 kept-one'; echo '1.0 seen-two'; echo '3.0 gone-drill'; } > "$DT"
+{ echo 'shard 6	UNKNOWN STEP	2026-10-13T06:45:06Z PASS  seen-two        3.7s ≤10s  恢复了  [wall 4.4s]'
+  echo 'FAIL  seen-two   took too long  [wall 6.0s]'
+  echo 'PASS  fleet-break-it-x-selftest.sh   9.0s'
+  echo 'FAIL  lint: drill_x has no row in docs/dev/BREAK-IT.md'
+} > "$log"
+msg=$(sh "$WORK/bin/selftest-durations.sh" --drills "$log") || fail "selftest-durations.sh --drills failed" "$msg"
+eq "--drills reports what it did" "selftest-durations: 1 updated, 0 added, 1 kept, 1 dropped" "$msg"
+eq "--drills: the median wall time per drill, unseen kept, a deleted drill dropped" \
+   "# drills
+4.0 kept-one
+5.2 seen-two" "$(cat "$DT")"
+rm -f "$DT" "$WORK/bin/selftest-durations.sh" "$WORK/bin/fleet-break-it-x-selftest.sh"
+
+# fleet-break-it-part.py: K/N contiguous slices balanced by that table — together
+# they are every id once, in order; an id with no row costs the table's median
+PART="$BIN/fleet-break-it-part.py"
+{ echo '# w'; echo '10 a'; echo '1 b'; echo '1 c'; echo '1 d'; echo '10 e'; echo '1 f'; } > "$DT"
+p1=$(python3 "$PART" 1/2 "$DT" a b c d e f g | tr '\n' ' ')
+p2=$(python3 "$PART" 2/2 "$DT" a b c d e f g | tr '\n' ' ')
+eq "part 1/2 takes the first half by cost, not by count" "a b c " "$p1"
+eq "part 2/2 takes the rest, the unknown id (g) costed at the median" "d e f g " "$p2"
+for n in 1 3 5; do
+  all=''; k=1
+  while [ "$k" -le "$n" ]; do all="$all$(python3 "$PART" "$k/$n" "$DT" a b c d e f g | tr '\n' ' ')"; k=$((k + 1)); done
+  eq "the $n parts together are every id once, in order" "a b c d e f g " "$all"
+done
+eq "no table: every id costs 1" "c d " "$(python3 "$PART" 2/3 "$WORK/none" a b c d e f | tr '\n' ' ')"
+python3 "$PART" 3/2 "$DT" a >/dev/null 2>&1; eq "K past N is exit 2" 2 "$?"
+rm -f "$DT"
 
 # ---------------------------------------------------------------------------
 # REFUSALS — a shard that runs nothing must never read as green

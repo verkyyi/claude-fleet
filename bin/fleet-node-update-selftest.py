@@ -1994,4 +1994,5 @@ if __name__ == "__main__":
         # BREAK-IT managed-login-install-predates: the updater moves a login whose
         # own install-sync cannot (issue #2714)
         unittest.main(argv=[sys.argv[0], "M_FollowInstall"], verbosity=1)
-    unittest.main(verbosity=2)
+    import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
+    selftest_part.main()
