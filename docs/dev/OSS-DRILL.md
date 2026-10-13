@@ -73,6 +73,15 @@
 | member/usage | 截图还是占位文字 | 演练时补真截图（C10 #3580 交接） |
 | README.md · README.zh-CN.md | 外人从 GitHub 首页进来，安装指向 `docs/dev/INSTALL.md`（让 Claude 装），找不到 `docs/public/` 的三条快速开始 | 待修（本单）：首页顶部链到 `docs/public/zh/index.md` |
 | 演练入口 `/docs/` | drill-hub 跑旧镜像 `prod-1f1f594`，`/docs/` 404，托管管理员在自己的入口上看不到文档 | 演练前重部署演练入口（交 #3797） |
+| install §1.3–1.4 | 只配邮箱登录时，`CCQUOTA_ADMINS` 的地址第一次登录收不到验证码，第一个管理员进不了门 | #3852（#3797 搭环境撞到） |
+| install §1.7 | 没配登录方式时 `/install` 是 404，检查步骤只写「返回脚本」 | 待修：说明先配登录方式 |
+| install §4.3 | 入口匿名问 api.github.com 拿 stable，国内出口被限流 403 | 待修：写 `fleet-release-publish.sh` 推 stable 的做法 |
+| install §1.2–1.3 | 设了 `RELEASE_KEY` 后打包要 codex / tmux 制品（`RELEASE_ARTIFACTS` / `PLATFORMS`），否则 422，文档没写、也没来源 | 待修 |
+| install §1.3 | 国内必须有中转，只给了 `CRED_RELAY_URL` 一个键；架中转与相关钥匙（`RELAY_SIGN_KEY` · `SESSION_CRED_KEY` · `OAUTH_REFRESH_VIA=relay`）都没写 | 待修：补「国内部署」一节 |
+| install §2.2 | Linux 加入显示「已收敛」，但缺第二张加入码 + `--login … --login-join-file`，开号卡 pending→failed；只写在 docs/dev | 待修（文档，或安装程序直说） |
+| install §2.2 | 每个登录的 `FLEET_CRED_RELAY_URL` 入口不下发、文档没写 | 待修 |
+| install §2.2（安装程序） | umask 077 下 `/usr/local/lib/claude-fleet` 建成 0700，共享代理每秒退出 | 待修（代码：显式 0755） |
+| 发布包 | Claude Code 从 registry.npmjs.org 拉，不走 npmmirror | 记一笔 |
 
 ## 演练记录
 
