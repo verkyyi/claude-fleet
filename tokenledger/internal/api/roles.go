@@ -82,7 +82,8 @@ var routeAccess = map[string]string{
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
 	NodeTasksPath: accessSelf, NodeTasksPath + "/": accessSelf,
-	NodeJobsPath: accessSelf, NodeJobsPath + "/": accessSelf, // a throwaway Job, the caller's own pod (claude-fleet#3552)
+	// a throwaway Job, the caller's own pod (claude-fleet#3552); a service run's Job, its own one-time key (#4005)
+	NodeJobsPath: accessSelf, NodeJobsPath + "/": accessSelf, NodeSvcRunsPath + "/": accessSelf,
 	"/v1/node/credentials": accessSelf,
 	NodeKeyPath:            accessSelf, // a node's signing key (claude-fleet#3699)
 	// The direct door (claude-fleet#3068): a machine's own list and record.
