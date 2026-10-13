@@ -8,6 +8,8 @@
                        the updater is at rest; then exec <root>/current's
                        fleet-node-linux.py foreground [args…]
   live                 liveness: the foreground loop's heartbeat is fresh
+  need <src> <arch>    the artifact names stage takes for linux-<arch>, one a line
+                       (prepare-image.sh checks its context against them)
 
 After the first boot the runtime on the persistent volume is the machine
 updater's (fleet-node-update.py), exactly as on a Mac: a container restart
@@ -30,6 +32,30 @@ SEED = os.environ.get('FLEET_NODE_SEED', '/opt/claude-fleet/seed')
 HEARTBEAT = os.environ.get('FLEET_NODE_HEARTBEAT', '/run/fleet-node-loop')
 
 
+def wanted(spec, arch):
+    """[(binary, artifact name)] stage takes from a release for linux-<arch>:
+    each tool's artifact and its helpers (#3017: codex's codex-code-mode-host)
+    — the ONE list, read by stage and by prepare-image.sh (`need`)."""
+    out = []
+    for tool in ('ccquota', 'claude', 'codex', 'tmux'):
+        component = spec['components'][tool]
+        binaries = {tool: component['artifact'], **component.get('helpers', {})}
+        for binary, template in binaries.items():
+            if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', binary):
+                raise ValueError('invalid tool/helper name')
+            name = template.format(os='linux', arch=arch, version=component.get('version', ''))
+            if Path(name).name != name or name in ('.', '..'):
+                raise ValueError('invalid artifact name')
+            out.append((tool, binary, name))
+    return out
+
+
+def need(src, arch):
+    """The artifact names stage will want from <src>, one a line."""
+    spec = json.loads((Path(src) / 'release.json').read_text())
+    return [name for _t, _b, name in wanted(spec, arch)]
+
+
 def stage(src, root):
     src, root = Path(src), Path(root)
     manifest = json.loads((src / '.release/manifest.json').read_text())
@@ -41,20 +67,17 @@ def stage(src, root):
     artifacts = {x['name']: x for x in manifest['artifacts']}
     selected = []
     got = {'release': sha}
-    for tool in ('ccquota', 'claude', 'codex', 'tmux'):
+    for tool, binary, name in wanted(spec, arch):
         component = spec['components'][tool]
-        binaries = {tool: component['artifact'], **component.get('helpers', {})}
-        for binary, template in binaries.items():
-            if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', binary):
-                raise ValueError('invalid tool/helper name')
-            name = template.format(os='linux', arch=arch, version=component.get('version', ''))
-            if Path(name).name != name or name in ('.', '..'):
-                raise ValueError('invalid artifact name')
-            file = src / '.release/artifacts' / name
-            if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != artifacts[name]['sha256']:
-                raise ValueError('artifact checksum mismatch: ' + name)
-            selected.append((binary, file))
-            got[binary] = component.get('version', artifacts[name]['sha256'])
+        file = src / '.release/artifacts' / name
+        if name not in artifacts:
+            raise ValueError('the release carries no artifact ' + name)
+        if not file.is_file():
+            raise ValueError('the build context lacks %s (prepare-image.sh checks this; re-run it)' % name)
+        if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != artifacts[name]['sha256']:
+            raise ValueError('artifact checksum mismatch: ' + name)
+        selected.append((binary, file))
+        got[binary] = component.get('version', artifacts[name]['sha256'])
     root.mkdir(parents=True, exist_ok=True)
     dest = root / sha
     if dest.exists() or (root / 'current').exists():
@@ -176,9 +199,11 @@ if __name__ == '__main__':
         sys.exit(live())
     elif verb == 'seed':
         print(seed(*rest))
+    elif verb == 'need' and len(rest) == 2:
+        print('\n'.join(need(*rest)))
     elif verb == 'stage' and len(rest) == 2:
         stage(*rest)
     elif len(sys.argv) == 3:   # the old form: <src> <root>
         stage(*sys.argv[1:])
     else:
-        sys.exit('usage: image-stage.py stage <src> <seed> | seed <seed> <root> <state> | boot | live')
+        sys.exit('usage: image-stage.py stage <src> <seed> | need <src> <arch> | seed <seed> <root> <state> | boot | live')

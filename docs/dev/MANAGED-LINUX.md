@@ -178,11 +178,18 @@ the image staging step checks the pinned artifact digests again.
 ```sh
 bash extras/managed-node/prepare-image.sh \
   https://YOUR-HUB /private/release.pub RELEASE_COMMIT /tmp/fleet-node-image linux-amd64
-docker build --platform linux/amd64 \
+docker buildx build --platform linux/amd64 --load \
   -t registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT \
   /tmp/fleet-node-image
 docker push registry.example.com/acme/fleet-managed-node:RELEASE_COMMIT
 ```
+
+`buildx`, not the classic builder: on Apple Silicon the classic one takes a
+cached arm64 base for `--platform linux/amd64`, which Rosetta cannot run. The
+context holds every artifact the image's `stage` takes — each tool and its
+helpers (`image-stage.py need <dir> amd64` is the list); prepare-image.sh checks
+it and, when the caller's ccquota's `--pinned` left one out (a ccquota older than
+#3017 drops helpers), fetches the release whole and keeps only those (issue #3554).
 
 The image is Debian 13 (trixie, OpenSSH 10.0); its build fails unless
 `sshd -T` shows `persourcepenalties`, so an image whose entry port could not
