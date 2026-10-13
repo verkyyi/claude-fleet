@@ -1,8 +1,8 @@
 # The shape of a runner scale set for this repo on a cluster that already runs
 # Actions Runner Controller 0.14.x (controller in arc-systems, watching
 # arc-runners) and a BuildKit daemon (svc buildkitd:1234, client TLS in the
-# Secret buildkit-client-tls) — the release train's `node image` job runs on it
-# (runs-on: fleet-ack). Ours, with our registry and pull secrets, is in the
+# Secret buildkit-client-tls) — the release train's `node image` job (#3855) and its
+# Linux shards (#3864, beside fleet-ci.example.yaml) run on it (runs-on: fleet-ack). Ours, with our registry and pull secrets, is in the
 # private deploy repo (k8s/runners/fleet-ack.yaml); see README.md.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -127,23 +127,16 @@ spec:
   githubConfigUrl: https://github.com/verkyyi/claude-fleet
   githubConfigSecret: claude-fleet-runners-app
   runnerScaleSetName: fleet-ack
-  maxRunners: 2
-  minRunners: 0
+  # issue #3864: the release train's Linux shards. 2 idle by day (fleet-ack-night
+  # sets 0 from 01:00 to 08:00 Beijing), 64 at most — past the fleet-ci pool's
+  # ~14 slots a node × 3 nodes the rest queue.
+  maxRunners: 64
+  minRunners: 2
   template:
     spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: workload_type
-                operator: In
-                values:
-                - spot
-              - key: ci_tier
-                operator: In
-                values:
-                - light
+      # the fleet-ci node pool only (spot, 16 cores, 0–3 nodes, taint fleet-ci=true)
+      nodeSelector:
+        fleet-ci: 'true'
       automountServiceAccountToken: false
       imagePullSecrets:
       - name: acr-pull
@@ -152,15 +145,18 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       tolerations:
-      - key: workload_type
+      - key: fleet-ci
         operator: Equal
-        value: spot
+        value: 'true'
+        effect: NoSchedule
       serviceAccountName: fleet-ack-runner
       containers:
       - name: runner
         command:
         - /home/runner/run.sh
-        image: registry.example.com/acme/arc-runner:TAG
+        # extras/ci-runner (fleet-ci-runner:<tag.sh>, built by ci-runner-image.yml):
+        # the ARC runner + the selftests' tools; buildctl stays for `node image`
+        image: registry.example.com/acme/fleet-ci-runner:ci-TAG
         resources:
           limits:
             cpu: '4'

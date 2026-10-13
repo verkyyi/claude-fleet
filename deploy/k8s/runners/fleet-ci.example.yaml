@@ -1,0 +1,250 @@
+# The fleet-ci pieces beside the fleet-ack scale set (issue #3864, EPIC #3863 C1):
+# the release train's Linux shards run on the fleet-ci node pool
+# (fleet-ci-nodepool.example.json — spot, 16 cores, 0–3 nodes, taint fleet-ci=true),
+# fetch their commit from the in-cluster git mirror, and start on a node that
+# already holds the runner image. Ours (our registry and pull secrets) is the
+# private deploy repo's k8s/runners/fleet-ci.yaml; see README.md.
+#
+#   fleet-git-mirror         a read-only mirror of this (public) repo: one git daemon
+#                            (git://fleet-git-mirror.arc-runners:9418/claude-fleet.git)
+#                            and a loop that asks GitHub every 10 s and fetches when
+#                            master moved. Repo variable FLEET_TRAIN_GIT_MIRROR names it.
+#   fleet-ci-prepull         the runner image on every fleet-ci node before a job asks
+#   fleet-ack-night          minRunners 0 from 01:00 to 08:00 Beijing (the pool then
+#                            empties itself), 2 again at 08:00
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fleet-git-mirror-data
+  namespace: arc-runners
+  labels: { app.kubernetes.io/name: fleet-git-mirror, app.kubernetes.io/managed-by: claude-fleet }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: alicloud-disk-essd
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fleet-git-mirror
+  namespace: arc-runners
+  labels: { app.kubernetes.io/name: fleet-git-mirror, app.kubernetes.io/managed-by: claude-fleet }
+data:
+  sync.sh: |
+    #!/bin/sh
+    # Keep /srv/git/claude-fleet.git a mirror of GitHub's master (a public repo: no
+    # credential). Seeded once onto the volume; then ls-remote every 10 s and a
+    # fetch only when master moved. SYNC_OK is the liveness probe's clock.
+    set -u
+    D=/srv/git/claude-fleet.git
+    URL=${MIRROR_URL:-https://github.com/verkyyi/claude-fleet.git}
+    log() { echo "[fleet-git-mirror] $(date -u +%FT%TZ) $*"; }
+    if [ ! -e "$D/HEAD" ]; then
+      log "seeding $D from $URL"
+      rm -rf "$D.tmp"
+      git clone --bare --single-branch --branch master "$URL" "$D.tmp" || { log "seed failed"; exit 1; }
+      git -C "$D.tmp" config remote.origin.fetch '+refs/heads/master:refs/heads/master'
+      git -C "$D.tmp" config repack.writeBitmaps true
+      git -C "$D.tmp" config pack.writeBitmapHashCache true
+      git -C "$D.tmp" config uploadpack.allowFilter true
+      git -C "$D.tmp" config uploadpack.allowAnySHA1InWant true
+      git -C "$D.tmp" repack -adq
+      touch "$D.tmp/git-daemon-export-ok"
+      mv "$D.tmp" "$D"
+      log "seeded: master $(git -C "$D" rev-parse --short master)"
+    fi
+    last=$(git -C "$D" rev-parse master 2>/dev/null)
+    n=0
+    while :; do
+      head=$(timeout 20 git ls-remote "$URL" refs/heads/master 2>/dev/null | cut -f1)
+      if [ -n "$head" ] && [ "$head" != "$last" ]; then
+        if timeout 120 git -C "$D" fetch -q --prune origin; then
+          last=$(git -C "$D" rev-parse master); log "master → ${last%"${last#???????}"}"
+          n=$((n + 1)); [ $((n % 200)) -ne 0 ] || git -C "$D" repack -adq
+        else
+          log "fetch failed"
+        fi
+      fi
+      [ -z "$head" ] || touch "$D/SYNC_OK"
+      sleep 10
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-git-mirror
+  namespace: arc-runners
+  labels: { app.kubernetes.io/name: fleet-git-mirror, app.kubernetes.io/managed-by: claude-fleet }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: fleet-git-mirror }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: fleet-git-mirror }
+    spec:
+      # the always-on CI node, never the fleet-ci pool (that one empties at night)
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - { key: workload_type, operator: In, values: [ci-resident] }
+      tolerations:
+      - { key: workload_type, operator: Exists }
+      automountServiceAccountToken: false
+      imagePullSecrets:
+      - name: acr-pull
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+      - name: daemon
+        image: registry.example.com/acme/arc-runner:TAG
+        command: [git, daemon, --reuseaddr, --base-path=/srv/git, --export-all, --enable=upload-pack,
+                  --listen=0.0.0.0, --port=9418, --informative-errors, --max-connections=64]
+        ports: [{ name: git, containerPort: 9418 }]
+        readinessProbe:
+          exec: { command: [git, -C, /srv/git/claude-fleet.git, rev-parse, --verify, --quiet, refs/heads/master] }
+          periodSeconds: 10
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }
+          limits: { cpu: '2', memory: 1Gi }
+        securityContext: { allowPrivilegeEscalation: false }
+        volumeMounts: [{ name: data, mountPath: /srv/git }]
+      - name: sync
+        image: registry.example.com/acme/arc-runner:TAG
+        command: [sh, /scripts/sync.sh]
+        livenessProbe:
+          exec:
+            command: [sh, -c, 'f=/srv/git/claude-fleet.git/SYNC_OK; [ ! -e /srv/git/claude-fleet.git/HEAD ] || [ $(( $(date +%s) - $(stat -c %Y $f 2>/dev/null || echo 0) )) -lt 300 ]']
+          initialDelaySeconds: 1800
+          periodSeconds: 60
+        resources:
+          requests: { cpu: 20m, memory: 64Mi }
+          limits: { cpu: 500m, memory: 512Mi }
+        securityContext: { allowPrivilegeEscalation: false }
+        volumeMounts:
+        - { name: data, mountPath: /srv/git }
+        - { name: scripts, mountPath: /scripts }
+      volumes:
+      - name: data
+        persistentVolumeClaim: { claimName: fleet-git-mirror-data }
+      - name: scripts
+        configMap: { name: fleet-git-mirror }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-git-mirror
+  namespace: arc-runners
+  labels: { app.kubernetes.io/name: fleet-git-mirror, app.kubernetes.io/managed-by: claude-fleet }
+spec:
+  selector: { app.kubernetes.io/name: fleet-git-mirror }
+  ports: [{ name: git, port: 9418, targetPort: 9418 }]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fleet-ci-prepull
+  namespace: arc-runners
+  labels: { app.kubernetes.io/name: fleet-ci-prepull, app.kubernetes.io/managed-by: claude-fleet }
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: fleet-ci-prepull }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: fleet-ci-prepull }
+    spec:
+      nodeSelector: { fleet-ci: 'true' }
+      tolerations:
+      - { key: fleet-ci, operator: Equal, value: 'true', effect: NoSchedule }
+      automountServiceAccountToken: false
+      imagePullSecrets:
+      - name: acr-pull
+      containers:
+      - name: runner-image
+        # the same tag as the fleet-ack template: a new node pulls it while it joins
+        image: registry.example.com/acme/fleet-ci-runner:ci-TAG
+        command: [/bin/sh, -c, exec sleep 2147483647]
+        resources:
+          requests: { cpu: 1m, memory: 8Mi }
+          limits: { cpu: 10m, memory: 32Mi }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet-ack-night
+  namespace: arc-runners
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fleet-ack-night
+  namespace: arc-runners
+rules:
+- apiGroups: [actions.github.com]
+  resources: [autoscalingrunnersets]
+  resourceNames: [fleet-ack]
+  verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fleet-ack-night
+  namespace: arc-runners
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: fleet-ack-night }
+subjects:
+- { kind: ServiceAccount, name: fleet-ack-night, namespace: arc-runners }
+---
+# 01:00 and 08:00 Beijing: fleet-ack's standing idle runners 0 at night, 2 by day.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fleet-ack-night
+  namespace: arc-runners
+  labels: { app.kubernetes.io/name: fleet-ack-night, app.kubernetes.io/managed-by: claude-fleet }
+spec:
+  schedule: '0 1,8 * * *'
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Replace
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        spec:
+          serviceAccountName: fleet-ack-night
+          restartPolicy: OnFailure
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - { key: workload_type, operator: In, values: [ci-resident] }
+          tolerations:
+          - { key: workload_type, operator: Exists }
+          imagePullSecrets:
+          - name: acr-pull
+          containers:
+          - name: patch
+            image: registry.example.com/acme/arc-runner:TAG   # any image with kubectl
+            command:
+            - sh
+            - -c
+            - |
+              h=$(TZ=Asia/Shanghai date +%H)
+              if [ "$h" -ge 1 ] && [ "$h" -lt 8 ]; then n=0; else n=2; fi
+              kubectl -n arc-runners patch autoscalingrunnerset fleet-ack --type merge -p "{\"spec\":{\"minRunners\":$n}}"
+              echo "fleet-ack minRunners=$n (Beijing hour $h)"
+            resources:
+              requests: { cpu: 10m, memory: 32Mi }
+              limits: { cpu: 200m, memory: 128Mi }

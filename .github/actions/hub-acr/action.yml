@@ -17,8 +17,9 @@ inputs:
   role:
     description: >
       The RAM role to assume: gha-claudefleet-deploy (environment prod, the hub
-      image) or gha-claudefleet-node-image (environment node-image, the managed
-      node image — #3855)
+      image), gha-claudefleet-node-image (environment node-image, the managed
+      node image — #3855) or gha-claudefleet-ci-runner (environment ci-runner,
+      the train's Linux test runner image — #3864)
     required: false
     default: gha-claudefleet-deploy
 

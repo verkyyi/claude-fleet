@@ -15,6 +15,11 @@
 #                       the train's board picks macos-latest, 2 shards (#3145)
 #   train-own-runner-silent  our runner said idle but never took the shard: the
 #                       train's watcher reds + cancels it at the deadline (#3145)
+#   train-ack-down      FLEET_TRAIN_RUNNER=fleet-ack but no fleet-ack runner online,
+#                       no token or no answer: the Linux half runs on ubuntu-latest,
+#                       saying 深圳不可用; the variable empty asks nothing (#3864)
+#   train-ack-reclaimed a spot node reclaimed mid-shard: the lost shard is not red,
+#                       fail-fast waits for its rescue; a test's red still cancels (#3864)
 #   train-shard-timeout  stable far behind, a near-full selection: the train sizes
 #                       its shards by the forecast and reruns a shard cut short
 #                       with no test red once — never one with a FAIL line (#3241)
@@ -125,6 +130,98 @@ G
     || { WHY="started shards: exit $rc, summary $(cat "$d/sum" 2>/dev/null)"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="自家测试机报 idle 却不接：到点这趟红、摘要写「自家测试机没接」、整趟取消；接了就记每片的机器和排队时间"
+}
+
+# The release train's Linux half in the Shenzhen cluster (issue #3864, EPIC #3863
+# C1): fleet-ack when asked and up, ubuntu-latest otherwise — the train runs either way.
+drill_train_ack_down() {
+  CAP=30
+  local t0 d out wf
+  [ -x "$BIN/fleet-train-runner.sh" ] || { WHY="no bin/fleet-train-runner.sh"; return 1; }
+  wf="$BIN/../.github/workflows/release-train.yml"
+  grep -q "runs_on: \${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}" "$wf" \
+    || { WHY="release-train.yml's Linux half does not fall back to ubuntu-latest without a pick"; return 1; }
+  sed -n '/^  linux-pick:/,/^  linux:/p' "$wf" | grep -q "vars.FLEET_TRAIN_RUNNER != ''" \
+    || { WHY="linux-pick runs with FLEET_TRAIN_RUNNER empty"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-ack.XXXXXX"); t0=$(now)
+  printf '%s' '{"runners":[{"name":"fleet-ack-a1","status":"online","busy":true,"labels":[{"name":"fleet-ack"}]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/up.json"
+  printf '%s' '{"runners":[{"name":"fleet-ack-a1","status":"offline","labels":[{"name":"fleet-ack"}]},{"name":"mac","status":"online","labels":[{"name":"fleet-ci"}]}]}' > "$d/down.json"
+  printf '%s' '{"total_count":0,"runners":[]}' > "$d/zero.json"
+  pick() { GITHUB_OUTPUT="$d/out" FLEET_TRAIN_GIT_MIRROR=git://mirror/claude-fleet.git bash "$BIN/fleet-train-runner.sh" pick "$@" 2>/dev/null; }
+  out=$(FLEET_TRAIN_RUNNER='' pick --runners-file "$d/up.json")
+  case "$out" in *'linux_runs_on=ubuntu-latest'*'linux_where=github'*'linux_mirror='|*'linux_mirror='$'\n'*) ;;
+    *) WHY="the variable empty, the pick was not ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
+  out=$(FLEET_TRAIN_RUNNER=fleet-ack pick --runners-file "$d/up.json")
+  case "$out" in *'linux_runs_on=["fleet-ack"]'*'linux_where=fleet-ack'*'linux_mirror=git://mirror/claude-fleet.git'*) ;;
+    *) WHY="a fleet-ack runner online, the pick was not fleet-ack + the mirror: $out"; rm -rf "$d"; return 1 ;; esac
+  for c in down zero notoken; do
+    case "$c" in
+      down)    out=$(FLEET_TRAIN_RUNNER=fleet-ack pick --runners-file "$d/down.json") ;;
+      zero)    out=$(FLEET_TRAIN_RUNNER=fleet-ack pick --runners-file "$d/zero.json") ;;
+      notoken) out=$(FLEET_TRAIN_RUNNER=fleet-ack FLEET_TRAIN_RUNNER_TOKEN='' pick --repo o/r) ;;
+    esac
+    case "$out" in *'linux_runs_on=ubuntu-latest'*'linux_where=github'*'深圳不可用，退回 GitHub'*) ;;
+      *) WHY="($c) the train did not fall back to ubuntu-latest saying 深圳不可用: $out"; rm -rf "$d"; return 1 ;; esac
+    case "$out" in *'linux_mirror=git'*) WHY="($c) a GitHub runner was handed the cluster mirror"; rm -rf "$d"; return 1 ;; esac
+  done
+  grep -q '^linux_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="fleet-ack 缩到 0 / 离线 / 没令牌：Linux 退回 ubuntu-latest、摘要写深圳不可用；有在线的才排 fleet-ack + 集群镜像；变量空什么都不问"
+}
+
+drill_train_ack_reclaimed() {
+  CAP=30
+  local t0 d out rc wf
+  wf="$BIN/../.github/workflows/release-train.yml"
+  sed -n '/^  linux-rescue:/,/^  macos:/p' "$wf" | grep -q 'of: ${{ needs.linux-rescue-plan.outputs.total }}' \
+    || { WHY="release-train.yml has no Linux rescue keeping K/N"; return 1; }
+  grep -q -- '--lost-ok "$LOST_OK"' "$wf" || { WHY="fail-fast is not told a lost Linux runner is no red"; return 1; }
+  grep -q -- '--ignore-check "Linux / shard $k"' "$wf" || { WHY="the move does not pass over a rescued shard"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-reclaim.XXXXXX"); t0=$(now)
+  # a fake gh: jobs from $d/jobs.tsv, annotations by job id, `run cancel` recorded
+  cat > "$d/gh" <<'G'
+#!/bin/bash
+case "$*" in
+  *check-runs/12/annotations*) echo 'The self-hosted runner: fleet-ack-8x2kq-runner-p4 lost communication with the server. Verify the machine is running and has a healthy network connection.' ;;
+  *check-runs/*/annotations*)  echo 'Process completed with exit code 1.' ;;
+  run\ cancel*) echo "$3" >> "$FAKE_DIR/cancelled" ;;
+  *'[.id,'*jobs*|*jobs*'[.id,'*) awk -F'\t' 'NF >= 4 { print $4 "\t" $2 "\t" $3 }' "$FAKE_DIR/jobs.tsv" ;;   # lost's columns
+  *jobs*) cat "$FAKE_DIR/jobs.tsv" ;;
+esac
+G
+  chmod +x "$d/gh"
+  ff() { FAKE_DIR=$d FLEET_TRAIN_GH="$d/gh" GITHUB_STEP_SUMMARY="$d/sum" \
+           bash "$BIN/fleet-train-failfast.sh" --repo o/r --run 77 --every 1 --deadline "$1" --lost-ok Linux 2>&1; }
+  # shard 2's node was reclaimed: not red — the rescue is awaited, nothing cancelled
+  printf 'completed\tsuccess\tboard\t1\ncompleted\tsuccess\tprecheck\t2\ncompleted\tsuccess\tLinux / shard 1\t11\ncompleted\tfailure\tLinux / shard 2\t12\ncompleted\tsuccess\tmacOS / shard 1\t21\n' > "$d/jobs.tsv"
+  out=$(ff 2); rc=$?
+  [ "$rc" = 0 ] && [ ! -f "$d/cancelled" ] && case "$out" in *'no verdict'*) true ;; *) false ;; esac \
+    || { WHY="a shard whose runner went away was judged (exit $rc, cancel $(cat "$d/cancelled" 2>/dev/null)): $out"; rm -rf "$d"; return 1; }
+  # its rescue green: the train is green
+  printf 'completed\tsuccess\tLinux rescue / shard 2\t31\n' >> "$d/jobs.tsv"
+  out=$(ff 30); rc=$?
+  [ "$rc" = 0 ] && [ ! -f "$d/cancelled" ] && case "$out" in *'finished green'*) true ;; *) false ;; esac \
+    || { WHY="lost + rescued green: exit $rc, cancel $(cat "$d/cancelled" 2>/dev/null): $out"; rm -rf "$d"; return 1; }
+  # `lost` names exactly the lost shard, and covers
+  out=$(FAKE_DIR=$d FLEET_TRAIN_GH="$d/gh" bash "$BIN/fleet-train-runner.sh" lost --repo o/r --run 77 2>/dev/null)
+  case "$out" in *'lost=[2]'*'red=[]'*'total=2'*'covers=true'*) ;;
+    *) WHY="lost did not name shard 2 of 2 as covered: $out"; rm -rf "$d"; return 1 ;; esac
+  # a test's red on another shard: cancelled as ever, and the rescue does not cover it
+  printf 'completed\tsuccess\tboard\t1\ncompleted\tfailure\tLinux / shard 2\t12\ncompleted\tfailure\tLinux / shard 3\t13\nin_progress\t\tmacOS / shard 1\t21\n' > "$d/jobs.tsv"
+  out=$(ff 30); rc=$?
+  [ "$rc" = 1 ] && [ "$(cat "$d/cancelled" 2>/dev/null)" = 77 ] && grep -q '红灯即停：Linux / shard 3' "$d/sum" \
+    || { WHY="a test red beside a lost runner: exit $rc, cancel $(cat "$d/cancelled" 2>/dev/null): $out"; rm -rf "$d"; return 1; }
+  out=$(FAKE_DIR=$d FLEET_TRAIN_GH="$d/gh" bash "$BIN/fleet-train-runner.sh" lost --repo o/r --run 77 2>/dev/null)
+  case "$out" in *'lost=[2]'*'red=[3]'*'covers=false'*) ;;
+    *) WHY="a test red was counted as a lost runner: $out"; rm -rf "$d"; return 1 ;; esac
+  # without --lost-ok (the variable empty) a lost runner is red as before
+  rm -f "$d/cancelled"
+  printf 'completed\tsuccess\tboard\t1\ncompleted\tfailure\tLinux / shard 2\t12\n' > "$d/jobs.tsv"
+  out=$(FAKE_DIR=$d FLEET_TRAIN_GH="$d/gh" GITHUB_STEP_SUMMARY="$d/sum" \
+    bash "$BIN/fleet-train-failfast.sh" --repo o/r --run 77 --every 1 --deadline 5 2>&1); rc=$?
+  [ "$rc" = 1 ] || { WHY="without --lost-ok a lost shard was not red: exit $rc: $out"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="抢占回收一台：丢 runner 的那片不算红、等它在 ubuntu-latest 上按原 K/N 补跑，补跑绿列车照发；旁边有真红照旧取消；变量空一切照旧"
 }
 
 # The release train's forecast and its cut-short rerun (issue #3241, EPIC #3139 C9).

@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-train-failfast.sh [--repo <owner/name>] [--run <id>] [--every <s>] [--deadline <s>]
-#                         [--jobs-re <ERE>] [--need <prefix|prefix…>]
+#                         [--jobs-re <ERE>] [--need <prefix|prefix…>] [--lost-ok <prefix>]
 #   — a red train gives the lane back at once (issue #3143, EPIC #3139 C4; BREAK-IT
 #   `train-red-holds-lane`).
 #
@@ -28,6 +28,10 @@
 # verdict (a newer push does not cancel a running train;
 # macOS 排队 cancels a run itself). gh reads $GH_TOKEN; $FLEET_TRAIN_GH is a test
 # seam for the gh command.
+# --lost-ok <prefix> (issue #3864: the Linux half on the cluster's spot runners): a
+# failed `<prefix> / shard K` whose RUNNER went away (GitHub's annotation —
+# `fleet-train-runner.sh is-lost`) is no red: the train reruns it on GitHub's
+# runners as `<prefix> rescue / shard K`, which this then waits for and judges.
 #
 # Exit: 0 every stage green / nothing to judge · 1 a stage went red, run cancelled
 #       · 2 usage
@@ -36,8 +40,9 @@ die() { printf 'fleet-train-failfast: %s\n' "$*" >&2; exit 2; }
 summary() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat >> "$GITHUB_STEP_SUMMARY"; }
 
 repo=${GITHUB_REPOSITORY:-} run=${GITHUB_RUN_ID:-} every=20 deadline=7200
-re='^(board|plan|quarantine|precheck|Linux / shard [0-9]+|macOS / shard [0-9]+)$'
+re='^(board|plan|quarantine|precheck|Linux / shard [0-9]+|Linux rescue / shard [0-9]+|macOS / shard [0-9]+)$'
 need='precheck|Linux / shard|macOS / shard'
+lostok='' excused='' BIN=$(cd "$(dirname "$0")" && pwd)
 gh=${FLEET_TRAIN_GH:-gh}
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -47,7 +52,8 @@ while [ "$#" -gt 0 ]; do
     --deadline) shift; deadline="${1:-7200}" ;;
     --jobs-re)  shift; re="${1:-}" ;;
     --need)     shift; need="${1:-}" ;;
-    -h|--help)  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --lost-ok)  shift; lostok="${1:-}" ;;
+    -h|--help)  sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
@@ -59,25 +65,43 @@ case "$deadline" in ''|*[!0-9]*) deadline=7200 ;; esac
 
 t0=$(date +%s)
 while :; do
-  # one "<status>\t<conclusion>\t<name>" line per job; unread = nothing to judge yet
+  # one "<status>\t<conclusion>\t<name>\t<id>" line per job; unread = nothing to judge yet
   rows=$($gh api --paginate "repos/$repo/actions/runs/$run/jobs?per_page=100" \
-           --jq '.jobs[] | [.status, (.conclusion // ""), .name] | @tsv' 2>/dev/null) || rows=''
-  verdict=$(printf '%s\n' "$rows" | awk -F'\t' -v re="$re" -v need="$need" '
-    BEGIN { k = split(need, want, "|") }
-    NF >= 3 { for (i = 1; i <= k; i++) if (want[i] != "" && index($3, want[i]) == 1) got[i] = 1 }
-    NF >= 3 && $3 ~ re {
-      n++
-      if ($2 == "failure" || $2 == "timed_out") { if (red == "") red = $3 " (" $2 ")" }
-      else if ($1 != "completed") open++
-    }
-    END {
-      if (red != "") print "red\t" red
-      else if (n && !open) {
-        for (i = 1; i <= k; i++) if (want[i] != "" && !(i in got)) { print "open"; exit }
-        print "green"
+           --jq '.jobs[] | [.status, (.conclusion // ""), .name, .id] | @tsv' 2>/dev/null) || rows=''
+  while :; do
+    verdict=$(printf '%s\n' "$rows" | awk -F'\t' -v re="$re" -v need="$need" -v exc="$excused" '
+      BEGIN { k = split(need, want, "|"); m = split(exc, ex, "\037"); for (i = 1; i <= m; i++) skip[ex[i]] = 1 }
+      NF >= 3 { for (i = 1; i <= k; i++) if (want[i] != "" && index($3, want[i]) == 1) got[i] = 1 }
+      NF >= 3 && $3 ~ re && !($3 in skip) {
+        n++
+        if ($2 == "failure" || $2 == "timed_out") { if (red == "") red = $3 " (" $2 ")\t" $2 "\t" $3 "\t" $4 }
+        else if ($1 != "completed") open++
       }
-      else print "open"
-    }')
+      END {
+        if (red != "") print "red\t" red
+        else if (n && !open) {
+          for (i = 1; i <= k; i++) if (want[i] != "" && !(i in got)) { print "open"; exit }
+          print "green"
+        }
+        else print "open"
+      }')
+    # a fleet-ack shard whose runner went away: excused, its rescue awaited (issue #3864)
+    case "$verdict" in
+      red*)
+        IFS="$(printf '\t')" read -r _ _ rconcl rname rid <<EOF
+$verdict
+EOF
+        if [ -n "$lostok" ] && [ "$rconcl" = failure ] && [ "${rname#"$lostok / shard "}" != "$rname" ] \
+           && FLEET_TRAIN_GH="$gh" bash "$BIN/fleet-train-runner.sh" is-lost --repo "$repo" --job "${rid:-0}" 2>/dev/null; then
+          excused="$excused$rname$(printf '\037')"
+          case "|$need|" in *"|$lostok rescue / shard|"*) ;; *) need="$need|$lostok rescue / shard" ;; esac
+          echo "$rname: its runner went away (a reclaimed spot node?) — not red; waiting for $lostok rescue"
+          continue
+        fi
+        verdict="red	$(printf '%s' "$verdict" | cut -f2)" ;;
+    esac
+    break
+  done
   case "$verdict" in
     red*)
       job=${verdict#red?}

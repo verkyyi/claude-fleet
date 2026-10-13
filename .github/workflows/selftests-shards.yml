@@ -65,6 +65,18 @@ on:
         type: string
         required: false
         default: ''
+      # The release train's Linux half in the Shenzhen cluster (issue #3864) — ONLY
+      # release-train.yml passes these; empty keeps every step as before.
+      mirror:
+        description: 'a git URL holding the commit (the cluster mirror): fetched there first, actions/checkout from GitHub when it fails — the train only'
+        type: string
+        required: false
+        default: ''
+      of:
+        description: 'N of --shard K/N when the matrix is a subset (a rescue of lost shards); empty = strategy.job-total'
+        type: string
+        required: false
+        default: ''
       record:
         description: 'upload each shard FAIL / QUARANTINE / FLAKY lines as train-result-<os>-<K> — the train only'
         type: boolean
@@ -112,11 +124,51 @@ jobs:
     # fleet-ci test comes first ("macOS" is among its labels).
     timeout-minutes: ${{ inputs.job_minutes != '' && fromJSON(inputs.job_minutes) || contains(inputs.runs_on, 'fleet-ci') && 25 || contains(inputs.runs_on, 'macos') && 60 || 15 }}
     steps:
+      - name: Fetch the commit from the cluster's git mirror
+        # issue #3864: GitHub is far from the Shenzhen cluster; its mirror polls
+        # GitHub every few seconds. Not there within ~30 s (or no mirror) ⇒ the
+        # GitHub checkout below, exactly as on any other runner.
+        id: mirror
+        if: inputs.mirror != '' && inputs.sha != ''
+        continue-on-error: true
+        env:
+          MIRROR: ${{ inputs.mirror }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -u
+          t0=$(date +%s)
+          git init -q . && git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" || exit 1
+          for i in 1 2 3 4 5 6; do
+            if timeout 60 git fetch -q --no-tags "$MIRROR" '+refs/heads/master:refs/remotes/origin/master' \
+               && git cat-file -e "$SHA^{commit}" 2>/dev/null; then
+              git checkout -q --detach "$SHA" || break
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              echo "fetched ${SHA:0:7} from the cluster mirror in $(( $(date +%s) - t0 ))s (try $i)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::the cluster mirror ($MIRROR) has no ${SHA:0:7} after $(( $(date +%s) - t0 ))s — checking out from GitHub"
+          rm -rf .git
+          exit 1
+
       - uses: actions/checkout@v4
+        if: steps.mirror.outputs.ok != 'true'
         with:
           ref: ${{ inputs.sha }}
           # --changed diffs against <base>; it must be in the clone.
           fetch-depth: 0
+
+      - name: Which runner image
+        # issue #3864: the fleet-ack set's image (fleet-ci-runner) says the text it
+        # was built from; an older one runs anyway, the summary says so.
+        if: inputs.mirror != ''
+        run: |
+          [ -n "${FLEET_CI_RUNNER_TAG:-}" ] || { echo "runner $RUNNER_NAME · not a fleet-ci-runner image"; exit 0; }
+          want=$(bash extras/ci-runner/tag.sh 2>/dev/null || echo '?')
+          echo "runner $RUNNER_NAME · image $FLEET_CI_RUNNER_TAG · this commit's extras/ci-runner $want"
+          [ "$FLEET_CI_RUNNER_TAG" = "$want" ] \
+            || echo "::warning::this runner's image is $FLEET_CI_RUNNER_TAG, the commit's extras/ci-runner is $want — point fleet-ack at the new tag (deploy/k8s/runners/README.md)"
 
       - name: Assert a BSD toolchain
         # macOS only: the premise of the BSD half, checked rather than assumed
@@ -197,7 +249,7 @@ jobs:
           SHARD_BUDGET_SECS: ${{ inputs.budget_secs }}
         run: |
           set -o pipefail
-          set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
+          set -- --shard "${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
           [ "$OURS" != true ] || set -- --durations selftest-durations-fleet-ci.txt "$@"
           if [ -n "$CHANGED_BASE" ] && [ -n "$QUARANTINE" ]; then
             printf '%s\n' "$QUARANTINE" > "$RUNNER_TEMP/quarantine.list"; set -- --quarantine "$RUNNER_TEMP/quarantine.list" "$@"
@@ -222,7 +274,7 @@ jobs:
         # that made it slower. A cut-short shard names the test in flight.
         run: |
           {
-            echo "## selftests · ${{ runner.os }} · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo "## selftests · ${{ runner.os }} · shard ${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
             echo
             echo '```'
             [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
@@ -262,13 +314,15 @@ jobs:
             train-result.txt
             train-flaky-*.txt
           retention-days: 3
+          # a rescue reruns a shard whose runner went away (issue #3864)
+          overwrite: true
           if-no-files-found: ignore
 
       - name: Name the failures as macOS-only
         if: failure() && runner.os == 'macOS'
         run: |
           {
-            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ inputs.of || strategy.job-total }}"
             echo
             echo "A failure HERE that the Linux half does not share is a BSD-toolchain"
             echo "or bash-3.2 difference (issue #696) — not a broken test."
