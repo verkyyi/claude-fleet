@@ -57,7 +57,8 @@
 # 2 usage · 3 refused (someone attached, a phase out of order, a name taken)
 #
 # Seams: FLEET_MOVE_KUBECTL (default kubectl), FLEET_MOVE_HUB_ADMIN (default
-# python3 fleet-hub-admin.py), FLEET_HUB_CURL (default curl), FLEET_MOVE_WAIT
+# python3 fleet-hub-admin.py), FLEET_MOVE_CRED_POLICY (default
+# fleet-cred-policy.sh), FLEET_HUB_CURL (default curl), FLEET_MOVE_WAIT
 # (seconds a wait lasts, default 600).
 set -uo pipefail
 
@@ -103,11 +104,28 @@ TIMELINE=$STATE/timeline
 WAIT=${FLEET_MOVE_WAIT:-600}
 read -r -a KC <<< "${FLEET_MOVE_KUBECTL:-kubectl}"
 read -r -a HUBADM <<< "${FLEET_MOVE_HUB_ADMIN:-python3 $BIN/fleet-hub-admin.py}"
+read -r -a CREDPOL <<< "${FLEET_MOVE_CRED_POLICY:-$BIN/fleet-cred-policy.sh}"
 CURL=${FLEET_HUB_CURL:-curl}
 
 mark() { printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" >> "$TIMELINE"; say "== $1: $2"; }
 kc() { ${KC[@]+"${KC[@]}"} -n "$NS" "$@"; }
 hubadm() { ${HUBADM[@]+"${HUBADM[@]}"} ${HUB:+--hub "$HUB"} "$@"; }
+credpol() { env ${HUB:+CCQUOTA_HUB_URL="$HUB"} ${CREDPOL[@]+"${CREDPOL[@]}"} "$@"; }
+# node_allow <machine>: its subscription allow-list as cred-policy's own verb —
+# `all`, `deny`, `set <id>…` — or nothing when it has none; rc 1 unreadable
+node_allow() {
+  credpol show --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for s in d.get("nodes") or []:
+    if s.get("id") != sys.argv[1]:
+        continue
+    if s.get("error"):
+        sys.exit(1)
+    a = s.get("allow")
+    print("all" if s.get("all") else "deny" if a == [] else "set " + " ".join(a) if a else "")
+' "$1"
+}
 src() { kc exec "$SOURCE" -c fleet -- "$@"; }
 
 [ -n "$POD" ] || POD=$(cat "$STATE/pod" 2>/dev/null || true)
@@ -374,18 +392,21 @@ acct_active() { [ "$(account_state "$POD")" = active ]; }
 phase_open() {
   need_pod
   pod_ready || die 3 "$POD is not Ready: run start"
-  # the machine's subscription allow-list (fleet.cred_allow.node.<host>) is the
-  # source's, set BEFORE the login exists there: an unnamed key is an open
-  # machine, and the restored sessions ask for credentials at once
-  local allow got
-  allow=$(hubadm get "fleet.cred_allow.node.$SRC_MACHINE" 2>/dev/null | tail -n 1)
-  if [ -z "$allow" ] || [ "$allow" = '-' ]; then
-    [ "$ALLOW_NONE" = 1 ] || die 3 "$SRC_MACHINE has no fleet.cred_allow.node list: the pod would be open to every subscription (--allow-list-none to move anyway)"
-    allow=''
+  # the machine's subscription allow-list (the hub's cred-policy, scope node)
+  # is the source's, set BEFORE the login exists there: a machine with no list
+  # is an open one, and the restored sessions ask for credentials at once
+  local allow got ids
+  allow=$(node_allow "$SRC_MACHINE") || die 1 "could not read $SRC_MACHINE's allow-list (fleet-cred-policy.sh show)"
+  if [ -z "$allow" ]; then
+    [ "$ALLOW_NONE" = 1 ] || die 3 "$SRC_MACHINE has no subscription allow-list: the pod would be open to every subscription (--allow-list-none to move anyway)"
   else
-    hubadm set "fleet.cred_allow.node.$POD" "$allow" >/dev/null ||
-      die 1 "could not copy the credential allow-list ($allow) to $POD"
-    got=$(hubadm get "fleet.cred_allow.node.$POD" 2>/dev/null | tail -n 1)
+    # --force: the pod has no list yet, so the hub reads a narrowing as taking
+    # a provider away — the source's own list is exactly what is meant
+    case "$allow" in
+      set\ *) read -r -a ids <<< "${allow#set }"; credpol set --force node "$POD" ${ids[@]+"${ids[@]}"} >/dev/null ;;
+      *) credpol "$allow" node "$POD" >/dev/null ;;
+    esac || die 1 "could not copy the credential allow-list ($allow) to $POD"
+    got=$(node_allow "$POD") || got='(unreadable)'
     [ "$got" = "$allow" ] || die 1 "the allow-list on $POD reads '$got', not the source's '$allow'"
   fi
   if ! acct_active; then

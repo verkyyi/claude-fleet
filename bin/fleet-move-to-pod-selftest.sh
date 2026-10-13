@@ -95,9 +95,20 @@ case "$*" in
     if [ -f "$FAKE/assigned" ]; then echo '{"accounts":[{"principal_id":"gh:7","hostname":"'"$(cat "$FAKE/assigned")"'","state":"active"}]}'
     else echo '{"accounts":[]}'; fi ;;
   *"accounts assign"*) set -- $*; while [ "$1" != --host ]; do shift; done; echo "$2" > "$FAKE/assigned" ;;
-  *"get fleet.cred_allow.node.node-a-0"*) [ -n "${FAKE_NO_ALLOW:-}" ] && exit 1; echo codex ;;
-  *"set fleet.cred_allow.node."*) echo "${@: -1}" > "$FAKE/allow.set" ;;
-  *"get fleet.cred_allow.node."*) cat "$FAKE/allow.set" 2>/dev/null || exit 1 ;;
+esac
+SH
+# the hub's cred-policy: node-a-0 has a Codex-only list; a set lands in allow.set
+cat > "$T/credpol" <<'SH'
+#!/bin/bash
+printf 'credpol %s\n' "$*" >> "$FAKE/calls.log"
+case "$1" in
+  show)
+    src='{"id":"node-a-0","allow":["codex:account:0123"]}'
+    [ -n "${FAKE_NO_ALLOW:-}" ] && src='{"id":"node-b-0","allow":["x"]}'
+    printf '{"mode":"strict","nodes":[%s%s]}\n' "$src" "$(cat "$FAKE/allow.set" 2>/dev/null)" ;;
+  set) [ "$2" = --force ] || { echo 'would empty claude' >&2; exit 5; }
+       pod=$4; shift 4; ids=$(printf '"%s",' "$@"); printf ',{"id":"%s","allow":[%s]}' "$pod" "${ids%,}" > "$FAKE/allow.set" ;;
+  *) exit 9 ;;
 esac
 SH
 cat > "$T/curl" <<'SH'
@@ -108,8 +119,8 @@ out=''; while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
 printf '{"code":"%s"}' "$FAKE_CODE" > "$out"
 printf 200
 SH
-chmod +x "$T/kubectl" "$T/hubadm" "$T/curl"
-export FAKE=$T FAKE_CODE=$CODE FLEET_MOVE_KUBECTL="$T/kubectl" FLEET_MOVE_HUB_ADMIN="$T/hubadm" \
+chmod +x "$T/kubectl" "$T/hubadm" "$T/curl" "$T/credpol"
+export FAKE=$T FAKE_CODE=$CODE FLEET_MOVE_KUBECTL="$T/kubectl" FLEET_MOVE_HUB_ADMIN="$T/hubadm" FLEET_MOVE_CRED_POLICY="$T/credpol" \
   FLEET_HUB_CURL="$T/curl" FLEET_MOVE_STATE="$T/state" FLEET_MOVE_WAIT=5 CCQUOTA_VIEWER_TOKEN=tok-xyz
 RARGS=(-- --image reg.example/fleet-managed-node@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --hub https://hub.example
        --storage-class essd --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local)
@@ -165,9 +176,10 @@ tokline=$(grep -h '^TOKEN=' "$T/send.py") && tok=${tokline#TOKEN=b\"} && tok=${t
 grep -q "$tok" "$LOG" && fail 'C: the copy token is in an argv'
 grep -rq "$tok" "$T/state" && fail 'C: the copy token was written to the state dir'
 grep -q "hubadm .*accounts assign gh:7 --host $POD --login 24acme --own-name" "$LOG" || fail 'C: no assign --own-name on the pod'
-grep -q "hubadm .*set fleet.cred_allow.node.$POD codex" "$LOG" || fail 'C: the allow-list was not copied'
-a_set=$(grep -n "hubadm .*set fleet.cred_allow.node.$POD" "$LOG" | head -1 | cut -d: -f1)
-a_get=$(grep -n "hubadm .*get fleet.cred_allow.node.$POD" "$LOG" | head -1 | cut -d: -f1)
+grep -q "credpol set --force node $POD codex:account:0123\$" "$LOG" || fail 'C: the allow-list was not copied'
+grep -q "fleet.cred_allow" "$LOG" && fail 'C: the allow-list went through the settings road (the hub refuses it: 400)'
+a_set=$(grep -n "credpol set " "$LOG" | head -1 | cut -d: -f1)
+a_get=$(awk -v s="$a_set" '/credpol show/ && NR > s {print NR; exit}' "$LOG")
 a_asg=$(grep -n "hubadm .*accounts assign" "$LOG" | head -1 | cut -d: -f1)
 [ -n "$a_get" ] && [ "$a_set" -lt "$a_asg" ] && [ "$a_get" -lt "$a_asg" ] ||
   fail "C: the allow-list must be set and read back before the login opens (set $a_set · get $a_get · assign $a_asg)"
@@ -183,7 +195,7 @@ ok
 # ── F. a source with no allow-list: open refuses (3) before any assign
 rm -f "$T/assigned" "$T/allow.set"; : > "$LOG"
 FAKE_NO_ALLOW=1 mv open 24acme > "$T/out" 2>&1; rc=$?
-[ "$rc" = 3 ] && grep -q 'no fleet.cred_allow.node list' "$T/out" || fail "F: no allow-list: rc $rc, $(cat "$T/out")"
+[ "$rc" = 3 ] && grep -q 'no subscription allow-list' "$T/out" || fail "F: no allow-list: rc $rc, $(cat "$T/out")"
 grep -q 'accounts assign' "$LOG" && fail 'F: the login was opened on an open machine'
 FAKE_NO_ALLOW=1 mv open 24acme --allow-list-none >/dev/null 2>&1 || fail 'F: --allow-list-none did not open'
 grep -q 'accounts assign' "$LOG" || fail 'F: --allow-list-none never assigned'
