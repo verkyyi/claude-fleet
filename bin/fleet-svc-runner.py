@@ -93,9 +93,12 @@ def attempt():
         return 1
 
 
-def hand_in(code, report=None, meta=None, usage=None):
-    """POST the result once (retried on a transport failure / 5xx); True = the hub took it."""
+def hand_in(code, report=None, meta=None, usage=None, detail=''):
+    """POST the result once (retried on a transport failure / 5xx); True = the hub took it.
+    detail (a failure's own words) stays in the hub's log — the caller sees the code alone."""
     body = {'attempt': attempt(), 'exit': code, 'usage': usage or {}}
+    if detail:
+        body['detail'] = detail[-300:]
     if report is not None:
         body.update(report=report, meta=meta)
     for wait in (2, 5, 10, None):
@@ -252,7 +255,7 @@ def run():
     claude = claude_bin()
     if not claude:
         say('no claude in this image')
-        hand_in(INFRA)
+        hand_in(INFRA, detail='no claude in this image')
         return INFRA
     home = env('HOME', '/tmp/home')
     os.makedirs(p['out'], exist_ok=True)
@@ -289,12 +292,13 @@ def run():
     sys.stderr.write((cp.stderr or '')[-2000:])
     if cp.returncode != 0 or res.get('is_error'):
         say('claude ended %d (%s)' % (cp.returncode, res.get('subtype', '')))
-        hand_in(INFRA, usage=usage)
+        hand_in(INFRA, usage=usage, detail='claude ended %d (%s): %s' % (
+            cp.returncode, res.get('subtype', ''), ' '.join((cp.stderr or '').split())[-200:]))
         return INFRA
     report, meta = check_outputs(p['out'])
     if report is None:
         say('the outputs are not the contract\'s: %s' % meta)
-        hand_in(OUTPUT_INVALID, usage=usage)
+        hand_in(OUTPUT_INVALID, usage=usage, detail=meta)
         return OUTPUT_INVALID
     return OK if hand_in(OK, report, meta, usage) else INFRA
 

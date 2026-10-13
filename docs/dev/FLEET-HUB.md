@@ -2122,8 +2122,10 @@ there is none and runs queue and expire as above.
   pass (`fcp-h1/2`, principal = the service, `worker_id svc/R<n>/a<k>`, Claude
   only, good until the deadline + 2 minutes). `POST /v1/node/svc-runs/R<n>/result
   {attempt, exit, report, meta, usage}` — once: exit 0 succeeded (contract 5
-  checked again), 20 `output_invalid`, 30 `run_timeout`, else `infra_error`. A
-  key opens only its own run (another's is 401), an ended one nothing (410).
+  checked again), 20 `output_invalid`, 30 `run_timeout`, else `infra_error`
+  (its `detail`, the runner's stderr tail, stays in the hub's log) — which a
+  first attempt is retried for (#4007): a new Job `…-a2`, a new key, the time
+  left of `deadline_at` as its deadline. A key opens only its own run (another's is 401), an ended one nothing (410).
   The result, a cancel and the sweep's `run_timeout` end the key and revoke the
   pass; a cancel and a timeout also send `delete-svc-run`.
 - **What runs inside** is `bin/fleet-svc-runner.py` (`fetch` · `run`) from the

@@ -38,10 +38,13 @@ import (
 //	                                            run's digest), the inputs, and a
 //	                                            model pass bound to this run,
 //	                                            good until its deadline
-//	POST /v1/node/svc-runs/R<n>/result           {attempt, exit, report, meta, usage}
+//	POST /v1/node/svc-runs/R<n>/result           {attempt, exit, report, meta, usage, detail}
 //
 // exit is the runner contract's: 0 succeeded (the outputs checked again,
-// SvcRunFinish), 20 output_invalid, 30 run_timeout, anything else infra_error.
+// SvcRunFinish), 20 output_invalid, 30 run_timeout, anything else infra_error —
+// which a first attempt is retried for (claude-fleet#4007): a new attempt, a new
+// Job, a new key, the time left of the deadline. detail (the runner's stderr
+// tail) stays in the hub's log.
 // The result ends the key and revokes the pass; a cancel or the sweep's
 // run_timeout do the same and delete the Job. Nothing the Job holds opens
 // anything of anyone else's: the key opens its own run's two routes, the pass
@@ -131,7 +134,7 @@ func (c *ClusterSvcRunner) Start(ctx context.Context, run store.SvcRun) error {
 		return err
 	}
 	res, err := s.clusterOp(ctx, c.Cluster, control.ClusterTicket{Op: control.ClusterCreateSvcRun, Run: run.Ref(),
-		Attempt: run.Attempt, Svc: label, Deadline: run.DeadlineS, Token: key})
+		Attempt: run.Attempt, Svc: label, Deadline: svcJobDeadline(run, time.Now()), Token: key})
 	if err == nil && res.RC != 0 {
 		err = fmt.Errorf("the provisioner said rc %d: %s", res.RC, res.Line)
 	}
@@ -141,6 +144,22 @@ func (c *ClusterSvcRunner) Start(ctx context.Context, run store.SvcRun) error {
 	}
 	s.svcAudit(run.Principal, "svc.run.job", run.Ref(), "ok", "attempt "+strconv.Itoa(run.Attempt)+" on "+c.Cluster, time.Now())
 	return nil
+}
+
+// svcJobDeadline is the attempt's Job's activeDeadlineSeconds: the run's
+// deadline_s, or for a retry (claude-fleet#4007) what is left of the deadline
+// its first start fixed — never under the ticket's 60.
+func svcJobDeadline(run store.SvcRun, now time.Time) int {
+	d := run.DeadlineS
+	if run.DeadlineAt != nil {
+		if left := int(run.DeadlineAt.Sub(now).Seconds()); left < d {
+			d = left
+		}
+	}
+	if d < 60 {
+		d = 60
+	}
+	return d
 }
 
 // Cancel ends the attempt's key and pass and deletes its Job.
@@ -248,11 +267,13 @@ func (s *Server) svcRunSpec(w http.ResponseWriter, r *http.Request, run store.Sv
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	start := now
-	if run.StartedAt != nil {
-		start = *run.StartedAt
+	deadline := now.Add(time.Duration(run.DeadlineS) * time.Second)
+	if run.DeadlineAt != nil {
+		deadline = *run.DeadlineAt
+	} else if run.StartedAt != nil {
+		deadline = run.StartedAt.Add(time.Duration(run.DeadlineS) * time.Second)
 	}
-	exp := start.Add(time.Duration(run.DeadlineS)*time.Second + svcPassGrace)
+	exp := deadline.Add(svcPassGrace)
 	if exp.After(now.Add(SessionCredTTL)) {
 		exp = now.Add(SessionCredTTL)
 	}
@@ -298,6 +319,7 @@ func (s *Server) svcRunResult(w http.ResponseWriter, r *http.Request, run store.
 		Report  *string         `json:"report"`
 		Meta    json.RawMessage `json:"meta"`
 		Usage   json.RawMessage `json:"usage"`
+		Detail  string          `json:"detail"`
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, svcResultMax))
 	if err != nil || json.Unmarshal(body, &in) != nil || in.Exit == nil {
@@ -332,7 +354,8 @@ func (s *Server) svcRunResult(w http.ResponseWriter, r *http.Request, run store.
 	case SvcExitTimeout:
 		code = SvcErrRunTimeout
 	}
-	ended, err := s.SvcRunFinish(run.ID, state, code, res, in.Usage)
+	// the runner's own words on a failure go to the hub's log and audit only
+	ended, err := s.SvcRunFinishDetail(run.ID, state, code, in.Detail, res, in.Usage)
 	s.svcEnvEnd(run.ID, j.Attempt, "run ended", now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

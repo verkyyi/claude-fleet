@@ -148,7 +148,6 @@ func TestSvcRunJobExitCodes(t *testing.T) {
 	}{
 		{map[string]any{"exit": SvcExitOutputInvalid}, SvcErrOutputInvalid},
 		{map[string]any{"exit": SvcExitTimeout}, SvcErrRunTimeout},
-		{map[string]any{"exit": 1}, SvcErrInfra},
 		{map[string]any{"exit": 0, "report": "# x", "meta": map[string]any{"summary": "no title"}}, SvcErrOutputInvalid},
 		{map[string]any{"exit": 0}, SvcErrOutputInvalid},
 	} {
@@ -163,6 +162,26 @@ func TestSvcRunJobExitCodes(t *testing.T) {
 	if st, _ := svcDo(t, h, http.MethodPost, NodeSvcRunsPath+"/"+ref+"/result", tk.Token,
 		map[string]any{"attempt": 2, "exit": 0}); st != http.StatusConflict {
 		t.Errorf("another attempt's result: %d", st)
+	}
+	// infra_error: the first attempt is retried (claude-fleet#4007) — a new Job,
+	// a new key, no more than the deadline left; the old key opens nothing
+	st, out := svcDo(t, h, http.MethodPost, NodeSvcRunsPath+"/"+ref+"/result", tk.Token,
+		map[string]any{"attempt": 1, "exit": 1, "detail": "claude ended 1"})
+	if st != http.StatusOK || out["state"] != store.SvcRunQueued {
+		t.Fatalf("attempt 1's infra_error: %d %v, want queued for its retry", st, out)
+	}
+	h.srv.SvcRunsTick(context.Background(), time.Now())
+	tk2 := ops.expect(control.ClusterCreateSvcRun)
+	if tk2.Run != ref || tk2.Attempt != 2 || tk2.Token == tk.Token || tk2.Deadline > 900 || tk2.Deadline < 60 {
+		t.Fatalf("the retry's ticket %+v", tk2)
+	}
+	if st, _ := svcDo(t, h, http.MethodGet, NodeSvcRunsPath+"/"+ref+"/spec", tk.Token, nil); st != http.StatusGone {
+		t.Errorf("attempt 1's key after its end: %d, want 410", st)
+	}
+	if st, out := svcDo(t, h, http.MethodPost, NodeSvcRunsPath+"/"+ref+"/result", tk2.Token,
+		map[string]any{"attempt": 2, "exit": 1}); st != http.StatusOK || out["state"] != store.SvcRunFailed ||
+		out["error_code"] != SvcErrInfra {
+		t.Errorf("attempt 2's infra_error: %d %v, want failed infra_error", st, out)
 	}
 	ops.quiet(200 * time.Millisecond)
 }
