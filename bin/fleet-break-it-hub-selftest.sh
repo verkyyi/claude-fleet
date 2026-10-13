@@ -91,6 +91,8 @@
 #                                                   capacity; the hub half is fleet_client_place.go pinnedFull (go test)
 #   admit-open-window-twice                         fleet_machine_admit / fleet_admit_pending / _fleet_admit_advice_left
 #                                                   (fleet-lib.sh), dash-raw-session.sh (the hub's worker_start)
+#   linux-admit-host-load                           fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu
+#                                                   (fleet-lib.sh) on a sandbox cgroup + machine reading
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
 #                                                   steward's beat (bin/fleet_steward.py)
@@ -1349,6 +1351,39 @@ drill_admit_open_window_twice() {
   case "$out" in *'pressure warn'*'|rc=1') ;; *) WHY="warn pressure must still hold: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="drill 36 的数（29% 空闲、保底 2457 MB、约 822 MB/会话、3 个已开的窗口）：第一个普通会话放行并记「0 still opening」；3 个还在开的 spawn 仍拦且写出 4751 − 2457 − 3 × 822 = -172；压力 warn 仍拦"
+}
+
+# linux-admit-host-load (issue #3308): in an ACK pod /proc/loadavg is the whole ECS
+# node's — 6.29/core on 2026-10-11 while the pod used a sliver of its 2-core
+# cpu.max — so fleet_machine_admit held every new session there. For real: the
+# host reading 6.29/core through the machine reading (no load stub), a sandbox
+# cgroup (cpu.max 200000/100000, an idle cpu.stat): no cgroup holds as before; the
+# idle pod admits however busy the host; a pod using 1.95 of 2 cores, or throttled
+# 40 %, holds with the container's own numbers; FLEET_ADMIT_LOAD_PER_CORE=0 admits.
+drill_linux_admit_host_load() {
+  CAP=20; local t0 d="$WORK/lahl" out
+  t0=$(now)
+  rm -rf "$d"; mkdir -p "$d/conf/cluster" "$d/tmp" "$d/cg"
+  printf '{\n"ts": %s,\n"load_per_core": "6.29"\n}\n' "$(date +%s)" > "$d/conf/cluster/machine.json"
+  printf '200000 100000\n' > "$d/cg/cpu.max"
+  printf 'usage_usec 5000000\nuser_usec 4000000\nsystem_usec 1000000\nnr_periods 900\nnr_throttled 0\nthrottled_usec 0\n' > "$d/cg/cpu.stat"
+  adm() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MACHINE_TASKS=off \
+            FLEET_MEM_TOTAL_MB=16384 FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 102400 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD='echo 1 66 0 0' FLEET_CPU_STAT_FILE="$d/cg/cpu.stat" \
+            FLEET_ADMIT_CPU_SAMPLE_SECS=0.1 "$@" \
+            bash -c "source '$BIN/fleet-lib.sh'; fleet_machine_admit; echo \"|rc=\$?\"" 2>&1; }
+  out=$(adm FLEET_CPU_MAX_FILE="$d/cg/none")
+  case "$out" in *'6.29/core'*'|rc=1') ;; *) WHY="with no cgroup limit the host's 6.29/core must still hold (the old rule): $out"; return 1 ;; esac
+  out=$(adm FLEET_CPU_MAX_FILE="$d/cg/cpu.max")
+  [ "$out" = '|rc=0' ] || { WHY="an idle pod (0 of 2 cores) was held by the host's 6.29/core: $out"; return 1; }
+  out=$(adm FLEET_CPU_MAX_FILE="$d/cg/cpu.max" FLEET_ADMIT_CPU_READING='0 1.95 2.00')
+  case "$out" in *'container cpu busy'*'1.95 of 2.00 cores'*'|rc=1') ;; *) WHY="a pod using 1.95 of 2 cores must hold with its own numbers: $out"; return 1 ;; esac
+  out=$(adm FLEET_ADMIT_CPU_READING='40 1.00 2.00')
+  case "$out" in *'40% throttled'*'|rc=1') ;; *) WHY="a pod throttled 40 % must hold: $out"; return 1 ;; esac
+  out=$(adm FLEET_ADMIT_CPU_READING='40 1.95 2.00' FLEET_ADMIT_LOAD_PER_CORE=0)
+  [ "$out" = '|rc=0' ] || { WHY="FLEET_ADMIT_LOAD_PER_CORE=0 must turn the cgroup reading off too: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="宿主 6.29/core（ACK 节点）、pod cpu.max 2 核：没有 cgroup 照旧拦；pod 闲时放行；pod 用 1.95/2 核或被限流 40% 时按容器自己的数拦；FLEET_ADMIT_LOAD_PER_CORE=0 一并关掉"
 }
 
 # hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and
