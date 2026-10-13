@@ -4,7 +4,6 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p . && vite build",
-    "build:site": "tsc -p . && vite build --mode site",
     "dev": "vite --host 127.0.0.1"
   },
   "dependencies": {

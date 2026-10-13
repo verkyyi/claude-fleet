@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/dns"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -265,64 +267,54 @@ func TestEntryDNSOffMakesNoCall(t *testing.T) {
 	}
 }
 
-// The page says the home is not reachable from outside — only with the
-// records on (no writer: the page as before), and not once C6 reaches it.
-func TestEntryPageHomeUnreachableFromOutside(t *testing.T) {
+// The door says the home is not reachable from outside — only with the
+// records on (no writer: as before), and not once C6 reaches it.
+func TestEntryDoorHomeUnreachableFromOutside(t *testing.T) {
 	h := entryHarness(t)
-	keysPost(t, h, pAlice, "do", "name", "name", "alice")
-	home := func() store.EntryHome {
-		_, _, _ = keysPage(t, h, pAlice, "", nil) // the first visit picks the home
-		home, ok, err := h.srv.Store.EntryHomeOf(pAlice)
-		if err != nil || !ok {
-			t.Fatalf("no home: %v", err)
-		}
-		return home
-	}()
-	page := func(what, want string, not ...string) string {
+	entryCall(t, h, http.MethodPut, control.EntryNamePath, asSession(pAlice), map[string]any{"name": "alice"})
+	_ = entryDoor(t, h, pAlice) // the first read picks the home
+	home, ok, err := h.srv.Store.EntryHomeOf(pAlice)
+	if err != nil || !ok {
+		t.Fatalf("no home: %v", err)
+	}
+	door := func(what, state, why string) {
 		t.Helper()
-		_, body, _ := keysPage(t, h, pAlice, "?step=5", nil)
-		if !strings.Contains(body, want) {
-			t.Fatalf("%s: no %q\n%s", what, want, body)
+		d := entryDoor(t, h, pAlice)
+		if d.State != state || !strings.Contains(d.Why, why) {
+			t.Fatalf("%s: door %+v; want %s %q", what, d, state, why)
 		}
-		for _, n := range not {
-			if strings.Contains(body, n) {
-				t.Fatalf("%s: %q\n%s", what, n, body)
-			}
-		}
-		return body
 	}
 	// No key: nothing listens, and that is no failure (claude-fleet#3199).
-	page("no key", "加上第一把钥匙后，家机器会打开入口", "外面还连不上")
-	keysPost(t, h, pAlice, "do", "add", "key", entryKeyLine(t, "p"), "label", "iPhone")
-	// A key just added, no report since: opening, and the page reloads itself.
-	body := page("just added", "正在为你打开入口", "外面还连不上")
-	if !strings.Contains(body, `http-equiv="refresh"`) {
-		t.Fatal("opening, but the page does not reload")
+	door("no key", "nokey", "")
+	if code, raw := entryCall(t, h, http.MethodPost, control.EntryKeysPath, asSession(pAlice), map[string]any{"public_key": entryKeyLine(t, "p")}); code != http.StatusCreated {
+		t.Fatalf("add a key: HTTP %d %s", code, raw)
 	}
+	// A key just added, no report since: opening.
+	door("just added", "opening", "")
 	// The home reports, not listening yet: still opening.
 	h.srv.entryReachSeen.Store(strings.ToLower(home.Machine), entryReachSeen{At: time.Now(), Listening: false})
-	page("not listening yet", "正在为你打开入口")
+	door("not listening yet", "opening", "")
 	// Past the grace: say where it is stuck.
 	old := entryOpenGrace
 	entryOpenGrace = 0
 	t.Cleanup(func() { entryOpenGrace = old })
-	page("past the grace", "入口没在听", "正在为你打开")
+	door("past the grace", "far", "入口没在听")
 	dnsReach(t, h, home.Machine, time.Now().UTC(), false, "198.51.100.213")
-	page("dialled, nobody answers", "没有回应：路由器还没把端口 22022 转到")
+	door("dialled, nobody answers", "far", "没有回应：路由器还没把端口 22022 转到")
 	dnsReach(t, h, home.Machine, time.Now().UTC(), true, "198.51.100.213")
-	page("reachable", "外面连得上", "外面还连不上", `http-equiv="refresh"`)
+	door("reachable", "ok", "")
 }
 
 // Two homes behind one router (EPIC #3067 改约定 3): one address, the port
-// the router forwards tells them apart. The page's Termius port is the
-// home's, a move to the other says the port changes, and an IPv6 the door
-// answers on another port than the A's gets no AAAA.
+// the router forwards tells them apart. The door's Termius port is the
+// home's, and an IPv6 the door answers on another port than the A's gets no
+// AAAA.
 func TestEntryDNSPortIsTheHomes(t *testing.T) {
 	h := entryHarness(t)
 	f := dns.NewFake()
 	h.srv.EntryDNS = NewEntryDNS(f, "cf")
 	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.example.com", time.Now())
-	keysPost(t, h, pAlice, "do", "name", "name", "alice")
+	entryCall(t, h, http.MethodPut, control.EntryNamePath, asSession(pAlice), map[string]any{"name": "alice"})
 	now := time.Now().UTC()
 	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "mac-e-mac-c", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
@@ -333,12 +325,7 @@ func TestEntryDNSPortIsTheHomes(t *testing.T) {
 	if got, want := dnsZone(f), "A alice.cf 198.51.100.213"; got != want {
 		t.Fatalf("zone: %s\nwant %s (no AAAA on another port)", got, want)
 	}
-	_, body, _ := keysPage(t, h, pAlice, "?step=4", nil)
-	if !strings.Contains(body, `<span class="v">22123</span>`) {
-		t.Fatalf("home mac-e-mac-c: the port is not 22123:\n%s", body)
-	}
-	_, body, _ = keysPage(t, h, pAlice, "?move=mac-e&login=alice", nil)
-	if !strings.Contains(body, "端口改成 <b>22122</b>（原来 22123）") {
-		t.Fatalf("move sheet does not say the port changes:\n%s", body)
+	if d := entryDoor(t, h, pAlice); d.Port != 22123 {
+		t.Fatalf("home mac-e-mac-c: the door's port is %d, not 22123", d.Port)
 	}
 }

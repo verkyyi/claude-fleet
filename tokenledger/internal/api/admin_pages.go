@@ -13,59 +13,11 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// The admin pages (claude-fleet#1990, EPIC #1982 C8): Subscriptions,
-// Machines, Users, Settings and Audit. Each is a thin HTML file that mounts
-// its script into the app shell (web/dist/app-shell.js) under the page id
-// /v1/me lists for an admin (pagesFor).
-//
-// A user is refused the page whole (claude-fleet#2516): one role_denied
-// audit row and the 404 an unknown address gets (claude-fleet#3925) — never
-// the page's skeleton, whose data reads would each fail on their own and look
-// broken. Every admin page's files live under web/dist/admin/, so the file
-// gate is that prefix (adminUIPrefix): a new admin page is refused to a user
-// by where it sits, with nothing to register.
-
-// adminPageRoutes are the admin pages outside the fleet block; Machines is
-// /nodes, mounted with the roster.
-var adminPageRoutes = []struct{ path, id, file string }{
-	{"/subscriptions/settings", "subscriptions", "admin/subscription-settings.html"},
-	{"/subscriptions/", "subscriptions", "admin/subscription.html"},
-	{"/admin/users/", "people", "admin/user.html"},
-	{"/subscriptions", "subscriptions", "admin/subscriptions.html"},
-	{"/admin/users", "people", "admin/users.html"},
-	{"/admin/settings", "settings", "admin/settings.html"},
-	{"/admin/audit", "audit", "admin/audit.html"},
-	// 反馈 (claude-fleet#3357): mounted like every admin page; /v1/me lists
-	// it only while the hub takes feedback, and its reads exist only then.
-	{feedbackPagePath, feedbackPageID, feedbackPageFile},
-	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
-	{"/admin/sessions", "all-sessions", "admin/sessions.html"},
-	{"/admin/overview", "by-person", "admin/overview.html"},
-	{"/admin/devices", "all-devices", "admin/devices.html"},
-	// 发布列车 (claude-fleet#3870): the release ledger's runs; /v1/me lists it
-	// only with the fleet module on, where the ledger is.
-	{trainsPagePath, trainsPageID, "admin/trains.html"},
-}
-
-// adminUIPrefix is where every admin page's files sit in web/dist.
-const adminUIPrefix = "admin/"
-
-// isAdminUIFile says whether a path in the built UI is an admin page's.
-func isAdminUIFile(name string) bool {
-	return strings.HasPrefix(strings.TrimPrefix(name, "/"), adminUIPrefix)
-}
-
-// adminPage serves one admin page, or to a user the answer an unknown
-// address gets (denyAdminPage).
-func (s *Server) adminPage(id, file string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !memberRole(roleOf(r.Context())) {
-			s.serveStandalonePage(w, r, file)
-			return
-		}
-		s.denyAdminPage(w, r)
-	})
-}
+// The admin pages are the new console's (claude-fleet#3925, EPIC #3923): a
+// user asking for one is refused it whole — one role_denied audit row and the
+// 404 an unknown address gets — never the page's skeleton. Their old
+// addresses only move on (consolePages, app_mount.go); the old console's
+// pages went with claude-fleet#3939.
 
 // denyAdminPage refuses a user an admin page: audited, then exactly the 404
 // an address that does not exist gets (claude-fleet#3925, EPIC #3923 rule 6)

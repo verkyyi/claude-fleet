@@ -649,7 +649,7 @@ its own team could move its spend onto another team's budget.
 Every human page — the dashboard, 连接, 我的会话, 机器节点, 凭据发放 — carries
 the same header, top right: the signed-in person's GitHub username with their
 role · GitHub under it, or 管理员 · 令牌 for the operator's own door. It is
-drawn by `web/dist/whoami.js` from **one** answer, `/v1/me` (`via`:
+drawn by the console from **one** answer, `/v1/me` (`via`:
 `open | token | github`, `person`, `name`, `role`, `can_logout`), recorded by the
 gate as it admits the request — never inferred per page. Clicking it opens
 姓名 / 登录方式 and, when a cookie of this hub's is behind the request, **退出**:
@@ -1124,7 +1124,7 @@ filters through the same `Server.FleetScope`. The token door still sees
 everything. The home page reads `/v1/fleet/me` once and shows the
 way to `/connect` and `/sessions` for a person with an active login (and
 `/nodes` too for an operator door), or 「未分配机器，联系管理员」 for a person
-the hub has placed nowhere yet (`web/dist/lib/fleetnav.js`).
+the hub has placed nowhere yet.
 
 ### Sessions on every machine — the Fleet Hub reads (claude-fleet#1409)
 
@@ -2560,9 +2560,10 @@ make build    # ./bin/ccquota
 make dist     # all five platforms
 ```
 
-The dashboard is hand-written HTML/CSS/JS in `web/dist`, embedded via
-`embed.FS`. There is no npm pipeline on purpose: a Go toolchain alone produces
-the complete artifact.
+The console is `extras/web-console` (its committed build packed into `web/console`
+by `bin/web-console-pack.sh` before an image is built), embedded via `embed.FS`
+with the website and docs; the old hand-written dashboard under `web/dist` was
+taken down (claude-fleet#3939) — `web/dist` keeps only the tab icons.
 
 Design notes are in `docs/superpowers/specs/`.
 

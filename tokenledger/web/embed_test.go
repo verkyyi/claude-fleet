@@ -4,234 +4,70 @@ import (
 	"bytes"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// The dashboard is embedded, so a missing web/dist is not a cosmetic problem:
-// go:embed fails the BUILD. An unanchored `dist/` in .gitignore once kept the
-// whole directory out of every commit, and a fresh clone could not compile.
+// web/dist is embedded, so a missing one is not a cosmetic problem: go:embed
+// fails the BUILD. An unanchored `dist/` in .gitignore once kept the whole
+// directory out of every commit, and a fresh clone could not compile.
 
-// appPages are the four everyday pages (claude-fleet#1989) and the five
-// admin pages (claude-fleet#1990): each a thin HTML file that links the one
-// stylesheet and mounts its script into the shell under the page id /v1/me
-// lists.
-var appPages = []struct{ html, script, id string }{
-	{"index.html", "overview.js", "overview"},
-	{"sessions.html", "sessions-page.js", "sessions"},
-	{"tasks.html", "tasks.js", "tasks"},
-	{"machines.html", "machines.js", "mymachines"},
-	{"connect.html", "connect.js", "devices"},
-	{"usage.html", "usage.js", "usage"},
-	{"config.html", "config.js", "config"},
-	{"admin/subscriptions.html", "admin/subscriptions.js", "subscriptions"},
-	{"admin/nodes.html", "admin/nodes.js", "machines"},
-	{"admin/users.html", "admin/users.js", "people"},
-	{"admin/settings.html", "admin/settings.js", "settings"},
-	{"admin/audit.html", "admin/audit.js", "audit"},
-	{"admin/trains.html", "admin/trains.js", "trains"}, // 发布列车 (claude-fleet#3870)
-	{"admin/feedback.html", "admin/feedback.js", "feedback"},
-	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
-	{"admin/sessions.html", "admin/sessions.js", "all-sessions"},
-	{"admin/overview.html", "admin/overview.js", "by-person"},
+// distIcons is all web/dist holds since the old console went
+// (claude-fleet#3939): the tab icons, for a hub whose site is off.
+var distIcons = map[string]string{
+	"favicon.svg":          "extras/fleet-theme/logo.svg",
+	"favicon.ico":          "site/assets/favicon.ico",
+	"apple-touch-icon.png": "site/assets/apple-touch-icon.png",
 }
 
-func TestAssets_AppPagesAreEmbedded(t *testing.T) {
+// The old console is gone, not hidden (claude-fleet#3939): no page, script or
+// stylesheet of it is in the build — the console is web/console's.
+func TestAssets_OldConsoleIsGone(t *testing.T) {
 	assets := Assets()
 	if assets == nil {
-		t.Fatal("no dashboard embedded: web/dist/index.html is missing from this checkout")
+		t.Fatal("no web/dist embedded: web/dist/favicon.svg is missing from this checkout")
 	}
-	for _, name := range []string{"app.css", "app-shell.js", "app.html", "app-start.js", "lib/router.js", "lib/stream.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js", "lib/usage-view.js"} {
-		if _, err := fs.Stat(assets, name); err != nil {
-			t.Fatalf("%s is not embedded: %v", name, err)
-		}
-	}
-	for _, p := range appPages {
-		html := string(mustRead(t, assets, p.html))
-		for _, want := range []string{"<title>", `href="/app.css"`, `<script type="module" src="/` + p.script + `"`} {
-			if !strings.Contains(html, want) {
-				t.Errorf("%s is missing %s", p.html, want)
-			}
-		}
-		js := string(mustRead(t, assets, p.script))
-		if !strings.Contains(js, `from './app-shell.js'`) && !strings.Contains(js, `from '../app-shell.js'`) {
-			t.Errorf("%s does not mount through app-shell.js", p.script)
-		}
-		if !strings.Contains(js, "Shell.mount('"+p.id+"'") {
-			t.Errorf("%s does not mount as page %q -- the id the menu and the page gate read", p.script, p.id)
-		}
-	}
-}
-
-// An old page whose address moved (lib/router.js MOVED) keeps its document,
-// so the old path still loads, and its script only starts the shell — which
-// moves the address. All devices is 服务节点与客户端's 客户端 tab
-// (claude-fleet#3232); 我的额度 is 我的用量 (claude-fleet#3229).
-func TestAssets_MovedPagesStillStart(t *testing.T) {
-	assets := Assets()
-	router := string(mustRead(t, assets, "lib/router.js"))
-	for _, m := range []struct{ html, script, move string }{
-		{"admin/devices.html", "admin/devices.js", `[APP + '/admin/devices']: APP + '/nodes?tab=clients'`},
-		{"quota.html", "quota.js", `[APP + '/quota']: APP + '/usage'`},
-	} {
-		html := string(mustRead(t, assets, m.html))
-		if !strings.Contains(html, `<script type="module" src="/`+m.script+`"`) {
-			t.Errorf("%s no longer loads its script: %q", m.html, html)
-		}
-		js := string(mustRead(t, assets, m.script))
-		if !strings.Contains(js, "Shell.start()") || strings.Contains(js, "Shell.mount(") {
-			t.Errorf("%s should only start the shell: %q", m.script, js)
-		}
-		if !strings.Contains(router, m.move) {
-			t.Errorf("lib/router.js no longer moves %s", m.move)
-		}
-	}
-}
-
-// Every page the menu links is embedded: lib/shell.js's PAGES hrefs are the
-// four app pages and the five admin pages.
-func TestAssets_MenuLinksResolve(t *testing.T) {
-	assets := Assets()
-	src := string(mustRead(t, assets, "lib/shell.js"))
-	route := map[string]string{
-		"/": "index.html", "/sessions": "sessions.html", "/tasks": "tasks.html", "/machines": "machines.html", "/machines/": "machines.html", "/connect": "connect.html", "/config": "config.html",
-		"/quota": "quota.html", "/usage": "usage.html",
-		"/subscriptions/": "admin/subscription.html", "/subscriptions/settings": "admin/subscription-settings.html", "/admin/users/": "admin/user.html",
-		"/subscriptions": "admin/subscriptions.html", "/nodes": "admin/nodes.html", "/admin/users": "admin/users.html",
-		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html", "/admin/feedback": "admin/feedback.html",
-		"/trains":         "admin/trains.html",
-		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",
-	}
-	// A console page's href is APP + its path under /app (claude-fleet#3583):
-	// read it as that path; the hub's own pages keep a plain string.
-	hrefs := regexp.MustCompile(`href: (APP(?: \+ '[^']*')?|'[^']+')`).FindAllStringSubmatch(src, -1)
-	for _, m := range hrefs {
-		h := m[1]
-		if strings.HasPrefix(h, "APP") {
-			if h = strings.Trim(strings.TrimPrefix(strings.TrimPrefix(h, "APP"), " + "), "'"); h == "" {
-				h = "/"
-			}
-		}
-		m[1] = strings.Trim(h, "'")
-	}
-	if len(hrefs) < 4 {
-		t.Fatalf("found %d menu hrefs in lib/shell.js; the PAGES table moved", len(hrefs))
-	}
-	// The hub draws these itself (internal/api/fleet_entry_page.go,
-	// claude-fleet#3199): menu links, no embedded page. /chat/ is the web chat's
-	// (claude-fleet#3646), packed in by bin/web-chat-pack.sh at build time —
-	// never in a checkout (internal/api/fleet_chat_page.go).
-	hubDrawn := map[string]bool{"/fleet/keys": true, "/fleet/connection": true, "/chat/": true}
-	for _, m := range hrefs {
-		if hubDrawn[m[1]] {
-			continue
-		}
-		file, ok := route[m[1]]
-		if !ok {
-			t.Errorf("menu links %s, which no embedded page serves", m[1])
-			continue
-		}
-		if _, err := fs.Stat(assets, file); err != nil {
-			t.Errorf("menu links %s but %s is not embedded", m[1], file)
-		}
-	}
-}
-
-// One document, many pages (claude-fleet#2793): app.html starts the shell,
-// and every PAGES entry names the module the shell import()s for it —
-// embedded, and registering itself under that id as its default export.
-func TestAssets_AppDocumentRoutesEveryPage(t *testing.T) {
-	assets := Assets()
-	html := string(mustRead(t, assets, "app.html"))
-	if !strings.Contains(html, `<script type="module" src="/app-start.js"`) || !strings.Contains(html, `href="/app.css"`) {
-		t.Errorf("app.html does not start the shell: %q", html)
-	}
-	if !strings.Contains(string(mustRead(t, assets, "app-start.js")), "Shell.start()") {
-		t.Error("app-start.js does not start the shell")
-	}
-	src := string(mustRead(t, assets, "lib/shell.js"))
-	rows := regexp.MustCompile(`\{ id: '([^']+)'[^}]*href: (APP(?: \+ '[^']*')?|'[^']+'), module: '/([^']+)' \}`).FindAllStringSubmatch(src, -1)
-	if len(rows) != len(appPages) {
-		t.Fatalf("%d PAGES rows carry a module; want %d (one per page)", len(rows), len(appPages))
-	}
-	for _, m := range rows {
-		js := string(mustRead(t, assets, m[3]))
-		if !strings.Contains(js, "export default Shell.mount('"+m[1]+"'") {
-			t.Errorf("%s (the module for %s) does not export its page as %q", m[3], m[2], m[1])
-		}
-	}
-}
-
-// The old dashboard is gone, not hidden (claude-fleet#1989 ⑥): its pages and
-// the module set they booted are no longer in the build.
-func TestAssets_OldDashboardIsGone(t *testing.T) {
-	assets := Assets()
-	// The older admin pages and their shared header went with claude-fleet#1990.
-	for _, name := range []string{"user.html", "styles.css", "app.js", "now.js", "review.js", "lib/sessions.js",
-		"credentials.html", "access.html", "whoami.js", "whoami.css", "lib/whoami.js"} {
-		if _, err := fs.Stat(assets, name); err == nil {
-			t.Errorf("%s is still embedded; the old page it belongs to was removed", name)
-		}
-	}
-	for _, p := range appPages {
-		if strings.Contains(string(mustRead(t, assets, p.html)), "whoami.js") {
-			t.Errorf("%s still loads the old header; the shell draws who is signed in", p.html)
-		}
-	}
-}
-
-func mustRead(t *testing.T, assets fs.FS, name string) []byte {
-	t.Helper()
-	b, err := fs.ReadFile(assets, name)
-	if err != nil {
-		t.Fatalf("%s unreadable: %v", name, err)
-	}
-	return b
-}
-
-// The tab icon is the site's logo, one source -- extras/fleet-theme/logo.svg,
-// site/assets for its PNG / ICO renderings -- and every page
-// names it at the root (claude-fleet#3946): web/dist carries copies of the
-// three files, byte for byte, and no page inlines an icon of its own (the old
-// green one came back on 28 pages once; landing.html's had even been broken).
-func TestAssets_IconIsTheSiteLogo(t *testing.T) {
-	assets := Assets()
-	if assets == nil {
-		t.Fatal("no dashboard embedded")
-	}
-	for copyName, src := range map[string]string{
-		"favicon.svg":          "extras/fleet-theme/logo.svg",
-		"favicon.ico":          "site/assets/favicon.ico",
-		"apple-touch-icon.png": "site/assets/apple-touch-icon.png",
-	} {
-		want, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(src)))
-		if err != nil {
-			t.Fatalf("%s: %v", src, err)
-		}
-		if got := mustRead(t, assets, copyName); !bytes.Equal(got, want) {
-			t.Errorf("web/dist/%s is not %s: cp %s tokenledger/web/dist/%s", copyName, src, src, copyName)
-		}
-	}
-	inlined := regexp.MustCompile(`rel="(?:icon|apple-touch-icon)"[^>]*href="data:|0e6e5e'|%230e6e5e|%232a78d6`)
+	var extra []string
 	err := fs.WalkDir(assets, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || path.Ext(p) != ".html" {
+		if err != nil || d.IsDir() {
 			return err
 		}
-		html := string(mustRead(t, assets, p))
-		if loc := inlined.FindStringIndex(html); loc != nil {
-			t.Errorf("%s inlines an icon of its own: %.80q", p, html[loc[0]:])
-		}
-		// chat/ is the web-chat page bin/web-chat-pack.sh packs (gitignored):
-		// it names its own copy, /chat/logo.svg.
-		if !strings.HasPrefix(p, "chat/") && strings.Contains(html, "<head") && !strings.Contains(html, `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`) {
-			t.Errorf("%s does not name /favicon.svg", p)
+		// chat/ is gitignored: an old checkout's web-chat build, never packed again
+		if _, ok := distIcons[p]; !ok && !strings.HasPrefix(p, "chat/") {
+			extra = append(extra, p)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	sort.Strings(extra)
+	if len(extra) > 0 {
+		t.Errorf("web/dist holds more than the tab icons: %v — the old console was taken down (claude-fleet#3939)", extra)
+	}
+}
+
+// The tab icon is the site's logo, one source -- extras/fleet-theme/logo.svg,
+// site/assets for its PNG / ICO renderings (claude-fleet#3946): web/dist
+// carries copies of the three files, byte for byte.
+func TestAssets_IconIsTheSiteLogo(t *testing.T) {
+	assets := Assets()
+	if assets == nil {
+		t.Fatal("no web/dist embedded")
+	}
+	for copyName, src := range distIcons {
+		want, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(src)))
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		got, err := fs.ReadFile(assets, copyName)
+		if err != nil {
+			t.Fatalf("%s unreadable: %v", copyName, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("web/dist/%s is not %s: cp %s tokenledger/web/dist/%s", copyName, src, src, copyName)
+		}
 	}
 }

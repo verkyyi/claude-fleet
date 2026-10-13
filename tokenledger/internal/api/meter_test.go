@@ -6,20 +6,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 )
 
-// meterServer is badgeServer's hub (one 4242-token turn) with a dashboard
-// that has both pages, so "/" can be told apart.
+// meterServer is badgeServer's hub (one 4242-token turn) with the public
+// site on and no built site.
 func meterServer(t *testing.T) *Server {
 	t.Helper()
 	s := badgeServer(t, false)
 	s.Site = true // the public site at "/" (claude-fleet#3583)
-	s.UI = fstest.MapFS{
-		"index.html":   {Data: []byte("<title>app</title>APP-SHELL")},
-		"landing.html": {Data: []byte("<title>claudefleet</title>FRONT-PAGE")},
-	}
 	return s
 }
 
@@ -34,50 +29,27 @@ func meterGet(t *testing.T, s *Server, path string, hdr map[string]string) *http
 	return rec
 }
 
-func TestLanding_SignedOutRootIsTheFrontPage(t *testing.T) {
+// With no built site the old landing page is gone (claude-fleet#3939): a
+// signed-out "/" is the gate's answer; signed in, /app; the old console's
+// files are a 404 for everyone (claude-fleet#1987) — never the app's index.
+func TestRoot_NoSiteIsTheGate(t *testing.T) {
 	s := meterServer(t)
-
-	rec := meterGet(t, s, "/", map[string]string{"Accept": "text/html"})
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "FRONT-PAGE") {
-		t.Fatalf("signed-out / = %d %.60q, want 200 and the front page", rec.Code, rec.Body.String())
+	if rec := meterGet(t, s, "/", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("signed-out / with no site = %d, want the gate's 401", rec.Code)
 	}
-	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "connect-src 'self'") {
-		t.Errorf("CSP = %q; the front page must send nothing to a third party", csp)
-	}
-
-	// Signed in: the app at /app (claude-fleet#3583), never the front page.
-	rec = meterGet(t, s, "/", map[string]string{"Authorization": "Bearer viewer-secret"})
+	rec := meterGet(t, s, "/", map[string]string{"Authorization": "Bearer viewer-secret"})
 	if rec.Code != http.StatusFound || rec.Header().Get("Location") != AppPrefix {
 		t.Fatalf("signed-in / = %d → %q, want 302 → /app", rec.Code, rec.Header().Get("Location"))
 	}
-	rec = meterGet(t, s, AppPrefix, map[string]string{"Authorization": "Bearer viewer-secret"})
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "APP-SHELL") {
-		t.Fatalf("signed-in /app = %d %.60q, want the app", rec.Code, rec.Body.String())
-	}
-
-	// Only "/" is public: every other file of the app is still behind the
-	// gate, and a path the hub has nothing at is a 404 for everyone
-	// (claude-fleet#1987) — never the app's index.
-	for _, p := range []string{"/index.html", "/landing.html"} {
-		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusUnauthorized {
-			t.Errorf("signed-out %s = %d, want 401", p, rec.Code)
-		}
-	}
-	for _, p := range []string{"/app.js", "/app/sessions"} {
-		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusNotFound {
-			t.Errorf("signed-out %s (not in this hub's UI) = %d, want 404", p, rec.Code)
+	for _, p := range []string{"/index.html", "/landing.html", "/app.js", "/app.css"} {
+		for _, hdr := range []map[string]string{nil, {"Authorization": "Bearer viewer-secret"}} {
+			if rec := meterGet(t, s, p, hdr); rec.Code != http.StatusNotFound {
+				t.Errorf("%s (signed in %v) = %d, want 404", p, hdr != nil, rec.Code)
+			}
 		}
 	}
 	if rec := meterGet(t, s, "/v1/live", nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("signed-out /v1/live = %d, want 401", rec.Code)
-	}
-}
-
-func TestLanding_NoFrontPageFallsBackToTheGate(t *testing.T) {
-	s := meterServer(t)
-	s.UI = fstest.MapFS{"index.html": {Data: []byte("APP-SHELL")}}
-	if rec := meterGet(t, s, "/", nil); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("signed-out / without landing.html = %d, want the gate's 401", rec.Code)
 	}
 }
 

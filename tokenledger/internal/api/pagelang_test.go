@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"testing/fstest"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 )
@@ -39,7 +38,7 @@ func TestPageText_BothLanguagesEveryKey(t *testing.T) {
 func TestPageText_TemplatesNameOnlyKnownKeys(t *testing.T) {
 	re := regexp.MustCompile(`\{\{\s*tb? "([\w.]+)"`)
 	direct := regexp.MustCompile(`pageT\([^,]+, "([\w.]+)"\)`)
-	for _, f := range []string{"github_auth.go", "fleet_certs.go", "pagelang.go", "meter.go", "../../web/dist/landing.html"} {
+	for _, f := range []string{"github_auth.go", "fleet_certs.go", "pagelang.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -120,50 +119,6 @@ func TestLangHrefKeepsTheRestOfTheQuery(t *testing.T) {
 	r := httptest.NewRequest("GET", "/fleet/login?code=ABCD-EFGH&lang=en", nil)
 	if got := langHref(r, i18n.ZhCN); got != "?code=ABCD-EFGH&lang=zh" {
 		t.Errorf("langHref = %q", got)
-	}
-}
-
-// The front page, drawn from the real landing.html: a Chinese browser gets
-// <html lang="zh-CN"> and Chinese on the first paint; ?lang=en gets English
-// and remembers it; nothing is left untranslated.
-func TestLanding_ServerPicksTheLanguage(t *testing.T) {
-	src, err := os.ReadFile("../../web/dist/landing.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := badgeServer(t, false)
-	s.Site = true
-	s.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, "landing.html": {Data: src}}
-
-	rec := meterGet(t, s, "/", map[string]string{"Accept-Language": "zh-CN,zh;q=0.9"})
-	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, `<html lang="zh-CN">`) || !strings.Contains(body, "已经替你装好") {
-		t.Fatalf("zh browser: %d %.300s", rec.Code, body)
-	}
-	if !strings.Contains(body, `href="?lang=en"`) || !strings.Contains(body, `aria-current="true">中文`) {
-		t.Errorf("zh page has no working switch to EN")
-	}
-	for _, en := range []string{"How it works", "Sign in", "Copy", "Open on your phone", "Waiting on you", "Hosted at"} {
-		if strings.Contains(body, en) {
-			t.Errorf("zh page still says %q", en)
-		}
-	}
-
-	rec = meterGet(t, s, "/?lang=en", map[string]string{"Accept-Language": "zh-CN"})
-	body = rec.Body.String()
-	if !strings.Contains(body, `<html lang="en">`) || !strings.Contains(body, "already set up") {
-		t.Fatalf("?lang=en: %.300s", body)
-	}
-	// The new page (claude-fleet#3307): the phone's way in is a button, and no
-	// command that no longer exists is shown.
-	if !strings.Contains(body, `href="/fleet/keys"`) || strings.Contains(body, "fleet spawn") {
-		t.Errorf("?lang=en: no /fleet/keys button, or an old command: %.300s", body)
-	}
-	if c := cookieOf(rec, langCookie); c == nil || c.Value != i18n.EN {
-		t.Errorf("?lang=en did not remember the choice: %+v", c)
-	}
-	if !strings.Contains(rec.Header().Get("Vary"), "Accept-Language") {
-		t.Errorf("Vary = %q; a cache must not hand one language's page to the other", rec.Header().Get("Vary"))
 	}
 }
 

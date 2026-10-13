@@ -2,12 +2,10 @@ package api
 
 import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 
-// pageText is every sentence the public pages say — the front page,
-// /signin, the "can't use this hub" refusal and the /fleet/login
+// pageText is every sentence the public pages say — /signin, the "can't use this hub" refusal and the /fleet/login
 // confirmation — in both languages (claude-fleet#2023).
 //
-// The words follow the Chinese design page's glossary, the same one at the
-// head of web/dist/lib/i18n/zh-CN.js: 会话 / 执行会话 / 机器 / 设备 / 订阅 /
+// The words follow the Chinese design page's glossary: 会话 / 执行会话 / 机器 / 设备 / 订阅 /
 // 订阅池 / 余量 / 登录 / 管理员 / 使用者 / 凭据. Never translated: the product
 // name, commands (fleet login), session keys, machine names, model ids.
 //
@@ -16,116 +14,6 @@ import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 // language and a template naming a key that is not here.
 var pageText = map[string]i18n.Text{
 	"lang.label": {i18n.EN: "Language", i18n.ZhCN: "语言"},
-
-	// ── the front page (landing.html) ─────────────────────────────────
-	// For people who are not developers (claude-fleet#3307): plain words, no
-	// internal names. The mock's words are the client's own (fleet_view.py's
-	// panel, fleet-topbar.py's top line).
-	"landing.description": {
-		i18n.EN:   "Claude Code, already set up for you: it runs on our machines, and you open it from your computer or your phone.",
-		i18n.ZhCN: "Claude Code，已经替你装好：跑在我们的机器上，从电脑或手机打开就能用。",
-	},
-	"landing.nav.how": {i18n.EN: "How it works", i18n.ZhCN: "怎么用"},
-	"landing.signin":  {i18n.EN: "Sign in", i18n.ZhCN: "登录"},
-	"landing.h1.pre":  {i18n.EN: "Claude Code, ", i18n.ZhCN: "Claude Code，"},
-	"landing.h1.em":   {i18n.EN: "already set up", i18n.ZhCN: "已经替你装好"},
-	"landing.h1.post": {i18n.EN: " for you.", i18n.ZhCN: "。"},
-	"landing.sub": {
-		i18n.EN: "It runs on our machines, and you open it from your computer or your phone. " +
-			"There is nothing to install on the phone, the subscriptions are provided, and the machine you land on is your own home machine.",
-		i18n.ZhCN: "它跑在我们的机器上，你从电脑或手机打开就能用。" +
-			"手机上什么都不用装，订阅由我们提供，你连进去的是属于你自己的家机器。",
-	},
-	"landing.cta.signin":    {i18n.EN: "Sign in with GitHub", i18n.ZhCN: "用 GitHub 登录"},
-	"landing.cta.phone":     {i18n.EN: "Open on your phone", i18n.ZhCN: "在手机上打开"},
-	"landing.install.label": {i18n.EN: "On a computer, one line sets it up:", i18n.ZhCN: "在电脑上，一行就装好："},
-	"landing.copy":          {i18n.EN: "Copy", i18n.ZhCN: "复制"},
-	"landing.copied":        {i18n.EN: "Copied", i18n.ZhCN: "已复制"},
-
-	"landing.mock.aria": {
-		i18n.EN:   "A computer and a phone, each showing one session full screen with the panel of every session open over it",
-		i18n.ZhCN: "一台电脑和一部手机，各自整屏显示一个会话，上面打开着列出所有会话的面板",
-	},
-	"landing.mock.cap.mac":   {i18n.EN: "On your computer · iTerm2 · ⌘P", i18n.ZhCN: "在电脑上 · iTerm2 · ⌘P"},
-	"landing.mock.cap.phone": {i18n.EN: "On your phone · Termius · ⌃space", i18n.ZhCN: "在手机上 · Termius · ⌃空格"},
-	"landing.mock.working":   {i18n.EN: "working", i18n.ZhCN: "在干活"},
-	"landing.mock.left":      {i18n.EN: "62% left", i18n.ZhCN: "剩余 62%"},
-	"landing.mock.s1":        {i18n.EN: "Weekly sales report", i18n.ZhCN: "每周销售周报"},
-	"landing.mock.s2":        {i18n.EN: "Fix the signup form", i18n.ZhCN: "修好报名表"},
-	"landing.mock.s3":        {i18n.EN: "Draft the newsletter", i18n.ZhCN: "写本期简报"},
-	"landing.mock.s4":        {i18n.EN: "Tidy the photos folder", i18n.ZhCN: "整理照片文件夹"},
-	"landing.mock.ask":       {i18n.EN: "asks: which colour?", i18n.ZhCN: "在问：用哪个颜色？"},
-	"landing.mock.you":       {i18n.EN: "Chart last month's sales from sales.csv", i18n.ZhCN: "用 sales.csv 画上个月的销售图"},
-	"landing.mock.c1":        {i18n.EN: "Read sales.csv · 412 rows", i18n.ZhCN: "读了 sales.csv · 412 行"},
-	"landing.mock.c2":        {i18n.EN: "Wrote chart.png", i18n.ZhCN: "写好 chart.png"},
-	"landing.mock.c3":        {i18n.EN: "Sales were up 18% in March, mostly from the new shop.", i18n.ZhCN: "三月销售涨了 18%，主要来自新开的店。"},
-	"landing.mock.filter":    {i18n.EN: "type to filter", i18n.ZhCN: "打字筛选"},
-	"landing.mock.dispatch":  {i18n.EN: "⚡ Dispatch a task…", i18n.ZhCN: "⚡ 派一件事…"},
-	"landing.mock.new":       {i18n.EN: "+ New session", i18n.ZhCN: "+ 新会话"},
-	"landing.mock.g.ask":     {i18n.EN: "Waiting on you 1", i18n.ZhCN: "等你 1"},
-	"landing.mock.g.work":    {i18n.EN: "Working 2", i18n.ZhCN: "在干活 2"},
-	"landing.mock.g.landed":  {i18n.EN: "Just landed 1", i18n.ZhCN: "刚落地 1"},
-	"landing.mock.keys":      {i18n.EN: "↵ go  Tab act  ↑↓ pick  esc close", i18n.ZhCN: "↵ 切过去  Tab 操作  ↑↓ 选  esc 关"},
-	"landing.mock.home":      {i18n.EN: "home", i18n.ZhCN: "家机器"},
-	"landing.mock.phonekey":  {i18n.EN: "ctrl, then space", i18n.ZhCN: "点 ctrl，再点空格"},
-
-	"landing.meter.caption": {
-		i18n.EN:   "Claude and Codex tokens used here so far, counted live.",
-		i18n.ZhCN: "这里至今用掉的 Claude 和 Codex token，实时累计。",
-	},
-	"landing.what.eyebrow": {i18n.EN: "Why it's easy", i18n.ZhCN: "为什么省事"},
-	"landing.what.h2":      {i18n.EN: "One key, any device, a machine of your own", i18n.ZhCN: "一个键、任何设备、一台你自己的机器"},
-	"landing.f1.h":         {i18n.EN: "One key: ⌘P", i18n.ZhCN: "一个键：⌘P"},
-	"landing.f1.p": {
-		i18n.EN:   "⌘P opens one panel with every session you have, on every machine, and everything you can do with them: start one, answer one, put one away.",
-		i18n.ZhCN: "⌘P 打开一个面板：你所有的会话，不管在哪台机器上，还有能对它们做的事——开一个、回答一个、收起一个，都在这里。",
-	},
-	"landing.f2.h": {i18n.EN: "Any device", i18n.ZhCN: "任何设备"},
-	"landing.f2.p": {
-		i18n.EN:   "A computer takes one line to set up. A phone takes nothing but Termius: no other install, no Tailscale, and no computer left on.",
-		i18n.ZhCN: "电脑上一行装好。手机上只要 Termius：不用再装别的，不用 Tailscale，也不用开着电脑。",
-	},
-	"landing.f3.h": {i18n.EN: "Your home machine, already set up", i18n.ZhCN: "你的家机器，已经装好"},
-	"landing.f3.p": {
-		i18n.EN:   "Claude Code is installed, the subscriptions are pooled, and the Mac and Linux machines behind it are looked after for you.",
-		i18n.ZhCN: "Claude Code 已经装好，订阅合在一个池里共用，背后的 Mac 和 Linux 机器也有人替你照看。",
-	},
-	"landing.how.eyebrow":  {i18n.EN: "How it works", i18n.ZhCN: "怎么用"},
-	"landing.how.h2":       {i18n.EN: "Start from whichever device is in your hand", i18n.ZhCN: "手边是哪台设备，就从哪台开始"},
-	"landing.how.computer": {i18n.EN: "On a computer", i18n.ZhCN: "在电脑上"},
-	"landing.how.phone":    {i18n.EN: "On a phone", i18n.ZhCN: "在手机上"},
-	"landing.c1.h":         {i18n.EN: "Install", i18n.ZhCN: "装上"},
-	"landing.c1.pre":       {i18n.EN: "Paste ", i18n.ZhCN: "在「终端」里粘贴 "},
-	"landing.c1.post":      {i18n.EN: " into Terminal and press return.", i18n.ZhCN: "，按回车。"},
-	"landing.c2.h":         {i18n.EN: "Type fleet", i18n.ZhCN: "输入 fleet"},
-	"landing.c2.post": {
-		i18n.EN:   " signs you in with GitHub and takes you to your home machine.",
-		i18n.ZhCN: " 会用 GitHub 登录，然后带你进家机器。",
-	},
-	"landing.c3.h": {i18n.EN: "Press ⌘P", i18n.ZhCN: "按 ⌘P"},
-	"landing.c3.p": {i18n.EN: "Pick a session, or start a new one.", i18n.ZhCN: "挑一个会话，或者开一个新的。"},
-	"landing.p1.h": {i18n.EN: "Get Termius", i18n.ZhCN: "装 Termius"},
-	"landing.p1.p": {
-		i18n.EN:   "It is free on the App Store. Make a key in it; the private half never leaves your phone.",
-		i18n.ZhCN: "App Store 里免费。在里面生成一把钥匙，私钥一直留在手机上。",
-	},
-	"landing.p2.h":    {i18n.EN: "Add your key", i18n.ZhCN: "加上钥匙"},
-	"landing.p2.pre":  {i18n.EN: "Sign in with GitHub and paste the public key on ", i18n.ZhCN: "用 GitHub 登录后，把公钥贴到 "},
-	"landing.p2.post": {i18n.EN: ".", i18n.ZhCN: "。"},
-	"landing.p3.h":    {i18n.EN: "Connect", i18n.ZhCN: "连上"},
-	"landing.p3.pre":  {i18n.EN: "In Termius, add a host for ", i18n.ZhCN: "在 Termius 里新建主机 "},
-	"landing.p3.addr": {i18n.EN: "your address", i18n.ZhCN: "你的地址"},
-	"landing.p3.post": {
-		i18n.EN:   ". The keys page gives you all four fields to copy.",
-		i18n.ZhCN: "：钥匙页把要填的四项都写好了，照抄就行。",
-	},
-	"landing.p4.h": {i18n.EN: "Press ⌃space", i18n.ZhCN: "按 ⌃空格"},
-	"landing.p4.p": {
-		i18n.EN:   "Tap ctrl, then space: the same panel as ⌘P on a computer.",
-		i18n.ZhCN: "先点 ctrl，再点空格：就是电脑上 ⌘P 的那个面板。",
-	},
-	"landing.foot.oss":    {i18n.EN: "claudefleet · open source, MIT", i18n.ZhCN: "claudefleet · 开源，MIT 许可"},
-	"landing.foot.hosted": {i18n.EN: "Hosted at {host}", i18n.ZhCN: "部署在 {host}"},
 
 	// ── /signin ───────────────────────────────────────────────────────
 	"signin.title":  {i18n.EN: "Sign in · claudefleet", i18n.ZhCN: "登录 · claudefleet"},

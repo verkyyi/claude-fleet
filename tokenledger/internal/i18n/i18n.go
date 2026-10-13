@@ -116,8 +116,7 @@ func (t Text) In(locale string) string {
 //
 // An unknown placeholder is left STANDING rather than replaced with an empty
 // string: a typo in a template's variable name should look like a bug, not like
-// a sentence that quietly stopped saying how many. Mirrors the same rule in
-// web/dist/lib/i18n.js so a translator sees one convention, not two.
+// a sentence that quietly stopped saying how many.
 func Interpolate(template string, args map[string]string) string {
 	if len(args) == 0 || !strings.Contains(template, "{") {
 		return template

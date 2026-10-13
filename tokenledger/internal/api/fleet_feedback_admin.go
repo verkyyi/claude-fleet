@@ -38,7 +38,6 @@ const (
 	adminFeedbackPrefix = AdminFeedbackPath + "/"
 	feedbackPageID      = "feedback"
 	feedbackPagePath    = "/admin/feedback"
-	feedbackPageFile    = "admin/feedback.html"
 	feedbackPageSize    = 50
 )
 

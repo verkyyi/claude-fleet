@@ -1,8 +1,8 @@
-// Package web carries the built dashboard.
-//
-// The SPA is compiled into the binary so a self-hoster deploys one file. When
-// the binary is built without running the frontend build, dist holds only a
-// placeholder and the hub says so rather than 404-ing mysteriously.
+// Package web carries what the hub serves of the browser's: the tab icons,
+// and the builds packed beside them before the image is built — the website,
+// its documentation, the console and the way-in pages' theme. The old
+// console that dist used to hold is gone (claude-fleet#3939); dist keeps
+// only the three icons, for a hub whose site is off.
 package web
 
 import (
@@ -13,18 +13,8 @@ import (
 //go:embed all:dist
 var dist embed.FS
 
-// Assets returns the dashboard's file system rooted at dist, or nil when no
-// dashboard was built in.
-func Assets() fs.FS {
-	sub, err := fs.Sub(dist, "dist")
-	if err != nil {
-		return nil
-	}
-	if _, err := fs.Stat(sub, "index.html"); err != nil {
-		return nil
-	}
-	return sub
-}
+// Assets returns dist — the tab icons — or nil when this binary carries none.
+func Assets() fs.FS { return built(dist, "dist", "favicon.svg") }
 
 // The public website and its documentation (claude-fleet#3584). Both are build
 // outputs like the client pack — bin/site-build.sh and bin/docs-build.sh write
