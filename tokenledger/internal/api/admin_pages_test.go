@@ -14,7 +14,7 @@ import (
 
 // The admin pages (claude-fleet#1990): every write an admin makes from them
 // lands in the one audit the Audit page reads, sorted into its filter; a
-// pool subscription can be paused; a user gets the 403 page.
+// pool subscription can be paused; a user gets the 404 an unknown address gets.
 
 func auditOf(t *testing.T, h *harness, q string) []AuditEvent {
 	t.Helper()
@@ -221,7 +221,7 @@ func TestAuditKinds(t *testing.T) {
 }
 
 // A user asking for an admin page is refused it whole (claude-fleet#2516):
-// a 403 that says 「这页不在你的菜单上」 and carries none of the page —
+// the 404 an unknown address gets (claude-fleet#3925), none of the page —
 // by its route and by its files' direct paths alike — plus one role_denied
 // row each; an admin and the operator get the page.
 func TestAdminPages_UserRefusedWhole(t *testing.T) {
@@ -260,12 +260,19 @@ func TestAdminPages_UserRefusedWhole(t *testing.T) {
 		for _, accept := range []string{"text/html", "application/json"} {
 			code, body := get(user, "", p, accept)
 			refusals++
-			if code != http.StatusForbidden || !strings.Contains(body, "这页不在你的菜单上") {
-				t.Errorf("user GET %s (%s) = %d %q; want 403 「这页不在你的菜单上」", p, accept, code, body)
+			if code != http.StatusNotFound || body != "404 page not found\n" {
+				t.Errorf("user GET %s (%s) = %d %q; want the plain 404", p, accept, code, body)
 			}
 			if strings.Contains(body, "skeleton") {
 				t.Errorf("user GET %s (%s) carries the page: %q", p, accept, body)
 			}
+		}
+		if to, moved := consoleTarget(pagePath(p), "", roleAdmin); moved {
+			// a page the console table already moves on (claude-fleet#3925)
+			if code, _ := get(admin, "", p, "text/html"); code != http.StatusMovedPermanently {
+				t.Errorf("admin GET %s = %d; want 301 → %s", p, code, to)
+			}
+			continue
 		}
 		if code, body := get(admin, "", p, "text/html"); code != http.StatusOK || !strings.Contains(body, "skeleton") {
 			t.Errorf("admin GET %s = %d %q; want 200 and the page", p, code, body)

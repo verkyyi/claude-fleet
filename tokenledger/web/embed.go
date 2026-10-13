@@ -44,6 +44,23 @@ func Site() fs.FS { return built(site, "site", "index.html") }
 // Docs returns the built documentation (zh/…, en/…), or nil.
 func Docs() fs.FS { return built(docs, "docs", "zh/index.html") }
 
+// The new console (claude-fleet#3925, EPIC #3923): bin/web-console-pack.sh
+// copies extras/web-console/dist here before the image is built — app/ (the
+// member side, /app) and admin/ (the admin side, /admin), each its own
+// index.html and assets/. Only .gitkeep is committed.
+
+//go:embed all:console
+var console embed.FS
+
+// Console returns the new console's build, or nil when this binary carries
+// neither entry.
+func Console() fs.FS {
+	if c := built(console, "console", "app/index.html"); c != nil {
+		return c
+	}
+	return built(console, "console", "admin/index.html")
+}
+
 func built(f embed.FS, dir, probe string) fs.FS {
 	sub, err := fs.Sub(f, dir)
 	if err != nil {

@@ -14,7 +14,7 @@ import (
 // read from the route table itself, lib/shell.js's PAGES — answers the one
 // app document, so the shell inside it can swap pages in place and a
 // bookmark or a reload of any page lands on the same app. The gates are the
-// routes' own and unchanged: a user still gets the bare 403 on an admin page,
+// routes' own: a user gets the 404 on an admin page (claude-fleet#3925),
 // none of the document; an unknown path is still a 404; a build without
 // app.html serves each page's own file, as before.
 func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
@@ -75,8 +75,8 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 		}
 		code, body := get(user, path)
 		switch {
-		case adminOnly && (code != http.StatusForbidden || strings.Contains(body, doc)):
-			t.Errorf("user GET %s = %d %q; want the bare 403, none of the app", path, code, body)
+		case adminOnly && (code != http.StatusNotFound || strings.Contains(body, doc)):
+			t.Errorf("user GET %s = %d %q; want the plain 404, none of the app", path, code, body)
 		case !adminOnly && (code != http.StatusOK || !strings.Contains(body, doc)):
 			t.Errorf("user GET %s = %d %q; want 200 and the app document", path, code, body)
 		}

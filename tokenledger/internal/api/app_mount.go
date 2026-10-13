@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
+	"time"
 )
 
 // The console lives under /app; the root is the public site (claude-fleet#3583,
@@ -59,6 +63,286 @@ func isAppPage(p string) bool {
 	return false
 }
 
+// The new console (claude-fleet#3925, EPIC #3923): a member's side under
+// AppPrefix and an admin's under AdminPrefix, one page at a time. consolePages
+// is the ONE table of where every old page goes; a page's member ticket flips
+// its own row's live when the new page lands, and from then on its old
+// address (GET / HEAD) answers 301 to the new one, query kept, in one hop.
+// Until then the old page answers as it always has. Any other method reaches
+// the old page until the old console is taken down (C16).
+//
+// The admin side is guarded whole (EPIC #3923 rule 6): to anyone who is not
+// an admin, AdminPrefix and everything under it, every admin page's old
+// address and the bare ones before /app, answer exactly what an address that
+// does not exist answers — a 404, one role_denied audit row — never a
+// redirect, which would itself say the page is there.
+
+// AdminPrefix is where the admin side of the new console is mounted.
+const AdminPrefix = "/admin"
+
+// The sides of the console.
+const (
+	sideMe    = "me"    // 我的: every signed-in person's
+	sideAdmin = "admin" // 管理: an admin's
+	sideEntry = "entry" // the way in: sign-in, invite, the scan, sign-out
+)
+
+// consolePage is one old page and where it goes. old and new are paths;
+// under = old is everything below it, its rest carried over into a new that
+// ends in "/". new may carry a query, merged ahead of the request's. forUser
+// is where a member goes from an admin-side row that also shows a member
+// their own (one machine); empty = a member gets the 404. owner is the EPIC
+// member that moves it.
+type consolePage struct {
+	old, new string
+	side     string
+	owner    string
+	live     bool
+	under    bool
+	forUser  string
+}
+
+// consolePages is every page the console moves (EPIC #3923 «逐页去向»).
+var consolePages = []consolePage{
+	// 我的
+	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3"},
+	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3"},
+	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
+	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
+	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5"},
+	{old: TicketsPagePath + "/", new: AppPrefix + TasksPagePath + "/tickets/", side: sideMe, owner: "C5", under: true},
+	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6"},
+	// 我的额度 is folded into 我的用量 already; the page only moved on in
+	// the browser, a second hop.
+	{old: AppPrefix + "/quota", new: AppPrefix + "/usage", side: sideMe, owner: "C2", live: true},
+	{old: AppPrefix + "/connect", new: AppPrefix + "/devices", side: sideMe, owner: "C7"},
+	{old: EntryPagePath, new: AppPrefix + "/devices?tab=phone", side: sideMe, owner: "C7"},
+	{old: EntryConnPath, new: AppPrefix + "/devices?tab=home", side: sideMe, owner: "C7"},
+	{old: AppPrefix + "/machines", new: AppPrefix + "/devices?tab=home", side: sideMe, owner: "C7"},
+	{old: AppPrefix + "/config", new: AppPrefix + "/settings", side: sideMe, owner: "C8"},
+	// The way in: each keeps its address and changes only its look.
+	{old: AppPrefix + "/signin", new: AppPrefix + "/signin", side: sideEntry, owner: "C9"},
+	{old: "/fleet/login", new: "/fleet/login", side: sideEntry, owner: "C9"},
+	{old: LoginRefusedPath, new: LoginRefusedPath, side: sideEntry, owner: "C9"},
+	{old: InvitePath, new: InvitePath, side: sideEntry, owner: "C9", under: true},
+	{old: AppPrefix + "/logout", new: AppPrefix + "/logout", side: sideEntry, owner: "C3"},
+	// 管理
+	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + "/devices?tab=home", under: true},
+	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10"},
+	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true},
+	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11"},
+	// All devices is the machines page's 客户端 tab already: one hop there,
+	// and on to the new page once that row is live.
+	{old: AppPrefix + "/admin/devices", new: AppPrefix + "/nodes?tab=clients", side: sideAdmin, owner: "C2", live: true},
+	{old: AppPrefix + "/subscriptions", new: AdminPrefix + "/pool", side: sideAdmin, owner: "C12"},
+	{old: AppPrefix + "/subscriptions/", new: AdminPrefix + "/pool/", side: sideAdmin, owner: "C12", under: true},
+	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12"},
+	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13"},
+	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13"},
+	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14"},
+	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15"},
+	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15"},
+	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15"},
+}
+
+// consoleRow is the row for path p: an exact old first, else the longest
+// old prefix.
+func consoleRow(p string) (consolePage, bool) {
+	var best consolePage
+	found := false
+	for _, c := range consolePages {
+		if c.old == p {
+			return c, true
+		}
+		if c.under && strings.HasPrefix(p, c.old) && len(c.old) > len(best.old) {
+			best, found = c, true
+		}
+	}
+	return best, found
+}
+
+// isAdminPath says whether p is the admin side's: AdminPrefix and below, an
+// admin row's old address, or the bare address before /app of one.
+func isAdminPath(p string) bool {
+	if p == AdminPrefix || strings.HasPrefix(p, AdminPrefix+"/") {
+		return true
+	}
+	c, ok := consoleRow(p)
+	if !ok && isAppPage(p) {
+		c, ok = consoleRow(appURL(p))
+	}
+	// a row that also shows a member their own is not the admin side's
+	return ok && c.side == sideAdmin && c.forUser == ""
+}
+
+// joinQuery is to with the request's query q after the query to already
+// carries — a key q names itself is q's (?tab=a on a row that says
+// ?tab=clients keeps tab=a), q kept byte for byte.
+func joinQuery(to, q string) string {
+	if q == "" {
+		return to
+	}
+	pth, tq, _ := strings.Cut(to, "?")
+	if tq == "" {
+		return pth + "?" + q
+	}
+	have, _ := url.ParseQuery(q)
+	var keep []string
+	for _, kv := range strings.Split(tq, "&") {
+		k, _, _ := strings.Cut(kv, "=")
+		if k, err := url.QueryUnescape(k); err == nil && have.Has(k) {
+			continue
+		}
+		keep = append(keep, kv)
+	}
+	return pth + "?" + strings.Join(append(keep, q), "&")
+}
+
+// consoleTarget is where path p (query q) ends up through the table for
+// role: every live row followed to its end, so an old address is one hop
+// from its final page. ok=false when no live row moves it.
+func consoleTarget(p, q, role string) (string, bool) {
+	to, moved := joinQuery(p, q), false
+	for i := 0; i <= len(consolePages); i++ {
+		pth, query, _ := strings.Cut(to, "?")
+		c, ok := consoleRow(pth)
+		if !ok || !c.live {
+			break
+		}
+		dest := c.new
+		if role == roleUser && c.forUser != "" {
+			dest = c.forUser
+		}
+		if c.under && c.old != pth {
+			// carry the rest over, into a destination that takes one
+			if rest := strings.TrimPrefix(pth, c.old); strings.HasSuffix(dest, "/") {
+				dest += rest
+			}
+		}
+		next := joinQuery(dest, query)
+		if next == to {
+			break
+		}
+		to, moved = next, true
+	}
+	return to, moved
+}
+
+// consoleRedirect is where r should be sent through the table — its old
+// address in the table, or a bare one before /app (one hop to the end, not
+// two). ok=false: no redirect, serve r where it is.
+func consoleRedirect(r *http.Request) (to string, ok bool) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return "", false
+	}
+	if r.URL.Query().Has("token") {
+		return "", false // the gate moves a ?token= link into its cookie first
+	}
+	p, role := r.URL.Path, roleOf(r.Context())
+	if !strings.HasPrefix(p, AppPrefix+"/") && p != AppPrefix && isAppPage(p) {
+		// a bookmark from before /app (claude-fleet#3583)
+		to, _ := consoleTarget(appURL(p), r.URL.RawQuery, role)
+		return to, true
+	}
+	return consoleTarget(p, r.URL.RawQuery, role)
+}
+
+// moveOn sends r on through the table (consoleRedirect), else to serve. A
+// live row that sends a member somewhere else than an admin asks the gate
+// who r is first.
+func (s *Server) moveOn(w http.ResponseWriter, r *http.Request, serve http.HandlerFunc) {
+	move := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if to, ok := consoleRedirect(r); ok {
+			http.Redirect(w, r, to, http.StatusMovedPermanently)
+			return
+		}
+		serve(w, r)
+	})
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		p := r.URL.Path
+		if p != AppPrefix && !strings.HasPrefix(p, AppPrefix+"/") && isAppPage(p) {
+			p = appURL(p)
+		}
+		if c, ok := consoleRow(p); ok && c.live && c.forUser != "" {
+			s.viewerOnly(move).ServeHTTP(w, r)
+			return
+		}
+	}
+	move.ServeHTTP(w, r)
+}
+
+// adminGate answers a request on the admin side: to anyone who is not an
+// admin the 404 an unknown address gets (audited), else next. Mounted
+// behind viewerOnly, so a stranger is asked to sign in first, as for any
+// page, whatever the address.
+func (s *Server) adminGate(next http.Handler) http.Handler {
+	return s.viewerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if roleOf(r.Context()) == roleUser {
+			s.denyAdminPage(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// adminSide is the router's AdminPrefix and below: the old console's own
+// files still under /admin/ as before (ui, serveUI gates them), else — past
+// the admin gate — the new console's admin entry.
+func (s *Server) adminSide(ui http.Handler) http.Handler {
+	entry := s.adminGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.serveConsole(w, r, "admin", strings.TrimPrefix(r.URL.Path, AdminPrefix))
+	}))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.UI != nil && r.URL.Path != AdminPrefix {
+			if st, err := fs.Stat(s.UI, strings.TrimPrefix(r.URL.Path, "/")); err == nil && !st.IsDir() {
+				ui.ServeHTTP(w, r)
+				return
+			}
+		}
+		entry.ServeHTTP(w, r)
+	})
+}
+
+// consoleNewLive says whether p is a live row's new page (so a bare old
+// address of the same spelling, /admin/settings, is the new page now).
+func consoleNewLive(p string) bool {
+	for _, c := range consolePages {
+		if !c.live {
+			continue
+		}
+		np, _, _ := strings.Cut(c.new, "?")
+		if np == p || (strings.HasSuffix(np, "/") && strings.HasPrefix(p, np)) {
+			return true
+		}
+	}
+	return false
+}
+
+// serveConsole serves the new console's side ("app" or "admin"): a file
+// under assets/ as it is, any other path the side's index.html (its router
+// draws the page). 404 while this hub carries no build of that side.
+func (s *Server) serveConsole(w http.ResponseWriter, r *http.Request, side, rest string) {
+	if s.ConsoleFS == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		http.NotFound(w, r)
+		return
+	}
+	name := side + "/index.html"
+	if strings.HasPrefix(rest, "/assets/") {
+		name = side + rest
+	}
+	b, err := fs.ReadFile(s.ConsoleFS, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.HasSuffix(name, "/index.html") {
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	http.ServeContent(w, r, path.Base(name), time.Time{}, bytes.NewReader(b))
+}
+
 type appMountedKey struct{}
 
 // appMounted says whether r came in under AppPrefix.
@@ -100,38 +384,74 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
+		case strings.HasPrefix(p, AppPrefix+"/assets/"):
+			// the new console's member side (claude-fleet#3925)
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+			s.serveConsole(w, r, "app", strings.TrimPrefix(p, AppPrefix))
+		case (p == AdminPrefix || strings.HasPrefix(p, AdminPrefix+"/")) && (!isAppPage(p) || consoleNewLive(p)):
+			// the admin side (adminSide, mounted in the router); a new page
+			// spelled like a bare old one (/admin/settings) is the router's
+			// old route, so it is answered here
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+			if isAppPage(p) {
+				s.adminSide(next).ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		case isAdminPath(p) && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+			// an admin page's old address: an admin moves on (or reaches the
+			// page while its row is not live); anyone else, the 404
+			if strings.HasPrefix(p, AppPrefix+"/") {
+				w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+			}
+			s.adminGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if to, ok := consoleRedirect(r); ok {
+					http.Redirect(w, r, to, http.StatusMovedPermanently)
+					return
+				}
+				if p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/") {
+					s.serveAppPage(w, r, next)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})).ServeHTTP(w, r)
 		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
-			inner := strings.TrimPrefix(p, AppPrefix)
-			if inner == "" || inner == "/" {
-				inner = "/"
-			}
-			if inner == "/try" {
-				// The site's 「试用」 button; until the try page has its own
-				// road (C20, claude-fleet#3590) it opens the console, whose
-				// gate asks a stranger to sign in (claude-fleet#3584).
-				http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
-				return
-			}
-			if !isAppPage(inner) {
-				http.NotFound(w, r)
-				return
-			}
-			r2 := r.WithContext(context.WithValue(r.Context(), appMountedKey{}, true))
-			u := *r.URL
-			u.Path, u.RawPath = inner, ""
-			r2.URL = &u
-			next.ServeHTTP(w, r2)
+			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) { s.serveAppPage(w, r, next) })
 		case p == "/":
 			s.serveRoot(w, r)
 		case s.serveSitePath(w, r):
 			// the site's other paths: /en/, /site/, icons, /docs/ (site_serve.go)
-		case isAppPage(p) && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-			http.Redirect(w, r, withQuery(AppPrefix+p, r), http.StatusMovedPermanently)
 		default:
-			next.ServeHTTP(w, r)
+			// an old page outside /app, or a bare one from before it, moves on
+			s.moveOn(w, r, next.ServeHTTP)
 		}
 	})
+}
+
+// serveAppPage serves a console page under AppPrefix: the page at its old
+// path, marked as having come in under /app.
+func (s *Server) serveAppPage(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	inner := strings.TrimPrefix(r.URL.Path, AppPrefix)
+	if inner == "" || inner == "/" {
+		inner = "/"
+	}
+	if inner == "/try" {
+		// The site's 「试用」 button; until the try page has its own
+		// road (C20, claude-fleet#3590) it opens the console, whose
+		// gate asks a stranger to sign in (claude-fleet#3584).
+		http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
+		return
+	}
+	if !isAppPage(inner) {
+		http.NotFound(w, r)
+		return
+	}
+	r2 := r.WithContext(context.WithValue(r.Context(), appMountedKey{}, true))
+	u := *r.URL
+	u.Path, u.RawPath = inner, ""
+	r2.URL = &u
+	next.ServeHTTP(w, r2)
 }
 
 // serveRoot answers "/": the public site for someone signed out while the

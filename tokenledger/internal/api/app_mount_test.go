@@ -35,9 +35,11 @@ func appGet(t *testing.T, h *ghHarness, method, path string, sess *http.Cookie) 
 	return resp
 }
 
-// Every old console address answers 301 to the same page under /app, its
-// query kept — a bookmark never lands on nothing; any other method still
-// reaches the page where it was.
+// Every old console address answers 301 to the same page under /app — or
+// straight on to where the console table sends it (claude-fleet#3925) — its
+// query kept: a bookmark never lands on nothing; any other method still
+// reaches the page where it was. A stranger asking for an admin page's old
+// address is asked to sign in, never told where it went.
 func TestAppOldPathsMoveUnderApp(t *testing.T) {
 	h, admin, _ := rolesHarness(t)
 	var olds []string
@@ -51,11 +53,17 @@ func TestAppOldPathsMoveUnderApp(t *testing.T) {
 	}
 	sort.Strings(olds)
 	for _, p := range olds {
+		want, _ := consoleTarget(AppPrefix+p, "tab=a&b=c", roleAdmin)
 		resp := appGet(t, h, http.MethodGet, p+"?tab=a&b=c", admin)
-		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix+p+"?tab=a&b=c" {
-			t.Errorf("GET %s = %d → %q; want 301 → %s?tab=a&b=c", p, resp.StatusCode, resp.Header.Get("Location"), AppPrefix+p)
+		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != want {
+			t.Errorf("GET %s = %d → %q; want 301 → %s", p, resp.StatusCode, resp.Header.Get("Location"), want)
 		}
-		if resp := appGet(t, h, http.MethodHead, p, nil); resp.StatusCode != http.StatusMovedPermanently {
+		resp = appGet(t, h, http.MethodHead, p, nil)
+		if isAdminPath(p) {
+			if resp.StatusCode == http.StatusMovedPermanently {
+				t.Errorf("stranger HEAD %s = 301 → %q; an admin page's way on is an admin's", p, resp.Header.Get("Location"))
+			}
+		} else if resp.StatusCode != http.StatusMovedPermanently {
 			t.Errorf("HEAD %s = %d; want 301", p, resp.StatusCode)
 		}
 	}
@@ -90,7 +98,7 @@ func TestAppIsNoindex(t *testing.T) {
 	}{
 		{AppPrefix, admin, http.StatusOK}, {AppPrefix + "/", admin, http.StatusOK},
 		{AppPrefix + "/sessions", user, http.StatusOK}, {AppPrefix + "/machines/mac-a", user, http.StatusOK},
-		{AppPrefix + "/nodes", user, http.StatusForbidden}, {AppPrefix + "/signin", nil, http.StatusOK},
+		{AppPrefix + "/nodes", user, http.StatusNotFound}, {AppPrefix + "/signin", nil, http.StatusOK},
 		{AppPrefix + "/sessions", nil, http.StatusFound},
 		{AppPrefix + "/v1/fleet/me", admin, http.StatusNotFound}, {AppPrefix + "/install", nil, http.StatusNotFound},
 		{AppPrefix + "/app.css", admin, http.StatusNotFound},

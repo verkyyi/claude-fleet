@@ -230,8 +230,12 @@ func TestFeedbackAdminRoles(t *testing.T) {
 		t.Fatal("a user's /v1/me lists 反馈")
 	}
 	for _, p := range []string{AdminFeedbackPath, AdminFeedbackPath + "/F1", AdminFeedbackPath + "/F1/attach/1-x.log", feedbackPagePath} {
-		if st, _ := rolesGet(t, h, user, p); st != http.StatusForbidden {
-			t.Errorf("user GET %s = %d; want 403", p, st)
+		want := http.StatusForbidden
+		if p == feedbackPagePath {
+			want = http.StatusNotFound // the page: as if there were none (claude-fleet#3925)
+		}
+		if st, _ := rolesGet(t, h, user, p); st != want {
+			t.Errorf("user GET %s = %d; want %d", p, st, want)
 		}
 	}
 	if st, b := rolesGet(t, h, admin, AdminFeedbackPath); st != http.StatusOK || !strings.Contains(string(b), `"feedback":[]`) {

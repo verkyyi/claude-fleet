@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/csv"
-	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -20,8 +19,8 @@ import (
 // /v1/me lists for an admin (pagesFor).
 //
 // A user is refused the page whole (claude-fleet#2516): one role_denied
-// audit row and a bare 403 that says 「这页不在你的菜单上」 — never the
-// page's skeleton, whose data reads would each fail on their own and look
+// audit row and the 404 an unknown address gets (claude-fleet#3925) — never
+// the page's skeleton, whose data reads would each fail on their own and look
 // broken. Every admin page's files live under web/dist/admin/, so the file
 // gate is that prefix (adminUIPrefix): a new admin page is refused to a user
 // by where it sits, with nothing to register.
@@ -56,7 +55,8 @@ func isAdminUIFile(name string) bool {
 	return strings.HasPrefix(strings.TrimPrefix(name, "/"), adminUIPrefix)
 }
 
-// adminPage serves one admin page, or its 403 to a user.
+// adminPage serves one admin page, or to a user the answer an unknown
+// address gets (denyAdminPage).
 func (s *Server) adminPage(id, file string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if roleOf(r.Context()) != roleUser {
@@ -67,41 +67,13 @@ func (s *Server) adminPage(id, file string) http.Handler {
 	})
 }
 
-// adminDeniedPage is the whole answer a user gets for an admin page: one
-// sentence and the way back, no shell, no script.
-const adminDeniedPage = `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>403 · claudefleet</title>
-<link rel="icon" href="/favicon.ico" sizes="32x32">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="stylesheet" href="/app.css">
-</head>
-<body>
-<main style="max-width:560px;margin:15vh auto;padding:0 24px">
-<h1>403 · 这页不在你的菜单上</h1>
-<p>This page is not on your menu.</p>
-<p><a href="/">回到概览 · Back to overview</a></p>
-</main>
-</body>
-</html>
-`
-
-// denyAdminPage refuses a user an admin page: audited, then the bare 403
-// page to a browser and the JSON error to anything else.
+// denyAdminPage refuses a user an admin page: audited, then exactly the 404
+// an address that does not exist gets (claude-fleet#3925, EPIC #3923 rule 6)
+// — a 403 said the page was there.
 func (s *Server) denyAdminPage(w http.ResponseWriter, r *http.Request) {
 	s.auditRoleDenied(r)
-	if !wantsHTML(r) {
-		httpError(w, http.StatusForbidden, "这页不在你的菜单上（this page is not on your menu）")
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusForbidden)
-	_, _ = io.WriteString(w, adminDeniedPage)
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow") // as under /app and /admin
+	http.NotFound(w, r)
 }
 
 // loadHistory is each machine's load per core, one bucket per five minutes
