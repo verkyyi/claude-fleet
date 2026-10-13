@@ -496,6 +496,12 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if role == "" {
+		if notListed(refusal) {
+			// Nobody named them yet: not a dead end, the way to ask
+			// (claude-fleet#4050).
+			s.notListedSignIn(w, r, store.IdentityGitHub, fmt.Sprint(id), login, now)
+			return
+		}
 		// A `fleet login` is waiting on this browser: its terminal hears the
 		// refusal too, in the same words, instead of waiting ten minutes.
 		if to := s.loginRefusedHop(w, r, refusal, login, now); to != "" {
@@ -576,7 +582,7 @@ func (s *Server) githubAdmitAs(actor string, id int64, login string, now time.Ti
 		role = roleUser
 	}
 	if role == "" {
-		_ = s.Store.HubAudit(actor, "signin", target, "refused", "not on the list", now)
+		_ = s.Store.HubAudit(actor, "signin", target, "refused", notListedAudit, now)
 		return "", denyNotListed, nil
 	}
 	if !known {
@@ -827,7 +833,9 @@ func (s *Server) githubUser(ctx context.Context, path, token string) (int64, str
 }
 
 // githubDeny answers a refusal: the "can't use this hub" page for a
-// browser, a JSON 403 for anything else. No session is created.
+// browser, a JSON 403 for anything else. No session is created. Since
+// claude-fleet#4050 it is only for a real refusal — removed, renamed, an
+// invite that cannot be used; nobody-named-you is notListedSignIn.
 func (s *Server) githubDeny(w http.ResponseWriter, r *http.Request, why, login string) {
 	if !wantsHTML(r) {
 		httpError(w, http.StatusForbidden, "this GitHub account is not on this hub's list")
@@ -835,21 +843,16 @@ func (s *Server) githubDeny(w http.ResponseWriter, r *http.Request, why, login s
 	}
 	loc := s.pageLocale(w, r)
 	page := denyPage{pageView: newPageView(r, loc), Why: why, Login: login}
-	if notListed(why) {
-		page.Ask = denyAskLine(loc, login)
-	}
 	writeAuthPage(w, http.StatusForbidden, denyTmpl, loc, page)
 }
 
-// denyAskLine is the one line a person nobody invited sends an admin
-// (claude-fleet#2261) — on the refusal page and in their terminal alike.
-func denyAskLine(loc, login string) string {
-	return i18n.Interpolate(pageT(loc, "deny.ask"), map[string]string{"login": login})
-}
-
 // denyText is a refusal as one plain sentence, for a terminal: the same
-// words as the page, with nothing bolded.
-func denyText(loc, why, login string) string {
+// words as the page, with nothing bolded. hub is this hub's address: a
+// person nobody named is told where to apply (claude-fleet#4050).
+func denyText(loc, why, login, hub string) string {
+	if notListed(why) {
+		return i18n.Interpolate(pageT(loc, "deny.notlisted.cli"), map[string]string{"url": hub + ApplyPath})
+	}
 	key := "deny.notlisted"
 	switch why {
 	case denyRenamed:
@@ -863,11 +866,7 @@ func denyText(loc, why, login string) string {
 			}
 		}
 	}
-	txt := i18n.Interpolate(pageT(loc, key), map[string]string{"v": login})
-	if notListed(why) {
-		txt += denyAskLine(loc, login) + pageT(loc, "deny.after")
-	}
-	return txt
+	return i18n.Interpolate(pageT(loc, key), map[string]string{"v": login})
 }
 
 // notListed: the refusal is "nobody has invited you" — denyNotListed, or no
@@ -936,8 +935,6 @@ type denyPage struct {
 	pageView
 	Why   string
 	Login string
-	// Ask is the line a person nobody invited sends an admin (#2261).
-	Ask string
 	// Heading replaces the GitHub heading for a way that is not GitHub
 	// (claude-fleet#3604).
 	Heading string
@@ -960,7 +957,6 @@ var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Pars
 <main class="col"><div class="tile">` + lockIcon + `</div>
 <h1>{{if .Heading}}{{.Heading}}{{else}}{{t "deny.h1"}}{{end}}<span class="dot">.</span></h1>
 <p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else if eq .Why "invite-expired"}}{{tb "deny.invite.expired" .Login}}{{else if eq .Why "invite-used"}}{{tb "deny.invite.used" .Login}}{{else if eq .Why "invite-revoked"}}{{tb "deny.invite.revoked" .Login}}{{else if eq .Why "invite-unknown"}}{{tb "deny.invite.unknown" .Login}}{{else if eq .Why "invite-other-user"}}{{tb "deny.invite.other-user" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p>
-{{if .Ask}}<p class="ask">{{.Ask}}</p>{{end}}
 <div class="stack"><a class="btn primary" href="/app/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/app">{{t "deny.back"}}</a></div>
 <p class="fine">{{t "deny.fine"}}</p>
 </main></div></body></html>`))

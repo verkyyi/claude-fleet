@@ -257,6 +257,14 @@ func (s *Server) handleWeChatCallback(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "could not read the people list")
 		return
 	}
+	if pid == "" && !s.wechatCanBind(r) {
+		// Nobody's, and nothing here to hang it on — no account signed in,
+		// no invite: someone the list does not name, who may ask
+		// (claude-fleet#4050).
+		_ = s.Store.HubAudit("wechat:?", "signin", target, "refused", notListedAudit, now)
+		s.notListedSignIn(w, r, store.IdentityWeChat, union, name, now)
+		return
+	}
 	if pid == "" {
 		// The first scan: nobody's yet. Ask, never make an account.
 		_ = s.Store.HubAudit("wechat:?", "signin", target, "held", "first scan: waiting to be bound", now)
@@ -271,7 +279,7 @@ func (s *Server) handleWeChatCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if role == "" {
 		_ = s.Store.HubAudit(pid, "signin", target, "refused", "no longer on the list", now)
-		s.waySignedOut(w, r, store.IdentityWeChat, denyRemoved, name, now)
+		s.waySignedOut(w, r, store.IdentityWeChat, denyRemoved, union, name, now)
 		return
 	}
 	_ = s.Store.TouchHubPrincipal(pid, "", now)
@@ -291,8 +299,14 @@ func (s *Server) signInAs(w http.ResponseWriter, r *http.Request, kind, pid, nam
 }
 
 // waySignedOut answers a refusal of a way that is not GitHub: a waiting
-// terminal hears it too, a browser gets the refusal page in that way's words.
-func (s *Server) waySignedOut(w http.ResponseWriter, r *http.Request, kind, why, name string, now time.Time) {
+// terminal hears it too, a browser gets the refusal page in that way's words
+// — or, for a way nobody named yet, the way to ask (notListedSignIn,
+// claude-fleet#4050). subject is the way's own (an address, a unionid).
+func (s *Server) waySignedOut(w http.ResponseWriter, r *http.Request, kind, why, subject, name string, now time.Time) {
+	if notListed(why) {
+		s.notListedSignIn(w, r, kind, subject, name, now)
+		return
+	}
 	if to := s.loginRefusedHop(w, r, why, name, now); to != "" {
 		http.Redirect(w, r, to, http.StatusFound)
 		return
@@ -351,6 +365,19 @@ func (s *Server) wechatBindOf(r *http.Request, now time.Time) *wechatBind {
 		return nil
 	}
 	return &b
+}
+
+// wechatCanBind: the binding page has something to offer this browser — it
+// is signed in as someone on the list, or it carries an invite.
+func (s *Server) wechatCanBind(r *http.Request) bool {
+	if c, err := r.Cookie(inviteCookie); err == nil && validInviteCode(c.Value) {
+		return true
+	}
+	if _, pid, ok := s.personSession(r); ok {
+		role, err := s.personRole(pid)
+		return err == nil && role != ""
+	}
+	return false
 }
 
 // wechatBindView is the binding page.
@@ -439,7 +466,7 @@ func (s *Server) handleWeChatBind(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if role == "" {
-			s.waySignedOut(w, r, store.IdentityWeChat, refusal, b.Name, now)
+			s.waySignedOut(w, r, store.IdentityWeChat, refusal, b.Union, b.Name, now)
 			return
 		}
 		s.signInAs(w, r, store.IdentityWeChat, pid, b.Name, role, now)

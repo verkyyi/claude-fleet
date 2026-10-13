@@ -161,18 +161,14 @@ var pageText = map[string]i18n.Text{
 		i18n.ZhCN: "{v} 已经不在本入口的名单上了。请让管理员重新加上你的 GitHub 用户名。",
 	},
 	"deny.notlisted": {
-		i18n.EN:   "Nobody has invited {v} to this hub yet. Send this line to an admin: ",
-		i18n.ZhCN: "还没有人邀请你（{v}）。把这行发给管理员：",
+		i18n.EN:   "Nobody has invited {v} to this hub yet.",
+		i18n.ZhCN: "还没有人邀请你（{v}）。",
 	},
-	// The terminal's last words after deny.notlisted + deny.ask (#2261).
-	"deny.after": {
-		i18n.EN:   " — once invited, run the line they send you.",
-		i18n.ZhCN: "——拿到邀请后，运行他发来的那一行就行。",
-	},
-	// The line a refused person sends (claude-fleet#2261): plain text, copied.
-	"deny.ask": {
-		i18n.EN:   "Please invite GitHub user {login}",
-		i18n.ZhCN: "请邀请 GitHub 用户 {login}",
+	// The terminal's words for a person nobody named (claude-fleet#4050):
+	// where to apply, in a browser.
+	"deny.notlisted.cli": {
+		i18n.EN:   "You're not on the list yet — open {url} in a browser to apply.",
+		i18n.ZhCN: "还不在名单上，在浏览器打开 {url} 申请。",
 	},
 	// An invite that cannot be used (claude-fleet#2261), one per reason.
 	"deny.invite.expired": {

@@ -137,7 +137,7 @@ func TestApplySubmitEditWithdraw(t *testing.T) {
 	h := newGitHubHarness(t)
 	ac := newApplyClient(t, h, store.IdentityGitHub, "4242", "zhouyu-dev", "203.0.113.7")
 
-	resp, body := ac.do(http.MethodGet, ApplyPath, nil)
+	resp, body := ac.do(http.MethodGet, ApplyPath+"?new=1", nil)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `action="/apply"`) || !strings.Contains(body, "zhouyu-dev") ||
 		!strings.Contains(body, `name="use"`) || !strings.Contains(body, `value="email" checked`) {
 		t.Fatalf("empty /apply = %d, want the form for zhouyu-dev with email first:\n%s", resp.StatusCode, body)
@@ -246,7 +246,7 @@ func TestApplySubmitEditWithdraw(t *testing.T) {
 func TestApplyCooldown(t *testing.T) {
 	h := newGitHubHarness(t)
 	ac := newApplyClient(t, h, store.IdentityEmail, "chen.ran@qq.com", "chen.ran@qq.com", "198.51.100.4")
-	if _, body := ac.do(http.MethodGet, ApplyPath, nil); !strings.Contains(body, "chen.ran@qq.com") ||
+	if _, body := ac.do(http.MethodGet, ApplyPath+"?new=1", nil); !strings.Contains(body, "chen.ran@qq.com") ||
 		!strings.Contains(body, `value="email" checked`) || strings.Contains(body, `name="email"`) {
 		t.Fatalf("a mail sign-in's form should default to their own address:\n%s", body)
 	}
@@ -301,7 +301,7 @@ func TestApplyPerAddressLimit(t *testing.T) {
 func TestApplyWeChatDefaultAndEnglish(t *testing.T) {
 	h := newGitHubHarness(t)
 	ac := newApplyClient(t, h, store.IdentityWeChat, "union-1", "林小满", "")
-	_, body := ac.do(http.MethodGet, ApplyPath+"?lang=en", nil)
+	_, body := ac.do(http.MethodGet, ApplyPath+"?new=1&lang=en", nil)
 	if !strings.Contains(body, `value="wechat" checked`) || !strings.Contains(body, "Apply to use it") ||
 		!strings.Contains(body, `<span class="av" aria-hidden="true">林</span>`) {
 		t.Fatalf("WeChat applicant, English:\n%s", body)

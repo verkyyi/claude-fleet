@@ -241,15 +241,16 @@ func TestGitHubSignIn_WhoGetsIn(t *testing.T) {
 		admins   []string
 		users    []fakeGHUser
 		as       fakeGHUser
-		wantRole string // "" = refused with 403
+		wantRole string // "" = refused
 		audit    string // a refused sign-in's audit detail
+		apply    bool   // refused as not listed: 302 /apply + the applicant note (#4050), else 403
 	}{
 		{name: "admin from the deploy", admins: []string{"Ivan"}, as: ghAdmin, wantRole: "admin"},
 		{name: "user on the list", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghAlice, wantRole: "user"},
-		{name: "not on the list", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghMallory, audit: "not on the list"},
+		{name: "not on the list", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghMallory, audit: notListedAudit, apply: true},
 		{name: "listed name, different ID", admins: []string{"ivan"}, users: []fakeGHUser{ghAlice}, as: ghNewAlice, audit: "pinned to GitHub ID 200"},
-		{name: "empty list, the admin's own account", admins: nil, as: ghAdmin, audit: "not on the list"},
-		{name: "empty list, anyone", admins: nil, as: ghMallory, audit: "not on the list"},
+		{name: "empty list, the admin's own account", admins: nil, as: ghAdmin, audit: notListedAudit, apply: true},
+		{name: "empty list, anyone", admins: nil, as: ghMallory, audit: notListedAudit, apply: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -259,7 +260,14 @@ func TestGitHubSignIn_WhoGetsIn(t *testing.T) {
 			}
 			cb, sess := h.signIn(t, tc.as)
 			if tc.wantRole == "" {
-				if cb.StatusCode != http.StatusForbidden {
+				if tc.apply {
+					if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != ApplyPath {
+						t.Fatalf("callback = %d → %q; want 302 /apply", cb.StatusCode, cb.Header.Get("Location"))
+					}
+					if c := cookieNamed(cb, applicantCookie); c == nil || c.Path != ApplyPath || !c.HttpOnly {
+						t.Fatalf("applicant note = %+v", c)
+					}
+				} else if cb.StatusCode != http.StatusForbidden {
 					t.Fatalf("callback = %d; want 403", cb.StatusCode)
 				}
 				if sess != nil && sess.MaxAge >= 0 {

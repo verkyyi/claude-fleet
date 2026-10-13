@@ -252,7 +252,7 @@ func (s *Server) admitPerson(kind, subject, name, invite string, now time.Time) 
 		actor = kind + ":?"
 	}
 	if role == "" {
-		_ = s.Store.HubAudit(actor, "signin", target, "refused", "not on the list", now)
+		_ = s.Store.HubAudit(actor, "signin", target, "refused", notListedAudit, now)
 		return "", "", denyNotListed, nil
 	}
 	if err := s.Store.AddHubIdentity(store.HubIdentity{Kind: kind, Subject: subject, PrincipalID: pid,

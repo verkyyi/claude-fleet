@@ -126,9 +126,10 @@ func (s *Server) emailBrowser(w http.ResponseWriter, r *http.Request) (string, e
 // errEmailSlow: the address had a mail a moment ago, or five this hour.
 var errEmailSlow = errors.New("too many mails to this address")
 
-// emailStart asks for a mail to addr from this browser. It records the ask
-// whatever the address is, and delivers only when the mail could open
-// something (emailOpens). nil is «sent» — never «this address is unknown».
+// emailStart asks for a mail to addr from this browser, whatever the address
+// is: an address nobody signs in with yet proves itself and comes in as an
+// applicant (claude-fleet#4050). nil is «sent» — never «this address is
+// unknown»; the limits per address hold either way.
 func (s *Server) emailStart(w http.ResponseWriter, r *http.Request, addr string, now time.Time) error {
 	last, n, err := s.Store.SigninCodeStats(store.IdentityEmail, addr, now.Add(-time.Hour))
 	if err != nil {
@@ -152,10 +153,6 @@ func (s *Server) emailStart(w http.ResponseWriter, r *http.Request, addr string,
 		CreatedAt: now, ExpiresAt: now.Add(store.SigninCodeTTL)}); err != nil {
 		return err
 	}
-	if !s.emailOpens(r, addr) {
-		_ = s.Store.HubAudit("email:?", "signin.mail", addr, "held", "nobody signs in with it and no invite: no mail", now)
-		return nil
-	}
 	loc := s.pageLocale(w, r)
 	subject := pageT(loc, "mail.subject")
 	body := i18n.Interpolate(pageT(loc, "mail.body"), map[string]string{
@@ -170,27 +167,6 @@ func (s *Server) emailStart(w http.ResponseWriter, r *http.Request, addr string,
 	}()
 	_ = s.Store.HubAudit("email:?", "signin.mail", addr, "ok", "sign-in mail sent", now)
 	return nil
-}
-
-// emailOpens: a mail to addr from r could open something — the address is
-// someone's way in, CCQUOTA_ADMINS names it (claude-fleet#3852), the browser carries an invite, or a signed-in person is
-// adding it to themselves.
-func (s *Server) emailOpens(r *http.Request, addr string) bool {
-	pid, err := s.Store.IdentityPrincipal(store.IdentityEmail, addr)
-	if err != nil {
-		return false
-	}
-	if pid != "" || s.adminAddress(addr) {
-		return true
-	}
-	if c, err := r.Cookie(inviteCookie); err == nil && validInviteCode(c.Value) {
-		return true
-	}
-	if _, me, ok := s.personSession(r); ok {
-		role, err := s.personRole(me)
-		return err == nil && role != ""
-	}
-	return false
 }
 
 // handleEmailStart is POST /auth/email/start: a form from /signin, or JSON.
@@ -403,7 +379,7 @@ func (s *Server) emailFinish(w http.ResponseWriter, r *http.Request, addr string
 		return
 	}
 	if role == "" {
-		s.waySignedOut(w, r, store.IdentityEmail, refusal, addr, now)
+		s.waySignedOut(w, r, store.IdentityEmail, refusal, store.NormIdentitySubject(store.IdentityEmail, addr), addr, now)
 		return
 	}
 	s.signInAs(w, r, store.IdentityEmail, pid, "", role, now)

@@ -237,11 +237,11 @@ func TestWeChatFirstScanOpensNoAccount(t *testing.T) {
 	}
 	before := people()
 
-	// Nobody, no invite: the binding page, no account, no session.
+	// Nobody, no invite: on to apply (claude-fleet#4050), no account, no session.
 	stranger := newBrowser(t, "")
 	cb, _ := h.scan(t, stranger, "c1", "union-new", "陌生人")
-	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != "/auth/wechat/bind" {
-		t.Fatalf("first scan = %d → %q; want the binding page", cb.StatusCode, cb.Header.Get("Location"))
+	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != ApplyPath {
+		t.Fatalf("first scan = %d → %q; want /apply", cb.StatusCode, cb.Header.Get("Location"))
 	}
 	if pid, _ := stranger.session(h); pid != "" {
 		t.Fatalf("a first scan signed someone in: %s", pid)
@@ -252,11 +252,11 @@ func TestWeChatFirstScanOpensNoAccount(t *testing.T) {
 	if pid, _ := h.srv.Store.IdentityPrincipal(store.IdentityWeChat, "union-new"); pid != "" {
 		t.Fatalf("a first scan hung the WeChat on %s", pid)
 	}
-	resp, body := stranger.do(http.MethodGet, h.http.URL+"/auth/wechat/bind", nil)
-	if resp.StatusCode != 200 || !strings.Contains(body, pageT(i18n.EN, "wxbind.none")) || strings.Contains(body, `name="action"`) {
-		t.Fatalf("binding page with nothing to bind to = %d, offers a button or no advice", resp.StatusCode)
+	resp, body := stranger.do(http.MethodGet, h.http.URL+ApplyPath, nil)
+	if resp.StatusCode != 200 || !strings.Contains(body, "陌生人") || !strings.Contains(body, `href="/apply?new=1"`) {
+		t.Fatalf("/apply after the first scan = %d:\n%s", resp.StatusCode, body)
 	}
-	// Forcing it anyway opens nothing.
+	// Forcing a bind anyway opens nothing.
 	resp, _ = stranger.do(http.MethodPost, h.http.URL+"/auth/wechat/bind", url.Values{"action": {"invite"}})
 	if pid, _ := stranger.session(h); pid != "" || people() != before {
 		t.Fatalf("a forced bind opened an account (%d)", resp.StatusCode)
@@ -450,17 +450,20 @@ func (h *waysHarness) startMail(t *testing.T, b *browser, addr string) *http.Res
 
 // BREAK-IT email-link-replay: a mail's link signs in once, in the browser
 // that asked; replayed — or opened on another device — it opens nothing.
-// Unknown addresses are answered alike and mailed nothing; the limits hold.
+// Unknown addresses are answered and mailed alike; the limits hold.
 func TestEmailSignIn(t *testing.T) {
 	h := newWaysHarness(t)
 	pid, _ := newPersonPrincipal()
 	_ = h.srv.Store.UpsertHubUser(store.HubUser{PrincipalID: pid, Login: "Dana", Role: store.RoleUser, AddedBy: "test", AddedAt: time.Now()})
 	_ = h.srv.Store.AddHubIdentity(store.HubIdentity{Kind: store.IdentityEmail, Subject: "dana@example.com", PrincipalID: pid, VerifiedAt: time.Now()})
 
-	// Unknown and known answer the same; only the known one gets a mail.
+	// Unknown and known answer the same, and both get a mail: an unknown
+	// address proves itself to apply (claude-fleet#4050).
 	nobody := newBrowser(t, "")
 	r1 := h.startMail(t, nobody, "nobody@example.com")
-	h.noMail(t)
+	if m := h.mail(t); m.to != "nobody@example.com" {
+		t.Fatalf("mail went to %q", m.to)
+	}
 	pc := newBrowser(t, "")
 	r2 := h.startMail(t, pc, "Dana@Example.com")
 	if r1.StatusCode != r2.StatusCode || r1.Header.Get("Location") != r2.Header.Get("Location") || r2.StatusCode != http.StatusSeeOther {
@@ -659,14 +662,10 @@ func TestBuildMailAndSMTPURL(t *testing.T) {
 
 // A new deploy's first admin: CCQUOTA_ADMINS names an address nobody signs
 // in with yet and no invite exists. Its mail goes out, its code opens the
-// door, and the person it makes is admin; an address the list does not name
-// stays mailed nothing (claude-fleet#3852).
+// door, and the person it makes is admin (claude-fleet#3852).
 func TestEmailFirstAdminFromList(t *testing.T) {
 	h := newWaysHarness(t)
 	h.srv.Admins = []string{" Boss@Example.com "}
-
-	h.startMail(t, newBrowser(t, ""), "stranger@example.com")
-	h.noMail(t)
 
 	pc := newBrowser(t, "")
 	if resp := h.startMail(t, pc, "boss@example.com"); !strings.Contains(resp.Header.Get("Location"), "step=code") {
