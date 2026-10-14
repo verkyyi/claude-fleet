@@ -1536,7 +1536,7 @@ def demote_kw(login, uid, gid, home, cwd=None):
     Python and no directory lookup in the child. A preexec_fn running demote() called
     initgroups() there, and a fork from a threaded parent (the root core serves a
     thread per connection, this daemon has its watchdog) can copy libinfo's cache
-    lock held by another thread: on 2026-10-14 macmini's core forked an exec-as
+    lock held by another thread: on 2026-10-14 a managed Mac's core forked an exec-as
     whose child waited on that lock for good — Popen() waits for the exec, no
     timeout covers it, the updater never returned, and this daemon's stop waited
     on the updater for 111 minutes. The groups are looked up here, before the fork."""
@@ -3320,7 +3320,7 @@ class Supervisor(object):
             self.save()
             self.at("sleep")
             time.sleep(tick)
-        # The stop is bounded and watched too (issue #4144): on 2026-10-14 macmini's
+        # The stop is bounded and watched too (issue #4144): on 2026-10-14 a managed Mac's
         # stop waited 111 minutes on an updater that never returned — the watchdog
         # was already off, the children already stopped, nothing came back. A task
         # still running past FLEET_NODE_STOP_SECS is left to run: state.json keeps

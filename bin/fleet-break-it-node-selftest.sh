@@ -239,7 +239,7 @@ drill_node_supervisor_wedged() {
   WHAT="整机守护的主循环卡在一个不返回的 open() 上：看门狗 2s 后写一行「卡在 «fda»」+ 各线程的栈、记进 state.json 并退出，KeepAlive 按 ${thr}s 拉起，status 写明看门狗重启过，两项任务接着跑"
 }
 
-# node-supervisor-stop-hang (#4144): on 2026-10-14 macmini's daemon was asked to
+# node-supervisor-stop-hang (#4144): on 2026-10-14 a managed Mac's daemon was asked to
 # restart onto a new release and its stop waited 111 minutes on the updater task,
 # which never returned — the watchdog was already off, the children already
 # stopped, the heartbeat still. The stop is bounded and watched now: a task still
@@ -279,7 +279,7 @@ drill_node_supervisor_stop_hang() {
   [ "$n" = 1 ] || { WHY="$n copies of the task after the restart"; return 1; }
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_WATCHDOG_SECS FLEET_NODE_STOP_SECS
-  WHAT="整机守护停下（重启请求 / TERM）时一项任务不理 TERM：${SECS}s 内照样退出、日志写明「留着它跑」、pid 留在 state.json，下一个守护把它记成孤儿、不再起第二份——不再像 macmini 那样停在退出路径上 111 分钟"
+  WHAT="整机守护停下（重启请求 / TERM）时一项任务不理 TERM：${SECS}s 内照样退出、日志写明「留着它跑」、pid 留在 state.json，下一个守护把它记成孤儿、不再起第二份——不再像那台 Mac 那样停在退出路径上 111 分钟"
 }
 
 # node-demote-in-forked-child (#4144): the same morning's cause. The root core
