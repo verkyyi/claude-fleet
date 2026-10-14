@@ -1083,6 +1083,21 @@ def svc_run_key_secret(job, namespace, token, owner_uid=''):
             'data': {SVC_TOKEN_KEY: base64.b64encode(token.encode()).decode()}}
 
 
+# A person's pod's containers, each on the one image (#4174): the inits, then the two
+USER_POD_IMAGE_CONTAINERS = (('initContainers', ('egress-guard', 'pod-etc')), ('containers', ('fleet', 'sshd')))
+
+
+def user_pod_image_patch(image):
+    """The patch that moves one pod onto image (kubectl patch deploy <name>
+    --type strategic; the provisioner's roll-user-pod, #4174): the image of its
+    four containers, by name, nothing else — Recreate, so the old pod lets go of
+    the disk first and the sessions come back through restore."""
+    if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image or ''):
+        raise ValueError('--image-patch needs an --image pinned by digest, not %r' % image)
+    return {'spec': {'template': {'spec': {k: [{'name': n, 'image': image} for n in names]
+                                           for k, names in USER_POD_IMAGE_CONTAINERS}}}}
+
+
 def user_pod_limits_patch(limits):
     """The patch that moves one pod's ceiling (kubectl patch deploy <name>
     --type strategic): only that Deployment rolls, nobody else's."""
@@ -1181,6 +1196,8 @@ if __name__ == '__main__':
     p.add_argument('--svc-deadline', type=int, default=900, help='seconds (%d-%d)' % SVC_DEADLINE)
     p.add_argument('--limits-patch', action='store_true',
                    help='print only the patch that moves --limits on a running pod (rolls that pod alone)')
+    p.add_argument('--image-patch', action='store_true',
+                   help='print only the patch that moves a running pod onto --image (rolls that pod alone, #4174)')
     args = p.parse_args()
     egress = {'dns': args.egress_dns, 'metadata': args.egress_metadata, 'pod_cidr': args.egress_pod_cidr,
               'service_cidr': args.egress_service_cidr,
@@ -1197,6 +1214,9 @@ if __name__ == '__main__':
             raise SystemExit(0)
         if private and not args.user_pod:
             raise ValueError('--private-mirrors is per login: a --user-pod only (a shared node has many logins)')
+        if args.image_patch:
+            print(json.dumps(user_pod_image_patch(args.image), indent=2))
+            raise SystemExit(0)
         if args.limits_patch:
             print(json.dumps(user_pod_limits_patch(user_pod_limits(args.limits)), indent=2))
             raise SystemExit(0)

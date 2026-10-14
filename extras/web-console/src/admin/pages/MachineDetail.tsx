@@ -372,6 +372,17 @@ function KV({ k, children }: { k: string; children: React.ReactNode }) {
   );
 }
 
+// rollText: a person's pod's image against stable, and the hub's last roll (claude-fleet#4174).
+function rollText(r: NonNullable<NodeDetail["version"]["roll"]>): string {
+  const parts: string[] = [];
+  if (r.behind === 0) parts.push(tm("d.rollOn"));
+  else if (r.behind === -1) parts.push(tm("d.rollUnknown"));
+  else if (r.behind) parts.push(tm("d.rollBehind", { n: r.behind }));
+  const l = r.last;
+  if (l) parts.push(l.pending ? tm("d.rollPending") : l.done ? tm("d.rollDone", { v: short(l.stable) }) : tm("d.rollFailed"));
+  return parts.join(" · ") || "—";
+}
+
 function VersionCard({ d, row, stable }: { d: NodeDetail; row: MachineRow | null; stable: string }) {
   const v = d.version;
   const pair = (n?: number, rel?: string) => (n ? `v${n}${rel ? " · " + short(rel) : ""}` : "—");
@@ -394,6 +405,13 @@ function VersionCard({ d, row, stable }: { d: NodeDetail; row: MachineRow | null
           <KV k={tm("d.stable")}>
             <span className="font-mono text-xs">{stable || "—"}</span>
           </KV>
+          {v.roll && (
+            <KV k={tm("d.roll")}>
+              <span className={cn("text-xs", !!v.roll.behind && "text-warn")} title={v.roll.last?.result || ""}>
+                {rollText(v.roll)}
+              </span>
+            </KV>
+          )}
           <KV k={tm("d.agent")}>
             <span className="font-mono text-xs">{v.agent || "—"}</span>
           </KV>

@@ -25,6 +25,9 @@
 #                            deploy/k8s/provisioner/policy.yaml (issue #4167)
 #   mirror-private-unlisted  extras/managed-node/render.py (private_mirrors, --mirror-grant) +
 #                            bin/fleet-provisioner.py + bin/fleet-node-linux.py devnet (issue #4002)
+#   user-pod-image-stale     bin/fleet-provisioner.py (roll-user-pod) + bin/fleet_cluster_ticket.py +
+#                            extras/managed-node/render.py (user_pod_image_patch) + deploy/k8s/provisioner/policy.yaml +
+#                            tokenledger/internal/api/fleet_user_pod_roll.go (issue #4174)
 #   svc-run-sees-keys        extras/managed-node/render.py (svc_run_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet_cluster_ticket.py + bin/fleet-svc-runner.py +
 #                            deploy/k8s/fleet-workers/networkpolicy.yaml + deploy/k8s/egress/run +
@@ -137,6 +140,18 @@ objs = {"/apis/apps/v1/namespaces/fleet-workers/deployments/u-door1": {
     "kind": "Deployment", "metadata": {"name": "u-door1", "uid": "u0", "labels": {"fleet/role": "door"}}}}
 book = {"metadata": {"name": "fleet-provisioner-nonces", "resourceVersion": "1"}, "data": {}}
 BOOK = "/api/v1/namespaces/fleet-workers/configmaps/fleet-provisioner-nonces"
+def merge(o, p):
+    """a strategic-merge patch, as the API server applies one: maps merge, a
+    list of named items merges by name, anything else is replaced"""
+    for k, v in p.items():
+        if isinstance(v, dict) and isinstance(o.get(k), dict):
+            merge(o[k], v)
+        elif isinstance(v, list) and isinstance(o.get(k), list) and all(isinstance(x, dict) and "name" in x for x in v + o[k]):
+            for x in v:
+                have = [y for y in o[k] if y["name"] == x["name"]]
+                merge(have[0], x) if have else o[k].append(x)
+        else:
+            o[k] = v
 class H(http.server.BaseHTTPRequestHandler):
     def out(self, st, o):
         b = json.dumps(o).encode()
@@ -167,8 +182,10 @@ class H(http.server.BaseHTTPRequestHandler):
         o["metadata"]["uid"] = "uid-" + o["metadata"]["name"]; objs[p] = o
         self.log("POST %s" % p); self.out(201, o)
     def do_PATCH(self):
-        self.body(); self.log("PATCH %s" % self.path)
-        self.out(200, objs.get(self.path, {})) if self.path in objs else self.out(404, {"message": "not found"})
+        b = self.body(); self.log("PATCH %s" % self.path)
+        if self.path not in objs:
+            return self.out(404, {"message": "not found"})
+        merge(objs[self.path], b); self.out(200, objs[self.path])
     def do_DELETE(self):
         self.body(); self.log("DELETE %s" % self.path); objs.pop(self.path, None); self.out(200, {})
     def log_message(self, *a): pass
@@ -1107,6 +1124,109 @@ PY
   fi
   SECS=$(since "$t0")
   WHAT="入口签的 create-svc-run 单：语法外（attempt / deadline / 名字 / 钥匙 / 多带字段）与重放一律拒、什么都没写；建出的 Job 以 fleet-job 跑、不挂令牌、只有 emptyDir 和它自己的钥匙 Secret（属这个 Job、随它删，钥匙不在 Job 里）、除守卫外非 root 只读根不加能力、环境里没有像凭据的变量；守卫封闭：元数据地址、pod / service 网段、全部私网段都 REJECT，只放两条集群内的路；一次不重试、到期即杀、结束 300 秒删；删单只删运行自己的 Job；网络规则只给 DNS · 运行出口 · 凭据代理 · hub 自己的 Service（#4175）；runner 照这个 Job 的环境跑：会话看不到钥匙与 hub 地址、只有通行证，工具就四个，用户要求不能合上自己的数据块，spec 只读一次、结果只交一次，产出不合约定得 20；${gohalf}"
+}
+
+# user-pod-image-stale (#4174): a person's pod runs its IMAGE's runtime and no
+# update task, so a fix merged after the pod was made never reaches it by
+# itself — #4172 was #4112's egress bug back on a pod made before #4116. The
+# provisioner half: a pod made on the old image stays there when the template
+# moves; a roll-user-pod ticket moves its four containers (and nothing else) onto
+# the template's image in ONE patch; a second roll sends nothing; a roll of
+# somebody else's Deployment, of no pod, or onto an image by tag is refused with
+# nothing sent; a pod on two images is off the template here and in the
+# admission policy. The hub half: TestUserPodRollBatchesSkipsBusyOncePerRelease —
+# stable moves ⇒ the stale pods are rolled two a batch, a busy one waits, each
+# once per release — run here with a Go toolchain, else by the Go gate.
+drill_user_pod_image_stale() {
+  CAP=60
+  local d="$WORK/stale" t0 api exp out rc gohalf
+  mkdir -p "$d/sa"; t0=$(now)
+  api=$(stub_api "$d") || { WHY="no stand-in API"; return 1; }
+  printf 'drill-token\n' > "$d/sa/token"
+  head -c 32 /dev/urandom > "$d/key"
+  python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
+  tpl() { printf '{"cluster": "drill", "namespace": "fleet-workers", "user_pod": {"image": "%s", "hub": "https://hub.example.com", "storage_class": "csi", "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local"}}\n' "$1" > "$d/template.json"; }
+  local old new
+  old="x@sha256:$(printf 'a%.0s' $(seq 1 64))" new="x@sha256:$(printf 'c%.0s' $(seq 1 64))"
+  tpl "$old"
+  export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
+    FLEET_PROVISIONER_API="$api" FLEET_PROVISIONER_SA_DIR="$d/sa"
+  exp=$(( $(date +%s) + 300 ))
+  tk() { python3 "$BIN/fleet_cluster_ticket.py" sign "$d/key" "$(python3 -c 'import json,sys; f=json.loads(sys.argv[1]); f.update(exp=int(sys.argv[2])); print(json.dumps(f))' "$1" "$exp")"; }
+  prov() { OUT=$(python3 "$BIN/fleet-provisioner.py" once "$1" 2>&1); RC=$?; }
+  images() { python3 - "$api" <<'PY2'
+import json, sys, urllib.request
+r = urllib.request.Request(sys.argv[1] + "/apis/apps/v1/namespaces/fleet-workers/deployments/u-stale01",
+                           headers={"Authorization": "Bearer drill-token"})
+p = json.load(urllib.request.urlopen(r))["spec"]["template"]["spec"]
+print(" ".join("%s=%s" % (c["name"], c["image"][-4:]) for c in p["initContainers"] + p["containers"]))
+PY2
+  }
+  prov "$(tk '{"op":"create-user-pod","cluster":"drill","pod":"u-stale01","limits":"","login":"stale","uid":10002,"join":"fj_aaaaaaaaaaaaaaaaaaaaaaaaaa","nonce":"c0000000000000000000000000000001"}')"
+  [ "$RC" = 0 ] || { WHY="the pod's create: rc $RC: $OUT"; return 1; }
+  # the fix lands as a new image: the pod made before it is still on the old one
+  tpl "$new"
+  [ "$(images)" = "egress-guard=aaaa pod-etc=aaaa fleet=aaaa sshd=aaaa" ] || { WHY="the pod moved by itself: $(images)"; return 1; }
+  : > "$d/writes"
+  prov "$(tk '{"op":"roll-user-pod","cluster":"drill","pod":"u-stale01","nonce":"c0000000000000000000000000000002"}')"
+  [ "$RC" = 0 ] && [ "$(cat "$d/writes")" = 'PATCH /apis/apps/v1/namespaces/fleet-workers/deployments/u-stale01' ] \
+    || { WHY="the roll: rc $RC, wrote: $(cat "$d/writes"): $OUT"; return 1; }
+  [ "$(images)" = "egress-guard=cccc pod-etc=cccc fleet=cccc sshd=cccc" ] || { WHY="after the roll: $(images)"; return 1; }
+  # the patch is the image alone: the rolled pod is the template's, and all else as made
+  out=$(python3 - "$BIN" "$api" "$new" <<'PY2'
+import importlib.util, json, sys, urllib.request
+spec = importlib.util.spec_from_file_location("p", sys.argv[1] + "/fleet-provisioner.py")
+p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
+r = urllib.request.Request(sys.argv[2] + "/apis/apps/v1/namespaces/fleet-workers/deployments/u-stale01",
+                           headers={"Authorization": "Bearer drill-token"})
+have = json.load(urllib.request.urlopen(r))
+want = [o for o in p.render().user_pod_resources(sys.argv[3], "https://hub.example.com", "csi", "u-stale01",
+        login="stale", uid=10002, cred_central="http://fleet-credproxy.fleet-workers.svc.cluster.local")
+        if o["kind"] == "Deployment"][0]
+have["metadata"].pop("uid", None)
+bad = []
+if have != want:
+    bad.append("the rolled Deployment differs from a fresh render on the new image")
+if p.off_template(have, "fleet-workers"):
+    bad.append("off the template: " + p.off_template(have, "fleet-workers"))
+two = json.loads(json.dumps(want)); two["spec"]["template"]["spec"]["containers"][1]["image"] = "x@sha256:" + "d" * 64
+if not p.off_template(two, "fleet-workers"):
+    bad.append("a pod on two images passes the guard")
+print("; ".join(bad))
+PY2
+) || { WHY="checking the rolled pod crashed: $out"; return 1; }
+  [ -z "$out" ] || { WHY="$out"; return 1; }
+  grep -q "variables.pod.containers\[0\].image" "$ROOT/deploy/k8s/provisioner/policy.yaml" \
+    || { WHY="the admission policy lets a person's pod run two images"; return 1; }
+  # once on it, a roll sends nothing; somebody else's, no pod, an image by tag: refused, nothing sent
+  : > "$d/writes"
+  prov "$(tk '{"op":"roll-user-pod","cluster":"drill","pod":"u-stale01","nonce":"c0000000000000000000000000000003"}')"
+  [ "$RC" = 0 ] && [ ! -s "$d/writes" ] && printf '%s' "$OUT" | grep -q 'already on' \
+    || { WHY="a second roll: rc $RC, wrote: $(cat "$d/writes"): $OUT"; return 1; }
+  prov "$(tk '{"op":"roll-user-pod","cluster":"drill","pod":"u-door1","nonce":"c0000000000000000000000000000004"}')"
+  [ "$RC" = 3 ] && [ ! -s "$d/writes" ] || { WHY="a roll of somebody else's Deployment: rc $RC: $OUT"; return 1; }
+  prov "$(tk '{"op":"roll-user-pod","cluster":"drill","pod":"u-none01","nonce":"c0000000000000000000000000000005"}')"
+  [ "$RC" = 3 ] && [ ! -s "$d/writes" ] || { WHY="a roll of no pod: rc $RC: $OUT"; return 1; }
+  tpl "debian:latest"
+  prov "$(tk '{"op":"roll-user-pod","cluster":"drill","pod":"u-stale01","nonce":"c0000000000000000000000000000006"}')"
+  [ "$RC" = 3 ] && [ ! -s "$d/writes" ] || { WHY="a roll onto an image by tag: rc $RC: $OUT"; return 1; }
+  # the hub half
+  gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestUserPodRollBatchesSkipsBusyOncePerRelease"
+  grep -q '^func TestUserPodRollBatchesSkipsBusyOncePerRelease(' "$ROOT/tokenledger/internal/api/fleet_user_pod_roll_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestUserPodRollBatchesSkipsBusyOncePerRelease is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestUserPodRoll' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 换版后分批滚、忙的等、一个版本只问一次、失败不连坐 通过" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="旧镜像上建的个人 pod 在模板换新镜像后原地不动（修复到不了）；roll-user-pod 一个 PATCH 把四个容器换到新镜像、别的一样不改（与新镜像现渲染的一字不差）；再滚一次什么都不发；滚别人的 Deployment / 不存在的 pod / 按标签的镜像都拒、一个请求都没发；一个 pod 两种镜像，执行器和准入策略都拦；${gohalf}"
 }
 
 cred_run_drills "$0"

@@ -207,6 +207,8 @@ sd = lambda o: [c for c in o["spec"]["template"]["spec"]["containers"] if c["nam
 fl = lambda o: [c for c in o["spec"]["template"]["spec"]["containers"] if c["name"] == "fleet"][0]
 ps = lambda o: o["spec"]["template"]["spec"]
 w("good-dep", dep); w("good-svc", svc); w("good-job", jb)
+# a person's pod on two images (#4174): roll-user-pod moves the four together
+w("bad-two-images", mut(dep, lambda o: c0(o).update(image=c0(o)["image"].split("@")[0] + "@sha256:" + "e" * 64)))
 # root-in-user-pod (#3757): the way back to root, as the provisioner's account
 w("bad-root-fleet", mut(dep, lambda o: fl(o)["securityContext"].update(runAsUser=0, runAsNonRoot=False)))
 w("bad-fleet-caps", mut(dep, lambda o: fl(o)["securityContext"]["capabilities"].update(add=["CHOWN"])))
@@ -422,6 +424,11 @@ step "spare-pod-leaks: bind, destroy, a fresh pod"
 [ "$(post "$(tk "$tmp/key" '{"op":"bind-user-pod","cluster":"kind","pod":"u-drill1","principal":"gh.7001","nonce":"a1111111111111111111111111111111","exp":'"$exp"'}')")" = 200 ] \
   || fail "the hub's bind: $(cat "$tmp/resp")"
 [ "$(K get deploy u-drill1 -o jsonpath='{.metadata.labels.fleet\/principal}')" = gh.7001 ] || fail "the bind wrote no fleet/principal label"
+# user-pod-image-stale (#4174): a roll of a pod already on the template's image sends nothing
+gen=$(K get deploy u-drill1 -o jsonpath='{.metadata.generation}')
+[ "$(post "$(tk "$tmp/key" '{"op":"roll-user-pod","cluster":"kind","pod":"u-drill1","nonce":"a1212121212121212121212121212121","exp":'"$exp"'}')")" = 200 ] \
+  && grep -q 'already on' "$tmp/resp" || fail "the hub's roll of a pod on the template's image: $(cat "$tmp/resp")"
+[ "$(K get deploy u-drill1 -o jsonpath='{.metadata.generation}')" = "$gen" ] || fail "a roll onto the same image changed the Deployment"
 K delete job job-111111111111 --wait=false >/dev/null 2>&1 || true
 [ "$(post "$(tk "$tmp/key" '{"op":"destroy-user-pod","cluster":"kind","pod":"u-drill1","nonce":"a2222222222222222222222222222222","exp":'"$exp"'}')")" = 200 ] \
   || fail "the hub's destroy: $(cat "$tmp/resp")"

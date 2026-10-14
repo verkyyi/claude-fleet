@@ -35,6 +35,10 @@ const (
 	ClusterSetLimits      = "set-limits"
 	ClusterCreateJob      = "create-job"
 	ClusterBindUserPod    = "bind-user-pod"
+	// roll-user-pod moves a person's pod onto the provisioner template's
+	// user_pod.image (claude-fleet#4174): the ticket names only the pod — the
+	// image is the cluster's, never the hub's word.
+	ClusterRollUserPod = "roll-user-pod"
 	// A service run's throwaway environment (claude-fleet#4005): create-svc-run
 	// carries the run, its attempt, its principal's name, its deadline and the
 	// Job's one-time key to the hub (written into its Secret); delete-svc-run
@@ -90,7 +94,7 @@ func SignClusterTicket(key ed25519.PrivateKey, t ClusterTicket) (string, error) 
 		return "", errors.New("no account key")
 	}
 	switch t.Op {
-	case ClusterCreateUserPod, ClusterDestroyUserPod, ClusterSetLimits, ClusterCreateJob, ClusterBindUserPod,
+	case ClusterCreateUserPod, ClusterDestroyUserPod, ClusterSetLimits, ClusterCreateJob, ClusterBindUserPod, ClusterRollUserPod,
 		ClusterCreateSvcRun, ClusterDeleteSvcRun:
 	default:
 		return "", errors.New("not a provisioner op: " + t.Op)

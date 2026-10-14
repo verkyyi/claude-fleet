@@ -19,6 +19,9 @@ The payload is exactly {op, cluster, nonce, exp} plus the op's own fields:
                                        one-time machine join code, #3553)
   destroy-user-pod  pod                those, and the join Secret
   set-limits        pod, limits        only that pod's Deployment rolls
+  roll-user-pod     pod                that pod's Deployment onto the template's
+                                       user_pod.image (#4174): the image moves,
+                                       nothing else — the ticket names no image
   create-job        pod, repo, ref,    a throwaway Job for that pod's session:
                     kind, cmd          kind build|test|browser|load|untrusted,
                                        cmd one line run by sh -c (#3552)
@@ -56,6 +59,7 @@ OPS = {
     "create-user-pod": ("pod", "limits", "login", "uid", "join"),
     "destroy-user-pod": ("pod",),
     "set-limits": ("pod", "limits"),
+    "roll-user-pod": ("pod",),
     "create-job": ("pod", "repo", "ref", "kind", "cmd"),
     "bind-user-pod": ("pod", "principal"),
     "create-svc-run": ("run", "attempt", "svc", "deadline", "token"),

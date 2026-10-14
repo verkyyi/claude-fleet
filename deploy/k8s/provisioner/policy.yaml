@@ -16,7 +16,8 @@
 #   Service      ClusterIP, no external address
 #   a pod        no host network / PID / IPC, no hostPath or projected volume,
 #                no token, account fleet-user (Deployment) / fleet-job (Job),
-#                every image by digest, no privilege, no escalation, ALL caps
+#                every image by digest (a person's pod one image in every
+#                container — roll-user-pod moves the four together, #4174), no privilege, no escalation, ALL caps
 #                dropped; a person's pod is root only in `sshd` (its login step:
 #                CHOWN SETUID SETGID SYS_CHROOT KILL AUDIT_WRITE) and the `egress-guard` init
 #                (NET_ADMIN NET_RAW), every other container runAsNonRoot, not
@@ -105,6 +106,8 @@ spec:
       message: "a person's pod runs as fleet-user, a Job as fleet-job"
     - expression: "!variables.workload || variables.containers.all(c, c.image.matches('@sha256:[a-f0-9]{64}$'))"
       message: "every image is pinned by digest"
+    - expression: "!variables.workload || variables.isJob || variables.containers.all(c, c.image == variables.pod.containers[0].image)"
+      message: "a person's pod runs one image in every container (roll-user-pod moves them together, claude-fleet#4174)"
     - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false && (!has(c.securityContext.privileged) || !c.securityContext.privileged))"
       message: "no privileged container, no privilege escalation"
     - expression: "!variables.workload || variables.containers.all(c, has(c.securityContext) && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop && (!has(c.securityContext.capabilities.add) || c.securityContext.capabilities.add.all(a, !variables.isJob && ((c.name == 'sshd' && a in variables.sshdCaps) || (c.name == 'egress-guard' && a in variables.guardCaps)) || (variables.svcJob && c.name == 'egress-guard' && a in variables.guardCaps))))"

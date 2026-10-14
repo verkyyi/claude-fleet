@@ -65,6 +65,9 @@ type NodeDetailVersion struct {
 	Reason      string            `json:"reason,omitempty"`
 	UpdatedAt   *time.Time        `json:"updated_at,omitempty"`
 	At          *time.Time        `json:"at"`
+	// Roll is a person's pod's image against stable (claude-fleet#4174): how
+	// many releases behind and the last roll the hub asked; absent elsewhere.
+	Roll *podRollView `json:"roll,omitempty"`
 }
 
 // NodeDetailLoad is load: the newest reading, the cores, and the roster's
@@ -247,6 +250,7 @@ func (s *Server) nodeDetail(now time.Time, name string, visible func(hostname, o
 		}
 		v.At = extra.VersionsAt
 	}
+	v.Roll = s.podRollFor(host, v.Runtime, now)
 
 	// Load and memory: measured at sys_at by a node that says so.
 	d.Load = NodeDetailLoad{Now: m.Load1, NCPU: m.NCPU, Hist: m.LoadHist, HistStep: int(loadBucket / time.Second), Unread: extra.SysUnread, At: extra.SysAt}
