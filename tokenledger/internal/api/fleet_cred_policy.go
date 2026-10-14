@@ -290,6 +290,7 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 	if err := s.drillUserAllow(settings, &pol); err != nil {
 		return credPolicy{}, err
 	}
+	s.trialUserAllow(settings, &pol) // a trial person: fleet.trial.cred_allow (#4260)
 	return pol, nil
 }
 

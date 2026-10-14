@@ -66,6 +66,7 @@ const (
 	trialWaitBusy  = "busy"  // no machine admits a new one, or none is ready
 	trialWaitLoad  = "load"  // the machine is above its load line
 	trialWaitQuota = "quota" // the pool is below its floor
+	// trialWaitNoSub (fleet_trial_cred.go): fleet.trial.cred_allow is []
 )
 
 // What exactly held a busy wait (claude-fleet#4251): the audit's
@@ -200,6 +201,9 @@ func trialDayStart(now time.Time) time.Time {
 
 // trialHold is why no seat is handed out on host now ("" = go ahead).
 func (s *Server) trialHold(host string, now time.Time) string {
+	if s.trialNoSub() {
+		return trialWaitNoSub // a seat would only answer the proxy's 403 (#4260)
+	}
 	if n, err := s.Store.TrialsHolding(); err != nil || n >= s.trialSlots() {
 		return trialWaitFull
 	}

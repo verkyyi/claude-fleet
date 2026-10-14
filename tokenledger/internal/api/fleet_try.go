@@ -113,7 +113,7 @@ type tryAnswer struct {
 	Next     string `json:"next,omitempty"`     // where to go now
 	Position int    `json:"position,omitempty"` // people ahead in line
 	ETASecs  int    `json:"eta_secs,omitempty"` // roughly how long until a seat
-	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota
+	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota · nosub
 	// Applied is a tried person's request state (pending · approved ·
 	// rejected · withdrawn), "" for none.
 	Applied string `json:"applied,omitempty"`
@@ -422,7 +422,7 @@ var tryTmpl = template.Must(template.New("try").Funcs(pageFuncs(i18n.EN)).Parse(
  data-w-busy="{{t "try.busy"}}" data-w-fail="{{t "try.fail"}}" data-w-min="{{t "try.min"}}"
  data-w-tried="{{t "try.tried"}}" data-w-applied="{{t "try.applied"}}" data-w-apply="{{t "try.apply"}}" data-w-see="{{t "try.see"}}"
  data-w-dayfull="{{t "try.dayfull"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
- data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-reach="{{t "try.reach"}}"
+ data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-r-nosub="{{t "try.r.nosub"}}" data-w-reach="{{t "try.reach"}}"
  data-w-paused="{{t "try.paused"}}" data-w-resume="{{t "try.resume"}}" data-w-resuming="{{t "try.resuming"}}" data-w-capped="{{t "try.capped"}}">
 <h1>{{t "try.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{t "try.lead"}}</p>
@@ -593,6 +593,7 @@ func init() {
 		"try.r.busy":  {i18n.EN: "The machines are busy right now.", i18n.ZhCN: "机器这会儿正忙。"},
 		"try.r.load":  {i18n.EN: "The machines are under load right now.", i18n.ZhCN: "机器这会儿负载高。"},
 		"try.r.quota": {i18n.EN: "The shared subscription is running low for now.", i18n.ZhCN: "共用的订阅额度这会儿偏紧。"},
+		"try.r.nosub": {i18n.EN: "The trial has no subscription to use right now.", i18n.ZhCN: "试用暂时没有可用订阅。"},
 		"try.reach":   {i18n.EN: "Following 二四网络科技? We'll tell you on WeChat when it's your turn.", i18n.ZhCN: "关注了「二四网络科技」的，排到时微信通知你。"},
 		"try.wait": {i18n.EN: "All machines are taken. {n} ahead of you — about {m}. Keep this page open to hold your place.",
 			i18n.ZhCN: "机器都被领走了。前面还有 {n} 人，大约 {m}。开着这页就保住你的位置。"},

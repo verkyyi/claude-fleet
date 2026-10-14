@@ -331,6 +331,7 @@ func (s *Server) convertTrial(pid, display, by string, now time.Time) {
 		return
 	}
 	_ = s.Store.HubAudit(by, "trial.convert", pid, "ok", "试用转正式 · trial became a member", now)
+	s.trialCredOnConvert(pid, by, now)
 	if t.State != store.TrialPlaced {
 		s.placePrincipal(pid, display, by)
 		s.carryTrialConvo(pid)
