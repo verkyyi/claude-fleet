@@ -2789,6 +2789,25 @@ drill_drill_trial_escape() {
   SECS=$(since "$t0")
 }
 
+drill_browser_import_access_crossed() {
+  CAP=120; local t0 out rc
+  t0=$(now)
+  grep -q '^func TestBrowserCacheRejectsReplacedSecret(' "$ROOT/tokenledger/internal/credvault/browser_import_test.go" \
+    || { WHY="browser import has no credential replacement regression"; return 1; }
+  WHAT='导入保存与缓存之间替换 / 刷新同名行，旧 access 被拒且新行不变；正常导入保留 MeterID（Go 门验证）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+      go test -count=1 -run '^TestBrowserCache(RejectsReplacedSecret|PreservesSavedIdentity)$' ./internal/credvault 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="browser cache regression ran no tests"; return 1 ;;
+      0:*) WHAT='实际交错两份 Vault：替换和同身份刷新均拒旧 access；原行逐字节不变，正常导入保留配对与 MeterID（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="browser cache race: $(printf '%s' "$out" | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
 # this file runs part 1/2; the rest are its part files (issue #2694)
 : "${BREAK_PART:=1/2}"
 cred_run_drills "$0"
