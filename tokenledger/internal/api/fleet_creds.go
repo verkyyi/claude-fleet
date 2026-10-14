@@ -467,11 +467,22 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 		// (claude-fleet#2127). Never a secret.
 		type credRow struct {
 			store.Credential
-			AccountUUID string `json:"account_uuid,omitempty"`
+			AccountUUID string     `json:"account_uuid,omitempty"`
+			Plan        string     `json:"plan,omitempty"`
+			PlanSource  string     `json:"plan_source,omitempty"`
+			PlanAt      *time.Time `json:"plan_at,omitempty"`
 		}
 		rows := make([]credRow, 0, len(creds))
 		for _, c := range creds {
-			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c)})
+			plan, source := s.Vault.PlanMetadata(c)
+			var planAt *time.Time
+			if source == "provider" {
+				planAt = c.RefreshedAt
+				if planAt == nil {
+					planAt = &c.CreatedAt
+				}
+			}
+			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), Plan: plan, PlanSource: source, PlanAt: planAt})
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		// paused: the pool accounts an admin paused (claude-fleet#1990).

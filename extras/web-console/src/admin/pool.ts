@@ -20,8 +20,11 @@ export type LimitsBody = {
   read_note?: string;
 };
 export type AccountLimits = { account_uuid: string; label?: string; limits?: LimitsBody };
-export type Account = { account_uuid: string; label?: string; display_name?: string; email?: string; source?: string; subscription_type?: string };
+export type Account = { account_uuid: string; label?: string; display_name?: string; email?: string; source?: string; subscription_type?: string; rate_limit_tier?: string };
 export type PoolCredential = Credential & {
+  plan?: string;
+  plan_source?: string;
+  plan_at?: string;
   reauth_required?: boolean;
   refresh_error?: string;
   secret_expires_at?: string;
@@ -61,6 +64,9 @@ export type Sub = {
   label: string;
   prov: Prov;
   plan: string;
+  planSource?: string;
+  planAt?: string;
+  planTier?: string;
   h5: Window | null;
   h7: Window | null;
   available: boolean;
@@ -176,14 +182,17 @@ export function subscriptions(p: {
     return !r;
   });
   const base = { people: [] as string[], limited: false, reauth: false, owner: "" };
-  const out: Sub[] = rows.map(({ pa, label, prov, cred, a, owner }) => {
+  const out: Sub[] = rows.filter(r => r.cred).map(({ pa, label, prov, cred, a, owner }) => {
     const w = windowsOf(pa.limits);
     return {
       ...base,
       id: pa.account_uuid,
       label,
       prov,
-      plan: pa.limits?.plan || (a as Account).subscription_type || "",
+      plan: pa.limits?.plan || cred?.plan || (a as Account).subscription_type || "",
+      planSource: pa.limits?.plan ? "provider" : cred?.plan_source || "legacy",
+      planAt: pa.limits?.plan ? pa.limits.observed_at : cred?.plan_at || "",
+      planTier: (a as Account).rate_limit_tier || "",
       h5: w.h5,
       h7: w.h7,
       available: !!(pa.limits && pa.limits.available !== false),
@@ -205,7 +214,9 @@ export function subscriptions(p: {
       id: mine ? `own:${c.principal_id}/${credKey(c)}` : "cred:" + credKey(c),
       label: c.account,
       prov: credProv(c),
-      plan: "",
+      plan: c.plan || "",
+      planSource: c.plan_source,
+      planAt: c.plan_at,
       h5: null,
       h7: null,
       available: false,
@@ -234,7 +245,7 @@ export function withOverview(subs: Sub[], pool: OverviewPool[] | null | undefine
   if (!Array.isArray(pool)) return subs;
   const by = new Map(pool.filter((s) => s.owner === "pool" && s.provider !== "github").map((s) => [`${s.provider}/${s.account}`, s]));
   return subs.map((s) => {
-    const o = s.cred ? by.get(credKey(s.cred)) : undefined;
+    const o = s.cred && !s.owner ? by.get(credKey(s.cred)) : undefined;
     if (!o) return s;
     const u5 = pct(o.used_5h_pct);
     const u7 = pct(o.used_7d_pct);
@@ -250,7 +261,7 @@ export function withOverview(subs: Sub[], pool: OverviewPool[] | null | undefine
   });
 }
 
-export type State = "ok" | "near" | "limited" | "reauth" | "paused" | "unmanaged";
+export type State = "ok" | "near" | "limited" | "reauth" | "paused" | "unmanaged" | "unread";
 
 // top is the fuller of a row's two windows.
 export const top = (s: Sub) => Math.max(s.h5?.p ?? 0, s.h7?.p ?? 0);
@@ -264,6 +275,7 @@ export function stateOf(s: Sub, skip: number): State {
   if (s.reauth || s.cred?.reauth_required) return "reauth";
   if (s.limited || top(s) >= 100) return "limited";
   if (top(s) >= skip) return "near";
+  if (s.h5?.p == null && s.h7?.p == null) return "unread";
   return "ok";
 }
 
@@ -285,7 +297,7 @@ export function credState(c: PoolCredential | null, now = Date.now()): { tone: C
 // room is the pool's mean room left in a window over the managed, unpaused
 // rows that report it, and the soonest reset after now; null when none does.
 export function room(subs: Sub[], which: "h5" | "h7", now = Date.now()): { left: number; next: number | null } | null {
-  const ws = subs.filter((s) => s.managed && !s.paused && s[which]?.p != null).map((s) => s[which]!);
+  const ws = subs.filter((s) => s.managed && !s.owner && !s.paused && s[which]?.p != null).map((s) => s[which]!);
   if (!ws.length) return null;
   const left = Math.round(ws.reduce((a, w) => a + (100 - (w.p as number)), 0) / ws.length);
   const next = ws.map((w) => toMs(w.resets)).filter((ms) => Number.isFinite(ms) && ms > now).sort((a, b) => a - b)[0];
