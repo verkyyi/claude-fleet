@@ -1494,6 +1494,13 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         self.assertIn("--ignore-check 'node tools' --ignore-check 'node image'", wf)
         self.assertIn('role: gha-claudefleet-node-image', wf)
         self.assertIn('--target tools --provenance=false', wf)   # ACR refuses an attestation manifest
+        node = wf.split('\n  node-image:\n', 1)[1]
+        node = node[:node.index('build and push (train-build.sh)')]
+        # #4109: the cluster's git mirror first; GitHub only when it fails, bounded
+        self.assertIn('vars.FLEET_TRAIN_GIT_MIRROR', node)
+        self.assertLess(node.index('git fetch -q --no-tags "$MIRROR"'), node.index('uses: actions/checkout@v4'))
+        self.assertEqual(node.count("steps.mirror.outputs.ok != 'true'"), 2)
+        self.assertEqual(node.count('timeout-minutes: 5'), 2)
 
     def test_image_self_updates_on_its_volume(self):
         """The image's defaults (#3212): the runtime on the PVC, owner node (the
