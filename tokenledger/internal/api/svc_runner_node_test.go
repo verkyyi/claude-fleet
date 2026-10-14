@@ -180,3 +180,53 @@ func TestSvcLoginsSettings(t *testing.T) {
 		}
 	}
 }
+
+// Two hub replicas (claude-fleet#4086, R2): the service login's link is held by
+// the replica that does NOT run the svc-runs loop. The leader still finds the
+// slot through fleet_node_conns and hands the start (and a cancel) to the
+// holder, which writes it down the link and returns the agent's ack.
+func TestSvcRunOnAnotherReplica(t *testing.T) {
+	ha, hb := newReplicaPair(t)
+	if err := ha.srv.Store.SetFleetSetting(CredPolicyModeKey, "legacy", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []*harness{ha, hb} {
+		h.srv.SessionCredKey = bytes.Repeat([]byte{9}, 32)
+		h.srv.SvcRunner = NewNodeSvcRunner(h.srv)
+	}
+	tok := svcSetup(t, ha, "livepage", "runs:write runs:read templates:write")
+	if err := ha.srv.Store.PutSvcTemplate(store.SvcTemplate{Principal: "svc:livepage", Digest: svcTestDigest,
+		Name: "daily", AgentMD: svcTestAgent}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := ha.srv.Store.SetFleetSetting(SvcLoginsKey, "mini:fleetsvc1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	svc := startFakeSvcLogin(t, hb, "svc1", "mini", "fleetsvc1")
+	waitFor(t, 3*time.Second, "hub-b holds the service login's link", func() bool {
+		return holder(t, ha, "ep_svc1") == "hub-b" && ha.srv.nodes.get("ep_svc1") == nil
+	})
+	settings, _ := ha.srv.Store.FleetSettings()
+	if n := (&NodeSvcRunner{s: ha.srv}).FreeSlots(settings); n != 1 {
+		t.Fatalf("hub-a sees %d free slots; want the one hub-b holds", n)
+	}
+	ref := svcSubmit(t, ha, tok, svcReq("space:ws:a", "a1"))["run_id"].(string)
+	ha.srv.SvcRunsTick(context.Background(), time.Now())
+	if got := svc.expectStart(t); got.Run != ref || got.Attempt != 1 {
+		t.Fatalf("svc_run %+v; want %s attempt 1", got, ref)
+	}
+	if st := svcState(t, ha, tok, ref)["state"]; st != store.SvcRunRunning {
+		t.Fatalf("state %v after the forwarded start; want running", st)
+	}
+	if st, _ := svcDo(t, ha, http.MethodPost, SvcRunsPath+"/"+ref+"/cancel", tok, nil); st/100 != 2 {
+		t.Fatalf("cancel: %d", st)
+	}
+	select {
+	case c := <-svc.cancels:
+		if c.Run != ref {
+			t.Fatalf("svc_run_cancel %+v; want %s", c, ref)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no svc_run_cancel through hub-b")
+	}
+}

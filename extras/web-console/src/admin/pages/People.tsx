@@ -11,6 +11,7 @@ import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
@@ -204,6 +205,13 @@ function PersonDrawer({ r, close, reload }: { r: Row; close: () => void; reload:
         <SheetDescription className="font-mono text-xs">
           {u.deploy ? t("role.deploy") : t(r.admin ? "role.admin" : "role.user")} · {r.id}
         </SheetDescription>
+        {/* 以他的视角看 (claude-fleet#3944): their 我的, read-only, in a tab of its own */}
+        <Button asChild variant="outline" size="sm" className="mt-2 w-fit" title={t("drawer.viewAsHint")}>
+          <a href={`/app?as=${encodeURIComponent(r.id)}`} target="_blank" rel="noopener">
+            <Eye />
+            {t("drawer.viewAs")}
+          </a>
+        </Button>
       </SheetHeader>
       <div className="grid gap-6 p-6">
         <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2.5 text-sm">

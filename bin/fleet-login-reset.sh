@@ -17,8 +17,11 @@
 #              started (issue #3979); the home RENAMED aside into the archive dir
 #              (instant, out of the login's reach at once) — archived there
 #              (--keep-home, once per op) and deleted by a detached job, off the
-#              clock; quiesced once more; then all at once: a fresh home from
-#              the template (createhomedir, 700); the admin's ~/<login>-onboard;
+#              clock; quiesced once more; then all at once: a fresh home — a
+#              clone of root's home template of the runtime's version
+#              (fleet-home-template.py clone, issue #4194: installed already),
+#              else the system template (createhomedir, 700) and a template
+#              build started off the clock; the admin's ~/<login>-onboard;
 #              its crontab; root's entry keys and task state for it (<node
 #              state>/entry/keys/<login>, logins/<login>/); a credsep store left
 #              over; any LaunchDaemon whose UserName it is; every file it owns in
@@ -67,7 +70,8 @@
 #   FLEET_LOGIN_RESET_SETTLE (seconds of watch after a quiesce, default 0) ·
 #   FLEET_LOGIN_RESET_ASIDE=wait (the old home's archive + delete in the run);
 #   FLEET_LOGIN_TEST_EUID (the EUID the root-mode test reads);
-#   FLEET_LOGIN_RESET_{REMOVE,NEW,CHECK} — the three scripts; FLEET_LOGIN_REMOVE_SSH
+#   FLEET_LOGIN_RESET_{REMOVE,NEW,CHECK} — the three scripts; FLEET_LOGIN_RESET_TEMPLATE
+#   (fleet-home-template.py; `0` = no template, createhomedir only); FLEET_LOGIN_REMOVE_SSH
 #   (the wash's road with no Full Disk Access, `0` = none) · FLEET_LOGIN_REMOVE_TCC_DB.
 set -uo pipefail
 
@@ -295,7 +299,26 @@ jobs_wait() {
   opput jobs "$JOBT" wash
   [ ! -s "$JOBS/failed" ] || failed wash "could not $(tr '\n' ' ' < "$JOBS/failed" | sed 's/ $//') (above)"
 }
-fresh_home() { sudo createhomedir -c -u "$LOGIN" && sudo chmod 700 "$H" && [ -d "$H" ]; }
+# The fresh home: a clone of root's home template for the runtime's version
+# (issue #4194, bin/fleet-home-template.py — built once per version from the
+# runtime alone, never from a home; the rejoin then has nothing to install).
+# No template for this version (exit 3): the template's skeleton the old way,
+# and a build started off the clock for the next wash. A clone that fails is
+# removed by the script itself — the old way then, as with none.
+TPL_PY=${FLEET_LOGIN_RESET_TEMPLATE:-$BIN/fleet-home-template.py}
+fresh_home() {
+  local out rc
+  if [ "$TPL_PY" != 0 ] && [ -f "$TPL_PY" ]; then
+    out=$(sudo python3 -I "$TPL_PY" clone "$LOGIN" --home "$H" 2>&1); rc=$?
+    printf '%s\n' "$out"
+    [ "$rc" = 0 ] && return 0
+    if [ "$rc" = 3 ]; then
+      nohup sudo python3 -I "$TPL_PY" build >> "$OPDIR/template.log" 2>&1 < /dev/null &
+      disown 2>/dev/null || :
+    fi
+  fi
+  sudo createhomedir -c -u "$LOGIN" && sudo chmod 700 "$H" && [ -d "$H" ]
+}
 cron_clear() {
   local cerr
   cerr=$(sudo crontab -u "$LOGIN" -r 2>&1) && return 0
@@ -419,6 +442,8 @@ if [ "$DONE_REJOIN" = 0 ]; then
   quiesce
   lap requiesce
   # The fresh home and every sweep at once: none of them touches another's.
+  show sudo python3 -I "$TPL_PY" clone "$LOGIN" --home "$H"
+  printf '  (no template for this version: the old way, and a template build off the clock)\n'
   show sudo createhomedir -c -u "$LOGIN"; show sudo chmod 700 "$H"
   job home fresh_home
   # the admin's onboarding papers (key pair, password, letter) — and root's;

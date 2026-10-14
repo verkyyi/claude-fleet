@@ -55,6 +55,12 @@
 #             person's own repo, cloned over https, so no `gh auth` is needed.
 #   doctor    fleet-doctor.sh, output passed through — a report, never a gate.
 #
+# A home template (issue #4194, bin/fleet-home-template.py build): root runs this
+# once per runtime version with FLEET_BOOTSTRAP_FLEET=0 into a staging home — the
+# starter is checked out, no fleet is started, nothing is marked bootstrapped. A
+# login cloned from it finds global/home-template: its apply is only
+# `fleet-install-apply.sh --conf-only` (its own fleet.conf), the rest is there.
+#
 # Every step is timed: one `timing:` line at the end, and the same in
 # `$FLEET_CONF_DIR/global/bootstrap.timing` — `<UTC> source=<s> total=<n>s
 # install=<n>s claude=… doctor=<n>s` (install's source and seconds from
@@ -214,7 +220,18 @@ nodaemons=''
 if [ "$platform" = launchd ] && [ "$sysd" = 0 ] && ! "${FLEET_INSTALL_LAUNCHCTL:-launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
   nodaemons=1
 fi
-if [ -f "$APPLIED" ]; then
+if [ -f "$APPLIED" ] && [ -f "$G/home-template" ]; then
+  # a home cloned from root's template (fleet-home-template.py, issue #4194):
+  # everything the version installs is in it already — only this login's own
+  # conf is left (7b wrote fleet.conf; the hub's address, FLEET_MACHINE_TASKS)
+  if out=$(bash "$ROOT/bin/fleet-install-apply.sh" --conf-only 2>&1); then
+    printf '%s\n' "$out" | sed 's/^/    /'
+    say "apply: ok — from the home template ($(cat "$G/home-template")), this login's conf filled"
+  else
+    printf '%s\n' "$out" | sed 's/^/    /'
+    fail apply "fleet-install-apply.sh --conf-only did not pass (lines above)"
+  fi
+elif [ -f "$APPLIED" ]; then
   say "apply: ok — applied before ($(cat "$APPLIED"))"
 else
   [ "$sysd" = 1 ] && say "apply: system LaunchDaemons com.claude-fleet.$login.* are installed — no GUI sign-in needed"
@@ -317,7 +334,9 @@ else
         || fail fleet "git clone $GITBASE/$SEED.git failed"
     fi
   fi
-  if [ -d "$seed_dir/.git" ]; then
+  if [ -d "$seed_dir/.git" ] && [ "${FLEET_BOOTSTRAP_FLEET:-1}" = 0 ]; then
+    say "fleet: skipped (FLEET_BOOTSTRAP_FLEET=0 — the starter is checked out, no fleet started: a home template, issue #4194)"
+  elif [ -d "$seed_dir/.git" ]; then
     if out=$(bash "$ROOT/bin/fleet-up.sh" "$SEED" "$seed_dir" --seed --no-attach </dev/null 2>&1); then
       printf '%s\n' "$out" | sed 's/^/    /'
       say "fleet: ok — up on the starter repo $SEED (looks only; add your own with fleet-up.sh <owner/repo>)"
@@ -330,7 +349,9 @@ fi
 step_end fleet
 
 # --- done? --------------------------------------------------------------------
-if [ "$FAILS" = 0 ]; then
+if [ "$FAILS" = 0 ] && [ "${FLEET_BOOTSTRAP_FLEET:-1}" = 0 ]; then
+  say "not marked bootstrapped — no fleet was started (FLEET_BOOTSTRAP_FLEET=0)"
+elif [ "$FAILS" = 0 ]; then
   date -u '+%Y-%m-%dT%H:%M:%SZ' > "$DONE"
   say "bootstrapped — marked $DONE"
 fi
