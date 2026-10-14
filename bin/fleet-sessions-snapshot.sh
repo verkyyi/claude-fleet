@@ -107,7 +107,11 @@ save() {
       $1 == "PIN" || $1 == "DESK" || $1 == "OWID" { post = post $0 "\n"; pend = ""; fid = ""; next }
       { pend = ""; fid = "" }
       END { if (c > 0) printf "%s", post > map; print c + 0 }' "$mf")
-    if [ "${n:-0}" -gt 0 ]; then mv -f "$SDIR/$sess.map.tmp" "$SDIR/$sess.map"
+    # A fleet with no session open keeps its copy too — the FLEET row alone: its
+    # home is still the person's view, and with no copy restore brought nothing
+    # back (issue #4199: a login with no session — a China pod can run none —
+    # drew no view after every pod roll).
+    if grep -q '^FLEET' "$SDIR/$sess.map.tmp" 2>/dev/null; then mv -f "$SDIR/$sess.map.tmp" "$SDIR/$sess.map"
     else rm -f "$SDIR/$sess.map.tmp" "$SDIR/$sess.map"; fi
     total=$((total + ${n:-0}))
   done
@@ -179,6 +183,12 @@ restore() {
     if grep -q '^WIN' "$tmp"; then
       log "restore: $sess — $(grep -c '^WIN' "$tmp") pinned session(s)"
       RESTORE_ONLY_MAP="$tmp" RESTORE_UNFINISHED=1 RESTORE_KEEP_DONE=1 bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :
+    elif [ ! -f "$FLEET_CONF_DIR/fleets/$sess/restore.down" ] \
+         && ! tmux -L "$(fleet_socket "$sess")" has-session -t "$sess" 2>/dev/null; then
+      # no session to bring back, but the fleet itself is the person's view: up
+      # it comes, its home alone (issue #4199) — a fleet-down one stays down
+      log "restore: $sess — no session pinned, bringing the fleet back up"
+      RESTORE_ONLY_MAP="$tmp" bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :
     fi
     rm -f "$tmp"
   done

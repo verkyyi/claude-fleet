@@ -16,6 +16,10 @@
 #   D  a worktree deleted while the server was down is never woken (`gone`)
 #   E  a fleet fleet-down took down on purpose stays down (`down`)
 #   G  nothing skipped → still restored (issue #3289)
+#   H  a fleet with NO session open (issue #4199: a China login can run none):
+#      save keeps its map copy, kill-server → restore brings its home back; a
+#      fleet-down one stays down. FSS_ONLY=H runs only this leg (BREAK-IT
+#      empty-fleet-not-restored)
 #   F  no snapshot → exit 3
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -62,6 +66,25 @@ ss() {
     bash "$WORK/inst/bin/fleet-sessions-snapshot.sh" "$@"
 }
 until_ok() { local secs="$1" _; shift; for _ in $(seq 1 $((secs * 10))); do "$@" && return 0; sleep 0.1; done; "$@"; }
+
+# ---- H. a fleet with no session: its home still comes back (issue #4199) -------
+nt -f /dev/null new-session -d -s oc -n home -x 120 -y 30 -c "$WORK/main" 'exec sleep 600' || fail "H: no isolated server"
+out=$(ss save) || fail "H: save exited non-zero ($out)"
+grep -q $'^FLEET\toc\t' "$WORK/conf/global/sessions.snapshot.d/oc.map" 2>/dev/null \
+  || fail "H: an empty fleet left no map copy — restore would bring nothing back ($out)"
+nt kill-server
+out=$(ss restore); rc=$?
+[ "$rc" = 0 ] || fail "H: restore of an empty fleet exit $rc ($out)"
+until_ok 10 nt has-session -t oc 2>/dev/null || fail "H: an empty fleet did not come back up ($(tail -3 "$WORK/conf/restore/restore.log" 2>/dev/null))"
+ss save >/dev/null
+nt kill-server
+: > "$WORK/conf/fleets/oc/restore.down"
+ss restore >/dev/null
+nt has-session -t oc 2>/dev/null && fail "H: a fleet-down empty fleet was brought back"
+rm -f "$WORK/conf/fleets/oc/restore.down" "$WORK/conf/global/sessions.snapshot" "$WORK/conf/global/sessions.snapshot.d/oc.map"
+if [ "${FSS_ONLY:-}" = H ]; then
+  echo "selftest PASS: fleet-sessions-snapshot H — an empty fleet comes back up after kill-server; a fleet-down one stays down"; exit 0
+fi
 
 # a live fleet: home + four sessions mid-work, one finished
 nt -f /dev/null new-session -d -s oc -n home -x 120 -y 30 -c "$WORK/main" 'exec sleep 600' || fail "no isolated server"
@@ -181,4 +204,4 @@ rm -f "$SNAP"
 ss restore >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] || fail "F: restore with no snapshot exit $rc, want 3"
 
-echo "selftest PASS: fleet-sessions-snapshot — save pins every open session (done + no-repo too, never exited); kill-server → restore brings each back (same name, cwd, transcript, reap policy); closed / gone / down stay closed; nothing skipped still restores; idempotent"
+echo "selftest PASS: fleet-sessions-snapshot — save pins every open session (done + no-repo too, never exited); kill-server → restore brings each back (same name, cwd, transcript, reap policy); closed / gone / down stay closed; nothing skipped still restores; an empty fleet comes back; idempotent"

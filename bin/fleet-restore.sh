@@ -1149,7 +1149,9 @@ auto_restore() {
     age=$(stat -c %Y "$mf" 2>/dev/null || stat -f %m "$mf" 2>/dev/null || echo 0)
     case "$age" in ''|*[!0-9]*) age=0 ;; esac
     [ $(( now - age )) -le "$maxage" ] || continue
-    grep -q '^WIN' "$mf" || continue                  # nothing to bring back
+    # A map with no WIN row still comes back (issue #4199): the fleet itself — its
+    # home — is the person's view, and a login with no session (a China pod can
+    # run none) otherwise drew no view after every kill-server or pod roll.
     tmux -L "$(fleet_socket "$s")" has-session -t "$s" 2>/dev/null && continue
     down="$down $s"
   done < <(each_restore_map)

@@ -211,7 +211,10 @@ L=$HOME/.cache/claude-fleet/thin.log T=cnprobe
 fleet route "$M" "$R" >/dev/null 2>&1
 n0=$(cat "$L" 2>/dev/null | wc -l)
 tmux -L $T kill-server 2>/dev/null
-tmux -L $T new-session -d -s v -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet; echo __CNP_EXIT=\$?; sleep 900" || { echo "VIEW notmux"; exit 0; }
+# a server still going away from the kill above answers once (#4199): one retry,
+# then tmux's own words
+tn() { tmux -L $T new-session -d -s v -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet; echo __CNP_EXIT=\$?; sleep 900" 2>&1; }
+e=$(tn) || { sleep 1; e=$(tn); } || { echo "VIEW notmux $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-160)"; exit 0; }
 new() { tail -n +$((n0 + 1)) "$L" 2>/dev/null; }
 up=''
 for i in $(seq 1 "$UPS"); do
@@ -250,7 +253,7 @@ view_step() {
       fi ;;
     'VIEW stay '*) fail "view:$r" "drawn, then gone within ${STAY}s (${st#VIEW stay }): $(printf '%s' "$scr" | shown)" ;;
     'VIEW noview') fail "view:$r" "bare fleet drew no view in ${VIEW_UP}s (no drawn row in thin.log): $(printf '%s' "$scr" | shown)" ;;
-    'VIEW notmux') fail "view:$r" "no tmux for $AS on the client — cannot give fleet a terminal" ;;
+    'VIEW notmux'*) fail "view:$r" "no tmux for $AS on the client — cannot give fleet a terminal: ${st#VIEW notmux}" ;;
     *) fail "view:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
   esac
 }
@@ -268,7 +271,10 @@ for r in rows: print(r.get("key", ""))' 2>/dev/null | sort; }
 fleet route "$M" "$R" >/dev/null 2>&1
 before=$(keys)
 tmux -L $T kill-server 2>/dev/null
-tmux -L $T new-session -d -s c -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet codex --new '$ASK'; echo __CNP_EXIT=\$?; sleep 900" || { echo "CODEX notmux"; exit 0; }
+# a server still going away from the kill above answers once (#4199): one retry,
+# then tmux's own words
+tn() { tmux -L $T new-session -d -s c -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet codex --new '$ASK'; echo __CNP_EXIT=\$?; sleep 900" 2>&1; }
+e=$(tn) || { sleep 1; e=$(tn); } || { echo "CODEX notmux $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-160)"; exit 0; }
 st=wait t0=$(date +%s)
 while [ $(( $(date +%s) - t0 )) -lt "$SECS" ]; do
   sleep 3
@@ -298,7 +304,7 @@ codex_step() {
     answered) pass "codex:$r" "a new Codex session answered $w in ${3:-?}s" ;;
     exited) fail "codex:$r" "fleet codex --new came back without a session: $scr" ;;
     wait) fail "codex:$r" "no answer carrying $w in ${ANSWER}s: $scr" ;;
-    notmux) fail "codex:$r" "no tmux for $AS on the client — cannot give fleet a terminal" ;;
+    notmux) fail "codex:$r" "no tmux for $AS on the client — cannot give fleet a terminal: ${st#CODEX notmux}" ;;
     *) fail "codex:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
   esac
 }
