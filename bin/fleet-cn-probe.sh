@@ -111,7 +111,13 @@ out=$(on_client "timeout $TMO fleet connect $MACHINE --verbose --retest -- hostn
 say "INFO table"
 printf '%s\n' "$out" | sed -n '/^fleet connect · /,/^→ /p' | sed 's/^/     /'
 picked=$(printf '%s\n' "$out" | sed -n 's/^→ 选中 //p' | tail -1)
-[ -n "$ROUTES" ] || ROUTES=$(printf '%s\n' "$out" | sed -n '/^fleet connect · /,/^→ /p' | sed -n '3,$p' | grep -v '^→' | cut -c3- | awk '{print $1}' | tr '\n' ' ')
+# a route the table marks as not for this computer (a LAN it is not on, a
+# tailnet it is not in) is named, never forced: it is not a road from here
+rows=$(printf '%s\n' "$out" | sed -n '/^fleet connect · /,/^→ /p' | sed -n '3,$p' | grep -v '^→')
+for r in $(printf '%s\n' "$rows" | grep -E '不在这台机器的局域网|Tailscale' | cut -c3- | awk '{print $1}'); do
+  say "INFO $r not a road from this client (the table says so) — not tested"
+done
+[ -n "$ROUTES" ] || ROUTES=$(printf '%s\n' "$rows" | grep -vE '不在这台机器的局域网|Tailscale' | cut -c3- | awk '{print $1}' | tr '\n' ' ')
 hostkey() { printf '%s' "$1" | grep -E 'REMOTE HOST IDENTIFICATION|Host key verification failed|主机钥匙' | head -1; }
 if printf '%s\n' "$out" | grep -q '^rc=0$' && printf '%s\n' "$out" | grep -q "^$MACHINE"; then
   hk=$(hostkey "$out"); if [ -n "$hk" ]; then fail auto "host key: $hk"; else pass auto "picked ${picked:-?}"; OKS="自动选 ${picked:-?}"; fi
@@ -124,13 +130,20 @@ fi
 # list is the hub's door list (the person's entry home is not on the pod).
 door_why() {
   command -v "$KUBECTL" >/dev/null 2>&1 || return 0
-  local p st
+  local p st why
   p=$("$KUBECTL" -n "$DOOR_NS" get pod -l app.kubernetes.io/name=fleet-door -o name 2>/dev/null | head -1)
   [ -n "$p" ] || return 0
   st=$("$KUBECTL" -n "$DOOR_NS" exec "$p" -- cat /var/db/fleet-node/entry/state.json 2>/dev/null |
     python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(d.get("allow") or []), d.get("version"))' 2>/dev/null)
+  # the door's sshd says why in its own log (LogLevel VERBOSE)
+  why=$("$KUBECTL" -n "$DOOR_NS" exec "$p" -- grep -E "Authentication refused|user $AS |$AS not allowed|publickey for $AS " /var/log/fleet-node/entry.log 2>/dev/null | tail -3 | tr '\n' ' ')
+  case "$why" in *'account is locked'*)
+    say "INFO door the door account of $AS is LOCKED (/etc/shadow !) — the door's sshd (UsePAM no) refuses it whatever the key (#4161)"; return 0 ;;
+  *'bad ownership or modes'*)
+    say "INFO door the door's sshd refuses every key: $(printf '%s' "$why" | sed 's/.*Authentication refused: //; s/ Failed.*//') (StrictModes, #4161)"; return 0 ;;
+  esac
   case " ${st% *} " in
-    *" $AS "*) say "INFO door $AS is on the door's list (v${st##* }) — the key it offered is not one the hub gave the door" ;;
+    *" $AS "*) say "INFO door $AS is on the door's list (v${st##* }) — the door refused its key: ${why:-nothing in its log}" ;;
     *) say "INFO door $AS is NOT on the door's list (v${st##* }: ${st% *}) — the hub routes only a person whose entry home is a user pod" ;;
   esac
 }
@@ -142,7 +155,7 @@ for r in $ROUTES; do
   unpin
   hk=$(hostkey "$out")
   if printf '%s\n' "$out" | grep -q "^$MACHINE" && printf '%s\n' "$out" | grep -q '^rc=0$' && [ -z "$hk" ]; then
-    pass "$r" "ran hostname on $(printf '%s\n' "$out" | grep "^$MACHINE" | head -1)"; OKS="$OKS；$r 通"
+    pass "$r" "ran hostname on $(printf '%s\n' "$out" | grep "^$MACHINE" | head -1)"; OKS="${OKS}；$r 通"
   else
     fail "$r" "${hk:-$(printf '%s\n' "$out" | grep -v '^rc=' | tail -3 | tr '\n' ' ')}"
     case "$r:$out" in entry:*'Permission denied (publickey)'*) door_why ;; esac
