@@ -557,6 +557,9 @@ cn_gate() {   # cn_gate <old> <new>
   _s=${slug:-$(repo_slug)}; [ -n "$_s" ] || return 0
   _row=$(gh api "repos/$_s/commits/$1/statuses?per_page=100" \
     --jq "[.[] | select(.context == \"$CN_CONTEXT\")][0] | [.state, (.target_url // \"-\"), (.description // \"\")] | @tsv" 2>/dev/null | head -n 1)
+  # only the row this --jq prints (state, target, description) is a verdict —
+  # anything else (an older gh, a stub answering every statuses read) is none
+  case "$_row" in *"	"*"	"*) ;; *) _row='' ;; esac
   _st=$(printf '%s' "$_row" | cut -f1) _url=$(printf '%s' "$_row" | cut -f2) _desc=$(printf '%s' "$_row" | cut -f3)
   case "$_st" in
     success) printf 'cn: the China real-user path is green on %s\n' "$(short "$1")"; return 0 ;;
