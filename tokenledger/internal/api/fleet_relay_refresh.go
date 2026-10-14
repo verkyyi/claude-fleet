@@ -42,7 +42,18 @@ const (
 var errHubRelayPassOff = errors.New("no session pass key (CCQUOTA_FLEET_SESSION_CRED_KEY) to sign the hub's relay pass")
 
 func (s *Server) hubRelayPassMAC(body string) []byte {
-	k := hmac.New(sha256.New, s.SessionCredKey)
+	return hubRelayPassMACWith(s.SessionCredKey, body)
+}
+
+// hubRelayPassOK checks a frh1 MAC under the current key and, while a
+// rotation overlaps (claude-fleet#4138), the retiring one.
+func (s *Server) hubRelayPassOK(body string, got []byte) bool {
+	return hmac.Equal(got, s.hubRelayPassMAC(body)) ||
+		(len(s.SessionCredKeyPrev) > 0 && hmac.Equal(got, hubRelayPassMACWith(s.SessionCredKeyPrev, body)))
+}
+
+func hubRelayPassMACWith(key []byte, body string) []byte {
+	k := hmac.New(sha256.New, key)
 	k.Write([]byte("claude-fleet hub relay pass v1"))
 	mac := hmac.New(sha256.New, k.Sum(nil))
 	mac.Write([]byte(body))
@@ -73,7 +84,7 @@ func (s *Server) verifyHubRelayPass(tok, uri string, now time.Time) relayVerdict
 	}
 	body := tok[:i]
 	got, err := base64.RawURLEncoding.DecodeString(tok[i+1:])
-	if err != nil || !hmac.Equal(got, s.hubRelayPassMAC(body)) {
+	if err != nil || !s.hubRelayPassOK(body, got) {
 		return relayVerdict{why: "hub pass refused: signature does not verify"}
 	}
 	exp, err := strconv.ParseInt(body[len(hubRelayPassPrefix):], 10, 64)

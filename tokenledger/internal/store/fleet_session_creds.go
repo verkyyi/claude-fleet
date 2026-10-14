@@ -161,6 +161,18 @@ func (s *Store) RenewSessionCred(id string, exp, at, lapsedSince time.Time) (boo
 	return n == 1, nil
 }
 
+// SessionCredsSignedBefore counts the passes a node may still renew (not
+// revoked, expired no earlier than renewableSince) whose newest signature —
+// the renewal, else the issue — is older than t: during a key rotation
+// (claude-fleet#4138) those are still the retiring key's.
+func (s *Store) SessionCredsSignedBefore(t, renewableSince time.Time) (int, error) {
+	var n int
+	err := s.write.QueryRow(`SELECT COUNT(*) FROM fleet_session_creds
+		WHERE revoked_at IS NULL AND expires_at > ? AND COALESCE(renewed_at, issued_at) < ?`,
+		renewableSince.UTC().Format(sessRFC), t.UTC().Format(sessRFC)).Scan(&n)
+	return n, err
+}
+
 // RevokeSessionCred revokes a pass; false when it was unknown or already
 // revoked (the first revocation's time and actor stand).
 func (s *Store) RevokeSessionCred(id, by, reason string, at time.Time) (bool, error) {

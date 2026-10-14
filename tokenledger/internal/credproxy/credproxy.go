@@ -98,6 +98,8 @@ type Resolution struct {
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 is signed with (base64), when the hub has one.
 	SessionPub string `json:"session_pub,omitempty"`
+	// SessionPubPrev is the key a rotation retires (claude-fleet#4138).
+	SessionPubPrev string `json:"session_pub_prev,omitempty"`
 }
 
 // ErrHubUnavailable is a resolve the hub could not answer — the proxy rides
@@ -193,8 +195,26 @@ type Proxy struct {
 
 	mu    sync.Mutex
 	cache map[string]*entry
-	pub   ed25519.PublicKey // fcp-h2's key, under mu
+	pub   ed25519.PublicKey // fcp-h2's key given at start, under mu
+	// learned are the keys the hub's newest answer named — current, then
+	// the one a rotation retires (claude-fleet#4138) — under mu.
+	learned []ed25519.PublicKey
+	// seen is when an answer last named each key: one named within keySeen
+	// still verifies — in a rolling deploy old and new replicas answer by
+	// turns. Under mu.
+	seen map[string]time.Time
+	// unknownAt is when a pass no known key verifies was last let through to
+	// the hub — at most once a keyRecheck — so a key rotated while this proxy
+	// ran is learned from the hub's answer, and a forgery storm is not
+	// forwarded (claude-fleet#4138). Under mu.
+	unknownAt time.Time
 }
+
+// keyRecheck bounds how often a pass under an unknown key goes to the hub.
+const keyRecheck = time.Minute
+
+// keySeen is how long a key the hub named stays good after it stops naming it.
+const keySeen = 10 * time.Minute
 
 type entry struct {
 	mu  sync.Mutex // one resolve at a time per pass
@@ -261,18 +281,32 @@ func ParseSessionPub(s string) (ed25519.PublicKey, error) {
 	return nil, errors.New("session pub must be a 32-byte Ed25519 public key, base64 encoded")
 }
 
-// learnPub keeps the hub's fcp-h2 key from an answer, when none is held.
+// learnPub keeps the hub's fcp-h2 keys from an answer: each answer that
+// names one replaces what the last did, so a rotated key is followed
+// (claude-fleet#4138) — a pass signed by the retiring key still verifies
+// while the hub names it as session_pub_prev.
 func (p *Proxy) learnPub(r Resolution) {
-	if r.SessionPub == "" {
-		return
-	}
 	k, err := ParseSessionPub(r.SessionPub)
 	if err != nil || k == nil {
 		return
 	}
+	keys := []ed25519.PublicKey{k}
+	if pk, err := ParseSessionPub(r.SessionPubPrev); err == nil && pk != nil {
+		keys = append(keys, pk)
+	}
+	now := p.cfg.Now()
 	p.mu.Lock()
-	if p.pub == nil {
-		p.pub = k
+	p.learned = keys
+	if p.seen == nil {
+		p.seen = map[string]time.Time{}
+	}
+	for k, at := range p.seen {
+		if now.Sub(at) >= keySeen {
+			delete(p.seen, k)
+		}
+	}
+	for _, k := range keys {
+		p.seen[string(k)] = now
 	}
 	p.mu.Unlock()
 }
@@ -281,9 +315,18 @@ func (p *Proxy) learnPub(r Resolution) {
 // reason it is refused otherwise, or "-" when no key is known yet (ask the hub).
 func (p *Proxy) checkPass2(pass string, now time.Time) string {
 	p.mu.Lock()
-	pub := p.pub
+	var keys []ed25519.PublicKey
+	if len(p.pub) == ed25519.PublicKeySize {
+		keys = append(keys, p.pub)
+	}
+	keys = append(keys, p.learned...)
+	for k, at := range p.seen {
+		if now.Sub(at) < keySeen && !now.Before(at) {
+			keys = append(keys, ed25519.PublicKey(k))
+		}
+	}
 	p.mu.Unlock()
-	if len(pub) != ed25519.PublicKeySize {
+	if len(keys) == 0 {
 		return "-"
 	}
 	parts := strings.Split(pass, ".")
@@ -291,7 +334,25 @@ func (p *Proxy) checkPass2(pass string, now time.Time) string {
 		return "malformed"
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[2], "="))
-	if err != nil || !ed25519.Verify(pub, []byte(parts[0]+"."+parts[1]), sig) {
+	if err != nil {
+		return "signature does not verify (not issued by this hub)"
+	}
+	good := false
+	for _, pub := range keys {
+		if good = ed25519.Verify(pub, []byte(parts[0]+"."+parts[1]), sig); good {
+			break
+		}
+	}
+	if !good {
+		p.mu.Lock()
+		ask := p.unknownAt.IsZero() || now.Sub(p.unknownAt) >= keyRecheck || now.Before(p.unknownAt)
+		if ask {
+			p.unknownAt = now
+		}
+		p.mu.Unlock()
+		if ask {
+			return "-" // perhaps a key the hub rotated to: its answer teaches it
+		}
 		return "signature does not verify (not issued by this hub)"
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))

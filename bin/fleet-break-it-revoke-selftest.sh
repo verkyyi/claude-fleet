@@ -12,6 +12,9 @@
 #                               (entry revocations follow: the list → revoked.krl, RevokedKeys)
 #   relay-revocations-hub-down  extras/cred-relay/fleet-relay-check.py (the kept list, version
 #                               resume, list-stale), the hub half: go test -run Revocations
+#   key-rotation-breaks-sessions  extras/cred-relay/fleet-relay-check.py (relay_pub_prev, a key
+#                               seen lately), the hub half: go test -run KeyRotation
+#                               (fleet_key_rotation_test.go, credproxy/pass2_test.go) — issue #4138
 #
 # ONE fake hub plays /v1/relay/check (an allow list) and the list
 # (/v1/relay/revocations + /v1/node/revocations, held while ?since is current);
@@ -379,6 +382,64 @@ PY
 )
   [ "$why" = "renewal ok" ] || { WHY="the proxy's renewal: $(printf '%s' "$why" | tail -3 | tr '\n' ' ')"; return 1; }
   WHAT="会话里抄走的中转通行证（frl2）：活着时中转自己验签放行、不问入口；过了 4 小时 ${SECS}s 内被拒；改成别的登录或别的钥匙签的立刻 403；入口停着照样；吊销后立刻拒。会话通行证（fcp-h2）同样中转自己验签、只放它覆盖的服务商、过期 / 别的钥匙即拒、上名单即拒，/v1/relay/check 一次没问。代理只在用到时剩不到 20%、或到 80% 处请求续，日志写原因"
+}
+
+# rot_list <dir> <v> <relay_pub> [relay_pub_prev] — a list with no entries
+# naming the hub's key(s), as a hub mid-rotation (claude-fleet#4138) serves it
+rot_list() {
+  python3 -c 'import json, os, sys
+d, v, pub = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+l = {"v": v, "at": 0, "entries": [], "relay_pub": pub}
+if len(sys.argv) > 4: l["relay_pub_prev"] = sys.argv[4]
+json.dump(l, open(os.path.join(d, "list.tmp"), "w")); os.rename(os.path.join(d, "list.tmp"), os.path.join(d, "list.json"))' "$@"
+}
+
+drill_key_rotation_breaks_sessions() {
+  CAP=10   # the retiring key's passes good again within one list wake
+  local d="$WORK/rot" code t0 oldp newp
+  mkdir -p "$d"; : > "$d/allow"   # the hub's old road says no to everything here
+  frl2 "$d" r_old -60 14000 alice old && fcph2 "$d" s_old -60 14000 claude old \
+    && frl2 "$d" r_new -60 14000 alice new && fcph2 "$d" s_new -60 14000 claude new \
+    && frl2 "$d" r_other -60 14000 alice rogue || { WHY="could not sign the test passes"; return 1; }
+  oldp=$(cat "$d/old.pub"); newp=$(cat "$d/new.pub")
+  # The break: the hub rotated to a new key and names only it — every pass
+  # the old key signed (523 sessions on 2026-10-14) is refused at the relay
+  rot_list "$d" 1 "$newp"
+  rev_hub "$d" 0 || { WHY="the fake hub did not start: $(tail -2 "$d/hub.err" | tr '\n' ' ')"; return 1; }
+  rev_checker "$d" RELAY_CHECK_CACHE_S=1 RELAY_CHECK_GRACE_S=600 || return 1
+  until_ok 10 grep -q ' list v=1 ' "$d/check.log" || { WHY="the checker never read the list"; return 1; }
+  code=$(relay_ask "$(cat "$d/r_old")"); [ "$code" = 403 ] || { WHY="no PREV: an old-key frl2 → $code (the drill's break did not reproduce)"; return 1; }
+  # The fix: the hub names the retiring key as relay_pub_prev
+  t0=$(now)
+  rot_list "$d" 2 "$newp" "$oldp"
+  until_ok 10 relay_is 200 "$(cat "$d/r_old")" || { WHY="relay_pub_prev: an old-key frl2 → $(relay_ask "$(cat "$d/r_old")")"; return 1; }
+  SECS=$(since "$t0")
+  code=$(relay_ask "$(cat "$d/s_old")"); [ "$code" = 200 ] || { WHY="relay_pub_prev: an old-key fcp-h2 → $code"; return 1; }
+  code=$(relay_ask "$(cat "$d/r_new")"); [ "$code" = 200 ] || { WHY="a new-key frl2 → $code"; return 1; }
+  code=$(relay_ask "$(cat "$d/r_other")"); [ "$code" = 403 ] || { WHY="a third key's frl2 → $code"; return 1; }
+  # A rolling deploy: an old replica answers the list with the old key alone —
+  # the new key it named a moment ago still verifies
+  rot_list "$d" 3 "$oldp"
+  until_ok 10 grep -q ' list v=3 ' "$d/check.log" || { WHY="the checker never read list v3"; return 1; }
+  code=$(relay_ask "$(cat "$d/s_new")"); [ "$code" = 200 ] || { WHY="mid-rollout: a new-key fcp-h2 → $code"; return 1; }
+  # The hub half (renew re-signs with the new key; no PREV ⇒ 403) and the
+  # cluster credential proxy's (it follows the key the hub names)
+  local gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestKeyRotation*" out rc
+  grep -q '^func TestKeyRotationSessionPassH1(' "$ROOT/tokenledger/internal/api/fleet_key_rotation_test.go" 2>/dev/null \
+    && grep -q '^func TestPass2KeyRotation(' "$ROOT/tokenledger/internal/credproxy/pass2_test.go" 2>/dev/null \
+    || { WHY="the hub half's tests TestKeyRotation* / TestPass2KeyRotation are gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'KeyRotation|LoadKeysPrev' ./internal/api ./internal/credproxy 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 旧钥签的 fcp-h1 / fcp-h2 / frl2 / frh1 在 PREV 下验得过、续签成新钥签的同一张，没 PREV 403；中心代理跟上入口换的钥" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  WHAT="入口换钥只认新钥时旧钥签的通行证在中转被拒；名单带上 relay_pub_prev 后 ${SECS}s 内旧钥签的 frl2 / fcp-h2 复通、第三把钥匙照拒；滚动发布中老副本只报旧钥时新钥签的照放；${gohalf}"
 }
 
 cred_run_drills "$0"

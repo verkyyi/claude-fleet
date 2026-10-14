@@ -60,8 +60,24 @@ type relayPass2Claims struct {
 // either holds a 32-byte Ed25519 seed, base64 encoded (openssl rand -base64 32).
 // ok is false when neither is set.
 func LoadRelaySignKey(getenv func(string) string) (key ed25519.PrivateKey, ok bool, err error) {
-	raw := strings.TrimSpace(getenv("CCQUOTA_FLEET_RELAY_SIGN_KEY"))
-	if path := getenv("CCQUOTA_FLEET_RELAY_SIGN_KEY_FILE"); path != "" {
+	return loadRelaySignKey(getenv, "CCQUOTA_FLEET_RELAY_SIGN_KEY")
+}
+
+// LoadRelaySignKeyPrev reads the seed a rotation retires
+// (CCQUOTA_FLEET_RELAY_SIGN_KEY_PREV[_FILE], claude-fleet#4138): frl2 and
+// fcp-h2 it signed still verify (and an fcp-h2 renews, re-signed with the new
+// key) until it is dropped; only its public half is kept.
+func LoadRelaySignKeyPrev(getenv func(string) string) (pub ed25519.PublicKey, ok bool, err error) {
+	k, ok, err := loadRelaySignKey(getenv, "CCQUOTA_FLEET_RELAY_SIGN_KEY_PREV")
+	if k == nil {
+		return nil, ok, err
+	}
+	return k.Public().(ed25519.PublicKey), true, nil
+}
+
+func loadRelaySignKey(getenv func(string) string, name string) (key ed25519.PrivateKey, ok bool, err error) {
+	raw := strings.TrimSpace(getenv(name))
+	if path := getenv(name + "_FILE"); path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, true, fmt.Errorf("read relay sign key: %w", err)
@@ -85,6 +101,28 @@ func (s *Server) RelayPub() string {
 		return ""
 	}
 	return base64.StdEncoding.EncodeToString(s.RelaySignKey.Public().(ed25519.PublicKey))
+}
+
+// RelayPubPrev is the retiring key's public half while a rotation overlaps
+// ("" = none, or no current key to rotate from).
+func (s *Server) RelayPubPrev() string {
+	if s.RelayPub() == "" || len(s.RelaySignPubPrev) != ed25519.PublicKeySize {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(s.RelaySignPubPrev)
+}
+
+// relayPubs are the keys an frl2 / fcp-h2 verifies under: the current one,
+// then the retiring one.
+func (s *Server) relayPubs() []ed25519.PublicKey {
+	if len(s.RelaySignKey) != ed25519.PrivateKeySize {
+		return nil
+	}
+	out := []ed25519.PublicKey{s.RelaySignKey.Public().(ed25519.PublicKey)}
+	if len(s.RelaySignPubPrev) == ed25519.PublicKeySize {
+		out = append(out, s.RelaySignPubPrev)
+	}
+	return out
 }
 
 func signRelayPass2(c relayPass2Claims, key ed25519.PrivateKey) string {
@@ -140,7 +178,13 @@ func (s *Server) relayJudge2(tok string, now time.Time) relayVerdict {
 	if len(s.RelaySignKey) != ed25519.PrivateKeySize {
 		return relayVerdict{why: "relay passes v2 are off on this hub"}
 	}
-	c, why := parseRelayPass2(tok, s.RelaySignKey.Public().(ed25519.PublicKey), now)
+	var c *relayPass2Claims
+	why := "bad relay pass signature"
+	for _, pub := range s.relayPubs() {
+		if c, why = parseRelayPass2(tok, pub, now); why != "bad relay pass signature" {
+			break
+		}
+	}
 	if why != "" {
 		return relayVerdict{why: why}
 	}

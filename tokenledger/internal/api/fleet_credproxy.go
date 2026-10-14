@@ -71,6 +71,8 @@ type CredProxyResolve struct {
 	// with it the proxy refuses a forged or expired pass without asking.
 	// Empty when the hub mints fcp-h1 only.
 	SessionPub string `json:"session_pub,omitempty"`
+	// SessionPubPrev is the key a rotation retires (claude-fleet#4138).
+	SessionPubPrev string `json:"session_pub_prev,omitempty"`
 }
 
 // handleCredProxyResolve answers the cluster credential proxy.
@@ -108,7 +110,8 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	now := time.Now()
 	v, c := s.verifySessionCred(req.Cred, "", req.Provider, false, now)
 	out := CredProxyResolve{Valid: v.Valid, Reason: v.Reason, ID: v.ID, Principal: v.Principal,
-		WorkerID: v.WorkerID, Machine: v.Machine, Exp: v.Exp, Provider: req.Provider, SessionPub: s.SessionPub()}
+		WorkerID: v.WorkerID, Machine: v.Machine, Exp: v.Exp, Provider: req.Provider, SessionPub: s.SessionPub(),
+		SessionPubPrev: s.SessionPubPrev()}
 	if !v.Valid {
 		writeJSON(w, http.StatusOK, out)
 		return

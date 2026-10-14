@@ -163,6 +163,9 @@ type RevocationList struct {
 	// Empty when the hub mints frl1. fcp-h2 session passes are signed with
 	// the same key (claude-fleet#3698).
 	RelayPub string `json:"relay_pub,omitempty"`
+	// RelayPubPrev is the key a rotation retires (claude-fleet#4138): what
+	// signed the passes still alive from before it. Empty outside one.
+	RelayPubPrev string `json:"relay_pub_prev,omitempty"`
 }
 
 func (s *Server) handleRelayRevocations(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +256,7 @@ func (s *Server) serveRevocations(w http.ResponseWriter, r *http.Request) {
 		out.SSHCA = s.SSHCA.PublicKey()
 	}
 	out.RelayPub = s.RelayPub()
+	out.RelayPubPrev = s.RelayPubPrev()
 	writeJSON(w, http.StatusOK, out)
 }
 

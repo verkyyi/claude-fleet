@@ -26,6 +26,7 @@ type fakeHub struct {
 	bad   map[string]string // pass → reason
 	over  map[string]string // pass → over-budget line (claude-fleet#1977)
 	pub   string            // the session_pub its answers carry (#3698)
+	prev  string            // the session_pub_prev they carry (#4138)
 }
 
 func (h *fakeHub) Resolve(_ context.Context, pass, provider string) (Resolution, error) {
@@ -49,7 +50,7 @@ func (h *fakeHub) Resolve(_ context.Context, pass, provider string) (Resolution,
 	who := strings.TrimPrefix(pass, PassPrefix)
 	return Resolution{Valid: true, ID: "sc_" + who, Principal: "p-" + who, WorkerID: "fleet/" + who,
 		Provider: provider, Owner: "p-" + who, Account: acct, BindRev: 1,
-		AccessToken: "tok-" + acct, AccountID: "aid-" + acct, ExpiresAt: &exp, Exp: exp.Unix(), SessionPub: h.pub}, nil
+		AccessToken: "tok-" + acct, AccountID: "aid-" + acct, ExpiresAt: &exp, Exp: exp.Unix(), SessionPub: h.pub, SessionPubPrev: h.prev}, nil
 }
 
 func (h *fakeHub) set(f func()) { h.mu.Lock(); f(); h.mu.Unlock() }

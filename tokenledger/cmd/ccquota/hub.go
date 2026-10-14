@@ -567,6 +567,16 @@ func loadSessionCreds(srv *api.Server) error {
 		return nil
 	}
 	srv.SessionCredKey = key
+	// A rotation's overlap (claude-fleet#4138): the retiring key still
+	// verifies and renews; unset = one key, as before.
+	prev, ok, err := api.LoadSessionCredKeyPrev(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if ok {
+		srv.SessionCredKeyPrev = prev
+		log.Printf("fleet: session pass key rotating — the previous key still verifies")
+	}
 	vt := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN"))
 	if path := os.Getenv("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN_FILE"); path != "" {
 		b, err := os.ReadFile(path)
@@ -906,6 +916,16 @@ func runHub(args []string) error {
 		if ok {
 			srv.RelaySignKey = rk
 			log.Printf("fleet: relay passes are frl2 (%s each)", api.RelayPassTTL)
+		}
+		// A rotation's overlap (claude-fleet#4138): what the retiring seed
+		// signed still verifies; its public half rides relay_pub_prev.
+		rp, ok, err := api.LoadRelaySignKeyPrev(os.Getenv)
+		if err != nil {
+			return err
+		}
+		if ok {
+			srv.RelaySignPubPrev = rp
+			log.Printf("fleet: relay sign key rotating — the previous key still verifies")
 		}
 		// After the session pass key: the relay path signs its pass with it.
 		if err := fleetRefreshVia(srv, vault); err != nil {

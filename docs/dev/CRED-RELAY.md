@@ -194,6 +194,9 @@ frl1 是一串随机数，入口只存它的哈希，**不过期**：会话里�
 - 核验进程从名单拿公钥（`relay_pub`，或 `FLEET_RELAY_PUB`），**自己验签**、看 exp、查名单（`frl2:<jti>` 或
   按机器 / 登录 / 人的范围），不问入口：入口 `/v1/relay/check` 上不再有 frl2 的请求，入口停着照常。
   验签用 python3 的 `cryptography`，没有就用装在它旁边的 `fleet_ed25519.py`（仓库 `bin/`）。没有公钥 ⇒ 照旧问入口。
+- 换钥（#4138）：入口设了 `CCQUOTA_FLEET_RELAY_SIGN_KEY_PREV[_FILE]` 时名单另带 `relay_pub_prev`，核验进程两把都认，
+  名单 10 分钟内报过的钥匙也认（滚动发布新旧副本轮流答）；会话通行证的 HMAC 钥匙同样有 `…SESSION_CRED_KEY_PREV`。
+  步骤见 deploy/k8s/RUNBOOK.md「换会话通行证 / 中转签名钥匙」。
 - 续：没有定时任务。代理挂通行证时看剩余，**用到时剩不到 20%**、或**到了 80% 处**，在自己的运行目录写
   `relay-want[.<login>]`（一行：原因 · 时间 · jti）；登录自己的 launcher、或共享代理时节点守护（`cred-relay`，
   以该登录身份、按请求跑一次）答它：`fleet-relay-cred.sh fetch --force`，交回代理。没有通行证（`missing`，
