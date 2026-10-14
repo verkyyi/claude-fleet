@@ -914,6 +914,7 @@ FLEET_DOCTOR_SINCE                 env handoff: fleet-install-sync.sh's doctor a
 FLEET_INSTALL_SETTLE_SECS          knob: internal budget, seconds install-sync waits after a switch for a sleep tick before its doctor runs (90, #2655)
 FLEET_INSTALLS_HOMES               seam: the homes root fleet-installs.sh looks into (default /Users, /home) (#2692)
 FLEET_INSTALLS_LAG_WARN            knob: an install behind stable longer than this WARNs in `fleet doctor --installs` (fleet-installs.sh, 1800 s, #2934)
+FLEET_INSTALLS_LOGIN               seam: read this one home only — the agent's heartbeat asks each login for its own installs (fleet-installs.sh, #2697)
 FLEET_INSTALL_SYNC_FETCH_ALARM_SECS knob: a stable the hub named but this login has not taken for this long notifies once and turns the doctor's install row FAIL (fleet-install-sync.sh / fleet-install-follow.sh, 7200 s, #3162)
 FLEET_INSTALLS_NOW                 seam: the clock fleet-installs.sh judges 落后 by (#2934)
 FLEET_INSTALLS_STABLE              seam: the stable commit fleet-installs.sh judges against (default the live install's refs/tags/stable) (#2692)
