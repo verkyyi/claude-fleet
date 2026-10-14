@@ -3137,8 +3137,8 @@ class W_DoorAccountLocked(unittest.TestCase):
 
     def test_new_door_account_is_not_locked(self):
         self.write({"root": "*"})
-        self.assertIsNone(fns.door_account("24haowan"))
-        self.assertEqual(self.field("24haowan"), "*")
+        self.assertIsNone(fns.door_account("24acme"))
+        self.assertEqual(self.field("24acme"), "*")
 
     def test_existing_locked_door_account_heals(self):
         self.users["drillcn"] = fns.DOOR_GECOS
