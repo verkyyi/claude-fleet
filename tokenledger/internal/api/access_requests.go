@@ -116,7 +116,6 @@ func identityOfKind(ids []store.HubIdentity, kind string) *store.HubIdentity {
 	return nil
 }
 
-
 // handleApply is /apply: GET the page, POST a new request.
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	if s.Store == nil || !s.signinOn() {
