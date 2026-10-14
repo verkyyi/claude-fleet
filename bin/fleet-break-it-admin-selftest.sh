@@ -15,6 +15,8 @@
 #   fleetadmin-forged-op      bin/fleet-admin-gate.sh + bin/fleet_admin_ticket.py
 #   fleetadmin-gate-tampered  bin/fleet_admin_seat.py place (the core's switch /
 #                             rollback, bin/fleet-node-core.py place_admin_gate)
+#   fleetadmin-token-misissued bin/fleet_admin_seat.py agent + the hub's
+#                             /v1/node/admin-token (Go TestNodeAdminToken)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -199,6 +201,59 @@ drill_fleetadmin_gate_tampered() {
   SECS=$(since "$t0")
   [ ! -e "$sb/bare/admin" ] || { WHY="place made admin/ on a machine with no seat"; return 1; }
   WHAT="admin/ 下的两个名字被换成链接 / 别人的脚本 / 0777、admin.conf 指到别处、used/ 换成链接：下一次切换都按刚验过签的发布版放回，入口的单只跑发布版的脚本；没设座位的机器什么都不放"
+}
+
+# fleetadmin-token-misissued (#3724): the seat's own token. The machine half —
+# the token lands root:<role> 0640, never in the unit; a world-readable or linked
+# token file is drift and is not used — then the hub half (Go TestNodeAdminToken):
+# a login's token, a person's login name, a name the hub does not count as admin
+# are refused; a machine named in the body is ignored; one audit line each.
+drill_fleetadmin_token_misissued() {
+  CAP=120
+  local sb st root units tok t0 out rc unit gohalf me
+  sb="$WORK/token"; st="$sb/state"; root="$sb/root"; units="$sb/units"; me="$(id -un)"
+  mkdir -p "$st/admin" "$root/agent" "$units"
+  printf '#!/bin/sh\nexit 0\n' > "$root/agent/ccquota"; chmod 755 "$root/agent/ccquota"
+  printf '#!/bin/sh\nexit 0\n' > "$sb/svc"; chmod 755 "$sb/svc"
+  tok="ccq_$(python3 -c 'print("B" * 43)')"
+  t0=$(now)
+  seat() {
+    FLEET_NODE_TEST=1 FLEET_NODE_STATE="$st" FLEET_NODE_ROOT="$root" FLEET_ADMIN_ROLE="$me" \
+      FLEET_ADMIN_UNIT_DIR="$units" FLEET_ADMIN_SVC_CMD="$sb/svc" python3 -I "$BIN/fleet_admin_seat.py" "$@"
+  }
+  out=$(printf '%s\n' "$tok" | seat agent --hub http://127.0.0.1:9 --token-stdin 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="agent: rc $rc: $out"; return 1; }
+  unit=$(ls "$units"/* | head -n 1)
+  ! grep -q "$tok" "$unit" || { WHY="the token is in the unit $unit"; return 1; }
+  grep -q "CCQUOTA_TOKEN_FILE" "$unit" || { WHY="the unit names no token file"; return 1; }
+  [ "$(python3 -c 'import os,sys; print(oct(os.lstat(sys.argv[1]).st_mode & 0o777))' "$st/admin/agent.token")" = 0o640 ] \
+    || { WHY="token file mode: $(ls -l "$st/admin/agent.token")"; return 1; }
+  # someone makes it world-readable, then a link to it: drift, and it is not used
+  chmod 644 "$st/admin/agent.token"
+  seat status --check >/dev/null 2>&1 && { WHY="a world-readable token file is not drift"; return 1; }
+  out=$(seat agent --hub http://127.0.0.1:9 --check 2>&1); rc=$?
+  [ "$rc" = 4 ] || { WHY="a world-readable token was still used (rc $rc: $out)"; return 1; }
+  mv "$st/admin/agent.token" "$sb/elsewhere.token"; chmod 640 "$sb/elsewhere.token"
+  ln -s "$sb/elsewhere.token" "$st/admin/agent.token"
+  out=$(seat agent --hub http://127.0.0.1:9 --check 2>&1); rc=$?
+  [ "$rc" = 4 ] || { WHY="a linked token file was used (rc $rc: $out)"; return 1; }
+  # the hub half
+  gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestNodeAdminToken"
+  grep -q '^func TestNodeAdminToken(' "$ROOT/tokenledger/internal/api/fleet_admin_token_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestNodeAdminToken is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestNodeAdminToken$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 登录的令牌 · 个人登录名 · 没认作管理员的名字都拒、请求体里的机器名不认、一次一行审计" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="座位的令牌落成 root:角色组 0640、单元里只有文件路径；改成人人可读、换成链接都报 DRIFT 且不再被用；${gohalf}"
 }
 
 cred_run_drills "$0"

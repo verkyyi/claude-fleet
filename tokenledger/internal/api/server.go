@@ -596,6 +596,9 @@ func (s *Server) routes() *routeMux {
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
 		mux.HandleFunc("/v1/node/peer-cert", s.handleNodePeerCert)
+		// The admin role account's own token (claude-fleet#3724): the
+		// machine asks for _fleetadmin on itself, once per install.
+		mux.HandleFunc(AdminTokenNodePath, s.handleNodeAdminToken)
 		// A node's own signing key (claude-fleet#3699): registered once, then
 		// its requests are signed instead of showing its token.
 		mux.HandleFunc(NodeKeyPath, s.handleNodeKey)

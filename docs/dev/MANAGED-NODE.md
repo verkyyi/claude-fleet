@@ -1034,11 +1034,32 @@ BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
   （`fleet-login-reset-check.py`）也读 `<node>/admin/<login>-onboard`。EUID 0 没有这个变量照旧拒；有变量
   不是 root 就忽略——管理员登录直接跑字节不变。
 
-还没做（各自的单）：`_fleetadmin` 的令牌与 `com.claude-fleet.admin-agent`（#3724）、
-旧 agent 交接进 attic 与真机切换演练（#3725）。
+还没做（各自的单）：旧 agent 交接进 attic 与真机切换演练（#3725）。
 
 BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
 `bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `internal/agent/node_accounts_seat_test.go`。
+
+### 23.2 座位自己的令牌和单元（C15·b-3，#3724）
+
+- **令牌**：`fleet node install` 的「座位agent」步（「管理员座位」之后；座位设过、`FLEET_ADMIN_SEAT` 不是 0 才有这一行）
+  先问 `fleet_admin_seat.py agent --hub <入口> --check`：没存令牌、或入口不再认存着的那个（`GET /v1/node/self` 答 401/403）⇒
+  用**机器**的凭据（machine.key 签名，否则 machine.env 的令牌）`POST /v1/node/admin-token {"login": "_fleetadmin"}`。
+  入口只认机器自己的节点程序（root 的端点或连接说 `CapMachine`），只发给 `_fleetadmin` / `fleetadmin` 且它在
+  `CCQUOTA_FLEET_ADMIN_USERS` 里，端点钉在提问者的机器名（请求体里的机器名不认）；已有同机同名的活端点就轮换它的令牌
+  （旧令牌宽限 `ReissueTokenGrace`），每次 `fleet_audit` 一行 `admin_token`。令牌经 stdin 交给
+  `fleet_admin_seat.py agent --token-stdin`，落成 `<state>/admin/agent.token`（root:角色组 0640）。
+- **单元**：`com.claude-fleet.admin-agent`（`/Library/LaunchDaemons`，`UserName`/`GroupName` 角色账号）/
+  `fleet-admin-agent.service`（`User=`），跑 `<root>/agent/ccquota agent --home <state>/admin-agent --state <state>/admin-agent/state`
+  （#3433 的固定签名副本），环境 `CCQUOTA_FLEET=1 CCQUOTA_FLEET_ADMIN=1 CCQUOTA_FLEET_ADMIN_SEAT=1`、
+  `CCQUOTA_FLEET_ADMIN_GATE_DIR`、`CCQUOTA_HUB_URL`、`CCQUOTA_TOKEN_FILE`（只写路径，令牌从不进单元）、`CCQUOTA_NODE_KEY`；
+  StateDir `<state>/admin-agent/` 是角色账号的（0700）。单元或令牌一变就重新加载。`ccquota agent` 的 `CCQUOTA_TOKEN_FILE`
+  拒链接、拒组可写或别人可读写的文件。`FLEET_ADMIN_SEAT=0` 先卸单元再拿掉 sudoers 与 admin/（StateDir 留着）。
+- **更新器**：`follow_admin_agents` 见到这个单元就每个发布版重启它一次（launchd `kickstart -k` / `systemctl restart`），
+  记在 `admin_agents` 的单元名下——路径不随发布版变，不用改单元。
+- `seats` 行早已按这个 Label / `UserName` 判「座位已起」；起来之后，个人登录下的管理员 agent 是 FAIL。
+
+BREAK-IT：`fleetadmin-token-misissued`（`bin/fleet-break-it-admin-selftest.sh` + Go `TestNodeAdminToken`）；
+`bin/fleet-admin-seat-selftest.sh` G；`bin/fleet-node-update-selftest.py` Q_AdminAgent；Go `TestTokenFromFile`。
 
 ## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）
 

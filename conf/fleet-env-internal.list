@@ -24,6 +24,8 @@ FLEET_ADMIN_ROLE                   seam: an existing user standing in for _fleet
 FLEET_ADMIN_ROLE_CMD               seam: run in place of each account-making command (fleet_admin_seat.py, #3696)
 FLEET_ADMIN_SEAT                   switch: 1 on `fleet node install` sets up the admin role account, its two sudo-able gate copies and sudoers (#3696); 0 takes them away
 FLEET_ADMIN_SUDOERS                seam: the sudoers file fleet_admin_seat.py writes (/etc/sudoers.d/fleet-admin, #3696)
+FLEET_ADMIN_SVC_CMD                seam: run in place of each launchctl / systemctl for the seat's agent unit (fleet_admin_seat.py agent, #3724)
+FLEET_ADMIN_UNIT_DIR               seam: where fleet_admin_seat.py writes the seat's agent unit (/Library/LaunchDaemons | /etc/systemd/system, #3724)
 FLEET_ADMIN_VISUDO                 seam: the visudo the new sudoers text is checked with; '' = none (#3696)
 FLEET_ADMIT_GUIDE                  handoff: dash-raw-session tells its own admission this is the pinned /fleet-onboard guide (#3472)
 FLEET_ADMIT_OWNER                  handoff: whose admission reservation this process holds (default $$; fleet_admit_*, #2502)

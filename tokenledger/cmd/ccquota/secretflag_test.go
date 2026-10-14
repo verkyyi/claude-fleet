@@ -119,3 +119,39 @@ func TestTokenFromFD(t *testing.T) {
 		t.Fatalf("token = %q, %v", tok, err)
 	}
 }
+
+// claude-fleet#3724: the admin seat's token file — root's, its group reads it.
+func TestTokenFromFile(t *testing.T) {
+	if tok, err := tokenFromFile(""); tok != "" || err != nil {
+		t.Fatalf("empty path = %q, %v", tok, err)
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "agent.token")
+	if err := os.WriteFile(p, []byte("ccq_seat\nignored\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := tokenFromFile(p); err != nil || tok != "ccq_seat" {
+		t.Fatalf("token = %q, %v", tok, err)
+	}
+	for _, mode := range []os.FileMode{0o644, 0o660, 0o642} {
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tokenFromFile(p); err == nil {
+			t.Fatalf("mode %v accepted", mode)
+		}
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(p, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tokenFromFile(link); err == nil {
+		t.Fatal("a link accepted")
+	}
+}

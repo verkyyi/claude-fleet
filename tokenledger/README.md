@@ -759,6 +759,7 @@ code buys is new: the admin role still needs the login in
 | `POST /v1/node/join` (`{code, hostname, os_user}`) | the code | redeem + enroll in one transaction → `{endpoint_id, label, token, hub, admin, ssh_ca, dist}` |
 | `GET /v1/node/dist/<darwin\|linux>-<amd64\|arm64>` | the new token | the agent binary, `X-Ccquota-Sha256` header |
 | `GET /v1/node/self` | the new token | this endpoint's roster row (`status: online\|lost`), or `never` |
+| `POST /v1/node/admin-token` (`{login}`) | the MACHINE's own node credential (root's endpoint / a `CapMachine` link) | the admin role account's token on that machine (claude-fleet#3724): only `_fleetadmin` / `fleetadmin`, only when `CCQUOTA_FLEET_ADMIN_USERS` names it, pinned to the asker's machine; a live one is reissued; one `admin_token` audit line → `{endpoint_id, login, machine, token, hub, outcome}` |
 
 The join records the reported hostname / login on the endpoint, so the admin
 gate recognises the agent's very first connection (otherwise `os_user` stays
