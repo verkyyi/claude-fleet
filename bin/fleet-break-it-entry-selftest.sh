@@ -59,6 +59,16 @@
 #                         door route EntryReachFresh later — the hub re-dials a
 #                         pulling door's last addresses against its host key
 #                         (TestDoorPullKeepsItsReachFresh, a real sshd)
+#   door-account-locked   door_account (issue #4161): useradd left a door account's
+#                         shadow field `!` (locked) and the door's `UsePAM no` sshd
+#                         refused it even with its key — 0 Accepted publickey; a new
+#                         and an existing door account leave `*` (the supervisor
+#                         selftest's W cases), a machine login is never touched
+#   door-strictmodes      _entry_state_dir (issue #4161): the door's state emptyDir is
+#                         0777, and sshd's StrictModes refused every key under it
+#                         (bad ownership or modes for directory) — a real sshd -d
+#                         login with the keys file under a 0777 dir, before and
+#                         after entry_converge's pass
 #   pod-relay-loopback    the relay into a person's pod (issue #4149): the pod's
 #                         agent splices it onto 127.0.0.1:2222, whose sshd took the
 #                         door's key alone — a real sshd on pod_sshd_text: a hub-CA
@@ -899,6 +909,45 @@ drill_door_reach_stale() {
   gotest TestDoorPullKeepsItsReachFresh fleet_door_reach_test.go || return 1
   SECS=$(since "$t0")
   WHAT="门只在启动时报一次可达：20 分钟后入口里门的地址过期 ⇒ pod 没有门的路由；门来拉表 ⇒ 入口照门的钥匙重拨、路由回来，换了钥匙的不算；$GOHALF"
+}
+
+drill_door_account_locked() {
+  CAP=15
+  local t0; t0=$(now)
+  grep -q 'return door_unlock(login) if r.returncode == 0' "$BIN/fleet-node-supervisor.py" \
+    || { WHY="door_account no longer unlocks the account it made"; return 1; }
+  if ! python3 -W ignore "$BIN/fleet-node-supervisor-selftest.py" W_DoorAccountLocked >"$EB/door-locked.out" 2>&1; then
+    WHY="a door account is left locked (shadow \`!\`): $(tail -n 3 "$EB/door-locked.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="门新造的账号与旧门留下的 ! 账号都改成 *（不可用的密码、不算锁定）；已是 * 不再 usermod；机器自己的登录不碰"
+}
+
+drill_door_strictmodes() {
+  CAP=20   # one sshd by hand, then the supervisor's
+  local t0 sp
+  erig strict
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  # the door's emptyDir: Kubernetes mounts it 0777
+  chmod 777 "$E/db"
+  # the bug: the entry's own config, its sshd started with the dir as mounted
+  "$SSHD_BIN" -D -e -f "$E/db/entry/sshd_config" 2>"$E/strict-before.log" & sp=$!
+  until_ok 10 listening || { WHY="the entry sshd (by hand) never listened: $(tail -3 "$E/strict-before.log")"; kill "$sp" 2>/dev/null; edown; return 1; }
+  if etry k1; then
+    kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+    WHY="a key under a 0777 state dir got in — the drill tests nothing"; edown; return 1
+  fi
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+  grep -q 'bad ownership or modes' "$E/strict-before.log" \
+    || { WHY="refused, but not by StrictModes: $(tail -3 "$E/strict-before.log")"; edown; return 1; }
+  chmod 777 "$E/db"
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  until_ok 10 etry k1 || { WHY="the key is still refused after the entry's pass: $(cat "$E/ssh.err"); mode $(stat -f %Lp "$E/db" 2>/dev/null || stat -c %a "$E/db")"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="state 目录 0777（门的 emptyDir）：sshd StrictModes 拒（bad ownership or modes），0 次 Accepted；入口每一轮把它的组 / 他人写位去掉，钥匙进得来"
 }
 
 drill_pod_relay_loopback() {
