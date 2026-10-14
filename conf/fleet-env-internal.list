@@ -415,6 +415,8 @@ FLEET_LEDGER_WATCH                 knob: 0 turns the ledger-watch daemon into a 
 FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code default (fleet-ledger-watch.sh)
 FLEET_LIVE_DIR                     path: the live install checkout (default ~/.claude/fleet) — fleet-install-version.sh, fleet-doctor.sh, and the hub refresh loop's stable mark (its local refs/tags/stable judges every machine's version, #644)
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
+FLEET_LOGIN_ADMIN_DIR              handoff: the admin gate's dir, set by fleet-admin-gate.sh — with EUID 0 the account scripts run as root under it (#3723)
+FLEET_LOGIN_TEST_EUID              test seam: the EUID fleet-login-new/remove/reset.sh read for the root-mode legs (#3723)
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOGIN_REMOVE_DELETE_SECS     knob: time limit (s) on sysadminctl -deleteUser before it is killed, default 120 (fleet-login-remove.sh, #2866)
 FLEET_LOGIN_REMOVE_OUTSIDE_DIRS    test seam: the dirs whose files of the login's uid fleet-login-remove.sh clears before the delete, default /private/tmp /private/var/tmp /Users/Shared (#3508)
