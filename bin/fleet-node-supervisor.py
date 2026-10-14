@@ -3459,6 +3459,20 @@ def _plist_label(path):
         return ""
 
 
+def _seat_admin_unit(path, label):
+    """The admin seat's own unit (com.claude-fleet.admin-agent, UserName the role
+    — #3724): the machine's, like the daemon and the core. Its UserName is a `_`
+    system account, so _unit_login read it as a machine unit no daemon runs and
+    the sweep booted it out minutes after `fleet node install` made it (#4118)."""
+    if label not in SEAT_ADMIN_UNITS:
+        return False
+    try:
+        with os.fdopen(open_ro(path, follow=True), "rb") as f:
+            return (plistlib.load(f) or {}).get("UserName") == SEAT_ADMIN_ROLE
+    except Exception:
+        return False
+
+
 class attic_lock(object):
     """The attic index has two writers — the sweep and `account adopt|release`."""
     def __init__(self, paths):
@@ -3866,7 +3880,7 @@ def _sweep(paths, dry=False):
                 # a managed machine (expected.json): what is not in its expected set
                 # goes to the attic, booted out first (issue #2981)
                 lb = _plist_label(src) or n[:-len(".plist")]
-                if lb in labels or lb in (LABEL, CORE_LABEL):
+                if lb in labels or lb in (LABEL, CORE_LABEL) or (d == paths.daemon_dir and _seat_admin_unit(src, lb)):
                     continue
                 go, why = _extra_verdict(paths, d, src, lb, legacy, managed)
                 if go is None:
