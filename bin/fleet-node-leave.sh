@@ -32,7 +32,9 @@
 #
 # Env: FLEET_CONF_DIR (~/.config/claude-fleet) · seams for the selftest:
 #   FLEET_HUB_CURL (curl), FLEET_LEAVE_OS (uname -s), FLEET_JOIN_SUDO (sudo -n),
-#   FLEET_LEAVE_HOME ($HOME — where ~/.ccquota and LaunchAgents live),
+#   FLEET_LEAVE_HOME ($HOME — where ~/.ccquota and LaunchAgents live; any other
+#   home RECORDS the service and signal actions in $FLEET_SIDEFX_LOG, never runs
+#   them — bin/fleet_sidefx.py, issue #4213),
 #   FLEET_LEAVE_DAEMON_DIR (/Library/LaunchDaemons),
 #   FLEET_LEAVE_UNIT_DIR (/etc/systemd/system)
 set -uo pipefail
@@ -76,6 +78,22 @@ priv() {
 }
 # act <cmd…> — run it, or under --dry-run only say it
 act() { if [ "$DRY" = 1 ]; then printf '  would run: %s\n' "$*"; return 0; fi; "$@"; }
+# dom [priv] <cmd…> — an action OUTSIDE $H's files: a service domain (launchctl /
+# systemctl) or a signal (issue #4213). FLEET_LEAVE_HOME swaps the files only;
+# gui/<uid>, system/<label> and a pid are the real ones. bin/fleet_sidefx.py is the
+# one rule: $H is this login's own home → act; any other home → recorded in
+# $FLEET_SIDEFX_LOG (the stand-in a test reads), never run.
+SFX=$(python3 "$(dirname "$0")/fleet_sidefx.py" check --login "$ME" --home "$H" 2>/dev/null); SFX=${SFX%%:*}
+[ -n "$SFX" ] || { [ "$H" = "$HOME" ] && SFX=live || SFX=sandbox; }
+dom() {
+  if [ "$SFX" != live ]; then
+    [ "$1" = priv ] && shift
+    if [ "$DRY" = 1 ]; then printf '  would record: %s\n' "$*"; return 0; fi
+    python3 "$(dirname "$0")/fleet_sidefx.py" run --login "$ME" --home "$H" -- "$@" >/dev/null 2>&1
+    return 0
+  fi
+  act "$@"
+}
 
 TOK=$(envval CCQUOTA_TOKEN)
 HUB=$(envval CCQUOTA_HUB_URL); HUB=${HUB%/}
@@ -119,13 +137,13 @@ stop_agent() {
       f="$H/Library/LaunchAgents/com.ccquota.agent.plist"
       if [ -f "$f" ]; then
         found=1
-        act launchctl bootout "gui/$UID_N/com.ccquota.agent" 2>/dev/null
+        dom launchctl bootout "gui/$UID_N/com.ccquota.agent" 2>/dev/null
         act rm -f "$f" || LEFT=1
       fi
       label="com.ccquota.agent.$ME"; f="$DDIR/$label.plist"
       if [ -f "$f" ]; then
         found=1
-        if ! { act priv launchctl bootout "system/$label" 2>/dev/null; act priv rm -f "$f"; }; then
+        if ! { dom priv launchctl bootout "system/$label" 2>/dev/null; act priv rm -f "$f"; }; then
           echo "! 系统服务 $label 要管理员权限才能删，请运行：sudo launchctl bootout system/$label && sudo rm -f ${f}（needs sudo）" >&2
           LEFT=1
         fi
@@ -134,25 +152,25 @@ stop_agent() {
       f="$H/.config/systemd/user/ccquota-agent.service"
       if [ -f "$f" ]; then
         found=1
-        act systemctl --user disable --now ccquota-agent.service 2>/dev/null
+        dom systemctl --user disable --now ccquota-agent.service 2>/dev/null
         act rm -f "$f" || LEFT=1
-        act systemctl --user daemon-reload 2>/dev/null
+        dom systemctl --user daemon-reload 2>/dev/null
       fi
       f="$UDIR/ccquota-agent-$ME.service"
       if [ -f "$f" ]; then
         found=1
-        if ! { act priv systemctl disable --now "ccquota-agent-$ME.service" 2>/dev/null; act priv rm -f "$f"; }; then
+        if ! { dom priv systemctl disable --now "ccquota-agent-$ME.service" 2>/dev/null; act priv rm -f "$f"; }; then
           echo "! 系统服务 ccquota-agent-$ME 要管理员权限才能删，请运行：sudo systemctl disable --now ccquota-agent-$ME.service && sudo rm -f ${f}（needs sudo）" >&2
           LEFT=1
         fi
-        act priv systemctl daemon-reload 2>/dev/null
+        dom priv systemctl daemon-reload 2>/dev/null
       fi ;;
   esac
   f="$STATE/agent.pid"
   if [ -f "$f" ]; then
     found=1
     local pid; pid=$(cat "$f" 2>/dev/null)
-    case "$pid" in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null && act kill "$pid" ;; esac
+    case "$pid" in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null && dom kill "$pid" ;; esac
     act rm -f "$f"
   fi
   if [ "$found" = 0 ]; then echo "✓ 这台电脑没有在跑的入口 agent（no agent service found）"
