@@ -20,6 +20,10 @@
 #   D. a taken name is refused with the --as hint; --as adds it under its own name.
 #   E. fleet-doctor.sh with only non-GitHub repos prints no gh / github / labels
 #      row, and its per-repo main + base rows pass off FLEET_REMOTE.
+#   F. a git mirror (issue #4153): with url.<mirror>.insteadOf over a GitHub address
+#      (a personal pod's FLEET_GIT_MIRRORS), an existing checkout of it is still that
+#      repo's — fleet_origin_url answers the address as written, fleet_repo_checkout
+#      reuses it and a second fleet's `fleet-repo.sh add` adopts it.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -164,6 +168,18 @@ tok=$(add "file://$WORK/other/srv/local.git" "$WORK/home/projects/local2" --as o
 eq "D: --as adds it under its own name" "$tok" "added:other-local"
 has "D: --as keeps the address" "$(conf_of other/local)" "FLEET_REMOTE=\"file://$WORK/other/srv/local.git\""
 eq "D: gh calls" "$(grep -c . "$WORK/gh.calls")" 0
+
+# ---- F. a git mirror's insteadOf over a GitHub address (issue #4153) ------------
+HS="$HOME/projects/hs"
+eq "F: get-url reads the mirror (the trap)" "$(git -C "$HS" remote get-url origin)" "file://$WORK/srv/gh/o/hs.git"
+eq "F: fleet_origin_url reads it as written" "$(fleet_origin_url "$HS")" "https://github.com/o/hs.git"
+out=$(fleet_repo_checkout o/hs "$HS" t 2>&1); rc=$?
+eq "F: fleet_repo_checkout reuses the mirrored checkout" "$rc" 0
+has "F: it says reusing" "$out" "reusing existing checkout"
+mkdir -p "$FLEET_CONF_DIR/fleets/fm"; printf 'FLEET_SESSION=fm\n' > "$FLEET_CONF_DIR/fleets/fm/conf"
+tok=$(bash "$BIN/fleet-repo.sh" add --session fm o/hs "$HS" 2>"$WORK/add.err")
+eq "F: another fleet adds the mirrored checkout" "$tok" "added:o-hs"
+[ "$tok" = "added:o-hs" ] || sed 's/^/    /' "$WORK/add.err" >&2
 
 # ---- E. the doctor with only non-GitHub repos ----------------------------------
 S2=fe

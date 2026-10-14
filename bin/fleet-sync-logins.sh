@@ -274,7 +274,7 @@ if [ "$togit" -eq 1 ]; then
   # a versions-layout install (#1894) sits on its own fleet-live/<sha> branch
   case "$branch" in fleet-live/*) branch=master ;; esac
   if [ -z "$origin" ]; then
-    src_origin=$(gitq "$src" remote get-url origin 2>/dev/null)
+    src_origin=$(gitq "$src" config --get remote.origin.url 2>/dev/null || gitq "$src" remote get-url origin 2>/dev/null)   # as written, not insteadOf'd (#4153)
     origin=$(to_https "$src_origin")
     case "$origin" in
       https://*) ;;

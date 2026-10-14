@@ -316,7 +316,7 @@ pool_windows() {
     [ -n "$w" ] || continue
     if [ "$nr" = 1 ]; then r=-                     # the HOME slot
     else
-      [ -z "$r" ] && [ -n "$wt" ] && [ -d "$wt" ] && r=$(git -C "$wt" remote get-url origin 2>/dev/null)
+      [ -z "$r" ] && [ -n "$wt" ] && [ -d "$wt" ] && r=$(fleet_origin_url "$wt")
       r=$(fleet_norm_repo "$r")
     fi
     [ "$r" = "$REPO" ] || continue

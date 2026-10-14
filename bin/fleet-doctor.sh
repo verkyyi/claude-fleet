@@ -3840,7 +3840,7 @@ _repo_block() {
   elif ! git -C "$main" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     warn main "$r: FLEET_MAIN $main is not a git checkout — no worktree can be cut from it"
   else
-    morigin=$(_norm_repo "$(git -C "$main" remote get-url origin 2>/dev/null)")
+    morigin=$(_norm_repo "$(git -C "$main" config --get remote.origin.url 2>/dev/null || git -C "$main" remote get-url origin 2>/dev/null)")   # as written (#4153)
     if [ "$rforge" = none ] && [ -n "$rremote" ]; then
       morigin=$(git -C "$main" config --get remote.origin.url 2>/dev/null)   # as written, not insteadOf'd
       [ "$morigin" = "$rremote" ] && morigin=$r
