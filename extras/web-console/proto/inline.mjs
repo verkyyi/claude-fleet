@@ -18,7 +18,7 @@ html = html.replace(/<link rel="stylesheet"[^>]*href="\.\/([^"]+)"[^>]*>/g, (_, 
 });
 html = html.replace(/<script type="module" crossorigin src="\.\/([^"]+)"><\/script>/g, (_, f) =>
   `<script type="module">${fs.readFileSync(path.join(dir, f), "utf8").replace(/<\/script/g, "<\\/script")}</script>`);
-html = html.replace(/href="\.\/(assets\/[^"]+\.svg)"/g, (_, f) => `href="${dataURL(f)}"`);
+html = html.replace(/href="\.\/(assets\/[^"]+\.(?:svg|png))"/g, (_, f) => `href="${dataURL(f)}"`);
 if (/(src|href)="\.\//.test(html)) throw new Error("inline.mjs: an asset was left behind");
 
 const page = `<!doctype html>
