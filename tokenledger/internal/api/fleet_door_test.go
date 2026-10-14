@@ -212,7 +212,7 @@ func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
 func TestHomeAnswerSendsPodsThroughTheDoor(t *testing.T) {
 	h := entryHarness(t)
 	now := time.Now().UTC()
-	h.srv.FleetRoutes = []FleetMachine{{Hostname: "u-alice1", Routes: []FleetRoute{{Name: "lan", Host: "172.20.0.9", Port: 22}}}}
+	h.srv.FleetRoutes = []FleetMachine{{Hostname: "u-alice1", Routes: []FleetRoute{{Name: "lan", Host: "198.51.100.9", Port: 22}}}}
 	if err := h.srv.Store.SetFleetSetting(DoorKey, "fleet-door", now); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestHomeAnswerSendsPodsThroughTheDoor(t *testing.T) {
 	for _, r := range pod.Routes {
 		rs = append(rs, r.Name+"="+r.Host+":"+strconv.Itoa(r.Port))
 	}
-	if got, want := strings.Join(rs, ","), "lan=172.20.0.9:22,entry=203.0.113.10:"+strconv.Itoa(entryPort); got != want {
+	if got, want := strings.Join(rs, ","), "lan=198.51.100.9:22,entry=203.0.113.10:"+strconv.Itoa(entryPort); got != want {
 		t.Fatalf("home answer routes: %s, want %s", got, want)
 	}
 	if pod.Relay {
