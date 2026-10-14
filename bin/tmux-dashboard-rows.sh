@@ -639,11 +639,13 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
       case "$RSLUGS" in *" $rslug "*) ;; *) RSLUGS+="$rslug " ;; esac
     fi ;;
   esac
+  # Another machine's row too (issue #4225): its title stays the hub's, but
+  # whether its issue is still open (the 已结束 rule below) is this cache's word.
   if [ "$SIDEBAR" = 1 ]; then
-    case "$rwid" in wid:*) ;; *) case "$iss" in ''|*[!0-9]*) ;; *)
+    case "$iss" in ''|*[!0-9]*) ;; *)
       cslug_v "$wrepo" "$wnorepo"
       [ -n "$rslug" ] && { ITWANT+="$rslug"$'\t#'"$iss"$'\n'
-                           case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; } ;; esac ;;
+                           case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; } ;;
     esac
   fi
   # A window still wearing an EPIC (issue #1916): its batch has a row of its own,
@@ -735,17 +737,28 @@ fi
 # The issue-title haystack (issue #1921): one awk over each on-screen repo's
 # issue cache (beside its prmap), narrowed to the keys pass A collected, `<key>\t<title>` a line. The cache line
 # is `milestone\t#num\tassignee\ttitle`. No issue row on screen ⇒ no fork.
-ITTL=$'\n'
+ITTL=$'\n'; ITOK=' '
 if [ -n "$ITWANT" ]; then
   ITFILES=()
-  for _s in $ISLUGS; do [ -s "$FLEET_C/fleets/$_s/issues" ] && ITFILES+=("$FLEET_C/fleets/$_s/issues"); done
+  # ITOK (issue #4225): the repos whose open-issue list was read — only there
+  # does «not on the list» mean the issue is closed
+  for _s in $ISLUGS; do
+    [ -f "$FLEET_C/fleets/$_s/issues" ] && ITOK+="$_s "
+    [ -s "$FLEET_C/fleets/$_s/issues" ] && ITFILES+=("$FLEET_C/fleets/$_s/issues")
+  done
   if [ "${#ITFILES[@]}" -gt 0 ]; then
+    # …and per repo one `=<slug>\t<lowest #>\t<rows>` line (issue #4225): the
+    # list is the newest 300 open issues, so a number missing from a FULL list
+    # is closed only when it is newer than the oldest one listed
     ITTL=$'\n'$(ITWANT="$ITWANT" awk -F'\t' '
       BEGIN { n = split(ENVIRON["ITWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
       { d = FILENAME; sub(/\/issues$/, "", d); sub(/.*\//, "", d); k = d "\t" $2
+        num = $2; sub(/^#/, "", num); num += 0; cnt[d]++
+        if (!(d in lo) || num < lo[d]) lo[d] = num
         if (!(k in want)) next
         t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); gsub(/[\t\r\037]/, " ", t)
-        if (t != "") print k "\t" t }' ${ITFILES[@]+"${ITFILES[@]}"} 2>/dev/null)$'\n'
+        if (t != "") print k "\t" t }
+      END { for (d in cnt) print "=" d "\t" lo[d] "\t" cnt[d] }' ${ITFILES[@]+"${ITFILES[@]}"} 2>/dev/null)$'\n'
   fi
 fi
 
@@ -1029,7 +1042,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # issue-231 — the old sed-strip wrongly ate that), then decoration-stripped.
   # The key is prefixed with the window's repo slug, and its deploy_<sha> verdicts
   # come from that repo's dir (issue #792); no repo → '—'.
-  ptxt='—'; pcol=$GY
+  ptxt='—'; pcol=$GY; pdep=''
   cslug_v "$wrepo" "$wnorepo"; rpfx="$rslug"$'\t'; rowdir="$FLEET_C/fleets/$rslug"
   if [ "$branch" != '-' ] && [ -n "$branch" ] && [ -n "$rslug" ]; then
     prcands_v "$branch"
@@ -1056,6 +1069,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
                     live)      ptxt='live';    pcol=$GN;;   # merge sha is in the deployment
                     deploying) ptxt='deploy…'; pcol=$TX;;   # post-merge runs still going
                     failed)    ptxt='deploy✗'; pcol=$RD;;   # a post-merge run went red
+                    # probed, not there yet (issue #4225): the cell stays `merged`,
+                    # the --rows line says it in field 20 — ⌘P's 等发布列车
+                    unknown)   pdep=unknown;;
                   esac;;
           CLOSED) pcol=$GY; ptxt="closed";;
           *) case "$ci" in
@@ -1385,7 +1401,36 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # reaper's own clock (`done:<dur>`, else fleet_reap_policy.DONE_DEFAULT 15m)
   # has not run. Drills 35–38: a newcomer's first session went `done` after its
   # first reply and dropped out of `fleet ls` at once. No state stamp = as before.
+  # A root bound to an issue is over too (issue #4225) once its issue is closed
+  # (off this repo's open-issue list — ITOK: only a list that was read says so),
+  # its PR merged and out (`merged` with no deploy verdict pending, or `live` — a
+  # deploy still to come is ⌘P's 等发版, never 已结束), and its last state older
+  # than the 刚落地 window (FLEET_VIEW_LANDED_SECS, 24 h) — unless its person
+  # chose to keep it (keep · at:… · loop-end). The sidebar, `fleet ls` and ⌘P
+  # read this one mark.
   repod=''; ended=0
+  if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -n "$iss" ] && [ -z "$carg" ] && [ "$SIDEBAR" = 1 ] && [ -z "$pdep" ]; then
+    case "$state:$ptxt:$wreap" in
+      *:*:keep|*:*:at:*|*:*:loop-end) ;;
+      done:merged:*|done:live:*|exited:merged:*|exited:live:*)
+        case "$ITOK" in *" $rslug "*)
+          case "$ITTL" in *$'\n'"$rslug"$'\t#'"$iss"$'\t'*) ;; *)
+            _lo=0 _cnt=0
+            case "$ITTL" in *$'\n='"$rslug"$'\t'*)
+              _lo=${ITTL#*$'\n='"$rslug"$'\t'}; _lo=${_lo%%$'\n'*}
+              _cnt=${_lo#*$'\t'}; _lo=${_lo%%$'\t'*} ;;
+            esac
+            case "$_lo:$_cnt" in *[!0-9:]*|:*|*:) _lo=0 _cnt=0 ;; esac
+            _ls=${FLEET_VIEW_LANDED_SECS:-86400}; case "$_ls" in ''|*[!0-9]*) _ls=86400 ;; esac
+            if [ "$_cnt" -lt 300 ] || [ "$iss" -gt "$_lo" ]; then
+              case "$state_ts" in ''|*[!0-9]*) ;; *)
+                [ "$state_ts" -gt 0 ] && [ $(( NOW - state_ts )) -ge "$_ls" ] && ended=1 ;;
+              esac
+            fi ;;
+          esac ;;
+        esac ;;
+    esac
+  fi
   if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -z "$iss" ] && [ -z "$carg" ]; then
     case "$state" in
       exited) ended=1 ;;
@@ -1559,6 +1604,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # 配置旧 left of the @ mark on a stale one, 待换新 on a renew one (issue #1895),
     # a red 会坏·需重开 on a broken one (issue #2076). Absent when unknown, so a login with no expected file
     # (or a session from before #1782) emits its rows byte for byte as before.
+    # field 20 (issue #4225): `unknown` — the PR merged, the deploy probe has not
+    # seen it live yet (⌘P's 等发布列车). Fields 13-19 stay, empty, before it;
+    # nothing to say ⇒ no field, byte for byte as before.
+    if [ -n "$pdep" ]; then
+      _nf=${cfgf//[!$US]/}; _nf=${#_nf}
+      while [ "$_nf" -lt 7 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
+      cfgf+="$US$pdep"
+    fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
   fi

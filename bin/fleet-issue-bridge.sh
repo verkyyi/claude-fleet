@@ -488,9 +488,45 @@ apply_forward() {
 # Prints one status token (for the log + the selftest) and returns:
 #   0  handled terminally (relayed|revived|suppress:*|gone|dup) → caller marks seen
 #   3  queued (target busy) → caller must NOT mark seen; retry next tick
+# THE OPEN-ASK BOOK (issue #4225): ⌘P puts a session under 等你 while its issue
+# holds a ⛔ ask nobody answered — whatever its @claude_state says (a child's
+# report clears `needs/blocked`, the question stays open). The panel reads it on
+# every pop, so it is never asked of GitHub there: this relay already sees every
+# comment of every repo it covers, and keeps one file per open ask,
+# $FLEET_C/global/asks/<slug>#<N> = `<cid>\t<epoch>\t<question's first line>`.
+# A ⛔ comment (or one carrying the decision format's `fleet:ask` marker) writes
+# it; a LATER comment that answers — fleet_decision.parse_comments's rule: a
+# `fleet:answer` marker, a direct-route 「决定…」, or any comment with no
+# `fleet:from` marker (a person's) — removes it. A closed issue is the reader's
+# (fleet_view.open_ask, off the collector's open-issue list). Never fails a relay.
+bridge_ask_note() {  # <slug> <issue> <cid> <body>
+  local f="$FLEET_C/global/asks/$1#$2" q='' old=''
+  case "$2" in ''|*[!0-9]*) return 0 ;; esac
+  case "$4" in
+    '⛔ blocked'*|*'<!-- fleet:ask '*)
+      case "$4" in '⛔ blocked'*) q=${4%%$'\n'*}; q=${q#*: } ;; esac
+      q=${q//[[:cntrl:]]/ }
+      mkdir -p "${f%/*}" 2>/dev/null || return 0
+      printf '%s\t%s\t%s\n' "$3" "$(now)" "${q:0:200}" > "$f.$$" 2>/dev/null && mv -f "$f.$$" "$f" 2>/dev/null
+      rm -f "$f.$$" 2>/dev/null
+      return 0 ;;
+  esac
+  [ -f "$f" ] || return 0
+  IFS=$'\t' read -r old _ < "$f" 2>/dev/null || :
+  # only a comment AFTER the ask answers it (a relay retried late must not)
+  case "$old:$3" in *[!0-9:]*|:*|*:) ;; *) [ "$3" -gt "$old" ] || return 0 ;; esac
+  case "$4" in
+    *'<!-- fleet:answer row='*|决定*) rm -f "$f" 2>/dev/null ;;
+    *"$FROM_PREFIX"*) ;;
+    *) rm -f "$f" 2>/dev/null ;;
+  esac
+  return 0
+}
+
 bridge_relay() {
   local repo="$1" slug="$2" issue="$3" cid="$4" assoc="$5" author="$6" body="$7"
   if bridge_seen_has "$slug" "$cid"; then echo "dup"; return 0; fi
+  bridge_ask_note "$slug" "$issue" "$cid" "$body"
   if bridge_marked "$body"; then echo "suppress:marker"; return 0; fi
   if bridge_self_authored "$body" "$issue"; then echo "suppress:self"; return 0; fi
   # A hub ticket's comment the fleet itself wrote (source=fleet, #3597): never echoed.

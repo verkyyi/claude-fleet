@@ -411,6 +411,11 @@ FLEET_CTX_WINDOW=200000
 # Read at each ⌘P (the environment, else this file's line).
 # @label=Closed sessions listed @group=status @tier=internal @scope=global @edit=int @unit=hours
 #FLEET_VIEW_CLOSED_HOURS=48
+# The panel's 刚落地 window (seconds): a done session whose PR merged within it is
+# 刚落地; past it a session bound to an issue that is closed, its PR merged, goes
+# to 已结束 · 还开着 (issue #4225) — the sidebar, `fleet ls` and ⌘P alike.
+# @label=Just-landed window @group=status @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_VIEW_LANDED_SECS=86400
 
 # The steward plugin's beat (seconds), in the loop of the session that took the
 # role: every FLEET_STEWARD_EVERY, FLEET_STEWARD_AGAIN after a beat

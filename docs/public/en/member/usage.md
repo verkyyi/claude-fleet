@@ -53,11 +53,12 @@ The panel groups sessions by what you should do:
 | Group | Meaning | What you do |
 |---|---|---|
 | **Pinned** | Ones you pinned yourself | — |
-| **Waiting on you** | The session stopped to ask you something, or is waiting for you to allow an action; its words are on the next line | Switch to it and answer, or press Tab on its row → "Answer…" |
+| **Waiting on you** | The session stopped to ask you something, or is waiting for you to allow an action — or asked on its ticket and nobody has answered yet, even if it has stopped since; its words are on the next line | Switch to it and answer, or press Tab on its row → "Answer…" |
 | **Working** | Doing it now | Nothing |
+| **Waiting to merge / ship** | Done, its pull request not merged yet, or merged but not live; the row ends with the step: checks running · checks red · ready to merge · waiting for the release train · deploying | Usually nothing; when the checks are red, take a look |
 | **Just landed** | The change has been merged into the repository | Take a look at the result |
-| **Other** | Idle, done, asleep | — |
-| **Ended** | Sessions whose window has been reaped, folded at the bottom | To carry on: pick it, ↵ "Restore" |
+| **Other** | Idle, or no state to read | — |
+| **Ended** | Finished sessions: ones bound to no ticket, or whose ticket is closed and pull request merged more than a day ago; the ones still open first, the reaped ones under them, folded at the bottom | Still open: ↵ on the last row reaps them all; to carry on: pick it, ↵ "Restore" |
 
 Each row ends with the machine it is on (`mac-a`) and its ticket number (`#128`) or PR. When a machine cannot be reached, a red bar appears across the top of the panel and its rows say "lost N min"; wait for it to come back — the sessions are not lost.
 

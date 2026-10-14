@@ -14,9 +14,9 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
     fleet-quickopen.py --view <view> [--client <c>]
                                               ⌘P / ⌘K: every session of yours, every
                                               machine, every login, grouped by what
-                                              you should do (#3179: 置顶 · 等你 ·
-                                              在干活 · 刚落地 · 其他); 已结束 under
-                                              them; ↵ goes there
+                                              you should do (#3179, #4225: 置顶 ·
+                                              等你 · 在干活 · 等合并/等发版 · 刚落地 ·
+                                              其他); 已结束 under them; ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
     fleet-quickopen.py do new|quit|shell --view <view> [--target <session>]
@@ -604,7 +604,7 @@ GLYPHS = {"needs": "!", "fail": "x", "work": "»", "done": "✓", "idle": "∙",
 GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "idle": ".", "lost": "?"}
 # the 16-colour palette's numbers, present in every theme: red red green blue grey yellow
 GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "idle": 8, "lost": 3}
-GROUPS = ("pin", "ask", "work", "landed", "other")
+GROUPS = ("pin", "ask", "work", "wait", "landed", "other")
 MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
 
 
@@ -632,16 +632,94 @@ def sym_of(state, lost=False):
     return "idle"
 
 
-def group_of(state, pinned, landed, ended):
+def group_of(state, pinned, landed, ended, asked=False, stage=""):
+    """What the person should do about a row (issues #3179, #4225): 置顶 · 等你
+    (needs / failed, or an unanswered ⛔ ask on its issue whatever the state) ·
+    在干活 · 等合并/等发版 (done, its PR open or merged-not-live — stage_of) ·
+    刚落地 · 已结束 (the producer's mark) · 其他 (idle, unknown)."""
     if pinned:
         return "pin"
-    if state in ("needs", "failed"):
+    if state in ("needs", "failed") or asked:
         return "ask"
     if state in ("working", "looping"):
         return "work"
+    if stage and not ended and state in ("done", "landed"):
+        return "wait"
     if landed:
         return "landed"
     return "ended" if ended else "other"
+
+
+# A PR's step on its way out (issue #4225), off the producer's PR cell (field 11:
+# `#75…` `#75✗` `#75✓↑` · `merged` · `live` · `deploy…` · `deploy✗` · `closed` · `—`)
+# and its field 20 (`unknown`: merged, the deploy probe has not seen it live).
+# "" = nothing to wait for: no PR, closed, live, or merged with no probe.
+def stage_of(pr, dep=""):
+    pr = (pr or "").strip()
+    if pr == "deploy…":
+        return "deploying"
+    if pr == "deploy✗":
+        return "deploy_red"
+    if pr == "merged":
+        return "train" if dep == "unknown" else ""
+    if not pr or pr in ("—", "·", "-", "closed", "live"):
+        return ""
+    ci = re.sub(r"^#\d+", "", pr)
+    if ci.startswith("✗") or ci == "✓!":
+        return "red"
+    if ci.startswith("✓"):
+        return "green"
+    return "checking"
+
+
+def repo_slug(repo):
+    """fleet_slug(fleet_norm_repo(repo)) — the cache dirs' and the ask book's key."""
+    return re.sub(r"[^A-Za-z0-9._-]", "", (repo or "").strip().rstrip("/").replace("/", "-"))
+
+
+def fleet_only_slug(fleet):
+    """The slug of the fleet's one hosted repo (fleets/<fleet>/repos/<slug>.conf),
+    "" unless it hosts exactly one — a one-repo list draws no repo heading."""
+    try:
+        confs = [p.stem for p in (conf_dir() / "fleets" / fleet / "repos").glob("*.conf")]
+    except OSError:
+        return ""
+    return confs[0] if len(confs) == 1 else ""
+
+
+ISSUES_LISTED = 300     # the collector's open-issue list holds this many (tmux-dash-collect.sh --limit)
+
+
+def open_ask(slug, issue, lists=None):
+    """The first line of the ⛔ ask still open on <slug>#<issue> (issue #4225), ""
+    when none: the issue bridge's book ($G/asks/<slug>#<N>, fleet-issue-bridge.sh
+    bridge_ask_note — written on the ⛔ comment, removed by the answer). An issue
+    no longer on the collector's open-issue list (fleets/<slug>/issues, when it
+    was read) is closed, so its ask is too. Local files only — the panel reads
+    this on every pop and never asks GitHub. `lists`: a {slug: set} memo."""
+    num = (issue or "").lstrip("#")
+    if not slug or not num.isdigit():
+        return ""
+    try:
+        line = (dash_global() / "asks" / ("%s#%s" % (slug, num))).read_text(
+            encoding="utf-8", errors="replace").split("\n", 1)[0]
+    except OSError:
+        return ""
+    lists = {} if lists is None else lists
+    if slug not in lists:
+        try:
+            text = (dash_global().parent / "fleets" / slug / "issues").read_text(encoding="utf-8", errors="replace")
+            lists[slug] = {ln.split("\t")[1] for ln in text.splitlines() if ln.count("\t") >= 1}
+        except OSError:
+            lists[slug] = None
+    have = lists[slug]
+    if have is not None and "#" + num not in have:
+        # the list is the newest ISSUES_LISTED open ones: missing from a full one
+        # says closed only for a number newer than its oldest
+        nums = [int(n[1:]) for n in have if n[1:].isdigit()]
+        if len(have) < ISSUES_LISTED or (nums and int(num) > min(nums)):
+            return ""
+    return one_line(line.split("\t", 2)[2] if line.count("\t") >= 2 else "") or say("view_ask_open")
 
 
 def one_line(text, n=200):
@@ -765,9 +843,12 @@ def closed_secs():
 
 def entries(vid, now=None, hub=True):
     """Every line the popup can show, in order (issue #3179): grouped by what you
-    should do — 置顶 (@pin) · 等你 (needs / failed / blocked) · 在干活 (working /
-    looping) · 刚落地 (done, its PR merged within FLEET_VIEW_LANDED_SECS, 24 h) ·
-    其他 — then ▸ 已结束 (folds). Within a group the producer's order stands, and a
+    should do — 置顶 (@pin) · 等你 (needs / failed / blocked, or an unanswered ⛔
+    ask on its issue — issue #4225) · 在干活 (working / looping) · 等合并/等发版
+    (done, its PR open or merged-not-live; the step a tag at the row's end) ·
+    刚落地 (done, its PR merged within FLEET_VIEW_LANDED_SECS, 24 h) · 其他 —
+    then ▸ 已结束 (folds; the producer's mark — a bound session too once its
+    issue closed and its PR merged past that window). Within a group the producer's order stands, and a
     row stays indented under its parent while the parent is in the same group.
     Machine, login and repo are tags, never groups. Each a dict:
     kind  hdr (a group heading, `group`) · sess · ask (the question a needs row
@@ -787,13 +868,21 @@ def entries(vid, now=None, hub=True):
     wins = windows(fleet) if fleet else {}
     held0 = names_raw(fleet) if fleet else {}
     held = names_live(held0, now)
-    landed_secs = fenv("FLEET_VIEW_LANDED_SECS", 86400)
+    # the environment, else fleet.conf's line — the producer reads the same one
+    try:
+        landed_secs = float(conf_word("FLEET_VIEW_LANDED_SECS") or 86400)
+    except ValueError:
+        landed_secs = 86400.0
     gl = glyphs()
     hage = hub_age(now)
     hstale = hage is not None and hage > fenv("FLEET_HUB_SESSIONS_STALE", 60)
     groups = {g: [] for g in GROUPS}
     ended, repos, anc = [], [], {}
     section, repo = "", ""
+    # the repo a row sits under, as the ask book's key (issue #4225): a heading's
+    # owner/name; with no heading at all (a one-repo list) the fleet's one repo
+    only = fleet_only_slug(fleet) if fleet else ""
+    slug, lists = only, {}
     if hub:     # hub=False: the cache as it is — the popup's first paint (#3311)
         hub_fresh(fleet)
     for line in produce(fleet, kept=not hub).splitlines():
@@ -802,18 +891,19 @@ def entries(vid, now=None, hub=True):
             kind = f[1] if len(f) > 1 else ""
             text = f[3] if len(f) > 3 else ""
             if kind in ("pin", "ended"):
-                section = kind
+                section, slug = kind, only     # names no repo
             elif text.startswith("─") or not text.strip():
                 section = ""          # the rule closing the pinned block
             else:
                 section = ""
                 repo = re.sub(r"\s*\(\d+\)$", "", re.sub(r"^▸\s*", "", text.strip()))
+                slug = repo_slug(kind) if "/" in kind else ""
                 if "/" in kind:       # a hosted repo's heading (`none` / '' are 无仓库 / ?)
                     repos.append(kind)
             continue
         if len(f) < 15 or not f[0]:
             continue
-        f += [""] * (19 - len(f))
+        f += [""] * (20 - len(f))
         key = f[0]
         local = not key.startswith("wid:")
         target = key if local else key[4:]
@@ -844,10 +934,18 @@ def entries(vid, now=None, hub=True):
         # remote row's off the hub; none recorded ⇒ nothing said, never 0
         tok = (f[18].split("|") + [""] * 6)[5]
         today = say("view_today_fmt", tokens_short(tok)) if tok.isdigit() and int(tok) > 0 else ""
+        # no activity known: 刚落地 — unless the producer already found it over
+        # (issue #4225: its own clock, the last state, is past the window)
         landed = state in ("done", "landed") and f[10].strip() in MERGED_PR and \
-            (not act or now - act <= landed_secs)
-        grp = group_of(state, section == "pin", landed, section == "ended")
+            (now - act <= landed_secs if act else section != "ended")
+        # issue #4225: an unanswered ⛔ ask on its issue is 等你 whatever the state;
+        # a done row whose PR is still on its way is 等合并 / 等发版
+        pend = open_ask(slug, issue, lists) if issue and section != "pin" else ""
+        stage = stage_of(f[10], f[19].strip())
+        grp = group_of(state, section == "pin", landed, section == "ended", bool(pend), stage)
         ask = one_line(f[17]) if state == "needs" else ""
+        if not ask and pend and grp == "ask":
+            ask = pend
         tags = []
         lost_secs = None
         if lost:
@@ -867,6 +965,8 @@ def entries(vid, now=None, hub=True):
             tags.append("-" if gl is GLYPHS_ASCII else "∅")
         if f[5].strip():
             tags.append(f[5].strip())
+        if grp == "wait":
+            tags.append(say("view_stage_" + stage))
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
              "state": state, "text": title or name, "name": name, "reap": f[14].strip(), "issue": issue, "depth": depth,
              "detail": detail,
@@ -877,7 +977,7 @@ def entries(vid, now=None, hub=True):
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
         if grp == "ended":
-            why = say("view_ended_merged") if f[10].strip() == "merged" else \
+            why = say("view_ended_merged") if f[10].strip() in MERGED_PR else \
                 say("view_ended_exited") if state == "exited" else say("view_ended_done")
             e["word"] = why
             e["right"] = say("view_ago_fmt", dur(now - act)) if act and local else ""
