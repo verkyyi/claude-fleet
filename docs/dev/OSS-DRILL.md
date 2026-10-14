@@ -30,9 +30,10 @@
 | 3 | 生成钥匙（§1.2） | | | | | |
 | 4 | 填配置 + 一种登录方式（§1.3–1.4） | | | | | |
 | 5 | 单机容器 + 反向代理起入口（§1.5） | | | | | |
+| 5a | 国内部署：推 stable（§4.4）、取发布包制品（§1.3「发布包要的程序」）、npm 国内源 + 接中转（§1.8） | | | | | |
 | 6 | 检查入口、管理员登录控制台（§1.7） | | | | | |
 | 7 | 加一台 Mac 机器（§2.1） | | | | | |
-| 8 | 加一台 Linux 机器（§2.2，可选） | | | | | |
+| 8 | 加一台 Linux 机器（§2.2：一张加入码 →「已加入，还没有账号」→ 开第一个号 → 重跑得「已收敛」） | | | | | |
 | 9 | `fleet doctor --machine` 全 PASS（§2.3） | | | | | |
 | 10 | 给成员开号（§3.1） | | | | | |
 | 11 | 成员装客户端、登录（§3.2，member quickstart） | | | | | |
@@ -71,8 +72,25 @@
 | install §6 | 卸载客户端漏了安装时带的 tmux（`~/.local/share/claude-fleet-vendor`） | 文档补上（本单） |
 | hosted §4 · admin/index | 托管管理员要从浏览器开发者工具手抄 `ccq_sess` cookie 才能用 `fleet hub` | 已登记 #3745（「将改为」`fleet login` 的身份） |
 | member/usage | 截图还是占位文字 | 演练时补真截图（C10 #3580 交接） |
+| README.md · README.zh-CN.md | 外人从 GitHub 首页进来，安装指向 `docs/dev/INSTALL.md`（让 Claude 装），找不到 `docs/public/` 的三条快速开始 | 待修（本单）：首页顶部链到 `docs/public/zh/index.md` |
+| 演练入口 `/docs/` | drill-hub 跑旧镜像 `prod-1f1f594`，`/docs/` 404，托管管理员在自己的入口上看不到文档 | 演练前重部署演练入口（交 #3797） |
+| install §1.3–1.4 | 只配邮箱登录时，`CCQUOTA_ADMINS` 的地址第一次登录收不到验证码，第一个管理员进不了门 | #3852（#3797 搭环境撞到） |
+| install §1.7 | 没配登录方式时 `/install` 是 404，检查步骤只写「返回脚本」 | 已修 #4009（现答 503 + 一句原因） |
+| install §4.3 | 入口匿名问 api.github.com 拿 stable，国内出口被限流 403 | 已修 #4009（install §4.4） |
+| install §1.2–1.3 | 设了 `RELEASE_KEY` 后打包要 codex / tmux 制品（`RELEASE_ARTIFACTS` / `PLATFORMS`），否则 422，文档没写、也没来源 | 已修 #4009（§1.3「发布包要的程序」+ `fleet-release-fetch.py`） |
+| install §1.3 | 国内必须有中转，只给了 `CRED_RELAY_URL` 一个键；架中转与相关钥匙（`RELAY_SIGN_KEY` · `SESSION_CRED_KEY` · `OAUTH_REFRESH_VIA=relay`）都没写 | 已修 #4009（install §1.8） |
+| install §2.2 | Linux 加入显示「已收敛」，但缺第二张加入码 + `--login … --login-join-file`，开号卡 pending→failed；只写在 docs/dev | 已修 #4010（一张加入码开得出号，安装程序说「已加入，还没有账号」） |
+| install §2.2 | 每个登录的 `FLEET_CRED_RELAY_URL` 入口不下发、文档没写 | 已修 #4010（入口加入时下发） |
+| install §2.2（安装程序） | umask 077 下 `/usr/local/lib/claude-fleet` 建成 0700，共享代理每秒退出 | 已修 #4010 |
+| 发布包 | Claude Code 从 registry.npmjs.org 拉，不走 npmmirror | 已修 #4011（`CCQUOTA_FLEET_RELEASE_NPM`，§1.8） |
+| install §0–§1.7 | 代走第一轮：buildx、国内拉 Docker Hub 基础镜像、umask 顺序、装 Caddy、`release-artifacts` 目录、未登录行为、登录方式要先备好、`CCQUOTA_ADMINS` 照抄占位 | #4070 |
+| install §1.3 | 发布包制品：没写官方发布方地址，「自己放」不知 Codex 用哪个文件、名字怎么对应 | #4071 |
+| install §1.8 | 境内入口域名没备案，云厂商按 SNI 拦外网所有 HTTPS | #4072 |
+| self-host quickstart | 本机模式装完提示「去 <入口>/install 装」、无 `--help`、非交互退出码 2 | #4074 |
 
 ## 演练记录
 
 | 日期 | 路 | stable | 总耗时 | 卡住次数 | 通过 | 备注 |
 |---|---|---|---|---|---|---|
+| 2026-10-13 | 自托管（代走，第一轮） | a858c58 | 26 分钟 | 6 | 否 | 停在 §1.7：域名未备案被拦、管理员收不到码。新卡点 #4070 #4071 #4072 #4074；结果见 #3588 评论 |
+| 2026-10-13 | 自托管（代走，第二轮，从 §1.7 起） | a858c58 | 2 分钟后等码 | 1 | 否 | 换已备案域名 + SES 后外网检查全过；停在管理员收码（演练限制，发起人未转码）。`CCQUOTA_ADMINS` 留成占位并入 #4070 |
