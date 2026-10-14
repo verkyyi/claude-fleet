@@ -890,6 +890,18 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   queue** (issue #1313): `FLEET_HEAVY_LIGHT_RE` is matched first — a pytest aimed
   at a file / `::` node / `-k` (no xdist `-n`), `npm test -- <file|-t>`,
   `run-selftests.sh <name>` (no glob, no option) pass through untouched.
+- **HOME is not a sandbox: a teardown's signals and service actions go through
+  `bin/fleet_sidefx.py`** (issue #4213). `HOME=$d … --apply` isolates files only —
+  on 2026-10-14 an uninstaller «tested» that way SIGTERMed the real login's fleet
+  tmux server (argv `~/.claude/fleet/…`) and booted out `gui/<real uid>`. The rule
+  keys on a NAMED target login (never `os.getuid()`): a home that is not that
+  login's passwd home ⇒ nothing runs, every kill / launchctl / systemctl is
+  recorded in `$FLEET_SIDEFX_LOG`; a caller that is neither the login nor root ⇒
+  refused; a process is a target only when its argv names a fleet path UNDER the
+  target home; a caller running inside the fleet it would stop ⇒ refused.
+  `fleet-node-leave.sh`'s `dom` uses it; a new uninstaller / reset imports it
+  (`Actor`, `stop`). A real run against another login is a real separate login,
+  never a swapped HOME. BREAK-IT `sandbox-home-real-uid`.
 - **A fleet temp server binds `127.0.0.1`, never `*`** (issue #1154). An agent's
   `python3 -m http.server` / dev server defaults to every interface and outlives
   its window as a `PPID=1` orphan — the 2026-09-24 audit found one serving the

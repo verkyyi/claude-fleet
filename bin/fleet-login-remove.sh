@@ -12,7 +12,9 @@
 # the daemon let go, the wash kills every process of the uid), the hub leave in
 # the background beside steps 1c–3, and no steps 4–5 — the wash quiesces and
 # moves the home aside itself (a rename: the archive is written after, off the
-# clock).
+# clock). --keep-node (with --recycle-stop, issue #4195): the wash keeps the
+# login's root-held node token, so step 1b does not take it off the hub — the
+# hub has already ended the last person's passes, leases and link on it.
 #
 # Home policy (EPIC #1212 C5, issue #1217 — #1210 ⑤ is the diagnosis):
 #   --keep-home    default. The home is ARCHIVED first — a 600 tar.gz owned by
@@ -61,7 +63,7 @@ usage() { printf 'usage: %s <login> [--keep-home|--delete-home] [--archive-dir <
 die() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 refuse() { printf '%s: refusing %s\n' "$PROG" "$1" >&2; exit 3; }
 
-LOGIN='' APPLY=0 KEEP=1 ARCHIVE_DIR=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded} RECYCLE=0 STOPONLY=0 QUICK=0
+LOGIN='' APPLY=0 KEEP=1 ARCHIVE_DIR=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded} RECYCLE=0 STOPONLY=0 QUICK=0 KEEPNODE=0
 ARGS=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -73,6 +75,7 @@ while [ $# -gt 0 ]; do
     --recycle) RECYCLE=1; shift ;;
     --recycle-stop) STOPONLY=1; shift ;;
     --quick) QUICK=1; shift ;;
+    --keep-node) KEEPNODE=1; shift ;;
     -h|--help) usage ;;
     -*) die "unknown option: $1" ;;
     *) [ -z "$LOGIN" ] || usage; LOGIN=$1; shift ;;
@@ -82,6 +85,7 @@ done
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "bad login name '$LOGIN'"
 [ "$RECYCLE" = 0 ] || [ "$STOPONLY" = 0 ] || die '--recycle and --recycle-stop: one or the other'
 [ "$QUICK" = 0 ] || [ "$STOPONLY" = 1 ] || die '--quick goes with --recycle-stop only'
+[ "$KEEPNODE" = 0 ] || [ "$STOPONLY" = 1 ] || die '--keep-node goes with --recycle-stop only'
 if [ "$RECYCLE" = 1 ]; then
   # the wash (issue #3505): the same arguments, minus --recycle
   FWD=()
@@ -334,7 +338,9 @@ leave() {
 # --quick: a round trip to the hub, beside steps 1c–3 (it runs as the login,
 # so it is waited for before anything kills the uid's processes)
 LEAVE_PID=''
-if [ "$APPLY" = 1 ] && [ "$QUICK" = 1 ]; then
+if [ "$KEEPNODE" = 1 ]; then
+  printf '  (skipped: --keep-node — the wash keeps its root-held node token; the hub ended the last person'"'"'s passes on it)\n'
+elif [ "$APPLY" = 1 ] && [ "$QUICK" = 1 ]; then
   leave > "${TMPDIR:-/tmp}/fleet-login-remove.leave.$$" 2>&1 &
   LEAVE_PID=$!
   printf '  (in the background, beside steps 1c–3)\n'

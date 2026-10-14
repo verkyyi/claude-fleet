@@ -125,6 +125,9 @@ type nodeConn struct {
 	// canRecycle is an admin hello's CapRecycle (claude-fleet#3504): its
 	// remove script washes a login for the next person. Set once, before publish.
 	canRecycle bool
+	// canRecycleKeep is its CapRecycleKeep (claude-fleet#4195): its wash keeps
+	// the login's root-held node token rather than re-joining.
+	canRecycleKeep bool
 	// adminSeat is the hello's CapAdminSeat (claude-fleet#3557): an admin
 	// agent running as the machine's admin role account, whose scripts run an
 	// op only with the hub's signed ticket. Set once, before publish.
@@ -483,6 +486,15 @@ func (n *nodeConns) recyclerFor(hostname string) (string, bool) {
 	return id, true
 }
 
+// recyclerKeeps says id's wash keeps a recycled login's node token
+// (CapRecycleKeep, claude-fleet#4195).
+func (n *nodeConns) recyclerKeeps(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	return c != nil && c.canRecycleKeep
+}
+
 // ErrNodeOffline is returned when a write is addressed to a node with no open
 // control channel.
 var ErrNodeOffline = errors.New("node has no open control channel")
@@ -622,12 +634,13 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canChat: hp.HasCap(control.CapChat), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
-		canCredsep:    hp.HasCap(control.CapCredsep),
-		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
-		canRecycle:    hp.HasCap(control.CapRecycle),
-		adminSeat:     hp.HasCap(control.CapAdminSeat),
-		canServiceLog: hp.HasCap(control.CapServiceLog),
-		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
+		canCredsep:     hp.HasCap(control.CapCredsep),
+		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
+		canRecycle:     hp.HasCap(control.CapRecycle),
+		canRecycleKeep: hp.HasCap(control.CapRecycleKeep),
+		adminSeat:      hp.HasCap(control.CapAdminSeat),
+		canServiceLog:  hp.HasCap(control.CapServiceLog),
+		computeOff:     !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
 		userPod:           hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
 		clusterOps:        hp.HasCap(control.CapClusterOps),
