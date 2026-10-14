@@ -49,8 +49,8 @@ type WxGateway struct {
 
 	// TplReview / TplNewReq are the template messages a request's result and
 	// an admin's new-request notice go out as (CCQUOTA_WX_TPL_REVIEW /
-	// CCQUOTA_WX_TPL_NEWREQ): a template shaped 时间 · 内容 · 建议
-	// (keyword1..3, notify.go). Empty = no template for that kind; the
+	// CCQUOTA_WX_TPL_NEWREQ): 「项目申请审核结果通知」 / 「用户注册申请审核提醒」,
+	// their fields filled by notify.go. Empty = no template for that kind; the
 	// notice falls back to a customer-service message, then a mail.
 	TplReview, TplNewReq string
 

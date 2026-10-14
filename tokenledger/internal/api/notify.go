@@ -42,9 +42,14 @@ import (
 // workbench gate is wxgw.go's alone, a failure is audited as its errcode at
 // most, and every word sent is built from the request itself.
 //
-// Templates: both kinds use one shaped 时间 · 内容 · 建议 (keyword1..3; on
-// 「二四网络科技」 that is 「提醒服务通知」), first and remark filled for the
-// clients that still show them. Its words are tplReview / tplNewReq below.
+// Templates (claude-fleet#4214): two of 「二四网络科技」's category templates —
+// a result is 「项目申请审核结果通知」 (申请项目 thing3 · 申请账号
+// character_string14 · 审核结果 thing5 · 审核时间 time6), new requests
+// 「用户注册申请审核提醒」 (平台名称 thing1 · 用户名称 thing2 · 申请时间 time6 ·
+// 待审批数 character_string10). WeChat holds a thing to 20 runes and a
+// character_string to 32 of letters, digits and symbols — no Chinese — and a
+// time to a bare time: reviewMsg / newReqMsg fill them within that. A refusal
+// for a reason has no field; tapping through to /apply shows it.
 
 const (
 	// notifyGather is how long an admin's new-request notice gathers.
@@ -508,8 +513,12 @@ func reviewMsg(req *store.AccessRequest, en bool, base string) noticeMsg {
 			advice = req.CooldownUntil.In(beijing).Format("2006-01-02") + " 起可以再申请"
 		}
 	}
-	m.Tpl = map[string]string{"first": head, "keyword1": when, "keyword2": clipRunes(oneLine(content), 60), "keyword3": advice,
-		"remark": ternary(en, "Tap to see your request", "点开查看申请")}
+	m.Tpl = map[string]string{
+		"thing3":             ternary(en, "ClaudeFleet access", "ClaudeFleet 使用申请"),
+		"character_string14": wxAccount(req),
+		"thing5":             ternary(ok, ternary(en, "Approved", "已通过"), ternary(en, "Not approved", "未通过")),
+		"time6":              noticeTime(req.DecidedAt, false),
+	}
 	m.Subject = head
 	var b strings.Builder
 	if en {
@@ -561,9 +570,16 @@ func newReqMsg(waiting []store.AccessRequest, en bool, base string) noticeMsg {
 		content += "）"
 		advice = "点开直接审核"
 	}
-	when := noticeTime(first.CreatedAt, en)
-	m.Tpl = map[string]string{"first": head, "keyword1": when, "keyword2": content, "keyword3": advice,
-		"remark": ternary(en, "Only admins get this notice", "只有管理员会收到这条提醒")}
+	who := name
+	if n > 1 {
+		who = clipRunes(oneLine(firstSet(first.Display, first.Kind)), 12) + ternary(en, fmt.Sprintf(" +%d", n-1), fmt.Sprintf(" 等 %d 人", n))
+	}
+	m.Tpl = map[string]string{
+		"thing1":             "ClaudeFleet",
+		"thing2":             clipRunes(who, 20),
+		"time6":              noticeTime(first.CreatedAt, false),
+		"character_string10": fmt.Sprint(n),
+	}
 	m.Subject = head
 	var b strings.Builder
 	for _, r := range waiting {
@@ -587,6 +603,38 @@ func newReqMsg(waiting []store.AccessRequest, en bool, base string) noticeMsg {
 		m.Text += "\n" + m.Link
 	}
 	return m
+}
+
+// wxAccount is a request's 申请账号 as a template's character_string can
+// carry it: the first of its mail address, its name, its id that is all
+// letters, digits and symbols, at most 32.
+func wxAccount(req *store.AccessRequest) string {
+	var mail string
+	switch {
+	case strings.Contains(req.NotifyAddr, "@"):
+		mail = req.NotifyAddr
+	case req.Kind == store.IdentityEmail:
+		mail = req.Subject
+	}
+	for _, c := range []string{mail, req.Display, req.ID} {
+		if c = strings.TrimSpace(c); c != "" && wxCharString(c) {
+			if len(c) > 32 {
+				c = c[:32]
+			}
+			return c
+		}
+	}
+	return "-"
+}
+
+// wxCharString: s is printable ASCII with no space — what a character_string takes.
+func wxCharString(s string) bool {
+	for _, r := range s {
+		if r <= ' ' || r > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func ternary(c bool, a, b string) string {
