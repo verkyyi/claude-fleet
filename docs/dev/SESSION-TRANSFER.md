@@ -106,6 +106,16 @@ is an agent-written summary. No extra Claude/model call is needed to export.
 
 ## Target login check
 
+On a separated login (`credsep.json`), an unpinned Codex target uses the
+credential proxy, just as the Codex launcher does. The check maps the target
+home to its proxy account and asks that login's authenticated control socket
+for a metadata-only verdict: its subscription lease must exist, be unexpired
+and have no upstream rejection for the same credential. No credential is copied
+to the login. An unavailable or older proxy refuses the transfer; deploy the
+matching proxy version before retrying. An explicit Codex profile/account keeps
+the local registry check. A central-only route cannot be attested by a local
+lease and remains refused until central target attestation is available.
+
 Before a cutover asks the source anything, `--dry-run` and the first step of a
 real transfer ask `bin/fleet-account.sh target-auth` whether the TARGET account
 can log in (issue #1667): a Codex profile whose ccquota login state is not
