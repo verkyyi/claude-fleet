@@ -2869,8 +2869,8 @@ drill_trial_idle_while_opening() {
 }
 
 # ---- trial-host-no-spare (#4259): least-busy ranks room before a ready spare,
-# so a trial picked mac-mini2 (room, no spare, its failed one stopping the
-# refill) over macmini (busy CPU, two ready) and waited «busy» for good. Now a
+# so a trial picked a machine with room and no spare (its failed one stopping the
+# refill) over one with a busy CPU and two ready, and waited «busy» for good. Now a
 # trial's candidates are the machines holding a ready spare; none ⇒ no_spare
 # and trial_no_spare.
 drill_trial_host_no_spare() {
