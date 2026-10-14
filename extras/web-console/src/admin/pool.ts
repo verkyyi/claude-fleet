@@ -405,17 +405,6 @@ export const fingerprint = (e?: PolicyEntry) => JSON.stringify(e ? { all: !!e.al
 
 export const LABEL_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
 
-// addCommand is what to run on a fleet machine to hand the hub a new
-// subscription — ONE command (claude-fleet#2084).
-export const addCommand = (prov: Prov, label: string) => `~/.claude/fleet/bin/fleet account add --provider ${prov} --label ${label}`;
-
-export type AuditRow = { action: string; provider: string; account: string; at: string; hostname?: string; detail?: string };
-// arrived is the credential audit's put that answers an add started at since.
-export function arrived(audit: { audit?: AuditRow[] } | null, prov: Prov, label: string, since: number): AuditRow | null {
-  const rows = Array.isArray(audit?.audit) ? audit!.audit! : [];
-  return rows.find((r) => r.action === "put" && r.provider === prov && norm(r.account) === norm(label) && toMs(r.at) >= since - 1000) || null;
-}
-
 // settingOf reads one key of /v1/fleet/settings.
 export function settingOf(answer: any, key: string): string {
   const row = (answer?.hub || []).find((h: any) => h.key === key);
