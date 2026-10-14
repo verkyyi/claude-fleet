@@ -105,6 +105,8 @@
 #                                                   (fleet-lib.sh), dash-raw-session.sh (the hub's worker_start)
 #   linux-admit-host-load                           fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu
 #                                                   (fleet-lib.sh) on a sandbox cgroup + machine reading
+#   mac-admit-load-not-busy                         fleet_machine_admit / _fleet_cpu_busy (fleet-lib.sh),
+#                                                   fleet-machine-tasks.py probe (cpu_busy), fleet-control-read.sh capacity
 #   pod-disk-node-tmp                               fleet_disk_target (fleet-lib.sh), fleet-diskguard.sh --free /
 #                                                   --gate, scratch-pool.sh pool_free_gb, fleet-alerts.sh (a df shim)
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
@@ -611,8 +613,8 @@ drill_node_paused_still_placed() {
   case "$out" in *'"admit":false'*'"admit_why":"内存紧张"'*'"room":0'*) ;; *)
     WHY="capacity under critical memory pressure does not say admit:false, admit_why 内存紧张, room 0: $out"; return 1 ;; esac
   out=$(cap 'echo 1 66 5 6' 'echo 1.9')
-  case "$out" in *'"admit":false'*'"admit_why":"负载过高"'*'"room":'[1-9]*) ;; *)
-    WHY="capacity under load 1.9/core does not say admit:false, admit_why 负载过高 with its room: $out"; return 1 ;; esac
+  case "$out" in *'"admit":false'*'"admit_why":"负载过高（负载 1.9/核）"'*'"room":'[1-9]*) ;; *)
+    WHY="capacity under load 1.9/core does not say admit:false, admit_why 负载过高（负载 1.9/核） with its room: $out"; return 1 ;; esac
   out=$(cap 'echo 1 66 5 6' 'echo 0.5')
   case "$out" in *'"max_sessions":0'*'"admit":true'*'"room":'[1-9]*) ;; *)
     WHY="a healthy machine's capacity does not say admit:true with room ≥ 1: $out"; return 1 ;; esac
@@ -1519,6 +1521,45 @@ drill_linux_admit_host_load() {
   [ "$out" = '|rc=0' ] || { WHY="FLEET_ADMIT_LOAD_PER_CORE=0 must turn the cgroup reading off too: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT="宿主 6.29/core（ACK 节点）、pod cpu.max 2 核：没有 cgroup 照旧拦；pod 闲时放行；pod 用 1.95/2 核或被限流 40% 时按容器自己的数拦；FLEET_ADMIT_LOAD_PER_CORE=0 一并关掉"
+}
+
+# mac-admit-load-not-busy (issue #4077): macOS counts waiting processes in its
+# load average — a 15-core Mac read load 47.2 on 15 cores (3.1/core) with the CPU
+# 40 % busy, and every login's gate answered admit=false 负载过高, so no new
+# session and no pool refill anywhere. For real, through the daemon's machine
+# reading (no load stub): that reading at 40 % busy admits and the heartbeat says
+# admit:true; 92 % busy holds and admit_why names the CPU; past the 5/core hard
+# cap it holds naming the load; a reading with no cpu_busy (an older daemon) and
+# no live probe falls back to the old load rule; the task's own probe publishes
+# a cpu_busy share.
+drill_mac_admit_load_not_busy() {
+  CAP=20; local t0 d="$WORK/malnb" out
+  t0=$(now)
+  rm -rf "$d"; mkdir -p "$d/conf/cluster" "$d/tmp"
+  mr() { printf '{\n"ts": %s,\n"load_per_core": "%s"%s\n}\n' "$(date +%s)" "$1" "${2:+,
+\"cpu_busy\": \"$2\"}" > "$d/conf/cluster/machine.json"; }
+  run() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MACHINE_TASKS=off \
+            FLEET_MEM_TOTAL_MB=16384 FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 102400 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD='echo 1 66 0 0' FLEET_CPU_MAX_FILE="$d/none" "$@"; }
+  adm() { run "$@" bash -c "source '$BIN/fleet-lib.sh'; fleet_machine_admit; echo \"|rc=\$?\"" 2>&1; }
+  mr 3.15 0.400
+  out=$(adm)
+  [ "$out" = '|rc=0' ] || { WHY="load 3.15/core at 40 % CPU must admit: $out"; return 1; }
+  out=$(run bash "$BIN/fleet-control-read.sh" capacity 2>&1)
+  case "$out" in *'"admit":true'*) ;; *) WHY="the heartbeat at 40 % CPU must say admit:true: $out"; return 1 ;; esac
+  mr 3.15 0.920
+  out=$(run bash "$BIN/fleet-control-read.sh" capacity 2>&1)
+  case "$out" in *'"admit":false'*'"admit_why":"负载过高（CPU 92%）"'*) ;; *) WHY="92 % busy must hold and admit_why name the CPU: $out"; return 1 ;; esac
+  mr 6.40 0.400
+  out=$(adm)
+  case "$out" in *'machine load extreme'*'6.40/core'*'|rc=1') ;; *) WHY="6.4/core is past the 5/core hard cap and must hold: $out"; return 1 ;; esac
+  mr 3.15
+  out=$(adm FLEET_CPU_BUSY_PROBE_CMD=true)
+  case "$out" in *'machine load high'*'3.15/core'*'no CPU-busy reading'*'|rc=1') ;; *) WHY="with no busy reading the old load rule must hold: $out"; return 1 ;; esac
+  out=$(env -u FLEET_MACHINE_TASKS python3 "$BIN/fleet-machine-tasks.py" probe 2>&1)
+  case "$out" in *'"cpu_busy": "'[01].[0-9][0-9][0-9]'"'*) ;; *) WHY="the machine-reading task must publish a cpu_busy share: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="15 核 Mac 3.1/核、CPU 40%：经机器读数放行、心跳 admit:true；CPU 92% 挡且 admit_why 写「负载过高（CPU 92%）」；过 5/核硬上限仍挡；没有 cpu_busy 读数回到老负载规则；守护的读数任务发布 cpu_busy"
 }
 
 # pod-disk-node-tmp (issue #3974): a Linux pod has no TMPDIR, and its /tmp is the

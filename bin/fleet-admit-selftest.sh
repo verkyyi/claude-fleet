@@ -33,13 +33,18 @@
 #      drill 35 numbers): room 0 above the floor + reserved admits an ordinary
 #      spawn and notes it; the reserved sessions, pressure and the floor still
 #      hold, and FLEET_ADMIT_ROOM=hold restores the strict rule.
+#   K. the CPU-busy share decides before load/core (issue #4077, a 15-core Mac's
+#      numbers: 3.1/core at 40 % CPU): load high + CPU idle admits, CPU really busy
+#      holds naming CPU, the hard load cap still holds, no busy reading = the old
+#      load rule, the ceiling knobs and FLEET_ADMIT_LOAD_PER_CORE=0.
 #   F/G pin the strict room arithmetic, so they run with FLEET_ADMIT_ROOM=hold.
 set -uo pipefail
 unset FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE \
       FLEET_LOADGEN_LOAD_PER_CORE FLEET_MEM_PROBE_CMD FLEET_LOAD_PROBE_CMD \
       FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN \
       FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_MEM_TOTAL_MB FLEET_MEM_PS_CMD \
-      FLEET_GLOBAL_MAX_SESSIONS FLEET_MAX_SESSIONS FLEET_MACHINE_MAX_SESSIONS 2>/dev/null
+      FLEET_GLOBAL_MAX_SESSIONS FLEET_MAX_SESSIONS FLEET_MACHINE_MAX_SESSIONS \
+      FLEET_CPU_BUSY_PROBE_CMD FLEET_ADMIT_CPU_BUSY FLEET_MAX_CPU_BUSY FLEET_ADMIT_LOAD_HARD_PER_CORE 2>/dev/null
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SPAWN="$BIN/dash-issue-session.sh"
@@ -77,7 +82,7 @@ r=$(admit 'echo 1 66 5 6' 'echo 1.30');            [ "$r" = "0|" ] || fail "A 1.
 r=$(admit 'echo 1 66 5 6' 'echo 1.30' FLEET_LOADGEN_LOAD_PER_CORE=1)
 case "$r" in 1\|*FLEET_ADMIT_LOAD_PER_CORE=1*) ;; *) fail "A load bound defaults to FLEET_LOADGEN_LOAD_PER_CORE when set (got '$r')" ;; esac
 r=$(SHORT=--short admit 'echo 4 5 97 0' 'echo 0.5'); [ "$r" = "1|暂停开新：内存紧张" ] || fail "A --short memory tag (got '$r')"
-r=$(SHORT=--short admit 'echo 1 66 5 6' 'echo 9');   [ "$r" = "1|暂停开新：负载过高" ] || fail "A --short load tag (got '$r')"
+r=$(SHORT=--short admit 'echo 1 66 5 6' 'echo 9');   [ "$r" = "1|暂停开新：负载过高（负载 9/核）" ] || fail "A --short load tag names the reading (got '$r')"
 r=$(admit 'true' 'true');                          [ "$r" = "0|" ] || fail "A unreadable probes must admit (got '$r')"
 r=$(admit 'echo 2 40 5 0' 'echo 0.5' FLEET_ADMIT_PRESSURE=critical); [ "$r" = "0|" ] || fail "A PRESSURE=critical admits a warn (got '$r')"
 r=$(admit 'echo 4 40 5 0' 'echo 0.5' FLEET_ADMIT_PRESSURE=off);      [ "$r" = "0|" ] || fail "A PRESSURE=off ignores the level (got '$r')"
@@ -87,6 +92,34 @@ case "$r" in 1\|*2048\ MB\ kept\ back*) ;; *) fail "A with the % floor off the a
 r=$(admit 'echo 1 66 5 0' 'echo 9' FLEET_ADMIT_LOAD_PER_CORE=0);     [ "$r" = "0|" ] || fail "A LOAD_PER_CORE=0 turns the load bound off (got '$r')"
 r=$(admit 'echo 4 5 97 0' 'echo 9' FLEET_ADMIT=0);                   [ "$r" = "0|" ] || fail "A FLEET_ADMIT=0 admits whatever the readings (got '$r')"
 ok "A fleet_machine_admit: memory pressure / avail% / load each hold with a reason; knobs + FLEET_ADMIT=0"
+
+# ===== K: CPU busy before load/core (issue #4077) ================================
+# busy <cpu-stub> <load-stub> [VAR=val …]: admit with a CPU-busy stub beside the load one
+busy() { local c="$1"; shift; admit 'echo 1 66 5 6' "$@" FLEET_CPU_BUSY_PROBE_CMD="$c"; }
+r=$(busy 'echo 0.40' 'echo 3.10');                [ "$r" = "0|" ] || fail "K load 3.1/core with CPU 40 % busy must admit (got '$r')"
+r=$(busy 'echo 0.92' 'echo 3.10')
+case "$r" in 1\|*'machine cpu busy'*负载过高*'CPU busy 92% over FLEET_ADMIT_CPU_BUSY=0.8'*'load 3.10/core'*) ;; *) fail "K CPU 92 % busy must hold, naming the CPU reading (got '$r')" ;; esac
+r=$(busy 'echo 0.92' 'echo 0.30');                case "$r" in 1\|*'CPU busy 92%'*) ;; *) fail "K CPU busy holds however low the load (got '$r')" ;; esac
+r=$(SHORT=--short busy 'echo 0.92' 'echo 3.10');  [ "$r" = "1|暂停开新：负载过高（CPU 92%）" ] || fail "K --short names the CPU reading (got '$r')"
+r=$(busy 'echo 0.40' 'echo 6.20')
+case "$r" in 1\|*'machine load extreme'*'6.20/core over the hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE=5'*'CPU busy 40%'*) ;; *) fail "K load past the 5/core hard cap holds even with CPU idle (got '$r')" ;; esac
+r=$(SHORT=--short busy 'echo 0.40' 'echo 6.20');  [ "$r" = "1|暂停开新：负载过高（负载 6.20/核）" ] || fail "K --short hard cap names the load (got '$r')"
+r=$(busy 'echo 0.40' 'echo 6.20' FLEET_ADMIT_LOAD_HARD_PER_CORE=0); [ "$r" = "0|" ] || fail "K HARD_PER_CORE=0 turns the cap off (got '$r')"
+r=$(busy 'true' 'echo 1.60')
+case "$r" in 1\|*'machine load high'*'1.60/core, over FLEET_ADMIT_LOAD_PER_CORE=1.5; no CPU-busy reading'*) ;; *) fail "K no busy reading falls back to the load rule (got '$r')" ;; esac
+r=$(busy 'echo 0.50' 'echo 3.10' FLEET_ADMIT_CPU_BUSY=0.45); case "$r" in 1\|*'FLEET_ADMIT_CPU_BUSY=0.45'*) ;; *) fail "K FLEET_ADMIT_CPU_BUSY sets the ceiling (got '$r')" ;; esac
+r=$(busy 'echo 0.50' 'echo 3.10' FLEET_MAX_CPU_BUSY=45%);    case "$r" in 1\|*'FLEET_ADMIT_CPU_BUSY=0.45'*) ;; *) fail "K the ceiling defaults to FLEET_MAX_CPU_BUSY (a percent too) (got '$r')" ;; esac
+r=$(busy 'echo 0.99' 'echo 9' FLEET_ADMIT_LOAD_PER_CORE=0);  [ "$r" = "0|" ] || fail "K LOAD_PER_CORE=0 turns every CPU reading off (got '$r')"
+r=$(busy 'echo garbage' 'echo 3.10');             case "$r" in 1\|*'no CPU-busy reading'*) ;; *) fail "K an unreadable busy reading is no reading (got '$r')" ;; esac
+# the reading the machine-reading task publishes is read like the others
+mkdir -p "$WORK/mr/cluster"
+printf '{\n"ts": %s,\n"load_per_core": "3.10",\n"cpu_busy": "0.400"\n}\n' "$(date +%s)" > "$WORK/mr/cluster/machine.json"
+r=$(env FLEET_MACHINE_TASKS=off FLEET_CONF_DIR="$WORK/mr" FLEET_MEM_PROBE_CMD='echo 1 66 5 6' TMPDIR="$WORK/t" \
+      bash -c 'source "$1/fleet-lib.sh"; printf "%s/%s" "$(_fleet_cpu_busy)" "$(_fleet_load_per_core)"; fleet_machine_admit; printf "|%s" "$?"' _ "$BIN")
+[ "$r" = "0.400/3.10|0" ] || fail "K the daemon's machine reading carries cpu_busy and admits 3.1/core at 40 % (got '$r')"
+r=$(bash -c 'source "$1/fleet-lib.sh"; _fleet_cpu_busy' _ "$BIN")
+case "$r" in 0.[0-9][0-9][0-9]|1.000) ;; *) fail "K this machine's own busy reading is a share 0..1 (got '$r')" ;; esac
+ok "K CPU busy decides before load/core: 3.1/core at 40 % admits, 92 % holds naming CPU, 5/core hard cap, fallback + knobs"
 
 # ===== B: fleet_session_cap_ok =================================================
 # A fake tmux with no windows = 0 sessions; FLEET_GLOBAL_MAX_SESSIONS decides the cap.
@@ -356,5 +389,5 @@ r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_admit_room_adv
 [ "$r" = "3,0" ] || fail "J advised room counts only the spawns still opening; an 8-field line keeps #3480's sum (got '$r')"
 ok "J drill 36 on mac-d: open windows are not charged twice — the first session is admitted; pressure still binds"
 
-printf '\nselftest OK: %s assertions passed (machine admission, issues #1090 #1831 #3472 #3479 #3487)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (machine admission, issues #1090 #1831 #3472 #3479 #3487 #4077)\n' "$pass"
 exit 0

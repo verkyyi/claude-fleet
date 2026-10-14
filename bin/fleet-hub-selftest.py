@@ -1038,7 +1038,7 @@ class HubTests(HubFixture):
         conf.write_text(stubs.replace("echo 0.5", "echo 1.9") + "FLEET_MEM_PROBE_CMD='echo 1 66 5 6'\n")
         cap = self.node.rpc("discover", {})["capacity"]
         self.assertIs(cap["admit"], False, cap)
-        self.assertEqual(cap["admit_why"], "负载过高", cap)
+        self.assertEqual(cap["admit_why"], "负载过高（负载 1.9/核）", cap)   # names its reading (#4077)
         self.assertGreaterEqual(cap["room"], 1, cap)
         conf.write_text(stubs + "FLEET_MEM_PROBE_CMD='echo 1 66 5 6'\n")   # healthy
         cap = self.node.rpc("discover", {})["capacity"]
