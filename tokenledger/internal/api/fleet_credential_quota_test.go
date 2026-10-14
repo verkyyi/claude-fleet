@@ -35,7 +35,7 @@ func TestCredentialQuotaUnbound(t *testing.T) {
 // Same labels and identical resets never establish identity. This exercises the
 // real periodic round, vault API, persistent readings, policy and picker.
 func TestCredentialQuotaIsolation(t *testing.T) {
-	h, _, _ := newVaultHarness(t)
+	h, nodeToken, _ := newVaultHarness(t)
 	h.srv.SessionCredKey = []byte("fixture-key")
 	var fraction atomic.Int64
 	fraction.Store(4)
@@ -86,6 +86,10 @@ func TestCredentialQuotaIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.srv.ReadHubQuota(context.Background())
+	code, leased, _ := lease(t, h, nodeToken)
+	if code != http.StatusOK || len(leased.Credentials) != 4 || len(leased.Withdrawn) != 1 {
+		t.Fatalf("node pool counted aliases: status=%d credentials=%d withdrawn=%d", code, len(leased.Credentials), len(leased.Withdrawn))
+	}
 	if calls.Load() != 4 {
 		t.Fatalf("round probed %d credentials, want 4 unique identities", calls.Load())
 	}

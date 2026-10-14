@@ -198,7 +198,12 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 	out.People = adminPeople(in)
 	out.Pool = adminPool(creds, passes, in.Names, func(c store.Credential) (string, *model.LimitsSnapshot) {
 		return c.Account, s.credentialSnapshot(c)
-	}, func(c store.Credential) string { return s.credAtLimit(c, now) }, s.Vault.CredentialID)
+	}, func(c store.Credential) string { return s.credAtLimit(c, now) }, func(c store.Credential) string {
+		if s.Vault == nil {
+			return ""
+		}
+		return s.Vault.CredentialID(c)
+	})
 	return true
 }
 

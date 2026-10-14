@@ -75,6 +75,9 @@ func (m *limitMemo) limited(provider, owner, account string, now time.Time) bool
 
 // credAtLimit says why one vault account is known to be at its limit, or "".
 func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
+	if s.Vault == nil {
+		return ""
+	}
 	if s.limits.limited(c.Provider, c.PrincipalID, s.Vault.CredentialID(c), now) {
 		return "429"
 	}
