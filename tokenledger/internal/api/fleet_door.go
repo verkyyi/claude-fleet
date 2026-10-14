@@ -134,6 +134,8 @@ func (s *Server) handleNodeEntryRoutes(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusForbidden, host+" is not this hub's door ("+DoorKey+")")
 		return
 	}
+	// its pull is the one beat every door has: keep its reach fresh (#4149)
+	s.doorReachKeep(host, time.Now())
 	out, err := s.entryRouteList()
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

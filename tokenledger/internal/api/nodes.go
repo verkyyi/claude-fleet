@@ -138,6 +138,9 @@ type nodeConn struct {
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
+	// canPodRelay is the hello's CapPodRelay: in a person's pod, its relay
+	// reaches the pod's sshd (claude-fleet#4149). Set once, before publish.
+	canPodRelay bool
 	// canSvcRun is the hello's CapSvcRun: a service login that takes service
 	// run attempts (claude-fleet#4086). Set once, before publish.
 	canSvcRun bool
@@ -614,7 +617,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
-		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
+		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
 		canChat: hp.HasCap(control.CapChat), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),

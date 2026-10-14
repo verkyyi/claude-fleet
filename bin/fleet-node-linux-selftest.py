@@ -631,6 +631,11 @@ class LinuxNode(unittest.TestCase):
             m = {x['mountPath']: x for x in cc['volumeMounts']}
             self.assertEqual((m['/etc/passwd']['subPath'], m['/etc/passwd']['readOnly']), ('passwd', True))
             self.assertTrue(m['/etc/group']['readOnly'])
+        # the sshd's key dir, read-only in the fleet container: its host.pub rides the
+        # heartbeat for a relayed login (claude-fleet#4149); the private half stays root's
+        fm = {x['mountPath']: x for x in c['volumeMounts']}
+        self.assertEqual((fm['/run/sshd-key']['name'], fm['/run/sshd-key']['readOnly']), ('sshd-key', True))
+        self.assertIn('chmod 711 /run/sshd-key\n', sshd['command'][2])
         # no login, a reserved one, root's number, no central route: not rendered
         for bad in (base[:base.index('--login')] + base[base.index('--uid') + 2:],
                     [x if x != 'fleetu7' else 'root' for x in base], [x if x != '10002' else '0' for x in base],
@@ -695,6 +700,10 @@ class LinuxNode(unittest.TestCase):
                          'ForceCommand /bin/bash /var/db/fleet-node/runtime/current/bin/fleet-entry.sh'):
                 self.assertIn(want + '\n', sshd)
             self.assertNotIn('Include', sshd)
+            # the relay (claude-fleet#4149): the hub's user CA on loopback alone, the file's last block
+            self.assertTrue(sshd.endswith('Match LocalAddress 127.0.0.1,::1\n'
+                                          'TrustedUserCAKeys /var/db/fleet-node/ssh/fleet_user_ca.pub\n'))
+            self.assertIn('TrustedUserCAKeys none\nPermitUserRC', sshd)
             for login, uid in (('root', '10002'), ('sshd', '10002'), ('fleetu7', '0'), ('fleetu7', '100'),
                                ('fleetu7', '65534'), ('Fleet', '10002')):
                 with patch.dict(os.environ, dict(pod, FLEET_POD_LOGIN=login, FLEET_POD_UID=uid)):

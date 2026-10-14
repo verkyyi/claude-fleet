@@ -88,6 +88,14 @@ func (s *Server) entryDeviceRevoke(pid, fp, actor string, now time.Time) {
 // (entryAddrMachine, as its DNS name and public port already are —
 // claude-fleet#3985), whether or not the home entry port is on.
 func (s *Server) withEntryReach(m FleetMachine, now time.Time) FleetMachine {
+	return s.withEntryReachRelay(m, now, false)
+}
+
+// withEntryReachRelay is withEntryReach for a machine the route list also
+// offers a relay to: a pod behind the door keeps its own reported host keys
+// beside the door's, since a relayed login meets the pod's sshd
+// (claude-fleet#4149).
+func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) FleetMachine {
 	if s.Store == nil {
 		return m
 	}
@@ -110,9 +118,13 @@ func (s *Server) withEntryReach(m FleetMachine, now time.Time) FleetMachine {
 		// ssh meets under fleet-<pod> is the door's, never the pod's own —
 		// whatever that pod's image carried (#4127). None known ⇒ none
 		// listed: ssh asks once rather than refuse on a wrong one.
+		own := m.HostKeys
 		m.HostKeys = nil
 		if k, err := s.Store.EntryHostKey(door); err == nil && k != "" {
 			m.HostKeys = control.HostKeys([]string{k})
+		}
+		if relay {
+			m.HostKeys = control.HostKeys(append(append([]string(nil), m.HostKeys...), own...))
 		}
 	}
 	routes := append([]FleetRoute(nil), m.Routes...)

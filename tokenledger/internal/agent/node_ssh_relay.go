@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,23 @@ import (
 // sshRelayTarget is the one address a relay may reach. Not configurable from the
 // hub: a relay is a way into THIS machine's sshd, never a general forwarder.
 // A variable only so tests can point it at a throwaway server.
-var sshRelayTarget = "127.0.0.1:22"
+var sshRelayTarget = defaultSSHRelayTarget()
+
+// podSSHDPort is a person's pod's sshd (fleet-node-linux.py POD_SSHD_PORT): the
+// pod's other container, no NET_BIND_SERVICE, so not 22.
+const podSSHDPort = "2222"
+
+// podRelay: this agent runs in one person's pod (render.py's FLEET_USER_POD=1,
+// the pod's own spec — never the hub's say), whose sshd takes a relayed login
+// on loopback with the hub's user CA (claude-fleet#4149).
+func podRelay() bool { return os.Getenv("FLEET_USER_POD") == "1" }
+
+func defaultSSHRelayTarget() string {
+	if podRelay() {
+		return "127.0.0.1:" + podSSHDPort
+	}
+	return "127.0.0.1:22"
+}
 
 // sshRelayDialTimeout bounds the data stream's dial and the sshd connect.
 const sshRelayDialTimeout = 15 * time.Second
@@ -110,7 +127,7 @@ func short(id string) string {
 // back to 127.0.0.1:22). For the hub's end-to-end tests only.
 func SetSSHRelayTargetForTest(addr string) {
 	if addr == "" {
-		addr = "127.0.0.1:22"
+		addr = defaultSSHRelayTarget()
 	}
 	sshRelayTarget = addr
 }

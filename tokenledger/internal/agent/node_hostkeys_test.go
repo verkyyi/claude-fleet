@@ -93,3 +93,35 @@ func TestNodeHostKeysContainer(t *testing.T) {
 		t.Fatalf("container key: %q, want [%s]", got, want)
 	}
 }
+
+// A person's pod (claude-fleet#4149): its relay reaches the pod's own sshd —
+// 127.0.0.1:2222, never :22 — and that sshd's key (the sshd container's
+// host.pub) travels in the heartbeat. Anywhere else: :22 and no such key.
+func TestPodRelayTargetAndKey(t *testing.T) {
+	dir := t.TempDir()
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	sp, _ := ssh.NewPublicKey(pub)
+	want := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp)))
+	if err := os.WriteFile(filepath.Join(dir, "host.pub"), []byte(want+" root@u-a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_NODE_STATE", filepath.Join(dir, "none"))
+	oldF, oldK := hostKeyFiles, podHostKeyFile
+	t.Cleanup(func() { hostKeyFiles, podHostKeyFile = oldF, oldK })
+	hostKeyFiles, podHostKeyFile = nil, filepath.Join(dir, "host.pub")
+
+	t.Setenv("FLEET_USER_POD", "")
+	if got := defaultSSHRelayTarget(); got != "127.0.0.1:22" || podRelay() {
+		t.Fatalf("not a pod: %s", got)
+	}
+	if got := nodeHostKeys(); got != nil {
+		t.Fatalf("not a pod: keys %q", got)
+	}
+	t.Setenv("FLEET_USER_POD", "1")
+	if got := defaultSSHRelayTarget(); got != "127.0.0.1:2222" {
+		t.Fatalf("a pod's relay target %s, want 127.0.0.1:2222", got)
+	}
+	if got := nodeHostKeys(); len(got) != 1 || got[0] != want {
+		t.Fatalf("a pod's keys %q, want its sshd's", got)
+	}
+}

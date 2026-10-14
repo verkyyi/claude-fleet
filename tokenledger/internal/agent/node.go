@@ -199,6 +199,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	}
 	if a.cfg.FleetSSHRelay {
 		caps = append(caps, control.CapSSHRelay)
+		if podRelay() {
+			// In a person's pod the relay reaches the pod's sshd (claude-fleet#4149).
+			caps = append(caps, control.CapPodRelay)
+		}
 	}
 	if a.cfg.FleetChat {
 		caps = append(caps, control.CapChat)

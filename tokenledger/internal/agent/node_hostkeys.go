@@ -38,6 +38,12 @@ func containerHostKeyFile() string {
 	return filepath.Join(nodeStateDir(), "ssh", "ssh_host_ed25519_key.pub")
 }
 
+// podHostKeyFile is a person's pod's sshd key (render.py: the sshd container
+// makes it at each start, the fleet container sees the .pub read-only): a
+// relayed login lands on that sshd, not the door, so its key travels with the
+// door's (claude-fleet#4149). Not a pod ⇒ nothing added.
+var podHostKeyFile = "/run/sshd-key/host.pub"
+
 func nodeStateDir() string {
 	if st := os.Getenv("FLEET_NODE_STATE"); st != "" {
 		return st
@@ -48,7 +54,11 @@ func nodeStateDir() string {
 // nodeHostKeys is the heartbeat's HostKeys: every readable, well-formed one.
 func nodeHostKeys() []string {
 	var lines []string
-	for _, f := range append(append([]string(nil), hostKeyFiles...), containerHostKeyFile(), entryHostKeyFile()) {
+	files := append(append([]string(nil), hostKeyFiles...), containerHostKeyFile(), entryHostKeyFile())
+	if podRelay() {
+		files = append(files, podHostKeyFile)
+	}
+	for _, f := range files {
 		if b, err := os.ReadFile(f); err == nil {
 			lines = append(lines, string(b))
 		}

@@ -54,6 +54,16 @@
 #                         「REMOTE HOST IDENTIFICATION HAS CHANGED」 on every connect;
 #                         the client's write_known_hosts with each against a real
 #                         door, and the hub half's Go test (TestDoorRouteListHandsOutTheDoorsHostKey)
+#   door-reach-stale      the door's reach lapsing (issue #4149): a door image that
+#                         reports `entry reach` only at its start lost every pod's
+#                         door route EntryReachFresh later — the hub re-dials a
+#                         pulling door's last addresses against its host key
+#                         (TestDoorPullKeepsItsReachFresh, a real sshd)
+#   pod-relay-loopback    the relay into a person's pod (issue #4149): the pod's
+#                         agent splices it onto 127.0.0.1:2222, whose sshd took the
+#                         door's key alone — a real sshd on pod_sshd_text: a hub-CA
+#                         certificate lands on loopback, not on the pod's address,
+#                         and a plain key does not
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -861,6 +871,85 @@ PY
   SECS=$(since "$t0")
   ddown
   WHAT="pod 在门后：fleet-known-hosts 里 fleet-u-aaaa1 记 pod 自己（镜像里）的钥匙 ⇒ 撞「HAS CHANGED」；记门的钥匙 ⇒ 过主机核对、旧行被换掉；$gohalf"
+}
+
+# the hub half of a drill: one Go test, when a toolchain is here (else the note)
+gotest() {  # gotest <TestName> <file under internal/api> → GOHALF, rc 1 = red
+  GOHALF="hub half: no go toolchain here — the Go gate runs $1"
+  grep -q "^func $1(" "$ROOT/tokenledger/internal/api/$2" 2>/dev/null \
+    || { WHY="the hub half's test $1 is gone"; return 1; }
+  [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1 || return 0
+  local out rc
+  out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+        go test -count=1 -run "^$1\$" ./internal/api 2>&1); rc=$?
+  case "$rc:$out" in
+    0:*'no tests to run'*) WHY="the hub half's Go test $1 did not run"; return 1 ;;
+    0:*) GOHALF="hub half: go test $1 ok" ;;
+    *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+    *) WHY="the hub half (go test $1) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"
+       return 1 ;;
+  esac
+}
+
+drill_door_reach_stale() {
+  CAP=60   # the Go test dials a real in-process sshd
+  local t0; t0=$(now)
+  grep -q 's.doorReachKeep(host, time.Now())' "$ROOT/tokenledger/internal/api/fleet_door.go" \
+    || { WHY="handleNodeEntryRoutes no longer re-checks the pulling door"; return 1; }
+  gotest TestDoorPullKeepsItsReachFresh fleet_door_reach_test.go || return 1
+  SECS=$(since "$t0")
+  WHAT="门只在启动时报一次可达：20 分钟后入口里门的地址过期 ⇒ pod 没有门的路由；门来拉表 ⇒ 入口照门的钥匙重拨、路由回来，换了钥匙的不算；$GOHALF"
+}
+
+drill_pod_relay_loopback() {
+  CAP=30   # one sshd, three logins
+  local t0 d port out1 out2 out3 sp
+  t0=$(now); d="$EB/podrelay"; rm -rf "$d"; mkdir -p "$d"; chmod 755 "$d"
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+  ssh-keygen -q -t ed25519 -N '' -f "$d/host"; ssh-keygen -q -t ed25519 -N '' -f "$d/ca"
+  ssh-keygen -q -t ed25519 -N '' -f "$d/door"; chmod 644 "$d/door.pub"
+  ssh-keygen -q -t ed25519 -N '' -f "$d/user"; ssh-keygen -q -s "$d/ca" -I drill -n "$ME" -V +5m "$d/user.pub"
+  ssh-keygen -q -t ed25519 -N '' -f "$d/plain"
+  # pod_sshd_text as the pod writes it, its paths moved into the sandbox
+  podcfg() {  # podcfg <out> [ca path]
+    python3 -I - "$BIN/fleet-node-linux.py" "$d" "$ME" "$port" "$1" "${2:-}" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("lin", sys.argv[1])
+lin = importlib.util.module_from_spec(spec); spec.loader.exec_module(lin)
+d, me, port, out, ca = sys.argv[2:7]
+t = lin.pod_sshd_text(me, "/rt")
+for a, b in (("/run/sshd-key/host", d + "/host"), ("Port %d" % lin.POD_SSHD_PORT, "Port " + port),
+             ("PidFile none", "PidFile none\nStrictModes no\nListenAddress 127.0.0.1"),
+             ("/run/fleet-door/door.pub", d + "/door.pub"),
+             ("/bin/bash /rt/current/bin/fleet-entry.sh", "/bin/echo LANDED"),
+             (lin.POD_USER_CA, ca or d + "/ca.pub")):
+    t = t.replace(a, b)
+t = t.replace("Subsystem sftp /usr/lib/openssh/sftp-server\n", "")
+open(out, "w").write(t)
+PY
+  }
+  login() {  # login <cfg> <key> → its last line
+    "$SSHD_BIN" -D -e -f "$1" >"$d/sshd.log" 2>&1 & sp=$!
+    until_ok 5 python3 -c 'import socket,sys; socket.create_connection(("127.0.0.1",int(sys.argv[1])),1)' "$port" 2>/dev/null
+    ssh -F /dev/null -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o IdentitiesOnly=yes -o IdentityAgent=none -o LogLevel=ERROR -o ConnectTimeout=5 -i "$2" "$ME@127.0.0.1" 2>&1 </dev/null | tail -1
+    kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+  }
+  # the bug: the pod's sshd before #4149 (the CA trusted nowhere) — a relayed certificate is refused
+  podcfg "$d/old" && sed -i.bak '/^Match LocalAddress/,$d' "$d/old"
+  out1=$(login "$d/old" "$d/user")
+  case $out1 in *LANDED*) WHY="a certificate landed on the pod's old sshd — the drill tests nothing: [$out1]"; return 1 ;; esac
+  podcfg "$d/new"
+  out2=$(login "$d/new" "$d/user")
+  case $out2 in *LANDED*) ;; *) WHY="a hub-CA certificate on 127.0.0.1 was refused: [$out2] $(tail -3 "$d/sshd.log")"; return 1 ;; esac
+  out3=$(login "$d/new" "$d/plain")
+  case $out3 in *LANDED*) WHY="a plain key with no certificate landed on the pod: [$out3]"; return 1 ;; esac
+  # the pod's own address (the door's way in) never trusts the CA
+  "$SSHD_BIN" -T -f "$d/new" -C "user=$ME,host=x,addr=10.0.0.9,laddr=10.0.0.5,lport=$port" 2>/dev/null \
+    | grep -qx 'trustedusercakeys none' \
+    || { WHY="the pod's own address trusts the hub's CA"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="pod 的 sshd：旧配置不认证书（中转永远进不去）；新配置 127.0.0.1 上认入口 CA 的证书、不认无证书的钥匙，pod 自己的地址（门走的）不认 CA"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

@@ -1275,6 +1275,9 @@ def primary_login(a):
 POD_RESERVED = RESERVED + ('fleetcred', 'sshd', 'fleet')
 POD_UID_RANGE = (1000, 60000)
 POD_SSHD_PORT = 2222
+# the hub's ssh user CA in a person's pod (claude-fleet#4149): written by the
+# pod's install as its login on the node disk the sshd container mounts read-only
+POD_USER_CA = '/var/db/fleet-node/ssh/fleet_user_ca.pub'
 
 
 def pod_own():
@@ -1334,6 +1337,11 @@ def pod_sshd_text(login, runtime='/var/db/fleet-node/runtime'):
     bin/fleet-entry.sh — user_pod_sshd_text's rules on a port that needs no
     NET_BIND_SERVICE, a host key made at each start, no PAM."""
     rules = [l for l in user_pod_sshd_text(runtime).splitlines() if not l.startswith('#')]
+    # the relay (claude-fleet#4149): the pod's agent splices a relayed login onto
+    # 127.0.0.1 here, and that one — never the door's, which comes in on the
+    # pod's address — may also show a certificate of the hub's user CA (the pod
+    # install writes it). The Match block is last: it ends the file.
+    relay = ['Match LocalAddress 127.0.0.1,::1', 'TrustedUserCAKeys ' + POD_USER_CA]
     return ''.join(l + '\n' for l in [
         '# claude-fleet: a person\'s pod (issue #3757) - written by fleet-node-linux.py pod-etc',
         'Port %d' % POD_SSHD_PORT,
@@ -1347,7 +1355,7 @@ def pod_sshd_text(login, runtime='/var/db/fleet-node/runtime'):
         'PrintMotd no',
         'PrintLastLog no',
         'Subsystem sftp /usr/lib/openssh/sftp-server',
-    ] + rules)
+    ] + rules + relay)
 
 
 def pod_etc(a):
