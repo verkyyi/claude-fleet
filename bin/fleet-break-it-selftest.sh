@@ -98,6 +98,7 @@
 #   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
 #   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
 #                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
+#   home-template-leak                              bin/fleet-home-template.py (build from the runtime only, refuse credentials), its selftest
 #   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
 #   login-remove-uid-leftovers                      bin/fleet-login-remove.sh step 5b (#3508)
 #   spare-wash-no-fda                               bin/fleet-login-reset.sh wash → bin/fleet-login-remove-ssh.sh wash (#3508)
@@ -5341,6 +5342,22 @@ drill_spare_reuse_leaks() {
   out=$(bash "$ROOT/bin/fleet-login-reset-check-selftest.sh" 2>&1) \
     || { WHY="fleet-login-reset-check-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
   WHAT="每类种一样 → reset: dirty 报出全部 $(printf '%s\n' "$out" | sed -n 's/^categories: //p') 类；清掉一类只少一类；--since 只认早于洗号的；表里少一类即红（沙盒真跑检查器）"
+  SECS=$(since "$t0")
+}
+
+# ---- home-template-leak (#4194): a recycled login's new home is a clone of
+# root's standard home — and the template carried someone's credentials or
+# session, or a login could change it, so every later person got the same leak
+# (or poison). Now root builds it from the runtime alone, refuses anything
+# credential-shaped, keeps it 0700 root, and a clone is a copy.
+drill_home_template_leak() {
+  CAP=60; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/bin/fleet-home-template.py" ] \
+    || { WHY="no bin/fleet-home-template.py: a recycle has no template, or one nobody checks"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-home-template-selftest.sh" 2>&1) \
+    || { WHY="fleet-home-template-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  WHAT='模板从运行时建、剥会话与 id；node.env / 令牌 / 二进制写死暂存路径 → 整份拒绝；root 0700；克隆改写路径、ctime 晚于洗号、改克隆不动模板（沙盒真跑）'
   SECS=$(since "$t0")
 }
 

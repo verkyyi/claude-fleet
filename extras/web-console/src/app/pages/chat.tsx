@@ -5,6 +5,7 @@
 // connected, the limit used up. The conversation service and /v1/chat are
 // unchanged. Every piece is a stock shadcn/ui or assistant-ui component.
 import { createContext, useContext, useEffect, type FC } from "react";
+import { Link } from "react-router";
 import { AssistantRuntimeProvider, type ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
@@ -22,6 +23,7 @@ import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 import { BindWeChatBanner } from "../WeChatBind";
+import { viewAs } from "@/shared/viewAs";
 
 type Chat = ReturnType<typeof useFleetChat> & { home: Home | null; quota: Quota | null };
 const ChatCtx = createContext<Chat | null>(null);
@@ -197,6 +199,27 @@ const TrialOver: FC<{ trial: TrialState }> = ({ trial }) => {
   );
 };
 
+// 只读预览 (claude-fleet#3944): the conversation is the person's own talk —
+// the entry never relays it under a view, and the page says so.
+const PreviewChat: FC = () => {
+  usePage(tr("对话", "Chat"));
+  const { me } = useShell();
+  const name = me?.view_as?.name || "";
+  return (
+    <div className="mx-auto flex h-full max-w-md flex-col items-start justify-center gap-4 px-6">
+      <Logo className="size-12" />
+      <h2 className="font-display text-[26px] leading-tight font-semibold tracking-tight">
+        {tr("对话不在预览里", "The conversation stays private")}<span className="text-clay">{tr("。", ".")}</span>
+      </h2>
+      <p className="text-muted-foreground text-[15px]">
+        {tr(`这是${name || "他"}自己的那一条对话，只读预览不打开它。会话、任务、用量、设备和设置都和${name || "他"}看到的一样。`,
+          `This is ${name || "their"}${name ? "’s" : ""} own conversation; a read-only preview does not open it. Sessions, tasks, usage, devices and settings are exactly as ${name || "they"} see${name ? "s" : ""} them.`)}
+      </p>
+      <Button asChild className="rounded-full"><Link to="/sessions" className="no-underline">{tr("看会话", "See sessions")}</Link></Button>
+    </div>
+  );
+};
+
 // the trial's 「还在吗？」 (issue #4060): no input for 3 minutes — a minute
 // later the machine goes to the next person; the conversation is kept 24 h
 const StillHere: FC<{ open: boolean; secs: number; onStay: () => void; onPause: () => void }> = ({ open, secs, onStay, onPause }) => (
@@ -218,6 +241,12 @@ const StillHere: FC<{ open: boolean; secs: number; onStay: () => void; onPause: 
 );
 
 export default function ChatPage() {
+  // the entry's word decides: a view it did not take (one's own row) is no view
+  const { me } = useShell();
+  return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat />;
+}
+
+function LiveChat() {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
   const { me, quota, bumpQuota } = useShell();

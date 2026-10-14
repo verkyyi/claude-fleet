@@ -4,6 +4,8 @@
 import { StrictMode, Suspense, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes } from "react-router";
+// first: a view (?as=, claude-fleet#3944) rides every read from the start
+import "@/shared/viewAs";
 import "@/shared/index.css";
 import "@/shared/theme";
 import { AppShell } from "./Shell";

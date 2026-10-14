@@ -302,6 +302,14 @@ func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx contex
 		return nil, true, true
 	}
 	s.slideSession(w, r, sess, role)
+	if role == roleAdmin {
+		// 以他的视角看 (claude-fleet#3944): an admin's own session only.
+		if target := viewAsAsked(r); target != "" {
+			if ctx, ok, handled := s.viewAsAdmit(w, r, sess, target); ok || handled {
+				return ctx, ok, handled
+			}
+		}
+	}
 	sub := sess.Principal()
 	ctx = context.WithValue(withViewer(r.Context(), sub), principalKey{}, sub)
 	ctx = withRole(withDoor(withSession(ctx, sess), doorGitHub), role)

@@ -23,6 +23,9 @@
 #      EUID 0 with no dir ⇒ 3, nothing run
 #   H  the stop is --quick, and the old home's archive + delete run detached:
 #      the run is back before they are (FLEET_LOGIN_RESET_ASIDE unset)
+#   T  the fresh home is a clone of root's home template (issue #4194): a
+#      template there ⇒ cloned, no createhomedir; none for this version (exit 3)
+#      ⇒ createhomedir, and a template build started off the clock
 #   G  launchd relaunched a process of the uid after the stop's quiesce, before
 #      the wash (distnoted, issue #3979) ⇒ the wash quiesces again before its
 #      clock starts: clean, and the bootout + kill sit between stop and wash
@@ -294,6 +297,30 @@ n=0; while [ "$n" -lt 60 ] && [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ]; do s
 rm -f "$W/shim/tar"
 [ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -n "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
   && ok 'H the detached job archived and deleted the old home' || fail 'H the detached job did not finish'
+
+# ---- T: the home template (issue #4194) ----
+cat > "$W/tpl.py" <<'EOF'
+import os, sys
+open(os.environ["RS_LOG"], "a").write("tpl %s\n" % " ".join(sys.argv[1:]))
+if sys.argv[1] == "clone":
+    if os.environ.get("RS_TPL_RC") == "3":
+        print("none 0123456789ab — no template for this version"); sys.exit(3)
+    h = sys.argv[sys.argv.index("--home") + 1]
+    os.makedirs(h); open(os.path.join(h, ".from-template"), "w").close()
+    print("cloned 0123456789ab → %s (clonefile, 0.1s)" % h)
+EOF
+fixture
+FLEET_LOGIN_RESET_TEMPLATE="$W/tpl.py" run "$L" --apply
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'T1 a template home: clean' || { tail -8 "$W/out"; fail "T1: $(last2) rc $RC"; }
+[ -f "$H/.from-template" ] && ok 'T1 the home is the clone' || fail 'T1 the home is not the clone'
+grep -q 'createhomedir' "$RS_LOG" && fail 'T1 createhomedir ran beside the clone' || ok 'T1 no createhomedir'
+has "$RS_LOG" "tpl clone $L --home $H" 'T1 cloned for the login, into its home'
+fixture
+RS_TPL_RC=3 FLEET_LOGIN_RESET_TEMPLATE="$W/tpl.py" run "$L" --apply
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'T2 no template: clean the old way' || { tail -8 "$W/out"; fail "T2: $(last2) rc $RC"; }
+has "$RS_LOG" "sudo createhomedir -c -u $L" 'T2 createhomedir made the home'
+n=0; while [ "$n" -lt 50 ] && ! grep -q '^tpl build' "$RS_LOG"; do sleep 0.1; n=$((n + 1)); done
+has "$RS_LOG" 'tpl build' 'T2 a template build started for the next wash'
 
 # ---- R: root under the admin gate (issue #3723) ----
 fixture

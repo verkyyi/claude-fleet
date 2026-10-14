@@ -365,7 +365,8 @@ func (n *nodeConns) opsFor(cluster string) (string, *nodeConn) {
 // svcLane is one service login's link (claude-fleet#4086).
 type svcLane struct {
 	id    string
-	conn  *nodeConn
+	conn  *nodeConn       // a link this replica holds, else nil
+	peer  *store.NodeConn // the other replica holding it (claude-fleet#2124)
 	host  string
 	login string
 }

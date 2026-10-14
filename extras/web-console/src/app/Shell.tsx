@@ -11,7 +11,7 @@
 // collapsible="icon"), the choice kept in this browser.
 import { createContext, useCallback, useContext, useEffect, useState, type ComponentProps, type FC, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router";
-import { LayoutGrid, LogOut, ShieldCheck } from "lucide-react";
+import { Eye, LayoutGrid, LogOut, ShieldCheck } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { NavigationMenu, NavigationMenuItem, NavigationMenuLink, NavigationMenuList } from "@/components/ui/navigation-menu";
@@ -24,6 +24,7 @@ import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useQuota, type Me, type Quota } from "@/shared/api";
+import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { ADMIN_HREF, PAGES, type PageDef } from "./routes";
 
 // What every page reads: who is signed in, and what is left of their limit
@@ -132,6 +133,28 @@ const Side: FC = () => {
   );
 };
 
+// 只读预览 (claude-fleet#3944): an admin looking through a member's eyes. The
+// band sits over every page, phone and computer alike, until they leave; the
+// entry refuses every change behind it.
+const ViewAsBar: FC = () => {
+  const { me } = useShell();
+  if (!viewAs || (me && !me.view_as)) return null; // the entry took no view (one's own row)
+  const name = me?.view_as?.name || me?.name || "…";
+  return (
+    <div role="status" aria-live="polite"
+      className="bg-primary text-primary-foreground flex flex-none items-center gap-2.5 px-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2 text-sm md:pt-2">
+      <Eye className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">
+        <b className="font-semibold">{tr("只读预览", "Read-only preview")} · {name}</b>
+        <span className="hidden opacity-85 sm:inline">{tr("　你看到的就是他的「我的」，这里改不了任何东西", " — exactly what they see; nothing can be changed here")}</span>
+      </span>
+      <Button size="sm" variant="secondary" className="h-7 shrink-0 rounded-full px-3" onClick={leaveViewAs}>
+        {tr("退出预览", "Leave preview")}
+      </Button>
+    </div>
+  );
+};
+
 // The phone's bars fold on the conversation (issue #3996): `folds` says this
 // page may fold them, `open` that the person brought the bottom bar back.
 type Nav = { folds: boolean; open: boolean; setOpen: (o: boolean) => void };
@@ -139,7 +162,8 @@ type Nav = { folds: boolean; open: boolean; setOpen: (o: boolean) => void };
 const TopBar: FC<{ nav: Nav }> = ({ nav }) => {
   const { quota } = useShell();
   return (
-    <header className="border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pt-[calc(env(safe-area-inset-top)+0.6rem)] pb-2.5 backdrop-blur-md md:hidden">
+    <header className={cn("border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pb-2.5 backdrop-blur-md md:hidden",
+      viewAs ? "pt-2.5" : "pt-[calc(env(safe-area-inset-top)+0.6rem)]")}>
       <Link to="/" className="text-foreground flex items-center gap-2.5 no-underline" aria-label="ClaudeFleet">
         <Logo className="size-7 shrink-0" />
         <span className="font-display text-[17px] leading-none font-semibold tracking-tight">ClaudeFleet</span>
@@ -214,6 +238,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none" style={{ height: "var(--app-h, 100dvh)" }}>
         <Side />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <ViewAsBar />
           <TopBar nav={nav} />
           <main className="min-h-0 flex-1 overflow-y-auto" data-immersive={nav.folds && !nav.open}
             onFocusCapture={(e) => { if (e.target instanceof HTMLTextAreaElement) fold(); }}
