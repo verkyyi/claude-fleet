@@ -69,7 +69,9 @@ import (
 //	GET|PUT /bind    a session's account binding, for the cluster credential
 //	                 proxy (claude-fleet#1973): the issuing node or the operator
 //	DELETE /<id>     the issuing node (the session wrapper at exit, C5) or the operator
-//	GET    ""        the operator's list (?all=1 includes revoked / expired)
+//	GET    ""        the operator's list (?all=1 includes revoked / expired;
+//	                 ?signed_before=<RFC3339> counts the renewable passes last
+//	                 signed before then — a key rotation's wait, #4138)
 //
 // A trusted machine may ask for one too (one interface for every machine);
 // by default it leases credentials as before and never does. No key = the
@@ -135,8 +137,20 @@ type sessionCredClaims struct {
 // CCQUOTA_FLEET_SESSION_CRED_KEY. Either holds 32 bytes, base64 encoded.
 // ok is false when neither is set.
 func LoadSessionCredKey(getenv func(string) string) (key []byte, ok bool, err error) {
-	raw := strings.TrimSpace(getenv("CCQUOTA_FLEET_SESSION_CRED_KEY"))
-	if path := getenv("CCQUOTA_FLEET_SESSION_CRED_KEY_FILE"); path != "" {
+	return loadSessionCredKey(getenv, "CCQUOTA_FLEET_SESSION_CRED_KEY")
+}
+
+// LoadSessionCredKeyPrev reads the key a rotation retires
+// (CCQUOTA_FLEET_SESSION_CRED_KEY_PREV[_FILE], claude-fleet#4138): passes it
+// signed still verify and renew — re-signed with the new key — until it is
+// dropped. ok is false when neither is set (one key, as before).
+func LoadSessionCredKeyPrev(getenv func(string) string) (key []byte, ok bool, err error) {
+	return loadSessionCredKey(getenv, "CCQUOTA_FLEET_SESSION_CRED_KEY_PREV")
+}
+
+func loadSessionCredKey(getenv func(string) string, name string) (key []byte, ok bool, err error) {
+	raw := strings.TrimSpace(getenv(name))
+	if path := getenv(name + "_FILE"); path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, true, fmt.Errorf("read session pass key: %w", err)
@@ -189,17 +203,36 @@ func (s *Server) SessionPub() string {
 	return s.RelayPub()
 }
 
-// parseSessionPass is parseSessionCred for either kind.
+// SessionPubPrev is the retiring key's public half while a rotation
+// overlaps (claude-fleet#4138; "" = none).
+func (s *Server) SessionPubPrev() string {
+	if len(s.SessionCredKey) == 0 {
+		return ""
+	}
+	return s.RelayPubPrev()
+}
+
+// parseSessionPass is parseSessionCred for either kind, under the current
+// key and — while a rotation overlaps (claude-fleet#4138) — the retiring one.
 func (s *Server) parseSessionPass(tok string, now time.Time) (*sessionCredClaims, string) {
 	if strings.HasPrefix(strings.TrimSpace(tok), sessionCred2Prefix+".") {
-		var pub ed25519.PublicKey
-		if len(s.RelaySignKey) == ed25519.PrivateKeySize {
-			pub = s.RelaySignKey.Public().(ed25519.PublicKey)
+		c, why := (*sessionCredClaims)(nil), "signature does not verify (not issued by this hub)"
+		for _, pub := range s.relayPubs() {
+			if c, why = parseSessionCred2(tok, pub, now); c != nil || why != sigBadWhy {
+				break
+			}
 		}
-		return parseSessionCred2(tok, pub, now)
+		return c, why
 	}
-	return parseSessionCred(tok, s.SessionCredKey, now)
+	c, why := parseSessionCred(tok, s.SessionCredKey, now)
+	if c == nil && why == sigBadWhy && len(s.SessionCredKeyPrev) > 0 {
+		return parseSessionCred(tok, s.SessionCredKeyPrev, now)
+	}
+	return c, why
 }
+
+// sigBadWhy is the refusal a pass signed with another key gets.
+const sigBadWhy = "signature does not verify (not issued by this hub)"
 
 // parseSessionCred2 checks an fcp-h2's shape, signature and life.
 func parseSessionCred2(tok string, pub ed25519.PublicKey, now time.Time) (*sessionCredClaims, string) {
@@ -212,7 +245,7 @@ func parseSessionCred2(tok string, pub ed25519.PublicKey, now time.Time) (*sessi
 		return nil, "malformed"
 	}
 	if len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, []byte(parts[0]+"."+parts[1]), sig) {
-		return nil, "signature does not verify (not issued by this hub)"
+		return nil, sigBadWhy
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
 	if err != nil {
@@ -242,7 +275,7 @@ func parseSessionCred(tok string, key []byte, now time.Time) (*sessionCredClaims
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	if !hmac.Equal(mac.Sum(nil), got) {
-		return nil, "signature does not verify (not issued by this hub)"
+		return nil, sigBadWhy
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
 	if err != nil {
@@ -747,7 +780,24 @@ func (s *Server) revokeSessionCred(w http.ResponseWriter, r *http.Request, id st
 }
 
 // listSessionCreds is the operator's view: metadata only, never a pass.
+// ?signed_before=<RFC3339> answers instead how many passes a node may still
+// renew were last signed before then (claude-fleet#4138): after a key
+// rotation's rollout, 0 means the previous key can go.
 func (s *Server) listSessionCreds(w http.ResponseWriter, r *http.Request) {
+	if sb := r.URL.Query().Get("signed_before"); sb != "" {
+		t, err := time.Parse(time.RFC3339, sb)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, "signed_before must be RFC3339")
+			return
+		}
+		n, err := s.Store.SessionCredsSignedBefore(t, time.Now().Add(-SessionCredRenewGrace))
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"signed_before": t.UTC(), "count": n})
+		return
+	}
 	all := r.URL.Query().Get("all") == "1"
 	rows, err := s.Store.SessionCreds(!all, time.Now(), 500)
 	if err != nil {

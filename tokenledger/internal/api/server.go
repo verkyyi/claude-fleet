@@ -245,6 +245,10 @@ type Server struct {
 	// (claude-fleet#1969, CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]); it never
 	// leaves the hub. Nil: /v1/fleet/session-cred answers 503.
 	SessionCredKey []byte
+	// SessionCredKeyPrev is the key a rotation retires
+	// (CCQUOTA_FLEET_SESSION_CRED_KEY_PREV[_FILE], claude-fleet#4138): it
+	// only verifies — a pass it signed renews under SessionCredKey. Nil: one key.
+	SessionCredKeyPrev []byte
 	// SessionCredVerifyToken lets the cluster credential proxy and the relay
 	// call POST /v1/fleet/session-cred/verify
 	// (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]); empty = the operator only.
@@ -257,6 +261,10 @@ type Server struct {
 	// CCQUOTA_FLEET_RELAY_SIGN_KEY[_FILE], an Ed25519 seed); its public half
 	// rides the revocation list. Nil: relay credentials are frl1, as before.
 	RelaySignKey ed25519.PrivateKey
+	// RelaySignPubPrev is the public half of the seed a rotation retires
+	// (CCQUOTA_FLEET_RELAY_SIGN_KEY_PREV[_FILE], claude-fleet#4138): frl2 /
+	// fcp-h2 it signed still verify, and it rides the list as relay_pub_prev.
+	RelaySignPubPrev ed25519.PublicKey
 	// CredProxyToken admits the cluster credential proxy (`ccquota
 	// credproxy`, claude-fleet#1973) to POST /v1/fleet/credproxy/resolve
 	// (CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]); empty = the route answers 503.

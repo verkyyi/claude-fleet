@@ -36,7 +36,9 @@ one is 403. The hub is never asked about it — so the hub's /v1/relay/check see
 no frl2 traffic, and a hub that is down changes nothing for it. The signature is
 checked with the `cryptography` package when python3 has it, else with
 bin/fleet_ed25519.py installed beside this file (FLEET_RELAY_ED25519 names another).
-No key known ⇒ an frl2 goes to the hub like any other pass.
+No key known ⇒ an frl2 goes to the hub like any other pass. While the hub
+rotates its key (claude-fleet#4138) the list also names `relay_pub_prev`, and a
+pass verifies under either — or any key the list named in the last 10 minutes.
 
 An fcp-h2 session pass (claude-fleet#3698 — signed with the same key) is
 verified here the same way, but only while the list is on (a session pass is
@@ -108,7 +110,8 @@ REV_STALE_S = env_num("RELAY_REVOCATIONS_STALE_S", 600)
 # reconnect within this long: a hub that comes back is heard inside the 10 s promise
 REV_BACKOFF_S = env_num("RELAY_REVOCATIONS_BACKOFF_S", 5)
 # the list as last fetched: version, when (wall clock), the jti set, the scopes
-_rev = {"on": False, "v": None, "at": 0.0, "jti": {}, "scopes": [], "file": "", "pub": b""}
+_rev = {"on": False, "v": None, "at": 0.0, "jti": {}, "scopes": [], "file": "", "pub": b"", "pub_prev": b"",
+        "seen": {}}  # key → when the list last named it (#4138)
 _rev_lock = threading.Lock()
 _verify = None      # (pub, msg, sig) -> bool, loaded on first need
 
@@ -157,12 +160,26 @@ def ed25519_verify():
     return _verify
 
 
-def relay_pub():
+KEY_SEEN_S = 600  # a key the list named this recently still verifies (#4138)
+
+
+def relay_pubs():
+    """The keys an frl2 / fcp-h2 verifies under: the list's current one (else
+    FLEET_RELAY_PUB), then — while the hub rotates — its `relay_pub_prev`
+    (claude-fleet#4138), and any key the list named in the last KEY_SEEN_S
+    (a rolling deploy has old and new replicas answer the list by turns).
+    [] when none is known."""
     with _rev_lock:
         if _rev["pub"]:
-            return _rev["pub"]
+            now = time.time()
+            keys = [k for k in (_rev["pub"], _rev["pub_prev"]) if k]
+            return keys + [k for k, at in _rev["seen"].items() if k not in keys and now - at < KEY_SEEN_S]
     k = b64any(os.environ.get("FLEET_RELAY_PUB", ""))
-    return k if len(k) == 32 else b""
+    return [k] if len(k) == 32 else []
+
+
+def sig_ok(v, pubs, body, sig):
+    return any(v(pub, body, sig) for pub in pubs)
 
 
 def frl2_claims(tok):
@@ -181,15 +198,15 @@ def frl2_claims(tok):
 def frl2_check(tok):
     """'' when this frl2 pass is good, else why not; None when no key is known
     here (the hub's road then)."""
-    pub = relay_pub()
-    if not pub:
+    pubs = relay_pubs()
+    if not pubs:
         return None
     v = ed25519_verify()
     if not v:
         return None
     body, _, sig = tok.rpartition(".")
     c = frl2_claims(tok)
-    if c is None or not body or not v(pub, body.encode(), b64any(sig)):
+    if c is None or not body or not sig_ok(v, pubs, body.encode(), b64any(sig)):
         return "bad signature"
     try:
         if int(c.get("v") or 0) != 2 or not c.get("jti") or time.time() >= int(c.get("exp") or 0):
@@ -205,17 +222,17 @@ ROUTE_PROVIDER = {"/anthropic/": "claude", "/chatgpt/": "codex", "/openai-auth/"
 def fcp2_check(tok, pre):
     """'' when this fcp-h2 session pass is good for route pre, else why not;
     None when it is the hub's to judge (no key, no list here)."""
-    pub = relay_pub()
+    pubs = relay_pubs()
     with _rev_lock:
         listed = _rev["on"] and _rev["v"] is not None
-    if not pub or not listed:
+    if not pubs or not listed:
         return None
     v = ed25519_verify()
     if not v:
         return None
     body, _, sig = tok.rpartition(".")
     c = pass_claims(tok)
-    if c is None or not body or not v(pub, body.encode(), b64any(sig)):
+    if c is None or not body or not sig_ok(v, pubs, body.encode(), b64any(sig)):
         return "bad signature"
     try:
         if int(c.get("v") or 0) != 2 or not c.get("id") or time.time() >= int(c.get("exp") or 0):
@@ -280,8 +297,9 @@ def rev_index(lst, fetched_at):
         elif e.get("machine") or e.get("principal"):
             scopes.append((str(e.get("machine") or ""), str(e.get("principal") or ""),
                            str(e.get("login") or ""), int(e.get("before") or 0), e["exp"]))
-    pub = b64any(lst.get("relay_pub"))
-    return {"v": lst["v"], "at": fetched_at, "jti": jti, "scopes": scopes, "pub": pub if len(pub) == 32 else b""}
+    pub, prev = b64any(lst.get("relay_pub")), b64any(lst.get("relay_pub_prev"))
+    return {"v": lst["v"], "at": fetched_at, "jti": jti, "scopes": scopes, "pub": pub if len(pub) == 32 else b"",
+            "pub_prev": prev if len(pub) == 32 and len(prev) == 32 else b""}
 
 
 def rev_set(lst, fetched_at, persist=True):
@@ -290,6 +308,12 @@ def rev_set(lst, fetched_at, persist=True):
         return False
     with _rev_lock:
         moved = idx["v"] != _rev["v"]
+        now = time.time()
+        seen = {k: at for k, at in _rev["seen"].items() if now - at < KEY_SEEN_S}
+        for k in (idx["pub"], idx["pub_prev"]):
+            if k:
+                seen[k] = now
+        idx["seen"] = seen
         _rev.update(idx)
     if moved:
         log("list", v=idx["v"], entries=len(idx["jti"]) + len(idx["scopes"]))

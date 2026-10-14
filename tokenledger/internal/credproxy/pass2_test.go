@@ -71,3 +71,53 @@ func TestPass2ConfiguredKey(t *testing.T) {
 		t.Fatalf("expired fcp-h2 with a configured key: %d, hub calls %d; want 403, none", st, h.hub.count())
 	}
 }
+
+// A key rotated while the proxy runs (claude-fleet#4138): a pass under the
+// new key is let through to the hub once (its answer teaches the new key and
+// the retiring one), then both verify here; another unknown key inside the
+// minute is refused without asking.
+func TestPass2KeyRotation(t *testing.T) {
+	old := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize))
+	cur := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))
+	other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, ed25519.SeedSize))
+	b64 := func(k ed25519.PrivateKey) string {
+		return base64.StdEncoding.EncodeToString(k.Public().(ed25519.PublicKey))
+	}
+	h := newHarness(t, false, nil)
+	before := signPass2(old, "o", time.Now().Add(time.Hour))
+	h.hub.set(func() { h.hub.pub = b64(old); h.hub.bind[before] = "acct-o" })
+	if st, body := h.do(t, "/v1/proxy/anthropic/v1/messages", before, `{}`, nil); st != http.StatusOK {
+		t.Fatalf("before the rotation: %d %s", st, body)
+	}
+	// The hub rotates: new key current, the old one retiring.
+	after := signPass2(cur, "n", time.Now().Add(time.Hour))
+	h.hub.set(func() { h.hub.pub, h.hub.prev = b64(cur), b64(old); h.hub.bind[after] = "acct-n" })
+	calls := h.hub.count()
+	if st, body := h.do(t, "/v1/proxy/anthropic/v1/messages", after, `{}`, nil); st != http.StatusOK || h.hub.count() != calls+1 {
+		t.Fatalf("new-key pass after a rotation: %d %s (hub calls %d → %d)", st, body, calls, h.hub.count())
+	}
+	if got := h.p.checkPass2(after, time.Now()); got != "" {
+		t.Fatalf("new key not learned: %q", got)
+	}
+	if got := h.p.checkPass2(signPass2(old, "o2", time.Now().Add(time.Hour)), time.Now()); got != "" {
+		t.Fatalf("retiring key refused during the overlap: %q", got)
+	}
+	calls = h.hub.count()
+	forged := signPass2(other, "f", time.Now().Add(time.Hour))
+	if st, _ := h.do(t, "/v1/proxy/anthropic/v1/messages", forged, `{}`, nil); st != http.StatusForbidden {
+		t.Fatalf("forged: %d; want 403", st)
+	}
+	if st, _ := h.do(t, "/v1/proxy/anthropic/v1/messages", signPass2(other, "g", time.Now().Add(time.Hour)), `{}`, nil); st != http.StatusForbidden || h.hub.count() > calls+1 {
+		t.Fatalf("second forgery inside the minute: %d, hub calls %d → %d; want at most one ask", st, calls, h.hub.count())
+	}
+	// The overlap ends: prev dropped. A rolling deploy's replicas answer by
+	// turns, so the key stays good keySeen after it was last named, then not.
+	h.p.learnPub(Resolution{SessionPub: b64(cur)})
+	oldPass := signPass2(old, "o3", time.Now().Add(time.Hour))
+	if got := h.p.checkPass2(oldPass, time.Now().Add(time.Minute)); got != "" {
+		t.Fatalf("retired key a minute after it was last named: %q; want still good", got)
+	}
+	if got := h.p.checkPass2(oldPass, time.Now().Add(keySeen+2*time.Minute)); got != "-" {
+		t.Fatalf("retired key past keySeen: %q; want the hub's to judge (once a minute)", got)
+	}
+}

@@ -1371,7 +1371,13 @@ docs/CRED-RELAY.md «吊销名单»). Unset: those routes are 404 and nothing is
 written. With `CCQUOTA_FLEET_RELAY_SIGN_KEY[_FILE]` (a 32-byte Ed25519 seed,
 base64) a node that asks gets an `frl2.` relay pass — signed, four hours,
 bound to its machine and login — which the relay verifies itself with the
-list's `relay_pub` (claude-fleet#3561); session passes live four hours too. The operator stores, lists and revokes:
+list's `relay_pub` (claude-fleet#3561); session passes live four hours too.
+A rotation keeps running sessions (claude-fleet#4138): the retiring key as
+`CCQUOTA_FLEET_SESSION_CRED_KEY_PREV[_FILE]` / `CCQUOTA_FLEET_RELAY_SIGN_KEY_PREV[_FILE]`
+still verifies (and renew re-signs with the new key), the list and resolve
+answers name it as `relay_pub_prev` / `session_pub_prev`, and
+`GET /v1/fleet/session-cred?signed_before=<RFC3339>` counts what is still the
+old key's (deploy/k8s/RUNBOOK.md «换会话通行证 / 中转签名钥匙»). The operator stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub
     curl -H "Authorization: Bearer $VIEWER" -d '{"action":"put","principal_id":"gh:<GitHub ID>",

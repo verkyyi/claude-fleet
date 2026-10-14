@@ -165,7 +165,18 @@ func (h *HubQuota) noteFor(account string) string {
 // --- the quota pass ----------------------------------------------------------
 
 func (s *Server) hubQuotaPassMAC(body string) []byte {
-	k := hmac.New(sha256.New, s.SessionCredKey)
+	return hubQuotaPassMACWith(s.SessionCredKey, body)
+}
+
+// hubQuotaPassOK checks a frq1 MAC under the current key and, while a
+// rotation overlaps (claude-fleet#4138), the retiring one.
+func (s *Server) hubQuotaPassOK(body string, got []byte) bool {
+	return hmac.Equal(got, s.hubQuotaPassMAC(body)) ||
+		(len(s.SessionCredKeyPrev) > 0 && hmac.Equal(got, hubQuotaPassMACWith(s.SessionCredKeyPrev, body)))
+}
+
+func hubQuotaPassMACWith(key []byte, body string) []byte {
+	k := hmac.New(sha256.New, key)
 	k.Write([]byte("claude-fleet hub quota pass v1"))
 	mac := hmac.New(sha256.New, k.Sum(nil))
 	mac.Write([]byte(body))
@@ -208,7 +219,7 @@ func (s *Server) verifyHubQuotaPass(tok, uri string, now time.Time) relayVerdict
 	}
 	body := tok[:i]
 	got, err := base64.RawURLEncoding.DecodeString(tok[i+1:])
-	if err != nil || !hmac.Equal(got, s.hubQuotaPassMAC(body)) {
+	if err != nil || !s.hubQuotaPassOK(body, got) {
 		return relayVerdict{why: "hub quota pass refused: signature does not verify"}
 	}
 	exp, err := strconv.ParseInt(body[len(hubQuotaPassPrefix):], 10, 64)

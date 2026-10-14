@@ -348,6 +348,65 @@ printf %s "$NEW" | gh secret set FLEET_HUB_VIEWER_TOKEN --repo verkyyi/claude-fl
 unset OLD NEW
 ```
 
+## 换会话通行证 / 中转签名钥匙（#4138）
+
+Secret `ccquota` 的 `session-cred-key`（fcp-h1、frh1、frq1 的 HMAC）和 `relay-sign-key`（frl2、fcp-h2 的
+Ed25519 种子）可以换，**不打断在跑的会话**：入口多读一把旧钥 `-prev`，签发只用新钥，验 / 续 / resolve /
+中转核验新旧都认，续签用新钥重签同一张（同一个 id、kind 不变）。没有 `-prev` ⇒ 一把钥匙，和以前一样。
+
+**先决条件（一次）**
+
+- 转发机的 `fleet-relay-check.py` 是这一版（认名单的 `relay_pub_prev`）——装法同上一节「转发机先升级」。
+- 中心代理（`deploy/k8s/credproxy`，hub-deploy 不碰它）跑的是这一版的 `ccquota`（跟着入口报的钥匙走）。
+- 私有部署仓库的 `overlays/prod/deployment-env.yaml` 里有这两条（`optional: true`：没有这把 key 就是没设）：
+
+```yaml
+            - name: CCQUOTA_FLEET_SESSION_CRED_KEY_PREV
+              valueFrom: {secretKeyRef: {name: ccquota, key: session-cred-key-prev, optional: true}}
+            - name: CCQUOTA_FLEET_RELAY_SIGN_KEY_PREV
+              valueFrom: {secretKeyRef: {name: ccquota, key: relay-sign-key-prev, optional: true}}
+```
+
+**换（K = `session-cred-key` 或 `relay-sign-key`，两把可以一起换）**——值不打印、不进 argv：
+
+```bash
+NS=new-deploy K=session-cred-key HUB=https://<入口域名>
+kubectl -n $NS get secret ccquota -o json | python3 -c '
+import base64, json, os, sys
+k = sys.argv[1]; d = json.load(sys.stdin)["data"]
+new = base64.b64encode(base64.b64encode(os.urandom(32))).decode()
+print(json.dumps([{"op": "add", "path": "/data/" + k + "-prev", "value": d[k]},
+                  {"op": "replace", "path": "/data/" + k, "value": new}]))' "$K" \
+  | kubectl -n $NS patch secret ccquota --type=json --patch-file=/dev/stdin
+kubectl -n $NS annotate secret ccquota kubectl.kubernetes.io/last-applied-configuration-
+kubectl -n $NS rollout restart deploy/ccquota-hub && kubectl -n $NS rollout status deploy/ccquota-hub
+T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)      # 发布完成的时刻：此后的签名都是新钥的
+kubectl -n $NS logs deploy/ccquota-hub | grep 'rotating — the previous key still verifies'
+```
+
+**等**：通行证用到 80% 就续（≤ 4 小时），续的就是新钥签的。数还没续到新钥的（没吊销、还在 7 天续签宽限里、
+最近一次签名早于 T0 的）：
+
+```bash
+printf 'header = "Authorization: Bearer %s"\n' "$(kubectl -n $NS get secret ccquota -o jsonpath='{.data.viewer-token}' | base64 -d)" \
+  | curl -s -K - "$HUB/v1/fleet/session-cred?signed_before=$T0"      # {"count": N, …}
+```
+
+`relay-sign-key` 另有 frl2：4 小时一张、到 80% 重领，T0 后 4 小时全是新钥的。`count` 4 小时后还剩的，是睡着
+的笔记本上过期了的会话（7 天宽限内醒来还能续）——等它到 0，或接受它们醒来要重开会话，再往下。
+
+**删 `-prev`**：
+
+```bash
+printf '[{"op":"remove","path":"/data/%s-prev"}]' "$K" | kubectl -n $NS patch secret ccquota --type=json --patch-file=/dev/stdin
+kubectl -n $NS annotate secret ccquota kubectl.kubernetes.io/last-applied-configuration-
+kubectl -n $NS rollout restart deploy/ccquota-hub && kubectl -n $NS rollout status deploy/ccquota-hub
+```
+
+滚动发布那一两分钟里，还没换的老副本不认新钥签的：转发机和中心代理会把 10 分钟内入口报过的钥匙都记着，
+其余是一次 verify 碰上老副本、这一个请求失败、下一次就好；续签要到通行证 80% 处（约 3 小时后）才轮到，碰不上老副本。BREAK-IT
+`key-rotation-breaks-sessions`。
+
 ## 发布包（#2335 代码，#2366 接上）
 
 入口按 stable 打包、签名每个发布版（`/v1/fleet/release/*`），存在 OSS 桶
