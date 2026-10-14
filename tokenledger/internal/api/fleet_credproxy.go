@@ -52,21 +52,22 @@ const CredProxyResolvePath = "/v1/fleet/credproxy/resolve"
 
 // CredProxyResolve is resolve's answer.
 type CredProxyResolve struct {
-	Valid       bool       `json:"valid"`
-	Reason      string     `json:"reason,omitempty"`
-	Error       string     `json:"error,omitempty"`
-	ID          string     `json:"id,omitempty"`
-	Principal   string     `json:"principal,omitempty"`
-	WorkerID    string     `json:"worker_id,omitempty"`
-	Machine     string     `json:"machine,omitempty"`
-	Exp         int64      `json:"exp,omitempty"`
-	Provider    string     `json:"provider,omitempty"`
-	Owner       string     `json:"owner,omitempty"`
-	Account     string     `json:"account,omitempty"`
-	BindRev     int64      `json:"bind_rev,omitempty"`
-	AccessToken string     `json:"access_token,omitempty"`
-	AccountID   string     `json:"account_id,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	CredentialID string     `json:"credential_id,omitempty"`
+	Valid        bool       `json:"valid"`
+	Reason       string     `json:"reason,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	ID           string     `json:"id,omitempty"`
+	Principal    string     `json:"principal,omitempty"`
+	WorkerID     string     `json:"worker_id,omitempty"`
+	Machine      string     `json:"machine,omitempty"`
+	Exp          int64      `json:"exp,omitempty"`
+	Provider     string     `json:"provider,omitempty"`
+	Owner        string     `json:"owner,omitempty"`
+	Account      string     `json:"account,omitempty"`
+	BindRev      int64      `json:"bind_rev,omitempty"`
+	AccessToken  string     `json:"access_token,omitempty"`
+	AccountID    string     `json:"account_id,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 passes are signed with (claude-fleet#3698):
 	// with it the proxy refuses a forged or expired pass without asking.
 	// Empty when the hub mints fcp-h1 only.
@@ -137,7 +138,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out.Owner, out.Account, out.BindRev = b.Owner, b.Account, b.Rev
-	acc, err := s.Vault.Lease(r.Context(), b.Owner, req.Provider, b.Account)
+	acc, identity, err := s.leaseIdentified(r.Context(), b.Owner, req.Provider, b.Account)
 	if err != nil {
 		if errors.Is(err, credvault.ErrLocked) {
 			sessionCredRefuse(w, http.StatusServiceUnavailable, LeaseVaultLocked, err.Error())
@@ -148,6 +149,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out.AccessToken, out.AccountID, out.ExpiresAt = acc.AccessToken, acc.AccountID, acc.ExpiresAt
+	out.CredentialID = identity
 	writeJSON(w, http.StatusOK, out)
 }
 

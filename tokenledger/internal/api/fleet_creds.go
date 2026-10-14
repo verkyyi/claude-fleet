@@ -418,9 +418,7 @@ type FleetCredentialRequest struct {
 	Secret      credvault.Secret `json:"secret"`
 	// AccountUUID is bind's one argument (claude-fleet#2169): which usage
 	// account an existing credential belongs to. No secret travels with it.
-	AccountUUID  string      `json:"account_uuid,omitempty"`
-	CredentialID string      `json:"credential_id,omitempty"`
-	Limits       *LimitsView `json:"limits,omitempty"`
+	AccountUUID string `json:"account_uuid,omitempty"`
 }
 
 var (

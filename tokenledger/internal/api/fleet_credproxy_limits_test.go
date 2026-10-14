@@ -188,3 +188,27 @@ func TestCredProxyRebindOnce(t *testing.T) {
 		t.Fatalf("wrong token → %d", st)
 	}
 }
+
+// A delayed report from the proxy's old cache cannot limit a replacement token.
+func TestCredProxyOldIdentityCannotLimitReplacement(t *testing.T) {
+	r := newCPRig(t)
+	pass, wid := r.issue(t, fidA)
+	r.call(t, credvault.Claude, pass)
+	old, _ := r.h.srv.Store.Credential("gh:1005", credvault.Claude, "acct1")
+	oldID := r.h.srv.Vault.CredentialID(*old)
+	if err := r.h.srv.Vault.Put("gh:1005", credvault.Claude, "acct1", credvault.Secret{RefreshToken: "fixture-replacement"}); err != nil {
+		t.Fatal(err)
+	}
+	req := map[string]any{"cred": pass, "provider": "claude", "owner": "gh:1005", "account": "acct1", "credential_id": oldID}
+	status, out := sessDo(t, r.h, http.MethodPost, CredProxyRebindPath, cpToken, "", req)
+	if status != 200 || out["rebind_from"] != nil {
+		t.Fatalf("late report rebound replacement: %d %v", status, out)
+	}
+	fresh, _ := r.h.srv.Store.Credential("gh:1005", credvault.Claude, "acct1")
+	if r.h.srv.credAtLimit(*fresh, time.Now()) != "" {
+		t.Fatal("late report limited new identity")
+	}
+	if account, _ := r.boundTo(t, wid); account != "acct1" {
+		t.Fatal("late report moved new identity")
+	}
+}

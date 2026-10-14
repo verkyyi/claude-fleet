@@ -411,6 +411,27 @@ func (v *Vault) Put(principal, provider, account string, s Secret) error {
 	l.Lock()
 	defer l.Unlock()
 	s.MeterID = credentialID(principal, provider, s)
+	// Re-importing the currently rotated refresh token keeps its original
+	// identity, even under another label. A different token never inherits it.
+	if s.SetupToken == "" && s.RefreshToken != "" {
+		rows, err := v.Store.Credentials(principal)
+		if err != nil {
+			return err
+		}
+		for _, c := range rows {
+			if c.Provider != provider {
+				continue
+			}
+			var old Secret
+			if err := sl.Open(c.SecretSealed, &old, principal, provider, c.Account, "secret"); err != nil {
+				return err
+			}
+			if old.RefreshToken == s.RefreshToken && old.MeterID != "" {
+				s.MeterID = old.MeterID
+				break
+			}
+		}
+	}
 	blob, err := sl.Seal(s, principal, provider, account, "secret")
 	if err != nil {
 		return err

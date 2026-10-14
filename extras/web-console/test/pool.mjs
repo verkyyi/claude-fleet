@@ -1,12 +1,8 @@
-import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import ts from 'typescript';
-// Execute the actual production join, with only TypeScript types erased.
-const source = readFileSync(new URL('../src/admin/pool.ts', import.meta.url), 'utf8');
-const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { subscriptions, withOverview } = await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
+import { subscriptions, withOverview } from '../src/admin/pool.ts';
+// Execute the production TypeScript join directly (Node strips types).
 const id = n => 'cred:' + String(n).repeat(64);
-const lim = pct => ({ available: true, five_hour: { utilization: pct, resets_at:'2027-01-01T00:00:00Z' }, seven_day: { utilization: 4 }, observed_at:'2026-10-14T00:00:00Z', read_status:'ok' });
+const lim = pct => ({ available: true, five_hour: { utilization: pct, resets_at:'2027-01-01T00:00:00Z' }, seven_day: { utilization: 1 }, observed_at:'2026-10-14T00:00:00Z', read_status:'ok' });
 const a = {principal_id:'pool',provider:'claude',account:'collision',credential_id:id(1),limits:lim(8)};
 const b = {principal_id:'pool',provider:'claude',account:'second',credential_id:id(2),limits:lim(99)};
 const own = {...a,principal_id:'alice',credential_id:id(3),limits:lim(17)};
@@ -15,6 +11,7 @@ const input = {creds:{credentials:[a,b,alias,own]}, limits:{per_account:[{accoun
 let rows = subscriptions(input);
 assert.equal(rows.filter(r=>r.managed).length,3);
 assert.equal(rows.find(r=>r.id===id(1)).h5.p,8);
+assert.equal(rows.find(r=>r.id===id(1)).h7.p,1); // API is percent: 1% must never render as 100%.
 assert.equal(rows.find(r=>r.id===id(2)).h5.p,99);
 assert.equal(rows.find(r=>r.id===id(3)).h5.p,17);
 assert.equal(rows.find(r=>r.id==='old').managed,false);

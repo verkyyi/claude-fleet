@@ -7,8 +7,8 @@
 # vault (#1415) used to take only refresh tokens; now it takes a setup token as
 # kind "setup_token", hands it down as is, and reminds the operator 30 days
 # before it ends. This command reads each pool file and POSTs it to the hub
-# over the viewer token — the token travels in a 0600 file to curl, never on a
-# command line, and is never printed: not on success, not on failure.
+# over the viewer token — the request and authorization travel through pipes,
+# never temporary files or command arguments, and never appear in output.
 #
 #   fleet-creds-import.sh [--principal <id>] [--expires-at <RFC3339>] [--account-uuid <uuid>|none] [--dry-run] [label …]
 #   fleet-creds-import.sh --codex [--principal <id>] [--dry-run] [profile …]
@@ -131,21 +131,12 @@ if [ "${#LABELS[@]}" -eq 0 ]; then
 fi
 [ "${#LABELS[@]}" -gt 0 ] || { printf 'fleet-creds-import: no pool files in %s\n' "$ACCT_DIR" >&2; exit 2; }
 
-# Private workspace for the request bodies and the auth header: 0700 dir,
-# 0600 files, gone on exit however we leave.
-umask 077
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-creds-import.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
-printf 'Authorization: Bearer %s\n' "$VIEWER" > "$WORK/hdr"
-
-# plan <file> <label> <principal> <expires-or-empty> → stdout: one line
-#   "<expires>\t<reason>"  reason "" = ok, else why this label is skipped.
-# Also writes the request body to $WORK/body when ok. The token is read here,
-# inside python, and goes nowhere but that 0600 file.
+# The planner returns a metadata line followed by JSON, captured in shell
+# memory. Only the metadata is printed; the JSON goes to curl's stdin.
 plan() {
-  python3 - "$1" "$2" "$3" "$4" "$WORK/body" "$AUUID" <<'PY'
+  python3 - "$1" "$2" "$3" "$4" "$AUUID" <<'PY'
 import json, os, sys, datetime
-path, label, principal, expires, out, auuid = sys.argv[1:7]
+path, label, principal, expires, auuid = sys.argv[1:6]
 try:
     with open(path, 'rb') as f:
         tok = f.readline().strip().decode('ascii', 'replace')
@@ -168,20 +159,17 @@ secret = {"setup_token": tok, "expires_at": exp}
 if auuid:
     secret["account_uuid"] = auuid
 body = {"action": "put", "principal_id": principal, "provider": "claude", "account": label, "secret": secret}
-fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, 'w') as f:
-    json.dump(body, f)
 print(exp + '\t')
+print(json.dumps(body))
 PY
 }
 
 # plan_codex <auth.json> <profile> <principal> → stdout: one line "\t<reason>"
-# (reason "" = ok, else why this profile is skipped) and the request body in
-# $WORK/body when ok. The tokens are read inside python and go nowhere else.
+# (reason "" = ok, else why this profile is skipped), followed by request JSON.
 plan_codex() {
-  python3 - "$1" "$2" "$3" "$WORK/body" <<'PY'
+  python3 - "$1" "$2" "$3" <<'PY'
 import json, os, sys
-path, label, principal, out = sys.argv[1:5]
+path, label, principal = sys.argv[1:4]
 try:
     with open(path, 'rb') as f:
         auth = json.load(f)
@@ -203,10 +191,8 @@ secret = {"refresh_token": rt, "account_id": acct}
 if idt:
     secret["id_token"] = idt
 body = {"action": "put", "principal_id": principal, "provider": "codex", "account": label, "secret": secret}
-fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, 'w') as f:
-    json.dump(body, f)
 print('\t')
+print(json.dumps(body))
 PY
 }
 
@@ -251,7 +237,6 @@ for l in ${LABELS[@]+"${LABELS[@]}"}; do
   case "$l" in
     ''|.*|*/*|*~|*.conf) printf 'skip   %-14s not a pool label\n' "$l"; skipped=$((skipped+1)); continue ;;
   esac
-  rm -f "$WORK/body"
   if [ "$CODEX" = 1 ]; then
     res=$(codex_resolve "$l"); kind=refresh_token
     f=${res%%	*}; rest=${res#*	}; label=${rest%%	*}; note=${rest#*	}
@@ -267,21 +252,24 @@ for l in ${LABELS[@]+"${LABELS[@]}"}; do
     exp=${line%%	*}
     [ -z "$AUUID" ] || printf 'uuid   %-14s account %s%s\n' "$l" "$AUUID" "${AUUID_NOTE:+ ($AUUID_NOTE)}"
   fi
+  payload=''
+  case "$line" in *$'\n'*) payload=${line#*$'\n'}; line=${line%%$'\n'*} ;; esac
   why=${line#*	}
   if [ -n "$why" ]; then printf 'skip   %-14s %s\n' "$l" "$why"; skipped=$((skipped+1)); continue; fi
   if [ "$DRY" = 1 ]; then
     printf 'would  %-14s → %s · %s · %s%s%s\n' "$l" "$HUB" "$PRINCIPAL" "$kind" "${exp:+ · expires $exp}" "${EXPIRES:+ (given)}"
     ok=$((ok+1)); continue
   fi
-  code=$(curl -sS -m 30 -o "$WORK/resp" -w '%{http_code}' -H @"$WORK/hdr" -H 'Content-Type: application/json' \
-           --data-binary @"$WORK/body" "$HUB/v1/fleet/credentials" 2>"$WORK/err") || code=000
-  rm -f "$WORK/body"
+  code=$(printf '%s' "$payload" | curl -sS -m 30 -o /dev/null -w '%{http_code}' \
+           -H @<(printf 'Authorization: Bearer %s\n' "$VIEWER") -H 'Content-Type: application/json' \
+           --data-binary @- "$HUB/v1/fleet/credentials" 2>/dev/null) || code=000
+  unset payload
   if [ "$code" = 200 ]; then
     printf 'put    %-14s → %s · %s%s%s\n' "$l" "$PRINCIPAL" "$kind" "${exp:+ · expires $exp}" "${EXPIRES:+ (given)}"
     ok=$((ok+1))
   else
-    # The hub's answer names the reason and never echoes a secret.
-    printf 'FAIL   %-14s HTTP %s %s\n' "$l" "$code" "$(tr -d '\n' < "$WORK/resp" 2>/dev/null; tr -d '\n' < "$WORK/err" 2>/dev/null)" >&2
+    # Never echo an upstream body: an error response may contain a secret.
+    printf 'FAIL   %-14s HTTP %s (import refused)\n' "$l" "$code" >&2
     failed=$((failed+1))
   fi
 done

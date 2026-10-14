@@ -76,6 +76,8 @@ export type Sub = {
   readAt: string;
   readVia: string;
   readNote: string;
+  readStatus?: string;
+  readAttemptAt?: string;
   // a member's own subscription (claude-fleet#4035): its owner's principal; "" = the pool's
   owner: string;
   // from /v1/admin/overview when it answers
@@ -96,7 +98,7 @@ export function pct(u: unknown): number | null {
 }
 
 // windowsOf is a LimitsView's 5-hour and weekly windows, Codex's included.
-export function windowsOf(lim?: LimitsBody): { h5: Window | null; h7: Window | null } {
+export function windowsOf(lim?: LimitsBody, percent = false): { h5: Window | null; h7: Window | null } {
   if (!lim || lim.available === false) return { h5: null, h7: null };
   let h5 = lim.five_hour || null;
   let h7 = lim.seven_day || null;
@@ -105,7 +107,7 @@ export function windowsOf(lim?: LimitsBody): { h5: Window | null; h7: Window | n
     if (!h5 && (mins === 300 || /5h|five|primary/i.test(w.id || w.label || ""))) h5 = w;
     else if (!h7 && (mins === 10080 || /week|seven|secondary/i.test(w.id || w.label || ""))) h7 = w;
   }
-  const v = (w: any): Window | null => (w ? { p: pct(w.utilization), resets: w.resets_at || null } : null);
+  const v = (w: any): Window | null => (w ? { p: percent && w.utilization != null ? Math.min(100, Math.max(0, Number(w.utilization))) : pct(w.utilization), resets: w.resets_at || null } : null);
   return { h5: v(h5), h7: v(h7) };
 }
 
@@ -131,7 +133,7 @@ export function subscriptions(p: {
   const seen = new Set<string>();
   const out: Sub[] = [];
   const make = (id: string, label: string, prov: Prov, lim: LimitsBody | undefined, c: PoolCredential | null): Sub => {
-    const w = windowsOf(lim);
+    const w = windowsOf(lim, !!c?.credential_id);
     const owner = c && c.principal_id !== "pool" ? c.principal_id || "" : "";
     return { id, label, prov, plan: lim?.plan || "", h5: w.h5, h7: w.h7,
       available: !!lim && lim.available !== false, reason: lim?.reason || "",
@@ -139,6 +141,7 @@ export function subscriptions(p: {
       cred: c, paused: !!c && !owner && paused.has(c.account), managed: !!c,
       readAt: lim?.observed_at || "", readVia: lim?.read_via || "",
       readNote: lim?.read_note || (lim?.read_status === "unknown" ? "No quota reading yet" : lim?.read_status === "stale" ? "Quota reading is stale" : ""),
+      readStatus: lim?.read_status, readAttemptAt: lim?.read_attempt_at,
       owner, people: [], limited: false, reauth: false };
   };
   for (const c of p.creds?.credentials || []) {

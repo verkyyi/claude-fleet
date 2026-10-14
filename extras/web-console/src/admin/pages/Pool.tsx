@@ -381,12 +381,15 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
           <Field k="pool.d.cred">
             <span className={CRED_TONE[cs.tone]}>{t(`pool.cred.${cs.key}` as MsgKey, { when: when(cs.at) })}</span>
           </Field>
-          {r.readAt && (
+          {(r.readAt || r.readStatus || r.readNote) && (
             <Field k="pool.d.read">
               <span title={r.readNote}>
-                {ago(r.readAt)}
+                {r.readAt ? ago(r.readAt) : t("pool.d.unread")}
                 {r.readVia && ` · ${t(r.readVia === "hub" ? "pool.d.viaHub" : "pool.d.viaNode")}`}
               </span>
+              {r.readStatus === "failed" && <span className="block text-destructive">{t("pool.d.readFailed")}{r.readAttemptAt && ` · ${ago(r.readAttemptAt)}`}</span>}
+              {r.readStatus === "stale" && <span className="block text-muted-foreground">{t("pool.d.stale")}</span>}
+              {r.readNote && <span className="block text-xs text-muted-foreground">{r.readNote}</span>}
             </Field>
           )}
           <Field k="pool.d.sessions">

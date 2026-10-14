@@ -177,10 +177,10 @@ printf 'sk-ant-oat01-BAD-BAD-BAD-BAD-BAD-BAD-BAD-BAD\n' > "$FLEET_ACCOUNTS_DIR/b
 out=$(bash "$IMPORT" bad alpha 2>&1); rc=$?
 no_token "failing run" "$out"
 [ "$rc" = 1 ] || fail "hub 400 should exit 1, got $rc" "$out"
-case "$out" in *"FAIL   bad"*"HTTP 400"*"setup_token must be"*) ;; *) fail "hub's message not shown" "$out" ;; esac
+case "$out" in *"FAIL   bad"*"HTTP 400"*) ;; *) fail "hub refusal status not shown" "$out" ;; esac
 case "$out" in *"put    alpha"*"1 imported, 0 skipped, 1 failed"*) ;; *) fail "the other label still imported" "$out" ;; esac
 case "$out" in *BAD-BAD*) fail "the failing token leaked" "$out" ;; esac
-ok "FAIL  hub 400 → exit 1 with the hub's reason; others still land; no token shown"
+ok "FAIL  hub 400 → exit 1 with its status only; others still land; no token shown"
 
 # --- NOAUTH --------------------------------------------------------------------
 : > "$LOG"

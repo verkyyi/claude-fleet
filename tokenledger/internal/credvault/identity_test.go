@@ -35,6 +35,13 @@ func TestCredentialIdentityScopesAndRefresh(t *testing.T) {
 	if err := v.Sealer.Open(c.SecretSealed, &secret, c.PrincipalID, c.Provider, c.Account, "secret"); err != nil {
 		t.Fatal(err)
 	}
+	if err := v.Put("pool", Claude, "rotated-alias", secret); err != nil {
+		t.Fatal(err)
+	}
+	aliasRow, _ := v.Store.Credential("pool", Claude, "rotated-alias")
+	if v.CredentialID(*aliasRow) != a {
+		t.Fatal("reimporting rotated token inflated capacity")
+	}
 	newer, _ := NewSealer(make([]byte, 32))
 	blob, err := newer.Seal(secret, c.PrincipalID, c.Provider, c.Account, "secret")
 	if err != nil {

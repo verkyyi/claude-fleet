@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
@@ -79,6 +81,9 @@ func (s *Server) credentialSnapshot(c store.Credential) *model.LimitsSnapshot {
 			snap.SevenDay = model.Window{Utilization: w.Utilization, ResetsAt: w.ResetsAt}
 		}
 	}
+	if v.Blocked {
+		snap.FiveHour.Utilization = 100
+	}
 	return snap
 }
 
@@ -99,4 +104,29 @@ func (s *Server) dedupCredentials(rows []store.Credential) []store.Credential {
 		out = append(out, c)
 	}
 	return out
+}
+
+// A lease can race an operator replacing a label. Do not attach the new
+// identity to the old token; ask the proxy to resolve again instead.
+func (s *Server) leaseIdentified(ctx context.Context, owner, provider, account string) (credvault.Access, string, error) {
+	before, err := s.Store.Credential(owner, provider, account)
+	if err != nil {
+		return credvault.Access{}, "", err
+	}
+	if before == nil {
+		return credvault.Access{}, "", store.ErrNoCredential
+	}
+	id := s.Vault.CredentialID(*before)
+	acc, err := s.Vault.Lease(ctx, owner, provider, account)
+	if err != nil {
+		return acc, "", err
+	}
+	after, err := s.Store.Credential(owner, provider, account)
+	if err != nil {
+		return credvault.Access{}, "", err
+	}
+	if after == nil || id != s.Vault.CredentialID(*after) {
+		return credvault.Access{}, "", errors.New("credential changed while leasing; retry")
+	}
+	return acc, id, nil
 }
