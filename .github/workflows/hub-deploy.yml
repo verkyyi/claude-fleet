@@ -294,7 +294,7 @@ jobs:
           # Base images (issue #4133): HUB_BASE_IMAGES = "GO_IMAGE=<ref> ALPINE_IMAGE=<ref>"
           # (registry copies) overrides the Dockerfile's docker.io defaults; unset = them.
           # The copies are pulled with hub-acr's login above, so they must sit in a
-          # repository its RAM policy may pull (24haowan/alpine, 24haowan/golang —
+          # repository its RAM policy may pull (acme/alpine, acme/golang —
           # issue #4143); a copy anywhere else answers insufficient_scope.
           [ -z "$HUB_BASE_IMAGES" ] || echo "base images: $HUB_BASE_IMAGES"
           base=(); for kv in $HUB_BASE_IMAGES; do
@@ -320,7 +320,7 @@ jobs:
           rc=${PIPESTATUS[0]}; set -e
           [ "$rc" -ne 0 ] || break
           if grep -qE 'insufficient_scope|pull access denied' "$RUNNER_TEMP/build.log"; then
-            echo "::error::a base image was refused (insufficient_scope): the HUB_BASE_IMAGES copy is outside what RAM policy gha-claudefleet-acr-push may pull — copy it into 24haowan/alpine or 24haowan/golang, or clear the variable"
+            echo "::error::a base image was refused (insufficient_scope): the HUB_BASE_IMAGES copy is outside what RAM policy gha-claudefleet-acr-push may pull — copy it into acme/alpine or acme/golang, or clear the variable"
             exit "$rc"
           fi
           if [ "$try" -lt 3 ] && grep -q 'failed to resolve source metadata' "$RUNNER_TEMP/build.log"; then
