@@ -49,6 +49,13 @@ func KnownIdentityKind(kind string) bool {
 	return false
 }
 
+// SignInKind reports whether kind may sign a person in: one of
+// IdentityKinds, or DrillKind — a drill trier's (claude-fleet#4215), which no
+// page lists and nobody adds by hand; only an admin's exchange code makes one.
+func SignInKind(kind string) bool {
+	return KnownIdentityKind(kind) || kind == DrillKind
+}
+
 // HubUser is one person on the list. PrincipalID is who they are; GitHubID is
 // the GitHub numeric ID behind a gh: person, 0 for a person with none.
 type HubUser struct {
@@ -287,7 +294,7 @@ func (s *Store) HubIdentities(pid string) ([]HubIdentity, error) {
 // they have. One that lets another person in is ErrIdentityTaken and changes
 // nothing: a sign-in never moves between people.
 func (s *Store) AddHubIdentity(i HubIdentity) error {
-	if !KnownIdentityKind(i.Kind) || strings.TrimSpace(i.Subject) == "" || i.PrincipalID == "" {
+	if !SignInKind(i.Kind) || strings.TrimSpace(i.Subject) == "" || i.PrincipalID == "" {
 		return fmt.Errorf("identity needs a known kind, a subject and a person")
 	}
 	i.Subject = NormIdentitySubject(i.Kind, i.Subject)

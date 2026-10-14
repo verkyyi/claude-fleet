@@ -258,7 +258,7 @@ func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
 		return nil, "", false
 	}
 	sess, err := authz.VerifySession(v, s.sessionKey(), time.Now())
-	if err != nil || !store.KnownIdentityKind(sess.Sub) || !isPerson(sess.UID) {
+	if err != nil || !store.SignInKind(sess.Sub) || !isPerson(sess.UID) {
 		return nil, "", false
 	}
 	// Cut off with «sign out everywhere» (claude-fleet#3701): a value signed

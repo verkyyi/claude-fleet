@@ -123,7 +123,7 @@ func (s *Store) ensureFleetTrials() error {
 		ON fleet_trials(kind, subject) WHERE kind <> ''`); err != nil {
 		return fmt.Errorf("create fleet trials way index: %w", err)
 	}
-	return nil
+	return s.ensureDrillTrials()
 }
 
 func unixOrZero(v int64) time.Time {
