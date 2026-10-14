@@ -130,7 +130,7 @@ func timePtr(t time.Time) *time.Time {
 
 func (s *Server) handleAdminRequests(w http.ResponseWriter, r *http.Request) {
 	// adminOnly's gate, answered as a missing page instead of 403 (#3925)
-	if roleOf(r.Context()) == roleUser {
+	if memberRole(roleOf(r.Context())) {
 		s.auditRoleDenied(r)
 		http.NotFound(w, r)
 		return

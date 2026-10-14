@@ -164,5 +164,5 @@ func (s *Server) handleWxRelayCB(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, appURL("/signin")+"?e=wechat-down", http.StatusFound)
 		return
 	}
-	s.wxLand(w, r, u, now)
+	s.wxLand(w, r, u, s.trialAsked(r), now)
 }
