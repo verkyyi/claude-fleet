@@ -426,7 +426,7 @@ PY
 # --logins <it>`) while the shared proxy running is an ORPHAN — started before
 # the machine daemon restarted, so the daemon no longer knows it. The restart the
 # join asked for never reaches it; every start the daemon makes finds the lock
-# held, printed «already running» and exited 0 (810 times on macmini), and the
+# held, printed «already running» and exited 0 (810 times on one managed Mac), and the
 # new login's every mint was «this login has not joined this machine's
 # credential proxy». Now `machine status` names it NOT SERVED, and the daemon's
 # next start sees the holder is stale (another set of logins), stops it and
