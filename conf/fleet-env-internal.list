@@ -171,6 +171,7 @@ FLEET_SPOTLIGHT_MDUTIL             seam: the mdutil fleet-spotlight.sh reads / t
 FLEET_SPOTLIGHT_PS                 seam: a command printing `user etime pcpu command` rows for fleet-spotlight.sh (#3402)
 FLEET_SPOTLIGHT_UIDS               seam: the uids fleet-spotlight.sh off disables the knowledge agents for (default every uid ≥ 500, #3402)
 FLEET_SVC_ATTEMPT                  handoff: the service run attempt the agent hands fleet-svc-local.sh (#4086)
+FLEET_SVC_CLAUDE                   handoff: the claude a service run uses, found by fleet-svc-local.sh before HOME moves (#4086)
 FLEET_SVC_DENY_ROOTS               handoff: top-level directories a service run's session may not read, fleet-svc-local.sh → fleet-svc-runner.py (#4086)
 FLEET_SVC_RUN                      handoff: the service run R<n> the agent hands fleet-svc-local.sh (#4086)
 FLEET_SVC_RUNS_DIR                 path: where fleet-svc-local.sh makes each attempt's directory (default ~/.fleet-svc-runs, #4086)
