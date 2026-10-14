@@ -868,7 +868,11 @@ def entries(vid, now=None, hub=True):
     wins = windows(fleet) if fleet else {}
     held0 = names_raw(fleet) if fleet else {}
     held = names_live(held0, now)
-    landed_secs = fenv("FLEET_VIEW_LANDED_SECS", 86400)
+    # the environment, else fleet.conf's line — the producer reads the same one
+    try:
+        landed_secs = float(conf_word("FLEET_VIEW_LANDED_SECS") or 86400)
+    except ValueError:
+        landed_secs = 86400.0
     gl = glyphs()
     hage = hub_age(now)
     hstale = hage is not None and hage > fenv("FLEET_HUB_SESSIONS_STALE", 60)
