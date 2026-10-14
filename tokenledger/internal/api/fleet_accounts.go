@@ -287,10 +287,24 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // name. "" when none is fit. A machine skip names is never picked (a drill's
 // own computer).
 func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
+	host, _ := s.pickMachine(now, false, skip)
+	return host
+}
+
+// trialMachine is leastBusyMachine among the machines holding a ready spare
+// only (claude-fleet#4259): a trial is only ever a spare, so a machine with
+// room and none ready — one whose failed spare stops its refill — would hold
+// the trial in line for good. noSpare: "" because every fit machine lacks a
+// ready spare (not because none is fit).
+func (s *Server) trialMachine(now time.Time, skip ...string) (host string, noSpare bool) {
+	return s.pickMachine(now, true, skip)
+}
+
+func (s *Server) pickMachine(now time.Time, spareOnly bool, skip []string) (string, bool) {
 	snap, err := s.Nodes(now)
 	if err != nil {
 		log.Printf("fleet: least-busy: roster: %v", err)
-		return ""
+		return "", false
 	}
 	admin := adminNodesOnline(snap)
 	settings, err := s.trustSettings(now)
@@ -305,6 +319,7 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 	}
 	spare := s.spareReadyHosts()
 	var fit []cand
+	spareless := false
 	for _, m := range snap.Machines {
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
 			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] || hasFold(skip, m.Hostname) {
@@ -337,10 +352,14 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		excluded, eq := cpuVerdict(m.CPUBusy, m.MaxCPUBusy, perCore)
 		c.room = excluded == "" && hostAdmits(snap, m.Hostname)
 		c.score = loadScore(eq, m.MemFree, m.MemTotal)
+		if spareOnly && !c.spare {
+			spareless = true
+			continue
+		}
 		fit = append(fit, c)
 	}
 	if len(fit) == 0 {
-		return ""
+		return "", spareless
 	}
 	sort.SliceStable(fit, func(a, b int) bool {
 		fa, fb := fit[a], fit[b]
@@ -373,7 +392,7 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		}
 		return fa.m.Hostname < fb.m.Hostname
 	})
-	return fit[0].m.Hostname
+	return fit[0].m.Hostname, false
 }
 
 // hostAdmits is false when the machine's logins that state an admission

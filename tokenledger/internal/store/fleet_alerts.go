@@ -54,6 +54,9 @@ const (
 	// within fleet.trial.open_slow_secs and was put back (claude-fleet#4235)
 	// — subject its hostname; cleared once a trial seat there is ready.
 	AlertTrialOpenSlow = "trial_open_slow"
+	// AlertTrialNoSpare: a trial waits because no fit machine holds a ready
+	// spare (claude-fleet#4259) — subject "hub"; cleared by the next claim.
+	AlertTrialNoSpare = "trial_no_spare"
 )
 
 // FleetAlert is one row.

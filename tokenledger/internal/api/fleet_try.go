@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"html/template"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -113,7 +114,7 @@ type tryAnswer struct {
 	Next     string `json:"next,omitempty"`     // where to go now
 	Position int    `json:"position,omitempty"` // people ahead in line
 	ETASecs  int    `json:"eta_secs,omitempty"` // roughly how long until a seat
-	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota · nosub
+	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota · nosub · no_spare
 	// Applied is a tried person's request state (pending · approved ·
 	// rejected · withdrawn), "" for none.
 	Applied string `json:"applied,omitempty"`
@@ -249,13 +250,18 @@ func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAn
 	if err != nil {
 		return tryAnswer{}, err
 	}
-	host := s.leastBusyMachine(now, s.drillComputer(pid)...)
+	host, noSpare := s.trialMachine(now, s.drillComputer(pid)...)
 	why := s.trialHold(host, now)
+	if why == trialWaitBusyNoHost && noSpare {
+		why = trialWaitNoSpare
+		s.trialNoSpareAlert(now)
+	}
 	if ahead == 0 && why == "" {
 		if claimed := s.claimSpares(pid, name, pid, []string{host}, now); len(claimed) > 0 {
 			if err := s.Store.PlaceTrial(pid, claimed[0], now); err != nil {
 				return tryAnswer{}, err
 			}
+			_, _ = s.Store.ClearFleetAlert(store.AlertTrialNoSpare, trialNoSpareSubject, now)
 			_ = s.Store.HubAudit(pid, "trial.claim", pid, "ok", "试用领到备用登录 · trial seat on "+claimed[0], now)
 			return s.tryHome(pid, now)
 		}
@@ -266,6 +272,23 @@ func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAn
 	}
 	s.trialQueued(pid, why, now)
 	return tryAnswer{State: "waiting", Position: ahead, ETASecs: s.trialETA(host, ahead), Reason: trialPageReason(why)}, nil
+}
+
+// trialNoSpareSubject is trial_no_spare's one subject: the whole hub.
+const trialNoSpareSubject = "hub"
+
+// trialNoSpareAlert tells the operator a trial waits because no fit machine
+// holds a ready spare; cleared by the next trial that claims one.
+func (s *Server) trialNoSpareAlert(now time.Time) {
+	raised, err := s.Store.RaiseFleetAlert(store.AlertTrialNoSpare, trialNoSpareSubject, "{}", now)
+	if err != nil {
+		log.Printf("fleet: trial no spare alert: %v", err)
+		return
+	}
+	if raised {
+		_ = s.Store.HubAudit(trialInviter, "trial.alert", trialNoSpareSubject, "raised",
+			store.AlertTrialNoSpare+": 试用在排队，可放的机器上都没有就绪备用 · no fit machine holds a ready spare", now)
+	}
 }
 
 // trialQueued audits why pid waits, once per change of reason.
@@ -422,7 +445,8 @@ var tryTmpl = template.Must(template.New("try").Funcs(pageFuncs(i18n.EN)).Parse(
  data-w-busy="{{t "try.busy"}}" data-w-fail="{{t "try.fail"}}" data-w-min="{{t "try.min"}}"
  data-w-tried="{{t "try.tried"}}" data-w-applied="{{t "try.applied"}}" data-w-apply="{{t "try.apply"}}" data-w-see="{{t "try.see"}}"
  data-w-dayfull="{{t "try.dayfull"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
- data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-r-nosub="{{t "try.r.nosub"}}" data-w-reach="{{t "try.reach"}}"
+ data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-r-nosub="{{t "try.r.nosub"}}"
+ data-w-r-no_spare="{{t "try.r.no_spare"}}" data-w-reach="{{t "try.reach"}}"
  data-w-paused="{{t "try.paused"}}" data-w-resume="{{t "try.resume"}}" data-w-resuming="{{t "try.resuming"}}" data-w-capped="{{t "try.capped"}}">
 <h1>{{t "try.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{t "try.lead"}}</p>
@@ -595,6 +619,8 @@ func init() {
 		"try.r.quota": {i18n.EN: "The shared subscription is running low for now.", i18n.ZhCN: "共用的订阅额度这会儿偏紧。"},
 		"try.r.nosub": {i18n.EN: "The trial has no subscription to use right now.", i18n.ZhCN: "试用暂时没有可用订阅。"},
 		"try.reach":   {i18n.EN: "Following 二四网络科技? We'll tell you on WeChat when it's your turn.", i18n.ZhCN: "关注了「二四网络科技」的，排到时微信通知你。"},
+
+		"try.r.no_spare": {i18n.EN: "No ready machine is free right now.", i18n.ZhCN: "这会儿没有备好的空机器。"},
 		"try.wait": {i18n.EN: "All machines are taken. {n} ahead of you — about {m}. Keep this page open to hold your place.",
 			i18n.ZhCN: "机器都被领走了。前面还有 {n} 人，大约 {m}。开着这页就保住你的位置。"},
 		"try.first": {i18n.EN: "You are next — a machine frees up in about {m}. Keep this page open.",
