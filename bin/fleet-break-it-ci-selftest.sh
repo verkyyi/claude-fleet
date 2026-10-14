@@ -192,7 +192,10 @@ drill_train_ack_reclaimed() {
   CAP=30
   local t0 d out rc wf
   wf="$BIN/../.github/workflows/release-train.yml"
-  sed -n '/^  linux-rescue:/,/^  macos:/p' "$wf" | grep -q 'of: ${{ needs.linux-rescue-plan.outputs.total }}' \
+  # the job's own lines only, read to the end: a `grep -q` leaving a 35 KB sed
+  # mid-write is SIGPIPE, red under pipefail on a Mac's small pipe (#4152)
+  awk '/^  linux-rescue:/{f=1;next} f&&/^  [A-Za-z0-9_-]+:/{f=0} f' "$wf" \
+    | grep -F 'of: ${{ needs.linux-rescue-plan.outputs.total }}' >/dev/null \
     || { WHY="release-train.yml has no Linux rescue keeping K/N"; return 1; }
   grep -q -- '--lost-ok "$LOST_OK"' "$wf" || { WHY="fail-fast is not told a lost Linux runner is no red"; return 1; }
   grep -q -- '--ignore-check "Linux / shard $k"' "$wf" || { WHY="the move does not pass over a rescued shard"; return 1; }

@@ -24,9 +24,12 @@ name: mac follow
 #     stable-publish.yml with ref=stable-macos — the hub's Mac lane, which only
 #     takes a release already on its stable chain.
 #   * our runner refusing the job (its job gate older than #3869, which a Mac only
-#     gets once this goes green — the lane carries it) is not a red: `follow` sees
-#     the gate's line in the failed shard's log, dispatches this workflow again on
-#     the same sha with `runners: github` and cancels this run (no verdict).
+#     gets once this goes green — the lane carries it), or failing to run the gate
+#     at all (a runner older than #4152 handed it the runtime's path with its
+#     space, `/bin/bash: /Library/Application: No such file or directory`), is not
+#     a red: `follow` sees either line in the failed shard's log, dispatches this
+#     workflow again on the same sha with `runners: github` and cancels this run
+#     (no verdict).
 #   * red ⇒ the lane stays: every Mac keeps the previous version (and a Mac whose
 #     switch fails its own doctor rolls back, #2334). bin/fleet-macos-watch.sh (the
 #     diskguard tick) reads THIS workflow's `macOS / shard *` jobs and files one
@@ -225,15 +228,16 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}
       - name: our runner refused it?
-        # an older job gate on our Mac (it admits release-train.yml only): not the
-        # BSD half's red — the same sha again on GitHub's Macs, this run cancelled
+        # an older job gate on our Mac (it admits release-train.yml only), or an
+        # older runner whose gate path split at the space (#4152): not the BSD
+        # half's red — the same sha again on GitHub's Macs, this run cancelled
         if: needs.board.outputs.macos_where == 'fleet-ci' && needs.macos.result == 'failure'
         run: |
           ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
             --jq '.jobs[] | select((.name | startswith("macOS / shard")) and .conclusion == "failure") | .id') || exit 0
           for j in $ids; do
-            gh run view --job "$j" --log -R "$GITHUB_REPOSITORY" 2>/dev/null | grep -q 'fleet-ci: this runner takes only the merged train' || continue
-            echo "### 自家测试机拒了 mac-follow（它的任务门还是旧版）：同一提交改到 GitHub 的 Mac 上重跑，这趟取消" >> "$GITHUB_STEP_SUMMARY"
+            gh run view --job "$j" --log -R "$GITHUB_REPOSITORY" 2>/dev/null | grep -qE 'fleet-ci: this runner takes only the merged train|/bin/bash: /Library/Application: No such file or directory' || continue
+            echo "### 自家测试机拒了 mac-follow（任务门旧版，或门的路径带空格没跑起来）：同一提交改到 GitHub 的 Mac 上重跑，这趟取消" >> "$GITHUB_STEP_SUMMARY"
             gh workflow run mac-follow.yml --repo "$GITHUB_REPOSITORY" --ref master -f "sha=$SHA" -f runners=github
             gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
             sleep 120; exit 1

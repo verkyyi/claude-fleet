@@ -33,8 +33,10 @@ Every FLEET_CI_EVERY seconds (20) the loop:
      starts `run.sh` demoted to the login, `nice 10`, its environment built from
      nothing (no FLEET_*, no CCQUOTA_*, no gh token; the JIT config rides
      ACTIONS_RUNNER_INPUT_JITCONFIG, never argv), with
-     ACTIONS_RUNNER_HOOK_JOB_STARTED = bin/fleet-ci-job-gate.sh: a job that is
-     not the train's (a pull_request, another branch, another workflow) is
+     ACTIONS_RUNNER_HOOK_JOB_STARTED = root's copy of bin/fleet-ci-job-gate.sh at
+     <state>/ci-runner/job-gate.sh (a path with no space: the runner runs its hook
+     as `bash -e <path>` unquoted, issue #4152): a job that is not the train's or
+     the macOS follow's (a pull_request, another branch, another workflow) is
      refused before any of its steps runs;
   6. while it waits for a job (`idle`) and the machine gets tight, takes it down
      and deregisters it; while a job runs (`busy`, a Runner.Worker under it) lets
@@ -97,6 +99,9 @@ _spec.loader.exec_module(sup)
 
 STATES = ("idle", "busy", "paused", "error", "off")
 GATE = os.path.join(HERE, "fleet-ci-job-gate.sh")
+# the events a job may come from: the train (push · dispatch · schedule) and the
+# macOS follow after it (workflow_run, mac-follow.yml — issue #3869)
+EVENTS = "push workflow_dispatch schedule workflow_run"
 
 
 def now():
@@ -444,6 +449,38 @@ def _call(base, method, path, tok, body=None):
         return 0, {"message": str(e)}
 
 
+def gate_copy(paths):
+    """(the job gate's path, "") or (None, why). The runner runs its job-started
+    hook as `/bin/bash -e <path>` with the path UNQUOTED, so the runtime's own
+    path — /Library/Application Support/claude-fleet/current/bin/… on a Mac —
+    split at the space and every job died before its first step, the macOS lane
+    red with no test run (issue #4152). So the hook is root's own copy under
+    <state>/ci-runner/, rewritten when the runtime's differs."""
+    d = os.path.join(paths.state, "ci-runner")
+    dst = os.path.join(d, "job-gate.sh")
+    if re.search(r"\s", dst):
+        return None, "the job gate's path %r has whitespace — the runner would split it" % dst
+    try:
+        with open(GATE, "rb") as f:
+            body = f.read()
+        os.makedirs(d, exist_ok=True)
+        os.chmod(d, 0o755)
+        try:
+            with open(dst, "rb") as f:
+                same = f.read() == body
+        except OSError:
+            same = False
+        if not same or os.stat(dst).st_mode & 0o7777 != 0o755:
+            tmp = dst + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(body)
+            os.chmod(tmp, 0o755)
+            os.rename(tmp, dst)
+    except OSError as e:
+        return None, "the job gate's copy: %s" % e
+    return dst, ""
+
+
 def kill_login(ident):
     """Whatever the test login still runs: root only, never our own uid."""
     if ident and os.geteuid() == 0 and ident[0] not in (0, os.geteuid()) and not test_mode():
@@ -526,6 +563,9 @@ class Loop(object):
     # -- one runner
     def mint(self, c, ident, tree):
         uid, gid, home = ident
+        gate, why = gate_copy(self.p)
+        if not gate:
+            return None, why
         rundir = os.path.join(home, "runner")
         shutil.rmtree(rundir, ignore_errors=True)
         clone(tree, rundir)
@@ -545,9 +585,9 @@ class Loop(object):
                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                "TMPDIR": os.path.join(rundir, "tmp"),
                "ACTIONS_RUNNER_INPUT_JITCONFIG": jit,
-               "ACTIONS_RUNNER_HOOK_JOB_STARTED": GATE,
+               "ACTIONS_RUNNER_HOOK_JOB_STARTED": gate,
                "CI_GATE_REPO": c.repo, "CI_GATE_REF": "refs/heads/master",
-               "CI_GATE_EVENTS": "push workflow_dispatch schedule",
+               "CI_GATE_EVENTS": EVENTS,
                "CI_GATE_WORKFLOWS": " ".join(c.workflows)}
         logdir = os.path.join(self.p.log, "ci-runner")
         os.makedirs(logdir, exist_ok=True)
