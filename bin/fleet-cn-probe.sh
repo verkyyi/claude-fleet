@@ -23,6 +23,9 @@
 #   auto     the route `fleet connect` picks by itself runs `hostname` on the pod
 #   <route>  each route forced (`--route <name>`) runs `hostname` on the pod
 #
+# door     (only when the door refuses the key, and this computer has kubectl)
+#          the door's allow list, read — is the login on it?
+#
 # Host key: a route whose ssh says the host key is unknown / changed is FAIL.
 # Prints `PASS|FAIL|INFO <layer> <detail>` lines, then ONE verdict line:
 #   通：自动选 <route>；<route> 通 · <route> 通 …
@@ -40,6 +43,8 @@ AS=${FLEET_CN_PROBE_LOGIN:-drillcn}
 MACHINE=${FLEET_CN_PROBE_MACHINE:-u-drillcn4150}
 ROUTES=${FLEET_CN_PROBE_ROUTES:-}
 TMO=${FLEET_CN_PROBE_TIMEOUT:-90}
+KUBECTL=${FLEET_CN_PROBE_KUBECTL:-kubectl}
+DOOR_NS=${FLEET_CN_PROBE_DOOR_NS:-fleet-workers}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -97,7 +102,11 @@ out=$(on_client "timeout $TMO fleet connect --pick $MACHINE")
 case "$out" in *"\"machine\": \"$MACHINE\""*|*"\"hostname\": \"$MACHINE\""*) pass list "the hub lists $MACHINE for $AS" ;;
   *) fail list "the hub does not list $MACHINE for $AS: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; verdict ;; esac
 
-# table + auto: one run, measured afresh
+# table + auto: one run, measured afresh. A forced route PINS the machine
+# (`--route` = `fleet route <machine> <route>`, remembered), so every run here
+# starts from and leaves the person's choice at auto.
+unpin() { on_client "fleet route $MACHINE auto" >/dev/null 2>&1; }
+unpin
 out=$(on_client "timeout $TMO fleet connect $MACHINE --verbose --retest -- hostname; echo rc=\$?")
 say "INFO table"
 printf '%s\n' "$out" | sed -n '/^fleet connect · /,/^→ /p' | sed 's/^/     /'
@@ -110,15 +119,33 @@ else
   fail auto "picked ${picked:-none}: $(printf '%s\n' "$out" | grep -v '^ \|^fleet connect · \|^→' | tail -3 | tr '\n' ' ')"
 fi
 
+# door_why — the door refused the key: read (never write) what the door was
+# told, when this computer holds the cluster. A login missing from its allow
+# list is the hub's door list (the person's entry home is not on the pod).
+door_why() {
+  command -v "$KUBECTL" >/dev/null 2>&1 || return 0
+  local p st
+  p=$("$KUBECTL" -n "$DOOR_NS" get pod -l app.kubernetes.io/name=fleet-door -o name 2>/dev/null | head -1)
+  [ -n "$p" ] || return 0
+  st=$("$KUBECTL" -n "$DOOR_NS" exec "$p" -- cat /var/db/fleet-node/entry/state.json 2>/dev/null |
+    python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(d.get("allow") or []), d.get("version"))' 2>/dev/null)
+  case " ${st% *} " in
+    *" $AS "*) say "INFO door $AS is on the door's list (v${st##* }) — the key it offered is not one the hub gave the door" ;;
+    *) say "INFO door $AS is NOT on the door's list (v${st##* }: ${st% *}) — the hub routes only a person whose entry home is a user pod" ;;
+  esac
+}
+
 # every route, forced
 for r in $ROUTES; do
   case "$r" in *[!A-Za-z0-9_.:-]*) continue ;; esac
   out=$(on_client "timeout $TMO fleet connect $MACHINE --route $r -- hostname; echo rc=\$?")
+  unpin
   hk=$(hostkey "$out")
   if printf '%s\n' "$out" | grep -q "^$MACHINE" && printf '%s\n' "$out" | grep -q '^rc=0$' && [ -z "$hk" ]; then
     pass "$r" "ran hostname on $(printf '%s\n' "$out" | grep "^$MACHINE" | head -1)"; OKS="$OKS；$r 通"
   else
     fail "$r" "${hk:-$(printf '%s\n' "$out" | grep -v '^rc=' | tail -3 | tr '\n' ' ')}"
+    case "$r:$out" in entry:*'Permission denied (publickey)'*) door_why ;; esac
   fi
 done
 verdict
