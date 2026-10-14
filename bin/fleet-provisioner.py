@@ -20,6 +20,10 @@ done. The ops are typed, never a manifest:
   destroy-user-pod pod             those three, each only if it is a user pod's,
                                    and the join Secret
   set-limits       pod limits      that pod's Deployment, nobody else's
+  roll-user-pod    pod             that pod's Deployment onto the template's
+                                   user_pod.image: its four containers' image,
+                                   by digest, nothing else (#4174) — Recreate;
+                                   already on it = nothing sent
   create-job       pod repo ref    render.py's throwaway Job for that pod: the
                    kind cmd        ticket's kind and command line, the template's
                                    job.{image, git_mirror, caches, egress_proxy,
@@ -205,6 +209,8 @@ def off_template(o, ns):
                 return 'a Job never runs as uid 0'
         if guard and not sc.get('readOnlyRootFilesystem'):
             return 'a run\'s egress guard runs on a read-only root'
+    if kind == 'Deployment' and len(set(c.get('image') for c in (p.get('initContainers') or []) + (p.get('containers') or []))) > 1:
+        return 'a person\'s pod runs one image in every container (#4174)'
     return None
 
 
@@ -287,6 +293,42 @@ def user_pod_of(api, ns, kind, name):
     if labels.get('fleet/role') != 'user' or labels.get('fleet/pod') != name:
         raise Refused('%s %s is not a user pod\'s' % (kind, name))
     return o
+
+
+def pod_images(dep):
+    """{container name: image} of a user pod's Deployment, inits included."""
+    p = ((dep.get('spec') or {}).get('template') or {}).get('spec') or {}
+    return dict((c.get('name'), c.get('image')) for c in (p.get('initContainers') or []) + (p.get('containers') or []))
+
+
+def roll(api, ns, pod, image, r):
+    """roll-user-pod (#4174): the pod's Deployment onto image, its four
+    containers by name and nothing else; one already on it is left alone."""
+    try:
+        patch = r.user_pod_image_patch(image)
+    except ValueError as e:
+        raise Refused('the template\'s user_pod.image: %s' % e)
+    dep = user_pod_of(api, ns, 'Deployment', pod)
+    if dep is None:
+        raise Refused('no user pod %s to roll' % pod)
+    have = pod_images(dep)
+    want = set(n for _, names in r.USER_POD_IMAGE_CONTAINERS for n in names)
+    if set(have) != want:
+        raise Refused('Deployment %s is not the template\'s person pod (containers %s)' % (pod, ' '.join(sorted(have))))
+    if all(v == image for v in have.values()):
+        return ['Deployment %s already on %s' % (pod, image.rsplit('@', 1)[-1][:19])]
+    new = json.loads(json.dumps(dep))
+    for k, names in r.USER_POD_IMAGE_CONTAINERS:
+        for c in new['spec']['template']['spec'].get(k) or []:
+            c['image'] = image
+    why = off_template(new, ns)
+    if why:
+        raise Refused('off the template: ' + why)
+    st, out = api.call('PATCH', (PATHS['Deployment'] % ns) + '/' + pod, patch,
+                       'application/strategic-merge-patch+json')
+    _ok(st, out, 'patch Deployment %s' % pod)
+    olds = sorted(set(v.rsplit('@', 1)[-1][:19] for v in have.values()))
+    return ['Deployment %s rolled %s -> %s' % (pod, ','.join(olds), image.rsplit('@', 1)[-1][:19])]
 
 
 def pod_login_of(dep):
@@ -382,6 +424,8 @@ def act(t, conf, api, r=None):
                            'application/strategic-merge-patch+json')
         _ok(st, out, 'patch Deployment %s' % pod)
         return ['Deployment %s limits %s' % (pod, t['limits'])]
+    if op == 'roll-user-pod':
+        return roll(api, ns, pod, (conf.get('user_pod') or {}).get('image', ''), r)
     if op == 'destroy-user-pod':
         # check all three first: a name that is somebody else's stops the whole op
         found = [(k, user_pod_of(api, ns, k, pod)) for k in ('Deployment', 'Service', 'PersistentVolumeClaim')]

@@ -130,6 +130,9 @@ func (s *Server) NodeAlertTick(since, now time.Time) {
 	s.UsageSilentTick(now, false)
 	s.SpareAlertTick(since, now)
 	s.SvcAlertTick(now)
+	// person pods onto the new image (claude-fleet#4174): its own goroutine —
+	// each roll waits on the cluster's ops link
+	go s.PodRollTick(now, false)
 	if err := s.Store.PruneFleetAlerts(now.Add(-fleetAlertKeep)); err != nil {
 		log.Printf("fleet alerts: prune: %v", err)
 	}

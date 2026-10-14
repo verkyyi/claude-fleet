@@ -131,6 +131,9 @@ export type NodeDetail = {
     result?: string;
     reason?: string;
     at: string | null;
+    // a person's pod against stable (claude-fleet#4174): releases behind (-1 = a runtime
+    // the ledger does not know) and the hub's last roll
+    roll?: { stable?: string; behind?: number; last?: { stable: string; at: string; done: boolean; pending?: boolean; result?: string } };
   };
   load: { now: number; ncpu: number; hist: number[]; hist_step_sec: number; unread?: string[]; at: string | null };
   mem: { used: number; total: number; pressure: number | null; at: string | null };

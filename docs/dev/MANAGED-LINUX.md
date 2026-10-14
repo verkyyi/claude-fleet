@@ -589,6 +589,8 @@ kubectl -n fleet-workers patch deploy u-k3x9q2 --type strategic \
   -p "$(python3 extras/managed-node/render.py --limits-patch --limits 'cpu=4,memory=8Gi')"
 ```
 
+`--image-patch --image <digest>` prints the patch that moves a running pod onto
+another image (its four containers, nothing else — what `roll-user-pod` sends).
 `--limits-patch` prints the cpu/memory half only, from the WHOLE value (the keys
 it omits are the defaults); a bigger `disk` is a re-render (the claim grows if
 the StorageClass allows expansion). The machine join code goes in the Secret
@@ -635,8 +637,16 @@ pod.
   and has `no_new_privs` (`pod_privileges`, the kernel's word — not a sudoers read).
 - **The runtime is the image's** (`FLEET_NODE_UPDATE_OWNER=image`): the login
   cannot switch it and the pod runs no update task — a new release is a new image,
-  and moving a pod onto it is the provisioner's to roll (the pod's sessions come
-  back through restore). The image's seed is copied to the disk at each start.
+  and moving a pod onto it is the provisioner's `roll-user-pod` (claude-fleet#4174:
+  the four containers' image, by digest, onto the template's `user_pod.image`;
+  Recreate, and the pod's sessions come back through restore). The hub sends it
+  once stable moves past the runtime a pod's beat names — `fleet.user_pod_roll_batch`
+  (2) a batch, a batch every 10 minutes, a pod with a session working or asking
+  left for the next one, each pod once per release, a failure asked again after
+  an hour and holding back no other pod (`fleet_user_pod_roll.go`;
+  `fleet.user_pod_roll=off` stops it). The node page's 版本 card says how many
+  releases behind a pod is and its last roll. BREAK-IT `user-pod-image-stale`.
+  The image's seed is copied to the disk at each start.
 - The readiness probe asks for the node program once a login is declared.
 
 An image older than this change has no `pod-etc`: the init fails and the pod never

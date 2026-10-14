@@ -23,6 +23,9 @@ const pyJobTicket = "c1.eyJvcCI6ImNyZWF0ZS1qb2IiLCJjbHVzdGVyIjoiYWNrLXN6IiwicG9k
 // its attempt, the principal's name, the deadline and the Job's key.
 const pySvcRunTicket = "c1.eyJvcCI6ImNyZWF0ZS1zdmMtcnVuIiwiY2x1c3RlciI6ImFjay1zeiIsInJ1biI6IlI0MiIsImF0dGVtcHQiOjEsInN2YyI6ImxpdmVwYWdlIiwiZGVhZGxpbmUiOjkwMCwidG9rZW4iOiJmc2pfYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm5vbmNlIjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJleHAiOjQxMDI0NDQ4MDB9.c2X_NYB3B2nayo_rW3n-acao1uwTEH1xvRb0_av1p1WXY9u6fUpn9dpKjtazQDcLMLEh7UDwMIOxncYFdxj6DQ"
 
+// pyRollTicket is the same for roll-user-pod (claude-fleet#4174): the pod alone.
+const pyRollTicket = "c1.eyJvcCI6InJvbGwtdXNlci1wb2QiLCJjbHVzdGVyIjoiYWNrLXN6IiwicG9kIjoidS1hMWIyYzMiLCJub25jZSI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiZXhwIjo0MTAyNDQ0ODAwfQ.QfRn-QYciYcftq0T15XlzAQhIWH3X5uWk88G5WqHQ9uPY-gNBXZra1H6_d02kUM4RXQTo1O4ZsKTaPiUVDMQAg"
+
 func TestClusterTicketMatchesTheProvisioner(t *testing.T) {
 	key := ticketKey()
 	got, err := SignClusterTicket(key, ClusterTicket{Op: ClusterCreateUserPod, Cluster: "ack-sz", Pod: "u-a1b2c3",
@@ -55,6 +58,11 @@ func TestClusterTicketMatchesTheProvisioner(t *testing.T) {
 		Nonce: "0123456789abcdef0123456789abcdef", Exp: 4102444800})
 	if err != nil || svc != pySvcRunTicket {
 		t.Fatalf("Go's svc run ticket\n%s\nis not the provisioner's\n%s (%v)", svc, pySvcRunTicket, err)
+	}
+	roll, err := SignClusterTicket(key, ClusterTicket{Op: ClusterRollUserPod, Cluster: "ack-sz", Pod: "u-a1b2c3",
+		Nonce: "0123456789abcdef0123456789abcdef", Exp: 4102444800})
+	if err != nil || roll != pyRollTicket {
+		t.Fatalf("Go's roll ticket\n%s\nis not the provisioner's\n%s (%v)", roll, pyRollTicket, err)
 	}
 }
 

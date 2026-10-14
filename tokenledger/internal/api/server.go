@@ -127,6 +127,13 @@ type Server struct {
 	// trains is the release ledger's memory (fleet_release_train.go,
 	// claude-fleet#3140): which shas are trains, which machines reached them.
 	trains trainBook
+	// podRoll is the person pods' runtimes and rolls (fleet_user_pod_roll.go,
+	// claude-fleet#4174); podRollStable is the stable it rolls toward — nil =
+	// Releases.StableSHA — and podRollRuntimes the pods' runtimes — nil = the
+	// roster (tests' seams).
+	podRoll         podRollBook
+	podRollStable   func() string
+	podRollRuntimes func(now time.Time) map[string]podRuntime
 	// releaseRoster is the roster a train snapshots its machines from; nil =
 	// Nodes (a test's seam).
 	releaseRoster func(now time.Time) (NodesSnapshot, error)

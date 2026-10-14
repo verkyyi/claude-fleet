@@ -14,12 +14,14 @@ Everything else in fleet-workers runs as its own account with no token
 It takes a ticket and nothing else — `POST /v1/op`, the ticket as the body, from
 fleet-ops (`fleet/role: control`) alone. A ticket is the hub's account key's
 (the admin seat's, `GET /v1/fleet/account-key`) under its own domain, for THIS
-cluster, five minutes, single-use; five typed ops: `create-user-pod` (pod,
+cluster, five minutes, single-use; typed ops only: `create-user-pod` (pod,
 limits, the pod's one login + UID — #3757 — and its one-time machine join code,
 written into its join Secret) ·
 `destroy-user-pod` (the join Secret too) · `set-limits` · `create-job` ·
 `bind-user-pod` (a claimed spare pod's `fleet/principal` label — claude-fleet#3553) ·
-`create-svc-run` / `delete-svc-run` (a service run's Job and its key Secret — claude-fleet#4005)
+`create-svc-run` / `delete-svc-run` (a service run's Job and its key Secret — claude-fleet#4005) ·
+`roll-user-pod` (the pod alone: its Deployment onto this template's `user_pod.image`,
+the four containers' image and nothing else — claude-fleet#4174)
 (`bin/fleet_cluster_ticket.py`,
 its Go twin `tokenledger/internal/control/cluster_ticket.go`). No manifest ever
 crosses: the provisioner renders the pod itself and checks it again
@@ -57,6 +59,16 @@ kubectl -n $NS create configmap fleet-provisioner --from-file=template.json --fr
 kubectl kustomize deploy/k8s/fleet-workers \
   | sed "s#image: fleet-provisioner-image\$#image: $MANAGED_NODE_IMAGE#" | kubectl apply -f -
 ```
+
+**A new image for the people's pods** (claude-fleet#4174): put its digest in
+`template.json`'s `user_pod.image` (the ConfigMap above, then
+`kubectl -n $NS rollout restart deploy/fleet-provisioner`). A pod already made
+does not move by itself — it runs its image's runtime. Once stable moves past a
+pod's runtime the hub sends `roll-user-pod` for it, `fleet.user_pod_roll_batch`
+(2) at a time, a batch every 10 minutes, never a pod with a session working or
+asking (`fleet.user_pod_roll=off` stops it); by hand it is
+`python3 extras/managed-node/render.py --image-patch --image "$IMAGE"` into
+`kubectl -n $NS patch deploy u-<nonce> --type strategic -p …`.
 
 Check it: `kubectl -n $NS auth can-i --list --as system:serviceaccount:$NS:<account>`
 for each account — only `fleet-provisioner` lists a write. The user pods, the
