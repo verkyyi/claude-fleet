@@ -143,6 +143,7 @@ FLEET_DEBUG_DRILL_POLL             knob: how often fleet-debug-drill.sh reads it
 FLEET_DEBUG_DRILL_ROOT             seam: the tree fleet-debug-drill.sh check reads conf/agent-defaults/claude/agents/fleet-debugger.md from (selftest, #2895)
 FLEET_DEBUG_DRILL_STEP_SECS        knob: fleet-debug-drill.sh's deadline per wait (180 s; the trigger gets 3×, #2895)
 FLEET_DEBUG_DRILL_TRIES            knob: how many times fleet-debug-drill.sh runs `fleet claude` before the client must have asked (5, #2895)
+FLEET_DEBUG_ROOT                   path: the install root fleet-install.sh fingerprints its debug ticket over, when it installs into a staging dir (fleet-client-update.sh: the real root, #4127)
 FLEET_DEBUG_CMD                    seam: the command fleet-debug-prompt.sh runs instead of `sh <here>/fleet-debug` (fleet-debug-prompt-selftest.sh, #2894)
 FLEET_DEBUG_PROMPT                 knob: 0 = the client never offers fleet-debug after failures, nor 按 d on the reconnect page (client side, #2894)
 FLEET_DEBUG_PROMPT_AFTER           knob: how many failures inside the window make the client ask (3, #2894)
