@@ -337,6 +337,39 @@ func TestFleetWritePinTool(t *testing.T) {
 	}
 }
 
+// worker_transfer (claude-fleet#4184): 换 Codex / 换 Claude on a row on another
+// machine. A journalled write under worker:stop's authority (the session exits
+// and its task continues in the other agent); the node gets worker_id and the
+// agent — nothing else, and no agent but claude or codex.
+func TestFleetWriteTransferTool(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	wid := f4.FleetID + "/issue-2"
+	if !hasString(FleetTools, "worker_transfer") || !fleetWriteTools["worker_transfer"] ||
+		fleetScopeOf["worker_transfer"] != "worker:stop" || !nodeWriteTools["worker_transfer"] {
+		t.Fatal("worker_transfer must be a listed write tool under worker:stop, open to a node token")
+	}
+	for i, to := range []string{"codex", "claude"} {
+		op := postFleet(t, h, "worker_transfer", map[string]any{"worker_id": wid, "to": to, "idempotency_key": fmt.Sprintf("ok-%d", i)}, 200)
+		if op["status"] != "accepted" {
+			t.Fatalf("worker_transfer %q = %v; want accepted", to, op)
+		}
+	}
+	waitFor(t, 2*time.Second, "the node took both", func() bool { return macC.count() == 2 })
+	env := macC.writes[0]
+	params, _ := env["params"].(map[string]any)
+	if env["action"] != "worker_transfer" || params["worker_id"] != wid || params["to"] != "codex" || len(params) != 2 {
+		t.Fatalf("the node was sent %v", env)
+	}
+	for i, bad := range []any{"", "Codex", "gpt", "claude codex", true, nil} {
+		postFleet(t, h, "worker_transfer", map[string]any{"worker_id": wid, "to": bad, "idempotency_key": fmt.Sprintf("bad-%d", i)}, 400)
+	}
+	postFleet(t, h, "worker_transfer", map[string]any{"worker_id": wid, "idempotency_key": "no-to"}, 400)
+	postFleet(t, h, "worker_transfer", map[string]any{"worker_id": wid, "to": "codex", "account": "x", "idempotency_key": "extra"}, 400)
+	if macC.count() != 2 {
+		t.Fatalf("a refused transfer reached the node (%d writes)", macC.count())
+	}
+}
+
 // worker_switch (claude-fleet#2102): the sidebar's 「换到可用订阅」 on a row on
 // another machine. A journalled write under worker:stop's authority (a switch is
 // a stop + resume of the same conversation); the node gets worker_id and, when

@@ -546,6 +546,9 @@ class Control:
         if action == "worker_pin":
             # By identity or key alike, as a rename (issue #3517).
             return self.execute_pin(fleet, key, params["pin"])
+        if action == "worker_transfer":
+            # By identity or key alike, as a switch (issue #4184).
+            return self.execute_transfer(fleet, key, params["to"])
         if action == "worker_message" and actor == FEEDBACK_ACTOR and params["text"].startswith(FEEDBACK_PREFIX):
             return self.execute_feedback(fleet, key, params["worker_id"], params["text"])
         if is_identity(key):
@@ -773,6 +776,32 @@ class Control:
         if code:
             raise Unattempted("INVALID_STATE", "Pin refused on the fleet: " + said)
         return {"pinned": matches[0], "pin": pin, "window": window, "how": said or pin, "observed_at": now()}
+
+    def execute_transfer(self, fleet, key, to):
+        """worker_transfer (issue #4184): 换 Codex / 换 Claude on a row here, from
+        another machine's menu — the same fleet-transfer.sh the menu runs on a
+        row of this machine. The adapter checks the window still carries the
+        worker's @fleet_id, then the transfer's own --dry-run (the agent it
+        already runs, a mid-turn source, a panel or hub window, the target's
+        login) refuses with ONE line, touching nothing: a clean `failed`. A
+        plan that goes is dispatched detached (an /exit and a cold start take
+        tens of seconds); a rollback or failure after that raises the transfer's
+        own ▲ alert on this machine and its @transfer_note on the row."""
+        matches, _ = self.target(fleet, key, "worker_transfer")
+        if matches[0].get("lifecycle", "awake") != "awake":
+            raise Unattempted("INVALID_STATE", "Worker is hibernating; wake it on the fleet before switching its agent")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("transfer", fleet["name"], window, matches[0].get("identity") or "", to,
+                                         timeout=120)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Transfer refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Transfer refused on the fleet: " + said)
+        return {"transferring": matches[0], "to": to, "window": window,
+                "how": "dispatched: the session exits and its task continues in " + to + " in the same pane; "
+                       "a rollback shows on the row and in that machine's alerts",
+                "observed_at": now()}
 
     def execute_reap(self, fleet, key):
         """worker_reap (issue #1487): dash-reap.sh --yes on the one live window

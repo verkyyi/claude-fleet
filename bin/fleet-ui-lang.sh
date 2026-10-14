@@ -787,6 +787,10 @@ fleet_ui_t() {
     en:view_act_allow_sleep)    printf 'Allow sleep' ;;
     zh:view_act_sub)            printf '换账号…' ;;
     en:view_act_sub)            printf 'Switch account…' ;;
+    # another machine's row (issue #4184): its accounts are that login's — the
+    # hub's worker_switch picks the active one there
+    zh:view_act_switch)         printf '换到可用订阅' ;;
+    en:view_act_switch)         printf 'Switch to an available subscription' ;;
     zh:view_act_agent_fmt)      printf '换成 %s' "${1:-}" ;;
     en:view_act_agent_fmt)      printf 'Switch to %s' "${1:-}" ;;
     zh:view_act_reap)           printf '回收…' ;;
@@ -935,6 +939,8 @@ fleet_ui_t() {
     en:remote_label_rename_fmt)  printf 'rename %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_reappol_fmt) printf '%s 改回收方式（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_reappol_fmt) printf 'reap policy of %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_label_agent_fmt)   printf '%s 换成 %s（在 %s）' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:remote_label_agent_fmt)   printf 'switch %s to %s (on %s)' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:remote_label_pin_on_fmt)  printf '置顶 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_pin_on_fmt)  printf 'pin %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_pin_off_fmt) printf '取消置顶 %s（在 %s）' "${1:-}" "${2:-}" ;;

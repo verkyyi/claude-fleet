@@ -35,6 +35,9 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             # worker_pin (issue #3517) puts the session at the top of its person's
             # lists: display only, a rename's authority.
             "worker_pin": "worker:message",
+            # worker_transfer (issue #4184) closes the session and continues its
+            # task in the other agent, in the same pane: a switch's authority.
+            "worker_transfer": "worker:stop",
             # orch_ensure (issue #2616): an older client's ⌘N, answered 「没有编排」
             # since issue #3118 — compat-1v: 下一批删
             "orch_ensure": "worker:start",
@@ -49,7 +52,7 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
 # dash-migrate.sh <window> to [<account>]: the same conversation resumed on the
 # fleet's active (or the named) subscription.
 WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap",
-                  "worker_switch", "worker_rename", "worker_reap_policy", "worker_pin")
+                  "worker_switch", "worker_rename", "worker_reap_policy", "worker_pin", "worker_transfer")
 # worker_switch's optional `account`: a label in the accounts dir, one argv word
 # (fleet-manual-sub.sh check's own rule).
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
@@ -654,6 +657,11 @@ def validate_write(action, params):
             fields(params, ("worker_id", "pin"))
             if params["pin"] not in ("on", "off"):
                 raise Fault("INVALID_ARGUMENT", "pin must be on or off")
+        elif action == "worker_transfer":
+            # issue #4184: the agent it continues in; the node refuses the one it runs
+            fields(params, ("worker_id", "to"))
+            if params["to"] not in ("claude", "codex"):
+                raise Fault("INVALID_ARGUMENT", "to must be claude or codex")
         elif action == "worker_switch":
             fields(params, ("worker_id",), ("account",))
             if "account" in params and not (isinstance(params["account"], str)

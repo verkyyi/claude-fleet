@@ -1377,6 +1377,18 @@ func fleetToolSpecs() []toolSpec {
 				"idempotency_key": idemProp}, "worker_id", "pin", "idempotency_key"),
 		},
 		{
+			Name:  "worker_transfer",
+			Title: "Hand a worker to the other coding agent",
+			Description: "Continue the worker's task in Claude or Codex, in the same pane and worktree " +
+				"(fleet-transfer.sh on its node): a handoff package is saved, the source exits, the other " +
+				"agent resumes the task. Refused with the node's reason when the session is mid-turn, already " +
+				"runs that agent, or the target cannot log in. Success means the cutover started. Needs " +
+				"worker:stop." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
+				"to":              map[string]any{"type": "string", "enum": []string{"claude", "codex"}},
+				"idempotency_key": idemProp}, "worker_id", "to", "idempotency_key"),
+		},
+		{
 			Name:  "config_set",
 			Title: "Set one fleet setting",
 			Description: "Compare-and-set FLEET_MAX_SESSIONS (0–256); expected_revision comes from " +

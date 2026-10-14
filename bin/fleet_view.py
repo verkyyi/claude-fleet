@@ -1662,6 +1662,19 @@ def far_name(fleet, wid):
     return wid.rsplit("/", 1)[-1]
 
 
+def far_agent(fleet, wid):
+    """A far session's agent as the hub's rows say it (global/remote_<fleet>,
+    field 7): claude · codex, '' when the row is not there (issue #4184)."""
+    try:
+        for line in (dash_global() / ("remote_" + fleet)).read_text().splitlines():
+            f = line.split(US)
+            if f[0] == "wid:" + wid and len(f) > 6:
+                return f[6].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def open_shell(qo, vid, client="", target=None, meta=None):
     r"""⌃\ (#2744's meaning, in a 看台): a SESSION's shell — a login shell on
     the machine it runs on, as its login, in the directory its agent is in right
@@ -2059,9 +2072,10 @@ def facts(fleet, e):
     t = e.get("target") or ""
     if e.get("far"):
         # another machine's: what it asks is all the panel needs to know (a
-        # permission prompt is y / n; fleet-row-remote.sh reads the rest)
+        # permission prompt is y / n; fleet-row-remote.sh reads the rest), and
+        # which agent it runs — 换 Codex / 换 Claude names the other (issue #4184)
         return {"needs": ("perm" if e.get("detail") == "perm" else "ask") if e.get("state") == "needs" else "",
-                "pin": e.get("group") == "pin"}
+                "pin": e.get("group") == "pin", "agent": far_agent(fleet, t) or "claude"}
     if not t.startswith("@"):
         return {}
     rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|#{@worker_lifecycle}|#{@sleep_keep_awake}|"
@@ -2155,6 +2169,8 @@ ACTIONS = [
      "when": lambda r: not r.get("gone") and not r.get("lost") and r.get("state") != "exited",
      "local": lambda r, a, f: "shell", "far": lambda r, a, f: "shell", "ask": None},
     {"id": "pr", "label": lambda r: say("view_act_pr_fmt", r.get("pr")), "when": lambda r: bool(r.get("pr")),
+     # far None (issue #4184): a far row carries no PR — the PR is found off the
+     # window's branch in its node's prmap; it needs an inventory column first
      "local": lambda r, a, f: sh("dash-open-pr.sh", "--wid", r["target"]), "far": None, "ask": None},
     # 消息
     {"id": "answer", "label": lambda r: say("view_act_answer"),
@@ -2184,6 +2200,9 @@ ACTIONS = [
      "when": lambda r: r.get("gone") or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
      "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
      "slow": True, "keys": "yYrR"},
+    # wake / awake far None (issue #4184): a far row carries no @worker_lifecycle
+    # nor @sleep_keep_awake, and a wake goes `--over-cap` — past THAT machine's
+    # session cap, its own capacity call, never one another machine makes for it
     {"id": "wake", "label": lambda r: say("view_act_wake"), "when": lambda r: not r.get("far") and r.get("life") == "sleeping",
      "local": lambda r, a, f: sh("fleet-sleep.sh", "wake", f, r["target"], "--over-cap"), "far": None, "ask": None,
      "slow": True},
@@ -2191,12 +2210,19 @@ ACTIONS = [
      "when": lambda r: not r.get("far") and not r.get("gone"),
      "local": lambda r, a, f: sh("fleet-sleep.sh", "allow-sleep" if r.get("keep") else "keep-awake", f, r["target"]),
      "far": None, "ask": None},
-    {"id": "sub", "label": lambda r: say("view_act_sub"), "when": lambda r: live(r) and r.get("agent") != "codex",
-     "local": lambda r, a, f: sh("dash-migrate.sh", r["target"], "to", a), "far": None, "ask": "choice",
-     "choices": sub_choices, "slow": True},
-    {"id": "agent", "label": lambda r: say("view_act_agent_fmt", other_agent(r)), "when": live,
+    # another machine's row (issue #4184): its accounts are that login's, never
+    # this machine's list — the hub's worker_switch, the active subscription there
+    {"id": "sub", "label": lambda r: say("view_act_switch" if r.get("far") else "view_act_sub"),
+     "when": lambda r: (live(r) or far_live(r)) and r.get("agent") != "codex",
+     "local": lambda r, a, f: sh("dash-migrate.sh", r["target"], "to", a), "far": far("switch"),
+     "ask": lambda r: None if r.get("far") else "choice", "choices": sub_choices, "slow": True},
+    # another machine's row (issue #4184): the hub's worker_transfer — the same
+    # fleet-transfer.sh, run on that machine, its --dry-run's refusal said here
+    {"id": "agent", "label": lambda r: say("view_act_agent_fmt", other_agent(r)),
+     "when": lambda r: live(r) or far_live(r),
      "local": lambda r, a, f: sh("fleet-transfer.sh", "--session", f, "--window", r["target"], "--to",
-                                 other_agent(r).lower()), "far": None, "ask": None, "slow": True},
+                                 other_agent(r).lower()),
+     "far": far("agent"), "ask": None, "slow": True},
     {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": far("reap"), "ask": "key",
      "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",

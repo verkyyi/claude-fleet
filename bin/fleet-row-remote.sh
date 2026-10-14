@@ -43,6 +43,14 @@
 #                             pin as the cache has it (field 30); the node sets
 #                             @pin on the window holding the worker's @fleet_id.
 #                             Toasted like a stop.
+#   agent    worker_transfer — 换 Codex / 换 Claude (issue #4184): `claude` /
+#                             `codex` from $FLEET_SIDEBAR_TEXT, else the other of
+#                             the row's agent as the cache has it (field 7); the
+#                             node checks the window still carries the worker's
+#                             @fleet_id and runs fleet-transfer.sh there — its
+#                             --dry-run refuses a mid-turn session, the agent it
+#                             already runs, a target that cannot log in, with the
+#                             reason; a plan that goes is dispatched. Toasted.
 #   answer   worker_answer  — the same: $FLEET_SIDEBAR_TEXT, or asked — a
 #                             permission prompt (`⊘`, needs=perm) takes y / n →
 #                             yes / no; a question (`?`, needs=ask) the option
@@ -166,7 +174,7 @@ if fleet_status_hub_lost "$(date +%s)"; then
     message|answer|rename|reappol)
       if [ -n "$LINE" ]; then toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")"
       else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
-    stop|resume|reap|switch|pin) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
+    stop|resume|reap|switch|pin|agent) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
   esac
   [ -n "$PRINT" ] && exit 1
   exit 0
@@ -200,6 +208,16 @@ case "$action" in
     fi
     LINE=1   # nothing to ask: toasted, as a stop is
     said worker_pin "$(json_wid pin "$how")" 30 "$(fleet_ui_t "remote_label_pin_${how}_fmt" "$name" "$node")"
+    ;;
+  agent)
+    # the agent it continues in: named, else the other of what the cache says
+    to=${FLEET_SIDEBAR_TEXT:-}
+    if [ "$to" != claude ] && [ "$to" != codex ]; then
+      cur=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $7; exit }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
+      to=codex; [ "$cur" = codex ] && to=claude
+    fi
+    LINE=1   # nothing to ask: toasted, as a stop is
+    said worker_transfer "$(json_wid to "$to")" 60 "$(fleet_ui_t remote_label_agent_fmt "$name" "$to" "$node")"
     ;;
   stop|resume|switch)
     tool=worker_$action

@@ -155,7 +155,14 @@ case " $(ids "$W5") " in *" wake "*) ;; *) fail "B: sleeping row lacks wake" ;; 
 case " $(ids "$W5") " in *" stop "*) fail "B: a sleeping row offers stop" ;; esac
 m3=$(qo view-menu --view fl@view-v1 "$W3")
 grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: $m3"
-[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+# 换账号 / 换 Codex on another machine's row (issue #4184): its hub writes; pr ·
+# wake · awake stay this machine's (no PR / lifecycle on a far row, a wake is past
+# THAT machine's cap)
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop sub agent reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
+grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || fail "B: a far row's agent item: $mf"
+grep -q $'^sub\t换到可用订阅\t$' <<< "$mf" || fail "B: a far row's sub item asks nothing, names the active pick: $mf"
+case " $(ids "$MU/far4") " in *" agent "*|*" sub "*) fail "B: a far exited row offers agent/sub: $(ids "$MU/far4")" ;; esac
 case " $(ids "$MU/far2") " in *" answer "*) ;; *) fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
 case " $(ids "$MU/far4") " in *" resume "*) ;; *) fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
 pass "B  a row's menu: done · asking · sleeping · ended (恢复) · another machine's (its hub writes)"
@@ -317,6 +324,27 @@ far far1 pin worker_pin '"pin":"on"'
 awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $30 = 1 } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
   && mv "$G/remote_fl.new" "$G/remote_fl"
 far far1 pin worker_pin '"pin":"off"'
+# 换 Codex / 换 Claude (issue #4184): the other of what the cache's field 7 says
+far far1 agent worker_transfer '"to":"codex"'
+case "$out" in *"换成 codex"*) ;; *) fail "E: the far agent outcome does not name the agent: $out" ;; esac
+awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $7 = "codex" } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
+  && mv "$G/remote_fl.new" "$G/remote_fl"
+qo view-menu --view fl@view-v1 "$MU/far1" | grep -q $'^agent\t换成 Claude' || fail "E: a far codex row does not offer Claude"
+case " $(ids "$MU/far1") " in *" sub "*) fail "E: a far codex row offers 换到可用订阅" ;; esac
+far far1 agent worker_transfer '"to":"claude"'
+awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $7 = "" } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
+  && mv "$G/remote_fl.new" "$G/remote_fl"
+# 换到可用订阅 (issue #4184): the menu's sub on a far row is the hub's worker_switch
+reset; : > "$WRITES"
+qo view-act --view fl@view-v1 "$MU/far1" sub >/dev/null 2>&1 || fail "E: a far sub failed"
+[ "$(calls)" = "fleet-row-remote.sh|switch|fl|wid:$MU/far1" ] || fail "E: a far sub ran «$(calls)»"
+[ "$(cut -f1 "$WRITES")" = worker_switch ] || fail "E: a far sub wrote «$(cat "$WRITES")»"
+# the node refuses (a mid-turn session): its words, verbatim, and a non-zero exit
+printf '{"operation_id":"op2","status":"failed","result":{"error":{"code":"INVALID_STATE","message":"Transfer refused on the fleet: transfer: the session is mid-turn; switch it once its turn is over"}}}\n' > "$FLEET_CONF_DIR/hub.answer"
+reset
+out=$(qo view-act --view fl@view-v1 "$MU/far1" agent 2>&1) && fail "E: a refused transfer exited 0: $out"
+case "$out" in *"INVALID_STATE"*"mid-turn"*) ;; *) fail "E: the transfer refusal is not shown verbatim: $out" ;; esac
+rm -f "$FLEET_CONF_DIR/hub.answer"
 far far1 stop worker_stop ''
 far far4 resume worker_resume ''
 far far2 answer worker_answer '"answer":"yes"' --text y
@@ -347,5 +375,5 @@ waitfor '▶ 停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517
 to send-keys -t o Enter
 waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
 [ "$(calls)" = "fleet-row-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
-pass "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
+pass "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
 echo "PASS fleet-view-actions-selftest"
