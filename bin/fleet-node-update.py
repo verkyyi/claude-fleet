@@ -200,6 +200,14 @@ if os.path.exists(os.path.join(HERE, "fleet_admin_seat.py")):
     admin_seat = importlib.util.module_from_spec(_aspec)
     _aspec.loader.exec_module(admin_seat)
 
+# the ONE trust rule for a release key (issue #3559): the doctor's key row asks
+# it whether the pin vouches for the signer, as the stage's verify does (#4152)
+rverify = None
+if os.path.exists(os.path.join(HERE, "fleet-release-verify.py")):
+    _vspec = importlib.util.spec_from_file_location("fleet_release_verify", os.path.join(HERE, "fleet-release-verify.py"))
+    rverify = importlib.util.module_from_spec(_vspec)
+    _vspec.loader.exec_module(rverify)
+
 env = fns.env
 env_num = fns.env_num
 read_json = fns.read_json
@@ -659,6 +667,22 @@ def skip_retry(sk, st, p):
     return None if now() >= at else at
 
 
+def vouched(p):
+    """True when the pinned key vouches for the current release's signer through
+    its manifest's key_chain, no revocation naming it — the stage's own rule
+    (fleet-release-verify.py signer_of, issue #3559). A pinned offline root and a
+    release signed by the train's key is the normal case, not a FAIL (#4152)."""
+    if rverify is None:
+        return False
+    m = read_json(os.path.join(p.current, ".release", "manifest.json"), {}) or {}
+    try:
+        anchor = rverify._pubkey(p.pubkey)
+        signer, _ = rverify.signer_of(anchor, m, known=rverify.load_revoked(p.pubkey + ".revoked")[0])
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
+        return False
+    return signer is not None
+
+
 def key_row(p, st):
     """The release key (issue #2843): FAIL when the pinned key is not the one the
     current release is signed with, or when the last fetch failed its signature
@@ -669,7 +693,7 @@ def key_row(p, st):
     pinned, signer, served = key_ids(p, hub=bool(sf))
     if not pinned:   # WARN: the next stage refuses with the same words; the rollback gate stays out of it
         return ("WARN", "key", "no pinned release key at %s — `sudo fleet node install` pins it" % p.pubkey)
-    if signer and signer != pinned:
+    if signer and signer != pinned and not vouched(p):
         return ("FAIL", "key", "pinned %s, but the current release is signed by %s" % (pinned, signer))
     if sf:
         t, f = sf
@@ -682,6 +706,8 @@ def key_row(p, st):
         # it never rolls a release back (issue #2906); a changed key stays FAIL
         return ("WARN" if torn else "FAIL", "key", "%s failed its signature check %s against pinned %s: %s"
                 % (t[:12], iso(f.get("at")), pinned, why))
+    if signer and signer != pinned:
+        return ("PASS", "key", "pinned %s · current release signed by %s, which it vouches for" % (pinned, signer))
     return ("PASS", "key", "pinned %s · current release signed by %s" % (pinned, signer or "?"))
 
 
