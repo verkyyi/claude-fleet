@@ -540,10 +540,25 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		return Access{AccessToken: s.SetupToken, Scopes: scopes, SubscriptionType: s.SubscriptionType, ExpiresAt: &exp}, nil
 	}
 
-	l := v.lock(principal, provider, account)
+	identity := v.CredentialID(*c)
+	l := v.lock(principal, provider, "\x00identity:"+identity)
 	l.Lock()
 	defer l.Unlock()
+	// Keep Put/Bind/Reject on this label serialized with its refresh too.
+	rowLock := v.lock(principal, provider, account)
+	rowLock.Lock()
+	defer rowLock.Unlock()
+
 	if v.CrossLock != nil {
+		// Serialize token aliases across replicas. Keep the old label lock too
+		// so a previous-version hub still serializes the same stored row.
+		ictx, icancel := context.WithTimeout(ctx, crossLockWait)
+		iunlock, ierr := v.CrossLock(ictx, "credential-identity/"+principal+"/"+provider+"/"+identity)
+		icancel()
+		if ierr != nil {
+			return Access{}, ierr
+		}
+		defer iunlock()
 		// The other replica may be refreshing this account right now: wait
 		// for it, then read the row it saved like any other waiter.
 		lctx, cancel := context.WithTimeout(ctx, crossLockWait)
@@ -555,10 +570,17 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		defer unlock()
 	}
 
+	if err := v.syncAlias(principal, provider, account, identity); err != nil {
+		return Access{}, err
+	}
+
 	for attempt := 0; attempt < 2; attempt++ {
 		c, err := v.Store.Credential(principal, provider, account)
 		if err != nil {
 			return Access{}, err
+		}
+		if v.CredentialID(*c) != identity {
+			return Access{}, store.ErrCredConflict
 		}
 		var cached Access
 		haveCached := len(c.AccessSealed) > 0 &&
@@ -639,6 +661,9 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 			// The refresh token has already rotated at the provider; losing
 			// the new one here would strand the account. Say so loudly.
 			return Access{}, fmt.Errorf("save refreshed credential (the rotated refresh token is lost; re-store this credential): %w", err)
+		}
+		if err := v.shareRefresh(*c, next, acc, at); err != nil {
+			return Access{}, err
 		}
 		_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredRefresh, PrincipalID: principal,
 			Provider: provider, Account: account, ExpiresAt: acc.ExpiresAt, Detail: "ok" + viaNote})

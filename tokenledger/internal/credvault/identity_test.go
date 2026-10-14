@@ -2,6 +2,7 @@ package credvault
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -51,5 +52,54 @@ func TestCredentialIdentityScopesAndRefresh(t *testing.T) {
 	v.Sealer = newer
 	if got := v.CredentialID(*c); got != a {
 		t.Fatal("vault key rotation changed identity")
+	}
+}
+
+func TestCredentialAliasRefreshShared(t *testing.T) {
+	for _, replicas := range []bool{false, true} {
+		t.Run(map[bool]string{false: "single", true: "replicas"}[replicas], func(t *testing.T) {
+			ref := &countingRefresher{ttl: 8 * time.Hour, delay: 10 * time.Millisecond}
+			v := newVault(t, ref)
+			other := v
+			if replicas {
+				other = &Vault{Store: v.Store, Sealer: v.Sealer, Refresher: ref}
+				var locks sync.Map
+				cross := func(_ context.Context, name string) (func(), error) {
+					value, _ := locks.LoadOrStore(name, &sync.Mutex{})
+					lock := value.(*sync.Mutex)
+					lock.Lock()
+					return lock.Unlock, nil
+				}
+				v.CrossLock, other.CrossLock = cross, cross
+			}
+			for _, name := range []string{"first", "second"} {
+				if err := v.Put("pool", Claude, name, Secret{RefreshToken: "fixture-shared-refresh"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var wg sync.WaitGroup
+			for name, vault := range map[string]*Vault{"first": v, "second": other} {
+				wg.Add(1)
+				go func(name string, vault *Vault) {
+					defer wg.Done()
+					if _, err := vault.Lease(context.Background(), "pool", Claude, name); err != nil {
+						t.Error(err)
+					}
+				}(name, vault)
+			}
+			wg.Wait()
+			if ref.n.Load() != 1 {
+				t.Fatalf("one token refreshed %d times through aliases", ref.n.Load())
+			}
+			if err := v.Store.DeleteCredential("pool", Claude, "first"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := other.Lease(context.Background(), "pool", Claude, "second"); err != nil {
+				t.Fatal(err)
+			}
+			if ref.n.Load() != 1 {
+				t.Fatal("deleting one alias lost the shared refresh state")
+			}
+		})
 	}
 }
