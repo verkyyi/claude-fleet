@@ -12,6 +12,8 @@
 #                                                   bin/fleet-cred-proxy.py (Router, send: route_switch)
 #   probe-ignores-relay                             bin/fleet-node-probe.sh + bin/fleet-cred-proxy.py
 #                                                   (relay-probe, Router: route relay) — issue #3364
+#   probe-stale-after-release                       bin/fleet-node-probe.sh (src, --max-age) + the agent's
+#                                                   probeDue (go test TestProbeOnce) — issue #4207
 #   cred-session-expire                             bin/fleet-cred-proxy.py (hub pass renewal, live fcp1),
 #                                                   bin/fleet-session-cred.sh (--wrap)
 #   cred-pass-lapsed                                bin/fleet-cred-proxy.py (HubPasses: a lapsed pass renewed
@@ -406,6 +408,49 @@ drill_probe_ignores_relay() {
   [ "$PRC" = 1 ] && [ "$(pj verdict)" = unsupported_region ] && [ "$(pj route)" = direct ] && [ "$(pj loc)" = CN ] && [ -z "$(pj loc_local)" ] \
     || { WHY="direct login, egress CN: wanted unsupported_region route direct loc CN, got rc $PRC $(cat "$CD/node-probe.json")"; return 1; }
   WHAT="本机出口 CN、会话走 relay → 按 relay 出口 SG 判 ok（route relay，代理先走 relay）；relay 在 HK 照关；直连登录照旧关"
+}
+
+# A release changes the probe's rule (issue #4207: #4185's central road), but the
+# verdict the old rule wrote is still fresh — a user pod's home disk keeps
+# node-probe.json across images, and the agent re-probed only a day-old file, so
+# the hub kept closing a login the new rule opens. The file names its script
+# ("src", the sha256): a reuse (--max-age) and the agent's daily probe both
+# measure again when it is not the script that runs now.
+drill_probe_stale_after_release() {
+  CAP=20
+  cred_rig psr trusted unsupported_region || return 1
+  mkdir -p "$CD/nobat" "$CD/old"; probe_curl_stub "$CD"
+  cred_serve || return 1
+  # the old release: the same script but for one line, and blind to the relay
+  { cat "$BIN/fleet-node-probe.sh"; printf '# the release before\n'; } > "$CD/old/fleet-node-probe.sh"
+  ( cred_env; env FLEET_PROBE_CURL="$CD/curl" FLEET_PROBE_OS=Linux FLEET_PROBE_BATTERY_DIR="$CD/nobat" \
+      FLEET_PROBE_RELAY_CMD="exit 3" bash "$CD/old/fleet-node-probe.sh" --quiet ) >"$CD/probe.out" 2>&1
+  [ "$(pj verdict)" = unsupported_region ] && [ "$(pj route)" = direct ] \
+    || { WHY="the old release's probe did not close it: $(cat "$CD/node-probe.json" 2>/dev/null)"; return 1; }
+  local t0 out rc gohalf
+  t0=$(now)
+  ( cred_env; env FLEET_PROBE_CURL="$CD/curl" FLEET_PROBE_OS=Linux FLEET_PROBE_BATTERY_DIR="$CD/nobat" \
+      FLEET_PROBE_RELAY_CMD="python3 -I $BIN/fleet-cred-proxy.py relay-probe" \
+      bash "$BIN/fleet-node-probe.sh" --quiet --max-age 86400 ) >"$CD/probe.out" 2>&1
+  PRC=$?
+  SECS=$(since "$t0")
+  [ "$PRC" = 0 ] && [ "$(pj verdict)" = ok ] && [ "$(pj route)" = relay ] && [ -n "$(pj src)" ] \
+    || { WHY="a fresh verdict the old release wrote was reused: wanted rc 0 verdict ok route relay with a src, got rc $PRC $(cat "$CD/node-probe.json" 2>/dev/null)"; return 1; }
+  # the agent's half: a probe another script wrote is due at once, not in a day
+  gohalf="agent half: no go toolchain here — the Go gate (tokenledger.yml) runs TestProbeOnce"
+  grep -q 'a probe another script wrote is due at once' "$ROOT/tokenledger/internal/agent/node_compute_test.go" 2>/dev/null \
+    || { WHY="the agent half's TestProbeOnce no longer pins a changed script"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestProbeOnce$' ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
+      0:*) gohalf="agent half: go test TestProbeOnce ok" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  WHAT="上一版规则写下的新鲜判定（route direct 关）不再沿用：src 不是现在的脚本 → 重测，按 relay 判 ok；$gohalf"
 }
 
 drill_cred_session_expire() {

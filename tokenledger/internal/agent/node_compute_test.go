@@ -63,9 +63,10 @@ func TestComputeLive(t *testing.T) {
 	}
 }
 
-// The daily probe: due with no file and once a day old; it runs the client
-// install's script with FLEET_CONF_DIR pointing at the probe file's dir, and a
-// fresh file is not re-probed.
+// The daily probe: due with no file, once a day old, or written by another
+// script (claude-fleet#4207); it runs the client install's script with
+// FLEET_CONF_DIR pointing at the probe file's dir, and a fresh file the same
+// script wrote is not re-probed.
 func TestProbeOnce(t *testing.T) {
 	home := t.TempDir()
 	conf := filepath.Join(home, "conf")
@@ -78,8 +79,13 @@ func TestProbeOnce(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nmkdir -p \"$FLEET_CONF_DIR\"\nprintf '{\"loc\":\"CN\",\"ts\":\"2026-10-05T00:00:00Z\",\"verdict\":\"unsupported_region\"}' > \"$FLEET_CONF_DIR/node-probe.json\"\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(bin, "fleet-node-probe.sh"), []byte(script), 0o755); err != nil {
+	// the probe writes its own sha256 as "src", as bin/fleet-node-probe.sh does
+	probe := func(loc string) string {
+		return "#!/bin/sh\nmkdir -p \"$FLEET_CONF_DIR\"\nsrc=$( (sha256sum \"$0\" 2>/dev/null || shasum -a 256 \"$0\") | cut -d' ' -f1)\n" +
+			"printf '{\"loc\":\"" + loc + "\",\"src\":\"%s\",\"ts\":\"2026-10-05T00:00:00Z\",\"verdict\":\"unsupported_region\"}' \"$src\" > \"$FLEET_CONF_DIR/node-probe.json\"\nexit 1\n"
+	}
+	scriptf := filepath.Join(bin, "fleet-node-probe.sh")
+	if err := os.WriteFile(scriptf, []byte(probe("CN")), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if !a.probeOnce(context.Background(), time.Now()) {
@@ -93,6 +99,27 @@ func TestProbeOnce(t *testing.T) {
 	}
 	if !a.probeOnce(context.Background(), time.Now().Add(25*time.Hour)) {
 		t.Fatal("a day-old probe is due again")
+	}
+	// claude-fleet#4207: a release changed the rule — the fresh verdict the
+	// old script wrote is due at once, not a day later
+	if err := os.WriteFile(scriptf, []byte(probe("SG")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !a.probeOnce(context.Background(), time.Now()) {
+		t.Fatal("a probe another script wrote is due at once")
+	}
+	if p := a.nodeProbe(); p == nil || p.Loc != "SG" {
+		t.Fatalf("probe after the new script ran: %+v", p)
+	}
+	if a.probeOnce(context.Background(), time.Now()) {
+		t.Fatal("the new script's fresh probe is not re-probed")
+	}
+	// a file from before src existed (no "src") is due too
+	if err := os.WriteFile(probef, []byte(`{"loc":"CN","verdict":"unsupported_region"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !a.probeOnce(context.Background(), time.Now()) {
+		t.Fatal("a probe file with no src is due at once")
 	}
 }
 
