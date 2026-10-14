@@ -5370,7 +5370,7 @@ drill_home_template_leak() {
 drill_spare_recycle_dirty() {
   CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
   t0=$(now)
-  grep -q 'recycleLeftovers(\*a, now)' "$f" \
+  grep -Eq 'recycleLeftovers(As)?\(\*a, now' "$f" \
     || { WHY="applyReset no longer checks the hub's half before recording the spare"; return 1; }
   grep -q 'case res.Reset != control.ResetClean:' "$f" \
     || { WHY="applyReset no longer refuses a wash that did not say reset: clean"; return 1; }
