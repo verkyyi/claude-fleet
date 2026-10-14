@@ -430,10 +430,11 @@ PY
 # new login's every mint was «this login has not joined this machine's
 # credential proxy». Now `machine status` names it NOT SERVED, and the daemon's
 # next start sees the holder is stale (another set of logins), stops it and
-# serves everyone — the old login's credential still answers.
+# serves everyone — the old login's credential still answers. `served` (the
+# heartbeat's cred_served, issue #4247) says no for beta, then yes.
 drill_spare_not_tenant() {
   CAP=15   # the daemon loop's 1 s + a SIGTERM + a python start + the first mint
-  local sb me uid gid port ta tb pid1 pid2 t0 sup out
+  local sb me uid gid port ta tb pid1 pid2 t0 sup out rc
   me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/spare"
   mkdir -p "$sb/daemons"
   cred_rig spare trusted reachable || return 1
@@ -470,6 +471,11 @@ drill_spare_not_tenant() {
   out=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
   case "$out" in *"NOT SERVED: beta"*) ;;
     *) WHY="machine status does not say beta is not served: $out"; spare_down; return 1 ;; esac
+  # what the heartbeat carries (issue #4247): cred_served false for beta, true for alpha
+  bash "$BIN/fleet-credsep.sh" served --login beta >"$sb/served-beta.out" 2>&1; rc=$?
+  [ "$rc" = 3 ] || { WHY="served for beta (unserved) = exit $rc: $(cat "$sb/served-beta.out")"; spare_down; return 1; }
+  bash "$BIN/fleet-credsep.sh" served --login alpha >"$sb/served-alpha.out" 2>&1; rc=$?
+  [ "$rc" = 0 ] || { WHY="served for alpha = exit $rc: $(cat "$sb/served-alpha.out")"; spare_down; return 1; }
   # the machine daemon's part: start it again (it lost the orphan, so it starts its own)
   t0=$(now)
   ( while :; do python3 -I "$sb/lib/fleet-credsep-launch.py" shared 2>>"$sb/shared.err"; sleep 1; done ) 2>/dev/null &
@@ -485,6 +491,8 @@ drill_spare_not_tenant() {
   [ "$(cred_req "$ta" "$sb/ra")" = 200 ] || { WHY="alpha's old credential after the takeover: $(cat "$sb/ra")"; spare_down; return 1; }
   out=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
   case "$out" in *"NOT SERVED"*) WHY="still not served after the takeover: $out"; spare_down; return 1 ;; esac
+  bash "$BIN/fleet-credsep.sh" served --login beta >"$sb/served-beta.out" 2>&1; rc=$?
+  [ "$rc" = 0 ] || { WHY="served for beta after the takeover = exit $rc: $(cat "$sb/served-beta.out")"; spare_down; return 1; }
   pid2=$(cat "$sb/run/.shared/pid")
   sleep 2   # the loop's next starts: the holder is current now, they leave it
   [ "$(cat "$sb/run/.shared/pid")" = "$pid2" ] && [ "$(grep -c 'took over' "$sb/shared.err")" = 1 ] \
