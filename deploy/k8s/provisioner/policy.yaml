@@ -18,7 +18,7 @@
 #                no token, account fleet-user (Deployment) / fleet-job (Job),
 #                every image by digest, no privilege, no escalation, ALL caps
 #                dropped; a person's pod is root only in `sshd` (its login step:
-#                CHOWN SETUID SETGID SYS_CHROOT KILL) and the `egress-guard` init
+#                CHOWN SETUID SETGID SYS_CHROOT KILL AUDIT_WRITE) and the `egress-guard` init
 #                (NET_ADMIN NET_RAW), every other container runAsNonRoot, not
 #                uid 0, adding nothing (#3757); a Job adds none, runs non-root
 #                on a read-only root, mounts no disk and no Secret
@@ -58,7 +58,7 @@ spec:
     - name: containers
       expression: "variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"
     - name: sshdCaps
-      expression: "['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL']"
+      expression: "['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL', 'AUDIT_WRITE']"
     - name: guardCaps
       expression: "['NET_ADMIN', 'NET_RAW']"
     # a service run's Job (claude-fleet#4005) and the name its labels give it

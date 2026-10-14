@@ -619,7 +619,7 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(sc['capabilities'], {'drop': ['ALL']})
         self.assertNotIn('ports', c)
         self.assertEqual(sshd['securityContext']['capabilities']['add'],
-                         ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL'])
+                         ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL', 'AUDIT_WRITE'])
         self.assertEqual([x['containerPort'] for x in sshd['ports']], [2222])
         self.assertEqual(pod['securityContext']['fsGroup'], 10002)
         self.assertNotIn('shareProcessNamespace', pod)

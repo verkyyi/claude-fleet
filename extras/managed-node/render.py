@@ -498,7 +498,7 @@ def _user_pod_container_resources(limits):
 # No shared process namespace: `ps` in fleet shows the login alone, in sshd root
 # and the login it switched to.
 POD_SSHD_PORT = 2222
-POD_SSHD_CAPS = ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL']
+POD_SSHD_CAPS = ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL', 'AUDIT_WRITE']
 POD_ETC_UID = 65534
 POD_UID_RANGE = (1000, 60000)
 POD_LOGIN_RE = r'(?=[a-z0-9]*[a-z])[a-z0-9]{2,16}'

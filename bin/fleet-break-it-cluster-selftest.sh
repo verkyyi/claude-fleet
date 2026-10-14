@@ -21,6 +21,8 @@
 #   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
 #                            tokenledger/internal/api/fleet_jobs.go
+#   pod-sshd-tty-audit       extras/managed-node/render.py + bin/fleet-provisioner.py +
+#                            deploy/k8s/provisioner/policy.yaml (issue #4167)
 #   mirror-private-unlisted  extras/managed-node/render.py (private_mirrors, --mirror-grant) +
 #                            bin/fleet-provisioner.py + bin/fleet-node-linux.py devnet (issue #4002)
 #   svc-run-sees-keys        extras/managed-node/render.py (svc_run_resources) + bin/fleet-provisioner.py +
@@ -387,7 +389,7 @@ PY
 
 # root-in-user-pod (#3757): a person's pod with root anywhere but sshd's login
 # step. The template: the fleet container runs as the pod's one login (non-root,
-# ALL dropped, nothing added), sshd adds only its five, the pod-etc init is
+# ALL dropped, nothing added), sshd adds only its six, the pod-etc init is
 # neither root nor the login; a user pod with no login is not rendered at all.
 # The provisioner's guard refuses each way back to root. pod-etc writes the
 # login's passwd line from the image's own (never a second uid 0, never root's
@@ -415,7 +417,7 @@ if ps.get("shareProcessNamespace"):
 names = sorted(c["name"] for c in ps["containers"])
 if names != ["fleet", "sshd"]:
     bad.append("containers %s, not fleet + sshd" % names)
-SSHD = {"CHOWN", "SETUID", "SETGID", "SYS_CHROOT", "KILL"}
+SSHD = {"CHOWN", "SETUID", "SETGID", "SYS_CHROOT", "KILL", "AUDIT_WRITE"}
 for c in ps["containers"] + ps.get("initContainers", []):
     sc = c.get("securityContext") or {}
     add = set((sc.get("capabilities") or {}).get("add") or [])
@@ -470,7 +472,49 @@ PY
   done
   [ ! -e "$d/bad/passwd" ] || { WHY="a refused pod-etc left a passwd behind"; return 1; }
   SECS=$(since "$t0")
-  WHAT="用户 pod 模板：fleet 容器以登录的 UID 跑（非 root、drop ALL、不加能力），sshd 只加 CHOWN SETUID SETGID SYS_CHROOT KILL，pod-etc 既不是 root 也不是登录；没给登录不渲染；执行器拒 root 的 fleet · 关掉 runAsNonRoot · fleet 加能力 · sshd 加 DAC_OVERRIDE · 多一个 root 容器；pod-etc 只加该登录一行，拒 root 名 / uid 0 / 系统号"
+  WHAT="用户 pod 模板：fleet 容器以登录的 UID 跑（非 root、drop ALL、不加能力），sshd 只加 CHOWN SETUID SETGID SYS_CHROOT KILL AUDIT_WRITE，pod-etc 既不是 root 也不是登录；没给登录不渲染；执行器拒 root 的 fleet · 关掉 runAsNonRoot · fleet 加能力 · sshd 加 DAC_OVERRIDE · 多一个 root 容器；pod-etc 只加该登录一行，拒 root 名 / uid 0 / 系统号"
+}
+
+# pod-sshd-tty-audit (#4167): a person's pod's sshd lets a key in and then drops
+# every login that asks for a terminal — the bare `fleet` thin client, `ssh -t`.
+# Debian's OpenSSH records a pty login through Linux audit and a failed audit
+# write is fatal (`linux_audit_write_entry failed: Operation not permitted`), so
+# sshd needs AUDIT_WRITE; a command with no terminal records nothing and worked,
+# which is why it hid. The rendered pod's sshd carries it, and the three places
+# that say what sshd may add — render.POD_SSHD_CAPS, the provisioner's
+# ROOT_CAPS['sshd'] and the admission policy's sshdCaps — say the same list, so
+# neither guard refuses the pod that has it. The kind half logs in with `-tt`.
+drill_pod_sshd_tty_audit() {
+  CAP=20
+  local t0 why
+  t0=$(now)
+  why=$(python3 - "$BIN" "$D64" "$ROOT/deploy/k8s/provisioner/policy.yaml" <<'PY2'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("p", sys.argv[1] + "/fleet-provisioner.py")
+p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
+r = p.render()
+objs = r.user_pod_resources("x@sha256:" + sys.argv[2], "https://hub.example.com", "csi", "u-drill1",
+                            login="drill1", uid=10002,
+                            cred_central="http://fleet-credproxy.fleet-workers.svc.cluster.local")
+dep = [o for o in objs if o["kind"] == "Deployment"][0]
+sd = [c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "sshd"][0]
+add = set(sd["securityContext"]["capabilities"].get("add") or [])
+bad = []
+if "AUDIT_WRITE" not in add:
+    bad.append("the pod's sshd lacks AUDIT_WRITE (adds %s): a terminal login is dropped" % sorted(add))
+m = re.search(r"name: sshdCaps\n\s*expression: \"\[([^\]]*)\]\"", open(sys.argv[3]).read())
+pol = set(re.findall(r"'([A-Z_]+)'", m.group(1))) if m else None
+if set(r.POD_SSHD_CAPS) != p.ROOT_CAPS["sshd"] or pol != p.ROOT_CAPS["sshd"]:
+    bad.append("sshd's caps disagree: render %s · provisioner %s · policy %s"
+               % (sorted(r.POD_SSHD_CAPS), sorted(p.ROOT_CAPS["sshd"]), sorted(pol or [])))
+if p.off_template(dep, "fleet-workers") is not None:
+    bad.append("the provisioner refuses the pod: %s" % p.off_template(dep, "fleet-workers"))
+print("; ".join(bad))
+PY2
+) || { WHY="sshd caps check crashed: $why"; return 1; }
+  [ -z "$why" ] || { WHY="$why"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="个人 pod 的 sshd 带 AUDIT_WRITE（Debian 的 OpenSSH 分配 pty 时写审计，写不了就断）；渲染 · 执行器 ROOT_CAPS · 准入 sshdCaps 三处同一张表，执行器不拒带它的 pod；kind 一半用 -tt 真登一次"
 }
 
 # job-sees-keys (#3552, C7): a throwaway Job — the code it runs may be anyone's —

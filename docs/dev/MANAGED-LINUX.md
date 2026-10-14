@@ -606,7 +606,7 @@ logged in).
 | `egress-guard` (init) | root, NET_ADMIN · NET_RAW | the egress guard's rules, once («Egress guard»), then gone |
 | `pod-etc` (init) | 65534 — neither root nor the login | `fleet-node-linux.py pod-etc` from the IMAGE's seed: `/etc/passwd` and `/etc/group` as the image has them plus the login's one line (`<login>:*:<uid>:<uid>::/home/<login>:/bin/zsh`), `/etc/gitconfig` and `/etc/fleet-devnet.env` («Dev network»), sshd's whole config — into an emptyDir both containers mount **read-only**, file by file. A name or number the image already has (root's, sshd's) is refused before a byte is written |
 | `fleet` | the login's UID, `runAsNonRoot`, ALL dropped, nothing added, `no_new_privs` | the node: supervisor, node program, the login's own credential proxy, tmux, every session |
-| `sshd` | root, only CHOWN · SETUID · SETGID · SYS_CHROOT · KILL | `sshd -D -f` pod-etc's config: port 2222 (the Service's 22 maps to it — no NET_BIND_SERVICE), a host key made at each start (the door never pins one), `UsePAM no`, `PermitRootLogin no`, `AllowUsers <login>`, the door's key alone, then `fleet-entry.sh`. What the person runs over ssh (the 看台, a shell, scp) runs here as the login: it mounts the home and `/tmp` (tmux's sockets) of the `fleet` container, the runtime read-only |
+| `sshd` | root, only CHOWN · SETUID · SETGID · SYS_CHROOT · KILL · AUDIT_WRITE (Debian's OpenSSH records a pty login through Linux audit and drops the session when the write fails — #4167) | `sshd -D -f` pod-etc's config: port 2222 (the Service's 22 maps to it — no NET_BIND_SERVICE), a host key made at each start (the door never pins one), `UsePAM no`, `PermitRootLogin no`, `AllowUsers <login>`, the door's key alone, then `fleet-entry.sh`. What the person runs over ssh (the 看台, a shell, scp) runs here as the login: it mounts the home and `/tmp` (tmux's sockets) of the `fleet` container, the runtime read-only |
 
 No shared process namespace. The pod's `fsGroup` is the login's: the kubelet hands
 the disk over in its group (`OnRootMismatch`).
@@ -791,7 +791,7 @@ CI git mirror only.
 
 A person's pod is root only in sshd's login step (#3757, «Run as the person»): the
 policy and `off_template` let only a container named `sshd` (CHOWN · SETUID ·
-SETGID · SYS_CHROOT · KILL) and the `egress-guard` init (NET_ADMIN · NET_RAW) add a
+SETGID · SYS_CHROOT · KILL · AUDIT_WRITE) and the `egress-guard` init (NET_ADMIN · NET_RAW) add a
 capability, and every other container of a Deployment must say `runAsNonRoot` and
 a `runAsUser` that is not 0.
 
