@@ -42,3 +42,4 @@ zh	en	note
 诊断包	diagnostic bundle	what `fleet debug report` sends
 反馈号	feedback number	F<n>, from /fleet-feedback
 上下文	context	the model's context window
+等合并 / 等发版	waiting to merge / ship	a finished session whose pull request is not merged or not live yet
