@@ -14,7 +14,7 @@ H="$WORK/home"; CONF="$H/.config/claude-fleet"; LOG="$WORK/calls.log"
 mkdir -p "$WORK/shim" "$WORK/daemons" "$WORK/units"
 export FLEET_CONF_DIR="$CONF" FLEET_LEAVE_HOME="$H" FLEET_LEAVE_DAEMON_DIR="$WORK/daemons" \
   FLEET_LEAVE_UNIT_DIR="$WORK/units" FLEET_HUB_CURL="$WORK/shim/curl" FLEET_JOIN_SUDO="$WORK/shim/sudo" \
-  FAKE_LOG="$LOG" PATH="$WORK/shim:$PATH"
+  FAKE_LOG="$LOG" FLEET_SIDEFX_LOG="$LOG" PATH="$WORK/shim:$PATH"
 ME=$(id -un)
 
 # curl: logs its argv and its stdin; answers FAKE_CODE (200) with FAKE_BODY,
@@ -75,14 +75,19 @@ lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
 assert lines[0].startswith('curl'), lines
 PY
 
-# C — a detached agent (agent.pid) is killed and its pid file removed.
+# C — a detached agent (agent.pid): its kill is RECORDED, never sent — the home
+# is a sandbox, the pid a real process (issue #4213, bin/fleet_sidefx.py) — and
+# its pid file removed. B's two bootouts above are records too: the launchctl
+# shim is never reached from a sandbox home.
 fixture; rm -f "$H/Library/LaunchAgents/com.ccquota.agent.plist" "$WORK/daemons/"*
 sleep 300 & SPID=$!
 echo "$SPID" > "$H/.ccquota/agent.pid"
 leave
 [ "$RC" = 0 ] || fail "C: exit $RC"
 sleep 0.2
-kill -0 "$SPID" 2>/dev/null && { kill "$SPID"; fail 'C: the detached agent still runs'; }
+kill -0 "$SPID" 2>/dev/null || fail 'C: a sandbox home signalled a real process'
+kill "$SPID" 2>/dev/null
+has "$LOG" "kill $SPID" 'C: the kill was not recorded'
 [ ! -e "$H/.ccquota/agent.pid" ] || fail 'C: agent.pid stayed'
 
 # D — Linux: the systemd user unit is disabled and removed.
