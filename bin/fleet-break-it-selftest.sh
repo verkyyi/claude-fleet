@@ -5323,9 +5323,15 @@ drill_stale_admin_opens_login() {
 # The two login-remove drills read ONE run of its selftest (~20 s): the second
 # drill reuses the first's verdict instead of running it again.
 LOGIN_REMOVE_ST=''
+# The whole selftest (~30 runs of the script, 50-60 s on a CI Mac) runs once and is
+# shared by every drill that asks; it is no drill's recovery, so the caller's
+# clock (its dynamically scoped `t0`) is moved past it — the first drill of a part
+# used to pay it all against its 60 s cap (#4232). Each leg bounds its own time.
 _login_remove_selftest() {
   [ -n "$LOGIN_REMOVE_ST" ] || {
+    local _s; _s=$(now)
     if LOGIN_REMOVE_ST_OUT=$(bash "$ROOT/bin/fleet-login-remove-selftest.sh" 2>&1); then LOGIN_REMOVE_ST=ok; else LOGIN_REMOVE_ST=red; fi
+    t0=$(python3 -c 'import sys, time; print("%.3f" % (float(sys.argv[1]) + time.time() - float(sys.argv[2])))' "$t0" "$_s")
   }
   [ "$LOGIN_REMOVE_ST" = ok ]
 }
@@ -5473,8 +5479,13 @@ drill_login_remove_respawn_hang() {
     || { WHY="fleet-login-remove.sh runs sysadminctl -deleteUser with no time limit"; return 1; }
   _login_remove_selftest \
     || { WHY="fleet-login-remove-selftest.sh is red (its respawn / deleteUser-hang legs): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  # the recovery is the two legs' own runs: respawn quieted, hanging deleteUser cut off
+  local rs hs
+  rs=$(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | sed -n 's/^leg respawn \([0-9]*\)s$/\1/p')
+  hs=$(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | sed -n 's/^leg delete-hang \([0-9]*\)s$/\1/p')
+  [ -n "$rs" ] && [ -n "$hs" ] || { WHY="fleet-login-remove-selftest.sh no longer times its respawn / deleteUser-hang legs"; return 1; }
   WHAT='pkill 之后 distnoted 被 launchd 拉回 → 先 bootout user/gui 域再杀、删号不挂；deleteUser 挂住 → 到时限杀掉（真跑 shim 化的 remove）'
-  SECS=$(since "$t0")
+  SECS=$(python3 -c 'import sys; print("%.1f" % (float(sys.argv[1]) + float(sys.argv[2]) + float(sys.argv[3])))' "$(since "$t0")" "$rs" "$hs")
 }
 
 # ---- newcomer-login-no-gh (#2953): a login the hub opened for a newcomer has
@@ -5955,7 +5966,10 @@ sp_start() {   # <session> — a fresh worker window; sets SPW / SPP
   nt -f /dev/null new-session -d -s "$1" -n issue-7 -x 100 -y 30 "printf 'working on it\n'; exec sleep 600" || return 1
   SPW=$(nt display-message -p -t "$1:issue-7" '#{window_id}'); SPP=$(nt display-message -p -t "$SPW" '#{pane_id}')
   nt set-option -w -t "$SPW" @issue 7 \; set-option -w -t "$SPW" @cc_agent claude
+  # the classifier reads the screen: wait for the line, an empty capture is skipped
+  until_ok 5 sp_drawn || return 1
 }
+sp_drawn() { nt capture-pane -p -t "$SPP" 2>/dev/null | grep -q 'working on it'; }
 sp_state() { printf '%s/%s/%s' "$(o "$SPW" @claude_state)" "$(o "$SPW" @claude_needs)" "$(o "$SPW" @claude_state_src)"; }
 sp_say() {   # <state> [kind] [words] — the agent's OSC 7501, read off its output
   local m=''; [ -n "${3:-}" ] && m=":msg=$(printf '%s' "$3" | base64 | tr -d '\n')"
@@ -5978,6 +5992,9 @@ drill_status_agent_not_up() {
   st=$(sp_state)
   [ "$st" = working//hook ] || { WHY="with no live 7501 report the prompt's hook did not land: [$st] — the window reads unknown"; return 1; }
   nt set-option -wu -t "$SPW" @agent_status \; set-option -wu -t "$SPW" @agent_status_ts \; set-option -w -t "$SPW" @claude_state 'done'
+  # its unchanged-screen hash lives under $BIN/../logs, which a rerun of this part
+  # shares: the same window id + screen from the last run would read «seen» (#4232)
+  rm -f "$BIN/../logs/.classify-cache/$(printf '%s' "$SPW" | tr '/:@' '___').hash"
   sp_env bash "$BIN/classify-sessions.sh" --window "$SPW"
   [ -f "$WORK/sp-claude-calls" ] || { WHY="the screen classifier was skipped although the agent never spoke"; return 1; }
   sp_env python3 "$BIN/fleet-state-reconcile.py" --registry "$WORK/spreg" --cache-dir "$WORK/spcache" \

@@ -24,6 +24,9 @@
 #   J. diskguard      fleet-diskguard.sh --watch's macos_watch drives it for a repo
 #                     carrying both gate files, files + alerts, spawns nobody; a
 #                     repo without them is never read; the dispatch shell is inert
+#   L. one key    (issue #4232) the same red test on a NEWER stable files under the
+#                     same key (the filer comments 「同一故障」 on the open one); a
+#                     different red test is another key; no test read ⇒ the shards
 #   K. held back      (issue #3869) the red streak began > FLEET_MACOS_STALE_SECS
 #                     ago ⇒ ONE more alert «every Mac … previous version»; the next
 #                     tick in the same streak says nothing; green forgets it. The
@@ -50,7 +53,7 @@ cat > "$WORK/shim/gh" <<SH
 case "\$*" in
   *actions/workflows/*) cat "$WORK/runs" ;;
   *actions/runs/*/jobs*) id=\${2#*actions/runs/}; id=\${id%%/*}; cat "$WORK/jobs.\$id" 2>/dev/null ;;
-  'run view'*) cat "$WORK/log" 2>/dev/null ;;
+  *actions/jobs/*/logs*) cat "$WORK/log" 2>/dev/null ;;   # REST: run view --log-failed printed nothing (#4232)
 esac
 SH
 cat > "$WORK/filer" <<SH
@@ -109,7 +112,7 @@ reset; red_runs
 run --now --session fleet
 eq "B: red exits 0" 0 "$RC"; contains "B: says filed" "$OUT" "filed	30	https://github.com/o/r/issues/4242"
 F=$(filed)
-contains "B: filed with --breakage" "$F" "--breakage --repo o/r"
+contains "B: filed under the red test's key, no commit in it (#4232)" "$F" "--breakage-key macos-dash-marker-selftest --repo o/r"
 contains "B: title names the test" "$F" "macOS 检查红了、Mac 停在上一版：dash-marker-selftest.sh"
 lacks "B: a bare 'FAIL: a thing' line is not a test name" "$F" "红了：a,"
 contains "B: title names the job" "$F" "（macOS / shard 2）"
@@ -187,7 +190,7 @@ env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
   FLEET_MACOS_FILE_CMD="$WORK/filer" FLEET_MACOS_ALERT_CMD="$WORK/alert" bash "$WORK/dg.sh" >/dev/null 2>&1
 i=0; while [ "$i" -lt 100 ] && ! grep -q 'filed' "$WORK/dg/macos-watch.log" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
 contains "J: diskguard's tick ran the watcher on the gated repo" "$(cat "$WORK/dg/macos-watch.log" 2>/dev/null)" "fleet o/r filed	30"
-contains "J: filed with --breakage" "$(filed)" "--breakage --repo o/r"
+contains "J: filed with --breakage-key" "$(filed)" "--breakage-key macos-dash-marker-selftest --repo o/r"
 eq "J: a repo without the gate files is never read" 1 "$(filed | grep -c -e '--breakage')"
 contains "J: alerted on the fleet" "$(alerted)" "event -L fleet breakage"
 eq "J: nobody spawned" no "$(spawned)"
@@ -214,5 +217,19 @@ lacks "K: within the window nothing is said" "$OUT" "stale	"
 run --now
 eq "K: green forgets the held-back mark" no "$([ -e "$WORK/conf/global/macos-watch/o-r.stale" ] && echo yes || echo no)"
 contains "K: the watched workflow is mac-follow.yml" "$(cat "$W")" 'FLEET_MACOS_WORKFLOW:-mac-follow.yml'
+
+# --- L. one issue per red test, whatever the commit (#4232) ------------------------------
+key() { sed -n 's/.*--breakage-key \([^ ]*\) .*/\1/p' "$WORK/filed" | tail -1; }
+reset; red_runs; run --now; k1=$(key)
+reset; { row 71 4444444ddddddd failure push; row 70 5555555eeeeeee success push; } > "$WORK/runs"; jobs 71 red; jobs 70 green
+run --now
+eq "L: a newer stable, same red test ⇒ the same key" "$k1" "$(key)"
+cp "$WORK/log" "$WORK/log.keep"
+printf 'x FAIL  fleet-break-it-7-selftest.sh 347.6s (exit 1)\nx TIMEOUT  b-selftest.sh\nx FAIL  fleet-break-it-7-selftest.sh\n' > "$WORK/log"
+reset; red_runs; run --now
+eq "L: another red test set ⇒ its own key, sorted, deduped" "macos-b-selftest_fleet-break-it-7-selftest" "$(key)"
+: > "$WORK/log"; reset; red_runs; run --now
+eq "L: no test read ⇒ keyed on the red shards" "macos-macOS-shard-2" "$(key)"
+mv "$WORK/log.keep" "$WORK/log"
 
 printf 'fleet-macos-watch-selftest OK (%d checks)\n' "$CHECKS"
