@@ -212,7 +212,9 @@ Seams (sandbox tests, docs/dev/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_WATCHDOG_SECS (300)  a loop that has not come round this long logs the
                         phase it is stuck in, dumps its stacks and exits 70 for launchd
                         to restart it (0 = off); FLEET_NODE_WATCHDOG_SWEEP_SECS (900)
-                        for a pass that sweeps (#3079, #3086)
+                        for a pass that sweeps (#3079, #3086) — and for its stop too:
+                        FLEET_NODE_STOP_SECS (30) a task still running that long after
+                        the stop's TERM is left to run, never waited on (#4144)
   SIGUSR1               `sudo kill -USR1 <pid>` writes every thread's Python stack into
                         supervisor.log and the loop goes on (#3084)
   FLEET_NODE_FDA_TIMEOUT (20)  the Full Disk Access probe (a child) is killed past this
@@ -1513,7 +1515,42 @@ def want_stamp(path):
         return 0
 
 
+def login_groups(login, gid):
+    """<login>'s groups, <gid> first, at most the kernel's NGROUPS_MAX — looked up
+    in the PARENT, before any fork (demote_kw)."""
+    try:
+        gs = os.getgrouplist(login, gid)
+    except OSError:
+        gs = []
+    out = [gid] + [g for g in gs if g != gid]
+    try:
+        cap = os.sysconf("SC_NGROUPS_MAX")
+    except (OSError, ValueError):
+        cap = 16
+    return out[:max(1, cap)]
+
+
+def demote_kw(login, uid, gid, home, cwd=None):
+    """Popen kwargs that run a child as <login> (issue #4144): user / group /
+    extra_groups, applied by _posixsubprocess in C between fork and exec — no
+    Python and no directory lookup in the child. A preexec_fn running demote() called
+    initgroups() there, and a fork from a threaded parent (the root core serves a
+    thread per connection, this daemon has its watchdog) can copy libinfo's cache
+    lock held by another thread: on 2026-10-14 a managed Mac's core forked an exec-as
+    whose child waited on that lock for good — Popen() waits for the exec, no
+    timeout covers it, the updater never returned, and this daemon's stop waited
+    on the updater for 111 minutes. The groups are looked up here, before the fork."""
+    if cwd is None:
+        cwd = home if home and os.path.isdir(home) else "/"
+    kw = {"cwd": cwd}
+    if os.geteuid() == 0:
+        kw.update(user=uid, group=gid, extra_groups=login_groups(login, gid))
+    return kw
+
+
 def demote(login, uid, gid, home):
+    """The in-process form: demote THIS process (a child that is about to exec
+    on its own). Never as a Popen preexec_fn — demote_kw is that (issue #4144)."""
     def f():
         if os.geteuid() == 0:
             os.initgroups(login, gid)
@@ -2145,7 +2182,7 @@ class Supervisor(object):
                 e = dict(e, **service_creds(self.p, ent)[0])
             return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=fh, env=e, start_new_session=True, close_fds=True,
-                                    preexec_fn=demote(ent["account"], ent["uid"], ent["gid"], ent["home"]))
+                                    **demote_kw(ent["account"], ent["uid"], ent["gid"], ent["home"]))
         return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                 env=self.child_env(extra_env), start_new_session=True, close_fds=True)
 
@@ -2684,6 +2721,8 @@ class Supervisor(object):
         return False
 
     def reap_tasks(self, wait=False):
+        """wait: False — only the finished ones; True — every one, however long;
+        a timestamp — every one that ends before it."""
         t = now()
         for name, (p, lf, t0, fh, tk) in list(self.running.items()):
             rc = p.poll()
@@ -2706,7 +2745,15 @@ class Supervisor(object):
             elif rc is None:
                 if not wait:
                     continue
-                rc = p.wait()
+                if wait is not True:
+                    # a deadline (the stop, #4144): one still running past it stays
+                    # in self.running — state.json keeps it «running» with its pid
+                    try:
+                        rc = p.wait(timeout=max(0.0, wait - now()))
+                    except subprocess.TimeoutExpired:
+                        continue
+                else:
+                    rc = p.wait()
                 result = None
             else:
                 result = None
@@ -3273,8 +3320,17 @@ class Supervisor(object):
             self.save()
             self.at("sleep")
             time.sleep(tick)
-        self.deadline = None
-        faulthandler.cancel_dump_traceback_later()
+        # The stop is bounded and watched too (issue #4144): on 2026-10-14 a managed Mac's
+        # stop waited 111 minutes on an updater that never returned — the watchdog
+        # was already off, the children already stopped, nothing came back. A task
+        # still running past FLEET_NODE_STOP_SECS is left to run: state.json keeps
+        # its pid, and the next daemon books it as an orphan (#3671), never a
+        # second copy beside it.
+        stop_secs = env_num("FLEET_NODE_STOP_SECS", 30)
+        self.at("stopping")
+        if wd > 0:
+            self.deadline = now() + stop_secs + wd
+            faulthandler.dump_traceback_later(stop_secs + wd + 60, exit=True, file=sys.stderr)
         self.log("supervisor stopping")
         self.stop_children()
         for name, (p, lf, t0, fh, tk) in list(self.running.items()):
@@ -3282,10 +3338,15 @@ class Supervisor(object):
                 os.killpg(p.pid, signal.SIGTERM)
             except OSError:
                 pass
-        self.reap_tasks(wait=True)
+        self.reap_tasks(wait=now() + stop_secs)
+        for name, (p, lf, t0, fh, tk) in list(self.running.items()):
+            self.log("task %s pid %d still running %ds after the stop — left to run; the next daemon books it"
+                     % (name, p.pid, stop_secs))
         for key in list(self.agent_running):
             self.reap_agent(key, self.state["agent_tasks"][key], self.agent_running[key][2], now(), wait=True)
         self.save(force=True)
+        self.deadline = None
+        faulthandler.cancel_dump_traceback_later()
         return 0
 
     def on_signal(self, signum, frame):
@@ -4332,7 +4393,7 @@ def account_rejoin(paths, login, ident, dry=False):
         try:
             r = subprocess.run([sys.executable, "-I", lpy, "node-pass", "--hub", hub, "--out", out],
                                env=cenv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               preexec_fn=demote(login, uid, gid, home), timeout=120)
+                               timeout=120, **demote_kw(login, uid, gid, home))
         except (OSError, subprocess.SubprocessError) as e:
             say("node-pass did not run: %s" % e)
             return 1

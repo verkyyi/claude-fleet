@@ -21,6 +21,13 @@
 #   node-supervisor-wedged bin/fleet-node-supervisor.py's watchdog (#3079, #3086): the
 #                         loop stops coming round (a blocking open()) — it names the
 #                         phase, dumps its stack, records it and exits; launchd brings it back
+#   node-supervisor-stop-hang bin/fleet-node-supervisor.py run's stop + reap_tasks (#4144):
+#                         a task deaf to the stop's TERM held the daemon in its stop for
+#                         good, the watchdog already off — bounded and watched now
+#   node-demote-in-forked-child bin/fleet-node-supervisor.py demote_kw + its callers in
+#                         fleet-node-core.py / fleet-node-update.py / fleet-node-linux.py /
+#                         fleet-ci-runner.py (#4144): initgroups() in a child forked from a
+#                         threaded parent waited on libinfo's lock for good
 #   node-fda-probe-hang   bin/fleet-node-supervisor.py's FDA probe (#3086): the open() of
 #                         TCC.db never returns (tccd not answering) — a child, killed; the
 #                         loop never waits on it
@@ -230,6 +237,83 @@ drill_node_supervisor_wedged() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_WATCHDOG_SECS FLEET_NODE_TEST_HANG
   WHAT="整机守护的主循环卡在一个不返回的 open() 上：看门狗 2s 后写一行「卡在 «fda»」+ 各线程的栈、记进 state.json 并退出，KeepAlive 按 ${thr}s 拉起，status 写明看门狗重启过，两项任务接着跑"
+}
+
+# node-supervisor-stop-hang (#4144): on 2026-10-14 a managed Mac's daemon was asked to
+# restart onto a new release and its stop waited 111 minutes on the updater task,
+# which never returned — the watchdog was already off, the children already
+# stopped, the heartbeat still. The stop is bounded and watched now: a task still
+# running FLEET_NODE_STOP_SECS after its TERM is left to run (its pid kept), the
+# daemon exits, and the next one books it as an orphan — never a second copy.
+drill_node_supervisor_stop_hang() {
+  CAP=25   # the stop's 2 s + a python start + the passes that book the orphan
+  local sb sup sup2 t0 n
+  sb="$WORK/stophang"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
+  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  # a task deaf to the stop's TERM (its sleep inherits the ignore across exec)
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 300\n' > "$sb/deaf.sh"
+  printf '{"children":[],"tasks":[{"name":"deaf","every":0.5,"timeout":600,"cmd":["/bin/bash","%s"]}]}\n' "$sb/deaf.sh" > "$sb/table.json"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_WATCHDOG_SECS=2 FLEET_NODE_STOP_SECS=2
+  python3 -I "$sb/rt/bin/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  # state.json, not `sh -c pgrep -f <path>`: that sh's own argv names the path
+  until_ok 10 python3 -c 'import json,os,sys; t=json.load(open(sys.argv[1]))["tasks"]["deaf"]; os.kill(int(t["pid"]), 0); sys.exit(0 if t.get("result") == "running" else 1)' "$sb/db/state.json" 2>/dev/null \
+    || { WHY="the task never started: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
+  t0=$(now)
+  kill -TERM "$sup"   # the same stop a restart request takes
+  until_ok 10 sh -c '! kill -0 "$1" 2>/dev/null' _ "$sup" \
+    || { WHY="the stop waited on a task deaf to TERM (still alive $(since "$t0")s after): $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill -9 "$sup"; pkill -f "$sb/deaf.sh"; return 1; }
+  SECS=$(since "$t0")
+  grep -q 'task deaf pid .* still running .* left to run' "$sb/sup.err" \
+    || { WHY="the stop did not say it left the task: $(tail -3 "$sb/sup.err" | tr '\n' ' ')"; pkill -f "$sb/deaf.sh"; return 1; }
+  pgrep -f "$sb/deaf.sh" >/dev/null || { WHY="the task was not left to run"; return 1; }
+  # the next daemon books it, never a second copy beside it (#3671)
+  python3 -I "$sb/rt/bin/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup2=$!; printf '%s\n' "$sup2" >> "$WORK/cred-pids"
+  until_ok 10 python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["tasks"]["deaf"]; sys.exit(0 if t.get("result") == "busy" and t.get("orphan") else 1)' "$sb/db/state.json" 2>/dev/null \
+    || { WHY="the next daemon did not book the left task: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup2"; pkill -f "$sb/deaf.sh"; return 1; }
+  sleep 1
+  n=$(pgrep -f "$sb/deaf.sh" | wc -l | tr -d ' ')
+  kill "$sup2" 2>/dev/null; pkill -9 -f "$sb/deaf.sh" 2>/dev/null
+  [ "$n" = 1 ] || { WHY="$n copies of the task after the restart"; return 1; }
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_WATCHDOG_SECS FLEET_NODE_STOP_SECS
+  WHAT="整机守护停下（重启请求 / TERM）时一项任务不理 TERM：${SECS}s 内照样退出、日志写明「留着它跑」、pid 留在 state.json，下一个守护把它记成孤儿、不再起第二份——不再像那台 Mac 那样停在退出路径上 111 分钟"
+}
+
+# node-demote-in-forked-child (#4144): the same morning's cause. The root core
+# serves a thread per connection; its exec-as / run-as forked with
+# preexec_fn=demote(), which called initgroups() in the child — and a fork from a
+# threaded parent copies libinfo's cache lock as another thread held it: the child
+# (argv still `fleet-node-core.py serve`) waited on that mutex for good, Popen()
+# waited on its exec with no timeout over it, and the updater never returned.
+# A login's identity is Popen's user / group / extra_groups now (demote_kw: set in
+# C between fork and exec, the groups looked up in the parent).
+drill_node_demote_in_forked_child() {
+  CAP=10; local t0 bad out
+  t0=$(now)
+  bad=$(grep -n 'preexec_fn=[^,)]*demote\|preexec_fn=.*initgroups' "$BIN"/*.py 2>/dev/null)
+  [ -z "$bad" ] || { WHY="a Popen still demotes in the forked child: $bad"; return 1; }
+  out=$(python3 -I - "$BIN/fleet-node-supervisor.py" <<'EOF' 2>&1
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1]); sup = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sup)
+import pwd
+me = pwd.getpwuid(os.getuid())
+kw = sup.demote_kw(me.pw_name, me.pw_uid, me.pw_gid, me.pw_dir)
+assert "preexec_fn" not in kw and kw["cwd"] in (me.pw_dir, "/"), kw
+os.geteuid = lambda: 0      # root's answer, without root
+kw = sup.demote_kw(me.pw_name, me.pw_uid, me.pw_gid, "/nonexistent-4144")
+assert kw["user"] == me.pw_uid and kw["group"] == me.pw_gid and kw["cwd"] == "/", kw
+assert kw["extra_groups"][0] == me.pw_gid and len(kw["extra_groups"]) <= os.sysconf("SC_NGROUPS_MAX"), kw
+print("ok")
+EOF
+)
+  [ "$out" = ok ] || { WHY="demote_kw: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="bin/ 里没有一处 Popen 在 fork 出的子进程里降权（preexec_fn=demote / initgroups）；demote_kw 给出 user / group / extra_groups（组在父进程里查好、不超 NGROUPS_MAX）和 cwd，没有 preexec_fn——多线程的 root core fork 后不再卡在 libinfo 的锁上"
 }
 
 drill_node_fda_probe_hang() {

@@ -139,8 +139,7 @@ def tenant_env(s, login):
 
 def as_tenant(s, login, cmd, **kwargs):
     p, e = tenant_env(s, login)
-    return subprocess.run(cmd, env=e, cwd=p.pw_dir,
-                          preexec_fn=s.demote(login, p.pw_uid, p.pw_gid, p.pw_dir),
+    return subprocess.run(cmd, env=e, **s.demote_kw(login, p.pw_uid, p.pw_gid, p.pw_dir, cwd=p.pw_dir),
                           check=kwargs.pop('check', True), **kwargs)
 
 
