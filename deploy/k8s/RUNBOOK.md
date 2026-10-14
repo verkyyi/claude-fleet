@@ -314,6 +314,40 @@ kubectl -n new-deploy label secret ccquota-ssh-ca ccquota-fleet-cred-key app=ccq
 - 这两把都**不在** `tools/export-cluster-state.sh` 的导出集里（Secret 按设计不进仓库），所以漂不漂只能
   靠 Deployment 起不起得来说话。
 
+## 换操作员令牌 viewer-token（#4122）
+
+`ccquota` Secret 的 `viewer-token`（pod 里的 `CCQUOTA_VIEWER_TOKEN`）是入口的**管理员**令牌：看板、查询 API、
+MCP、`/v1/fleet/*` 的管理员口都认它。泄露过（进过 argv、日志、聊天）就整把换，不留旧值。
+
+用它的地方（只写位置）：
+
+| 位置 | 怎么跟上 |
+|---|---|
+| Secret `new-deploy/ccquota` 的 `viewer-token` | 下面的命令换 |
+| 仓库密钥 `FLEET_HUB_VIEWER_TOKEN`（`mac-follow.yml` 的 `fleet-train-macos.sh pick` 读 `/v1/fleet/ci-runners`） | 同一管道 `gh secret set` |
+| 「从 hub pod 环境现读」的脚本 / 文档（`kubectl exec … printenv CCQUOTA_VIEWER_TOKEN` 一类） | 换完自然跟上 |
+| 个人电脑上的 `~/.ccquota/viewer-token` / `CCQUOTA_VIEWER_TOKEN`（fleet-hub-sessions / fleet-release / fleet-drill 等操作者脚本读它） | 谁有谁从 Secret 重取 |
+| 浏览器里 `?token=` 换来的 cookie | 失效，用 GitHub 登录 |
+
+官网里程表的发布器（monorepo `tools/ccquota-publish.sh`）自 monorepo #11768 起只读公开的 `/meter.json` +
+`/odometer.svg`，**不要任何令牌**；`fleet-drill` 命名空间的演练入口是另一把，不跟着换。
+
+全程不打印、不落盘、不进 argv（`--patch-file=/dev/stdin`、curl `-K -`、`gh secret set` 读 stdin）：
+
+```bash
+NS=new-deploy HUB=https://<入口域名>
+code(){ printf 'header = "Authorization: Bearer %s"\n' "$1" | curl -s -o /dev/null -w '%{http_code}' -K - "$HUB$2"; }
+OLD=$(kubectl -n $NS get secret ccquota -o jsonpath='{.data.viewer-token}' | base64 -d)
+python3 -c 'import secrets,json,base64;print(json.dumps([{"op":"replace","path":"/data/viewer-token","value":base64.b64encode(secrets.token_hex(24).encode()).decode()}]))' \
+  | kubectl -n $NS patch secret ccquota --type=json --patch-file=/dev/stdin
+kubectl -n $NS annotate secret ccquota kubectl.kubernetes.io/last-applied-configuration-   # 旧注解里存着整份旧 data
+kubectl -n $NS rollout restart deploy/ccquota-hub && kubectl -n $NS rollout status deploy/ccquota-hub
+NEW=$(kubectl -n $NS get secret ccquota -o jsonpath='{.data.viewer-token}' | base64 -d)
+echo "old=$(code "$OLD" /v1/live) new=$(code "$NEW" /v1/live)"          # 应为 old=401 new=200
+printf %s "$NEW" | gh secret set FLEET_HUB_VIEWER_TOKEN --repo verkyyi/claude-fleet
+unset OLD NEW
+```
+
 ## 发布包（#2335 代码，#2366 接上）
 
 入口按 stable 打包、签名每个发布版（`/v1/fleet/release/*`），存在 OSS 桶
