@@ -554,18 +554,21 @@ class Loop(object):
         os.chmod(logdir, 0o700)
         logfile = os.path.join(logdir, "%s.log" % name)
         fh = open(logfile, "ab")
-        demote = sup.demote(c.login, uid, gid, rundir)
-
         def pre():
             # nice 10 itself, not +10: a parent already at a negative nice (a CI
-            # runner's own service) would leave os.nice(10) at 0 (issue #3219)
-            os.setpriority(os.PRIO_PROCESS, 0, 10)
-            demote()
+            # runner's own service) would leave os.nice(10) at 0 (issue #3219).
+            # Only a syscall here: the login's groups are demote_kw's, set in C
+            # before this runs — never initgroups() in a forked child (#4144)
+            try:
+                os.setpriority(os.PRIO_PROCESS, 0, 10)
+            except OSError:
+                pass   # already nicer than 10: demoted, it may not go back up
 
         try:
-            proc = subprocess.Popen([os.path.join(rundir, "run.sh")], cwd=rundir, env=env,
+            proc = subprocess.Popen([os.path.join(rundir, "run.sh")], env=env,
                                     stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                                    start_new_session=True, close_fds=True, preexec_fn=pre)
+                                    start_new_session=True, close_fds=True, preexec_fn=pre,
+                                    **sup.demote_kw(c.login, uid, gid, rundir, cwd=rundir))
         except OSError as e:
             fh.close()
             self.deregister(c, rid)

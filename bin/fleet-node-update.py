@@ -909,7 +909,7 @@ class Updater(object):
                 continue
             kw = {}
             if os.geteuid() == 0 and uid != 0:
-                kw["preexec_fn"] = fns.demote(login, uid, gid, home)
+                kw = fns.demote_kw(login, uid, gid, home)
             rc, out, err = run(cmd.split() + [n, "--repo", repo, "--note", "--from", "fleet", "--body-file", bf],
                                timeout=60, env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
                                                 "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
@@ -1378,7 +1378,7 @@ class Updater(object):
                 notes.append("%s: needs root to link" % login)
                 continue
             rc, out, err = run([sys.executable, "-I", os.path.abspath(__file__), "link-account", login],
-                               timeout=60, preexec_fn=fns.demote(login, uid, gid, home),
+                               timeout=60, **fns.demote_kw(login, uid, gid, home),
                                env={"HOME": home, "USER": login, "LOGNAME": login, "PATH": "/usr/bin:/bin",
                                     "FLEET_NODE_ROOT": self.p.root})
             if rc != 0:
@@ -1565,7 +1565,7 @@ class Updater(object):
             else:
                 rc, out, err = run(["/bin/sh", "-c", SESSIONS_SH, "fleet-sessions",
                                     "/bin/bash", sc, verb],
-                                   timeout=600, preexec_fn=fns.demote(login, uid, gid, home),
+                                   timeout=600, **fns.demote_kw(login, uid, gid, home),
                                    env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
                                         "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
                                         "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet")})
@@ -2154,7 +2154,7 @@ def account_install_sha(login, ident, path, root=None):
         return m["sha"]
     if (os.geteuid() == 0 or uid == os.geteuid()) and os.path.lexists(os.path.join(os.path.realpath(path), ".git")):
         rc, out, _ = run(["git", "-C", path, "rev-parse", "HEAD"], timeout=30,
-                         preexec_fn=fns.demote(login, uid, gid, home),
+                         **fns.demote_kw(login, uid, gid, home),
                          env={"HOME": home, "USER": login, "LOGNAME": login,
                               "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"})
         if rc == 0 and SHA_RE.match(out):
@@ -2837,7 +2837,7 @@ def as_login(login, args, timeout=1200, root=None):
             e[k] = env(k, "")
     return run(["/bin/sh", "-c", SESSIONS_SH, "fleet-node-update", sys.executable, "-I",
                 os.path.abspath(__file__)] + list(args),
-               timeout=timeout, preexec_fn=fns.demote(login, uid, gid, home), env=e)
+               timeout=timeout, env=e, **fns.demote_kw(login, uid, gid, home))
 
 
 # --------------------------------------------------------------- main -----------

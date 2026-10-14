@@ -855,7 +855,7 @@ class Core(object):
             fh = self.logfile(a["login"])
             p = subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=fh,
                                  env=e, start_new_session=True, close_fds=True,
-                                 preexec_fn=sup.demote(ent["account"], ent["uid"], ent["gid"], ent["home"]))
+                                 **sup.demote_kw(ent["account"], ent["uid"], ent["gid"], ent["home"]))
             fh.close()
             self.jobs[key] = p
         self.log(self.tl.uid, "run-as", a, "ok pid %d" % p.pid)
@@ -896,7 +896,7 @@ class Core(object):
         try:
             r = subprocess.run(["/bin/sh", "-c", CORE_SH, "fleet-core"] + interp(real) + argv[1:],
                                stdin=subprocess.DEVNULL, capture_output=True, env=e, timeout=EXEC_TIMEOUT,
-                               preexec_fn=sup.demote(a["login"], uid, gid, home), close_fds=True)
+                               close_fds=True, **sup.demote_kw(a["login"], uid, gid, home))
             rc, out, err = r.returncode, r.stdout, r.stderr
         except subprocess.TimeoutExpired as x:
             rc, out, err = 124, x.stdout or b"", (x.stderr or b"") + b"\n(timed out)"
@@ -912,7 +912,7 @@ class Core(object):
         try:
             p = subprocess.Popen(["/bin/sh", "-c", CORE_SH, "fleet-core"] + interp(real) + a["argv"][1:],
                                  stdin=fds[0], stdout=fds[1], stderr=fds[2], env=e, start_new_session=True,
-                                 close_fds=True, preexec_fn=sup.demote(a["login"], uid, gid, home))
+                                 close_fds=True, **sup.demote_kw(a["login"], uid, gid, home))
         finally:
             close_fds(fds)
         self.log(self.tl.uid, "exec-as", a, "ok pid %d (stream)" % p.pid)
