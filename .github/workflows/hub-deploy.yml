@@ -225,6 +225,7 @@ jobs:
     env:
       TRAIN_SHA: ${{ inputs.sha }}
       ACK: ${{ contains(inputs.runs_on, 'fleet-ack') }}
+      HUB_BASE_IMAGES: ${{ vars.HUB_BASE_IMAGES }}
       # the registry's VPC endpoint from inside the cluster (repo variable), else the public one
       BUILD_REPO: ${{ contains(inputs.runs_on, 'fleet-ack') && vars.HUB_BUILD_PUSH_REPO || vars.HUB_PUSH_REPO }}
     steps:
@@ -290,7 +291,16 @@ jobs:
           set -euo pipefail
           : "${BUILDKIT_HOST:?BUILDKIT_HOST is not set on this runner (the cluster buildkitd)}"
           tls=(); [ -z "${BUILDKIT_TLSDIR:-}" ] || tls=(--tlsdir "$BUILDKIT_TLSDIR")
-          # Go modules: the Dockerfile's default GOPROXY (goproxy.cn) — inside CN
+          # Base images (issue #4133): HUB_BASE_IMAGES = "GO_IMAGE=<ref> ALPINE_IMAGE=<ref>"
+          # (registry copies) overrides the Dockerfile's docker.io defaults; unset = them.
+          base=(); for kv in $HUB_BASE_IMAGES; do
+            [[ "$kv" =~ ^(GO_IMAGE|ALPINE_IMAGE)=[^[:space:]]+$ ]] || { echo "::error::HUB_BASE_IMAGES: '$kv' is not GO_IMAGE=<ref> / ALPINE_IMAGE=<ref>"; exit 1; }
+            base+=(--opt "build-arg:$kv"); done
+          # Go modules: the Dockerfile's default GOPROXY (goproxy.cn) — inside CN.
+          # A base image the registry mirror could not resolve (a 5xx from docker.io's
+          # mirror, 2026-10-14) is retried twice after a pause; any other red is final.
+          for try in 1 2 3; do
+          set +e
           buildctl --addr "$BUILDKIT_HOST" ${tls[@]+"${tls[@]}"} build \
             --frontend dockerfile.v0 \
             --local context=tokenledger --local dockerfile=tokenledger \
@@ -301,7 +311,16 @@ jobs:
             --import-cache "type=registry,ref=$BUILD_REPO:buildcache" \
             --export-cache "type=registry,ref=$BUILD_REPO:buildcache,mode=max" \
             --metadata-file "$RUNNER_TEMP/meta.json" \
-            --progress plain
+            ${base[@]+"${base[@]}"} \
+            --progress plain 2>&1 | tee "$RUNNER_TEMP/build.log"
+          rc=${PIPESTATUS[0]}; set -e
+          [ "$rc" -ne 0 ] || break
+          if [ "$try" -lt 3 ] && grep -q 'failed to resolve source metadata' "$RUNNER_TEMP/build.log"; then
+            echo "::warning::a base image did not resolve (try $try of 3) — retrying in $((try * 30))s"
+            sleep $((try * 30)); continue
+          fi
+          exit "$rc"
+          done
           d=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("containerimage.digest") or "")' "$RUNNER_TEMP/meta.json")
           [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::pushed, but buildctl named no digest"; exit 1; }
           echo "digest=$d" >> "$GITHUB_OUTPUT"

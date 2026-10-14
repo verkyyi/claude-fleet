@@ -1,3 +1,11 @@
+# Base images (claude-fleet#4133): every FROM names one of these two, so a
+# builder whose docker.io road is down (the Shenzhen buildkitd resolves docker.io
+# through a public mirror that answered 502 on 2026-10-14) can point them at a
+# registry copy — `--opt build-arg:ALPINE_IMAGE=<registry>/alpine:3.20`, repo
+# variable HUB_BASE_IMAGES on the train. Unset = docker.io, byte for byte.
+ARG GO_IMAGE=golang:1.25-alpine
+ARG ALPINE_IMAGE=alpine:3.20
+
 # Build
 #
 # --platform=$BUILDPLATFORM: compile natively on whatever machine is building and
@@ -5,7 +13,7 @@
 # QEMU. The binary is pure Go (CGO_ENABLED=0, modernc SQLite), so this is just
 # GOARCH — and it turns a ~10 minute emulated build on an arm64 laptop into a
 # native one.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 WORKDIR /src
 # ★ 默认走国内代理：从境内（开发机与深圳的自建 runner 都是）直连 proxy.golang.org
 #   会挂在那里几十分钟而不报错 —— 表现是「构建卡住，没有任何输出」。
@@ -49,7 +57,7 @@ RUN mkdir -p /out/dist && for t in $DIST_TARGETS; do \
 # because the hash decides: jsDelivr first (it answers from Shenzhen, where the
 # cluster's buildkitd builds), GitHub raw second. To move it: a PR bumping the
 # three pins (docs/dev/WEB-CHAT.md «城市库»).
-FROM alpine:3.20 AS geo
+FROM ${ALPINE_IMAGE} AS geo
 ARG GEO_DB_COMMIT=0af9fb06b0651f0fe314b8794266bcce498532a9
 ARG GEO_DB_SHA256=61b1c8cd4a1e0935fc1d3bd915350cf38e34ab54e34c9146154956ce97bfa047
 ARG GEO_LICENSE_SHA256=fe01f2f8fcaafac539154e6aa80b0b7f8af54e01dc4d52322f72971991c6280e
@@ -65,7 +73,7 @@ RUN set -eu; mkdir -p /out/ip2region; cd /out/ip2region; \
     echo "lionsoul2014/ip2region@$GEO_DB_COMMIT data/ip2region_v4.xdb" > SOURCE
 
 # Run
-FROM alpine:3.20
+FROM ${ALPINE_IMAGE}
 RUN apk add --no-cache ca-certificates tzdata \
  && adduser -D -u 10001 ccquota \
  && mkdir -p /data && chown ccquota /data
