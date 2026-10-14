@@ -23,11 +23,11 @@ instead of probing.
 
 The file: one key per line, every value a string but `v` and `ts` —
   {"v": 1, "ts": <epoch>, "mem_probe": "<fleet_mem_probe line>",
-   "mem_total_mb": "<n>", "load_per_core": "<x.yy>"}
+   "mem_total_mb": "<n>", "load_per_core": "<x.yy>", "cpu_busy": "<0.xxx>"}
 An empty value is a probe that did not answer; the reader then probes itself.
 
 The reading is fleet-lib.sh's OWN probes (fleet_mem_probe, fleet_mem_total_mb,
-_fleet_load_per_core), run once with the switch off for this call — never a
+_fleet_load_per_core, _fleet_cpu_busy — issue #4077), run once with the switch off for this call — never a
 second implementation of any of them.
 """
 import json
@@ -39,7 +39,7 @@ import time
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BIN)
-KEYS = ("mem_probe", "mem_total_mb", "load_per_core")
+KEYS = ("mem_probe", "mem_total_mb", "load_per_core", "cpu_busy")
 
 
 def table_path(root=ROOT):
@@ -117,7 +117,7 @@ def probe():
     env["FLEET_SKIP_GLOBAL_CONF"] = "1"
     script = ('. "$1" >/dev/null 2>&1 || exit 1; FLEET_MACHINE_TASKS=; '
               'printf "%s\\n" "$(fleet_mem_probe 2>/dev/null)" "$(fleet_mem_total_mb 2>/dev/null)" '
-              '"$(_fleet_load_per_core 2>/dev/null)"')
+              '"$(_fleet_load_per_core 2>/dev/null)" "$(_fleet_cpu_busy 2>/dev/null)"')
     try:
         p = subprocess.run(["/bin/bash", "-c", script, "_", os.path.join(BIN, "fleet-lib.sh")],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -125,7 +125,7 @@ def probe():
         vals = p.stdout.decode("utf-8", "replace").split("\n")
     except (OSError, subprocess.SubprocessError):
         vals = []
-    vals = [v.strip() for v in vals] + ["", "", ""]
+    vals = [v.strip() for v in vals] + [""] * len(KEYS)
     r = {"v": 1, "ts": int(time.time())}
     for k, v in zip(KEYS, vals):
         # a value travels into an awk / shell reader: one line, no quote, no backslash
@@ -134,7 +134,9 @@ def probe():
 
 
 def render(r):
-    return "{\n" + ",\n".join('"%s": %s' % (k, json.dumps(r[k])) for k in ("v", "ts") + KEYS) + "\n}\n"
+    # a key the reading does not carry is left out (the node program's pod copy,
+    # node_cluster_reading.go, writes no cpu_busy — the pod's login probes it)
+    return "{\n" + ",\n".join('"%s": %s' % (k, json.dumps(r[k])) for k in ("v", "ts") + KEYS if k in r) + "\n}\n"
 
 
 def write(out_dir, r):

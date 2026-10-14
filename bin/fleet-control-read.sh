@@ -438,7 +438,8 @@ case "$mode" in
     # (issue #1836, EPIC #2074 C5). So the object also carries the gate's own
     # verdict, the same one a spawn here meets:
     #   admit      may this machine take ONE MORE session right now
-    #   admit_why  the hold's tag without its 暂停开新： prefix — 内存紧张 / 负载过高
+    #   admit_why  the hold's tag without its 暂停开新： prefix — 内存紧张 /
+    #              负载过高（CPU 92%） / 负载过高（负载 3.10/核）: the reading that held (#4077)
     #              (only with admit false)
     #   room       fleet_machine_headroom's count: how many more fit in memory.
     #              Left out when memory is unreadable, or with FLEET_ADMIT=0 —
