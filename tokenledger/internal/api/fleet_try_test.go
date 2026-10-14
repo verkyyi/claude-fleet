@@ -620,7 +620,7 @@ func TestTrialAdmissionQueues(t *testing.T) {
 	// The machine's own gate holds new sessions: busy.
 	no := false
 	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 1, NCPU: 8, Admit: &no, AdmitWhy: "内存紧张"})
-	waitFor(t, 3*time.Second, "mac-d's gate to say no", func() bool { return h.srv.trialHold("mac-d", time.Now()) == trialWaitBusy })
+	waitFor(t, 3*time.Second, "mac-d's gate to say no", func() bool { return h.srv.trialHold("mac-d", time.Now()) == trialWaitBusyAdmit })
 	// Load over 0.8 × cores.
 	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 1, NCPU: 8, Load1: 7})
 	waitFor(t, 3*time.Second, "mac-d's load to read", func() bool { return h.srv.trialHold("mac-d", time.Now()) == trialWaitLoad })

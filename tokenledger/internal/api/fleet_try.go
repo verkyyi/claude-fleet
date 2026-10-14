@@ -259,13 +259,13 @@ func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAn
 			_ = s.Store.HubAudit(pid, "trial.claim", pid, "ok", "试用领到备用登录 · trial seat on "+claimed[0], now)
 			return s.tryHome(pid, now)
 		}
-		why = trialWaitBusy // no ready spare there
+		why = trialWaitBusySpare // no ready spare there
 	}
 	if why == "" {
 		why = trialWaitFull // someone is ahead
 	}
 	s.trialQueued(pid, why, now)
-	return tryAnswer{State: "waiting", Position: ahead, ETASecs: s.trialETA(host, ahead), Reason: why}, nil
+	return tryAnswer{State: "waiting", Position: ahead, ETASecs: s.trialETA(host, ahead), Reason: trialPageReason(why)}, nil
 }
 
 // trialQueued audits why pid waits, once per change of reason.
