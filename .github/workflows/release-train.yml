@@ -1007,10 +1007,40 @@ jobs:
       BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
       TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
     steps:
-      # GitHub from Shenzhen: a sparse, shallow checkout, tried twice
+      # The cluster's git mirror first (vars.FLEET_TRAIN_GIT_MIRROR, issue #4109):
+      # github.com from Shenzhen now and then does not connect at all (run
+      # 38484652776: 130 s to a refused 443, then no HEAD). TRAIN_SHA is
+      # origin/master's head when the train boarded, so the mirror's master holds
+      # it once it has caught up (it fetches GitHub every 5 s).
+      - name: Fetch the commit from the cluster's git mirror
+        id: mirror
+        if: vars.FLEET_TRAIN_GIT_MIRROR != ''
+        continue-on-error: true
+        env:
+          MIRROR: ${{ vars.FLEET_TRAIN_GIT_MIRROR }}
+        run: |
+          set -u
+          t0=$(date +%s)
+          git init -q . && git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" || exit 1
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if timeout 60 git fetch -q --no-tags "$MIRROR" '+refs/heads/master:refs/remotes/origin/master' \
+               && git cat-file -e "$TRAIN_SHA^{commit}" 2>/dev/null; then
+              git checkout -q --detach "$TRAIN_SHA" || break
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              echo "fetched ${TRAIN_SHA:0:7} from the cluster mirror in $(( $(date +%s) - t0 ))s (try $i)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::the cluster mirror ($MIRROR) has no ${TRAIN_SHA:0:7} after $(( $(date +%s) - t0 ))s — checking out from GitHub"
+          rm -rf .git
+          exit 1
+      # else GitHub: a sparse, shallow checkout, tried twice, each bounded
       - uses: actions/checkout@v4
         id: co
+        if: steps.mirror.outputs.ok != 'true'
         continue-on-error: true
+        timeout-minutes: 5
         with:
           ref: ${{ needs.board.outputs.train_sha }}
           sparse-checkout-cone-mode: false
@@ -1020,8 +1050,9 @@ jobs:
             /bin/fleet-release-verify.py
             /.github/actions/hub-acr/
             /.github/actions/hub-kubeconfig/
-      - if: steps.co.outcome == 'failure'
+      - if: steps.mirror.outputs.ok != 'true' && steps.co.outcome == 'failure'
         uses: actions/checkout@v4
+        timeout-minutes: 5
         with:
           ref: ${{ needs.board.outputs.train_sha }}
           sparse-checkout-cone-mode: false
