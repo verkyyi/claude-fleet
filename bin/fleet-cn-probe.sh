@@ -87,9 +87,10 @@ pass client "$CLIENT"
 out=$(on_client 'command -v fleet && cat ~/.claude/fleet/.release 2>/dev/null | head -1; grep -h "^export FLEET_HUB_URL=" ~/.config/claude-fleet/fleet.conf')
 case "$out" in */fleet*) pass install "$(printf '%s' "$out" | tr '\n' ' ')" ;; *) fail install "no fleet for $AS: $out"; verdict ;; esac
 HUB=$(printf '%s\n' "$out" | sed -n 's/^export FLEET_HUB_URL="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | tail -1)
+[ -n "$HUB" ] || { fail install "the client's fleet.conf names no FLEET_HUB_URL"; verdict; }
 
 # hub
-out=$(on_client "curl -sS -m 20 -o /dev/null -w '%{http_code} %{time_total}s' ${HUB:-https://claudefleet.24haowan.com}/version")
+out=$(on_client "curl -sS -m 20 -o /dev/null -w '%{http_code} %{time_total}s' $HUB/version")
 case "$out" in 200*) pass hub "$HUB $out" ;; *) fail hub "$HUB $out"; verdict ;; esac
 
 # cert
