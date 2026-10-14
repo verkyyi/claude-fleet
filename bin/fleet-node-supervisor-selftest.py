@@ -3030,6 +3030,26 @@ for _cls in (T_RootCore, V_SessionUnits):
             setattr(_cls, _n, None)
 
 
+class Z_ForgetZombie(unittest.TestCase):
+    """A run that ended but is not reaped yet (stat Z) is not «running»: a
+    recycle's forget never waits for the daemon's tick to reap it (#4044)."""
+
+    def test_zombie_is_not_running(self):
+        p = subprocess.Popen(["sleep", "30"])
+        try:
+            self.assertEqual(fns._zombies([p.pid]), set())
+            os.kill(p.pid, signal.SIGKILL)
+            self.assertTrue(until(5, lambda: fns._zombies([p.pid]) == {p.pid}), "a killed, unreaped child reads as a zombie")
+            st = {"tasks": {"bob/job": {"pid": p.pid}}}
+            with mock.patch.object(fns, "read_json", return_value=st):
+                paths = mock.Mock(state_file="/nonexistent")
+                self.assertFalse(fns._account_running(paths, "bob"))
+                self.assertEqual(fns._account_pids(paths, "bob"), [])
+        finally:
+            p.kill()
+            p.wait()
+
+
 if __name__ == "__main__":
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
     selftest_part.main()

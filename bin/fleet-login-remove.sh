@@ -335,10 +335,10 @@ fi
 step 1c "take $LOGIN out of the machine daemon (account forget)"
 if [ -f "$NODE_SUP" ] && [ "$QUICK" = 1 ]; then
   # --quick (issue #4044): no waiting up to 20 s for the daemon's own tick to
-  # drop the login's runs (12.3 s on a managed Mac) — one second, then they are
-  # stopped (TERM, KILL after a second); the wash kills the uid's every
-  # process anyway
-  run sudo env FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1 /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
+  # drop the login's runs (12.3 s on a managed Mac) — they are stopped at once
+  # (TERM, KILL after half a second; a zombie counts as ended); the wash kills
+  # the uid's every process anyway
+  run sudo env FLEET_NODE_RELEASE_WAIT=0 FLEET_NODE_FORGET_KILL_WAIT=0.5 /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
 elif [ -f "$NODE_SUP" ]; then
   run sudo /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
 else

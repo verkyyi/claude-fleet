@@ -4387,20 +4387,33 @@ def _undo(paths, index, moved):
     write_json(paths.attic_index, index, 0o600)
 
 
-def _account_running(paths, login):
-    st = read_json(paths.state_file, {})
-    for kind in ("children", "tasks"):
-        for name, x in (st.get(kind) or {}).items():
-            if name.startswith(login + "/") and x.get("pid") and pid_alive(x["pid"]):
-                return True
-    return False
+def _zombies(pids):
+    """Which of pids are exited and only waiting to be reaped (stat Z): the
+    daemon reaps its own children on its tick, so a killed run reads alive for
+    up to that long (issue #4044: 2–3 s of every recycle's forget). One ps."""
+    if not pids or os.environ.get("FLEET_NODE_PS_CMD"):
+        return set()
+    try:
+        out = subprocess.check_output(["ps", "-o", "pid=,stat=", "-p", ",".join(str(p) for p in pids)],
+                                      stderr=subprocess.DEVNULL, universal_newlines=True)
+    except Exception:
+        return set()
+    return set(int(f[0]) for f in (l.split() for l in out.splitlines())
+               if len(f) == 2 and f[0].isdigit() and f[1].startswith("Z"))
 
 
 def _account_pids(paths, login):
+    """The login's runs still running — a zombie has ended, whatever its reaper."""
     st = read_json(paths.state_file, {})
-    return sorted(set(int(x["pid"]) for kind in ("children", "tasks")
+    pids = sorted(set(int(x["pid"]) for kind in ("children", "tasks")
                       for name, x in (st.get(kind) or {}).items()
                       if name.startswith(login + "/") and x.get("pid") and pid_alive(x["pid"])))
+    z = _zombies(pids)
+    return [p for p in pids if p not in z]
+
+
+def _account_running(paths, login):
+    return bool(_account_pids(paths, login))
 
 
 def _account_stop(paths, login):

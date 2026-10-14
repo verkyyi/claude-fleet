@@ -336,9 +336,15 @@ if [ "$FAILS" = 0 ]; then
 fi
 
 # --- doctor (a report, not a gate) ---------------------------------------------
+# FLEET_BOOTSTRAP_DOCTOR=0: no report — a recycled spare (fleet-login-new.sh
+# --recycle, issue #4044), where nobody reads it and it was 29 of the 42 s
 step_begin
-say "doctor:"
-bash "$ROOT/bin/fleet-doctor.sh" 2>&1 | sed 's/^/    /'
+if [ "${FLEET_BOOTSTRAP_DOCTOR:-1}" = 0 ]; then
+  say "doctor: skipped (FLEET_BOOTSTRAP_DOCTOR=0)"
+else
+  say "doctor:"
+  bash "$ROOT/bin/fleet-doctor.sh" 2>&1 | sed 's/^/    /'
+fi
 step_end doctor
 
 # --- timing (issue #2775) -------------------------------------------------------
