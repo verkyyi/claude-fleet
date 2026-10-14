@@ -33,7 +33,8 @@
 #   E  fleet-restore.sh --auto (the diskguard tick): a fleet whose server was
 #      killed comes back with ONLY its unfinished sessions; held while the machine
 #      is busy; never for a fleet fleet-down took down (restore.down), one with no
-#      conf, or one whose map is a day old; the tick calls it (restore_watch)
+#      conf, or one whose map is a day old; the tick calls it (restore_watch);
+#      a fleet with NO session in its map still comes back, its home alone (#4199)
 #   F  claude is found with PATH=/usr/bin:/bin (~/.local/bin, fleet-claude.sh),
 #      and a miss names every place tried
 #
@@ -511,6 +512,14 @@ CHECKS=$((CHECKS + 1)); tf list-windows -t oc -F '#{pane_start_command}' | grep 
 # up: a second tick changes nothing
 auto
 eq "E: a live fleet is left alone" "$wins" "$(tf list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')"
+# a fleet with no session (issue #4199: a China login can run none): its home is
+# the person's view — one tick brings it back
+tf kill-server 2>/dev/null
+printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain" > "$WORK/econf/fleets/oc/restore.map"
+auto
+CHECKS=$((CHECKS + 1)); up || fail "E: --auto left a fleet with no session down" "$(tail -3 "$WORK/econf/restore/restore.log" 2>/dev/null)"
+eq "E: the empty fleet came back with its home alone" "home " "$(tf list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')"
+tf kill-server 2>/dev/null
 
 # ---------------------------------------------- F: claude off a bare PATH ----
 mkdir -p "$WORK/fhome/.local/bin"

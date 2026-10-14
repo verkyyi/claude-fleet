@@ -15,6 +15,7 @@
 #   release-key-revoked                             bin/fleet-release-verify.py (trust), fleet-release-fetch.py;
 #                                                   tokenledger/internal/release trust.go (go test, when a toolchain is)
 #   node-tmux-restart                               bin/fleet-sessions-snapshot.sh → fleet-restore.sh
+#   empty-fleet-not-restored                        bin/fleet-sessions-snapshot.sh, fleet-restore.sh --auto
 #   node-update-sessions                            bin/fleet-node-update.py (sessions save / restore)
 #   release-unverified                              bin/fleet-release.sh (fleet-release-selftest.sh's sandbox)
 #   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
@@ -405,6 +406,19 @@ drill_node_tmux_restart() {
     || { WHY="fleet-sessions-snapshot-selftest: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
   SECS=$(since "$t0")
   WHAT="save → kill-server → restore：同名同目录同对话回来，已关单 / 已删目录 / fleet-down 的不开"
+}
+
+# A login with no session open (a China pod can run none, issue #4199): its fleet —
+# the home the person views — comes back after a tmux restart all the same.
+drill_empty_fleet_not_restored() {
+  CAP=60; local t0 out
+  sed -n '/^auto_restore()/,/^}/p' "$BIN/fleet-restore.sh" | grep -q "grep -q '^WIN'" \
+    && { WHY="fleet-restore.sh --auto still skips a map with no WIN row"; return 1; }
+  t0=$(now)
+  out=$(FSS_ONLY=H bash "$BIN/fleet-sessions-snapshot-selftest.sh" 2>&1) \
+    || { WHY="fleet-sessions-snapshot-selftest H: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="没会话的 fleet：save 留下 FLEET 行，kill-server → restore 拉回 home；fleet-down 的不拉；--auto 不跳过无 WIN 的图"
 }
 
 drill_node_update_sessions() {
