@@ -1531,6 +1531,9 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         self.assertTrue(df.startswith('# Context'))
         self.assertIn('\nARG TOOLS=tools\nFROM debian:trixie-slim AS tools\n', df)
         self.assertIn('\nFROM ${TOOLS} AS toolsrc\n', df)
+        # #4159: the image's base is BASE (Docker Hub by default), the train's copy in the cluster
+        self.assertIn('\nARG BASE=debian:trixie-slim\nARG TOOLS=tools\n', df)
+        self.assertIn('\nFROM ${BASE}\n', df)
         self.assertIn('COPY --from=toolsrc /opt/tools/usr/local/ /usr/local/', df)
         stage = df.split(' AS tools\n', 1)[1].split('FROM ${TOOLS}', 1)[0]
         for pin in ('NODE_SHA256', 'GO_SHA256', 'KUBECTL_SHA256', 'FNM_SHA256', 'ALIYUN_SHA256', 'UV_SHA256'):
@@ -1555,6 +1558,11 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         self.assertIn("--ignore-check 'node tools' --ignore-check 'node image'", wf)
         self.assertIn('role: gha-claudefleet-node-image', wf)
         self.assertIn('--target tools --provenance=false', wf)   # ACR refuses an attestation manifest
+        # #4159: node tools copies the amd64 base beside it; node image builds FROM that copy, retrying a 5xx
+        self.assertIn('imagetools create -t "$REPO:base-debian-trixie-slim"', wf)
+        self.assertIn('"$BUILD_REPO@$TOOLS_DIGEST" "$BUILD_REPO@$BASE_DIGEST"', wf)
+        for want in ('build-arg:BASE=$BASE', 'try $try of 3', 'failed to resolve source metadata', 'Bad Gateway'):
+            self.assertIn(want, tb)
         node = wf.split('\n  node-image:\n', 1)[1]
         node = node[:node.index('build and push (train-build.sh)')]
         # #4109: the cluster's git mirror first; GitHub only when it fails, bounded
