@@ -464,6 +464,8 @@ FLEET_LOGIN_RESET_ROOT             test seam: sandbox prefix for the system path
 FLEET_LOGIN_RESET_SETTLE           knob: seconds the wash watches for a respawned process after kill + bootout, default 0 (fleet-login-reset.sh, #3979, #4044)
 FLEET_LOGIN_RESET_ASIDE            test seam: wait = the old home's archive + delete run inside the wash instead of detached (fleet-login-reset.sh, #4044)
 FLEET_LOGIN_RESET_TEMPLATE         test seam: the home-template script the wash clones a fresh home with; 0 = createhomedir only (fleet-login-reset.sh, #4194)
+FLEET_LOGIN_RESET_KEEP_NODE        switch: 0 = a recycle always re-joins the hub, never keeps the root-held node token (fleet-login-reset.sh, #4195)
+FLEET_LOGIN_KEEP_NODE              env handoff: the wash's root-only keep dir to fleet-login-new.sh --recycle — no join, the token back through credsep setenv (#4195)
 FLEET_REMOVE_SSH_DIR               path: root's key + known_hosts for the local ssh delete (fleet-login-remove-ssh.sh, #2994)
 FLEET_REMOVE_SSH_FORCED            test seam: the forced command= path written into authorized_keys (fleet-login-remove-ssh.sh, #2994)
 FLEET_REMOVE_SSH_HOMES             test seam: where the admin's home is looked for when dscl has none (fleet-login-remove-ssh.sh, #2994)
