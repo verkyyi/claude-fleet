@@ -174,6 +174,8 @@ func (s *Server) endTrial(t store.Trial, reason string, now time.Time) (ok, sent
 		log.Printf("fleet: trial end: accounts of %s: %v", t.Principal, err)
 		return false, false
 	}
+	// The conversation goes apart first, sealed to the person (#4060).
+	convo := s.trialKeepConvo(t.Principal, now)
 	ok = true
 	for _, a := range as {
 		if a.State != store.AccountActive || !a.Managed() {
@@ -185,16 +187,20 @@ func (s *Server) endTrial(t store.Trial, reason string, now time.Time) (ok, sent
 			continue
 		}
 		sent = true
+		s.trialGiveBack(t.Principal, a, now)
 	}
 	if !ok {
 		return false, sent
 	}
-	if err := s.Store.EndTrial(t.Principal, reason, now); err != nil {
-		log.Printf("fleet: trial end: %s: %v", t.Principal, err)
+	if moved, err := s.Store.ReleaseTrial(t.Principal, reason, now); err != nil || !moved {
+		if err != nil {
+			log.Printf("fleet: trial end: %s: %v", t.Principal, err)
+		}
 		return false, sent
 	}
 	_ = s.Store.HubAudit(trialInviter, "trial.release", t.Principal, "ok",
-		"reason="+reason+" · 试用用完，登录收回 · trial spent, login given back", now)
+		"reason="+reason+" "+convo+" · "+trialEndNote[reason], now)
+	log.Printf("fleet: trial of %s released (%s, %s)", t.Principal, reason, convo)
 	return true, sent
 }
 
@@ -248,6 +254,9 @@ func (s *Server) convertTrial(pid, display, by string, now time.Time) {
 	}
 }
 
-// carryTrialConvo brings pid's kept trial conversation into their new home:
-// C12 keeps it (24 hours, per person); until it lands there is none.
-func (s *Server) carryTrialConvo(pid string) {}
+// carryTrialConvo brings pid's kept trial conversation into their new home
+// (claude-fleet#4060): at once when the home is there, else on their first
+// conversation read (handleChat → seedKeptConvo).
+func (s *Server) carryTrialConvo(pid string) {
+	go s.seedKeptConvo(pid, time.Now())
+}

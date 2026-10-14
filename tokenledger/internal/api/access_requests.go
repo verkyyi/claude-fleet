@@ -116,10 +116,6 @@ func identityOfKind(ids []store.HubIdentity, kind string) *store.HubIdentity {
 	return nil
 }
 
-// trialFirstWords is what the trial person first asked of it, to start
-// their request with: C12 keeps the trial's conversation; until it lands
-// there is nothing to carry and the field starts empty.
-func (s *Server) trialFirstWords(pid string) string { return "" }
 
 // handleApply is /apply: GET the page, POST a new request.
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {

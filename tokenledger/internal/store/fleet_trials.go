@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,7 +24,11 @@ import (
 // seat — added up when a seat goes back), msgs (lines it sent), capped_at
 // (when the last line allowed was sent: the machine goes back once its reply
 // had time to arrive) and ended_reason (why it ended: time · msgs, C12 adds
-// its own; approved when it became a member).
+// its own; approved when it became a member). Since claude-fleet#4060 a placed
+// row also carries the page's last heartbeat (beat_at) and the person's last
+// input (input_at) — what the 15-second patrol gives the machine back on —
+// and when the 「1 分钟后暂停」 warning went out (warned_at); C12's reasons are
+// hidden · idle · pause, and the conversation is kept apart (hub_trial_convos).
 const fleetTrialsSchema = `
 CREATE TABLE IF NOT EXISTS fleet_trials (
   principal     TEXT PRIMARY KEY,
@@ -41,7 +46,10 @@ CREATE TABLE IF NOT EXISTS fleet_trials (
   used_secs     INTEGER NOT NULL DEFAULT 0,
   msgs          INTEGER NOT NULL DEFAULT 0,
   capped_at     INTEGER NOT NULL DEFAULT 0,
-  ended_reason  TEXT NOT NULL DEFAULT ''
+  ended_reason  TEXT NOT NULL DEFAULT '',
+  beat_at       INTEGER NOT NULL DEFAULT 0,
+  input_at      INTEGER NOT NULL DEFAULT 0,
+  warned_at     INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS fleet_trial_timings (
   at INTEGER NOT NULL,
@@ -76,6 +84,9 @@ type Trial struct {
 	Msgs         int
 	CappedAt     time.Time
 	EndedReason  string
+	BeatAt       time.Time
+	InputAt      time.Time
+	WarnedAt     time.Time
 }
 
 // Used is how long t has held a machine by now: every seat before, and the
@@ -97,13 +108,16 @@ func (s *Store) ensureFleetTrials() error {
 			return err
 		}
 	}
-	for _, col := range []string{"used_secs", "msgs", "capped_at"} {
+	for _, col := range []string{"used_secs", "msgs", "capped_at", "beat_at", "input_at", "warned_at"} {
 		if err := s.addColumn("fleet_trials", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
 	}
 	if err := s.addColumn("fleet_trials", "ended_reason", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+	if _, err := s.write.Exec(s.d.ddl(trialConvosSchema)); err != nil {
+		return fmt.Errorf("create trial conversations table: %w", err)
 	}
 	if _, err := s.write.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_trials_way
 		ON fleet_trials(kind, subject) WHERE kind <> ''`); err != nil {
@@ -119,16 +133,18 @@ func unixOrZero(v int64) time.Time {
 	return time.Unix(v, 0).UTC()
 }
 
-const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at, kind, subject, queue_reason, used_secs, msgs, capped_at, ended_reason`
+const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at, kind, subject, queue_reason, used_secs, msgs, capped_at, ended_reason,
+	beat_at, input_at, warned_at`
 
 func scanTrial(row interface{ Scan(...any) error }) (*Trial, error) {
 	var t Trial
-	var st, ws, pa, ls, ta, ra, ca int64
+	var st, ws, pa, ls, ta, ra, ca, ba, ia, wa int64
 	if err := row.Scan(&t.Principal, &t.State, &st, &ws, &pa, &t.Host, &ls, &ta, &ra, &t.Kind, &t.Subject, &t.QueueReason,
-		&t.UsedSecs, &t.Msgs, &ca, &t.EndedReason); err != nil {
+		&t.UsedSecs, &t.Msgs, &ca, &t.EndedReason, &ba, &ia, &wa); err != nil {
 		return nil, err
 	}
 	t.CappedAt = unixOrZero(ca)
+	t.BeatAt, t.InputAt, t.WarnedAt = unixOrZero(ba), unixOrZero(ia), unixOrZero(wa)
 	t.StartedAt, t.WaitingSince, t.PlacedAt = unixOrZero(st), unixOrZero(ws), unixOrZero(pa)
 	t.LastSeen, t.TimedAt, t.ReclaimedAt = unixOrZero(ls), unixOrZero(ta), unixOrZero(ra)
 	return &t, nil
@@ -267,8 +283,83 @@ func (s *Store) TrialsWaiting(fresh time.Time) (int, error) {
 
 // PlaceTrial records that pid was handed a login on host.
 func (s *Store) PlaceTrial(pid, host string, now time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = ?, host = ?, last_seen = ?, queue_reason = ''
-		WHERE principal = ?`, TrialPlaced, now.Unix(), host, now.Unix(), pid)
+	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = ?, host = ?, last_seen = ?, queue_reason = '',
+		beat_at = ?, input_at = ?, warned_at = 0 WHERE principal = ?`, TrialPlaced, now.Unix(), host, now.Unix(), now.Unix(), now.Unix(), pid)
+	return err
+}
+
+// PlacedTrials are every trial person holding a machine now.
+func (s *Store) PlacedTrials() ([]Trial, error) {
+	return s.trialsWhere(`state = ?`, TrialPlaced)
+}
+
+func (s *Store) trialsWhere(where string, args ...any) ([]Trial, error) {
+	rows, err := s.write.Query(`SELECT `+trialCols+` FROM fleet_trials WHERE `+where+` ORDER BY principal`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Trial
+	for rows.Next() {
+		t, err := scanTrial(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+// BeatTrial records the page's heartbeat at now and the person's last input
+// at input (never later than now, never earlier than what is kept); a beat
+// that carries input after the warning clears it. Nothing for a trial that
+// holds no machine; false then.
+func (s *Store) BeatTrial(pid string, now, input time.Time) (bool, error) {
+	in := input.Unix()
+	if input.IsZero() || in > now.Unix() {
+		in = 0
+	}
+	res, err := s.write.Exec(`UPDATE fleet_trials SET beat_at = ?, last_seen = ?,
+		input_at = CASE WHEN ? > input_at THEN ? ELSE input_at END,
+		warned_at = CASE WHEN ? > warned_at THEN 0 ELSE warned_at END
+		WHERE principal = ? AND state = ?`, now.Unix(), now.Unix(), in, in, in, pid, TrialPlaced)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// WarnTrial records that pid was told 「1 分钟后暂停」 at now.
+func (s *Store) WarnTrial(pid string, now time.Time) error {
+	_, err := s.write.Exec(`UPDATE fleet_trials SET warned_at = ? WHERE principal = ? AND state = ? AND warned_at = 0`,
+		now.Unix(), pid, TrialPlaced)
+	return err
+}
+
+// ReleaseTrial records that pid's machine went back at now, why — EndTrial
+// that says whether it moved (false: pid held no machine; a second release of
+// the same seat records nothing) and clears the seat's heartbeat.
+func (s *Store) ReleaseTrial(pid, reason string, now time.Time) (bool, error) {
+	res, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, reclaimed_at = ?, ended_reason = ?,
+		used_secs = used_secs + CASE WHEN placed_at > 0 AND ? > placed_at THEN ? - placed_at ELSE 0 END,
+		beat_at = 0, input_at = 0, warned_at = 0
+		WHERE principal = ? AND state = ?`,
+		TrialReclaimed, now.Unix(), reason, now.Unix(), now.Unix(), pid, TrialPlaced)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ResumeTrial puts a paused trial person back at the end of the waitlist with
+// what is left of their budget — the same trial (claude-fleet#4060), unlike
+// RejoinTrial's fresh one.
+func (s *Store) ResumeTrial(pid string, now time.Time) error {
+	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, waiting_since = ?, placed_at = 0, host = '',
+		reclaimed_at = 0, ended_reason = '', last_seen = ? WHERE principal = ? AND state = ?`,
+		TrialWaiting, now.Unix(), now.Unix(), pid, TrialReclaimed)
 	return err
 }
 
@@ -420,4 +511,42 @@ func (s *Store) TrialCounts() (map[string]int, error) {
 		out[st] = n
 	}
 	return out, rows.Err()
+}
+
+// HandOffWash gives pid's login on host, queued or being washed for the next
+// person (reset_pending · resetting), to a spare holder of its own
+// (claude-fleet#4060): the wash runs on as before — the same op, the same
+// check, a clean answer recycled into a ready spare (RecycleAccount, which
+// drops the holder), anything else failed and never handed out — while pid is
+// free at once to be handed another login on the same machine. false: nothing
+// of pid's there is being washed.
+func (s *Store) HandOffWash(pid, host string, at time.Time) (bool, error) {
+	nonce, err := randomLowerAlnum(8)
+	if err != nil {
+		return false, err
+	}
+	id := SparePrefix + strings.ToLower(host) + ":" + nonce
+	tx, err := s.write.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(s.d.deferForeignKeys()); err != nil {
+		return false, err
+	}
+	ts := at.UTC().Format(rfc)
+	if _, err := tx.Exec(`INSERT INTO fleet_principals (principal_id, login, display_name, created_at)
+		VALUES (?, ?, ?, ?)`, id, "spare."+nonce, SpareFullName, ts); err != nil {
+		return false, err
+	}
+	res, err := tx.Exec(`UPDATE fleet_accounts SET principal_id = ?, detail = ?, updated_at = ?
+		WHERE principal_id = ? AND hostname = ? AND state IN (?, ?)`,
+		id, "washing for the next person: given back by trial "+pid, ts, pid, host, AccountResetPending, AccountResetting)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	return true, tx.Commit()
 }

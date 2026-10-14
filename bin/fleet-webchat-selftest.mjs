@@ -47,7 +47,12 @@
 //      the entry's X-Fleet-Client) — never the IP — and only when it changed (same
 //      browser again: none; another city: again); the page never shows it; the
 //      browser_context tool answers the full IP and UA; neither is in server.log
-//   --only=socket|budget|context|home|idle|local (comma list) runs those parts only — the drills' road.
+//   N  a trial's conversation leaves with its person (issue #4060): GET /api/export on
+//      login A gives every session's transcript + home; POST /api/import on a clean
+//      login B puts it back — the page reads the same history under B's home, the next
+//      turn is a NEW session seeded with the last words — and an import onto a login
+//      that already has a conversation is refused 409 (BREAK-IT trial-transcript-cross)
+//   --only=socket|budget|context|home|idle|trial|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -65,7 +70,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -396,6 +401,42 @@ if (part("idle")) {
   const k2 = (await sstart(["--socket"], asHome("k"))).p;
   ok(JSON.parse((await sreq("/api/conversation")).body).session === SID, "K started again: the same conversation");
   await sstop(k2);
+}
+// ---- N: a trial's conversation leaves with its person ----------------------------
+if (part("trial")) {
+  for (const h of ["ta", "tb"]) mkdirSync(homeOf(h), { recursive: true });
+  SSTATE = stateOf("ta"); SOCK = join(SSTATE, "chat.sock");
+  const a = (await sstart(["--socket"], asHome("ta"))).p;
+  ok((await sturn("甲的青蛙")).lines.at(-1)?.t === "done", "N a turn on login A");
+  const ex = await sreq("/api/export", { headers: { "X-Fleet-Person": "p:alice" } });
+  const bundle = JSON.parse(ex.body);
+  ok(ex.status === 200 && bundle.v === 1 && bundle.home === homeOf("ta") && bundle.sessions.length === 1 &&
+    bundle.sessions[0].id === SID && bundle.sessions[0].jsonl.includes("甲的青蛙"), "N export: every session's transcript and the home");
+  ok((await sreq("/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: bundle })).status === 403,
+    "N an import without the page's header is refused");
+  ok((await sreq("/api/import", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: bundle })).status === 409,
+    "N an import onto a login that has a conversation of its own is refused 409");
+  await sstop(a);
+  // the clean login B: its own state dir, nothing of A's
+  SSTATE = stateOf("tb"); SOCK = join(SSTATE, "chat.sock");
+  const b = (await sstart(["--socket"], asHome("tb"))).p;
+  ok(JSON.parse((await sreq("/api/conversation")).body).items.length === 0, "N login B starts with no conversation");
+  const im = await sreq("/api/import", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: bundle });
+  ok(im.status === 200, `N import onto B (${im.status} ${im.body})`);
+  const cb = JSON.parse((await sreq("/api/conversation")).body);
+  ok(cb.session === "" && cb.items.some((i) => i.t === "user" && i.text === "甲的青蛙"), "N under B: the history is on the page");
+  const trB = join(homeOf("tb"), ".claude", "projects", mangle(homeOf("tb")), SID + ".jsonl");
+  ok(existsSync(trB) && (statSync(trB).mode & 0o777) === 0o600, "N the transcript is under B's projects dir (0600)");
+  const before = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).length;
+  ok((await sturn("接着说")).lines.at(-1)?.t === "done", "N the next turn on B");
+  const prompts = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).slice(before);
+  ok(JSON.parse(readFileSync(ENVLOG, "utf8")).resume === "" && prompts.length === 1 &&
+    /<fleet-webchat-relay>[\s\S]*甲的青蛙[\s\S]*<\/fleet-webchat-relay>/.test(prompts[0].prompt) && prompts[0].prompt.endsWith("接着说"),
+    "N it is a new session seeded with the last words");
+  ok((await sreq("/api/import", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: bundle })).status === 409,
+    "N a second import onto B is refused 409");
+  ok(/"ev":"imported"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "N the log says imported");
+  await sstop(b);
 }
 if (!part("local")) {
   proxy.close();

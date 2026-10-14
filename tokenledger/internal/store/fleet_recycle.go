@@ -104,6 +104,14 @@ func (s *Store) RecycleAccount(opID, endpointID, actor, note string, at time.Tim
 	if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ? AND hostname = ?`, from, host); err != nil {
 		return nil, "", false, err
 	}
+	// A holder HandOffWash made for the wash (claude-fleet#4060) goes with
+	// it: a spare record with no login left.
+	if IsSparePrincipal(from) {
+		if _, err := tx.Exec(`DELETE FROM fleet_principals WHERE principal_id = ?
+			AND NOT EXISTS (SELECT 1 FROM fleet_accounts WHERE principal_id = ?)`, from, from); err != nil {
+			return nil, "", false, err
+		}
+	}
 	if _, err := tx.Exec(`INSERT INTO fleet_principals (principal_id, login, display_name, created_at)
 		VALUES (?, ?, ?, ?)`, id, name, SpareFullName, ts); err != nil {
 		return nil, "", false, err

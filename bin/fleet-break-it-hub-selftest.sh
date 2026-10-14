@@ -173,6 +173,15 @@
 #   svc-usage-crosses-tenant                        tokenledger/internal/api svc_usage.go (tenant on the run's pass and
 #                                                   pool_usage, fleet.svc_budget / svc_tenant_budget, svcYield,
 #                                                   GET /v1/svc/usage; go test, when a toolchain is here)
+#   trial-transcript-cross                          tokenledger/internal/api fleet_try_slot.go (trialKeepConvo /
+#                                                   trialSeed: sealed per principal, opened only as the session's own)
+#                                                   + credvault SealPerson + extras/web-chat server.mjs (/api/export,
+#                                                   /api/import); go test when a toolchain is here, node for the webchat
+#   trial-dirty-handout                             tokenledger/internal/api fleet_try_budget.go (endTrial → remove →
+#                                                   #3504's reset, trialGiveBack → store.HandOffWash) + fleet_recycle.go
+#                                                   applyReset; go test
+#   trial-slot-held                                 tokenledger/internal/api fleet_try_slot.go (SweepTrialSlots on the
+#                                                   15 s alerts tick: hidden 120 · idle 240, + #4059's budget); go test
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2641,6 +2650,69 @@ PY
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   fi
+  SECS=$(since "$t0")
+}
+
+# ---- trial-transcript-cross (#4060, EPIC #4048 C12): a trial's conversation
+# outlives its washed machine — kept on the hub, sealed under a key derived for
+# that one principal, opened only with the session's own principal and put only
+# into that person's next login; the conversation service takes an import only
+# on a login with no conversation of its own.
+drill_trial_transcript_cross() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal" out; GO_RAN=0
+  t0=$(now)
+  grep -q 'func (v \*Vault) OpenPerson(' "$tl/credvault/credvault.go" 2>/dev/null \
+    || { WHY="no per-person seal in the vault (credvault SealPerson / OpenPerson)"; return 1; }
+  grep -q 'OpenPerson(c.Sealed, &bundle, pid, trialConvoPurpose)' "$tl/api/fleet_try_slot.go" 2>/dev/null \
+    || { WHY="the seed no longer opens the conversation as the trial's own principal (fleet_try_slot.go)"; return 1; }
+  if grep -q 'TrialConvo(r\.\|TrialConvo(id\|TrialConvo(req' "$tl"/api/*.go 2>/dev/null; then
+    WHY="a kept conversation is read by an id the request carries"; return 1
+  fi
+  c11_go_tests fleet_try_slot_test.go TestTrialConvoNeverCrosses TestTrialPauseAndResumeCarriesTheConversation || return 1
+  if command -v node >/dev/null 2>&1; then
+    out=$(node "$BIN/fleet-webchat-selftest.mjs" --only=trial 2>&1)
+    printf '%s\n' "$out" | grep -q '^PASS fleet-webchat-selftest' \
+      || { WHY="the webchat's export / import is red: $(printf '%s\n' "$out" | grep '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+    printf '%s\n' "$out" | grep -qF 'ok   N an import onto a login that has a conversation of its own is refused 409' \
+      || { WHY="the conversation service no longer refuses an import onto a login with its own"; return 1; }
+  fi
+  WHAT='甲的对话按甲派生的钥匙封存，换成乙打不开、种到乙的号上什么也没有；只认当前会话的 principal；对话服务只往空号里导入（测试按名核对在，Go 门跑它们；node 跑网页对话那半）'
+  [ "$GO_RAN" = 1 ] && WHAT='甲的对话封存后乙打不开、贴到乙的行上也只认甲；乙的座位种不进甲的；甲暂停后继续，在一台干净的号上续上自己的对话（go test）；对话服务导出 / 导入、往已有对话的号上导入 409（node）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-dirty-handout (#4060): a trial's machine given back goes through
+# #3504's wash — reset, bin/fleet-login-reset-check.py, recycleLeftovers — and
+# only a clean answer makes it a spare; the washing row is handed to a spare
+# holder so the person is free at once, and a dirty wash stays failed
+# (spare_failed), never handed to the next person.
+drill_trial_dirty_handout() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'FleetAccountRequest{Action: "remove", PrincipalID: t.Principal' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+    || { WHY="a trial's release no longer goes through the operator's remove (the #3504 wash)"; return 1; }
+  grep -q 's.trialGiveBack(t.Principal, a, now)' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+    || { WHY="a trial's release no longer hands the washing login off the person (trialGiveBack)"; return 1; }
+  grep -q 'state IN (?, ?)`,' "$tl/store/fleet_trials.go" 2>/dev/null && grep -q 'AccountResetPending, AccountResetting)' "$tl/store/fleet_trials.go" \
+    || { WHY="HandOffWash no longer takes only a login that is being washed"; return 1; }
+  c11_go_tests fleet_try_slot_test.go TestTrialReleaseWashesBeforeTheNext || return 1
+  c11_go_tests fleet_recycle_test.go TestRecycleNeverHandsOutAnUncleanWash || return 1
+  WHAT='试用放回的号走洗号：dirty 的留 failed、不进预备池；洗净的才成备用；人立刻和这台脱钩（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='试用被巡检放回 → reset：说 dirty 的那台 failed、永不成备用；clean 的成备用；放回那刻人已不挂这个号、家也清了（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-slot-held (#4060): a trial left open, hidden or idle held its
+# machine for 7 days. Now the 15 s patrol gives it back: no heartbeat 120 s,
+# no input 240 s (warned at 180), 900 s of machine time across seats.
+drill_trial_slot_held() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'go s.SweepTrialSlots(now)' "$tl/api/fleet_alerts.go" 2>/dev/null \
+    || { WHY="nothing runs the trial patrol on the 15 s tick (fleet_alerts.go)"; return 1; }
+  c11_go_tests fleet_try_slot_test.go TestTrialSlotReleasesOnTime TestTrialConvosPurgedAfterADay || return 1
+  WHAT='关页 2 分钟、没输入 4 分钟（3 分钟先提示）、额度用完各自放回，审计 trial.release reason=…（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='119 s 不放、121 s 放（hidden）；182 s 心跳带「1 分钟后暂停」、241 s 放（idle）；用满 900 s 放（time）并指去申请；名额当场空出；对话 24 h 后删（go test）'
   SECS=$(since "$t0")
 }
 

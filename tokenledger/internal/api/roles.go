@@ -131,6 +131,8 @@ var routeAccess = map[string]string{
 	// The 60-second trial (claude-fleet#3590): the start mints a trial
 	// invite for a stranger; the claim and the timing are the person's own.
 	TryStartPath: accessPublic, TryClaimPath: accessUser, TryTimingPath: accessUser, TryStatePath: accessUser,
+	// The heartbeat and the pause (claude-fleet#4060): the person's own seat.
+	TryBeatPath: accessUser, TryPausePath: accessUser,
 	TryStatsPath: accessAdmin,
 	// 管理侧「申请」(claude-fleet#4052): 404 to a member, as a page is
 	AdminRequestsPath: accessAdmin, adminRequestsPrefix: accessAdmin,

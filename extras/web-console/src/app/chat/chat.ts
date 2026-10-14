@@ -320,5 +320,5 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     onRespondToToolApproval,
   });
 
-  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load };
+  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy };
 }
