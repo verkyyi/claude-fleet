@@ -21,10 +21,11 @@
 #              relay's egress (the address it answered from → ipinfo) and the
 #              APIs' answers are the relay's; `loc_local` keeps this machine's.
 #              A relay in an unsupported region, or refused there, closes all the same;
-#              central — neither of the above is ok and FLEET_CRED_CENTRAL_URL is
-#              set (a person's pod, extras/managed-node/render.py --cred-central:
-#              no subscription credential, every session goes through the cluster
-#              credential proxy — issue #4185): judged by that proxy, which always
+#              central — neither of the above is ok, FLEET_CRED_CENTRAL_URL is
+#              set and node.env says CCQUOTA_FLEET_CREDS=0 (a person's pod,
+#              extras/managed-node/render.py --cred-central: nothing is leased in,
+#              every session goes through the cluster credential proxy — issue
+#              #4185; a login that leases keeps its own road, as fleet-claude.sh): judged by that proxy, which always
 #              sends on through the Singapore relay — one request per provider with
 #              NO pass; its own refusal of a missing pass = reachable, no answer or
 #              a gateway error = unreachable. loc is left empty (the egress is the
@@ -186,7 +187,11 @@ if d.get("relay") is True:
   [ -n "$central" ] || central=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_CRED_CENTRAL_URL=["'"'"']\{0,1\}\([^"'"'"' ]*\).*/\2/p' "$CONF/fleet.conf" 2>/dev/null | tail -n 1)
   central="${central%/}"
   ca="" co=""
-  if [ "$verdict" != ok ] && [ "$route" = direct ] && [ -n "$central" ]; then
+  nocreds=""
+  for f in "$ENVF" "$CONF/node.pub.env"; do
+    [ -r "$f" ] && grep -qx 'CCQUOTA_FLEET_CREDS=0' "$f" && nocreds=1 && break
+  done
+  if [ "$verdict" != ok ] && [ "$route" = direct ] && [ -n "$central" ] && [ -n "$nocreds" ]; then
     # cen <name> <args…> — one request to the central proxy with no pass
     cen() {
       local name="$1" code; shift

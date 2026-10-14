@@ -38,11 +38,12 @@
 #                  closed / unreachable; no relay (the proxy says relay:false,
 #                  or none answers) → route direct, closed as before
 #   L. central     (issue #4185) egress CN, no relay, FLEET_CRED_CENTRAL_URL set (a
-#                  person's pod): judged by the cluster credential proxy — its
+#                  person's pod — node.env CCQUOTA_FLEET_CREDS=0): judged by the cluster credential proxy — its
 #                  refusal of a missing pass = reachable → ok, route central,
 #                  loc_local CN, no loc; the URL read off fleet.conf too; a proxy
 #                  that does not answer / a 503 → unreachable, never closed; an
-#                  ok egress never asks it
+#                  ok egress never asks it; a login that leases (no CREDS=0) keeps
+#                  route direct
 #   J. sleepwatch  bin/fleet-node-sleepwatch.sh: not macOS → exit 3; on macOS
 #                  its selftest seam prints ready / sleep / wake
 set -u
@@ -274,6 +275,8 @@ FLEET_PROBE_RELAY_CMD="echo called >>'$SB/relay.called'" probe_in k5
 
 # ── L. central ───────────────────────────────────────────────────────────
 NORELAY="printf '%s' '{\"relay\": false}'"
+pod() { mkdir -p "$SB/$1/.config/claude-fleet"; echo CCQUOTA_FLEET_CREDS=0 >"$SB/$1/.config/claude-fleet/node.env"; }
+pod l; pod l2; pod l3; pod l4
 : >"$SB/curl.log"
 FAKE_LOC1=CN FAKE_LOC2=CN FLEET_CRED_CENTRAL_URL=https://central.test/ FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l
 if [ "$(rc)" = 0 ] && J l | grep -q '"loc":"","anthropic":"reachable",' \
@@ -299,6 +302,9 @@ done
 FLEET_CRED_CENTRAL_URL=https://central.test probe_in l4
 [ "$(rc)" = 0 ] && J l4 | grep -q '"route":"direct"' && ! grep -q central.test "$SB/curl.log" \
   && ok "L an ok egress never asks the central proxy" || bad "L ok egress asked central: $(J l4)"
+FAKE_LOC1=CN FAKE_LOC2=CN FLEET_CRED_CENTRAL_URL=https://central.test FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l5
+[ "$(rc)" = 1 ] && J l5 | grep -q '"route":"direct"' && J l5 | grep -q '"verdict":"unsupported_region"' \
+  && ok "L a login that leases (no CREDS=0) keeps route direct, closed as before" || bad "L leasing login went central: $(J l5)"
 
 # ── J. sleepwatch ────────────────────────────────────────────────────────
 if [ "$(uname -s)" != Darwin ]; then
