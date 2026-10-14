@@ -1,8 +1,15 @@
 package agent
 
 import (
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
@@ -63,5 +70,57 @@ func nodeHostKeys() []string {
 			lines = append(lines, string(b))
 		}
 	}
+	if podRelay() {
+		if k := podSSHDKey(); k != "" {
+			lines = append(lines, k)
+		}
+	}
 	return control.HostKeys(lines)
+}
+
+// The key a pod's sshd shows right now (claude-fleet#4149): the hub's pod roll
+// patches only a Deployment's image, so a pod rendered before #4151 has no
+// /run/sshd-key mount in its fleet container and the file above is never there
+// — and the sshd makes a new key at each start anyway. So the agent asks the
+// sshd itself, on the relay's own address: one key exchange, never a login, at
+// most once per podKeyEvery (the sshd logs each probe as a closed preauth).
+var (
+	podKeyEvery   = 5 * time.Minute
+	podKeyTimeout = 3 * time.Second
+	podKeyMu      sync.Mutex
+	podKeyAt      time.Time
+	podKeyLast    string
+)
+
+var errPodKeySeen = errors.New("pod sshd: host key seen")
+
+func podSSHDKey() string {
+	podKeyMu.Lock()
+	defer podKeyMu.Unlock()
+	if !podKeyAt.IsZero() && time.Since(podKeyAt) < podKeyEvery {
+		return podKeyLast
+	}
+	podKeyAt = time.Now()
+	conn, err := net.DialTimeout("tcp", sshRelayTarget, podKeyTimeout)
+	if err != nil {
+		podKeyLast = ""
+		return ""
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(podKeyTimeout))
+	var seen ssh.PublicKey
+	_, _, _, err = ssh.NewClientConn(conn, sshRelayTarget, &ssh.ClientConfig{
+		User:              "fleet-hostkey",
+		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
+		HostKeyCallback: func(_ string, _ net.Addr, k ssh.PublicKey) error {
+			seen = k
+			return errPodKeySeen
+		},
+	})
+	if seen == nil || !errors.Is(err, errPodKeySeen) {
+		podKeyLast = ""
+		return ""
+	}
+	podKeyLast = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(seen)))
+	return podKeyLast
 }
