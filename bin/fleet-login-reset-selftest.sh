@@ -26,6 +26,13 @@
 #   T  the fresh home is a clone of root's home template (issue #4194): a
 #      template there ⇒ cloned, no createhomedir; none for this version (exit 3)
 #      ⇒ createhomedir, and a template build started off the clock
+#   K  a login the machine daemon serves with its token in the credsep store
+#      (issue #4195): the token kept root's — the store's node keys (only) and
+#      node.key into <node state>/keep/<login>/ before the stop, the stop
+#      --keep-node, the opener handed the keep dir, `node: kept` before the
+#      verdict, the keep dir gone, a `keep=` lap; the opener not putting it back
+#      ⇒ dirty rejoin and the keep dir stays for the same op again; no daemon
+#      file, or FLEET_LOGIN_RESET_KEEP_NODE=0 ⇒ the old re-join, byte for byte
 #   G  launchd relaunched a process of the uid after the stop's quiesce, before
 #      the wash (distnoted, issue #3979) ⇒ the wash quiesces again before its
 #      clock starts: clean, and the bootout + kill sit between stop and wash
@@ -139,6 +146,7 @@ EOF
 cat > "$W/new.sh" <<'EOF'
 #!/bin/bash
 printf 'new %s op=%s code=%s\n' "$*" "${FLEET_LOGIN_OP_ID:-}" "${FLEET_LOGIN_JOIN_CODE:-}" >> "$RS_LOG"
+[ -z "${FLEET_LOGIN_KEEP_NODE:-}" ] || printf 'new-keep %s %s\n' "$FLEET_LOGIN_KEEP_NODE" "$(tr '\n' ' ' < "$FLEET_LOGIN_KEEP_NODE/node.env")" >> "$RS_LOG"
 [ -z "${FLEET_LOGIN_ADMIN_DIR:-}" ] || printf 'new-adir %s euid=%s\n' "$FLEET_LOGIN_ADMIN_DIR" "${FLEET_LOGIN_TEST_EUID:-}" >> "$RS_LOG"
 login=$1; h="$FLEET_LOGIN_HOMES/$login"
 case " $* " in *' --apply '*) ;; *) echo 'fleet-login-new: DRY RUN'; exit 0 ;; esac
@@ -147,6 +155,7 @@ mkdir -p "$h/.ssh" "$h/.config/claude-fleet" "$h/.claude/fleet" "$HOME/$login-on
 echo 'ssh-ed25519 AAAA new' > "$h/.ssh/authorized_keys"; : > "$h/.config/claude-fleet/fleet.conf"
 : > "$HOME/$login-onboard/welcome.txt"
 [ -z "${RS_NEW_FAILS:-}" ] || { echo 'credsep: pending — the proxy is still starting'; exit 1; }
+[ -z "${FLEET_LOGIN_KEEP_NODE:-}" ] || [ -n "${RS_NEW_NO_KEEP:-}" ] || echo '  node: kept — the token root kept, never through the home'
 echo 'credsep: separated'
 EOF
 chmod +x "$W/shim/"* "$W/remove.sh" "$W/new.sh"
@@ -265,6 +274,40 @@ run ghost --apply; [ "$RC" = 4 ] && ok 'F no such login: 4' || fail "F ghost: $R
 run boss --apply; [ "$RC" = 3 ] && ok 'F an admin: 3' || fail "F boss: $RC"
 RS_ADMIN_UID=$U run "$L" --apply; [ "$RC" = 3 ] && ok 'F the caller itself: 3' || fail "F self: $RC"
 run "$L" --bogus; [ "$RC" = 2 ] && ok 'F a bad option: 2' || fail "F bogus: $RC"
+
+# ---- K: the node token kept (issue #4195) ----
+keep_fixture() {
+  fixture
+  printf 'CCQUOTA_TOKEN=x\n' > "$FLEET_NODE_STATE/logins/$L.env"
+  printf '{"login":"%s"}\n' "$L" > "$FLEET_CREDSEP_ROOT_BASE/$L/meta.json"
+  printf '# node\nCCQUOTA_TOKEN=tok-kept\nCCQUOTA_HUB_URL=https://hub.example\nFLEET_X=1\n' > "$FLEET_CREDSEP_ROOT_BASE/$L/node.env"
+  printf 'key\n' > "$FLEET_CREDSEP_ROOT_BASE/$L/node.key"; chmod 600 "$FLEET_CREDSEP_ROOT_BASE/$L/node.key"
+}
+KD="$FLEET_NODE_STATE/keep/$L"
+keep_fixture
+FLEET_LOGIN_OP_ID=abc7 run "$L" --apply
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'K clean' || { cat "$W/out"; fail "K: $(last2) rc $RC"; }
+has "$RS_LOG" "remove $L --recycle-stop --quick --delete-home --archive-dir $ARCH --keep-node" 'K the stop keeps the node (no fleet node leave)'
+has "$RS_LOG" "new-keep $KD CCQUOTA_TOKEN=tok-kept CCQUOTA_HUB_URL=https://hub.example " 'K the opener gets the keep dir: the node keys only'
+[ "$(tail -n 3 "$W/out" | head -n 1)" = 'node: kept (root-held token, no re-join)' ] && ok 'K node: kept right before the verdict' || fail 'K no node: kept line'
+grep -Eq '^timing: keep=[0-9.]+ stop=' "$W/out" && ok 'K the timing line has keep=' || fail 'K no keep= lap'
+gone "$KD" 'K the keep dir is gone once set up'
+grep -q "sudo cp -p $FLEET_CREDSEP_ROOT_BASE/$L/node.key $KD/node.key" "$RS_LOG" && ok 'K node.key kept, owner and mode with it' || fail 'K node.key not kept'
+keep_fixture
+RS_NEW_NO_KEEP=1 FLEET_LOGIN_OP_ID=abc8 run "$L" --apply
+[ "$(last2)" = 'reset: dirty rejoin|credsep: separated' ] && [ -f "$KD/node.env" ] && ok 'K the token not put back ⇒ dirty rejoin, kept for the same op' \
+  || { tail -5 "$W/out"; fail "K2: $(last2)"; }
+FLEET_LOGIN_OP_ID=abc8 run "$L" --apply
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && grep -q 'kept by an earlier run of this op' "$W/out" && [ ! -e "$KD" ] \
+  && ok 'K the same op again: the kept token, from the keep dir' || { tail -8 "$W/out"; fail "K3: $(last2)"; }
+keep_fixture
+FLEET_LOGIN_RESET_KEEP_NODE=0 FLEET_LOGIN_OP_ID=abc9 run "$L" --apply
+! grep -q -- '--keep-node' "$RS_LOG" && ! grep -q '^new-keep' "$RS_LOG" && ! grep -q '^node: kept' "$W/out" \
+  && ok 'K FLEET_LOGIN_RESET_KEEP_NODE=0 ⇒ the old re-join' || fail 'K the off switch kept the node'
+keep_fixture; rm -f "$FLEET_NODE_STATE/logins/$L.env"
+FLEET_LOGIN_OP_ID=abca run "$L" --apply
+! grep -q -- '--keep-node' "$RS_LOG" && ! grep -q '^new-keep' "$RS_LOG" && grep -Eq '^timing: stop=' "$W/out" \
+  && ok 'K not served by the machine daemon (the token was in the person'"'"'s reach) ⇒ re-join' || fail 'K kept a token the person could reach'
 
 # ---- G: a process relaunched between the stop and the wash ----
 fixture

@@ -8,6 +8,17 @@
 # (#3504) — so it needs no sudoers line of its own. Dry run by default; run as
 # the admin login, from anywhere.
 #
+#   0 keep     (issue #4195) a login whose node token only root ever held — the
+#              machine daemon serves it (<node state>/logins/<login>.env) and
+#              its credsep store has it (<cred-base>/<login>/node.env) — keeps
+#              it: the store's node.env (credsep setenv's keys only) and its
+#              node.key / .ok, owner and mode kept, into root's
+#              <node state>/keep/<login>/ (0700). The hub (CapRecycleKeep) left
+#              that node enrolled; only who the login belongs to changes there,
+#              and the last person's passes, leases, link and certificates are
+#              revoked. A login whose token sat where the person could read or
+#              change it (not taken over by the machine daemon, not separated)
+#              re-joins as before. FLEET_LOGIN_RESET_KEEP_NODE=0 = always re-join.
 #   1 stop     fleet-login-remove.sh --recycle-stop --quick: off the hub (in
 #              the background), `account forget`, its services booted out, its
 #              credsep purged, the pool copy gone — no fleet-down, no quiesce,
@@ -36,15 +47,20 @@
 #              password, the key and the letter, the install, the hub's join
 #              code (FLEET_LOGIN_JOIN_CODE / FLEET_LOGIN_HUB from the
 #              environment, as for a create), credsep --fresh, account adopt
-#              or its daemons, the fleet up.
+#              or its daemons, the fleet up. A kept token: --keep-node on the
+#              stop (no `fleet node leave`), FLEET_LOGIN_KEEP_NODE=<the keep dir>
+#              to the opener — no join ([7a] keeps instead), the token back into
+#              the new store from root, never through the home — and the keep
+#              dir removed once it is set up; the answer says `node: kept`.
 #
 # Before the verdict, ONE line says where the time went (issue #4044):
-#     timing: stop=… quiesce=… aside=… requiesce=… home+sweep=… check=… rejoin=… isolated=… total=…
+#     timing: [keep=…] stop=… quiesce=… aside=… requiesce=… home+sweep=… check=… rejoin=… isolated=… total=…
 # isolated = the wash itself: from the start until the check said clean. The
 # hub keeps the line in the spare.recycle audit; the op dir keeps it too, with
 # stop.log / rejoin.log (each child's steps stamped) and aside.log.
 #
-# The run ends with TWO lines the hub reads (EPIC #3500 convention 9):
+# The run ends with TWO lines the hub reads (EPIC #3500 convention 9), a kept
+# token's `node: kept …` line before them (issue #4195):
 #     reset: clean | reset: dirty <category>,…
 #     credsep: separated | credsep: <anything else>
 # A phase that fails is `reset: dirty <phase>` (stop · wash · check · rejoin).
@@ -141,10 +157,11 @@ case "$ARCHIVE_DIR/" in "$H/"*) refuse "archiving '$H' into itself ($ARCHIVE_DIR
 show() { [ "$ROOTRUN" = 0 ] || [ "${1:-}" != sudo ] || [ "${2:-}" = -u ] || shift
   local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
 step() { printf '\n[%s] %s\n' "$1" "$2"; }
-CREDSEP_LINE='credsep: not reached'
+CREDSEP_LINE='credsep: not reached' NODE_LINE=''
 # verdict <reset verdict> <exit>: the two last lines, then out
 verdict() {
   timing_line
+  [ -z "$NODE_LINE" ] || printf '\n%s' "$NODE_LINE"
   printf '\n%s\n%s\n' "reset: $1" "$CREDSEP_LINE"
   exit "$2"
 }
@@ -257,6 +274,42 @@ JOBS=$(mktemp -d "${TMPDIR:-/tmp}/fleet-login-reset.jobs.XXXXXX") || failed stop
 NOUT='' CERR="$SOUT.check"
 trap 'rm -rf "$SOUT" "${NOUT:-}" "$CERR" "$JOBS"' EXIT
 
+# ---- 0 keep: the login's node token stays root's (issue #4195) ---------------
+# Kept only when nothing of the last person's ever held it: the machine daemon
+# speaks for the login (logins/<login>.env — its own agent was in the attic, a
+# binary in the home never got the token) and the credsep store (the role
+# account's, 0700) has it. The keep dir is root's under the node state, which
+# the wash's books sweep and the check never touch; an earlier run of this op
+# left it ⇒ it is that token still (the store may be purged by now).
+KEEPD="$NODE_STATE/keep/$LOGIN" CSTORE="$CRED_BASE/$LOGIN" KEEP_NODE=0
+KEEP_KEYS='CCQUOTA_TOKEN|CCQUOTA_HUB_URL|CCQUOTA_FLEET|CCQUOTA_FLEET_ADMIN|CCQUOTA_FLEET_NODE_KIND|CCQUOTA_FLEET_COMPUTE|CCQUOTA_FLEET_COMPUTE_FORCE|CCQUOTA_FLEET_PERSONAL'
+keep_save() {
+  sudo install -d -m 700 "$NODE_STATE/keep" && sudo rm -rf "$KEEPD" && sudo install -d -m 700 "$KEEPD" || return 1
+  # credsep setenv takes back only the node's own keys
+  sudo grep -E "^($KEEP_KEYS)=" "$CSTORE/node.env" | sudo tee "$KEEPD/node.env" >/dev/null && sudo chmod 600 "$KEEPD/node.env" || return 1
+  local k
+  for k in node.key node.key.ok; do
+    if sudo test -f "$CSTORE/$k"; then sudo cp -p "$CSTORE/$k" "$KEEPD/$k" || return 1; fi
+  done
+}
+if [ "${FLEET_LOGIN_RESET_KEEP_NODE:-1}" = 0 ]; then
+  :
+elif sudo test -f "$KEEPD/node.env"; then
+  KEEP_NODE=1
+  printf '\n[0] keep %s'"'"'s node token: kept by an earlier run of this op (%s)\n' "$LOGIN" "$KEEPD"
+elif sudo test -f "$NODE_STATE/logins/$LOGIN.env" && sudo test -f "$CSTORE/meta.json" \
+     && sudo grep -q '^CCQUOTA_TOKEN=.' "$CSTORE/node.env" 2>/dev/null; then
+  KEEP_NODE=1
+  step 0 "keep $LOGIN's node token root's (no re-join: only root ever held it — the machine daemon serves it, credsep stores it)"
+  show sudo install -d -m 700 "$KEEPD"
+  show sudo cp -p "$CSTORE/node.env <its node keys only>" "$CSTORE/node.key" "$KEEPD/"
+  if [ "$APPLY" = 1 ]; then
+    keep_save || { sudo rm -rf "$KEEPD"; failed stop "cannot keep the node token in $KEEPD"; }
+    opput keep "$KEEPD" stop
+  fi
+fi
+[ "$KEEP_NODE" = 0 ] || lap keep   # a re-join's timing line stays as it was
+
 # ---- 1 stop: the remove script's steps 1b–3, --quick ------------------------
 # Again on a re-run, even when it finished: a rejoin cut off half way started
 # the login's services, and they must be down before the wash. --quick: no
@@ -264,6 +317,7 @@ trap 'rm -rf "$SOUT" "${NOUT:-}" "$CERR" "$JOBS"' EXIT
 # no quiesce and no archive there — the wash does both.
 step 1 "stop $LOGIN (fleet-login-remove.sh --recycle-stop --quick: off the hub, out of the daemon, services out, credsep purged)"
 STOPA=(bash "$REMOVE_SH" "$LOGIN" --recycle-stop --quick --delete-home --archive-dir "$ARCHIVE_DIR")
+[ "$KEEP_NODE" = 0 ] || STOPA+=(--keep-node)   # the token stays enrolled: no `fleet node leave`
 [ "$APPLY" = 0 ] || STOPA+=(--apply)
 show "${STOPA[@]}"
 stamped "$SOUT" "${STOPA[@]}"; rc=$?
@@ -495,13 +549,14 @@ fi
 
 # ---- 4 rejoin: the opener, on the kept login ---------------------------------
 if [ "$DONE_REJOIN" = 0 ]; then
-  step 4 "set $LOGIN up again (fleet-login-new.sh --recycle: new password, key, install, the hub's join code, credsep, its services)"
+  step 4 "set $LOGIN up again (fleet-login-new.sh --recycle: new password, key, install, $([ "$KEEP_NODE" = 1 ] && echo 'its kept node token' || echo "the hub's join code"), credsep, its services)"
   NEWA=(bash "$NEW_SH" "$LOGIN" --recycle --share-pool)
+  KENV=(); [ "$KEEP_NODE" = 0 ] || KENV=("FLEET_LOGIN_KEEP_NODE=$KEEPD")
   [ "$APPLY" = 0 ] || NEWA+=(--apply)
   show "${NEWA[@]}"
   if [ "$APPLY" = 1 ]; then
     NOUT=$(mktemp "${TMPDIR:-/tmp}/fleet-login-reset.XXXXXX") || failed rejoin 'mktemp failed'
-    stamped "$NOUT" env ${OPID:+FLEET_LOGIN_OP_ID=$OPID} "${NEWA[@]}"; rc=$?
+    stamped "$NOUT" env ${OPID:+FLEET_LOGIN_OP_ID=$OPID} ${KENV[@]+"${KENV[@]}"} "${NEWA[@]}"; rc=$?
     sed 's/^/    /' "$NOUT"
     cp "$NOUT" "$OPDIR/rejoin.log" 2>/dev/null || :
     L=$(sed -n 's/^\(credsep: .*\)$/\1/p' "$NOUT" | tail -n 1)
@@ -509,10 +564,17 @@ if [ "$DONE_REJOIN" = 0 ]; then
     lap rejoin
     [ "$rc" = 0 ] || failed rejoin "fleet-login-new.sh --recycle failed (exit $rc, above)"
     opput credsep "$CREDSEP_LINE" rejoin
+    if [ "$KEEP_NODE" = 1 ]; then
+      grep -q 'node: kept' "$NOUT" || failed rejoin "the opener did not put the kept node token back (no 'node: kept' above)"
+      NODE_LINE="node: kept (root-held token, no re-join)"
+      opput node "$NODE_LINE" rejoin
+      sudo rm -rf "$KEEPD" || :
+    fi
     opput phase rejoin rejoin
   fi
 else
   printf '\n[4] (done in this op: washed at %s, set up again)\n' "$SINCE"
+  NODE_LINE=$(opget node)
 fi
 [ "$APPLY" = 1 ] || { printf '\n%s: dry run complete\n' "$PROG"; exit 0; }
 verdict clean 0

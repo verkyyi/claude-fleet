@@ -710,8 +710,14 @@ func (s *Server) dispatchAccounts() {
 		if a.State == store.AccountResetPending {
 			// The person's hub-side pieces go before the wash starts: the
 			// reset re-joins the login with a fresh code, and nothing of
-			// theirs may stand beside the spare's new node.
-			s.recycleClear(a, time.Now())
+			// theirs may stand beside the spare's new node. A wash that keeps
+			// the login's root-held node token (claude-fleet#4195) keeps it
+			// enrolled: only the person's passes, leases and link go now.
+			keep := ""
+			if s.nodes.recyclerKeeps(epID) {
+				keep = recycleKeepAll
+			}
+			s.recycleClearAs(a, time.Now(), keep)
 		}
 		op, err := s.accountOpFor(a, map[string]string{store.AccountRemovePending: control.AccountRemove,
 			store.AccountResetPending: control.AccountReset}[a.State])

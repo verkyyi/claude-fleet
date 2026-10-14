@@ -4301,6 +4301,26 @@ def account_agent(paths, login, uid, home):
     return None
 
 
+def account_agent_store(login):
+    """A recycled login whose node token the wash kept (issue #4195): no agent of
+    its own was set up again (no join), the token is only in its credsep store —
+    the same settings, with nothing to boot out (path None). None: no store, or no
+    token in it."""
+    cbase = env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+    meta = read_json(os.path.join(cbase, login, "meta.json"), None)
+    if not isinstance(meta, dict) or meta.get("login") != login:
+        return None
+    ne_path = os.path.join(cbase, login, "node.env")
+    out = {k: v for k, v in (_env_file(ne_path, 0, _role_uids()) or {}).items() if k.startswith("CCQUOTA_") and v}
+    if not out.get("CCQUOTA_TOKEN"):
+        return None
+    run = env("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred")
+    out["CCQUOTA_FLEET_CRED_STORE"] = os.path.join(run, ".shared", "ctl.sock") if meta.get("mode") == "shared" \
+        else os.path.join(run, login, "ctl.sock")
+    out.setdefault("CCQUOTA_FLEET_CREDS", "1")
+    return {"path": None, "domain": None, "label": "credsep store (kept token)", "env": out, "node_env": ne_path}
+
+
 def lane_refusals(paths):
     """login → {why, since}: every tenant of the node program whose hello the hub
     refused with WRONG_LOGIN (issue #2501) — <state>/agent/<login>/lane.json, which
@@ -4559,6 +4579,8 @@ def account_adopt(paths, login, dry=False, rejoin=False):
         if rc or was is not None:
             return rc
     agent = account_agent(paths, login, uid, home)
+    if agent is None and was is None:
+        agent = account_agent_store(login)
     if was is not None and agent is None:
         print("%s already managed since %s" % (login, iso(was.get("since"))))
         return 0
@@ -4569,7 +4591,7 @@ def account_adopt(paths, login, dry=False, rejoin=False):
         print("fleet-node-supervisor: %s — nothing moved; fix the token (bin/fleet-hub-node.sh env --write) and adopt again"
               % agent, file=sys.stderr)
         return 1
-    if agent:
+    if agent and agent.get("path"):
         svcs.append(agent)
     if dry:
         for sv in svcs:

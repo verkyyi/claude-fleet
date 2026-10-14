@@ -227,6 +227,16 @@ const CapLoginJoin = "login_join"
 // admin without it is sent a remove, as before.
 const CapRecycle = "recycle"
 
+// CapRecycleKeep is the hello capability an admin node lists when its wash
+// keeps a recycled login's node token instead of re-joining it
+// (claude-fleet#4195): the token lives only in root's books (the credential
+// store, the machine daemon's logins/<login>.env), so nothing the last person
+// could read or change holds it. The hub then leaves that login's node enrolled
+// while the reset runs — it takes away the last person's passes, leases, link,
+// 家 and certificates instead — and keeps it when the answer says `node: kept`.
+// An admin without it re-joins with the reset's join code, as before.
+const CapRecycleKeep = "recycle_keep"
+
 // CapMachine is the hello capability of a MACHINE link (claude-fleet#2333,
 // EPIC #2329 C5): one connection, dialled by `ccquota agent --machine` with
 // the machine's own node token, that carries every login of the machine. Each

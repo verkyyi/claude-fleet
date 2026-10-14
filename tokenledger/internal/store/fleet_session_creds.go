@@ -185,6 +185,29 @@ func (s *Store) RevokeSessionCred(id, by, reason string, at time.Time) (bool, er
 	return n == 1, nil
 }
 
+// RevokeEndpointSessionCreds revokes every pass endpointID's node issued and
+// that is not revoked yet — the endpoint itself stays (claude-fleet#4195: a
+// recycled login keeps its root-held node token, the last person's passes go).
+func (s *Store) RevokeEndpointSessionCreds(endpointID, by, reason string, at time.Time) (int, error) {
+	res, err := s.write.Exec(`UPDATE fleet_session_creds SET revoked_at = ?, revoked_by = ?, reason = ?
+		WHERE endpoint_id = ? AND revoked_at IS NULL`, at.UTC().Format(sessRFC), by, reason, endpointID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// LiveEndpointSessionCreds counts endpointID's passes issued before cutoff
+// that are neither revoked nor expired as of now.
+func (s *Store) LiveEndpointSessionCreds(endpointID string, cutoff, now time.Time) (int, error) {
+	var n int
+	err := s.write.QueryRow(`SELECT COUNT(*) FROM fleet_session_creds
+		WHERE endpoint_id = ? AND revoked_at IS NULL AND expires_at > ? AND issued_at < ?`,
+		endpointID, now.UTC().Format(sessRFC), cutoff.UTC().Format(sessRFC)).Scan(&n)
+	return n, err
+}
+
 // SessionCredsForWorker is a session's live passes (not revoked, not
 // expired as of now), newest first.
 func (s *Store) SessionCredsForWorker(workerID string, now time.Time) ([]SessionCred, error) {

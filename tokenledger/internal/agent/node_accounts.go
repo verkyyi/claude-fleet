@@ -137,6 +137,22 @@ func recycleCapable(script string) bool {
 	return err == nil && bytes.Contains(b, []byte(recycleScriptMark))
 }
 
+// recycleKeepMark is what a wash that keeps the login's root-held node token
+// carries (claude-fleet#4195) — in fleet-login-reset.sh, beside the remove
+// script: the hello's CapRecycleKeep. Without it the hub retires the login's
+// node before the reset and the wash re-joins it.
+const recycleKeepMark = "FLEET_LOGIN_KEEP_NODE"
+
+// recycleKeepCapable reports whether the wash beside this login's remove
+// script (at script) keeps the node token instead of re-joining.
+func recycleKeepCapable(script string) bool {
+	if script == "" {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(script), "fleet-login-reset.sh"))
+	return err == nil && bytes.Contains(b, []byte(recycleKeepMark))
+}
+
 // resetResult is AccountResult.Reset for a reset's output: the LAST
 // `reset: <verdict>` line's verdict ("clean", or "dirty home,…"); "" when the
 // script never said one — never read as clean.

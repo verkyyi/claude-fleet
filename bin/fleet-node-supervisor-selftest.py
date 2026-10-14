@@ -1287,6 +1287,32 @@ class H_Accounts(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(self.home("bob"), "Library", "LaunchAgents",
                                                      "com.ccquota.agent.plist")))
 
+    def test_recycled_login_with_a_kept_token_adopts_from_the_store(self):
+        # issue #4195: a recycle kept the login's node token — no agent plist was
+        # set up again (no join), the token is only in the credsep store — and
+        # adopt serves it from there with nothing to boot out; no store token ⇒
+        # nothing to adopt, as before
+        cred = os.path.join(self.d, "cred")
+        os.makedirs(os.path.join(cred, "alice"))
+        json.dump({"login": "alice", "mode": "shared"}, open(os.path.join(cred, "alice", "meta.json"), "w"))
+        self.node_env(os.path.join(cred, "alice", "node.env"), "CCQUOTA_TOKEN=tok-kept\nCCQUOTA_HUB_URL=https://h\n")
+        self.acct_table()
+        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
+        r = self.run_sup("account", "adopt", "alice", env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("tok-kept", r.stdout + r.stderr, "adopt printed the token")
+        kv, mode = self.login_env("alice")
+        self.assertEqual(mode, 0o600)
+        self.assertEqual(kv, {"CCQUOTA_TOKEN": "tok-kept", "CCQUOTA_HUB_URL": "https://h", "CCQUOTA_FLEET_CREDS": "1",
+                              "CCQUOTA_FLEET_CRED_STORE": "/run/fc/.shared/ctl.sock"})
+        self.assertNotIn("bootout", self.lclog(), "a kept token has no agent to boot out")
+        self.assertIn("already managed", self.run_sup("account", "adopt", "alice", env=e).stdout)
+        os.unlink(os.path.join(cred, "alice", "node.env"))
+        self.run_sup("account", "forget", "alice", env=e)
+        self.assertEqual(self.login_env("alice"), (None, None))
+        r = self.run_sup("account", "adopt", "alice", env=e)
+        self.assertEqual(self.login_env("alice"), (None, None), "a store with no token was adopted")
+
     def test_store_login_leases_its_credentials(self):
         # issue #3276 (the Mac half of #3211): a login with a credential store
         # leases its accounts — node-join's node.env never says so, so the

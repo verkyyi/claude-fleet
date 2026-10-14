@@ -195,6 +195,8 @@
 #   pod template's token and the provisioner against a stand-in API on 127.0.0.1,
 #   bin/fleet-break-it-cluster-selftest.sh; the real cluster's RBAC and admission
 #   policy on kind, deploy/k8s/provisioner/kind-drill.sh (cluster-perms.yml).
+# Sidefx half — sandbox-home-real-uid (issue #4213): a teardown sandboxed by HOME
+#   alone, bin/fleet-break-it-sidefx-selftest.sh (decoys, a record, no real signal).
 # CI half — ci-runner-* rows (issue #3144): the machine's test runner, a fake GitHub
 #   API on 127.0.0.1 and a fake runner archive, bin/fleet-break-it-ci-selftest.sh.
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
@@ -288,7 +290,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/dev/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" "$BIN/fleet-break-it-seats-selftest.sh" "$BIN/fleet-break-it-admin-selftest.sh" "$BIN/fleet-break-it-cluster-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" "$BIN/fleet-break-it-seats-selftest.sh" "$BIN/fleet-break-it-admin-selftest.sh" "$BIN/fleet-break-it-cluster-selftest.sh" "$BIN/fleet-break-it-sidefx-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -5370,7 +5372,7 @@ drill_home_template_leak() {
 drill_spare_recycle_dirty() {
   CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
   t0=$(now)
-  grep -q 'recycleLeftovers(\*a, now)' "$f" \
+  grep -Eq 'recycleLeftovers(As)?\(\*a, now' "$f" \
     || { WHY="applyReset no longer checks the hub's half before recording the spare"; return 1; }
   grep -q 'case res.Reset != control.ResetClean:' "$f" \
     || { WHY="applyReset no longer refuses a wash that did not say reset: clean"; return 1; }
@@ -5397,6 +5399,48 @@ drill_spare_wash_resume() {
   out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
     || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
   WHAT="每类种一样 → 洗完 reset: clean + credsep: separated；留一个进程 → dirty processes；重新加入失败 → dirty rejoin；半路杀掉同 op 再跑续完、只一份存档（沙盒真跑检查器）"
+  SECS=$(since "$t0")
+}
+
+# ---- recycle-rejoins (#4195, #4194 A): every recycle re-joined the hub with a
+# fresh join code (8.9–13.1 s of [7a]) though only root ever held the login's
+# token. Now a login the machine daemon serves keeps it root's through the wash
+# (fleet-login-reset.sh step 0, credsep setenv back, adopt from the store), the
+# hub (CapRecycleKeep) leaves that node enrolled and changes only who the login
+# belongs to; a token the person could reach still re-joins.
+drill_recycle_rejoins() {
+  CAP=150; local t0 out
+  t0=$(now)
+  grep -q 'FLEET_LOGIN_KEEP_NODE' "$ROOT/bin/fleet-login-reset.sh" \
+    || { WHY="fleet-login-reset.sh no longer keeps the root-held node token: every recycle re-joins"; return 1; }
+  grep -q 'logins/\$LOGIN.env' "$ROOT/bin/fleet-login-reset.sh" \
+    || { WHY="fleet-login-reset.sh keeps a token without asking whether only the machine daemon ever served it"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  printf '%s\n' "$out" | grep -q '^ok   K not served by the machine daemon' \
+    || { WHY="fleet-login-reset-selftest.sh has no keep leg (K)"; return 1; }
+  _drill_go_tests 'TestRecycleKeepsRootHeldNode TestRecycleKeptNodeAmbiguousFails' \
+    "$ROOT/tokenledger/internal/api/fleet_recycle_keep_test.go" \
+    '机器守护代管的登录令牌回收时留在 root（不再 [7a] join）、入口只改归属（spare）并作废旧人的通行证·租约·连接·证书；令牌旧人碰得到过照旧重新入网；留下的节点说不清是哪个就失败（沙盒真跑洗号 + go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- recycle-old-cert (#4195): a recycled login's last person kept a live SSH
+# certificate naming it (12 h), and the hub never listed it — a door would
+# still let them in as the next person's login. Now every recycle puts the
+# person's scope on this machine and each live certificate naming the login on
+# the revocation list (refused within 10 s), and recycleLeftovers reds on one
+# not there.
+drill_recycle_old_cert() {
+  CAP=90; local t0 f="$ROOT/tokenledger/internal/api/fleet_recycle.go"
+  t0=$(now)
+  grep -q 'recycleRevokePerson(a, now' "$f" \
+    || { WHY="recycleClear no longer revokes the last person's certificates"; return 1; }
+  grep -q '"cert"' "$f" \
+    || { WHY="recycleLeftovers no longer checks the last person's certificates are on the list"; return 1; }
+  _drill_go_tests 'TestRecycleRevokesOldCertsWhenRejoining TestRecycleKeepsRootHeldNode' \
+    "$ROOT/tokenledger/internal/api/fleet_recycle_keep_test.go" \
+    '回收时旧人在这台的范围吊销 + 每张仍有效、写着这个登录的 SSH 证书上吊销名单（ssh:<serial>），留号与重新入网两条路都是；审计 spare.revoke（go test）' || return 1
   SECS=$(since "$t0")
 }
 
