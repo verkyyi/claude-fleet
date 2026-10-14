@@ -36,6 +36,7 @@ function machines(): DemoMachine[] {
   const all: DemoMachine[] = [
     {
       hostname: "mac-a",
+      alias: "mac-mini",
       status: "online",
       sessions: 9,
       load1: 0.42 * 10,
