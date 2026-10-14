@@ -83,6 +83,10 @@
 | install §2.2 | 每个登录的 `FLEET_CRED_RELAY_URL` 入口不下发、文档没写 | 已修 #4010（入口加入时下发） |
 | install §2.2（安装程序） | umask 077 下 `/usr/local/lib/claude-fleet` 建成 0700，共享代理每秒退出 | 已修 #4010 |
 | 发布包 | Claude Code 从 registry.npmjs.org 拉，不走 npmmirror | 已修 #4011（`CCQUOTA_FLEET_RELEASE_NPM`，§1.8） |
+| install §0–§1.7 | 代走第一轮：buildx、国内拉 Docker Hub 基础镜像、umask 顺序、装 Caddy、`release-artifacts` 目录、未登录行为、登录方式要先备好、`CCQUOTA_ADMINS` 照抄占位 | #4070 |
+| install §1.3 | 发布包制品：没写官方发布方地址，「自己放」不知 Codex 用哪个文件、名字怎么对应 | #4071 |
+| install §1.8 | 境内入口域名没备案，云厂商按 SNI 拦外网所有 HTTPS | #4072 |
+| self-host quickstart | 本机模式装完提示「去 <入口>/install 装」、无 `--help`、非交互退出码 2 | #4074 |
 
 ## 演练记录
 
