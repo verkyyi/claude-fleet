@@ -29,6 +29,7 @@ T="$BIN/fleet-home-template.py"
 ME=$(id -un)
 export FLEET_HOME_TEMPLATE_DIR="$W/tpl" FLEET_NODE_ROOT="$W/rt" FLEET_HOME_TEMPLATE_RUNAS=- FLEET_HOME_TEMPLATE_TEST_EUID=0
 S1=1111111111111111111111111111111111111111 S2=2222222222222222222222222222222222222222 S3=3333333333333333333333333333333333333333
+mode() { python3 -c 'import os,sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 runtime() { mkdir -p "$W/rt/$1/bin"; rm -f "$W/rt/current"; ln -s "$W/rt/$1" "$W/rt/current"; }
 # the stub of a login's first minute: what install + bootstrap leave in $HOME
 # shellcheck disable=SC2016 # expanded by the build's bash
@@ -60,7 +61,7 @@ m = json.load(open(sys.argv[1]))
 assert sorted(m["rewrite"]) == [".claude.json", ".tmux.conf"], m["rewrite"]
 assert m["relink"] == [".claude/fleet"], m["relink"]
 PY
-[ "$(stat -f %Lp "$W/tpl" 2>/dev/null || stat -c %a "$W/tpl")" = 711 ] && [ "$(stat -f %Lp "$W/tpl/$S1" 2>/dev/null || stat -c %a "$W/tpl/$S1")" = 700 ] \
+[ "$(mode "$W/tpl")" = 711 ] && [ "$(mode "$W/tpl/$S1")" = 700 ] \
   && ok 'A base 0711, template 0700' || fail 'A modes'
 [ ! -e "$W/tpl/build" ] && [ ! -e "$W/tpl/build.lock" ] && ok 'A no staging left' || fail 'A staging left'
 python3 "$T" status | grep -q "^ready ${S1:0:12}" && ok 'A status: ready' || fail 'A status'
@@ -92,7 +93,7 @@ grep -q "source $D/.claude/fleet/conf" "$D/.tmux.conf" && ! grep -q "$W/tpl" "$D
   && ok 'D files name the new home' || fail 'D a file still names the staging home'
 [ "$(readlink "$D/.claude/fleet")" = "$D/.claude/fleet.versions/v" ] && ok 'D the link names the new home' || fail "D link: $(readlink "$D/.claude/fleet")"
 grep -q "^$S1 " "$D/.config/claude-fleet/global/home-template" && ok 'D marked home-template' || fail 'D no mark'
-[ "$(stat -f %Lp "$D" 2>/dev/null || stat -c %a "$D")" = 700 ] && ok 'D 0700' || fail 'D mode'
+[ "$(mode "$D")" = 700 ] && ok 'D 0700' || fail 'D mode'
 python3 - "$D" "$since" <<'PY' && ok 'D every entry is newer than the wash (the check never reads it as the last person'"'"'s)' || fail 'D an entry predates the wash'
 import os, sys
 top, since = sys.argv[1], float(sys.argv[2])
