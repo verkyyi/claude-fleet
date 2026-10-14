@@ -235,8 +235,11 @@ jobs:
         run: |
           ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
             --jq '.jobs[] | select((.name | startswith("macOS / shard")) and .conclusion == "failure") | .id') || exit 0
+          # the job's log over REST: `gh run view --log` refuses while the run is
+          # in progress — and this job is part of it, so it never matched (#4238)
           for j in $ids; do
-            gh run view --job "$j" --log -R "$GITHUB_REPOSITORY" 2>/dev/null | grep -qE 'fleet-ci: this runner takes only the merged train|/bin/bash: /Library/Application: No such file or directory' || continue
+            u="repos/$GITHUB_REPOSITORY/actions/jobs/$j/logs"
+            { gh api "$u" --allow-escape-sequences 2>/dev/null || gh api "$u" 2>/dev/null; } | grep -qE 'fleet-ci: this runner takes only the merged train|/bin/bash: /Library/Application: No such file or directory' || continue
             echo "### 自家测试机拒了 mac-follow（任务门旧版，或门的路径带空格没跑起来）：同一提交改到 GitHub 的 Mac 上重跑，这趟取消" >> "$GITHUB_STEP_SUMMARY"
             gh workflow run mac-follow.yml --repo "$GITHUB_REPOSITORY" --ref master -f "sha=$SHA" -f runners=github
             gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
