@@ -165,6 +165,24 @@ def _guard_regrant(script, checked, granted):
 # inside the cluster, never a subscription credential.
 CENTRAL_RE = r'(https://[A-Za-z0-9.-]+|http://[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.svc\.cluster\.local)(:[0-9]{1,5})?'
 EGRESS_PROXY_RE = r'http://[A-Za-z0-9.-]+:[0-9]{1,5}'
+# The hub's own Service (#4175): a pod's machine-to-hub calls (its control link,
+# a session's pass, the svc run's ticket) dial it inside the cluster instead of
+# the public door — whose host the egress lists no more than any other (#4112,
+# #4172: 403). FLEET_HUB_URL stays the public address: the hub's identity, links
+# for people. Plain http only to a cluster-local name, like the credential proxy
+# (deploy/k8s/credproxy/fleet-workers already reaches the hub this way). The
+# guard cuts the service range: the hub's ClusterIP:PORT goes in --egress-allow.
+HUB_INTERNAL_RE = r'http://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9]([a-z0-9-]*[a-z0-9])?\.svc\.cluster\.local(:[0-9]{1,5})?'
+
+
+def hub_internal_env(hub_internal):
+    """[] (none named — byte for byte as before) or the one FLEET_HUB_INTERNAL_URL."""
+    if not hub_internal:
+        return []
+    if not re.fullmatch(HUB_INTERNAL_RE, hub_internal):
+        raise ValueError('--hub-internal is http://NAME.NS.svc.cluster.local[:PORT] (the hub\'s Service), not %r'
+                         % hub_internal)
+    return [{'name': 'FLEET_HUB_INTERNAL_URL', 'value': hub_internal}]
 # The package caches (#3548, EPIC #3500 C3): fleet-npm:4873 · fleet-pypi:3141 ·
 # fleet-goproxy:3000 in this namespace (deploy/k8s/caches). The pod carries the
 # namespace; fleet-node-linux.py writes the three URLs into /etc/fleet-devnet.env.
@@ -526,7 +544,7 @@ def _etc_mounts(names):
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
                        cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay='',
-                       login='', uid=0, private_mirrors=()):
+                       login='', uid=0, private_mirrors=(), hub_internal=''):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
     (ReadWriteOncePod). Inside: one login, the one it was made for (--login /
@@ -535,7 +553,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
     are the cluster's (FLEET_NODE_PROFILE=user-pod). No Kubernetes credential, no
     fleet/principal label — the provisioner writes that once the pod is ready.
     `private_mirrors` (#4002): the mirrors only their lists may read; this pod
-    gets the ones whose list names its login, and nothing of the others."""
+    gets the ones whose list names its login, and nothing of the others.
+    `hub_internal` (#4175): the hub's Service its machine-to-hub calls dial."""
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
                                              cn_mirrors, cluster_caches, namespace)
@@ -571,6 +590,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
            # the image's runtime: the login cannot (and need not) switch it
            {'name': 'FLEET_NODE_UPDATE_OWNER', 'value': 'image'},
            {'name': 'HOME', 'value': '/home/' + login}] + who
+    env += hub_internal_env(hub_internal)
     env += devnet
     env += _relay_env(relay)
     # fresh dicts each time: no two containers share one object (a patch of one stays its own)
@@ -962,11 +982,13 @@ def svc_run_name(run, attempt):
 
 def svc_run_resources(image, run, attempt, svc, deadline, hub, cred_central, egress_proxy,
                       namespace='fleet-workers', egress=None, pull_secrets=('acr-pull',), ttl=SVC_TTL,
-                      runner=SVC_RUNNER):
+                      runner=SVC_RUNNER, hub_internal=''):
     """[the Job] of one service run attempt. `egress['allow']` names the two
     in-cluster roads the closed guard lets through (the run egress proxy and the
     credential proxy, IP:PORT each); `egress_proxy` is the run egress proxy's URL
-    (the hub and the open web go through it), `cred_central` the credential proxy."""
+    (the hub and the open web go through it), `cred_central` the credential proxy,
+    `hub_internal` (#4175) the hub's Service the runner asks in its place (its
+    ClusterIP:PORT then in egress['allow'])."""
     name = svc_run_name(run, attempt)
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the svc run image by sha256 digest')
@@ -976,6 +998,7 @@ def svc_run_resources(image, run, attempt, svc, deadline, hub, cred_central, egr
         raise ValueError('a run deadline is %d-%d seconds, not %r' % (SVC_DEADLINE + (deadline,)))
     if not re.fullmatch(r'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?', hub or ''):
         raise ValueError('the hub is https://HOST[:PORT], not %r' % hub)
+    hub_internal_env(hub_internal)
     if not re.fullmatch(CENTRAL_RE, cred_central or ''):
         raise ValueError('the credential proxy is https://HOST or http://NAME.NS.svc.cluster.local[:PORT], not %r'
                          % cred_central)
@@ -995,7 +1018,7 @@ def svc_run_resources(image, run, attempt, svc, deadline, hub, cred_central, egr
     labels = {'app.kubernetes.io/name': 'fleet-svc-run', 'fleet/role': 'job', 'fleet/job-kind': 'svc',
               'fleet/job-net': 'svc', 'fleet/svc': svc, 'fleet/run': run, 'fleet/attempt': str(attempt)}
     env = [{'name': 'FLEET_SVC_RUN', 'value': run}, {'name': 'FLEET_SVC_ATTEMPT', 'value': str(attempt)},
-           {'name': 'FLEET_SVC_DEADLINE', 'value': str(deadline)}, {'name': 'FLEET_SVC_HUB', 'value': hub},
+           {'name': 'FLEET_SVC_DEADLINE', 'value': str(deadline)}, {'name': 'FLEET_SVC_HUB', 'value': hub_internal or hub},
            {'name': 'FLEET_SVC_CENTRAL', 'value': cred_central},
            {'name': 'FLEET_SVC_KEY_FILE', 'value': '/run/fleet-svc-key/' + SVC_TOKEN_KEY},
            # the hub and the open web through the run egress proxy; the credential
@@ -1114,6 +1137,10 @@ if __name__ == '__main__':
                         'every session routes central, no subscription credential is leased into or kept in the pod')
     p.add_argument('--egress-proxy', default='', metavar='URL',
                    help="every login's HTTPS_PROXY: the cluster's one egress (http://fleet-egress.fleet-workers.svc.cluster.local:3128)")
+    p.add_argument('--hub-internal', default='', metavar='URL',
+                   help="the hub's in-cluster Service (http://ccquota-hub.new-deploy.svc.cluster.local): a "
+                        "--user-pod's / --svc-run's machine-to-hub calls dial it; --hub stays the public address "
+                        "(#4175). Its ClusterIP:PORT goes in --egress-allow")
     p.add_argument('--egress-closed', action='store_true',
                    help='the guard rejects the public internet too: out only through --egress-allow destinations '
                         "(the egress and credproxy Services' ClusterIPs, the hub's address)")
@@ -1186,7 +1213,7 @@ if __name__ == '__main__':
         if args.svc_run:
             items = svc_run_resources(args.image, args.svc_run, args.svc_attempt, args.svc_name, args.svc_deadline,
                                       args.hub, args.cred_central, args.egress_proxy, args.namespace, egress=egress,
-                                      pull_secrets=args.pull_secrets or ['acr-pull'])
+                                      pull_secrets=args.pull_secrets or ['acr-pull'], hub_internal=args.hub_internal)
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         if args.job:
@@ -1207,7 +1234,8 @@ if __name__ == '__main__':
                                        cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
                                        egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
                                        cluster_caches=args.cluster_caches, relay=args.relay,
-                                       login=args.login, uid=args.uid, private_mirrors=private)
+                                       login=args.login, uid=args.uid, private_mirrors=private,
+                                       hub_internal=args.hub_internal)
         else:
             items = resources(args.image, args.hub, args.storage_class, args.namespace,
                               entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,

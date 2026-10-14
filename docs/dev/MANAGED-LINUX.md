@@ -480,17 +480,20 @@ A user pod uses them through three render flags:
 | `--cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local` | every login's root route settings carry `FLEET_CRED_CENTRAL_URL` (its host on `FLEET_CRED_ALLOW_HOSTS`); every login's store and node agent settings say `CCQUOTA_FLEET_CREDS=0`, so the node program leases nothing into the pod; and each start deletes every subscription credential file the volume still holds — each store's `accounts/` tokens, hub-managed Codex `auth.json`, the pool index, the shared proxy's pool (the node token, the relay pass and the hub passes stay: they are the login's identity). The local proxy takes plain `http` for the central route only, and only to a `NAME.NS.svc.cluster.local` name |
 | `--egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128` | `/etc/fleet-devnet.env`: `HTTPS_PROXY` / `HTTP_PROXY` (both cases) and `NO_PROXY=localhost,127.0.0.1,::1,.svc,.cluster.local` for every login, the gh wrapper's road when no `--github-proxy` is named; `/etc/gitconfig`: `http.proxy` for every host |
 | `--egress-closed` (needs `--egress-proxy`) | the guard's last rule rejects everything else (IPv4 and IPv6): the pod reaches the outside only through its `--egress-allow` destinations |
+| `--hub-internal http://ccquota-hub.new-deploy.svc.cluster.local` (user pod, svc run) | `FLEET_HUB_INTERNAL_URL` (#4175): the pod's machine-to-hub calls — the node program's control link and every HTTP call it makes, the login's own proxy (its pass renewals, budget, trust check, hub broker) and a session's pass (`fleet-session-cred.sh`) — dial the hub's own Service instead of the public door the egress does not carry (#4112 / #4172: 403). `FLEET_HUB_URL` and node.env's `CCQUOTA_HUB_URL` stay the public address: the hub's identity, what a login is joined to, every link for a person. Only `http(s)://NAME.NS.svc.cluster.local[:PORT]` is taken (anything else = the public URL, as before); plain http inside the cluster carries the node token and passes the way `deploy/k8s/credproxy/fleet-workers` already reaches the hub. The guard cuts the service range: name the hub Service's ClusterIP:80 in `--egress-allow` |
 
 With `--egress-closed`, name each destination the node itself needs, before the
 range cuts: the two Services' ClusterIPs and the hub's address.
 
 ```sh
 kubectl -n fleet-workers get svc fleet-credproxy fleet-egress -o jsonpath='{range .items[*]}{.spec.clusterIP}{"\n"}{end}'
+kubectl -n new-deploy get svc ccquota-hub -o jsonpath='{.spec.clusterIP}'   # HUB_SVC_IP (--hub-internal)
 dig +short hub.example.com            # the hub (also the NetworkPolicy's ipBlock)
 python3 extras/managed-node/render.py … \
   --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local \
   --egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 --egress-closed \
   --egress-allow CREDPROXY_IP:80 --egress-allow EGRESS_IP:3128 --egress-allow HUB_IP:443 \
+  --hub-internal http://ccquota-hub.new-deploy.svc.cluster.local --egress-allow HUB_SVC_IP:80 \
   --github-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 > /tmp/fleet-linux.json
 ```
 

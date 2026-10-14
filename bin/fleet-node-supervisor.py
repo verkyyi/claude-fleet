@@ -289,6 +289,9 @@ NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "F
                  # node program
                  "FLEET_NODE_PROFILE", "FLEET_USER_POD", "FLEET_POD_LOGIN", "FLEET_POD_UID",
                  "FLEET_CRED_CENTRAL_URL",
+                 # the hub's in-cluster Service a pod's machine-to-hub calls dial
+                 # (#4175): the node program's control link, a login's own proxy
+                 "FLEET_HUB_INTERNAL_URL",
                  # the cluster's one door (#3549): its switch and where its keys are mounted
                  "FLEET_DOOR", "FLEET_DOOR_NAMESPACE", "FLEET_DOOR_SECRET",
                  # a container's entry= route (#3213): `entry reach` runs under the node

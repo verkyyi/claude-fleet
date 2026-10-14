@@ -680,13 +680,17 @@ def login_open(a):
 # The tenant's fleet.conf on a person's own pod (#3757): its own proxy, not
 # separated — the pod holds no subscription credential to separate it from —
 # routing every session to the cluster credential proxy. Written as the login.
+# argv[2] (#4175): the hub's in-cluster Service (render.py --hub-internal) its
+# proxy and its sessions' passes dial in the public address' place; '' = no line.
 POD_CONF = (
     'import sys; from pathlib import Path; p=Path.home()/".config/claude-fleet"; p.mkdir(parents=True,exist_ok=True); '
     'f=p/"fleet.conf"; old=f.read_text() if f.exists() else ""; '
     'keep=[l for l in old.splitlines(True) if l.split("=",1)[0] not in '
-    '("FLEET_CRED_PROXY","FLEET_CRED_SEPARATE","FLEET_CRED_CENTRAL_URL")]; '
+    '("FLEET_CRED_PROXY","FLEET_CRED_SEPARATE","FLEET_CRED_CENTRAL_URL","FLEET_HUB_INTERNAL_URL")]; '
     'b="".join(keep) or "# ---- [common] ----\\n"; b=b if b.endswith("\\n") else b+"\\n"; '
-    'f.write_text(b+"FLEET_CRED_PROXY=1\\nFLEET_CRED_SEPARATE=0\\nFLEET_CRED_CENTRAL_URL="+sys.argv[1]+"\\n")')
+    'hi=sys.argv[2] if len(sys.argv)>2 else ""; '
+    'f.write_text(b+"FLEET_CRED_PROXY=1\\nFLEET_CRED_SEPARATE=0\\nFLEET_CRED_CENTRAL_URL="+sys.argv[1]+"\\n"'
+    '+("FLEET_HUB_INTERNAL_URL="+hi+"\\n" if hi else ""))')
 
 
 def pod_login_open(a):
@@ -745,7 +749,7 @@ def pod_login_open(a):
             home.mkdir(mode=0o700)
         os.chmod(home, 0o700)
     conf = home / '.config/claude-fleet'
-    as_tenant(s, login, ['python3', '-c', POD_CONF, central_url()])
+    as_tenant(s, login, ['python3', '-c', POD_CONF, central_url(), hub_internal_url()])
     token_path = conf / 'node.env'
     ne = env_read(token_path)
     if ne.get('CCQUOTA_TOKEN'):
@@ -892,6 +896,19 @@ def route_heal(a):
 # login's identity, not a subscription's. Unset = byte for byte as before.
 def central_url():
     return os.environ.get('FLEET_CRED_CENTRAL_URL', '').strip().rstrip('/')
+
+
+# The hub's in-cluster Service (render.py --hub-internal, #4175): what a pod's
+# machine-to-hub calls dial instead of the public FLEET_HUB_URL, which stays the
+# hub's identity (node.env's CCQUOTA_HUB_URL never changes). Only an http(s) URL
+# to a NAME.NS.svc.cluster.local Service is taken; anything else = none.
+HUB_INTERNAL_RE = re.compile(r'https?://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9]([a-z0-9-]*[a-z0-9])?'
+                             r'\.svc\.cluster\.local(:[0-9]{1,5})?')
+
+
+def hub_internal_url():
+    v = os.environ.get('FLEET_HUB_INTERNAL_URL', '').strip().rstrip('/')
+    return v if HUB_INTERNAL_RE.fullmatch(v) else ''
 
 
 def creds_flag():

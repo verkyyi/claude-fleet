@@ -38,9 +38,22 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/spool"
 )
 
+// hub is the base URL a call to the hub dials (claude-fleet#4175).
+func (c Config) hub() string {
+	if c.HubDial != "" {
+		return c.HubDial
+	}
+	return c.HubURL
+}
+
 // Config configures one endpoint's collector.
 type Config struct {
-	HubURL              string // e.g. https://ccquota.example.com
+	HubURL string // e.g. https://ccquota.example.com
+	// HubDial is where this agent's calls to the hub go when not HubURL: a
+	// person's pod dials the hub's in-cluster Service (claude-fleet#4175,
+	// FLEET_HUB_INTERNAL_URL). HubURL stays the hub's identity — what a login
+	// opened here is joined to. Empty = HubURL.
+	HubDial             string
 	Token               string // enrollment token
 	Home                string // Claude Code home; defaults to the user's home
 	StateDir            string // cursor + spool live here
@@ -701,7 +714,7 @@ func (a *Agent) pushLive(ctx context.Context) error {
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		a.cfg.HubURL+"/v1/live/report", bytes.NewReader(body))
+		a.cfg.hub()+"/v1/live/report", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1304,7 +1317,7 @@ func (a *Agent) push(ctx context.Context, batch *model.Batch) (*model.IngestResp
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		a.cfg.HubURL+"/v1/ingest", bytes.NewReader(body))
+		a.cfg.hub()+"/v1/ingest", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -1337,7 +1350,7 @@ func (a *Agent) ensureKey(ctx context.Context) {
 	}
 	kctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	s, note := nodesig.Ensure(kctx, nil, a.cfg.HubURL, a.cfg.Token, a.cfg.KeyFile)
+	s, note := nodesig.Ensure(kctx, nil, a.cfg.hub(), a.cfg.Token, a.cfg.KeyFile)
 	if note != "" {
 		log.Print(note)
 	}

@@ -56,6 +56,20 @@ switch() { # 1 / 0 — an explicit environment value outranks the conf (fleet-cr
     printf '%s' "${FLEET_CRED_PROXY:-0}" )
 }
 
+# hub_internal → the hub's in-cluster Service a person's pod asks for a pass in
+# the public address' place (issue #4175: render.py --hub-internal; the pod's
+# fleet.conf names it). The environment wins, as for FLEET_CRED_PROXY; python
+# takes it only as http(s)://NAME.NS.svc.cluster.local[:PORT]. Unset = nothing.
+hub_internal() {
+  [ -n "${FLEET_HUB_INTERNAL_URL:-}" ] && { printf '%s' "$FLEET_HUB_INTERNAL_URL"; return; }
+  ( set -a
+    for f in "$BIN/../fleet.conf" "$CONF/fleet.settings" "$CONF/fleet.conf"; do
+      # shellcheck source=/dev/null
+      [ -f "$f" ] && . "$f" >/dev/null 2>&1
+    done
+    printf '%s' "${FLEET_HUB_INTERNAL_URL:-}" )
+}
+
 separated() { [ -f "$CONF/credsep.json" ]; }   # the role account holds the credentials (#1971)
 
 sid_ok() { case "${1:-}" in ''|*[!A-Za-z0-9._-]*|.*) return 1 ;; esac; }
@@ -105,8 +119,8 @@ hub_pass() {
   [ -n "$a" ] || a=$(python3 "$BIN/fleet-mcp.py" --cred assert 2>/dev/null)
   [ -n "$a" ] || die "central route: this session has no worker assertion (FLEET_WORKER_CRED, a hub) — no pass"
   local br=''; br=$(hub_broker) || br=''
-  FSC_BROKER="$br" FLEET_WORKER_ASSERT="$a" FSC_PROVIDER="$1" FSC_CONF="$CONF" python3 -I - <<'PY'
-import json, os, sys, urllib.parse, urllib.request
+  FSC_DIAL="$(hub_internal)" FSC_BROKER="$br" FLEET_WORKER_ASSERT="$a" FSC_PROVIDER="$1" FSC_CONF="$CONF" python3 -I - <<'PY'
+import json, os, re, sys, urllib.parse, urllib.request
 ne = {}
 try:
     for line in open(os.path.join(os.environ["FSC_CONF"], "node.env")):
@@ -120,6 +134,10 @@ except OSError:
     pass
 hub = (ne.get("CCQUOTA_HUB_URL") or os.environ.get("FLEET_HUB_URL", "")).rstrip("/")
 tok = ne.get("CCQUOTA_TOKEN", "")
+dial = os.environ.get("FSC_DIAL", "").strip().rstrip("/")
+if hub and re.fullmatch(r"https?://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+                        r"\.svc\.cluster\.local(:[0-9]{1,5})?", dial):
+    hub = dial   # the hub's in-cluster Service (#4175); node.env still names the hub
 if os.environ.get("FSC_BROKER") and "\t" in os.environ["FSC_BROKER"]:
     hub, tok = os.environ["FSC_BROKER"].split("\t", 1)   # separated: the proxy's hub broker
 if not hub or not tok:
@@ -161,8 +179,8 @@ PY
 
 hub_drop() { # <pass id> — DELETE it, best effort (it expires on its own)
   local br=''; br=$(hub_broker) || br=''
-  FSC_BROKER="$br" FSC_ID="$1" FSC_CONF="$CONF" python3 -I - <<'PY' >/dev/null 2>&1
-import os, urllib.parse, urllib.request
+  FSC_DIAL="$(hub_internal)" FSC_BROKER="$br" FSC_ID="$1" FSC_CONF="$CONF" python3 -I - <<'PY' >/dev/null 2>&1
+import os, re, urllib.parse, urllib.request
 ne = {}
 try:
     for line in open(os.path.join(os.environ["FSC_CONF"], "node.env")):
@@ -176,6 +194,10 @@ except OSError:
     pass
 hub = (ne.get("CCQUOTA_HUB_URL") or os.environ.get("FLEET_HUB_URL", "")).rstrip("/")
 tok = ne.get("CCQUOTA_TOKEN", "")
+dial = os.environ.get("FSC_DIAL", "").strip().rstrip("/")
+if hub and re.fullmatch(r"https?://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+                        r"\.svc\.cluster\.local(:[0-9]{1,5})?", dial):
+    hub = dial   # the hub's in-cluster Service (#4175); node.env still names the hub
 if os.environ.get("FSC_BROKER") and "\t" in os.environ["FSC_BROKER"]:
     hub, tok = os.environ["FSC_BROKER"].split("\t", 1)   # separated: the proxy's hub broker
 if hub and tok:

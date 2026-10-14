@@ -263,7 +263,7 @@ def configured_urls(cfgs):
     """The fleet's own hub and relay as root's config names them (issue #3577):
     FLEET_HUB_URL, each config's relay / central URL, and the hub its node.env
     (root's copy in separated mode) points at."""
-    urls = [env("FLEET_HUB_URL")]
+    urls = [env("FLEET_HUB_URL"), env("FLEET_HUB_INTERNAL_URL")]
     for c in cfgs:
         urls += [getattr(c, "relay_url", ""), getattr(c, "central_url", "")]
         ne = getattr(c, "node_env", "")
@@ -289,6 +289,19 @@ def loopback_ok(url, cluster=False):
     if u.scheme == "https" or incluster:
         return host in ALLOWED
     return loop and env("FLEET_CREDSEP_TEST") == "1"
+
+
+def hub_dial(hub):
+    """Where a call to `hub` goes (issue #4175): a person's pod names the hub's
+    in-cluster Service (FLEET_HUB_INTERNAL_URL, render.py --hub-internal) and asks
+    it there instead of the public door the egress does not carry. `hub` stays the
+    identity and is checked as before; the Service must pass loopback_ok's cluster
+    rule (http to NAME.NS.svc.cluster.local, an allowed host when separated).
+    Unset or not such a URL = `hub`, byte for byte."""
+    dial = env("FLEET_HUB_INTERNAL_URL").strip().rstrip("/")
+    if hub and dial and loopback_ok(dial, cluster=True):
+        return dial
+    return hub
 
 
 def node_env(path=None):
@@ -516,7 +529,7 @@ class Budget:
             sent = {k: list(v) for k, v in self.pending.items()}
         body = json.dumps({"usage": [self.entry(k, v) for k, v in sorted(sent.items())]}).encode()
         try:
-            req = urllib.request.Request(hub + "/v1/node/usage", data=body, method="POST",
+            req = urllib.request.Request(hub_dial(hub) + "/v1/node/usage", data=body, method="POST",
                                          headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=10) as r:
                 st = json.loads(r.read() or b"{}")
@@ -673,7 +686,7 @@ class HubPasses:
                 raise RuntimeError("no hub / node token here")
             if not loopback_ok(hub):
                 raise RuntimeError("hub URL not allowed (%s)" % hub)
-            req = urllib.request.Request(hub + "/v1/fleet/session-cred/renew", method="POST",
+            req = urllib.request.Request(hub_dial(hub) + "/v1/fleet/session-cred/renew", method="POST",
                                          data=json.dumps({"cred": cur}).encode(),
                                          headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
             try:
@@ -907,7 +920,7 @@ class Router:
             t, why = "untrusted", "no node token: a client-only computer"
         else:
             try:
-                req = urllib.request.Request(hub + "/v1/node/self", headers={"Authorization": "Bearer " + tok})
+                req = urllib.request.Request(hub_dial(hub) + "/v1/node/self", headers={"Authorization": "Bearer " + tok})
                 with urllib.request.urlopen(req, timeout=10) as r:
                     body = json.loads(r.read() or b"{}")
                 raw = body.get("trust")
@@ -1338,6 +1351,7 @@ class Proxy(BaseHTTPRequestHandler):
             return self.fail(403, "hub URL is neither https nor loopback", "permission_error")
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != "authorization"}
         out["Authorization"] = "Bearer " + ntok
+        hub = hub_dial(hub)
         self.upstream(hub, urlsplit(hub).path.rstrip("/") + path, out, body, "hub", "node", "-", "node",
                       [], t0, "hub", can_switch=False)
 

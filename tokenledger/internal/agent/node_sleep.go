@@ -246,7 +246,7 @@ func (a *Agent) nodePost(ctx context.Context, path string, body any, timeout tim
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	b, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.HubURL+path, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.hub()+path, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
