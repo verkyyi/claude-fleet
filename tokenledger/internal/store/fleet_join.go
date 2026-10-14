@@ -228,6 +228,21 @@ func (s *Store) DeviceNodeEndpoint(deviceFP string) (string, error) {
 	return id, err
 }
 
+// LiveEndpointOn is the newest live endpoint of OS user osUser on machine host
+// (the name it enrolled as, else the one it reports); ErrNoSuchEndpoint when
+// none. The admin seat's token is reissued on it rather than a second node
+// minted (claude-fleet#3724).
+func (s *Store) LiveEndpointOn(host, osUser string) (string, error) {
+	var id string
+	err := s.read.QueryRow(`SELECT endpoint_id FROM endpoints
+		WHERE os_user = ? AND retired_at IS NULL AND (enrolled_host = ? OR (enrolled_host = '' AND hostname = ?))
+		ORDER BY enrolled_at DESC LIMIT 1`, osUser, host, host).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "") {
+		return "", ErrNoSuchEndpoint
+	}
+	return id, err
+}
+
 // RotateEndpointToken gives a live endpoint a new enrollment token. The old
 // one keeps resolving for grace (claude-fleet#2501: a machine's node program
 // may hold it while the login re-registers), then stops; grace 0 stops it at

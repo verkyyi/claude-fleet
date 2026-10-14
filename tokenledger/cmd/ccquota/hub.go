@@ -1522,6 +1522,15 @@ func runAgent(args []string) error {
 			keyFile = ""
 		}
 	}
+	if *token == "" {
+		// The admin seat's agent (claude-fleet#3724): root's file, read by
+		// the role account's group only.
+		t, err := tokenFromFile(os.Getenv("CCQUOTA_TOKEN_FILE"))
+		if err != nil {
+			return err
+		}
+		*token = t
+	}
 
 	h, err := homeDir(*home)
 	if err != nil {

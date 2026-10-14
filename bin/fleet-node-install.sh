@@ -53,6 +53,15 @@
 #             visudo -c (fleet_admin_seat.py ensure); 0 takes admin/ and the
 #             sudoers file away (the account stays); neither: a seat already
 #             set up is kept converged, none = no line at all
+#   座位agent the seat's own agent (#3724, C15·b-3), on a machine whose seat is
+#             set up (admin/ there, FLEET_ADMIN_SEAT not 0): the role account's
+#             node token — asked of the hub with the MACHINE's credential (POST
+#             /v1/node/admin-token: only this machine, only the admin role's name
+#             CCQUOTA_FLEET_ADMIN_USERS names, one audit line) when none is stored
+#             or the hub stopped taking it — kept root:<role> 0640 in
+#             <state>/admin/agent.token, and com.claude-fleet.admin-agent /
+#             fleet-admin-agent.service (UserName the role) running
+#             <root>/agent/ccquota agent (fleet_admin_seat.py agent); no seat = no line
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3).
 #             FLEET_NODE_SEAT=1 on the command (with the core serving) moves it
@@ -603,6 +612,37 @@ case "${POD:+pod}${FLEET_ADMIN_SEAT:-}" in
        fi
      fi ;;
 esac
+
+# ---------------------------------------------------------------- 座位agent -----
+# The seat's own agent (issue #3724, C15·b-3): its token is the machine's to ask for
+# (req signs with machine.key, else shows machine.env's token) and fleet_admin_seat.py
+# keeps it root:<role> 0640 beside the gate; the unit runs the role's ccquota agent.
+if [ "${FLEET_ADMIN_SEAT:-}" != 0 ] && [ -d "$STATE/admin" ] && [ -f "$ASEAT" ] && grep -q '^def agent_ensure' "$ASEAT"; then
+  out="$("$PY" -I "$ASEAT" agent --hub "$HUB" --check 2>&1)"; arc=$?
+  case "$arc" in
+    0|3) skip 座位agent "$(printf '%s' "$out" | tail -n 1)" ;;
+    1) out="$("$PY" -I "$ASEAT" agent --hub "$HUB" 2>&1)" && ok 座位agent "$(printf '%s' "$out" | tail -n 1)" \
+         || fail 座位agent "$(printf '%s' "$out" | tail -n 1)" ;;
+    4) arole="$("$PY" -I "$ASEAT" role)"
+       "$PY" -c 'import json,sys; json.dump({"login": sys.argv[1]}, open(sys.argv[2], "w"))' "$arole" "$WORK/atok.req"
+       code=$(req POST /v1/node/admin-token "$WORK/atok" "$WORK/atok.req" "$TOKEN")
+       case "$code" in
+         200) ;;
+         404) rm -f "$WORK/atok"; skip 座位agent "入口还不发管理员座位的令牌（早于 #3724）" ;;
+         000) rm -f "$WORK/atok"; fail 座位agent "连不上 $HUB" ;;
+         *) why="$(head -c 300 "$WORK/atok" 2>/dev/null)"; rm -f "$WORK/atok"
+            fail 座位agent "入口答 HTTP ${code}：${why}（入口的 CCQUOTA_FLEET_ADMIN_USERS 要有 ${arole}）" ;;
+       esac
+       if [ "$code" = 200 ]; then
+         out="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORK/atok" 2>/dev/null \
+                | "$PY" -I "$ASEAT" agent --hub "$HUB" --token-stdin 2>&1)"; arc=$?
+         rm -f "$WORK/atok"
+         [ "$arc" = 0 ] && ok 座位agent "$(printf '%s' "$out" | tail -n 1)（令牌：入口给 ${arole} 新发的）" \
+           || fail 座位agent "$(printf '%s' "$out" | tail -n 1)"
+       fi ;;
+    *) fail 座位agent "$(printf '%s' "$out" | tail -n 1)" ;;
+  esac
+fi
 
 # ---------------------------------------------------------------- 守护 ----------
 # a seated machine's logins/ is root:seat 0750 (the seat lists its names, #3668)

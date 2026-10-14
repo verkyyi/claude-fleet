@@ -90,6 +90,7 @@ var routeAccess = map[string]string{
 	NodeJobsPath: accessSelf, NodeJobsPath + "/": accessSelf, NodeSvcRunsPath + "/": accessSelf,
 	"/v1/node/credentials": accessSelf,
 	NodeKeyPath:            accessSelf, // a node's signing key (claude-fleet#3699)
+	AdminTokenNodePath:     accessSelf, // the admin role account's token (claude-fleet#3724)
 	// The direct door (claude-fleet#3068): a machine's own list and record.
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,
 	// … its reach, and the cluster door's table (claude-fleet#3549).

@@ -3,7 +3,8 @@
 # C15·b): the install step's `ensure` (role account, admin/, the account key
 # pinned once, the gate copies, /etc/sudoers.d/fleet-admin exactly two lines),
 # `ensure --check`, `status --check`, `remove`, and the seat-off case (a hub with
-# no account key ⇒ exit 3, nothing made). A sandbox state / root / sudoers file;
+# no account key ⇒ exit 3, nothing made); the seat's own agent (`agent`, issue
+# #3724): its token file, StateDir and unit, a token the hub stopped taking. A sandbox state / root / sudoers file;
 # the role account is the running user (FLEET_ADMIN_ROLE); the hub a one-route
 # server on 127.0.0.1. The core's switch placing the gate is
 # bin/fleet-node-core-selftest.py G_Switch; the tampering drill is
@@ -30,6 +31,10 @@ import http.server, os, sys
 d = sys.argv[1]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/v1/node/self":
+            toks = open(os.path.join(d, "tokens")).read().split() if os.path.exists(os.path.join(d, "tokens")) else []
+            auth = self.headers.get("Authorization", "")
+            self.send_response(200 if auth[7:] in toks and auth.startswith("Bearer ") else 401); self.end_headers(); return
         key = open(os.path.join(d, "key")).read()
         if self.path != "/v1/fleet/account-key" or not key:
             self.send_response(404); self.end_headers(); return
@@ -106,9 +111,43 @@ check "E a rotated key is refused without the repin word" '[ "$rc" = 1 ] && [ "$
 out=$(FLEET_ADMIN_KEY_REPIN=1 "${AS[@]}" ensure --hub "$ON" 2>&1); rc=$?
 check "E FLEET_ADMIN_KEY_REPIN=1 pins the new one" '[ "$rc" = 0 ] && [ "$(cat "$ST/admin/account.pub")" = "$KEY2" ]'
 
+# G — the seat's own agent (#3724): token file root:<role> 0640, StateDir, the unit
+UNITS="$WORK/units"; mkdir -p "$UNITS"
+printf '#!/bin/bash\necho "$*" >> %q\nexit 0\n' "$WORK/svc.log" > "$WORK/svc"; chmod +x "$WORK/svc"
+export FLEET_ADMIN_UNIT_DIR="$UNITS" FLEET_ADMIN_SVC_CMD="$WORK/svc"
+TOK="ccq_$(python3 -c 'print("A" * 43)')"
+out=$(printf '%s\n' "$TOK" | "${AS[@]}" agent --hub "$ON" --token-stdin 2>&1); rc=$?
+check "G no <root>/agent/ccquota yet: exit 3, nothing written ($out)" '[ "$rc" = 3 ] && [ ! -e "$ST/admin/agent.token" ]'
+mkdir -p "$ROOT/agent"; printf '#!/bin/sh\nexit 0\n' > "$ROOT/agent/ccquota"; chmod 755 "$ROOT/agent/ccquota"
+out=$("${AS[@]}" agent --hub "$ON" --check 2>&1); rc=$?
+check "G no token stored: --check exit 4 ($out)" '[ "$rc" = 4 ]'
+out=$(printf '%s\n' "not-a-token" | "${AS[@]}" agent --hub "$ON" --token-stdin 2>&1); rc=$?
+check "G a line that is no node token is refused" '[ "$rc" = 2 ] && [ ! -e "$ST/admin/agent.token" ]'
+out=$(printf '%s\n' "$TOK" | "${AS[@]}" agent --hub "$ON" --token-stdin 2>&1); rc=$?
+check "G agent: exit 0 ($out)" '[ "$rc" = 0 ]'
+check "G token file holds the token, 0640" '[ "$(cat "$ST/admin/agent.token")" = "$TOK" ] && [ "$(python3 -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$ST/admin/agent.token")" = 0o640 ]'
+check "G StateDir 0700" '[ "$(python3 -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$ST/admin-agent")" = 0o700 ]'
+UNIT=$(ls "$UNITS"/* 2>/dev/null | head -n 1)
+check "G the unit runs <root>/agent/ccquota agent as the role, the seat's switches on" \
+  '[ -n "$UNIT" ] && grep -q "$ROOT/agent/ccquota" "$UNIT" && grep -q "CCQUOTA_FLEET_ADMIN_SEAT" "$UNIT" && grep -q "$ST/admin/agent.token" "$UNIT" && { grep -q "<string>$ME</string>" "$UNIT" || grep -qx "User=$ME" "$UNIT"; }'
+check "G the token is never in the unit" '! grep -q "$TOK" "$UNIT"'
+check "G the unit was loaded" 'grep -Eq "^(launchctl bootstrap system|systemctl (start|restart) fleet-admin-agent)" "$WORK/svc.log"'
+echo "$TOK" > "$WORK/hub-on/tokens"
+out=$("${AS[@]}" agent --hub "$ON" --check 2>&1); rc=$?
+check "G --check after: 0 converged ($out)" '[ "$rc" = 0 ]'
+check "G status --check: 0 with the agent" '"${AS[@]}" status --check >/dev/null'
+: > "$WORK/hub-on/tokens"
+out=$("${AS[@]}" agent --hub "$ON" --check 2>&1); rc=$?
+check "G the hub stopped taking the token: exit 4 ($out)" '[ "$rc" = 4 ]'
+chmod 644 "$ST/admin/agent.token"
+"${AS[@]}" status --check >/dev/null; rc=$?
+check "G a world-readable token file is drift" '[ "$rc" = 1 ]'
+chmod 640 "$ST/admin/agent.token"
+
 # F — remove: the sudoers file and admin/ go
 out=$("${AS[@]}" remove 2>&1); rc=$?
 check "F remove" '[ "$rc" = 0 ] && [ ! -e "$FLEET_ADMIN_SUDOERS" ] && [ ! -e "$ST/admin" ]'
+check "F remove: the agent's unit unloaded and gone" '[ ! -e "$UNIT" ] && grep -Eq "^(launchctl bootout system/com.claude-fleet.admin-agent|systemctl disable --now fleet-admin-agent)" "$WORK/svc.log"'
 
 if [ "$FAILS" = 0 ]; then echo "fleet-admin-seat selftest: OK"; exit 0; fi
 echo "fleet-admin-seat selftest: $FAILS FAILED"; exit 1

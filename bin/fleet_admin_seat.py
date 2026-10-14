@@ -27,6 +27,21 @@ install replaces it) and used/ (the spent-nonce book, root 0700).
   fleet_admin_seat.py remove
         the install step's FLEET_ADMIN_SEAT=0 (root): the sudoers file and admin/
         go; the role account stays (it owns nothing).
+  fleet_admin_seat.py agent --hub <url> [--token-stdin] [--check]
+        the seat's own agent (issue #3724, C15·b-3, root): the role account's node
+        token in <state>/admin/agent.token (root:<role> 0640 — root writes it, the
+        role's agent reads it through CCQUOTA_TOKEN_FILE), its StateDir
+        <state>/admin-agent/ (the role's, 0700) and the unit
+        com.claude-fleet.admin-agent (/Library/LaunchDaemons, UserName <role>) /
+        fleet-admin-agent.service (User=<role>) running <root>/agent/ccquota agent
+        with CCQUOTA_FLEET=1 CCQUOTA_FLEET_ADMIN=1 CCQUOTA_FLEET_ADMIN_SEAT=1 —
+        loaded / restarted when its unit or token changed. --token-stdin: one line,
+        the token the root install step got from the hub's POST /v1/node/admin-token.
+        --check: 0 converged, 1 something to do. Exit 3 = the seat is off (no
+        admin/ or no role account) or <root>/agent/ccquota is not there yet; exit 4
+        = a token is needed (none stored, or the hub no longer takes it).
+  fleet_admin_seat.py role
+        the role account's name.
   fleet_admin_seat.py status [--check]
         one line per item; --check exit 1 on any drift (a copy that is not the
         current release's gate, a link, someone else's file, a sudoers file with
@@ -35,12 +50,15 @@ install replaces it) and used/ (the spent-nonce book, root 0700).
 Seams (tests): FLEET_NODE_STATE · FLEET_NODE_ROOT · FLEET_ADMIN_ROLE (an existing
 user) · FLEET_ADMIN_ROLE_CMD (run in place of each system command) ·
 FLEET_ADMIN_SUDOERS (the file) · FLEET_ADMIN_VISUDO (''= no check) ·
+FLEET_ADMIN_UNIT_DIR (where the agent's unit goes) · FLEET_ADMIN_SVC_CMD (run in
+place of each launchctl / systemctl) ·
 FLEET_NODE_TEST=1 (no root, no chown).
 """
 import grp
 import hashlib
 import os
 import platform
+import plistlib
 import pwd
 import re
 import shutil
@@ -314,6 +332,236 @@ def pinned(adir=None):
         return None
 
 
+# ---------------------------------------------------------------- the agent -----
+# The seat's own agent (issue #3724, C15·b-3): `ccquota agent` as the role account,
+# under its own unit, with its own node token — the hub's POST /v1/node/admin-token
+# (asked by the root install step with the MACHINE's credential) — kept by root.
+AGENT_LABEL = "com.claude-fleet.admin-agent"
+AGENT_UNIT = "fleet-admin-agent.service"
+SELF_PATH = "/v1/node/self"
+TOKEN_RE = re.compile(r"^ccq_[A-Za-z0-9_-]{20,100}$")
+
+
+def agent_state():
+    return os.path.join(state_dir(), "admin-agent")
+
+
+def token_path(adir=None):
+    return os.path.join(adir or admin_dir(), "agent.token")
+
+
+def unit_path():
+    if MAC:
+        return os.path.join(env("FLEET_ADMIN_UNIT_DIR", "/Library/LaunchDaemons"), AGENT_LABEL + ".plist")
+    return os.path.join(env("FLEET_ADMIN_UNIT_DIR", "/etc/systemd/system"), AGENT_UNIT)
+
+
+def agent_ccquota():
+    """The fixed, signed copy of the release's ccquota (issue #3433): a path no
+    release changes, so the unit never has to — the updater kickstarts it."""
+    return os.path.join(root_dir(), "agent", "ccquota")
+
+
+def role_ids():
+    pw = pwd.getpwnam(role())
+    return pw.pw_uid, pw.pw_gid
+
+
+def agent_env(hub):
+    sd = agent_state()
+    return [("CCQUOTA_FLEET", "1"), ("CCQUOTA_FLEET_ADMIN", "1"), ("CCQUOTA_FLEET_ADMIN_SEAT", "1"),
+            ("CCQUOTA_FLEET_ADMIN_GATE_DIR", admin_dir()), ("CCQUOTA_HUB_URL", hub),
+            ("CCQUOTA_TOKEN_FILE", token_path()), ("CCQUOTA_NODE_KEY", os.path.join(sd, "node.key")),
+            ("FLEET_CONF_DIR", os.path.join(sd, "conf")), ("HOME", sd)]
+
+
+def agent_argv():
+    sd = agent_state()
+    return [agent_ccquota(), "agent", "--home", sd, "--state", os.path.join(sd, "state")]
+
+
+def unit_body(hub):
+    """The unit's exact text: a LaunchDaemon (UserName the role) / a systemd service
+    (User= the role). The token is never in it — only the file's path."""
+    sd = agent_state()
+    if MAC:
+        return plistlib.dumps({
+            "Label": AGENT_LABEL, "UserName": role(), "GroupName": role(),
+            "ProgramArguments": agent_argv(), "EnvironmentVariables": dict(agent_env(hub)),
+            "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10,
+            "StandardOutPath": os.path.join(sd, "agent.log"), "StandardErrorPath": os.path.join(sd, "agent.log"),
+        }).decode()
+    q = lambda v: '"%s"' % v.replace("\\", "\\\\").replace('"', '\\"')
+    return "\n".join(
+        ["# claude-fleet (issue #3724): the admin role account's own ccquota agent",
+         "[Unit]", "Description=claude-fleet admin seat agent", "After=network-online.target", "",
+         "[Service]", "User=%s" % role(), "Group=%s" % role()]
+        + ["Environment=%s" % q("%s=%s" % kv) for kv in agent_env(hub)]
+        + ["ExecStart=%s" % " ".join(agent_argv()), "Restart=always", "RestartSec=10", "",
+           "[Install]", "WantedBy=multi-user.target", ""])
+
+
+def unit_text(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def svc(argv):
+    cmd = env("FLEET_ADMIN_SVC_CMD", "")
+    return subprocess.call(([cmd] if cmd else []) + argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def agent_loaded():
+    if MAC:
+        return svc(["launchctl", "print", "system/" + AGENT_LABEL]) == 0
+    return svc(["systemctl", "is-active", "--quiet", AGENT_UNIT]) == 0
+
+
+def agent_start(fresh):
+    """Load the unit (fresh: it or its token changed — stop the old one first)."""
+    if MAC:
+        if fresh:
+            svc(["launchctl", "bootout", "system/" + AGENT_LABEL])
+        rc = svc(["launchctl", "bootstrap", "system", unit_path()])
+        if rc != 0 and not fresh:
+            rc = svc(["launchctl", "kickstart", "-k", "system/" + AGENT_LABEL])
+        return rc
+    rc = svc(["systemctl", "daemon-reload"]) or svc(["systemctl", "enable", AGENT_UNIT])
+    return rc or svc(["systemctl", "restart" if fresh else "start", AGENT_UNIT])
+
+
+def agent_stop():
+    """Unload and delete the unit (FLEET_ADMIN_SEAT=0); the StateDir stays."""
+    up = unit_path()
+    if not os.path.lexists(up):
+        return
+    if MAC:
+        svc(["launchctl", "bootout", "system/" + AGENT_LABEL])
+    else:
+        svc(["systemctl", "disable", "--now", AGENT_UNIT])
+    os.unlink(up)
+    if not MAC:
+        svc(["systemctl", "daemon-reload"])
+
+
+def token_file_ok(path):
+    """root's regular file, the role's group, 0640 — what the agent's
+    CCQUOTA_TOKEN_FILE accepts and nobody else reads."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if not rootish(st, 0o640) or not stat.S_ISREG(st.st_mode):
+        return False
+    if testing():
+        return True
+    try:
+        return st.st_gid == role_ids()[1]
+    except KeyError:
+        return False
+
+
+def read_token(path):
+    try:
+        with open(path) as f:
+            t = f.readline().strip()
+    except OSError:
+        return ""
+    return t if TOKEN_RE.match(t) else ""
+
+
+def token_live(hub, tok):
+    """True: the hub takes it · False: it refuses it (401/403) · None: no answer."""
+    req = urllib.request.Request(hub.rstrip("/") + SELF_PATH, headers={"Authorization": "Bearer " + tok})
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            return True
+    except urllib.error.HTTPError as e:
+        return False if e.code in (401, 403) else None
+    except (OSError, ValueError):
+        return None
+
+
+def state_ok(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o700:
+        return False
+    return testing() or st.st_uid == role_ids()[0]
+
+
+def own_state(path):
+    """<path> a real directory, the role's, 0700 (a link in its place removed)."""
+    if os.path.islink(path) or (os.path.lexists(path) and not os.path.isdir(path)):
+        os.unlink(path)
+    if not os.path.isdir(path):
+        os.mkdir(path, 0o700)
+    os.chmod(path, 0o700)
+    if os.geteuid() == 0:
+        uid, gid = role_ids()
+        os.lchown(path, uid, gid)
+
+
+def agent_ensure(hub, token="", check=False):
+    """The seat's agent converged (see the module doc for the exit codes)."""
+    if os.geteuid() != 0 and not testing():
+        print("fleet_admin_seat: agent writes a system unit — run it as root", file=sys.stderr)
+        return 2
+    hub = hub.rstrip("/")
+    adir = admin_dir()
+    if not os.path.isdir(adir) or os.path.islink(adir) or not role_exists():
+        print("seat off: no %s or no %s — set the seat up first (FLEET_ADMIN_SEAT=1)" % (adir, role()))
+        return 3
+    if not os.access(agent_ccquota(), os.X_OK):
+        print("waiting: %s is not there yet (the updater puts it)" % agent_ccquota())
+        return 3
+    if token and not TOKEN_RE.match(token):
+        print("fleet_admin_seat: the token on stdin is not a node token", file=sys.stderr)
+        return 2
+    tp, up, sd = token_path(adir), unit_path(), agent_state()
+    have = read_token(tp) if token_file_ok(tp) else ""
+    if not token and (not have or token_live(hub, have) is False):
+        print("token needed: %s (POST %s for %s)" % ("the hub no longer takes the stored one" if have else "none stored",
+                                                    "/v1/node/admin-token", role()))
+        return 4
+    body = unit_body(hub)
+    want = []
+    if token and token != have:
+        want.append("agent.token")
+    if not state_ok(sd):
+        want.append("admin-agent/")
+    if unit_text(up) != body:
+        want.append("unit")
+    loaded = agent_loaded()
+    if not loaded:
+        want.append("start")
+    if check:
+        print("admin agent: %s" % (", ".join(want) + " to do" if want else "converged"))
+        return 1 if want else 0
+    if not want:
+        print("admin agent: converged (%s as %s)" % (AGENT_LABEL if MAC else AGENT_UNIT, role()))
+        return 0
+    if "agent.token" in want:
+        put(tp, (token + "\n").encode(), 0o640)
+        if os.geteuid() == 0:
+            os.lchown(tp, 0, role_ids()[1])
+    if "admin-agent/" in want:
+        own_state(sd)
+    if "unit" in want:
+        put(up, body.encode(), 0o644)
+    rc = agent_start(fresh=loaded and ("unit" in want or "agent.token" in want))
+    if rc != 0:
+        print("fleet_admin_seat: starting %s answered rc %d" % (AGENT_LABEL if MAC else AGENT_UNIT, rc), file=sys.stderr)
+        return 1
+    print("admin agent: %s as %s · %s" % (AGENT_LABEL if MAC else AGENT_UNIT, role(), ", ".join(want)))
+    return 0
+
+
 # ---------------------------------------------------------------- ensure --------
 def ensure(hub, repin=False, check=False):
     if os.geteuid() != 0 and not testing():
@@ -362,7 +610,9 @@ def remove():
     if os.geteuid() != 0 and not testing():
         print("fleet_admin_seat: remove writes sudoers — run it as root", file=sys.stderr)
         return 2
-    # the sudoers lines first: the role loses its two scripts before they go
+    # the seat's agent stops first, then the sudoers lines: the role loses its
+    # two scripts before they go
+    agent_stop()
     try:
         os.unlink(sudoers_path())
     except FileNotFoundError:
@@ -410,6 +660,14 @@ def status_lines():
     ok = sudoers_ok()
     lines.append("sudoers     %s" % ("two lines" if ok else "DRIFT"))
     bad |= not ok
+    # the seat's agent (#3724): not there yet is not drift — `agent` makes it
+    tp = token_path(adir)
+    ok = not os.path.lexists(tp) or token_file_ok(tp)
+    lines.append("agent.token %s" % (("ok" if ok else "DRIFT") if os.path.lexists(tp) else "none yet"))
+    bad |= not ok
+    up = unit_path()
+    lines.append("agent unit  %s" % ((("ok" if unit_text(up) == unit_body(conf_hub(adir)) else "stale")
+                                      if conf_hub(adir) else "ok") if os.path.isfile(up) else "none yet"))
     return lines, bad
 
 
@@ -426,6 +684,26 @@ def main(argv):
         return 0
     if cmd == "remove":
         return remove()
+    if cmd == "role":
+        print(role())
+        return 0
+    if cmd == "agent":
+        hub, it, flags = "", iter(rest), set()
+        for a in it:
+            if a == "--hub":
+                hub = next(it, "")
+            elif a in ("--token-stdin", "--check"):
+                flags.add(a)
+            else:
+                return 2
+        if not re.match(r"^https?://", hub):
+            print("fleet_admin_seat: agent --hub <http(s) url>", file=sys.stderr)
+            return 2
+        tok = sys.stdin.readline().strip() if "--token-stdin" in flags else ""
+        if "--token-stdin" in flags and not tok:
+            print("fleet_admin_seat: --token-stdin read no token", file=sys.stderr)
+            return 2
+        return agent_ensure(hub, tok, check="--check" in flags)
     if cmd == "status":
         lines, bad = status_lines()
         print("\n".join(lines))

@@ -1271,9 +1271,38 @@ class Updater(object):
             else:
                 rec[login] = {"sha": None, "at": now(), "rc": rc}
                 notes.append("admin agent %s: restart %s rc %d" % (login, svc["label"], rc))
+        notes += self.follow_seat_agent(rec, cur, seen)
         for login in [x for x in rec if x not in seen]:
             rec.pop(login, None)
         return notes
+
+    def follow_seat_agent(self, rec, cur, seen):
+        """The admin seat's own agent (issue #3724): com.claude-fleet.admin-agent
+        (fleet-admin-agent.service) runs <root>/agent/ccquota — a path no release
+        changes — so following the release is only its restart once per release,
+        kept under the unit's name beside the logins'. No unit ⇒ nothing. -> notes."""
+        if admin_seat is None:
+            return []
+        try:
+            unit = admin_seat.unit_path()
+        except Exception:  # noqa: BLE001 — an older module: no seat agent
+            return []
+        if not os.path.isfile(unit):
+            return []
+        key = admin_seat.AGENT_LABEL if admin_seat.MAC else admin_seat.AGENT_UNIT
+        seen.add(key)
+        if (rec.get(key) or {}).get("sha") == cur:
+            return []
+        if admin_seat.MAC:
+            rc = fns.launchctl("kickstart", "-k", "system/%s" % key)
+        else:
+            rc = fns.systemctl("restart", key)
+        self.log("admin seat agent: restarted onto %s · rc %d" % (cur[:12], rc))
+        if rc == 0:
+            rec[key] = {"sha": cur, "at": now()}
+            return []
+        rec[key] = {"sha": None, "at": now(), "rc": rc}
+        return ["admin seat agent: restart %s rc %d" % (key, rc)]
 
     def ensure_helpers(self):
         """A helper release.json pins that current/tools/bin lacks is put there

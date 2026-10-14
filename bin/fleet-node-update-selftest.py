@@ -1686,6 +1686,36 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(self.state()["admin_agents"]["frank"]["sha"], V2)
         self.assertIn(V2[:7].encode(), self.agent_bytes())          # the copy went back too
 
+    def test_seat_agent_follows_once_per_release(self):
+        """issue #3724: the admin seat's own unit (com.claude-fleet.admin-agent /
+        fleet-admin-agent.service) runs <root>/agent/ccquota, so a release moves
+        it by one restart — the switch, never every tick; no unit ⇒ none."""
+        import platform
+        mac = platform.system() == "Darwin"
+        units = os.path.join(self.d, "units")
+        os.makedirs(units)
+        self.env["FLEET_ADMIN_UNIT_DIR"] = units
+        sc = os.path.join(self.d, "systemctl")
+        with open(sc, "w") as f:
+            f.write('#!/bin/sh\necho "$*" >> %s\n' % self.lc)
+        os.chmod(sc, 0o755)
+        self.env["FLEET_NODE_SYSTEMCTL"] = sc
+        key = "com.claude-fleet.admin-agent" if mac else "fleet-admin-agent.service"
+        want = "kickstart -k system/%s" % key if mac else "restart %s" % key
+        seat = lambda: [l.strip() for l in open(self.lc) if key in l] if os.path.exists(self.lc) else []
+        self.install(V1)
+        self.assertEqual(seat(), [])                               # no unit: nothing
+        with open(os.path.join(units, key + (".plist" if mac else "")), "w") as f:
+            f.write("unit\n")
+        self.tick(V1)
+        self.assertEqual(seat(), [want])
+        self.tick(V1)                                              # at the release: no second restart
+        self.assertEqual(len(seat()), 1)
+        self.release(V2)
+        self.assertEqual(self.tick(V2)["phase"], "switched")
+        self.assertEqual(seat(), [want, want])
+        self.assertEqual(self.state()["admin_agents"][key]["sha"], V2)
+
     def test_own_old_binary_is_warned_then_repointed(self):
         self.install(V1)
         self.meta("frank", self.own)                               # credsep install / a hand put it back

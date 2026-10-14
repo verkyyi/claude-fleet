@@ -58,3 +58,27 @@ func tokenFromFD(fd string) (string, error) {
 	os.Unsetenv("CCQUOTA_TOKEN_FD")
 	return strings.TrimSpace(line), nil
 }
+
+// tokenFromFile reads the token line from path (claude-fleet#3724): the admin
+// seat's agent runs as _fleetadmin under launchd / systemd, and root keeps its
+// token in a file only root writes and only that account's group reads — never
+// in the unit's environment. A link, or a file anyone else may read or anyone
+// but its owner may write, is refused. An empty path is "" and no error.
+func tokenFromFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	st, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("CCQUOTA_TOKEN_FILE: %w", err)
+	}
+	if !st.Mode().IsRegular() || st.Mode().Perm()&0o026 != 0 {
+		return "", fmt.Errorf("CCQUOTA_TOKEN_FILE=%s: must be a regular file no one else may read or write (mode %v)", path, st.Mode())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("CCQUOTA_TOKEN_FILE: %w", err)
+	}
+	line, _, _ := strings.Cut(string(b), "\n")
+	return strings.TrimSpace(line), nil
+}
