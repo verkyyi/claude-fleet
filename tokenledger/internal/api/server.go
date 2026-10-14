@@ -446,7 +446,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.readOnlyGate(s.appMount(s.routes())))
+	return s.logRequests(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is

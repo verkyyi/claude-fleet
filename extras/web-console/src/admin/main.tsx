@@ -8,6 +8,9 @@ import { createBrowserRouter, createMemoryRouter, Navigate, RouterProvider } fro
 import "./admin.css";
 // dark or light on <html data-theme> (the system's, or a pick made on 设置 — claude-fleet#3931)
 import "@/shared/theme";
+// back on the admin side, a tab that looked through someone's eyes (/app?as=,
+// claude-fleet#3944, shared/viewAs.ts's key) stops doing so
+try { sessionStorage.removeItem("fleet.console.view_as"); } catch { /* private mode */ }
 import { AdminShell, NotFound } from "./AdminShell";
 import { MachineDetailPage } from "./pages/MachineDetail";
 import { MachinesPage } from "./pages/Machines";

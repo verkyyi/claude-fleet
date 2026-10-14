@@ -88,6 +88,16 @@ type Me struct {
 	// CanLogout says a cookie THIS hub minted is behind the request, so
 	// POST /logout has something to clear. A bearer header has none.
 	CanLogout bool `json:"can_logout"`
+	// ViewAs says an admin is looking through this person's eyes, read-only
+	// (claude-fleet#3944): the page draws its 只读预览 bar off it.
+	ViewAs *MeViewAs `json:"view_as,omitempty"`
+}
+
+// MeViewAs is /v1/me's view_as: whom the page shows, and who is looking.
+type MeViewAs struct {
+	Person string `json:"person"`
+	Name   string `json:"name"`
+	By     string `json:"by"`
 }
 
 // handleMe answers who the gate admitted. Mounted unconditionally, inside
@@ -137,6 +147,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	case doorToken:
 		_, err := r.Cookie(viewerCookie)
 		out.CanLogout = err == nil
+	}
+	if v := viewAsOf(r.Context()); v != nil {
+		out.ViewAs, out.CanLogout = &MeViewAs{Person: v.Person, Name: v.Name, By: v.AdminName}, false
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)

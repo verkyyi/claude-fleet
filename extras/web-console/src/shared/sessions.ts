@@ -6,6 +6,7 @@
 // worker_resume. Every read is already cut to the person by the hub.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, sendJSON } from "./api";
+import { withAs } from "./viewAs";
 
 // The push channel's watchdog (BREAK-IT hub-stream-silent): no event for
 // 30 s — the hub pings every 20 s — is a stream something in between holds
@@ -121,7 +122,7 @@ export function useSessions(): SessionsState {
     function open() {
       if (gone) return;
       if (typeof EventSource === "undefined") { startPoll(); return; }
-      es = new EventSource("/v1/fleet/stream?topics=sessions");
+      es = new EventSource(withAs("/v1/fleet/stream?topics=sessions"));
       dog = window.setTimeout(quiet, WATCHDOG_MS);
       es.addEventListener("ping", alive);
       es.addEventListener("sessions", (e) => {
