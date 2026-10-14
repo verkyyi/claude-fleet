@@ -1810,10 +1810,15 @@ def machine_refresh(a):
     shared_record([m["login"] for m in shared_tenants()])
     for m in shared_tenants():
         relog_agent(m["login"])     # separated before issue #2296
-    if moved and not sup:
+    # a login the running proxy does not serve (issue #4245): restart it even on
+    # unchanged bytes — the start takes over a stale holder of the lock
+    _, unserved = shared_unserved(shared_rec())
+    if (moved and not sup) or unserved:
         shared_restart()
-    say("shared: %s — version %s" % (("refreshed, restarted" + (" by the machine daemon" if sup else "")) if moved
-                                      else "current", code_version(os.path.join(LIB, "fleet-cred-proxy.py"))))
+    say("shared: %s — version %s%s" % (("refreshed, restarted" + (" by the machine daemon" if sup else ""))
+                                        if moved or unserved else "current",
+                                        code_version(os.path.join(LIB, "fleet-cred-proxy.py")),
+                                        " (not served: %s)" % ", ".join(unserved) if unserved else ""))
     return 0
 
 
@@ -2147,6 +2152,7 @@ def machine_status(a):
             out["live_version"] = ""
         out["install_version"] = code_version(os.path.join(HERE, "fleet-cred-proxy.py"))
         out["machine_logins"] = [n for n, _, _ in fleet_logins()]
+        out["live_logins"], out["unserved"] = shared_unserved(rec)
     out["own"] = own_proxies()
     try:
         out["pool_sync"] = json.load(open(POOL_SYNC))
@@ -2157,12 +2163,28 @@ def machine_status(a):
     elif not rec:
         print("per-login (no shared proxy on this machine)")
     else:
-        print("shared · %s · %d login(s) · 127.0.0.1:%s · version %s%s%s%s"
+        print("shared · %s · %d login(s) · 127.0.0.1:%s · version %s%s%s%s%s"
               % (rec.get("user"), len(rec.get("logins") or []), out["live_port"] or "down", out["live_version"] or "-",
                  "" if out["live_version"] == out["install_version"] else " (this install: %s)" % out["install_version"],
+                 " · NOT SERVED: %s (joined after the running proxy started)" % ", ".join(out["unserved"])
+                 if out["unserved"] else "",
                  " · own proxy: %s (machine join)" % ", ".join(out["own"]) if out["own"] else "",
                  pool_sync_line(out["pool_sync"])))
     return 0 if rec else 3
+
+
+def shared_unserved(rec):
+    """-> (the logins the running shared proxy serves — None when it wrote no
+    <run>/logins, a proxy older than issue #4245 —, the record's logins it does
+    not serve). A login in the record and not in the proxy gets no credential:
+    «the proxy did not say which route this machine takes», every mint."""
+    if not rec or not os.path.exists(os.path.join(rec.get("run") or SHARED_RUN, "pid")):
+        return None, []
+    try:
+        live = sorted(l for l in open(os.path.join(rec.get("run") or SHARED_RUN, "logins")).read().split() if l)
+    except OSError:
+        return None, []
+    return live, [l for l in sorted(rec.get("logins") or []) if l not in live]
 
 
 def machine_pooldup(a):
@@ -2962,6 +2984,24 @@ def check(a):
               "upstream / hub setting beyond its defaults. Re-run (sudo): bash %s/fleet-credsep.sh %s"
               % (rconf, HERE, "machine refresh" if rec.get("shared") else "install"))
         return 1
+    if rec.get("shared"):
+        srec = shared_rec() or {}
+        live, _ = shared_unserved(srec)
+        if live is not None and me not in live:
+            print("credsep: FAIL — this login joined the machine's shared proxy, but the running proxy does not serve "
+                  "it (it started before the login joined, and was never restarted): no session here gets a "
+                  "credential. The machine daemon restarts it within a tick; if this stays, an admin: sudo bash "
+                  "%s/fleet-credsep.sh machine refresh" % HERE)
+            return 1
+        try:
+            lv = open(os.path.join(srec.get("run") or SHARED_RUN, "version")).read().strip()
+        except OSError:
+            lv = ""
+        if live is None and lv and srec.get("version") and lv != srec["version"]:
+            print("credsep: WARN — the machine's shared proxy runs version %s, its record says %s: a login that "
+                  "joined since it started may not be served. An admin: sudo bash %s/fleet-credsep.sh machine refresh"
+                  % (lv, srec["version"], HERE))
+            return 1
     try:
         ign = [l.split(" ", 1) for l in open(os.path.join(rec["run"], "ignored." + me)).read().splitlines() if l]
     except OSError:
