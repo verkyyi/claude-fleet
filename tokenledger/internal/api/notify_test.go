@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -177,7 +178,7 @@ func TestNotifyRoadsInOrder(t *testing.T) {
 	h.wb.mu.Unlock()
 	data, _ := json.Marshal(got)
 	if got["touser"] != "o-1" || got["template_id"] != "tpl-review" || got["url"] != "https://fleet.example/apply" ||
-		!strings.Contains(string(data), "你的使用申请已通过") {
+		!strings.Contains(string(data), `"thing5":{"value":"已通过"}`) {
 		t.Fatalf("template = %s", data)
 	}
 
@@ -331,7 +332,8 @@ func TestNotifyGatherWindow(t *testing.T) {
 		t.Fatalf("after the window: %d templates", len(h.wb.tpl))
 	}
 	b, _ := json.Marshal(h.wb.tpl[1])
-	if h.wb.tpl[1]["template_id"] != "tpl-newreq" || !strings.Contains(string(b), "2 条新申请待审核（bravo 等）") ||
+	if h.wb.tpl[1]["template_id"] != "tpl-newreq" || !strings.Contains(string(b), `"thing2":{"value":"bravo 等 2 人"}`) ||
+		!strings.Contains(string(b), `"character_string10":{"value":"2"}`) ||
 		h.wb.tpl[1]["url"] != "https://fleet.example/admin/requests/rq-b" {
 		t.Fatalf("gathered template = %s", b)
 	}
@@ -514,4 +516,51 @@ func TestNotifyFromTheDoors(t *testing.T) {
 		t.Fatalf("a second mail: %+v", m)
 	default:
 	}
+}
+
+// claude-fleet#4214: the two category templates' fields, each within what
+// WeChat takes — a thing ≤ 20 runes, a character_string ≤ 32 with no
+// Chinese, a time with no zone note.
+func TestNotifyTemplateFields(t *testing.T) {
+	at := time.Date(2026, 10, 14, 1, 2, 0, 0, time.UTC)
+	check := func(t *testing.T, tpl map[string]string, want map[string]string) {
+		t.Helper()
+		if len(tpl) != len(want) {
+			t.Fatalf("fields = %v; want %v", tpl, want)
+		}
+		for k, v := range want {
+			if tpl[k] != v {
+				t.Fatalf("%s = %q; want %q (all: %v)", k, tpl[k], v, tpl)
+			}
+		}
+		for k, v := range tpl {
+			switch {
+			case strings.HasPrefix(k, "thing") && utf8.RuneCountInString(v) > 20,
+				strings.HasPrefix(k, "character_string") && (len(v) > 32 || !wxCharString(v)):
+				t.Fatalf("%s = %q is not what WeChat takes", k, v)
+			}
+		}
+	}
+	ok := &store.AccessRequest{ID: "rq-1", Kind: store.IdentityWeChat, Subject: "union-1", Display: "林晓",
+		State: store.RequestApproved, DecidedAt: at}
+	check(t, reviewMsg(ok, false, "").Tpl, map[string]string{"thing3": "ClaudeFleet 使用申请",
+		"character_string14": "rq-1", "thing5": "已通过", "time6": "2026-10-14 09:02"})
+	no := &store.AccessRequest{ID: "rq-2", Kind: store.IdentityEmail, Subject: "a-very-long-mail-address-for-a-test@example.com",
+		Display: "lin", State: store.RequestRejected, Reason: "说明再具体一点", DecidedAt: at}
+	check(t, reviewMsg(no, true, "").Tpl, map[string]string{"thing3": "ClaudeFleet access",
+		"character_string14": "a-very-long-mail-address-for-a-t", "thing5": "Not approved", "time6": "2026-10-14 09:02"})
+	mail := &store.AccessRequest{ID: "rq-3", Kind: store.IdentityWeChat, Display: "林晓", NotifyAddr: "lx@example.com",
+		State: store.RequestApproved, DecidedAt: at}
+	if got := reviewMsg(mail, false, "").Tpl["character_string14"]; got != "lx@example.com" {
+		t.Fatalf("account = %q; want the mail address", got)
+	}
+
+	one := []store.AccessRequest{{ID: "rq-a", Display: "一个名字特别特别特别特别长的申请人啊啊啊啊", CreatedAt: at}}
+	check(t, newReqMsg(one, false, "").Tpl, map[string]string{"thing1": "ClaudeFleet",
+		"thing2": "一个名字特别特别特别特别长的申请人啊啊…", "time6": "2026-10-14 09:02", "character_string10": "1"})
+	three := append(one, store.AccessRequest{ID: "rq-b", Display: "b"}, store.AccessRequest{ID: "rq-c", Display: "c"})
+	check(t, newReqMsg(three, false, "").Tpl, map[string]string{"thing1": "ClaudeFleet",
+		"thing2": "一个名字特别特别特别特… 等 3 人", "time6": "2026-10-14 09:02", "character_string10": "3"})
+	check(t, newReqMsg(three, true, "").Tpl, map[string]string{"thing1": "ClaudeFleet",
+		"thing2": "一个名字特别特别特别特… +2", "time6": "2026-10-14 09:02", "character_string10": "3"})
 }

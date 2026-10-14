@@ -77,6 +77,9 @@ var routeAccess = map[string]string{
 	// The onboarding drill (claude-fleet#2010): each request signed by the
 	// inviting machine, the drill person's certificate or its approve code.
 	DrillPath: accessSelf, DrillSelfPath: accessSelf, LoginApprovePath: accessSelf,
+	// Drill triers (claude-fleet#4215): an admin mints (cert or gate, like
+	// DrillPath); the one-time code in the query is the redeem's credential.
+	DrillTrialPath: accessSelf, DrillTrialRedeemPath: accessPublic,
 	control.Path: accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/attachment/": accessSelf,

@@ -288,6 +288,9 @@ func (s *Server) trialOutside(r *http.Request) bool {
 	if !ok || sess.Role != roleTrial {
 		return false
 	}
+	if sess.Sub == store.DrillKind && r.URL.Path == DrillSelfPath {
+		return false // a drill trier deletes itself (claude-fleet#4215)
+	}
 	role, err := s.personRole(pid)
 	return err == nil && role == roleTrial
 }

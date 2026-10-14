@@ -35,7 +35,7 @@
 #              decision 3: a lid that closes stops its sessions).
 #
 #   {"loc","anthropic","openai","laptop","sleep_min","route",["loc_local","relay_anthropic",
-#    "relay_openai" | "loc_local","central_anthropic","central_openai"],"ts","verdict","reason"}  — anthropic/openai stay THIS machine's
+#    "relay_openai" | "loc_local","central_anthropic","central_openai"],"ts","verdict","reason","src"}  — anthropic/openai stay THIS machine's
 #   answers (the proxy's router reads them); loc and verdict are the route's
 #   verdict: ok | unsupported_region | unreachable
 #
@@ -49,7 +49,9 @@
 #
 #   --quiet          write the file, print nothing
 #   --json           print the JSON instead of the sentence
-#   --max-age <s>    a node-probe.json younger than this is reused, not re-measured
+#   --max-age <s>    a node-probe.json younger than this is reused, not re-measured —
+#                    only one this script wrote as it is now ("src", its sha256;
+#                    the node agent re-probes on a src that differs — issue #4207)
 #
 # Env (test seams): FLEET_PROBE_CURL (curl) · FLEET_PROBE_PMSET (pmset) ·
 #   FLEET_PROBE_OS (uname -s) · FLEET_PROBE_BATTERY_DIR (/sys/class/power_supply) ·
@@ -90,9 +92,13 @@ jget() { sed -n "s/.*\"$1\":\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "$2" |
 
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }  # GNU first: GNU `stat -f` is filesystem status and succeeds
 
+# the script's own sha256, written as "src" (issue #4207): a verdict an older
+# rule wrote is never reused, and the node agent re-probes at once on a change
+SRC=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$DIR/$(basename "$0")" 2>/dev/null)
+
 # ── measure (or reuse) ──────────────────────────────────────────────────────
 reuse=0
-if [ -n "$MAXAGE" ] && [ -s "$OUT" ]; then
+if [ -n "$MAXAGE" ] && [ -s "$OUT" ] && [ -n "$SRC" ] && [ "$(jget src "$OUT")" = "$SRC" ]; then
   m=$(mtime "$OUT")
   case "$m" in ''|*[!0-9]*) ;; *) [ $(( $(date +%s) - m )) -lt "$MAXAGE" ] && reuse=1 ;; esac
 fi
@@ -218,7 +224,9 @@ if d.get("relay") is True:
     printf '"route":"%s",' "$route"
     [ "$route" != relay ] || printf '"loc_local":"%s","relay_anthropic":"%s","relay_openai":"%s",' "$loc_local" "$ra" "$ro"
     [ "$route" != central ] || printf '"loc_local":"%s","central_anthropic":"%s","central_openai":"%s",' "$loc_local" "$ca" "$co"
-    printf '"ts":"%s","verdict":"%s","reason":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$verdict" "$reason"
+    printf '"ts":"%s","verdict":"%s","reason":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$verdict" "$reason"
+    [ -z "$SRC" ] || printf ',"src":"%s"' "$SRC"
+    printf '}\n'
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || { echo "fleet-node-probe: cannot write $OUT" >&2; exit 1; }
   # separated (issue #1971): the credential proxy runs as another account and
   # cannot read this file — hand it the fresh verdict over its socket

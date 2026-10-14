@@ -26,7 +26,8 @@
 #                  keeps every other node.env line, 0600, nudges the agent;
 #                  off writes 0; status says which; not a node → refused
 #   G. laptop      a battery is noted, never refused (Darwin pmset, Linux BAT*)
-#   H. --max-age   a fresh node-probe.json is reused: no request at all
+#   H. --max-age   a fresh node-probe.json is reused: no request at all — only
+#                  one this script wrote ("src" = its sha256, issue #4207)
 #   I. personal    (issue #1721) `compute on` on a laptop writes
 #                  CCQUOTA_FLEET_PERSONAL=1 and says 个人电脑; --shared writes 0
 #                  and a later plain `on` keeps it; --personal on a desktop;
@@ -217,6 +218,16 @@ probe_in a --max-age 3600
   && ok "H a fresh probe is reused: no request" || bad "H requests: $(cat "$SB/curl.log") out=$(out)"
 probe_in a --max-age 0
 [ -s "$SB/curl.log" ] && ok "H --max-age 0 measures again" || bad "H --max-age 0 made no request"
+# issue #4207: the file says which script wrote it ("src", the script's sha256),
+# and a fresh verdict an older rule wrote is measured again, never reused
+want=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$BIN/fleet-node-probe.sh")
+[ "$(J a | sed -n 's/.*"src":"\([0-9a-f]*\)".*/\1/p')" = "$want" ] \
+  && ok "H the JSON carries the script's sha256 as src" || bad "H src: $(J a)"
+J a | sed 's/,"src":"[0-9a-f]*"//' > "$SB/a/.config/claude-fleet/node-probe.json"
+: >"$SB/curl.log"
+probe_in a --max-age 3600
+[ -s "$SB/curl.log" ] && J a | grep -q "\"src\":\"$want\"" \
+  && ok "H a fresh probe an older script wrote (no src) is measured again" || bad "H old-script probe reused: $(J a)"
 probe_in a --json
 [ "$(rc)" = 0 ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["verdict"]=="ok" else 1)' "$SB/out" \
   && ok "H --json prints the JSON" || bad "H --json: $(out)"

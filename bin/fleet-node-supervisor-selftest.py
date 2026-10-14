@@ -12,7 +12,8 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   O  the sweep's removals on a managed machine (#2981): what goes, what stays
      named and why, a unit that will not unload, a running drill holding all of
      it, a legacy child taken over by the running daemon, the client shell
-     retired by the sweep itself
+     retired by the sweep itself; the root core (#3857) and the admin seat's
+     unit (#4118) never go
   D  the supervisor restarted (kill -9) keeps its state and ADOPTS a live child
   E  status: one line per item; --check 2 not installed · 0 ok · 1 stale/down
   F  root runs only a root-owned, non-writable script; the built-in table's shape
@@ -526,6 +527,26 @@ class O_SweepRemoves(Sandbox):
                          "the sweep called launchctl on the core")
         # and the one place that boots a unit out refuses it, whoever asks
         self.assertIsInstance(fns._retire_unit(None, self.dd, p, "com.claude-fleet.node-core", [], "x", False), str)
+
+    def test_the_admin_seat_unit_is_never_swept(self):
+        """issue #4118: expected.json naming no labels and the admin seat's own
+        unit (com.claude-fleet.admin-agent, UserName the role — #3724) beside the
+        daemon's: its `_` UserName read as "a machine unit the daemon does not
+        run", and the sweep booted it out minutes after `fleet node install` made
+        it. The seat's unit stays; the same label under another UserName does not."""
+        # the daemon under the launchctl seam is the macOS one on any CI box, so the role is
+        # macOS's — not fns.SEAT_ADMIN_ROLE, which this (seamless) import read off the platform
+        p = self.plist(self.dd, "com.claude-fleet.admin-agent", UserName="_fleetadmin")
+        r = self.run_sup("sweep")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.exists(p), r.stdout)
+        self.assertNotIn("admin-agent", r.stdout)
+        self.assertFalse(os.path.exists(self.lclog) and "admin-agent" in open(self.lclog).read(),
+                         "the sweep called launchctl on the seat's agent")
+        os.unlink(p)
+        p = self.plist(self.dd, "com.claude-fleet.admin-agent")       # no UserName: root, not the seat
+        r = self.run_sup("sweep")
+        self.assertFalse(os.path.exists(p), r.stdout)
 
     def test_a_core_gone_from_launchd_is_put_back(self):
         """issue #3857: the core's plist installed, launchd holding no such job,
