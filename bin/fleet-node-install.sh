@@ -497,7 +497,25 @@ KEYP="$SSHDIR/fleet_user_ca.pub"
 CONFP="$SSHDIR/sshd_config.d/100-fleet-user-ca.conf"
 code=pod; [ -n "$POD" ] || code=$(req GET /v1/fleet/ssh-ca.pub "$WORK/ca")
 case "$code" in
-  pod) skip "ssh CA" "一个人的 pod：sshd 在另一个容器，只认门的钥匙" ;;
+  pod)
+    # a person's pod (claude-fleet#4149): its sshd (the other container) takes
+    # the door's key on the pod's address, and on 127.0.0.1 — where the agent
+    # splices a relay — also a certificate of this CA, read from the node disk
+    # it mounts read-only. No CA ⇒ the door alone, as before: never a failure.
+    PCA="$STATE/ssh/fleet_user_ca.pub"
+    pc=$(req GET /v1/fleet/ssh-ca.pub "$WORK/ca")
+    if [ "$pc" != 200 ]; then
+      skip "ssh CA" "一个人的 pod：入口答 HTTP ${pc}，中转进不来，只走门"
+    elif ! tr -d '\r' < "$WORK/ca" | sed -n '1p' > "$WORK/ca.1" \
+        || ! grep -Eq '^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ [A-Za-z0-9+/=]+' "$WORK/ca.1"; then
+      skip "ssh CA" "一个人的 pod：入口给的不是一把 ssh 公钥，中转进不来，只走门"
+    elif cmp -s "$WORK/ca.1" "$PCA"; then
+      skip "ssh CA" "一个人的 pod：中转已信入口的 CA（${PCA}）"
+    elif mkdir -p "$STATE/ssh" && put "$WORK/ca.1" "$PCA" 644; then
+      ok "ssh CA" "一个人的 pod：${PCA}（门照旧；中转经 127.0.0.1 认入口的证书）"
+    else
+      skip "ssh CA" "一个人的 pod：写不了 ${PCA}，中转进不来，只走门"
+    fi ;;
   200)
     tr -d '\r' < "$WORK/ca" | sed -n '1p' > "$WORK/ca.1"
     grep -Eq '^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ [A-Za-z0-9+/=]+' "$WORK/ca.1" || fail "ssh CA" "入口给的不是一把 ssh 公钥"

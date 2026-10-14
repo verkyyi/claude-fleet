@@ -585,13 +585,16 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                             'allowPrivilegeEscalation': False, 'capabilities': drop(), 'seccompProfile': rt()},
         'volumeMounts': data + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env'])
                         + [{'name': 'run', 'mountPath': '/run'},
-                           {'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
+                           {'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True},
+                           # the sshd's host.pub (claude-fleet#4149): a relayed login
+                           # meets that sshd, so the heartbeat carries its key
+                           {'name': 'sshd-key', 'mountPath': '/run/sshd-key', 'readOnly': True}],
     }, **_probes())
     # sshd: a host key of its own each start (the door never pins one — fleet-door.sh),
     # the config pod-etc wrote
     sshd = {
         'name': 'sshd', 'image': image,
-        'command': ['/bin/sh', '-ec', 'chmod 700 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
+        'command': ['/bin/sh', '-ec', 'chmod 711 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
                     'ssh-keygen -q -t ed25519 -N "" -f /run/sshd-key/host\n'
                     'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
         'resources': {'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},

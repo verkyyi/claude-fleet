@@ -1362,6 +1362,13 @@ const (
 	// CapSSHRelay is the hello capability of an agent that serves TypeSSHRelayOpen.
 	CapSSHRelay = "ssh_relay"
 
+	// CapPodRelay is listed beside CapSSHRelay by an agent in one person's pod
+	// whose relay reaches the pod's own sshd (its port 2222, the hub's user CA
+	// trusted on loopback — claude-fleet#4149). Without it a pod behind the
+	// door is offered no relay: the agent there would dial a port nothing
+	// listens on.
+	CapPodRelay = "pod_relay"
+
 	// SSHRelaySigNamespace is the ssh-keygen -Y namespace a client signs the
 	// hub's relay challenge under. A signature made for anything else (git
 	// commits use "git", files "file") is never accepted as a relay login.

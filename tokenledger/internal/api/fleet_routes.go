@@ -244,8 +244,13 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 // answer's alike (claude-fleet#4112: `fleet` with no machine connects off the
 // home answer, which carried the pod's relay and no door route long after
 // #3985 fixed the route list): the door's entry route, and no relay for a pod
-// behind the door.
+// behind the door — unless its agent says its relay reaches the pod's own
+// sshd (CapPodRelay, claude-fleet#4149): then the relay is the way in when the
+// door is not, and the pod's own host key rides beside the door's.
 func (s *Server) routeMachine(m FleetMachine, relayReady func(string) bool, login string, now time.Time) RouteMachine {
-	return RouteMachine{FleetMachine: s.withEntryReach(m, now),
-		Relay: relayReady(m.Hostname) && !s.podBehindDoor(m.Hostname), Login: login}
+	relay := relayReady(m.Hostname)
+	if relay && s.podBehindDoor(m.Hostname) {
+		relay = s.podRelayReady(m.Hostname)
+	}
+	return RouteMachine{FleetMachine: s.withEntryReachRelay(m, now, relay), Relay: relay, Login: login}
 }

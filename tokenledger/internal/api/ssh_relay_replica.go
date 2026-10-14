@@ -52,6 +52,26 @@ func (s *Server) sshRelayLocal(host string) bool {
 	return false
 }
 
+// podRelayReady says a link to host — this replica's or another's — listed
+// CapPodRelay: a person's pod whose relay reaches its own sshd
+// (claude-fleet#4149).
+func (s *Server) podRelayReady(host string) bool {
+	s.nodes.mu.Lock()
+	for _, c := range s.nodes.conns {
+		if c.canSSHRelay && c.canPodRelay && c.hostname() == host && control.Compatible(int(c.proto.Load())) {
+			s.nodes.mu.Unlock()
+			return true
+		}
+	}
+	s.nodes.mu.Unlock()
+	for _, pc := range s.peerRelayHosts()[host] {
+		if pc.HasCap(control.CapPodRelay) {
+			return true
+		}
+	}
+	return false
+}
+
 // peerRelayHosts is, per hostname, the other replicas' links that offered
 // CapSSHRelay (nil on a single hub, and when none does).
 func (s *Server) peerRelayHosts() map[string][]store.NodeConn {
