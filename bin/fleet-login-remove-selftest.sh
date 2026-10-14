@@ -740,6 +740,15 @@ not_has "$FLEET_TEST_LOG" 'tar ' 'quick: archived (the wash does)'
 [ ! -e "$CS/db/alice" ] || fail 'quick: credsep not purged'
 has "$WORK/out" 'the wash quiesces and moves the home aside' 'quick: the end line is missing'
 run alice --quick --apply; [ "$RC" = 2 ] || fail '--quick without --recycle-stop was not refused'
+# --keep-node (issue #4195): the wash keeps the login's root-held node token —
+# no hub leave, the rest as --quick
+reset_fixture; : > "$FLEET_TEST_LOG"
+run alice --recycle-stop --quick --delete-home --keep-node --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "keep-node: exit $RC"; }
+not_has "$FLEET_TEST_LOG" '/v1/node/leave' 'keep-node: the kept token was taken off the hub'
+has "$WORK/out" 'skipped: --keep-node' 'keep-node: the skip is not said'
+has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" 'keep-node: services not booted out'
+run alice --keep-node --apply; [ "$RC" = 2 ] || fail '--keep-node without --recycle-stop was not refused'
 reset_fixture
 cat > "$WORK/reset-stub.sh" <<'EOF2'
 #!/bin/sh

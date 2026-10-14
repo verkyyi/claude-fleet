@@ -87,15 +87,30 @@ func (s *Server) recycleHomes(host, login string) ([]store.EntryHome, error) {
 // recycleJoinLabel is the label loginJoinCode mints a login's codes under.
 func recycleJoinLabel(a store.FleetAccount) string { return a.Hostname + "-" + a.Login }
 
+// recycleKeepAll is recycleClearAs's keep while a keeping reset runs: every
+// node of the login stays enrolled (which one the wash kept is known only
+// from its answer).
+const recycleKeepAll = "*"
+
 // recycleClear takes the person's hub-side pieces off login a.Login on
-// a.Hostname. Every step is idempotent; one that fails is logged and left to
-// recycleLeftovers, which fails the recycle rather than hand the login on.
-func (s *Server) recycleClear(a store.FleetAccount, now time.Time) {
+// a.Hostname, its node tokens with them. Every step is idempotent; one that
+// fails is logged and left to recycleLeftovers, which fails the recycle rather
+// than hand the login on.
+func (s *Server) recycleClear(a store.FleetAccount, now time.Time) { s.recycleClearAs(a, now, "") }
+
+// recycleClearAs is recycleClear with keep (claude-fleet#4195): the node(s)
+// whose token the wash keeps — "" none (each is retired), recycleKeepAll every
+// one, else that endpoint id. A kept node stays enrolled; the last person's
+// pieces of it go all the same: the passes it issued (revoked, on the list),
+// its leases, its open link. And kept or not, the last person's credentials on
+// this machine go on the revocation list (recycleRevokePerson).
+func (s *Server) recycleClearAs(a store.FleetAccount, now time.Time, keep string) {
 	who := a.Login + "@" + a.Hostname
 	eps, err := s.recycleEndpoints(a.Hostname, a.Login, a.RequestedAt)
 	if err != nil {
 		log.Printf("fleet: recycle %s: endpoints: %v", who, err)
 	}
+	passes := 0
 	for i := range eps {
 		ep := &eps[i]
 		if held, err := s.Store.ReleaseLeasesOfEndpoint(ep.ID); err != nil {
@@ -106,10 +121,25 @@ func (s *Server) recycleClear(a store.FleetAccount, now time.Time) {
 					fmt.Sprintf("%s#%d (%s) — %s recycled", l.Repo, l.Issue, l.WorkerID, who), now)
 			}
 		}
+		if keep == recycleKeepAll || keep == ep.ID {
+			n, err := s.Store.RevokeEndpointSessionCreds(ep.ID, "hub", "login "+a.Login+" recycled: the last person's passes end", now)
+			if err != nil {
+				log.Printf("fleet: recycle %s: passes of kept node %s: %v", who, ep.ID, err)
+			}
+			passes += n
+			s.sessCred.drop("")
+			s.revNodePasses(ep, now)
+			if s.nodes.get(ep.ID) != nil {
+				// it reconnects with the same token once the wash is done
+				s.nodes.closeRevoked(ep.ID)
+			}
+			continue
+		}
 		if _, err := s.retireNode(ep, "hub", "login "+a.Login+" recycled into a spare", now); err != nil {
 			log.Printf("fleet: recycle %s: retire node %s: %v", who, ep.ID, err)
 		}
 	}
+	s.recycleRevokePerson(a, now, keep, passes)
 	// A relay credential the login holds with no endpoint left to name it.
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		key := relayKey(a.Hostname)
@@ -147,10 +177,32 @@ func (s *Server) recycleClear(a store.FleetAccount, now time.Time) {
 // categories still there, in a fixed order, empty when clean. A category it
 // cannot read is listed too — never called clean unread.
 func (s *Server) recycleLeftovers(a store.FleetAccount, now time.Time) []string {
+	return s.recycleLeftoversAs(a, now, "")
+}
+
+// recycleLeftoversAs is recycleLeftovers with the node the wash kept (its
+// endpoint id, claude-fleet#4195): that one may stay enrolled, but no pass it
+// issued before the reset may still be live, and neither may a certificate of
+// the last person's that names the login.
+func (s *Server) recycleLeftoversAs(a store.FleetAccount, now time.Time, kept string) []string {
 	var dirty []string
-	eps, err := s.recycleEndpoints(a.Hostname, a.Login, a.RequestedAt)
+	all, err := s.recycleEndpoints(a.Hostname, a.Login, a.RequestedAt)
+	var eps []store.Endpoint
+	for _, ep := range all {
+		if ep.ID != kept || kept == "" {
+			eps = append(eps, ep)
+		}
+	}
 	if err != nil || len(eps) > 0 {
 		dirty = append(dirty, "node-token")
+	}
+	if kept != "" {
+		if n, err := s.Store.LiveEndpointSessionCreds(kept, now, now); err != nil || n > 0 {
+			dirty = append(dirty, "pass")
+		}
+	}
+	if left, err := s.recycleCertsLeft(a, now); err != nil || left > 0 {
+		dirty = append(dirty, "cert")
 	}
 	if err == nil {
 		leases, lerr := s.Store.Leases(now)
@@ -209,8 +261,19 @@ func (s *Server) applyReset(opID, epID string, res control.AccountResult, now ti
 	if why == "" {
 		// The hub's half, once more: a write that failed at send time is
 		// retried here, and what is still there fails the recycle.
-		s.recycleClear(*a, now)
-		if left := s.recycleLeftovers(*a, now); len(left) > 0 {
+		kept := ""
+		if nodeKept(res.Detail) {
+			// The wash kept the login's node token (claude-fleet#4195): the one
+			// node enrolled before the reset is that one — two or none, and the
+			// hub cannot tell which, so none is kept and the recycle fails.
+			if eps, err := s.recycleEndpoints(a.Hostname, a.Login, a.RequestedAt); err == nil && len(eps) == 1 {
+				kept = eps[0].ID
+			} else {
+				why = fmt.Sprintf("the wash kept the login's node token, but the hub has %d node(s) of it from before the reset", len(eps))
+			}
+		}
+		s.recycleClearAs(*a, now, kept)
+		if left := s.recycleLeftoversAs(*a, now, kept); len(left) > 0 && why == "" {
 			why = "hub still holds " + strings.Join(left, ",") + " of the last person"
 		}
 	}
@@ -243,4 +306,106 @@ func resetTiming(detail string) string {
 		}
 	}
 	return ""
+}
+
+// nodeKept says the wash's answer kept the login's node token: a `node: kept`
+// line (bin/fleet-login-reset.sh, claude-fleet#4195) among its last lines.
+func nodeKept(detail string) bool {
+	for _, l := range strings.Split(detail, "\n") {
+		if strings.HasPrefix(strings.TrimRight(l, " \t\r"), "node: kept") {
+			return true
+		}
+	}
+	return false
+}
+
+// recycleCerts is the last person's live SSH certificates that name the
+// recycled login: with them the person could still sign in as it.
+func (s *Server) recycleCerts(a store.FleetAccount, now time.Time) ([]store.FleetCert, error) {
+	if store.IsSparePrincipal(a.PrincipalID) {
+		return nil, nil
+	}
+	certs, err := s.Store.LiveFleetCerts(a.PrincipalID, now)
+	if err != nil {
+		return nil, err
+	}
+	var out []store.FleetCert
+	for _, c := range certs {
+		for _, p := range c.Principals {
+			if p == a.Login {
+				out = append(out, c)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// recycleRevokePerson puts what the last person still holds for this machine
+// on the revocation list (claude-fleet#4195) — every credential of theirs
+// issued here before now (the scope a credential revoke writes) and each live
+// SSH certificate naming the login — refused at every door within the list's
+// 10 seconds, kept token or not; and leaves one hub_audit spare.revoke line
+// with what went.
+func (s *Server) recycleRevokePerson(a store.FleetAccount, now time.Time, keep string, passes int) {
+	who := a.Login + "@" + a.Hostname
+	src := "recycle:" + revMachine(a.Hostname) + "|" + a.Login
+	var entries []store.Revocation
+	if !store.IsSparePrincipal(a.PrincipalID) {
+		entries = append(entries, store.Revocation{Machine: revMachine(a.Hostname), Principal: a.PrincipalID,
+			Before: now.Unix(), Exp: now.Add(revScopeKeep).Unix(), Src: src, Reason: "login " + a.Login + " recycled"})
+	}
+	certs, err := s.recycleCerts(a, now)
+	if err != nil {
+		log.Printf("fleet: recycle %s: certificates: %v", who, err)
+	}
+	for _, c := range certs {
+		entries = append(entries, store.Revocation{JTI: "ssh:" + c.Serial, Principal: a.PrincipalID,
+			Exp: c.ValidBefore.Unix(), Src: src})
+	}
+	s.revRecord(entries, now)
+	node := "re-joined"
+	switch keep {
+	case "":
+	case recycleKeepAll:
+		node = "kept while washing"
+	default:
+		node = "kept " + keep
+	}
+	list := "on"
+	if !s.revOn() {
+		list = "off"
+	}
+	detail := fmt.Sprintf("%s · login %s → spare · node %s · passes %d · certs %d · list %s",
+		a.PrincipalID, a.Login, node, passes, len(certs), list)
+	if err := s.Store.HubAudit("hub", "spare.revoke", a.Login, "ok", detail, now); err != nil {
+		log.Printf("fleet: recycle %s: audit: %v", who, err)
+	}
+}
+
+// recycleCertsLeft counts the last person's live certificates naming the
+// login that the list does not carry (0 when the list is off: no door reads it).
+func (s *Server) recycleCertsLeft(a store.FleetAccount, now time.Time) (int, error) {
+	if !s.revOn() {
+		return 0, nil
+	}
+	certs, err := s.recycleCerts(a, now)
+	if err != nil || len(certs) == 0 {
+		return 0, err
+	}
+	_, list, err := s.Store.RevocationList(now)
+	if err != nil {
+		return 0, err
+	}
+	on := map[string]bool{}
+	for _, r := range list {
+		on[r.JTI] = true
+	}
+	n := 0
+	for _, c := range certs {
+		if !on["ssh:"+c.Serial] {
+			n++
+		}
+	}
+	return n, nil
 }

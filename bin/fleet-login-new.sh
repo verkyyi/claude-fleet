@@ -256,6 +256,15 @@ if [ -n "$JCODE" ] && [ -n "$JHUB" ]; then
   printf '%s' "$JCODE" | grep -Eq '^fj_[a-z2-7]{26}$' || die2 'FLEET_LOGIN_JOIN_CODE is not a join code (fj_…)'
   JHUB=${JHUB%/}; OPENED=1
 fi
+# A recycle that kept the login's node token (issue #4195): the wash's root-only
+# keep dir (fleet-login-reset.sh step 0) — no join (7a keeps instead), and 7b puts
+# the token back into the new credential store from root, never through the home.
+KEEPN=${FLEET_LOGIN_KEEP_NODE:-}
+unset FLEET_LOGIN_KEEP_NODE
+if [ -n "$KEEPN" ]; then
+  [ "$RECYCLE" = 1 ] || die2 'FLEET_LOGIN_KEEP_NODE goes with --recycle only (a kept token is a washed login'"'"'s)'
+  case "$KEEPN" in /*) ;; *) die2 "FLEET_LOGIN_KEEP_NODE is not an absolute directory: '$KEEPN'" ;; esac
+fi
 # The op that runs this (issue #2928): the admin agent's op_id, from its
 # environment. Under --apply it is written to ~/<login>-onboard/op before step 1
 # (op= · pid= · started=) and, when the run ends well, its result lines after
@@ -524,6 +533,13 @@ onboard_mk() {
 NODE_LINE='' FLEET_LINE=''
 warn_step() { say "  WARN: $1"; NODE_LINE=${NODE_LINE:-"node: WARN — $1"}; }
 node_join_step() {
+  if [ -n "$KEEPN" ]; then
+    N0=$N; N="${N}a"; say ""; say "[$N] keep $LOGIN's node token (no join: root held it through the wash, $KEEPN — it goes back into the store in the next step)"
+    NODE_LINE="node: kept — the token root kept, never through the home"
+    say "  $NODE_LINE"
+    N=$N0
+    return 0
+  fi
   [ "$OPENED" = 1 ] || return 0
   N0=$N; N="${N}a"; say ""; say "[$N] join $JHUB as $LOGIN's own node (the hub opened this login: its fleet is seen only through its own agent)"
   local pass="$H/.fleet-join-pass.json" plist="$DDIR/com.ccquota.agent.$LOGIN.plist"
@@ -796,6 +812,7 @@ if [ "$DONLY" = 0 ]; then
   # 7b. the subscription out of the login's reach (issue #2294) — before its
   # services (8) and its first session: the proxy first, then the credentials
   CD="$H/.config/claude-fleet"
+  [ -z "$KEEPN" ] || [ "$CREDSEP" = 1 ] || die2 'a kept node token goes back into a credential store only (--no-credsep with FLEET_LOGIN_KEEP_NODE)'
   if [ "$CREDSEP" = 1 ]; then
     N0=$N; N="${N}b"; say ""; say "[$N] keep the subscription out of $LOGIN's reach (credsep, before any service or session: FLEET_CRED_PROXY=1 + FLEET_CRED_SEPARATE=1, store ${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN$([ "$SHARE" = 1 ] && echo ', the pool inside it'))"
     FC="$TMPD/fleet.conf"
@@ -827,6 +844,21 @@ if [ "$DONLY" = 0 ]; then
     [ "$RECYCLE" = 0 ] || CS=(sudo env FLEET_CREDSEP_JOIN_WAIT=0 bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
     [ "$SHARE" = 1 ] && CS+=(--pool-src "$POOL_SRC")
     run "${CS[@]}"
+    if [ -n "$KEEPN" ]; then
+      # the kept token into the new store (issue #4195): root reads the keep dir,
+      # credsep setenv writes the store's node.env (the home gets the link and the
+      # token-less node.pub.env); the signing key goes beside it, owner kept
+      KSTORE="${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN"
+      printf '  $ %s%s\n' "${SU}" "bash $(printf %q "$BIN/fleet-credsep.sh") setenv --login $LOGIN < $(printf %q "$KEEPN/node.env")"
+      printf '  $ %s%s\n' "${SU}" "cp -p $(printf %q "$KEEPN")/node.key{,.ok} $(printf %q "$KSTORE")/  (those there are)"
+      if [ "$APPLY" = 1 ]; then
+        sudo cat "$KEEPN/node.env" | sudo bash "$BIN/fleet-credsep.sh" setenv --login "$LOGIN" || fail
+        for k in node.key node.key.ok; do
+          if sudo test -f "$KEEPN/$k"; then sudo cp -p "$KEEPN/$k" "$KSTORE/$k" || fail; fi
+        done
+        say "  node: kept — its token is back in $KSTORE (no re-join)"
+      fi
+    fi
     N=$N0
   fi
 fi

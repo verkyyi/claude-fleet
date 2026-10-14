@@ -260,6 +260,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.cfg.FleetAdmin && recycleCapable(a.accountScript(loginRemoveScript)) {
 		// Its remove script washes a login for the next person (claude-fleet#3504).
 		caps = append(caps, control.CapRecycle)
+		if recycleKeepCapable(a.accountScript(loginRemoveScript)) {
+			// ... and its wash keeps the login's root-held node token (claude-fleet#4195).
+			caps = append(caps, control.CapRecycleKeep)
+		}
 	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),

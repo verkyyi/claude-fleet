@@ -88,3 +88,29 @@ func TestRecycleCapableNeedsTheMode(t *testing.T) {
 		t.Fatal("resetResult reads the wrong line")
 	}
 }
+
+// claude-fleet#4195: CapRecycleKeep only when the wash beside the remove script
+// keeps the login's node token (FLEET_LOGIN_KEEP_NODE).
+func TestRecycleKeepCapableReadsTheWash(t *testing.T) {
+	home := t.TempDir()
+	rm := filepath.Join(home, loginRemoveScript)
+	if recycleKeepCapable(rm) || recycleKeepCapable("") {
+		t.Fatal("no wash, yet keep capable")
+	}
+	reset := filepath.Join(filepath.Dir(rm), "fleet-login-reset.sh")
+	if err := os.MkdirAll(filepath.Dir(reset), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reset, []byte("#!/bin/bash\n# re-joins\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if recycleKeepCapable(rm) {
+		t.Fatal("a wash without the keep counted as keeping")
+	}
+	if err := os.WriteFile(reset, []byte("#!/bin/bash\nFLEET_LOGIN_KEEP_NODE=x\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !recycleKeepCapable(rm) {
+		t.Fatal("a wash that keeps the token is not keep capable")
+	}
+}
