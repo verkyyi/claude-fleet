@@ -186,6 +186,9 @@
 #                                                   15 s alerts tick: hidden 120 · idle 240, + #4059's budget); go test
 #   trial-idle-while-opening                        tokenledger/internal/api fleet_try_slot.go (trialSlotVerdict: idle
 #                                                   from ready_at, open_slow 300 → store.RequeueTrial); go test
+#   trial-seat-no-home                              tokenledger/internal/api fleet_spare.go (deadSpares / liveFleetRows,
+#                                                   claimSpareAt's skip, healDeadSpares) + internal/store fleet_spare.go
+#                                                   (ClaimSpare / ClaimSpareFor skip); go test, when a toolchain is here
 #   drill-trial-escape                              tokenledger/internal/api fleet_drill_trial.go (an admin's ft_ code,
 #                                                   spent once, into trialSignIn; SweepDrillTrials) + internal/store
 #                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
@@ -2745,6 +2748,26 @@ drill_trial_dirty_handout() {
   c11_go_tests fleet_recycle_test.go TestRecycleNeverHandsOutAnUncleanWash || return 1
   WHAT='试用放回的号走洗号：dirty 的留 failed、不进预备池；洗净的才成备用；人立刻和这台脱钩（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='试用被巡检放回 → reset：说 dirty 的那台 failed、永不成备用；clean 的成备用；放回那刻人已不挂这个号、家也清了（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-seat-no-home (#4234): a spare the hub held active whose fleet was
+# never live (no node reported it) was handed to a trial — 「opening」 and
+# 409 no_home until it was taken back. Now only a spare whose fleet is live is
+# handed; one unseen past spareDeadAfter is dead, skipped by the claim and
+# closed by the refill (a wash, or a remove), audited spare.dead.
+drill_trial_seat_no_home() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'dead := s.deadSpareLogins(host, now)' "$tl/api/fleet_spare.go" 2>/dev/null \
+    || { WHY="a claim no longer skips the dead spares (claimSpareAt, fleet_spare.go)"; return 1; }
+  grep -q 'queued = s.healDeadSpares(m, now) || queued' "$tl/api/fleet_spare.go" 2>/dev/null \
+    || { WHY="the refill no longer closes a dead spare (healDeadSpares)"; return 1; }
+  grep -q 'rows, avail, err := s.liveFleetRows(now)' "$tl/api/fleet_entry.go" 2>/dev/null \
+    || { WHY="a home and a ready spare no longer read the same live rows (entryHomeChoices → liveFleetRows)"; return 1; }
+  c11_go_tests fleet_spare_dead_test.go TestTrialSeatNeverAHomelessSpare || return 1
+  WHAT='只发 fleet 活着的备用；active 过 10 分钟仍不见 fleet 的是死备用：不算就绪、领号跳过、补池收掉并审计 spare.dead（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='fleet 活的备用领走即成家；fleet 从没起来的备用过期后就绪 0、试用者排队不领它、补池发 remove（能回收的发 reset）、审计 spare.dead（go test）'
   SECS=$(since "$t0")
 }
 
