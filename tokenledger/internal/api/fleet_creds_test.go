@@ -475,8 +475,6 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 	for name, req := range map[string]FleetCredentialRequest{
 		"expired": {Action: "put", PrincipalID: store.PoolPrincipal, Provider: credvault.Claude, Account: "old",
 			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", ExpiresAt: ptrTime(time.Now().Add(-time.Hour))}},
-		"no expiry": {Action: "put", PrincipalID: store.PoolPrincipal, Provider: credvault.Claude, Account: "x",
-			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x"}},
 		"both": {Action: "put", PrincipalID: pAlice, Provider: credvault.Claude, Account: "x",
 			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", RefreshToken: "rt", ExpiresAt: &exp}},
 		"unknown person": {Action: "put", PrincipalID: "gh:1099", Provider: credvault.Claude, Account: "x",
@@ -485,6 +483,20 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 		if code, _ := h.post(t, "/v1/fleet/credentials", req); code != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, code)
 		}
+	}
+
+	// Unknown expiry is accepted and stays unknown in storage and the lease.
+	if code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal,
+		Provider: credvault.Claude, Account: "unknown-expiry", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-UNKNOWN"}}); code != http.StatusOK {
+		t.Fatalf("put unknown expiry: %d %v", code, out)
+	}
+	unknown, err := h.srv.Store.Credential(store.PoolPrincipal, credvault.Claude, "unknown-expiry")
+	if err != nil || unknown.SecretExpiresAt != nil {
+		t.Fatalf("unknown expiry stored: %+v %v", unknown, err)
+	}
+	access, err := h.srv.Vault.Lease(context.Background(), store.PoolPrincipal, credvault.Claude, "unknown-expiry")
+	if err != nil || access.ExpiresAt != nil {
+		t.Fatalf("unknown expiry leased: %+v %v", access, err)
 	}
 
 	// Expiring within a month: the hub's own page carries the reminder.
