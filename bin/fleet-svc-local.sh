@@ -102,6 +102,10 @@ R=${FLEET_SVC_RUN:-} K=${FLEET_SVC_ATTEMPT:-}
 valid "$R" "$K" || { echo "fleet-svc-local: FLEET_SVC_RUN / FLEET_SVC_ATTEMPT are not R<n> / 1-9" >&2; exit 3; }
 IFS= read -r key || true
 [[ "$key" =~ ^fsj_[a-z2-7]{52}$ ]] || { echo "fleet-svc-local: no run key on stdin" >&2; exit 3; }
+# claude, found while HOME is still the login's: the agent starts this with root's
+# PATH, and a managed login's claude is its ~/.local/bin link to the runtime's
+claude_bin=${FLEET_SVC_CLAUDE:-}
+[ -n "$claude_bin" ] || claude_bin=$(PATH="$REAL_HOME/.local/bin:$PATH" command -v claude 2>/dev/null || true)
 umask 077
 mkdir -p "$BASE" && chmod 700 "$BASE" || exit 1
 dir="$BASE/$R-a$K"
@@ -122,11 +126,11 @@ unset key
 # what the session must never read: the key, the pass, this login's own config
 deny="$dir/key,$dir/run/**"
 for d in .config .ssh .claude .ccquota .codex .local Library; do deny="$deny,$REAL_HOME/$d/**"; done
-FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" \
+FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" FLEET_SVC_CLAUDE="$claude_bin" \
 FLEET_SVC_WORK="$dir/work" FLEET_SVC_OUT="$dir/out" FLEET_SVC_PASS_DIR="$dir/run" FLEET_SVC_KEY_FILE="$dir/key" \
 FLEET_SVC_PGID_FILE="$dir/pgid" FLEET_SVC_DENY_EXTRA="$deny" FLEET_SVC_DENY_ROOTS="${FLEET_SVC_DENY_ROOTS-private,etc,var,tmp,opt,usr,Library,System,Volumes,Applications,cores}" \
   python3 -I "$BIN/fleet-svc-runner.py" fetch </dev/null || exit $?
-FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" \
+FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" FLEET_SVC_CLAUDE="$claude_bin" \
 FLEET_SVC_WORK="$dir/work" FLEET_SVC_OUT="$dir/out" FLEET_SVC_PASS_DIR="$dir/run" FLEET_SVC_KEY_FILE="$dir/key" \
 FLEET_SVC_PGID_FILE="$dir/pgid" FLEET_SVC_DENY_EXTRA="$deny" FLEET_SVC_DENY_ROOTS="${FLEET_SVC_DENY_ROOTS-private,etc,var,tmp,opt,usr,Library,System,Volumes,Applications,cores}" \
   python3 -I "$BIN/fleet-svc-runner.py" run </dev/null
