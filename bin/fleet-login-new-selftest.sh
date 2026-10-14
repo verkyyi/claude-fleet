@@ -1040,6 +1040,23 @@ eq "R no such login: nothing ran" 0 "$(mutations)"
 : > "$LOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --daemons-only 2>&1); RC=$?
 eq "R with --daemons-only → 2" 2 "$RC"
 
+# --- R2. --recycle with a kept node token (issue #4195): no join, the token back
+# into the new store from root (credsep setenv), never through the home ---------
+KDIR="$WORK/keep-rex"; mkdir -p "$KDIR"; chmod 700 "$KDIR"
+printf 'CCQUOTA_TOKEN=tok-kept-rex\nCCQUOTA_HUB_URL=%s\n' "https://hub.example" > "$KDIR/node.env"; chmod 600 "$KDIR/node.env"
+: > "$LOG"; OUT=$(FLEET_LOGIN_KEEP_NODE="$KDIR" FLEET_LOGIN_JOIN_CODE=fj_zzzzzzzzzzzzzzzzzzzzzzzzzz FLEET_LOGIN_HUB=https://hub.example \
+  FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" --share-pool --pool-src "$POOL" $DAEMONS 2>&1); RC=$?
+eq "R2 dry run exit" 0 "$RC"
+contains "R2 7a keeps instead of joining" "$OUT" "keep rex's node token (no join"
+not_contains "R2 no join" "$OUT" "/v1/node/join"
+contains "R2 the token back through credsep setenv" "$OUT" "fleet-credsep.sh setenv --login rex < $KDIR/node.env"
+contains "R2 the answer says node: kept" "$OUT" "node: kept"
+not_contains "R2 the token is never shown" "$OUT" "tok-kept-rex"
+: > "$LOG"; OUT=$(FLEET_LOGIN_KEEP_NODE="$KDIR" "$BASH_BIN" "$S" kim --full-name Kim --pubkey "$KEY" 2>&1); RC=$?
+eq "R2 a kept token without --recycle → 2" 2 "$RC"
+: > "$LOG"; OUT=$(FLEET_LOGIN_KEEP_NODE=rel/dir FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" 2>&1); RC=$?
+eq "R2 a relative keep dir → 2" 2 "$RC"
+
 # --- S. root under the admin gate (issue #3723) -------------------------------
 GATE="$WORK/gate"; mkdir -p "$GATE/accounts"; chmod 755 "$GATE"
 cp -p "$POOL/alpha" "$POOL/alpha.conf" "$GATE/accounts/"

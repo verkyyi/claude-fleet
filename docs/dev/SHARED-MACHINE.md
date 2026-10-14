@@ -697,3 +697,18 @@ only fills the login's own `fleet.conf` (`fleet-install-apply.sh --conf-only`)
 and starts its fleet. No template for this version: `createhomedir` as before,
 and a build is started off the clock for the next wash.
 `fleet-home-template.py status` says whether one is ready.
+
+**No re-join for a token only root held** (issue #4195). A login the machine
+daemon serves (`<node state>/logins/<login>.env`) whose node token sits in its
+credsep store keeps that token: step 0 copies the store's node keys and
+`node.key` into root's `<node state>/keep/<login>/` (0700), the stop runs
+`--keep-node` (no `fleet node leave`), the opener skips the join and puts the
+token back into the new store with `credsep setenv` (never through the home),
+`account adopt` reads it from the store, and the answer says `node: kept`
+(timing `keep=`). The hub — told by the admin's `recycle_keep` capability —
+leaves that node enrolled and changes only who the login belongs to (the
+spare), while the last person's passes, leases, link, 家 and every live SSH
+certificate naming the login are revoked (the revocation list, refused within
+10 s; `hub_audit spare.revoke`). A login whose token sat where the person could
+read or change it re-joins as before; `FLEET_LOGIN_RESET_KEEP_NODE=0` always
+re-joins. BREAK-IT `recycle-rejoins`, `recycle-old-cert`.
