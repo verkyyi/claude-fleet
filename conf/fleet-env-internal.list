@@ -65,6 +65,7 @@ FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code def
 FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
 FLEET_BOOTSTRAP_GIT_BASE           seam: an injectable command/path for tests (fleet-login-bootstrap.sh)
 FLEET_BOOTSTRAP_DOCTOR             knob: 0 = skip the closing doctor report (fleet-login-new.sh --recycle passes it: 29 s nobody reads, #4044)
+FLEET_BOOTSTRAP_FLEET              env handoff: 0 = check the starter out but start no fleet and mark nothing bootstrapped (fleet-home-template.py build, #4194)
 FLEET_BOOTSTRAP_CACHE              path: the machine cache a new login installs from; `off` = none (fleet-bootstrap-cache.sh, issue #2297)
 FLEET_BOOT_ID_CMD                  seam: a fake boot-session id for the diskguard crash harvest (fleet-diskguard.sh, #1294)
 FLEET_BREW_LOG                     path: the brew-perms repair log (fleet-brew-perms.sh, #2283)
@@ -462,6 +463,7 @@ FLEET_LOGIN_RESET_CHECK            test seam: the leftovers check fleet-login-re
 FLEET_LOGIN_RESET_ROOT             test seam: sandbox prefix for the system paths fleet-login-reset.sh sweeps; the check's --root (#3505)
 FLEET_LOGIN_RESET_SETTLE           knob: seconds the wash watches for a respawned process after kill + bootout, default 0 (fleet-login-reset.sh, #3979, #4044)
 FLEET_LOGIN_RESET_ASIDE            test seam: wait = the old home's archive + delete run inside the wash instead of detached (fleet-login-reset.sh, #4044)
+FLEET_LOGIN_RESET_TEMPLATE         test seam: the home-template script the wash clones a fresh home with; 0 = createhomedir only (fleet-login-reset.sh, #4194)
 FLEET_REMOVE_SSH_DIR               path: root's key + known_hosts for the local ssh delete (fleet-login-remove-ssh.sh, #2994)
 FLEET_REMOVE_SSH_FORCED            test seam: the forced command= path written into authorized_keys (fleet-login-remove-ssh.sh, #2994)
 FLEET_REMOVE_SSH_HOMES             test seam: where the admin's home is looked for when dscl has none (fleet-login-remove-ssh.sh, #2994)
