@@ -14,6 +14,11 @@ import (
 // key never comes near SQLite — plus an audit row for every issue, denial and
 // change, and the revocations that stop a node or a person from leasing more.
 const fleetCredsSchema = `
+CREATE TABLE IF NOT EXISTS fleet_credential_quota (
+  credential_id TEXT PRIMARY KEY,
+  at TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS fleet_credentials (
   principal_id     TEXT NOT NULL,
   provider         TEXT NOT NULL,

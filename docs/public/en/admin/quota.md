@@ -1,5 +1,7 @@
 # Subscriptions and quota
 
+Claude OAuth subscriptions do not require an account UUID. The hub periodically reads the five-hour and seven-day windows for each credential. Importing the same token twice counts once; replacing a token under the same name waits for a new reading. Account association is optional, and imports never borrow the importing machine's login identity. A failed read shows its reason and the observation time of that credential's last reading; an unread credential shows no quota.
+
 Sessions use a Claude or ChatGPT (Codex) subscription. A subscription's sign-in credential exists only in the hub; a machine is lent a short-lived copy, renewed as it runs out, and members can never read the long-lived credential.
 
 ## Where subscriptions come from: either works

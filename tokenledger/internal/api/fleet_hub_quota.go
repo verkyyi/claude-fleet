@@ -40,15 +40,10 @@ import (
 //   - Codex: <relay>/chatgpt/wham/usage with the vault's access token (the
 //     vault refreshes it itself), parsed by codex.ParseUsage.
 //
-// A reading is filed under the credential's OWN account_uuid — a Codex one's
-// from its id_token, a Claude one's as recorded at import or by the
-// operator's `bind` — else the one account its label names
-// (store.ResolveCredentialLabel); a Claude credential that names neither is
-// not written, never filed under a new win_ fingerprint. It is stored as an
-// ordinary row with endpoint_id HubQuotaEndpoint, so a fresh hub reading wins
-// on the page (LimitsFor, codexLimitsFor), and with the relay down or the
-// pass refused the page falls back to the nodes' readings and says why
-// (read_via / read_note).
+// Readings are filed under an owner/provider-scoped credential identity. The
+// optional verified upstream account association is kept separately; neither
+// a label nor a reset schedule can establish it. Bound legacy accounts still
+// receive a compatibility copy for older account readers.
 //
 // The relay's forward_auth is answered by this hub: the quota pass
 //
@@ -94,12 +89,14 @@ type HubQuota struct {
 // HubQuotaRead is the outcome of the last read of one credential — what
 // read_note quotes when the page falls back to a node. Never a token.
 type HubQuotaRead struct {
-	Provider    string    `json:"provider"`
-	Account     string    `json:"account"`
-	AccountUUID string    `json:"account_uuid,omitempty"`
-	At          time.Time `json:"at"`
-	OK          bool      `json:"ok"`
-	Error       string    `json:"error,omitempty"`
+	Provider     string    `json:"provider"`
+	Account      string    `json:"account"`
+	AccountUUID  string    `json:"account_uuid,omitempty"`
+	CredentialID string    `json:"credential_id,omitempty"`
+	Owner        string    `json:"owner"`
+	At           time.Time `json:"at"`
+	OK           bool      `json:"ok"`
+	Error        string    `json:"error,omitempty"`
 }
 
 func (h *HubQuota) now() time.Time {
@@ -135,7 +132,7 @@ func (h *HubQuota) record(r HubQuotaRead) {
 	if h.last == nil {
 		h.last = map[string]HubQuotaRead{}
 	}
-	h.last[r.Provider+"/"+r.Account] = r
+	h.last[r.CredentialID] = r
 }
 
 // Reads is every credential's last read, for the doctor and tests.
@@ -265,7 +262,7 @@ func (s *Server) ReadHubQuota(ctx context.Context) {
 		log.Printf("hub quota: vault locked, nothing read this round")
 		return
 	}
-	creds, err := s.Store.Credentials(store.PoolPrincipal)
+	creds, err := s.Store.Credentials("")
 	if err != nil {
 		log.Printf("hub quota: list pool credentials: %v", err)
 		return
@@ -279,13 +276,19 @@ func (s *Server) ReadHubQuota(ctx context.Context) {
 	for _, a := range pausedAccounts(settings) {
 		paused[a] = true
 	}
+	seen := map[string]bool{}
 	for _, c := range creds {
 		if ctx.Err() != nil {
 			return
 		}
-		if c.Provider == credvault.GitHub || paused[c.Account] || c.ReauthRequired {
+		if c.Provider == credvault.GitHub || (c.PrincipalID == store.PoolPrincipal && paused[c.Account]) || ownPaused(settings, c) {
 			continue
 		}
+		id := s.Vault.CredentialID(c)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
 		rctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		r := s.readHubQuotaOne(rctx, c)
 		cancel()
@@ -296,21 +299,32 @@ func (s *Server) ReadHubQuota(ctx context.Context) {
 	}
 }
 
-func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) HubQuotaRead {
+func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) (r HubQuotaRead) {
 	h := s.HubQuota
-	r := HubQuotaRead{Provider: c.Provider, Account: c.Account, At: h.now().UTC()}
+	r = HubQuotaRead{Provider: c.Provider, Owner: c.PrincipalID, Account: c.Account, At: h.now().UTC(), AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c)}
+	defer func() {
+		if r.CredentialID != "" {
+			if err := s.Store.SaveCredentialQuotaRead(r.CredentialID, r.At, r.Error); err != nil {
+				r.OK = false
+				r.Error = "could not persist quota read status"
+			}
+		}
+	}()
 	fail := func(err error) HubQuotaRead {
 		r.Error = truncate(err.Error(), 200)
 		return r
 	}
 	uuid, err := s.hubQuotaAccount(c)
-	r.AccountUUID = uuid
 	if err != nil {
 		return fail(err)
 	}
-	acc, err := s.Vault.Lease(ctx, store.PoolPrincipal, c.Provider, c.Account)
+	acc, err := s.Vault.Lease(ctx, c.PrincipalID, c.Provider, c.Account)
 	if err != nil {
 		return fail(fmt.Errorf("lease: %w", err))
+	}
+	current, err := s.Store.Credential(c.PrincipalID, c.Provider, c.Account)
+	if err != nil || current == nil || s.Vault.CredentialID(*current) != uuid {
+		return fail(errors.New("credential changed during read; retry next round"))
 	}
 	base := strings.TrimRight(h.RelayURL, "/")
 	switch c.Provider {
@@ -321,11 +335,17 @@ func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) HubQuo
 			return fail(err)
 		}
 		snap.AccountUUID, snap.EndpointID, snap.CredentialLabel = uuid, HubQuotaEndpoint, c.Account
-		if err := s.hubQuotaEnsureAccount(uuid, model.SourceClaude, c.Account); err != nil {
-			return fail(err)
-		}
 		if err := s.Store.InsertLimits(snap); err != nil {
 			return fail(err)
+		}
+		if r.AccountUUID != "" {
+			if err := s.hubQuotaEnsureAccount(r.AccountUUID, model.SourceClaude, c.Account); err != nil {
+				return fail(err)
+			}
+			snap.AccountUUID = r.AccountUUID
+			if err := s.Store.InsertLimits(snap); err != nil {
+				return fail(err)
+			}
 		}
 	case credvault.Codex:
 		q, err := s.hubQuotaCodex(ctx, base, acc)
@@ -333,11 +353,17 @@ func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) HubQuo
 			return fail(err)
 		}
 		q.AccountUUID, q.Source, q.EndpointID, q.ProfileID = uuid, model.SourceCodex, HubQuotaEndpoint, "hub"
-		if err := s.hubQuotaEnsureAccount(uuid, model.SourceCodex, c.Account); err != nil {
-			return fail(err)
-		}
 		if err := s.Store.InsertQuota(*q); err != nil {
 			return fail(err)
+		}
+		if r.AccountUUID != "" {
+			if err := s.hubQuotaEnsureAccount(r.AccountUUID, model.SourceCodex, c.Account); err != nil {
+				return fail(err)
+			}
+			q.AccountUUID = r.AccountUUID
+			if err := s.Store.InsertQuota(*q); err != nil {
+				return fail(err)
+			}
 		}
 	default:
 		return fail(errors.New("no quota reading for provider " + c.Provider))
@@ -346,21 +372,12 @@ func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) HubQuo
 	return r
 }
 
-// hubQuotaAccount is the usage account a reading of c is filed under: the
-// credential's own account_uuid, else the ONE account its label names.
-// Neither = an error — never a guess, never a new win_ fingerprint.
+// hubQuotaAccount is an internal quota subject, never a guessed account UUID.
 func (s *Server) hubQuotaAccount(c store.Credential) (string, error) {
-	if u := s.Vault.AccountUUID(c); u != "" {
-		return u, nil
+	if id := s.Vault.CredentialID(c); id != "" {
+		return id, nil
 	}
-	u, err := s.Store.ResolveCredentialLabel(model.UsageSource(c.Provider), c.Account)
-	if err != nil {
-		return "", err
-	}
-	if u == "" {
-		return "", errors.New("no account_uuid on the credential and its label names no single account — not written (POST /v1/fleet/credentials action=bind)")
-	}
-	return u, nil
+	return "", errors.New("credential identity unavailable")
 }
 
 // hubQuotaEnsureAccount gives a reading of a known identity its account row:

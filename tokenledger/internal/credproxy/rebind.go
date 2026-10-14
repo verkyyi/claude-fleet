@@ -31,17 +31,21 @@ const RebindPath = "/v1/fleet/credproxy/rebind"
 // Rebinder is a Resolver that also moves a session off an account at its
 // limit. It answers the session's resolution after the move (or as it stands).
 type Rebinder interface {
-	Rebind(ctx context.Context, pass, provider, owner, account string, resetAt int64) (Resolution, error)
+	Rebind(ctx context.Context, pass, provider, owner, account string, resetAt int64, credentialID ...string) (Resolution, error)
 }
 
 // Rebind reports a quota 429 on account for pass's session.
-func (h *HubResolver) Rebind(ctx context.Context, pass, provider, owner, account string, resetAt int64) (Resolution, error) {
+func (h *HubResolver) Rebind(ctx context.Context, pass, provider, owner, account string, resetAt int64, credentialID ...string) (Resolution, error) {
 	c := h.Client
 	if c == nil {
 		c = &http.Client{Timeout: 5 * time.Second}
 	}
+	identity := ""
+	if len(credentialID) > 0 {
+		identity = credentialID[0]
+	}
 	body, _ := json.Marshal(map[string]any{"cred": pass, "provider": provider, "owner": owner,
-		"account": account, "reset_at": resetAt})
+		"account": account, "reset_at": resetAt, "credential_id": identity})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.URL, "/")+RebindPath, bytes.NewReader(body))
 	if err != nil {
 		return Resolution{}, err
@@ -158,7 +162,7 @@ func (p *Proxy) rebind(ctx context.Context, resp *http.Response, pass, provider 
 	if !limited {
 		return resp
 	}
-	nr, err := rb.Rebind(ctx, pass, provider, res.Owner, res.Account, resetAt)
+	nr, err := rb.Rebind(ctx, pass, provider, res.Owner, res.Account, resetAt, res.CredentialID)
 	if err != nil || !nr.Valid || nr.AccessToken == "" || (nr.Owner == res.Owner && nr.Account == res.Account) {
 		return resp
 	}

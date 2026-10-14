@@ -19,8 +19,7 @@ import (
 // and every session on it opened onto a 429. Now the pick puts an account
 // known to be at its limit after the rest:
 //
-//   - its latest reading (limit_snapshots, by the account the vault label
-//     names — ResolveCredentialLabel) has the five-hour or the seven-day
+//   - its latest reading (limit_snapshots, by the credential identity) has the five-hour or the seven-day
 //     window at 100% and that window has not reset yet; or
 //   - the cluster proxy reported a quota 429 for it (POST
 //     /v1/fleet/credproxy/rebind), remembered until the reset the answer
@@ -76,15 +75,14 @@ func (m *limitMemo) limited(provider, owner, account string, now time.Time) bool
 
 // credAtLimit says why one vault account is known to be at its limit, or "".
 func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
-	if s.limits.limited(c.Provider, c.PrincipalID, c.Account, now) {
-		return "429"
-	}
-	uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
-	if err != nil || uuid == "" {
+	if s.Vault == nil {
 		return ""
 	}
-	snap, err := s.Store.LatestLimits(uuid)
-	if err != nil || snap == nil {
+	if s.limits.limited(c.Provider, c.PrincipalID, s.Vault.CredentialID(c), now) {
+		return "429"
+	}
+	snap := s.credentialSnapshot(c)
+	if snap == nil {
 		return ""
 	}
 	full := func(pct float64, reset *time.Time) bool {
@@ -102,12 +100,8 @@ func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
 // credPeak is the fuller of one vault account's two windows on its latest
 // reading, in percent — a window already reset reads 0; no reading is 0.
 func (s *Server) credPeak(c store.Credential, now time.Time) float64 {
-	uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
-	if err != nil || uuid == "" {
-		return 0
-	}
-	snap, err := s.Store.LatestLimits(uuid)
-	if err != nil || snap == nil {
+	snap := s.credentialSnapshot(c)
+	if snap == nil {
 		return 0
 	}
 	peak := 0.0
@@ -162,11 +156,12 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Cred     string `json:"cred"`
-		Provider string `json:"provider"`
-		Account  string `json:"account"`
-		Owner    string `json:"owner"`
-		ResetAt  int64  `json:"reset_at"`
+		Cred         string `json:"cred"`
+		Provider     string `json:"provider"`
+		Account      string `json:"account"`
+		Owner        string `json:"owner"`
+		ResetAt      int64  `json:"reset_at"`
+		CredentialID string `json:"credential_id"`
 	}
 	if err := readOptionalJSON(r, &req); err != nil || req.Cred == "" || req.Account == "" || !hasString(sessionCredProviders, req.Provider) {
 		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument",
@@ -198,11 +193,18 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 			until = t
 		}
 	}
-	s.limits.mark(req.Provider, owner, req.Account, until)
+	if row, err := s.Store.Credential(owner, req.Provider, req.Account); err == nil && row != nil {
+		id := s.Vault.CredentialID(*row)
+		if req.CredentialID != "" && req.CredentialID == id {
+			s.limits.mark(req.Provider, owner, id, until)
+		}
+	}
 
 	epID := s.passEndpoint(c.ID, now)
 	b, err := s.sessionBind(c.WorkerID, c.Principal, epID, req.Provider, now)
-	if err == nil && b.Owner == owner && b.Account == req.Account {
+	current, _ := s.Store.Credential(owner, req.Provider, req.Account)
+	same := current != nil && (req.CredentialID == "" || req.CredentialID == s.Vault.CredentialID(*current))
+	if err == nil && same && b.Owner == owner && b.Account == req.Account {
 		var choices []store.Credential
 		if choices, err = s.sessionBindChoices(c.Principal, epID, req.Provider); err == nil {
 			for _, ch := range choices {
@@ -235,7 +237,7 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out.Owner, out.Account, out.BindRev = b.Owner, b.Account, b.Rev
-	acc, err := s.Vault.Lease(r.Context(), b.Owner, req.Provider, b.Account)
+	acc, identity, err := s.leaseIdentified(r.Context(), b.Owner, req.Provider, b.Account)
 	if err != nil {
 		if errors.Is(err, credvault.ErrLocked) {
 			sessionCredRefuse(w, http.StatusServiceUnavailable, LeaseVaultLocked, err.Error())
@@ -246,5 +248,6 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out.AccessToken, out.AccountID, out.ExpiresAt = acc.AccessToken, acc.AccountID, acc.ExpiresAt
+	out.CredentialID = identity
 	writeJSON(w, http.StatusOK, out)
 }
