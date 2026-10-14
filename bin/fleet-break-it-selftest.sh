@@ -7217,6 +7217,14 @@ drill_ticket_hub_down() {
 # refuses a recycled window, the agent it already runs and a mid-turn source
 # with one line, dispatching nothing; a settled one is dispatched exactly once,
 # detached on the fleet's own server, to the same fleet-transfer.sh.
+drill_transfer_proxy_auth() {
+  CAP=10
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-auth-selftest.py" >"$WORK/transfer-auth.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-auth.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
+}
+
 drill_far_agent_switch() {
   CAP=15; BREAK_SOCK="$WORK/sock-fas"; local d="$WORK/fas" t0 out rc win ids i
   mkdir -p "$d/conf/fleets/fa" "$d/sb" "$d/home"

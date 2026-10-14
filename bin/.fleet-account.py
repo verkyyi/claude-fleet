@@ -370,6 +370,47 @@ def claude_profile(label=''):
     return dict(agent='claude', label=label, key='claude/' + label, login=login)
 
 
+def codex_proxy_auth(home=''):
+    """Check the exact proxy account fleet-session-cred.sh would mint for.
+
+    A separated login deliberately has no auth.json. Ask its authenticated
+    control socket, never infer a login from old quota readings or proxy uptime.
+    None means the launcher would still use the local profile road.
+    """
+    conf = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
+    if not (conf / 'credsep.json').is_file():
+        return None
+    row = dict(agent='codex', source='proxy', key='codex/proxy', login='unknown')
+    try:
+        run(['bash', BIN / 'fleet-session-cred.sh', 'on'])
+    except (OSError, subprocess.SubprocessError):
+        return dict(row, verdict='refuse', reason='separated Codex login needs its credential proxy enabled')
+    home = home or os.environ.get('FLEET_CODEX_HOME', '')
+    if not home and os.environ.get('FLEET_CODEX_ACCOUNTS'):
+        # That selector uses local profiles before the proxy launcher path.
+        return None
+    home = Path(home or Path.home() / '.codex').resolve()
+    if not home.is_dir():
+        return dict(row, verdict='refuse', reason='Codex home missing: ' + str(home))
+    default = (Path.home() / '.codex').resolve()
+    pool = Path(os.environ.get('FLEET_CRED_CODEX_HOMES', str(Path.home() / '.codex-accounts'))).resolve()
+    if home == default:
+        label = 'default'
+    elif home.parent == pool:
+        label = home.name
+    else:
+        return dict(row, verdict='refuse', reason='Codex home has no credential proxy account mapping')
+    row.update(home=str(home), profile=label)
+    try:
+        result = json.loads(run(['bash', BIN / 'fleet-cred-proxy.sh', 'target-auth', '--account', label]))
+        if not isinstance(result, dict) or result.get('verdict') not in ('ok', 'refuse'):
+            raise ValueError('invalid proxy verdict')
+        return dict(row, verdict=result['verdict'], login='valid' if result['verdict'] == 'ok' else 'unavailable',
+                    reason=str(result.get('reason') or ''))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return dict(row, verdict='refuse', reason='credential proxy cannot verify the Codex target; check proxy availability/version')
+
+
 def target_auth(agent, label='', profile_name='', home='', account=''):
     """verdict `ok` | `refuse` | `unknown`, with key / login / reason. `refuse` is the
     only answer that stops a switch. `unknown` = there is no registry to ask (no
@@ -393,6 +434,11 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
         if login in LOGIN_OK:
             return dict(row, verdict='ok', reason='')
         return dict(row, verdict='refuse', reason='Claude account %s needs a new login (%s)' % (label, login))
+    profile_name = profile_name or os.environ.get('FLEET_CODEX_PROFILE', '')
+    if not (profile_name or account):
+        proxy = codex_proxy_auth(home)
+        if proxy is not None:
+            return proxy
     try:
         rows = profiles()
     except (OSError, ValueError, subprocess.SubprocessError):

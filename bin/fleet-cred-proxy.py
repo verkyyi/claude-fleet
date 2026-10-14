@@ -1920,6 +1920,41 @@ def codex_tokens(path):
     return t["access_token"], t.get("account_id"), fp
 
 
+def codex_target_auth(t, label):
+    """Metadata-only preflight for a transfer, scoped by ctl_tenant's peer uid.
+
+    Use the same account path as target(), without minting a pass or moving
+    files. Unknown, missing, expired and upstream-rejected leases fail closed.
+    Central-only routes need their own remote attestation; a local lease cannot
+    prove that the central service will admit a new target session.
+    """
+    def refuse(reason):
+        return dict(ok=True, verdict='refuse', reason=reason)
+    if not SAFE_LABEL(label):
+        return refuse('invalid Codex proxy account')
+    order, _ = t.router.candidates('codex', False)
+    if not order or order[0] == 'central':
+        return refuse('central Codex target cannot be verified by the local credential proxy')
+    if order[0] == 'relay' and not relay_pass(t.cfg):
+        return refuse('Codex relay has no usable pass')
+    path = pool_entry(t.cfg, 'codex', label) or codex_auth_path(t.cfg, label)
+    try:
+        token, account, fingerprint = codex_tokens(path)
+        parts = token.split('.')
+        if len(parts) != 3 or not account:
+            return refuse('Codex proxy lease has no subscription identity')
+        claims = json.loads(base64.urlsafe_b64decode(parts[1] + '=' * (-len(parts[1]) % 4)))
+        expiry = _num(claims.get('exp'))
+        if expiry is None or expiry <= time.time():
+            return refuse('Codex proxy lease is expired or has no expiry')
+        verdict = read_json(os.path.join(os.path.dirname(path), '.ccquota-upstream.json'), {})
+        if isinstance(verdict, dict) and verdict.get('credential_version') == fingerprint and verdict.get('state') == 'rejected':
+            return refuse('upstream rejected this Codex proxy lease')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return refuse('Codex proxy lease is missing or unreadable')
+    return dict(ok=True, verdict='ok', reason='')
+
+
 def codex_verdict(seen, route, status, body):
     """Leave the upstream's word on a Codex home's access token where
     `ccquota codex list` reads it (<home>/.ccquota-upstream.json,
@@ -1984,6 +2019,8 @@ def no_account_why(cfg, provider):
 def ctl_handle(req, t):
     cfg = t.cfg
     op = req.get("op")
+    if op == "target-auth":
+        return codex_target_auth(t, req.get("account") or "")
     if op == "route":
         if req.get("refresh"):
             t.router.refresh(t.log)
@@ -2769,6 +2806,8 @@ def main():
     o = sub.add_parser("unstore")
     o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
     sub.add_parser("accounts")
+    a = sub.add_parser("target-auth")
+    a.add_argument("--account", required=True)
     sub.add_parser("probe")
     sub.add_parser("relay")
     sub.add_parser("relay-probe")
@@ -2806,6 +2845,9 @@ def main():
         ctl_call(a.state, {"op": "unstore", "kind": a.kind, "label": a.label})
     elif a.cmd == "accounts":
         print(json.dumps(ctl_call(a.state, {"op": "accounts"}).get("claude") or {}, sort_keys=True))
+    elif a.cmd == "target-auth":
+        res = ctl_call(a.state, {"op": "target-auth", "account": a.account})
+        print(json.dumps({k: res[k] for k in ("verdict", "reason")}))
     elif a.cmd == "probe":
         ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
     elif a.cmd == "relay-probe":
