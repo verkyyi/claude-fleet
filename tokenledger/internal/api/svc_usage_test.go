@@ -307,7 +307,7 @@ func TestSvcYieldsTightPool(t *testing.T) {
 		}
 	}
 	soon := time.Now().Add(48 * time.Hour)
-	atLimit(t, r, "pool1", 85, soon)
+	atLimit(t, r, store.PoolPrincipal, "pool1", 85, soon)
 	ws1 := svcPassFor(t, r.h, "space:ws:1", "R21")
 	if st, body := r.call(t, credvault.Claude, ws1); st != 200 {
 		t.Fatalf("a service call with pool2 free → %d %s", st, body)
@@ -315,7 +315,7 @@ func TestSvcYieldsTightPool(t *testing.T) {
 	if acct, _ := r.boundTo(t, "svc/R21/a1"); acct != "pool2" {
 		t.Fatalf("pool1 is at 85%%; the service bound to %s, want pool2", acct)
 	}
-	atLimit(t, r, "pool2", 90, soon)
+	atLimit(t, r, store.PoolPrincipal, "pool2", 90, soon)
 	ws2 := svcPassFor(t, r.h, "space:ws:2", "R22")
 	if st, body := r.call(t, credvault.Claude, ws2); st == 200 {
 		t.Fatalf("every pool account tight, the service still got one: %s", body)
