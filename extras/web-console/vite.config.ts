@@ -1,5 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -13,6 +14,44 @@ import tailwindcss from "@tailwindcss/vite";
 //   vite build --mode proto   the member side over a mock API (src/proto), one
 //                             relative-path build that proto/inline.mjs folds
 //                             into a single page for review (rule 14) — never packed
+// 添加到主屏幕 (claude-fleet#3943): the member side's build writes
+// manifest.webmanifest beside its index.html — served at /app/manifest.webmanifest
+// (the hub's AppManifestPath), the ONE manifest of the hub (/term links it too).
+// The icons are the theme's PNG cut of logo.svg (bin/site-images.sh), hashed
+// into assets/; the colour is the theme's --fleet-bg. No service worker, no
+// offline cache.
+const repo = path.resolve(import.meta.dirname, "../..");
+function homeScreen(base: string): Plugin {
+  const href = `${base}manifest.webmanifest`;
+  return {
+    name: "fleet-home-screen",
+    apply: "build",
+    transformIndexHtml: () => [
+      { tag: "link", attrs: { rel: "manifest", href }, injectTo: "head" },
+    ],
+    generateBundle() {
+      const theme = fs.readFileSync(path.join(repo, "extras/fleet-theme/theme.css"), "utf8");
+      const bg = /--fleet-bg:\s*(#[0-9a-fA-F]{6})/.exec(theme)?.[1];
+      if (!bg) throw new Error("fleet-home-screen: no --fleet-bg in the theme");
+      const icon = (file: string, sizes: string) => ({
+        src: base + this.getFileName(this.emitFile({
+          type: "asset", name: file,
+          source: fs.readFileSync(path.join(repo, "site/assets", file)),
+        })),
+        sizes, type: "image/png",
+      });
+      const manifest = {
+        id: "/app", name: "ClaudeFleet", short_name: "ClaudeFleet",
+        start_url: "/app", scope: "/", display: "standalone",
+        background_color: bg, theme_color: bg, lang: "zh-CN",
+        icons: [icon("icon-192.png", "192x192"), icon("icon-512.png", "512x512"),
+          icon("apple-touch-icon.png", "180x180")],
+      };
+      this.emitFile({ type: "asset", fileName: "manifest.webmanifest", source: JSON.stringify(manifest, null, 2) + "\n" });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const proto = mode === "proto";
   const side = proto ? "app" : mode;
@@ -20,7 +59,7 @@ export default defineConfig(({ mode }) => {
     root: path.resolve(import.meta.dirname, side),
     base: proto ? "./" : `/${side}/`,
     envDir: import.meta.dirname,
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), ...(side === "app" && !proto ? [homeScreen(`/${side}/`)] : [])],
     resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
     define: { __PROTO__: JSON.stringify(proto) },
     build: {

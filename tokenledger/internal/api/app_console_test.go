@@ -478,3 +478,31 @@ func TestConsoleSettings(t *testing.T) {
 		t.Errorf("settingsBack = %q; want %q", got, want)
 	}
 }
+
+// 添加到主屏幕 (claude-fleet#3943): /app/manifest.webmanifest is the build's
+// manifest, served to anyone — a browser fetches it without cookies — as
+// application/manifest+json; no build ⇒ 404.
+func TestConsoleManifest(t *testing.T) {
+	h, _, user := rolesHarness(t)
+	h.srv.ConsoleFS = fstest.MapFS{
+		"app/index.html":           {Data: []byte("APP-ENTRY")},
+		"app/manifest.webmanifest": {Data: []byte(`{"name":"ClaudeFleet","start_url":"/app"}`)},
+	}
+	hd := h.srv.Handler()
+	for _, who := range []*http.Cookie{nil, user} {
+		got := consoleDo(hd, http.MethodGet, AppManifestPath, who)
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"start_url":"/app"`) {
+			t.Fatalf("GET %s (cookie %v) = %d %.60q; want the manifest", AppManifestPath, who != nil, got.Code, got.Body.String())
+		}
+		if ct := got.Header().Get("Content-Type"); ct != "application/manifest+json" {
+			t.Errorf("Content-Type %q; want application/manifest+json", ct)
+		}
+	}
+	if got := consoleDo(hd, http.MethodPost, AppManifestPath, user); got.Code != http.StatusNotFound {
+		t.Errorf("POST %s = %d; want 404", AppManifestPath, got.Code)
+	}
+	h.srv.ConsoleFS = nil
+	if got := consoleDo(hd, http.MethodGet, AppManifestPath, nil); got.Code != http.StatusNotFound {
+		t.Errorf("no build: GET %s = %d; want 404", AppManifestPath, got.Code)
+	}
+}
