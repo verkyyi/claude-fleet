@@ -458,6 +458,12 @@ func withQuery(to string, r *http.Request) string {
 func (s *Server) appMount(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+		if (strings.HasPrefix(p, "/v1/") || p == "/mcp") && s.trialOutside(r) {
+			// A trial person's API is the chat and their trial; the rest is an
+			// unknown address (claude-fleet#4058).
+			http.NotFound(w, r)
+			return
+		}
 		switch {
 		case strings.HasPrefix(p, themePrefix):
 			// the theme the way-in pages wear (claude-fleet#3932)

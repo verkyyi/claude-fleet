@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -74,7 +76,7 @@ func TestTryPageAndScript(t *testing.T) {
 	enablePeople(t, h)
 	setHubSetting(t, h.srv, TrialKey, "on")
 	resp, body := h.get(t, TryPagePath+"?lang=zh")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "60 秒试用") ||
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "立即体验") ||
 		!strings.Contains(string(body), `src="`+tryScriptPath+`"`) {
 		t.Fatalf("GET /app/try = %d %s", resp.StatusCode, body)
 	}
@@ -88,14 +90,14 @@ func TestTryPageAndScript(t *testing.T) {
 	}
 }
 
-// The start mints a one-use trial invite into the cookie and sends the
-// browser to sign in; the sign-in that spends it records a waiting trial and
-// opens no login.
-func TestTryStartLetsAStrangerInAsATrial(t *testing.T) {
+// The start leaves only the ccq_try note and sends the browser to sign in —
+// no invite. A verified sign-in the list refuses, carrying the note, becomes a
+// trial person (role trial, one row per way); without the note it is the old
+// refusal; a trial invite from before admits no one (claude-fleet#4058).
+func TestTryStartNeedsAVerifiedSignIn(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
 	setHubSetting(t, h.srv, TrialKey, "on")
-	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
 
 	req, _ := http.NewRequest(http.MethodPost, h.http.URL+TryStartPath, nil)
 	if resp, err := noFollow.Do(req); err != nil || resp.StatusCode != http.StatusBadRequest {
@@ -106,37 +108,120 @@ func TestTryStartLetsAStrangerInAsATrial(t *testing.T) {
 		t.Fatalf("start = %d %v", code, out)
 	}
 	resp := &http.Response{Header: hdr}
-	ic, rc := cookieNamed(resp, inviteCookie), cookieNamed(resp, entryReturnCookie)
-	if ic == nil || !validInviteCode(ic.Value) || rc == nil || rc.Value != TryPagePath {
-		t.Fatalf("cookies = %+v / %+v; want an invite and a way back to /app/try", ic, rc)
+	tc, rc := cookieNamed(resp, tryCookie), cookieNamed(resp, entryReturnCookie)
+	if tc == nil || tc.Value != "1" || rc == nil || rc.Value != TryPagePath || cookieNamed(resp, inviteCookie) != nil {
+		t.Fatalf("cookies = %+v / %+v; want the try note, a way back to /app/try and no invite", tc, rc)
 	}
-	inv, err := h.srv.Store.InviteByHash(inviteHash(ic.Value))
-	if err != nil || inv == nil || inv.CreatedBy != trialInviter {
-		t.Fatalf("invite = %+v, %v; want one made by %q", inv, err, trialInviter)
+	if n, err := h.srv.Store.Invites(); err != nil || len(n) != 0 {
+		t.Fatalf("invites = %v, %v; want none minted", n, err)
 	}
 
-	const pid = "p:00000000-0000-4000-8000-000000003590"
-	if refusal, err := h.srv.admitInviteAs(pid, store.IdentityEmail, "trier@example.com", "trier", ic.Value, time.Now()); err != nil || refusal != "" {
-		t.Fatalf("admit = %q, %v", refusal, err)
+	now := time.Now()
+	// No note: the refusal stands, nothing recorded.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "https://hub.example.com/auth/email/link", nil)
+	if h.srv.trialSignIn(w, r, h.srv.trialAsked(r), store.IdentityEmail, "a@example.com", "a", "", now) {
+		t.Fatalf("a sign-in with no try note became a trial")
 	}
-	tr, err := h.srv.Store.Trial(pid)
+	// With the note: a trial person, signed in as one, sent to /app/try.
+	r.AddCookie(&http.Cookie{Name: tryCookie, Value: "1"})
+	w = httptest.NewRecorder()
+	if !h.srv.trialSignIn(w, r, h.srv.trialAsked(r), store.IdentityEmail, "A@example.com", "a", "", now) {
+		t.Fatalf("a verified sign-in with the try note was not made a trial")
+	}
+	if loc := w.Result().Header.Get("Location"); loc != TryPagePath {
+		t.Fatalf("after the trial sign-in → %q; want %s", loc, TryPagePath)
+	}
+	tr, err := h.srv.Store.TrialByWay(store.IdentityEmail, "a@example.com")
 	if err != nil || tr == nil || tr.State != store.TrialWaiting {
-		t.Fatalf("trial = %+v, %v; want waiting", tr, err)
+		t.Fatalf("trial by the address = %+v, %v; want waiting", tr, err)
 	}
-	if h.srv.placePrincipal(pid, "trier", pid); len(mustAccounts(t, h, pid)) != 0 {
-		t.Fatalf("the sign-in opened a login for a trial: %+v", mustAccounts(t, h, pid))
+	if role, err := h.srv.personRole(tr.Principal); err != nil || role != roleTrial {
+		t.Fatalf("role = %q, %v; want trial", role, err)
+	}
+	if u, _ := h.srv.Store.HubUserByPrincipal(tr.Principal); u != nil {
+		t.Fatalf("a trial person was put on the list: %+v", u)
+	}
+	if h.srv.placePrincipal(tr.Principal, "a", tr.Principal); len(mustAccounts(t, h, tr.Principal)) != 0 {
+		t.Fatalf("the sign-in opened a login for a trial")
+	}
+	// The same address signs in again: the same person, the same one trial.
+	pid, role, _, err := h.srv.admitPerson(store.IdentityEmail, "a@example.com", "", "", now)
+	if err != nil || pid != tr.Principal || role != roleTrial {
+		t.Fatalf("second sign-in = %q %q %v; want the trial person back", pid, role, err)
+	}
+	// Another person cannot take this way's trial.
+	if err := h.srv.Store.StartTrialAs("p:00000000-0000-4000-8000-000000004058", store.IdentityEmail, "a@example.com", now); err == nil {
+		t.Fatalf("a second trial on one way was recorded")
 	}
 
-	// An admin's invite is not a trial.
-	other := &store.Invite{CreatedBy: "gh:1"}
-	h.srv.trialAdmitted("gh:7777", other, time.Now())
-	if tr, _ := h.srv.Store.Trial("gh:7777"); tr != nil {
-		t.Fatalf("an admin's invite made a trial: %+v", tr)
+	// A trial invite from before #4058 lets no one in.
+	code2 := "trialcode-0000000000000000000000000000"
+	if err := h.srv.Store.CreateInvite(store.Invite{ID: "try-old", CodeHash: inviteHash(code2), CreatedBy: trialInviter,
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if refusal, err := h.srv.admitInviteAs("p:00000000-0000-4000-8000-000000004059", store.IdentityEmail, "b@example.com", "b", code2, now); err != nil || refusal == "" {
+		t.Fatalf("an old trial invite = %q, %v; want refused", refusal, err)
 	}
 	// The way back after the sign-in is the try page.
-	r := httptestRequestWithCookie(entryReturnCookie, TryPagePath)
+	r = httptestRequestWithCookie(entryReturnCookie, TryPagePath)
 	if to := entryReturnTo(&nopWriter{h: http.Header{}}, r); to != TryPagePath {
 		t.Fatalf("entryReturnTo = %q; want %s", to, TryPagePath)
+	}
+}
+
+// trialSession is a trial person's session cookie: their own role, not on
+// the list.
+func trialSession(t *testing.T, h *harness, pid string) *http.Cookie {
+	t.Helper()
+	if err := h.srv.Store.StartTrialAs(pid, store.IdentityEmail, pid+"@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return &http.Cookie{Name: authz.CookieName, Value: authz.SignRole(store.IdentityEmail, pid, "trier", roleTrial,
+		(&GitHubAuth{ClientSecret: testGitHubSecret}).sessionKey(), time.Now(), time.Hour)}
+}
+
+// A trial person reaches the chat, their trial and /apply; /app/sessions,
+// /v1/fleet/*, the admin side answer 404 (claude-fleet#4058).
+func TestTrialRoleReachesOnlyTheChat(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	setHubSetting(t, h.srv, TrialKey, "on")
+	const pid = "p:00000000-0000-4000-8000-000000004060"
+	c := trialSession(t, h, pid)
+	do := func(method, path string) (int, string) {
+		req, _ := http.NewRequest(method, h.http.URL+path, nil)
+		req.AddCookie(c)
+		req.Header.Set(tryHeader, "1")
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	for _, p := range []string{AppPrefix + "/sessions", control.SessionsPath, control.SummaryPath, "/v1/fleet/settings",
+		AdminPrefix, AdminPrefix + "/people", TryStatsPath, "/v1/me/identities"} {
+		if code, _ := do(http.MethodGet, p); code != http.StatusNotFound {
+			t.Errorf("trial GET %s = %d; want 404", p, code)
+		}
+	}
+	code, body := do(http.MethodGet, "/v1/me")
+	if code != http.StatusOK || !strings.Contains(body, `"role":"trial"`) {
+		t.Fatalf("trial GET /v1/me = %d %s; want role trial", code, body)
+	}
+	var me Me
+	_ = json.Unmarshal([]byte(body), &me)
+	if len(me.Pages) != 1 || me.Pages[0] != "chat" {
+		t.Fatalf("trial pages = %v; want the chat only", me.Pages)
+	}
+	if code, _ := do(http.MethodPost, TryClaimPath); code != http.StatusOK {
+		t.Fatalf("trial claim = %d; want 200", code)
+	}
+	if !trialRoute(AppPrefix) || !trialRoute(ChatPathPrefix+"home") || trialRoute(AppPrefix+"/usage") {
+		t.Fatalf("trialRoute is not the chat and the trial")
 	}
 }
 
@@ -320,10 +405,16 @@ func TestTrySweepReclaimsAfterSevenDays(t *testing.T) {
 	if a := accountState(t, h, fresh, "mac-d"); a.State != store.AccountActive {
 		t.Fatalf("a trial used yesterday was swept: %+v", a)
 	}
-	if !auditHas(mustAudit(t, h), "trial", "ok", "7 天没用") {
+	if !auditHas(mustAudit(t, h), "trial.release", "ok", "7 天没用") {
 		t.Errorf("no reclaim audit row")
 	}
-	// Back after the reclaim: to the end of the line, never an error.
+	// Back after the reclaim: one trial per account (fleet.trial.once) —
+	// 「已试过」, pointed at /apply.
+	if a, err := h.srv.tryClaim(old, "", now.Add(trialIdle+2*time.Hour)); err != nil || a.State != "tried" || a.Next != ApplyPath {
+		t.Fatalf("a second trial = %+v, %v; want tried → /apply", a, err)
+	}
+	// With fleet.trial.once off: to the end of the line, never an error.
+	setHubSetting(t, h.srv, TrialOnceKey, "off")
 	if _, err := h.srv.tryClaim(old, "", now.Add(trialIdle+2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -339,4 +430,86 @@ func mustAudit(t *testing.T, h *harness) []store.HubAuditEntry {
 		t.Fatal(err)
 	}
 	return log
+}
+
+// Admission (共同约定「准入」, claude-fleet#4058): seats full, the machine's own
+// gate saying no, load over the line, the pool under its floor — each a wait
+// with its reason and an ETA, never an error; the day's total spent (halved
+// under half a pool) is 「今天满了」.
+func TestTrialAdmissionQueues(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	nodes := spareFleet(t, h)
+	setHubSetting(t, h.srv, TrialKey, "on")
+	sparesOn(t, h, "1")
+	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
+	openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
+	readySpares(t, h, "mac-d", 1)
+	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "0")
+	old := trialPoolLeft
+	t.Cleanup(func() { trialPoolLeft = old })
+	pool := func(left float64, ok bool) { trialPoolLeft = func(*Server) (float64, bool) { return left, ok } }
+	pool(0, false)
+
+	now := time.Now()
+	const p = "gh:7401"
+	if err := h.srv.Store.StartTrialAs(p, store.IdentityGitHub, "7401", now); err != nil {
+		t.Fatal(err)
+	}
+	claim := func(want, reason string) tryAnswer {
+		t.Helper()
+		a, err := h.srv.tryClaim(p, "", time.Now())
+		if err != nil || a.State != want || a.Reason != reason {
+			t.Fatalf("claim = %+v, %v; want %s/%s", a, err, want, reason)
+		}
+		return a
+	}
+	setHubSetting(t, h.srv, TrialSlotsKey, "0")
+	if a := claim("waiting", trialWaitFull); a.ETASecs <= 0 {
+		t.Fatalf("a full wait has no ETA: %+v", a)
+	}
+	setHubSetting(t, h.srv, TrialSlotsKey, "8")
+	pool(10, true)
+	claim("waiting", trialWaitQuota)
+	pool(40, true) // under half: the day's 2 halve to 1
+	setHubSetting(t, h.srv, TrialDailyKey, "2")
+	if err := h.srv.Store.StartTrialAs("gh:7402", store.IdentityGitHub, "7402", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.PlaceTrial("gh:7402", "mac-d", now); err != nil {
+		t.Fatal(err)
+	}
+	claim("day_full", "")
+	pool(90, true)
+	// The machine's own gate holds new sessions: busy.
+	no := false
+	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 1, NCPU: 8, Admit: &no, AdmitWhy: "内存紧张"})
+	waitFor(t, 3*time.Second, "mac-d's gate to say no", func() bool { return h.srv.trialHold("mac-d", time.Now()) == trialWaitBusy })
+	// Load over 0.8 × cores.
+	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 1, NCPU: 8, Load1: 7})
+	waitFor(t, 3*time.Second, "mac-d's load to read", func() bool { return h.srv.trialHold("mac-d", time.Now()) == trialWaitLoad })
+	setHubSetting(t, h.srv, TrialLoadRatioKey, "1")
+	beatCount(t, nodes["mac-d"], "mac-d", "ivan", 1)
+	waitFor(t, 3*time.Second, "mac-d to admit again", func() bool { return h.srv.trialHold("mac-d", time.Now()) == "" })
+	if !auditHas(mustAudit(t, h), "trial.queued", "waiting", "reason=quota") {
+		t.Errorf("no trial.queued audit for the pool")
+	}
+	// Every gate open: the seat.
+	if a, err := h.srv.tryClaim(p, "", time.Now()); err != nil || (a.State != "ready" && a.State != "opening") {
+		t.Fatalf("claim with every gate open = %+v, %v; want a seat", a, err)
+	}
+	if !auditHas(mustAudit(t, h), "trial.claim", "ok", "mac-d") {
+		t.Errorf("no trial.claim audit")
+	}
+	// The ETA follows the last releases' spacing once two are known.
+	for i, q := range []string{"gh:7403", "gh:7404"} {
+		_ = h.srv.Store.StartTrialAs(q, store.IdentityGitHub, q[3:], now)
+		_ = h.srv.Store.PlaceTrial(q, "mac-d", now)
+		if err := h.srv.Store.ReclaimTrial(q, now.Add(time.Duration(i)*90*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if eta := h.srv.trialETA("mac-d", 1); eta != 180 {
+		t.Fatalf("ETA one behind = %d; want 2 × the 90 s spacing", eta)
+	}
 }

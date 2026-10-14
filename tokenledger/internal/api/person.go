@@ -192,6 +192,9 @@ func (s *Server) personRole(pid string) (string, error) {
 	if u != nil && u.Role == roleUser {
 		return roleUser, nil
 	}
+	if !s.Fleet {
+		return "", nil // the trial is the fleet module's
+	}
 	if t, err := s.Store.Trial(pid); err != nil {
 		return "", err
 	} else if t != nil {

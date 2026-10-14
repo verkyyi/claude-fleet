@@ -276,3 +276,18 @@ func (s *Server) trialETA(host string, ahead int) int {
 	}
 	return each * (1 + ahead/per)
 }
+
+// trialOutside: r carries a trial person's session and asks for something
+// beyond trialRoute. The cookie's role only spares the list a read for
+// everyone else; the list decides.
+func (s *Server) trialOutside(r *http.Request) bool {
+	if trialRoute(r.URL.Path) || r.URL.Path == TryStartPath {
+		return false
+	}
+	sess, pid, ok := s.personSession(r)
+	if !ok || sess.Role != roleTrial {
+		return false
+	}
+	role, err := s.personRole(pid)
+	return err == nil && role == roleTrial
+}
