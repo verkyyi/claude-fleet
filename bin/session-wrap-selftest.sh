@@ -217,6 +217,9 @@ win rf 5; printf refuse > "$WORK/rf/mode"
 waitfor "rf: state exited" state_is rf exited
 waitfor "rf: the page says the launch was refused, and why" screen_has rf '会话没能启动：凭据代理没给出会话凭据'
 waitfor "rf: ↵ is a retry" screen_has rf '重试启动'
+# … and presses ↵ by itself after a countdown (issue #4112): a pod's restart can
+# leave the hub a moment out of reach, and nobody is there to press it
+waitfor "rf: no credential ⇒ the page retries by itself" screen_has rf '15 秒后'
 CHECKS=$((CHECKS + 1)); screen_has rf 'WRAP_RC=' && fail "rf: the wrapper returned to the caller's shell"
 eq "rf: the wrapper is still there" "" "$(o rf @wrap_gone)"
 printf fast > "$WORK/rf/mode"; tf send-keys -t sw:rf Enter

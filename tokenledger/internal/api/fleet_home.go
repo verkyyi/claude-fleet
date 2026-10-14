@@ -132,7 +132,7 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 			continue
 		}
 		lg, live := loginOn(m.Hostname)
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname), Login: lg})
+		out.Machines = append(out.Machines, s.routeMachine(m, relayReady, lg, now))
 		c := HomeCandidate{Machine: m.Hostname, Alias: m.alias(), Sessions: sessions[strings.ToLower(m.Hostname)],
 			Login: lg, NoFleet: pid != "" && !live}
 		anyFleet = anyFleet || (c.Login != "" && !c.NoFleet)

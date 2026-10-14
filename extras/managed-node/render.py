@@ -669,10 +669,14 @@ DOOR_PUB_SECRET = 'fleet-door-pub'
 
 
 def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec='slb.s1.small',
-                   pull_secrets=('acr-pull',)):
+                   pull_secrets=('acr-pull',), entry_host=''):
     """The door: its LoadBalancer Service (22022 alone, externalTrafficPolicy
     Local — the client's own address for PerSourcePenalties and the record) and
-    its Deployment. No disk, no login, no Kubernetes credential."""
+    its Deployment. No disk, no login, no Kubernetes credential. entry_host is
+    the load balancer's address once it has one (--entry-host): the door's
+    `entry reach` hands it to the hub, which otherwise knocks on the cluster's
+    NAT egress and finds the door unreachable — and a person's pod then gets no
+    door route at all (claude-fleet#4112)."""
     if not image or not hub:
         raise ValueError('--door needs --image and --hub')
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
@@ -685,6 +689,8 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
         raise ValueError('--door-replicas is 1-5')
     if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
         raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
+    if entry_host and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', entry_host):
+        raise ValueError('--entry-host is a host name or an IPv4 address, not %r' % entry_host)
     labels = {'app.kubernetes.io/name': 'fleet-door', 'fleet/role': 'door'}
     meta = {'name': DOOR_NAME, 'namespace': namespace, 'labels': labels}
     env = [{'name': 'FLEET_HUB_URL', 'value': hub},
@@ -695,6 +701,8 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
            {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)},
            {'name': 'FLEET_DOOR_NAMESPACE', 'value': namespace},
            {'name': 'FLEET_DOOR_SECRET', 'value': '/run/fleet-door'}]
+    if entry_host:
+        env.append({'name': 'CCQUOTA_FLEET_NODE_ROUTES', 'value': 'entry=%s:%d' % (entry_host, ENTRY_PORT)})
     tcp = {'tcpSocket': {'port': ENTRY_PORT}}
     container = {
         'name': 'door', 'image': image, 'env': env,
@@ -1164,7 +1172,7 @@ if __name__ == '__main__':
             raise SystemExit(0)
         if args.door:
             items = door_resources(args.image, args.hub, args.namespace, args.door_replicas, args.entry_lb_spec,
-                                   pull_secrets=args.pull_secrets or ['acr-pull'])
+                                   pull_secrets=args.pull_secrets or ['acr-pull'], entry_host=args.entry_host)
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         if args.ops:

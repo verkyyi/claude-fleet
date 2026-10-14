@@ -357,7 +357,11 @@ def make_user(t, full_name=''):
 # FLEET_EGRESS_PROXY (render.py --egress-proxy, #3547): the cluster's one egress
 # (deploy/k8s/egress) is every login's HTTPS_PROXY and git's proxy for every
 # host, the gh wrapper's road when no GitHub relay is named; the cluster and
-# loopback (the local credential proxy) stay direct.
+# loopback (the local credential proxy) stay direct — and so does the fleet's own
+# hub (FLEET_HUB_URL / FLEET_CRED_CENTRAL_URL's host, issue #4112): the pod's
+# guard lets it out directly, the egress's host list does not name it, and a
+# session pass asked through the egress was refused 403 host_not_allowed — every
+# session in the pod stopped on 「凭据代理没给出会话凭据」.
 # FLEET_CLUSTER_CACHES (render.py --cluster-caches, #3548): the namespace whose
 # package caches (deploy/k8s/caches) every login installs from — npm, pnpm, yarn,
 # corepack through fleet-npm, pip and uv through fleet-pypi, Go through
@@ -391,6 +395,17 @@ def cluster_caches(ns):
 
 GH_PROXY_RE = re.compile(r'http://[A-Za-z0-9.-]+:[0-9]{1,5}')
 NO_PROXY = 'localhost,127.0.0.1,::1,.svc,.cluster.local'
+HOST_RE = re.compile(r'[A-Za-z0-9.-]+')
+
+
+def hub_hosts(env):
+    """The fleet's own hub hosts the pod reaches directly (issue #4112)."""
+    out = []
+    for k in ('FLEET_HUB_URL', 'FLEET_CRED_CENTRAL_URL', 'CCQUOTA_HUB_URL'):
+        host = urllib.parse.urlsplit(env.get(k, '').strip()).hostname or ''
+        if host and HOST_RE.fullmatch(host) and host not in out:
+            out.append(host)
+    return out
 MIRROR_RE = re.compile(r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+')
 UPSTREAM_RE = re.compile(r'https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git')
 
@@ -418,7 +433,8 @@ def devnet_settings(env):
     pairs = [('FLEET_GITHUB_PROXY', proxy)] if proxy else []
     if egress:
         pairs += [(k, egress) for k in ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy')]
-        pairs += [(k, NO_PROXY) for k in ('NO_PROXY', 'no_proxy')]
+        direct = ','.join([NO_PROXY] + hub_hosts(env))
+        pairs += [(k, direct) for k in ('NO_PROXY', 'no_proxy')]
     caches = env.get('FLEET_CLUSTER_CACHES', '').strip()
     if caches and not NS_RE.fullmatch(caches):
         raise ValueError('FLEET_CLUSTER_CACHES is a namespace, not %r' % caches)
@@ -1421,6 +1437,36 @@ def door_env(hub, secret=None, port='22022'):
         ('FLEET_ENTRY', '1'), ('FLEET_ENTRY_PORT', port), ('FLEET_DOOR', '1')))
 
 
+class DoorReach(object):
+    """The door's `entry reach` (claude-fleet#4112): a home's node program runs
+    it every 5 minutes, but the door runs none, and the hub keeps a reach row
+    only EntryReachFresh (15 min) — so a person's pod had a door route for a
+    quarter of an hour after someone ran it by hand, then none. The resident
+    loop runs it the same way: off the loop's beat, one at a time, a minute
+    after the start (the entry child first), then every FLEET_ENTRY_REACH_EVERY
+    seconds (300; 0 = off)."""
+
+    def __init__(self, loop, clock=time.monotonic):
+        self.loop, self.clock, self.proc = loop, clock, None
+        self.every = int(os.environ.get('FLEET_ENTRY_REACH_EVERY', '300') or 0)
+        self.next = clock() + min(60, self.every)
+
+    def tick(self):
+        if self.every <= 0 or (self.proc is not None and self.proc.poll() is None):
+            return
+        if self.clock() < self.next:
+            return
+        self.next = self.clock() + self.every
+        script = (self.loop.bin() / 'fleet-node-supervisor.py').resolve()
+        self.proc = subprocess.Popen([sys.executable, '-I', str(script), 'entry', 'reach'],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def stop(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait()
+
+
 def door_foreground(a):
     """The cluster's one door (#3549, EPIC #3500 C4): no login, no node program,
     no disk — the supervisor with its entry child in door mode, and its pull."""
@@ -1434,6 +1480,7 @@ def door_foreground(a):
     Path('/run/sshd').mkdir(parents=True, exist_ok=True)
     loop = Loop(Path(os.environ.get('FLEET_NODE_ROOT', str(HERE.parent.parent))))
     loop.start()
+    reach = DoorReach(loop)
     stopping = False
 
     def stop(_sig, _frame):
@@ -1448,12 +1495,14 @@ def door_foreground(a):
         ready.write_text(os.environ.get('FLEET_NODE_BOOT_ID', 'door'))
         while not stopping:
             loop.beat()
+            reach.tick()
             rc = loop.tend()
             if rc is not None:
                 break
             time.sleep(1)
     finally:
         ready.unlink(missing_ok=True)
+        reach.stop()
         loop.stop()
     return 0 if stopping else rc or 1
 
