@@ -183,6 +183,9 @@
 #   trial-dirty-handout                             tokenledger/internal/api fleet_try_budget.go (endTrial → remove →
 #                                                   #3504's reset, trialGiveBack → store.HandOffWash) + fleet_recycle.go
 #                                                   applyReset; go test
+#   trial-pause-not-recycled                        tokenledger/internal/api fleet_try_budget.go (trialWashable: a failed
+#                                                   / unknown seat goes back too; SweepTrialStragglers off the patrol)
+#                                                   + internal/store fleet_trials.go (ReclaimedTrialsHolding); go test
 #   trial-slot-held                                 tokenledger/internal/api fleet_try_slot.go (SweepTrialSlots on the
 #                                                   15 s alerts tick: hidden 120 · idle 240, + #4059's budget); go test
 #   trial-idle-while-opening                        tokenledger/internal/api fleet_try_slot.go (trialSlotVerdict: idle
@@ -2755,9 +2758,9 @@ drill_trial_transcript_cross() {
 drill_trial_dirty_handout() {
   CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
   t0=$(now)
-  grep -q 'FleetAccountRequest{Action: "remove", PrincipalID: t.Principal' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+  grep -q 'FleetAccountRequest{Action: "remove", PrincipalID: pid' "$tl/api/fleet_try_budget.go" 2>/dev/null \
     || { WHY="a trial's release no longer goes through the operator's remove (the #3504 wash)"; return 1; }
-  grep -q 's.trialGiveBack(t.Principal, a, now)' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+  grep -q 's.trialGiveBack(pid, a, now)' "$tl/api/fleet_try_budget.go" 2>/dev/null \
     || { WHY="a trial's release no longer hands the washing login off the person (trialGiveBack)"; return 1; }
   grep -q 'state IN (?, ?)`,' "$tl/store/fleet_trials.go" 2>/dev/null && grep -q 'AccountResetPending, AccountResetting)' "$tl/store/fleet_trials.go" \
     || { WHY="HandOffWash no longer takes only a login that is being washed"; return 1; }
@@ -2765,6 +2768,27 @@ drill_trial_dirty_handout() {
   c11_go_tests fleet_recycle_test.go TestRecycleNeverHandsOutAnUncleanWash || return 1
   WHAT='试用放回的号走洗号：dirty 的留 failed、不进预备池；洗净的才成备用；人立刻和这台脱钩（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='试用被巡检放回 → reset：说 dirty 的那台 failed、永不成备用；clean 的成备用；放回那刻人已不挂这个号、家也清了（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-pause-not-recycled (#4262): endTrial took back only an active
+# seat — a trial whose login's last op had failed was released 「先暂停」 with
+# its login never washed, left failed under the person, and the machine's
+# spares ran out. Now every managed row the remove takes goes back (active ·
+# failed · unknown), the trial.release audit names each login and what it
+# became, and the patrol washes what an ended trial still holds (trial.regive).
+drill_trial_pause_not_recycled() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'case store.AccountActive, store.AccountFailed, store.AccountUnknown:' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+    || { WHY="a trial's release no longer takes back a failed / unknown seat (trialWashable)"; return 1; }
+  grep -q 'if s.SweepTrialStragglers(now) {' "$tl/api/fleet_try_slot.go" 2>/dev/null \
+    || { WHY="the trial patrol no longer washes what an ended trial still holds (SweepTrialStragglers)"; return 1; }
+  grep -q '^func (s \*Store) ReclaimedTrialsHolding(' "$tl/store/fleet_trials.go" 2>/dev/null \
+    || { WHY="no store read for ended trials still holding a login (ReclaimedTrialsHolding)"; return 1; }
+  c11_go_tests fleet_try_slot_test.go TestTrialPauseWashesAFailedSeat || return 1
+  WHAT='暂停放回连 failed / unknown 的号一起洗；审计 logins= 写明每个号放回后成了什么；已结束还挂着号的试用由巡检补洗（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='一个 failed 的试用座位先暂停 → reset 发出、人立刻脱钩、洗净回到备用，trial.release 写 logins=…:failed→；已 reclaimed 还挂着 failed 号的试用 → 巡检发 reset、trial.regive（go test）'
   SECS=$(since "$t0")
 }
 

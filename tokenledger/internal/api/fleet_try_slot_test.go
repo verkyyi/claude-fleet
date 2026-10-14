@@ -563,3 +563,89 @@ func TestTrialConvoCarriedOnApprovalAndFirstWords(t *testing.T) {
 		t.Fatalf("imports = %v; want the one into their home", f.imports)
 	}
 }
+
+// BREAK-IT trial-pause-not-recycled (claude-fleet#4262): a seat whose last op
+// had failed was skipped by endTrial — 「先暂停」 released the trial, the login
+// was never washed and the machine ran out of spares. Every managed row a
+// trial holds goes back on the release, a failed one too, and the audit names
+// each login and what it became; a trial already ended with a login left on
+// it has that login washed by the patrol.
+func TestTrialPauseWashesAFailedSeat(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	admin := recycleFleet(t, h)
+	sparesOn(t, h, "2")
+	setHubSetting(t, h.srv, TrialKey, "on")
+	h.srv.trialConvoIO = &fakeConvos{held: map[string][]byte{}}
+	t0 := time.Now().Truncate(time.Second)
+
+	// 甲: placed on m8, its row failed by a later op.
+	const p, login = "gh:8601", "trialfail"
+	openLogin(t, h, admin, p, login)
+	failAccount(t, h, p, "m8")
+	if err := h.srv.Store.StartTrial(p, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.PlaceTrial(p, "m8", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.trialRelease(p, trialReleasePause, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	m, op := expectAccountOp(t, admin.tnode)
+	if op.Op != control.AccountReset || op.Login != login {
+		t.Fatalf("op = %+v; want the reset of the failed seat %s", op, login)
+	}
+	if as := mustAccounts(t, h, p); len(as) != 0 {
+		t.Fatalf("the paused person still holds %+v", as)
+	}
+	if !auditHas(mustAudit(t, h), "trial.release", "ok", "reason=pause convo=") ||
+		!auditHas(mustAudit(t, h), "trial.release", "ok", "logins="+login+"@m8:failed→") {
+		t.Errorf("no trial.release audit naming %s's wash: %+v", login, mustAudit(t, h))
+	}
+	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountReset, Login: login, OK: true,
+		Reset: control.ResetClean, Credsep: control.CredsepSeparated})
+	waitFor(t, 3*time.Second, login+" to be a spare again", func() bool {
+		for _, sp := range mustSpares(t, h) {
+			if sp.Login == login && sp.State == store.AccountActive {
+				return true
+			}
+		}
+		return false
+	})
+
+	// 乙: an ended trial that still holds its login (what the old endTrial
+	// left behind) — the patrol washes it, once per trialRegiveEvery.
+	const q, login2 = "gh:8602", "trialleft"
+	openLogin(t, h, admin, q, login2)
+	if err := h.srv.Store.StartTrial(q, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.PlaceTrial(q, "m8", t0); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := h.srv.Store.ReleaseTrial(q, trialReleasePause, t0.Add(time.Minute)); err != nil || !moved {
+		t.Fatalf("release %s: %v %v", q, moved, err)
+	}
+	failAccount(t, h, q, "m8")
+	h.srv.SweepTrialSlots(t0.Add(2 * time.Minute))
+	if _, op := expectAccountOp(t, admin.tnode); op.Op != control.AccountReset || op.Login != login2 {
+		t.Fatalf("op = %+v; want the leftover %s washed", op, login2)
+	}
+	if !auditHas(mustAudit(t, h), "trial.regive", "ok", "logins="+login2+"@m8:failed→") {
+		t.Errorf("no trial.regive audit for %s", login2)
+	}
+}
+
+// failAccount marks pid's row on host failed, as a node's failed answer to
+// a later op does — written straight, so no op goes out to the node.
+func failAccount(t *testing.T, h *harness, pid, host string) {
+	t.Helper()
+	if _, err := h.srv.Store.DB().Exec(`UPDATE fleet_accounts SET state = ?, detail = ?
+		WHERE principal_id = ? AND hostname = ?`, store.AccountFailed, "planted failure", pid, host); err != nil {
+		t.Fatal(err)
+	}
+	if a := accountState(t, h, pid, host); a.State != store.AccountFailed {
+		t.Fatalf("%s@%s = %+v; want failed", pid, host, a)
+	}
+}
