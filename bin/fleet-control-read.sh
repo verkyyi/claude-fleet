@@ -399,6 +399,18 @@ case "$mode" in
     if [ "$creds" = false ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v security >/dev/null 2>&1 \
        && security find-generic-password -s 'Claude Code-credentials' >/dev/null 2>&1; then creds=true; fi
     [ "$creds" = true ] || [ -s "${CODEX_HOME:-$HOME/.codex}/auth.json" ] && creds=true
+    # A person's pod holds no credential by design (render.py --cred-central,
+    # issues #3554 / #4185): node.env says CCQUOTA_FLEET_CREDS=0 and every
+    # session goes through the hub's central proxy (FLEET_CRED_CENTRAL_URL).
+    # That road IS its credential — «not ready: creds» kept every new session,
+    # the first one a bare `fleet` asks for too, off the pod (issue #4255).
+    # Whether the road answers is fleet-node-probe.sh's `route=central` verdict.
+    if [ "$creds" = false ]; then
+      cen="${FLEET_CRED_CENTRAL_URL:-}"
+      [ -n "$cen" ] || cen=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_CRED_CENTRAL_URL=["'"'"']\{0,1\}\([^"'"'"' ]*\).*/\2/p' \
+        "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" 2>/dev/null | tail -n 1)
+      [ -n "$cen" ] && [ "$(_fleet_node_env_val CCQUOTA_FLEET_CREDS 2>/dev/null)" = 0 ] && creds=true
+    fi
     [ "$creds" = true ] || missing="$missing creds"
     checkouts=true
     nrepos=0

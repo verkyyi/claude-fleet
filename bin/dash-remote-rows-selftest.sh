@@ -1402,6 +1402,18 @@ print("%s|%s|%s" % (r["ready"], r["repo_ready"], ",".join(r["repo_missing"])))' 
 eq "R: fleet_control.py hands repo_ready on" "True|False|gh" "$got"
 printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/o-own.conf"
 eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
+# a person's pod holds no credential by design (render.py --cred-central, #3554 /
+# #4185): node.env says CCQUOTA_FLEET_CREDS=0 and fleet.conf names the central
+# proxy — that road is its credential, or a bare `fleet` never gets its first
+# session there (#4255). Either half alone is not.
+rm -f "$HOME/.claude/.credentials.json"
+printf 'FLEET_CRED_PROXY=1\nFLEET_CRED_CENTRAL_URL=https://hub.example\n' > "$WORK/conf-norepo/fleet.conf"
+eq "R: central proxy named, node.env silent: creds still missing" "False|False|False|True|creds" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/conf-norepo/node.env"
+eq "R: a pod on the central road (CCQUOTA_FLEET_CREDS=0): ready" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+printf 'CCQUOTA_FLEET_CREDS=1\n' > "$WORK/conf-norepo/node.env"
+eq "R: a login that leases (CCQUOTA_FLEET_CREDS=1): the road is not its credential" "False|False|False|True|creds" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
+rm -f "$WORK/conf-norepo/fleet.conf" "$WORK/conf-norepo/node.env"
 touch "$WORK/gh-ok"; rm -f "$HOME/.claude/.credentials.json"
 HOME="$(cd ~ && pwd)"; export HOME
 
