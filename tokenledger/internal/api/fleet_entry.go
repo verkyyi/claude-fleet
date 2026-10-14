@@ -289,21 +289,14 @@ func (s *Server) entryHomeChoices(person string, now time.Time) ([]EntryHomeChoi
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.Store.Fleets()
+	rows, avail, err := s.liveFleetRows(now)
 	if err != nil {
 		return nil, err
 	}
-	avail := s.nodeAvailability(now)
 	seen := map[string]bool{}
 	out := []EntryHomeChoice{}
 	for _, r := range rows {
-		if !r.Present || r.OSUser == "" || s.isFleetAdmin(r.OSUser) {
-			continue
-		}
 		a := avail[r.EndpointID]
-		if a == "" || a == "lost" {
-			continue
-		}
 		for h, login := range byHost {
 			if login != r.OSUser || !sameMachine(r.Hostname, h) {
 				continue
