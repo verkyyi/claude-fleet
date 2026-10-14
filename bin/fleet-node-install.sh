@@ -62,6 +62,11 @@
 #             <state>/admin/agent.token, and com.claude-fleet.admin-agent /
 #             fleet-admin-agent.service (UserName the role) running
 #             <root>/agent/ccquota agent (fleet_admin_seat.py agent); no seat = no line
+#   旧管理员agent the admin login's own com.ccquota.agent.<admin> (#3725, C15·b-4):
+#             once the hub sees the seat's agent connected and the old one's
+#             account-ops.json holds nothing, booted out into the attic (`attic
+#             restore` puts it back) — fleet-node-supervisor.py admin-handover;
+#             not yet ⇒ 跳过 (the daemon's sweep retries); no seat = no line
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3).
 #             FLEET_NODE_SEAT=1 on the command (with the core serving) moves it
@@ -641,6 +646,20 @@ if [ "${FLEET_ADMIN_SEAT:-}" != 0 ] && [ -d "$STATE/admin" ] && [ -f "$ASEAT" ] 
            || fail 座位agent "$(printf '%s' "$out" | tail -n 1)"
        fi ;;
     *) fail 座位agent "$(printf '%s' "$out" | tail -n 1)" ;;
+  esac
+fi
+
+# ---------------------------------------------------------------- 旧管理员agent --
+# The admin login's own com.ccquota.agent.<admin> into the attic once the seat's
+# agent is connected and the old one holds no op (issue #3725, C15·b-4). Not yet ⇒
+# 跳过: the daemon's sweep looks again every 5 minutes while one waits.
+if [ "${FLEET_ADMIN_SEAT:-}" != 0 ] && [ -d "$STATE/admin" ] \
+   && grep -q '^def admin_handover_cli' "$CUR/bin/fleet-node-supervisor.py" 2>/dev/null; then
+  out="$("$PY" -I "$CUR/bin/fleet-node-supervisor.py" admin-handover 2>&1)"; arc=$?
+  case "$arc" in
+    0) if printf '%s' "$out" | grep -q '^handed over'; then ok 旧管理员agent "$(printf '%s' "$out" | grep '^handed over' | tail -n 1)"
+       else skip 旧管理员agent "$(printf '%s' "$out" | tail -n 1)"; fi ;;
+    *) skip 旧管理员agent "$(printf '%s' "$out" | tail -n 1)（守护的清扫会再看）" ;;
   esac
 fi
 

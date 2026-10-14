@@ -17,6 +17,9 @@
 #                             rollback, bin/fleet-node-core.py place_admin_gate)
 #   fleetadmin-token-misissued bin/fleet_admin_seat.py agent + the hub's
 #                             /v1/node/admin-token (Go TestNodeAdminToken)
+#   admin-handover-cut-op     bin/fleet-node-supervisor.py admin-handover (the
+#                             sweep's) + bin/fleet_admin_seat.py seat_connected —
+#                             the cases of bin/fleet-admin-handover-selftest.py
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -254,6 +257,25 @@ drill_fleetadmin_token_misissued() {
   fi
   SECS=$(since "$t0")
   WHAT="座位的令牌落成 root:角色组 0640、单元里只有文件路径；改成人人可读、换成链接都报 DRIFT 且不再被用；${gohalf}"
+}
+
+# admin-handover-cut-op (#3725): hand the admin login's old agent over at the wrong
+# moment — before the seat's own agent is connected (the hub says not connected,
+# refuses its token, there is none), while its book holds an op (inflight, a result
+# not yet acked in its outbox, a book that cannot be read), and with an op landing
+# between the read and the bootout. Each must leave the old agent running (put back
+# in the last case); only a connected seat and an empty book hand it over, into the
+# attic, and `attic restore` brings it back.
+drill_admin_handover_cut_op() {
+  CAP=90
+  local t0 out rc
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-admin-handover-selftest.py" \
+        Handover.test_b_seat_not_connected Handover.test_c_book_not_empty_or_unreadable \
+        Handover.test_e_op_arrives_while_stopping Handover.test_d_handed_over_and_restored 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$(printf '%s' "$out" | grep -E '^(FAIL|ERROR|AssertionError)' | head -4 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="座位 agent 没连上（入口说没连、拒令牌、没令牌）、旧 agent 的 account-ops.json 还有单（进行中 / 没确认的结果 / 读不了）都不动它；停的那一刻来了单就放回；连上且簿子空了才 bootout 进 attic，attic restore 能回去"
 }
 
 cred_run_drills "$0"

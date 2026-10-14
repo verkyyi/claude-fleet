@@ -1034,7 +1034,7 @@ BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
   （`fleet-login-reset-check.py`）也读 `<node>/admin/<login>-onboard`。EUID 0 没有这个变量照旧拒；有变量
   不是 root 就忽略——管理员登录直接跑字节不变。
 
-还没做（各自的单）：旧 agent 交接进 attic 与真机切换演练（#3725）。
+旧 agent 交接进 attic：§23.3（#3725）。真机切换演练（一台托管 Mac，时间由操作者定）还没做。
 
 BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
 `bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `internal/agent/node_accounts_seat_test.go`。
@@ -1060,6 +1060,27 @@ BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-brea
 
 BREAK-IT：`fleetadmin-token-misissued`（`bin/fleet-break-it-admin-selftest.sh` + Go `TestNodeAdminToken`）；
 `bin/fleet-admin-seat-selftest.sh` G；`bin/fleet-node-update-selftest.py` Q_AdminAgent；Go `TestTokenFromFile`。
+
+### 23.3 旧管理员 agent 交接进 attic（C15·b-4，#3725）
+
+- **何时**：入口见到座位 agent（hello 带 `CapAdminSeat`）就只给它发开号删号单（C15·a）。机器这边以入口为准——
+  用座位的令牌问 `GET /v1/node/self`，答 `connected: true` 才算座位 agent 已连上（`fleet_admin_seat.py seat_connected`）。
+- **做完手上的单**：旧 agent（管理员登录的 `com.ccquota.agent.<admin>` / `ccquota-agent-<admin>.service`，
+  只认管理员登录的，租户的 agent 归 `account adopt`）的簿子 `<StateDir>/account-ops.json`——StateDir 取 credsep
+  `meta.json` 的 `agent_argv` 的 `--state`，否则单元自己的参数，否则 `<home>/.ccquota`——`inflight` 与 `outbox`
+  都空（没有簿子 = 没跑过单）才动它；有单、或簿子读不了，原样留着。
+- **交接**：root bootout（Linux `systemctl disable --now`）、单元文件进 `/var/db/fleet-node/attic/`（同
+  `account adopt` 的 attic，`keep`、不过期；`attic list` 标「old admin agent of <login>」），再读一次簿子——
+  停的那一刻来了单就放回去重启。交接过的登录记在 `<state>/admin-handover.json`（root 0644）：更新器的
+  `follow_admin_agents` 和体检的 `admin-agent` 行不再跟它，credsep 的 `agent_reload` 见单元不在就不重启。
+  `fleet-node-supervisor.py attic restore <id>` 放回单元并去掉这一条（再 `launchctl bootstrap` 起它）。
+- **谁做**：`fleet-node-supervisor.py admin-handover [--dry-run]`（0 没有要交的 · 3 在等 · 1 有一个卸不下来 / 放回了）。
+  守护的清扫每次都带上（入座的守护经核心的 `sweep`），有旧 agent 在等时清扫 5 分钟一次
+  （`FLEET_NODE_HANDOVER_EVERY`）；`fleet node install` 的「旧管理员agent」步在「座位agent」之后跑一次，没到时候就「跳过」。
+- **之后**：`seats` 行对旧 agent 本来就是 FAIL（座位已起），FAIL 的那一句写明它在等交接；交接完这一行不再有它。
+
+BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）；`bin/fleet-admin-handover-selftest.sh`；
+`bin/fleet-node-update-selftest.py` Q_AdminAgent。
 
 ## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）
 

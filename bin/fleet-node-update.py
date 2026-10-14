@@ -1232,10 +1232,12 @@ class Updater(object):
         if not cur or not os.access(cq, os.X_OK):
             return []
         managed = fns.managed_accounts(self.p.sup)
+        # an old admin agent handed over to the seat (#3725) is in the attic: not followed
+        handed = fns.handed_over(self.p.sup) if hasattr(fns, "handed_over") else {}
         rec = self.st.setdefault("admin_agents", {})
         notes, seen = [], set()
         for login, mp, meta in admin_agents():
-            if login in managed:
+            if login in managed or login in handed:
                 continue
             seen.add(login)
             argv = list(meta["agent_argv"])
@@ -2091,10 +2093,11 @@ def admin_agent_rows(p, cur):
     updater's record in update.json. Neither ⇒ no row."""
     cq = agent_ccquota(p)
     managed = fns.managed_accounts(p.sup)
+    handed = fns.handed_over(p.sup) if hasattr(fns, "handed_over") else {}
     rec = (read_json(p.file, {}) or {}).get("admin_agents") or {}
     rows, seen = [], set()
     for login, _, meta in admin_agents():
-        if login in managed:
+        if login in managed or login in handed:     # handed over to the seat (#3725)
             continue
         seen.add(login)
         path = meta["agent_argv"][0]
