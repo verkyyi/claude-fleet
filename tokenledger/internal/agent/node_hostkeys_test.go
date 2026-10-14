@@ -3,10 +3,12 @@ package agent
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -106,9 +108,10 @@ func TestPodRelayTargetAndKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("FLEET_NODE_STATE", filepath.Join(dir, "none"))
-	oldF, oldK := hostKeyFiles, podHostKeyFile
-	t.Cleanup(func() { hostKeyFiles, podHostKeyFile = oldF, oldK })
+	oldF, oldK, oldT := hostKeyFiles, podHostKeyFile, sshRelayTarget
+	t.Cleanup(func() { hostKeyFiles, podHostKeyFile, sshRelayTarget = oldF, oldK, oldT; podKeyAt = time.Time{} })
 	hostKeyFiles, podHostKeyFile = nil, filepath.Join(dir, "host.pub")
+	sshRelayTarget, podKeyAt = closedAddr(t), time.Time{} // no sshd answering: the file alone
 
 	t.Setenv("FLEET_USER_POD", "")
 	if got := defaultSSHRelayTarget(); got != "127.0.0.1:22" || podRelay() {
@@ -123,5 +126,63 @@ func TestPodRelayTargetAndKey(t *testing.T) {
 	}
 	if got := nodeHostKeys(); len(got) != 1 || got[0] != want {
 		t.Fatalf("a pod's keys %q, want its sshd's", got)
+	}
+}
+
+func closedAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := l.Addr().String()
+	l.Close()
+	return a
+}
+
+// A pod rolled onto a new image keeps its old spec (the hub's roll patches the
+// image alone — claude-fleet#4149): no /run/sshd-key mount, so the key its sshd
+// shows is read off the sshd itself on the relay's address — the key a relayed
+// login meets — and asked again only after podKeyEvery.
+func TestPodSSHDKeyReadOffTheSSHD(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg.AddHostKey(signer)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	dials := 0
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			dials++
+			go func() { _, _, _, _ = ssh.NewServerConn(c, cfg); c.Close() }()
+		}
+	}()
+	t.Setenv("FLEET_USER_POD", "1")
+	t.Setenv("FLEET_NODE_STATE", filepath.Join(t.TempDir(), "none"))
+	oldF, oldK, oldT := hostKeyFiles, podHostKeyFile, sshRelayTarget
+	t.Cleanup(func() { hostKeyFiles, podHostKeyFile, sshRelayTarget = oldF, oldK, oldT; podKeyAt = time.Time{} })
+	hostKeyFiles, podHostKeyFile = nil, filepath.Join(t.TempDir(), "absent.pub")
+	sshRelayTarget, podKeyAt = l.Addr().String(), time.Time{}
+	if got := nodeHostKeys(); len(got) != 1 || got[0] != want {
+		t.Fatalf("keys %q, want the sshd's %q", got, want)
+	}
+	if got := nodeHostKeys(); len(got) != 1 || got[0] != want || dials != 1 {
+		t.Fatalf("a second beat: keys %q, dials %d — want the same key, no second dial", got, dials)
+	}
+	t.Setenv("FLEET_USER_POD", "")
+	if got := nodeHostKeys(); got != nil {
+		t.Fatalf("not a pod: %q", got)
 	}
 }
