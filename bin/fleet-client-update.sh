@@ -399,9 +399,12 @@ stage() {
   fi
   [ "$(head -c 2 "$inst")" = '#!' ] || { note "$src 返回的不是安装脚本"; rm -rf "$lock"; return 1; }
   # never asks (a stage runs in the background), never 承载, never a node: it
-  # only fills a staging dir with the part everyone has
+  # only fills a staging dir with the part everyone has. The debug ticket it
+  # asks for is fingerprinted over the root fleet-debug computes, never the
+  # staging dir (#4127)
+  droot="${FLEET_INSTALL_HOME:-${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}}"; droot="${droot%/}"
   if [ -n "$HUB" ]; then
-    FLEET_HUB_URL="$HUB" FLEET_INSTALL_HUB=1 FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
+    FLEET_HUB_URL="$HUB" FLEET_INSTALL_HUB=1 FLEET_DEBUG_ROOT="$droot" FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
       FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
       FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
       FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1

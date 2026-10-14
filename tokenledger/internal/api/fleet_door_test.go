@@ -205,6 +205,37 @@ func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
 	}
 }
 
+// The door ends a person's ssh itself (fleet-door.sh), so the host key their
+// ssh meets under fleet-<pod> is the DOOR's (claude-fleet#4127): a pod behind
+// the door is listed with the door's entry key, never the keys its own image
+// carried — those sent a person into 「REMOTE HOST IDENTIFICATION HAS CHANGED」
+// on every connect. No door key known yet ⇒ none listed (ssh asks once). A
+// home that is not a pod keeps its own keys.
+func TestDoorRouteListHandsOutTheDoorsHostKey(t *testing.T) {
+	h := entryHarness(t)
+	now := time.Now().UTC()
+	baked := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7"
+	door := reachKeyLine(reachKey(t))
+	pod := FleetMachine{Hostname: "u-alice1", HostKeys: []string{baked}}
+	if err := h.srv.Store.SetFleetSetting(DoorKey, "fleet-door", now); err != nil {
+		t.Fatal(err)
+	}
+	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
+	if got := h.srv.withEntryReach(pod, now).HostKeys; len(got) != 0 {
+		t.Fatalf("no door key known: %v, want none", got)
+	}
+	if err := h.srv.Store.SetEntryHostKey("fleet-door", door, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.srv.withEntryReach(pod, now).HostKeys; len(got) != 1 || got[0] != door {
+		t.Fatalf("pod host keys %v, want the door's %q alone", got, door)
+	}
+	home := FleetMachine{Hostname: "home-a", HostKeys: []string{baked}}
+	if got := h.srv.withEntryReach(home, now).HostKeys; len(got) != 1 || got[0] != baked {
+		t.Fatalf("home-a host keys %v, want its own", got)
+	}
+}
+
 // `fleet` with no machine named connects off the home answer, and its route
 // list is the route list's (claude-fleet#4112): a pod behind the door gets the
 // door's entry route and no relay there too — before, the home answer still

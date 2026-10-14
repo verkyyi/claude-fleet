@@ -65,7 +65,11 @@ RUN [ -z "$DEBIAN_MIRROR" ] || sed -i "s#http://deb.debian.org/debian#$DEBIAN_MI
     && ssh-keygen -q -t ed25519 -N '' -f /tmp/hk \
     && mkdir -p /run/sshd && /usr/sbin/sshd -T -f /dev/null -o HostKey=/tmp/hk \
        | grep -Ei '^persourcepenalties ' | grep -Eqv ' no$' \
-    && rm -f /tmp/hk /tmp/hk.pub
+    && rm -f /tmp/hk /tmp/hk.pub \
+    # openssh-server's install made host keys in this layer — one set for every
+    # pod and door built from it (claude-fleet#4127). Each instance makes its own
+    # (a machine on its disk, a pod per start, the door from its Secret).
+    && rm -f /etc/ssh/ssh_host_*
 COPY --from=toolsrc /opt/tools/usr/local/ /usr/local/
 RUN corepack enable --install-directory /usr/local/bin \
     && node --version && go version && kubectl version --client && fnm --version && aliyun version \

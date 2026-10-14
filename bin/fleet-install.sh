@@ -652,17 +652,24 @@ debug_fp() {
     esac
   fi
   [ -n "$_hw" ] || return 1
-  printf '%s|%s|%s' "$_hw" "$(id -un)" "$ROOT" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{ print $1 }'
+  # the root fleet-debug will compute: a staged install (fleet-client-update.sh
+  # fills a temp dir) names the real one — over the staging path the ticket
+  # read 「属于另一台电脑」 on the computer it was minted for (#4127)
+  printf '%s|%s|%s' "$_hw" "$(id -un)" "${FLEET_DEBUG_ROOT:-$ROOT}" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{ print $1 }'
 }
-if [ "$HUB_ANS" = 1 ] && [ "$DEBUG_TICKETS" = 1 ] && [ -z "$(find "$CONF/debug-ticket" -mmin -720 2>/dev/null)" ] \
-   && _fp=$(debug_fp) && [ -n "$_fp" ]; then
+# kept as it is only while it is young AND minted for this fingerprint
+# (debug-ticket.fp beside it; none = an older install's — asked again, #4127)
+if [ "$HUB_ANS" = 1 ] && [ "$DEBUG_TICKETS" = 1 ] && _fp=$(debug_fp) && [ -n "$_fp" ] \
+   && { [ -z "$(find "$CONF/debug-ticket" -mmin -720 2>/dev/null)" ] \
+        || [ "$(cat "$CONF/debug-ticket.fp" 2>/dev/null)" != "$_fp" ]; }; then
   _dv=$(printf '%s' "${COMMIT:-}" | tr -cd 'A-Za-z0-9._-')
   if curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
        --data "{\"fp\":\"$_fp\",\"version\":\"$_dv\",\"invite\":\"$INVITE\"}" \
        "$HUBURL/v1/fleet/debug/ticket" -o "$tmp/debug-ticket.json" 2>/dev/null; then
     _dt=$(sed -n 's/.*"ticket":"\(fdt1\.[A-Za-z0-9_.-]*\)".*/\1/p' "$tmp/debug-ticket.json")
     if [ -n "$_dt" ]; then
-      ( umask 077; printf '%s\n' "$_dt" > "$CONF/debug-ticket.tmp" ) && mv -f "$CONF/debug-ticket.tmp" "$CONF/debug-ticket"
+      ( umask 077; printf '%s\n' "$_dt" > "$CONF/debug-ticket.tmp" ) && mv -f "$CONF/debug-ticket.tmp" "$CONF/debug-ticket" \
+        && ( umask 077; printf '%s\n' "$_fp" > "$CONF/debug-ticket.fp" )
       [ "$NEWBIE" = 1 ] || say "调试票: 已存好（24 小时，只认这台电脑；出问题时 fleet-debug 用）"
     fi
   fi
