@@ -439,7 +439,9 @@ func (s *Server) liveFleetRows(now time.Time) ([]store.FleetRow, map[string]stri
 // deadSpares is every dead spare (claude-fleet#4234, BREAK-IT
 // trial-seat-no-home): active for longer than spareDeadAfter, on a machine
 // one of whose nodes is online right now — so the hub would see its fleet if
-// it had one — with no live fleet of its login there. A pod is its cluster's
+// it had one — with no live fleet of its login there. A live fleet whose node
+// says the proxy does not serve its login counts as none (claude-fleet#4247,
+// BREAK-IT spare-unserved-handed). A pod is its cluster's
 // (destroyed whole, never washed) and is never judged here.
 func (s *Server) deadSpares(now time.Time) ([]store.FleetAccount, error) {
 	spares, err := s.Store.SpareAccounts()
@@ -453,6 +455,17 @@ func (s *Server) deadSpares(now time.Time) ([]store.FleetAccount, error) {
 	nodes, err := s.Store.Nodes()
 	if err != nil {
 		return nil, err
+	}
+	// A login its node says the proxy does not serve (claude-fleet#4247) has a
+	// fleet but no credential: every session's first word is «no session
+	// credential from the proxy». Unsaid (an older node, cannot tell) holds
+	// nothing.
+	unserved := map[string]bool{}
+	for _, n := range nodes {
+		var hb control.Heartbeat
+		if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil && hb.CredServed != nil && !*hb.CredServed {
+			unserved[n.EndpointID] = true
+		}
 	}
 	var out []store.FleetAccount
 	for _, a := range spares {
@@ -472,7 +485,7 @@ func (s *Server) deadSpares(now time.Time) ([]store.FleetAccount, error) {
 		}
 		seen := false
 		for _, r := range live {
-			if r.OSUser == a.Login && sameMachine(r.Hostname, a.Hostname) {
+			if r.OSUser == a.Login && sameMachine(r.Hostname, a.Hostname) && !unserved[r.EndpointID] {
 				seen = true
 				break
 			}
@@ -518,7 +531,7 @@ func (s *Server) healDeadSpares(m *spareMachine, now time.Time) bool {
 			}
 			continue
 		}
-		why := "active since " + a.UpdatedAt.UTC().Format(time.RFC3339) + " but its fleet is not live on the hub — " + how
+		why := "active since " + a.UpdatedAt.UTC().Format(time.RFC3339) + " but its fleet is not live on the hub, or the proxy serves its login no credential — " + how
 		log.Printf("fleet: spares: %s on %s is dead: %s", a.Login, a.Hostname, why)
 		_ = s.Store.HubAudit("hub", "spare.dead", a.Login, "queued", a.Hostname+": "+why, now)
 		queued = true

@@ -190,6 +190,9 @@
 #   trial-seat-no-home                              tokenledger/internal/api fleet_spare.go (deadSpares / liveFleetRows,
 #                                                   claimSpareAt's skip, healDeadSpares) + internal/store fleet_spare.go
 #                                                   (ClaimSpare / ClaimSpareFor skip); go test, when a toolchain is here
+#   spare-unserved-handed                           bin/fleet-credsep.py served (shared_unserved) → the agent's
+#                                                   credsepServed → Heartbeat.CredServed → fleet_spare.go deadSpares
+#                                                   (a live fleet the proxy does not serve counts as none); go test
 #   drill-trial-escape                              tokenledger/internal/api fleet_drill_trial.go (an admin's ft_ code,
 #                                                   spent once, into trialSignIn; SweepDrillTrials) + internal/store
 #                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
@@ -2782,6 +2785,28 @@ drill_trial_seat_no_home() {
   c11_go_tests fleet_spare_dead_test.go TestTrialSeatNeverAHomelessSpare || return 1
   WHAT='只发 fleet 活着的备用；active 过 10 分钟仍不见 fleet 的是死备用：不算就绪、领号跳过、补池收掉并审计 spare.dead（测试按名核对在，Go 门跑它）'
   [ "$GO_RAN" = 1 ] && WHAT='fleet 活的备用领走即成家；fleet 从没起来的备用过期后就绪 0、试用者排队不领它、补池发 remove（能回收的发 reset）、审计 spare.dead（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- spare-unserved-handed (#4247): a spare whose fleet was live but whose
+# login the machine's shared proxy did not serve (#4245) was ready all the
+# same — the trial's first word was «no session credential from the proxy».
+# Now the node says cred_served (fleet-credsep.sh served) and the hub counts a
+# spare its node says unserved as dead.
+drill_spare_unserved_handed() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q '^def served(a):' "$ROOT/bin/fleet-credsep.py" 2>/dev/null \
+    || { WHY="fleet-credsep.py has no served verb: nothing says whether the proxy serves this login"; return 1; }
+  grep -q 'credsepRun(ctx, home, script, "served")' "$tl/agent/node_credsep.go" 2>/dev/null \
+    || { WHY="the agent no longer asks fleet-credsep.sh served (credsepServed)"; return 1; }
+  grep -q 'hb.CredServed = fp.credsep, fp.served' "$tl/agent/beat_parts.go" 2>/dev/null \
+    || { WHY="the heartbeat no longer carries cred_served (beat_parts.go fill)"; return 1; }
+  grep -q '!unserved\[r.EndpointID\]' "$tl/api/fleet_spare.go" 2>/dev/null \
+    || { WHY="deadSpares no longer counts a live fleet the proxy does not serve as none"; return 1; }
+  c11_go_tests fleet_spare_dead_test.go TestTrialSeatNeverAnUnservedSpare || return 1
+  WHAT='节点上报 cred_served；fleet 活着、代理却不服务的备用算死备用：不算就绪、领号跳过、补池收掉（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='cred_served=false 的备用就绪 0、试用者排队不领它；改报 true 或不报（旧节点）即重回就绪（go test）'
   SECS=$(since "$t0")
 }
 

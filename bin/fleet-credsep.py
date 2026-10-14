@@ -2871,6 +2871,36 @@ def status(a):
     return 0 if rec else 3
 
 
+def served(a):
+    """Does the proxy hand THIS login a credential right now (issue #4247)? The
+    heartbeat's cred_served: the hub hands no spare login whose sessions would
+    get none. Exit 0 served · 3 not served (a tenant the running shared proxy
+    does not serve — shared_unserved —, or its own proxy not running) · 2
+    cannot tell (not separated, or a shared proxy older than #4245 that wrote
+    no <run>/logins)."""
+    rec = record(a.conf_dir)
+    if not rec:
+        print("served: unknown — not separated: credentials in this login's own files")
+        return 2
+    # the store is <ROOT_BASE>/<login>: the login whose conf this is
+    me = os.path.basename((rec.get("root") or "").rstrip("/")) or pwd.getpwuid(os.getuid()).pw_name
+    if rec.get("shared"):
+        live, _ = shared_unserved(shared_rec() or {})
+        if live is None:
+            print("served: unknown — the machine's shared proxy does not say whom it serves")
+            return 2
+        if me in live:
+            print("served: yes — the machine's shared proxy serves %s" % me)
+            return 0
+        print("served: no — the machine's shared proxy does not serve %s: no session here gets a credential" % me)
+        return 3
+    if os.path.exists(os.path.join(rec["run"], "port")):
+        print("served: yes — this login's own proxy is running")
+        return 0
+    print("served: no — this login's own proxy is not running (no %s/port)" % rec["run"])
+    return 3
+
+
 def leftovers(conf, home, rec):
     """Credential files still at a login path (a leak the doctor names)."""
     out = []
@@ -3033,6 +3063,7 @@ def main():
             p.add_argument("--pool-src", default="")         # with --fresh: the team pool, into the store
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
+    sv = sub.add_parser("served"); sv.add_argument("--conf-dir", required=True)
     rl = sub.add_parser("relog")
     rl.add_argument("--login", required=True)
     rl.add_argument("--conf-dir", default="")
@@ -3153,6 +3184,8 @@ def main():
                 say("install: rolled back — %s is as it was; nothing is separated" % a.login)
                 return 1
             return 5
+    if a.cmd == "served":
+        return served(a)
     return status(a) if a.cmd == "status" else check(a)
 
 

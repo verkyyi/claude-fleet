@@ -862,6 +862,14 @@ type Heartbeat struct {
 	// CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
 	// #2295 — the hub reads that as not separated for a role=user person.
 	Credsep string `json:"credsep,omitempty"`
+	// CredServed says whether the proxy hands this login a credential right
+	// now (claude-fleet#4247): `fleet-credsep.sh served` — false for a tenant
+	// the machine's running shared proxy does not serve (#4245), or a login
+	// whose own proxy is down; every session's first word there is «no session
+	// credential from the proxy». The hub hands no such spare. Absent (nil)
+	// when it cannot tell — not separated, an older proxy or claude-fleet, an
+	// older agent — and then the hub holds nothing on it.
+	CredServed *bool `json:"cred_served,omitempty"`
 
 	// Gate is this machine's half of the public gate (claude-fleet#3574,
 	// EPIC #3569 C4): every conf/public-gate.tsv row judged where=node, as

@@ -180,6 +180,7 @@ type fleetPart struct {
 	notReady string
 	repoWhy  string
 	credsep  string
+	served   *bool // the proxy serves this login (claude-fleet#4247)
 	gate     []control.GateItem
 	installs *control.Installs
 }
@@ -195,6 +196,7 @@ func (a *Agent) readFleetPart(ctx context.Context, probe *fleetProbe) (fleetPart
 	fp.ready, fp.notReady = probe.ready.reading(ctx, a.cfg.Home, time.Now())
 	fp.repoWhy = probe.ready.repoWhy
 	fp.credsep = probe.credsep.reading(ctx, a.cfg.Home, time.Now())
+	fp.served = probe.credsep.served
 	fp.gate = probe.gate.reading(ctx, a.cfg.Home, time.Now())
 	fp.installs = probe.installs.reading(ctx, a.cfg.Home, time.Now())
 	if fp.version == "" {
@@ -226,7 +228,7 @@ func (fp fleetPart) fill(hb *control.Heartbeat, at time.Time) {
 	}
 	hb.FleetVersion = fp.version
 	hb.Ready, hb.NotReady, hb.RepoNotReady = fp.ready, fp.notReady, fp.repoWhy
-	hb.Credsep = fp.credsep
+	hb.Credsep, hb.CredServed = fp.credsep, fp.served
 	hb.Gate = fp.gate
 	hb.Installs = fp.installs
 	if !at.IsZero() {

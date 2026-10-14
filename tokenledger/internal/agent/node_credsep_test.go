@@ -70,3 +70,41 @@ func TestCredsepProbeCaches(t *testing.T) {
 		t.Fatalf("after the interval = %q", got)
 	}
 }
+
+// cred_served (claude-fleet#4247) is `fleet-credsep.sh served`: 0 yes, 3 no,
+// anything else — cannot tell, or a script older than the verb (exit 2) —
+// unsaid, so the hub holds nothing on it.
+func TestCredsepServed(t *testing.T) {
+	ctx := context.Background()
+	if got := credsepServed(ctx, t.TempDir()); got != nil {
+		t.Fatalf("no claude-fleet: served = %v; want unsaid", *got)
+	}
+	home := t.TempDir()
+	fakeCredsep(t, home, 0, 0) // no served verb: exits 2
+	if got := credsepServed(ctx, home); got != nil {
+		t.Fatalf("script older than the verb: served = %v; want unsaid", *got)
+	}
+	p := filepath.Join(home, credsepScript)
+	for _, tc := range []struct {
+		rc   int
+		want string
+	}{{0, "true"}, {3, "false"}, {2, "unsaid"}} {
+		body := "#!/bin/bash\ncase \"$1\" in served) exit " + strconv.Itoa(tc.rc) + " ;; esac\nexit 0\n"
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := "unsaid"
+		if v := credsepServed(ctx, home); v != nil {
+			got = strconv.FormatBool(*v)
+		}
+		if got != tc.want {
+			t.Fatalf("served exit %d = %s; want %s", tc.rc, got, tc.want)
+		}
+	}
+	// The probe carries it beside the word.
+	var pr credsepProbe
+	pr.reading(ctx, home, time.Now())
+	if pr.served != nil {
+		t.Fatalf("probe served = %v after exit 2; want unsaid", *pr.served)
+	}
+}
