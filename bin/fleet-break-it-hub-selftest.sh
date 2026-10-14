@@ -193,6 +193,9 @@
 #   spare-unserved-handed                           bin/fleet-credsep.py served (shared_unserved) → the agent's
 #                                                   credsepServed → Heartbeat.CredServed → fleet_spare.go deadSpares
 #                                                   (a live fleet the proxy does not serve counts as none); go test
+#   trial-no-subscription                           tokenledger/internal/api fleet_trial_cred.go (trialUserAllow in
+#                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
+#                                                   convertTrial writes the member's own list); go test
 #   drill-trial-escape                              tokenledger/internal/api fleet_drill_trial.go (an admin's ft_ code,
 #                                                   spent once, into trialSignIn; SweepDrillTrials) + internal/store
 #                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
@@ -2807,6 +2810,27 @@ drill_spare_unserved_handed() {
   c11_go_tests fleet_spare_dead_test.go TestTrialSeatNeverAnUnservedSpare || return 1
   WHAT='节点上报 cred_served；fleet 活着、代理却不服务的备用算死备用：不算就绪、领号跳过、补池收掉（测试按名核对在，Go 门跑它）'
   [ "$GO_RAN" = 1 ] && WHAT='cred_served=false 的备用就绪 0、试用者排队不领它；改报 true 或不报（旧节点）即重回就绪（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-no-subscription (#4260): a trial person is a fresh p: principal no
+# administrator ever listed, and strict mode denies a person with no
+# fleet.cred_allow.user.<pid> every subscription — the trial's first line was
+# the proxy's 403 «this login holds no claude account». Now its person
+# allowance is fleet.trial.cred_allow ("*" by default); [] makes the trial wait
+# 「试用暂时没有可用订阅」 instead of placing it onto a 403.
+drill_trial_no_subscription() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 's.trialUserAllow(settings, &pol)' "$tl/api/fleet_cred_policy.go" 2>/dev/null \
+    || { WHY="credPolicyFor no longer gives a trial person fleet.trial.cred_allow (trialUserAllow)"; return 1; }
+  grep -q 'return trialWaitNoSub' "$tl/api/fleet_try_gate.go" 2>/dev/null \
+    || { WHY="admission no longer holds a trial that has no subscription (trialHold nosub)"; return 1; }
+  grep -q 's.trialCredOnConvert(pid, by, now)' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+    || { WHY="approval no longer writes the trial's allowance as the member's own (convertTrial)"; return 1; }
+  c11_go_tests fleet_trial_cred_test.go TestTrialCredAllow TestCheckTrialCredAllow || return 1
+  WHAT='试用者没有个人白名单 key 也按 fleet.trial.cred_allow（默认 "*"）拿订阅；[] 时排队说「试用暂时没有可用订阅」；转正写成本人的白名单（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='新试用 principal 无 user key ⇒ "*" 放行、列表只放列出的、[] 拒绝且领位回 nosub；本人的列表优先；转正后本人 key 为 "*"、不再是试用者（go test）'
   SECS=$(since "$t0")
 }
 
