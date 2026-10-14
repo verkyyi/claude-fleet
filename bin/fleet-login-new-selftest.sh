@@ -87,6 +87,14 @@
 #                 before step 1, done= + the result's lines at the end (credsep
 #                 last); a run stopped half way has no done=; the same op again
 #                 still exits 3 and leaves the mark; a malformed id is usage
+#   S. root       (#3723) under the admin gate — FLEET_LOGIN_ADMIN_DIR + EUID 0
+#                 (FLEET_LOGIN_TEST_EUID): no step shows or takes a sudo but the
+#                 `sudo -u <login>` drops; <dir>/<login>-onboard/ 755 with op 644
+#                 (op= … done=), password / key pair / welcome 600, nothing in
+#                 the admin's $HOME; --share-pool reads <dir>/accounts; EUID 0
+#                 with no dir → 2, nothing run; the dir without root → the admin
+#                 login's road (the sandbox homes are left open: FAKE_NOLOCK —
+#                 a root process reads a 000 home)
 #   N. full name  (#2210) a full name another login carries → `<name> (<login>)`
 #                 passed to sysadminctl, a note on stderr; that one taken too →
 #                 exit 3, nothing run; sysadminctl "succeeding" without making
@@ -134,7 +142,7 @@ fi
 echo "sudo \$1" >> "$LOG"
 for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 700 "\$h"; done
 "\$@"; rc=\$?
-for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 000 "\$h"; done
+[ -n "\${FAKE_NOLOCK:-}" ] || for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 000 "\$h"; done
 exit \$rc
 EOF
 for t in sysadminctl dseditgroup chown launchctl; do
@@ -148,7 +156,7 @@ done
 cat > "$WORK/shim/createhomedir" <<EOF
 #!/bin/sh
 echo "createhomedir \$*" >> "$LOG"
-mkdir -p "\$FLEET_LOGIN_HOMES/\$3" && chmod 000 "\$FLEET_LOGIN_HOMES/\$3"
+mkdir -p "\$FLEET_LOGIN_HOMES/\$3" && { [ -n "\${FAKE_NOLOCK:-}" ] || chmod 000 "\$FLEET_LOGIN_HOMES/\$3"; }
 EOF
 # `dscl . -list /Users RealName` answers FAKE_REALNAMES ("<login>=<full name>;…",
 # issue #2210); every other read answers the ssh group's presence
@@ -1023,5 +1031,50 @@ eq "R no such login → 4" 4 "$RC"
 eq "R no such login: nothing ran" 0 "$(mutations)"
 : > "$LOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --daemons-only 2>&1); RC=$?
 eq "R with --daemons-only → 2" 2 "$RC"
+
+# --- S. root under the admin gate (issue #3723) -------------------------------
+GATE="$WORK/gate"; mkdir -p "$GATE/accounts"; chmod 755 "$GATE"
+cp -p "$POOL/alpha" "$POOL/alpha.conf" "$GATE/accounts/"
+for l in sam sid; do printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"; done >> "$FLEET_CREDSEP_PW"
+groot() { : > "$LOG"; : > "$DLOG"; OUT=$(FAKE_NOLOCK=1 FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$GATE" "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
+groot sam --full-name Sam --share-pool $DAEMONS
+eq "S dry run exit" 0 "$RC"
+contains "S a root step takes no sudo" "$OUT" "  \$ sysadminctl -addUser sam -fullName Sam -shell /usr/bin/false"
+not_contains "S no sudo on any root step" "$(printf '%s\n' "$OUT" | grep '^  \$ ' | grep -v '^  \$ sudo -u ')" "sudo "
+contains "S the password stdin line" "$OUT" "  \$ dscl .   < passwd /Users/sam <redacted: $GATE/sam-onboard/password.txt>"
+contains "S the drop to the login stays" "$OUT" "sudo -u sam -H"
+contains "S the pool is the gate dir's" "$OUT" "--pool-src $GATE/accounts"
+contains "S the key pair under the gate dir" "$OUT" "$GATE/sam-onboard/id_ed25519"
+[ -e "$GATE/sam-onboard" ] && fail "S a dry run made the onboard dir"
+OPS=3723c15b9c43230eafe5f971f0dc15ef
+: > "$LOG"; : > "$DLOG"; OUT=$(FAKE_NOLOCK=1 FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$GATE" FLEET_LOGIN_OP_ID=$OPS \
+  "$BASH_BIN" "$S" sam --full-name Sam --share-pool --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "S apply exit" 0 "$RC"
+SO="$GATE/sam-onboard"
+eq "S onboard dir 755 (the agent reads the mark)" 755 "$(mode "$SO")"
+eq "S op mark 644" 644 "$(mode "$SO/op")"
+eq "S op mark: this op" "op=$OPS" "$(sed -n 1p "$SO/op")"
+contains "S op mark: finished" "$(cat "$SO/op")" "done="
+eq "S password 600" 600 "$(mode "$SO/password.txt")"
+eq "S key 600" 600 "$(mode "$SO/id_ed25519")"
+eq "S letter 600" 600 "$(mode "$SO/welcome.txt")"
+eq "S the temporary key installed" "$(cat "$SO/id_ed25519.pub")" "$(cat "$FLEET_LOGIN_HOMES/sam/.ssh/authorized_keys")"
+[ -e "$HOME/sam-onboard" ] && fail "S a root run wrote into the admin's home"
+contains "S the login made" "$CALLS" "sysadminctl -addUser sam"
+eq "S no step went through sudo but the drops" 0 "$(printf '%s\n' "$CALLS" | grep -cE '^sudo (sysadminctl|createhomedir|dseditgroup|dscl|tee|chmod|chown|install|bash)( |$)')"
+not_contains "S the letter names no admin login" "$(cat "$SO/welcome.txt")" "开号人 $ME"
+contains "S the last line is credsep's" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
+# EUID 0 with no gate dir: refused as before, nothing run
+: > "$LOG"; OUT=$(FLEET_LOGIN_TEST_EUID=0 "$BASH_BIN" "$S" sid --full-name Sid --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "S root without the gate dir → 2" 2 "$RC"
+contains "S says why" "$OUT" "not under sudo"
+eq "S root without the gate dir: nothing ran" 0 "$(mutations)"
+: > "$LOG"; OUT=$(FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR=relative "$BASH_BIN" "$S" sid --full-name Sid $DAEMONS 2>&1); RC=$?
+eq "S a relative gate dir → 2" 2 "$RC"
+# the dir without root: the admin login's road, byte for byte
+: > "$LOG"; OUT=$(FLEET_LOGIN_ADMIN_DIR="$GATE" "$BASH_BIN" "$S" sid --full-name Sid $DAEMONS 2>&1); RC=$?
+eq "S not root: exit" 0 "$RC"
+contains "S not root: the admin's home" "$OUT" "$HOME/sid-onboard/password.txt"
+contains "S not root: sudo per step" "$OUT" "sudo sysadminctl -addUser sid"
 
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"

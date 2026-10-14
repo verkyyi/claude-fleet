@@ -57,7 +57,7 @@ CATEGORIES = [
     ("credsep", "both", "凭据隔离库 <cred-base>/<login>/"),
     ("entry-keys", "both", "入口钥匙文件 <state>/entry/keys/<login>"),
     ("task-state", "both", "整机守护里的任务状态 <state>/logins/<login>/"),
-    ("onboard", "both", "管理员目录里的开号材料 ~admin/<login>-onboard/"),
+    ("onboard", "both", "管理员目录里的开号材料 ~admin/<login>-onboard/、<node>/admin/<login>-onboard/"),
     ("crontab", "both", "crontab"),
     ("launchd", "darwin", "LaunchAgents / 以它为 UserName 的 LaunchDaemons"),
     ("systemd-user", "linux", "systemd --user 单元与 linger"),
@@ -311,6 +311,8 @@ class Check(object):
 
     def onboard(self):
         roots = [self.a.homes_root] + [self.p(x) for x in ADMIN_HOMES[self.plat]]
+        # the admin gate's dir: where a root run under it keeps them (issue #3723)
+        roots.append(os.path.join(self.a.node_state or self.p("/var/db/fleet-node"), "admin"))
         for r in roots:
             try:
                 names = sorted(os.listdir(r))

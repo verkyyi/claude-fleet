@@ -9,7 +9,8 @@
 # inspects a genuine tar.gz. The closed-cwd leg runs --apply from the admin's
 # own 0700 home (issue #1216): the sudo shim refuses any `sudo -u` from under
 # it, as the login's bash dies on getcwd there — the script must run step 1
-# from /.
+# from /. The root leg (issue #3723) runs it as the admin gate does: EUID 0
+# (FLEET_LOGIN_TEST_EUID) with FLEET_LOGIN_ADMIN_DIR — no sudo but the drops.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/login-remove-selftest.XXXXXX") || exit 2
@@ -777,6 +778,26 @@ for r in 5 7; do
   has "$WORK/out" 'this process has no Full Disk Access' "road $r: #2974's reason is gone"
 done
 has "$WORK/out" '允许远程用户完全磁盘访问' 'road 7: the Remote Login switch was not named'
+# Root under the admin gate (issue #3723): FLEET_LOGIN_ADMIN_DIR + EUID 0 — the
+# gate's argv and its rollback's; no step goes through sudo but the drops to the
+# login, the archive root's, and no Full Disk Access does not ride the ssh road
+# (there is no admin login to ssh as) — the direct road runs.
+mkdir -p "$WORK/gate"
+reset_fixture; : > "$FLEET_TEST_LOG"
+FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$WORK/gate" FLEET_LOGIN_REMOVE_TCC_DB="$WORK/tcc/TCC.db" FAKE_TCC=1 run alice --keep-home --apply
+[ "$RC" = 0 ] || [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "root leg: exit $RC"; }
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'root leg: the login was not deleted'
+not_has "$FLEET_TEST_LOG" 'road ' 'root leg: the ssh road was taken with no admin login'
+[ "$(grep '^sudo ' "$FLEET_TEST_LOG" | grep -vc '^sudo -u ')" = 0 ] || { grep '^sudo ' "$FLEET_TEST_LOG" >&2; fail 'root leg: a step went through sudo'; }
+[ "$(grep '^  \$ sudo ' "$WORK/out" | grep -vc '^  \$ sudo -u ')" = 0 ] || fail 'root leg: a shown step still says sudo'
+has "$FLEET_TEST_LOG" "install -d -m 700 -o 0 $ARCH" 'root leg: the archive dir is not owned by root'
+rm -rf "$ARCH"/alice-*.left
+reset_fixture; : > "$FLEET_TEST_LOG"
+FLEET_LOGIN_TEST_EUID=0 run alice --keep-home --apply
+[ "$RC" = 3 ] || fail "root without the gate dir: exit $RC (want 3)"
+[ ! -s "$FLEET_TEST_LOG" ] || fail 'root without the gate dir ran a command'
+FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR=gate run alice --keep-home --apply
+[ "$RC" = 2 ] || fail "root with a relative gate dir: exit $RC (want 2)"
 chmod 600 "$WORK/tcc/TCC.db"; rm -rf "$ARCH"/alice-*.left
 unset FLEET_LOGIN_REMOVE_SSH
 

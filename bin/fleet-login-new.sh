@@ -175,6 +175,18 @@
 # `.claude/fleet/`. In YOUR home it writes only ~/<login>-onboard/
 # (password.txt, the temporary key pair, welcome.txt — all yours only).
 #
+# Root, under the admin gate (issue #3723, EPIC #3500 C15·b-2): run by
+# bin/fleet-admin-gate.sh as root with FLEET_LOGIN_ADMIN_DIR (the gate's own
+# directory) set, nothing of an admin login is read — every step runs as root
+# without a sudo (`sudo -u <login>` stays: that is the drop to the login), and
+# what the admin's home held is under the gate dir: <dir>/<login>-onboard/
+# (root 0755; op 0644, read by the admin agent — settleOwnCreate / ownsCreate,
+# and the gate's rollback; password.txt, the key pair and welcome.txt 0600
+# root's), the pool --share-pool copies is <dir>/accounts, the Claude Code the
+# machine cache is filled from is the runtime's tools/bin/claude, and the
+# letter's 开号人 is the hub. EUID 0 without that variable is refused as before;
+# the variable without root is ignored — the admin login's run, byte for byte.
+#
 # Exit: 0 ok · 1 a step failed under --apply · 2 bad arguments · 3 the login
 #       (or its home) already exists · 4 --daemons-only / --recycle: no such
 #       login (or no home)
@@ -192,7 +204,8 @@
 #      (https://github.com) · FLEET_INSTALL_BREW_PREFIX (as fleet-install-apply.sh) ·
 #      FLEET_BOOTSTRAP_CACHE (fleet-bootstrap-cache.sh's; `off` = no cache) ·
 #      FLEET_NODE_ROOT (the machine runtime, fleet-login-install.sh's) ·
-#      FLEET_HUB_URL / FLEET_DIST_SOURCE (passed to the login's install).
+#      FLEET_HUB_URL / FLEET_DIST_SOURCE (passed to the login's install) ·
+#      FLEET_LOGIN_TEST_EUID (the EUID the root-mode test reads, never set by the gate).
 set -u
 
 PROG=fleet-login-new
@@ -278,7 +291,17 @@ elif [ -z "$PUBKEY" ]; then
 else
   [ -r "$PUBKEY" ] || die2 "--pubkey: cannot read '$PUBKEY'"
 fi
-[ "$EUID" != 0 ] || die2 "run this as the admin login, not under sudo — it sudo's each step itself"
+# Root under the gate (issue #3723): FLEET_LOGIN_ADMIN_DIR + EUID 0, else today's road
+ROOTRUN=0 ADIR=${FLEET_LOGIN_ADMIN_DIR:-}
+unset FLEET_LOGIN_ADMIN_DIR
+if [ "${FLEET_LOGIN_TEST_EUID:-$EUID}" = 0 ]; then
+  [ -n "$ADIR" ] || die2 "run this as the admin login, not under sudo — it sudo's each step itself"
+  case "$ADIR" in /*) ;; *) die2 "FLEET_LOGIN_ADMIN_DIR is not an absolute directory: '$ADIR'" ;; esac
+  [ -d "$ADIR" ] && [ ! -L "$ADIR" ] || die2 "FLEET_LOGIN_ADMIN_DIR: no directory at '$ADIR'"
+  ADIR=${ADIR%/}; ROOTRUN=1
+  # already root: a step's sudo is the step itself; `sudo -u <login>` still drops to it
+  sudo() { if [ "${1:-}" = -u ]; then command sudo "$@"; else "$@"; fi; }
+fi
 
 if [ "$TMPKEY" = 1 ] || [ "$DONLY" = 1 ]; then
   KEYS=1
@@ -325,8 +348,9 @@ abs_file() { case "$1" in /*) printf '%s\n' "$1" ;; */*) printf '%s/%s\n' "$(abs
 HOMES=$(abs_dir "${FLEET_LOGIN_HOMES:-/Users}")
 H="$HOMES/$LOGIN"
 DDIR=$(abs_dir "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}")
-# Everything this run leaves in the ADMIN's home: one dir, theirs only (700).
-ONBOARD="$HOME/$LOGIN-onboard"
+# Everything this run leaves in the ADMIN's home: one dir, theirs only (700) —
+# or, a root run's, the gate dir's (issue #3723: 0755, its op mark 0644 for the agent).
+ONBOARD="$HOME/$LOGIN-onboard"; [ "$ROOTRUN" = 0 ] || ONBOARD="$ADIR/$LOGIN-onboard"
 KEYFILE="$ONBOARD/id_ed25519"; [ "$TMPKEY" = 0 ] || PUBKEY="$KEYFILE.pub"
 WELCOME_FILE="$ONBOARD/welcome.txt"
 cd / || die2 'cannot cd / (every step runs from there; issue #1216)'
@@ -377,6 +401,7 @@ gen_password() { printf '%sa7' "$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-
 # <label> token AND its <label>.conf (fleet-account.sh's acct_labels, .conf kept).
 POOL=()
 if [ "$SHARE" = 1 ]; then
+  [ -n "$POOL_SRC" ] || [ "$ROOTRUN" = 0 ] || POOL_SRC="$ADIR/accounts"
   [ -n "$POOL_SRC" ] || POOL_SRC="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
   [ -d "$POOL_SRC" ] || die2 "--share-pool: no pool at '$POOL_SRC' (--pool-src <dir>)"
   for f in "$POOL_SRC"/*; do
@@ -460,7 +485,11 @@ trap 'rm -rf "$TMPD"' EXIT
 
 N=0
 say() { printf '%s\n' "$*"; }
-show() { local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
+# SU: the word a shown step starts with — `sudo ` for the admin login, nothing
+# for a root run (issue #3723), which still shows `sudo -u <login>`
+SU='sudo '; [ "$ROOTRUN" = 0 ] || SU=''
+show() { [ "$ROOTRUN" = 0 ] || [ "${1:-}" != sudo ] || [ "${2:-}" = -u ] || shift
+  local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
 fail() { printf '%s: FAILED at step %s — stopped; nothing after it ran\n' "$PROG" "$N" >&2; exit 1; }
 # run <argv…>: print, and under --apply execute.
 run() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || fail; }
@@ -470,13 +499,22 @@ run() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || fail; }
 run_shown() { local line=$1; shift; [ "${1:-}" != -- ] || shift; printf '  $ %s\n' "$line"; [ "$APPLY" = 1 ] || return 0; "$@" || fail; }
 # append <src> <dst>: sudo tee -a <dst> < <src>
 append() {
-  local q; q=$(printf "%q " sudo tee -a "$2")
+  local q; q=$(printf "%q " ${SU:+sudo} tee -a "$2")
   printf "  \$ %s < %s\n" "${q% }" "$(printf %q "$1")"
   [ "$APPLY" = 1 ] || return 0
   # shellcheck disable=SC2024  # the key is read as the admin on purpose; only the write needs root
   sudo tee -a "$2" < "$1" >/dev/null || fail
 }
 step() { N=$((N + 1)); say ""; say "[$N] $*"; }
+# onboard_mk: the onboard dir — the admin's, 700; a root run's, 0755 root's
+# (never through a link), its files 600 all the same (issue #3723)
+onboard_mk() {
+  if [ "$ROOTRUN" = 1 ]; then
+    [ ! -L "$ONBOARD" ] && mkdir -p "$ONBOARD" && chmod 755 "$ONBOARD"
+  else
+    ( umask 077 && mkdir -p "$ONBOARD" )
+  fi
+}
 
 # ---- a login the hub opens (issue #2652): its own node, its fleet up --------
 # FLEET_LOGIN_JOIN_CODE / FLEET_LOGIN_HUB come from the admin agent (the create
@@ -568,8 +606,9 @@ OPMARK="$ONBOARD/op"
 if [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ] && [ -n "$OPID" ]; then
   # before anything is made: a login this op makes is known as this op's, even
   # when the run is cut off half way (issue #2928)
-  ( umask 077 && mkdir -p "$ONBOARD" \
-    && printf 'op=%s\npid=%s\nstarted=%s\n' "$OPID" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OPMARK" ) \
+  OPUM=077; [ "$ROOTRUN" = 0 ] || OPUM=022
+  { onboard_mk && ( umask "$OPUM" && rm -f "$OPMARK" \
+    && printf 'op=%s\npid=%s\nstarted=%s\n' "$OPID" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OPMARK" ); } \
     || { printf '%s: cannot write %s — nothing was changed\n' "$PROG" "$OPMARK" >&2; exit 1; }
 fi
 if [ "$DONLY" = 0 ]; then
@@ -579,7 +618,7 @@ if [ "$DONLY" = 0 ]; then
     if [ "$APPLY" = 1 ]; then
       PW=$(gen_password)
       [ "${#PW}" -ge 16 ] || { printf '%s: could not generate a password\n' "$PROG" >&2; fail; }
-      ( umask 077 && mkdir -p "$(dirname "$PWFILE")" && printf '%s\n' "$PW" > "$PWFILE" ) || fail
+      onboard_mk && ( umask 077 && printf '%s\n' "$PW" > "$PWFILE" ) || fail
       say "  (wrote $PWFILE)"
     else
       say "  (would write a random password to $PWFILE, mode 600)"
@@ -601,7 +640,7 @@ if [ "$DONLY" = 0 ]; then
     # the kept record goes shell-less while its password changes, as a new one is
     run sudo dscl . -create "/Users/$LOGIN" UserShell /usr/bin/false
   fi
-  printf '  $ sudo dscl .   < passwd /Users/%s <redacted: %s>   (on stdin, never argv)\n' "$LOGIN" "$PWFILE"
+  printf '  $ %sdscl .   < passwd /Users/%s <redacted: %s>   (on stdin, never argv)\n' "$SU" "$LOGIN" "$PWFILE"
   if [ "$APPLY" = 1 ]; then
     # interactive dscl: one command per stdin line, the password one plain word
     # (checked above). It exits 0 on a DS error, so its words are the verdict;
@@ -638,7 +677,7 @@ if [ "$DONLY" = 0 ]; then
     # ssh-keygen would otherwise stop to ask "Overwrite?" on a non-tty and hang.
     step "install the public key (no --pubkey: a temporary ed25519 pair → $KEYFILE, mode 600 — public half installed now, private half goes in the welcome letter)"
     if [ "$APPLY" = 1 ]; then
-      ( umask 077 && mkdir -p "$ONBOARD" && rm -f "$KEYFILE" "$KEYFILE.pub" \
+      onboard_mk && ( umask 077 && rm -f "$KEYFILE" "$KEYFILE.pub" \
         && ssh-keygen -q -t ed25519 -N '' -C "$LOGIN-onboard-temp" -f "$KEYFILE" ) || fail
       say "  (generated $KEYFILE + .pub)"
     else
@@ -691,7 +730,9 @@ if [ "$DONLY" = 0 ]; then
   # install reaches no claude.ai. A note, never a failure.
   if [ "$CDIR" != off ]; then
     CL=$(command -v claude 2>/dev/null) || CL=''
-    [ -n "$CL" ] || { [ -x "$HOME/.local/bin/claude" ] && CL="$HOME/.local/bin/claude"; }
+    # a root run has no admin's ~/.local: the runtime's pinned Claude Code (issue #3723)
+    [ "$ROOTRUN" = 0 ] || { CL=''; [ -x "$NROOT/current/tools/bin/claude" ] && CL="$NROOT/current/tools/bin/claude"; }
+    [ -n "$CL" ] || [ "$ROOTRUN" = 1 ] || { [ -x "$HOME/.local/bin/claude" ] && CL="$HOME/.local/bin/claude"; }
     show sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh ${CL:+--claude "$CL"}
     if [ "$APPLY" = 1 ]; then
       sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh ${CL:+--claude "$CL"} 2>&1 | sed 's/^/    /'
@@ -752,7 +793,7 @@ if [ "$DONLY" = 0 ]; then
     run sudo mkdir -p "$CD"
     run sudo chown "$LOGIN:staff" "$H/.config" "$CD"
     run sudo chmod 700 "$CD"
-    run_shown "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $(printf %q "$CD/fleet.conf")" \
+    run_shown "${SU}install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $(printf %q "$CD/fleet.conf")" \
       -- sudo install -m 600 "$FC" "$CD/fleet.conf"
     run sudo chown "$LOGIN:staff" "$CD/fleet.conf"
     CS=(sudo bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
@@ -845,7 +886,7 @@ if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
       FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$STAGE" > "$src" \
         || { printf '%s: render %s failed (%s --render-system)\n' "$PROG" "$u" "$APPLY_SH" >&2; fail; }
     fi
-    run_shown "sudo install -m 644 <$label.plist, rendered from launchd/com.claude-fleet.$u.plist.tmpl> $(printf %q "$dst")" \
+    run_shown "${SU}install -m 644 <$label.plist, rendered from launchd/com.claude-fleet.$u.plist.tmpl> $(printf %q "$dst")" \
       -- sudo install -m 644 "$src" "$dst"
     run sudo launchctl bootstrap system "$dst"
     NI=$((NI + 1))
@@ -906,6 +947,8 @@ fi
 # password. `<HOST>` stays a visible placeholder when the public entry is unset
 # — the admin gets a WARN here, the reader gets a line saying who to ask.
 ADMIN=${USER:-}; [ -n "$ADMIN" ] || ADMIN=$(id -un 2>/dev/null || true)
+# a root run's opener is the hub that sent the op (issue #3723), never `root`
+if [ "$ROOTRUN" = 1 ]; then ADMIN=${JHUB#*://}; ADMIN=${ADMIN%%/*}; fi
 KEY_ALIAS="$MACHINE-$LOGIN"
 welcome_zh() {
   local date; date=$(date -u +%Y-%m-%d)
@@ -1115,7 +1158,7 @@ if [ "$WELCOME" = 1 ]; then
   step "write the welcome letter ($WLANG) → $WELCOME_FILE (mode 600, yours only: host $HOST_SHOWN, port $SSH_PORT, $([ "$TMPKEY" = 1 ] && echo 'the temporary private key inline' || echo "their own key's public line"), never the password)"
   [ -n "$SSH_HOST" ] || say "  WARN: FLEET_SSH_PUBLIC_HOST is unset — the letter says <HOST>; set it (and FLEET_SSH_PUBLIC_PORT, now $SSH_PORT) in ~/.config/claude-fleet/fleet.settings (prefix+c), then re-run or edit the letter"
   if [ "$APPLY" = 1 ]; then
-    ( umask 077 && mkdir -p "$ONBOARD" && welcome_text > "$WELCOME_FILE" ) || fail
+    onboard_mk && ( umask 077 && welcome_text > "$WELCOME_FILE" ) || fail
     say "  (wrote $WELCOME_FILE)"
   else
     say "  (would write it — a dry run writes nothing)"

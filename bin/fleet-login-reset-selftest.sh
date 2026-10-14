@@ -16,6 +16,11 @@
 #      redone without a second archive, washed, set up, clean; once more ⇒ only
 #      the check. Another op ⇒ from the start.
 #   F  refusals: no such login (4), an admin (3), under root's uid as the caller
+#   R  root under the admin gate (issue #3723): FLEET_LOGIN_ADMIN_DIR + EUID 0
+#      (FLEET_LOGIN_TEST_EUID) ⇒ clean, no step through sudo but the drops, the
+#      op book <dir>/<login>-reset/op, the gate dir's <login>-onboard cleared,
+#      nothing written in the admin's $HOME, both children handed the same;
+#      EUID 0 with no dir ⇒ 3, nothing run
 #   H  the stop is --quick, and the old home's archive + delete run detached:
 #      the run is back before they are (FLEET_LOGIN_RESET_ASIDE unset)
 #   G  launchd relaunched a process of the uid after the stop's quiesce, before
@@ -113,6 +118,7 @@ EOF
 cat > "$W/remove.sh" <<'EOF'
 #!/bin/bash
 printf 'remove %s\n' "$*" >> "$RS_LOG"
+[ -z "${FLEET_LOGIN_ADMIN_DIR:-}" ] || printf 'remove-adir %s euid=%s\n' "$FLEET_LOGIN_ADMIN_DIR" "${FLEET_LOGIN_TEST_EUID:-}" >> "$RS_LOG"
 login=$1; keep=0; apply=0
 for a in "$@"; do case "$a" in --keep-home) keep=1 ;; --apply) apply=1 ;; esac; done
 [ "$apply" = 1 ] || { echo 'fleet-login-remove: dry run complete'; exit 0; }
@@ -130,6 +136,7 @@ EOF
 cat > "$W/new.sh" <<'EOF'
 #!/bin/bash
 printf 'new %s op=%s code=%s\n' "$*" "${FLEET_LOGIN_OP_ID:-}" "${FLEET_LOGIN_JOIN_CODE:-}" >> "$RS_LOG"
+[ -z "${FLEET_LOGIN_ADMIN_DIR:-}" ] || printf 'new-adir %s euid=%s\n' "$FLEET_LOGIN_ADMIN_DIR" "${FLEET_LOGIN_TEST_EUID:-}" >> "$RS_LOG"
 login=$1; h="$FLEET_LOGIN_HOMES/$login"
 case " $* " in *' --apply '*) ;; *) echo 'fleet-login-new: DRY RUN'; exit 0 ;; esac
 [ -z "${RS_NEW_DIES:-}" ] || { kill -KILL "$PPID"; exit 1; }
@@ -287,6 +294,31 @@ n=0; while [ "$n" -lt 60 ] && [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ]; do s
 rm -f "$W/shim/tar"
 [ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -n "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
   && ok 'H the detached job archived and deleted the old home' || fail 'H the detached job did not finish'
+
+# ---- R: root under the admin gate (issue #3723) ----
+fixture
+GD="$W/gate"; rm -rf "$GD"; mkdir -p "$GD/$L-onboard"; : > "$GD/$L-onboard/password.txt"
+# root's `install -o 0`, played by the runner: the owner is dropped (as the sudo shim does)
+mkdir -p "$W/shim-root"
+cat > "$W/shim-root/install" <<'EOF'
+#!/bin/sh
+n=$#; i=0
+while [ "$i" -lt "$n" ]; do a=$1; shift; i=$((i + 1)); if [ "$a" = -o ]; then shift; i=$((i + 1)); continue; fi; set -- "$@" "$a"; done
+exec /usr/bin/install "$@"
+EOF
+chmod +x "$W/shim-root/install"
+PATH="$W/shim-root:$PATH" FLEET_LOGIN_TEST_EUID=0 FLEET_LOGIN_ADMIN_DIR="$GD" FLEET_LOGIN_OP_ID=abc7 run "$L" --apply
+[ "$(last2)" = 'reset: clean|credsep: separated' ] && [ "$RC" = 0 ] && ok 'R a root run washes clean' || { tail -12 "$W/out"; fail "R: $(last2) rc $RC"; }
+[ "$(grep '^sudo ' "$RS_LOG" | grep -vc '^sudo -u ')" = 0 ] && ok 'R no step through sudo but the drops' || { grep '^sudo ' "$RS_LOG"; fail 'R a step went through sudo'; }
+[ "$(grep '^  \$ sudo ' "$W/out" | grep -vc '^  \$ sudo -u ')" = 0 ] && ok 'R no shown step says sudo' || fail 'R a shown step still says sudo'
+grep -q '^op=abc7' "$GD/$L-reset/op" 2>/dev/null && ok 'R the op book is the gate dir'"'"'s' || fail 'R no op book under the gate dir'
+[ ! -e "$HOME/$L-reset" ] && ok 'R nothing in the admin'"'"'s home' || fail 'R a root run wrote the admin'"'"'s home'
+gone "$GD/$L-onboard/password.txt" "R the gate dir's onboarding papers cleared"
+has "$RS_LOG" "remove-adir $GD euid=0" 'R the stop runs as root under the gate too'
+has "$RS_LOG" "new-adir $GD euid=0" 'R the rejoin runs as root under the gate too'
+: > "$RS_LOG"
+FLEET_LOGIN_TEST_EUID=0 run "$L" --apply
+[ "$RC" = 3 ] && [ ! -s "$RS_LOG" ] && ok 'R root with no gate dir: 3, nothing run' || fail "R root with no gate dir: $RC"
 
 [ "$FAILS" = 0 ] || { printf 'fleet-login-reset-selftest: %s FAILED\n' "$FAILS"; exit 1; }
 printf 'fleet-login-reset-selftest: PASS\n'
