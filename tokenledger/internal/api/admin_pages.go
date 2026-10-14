@@ -59,7 +59,7 @@ func isAdminUIFile(name string) bool {
 // address gets (denyAdminPage).
 func (s *Server) adminPage(id, file string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if roleOf(r.Context()) != roleUser {
+		if !memberRole(roleOf(r.Context())) {
 			s.serveStandalonePage(w, r, file)
 			return
 		}

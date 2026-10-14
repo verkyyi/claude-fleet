@@ -493,3 +493,78 @@ func TestWxScanReturnsToFleetLogin(t *testing.T) {
 		t.Fatalf("finish → %q", fin.Header.Get("Location"))
 	}
 }
+
+// 立即体验 (claude-fleet#4058): a browser on its way to a trial draws a
+// trial-purpose code; someone the list does not name who scans it is a trial
+// person — signed in as one, sent to /app/try, one trial per unionid —
+// someone it names goes straight to /app. A second trial for the same
+// WeChat reads 「已试过」.
+func TestWxScanStartsATrial(t *testing.T) {
+	h := newWxHarness(t)
+	h.srv.Fleet = true // the trial is the fleet module's
+	setHubSetting(t, h.srv, TrialKey, "on")
+	trying := func() *browser {
+		b := newBrowser(t, "")
+		b.c.Jar.SetCookies(mustURL(h.http.URL+"/"), []*http.Cookie{{Name: tryCookie, Value: "1", Path: "/"}})
+		return b
+	}
+	b := trying()
+	scene, body := h.signinScene(t, b)
+	if !strings.Contains(body, `data-p="trial"`) || !strings.Contains(body, "p=trial") {
+		t.Fatalf("the sign-in page on the way to a trial drew no trial code:\n%s", body)
+	}
+	if c, _ := h.srv.Store.WxSceneOf(scene); c == nil || c.Purpose != wxPurposeTrial {
+		t.Fatalf("scene = %+v; want purpose trial", c)
+	}
+	// A login poll does not finish a trial code.
+	if st := h.pollJSON(t, b, scene); st != wxExpired {
+		t.Fatalf("a trial code read as a login code: %s", st)
+	}
+	h.wb.scan(scene, "open-try", "union-try")
+	fin, _ := b.do(http.MethodGet, h.http.URL+wxPollPath+"?p=trial&s="+strconv.FormatInt(scene, 10), nil)
+	if fin.StatusCode != http.StatusFound || fin.Header.Get("Location") != TryPagePath {
+		t.Fatalf("trial finish = %d → %q; want /app/try", fin.StatusCode, fin.Header.Get("Location"))
+	}
+	pid, via := b.session(h.waysHarness)
+	tr, _ := h.srv.Store.TrialByWay(store.IdentityWeChat, "union-try")
+	if pid == "" || via != store.IdentityWeChat || tr == nil || tr.Principal != pid {
+		t.Fatalf("signed in %q via %q, trial %+v; want the trial person by unionid", pid, via, tr)
+	}
+	if role, _ := h.srv.personRole(pid); role != roleTrial {
+		t.Fatalf("role %q; want trial", role)
+	}
+	if reach, _ := h.srv.Store.HubReachOf(pid); len(reach) != 1 || reach[0].Addr != "open-try" {
+		t.Fatalf("trial reach = %+v", reach)
+	}
+
+	// Someone on the list scans a trial code: the console, no trial.
+	listed := h.addPerson(t, store.IdentityWeChat, "union-lx")
+	b2 := trying()
+	scene2, _ := h.signinScene(t, b2)
+	h.wb.scan(scene2, "open-lx", "union-lx")
+	fin, _ = b2.do(http.MethodGet, h.http.URL+wxPollPath+"?p=trial&s="+strconv.FormatInt(scene2, 10), nil)
+	if fin.StatusCode != http.StatusFound || fin.Header.Get("Location") != AppPrefix {
+		t.Fatalf("listed trial scan → %d %q; want /app", fin.StatusCode, fin.Header.Get("Location"))
+	}
+	if got, _ := b2.session(h.waysHarness); got != listed {
+		t.Fatalf("signed in %q; want %s", got, listed)
+	}
+	if tr, _ := h.srv.Store.Trial(listed); tr != nil {
+		t.Fatalf("a listed person got a trial: %+v", tr)
+	}
+
+	// The trial ends; the same WeChat scans again: the same person, 已试过.
+	now := time.Now()
+	_ = h.srv.Store.PlaceTrial(pid, "mac-d", now)
+	_ = h.srv.Store.ReclaimTrial(pid, now)
+	b3 := trying()
+	scene3, _ := h.signinScene(t, b3)
+	h.wb.scan(scene3, "open-try", "union-try")
+	b3.do(http.MethodGet, h.http.URL+wxPollPath+"?p=trial&s="+strconv.FormatInt(scene3, 10), nil)
+	if got, _ := b3.session(h.waysHarness); got != pid {
+		t.Fatalf("second scan signed in %q; want the same trial person %s", got, pid)
+	}
+	if a, err := h.srv.tryClaim(pid, "", now); err != nil || a.State != "tried" {
+		t.Fatalf("second trial claim = %+v, %v; want tried", a, err)
+	}
+}

@@ -378,6 +378,10 @@ func (s *Server) emailFinish(w http.ResponseWriter, r *http.Request, addr string
 		httpError(w, http.StatusInternalServerError, "could not read the people list")
 		return
 	}
+	if role == "" && refusal == denyNotListed &&
+		s.trialSignIn(w, r, s.trialAsked(r), store.IdentityEmail, addr, addr, "", now) {
+		return // on its way to a trial (claude-fleet#4058)
+	}
 	if role == "" {
 		s.waySignedOut(w, r, store.IdentityEmail, refusal, store.NormIdentitySubject(store.IdentityEmail, addr), addr, now)
 		return

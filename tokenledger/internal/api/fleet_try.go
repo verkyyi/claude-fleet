@@ -18,16 +18,18 @@ import (
 // line in the browser conversation; the page stops the clock at the first
 // reply and tells them 「你用了 0:47」. It only strings together what exists:
 //
-//   - Who may come in: a trial invite. POST TryStartPath mints a one-use
-//     invite (created_by trialInviter, 10 minutes) into the invite cookie, so
-//     the sign-in — GitHub, WeChat, mail — admits a stranger through the very
-//     road an admin's invite takes (admitInviteAs), which records them here
-//     (store.StartTrial) as waiting.
+//   - Who may come in: a verified sign-in on its way to a trial
+//     (claude-fleet#4058, fleet_try_gate.go) — POST TryStartPath leaves the
+//     ccq_try note and sends the browser to sign in; the service account's
+//     code, a mailed code or GitHub then makes someone the list does not
+//     name a trial person (trialSignIn), recorded here as waiting. Until
+//     #4058 a trial invite did this; it no longer admits anyone.
 //   - The login: never opened for them at the sign-in (placePrincipal leaves a
 //     trial person alone). POST TryClaimPath is the one place they are placed:
 //     the first in line, by waiting_since, takes a ready spare
-//     (claimSpares, EPIC #3500) on the machine placement picks; everyone else
-//     is told their place and an ETA. A person who walked away from the page
+//     (claimSpares, EPIC #3500) on the machine placement picks, once the
+//     admission (trialHold) says yes; everyone else is told their place, why
+//     and an ETA. A person who walked away from the page
 //     (not seen for trialFresh) holds no one up.
 //   - The conversation: /app, the console's chat (claude-fleet#3567). The
 //     clock lives in the browser (sessionStorage), from the press on the site
@@ -108,10 +110,14 @@ func (t *tryStarts) take(now time.Time) bool {
 
 // tryAnswer is what the page reads.
 type tryAnswer struct {
-	State    string `json:"state"`              // ready · opening · waiting · member · off
+	State    string `json:"state"`              // ready · opening · waiting · member · tried · day_full · signin · signed_in
 	Next     string `json:"next,omitempty"`     // where to go now
 	Position int    `json:"position,omitempty"` // people ahead in line
 	ETASecs  int    `json:"eta_secs,omitempty"` // roughly how long until a seat
+	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota
+	// Applied is a tried person's request state (pending · approved ·
+	// rejected · withdrawn), "" for none.
+	Applied string `json:"applied,omitempty"`
 }
 
 // handleTryStart: a signed-out browser gets a trial invite and is sent to
@@ -132,40 +138,16 @@ func (s *Server) handleTryStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	now := time.Now()
-	if !trialStarts.take(now) {
+	if !trialStarts.take(time.Now()) {
 		refuseJSON(w, http.StatusTooManyRequests, "busy", "试用的人太多了，过一分钟再试")
 		return
 	}
-	code, err := randomToken(24)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	id, err := randomToken(6)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := s.Store.CreateInvite(store.Invite{ID: "try-" + id, CodeHash: inviteHash(code),
-		CreatedBy: trialInviter, CreatedAt: now, ExpiresAt: now.Add(inviteCookieTTL)}); err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.setInviteCookie(w, r, code)
+	// The note alone opens nothing: the sign-in it leads to must verify
+	// someone (claude-fleet#4058).
+	setTryCookie(w, r)
 	http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: TryPagePath, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r), MaxAge: int(loginCookieTTL.Seconds())})
 	writeJSON(w, http.StatusOK, tryAnswer{State: "signin", Next: AppPrefix + "/signin"})
-}
-
-// trialAdmitted records a person a trial invite just let in.
-func (s *Server) trialAdmitted(pid string, inv *store.Invite, now time.Time) {
-	if inv == nil || inv.CreatedBy != trialInviter {
-		return
-	}
-	if err := s.Store.StartTrial(pid, now); err != nil {
-		log.Printf("fleet: trial of %s: %v", pid, err)
-	}
 }
 
 // handleTryClaim places the person if they are first in line, and says where
@@ -207,7 +189,11 @@ func (s *Server) tryClaim(pid, name string, now time.Time) (tryAnswer, error) {
 		return tryAnswer{}, err
 	}
 	if t.State == store.TrialReclaimed {
-		// Back after the 7 days: to the end of the line.
+		if s.trialOnce() {
+			// One trial per way (claude-fleet#4058): /apply is what is left.
+			return tryAnswer{State: "tried", Next: ApplyPath, Applied: s.trialApplied(pid)}, nil
+		}
+		// Back after their machine went back: to the end of the line.
 		if err := s.Store.RejoinTrial(pid, now); err != nil {
 			return tryAnswer{}, err
 		}
@@ -218,21 +204,52 @@ func (s *Server) tryClaim(pid, name string, now time.Time) (tryAnswer, error) {
 	if t.State == store.TrialPlaced {
 		return s.tryHome(pid, now)
 	}
+	if n, err := s.Store.TrialsStartedSince(trialDayStart(now)); err != nil {
+		return tryAnswer{}, err
+	} else if n >= s.trialDailyNow() {
+		s.trialQueued(pid, "daily", now)
+		return tryAnswer{State: "day_full"}, nil
+	}
 	ahead, err := s.Store.TrialsAhead(t, now.Add(-trialFresh))
 	if err != nil {
 		return tryAnswer{}, err
 	}
 	host := s.leastBusyMachine(now, s.drillComputer(pid)...)
-	if ahead == 0 && host != "" {
+	why := s.trialHold(host, now)
+	if ahead == 0 && why == "" {
 		if claimed := s.claimSpares(pid, name, pid, []string{host}, now); len(claimed) > 0 {
 			if err := s.Store.PlaceTrial(pid, claimed[0], now); err != nil {
 				return tryAnswer{}, err
 			}
-			_ = s.Store.HubAudit(pid, "trial", pid, "ok", "试用领到备用登录 · trial seat on "+claimed[0], now)
+			_ = s.Store.HubAudit(pid, "trial.claim", pid, "ok", "试用领到备用登录 · trial seat on "+claimed[0], now)
 			return s.tryHome(pid, now)
 		}
+		why = trialWaitBusy // no ready spare there
 	}
-	return tryAnswer{State: "waiting", Position: ahead, ETASecs: s.trialETA(host, ahead)}, nil
+	if why == "" {
+		why = trialWaitFull // someone is ahead
+	}
+	s.trialQueued(pid, why, now)
+	return tryAnswer{State: "waiting", Position: ahead, ETASecs: s.trialETA(host, ahead), Reason: why}, nil
+}
+
+// trialQueued audits why pid waits, once per change of reason.
+func (s *Server) trialQueued(pid, why string, now time.Time) {
+	if changed, err := s.Store.SetTrialQueueReason(pid, why); err == nil && changed {
+		_ = s.Store.HubAudit(pid, "trial.queued", pid, "waiting", "reason="+why, now)
+	}
+}
+
+// trialApplied is the state of pid's newest request, "" for none.
+func (s *Server) trialApplied(pid string) string {
+	a, ok := s.trialApplicant(pid)
+	if !ok {
+		return ""
+	}
+	if rs, err := s.Store.Requests().ByIdentity(a.Kind, a.Subject); err == nil && len(rs) > 0 {
+		return rs[0].State
+	}
+	return ""
 }
 
 // tryHome: placed — ready once their home is set, which needs the login live.
@@ -252,21 +269,6 @@ func (s *Server) tryHome(pid string, now time.Time) (tryAnswer, error) {
 		return tryAnswer{State: "ready", Next: AppPrefix}, nil
 	}
 	return tryAnswer{State: "opening"}, nil
-}
-
-// trialETA is roughly how long the person ahead-th in line waits: a seat
-// frees when the pool refills, which opens spare_max logins at a time, each
-// as long as an opening takes on host.
-func (s *Server) trialETA(host string, ahead int) int {
-	each := openingETA
-	if host != "" {
-		each = s.openingETAFor(host)
-	}
-	per := s.spareMax()
-	if per < 1 {
-		per = 1
-	}
-	return each * (1 + ahead/per)
 }
 
 // handleTryTiming keeps the page's one timing, anonymously.
@@ -385,7 +387,7 @@ func (s *Server) SweepTrials(now time.Time) {
 			log.Printf("fleet: trial sweep: %s: %v", t.Principal, err)
 			continue
 		}
-		_ = s.Store.HubAudit(trialInviter, "trial", t.Principal, "ok",
+		_ = s.Store.HubAudit(trialInviter, "trial.release", t.Principal, "ok",
 			"试用 7 天没用，登录收回 · trial login reclaimed after "+trialIdle.String()+" unused", now)
 		log.Printf("fleet: trial of %s unused since %s — login given back", t.Principal, t.LastSeen.Format(time.RFC3339))
 	}
@@ -414,7 +416,10 @@ var tryTmpl = template.Must(template.New("try").Funcs(pageFuncs(i18n.EN)).Parse(
 <title>{{t "try.title"}}</title></head><body><div class="page">` + entryTop + `
 <main class="col" id="try" data-in="{{if .In}}1{{end}}"
  data-w-wait="{{t "try.wait"}}" data-w-first="{{t "try.first"}}" data-w-opening="{{t "try.opening"}}"
- data-w-busy="{{t "try.busy"}}" data-w-fail="{{t "try.fail"}}" data-w-min="{{t "try.min"}}">
+ data-w-busy="{{t "try.busy"}}" data-w-fail="{{t "try.fail"}}" data-w-min="{{t "try.min"}}"
+ data-w-tried="{{t "try.tried"}}" data-w-applied="{{t "try.applied"}}" data-w-apply="{{t "try.apply"}}" data-w-see="{{t "try.see"}}"
+ data-w-dayfull="{{t "try.dayfull"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
+ data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-reach="{{t "try.reach"}}">
 <h1>{{t "try.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{t "try.lead"}}</p>
 <ol class="steps">
@@ -484,6 +489,7 @@ const tryScript = `(function () {
   var fmt = function (ms) { var s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); };
   var tick = function () { if (t0) { clock.hidden = false; clock.textContent = fmt(Date.now() - t0); } };
   var say = function (text) { msg.hidden = !text; msg.lastChild.textContent = text || ""; };
+  var done = false;
   var step = function (n) {
     [].forEach.call(main.querySelectorAll(".steps li"), function (li) {
       var k = Number(li.getAttribute("data-step"));
@@ -514,13 +520,22 @@ const tryScript = `(function () {
       .then(function (j) {
         if (j.state === "ready" || j.state === "member") { step(3); location.assign(j.next || "/app"); return; }
         if (j.state === "opening") { say(w("opening")); setTimeout(claim, 3000); return; }
+        if (j.state === "tried") {
+          // One trial per account: what is left is applying.
+          done = true; clock.hidden = true; sessionStorage.removeItem(KEY);
+          say(j.applied ? w("applied") : w("tried"));
+          go.textContent = j.applied ? w("see") : w("apply"); go.disabled = false;
+          return;
+        }
+        if (j.state === "day_full") { say(w("dayfull")); setTimeout(claim, 60000); return; }
         var mins = Math.max(1, Math.round((j.eta_secs || 60) / 60));
-        say((j.position ? w("wait").replace("{n}", j.position) : w("first")).replace("{m}", mins + " " + w("min")));
+        var why = j.reason ? w("r-" + j.reason) : "";
+        say((why ? why + " " : "") + (j.position ? w("wait").replace("{n}", j.position) : w("first")).replace("{m}", mins + " " + w("min")) + " " + w("reach"));
         setTimeout(claim, 10000);
       })
       .catch(function () { say(w("fail")); go.disabled = false; });
   };
-  go.addEventListener("click", start);
+  go.addEventListener("click", function () { if (done) location.assign("` + ApplyPath + `"); else start(); });
   setInterval(tick, 250);
   if (main.getAttribute("data-in") === "1") { if (t0) start(); else step(2); }
   else if (new URLSearchParams(location.search).get("go") === "1") start();
@@ -530,16 +545,28 @@ const tryScript = `(function () {
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"try.title": {i18n.EN: "Try it in 60 seconds · ClaudeFleet", i18n.ZhCN: "60 秒试用 · ClaudeFleet"},
-		"try.h1":    {i18n.EN: "Try it in 60 seconds", i18n.ZhCN: "60 秒试用"},
-		"try.lead": {i18n.EN: "Sign in, get a machine, say your first line. The clock runs from the press to the first reply.",
-			i18n.ZhCN: "登录、领一台机器、说第一句话。从按下按钮到看到第一句回复，都在计时。"},
-		"try.s1": {i18n.EN: "Sign in", i18n.ZhCN: "登录"},
+		"try.title": {i18n.EN: "Try it now · ClaudeFleet", i18n.ZhCN: "立即体验 · ClaudeFleet"},
+		"try.h1":    {i18n.EN: "Try it now", i18n.ZhCN: "立即体验"},
+		"try.lead": {i18n.EN: "Scan with WeChat and follow 二四网络科技, get a machine, say your first line. The clock runs from the press to the first reply.",
+			i18n.ZhCN: "扫码关注「二四网络科技」、领一台机器、说第一句话。从按下按钮到看到第一句回复，都在计时。"},
+		"try.s1": {i18n.EN: "Scan and follow to sign in", i18n.ZhCN: "扫码关注即登录"},
 		"try.s2": {i18n.EN: "Get a machine", i18n.ZhCN: "领一台机器"},
 		"try.s3": {i18n.EN: "Say your first line", i18n.ZhCN: "说第一句话"},
-		"try.go": {i18n.EN: "Start the 60-second trial", i18n.ZhCN: "开始 60 秒试用"},
-		"try.fine": {i18n.EN: "Free while you try, on a subscription we provide. Unused for 7 days, the machine goes back.",
-			i18n.ZhCN: "试用期间用我们提供的订阅。7 天没用，机器会收回。"},
+		"try.go": {i18n.EN: "Start the trial", i18n.ZhCN: "开始试用"},
+		"try.fine": {i18n.EN: "ClaudeFleet is open to a limited few for now. A trial is free, on a subscription we provide; one per account. Files made in a trial are not kept.",
+			i18n.ZhCN: "ClaudeFleet 目前限定开放。试用免费，用我们提供的订阅；一个账号试一次。试用里生成的文件不保留。"},
+		"try.tried": {i18n.EN: "You have already had your trial with this account. To keep using ClaudeFleet, apply — the answer usually comes within one working day.",
+			i18n.ZhCN: "这个账号已经试用过了。想长期使用，就申请吧——通常 1 个工作日内答复。"},
+		"try.applied": {i18n.EN: "You have already had your trial, and your application is in. See where it stands on your application page.",
+			i18n.ZhCN: "这个账号已经试用过了，你的申请也已经交了。在「我的申请」里看进度。"},
+		"try.apply":   {i18n.EN: "Apply to use it", i18n.ZhCN: "申请使用"},
+		"try.see":     {i18n.EN: "See my application", i18n.ZhCN: "看我的申请"},
+		"try.dayfull": {i18n.EN: "Today's trials are all taken. Come back tomorrow — or apply to use it now.", i18n.ZhCN: "今天的试用名额满了。明天再来，或者现在就申请使用。"},
+		"try.r.full":  {i18n.EN: "Every trial seat is taken.", i18n.ZhCN: "试用名额都在用。"},
+		"try.r.busy":  {i18n.EN: "The machines are busy right now.", i18n.ZhCN: "机器这会儿正忙。"},
+		"try.r.load":  {i18n.EN: "The machines are under load right now.", i18n.ZhCN: "机器这会儿负载高。"},
+		"try.r.quota": {i18n.EN: "The shared subscription is running low for now.", i18n.ZhCN: "共用的订阅额度这会儿偏紧。"},
+		"try.reach":   {i18n.EN: "Following 二四网络科技? We'll tell you on WeChat when it's your turn.", i18n.ZhCN: "关注了「二四网络科技」的，排到时微信通知你。"},
 		"try.wait": {i18n.EN: "All machines are taken. {n} ahead of you — about {m}. Keep this page open to hold your place.",
 			i18n.ZhCN: "机器都被领走了。前面还有 {n} 人，大约 {m}。开着这页就保住你的位置。"},
 		"try.first": {i18n.EN: "You are next — a machine frees up in about {m}. Keep this page open.",

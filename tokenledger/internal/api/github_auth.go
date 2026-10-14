@@ -119,12 +119,19 @@ const (
 
 // Roles, as roleOf names them. admin and user are a GitHub person's (and the
 // list's); operator is the shared doors — the viewer token, a hub with no
-// auth — which have always seen everything.
+// auth — which have always seen everything. trial is someone the list does
+// not name who came in through /app/try (claude-fleet#4058): the chat, their
+// trial and /apply, nothing else (trialRoute).
 const (
 	roleAdmin    = store.RoleAdmin
 	roleUser     = store.RoleUser
+	roleTrial    = "trial"
 	roleOperator = "operator"
 )
+
+// memberRole: a role cut to its own — a user's, a trial person's — never an
+// admin's or the operator's.
+func memberRole(role string) bool { return role == roleUser || role == roleTrial }
 
 func (g *GitHubAuth) ready() bool {
 	return g != nil && g.ClientID != "" && g.ClientSecret != ""
@@ -286,6 +293,12 @@ func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx contex
 		_ = s.Store.HubAudit(sess.UID, "request", sess.Name+" ("+sess.UID+")", "refused",
 			"no longer on the list; session dropped", time.Now())
 		s.githubDeny(w, r, denyRemoved, sess.Name)
+		return nil, true, true
+	}
+	if role == roleTrial && !trialRoute(r.URL.Path) {
+		// A trial person reaches the chat, their trial and /apply only
+		// (claude-fleet#4058): everything else is an unknown address.
+		s.notFoundPage(w, r)
 		return nil, true, true
 	}
 	s.slideSession(w, r, sess, role)
@@ -494,6 +507,10 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("github sign-in of %s (%d): %v", login, id, err)
 		httpError(w, http.StatusInternalServerError, "could not read the people list")
 		return
+	}
+	if role == "" && refusal == denyNotListed &&
+		s.trialSignIn(w, r, s.trialAsked(r), store.IdentityGitHub, fmt.Sprint(id), login, principal, now) {
+		return // on its way to a trial (claude-fleet#4058)
 	}
 	if role == "" {
 		if notListed(refusal) {

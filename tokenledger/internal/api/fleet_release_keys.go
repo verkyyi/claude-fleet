@@ -84,7 +84,7 @@ func (rs *ReleaseStore) keysView() releaseKeysView {
 // handleReleaseKeys serves GET /v1/fleet/release/keys.
 func (s *Server) handleReleaseKeys(w http.ResponseWriter, r *http.Request) {
 	// adminOnly's gate, answered as a missing page instead of 403
-	if roleOf(r.Context()) == roleUser {
+	if memberRole(roleOf(r.Context())) {
 		s.auditRoleDenied(r)
 		http.NotFound(w, r)
 		return

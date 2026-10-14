@@ -197,9 +197,9 @@ func (s *Server) handleWxQR(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	purpose := orDefault(strings.TrimSpace(r.FormValue("purpose")), wxPurposeLogin)
-	if purpose != wxPurposeLogin {
+	if purpose != wxPurposeLogin && (purpose != wxPurposeTrial || !s.trialOn()) {
 		// bind / reach draw theirs from their own pages, through wxScene.
-		httpError(w, http.StatusBadRequest, "purpose must be login")
+		httpError(w, http.StatusBadRequest, "purpose must be login (or trial, with the trial on)")
 		return
 	}
 	c, err := s.wxScene(r.Context(), w, r, purpose, "", time.Now())
@@ -228,7 +228,11 @@ func (s *Server) handleWxPoll(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	now := time.Now()
 	n, _ := strconv.ParseInt(r.URL.Query().Get("s"), 10, 64)
-	state, c, openid := s.wxScenePoll(r.Context(), r, n, wxPurposeLogin, now)
+	purpose := wxPurposeLogin
+	if r.URL.Query().Get("p") == wxPurposeTrial && s.trialOn() {
+		purpose = wxPurposeTrial // a code drawn on the way to a trial (claude-fleet#4058)
+	}
+	state, c, openid := s.wxScenePoll(r.Context(), r, n, purpose, now)
 	if !wantsHTML(r) {
 		writeJSON(w, http.StatusOK, map[string]string{"s": state})
 		return
@@ -239,14 +243,15 @@ func (s *Server) handleWxPoll(w http.ResponseWriter, r *http.Request) {
 	case wxDown:
 		http.Redirect(w, r, appURL("/signin")+"?e=wechat-down", http.StatusFound)
 	case wxReady:
-		s.wxFinishLogin(w, r, c, openid, now)
+		s.wxFinishLogin(w, r, c, openid, purpose == wxPurposeTrial, now)
 	default:
 		http.Redirect(w, r, appURL("/signin")+"?e=wechat-expired", http.StatusFound)
 	}
 }
 
 // wxFinishLogin trades a scanned login code, once, for whoever scanned it.
-func (s *Server) wxFinishLogin(w http.ResponseWriter, r *http.Request, c *store.WxScene, openid string, now time.Time) {
+// trial: the code was drawn on the way to a trial (claude-fleet#4058).
+func (s *Server) wxFinishLogin(w http.ResponseWriter, r *http.Request, c *store.WxScene, openid string, trial bool, now time.Time) {
 	u, err := s.WxGW.userInfo(r.Context(), openid)
 	if err != nil {
 		log.Printf("wechat scan: user/info: %v", err)
@@ -260,14 +265,15 @@ func (s *Server) wxFinishLogin(w http.ResponseWriter, r *http.Request, c *store.
 		http.Redirect(w, r, appURL("/signin")+"?e=wechat-expired", http.StatusFound)
 		return
 	}
-	s.wxLand(w, r, u, now)
+	s.wxLand(w, r, u, trial, now)
 }
 
 // wxLand signs in whoever the service account says u is — the scan's road
 // and the web-authorisation relay's (wx_relay.go) alike: someone on the list
 // comes in, someone not on it goes to /apply as an applicant, and the openid
-// is kept as where to reach them.
-func (s *Server) wxLand(w http.ResponseWriter, r *http.Request, u wxUser, now time.Time) {
+// is kept as where to reach them. trial: the sign-in is on its way to a
+// trial (claude-fleet#4058) — a trial code, or the ccq_try note.
+func (s *Server) wxLand(w http.ResponseWriter, r *http.Request, u wxUser, trial bool, now time.Time) {
 	openid := u.OpenID
 	kind, subject, err := s.wxIdentity(u, now)
 	if err != nil {
@@ -295,6 +301,24 @@ func (s *Server) wxLand(w http.ResponseWriter, r *http.Request, u wxUser, now ti
 			Followed: u.Followed, UpdatedAt: now}); err != nil {
 			log.Printf("wechat scan: reach: %v", err)
 		}
+	}
+	if role == "" && refusal == denyNotListed && s.trialSignIn(w, r, trial || s.trialAsked(r), kind, subject, name, "", now) {
+		if pid, err := s.Store.IdentityPrincipal(kind, subject); err == nil && pid != "" {
+			// Reach the trial person where they scanned: their turn, their
+			// result (C5).
+			_ = s.Store.SetHubReach(store.HubReach{Owner: pid, Channel: store.ReachWeChatMP, Addr: openid,
+				Followed: u.Followed, UpdatedAt: now})
+		}
+		return
+	}
+	if trial && role != "" && role != roleTrial {
+		// On the list already: the console is theirs, no trial
+		// (claude-fleet#4058).
+		clearCookie(w, r, tryCookie, "/")
+		http.SetCookie(w, s.personCookie(r, kind, pid, name, role, now))
+		s.onPrincipalSignIn(pid, name)
+		http.Redirect(w, r, AppPrefix, http.StatusFound)
+		return
 	}
 	if role == "" {
 		if refusal == denyNotListed {
@@ -351,6 +375,9 @@ type signinScanPage struct {
 	PageURL string
 	// Apply: the person came to apply (?next=/apply).
 	Apply bool
+	// Trial: on the way to a trial (claude-fleet#4058) — the code is drawn
+	// for one, and the page says scanning starts it.
+	Trial bool
 	// The other ways; OtherOpen unfolds them (WeChat is not answering).
 	Email, GitHub, OtherOpen bool
 }
@@ -366,8 +393,12 @@ func mobileBrowser(r *http.Request) bool {
 // ?s= names it, else the one it holds, else a new one.
 func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e string) {
 	now := time.Now()
-	page := signinScanPage{pageView: newPageView(r, loc), Mode: "qr", Apply: toApply(r),
+	page := signinScanPage{pageView: newPageView(r, loc), Mode: "qr", Apply: toApply(r), Trial: s.trialAsked(r),
 		Email: s.Email.ready(), GitHub: s.GitHub.ready(), PageURL: s.hubURL(r) + appURL("/signin")}
+	purpose := wxPurposeLogin
+	if page.Trial {
+		purpose = wxPurposeTrial
+	}
 	if signinNotes[e] || signinWayNotes[e] {
 		page.Note = pageT(loc, "signin.note."+e)
 	}
@@ -382,14 +413,14 @@ func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e
 	}
 	var c *store.WxScene
 	if n, err := strconv.ParseInt(r.URL.Query().Get("s"), 10, 64); err == nil && e == "" {
-		if got, _ := s.Store.WxSceneOf(n); got != nil && got.Purpose == wxPurposeLogin && got.QRURL != "" &&
+		if got, _ := s.Store.WxSceneOf(n); got != nil && got.Purpose == purpose && got.QRURL != "" &&
 			got.ConsumedAt.IsZero() && now.Before(got.ExpiresAt) && constantTimeEqual(got.BrowserHash, wxBrowserHashOf(r)) {
 			c = got
 		}
 	}
 	if c == nil {
 		var err error
-		if c, err = s.wxScene(r.Context(), w, r, wxPurposeLogin, "", now); err != nil {
+		if c, err = s.wxScene(r.Context(), w, r, purpose, "", now); err != nil {
 			if !errors.Is(err, errWxBusy) {
 				log.Printf("wechat scan: no code: %v", err)
 			}
@@ -491,10 +522,10 @@ details.more .qrbox{margin-top:12px}
 `
 
 var signinScanTmpl = template.Must(template.New("signin-scan").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `<style>` + signinScanCSS + `</style>
-<title>{{t "signin.title"}}</title>{{if .Scene}}<noscript><meta http-equiv="refresh" content="2;url=` + wxPollPath + `?s={{.Scene}}"></noscript>{{end}}</head><body><div class="page">` + entryTop + `
-<main class="col" id="wx"{{if .Scene}} data-s="{{.Scene}}"{{end}}>
+<title>{{t "signin.title"}}</title>{{if .Scene}}<noscript><meta http-equiv="refresh" content="2;url=` + wxPollPath + `?s={{.Scene}}{{if .Trial}}&amp;p=trial{{end}}"></noscript>{{end}}</head><body><div class="page">` + entryTop + `
+<main class="col" id="wx"{{if .Scene}} data-s="{{.Scene}}"{{end}}{{if .Trial}} data-p="trial"{{end}}>
 ` + limitedPill + `<h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
-<p class="lead">{{if .Apply}}{{t "signin.wx.lead.apply"}}{{else}}{{t "signin.wx.lead"}}{{end}}</p>
+<p class="lead">{{if .Trial}}{{t "signin.wx.lead.trial"}}{{else if .Apply}}{{t "signin.wx.lead.apply"}}{{else}}{{t "signin.wx.lead"}}{{end}}</p>
 {{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
 {{if eq .Mode "mobile"}}<button class="btn wx" type="button" id="wxcopy" data-url="{{.PageURL}}">` + wechatIcon + `{{t "signin.wx.open"}}</button>
 <p class="alert" id="wxcopied" role="status" hidden>` + checkIcon + `<span>{{t "signin.wx.copied"}}</span></p>
@@ -542,7 +573,7 @@ const signinPollScript = `(function () {
   });
   var s = m.getAttribute("data-s");
   if (!s) return;
-  var downs = 0, url = "` + wxPollPath + `?s=" + encodeURIComponent(s);
+  var downs = 0, url = "` + wxPollPath + `?s=" + encodeURIComponent(s) + (m.getAttribute("data-p") === "trial" ? "&p=trial" : "");
   function tick() {
     fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : { s: "down" }; }, function () { return { s: "down" }; })
@@ -565,6 +596,10 @@ func init() {
 		"signin.wx.lead": {
 			i18n.EN:   "Scan with WeChat and follow 二四网络科技 to sign in. Not on the list yet? Sign in, then try it and apply right there.",
 			i18n.ZhCN: "用微信扫码关注「二四网络科技」登录。还不在名单上的，登录后可以先试用、当场申请。",
+		},
+		"signin.wx.lead.trial": {
+			i18n.EN:   "Scan with WeChat and follow 二四网络科技 — your trial starts right away. One trial per account; email or GitHub work too, under other ways.",
+			i18n.ZhCN: "用微信扫码关注「二四网络科技」，马上开始试用。一个账号试一次；也可以用下面的邮箱或 GitHub。",
 		},
 		"signin.wx.lead.apply": {
 			i18n.EN:   "Scan to sign in first, then fill in the application; the answer comes to your WeChat.",

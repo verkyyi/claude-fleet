@@ -199,6 +199,9 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 			// An admin sees every machine, as the operator's doors do
 			// (claude-fleet#1985).
 			return sshRelayIdentity{Operator: true, Actor: sess.UID, Admin: true}, true
+		} else if err == nil && role == roleTrial && !trialRoute(r.URL.Path) {
+			// A trial person's chat and trial only (claude-fleet#4058).
+			return sshRelayIdentity{}, false
 		} else if err == nil && role != "" {
 			return sshRelayIdentity{Principal: sess.UID, Actor: sess.UID}, true
 		}
