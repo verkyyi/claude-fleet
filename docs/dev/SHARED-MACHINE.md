@@ -683,3 +683,17 @@ install, the hub's join code, credsep) and ends with
 hub reads: `reset: clean` (or `reset: dirty <categories>`) and `credsep: …`.
 Cut off half way, the same op (`FLEET_LOGIN_OP_ID`) run again goes on from
 `~/<login>-reset/op`.
+
+**The fresh home is a clone of root's home template** (issue #4194). On a
+managed machine root builds, once per runtime version, the home a new login's
+first minute would make — the linked install, hooks, settings, skills, agents,
+plugins, the starter checkout — from the runtime alone, in a staging home no
+login owns (`bin/fleet-home-template.py build`, run as `nobody`), scrubbed of
+anything per-person and refused whole if anything credential-shaped is in it;
+it lives in `/private/var/db/fleet-home/<sha>/` (root, 0700). The wash clones
+it (`… clone <login> --home <home>`: one APFS clonefile, paths rewritten, the
+home handed to the login) instead of `createhomedir`, so the rejoin's bootstrap
+only fills the login's own `fleet.conf` (`fleet-install-apply.sh --conf-only`)
+and starts its fleet. No template for this version: `createhomedir` as before,
+and a build is started off the clock for the next wash.
+`fleet-home-template.py status` says whether one is ready.
