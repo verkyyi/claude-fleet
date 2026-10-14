@@ -3,6 +3,8 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -123,6 +125,10 @@ func (a *Agent) nodeProbe() *control.NodeProbe {
 // (or missing), it runs bin/fleet-node-probe.sh from the full install or the
 // client install, and the next beat carries the new verdict. A machine that
 // moved to an unsupported region is closed by the hub within a day of the move.
+// A probe the script did not write as it is now is due at once (claude-fleet
+// #4207): the file records its script's sha256 as "src", and a release that
+// changes the rule — #4185's central road — must not wait a day on a verdict
+// the old rule wrote (a user pod's home disk keeps the file across images).
 const (
 	probeEvery   = 24 * time.Hour
 	probeCheck   = time.Hour
@@ -146,13 +152,43 @@ func (a *Agent) probeScript() string {
 	return ""
 }
 
-// probeDue: no probe file yet, or one older than probeEvery.
-func (a *Agent) probeDue(now time.Time) bool {
+// probeDue: no probe file yet, one older than probeEvery, or one another
+// script wrote (its "src" is not the sha256 of script's bytes).
+func (a *Agent) probeDue(now time.Time, script string) bool {
 	if a.cfg.FleetProbePath == "" {
 		return false
 	}
 	st, err := os.Stat(a.cfg.FleetProbePath)
-	return err != nil || now.Sub(st.ModTime()) >= probeEvery
+	if err != nil || now.Sub(st.ModTime()) >= probeEvery {
+		return true
+	}
+	return probeSrc(a.cfg.FleetProbePath) != scriptSum(script)
+}
+
+// probeSrc is the "src" a probe file says it was written by ("" for none).
+func probeSrc(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var p struct {
+		Src string `json:"src"`
+	}
+	if json.Unmarshal(b, &p) != nil {
+		return ""
+	}
+	return p.Src
+}
+
+// scriptSum is the sha256 of a script's bytes, "-" when it cannot be read
+// (never equal to a probe file's src, so the run is attempted).
+func scriptSum(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "-"
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *Agent) runProbe(ctx context.Context) {
@@ -171,11 +207,8 @@ func (a *Agent) runProbe(ctx context.Context) {
 // probeOnce runs the probe when it is due; false when it did not run. Exit 1
 // is the script's "does not suit" — a verdict, not a failure.
 func (a *Agent) probeOnce(ctx context.Context, now time.Time) bool {
-	if !a.probeDue(now) {
-		return false
-	}
 	script := a.probeScript()
-	if script == "" {
+	if script == "" || !a.probeDue(now, script) {
 		return false
 	}
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)

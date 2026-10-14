@@ -184,6 +184,9 @@
 #                                                   applyReset; go test
 #   trial-slot-held                                 tokenledger/internal/api fleet_try_slot.go (SweepTrialSlots on the
 #                                                   15 s alerts tick: hidden 120 · idle 240, + #4059's budget); go test
+#   drill-trial-escape                              tokenledger/internal/api fleet_drill_trial.go (an admin's ft_ code,
+#                                                   spent once, into trialSignIn; SweepDrillTrials) + internal/store
+#                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2762,6 +2765,27 @@ drill_credential_quota_unbound() {
   t0=$(now)
   c11_go_tests fleet_credential_quota_test.go TestCredentialQuotaUnbound TestCredentialQuotaIsolation || return 1
   WHAT='无 UUID 的 OAuth 凭据独立计量；重复 Token 去重、换 Token 不继承旧读数（Go 门验证）'
+  SECS=$(since "$t0")
+}
+
+# ---- drill-trial-escape (#4215): a drill trier — the stand-in stranger an
+# admin mints so the isolated drill (#4061) walks the trial without a real
+# scan — must not outgrow it: its code replayed, minted by a non-admin, landing
+# on the list or a console session, or the trier outliving its life with its
+# conversation, identity or machine still there.
+drill_drill_trial_escape() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'UPDATE hub_drill_trial_codes SET used_at = ?' "$tl/store/drill_trials.go" 2>/dev/null \
+    || { WHY="a drill trier's code is no longer spent once (store/drill_trials.go)"; return 1; }
+  grep -q 's.trialSignIn(w, r, true, store.DrillKind,' "$tl/api/fleet_drill_trial.go" 2>/dev/null \
+    || { WHY="the redeem no longer goes through the real trial sign-in (fleet_drill_trial.go)"; return 1; }
+  grep -q 'go s.SweepDrillTrials(now)' "$tl/api/fleet_alerts.go" 2>/dev/null \
+    || { WHY="nothing deletes an expired drill trier on the tick (fleet_alerts.go)"; return 1; }
+  c11_go_tests fleet_drill_trial_test.go TestDrillTrialMintIsAdminOnly TestDrillTrialCodeOnceIntoTheTrial \
+    TestDrillTrialExpiresGivesBackAndDeletes TestDrillTrialSelfDelete TestDrillTrialOffAddsNothing || return 1
+  WHAT='演练试用码只管理员铸、只换一次、换到的是试用会话不进名单；到期放回机器并删对话密文 / 身份 / 试用（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='非管理员铸 403；码重放 / 过期 401；换到 roleTrial、不在名单、控制台 404；到期放回 + 删密文身份试用、旧码作废；自删；真人路不变（go test 五条）'
   SECS=$(since "$t0")
 }
 

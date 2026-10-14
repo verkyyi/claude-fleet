@@ -346,6 +346,11 @@ func (s *Server) handleSelf(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "DELETE only")
 		return
 	}
+	if sess, pid, ok := s.personSession(r); ok && sess.Sub == store.DrillKind {
+		// A drill trier (claude-fleet#4215): its own session is its credential.
+		s.drillTrialSelfDelete(w, r, pid)
+		return
+	}
 	var req selfDeleteRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "body must be JSON")

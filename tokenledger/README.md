@@ -952,20 +952,27 @@ unfollowed and sends the mail; a road that is down is tried three more times
 (15 s · 30 s · 60 s), every try in `hub_audit` (`notify.retry`, the errcode at
 most — BREAK-IT `notify-leaks-secret`). An admin hears of the first request at
 once; the ones in the next ten minutes come as one notice. The result is told
-in the language the person asked in. Both template variables name a template
-shaped 时间 · 内容 · 建议 — on 「二四网络科技」 that is 「提醒服务通知」
-(`2vnnKkz4i6TINyhXLv2UaZ2bLDodtuR__7qo7N1wZd0`, already approved, shared with
-space):
+in the language the person asked in. The two template variables name two of
+「二四网络科技」's category templates (claude-fleet#4214; the old 「提醒服务通知」
+is banned, 43116):
 
-| field | a result (`…_REVIEW`) | new requests (`…_NEWREQ`) |
-|---|---|---|
-| 时间 `keyword1` | when it was decided | when the first one came in |
-| 内容 `keyword2` | 「ClaudeFleet：你的使用申请已通过」 / 「…未通过：<理由>」 | 「ClaudeFleet：N 条新申请待审核（<第一位> 等）」 |
-| 建议 `keyword3` | 「打开 ClaudeFleet 开始使用」 / 「<日期> 起可以再申请」 | 「点开直接审核」 |
-| tap → | `/apply` | `/admin/requests/<the first one>` |
+| `CCQUOTA_WX_TPL_REVIEW` · 项目申请审核结果通知 (`MFeNa70r…`) | |
+|---|---|
+| 申请项目 `thing3` | 「ClaudeFleet 使用申请」 |
+| 申请账号 `character_string14` | their mail address, else name, else the request's id — only one with no Chinese, ≤ 32 |
+| 审核结果 `thing5` | 「已通过」 / 「未通过」 (no field for the reason: tapping through to `/apply` shows it) |
+| 审核时间 `time6` | when it was decided (UTC+8) |
+| tap → | `/apply` |
 
-`first` / `remark` are filled for the clients that still show them. A
-template unset ⇒ that kind skips straight to the customer-service message and
+| `CCQUOTA_WX_TPL_NEWREQ` · 用户注册申请审核提醒 (`PlJ5dFCF…`) | |
+|---|---|
+| 平台名称 `thing1` | 「ClaudeFleet」 |
+| 用户名称 `thing2` | the first one's name; several: 「<名字> 等 N 人」 (≤ 20) |
+| 申请时间 `time6` | when the first one came in (UTC+8) |
+| 待审批数 `character_string10` | N |
+| tap → | `/admin/requests/<the first one>` |
+
+A template unset ⇒ that kind skips straight to the customer-service message and
 the mail.
 
 With neither WeChat nor a mail configured, `/signin` is GitHub's page byte for

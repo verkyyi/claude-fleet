@@ -672,6 +672,10 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(ChatPathPrefix, s.viewerOnly(http.HandlerFunc(s.handleChat)))
 		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
 		mux.HandleFunc(TryStartPath, s.handleTryStart)
+		// Drill triers (claude-fleet#4215): an admin's code, once, into the
+		// same trial sign-in; both 404 while fleet.trial is off.
+		mux.HandleFunc(DrillTrialPath, s.handleAdminDrillTrial)
+		mux.HandleFunc(DrillTrialRedeemPath, s.handleDrillTrialRedeem)
 		mux.Handle(TryClaimPath, s.viewerOnly(http.HandlerFunc(s.handleTryClaim)))
 		mux.Handle(TryStatePath, s.viewerOnly(http.HandlerFunc(s.handleTryState)))
 		mux.Handle(TryTimingPath, s.viewerOnly(http.HandlerFunc(s.handleTryTiming)))

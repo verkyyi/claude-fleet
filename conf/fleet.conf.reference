@@ -2985,8 +2985,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 (…/node_w/wx/oauth/relay), signed with the TOKEN above · needs that pair
 #                                 · _RELAY_TARGET (default fleet) · _COMPONENT_APPID (default the company's)
 #   CCQUOTA_WX_TPL_REVIEW / CCQUOTA_WX_TPL_NEWREQ             the notices' template messages (a request's
-#                                 result · new requests to the admins): a template shaped 时间·内容·建议 —
-#                                 「提醒服务通知」 on 「二四网络科技」 · needs the pair above · unset = chat message, else mail
+#                                 result · new requests to the admins): 「项目申请审核结果通知」 /
+#                                 「用户注册申请审核提醒」 on 「二四网络科技」 · needs the pair above · unset = chat message, else mail
 #   CCQUOTA_SESSION_SECRET        signs sessions on a hub without GitHub · 必填 then · 密钥
 # Other:
 #   CCQUOTA_FLEET                 1 = fleet on · 必填

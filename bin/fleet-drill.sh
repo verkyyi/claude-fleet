@@ -1,6 +1,7 @@
 #!/bin/bash
 # fleet drill invite [--ttl <2h|90m|7200>] [--login drill<x>] [--host <machine>] [--home <machine>] [--json]
 # fleet drill approve <USER-CODE>       (the approve code in FLEET_DRILL_INVITE)
+# fleet drill trial [--ttl <2h|90m|7200>] [--json] · fleet drill trial-again <subject|person> [--json]
 #   — mint a DRILL PERSON on the hub for one onboarding drill (claude-fleet#2010,
 #     EPIC #1906 C16): the stand-in colleague bin/fleet-onboard-drill.sh confirms
 #     its scan as, so the drill walks a NEW person's first time instead of being
@@ -36,6 +37,18 @@
 # token (CCQUOTA_VIEWER_TOKEN, ~/.ccquota/viewer-token). The code is printed,
 # never written to a file.
 #
+# `trial` (claude-fleet#4215) mints a DRILL TRIER instead: a stand-in stranger
+# (kind=drill, subject trial-<random>, never on the list) that walks the trial
+# exactly as a real person does — /app/try, a spare, the web chat, the give-back
+# — with no WeChat and no scan, so the isolated drill (#4061) can run again. It
+# prints a one-time link, /auth/drill/trial?code=ft_… (good once, 600 s): open
+# it in the drill's browser and it is signed in as a trial person. The trier
+# lives --ttl like a drill person and is then deleted — its machine given back,
+# its conversation, identity and trial gone. `trial-again <subject>` mints
+# another link for the SAME trier (the one it comes back on to go on talking).
+# Same doors as invite (an admin's certificate, else the operator's token);
+# the link is printed, never written to a file. The hub's fleet.trial must be on.
+#
 # Exit: 0 invited / approved · 1 the hub refused / did not answer · 2 usage / no hub / no credential
 set -u
 PROG=fleet-drill
@@ -44,11 +57,17 @@ note() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 
 SUB=${1-}
 case "$SUB" in
-  invite|approve) shift ;;
+  invite|approve|trial|trial-again) shift ;;
   -h|--help) sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
-TTL='' LOGIN='' HOST='' HOME_M='' JSON=0 UCODE=''
+TTL='' LOGIN='' HOST='' HOME_M='' JSON=0 UCODE='' SUBJ=''
+if [ "$SUB" = trial-again ]; then
+  [ $# -ge 1 ] || usage
+  SUBJ=$1; shift
+  printf '%s' "$SUBJ" | grep -Eq '^(trial-[0-9a-f]{16}|p:[0-9a-f-]{36})$' \
+    || { note "trial-again: a drill trier's subject (trial-…) or person (p:…) (got '$SUBJ')"; exit 2; }
+fi
 if [ "$SUB" = approve ]; then
   [ $# = 1 ] || usage
   UCODE=$(printf '%s' "$1" | tr 'a-z' 'A-Z'); set --
@@ -66,6 +85,11 @@ while [ $# -gt 0 ]; do
     *)       note "unknown argument: $1"; usage ;;
   esac
 done
+case "$SUB" in
+  trial|trial-again)
+    [ -z "$LOGIN$HOST$HOME_M" ] || { note "$SUB: --login / --host / --home are invite's (a drill trier has no computer)"; exit 2; }
+    [ "$SUB" = trial ] || [ -z "$TTL" ] || { note "trial-again: the trier keeps its life (no --ttl)"; exit 2; } ;;
+esac
 
 # --ttl → seconds (0 = the hub's default)
 TTLS=0
@@ -115,7 +139,28 @@ if [ "$SUB" = approve ]; then
     *)   note "the hub refused the approve code (HTTP $code)"; exit 1 ;;
   esac
 fi
-if cert_live; then
+if [ "$SUB" = trial ] || [ "$SUB" = trial-again ]; then
+  if cert_live; then
+    ts=$(date +%s)
+    sig=$(printf 'fleet-drill %s trial %s%s' "$ts" "$TTLS" "${SUBJ:+ $SUBJ}" \
+          | ssh-keygen -Y sign -f "$CERT_KEY" -n fleet-drill@claude-fleet 2>/dev/null) \
+      || { note "ssh-keygen -Y sign failed with $CERT_KEY"; exit 1; }
+    body=$(python3 -c 'import json,sys; d={"ttl_seconds":int(sys.argv[1]),"cert":open(sys.argv[2]).readline().strip(),"sig":sys.argv[3],"ts":int(sys.argv[4])}
+if sys.argv[5]: d["subject"]=sys.argv[5]
+print(json.dumps(d))' "$TTLS" "$CERT_PUB" "$sig" "$ts" "$SUBJ") || exit 1
+    code=$(printf '%s' "$body" | curl -sS -m 30 -o "$OUT" -w '%{http_code}' -X POST \
+           -H 'Content-Type: application/json' --data-binary @- "$HUB/v1/admin/drill/trial" 2>/dev/null)
+  else
+    TOK="${CCQUOTA_VIEWER_TOKEN:-}"
+    [ -n "$TOK" ] || { [ -r "$HOME/.ccquota/viewer-token" ] && read -r TOK < "$HOME/.ccquota/viewer-token"; } || TOK=''
+    [ -n "$TOK" ] || { note "no live connection certificate ($CERT_PUB — run fleet login) and no operator token — nothing sent"; exit 2; }
+    body=$(python3 -c 'import json,sys; d={"ttl_seconds":int(sys.argv[1])}
+if sys.argv[2]: d["subject"]=sys.argv[2]
+print(json.dumps(d))' "$TTLS" "$SUBJ") || exit 1
+    code=$(printf 'Authorization: Bearer %s\n' "$TOK" | curl -sS -m 30 -o "$OUT" -w '%{http_code}' -X POST \
+           -H @- -H 'Content-Type: application/json' --data-binary "$body" "$HUB/v1/admin/drill/trial" 2>/dev/null)
+  fi
+elif cert_live; then
   ts=$(date +%s)
   sig=$(printf 'fleet-drill %s invite %s %s %s%s' "$ts" "$HOST" "$LOGIN" "$TTLS" "${HOME_M:+ $HOME_M}" \
         | ssh-keygen -Y sign -f "$CERT_KEY" -n fleet-drill@claude-fleet 2>/dev/null) \
@@ -145,6 +190,26 @@ try: print(json.load(open(sys.argv[1])).get("error",""))
 except Exception: print(open(sys.argv[1]).read()[:200])' "$OUT" 2>/dev/null)"; exit 1 ;;
 esac
 if [ "$JSON" = 1 ]; then cat "$OUT"; echo; exit 0; fi
+if [ "$SUB" = trial ] || [ "$SUB" = trial-again ]; then
+  python3 - "$OUT" "$BIN" "$SUB" <<'PY' || { note "could not format the hub's answer — as it came:"; cat "$OUT"; echo; exit 1; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("兑换链接  %s  （只能用一次）" % d["url"], flush=True)
+print("演练试用者 %s（kind=%s）%s" % (d.get("subject"), d.get("kind"), (" · " + d["person_id"]) if d.get("person_id") else ""))
+def when(raw):
+    try:
+        sys.path.insert(0, sys.argv[2])
+        import fleet_iso
+        return fleet_iso.parse(str(raw)).astimezone().strftime("%m-%d %H:%M")
+    except Exception:
+        return str(raw or "?")
+print("链接到期  %s（10 分钟内打开，换过即作废）" % when(d.get("code_expires_at")))
+print("到期      %s（到期入口放回它占的机器，删它的对话、身份和试用）" % when(d.get("expires_at")))
+print()
+print("在演练的浏览器里打开上面的链接 → /app/try。回来续聊：%s/fleet-drill.sh trial-again %s" % (sys.argv[2], d.get("subject")))
+PY
+  exit $?
+fi
 # The code first, the formatting after (issue #2024): the invite already exists on
 # the hub, so a line that cannot be formatted prints raw — never loses the code.
 python3 - "$OUT" "$BIN" <<'PY' || { note "could not format the hub's answer — as it came:"; cat "$OUT"; echo; exit 1; }

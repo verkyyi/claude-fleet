@@ -30,6 +30,7 @@ done
 case "${CURL_ANSWER:-ok}" in
   ok)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"mac-c-mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T14:00:00Z"}' > "$out"; printf 200 ;;
   403) printf '{"error":"only an admin can invite a drill person"}' > "$out"; printf 403 ;;
+  trial) printf '{"subject":"trial-0123456789abcdef","kind":"drill","code":"ft_abcdefghijklmnopqrstuvwxyz","url":"https://hub.example/auth/drill/trial?code=ft_abcdefghijklmnopqrstuvwxyz","code_expires_at":"2026-10-07T12:10:00Z","expires_at":"2026-10-07T14:00:00Z"}' > "$out"; printf 200 ;;
   ns)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T05:47:35.272044642Z"}' > "$out"; printf 200 ;;
   junk) printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"mac-a","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"next tuesday"}' > "$out"; printf 200 ;;
 esac
@@ -74,6 +75,20 @@ fi
 run 0 '^确认码 +fd_abcdefghijklmnopqrstuvwxyz' 'the code line prints' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host mac-a
 run 0 '到期 +next tuesday'     'an unreadable expiry prints raw, the code kept' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=junk -- invite --host mac-a
 
+# trial (issue #4215): a drill trier — the link printed, the ttl / subject in the body
+run 0 '^兑换链接 +https://hub.example/auth/drill/trial\?code=ft_' 'trial prints the one-time link' \
+  CCQUOTA_VIEWER_TOKEN=tok-secret CURL_ANSWER=trial -- trial --ttl 90m
+grep -q '^REQ POST https://hub.example/v1/admin/drill/trial' "$T/curl.log" && ok 'POST /v1/admin/drill/trial' || bad "no trial POST: $(cat "$T/curl.log")"
+grep -qF 'BODY {"ttl_seconds": 5400}' "$T/curl.log" && ok 'trial --ttl 90m → 5400 s, no subject' || bad "trial body: $(grep ^BODY "$T/curl.log")"
+if grep '^ARGV' "$T/curl.log" | grep -q tok-secret; then bad 'trial: the token reached an argv'; else ok 'trial: the token never reached an argv'; fi
+run 0 'trial-again trial-0123456789abcdef' 'trial names the way back' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=trial -- trial
+run 0 '兑换链接'                 'trial-again prints a new link' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=trial -- trial-again trial-0123456789abcdef
+grep -qF 'BODY {"ttl_seconds": 0, "subject": "trial-0123456789abcdef"}' "$T/curl.log" && ok 'trial-again sends the subject' || bad "trial-again body: $(grep ^BODY "$T/curl.log")"
+run 2 "a drill trier's subject" 'trial-again: a bad subject'  CCQUOTA_VIEWER_TOKEN=tok -- trial-again dave
+run 2 'no --ttl'                 'trial-again keeps its life'  CCQUOTA_VIEWER_TOKEN=tok -- trial-again trial-0123456789abcdef --ttl 2h
+run 2 'has no computer'          'trial takes no --host'       CCQUOTA_VIEWER_TOKEN=tok -- trial --host mac-a
+run 0 '"code": *"ft_'            'trial --json prints the raw answer' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=trial -- trial --json
+
 # the certificate door: a live cert → signed, no token sent
 printf 'k\n' > "$T/home/.ssh/fleet-cert"; printf 'ssh-ed25519-cert-v01@openssh.com AAAA cert\n' > "$T/home/.ssh/fleet-cert-cert.pub"
 cat > "$T/shim/ssh-keygen" <<'EOF'
@@ -100,6 +115,15 @@ grep -q '^BODY .*"home": "mac-d"' "$T/curl.log" && ok 'the token door sends the 
 run 2 '--home: a machine name' 'a bad --home' CCQUOTA_VIEWER_TOKEN=tok -- invite --host mac-a --home 'a b'
 run 0 'fleet-onboard-drill.sh' 'no --home sends none' CCQUOTA_VIEWER_TOKEN=tok -- invite --host mac-a
 if grep -q '^BODY .*"home"' "$T/curl.log"; then bad 'no --home still sent a home'; else ok 'no --home: no home in the body'; fi
+
+# trial by the cert door: it signs "fleet-drill <ts> trial <ttl>[ <subject>]"
+run 0 '兑换链接' 'trial by the cert door' SIGNED="$T/signed" CCQUOTA_VIEWER_TOKEN=tok-secret CURL_ANSWER=trial -- trial
+if grep -Eq '^fleet-drill [0-9]+ trial 0$' "$T/signed" 2>/dev/null; then ok 'trial signs "fleet-drill <ts> trial <ttl>"'
+else bad "trial signed: $(cat "$T/signed" 2>/dev/null)"; fi
+if grep -q '^HDR Authorization' "$T/curl.log"; then bad 'trial: a live cert still sent the token'; else ok 'trial: a live cert sends no token'; fi
+run 0 '兑换链接' 'trial-again by the cert door' SIGNED="$T/signed" CURL_ANSWER=trial -- trial-again trial-0123456789abcdef
+if grep -Eq '^fleet-drill [0-9]+ trial 0 trial-0123456789abcdef$' "$T/signed" 2>/dev/null; then ok 'trial-again signs the subject after the rest'
+else bad "trial-again signed: $(cat "$T/signed" 2>/dev/null)"; fi
 
 # approve: the drill's scan — the code (from the environment) is the only
 # credential sent, even with a token and a live cert right here
