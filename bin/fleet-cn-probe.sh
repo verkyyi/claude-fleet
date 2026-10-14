@@ -244,6 +244,7 @@ view_step() {
       if printf '%s' "$scr" | grep -qE '__CNP_EXIT=|连不上|could not|REFUSED|Permission denied'; then
         fail "view:$r" "drawn, then an error on screen: $(printf '%s' "$scr" | shown)"
       else
+        # shellcheck disable=SC2046 # the VIEW line's words, split on purpose
         set -- $(printf '%s\n' "$out" | grep '^VIEW up ' | tail -n 1)
         pass "view:$r" "bare fleet drew the pod's view in ${3:-?}s (route ${4:-?}, first ${5:-?}ms) and stayed ${STAY}s"
       fi ;;
@@ -291,6 +292,7 @@ codex_step() {
   st=$(printf '%s\n' "$out" | grep '^CODEX ' | tail -n 1)
   scr=$(printf '%s\n' "$out" | sed -n 's/^SCREEN //p' | grep -v "$w" | tail -n 3 | tr '\n' ' ' | shown)
   printf '%s\n' "$out" | grep '^LEFT ' | while read -r _ k; do say "INFO codex:$r could not close the session $k it opened"; done
+  # shellcheck disable=SC2086 # the CODEX line's words, split on purpose
   set -- $st
   case "${2:-}" in
     answered) pass "codex:$r" "a new Codex session answered $w in ${3:-?}s" ;;
