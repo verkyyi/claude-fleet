@@ -534,7 +534,9 @@ class O_SweepRemoves(Sandbox):
         daemon's: its `_` UserName read as "a machine unit the daemon does not
         run", and the sweep booted it out minutes after `fleet node install` made
         it. The seat's unit stays; the same label under another UserName does not."""
-        p = self.plist(self.dd, "com.claude-fleet.admin-agent", UserName=fns.SEAT_ADMIN_ROLE)
+        # the daemon under the launchctl seam is the macOS one on any CI box, so the role is
+        # macOS's — not fns.SEAT_ADMIN_ROLE, which this (seamless) import read off the platform
+        p = self.plist(self.dd, "com.claude-fleet.admin-agent", UserName="_fleetadmin")
         r = self.run_sup("sweep")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(p), r.stdout)
