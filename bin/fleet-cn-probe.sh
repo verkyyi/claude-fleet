@@ -1,17 +1,18 @@
 #!/bin/bash
-# fleet-cn-probe.sh — walk `fleet connect` end to end from a client in China,
-# and say 通 / 不通 + the layer it stopped at (issue #4150).
+# fleet-cn-probe.sh — walk a China user's real road end to end from a client in
+# China, and say 通 / 不通 + the layer it stopped at (issues #4150, #4180).
 #
 #   bin/fleet-cn-probe.sh [--client user@host] [--key FILE] [--known-hosts FILE]
 #                         [--as LOGIN] [--machine NAME] [--routes "entry relay …"]
+#                         [--layers "connect view codex task"] [--repo owner/name]
 #
 # Segment checks (the door port answers, the hub carries the fix) once said
-# "fixed" three times while a person in China still could not get in. This is
-# the person's road, run for real: the INSTALLED client on a China machine
-# (default the Shenzhen drill box, oss-drill, reached from this computer — its
-# security group lets only this machine's egress in), as a signed-in test
-# login, against a cluster user pod, every route forced in turn, each a real
-# ssh that must run a command on the pod. Layers, in order:
+# "fixed" three times while a person in China still could not get in, and nine
+# separate bugs each had a green unit test (#4180). This is the person's road,
+# run for real: the INSTALLED client on a China machine (default the Shenzhen
+# drill box, oss-drill, reached from this computer — its security group lets
+# only this machine's egress in), as a signed-in test login, against a cluster
+# user pod, every route forced in turn. Layers, in order:
 #
 #   client   this computer → the client box (ssh)
 #   install  the client's `fleet` is there
@@ -22,18 +23,35 @@
 #            (TCP + SSH banner handshakes), the table printed as is
 #   auto     the route `fleet connect` picks by itself runs `hostname` on the pod
 #   <route>  each route forced (`--route <name>`) runs `hostname` on the pod
+#   view:<route>   bare `fleet` on a terminal (a tmux pty on the client, the
+#            route pinned): the pod's view drawn (the client's thin.log says
+#            `drawn` on that route) and still up FLEET_CN_PROBE_STAY s later
+#            (default 30) — no `end`, the client alive, no error on screen
+#   codex:<route>  `fleet codex --new '<one sentence>'` on a terminal, the route
+#            pinned: a NEW Codex session on the pod answers the sentence (its
+#            nonce word on a line of its own) within FLEET_CN_PROBE_ANSWER s
+#            (default 300); the session is closed afterwards (`fleet close`)
+#   task     on the pod, through `fleet connect`: `fleet-task-record.sh dispatch
+#            --repo <hosted repo>` — a hub task record T<n> AND its ticket filed
+#            (file_issue's road, no spawn); the ticket is closed again
+#            (not_planned) so the probe leaves no open work behind
 #
 # door     (only when the door refuses the key, and this computer has kubectl)
 #          the door's allow list, read — is the login on it?
+#
+# --layers picks which of view, codex, task run (default all; `connect` is the
+# road every one of them stands on, client … <route>, and always runs). A route
+# is pinned only for its view / codex step and put back to auto right after.
 #
 # Host key: a route whose ssh says the host key is unknown / changed is FAIL.
 # Prints `PASS|FAIL|INFO <layer> <detail>` lines, then ONE verdict line:
 #   通：自动选 <route>；<route> 通 · <route> 通 …
 #   不通：卡在 <layer> — <detail>
-# Exit 0 通 (auto and every forced route) · 1 不通 · 2 usage.
+# Exit 0 通 (every layer that ran) · 1 不通 · 2 usage.
 #
-# Nothing is written on the pod; the client keeps its own connect cache (that
-# is the person's state). No credential is printed or passed in an argv.
+# What it leaves on the pod: one closed ticket and its task record per run; the
+# Codex sessions it opened are closed. The client keeps its own connect cache
+# (that is the person's state). No credential is printed or passed in an argv.
 set -uo pipefail
 
 CLIENT=${FLEET_CN_PROBE_CLIENT:-root@47.119.157.4}
@@ -45,6 +63,11 @@ ROUTES=${FLEET_CN_PROBE_ROUTES:-}
 TMO=${FLEET_CN_PROBE_TIMEOUT:-90}
 KUBECTL=${FLEET_CN_PROBE_KUBECTL:-kubectl}
 DOOR_NS=${FLEET_CN_PROBE_DOOR_NS:-fleet-workers}
+LAYERS=${FLEET_CN_PROBE_LAYERS:-connect view codex task}
+REPO=${FLEET_CN_PROBE_REPO:-}
+STAY=${FLEET_CN_PROBE_STAY:-30}
+VIEW_UP=${FLEET_CN_PROBE_VIEW_UP:-30}
+ANSWER=${FLEET_CN_PROBE_ANSWER:-300}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,12 +77,18 @@ while [ $# -gt 0 ]; do
     --as) AS=${2:-}; shift 2 ;;
     --machine) MACHINE=${2:-}; shift 2 ;;
     --routes) ROUTES=${2:-}; shift 2 ;;
+    --layers) LAYERS=${2:-}; shift 2 ;;
+    --repo) REPO=${2:-}; shift 2 ;;
     -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *) echo "fleet-cn-probe: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
 case "$AS" in ''|*[!a-z0-9_.-]*) echo "fleet-cn-probe: --as is a login name" >&2; exit 2 ;; esac
 case "$MACHINE" in ''|*[!A-Za-z0-9_.-]*) echo "fleet-cn-probe: --machine is a machine name" >&2; exit 2 ;; esac
+case "$REPO" in ''|*/*) ;; *) echo "fleet-cn-probe: --repo is owner/name" >&2; exit 2 ;; esac
+case "$REPO" in *[!A-Za-z0-9_./-]*) echo "fleet-cn-probe: --repo is owner/name" >&2; exit 2 ;; esac
+for n in "$STAY" "$VIEW_UP" "$ANSWER"; do case "$n" in ''|*[!0-9]*) echo "fleet-cn-probe: FLEET_CN_PROBE_STAY / _VIEW_UP / _ANSWER are seconds" >&2; exit 2 ;; esac; done
+layer_on() { case " $LAYERS " in *" $1 "*) return 0 ;; esac; return 1; }
 
 STUCK='' DETAIL='' OKS=''
 say() { printf '%s\n' "$*"; }
@@ -77,6 +106,13 @@ SSHO=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10)
 # ~/.local/bin is on PATH; the script travels on stdin, never in an argv
 on_client() {
   printf '%s\n' "$*" | ssh "${SSHO[@]}" "$CLIENT" "su - $AS -s /bin/bash" 2>&1
+}
+# shown — a screen's last lines for a detail line, the probe's own sentinel cut
+shown() { sed 's/__CNP_EXIT=[0-9]*//g; s/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'; }
+# on_client_s — a whole script on stdin, run from a file on the client so a
+# command inside it (fleet, ssh) can never read the rest of the script
+on_client_s() {
+  ssh "${SSHO[@]}" "$CLIENT" "su - $AS -s /bin/bash -c 'f=\$(mktemp) && cat > \$f && bash \$f </dev/null; rc=\$?; rm -f \$f; exit \$rc'" 2>&1
 }
 
 # client
@@ -162,4 +198,160 @@ for r in $ROUTES; do
     case "$r:$out" in entry:*'Permission denied (publickey)'*) door_why ;; esac
   fi
 done
+# ---- the person's own screens (issue #4180) ----------------------------------
+# Each runs on the client as the test login, in a tmux of the probe's own
+# (`tmux -L cnprobe`, a socket nobody else uses) so the client gets a real
+# terminal; the server is killed when the step ends.
+
+# view_script <route> — bare `fleet`: the thin client draws the pod's view
+view_script() {
+  printf 'M=%s R=%s UPS=%s STAY=%s\n' "$MACHINE" "$1" "$VIEW_UP" "$STAY"
+  cat <<'EOS'
+L=$HOME/.cache/claude-fleet/thin.log T=cnprobe
+fleet route "$M" "$R" >/dev/null 2>&1
+n0=$(cat "$L" 2>/dev/null | wc -l)
+tmux -L $T kill-server 2>/dev/null
+tmux -L $T new-session -d -s v -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet; echo __CNP_EXIT=\$?; sleep 900" || { echo "VIEW notmux"; exit 0; }
+new() { tail -n +$((n0 + 1)) "$L" 2>/dev/null; }
+up=''
+for i in $(seq 1 "$UPS"); do
+  sleep 1
+  row=$(new | awk -F '\t' '$2 == "drawn"' | tail -n 1)
+  [ -n "$row" ] && { up=$i; break; }
+  tmux -L $T capture-pane -p -t v 2>/dev/null | grep -q '__CNP_EXIT=' && break
+done
+if [ -z "$up" ]; then
+  echo "VIEW noview"
+else
+  echo "VIEW up $up $(printf '%s' "$row" | awk -F '\t' '{print $4, $7}')"
+  sleep "$STAY"
+  ended=$(new | awk -F '\t' '$2 == "end"' | tail -n 1 | cut -f2- | tr '\t' ' ')
+  alive=0; pgrep -u "$(id -u)" -f fleet-thin.py >/dev/null 2>&1 && alive=1
+  echo "VIEW stay alive=$alive end=${ended:-none}"
+fi
+tmux -L $T capture-pane -p -t v 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n 6 | sed 's/^/SCREEN /'
+tmux -L $T kill-server 2>/dev/null
+fleet route "$M" auto >/dev/null 2>&1
+EOS
+}
+view_step() {
+  local r=$1 out st scr
+  out=$(view_script "$r" | on_client_s)
+  st=$(printf '%s\n' "$out" | grep '^VIEW ' | tail -n 1)
+  scr=$(printf '%s\n' "$out" | sed -n 's/^SCREEN //p' | tail -n 2 | tr '\n' ' ')
+  case "$st" in
+    'VIEW stay alive=1 end=none')
+      if printf '%s' "$scr" | grep -qE '__CNP_EXIT=|连不上|could not|REFUSED|Permission denied'; then
+        fail "view:$r" "drawn, then an error on screen: $(printf '%s' "$scr" | shown)"
+      else
+        set -- $(printf '%s\n' "$out" | grep '^VIEW up ' | tail -n 1)
+        pass "view:$r" "bare fleet drew the pod's view in ${3:-?}s (route ${4:-?}, first ${5:-?}ms) and stayed ${STAY}s"
+      fi ;;
+    'VIEW stay '*) fail "view:$r" "drawn, then gone within ${STAY}s (${st#VIEW stay }): $(printf '%s' "$scr" | shown)" ;;
+    'VIEW noview') fail "view:$r" "bare fleet drew no view in ${VIEW_UP}s (no drawn row in thin.log): $(printf '%s' "$scr" | shown)" ;;
+    'VIEW notmux') fail "view:$r" "no tmux for $AS on the client — cannot give fleet a terminal" ;;
+    *) fail "view:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
+  esac
+}
+
+# codex_script <route> <word> — `fleet codex --new`: a new Codex session on the
+# pod answers; every session the step opened is closed again
+codex_script() {
+  printf 'M=%s R=%s W=%s SECS=%s\n' "$MACHINE" "$1" "$2" "$ANSWER"
+  cat <<'EOS'
+T=cnprobe ASK="只回一个词：$W"
+keys() { fleet ls --json 2>/dev/null | python3 -c 'import json, sys
+try: rows = json.load(sys.stdin)
+except Exception: rows = []
+for r in rows: print(r.get("key", ""))' 2>/dev/null | sort; }
+fleet route "$M" "$R" >/dev/null 2>&1
+before=$(keys)
+tmux -L $T kill-server 2>/dev/null
+tmux -L $T new-session -d -s c -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet codex --new '$ASK'; echo __CNP_EXIT=\$?; sleep 900" || { echo "CODEX notmux"; exit 0; }
+st=wait t0=$(date +%s)
+while [ $(( $(date +%s) - t0 )) -lt "$SECS" ]; do
+  sleep 3
+  scr=$(tmux -L $T capture-pane -p -t c 2>/dev/null)
+  if printf '%s\n' "$scr" | grep -F -- "$W" | grep -vqF -- '只回一个词'; then st=answered; break; fi
+  if printf '%s\n' "$scr" | grep -q '__CNP_EXIT='; then st=exited; break; fi
+done
+echo "CODEX $st $(( $(date +%s) - t0 ))"
+printf '%s\n' "$scr" | grep -v '^[[:space:]]*$' | tail -n 8 | sed 's/^/SCREEN /'
+tmux -L $T kill-server 2>/dev/null
+for k in $(comm -13 <(printf '%s\n' "$before") <(keys)); do
+  fleet close "$k" --yes >/dev/null 2>&1 && echo "CLOSED $k" || echo "LEFT $k"
+done
+fleet route "$M" auto >/dev/null 2>&1
+EOS
+}
+codex_step() {
+  local r=$1 w out st scr
+  w=CNP$(od -An -N3 -tu4 /dev/urandom 2>/dev/null | tr -dc 0-9 | cut -c1-6)
+  out=$(codex_script "$r" "$w" | on_client_s)
+  st=$(printf '%s\n' "$out" | grep '^CODEX ' | tail -n 1)
+  scr=$(printf '%s\n' "$out" | sed -n 's/^SCREEN //p' | grep -v "$w" | tail -n 3 | tr '\n' ' ' | shown)
+  printf '%s\n' "$out" | grep '^LEFT ' | while read -r _ k; do say "INFO codex:$r could not close the session $k it opened"; done
+  set -- $st
+  case "${2:-}" in
+    answered) pass "codex:$r" "a new Codex session answered $w in ${3:-?}s" ;;
+    exited) fail "codex:$r" "fleet codex --new came back without a session: $scr" ;;
+    wait) fail "codex:$r" "no answer carrying $w in ${ANSWER}s: $scr" ;;
+    notmux) fail "codex:$r" "no tmux for $AS on the client — cannot give fleet a terminal" ;;
+    *) fail "codex:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
+  esac
+}
+
+# task_script <repo> — on the pod, through `fleet connect`: a task record with
+# its ticket filed on a hosted repo, then the ticket closed (not_planned)
+task_script() {
+  printf 'M=%s REPO=%s TMO=%s\n' "$MACHINE" "$1" "$TMO"
+  cat <<'EOS'
+p=$(mktemp)
+cat > "$p" <<'POD'
+B=$HOME/.claude/fleet/bin
+if [ -z "$REPO" ]; then
+  REPO=$(sed -n 's/^FLEET_REPO="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$HOME"/.config/claude-fleet/fleets/*/repos/*.conf 2>/dev/null | head -n 1)
+fi
+[ -n "$REPO" ] || { echo "TASK norepo"; exit 0; }
+echo "TASK repo $REPO"
+out=$(printf 'fleet-cn-probe (#4180): the China real-user path, run by a machine. Closed by it at once.\n' |
+  bash "$B/fleet-task-record.sh" dispatch --title "cn-probe $(date -u +%Y-%m-%dT%H:%MZ)" --body-file - --repo "$REPO" 2>&1); rc=$?
+t=$(printf '%s\n' "$out" | grep -E '^T[0-9]+$' | head -n 1)
+u=$(printf '%s\n' "$out" | grep -E '^https?://' | head -n 1)
+echo "TASK rc=$rc t=${t:--} url=${u:--}"
+[ "$rc" = 0 ] || printf '%s\n' "$out" | tail -n 2 | sed 's/^/ERR /'
+n=${u##*/}
+case "$n" in ''|*[!0-9]*) exit 0 ;; esac
+id=$(bash "$B/fleet-ticket.sh" id "$REPO" "$n" 2>/dev/null)
+bash "$B/fleet-ticket.sh" state "$id" closed --reason not_planned >/dev/null 2>&1 && echo "TASK closed $id" || echo "TASK open $id"
+POD
+REPO=$REPO timeout "$TMO" fleet connect "$M" -- "REPO='$REPO' bash -l" < "$p" 2>&1
+rm -f "$p"
+EOS
+}
+task_step() {
+  local out ln t u why
+  out=$(task_script "$REPO" | on_client_s)
+  ln=$(printf '%s\n' "$out" | grep '^TASK rc=' | tail -n 1)
+  t=$(printf '%s' "$ln" | sed -n 's/.* t=\([^ ]*\).*/\1/p') u=$(printf '%s' "$ln" | sed -n 's/.* url=\([^ ]*\).*/\1/p')
+  case "$ln" in
+    'TASK rc=0 '*)
+      if [ "$t" != - ] && [ "$u" != - ]; then
+        pass task "$(printf '%s\n' "$out" | sed -n 's/^TASK repo //p') — record $t, ticket $u filed$(printf '%s\n' "$out" | grep -q '^TASK closed' && echo ' and closed again' || echo ' (NOT closed — close it by hand)')"
+      else
+        fail task "dispatch said 0 but printed record ${t} ticket ${u}"
+      fi ;;
+    'TASK rc='*) why=$(printf '%s\n' "$out" | sed -n 's/^ERR //p' | tr '\n' ' '); fail task "dispatch failed (${ln#TASK }): $why" ;;
+    *) case "$out" in *'TASK norepo'*) why="the pod's fleet hosts no repo" ;; *) why=$(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ') ;; esac
+       fail task "$why" ;;
+  esac
+}
+
+for r in $ROUTES; do
+  case "$r" in *[!A-Za-z0-9_.:-]*) continue ;; esac
+  layer_on view && view_step "$r"
+  layer_on codex && codex_step "$r"
+done
+layer_on task && task_step
+
 verdict

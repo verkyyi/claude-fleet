@@ -878,6 +878,34 @@ macos_watch() {
   return 0
 }
 
+# cn_probe_watch — the China real-user path, walked every few hours (issue #4180):
+# bin/fleet-cn-probe-watch.sh for each hosted repo whose base checkout carries it
+# and bin/fleet-stable.sh (business repos never). It runs only where the China
+# client's key is (the probe's own default; every other machine and login skips
+# it), throttles itself (FLEET_CN_PROBE_SECS / _RED_SECS) and takes ~5 min, so
+# detached; FLEET_CN_PROBE=0 turns it off.
+cn_probe_watch() {
+  [ "${FLEET_CN_PROBE:-1}" = 0 ] && return 0
+  [ -r "${FLEET_CN_PROBE_KEY:-$HOME/fleet-secrets/oss-drill/id_oss_drill}" ] || return 0
+  type fleet_load_conf >/dev/null 2>&1 || return 0
+  local s
+  for s in $(fleet_sockets 2>/dev/null); do
+    [ -f "$(fleet_conf_file "$s")" ] || continue
+    ( ( fleet_load_conf "$s" >/dev/null 2>&1
+      [ "${FLEET_CN_PROBE:-1}" = 0 ] && exit 0
+      fleet_repos "$s" | while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        ( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1
+          main="${FLEET_MAIN:-}"
+          [ -n "$main" ] && [ -f "$main/bin/fleet-cn-probe.sh" ] && [ -f "$main/bin/fleet-stable.sh" ] || exit 0
+          out=$(bash "$BIN/fleet-cn-probe-watch.sh" --repo "$r" --session "$s" 2>&1)
+          [ -z "$out" ] || { mkdir -p "$GDIR" 2>/dev/null
+            printf '%s %s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$r" "${out//$'\n'/ | }" >> "$GDIR/cn-probe.log" 2>/dev/null; } )
+      done ) & ) 2>/dev/null
+  done
+  return 0
+}
+
 # batch_green_watch — a batch nobody drives still has green PRs (issue #3369):
 # bin/fleet-batch-green.sh counts each stale batch's READY member PRs (prmap, one
 # REST sub-issue read per batch per FLEET_BATCH_GREEN_SECS) and says the count once
@@ -1056,6 +1084,7 @@ EOF2
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
+    cn_probe_watch                                # the China real-user path, every few hours (#4180)
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
     feedback_watch                                # /fleet-feedback's outbox: send what waited (#3358)
     docprev_watch                                 # doc-preview's server gone with docs shared: restart it (#3988)

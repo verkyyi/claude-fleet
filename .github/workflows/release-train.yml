@@ -27,7 +27,7 @@ name: release train
 #     boarded the first time there is none (fleet-stable.sh move --ref stable-macos
 #     --seed), so no Mac is ever handed a version its BSD half has not seen.
 #   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
-#     oldcfg / release.json / artifacts, no tag pushed. Any red ⇒ this train is
+#     oldcfg / release.json / artifacts / cn (issue 4180), no tag pushed. Any red ⇒ this train is
 #     red and ships nothing; the next merge starts the next one (拍板 7).
 #   * `fail-fast` (issue #3143, C4) watches the stages beside them: the first red
 #     shard, precheck or board cancels the whole run (bin/fleet-train-failfast.sh) —
@@ -507,6 +507,10 @@ jobs:
     needs: board
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: read    # gate 9 (issue #4180)
+      issues: read
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -517,6 +521,8 @@ jobs:
         env:
           SHA: ${{ needs.board.outputs.train_sha }}
           # gate 7 (issue #2631): release.json's pins must be on the hub ($FLEET_HUB_URL, above)
+          # gate 9 (issue #4180): the `cn path` status on the current stable
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           sh bin/fleet-stable.sh move "$SHA" --precheck --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
@@ -730,6 +736,8 @@ jobs:
       contents: write   # the stable tag (STABLE_PUSH_TOKEN, else GITHUB_TOKEN)
       id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
       actions: read     # --train reads this run's jobs
+      statuses: read    # gate 9 (issue #4180): the `cn path` status on the current stable
+      issues: read      # … and whether the breakage issue it names is closed
     env:
       TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
       STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
@@ -1022,6 +1030,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      statuses: write   # the `node image` status (issue #4180)
     env:
       TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
       HUB_URLS: ${{ vars.HUB_URLS }}   # the hub's addresses (hub-deploy's); the first is asked
@@ -1103,3 +1112,26 @@ jobs:
             echo '```'
             echo "部署按 digest 引用（render.py --image $REPO@$DIGEST）。"
           } >> "$GITHUB_STEP_SUMMARY"
+      # The digest where a machine can read it (issue #4180): a `node image`
+      # commit status on the commit it was built from, description
+      # `<repo>@sha256:…` — bin/fleet-cn-probe-env.sh rolls the China probe's
+      # test pod onto stable's image by it. github.com from Shenzhen now and then
+      # does not answer: tried three times, never red for the image.
+      - name: node image status
+        continue-on-error: true
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          case "$DIGEST" in sha256:*) ;; *) echo "no digest from the build — no status"; exit 0 ;; esac
+          body=$(printf '{"state":"success","context":"node image","description":"%s@%s"}' "$REPO" "$DIGEST")
+          for i in 1 2 3; do
+            if printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN" | curl -fsS -m 30 -K - -X POST \
+                 -H 'Accept: application/vnd.github+json' -d "$body" \
+                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TRAIN_SHA" >/dev/null; then
+              echo "node image status on ${TRAIN_SHA:0:7}: $REPO@$DIGEST"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::could not leave the node image status on ${TRAIN_SHA:0:7}"

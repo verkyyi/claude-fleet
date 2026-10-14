@@ -90,6 +90,8 @@ case "\$*" in
   *actions/workflows/*) cat "$WORK/macos" 2>/dev/null ;;
   *'actions/runs?head_sha='*) cat "$WORK/derived" 2>/dev/null ;;
   *actions/runs/*/jobs*) cat "$WORK/jobs" 2>/dev/null ;;
+  *'cn path'*) cat "$WORK/cnstatus" 2>/dev/null ;;
+  */issues/*) cat "$WORK/cnissue" 2>/dev/null ;;
   */statuses*) cat "$WORK/statuses" 2>/dev/null ;;
   'workflow run'*) echo "\$*" >> "$WORK/dispatched"; cat "$WORK/dispatch_to" >> "$WORK/macos" 2>/dev/null ;;
   *) cat "$WORK/checks" ;;
@@ -438,5 +440,38 @@ eq "R: with the seeded lane, stable moves past a red macOS" 0 "$RC"; eq "R: stab
 eq "R: the lane stays behind" "$C24" "$(ltag)"
 run move --seed
 eq "R: --seed without --ref stable-macos is usage" 2 "$RC"
+
+# --- S. gate 9, the China real-user path (issue #4180) -------------------------------------------
+# bin/fleet-cn-probe-watch.sh leaves `cn path` on the stable it walked; red holds stable while
+# the breakage issue it names is open. The lane above carries macOS, so only gate 9 decides here.
+green; S25=$(tag)
+C26=$(commit twentysix); push
+printf 'failure\thttps://github.com/o/r/issues/77\t不通：卡在 codex:entry — no answer\n' > "$WORK/cnstatus"
+printf 'open\n' > "$WORK/cnissue"
+run move "$C26"
+eq "S: a red China path on stable refuses" 3 "$RC"; contains "S: reason cn:" "$OUT" "REFUSED — cn:"
+contains "S: names the layer" "$OUT" "卡在 codex:entry"; contains "S: names the issue" "$OUT" "issues/77"
+eq "S: stable untouched" "$S25" "$(tag)"
+run move "$C26" --precheck
+eq "S: --precheck refuses it too" 3 "$RC"; contains "S: precheck reason cn:" "$OUT" "REFUSED — cn:"
+export FLEET_STABLE_CN_GATE=0
+run move "$C26" --dry-run
+eq "S: FLEET_STABLE_CN_GATE=0 turns it off" 0 "$RC"
+unset FLEET_STABLE_CN_GATE
+printf 'closed\n' > "$WORK/cnissue"
+run move "$C26"
+eq "S: its issue closed → the fix ships, stable moves" 0 "$RC"; eq "S: stable at C26" "$C26" "$(tag)"
+contains "S: says the issue is closed" "$OUT" "its issue is closed"
+C27=$(commit twentyseven); push; printf 'open\n' > "$WORK/cnissue"
+OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C27" --force --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "S: --force moves past a red path" 0 "$RC"
+contains "S: …and logs cn=" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	cn=the China real-user path is red"
+C28=$(commit twentyeight); push
+printf 'success\t-\t通：自动选 entry\n' > "$WORK/cnstatus"
+run move "$C28"
+eq "S: a green path moves" 0 "$RC"; contains "S: says green" "$OUT" "cn: the China real-user path is green"
+C29=$(commit twentynine); push; : > "$WORK/cnstatus"
+run move "$C29"
+eq "S: no verdict → not gated" 0 "$RC"; contains "S: says no verdict" "$OUT" 'no "cn path" verdict'
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"
