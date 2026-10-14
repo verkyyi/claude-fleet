@@ -1875,7 +1875,7 @@ drill_debug_ticket_replayed() {
   grep -q 'case p.FP != "" && p.FP != fp, p.FP == "" && row.FP != "" && row.FP != fp:' "$f" 2>/dev/null \
     || { WHY="debugTicketAuth no longer refuses a ticket used from another computer's fingerprint"; return 1; }
   grep -q 'if !row.RevokedAt.IsZero() {' "$f" || { WHY="debugTicketAuth no longer refuses a superseded ticket"; return 1; }
-  grep -q "printf '%s|%s|%s' \"\$_hw\" \"\$(id -un)\" \"\$ROOT\" | { shasum -a 256" "$ROOT/bin/fleet-install.sh" \
+  grep -q "printf '%s|%s|%s' \"\$_hw\" \"\$(id -un)\" \"\${FLEET_DEBUG_ROOT:-\$ROOT}\" | { shasum -a 256" "$ROOT/bin/fleet-install.sh" \
     || { WHY="the installer no longer sends only the hash of hwid|login|root"; return 1; }
   for t in $tests; do
     grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_debug_ticket_test.go" 2>/dev/null \
