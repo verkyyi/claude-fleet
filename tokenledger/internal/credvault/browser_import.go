@@ -1,9 +1,11 @@
 package credvault
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
@@ -75,22 +77,53 @@ func (v *Vault) ImportBrowser(ctx context.Context, owner, provider, account, tok
 	if err := v.Put(owner, provider, account, sec); err != nil {
 		return nil, false, err
 	}
+	c, err := v.cacheBrowserAccess(owner, provider, account, sec, access)
+	return c, false, err
+}
+
+// cacheBrowserAccess runs after Put, separately from the browser import lock:
+// other credential writers do not take that lock.
+func (v *Vault) cacheBrowserAccess(owner, provider, account string, expected Secret, access Access) (*store.Credential, error) {
+	sl, err := v.sealer()
+	if err != nil {
+		return nil, err
+	}
 	c, err := v.Store.Credential(owner, provider, account)
 	if err != nil {
-		return nil, false, err
+		return nil, err
+	}
+	// This version may already belong to another writer. Match the actual
+	// validated secret, not its label or stable metering ID (refresh preserves
+	// that ID while changing the token). Put alone owns the generated MeterID.
+	var saved Secret
+	if err := sl.Open(c.SecretSealed, &saved, owner, provider, account, "secret"); err != nil {
+		return nil, err
+	}
+	expected.MeterID = saved.MeterID
+	want, err := json.Marshal(expected)
+	if err != nil {
+		return nil, err
+	}
+	got, err := json.Marshal(saved)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(want, got) {
+		return nil, store.ErrCredConflict
 	}
 	// Keep the exchanged access token: do not immediately rotate a fresh refresh
-	// token a second time just to perform the first quota read.
+	// token a second time just to perform the first quota read. The CAS below
+	// refuses a replacement that lands after the comparison above.
 	if access.AccessToken != "" && access.ExpiresAt != nil {
 		accessBlob, err := sl.Seal(access, owner, provider, account, "access")
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		if err := v.Store.SaveRefresh(owner, provider, account, c.Version, c.SecretSealed, accessBlob, access.ExpiresAt, v.now()); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
-	return c, false, nil
+	return c, nil
 }
 
 // PlanMetadata exposes only explicitly stored plan information. Legacy manual
