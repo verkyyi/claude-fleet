@@ -1470,7 +1470,7 @@ drill_linux_admit_host_load() {
 }
 
 # mac-admit-load-not-busy (issue #4077): macOS counts waiting processes in its
-# load average — the macmini read load 47.2 on 15 cores (3.1/core) with the CPU
+# load average — a 15-core Mac read load 47.2 on 15 cores (3.1/core) with the CPU
 # 40 % busy, and every login's gate answered admit=false 负载过高, so no new
 # session and no pool refill anywhere. For real, through the daemon's machine
 # reading (no load stub): that reading at 40 % busy admits and the heartbeat says
@@ -1505,7 +1505,7 @@ drill_mac_admit_load_not_busy() {
   out=$(env -u FLEET_MACHINE_TASKS python3 "$BIN/fleet-machine-tasks.py" probe 2>&1)
   case "$out" in *'"cpu_busy": "'[01].[0-9][0-9][0-9]'"'*) ;; *) WHY="the machine-reading task must publish a cpu_busy share: $out"; return 1 ;; esac
   SECS=$(since "$t0")
-  WHAT="macmini 3.1/核、CPU 40%：经机器读数放行、心跳 admit:true；CPU 92% 挡且 admit_why 写「负载过高（CPU 92%）」；过 5/核硬上限仍挡；没有 cpu_busy 读数回到老负载规则；守护的读数任务发布 cpu_busy"
+  WHAT="15 核 Mac 3.1/核、CPU 40%：经机器读数放行、心跳 admit:true；CPU 92% 挡且 admit_why 写「负载过高（CPU 92%）」；过 5/核硬上限仍挡；没有 cpu_busy 读数回到老负载规则；守护的读数任务发布 cpu_busy"
 }
 
 # pod-disk-node-tmp (issue #3974): a Linux pod has no TMPDIR, and its /tmp is the

@@ -9211,7 +9211,7 @@ EOF
 #                    one, else 1.5 — a healthy 20-session afternoon reads 1.3/core
 #                    (measured 2026-10-03); the old 2 meant load 30 on 15 cores,
 #                    which never fired (issue #1831). macOS counts waiting
-#                    processes in its load: the macmini read 3.1/core at 40 % CPU
+#                    processes in its load: a 15-core Mac read 3.1/core at 40 % CPU
 #                    and held every login (#4077). FLEET_ADMIT_LOAD_PER_CORE=0
 #                    turns every CPU reading off.
 # An unreadable probe admits (no reading is not a reason to stop the fleet).

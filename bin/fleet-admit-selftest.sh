@@ -33,7 +33,7 @@
 #      drill 35 numbers): room 0 above the floor + reserved admits an ordinary
 #      spawn and notes it; the reserved sessions, pressure and the floor still
 #      hold, and FLEET_ADMIT_ROOM=hold restores the strict rule.
-#   K. the CPU-busy share decides before load/core (issue #4077, the macmini's
+#   K. the CPU-busy share decides before load/core (issue #4077, a 15-core Mac's
 #      numbers: 3.1/core at 40 % CPU): load high + CPU idle admits, CPU really busy
 #      holds naming CPU, the hard load cap still holds, no busy reading = the old
 #      load rule, the ceiling knobs and FLEET_ADMIT_LOAD_PER_CORE=0.
