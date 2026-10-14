@@ -293,6 +293,7 @@ var trialEndNote = map[string]string{
 	trialReleasePause:  "试用者先暂停，机器放回 · paused by the person",
 	trialEndTime:       "试用用完，登录收回 · trial spent, login given back",
 	trialEndMsgs:       "试用用完，登录收回 · trial spent, login given back",
+	trialEndDrill:      "演练试用者到期，机器放回 · drill trier expired",
 }
 
 // trialSlotVerdict is what the patrol does with a placed trial at now: a
