@@ -82,7 +82,7 @@ SERVICE_ACCOUNT = {'Deployment': 'fleet-user', 'Job': 'fleet-job'}
 # A person's pod runs as its login (#3757): root only in `sshd`, with only these
 # (render.POD_SSHD_CAPS), and in the `egress-guard` init with only its two; every
 # other container is runAsNonRoot, not uid 0, and adds nothing.
-ROOT_CAPS = {'sshd': {'CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL'},
+ROOT_CAPS = {'sshd': {'CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL', 'AUDIT_WRITE'},
              'egress-guard': {'NET_ADMIN', 'NET_RAW'}}
 DIGEST = re.compile(r'^[^\s]+@sha256:[a-f0-9]{64}$')
 PATHS = {

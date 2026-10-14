@@ -461,13 +461,17 @@ for _ in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/12222) 2>/dev/null && break
 sshp() { ssh -i "$tmp/door" -p 12222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -o LogLevel=ERROR -o BatchMode=yes "$@"; }
 landed=$(sshp live1@127.0.0.1 2>&1 || true)
+# pod-sshd-tty-audit (#4167): a login that asks for a terminal (the thin client's
+# attach) — sshd writes an audit record for the pty; without AUDIT_WRITE it drops it
+tty=$(sshp -tt live1@127.0.0.1 2>&1 || true)
 asroot=$(sshp root@127.0.0.1 true 2>&1 && echo IN || true)
 kill "$pf2" 2>/dev/null || true
 echo "$landed"
 case "$landed" in "ENTRY live1 10002 | "*) ;; *) fail "an ssh login with the door's key: '$landed'" ;; esac
 case "$landed" in *"| live1 root "*|*"| root live1 "*) ;; *) fail "ps in sshd during a login: '$landed' (want root + live1)" ;; esac
 case "$asroot" in *IN) fail "root logged in over ssh" ;; esac
+case "$tty" in *"ENTRY live1 10002 | "*) ;; *) fail "a terminal login was dropped: '$tty'" ;; esac
 out="fleet: $fid · ps fleet: $fu· ps sshd: $su· a login: $landed"
 echo "$out"
 { echo; echo "### root-in-user-pod"; echo '```'; echo "$out"; echo '```'; } | summary
-echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · job-sees-keys · svc-run-sees-keys · spare-pod-leaks · root-in-user-pod (kind)"
+echo; echo "PASS sa-token-in-user-pod · provisioner-off-template · job-sees-keys · svc-run-sees-keys · spare-pod-leaks · root-in-user-pod · pod-sshd-tty-audit (kind)"
