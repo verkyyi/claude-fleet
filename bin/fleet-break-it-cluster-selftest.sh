@@ -1144,7 +1144,8 @@ drill_user_pod_image_stale() {
   head -c 32 /dev/urandom > "$d/key"
   python3 "$BIN/fleet_cluster_ticket.py" pub "$d/key" > "$d/account.pub"
   tpl() { printf '{"cluster": "drill", "namespace": "fleet-workers", "user_pod": {"image": "%s", "hub": "https://hub.example.com", "storage_class": "csi", "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local"}}\n' "$1" > "$d/template.json"; }
-  local old="x@sha256:$(printf 'a%.0s' $(seq 1 64))" new="x@sha256:$(printf 'c%.0s' $(seq 1 64))"
+  local old new
+  old="x@sha256:$(printf 'a%.0s' $(seq 1 64))" new="x@sha256:$(printf 'c%.0s' $(seq 1 64))"
   tpl "$old"
   export FLEET_PROVISIONER_CONF="$d/template.json" FLEET_PROVISIONER_PUB="$d/account.pub" \
     FLEET_PROVISIONER_API="$api" FLEET_PROVISIONER_SA_DIR="$d/sa"
