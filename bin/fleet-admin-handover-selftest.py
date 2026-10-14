@@ -37,7 +37,6 @@ SUP = os.path.join(BIN, "fleet-node-supervisor.py")
 spec = importlib.util.spec_from_file_location("fns", SUP)
 fns = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fns)
-MAC = fns.MAC
 TOK = "ccq_" + "A" * 43
 
 
@@ -69,6 +68,10 @@ class Hub(object):
 
 
 class Handover(unittest.TestCase):
+    # launchd fixtures everywhere (the supervisor reads FLEET_NODE_LAUNCHCTL as
+    # launchd even on Linux CI); HandoverSystemd below is the systemd road
+    mac = True
+
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="fah.")
         self.hub = Hub()
@@ -106,6 +109,8 @@ class Handover(unittest.TestCase):
             "FLEET_CREDSEP_ROOT_BASE": os.path.join(self.d, "cred"),
             "FLEET_ADMIN_ROLE": subprocess.check_output(["id", "-un"], text=True).strip(),
         })
+        if not self.mac:
+            del self.env["FLEET_NODE_LAUNCHCTL"]
         with open(self.env["FLEET_NODE_TABLE"], "w") as f:
             json.dump({"children": [], "tasks": []}, f)
         # the seat: admin/ with admin.conf (hub=) and agent.token (root-ish 0640)
@@ -133,12 +138,12 @@ class Handover(unittest.TestCase):
         os.chmod(p, 0o640)
 
     def label(self, login):
-        return "com.ccquota.agent.%s" % login if MAC else "ccquota-agent-%s.service" % login
+        return "com.ccquota.agent.%s" % login if self.mac else "ccquota-agent-%s.service" % login
 
     def old_unit(self, login, argv=None):
         """The login's old agent unit; argv defaults to `ccquota agent --state <d>/<login>-state`."""
         argv = argv or ["/usr/local/bin/ccquota", "agent", "--state", os.path.join(self.d, login + "-state")]
-        if MAC:
+        if self.mac:
             p = os.path.join(self.dd, self.label(login) + ".plist")
             with open(p, "wb") as f:
                 plistlib.dump({"Label": self.label(login), "ProgramArguments": argv, "UserName": login}, f)
@@ -223,7 +228,7 @@ class Handover(unittest.TestCase):
         self.assertIn("handed over", r.stdout)
         self.assertFalse(os.path.exists(p), "the old unit is still in the unit directory")
         log = open(self.lclog).read()
-        self.assertIn("bootout system/com.ccquota.agent.bob" if MAC else "disable --now ccquota-agent-bob.service", log)
+        self.assertIn("bootout system/com.ccquota.agent.bob" if self.mac else "disable --now ccquota-agent-bob.service", log)
         a = self.attic()
         self.assertEqual(len(a), 1)
         self.assertTrue(a[0]["keep"], "an attic copy of the old agent must not be purged")
@@ -262,7 +267,7 @@ class Handover(unittest.TestCase):
             'echo "$*" >> %s\n'
             'case "$1" in bootout) printf %%s %s > %s ;; disable) printf %%s %s > %s ;; print|is-active) exit 3 ;; esac\n'
             'exit 0\n') % (self.lclog, json.dumps(late), state, json.dumps(late), state))
-        r = self.run_sup("admin-handover", env={"FLEET_NODE_LAUNCHCTL": lc, "FLEET_NODE_SYSTEMCTL": lc})
+        r = self.run_sup("admin-handover", env={"FLEET_NODE_LAUNCHCTL" if self.mac else "FLEET_NODE_SYSTEMCTL": lc})
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("put back", r.stdout)
         self.assertTrue(os.path.isfile(p), "an op was cut off: the old agent must come back")
@@ -308,6 +313,11 @@ class Handover(unittest.TestCase):
         self.book("bob", inflight={"c": {}, "d": {}}, state=os.path.join(home, ".ccquota"))
         self.assertIn("inflight 2", self.run_sup("admin-handover").stdout)
         self.assertTrue(os.path.isfile(p))
+
+
+@unittest.skipIf(fns.MAC, "systemd: Linux only")
+class HandoverSystemd(Handover):
+    mac = False
 
 
 if __name__ == "__main__":
