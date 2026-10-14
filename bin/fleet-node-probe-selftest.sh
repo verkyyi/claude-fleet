@@ -37,6 +37,12 @@
 #                  anthropic/openai kept; the relay in HK or refused there →
 #                  closed / unreachable; no relay (the proxy says relay:false,
 #                  or none answers) → route direct, closed as before
+#   L. central     (issue #4185) egress CN, no relay, FLEET_CRED_CENTRAL_URL set (a
+#                  person's pod): judged by the cluster credential proxy — its
+#                  refusal of a missing pass = reachable → ok, route central,
+#                  loc_local CN, no loc; the URL read off fleet.conf too; a proxy
+#                  that does not answer / a 503 → unreachable, never closed; an
+#                  ok egress never asks it
 #   J. sleepwatch  bin/fleet-node-sleepwatch.sh: not macOS → exit 3; on macOS
 #                  its selftest seam prints ready / sleep / wake
 set -u
@@ -61,6 +67,8 @@ done
 echo "$url" >>"$FAKE_CURL_LOG"
 code=""
 case "$url" in
+  *central.test/v1/proxy/anthropic/*) code="${FAKE_CENT_A:-403}" ;;
+  *central.test/v1/proxy/codex/*) code="${FAKE_CENT_O:-403}" ;;
   *cdn-cgi/trace) [ "${FAKE_LOC1:-US}" = DOWN ] && exit 6; printf 'ip=192.0.2.1\nloc=%s\n' "${FAKE_LOC1:-US}" ;;
   *ipinfo.io/*/country) printf '%s\n' "${FAKE_RLOC:-SG}" ;;
   *ipinfo.io*) [ "${FAKE_LOC2:-US}" = DOWN ] && exit 6; printf '%s\n' "${FAKE_LOC2:-US}" ;;
@@ -69,7 +77,10 @@ case "$url" in
 esac
 if [ -n "$code" ]; then
   if [ "$code" = 000 ]; then printf 000; exit 7; fi
-  [ -n "$out" ] && echo '{"error":{"type":"x"}}' >"$out"
+  case "$url" in
+    *central.test*) [ -n "$out" ] && echo '{"error":{"type":"permission_error","message":"the cluster credential proxy takes a hub session pass (fcp-h1. / fcp-h2.) only"}}' >"$out" ;;
+    *) [ -n "$out" ] && echo '{"error":{"type":"x"}}' >"$out" ;;
+  esac
   printf '%s' "$code"
 fi
 exit 0
@@ -260,6 +271,34 @@ done
 FLEET_PROBE_RELAY_CMD="echo called >>'$SB/relay.called'" probe_in k5
 [ "$(rc)" = 0 ] && [ ! -e "$SB/relay.called" ] && J k5 | grep -q '"route":"direct"' \
   && ok "K an ok egress never asks the relay" || bad "K ok egress asked the relay: $(J k5)"
+
+# ── L. central ───────────────────────────────────────────────────────────
+NORELAY="printf '%s' '{\"relay\": false}'"
+: >"$SB/curl.log"
+FAKE_LOC1=CN FAKE_LOC2=CN FLEET_CRED_CENTRAL_URL=https://central.test/ FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l
+if [ "$(rc)" = 0 ] && J l | grep -q '"loc":"","anthropic":"reachable",' \
+   && J l | grep -q '"route":"central","loc_local":"CN","central_anthropic":"reachable","central_openai":"reachable",' \
+   && J l | grep -q '"verdict":"ok"' && J l | grep -q 'route central — local: egress CN' \
+   && grep -q '^本机判断：合适 — 本机出口 CN，会话经集群凭证代理' "$SB/out" \
+   && grep -q '^https://central.test/v1/proxy/anthropic/v1/messages$' "$SB/curl.log" \
+   && grep -q '^https://central.test/v1/proxy/codex/models$' "$SB/curl.log"; then
+  ok "L pod, egress CN, sessions go central → judged by the central proxy: ok, route central"
+else bad "L central ok: rc=$(rc) json=$(J l) out=$(out)"; fi
+mkdir -p "$SB/l2/.config/claude-fleet"
+echo 'FLEET_CRED_CENTRAL_URL="https://central.test"' >"$SB/l2/.config/claude-fleet/fleet.conf"
+FAKE_LOC1=CN FAKE_LOC2=CN FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l2
+[ "$(rc)" = 0 ] && J l2 | grep -q '"route":"central"' && J l2 | grep -q '"verdict":"ok"' \
+  && ok "L the central URL read off fleet.conf" || bad "L central from fleet.conf: rc=$(rc) json=$(J l2)"
+for c in 000 503; do
+  FAKE_CENT_O=$c FAKE_LOC1=CN FAKE_LOC2=CN FLEET_CRED_CENTRAL_URL=https://central.test FLEET_PROBE_RELAY_CMD="$NORELAY" probe_in l3
+  [ "$(rc)" = 1 ] && J l3 | grep -q '"route":"central"' && J l3 | grep -q '"central_openai":"unreachable"' \
+    && J l3 | grep -q '"verdict":"unreachable"' && grep -q '^本机判断：暂不合适 — 本机出口 CN，会话经集群凭证代理' "$SB/out" \
+    && ok "L central proxy answers $c → unreachable (weather), never closed" || bad "L central $c: rc=$(rc) json=$(J l3) out=$(out)"
+done
+: >"$SB/curl.log"
+FLEET_CRED_CENTRAL_URL=https://central.test probe_in l4
+[ "$(rc)" = 0 ] && J l4 | grep -q '"route":"direct"' && ! grep -q central.test "$SB/curl.log" \
+  && ok "L an ok egress never asks the central proxy" || bad "L ok egress asked central: $(J l4)"
 
 # ── J. sleepwatch ────────────────────────────────────────────────────────
 if [ "$(uname -s)" != Darwin ]; then
