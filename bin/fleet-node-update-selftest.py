@@ -765,6 +765,36 @@ class N_ReleaseKey(Sandbox):
         self.assertIn("failed its signature check", r.stdout)
 
 
+    def test_a_signer_the_pin_vouches_for_is_a_pass(self):
+        """issue #4152: the machine pins the offline root (#3559) and the release
+        is signed by the train's key, vouched for through the manifest's
+        key_chain — the stage accepts it, so the doctor's key row must too; a
+        signer the pin does not vouch for stays FAIL."""
+        import importlib.util
+        sp = importlib.util.spec_from_file_location("rv", os.path.join(BIN, "fleet-release-verify.py"))
+        rv = importlib.util.module_from_spec(sp)
+        sp.loader.exec_module(rv)
+        self.install(V1)
+        root, signer = b"\x02" * 32, b"\x03" * 32
+        rpub, spub = rv.pub_of(root), rv.pub_of(signer)
+        with open(os.path.join(self.d, "db", "release.pub"), "w") as f:
+            f.write(rv.key_line(rpub) + "\n")
+        mpath = os.path.join(self.root, V1, ".release", "manifest.json")
+        m = json.load(open(mpath))
+        m["key"] = rv.key_id(spub)
+        m["key_chain"] = [rv.make_doc(root, {"schema": 1, "kind": "release-key", "key": rv.key_line(spub),
+                                             "role": "sign", "by": rv.key_id(rpub), "created": "2026-10-13T00:00:00Z"})]
+        self.wj(mpath, m)
+        r = self.cmd("doctor")
+        self.assertRegex(r.stdout, r"PASS  key +pinned %s · current release signed by %s, which it vouches for"
+                         % (rv.key_id(rpub), rv.key_id(spub)))
+        m["key_chain"] = []
+        self.wj(mpath, m)
+        r = self.cmd("doctor")
+        self.assertIn("FAIL  key", r.stdout)
+        self.assertIn("but the current release is signed by %s" % rv.key_id(spub), r.stdout)
+
+
 TORN = ("fetch: ccquota: signature does not match the pinned key")
 
 

@@ -123,7 +123,9 @@ class FakeGitHub(object):
 
 # The fake runner: records what it was handed, waits for `go`, then — like the
 # real one — runs the job-started hook and the job's step only when the hook
-# says yes, the step as a child named Runner.Worker; then exits (one job).
+# says yes, the step as a child named Runner.Worker; then exits (one job). The
+# hook runs as the real runner runs it: `/bin/bash -e <path>`, the path UNQUOTED
+# (a space in it split it and failed every job — issue #4152).
 RUN_SH = r"""#!/bin/bash
 env > "$HOME/seen.env.tmp" && mv "$HOME/seen.env.tmp" "$HOME/seen.env"   # whole, or not yet there (#3241)
 ps -o nice= -p $$ | tr -d ' ' > "$HOME/seen.nice"
@@ -131,7 +133,7 @@ pwd > "$HOME/seen.pwd"
 while [ ! -e "$HOME/go" ]; do sleep 0.1; done
 . "$HOME/go"   # the job's GITHUB_* context
 rm -f "$HOME/go"
-if "$ACTIONS_RUNNER_HOOK_JOB_STARTED" > "$HOME/hook.out" 2>&1; then
+if /bin/bash -e $ACTIONS_RUNNER_HOOK_JOB_STARTED > "$HOME/hook.out" 2>&1; then
   /bin/sh -c 'sleep 1.5; : Runner.Worker'
   touch "$HOME/step-ran"
 else
@@ -385,7 +387,11 @@ class T(unittest.TestCase):
         self.assertEqual(jit["body"]["runner_group_id"], 1)
         envs = dict(l.split("=", 1) for l in open(os.path.join(b.home, "seen.env")).read().splitlines() if "=" in l)
         self.assertEqual(envs["ACTIONS_RUNNER_INPUT_JITCONFIG"], "JITCONFIG-1")
-        self.assertEqual(envs["ACTIONS_RUNNER_HOOK_JOB_STARTED"], GATE)
+        gate = os.path.join(b.state, "ci-runner", "job-gate.sh")
+        self.assertEqual(envs["ACTIONS_RUNNER_HOOK_JOB_STARTED"], gate)
+        self.assertEqual(open(gate, "rb").read(), open(GATE, "rb").read())
+        self.assertEqual(os.stat(gate).st_mode & 0o7777, 0o755)
+        self.assertEqual(envs["CI_GATE_EVENTS"], "push workflow_dispatch schedule workflow_run")
         self.assertEqual(envs["HOME"], b.home)
         self.assertEqual(envs["CI_GATE_WORKFLOWS"], "release-train.yml mac-follow.yml")
         leaked = [k for k in envs if k.startswith(("FLEET_", "CCQUOTA_")) or k in ("GH_TOKEN", "GITHUB_TOKEN")]
@@ -397,7 +403,9 @@ class T(unittest.TestCase):
         tools = os.path.join(b.d, "root", "tools", "actions-runner", b.sha)
         self.assertTrue(os.path.exists(os.path.join(tools, ".ok")))
         os.unlink(os.path.join(b.home, "seen.env"))
-        b.go()
+        # the macOS follow's job (workflow_run, mac-follow.yml) is taken (#3869, #4152)
+        b.go(GITHUB_EVENT_NAME="workflow_run",
+             GITHUB_WORKFLOW_REF="verkyyi/claude-fleet/.github/workflows/mac-follow.yml@refs/heads/master")
         self.assertTrue(b.wait_state("busy"), b.book())
         self.assertTrue(until(15, lambda: (b.book().get("runs") or {}).get("total") == 1), b.book())
         self.assertTrue(os.path.exists(os.path.join(b.home, "step-ran")))
