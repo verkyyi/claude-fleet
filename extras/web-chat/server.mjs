@@ -285,6 +285,13 @@ function carryIn() {
     if (!old && home && sessions().length) { conv.home = home; saveConv(); }
     return;
   }
+  const n = restoreSessions(old, home);
+  saveConv();
+  log("home_moved", { from: old, to: home, restored: n });
+}
+// each session's carried copy put back under home's projects dir where it is
+// missing, its cwd moved from old to home (the lines' too); how many written
+function restoreSessions(old, home) {
   const rehome = (c) => c === old ? home : c.startsWith(old + "/") ? home + c.slice(old.length) : c;
   let n = 0;
   const all = sessions();
@@ -305,8 +312,7 @@ function carryIn() {
   }
   if (conv.session) conv.cwd = all.at(-1).cwd;          // the chain's entries are conv's own, rehomed in place
   conv.home = home;
-  saveConv();
-  log("home_moved", { from: old, to: home, restored: n });
+  return n;
 }
 carryIn();
 let live = null;          // the running turn: { tid, ac, listeners, asks, model }
@@ -363,8 +369,8 @@ function maintain(why) {
   })().finally(() => { maint = null; touch(); });
   return maint;
 }
-async function relay() {
-  const items = await readItems(conv.session, conv.cwd);
+// the conversation's last words, newest kept, at most 8000 characters
+function tailOf(items) {
   let tail = "";
   for (const it of items.slice().reverse()) {
     const line = it.t === "user" ? `用户：${it.text}` : it.t === "text" ? `助手：${it.d}` : "";
@@ -372,6 +378,10 @@ async function relay() {
     if (tail.length + line.length > 8000) break;
     tail = line + "\n" + tail;
   }
+  return tail;
+}
+async function relay() {
+  const tail = tailOf(await readItems(conv.session, conv.cwd));
   log("relay", { from: conv.session });
   if (conv.session) conv.chain.push({ id: conv.session, cwd: conv.cwd });
   conv.session = "";
@@ -536,6 +546,53 @@ function answer(body) {
   return true;
 }
 
+// ---- a trial's conversation leaves with its person (issue #4060) ---------------
+// The entry takes the conversation out before a trial's login is washed
+// (GET /api/export) and puts it into the clean login the person is handed next
+// (POST /api/import): every session's transcript, its cwd and home, so the page
+// reads as the one conversation, and the next turn starts a new session seeded
+// with the last words (the same relay as a too-long conversation). Only through
+// the socket — the entry is the one way in, and it keeps the export sealed to
+// the person. The import lands only on a login with no conversation of its own.
+const SID_RE = /^[A-Za-z0-9_-]{1,80}$/;
+const EXPORT_MAX = Number(E.FLEET_WEBCHAT_EXPORT_MAX || 16 * 1024 * 1024);
+async function exportConv() {
+  if (live) await new Promise((r) => { const t = setInterval(() => { if (!live) { clearInterval(t); r(); } }, 200); setTimeout(() => { clearInterval(t); r(); }, 5000); });
+  if (maint) await maint;
+  const out = [];
+  let size = 0;
+  for (const s of sessions().slice().reverse()) {           // newest first: the oldest go when it is too big
+    let jsonl = "";
+    try { jsonl = await fsp.readFile(transcriptPath(s.id, s.cwd), "utf8"); } catch {
+      try { jsonl = await fsp.readFile(join(CARRY, `${s.id}.jsonl`), "utf8"); } catch { continue; }
+    }
+    if (size + jsonl.length > EXPORT_MAX) break;
+    size += jsonl.length;
+    out.unshift({ id: s.id, cwd: s.cwd, jsonl });
+  }
+  return { v: 1, home: conv.home || E.HOME || "", sessions: out };
+}
+async function importConv(body) {
+  if (body?.v !== 1 || !Array.isArray(body.sessions) || typeof body.home !== "string" || !body.home) return [400, "not a conversation export"];
+  if (live || maint) return [409, "busy"];
+  if (conv.session || conv.chain.length) return [409, "this login already has a conversation"];
+  const ss = body.sessions.filter((s) => s && SID_RE.test(String(s.id)) && typeof s.cwd === "string" && typeof s.jsonl === "string");
+  if (!ss.length) return [200, "nothing to import"];
+  mkdirSync(CARRY, { recursive: true, mode: 0o700 });
+  for (const s of ss) {
+    writeFileSync(join(CARRY, `${s.id}.jsonl`), s.jsonl, { mode: 0o600 });
+  }
+  conv.chain = ss.map((s) => ({ id: s.id, cwd: s.cwd }));
+  conv.session = "";
+  const n = restoreSessions(body.home, E.HOME || body.home);
+  const tail = tailOf((await conversationItems()).filter((it) => it.t === "user" || it.t === "text"));
+  conv.seed = tail ? `<fleet-webchat-relay>\n（这是同一段对话的接续：换了一台机器，下面是它最后的部分，请接着它继续，不必提起这次接续。之前生成的文件不在这台机器上。）\n${tail}</fleet-webchat-relay>\n\n` : "";
+  conv.ctx = { used: 0, window: conv.ctx.window };
+  saveConv();
+  log("imported", { sessions: ss.length, restored: n });
+  return [200, "imported"];
+}
+
 // ---- routes -------------------------------------------------------------------
 async function handle(req, res) {
   const port = SOCKET ? 0 : server.address().port;
@@ -594,6 +651,11 @@ async function handle(req, res) {
       models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600) });
   }
   if (p === "/api/turn" && req.method === "POST") return turn(req, res, person);
+  if (SOCKET && p === "/api/export" && req.method === "GET") { log("export", { person }); return send(res, 200, await exportConv()); }
+  if (SOCKET && p === "/api/import" && req.method === "POST") {
+    const [code, msg] = await importConv(await readJson(req, EXPORT_MAX + 1024 * 1024));
+    return send(res, code, code === 200 ? { ok: true, msg } : { error: msg });
+  }
   if (p === "/api/stop" && req.method === "POST") {
     const ok = !!live && String((await readJson(req)).turn || "") === live.tid;
     if (ok) live.ac.abort();

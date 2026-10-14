@@ -251,6 +251,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	where := home.Machine + "/" + home.Login
+	// A conversation kept apart from a trial (claude-fleet#4060) goes into
+	// the person's home before its first read there.
+	if name == "conversation" {
+		s.seedKeptConvo(person, time.Now())
+	}
 	// The login's link ends in another replica (claude-fleet#3847): hand it
 	// the whole request, before any bound or audit here — it signs the person
 	// in again, opens the relay and audits it as its own.

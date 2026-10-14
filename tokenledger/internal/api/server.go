@@ -212,6 +212,13 @@ type Server struct {
 	chatRelays sshRelayTable
 	// chatGate holds each person's /v1/chat bounds (claude-fleet#3645).
 	chatGate chatGate
+	// trialConvoIO takes a trial's conversation out of its login and puts it
+	// into the next (claude-fleet#4060); nil = through the person's own chat
+	// relay. Tests put a stand-in here.
+	trialConvoIO trialConvoIO
+	// trialSlots holds which trials are being released now, and when the kept
+	// conversations were last purged (claude-fleet#4060).
+	trialSlotSt trialSlotState
 	// svcLogs are the service logs being followed (claude-fleet#2797): one
 	// node stream per service, however many viewers.
 	svcLogs svcLogHub
@@ -650,6 +657,8 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(TryClaimPath, s.viewerOnly(http.HandlerFunc(s.handleTryClaim)))
 		mux.Handle(TryStatePath, s.viewerOnly(http.HandlerFunc(s.handleTryState)))
 		mux.Handle(TryTimingPath, s.viewerOnly(http.HandlerFunc(s.handleTryTiming)))
+		mux.Handle(TryBeatPath, s.viewerOnly(http.HandlerFunc(s.handleTryBeat)))
+		mux.Handle(TryPausePath, s.viewerOnly(http.HandlerFunc(s.handleTryPause)))
 		mux.Handle(TryStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTryStats))))
 		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.
 		mux.Handle(AdminRequestsPath, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))

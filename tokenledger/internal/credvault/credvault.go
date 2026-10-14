@@ -19,7 +19,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -171,7 +173,10 @@ const sealVersion = 1
 // Sealer encrypts the vault's blobs with AES-256-GCM. The additional data
 // binds a blob to its row and half, so a blob copied onto another person's
 // row — or the access half pasted over the secret half — fails to open.
-type Sealer struct{ aead cipher.AEAD }
+type Sealer struct {
+	aead cipher.AEAD
+	key  []byte
+}
 
 // NewSealer builds a Sealer from a 32-byte key.
 func NewSealer(key []byte) (*Sealer, error) {
@@ -186,7 +191,16 @@ func NewSealer(key []byte) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Sealer{aead: aead}, nil
+	return &Sealer{aead: aead, key: append([]byte(nil), key...)}, nil
+}
+
+// forPerson is a Sealer under a key of principal's own, derived from this one
+// (HMAC-SHA256 over the purpose and the principal): what it seals opens only
+// under the same principal and purpose, whatever additional data says.
+func (s *Sealer) forPerson(principal, purpose string) (*Sealer, error) {
+	m := hmac.New(sha256.New, s.key)
+	m.Write([]byte("fleet-person-seal\x00" + purpose + "\x00" + principal))
+	return NewSealer(m.Sum(nil))
 }
 
 // LoadKey reads the vault key: CCQUOTA_FLEET_CRED_KEY_FILE (a path — the k8s
@@ -736,4 +750,32 @@ func (v *Vault) OpenNote(blob []byte, note any, principal, kind string) error {
 		return err
 	}
 	return sl.Open(blob, note, principal, "note", kind, "note")
+}
+
+// SealPerson / OpenPerson seal a person's own data at rest under a key
+// derived for that principal and purpose (claude-fleet#4060: a trial's kept
+// conversation). A blob sealed for one principal never opens as another's —
+// neither the key nor the additional data match.
+func (v *Vault) SealPerson(data any, principal, purpose string) ([]byte, error) {
+	sl, err := v.sealer()
+	if err != nil {
+		return nil, err
+	}
+	ps, err := sl.forPerson(principal, purpose)
+	if err != nil {
+		return nil, err
+	}
+	return ps.Seal(data, principal, "person", purpose, "data")
+}
+
+func (v *Vault) OpenPerson(blob []byte, data any, principal, purpose string) error {
+	sl, err := v.sealer()
+	if err != nil {
+		return err
+	}
+	ps, err := sl.forPerson(principal, purpose)
+	if err != nil {
+		return err
+	}
+	return ps.Open(blob, data, principal, "person", purpose, "data")
 }

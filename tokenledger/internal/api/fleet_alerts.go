@@ -79,7 +79,10 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 			}
 			s.NodeAlertTick(start, now)
 			s.SweepDrills(now) // a drill person past its life (claude-fleet#2010)
-			s.SweepTrials(now) // a trial login unused for 7 days (claude-fleet#3590)
+			// A trial's machine back on its budget (claude-fleet#4059) or on
+			// hidden · idle (claude-fleet#4060), off the tick: a release waits
+			// on its conversation's export.
+			go s.SweepTrialSlots(now)
 		}
 	}
 }

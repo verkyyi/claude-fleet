@@ -2,7 +2,7 @@
 // person pressed 「60 秒试用」 into sessionStorage (fleet.try.t0); the chat shows
 // the clock running and stops it at the first text of the first reply: 「你用了
 // 0:47」, and the hub keeps the time once, anonymously (/v1/try/timing).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const KEY = "fleet.try.t0";
 
@@ -76,4 +76,64 @@ export function useTrial(on: boolean) {
   if (!on || !st || st.state === "member") return { trial: null, secsLeft: 0, refresh };
   const secsLeft = running ? Math.max(0, st.secs_left - Math.floor(Math.max(0, now - at) / 1000)) : st.secs_left;
   return { trial: st, secsLeft, refresh };
+}
+
+// The trial's heartbeat (issue #4060): while the page is visible, every 30 s,
+// the person's last input — a key, a tap, a reply still running counts. The
+// hub gives the machine back on 2 minutes with no beat (the page closed or
+// hidden), 4 with no input (warned at 3: 「1 分钟后暂停」), or the trial's
+// limit; then the page goes to /app/try, where 继续 picks the conversation up
+// on a clean machine.
+export type Beat = { state: string; warn?: boolean; pause_in_secs?: number; left_secs?: number; reason?: string; next?: string };
+
+const H = { "X-Fleet-Try": "1", "Content-Type": "application/json" };
+
+export function useTrialBeat(on: boolean, busy: boolean) {
+  const [beat, setBeat] = useState<Beat | null>(null);
+  const input = useRef(Date.now());
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const send = useCallback(async () => {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const r = await fetch("/v1/try/beat", { method: "POST", headers: H, credentials: "same-origin",
+        body: JSON.stringify({ input_at: input.current, busy: busyRef.current }) });
+      if (!r.ok) return;
+      const b = (await r.json()) as Beat;
+      setBeat(b);
+      // spent (time · msgs) stays here on the chat's own 「用完了」; anything
+      // else that took the machine is 「已暂停」 on /app/try
+      if ((b.state === "released" && b.reason !== "time" && b.reason !== "msgs") || b.state === "waiting")
+        location.assign((b.next || "/app/try") + "?paused=1");
+    } catch { /* the next beat */ }
+  }, []);
+  useEffect(() => {
+    if (!on) return;
+    const mark = () => { input.current = Date.now(); };
+    const evs = ["keydown", "pointerdown", "touchstart", "wheel"] as const;
+    for (const e of evs) window.addEventListener(e, mark, { passive: true });
+    const vis = () => { if (document.visibilityState === "visible") void send(); };
+    document.addEventListener("visibilitychange", vis);
+    void send();
+    const t = window.setInterval(() => void send(), 30000);
+    return () => {
+      for (const e of evs) window.removeEventListener(e, mark);
+      document.removeEventListener("visibilitychange", vis);
+      clearInterval(t);
+    };
+  }, [on, send]);
+  // 「我还在」: an input, said at once
+  const stillHere = useCallback(() => { input.current = Date.now(); void send(); }, [send]);
+  // 「先暂停」: the machine goes back now, the conversation kept
+  const pause = useCallback(async () => {
+    try { await fetch("/v1/try/pause", { method: "POST", headers: H, credentials: "same-origin" }); } catch { /* the page goes anyway */ }
+    location.assign("/app/try?paused=1");
+  }, []);
+  return { beat, stillHere, pause };
+}
+
+// back on a clean machine (/app/try's 继续 → /app?resumed=<seconds>)
+export function resumedSecs(): number {
+  const v = Number(new URLSearchParams(location.search).get("resumed"));
+  return Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
 }

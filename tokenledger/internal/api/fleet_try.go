@@ -117,6 +117,13 @@ type tryAnswer struct {
 	// Applied is a tried person's request state (pending · approved ·
 	// rejected · withdrawn), "" for none.
 	Applied string `json:"applied,omitempty"`
+	// Resumed: the seat is ready with the person's kept conversation in it
+	// (claude-fleet#4060).
+	Resumed bool `json:"resumed,omitempty"`
+	// LeftSecs is the trial's machine time left; KeptUntil (unix seconds) is
+	// when a paused trial's conversation goes (state paused).
+	LeftSecs  int   `json:"left_secs,omitempty"`
+	KeptUntil int64 `json:"kept_until,omitempty"`
 }
 
 // handleTryStart: a signed-out browser gets a trial invite and is sent to
@@ -166,7 +173,7 @@ func (s *Server) handleTryClaim(w http.ResponseWriter, r *http.Request) {
 	if sess := sessionOf(r.Context()); sess != nil {
 		name = sess.Name
 	}
-	a, err := s.tryClaim(pid, name, time.Now())
+	a, err := s.tryClaimAs(pid, name, r.URL.Query().Get("resume") == "1", time.Now())
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -176,6 +183,12 @@ func (s *Server) handleTryClaim(w http.ResponseWriter, r *http.Request) {
 
 // tryClaim is the claim at now.
 func (s *Server) tryClaim(pid, name string, now time.Time) (tryAnswer, error) {
+	return s.tryClaimAs(pid, name, false, now)
+}
+
+// tryClaimAs is the claim at now; resume: the person pressed 继续 on a paused
+// trial (claude-fleet#4060).
+func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAnswer, error) {
 	t, err := s.Store.Trial(pid)
 	if err != nil {
 		return tryAnswer{}, err
@@ -187,10 +200,28 @@ func (s *Server) tryClaim(pid, name string, now time.Time) (tryAnswer, error) {
 	if err := s.Store.TouchTrial(pid, now); err != nil {
 		return tryAnswer{}, err
 	}
+	if t.State == store.TrialReclaimed && s.trialResumable(t, now) {
+		// Paused, hidden or idle with time left (claude-fleet#4060): the same
+		// trial — 「已暂停」 until they press 继续, then back in line.
+		if !resume {
+			kept := int64(0)
+			if c, err := s.Store.TrialConvo(pid, now); err == nil && c != nil {
+				kept = c.ExpiresAt.Unix()
+			}
+			secs, _ := s.trialLeft(t, now)
+			return tryAnswer{State: "paused", Reason: t.EndedReason, LeftSecs: secs, KeptUntil: kept}, nil
+		}
+		if err := s.Store.ResumeTrial(pid, now); err != nil {
+			return tryAnswer{}, err
+		}
+		if t, err = s.Store.Trial(pid); err != nil || t == nil {
+			return tryAnswer{}, err
+		}
+	}
 	if t.State == store.TrialReclaimed {
 		if s.trialOnce() {
 			// One trial per way (claude-fleet#4058): /apply is what is left.
-			return tryAnswer{State: "tried", Next: ApplyPath, Applied: s.trialApplied(pid)}, nil
+			return tryAnswer{State: "tried", Next: ApplyPath, Applied: s.trialApplied(pid), Reason: t.EndedReason}, nil
 		}
 		// Back after their machine went back: to the end of the line.
 		if err := s.Store.RejoinTrial(pid, now); err != nil {
@@ -201,6 +232,11 @@ func (s *Server) tryClaim(pid, name string, now time.Time) (tryAnswer, error) {
 		}
 	}
 	if t.State == store.TrialPlaced {
+		// The claim's own poll keeps a seat that is still opening from
+		// reading as «hidden» (claude-fleet#4060).
+		if _, err := s.Store.BeatTrial(pid, now, time.Time{}); err != nil {
+			return tryAnswer{}, err
+		}
 		return s.tryHome(pid, now)
 	}
 	if n, err := s.Store.TrialsStartedSince(trialDayStart(now)); err != nil {
@@ -251,23 +287,39 @@ func (s *Server) trialApplied(pid string) string {
 	return ""
 }
 
-// tryHome: placed — ready once their home is set, which needs the login live.
+// tryHome: placed — ready once their home is set, which needs the login live,
+// and their own kept conversation is in it (claude-fleet#4060).
 func (s *Server) tryHome(pid string, now time.Time) (tryAnswer, error) {
-	if _, ok, err := s.Store.EntryHomeOf(pid); err != nil {
-		return tryAnswer{}, err
-	} else if ok {
-		return tryAnswer{State: "ready", Next: AppPrefix}, nil
-	}
-	choices, err := s.entryHomeChoices(pid, now)
+	_, ok, err := s.Store.EntryHomeOf(pid)
 	if err != nil {
 		return tryAnswer{}, err
 	}
-	if h, err := s.entryEnsureHome(pid, choices, now); err != nil {
-		return tryAnswer{}, err
-	} else if h != nil {
-		return tryAnswer{State: "ready", Next: AppPrefix}, nil
+	if !ok {
+		choices, err := s.entryHomeChoices(pid, now)
+		if err != nil {
+			return tryAnswer{}, err
+		}
+		h, err := s.entryEnsureHome(pid, choices, now)
+		if err != nil {
+			return tryAnswer{}, err
+		}
+		if h == nil {
+			return tryAnswer{State: "opening"}, nil
+		}
 	}
-	return tryAnswer{State: "opening"}, nil
+	t, err := s.Store.Trial(pid)
+	if err != nil {
+		return tryAnswer{}, err
+	}
+	resumed, done := s.trialSeed(t, now)
+	if !done {
+		return tryAnswer{State: "opening"}, nil
+	}
+	a := tryAnswer{State: "ready", Next: AppPrefix, Resumed: resumed}
+	if t != nil {
+		a.LeftSecs, _ = s.trialLeft(t, now)
+	}
+	return a, nil
 }
 
 // handleTryTiming keeps the page's one timing, anonymously.
@@ -369,7 +421,8 @@ var tryTmpl = template.Must(template.New("try").Funcs(pageFuncs(i18n.EN)).Parse(
  data-w-busy="{{t "try.busy"}}" data-w-fail="{{t "try.fail"}}" data-w-min="{{t "try.min"}}"
  data-w-tried="{{t "try.tried"}}" data-w-applied="{{t "try.applied"}}" data-w-apply="{{t "try.apply"}}" data-w-see="{{t "try.see"}}"
  data-w-dayfull="{{t "try.dayfull"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
- data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-reach="{{t "try.reach"}}">
+ data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-reach="{{t "try.reach"}}"
+ data-w-paused="{{t "try.paused"}}" data-w-resume="{{t "try.resume"}}" data-w-resuming="{{t "try.resuming"}}" data-w-capped="{{t "try.capped"}}">
 <h1>{{t "try.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{t "try.lead"}}</p>
 <ol class="steps">
@@ -453,7 +506,7 @@ const tryScript = `(function () {
     }
     go.disabled = true;
     tick();
-    if (main.getAttribute("data-in") === "1") { claim(); return; }
+    if (main.getAttribute("data-in") === "1") { claim(false); return; }
     step(1);
     fetch("` + TryStartPath + `", { method: "POST", headers: H, credentials: "same-origin" })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -463,31 +516,54 @@ const tryScript = `(function () {
       })
       .catch(function () { say(w("fail")); go.disabled = false; });
   };
-  var claim = function () {
+  var paused = false, resumeAt = 0;
+  var claim = function (resume) {
     step(2);
-    fetch("` + TryClaimPath + `", { method: "POST", headers: H, credentials: "same-origin" })
+    if (resume) { resumeAt = Date.now(); say(w("resuming")); }
+    fetch("` + TryClaimPath + `" + (resume ? "?resume=1" : ""), { method: "POST", headers: H, credentials: "same-origin" })
       .then(function (r) { if (r.redirected || !r.ok) throw r; return r.json(); })
       .then(function (j) {
-        if (j.state === "ready" || j.state === "member") { step(3); location.assign(j.next || "/app"); return; }
-        if (j.state === "opening") { say(w("opening")); setTimeout(claim, 3000); return; }
+        if (j.state === "ready" || j.state === "member") {
+          step(3);
+          var next = j.next || "/app";
+          // back on a clean machine with their own conversation (issue #4060)
+          if (j.resumed) next += (next.indexOf("?") < 0 ? "?" : "&") + "resumed=" + Math.max(1, Math.round((Date.now() - (resumeAt || Date.now())) / 1000));
+          location.assign(next); return;
+        }
+        if (j.state === "opening") { say(w(resumeAt ? "resuming" : "opening")); setTimeout(function () { claim(false); }, 2000); return; }
+        if (j.state === "paused") {
+          // the machine went back; the conversation is kept — 继续 is the same trial
+          paused = true; clock.hidden = true;
+          var left = j.left_secs || 0, until = j.kept_until ? new Date(j.kept_until * 1000) : null;
+          say(w("paused").replace("{left}", Math.floor(left / 60) + ":" + ("0" + (left % 60)).slice(-2))
+            .replace("{until}", until ? until.toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"));
+          go.textContent = w("resume"); go.disabled = false;
+          return;
+        }
         if (j.state === "tried") {
           // One trial per account: what is left is applying.
           done = true; clock.hidden = true; sessionStorage.removeItem(KEY);
-          say(j.applied ? w("applied") : w("tried"));
+          say((j.reason === "time" || j.reason === "msgs") && !j.applied ? w("capped") : j.applied ? w("applied") : w("tried"));
           go.textContent = j.applied ? w("see") : w("apply"); go.disabled = false;
           return;
         }
-        if (j.state === "day_full") { say(w("dayfull")); setTimeout(claim, 60000); return; }
+        if (j.state === "day_full") { say(w("dayfull")); setTimeout(function () { claim(false); }, 60000); return; }
         var mins = Math.max(1, Math.round((j.eta_secs || 60) / 60));
         var why = j.reason ? w("r-" + j.reason) : "";
         say((why ? why + " " : "") + (j.position ? w("wait").replace("{n}", j.position) : w("first")).replace("{m}", mins + " " + w("min")) + " " + w("reach"));
-        setTimeout(claim, 10000);
+        // first in line asks often: a seat freed is taken within seconds
+        setTimeout(function () { claim(false); }, j.position ? 10000 : 3000);
       })
       .catch(function () { say(w("fail")); go.disabled = false; });
   };
-  go.addEventListener("click", function () { if (done) location.assign("` + ApplyPath + `"); else start(); });
+  go.addEventListener("click", function () {
+    if (done) location.assign("` + ApplyPath + `");
+    else if (paused) { paused = false; go.disabled = true; claim(true); }
+    else start();
+  });
   setInterval(tick, 250);
-  if (main.getAttribute("data-in") === "1") { if (t0) start(); else step(2); }
+  var q = new URLSearchParams(location.search);
+  if (main.getAttribute("data-in") === "1") { if (t0) start(); else if (q.get("paused") === "1") claim(false); else step(2); }
   else if (new URLSearchParams(location.search).get("go") === "1") start();
   else step(1);
 })();
@@ -525,6 +601,12 @@ func init() {
 		"try.busy":    {i18n.EN: "Many people are trying right now. Try again in a minute.", i18n.ZhCN: "试用的人太多了，过一分钟再试。"},
 		"try.fail":    {i18n.EN: "That did not go through. Press the button again.", i18n.ZhCN: "没走通，再按一次按钮。"},
 		"try.min":     {i18n.EN: "min", i18n.ZhCN: "分钟"},
+		"try.paused": {i18n.EN: "Paused. Your machine went to someone else and was wiped clean; your conversation is kept apart — only you can get it back — until {until}. Trial time left: {left}.",
+			i18n.ZhCN: "已暂停。机器已经让给别人了，上面你的东西已清干净。你的对话单独存着，只有你能取回，保存到 {until}；试用还剩 {left}。"},
+		"try.resume":   {i18n.EN: "Continue", i18n.ZhCN: "继续"},
+		"try.resuming": {i18n.EN: "Getting a clean machine and picking your conversation back up…", i18n.ZhCN: "正在换一台干净的机器，接上你的对话……"},
+		"try.capped": {i18n.EN: "This trial is used up. Found it useful? Apply — once you're in, you go on in this same conversation.",
+			i18n.ZhCN: "这次试用用完了。觉得有用？申请吧——通过后就在这段对话里接着用。"},
 	} {
 		pageText[k] = v
 	}

@@ -190,7 +190,7 @@ func (s *Server) trialHold(host string, now time.Time) string {
 func trialRoute(p string) bool {
 	switch p {
 	case "/", AppPrefix, AppPrefix + "/", ChatPagePath, "/v1/me", "/v1/me/usage",
-		TryPagePath, TryClaimPath, TryTimingPath, TryStatePath:
+		TryPagePath, TryClaimPath, TryTimingPath, TryStatePath, TryBeatPath, TryPausePath:
 		return true
 	}
 	return strings.HasPrefix(p, ChatPathPrefix)

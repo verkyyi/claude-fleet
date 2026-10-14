@@ -14,7 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { useFleetChat, type Gate } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
-import { fmtClock, useTrial, useTryClock, type TrialState } from "@/app/chat/try";
+import { fmtClock, resumedSecs, useTrial, useTrialBeat, useTryClock, type TrialState } from "@/app/chat/try";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
@@ -195,6 +197,26 @@ const TrialOver: FC<{ trial: TrialState }> = ({ trial }) => {
   );
 };
 
+// the trial's 「还在吗？」 (issue #4060): no input for 3 minutes — a minute
+// later the machine goes to the next person; the conversation is kept 24 h
+const StillHere: FC<{ open: boolean; secs: number; onStay: () => void; onPause: () => void }> = ({ open, secs, onStay, onPause }) => (
+  <AlertDialog open={open}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{tr("还在吗？", "Still there?")}</AlertDialogTitle>
+        <AlertDialogDescription>
+          {tr(`3 分钟没动静了。${secs > 0 ? `${Math.max(1, Math.round(secs / 60))} 分钟后` : "马上"}暂停，把机器让给排队的人；对话会保存 24 小时，回来接着聊。`,
+            `Nothing for 3 minutes. ${secs > 0 ? `In about ${Math.max(1, Math.round(secs / 60))} minute` : "Soon"} it pauses and the machine goes to the next person; your conversation is kept 24 hours — come back and go on.`)}
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel onClick={onPause}>{tr("先暂停", "Pause now")}</AlertDialogCancel>
+        <AlertDialogAction onClick={onStay}>{tr("我还在", "I'm here")}</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
+);
+
 export default function ChatPage() {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
@@ -206,9 +228,13 @@ export default function ChatPage() {
     blockedBy: quota?.over ? { blocked: true, ...(quota.reset ? { until: quota.reset } : {}) } : null,
     onTurnEnd: () => { bumpQuota(); void readTrial(); },
   });
-  const over = trial?.state === "ended";
+  // spent (time · lines) ends here; a pause, a hidden page or no input went
+  // back to /app/try with the conversation kept (issue #4060)
+  const over = trial?.state === "ended" && (trial.ended === "time" || trial.ended === "msgs");
   const { runtime, notice, gate } = chat;
   const home = useHome(gate?.code);
+  const beat = useTrialBeat(me?.role === "trial" && !over, chat.busy);
+  const resumed = resumedSecs();
   return (
     <ChatCtx.Provider value={{ ...chat, home, quota }}>
       <AssistantRuntimeProvider runtime={runtime}>
@@ -217,6 +243,10 @@ export default function ChatPage() {
             <BindWeChatBanner unbound={!!me?.reach && !me.reach.wechat} />
             {trial && !over ? <TrialBar trial={trial} secsLeft={secsLeft} /> : null}
             <TryClock clock={clock} />
+            {resumed ? <p role="status" className="text-muted-foreground px-4 pt-2 text-center text-[13px]">
+              {tr(`已在一台干净的机器上续上你的对话 · 用了 ${resumed} 秒`, `Picked your conversation up on a clean machine · took ${resumed} s`)}
+            </p> : null}
+            <StillHere open={!!beat.beat?.warn} secs={beat.beat?.pause_in_secs ?? 0} onStay={beat.stillHere} onPause={beat.pause} />
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">
               {over ? <TrialOver trial={trial} /> : gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
