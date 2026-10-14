@@ -42,6 +42,7 @@
 
 - [FLEET-HUB.md](dev/FLEET-HUB.md) — 入口（hub）
 - [MANAGED-NODE.md](dev/MANAGED-NODE.md) · [MANAGED-LINUX.md](dev/MANAGED-LINUX.md) — 托管机器（macOS / Linux）
+- [DOOR-SIMPLIFY.md](dev/DOOR-SIMPLIFY.md) — 门简化方案（设计，待确认）
 - [HOST.md](dev/HOST.md) — 只跑会话的 Mac 怎么设
 - [SHARED-MACHINE.md](dev/SHARED-MACHINE.md) — 一台机器一人一个登录
 - [MULTI-MACHINE-OPS.md](dev/MULTI-MACHINE-OPS.md) — 多机运维手册
