@@ -23,6 +23,7 @@ import { FeedbackPage } from "./pages/Feedback";
 import { PeoplePage } from "./pages/People";
 import { SettingsPage } from "./pages/Settings";
 import { RequestsPage } from "./pages/Requests";
+import { NoticesPage } from "./pages/Notices";
 
 const routes = [
   {
@@ -36,6 +37,7 @@ const routes = [
       { path: "machines/:host", element: <MachineDetailPage /> },
       { path: "requests", element: <RequestsPage /> },
       { path: "requests/:id", element: <RequestsPage /> },
+      { path: "notices", element: <NoticesPage /> },
       { path: "release", element: <ReleasePage /> },
       { path: "release/:run", element: <ReleasePage /> },
       { path: "pool", element: <PoolPage /> },

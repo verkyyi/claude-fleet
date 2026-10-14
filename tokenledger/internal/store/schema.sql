@@ -672,3 +672,20 @@ CREATE TABLE IF NOT EXISTS hub_notify_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_hub_notify_outbox_due ON hub_notify_outbox(state, due_at);
 CREATE INDEX IF NOT EXISTS idx_hub_notify_outbox_owner ON hub_notify_outbox(owner, kind, state);
+
+-- An admin's service notices to members (claude-fleet#4063, EPIC #4048 R1):
+-- one row per notice an admin sent — the words, at most one link, who it was
+-- for ('all' = every member at the moment it went, else the principals
+-- comma-joined, recipients the expanded list). Each recipient's copy is a
+-- hub_notify_outbox row of kind notice whose refs is this id, so how it went
+-- is read there. At most three a day (the API's rule, counted here).
+CREATE TABLE IF NOT EXISTS hub_notices (
+  id          TEXT PRIMARY KEY,
+  body        TEXT NOT NULL,
+  link        TEXT NOT NULL DEFAULT '',
+  audience    TEXT NOT NULL DEFAULT 'all',
+  recipients  TEXT NOT NULL DEFAULT '',
+  created_by  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hub_notices_created ON hub_notices(created_at);

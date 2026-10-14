@@ -685,6 +685,8 @@ func (s *Server) routes() *routeMux {
 		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.
 		mux.Handle(AdminRequestsPath, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
 		mux.Handle(adminRequestsPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
+		// 管理侧「发通知」(claude-fleet#4063): the same 404 to a member.
+		mux.Handle(AdminNoticesPath, s.viewerOnly(http.HandlerFunc(s.handleAdminNotices)))
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

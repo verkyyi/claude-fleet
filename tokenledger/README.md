@@ -975,6 +975,25 @@ is banned, 43116):
 A template unset ⇒ that kind skips straight to the customer-service message and
 the mail.
 
+**管理侧「发通知」** (claude-fleet#4063, the console's `/admin/notices`,
+`GET/POST /v1/admin/notices`): an admin writes one plain sentence — at most 300
+characters, no link inside it, at most one `https://` link beside it — for every
+member («全部成员», expanded at that moment: everyone in `hub_users`) or a few
+named ones. It is written to `hub_notices` and one desk row per member (kind
+`notice`), so each copy takes the same roads in the same order: a template to a
+follower, a customer-service message, a mail to their mail sign-in, else the
+record only. At most three in any 24 hours (429 past it, audited `denied`); each
+one is a `notice.send` row in `hub_audit`. A member is answered 404, as for the
+requests.
+
+| `CCQUOTA_WX_TPL_NOTICE` · a 「系统维护通知」-like template | |
+|---|---|
+| fields | `CCQUOTA_WX_TPL_NOTICE_FIELDS`: `<field>=<what>` pairs, what ∈ title · body · time · link; default `thing1=title,thing2=body,time3=time` |
+| title | 「ClaudeFleet 服务通知」 |
+| body | the words, on one line (a `thing` keeps 20 characters — the mail and the chat message carry them whole) |
+| time | when it was sent (UTC+8) |
+| tap → | the link, else `/app` |
+
 With neither WeChat nor a mail configured, `/signin` is GitHub's page byte for
 byte. A hub with no GitHub at all signs its sessions with `CCQUOTA_SESSION_SECRET`
 (else the first other way's own secret). All of these live in Secret `ccquota`

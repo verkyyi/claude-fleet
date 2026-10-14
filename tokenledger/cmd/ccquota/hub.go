@@ -1290,6 +1290,9 @@ func wxGatewayFromEnv(getenv func(string) string) *api.WxGateway {
 	if g.TplReview == "" || g.TplNewReq == "" {
 		log.Printf("wechat notices: CCQUOTA_WX_TPL_REVIEW / CCQUOTA_WX_TPL_NEWREQ not both set — that kind goes as a customer-service message or a mail")
 	}
+	// An admin's service notice (claude-fleet#4063): unset ⇒ the same fallback.
+	g.TplNotice = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NOTICE"))
+	g.TplNoticeFields = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NOTICE_FIELDS"))
 	return g
 }
 

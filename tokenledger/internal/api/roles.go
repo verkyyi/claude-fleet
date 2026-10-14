@@ -140,6 +140,8 @@ var routeAccess = map[string]string{
 	TryStatsPath: accessAdmin,
 	// 管理侧「申请」(claude-fleet#4052): 404 to a member, as a page is
 	AdminRequestsPath: accessAdmin, adminRequestsPrefix: accessAdmin,
+	// 管理侧「发通知」(claude-fleet#4063): 404 to a member, as the requests
+	AdminNoticesPath: accessAdmin,
 	// The ticket registry (claude-fleet#2676): a node registers with its token.
 	FleetTicketRegisterPath: accessSelf,
 	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.
