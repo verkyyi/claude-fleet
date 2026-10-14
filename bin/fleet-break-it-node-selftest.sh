@@ -258,7 +258,8 @@ drill_node_supervisor_stop_hang() {
     FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_WATCHDOG_SECS=2 FLEET_NODE_STOP_SECS=2
   python3 -I "$sb/rt/bin/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
   sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
-  until_ok 10 sh -c 'pgrep -f "$1" >/dev/null' _ "$sb/deaf.sh" \
+  # state.json, not `sh -c pgrep -f <path>`: that sh's own argv names the path
+  until_ok 10 python3 -c 'import json,os,sys; t=json.load(open(sys.argv[1]))["tasks"]["deaf"]; os.kill(int(t["pid"]), 0); sys.exit(0 if t.get("result") == "running" else 1)' "$sb/db/state.json" 2>/dev/null \
     || { WHY="the task never started: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
   t0=$(now)
   kill -TERM "$sup"   # the same stop a restart request takes
