@@ -276,6 +276,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.chatGate.release(person)
+	if name == "turn" {
+		// A trial's lines and time (claude-fleet#4059): past either, no more.
+		if code, msg := s.trialTurn(w, person, time.Now()); code != "" {
+			s.chatRefuse(w, person, name, http.StatusForbidden, code, msg)
+			return
+		}
+	}
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, chatBodyMax)
 	}

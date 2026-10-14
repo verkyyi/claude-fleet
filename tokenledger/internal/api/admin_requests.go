@@ -94,11 +94,12 @@ type requestTrialView struct {
 	PlacedAt    *time.Time `json:"placed_at,omitempty"`
 	LastSeen    *time.Time `json:"last_seen,omitempty"`
 	ReclaimedAt *time.Time `json:"reclaimed_at,omitempty"`
-	// Minutes is how long they had a machine: placed → last seen.
+	// Minutes is how long they had a machine (used_secs + the seat held).
 	Minutes int `json:"minutes"`
-	// Messages is how many they sent, when the trial counts them (C12).
+	// Messages is how many lines they sent (claude-fleet#4059).
 	Messages *int `json:"messages,omitempty"`
-	// Ended is why it ended (C12's reasons), "" while it runs.
+	// Ended is why it ended — time · msgs · approved (C12 adds its own) —
+	// "" while it runs.
 	Ended string `json:"ended,omitempty"`
 }
 
@@ -255,11 +256,12 @@ func (s *Server) writeRequestDetail(w http.ResponseWriter, code int, req *store.
 	if d.Trial {
 		if t, err := s.Store.Trial(d.Person); err == nil && t != nil {
 			tv := &requestTrialView{State: t.State, StartedAt: t.StartedAt, PlacedAt: timePtr(t.PlacedAt),
-				LastSeen: timePtr(t.LastSeen), ReclaimedAt: timePtr(t.ReclaimedAt)}
-			if !t.PlacedAt.IsZero() && t.LastSeen.After(t.PlacedAt) {
-				tv.Minutes = int(t.LastSeen.Sub(t.PlacedAt).Round(time.Minute) / time.Minute)
-			}
-			if t.State == store.TrialReclaimed {
+				LastSeen: timePtr(t.LastSeen), ReclaimedAt: timePtr(t.ReclaimedAt), Ended: t.EndedReason}
+			// Their time on a machine and lines sent (claude-fleet#4059).
+			tv.Minutes = int(t.Used(time.Now()).Round(time.Minute) / time.Minute)
+			msgs := t.Msgs
+			tv.Messages = &msgs
+			if t.State == store.TrialReclaimed && tv.Ended == "" {
 				tv.Ended = "reclaimed"
 			}
 			d.TrialOf = tv
@@ -353,7 +355,8 @@ func (s *Server) admitRequest(req *store.AccessRequest, by string, now time.Time
 	if err != nil {
 		return "", err
 	}
-	if role == "" {
+	if role == "" || role == roleTrial {
+		// A trial person becomes a member here (claude-fleet#4059).
 		name := strings.TrimSpace(req.Display)
 		if name == "" {
 			name = req.Subject
@@ -367,12 +370,12 @@ func (s *Server) admitRequest(req *store.AccessRequest, by string, now time.Time
 			return "", err
 		}
 	}
-	// A trial person is on the list already (their trial's invite); the
-	// approval is what makes them a member — C11 turns the trial over.
 	if err := s.Store.AddHubIdentity(store.HubIdentity{Kind: req.Kind, Subject: req.Subject, PrincipalID: pid,
 		VerifiedAt: now, AddedBy: "request " + req.ID}); err != nil {
 		return "", err
 	}
+	// Their trial turns over: the conversation goes on (claude-fleet#4059).
+	s.convertTrial(pid, req.Display, by, now)
 	_ = s.Store.HubAudit(by, "user.add", target, "ok", "as user, request "+req.ID, now)
 	return pid, nil
 }
