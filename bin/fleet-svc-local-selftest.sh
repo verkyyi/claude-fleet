@@ -143,5 +143,16 @@ echo 4 > "$WORK/n"; one 4 1; rc=$?
   && ok "E a second start of one attempt is refused, the first's directory untouched" || bad "E rc=$rc"
 rmdir "$WORK/runs/R4-a1"
 
+# F: the agent starts it with root's PATH (no ~/.local/bin) and no FLEET_SVC_CLAUDE —
+# the login's own ~/.local/bin/claude (the managed link) is found before HOME moves
+mkdir -p "$WORK/realhome/.local/bin"; cp "$WORK/bin/claude" "$WORK/realhome/.local/bin/claude"
+echo 5 > "$WORK/n"
+printf '%s\n' "$KEY" | env -u FLEET_SVC_CLAUDE HOME="$WORK/realhome" PATH=/usr/bin:/bin FLEET_SVC_RUN=R5 FLEET_SVC_ATTEMPT=1 \
+  FLEET_SVC_DEADLINE=120 FLEET_SVC_HUB="$HUB" FLEET_SVC_CENTRAL="$HUB" bash "$L" run >"$WORK/run-5.out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q '^/v1/node/svc-runs/R5/result .*"exit": 0' "$WORK/results" \
+  && ok "F with root's PATH the login's ~/.local/bin/claude runs it" \
+  || bad "F rc=$rc: $(tail -3 "$WORK/run-5.out" | tr '\n' ' ') $(grep R5 "$WORK/results")"
+settle || bad "F a process of run 5 outlived it"
+
 [ "$fail" = 0 ] && echo "svc-local selftest: PASS" || echo "svc-local selftest: FAIL"
 exit "$fail"
