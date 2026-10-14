@@ -335,7 +335,7 @@ MCP、`/v1/fleet/*` 的管理员口都认它。泄露过（进过 argv、日志�
 全程不打印、不落盘、不进 argv（`--patch-file=/dev/stdin`、curl `-K -`、`gh secret set` 读 stdin）：
 
 ```bash
-NS=new-deploy HUB=https://claudefleet.24haowan.com
+NS=new-deploy HUB=https://<入口域名>
 code(){ printf 'header = "Authorization: Bearer %s"\n' "$1" | curl -s -o /dev/null -w '%{http_code}' -K - "$HUB$2"; }
 OLD=$(kubectl -n $NS get secret ccquota -o jsonpath='{.data.viewer-token}' | base64 -d)
 python3 -c 'import secrets,json,base64;print(json.dumps([{"op":"replace","path":"/data/viewer-token","value":base64.b64encode(secrets.token_hex(24).encode()).decode()}]))' \
