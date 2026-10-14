@@ -2,7 +2,8 @@
 // /app/machines/<host> moves here — one machine's details are the admin's,
 // 拍板 2). On one page: its state and the two writes the list had per card
 // (维护 / 结束维护 behind today's confirm, 移除), 负载与内存 (its trend as a
-// shadcn Chart), 版本与更新, 门与连接, 登录账号, 会话, 服务与定时任务 (a row's
+// shadcn Chart), 版本与更新, 安装 (#2697: runtime · login installs · client
+// shells, each against stable), 门与连接, 登录账号, 会话, 服务与定时任务 (a row's
 // Sheet: its actions and its live log) and which subscriptions its sessions may
 // use. Reads /v1/nodes/<host> (re-read every 10 s while the tab is shown),
 // /v1/nodes (its door and endpoints), /version, /v1/fleet/ci-runners; writes
@@ -47,6 +48,7 @@ import {
   sessionState,
   short,
   type CIRunner,
+  type InstallItem,
   type MachineRow,
   type NodeDetail,
   type NodesSnapshot,
@@ -209,6 +211,8 @@ export function MachineDetailPage() {
         <DoorCard d={d} row={row} runner={st.runner} />
       </div>
 
+      <InstallsCard d={d} />
+
       <SessionsCard d={d} />
 
       <Card className="gap-0 pb-0">
@@ -279,10 +283,11 @@ export function MachineDetailPage() {
 
 // ---- pieces -----------------------------------------------------------------
 
-function Fresh({ at }: { at: string | null | undefined }) {
+// warnAfter: a reading taken on a slower clock (安装, every 5 min) warns later.
+function Fresh({ at, warnAfter = 60 }: { at: string | null | undefined; warnAfter?: number }) {
   if (!at) return <span className="text-xs text-muted-foreground">{tm("d.unknownTime")}</span>;
   const age = (Date.now() - Date.parse(at)) / 1000;
-  return <span className={cn("text-xs", age > 300 ? "text-muted-foreground/60" : age > 60 ? "text-warn" : "text-muted-foreground")}>{tm("d.measured", { when: ago(at) })}</span>;
+  return <span className={cn("text-xs", age > Math.max(300, warnAfter * 2) ? "text-muted-foreground/60" : age > warnAfter ? "text-warn" : "text-muted-foreground")}>{tm("d.measured", { when: ago(at) })}</span>;
 }
 
 function SvcBadge({ s }: { s: ServiceRow }) {
@@ -453,6 +458,107 @@ function VersionCard({ d, row, stable }: { d: NodeDetail; row: MachineRow | null
             )}
           </KV>
         </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+function dur(secs: number): string {
+  const m = Math.floor(secs / 60);
+  if (m < 120) return tm("d.dur.m", { n: m });
+  if (m < 2880) return tm("d.dur.h", { h: Math.floor(m / 60), m: m % 60 });
+  return tm("d.dur.d", { n: Math.floor(m / 1440) });
+}
+
+function InstState({ it }: { it: InstallItem }) {
+  if (it.at_stable === true)
+    return (
+      <Badge variant="outline" className="border-ok/40 font-normal text-ok">
+        {tm("d.inst.at")}
+      </Badge>
+    );
+  if (it.at_stable === false)
+    return (
+      <Badge variant="outline" className="border-warn/50 font-normal text-warn">
+        {it.behind_secs != null ? tm("d.inst.behindFor", { d: dur(it.behind_secs) }) : tm("d.inst.behind")}
+      </Badge>
+    );
+  return (
+    <Badge variant="outline" className="font-normal text-muted-foreground">
+      {tm("d.inst.unknown")}
+    </Badge>
+  );
+}
+
+const srcKey: Record<string, MKey> = {
+  hub: "d.inst.src.hub",
+  runtime: "d.inst.src.runtime",
+  github: "d.inst.src.github",
+  dev: "d.inst.src.dev",
+};
+
+// 安装 (claude-fleet#2697): what each heartbeat's fleet-installs.sh read, one
+// row per install, judged by the hub against the stable it follows.
+function InstallsCard({ d }: { d: NodeDetail }) {
+  const ins = d.machine.installs;
+  type Row = { what: MKey; login: string; it: InstallItem; note?: string };
+  const rows: Row[] = [];
+  if (ins?.runtime) rows.push({ what: "d.inst.runtime", login: "—", it: ins.runtime });
+  for (const l of ins?.logins || []) {
+    if (l.install) rows.push({ what: "d.inst.install", login: l.login, it: l.install, note: l.install.kind === "dir" ? tm("d.inst.plain") : undefined });
+    if (l.shell) rows.push({ what: "d.inst.shell", login: l.login, it: l.shell, note: tm(l.shell.follows ? "d.inst.follows" : "d.inst.pinned") });
+    if (l.client) rows.push({ what: "d.inst.client", login: l.login, it: l.client });
+  }
+  const ok = rows.filter((r) => r.it.at_stable === true).length;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="font-display text-base">{tm("d.installs")}</CardTitle>
+        <CardDescription>
+          {tm("d.installsLead")}
+          {!!rows.length && (
+            <span className={cn("mt-1 block", ok < rows.length && "text-warn")}>
+              {ins?.stable ? tm("d.installsSum", { ok, n: rows.length, s: short(ins.stable) }) : tm("d.installsSumNo")}
+            </span>
+          )}
+        </CardDescription>
+        <CardAction>
+          <Fresh at={ins?.at} warnAfter={900} />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {!rows.length ? (
+          <p className="text-sm text-muted-foreground">{tm("d.installsNone")}</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{tm("d.inst.what")}</TableHead>
+                <TableHead className="hidden sm:table-cell">{tm("d.inst.login")}</TableHead>
+                <TableHead>{tm("d.inst.version")}</TableHead>
+                <TableHead className="hidden sm:table-cell">{tm("d.inst.source")}</TableHead>
+                <TableHead>{tm("d.inst.state")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r, i) => (
+                <TableRow key={i}>
+                  <TableCell>
+                    {tm(r.what)}
+                    {r.login !== "—" && <span className="block font-mono text-xs text-muted-foreground sm:hidden">{r.login}</span>}
+                    {r.note && <span className="block text-xs text-muted-foreground">{r.note}</span>}
+                  </TableCell>
+                  <TableCell className="hidden font-mono text-xs sm:table-cell">{r.login}</TableCell>
+                  <TableCell className={cn("font-mono text-xs", r.it.at_stable === false && "text-warn")}>{short(r.it.version) || "—"}</TableCell>
+                  <TableCell className="hidden text-muted-foreground sm:table-cell">{tm(srcKey[r.it.source || ""] || "d.inst.src.unknown")}</TableCell>
+                  <TableCell>
+                    <InstState it={r.it} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </CardContent>
     </Card>
   );

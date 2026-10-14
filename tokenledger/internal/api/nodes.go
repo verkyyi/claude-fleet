@@ -959,6 +959,10 @@ type NodeView struct {
 	Fleets       []NodeFleetSummary `json:"fleets"`
 	FleetError   string             `json:"fleet_error,omitempty"`
 	FleetVersion string             `json:"fleet_version,omitempty"`
+	// Installs is this login's installs as its beat read them
+	// (claude-fleet#2697) — the script's own at_stable; the machine's
+	// Installs is the hub's judgement.
+	Installs *control.Installs `json:"installs,omitempty"`
 
 	// Kind is fixed, or ephemeral for a SPOT node the hub started
 	// (claude-fleet#1428); Spot is that node's ledger state while it lives.
@@ -1059,6 +1063,12 @@ type MachineView struct {
 	// /v1/fleet/summary carries machines only, so without it a sidebar read
 	// every machine as "no fleet version reported". Absent when none did.
 	FleetVersion string `json:"fleet_version,omitempty"`
+	// Installs is the machine's 「安装」 (claude-fleet#2697): its runtime and
+	// every heard login's install, client shell and client install, each
+	// judged against the stable this hub follows (Stable — the Mac lane's
+	// for a machine on it; at_stable nil when the hub knows none). Absent
+	// when no login reported one.
+	Installs *control.Installs `json:"installs,omitempty"`
 	// ComputeOff: every login of the machine only coordinates
 	// (claude-fleet#1719) — nothing is placed on it.
 	ComputeOff bool `json:"compute_off,omitempty"`
@@ -1176,8 +1186,9 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	peers := s.peerConns() // nil on a single hub (claude-fleet#2124)
 	aliases := s.staticAliases(settings)
 	machines := map[string]*MachineView{}
-	fleetVerAt := map[string]time.Time{} // when each machine's FleetVersion was heard
-	sysBest := map[string]*sysPick{}     // each machine's load reading so far (#2798)
+	fleetVerAt := map[string]time.Time{}   // when each machine's FleetVersion was heard
+	installs := map[string]*installsPick{} // each machine's installs so far (#2697)
+	sysBest := map[string]*sysPick{}       // each machine's load reading so far (#2798)
 	order := []string{}
 	// The register rides the machine link's beat (claude-fleet#2526), a row
 	// a person never sees — its entries are narrowed one by one below.
@@ -1309,6 +1320,20 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if v.FleetVersion != "" && v.LastHeartbeat != nil {
 			if at, ok := fleetVerAt[v.Hostname]; !ok || v.LastHeartbeat.After(at) {
 				m.FleetVersion, fleetVerAt[v.Hostname] = v.FleetVersion, *v.LastHeartbeat
+			}
+		}
+		if v.Installs != nil {
+			if installs[v.Hostname] == nil {
+				installs[v.Hostname] = &installsPick{logins: map[string]installsLogin{}}
+			}
+			installs[v.Hostname].add(v.Installs)
+		}
+	}
+	if len(installs) > 0 {
+		stable, mac := s.stableCommit(), s.Releases.MacStableSHA()
+		for h, pk := range installs {
+			if m := machines[h]; m != nil {
+				m.Installs = pk.judged(stable, mac)
 			}
 		}
 	}
@@ -1443,6 +1468,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
+		v.Installs = hb.Installs
 		v.Credsep = hb.Credsep
 		v.Gate = hb.Gate
 		v.LoginsRefused = hb.LoginsRefused

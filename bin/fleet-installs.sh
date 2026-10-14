@@ -60,6 +60,8 @@
 # (the stable commit), FLEET_NODE_ROOT (the runtime root), FLEET_NODE_STATE (the
 # machine updater's state dir), FLEET_INSTALLS_NOW (the clock), FLEET_LIVE_DIR,
 # FLEET_INSTALLS_HUB (the hub's address; empty = none), FLEET_PLATFORM.
+# FLEET_INSTALLS_LOGIN=<name> reads that one home only — the agent's heartbeat
+# (issue #2697) asks each login for its own, with no sudo and no hub.
 set -u
 as_json=0
 case "${1:-}" in
@@ -88,12 +90,12 @@ hub="${FLEET_INSTALLS_HUB-${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}}"
 exec python3 - "$as_json" "${FLEET_INSTALLS_HOMES:-$homes_default}" "${FLEET_INSTALLS_SUDO-sudo -n}" \
   "$stable" "${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}" \
   "${FLEET_NODE_STATE:-/var/db/fleet-node}" "${FLEET_INSTALLS_LAG_WARN:-1800}" "${FLEET_INSTALLS_NOW:-}" \
-  "$lane" "${plat:-?}" "${hub%/}" <<'PY'
+  "$lane" "${plat:-?}" "${hub%/}" "${FLEET_INSTALLS_LOGIN:-}" <<'PY'
 import json, os, re, socket, subprocess, sys, time
 
 mode = sys.argv[1]
 as_json, homes, sudo, stable, root = mode == "1", sys.argv[2], sys.argv[3].split(), sys.argv[4], sys.argv[5]
-lane, plat, hub = sys.argv[9], sys.argv[10], sys.argv[11]
+lane, plat, hub, only = sys.argv[9], sys.argv[10], sys.argv[11], sys.argv[12]
 node_state = sys.argv[6]
 try:
     lag_warn = int(sys.argv[7])
@@ -275,7 +277,7 @@ except OSError:
     entries = []
 for name in entries:
     home = os.path.join(homes, name)
-    if not os.path.isdir(home) or name.startswith("."):
+    if not os.path.isdir(home) or name.startswith(".") or (only and name != only):
         continue
     r = probe(home)
     if r is None:
