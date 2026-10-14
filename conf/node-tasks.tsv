@@ -17,6 +17,11 @@
 #                     collector publishes a session count above 0
 #                     (fleet_machine_sessions_publish); a login with no session
 #                     keeps no such process. No count, or a stale one ⇒ it runs.
+#           worker  — a login loop that asks GitHub for the login's worker windows
+#                     (issue #4231): run while the collector counts a session,
+#                     awake OR asleep (the row's third field), so a spare login
+#                     with no session asks GitHub nothing and a hibernated worker
+#                     still gets its comments. No count, or a stale one ⇒ it runs.
 #   what    one line: what it does and, for a login loop, why it cannot be the machine's
 #
 # A new loop is a new row, and its class is a decision: a machine row's answer
@@ -30,11 +35,11 @@ collect	unit	login	the dash collector for the login's tmux server
 cred-proxy	unit	login	the login's credential proxy (a relay to the shared one when the machine has it)
 diskguard	unit	login	the login's tick (restore, home pane, pool, cert, inbox); the orphan watchdog is the machine's
 install-sync	unit	login	follows stable for the login's install (a managed login answers off · follows the runtime)
-issue-bridge	unit	login	relays the login's issue comments into its sessions
+issue-bridge	unit	worker	relays the login's issue comments into its sessions: nothing to relay into with no worker window
 ledger-watch	unit	login	the login's child-report ledgers
 memguard	unit	machine	the machine's memguard template: never run per login (the machine table's memguard is the one copy)
 peerlink	unit	login	the login's links into other machines' views
-pr-refresh	unit	login	gh pr list for the login's own repos with its own token; stamps its tmux windows
+pr-refresh	unit	worker	gh pr list for the login's own repos with its own token; stamps its tmux windows: none to stamp with no worker window
 quotawatch	unit	login	the login's account quota policy and its sessions' warnings
 sleep	unit	login	hibernates the login's idle sessions
 spinner	unit	session	animates the login's session windows: nothing to animate with no session

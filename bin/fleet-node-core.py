@@ -101,6 +101,18 @@ fake passwd also names the seat) · FLEET_NODE_TEST=1.
 """
 from __future__ import print_function
 
+import os
+import sys
+
+# The node daemon's stand-in (`call … --follow`, one per account job a minute):
+# it needs the wire alone. Importing the rest below compiled the supervisor's 8k
+# lines again in every stand-in — 0.25 s of CPU each, a few a second on a machine
+# of nine logins (issue #4231).
+if __name__ == "__main__" and sys.argv[1:2] == ["call"]:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fleet_node_core
+    sys.exit(fleet_node_core.cli_call(sys.argv[2:]))
+
 import base64
 import collections
 import grp
@@ -388,6 +400,48 @@ def stop_group(pid, grace=5.0, group=True):
             except OSError:
                 continue
     return not sup.pid_alive(pid)
+
+
+def stray_copies(ent, held=()):
+    """The live copies of an account unit no book of this core holds (issue #4231):
+    an orphan (PPID 1) running as the unit's login that reads as the unit
+    (sup.account_proc_is). A core restart — every release switch — forgot the jobs
+    it ran, and they ran on: the new core started another copy at the next run-as,
+    and stop-as could not stop the old one. A 15-core machine was found with eight
+    fleet-webhook.sh of one login and four of a login with no session. Only a unit
+    of the account table, never a service or an agent task."""
+    if not ent.get("unit") or not ent.get("uid"):
+        return []
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,uid=,command="], stderr=subprocess.DEVNULL,
+                                      timeout=20).decode("utf-8", "replace")
+    except Exception:
+        return []
+    found = []
+    for line in out.splitlines():
+        w = line.split(None, 3)
+        if len(w) < 4 or not (w[0].isdigit() and w[1] == "1" and w[2].isdigit()):
+            continue
+        pid = int(w[0])
+        if pid in held or int(w[2]) != ent["uid"] or not sup.account_proc_is(ent, w[3]):
+            continue
+        found.append(pid)
+    return found
+
+
+def stop_strays(ent, held=()):
+    """Stop every stray copy of <ent> (stray_copies) -> how many went. A copy that
+    leads its own group (a job of ours: start_new_session) goes with its group —
+    the webhook's handler with it."""
+    n = 0
+    for pid in stray_copies(ent, held):
+        try:
+            group = os.getpgid(pid) == pid
+        except OSError:
+            continue
+        if stop_group(pid, group=group):
+            n += 1
+    return n
 
 
 # ------------------------------------------------------------- releases --------
@@ -848,6 +902,15 @@ class Core(object):
             old = self.jobs.get(key)
             if old is not None and old.poll() is None:
                 return {"error": "running", "pid": old.pid}
+        if ent.get("keepalive"):
+            # one copy of a resident unit (#4231): what an earlier core left running goes first
+            n = stop_strays(ent, self.held())
+            if n:
+                self.log(self.tl.uid, "run-as", a, "stopped %d stray cop%s" % (n, "y" if n == 1 else "ies"))
+        with self.lock:
+            old = self.jobs.get(key)
+            if old is not None and old.poll() is None:
+                return {"error": "running", "pid": old.pid}
             e = ent["env"]
             if ent.get("service"):
                 sup.service_logdir(ent)
@@ -874,9 +937,28 @@ class Core(object):
             raise Refused(None, "login %r is not a login name" % a["login"])
         with self.lock:
             p = self.jobs.get((a["login"], a["job"]))
-        if p is None or p.poll() is not None:
-            return {"ok": True, "stopped": False}
-        return {"ok": True, "stopped": stop_group(p.pid)}
+        stopped = stop_group(p.pid) if p is not None and p.poll() is None else False
+        # and a copy an earlier core started (#4231): no book holds it, so before
+        # this a login's session unit stopped for «no session» ran on for days
+        strays = self.strays_of(a["login"], a["job"])
+        if strays:
+            self.log(self.tl.uid, "stop-as", a, "stopped %d stray cop%s" % (strays, "y" if strays == 1 else "ies"))
+        return {"ok": True, "stopped": bool(stopped or strays)}
+
+    def held(self):
+        with self.lock:
+            return set(p.pid for p in self.jobs.values() if p.poll() is None)
+
+    def strays_of(self, login, job):
+        """stop_strays for (login, job) of the account table — a released login's too."""
+        ident = sup.account_ident(login)
+        if ident is None or ident[0] == 0 or job.startswith(("svc:", "task:")):
+            return 0
+        try:
+            ent = resolve_job(self.p, login, job, ident)
+        except Refused:
+            return 0
+        return stop_strays(ent, self.held()) if ent.get("keepalive") else 0
 
     def op_exec_as(self, conn, a):
         uid, gid, home = managed_login(self.p, a["login"])
@@ -1267,68 +1349,7 @@ class Core(object):
 
 
 # ------------------------------------------------------------- the client ------
-def cli_call(rest):
-    follow = "--follow" in rest
-    rest = [x for x in rest if x != "--follow"]
-    if not rest:
-        print("usage: fleet-node-core.py call <op> [<args JSON>] [--follow]", file=sys.stderr)
-        return 1
-    op = rest[0]
-    try:
-        args = json.loads(rest[1]) if len(rest) > 1 else {}
-    except ValueError:
-        print("fleet-node-core: args are not JSON", file=sys.stderr)
-        return 1
-    try:
-        c = wire.Conn(op, args)
-    except OSError as e:
-        print("fleet-node-core: no core at %s (%s)" % (wire.sock_path(), e), file=sys.stderr)
-        return 1
-    try:
-        r = c.reply()
-    except OSError:      # cut off (a peer it does not take): a reset on Linux
-        r = None
-    r = r or {"error": "the core closed the connection"}
-    print(json.dumps(r, sort_keys=True))
-    sys.stdout.flush()
-    if "refused" in r:
-        return 2
-    if not r.get("ok"):
-        return 1
-    if not (follow and (op == "run-as" or (op == "machine" and args.get("action") == "start"))):
-        return 0 if r.get("rc", 0) == 0 else r["rc"] if isinstance(r.get("rc"), int) and 0 < r["rc"] < 256 else 1
-
-    # the job runs under the core; this process stands in for it under the node
-    # daemon — its exit is the job's, a TERM to it stops the job first
-    pid = r.get("pid")
-
-    def term(*_):
-        try:
-            if op == "machine":
-                wire.call("machine", {"job": args.get("job"), "action": "stop"}, timeout=15)
-            else:
-                wire.call("stop-as", {"login": args.get("login"), "job": args.get("job")}, timeout=15)
-        except (OSError, ValueError):
-            pass
-    signal.signal(signal.SIGTERM, term)
-    signal.signal(signal.SIGINT, term)
-    while True:
-        try:
-            r = c.reply()
-            break
-        except InterruptedError:
-            continue
-        except OSError:
-            r = None
-            break
-    c.close()
-    if r is not None and isinstance(r.get("exit"), int):
-        rc = r["exit"]
-        return rc if 0 <= rc < 256 else 128 + (-rc) if rc < 0 else 1
-    # the core went (a restart): stand in until the job itself has gone
-    while pid and sup.pid_alive(pid):
-        time.sleep(1)
-    return 0
+cli_call = wire.cli_call
 
 
 def status(paths, check=False):

@@ -15,6 +15,9 @@
 #   node-core-old-code    bin/fleet-node-core.py maybe_restart / code_files (#3959): a switch
 #                         that changed only a sibling the core loaded (the supervisor's sweep)
 #                         left the core on the old code — the old sweep booted the core out
+#   core-restart-leaks-loops bin/fleet-node-core.py stray_copies / op_run_as / op_stop_as +
+#                         fleet-node-supervisor.py sweep_strays · the `worker` class (#4231):
+#                         a core restart left its resident jobs running beside the next copy
 #   node-supervisor-dead  bin/fleet-node-supervisor.py (install's KeepAlive +
 #                         ThrottleInterval, run's adopt + state.json, status --check),
 #                         bin/fleet-doctor.sh's `node` row
@@ -1537,6 +1540,27 @@ drill_node_core_old_code() {
     || { WHY="a switch that changed only a sibling left the core on old code: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="切换只改了核心加载的同目录文件（守护的 sweep）：核心回完话就退出、launchd 用新代码拉起；代码没变的切换不重启核心"
+}
+
+# core-restart-leaks-loops (#4231): the root core restarts on every switch (#3959)
+# and forgot the resident account jobs it ran — each ran on, the next run-as
+# started another beside it, stop-as could not stop it, and the seated daemon's
+# stray sweep was off. A 15-core managed Mac sat at load 34: eight webhooks of one
+# login, four of a login with no session, and every spare login's issue-bridge /
+# pr-refresh asking GitHub every 15 s through a stand-in that compiled the
+# supervisor's 8k lines each time.
+drill_core_restart_leaks_loops() {
+  CAP=120
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-core-selftest.py" \
+          C_RunAs.test_a_core_restart_leaves_no_second_copy 2>&1) \
+    || { WHY="a killed core's resident job still runs beside the next copy: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-supervisor-selftest.py" \
+          V_SessionUnits.test_spare_login_runs_no_github_job 2>&1) \
+    || { WHY="a spare login with no session still runs its GitHub loops: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="核心被 kill 后它起的常驻任务还活着：下一个核心的 run-as 先停掉旧的、只留一份，stop-as 也停得掉没人记账的那份；替身 call 只加载线协议不加载守护；没有会话（醒着或睡着）的空闲登录不跑 issue-bridge / pr-refresh，开了会话就跑"
 }
 
 # managed-login-install-stale (#2688): the machine moved to a release, a managed

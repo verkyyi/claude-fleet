@@ -17,11 +17,14 @@ so does `machine` with action start.
 FLEET_NODE_CORE=0 makes `available()` false everywhere: every caller then takes
 its old road, byte for byte (共同约定 11).
 """
+import errno
 import json
 import os
+import signal
 import socket
 import struct
 import sys
+import time
 
 SOCK = "/var/run/fleet-node-core.sock"
 MAX_LINE = 65536
@@ -173,6 +176,79 @@ def call(op, args, timeout=None):
     finally:
         c.close()
     return r if r is not None else {"error": "the core closed the connection"}
+
+
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except OSError as e:
+        return e.errno == errno.EPERM
+    return True
+
+
+# -- the client (`fleet-node-core.py call`): here, so a stand-in loads nothing else
+def cli_call(rest):
+    follow = "--follow" in rest
+    rest = [x for x in rest if x != "--follow"]
+    if not rest:
+        print("usage: fleet-node-core.py call <op> [<args JSON>] [--follow]", file=sys.stderr)
+        return 1
+    op = rest[0]
+    try:
+        args = json.loads(rest[1]) if len(rest) > 1 else {}
+    except ValueError:
+        print("fleet-node-core: args are not JSON", file=sys.stderr)
+        return 1
+    try:
+        c = Conn(op, args)
+    except OSError as e:
+        print("fleet-node-core: no core at %s (%s)" % (sock_path(), e), file=sys.stderr)
+        return 1
+    try:
+        r = c.reply()
+    except OSError:      # cut off (a peer it does not take): a reset on Linux
+        r = None
+    r = r or {"error": "the core closed the connection"}
+    print(json.dumps(r, sort_keys=True))
+    sys.stdout.flush()
+    if "refused" in r:
+        return 2
+    if not r.get("ok"):
+        return 1
+    if not (follow and (op == "run-as" or (op == "machine" and args.get("action") == "start"))):
+        return 0 if r.get("rc", 0) == 0 else r["rc"] if isinstance(r.get("rc"), int) and 0 < r["rc"] < 256 else 1
+
+    # the job runs under the core; this process stands in for it under the node
+    # daemon — its exit is the job's, a TERM to it stops the job first
+    pid = r.get("pid")
+
+    def term(*_):
+        try:
+            if op == "machine":
+                call("machine", {"job": args.get("job"), "action": "stop"}, timeout=15)
+            else:
+                call("stop-as", {"login": args.get("login"), "job": args.get("job")}, timeout=15)
+        except (OSError, ValueError):
+            pass
+    signal.signal(signal.SIGTERM, term)
+    signal.signal(signal.SIGINT, term)
+    while True:
+        try:
+            r = c.reply()
+            break
+        except InterruptedError:
+            continue
+        except OSError:
+            r = None
+            break
+    c.close()
+    if r is not None and isinstance(r.get("exit"), int):
+        rc = r["exit"]
+        return rc if 0 <= rc < 256 else 128 + (-rc) if rc < 0 else 1
+    # the core went (a restart): stand in until the job itself has gone
+    while pid and pid_alive(pid):
+        time.sleep(1)
+    return 0
 
 
 # -- a release's bytecode (issue #3318, EPIC #3500 C6) ---------------------------
