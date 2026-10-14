@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -111,7 +112,49 @@ func (r *NodeSvcRunner) lanes(settings map[string]string) ([]svcLane, map[string
 	if err != nil {
 		busy = map[string]int{}
 	}
-	return r.s.nodes.svcLanes(svcLoginsAllowed(settings)), busy
+	return r.allLanes(svcLoginsAllowed(settings)), busy
+}
+
+// allLanes is every service login's link, wherever it ends: the ones this
+// replica holds, then — with several replicas — the ones another holds
+// (fleet_node_conns), named off the node roster. The svc-runs loop runs on one
+// replica while a login's link lands on either, so a lane held elsewhere is
+// a lane all the same (R2 waited in the queue for exactly this).
+func (r *NodeSvcRunner) allLanes(allowed func(host, login string) bool) []svcLane {
+	s := r.s
+	out := s.nodes.svcLanes(allowed)
+	peers := s.peerConns()
+	if len(peers) == 0 {
+		return out
+	}
+	held := map[string]bool{}
+	for _, l := range out {
+		held[l.id] = true
+	}
+	rows, err := s.Store.Nodes()
+	if err != nil {
+		return out
+	}
+	byID := make(map[string]store.Node, len(rows))
+	for _, n := range rows {
+		byID[n.EndpointID] = n
+	}
+	ids := make([]string, 0, len(peers))
+	for id := range peers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		pc := peers[id]
+		n, ok := byID[id]
+		if held[id] || !ok || !pc.HasCap(control.CapSvcRun) || !control.Compatible(n.Proto) {
+			continue
+		}
+		if n.Hostname != "" && n.OSUser != "" && allowed(n.Hostname, n.OSUser) {
+			out = append(out, svcLane{id: id, peer: &pc, host: n.Hostname, login: n.OSUser})
+		}
+	}
+	return out
 }
 
 // FreeSlots is how many attempts the service logins can start now.
@@ -144,33 +187,57 @@ func (r *NodeSvcRunner) pick() (svcLane, error) {
 	return lanes[best], nil
 }
 
-// send writes one message down l's link and waits for its TypeResult ack.
+// send writes one message down l's link and waits for its TypeResult ack —
+// here, or on the replica holding the link (the ack comes back to the one
+// that wrote it, so the holder waits for it and returns it).
 func (r *NodeSvcRunner) send(ctx context.Context, l svcLane, typ string, v any) (control.SvcRunAck, error) {
-	var ack control.SvcRunAck
 	msg, err := control.New(typ, v)
 	if err != nil {
-		return ack, err
+		return control.SvcRunAck{}, err
 	}
-	ch := l.conn.pending.add(msg.OpID)
-	defer l.conn.pending.remove(msg.OpID)
+	if l.conn != nil {
+		return svcSendConn(ctx, l.conn, l.place(), msg)
+	}
+	var ack control.SvcRunAck
+	rep, err := r.s.forward(ctx, *l.peer, nodeForward{Kind: "svc", Endpoint: l.id, Message: &msg}, svcRunAckWait)
+	if err != nil {
+		return ack, fmt.Errorf("%s through replica %s: %w", l.place(), l.peer.Replica, err)
+	}
+	if rep.Error != nil {
+		return ack, fmt.Errorf("%s through replica %s: %s", l.place(), l.peer.Replica, rep.Error.Message)
+	}
+	if err := json.Unmarshal(rep.Data, &ack); err != nil {
+		return ack, fmt.Errorf("%s answered %s with a malformed ack", l.place(), typ)
+	}
+	return ack, nil
+}
+
+// svcSendConn writes msg down c and waits for its TypeResult ack.
+func svcSendConn(ctx context.Context, c *nodeConn, place string, msg control.Message) (control.SvcRunAck, error) {
+	var ack control.SvcRunAck
+	if msg.Proto == 0 {
+		msg.Proto = control.Proto
+	}
+	ch := c.pending.add(msg.OpID)
+	defer c.pending.remove(msg.OpID)
 	ctx, cancel := context.WithTimeout(ctx, svcRunAckWait)
 	defer cancel()
-	if err := l.conn.wire.write(ctx, msg); err != nil {
-		return ack, fmt.Errorf("write to %s: %w", l.place(), err)
+	if err := c.wire.write(ctx, msg); err != nil {
+		return ack, fmt.Errorf("write to %s: %w", place, err)
 	}
 	select {
 	case <-ctx.Done():
-		return ack, fmt.Errorf("%s did not answer %s within %s", l.place(), typ, svcRunAckWait)
+		return ack, fmt.Errorf("%s did not answer %s within %s", place, msg.Type, svcRunAckWait)
 	case reply := <-ch:
 		if reply.Type == control.TypeError {
 			why := "refused"
 			if reply.Error != nil {
 				why = reply.Error.Code + ": " + reply.Error.Message
 			}
-			return ack, fmt.Errorf("%s refused %s: %s", l.place(), typ, why)
+			return ack, fmt.Errorf("%s refused %s: %s", place, msg.Type, why)
 		}
 		if err := json.Unmarshal(reply.Payload, &ack); err != nil {
-			return ack, fmt.Errorf("%s answered %s with a malformed ack", l.place(), typ)
+			return ack, fmt.Errorf("%s answered %s with a malformed ack", place, msg.Type)
 		}
 		return ack, nil
 	}
@@ -226,7 +293,7 @@ func (r *NodeSvcRunner) Cancel(ctx context.Context, run store.SvcRun) error {
 		return nil
 	}
 	settings, _ := s.Store.FleetSettings()
-	for _, l := range s.nodes.svcLanes(svcLoginsAllowed(settings)) {
+	for _, l := range r.allLanes(svcLoginsAllowed(settings)) {
 		if l.place() != j.Cluster {
 			continue
 		}

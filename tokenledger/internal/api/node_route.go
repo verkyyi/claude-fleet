@@ -193,7 +193,8 @@ func (s *Server) peerConns() map[string]store.NodeConn {
 // nodeForward is one call handed to the holder.
 type nodeForward struct {
 	// Kind: write (sendWrite) · read (NodeRead) · send (SendNodeWrite) ·
-	// relays (dispatchRelays) · oauth (a relayed token refresh).
+	// relays (dispatchRelays) · oauth (a relayed token refresh) · svc (a
+	// service run's start / cancel, its ack returned — claude-fleet#4086).
 	Kind     string `json:"kind"`
 	Endpoint string `json:"endpoint_id"`
 
@@ -325,6 +326,21 @@ func (s *Server) handleNodeRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		answer(http.StatusOK, nodeForwardReply{Status: "sent"})
+	case "svc":
+		// a service run's start / cancel (claude-fleet#4086): written here, its
+		// ack awaited here — the agent answers the replica that wrote it
+		c := s.nodes.get(f.Endpoint)
+		if f.Message == nil || c == nil || !c.canSvcRun {
+			httpError(w, http.StatusBadRequest, "a svc forward needs its message and a service login's link")
+			return
+		}
+		ack, err := svcSendConn(ctx, c, f.Endpoint, *f.Message)
+		if err != nil {
+			refuse(fault("UNAVAILABLE", err.Error()))
+			return
+		}
+		b, _ := json.Marshal(ack)
+		answer(http.StatusOK, nodeForwardReply{Data: b})
 	case "relays":
 		go s.dispatchRelays(f.Endpoint)
 		answer(http.StatusOK, nodeForwardReply{Status: "dispatching"})
