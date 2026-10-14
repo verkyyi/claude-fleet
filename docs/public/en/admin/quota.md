@@ -51,7 +51,7 @@ What a person can finally use = the subscription pool ∩ what that machine is g
 
 ### A subscription needs a new login, pausing, removing
 
-- **Needs a new login**: the subscription's card says so. Run `fleet account add` again with the same name, and the new credential replaces the old one.
+- **Needs a new login**: the subscription's card says so. Select **Update credential** in its details, then authorize again or submit a token. The new credential replaces the old one after validation.
 - **Pause**: new sessions no longer open on it; running ones carry on to the end. **Resume** to undo.
 - **Remove**: the credential is deleted from the hub; sessions using it move to another subscription when their short-lived credential runs out.
 

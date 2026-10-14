@@ -231,3 +231,67 @@ func TestAdminSubsConcurrentDuplicate(t *testing.T) {
 		t.Fatalf("rows=%d validations=%d", len(rows), calls.Load())
 	}
 }
+
+func TestAdminSubsMemberCannotWrite(t *testing.T) {
+	h, _, member := rolesHarness(t)
+	for _, path := range []string{AdminSubsLoginPath, AdminSubsFinishPath, AdminSubsTokenPath, AdminSubsRefreshPath} {
+		code, _ := requestsDo(t, h, member, "POST", path, map[string]any{"provider": "claude", "account": "forbidden", "token": "test-only", "owner": "pool"})
+		if code != http.StatusForbidden {
+			t.Fatalf("member POST %s = %d", path, code)
+		}
+	}
+}
+
+type adminSubRefresher struct {
+	calls   int
+	idToken string
+}
+
+func (f *adminSubRefresher) Refresh(_ context.Context, _ string, sec credvault.Secret) (credvault.Access, credvault.Secret, error) {
+	f.calls++
+	exp := time.Now().Add(time.Hour)
+	sec.RefreshToken, sec.IDToken = "rotated-test-refresh", f.idToken
+	return credvault.Access{AccessToken: "test-access", ExpiresAt: &exp}, sec, nil
+}
+
+func TestAdminSubsCodexBrowserAndExistingToken(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	ex := &fakeExchange{}
+	h.srv.OAuthExchange = ex.fn
+	code, start := adminSubsCall(t, h, "admin", AdminSubsLoginPath, map[string]any{"provider": "codex", "account": "browser"})
+	if code != 200 || start["paste"] != "url" {
+		t.Fatalf("codex start: %d %v", code, start)
+	}
+	auth, _ := url.Parse(start["authorize_url"].(string))
+	if auth.Host != "auth.openai.com" {
+		t.Fatal("not official Codex login")
+	}
+	paste := "http://localhost:1455/auth/callback?code=test&state=" + auth.Query().Get("state")
+	code, out := adminSubsCall(t, h, "admin", AdminSubsFinishPath, map[string]any{"flow": start["flow"], "paste": paste})
+	if code != 200 || out["owner"] != "pool" {
+		t.Fatalf("codex finish: %d %v", code, out)
+	}
+	c, _ := h.srv.Store.Credential("pool", "codex", "browser")
+	plan, source := h.srv.Vault.PlanMetadata(*c)
+	if plan != "plus" || source != "provider" {
+		t.Fatalf("plan provenance: %s %s", plan, source)
+	}
+	_, raw, _ := ex.fn(context.Background(), "codex", nil, "")
+	var ans tokenAnswer
+	_ = json.Unmarshal(raw, &ans)
+	ref := &adminSubRefresher{idToken: ans.IDToken}
+	h.srv.Vault.Refresher = ref
+	for _, name := range []string{"existing", "alias"} {
+		code, out := adminSubsCall(t, h, "admin", AdminSubsTokenPath, map[string]any{"provider": "codex", "account": name, "token": "original-test-refresh"})
+		if code != 200 || out["account"] != "existing" {
+			t.Fatalf("codex token: %d %v", code, out)
+		}
+		b, _ := json.Marshal(out)
+		if strings.Contains(string(b), "test-refresh") || strings.Contains(string(b), "test-access") {
+			t.Fatal("secret in answer")
+		}
+	}
+	if ref.calls != 1 {
+		t.Fatalf("rotated token submitted twice: %d refreshes", ref.calls)
+	}
+}
