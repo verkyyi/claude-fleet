@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,7 +17,8 @@ import (
 //
 //   - The budget: fleet.trial.max_secs of a machine (used_secs, summed over
 //     its seats — only the time it holds one counts) and fleet.trial.max_msgs
-//     lines (msgs, counted at each POST /v1/chat/turn). A line past the last
+//     lines (msgs, counted at each POST /v1/chat/turn, given back when the
+//     turn gets no reply — claude-fleet#4248). A line past the last
 //     is refused (trial_over); the last one's reply gets trialCapGrace, then
 //     the machine goes back.
 //   - The sweep (SweepTrials, every alert tick — it replaced #3590's 7-day
@@ -141,29 +144,105 @@ func (s *Server) handleTryState(w http.ResponseWriter, r *http.Request) {
 
 // trialTurn decides a trial person's line before it is relayed: "" lets it
 // through (counted, the header set), else the refusal's code and words. A
-// person with no running trial is not held here.
-func (s *Server) trialTurn(w http.ResponseWriter, pid string, now time.Time) (code, msg string) {
+// person with no running trial is not held here. counted says a line was
+// taken — trialRefund gives it back when the turn gets no reply.
+func (s *Server) trialTurn(w http.ResponseWriter, pid string, now time.Time) (code, msg string, counted bool) {
 	t, err := s.Store.Trial(pid)
 	if err != nil || t == nil || t.State == store.TrialConverted {
-		return "", ""
+		return "", "", false
 	}
 	if t.State != store.TrialPlaced {
-		return "trial_over", "这次试用已经结束 · this trial has ended"
+		return "trial_over", "这次试用已经结束 · this trial has ended", false
 	}
 	if secs, _ := s.trialLeft(t, now); secs <= 0 {
-		return "trial_over", "试用时间用完了 · the trial's time is up"
+		return "trial_over", "试用时间用完了 · the trial's time is up", false
 	}
 	n, ok, err := s.Store.CountTrialMsg(pid, s.trialMaxMsgs(), now)
 	if err != nil {
 		log.Printf("fleet: trial line of %s: %v", pid, err)
-		return "", "" // never stop a conversation on a bookkeeping error
+		return "", "", false // never stop a conversation on a bookkeeping error
 	}
 	if !ok {
-		return "trial_over", "试用的消息条数用完了 · the trial's lines are used up"
+		return "trial_over", "试用的消息条数用完了 · the trial's lines are used up", false
 	}
 	secs, _ := s.trialLeft(t, now)
 	w.Header().Set(trialLeftHeader, strconv.Itoa(secs)+","+strconv.Itoa(max(s.trialMaxMsgs()-n, 0)))
-	return "", ""
+	return "", "", true
+}
+
+// trialRefund gives pid's counted line back: the turn got no reply
+// (claude-fleet#4248 — the service did not answer, no session credential).
+func (s *Server) trialRefund(pid, why string) {
+	if err := s.Store.UncountTrialMsg(pid); err != nil {
+		log.Printf("fleet: trial line of %s: give back (%s): %v", pid, why, err)
+		return
+	}
+	log.Printf("fleet: trial line of %s given back (%s)", pid, why)
+}
+
+// turnWatch reads a /api/turn NDJSON stream as it passes to the page and says,
+// once it closes, whether the turn failed with no reply: an error frame and
+// none of text · tool · ask · tool_result · done before it. Only then onFail
+// runs; a page that went away mid-turn saw no error frame, so it is never one.
+type turnWatch struct {
+	io.ReadCloser
+	line   []byte
+	reply  bool
+	failed bool
+	onFail func()
+	closed bool
+}
+
+// turnWatchLineMax bounds the one line held while it passes; a longer line is
+// a reply (only a reply frame carries that much).
+const turnWatchLineMax = 64 << 10
+
+func (tw *turnWatch) Read(p []byte) (int, error) {
+	n, err := tw.ReadCloser.Read(p)
+	for _, b := range p[:n] {
+		if b != '\n' {
+			if len(tw.line) < turnWatchLineMax {
+				tw.line = append(tw.line, b)
+			} else {
+				tw.reply = true
+			}
+			continue
+		}
+		tw.frame()
+	}
+	return n, err
+}
+
+func (tw *turnWatch) frame() {
+	var f struct {
+		T string `json:"t"`
+	}
+	if json.Unmarshal(tw.line, &f) == nil {
+		switch f.T {
+		case "text", "tool", "tool_result", "ask", "done":
+			tw.reply = true
+		case "error":
+			if !tw.reply {
+				tw.failed = true
+			}
+		}
+	}
+	tw.line = tw.line[:0]
+}
+
+func (tw *turnWatch) Close() error {
+	err := tw.ReadCloser.Close()
+	if tw.closed {
+		return err
+	}
+	tw.closed = true
+	if len(tw.line) > 0 {
+		tw.frame()
+	}
+	if tw.failed && !tw.reply {
+		tw.onFail()
+	}
+	return err
 }
 
 // endTrial gives t's logins back and ends it for reason; false when a

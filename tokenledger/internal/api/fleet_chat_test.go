@@ -30,6 +30,7 @@ type fakeChatService struct {
 	hits    []string // "<method> <path> person=<X-Fleet-Person> cookie=<Cookie>"
 	clients []string // each request's X-Fleet-Client (claude-fleet#4034)
 	release chan struct{}
+	turn    func(w http.ResponseWriter) // set: /api/turn answers this way instead
 }
 
 func (f *fakeChatService) seen() []string {
@@ -58,6 +59,14 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"session":"s1","items":[]}`)
 		case "/api/turn":
+			f.mu.Lock()
+			turn := f.turn
+			f.mu.Unlock()
+			if turn != nil {
+				io.ReadAll(r.Body)
+				turn(w)
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			io.WriteString(w, `{"t":"start","echo":`+strconvQuote(string(body))+"}\n")
