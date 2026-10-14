@@ -25,16 +25,14 @@ The console's **Admin → Subscription pool**. One row per subscription: how muc
 
 ### Adding a subscription
 
-**Subscription pool** page → **Add subscription** → choose Claude or Codex → give it a name (letters, digits, dot, hyphen, underscore). The page gives you one command and starts waiting:
+An admin selects **Add subscription**, chooses Claude Code or Codex and gives it a name (letters, digits, dots, hyphens and underscores). Both connection methods stay in the browser:
 
-```sh
-fleet account add --provider claude --label team-max-1
-```
+- **Browser authorization (default)**: open the provider's sign-in page and paste its authorization code back here. For Codex, paste the complete localhost redirect URL; it is normal for that page not to load. Authorization expires after ten minutes. Start again after cancelling.
+- **Existing OAuth token**: submit a Claude OAuth token or Codex OAuth refresh token in the hidden input. It clears on submit or close. The server validates it before encrypted storage. No SSH, operator token or account UUID is needed.
 
-Run it on a computer with fleet installed and, as it asks, sign in once with that subscription's account (Claude asks you to paste a login code; Codex gives a link and a verification code). Once signed in, the credential goes straight into the hub and no copy stays on the computer; when the subscription appears on the page with a quota reading, it is added.
+The page returns the result directly and reads the initial quota. Retry network failures; a valid credential whose quota cannot yet be read shows **Quota pending**. **Refresh quota** in its details reads the backend again. Duplicate tokens return the existing subscription. To replace a credential under the same name, explicitly select **Update credential** in its details; replacement follows validation. An unconfirmed expiry is shown as **Unknown**.
 
-- **Self-hosted**: run it on any hosting machine, after `export CCQUOTA_VIEWER_TOKEN=…` (the hub's operator token).
-- **Hosted**: this command needs the operator token, which only we have. To connect your own subscriptions there is no appointment to book — each person connects their own on their Usage page (next section).
+Only vault credentials appear in the pool. Historical usage remains in usage reports. Personal subscriptions retain their owner and do not count toward shared capacity. **Service** and **Plan** are separate columns: Max shows 5× or 20× only with a known tier. Unknown plans show **Unrecognized**; details retain the raw value, source and known observation time. A name containing 20X is not evidence of a plan.
 
 ### Members connect their own
 
@@ -55,7 +53,7 @@ What a person can finally use = the subscription pool ∩ what that machine is g
 
 ### A subscription needs a new login, pausing, removing
 
-- **Needs a new login**: the subscription's card says so. Run `fleet account add` again with the same name, and the new credential replaces the old one.
+- **Needs a new login**: the subscription's card says so. Select **Update credential** in its details, then authorize again or submit a token. The new credential replaces the old one after validation.
 - **Pause**: new sessions no longer open on it; running ones carry on to the end. **Resume** to undo.
 - **Remove**: the credential is deleted from the hub; sessions using it move to another subscription when their short-lived credential runs out.
 

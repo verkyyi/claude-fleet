@@ -22,9 +22,12 @@ export type LimitsBody = {
   read_attempt_at?: string;
 };
 export type AccountLimits = { account_uuid: string; label?: string; limits?: LimitsBody };
-export type Account = { account_uuid: string; label?: string; display_name?: string; email?: string; source?: string; subscription_type?: string };
+export type Account = { account_uuid: string; label?: string; display_name?: string; email?: string; source?: string; subscription_type?: string; rate_limit_tier?: string };
 export type PoolCredential = Credential & {
   limits?: LimitsBody;
+  plan?: string;
+  plan_source?: string;
+  plan_at?: string;
   reauth_required?: boolean;
   refresh_error?: string;
   secret_expires_at?: string;
@@ -65,6 +68,9 @@ export type Sub = {
   label: string;
   prov: Prov;
   plan: string;
+  planSource?: string;
+  planAt?: string;
+  planTier?: string;
   h5: Window | null;
   h7: Window | null;
   available: boolean;
@@ -87,7 +93,6 @@ export type Sub = {
 };
 
 const toMs = (v: unknown) => (typeof v === "number" ? v : Date.parse(String(v || "")));
-const norm = (s: unknown) => String(s || "").trim().toLowerCase();
 
 // pct is a utilization (0–1 or 0–100, the hub has sent both) as 0–100.
 export function pct(u: unknown): number | null {
@@ -129,13 +134,16 @@ export function subscriptions(p: {
   const per = p.limits?.per_account || [];
   const accounts = new Map((p.accounts || []).map(a => [a.account_uuid, a]));
   const paused = new Set(p.creds?.paused || p.paused || []);
-  const linked = new Set<string>();
   const seen = new Set<string>();
   const out: Sub[] = [];
   const make = (id: string, label: string, prov: Prov, lim: LimitsBody | undefined, c: PoolCredential | null): Sub => {
     const w = windowsOf(lim, !!c?.credential_id);
     const owner = c && c.principal_id !== "pool" ? c.principal_id || "" : "";
-    return { id, label, prov, plan: lim?.plan || "", h5: w.h5, h7: w.h7,
+    const meta = c?.account_uuid ? accounts.get(c.account_uuid) : undefined;
+    return { id, label, prov, plan: lim?.plan || c?.plan || meta?.subscription_type || "",
+      planSource: lim?.plan ? "provider" : c?.plan_source || "legacy",
+      planAt: lim?.plan ? lim.observed_at || "" : c?.plan_at || "",
+      planTier: meta?.rate_limit_tier || "", h5: w.h5, h7: w.h7,
       available: !!lim && lim.available !== false, reason: lim?.reason || "",
       sessions: (p.live?.sessions || []).filter(s => s.account === id).length,
       cred: c, paused: !!c && !owner && paused.has(c.account), managed: !!c,
@@ -149,17 +157,10 @@ export function subscriptions(p: {
     const id = c.credential_id || c.account_uuid || "cred:" + credKey(c);
     // Scope even legacy identities: two owners never borrow each other's row.
     const key = `${c.principal_id}/${c.provider}/${id}`;
-    if (c.account_uuid) linked.add(c.account_uuid);
     if (seen.has(key)) continue;
     seen.add(key);
     const old = !c.credential_id && c.account_uuid ? per.find(a => a.account_uuid === c.account_uuid) : undefined;
     out.push(make(id, c.account, credProv(c), c.limits || old?.limits, c));
-  }
-  for (const a of per) {
-    if (linked.has(a.account_uuid) || a.account_uuid.startsWith("cred:")) continue;
-    const meta = accounts.get(a.account_uuid);
-    out.push(make(a.account_uuid, a.label || meta?.label || meta?.display_name || meta?.email || a.account_uuid,
-      provOf(a.account_uuid, a.limits?.source || meta?.source), a.limits, null));
   }
   return out.sort((x,y) => Number(y.managed)-Number(x.managed) || (x.prov === y.prov ? x.label.localeCompare(y.label) : x.prov === "claude" ? -1 : 1));
 }
@@ -188,7 +189,7 @@ export function withOverview(subs: Sub[], pool: OverviewPool[] | null | undefine
   });
 }
 
-export type State = "ok" | "near" | "limited" | "reauth" | "paused" | "unmanaged";
+export type State = "ok" | "near" | "limited" | "reauth" | "paused" | "unmanaged" | "unread";
 
 // top is the fuller of a row's two windows.
 export const top = (s: Sub) => Math.max(s.h5?.p ?? 0, s.h7?.p ?? 0);
@@ -202,6 +203,7 @@ export function stateOf(s: Sub, skip: number): State {
   if (s.reauth || s.cred?.reauth_required) return "reauth";
   if (s.limited || top(s) >= 100) return "limited";
   if (top(s) >= skip) return "near";
+  if (s.h5?.p == null && s.h7?.p == null) return "unread";
   return "ok";
 }
 
@@ -223,7 +225,7 @@ export function credState(c: PoolCredential | null, now = Date.now()): { tone: C
 // room is the pool's mean room left in a window over the managed, unpaused
 // rows that report it, and the soonest reset after now; null when none does.
 export function room(subs: Sub[], which: "h5" | "h7", now = Date.now()): { left: number; next: number | null } | null {
-  const ws = subs.filter((s) => s.managed && !s.paused && s[which]?.p != null).map((s) => s[which]!);
+  const ws = subs.filter((s) => s.managed && !s.owner && !s.paused && s[which]?.p != null).map((s) => s[which]!);
   if (!ws.length) return null;
   const left = Math.round(ws.reduce((a, w) => a + (100 - (w.p as number)), 0) / ws.length);
   const next = ws.map((w) => toMs(w.resets)).filter((ms) => Number.isFinite(ms) && ms > now).sort((a, b) => a - b)[0];
@@ -330,17 +332,6 @@ export function togglePayload(g: Grant, uuid: string, on: boolean): { scope: str
 export const fingerprint = (e?: PolicyEntry) => JSON.stringify(e ? { all: !!e.all, allow: [...e.allow].sort(), error: e.error || "" } : null);
 
 export const LABEL_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
-
-// addCommand is what to run on a fleet machine to hand the hub a new
-// subscription — ONE command (claude-fleet#2084).
-export const addCommand = (prov: Prov, label: string) => `~/.claude/fleet/bin/fleet account add --provider ${prov} --label ${label}`;
-
-export type AuditRow = { action: string; provider: string; account: string; at: string; hostname?: string; detail?: string };
-// arrived is the credential audit's put that answers an add started at since.
-export function arrived(audit: { audit?: AuditRow[] } | null, prov: Prov, label: string, since: number): AuditRow | null {
-  const rows = Array.isArray(audit?.audit) ? audit!.audit! : [];
-  return rows.find((r) => r.action === "put" && r.provider === prov && norm(r.account) === norm(label) && toMs(r.at) >= since - 1000) || null;
-}
 
 // settingOf reads one key of /v1/fleet/settings.
 export function settingOf(answer: any, key: string): string {

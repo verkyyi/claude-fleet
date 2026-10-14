@@ -907,6 +907,10 @@ func (s *Server) routes() *routeMux {
 	mux.Handle("/v1/me/quota", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleMeQuota))))
 	// 我自己的订阅 (claude-fleet#4035): a member's own subscriptions — connect
 	// one in their own browser, read, pause, disconnect; their rows only.
+	mux.Handle(AdminSubsLoginPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsLogin))))
+	mux.Handle(AdminSubsFinishPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsFinish))))
+	mux.Handle(AdminSubsTokenPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsToken))))
+	mux.Handle(AdminSubsRefreshPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsRefresh))))
 	mux.Handle(MeSubsPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubs)))
 	mux.Handle(MeSubsLoginPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsLogin)))
 	mux.Handle(MeSubsFinishPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsFinish)))

@@ -39,6 +39,8 @@ jobs:
           cache-dependency-path: extras/web-console/package-lock.json
       - name: Install (lockfile only)
         run: npm ci --no-audit --no-fund
+      - name: Subscription pool behavior
+        run: node --experimental-strip-types src/admin/pool.test.mjs
       - name: Subscription identity join
         run: node test/pool.mjs
       - name: Build

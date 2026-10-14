@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS fleet_credentials (
   reauth_required_at TEXT,
   PRIMARY KEY (principal_id, provider, account)
 );
+CREATE TABLE IF NOT EXISTS fleet_pool_login_used (
+  nonce TEXT PRIMARY KEY,
+  expires_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fleet_cred_audit (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   at          TEXT NOT NULL,
@@ -463,4 +467,18 @@ func (s *Store) PrincipalForLogin(hostname, login string) (string, error) {
 		return "", ErrNoPrincipal
 	}
 	return id, err
+}
+
+// SpendPoolLogin consumes one admin OAuth state across replicas until its
+// sealed expiry. Kept apart from node signature nonces, whose pruning TTL differs.
+func (s *Store) SpendPoolLogin(nonce string, expires, now time.Time) (bool, error) {
+	if _, err := s.write.Exec(`DELETE FROM fleet_pool_login_used WHERE expires_at < ?`, fmtTime(now)); err != nil {
+		return false, err
+	}
+	res, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_pool_login_used (nonce, expires_at) VALUES (?, ?)`), nonce, fmtTime(expires))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }

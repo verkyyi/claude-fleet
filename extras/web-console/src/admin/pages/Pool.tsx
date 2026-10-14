@@ -64,6 +64,7 @@ import {
   type Target,
   type Window,
 } from "../pool";
+import { planName } from "../plan";
 import { AddSubscriptionDialog } from "./AddSubscriptionDialog";
 
 const POLICY = "/v1/fleet/cred-policy";
@@ -92,6 +93,7 @@ const STATE: Record<State, string> = {
   reauth: "border-destructive/50 text-destructive",
   paused: "border-clay-line bg-clay-soft text-clay",
   unmanaged: "text-muted-foreground",
+  unread: "text-muted-foreground",
 };
 
 function StateBadge({ s }: { s: State }) {
@@ -119,7 +121,8 @@ function Bar({ w, skip, wide }: { w: Window | null; skip: number; wide?: boolean
   );
 }
 
-const kindOf = (s: Sub) => s.plan || (s.prov === "codex" ? "Codex" : "Claude");
+const serviceOf = (s: Sub) => s.prov === "codex" ? "Codex" : "Claude Code";
+const planOf = (s: Sub) => planName(s.prov, s.plan, s.planTier) || t(s.plan ? "pool.plan.unknown" : "pool.plan.none");
 // ownerName is a member's own subscription's owner as the people page names them (claude-fleet#4035).
 const ownerName = (w: World, principal: string) => w.users.find((u) => u.principal_id === principal)?.login || principal;
 const uuidOf = (s: Sub) => s.cred?.account_uuid || s.cred?.credential_id || (s.id.startsWith("cred:") || s.id.startsWith("own:") ? String(s.cred?.account_uuid || "").toLowerCase() : s.id.toLowerCase());
@@ -226,7 +229,8 @@ export function PoolPage() {
           </span>
         ),
       },
-      { id: "kind", accessorFn: kindOf, header: () => t("pool.col.kind"), cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
+      { id: "service", accessorFn: serviceOf, header: () => t("pool.col.service") },
+      { id: "plan", accessorFn: planOf, header: () => t("pool.col.plan"), cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
       { id: "h5", accessorFn: (r) => r.h5?.p ?? undefined, sortUndefined: "last", header: () => t("pool.col.h5"), cell: ({ row }) => <Bar w={row.original.h5} skip={world.skip} /> },
       { id: "h7", accessorFn: (r) => r.h7?.p ?? undefined, sortUndefined: "last", header: () => t("pool.col.h7"), cell: ({ row }) => <Bar w={row.original.h7} skip={world.skip} /> },
       {
@@ -255,7 +259,6 @@ export function PoolPage() {
       { key: "codex", label: t("pool.filter.codex"), test: (r) => r.prov === "codex" },
       { key: "near", label: t("pool.filter.near"), test: (r) => r.state === "near" || r.state === "limited" },
       { key: "paused", label: t("pool.filter.paused"), test: (r) => r.state === "paused" },
-      { key: "unmanaged", label: t("pool.filter.unmanaged"), test: (r) => r.state === "unmanaged" },
     ],
     [],
   );
@@ -276,7 +279,7 @@ export function PoolPage() {
         columns={columns}
         fetch={fetchRows}
         filters={filters}
-        searchText={(r) => [r.label, kindOf(r), r.who, r.people.join(" "), r.cred?.account, r.id, r.owner && ownerName(world, r.owner)].join(" ")}
+        searchText={(r) => [r.label, serviceOf(r), planOf(r), r.who, r.people.join(" "), r.cred?.account, r.id, r.owner && ownerName(world, r.owner)].join(" ")}
         rowId={(r) => r.id}
         openId={id ? decodeURIComponent(id) : null}
         onOpen={(x) => nav(x ? `/pool/${encodeURIComponent(x)}` : "/pool")}
@@ -302,7 +305,7 @@ export function PoolPage() {
                 {t("pool.settings")}
               </Link>
             </Button>
-            <AddSubscriptionDialog known={rows.filter((r) => r.cred).map((r) => `${r.cred!.provider}/${r.cred!.account}`)} onAdded={reload} />
+            <AddSubscriptionDialog known={rows.filter((r) => r.cred && !r.owner).map((r) => `${r.cred!.provider}/${r.cred!.account}`)} onAdded={reload} />
           </>
         )}
         drawer={(r, ctx) => <PoolDrawer r={r} world={world} {...ctx} />}
@@ -338,6 +341,15 @@ const CRED_TONE = { ok: "text-ok", warn: "text-warn", bad: "text-destructive" };
 
 function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: () => void; reload: () => void }) {
   const cs = credState(r.cred);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await api<{ quota: string }>("/v1/admin/subscriptions/refresh", { json: { provider: r.prov, account: r.cred!.account } });
+      toast(t(result.quota === "ready" ? "pool.web.ready" : "pool.web.pending"));
+      reload();
+    } catch (e) { toast.error((e as Error).message); } finally { setRefreshing(false); }
+  };
   const leases = leasesOf(world.live, r.id, world.users);
   const names = world.names;
   const switches = world.switches.filter((x) => x.from_account === r.id || x.to_account === r.id).slice(0, 6);
@@ -360,7 +372,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
           {!r.id.startsWith("cred:") && !r.owner && <RenameDialog r={r} onDone={reload} />}
         </div>
         <SheetDescription className="flex items-center gap-2">
-          {kindOf(r)} <StateBadge s={r.state} />
+          {serviceOf(r)} · {planOf(r)} <StateBadge s={r.state} />
         </SheetDescription>
       </SheetHeader>
 
@@ -376,6 +388,10 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
           </Alert>
         )}
         <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2.5 text-sm">
+          <Field k="pool.plan.raw">{r.plan || "—"}{r.planTier && ` · ${r.planTier}`}</Field>
+          <Field k="pool.plan.source">{t(!r.plan ? "pool.plan.none" : r.planSource === "provider" ? "pool.plan.provider" : r.planSource === "admin" ? "pool.plan.admin" : "pool.plan.legacy")}</Field>
+          <Field k="pool.plan.observed">{r.planAt ? when(r.planAt) : t("pool.plan.none")}</Field>
+          <Field k="pool.web.expiry">{r.cred?.secret_expires_at ? when(r.cred.secret_expires_at) : t("pool.plan.none")}</Field>
           <WindowField k="pool.d.h5" w={r.h5} skip={world.skip} />
           <WindowField k="pool.d.h7" w={r.h7} skip={world.skip} />
           <Field k="pool.d.cred">
@@ -450,6 +466,11 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
       </div>
 
       <SheetFooter className="mt-auto flex-row justify-end gap-2 border-t p-4">
+        {r.cred && !r.owner && <>
+          <Button variant="outline" disabled={refreshing} onClick={refresh}>{t("pool.web.refresh")}</Button>
+          <AddSubscriptionDialog known={[]} replace={{ provider: r.prov, account: r.cred.account }} onAdded={reload} />
+        </>}
+
         {r.cred ? (
           <>
             {r.owner ? null : r.paused ? (

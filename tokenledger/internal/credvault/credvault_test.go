@@ -277,7 +277,6 @@ func TestSetupTokenIssuedAsIsAndNeverRefreshed(t *testing.T) {
 	// The shape the operator must send.
 	for name, s := range map[string]Secret{
 		"both":       {RefreshToken: "rt", SetupToken: tok, ExpiresAt: &exp},
-		"no expiry":  {SetupToken: tok},
 		"not an oat": {SetupToken: "sk-ant-api03-key", ExpiresAt: &exp},
 		"neither":    {},
 	} {
@@ -546,5 +545,17 @@ func TestTwoReplicasRefreshOnce(t *testing.T) {
 				t.Fatalf("refresh audit carries no replica: %+v", audits)
 			}
 		}
+	}
+}
+
+// An imported OAuth token does not prove when the provider will expire it.
+func TestSetupTokenUnknownExpiry(t *testing.T) {
+	v := newVault(t, nil)
+	if err := v.Put("pool", Claude, "unknown", Secret{SetupToken: "sk-ant-oat01-unknown"}); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := v.Lease(context.Background(), "pool", Claude, "unknown")
+	if err != nil || acc.ExpiresAt != nil || acc.AccessToken == "" {
+		t.Fatalf("unknown expiry: %+v %v", acc, err)
 	}
 }

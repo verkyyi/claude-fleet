@@ -187,6 +187,7 @@ var routeAccess = map[string]string{
 	// and where it went, off pool_usage under their principal.
 	"/v1/me/usage": accessUser,
 	// 我自己的订阅 (claude-fleet#4035): each person their own rows only.
+	AdminSubsLoginPath: accessAdmin, AdminSubsFinishPath: accessAdmin, AdminSubsTokenPath: accessAdmin, AdminSubsRefreshPath: accessAdmin,
 	MeSubsPath: accessUser, MeSubsLoginPath: accessUser, MeSubsFinishPath: accessUser,
 	MeSubsPausePath: accessUser, MeSubsDeletePath: accessUser,
 	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,

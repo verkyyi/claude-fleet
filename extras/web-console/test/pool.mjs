@@ -14,7 +14,7 @@ assert.equal(rows.find(r=>r.id===id(1)).h5.p,8);
 assert.equal(rows.find(r=>r.id===id(1)).h7.p,1); // API is percent: 1% must never render as 100%.
 assert.equal(rows.find(r=>r.id===id(2)).h5.p,99);
 assert.equal(rows.find(r=>r.id===id(3)).h5.p,17);
-assert.equal(rows.find(r=>r.id==='old').managed,false);
+assert.equal(rows.find(r=>r.id==='old'),undefined);
 // A stale overview response to the same label cannot undo a replacement.
 const replacement = {...a,credential_id:id(4),limits:{available:false,read_status:'unknown'}};
 rows = subscriptions({creds:{credentials:[replacement]}});
@@ -25,7 +25,7 @@ rows = subscriptions({creds:{credentials:[{...a,account_uuid:'old'}]},limits:inp
 assert.equal(rows.length,1); assert.equal(rows[0].label,'collision'); assert.equal(rows[0].h5.p,8);
 // No singleton/domain/label guess for an older response either.
 rows = subscriptions({creds:{credentials:[{principal_id:'pool',provider:'claude',account:'example'}]},limits:input.limits,accounts:input.accounts});
-assert.equal(rows.length,2); assert.equal(rows.find(r=>r.managed).h5,null);
+assert.equal(rows.length,1); assert.equal(rows[0].h5,null);
 // A failed attempt keeps that credential's timestamp and last good reading.
 rows = subscriptions({creds:{credentials:[{...a,limits:{...lim(8),read_status:'failed',read_note:'HTTP 503'}}]}});
 assert.equal(rows[0].readNote,'HTTP 503'); assert.equal(rows[0].readAt,'2026-10-14T00:00:00Z');

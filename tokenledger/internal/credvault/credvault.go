@@ -65,17 +65,18 @@ func ValidProvider(p string) bool { return p == Claude || p == Codex || p == Git
 // setup token cannot say whose it is (claude-fleet#2127). Not a secret — it
 // rides in the sealed half only so a refresh carries it along unchanged.
 type Secret struct {
-	RefreshToken     string     `json:"refresh_token,omitempty"`
-	SetupToken       string     `json:"setup_token,omitempty"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
-	IDToken          string     `json:"id_token,omitempty"`
-	AccountID        string     `json:"account_id,omitempty"`
-	Scopes           []string   `json:"scopes,omitempty"`
-	SubscriptionType string     `json:"subscription_type,omitempty"`
-	Token            string     `json:"token,omitempty"`
-	User             string     `json:"user,omitempty"`
-	AccountUUID      string     `json:"account_uuid,omitempty"`
-	MeterID          string     `json:"meter_id,omitempty"` // internal; Put overwrites caller input, refresh preserves it
+	BrowserImportFingerprint string     `json:"browser_import_fingerprint,omitempty"`
+	RefreshToken             string     `json:"refresh_token,omitempty"`
+	SetupToken               string     `json:"setup_token,omitempty"`
+	ExpiresAt                *time.Time `json:"expires_at,omitempty"`
+	IDToken                  string     `json:"id_token,omitempty"`
+	AccountID                string     `json:"account_id,omitempty"`
+	Scopes                   []string   `json:"scopes,omitempty"`
+	SubscriptionType         string     `json:"subscription_type,omitempty"`
+	Token                    string     `json:"token,omitempty"`
+	User                     string     `json:"user,omitempty"`
+	AccountUUID              string     `json:"account_uuid,omitempty"`
+	MeterID                  string     `json:"meter_id,omitempty"` // internal; Put overwrites caller input, refresh preserves it
 }
 
 // Kinds — what the long-lived half IS, kept beside the row as metadata (the
@@ -118,8 +119,6 @@ func (s Secret) Validate(provider string) error {
 		switch {
 		case s.RefreshToken != "" && s.SetupToken != "":
 			return errors.New("claude takes refresh_token or setup_token, not both")
-		case s.SetupToken != "" && s.ExpiresAt == nil:
-			return errors.New("claude setup_token needs expires_at (claude setup-token mints a ~1 year token; say when it ends)")
 		case s.SetupToken != "" && !strings.HasPrefix(s.SetupToken, "sk-ant-oat01-"):
 			return errors.New("claude setup_token must be the sk-ant-oat01-… token `claude setup-token` prints")
 		case s.RefreshToken == "" && s.SetupToken == "":
@@ -525,7 +524,7 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		if provider == GitHub {
 			return Access{Token: s.Token, User: s.User}, nil
 		}
-		if s.ExpiresAt == nil || !s.ExpiresAt.After(v.now()) {
+		if s.ExpiresAt != nil && !s.ExpiresAt.After(v.now()) {
 			at := ""
 			if s.ExpiresAt != nil {
 				at = " at " + s.ExpiresAt.UTC().Format(time.RFC3339)
@@ -536,8 +535,7 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		if len(scopes) == 0 {
 			scopes = []string{"user:inference"}
 		}
-		exp := s.ExpiresAt.UTC()
-		return Access{AccessToken: s.SetupToken, Scopes: scopes, SubscriptionType: s.SubscriptionType, ExpiresAt: &exp}, nil
+		return Access{AccessToken: s.SetupToken, Scopes: scopes, SubscriptionType: s.SubscriptionType, ExpiresAt: s.ExpiresAt}, nil
 	}
 
 	identity := v.CredentialID(*c)

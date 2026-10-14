@@ -329,24 +329,7 @@ func (s *Server) handleMeSubsLogin(w http.ResponseWriter, r *http.Request) {
 		httpError(w, code, err.Error())
 		return
 	}
-	sum := sha256.Sum256([]byte(note.Verifier))
-	q := url.Values{"response_type": {"code"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])},
-		"code_challenge_method": {"S256"}, "state": {note.State}}
-	auth, paste := "", "code"
-	if req.Provider == credvault.Claude {
-		q.Set("code", "true")
-		q.Set("client_id", credvault.ClaudeClientID)
-		q.Set("redirect_uri", claudeCodeRedirect)
-		q.Set("scope", claudeLoginScope)
-		auth = claudeAuthorizeURL + "?" + q.Encode()
-	} else {
-		q.Set("client_id", credvault.CodexClientID)
-		q.Set("redirect_uri", codexRedirect)
-		q.Set("scope", codexLoginScope)
-		q.Set("id_token_add_organizations", "true")
-		q.Set("codex_cli_simplified_flow", "true")
-		auth, paste = codexAuthorizeURL+"?"+q.Encode(), "url"
-	}
+	auth, paste := subAuthorizeURL(note)
 	writeJSON(w, http.StatusOK, map[string]any{"flow": base64.RawURLEncoding.EncodeToString(blob),
 		"authorize_url": auth, "paste": paste, "expires_at": note.Expires})
 }
@@ -652,4 +635,27 @@ func (s *Server) handleMeSubsDelete(w http.ResponseWriter, r *http.Request) {
 		Detail: "own · disconnected" + optional(" · allowlists −"+removed, removed != "") + " · by " + actorOf(r)})
 	s.BroadcastCreds("own subscription disconnected")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// subAuthorizeURL is shared by personal and administrator flows; their sealed purposes stay separate.
+func subAuthorizeURL(note meSubLogin) (string, string) {
+	sum := sha256.Sum256([]byte(note.Verifier))
+	q := url.Values{"response_type": {"code"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])},
+		"code_challenge_method": {"S256"}, "state": {note.State}}
+	auth, paste := "", "code"
+	if note.Provider == credvault.Claude {
+		q.Set("code", "true")
+		q.Set("client_id", credvault.ClaudeClientID)
+		q.Set("redirect_uri", claudeCodeRedirect)
+		q.Set("scope", claudeLoginScope)
+		auth = claudeAuthorizeURL + "?" + q.Encode()
+	} else {
+		q.Set("client_id", credvault.CodexClientID)
+		q.Set("redirect_uri", codexRedirect)
+		q.Set("scope", codexLoginScope)
+		q.Set("id_token_add_organizations", "true")
+		q.Set("codex_cli_simplified_flow", "true")
+		auth, paste = codexAuthorizeURL+"?"+q.Encode(), "url"
+	}
+	return auth, paste
 }
