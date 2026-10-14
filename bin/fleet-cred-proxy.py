@@ -52,6 +52,11 @@ proxy's, moved over) is served too, answering that login only, so a session
 started before the switch moves over on its next request. The control socket
 (0666) knows the caller from the kernel (getpeereid / SO_PEERCRED): a login's
 uid reaches its own tenant, nothing else; root names one (FLEET_CRED_AS).
+It reads its tenants once, at start, and writes the logins it serves to
+<run>/logins beside <run>/version. A start that finds the lock held by a proxy
+serving another version or another set of logins (an orphan the daemon lost,
+still running the tenants from before a login joined — issue #4245) takes it
+over: SIGTERM, then the lock; only an identical one is "already running".
 
 `serve` binds 127.0.0.1 (the port in <state>/port) and a control socket
 <state>/ctl.sock (0600); every other subcommand is a client of that socket.
@@ -2546,6 +2551,84 @@ def legacy_serve(t, cfg):
     srv.serve_forever()
 
 
+def shared_logins(run):
+    """-> the logins the running shared proxy serves (<run>/logins), or None
+    when it wrote none (a proxy older than issue #4245)."""
+    try:
+        return sorted(l for l in open(os.path.join(run, "logins")).read().split() if l)
+    except OSError:
+        return None
+
+
+def shared_stale(shared):
+    """-> (pid, why) when the lock's holder is a shared proxy that is NOT this
+    tenants file's — another version, or another set of logins (issue #4245: an
+    orphan from before the daemon restarted kept the lock for two days, and every
+    restart the daemon made printed «already running» and exited, so a login that
+    joined since was never served) — else None: the holder is current, or not a
+    proxy we may stop."""
+    run = shared.get("run") or ""
+    want_v = shared.get("version") or "-"
+    want = sorted(str(t.get("login")) for t in shared["tenants"] if isinstance(t, dict))
+    try:
+        have_v = open(os.path.join(run, "version")).read().strip()
+    except OSError:
+        have_v = ""
+    have = shared_logins(run)
+    if have_v == want_v and have == want:
+        return None
+    try:
+        pid = int(open(os.path.join(run, "pid")).read().strip())
+    except (OSError, ValueError):
+        return None
+    if pid <= 1 or pid == os.getpid() or not pid_alive(pid):
+        return None
+    try:
+        argv = subprocess_out(["ps", "-o", "command=", "-p", str(pid)])
+    except OSError:
+        return None
+    if "fleet-cred-proxy.py" not in argv or "--shared" not in argv:
+        return None      # a pid reused by someone else: never ours to stop
+    if have is None:
+        why = "version %s (want %s), its logins unknown" % (have_v or "?", want_v)
+    else:
+        why = "version %s → %s, logins %s → %s" % (have_v or "?", want_v, ",".join(have) or "-", ",".join(want) or "-")
+    return pid, why
+
+
+def subprocess_out(cmd):
+    import subprocess
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+                          universal_newlines=True).stdout
+
+
+def shared_takeover(lockf, st, pid, why):
+    """Stop the stale holder and take its lock (SIGTERM, then SIGKILL past
+    FLEET_CRED_TAKEOVER_SECS / 2) — or exit 1, said, so the daemon's log shows it."""
+    secs = float(env("FLEET_CRED_TAKEOVER_SECS", "10") or 10)
+    sys.stderr.write("fleet-cred-proxy: the shared proxy pid %d is stale (%s): taking over\n" % (pid, why))
+    t0, killed = time.time(), False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        sys.exit("fleet-cred-proxy: cannot stop the stale shared proxy pid %d (%s) — it keeps %s/lock" % (pid, e, st))
+    while time.time() - t0 < secs:
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            sys.stderr.write("fleet-cred-proxy: took over from pid %d in %.1fs\n" % (pid, time.time() - t0))
+            return
+        except OSError:
+            pass
+        if not killed and time.time() - t0 >= secs / 2:
+            killed = True
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        time.sleep(0.1)
+    sys.exit("fleet-cred-proxy: the stale shared proxy pid %d still holds %s/lock after %gs" % (pid, st, secs))
+
+
 def serve(a):
     cfg = a
     shared = None
@@ -2560,8 +2643,11 @@ def serve(a):
     try:
         fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        sys.stderr.write("fleet-cred-proxy: already running (%s/lock)\n" % st)
-        sys.exit(0)
+        stale = shared_stale(shared) if shared else None
+        if not stale:
+            sys.stderr.write("fleet-cred-proxy: already running (%s/lock)\n" % st)
+            sys.exit(0)
+        shared_takeover(lockf, st, *stale)
     cfg.anthropic_url = env("FLEET_CRED_ANTHROPIC_URL", "https://api.anthropic.com").rstrip("/")
     cfg.codex_url = env("FLEET_CRED_CODEX_URL", "https://chatgpt.com/backend-api/codex").rstrip("/")
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
@@ -2712,6 +2798,12 @@ def serve(a):
         with open(vf, "w") as f:
             f.write("%s\n" % (cfg.version or "-"))
         files.append(vf)
+        # the logins it serves (issue #4245): the doctor's «joined, not served»
+        lf = os.path.join(ctld, "logins")
+        with open(lf + ".tmp", "w") as f:
+            f.write("".join("%s\n" % n for n in sorted(Proxy.tenants)))
+        os.replace(lf + ".tmp", lf)
+        files.append(lf)
         for t in tenants:
             if t.cfg.legacy_port and t.cfg.legacy_port != cfg.bound_port:
                 threading.Thread(target=legacy_serve, args=(t, cfg), daemon=True).start()
