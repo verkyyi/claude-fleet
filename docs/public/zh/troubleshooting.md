@@ -186,6 +186,13 @@ fleet debug report
 - **是什么**：这台机器跟哪条发布通道——Linux 跟 stable，Mac 跟 stable-macos（等于或落后 stable）——以及 Mac 通道比 stable 晚了几版、多久。
 - **WARN / FAIL 怎么办**：Mac 通道落后超过 2 小时，通常是 macOS 那半测试红了或没跑：等它绿了 Mac 自己跟上；红着就看那张 breakage 单。
 
+#### `cnpath`
+
+来自 `fleet doctor`；只在走国内真实用户路径巡检的那台机器上出现。
+
+- **是什么**：上一次从国内客户端走一遍真实用户路径（连上测试 pod、裸 `fleet` 进界面、新开 Codex 会话问一句、建一个任务）的结论，以及走了多久以前。
+- **WARN / FAIL 怎么办**：不通：说明里写着卡在哪层和它开的 breakage 单；那张单关掉或下一次巡检转绿之前，stable 不会前移。超过 12 小时没走：看这台机器的 diskguard 守护是不是还在跑。
+
 #### `install`
 
 来自 `fleet doctor` 和 `fleet doctor --machine`。

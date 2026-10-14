@@ -186,6 +186,13 @@ From `fleet doctor`; it appears only when the hub has set up a Mac channel.
 - **What it is**: which release channel this machine follows — Linux follows stable, Mac follows stable-macos (equal to or behind stable) — and how many versions and how long the Mac channel trails stable.
 - **On WARN / FAIL**: the Mac channel more than 2 hours behind usually means the macOS half of the tests is red or has not run: once it is green, Macs catch up by themselves; while it is red, look at its breakage ticket.
 
+#### `cnpath`
+
+From `fleet doctor`; it appears only on the machine that walks the China real-user path.
+
+- **What it is**: the verdict of the last walk of a real user's road from a client in China (connect to the test pod, open the view with a bare `fleet`, ask a new Codex session one sentence, file a task), and how long ago it ran.
+- **On WARN / FAIL**: not through: the explanation names the layer it stopped at and the breakage ticket it filed; stable does not move until that ticket is closed or the next walk is green. Not walked for over 12 hours: check that this machine's diskguard daemon is still running.
+
 #### `install`
 
 From `fleet doctor` and `fleet doctor --machine`.

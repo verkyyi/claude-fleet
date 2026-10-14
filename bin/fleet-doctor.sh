@@ -910,6 +910,34 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       info install "other logins on this machine: $flo (\`?\` = unreadable without passwordless sudo; $(dirname "$0")/fleet-install-follow.sh for the table)"
     fi
   fi
+  # The China real-user path (issue #4180): bin/fleet-cn-probe-watch.sh's last walk,
+  # on the one machine that walks it (where its last.json is). Green a PASS; red a
+  # WARN naming the layer and its breakage issue (never a FAIL — the install's own
+  # post-update doctor compares FAILs, and a red path is not this install's);
+  # a last walk older than 12 h (two green intervals) is a WARN too.
+  cnj="$conf_dir/global/cn-probe/last.json"
+  if [ -f "$cnj" ]; then
+    cnl=$(python3 - "$cnj" <<'PY2' 2>/dev/null
+import json, sys, time
+d = json.load(open(sys.argv[1]))
+age = int(time.time()) - int(d.get("ts") or 0)
+h = "%dh%02dm" % (age // 3600, age % 3600 // 60)
+st = (d.get("stable") or "")[:7] or "?"
+if age > 12 * 3600:
+    print("WARN\tthe last walk was %s ago (stable %s) — is the diskguard tick running? `bin/fleet-cn-probe-watch.sh --repo <repo> --now`" % (h, st))
+elif d.get("verdict") == "green":
+    print("PASS\t通 — walked %s ago against stable %s" % (h, st))
+else:
+    print("WARN\t不通：卡在 %s — %s (%s ago, stable %s%s); stable cannot move past it" % (
+        d.get("stuck") or "?", (d.get("detail") or "")[:120], h, st, ", " + d["issue"] if d.get("issue") else ""))
+PY2
+)
+    case "$cnl" in
+      PASS*) pass cnpath "${cnl#*	}" ;;
+      WARN*) warn cnpath "${cnl#*	}" ;;
+      *)     warn cnpath "$cnj unreadable" ;;
+    esac
+  fi
   # The OTHER MACHINES (issue #644, EPIC #1524 R4). The install that is old is on
   # the machine you are not logged into: on 2026-09-14 the Mac mini sat 28 commits
   # behind while nobody ran doctor there. Every node's heartbeat carries its live
