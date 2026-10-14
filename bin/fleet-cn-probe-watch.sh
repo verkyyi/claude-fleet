@@ -81,8 +81,7 @@ if [ "$now" = 0 ] && [ "$dry" = 0 ]; then
 fi
 # one run at a time; a lock older than an hour is a run that died
 if ! mkdir "$SD/lock" 2>/dev/null; then
-  lt=$(stat -f %m "$SD/lock" 2>/dev/null || stat -c %Y "$SD/lock" 2>/dev/null); lt=$(secs "$lt" 0)
-  [ $((t - lt)) -gt 3600 ] || exit 0
+  [ -n "$(find "$SD/lock" -maxdepth 0 -mmin +60 2>/dev/null)" ] || exit 0
   rmdir "$SD/lock" 2>/dev/null; mkdir "$SD/lock" 2>/dev/null || exit 0
 fi
 trap 'rmdir "$SD/lock" 2>/dev/null' EXIT
