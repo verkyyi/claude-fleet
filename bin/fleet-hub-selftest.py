@@ -86,8 +86,22 @@ if "set-option" in sys.argv and "rename-window" not in sys.argv:
     with open(root/"reappol.calls", "a") as out:
         out.write("\\x1f".join(sys.argv[1:]) + "\\n")
     sys.exit(0)
+if "display-message" in sys.argv and "#{@cc_agent}" in sys.argv:
+    # worker_transfer (issue #4184): the agent a window runs, workers.tsv column 6
+    win=sys.argv[sys.argv.index("-t") + 1]
+    data=root/"workers.tsv"
+    for row in (data.read_text().splitlines() if data.exists() else []):
+        cols=row.split("\t")
+        if cols[0] == win:
+            print(cols[5] if len(cols) > 5 else ""); sys.exit(0)
+    print(""); sys.exit(0)
 if "display-message" in sys.argv:
     print(""); sys.exit(0)
+if "run-shell" in sys.argv:
+    # a detached job (fleet_bg, issue #4184's transfer): its command, logged
+    with open(root/"runshell.calls", "a") as out:
+        out.write(sys.argv[-1].replace("\\n", " ") + "\\n")
+    sys.exit(0)
 if "rename-window" in sys.argv:
     # worker_rename (issue #2358): the whole argv, the name one word of it
     with open(root/"rename.calls", "a") as out:
@@ -234,6 +248,15 @@ if [ -f "$FLEET_CONF_DIR/reap-dirty" ]; then echo reaped:keep; else echo reaped:
         self.script(self.bin / "dash-migrate.sh", '''#!/bin/bash
 printf '%s\\n' "$* TMUX=${TMUX:-}" >> "$FLEET_CONF_DIR/migrate.calls"
 [ ! -f "$FLEET_CONF_DIR/switch-same" ] || { echo 'guide: already on gmail'; exit 1; }
+exit 0
+''')
+        # worker_transfer (issue #4184): fleet-transfer.sh's --dry-run refuses with
+        # a `fleet-transfer: <why>` line and exit 1, or says the source is mid-turn
+        self.script(self.bin / "fleet-transfer.sh", '''#!/bin/bash
+printf '%s\\n' "$* TMUX=${TMUX:-}" >> "$FLEET_CONF_DIR/transfer.calls"
+[ ! -f "$FLEET_CONF_DIR/transfer-auth" ] || { echo 'fleet-transfer: target-auth: codex is not logged in — a cutover would not switch; log in to the target first' >&2; exit 1; }
+echo 'dry-run: save a provenance package, /exit the source, then launch codex in %5 (state=done).'
+[ ! -f "$FLEET_CONF_DIR/transfer-busy" ] || echo 'cutover would refuse until the source reaches done.'
 exit 0
 ''')
         self.script(self.bin / "fleet-history.sh", '''#!/bin/bash
@@ -607,6 +630,47 @@ class HubTests(HubFixture):
         with self.assertRaisesRegex(Fault, "outside this caller"):
             self.lifecycle("worker_switch", idem="no-scope", token=reader["token"])
         self.assertEqual(len(self.node.calls("migrate")), n)
+
+    def test_transfer_hands_the_window_to_the_other_agent(self):
+        # worker_transfer (issue #4184): 换 Codex / 换 Claude on a row here from
+        # another machine. The worker resolves to its window (key or identity),
+        # the adapter checks its @fleet_id, refuses the agent it already runs,
+        # runs fleet-transfer.sh --dry-run (its refusal / a mid-turn source come
+        # back verbatim, nothing dispatched), then dispatches the real transfer
+        # detached on the fleet's own server.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident))
+        done = self.lifecycle("worker_transfer", to="codex")
+        self.assertEqual((done["status"], done["result"]["window"], done["result"]["to"]), ("succeeded", "@12", "codex"), done)
+        self.assertEqual(self.node.calls("transfer"), ["--session demo --window @12 --to codex --dry-run TMUX="])
+        jobs = self.node.calls("runshell")
+        self.assertEqual(len(jobs), 1, jobs)
+        self.assertIn("fleet-transfer.sh --session demo --window @12 --to codex", jobs[0])
+        self.assertIn("transfer-remote.log", jobs[0])
+        by_id = self.lifecycle("worker_transfer", ident, idem="by-identity", to="codex")
+        self.assertEqual((by_id["status"], by_id["result"]["window"]), ("succeeded", "@12"), by_id)
+        same = self.lifecycle("worker_transfer", idem="same", to="claude")
+        self.assertEqual((same["status"], same["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
+        self.assertIn("already runs claude", same["result"]["error"]["message"])
+        for flag, why, idem in (("transfer-busy", "mid-turn", "busy"), ("transfer-auth", "codex is not logged in", "auth")):
+            (self.node.conf / flag).touch()
+            got = self.lifecycle("worker_transfer", idem=idem, to="codex")
+            self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_STATE"), got)
+            self.assertIn(why, got["result"]["error"]["message"])
+            (self.node.conf / flag).unlink()
+        self.assertEqual(len(self.node.calls("runshell")), 2)
+        code, out, err = self.node.controller.adapter("transfer", "demo", "@12", str(uuid.uuid4()), "codex")
+        self.assertEqual(code, 5, (out, err))
+        self.assertEqual(self.node.controller.adapter("transfer", "demo", "@12", ident, "gpt")[0], 2)
+        for bad in ("", "Codex", "gpt", 3, None):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("worker_transfer", {"worker_id": self.worker(), "to": bad, "idempotency_key": "bad"})
+        with self.assertRaises(Fault):
+            self.call("worker_transfer", {"worker_id": self.worker(), "idempotency_key": "no-to"})
+        reader = self.hub.grant("answerer4", [self.fleet], ["fleet:read", "worker:answer"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_transfer", idem="no-scope", token=reader["token"], to="codex")
+        self.assertEqual(len(self.node.calls("runshell")), 2)
 
     def test_rename_renames_the_window_by_key_or_identity(self):
         # worker_rename (issue #2358): the client sidebar's 「改名…」 on a row here.

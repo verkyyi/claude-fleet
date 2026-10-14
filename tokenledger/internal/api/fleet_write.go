@@ -72,6 +72,10 @@ var fleetScopeOf = map[string]string{
 	// 置顶 / 取消置顶 on another machine's row (claude-fleet#3517): the list's
 	// order only — a rename's authority.
 	"worker_pin": "worker:message",
+	// 换 Codex / 换 Claude on another machine's row (claude-fleet#4184): close
+	// the session and continue the same task in the other agent, in the same
+	// pane — a switch's authority, a stop's.
+	"worker_transfer": "worker:stop",
 	// A session moved in through the hub (claude-fleet#1426) opens a worker
 	// like a start does.
 	"worker_move_in": "worker:start",
@@ -115,8 +119,8 @@ var fleetConfigKeys = map[string][2]int{
 var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
 		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true,
-		"worker_reap_policy": true, "worker_pin": true, "config_set": true, "gh_comment": true, "service_control": true,
-		"orch_ensure": true}
+		"worker_reap_policy": true, "worker_pin": true, "worker_transfer": true, "config_set": true, "gh_comment": true,
+		"service_control": true, "orch_ensure": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -708,7 +712,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		w.fleetID, _ = args["fleet_id"].(string)
 	case "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename",
-		"worker_reap_policy", "worker_pin":
+		"worker_reap_policy", "worker_pin", "worker_transfer":
 		opt := []string{}
 		req := []string{"worker_id", "idempotency_key"}
 		if tool == "worker_message" {
@@ -728,6 +732,9 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if tool == "worker_pin" {
 			req = append(req, "pin")
+		}
+		if tool == "worker_transfer" {
+			req = append(req, "to")
 		}
 		if err = checkFields(args, req, opt...); err != nil {
 			break
@@ -787,6 +794,15 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				break
 			}
 			w.params["pin"] = p
+		}
+		if tool == "worker_transfer" {
+			// the agent it continues in; the node refuses the one it already runs
+			to, _ := args["to"].(string)
+			if to != "claude" && to != "codex" {
+				err = fault("INVALID_ARGUMENT", "to must be claude or codex")
+				break
+			}
+			w.params["to"] = to
 		}
 	case "service_control":
 		w.svc, err = parseServiceControl(args, w.params)

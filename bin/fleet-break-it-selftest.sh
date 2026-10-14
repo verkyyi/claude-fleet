@@ -103,6 +103,7 @@
 #   spare-wash-no-fda                               bin/fleet-login-reset.sh wash → bin/fleet-login-remove-ssh.sh wash (#3508)
 #   spare-wash-respawn                              bin/fleet-login-reset.sh (quiesce before --since and after the home move, #3979)
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
+#   far-agent-switch                                bin/fleet_view.py ACTIONS agent (far), bin/fleet-control-read.sh transfer (#4184)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
 #   login-remove-no-fda                             bin/fleet-login-remove.sh (a failed deleteUser is checked, not
@@ -7207,6 +7208,61 @@ drill_ticket_hub_down() {
   printf '%s\n' "$out" | grep -q 'P1 hub down → held, back → backstop types it once — PASS' \
     || { WHY="the bridge's hub-down backstop is red: $(printf '%s\n' "$out" | grep FAIL | head -2 | tr '\n' ' ')"; return 1; }
   WHAT="入口不通：开单 / 读单 / 评论 / 采集都退出 4、说入口不通，一次也不找 GitHub，缓存留着最后一份；停着时的评论由桥的兜底在入口回来后送进会话、只送一次"
+}
+
+# far-agent-switch (issue #4184): 换 Codex / 换 Claude on a session that lives on
+# ANOTHER machine. The 看台's menu used to drop it (far None), and the hub had no
+# tool for it. Now the far row's menu offers it, and the node's adapter
+# (fleet-control-read.sh transfer — what the hub's worker_transfer runs there)
+# refuses a recycled window, the agent it already runs and a mid-turn source
+# with one line, dispatching nothing; a settled one is dispatched exactly once,
+# detached on the fleet's own server, to the same fleet-transfer.sh.
+drill_far_agent_switch() {
+  CAP=15; BREAK_SOCK="$WORK/sock-fas"; local d="$WORK/fas" t0 out rc win ids i
+  mkdir -p "$d/conf/fleets/fa" "$d/sb" "$d/home"
+  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\n' "$d" > "$d/conf/fleets/fa/conf"
+  for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
+  rm -f "$d/sb/fleet-transfer.sh"
+  cat > "$d/sb/fleet-transfer.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$d/calls"
+echo 'dry-run: save a provenance package, /exit the source, then launch codex in %1 (state=working).'
+[ ! -f "$d/busy" ] || echo 'cutover would refuse until the source reaches done.'
+exit 0
+EOF
+  chmod +x "$d/sb/fleet-transfer.sh"
+  nt -f /dev/null new-session -d -s fa -n w1 -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  win=$(nt display-message -p -t fa:w1 '#{window_id}')
+  nt set-option -w -t "$win" @fleet_id F1 \; set-option -w -t "$win" @cc_agent claude
+  run() { env -u TMUX -u TMUX_PANE PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+            FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" bash "$d/sb/fleet-control-read.sh" transfer fa "$win" "$@"; }
+  # the 看台's menu on a far row: 换成 Codex is there (it used to be dropped)
+  ids=$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+r = {"far": True, "state": "working", "target": "u/F1", "agent": "claude"}
+print(" ".join(a["id"] for a, _ in fv.menu_of(r)))' "$BIN" 2>&1)
+  case " $ids " in *" agent "*) ;; *) WHY="a far row's menu has no 换 Codex: [$ids]"; return 1 ;; esac
+  t0=$(now)
+  touch "$d/busy"
+  out=$(run F1 codex 2>&1); rc=$?
+  [ "$rc" = 1 ] && case "$out" in *mid-turn*) true ;; *) false ;; esac \
+    || { WHY="a mid-turn source answered rc=$rc [$out], want 1 and «mid-turn»"; return 1; }
+  rm -f "$d/busy"
+  out=$(run F2 codex 2>&1); rc=$?
+  [ "$rc" = 5 ] || { WHY="a recycled window answered rc=$rc [$out], want 5"; return 1; }
+  out=$(run F1 claude 2>&1); rc=$?
+  [ "$rc" = 1 ] && case "$out" in *"already runs claude"*) true ;; *) false ;; esac \
+    || { WHY="the agent it already runs answered rc=$rc [$out]"; return 1; }
+  [ "$(grep -vc -- --dry-run "$d/calls")" = 0 ] || { WHY="a refusal dispatched a transfer: $(cat "$d/calls")"; return 1; }
+  out=$(run F1 codex 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$out" = 'dispatched → codex' ] || { WHY="a settled source answered rc=$rc [$out]"; return 1; }
+  for i in $(seq 1 50); do [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && break; sleep 0.1; done
+  SECS=$(since "$t0")
+  [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && grep -qx -- "--session fa --window $win --to codex" "$d/calls" \
+    || { WHY="the transfer was not dispatched exactly once: $(cat "$d/calls")"; return 1; }
+  WHAT="别的机器上的会话也能换 Codex：菜单有这一项；那台机器上回合中 / 窗口换人 / 已是该 agent 一行拒绝、什么都不派，空闲的派一次 fleet-transfer.sh"
 }
 
 # ================================================================ run ====}
