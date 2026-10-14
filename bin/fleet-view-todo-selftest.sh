@@ -43,6 +43,7 @@ pass() { echo "ok   $*"; }
 # ============================================================================
 (
   FLEET_C="$C"; FROM_PREFIX='<!-- fleet:from '
+  : "$FLEET_C" "$FROM_PREFIX"   # read by the eval'd function below (opaque to shellcheck)
   now() { date +%s; }
   eval "$(awk '/^bridge_ask_note\(\) \{/,/^}/' "$BRIDGE")"
   command -v bridge_ask_note >/dev/null || { echo "no bridge_ask_note in $BRIDGE"; exit 1; }
