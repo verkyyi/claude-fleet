@@ -3,7 +3,7 @@
 // memory. Only a VITE_DEMO=1 build reaches it (../demo.ts asks it first);
 // DemoEventSource stands in for the hub's log stream there.
 import type { ApiInit } from "../api";
-import type { CIRunner, FleetDevice, MachineView, NodeDetail, NodeView, NodesSnapshot, ServiceStatus, SpotNodeView } from "./model";
+import type { CIRunner, FleetDevice, Installs, MachineView, NodeDetail, NodeView, NodesSnapshot, ServiceStatus, SpotNodeView } from "./model";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -230,6 +230,26 @@ function snapshot(): NodesSnapshot {
   };
 }
 
+// 安装 (#2697): the runtime and each login's install; the first login runs a
+// client shell that follows it, the second a client one release behind.
+function installsOf(m: DemoMachine): Installs {
+  const v = m.fleet_version || STABLE;
+  const at = v === STABLE;
+  const late = at ? undefined : 95 * 60;
+  return {
+    lane: "stable",
+    stable: STABLE,
+    at: ago(2),
+    runtime: m.versions?.runtime ? { version: m.versions.runtime, source: "hub", at_stable: m.versions.runtime === STABLE, behind_secs: m.versions.runtime === STABLE ? undefined : late } : undefined,
+    logins: m._logins.map((l, i) => ({
+      login: l.user,
+      install: { kind: "link", version: v, source: m.versions?.runtime ? "runtime" : "hub", at_stable: at, behind_secs: late },
+      shell: i === 0 ? { version: v, follows: true, source: "runtime", at_stable: at, behind_secs: late } : undefined,
+      client: i === 1 ? { version: OLD, source: "hub", at_stable: false, behind_secs: 50 * 60 } : undefined,
+    })),
+  };
+}
+
 function detail(host: string): NodeDetail | null {
   const m = machines().find((x) => x.hostname === host);
   if (!m) return null;
@@ -245,7 +265,7 @@ function detail(host: string): NodeDetail | null {
   const behind = m.fleet_version === OLD;
   return {
     at: new Date().toISOString(),
-    machine: mv,
+    machine: { ...mv, installs: installsOf(m) },
     logins: nodesOf(m),
     logins_at: ago(0.2),
     services: m.services || [],

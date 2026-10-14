@@ -23,6 +23,21 @@ export type ServiceStatus = {
   restarts?: number;
   last_log_line?: string;
 };
+// A machine's 「安装」 (claude-fleet#2697): its runtime and every heard login's
+// install, client shell and client install, each judged against the stable
+// the hub follows (at_stable null = not known); behind_secs is how long it
+// has trailed that stable, when the machine knows.
+export type InstallItem = {
+  version: string;
+  kind?: "link" | "dir" | string;
+  follows?: boolean;
+  source?: "hub" | "runtime" | "github" | "dev" | "?" | string;
+  at_stable: boolean | null;
+  behind_secs?: number;
+};
+export type LoginInstall = { login: string; install?: InstallItem; shell?: InstallItem; client?: InstallItem };
+export type Installs = { lane?: string; stable?: string; at?: string; runtime?: InstallItem; logins?: LoginInstall[] };
+
 export type MachineView = {
   hostname: string;
   alias?: string;
@@ -37,6 +52,7 @@ export type MachineView = {
   mem_total_bytes?: number;
   last_heartbeat: string | null;
   fleet_version?: string;
+  installs?: Installs;
   versions?: { runtime?: string; actual?: Record<string, string>; want?: Record<string, string>; daemon?: string };
   role: "host" | "client" | string;
   kind: "fixed" | "ephemeral" | string;

@@ -86,6 +86,11 @@ print(d["runtime"]["version"], d["runtime"]["at_stable"], L["alice"]["install"][
       L["alice"]["shell"]["follows"], L["alice"]["shell"]["version"] == d["runtime"]["version"], L["bob"]["install"]["kind"],
       L["bob"]["install"]["at_stable"], L["bob"]["shell"]["follows"], L["bob"]["client"]["version"], sorted(L))' 2>&1)
 eq "C: json facts" "$S1 True link True True True dir False False $S2 ['alice', 'bob']" "$J"
+# FLEET_INSTALLS_LOGIN (issue #2697): the agent's heartbeat reads one login only
+FLEET_INSTALLS_LOGIN=bob FLEET_INSTALLS_STABLE=$S1 run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); print([l["login"] for l in d["logins"]], d["runtime"]["version"], d["unreadable"])' 2>&1)
+eq "C: one login only" "['bob'] $S1 []" "$J"
 
 # --- L. 落后 (issue #2934) ------------------------------------------------------------
 # nothing recorded: no 落后 word (above). alice's install-sync saw S2 at T0, the

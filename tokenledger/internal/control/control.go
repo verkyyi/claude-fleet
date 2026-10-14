@@ -825,6 +825,11 @@ type Heartbeat struct {
 	FleetError string  `json:"fleet_error,omitempty"`
 	// FleetVersion is the claude-fleet install's HEAD, when known.
 	FleetVersion string `json:"fleet_version,omitempty"`
+	// Installs is this login's three kinds of install as `fleet-installs.sh
+	// --json` reads them for it (claude-fleet#2697): the machine runtime, its
+	// own login install and its client shell. Absent from an older agent or a
+	// login without the script; the hub judges at_stable against its stable.
+	Installs *Installs `json:"installs,omitempty"`
 
 	// Routes is how people reach this machine's sshd from outside
 	// (claude-fleet#1414): its tailnet name, a public port the gateway
@@ -908,6 +913,41 @@ type Versions struct {
 	Update *UpdateState `json:"update,omitempty"`
 	// Error says why the read failed; the rest is then absent.
 	Error string `json:"error,omitempty"`
+}
+
+// Installs is one login's reading of fleet-installs.sh (claude-fleet#2697),
+// trimmed to what the hub shows: each install's version and where it came
+// from. AtStable is the script's own judgement against the stable it knew
+// (nil = it knew none); the hub re-judges against its own stable.
+type Installs struct {
+	Lane    string         `json:"lane,omitempty"` // stable · stable-macos
+	Stable  string         `json:"stable,omitempty"`
+	Runtime *InstallItem   `json:"runtime,omitempty"`
+	Logins  []LoginInstall `json:"logins,omitempty"`
+	At      *time.Time     `json:"at,omitempty"`
+}
+
+// LoginInstall is one login's install, client shell and client install.
+type LoginInstall struct {
+	Login   string       `json:"login"`
+	Install *InstallItem `json:"install,omitempty"`
+	Shell   *InstallItem `json:"shell,omitempty"`
+	Client  *InstallItem `json:"client,omitempty"`
+}
+
+// InstallItem is one install: its version (a commit sha, or "-"), how it is
+// laid (Kind link|dir for a login install; Follows for a shell that follows
+// its login install), its source (hub · runtime · github · dev · ?) and
+// whether it is at stable (nil = not known).
+type InstallItem struct {
+	Version  string `json:"version"`
+	Kind     string `json:"kind,omitempty"`
+	Follows  bool   `json:"follows,omitempty"`
+	Source   string `json:"source,omitempty"`
+	AtStable *bool  `json:"at_stable"`
+	// BehindSecs is how long this machine has known a stable it is not at
+	// (fleet-installs.sh's behind_secs); absent when at stable or not known.
+	BehindSecs *int64 `json:"behind_secs,omitempty"`
 }
 
 // UpdateState is the updater's state as update.json keeps it.

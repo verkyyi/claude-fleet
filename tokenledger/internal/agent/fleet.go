@@ -66,6 +66,8 @@ type fleetProbe struct {
 	credsep credsepProbe
 	// gate is this machine's half of the public gate (claude-fleet#3574).
 	gate gateProbe
+	// installs is this login's installs (claude-fleet#2697).
+	installs installsProbe
 }
 
 // fleetVersionWire is the script's JSON as it arrives. Kept separate from

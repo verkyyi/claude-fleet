@@ -181,6 +181,7 @@ type fleetPart struct {
 	repoWhy  string
 	credsep  string
 	gate     []control.GateItem
+	installs *control.Installs
 }
 
 // readFleetPart is one fleet-half read. ok false when ctx ended under it — a
@@ -195,6 +196,10 @@ func (a *Agent) readFleetPart(ctx context.Context, probe *fleetProbe) (fleetPart
 	fp.repoWhy = probe.ready.repoWhy
 	fp.credsep = probe.credsep.reading(ctx, a.cfg.Home, time.Now())
 	fp.gate = probe.gate.reading(ctx, a.cfg.Home, time.Now())
+	fp.installs = probe.installs.reading(ctx, a.cfg.Home, time.Now())
+	if fp.version == "" {
+		fp.version = installsOwnVersion(fp.installs, a.cfg.Home)
+	}
 	return fp, ctx.Err() == nil
 }
 
@@ -223,6 +228,7 @@ func (fp fleetPart) fill(hb *control.Heartbeat, at time.Time) {
 	hb.Ready, hb.NotReady, hb.RepoNotReady = fp.ready, fp.notReady, fp.repoWhy
 	hb.Credsep = fp.credsep
 	hb.Gate = fp.gate
+	hb.Installs = fp.installs
 	if !at.IsZero() {
 		hb.FleetAt = &at
 	}
