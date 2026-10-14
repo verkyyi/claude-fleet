@@ -33,3 +33,47 @@ export function useTryClock() {
   }, [t0, took]);
   return { running: !!t0 && took === null, elapsed: now - t0, took, stop };
 }
+
+// 试用中 (issue #4059): a trial person's budget — 15 minutes on a machine or 20
+// lines, whichever comes first. GET /v1/try/state says what is left; read on
+// open, every 15 seconds and after each line (refresh), the seconds counted
+// down here in between. null for anyone who is not on a trial.
+export type TrialState = {
+  state: "running" | "waiting" | "ended" | "member";
+  secs_left: number;
+  msgs_left: number;
+  max_secs: number;
+  max_msgs: number;
+  ended?: string; // time · msgs
+  applied?: string; // their request's state, "" for none
+  apply: string; // where 「申请正式使用」 goes
+};
+
+export function useTrial(on: boolean) {
+  const [st, setSt] = useState<TrialState | null>(null);
+  const [at, setAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch("/v1/try/state", { credentials: "same-origin", headers: { Accept: "application/json" } });
+      if (!r.ok) return;
+      setSt(await r.json());
+      setAt(Date.now());
+    } catch { /* the next read */ }
+  }, []);
+  useEffect(() => {
+    if (!on) return;
+    void refresh();
+    const t = window.setInterval(refresh, 15000);
+    return () => clearInterval(t);
+  }, [on, refresh]);
+  const running = on && st?.state === "running";
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+  if (!on || !st || st.state === "member") return { trial: null, secsLeft: 0, refresh };
+  const secsLeft = running ? Math.max(0, st.secs_left - Math.floor(Math.max(0, now - at) / 1000)) : st.secs_left;
+  return { trial: st, secsLeft, refresh };
+}

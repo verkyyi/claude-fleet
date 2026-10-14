@@ -648,6 +648,7 @@ func (s *Server) routes() *routeMux {
 		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
 		mux.HandleFunc(TryStartPath, s.handleTryStart)
 		mux.Handle(TryClaimPath, s.viewerOnly(http.HandlerFunc(s.handleTryClaim)))
+		mux.Handle(TryStatePath, s.viewerOnly(http.HandlerFunc(s.handleTryState)))
 		mux.Handle(TryTimingPath, s.viewerOnly(http.HandlerFunc(s.handleTryTiming)))
 		mux.Handle(TryStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTryStats))))
 		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.

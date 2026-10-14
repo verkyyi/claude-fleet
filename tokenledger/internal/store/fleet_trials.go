@@ -18,7 +18,12 @@ import (
 // instead of starting another. queue_reason is why they last waited (full ·
 // busy · load · quota), kept so the audit records a change, not every poll.
 // The timings themselves are anonymous: fleet_trial_timings keeps
-// when and how long, never who.
+// when and how long, never who. Since claude-fleet#4059 a row also holds the
+// trial's budget spent: used_secs (time it held a machine, summed over each
+// seat — added up when a seat goes back), msgs (lines it sent), capped_at
+// (when the last line allowed was sent: the machine goes back once its reply
+// had time to arrive) and ended_reason (why it ended: time · msgs, C12 adds
+// its own; approved when it became a member).
 const fleetTrialsSchema = `
 CREATE TABLE IF NOT EXISTS fleet_trials (
   principal     TEXT PRIMARY KEY,
@@ -32,7 +37,11 @@ CREATE TABLE IF NOT EXISTS fleet_trials (
   reclaimed_at  INTEGER NOT NULL DEFAULT 0,
   kind          TEXT NOT NULL DEFAULT '',
   subject       TEXT NOT NULL DEFAULT '',
-  queue_reason  TEXT NOT NULL DEFAULT ''
+  queue_reason  TEXT NOT NULL DEFAULT '',
+  used_secs     INTEGER NOT NULL DEFAULT 0,
+  msgs          INTEGER NOT NULL DEFAULT 0,
+  capped_at     INTEGER NOT NULL DEFAULT 0,
+  ended_reason  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS fleet_trial_timings (
   at INTEGER NOT NULL,
@@ -44,6 +53,9 @@ const (
 	TrialWaiting   = "waiting"
 	TrialPlaced    = "placed"
 	TrialReclaimed = "reclaimed"
+	// TrialConverted: approved — a member now, the trial over
+	// (claude-fleet#4059); the login it held, if any, stays theirs.
+	TrialConverted = "converted"
 )
 
 // Trial is one trial person's row.
@@ -60,6 +72,20 @@ type Trial struct {
 	Kind         string
 	Subject      string
 	QueueReason  string
+	UsedSecs     int64
+	Msgs         int
+	CappedAt     time.Time
+	EndedReason  string
+}
+
+// Used is how long t has held a machine by now: every seat before, and the
+// one it holds.
+func (t *Trial) Used(now time.Time) time.Duration {
+	d := time.Duration(t.UsedSecs) * time.Second
+	if t.State == TrialPlaced && !t.PlacedAt.IsZero() && now.After(t.PlacedAt) {
+		d += now.Sub(t.PlacedAt)
+	}
+	return d
 }
 
 func (s *Store) ensureFleetTrials() error {
@@ -70,6 +96,14 @@ func (s *Store) ensureFleetTrials() error {
 		if err := s.addColumn("fleet_trials", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
+	}
+	for _, col := range []string{"used_secs", "msgs", "capped_at"} {
+		if err := s.addColumn("fleet_trials", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	if err := s.addColumn("fleet_trials", "ended_reason", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
 	}
 	if _, err := s.write.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_trials_way
 		ON fleet_trials(kind, subject) WHERE kind <> ''`); err != nil {
@@ -85,14 +119,16 @@ func unixOrZero(v int64) time.Time {
 	return time.Unix(v, 0).UTC()
 }
 
-const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at, kind, subject, queue_reason`
+const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at, kind, subject, queue_reason, used_secs, msgs, capped_at, ended_reason`
 
 func scanTrial(row interface{ Scan(...any) error }) (*Trial, error) {
 	var t Trial
-	var st, ws, pa, ls, ta, ra int64
-	if err := row.Scan(&t.Principal, &t.State, &st, &ws, &pa, &t.Host, &ls, &ta, &ra, &t.Kind, &t.Subject, &t.QueueReason); err != nil {
+	var st, ws, pa, ls, ta, ra, ca int64
+	if err := row.Scan(&t.Principal, &t.State, &st, &ws, &pa, &t.Host, &ls, &ta, &ra, &t.Kind, &t.Subject, &t.QueueReason,
+		&t.UsedSecs, &t.Msgs, &ca, &t.EndedReason); err != nil {
 		return nil, err
 	}
+	t.CappedAt = unixOrZero(ca)
 	t.StartedAt, t.WaitingSince, t.PlacedAt = unixOrZero(st), unixOrZero(ws), unixOrZero(pa)
 	t.LastSeen, t.TimedAt, t.ReclaimedAt = unixOrZero(ls), unixOrZero(ta), unixOrZero(ra)
 	return &t, nil
@@ -199,10 +235,11 @@ func (s *Store) TouchTrial(pid string, now time.Time) error {
 	return err
 }
 
-// RejoinTrial puts a reclaimed trial person back at the end of the waitlist.
+// RejoinTrial puts a reclaimed trial person back at the end of the waitlist,
+// with a whole budget again (fleet.trial.once off).
 func (s *Store) RejoinTrial(pid string, now time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, waiting_since = ?, placed_at = 0, host = '',
-		reclaimed_at = 0, last_seen = ? WHERE principal = ? AND state = ?`,
+		reclaimed_at = 0, last_seen = ?, used_secs = 0, msgs = 0, capped_at = 0, ended_reason = '' WHERE principal = ? AND state = ?`,
 		TrialWaiting, now.Unix(), now.Unix(), pid, TrialReclaimed)
 	return err
 }
@@ -255,10 +292,76 @@ func (s *Store) IdleTrials(cutoff time.Time) ([]Trial, error) {
 }
 
 // ReclaimTrial records that pid's login was given back.
-func (s *Store) ReclaimTrial(pid string, now time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, reclaimed_at = ? WHERE principal = ? AND state = ?`,
-		TrialReclaimed, now.Unix(), pid, TrialPlaced)
+func (s *Store) ReclaimTrial(pid string, now time.Time) error { return s.EndTrial(pid, "", now) }
+
+// EndTrial records that pid's login was given back because of reason: the
+// seat's time is added to used_secs.
+func (s *Store) EndTrial(pid, reason string, now time.Time) error {
+	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, reclaimed_at = ?,
+		used_secs = used_secs + CASE WHEN placed_at > 0 AND ? > placed_at THEN ? - placed_at ELSE 0 END,
+		ended_reason = ? WHERE principal = ? AND state = ?`,
+		TrialReclaimed, now.Unix(), now.Unix(), now.Unix(), reason, pid, TrialPlaced)
 	return err
+}
+
+// ConvertTrial records that pid was approved: the trial is over, whatever
+// state it was in (a seat's time is added to used_secs). changed=false when
+// pid has no trial, or it was converted already.
+func (s *Store) ConvertTrial(pid string, now time.Time) (changed bool, err error) {
+	res, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, ended_reason = 'approved',
+		used_secs = used_secs + CASE WHEN state = ? AND placed_at > 0 AND ? > placed_at THEN ? - placed_at ELSE 0 END
+		WHERE principal = ? AND state <> ?`,
+		TrialConverted, TrialPlaced, now.Unix(), now.Unix(), pid, TrialConverted)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// CountTrialMsg counts one line pid sends from its seat, when fewer than max
+// were sent: ok=false (nothing counted) for no seat or none left. n is the
+// lines sent with this one; the last allowed one marks capped_at.
+func (s *Store) CountTrialMsg(pid string, max int, now time.Time) (n int, ok bool, err error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE fleet_trials SET msgs = msgs + 1, last_seen = ?,
+		capped_at = CASE WHEN msgs + 1 >= ? THEN ? ELSE capped_at END
+		WHERE principal = ? AND state = ? AND msgs < ?`, now.Unix(), max, now.Unix(), pid, TrialPlaced, max)
+	if err != nil {
+		return 0, false, err
+	}
+	if c, _ := res.RowsAffected(); c == 0 {
+		return 0, false, nil
+	}
+	if err := tx.QueryRow(`SELECT msgs FROM fleet_trials WHERE principal = ?`, pid).Scan(&n); err != nil {
+		return 0, false, err
+	}
+	return n, true, tx.Commit()
+}
+
+// SpentTrials are the placed trials whose budget is spent at now: maxSecs of
+// a machine, or the last line sent at least grace ago.
+func (s *Store) SpentTrials(now time.Time, maxSecs int64, grace time.Duration) ([]Trial, error) {
+	rows, err := s.write.Query(`SELECT `+trialCols+` FROM fleet_trials
+		WHERE state = ? AND ((placed_at > 0 AND used_secs + ? - placed_at >= ?) OR (capped_at > 0 AND capped_at <= ?))
+		ORDER BY placed_at, principal`, TrialPlaced, now.Unix(), maxSecs, now.Add(-grace).Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Trial
+	for rows.Next() {
+		t, err := scanTrial(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
 }
 
 // RecordTrialTiming keeps ms as one anonymous timing, once per trial person:

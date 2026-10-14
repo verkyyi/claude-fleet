@@ -50,7 +50,7 @@
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.trial
-fleet.trial.slots fleet.trial.load_ratio fleet.trial.quota_floor fleet.trial.daily fleet.trial.once
+fleet.trial.slots fleet.trial.load_ratio fleet.trial.quota_floor fleet.trial.daily fleet.trial.once fleet.trial.max_secs fleet.trial.max_msgs
 fleet.entry fleet.entry_domain
 fleet.node_user_cap.<machine> user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
 

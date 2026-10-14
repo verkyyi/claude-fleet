@@ -11,9 +11,10 @@ import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.a
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector.aui";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 import { useFleetChat, type Gate } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
-import { fmtClock, useTryClock } from "@/app/chat/try";
+import { fmtClock, useTrial, useTryClock, type TrialState } from "@/app/chat/try";
 import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
@@ -144,16 +145,68 @@ const TryClock: FC<{ clock: ReturnType<typeof useTryClock> }> = ({ clock }) => {
   );
 };
 
+// 试用中 (issue #4059): the trial's bar, always on top while it runs — how
+// long and how many lines are left, and the one way on, 「申请正式使用」.
+const applyWords = (t: TrialState) => (t.applied && t.applied !== "withdrawn"
+  ? tr("看我的申请", "See my application")
+  : tr("申请正式使用", "Apply for full use"));
+
+const TrialBar: FC<{ trial: TrialState; secsLeft: number }> = ({ trial, secsLeft }) => (
+  <div className="px-4 pt-3">
+    <Alert role="status" data-testid="trial-bar"
+      className="border-clay-line bg-clay-soft mx-auto flex max-w-3xl items-center gap-3 rounded-full py-2 ps-4 pe-2">
+      <b className="shrink-0 font-semibold">{tr("试用", "Trial")}</b>
+      <span className="text-muted-foreground min-w-0 flex-1 truncate text-[13px]">
+        {trial.state === "waiting"
+          ? tr("还没领到机器", "No machine yet")
+          : trial.msgs_left <= 0
+            ? tr("条数用完，回复后结束", "No lines left")
+            : <>{tr("还剩 ", "")}<b className="text-foreground font-mono font-semibold tabular-nums">{fmtClock(secsLeft * 1000)}</b>
+              {tr(" · ", " left · ")}<b className="text-foreground font-semibold tabular-nums">{trial.msgs_left}</b>{tr(" 条", " lines")}</>}
+      </span>
+      <Button asChild size="sm" className="shrink-0 rounded-full">
+        <a href={trial.apply} className="no-underline">{applyWords(trial)}</a>
+      </Button>
+    </Alert>
+  </div>
+);
+
+// the trial is spent: the machine went back; what is left is applying
+const TrialOver: FC<{ trial: TrialState }> = ({ trial }) => {
+  const mins = Math.round(trial.max_secs / 60);
+  const why = trial.ended === "msgs"
+    ? tr(`${trial.max_msgs} 条消息用完了。`, `Your ${trial.max_msgs} lines are used up. `)
+    : tr(`${mins} 分钟到了。`, `Your ${mins} minutes are up. `);
+  return (
+    <div className="mx-auto flex h-full max-w-md flex-col items-start justify-center gap-4 px-6" data-testid="trial-over">
+      <Logo className="size-12" />
+      <h2 className="font-display text-[26px] leading-tight font-semibold tracking-tight">
+        {tr("这次试用用完了", "This trial is over")}<span className="text-clay">{tr("。", ".")}</span>
+      </h2>
+      <p className="text-muted-foreground text-[15px]">
+        {why}{tr("觉得有用？一键申请，通过后就在这段对话里接着聊。", "Found it useful? Apply in one step — once approved you carry on in this conversation.")}
+      </p>
+      <Button asChild className="rounded-full"><a href={trial.apply} className="no-underline">{applyWords(trial)}</a></Button>
+      <p className="text-muted-foreground text-[13px]">
+        {tr("对话保存 24 小时；没通过的话，到期删除。试用里生成的文件不保留。",
+          "The conversation is kept for 24 hours; if you are not approved, it is deleted then. Files made in the trial are not kept.")}
+      </p>
+    </div>
+  );
+};
+
 export default function ChatPage() {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
   const { me, quota, bumpQuota } = useShell();
   const clock = useTryClock();
+  const { trial, secsLeft, refresh: readTrial } = useTrial(me?.role === "trial");
   const chat = useFleetChat({
     onReply: clock.stop,
     blockedBy: quota?.over ? { blocked: true, ...(quota.reset ? { until: quota.reset } : {}) } : null,
-    onTurnEnd: bumpQuota,
+    onTurnEnd: () => { bumpQuota(); void readTrial(); },
   });
+  const over = trial?.state === "ended";
   const { runtime, notice, gate } = chat;
   const home = useHome(gate?.code);
   return (
@@ -162,10 +215,11 @@ export default function ChatPage() {
         <TooltipProvider>
           <div className="flex h-full flex-col">
             <BindWeChatBanner unbound={!!me?.reach && !me.reach.wechat} />
+            {trial && !over ? <TrialBar trial={trial} secsLeft={secsLeft} /> : null}
             <TryClock clock={clock} />
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">
-              {gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
+              {over ? <TrialOver trial={trial} /> : gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
                 <Thread autoFocus={false} placeholder={chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
                   components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ModelPicker, ComposerTop: QuotaBanner }} />
               )}

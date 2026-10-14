@@ -17,8 +17,8 @@ import (
 
 // claude-fleet#3590 (EPIC #3569 C20): the 60-second trial. A trial invite lets
 // a stranger in; the first in line takes a ready spare, the rest wait and are
-// told roughly how long; the page's one timing is kept anonymously; a trial
-// login unused for 7 days goes back. fleet.trial off adds nothing.
+// told roughly how long; the page's one timing is kept anonymously; a spent
+// trial's login goes back (claude-fleet#4059). fleet.trial off adds nothing.
 
 // tryDo is one request from the trial page: its header, and the person's
 // session when pid is set.
@@ -363,9 +363,11 @@ func TestTryTimingAnonymousAndStats(t *testing.T) {
 	}
 }
 
-// Seven days unused, a trial login goes back through the operator's remove;
-// one used yesterday stays; a reclaimed trial who comes back rejoins the line.
-func TestTrySweepReclaimsAfterSevenDays(t *testing.T) {
+// A spent trial goes back (claude-fleet#4059, it replaced the 7-day reclaim):
+// fleet.trial.max_secs on a machine, or the last line's reply given
+// trialCapGrace; one with budget left stays; a spent trial who comes back has
+// tried (fleet.trial.once) or rejoins the line with a whole budget.
+func TestTrySweepEndsASpentTrial(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
@@ -375,9 +377,9 @@ func TestTrySweepReclaimsAfterSevenDays(t *testing.T) {
 	openSpares(t, nodes["mac-d"], 2, control.CredsepSeparated)
 	readySpares(t, h, "mac-d", 2)
 
-	const old, fresh = "gh:7301", "gh:7302"
+	const timed, talked = "gh:7301", "gh:7302"
 	now := time.Now()
-	for _, p := range []string{old, fresh} {
+	for _, p := range []string{timed, talked} {
 		if err := h.srv.Store.StartTrial(p, now); err != nil {
 			t.Fatal(err)
 		}
@@ -388,38 +390,172 @@ func TestTrySweepReclaimsAfterSevenDays(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h.srv.SweepTrials(now.Add(trialIdle - time.Hour))
-	if a := accountState(t, h, old, "mac-d"); a.State != store.AccountActive {
-		t.Fatalf("swept before 7 days: %+v", a)
+	// talked sends all 20 lines in the first minute; the 21st is refused.
+	for i := 1; i <= defaultTrialMaxMsgs; i++ {
+		if code, _ := h.srv.trialTurn(&nopWriter{h: http.Header{}}, talked, now.Add(time.Minute)); code != "" {
+			t.Fatalf("line %d refused: %s", i, code)
+		}
 	}
-	if err := h.srv.Store.TouchTrial(fresh, now.Add(6*24*time.Hour)); err != nil {
-		t.Fatal(err)
+	if code, _ := h.srv.trialTurn(&nopWriter{h: http.Header{}}, talked, now.Add(time.Minute)); code != "trial_over" {
+		t.Fatalf("line 21 = %q; want trial_over", code)
 	}
-	h.srv.SweepTrials(now.Add(trialIdle + time.Hour))
-	if a := accountState(t, h, old, "mac-d"); a.State == store.AccountActive {
-		t.Fatalf("an idle trial login was not given back: %+v", a)
+	h.srv.SweepTrials(now.Add(time.Minute + trialCapGrace - time.Second))
+	for _, p := range []string{timed, talked} {
+		if a := accountState(t, h, p, "mac-d"); a.State != store.AccountActive {
+			t.Fatalf("%s swept with budget (or its last reply's grace) left: %+v", p, a)
+		}
 	}
-	if tr, _ := h.srv.Store.Trial(old); tr == nil || tr.State != store.TrialReclaimed {
-		t.Fatalf("old trial = %+v; want reclaimed", tr)
+	h.srv.SweepTrials(now.Add(time.Minute + trialCapGrace + time.Second))
+	if a := accountState(t, h, talked, "mac-d"); a.State == store.AccountActive {
+		t.Fatalf("a trial past its lines was not given back: %+v", a)
 	}
-	if a := accountState(t, h, fresh, "mac-d"); a.State != store.AccountActive {
-		t.Fatalf("a trial used yesterday was swept: %+v", a)
+	if tr, _ := h.srv.Store.Trial(talked); tr == nil || tr.State != store.TrialReclaimed || tr.EndedReason != trialEndMsgs || tr.Msgs != 20 {
+		t.Fatalf("talked = %+v; want reclaimed for msgs after 20 lines", tr)
 	}
-	if !auditHas(mustAudit(t, h), "trial.release", "ok", "7 天没用") {
-		t.Errorf("no reclaim audit row")
+	if a := accountState(t, h, timed, "mac-d"); a.State != store.AccountActive {
+		t.Fatalf("a trial with time left was swept: %+v", a)
 	}
-	// Back after the reclaim: one trial per account (fleet.trial.once) —
-	// 「已试过」, pointed at /apply.
-	if a, err := h.srv.tryClaim(old, "", now.Add(trialIdle+2*time.Hour)); err != nil || a.State != "tried" || a.Next != ApplyPath {
+	h.srv.SweepTrials(now.Add(time.Duration(defaultTrialMaxSecs-1) * time.Second))
+	if a := accountState(t, h, timed, "mac-d"); a.State != store.AccountActive {
+		t.Fatalf("swept before 900 s: %+v", a)
+	}
+	h.srv.SweepTrials(now.Add(time.Duration(defaultTrialMaxSecs) * time.Second))
+	if tr, _ := h.srv.Store.Trial(timed); tr == nil || tr.State != store.TrialReclaimed || tr.EndedReason != trialEndTime || tr.UsedSecs != defaultTrialMaxSecs {
+		t.Fatalf("timed = %+v; want reclaimed for time after 900 s", tr)
+	}
+	if !auditHas(mustAudit(t, h), "trial.release", "ok", "reason=msgs") || !auditHas(mustAudit(t, h), "trial.release", "ok", "reason=time") {
+		t.Errorf("no trial.release audit rows with their reasons")
+	}
+	// What the chat reads now: ended, why, and where to apply.
+	st, err := h.srv.trialStateOf(timed, now.Add(time.Hour))
+	if err != nil || st.State != "ended" || st.Ended != trialEndTime || st.SecsLeft != 0 || st.Apply != ApplyPath+"?from=trial" {
+		t.Fatalf("state after = %+v, %v", st, err)
+	}
+	// Back after it: one trial per account — 「已试过」, pointed at /apply.
+	later := now.Add(time.Hour)
+	if a, err := h.srv.tryClaim(timed, "", later); err != nil || a.State != "tried" || a.Next != ApplyPath {
 		t.Fatalf("a second trial = %+v, %v; want tried → /apply", a, err)
 	}
-	// With fleet.trial.once off: to the end of the line, never an error.
+	// With fleet.trial.once off: to the end of the line with a whole budget.
 	setHubSetting(t, h.srv, TrialOnceKey, "off")
-	if _, err := h.srv.tryClaim(old, "", now.Add(trialIdle+2*time.Hour)); err != nil {
+	if _, err := h.srv.tryClaim(timed, "", later); err != nil {
 		t.Fatal(err)
 	}
-	if tr, _ := h.srv.Store.Trial(old); tr == nil || tr.State == store.TrialReclaimed {
-		t.Fatalf("reclaimed trial after a claim = %+v; want back in line or placed", tr)
+	if tr, _ := h.srv.Store.Trial(timed); tr == nil || tr.State == store.TrialReclaimed || tr.UsedSecs != 0 || tr.Msgs != 0 || tr.EndedReason != "" {
+		t.Fatalf("reclaimed trial after a claim = %+v; want back in line, budget whole", tr)
+	}
+}
+
+// What is left (claude-fleet#4059): GET /v1/try/state counts the time held
+// and the lines sent; every line's answer carries the same two numbers; the
+// settings move the budget; fleet.trial off 404s.
+func TestTryStateCountsDown(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	setHubSetting(t, h.srv, TrialKey, "on")
+	setHubSetting(t, h.srv, TrialMaxSecsKey, "600")
+	setHubSetting(t, h.srv, TrialMaxMsgsKey, "5")
+	const pid = "p:00000000-0000-4000-8000-000000004059"
+	c := trialSession(t, h, pid)
+	get := func() (int, trialState) {
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+TryStatePath, nil)
+		req.AddCookie(c)
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var st trialState
+		_ = json.NewDecoder(resp.Body).Decode(&st)
+		return resp.StatusCode, st
+	}
+	if code, st := get(); code != http.StatusOK || st.State != "waiting" || st.SecsLeft != 600 || st.MsgsLeft != 5 || st.MaxMsgs != 5 {
+		t.Fatalf("waiting state = %d %+v", code, st)
+	}
+	now := time.Now()
+	if err := h.srv.Store.PlaceTrial(pid, "mac-d", now.Add(-100*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	w := &nopWriter{h: http.Header{}}
+	if code, _ := h.srv.trialTurn(w, pid, now); code != "" {
+		t.Fatalf("a line with budget left refused: %s", code)
+	}
+	if got := w.h.Get(trialLeftHeader); got != "500,4" {
+		t.Fatalf("%s = %q; want 500,4", trialLeftHeader, got)
+	}
+	code, st := get()
+	if code != http.StatusOK || st.State != "running" || st.MsgsLeft != 4 || st.SecsLeft > 500 || st.SecsLeft < 495 {
+		t.Fatalf("running state = %d %+v", code, st)
+	}
+	// Time up: the line is refused before it is counted.
+	if code, _ := h.srv.trialTurn(&nopWriter{h: http.Header{}}, pid, now.Add(501*time.Second)); code != "trial_over" {
+		t.Fatalf("a line past the time = %q; want trial_over", code)
+	}
+	if tr, _ := h.srv.Store.Trial(pid); tr.Msgs != 1 {
+		t.Fatalf("msgs = %d; want the refused line not counted", tr.Msgs)
+	}
+	// A member is not held by any of it.
+	if code, _ := h.srv.trialTurn(&nopWriter{h: http.Header{}}, "gh:7399", now); code != "" {
+		t.Fatalf("a member's line = %q", code)
+	}
+	setHubSetting(t, h.srv, TrialKey, "off")
+	if code, _ := get(); code != http.StatusNotFound {
+		t.Fatalf("state with the trial off = %d; want 404", code)
+	}
+}
+
+// Approved (claude-fleet#4059): a trial person becomes a member — role user,
+// the trial converted, the login they hold stays theirs and the sweep leaves
+// it; the chat reads member.
+func TestApprovedTrialBecomesAMember(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	nodes := spareFleet(t, h)
+	setHubSetting(t, h.srv, TrialKey, "on")
+	sparesOn(t, h, "1")
+	openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
+	readySpares(t, h, "mac-d", 1)
+	const pid = "p:00000000-0000-4000-8000-000000004061"
+	now := time.Now()
+	if err := h.srv.Store.StartTrialAs(pid, store.IdentityEmail, "kept@example.com", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.AddHubIdentity(store.HubIdentity{Kind: store.IdentityEmail, Subject: "kept@example.com",
+		PrincipalID: pid, VerifiedAt: now, AddedBy: "trial"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.srv.claimSpares(pid, pid, pid, []string{"mac-d"}, now); len(got) != 1 {
+		t.Fatalf("claim = %v", got)
+	}
+	if err := h.srv.Store.PlaceTrial(pid, "mac-d", now); err != nil {
+		t.Fatal(err)
+	}
+	if role, _ := h.srv.personRole(pid); role != roleTrial {
+		t.Fatalf("role before = %q; want trial", role)
+	}
+	req := &store.AccessRequest{ID: "rq-trial", Kind: store.IdentityEmail, Subject: "kept@example.com", Display: "Kept"}
+	if got, err := h.srv.admitRequest(req, "gh:1", now.Add(time.Minute)); err != nil || got != pid {
+		t.Fatalf("admit = %q, %v; want the trial's person", got, err)
+	}
+	if role, _ := h.srv.personRole(pid); role != roleUser {
+		t.Fatalf("role after = %q; want user", role)
+	}
+	tr, _ := h.srv.Store.Trial(pid)
+	if tr == nil || tr.State != store.TrialConverted || tr.EndedReason != "approved" || h.srv.trialPerson(pid) {
+		t.Fatalf("trial after approval = %+v", tr)
+	}
+	if st, _ := h.srv.trialStateOf(pid, now); st.State != "member" {
+		t.Fatalf("state after approval = %+v; want member", st)
+	}
+	h.srv.SweepTrials(now.Add(time.Hour))
+	if a := accountState(t, h, pid, "mac-d"); a.State != store.AccountActive {
+		t.Fatalf("the approved person's login went back: %+v", a)
+	}
+	if code, _ := h.srv.trialTurn(&nopWriter{h: http.Header{}}, pid, now.Add(time.Hour)); code != "" {
+		t.Fatalf("an approved person's line = %q; want through", code)
+	}
+	if !auditHas(mustAudit(t, h), "trial.convert", "ok", "") {
+		t.Errorf("no trial.convert audit row")
 	}
 }
 

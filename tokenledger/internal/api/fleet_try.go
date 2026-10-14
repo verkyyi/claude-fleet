@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"html/template"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -37,8 +36,9 @@ import (
 //     reply; POST TryTimingPath keeps it once per person, anonymously — the
 //     table holds when and how long, never who. GET TryStatsPath (admin) is
 //     the p50 / p90.
-//   - Seven days unused (trialIdle, last_seen: the trial page and every chat
-//     call), their login goes back through the operator's remove — a
+//   - Spent (fleet.trial.max_secs on a machine or fleet.trial.max_msgs
+//     lines, claude-fleet#4059 — fleet_try_budget.go; it replaced the 7-day
+//     reclaim), their login goes back through the operator's remove — a
 //     recycling machine washes it into a spare (claude-fleet#3504).
 //
 // fleet.trial is off by default: /app/try opens the console as before
@@ -63,8 +63,6 @@ const (
 )
 
 var (
-	// trialIdle is how long a trial login may go unused before it is reclaimed.
-	trialIdle = 7 * 24 * time.Hour
 	// trialFresh: a waiting person not seen for this long holds no one up.
 	trialFresh = 2 * time.Minute
 	// trialStartsPerMinute bounds the trial invites minted hub-wide.
@@ -77,13 +75,14 @@ var (
 // trialOn is fleet.trial.
 func (s *Server) trialOn() bool { return s.settingOn(TrialKey) }
 
-// trialPerson says whether pid came in through the trial road.
+// trialPerson says whether pid came in through the trial road and is not a
+// member since (an approved trial is converted, claude-fleet#4059).
 func (s *Server) trialPerson(pid string) bool {
 	if s.Store == nil || pid == "" {
 		return false
 	}
 	t, err := s.Store.Trial(pid)
-	return err == nil && t != nil
+	return err == nil && t != nil && t.State != store.TrialConverted
 }
 
 // tryStarts is the hub-wide minute window of trial invites minted.
@@ -181,8 +180,8 @@ func (s *Server) tryClaim(pid, name string, now time.Time) (tryAnswer, error) {
 	if err != nil {
 		return tryAnswer{}, err
 	}
-	if t == nil {
-		// Already a member: the console is theirs.
+	if t == nil || t.State == store.TrialConverted {
+		// Already a member (or approved since): the console is theirs.
 		return tryAnswer{State: "member", Next: AppPrefix}, nil
 	}
 	if err := s.Store.TouchTrial(pid, now); err != nil {
@@ -345,55 +344,6 @@ func (s *Server) trialStatsAt(now time.Time) (trialStats, error) {
 	}
 	out.All, err = spread(time.Time{})
 	return out, err
-}
-
-// SweepTrials gives back every trial login unused for trialIdle: the
-// operator's remove on each of the person's logins (recycled into a spare
-// where the machine recycles), then the trial is marked reclaimed. It runs
-// whatever fleet.trial says now — a login handed out while it was on still
-// goes back.
-func (s *Server) SweepTrials(now time.Time) {
-	if s.Store == nil {
-		return
-	}
-	idle, err := s.Store.IdleTrials(now.Add(-trialIdle))
-	if err != nil {
-		log.Printf("fleet: trial sweep: %v", err)
-		return
-	}
-	sent := false
-	for _, t := range idle {
-		as, err := s.Store.FleetAccounts(t.Principal)
-		if err != nil {
-			log.Printf("fleet: trial sweep: accounts of %s: %v", t.Principal, err)
-			continue
-		}
-		ok := true
-		for _, a := range as {
-			if a.State != store.AccountActive || !a.Managed() {
-				continue
-			}
-			if err := s.changeAccount(FleetAccountRequest{Action: "remove", PrincipalID: t.Principal, Hostname: a.Hostname}, trialInviter); err != nil {
-				log.Printf("fleet: trial sweep: remove %s on %s: %v", t.Principal, a.Hostname, err)
-				ok = false
-				continue
-			}
-			sent = true
-		}
-		if !ok {
-			continue
-		}
-		if err := s.Store.ReclaimTrial(t.Principal, now); err != nil {
-			log.Printf("fleet: trial sweep: %s: %v", t.Principal, err)
-			continue
-		}
-		_ = s.Store.HubAudit(trialInviter, "trial.release", t.Principal, "ok",
-			"试用 7 天没用，登录收回 · trial login reclaimed after "+trialIdle.String()+" unused", now)
-		log.Printf("fleet: trial of %s unused since %s — login given back", t.Principal, t.LastSeen.Format(time.RFC3339))
-	}
-	if sent {
-		s.dispatchAccounts()
-	}
 }
 
 // ── the page ────────────────────────────────────────────────────────────

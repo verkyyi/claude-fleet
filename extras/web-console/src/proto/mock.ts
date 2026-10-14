@@ -10,7 +10,9 @@ type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home
   // 我自己的订阅 (C21): none = the empty state; login = the dialog open at the sign-in; error = the read fails
   sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error";
   // unbound = a GitHub member the notices cannot find yet (claude-fleet#4057)
-  wx?: "unbound" };
+  wx?: "unbound";
+  // 试用中 (claude-fleet#4059): a trial person — running, its last line, spent
+  trial?: "running" | "last" | "capped" };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -28,6 +30,10 @@ export async function install(): Promise<string> {
     ? { via: "wechat", role: "admin", person: "p:zhouning", name: "周宁", login: "zhouning", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true }
     : { via: "wechat", role: "user", person: "p:linxiao", name: "林晓", login: "linxiao", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true };
   const wxBind = { unbound: sc.wx === "unbound", polls: 0 };
+  if (sc.trial) Object.assign(me, { role: "trial", pages: ["chat"] });
+  const trialState = () => ({ state: sc.trial === "capped" ? "ended" : "running", secs_left: sc.trial === "capped" ? 0 : 680,
+    msgs_left: sc.trial === "last" ? 0 : sc.trial === "capped" ? 4 : 16, max_secs: 900, max_msgs: 20,
+    ...(sc.trial === "capped" ? { ended: "time" } : {}), apply: "/apply?from=trial" });
   if (wxBind.unbound) Object.assign(me, { via: "github", reach: { wechat: false } });
   const limit = state === "unlimited" ? { set: false, used_week: 0, used_5h: 412000 } : {
     set: true, limit_week: 6_000_000, used_week: state === "over" ? 6_000_000 : state === "empty" ? 0 : 2_284_000,
@@ -257,6 +263,7 @@ export async function install(): Promise<string> {
       case "/v1/fleet/tasks": return state === "error" ? ok({ error: "down" }, 502) : ok({ tasks, observed_at: new Date().toISOString() });
       case "/v1/fleet/tickets": return state === "error" ? ok({ error: "down" }, 502) : ok({ tickets: tickets.map((t) => ({ ...t, comments: (comments[`${t.repo}#${t.number}`] || []).length })) });
       case "/v1/me": return ok(me);
+      case "/v1/try/state": return sc.trial ? ok(trialState()) : ok({ error: "not found" }, 404);
       // 绑微信 (claude-fleet#4057): the third ask finds it scanned
       case "/v1/me/wechat/bind-qr":
         wxBind.polls = 0;
