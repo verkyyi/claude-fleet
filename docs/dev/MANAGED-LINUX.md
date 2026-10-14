@@ -202,7 +202,11 @@ builds with `buildctl` (CN package mirrors; the registry's layer cache
 Dockerfile's `tools` stage (the sha256-pinned toolchain) is pushed separately by
 the train's `node tools` job from a GitHub-hosted runner, tagged
 `tools-<hash of the stage's text>` (`tools-tag.sh`) — once per pin change — and
-the cluster build takes it as `TOOLS=<repo>@<digest>`. Push credentials are the
+the cluster build takes it as `TOOLS=<repo>@<digest>`. The same job copies the image's base
+(`debian:trixie-slim`, linux/amd64 only) to `<repo>:base-debian-trixie-slim`,
+and the cluster build takes it as `BASE=<repo>@<digest>` — Docker Hub's mirror
+from there answered 502 for a whole train (issue #4159); a registry that answers
+5xx or does not resolve is tried three times. Push credentials are the
 job's GitHub OIDC token traded for a short ACR login as a RAM role that may push
 this one repository (`.github/actions/hub-acr`, role
 `gha-claudefleet-node-image`, environment `node-image`, master only). The

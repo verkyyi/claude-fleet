@@ -958,6 +958,7 @@ jobs:
     outputs:
       tag: ${{ steps.tools.outputs.tag }}
       digest: ${{ steps.tools.outputs.digest }}
+      base: ${{ steps.base.outputs.digest }}
     env:
       REPO: ${{ vars.NODE_IMAGE_REPO }}
     steps:
@@ -982,6 +983,27 @@ jobs:
           case "$digest" in (sha256:*) ;; (*) echo "::error::cannot read the digest of $REPO:$tag"; exit 1 ;; esac
           printf 'tag=%s\ndigest=%s\n' "$tag" "$digest" >> "$GITHUB_OUTPUT"
           echo "### 节点镜像工具层 \`$tag\`（$note）: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      # The image's own base (Dockerfile ARG BASE), copied beside the tools image
+      # from here: Docker Hub's mirror from Shenzhen answered 502 for a whole
+      # train (#4159). Only the linux/amd64 manifest — ACR refuses an attestation
+      # manifest, and the cluster builds amd64 alone; by digest, so a red copy
+      # never builds a different base than the one named.
+      - name: the base image, copied into the node image repository
+        id: base
+        run: |
+          set -euo pipefail
+          src=docker.io/library/debian:trixie-slim
+          for try in 1 2 3; do
+            amd=$(docker buildx imagetools inspect "$src" --raw \
+              | jq -r '[.manifests[]? | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest // empty') && [ -n "$amd" ] && break
+            [ "$try" -lt 3 ] || { echo "::error::cannot read the linux/amd64 digest of $src"; exit 1; }
+            sleep $((try * 15))
+          done
+          docker buildx imagetools create -t "$REPO:base-debian-trixie-slim" "docker.io/library/debian@$amd"
+          digest=$(docker buildx imagetools inspect "$REPO:base-debian-trixie-slim" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in (sha256:*) ;; (*) echo "::error::cannot read the digest of $REPO:base-debian-trixie-slim"; exit 1 ;; esac
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          echo "### 节点镜像基础层 \`$src\` (linux/amd64 \`$amd\`): \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
 
   node-image:
     # The managed node image of the release this train just shipped (issue
@@ -1006,6 +1028,7 @@ jobs:
       REPO: ${{ vars.NODE_IMAGE_REPO }}
       BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
       TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
+      BASE_DIGEST: ${{ needs.node-tools.outputs.base }}
     steps:
       # The cluster's git mirror first (vars.FLEET_TRAIN_GIT_MIRROR, issue #4109):
       # github.com from Shenzhen now and then does not connect at all (run
@@ -1067,7 +1090,7 @@ jobs:
           role: gha-claudefleet-node-image
       - name: build and push (train-build.sh)
         id: build
-        run: bash extras/managed-node/train-build.sh "${HUB_URLS%% *}" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST"
+        run: bash extras/managed-node/train-build.sh "${HUB_URLS%% *}" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST" "$BUILD_REPO@$BASE_DIGEST"
       - name: summary
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

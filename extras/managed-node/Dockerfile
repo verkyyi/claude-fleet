@@ -7,6 +7,12 @@
 # a GitHub-hosted runner, `<image>:<tools-tag.sh>`, because GitHub's release
 # assets and dl.k8s.io crawl from Shenzhen. The tag is this stage's own text, so
 # a pin moved here is a new tools image.
+#
+# BASE is the image's own base: Docker Hub's by default; the train's in-cluster
+# build names the copy the `node tools` job pushed beside the tools image,
+# `<image>@<digest of base-debian-trixie-slim>`, because Docker Hub's mirror from
+# Shenzhen answered 502 for a whole train (#4159).
+ARG BASE=debian:trixie-slim
 ARG TOOLS=tools
 FROM debian:trixie-slim AS tools
 # Every tar runs --no-same-owner: as root tar keeps the archive's owner, and
@@ -42,7 +48,7 @@ RUN set -eu; T=/opt/tools/usr/local; mkdir -p "$T/bin"; cd /tmp; \
 FROM ${TOOLS} AS toolsrc
 
 # trixie: OpenSSH 10.0 — the entry port's sshd needs PerSourcePenalties (9.8+, #3092)
-FROM debian:trixie-slim
+FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     FLEET_NODE_ROOT=/var/db/fleet-node/runtime FLEET_NODE_STATE=/var/db/fleet-node \
     FLEET_NODE_SEED=/opt/claude-fleet/seed \
