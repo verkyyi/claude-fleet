@@ -1020,8 +1020,11 @@ contains "R a new password on dscl's stdin" "$(cat "$DLOG")" "passwd /Users/rex 
 contains "R shell-less while it changes" "$CALLS" "dscl . -create /Users/rex UserShell /usr/bin/false"
 contains "R the shell back" "$CALLS" "dscl . -create /Users/rex UserShell /bin/zsh"
 contains "R createhomedir fills" "$CALLS" "createhomedir -c -u rex"
-contains "R the proxy's first answer is not waited 30 s (#4044)" "$OUT" "env FLEET_CREDSEP_JOIN_WAIT=3 bash"
-contains "R the bootstrap skips its doctor report (#4044)" "$(tail -n 1 "$WORK/bs.log" 2>/dev/null)" "doctor=0"
+contains "R the proxy's first answer is not waited for (#4044, #4196)" "$OUT" "env FLEET_CREDSEP_JOIN_WAIT=0 bash"
+contains "R the fleet starts off the clock (#4196)" "$OUT" "fleet: starting (fleet-login-bootstrap.sh, detached as rex"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q doctor=0 "$WORK/bs.log" 2>/dev/null && break; sleep 0.1; done
+contains "R the detached bootstrap ran, without its doctor report (#4044)" "$(tail -n 1 "$WORK/bs.log" 2>/dev/null)" "doctor=0"
+contains "R its output in its own log, never this run's (#4196)" "$(cat "$RH/.claude/fleet/logs/bootstrap.log" 2>/dev/null)" "fleet: ok"
 contains "R its own name when none is given" "$OUT" "full-name=rex"
 eq "R the key installed" "$(cat "$KEY")" "$(cat "$RH/.ssh/authorized_keys")"
 contains "R the last line is credsep's (pending in a sandbox, as leg M)" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: pending"

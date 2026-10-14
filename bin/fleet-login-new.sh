@@ -123,7 +123,9 @@
 #      the fleet comes up AS the login, right away — fleet-login-bootstrap.sh:
 #      clone, Claude Code, apply, the starter fleet. No ~/.zshrc block runs it on
 #      a first SSH login any more, and the person's first session needs a fleet
-#      there (a WARN on failure that names the command to re-run).
+#      there (a WARN on failure that names the command to re-run). A --recycle
+#      starts it detached instead (issue #4196): the login is ready to hand out
+#      without it, so the reset's clock never waits on the starter fleet.
 #   9. the welcome letter (issue #1195; `--no-welcome` skips it) →
 #      ~/<login>-onboard/welcome.txt in YOUR home, mode 600: how to connect
 #      (`ssh -p <port> <login>@<host>` — host and port from FLEET_SSH_PUBLIC_HOST /
@@ -567,14 +569,35 @@ node_join_step() {
   N=$N0
 }
 fleet_up_step() {
+  local bpath="$H/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  if [ "$RECYCLE" = 1 ]; then
+    # a recycle starts the fleet OFF the clock (issue #4196): the login is
+    # ready to hand out once the credsep check below passed — the bootstrap
+    # (its apply, the starter checkout, fleet-up's wait for the seed session,
+    # ~55 s) runs detached as the login, its output in its own logs/, and the
+    # reset's verdict never waits for it. Its stdio is never ours: the reset
+    # reads this run through a pipe that a child holding it would keep open.
+    local blog="$ROOT/logs/bootstrap.log"
+    say ""; say "[${N}b] start $LOGIN's fleet off the clock, as $LOGIN (fleet-login-bootstrap.sh, detached → $blog — the login is ready without it, issue #4196)"
+    show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" FLEET_BOOTSTRAP_DOCTOR=0 bash "$ROOT/bin/fleet-login-bootstrap.sh" '>' "$blog"
+    [ "$APPLY" = 1 ] || return 0
+    # shellcheck disable=SC2016 # expanded by the inner bash, as the login
+    if nohup sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" PATH="$bpath" FLEET_BOOTSTRAP_DOCTOR=0 \
+        bash -c 'exec bash "$1" > "$2" 2>&1 < /dev/null' _ "$ROOT/bin/fleet-login-bootstrap.sh" "$blog" \
+        > /dev/null 2>&1 < /dev/null & then
+      disown 2>/dev/null || :
+      FLEET_LINE="fleet: starting (fleet-login-bootstrap.sh, detached as $LOGIN — $blog)"
+    else
+      FLEET_LINE="fleet: WARN — could not start fleet-login-bootstrap.sh; re-run: sudo -u $LOGIN -H bash $ROOT/bin/fleet-login-bootstrap.sh"
+    fi
+    say "  $FLEET_LINE"
+    return 0
+  fi
   say ""; say "[${N}b] bring $LOGIN's fleet up now, as $LOGIN (fleet-login-bootstrap.sh — no login shell sets it up, issue #2702)"
   show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" bash "$ROOT/bin/fleet-login-bootstrap.sh"
   [ "$APPLY" = 1 ] || return 0
   local out rc
-  # a recycle skips the bootstrap's closing doctor report (issue #4044: 29 s,
-  # read by nobody — the reset's check is the verdict)
-  out=$(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" PATH="$H/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    FLEET_BOOTSTRAP_DOCTOR="$([ "$RECYCLE" = 1 ] && echo 0 || echo 1)" \
+  out=$(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" PATH="$bpath" FLEET_BOOTSTRAP_DOCTOR=1 \
     bash "$ROOT/bin/fleet-login-bootstrap.sh" </dev/null 2>&1); rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" = 0 ]; then FLEET_LINE='fleet: up (fleet-login-bootstrap.sh)'
@@ -797,10 +820,11 @@ if [ "$DONLY" = 0 ]; then
       -- sudo install -m 600 "$FC" "$CD/fleet.conf"
     run sudo chown "$LOGIN:staff" "$CD/fleet.conf"
     CS=(sudo bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
-    # a recycle: the shared proxy's first answer is not waited for 30 s here
+    # a recycle: the shared proxy's first answer is not waited for here at all
     # (issue #4044: it timed out at 30 s, then the [check] below passed in
-    # 0.6 s) — the check polls for it and stays the one verdict
-    [ "$RECYCLE" = 0 ] || CS=(sudo env FLEET_CREDSEP_JOIN_WAIT=3 bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
+    # 0.6 s; #4196: not even 3 s) — the check polls for it and stays the one
+    # verdict, before the login goes back to the pool
+    [ "$RECYCLE" = 0 ] || CS=(sudo env FLEET_CREDSEP_JOIN_WAIT=0 bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
     [ "$SHARE" = 1 ] && CS+=(--pool-src "$POOL_SRC")
     run "${CS[@]}"
     N=$N0
