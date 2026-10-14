@@ -52,6 +52,11 @@
 # archive (it quiesces again), a rejoin that did not finish is washed away and
 # redone. No op id, or another one ⇒ from the start.
 #
+# Root under the admin gate (issue #3723): FLEET_LOGIN_ADMIN_DIR + EUID 0 — no
+# sudo per step, its op book <dir>/<login>-reset/, the onboarding papers it
+# clears <dir>/<login>-onboard, no local ssh road; the two scripts it runs
+# inherit the same and run as root too.
+#
 # Exit: 0 clean (the credsep line says the rest) · 1 dirty, or a phase failed ·
 #       2 usage · 3 refused · 4 no such login · 6 services not moved yet (the
 #       remove script's).
@@ -61,6 +66,7 @@
 #   FLEET_LOGIN_RESET_ROOT prefixes the outside dirs and is the check's --root;
 #   FLEET_LOGIN_RESET_SETTLE (seconds of watch after a quiesce, default 0) ·
 #   FLEET_LOGIN_RESET_ASIDE=wait (the old home's archive + delete in the run);
+#   FLEET_LOGIN_TEST_EUID (the EUID the root-mode test reads);
 #   FLEET_LOGIN_RESET_{REMOVE,NEW,CHECK} — the three scripts; FLEET_LOGIN_REMOVE_SSH
 #   (the wash's road with no Full Disk Access, `0` = none) · FLEET_LOGIN_REMOVE_TCC_DB.
 set -uo pipefail
@@ -88,9 +94,21 @@ done
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "bad login name '$LOGIN'"
 OPID=${FLEET_LOGIN_OP_ID:-}
 [ -z "$OPID" ] || printf '%s' "$OPID" | grep -Eq '^[0-9a-f]{1,64}$' || die 'FLEET_LOGIN_OP_ID is not an op id (hex)'
-[ "$EUID" != 0 ] || refuse 'running under sudo/root; run as the admin login'
+# Root under the admin gate (issue #3723, EPIC #3500 C15·b-2): bin/fleet-admin-gate.sh
+# runs this as root with FLEET_LOGIN_ADMIN_DIR (its own directory) set — then
+# no step takes a sudo (`sudo -u <login>` stays: the drop to the login) and
+# there is no admin login to ssh as. EUID 0 without it is refused as before;
+# the variable without root is ignored (the admin login's run, byte for byte).
+ROOTRUN=0 ADIR=${FLEET_LOGIN_ADMIN_DIR:-}
+if [ "${FLEET_LOGIN_TEST_EUID:-$EUID}" = 0 ]; then
+  [ -n "$ADIR" ] || refuse 'running under sudo/root; run as the admin login'
+  case "$ADIR" in /*) ;; *) die "FLEET_LOGIN_ADMIN_DIR is not an absolute directory: '$ADIR'" ;; esac
+  [ -d "$ADIR" ] && [ ! -L "$ADIR" ] || die "FLEET_LOGIN_ADMIN_DIR: no directory at '$ADIR'"
+  ADIR=${ADIR%/}; ROOTRUN=1
+  sudo() { if [ "${1:-}" = -u ]; then command sudo "$@"; else "$@"; fi; }
+fi
 UIDT=$(id -u "$LOGIN" 2>/dev/null) || { printf '%s: no login %s on this machine: nothing to wash\n' "$PROG" "$LOGIN" >&2; exit 4; }
-ADMIN_UID=$(id -u)
+ADMIN_UID=$(id -u); [ "$ROOTRUN" = 0 ] || ADMIN_UID=0   # a root run's archive is root's
 [ "$UIDT" != "$ADMIN_UID" ] || refuse "washing the current login '$LOGIN'"
 case " $(id -Gn "$LOGIN" 2>/dev/null) " in *' admin '*) refuse "washing admin group member '$LOGIN'" ;; esac
 
@@ -107,12 +125,17 @@ NEW_SH=${FLEET_LOGIN_RESET_NEW:-$BIN/fleet-login-new.sh}
 CHECK_PY=${FLEET_LOGIN_RESET_CHECK:-$BIN/fleet-login-reset-check.py}
 RM_SSH=${FLEET_LOGIN_REMOVE_SSH:-$BIN/fleet-login-remove-ssh.sh}
 TCC_DB=${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}
-OPDIR="$HOME/$LOGIN-reset" OPF="$HOME/$LOGIN-reset/op"
+# the op book and the onboarding papers: the admin's home, or a root run's gate dir (issue #3723)
+OBASE=$HOME; [ "$ROOTRUN" = 0 ] || OBASE=$ADIR
+OPDIR="$OBASE/$LOGIN-reset" OPF="$OBASE/$LOGIN-reset/op"
+[ "$ROOTRUN" = 0 ] || RM_SSH=0   # a root run: no admin login to ssh as
 cd / || die 'cannot cd / (every step runs from there; issue #1216)'
 [ ! -L "$H" ] || refuse "symlinked home '$H'"
 case "$ARCHIVE_DIR/" in "$H/"*) refuse "archiving '$H' into itself ($ARCHIVE_DIR)" ;; esac
 
-show() { local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
+# a root run (issue #3723) shows the step without the sudo it does not take
+show() { [ "$ROOTRUN" = 0 ] || [ "${1:-}" != sudo ] || [ "${2:-}" = -u ] || shift
+  local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
 step() { printf '\n[%s] %s\n' "$1" "$2"; }
 CREDSEP_LINE='credsep: not reached'
 # verdict <reset verdict> <exit>: the two last lines, then out
@@ -400,7 +423,10 @@ if [ "$DONE_REJOIN" = 0 ]; then
   job home fresh_home
   # the admin's onboarding papers (key pair, password, letter) — and root's;
   # root's books about it: entry keys, the daemon's task state, a credsep store
-  job onboard rm -rf "$HOME/$LOGIN-onboard"
+  # a root run (issue #3723) has no admin of its own: the gate dir's papers and
+  # any an admin login's run left in its home — the check reads every home's
+  if [ "$ROOTRUN" = 1 ]; then job onboard rm -rf "$ADIR/$LOGIN-onboard" "$HOMES"/*/"$LOGIN-onboard"
+  else job onboard rm -rf "$OBASE/$LOGIN-onboard"; fi
   job books sudo rm -rf "${RROOT}/var/root/$LOGIN-onboard" "$NODE_STATE/entry/keys/$LOGIN" "$NODE_STATE/logins/$LOGIN" "$CRED_BASE/$LOGIN"
   show sudo crontab -u "$LOGIN" -r
   job crontab cron_clear

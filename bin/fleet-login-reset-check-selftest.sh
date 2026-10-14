@@ -166,6 +166,11 @@ EOF
     run; want "$P D: a linger file → systemd-user" 'reset: dirty systemd-user' 1
   fi
 
+  # D2: the admin gate's dir (issue #3723) — a root run's onboarding kit is onboard's
+  setup "$P"
+  mkdir -p "$S/sys/var/db/fleet-node/admin/$L-onboard"; : > "$S/sys/var/db/fleet-node/admin/$L-onboard/password.txt"
+  run; want "$P D2: a kit under the gate dir → onboard" 'reset: dirty onboard' 1
+
   # E: --since (ctime / process start) and fail-closed
   setup "$P"
   rm -rf "$H"; mkdir -p "$H"

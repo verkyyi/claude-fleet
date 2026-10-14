@@ -48,6 +48,9 @@
 # daemon's register (`fleet service` / `fleet task`, /var/db/fleet-node/logins/
 # <login>/services) is refused, exit 6, with the `service move` line for each —
 # left there they fail every run under a login that is gone (issue #2528).
+# Root under the admin gate (issue #3723): FLEET_LOGIN_ADMIN_DIR + EUID 0 — no
+# sudo per step, the archive root's, no local ssh road (no admin login).
+# Env (tests): FLEET_LOGIN_TEST_EUID — the EUID that test reads.
 # Exit (--recycle: fleet-login-reset.sh's): 0 done · 1 a step failed · 2 usage · 3 refused · 4 no such login (nothing
 # to remove, #2696) · 6 services not moved yet.
 set -uo pipefail
@@ -85,12 +88,24 @@ if [ "$RECYCLE" = 1 ]; then
   for a in ${ARGS[@]+"${ARGS[@]}"}; do [ "$a" = --recycle ] || FWD+=("$a"); done
   exec bash "${FLEET_LOGIN_RESET_SH:-$BIN/fleet-login-reset.sh}" ${FWD[@]+"${FWD[@]}"}
 fi
-[ "$EUID" != 0 ] || refuse 'running under sudo/root; run as the admin login'
+# Root under the admin gate (issue #3723, EPIC #3500 C15·b-2): bin/fleet-admin-gate.sh
+# runs this as root with FLEET_LOGIN_ADMIN_DIR (its own directory) set — then
+# no step takes a sudo (`sudo -u <login>` stays: the drop to the login) and
+# there is no admin login to ssh as. EUID 0 without it is refused as before;
+# the variable without root is ignored (the admin login's run, byte for byte).
+ROOTRUN=0 ADIR=${FLEET_LOGIN_ADMIN_DIR:-}
+if [ "${FLEET_LOGIN_TEST_EUID:-$EUID}" = 0 ]; then
+  [ -n "$ADIR" ] || refuse 'running under sudo/root; run as the admin login'
+  case "$ADIR" in /*) ;; *) die "FLEET_LOGIN_ADMIN_DIR is not an absolute directory: '$ADIR'" ;; esac
+  [ -d "$ADIR" ] && [ ! -L "$ADIR" ] || die "FLEET_LOGIN_ADMIN_DIR: no directory at '$ADIR'"
+  ADIR=${ADIR%/}; ROOTRUN=1
+  sudo() { if [ "${1:-}" = -u ]; then command sudo "$@"; else "$@"; fi; }
+fi
 # No such login (issue #2696): nothing to remove — a create that never made it,
 # or one closed by hand. Its own exit, so the hub records the remove done
 # instead of failed (a failed one kept the drill person waiting, or left it).
 UID_TARGET=$(id -u "$LOGIN" 2>/dev/null) || { printf '%s: no login %s on this machine: nothing to remove\n' "$PROG" "$LOGIN" >&2; exit 4; }
-ADMIN_UID=$(id -u)
+ADMIN_UID=$(id -u); [ "$ROOTRUN" = 0 ] || ADMIN_UID=0   # a root run's archive is root's
 [ "$UID_TARGET" != "$ADMIN_UID" ] || refuse "deleting the current login '$LOGIN'"
 GROUPS_TARGET=$(id -Gn "$LOGIN" 2>/dev/null) || refuse "cannot read groups for '$LOGIN'"
 case " $GROUPS_TARGET " in
@@ -158,7 +173,9 @@ for g in $(dscl . -list /Groups 2>/dev/null | grep '^com\.apple\.sharepoint\.gro
 done
 fi
 
-show() { local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
+# a root run (issue #3723) shows the step without the sudo it does not take
+show() { [ "$ROOTRUN" = 0 ] || [ "${1:-}" != sudo ] || [ "${2:-}" = -u ] || shift
+  local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
 run() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || { printf '%s: failed; stopped before deleting the login\n' "$PROG" >&2; exit 1; }; }
 # run_post: a step after the login is gone cannot stop before deleting it —
 # report what is left to finish by hand, keep going, exit 1 at the end.
@@ -480,6 +497,7 @@ quiesce   # again: the archive took its time, and launchd may have relaunched on
 # Full Disk Access the direct road is the only one.
 TCC_DB=${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}
 RM_SSH=${FLEET_LOGIN_REMOVE_SSH:-$BIN/fleet-login-remove-ssh.sh}
+[ "$ROOTRUN" = 0 ] || RM_SSH=0   # a root run: no admin login to ssh as (issue #3723)
 VIA=direct
 if [ "$APPLY" = 1 ] && ! sudo head -c 1 "$TCC_DB" >/dev/null 2>&1; then
   ME_ADMIN=$(id -un 2>/dev/null)

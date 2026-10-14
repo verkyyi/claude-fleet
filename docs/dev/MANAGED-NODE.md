@@ -1025,7 +1025,16 @@ BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
 - **`seats` 行**：管理员 agent 还在个人账号名下，只在 `_fleetadmin` 自己的 agent 起来（`com.claude-fleet.admin-agent`
   的 UserName，或以它跑的 `ccquota agent`）之后 FAIL；只建了账号仍是 WARN。
 
-还没做（各自的单）：脚本在门下以 root 跑（#3723）、`_fleetadmin` 的令牌与 `com.claude-fleet.admin-agent`（#3724）、
+- **脚本在门下以 root 跑**（#3723）：`fleet-login-new.sh` / `-remove.sh` / `-reset.sh` 见 `FLEET_LOGIN_ADMIN_DIR`
+  且 EUID 0 才走 root 模式——每步不再 sudo（只留 `sudo -u <login>` 这一降权），不读任何管理员登录的 `$HOME`：
+  `<门目录>/<login>-onboard/`（root 0755；`op` 0644 给座位 agent 和门的回滚读；password.txt、临时钥匙、welcome.txt
+  0600 root）、回收的 op 簿 `<门目录>/<login>-reset/`、`--share-pool` 的池源 `<门目录>/accounts`、机器缓存的
+  Claude Code 取运行时的 `tools/bin/claude`、信里的开号人是入口；没有管理员登录可 ssh，所以无完全磁盘访问时
+  不走本机 ssh 路、直接删。回收在 root 模式下清门目录和每个 home 里的 `<login>-onboard`，检查
+  （`fleet-login-reset-check.py`）也读 `<node>/admin/<login>-onboard`。EUID 0 没有这个变量照旧拒；有变量
+  不是 root 就忽略——管理员登录直接跑字节不变。
+
+还没做（各自的单）：`_fleetadmin` 的令牌与 `com.claude-fleet.admin-agent`（#3724）、
 旧 agent 交接进 attic 与真机切换演练（#3725）。
 
 BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
