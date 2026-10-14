@@ -396,6 +396,7 @@ def attach_bus(rs):
     words (issue #2538)."""
     bus = bus_cache()
     bus.update(bus_local({r["key"] for r in rs if r["key"].startswith("@") and r["key"] not in bus}))
+    fv, lists, only = None, {}, None
     for r in rs:
         m = bus.get(r["key"], {})
         r["agent"] = agent_say(m.get("agent", ""))
@@ -403,7 +404,17 @@ def attach_bus(rs):
         for k in ("left", "band", "ts", "model", "effort"):
             r[k] = m.get(k, "")
         ask = re.sub(r"[\x00-\x1f\x7f]+", " ", m.get("ask", "")).strip()[:200] if r["state"] == "needs" else ""
-        r["ask"], r["ask_kind"] = ask, (m.get("ask_kind", "") if ask else "")
+        kind = m.get("ask_kind", "") if ask else ""
+        if not ask and r.get("issue") and not r.get("ended"):
+            # an unanswered ⛔ ask on its issue (issue #4225): ⌘P's 等你, the same
+            # reader (fleet_view.open_ask — the issue bridge's book, local only)
+            if fv is None:
+                fv = lib("fleet_view", "fleet_view.py")
+                only = fv.fleet_only_slug(os.environ.get("FLEET_SESSION", ""))
+            repo = r.get("repo") or ""
+            ask = fv.open_ask(fv.repo_slug(repo) if "/" in repo else only, r["issue"], lists)
+            kind = "question" if ask else ""
+        r["ask"], r["ask_kind"] = ask, kind
     return rs
 
 
