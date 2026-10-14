@@ -209,6 +209,25 @@ PORT=$(bash "$BIN/fleet-cred-proxy.sh" ensure --max-seconds 300 2>"$SB/ensure.er
 PROXY_PID=$(cat "$FLEET_CONF_DIR/cred-proxy/pid")
 CP() { bash "$BIN/fleet-cred-proxy.sh" "$@"; }
 
+# ── N: another PID namespace (issue #4172) ───────────────────────────────────
+# A person's pod: the proxy in `fleet`, the door's login in `sshd` — one disk, two
+# process tables. The pid file names a process this side cannot see; the control
+# socket still answers, so the proxy is up. A socket nobody listens on is down.
+( exit 0 ) & DEADPID=$!; wait "$DEADPID" 2>/dev/null
+cp "$FLEET_CONF_DIR/cred-proxy/pid" "$SB/pid.real"
+printf '%s\n' "$DEADPID" > "$FLEET_CONF_DIR/cred-proxy/pid"
+out=$(CP port 2>&1)
+[ "$out" = "$PORT" ] && pass "N pid unseen, ctl.sock answers → up (port $PORT)" \
+  || fail "N pid unseen: port said '$out', not $PORT"
+out=$(CP ensure 2>&1)
+[ "$out" = "$PORT" ] && pass "N ensure keeps the serving proxy (no second serve)" || fail "N ensure: '$out'"
+mv "$FLEET_CONF_DIR/cred-proxy/ctl.sock" "$SB/ctl.sock.away"
+python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$FLEET_CONF_DIR/cred-proxy/ctl.sock"
+CP port >/dev/null 2>&1 && fail "N a dead socket + an unseen pid still read up" || pass "N dead socket + unseen pid → down"
+rm -f "$FLEET_CONF_DIR/cred-proxy/ctl.sock"
+mv "$SB/ctl.sock.away" "$FLEET_CONF_DIR/cred-proxy/ctl.sock"
+cp "$SB/pid.real" "$FLEET_CONF_DIR/cred-proxy/pid"
+
 # ── the driver: one request, its JSON verdict ────────────────────────────────
 cat > "$SB/req.py" <<'PY'
 import hashlib, http.client, json, sys

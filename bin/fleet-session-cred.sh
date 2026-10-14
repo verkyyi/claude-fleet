@@ -106,7 +106,7 @@ hub_pass() {
   [ -n "$a" ] || die "central route: this session has no worker assertion (FLEET_WORKER_CRED, a hub) — no pass"
   local br=''; br=$(hub_broker) || br=''
   FSC_BROKER="$br" FLEET_WORKER_ASSERT="$a" FSC_PROVIDER="$1" FSC_CONF="$CONF" python3 -I - <<'PY'
-import json, os, sys, urllib.request
+import json, os, sys, urllib.parse, urllib.request
 ne = {}
 try:
     for line in open(os.path.join(os.environ["FSC_CONF"], "node.env")):
@@ -143,7 +143,15 @@ except Exception as e:
         sys.stderr.write("fleet-session-cred: central route: the hub does not know this session "
                          "(404 — its fleet is not registered for this node); relaunch it to re-register\n")
         sys.exit(5)
-    sys.exit("fleet-session-cred: central route: the hub refused a pass (%s)" % getattr(e, "code", type(e).__name__))
+    why = getattr(e, "code", None) or type(e).__name__
+    if why == "URLError":
+        # no answer at all: say why, and which proxy the request went through
+        # (issue #4172: a pod's egress refusing the hub read only "URLError")
+        why = "URLError: %s" % str(getattr(e, "reason", "") or "-")[:160]
+        px = urllib.request.getproxies().get(hub.split(":", 1)[0])
+        if px and not urllib.request.proxy_bypass(urllib.parse.urlsplit(hub).hostname or ""):
+            why += " — through the proxy %s (NO_PROXY does not name the hub)" % px
+    sys.exit("fleet-session-cred: central route: the hub refused a pass (%s)" % why)
 cred, pid = d.get("cred", ""), d.get("id", "")
 if cred.split(".", 1)[0] not in ("fcp-h1", "fcp-h2") or cred.count(".") != 2 or not pid or "\t" in pid:
     sys.exit("fleet-session-cred: central route: the hub's answer carries no pass")
