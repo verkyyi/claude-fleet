@@ -136,6 +136,12 @@
 #             here. A login that HAS the full install (~/.claude/fleet,
 #             FLEET_INSTALL_NODE_ROOT) is that install's to apply — one line, exit 0.
 #
+#   --conf-only
+#             (issue #4194) the conf step alone (no --from/--to): a login whose
+#             home was cloned from root's home template (fleet-home-template.py)
+#             has every other pass done already; its own fleet.conf is what is
+#             left — the hub's address from node.env, FLEET_MACHINE_TASKS.
+#
 #   --tree-from <dir> --tree-to <dir>
 #             (issue #2774, EPIC #2770 C4) two version DIRECTORIES instead of two
 #             commits: a managed login's ~/.claude/fleet.versions/<sha>/ is a tree
@@ -159,6 +165,7 @@
 #   fleet-install-apply.sh --tree-from <dir> --tree-to <dir> [--from <name> --to <name>]
 #                          [--dry-run] [--root <dir>] [--no-daemons]
 #   fleet-install-apply.sh --bundle [--root <dir>] [--dry-run]
+#   fleet-install-apply.sh --conf-only [--root <dir>] [--dry-run]
 #   fleet-install-apply.sh --is-command <file>    # exit 0 iff the #858 gate passes
 #   fleet-install-apply.sh --is-skill <dir>       # exit 0 iff the skills pass installs it
 #   fleet-install-apply.sh --render-system <unit> [--root <dir>]
@@ -248,7 +255,7 @@ render_system() { # $1 template $2 unit $3 out
 }
 
 FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER='' NODAEMONS=0 BUNDLE=0
-TREEF='' TREET=''
+TREEF='' TREET='' CONFONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
@@ -258,6 +265,7 @@ while [ $# -gt 0 ]; do
     --sync-logins=*) SYNCL=1; SYNCL_ONLY="${1#--sync-logins=}"; shift ;;
     --no-daemons) NODAEMONS=1; shift ;;
     --bundle) BUNDLE=1; shift ;;
+    --conf-only) CONFONLY=1; shift ;;
     --tree-from) TREEF="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --tree-to) TREET="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --root) ROOT="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
@@ -294,7 +302,10 @@ if [ -n "$RENDER" ]; then
   rm -f "$tmp"; exit "$rc"
 fi
 
-if [ "$BUNDLE" = 0 ] && { [ -n "$TREEF" ] || [ -n "$TREET" ]; }; then
+if [ "$CONFONLY" = 1 ]; then
+:   # --conf-only: no versions to compare
+from=none to=none
+elif [ "$BUNDLE" = 0 ] && { [ -n "$TREEF" ] || [ -n "$TREET" ]; }; then
 # two version directories (issue #2774): no git, the trees are the versions
 [ -d "$TREEF" ] && [ -d "$TREET" ] \
   || { printf 'fleet-install-apply: --tree-from and --tree-to must both be directories (%s, %s)\n' "$TREEF" "$TREET" >&2; exit 2; }
@@ -464,6 +475,62 @@ finish() {   # $1 — what "apply: ok —" says
   exit 0
 }
 
+# conf_pass — the conf step below, also run alone by --conf-only (issue #4194:
+# a home cloned from root's template has every other pass done already)
+conf_pass() {
+# --- conf (issue #1623): the machine's ONE config file ------------------------------
+# Folds the install's fleet.conf, fleet.settings, the fleet conf, shell.conf and
+# hub.json's url into $FLEET_CONF_DIR/fleet.conf, each old file kept as .bak.
+# Idempotent: a machine already on one file says so and changes nothing.
+# FIRST every fleet's identity is frozen (issue #1936): fleet_uuid writes
+# fleets/<sess>/identity from today's repo + checkout, so whatever this pass — or
+# a later one — does to FLEET_REPO / FLEET_MAIN, the fleet's UUID stays put.
+if [ -z "$DRYFLAG" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then
+  frozen=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 || exit 0
+            n=0
+            while IFS=$'\t' read -r s _c; do
+              [ -n "$s" ] || continue
+              [ -f "$(fleet_identity_file "$s")" ] && continue
+              fleet_uuid "$s" >/dev/null 2>&1 && n=$((n + 1))
+            done <<EOF
+$(fleet_each_conf)
+EOF
+            printf '%s' "$n" )
+  [ "${frozen:-0}" = 0 ] || say "conf: froze the identity of $frozen fleet(s)"
+fi
+if [ -f "$ROOT/bin/fleet-conf.sh" ]; then
+  if out=$(bash "$ROOT/bin/fleet-conf.sh" migrate ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+    say "conf: ok — $(printf '%s\n' "$out" | grep -v '^  |' | tail -1 | sed 's/^fleet-conf: //')"
+  else
+    fail conf "$(printf '%s\n' "$out" | tail -1)"
+  fi
+else
+  say 'conf: skip — no fleet-conf.sh in this version'
+fi
+# The machine's one reading (issue #3546, EPIC #3500 C1): a login the node daemon
+# manages reads memory / load from the daemon's machine-reading task instead of
+# probing the machine itself — FLEET_MACHINE_TASKS=off in its fleet.conf, written
+# here and taken back here when the login is released (only the line this wrote).
+# Quiet unless it changes something; nothing else on any other machine.
+if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" ]; then
+  _mt=$(bash "$ROOT/bin/fleet-conf.sh" line FLEET_MACHINE_TASKS 2>/dev/null </dev/null)
+  # a person's pod (FLEET_USER_POD=1) reads its own: fleet-ops' reading of the
+  # pod, pushed into $FLEET_CONF_DIR/cluster/ (issue #3734)
+  if fleet_node_manages "$LOGIN" || [ "${FLEET_USER_POD:-}" = 1 ]; then
+    [ -n "$_mt" ] || { bash "$ROOT/bin/fleet-conf.sh" set-line FLEET_MACHINE_TASKS 'FLEET_MACHINE_TASKS=off' >/dev/null 2>&1 </dev/null \
+      && say 'conf: FLEET_MACHINE_TASKS=off — memory and load come from the machine'; }
+  elif [ "$_mt" = 'FLEET_MACHINE_TASKS=off' ]; then
+    bash "$ROOT/bin/fleet-conf.sh" drop-line FLEET_MACHINE_TASKS >/dev/null 2>&1 </dev/null \
+      && say 'conf: FLEET_MACHINE_TASKS dropped — this login probes the machine itself again'
+  fi
+  unset _mt
+fi
+}
+if [ "$CONFONLY" = 1 ]; then
+  conf_pass
+  finish "conf only (a home from the template, issue #4194)"
+fi
+
 # --- bundle (issue #1725): the package alone, on a client-only install ------------
 CLIENT=0
 if [ "$BUNDLE" = 1 ]; then
@@ -527,53 +594,7 @@ else
   say 'layout: skip — no migrator in this version'
 fi
 
-# --- conf (issue #1623): the machine's ONE config file ------------------------------
-# Folds the install's fleet.conf, fleet.settings, the fleet conf, shell.conf and
-# hub.json's url into $FLEET_CONF_DIR/fleet.conf, each old file kept as .bak.
-# Idempotent: a machine already on one file says so and changes nothing.
-# FIRST every fleet's identity is frozen (issue #1936): fleet_uuid writes
-# fleets/<sess>/identity from today's repo + checkout, so whatever this pass — or
-# a later one — does to FLEET_REPO / FLEET_MAIN, the fleet's UUID stays put.
-if [ -z "$DRYFLAG" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then
-  frozen=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 || exit 0
-            n=0
-            while IFS=$'\t' read -r s _c; do
-              [ -n "$s" ] || continue
-              [ -f "$(fleet_identity_file "$s")" ] && continue
-              fleet_uuid "$s" >/dev/null 2>&1 && n=$((n + 1))
-            done <<EOF
-$(fleet_each_conf)
-EOF
-            printf '%s' "$n" )
-  [ "${frozen:-0}" = 0 ] || say "conf: froze the identity of $frozen fleet(s)"
-fi
-if [ -f "$ROOT/bin/fleet-conf.sh" ]; then
-  if out=$(bash "$ROOT/bin/fleet-conf.sh" migrate ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
-    say "conf: ok — $(printf '%s\n' "$out" | grep -v '^  |' | tail -1 | sed 's/^fleet-conf: //')"
-  else
-    fail conf "$(printf '%s\n' "$out" | tail -1)"
-  fi
-else
-  say 'conf: skip — no fleet-conf.sh in this version'
-fi
-# The machine's one reading (issue #3546, EPIC #3500 C1): a login the node daemon
-# manages reads memory / load from the daemon's machine-reading task instead of
-# probing the machine itself — FLEET_MACHINE_TASKS=off in its fleet.conf, written
-# here and taken back here when the login is released (only the line this wrote).
-# Quiet unless it changes something; nothing else on any other machine.
-if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" ]; then
-  _mt=$(bash "$ROOT/bin/fleet-conf.sh" line FLEET_MACHINE_TASKS 2>/dev/null </dev/null)
-  # a person's pod (FLEET_USER_POD=1) reads its own: fleet-ops' reading of the
-  # pod, pushed into $FLEET_CONF_DIR/cluster/ (issue #3734)
-  if fleet_node_manages "$LOGIN" || [ "${FLEET_USER_POD:-}" = 1 ]; then
-    [ -n "$_mt" ] || { bash "$ROOT/bin/fleet-conf.sh" set-line FLEET_MACHINE_TASKS 'FLEET_MACHINE_TASKS=off' >/dev/null 2>&1 </dev/null \
-      && say 'conf: FLEET_MACHINE_TASKS=off — memory and load come from the machine'; }
-  elif [ "$_mt" = 'FLEET_MACHINE_TASKS=off' ]; then
-    bash "$ROOT/bin/fleet-conf.sh" drop-line FLEET_MACHINE_TASKS >/dev/null 2>&1 </dev/null \
-      && say 'conf: FLEET_MACHINE_TASKS dropped — this login probes the machine itself again'
-  fi
-  unset _mt
-fi
+conf_pass
 
 # --- daemons ------------------------------------------------------------------
 same_plist() { # semantic equality — the installed file may be binary or reformatted
