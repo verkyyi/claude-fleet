@@ -752,7 +752,10 @@ drill_linux_remove_task_running() {
   t0=$(now)
   python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
     || { WHY="account forget failed on a hung task: $(tail -1 "$sb/forget.out")"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
-  kill -0 "$tpid" 2>/dev/null && { WHY="alice's hung task still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
+  # ended is ended: a killed run waits as a zombie for the daemon's tick to reap
+  # it, and forget no longer waits for that (#4044)
+  kill -0 "$tpid" 2>/dev/null && ! ps -o stat= -p "$tpid" 2>/dev/null | grep -q '^ *Z' \
+    && { WHY="alice's hung task still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   grep -q 'sent KILL' "$sb/forget.out" || { WHY="forget never said it killed the run: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
   python3 -c 'import json,sys; sys.exit(0 if "alice" not in json.load(open(sys.argv[1])) else 1)' "$sb/db/accounts.json" \
     || { WHY="accounts.json still holds alice"; _forget_unset; return 1; }
