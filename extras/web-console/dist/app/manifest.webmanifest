@@ -1,0 +1,28 @@
+{
+  "id": "/app",
+  "name": "ClaudeFleet",
+  "short_name": "ClaudeFleet",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#19182a",
+  "theme_color": "#19182a",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/app/assets/icon-192-COtP-V7j.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/app/assets/icon-512-Cbq-OP_I.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/app/assets/apple-touch-icon-KZkN4yK-.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

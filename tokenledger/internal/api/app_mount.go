@@ -363,6 +363,31 @@ func (s *Server) appSide() http.Handler {
 	})))
 }
 
+// AppManifestPath is the console's web app manifest (claude-fleet#3943): what
+// 「添加到主屏幕」 reads — name, icon, start_url /app, full screen. ONE manifest
+// for the whole hub (/term links the same). Served to anyone: a browser
+// fetches a manifest without its cookies, and it names nothing of anyone's.
+const AppManifestPath = AppPrefix + "/manifest.webmanifest"
+
+// serveAppManifest serves the member side's build of the manifest
+// (vite.config.ts writes it beside index.html); 404 with no build.
+func (s *Server) serveAppManifest(w http.ResponseWriter, r *http.Request) {
+	if s.ConsoleFS == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		http.NotFound(w, r)
+		return
+	}
+	b, err := fs.ReadFile(s.ConsoleFS, "app/manifest.webmanifest")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "application/manifest+json")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, "manifest.webmanifest", time.Time{}, bytes.NewReader(b))
+}
+
 // consoleCSP is the console's policy: every byte its own — same origin only,
 // no CDN, no font or script from anywhere else (EPIC #3923 rule 4).
 const consoleCSP = chatCSP
@@ -451,6 +476,10 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 			// the sign-in page's one script (claude-fleet#4054)
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			serveSigninPollScript(w, r)
+		case p == AppManifestPath:
+			// 添加到主屏幕 (claude-fleet#3943)
+			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+			s.serveAppManifest(w, r)
 		case strings.HasPrefix(p, AppPrefix+"/assets/"):
 			// the new console's member side (claude-fleet#3925)
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
