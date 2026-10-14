@@ -62,11 +62,6 @@ func (s *Server) handleMeQuota(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// serveQuotaPage serves 我的额度's page.
-func (s *Server) serveQuotaPage(w http.ResponseWriter, r *http.Request) {
-	s.serveStandalonePage(w, r, "quota.html")
-}
-
 // myQuota is pid's rows; pid "" is the operator's door, every subscription.
 func (s *Server) myQuota(pid string, now time.Time) ([]MyQuota, error) {
 	var mine map[string]bool
@@ -219,7 +214,7 @@ type poolCreds struct {
 
 // match is a's pool label: the credential bound to its uuid, else one whose
 // label is a's e-mail or its local part (the Subscriptions page's own
-// pairing, web/dist/lib/admin.js subscriptions, steps 0 and 1).
+// pairing, steps 0 and 1).
 func (p poolCreds) match(a store.Account) string {
 	if c := p.byUUID[a.AccountUUID]; c != "" {
 		return c

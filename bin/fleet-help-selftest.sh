@@ -11,7 +11,8 @@
 #      serve are each red, naming what is gone
 #   B  the real skill: every § 「…」 resolves (docs/dev/CLIENT.md, MULTI-MACHINE-OPS.md,
 #      MANAGED-NODE.md, STATE.md …), every <入口>/… page is a route in
-#      tokenledger/internal/api (server.go, roles.go, fleet_entry_page.go), and the
+#      tokenledger/internal/api (server.go, roles.go, or an old address app_mount.go's
+#      consolePages moves on), and the
 #      index is not empty
 #   C  the skill ships: it is on the hub client's manifest (the agent bundle's
 #      skills/), and docs/dev/CLIENT.md carries the 常见问题 section it answers from

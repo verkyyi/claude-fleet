@@ -47,9 +47,6 @@ import os, re, sys
 root, listing = sys.argv[1:3]
 PKG = 'extras/fleet-theme/'
 EXEMPT = {   # a page the batch replaces, and the member that does
-    'tokenledger/web/dist/app.css': 'C16 #3939 拆掉旧控制台',
-    'tokenledger/web/dist/landing.html': 'C16 #3939 拆掉旧控制台',
-    'tokenledger/internal/api/oldpages_palette.go': 'C5 #3928 · C7 #3930 单子页、从手机连',
     'bin/docs-build.sh': 'C18 #3941 帮助文档',
     'plugins/fleet-epic/skills/epic-page/template.html': 'EPIC 设计页（doc-preview，不是产品页面）',
 }

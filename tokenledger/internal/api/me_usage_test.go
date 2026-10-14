@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 )
 
@@ -103,16 +102,9 @@ func TestPersonUsage_UserReadsOwn(t *testing.T) {
 		t.Errorf("operator mine: %d %+v", st, a)
 	}
 
-	// The page, and the menu entry.
-	if routeAccess["/usage"] != accessUser || routeAccess["/v1/fleet/person-usage"] != accessUser {
-		t.Errorf("/usage %v, person-usage %v; want both a user's", routeAccess["/usage"], routeAccess["/v1/fleet/person-usage"])
-	}
-	h.srv.UI = fstest.MapFS{
-		"usage.html": &fstest.MapFile{Data: []byte("<!doctype html><title>我的用量</title>")},
-		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>dashboard</title>")},
-	}
-	if code, b := rolesGet(t, h, bob, "/usage"); code != http.StatusOK || !strings.Contains(string(b), "我的用量") {
-		t.Errorf("bob GET /usage = %d %q; want usage.html", code, b)
+	// The menu entry (the page is the console's /app/usage).
+	if routeAccess["/v1/fleet/person-usage"] != accessUser {
+		t.Errorf("person-usage %v; want a user's", routeAccess["/v1/fleet/person-usage"])
 	}
 	for _, c := range []*http.Cookie{bob, admin} {
 		var me Me

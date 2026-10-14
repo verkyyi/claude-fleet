@@ -7,58 +7,42 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 )
 
-// The web chat's page on the website (claude-fleet#3646, EPIC #3642 C4): /chat/
-// is a signed-in person's, every byte the hub's own; the menu lists it for
-// every role; GET /v1/chat/home says where the conversation runs without
-// relaying anything.
-
-func chatPageUI() fstest.MapFS {
-	return fstest.MapFS{
-		"index.html":             &fstest.MapFile{Data: []byte("console")},
-		"chat/index.html":        &fstest.MapFile{Data: []byte(`<!doctype html><script type="module" src="/chat/assets/index-x.js"></script>CHAT-PAGE`)},
-		"chat/assets/index-x.js": &fstest.MapFile{Data: []byte("console.log(1)")},
-	}
-}
+// The web chat's page (claude-fleet#3646) moved to /app, the console's front
+// page (claude-fleet#3926), and its /chat/assets build went with the old
+// console (claude-fleet#3939): /chat and /chat/ move on, the files are gone;
+// GET /v1/chat/home says where the conversation runs without relaying
+// anything.
 
 func TestChatPage(t *testing.T) {
 	h, _, _, _ := chatHarness(t)
 	alice := personCookie(pAlice, "alice")
-	page := func(path string, cookie *http.Cookie) (*http.Response, string) {
+	page := func(path string, cookie *http.Cookie) *http.Response {
 		t.Helper()
 		resp := chatDo(t, h, "GET", path, cookie, map[string]string{"Accept": "text/html"}, "")
-		b, _ := io.ReadAll(resp.Body)
-		return resp, string(b)
+		resp.Body.Close()
+		return resp
 	}
-
-	// The page itself moved to /app, the new console's front page
-	// (claude-fleet#3926): one 301, signed in or not — the gate is /app's.
-	h.srv.UI = chatPageUI()
+	// One 301, signed in or not — the gate is /app's.
 	for _, c := range []*http.Cookie{alice, nil} {
-		if resp, _ := page("/chat/", c); resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix {
-			t.Fatalf("/chat/ (cookie %v): %d → %q; want 301 %s", c != nil, resp.StatusCode, resp.Header.Get("Location"), AppPrefix)
+		for _, p := range []string{"/chat/", "/chat"} {
+			if resp := page(p, c); resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix {
+				t.Fatalf("%s (cookie %v): %d → %q; want 301 %s", p, c != nil, resp.StatusCode, resp.Header.Get("Location"), AppPrefix)
+			}
 		}
 	}
-	if resp, _ := page("/chat/?x=1", alice); resp.Header.Get("Location") != AppPrefix+"?x=1" {
+	if resp := page("/chat/?x=1", alice); resp.Header.Get("Location") != AppPrefix+"?x=1" {
 		t.Errorf("/chat/?x=1 → %q; want the query kept", resp.Header.Get("Location"))
 	}
-	// Its files stay where they were until the old build goes (C16).
-	var resp *http.Response
-	var body string
-	resp, body = page("/chat/assets/index-x.js", alice)
-	if resp.StatusCode != http.StatusOK || body != "console.log(1)" || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
-		t.Errorf("an asset: %d %q %q", resp.StatusCode, body, resp.Header.Get("Cache-Control"))
-	}
-	if resp, _ := page("/chat", alice); resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != "/chat/" {
-		t.Errorf("/chat: %d → %q; want 301 /chat/", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	for _, p := range []string{"/chat/nope.js", "/chat/assets/", "/chat/../index.html", "/chat/%2e%2e/index.html"} {
-		if resp, body := page(p, alice); resp.StatusCode == http.StatusOK {
-			t.Errorf("%s: 200 %q; want refused", p, body)
+	for _, p := range []string{"/chat/assets/index-x.js", "/chat/nope.js"} {
+		if resp := page(p, alice); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: %d; want 404 — the old build is gone", p, resp.StatusCode)
 		}
+	}
+	if resp := chatDo(t, h, "POST", "/chat/", alice, nil, ""); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("POST /chat/: %d; want 404", resp.StatusCode)
 	}
 
 	// A return cookie a sign-in left before the move still lands (and moves on).

@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -348,16 +347,11 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 		t.Fatalf("poll: %d %s", code, body)
 	}
 
-	// /connect and its data — the old page, not 设备 it moved to (claude-fleet#3930).
-	defer oldPagesStay(AppPrefix + "/connect")()
-	h.srv.UI = fstest.MapFS{"connect.html": &fstest.MapFile{Data: []byte("<!doctype html><title>连接</title>")}}
-	if code, b := asUID(t, h, http.MethodGet, "/connect", pCao, "曹健", nil); code != 200 || !strings.Contains(string(b), "连接") {
-		t.Fatalf("/connect: %d %s", code, b)
-	}
+	// 设备's data (claude-fleet#3930) places them on the first read.
+	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", pCao, "曹健", nil)
 	if p, err := h.srv.Store.Principal(pCao); err != nil || p.Login != "globex" || p.DisplayName != "曹健" {
-		t.Fatalf("/connect did not place them: %+v %v", p, err)
+		t.Fatalf("/v1/fleet/connect did not place them: %+v %v", p, err)
 	}
-	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", pCao, "", nil)
 	var ci ConnectInfo
 	json.Unmarshal(body, &ci)
 	if code != 200 || !ci.Signed || ci.Login != "globex" || ci.Problem != "" || len(ci.Machines) != 1 || ci.Machines[0].Hostname != "mac-e" {
@@ -378,9 +372,6 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	json.Unmarshal(body, &st)
 	if _, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pZhang, "张三", nil); !strings.Contains(string(raw), "issue yet") {
 		t.Fatalf("zhangsan's confirm page:\n%s", raw)
-	}
-	if code, _ := asUID(t, h, http.MethodGet, "/connect", pZhang, "张三", nil); code != 200 {
-		t.Fatalf("zhangsan /connect: %d", code)
 	}
 	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", pZhang, "张三", nil)
 	ci = ConnectInfo{}

@@ -47,7 +47,8 @@ const (
 	trainBudgetDefault = 120
 )
 
-// The page (web/dist/admin/trains.js): an admin's, mounted like every admin page.
+// The page's old address: the console's 发布 (/admin/release) took it over
+// (claude-fleet#3937); /trains only moves on (consolePages).
 const (
 	trainsPagePath = "/trains"
 	trainsPageID   = "trains"

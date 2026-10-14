@@ -1,11 +1,17 @@
 // sessions.ts — 我的会话's data (EPIC #3923 C4, issue #3927): the person's own
 // live sessions (/v1/fleet/sessions, kept fresh by the push channel's
-// `sessions` topic, /v1/fleet/stream — a 10 s poll when the channel is not
-// there), their ended ones of the last 14 days (?state=ended), and the two
+// `sessions` topic, /v1/fleet/stream, under a watchdog — a 10 s poll when the
+// channel is not there), their ended ones of the last 14 days (?state=ended), and the two
 // writes through the write door (/v1/fleet/write): 回收 = worker_reap, 接回 =
 // worker_resume. Every read is already cut to the person by the hub.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, sendJSON } from "./api";
+
+// The push channel's watchdog (BREAK-IT hub-stream-silent): no event for
+// 30 s — the hub pings every 20 s — is a stream something in between holds
+// silent; it is opened again after 1 → 2 → 4 → 8 → 15 s.
+export const WATCHDOG_MS = 30_000;
+const BACKOFF_MS = [1000, 2000, 4000, 8000, 15000];
 
 export type Group = "run" | "ask" | "ended";
 export type Ask = { kind: string; msg: string };
@@ -97,18 +103,45 @@ export function useSessions(): SessionsState {
   useEffect(() => {
     reload();
     let es: EventSource | null = null;
-    let poll = 0;
+    let poll = 0, dog = 0, retry = 0, silent = 0, tries = 0, gone = false;
     const startPoll = () => { if (!poll) poll = window.setInterval(() => getJSON<LiveBody>("/v1/fleet/sessions").then((b) => b && onLive(b)), 10000); };
-    if (typeof EventSource !== "undefined") {
+    const stopPoll = () => { if (poll) { clearInterval(poll); poll = 0; } };
+    const drop = () => { es?.close(); es = null; clearTimeout(dog); };
+    const later = (ms: number) => { clearTimeout(retry); retry = window.setTimeout(open, ms); };
+    // a channel a proxy holds open but silent (BREAK-IT hub-stream-silent):
+    // dropped and opened again, and twice silent in a row the route's poll,
+    // the stream tried again every minute
+    const quiet = () => {
+      drop();
+      if (++silent >= 2) { startPoll(); later(60_000); return; }
+      later(BACKOFF_MS[Math.min(tries++, BACKOFF_MS.length - 1)]);
+    };
+    // anything that arrives — the hub's 20 s ping too — says it is alive
+    const alive = () => { silent = 0; tries = 0; stopPoll(); clearTimeout(dog); dog = window.setTimeout(quiet, WATCHDOG_MS); };
+    function open() {
+      if (gone) return;
+      if (typeof EventSource === "undefined") { startPoll(); return; }
       es = new EventSource("/v1/fleet/stream?topics=sessions");
+      dog = window.setTimeout(quiet, WATCHDOG_MS);
+      es.addEventListener("ping", alive);
       es.addEventListener("sessions", (e) => {
+        alive();
         try { const f = JSON.parse((e as MessageEvent).data); if (f?.body) onLive(f.body); } catch { /* the next event */ }
       });
       // a stream the hub or a proxy will not hold: the route's own poll
-      es.onerror = () => { if (es && es.readyState === EventSource.CLOSED) startPoll(); };
-    } else startPoll();
+      // meanwhile, the stream again after a backoff (its first event the
+      // whole list: the catch-up)
+      es.onerror = () => {
+        if (es && es.readyState === EventSource.CLOSED) {
+          drop();
+          startPoll();
+          later(BACKOFF_MS[Math.min(tries++, BACKOFF_MS.length - 1)]);
+        }
+      };
+    }
+    open();
     const t = timers.current;
-    return () => { es?.close(); if (poll) clearInterval(poll); t.forEach(clearTimeout); };
+    return () => { gone = true; drop(); stopPoll(); clearTimeout(retry); t.forEach(clearTimeout); };
   }, [reload, onLive]);
 
   return { live, ended, failed, reload };

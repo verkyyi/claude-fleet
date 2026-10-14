@@ -57,20 +57,6 @@ func sameAnswer(a, b *httptest.ResponseRecorder) string {
 	return ""
 }
 
-// withLive runs f with every row of the table live (all == true) or none.
-func withLive(t *testing.T, all bool, f func()) {
-	t.Helper()
-	saved := consolePages
-	rows := append([]consolePage(nil), consolePages...)
-	for i := range rows {
-		rows[i].live = all
-		rows[i].userLive = all && rows[i].forUser != ""
-	}
-	consolePages = rows
-	defer func() { consolePages = saved }()
-	f()
-}
-
 // adminOlds is every admin page's old address — the twelve the batch counts
 // (EPIC #3923: 成员能看出存在的管理页) and the rest under them.
 func adminOlds() []string {
@@ -94,7 +80,6 @@ func adminOlds() []string {
 // one role_denied audit row. Never a redirect: one would say the page is there.
 func TestAdminIs404ForMember(t *testing.T) {
 	h, admin, user := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, "admin/users.js": {Data: []byte("ADMIN-SCRIPT")}}
 	h.srv.ConsoleFS = fstest.MapFS{
 		"admin/index.html":     {Data: []byte("ADMIN-ENTRY")},
 		"admin/assets/main.js": {Data: []byte("ADMIN-CODE")},
@@ -120,31 +105,28 @@ func TestAdminIs404ForMember(t *testing.T) {
 		}
 	}
 	paths = append(paths, AdminPrefix, AdminPrefix+"/", AdminPrefix+"/assets/main.js", AdminPrefix+"/users.js")
-	for _, all := range []bool{false, true} {
-		withLive(t, all, func() {
-			for _, p := range paths {
-				for _, q := range []string{"", "?tab=clients"} {
-					got := consoleDo(hd, http.MethodGet, p+q, user)
-					if d := sameAnswer(got, unknown); d != "" {
-						t.Errorf("live=%v member GET %s%s = %d → %q %.60q; differs from /admin/no-such-page in its %s",
-							all, p, q, got.Code, got.Header().Get("Location"), got.Body.String(), d)
-					}
-				}
+	for _, p := range paths {
+		for _, q := range []string{"", "?tab=clients"} {
+			got := consoleDo(hd, http.MethodGet, p+q, user)
+			if d := sameAnswer(got, unknown); d != "" {
+				t.Errorf("member GET %s%s = %d → %q %.60q; differs from /admin/no-such-page in its %s",
+					p, q, got.Code, got.Header().Get("Location"), got.Body.String(), d)
 			}
-		})
+		}
 	}
 	var refused int
 	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_audit WHERE action = 'role_denied'
 		AND actor LIKE 'gh:200%'`).Scan(&refused); err != nil {
 		t.Fatal(err)
 	}
-	if want := 1 + 4*len(paths); refused < want {
+	if want := 1 + 2*len(paths); refused < want {
 		t.Errorf("%d role_denied rows; want one per refusal (%d)", refused, want)
 	}
-	// An admin: the new entry and its files, the old pages' scripts as before.
+	// An admin: the new entry and its files — an old page's script is gone,
+	// the entry draws it as the console's own unknown page.
 	for p, want := range map[string]string{
 		AdminPrefix: "ADMIN-ENTRY", AdminPrefix + "/people": "ADMIN-ENTRY", AdminPrefix + "/no-such-page": "ADMIN-ENTRY",
-		AdminPrefix + "/assets/main.js": "ADMIN-CODE", AdminPrefix + "/users.js": "ADMIN-SCRIPT",
+		AdminPrefix + "/assets/main.js": "ADMIN-CODE", AdminPrefix + "/users.js": "ADMIN-ENTRY",
 	} {
 		if got := consoleDo(hd, http.MethodGet, p, admin); got.Code != http.StatusOK || got.Body.String() != want {
 			t.Errorf("admin GET %s = %d %.60q; want 200 %s", p, got.Code, got.Body.String(), want)
@@ -167,9 +149,11 @@ func TestAdminIs404ForMember(t *testing.T) {
 	}
 }
 
-// Every old address — in the table, or a bare one from before /app — is at
-// most ONE hop from where it ends, its query kept, with every row live (the
-// batch's end) and as the table stands today.
+// Every old address — in the table, or a bare one from before /app — is ONE
+// hop from where it ends, its query kept, for good (claude-fleet#3939): an
+// admin moves on from every row, a member from every row that is theirs, and
+// any other method is the 404 an unknown address gets — the old pages are
+// gone.
 func TestConsoleTableOneHop(t *testing.T) {
 	h, admin, user := rolesHarness(t)
 	hd := h.srv.Handler()
@@ -188,27 +172,49 @@ func TestConsoleTableOneHop(t *testing.T) {
 		olds = append(olds, pre+"x")
 	}
 	sort.Strings(olds)
-	for _, all := range []bool{false, true} {
-		withLive(t, all, func() {
-			for _, p := range olds {
-				for _, sess := range []*http.Cookie{admin, user} {
-					got := consoleDo(hd, http.MethodGet, p+"?x=1&y=two", sess)
-					if got.Code != http.StatusMovedPermanently {
-						continue
-					}
-					to := got.Header().Get("Location")
-					u, err := url.Parse(to)
-					if err != nil || u.Query().Get("x") != "1" || u.Query().Get("y") != "two" {
-						t.Errorf("live=%v GET %s → %q: the query is lost", all, p, to)
-					}
-					if again := consoleDo(hd, http.MethodGet, to, sess); again.Code == http.StatusMovedPermanently {
-						t.Errorf("live=%v GET %s → %s → %s: two hops", all, p, to, again.Header().Get("Location"))
-					}
+	for _, p := range olds {
+		for _, sess := range []*http.Cookie{admin, user} {
+			got := consoleDo(hd, http.MethodGet, p+"?x=1&y=two", sess)
+			if got.Code != http.StatusMovedPermanently {
+				continue
+			}
+			to := got.Header().Get("Location")
+			u, err := url.Parse(to)
+			if err != nil || u.Query().Get("x") != "1" || u.Query().Get("y") != "two" {
+				t.Errorf("GET %s → %q: the query is lost", p, to)
+			}
+			if again := consoleDo(hd, http.MethodGet, to, sess); again.Code == http.StatusMovedPermanently {
+				t.Errorf("GET %s → %s → %s: two hops", p, to, again.Header().Get("Location"))
+			}
+		}
+	}
+	// Every row moves on: an admin from each, a member from each that is
+	// theirs (an admin row the member's 404 — TestAdminIs404ForMember).
+	for _, c := range consolePages {
+		p := c.old
+		if c.under {
+			p += "x"
+		}
+		for _, sess := range []*http.Cookie{admin, user} {
+			if sess == user && c.side == sideAdmin && c.forUser == "" {
+				continue
+			}
+			if c.old == c.new && !c.under {
+				continue // a console page that kept its address (/app/usage)
+			}
+			for _, m := range []string{http.MethodGet, http.MethodHead} {
+				if got := consoleDo(hd, m, p, sess); got.Code != http.StatusMovedPermanently {
+					t.Errorf("row %s: %s %s = %d; want 301 — an old bookmark stays one hop", c.owner, m, p, got.Code)
 				}
 			}
-		})
+			for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+				if got := consoleDo(hd, m, p, sess); got.Code != http.StatusNotFound && got.Code != http.StatusMethodNotAllowed {
+					t.Errorf("row %s: %s %s = %d; want 404/405 — the old page is gone", c.owner, m, p, got.Code)
+				}
+			}
+		}
 	}
-	// The three that move today: 我的额度, All devices, and the bare ones.
+	// A sample, spelled out.
 	for p, want := range map[string]string{
 		AppPrefix + "/quota?a=1":         AppPrefix + "/usage?a=1",
 		"/quota":                         AppPrefix + "/usage",
@@ -261,111 +267,30 @@ func TestConsoleTableOneHop(t *testing.T) {
 			t.Errorf("member GET %s = %d → %q; want 301 → /app/devices?tab=home", p, got.Code, got.Header().Get("Location"))
 		}
 	}
-	// Live, one machine is a member's own: theirs goes to 设备, an admin's on.
-	withLive(t, true, func() {
-		if got := consoleDo(hd, http.MethodGet, "/machines/mac-a", user); got.Header().Get("Location") != AppPrefix+"/devices?tab=home" {
-			t.Errorf("live: member /machines/mac-a → %q; want /app/devices?tab=home", got.Header().Get("Location"))
+	// A new page spelled like a bare old one is the new page.
+	h.srv.ConsoleFS = fstest.MapFS{"admin/index.html": {Data: []byte("ADMIN-ENTRY")}}
+	if got := consoleDo(hd, http.MethodGet, AdminPrefix+"/settings", admin); got.Code != http.StatusOK || got.Body.String() != "ADMIN-ENTRY" {
+		t.Errorf("admin /admin/settings = %d %q; want the new page", got.Code, got.Body.String())
+	}
+	h.srv.ConsoleFS = nil
+	// The old pages are gone: a form gets the 404, never the page.
+	for _, p := range []string{TicketsPagePath, TicketsPagePath + "/o/r/1", EntryPagePath, EntryConnPath, ChatPagePath, "/usage", AppPrefix + "/config"} {
+		if got := consoleDo(hd, http.MethodPost, p, user); got.Code != http.StatusNotFound {
+			t.Errorf("POST %s = %d; want 404", p, got.Code)
 		}
-		if got := consoleDo(hd, http.MethodGet, AppPrefix+"/machines/mac-a", admin); got.Header().Get("Location") != AdminPrefix+"/machines/mac-a" {
-			t.Errorf("live: admin /app/machines/mac-a → %q; want /admin/machines/mac-a", got.Header().Get("Location"))
+	}
+	// The paths a person typed for the keys page, and its pictures, land on 设备.
+	for _, p := range []string{"/fleet/key", "/keys", EntryPagePath + "/", EntryPagePath + "/img/step1.png"} {
+		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+devicesPagePath+"?tab=phone" {
+			t.Errorf("GET %s = %d → %q; want 301 → /app/devices?tab=phone", p, got.Code, got.Header().Get("Location"))
 		}
-		if got := consoleDo(hd, http.MethodGet, AppPrefix+"/admin/devices", admin); got.Header().Get("Location") != AdminPrefix+"/machines?tab=clients" {
-			t.Errorf("live: admin /app/admin/devices → %q; want /admin/machines?tab=clients", got.Header().Get("Location"))
-		}
-		// A new page spelled like a bare old one is the new page.
-		h.srv.ConsoleFS = fstest.MapFS{"admin/index.html": {Data: []byte("ADMIN-ENTRY")}}
-		if got := consoleDo(hd, http.MethodGet, AdminPrefix+"/settings", admin); got.Code != http.StatusOK || got.Body.String() != "ADMIN-ENTRY" {
-			t.Errorf("live: admin /admin/settings = %d %q; want the new page", got.Code, got.Body.String())
-		}
-		h.srv.ConsoleFS = nil
-	})
-	// Only GET and HEAD move: a form still reaches the old page.
-	withLive(t, true, func() {
-		if got := consoleDo(hd, http.MethodPost, TicketsPagePath, user); got.Code == http.StatusMovedPermanently {
-			t.Errorf("live: POST %s = 301; a form is not moved", TicketsPagePath)
-		}
-	})
+	}
 }
 
-// appMountBefore is appMount as it stood before the table (claude-fleet#3583),
-// kept here as the measure of «unchanged».
-func (s *Server) appMountBefore(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		switch {
-		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
-			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
-			s.serveAppPage(w, r, next)
-		case p == "/":
-			s.serveRoot(w, r)
-		case s.serveSitePath(w, r):
-		case isAppPage(p) && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-			http.Redirect(w, r, withQuery(AppPrefix+p, r), http.StatusMovedPermanently)
-		default:
-			next.ServeHTTP(w, r)
-		}
-	})
-}
-
-// With no row live, every address answers byte for byte what it did before
-// the table — but for the three that move today (我的额度, All devices, the
-// bare ones' one hop) and the admin side's answers to anyone not an admin.
-func TestConsoleLiveOffIsUnchanged(t *testing.T) {
-	h, admin, user := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, appPage: {Data: []byte("APP")}}
-	routes := h.srv.routes()
-	before := h.srv.logRequests(h.srv.readOnlyGate(h.srv.appMountBefore(routes)))
-	now := h.srv.Handler()
-	moved := func(p string) bool {
-		inner := strings.TrimPrefix(p, AppPrefix)
-		return inner == "/quota" || inner == "/admin/devices"
-	}
-	var paths []string
-	for _, c := range consolePages {
-		p := c.old
-		if c.under {
-			p += "x"
-		}
-		paths = append(paths, p, p+"?tab=a")
-	}
-	for p := range appPagePaths {
-		paths = append(paths, p, appURL(p))
-	}
-	for _, pre := range appPagePrefixes {
-		paths = append(paths, pre+"x")
-	}
-	paths = append(paths, "/", "/no-such-page", AppPrefix+"/no-such-page", AppPrefix+"/try", "/v1/me", "/fleet/keys/x.png")
-	sort.Strings(paths)
-	withLive(t, false, func() {
-		for _, p := range paths {
-			pth, _, _ := strings.Cut(p, "?")
-			if moved(pth) {
-				continue
-			}
-			for _, sess := range []*http.Cookie{admin, user, nil} {
-				if sess != admin && isAdminPath(pth) {
-					continue // the admin side's, to anyone else: TestAdminIs404ForMember
-				}
-				for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
-					a, b := consoleDo(before, m, p, sess), consoleDo(now, m, p, sess)
-					a.Body.Reset()
-					a.Body.Write(sansNow(consoleDo(before, m, p, sess).Body.Bytes()))
-					b.Body.Reset()
-					b.Body.Write(sansNow(consoleDo(now, m, p, sess).Body.Bytes()))
-					if d := sameAnswer(a, b); d != "" && d != "header Set-Cookie" {
-						t.Errorf("%s %s (signed in %v): %d → %q now, %d → %q before; differs in its %s",
-							m, p, sess != nil, b.Code, b.Header().Get("Location"), a.Code, a.Header().Get("Location"), d)
-					}
-				}
-			}
-		}
-	})
-}
-
-// The table and the routes speak of the same pages: every old address is a
-// page the hub serves, every admin-side new address is an admin route, a
-// live member-side one is a console page, and a member's /v1/me lists no
-// admin page (the menu never shows one).
+// The table and the routes speak of the same pages: every admin-side new
+// address is an admin route, a member-side one a console page, and a
+// member's /v1/me lists no admin page (the menu never shows one). The old
+// addresses are no routes any more (claude-fleet#3939): appMount answers them.
 func TestConsoleTableNamesRoutes(t *testing.T) {
 	route := func(p string) (string, bool) {
 		best := ""
@@ -390,14 +315,6 @@ func TestConsoleTableNamesRoutes(t *testing.T) {
 			if !isAppPage(inner) {
 				t.Errorf("row %s: %s is no console page", c.owner, old)
 			}
-			old = inner
-		}
-		acc, ok := route(old)
-		if !ok {
-			t.Errorf("row %s: old %s is no route", c.owner, c.old)
-		}
-		if c.side == sideAdmin && c.forUser == "" && acc != accessAdmin {
-			t.Errorf("row %s: %s is the admin side's but its route is %q", c.owner, c.old, acc)
 		}
 		np, _, _ := strings.Cut(c.new, "?")
 		switch {
@@ -409,9 +326,9 @@ func TestConsoleTableNamesRoutes(t *testing.T) {
 			} else if acc, ok := route(np); !ok || acc != accessAdmin {
 				t.Errorf("row %s: new %s is route %q; want an admin route", c.owner, np, acc)
 			}
-		case c.live && strings.HasPrefix(np, AppPrefix):
+		case strings.HasPrefix(np, AppPrefix):
 			if !isAppPage(strings.TrimPrefix(np, AppPrefix)) && np != AppPrefix {
-				t.Errorf("row %s is live but %s is no console page yet", c.owner, np)
+				t.Errorf("row %s goes to %s, no console page", c.owner, np)
 			}
 		}
 	}
@@ -432,12 +349,10 @@ func TestConsoleTableNamesRoutes(t *testing.T) {
 // 我的 is /app/me, 用量 /app/usage (claude-fleet#3929, C6) — each the console's
 // index.html for a signed-in person, with the console's own-origin policy;
 // /chat/ is one 301 to /app, /app/quota and the bare /usage one 301 to
-// /app/usage; a page whose own row is not live yet (/app/sessions) is still
-// the old page; a stranger is asked to sign in; and a hub with no
-// console build serves /app as it always did.
+// /app/usage; a stranger is asked to sign in; and a hub with no console
+// build has no page to show.
 func TestConsoleMemberSide(t *testing.T) {
 	h, admin, user := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("OLD-APP")}}
 	h.srv.ConsoleFS = fstest.MapFS{
 		"app/index.html":     {Data: []byte("APP-ENTRY")},
 		"app/assets/main.js": {Data: []byte("APP-CODE")},
@@ -482,21 +397,19 @@ func TestConsoleMemberSide(t *testing.T) {
 			t.Errorf("stranger GET %s = 200; want the gate", p)
 		}
 	}
-	// no build: /app is the old overview, /app/me has nothing to show
+	// no build: nothing to show — the old overview is gone (claude-fleet#3939)
 	h.srv.ConsoleFS = nil
-	if got := consoleDo(hd, http.MethodGet, AppPrefix, user); got.Body.String() != "OLD-APP" {
-		t.Errorf("no console build: GET /app = %d %.60q; want the old page", got.Code, got.Body.String())
-	}
-	if got := consoleDo(hd, http.MethodGet, AppPrefix+mePagePath, user); got.Code != http.StatusNotFound {
-		t.Errorf("no console build: GET /app/me = %d; want 404", got.Code)
+	for _, p := range []string{AppPrefix, AppPrefix + mePagePath, AppPrefix + "/usage"} {
+		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusNotFound {
+			t.Errorf("no console build: GET %s = %d; want 404", p, got.Code)
+		}
 	}
 }
 
 // 设备 (claude-fleet#3930, C7): /app/devices is the console's page; the four
 // old addresses it took over — 设备与 SSH, 从手机连, 我的连接, 我的机器 — are
 // one 301 to its tab, query kept; a member's one machine goes to its 我的机器
-// tab while an admin's still opens the old page (C11 moves that); a form still
-// reaches the keys page.
+// tab while an admin's goes to the admin side (C11).
 func TestConsoleDevices(t *testing.T) {
 	h, admin, user := rolesHarness(t)
 	h.srv.ConsoleFS = fstest.MapFS{"app/index.html": {Data: []byte("APP-ENTRY")}}
@@ -529,9 +442,6 @@ func TestConsoleDevices(t *testing.T) {
 	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/connect", admin); got.Header().Get("Location") != AppPrefix+"/devices" {
 		t.Errorf("admin GET /app/connect → %q; want /app/devices", got.Header().Get("Location"))
 	}
-	if got := consoleDo(hd, http.MethodPost, EntryPagePath, user); got.Code == http.StatusMovedPermanently {
-		t.Errorf("POST %s = 301; a form is not moved", EntryPagePath)
-	}
 	// a stranger is asked to sign in at the end, never shown the page
 	if got := consoleDo(hd, http.MethodGet, AppPrefix+devicesPagePath, nil); got.Code == http.StatusOK {
 		t.Errorf("stranger GET /app/devices = 200; want the gate")
@@ -544,7 +454,6 @@ func TestConsoleDevices(t *testing.T) {
 // to sign in, and a way of signing in that was just added comes back to it.
 func TestConsoleSettings(t *testing.T) {
 	h, admin, user := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("OLD-APP")}, "config.html": {Data: []byte("OLD-CONFIG")}}
 	h.srv.ConsoleFS = fstest.MapFS{"app/index.html": {Data: []byte("APP-ENTRY")}}
 	hd := h.srv.Handler()
 	for _, who := range []*http.Cookie{user, admin} {

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
@@ -134,7 +133,7 @@ func (s *Server) hubFacts() HubFacts {
 		PublicBadges: s.publicBadges(),
 		PublicMeter:  s.publicMeter(),
 		MCP:          s.MCP != nil,
-		Dashboard:    s.UI != nil,
+		Dashboard:    s.consoleBuilt("app"),
 		Listeners:    s.Listeners,
 		Enrollments:  map[string]int{},
 	}
@@ -197,7 +196,7 @@ func (s *Server) doors(f HubFacts) []Door {
 			Can: "Read what the viewer's role lets them see (claude-fleet#1985, #1989): an admin every " +
 				"figure this hub holds, a user their own usage, sessions, devices and settings.",
 			State: pick(f.Dashboard, "open", "off"),
-			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so /app answers JSON instead."),
+			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the console, so /app answers 404."),
 		},
 		{
 			ID: "github", Name: "Sign in with GitHub", Via: "http",
@@ -317,46 +316,6 @@ func (s *Server) doors(f HubFacts) []Door {
 				"credential or need none.",
 		},
 	}
-}
-
-// appPage is the one document every page path answers (claude-fleet#2793):
-// the shell inside it draws the page the address names and swaps pages in
-// place, so a click is no page load. A path's own .html stays in the build
-// for a bookmark of the file itself.
-const appPage = "app.html"
-
-// serveStandalonePage serves a page path: the app document when the built UI
-// holds one, else the page's own file (a build from before #2793). Who may
-// open the path is decided before this, by the route's own gate.
-func (s *Server) serveStandalonePage(w http.ResponseWriter, r *http.Request, name string) {
-	if s.UI == nil {
-		httpError(w, http.StatusNotFound, "this binary was built without the UI")
-		return
-	}
-	if _, err := fs.Stat(s.UI, appPage); err == nil {
-		name = appPage
-	}
-	f, err := s.UI.Open(name)
-	if err != nil {
-		httpError(w, http.StatusNotFound, "no "+name+" in this build")
-		return
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, "unreadable page")
-		return
-	}
-	rs, ok := f.(interface {
-		Read([]byte) (int, error)
-		Seek(int64, int) (int64, error)
-	})
-	if !ok {
-		httpError(w, http.StatusInternalServerError, "unreadable page")
-		return
-	}
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, name, st.ModTime(), rs)
 }
 
 // pick is the ternary this file would otherwise spell out eight times. Every

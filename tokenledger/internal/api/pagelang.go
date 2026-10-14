@@ -15,7 +15,7 @@ import (
 
 // Which language a PAGE is drawn in (claude-fleet#2023).
 //
-// One rule, read the same way here and in web/dist/lib/i18n.js's pickLocale:
+// One rule:
 //
 //	?lang=zh|en in the link  >  the signed-in account's user.<id>.lang
 //	                         >  the cf_lang cookie  >  the browser's language

@@ -38,8 +38,7 @@ func appGet(t *testing.T, h *ghHarness, method, path string, sess *http.Cookie) 
 
 // Every old console address answers 301 to the same page under /app — or
 // straight on to where the console table sends it (claude-fleet#3925) — its
-// query kept: a bookmark never lands on nothing; any other method still
-// reaches the page where it was. A stranger asking for an admin page's old
+// query kept: a bookmark never lands on nothing. A stranger asking for an admin page's old
 // address is asked to sign in, never told where it went.
 func TestAppOldPathsMoveUnderApp(t *testing.T) {
 	h, admin, _ := rolesHarness(t)
@@ -68,20 +67,18 @@ func TestAppOldPathsMoveUnderApp(t *testing.T) {
 		// a live row that sends a member elsewhere than an admin (one
 		// machine, claude-fleet#3934) asks who it is first, like an admin page
 		c, ok := consoleRow(AppPrefix + p)
-		if isAdminPath(p) || (ok && c.live && c.forUser != "") {
+		if isAdminPath(p) || (ok && c.forUser != "") {
 			if resp.StatusCode == http.StatusMovedPermanently {
 				t.Errorf("stranger HEAD %s = 301 → %q; an admin page's way on is an admin's", p, resp.Header.Get("Location"))
 			}
-		} else if c, ok := consoleRow(AppPrefix + p); ok && c.userLive && resp.StatusCode != http.StatusMovedPermanently {
-			// a member's way on differs from an admin's: the gate asks who first
 		} else if resp.StatusCode != http.StatusMovedPermanently {
 			t.Errorf("HEAD %s = %d; want 301", p, resp.StatusCode)
 		}
 	}
-	// The app's own files stay where they are.
-	for _, p := range []string{"/admin/users.js", "/machines.js", "/app.css", "/app-shell.js"} {
-		if resp := appGet(t, h, http.MethodGet, p, admin); resp.StatusCode == http.StatusMovedPermanently {
-			t.Errorf("GET %s = 301; an app file is not a page", p)
+	// The old console's own files are gone (claude-fleet#3939): a 404, never a page.
+	for _, p := range []string{"/machines.js", "/app.css", "/app-shell.js", "/app.html", "/lib/shell.js"} {
+		if resp := appGet(t, h, http.MethodGet, p, admin); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s = %d; want 404", p, resp.StatusCode)
 		}
 	}
 	// A form POST to the old /logout still signs out (303), not a redirect.
@@ -101,7 +98,7 @@ func TestAppOldPathsMoveUnderApp(t *testing.T) {
 // /app that is no console page is a 404 — /app is not a second road to /v1.
 func TestAppIsNoindex(t *testing.T) {
 	h, admin, user := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, appPage: {Data: []byte("APP")}}
+	h.srv.ConsoleFS = fstest.MapFS{"app/index.html": {Data: []byte("APP")}}
 	for _, c := range []struct {
 		path string
 		sess *http.Cookie
@@ -135,8 +132,6 @@ func TestAppIsNoindex(t *testing.T) {
 // offers 进入控制台 · 退出 (claude-fleet#3798).
 func TestAppRoot(t *testing.T) {
 	h, admin, _ := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, "app.html": {Data: []byte("APP")},
-		"landing.html": {Data: []byte("<title>x</title>FRONT-PAGE")}}
 	for _, site := range []bool{false, true} {
 		h.srv.Site = site
 		resp := appGet(t, h, http.MethodGet, "/", admin)
@@ -151,10 +146,11 @@ func TestAppRoot(t *testing.T) {
 	if resp := appGet(t, h, http.MethodGet, "/?lang=zh", nil); resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != AppPrefix+"?lang=zh" {
 		t.Errorf("site off, signed-out / = %d → %q; want 302 → /app?lang=zh", resp.StatusCode, resp.Header.Get("Location"))
 	}
+	// Site on with no built site: the old landing page is gone
+	// (claude-fleet#3939) — the gate's own answer, never a 200.
 	h.srv.Site = true
-	resp := appGet(t, h, http.MethodGet, "/", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("site on, signed-out / = %d; want 200 and the site", resp.StatusCode)
+	if resp := appGet(t, h, http.MethodGet, "/", nil); resp.StatusCode == http.StatusOK {
+		t.Errorf("site on, no build, signed-out / = %d; want the gate", resp.StatusCode)
 	}
 	// The built site, when the hub carries one (web/site, C14).
 	h.srv.SiteFS = fstest.MapFS{"index.html": {Data: []byte("<title>site</title>SITE")}}
@@ -235,17 +231,22 @@ func sansNow(b []byte) []byte {
 	return b
 }
 
-// Every console page is a route roles.go names — the table and the mount
-// speak of the same pages, so moving one never leaves it ungated.
+// Every console page is a route roles.go names, or an old address the
+// console table moves on (claude-fleet#3939) — so moving one never leaves it
+// ungated, nor a bookmark of it on nothing.
 func TestAppPagesAreRoutes(t *testing.T) {
 	for p := range appPagePaths {
 		if _, ok := routeAccess[p]; !ok {
-			t.Errorf("console page %s has no routeAccess row", p)
+			if _, moved := consoleTarget(appURL(p), "", roleAdmin); !moved && !consoleNewLive(appURL(p)) {
+				t.Errorf("console page %s has no routeAccess row and moves nowhere", p)
+			}
 		}
 	}
 	for _, p := range appPagePrefixes {
 		if _, ok := routeAccess[p]; !ok {
-			t.Errorf("console prefix %s has no routeAccess row", p)
+			if _, moved := consoleTarget(appURL(p)+"x", "", roleAdmin); !moved {
+				t.Errorf("console prefix %s has no routeAccess row and moves nowhere", p)
+			}
 		}
 	}
 }

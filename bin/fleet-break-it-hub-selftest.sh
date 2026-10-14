@@ -119,9 +119,9 @@
 #   bootstrap-reaches-github                        bin/dist-no-github-selftest.sh --strict bootstrap bootstrap-hub
 #                                                   (a new login on a managed machine / with only a hub: no GitHub, #2775)
 #   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
-#   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
-#                                                   node --test stream.test.mjs, when node is here) + internal/api
-#                                                   fleet_stream.go (ping, scope; go test, when a toolchain is here)
+#   hub-stream-silent                               extras/web-console/src/shared/sessions.ts (watchdog, backoff, poll
+#                                                   fallback, by name) + internal/api fleet_stream.go (ping, scope;
+#                                                   go test, when a toolchain is here)
 #   feedback-secret-in-text                         bin/fleet-feedback.sh (fleet_redact.py over the words, the
 #                                                   whole-set recheck; a fake hub records the bytes)
 #   feedback-secret-in-attach                       bin/fleet-feedback.sh --attach (conf/debug-collect.list's fresh
@@ -129,7 +129,7 @@
 #   service-log-cross-login                         tokenledger/internal/api fleet_service_log.go (FleetScope before any
 #                                                   node read, one follow per service, masking; go test, when a toolchain
 #                                                   is here) + internal/agent node_service_log.go (the register's path only)
-#                                                   + web/dist/lib/svc-log.js (403 is a word; node --test, when node is here)
+#                                                   + the console's ServiceSheet.tsx (403 is a word, by name)
 #   debug-ticket-replayed                           tokenledger/internal/api fleet_debug_ticket.go (debugTicketAuth: the
 #                                                   fingerprint, the HMAC, expiry, the superseded row; go test, when a
 #                                                   toolchain is here) + bin/fleet-install.sh (debug_fp: only the hash sent)
@@ -1766,29 +1766,26 @@ drill_dist_publish_tampered() {
 
 # ---- hub-stream-silent (#2794, EPIC #2792 C2): the push channel held open by a
 # proxy that neither sends nor closes — the page must not believe it is live.
-# The page half for real (node --test on lib/stream.js under a virtual clock: a
-# silent stream is down at 30 s and reconnects, the reconnect is the catch-up, a
-# stream that cannot be built polls every 10 s); the hub half's ping and scope by
-# name (and go test with a toolchain).
+# The page half by name (the console's sessions.ts, since the old console's
+# lib/stream.js went with claude-fleet#3939: a silent stream is dropped at 30 s
+# and opened again with a backoff, the reconnect is the catch-up, twice silent
+# or one that cannot be built polls every 10 s); the hub half's ping and scope
+# by name (and go test with a toolchain).
 drill_hub_stream_silent() {
-  CAP=120; local t0 out rc js="$ROOT/tokenledger/web/dist/lib/stream.js" tests f
+  CAP=120; local t0 out rc js="$ROOT/extras/web-console/src/shared/sessions.ts" tests f
   tests='TestFleetStreamPing TestFleetStreamScoped TestFleetStreamOnlyOnChange'
   f="$ROOT/tokenledger/internal/api/fleet_stream_test.go"
   t0=$(now)
-  grep -q 'export const WATCHDOG_MS = 30000;' "$js" || { WHY="lib/stream.js no longer gives up on a silent stream at 30 s"; return 1; }
+  grep -q 'export const WATCHDOG_MS = 30_000;' "$js" || { WHY="sessions.ts no longer gives up on a silent stream at 30 s"; return 1; }
+  grep -q 'es.addEventListener("ping", alive);' "$js" || { WHY="sessions.ts no longer takes the hub's ping as a sign of life"; return 1; }
+  grep -q 'if (++silent >= 2) { startPoll(); later(60_000); return; }' "$js" \
+    || { WHY="sessions.ts no longer falls back to the 10 s poll on a stream silent twice"; return 1; }
   grep -q 'var fleetStreamPing = 20 \* time.Second' "$ROOT/tokenledger/internal/api/fleet_stream.go" \
     || { WHY="the hub no longer pings an idle stream every 20 s"; return 1; }
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
-  if command -v node >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger/web" && node --test test/stream.test.mjs 2>&1); rc=$?
-    [ "$rc" = 0 ] || { WHY="the page half is red: $(printf '%s\n' "$out" | grep -m 4 -E 'not ok|Error|expected|actual' | tr '\n' ' ')"; return 1; }
-    printf '%s\n' "$out" | grep -q 'hub-stream-silent' || { WHY="the hub-stream-silent test did not run"; return 1; }
-    WHAT='代理挂住的推送 30 s 标黄并重连、重连即补一份；建不起来退回 10 s 轮询（node --test，虚拟时钟）'
-  else
-    WHAT='没有 node：页面一半按名核对在，web 门（tokenledger.yml 的 npm test）跑它'
-  fi
+  WHAT='页面：代理挂住的推送 30 s 断开重连（1→2→4→8→15 s）、重连即补一份；连着两次没声音或建不起来退回 10 s 轮询（按名核对）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
@@ -1832,7 +1829,7 @@ drill_bootstrap_reaches_github() {
 # node is asked, masks every credential-shaped line, asks the node once per
 # service; the node opens only the register's <log>/logins/<login>/<name>.log,
 # the lane's own login, never a link. Go tests by name (and run with a
-# toolchain), the page's 403-is-a-word by node --test.
+# toolchain), the page's 403-is-a-word by name (the console's ServiceSheet).
 drill_service_log_cross_login() {
   CAP=180; local t0 out rc api agt fa fg
   api='TestServiceLogCrossLoginIs403 TestServiceLogOneFollowForManyViewers TestRedactLogLine'
@@ -1849,11 +1846,9 @@ drill_service_log_cross_login() {
   done
   grep -q "^func $agt(" "$fg" 2>/dev/null || { WHY="the node half's test $agt is not in ${fg#$ROOT/}"; return 1; }
   WHAT='别人的登录名拼进地址 → 403、节点一次都没被问；只读登记表里本登录的那个文件（测试按名核对在，Go 门跑它们）'
-  if command -v node >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger/web" && node --test test/svc-log.test.mjs 2>&1); rc=$?
-    [ "$rc" = 0 ] || { WHY="the page half is red: $(printf '%s\n' "$out" | grep -m 4 -E 'not ok|Error|expected|actual' | tr '\n' ' ')"; return 1; }
-    WHAT="${WHAT}；页面：403 写「只有管理员看得到」、不重试（node --test）"
-  fi
+  grep -q 'if (s === 403) return setMode("denied");' "$ROOT/extras/web-console/src/admin/pages/ServiceSheet.tsx" \
+    || { WHY="the console's ServiceSheet no longer takes a 403 as a word (it would retry)"; return 1; }
+  WHAT="${WHAT}；页面：403 是一句话、不重试（按名核对）"
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
@@ -2452,8 +2447,8 @@ drill_cred_policy_empties_machine() {
     || { WHY="the hub no longer judges a list that empties a provider (fleet_cred_policy.go)"; return 1; }
   grep -q '409) die 5' "$BIN/fleet-cred-policy.sh" && grep -q -- '--force' "$BIN/fleet-cred-policy.sh" \
     || { WHY="fleet-cred-policy.sh no longer answers the refusal (exit 5) or offers --force"; return 1; }
-  grep -q 'would keep no' "$ROOT/tokenledger/web/dist/lib/cred-policy.js" 2>/dev/null \
-    || { WHY="the web editor no longer asks before forcing (lib/cred-policy.js)"; return 1; }
+  grep -q 'would keep no' "$ROOT/extras/web-console/src/admin/pages/Pool.tsx" 2>/dev/null \
+    || { WHY="the web editor no longer asks before forcing (the console's Pool.tsx)"; return 1; }
   c11_go_tests fleet_cred_policy_test.go TestCredPolicyRefusesEmptyingAProvider TestCredPolicyNoBindSaysWhy || return 1
   WHAT='收空一台机器 / 一个人某个 provider 的白名单写入 409、不变；--force 照写；deny / clear 不拦；会话报错点名拒它的那张白名单（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='收空 claude / codex 的写入 409 点名、列表不变；force 照写；deny / clear 不拦；会话报错点名「not in machine … allowlist」（go test 两条）'

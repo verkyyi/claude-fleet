@@ -620,19 +620,7 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		// One machine's page (claude-fleet#2796): its five blocks, the same cut.
 		mux.Handle(NodeDetailPrefix, s.viewerOnly(http.HandlerFunc(s.handleNodeDetail)))
-		// Machines (claude-fleet#1990): an admin's page; a user gets the
-		// shell's 403 (admin_pages.go).
-		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "admin/nodes.html")))
-		// 我的机器 (claude-fleet#2518): a user's own machines, off the same
-		// /v1/nodes cut.
-		mux.Handle("/machines", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
-		// …and one of them, /machines/<host> (claude-fleet#2796): the app
-		// document; the page reads /v1/nodes/<host>, which does the cut.
-		mux.Handle("/machines/", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
-		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
-		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
-		// 任务 (claude-fleet#3325): the viewer's task records, T<n>.
-		mux.Handle(TasksPagePath, s.viewerOnly(http.HandlerFunc(s.serveTasksPage)))
+		// 任务's reads (claude-fleet#3325): the viewer's task records, T<n>.
 		mux.Handle(FleetTasksPath, s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
 		mux.Handle(FleetTasksPath+"/", s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
@@ -665,21 +653,6 @@ func (s *Server) routes() *routeMux {
 		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.
 		mux.Handle(AdminRequestsPath, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
 		mux.Handle(adminRequestsPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
-		// Its page (claude-fleet#3646): a signed-in person's, back here after
-		// the sign-in.
-		mux.Handle(ChatPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleChatPage))))
-		// The keys page (claude-fleet#3069): a browser not signed in comes
-		// back here after GitHub's.
-		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
-		mux.Handle(EntryConnPath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
-		// 我的单子 (claude-fleet#3596): the hub's tickets as pages; a browser
-		// not signed in comes back to the one it asked for.
-		mux.Handle(TicketsPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleTicketsPage))))
-		mux.Handle(TicketsPagePath+"/", s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleTicketsPage))))
-		// Its pictures, and the paths a person types for it (claude-fleet#3199).
-		mux.HandleFunc(EntryPagePath+"/", s.handleEntryPageAside)
-		mux.HandleFunc("/fleet/key", s.handleEntryPageAside)
-		mux.HandleFunc("/keys", s.handleEntryPageAside)
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
@@ -727,10 +700,6 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(LoginApprovePath, s.stateRouteFunc(s.handleLoginApprove))
 		mux.HandleFunc(DrillPath, s.handleAdminDrill)
 		mux.HandleFunc(DrillSelfPath, s.handleSelf)
-		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
-		// Config (claude-fleet#1989): my settings and the team layer, read
-		// from the bundle routes below.
-		mux.Handle("/config", s.viewerOnly(http.HandlerFunc(s.serveConfigPage)))
 		// Registered devices (claude-fleet#1470): a renewal is proven by the
 		// device's own key, so it authenticates itself, outside the viewer
 		// gate — like start/poll, it is what `fleet` runs before it holds a
@@ -829,8 +798,6 @@ func (s *Server) routes() *routeMux {
 		// 我的用量 in one answer (claude-fleet#3227): the viewer's own limit,
 		// days, models and where it went — off pool_usage, never the pool.
 		mux.Handle("/v1/me/usage", s.viewerOnly(http.HandlerFunc(s.handleMeUsage)))
-		// 我的用量 (claude-fleet#2519): a person's own usage and budget.
-		mux.Handle("/usage", s.viewerOnly(http.HandlerFunc(s.serveUsagePage)))
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by
@@ -913,7 +880,6 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(MeSubsFinishPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsFinish)))
 	mux.Handle(MeSubsPausePath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsPause)))
 	mux.Handle(MeSubsDeletePath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsDelete)))
-	mux.Handle("/quota", s.viewerOnly(http.HandlerFunc(s.serveQuotaPage)))
 	mux.Handle("/v1/collectors", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCollectors))))
 	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))
 	mux.Handle("/v1/limits", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimits))))
@@ -955,11 +921,6 @@ func (s *Server) routes() *routeMux {
 	// See access.go.
 	mux.Handle("/v1/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccess))))
 
-	// The admin pages (claude-fleet#1990): Subscriptions, Users, Settings,
-	// Audit (Machines is /nodes, above). A user gets the 403 page.
-	for _, p := range adminPageRoutes {
-		mux.Handle(p.path, s.viewerOnly(s.adminPage(p.id, p.file)))
-	}
 	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
 	mux.Handle(AdminOverviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminOverview))))
 	mux.Handle(AdminUsagePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminUsage))))
@@ -999,15 +960,19 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(p, s.serveAppIcon)
 	}
 
-	// "/" here is the console's overview, /app (appMount answers the public
-	// "/" itself, claude-fleet#3583). Every page under it settles its language
-	// first (claude-fleet#2023). Every other path that reaches here is one of
-	// the app's own files or a 404 -- for everyone, before the gate: the file
-	// list is the repository's web/dist, so whether a path exists tells a
-	// stranger nothing, and a removed route answers 404 rather than the app's
-	// index (claude-fleet#1987).
-	ui := s.uiPathOr404(s.withPageLang(s.viewerOnly(http.HandlerFunc(s.serveUI))))
-	mux.Handle("/", ui)
+	// "/" here is /app with no console build (appMount answers the public
+	// "/" itself): past the gate — a stranger asked to sign in, a ?token=
+	// link moved into its cookie, the page's language settled — a 404, the
+	// old console that answered here gone (claude-fleet#3939). Every other
+	// path is a 404 for everyone, before the gate: its addresses only move on.
+	noConsole := s.withPageLang(s.viewerOnly(http.HandlerFunc(http.NotFound)))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			noConsole.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}))
 	// 我的 (claude-fleet#3926): a page of the new console only — appMount
 	// serves it at /app/me; here is where it lands with no console build (404).
 	mux.Handle(mePagePath, s.appSide())
@@ -1019,8 +984,8 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(settingsPagePath, s.appSide())
 	// The new console's admin side (claude-fleet#3925): an admin's, and to
 	// anyone else what an unknown address answers (app_mount.go).
-	mux.Handle(AdminPrefix, s.adminSide(ui))
-	mux.Handle(AdminPrefix+"/", s.adminSide(ui))
+	mux.Handle(AdminPrefix, s.adminSide())
+	mux.Handle(AdminPrefix+"/", s.adminSide())
 
 	return mux
 }
@@ -1107,83 +1072,6 @@ func stripToken(r *http.Request) string {
 	// Under /app the browser's address carries the prefix (claude-fleet#3583).
 	u.Path, u.RawPath = appPath(r, u.Path), ""
 	return u.RequestURI()
-}
-
-// uiPathOr404 lets through "/" and the paths the built UI holds, and answers
-// 404 to every other path. The dashboard routes by its URL fragment
-// (#/?view=…), so it never needed a path fallback, and an unknown path —
-// a route this hub no longer has, an API path that never existed — is a 404.
-func (s *Server) uiPathOr404(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if s.UI == nil {
-			http.NotFound(w, r)
-			return
-		}
-		st, err := fs.Stat(s.UI, strings.TrimPrefix(r.URL.Path, "/"))
-		if err != nil || st.IsDir() {
-			http.NotFound(w, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// serveUI serves the embedded dashboard: index.html at "/", else the file
-// the path names (uiPathOr404 has already refused one the UI does not hold).
-func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
-	if s.UI == nil {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"service": "ccquota hub",
-			"note":    "this binary was built without the dashboard; the API is at /v1/",
-		})
-		return
-	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/")
-	if path == "" {
-		// "/" is the overview page: the app document, like every page path
-		// (claude-fleet#2793), else a build's own index.html.
-		path = "index.html"
-		if _, err := fs.Stat(s.UI, appPage); err == nil {
-			path = appPage
-		}
-	}
-	// An admin page's files are refused a user whole, by where they sit
-	// (claude-fleet#2516) -- the direct path as much as the route.
-	if isAdminUIFile(path) && memberRole(roleOf(r.Context())) {
-		s.denyAdminPage(w, r)
-		return
-	}
-	f, err := s.UI.Open(path)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer f.Close()
-
-	st, err := f.Stat()
-	if err != nil || st.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-	rs, ok := f.(interface {
-		Read([]byte) (int, error)
-		Seek(int64, int) (int64, error)
-	})
-	if !ok {
-		http.Error(w, "unreadable asset", http.StatusInternalServerError)
-		return
-	}
-	// The embedded dashboard is rebuilt into the SAME binary on every deploy,
-	// with no cache-busting filename. A browser that cached an old bundle
-	// under this path would keep serving it past a release until someone
-	// force-refreshed, silently running stale JS against a live API.
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, path, st.ModTime(), rs)
 }
 
 // logRequests logs method, path, status and duration, plus who it was when a

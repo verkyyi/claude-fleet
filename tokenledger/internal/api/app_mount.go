@@ -65,13 +65,12 @@ func isAppPage(p string) bool {
 	return false
 }
 
-// The new console (claude-fleet#3925, EPIC #3923): a member's side under
-// AppPrefix and an admin's under AdminPrefix, one page at a time. consolePages
-// is the ONE table of where every old page goes; a page's member ticket flips
-// its own row's live when the new page lands, and from then on its old
-// address (GET / HEAD) answers 301 to the new one, query kept, in one hop.
-// Until then the old page answers as it always has. Any other method reaches
-// the old page until the old console is taken down (C16).
+// The console (claude-fleet#3925, EPIC #3923): a member's side under
+// AppPrefix and an admin's under AdminPrefix. consolePages is the ONE table
+// of where every old page went: its old address (GET / HEAD) answers 301 to
+// the new one, query kept, in one hop — kept for good, so no bookmark
+// breaks. The old pages themselves were taken down (claude-fleet#3939): any
+// other method at an old address is the 404 an unknown address gets.
 //
 // The admin side is guarded whole (EPIC #3923 rule 6): to anyone who is not
 // an admin, AdminPrefix and everything under it, every admin page's old
@@ -116,71 +115,65 @@ const AdminPrefix = "/admin"
 const (
 	sideMe    = "me"    // 我的: every signed-in person's
 	sideAdmin = "admin" // 管理: an admin's
-	sideEntry = "entry" // the way in: sign-in, invite, the scan, sign-out
 )
 
-// consolePage is one old page and where it goes. old and new are paths;
+// consolePage is one old page and where it went. old and new are paths;
 // under = old is everything below it, its rest carried over into a new that
 // ends in "/". new may carry a query, merged ahead of the request's. forUser
 // is where a member goes from an admin-side row that also shows a member
-// their own (one machine); empty = a member gets the 404. userLive moves a
-// member there while the row itself (an admin's way) is not live yet. owner
-// is the EPIC member that moves it.
+// their own (one machine); empty = a member gets the 404. owner is the EPIC
+// member that moved it.
 type consolePage struct {
 	old, new string
 	side     string
 	owner    string
-	live     bool
 	under    bool
 	forUser  string
-	userLive bool
 }
 
 // consolePages is every page the console moves (EPIC #3923 «逐页去向»).
 var consolePages = []consolePage{
 	// 我的 — the conversation is its front page, 我的 its own (C3)
-	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3", live: true},
-	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3", live: true},
-	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3", live: true},
-	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4", live: true},
+	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3"},
+	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3"},
+	{old: "/chat", new: AppPrefix, side: sideMe, owner: "C16"},
+	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3"},
+	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
 	// 任务 and 我的单子 are one page (C5): the tickets a tab of it
-	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5", live: true},
-	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5", live: true},
-	{old: TicketsPagePath + "/", new: AppPrefix + ticketPagesPrefix, side: sideMe, owner: "C5", live: true, under: true},
-	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6", live: true},
+	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
+	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5"},
+	{old: TicketsPagePath + "/", new: AppPrefix + ticketPagesPrefix, side: sideMe, owner: "C5", under: true},
+	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6"},
 	// 我的额度 is folded into 我的用量 already; the page only moved on in
 	// the browser, a second hop.
-	{old: AppPrefix + "/quota", new: AppPrefix + "/usage", side: sideMe, owner: "C2", live: true},
-	{old: AppPrefix + devicesPagePath, new: AppPrefix + devicesPagePath, side: sideMe, owner: "C7", live: true},
-	{old: AppPrefix + "/connect", new: AppPrefix + devicesPagePath, side: sideMe, owner: "C7", live: true},
-	{old: EntryPagePath, new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C7", live: true},
-	{old: EntryConnPath, new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7", live: true},
-	{old: AppPrefix + "/machines", new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7", live: true},
-	{old: AppPrefix + "/config", new: AppPrefix + settingsPagePath, side: sideMe, owner: "C8", live: true},
-	// The way in: each keeps its address and changes only its look.
-	{old: AppPrefix + "/signin", new: AppPrefix + "/signin", side: sideEntry, owner: "C9"},
-	{old: "/fleet/login", new: "/fleet/login", side: sideEntry, owner: "C9"},
-	{old: LoginRefusedPath, new: LoginRefusedPath, side: sideEntry, owner: "C9"},
-	{old: InvitePath, new: InvitePath, side: sideEntry, owner: "C9", under: true},
-	{old: AppPrefix + "/logout", new: AppPrefix + "/logout", side: sideEntry, owner: "C3"},
+	{old: AppPrefix + "/quota", new: AppPrefix + "/usage", side: sideMe, owner: "C2"},
+	{old: AppPrefix + devicesPagePath, new: AppPrefix + devicesPagePath, side: sideMe, owner: "C7"},
+	{old: AppPrefix + "/connect", new: AppPrefix + devicesPagePath, side: sideMe, owner: "C7"},
+	{old: EntryPagePath, new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C7"},
+	// the keys page's pictures and the paths a person typed for it (claude-fleet#3199)
+	{old: EntryPagePath + "/", new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C16", under: true},
+	{old: "/fleet/key", new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C16"},
+	{old: "/keys", new: AppPrefix + devicesPagePath + "?tab=phone", side: sideMe, owner: "C16"},
+	{old: EntryConnPath, new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7"},
+	{old: AppPrefix + "/machines", new: AppPrefix + devicesPagePath + "?tab=home", side: sideMe, owner: "C7"},
+	{old: AppPrefix + "/config", new: AppPrefix + settingsPagePath, side: sideMe, owner: "C8"},
 	// 管理
 	// a member's branch is C7's (设备 · 我的机器); an admin's is C11's
-	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + devicesPagePath + "?tab=home", under: true, userLive: true, live: true},
-	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10", live: true},
-	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true, live: true},
-	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11", live: true},
-	// All devices is the machines page's 客户端 tab already: one hop there,
-	// and on to the new page once that row is live.
-	{old: AppPrefix + "/admin/devices", new: AppPrefix + "/nodes?tab=clients", side: sideAdmin, owner: "C2", live: true},
-	{old: AppPrefix + "/subscriptions", new: AdminPrefix + "/pool", side: sideAdmin, owner: "C12", live: true},
-	{old: AppPrefix + "/subscriptions/", new: AdminPrefix + "/pool/", side: sideAdmin, owner: "C12", under: true, live: true},
-	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12", live: true},
-	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13", live: true},
-	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13", live: true},
-	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14", live: true},
-	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15", live: true},
-	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15", live: true},
-	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15", live: true},
+	{old: AppPrefix + "/machines/", new: AdminPrefix + "/machines/", side: sideAdmin, owner: "C11", forUser: AppPrefix + devicesPagePath + "?tab=home", under: true},
+	{old: AppPrefix + "/admin/users", new: AdminPrefix + "/people", side: sideAdmin, owner: "C10"},
+	{old: AppPrefix + "/admin/users/", new: AdminPrefix + "/people/", side: sideAdmin, owner: "C10", under: true},
+	{old: AppPrefix + "/nodes", new: AdminPrefix + "/machines", side: sideAdmin, owner: "C11"},
+	// All devices is the machines page's 客户端 tab: one hop to the end.
+	{old: AppPrefix + "/admin/devices", new: AppPrefix + "/nodes?tab=clients", side: sideAdmin, owner: "C2"},
+	{old: AppPrefix + "/subscriptions", new: AdminPrefix + "/pool", side: sideAdmin, owner: "C12"},
+	{old: AppPrefix + "/subscriptions/", new: AdminPrefix + "/pool/", side: sideAdmin, owner: "C12", under: true},
+	{old: AppPrefix + "/subscriptions/settings", new: AdminPrefix + "/pool/settings", side: sideAdmin, owner: "C12"},
+	{old: AppPrefix + "/admin/overview", new: AdminPrefix + "/usage", side: sideAdmin, owner: "C13"},
+	{old: AppPrefix + "/admin/sessions", new: AdminPrefix + "/usage?tab=sessions", side: sideAdmin, owner: "C13"},
+	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14"},
+	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15"},
+	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15"},
+	{old: AppPrefix + feedbackPagePath, new: AdminPrefix + "/feedback", side: sideAdmin, owner: "C15"},
 }
 
 // consoleRow is the row for path p: an exact old first, else the longest
@@ -237,15 +230,15 @@ func joinQuery(to, q string) string {
 }
 
 // consoleTarget is where path p (query q) ends up through the table for
-// role: every live row followed to its end, so an old address is one hop
-// from its final page. ok=false when no live row moves it.
+// role: every row followed to its end, so an old address is one hop from its
+// final page. ok=false when no row moves it.
 func consoleTarget(p, q, role string) (string, bool) {
 	to, moved := joinQuery(p, q), false
 	for i := 0; i <= len(consolePages); i++ {
 		pth, query, _ := strings.Cut(to, "?")
 		c, ok := consoleRow(pth)
 		member := role == roleUser && c.forUser != ""
-		if !ok || !(c.live || (member && c.userLive)) {
+		if !ok {
 			break
 		}
 		dest := c.new
@@ -287,8 +280,8 @@ func consoleRedirect(r *http.Request) (to string, ok bool) {
 }
 
 // moveOn sends r on through the table (consoleRedirect), else to serve. A
-// live row that sends a member somewhere else than an admin asks the gate
-// who r is first.
+// row that sends a member somewhere else than an admin asks the gate who r
+// is first.
 func (s *Server) moveOn(w http.ResponseWriter, r *http.Request, serve http.HandlerFunc) {
 	move := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if to, ok := consoleRedirect(r); ok {
@@ -297,12 +290,18 @@ func (s *Server) moveOn(w http.ResponseWriter, r *http.Request, serve http.Handl
 		}
 		serve(w, r)
 	})
+	if r.URL.Query().Has("token") {
+		// the gate moves a ?token= link into its cookie first, then the
+		// address moves on (consoleRedirect)
+		s.viewerOnly(move).ServeHTTP(w, r)
+		return
+	}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		p := r.URL.Path
 		if p != AppPrefix && !strings.HasPrefix(p, AppPrefix+"/") && isAppPage(p) {
 			p = appURL(p)
 		}
-		if c, ok := consoleRow(p); ok && (c.live || c.userLive) && c.forUser != "" {
+		if c, ok := consoleRow(p); ok && c.forUser != "" {
 			s.viewerOnly(move).ServeHTTP(w, r)
 			return
 		}
@@ -325,38 +324,18 @@ func (s *Server) adminGate(next http.Handler) http.Handler {
 	}), rememberAdminReturn)
 }
 
-// adminSide is the router's AdminPrefix and below: the old console's own
-// files still under /admin/ as before (ui, serveUI gates them), else — past
-// the admin gate — the new console's admin entry.
-func (s *Server) adminSide(ui http.Handler) http.Handler {
-	entry := s.adminGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// adminSide is the router's AdminPrefix and below: past the admin gate, the
+// new console's admin entry.
+func (s *Server) adminSide() http.Handler {
+	return s.adminGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.serveConsole(w, r, "admin", strings.TrimPrefix(r.URL.Path, AdminPrefix))
 	}))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.UI != nil && r.URL.Path != AdminPrefix {
-			if st, err := fs.Stat(s.UI, strings.TrimPrefix(r.URL.Path, "/")); err == nil && !st.IsDir() {
-				ui.ServeHTTP(w, r)
-				return
-			}
-		}
-		entry.ServeHTTP(w, r)
-	})
 }
 
-// consoleNewLive says whether p is a live row's new page (so a bare old
-// address of the same spelling, /admin/settings, is the new page now) — and
-// not an old page still in place: /app/usage is where the live /app/quota
-// row goes, yet 我的用量 stays the old page until its own row is live.
+// consoleNewLive says whether p is a new page of the table (so a bare old
+// address of the same spelling, /admin/settings, is the new page).
 func consoleNewLive(p string) bool {
 	for _, c := range consolePages {
-		if c.old == p && !c.live {
-			return false
-		}
-	}
-	for _, c := range consolePages {
-		if !c.live {
-			continue
-		}
 		np, _, _ := strings.Cut(c.new, "?")
 		if np == p || (strings.HasSuffix(np, "/") && strings.HasPrefix(p, np)) {
 			return true
@@ -366,7 +345,7 @@ func consoleNewLive(p string) bool {
 }
 
 // consoleBuilt says this hub carries a build of the console's side; without
-// one a page the table has moved stays the old page it was.
+// one its pages are a 404.
 func (s *Server) consoleBuilt(side string) bool {
 	if s.ConsoleFS == nil {
 		return false
@@ -482,13 +461,13 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 			// old route, so it is answered here
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			if isAppPage(p) {
-				s.adminSide(next).ServeHTTP(w, r)
+				s.adminSide().ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
 		case isAdminPath(p) && (r.Method == http.MethodGet || r.Method == http.MethodHead):
-			// an admin page's old address: an admin moves on (or reaches the
-			// page while its row is not live); anyone else, the 404
+			// an admin page's old address: an admin moves on; anyone else,
+			// the 404
 			if strings.HasPrefix(p, AppPrefix+"/") {
 				w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			}
@@ -497,11 +476,7 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 					http.Redirect(w, r, to, http.StatusMovedPermanently)
 					return
 				}
-				if p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/") {
-					s.serveAppPage(w, r, next)
-					return
-				}
-				next.ServeHTTP(w, r)
+				http.NotFound(w, r)
 			})).ServeHTTP(w, r)
 		case (p == TryPagePath || p == tryScriptPath) && s.trialOn():
 			// the 60-second trial (claude-fleet#3590): open to anyone
@@ -589,8 +564,8 @@ func (s *Server) siteServed() bool {
 
 // serveSite is the public site's front page: SiteFS's index.html (中文; the
 // English one is /en/, site_serve.go) when the hub carries the built site
-// (web/site, C14), else the landing page this hub has always drawn for a
-// stranger. Cacheable: it holds nothing of anyone's.
+// (web/site, C14); without one, false — the old landing page went with the
+// old console (claude-fleet#3939). Cacheable: it holds nothing of anyone's.
 func (s *Server) serveSite(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
@@ -601,5 +576,5 @@ func (s *Server) serveSite(w http.ResponseWriter, r *http.Request) bool {
 			return s.sitePage(w, r, "index.html", "zh-CN")
 		}
 	}
-	return s.serveLanding(w, r)
+	return false
 }

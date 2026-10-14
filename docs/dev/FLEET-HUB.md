@@ -844,8 +844,8 @@ summary page prints the same 「卡在…」 line. The stats add `merge_to_stabl
 `runs_started` / `runs_shipped`, `run_p50_secs`, `runs_slow` / `runs_slow_said`,
 `lanes` (stable · stable-macos) and `runs[]` (each with its stages, offsets,
 budgets, `bottleneck`, `conclusion`, `mac`) — `trains` stays the count it was. The
-admin page `/trains` (`web/dist/admin/trains.js`, listed by `/v1/me` on a fleet hub)
-draws them: four KPIs, the two lanes, one time bar a run against the 5-minute line,
+admin page — the console's 发布 (`/admin/release`, claude-fleet#3937; the old
+`/trains` moves there) — draws them: four KPIs, the two lanes, one time bar a run against the 5-minute line,
 a row's merges and stage table on a tap, phone-width. The ledger job never reds (a
 red would stop mac-follow) and the move ignores it (`--ignore-check ledger`);
 `fleet-train-ledger-selftest.sh`, `TestTrainBottleneck`, `TestReleaseTrainRunRoute`.
@@ -1988,8 +1988,8 @@ machine, which session and the attachments are read here, by an admin.
     GET  /v1/admin/feedback/F12/attach/<name>  one attachment, a download (nosniff, sandbox CSP)
     POST /v1/admin/feedback/F12/duplicate      {of:"F3"} → closed, reply 「与 F3 重复」
 
-- Every door is `adminOnly`; the page is `/admin/feedback` (`web/dist/admin/feedback.*`,
-  under `admin/` so a user's request is the 403 page). `/v1/me` lists `feedback` for an
+- Every door is `adminOnly`; the page is the console's `/admin/feedback` (the admin
+  side, so a user's request is the 404 an unknown address gets). `/v1/me` lists `feedback` for an
   admin only while feedback is on.
 - An attachment is served only by a name its row lists, from `F<id>/`; it was held
   against the secret shapes when it came in (C1), so the page shows nothing the hub

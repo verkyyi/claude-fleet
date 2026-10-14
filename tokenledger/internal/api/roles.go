@@ -61,7 +61,6 @@ var routeAccess = map[string]string{
 	control.AccountKeyPath: accessPublic, // the admin seat's ticket key (claude-fleet#3557)
 	ReleaseStatsPath:       accessAdmin,  // the release ledger (claude-fleet#3140)
 	ReleaseKeysPath:        accessAdmin,  // the signing keys' state, 404 to a member (claude-fleet#3937)
-	trainsPagePath:         accessAdmin,  // its runs as a page (claude-fleet#3870)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	// The tab icon, a copy of the site's logo (claude-fleet#3946).
@@ -98,12 +97,6 @@ var routeAccess = map[string]string{
 	// … and a person's own keys, name and home; the handler scopes them.
 	control.EntryKeysPath: accessUser, control.EntryKeysPath + "/": accessUser,
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,
-	EntryPagePath: accessUser, // the keys page (claude-fleet#3069)
-	EntryConnPath: accessUser, // 我的连接 (claude-fleet#3199)
-	// 我的单子 (claude-fleet#3596): a person's own tickets; the handler scopes them.
-	TicketsPagePath: accessUser, TicketsPagePath + "/": accessUser,
-	// … its pictures and the misspellings that lead to it (claude-fleet#3199).
-	EntryPagePath + "/": accessPublic, "/fleet/key": accessPublic, "/keys": accessPublic,
 	// claude-fleet#2850: the pool manifest; #3826: which agents a login may
 	// start — any enrollment token, each.
 	NodePoolPath: accessSelf, NodeAgentsPath: accessSelf,
@@ -134,7 +127,7 @@ var routeAccess = map[string]string{
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
 	control.ChatRelayDataPath: accessSelf,
 	// The web chat (claude-fleet#3645): each person their own conversation.
-	ChatPathPrefix: accessUser, ChatPagePath: accessUser,
+	ChatPathPrefix: accessUser,
 	// The 60-second trial (claude-fleet#3590): the start mints a trial
 	// invite for a stranger; the claim and the timing are the person's own.
 	TryStartPath: accessPublic, TryClaimPath: accessUser, TryTimingPath: accessUser,
@@ -169,13 +162,10 @@ var routeAccess = map[string]string{
 	"/v1/endpoints": accessAdmin, "/v1/account-switches": accessAdmin, "/v1/endpoint-accounts": accessAdmin,
 	"/v1/findings": accessAdmin, "/v1/findings/mutes": accessAdmin,
 	"/v1/access": accessAdmin,
-	// The admin pages (claude-fleet#1990) and the one audit they read.
-	"/subscriptions/": accessAdmin, "/subscriptions/settings": accessAdmin, "/admin/users/": accessAdmin,
-	"/subscriptions": accessAdmin, "/nodes": accessAdmin, "/admin/users": accessAdmin,
-	"/admin/settings": accessAdmin, "/admin/audit": accessAdmin, AuditPath: accessAdmin, "/admin/feedback": accessAdmin,
+	// The one audit the admin side reads (claude-fleet#1990).
+	AuditPath: accessAdmin,
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	AdminSessionsPath: accessAdmin, AdminOverviewPath: accessAdmin, AdminDevicesPath: accessAdmin,
-	"/admin/sessions": accessAdmin, "/admin/overview": accessAdmin, "/admin/devices": accessAdmin,
 	// 全队用量 reads each person as their own page does (claude-fleet#3936).
 	AdminUsagePath: accessAdmin,
 	// The new console's admin side (claude-fleet#3925): to anyone else, the
@@ -187,10 +177,6 @@ var routeAccess = map[string]string{
 	// FleetScope.
 	"/": accessUser, "/v1/me": accessUser, "/v1/me/identities": accessUser,
 	meWxBindQRPath: accessUser, meWxBindPollPath: accessUser, // claude-fleet#4057
-	// 我的额度 (claude-fleet#2517): the page stays until it folds into /usage
-	// (EPIC #3225 C4); its API reads the pool's windows, an admin's
-	// (claude-fleet#3227).
-	"/quota": accessUser,
 	// 我的用量 in one answer (claude-fleet#3227): their limit, days, models
 	// and where it went, off pool_usage under their principal.
 	"/v1/me/usage": accessUser,
@@ -205,20 +191,16 @@ var routeAccess = map[string]string{
 	"/v1/fleet/stream": accessUser,
 	// 我的会话 (claude-fleet#3927): live and ended, cut to their own.
 	FleetSessionListPath: accessUser,
-	"/sessions":          accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
+	"/v1/fleet/me":       accessUser, "/v1/fleet/": accessUser,
 	// 任务 (claude-fleet#3325): the viewer's own records.
-	"/tasks": accessUser, "/v1/fleet/tasks": accessUser, "/v1/fleet/tasks/": accessUser,
+	"/v1/fleet/tasks": accessUser, "/v1/fleet/tasks/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
 	"/v1/nodes": accessUser,
 	// One machine (claude-fleet#2796): 404 unless one of their logins is on it.
 	NodeDetailPrefix:    accessUser,
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
-	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
-	// 我的机器 (claude-fleet#2518): the page reads only /v1/nodes and /v1/me.
-	"/machines": accessUser, "/machines/": accessUser,
-	// 我的用量 (claude-fleet#2519): reads /v1/fleet/person-usage, cut to them.
-	"/usage": accessUser,
+	"/fleet/login": accessUser,
 	// 我的 (claude-fleet#3926): a page of the new console only, each person their own
 	mePagePath: accessUser,
 	// one ticket under 任务 (claude-fleet#3928): the new console's, read off /v1/fleet/tickets

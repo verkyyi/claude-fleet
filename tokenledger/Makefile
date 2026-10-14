@@ -1,8 +1,9 @@
-# ccquota — one binary, no build step for the dashboard.
+# ccquota — one binary.
 #
-# The dashboard is hand-written HTML/CSS/JS under web/dist and is embedded by
-# `go build`. There is deliberately no npm pipeline: a contributor needs only a
-# Go toolchain to produce the complete artifact.
+# The console, the website and its docs are packed into web/ before an image is
+# built (bin/web-console-pack.sh · site-build.sh · docs-build.sh) and embedded by
+# `go build`; a plain `go build` serves the API, the way-in pages and the tab
+# icons (web/dist), and no console.
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 SRCDIGEST ?= $(shell go run ./cmd/ccquota-srcdigest . 2>/dev/null)

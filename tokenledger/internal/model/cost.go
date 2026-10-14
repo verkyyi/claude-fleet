@@ -55,8 +55,7 @@ func CostKind(source string) string {
 // The default is deliberately false: a source added to the constants and
 // forgotten here goes missing from a quota card, which is visible and
 // harmless, rather than appearing there forever saying "no reading available".
-// web/dist/lib/providers.js mirrors this set for the dashboard's own filter;
-// the guard in cost_quota_test.go keeps both honest.
+// The guard in cost_quota_test.go keeps it honest.
 func HasQuotaWindow(source string) bool {
 	switch UsageSource(source) {
 	case SourceClaude, SourceCodex:

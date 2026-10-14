@@ -202,19 +202,6 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '22' }
-      # `npm test` is `node --test test/*.test.mjs` (the glob form: a bare
-      # directory positional does not glob-search on Node 22 — it tries to
-      # require() the directory and fails with ERR_MODULE_NOT_FOUND). There are
-      # no dependencies; `npm ci` only checks the lockfile is in step.
-      - run: npm ci && npm test
-        working-directory: tokenledger/web
-
   cross-compile:
     # The whole adoption story is "download one binary", so a platform that
     # stops building is a release-blocking bug, not a nice-to-have.

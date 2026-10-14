@@ -25,5 +25,3 @@ tokenledger/web/console/*
 # the way-in pages' theme (issue #3932): bin/web-console-pack.sh copies extras/fleet-theme
 tokenledger/web/theme/*
 !tokenledger/web/theme/.gitkeep
-# the website's /chat page (issue #3646): bin/web-chat-pack.sh builds it from extras/web-chat/ui
-tokenledger/web/dist/chat/

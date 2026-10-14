@@ -10,13 +10,11 @@ on:
     paths:
       - 'extras/web-chat/ui/**'
       - 'extras/fleet-theme/**'
-      - 'bin/web-chat-pack.sh'
       - '.github/workflows/web-chat-ui.yml'
   pull_request:
     paths:
       - 'extras/web-chat/ui/**'
       - 'extras/fleet-theme/**'
-      - 'bin/web-chat-pack.sh'
       - '.github/workflows/web-chat-ui.yml'
 
 concurrency:
@@ -52,10 +50,3 @@ jobs:
           # the page loads only its own files: no <script src=http…>, no font service, no CDN
           if grep -rEn '(src|href)="https?://' dist/index.html; then echo "::error::dist/index.html loads from another origin"; exit 1; fi
           if grep -rEn 'fonts\.(googleapis|gstatic)\.com|cdn\.jsdelivr|unpkg\.com|cdnjs' dist; then echo "::error::a CDN in dist"; exit 1; fi
-      # The website's /chat build (issue #3646) from the same source: what
-      # hub-deploy packs into the image — it must build, under /chat/, own-origin only.
-      - name: The website's build
-        run: |
-          ../../../bin/web-chat-pack.sh --out "$RUNNER_TEMP/chat"
-          grep -q 'src="/chat/assets/' "$RUNNER_TEMP/chat/index.html" || { echo "::error::the site build is not under /chat/"; exit 1; }
-          grep -rq '/v1/chat' "$RUNNER_TEMP/chat/assets" || { echo "::error::the site build does not talk to /v1/chat"; exit 1; }

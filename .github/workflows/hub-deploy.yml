@@ -204,8 +204,8 @@ jobs:
           fi
 
   # The train's hub image, built BESIDE its tests (issue #3867, EPIC #3863 C4):
-  # the same inputs as the deploy job's build steps — the client pack, the chat
-  # page, the website — then the image, labelled with TRAIN_SHA. On the cluster's
+  # the same inputs as the deploy job's build steps — the client pack, the
+  # console, the website — then the image, labelled with TRAIN_SHA. On the cluster's
   # fleet-ack runner it is the cluster's buildkitd (buildctl, native amd64, the
   # registry's VPC endpoint, its layer cache `<repo>:buildcache` in the registry —
   # no GitHub cache across the Pacific); on ubuntu-latest buildx with GitHub's
@@ -259,20 +259,6 @@ jobs:
       - name: Pack the client
         if: steps.look.outputs.reuse != 'true'
         run: bin/fleet-client-pack.sh
-      - uses: actions/setup-node@v4
-        if: steps.look.outputs.reuse != 'true' && env.ACK != 'true'   # fleet-ci-runner carries Node 22
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: extras/web-chat/ui/package-lock.json
-      - name: Pack the chat page
-        if: steps.look.outputs.reuse != 'true'
-        env:
-          # the lockfile's packages from the CN mirror in the cluster (npm swaps the registry host)
-          npm_config_registry: ${{ env.ACK == 'true' && 'https://registry.npmmirror.com' || '' }}
-        run: |
-          [ -n "$npm_config_registry" ] || unset npm_config_registry
-          bin/web-chat-pack.sh
       - name: Pack the new console
         if: steps.look.outputs.reuse != 'true'
         run: bin/web-console-pack.sh
@@ -444,18 +430,6 @@ jobs:
       - name: Pack the client
         if: steps.tag.outputs.build == 'true'
         run: bin/fleet-client-pack.sh
-
-      # The website's /chat page (issue #3646) is built from extras/web-chat/ui,
-      # its one source, into tokenledger/web/dist/chat/ — never a committed copy.
-      - uses: actions/setup-node@v4
-        if: steps.tag.outputs.build == 'true'
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: extras/web-chat/ui/package-lock.json
-      - name: Pack the chat page
-        if: steps.tag.outputs.build == 'true'
-        run: bin/web-chat-pack.sh
 
       # The new console (issue #3925): its committed build, copied in.
       - name: Pack the new console

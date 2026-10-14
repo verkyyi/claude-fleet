@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/coder/websocket"
@@ -598,62 +597,10 @@ func pyQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// 我的会话 (claude-fleet#1429) is its own page, served from the embedded UI,
-// and only when the fleet module is on.
-func TestFleetSessionsPage(t *testing.T) {
-	h := newFleetHarness(t)
-	h.srv.UI = fstest.MapFS{
-		"sessions.html": &fstest.MapFile{Data: []byte("<!doctype html><title>我的会话</title>")},
-		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>dashboard</title>")},
-	}
-	resp, body := h.get(t, "/sessions")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "我的会话") {
-		t.Fatalf("GET /sessions = %d %q; want sessions.html", resp.StatusCode, body)
-	}
-
-	off := newHarness(t)
-	off.srv.UI = h.srv.UI
-	if _, body := off.get(t, "/sessions"); strings.Contains(string(body), "我的会话") {
-		t.Errorf("GET /sessions served the page with the fleet module off")
-	}
-}
-
-// 我的机器 (claude-fleet#2518) is a user's page beside /sessions: served from
-// the embedded UI, only with the fleet module on, and listed in a user's menu.
-func TestFleetMachinesPage(t *testing.T) {
-	h := newFleetHarness(t)
-	h.srv.UI = fstest.MapFS{
-		"machines.html": &fstest.MapFile{Data: []byte("<!doctype html><title>我的机器</title>")},
-		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>dashboard</title>")},
-	}
-	defer oldPagesStay(AppPrefix + "/machines")() // the old page, not 设备 it moved to (claude-fleet#3930)
-	resp, body := h.get(t, "/machines")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "我的机器") {
-		t.Fatalf("GET /machines = %d %q; want machines.html", resp.StatusCode, body)
-	}
-	if routeAccess["/machines"] != accessUser {
-		t.Errorf("/machines is %v; want a user's page", routeAccess["/machines"])
-	}
-	if !hasString(pagesFor(roleUser), "mymachines") || !hasString(pagesFor(roleAdmin), "mymachines") {
-		t.Errorf("/v1/me.pages leaves out mymachines: user %v admin %v", pagesFor(roleUser), pagesFor(roleAdmin))
-	}
-
-	off := newHarness(t)
-	off.srv.UI = h.srv.UI
-	if _, body := off.get(t, "/machines"); strings.Contains(string(body), "我的机器") {
-		t.Errorf("GET /machines served the page with the fleet module off")
-	}
-}
-
-// Config (claude-fleet#1989) is its own page beside /sessions and /connect,
-// served from the embedded UI only when the fleet module is on, and gone /u/.
+// Config (claude-fleet#1989) was its own page; 设置 took it over
+// (claude-fleet#3931) and the old page is gone (claude-fleet#3939).
 func TestFleetConfigPage(t *testing.T) {
 	h := newFleetHarness(t)
-	h.srv.UI = fstest.MapFS{
-		"config.html": &fstest.MapFile{Data: []byte("<!doctype html><title>Config</title>")},
-		"index.html":  &fstest.MapFile{Data: []byte("<!doctype html><title>overview</title>")},
-		"user.html":   &fstest.MapFile{Data: []byte("<!doctype html><title>old user page</title>")},
-	}
 	// 设置 took it over (claude-fleet#3931): the old address is one 301 to it.
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/config", nil)
 	req.Header.Set("Authorization", "Bearer "+viewerToken)
@@ -665,14 +612,8 @@ func TestFleetConfigPage(t *testing.T) {
 	if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix+settingsPagePath {
 		t.Fatalf("GET /config = %d → %q; want 301 %s", resp.StatusCode, resp.Header.Get("Location"), AppPrefix+settingsPagePath)
 	}
-	if _, body := h.get(t, "/u/alice"); strings.Contains(string(body), "old user page") {
-		t.Errorf("GET /u/alice still serves the old per-person page")
-	}
-
-	off := newHarness(t)
-	off.srv.UI = h.srv.UI
-	if _, body := off.get(t, "/config"); strings.Contains(string(body), "<title>Config") {
-		t.Errorf("GET /config served the page with the fleet module off")
+	if resp, _ := h.get(t, "/u/alice"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /u/alice = %d; want 404", resp.StatusCode)
 	}
 }
 

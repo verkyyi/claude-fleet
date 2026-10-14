@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"testing/fstest"
 )
 
 // The company-business routes are gone (claude-fleet#1987): each answers 404
@@ -12,10 +11,6 @@ import (
 // 401 that would say something is there.
 func TestRemovedRoutesAre404(t *testing.T) {
 	h := newHarness(t)
-	h.srv.UI = fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>app</title>")},
-		"app.js":     &fstest.MapFile{Data: []byte("// app")},
-	}
 	removed := []string{
 		"/growth", "/growth/", "/v1/ingest/growth", "/v1/growth/latest",
 		"/v1/repos", "/v1/repo/flow", "/v1/repo/issues", "/v1/repo/cost", "/v1/repo/human-debt", "/v1/ingest/repo",
@@ -47,10 +42,10 @@ func TestRemovedRoutesAre404(t *testing.T) {
 			}
 		}
 	}
-	// What remains is untouched: the app at "/" and its own files.
-	for _, path := range []string{"/", "/app.js"} {
-		if code := h.getCode(t, path); code != http.StatusOK {
-			t.Errorf("GET %s = %d, want 200", path, code)
+	// The old console's files went too (claude-fleet#3939).
+	for _, path := range []string{"/app.js", "/app.html", "/lib/shell.js"} {
+		if code := h.getCode(t, path); code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, code)
 		}
 	}
 }

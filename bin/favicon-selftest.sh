@@ -21,7 +21,7 @@ for pair in "extras/fleet-theme/logo.svg tokenledger/web/dist/favicon.svg" \
 done
 
 # no inlined icon, no old green / blue one
-pages="$(cd "$ROOT" && { git ls-files 'tokenledger/web/dist/*.html' 'extras/web-chat/ui/index.html' 'extras/web-chat/ui/dist/index.html'; echo site/template.html; })"
+pages="$(cd "$ROOT" && { git ls-files 'extras/web-chat/ui/index.html' 'extras/web-chat/ui/dist/index.html'; echo site/template.html; })"
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   if grep -Eq "rel=\"(icon|apple-touch-icon)\"[^>]*href=\"data:|%230e6e5e|%232a78d6" "$ROOT/$f"; then

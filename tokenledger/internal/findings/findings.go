@@ -267,9 +267,8 @@ const (
 //
 // The dashboard's endpoint roster used to dim a row after ten minutes while
 // this alert waited an hour, so the same machine was "stale" in one place and
-// fine in another, on one page. The roster now reads this number (web/dist has
-// no build step and cannot import Go, so it carries the literal and
-// web/embed_test.go fails the build if the two ever drift).
+// fine in another, on one page. The roster read this number; the old
+// dashboard that carried it went with claude-fleet#3939.
 //
 // Not to be confused with the limits banner's ten-minute threshold, which is
 // about the age of a rate-limit READING, not about an endpoint being quiet.
