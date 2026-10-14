@@ -236,6 +236,10 @@ func TestEntryReachUnreachableNotRecorded(t *testing.T) {
 		(v.Addrs[1].Reason != control.ReachTimeout && v.Addrs[1].Reason != control.ReachNoRoute) {
 		t.Fatalf("verdict %s, want 127.0.0.1 reachable and 100::1 not (timeout / unreachable)", raw)
 	}
+	// the key every address was held to is kept: a pod behind a door is handed it (#4127)
+	if k, err := h.srv.Store.EntryHostKey("mac-e"); err != nil || k != reachKeyLine(key) {
+		t.Fatalf("entry host key kept = %q %v, want %q", k, err, reachKeyLine(key))
+	}
 	now := time.Now()
 	got, err := h.srv.EntryReachable("mac-e", now)
 	if err != nil || len(got) != 1 || got[0].Addr != "127.0.0.1" || got[0].Port != port || got[0].Family != "ipv4" {

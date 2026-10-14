@@ -48,6 +48,12 @@
 #   door-empty-table      the door with an empty table (issue #3554): it still listens
 #                         (its startup probe is tcp :22022) and lets nobody in —
 #                         AllowUsers is a name no account can have — until a route comes
+#   door-hostkey-pod      a pod behind the door (issue #4127): ssh lands on the DOOR's
+#                         sshd, so fleet-known-hosts must hold the door's key under
+#                         fleet-<pod> — the pod's own (an image's baked key) is
+#                         「REMOTE HOST IDENTIFICATION HAS CHANGED」 on every connect;
+#                         the client's write_known_hosts with each against a real
+#                         door, and the hub half's Go test (TestDoorRouteListHandsOutTheDoorsHostKey)
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -801,6 +807,60 @@ PY
   sys_same || { ddown; return 1; }
   ddown
   WHAT="入口的表还是空的（还没有人的家在 pod 上）：门照样监听 22022、AllowUsers 只有永远不存在的 fleet-door-closed，谁都进不来；第一条路由一到，换成那个登录"
+}
+
+drill_door_hostkey_pod() {
+  CAP=60   # the door, two client connects, the hub half's go test
+  local t0 out rc kh gohalf
+  erig doorkey
+  mkdir -p "$E/rt/bin" "$E/door"; ln -s "$BIN/fleet-door.sh" "$E/rt/bin/fleet-door.sh"
+  ssh-keygen -q -t ed25519 -N '' -f "$E/door/host_ed25519_key"
+  ssh-keygen -q -t ed25519 -N '' -C fleet-door -f "$E/door/id_ed25519"
+  ssh-keygen -q -t rsa -b 2048 -N '' -C root@buildkitsandbox -f "$E/baked"
+  export FLEET_DOOR=1 FLEET_DOOR_SECRET="$E/door"
+  eapply "$(dlist 1)" || { WHY="door apply failed: $(tail -2 "$E/apply.out")"; ddown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the door never listened"; ddown; return 1; }
+  kh="$E/fleet-known-hosts"
+  # the client writes what the hub lists for u-aaaa1, then ssh checks it under fleet-u-aaaa1
+  connect() {  # connect <host key line the hub lists>
+    FLEET_KNOWN_HOSTS="$kh" python3 -I - "$BIN/fleet-connect.py" "$1" <<'PY' || return 1
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1])
+fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+sys.exit(0 if fc.write_known_hosts({"alias": "u-aaaa1", "host_keys": [sys.argv[2]]}) else 1)
+PY
+    ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -i "$E/k1" \
+        -o HostKeyAlias=fleet-u-aaaa1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$kh" \
+        -o ConnectTimeout=5 -p "$EPORT" "$ME@127.0.0.1" true </dev/null 2>&1
+  }
+  # the bug: the pod's own (baked) key listed — the door's key is a stranger
+  out=$(connect "$(cut -d' ' -f1-2 "$E/baked.pub")")
+  case $out in *'HAS CHANGED'*|*'verification failed'*) ;;
+    *) WHY="the pod's baked key did not trip ssh's host check — the drill tests nothing: [$out]"; ddown; return 1 ;; esac
+  # the fix: the door's key listed — the line under fleet-u-aaaa1 replaced, ssh past the host check
+  out=$(connect "$(cut -d' ' -f1-2 "$E/door/host_ed25519_key.pub")")
+  case $out in *'HAS CHANGED'*|*'verification failed'*)
+    WHY="with the door's key listed ssh still refuses the host: [$out]"; ddown; return 1 ;; esac
+  [ "$(grep -c '^fleet-u-aaaa1 ' "$kh")" = 1 ] && ! grep -q ssh-rsa "$kh" \
+    || { WHY="the old line was not replaced: $(cat "$kh")"; ddown; return 1; }
+  gohalf="hub half: no go toolchain here — the Go gate runs TestDoorRouteListHandsOutTheDoorsHostKey"
+  grep -q '^func TestDoorRouteListHandsOutTheDoorsHostKey(' "$ROOT/tokenledger/internal/api/fleet_door_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestDoorRouteListHandsOutTheDoorsHostKey is gone"; ddown; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestDoorRouteListHandsOutTheDoorsHostKey$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; ddown; return 1 ;;
+      0:*) gohalf="hub half: go test ok" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"
+         ddown; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  ddown
+  WHAT="pod 在门后：fleet-known-hosts 里 fleet-u-aaaa1 记 pod 自己（镜像里）的钥匙 ⇒ 撞「HAS CHANGED」；记门的钥匙 ⇒ 过主机核对、旧行被换掉；$gohalf"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

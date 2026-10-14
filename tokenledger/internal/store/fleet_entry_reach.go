@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,11 @@ CREATE TABLE IF NOT EXISTS fleet_entry_reach (
   PRIMARY KEY (machine, addr, port)
 );
 CREATE INDEX IF NOT EXISTS fleet_entry_reach_machine ON fleet_entry_reach(machine);
+CREATE TABLE IF NOT EXISTS fleet_entry_hostkey (
+  machine  TEXT PRIMARY KEY,
+  host_key TEXT NOT NULL,
+  seen_at  TEXT NOT NULL
+);
 `
 
 // EntryReach is one address of a machine the hub tried.
@@ -123,4 +129,35 @@ func (s *Store) EntryReachAll() ([]EntryReach, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SetEntryHostKey keeps the entry port's host key a machine's last report
+// named — the key the hub's probe held each address to (claude-fleet#4127).
+// A person's pod is reached through the door: its route list hands out the
+// door's key, never the pod's own.
+func (s *Store) SetEntryHostKey(machine, key string, at time.Time) error {
+	machine = strings.ToLower(machine)
+	tx, err := s.write.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck — a no-op after Commit
+	if _, err := tx.Exec(`DELETE FROM fleet_entry_hostkey WHERE machine = ?`, machine); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO fleet_entry_hostkey (machine, host_key, seen_at) VALUES (?, ?, ?)`,
+		machine, key, at.UTC().Format(rfc)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// EntryHostKey is the machine's last reported entry host key, "" when none.
+func (s *Store) EntryHostKey(machine string) (string, error) {
+	var k string
+	err := s.read.QueryRow(`SELECT host_key FROM fleet_entry_hostkey WHERE machine = ?`, strings.ToLower(machine)).Scan(&k)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return k, err
 }

@@ -369,6 +369,14 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if want != nil {
+		// the key every address above was held to: a pod behind this door
+		// is handed it (withEntryReach), not the pod's own (#4127)
+		if err := s.Store.SetEntryHostKey(host, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(want))), now); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	v := control.EntryReachVerdict{CheckedAt: now, NoPublic: noPublic, Addrs: entryReachAddrs(written)}
 	if src.IsValid() {
 		v.Source = src.String()

@@ -71,3 +71,25 @@ func TestNodeHostKeysEntry(t *testing.T) {
 		t.Fatalf("with the entry: %q, want [%s %s]", got, sys, entry)
 	}
 }
+
+// A container machine's sshd key, kept on its own disk (claude-fleet#4127),
+// rides along before the entry's: the image itself carries no host key.
+func TestNodeHostKeysContainer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FLEET_NODE_STATE", dir)
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	sp, _ := ssh.NewPublicKey(pub)
+	want := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sp)))
+	old := hostKeyFiles
+	t.Cleanup(func() { hostKeyFiles = old })
+	hostKeyFiles = []string{filepath.Join(dir, "missing.pub")}
+	if err := os.MkdirAll(filepath.Join(dir, "ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ssh", "ssh_host_ed25519_key.pub"), []byte(want+" root@u-x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := nodeHostKeys(); len(got) != 1 || got[0] != want {
+		t.Fatalf("container key: %q, want [%s]", got, want)
+	}
+}

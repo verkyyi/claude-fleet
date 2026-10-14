@@ -871,6 +871,16 @@ got=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["fp"]
   && ok "L the ticket kept 0600 at ~/.config/claude-fleet/debug-ticket, never printed" || bad "L ticket file: $(ls -l "$tk" 2>&1) $out"
 linstall "$LH"
 [ "$rc" = 0 ] && ! grep -q '^POST ' "$K/requests" && ok "L a rerun within 12 hours asks for no second ticket" || bad "L rerun asked again: $(cat "$K/requests")"
+# a staged install (fleet-client-update.sh: FLEET_INSTALL_HOME=<temp>) asks over
+# the REAL root, and a ticket with no fingerprint beside it is asked again (#4127)
+rm -f "$LH/.config/claude-fleet/debug-ticket.fp"; : > "$K/requests"; rm -f "$K/debug-req"
+out=$(env -i HOME="$LH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FC_BREW_DIRS= FLEET_DEBUG_HWID=hw-L2891 \
+      FLEET_INSTALL_HOME="$K/lstage" FLEET_DEBUG_ROOT="$LH/.claude/fleet" \
+      FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_NO_AGENTS=1 sh < "$K/install.sh" 2>&1); rc=$?
+got=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fp"])' "$K/debug-req" 2>&1)
+[ "$rc" = 0 ] && [ "$got" = "$want" ] && [ "$(cat "$LH/.config/claude-fleet/debug-ticket.fp" 2>/dev/null)" = "$want" ] \
+  && ok "L a staged install fingerprints the real root; a ticket with no .fp is asked again (#4127)" \
+  || bad "L staged: rc=$rc got=$got want=$want $(cat "$K/requests") $out"
 touch "$K/debug429"; LH2="$K/lhome2"; mkdir -p "$LH2"
 linstall "$LH2"; rm -f "$K/debug429"
 [ "$rc" = 0 ] && grep -q '^POST /v1/fleet/debug/ticket$' "$K/requests" && [ ! -e "$LH2/.config/claude-fleet/debug-ticket" ] \

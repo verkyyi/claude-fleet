@@ -27,17 +27,28 @@ var hostKeyFiles = []string{
 // the first connection there is checked too (claude-fleet#3075). No entry on
 // this machine ⇒ no file ⇒ nothing added.
 func entryHostKeyFile() string {
-	st := os.Getenv("FLEET_NODE_STATE")
-	if st == "" {
-		st = "/var/db/fleet-node"
+	return filepath.Join(nodeStateDir(), "entry", "ssh_host_ed25519_key.pub")
+}
+
+// containerHostKeyFile is a container machine's sshd key (fleet-node-linux.py
+// container: made once on the machine's own disk, its sshd_config.d names it
+// alone — claude-fleet#4127). The image keeps no /etc/ssh host key, so this
+// is the one its sshd shows. No such machine ⇒ no file ⇒ nothing added.
+func containerHostKeyFile() string {
+	return filepath.Join(nodeStateDir(), "ssh", "ssh_host_ed25519_key.pub")
+}
+
+func nodeStateDir() string {
+	if st := os.Getenv("FLEET_NODE_STATE"); st != "" {
+		return st
 	}
-	return filepath.Join(st, "entry", "ssh_host_ed25519_key.pub")
+	return "/var/db/fleet-node"
 }
 
 // nodeHostKeys is the heartbeat's HostKeys: every readable, well-formed one.
 func nodeHostKeys() []string {
 	var lines []string
-	for _, f := range append(append([]string(nil), hostKeyFiles...), entryHostKeyFile()) {
+	for _, f := range append(append([]string(nil), hostKeyFiles...), containerHostKeyFile(), entryHostKeyFile()) {
 		if b, err := os.ReadFile(f); err == nil {
 			lines = append(lines, string(b))
 		}

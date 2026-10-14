@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
 // A computer's own key on its person's door list (claude-fleet#3075, EPIC
@@ -98,9 +100,20 @@ func (s *Server) withEntryReach(m FleetMachine, now time.Time) FleetMachine {
 			return m
 		}
 	}
-	addrs, err := s.EntryReachable(s.entryAddrMachine(m.Hostname, now), now)
+	door := s.entryAddrMachine(m.Hostname, now)
+	addrs, err := s.EntryReachable(door, now)
 	if err != nil || len(addrs) == 0 {
 		return m
+	}
+	if pod && door != m.Hostname {
+		// the door ends the ssh itself (fleet-door.sh): the key a person's
+		// ssh meets under fleet-<pod> is the door's, never the pod's own —
+		// whatever that pod's image carried (#4127). None known ⇒ none
+		// listed: ssh asks once rather than refuse on a wrong one.
+		m.HostKeys = nil
+		if k, err := s.Store.EntryHostKey(door); err == nil && k != "" {
+			m.HostKeys = control.HostKeys([]string{k})
+		}
 	}
 	routes := append([]FleetRoute(nil), m.Routes...)
 	for i, a := range addrs {
