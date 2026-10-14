@@ -687,7 +687,7 @@ def fleet_only_slug(fleet):
     return confs[0] if len(confs) == 1 else ""
 
 
-ISSUES_LISTED = 300     # tmux-dash-collect.sh's `gh issue list --limit`
+ISSUES_LISTED = 300     # the collector's open-issue list holds this many (tmux-dash-collect.sh --limit)
 
 
 def open_ask(slug, issue, lists=None):
