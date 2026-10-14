@@ -79,7 +79,7 @@ fi
 # (`cf` still means "take me to my fleet", issue #979).
 if [ -z "$REPO" ] && [ "$NOREPO" = 0 ]; then
   if top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); then
-    REPO=$(git -C "$top" remote get-url origin 2>/dev/null) \
+    REPO=$(fleet_origin_url "$top") \
       || die "$top has no 'origin' remote — pass <owner/repo> explicitly, or --no-repo"
     DIR="${DIR:-$top}"
     echo "fleet-up: inferred $(fleet_repo_name_of "$REPO") from $top"

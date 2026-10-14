@@ -526,6 +526,16 @@ fleet_sessmap_file() {
   printf '%s' "$FLEET_C/sessmap"
 }
 
+# fleet_origin_url <dir> — <dir>'s origin as WRITTEN (issue #4153). `git remote
+# get-url` applies url.*.insteadOf, so on a machine with a git mirror (a personal
+# pod's FLEET_GIT_MIRRORS) it answers the mirror's address and an identity check
+# reads "not a checkout of owner/name". Read the config; get-url only when the
+# config has none (an origin defined some other way). Same rc as get-url.
+fleet_origin_url() {
+  git -C "${1:-.}" config --get remote.origin.url 2>/dev/null \
+    || git -C "${1:-.}" remote get-url origin 2>/dev/null
+}
+
 # git remote URL (or owner/name) → owner/name. Empty if it isn't GitHub-ish.
 # Forkless (issue #888) — the same four edits, in the same order, as the
 #   sed -E 's#^git@[^:]*:##; s#^https?://[^/]*/##; s#\.git$##; s#/+$##'
@@ -1063,7 +1073,7 @@ fleet_window_repo() {
   [ -n "$r" ] && { printf '%s' "$r"; return 0; }
   [ "$norepo" = 1 ] && return 0
   if [ -n "$wt" ] && [ -d "$wt" ]; then
-    r=$(fleet_norm_repo "$(git -C "$wt" remote get-url origin 2>/dev/null)")
+    r=$(fleet_norm_repo "$(fleet_origin_url "$wt")")
     case "$r" in
       ?*/?*) _fleet_tmux "$sess" set-option -w -t "$t" @repo "$r" 2>/dev/null
              printf '%s' "$r"; return 0 ;;
@@ -2165,8 +2175,7 @@ fleet_repo_checkout() {
   local repo="${1:-}" dir="${2:-}" tag="${3:-fleet}" remote="${4:-}" forge="${5:-github}" have url
   if [ "$forge" != github ] && [ -n "$remote" ]; then
     if [ -d "$dir/.git" ]; then
-      # the address as written (`remote get-url` applies url.*.insteadOf)
-      url=$(git -C "$dir" config --get remote.origin.url 2>/dev/null)
+      url=$(git -C "$dir" config --get remote.origin.url 2>/dev/null)   # as written (fleet_origin_url)
       if [ "$url" != "$remote" ] && [ "$(fleet_repo_name_of "$url")" != "$repo" ]; then
         echo "$tag: $dir is a checkout of '${url:-no origin}', not '$remote'" >&2; return 3
       fi
@@ -2181,7 +2190,7 @@ fleet_repo_checkout() {
     return 0
   fi
   if [ -d "$dir/.git" ]; then
-    have=$(fleet_norm_repo "$(git -C "$dir" remote get-url origin 2>/dev/null)")
+    have=$(fleet_norm_repo "$(fleet_origin_url "$dir")")
     [ "$have" = "$repo" ] || { echo "$tag: $dir is a checkout of '$have', not '$repo'" >&2; return 3; }
     echo "$tag: reusing existing checkout $dir"
   elif [ -e "$dir" ]; then
@@ -8554,7 +8563,7 @@ fleet_resolve_repo_for_session() {
   while IFS= read -r pth; do
     [ -z "$pth" ] && continue
     git -C "$pth" rev-parse --git-dir >/dev/null 2>&1 || continue
-    repo=$(git -C "$pth" remote get-url origin 2>/dev/null) || continue
+    repo=$(fleet_origin_url "$pth") || continue
     repo=$(fleet_norm_repo "$repo")
     [ -n "$repo" ] && { printf '%s' "$repo"; return; }
     # -L "$sess": each fleet runs on its own named socket (== session name), so a

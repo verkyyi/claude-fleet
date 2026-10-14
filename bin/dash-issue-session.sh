@@ -392,7 +392,7 @@ fi
 
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit "$RC_INFRA"; }
-REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
+REPO="${FLEET_REPO:-$(fleet_origin_url "$MAIN" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 # A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3598, EPIC #3570
 # C5): every read, claim and release below goes through the ticket door and never
