@@ -5207,6 +5207,7 @@ def entry_sshd():
 # forwarding (it would land on the door, not the pod).
 DOOR_GROUP = "fleet-door"
 DOOR_GECOS = "fleet-door"
+DOOR_SHADOW = "/etc/shadow"
 # AllowUsers of a door whose table is empty (issue #3554): a `-` no login of the
 # hub's (2-16 of a-z0-9) can carry, so no door account is ever this name
 DOOR_NOBODY = "fleet-door-closed"
@@ -5276,14 +5277,42 @@ def door_account(login):
         return None if e.get("gecos") == DOOR_GECOS else "a login of this machine, not a door account"
     try:
         pw = pwd.getpwnam(login)
-        return None if pw.pw_gecos == DOOR_GECOS else "a login of this machine, not a door account"
+        if pw.pw_gecos != DOOR_GECOS:
+            return "a login of this machine, not a door account"
+        return door_unlock(login)
     except KeyError:
         pass
     subprocess.run(["groupadd", "-f", DOOR_GROUP], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     r = subprocess.run(["useradd", "-M", "-d", "/nonexistent", "-s", "/bin/bash", "-g", DOOR_GROUP,
                         "-c", DOOR_GECOS, "-K", "UID_MIN=60000", "-K", "UID_MAX=64999", login],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
-    return None if r.returncode == 0 else "useradd: %s" % r.stdout.strip()[:200]
+    return door_unlock(login) if r.returncode == 0 else "useradd: %s" % r.stdout.strip()[:200]
+
+
+def door_shadow(login):
+    """The second field of <login>'s shadow line, None when there is none."""
+    try:
+        with open(DOOR_SHADOW) as f:
+            for line in f:
+                parts = line.rstrip("\n").split(":")
+                if parts[0] == login and len(parts) > 1:
+                    return parts[1]
+    except OSError:
+        return None
+    return None
+
+
+def door_unlock(login):
+    """None once <login>'s shadow field is `*`, else why not. useradd leaves `!`
+    (LOCKED); the door's sshd runs `UsePAM no`, and OpenSSH without PAM turns a
+    locked account away even with its key (door-account-locked, #4161 — the
+    door's twin of linux-login-locked, #3304). `*` matches no password but is not
+    a lock. Checked on every pass, so a door made before this heals itself."""
+    if door_shadow(login) in ("*", None):
+        return None
+    r = subprocess.run(["usermod", "--password", "*", login], stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
+    return None if r.returncode == 0 else "usermod: %s" % r.stdout.strip()[:200]
 
 
 def door_eligible(logins, routes):
@@ -5367,6 +5396,20 @@ def _entry_root_dir(d, mode):
             os.chown(d, 0, 0)
     if os.stat(d).st_mode & 0o7777 != mode:
         os.chmod(d, mode)
+
+
+def _entry_state_dir(d):
+    """The state dir under AuthorizedKeysFile: made 0755 when missing; one that is
+    there loses its group / other write. sshd's `StrictModes yes` refuses every key
+    under a group- or world-writable directory — the door mounts an emptyDir here,
+    which Kubernetes makes 0777 (door-strictmodes, #4161: `bad ownership or modes
+    for directory /var/db/fleet-node`, 0 Accepted). A sticky dir (/tmp) is left."""
+    if not os.path.isdir(d):
+        _entry_root_dir(d, 0o755)
+        return
+    mode = os.stat(d).st_mode & 0o7777
+    if mode & 0o022 and not mode & stat.S_ISVTX:
+        os.chmod(d, mode & ~0o022)
 
 
 def entry_key_line(k):
@@ -5749,8 +5792,7 @@ def entry_converge(paths, lst=None, force=False):
     if not on:
         return None
     ep = EntryPaths(paths)
-    if not os.path.isdir(paths.state):
-        _entry_root_dir(paths.state, 0o755)
+    _entry_state_dir(paths.state)
     _entry_root_dir(ep.dir, 0o755)
     _entry_root_dir(ep.keys, 0o755)
     lk = os.open(ep.lock, os.O_RDWR | os.O_CREAT, 0o600)
