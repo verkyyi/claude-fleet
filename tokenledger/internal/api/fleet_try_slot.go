@@ -30,6 +30,12 @@ import (
 //     beat for fleet.trial.hidden_secs (120) ⇒ release, reason hidden; no input
 //     for fleet.trial.idle_warn_secs (180) ⇒ the next beat answers warn (the page
 //     says 「1 分钟后暂停」); for fleet.trial.idle_secs (240) ⇒ release, idle.
+//     Both idle lines count only from the moment the seat is ready (ready_at:
+//     its home set, the conversation in — claude-fleet#4235): a seat still
+//     opening cannot be typed into, so it is never «idle». One that is not
+//     ready within fleet.trial.open_slow_secs (300) goes back as open_slow —
+//     uncharged, the person waiting again in their place (not 「已试过」), and
+//     a trial_open_slow alert names the machine.
 //     「先暂停」 on the page is TryPausePath, reason pause. The trial's budget
 //     (#4059: fleet.trial.max_secs of a machine across every seat, max_msgs
 //     lines) ends it through the same road (SweepTrials, reason time · msgs),
@@ -70,10 +76,12 @@ const (
 	TrialHiddenSecsKey = "fleet.trial.hidden_secs"
 	TrialIdleWarnKey   = "fleet.trial.idle_warn_secs"
 	TrialIdleKey       = "fleet.trial.idle_secs"
+	TrialOpenSlowKey   = "fleet.trial.open_slow_secs"
 
 	defaultTrialHiddenSecs   = 120
 	defaultTrialIdleWarnSecs = 180
 	defaultTrialIdleSecs     = 240
+	defaultTrialOpenSlowSecs = 300
 
 	TryBeatPath  = "/v1/try/beat"
 	TryPausePath = "/v1/try/pause"
@@ -83,6 +91,10 @@ const (
 	trialReleaseHidden = "hidden"
 	trialReleaseIdle   = "idle"
 	trialReleasePause  = "pause"
+
+	// trialReleaseOpenSlow: the seat did not open in time — put back and the
+	// person requeued, never counted as a trial spent (claude-fleet#4235).
+	trialReleaseOpenSlow = "open_slow"
 
 	// trialConvoPurpose is what a kept conversation is sealed for.
 	trialConvoPurpose = "trial-convo"
@@ -110,6 +122,10 @@ func (s *Server) trialIdleWarnSecs() int {
 }
 func (s *Server) trialIdleSecs() int {
 	return s.settingIntOr(TrialIdleKey, defaultTrialIdleSecs, 60, 7200)
+}
+
+func (s *Server) trialOpenSlowSecs() int {
+	return s.settingIntOr(TrialOpenSlowKey, defaultTrialOpenSlowSecs, 60, 3600)
 }
 
 // trialSlotState: which trials are being released now (one release per
@@ -288,12 +304,13 @@ func (s *Server) trialGiveBack(pid string, a store.FleetAccount, now time.Time) 
 
 // trialEndNote is the audit's words for why a trial's machine went back.
 var trialEndNote = map[string]string{
-	trialReleaseHidden: "试用页关了或切走，机器放回 · page closed or hidden",
-	trialReleaseIdle:   "试用没动静，机器放回 · no input",
-	trialReleasePause:  "试用者先暂停，机器放回 · paused by the person",
-	trialEndTime:       "试用用完，登录收回 · trial spent, login given back",
-	trialEndMsgs:       "试用用完，登录收回 · trial spent, login given back",
-	trialEndDrill:      "演练试用者到期，机器放回 · drill trier expired",
+	trialReleaseHidden:   "试用页关了或切走，机器放回 · page closed or hidden",
+	trialReleaseIdle:     "试用没动静，机器放回 · no input",
+	trialReleasePause:    "试用者先暂停，机器放回 · paused by the person",
+	trialReleaseOpenSlow: "试用的机器迟迟没开好，放回并重新排队（不算试过） · seat did not open in time, requeued",
+	trialEndTime:         "试用用完，登录收回 · trial spent, login given back",
+	trialEndMsgs:         "试用用完，登录收回 · trial spent, login given back",
+	trialEndDrill:        "演练试用者到期，机器放回 · drill trier expired",
 }
 
 // trialSlotVerdict is what the patrol does with a placed trial at now: a
@@ -305,15 +322,67 @@ func (s *Server) trialSlotVerdict(t store.Trial, now time.Time) string {
 		}
 		return now.Sub(at)
 	}
-	switch {
-	case since(t.BeatAt) >= time.Duration(s.trialHiddenSecs())*time.Second:
+	if since(t.BeatAt) >= time.Duration(s.trialHiddenSecs())*time.Second {
 		return trialReleaseHidden
-	case since(t.InputAt) >= time.Duration(s.trialIdleSecs())*time.Second:
+	}
+	if t.ReadyAt.IsZero() {
+		// Still opening: no idle clock (claude-fleet#4235), only its own line.
+		if since(t.PlacedAt) >= time.Duration(s.trialOpenSlowSecs())*time.Second {
+			return trialReleaseOpenSlow
+		}
+		return ""
+	}
+	quiet := since(trialLastInput(t))
+	switch {
+	case quiet >= time.Duration(s.trialIdleSecs())*time.Second:
 		return trialReleaseIdle
-	case since(t.InputAt) >= time.Duration(s.trialIdleWarnSecs())*time.Second:
+	case quiet >= time.Duration(s.trialIdleWarnSecs())*time.Second:
 		return "warn"
 	}
 	return ""
+}
+
+// trialLastInput is where t's idle clock starts: its last input, never
+// before the seat was ready.
+func trialLastInput(t store.Trial) time.Time {
+	last := t.InputAt
+	if last.Before(t.ReadyAt) {
+		last = t.ReadyAt
+	}
+	if last.Before(t.PlacedAt) {
+		last = t.PlacedAt
+	}
+	return last
+}
+
+// trialReady stamps pid's seat ready at now (the first time) — the idle
+// clock starts here — and clears the machine's trial_open_slow alert.
+func (s *Server) trialReady(pid string, now time.Time) {
+	moved, err := s.Store.ReadyTrial(pid, now)
+	if err != nil || !moved {
+		return
+	}
+	if t, err := s.Store.Trial(pid); err == nil && t != nil && t.Host != "" {
+		_, _ = s.Store.ClearFleetAlert(store.AlertTrialOpenSlow, t.Host, now)
+	}
+}
+
+// trialOpenSlowAlert tells the operator a seat on host did not open in time.
+func (s *Server) trialOpenSlowAlert(t store.Trial, now time.Time) {
+	if t.Host == "" {
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"hostname": t.Host, "after_secs": s.trialOpenSlowSecs(),
+		"placed_at": t.PlacedAt.UTC()})
+	raised, err := s.Store.RaiseFleetAlert(store.AlertTrialOpenSlow, t.Host, string(b), now)
+	if err != nil {
+		log.Printf("fleet: trial open slow alert %s: %v", t.Host, err)
+		return
+	}
+	if raised {
+		_ = s.Store.HubAudit(trialInviter, "trial.alert", t.Host, "raised",
+			fmt.Sprintf("%s: %s %s", store.AlertTrialOpenSlow, t.Host, trialEndNote[trialReleaseOpenSlow]), now)
+	}
 }
 
 // SweepTrialSlots is the 15-second patrol, off the alerts tick: the spent
@@ -361,6 +430,9 @@ func (s *Server) SweepTrialSlots(now time.Time) {
 				_ = s.Store.WarnTrial(t.Principal, now)
 			}
 		default:
+			if v == trialReleaseOpenSlow {
+				s.trialOpenSlowAlert(t, now)
+			}
 			if err := s.trialRelease(t.Principal, v, now); err != nil {
 				log.Printf("fleet: trial patrol: release %s (%s): %v", t.Principal, v, err)
 			}
@@ -589,6 +661,9 @@ func (s *Server) tryBeat(pid string, input, now time.Time) (beatAnswer, error) {
 	case store.TrialWaiting:
 		return beatAnswer{State: "waiting", Next: TryPagePath}, nil
 	}
+	// The chat page beats only once the seat is usable: ready, if the
+	// claim's poll did not say so first.
+	s.trialReady(pid, now)
 	if _, err := s.Store.BeatTrial(pid, now, input); err != nil {
 		return beatAnswer{}, err
 	}
@@ -598,12 +673,8 @@ func (s *Server) tryBeat(pid string, input, now time.Time) (beatAnswer, error) {
 	secs, _ := s.trialLeft(t, now)
 	a := beatAnswer{State: "placed", LeftSecs: secs}
 	if !t.WarnedAt.IsZero() {
-		last := t.InputAt
-		if last.Before(t.PlacedAt) {
-			last = t.PlacedAt
-		}
 		a.Warn = true
-		a.PauseIn = s.trialIdleSecs() - int(now.Sub(last).Seconds())
+		a.PauseIn = s.trialIdleSecs() - int(now.Sub(trialLastInput(*t)).Seconds())
 		if a.PauseIn < 0 {
 			a.PauseIn = 0
 		}

@@ -95,7 +95,115 @@ func seat(t *testing.T, h *harness, pid string, now time.Time) string {
 	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pid, Machine: "mac-d", Login: a.Login, SetBy: "test", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := h.srv.Store.ReadyTrial(pid, now); err != nil {
+		t.Fatal(err)
+	}
 	return a.Login
+}
+
+// seatOpening hands pid a spare on mac-d at now that is still opening: no
+// home yet, so nobody can type into it.
+func seatOpening(t *testing.T, h *harness, pid string, now time.Time) {
+	t.Helper()
+	if got := h.srv.claimSpares(pid, pid, pid, []string{"mac-d"}, now); len(got) != 1 {
+		t.Fatalf("claim for %s = %v", pid, got)
+	}
+	if err := h.srv.Store.PlaceTrial(pid, "mac-d", now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// claude-fleet#4235: a seat still opening (no home, nothing to type into) is
+// never «idle» — the drill's trier was idled out at 252 s before their machine
+// ever opened, and the trial counted as tried. Idle counts from ready; a seat
+// that does not open within open_slow_secs goes back uncharged, the person
+// waiting again in their place, and the machine is named in an alert.
+func TestTrialIdleNotWhileOpening(t *testing.T) {
+	h, _, _ := trialSlotHarness(t, 5)
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Second)
+	const opening, slow = "gh:8201", "gh:8202"
+	for _, p := range []string{opening, slow} {
+		if err := h.srv.Store.StartTrial(p, t0.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		seatOpening(t, h, p, t0)
+	}
+	// The claim's poll beats while it opens.
+	poll := func(p string, from, to int) {
+		t.Helper()
+		for s := from; s <= to; s += 30 {
+			if _, err := h.srv.Store.BeatTrial(p, t0.Add(time.Duration(s)*time.Second), time.Time{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	poll(opening, 30, 240)
+	poll(slow, 30, 240)
+	h.srv.SweepTrialSlots(t0.Add(241 * time.Second))
+	for _, p := range []string{opening, slow} {
+		if tr, _ := h.srv.Store.Trial(p); tr.State != store.TrialPlaced || !tr.WarnedAt.IsZero() {
+			t.Fatalf("%s opening for 241 s: %+v; want placed, not warned", p, tr)
+		}
+	}
+
+	// opening becomes ready at 250 s: from then on the idle lines count.
+	ready := t0.Add(250 * time.Second)
+	h.srv.trialReady(opening, ready)
+	beat := func(p string, s int) {
+		t.Helper()
+		if _, err := h.srv.tryBeat(p, time.Time{}, ready.Add(time.Duration(s)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beat(opening, 0)
+	beat(opening, 30)
+	poll(slow, 270, 299)
+
+	// slow never opened: at 301 s it goes back — waiting again, uncharged,
+	// not a start of the day, the machine named.
+	h.srv.SweepTrialSlots(t0.Add(301 * time.Second))
+	tr, _ := h.srv.Store.Trial(slow)
+	if tr.State != store.TrialWaiting || tr.UsedSecs != 0 || !tr.PlacedAt.IsZero() || tr.EndedReason != "" ||
+		!tr.WaitingSince.Equal(t0.Add(-time.Minute).UTC()) {
+		t.Fatalf("not open after 301 s: %+v; want waiting in its place, nothing used", tr)
+	}
+	if a := accountState(t, h, slow, "mac-d"); a.State == store.AccountActive {
+		t.Fatalf("the slow seat's login still theirs: %+v", a)
+	}
+	if subs, _ := h.srv.Store.OpenFleetAlertSubjects(store.AlertTrialOpenSlow, ""); len(subs) != 1 || subs[0] != "mac-d" {
+		t.Fatalf("trial_open_slow alerts = %v; want mac-d", subs)
+	}
+	if !auditHas(mustAudit(t, h), "trial.release", "ok", "reason=open_slow") {
+		t.Errorf("no trial.release reason=open_slow audit")
+	}
+	if a, err := h.srv.tryClaim(slow, "", t0.Add(302*time.Second)); err != nil || a.State == "tried" || a.State == "paused" {
+		t.Fatalf("the requeued trial's claim = %+v, %v; want back in line, not tried", a, err)
+	}
+
+	for s := 60; s <= 239; s += 30 {
+		beat(opening, s)
+	}
+	h.srv.SweepTrialSlots(ready.Add(239 * time.Second))
+	if tr, _ := h.srv.Store.Trial(opening); tr.State != store.TrialPlaced {
+		t.Fatalf("ready 239 s, no input: %+v; want still placed", tr)
+	}
+
+	// opening, ready 241 s with no input: idle.
+	h.srv.SweepTrialSlots(ready.Add(241 * time.Second))
+	if tr, _ := h.srv.Store.Trial(opening); tr.State != store.TrialReclaimed || tr.EndedReason != trialReleaseIdle {
+		t.Fatalf("ready 241 s, no input: %+v; want released, idle", tr)
+	}
+
+	// A seat on mac-d that opens clears the alert.
+	const next = "gh:8203"
+	if err := h.srv.Store.StartTrial(next, t0); err != nil {
+		t.Fatal(err)
+	}
+	seatOpening(t, h, next, ready.Add(250*time.Second))
+	h.srv.trialReady(next, ready.Add(260*time.Second))
+	if subs, _ := h.srv.Store.OpenFleetAlertSubjects(store.AlertTrialOpenSlow, ""); len(subs) != 0 {
+		t.Fatalf("trial_open_slow after a seat there opened = %v; want cleared", subs)
+	}
 }
 
 // The three lines, each in its time: hidden after 120 s with no beat, idle

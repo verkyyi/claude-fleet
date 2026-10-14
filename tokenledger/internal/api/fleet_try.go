@@ -315,6 +315,7 @@ func (s *Server) tryHome(pid string, now time.Time) (tryAnswer, error) {
 	if !done {
 		return tryAnswer{State: "opening"}, nil
 	}
+	s.trialReady(pid, now) // the idle clock starts now (claude-fleet#4235)
 	a := tryAnswer{State: "ready", Next: AppPrefix, Resumed: resumed}
 	if t != nil {
 		a.LeftSecs, _ = s.trialLeft(t, now)

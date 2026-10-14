@@ -184,6 +184,8 @@
 #                                                   applyReset; go test
 #   trial-slot-held                                 tokenledger/internal/api fleet_try_slot.go (SweepTrialSlots on the
 #                                                   15 s alerts tick: hidden 120 · idle 240, + #4059's budget); go test
+#   trial-idle-while-opening                        tokenledger/internal/api fleet_try_slot.go (trialSlotVerdict: idle
+#                                                   from ready_at, open_slow 300 → store.RequeueTrial); go test
 #   drill-trial-escape                              tokenledger/internal/api fleet_drill_trial.go (an admin's ft_ code,
 #                                                   spent once, into trialSignIn; SweepDrillTrials) + internal/store
 #                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
@@ -2757,6 +2759,23 @@ drill_trial_slot_held() {
   c11_go_tests fleet_try_slot_test.go TestTrialSlotReleasesOnTime TestTrialConvosPurgedAfterADay || return 1
   WHAT='关页 2 分钟、没输入 4 分钟（3 分钟先提示）、额度用完各自放回，审计 trial.release reason=…（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='119 s 不放、121 s 放（hidden）；182 s 心跳带「1 分钟后暂停」、241 s 放（idle）；用满 900 s 放（time）并指去申请；名额当场空出；对话 24 h 后删（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-idle-while-opening (#4235): a seat still opening (no home, nothing
+# to type into) was idled out at 252 s and the trial counted as tried. Now the
+# idle lines count from ready_at only; a seat not ready in open_slow_secs goes
+# back uncharged and the person waits again in their place.
+drill_trial_idle_while_opening() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'if t.ReadyAt.IsZero() {' "$tl/api/fleet_try_slot.go" 2>/dev/null \
+    || { WHY="the trial patrol no longer holds the idle clock while a seat opens (fleet_try_slot.go)"; return 1; }
+  grep -q 'release = s.Store.RequeueTrial' "$tl/api/fleet_try_budget.go" 2>/dev/null \
+    || { WHY="a seat that did not open is no longer requeued uncharged (fleet_try_budget.go)"; return 1; }
+  c11_go_tests fleet_try_slot_test.go TestTrialIdleNotWhileOpening TestTrialSlotReleasesOnTime || return 1
+  WHAT='开位期间不计 idle；开好后 240 秒没输入才放；300 秒没开好放回重排、不扣用时、不算试过、告警 trial_open_slow（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='开位 241 s 不放不提示；开好后 239 s 不放、241 s 放（idle）；没开好 301 s 放回重排、用时 0、原位排队、告警点名 mac-d、再领不是 tried；那台有位开好即清告警（go test）'
   SECS=$(since "$t0")
 }
 

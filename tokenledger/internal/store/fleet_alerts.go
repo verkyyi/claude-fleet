@@ -50,6 +50,10 @@ const (
 	// waiting too long to start (claude-fleet#4007) — subject the principal
 	// (svc:<name>); raised at most once an hour.
 	AlertSvcDegraded = "svc_degraded"
+	// AlertTrialOpenSlow: a trial's seat on a machine did not become usable
+	// within fleet.trial.open_slow_secs and was put back (claude-fleet#4235)
+	// — subject its hostname; cleared once a trial seat there is ready.
+	AlertTrialOpenSlow = "trial_open_slow"
 )
 
 // FleetAlert is one row.
