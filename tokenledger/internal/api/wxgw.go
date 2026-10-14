@@ -53,6 +53,12 @@ type WxGateway struct {
 	// their fields filled by notify.go. Empty = no template for that kind; the
 	// notice falls back to a customer-service message, then a mail.
 	TplReview, TplNewReq string
+	// TplNotice is the template an admin's service notice goes out as
+	// (CCQUOTA_WX_TPL_NOTICE, a 「系统维护通知」-like one, claude-fleet#4063);
+	// TplNoticeFields maps its fields to what fills them
+	// (CCQUOTA_WX_TPL_NOTICE_FIELDS, "thing1=title,thing2=body,time3=time";
+	// empty = that default — see noticeTplFields).
+	TplNotice, TplNoticeFields string
 
 	// The web-authorisation relay (claude-fleet#4055, wx_relay.go):
 	// RelayURL is workbench's GET /node_w/wx/oauth/relay (CCQUOTA_WX_RELAY_URL),

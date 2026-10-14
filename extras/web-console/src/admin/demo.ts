@@ -1,7 +1,7 @@
 // demo.ts — the prototype's hub (EPIC #3923 rule 14): the real reads' shapes
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
-import type { AccessRequest, ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, TeamUsage, TrainRun } from "./api";
+import type { AccessRequest, ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, NoticeMember, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, ServiceNotice, TeamUsage, TrainRun } from "./api";
 import { demoMachines } from "./machines/demo";
 import { demoPool, poolSettings } from "./poolDemo";
 import { entryDemo } from "./demo-entry";
@@ -232,6 +232,23 @@ const requestDetail = (r: AccessRequest): RequestDetail => ({
   earlier: [],
 });
 
+// 发通知 (claude-fleet#4063): the members a notice can reach, and two sent
+const noticeMembers: NoticeMember[] = [
+  { principal_id: "gh:1001", login: "zhouning", role: "admin", reach: "wechat" },
+  { principal_id: "p:51aa", login: "林小满", role: "user", reach: "wechat" },
+  { principal_id: "gh:93817402", login: "zhouyu-dev", role: "user", reach: "email" },
+  { principal_id: "p:7c02", login: "何以宁", role: "user", reach: "wechat" },
+  { principal_id: "gh:5521", login: "tomlee", role: "user", reach: "none" },
+];
+let notices: ServiceNotice[] = [
+  { id: "nc-2", body: "本周六 14:00 起维护 30 分钟，期间会话暂停，结束后自动恢复。", link: "", audience: "all",
+    recipients: noticeMembers.map((m) => m.principal_id), created_by: "gh:1001", created_at: ago(90),
+    delivery: { pending: 0, sent: 4, undelivered: 1, via: { "wechat-tpl": 3, email: 1 } } },
+  { id: "nc-1", body: "每人每天的用量上限从下周一起调整为 8 小时。", link: "", audience: "some",
+    recipients: ["p:51aa", "gh:93817402"], created_by: "gh:1001", created_at: ago(60 * 24 * 6),
+    delivery: { pending: 0, sent: 2, undelivered: 0, via: { "wechat-tpl": 1, email: 1 } } },
+];
+
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 const scenario = () => (window as any).__DEMO_SCENARIO || new URLSearchParams(location.search).get("demo") || "";
 
@@ -283,6 +300,19 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
       return requestDetail(done);
     }
     return requestDetail(r);
+  }
+  if (u.pathname === "/v1/admin/notices") {
+    const today = notices.filter((n) => Date.now() - Date.parse(n.created_at) < 86400_000).length;
+    if (method === "POST") {
+      if (today >= 3) throw Object.assign(new Error("at most 3 notices in 24 hours"), { status: 429 });
+      const to: string[] = body.to === "all" ? noticeMembers.map((m) => m.principal_id) : body.to;
+      const n: ServiceNotice = { id: `nc-${notices.length + 1}`, body: String(body.body || ""), link: String(body.link || ""),
+        audience: body.to === "all" ? "all" : "some", recipients: to, created_by: "gh:1001", created_at: new Date().toISOString(),
+        delivery: { pending: to.length, sent: 0, undelivered: 0, via: {} } };
+      notices = [n, ...notices];
+      return n;
+    }
+    return { notices: empty ? [] : notices, today: empty ? 0 : today, limit: 3, members: noticeMembers };
   }
   switch (`${method} ${u.pathname}`) {
     case "GET /v1/me":

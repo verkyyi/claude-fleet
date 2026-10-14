@@ -302,3 +302,19 @@ export type RequestDetail = AccessRequest & {
   convo_until?: string;
   earlier: AccessRequest[];
 };
+
+// 发通知 (GET/POST /v1/admin/notices, claude-fleet#4063): an admin's service
+// notices to members, and how each one's copies went.
+export type NoticeReach = "wechat" | "email" | "none";
+export type NoticeMember = { principal_id: string; login: string; role: "user" | "admin"; reach: NoticeReach };
+export type ServiceNotice = {
+  id: string;
+  body: string;
+  link?: string;
+  audience: "all" | "some";
+  recipients: string[];
+  created_by: string;
+  created_at: string;
+  delivery: { pending: number; sent: number; undelivered: number; via: Record<string, number> };
+};
+export type NoticesList = { notices: ServiceNotice[]; today: number; limit: number; members: NoticeMember[] };

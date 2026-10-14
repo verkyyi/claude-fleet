@@ -50,6 +50,11 @@ import (
 // character_string to 32 of letters, digits and symbols — no Chinese — and a
 // time to a bare time: reviewMsg / newReqMsg fill them within that. A refusal
 // for a reason has no field; tapping through to /apply shows it.
+//
+// An admin's service notice (claude-fleet#4063, admin_notices.go) is a third
+// kind, notice: one desk row per member, the words read from hub_notices, the
+// same roads in the same order; its template is CCQUOTA_WX_TPL_NOTICE, its
+// fields named by CCQUOTA_WX_TPL_NOTICE_FIELDS (noticeTplFields).
 
 const (
 	// notifyGather is how long an admin's new-request notice gathers.
@@ -354,8 +359,11 @@ func wxWhy(code int) string {
 }
 
 func (s *Server) wxTemplate(kind string) string {
-	if kind == store.NotifyKindNewReq {
+	switch kind {
+	case store.NotifyKindNewReq:
 		return s.WxGW.TplNewReq
+	case store.NotifyKindNotice:
+		return s.WxGW.TplNotice
 	}
 	return s.WxGW.TplReview
 }
@@ -468,6 +476,18 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 			return noticeMsg{}, false, nil
 		}
 		return newReqMsg(waiting, en, base), true, nil
+	case store.NotifyKindNotice:
+		if len(n.Refs) == 0 {
+			return noticeMsg{}, false, nil
+		}
+		sn, err := s.Store.ServiceNotice(n.Refs[0])
+		if err != nil {
+			return noticeMsg{}, false, err
+		}
+		if sn == nil {
+			return noticeMsg{}, false, nil
+		}
+		return serviceNoticeMsg(sn, en, base, s.noticeTplFields()), true, nil
 	}
 	return noticeMsg{}, false, errors.New("no notice of kind " + n.Kind)
 }
@@ -642,4 +662,84 @@ func ternary(c bool, a, b string) string {
 		return a
 	}
 	return b
+}
+
+// noticeTplDefault is the service notice template's fields when
+// CCQUOTA_WX_TPL_NOTICE_FIELDS is unset.
+const noticeTplDefault = "thing1=title,thing2=body,time3=time"
+
+// noticeTplFields reads CCQUOTA_WX_TPL_NOTICE_FIELDS: "<field>=<what>" pairs,
+// comma-separated, <what> one of title · body · time · link. A pair it cannot
+// read is skipped; none read = the default.
+func (s *Server) noticeTplFields() [][2]string {
+	var out [][2]string
+	for _, src := range []string{s.WxGW.TplNoticeFields, noticeTplDefault} {
+		for _, pair := range strings.Split(src, ",") {
+			k, v, ok := strings.Cut(strings.TrimSpace(pair), "=")
+			k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+			switch {
+			case !ok || k == "":
+			case v == "title" || v == "body" || v == "time" || v == "link":
+				out = append(out, [2]string{k, v})
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return out
+}
+
+// serviceNoticeMsg: an admin's service notice, as the admin wrote it.
+func serviceNoticeMsg(sn *store.ServiceNotice, en bool, base string, fields [][2]string) noticeMsg {
+	m := noticeMsg{Link: sn.Link}
+	if m.Link == "" && base != "" {
+		m.Link = base + "/app"
+	}
+	title := ternary(en, "ClaudeFleet service notice", "ClaudeFleet 服务通知")
+	when := noticeTime(sn.CreatedAt, en)
+	m.Subject = title + ternary(en, ": ", "：") + clipRunes(oneLine(sn.Body), 40)
+	m.Tpl = map[string]string{}
+	for _, f := range fields {
+		var v string
+		switch f[1] {
+		case "title":
+			v = title
+		case "body":
+			v = oneLine(sn.Body)
+		case "time":
+			v = noticeTime(sn.CreatedAt, false)
+		case "link":
+			v = m.Link
+		}
+		switch {
+		case strings.HasPrefix(f[0], "thing"):
+			v = clipRunes(v, 20)
+		case strings.HasPrefix(f[0], "character_string"):
+			if !wxCharString(v) {
+				v = "-"
+			} else if len(v) > 32 {
+				v = v[:32]
+			}
+		}
+		m.Tpl[f[0]] = v
+	}
+	var b strings.Builder
+	b.WriteString(title + "\n\n" + sn.Body + "\n")
+	if sn.Link != "" {
+		b.WriteString("\n" + sn.Link + "\n")
+	}
+	if en {
+		b.WriteString("\nSent: " + when + "\n")
+		b.WriteString("\nYou got this mail because you are a member of ClaudeFleet; it is a service notice about your account.\n")
+	} else {
+		b.WriteString("\n发送时间：" + when + "\n")
+		b.WriteString("\n你收到这封信，是因为你是 ClaudeFleet 的成员；这是和你的账号有关的服务通知。\n")
+	}
+	m.Body = b.String()
+	m.Text = title + "\n" + sn.Body
+	if sn.Link != "" {
+		m.Text += "\n" + sn.Link
+	}
+	return m
 }

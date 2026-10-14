@@ -2992,6 +2992,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   CCQUOTA_WX_TPL_REVIEW / CCQUOTA_WX_TPL_NEWREQ             the notices' template messages (a request's
 #                                 result · new requests to the admins): 「项目申请审核结果通知」 /
 #                                 「用户注册申请审核提醒」 on 「二四网络科技」 · needs the pair above · unset = chat message, else mail
+#   CCQUOTA_WX_TPL_NOTICE         an admin's service notice to members (/admin/notices): a 「系统维护通知」-like
+#                                 template · _FIELDS names its fields (default thing1=title,thing2=body,time3=time;
+#                                 what: title · body · time · link) · unset = chat message, else mail
 #   CCQUOTA_SESSION_SECRET        signs sessions on a hub without GitHub · 必填 then · 密钥
 # Other:
 #   CCQUOTA_FLEET                 1 = fleet on · 必填
