@@ -497,7 +497,7 @@ drill_seat_repin() {
 # (`fleet-node-core.py call run-as … --follow`); the job itself is the root core's
 # child. A stand-in KILLed (the old forget's second round, a reap, a lost core)
 # leaves its job running under the core, and the old forget — reading only
-# state.json — said 「its tasks stopped」 over it (macmini, fleetu3 / fleetu6:
+# state.json — said 「its tasks stopped」 over it (a managed Mac, two spare logins:
 # spinner + webhook under the core 69123 after the forget). forget now finds the
 # login's jobs under the core itself, stops them as root, and the core starts no
 # new one: run-as refuses a login accounts.json no longer manages.
