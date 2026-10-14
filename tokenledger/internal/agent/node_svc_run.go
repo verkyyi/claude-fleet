@@ -131,7 +131,7 @@ func (a *Agent) answerSvcRun(ctx context.Context, conn nodeLink, m control.Messa
 	rctx := context.WithoutCancel(ctx)
 	cmd := exec.Command(a.svcScript(), "run")
 	cmd.Env = append(os.Environ(), "FLEET_SVC_RUN="+req.Run, "FLEET_SVC_ATTEMPT="+strconv.Itoa(req.Attempt),
-		"FLEET_SVC_DEADLINE="+strconv.Itoa(req.Deadline), "FLEET_SVC_HUB="+a.cfg.HubURL, "FLEET_SVC_CENTRAL="+a.cfg.HubURL)
+		"FLEET_SVC_DEADLINE="+strconv.Itoa(req.Deadline), "FLEET_SVC_HUB="+a.cfg.hub(), "FLEET_SVC_CENTRAL="+a.cfg.hub())
 	cmd.Stdin = strings.NewReader(req.Token + "\n")
 	if err := prepCmd(rctx, cmd); err != nil {
 		no("cannot run as this login: " + err.Error())

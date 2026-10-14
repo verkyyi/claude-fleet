@@ -123,7 +123,7 @@ func (a *Agent) openChatRelay(ctx context.Context, m control.Message) {
 
 	dctx, cancel := context.WithTimeout(ctx, sshRelayDialTimeout)
 	defer cancel()
-	u := chatRelayDataURL(a.cfg.HubURL, ro.RelayID)
+	u := chatRelayDataURL(a.cfg.hub(), ro.RelayID)
 	ws, _, err := websocket.Dial(dctx, u, &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"Authorization":  []string{a.authValue(http.MethodGet, u)},

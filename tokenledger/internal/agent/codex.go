@@ -444,7 +444,7 @@ func (a *Agent) codexQuotaLease(ctx context.Context, account, profile string, in
 	b, _ := json.Marshal(map[string]any{"account_uuid": account, "profile_id": profile, "seconds": int(interval.Seconds() * 1.5), "failures": failures})
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.HubURL+"/v1/collectors/quota-lease", bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.hub()+"/v1/collectors/quota-lease", bytes.NewReader(b))
 	if err != nil {
 		return false
 	}

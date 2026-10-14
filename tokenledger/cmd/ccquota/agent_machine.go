@@ -6,10 +6,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -38,6 +40,24 @@ const (
 	defaultMachineLogins = "/var/db/fleet-node/logins"
 	defaultMachineState  = "/var/db/fleet-node/agent"
 )
+
+// hubDialRE: the only dial address taken in the hub's place — a Kubernetes
+// Service's cluster-local name (claude-fleet#4175, render.py --hub-internal).
+var hubDialRE = regexp.MustCompile(`^https?://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9]([a-z0-9-]*[a-z0-9])?\.svc\.cluster\.local(:[0-9]{1,5})?$`)
+
+// hubDialURL is FLEET_HUB_INTERNAL_URL when it is such a name, else "" (the
+// public hub URL is dialled, as before); a value of any other shape is logged.
+func hubDialURL(v string) string {
+	v = strings.TrimRight(strings.TrimSpace(v), "/")
+	if v == "" {
+		return ""
+	}
+	if !hubDialRE.MatchString(v) {
+		log.Printf("agent --machine: FLEET_HUB_INTERNAL_URL %q is not http(s)://NAME.NS.svc.cluster.local[:PORT] — dialling the hub URL", v)
+		return ""
+	}
+	return v
+}
 
 func runAgentMachine(args []string) error {
 	fs := flag.NewFlagSet("agent --machine", flag.ExitOnError)
@@ -71,6 +91,7 @@ func runAgentMachine(args []string) error {
 	acctOn := os.Getenv("FLEET_NODE_ACCOUNT_OPS")
 	service := os.Getenv("FLEET_NODE_LOGIN")
 	userPod := os.Getenv("FLEET_USER_POD")
+	hubDial := os.Getenv("FLEET_HUB_INTERNAL_URL")
 	if *machineEnv != "" {
 		env, err := readLoginEnv(*machineEnv, strict)
 		if err != nil {
@@ -90,6 +111,9 @@ func runAgentMachine(args []string) error {
 		}
 		if userPod == "" {
 			userPod = env["FLEET_USER_POD"]
+		}
+		if hubDial == "" {
+			hubDial = env["FLEET_HUB_INTERNAL_URL"]
 		}
 		if *token == "" {
 			*token = env["CCQUOTA_TOKEN"]
@@ -115,6 +139,8 @@ func runAgentMachine(args []string) error {
 	defer stop()
 	return agent.RunMachine(ctx, agent.MachineConfig{
 		HubURL: strings.TrimRight(*hub, "/"), Token: *token, Version: Version,
+		// a person's pod: the hub's in-cluster Service (claude-fleet#4175)
+		HubDial: hubDialURL(hubDial),
 		// machine.key beside machine.env (claude-fleet#3699, made by fleet node
 		// install), else $CCQUOTA_NODE_KEY.
 		KeyFile:      machineKeyFile(*machineEnv),

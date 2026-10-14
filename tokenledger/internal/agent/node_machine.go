@@ -62,9 +62,20 @@ func (l wsLink) closeNow()                      { l.c.CloseNow() }
 // machine link itself dropped. The tenant says its hello again after a backoff.
 var errLaneClosed = errors.New("machine link: this login's lane closed")
 
+// hub is the base URL the machine link dials (claude-fleet#4175).
+func (mc MachineConfig) hub() string {
+	if mc.HubDial != "" {
+		return mc.HubDial
+	}
+	return mc.HubURL
+}
+
 // MachineConfig is `ccquota agent --machine`.
 type MachineConfig struct {
-	HubURL  string
+	HubURL string
+	// HubDial: the hub's in-cluster Service a person's pod dials in HubURL's
+	// place (claude-fleet#4175); every tenant takes it too. Empty = HubURL.
+	HubDial string
 	Token   string // the machine's own node token
 	Version string
 	// LiveInterval is the machine link's own heartbeat.
@@ -262,7 +273,7 @@ func (ml *machineLink) run(ctx context.Context) {
 		// the machine's own key (claude-fleet#3710): fleet node install made
 		// and registered it; this confirms it (and makes it on an older install)
 		kctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		s, note := nodesig.Ensure(kctx, nil, ml.cfg.HubURL, ml.cfg.Token, ml.cfg.KeyFile)
+		s, note := nodesig.Ensure(kctx, nil, ml.cfg.hub(), ml.cfg.Token, ml.cfg.KeyFile)
 		cancel()
 		if note != "" {
 			log.Print("machine link: " + note)
@@ -304,8 +315,8 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	defer cancel()
 	dctx, dcancel := context.WithTimeout(ctx, nodeDialTimeout)
 	defer dcancel()
-	conn, _, err := websocket.Dial(dctx, nodeURL(ml.cfg.HubURL), &websocket.DialOptions{
-		HTTPHeader: http.Header{"Authorization": []string{nodesig.Authorization(ml.signer.Load(), ml.cfg.Token, http.MethodGet, nodeURL(ml.cfg.HubURL))}},
+	conn, _, err := websocket.Dial(dctx, nodeURL(ml.cfg.hub()), &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{nodesig.Authorization(ml.signer.Load(), ml.cfg.Token, http.MethodGet, nodeURL(ml.cfg.hub()))}},
 	})
 	if err != nil {
 		return false, err
@@ -547,7 +558,7 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 		if tc.Token == "" {
 			return fmt.Errorf("machine agent: login %s has no node token", tc.RunAs.Login)
 		}
-		tc.HubURL, tc.Version, tc.Fleet, tc.Once = mc.HubURL, mc.Version, true, false
+		tc.HubURL, tc.HubDial, tc.Version, tc.Fleet, tc.Once = mc.HubURL, mc.HubDial, mc.Version, true, false
 		tc.ServiceCtl = mc.ServiceCtl
 		tc.ServicesFile = mc.ServicesFile
 		if tc.FleetCreds && tc.FleetCredStore == "" {
@@ -587,7 +598,7 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 			}
 		}(a)
 	}
-	log.Printf("ccquota agent --machine %s -> %s (%d logins)", mc.Version, mc.HubURL, len(agents))
+	log.Printf("ccquota agent --machine %s -> %s (%d logins)", mc.Version, mc.hub(), len(agents))
 	wg.Wait()
 	return nil
 }

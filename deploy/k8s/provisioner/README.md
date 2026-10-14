@@ -37,13 +37,17 @@ NS=fleet-workers
 # warm pool, #3999). One git_mirrors entry per mirrored repo.
 EGRESS_IP=$(kubectl -n $NS get svc fleet-egress -o jsonpath='{.spec.clusterIP}')
 MIRROR_IP=$(kubectl -n arc-runners get svc fleet-git-mirror -o jsonpath='{.spec.clusterIP}')
+# the hub's own Service (#4175): the pods' node link and passes ask it here, not
+# through the public door (FLEET_HUB_URL stays $HUB, the public identity)
+HUB_SVC_IP=$(kubectl -n new-deploy get svc ccquota-hub -o jsonpath='{.spec.clusterIP}')
 cat > template.json <<EOF
 {"cluster": "ack-sz", "namespace": "$NS",
  "user_pod": {"image": "$IMAGE", "hub": "$HUB", "storage_class": "$SC",
               "cred_central": "http://fleet-credproxy.$NS.svc.cluster.local",
               "egress_proxy": "http://fleet-egress.$NS.svc.cluster.local:3128",
               "git_mirrors": ["git://fleet-git-mirror.arc-runners:9418/claude-fleet.git=https://github.com/verkyyi/claude-fleet.git"],
-              "egress": {"allow": ["$EGRESS_IP:3128", "$MIRROR_IP:9418"]},
+              "hub_internal": "http://ccquota-hub.new-deploy.svc.cluster.local",
+              "egress": {"allow": ["$EGRESS_IP:3128", "$MIRROR_IP:9418", "$HUB_SVC_IP:80"]},
               "cluster_caches": true, "pull_secrets": ["acr-pull"]},
  "job": {"image": "$IMAGE", "pull_secrets": ["acr-pull"],
          "git_mirror": "git://$GIT_MIRROR/{repo}.git", "caches": true,

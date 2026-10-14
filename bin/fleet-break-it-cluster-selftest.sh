@@ -996,13 +996,15 @@ PY
   [ "$RC" = 3 ] && [ ! -s "$d/writes" ] || { WHY="a delete aimed at a Job not a run's: rc $RC: $OUT"; return 1; }
   unset FLEET_PROVISIONER_CONF FLEET_PROVISIONER_PUB FLEET_PROVISIONER_API FLEET_PROVISIONER_SA_DIR
   # the network rules: job-out leaves a run's Job out; job-out-svc has no address
-  # block, and only DNS, the run egress (3128) and the credential proxy (8788)
+  # block, and only DNS, the run egress (3128), the credential proxy (8788) and
+  # the hub's own Service (its pods' 8787 — svc.hub_internal, #4175)
   out=$(awk '/^  name: job-out$/{on=1} on&&/^---/{exit} on' "$ROOT/deploy/k8s/fleet-workers/networkpolicy.yaml")
   case "$out" in *'NotIn, values: [svc]'*) ;; *) WHY="job-out does not leave a service run's Job out"; return 1 ;; esac
   out=$(awk '/^  name: job-out-svc$/{on=1} on&&/^---/{exit} on' "$ROOT/deploy/k8s/fleet-workers/networkpolicy.yaml")
   case "$out" in ''|*ipBlock*) WHY="job-out-svc is missing or names an address: $out"; return 1 ;; esac
-  [ "$(printf '%s\n' "$out" | grep -o 'port: [0-9]*' | sort -u | tr '\n' ' ')" = "port: 3128 port: 53 port: 8788 " ] \
-    || { WHY="job-out-svc opens ports beyond 53 · 3128 · 8788: $out"; return 1; }
+  [ "$(printf '%s\n' "$out" | grep -o 'port: [0-9]*' | sort -u | tr '\n' ' ')" = "port: 3128 port: 53 port: 8787 port: 8788 " ] \
+    || { WHY="job-out-svc opens ports beyond 53 · 3128 · 8787 · 8788: $out"; return 1; }
+  case "$out" in *'name: new-deploy'*'app: ccquota-hub'*) ;; *) WHY="job-out-svc's 8787 is not the hub's pods: $out"; return 1 ;; esac
   # the runner, in the rendered Job's environment, against a stand-in hub and claude
   out=$(python3 - "$d" "$BIN/fleet-svc-runner.py" "$key" <<'PY' 2>&1
 import http.server, json, os, subprocess, sys, threading
@@ -1104,7 +1106,7 @@ PY
     esac
   fi
   SECS=$(since "$t0")
-  WHAT="入口签的 create-svc-run 单：语法外（attempt / deadline / 名字 / 钥匙 / 多带字段）与重放一律拒、什么都没写；建出的 Job 以 fleet-job 跑、不挂令牌、只有 emptyDir 和它自己的钥匙 Secret（属这个 Job、随它删，钥匙不在 Job 里）、除守卫外非 root 只读根不加能力、环境里没有像凭据的变量；守卫封闭：元数据地址、pod / service 网段、全部私网段都 REJECT，只放两条集群内的路；一次不重试、到期即杀、结束 300 秒删；删单只删运行自己的 Job；网络规则只给 DNS · 运行出口 · 凭据代理；runner 照这个 Job 的环境跑：会话看不到钥匙与 hub 地址、只有通行证，工具就四个，用户要求不能合上自己的数据块，spec 只读一次、结果只交一次，产出不合约定得 20；${gohalf}"
+  WHAT="入口签的 create-svc-run 单：语法外（attempt / deadline / 名字 / 钥匙 / 多带字段）与重放一律拒、什么都没写；建出的 Job 以 fleet-job 跑、不挂令牌、只有 emptyDir 和它自己的钥匙 Secret（属这个 Job、随它删，钥匙不在 Job 里）、除守卫外非 root 只读根不加能力、环境里没有像凭据的变量；守卫封闭：元数据地址、pod / service 网段、全部私网段都 REJECT，只放两条集群内的路；一次不重试、到期即杀、结束 300 秒删；删单只删运行自己的 Job；网络规则只给 DNS · 运行出口 · 凭据代理 · hub 自己的 Service（#4175）；runner 照这个 Job 的环境跑：会话看不到钥匙与 hub 地址、只有通行证，工具就四个，用户要求不能合上自己的数据块，spec 只读一次、结果只交一次，产出不合约定得 20；${gohalf}"
 }
 
 cred_run_drills "$0"

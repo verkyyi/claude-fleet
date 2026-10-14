@@ -421,7 +421,9 @@ def create_svc_run(api, ns, svc, t, r):
                                   svc.get('hub', ''), svc.get('cred_central', ''), svc.get('egress_proxy', ''),
                                   namespace=ns, egress=svc.get('egress') or {},
                                   pull_secrets=tuple(svc.get('pull_secrets') or ('acr-pull',)),
-                                  ttl=int(svc.get('ttl', r.SVC_TTL)))[0]
+                                  ttl=int(svc.get('ttl', r.SVC_TTL)),
+                                  # the hub's Service, dialled in the public address' place (#4175)
+                                  hub_internal=svc.get('hub_internal', ''))[0]
         key = r.svc_run_key_secret(job['metadata']['name'], ns, t['token'], 'uid')
     except (ValueError, TypeError) as e:
         raise Refused('cannot render the service run: %s' % e)

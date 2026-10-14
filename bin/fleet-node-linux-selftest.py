@@ -1147,6 +1147,85 @@ class LinuxNode(unittest.TestCase):
                      'mcp-server-fetch==', 'UV_SHA256', 'echo "$UV_SHA256  uv.tgz" | sha256sum -c -'):
             self.assertIn(want, df)
 
+    def test_hub_internal_dial(self):
+        """#4175: a person's pod (and a service run) asks the hub at its
+        in-cluster Service — render.py --hub-internal → FLEET_HUB_INTERNAL_URL —
+        instead of the public door the egress does not carry (#4112/#4172: 403).
+        FLEET_HUB_URL stays the public identity; only an http(s)
+        NAME.NS.svc.cluster.local URL is taken; none named = byte for byte."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        internal = 'http://ccquota-hub.new-deploy.svc.cluster.local'
+        img = 'example/image@sha256:' + 'a' * 64
+        base = [sys.executable, str(render), '--image', img,
+                '--hub', 'https://hub.example', '--storage-class', 'essd', '--user-pod', 'u-drill1',
+                '--login', 'fleetu7', '--uid', '10002', '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local']
+
+        def fleet_env(argv):
+            dep = json.loads(subprocess.check_output(argv))['items'][-1]
+            return {e['name']: e.get('value', '') for e in dep['spec']['template']['spec']['containers'][0]['env']}
+        env = fleet_env(base + ['--hub-internal', internal])
+        self.assertEqual(env['FLEET_HUB_INTERNAL_URL'], internal)
+        self.assertEqual(env['FLEET_HUB_URL'], 'https://hub.example')   # the identity stays public
+        self.assertNotIn('FLEET_HUB_INTERNAL_URL', fleet_env(base))
+        for bad in ('http://hub.example', 'https://ccquota-hub.new-deploy.svc.cluster.local',
+                    'http://ccquota-hub.svc.cluster.local', 'http://x.y.svc.cluster.local.evil.example',
+                    internal + '/v1', 'http://ccquota-hub.new-deploy.svc'):
+            r = subprocess.run(base + ['--hub-internal', bad], capture_output=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+        run = [sys.executable, str(render), '--svc-run', 'R7', '--image', img, '--hub', 'https://hub.example.com',
+               '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local',
+               '--egress-proxy', 'http://fleet-egress-run.fleet-workers.svc.cluster.local:3128',
+               '--egress-allow', '198.51.100.40:3128', '--egress-allow', '198.51.100.41:80']
+
+        def svc_hub(argv):
+            job = json.loads(subprocess.check_output(argv))['items'][0]
+            env = {e['name']: e.get('value', '') for e in job['spec']['template']['spec']['containers'][0]['env']}
+            return env['FLEET_SVC_HUB']
+        self.assertEqual(svc_hub(run), 'https://hub.example.com')
+        self.assertEqual(svc_hub(run + ['--hub-internal', internal + ':80']), internal + ':80')
+
+        # the node program and every login job see it (the supervisor's passthrough)
+        self.assertIn('FLEET_HUB_INTERNAL_URL', module('fleet-node-supervisor').NODE_ENV_KEYS)
+
+        # the login's own fleet.conf names it; a pod with none writes no line
+        m = module('fleet-node-linux')
+        with patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': internal + '/'}):
+            self.assertEqual(m.hub_internal_url(), internal)
+        with patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': 'http://hub.example'}):
+            self.assertEqual(m.hub_internal_url(), '')
+        with tempfile.TemporaryDirectory() as d:
+            conf = Path(d) / '.config/claude-fleet/fleet.conf'
+            for extra, want in (([internal], 'FLEET_HUB_INTERNAL_URL=' + internal + '\n'), ([''], None), ([], None)):
+                subprocess.run([sys.executable, '-c', m.POD_CONF, 'http://c.ns.svc.cluster.local'] + extra,
+                               env=dict(os.environ, HOME=d), check=True)
+                text = conf.read_text()
+                self.assertEqual(text.count('FLEET_HUB_INTERNAL_URL='), 1 if want else 0, text)
+                if want:
+                    self.assertTrue(text.endswith(want), text)
+
+        # the proxy's calls (broker, budget, renew, trust) dial it; node.env's hub
+        # stays the identity checked; anything else = the hub, byte for byte
+        px = module('fleet-cred-proxy')
+        hub = 'https://hub.example'
+        with patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': internal}):
+            self.assertEqual(px.hub_dial(hub), internal)
+            self.assertEqual(px.hub_dial(''), '')
+            self.assertIn('ccquota-hub.new-deploy.svc.cluster.local', px.allowed_hosts('', px.configured_urls([])))
+            px.ALLOWED = px.allowed_hosts('')
+            self.assertEqual(px.hub_dial(hub), hub)                       # separated: an allowed host only
+            px.ALLOWED = None
+        with patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': 'http://evil.example'}):
+            self.assertEqual(px.hub_dial(hub), hub)
+        with patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': ''}):
+            self.assertEqual(px.hub_dial(hub), hub)
+        src = (BIN / 'fleet-cred-proxy.py').read_text()
+        for path in ('/v1/node/usage', '/v1/fleet/session-cred/renew', '/v1/node/self'):
+            self.assertIn('hub_dial(hub) + "%s"' % path, src)
+        # the session's own pass and its drop read it too (fleet.conf / the environment)
+        sc = (BIN / 'fleet-session-cred.sh').read_text()
+        self.assertEqual(sc.count('FSC_DIAL="$(hub_internal)"'), 2)
+        self.assertEqual(sc.count('hub = dial'), 2)
+
     def test_central_pod_holds_no_credential(self):
         """BREAK-IT cred-in-user-pod (#3547, EPIC #3500 C2): a user pod in the
         cluster routes every session to the cluster credential proxy

@@ -109,7 +109,7 @@ func (a *Agent) Reclaim(ctx context.Context) {
 func (a *Agent) reclaimNotify(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.HubURL+"/v1/node/reclaim", strings.NewReader("{}"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.hub()+"/v1/node/reclaim", strings.NewReader("{}"))
 	if err != nil {
 		return err
 	}

@@ -65,9 +65,9 @@ func (a *Agent) openSSHRelay(ctx context.Context, m control.Message) {
 	}
 	dctx, cancel := context.WithTimeout(ctx, sshRelayDialTimeout)
 	defer cancel()
-	ws, _, err := websocket.Dial(dctx, sshRelayDataURL(a.cfg.HubURL, ro.RelayID), &websocket.DialOptions{
+	ws, _, err := websocket.Dial(dctx, sshRelayDataURL(a.cfg.hub(), ro.RelayID), &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization":  []string{a.authValue(http.MethodGet, sshRelayDataURL(a.cfg.HubURL, ro.RelayID))},
+			"Authorization":  []string{a.authValue(http.MethodGet, sshRelayDataURL(a.cfg.hub(), ro.RelayID))},
 			"X-Relay-Secret": []string{ro.Secret},
 		},
 	})

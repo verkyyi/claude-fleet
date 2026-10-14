@@ -58,6 +58,18 @@ spec:
               kubernetes.io/metadata.name: arc-runners
       ports:
         - {protocol: TCP, port: 9418}
+    # the hub's own Service (render.py --hub-internal, #4175): the node link
+    # and the passes go there instead of the public door — at the hub pods'
+    # port, as the policy sees it (the Service's 80 → 8787)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: new-deploy
+          podSelector:
+            matchLabels:
+              app: ccquota-hub
+      ports:
+        - {protocol: TCP, port: 8787}
     # the hub's public address (the node link, passes, the relay check): the
     # load balancer's IP, the same one render.py's --egress-allow names. The
     # TEST-NET placeholder allows nothing — replace it at apply (README.md).
@@ -274,7 +286,8 @@ spec:
         - {protocol: TCP, port: 3128}
 ---
 # A service run's Job (#4005, the SPACE EPIC C3): kube-dns, the run egress
-# (fleet-egress-run:3128 — the hub and the open web, public addresses only) and
+# (fleet-egress-run:3128 — the hub and the open web, public addresses only), the
+# hub's own Service when the template names it (svc.hub_internal, #4175) and
 # the credential proxy (8788: the model, with a pass bound to the run) — no
 # package cache, no git mirror, no other pod, nothing comes in. Its own egress
 # guard (render.py svc_run_resources, closed) is the wall that holds on ACK.
@@ -307,6 +320,15 @@ spec:
               fleet/egress: run
       ports:
         - {protocol: TCP, port: 3128}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: new-deploy
+          podSelector:
+            matchLabels:
+              app: ccquota-hub
+      ports:
+        - {protocol: TCP, port: 8787}
     - to:
         - podSelector:
             matchLabels:

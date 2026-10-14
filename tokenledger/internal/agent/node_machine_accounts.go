@@ -122,7 +122,7 @@ func newMachineAccounts(mc MachineConfig) *Agent {
 	if mc.AccountOpener == "" {
 		return nil
 	}
-	a := &Agent{cfg: Config{HubURL: mc.HubURL, FleetAdmin: true, LinuxOpener: mc.AccountOpener,
+	a := &Agent{cfg: Config{HubURL: mc.HubURL, HubDial: mc.HubDial, FleetAdmin: true, LinuxOpener: mc.AccountOpener,
 		ServiceLogin: mc.ServiceLogin, LinuxTenants: mc.LinuxTenants}}
 	if mc.AccountState != "" {
 		a.cfg.StateDir = mc.AccountState

@@ -82,7 +82,7 @@ func (a *Agent) fetchAttachment(ctx context.Context, at startAttachment) (string
 			return "UNAVAILABLE", "attachment directory " + d + " is not a plain directory"
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.HubURL+"/v1/node/attachment/"+at.ID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.hub()+"/v1/node/attachment/"+at.ID, nil)
 	if err != nil {
 		return "UNAVAILABLE", err.Error()
 	}

@@ -592,7 +592,7 @@ func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(rctx, http.MethodPost, a.cfg.HubURL+"/v1/node/credentials", body)
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, a.cfg.hub()+"/v1/node/credentials", body)
 	if err != nil {
 		return nil, err
 	}

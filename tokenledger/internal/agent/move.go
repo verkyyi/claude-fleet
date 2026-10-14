@@ -58,7 +58,7 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	}
 	fctx, cancel := context.WithTimeout(ctx, moveFetchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(fctx, http.MethodGet, a.cfg.HubURL+"/v1/node/move/bundle/"+id, nil)
+	req, err := http.NewRequestWithContext(fctx, http.MethodGet, a.cfg.hub()+"/v1/node/move/bundle/"+id, nil)
 	if err != nil {
 		return "UNAVAILABLE", err.Error()
 	}
