@@ -9,8 +9,8 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// A trial is only ever a spare (claude-fleet#4259): mac-c has room and no
-// ready spare, mac-d is over placement's CPU line with one — the trial lands
+// A trial is only ever a spare (claude-fleet#4259): mac-c and m7 have room
+// and no ready spare, mac-d is over placement's CPU line with one — the trial lands
 // on mac-d, where least-busy's room-first pick would hold it in line for good.
 // With no ready spare anywhere the wait says no_spare and trial_no_spare is
 // raised; the next claim that lands clears it.
@@ -26,8 +26,9 @@ func TestTrialPicksAMachineWithASpare(t *testing.T) {
 	hot := 0.95
 	beat(t, nodes["mac-d"].c, control.Proto, control.Heartbeat{Hostname: "mac-d", OSUser: "ivan", Sessions: 1,
 		NCPU: 10, Load1: 1, CPUBusy: &hot, MemTotalBytes: 64 << 30, MemFreeBytes: 32 << 30})
-	waitFor(t, 3*time.Second, "mac-d over the CPU line, mac-c first for least-busy", func() bool {
-		return h.srv.leastBusyMachine(time.Now()) == "mac-c"
+	waitFor(t, 3*time.Second, "mac-d over the CPU line: least-busy picks a machine with room and no spare", func() bool {
+		got := h.srv.leastBusyMachine(time.Now())
+		return got != "" && got != "mac-d"
 	})
 	if host, _ := h.srv.trialMachine(time.Now()); host != "mac-d" {
 		t.Fatalf("trialMachine = %q; want mac-d (the only ready spare)", host)
