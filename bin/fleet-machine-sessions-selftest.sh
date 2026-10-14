@@ -95,7 +95,7 @@ lib alice 0 'fleet_machine_sessions_publish 7' && read -r an ats az < "$SH/alice
 # issue #4231: asleep workers ride the third field — the daemon runs a login's
 # GitHub loops (class worker) while awake + asleep > 0; the readers take two
 FAKE_ASLEEP=2 lib dave 1 fleet_machine_sessions_publish
-read -r dn dts dz < "$SH/dave"; [ "$dn $dz" = "1 2" ] || fail "A dave: 1 awake, 2 asleep (got '$dn $dz')"
+read -r dn _ dz < "$SH/dave"; [ "$dn $dz" = "1 2" ] || fail "A dave: 1 awake, 2 asleep (got '$dn $dz')"
 r=$(lib erin 0 fleet_machine_sessions_rows | awk '$1 == "dave" { print $2, $4 }')
 [ "$r" = "1 fresh" ] || fail "A a three-field row reads as its count (got '$r')"
 rm -f "$SH/dave"
