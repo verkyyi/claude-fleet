@@ -12,8 +12,8 @@ const per_account = [
   { account_uuid: "no-login", limits: {} },
 ];
 const credentials = [
-  { principal_id: "pool", provider: "claude", account: "team", account_uuid: "managed" },
-  { principal_id: "member", provider: "claude", account: "team", account_uuid: "personal" },
+  { principal_id: "pool", provider: "claude", account: "team", credential_id: "cred:pool", account_uuid: "managed", limits: per_account[0].limits },
+  { principal_id: "member", provider: "claude", account: "team", credential_id: "cred:personal", limits: { available: false, read_status: "unknown" } },
 ];
 const input = { limits: { per_account }, creds: { credentials } };
 const rows = subscriptions(input);
@@ -22,6 +22,14 @@ assert.equal(per_account.length, 5);
 assert.equal(subscriptions({ ...input, limits: { per_account: [...per_account, { account_uuid: "re-reported", limits: {} }] } }).length, 2);
 assert(rows.every(r => r.managed));
 assert.equal(rows.find(r => r.owner)?.owner, "member");
+assert.equal(rows.find(r => !r.owner)?.id, "cred:pool");
+assert.equal(rows.find(r => !r.owner)?.plan, "max");
+assert.equal(rows.find(r => !r.owner)?.planSource, "provider");
+assert.equal(rows.find(r => !r.owner)?.planAt, "2026-10-14T00:00:00Z");
+const manual = subscriptions({ creds: { credentials: [{ principal_id: "pool", provider: "codex", account: "manual", credential_id: "cred:manual", plan: "prolite", plan_source: "admin" }] } })[0];
+assert.equal(manual.plan, "prolite");
+assert.equal(manual.planSource, "admin");
+assert.equal(manual.planAt, "");
 // A personal row with the same label may not receive the pool's overview.
 const over = withOverview(rows, [{ owner: "pool", provider: "claude", account: "team", used_5h_pct: 75 }]);
 assert.equal(over.find(r => r.owner)?.h5, null);
