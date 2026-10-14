@@ -21,12 +21,21 @@
 #              relay's egress (the address it answered from → ipinfo) and the
 #              APIs' answers are the relay's; `loc_local` keeps this machine's.
 #              A relay in an unsupported region, or refused there, closes all the same;
+#              central — neither of the above is ok, FLEET_CRED_CENTRAL_URL is
+#              set and node.env says CCQUOTA_FLEET_CREDS=0 (a person's pod,
+#              extras/managed-node/render.py --cred-central: nothing is leased in,
+#              every session goes through the cluster credential proxy — issue
+#              #4185; a login that leases keeps its own road, as fleet-claude.sh): judged by that proxy, which always
+#              sends on through the Singapore relay — one request per provider with
+#              NO pass; its own refusal of a missing pass = reachable, no answer or
+#              a gateway error = unreachable. loc is left empty (the egress is the
+#              cluster's), `loc_local` keeps this machine's;
 #   laptop     a battery (pmset -g batt / /sys/class/power_supply/BAT*) — and the
 #              sleep setting. A laptop is a NOTE, never a refusal (EPIC #1718
 #              decision 3: a lid that closes stops its sessions).
 #
 #   {"loc","anthropic","openai","laptop","sleep_min","route",["loc_local","relay_anthropic",
-#    "relay_openai"],"ts","verdict","reason"}  — anthropic/openai stay THIS machine's
+#    "relay_openai" | "loc_local","central_anthropic","central_openai"],"ts","verdict","reason"}  — anthropic/openai stay THIS machine's
 #   answers (the proxy's router reads them); loc and verdict are the route's
 #   verdict: ok | unsupported_region | unreachable
 #
@@ -46,7 +55,8 @@
 #   FLEET_PROBE_OS (uname -s) · FLEET_PROBE_BATTERY_DIR (/sys/class/power_supply) ·
 #   FLEET_PROBE_UNSUPPORTED (the region list, ISO-3166 alpha-2, space separated) ·
 #   FLEET_PROBE_RELAY_CMD (the relay road's measurement; default
-#   `fleet-cred-proxy.sh relay-probe` beside this script).
+#   `fleet-cred-proxy.sh relay-probe` beside this script) · FLEET_CRED_CENTRAL_URL
+#   (the central road; else its line in $FLEET_CONF_DIR/fleet.conf).
 # Exit: 0 ok · 1 not suitable (unsupported_region / unreachable) · 2 usage
 set -uo pipefail
 
@@ -170,6 +180,36 @@ if d.get("relay") is True:
       fi
     fi
   fi
+  # the central road (issue #4185): a pod that holds no credential sends every
+  # session through the cluster credential proxy — judge that road, not the
+  # pod's own egress (which only reaches GitHub anyway)
+  central="${FLEET_CRED_CENTRAL_URL:-}"
+  [ -n "$central" ] || central=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_CRED_CENTRAL_URL=["'"'"']\{0,1\}\([^"'"'"' ]*\).*/\2/p' "$CONF/fleet.conf" 2>/dev/null | tail -n 1)
+  central="${central%/}"
+  ca="" co=""
+  nocreds=""
+  for f in "$ENVF" "$CONF/node.pub.env"; do
+    [ -r "$f" ] && grep -qx 'CCQUOTA_FLEET_CREDS=0' "$f" && nocreds=1 && break
+  done
+  if [ "$verdict" != ok ] && [ "$route" = direct ] && [ -n "$central" ] && [ -n "$nocreds" ]; then
+    # cen <name> <args…> — one request to the central proxy with no pass
+    cen() {
+      local name="$1" code; shift
+      code=$("$CURL" -sS --noproxy '*' -o "$WORK/$name.body" -w '%{http_code}' --max-time 10 "$@" 2>/dev/null) || code=000
+      printf '%s' "$code" > "$WORK/$name.code"
+      case "$code" in
+        000|''|502|503|504) echo unreachable ;;
+        403) if grep -q 'session pass' "$WORK/$name.body" 2>/dev/null; then echo reachable; else echo unreachable; fi ;;
+        *) echo reachable ;;
+      esac
+    }
+    ca=$(cen central_anthropic -X POST "$central/v1/proxy/anthropic/v1/messages" \
+      -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' -d '{}')
+    co=$(cen central_openai "$central/v1/proxy/codex/models")
+    route=central loc_local="$loc" loc=""
+    reason="route central — local: $reason; central $central; anthropic via central $ca ($(cat "$WORK/central_anthropic.code")); openai via central $co ($(cat "$WORK/central_openai.code"))"
+    if [ "$ca" = reachable ] && [ "$co" = reachable ]; then verdict=ok; else verdict=unreachable; fi
+  fi
   reason=$(printf '%s' "$reason" | tr -d '"\\')
   mkdir -p "$CONF" || exit 1
   {
@@ -177,6 +217,7 @@ if d.get("relay") is True:
     [ -z "$sleep_min" ] || printf '"sleep_min":%s,' "$sleep_min"
     printf '"route":"%s",' "$route"
     [ "$route" != relay ] || printf '"loc_local":"%s","relay_anthropic":"%s","relay_openai":"%s",' "$loc_local" "$ra" "$ro"
+    [ "$route" != central ] || printf '"loc_local":"%s","central_anthropic":"%s","central_openai":"%s",' "$loc_local" "$ca" "$co"
     printf '"ts":"%s","verdict":"%s","reason":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$verdict" "$reason"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || { echo "fleet-node-probe: cannot write $OUT" >&2; exit 1; }
   # separated (issue #1971): the credential proxy runs as another account and
@@ -197,6 +238,8 @@ anthropic=$(jget anthropic "$OUT") openai=$(jget openai "$OUT")
 route=$(jget route "$OUT") loc_local=$(jget loc_local "$OUT")
 if [ "$route" = relay ]; then   # the sessions' road is the relay: say its answers
   anthropic=$(jget relay_anthropic "$OUT") openai=$(jget relay_openai "$OUT")
+elif [ "$route" = central ]; then
+  anthropic=$(jget central_anthropic "$OUT") openai=$(jget central_openai "$OUT")
 fi
 word() { case "$1" in reachable) echo 能直连 ;; unsupported_region) echo 拒绝本地区 ;; *) echo 连不上 ;; esac; }
 note=""
@@ -210,6 +253,12 @@ if [ "$route" = relay ]; then
     ok) echo "本机判断：合适 — ${via}（转发出口 ${loc:-未知}），Anthropic / OpenAI 经转发都能连${note}" ;;
     unsupported_region) echo "本机判断：不合适 — ${via}，转发出口 ${loc:-未知} 不在 Claude / OpenAI 支持范围（经转发 Anthropic $(word "$anthropic")，OpenAI $(word "$openai")）；不在本机跑会话${note}" ;;
     *) echo "本机判断：暂不合适 — ${via}（转发出口 ${loc:-未知}）：经转发 Anthropic $(word "$anthropic")，OpenAI $(word "$openai")（转发恢复后再测：fleet-node-probe.sh）${note}" ;;
+  esac
+elif [ "$route" = central ]; then
+  via="本机出口 ${loc_local:-未知}，会话经集群凭证代理（中心代理）"
+  case "$verdict" in
+    ok) echo "本机判断：合适 — ${via}，Anthropic / OpenAI 经中心代理都能连${note}" ;;
+    *) echo "本机判断：暂不合适 — ${via}：经中心代理 Anthropic $(word "$anthropic")，OpenAI $(word "$openai")（中心代理恢复后再测：fleet-node-probe.sh）${note}" ;;
   esac
 else
 case "$verdict" in
