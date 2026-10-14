@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -80,7 +81,7 @@ def arm(a):
     if not 1 <= timeout <= 240 or not 0 <= defer <= 240:
         raise ValueError("wait bounds: idle 1..240 seconds, typing deferral 0..240 seconds")
     root = (Path(a.conf_dir) / "handoffs").resolve()
-    if any(root == Path(p).resolve() or Path(p).resolve() in root.parents for p in (a.worktree, a.main)):
+    if a.norepo != '1' and any(root == Path(p).resolve() or Path(p).resolve() in root.parents for p in (a.worktree, a.main)):
         raise ValueError("handoff storage must be outside the repository and worktree")
     r = vars(a).copy()
     r.update(deadline=time.time() + timeout, defer=defer)
@@ -139,8 +140,12 @@ def wait(request):
             if option(r, "@agent_transfer_request") != str(request):
                 raise ValueError("transfer request was replaced or cancelled")
             if (option(r, "window_id") != r["window"] or option(r, "pane_dead") == "1"
-                    or Path(option(r, "@worktree")).resolve() != Path(r["worktree"])):
+                    or Path(option(r, "pane_current_path" if r.get("norepo") == "1" else "@worktree")).resolve() != Path(r["worktree"])):
                 raise ValueError("source pane or worktree changed")
+            if r.get('norepo') == '1':
+                reader = runpy.run_path(str(Path(__file__).with_name('.fleet-transfer-norepo.py')))
+                if reader['identity'](r['session'], r['pane']) != json.loads(r['identity']):
+                    raise ValueError('managed HOME identity or role changed after arming')
             os.kill(r["pid"], 0)
             if r.get('source_agent', 'claude') == 'codex':
                 if not same_codex_source(r):
@@ -209,6 +214,8 @@ def main():
     a.add_argument("--pid", type=int, required=True)
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)
+    a.add_argument('--norepo', default='')
+    a.add_argument('--identity', default='')
     a.add_argument("--loop", default='')
     a.add_argument('--to', choices=('claude', 'codex'), default='codex')
     a.add_argument('--target-file', default=''); a.add_argument('--draft-file', default='')

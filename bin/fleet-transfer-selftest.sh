@@ -24,7 +24,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set
@@ -78,7 +78,7 @@ my ($sid, $mode) = @ARGV;
 alarm 120;
 open(my $r, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/$$.json") or die;
 print $r encode_json({sessionId=>$sid, cwd=>getcwd(), peerToken=>'never-copy-the-registry-secret'}); close $r;
-$| = 1; print "Claude ready $sid\n";
+$| = 1; print "Claude ready $sid\n"; print "❯ " if $mode eq 'norepo';
 while (my $line = <STDIN>) {
     next unless $line =~ m{/exit};
     next if $mode eq 'stuck';
@@ -141,7 +141,11 @@ spawn() { # n, issue|raw, normal|stuck|tool|loop-dialog
   local n=$1 kind=$2 mode=$3 branch cmd
   case "$kind" in issue) branch="issue-$n" ;; *) branch="scratch-$n" ;; esac
   WT="$WORK/wt '$n percent%"
-  git -C "$MAIN" worktree add -qb "$branch" "$WT" || fail 'worktree'
+  if [ "$kind" = norepo ]; then
+    WT="$HOME"
+  else
+    git -C "$MAIN" worktree add -qb "$branch" "$WT" || fail 'worktree'
+  fi
   SID="source-$n"
   TRANSCRIPT="$WORK/projects/actual/$SID.jsonl"
   python3 - "$SID" "$TRANSCRIPT" <<'PY'
@@ -189,6 +193,106 @@ wait_request() {
   OUT=$(cat "$REQUEST/state.json" "$REQUEST/wait.log")
   fail "after-turn request did not finish as $expected"
 }
+
+# #4258: the same real isolated socket/process fixture, with a physical HOME.
+if [ "${1:-}" = --norepo ]; then
+  unset CODEX_HOME
+  export HOME="$WORK/home"
+  mkdir -p "$HOME/.codex"
+  printf '[projects."%s"]\ntrust_level = "trusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  spawn 91 norepo norepo
+  TM set-option -wu -t "$WIN" @raw
+  TM set-option -wu -t "$WIN" @worktree
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_role_def orchestrator
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111191
+  TM set-option -w -t "$WIN" @agent_spawn 1
+  TM set-option -w -t "$WIN" @task T91
+  transfer --prepare-only || fail 'managed no-repo orchestrator must prepare'
+  BUNDLE=$(packet)
+  python3 - "$BUNDLE" "$SID" "$HOME" <<'PYNO' || fail 'no-repo packet provenance'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); m=json.loads((p/'manifest.json').read_text())
+assert m['source']['session_id']==sys.argv[2]
+assert m['workspace']==dict(kind='norepo',path=sys.argv[3],branch=None,head=None,repo='')
+assert m['fleet']['identity']['fleet_id']=='11111111-1111-4111-8111-111111111191'
+assert m['fleet']['identity']['fleet_role_def']=='orchestrator'
+assert m['fleet']['identity']['task']=='T91'
+assert not (p/'git-status.txt').exists()
+PYNO
+  ok; kill -0 "$PID" || fail 'prepare killed source'
+  [ -z "$(field worktree)" ] && [ -z "$(field raw)" ] || fail 'no-repo must not manufacture worktree/raw'
+  TM set-option -w -t "$WIN" @claude_state working
+  transfer --dry-run && fail 'busy dry-run must refuse'
+  ok; kill -0 "$PID" || fail 'busy refusal killed source'
+  TM set-option -w -t "$WIN" @claude_state done
+  TM set-option -w -t "$WIN" @fleet_role panel
+  transfer --prepare-only && fail 'renamed panel must refuse'
+  ok
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -wu -t "$WIN" @fleet_id
+  transfer --prepare-only && fail 'unstamped HOME session must refuse'
+  ok
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111191
+  TM set-option -w -t "$WIN" @loop 'kind=cron id=a@9999999999 cron=a@*/15_*_*_*_*'
+  transfer --dry-run && fail 'unknown native schedule must refuse'
+  ok; kill -0 "$PID" || fail 'schedule refusal killed source'
+  TM set-option -wu -t "$WIN" @loop
+  printf '[projects."%s"]\ntrust_level = "untrusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  transfer --dry-run && fail 'explicit untrusted HOME must refuse'
+  ok; kill -0 "$PID" || fail 'trust refusal killed source'
+  printf '[projects."%s"]\ntrust_level = "trusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  cat > "$WORK/codex.pl" <<'PLNATIVE'
+use JSON::PP; use Cwd;
+alarm 60;
+my $record = encode_json({owner=>"$$", session_id=>'22222222-2222-4222-8222-222222222222',
+                         home=>"$ENV{HOME}/.codex", cwd=>getcwd()});
+system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@cc_launcher_pid',"$$");
+system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@codex_identity',$record);
+$|=1; print "Codex native ready\n";
+while (<STDIN>) { }
+PLNATIVE
+  transfer || fail 'managed no-repo native cutover'
+  ok
+  kill -0 "$PID" 2>/dev/null && fail 'source must exit before target starts'
+  [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111191 ] && [ "$(field fleet_role_def)" = orchestrator ] \
+    && [ "$(field origin)" = scratch-99 ] && [ "$(field task)" = T91 ] && [ "$(field agent_spawn)" = 1 ] || fail 'cutover lost identity/role/routing'
+  [ -z "$(field worktree)" ] && [ -z "$(field raw)" ] || fail 'cutover invented a repository binding'
+  ok
+  # Failed target must restore the exact source once, with no second writer.
+  spawn 92 norepo norepo
+  for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111192
+  touch "$WORK/fail-target"
+  transfer && fail 'failed target cannot report success'
+  BUNDLE=$(packet)
+  python3 - "$BUNDLE/state.json" <<'PYBACK' || fail 'source must roll back'
+import json,sys
+assert json.load(open(sys.argv[1]))['state']=='rolled_back'
+PYBACK
+  BACK=$(fleet_pane_claude_pid "$PANE" "$LBL")
+  [ "$(fleet_cc_session_id "$BACK")" = "$SID" ] || fail 'rollback lost source native identity'
+  [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111192 ] || fail 'rollback changed lifelong identity'
+  ok
+  rm "$WORK/fail-target"
+  # A target which is alive but never binds must never be killed/replaced with a second writer.
+  spawn 93 norepo norepo
+  for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111193
+  printf 'alarm 60; $|=1; print "unbound target\\n"; while (<STDIN>) {}\n' > "$WORK/codex.pl"
+  transfer && fail 'unbound live process cannot report takeover'
+  printf '%s' "$OUT" | grep -q 'refusing a second writer' || fail 'must explicitly refuse unsafe rollback'
+  [ "$(field cc_agent)" = codex ] || fail 'live target cannot be relabelled as a resumed source'
+  fleet_pane_claude_pid "$PANE" "$LBL" >/dev/null 2>&1 && fail 'unsafe rollback launched a second writer'
+  ok
+  printf 'fleet-transfer norepo selftest: PASS (%s checks)\n' "$checks"
+  exit 0
+fi
 
 spawn 41 issue normal
 TM set-option -wu -t "$WIN" @worktree

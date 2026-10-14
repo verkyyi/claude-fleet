@@ -17,6 +17,57 @@ loader.loader.exec_module(loop)
 SID = '12345678-1234-1234-1234-123456789abc'
 
 
+class CronTests(unittest.TestCase):
+    def test_two_schedules_keep_phase_and_expiry(self):
+        start = 1792022400  # UTC midnight, minute 0
+        jobs = [dict(id='a', prompt='first patrol', cron='*/15 * * * *', timezone='UTC',
+                     expires_at=start+3600, stop_when='batch completes'),
+                dict(id='b', prompt='second patrol', cron='7,22,37,52 * * * *', timezone='UTC',
+                     expires_at=start+3600, stop_when='operator cancels')]
+        s = loop.spec(dict(jobs=jobs), now=start)
+        self.assertEqual([j['next_run_at'] for j in s['jobs']], [start+900,start+420])
+        self.assertEqual(s['next_run_at'],start+420)
+        loop.advance(s, start+420)
+        self.assertEqual([j['next_run_at'] for j in s['jobs']], [start+900,start+1320])
+        self.assertEqual([j['prompt'] for j in s['jobs']], ['first patrol','second patrol'])
+        loop.advance(s, start+3601)
+        self.assertIsNone(s['next_run_at'])
+
+    def test_ambiguous_specs_refuse(self):
+        for value in [dict(jobs=[]), dict(jobs=[dict(id='x',prompt='p',cron='* * * * *')])]:
+            with self.assertRaises(ValueError): loop.spec(value)
+
+
+class NativeCronTests(unittest.TestCase):
+    def test_exact_live_snapshot_and_refusals(self):
+        import fleet_transfer_cron as native
+        now=1792022400
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'source.jsonl'
+            jobs=[dict(id='a',prompt='one',cron='*/15 * * * *',timezone='UTC',expires_at=now+3600,stop_when='done',recurring=True),
+                  dict(id='b',prompt='two',cron='7,22,37,52 * * * *',timezone='UTC',expires_at=now+3600,stop_when='cancelled',recurring=True)]
+            def result(name, inp, response, stamp=now):
+                ts=__import__('datetime').datetime.fromtimestamp(stamp,__import__('datetime').timezone.utc).isoformat()
+                return [dict(timestamp=ts,message=dict(content=[dict(type='tool_use',name=name,id=name,input=inp)])),
+                        dict(timestamp=ts,toolUseResult=response,message=dict(content=[dict(type='tool_result',tool_use_id=name)]))]
+            records=result('CronList',{},jobs)
+            def write(rs): path.write_text(''.join(json.dumps(r)+'\n' for r in rs))
+            write(records)
+            raw=dict(jobs=jobs,native_source=dict(pid=42,session_id=SID,fleet_id='fid',confirmed=True))
+            mark='kind=cron id=a@%d,b@%d' % (now+4000,now+4000)
+            with patch.object(native,'process_start',return_value=now-60):
+                self.assertEqual(len(native.validate(raw,path,42,SID,'fid',mark,now)['jobs']),2)
+                with self.assertRaises(ValueError): native.validate(raw,path,43,SID,'fid',mark,now)
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'other',mark,now)
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid','',now)
+                write(records+result('CronDelete',{'id':'b'},{}))
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
+                write(result('CronList',{},jobs,now-120))
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
+                write(result('CronList',{},jobs,now-400))
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
+
+
 class LoopTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fleet-loop-test-')
@@ -63,6 +114,36 @@ class LoopTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
 
     def read(self): return json.loads(self.path.read_text())
+
+    def test_two_cron_jobs_deliver_independently_once_and_preserve_expiry(self):
+        now = 1792022400
+        jobs = [dict(id='a',prompt='patrol one',cron='*/15 * * * *',timezone='UTC',expires_at=now+3600,stop_when='done'),
+                dict(id='b',prompt='patrol two',cron='7,22,37,52 * * * *',timezone='UTC',expires_at=now+3600,stop_when='cancelled')]
+        self.r['schedule'] = loop.spec(dict(jobs=jobs), now=now)
+        loop.save(self.path, self.r)
+        loop.dispatch(self.path, now=now+420)
+        self.assertEqual(len(self.messages),1)
+        self.assertIn('patrol two',self.messages[0]['input'][0]['text'])
+        self.assertNotIn('patrol one',self.messages[0]['input'][0]['text'])
+        loop.dispatch(self.path, now=now+421)
+        self.assertEqual(len(self.messages),1)
+        loop.dispatch(self.path, now=now+900)
+        self.assertEqual(len(self.messages),2)
+        self.assertIn('patrol one',self.messages[1]['input'][0]['text'])
+        self.assertEqual([j['next_run_at'] for j in self.read()['schedule']['jobs']], [now+1800,now+1320])
+        loop.dispatch(self.path, now=now+3601)
+        self.assertEqual(len(self.messages),2)
+        self.assertEqual(self.read()['status'],'complete')
+
+    def test_ambiguous_multi_cron_delivery_is_never_resent(self):
+        now=1792022400
+        self.r['schedule']=loop.spec(dict(jobs=[dict(id='a',prompt='patrol',cron='* * * * *',timezone='UTC',expires_at=now+3600,stop_when='done')]),now=now)
+        loop.save(self.path,self.r)
+        self.fail_send=True
+        loop.dispatch(self.path,now=now+60)
+        loop.dispatch(self.path,now=now+120)
+        self.assertEqual(len(self.messages),1)
+        self.assertEqual(self.read()['status'],'paused')
 
     def test_exact_thread_delivery_and_no_catchup_burst(self):
         loop.dispatch(self.path, now=10000)

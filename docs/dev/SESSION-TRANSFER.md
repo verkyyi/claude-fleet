@@ -72,7 +72,7 @@ must be resolved first. Loop dispatch waits while a handoff is pending.
 
 Run from the hub, another pane or an external terminal. The source must be idle
 (`done`), with no pending `/fleet-handoff` cycle, and must have its own linked
-worktree. The base checkout and panel windows are refused. A source agent may
+worktree or be a managed no-repo HOME session (below). The base checkout and panel windows are refused. A source agent may
 use `--prepare-only` itself, or `--after-turn --handoff <notes>` as the final tool
 call of a handoff turn. An immediate cutover cannot run inside its own source.
 There must be exactly one worker pane. A marked task-list sidebar (`@sidebar 1`) is allowed and
@@ -103,6 +103,76 @@ Notes are optional. Without them, the packet contains the visible conversation,
 first/last recorded user messages and git evidence, and directs Codex to recover
 the task before editing. It does not pretend an automatically extracted excerpt
 is an agent-written summary. No extra Claude/model call is needed to export.
+
+## Managed no-repo sessions
+
+A Fleet-created no-repo conversation in the physical login HOME can use the same
+panel action. The controller requires `@norepo 1`, a worker role and a lifelong
+`@fleet_id`, with no repo/issue/raw/worktree binding. Panel windows, the base
+checkout, arbitrary directories and unmarked HOME shells still refuse. It never
+creates a repository or manufactures a worktree stamp. The packet records a
+`norepo` workspace and the existing role, agent definition, parent identity and
+task record; it performs no git operations. The target uses the common launcher
+and the source's agent definition, preserving its tool grant and role skill.
+
+The exact source process, native session and transcript are required. Before
+exiting it, transfer checks the source input and preserves an exportable unsent
+draft as **unsent**, never as an instruction. Unknown/multiline input refuses.
+The Codex HOME trust entry must already be explicitly trusted in the effective
+config (including a proxy-home symlink). This read does not grant trust; the
+common launcher's HOME pre-trust work is tracked separately in #3029. Explicit
+`untrusted` and pre-trust opt-out are never overwritten by transfer.
+
+Both dry-run and cutover refuse a busy source, pending handoff, missing target
+launcher/hooks, invalid target auth, unknown scheduling or unreadable input.
+The no-repo target must bind its native identity in the retained pane, with the
+same lifelong identity, role and routing. A live process alone is insufficient.
+A target still running without a proven binding is retained for inspection;
+rollback must not replace it with a second writer.
+
+### Native cron handover
+
+The old interval import does not establish that a native cron is still active.
+For a no-repo Claude source with native scheduling, first have **that source**
+call `CronList`. It must be from the current process, less than five minutes old,
+with no subsequent scheduler mutation and no round due within sixty seconds.
+Historical creates, stale markers and
+ambiguous lists refuse before the source exits.
+
+The source writes a private JSON plan with `jobs`, one object per current id:
+`id`, exact `prompt`, five-field `cron`, IANA `timezone`, Unix `expires_at` and
+explicit `stop_when`. Every current native job must be present and recurring.
+The plan also contains `native_source: {"confirmed": true, "job_evidence": …}`.
+When the native list omits timezone, expiry or termination, `job_evidence` must
+record each missing field as `{ "value": <exact value>, "source": <verified evidence> }`
+under that job id. An unknown value is a blocker, never an invitation to infer it
+from a fifteen-minute frequency or the marker's grace-extended expiry.
+
+From the owning Claude session, export the plan without stopping any task:
+
+```sh
+python3 ~/.claude/fleet/bin/fleet-loop.py export-cron \
+  --session <fleet> --jobs-file /private/path/verified-cron-jobs.json
+```
+
+The exporter reads the exact source through transfer's inspector, pins its pid,
+native sid and fid, checks the current list, and stores the private plan under
+`$FLEET_CONF_DIR/transfer-plans/<fid>.json`. The panel's transfer reads it, repeats
+validation, and rechecks it immediately before `/exit`. A fresh list/export is
+needed if the evidence ages or the source process changes. The source keeps its
+native tasks until it exits; only then can the target's Fleet scheduler bind.
+Only a selected native exit dialog listing exactly the verified scheduled tasks
+may be confirmed; other background work or a different dialog refuses.
+
+Fleet retains each job's prompt, wall-clock phase, timezone, expiry and stop
+condition. Due jobs use the same native conversation writer. An accepted wakeup
+advances only its due jobs; a delivery whose result is uncertain is paused and
+never resent automatically. The owner ends one responsibility with
+`fleet-loop.py stop --job <id>`; `defer` refuses multi-cron plans. Expiry stops
+each job independently. On a failed target that has exited, rollback resumes the
+source conversation through the Fleet scheduler with the last recorded schedule;
+it does not assume `Claude --resume` restores in-memory CronCreate jobs. An
+ambiguous target delivery requires inspection before recovery.
 
 ## Target login check
 
@@ -277,7 +347,7 @@ Fleet scheduling, not restoration of Claude's in-memory `ScheduleWakeup` object.
 The source must exit before the target timer can start.
 When Claude shows its native exit confirmation for a single self-paced `/loop`,
 an explicit `--loop` transfer confirms the selected **Exit and stop tasks** once.
-Different dialogs, other background jobs and multiple timers are left for inspection.
+Different dialogs and other background jobs are left for inspection. Verified multi-cron plans use the separate no-repo handover checks above.
 
 Runtime state and the app-server log live under `<handoff packet>/loop/`. A
 replaced pane/thread, unloaded thread, or ambiguous delivery failure pauses the

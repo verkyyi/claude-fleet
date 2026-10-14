@@ -7295,6 +7295,14 @@ drill_ticket_hub_down() {
 # refuses a recycled window, the agent it already runs and a mid-turn source
 # with one line, dispatching nothing; a settled one is dispatched exactly once,
 # detached on the fleet's own server, to the same fleet-transfer.sh.
+drill_transfer_norepo() {
+  CAP=60
+  local started; started=$(now)
+  bash "$BIN/fleet-transfer-norepo-selftest.sh" >"$WORK/transfer-norepo.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-norepo.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive'
+}
+
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)
