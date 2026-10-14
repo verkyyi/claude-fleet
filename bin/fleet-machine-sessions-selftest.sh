@@ -51,7 +51,8 @@ case "\${1:-}" in
     n="\${FAKE_WINDOWS:-0}"
     case "\$*" in *session_name*) pre='f ' ;; *) pre='' ;; esac
     printf '%sdash @L=\n' "\$pre"
-    i=0; while [ "\$i" -lt "\$n" ]; do printf '%sw%s @L=\n' "\$pre" "\$i"; i=\$((i+1)); done ;;
+    i=0; while [ "\$i" -lt "\$n" ]; do printf '%sw%s @L=\n' "\$pre" "\$i"; i=\$((i+1)); done
+    i=0; while [ "\$i" -lt "\${FAKE_ASLEEP:-0}" ]; do printf '%sz%s @L=sleeping\n' "\$pre" "\$i"; i=\$((i+1)); done ;;
   has-session) exit 0 ;;
   display-message) case "\$*" in *-p*) case "\$*" in *window_id*) echo @9 ;; *session_name*) echo f ;; *) echo '' ;; esac ;; esac ;;
   new-window) printf '%s\n' "\$*" >> "$NEWWIN_LOG"; echo @9 ;;
@@ -82,16 +83,25 @@ lib() { local l="$1" w="$2"; shift 2; as "$l" "$w" bash -c 'source "$1/fleet-lib
 lib alice 3 fleet_machine_sessions_publish || fail "A alice publish failed"
 lib bob   2 fleet_machine_sessions_publish || fail "A bob publish failed"
 lib carol 0 fleet_machine_sessions_publish || fail "A carol publish failed"
-read -r an ats < "$SH/alice"; [ "$an" = 3 ] || fail "A alice's file must hold her live count 3 (got '$an')"
+read -r an ats az < "$SH/alice"; [ "$an" = 3 ] || fail "A alice's file must hold her live count 3 (got '$an')"
+[ "$az" = 0 ] || fail "A the third field is her asleep workers, 0 (got '$az')"
 case "$ats" in ''|*[!0-9]*) fail "A the file's second field is an epoch (got '$ats')" ;; esac
 [ "$(cat "$SH/bob")" != "" ] && read -r bn _ < "$SH/bob"; [ "$bn" = 2 ] || fail "A bob's count (got '$bn')"
 perm=$(stat -c %a "$SH" 2>/dev/null || stat -f %Mp%Lp "$SH" 2>/dev/null)
 [ "$perm" = 1777 ] || fail "A the shared dir must be 1777 like the heavy queue (got $perm)"
 for t in "$SH"/.*; do case "${t##*/}" in .|..) ;; *) [ -e "$t" ] && fail "A a publish must leave no temp file behind" "$t" ;; esac; done
-lib alice 0 'fleet_machine_sessions_publish 7' && read -r an _ < "$SH/alice"; [ "$an" = 7 ] || fail "A an explicit count wins (got '$an')"
+lib alice 0 'fleet_machine_sessions_publish 7' && read -r an ats az < "$SH/alice"; [ "$an" = 7 ] || fail "A an explicit count wins (got '$an')"
+[ -z "$az" ] || fail "A an explicit count knows no sleepers: no third field (got '$az')"
+# issue #4231: asleep workers ride the third field — the daemon runs a login's
+# GitHub loops (class worker) while awake + asleep > 0; the readers take two
+FAKE_ASLEEP=2 lib dave 1 fleet_machine_sessions_publish
+read -r dn _ dz < "$SH/dave"; [ "$dn $dz" = "1 2" ] || fail "A dave: 1 awake, 2 asleep (got '$dn $dz')"
+r=$(lib erin 0 fleet_machine_sessions_rows | awk '$1 == "dave" { print $2, $4 }')
+[ "$r" = "1 fresh" ] || fail "A a three-field row reads as its count (got '$r')"
+rm -f "$SH/dave"
 lib alice 0 'fleet_machine_sessions_publish x' && fail "A a non-numeric count must be refused"
 lib alice 3 fleet_machine_sessions_publish
-ok "A one '<count> <epoch>' file per login, dir 1777, atomic"
+ok "A one '<count> <epoch> [<asleep>]' file per login, dir 1777, atomic"
 
 # ===== B: rows / summary =======================================================
 r=$(lib alice 3 fleet_machine_sessions_summary)

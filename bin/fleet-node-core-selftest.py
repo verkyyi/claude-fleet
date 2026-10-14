@@ -12,7 +12,9 @@ under a fake passwd); nothing touches /var, /Library or a real login.
   C  run-as starts a job of the account table as its login and answers its exit on
      the same connection; one copy per (login, job); stop-as stops it; a job name
      outside the table / an unmanaged login is refused; `call --follow` exits with
-     the job's rc and a TERM to it stops the job
+     the job's rc and a TERM to it stops the job; a resident job a killed core left
+     running is stopped by the next core's run-as / stop-as — one copy, never two —
+     and `call` loads the wire alone, never the supervisor (issue #4231)
   D  exec-as runs a file under <current>/bin as the login (rc + output); an argv[0]
      elsewhere (/bin/sh, a link out of bin/) is refused
   E  kill: a job of the core's, or a managed login's process; pid ≤ 1 and an
@@ -290,6 +292,56 @@ class C_RunAs(Sandbox):
         self.assertTrue(until(10, lambda: not os.path.exists("/proc/%d" % first["pid"]) and
                               subprocess.call(["kill", "-0", str(first["pid"])], stderr=subprocess.DEVNULL) != 0))
         self.assertEqual(self.req("stop-as", {"login": "alice", "job": "probe"}), {"ok": True, "stopped": False})
+
+    def test_a_core_restart_leaves_no_second_copy(self):
+        # issue #4231: a core restart (every release switch) forgot its resident
+        # jobs; they ran on beside the next run-as's copy, and stop-as could not
+        # stop them — eight webhooks of one login on a 15-core machine
+        with open(os.path.join(self.home, "loop.sh"), "w") as f:
+            f.write("#!/bin/bash\nwhile :; do sleep 1; done\n")
+        self.table([{"name": "loop", "keepalive": True, "argv": ["/bin/bash", "__HOME__/loop.sh"], "env": {}}])
+        script = os.path.join(self.home, "loop.sh")
+
+        def copies():
+            out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="]).decode()
+            return [l.split()[:2] for l in out.splitlines() if script in l and "/bin/bash" in l]
+
+        def start_one():
+            p = subprocess.Popen([sys.executable, os.path.join(self.bin, "fleet-node-core.py"), "call", "run-as",
+                                  json.dumps({"login": "alice", "job": "loop"}), "--follow"], env=self.env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.procs.append(p)
+            first = json.loads(p.stdout.readline().decode())
+            self.assertTrue(first.get("ok") and first.get("pid"), first)
+            return p, first["pid"]
+
+        core = self.serve()
+        stand, pid = start_one()
+        core.kill()
+        core.wait()
+        os.remove(self.env["FLEET_NODE_CORE_SOCK"])
+        self.assertTrue(until(10, lambda: [str(pid), "1"] in copies()), copies())
+        if [str(pid), "1"] not in copies():
+            self.skipTest("orphans are not reparented to pid 1 here (a subreaper)")
+        self.serve()
+        # the new core's run-as stops the old copy first: one copy, never two
+        stand2, pid2 = start_one()
+        self.assertTrue(until(10, lambda: [c[0] for c in copies()] == [str(pid2)]), copies())
+        self.assertIn("stopped 1 stray copy", self.log())
+        stand.wait(timeout=20)   # the old stand-in ends with the copy it stood in for
+        # and stop-as reaches a copy no book holds: the core goes once more
+        self.procs[-2].kill()
+        self.procs[-2].wait()
+        os.remove(self.env["FLEET_NODE_CORE_SOCK"])
+        self.assertTrue(until(10, lambda: [str(pid2), "1"] in copies()), copies())
+        self.serve()
+        self.assertEqual(self.req("stop-as", {"login": "alice", "job": "loop"}), {"ok": True, "stopped": True})
+        self.assertEqual(copies(), [], "stop-as left a copy no book held running")
+        stand2.wait(timeout=20)
+        # the stand-in is the wire alone: it never loads the supervisor (0.25 s each)
+        r = subprocess.run([sys.executable, "-X", "importtime", os.path.join(self.bin, "fleet-node-core.py"),
+                            "call", "rollback"], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertNotIn("fleet_node_supervisor", r.stderr)
 
     def test_outside_the_account_table(self):
         self.serve()

@@ -874,6 +874,13 @@ def table_session_units(runtime):
     return table_units(runtime, "session")
 
 
+def table_worker_units(runtime):
+    """The launchd units conf/node-tasks.tsv marks `worker` (issue #4231): a
+    login's GitHub loop that serves its worker windows, awake or asleep — run
+    while it has one. A spare login with no session asks GitHub nothing."""
+    return table_units(runtime, "worker")
+
+
 def account_units(paths, table=None):
     """The ONE account task table: [{name, argv, env, every | keepalive, out, err}],
     argv/env/out/err still carrying __HOME__ (filled per account). From the table
@@ -885,6 +892,7 @@ def account_units(paths, table=None):
     out = []
     machine_class = table_machine_units(paths.runtime)
     session_class = table_session_units(paths.runtime)
+    worker_class = table_worker_units(paths.runtime)
     pat = os.path.join(paths.runtime, "launchd", "com.claude-fleet.*.plist.tmpl")
     for f in sorted(glob.glob(pat)):
         u = os.path.basename(f)[len("com.claude-fleet."):-len(".plist.tmpl")]
@@ -909,6 +917,8 @@ def account_units(paths, table=None):
             ent["every"] = float(pl.get("StartInterval") or 60)
         if u in session_class:
             ent["session"] = True
+        elif u in worker_class:
+            ent["session"] = ent["asleep"] = True
         if u == "diskguard":
             # its orphan watchdog runs once for every user, as the machine's
             # `orphans` task — an account copy would notify twice
@@ -1394,6 +1404,8 @@ def account_entry(unit, login, ident, brew):
     ent["script"] = script_of(argv)
     if unit.get("session"):
         ent["session"] = True
+        if unit.get("asleep"):
+            ent["asleep"] = True
     if unit.get("keepalive"):
         ent["keepalive"] = True
     else:
@@ -1416,11 +1428,13 @@ def machine_sessions_dir():
     return "/Users/Shared/claude-fleet/sessions" if sys.platform == "darwin" else "/var/tmp/claude-fleet/sessions"
 
 
-def login_sessions(ident, t=None):
+def login_sessions(ident, t=None, asleep=False):
     """The live session count a login's collector published (`<count> <epoch>`,
     fleet_machine_sessions_publish — issue #3671), or None: no file, not a regular
     file the login owns, garbled, or older than FLEET_MACHINE_SESSIONS_STALE (300 s,
-    the readers' own bound). None means "do not know" — a session unit runs."""
+    the readers' own bound). None means "do not know" — a session unit runs.
+    asleep: plus the row's third field, its asleep workers (issue #4231); a row
+    without one (an older collector, an explicit count) adds nothing."""
     uid, _, home = ident
     p = os.path.join(machine_sessions_dir(), os.path.basename(home.rstrip("/")))
     try:
@@ -1442,6 +1456,8 @@ def login_sessions(ident, t=None):
     age = (t if t is not None else now()) - int(w[1])
     if age > env_num("FLEET_MACHINE_SESSIONS_STALE", 300) or age < -60:
         return None
+    if asleep and len(w) > 2 and w[2].isdigit():
+        return int(w[0]) + int(w[2])
     return int(w[0])
 
 
@@ -2055,8 +2071,8 @@ class Supervisor(object):
         self.last_save = 0
         self.units = None
         self.units_at = 0
-        self.sessions = {}    # login -> (read at, count | None) — a session unit's gate (#3671)
-        self.busy_at = {}     # login -> the last time its count was above 0
+        self.sessions = {}    # (login, asleep) -> (read at, count | None) — a session unit's gate (#3671)
+        self.busy_at = {}     # (login, asleep) -> the last time its count was above 0
         self.strays_at = 0
         # the seat (#3668): this daemon runs as _fleetnode and asks the root core
         # for everything root's — no seat = every branch below is the old road
@@ -2322,16 +2338,18 @@ class Supervisor(object):
         FLEET_NODE_SESSION_UNITS=0 runs every one."""
         if not c.get("session") or env("FLEET_NODE_SESSION_UNITS", "1") == "0":
             return False
+        # a `worker` unit (#4231) counts the asleep workers too: its own book
         login, t = c["account"], now()
-        at, n = self.sessions.get(login, (0, None))
+        key = (login, bool(c.get("asleep")))
+        at, n = self.sessions.get(key, (0, None))
         if t - at >= 5:
-            n = login_sessions((c["uid"], c["gid"], c["home"]), t)
-            self.sessions[login] = (t, n)
+            n = login_sessions((c["uid"], c["gid"], c["home"]), t, asleep=key[1])
+            self.sessions[key] = (t, n)
             if n is None or n > 0:
-                self.busy_at[login] = t
+                self.busy_at[key] = t
         if n is None or n > 0:
             return False
-        return t - self.busy_at.get(login, 0) >= env_num("FLEET_NODE_SESSION_HOLD", 120)
+        return t - self.busy_at.get(key, 0) >= env_num("FLEET_NODE_SESSION_HOLD", 120)
 
     def is_ours(self, c, pid, cmd):
         """Is the live pid the child an earlier run started? Its recorded command —
@@ -2350,9 +2368,12 @@ class Supervisor(object):
         webhooks per idle login on a managed machine. Once a minute, an orphan (PPID 1) of a login
         this daemon runs a KeepAlive unit for, reading as that unit
         (account_proc_is), not the pid we hold, is stopped. A seat stops nothing
-        of a login's itself; FLEET_NODE_STRAY_SWEEP=0 is off."""
+        of a login's itself: it asks the core's stop-as, which stops the strays of
+        that (login, unit) with it (issue #4231 — seated, this sweep did nothing,
+        and every core restart left one more webhook and spinner per login);
+        FLEET_NODE_STRAY_SWEEP=0 is off."""
         t = now()
-        if self.seated or t - self.strays_at < env_num("FLEET_NODE_STRAY_SECS", 60) \
+        if t - self.strays_at < env_num("FLEET_NODE_STRAY_SECS", 60) \
                 or env("FLEET_NODE_STRAY_SWEEP", "1") == "0":
             return
         self.strays_at = t
@@ -2365,6 +2386,7 @@ class Supervisor(object):
         except Exception:
             return
         held = set(p.pid for p in self.procs.values()) | set(self.adopted.values())
+        asked = {}
         for line in out.splitlines():
             w = line.split(None, 3)
             if len(w) < 4 or not (w[0].isdigit() and w[1] == "1" and w[2].isdigit()):
@@ -2374,6 +2396,9 @@ class Supervisor(object):
                 continue
             for c in units:
                 if c["uid"] == uid and account_proc_is(c, cmd):
+                    if self.seated:
+                        asked.setdefault(c["name"], c)
+                        break
                     for kill in (os.killpg, os.kill):
                         try:
                             if kill is os.killpg and os.getpgid(pid) != pid:
@@ -2384,6 +2409,11 @@ class Supervisor(object):
                             pass
                     self.log("child %s: stray copy pid %d (no daemon tends it) — stopped" % (c["name"], pid))
                     break
+        for name, c in sorted(asked.items()):
+            # stop-as stops the core's own copy too: a supervised one starts again
+            r = core_ask("stop-as", {"login": c["account"], "job": c["job"]}, 60)
+            self.log("child %s: stray copies — the core's stop-as: %s"
+                     % (name, json.dumps(r, sort_keys=True)[:120]))
 
     def child_status(self, c):
         if c.get("account"):
@@ -2629,7 +2659,9 @@ class Supervisor(object):
 
     def task_runnable(self, tk):
         if tk.get("account"):
-            return account_runnable(tk, self.seated)
+            # an interval unit of class session / worker too (#4231): issue-bridge and
+            # pr-refresh asked GitHub every 15 s for every spare login with no session
+            return account_runnable(tk, self.seated) or (NO_SESSION if self.no_session(tk) else None)
         if tk.get("scope") == "account" or not tk.get("cmd"):
             return "deferred"
         if not trusted(self.script_of(tk["cmd"])):

@@ -9403,9 +9403,19 @@ fleet_machine_login() {
 # to the live awake sessions + in-flight spawns, what the caps count). Atomic:
 # a hidden temp in the same dir, then rename. Creates the dir chain 1777 when it
 # is the first login there. Never fails a caller that ignores its rc.
+# The default row carries a third field, the login's ASLEEP workers (issue #4231):
+# `<count> <epoch> <asleep>` — the node daemon runs a login's GitHub loops
+# (issue-bridge, pr-refresh: class `worker` in conf/node-tasks.tsv) while
+# count + asleep is above 0, so a comment still reaches a hibernated worker.
+# An explicit count writes no third field (the reader then knows no sleepers).
 fleet_machine_sessions_publish() {
-  local n="${1:-}" d f tmp p
-  [ -n "$n" ] || n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
+  local n="${1:-}" d f tmp p z='' t aw
+  if [ -z "$n" ]; then
+    t=$(_fleet_session_tally); aw=${t%% *}; z=${t##* }
+    case "$aw" in ''|*[!0-9]*) aw=0 ;; esac
+    case "$z" in ''|*[!0-9]*) z='' ;; esac
+    n=$(( aw + $(fleet_inflight_count) ))
+  fi
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
   d="$(fleet_machine_sessions_dir)"
   for p in "${d%/*}" "$d"; do
@@ -9415,7 +9425,7 @@ fleet_machine_sessions_publish() {
   [ -d "$d" ] || return 1
   f="$d/$(fleet_machine_login)"
   tmp=$(mktemp "$d/.$(fleet_machine_login).XXXXXX" 2>/dev/null) || return 1
-  if printf '%s %s\n' "$n" "$(date +%s)" > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
+  if printf '%s %s%s\n' "$n" "$(date +%s)" "${z:+ $z}" > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
      && mv -f "$tmp" "$f" 2>/dev/null; then return 0; fi
   rm -f "$tmp" 2>/dev/null; return 1
 }
@@ -9453,7 +9463,7 @@ fleet_machine_sessions_rows() {
   [ -d "$d" ] || return 0
   fleet_machine_sessions_owned "$d" | while read -r f; do
     l="${f##*/}"; [ "$l" = "$me" ] && continue
-    n=''; ts=''; read -r n ts < "$f" 2>/dev/null
+    n=''; ts=''; read -r n ts _ < "$f" 2>/dev/null
     case "$n" in ''|*[!0-9]*) n=0; ts=0 ;; esac
     case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
     age=$((now - ts))

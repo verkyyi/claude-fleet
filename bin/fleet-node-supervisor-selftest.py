@@ -3030,6 +3030,62 @@ class V_SessionUnits(H_Accounts):
         self.start(FLEET_NODE_SESSION_UNITS="0")
         self.assertTrue(until(10, lambda: self.child("alice/spin").get("pid")), "FLEET_NODE_SESSION_UNITS=0 still gates")
 
+    def test_spare_login_runs_no_github_job(self):
+        # issue #4231: the GitHub loops (issue-bridge, pr-refresh — class `worker`)
+        # are interval TASKS; a spare login with no session ran both every 15 s
+        rt = os.path.join(self.d, "rt")
+        os.makedirs(rt)
+        root = os.path.dirname(BIN)
+        for x in ("launchd", "conf"):
+            os.symlink(os.path.join(root, x), os.path.join(rt, x))
+        old = dict(os.environ)
+        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
+        os.environ["FLEET_NODE_RUNTIME"] = rt
+        try:
+            units = {u["name"]: u for u in fns.account_units(fns.Paths())}
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        self.assertEqual(fns.table_worker_units(rt), {"issue-bridge", "pr-refresh"})
+        for gh in ("issue-bridge", "pr-refresh"):
+            self.assertTrue(units[gh].get("session") and units[gh].get("asleep"), gh)
+        for other in ("collect", "diskguard", "cleanup", "install-sync"):
+            self.assertFalse(units[other].get("session"), "%s must run with no session" % other)
+        self.assertFalse(units["webhook"].get("asleep"), "a session unit counts the awake ones only")
+        # the daemon: alice has no session (spare), bob's only worker is asleep
+        # (third field), carol has one awake — the GitHub task runs for bob and carol
+        os.makedirs(os.path.join(self.home("carol"), ".claude", "fleet", "bin"))
+        os.makedirs(os.path.join(self.home("carol"), "Library", "LaunchAgents"))
+        with open(os.path.join(self.d, "passwd.json")) as f:
+            pw = json.load(f)
+        pw["carol"] = dict(pw["alice"], home=self.home("carol"))
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump(pw, f)
+        for who in ("alice", "bob", "carol"):
+            self.acct_script(who, "gh-loop.sh", 'echo x >> "$HOME/gh-runs"\n')
+            self.acct_script(who, "collect.sh", 'echo x >> "$HOME/collect-runs"\n')
+        self.acct_table(
+            {"name": "gh", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/gh-loop.sh"], "every": 0.3,
+             "session": True, "asleep": True},
+            {"name": "collect", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/collect.sh"], "every": 0.3})
+        for who in ("alice", "bob", "carol"):
+            self.assertEqual(self.run_sup("account", "adopt", who).returncode, 0)
+        self.count("alice", 0)
+        with open(os.path.join(self.sd, "bob"), "w") as f:
+            f.write("0 %d 1\n" % int(time.time()))
+        self.count("carol", 1)
+        self.start()
+        runs = lambda who, what: os.path.exists(os.path.join(self.home(who), what))
+        self.assertTrue(until(10, lambda: runs("bob", "gh-runs") and runs("carol", "gh-runs")
+                              and runs("alice", "collect-runs")), self.state().get("tasks"))
+        self.assertTrue(until(5, lambda: self.task("alice/gh").get("result") == fns.NO_SESSION),
+                        self.task("alice/gh"))
+        time.sleep(1)
+        self.assertFalse(runs("alice", "gh-runs"), "a spare login with no session ran its GitHub job")
+        # a worker opens on the spare login: its GitHub job starts
+        self.count("alice", 1)
+        self.assertTrue(until(10, lambda: runs("alice", "gh-runs")), "never ran once the login had a session")
+
     def test_restart_adopts_and_strays_stop(self):
         self.acct_script("alice", "keep.sh", "while :; do sleep 1; done\n")
         self.acct_table({"name": "keep", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/keep.sh"],
