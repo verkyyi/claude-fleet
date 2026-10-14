@@ -8,7 +8,9 @@ description: >
 
 # EPIC #1982 C1 (issue #1983). Ported from acme-monorepo's acr-credentials
 # action. The role's ACR policy (gha-claudefleet-acr-push) pulls and pushes
-# acme/ccquota only — it cannot create or delete a repository.
+# acme/ccquota, and only PULLS 24haowan/alpine + 24haowan/golang (the base-image
+# copies HUB_BASE_IMAGES points the build at — issue #4143); it cannot create or
+# delete a repository.
 inputs:
   duration:
     description: "STS (= login) lifetime in seconds (900–7200); must cover the last push"

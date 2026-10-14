@@ -185,7 +185,9 @@ workflow. The one exception is the switch itself (RUNBOOK.md «换库»).
   `gha-claudefleet-deploy` (trusts `sub=repo:verkyyi/claude-fleet:environment:prod`
   only).
 - Aliyun: `gha-prod-kubeconfig` (a temporary kubeconfig) + `gha-claudefleet-acr-push`
-  (pull/push `acme/ccquota` only).
+  (pull/push `acme/ccquota`; pull only `24haowan/alpine` · `24haowan/golang`, the
+  base-image copies the cluster's buildkitd builds FROM — repo variable
+  `HUB_BASE_IMAGES`, issue #4143).
 - Cluster: Role `new-deploy/claudefleet-deployer` (acme-monorepo#11751) —
   the hub's Deployment, Service, Ingress, the `ccquota-pricing` ConfigMap, a
   read of the `ccquota-data` PVC, pod exec for the snapshot, and patch on

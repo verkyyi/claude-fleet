@@ -293,6 +293,10 @@ jobs:
           tls=(); [ -z "${BUILDKIT_TLSDIR:-}" ] || tls=(--tlsdir "$BUILDKIT_TLSDIR")
           # Base images (issue #4133): HUB_BASE_IMAGES = "GO_IMAGE=<ref> ALPINE_IMAGE=<ref>"
           # (registry copies) overrides the Dockerfile's docker.io defaults; unset = them.
+          # The copies are pulled with hub-acr's login above, so they must sit in a
+          # repository its RAM policy may pull (24haowan/alpine, 24haowan/golang —
+          # issue #4143); a copy anywhere else answers insufficient_scope.
+          [ -z "$HUB_BASE_IMAGES" ] || echo "base images: $HUB_BASE_IMAGES"
           base=(); for kv in $HUB_BASE_IMAGES; do
             [[ "$kv" =~ ^(GO_IMAGE|ALPINE_IMAGE)=[^[:space:]]+$ ]] || { echo "::error::HUB_BASE_IMAGES: '$kv' is not GO_IMAGE=<ref> / ALPINE_IMAGE=<ref>"; exit 1; }
             base+=(--opt "build-arg:$kv"); done
@@ -315,6 +319,10 @@ jobs:
             --progress plain 2>&1 | tee "$RUNNER_TEMP/build.log"
           rc=${PIPESTATUS[0]}; set -e
           [ "$rc" -ne 0 ] || break
+          if grep -qE 'insufficient_scope|pull access denied' "$RUNNER_TEMP/build.log"; then
+            echo "::error::a base image was refused (insufficient_scope): the HUB_BASE_IMAGES copy is outside what RAM policy gha-claudefleet-acr-push may pull — copy it into 24haowan/alpine or 24haowan/golang, or clear the variable"
+            exit "$rc"
+          fi
           if [ "$try" -lt 3 ] && grep -q 'failed to resolve source metadata' "$RUNNER_TEMP/build.log"; then
             echo "::warning::a base image did not resolve (try $try of 3) — retrying in $((try * 30))s"
             sleep $((try * 30)); continue

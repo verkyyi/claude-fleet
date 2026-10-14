@@ -26,7 +26,8 @@ const { githubOidcToken, assumeRoleWithOidc, oidcClaims, signV3 } = require('../
 const ACCOUNT = '1720148580188583';
 const REGION = 'cn-shenzhen';
 // The roles a job may ask for, each with the one environment its trust admits
-// and what its policy pushes: the hub image (prod), the node image (#3855), the
+// and what its policy pushes: the hub image (prod — it also PULLS the base-image
+// copies 24haowan/alpine and 24haowan/golang, #4143), the node image (#3855), the
 // release train's Linux test runner image (#3864; it also PULLS the namespace's
 // other repositories — its base, the cluster's ARC runner image, carries layers
 // first pushed elsewhere, and the push mounts them from there).
