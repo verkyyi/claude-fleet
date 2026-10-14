@@ -6,6 +6,7 @@
 import type { Credential, HubUser, PolicyEntry, PolicyView } from "./api";
 
 export type Window = { p: number | null; resets: string | null };
+export type PlanSource = "provider" | "legacy" | "admin";
 
 export type LimitsBody = {
   five_hour?: any;
@@ -26,7 +27,7 @@ export type Account = { account_uuid: string; label?: string; display_name?: str
 export type PoolCredential = Credential & {
   limits?: LimitsBody;
   plan?: string;
-  plan_source?: string;
+  plan_source?: PlanSource;
   plan_at?: string;
   reauth_required?: boolean;
   refresh_error?: string;
@@ -68,7 +69,7 @@ export type Sub = {
   label: string;
   prov: Prov;
   plan: string;
-  planSource?: string;
+  planSource?: PlanSource;
   planAt?: string;
   planTier?: string;
   h5: Window | null;
