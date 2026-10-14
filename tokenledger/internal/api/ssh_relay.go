@@ -196,6 +196,10 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	}
 	if ok {
 		if role, err := s.personRole(pid); err == nil && role == roleAdmin {
+			if target := viewAsAsked(r); target != "" && target != pid {
+				// 以他的视角看 (claude-fleet#3944): the person's own reads.
+				return s.viewAsRelayIdentity(r, target)
+			}
 			// An admin sees every machine, as the operator's doors do
 			// (claude-fleet#1985).
 			return sshRelayIdentity{Operator: true, Actor: sess.UID, Admin: true}, true

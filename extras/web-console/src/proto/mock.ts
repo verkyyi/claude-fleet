@@ -6,7 +6,8 @@
 // /v1/fleet/person-bundle, kept in memory so binding and importing can be clicked) with
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
-type Scenario = { role?: "user" | "admin"; state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off" | "ask"; page?: string;
+type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking through 林晓's eyes (claude-fleet#3944)
+  state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off" | "ask"; page?: string;
   // 我自己的订阅 (C21): none = the empty state; login = the dialog open at the sign-in; error = the read fails
   sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error";
   // unbound = a GitHub member the notices cannot find yet (claude-fleet#4057)
@@ -29,6 +30,8 @@ export async function install(): Promise<string> {
   const me = admin
     ? { via: "wechat", role: "admin", person: "p:zhouning", name: "周宁", login: "zhouning", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true }
     : { via: "wechat", role: "user", person: "p:linxiao", name: "林晓", login: "linxiao", pages: ["overview", "sessions", "tasks", "usage", "chat"], can_logout: true };
+  // 只读预览: the entry answers as 林晓, says who looks, and has nothing to sign out
+  if (sc.role === "view") Object.assign(me, { view_as: { person: "p:linxiao", name: "林晓", by: "周宁" }, can_logout: false });
   const wxBind = { unbound: sc.wx === "unbound", polls: 0 };
   if (sc.trial) Object.assign(me, { role: "trial", pages: ["chat"] });
   const trialState = () => ({ state: sc.trial === "capped" ? "ended" : "running", secs_left: sc.trial === "capped" ? 0 : 680,
@@ -182,6 +185,10 @@ export async function install(): Promise<string> {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const p = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
     await new Promise((r) => setTimeout(r, 120));
+    // 只读预览: every change is the entry's 403 (view_as.go), the conversation too
+    const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    if (sc.role === "view" && (method !== "GET" || (p.startsWith("/v1/chat/") && p !== "/v1/chat/home")))
+      return ok({ error: "只读预览，不能改动（read-only preview: nothing can be changed）" }, 403);
     if (p === "/v1/fleet/sessions") {
       if (state === "loading") return new Promise<Response>(() => {});
       if (state === "error") return ok({ error: { code: "UNAVAILABLE", message: "演示：入口出错" } }, 503);

@@ -139,7 +139,7 @@ type AuditEvent struct {
 // send, …) is a session's.
 func fleetAuditKind(action string) string {
 	switch {
-	case action == "role_denied":
+	case action == "role_denied", action == "view_as":
 		return auditUsers
 	case action == "session_bind" || action == "session_cred":
 		return auditSubs
