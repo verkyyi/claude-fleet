@@ -21,7 +21,8 @@
 #      renderMachineReading) is fleet-machine-tasks.py's render, byte for byte,
 #      and the reader takes it
 #   F  class session (#3671): spinner and webhook serve only a login's sessions — the
-#      daemon runs them only while it has one; a session row on a machine-table task
+#      daemon runs them only while it has one; class worker (#4231): issue-bridge and
+#      pr-refresh only while it has one awake or asleep; a session row on a machine-table task
 #      is red; bin/fleet-node-supervisor-selftest.py V (session units, a restart
 #      adopts instead of doubling, an orphaned copy stops, a task is not doubled)
 set -u
@@ -149,10 +150,14 @@ sess=$(python3 - "$BIN/fleet-node-supervisor.py" "$ROOT" <<'PY'
 import importlib.util, sys, types
 spec = importlib.util.spec_from_file_location("sup", sys.argv[1]); m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-print(" ".join(sorted(u["name"] for u in m.account_units(types.SimpleNamespace(runtime=sys.argv[2])) if u.get("session"))))
+us = m.account_units(types.SimpleNamespace(runtime=sys.argv[2]))
+print(" ".join(sorted(u["name"] for u in us if u.get("session") and not u.get("asleep"))) + " | "
+      + " ".join(sorted(u["name"] for u in us if u.get("asleep"))))
 PY
 )
-[ "$sess" = "spinner webhook" ] && ok "F spinner and webhook run only while the login has a session" || bad "F session units: '$sess'"
+[ "$sess" = "spinner webhook | issue-bridge pr-refresh" ] \
+  && ok "F spinner and webhook run only while the login has a session; issue-bridge and pr-refresh (class worker, #4231) while it has one awake or asleep" \
+  || bad "F session units: '$sess'"
 cp "$ROOT/conf/node-tasks.tsv" "$fake/conf/"
 sed -i.bak 's/^orphans	machine	machine	/orphans	machine	session	/' "$fake/conf/node-tasks.tsv"
 out=$(python3 "$MT" table --check "$fake" 2>&1)
