@@ -19,10 +19,11 @@
 #   3. red → names what is red (the failed job, the FAIL/TIMEOUT tests in its log)
 #      and since which commit (the red streak walked back to the last green run;
 #      a run's head commit — a train boards master's head when it starts, at or
-#      past it), and files it through the ONE filer road with `--breakage`
-#      (bin/fleet-issue-file.sh, issue #2078): one issue per fingerprint across
-#      every machine and login; a breakage someone already filed comes back exit 5
-#      and is left alone. Either way it raises ONE `breakage` alert
+#      past it), and files it through the ONE filer road with
+#      `--breakage-key macos-<the red tests>` (bin/fleet-issue-file.sh, issues
+#      #2078, #4232): one issue per red test set across every machine, login and
+#      new stable — no commit in the key; one already open gets a 「同一故障」
+#      comment and comes back exit 5. Either way it raises ONE `breakage` alert
 #      (fleet-alerts.sh event) on --session's fleet — and spawns NOTHING: since
 #      #3120 (EPIC #3111 C9) no session starts by itself; sending a fixer is the
 #      person's, or a steward holder's (the fleet-steward plugin).
@@ -152,8 +153,11 @@ jid=$(printf '%s\n' "$jobs" | awk -F'\t' 'NF { print $1; exit }')
 jnames=$(printf '%s\n' "$jobs" | cut -f2 | grep . | paste -sd ',' - | sed 's/,/, /g')
 tests=''
 if [ -n "$jid" ]; then
-  tests=$(gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null \
-            | grep -oE '(FAIL|TIMEOUT) +[A-Za-z0-9_.-]*selftest[A-Za-z0-9_.-]*' | awk '{print $2}')
+  # over REST (#4238): `gh run view --log-failed` printed nothing for these jobs,
+  # so every filing said «no FAIL line» — and the key below needs the names
+  u="repos/$repo/actions/jobs/$jid/logs"
+  tests=$({ gh api "$u" --allow-escape-sequences 2>/dev/null || gh api "$u" 2>/dev/null; } \
+            | grep -aoE '(FAIL|TIMEOUT) +[A-Za-z0-9_.-]*selftest[A-Za-z0-9_.-]*' | awk '{print $2}')
   tests=$(printf '%s\n' "$tests" | grep . | awk '!seen[$0]++' | head -5 | paste -sd ',' - | sed 's/,/, /g')
 fi
 what="${tests:-${jnames:-$WF}}"
@@ -173,8 +177,17 @@ if [ "$dry" = 1 ]; then
   printf 'would-file\t%s\t%s\n' "$rid" "$title"; exit 0
 fi
 
+# ONE issue per red test (issue #4232): the filer's own fingerprint carries the
+# commit, so every new stable with the same red test opened another issue (21 for
+# one red, #3975 … #4191). The key is the red tests (else the red shards) — the
+# filer finds the open issue under it, comments 「同一故障」 there and exits 5.
+bkey=$(printf '%s\n' "${tests:-$jnames}" | tr ',' '\n' | sed 's/^ *//; s/\.sh$//; s/[^A-Za-z0-9._-]\{1,\}/-/g' \
+         | grep . | LC_ALL=C sort -u | paste -sd '_' -)
+case "$bkey" in ''|*[!A-Za-z0-9._-]*) bkey=$(printf '%s' "$what" | cksum | cut -d' ' -f1) ;; esac
+bkey="macos-$bkey"
+[ "${#bkey}" -le 80 ] || bkey="macos-$(printf '%s' "$bkey" | cksum | cut -d' ' -f1)"
 filer="${FLEET_MACOS_FILE_CMD:-$BIN/fleet-issue-file.sh}"
-url=$(bash "$filer" --breakage --repo "$repo" --priority p1 --from macos-watch --title "$title" --body "$body"); rc=$?
+url=$(bash "$filer" --breakage-key "$bkey" --repo "$repo" --priority p1 --from macos-watch --title "$title" --body "$body"); rc=$?
 case "$rc" in
   0|5) printf '%s\n' "$rid" > "$memo" ;;
   *)   log "filing failed (rc $rc) — retried next tick"; exit 1 ;;

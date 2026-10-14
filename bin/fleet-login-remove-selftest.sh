@@ -473,6 +473,7 @@ grep -qx 'launchctl bootout gui/602' "$FLEET_TEST_LOG" || fail "the login's gui 
 [ ! -e "$WORK/procs" ] || fail 'distnoted came back and is still running'
 not_has "$WORK/out" 'timed out' 'deleteUser hung on a respawned process'
 [ "$el" -lt 15 ] || fail "respawn apply took ${el}s"
+printf 'leg respawn %ss\n' "$el"   # break-it login-remove-respawn-hang reads it
 python3 - "$FLEET_TEST_LOG" <<'PY2' || fail 'bootout user/<uid> is not before every kill and before deleteUser'
 import pathlib, sys
 lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
@@ -495,6 +496,7 @@ t0=$(date +%s)
 FAKE_DELETE_HANGS=1 FAKE_RECORD_STAYS=1 FLEET_LOGIN_REMOVE_DELETE_SECS=1 run alice --delete-home --apply
 el=$(( $(date +%s) - t0 ))
 [ "$el" -lt 15 ] || fail "a hanging deleteUser was not cut off at its limit (${el}s)"
+printf 'leg delete-hang %ss\n' "$el"
 has "$WORK/out" 'sysadminctl -deleteUser alice timed out after 1s' 'the deleteUser time limit was not said'
 has "$FLEET_TEST_LOG" 'dscl . -delete /Users/alice' 'after a timed-out deleteUser the record was not deleted with dscl'
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "timed-out deleteUser, record then deleted: exit $RC (want 0)"; }
