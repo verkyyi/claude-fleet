@@ -68,6 +68,47 @@ const (
 	trialWaitQuota = "quota" // the pool is below its floor
 )
 
+// What exactly held a busy wait (claude-fleet#4251): the audit's
+// trial.queued names it, the page reads only the word before the colon.
+const (
+	trialWaitBusyAdmit  = trialWaitBusy + ":admit"    // the machine's own gate holds new sessions
+	trialWaitBusyNoHost = trialWaitBusy + ":no-host"  // no machine fit to open one (leastBusyMachine "")
+	trialWaitBusySpare  = trialWaitBusy + ":no-spare" // no ready spare on the machine picked
+	trialWaitBusyRoster = trialWaitBusy + ":roster"   // the roster could not be read
+)
+
+// trialPageReason is what the page is told of why: busy's detail stays in
+// the audit.
+func trialPageReason(why string) string {
+	if i := strings.IndexByte(why, ':'); i >= 0 {
+		return why[:i]
+	}
+	return why
+}
+
+// machineAdmit is the machine's one admission verdict (共同约定 2, the
+// newest heartbeat's — fleet_machine_admit): of host's online logins that
+// state one, the most recently heard login's. Every login reads the machine
+// at its own moment, so one stale «no» among eighteen must not veto the
+// machine (claude-fleet#4251). true when none states one.
+func machineAdmit(snap NodesSnapshot, host string) bool {
+	var newest time.Time
+	admit, said := true, false
+	for _, n := range snap.Nodes {
+		if !strings.EqualFold(n.Hostname, host) || n.Status != "online" || n.Admit == nil {
+			continue
+		}
+		var at time.Time
+		if n.LastHeartbeat != nil {
+			at = *n.LastHeartbeat
+		}
+		if !said || at.After(newest) {
+			newest, admit, said = at, *n.Admit, true
+		}
+	}
+	return admit
+}
+
 // trialDay is the zone the day's total is counted in.
 var trialDay = time.FixedZone("CST", 8*3600)
 
@@ -166,16 +207,14 @@ func (s *Server) trialHold(host string, now time.Time) string {
 		return trialWaitQuota
 	}
 	if host == "" {
-		return trialWaitBusy
+		return trialWaitBusyNoHost
 	}
 	snap, err := s.Nodes(now)
 	if err != nil {
-		return trialWaitBusy
+		return trialWaitBusyRoster
 	}
-	for _, n := range snap.Nodes {
-		if strings.EqualFold(n.Hostname, host) && n.Status == "online" && n.Admit != nil && !*n.Admit {
-			return trialWaitBusy // the machine's own gate is holding new sessions
-		}
+	if !machineAdmit(snap, host) {
+		return trialWaitBusyAdmit // the machine's own gate is holding new sessions
 	}
 	for _, m := range snap.Machines {
 		if strings.EqualFold(m.Hostname, host) && m.NCPU > 0 && m.Load1 > s.trialLoadRatio()*float64(m.NCPU) {
