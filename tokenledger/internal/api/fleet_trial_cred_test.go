@@ -95,12 +95,14 @@ func TestTrialCredAllow(t *testing.T) {
 }
 
 func TestCheckTrialCredAllow(t *testing.T) {
-	for in, want := range map[string]string{
-		"*":                 `"*"`,
-		` "*" `:             `"*"`,
-		"[]":                "[]",
-		`["` + uuidCodex + `","` + "11111111-1111-4111-8111-111111111111" + `"]`: `["11111111-1111-4111-8111-111111111111","` + uuidCodex + `"]`,
+	const gmail = "11111111-1111-4111-8111-111111111111"
+	for _, c := range [][2]string{
+		{"*", `"*"`},
+		{` "*" `, `"*"`},
+		{"[]", "[]"},
+		{`["` + uuidCodex + `","` + gmail + `"]`, `["` + gmail + `","` + uuidCodex + `"]`},
 	} {
+		in, want := c[0], c[1]
 		if got, bad := checkTrialCredAllow(nil, in); bad != "" || got != want {
 			t.Errorf("%q = %q, %q; want %q", in, got, bad, want)
 		}
