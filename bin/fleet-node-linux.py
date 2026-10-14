@@ -357,7 +357,11 @@ def make_user(t, full_name=''):
 # FLEET_EGRESS_PROXY (render.py --egress-proxy, #3547): the cluster's one egress
 # (deploy/k8s/egress) is every login's HTTPS_PROXY and git's proxy for every
 # host, the gh wrapper's road when no GitHub relay is named; the cluster and
-# loopback (the local credential proxy) stay direct.
+# loopback (the local credential proxy) stay direct — and so does the fleet's own
+# hub (FLEET_HUB_URL / FLEET_CRED_CENTRAL_URL's host, issue #4112): the pod's
+# guard lets it out directly, the egress's host list does not name it, and a
+# session pass asked through the egress was refused 403 host_not_allowed — every
+# session in the pod stopped on 「凭据代理没给出会话凭据」.
 # FLEET_CLUSTER_CACHES (render.py --cluster-caches, #3548): the namespace whose
 # package caches (deploy/k8s/caches) every login installs from — npm, pnpm, yarn,
 # corepack through fleet-npm, pip and uv through fleet-pypi, Go through
@@ -391,6 +395,17 @@ def cluster_caches(ns):
 
 GH_PROXY_RE = re.compile(r'http://[A-Za-z0-9.-]+:[0-9]{1,5}')
 NO_PROXY = 'localhost,127.0.0.1,::1,.svc,.cluster.local'
+HOST_RE = re.compile(r'[A-Za-z0-9.-]+')
+
+
+def hub_hosts(env):
+    """The fleet's own hub hosts the pod reaches directly (issue #4112)."""
+    out = []
+    for k in ('FLEET_HUB_URL', 'FLEET_CRED_CENTRAL_URL', 'CCQUOTA_HUB_URL'):
+        host = urllib.parse.urlsplit(env.get(k, '').strip()).hostname or ''
+        if host and HOST_RE.fullmatch(host) and host not in out:
+            out.append(host)
+    return out
 MIRROR_RE = re.compile(r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+')
 UPSTREAM_RE = re.compile(r'https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git')
 
@@ -418,7 +433,8 @@ def devnet_settings(env):
     pairs = [('FLEET_GITHUB_PROXY', proxy)] if proxy else []
     if egress:
         pairs += [(k, egress) for k in ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy')]
-        pairs += [(k, NO_PROXY) for k in ('NO_PROXY', 'no_proxy')]
+        direct = ','.join([NO_PROXY] + hub_hosts(env))
+        pairs += [(k, direct) for k in ('NO_PROXY', 'no_proxy')]
     caches = env.get('FLEET_CLUSTER_CACHES', '').strip()
     if caches and not NS_RE.fullmatch(caches):
         raise ValueError('FLEET_CLUSTER_CACHES is a namespace, not %r' % caches)

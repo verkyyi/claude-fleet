@@ -21,6 +21,9 @@ operator's choice:
            the way q does. 「N 秒后关闭 · 按任意键取消」 rides the line, counting
            down each second; ANY key cancels it — and a key the page knows
            (↵ r q p) still does what it says. 0 = no countdown, as before.
+    10     also when --retry-in N runs out (issue #4112): a launch the launcher
+           refused for want of a session credential is retried by itself —
+           「N 秒后自动重试 · 按任意键取消」, the same countdown, ending in ↵.
 
 A line goes ABOVE it only for something the person must know before choosing
 (issue #1842): commits on the branch that are on no remote (「未推送：N 个提交
@@ -60,7 +63,8 @@ TEXT = {
            'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
            'resume': '重开', 'resume_new': '新开对话', 'retry': '重试启动', 'list': '回列表',
            'new': '新对话', 'quit': '关窗口', 'personal': '不带个人配置重开',
-           'closing': '{n} 秒后关闭 · 按任意键取消', 'closing_short': '{n} 秒后关闭'},
+           'closing': '{n} 秒后关闭 · 按任意键取消', 'closing_short': '{n} 秒后关闭',
+           'retrying': '{n} 秒后自动重试 · 按任意键取消', 'retrying_short': '{n} 秒后重试'},
     'en': {'ended': 'Session ended', 'crashed': 'Session exited unexpectedly',
            'unpushed': 'Unpushed: {n} commits (branch {b})', 'unpushed_nob': 'Unpushed: {n} commits',
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
@@ -71,7 +75,8 @@ TEXT = {
            'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
            'resume': 'reopen', 'resume_new': 'new conversation', 'retry': 'retry the launch', 'list': 'list',
            'new': 'new chat', 'quit': 'close window', 'personal': 'reopen without personal config',
-           'closing': 'closing in {n}s · any key cancels', 'closing_short': 'closing in {n}s'},
+           'closing': 'closing in {n}s · any key cancels', 'closing_short': 'closing in {n}s',
+           'retrying': 'retrying in {n}s · any key cancels', 'retrying_short': 'retrying in {n}s'},
 }
 
 
@@ -120,8 +125,9 @@ def render(facts, cols, rows=None):
     # the countdown (issue #3170) rides after the headline; narrow, it first
     # shortens to 「N 秒后关闭」 — a key on the line never makes way for it
     n = int(facts.get('close_in') or 0)
-    full = YELLOW + words['closing'].format(n=n) + RESET + ' · ' if n > 0 else ''
-    short = YELLOW + words['closing_short'].format(n=n) + RESET + ' · ' if n > 0 else ''
+    cd = 'retrying' if facts.get('auto') == RESUME else 'closing'   # --retry-in (issue #4112)
+    full = YELLOW + words[cd].format(n=n) + RESET + ' · ' if n > 0 else ''
+    short = YELLOW + words[cd + '_short'].format(n=n) + RESET + ' · ' if n > 0 else ''
     lead = color + BOLD + head + RESET + ' · '
     line = None
     for cand in (lead + full + keys, lead + short + keys,
@@ -200,12 +206,16 @@ def main():
     p.add_argument('--hooks-off-what', default='')
     p.add_argument('--close-in', type=int, default=0,
                    help='close the window (exit 14) after N seconds unless a key is pressed; 0 = never (#3170)')
+    p.add_argument('--retry-in', type=int, default=0,
+                   help='with --retry: press ↵ by itself (exit 10) after N seconds unless a key is pressed (#4112)')
     p.add_argument('--print', action='store_true', help='draw once at 80 columns and exit 0 (selftest)')
     a = p.parse_args()
     facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'unpushed': a.unpushed,
              'branch': a.branch, 'failed': a.failed, 'why': a.why,
              'retry': a.retry, 'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what,
-             'close_in': max(a.close_in, 0)}
+             'close_in': max(a.close_in, 0), 'auto': AUTO_CLOSE}
+    if a.retry and a.retry_in > 0:
+        facts['close_in'], facts['auto'] = a.retry_in, RESUME
     if a.print:
         sys.stdout.write(render(facts, 80) + '\n')
         return 0
@@ -250,13 +260,13 @@ def main():
             wait = None
             if deadline is not None:
                 left = deadline - time.monotonic()
-                if left <= 0: return AUTO_CLOSE
+                if left <= 0: return facts['auto']
                 wait = left - int(left) or 1.0   # to the next whole second
             try: ready = select.select([rd, 0], [], [], wait)[0]
             except InterruptedError: ready = [rd]
             if deadline is not None and not ready:
                 left = deadline - time.monotonic()
-                if left <= 0.05: return AUTO_CLOSE
+                if left <= 0.05: return facts['auto']
                 facts['close_in'] = int(left + 0.95); redraw()
                 continue
             if rd in ready:

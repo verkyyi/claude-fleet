@@ -1207,6 +1207,12 @@ class LinuxNode(unittest.TestCase):
                 for line in ('HTTPS_PROXY=' + egress, 'https_proxy=' + egress, 'FLEET_GITHUB_PROXY=' + egress,
                              'NO_PROXY=localhost,127.0.0.1,::1,.svc,.cluster.local'):
                     self.assertIn(line + '\n', shell)
+                # the fleet's own hub stays direct: the egress does not name it (issue #4112)
+                _, shell = m.devnet_settings({'FLEET_EGRESS_PROXY': egress,
+                                              'FLEET_HUB_URL': 'https://hub.example.com',
+                                              'FLEET_CRED_CENTRAL_URL': 'https://hub.example.com/'})
+                for k in ('NO_PROXY', 'no_proxy'):
+                    self.assertIn(k + '=localhost,127.0.0.1,::1,.svc,.cluster.local,hub.example.com\n', shell)
                 with self.assertRaises(ValueError):
                     m.devnet_settings({'FLEET_EGRESS_PROXY': 'http://x:1 -c core.sshCommand=sh'})
             # unset: the lease stays on, nothing is purged

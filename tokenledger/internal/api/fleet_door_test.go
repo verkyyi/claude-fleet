@@ -204,3 +204,40 @@ func TestDoorRouteListSendsPodsThroughTheDoor(t *testing.T) {
 		t.Fatalf("entry port off: %s, want %s", got, want)
 	}
 }
+
+// `fleet` with no machine named connects off the home answer, and its route
+// list is the route list's (claude-fleet#4112): a pod behind the door gets the
+// door's entry route and no relay there too — before, the home answer still
+// carried the relay and the pod's unreachable LAN line alone.
+func TestHomeAnswerSendsPodsThroughTheDoor(t *testing.T) {
+	h := entryHarness(t)
+	now := time.Now().UTC()
+	h.srv.FleetRoutes = []FleetMachine{{Hostname: "u-alice1", Routes: []FleetRoute{{Name: "lan", Host: "172.20.0.9", Port: 22}}}}
+	if err := h.srv.Store.SetFleetSetting(DoorKey, "fleet-door", now); err != nil {
+		t.Fatal(err)
+	}
+	dnsReach(t, h, "fleet-door", now, true, "203.0.113.10")
+	out, err := h.srv.homePick("", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pod *RouteMachine
+	for i := range out.Machines {
+		if out.Machines[i].Hostname == "u-alice1" {
+			pod = &out.Machines[i]
+		}
+	}
+	if pod == nil {
+		t.Fatalf("u-alice1 missing from the home answer: %+v", out.Machines)
+	}
+	var rs []string
+	for _, r := range pod.Routes {
+		rs = append(rs, r.Name+"="+r.Host+":"+strconv.Itoa(r.Port))
+	}
+	if got, want := strings.Join(rs, ","), "lan=172.20.0.9:22,entry=203.0.113.10:"+strconv.Itoa(entryPort); got != want {
+		t.Fatalf("home answer routes: %s, want %s", got, want)
+	}
+	if pod.Relay {
+		t.Fatal("home answer offers a pod behind the door the relay")
+	}
+}

@@ -221,6 +221,7 @@ close_secs() {
 PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''
+cred_tries=0   # refused launches in a row for want of a session credential (#4112)
 while :; do
   if [ "$intmux" = 1 ]; then
     wset -u @wrap_quiet
@@ -328,6 +329,19 @@ while :; do
   [ "$unp" -gt 0 ] && pargs+=(--unpushed "$unp" --branch "$br")
   [ -n "$failed" ] && pargs+=(--failed "$failed" --why "$fail_why" --detail "$fail_line" --secs "$dur")
   [ "$failed" = launch ] && [ "$retry" = 1 ] && pargs+=(--retry)
+  # No session credential (issue #4112): the hub / the egress may be a moment
+  # behind a pod's restart, so the page presses ↵ by itself — 15 s, doubling to
+  # 5 min — instead of holding the window for a person who is not there.
+  case "$refused" in
+    cred|cred_unknown)
+      if [ "$retry" = 1 ]; then
+        cred_tries=$((cred_tries + 1)); rin=15; i=1
+        while [ "$i" -lt "$cred_tries" ] && [ "$rin" -lt 300 ]; do rin=$((rin * 2)); i=$((i + 1)); done
+        [ "$rin" -gt 300 ] && rin=300
+        pargs+=(--retry-in "$rin")
+      fi ;;
+    *) cred_tries=0 ;;
+  esac
   # The countdown (issue #3170): only the person's own exit — never a crash, a
   # failed relaunch or a refused launch (the page must stay to say why), and never
   # the orchestrator / steward (their ensure reopens them; a close would fight it).
