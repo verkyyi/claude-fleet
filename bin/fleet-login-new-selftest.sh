@@ -1013,6 +1013,12 @@ not_contains "Q malformed op id: nothing ran" "$CALLS" "addUser"
 printf 'rex:%s:%s:%s\n' "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/rex" >> "$FLEET_CREDSEP_PW"
 RH="$FLEET_LOGIN_HOMES/rex"; mkdir -p "$RH"; chmod 000 "$RH"
 : > "$LOG"; : > "$DLOG"; OUT=$(FAKE_EXISTING=rex "$BASH_BIN" "$S" rex --recycle --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+# the bootstrap runs detached (#4196): wait (≤ 10 s) until it ran and its sudo is
+# gone — the shim locks the home again when that call ends
+for _ in $(seq 1 100); do
+  grep -q doctor=0 "$WORK/bs.log" 2>/dev/null && ! pgrep -f "$RH/.claude/fleet/bin/fleet-login-bootstrap.sh" >/dev/null 2>&1 && break
+  sleep 0.1
+done
 unlock_homes
 eq "R exit" 0 "$RC"
 not_contains "R no addUser" "$CALLS" "sysadminctl"
@@ -1022,8 +1028,6 @@ contains "R the shell back" "$CALLS" "dscl . -create /Users/rex UserShell /bin/z
 contains "R createhomedir fills" "$CALLS" "createhomedir -c -u rex"
 contains "R the proxy's first answer is not waited for (#4044, #4196)" "$OUT" "env FLEET_CREDSEP_JOIN_WAIT=0 bash"
 contains "R the fleet starts off the clock (#4196)" "$OUT" "fleet: starting (fleet-login-bootstrap.sh, detached as rex"
-# detached: wait for it (≤ 10 s) — its last line is the stub's echo into its own log
-for _ in $(seq 1 100); do grep -q 'fleet: ok' "$RH/.claude/fleet/logs/bootstrap.log" 2>/dev/null && break; sleep 0.1; done
 contains "R the detached bootstrap ran, without its doctor report (#4044)" "$(tail -n 1 "$WORK/bs.log" 2>/dev/null)" "doctor=0"
 contains "R its output in its own log, never this run's (#4196)" "$(cat "$RH/.claude/fleet/logs/bootstrap.log" 2>/dev/null)" "fleet: ok"
 contains "R its own name when none is given" "$OUT" "full-name=rex"
