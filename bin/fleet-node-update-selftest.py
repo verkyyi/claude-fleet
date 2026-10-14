@@ -1686,6 +1686,19 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(self.state()["admin_agents"]["frank"]["sha"], V2)
         self.assertIn(V2[:7].encode(), self.agent_bytes())          # the copy went back too
 
+    def test_handed_over_agent_is_not_followed(self):
+        """issue #3725: an old admin agent handed over to the seat (in the attic,
+        named in <state>/admin-handover.json) is never kickstarted again."""
+        st = self.env["FLEET_NODE_STATE"]
+        if not os.path.isdir(st):
+            os.makedirs(st)
+        self.wj(os.path.join(st, "admin-handover.json"),
+                {"frank": {"label": "com.ccquota.agent.frank", "attic": "x-1", "at": 1}})
+        self.install(V1)
+        self.assertEqual(self.kicks(), [], "a handed-over agent was restarted")
+        self.assertEqual(self.argv0("frank"), self.own)
+        self.assertEqual([r for r in self.rows() if "frank" in r], [], "a handed-over agent still has a doctor row")
+
     def test_seat_agent_follows_once_per_release(self):
         """issue #3724: the admin seat's own unit (com.claude-fleet.admin-agent /
         fleet-admin-agent.service) runs <root>/agent/ccquota, so a release moves

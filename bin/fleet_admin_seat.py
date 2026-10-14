@@ -56,6 +56,7 @@ FLEET_NODE_TEST=1 (no root, no chown).
 """
 import grp
 import hashlib
+import json
 import os
 import platform
 import plistlib
@@ -483,6 +484,29 @@ def token_live(hub, tok):
         return False if e.code in (401, 403) else None
     except (OSError, ValueError):
         return None
+
+
+def seat_connected(adir=None):
+    """(True, "") once the hub sees the seat's own agent connected — its
+    /v1/node/self row (asked with the seat's token) says connected — else
+    (False, why). What the old admin agent's handover waits for (issue #3725)."""
+    adir = adir or admin_dir()
+    hub, tp = conf_hub(adir), token_path(adir)
+    tok = read_token(tp) if token_file_ok(tp) else ""
+    if not hub or not tok:
+        return False, "the seat's agent has no %s yet" % ("hub" if not hub else "token")
+    req = urllib.request.Request(hub.rstrip("/") + SELF_PATH, headers={"Authorization": "Bearer " + tok})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            row = json.loads(r.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as e:
+        return False, "the hub answers HTTP %d for the seat's token" % e.code
+    except (OSError, ValueError) as e:
+        return False, "no answer from %s (%s)" % (hub, e)
+    if isinstance(row, dict) and row.get("connected") is True:
+        return True, ""
+    return False, "the hub does not see the seat's agent connected (status %s)" % (
+        row.get("status") if isinstance(row, dict) else "?")
 
 
 def state_ok(path):

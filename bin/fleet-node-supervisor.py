@@ -165,6 +165,14 @@ Usage:
                                                hand; one converge pass; --check is the
                                                doctor's row (0 ok · 1 WARN · 2 off)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
+  fleet-node-supervisor.py admin-handover [--dry-run]
+                                               the admin login's old node agent
+                                               (com.ccquota.agent.<admin> / ccquota-agent-<admin>
+                                               .service) into the attic once the seat's own
+                                               agent is connected and the old one's
+                                               account-ops.json holds nothing (issue #3725; the
+                                               sweep does it too, every 5 min while one waits):
+                                               0 none left · 3 waiting · 1 one would not unload
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|schedule|cred|ls|logs …
                                                the login-level register (#2525; writes as root,
@@ -1310,7 +1318,11 @@ def seats_check(cur):
     is up — C15·b #3696)."""
     say = lambda rs: "; ".join("%s: %s（%s）" % (r["login"], r["what"], " · ".join(r["where"])) for r in rs)
     if cur["machine"] or (cur["admin"] and cur["admin_role"]):
-        return 1, "个人账号在跑 fleet 整机 / 管理服务 — " + say(cur["machine"] + (cur["admin"] if cur["admin_role"] else []))
+        line = "个人账号在跑 fleet 整机 / 管理服务 — " + say(cur["machine"] + (cur["admin"] if cur["admin_role"] else []))
+        if cur["admin"] and cur["admin_role"]:
+            # the seat is up: the sweep hands the old one over once its book is empty (#3725)
+            line += "；旧管理员 agent 等手上的单做完就交接进 attic（sudo fleet-node-supervisor.py admin-handover）"
+        return 1, line
     if cur["admin"]:
         return 3, "管理员 agent 还在个人账号名下（%s 的 agent 还没起来，C15 #3696 把它搬过去）— %s" % (SEAT_ADMIN_ROLE, say(cur["admin"]))
     return 0, "没有个人账号在跑 fleet 整机或管理服务"
@@ -3123,7 +3135,11 @@ class Supervisor(object):
 
     # -- sweep
     def sweep_due(self, t):
-        return t - (self.state["sweep"].get("last") or 0) >= env_num("FLEET_NODE_SWEEP_EVERY", 3600)
+        every = env_num("FLEET_NODE_SWEEP_EVERY", 3600)
+        if self.state["sweep"].get("handover_waiting"):
+            # an old admin agent waits for its handover (#3725): look again soon
+            every = min(every, env_num("FLEET_NODE_HANDOVER_EVERY", 300))
+        return t - (self.state["sweep"].get("last") or 0) >= every
 
     def do_sweep(self, dry=False):
         if self.seated and not dry:
@@ -3143,7 +3159,10 @@ class Supervisor(object):
                       clientshell=res["clientshell"], extras=res["extra"], hold=res["hold"],
                       removed=len(res["removed"]),
                       total_removed=(sw.get("total_removed") or 0) + len(res["removed"]),
-                      purged=res["purged"], total_moved=(sw.get("total_moved") or 0) + len(res["moved"]))
+                      purged=res["purged"], total_moved=(sw.get("total_moved") or 0) + len(res["moved"]),
+                      handover_waiting=[w["login"] for w in (res.get("handover") or {}).get("waiting") or []])
+            for e in (res.get("handover") or {}).get("moved") or []:
+                self.log("old admin agent %s handed over: %s → attic %s" % (e.get("handover"), e.get("label"), e.get("id")))
             self.dirty = True
         return res
 
@@ -3802,14 +3821,16 @@ def _sweep(paths, dry=False):
                 h = _handwritten(paths, d, n, src)
                 if h and h["login"] in listed:
                     hand.append(h)
+    # the admin login's old node agent, once the seat's own is connected (#3725)
+    ho = admin_handover(paths, index, stamp, dry)
     purged = 0 if dry else attic_purge(paths, index)
-    if not dry and (moved or removed or purged):
+    if not dry and (moved or removed or purged or ho["moved"]):
         write_json(paths.attic_index, index, 0o600)
     shells = client_shell(paths, listed)
     if not dry and labels is not None:
         shells = retire_client_shells(paths, shells)
     return {"moved": moved, "extra": extra, "removed": removed, "purged": purged, "handwritten": hand,
-            "clientshell": shells, "hold": hold}
+            "clientshell": shells, "hold": hold, "handover": ho}
 
 
 def attic_purge(paths, index):
@@ -3842,10 +3863,214 @@ def attic_restore(paths, ident):
             shutil.rmtree(os.path.dirname(e["dst"]), ignore_errors=True)
             index.remove(e)
             write_json(paths.attic_index, index, 0o600)
+            if e.get("handover"):
+                # an old admin agent put back: the updater follows it again
+                handed = handed_over(paths)
+                handed.pop(e["handover"], None)
+                write_json(handover_path(paths), handed, 0o644)
             print("restored %s" % e["src"])
             return 0
     print("fleet-node-supervisor: no attic entry %s (see `attic list`)" % ident, file=sys.stderr)
     return 1
+
+
+# -- the old admin agent's handover (issue #3725, EPIC #3500 C15·b-4): once the
+# seat's own agent (com.claude-fleet.admin-agent, _fleetadmin — #3724) is connected
+# to the hub, which then sends account ops to it and none to the old one (C15·a),
+# the admin login's own com.ccquota.agent.<admin> (ccquota-agent-<admin>.service)
+# finishes what it holds — its account-ops.json's inflight AND outbox empty — and is
+# booted out into the attic like `account adopt`'s (kept, `attic restore <id>`).
+# A book with anything in it, or one root cannot read, leaves it running. Run by the
+# sweep (root's, the core's when seated) and by `fleet node install`'s step.
+def handover_path(paths):
+    return os.path.join(paths.state, "admin-handover.json")
+
+
+def handed_over(paths):
+    """{login: {label, attic, at}} of the old admin agents handed over — the
+    updater stops following them (fleet-node-update.py follow_admin_agents)."""
+    h = read_json(handover_path(paths), {})
+    return h if isinstance(h, dict) else {}
+
+
+OLD_ADMIN_UNIT = re.compile(r"^com\.ccquota\.agent\.([A-Za-z0-9._-]+)\.plist$" if MAC
+                            else r"^ccquota-agent-([A-Za-z0-9._-]+)\.service$")
+
+
+def _old_agent_argv(login, path):
+    """The old agent's own argv: the credential launcher's meta.json agent_argv
+    when it starts it (fleet-credsep-launch.py agent <login>), else the unit's."""
+    meta = read_json(os.path.join(env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred"), login, "meta.json"), None)
+    if isinstance(meta, dict) and meta.get("login") == login and isinstance(meta.get("agent_argv"), list):
+        return [str(a) for a in meta["agent_argv"]]
+    try:
+        with os.fdopen(open_ro(path), "rb") as f:
+            raw = f.read()
+    except OSError:
+        return []
+    if MAC:
+        try:
+            return [str(a) for a in plistlib.loads(raw).get("ProgramArguments") or []]
+        except Exception:
+            return []
+    m = re.search(r"^ExecStart=(.*)$", raw.decode("utf-8", "replace"), re.M)
+    return m.group(1).split() if m else []
+
+
+def _old_agent_book(argv, home):
+    """<StateDir>/account-ops.json of `ccquota agent` run with <argv>: its
+    --state (any flag spelling), else <home>/.ccquota (cmd/ccquota/hub.go)."""
+    state = os.path.join(home, ".ccquota")
+    for i, a in enumerate(argv):
+        k, eq, v = a.lstrip("-").partition("=")
+        if a.startswith("-") and k == "state":
+            state = v if eq else (argv[i + 1] if i + 1 < len(argv) else state)
+    return os.path.join(state, "account-ops.json")
+
+
+def old_admin_agents(paths):
+    """[{login, label, path, book}] — every admin login's own node agent unit
+    still in the system's unit directory."""
+    out = []
+    try:
+        names = sorted(os.listdir(paths.daemon_dir))
+    except OSError:
+        return out
+    for n in names:
+        m = OLD_ADMIN_UNIT.match(n)
+        p = os.path.join(paths.daemon_dir, n)
+        if not m or os.path.islink(p) or not os.path.isfile(p):
+            continue
+        login = m.group(1)
+        ident = account_ident(login)
+        if ident is None or not tenant_privileges(login)[0]:
+            continue      # not an admin's: a tenant's agent is account adopt's
+        out.append({"login": login, "label": n[:-len(".plist")] if MAC else n, "path": p,
+                    "book": _old_agent_book(_old_agent_argv(login, p), ident[2])})
+    return out
+
+
+def _book_pending(book):
+    """(n, why): n results / ops the book still holds; None when it cannot be read
+    (left alone). No book = an agent that never ran an op: nothing held."""
+    try:
+        with os.fdopen(open_ro(book), "rb") as f:
+            b = json.loads(f.read().decode("utf-8", "replace") or "{}")
+    except FileNotFoundError:
+        return 0, ""
+    except (OSError, ValueError) as e:
+        return None, "its book %s cannot be read (%s)" % (book, e)
+    if not isinstance(b, dict):
+        return None, "its book %s is not an object" % book
+    inf, out = b.get("inflight") or {}, b.get("outbox") or {}
+    n = (len(inf) if isinstance(inf, dict) else 1) + (len(out) if isinstance(out, dict) else 1)
+    return n, ("inflight %d · outbox %d" % (len(inf) if isinstance(inf, dict) else -1,
+                                            len(out) if isinstance(out, dict) else -1)) if n else ""
+
+
+def _seat_connected(paths):
+    """(True, "") once the seat's agent is connected; (False, why) otherwise."""
+    adir = os.path.join(paths.state, "admin")
+    if not os.path.isdir(adir) or os.path.islink(adir):
+        return False, "no admin seat (%s)" % adir
+    try:
+        import fleet_admin_seat
+    except ImportError:
+        return False, "fleet_admin_seat.py is not in this runtime"
+    return fleet_admin_seat.seat_connected(adir)
+
+
+def _handover_one(paths, a, index, ident_, dry):
+    """Boot one old admin agent out into the attic: the entry, or why it stays."""
+    if MAC:
+        e = _retire_unit(paths, paths.daemon_dir, a["path"], a["label"], index, ident_, dry)
+        if not isinstance(e, dict):
+            return e
+    else:
+        e = {"id": ident_, "src": a["path"], "dst": os.path.join(paths.attic, ident_, os.path.basename(a["path"])),
+             "label": a["label"], "domain": None, "unit": "systemd"}
+        if not dry:
+            systemctl("disable", "--now", a["label"])
+            if systemctl("is-active", "--quiet", a["label"]) == 0:
+                return "%s did not stop" % a["label"]
+            st = os.stat(a["path"])
+            os.makedirs(os.path.dirname(e["dst"]), 0o700)
+            shutil.move(a["path"], e["dst"])
+            systemctl("daemon-reload")
+            e.update(moved=now(), uid=st.st_uid, gid=st.st_gid, mode=st.st_mode & 0o7777)
+            index.append(e)
+    # kept like account adopt's (never purged): the way back is `attic restore`
+    e.update(keep=True, handover=a["login"])
+    return e
+
+
+def _handover_undo(paths, index, e):
+    _put_back(paths, e)
+    if e.get("unit") == "systemd":
+        systemctl("daemon-reload")
+        systemctl("enable", "--now", e["label"])
+    index.remove(e)
+
+
+def admin_handover(paths, index, stamp, dry=False):
+    """{"moved": [...], "waiting": [{login, why}], "seat": why-not-yet} — the
+    attic lock held, index the attic's (written by the caller)."""
+    olds = old_admin_agents(paths)
+    res = {"moved": [], "waiting": [], "seat": ""}
+    if not olds:
+        return res
+    up, why = _seat_connected(paths)
+    if not up:
+        res["seat"] = why
+        res["waiting"] = [{"login": a["login"], "why": "the seat's agent is not connected: %s" % why} for a in olds]
+        return res
+    handed = handed_over(paths)
+    for a in olds:
+        n, why = _book_pending(a["book"])
+        if n != 0:
+            res["waiting"].append({"login": a["login"], "why": why})
+            continue
+        e = _handover_one(paths, a, index, _attic_id(paths, stamp, index, len(res["moved"]) if dry else 0), dry)
+        if not isinstance(e, dict):
+            res["waiting"].append({"login": a["login"], "why": e, "stuck": True})
+            continue
+        if not dry and _book_pending(a["book"])[0] != 0:
+            # an op reached it between the read and the bootout: it goes back,
+            # its restart resumes the op (node_accounts.go), the next sweep retries
+            _handover_undo(paths, index, e)
+            res["waiting"].append({"login": a["login"], "why": "an op arrived while it was stopping — put back",
+                                   "stuck": True})
+            continue
+        res["moved"].append(e)
+        handed[a["login"]] = {"label": a["label"], "attic": e["id"], "at": now()}
+    if res["moved"] and not dry:
+        write_json(handover_path(paths), handed, 0o644)
+    return res
+
+
+def admin_handover_cli(paths, dry=False):
+    """`admin-handover [--dry-run]`: 0 nothing left to hand over (or handed over
+    now) · 3 waiting (the seat's agent not connected, or a book not empty) · 1 an
+    old agent that would not unload. One line each."""
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        print("fleet-node-supervisor: admin-handover boots a system unit out — run it as root (sudo)",
+              file=sys.stderr)
+        return 2
+    with attic_lock(paths):
+        index = read_json(paths.attic_index, [])
+        res = admin_handover(paths, index, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), dry)
+        if res["moved"] and not dry:
+            write_json(paths.attic_index, index, 0o600)
+    for e in res["moved"]:
+        print("%s %s/%s → attic %s (attic restore %s puts it back)"
+              % ("would hand over" if dry else "handed over", e["domain"], e["label"], e["dst"], e["id"]))
+    for w in res["waiting"]:
+        print("waiting: %s's old admin agent stays — %s" % (w["login"], w["why"]))
+    if not res["moved"] and not res["waiting"]:
+        print("no old admin agent here")
+    if any(w.get("stuck") for w in res["waiting"]):
+        return 1
+    return 3 if res["waiting"] else 0
 
 
 # --------------------------------------------------------------- adopt / release --
@@ -7842,13 +8067,20 @@ def main(argv):
         for c in res["clientshell"]:
             print("clientshell (%s): %s" % ("would retire" if dry and os.path.exists(paths.expected)
                                             else "left in place", client_shell_says(c, paths)))
+        for x in (res.get("handover") or {}).get("moved") or []:
+            print("%s old admin agent %s -> attic %s" % ("would hand over" if dry else "handed over", x["label"], x["id"]))
+        for w in (res.get("handover") or {}).get("waiting") or []:
+            print("old admin agent of %s left running: %s" % (w["login"], w["why"]))
         return 0
+    if cmd == "admin-handover":
+        return admin_handover_cli(paths, dry="--dry-run" in rest)
     if cmd == "attic":
         sub = rest[0] if rest else "list"
         if sub == "list":
             for e in read_json(paths.attic_index, []):
                 print("%s  %s  moved %s%s" % (e["id"], e["src"], iso(e.get("moved")),
-                                              "  (account %s, kept)" % e["account"] if e.get("keep") else ""))
+                                              ("  (old admin agent of %s, kept)" % e["handover"]) if e.get("handover")
+                                              else ("  (account %s, kept)" % e.get("account")) if e.get("keep") else ""))
             return 0
         if sub == "restore" and len(rest) > 1:
             return attic_restore(paths, rest[1])

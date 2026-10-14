@@ -2670,6 +2670,10 @@ def agent_reload(login, R):
     if s:
         path, label = (s["path"], s["label"]) if s["kind"] != "launchd-gui" else \
             (os.path.join(DAEMON_DIR, "com.ccquota.agent.%s.plist" % login), "com.ccquota.agent.%s" % login)
+        if not os.path.isfile(path):
+            # an admin's old agent handed over to the seat (issue #3725): in the attic
+            say("agent: %s is not installed (handed over?) — nothing to restart" % label)
+            return
         load_daemon(path, label)
         say("agent: %s restarted through the launcher" % label)
     else:
