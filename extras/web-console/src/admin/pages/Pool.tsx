@@ -389,7 +389,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
         )}
         <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2.5 text-sm">
           <Field k="pool.plan.raw">{r.plan || "—"}{r.planTier && ` · ${r.planTier}`}</Field>
-          <Field k="pool.plan.source">{t(r.planSource === "provider" ? "pool.plan.provider" : r.planSource === "admin" ? "pool.plan.admin" : "pool.plan.legacy")}</Field>
+          <Field k="pool.plan.source">{t(!r.plan ? "pool.plan.none" : r.planSource === "provider" ? "pool.plan.provider" : r.planSource === "admin" ? "pool.plan.admin" : "pool.plan.legacy")}</Field>
           <Field k="pool.plan.observed">{r.planAt ? when(r.planAt) : t("pool.plan.none")}</Field>
           <Field k="pool.web.expiry">{r.cred?.secret_expires_at ? when(r.cred.secret_expires_at) : t("pool.plan.none")}</Field>
           <WindowField k="pool.d.h5" w={r.h5} skip={world.skip} />

@@ -164,8 +164,8 @@ func TestAdminSubsTokenValidationDuplicateUpdateAndRefresh(t *testing.T) {
 	}
 	status.Store(200)
 	code, out := adminSubsCall(t, h, "admin", AdminSubsTokenPath, args("one", "sk-ant-oat01-valid", false))
-	if code != 200 {
-		t.Fatalf("valid: %d %v", code, out)
+	if code != 200 || out["quota"] != "ready" {
+		t.Fatalf("initial quota without UUID: %d %v", code, out)
 	}
 	c, _ := h.srv.Store.Credential("pool", "claude", "one")
 	if c.SecretExpiresAt != nil {
@@ -187,10 +187,7 @@ func TestAdminSubsTokenValidationDuplicateUpdateAndRefresh(t *testing.T) {
 	if err != nil || acc.AccessToken != "sk-ant-oat01-new" {
 		t.Fatal("replacement not saved")
 	}
-	// UUID compatibility lets this assertion run both before and after #4205.
-	if err := h.srv.Vault.BindAccountUUID("pool", "claude", "one", aliceSubUUID); err != nil {
-		t.Fatal(err)
-	}
+	// Refresh uses the same credential identity, with no account UUID binding.
 	code, out = adminSubsCall(t, h, "admin", AdminSubsRefreshPath, map[string]any{"provider": "claude", "account": "one"})
 	if code != 200 || out["quota"] != "ready" {
 		t.Fatalf("refresh: %d %v", code, out)
