@@ -798,6 +798,13 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual((env['FLEET_NODE_PROFILE'], env['FLEET_DOOR'], env['FLEET_ENTRY'], env['FLEET_ENTRY_PORT']),
                          ('door', '1', '1', '22022'))
         self.assertIn({'name': 'secret', 'secret': {'secretName': 'fleet-door', 'defaultMode': 0o400}}, pod['volumes'])
+        self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', env)
+        # the load balancer's address, once it has one: the door's reach knocks
+        # there, not on the NAT (#4112)
+        lb = json.loads(subprocess.check_output([sys.executable, str(render), '--door', '--image', img,
+                                                 '--hub', 'https://hub.example', '--entry-host', '203.0.113.7']))['items'][1]
+        lbenv = {e['name']: e['value'] for e in lb['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(lbenv['CCQUOTA_FLEET_NODE_ROUTES'], 'entry=203.0.113.7:22022')
         for bad in (['--image', 'example/image:latest', '--hub', 'https://hub.example'],
                     ['--image', img, '--hub', 'http://hub.example'], ['--image', img, '--hub', 'https://h', '--door-replicas', '9']):
             self.assertNotEqual(subprocess.run([sys.executable, str(render), '--door'] + bad, capture_output=True).returncode, 0, bad)
@@ -837,6 +844,45 @@ class LinuxNode(unittest.TestCase):
             self.assertIn('FLEET_DOOR=1\n', me)
             Path(d, 'token').write_text('bad token\n')
             self.assertRaises(ValueError, lin.door_env, 'https://hub.example', d)
+        # the door runs its own `entry reach` (#4112): none at the start, the
+        # first a minute on, one at a time, then every FLEET_ENTRY_REACH_EVERY
+        t = [1000.0]
+
+        class FakeLoop(object):
+            def bin(self):
+                return Path('/rt/current/bin')
+        runs = []
+
+        class Proc(object):
+            def __init__(self, argv, **_kw):
+                runs.append(argv)
+                self.done = False
+
+            def poll(self):
+                return 0 if self.done else None
+        with patch.object(lin.subprocess, 'Popen', Proc), patch.dict(os.environ, {'FLEET_ENTRY_REACH_EVERY': '300'}):
+            r = lin.DoorReach(FakeLoop(), clock=lambda: t[0])
+            r.tick()
+            self.assertEqual(runs, [])
+            t[0] += 60
+            r.tick()
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0][-3:], [str(Path('/rt/current/bin/fleet-node-supervisor.py').resolve()), 'entry', 'reach'])
+            t[0] += 400
+            r.tick()
+            self.assertEqual(len(runs), 1)          # the last one still running
+            r.proc.done = True
+            r.tick()
+            self.assertEqual(len(runs), 2)
+            r.proc.done = True
+            t[0] += 100
+            r.tick()
+            self.assertEqual(len(runs), 2)          # not due yet
+        with patch.object(lin.subprocess, 'Popen', Proc), patch.dict(os.environ, {'FLEET_ENTRY_REACH_EVERY': '0'}):
+            r = lin.DoorReach(FakeLoop(), clock=lambda: t[0])
+            t[0] += 10000
+            r.tick()
+            self.assertEqual(len(runs), 2)          # 0 = off
         pol = (BIN.parent / 'deploy/k8s/fleet-workers/networkpolicy.yaml').read_text()
         for name in ('door-in', 'door-out'):
             self.assertIn('  name: %s\n' % name, pol)
