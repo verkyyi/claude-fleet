@@ -467,6 +467,15 @@ func (s *Store) CountTrialMsg(pid string, max int, now time.Time) (n int, ok boo
 	return n, true, tx.Commit()
 }
 
+// UncountTrialMsg gives back a line CountTrialMsg took for a turn that got no
+// reply (claude-fleet#4248): the relay never reached the service, or it ended
+// on an error frame. The line is no longer the last one, so capped_at goes too.
+func (s *Store) UncountTrialMsg(pid string) error {
+	_, err := s.write.Exec(`UPDATE fleet_trials SET msgs = msgs - 1, capped_at = 0
+		WHERE principal = ? AND state = ? AND msgs > 0`, pid, TrialPlaced)
+	return err
+}
+
 // SpentTrials are the placed trials whose budget is spent at now: maxSecs of
 // a machine, or the last line sent at least grace ago.
 func (s *Store) SpentTrials(now time.Time, maxSecs int64, grace time.Duration) ([]Trial, error) {

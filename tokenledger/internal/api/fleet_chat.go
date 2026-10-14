@@ -281,11 +281,19 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.chatGate.release(person)
+	// A trial line counted for this turn goes back when the turn gets no reply
+	// (claude-fleet#4248); nil for anything else.
+	var refund func(why string)
 	if name == "turn" {
 		// A trial's lines and time (claude-fleet#4059): past either, no more.
-		if code, msg := s.trialTurn(w, person, time.Now()); code != "" {
+		code, msg, counted := s.trialTurn(w, person, time.Now())
+		if code != "" {
 			s.chatRefuse(w, person, name, http.StatusForbidden, code, msg)
 			return
+		}
+		if counted {
+			var once sync.Once
+			refund = func(why string) { once.Do(func() { s.trialRefund(person, why) }) }
 		}
 	}
 	if r.Body != nil {
@@ -334,7 +342,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Transport: tr,
 		// NDJSON: each line reaches the page as the service writes it.
 		FlushInterval: -1,
+		ModifyResponse: func(resp *http.Response) error {
+			if refund == nil {
+				return nil
+			}
+			if resp.StatusCode != http.StatusOK {
+				refund("the service refused the turn: " + resp.Status)
+				return nil
+			}
+			resp.Body = &turnWatch{ReadCloser: resp.Body, onFail: func() { refund("the turn ended on an error") }}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if refund != nil && r.Context().Err() == nil {
+				refund("the relay did not reach the service")
+			}
 			mu.Lock()
 			derr := dialErr
 			mu.Unlock()
