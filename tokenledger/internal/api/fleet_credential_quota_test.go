@@ -49,7 +49,7 @@ func TestCredentialQuotaIsolation(t *testing.T) {
 			return
 		}
 		n := fraction.Load()
-		if strings.Contains(r.Header.Get("Authorization"), "fixture-b") {
+		if r.Header.Get("Authorization") == "Bearer sk-ant-oat01-fixture-b" {
 			n = 100
 		}
 		w.Header().Set("anthropic-ratelimit-unified-5h-utilization", fmt.Sprintf("%.2f", float64(n)/100))
