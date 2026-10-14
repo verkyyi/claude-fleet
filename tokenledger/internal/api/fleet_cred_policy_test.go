@@ -118,7 +118,7 @@ func TestCredPolicyNodeUserIntersection(t *testing.T) {
 		t.Fatalf("recheck_secs = %d", resp.RecheckSecs)
 	}
 	for _, c := range resp.Withdrawn {
-		if c.Account == "legacy" && !strings.Contains(c.Error, "no account UUID") {
+		if c.Account == "legacy" && !strings.Contains(c.Error, "not in machine mac-c's allowlist") {
 			t.Fatalf("legacy's reason: %q", c.Error)
 		}
 		if c.Account == "icloud" && !strings.Contains(c.Error, "not in machine mac-c's allowlist") {

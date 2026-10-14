@@ -492,7 +492,18 @@ func TestTwoReplicasRefreshOnce(t *testing.T) {
 		b := &Vault{Store: a.Store, Sealer: a.Sealer, Refresher: r}
 		var mu sync.Mutex
 		if shared {
-			cross := func(context.Context, string) (func(), error) { mu.Lock(); return mu.Unlock, nil }
+			locks := map[string]*sync.Mutex{}
+			cross := func(_ context.Context, name string) (func(), error) {
+				mu.Lock()
+				l := locks[name]
+				if l == nil {
+					l = &sync.Mutex{}
+					locks[name] = l
+				}
+				mu.Unlock()
+				l.Lock()
+				return l.Unlock, nil
+			}
 			a.CrossLock, b.CrossLock = cross, cross
 			a.Replica, b.Replica = "hub-a", "hub-b"
 		}

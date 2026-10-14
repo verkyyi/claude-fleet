@@ -49,8 +49,10 @@ type LimitsView struct {
 	// the hub's failed (claude-fleet#2169). Both stay empty unless the hub
 	// reads quota itself (CCQUOTA_FLEET_HUB_QUOTA), so the view is unchanged
 	// without it.
-	ReadVia  string `json:"read_via,omitempty"`
-	ReadNote string `json:"read_note,omitempty"`
+	ReadVia       string     `json:"read_via,omitempty"`
+	ReadNote      string     `json:"read_note,omitempty"`
+	ReadStatus    string     `json:"read_status,omitempty"`
+	ReadAttemptAt *time.Time `json:"read_attempt_at,omitempty"`
 
 	FiveHour *WindowView `json:"five_hour,omitempty"`
 	SevenDay *WindowView `json:"seven_day,omitempty"`

@@ -2760,6 +2760,14 @@ drill_trial_slot_held() {
   SECS=$(since "$t0")
 }
 
+drill_credential_quota_unbound() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests fleet_credential_quota_test.go TestCredentialQuotaUnbound TestCredentialQuotaIsolation || return 1
+  WHAT='无 UUID 的 OAuth 凭据独立计量；重复 Token 去重、换 Token 不继承旧读数（Go 门验证）'
+  SECS=$(since "$t0")
+}
+
 # ---- drill-trial-escape (#4215): a drill trier — the stand-in stranger an
 # admin mints so the isolated drill (#4061) walks the trial without a real
 # scan — must not outgrow it: its code replayed, minted by a non-admin, landing

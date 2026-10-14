@@ -122,7 +122,7 @@ function Bar({ w, skip, wide }: { w: Window | null; skip: number; wide?: boolean
 const kindOf = (s: Sub) => s.plan || (s.prov === "codex" ? "Codex" : "Claude");
 // ownerName is a member's own subscription's owner as the people page names them (claude-fleet#4035).
 const ownerName = (w: World, principal: string) => w.users.find((u) => u.principal_id === principal)?.login || principal;
-const uuidOf = (s: Sub) => (s.id.startsWith("cred:") || s.id.startsWith("own:") ? String(s.cred?.account_uuid || "").toLowerCase() : s.id.toLowerCase());
+const uuidOf = (s: Sub) => s.cred?.account_uuid || s.cred?.credential_id || (s.id.startsWith("cred:") || s.id.startsWith("own:") ? String(s.cred?.account_uuid || "").toLowerCase() : s.id.toLowerCase());
 
 // whoText is the table's 谁能用: the people and the nodes the policy lets use
 // the subscription, in a few words.
@@ -381,12 +381,15 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
           <Field k="pool.d.cred">
             <span className={CRED_TONE[cs.tone]}>{t(`pool.cred.${cs.key}` as MsgKey, { when: when(cs.at) })}</span>
           </Field>
-          {r.readAt && (
+          {(r.readAt || r.readStatus || r.readNote) && (
             <Field k="pool.d.read">
               <span title={r.readNote}>
-                {ago(r.readAt)}
+                {r.readAt ? ago(r.readAt) : t("pool.d.unread")}
                 {r.readVia && ` · ${t(r.readVia === "hub" ? "pool.d.viaHub" : "pool.d.viaNode")}`}
               </span>
+              {r.readStatus === "failed" && <span className="block text-destructive">{t("pool.d.readFailed")}{r.readAttemptAt && ` · ${ago(r.readAttemptAt)}`}</span>}
+              {r.readStatus === "stale" && <span className="block text-muted-foreground">{t("pool.d.stale")}</span>}
+              {r.readNote && <span className="block text-xs text-muted-foreground">{r.readNote}</span>}
             </Field>
           )}
           <Field k="pool.d.sessions">

@@ -18,10 +18,13 @@ export type LimitsBody = {
   observed_at?: string;
   read_via?: string;
   read_note?: string;
+  read_status?: string;
+  read_attempt_at?: string;
 };
 export type AccountLimits = { account_uuid: string; label?: string; limits?: LimitsBody };
 export type Account = { account_uuid: string; label?: string; display_name?: string; email?: string; source?: string; subscription_type?: string };
 export type PoolCredential = Credential & {
+  limits?: LimitsBody;
   reauth_required?: boolean;
   refresh_error?: string;
   secret_expires_at?: string;
@@ -40,6 +43,7 @@ export type LiveSession = {
 export type AccountSwitch = { from_account?: string; to_account?: string; observed_at?: string; endpoint_id?: string };
 // /v1/admin/overview's pool rows (claude-fleet#3231)
 export type OverviewPool = {
+  credential_id?: string;
   owner: string;
   provider: string;
   account: string;
@@ -72,6 +76,8 @@ export type Sub = {
   readAt: string;
   readVia: string;
   readNote: string;
+  readStatus?: string;
+  readAttemptAt?: string;
   // a member's own subscription (claude-fleet#4035): its owner's principal; "" = the pool's
   owner: string;
   // from /v1/admin/overview when it answers
@@ -92,7 +98,7 @@ export function pct(u: unknown): number | null {
 }
 
 // windowsOf is a LimitsView's 5-hour and weekly windows, Codex's included.
-export function windowsOf(lim?: LimitsBody): { h5: Window | null; h7: Window | null } {
+export function windowsOf(lim?: LimitsBody, percent = false): { h5: Window | null; h7: Window | null } {
   if (!lim || lim.available === false) return { h5: null, h7: null };
   let h5 = lim.five_hour || null;
   let h7 = lim.seven_day || null;
@@ -101,7 +107,7 @@ export function windowsOf(lim?: LimitsBody): { h5: Window | null; h7: Window | n
     if (!h5 && (mins === 300 || /5h|five|primary/i.test(w.id || w.label || ""))) h5 = w;
     else if (!h7 && (mins === 10080 || /week|seven|secondary/i.test(w.id || w.label || ""))) h7 = w;
   }
-  const v = (w: any): Window | null => (w ? { p: pct(w.utilization), resets: w.resets_at || null } : null);
+  const v = (w: any): Window | null => (w ? { p: percent && w.utilization != null ? Math.min(100, Math.max(0, Number(w.utilization))) : pct(w.utilization), resets: w.resets_at || null } : null);
   return { h5: v(h5), h7: v(h7) };
 }
 
@@ -109,14 +115,10 @@ export const provOf = (uuid: string, source?: string): Prov =>
   String(source || "").toLowerCase() === "codex" || String(uuid || "").startsWith("codex:") ? "codex" : "claude";
 const credProv = (c: Credential): Prov => (c.provider === "codex" ? "codex" : "claude");
 export const isStandIn = (uuid: string) => /^win_/.test(String(uuid || "")) || /:local$/.test(String(uuid || ""));
-const credKey = (c: Credential) => `${c.provider}/${c.account}`;
+const credKey = (c: Credential) => `${c.principal_id || "pool"}/${c.provider}/${c.account}`;
 
-// subscriptions joins usage, accounts, the vault's pool credentials, the
-// paused list and live sessions into one row per subscription — the old
-// page's join, pass for pass (claude-fleet#2104 · #2127): by identity, then
-// exactly by label / e-mail / uuid, then a unique e-mail domain, then one
-// credential and one real account of a provider. A guess that fits two
-// accounts matches neither.
+// The vault's credential identity is the only metering join. An upstream UUID
+// remains optional; labels, e-mail domains and reset schedules are display data.
 export function subscriptions(p: {
   limits?: { per_account?: AccountLimits[] } | null;
   accounts?: Account[] | null;
@@ -124,106 +126,42 @@ export function subscriptions(p: {
   paused?: string[];
   live?: { sessions?: LiveSession[] } | null;
 }): Sub[] {
-  const per = Array.isArray(p.limits?.per_account) ? p.limits!.per_account! : [];
-  const accts = new Map((Array.isArray(p.accounts) ? p.accounts : []).map((a) => [a.account_uuid, a]));
-  const pool = (p.creds?.credentials || []).filter((c) => c.principal_id === "pool" && c.provider !== "github");
-  // members' own (claude-fleet#4035): shown, each with its owner, never matched as the pool's
-  const own = (p.creds?.credentials || []).filter((c) => c.principal_id && c.principal_id !== "pool" && c.provider !== "github");
-  const pausedSet = new Set((p.creds?.paused || p.paused || []).map(String));
-  const n: Record<string, number> = {};
-  for (const s of p.live?.sessions || []) if (s.account) n[s.account] = (n[s.account] || 0) + 1;
-  const used = new Set<string>();
-  type R = { pa: AccountLimits; a: Account | Record<string, never>; label: string; prov: Prov; cred: PoolCredential | null; owner?: string };
-  const rows: R[] = per.map((pa) => {
-    const a: any = accts.get(pa.account_uuid) || {};
-    const label = pa.label || a.label || a.display_name || a.email || pa.account_uuid;
-    return { pa, a, label, prov: provOf(pa.account_uuid, pa.limits?.source || a.source), cred: null };
-  });
-  const take = (r: R, c: PoolCredential) => {
-    r.cred = c;
-    used.add(credKey(c));
+  const per = p.limits?.per_account || [];
+  const accounts = new Map((p.accounts || []).map(a => [a.account_uuid, a]));
+  const paused = new Set(p.creds?.paused || p.paused || []);
+  const linked = new Set<string>();
+  const seen = new Set<string>();
+  const out: Sub[] = [];
+  const make = (id: string, label: string, prov: Prov, lim: LimitsBody | undefined, c: PoolCredential | null): Sub => {
+    const w = windowsOf(lim, !!c?.credential_id);
+    const owner = c && c.principal_id !== "pool" ? c.principal_id || "" : "";
+    return { id, label, prov, plan: lim?.plan || "", h5: w.h5, h7: w.h7,
+      available: !!lim && lim.available !== false, reason: lim?.reason || "",
+      sessions: (p.live?.sessions || []).filter(s => s.account === id).length,
+      cred: c, paused: !!c && !owner && paused.has(c.account), managed: !!c,
+      readAt: lim?.observed_at || "", readVia: lim?.read_via || "",
+      readNote: lim?.read_note || (lim?.read_status === "unknown" ? "No quota reading yet" : lim?.read_status === "stale" ? "Quota reading is stale" : ""),
+      readStatus: lim?.read_status, readAttemptAt: lim?.read_attempt_at,
+      owner, people: [], limited: false, reauth: false };
   };
-  const free = (prov: Prov) => pool.filter((c) => !used.has(credKey(c)) && credProv(c) === prov);
-  for (const r of rows) {
-    const c = free(r.prov).find((x) => x.account_uuid && x.account_uuid === r.pa.account_uuid);
-    if (c) take(r, c);
+  for (const c of p.creds?.credentials || []) {
+    if (c.provider === "github") continue;
+    const id = c.credential_id || c.account_uuid || "cred:" + credKey(c);
+    // Scope even legacy identities: two owners never borrow each other's row.
+    const key = `${c.principal_id}/${c.provider}/${id}`;
+    if (c.account_uuid) linked.add(c.account_uuid);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const old = !c.credential_id && c.account_uuid ? per.find(a => a.account_uuid === c.account_uuid) : undefined;
+    out.push(make(id, c.account, credProv(c), c.limits || old?.limits, c));
   }
-  for (const r of rows) {
-    if (r.cred) continue;
-    const email = (r.a as Account).email;
-    const keys = [norm(r.label), norm(email), norm(String(email || "").split("@")[0]), norm(r.pa.account_uuid)];
-    const c = free(r.prov).find((x) => keys.includes(norm(x.account)));
-    if (c) take(r, c);
+  for (const a of per) {
+    if (linked.has(a.account_uuid) || a.account_uuid.startsWith("cred:")) continue;
+    const meta = accounts.get(a.account_uuid);
+    out.push(make(a.account_uuid, a.label || meta?.label || meta?.display_name || meta?.email || a.account_uuid,
+      provOf(a.account_uuid, a.limits?.source || meta?.source), a.limits, null));
   }
-  const domainOf = (email?: string) => {
-    const d = norm(String(email || "").split("@")[1]);
-    return d ? [d, d.split(".")[0]] : [];
-  };
-  for (const c of pool) {
-    if (used.has(credKey(c))) continue;
-    const fit = rows.filter((r) => !r.cred && r.prov === credProv(c) && domainOf((r.a as Account).email).includes(norm(c.account)));
-    if (fit.length === 1) take(fit[0], c);
-  }
-  for (const prov of ["claude", "codex"] as const) {
-    const cs = pool.filter((c) => credProv(c) === prov);
-    const real = rows.filter((r) => r.prov === prov && !isStandIn(r.pa.account_uuid));
-    if (cs.length === 1 && real.length === 1 && !used.has(credKey(cs[0])) && !real[0].cred) take(real[0], cs[0]);
-  }
-  // a member's own credential takes the usage row of its account, when the pool did not
-  const ownLeft = own.filter((c) => {
-    const r = c.account_uuid ? rows.find((x) => !x.cred && x.pa.account_uuid === c.account_uuid) : undefined;
-    if (r) Object.assign(r, { cred: c, owner: c.principal_id, label: c.account });
-    return !r;
-  });
-  const base = { people: [] as string[], limited: false, reauth: false, owner: "" };
-  const out: Sub[] = rows.map(({ pa, label, prov, cred, a, owner }) => {
-    const w = windowsOf(pa.limits);
-    return {
-      ...base,
-      id: pa.account_uuid,
-      label,
-      prov,
-      plan: pa.limits?.plan || (a as Account).subscription_type || "",
-      h5: w.h5,
-      h7: w.h7,
-      available: !!(pa.limits && pa.limits.available !== false),
-      reason: pa.limits?.reason || "",
-      sessions: n[pa.account_uuid] || 0,
-      cred,
-      owner: owner || "",
-      paused: !!(cred && !owner && pausedSet.has(cred.account)),
-      managed: !!cred,
-      readAt: pa.limits?.observed_at || "",
-      readVia: pa.limits?.read_via || "",
-      readNote: pa.limits?.read_note || "",
-    };
-  });
-  for (const c of [...pool.filter((x) => !used.has(credKey(x))), ...ownLeft]) {
-    const mine = c.principal_id !== "pool";
-    out.push({
-      ...base,
-      id: mine ? `own:${c.principal_id}/${credKey(c)}` : "cred:" + credKey(c),
-      label: c.account,
-      prov: credProv(c),
-      plan: "",
-      h5: null,
-      h7: null,
-      available: false,
-      reason: "",
-      sessions: 0,
-      cred: c,
-      owner: mine ? c.principal_id || "" : "",
-      paused: !mine && pausedSet.has(c.account),
-      managed: true,
-      readAt: "",
-      readVia: "",
-      readNote: "",
-    });
-  }
-  // the pool's own first (Claude, then Codex, by name); what it does not manage last
-  return out.sort(
-    (x, y) => Number(y.managed) - Number(x.managed) || (x.prov === y.prov ? x.label.localeCompare(y.label) : x.prov === "claude" ? -1 : 1),
-  );
+  return out.sort((x,y) => Number(y.managed)-Number(x.managed) || (x.prov === y.prov ? x.label.localeCompare(y.label) : x.prov === "claude" ? -1 : 1));
 }
 
 // withOverview lays /v1/admin/overview's pool over the rows, joined by
@@ -232,16 +170,16 @@ export function subscriptions(p: {
 // state. A hub without it keeps the rows as they were.
 export function withOverview(subs: Sub[], pool: OverviewPool[] | null | undefined): Sub[] {
   if (!Array.isArray(pool)) return subs;
-  const by = new Map(pool.filter((s) => s.owner === "pool" && s.provider !== "github").map((s) => [`${s.provider}/${s.account}`, s]));
+  const by = new Map(pool.filter(s => s.provider !== "github").map(s => [s.credential_id || `${s.owner}/${s.provider}/${s.account}`, s]));
   return subs.map((s) => {
-    const o = s.cred ? by.get(credKey(s.cred)) : undefined;
+    const o = s.cred ? by.get(s.cred.credential_id || credKey(s.cred)) : undefined;
     if (!o) return s;
     const u5 = pct(o.used_5h_pct);
     const u7 = pct(o.used_7d_pct);
     return {
       ...s,
-      h5: u5 == null ? s.h5 : { p: u5, resets: o.resets_5h_at || s.h5?.resets || null },
-      h7: u7 == null ? s.h7 : { p: u7, resets: o.resets_at || s.h7?.resets || null },
+      h5: s.cred?.credential_id || u5 == null ? s.h5 : { p: u5, resets: o.resets_5h_at || s.h5?.resets || null },
+      h7: s.cred?.credential_id || u7 == null ? s.h7 : { p: u7, resets: o.resets_at || s.h7?.resets || null },
       sessions: o.sessions ?? s.sessions,
       people: Array.isArray(o.people) ? o.people : [],
       limited: o.state === "limited",

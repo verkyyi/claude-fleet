@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -113,9 +114,11 @@ type credPolicy struct {
 // normSubID is a subscription ID as compared: a Claude UUID lowercased.
 func normSubID(id string) string { return strings.ToLower(strings.TrimSpace(id)) }
 
-// validSubID is a Claude account UUID or a Codex account ID.
+var credentialIDRE = regexp.MustCompile(`^cred:[0-9a-f]{64}$`)
+
+// validSubID accepts credential identities and verified upstream accounts.
 func validSubID(id string) bool {
-	return claudeAccountUUIDRE.MatchString(id) || codexAccountUUIDRE.MatchString(id)
+	return claudeAccountUUIDRE.MatchString(id) || codexAccountUUIDRE.MatchString(id) || credentialIDRE.MatchString(id)
 }
 
 // parseCredAllow reads one stored value: a JSON list of subscription IDs.
@@ -222,7 +225,7 @@ func credPolicyOf(settings map[string]string, machine, principal string) credPol
 func (p credPolicy) Restricted() bool { return p.Node.Set || p.User.Set || p.NodeUnknown }
 
 // check is "" when subscription uuid of provider may be used, else why not.
-func (p credPolicy) check(provider, uuid string) string {
+func (p credPolicy) check(provider, uuid string, aliases ...string) string {
 	if provider == credvault.GitHub || !p.Restricted() {
 		return ""
 	}
@@ -241,6 +244,10 @@ func (p credPolicy) check(provider, uuid string) string {
 		if !sc.a.Set || sc.a.All {
 			continue
 		}
+		allowed := sc.a.IDs[u]
+		for _, alias := range aliases {
+			allowed = allowed || sc.a.IDs[normSubID(alias)]
+		}
 		switch {
 		case sc.a.None:
 			return sc.what + " has no allowlist: every subscription denied until one is set"
@@ -250,7 +257,7 @@ func (p credPolicy) check(provider, uuid string) string {
 			return sc.what + "'s allowlist is empty: every subscription denied"
 		case u == "":
 			return "no account UUID recorded for it — it cannot match " + sc.what + "'s allowlist (record one: credentials action=bind)"
-		case !sc.a.IDs[u]:
+		case !allowed:
 			return "not in " + sc.what + "'s allowlist"
 		}
 	}
@@ -321,7 +328,8 @@ func (s *Server) credVerdict(c store.Credential, p credPolicy) (uuid, why string
 		return "", ""
 	}
 	if s.Vault != nil {
-		uuid = s.Vault.AccountUUID(c)
+		uuid = s.Vault.CredentialID(c)
+		return uuid, p.check(c.Provider, uuid, s.Vault.AccountUUID(c))
 	}
 	return uuid, p.check(c.Provider, uuid)
 }
@@ -499,7 +507,7 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 			if s.Vault != nil {
 				e.AccountUUID = s.Vault.AccountUUID(c)
 			}
-			e.Reason = pol.check(c.Provider, e.AccountUUID)
+			_, e.Reason = s.credVerdict(c, pol)
 			e.Allowed = e.Reason == ""
 			eff = append(eff, e)
 		}
@@ -699,10 +707,10 @@ func (s *Server) credPolicyEmptied(scope, id string, settings map[string]string,
 		if s.Vault != nil {
 			uuid = s.Vault.AccountUUID(c)
 		}
-		if oldA.permits(uuid) {
+		if oldA.permits(uuid) || (s.Vault != nil && oldA.permits(s.Vault.CredentialID(c))) {
 			before[c.Provider] = append(before[c.Provider], c.Account)
 		}
-		if newA.permits(uuid) {
+		if newA.permits(uuid) || (s.Vault != nil && newA.permits(s.Vault.CredentialID(c))) {
 			kept[c.Provider] = true
 		}
 	}

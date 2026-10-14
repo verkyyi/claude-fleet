@@ -17,13 +17,17 @@ const weekly429 = `{"type":"error","error":{"type":"rate_limit_error","message":
 
 // atLimit stores a reading for the account the vault label names: the
 // seven-day window at pct, resetting at reset.
-func atLimit(t *testing.T, r *cpRig, label string, pct float64, reset time.Time) {
+func atLimit(t *testing.T, r *cpRig, owner, label string, pct float64, reset time.Time) {
 	t.Helper()
 	id := model.Identity{Source: "claude", AccountUUID: "uuid-" + label, Email: label + "@example.com"}
 	if err := r.h.srv.Store.UpsertAccount(id, "max", ""); err != nil {
 		t.Fatal(err)
 	}
-	snap := &model.LimitsSnapshot{AccountUUID: id.AccountUUID, ObservedAt: time.Now()}
+	c, err := r.h.srv.Store.Credential(owner, credvault.Claude, label)
+	if err != nil || c == nil {
+		t.Fatal("missing credential", err)
+	}
+	snap := &model.LimitsSnapshot{AccountUUID: r.h.srv.Vault.CredentialID(*c), ObservedAt: time.Now()}
 	snap.SevenDay.Utilization, snap.SevenDay.ResetsAt = pct, &reset
 	if err := r.h.srv.Store.InsertLimits(snap); err != nil {
 		t.Fatal(err)
@@ -50,7 +54,7 @@ func (r *cpRig) upCount() int {
 func TestSessionPickSkipsAccountAtLimit(t *testing.T) {
 	r := newCPRig(t)
 	soon := time.Now().Add(48 * time.Hour)
-	atLimit(t, r, "acct1", 100, soon)
+	atLimit(t, r, "gh:1005", "acct1", 100, soon)
 	credA, widA := r.issue(t, fidA)
 	if st, body := r.call(t, credvault.Claude, credA); st != 200 {
 		t.Fatalf("A → %d %s", st, body)
@@ -63,7 +67,7 @@ func TestSessionPickSkipsAccountAtLimit(t *testing.T) {
 	}
 
 	// every account full: the pick falls back to the old order (acct1)
-	atLimit(t, r, "acct2", 100, soon)
+	atLimit(t, r, "gh:1005", "acct2", 100, soon)
 	credB, widB := r.issue(t, fidB)
 	r.call(t, credvault.Claude, credB)
 	if acct, _ := r.boundTo(t, widB); acct != "acct1" {
@@ -72,7 +76,7 @@ func TestSessionPickSkipsAccountAtLimit(t *testing.T) {
 
 	// a window that has reset is not full
 	r2 := newCPRig(t)
-	atLimit(t, r2, "acct1", 100, time.Now().Add(-time.Minute))
+	atLimit(t, r2, "gh:1005", "acct1", 100, time.Now().Add(-time.Minute))
 	credC, widC := r2.issue(t, fidA)
 	r2.call(t, credvault.Claude, credC)
 	if acct, _ := r2.boundTo(t, widC); acct != "acct1" {
@@ -182,5 +186,29 @@ func TestCredProxyRebindOnce(t *testing.T) {
 	}
 	if st, _ := sessDo(t, r.h, http.MethodPost, CredProxyRebindPath, "wrong", "", req); st != 401 {
 		t.Fatalf("wrong token → %d", st)
+	}
+}
+
+// A delayed report from the proxy's old cache cannot limit a replacement token.
+func TestCredProxyOldIdentityCannotLimitReplacement(t *testing.T) {
+	r := newCPRig(t)
+	pass, wid := r.issue(t, fidA)
+	r.call(t, credvault.Claude, pass)
+	old, _ := r.h.srv.Store.Credential("gh:1005", credvault.Claude, "acct1")
+	oldID := r.h.srv.Vault.CredentialID(*old)
+	if err := r.h.srv.Vault.Put("gh:1005", credvault.Claude, "acct1", credvault.Secret{RefreshToken: "fixture-replacement"}); err != nil {
+		t.Fatal(err)
+	}
+	req := map[string]any{"cred": pass, "provider": "claude", "owner": "gh:1005", "account": "acct1", "credential_id": oldID}
+	status, out := sessDo(t, r.h, http.MethodPost, CredProxyRebindPath, cpToken, "", req)
+	if status != 200 || out["rebind_from"] != nil {
+		t.Fatalf("late report rebound replacement: %d %v", status, out)
+	}
+	fresh, _ := r.h.srv.Store.Credential("gh:1005", credvault.Claude, "acct1")
+	if r.h.srv.credAtLimit(*fresh, time.Now()) != "" {
+		t.Fatal("late report limited new identity")
+	}
+	if account, _ := r.boundTo(t, wid); account != "acct1" {
+		t.Fatal("late report moved new identity")
 	}
 }

@@ -160,7 +160,7 @@ func TestHubQuotaReadsThroughRelay(t *testing.T) {
 
 	exp := time.Now().Add(300 * 24 * time.Hour)
 	putPool(t, h, credvault.Claude, "icloud", credvault.Secret{SetupToken: "sk-ant-oat01-ICLOUDSECRET", ExpiresAt: &exp, AccountUUID: icloudUUID})
-	putPool(t, h, credvault.Claude, "gmail", credvault.Secret{SetupToken: "sk-ant-oat01-GMAILSECRET", ExpiresAt: &exp})
+	putPool(t, h, credvault.Claude, "gmail", credvault.Secret{SetupToken: "sk-ant-oat01-GMAILSECRET", ExpiresAt: &exp, AccountUUID: gmailUUID})
 	putPool(t, h, credvault.Claude, "nobody", credvault.Secret{SetupToken: "sk-ant-oat01-NOBODYSECRET", ExpiresAt: &exp})
 	putPool(t, h, credvault.Claude, "paused", credvault.Secret{SetupToken: "sk-ant-oat01-PAUSEDSECRET", ExpiresAt: &exp, AccountUUID: gmailUUID})
 	putPool(t, h, credvault.Codex, "heidi", credvault.Secret{RefreshToken: "rt-CODEXSECRET", AccountID: "acct-1", IDToken: quotaIDToken("acct-1", "user-1")})
@@ -186,7 +186,7 @@ func TestHubQuotaReadsThroughRelay(t *testing.T) {
 	auths, accts := strings.Join(relay.auth, " "), strings.Join(relay.acct, " ")
 	relay.mu.Unlock()
 	if !strings.Contains(auths, "ICLOUDSECRET") || !strings.Contains(auths, "GMAILSECRET") || strings.Contains(auths, "PAUSEDSECRET") ||
-		strings.Contains(auths, "NOBODYSECRET") || !strings.Contains(auths, "codex-access-") || !strings.Contains(accts, "acct-1") {
+		!strings.Contains(auths, "NOBODYSECRET") || !strings.Contains(auths, "codex-access-") || !strings.Contains(accts, "acct-1") {
 		t.Fatalf("upstream saw auth=%q acct=%q", auths, accts)
 	}
 
@@ -240,7 +240,7 @@ func TestHubQuotaReadsThroughRelay(t *testing.T) {
 			t.Fatal("a paused account was read")
 		}
 	}
-	if nobody == nil || nobody.OK || !strings.Contains(nobody.Error, "not written") {
+	if nobody == nil || !nobody.OK || nobody.AccountUUID != "" {
 		t.Fatalf("nobody: %+v", nobody)
 	}
 	if out := logs.String(); strings.Contains(out, "SECRET") || strings.Contains(out, "codex-access-") || strings.Contains(out, "frq1.") {

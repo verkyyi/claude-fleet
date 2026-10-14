@@ -316,6 +316,20 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		creds = kept
 	}
+	// A node's local pool must not count or refresh token aliases twice.
+	// Explicitly withdraw the redundant names so an older local copy is removed.
+	seenIDs := map[string]bool{}
+	unique := make([]store.Credential, 0, len(creds))
+	for _, c := range creds {
+		id := s.Vault.CredentialID(c)
+		if id != "" && seenIDs[id] {
+			withdrawn = append(withdrawn, NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: c.PrincipalID == store.PoolPrincipal, Error: "duplicate credential alias"})
+			continue
+		}
+		seenIDs[id] = true
+		unique = append(unique, c)
+	}
+	creds = unique
 	// Machine allowlists (claude-fleet#3824): a person this machine is not
 	// open to leases nothing here, and every copy the node holds is withdrawn
 	// — a 200 that names them, so the node removes them and keeps rechecking;
@@ -467,11 +481,18 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 		// (claude-fleet#2127). Never a secret.
 		type credRow struct {
 			store.Credential
-			AccountUUID string `json:"account_uuid,omitempty"`
+			AccountUUID  string      `json:"account_uuid,omitempty"`
+			CredentialID string      `json:"credential_id,omitempty"`
+			Limits       *LimitsView `json:"limits,omitempty"`
 		}
 		rows := make([]credRow, 0, len(creds))
 		for _, c := range creds {
-			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c)})
+			view, err := s.credentialLimits(c)
+			if err != nil {
+				httpError(w, http.StatusInternalServerError, "quota read failed")
+				return
+			}
+			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view})
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		// paused: the pool accounts an admin paused (claude-fleet#1990).

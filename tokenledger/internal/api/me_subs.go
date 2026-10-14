@@ -226,8 +226,8 @@ func (s *Server) mySub(c store.Credential, settings map[string]string) MySub {
 	if s.Vault != nil {
 		m.AccountUUID = s.Vault.AccountUUID(c)
 	}
-	if m.AccountUUID != "" {
-		if v, err := s.LimitsFor(m.AccountUUID); err == nil && v != nil {
+	if s.Vault != nil {
+		if v, err := s.credentialLimits(c); err == nil && v != nil {
 			m.Plan, m.ObservedAt = v.Plan, v.ObservedAt
 			h5, h7 := limitWindows(v)
 			win := func(w *WindowView) *MySubWin {

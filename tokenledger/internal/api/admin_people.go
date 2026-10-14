@@ -48,6 +48,7 @@ type AdminDoing struct {
 
 // AdminSub is one subscription on the pool panel.
 type AdminSub struct {
+	CredentialID string `json:"credential_id,omitempty"`
 	// Account is the vault's name for it; Label the subscription's own (the
 	// account it resolves to), "" when it has reported no reading.
 	Account  string `json:"account"`
@@ -256,13 +257,25 @@ func passSubs(passes []adminPass) map[string][]string {
 // reading names the account's subscription and its latest limits snapshot;
 // atLimit is credAtLimit.
 func adminPool(creds []store.Credential, passes []adminPass, names map[string]string,
-	reading func(store.Credential) (string, *model.LimitsSnapshot), atLimit func(store.Credential) string) []AdminSub {
+	reading func(store.Credential) (string, *model.LimitsSnapshot), atLimit func(store.Credential) string, identity ...func(store.Credential) string) []AdminSub {
 	type key struct{ provider, owner, account string }
+	ids := map[key]string{}
+	if len(identity) > 0 {
+		for _, c := range creds {
+			ids[key{c.Provider, c.PrincipalID, c.Account}] = identity[0](c)
+		}
+	}
+	canonical := func(k key) key {
+		if id := ids[k]; id != "" {
+			k.account = id
+		}
+		return k
+	}
 	people := map[key]map[string]bool{}
 	sessions := map[key]int{}
 	for _, p := range passes {
 		for _, b := range p.Binds {
-			k := key{b.Provider, b.Owner, b.Account}
+			k := canonical(key{b.Provider, b.Owner, b.Account})
 			if people[k] == nil {
 				people[k] = map[string]bool{}
 			}
@@ -275,9 +288,14 @@ func adminPool(creds []store.Credential, passes []adminPass, names map[string]st
 		}
 	}
 	out := make([]AdminSub, 0, len(creds))
+	seen := map[key]bool{}
 	for _, c := range creds {
-		k := key{c.Provider, c.PrincipalID, c.Account}
-		sub := AdminSub{Account: c.Account, Provider: c.Provider, Owner: c.PrincipalID, People: []string{}, Sessions: sessions[k]}
+		k := canonical(key{c.Provider, c.PrincipalID, c.Account})
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		sub := AdminSub{CredentialID: ids[key{c.Provider, c.PrincipalID, c.Account}], Account: c.Account, Provider: c.Provider, Owner: c.PrincipalID, People: []string{}, Sessions: sessions[k]}
 		for n := range people[k] {
 			sub.People = append(sub.People, n)
 		}
