@@ -190,16 +190,16 @@ case "$out" in *"no viewer token"*) ;; *) fail "noauth message" "$out" ;; esac
 ok "NOAUTH no viewer token → exit 2, nothing sent"
 
 # --- UUID (issue #2127) ---------------------------------------------------------
-# One label: the importing login's oauthAccount.accountUuid rides along, printed.
+# One label: a pasted token never borrows the importing machine's identity.
 U1='6f1c2d3e-0000-4000-8000-000000000001'
 printf '{"oauthAccount":{"accountUuid":"%s","emailAddress":"a@example.com"}}\n' "$U1" > "$HOME/.claude.json"
 : > "$LOG"
 out=$(bash "$IMPORT" alpha 2>&1); rc=$?
 no_token "uuid run" "$out"
 [ "$rc" = 0 ] && [ "$(nreq)" = 1 ] || fail "uuid: rc=$rc n=$(nreq)" "$out"
-[ "$(field 0 'b["secret"].get("account_uuid","")')" = "$U1" ] || fail "login's account uuid not sent" "$(field 0 'b["secret"].keys()')"
-case "$out" in *"uuid   alpha"*"$U1"*".claude.json"*) ;; *) fail "assumed uuid not printed" "$out" ;; esac
-ok "UUID  one label: this login's oauthAccount.accountUuid sent and named"
+[ "$(field 0 '"account_uuid" in b["secret"]')" = "False" ] || fail "local identity was attached to an unrelated token" "$out"
+case "$out" in *"$U1"*) fail "local uuid leaked into import plan" "$out" ;; esac
+ok "UUID  single label: no implicit local identity"
 : > "$LOG"
 out=$(bash "$IMPORT" --account-uuid u-given alpha 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(field 0 'b["secret"].get("account_uuid","")')" = "u-given" ] || fail "--account-uuid not sent as given" "$out"

@@ -75,6 +75,7 @@ type Secret struct {
 	Token            string     `json:"token,omitempty"`
 	User             string     `json:"user,omitempty"`
 	AccountUUID      string     `json:"account_uuid,omitempty"`
+	MeterID          string     `json:"meter_id,omitempty"` // internal; Put overwrites caller input, refresh preserves it
 }
 
 // Kinds — what the long-lived half IS, kept beside the row as metadata (the
@@ -409,6 +410,7 @@ func (v *Vault) Put(principal, provider, account string, s Secret) error {
 	l := v.lock(principal, provider, account)
 	l.Lock()
 	defer l.Unlock()
+	s.MeterID = credentialID(principal, provider, s)
 	blob, err := sl.Seal(s, principal, provider, account, "secret")
 	if err != nil {
 		return err
@@ -557,7 +559,11 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 			return Access{}, err
 		}
+		if s.MeterID == "" {
+			s.MeterID = credentialID(principal, provider, s)
+		}
 		acc, next, via, rerr := v.refresh(ctx, provider, s)
+		next.MeterID = s.MeterID
 		at := v.now()
 		// The audit says where the refresh ran when a node carried it
 		// (claude-fleet#1490): refresh_via=<login>@<host>.

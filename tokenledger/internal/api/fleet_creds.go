@@ -418,7 +418,9 @@ type FleetCredentialRequest struct {
 	Secret      credvault.Secret `json:"secret"`
 	// AccountUUID is bind's one argument (claude-fleet#2169): which usage
 	// account an existing credential belongs to. No secret travels with it.
-	AccountUUID string `json:"account_uuid,omitempty"`
+	AccountUUID  string      `json:"account_uuid,omitempty"`
+	CredentialID string      `json:"credential_id,omitempty"`
+	Limits       *LimitsView `json:"limits,omitempty"`
 }
 
 var (
@@ -467,11 +469,18 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 		// (claude-fleet#2127). Never a secret.
 		type credRow struct {
 			store.Credential
-			AccountUUID string `json:"account_uuid,omitempty"`
+			AccountUUID  string      `json:"account_uuid,omitempty"`
+			CredentialID string      `json:"credential_id,omitempty"`
+			Limits       *LimitsView `json:"limits,omitempty"`
 		}
 		rows := make([]credRow, 0, len(creds))
 		for _, c := range creds {
-			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c)})
+			view, err := s.credentialLimits(c)
+			if err != nil {
+				httpError(w, http.StatusInternalServerError, "quota read failed")
+				return
+			}
+			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view})
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		// paused: the pool accounts an admin paused (claude-fleet#1990).

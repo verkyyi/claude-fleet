@@ -97,7 +97,7 @@ export type PolicyEntry = { id: string; allow: string[]; all?: boolean; error?: 
 // their lists are users entries keyed svc:<name> (claude-fleet#4085).
 export type PolicyService = { id: string; name: string; enabled: boolean };
 export type PolicyView = { mode?: "legacy" | "strict"; users?: PolicyEntry[]; nodes?: PolicyEntry[]; services?: PolicyService[] };
-export type Credential = { provider: string; account: string; account_uuid?: string; principal_id?: string };
+export type Credential = { provider: string; account: string; account_uuid?: string; credential_id?: string; principal_id?: string };
 export type Limits = { per_account?: { account_uuid?: string; limits?: Record<string, any> }[] };
 
 // The release ledger (GET /v1/fleet/release/stats, claude-fleet#3870): every

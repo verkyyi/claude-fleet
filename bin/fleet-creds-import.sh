@@ -26,10 +26,8 @@
 #   --account-uuid which account the token belongs to (issue #2127): a setup
 #                  token cannot say, so the hub pairs it with its usage by this
 #                  uuid instead of guessing from the label. ONE label only.
-#                  Default for a single label: this login's own
-#                  oauthAccount.accountUuid (${CLAUDE_CONFIG_DIR:-~}/.claude.json),
-#                  printed so you can see what was assumed; several labels send
-#                  none. `none` sends none (the hub falls back to the label).
+#                  Default: no account association. `none` also sends none.
+#                  A pasted setup token need not belong to this machine's login.
 #   --codex        import CODEX refresh tokens instead (issue #1490): each
 #                  profile's auth.json — `default` = ~/.codex/auth.json, any
 #                  other = <codex-homes>/<profile>/auth.json (CCQUOTA_FLEET_CODEX_HOMES,
@@ -95,20 +93,8 @@ if [ "$AUUID_GIVEN" = 1 ] && [ "${#LABELS[@]}" -ne 1 ]; then
 fi
 [ "$AUUID" != none ] || AUUID=''
 case "$AUUID" in *[!A-Za-z0-9:._-]*) printf 'fleet-creds-import: --account-uuid must be [A-Za-z0-9:._-]\n' >&2; usage ;; esac
-# One label and no --account-uuid: the importing login's own account
-# (issue #2127) — the add flow is `claude setup-token` then this, on that login.
+# Account association is explicit; never borrow this machine's OAuth identity.
 AUUID_NOTE=''
-if [ "$CODEX" = 0 ] && [ "$AUUID_GIVEN" = 0 ] && [ "${#LABELS[@]}" -eq 1 ]; then
-  cj="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
-  AUUID=$(python3 -c '
-import json, re, sys
-try:
-    u = (json.load(open(sys.argv[1])).get("oauthAccount") or {}).get("accountUuid") or ""
-except (OSError, ValueError, AttributeError):
-    u = ""
-print(u if re.fullmatch(r"[A-Za-z0-9:._-]{1,128}", u) else "")' "$cj" 2>/dev/null) || AUUID=''
-  [ -z "$AUUID" ] || AUUID_NOTE="this login's $cj — --account-uuid <uuid> names another, none sends none"
-fi
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
 CODEX_HOMES="${CCQUOTA_FLEET_CODEX_HOMES:-$HOME/.codex-accounts}"

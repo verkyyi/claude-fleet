@@ -76,15 +76,11 @@ func (m *limitMemo) limited(provider, owner, account string, now time.Time) bool
 
 // credAtLimit says why one vault account is known to be at its limit, or "".
 func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
-	if s.limits.limited(c.Provider, c.PrincipalID, c.Account, now) {
+	if s.limits.limited(c.Provider, c.PrincipalID, s.Vault.CredentialID(c), now) {
 		return "429"
 	}
-	uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
-	if err != nil || uuid == "" {
-		return ""
-	}
-	snap, err := s.Store.LatestLimits(uuid)
-	if err != nil || snap == nil {
+	snap := s.credentialSnapshot(c)
+	if snap == nil {
 		return ""
 	}
 	full := func(pct float64, reset *time.Time) bool {
@@ -102,12 +98,8 @@ func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
 // credPeak is the fuller of one vault account's two windows on its latest
 // reading, in percent — a window already reset reads 0; no reading is 0.
 func (s *Server) credPeak(c store.Credential, now time.Time) float64 {
-	uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
-	if err != nil || uuid == "" {
-		return 0
-	}
-	snap, err := s.Store.LatestLimits(uuid)
-	if err != nil || snap == nil {
+	snap := s.credentialSnapshot(c)
+	if snap == nil {
 		return 0
 	}
 	peak := 0.0
@@ -198,7 +190,9 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 			until = t
 		}
 	}
-	s.limits.mark(req.Provider, owner, req.Account, until)
+	if row, err := s.Store.Credential(owner, req.Provider, req.Account); err == nil && row != nil {
+		s.limits.mark(req.Provider, owner, s.Vault.CredentialID(*row), until)
+	}
 
 	epID := s.passEndpoint(c.ID, now)
 	b, err := s.sessionBind(c.WorkerID, c.Principal, epID, req.Provider, now)

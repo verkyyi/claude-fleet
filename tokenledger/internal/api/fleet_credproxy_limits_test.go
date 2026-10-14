@@ -23,7 +23,11 @@ func atLimit(t *testing.T, r *cpRig, label string, pct float64, reset time.Time)
 	if err := r.h.srv.Store.UpsertAccount(id, "max", ""); err != nil {
 		t.Fatal(err)
 	}
-	snap := &model.LimitsSnapshot{AccountUUID: id.AccountUUID, ObservedAt: time.Now()}
+	c, err := r.h.srv.Store.Credential("gh:1005", credvault.Claude, label)
+	if err != nil || c == nil {
+		t.Fatal("missing credential", err)
+	}
+	snap := &model.LimitsSnapshot{AccountUUID: r.h.srv.Vault.CredentialID(*c), ObservedAt: time.Now()}
 	snap.SevenDay.Utilization, snap.SevenDay.ResetsAt = pct, &reset
 	if err := r.h.srv.Store.InsertLimits(snap); err != nil {
 		t.Fatal(err)

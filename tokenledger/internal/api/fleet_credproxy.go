@@ -204,7 +204,7 @@ func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]s
 		})
 		out = append(out, mine...)
 	}
-	return s.credPolicyFilter(out, pol), nil
+	return s.dedupCredentials(s.credPolicyFilter(out, pol)), nil
 }
 
 // noBindWhy is what refused each of provider's accounts (claude-fleet#3713):

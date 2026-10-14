@@ -196,15 +196,9 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 		}
 	}
 	out.People = adminPeople(in)
-	labels := s.accountLabels()
 	out.Pool = adminPool(creds, passes, in.Names, func(c store.Credential) (string, *model.LimitsSnapshot) {
-		uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
-		if err != nil || uuid == "" {
-			return "", nil
-		}
-		snap, _ := s.Store.LatestLimits(uuid)
-		return labels[uuid], snap
-	}, func(c store.Credential) string { return s.credAtLimit(c, now) })
+		return c.Account, s.credentialSnapshot(c)
+	}, func(c store.Credential) string { return s.credAtLimit(c, now) }, s.Vault.CredentialID)
 	return true
 }
 
