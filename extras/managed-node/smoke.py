@@ -258,7 +258,10 @@ def pod_login(d, runtime, hub, made):
     joins = Hub.joins
     out = run(['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', hub, '--service', 'foreground',
                '--join-file', str(code), '--release-key', str(d / 'release.pub')])
-    assert '跳过 角色用户' in out and '跳过 ssh CA' in out, out
+    assert '跳过 角色用户' in out and '✓ ssh CA 一个人的 pod' in out, out
+    # the relay's CA (claude-fleet#4149): on the node disk, the login's, for the sshd's loopback Match
+    pca = d / 'pod/state/ssh/fleet_user_ca.pub'
+    assert pca.stat().st_uid == uid and pca.read_bytes().split()[:2] == Hub.ca.split()[:2], pca.read_bytes()
     assert (d / 'pod/state/machine.env').stat().st_uid == uid, 'machine.env is not the login\'s'
     tool = [sys.executable, '-I', str(runtime / 'bin/fleet-node-linux.py')]
     out = run(tool + ['login', 'open', name, '--no-start', '--hub', hub, '--join-file', str(lcode)])
