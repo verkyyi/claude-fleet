@@ -4688,14 +4688,44 @@ def _zombies(pids):
                if len(f) == 2 and f[0].isdigit() and f[1].startswith("Z"))
 
 
+def _core_jobs(login):
+    """The login's jobs the root core runs (issue #4164): on a seated machine
+    state.json holds only the seat's stand-ins, and a stand-in killed — or one that
+    lost its core — leaves its job running under the core. Each is a direct child
+    of `fleet-node-core.py serve` (root's), as the login's uid, its own process
+    group. Read from ps, never asked of the core: forget runs as root, and a seated
+    core takes only _fleetnode. A test login shares this uid, so there only a
+    process whose command names its home counts. One ps; none under the ps seam."""
+    ident = account_ident(login)
+    if ident is None or ident[0] == 0 or os.environ.get("FLEET_NODE_PS_CMD"):
+        return []
+    uid, home = ident[0], ident[2].rstrip("/") + "/"
+    try:
+        out = subprocess.check_output(["ps", "-axww", "-o", "pid=,ppid=,uid=,stat=,command="],
+                                      stderr=subprocess.DEVNULL, universal_newlines=True)
+    except Exception:
+        return []
+    rows = []
+    for line in out.splitlines():
+        f = line.split(None, 4)
+        if len(f) == 5 and f[0].isdigit() and f[1].isdigit() and f[2].isdigit():
+            rows.append((int(f[0]), int(f[1]), int(f[2]), f[3], f[4]))
+    me = os.geteuid()
+    cores = set(r[0] for r in rows if (r[2] == 0 or (r[2] == me and env("FLEET_NODE_TEST", "") == "1"))
+                and re.search(r"fleet-node-core\.py serve(\s|$)", r[4]))
+    return sorted(r[0] for r in rows if r[1] in cores and r[2] == uid and not r[3].startswith("Z")
+                  and (uid != me or home in r[4]))
+
+
 def _account_pids(paths, login):
-    """The login's runs still running — a zombie has ended, whatever its reaper."""
+    """The login's runs still running — a zombie has ended, whatever its reaper —
+    and its jobs under the root core (#4164)."""
     st = read_json(paths.state_file, {})
     pids = sorted(set(int(x["pid"]) for kind in ("children", "tasks")
                       for name, x in (st.get(kind) or {}).items()
                       if name.startswith(login + "/") and x.get("pid") and pid_alive(x["pid"])))
     z = _zombies(pids)
-    return [p for p in pids if p not in z]
+    return sorted(set(p for p in pids if p not in z) | set(_core_jobs(login)))
 
 
 def _account_running(paths, login):
@@ -4705,7 +4735,10 @@ def _account_running(paths, login):
 def _account_stop(paths, login):
     """Stop what still runs as <login> after the daemon dropped it (#3379): each
     run is its own process group (start_new_session) — TERM it, then KILL after
-    FLEET_NODE_FORGET_KILL_WAIT seconds. True once nothing of it runs."""
+    FLEET_NODE_FORGET_KILL_WAIT seconds. True once nothing of it runs. On a seated
+    machine that includes the jobs under the root core (#4164): stopped by root
+    directly, the seat's stand-ins then end with them, and the core starts no new
+    one — run-as refuses a login accounts.json no longer manages."""
     for sig, wait in ((signal.SIGTERM, env_num("FLEET_NODE_FORGET_KILL_WAIT", 5)), (signal.SIGKILL, 5)):
         pids = _account_pids(paths, login)
         if not pids:
@@ -4808,12 +4841,14 @@ def account_forget(paths, login, force=False):
         end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
         while now() < end and (_account_running(paths, login) or (gone_env and _node_agent_stale(paths))):
             time.sleep(0.2)
-        # a run the daemon dropped but that will not end by itself (a git fetch
-        # hung on the network, #3379) must not fail the removal: stop it
-        if _account_running(paths, login) and not _account_stop(paths, login):
-            print("fleet-node-supervisor: %s's tasks still run %ss on and did not stop on TERM/KILL"
-                  % (login, env_num("FLEET_NODE_RELEASE_WAIT", 20)), file=sys.stderr)
-            return 1
+    # a run the daemon dropped but that will not end by itself (a git fetch hung on
+    # the network, #3379), or a job the root core still runs for it with nobody
+    # standing in (#4164 — with no daemon too), must not fail the removal: stop it
+    if _account_running(paths, login) and not _account_stop(paths, login):
+        print("fleet-node-supervisor: %s's tasks still run %ss on and did not stop on TERM/KILL: %s"
+              % (login, env_num("FLEET_NODE_RELEASE_WAIT", 20), " ".join(map(str, _account_pids(paths, login)))),
+              file=sys.stderr)
+        return 1
     agent_dir = _agent_dir_retire(paths, login)
     left = 0
     with attic_lock(paths):

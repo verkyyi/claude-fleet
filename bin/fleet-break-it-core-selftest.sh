@@ -492,4 +492,52 @@ drill_seat_repin() {
   WHAT="入座的更新器遇到要 re-pin 的链：拿自己那份 pin 副本校验、不失败；锚（release.pub / .revoked）只由核心在 switch 时改；seat 要改锚（自签的根、表外动作、多一个键）一律拒绝、锚不动"
 }
 
+# seated-forget-core-job (#4164): a login removed from a seated machine while its
+# jobs still run. On a seated daemon state.json holds only the seat's stand-ins
+# (`fleet-node-core.py call run-as … --follow`); the job itself is the root core's
+# child. A stand-in KILLed (the old forget's second round, a reap, a lost core)
+# leaves its job running under the core, and the old forget — reading only
+# state.json — said 「its tasks stopped」 over it (a managed Mac, two spare logins:
+# spinner + webhook under the core 69123 after the forget). forget now finds the
+# login's jobs under the core itself, stops them as root, and the core starts no
+# new one: run-as refuses a login accounts.json no longer manages.
+drill_seated_forget_core_job() {
+  CAP=30
+  local sb t0 out sp job i
+  sb="$WORK/forgetcore"; core_sandbox "$sb"
+  mkdir -p "$sb/Users/alice/.claude/fleet/bin"
+  printf '#!/bin/bash\nwhile :; do sleep 0.2; done\n' > "$sb/Users/alice/.claude/fleet/bin/fleet-spin.sh"
+  chmod 755 "$sb/Users/alice/.claude/fleet/bin/fleet-spin.sh"
+  printf '{"children": [], "tasks": [], "account": [{"name": "spinner", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/fleet-spin.sh"], "keepalive": true}]}\n' \
+    > "$sb/table.json"
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  # the seat's stand-in for alice's spinner
+  core_call "$sb" run-as '{"job": "spinner", "login": "alice"}' --follow >"$sb/standin.out" 2>&1 &
+  sp=$!
+  for i in $(seq 1 100); do grep -q '"pid"' "$sb/standin.out" 2>/dev/null && break; sleep 0.1; done
+  job=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["pid"])' "$sb/standin.out" 2>/dev/null)
+  [ -n "$job" ] || { kill "$sp" 2>/dev/null; WHY="the core never started alice's job: $(cat "$sb/standin.out") $(tail -2 "$sb/core.log")"; return 1; }
+  printf '{"children": {"alice/spinner": {"pid": %s, "cmd": "python3 fleet-node-core.py call run-as {\\"job\\": \\"spinner\\", \\"login\\": \\"alice\\"} --follow"}}, "tasks": {}}\n' \
+    "$sp" > "$sb/db/state.json"
+  # the stand-in KILLed: nothing in state.json runs any more, the job runs on
+  kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+  kill -0 "$job" 2>/dev/null || { WHY="the job ended with its stand-in — nothing to drill"; return 1; }
+  t0=$(now)
+  # shellcheck disable=SC2046  # one seam a line
+  env $(core_env "$sb") FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1 \
+    python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
+    || { kill -9 -- -"$job" 2>/dev/null; WHY="account forget failed: $(tail -2 "$sb/forget.out")"; return 1; }
+  for i in $(seq 1 50); do kill -0 "$job" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$job" 2>/dev/null && ! ps -o stat= -p "$job" 2>/dev/null | grep -q '^ *Z'; then
+    kill -9 -- -"$job" 2>/dev/null
+    WHY="alice's job $job still runs under the core after forget: $(cat "$sb/forget.out")"; return 1
+  fi
+  python3 -c 'import json,sys; sys.exit(0 if "alice" not in json.load(open(sys.argv[1])) else 1)' "$sb/db/accounts.json" \
+    || { WHY="accounts.json still holds alice"; return 1; }
+  out=$(core_call "$sb" run-as '{"job": "spinner", "login": "alice"}')
+  printf '%s' "$out" | grep -q '"refused"' || { WHY="the core started alice's job again after forget: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="入座守护的机器上删号：stand-in 被杀、作业还挂在 root core 下跑；account forget 自己按 uid 找出 core 下该登录的作业、以 root 停掉，core 不再为它起新的"
+}
+
 cred_run_drills "$0"
