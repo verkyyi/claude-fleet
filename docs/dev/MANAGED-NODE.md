@@ -1034,7 +1034,7 @@ BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
   （`fleet-login-reset-check.py`）也读 `<node>/admin/<login>-onboard`。EUID 0 没有这个变量照旧拒；有变量
   不是 root 就忽略——管理员登录直接跑字节不变。
 
-旧 agent 交接进 attic：§23.3（#3725）。真机切换演练（macmini，时间由操作者定）还没做。
+旧 agent 交接进 attic：§23.3（#3725）。真机切换演练（一台托管 Mac，时间由操作者定）还没做。
 
 BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
 `bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `internal/agent/node_accounts_seat_test.go`。
