@@ -141,9 +141,9 @@ Match User fleet-jump
 
 原则：每一步只**加**东西，旧路照常；删旧路放最后，按门的记录确认没人再走。每一步之前先写 BREAK-IT 行和演练（CLAUDE.md「新坏法先登记」）。
 
-1. **基线**：`bin/fleet-cn-probe.sh`（#4150）在 oss-drill 上以 drillcn 跑一遍，所有路线「通」，存为改动前证据。
+1. **基线**：`bin/fleet-cn-probe.sh`（#4150）在 oss-drill 上以演练登录跑一遍，所有路线「通」，存为改动前证据。
 2. **pod 侧加信任**（新镜像 + 逐个 pod 重渲染）：pod sshd 在所有地址认「这个人的钥匙表 + 入口 CA」，`door.pub` 照旧也认。
-   pod 重渲染会断这个人的会话——和本人约时间，一次一个（先 drillcn，再 arvin）。
+   pod 重渲染会断这个人的会话——和本人约时间，一次一个（先演练登录，再真实用户）。
    BREAK-IT：`pod-foreign-key`（别人的钥匙 / 别人的证书主体进不来）。
 3. **门侧加 `fleet-jump`**（门 rollout，2 副本滚动，不碰 pod）：镜像里的账号 + `fleet-door-keys.py` + `Match User fleet-jump`。
    per-login 账号和 fleet-door.sh 不动。BREAK-IT：`door-jump-other-pod`（A 的钥匙要求 permitopen B 的 pod 被拒）、
@@ -166,6 +166,6 @@ Match User fleet-jump
 
 - 是否接受 A2 的代价：手机 / 裸 ssh 要写跳板（`-J`），建连多 2–3 个往返。
 - A1 要不要作为以后的一步（只给 fleet 客户端，手机仍走 A2）——本方案不做。
-- 第 2 步重渲染 arvin 的 pod 的时间。
+- 第 2 步重渲染真实用户 pod 的时间。
 
 确认后按第 3 节拆单（pod 侧、门侧、入口+客户端、探针、删旧路各一张）。
