@@ -29,6 +29,8 @@ import (
 // input (input_at) — what the 15-second patrol gives the machine back on —
 // and when the 「1 分钟后暂停」 warning went out (warned_at); C12's reasons are
 // hidden · idle · pause, and the conversation is kept apart (hub_trial_convos).
+// Since claude-fleet#4235 ready_at is when the seat became usable (its home
+// set, the conversation in): idle counts from there, never while it opens.
 const fleetTrialsSchema = `
 CREATE TABLE IF NOT EXISTS fleet_trials (
   principal     TEXT PRIMARY KEY,
@@ -49,7 +51,8 @@ CREATE TABLE IF NOT EXISTS fleet_trials (
   ended_reason  TEXT NOT NULL DEFAULT '',
   beat_at       INTEGER NOT NULL DEFAULT 0,
   input_at      INTEGER NOT NULL DEFAULT 0,
-  warned_at     INTEGER NOT NULL DEFAULT 0
+  warned_at     INTEGER NOT NULL DEFAULT 0,
+  ready_at      INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS fleet_trial_timings (
   at INTEGER NOT NULL,
@@ -87,6 +90,7 @@ type Trial struct {
 	BeatAt       time.Time
 	InputAt      time.Time
 	WarnedAt     time.Time
+	ReadyAt      time.Time
 }
 
 // Used is how long t has held a machine by now: every seat before, and the
@@ -108,7 +112,7 @@ func (s *Store) ensureFleetTrials() error {
 			return err
 		}
 	}
-	for _, col := range []string{"used_secs", "msgs", "capped_at", "beat_at", "input_at", "warned_at"} {
+	for _, col := range []string{"used_secs", "msgs", "capped_at", "beat_at", "input_at", "warned_at", "ready_at"} {
 		if err := s.addColumn("fleet_trials", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
@@ -134,17 +138,18 @@ func unixOrZero(v int64) time.Time {
 }
 
 const trialCols = `principal, state, started_at, waiting_since, placed_at, host, last_seen, timed_at, reclaimed_at, kind, subject, queue_reason, used_secs, msgs, capped_at, ended_reason,
-	beat_at, input_at, warned_at`
+	beat_at, input_at, warned_at, ready_at`
 
 func scanTrial(row interface{ Scan(...any) error }) (*Trial, error) {
 	var t Trial
-	var st, ws, pa, ls, ta, ra, ca, ba, ia, wa int64
+	var st, ws, pa, ls, ta, ra, ca, ba, ia, wa, ya int64
 	if err := row.Scan(&t.Principal, &t.State, &st, &ws, &pa, &t.Host, &ls, &ta, &ra, &t.Kind, &t.Subject, &t.QueueReason,
-		&t.UsedSecs, &t.Msgs, &ca, &t.EndedReason, &ba, &ia, &wa); err != nil {
+		&t.UsedSecs, &t.Msgs, &ca, &t.EndedReason, &ba, &ia, &wa, &ya); err != nil {
 		return nil, err
 	}
 	t.CappedAt = unixOrZero(ca)
 	t.BeatAt, t.InputAt, t.WarnedAt = unixOrZero(ba), unixOrZero(ia), unixOrZero(wa)
+	t.ReadyAt = unixOrZero(ya)
 	t.StartedAt, t.WaitingSince, t.PlacedAt = unixOrZero(st), unixOrZero(ws), unixOrZero(pa)
 	t.LastSeen, t.TimedAt, t.ReclaimedAt = unixOrZero(ls), unixOrZero(ta), unixOrZero(ra)
 	return &t, nil
@@ -284,7 +289,7 @@ func (s *Store) TrialsWaiting(fresh time.Time) (int, error) {
 // PlaceTrial records that pid was handed a login on host.
 func (s *Store) PlaceTrial(pid, host string, now time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = ?, host = ?, last_seen = ?, queue_reason = '',
-		beat_at = ?, input_at = ?, warned_at = 0 WHERE principal = ?`, TrialPlaced, now.Unix(), host, now.Unix(), now.Unix(), now.Unix(), pid)
+		beat_at = ?, input_at = ?, warned_at = 0, ready_at = 0 WHERE principal = ?`, TrialPlaced, now.Unix(), host, now.Unix(), now.Unix(), now.Unix(), pid)
 	return err
 }
 
@@ -330,6 +335,34 @@ func (s *Store) BeatTrial(pid string, now, input time.Time) (bool, error) {
 	return n > 0, nil
 }
 
+// ReadyTrial records that pid's seat became usable at now — the first time
+// only; the idle lines count from here (claude-fleet#4235). false: pid holds
+// no machine, or it was ready already.
+func (s *Store) ReadyTrial(pid string, now time.Time) (bool, error) {
+	res, err := s.write.Exec(`UPDATE fleet_trials SET ready_at = ?, warned_at = 0
+		WHERE principal = ? AND state = ? AND ready_at = 0`, now.Unix(), pid, TrialPlaced)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// RequeueTrial puts back a seat that never became usable (claude-fleet#4235):
+// pid waits again in the place it had (waiting_since kept), the seat's time is
+// not charged, and it is not a start of the day (placed_at cleared) — the
+// trial is not spent by a machine that did not open. false: pid held none.
+func (s *Store) RequeueTrial(pid, reason string, now time.Time) (bool, error) {
+	res, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = 0, host = '', reclaimed_at = 0,
+		ended_reason = '', queue_reason = ?, last_seen = ?, beat_at = 0, input_at = 0, warned_at = 0, ready_at = 0
+		WHERE principal = ? AND state = ?`, TrialWaiting, reason, now.Unix(), pid, TrialPlaced)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // WarnTrial records that pid was told 「1 分钟后暂停」 at now.
 func (s *Store) WarnTrial(pid string, now time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_trials SET warned_at = ? WHERE principal = ? AND state = ? AND warned_at = 0`,
@@ -343,7 +376,7 @@ func (s *Store) WarnTrial(pid string, now time.Time) error {
 func (s *Store) ReleaseTrial(pid, reason string, now time.Time) (bool, error) {
 	res, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, reclaimed_at = ?, ended_reason = ?,
 		used_secs = used_secs + CASE WHEN placed_at > 0 AND ? > placed_at THEN ? - placed_at ELSE 0 END,
-		beat_at = 0, input_at = 0, warned_at = 0
+		beat_at = 0, input_at = 0, warned_at = 0, ready_at = 0
 		WHERE principal = ? AND state = ?`,
 		TrialReclaimed, now.Unix(), reason, now.Unix(), now.Unix(), pid, TrialPlaced)
 	if err != nil {

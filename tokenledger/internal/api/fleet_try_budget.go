@@ -192,7 +192,11 @@ func (s *Server) endTrial(t store.Trial, reason string, now time.Time) (ok, sent
 	if !ok {
 		return false, sent
 	}
-	if moved, err := s.Store.ReleaseTrial(t.Principal, reason, now); err != nil || !moved {
+	release := s.Store.ReleaseTrial
+	if reason == trialReleaseOpenSlow {
+		release = s.Store.RequeueTrial // not a trial spent (claude-fleet#4235)
+	}
+	if moved, err := release(t.Principal, reason, now); err != nil || !moved {
 		if err != nil {
 			log.Printf("fleet: trial end: %s: %v", t.Principal, err)
 		}
