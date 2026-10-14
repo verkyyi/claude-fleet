@@ -62,6 +62,7 @@ FLEET_BASE_SYNC                    knob: per-repo 0 opts a repo out of base-bran
 FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code default (fleet-base-sync.sh)
 FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
 FLEET_BOOTSTRAP_GIT_BASE           seam: an injectable command/path for tests (fleet-login-bootstrap.sh)
+FLEET_BOOTSTRAP_DOCTOR             knob: 0 = skip the closing doctor report (fleet-login-new.sh --recycle passes it: 29 s nobody reads, #4044)
 FLEET_BOOTSTRAP_CACHE              path: the machine cache a new login installs from; `off` = none (fleet-bootstrap-cache.sh, issue #2297)
 FLEET_BOOT_ID_CMD                  seam: a fake boot-session id for the diskguard crash harvest (fleet-diskguard.sh, #1294)
 FLEET_BREW_LOG                     path: the brew-perms repair log (fleet-brew-perms.sh, #2283)

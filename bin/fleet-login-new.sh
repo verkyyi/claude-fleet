@@ -533,7 +533,10 @@ fleet_up_step() {
   show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" bash "$ROOT/bin/fleet-login-bootstrap.sh"
   [ "$APPLY" = 1 ] || return 0
   local out rc
+  # a recycle skips the bootstrap's closing doctor report (issue #4044: 29 s,
+  # read by nobody — the reset's check is the verdict)
   out=$(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" PATH="$H/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    FLEET_BOOTSTRAP_DOCTOR="$([ "$RECYCLE" = 1 ] && echo 0 || echo 1)" \
     bash "$ROOT/bin/fleet-login-bootstrap.sh" </dev/null 2>&1); rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" = 0 ]; then FLEET_LINE='fleet: up (fleet-login-bootstrap.sh)'
@@ -753,6 +756,10 @@ if [ "$DONLY" = 0 ]; then
       -- sudo install -m 600 "$FC" "$CD/fleet.conf"
     run sudo chown "$LOGIN:staff" "$CD/fleet.conf"
     CS=(sudo bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
+    # a recycle: the shared proxy's first answer is not waited for 30 s here
+    # (issue #4044: it timed out at 30 s, then the [check] below passed in
+    # 0.6 s) — the check polls for it and stays the one verdict
+    [ "$RECYCLE" = 0 ] || CS=(sudo env FLEET_CREDSEP_JOIN_WAIT=3 bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
     [ "$SHARE" = 1 ] && CS+=(--pool-src "$POOL_SRC")
     run "${CS[@]}"
     N=$N0

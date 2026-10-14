@@ -224,7 +224,7 @@ echo "service: skipped (--service none)"
 NJ
 cat > "$FX/bin/fleet-login-bootstrap.sh" <<'BS'
 #!/bin/bash
-echo "as=$HOME conf=$FLEET_CONF_DIR" >> "${FLEET_SELFTEST_BS_LOG:-/dev/null}"
+echo "as=$HOME conf=$FLEET_CONF_DIR doctor=${FLEET_BOOTSTRAP_DOCTOR:-unset}" >> "${FLEET_SELFTEST_BS_LOG:-/dev/null}"
 echo "fleet-login-bootstrap: fleet: ok — up on the starter repo"
 exit "${FLEET_SELFTEST_BS_RC:-0}"
 BS
@@ -947,6 +947,7 @@ contains "O ... runs as the login" "$(cat "$FLEET_INSTALL_DAEMON_DIR/com.ccquota
 [ -L "$OH/.config/claude-fleet/node.env" ] || fail "O 7b did not move node.env into the store (still $(ls -l "$OH/.config/claude-fleet/node.env" 2>&1))"
 eq "O 7b: the token in the store" "CCQUOTA_TOKEN=ntok-secret" "$(cat "$FLEET_CREDSEP_ROOT_BASE/oli/node.env" 2>/dev/null)"
 contains "O the fleet brought up as the login, after 8 (its conf; the sudo shim keeps HOME)" "$(cat "$WORK/bs.log" 2>/dev/null)" "conf=$OH/.config/claude-fleet"
+contains "O a new login keeps the bootstrap's doctor report" "$(cat "$WORK/bs.log" 2>/dev/null)" "doctor=1"
 contains "O the hub's detail says so" "$(printf '%s\n' "$OUT" | tail -n 3)" "fleet: up"
 contains "O ... and that it joined" "$(printf '%s\n' "$OUT" | tail -n 3)" "node: joined $HUBU"
 contains "O credsep stays last" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
@@ -1011,6 +1012,8 @@ contains "R a new password on dscl's stdin" "$(cat "$DLOG")" "passwd /Users/rex 
 contains "R shell-less while it changes" "$CALLS" "dscl . -create /Users/rex UserShell /usr/bin/false"
 contains "R the shell back" "$CALLS" "dscl . -create /Users/rex UserShell /bin/zsh"
 contains "R createhomedir fills" "$CALLS" "createhomedir -c -u rex"
+contains "R the proxy's first answer is not waited 30 s (#4044)" "$OUT" "env FLEET_CREDSEP_JOIN_WAIT=3 bash"
+contains "R the bootstrap skips its doctor report (#4044)" "$(tail -n 1 "$WORK/bs.log" 2>/dev/null)" "doctor=0"
 contains "R its own name when none is given" "$OUT" "full-name=rex"
 eq "R the key installed" "$(cat "$KEY")" "$(cat "$RH/.ssh/authorized_keys")"
 contains "R the last line is credsep's (pending in a sandbox, as leg M)" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: pending"

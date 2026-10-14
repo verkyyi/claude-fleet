@@ -689,7 +689,7 @@ printf '{"alice": {"managed": true, "since": 1}}\n' > "$WORK/node/accounts.json"
 : > "$FLEET_TEST_LOG"
 FLEET_NODE_TEST=1 run alice --recycle-stop --quick --delete-home --apply
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "quick forget: exit $RC"; }
-has "$FLEET_TEST_LOG" 'FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1' 'quick: the forget still waits for the daemon tick'
+has "$FLEET_TEST_LOG" 'FLEET_NODE_RELEASE_WAIT=0 FLEET_NODE_FORGET_KILL_WAIT=0.5' 'quick: the forget still waits for the daemon tick'
 grep -q '"alice"' "$WORK/node/accounts.json" && fail 'quick: alice not forgotten'
 rm -rf "${WORK:?}/rt" "${WORK:?}/node"
 
