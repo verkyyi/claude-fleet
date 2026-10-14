@@ -4200,7 +4200,7 @@ case "\$*" in
   *actions/runs/9/jobs*) printf '7\tfailure\tmacOS / shard 1\n' ;;
   *actions/runs/*/jobs*) printf '6\tsuccess\tmacOS / shard 1\n' ;;
   *statuses*) cat "$d/status" ;;
-  'run view'*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
+  *actions/jobs/*/logs*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
   *) printf 'completed success shard 1\n' ;;
 esac
 SH
