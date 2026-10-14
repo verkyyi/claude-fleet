@@ -163,7 +163,14 @@ live_pid() { # the serving proxy's pid, if any
   fi
   p=$(cat "$STATE/pid" 2>/dev/null) || return 1
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$p" 2>/dev/null && printf '%s' "$p"
+  kill -0 "$p" 2>/dev/null && { printf '%s' "$p"; return 0; }
+  # Another PID namespace (issue #4172): a person's pod runs the proxy in its
+  # `fleet` container while a login over the door runs in `sshd` — one disk, one
+  # /tmp, two process tables. kill -0 there says no for a proxy that serves; the
+  # control socket is on the shared disk and answers. A dead proxy's socket
+  # refuses the connect at once.
+  [ -S "$STATE/ctl.sock" ] && [ -s "$STATE/port" ] \
+    && python3 -I "$PY" --state "$STATE" status --json >/dev/null 2>&1 && printf '%s' "$p"
 }
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
