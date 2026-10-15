@@ -2872,37 +2872,37 @@ class U_OnDemand(Sandbox):
         self.assertTrue(until(10, lambda: (self.child(key).get("started") or 0) != started),
                         "start did not bring an idle service back")
 
-    def stub_webchat(self, idle):
-        """the login's fleet-webchat.sh serve: answers /healthz on the socket, idles out"""
+    def stub_webchat(self):
+        """Answer /healthz until the test requests an idle exit (75)."""
         b = os.path.join(self.home, ".claude", "fleet", "bin")
         os.makedirs(b)
         p = os.path.join(b, "fleet-webchat.sh")
         with open(os.path.join(b, "serve.py"), "w") as f:
             f.write(r"""
-import os, socket, sys, time
+import os, socket, sys
 d = os.path.join(os.environ["HOME"], ".config", "claude-fleet", "webchat")
 os.makedirs(d, 0o700, exist_ok=True)
 s = os.path.join(d, "chat.sock")
 try: os.unlink(s)
 except OSError: pass
 l = socket.socket(socket.AF_UNIX); l.bind(s); l.listen(4); l.settimeout(0.2)
-end = time.time() + float(sys.argv[1])
-while time.time() < end:
+idle = os.path.join(d, "idle")
+while not os.path.exists(idle):
     try: c, _ = l.accept()
     except socket.timeout: continue
     c.recv(512); c.sendall(b"HTTP/1.0 200 OK\r\n\r\n{}"); c.close()
-os.unlink(s); sys.exit(75)
+os.unlink(idle); os.unlink(s); sys.exit(75)
 """)
         with open(p, "w") as f:
-            f.write('#!/bin/bash\n[ "$1" = serve ] || exit 2\nexec %s -I "$(dirname "$0")/serve.py" %s\n'
-                    % (sys.executable, idle))
+            f.write('#!/bin/bash\n[ "$1" = serve ] || exit 2\nexec %s -I "$(dirname "$0")/serve.py"\n'
+                    % sys.executable)
         os.chmod(p, 0o755)
-        return p
+        return p, os.path.join(self.home, ".config", "claude-fleet", "webchat", "idle")
 
     def test_ensure_registers_starts_and_waits(self):
         self.assertEqual(self.svc("ensure", "--login", "alice", "--name", "sms").returncode, 2,
                          "a name off the on-demand table was ensured")
-        p = self.stub_webchat(4)
+        p, idle = self.stub_webchat()
         self.start()
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -2912,9 +2912,14 @@ os.unlink(s); sys.exit(75)
         self.assertEqual(ent["paths"], [os.path.join(self.home, ".config", "claude-fleet", "webchat")])
         self.assertEqual(ent["state"], "enabled")
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("running · ready", r.stdout, r.stderr)
-        # idle out (75), then the next open starts it again
+        # #3737: a fixed 4s lifetime races the client's scheduling on busy CI.
+        # Keep serving through both ready checks, then request the real exit 75.
+        with open(idle, "w"):
+            pass
         self.assertTrue(until(15, lambda: self.services()["webchat"]["status"] == "idle"), self.services())
+        self.assertEqual(self.child("svc:alice/webchat").get("last_rc"), fns.SVC_IDLE_RC)
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("started · ready", r.stdout)
@@ -2922,6 +2927,7 @@ os.unlink(s); sys.exit(75)
         self.assertEqual(self.svc("stop", "--login", "alice", "--name", "webchat").returncode, 0)
         self.assertTrue(until(15, lambda: self.services()["webchat"]["status"] == "stopped"))
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("started · ready", r.stdout, r.stderr)
 
     def test_start_races_a_service_call(self):
