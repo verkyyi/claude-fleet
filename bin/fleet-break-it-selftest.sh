@@ -101,6 +101,7 @@
 #   home-template-leak                              bin/fleet-home-template.py (build from the runtime only, refuse credentials), its selftest
 #   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
 #   login-remove-uid-leftovers                      bin/fleet-login-remove.sh step 5b (#3508)
+#   trial-wash-webchat-registered                   bin/fleet-login-remove.sh + fleet-node-supervisor.py service drop-fleet (#4273)
 #   spare-wash-no-fda                               bin/fleet-login-reset.sh wash → bin/fleet-login-remove-ssh.sh wash (#3508)
 #   spare-wash-respawn                              bin/fleet-login-reset.sh (quiesce before --since and after the home move, #3979)
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
@@ -5600,6 +5601,25 @@ drill_login_remove_uid_leftovers() {
   _login_remove_selftest \
     || { WHY="fleet-login-remove-selftest.sh is red: $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='删号前删掉这个 uid 在 /private/tmp · /private/var/tmp · /Users/Shared 里的文件（存档目录除外），uid 被下一个登录复用时它拿不到上一个人的东西（真跑 shim 化的删号）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-wash-webchat-registered (#4273): a trial login's web chat was
+# registered by the machine daemon (`service ensure --name webchat`), and the
+# remove script refused any registered service — every wash of a login that
+# had chatted stopped at step 1 and the login stayed failed (fleetu7 / fleetu9
+# on a managed Mac). Now the daemon drops only the entries it built itself
+# (`service drop-fleet`) before the register is read; a person's still refuses.
+drill_trial_wash_webchat_registered() {
+  CAP=60; local t0
+  t0=$(now)
+  grep -q 'service drop-fleet --login "$LOGIN"' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh no longer drops the daemon's own on-demand entries: a trial login that chatted cannot be washed"; return 1; }
+  grep -q 'def service_fleet_made' "$ROOT/bin/fleet-node-supervisor.py" \
+    || { WHY="fleet-node-supervisor.py has no fleet-made test: drop-fleet would take a person's entry"; return 1; }
+  _login_remove_selftest \
+    || { WHY="fleet-login-remove-selftest.sh is red: $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  WHAT='试用号登记着守护按需建的 webchat：洗号（--recycle-stop --quick）和删号都先注销它、照常走完；人自己的条目（别的名字、改过的 webchat）照旧退 6、什么都不跑（真跑 shim 化的删号 + 真守护）'
   SECS=$(since "$t0")
 }
 
