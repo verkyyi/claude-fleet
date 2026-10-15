@@ -541,7 +541,7 @@ class Thin:
         self.master = None
         self.attrs = termios.tcgetattr(0) if os.isatty(0) else None
         self.version = version()
-        self.clip = None
+        self.attachments = None
         self.saying = False     # a first-session line is being written over (#3054)
         self.firsts = 0         # first-session roads taken (FLEET_THIN_FIRST_ROUNDS)
         self.up_home = ""       # the home this loop was last up on (issue #3511)
@@ -584,38 +584,6 @@ class Thin:
         return a[:h] + extra + [a[h], remote]
 
     # -- uploads ----------------------------------------------------------
-    def send(self, path, name=""):
-        """One file to the session's machine through the home: (rc, path there | why)."""
-        up = self.upload_mod()
-        if not self.cur or not self.base:
-            return 1, up.tr("paste_failed", os.path.basename(path))
-        m, l, w = self.cur
-        name = up.safe(name or path)
-        rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
-        words = ["python3", rbin + "/fleet-client-upload.py", "recv", m or "-", l or "-", w or "-", "--name", name]
-        remote = " ".join(shlex.quote(x) for x in words)
-        cmd = self.command(self.base, ["-o", "ControlMaster=no", "-o", "ControlPath=none",
-                                       "-o", "ServerAliveInterval=5"], remote)
-        t0 = time.time()
-        try:
-            with open(path, "rb") as f:
-                r = subprocess.run(cmd, stdin=f, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
-        except (OSError, subprocess.SubprocessError) as e:
-            tlog("upload", self.home, "", "", "", "", 1, "%s: %s" % (name, e))
-            return 1, up.tr("paste_failed", "%s: %s" % (name, e))
-        out = r.stdout.decode("utf-8", "replace").strip().splitlines()
-        there = out[-1] if out else ""
-        tlog("upload", self.home, "", "", ms(t0), "", r.returncode, "%s → %s" % (name, there))
-        if r.returncode != 0 or not there.startswith("/"):
-            why = (r.stderr.decode("utf-8", "replace").strip().splitlines() or ["exit %d" % r.returncode])[-1]
-            return (3 if r.returncode == 3 else 1), why[:120]
-        return 0, there
-
-    def upload_mod(self):
-        if self.clip is None:
-            self.clip = load("fleet-client-upload.py", "fleet_client_upload")
-        return self.clip
-
     def say(self, text):
         """No bar of ours to write on: the log, and a terminal notification."""
         tlog("say", self.home, "", "", "", "", "", text)
@@ -758,29 +726,6 @@ class Thin:
              "cport=%d" % cport if cport else ("rport=%d" % rport if rport else "url"))
         return ok, "" if ok else "the browser opener failed"
 
-    def ctrl_v(self):
-        """⌃V: a picture on the clipboard → its path on the session's machine,
-        bracket-pasted; anything else → the ⌃V itself."""
-        if os.environ.get("FLEET_CLIENT_PASTE", "1") == "0" or not self.cur:
-            return b"\x16"
-        import tempfile
-        up = self.upload_mod()
-        fd, png = tempfile.mkstemp(prefix="fleet-clip.", suffix=".png")
-        os.close(fd)
-        try:
-            if not up.clip_png(png):
-                return b"\x16"
-            rc, out = self.send(png, "clip.png")
-        finally:
-            try:
-                os.unlink(png)
-            except OSError:
-                pass
-        if rc != 0:
-            self.say(out)
-            return b""
-        return START + out.encode() + END
-
     # -- one connection ---------------------------------------------------
     def connect_once(self, reconnect):
         """(rc, came_up, reason)."""
@@ -846,15 +791,22 @@ class Thin:
         os.close(slave)
         self.child, self.master = pid, master
         osc = Osc7502(token)
-        rw = None
+        # A reconnect starts with no upload authority. The OSC parser keeps
+        # running while a short-lived worker captures/hashes/transfers files.
+        self.cur = None
+        self.cur_generation = ""
+        self.selection = 0
+        uploads = None
         if os.environ.get("FLEET_CLIENT_PASTE", "1") != "0":
-            try:
-                up = self.upload_mod()
-                rw = up.Rewriter(self.home, "", "", send=lambda p: self.send(p), say=self.say)
-            except Exception as e:
-                tlog("filter-error", self.home, "", "", "", "", "", e)
+            up = load("fleet-thin-upload.py", "fleet_thin_upload")
+            uploads = up.Input(lambda: {
+                "base": self.base, "cur": self.cur, "generation": self.cur_generation,
+                "selection": self.selection, "token": token, "view": self.view,
+                "rbin": os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin",
+            }, self.say)
+        self.attachments = uploads
         first_byte = first_view = None
-        out_wait = in_wait = 0.0
+        out_wait = 0.0
         st = None
         if tty_in:
             try:
@@ -868,7 +820,7 @@ class Thin:
                 if done == pid:
                     st = s_
                     break
-                tmo = 0.05 if (out_wait or in_wait) else 0.5
+                tmo = 0.02 if (out_wait or (uploads and uploads.busy)) else 0.5
                 try:
                     r, _, _ = select.select([0, master], [], [], tmo)
                 except InterruptedError:
@@ -877,9 +829,6 @@ class Thin:
                 if out_wait and now - out_wait > 0.05:
                     write_out(osc.flush())
                     out_wait = 0.0
-                if in_wait and rw and now - in_wait > (2.0 if rw.buf else 0.05):
-                    writeall(master, rw.flush())
-                    in_wait = 0.0
                 if master in r:
                     try:
                         data = os.read(master, 65536)
@@ -897,8 +846,10 @@ class Thin:
                     for kind, kv in events:
                         if kind == "cur":
                             self.cur = (kv.get("m", ""), kv.get("l", ""), kv.get("w", ""))
-                            if rw:
-                                rw.node, rw.wid = self.cur[0], self.cur[2]
+                            self.cur_generation = kv.get("g", "")
+                            self.selection += 1
+                            if uploads:
+                                uploads.cancel("会话目标已改变，附件未插入")
                             if first_view is None:
                                 first_view = now
                                 # written now, not when the connection ends: a
@@ -909,6 +860,8 @@ class Thin:
                                      ms(t0, now), "", "")
                         elif kind == "quit":
                             self.quit = True
+                            if uploads:
+                                uploads.cancel("连接结束，附件已取消")
                         elif kind == "open":
                             threading.Thread(target=self.open_req, args=(kv,), daemon=True).start()
                 if self.said:
@@ -925,19 +878,22 @@ class Thin:
                         self.hangup(signal.SIGHUP, None)
                     if reconnect and first_byte is None and b"\x03" not in data:
                         continue   # the line still down: a mouse report / a key goes nowhere (⌃C still stops the ssh)
-                    if data == b"\x16" and not (rw and (rw.buf or rw.held)):
-                        writeall(master, self.ctrl_v())
-                        continue
-                    if rw:
-                        out, waiting = rw.feed(data)
-                        in_wait = (in_wait or now) if waiting else 0.0
-                    else:
-                        out = data
+                    out = uploads.feed(data) if uploads else data
                     try:
                         writeall(master, out)
                     except OSError:
                         pass
+                if uploads:
+                    # Output/control events and Ctrl+C win a completion race.
+                    try:
+                        writeall(master, uploads.poll())
+                    except OSError:
+                        uploads.cancel("连接结束，附件已取消")
         finally:
+            if uploads:
+                uploads.close()
+            self.attachments = None
+            self.cur = None
             self.child, self.master = 0, None
             # cooked again, but echo stays off: the loop is between connections until
             # the next pump's setraw — a key or a mouse report in the meantime (the hub
@@ -973,10 +929,19 @@ class Thin:
     def hangup(self, n, _f):
         """The terminal closed (SIGHUP) or we were told to stop: the ssh goes with
         us, nothing stays."""
+        if self.attachments:
+            self.attachments.close()
         if self.child:
             try:
-                os.kill(self.child, signal.SIGHUP)
-                os.waitpid(self.child, 0)
+                os.killpg(self.child, signal.SIGHUP)
+                deadline = time.monotonic() + .2
+                while time.monotonic() < deadline:
+                    if os.waitpid(self.child, os.WNOHANG)[0]:
+                        break
+                    time.sleep(.01)
+                else:
+                    os.killpg(self.child, signal.SIGKILL)
+                    os.waitpid(self.child, 0)
             except OSError:
                 pass
         if self.fwd:
