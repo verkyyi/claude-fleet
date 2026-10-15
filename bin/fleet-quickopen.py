@@ -877,25 +877,30 @@ class Heal:
     narrower than the terminal cannot be scrolled in place (the client keeps the
     terminal's left/right margins off, conf/tmux-shell.conf), so tmux draws the
     popup again, frame and all — and curses repaints from a cleared screen."""
-    HEAL = 1.0      # seconds between two whole repaints of an idle popup
+    # The thin view freezes the pane behind its popup (#3058), so it needs only
+    # the resize repair. Repeating the scroll/clear there flashes the frame even
+    # when nothing changed (#4410). Keep periodic repair for the older callers
+    # whose background is not frozen.
+    HEAL = 1.0      # seconds between two whole repaints of an unfrozen popup
     SETTLE = 0.3    # after a resize: the session behind has redrawn by then
 
-    def __init__(self):
-        self.due = time.monotonic() + self.HEAL
+    def __init__(self, periodic=True):
+        self.periodic = periodic
+        self.due = time.monotonic() + self.HEAL if periodic else None
 
     def resized(self, screen):
         screen.clearok(True)
         self.due = time.monotonic() + self.SETTLE
 
     def timeout(self, busy):
-        """The ms get_wch waits: 150 while a read runs, else until the next heal."""
-        left = max(0, int((self.due - time.monotonic()) * 1000))
+        """Bound the input wait by a pending repair, without scheduling one."""
+        left = 1000 if self.due is None else max(0, int((self.due - time.monotonic()) * 1000))
         return min(150, left) if busy else left
 
     def tick(self, screen):
         """Before a draw: past due ⇒ tmux redraws the whole popup, and curses
         every cell of it."""
-        if time.monotonic() < self.due:
+        if self.due is None or time.monotonic() < self.due:
             return
         height = screen.getmaxyx()[0]
         try:
@@ -903,7 +908,7 @@ class Heal:
         except OSError:
             pass
         screen.clearok(True)
-        self.due = time.monotonic() + self.HEAL
+        self.due = time.monotonic() + self.HEAL if self.periodic else None
 
 
 def words(*keys):
