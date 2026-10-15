@@ -28,6 +28,17 @@
 - **测试身份**：入口给演练身份的寿命最长 24 小时，到期连同 pod 上的登录一起删。证书不被接受或入口不再列出 pod，就用这台机器的管理员证书 `fleet drill invite --home <pod> --ttl 24h` 重开，客户端 `fleet login`，用一次性批准码确认（批准码只在变量里，不落盘、不打印）。
 - 客户端上的登录或 `fleet` 不在了：`useradd` + 入口的安装行。
 
+## 一轮的结果与诊断（#4303）
+
+每轮一个 `run_id`，目录 `$FLEET_CONF_DIR/global/cn-probe/runs/<run_id>/`（0700，文件 0600），巡检的 `last.json` 记着 `run_id` 和 `result`：
+
+- `stages.tsv` → **`result.json`**：每阶段的起止、耗时、可机读 `reason_code`、证据（`ev/<阶段>.txt`，脱敏）和类别——`product` 产品失败、`env` 测试路面无效（客户端机器、它的登录、演练身份过期、pod 不在名单、`ensure` 失败）、`probe` 探针自己出错。只有一个失败阶段都没有才算通；`env` 和 `probe` 都不算通过。探针打印的 `RESULT` / `CLASS` / `通：` / `不通：` 行和退出码都由 `bin/fleet-cn-probe-result.py render` 从这个文件生成，一份结论。
+- **`diag.json`**：`bin/fleet-cn-probe-diag.sh` 每轮一次的只读、脱敏诊断——hub / 客户端 / 节点运行时 / ccquota 版本，pod 名、UID、镜像和实际运行的 digest，证书主体与有效期、入口名单，准入闸门的判定、真正的拒绝者和 CPU / 内存 / 磁盘读数（闸门对着状态文件的副本跑，不写任何东西），凭据代理的信任、各家走哪条路、最近一次启动和最近一次 `nocred`，开号器在跑还是被关、为什么、运行时目录权限。读不到的项写 `unknown`，`sources` 说每个来源怎么样；凭据文件一概不读，token / cookie / 码一律删去。有 kubectl 的这台机器从集群直接读 pod（`kubectl exec`，只读命令），否则经客户端 `fleet connect`。
+- Codex 步只读本轮 `--new` 会话自己那块屏：已经出现明确终止错误（`unexpected status 4xx`，不含 408 / 429 和正在重试的行；钥匙被拒；证书过期 / 吊销）就当场失败，reason 按原话分（`upstream_no_credential` · `upstream_http_<码>` · `cert_refused`）；没有明确错误照常等到 `FLEET_CN_PROBE_ANSWER`。
+- `ensure` 失败就是本轮结论（`env` · `ensure:<部分>`），不跑探针、不开会话；单的标题写「国内探针环境无效」，提交状态写「环境无效」。
+
+后续有界复测沿用这个格式。
+
 ## 红了会怎样
 
 - 在它测的 stable 提交上留提交状态 `cn path`（failure，指向 breakage 单）；绿了留 success。
@@ -45,7 +56,8 @@
 ## 手动
 
 ```sh
-bin/fleet-cn-probe.sh                                  # 走一遍，不记任何东西
+bin/fleet-cn-probe.sh                                  # 走一遍（只写 runs/<run_id>/，不记巡检状态、不开单）
+bin/fleet-cn-probe-diag.sh                             # 只读诊断一次，写 runs/<id>/diag.json
 bin/fleet-cn-probe.sh --layers 'view'                  # 只走连通 + 界面
 bin/fleet-cn-probe-env.sh status --repo <owner/name> --stable <sha>   # 测试路面现状，不动
 bin/fleet-cn-probe-watch.sh --repo <owner/name> --now  # 立刻巡检一次（记状态、开单）

@@ -928,8 +928,13 @@ if age > 12 * 3600:
 elif d.get("verdict") == "green":
     print("PASS\t通 — walked %s ago against stable %s" % (h, st))
 else:
-    print("WARN\t不通：卡在 %s — %s (%s ago, stable %s%s); stable cannot move past it" % (
-        d.get("stuck") or "?", (d.get("detail") or "")[:120], h, st, ", " + d["issue"] if d.get("issue") else ""))
+    # issue #4303: whose failure (product / env / probe), why, and the run's result
+    cls = {"env": "环境无效", "probe": "检测出错"}.get(d.get("class") or "", "不通")
+    why = " · %s" % d["reason_code"] if d.get("reason_code") else ""
+    run = "; result %s" % d["result"] if d.get("result") else ""
+    print("WARN\t%s%s：卡在 %s — %s (%s ago, stable %s%s%s); stable cannot move past it" % (
+        cls, why, d.get("stuck") or "?", (d.get("detail") or "")[:120], h, st,
+        ", " + d["issue"] if d.get("issue") else "", run))
 PY2
 )
     case "$cnl" in

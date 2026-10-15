@@ -44,10 +44,31 @@
 # is pinned only for its view / codex step and put back to auto right after.
 #
 # Host key: a route whose ssh says the host key is unknown / changed is FAIL.
-# Prints `PASS|FAIL|INFO <layer> <detail>` lines, then ONE verdict line:
+# Prints `PASS|FAIL|INFO <layer> <detail>` lines, then `RESULT <result.json>`,
+# `CLASS <class> <reason_code>` and ONE verdict line:
 #   通：自动选 <route>；<route> 通 · <route> 通 …
 #   不通：卡在 <layer> — <detail>
 # Exit 0 通 (every layer that ran) · 1 不通 · 2 usage.
+#
+# One result (issue #4303): every stage is recorded with its start, end, a
+# machine-readable reason_code, its evidence (redacted, under the run dir) and a
+# class — `product` (the product failed the person's road), `env` (the test road
+# is not there: the client box, its login, the drill identity, the pod off the
+# roster) or `probe` (the probe's own machinery); only a run with no failed stage
+# is 通. The run's dir, FLEET_CN_PROBE_RUNS/<run_id>/ (default
+# $FLEET_CONF_DIR/global/cn-probe/runs, 0700, files 0600), holds stages.tsv,
+# result.json — the verdict line above is printed FROM it
+# (bin/fleet-cn-probe-result.py) — diag.json (bin/fleet-cn-probe-diag.sh, one
+# read-only, redacted diagnosis of the run: versions, image digest, identity,
+# admission and its readings, the credential road, the account opener;
+# FLEET_CN_PROBE_DIAG=0 skips it) and ev/<stage>.txt.
+#
+# A Codex session's own terminal error ends its wait at once (issue #4303): the
+# probe's pane holds only this round's NEW session, and a definite refusal on it
+# — `unexpected status 4xx …` (403 no upstream credential, 401 …; never 408 /
+# 429, and never a retrying line), a refused ssh key — fails the step with that
+# reason within a poll (3 s), instead of waiting FLEET_CN_PROBE_ANSWER s. The
+# prompt's own echo is never read as an answer or an error.
 #
 # What it leaves on the pod: one closed ticket and its task record per run; the
 # Codex sessions it opened are closed. The client keeps its own connect cache
@@ -90,13 +111,48 @@ case "$REPO" in *[!A-Za-z0-9_./-]*) echo "fleet-cn-probe: --repo is owner/name" 
 for n in "$STAY" "$VIEW_UP" "$ANSWER"; do case "$n" in ''|*[!0-9]*) echo "fleet-cn-probe: FLEET_CN_PROBE_STAY / _VIEW_UP / _ANSWER are seconds" >&2; exit 2 ;; esac; done
 layer_on() { case " $LAYERS " in *" $1 "*) return 0 ;; esac; return 1; }
 
-STUCK='' DETAIL='' OKS=''
+BIN="$(cd "$(dirname "$0")" && pwd)"
+RES="$BIN/fleet-cn-probe-result.py"
+RUN_ID=${FLEET_CN_PROBE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -dc 0-9a-f)}
+case "$RUN_ID" in ''|*[!A-Za-z0-9_.-]*) echo "fleet-cn-probe: FLEET_CN_PROBE_RUN_ID is [A-Za-z0-9_.-]" >&2; exit 2 ;; esac
+RUN_DIR=${FLEET_CN_PROBE_RUNS:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/cn-probe/runs}/$RUN_ID
+umask 077
+mkdir -p "$RUN_DIR/ev" || { echo "fleet-cn-probe: cannot make $RUN_DIR" >&2; exit 2; }
+chmod 700 "$RUN_DIR" "$RUN_DIR/ev" 2>/dev/null
+STAGES="$RUN_DIR/stages.tsv"; : > "$STAGES"
+export FLEET_CN_PROBE_RUN_ID=$RUN_ID FLEET_CN_PROBE_RUN_DIR=$RUN_DIR
+
+OKS='' T0=$(date +%s)
 say() { printf '%s\n' "$*"; }
-pass() { say "PASS $1 $2"; }
-fail() { say "FAIL $1 $2"; [ -n "$STUCK" ] || { STUCK=$1; DETAIL=$2; }; }
+redact() { python3 "$RES" redact; }
+# rec <result> <layer> <class> <reason_code> <detail> [<evidence text>] — one
+# stage row; a stage runs from the previous stage's end (or the probe's start)
+rec() {
+  local t1 ev=''
+  t1=$(date +%s)
+  if [ -n "${6:-}" ]; then
+    ev="ev/$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_').txt"
+    printf '%s\n' "$6" | redact > "$RUN_DIR/$ev"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$T0" "$t1" "$ev" "$(printf '%s' "$5" | tr '\t\n' '  ')" >> "$STAGES"
+  T0=$t1
+}
+# pass <layer> <detail> [<evidence>] · fail <layer> <detail> [<reason_code> [<class> [<evidence>]]]
+pass() { local d; d=$(printf '%s' "$2" | redact); say "PASS $1 $d"; rec pass "$1" none ok "$d" "${3:-}"; }
+fail() {
+  local d; d=$(printf '%s' "$2" | redact)
+  say "FAIL $1 $d"; rec fail "$1" "${4:-product}" "${3:-$(printf '%s' "${1%%:*}" | tr -c 'A-Za-z0-9' '_')_failed}" "$d" "${5:-}"
+}
+# verdict — the diagnosis (read-only), then the ONE result: the lines and the
+# exit code come out of result.json
 verdict() {
-  if [ -z "$STUCK" ]; then say "通：$OKS"; exit 0; fi
-  say "不通：卡在 $STUCK — $DETAIL"; exit 1
+  if [ "${FLEET_CN_PROBE_DIAG:-1}" != 0 ]; then
+    ${FLEET_CN_PROBE_DIAG_CMD:-bash $BIN/fleet-cn-probe-diag.sh} --run-dir "$RUN_DIR" >/dev/null 2>&1 \
+      || say "INFO diag the read-only diagnosis did not finish (see $RUN_DIR)"
+  fi
+  python3 "$RES" render "$RUN_DIR" --oks "$OKS"
+  case $? in 0) exit 0 ;; 1) exit 1 ;; esac
+  say "CLASS probe result_unwritten"; say "不通：卡在 probe — the result could not be written ($RUN_DIR)"; exit 1
 }
 
 SSHO=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10)
@@ -116,28 +172,30 @@ on_client_s() {
 }
 
 # client
-if ! out=$(ssh "${SSHO[@]}" "$CLIENT" true 2>&1); then fail client "ssh $CLIENT: $(printf '%s' "$out" | tail -1)"; verdict; fi
+if ! out=$(ssh "${SSHO[@]}" "$CLIENT" true 2>&1); then fail client "ssh $CLIENT: $(printf '%s' "$out" | tail -1)" client_unreachable env "$out"; verdict; fi
 pass client "$CLIENT"
 
 # install
 out=$(on_client 'command -v fleet && cat ~/.claude/fleet/.release 2>/dev/null | head -1; grep -h "^export FLEET_HUB_URL=" ~/.config/claude-fleet/fleet.conf')
-case "$out" in */fleet*) pass install "$(printf '%s' "$out" | tr '\n' ' ')" ;; *) fail install "no fleet for $AS: $out"; verdict ;; esac
+case "$out" in */fleet*) pass install "$(printf '%s' "$out" | tr '\n' ' ')" ;; *) fail install "no fleet for $AS: $out" client_no_fleet env "$out"; verdict ;; esac
 HUB=$(printf '%s\n' "$out" | sed -n 's/^export FLEET_HUB_URL="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | tail -1)
-[ -n "$HUB" ] || { fail install "the client's fleet.conf names no FLEET_HUB_URL"; verdict; }
+[ -n "$HUB" ] || { fail install "the client's fleet.conf names no FLEET_HUB_URL" client_no_hub_url env "$out"; verdict; }
 
 # hub
 out=$(on_client "curl -sS -m 20 -o /dev/null -w '%{http_code} %{time_total}s' $HUB/version")
-case "$out" in 200*) pass hub "$HUB $out" ;; *) fail hub "$HUB $out"; verdict ;; esac
+case "$out" in 200*) pass hub "$HUB $out" ;; *) fail hub "$HUB $out" "$(printf '%s' "$out" | awk '{c = $1 + 0; print (c ? "hub_http_" c : "hub_unreachable")}')" product "$out"; verdict ;; esac
 
 # cert
 out=$(on_client "timeout $TMO fleet connect --cert-check")
 case "$out" in PASS*) pass cert "$(printf '%s' "$out" | cut -f2-)" ;;
-  *) fail cert "$(printf '%s' "$out" | tr '\t\n' '  ')"; verdict ;; esac
+  # the drill identity ran out (env) or the hub refused a live certificate (product)
+  *) cc=$(python3 "$RES" classify-cert "$out")
+     fail cert "$(printf '%s' "$out" | tr '\t\n' '  ')" "${cc#* }" "${cc%% *}" "$out"; verdict ;; esac
 
 # list
 out=$(on_client "timeout $TMO fleet connect --pick $MACHINE")
 case "$out" in *"\"machine\": \"$MACHINE\""*|*"\"hostname\": \"$MACHINE\""*) pass list "the hub lists $MACHINE for $AS" ;;
-  *) fail list "the hub does not list $MACHINE for $AS: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; verdict ;; esac
+  *) fail list "the hub does not list $MACHINE for $AS: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')" machine_not_listed env "$out"; verdict ;; esac
 
 # table + auto: one run, measured afresh. A forced route PINS the machine
 # (`--route` = `fleet route <machine> <route>`, remembered), so every run here
@@ -157,9 +215,9 @@ done
 [ -n "$ROUTES" ] || ROUTES=$(printf '%s\n' "$rows" | grep -vE '不在这台机器的局域网|Tailscale' | cut -c3- | awk '{print $1}' | tr '\n' ' ')
 hostkey() { printf '%s' "$1" | grep -E 'REMOTE HOST IDENTIFICATION|Host key verification failed|主机钥匙' | head -1; }
 if printf '%s\n' "$out" | grep -q '^rc=0$' && printf '%s\n' "$out" | grep -q "^$MACHINE"; then
-  hk=$(hostkey "$out"); if [ -n "$hk" ]; then fail auto "host key: $hk"; else pass auto "picked ${picked:-?}"; OKS="自动选 ${picked:-?}"; fi
+  hk=$(hostkey "$out"); if [ -n "$hk" ]; then fail auto "host key: $hk" host_key product "$out"; else pass auto "picked ${picked:-?}" "$out"; OKS="自动选 ${picked:-?}"; fi
 else
-  fail auto "picked ${picked:-none}: $(printf '%s\n' "$out" | grep -v '^ \|^fleet connect · \|^→' | tail -3 | tr '\n' ' ')"
+  fail auto "picked ${picked:-none}: $(printf '%s\n' "$out" | grep -v '^ \|^fleet connect · \|^→' | tail -3 | tr '\n' ' ')" route_auto_failed product "$out"
 fi
 
 # door_why — the door refused the key: read (never write) what the door was
@@ -194,7 +252,10 @@ for r in $ROUTES; do
   if printf '%s\n' "$out" | grep -q "^$MACHINE" && printf '%s\n' "$out" | grep -q '^rc=0$' && [ -z "$hk" ]; then
     pass "$r" "ran hostname on $(printf '%s\n' "$out" | grep "^$MACHINE" | head -1)"; OKS="${OKS}；$r 通"
   else
-    fail "$r" "${hk:-$(printf '%s\n' "$out" | grep -v '^rc=' | tail -3 | tr '\n' ' ')}"
+    rc_why=route_failed
+    [ -z "$hk" ] || rc_why=host_key
+    case "$out" in *'Permission denied (publickey'*) rc_why=key_refused ;; esac
+    fail "$r" "${hk:-$(printf '%s\n' "$out" | grep -v '^rc=' | tail -3 | tr '\n' ' ')}" "$rc_why" product "$out"
     case "$r:$out" in entry:*'Permission denied (publickey)'*) door_why ;; esac
   fi
 done
@@ -245,16 +306,16 @@ view_step() {
   case "$st" in
     'VIEW stay alive=1 end=none')
       if printf '%s' "$scr" | grep -qE '__CNP_EXIT=|连不上|could not|REFUSED|Permission denied'; then
-        fail "view:$r" "drawn, then an error on screen: $(printf '%s' "$scr" | shown)"
+        fail "view:$r" "drawn, then an error on screen: $(printf '%s' "$scr" | shown)" view_error product "$out"
       else
         # shellcheck disable=SC2046 # the VIEW line's words, split on purpose
         set -- $(printf '%s\n' "$out" | grep '^VIEW up ' | tail -n 1)
-        pass "view:$r" "bare fleet drew the pod's view in ${3:-?}s (route ${4:-?}, first ${5:-?}ms) and stayed ${STAY}s"
+        pass "view:$r" "bare fleet drew the pod's view in ${3:-?}s (route ${4:-?}, first ${5:-?}ms) and stayed ${STAY}s" "$out"
       fi ;;
-    'VIEW stay '*) fail "view:$r" "drawn, then gone within ${STAY}s (${st#VIEW stay }): $(printf '%s' "$scr" | shown)" ;;
-    'VIEW noview') fail "view:$r" "bare fleet drew no view in ${VIEW_UP}s (no drawn row in thin.log): $(printf '%s' "$scr" | shown)" ;;
-    'VIEW notmux'*) fail "view:$r" "no tmux for $AS on the client — cannot give fleet a terminal: ${st#VIEW notmux}" ;;
-    *) fail "view:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
+    'VIEW stay '*) fail "view:$r" "drawn, then gone within ${STAY}s (${st#VIEW stay }): $(printf '%s' "$scr" | shown)" view_dropped product "$out" ;;
+    'VIEW noview') fail "view:$r" "bare fleet drew no view in ${VIEW_UP}s (no drawn row in thin.log): $(printf '%s' "$scr" | shown)" view_not_drawn product "$out" ;;
+    'VIEW notmux'*) fail "view:$r" "no tmux for $AS on the client — cannot give fleet a terminal: ${st#VIEW notmux}" client_no_tmux probe "$out" ;;
+    *) fail "view:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" step_not_run probe "$out" ;;
   esac
 }
 
@@ -275,37 +336,63 @@ tmux -L $T kill-server 2>/dev/null
 # then tmux's own words
 tn() { tmux -L $T new-session -d -s c -x 160 -y 48 "env -u TMUX -u TMUX_PANE fleet codex --new '$ASK'; echo __CNP_EXIT=\$?; sleep 900" 2>&1; }
 e=$(tn) || { sleep 1; e=$(tn); } || { echo "CODEX notmux $(printf '%s' "$e" | tr '\n' ' ' | cut -c1-160)"; exit 0; }
-st=wait t0=$(date +%s)
+st=wait t0=$(date +%s) err=''
+# term — a definite terminal error the NEW session itself shows (issue #4303):
+# an HTTP refusal the agent gave up on, a refused key. The prompt's echo, a
+# retrying line, 408 / 429 (retried by the agent) are never one.
+term() {
+  printf '%s\n' "$1" | grep -vF -- '只回一个词' | grep -viE 'reconnect|re-connect|retrying|retry in' | tr '\n' ' ' |
+    grep -Eo 'unexpected status [0-9]{3}[^■›│]{0,220}|Permission denied \(publickey[^)]*\)|certificate (is )?(expired|revoked|not (yet )?valid)[^.]{0,80}' |
+    grep -vE '^unexpected status (408|429)' | head -n 1 | sed 's/[[:space:]][[:space:]]*/ /g; s/ $//'
+}
 while [ $(( $(date +%s) - t0 )) -lt "$SECS" ]; do
   sleep 3
   scr=$(tmux -L $T capture-pane -p -t c 2>/dev/null)
   if printf '%s\n' "$scr" | grep -F -- "$W" | grep -vqF -- '只回一个词'; then st=answered; break; fi
   if printf '%s\n' "$scr" | grep -q '__CNP_EXIT='; then st=exited; break; fi
+  err=$(term "$scr"); [ -z "$err" ] || { st=error; break; }
 done
 echo "CODEX $st $(( $(date +%s) - t0 ))"
+[ -z "$err" ] || echo "TERM $err"
 printf '%s\n' "$scr" | grep -v '^[[:space:]]*$' | tail -n 8 | sed 's/^/SCREEN /'
 tmux -L $T kill-server 2>/dev/null
 for k in $(comm -13 <(printf '%s\n' "$before") <(keys)); do
-  fleet close "$k" --yes >/dev/null 2>&1 && echo "CLOSED $k" || echo "LEFT $k"
+  if o=$(fleet close "$k" --yes 2>&1); then echo "CLOSED $k"; else echo "LEFT $k $(printf '%s' "$o" | tail -n 1 | tr '\t' ' ' | cut -c1-200)"; fi
 done
 fleet route "$M" auto >/dev/null 2>&1
 EOS
 }
 codex_step() {
-  local r=$1 w out st scr
+  local r=$1 w out st scr term why
   w=CNP$(od -An -N3 -tu4 /dev/urandom 2>/dev/null | tr -dc 0-9 | cut -c1-6)
   out=$(codex_script "$r" "$w" | on_client_s)
   st=$(printf '%s\n' "$out" | grep '^CODEX ' | tail -n 1)
   scr=$(printf '%s\n' "$out" | sed -n 's/^SCREEN //p' | grep -v "$w" | tail -n 3 | tr '\n' ' ' | shown)
-  printf '%s\n' "$out" | grep '^LEFT ' | while read -r _ k; do say "INFO codex:$r could not close the session $k it opened"; done
+  printf '%s\n' "$out" | grep '^LEFT ' | while read -r _ k why; do say "INFO codex:$r could not close the session $k it opened: ${why:-no reason given}"; done
   # shellcheck disable=SC2086 # the CODEX line's words, split on purpose
   set -- $st
+  term=$(printf '%s\n' "$out" | sed -n 's/^TERM //p' | head -n 1)
   case "${2:-}" in
-    answered) pass "codex:$r" "a new Codex session answered $w in ${3:-?}s" ;;
-    exited) fail "codex:$r" "fleet codex --new came back without a session: $scr" ;;
-    wait) fail "codex:$r" "no answer carrying $w in ${ANSWER}s: $scr" ;;
-    notmux) fail "codex:$r" "no tmux for $AS on the client — cannot give fleet a terminal: ${st#CODEX notmux}" ;;
-    *) fail "codex:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
+    answered) pass "codex:$r" "a new Codex session answered $w in ${3:-?}s" "$out" ;;
+    error)    # the session's own refusal: say it at once, by what it said
+      case "$term" in
+        *'no upstream credential'*) why=upstream_no_credential ;;
+        *'no subscription account'*) why=upstream_no_subscription ;;
+        'unexpected status '*) why=upstream_http_$(printf '%s' "$term" | awk '{print $3}') ;;
+        *'Permission denied'*|*certificate*) why=cert_refused ;;
+        *) why=session_error ;;
+      esac
+      fail "codex:$r" "the new Codex session ended its turn with an error after ${3:-?}s: $term" "$why" product "$out" ;;
+    exited)
+      case "$scr" in
+        *'REFUSED AT_CAPACITY'*) why=admit_refused ;;
+        *REFUSED*) why=refused_$(printf '%s' "$scr" | sed -n 's/.*REFUSED \([A-Z_]*\).*/\1/p' | tr 'A-Z' 'a-z') ;;
+        *) why=session_not_opened ;;
+      esac
+      fail "codex:$r" "fleet codex --new came back without a session: $scr" "$why" product "$out" ;;
+    wait) fail "codex:$r" "no answer carrying $w in ${ANSWER}s: $scr" no_answer_timeout product "$out" ;;
+    notmux) fail "codex:$r" "no tmux for $AS on the client — cannot give fleet a terminal: ${st#CODEX notmux}" client_no_tmux probe "$out" ;;
+    *) fail "codex:$r" "the client step did not run: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" step_not_run probe "$out" ;;
   esac
 }
 
@@ -345,13 +432,15 @@ task_step() {
   case "$ln" in
     'TASK rc=0 '*)
       if [ "$t" != - ] && [ "$u" != - ]; then
-        pass task "$(printf '%s\n' "$out" | sed -n 's/^TASK repo //p') — record $t, ticket $u filed$(printf '%s\n' "$out" | grep -q '^TASK closed' && echo ' and closed again' || echo ' (NOT closed — close it by hand)')"
+        pass task "$(printf '%s\n' "$out" | sed -n 's/^TASK repo //p') — record $t, ticket $u filed$(printf '%s\n' "$out" | grep -q '^TASK closed' && echo ' and closed again' || echo ' (NOT closed — close it by hand)')" "$out"
       else
-        fail task "dispatch said 0 but printed record ${t} ticket ${u}"
+        fail task "dispatch said 0 but printed record ${t} ticket ${u}" task_incomplete product "$out"
       fi ;;
-    'TASK rc='*) why=$(printf '%s\n' "$out" | sed -n 's/^ERR //p' | tr '\n' ' '); fail task "dispatch failed (${ln#TASK }): $why" ;;
-    *) case "$out" in *'TASK norepo'*) why="the pod's fleet hosts no repo" ;; *) why=$(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ') ;; esac
-       fail task "$why" ;;
+    'TASK rc='*) why=$(printf '%s\n' "$out" | sed -n 's/^ERR //p' | tr '\n' ' '); fail task "dispatch failed (${ln#TASK }): $why" task_dispatch_failed product "$out" ;;
+    *) case "$out" in
+         *'TASK norepo'*) fail task "the pod's fleet hosts no repo" pod_no_repo env "$out" ;;
+         *) fail task "$(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" step_not_run probe "$out" ;;
+       esac ;;
   esac
 }
 
