@@ -329,7 +329,7 @@ class Topbar(unittest.TestCase):
     def test_width_progress_and_restoration(self):
         import base64, json
         bar = module('fleet-topbar.py')
-        state = dict(id='g-123', window='@1', until=time.time() + 10, phase='uploading',
+        state = dict(id='g-123', generation='g', window='@1', until=time.time() + 10, phase='uploading',
                      name='long screenshot name.png', done=3400000, total=8100000, index=2, count=3)
         full = bar.upload_line(state, 120)
         self.assertIn('41%', full)

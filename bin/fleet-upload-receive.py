@@ -193,7 +193,7 @@ def status(up, h):
     key = '%s-%s' % (h['generation'], op)
     state = dict(phase='preparing', name='', index=0, count=0, done=0, total=0,
                  generation=h['generation'], operation=op, window=ident['home'].split('|')[0], id=key)
-    lockpath = Path(leases.views_dir()) / ('.upload-' + h['view'] + '.lock')
+    lockpath = Path(leases.views_dir()) / '.upload-status.lock'
 
     def publish(first=False, terminal=False):
         current = leases.rows().get(h['view'], {})

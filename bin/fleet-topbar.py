@@ -487,7 +487,7 @@ def upload_line(state, cols):
         suffix = ' · Paused · ^C cancel' if active else ''
         fixed = '↑ ' + word + count + percent + suffix
     if cells(fixed) > cols:
-        fixed = word + percent + (' · ^C cancel' if active else '')
+        fixed = word[:4] + percent + ' Paused ^C cancel' if active else word + percent
     if cells(fixed) > cols and active:
         fixed = ('↑' + percent.strip() if phase == 'uploading' else word[:4]) + ' Pause ^C cancel'
     room = cols - cells(fixed) - 1
@@ -506,7 +506,11 @@ def render_upload(kv, cols):
         line = '#[fg=%s,bold]%s#[default]' % (HL, tmux_text(upload_line(state, cols)))
         # A cached #() output loses ownership immediately on switch/reconnect or
         # replacement by another attachment, even before Python next runs.
-        line = '#{?#{==:#{@view_upload_id},%s},%s,%s}' % (state['id'], branch_text(line), quick_fmt())
+        # Generation is written only by cur, never by a status writer; even a
+        # switch racing a last publish cannot resurrect the old view's line.
+        if not re.fullmatch(r'[A-Za-z0-9-]+', state['generation']): return None
+        line = '#{?#{&&:#{==:#{@view_upload_id},%s},#{==:#{@view_upload_gen},%s}},%s,%s}' % (
+            state['id'], state['generation'], branch_text(line), quick_fmt())
         return own_window(state['window'], line)
     except (ValueError, KeyError, TypeError):
         return None
