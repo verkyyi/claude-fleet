@@ -168,6 +168,57 @@ class IdleGuard:
         self.previous = None
         self.peer_activity = {}
         self.started = time.time()
+        self.activity_before = None
+        self.self_activity = None
+        self.activity_dir = (os.path.join(a.conf_dir, "idle-cost", "activity")
+                             if a.conf_dir else "")
+        if self.activity_dir:
+            os.makedirs(self.activity_dir, mode=0o700, exist_ok=True)
+
+    def activity(self):
+        """Never clear counters: another observer can still need their baseline.
+
+        Size is monotonic even when timestamps collide, and inode changes or
+        deletions invalidate an in-flight reading instead of hiding activity.
+        An unreadable tree is unknown, never a successful empty scan.
+        """
+        counters = {}
+        if not self.activity_dir:
+            return counters
+
+        def scan(directory):
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    st = entry.stat(follow_symlinks=False)
+                    if st.st_uid != os.getuid():
+                        raise RuntimeError("local activity has wrong owner")
+                    if stat.S_ISDIR(st.st_mode):
+                        scan(entry.path)
+                    elif stat.S_ISREG(st.st_mode):
+                        if entry.path != self.self_activity:
+                            counters[entry.path] = (st.st_ino, st.st_size)
+                    else:
+                        raise RuntimeError("local activity has wrong type")
+        scan(self.activity_dir)
+        return counters
+
+    def caller_activity(self):
+        # Pin the caller's server lifetime once. Another server on the same
+        # socket with a recycled @id must not inherit this exclusion.
+        if self.self_activity is None:
+            self.self_activity = ""
+            if self.activity_dir and self.a.self_socket and self.a.self_window:
+                try:
+                    identity = self.s.run(["tmux", "-S", self.a.self_socket,
+                                           "display-message", "-p", "-t", self.a.self_window,
+                                           "#{socket_path}/#{pid}/#{window_id}"]).strip()
+                except RuntimeError:
+                    return
+                # A missing target may resolve to nothing; never exclude a
+                # different window from a partial/default tmux match.
+                if re.fullmatch(re.escape(self.a.self_socket) + r"/\d+/" +
+                                re.escape(self.a.self_window), identity):
+                    self.self_activity = self.activity_dir + identity
 
     def local(self):
         sockets = {r.split("\t", 1)[0] for r in self.a.configs.splitlines() if r}
@@ -181,7 +232,7 @@ class IdleGuard:
                                 "tmux-%s" % os.getuid(), label)
             try:
                 out = self.s.run(["tmux", "-L", label, "list-windows", "-a", "-F",
-                                  self.a.window_format])
+                                  self.a.window_format + "|#{pid}"])
             except RuntimeError:
                 # A configured but stopped fleet has no socket. A server that
                 # exists but cannot answer is unknown, not an empty scan.
@@ -202,15 +253,15 @@ class IdleGuard:
                     seen.add(wid)
                     line = body
                 f = line.split("|")
-                if len(f) != 6:
+                if len(f) != 7:
                     raise RuntimeError("malformed window state: " + label)
-                sock, wid, role, state, changed, life = f
+                sock, wid, role, state, changed, life, server = f
                 # FLEET_ROLE_FMT is supplied by fleet-lib; same fallback as
                 # FLEET_ROLE_AWK, for windows predating role stamps.
                 worker = role == "=worker" or (not role.startswith("=") and
                                                role not in {"home", "plan", "dash", "backlog"})
                 if worker and life not in {"sleeping", "remote"}:
-                    rows[(sock, wid)] = (state, changed, life)
+                    rows[(sock, wid)] = (state, changed, life, server)
         return rows
 
     def snapshot(self):
@@ -295,8 +346,22 @@ class IdleGuard:
         return ""
 
     def check(self, alive):
+        self.caller_activity()
+        before = self.activity()
+        if self.activity_before is None:
+            self.activity_before = before
+        if before != self.activity_before:
+            return "busy interval: worker activity during sampling"
         rows = self.local()
-        rows.pop((self.a.self_socket, self.a.self_window), None)
+        # Bracket the tmux scan, including the first one. A transition during
+        # discovery cannot get incorporated into a later baseline unnoticed.
+        if self.activity() != self.activity_before:
+            return "busy interval: worker activity during sampling"
+        caller = (self.a.self_socket, self.a.self_window)
+        own = rows.get(caller)
+        if own and self.self_activity == (
+                self.activity_dir + caller[0] + "/" + own[3] + "/" + caller[1]):
+            rows.pop(caller)
         working = sum(v[0] == "working" or v[2] in {"preparing", "waking"} for v in rows.values())
         if working:
             return "working: %s session(s)" % working

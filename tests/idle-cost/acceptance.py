@@ -93,9 +93,10 @@ s = m.Sampler([])
 a = SimpleNamespace(configs="", conf_dir="", self_socket="/mine", self_window="@1",
                     sessions_dir=str(work / "empty"), login="me")
 g = m.IdleGuard(a, s)
-with patch.object(g, "local", return_value={("/other", "@1"): ("working", "1", "")}):
+g.self_activity = "/mine/123/@1"
+with patch.object(g, "local", return_value={("/other", "@1"): ("working", "1", "", "123")}):
     assert g.check(set()).startswith("working:")
-with patch.object(g, "local", return_value={("/mine", "@1"): ("working", "1", "")}):
+with patch.object(g, "local", return_value={("/mine", "@1"): ("working", "1", "", "123")}):
     assert g.check(set()) == ""
 # A worker that starts AND finishes between probes still changes its timestamp.
 g.previous = {("/other", "@1"): ("done", "1", "")}
