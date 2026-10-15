@@ -45,6 +45,8 @@ const (
 // A console page keeps its row at its old path: app_mount.go serves it under
 // /app (claude-fleet#3583) and TestAppPagesAreRoutes holds the two together.
 var routeAccess = map[string]string{
+	AttachmentPath:             accessUser,
+	control.AttachmentDataPath: accessSelf,
 	// The way in, and what a signed-out machine must reach.
 	"/logout": accessPublic, "/signin": accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,

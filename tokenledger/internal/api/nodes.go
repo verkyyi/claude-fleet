@@ -58,6 +58,8 @@ type nodeConns struct {
 const supersedeWindow = 10 * time.Minute
 
 type nodeConn struct {
+	attachmentGeneration string
+	canAttachment        bool
 	// wire is the endpoint's half of its control channel: the websocket, or
 	// one login's lane on its machine's link (claude-fleet#2333).
 	wire nodeWire
@@ -632,6 +634,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	}
 
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
+		canAttachment: hp.HasCap(control.CapAttachment), attachmentGeneration: hp.AttachmentGeneration,
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
 		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),

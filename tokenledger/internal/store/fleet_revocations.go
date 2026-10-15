@@ -152,6 +152,14 @@ func (s *Store) RevocationsVersion() (int64, error) {
 	return v, err
 }
 
+// RevokedJTI reads one expiring revocation without a process-local cache. Browser
+// attachment logout must take effect on the replica holding its signaling link.
+func (s *Store) RevokedJTI(jti string, at time.Time) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_revocations WHERE k = ? AND exp > ?`, "jti:"+jti, at.Unix()).Scan(&n)
+	return n != 0, err
+}
+
 // Revocations lists the entries still alive at at (exp after it), in key
 // order, with the version they belong to.
 func (s *Store) RevocationList(at time.Time) (int64, []Revocation, error) {

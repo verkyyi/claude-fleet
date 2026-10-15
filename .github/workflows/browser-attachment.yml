@@ -1,0 +1,47 @@
+name: browser-attachment
+on:
+  pull_request:
+    paths:
+      - 'tokenledger/**'
+      - 'extras/browser-transport/**'
+      - '.github/workflows/browser-attachment.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'tokenledger/**'
+      - 'extras/browser-transport/**'
+      - '.github/workflows/browser-attachment.yml'
+concurrency:
+  group: browser-attachment-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: tokenledger/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extras/browser-transport/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: extras/browser-transport
+      - run: npm run check
+        working-directory: extras/browser-transport
+      - run: npx playwright install --with-deps chromium
+        working-directory: extras/browser-transport
+      - name: Actual browser to node adapter, UDP denial, no replay and cleanup
+        working-directory: tokenledger
+        run: |
+          set -o pipefail
+          go test -tags browseracceptance -count=1 -v -timeout 3m -run '^TestAttachmentChromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-attachment-evidence
+          path: browser-attachment.log

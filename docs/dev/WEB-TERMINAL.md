@@ -57,3 +57,62 @@ pod 重建就变。
 BREAK-IT：`term-other-person` · `term-relay-orphan` · `term-view-kills-session`。
 测试：`tokenledger/internal/api/term_relay_test.go`、`internal/agent/term_pty_test.go`、
 `internal/control/term_relay_test.go`、`bin/fleet-term-attach-selftest.sh`。
+
+## 直连优先的共用传输（C5 #4374）
+
+`extras/browser-transport/attachment.ts` 是两个 Vite 页面共用的连接助手；Go 的
+`internal/attachment.Stream` 是终端与对话适配器共用的有序帧接口。C5 提供终端适配器，
+C2 接页面；C6 接 Webchat 的请求准入及固定 `chat.sock` 适配器，仍使用原来的对话进程。
+在 C6 接入前，`service=chat` 明确拒绝，不绕过 `/v1/chat/*` 的试用、预算及请求限额。
+
+入口为同源 WebSocket `/v1/attachment/connect?service=term&worker=<worker id>`，也可用
+`target=personal`。`generation=<上次的代>` 用于恢复；不匹配答 `interrupted`，不跟到重建的 pod。
+旧 `/v1/term/connect` 和旧节点能力位保留；新入口要求 `attachment-v1`，不把旧节点说成能直连。
+
+1. hub 认本人、家、目标及维护状态，返回 `config`（目标、节点代、显式 STUN 配置）。
+2. 浏览器给 `offer`；完整 SDP ≤24 KiB、候选 ≤32、只准 UDP 的数据通道。无 WebRTC 时给 `relay`。
+3. hub 经原 `openLoginRelay` / 节点控制链路发 `attachment_open`；节点回拨
+   `/v1/node/attachment`。第一帧的 `fba1` 授权只到节点：人、家、登录、节点、服务、目标、连接、
+   代、DTLS SHA-256 指纹、选择 epoch、过期时间缺一不可。验过才建 ICE，协商时不开 PTY。
+4. 浏览器原生 WebRTC 与 Pion 交换 `answer`。可靠有序 `fleet.v1` DataChannel 通过 DTLS 校验
+   offer 指纹；无 TURN，relay candidate 拒绝。协商超时最多 8 秒，选择原 hub WebSocket 路。
+5. hub 在 `select` 时再认一次本人及同一个目标，签 epoch 2。节点先关闭 ICE 才允许 relay
+   开目标；direct 必须 DataChannel 已打开。服务发 `ready` 后才接收输入。协商期的数据直接拒绝。
+6. direct 的字节只走浏览器与节点；hub 每 5 秒重验授权并续一个 ≤15 秒的租约。维护、撤销、
+   换家、目标消失、节点控制链路断开或租约不能续都结束附件。退出登录持久撤销该 cookie 的
+   哈希，其他副本持有的连接也在重验时关闭；不保存 cookie 本身。
+
+选择只生效一次；迟到的 direct 成功不能抢回 relay。已就绪的 direct 后来断开，助手只尝试一次
+重新授权的 relay：同目标、同代、携带 `previous` 连接。节点先取消并等待旧附件清理，才启动
+新适配器；同一个前任只能被替换一次。没有输入队列，不重放不确定是否送达的写入。之后的页面
+恢复策略由 C3 负责。这个传输的 epoch 只裁定路径，C4 的逻辑终端控制权仍由页面/服务适配器接入。
+
+帧 ≤32 KiB；单 peer 接收/发送缓冲 ≤256 KiB，读写背压超限关闭该附件。文本仍为终端控制，
+二进制保持原始字节；页面显示可用 `utf8Stream()` 保留跨帧 UTF-8 状态。审计 `mode` 为
+`direct` 或 `relay`；`bytes_up/down` 是 **hub 转发的数据字节**，direct 必须为 0，不代表终端没有流量。
+选中的候选对类型经 `selected.pair` 返回；不记录候选地址、终端字节、授权或密钥。
+
+### 网络与部署验证
+
+hub 的 `CCQUOTA_ATTACHMENT_STUN` 是空白分隔的 `stun:host:port`，最多 4 个，默认空；
+没有隐含公共 STUN。空配置仍可尝试本地可达 host 候选，跨 NAT 通常回退。需要 STUN 时由部署者
+显式提供其端点，端点会交给浏览器和节点；不支持带凭据端点或 TURN。
+
+Mac 节点保留 SSH 为唯一静态公网入口。ICE 是节点附件临时分配的 UDP socket，不增加 TCP
+终端监听，不改防火墙或路由器。个人 ACK pod 使用现有 per-pod/per-login agent 边界及认证
+分配的家，不创建每人 LoadBalancer、NodePort、公网 IP 或 SSH 入口。所需策略须由部署者审阅：
+pod 到指定 STUN 的 UDP 出站及回包、pod 到浏览器候选地址临时 UDP 端口的 ICE 检查及回包、
+SNAT 映射允许反向 ICE。严格/对称 NAT 或 UDP 禁止时保留现有 hub HTTPS/WSS 回退。
+本实现不申请或修改任何基础设施规则，也不保证任意 NAT 都能直连。
+
+CI `browser-attachment` 在隔离身份、真实节点适配器和抛弃式 shell 上运行 Chromium：直连、
+跨帧中文、ready 前拒绝输入、直连中断后的无重放回退、浏览器策略禁 UDP 后回退、进程与转发表归零。
+精确命令：在 `extras/browser-transport` 中 `npm ci && npm run check && npx playwright install chromium`；
+在 `tokenledger` 中 `go test -tags browseracceptance -count=1 -v -run '^TestAttachmentChromium$' ./internal/api`。
+普通 Go 门另跑 `TestAttachment*` 的授权、重放、租约、候选/帧上限与背压测试。
+
+每次部署另外记录 Mac SSH-only 实际网络、ACK 个人 pod 各自的节点/hub 版本、STUN 配置、
+候选对类型、direct/relay、目标/代、hub 字节计数、清理结果及 UDP 禁止时的回退。用可回滚的
+浏览器 UDP 策略或专用测试身份验证，不能为测试改 live 防火墙/集群策略。pod 重建必须换代并拒绝
+旧授权。CI Chromium 版本写在日志；Safari 版本、日期、真实 OS CJK IME 需人工记录。上述真实
+拓扑与 Safari 验证在部署前仍为待验，不能用 CI host 候选对结果声称已覆盖 NAT 或已上线。

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/attachment"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
@@ -126,7 +127,20 @@ var startTermHelper = func(ctx context.Context, view, target string, cols, rows 
 		return nil, startWhy(ctx, cmd, err)
 	}
 	p := &chatPipe{cmd: cmd, in: in, out: bufio.NewReader(outR)}
-	b, err := p.out.ReadByte()
+	type firstByte struct {
+		b   byte
+		err error
+	}
+	first := make(chan firstByte, 1)
+	go func() { b, err := p.out.ReadByte(); first <- firstByte{b, err} }()
+	var b byte
+	select {
+	case got := <-first:
+		b, err = got.b, got.err
+	case <-ctx.Done():
+		p.Close()
+		return nil, ctx.Err()
+	}
 	if err == nil && b != termPtyReady {
 		err = fmt.Errorf("unexpected first byte %#x", b)
 	}
@@ -222,6 +236,11 @@ func (a *Agent) openTermRelay(ctx context.Context, m control.Message) {
 // spliceTerm moves frames between the hub's stream and the helper until either
 // ends or ctx does, then hangs the terminal up and closes the stream.
 func spliceTerm(ctx context.Context, ws *websocket.Conn, h termHelper) string {
+	return spliceTermStream(ctx, attachment.WebSocket{Conn: ws}, h)
+}
+
+// The PTY adapter is independent of WebSocket vs DataChannel selection.
+func spliceTermStream(ctx context.Context, ws attachment.Stream, h termHelper) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var mu sync.Mutex
@@ -290,7 +309,7 @@ func spliceTerm(ctx context.Context, ws *websocket.Conn, h termHelper) string {
 	}()
 	<-ctx.Done()
 	h.Close() // hang up: the helper's read ends, so does the copy
-	ws.Close(websocket.StatusNormalClosure, "")
+	ws.Close()
 	wg.Wait()
 	mu.Lock()
 	defer mu.Unlock()

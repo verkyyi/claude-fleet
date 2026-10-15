@@ -209,6 +209,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	}
 	if a.cfg.FleetTerm {
 		caps = append(caps, control.CapTerm)
+		caps = append(caps, control.CapAttachment)
 	}
 	if a.svcRunCapable() {
 		// A service login takes service run attempts (claude-fleet#4086).
@@ -268,16 +269,18 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			caps = append(caps, control.CapRecycleKeep)
 		}
 	}
+	attachmentGeneration := control.NewOpID()
 	hello, err := control.New(control.TypeHello, control.Hello{
-		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
-		AgentVersion: a.cfg.Version,
-		Admin:        a.cfg.FleetAdmin,
-		Capabilities: caps,
-		Compute:      a.computeClaim(),
-		ComputeForce: a.computeForce(),
-		Probe:        a.nodeProbe(),
-		Personal:     a.personalNow(),
-		LoginToken:   a.loginToken(),
+		AttachmentGeneration: attachmentGeneration,
+		HeartbeatMS:          int(a.cfg.LiveInterval / time.Millisecond),
+		AgentVersion:         a.cfg.Version,
+		Admin:                a.cfg.FleetAdmin,
+		Capabilities:         caps,
+		Compute:              a.computeClaim(),
+		ComputeForce:         a.computeForce(),
+		Probe:                a.nodeProbe(),
+		Personal:             a.personalNow(),
+		LoginToken:           a.loginToken(),
 	})
 	if err != nil {
 		return false, err
@@ -377,6 +380,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				// (claude-fleet#3838).
 				if a.cfg.FleetTerm {
 					go a.openTermRelay(ctx, m)
+				}
+			case control.TypeAttachmentOpen:
+				if a.cfg.FleetTerm {
+					go a.openAttachment(ctx, m, attachmentGeneration)
 				}
 			case control.TypeServiceLog:
 				// One entry's log (claude-fleet#2797): a page, or a

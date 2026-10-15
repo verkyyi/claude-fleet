@@ -179,6 +179,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusForbidden, "cross-origin form")
 			return
 		}
+		if err := s.logoutAttachments(r); err != nil {
+			httpError(w, http.StatusServiceUnavailable, "could not close browser attachments; retry sign-out")
+			return
+		}
 		for _, name := range []string{authz.CookieName, viewerCookie, loginCookie} {
 			http.SetCookie(w, &http.Cookie{
 				Name: name, Value: "", Path: "/", MaxAge: -1,
