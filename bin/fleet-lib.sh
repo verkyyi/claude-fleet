@@ -9612,6 +9612,29 @@ fleet_login_unused() {
   for s in "$@"; do [ -x "$d/$s" ] && return 1; done
   return 0
 }
+# fleet_idle_now — the ONE "nobody is working" predicate (issue #4355, EPIC #4354
+# 共同约定 1): rc 0 = idle, rc 1 = busy with one reason line on stdout. Busy is a
+# worker window (fleet_win_role worker) on any live fleet socket of this login whose
+# @claude_state is `working` — the caller's OWN window excepted (the session that
+# asks is not "someone working") — or a CI job on the box: a process whose argv
+# carries FLEET_CI_WORKER_PAT (Runner.Worker, what fleet-ci-runner.py marks busy;
+# `ps -ax` sees every login's, fleet-ci's included). Every idle measurement reads
+# it — fleet-idle-cost.sh, its doctor row, the batch's before/after readings — and
+# none writes a second one. FLEET_IDLE_SELF_WIN names the caller's window when it
+# has no $TMUX_PANE.
+fleet_idle_now() {
+  local self="${FLEET_IDLE_SELF_WIN:-}" n pat ps_out ci
+  [ -n "$self" ] || self=$(fleet_pane_fmt '#{window_id}' 2>/dev/null)
+  n=$(fleet_list_windows_all "#{window_id} $FLEET_ROLE_FMT #{@claude_state}" 2>/dev/null \
+      | awk -v self="${self:-}" "$FLEET_ROLE_AWK"' $1 != self && frole($2) == "worker" && $3 == "working" { n++ } END { print n+0 }')
+  if [ "${n:-0}" -gt 0 ]; then printf 'working: %s session(s)\n' "$n"; return 1; fi
+  pat="${FLEET_CI_WORKER_PAT:-Runner.Worker}"
+  # ps first, into a variable: an awk started beside it would see its own -v argv
+  ps_out=$(ps -axo command= 2>/dev/null)
+  ci=$(printf '%s\n' "$ps_out" | awk -v p="$pat" 'index($0, p) { n++ } END { print n+0 }')
+  if [ "${ci:-0}" -gt 0 ]; then printf 'ci: %s job(s) running\n' "$ci"; return 1; fi
+  printf 'idle\n'
+}
 # fleet_machine_sessions_owned <dir> — the login files in <dir> their login owns,
 # one path a line: a regular file named after the account that owns it (or after
 # that account's home basename — fleet_machine_login's key). fleet-doctor.sh is
