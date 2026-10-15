@@ -239,6 +239,8 @@ class IdleGuard:
             names = []
         except OSError:
             return "unknown: machine session inventory unreadable"
+        if set(self.peer_activity) - set(names):
+            return "unknown: a login disappeared during sampling"
         covered = set()
         for name in names:
             if name.startswith(".") or name == self.a.login:
@@ -278,6 +280,8 @@ class IdleGuard:
                         raise ValueError("activity marker has wrong owner or type")
                     if mark.st_mtime_ns != r["activity"]:
                         raise ValueError("activity since the last working-state snapshot")
+                    if self.previous is not None and mark.st_mtime_ns >= self.started * 1e9:
+                        return "busy interval: activity in login " + name
                     old = self.peer_activity.setdefault(name, mark.st_mtime_ns)
                     if old != mark.st_mtime_ns:
                         return "busy interval: activity in login " + name
@@ -382,9 +386,9 @@ def cmd_sample(a):
         a_ = s.ppid.get(p)
         top = p
         owner = None
-        guard = set()
-        while a_ is not None and a_ not in guard:
-            guard.add(a_)
+        ancestors = set()
+        while a_ is not None and a_ not in ancestors:
+            ancestors.add(a_)
             if a_ in alive and a_ in s.last:
                 age = s.last[a_][0] + (end - s.seen_at[a_])
                 if age >= a.min_age:

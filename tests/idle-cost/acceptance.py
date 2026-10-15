@@ -136,4 +136,15 @@ assert "busy interval" in g.peers(set())
 assert m.IdleGuard(a, s).peers(set()) == ""
 marker.unlink()
 assert "unknown" in m.IdleGuard(a, s).peers(set())
+marker.touch()
+g = m.IdleGuard(a, s)
+time.sleep(0.02)
+marker.touch()
+publish_peer()
+g.previous = {}  # first probe had no peers; this login appeared mid-window
+assert "busy interval" in g.peers(set())
+g = m.IdleGuard(a, s)
+assert g.peers(set()) == ""
+(shared / "peer").unlink()
+assert "disappeared" in g.peers(set())
 print("PASS cross-login activity between publications, missing marker refuses")
