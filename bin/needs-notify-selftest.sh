@@ -11,21 +11,10 @@
 #                 AskUserQuestion payload → @claude_needs_detail beside
 #                 needs/ask; the mod's `ask` with the payload on stdin → the same;
 #                 the next `working` clears it with the subtype
-#   C. notify   — moved to bin/notify-selftest.sh (issue #2759: the client's
-#                 refresh loop decides it); here: the bar's old road is a no-op,
-#                 and FLEET_NOTIFY=0 reaches the notifier
-#   D. focus    — a notifier with no click of its own (iTerm2's OSC 9): the jump
-#                 waits in @notify_jump and `jump-pending` (the client's focus-in)
-#                 takes it once; past FLEET_NOTIFY_JUMP_SECS it is dropped
-#   E. keys     — the bar's middle (conf/tmux-shell.conf @fleet_hint) for a real
-#                 client attached to an isolated server: the session's keys by
-#                 default (⌘N ⌘P ⌘↑↓ ⌘., each a `key-<key>` range); the prefix
-#                 keys while prefix is pressed; ⌘P's while its popup is open; ↵ /
-#                 esc in a question's pane; what a tap does on the list, with the
-#                 highlighted row's detail (fleet-sidebar.py bar_hint, #2305 — #948's
-#                 `? 快捷键` row is gone, the bar says it); the writing area's; a
-#                 tap on a range is that key (MouseDown1Status → send-keys -K) and
-#                 「! n 等你」 jumps to the one waiting (#2362: no ⌘J); narrower than 100 columns the line goes
+#   C. notify   — moved to bin/notify-selftest.sh (issue #2759: fleet_notify.py
+#                 decides it); here: the bar's old road is a no-op. The thin
+#                 client's focus jump is fleet-thin-notify-selftest.sh D (the old
+#                 client's D/E — its click, its bar's keys — went with it, #3008)
 # No network, no live fleet. Exit 0 = pass.
 set -uo pipefail
 
@@ -89,120 +78,9 @@ printf '%s' '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | st busy
 eq "B: an ordinary tool → working, no question" "working|" "$(opt '#{@claude_state}|#{@claude_needs_detail}')"
 
 # ============================================================================
-# C. notify — once, with who and what, and a click that jumps
+# C. notify — the bar's old road stays a no-op
 # ============================================================================
-T split-window -d -t "$PANE" 'sleep 600'
-LIST=$(T list-panes -t "=$L:" -F '#{pane_id}' | tail -1)
-T set-option -p -t "$LIST" @sidebar 1
-printf '{"caps":["notify"]}\n' > "$WORK/client.where.json"
-cat > "$WORK/notifier" <<'SH'
-#!/bin/sh
-# a fake notifier: one line per notification, then the person clicks it
-printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"
-[ -n "${FLEET_NOTIFY_CLICK:-}" ] && eval "$FLEET_NOTIFY_CLICK"
-exit 0
-SH
-chmod +x "$WORK/notifier"
-export NOTIFY_LOG="$WORK/notify.log" FLEET_CLIENT_NOTIFY_CMD="$WORK/notifier" FLEET_SHELL_SESSION="$L"
-# The notification itself is bin/fleet_notify.py's since issue #2759 (the
-# client's refresh loop — bin/notify-selftest.sh); the bar's old road is a no-op.
-eq "C: fleet_alerts_notify (the bar's road) is retired — nothing" "0|" \
-   "$(TMUX="$SOCK,0,0" FLEET_SHELL=1 bash -c '. "$1/usage-lib.sh"; . "$1/fleet-alerts.sh"; fleet_alerts_notify; echo $?' _ "$BIN")|$(cat "$NOTIFY_LOG" 2>/dev/null)"
-FLEET_NOTIFY=0 python3 "$BIN/fleet-client-actions.py" notify --title t --body b --jump wid:F/x; sleep 0.2
-eq "C: FLEET_NOTIFY=0 reaches the notifier too → nothing" "" "$(cat "$NOTIFY_LOG" 2>/dev/null)"
-
-# ============================================================================
-# D. focus — a notifier with no click: the focus-in takes the jump
-# ============================================================================
-printf '{"caps":["iterm2"]}\n' > "$WORK/client.where.json"
-printf '#!/bin/sh\ncat >> "%s/escapes"\n' "$WORK" > "$WORK/escape"; chmod +x "$WORK/escape"
-export FLEET_CLIENT_ESCAPE_CMD="$WORK/escape"
-T set-option -up -t "$LIST" @sidebar_do 2>/dev/null
-python3 "$BIN/fleet-client-actions.py" notify --title '#1909 在问你' --body q --jump wid:F/issue-1909
-case "$(T show-options -gqv @notify_jump)" in *" wid:F/issue-1909") CHECKS=$((CHECKS+1)) ;; *) fail "D: the jump waits in @notify_jump" "$(T show-options -gqv @notify_jump)" ;; esac
-case "$(cat "$WORK/escapes" 2>/dev/null)" in *"1337;RequestAttention=yes"*"]9;#1909 在问你: q"*) CHECKS=$((CHECKS+1)) ;; *) fail "D: iTerm2 gets RequestAttention and OSC 9" "$(cat -v "$WORK/escapes")" ;; esac
-python3 "$BIN/fleet-client-actions.py" jump-pending
-eq "D: the focus-in takes it → the list jumps" "jump=wid:F/issue-1909" "$(T show-options -pqv -t "$LIST" @sidebar_do | tr -d ' ')"
-eq "D: …once" "" "$(T show-options -gqv @notify_jump)"
-T set-option -up -t "$LIST" @sidebar_do
-T set-option -g @notify_jump "$(( $(date +%s) - 120 )) wid:F/issue-7"
-python3 "$BIN/fleet-client-actions.py" jump-pending
-eq "D: past FLEET_NOTIFY_JUMP_SECS → dropped, no jump" "|" "$(T show-options -pqv -t "$LIST" @sidebar_do)|$(T show-options -gqv @notify_jump)"
-
-# ============================================================================
-# E. keys — the bar's middle says what you can press right now
-# ============================================================================
-CONF="$BIN/../conf/tmux-shell.conf"
-grep -E '^set -g @fleet_hint' "$CONF" > "$WORK/hint.conf"
-T source-file "$WORK/hint.conf" || fail "E: the hint lines do not load"
-T set-option -g status-left "$(sed -n 's/^set -g status-left "\(.*\)"$/\1/p' "$CONF" | sed 's|#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})|B|')"
-"$REAL_TMUX" -L "${L}o" -f /dev/null new-session -d -s o -x 150 -y 20 "env -u TMUX $REAL_TMUX -L $L attach -t '=$L'" \
-  || fail "E: could not attach a client"
-i=0; CL=''; while [ -z "$CL" ] && [ "$i" -lt 30 ]; do CL=$(T list-clients -F '#{client_name}' | head -1); sleep 0.1; i=$((i+1)); done
-[ -n "$CL" ] || fail "E: no client attached"
-hint() { T display-message -p -c "$CL" '#{E:@fleet_hint}' | sed 's/#\[[^]]*\]//g'; }
-raw() { T display-message -p -c "$CL" '#{E:@fleet_hint}'; }
-T select-pane -t "$PANE"
-# the bar is login · ⟳ · the keys of where the keyboard is (issue #2365)
-eq "E: the keyboard in the session → its keys" " ⌘P 会话与动作  ⌘N 新会话  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
-case "$(raw)" in *"range=user|key-User927]"*"⌘P"*"range=user|key-User928]"*"⌘N"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
-T set-option -g @fleet_layout solo
-eq "E: the one-session view → ⌃\\ 会话 shell, ⌃D 放到后台 in ⌘↑↓'s place (issue #2566)" " ⌘P 会话与动作  ⌘N 新会话  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" "$(hint)"
-case "$(raw)" in *"range=user|key-C-d]"*"⌃D"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: ⌃D is its key range" "$(raw)" ;; esac
-T set-option -gu @fleet_layout
-T switch-client -c "$CL" -T prefix
-eq "E: prefix pressed → the prefix keys" " / 会话与动作  c 新会话  n p 切换  d 放到后台  Q 退出 fleet" "$(hint)"
-T switch-client -c "$CL" -T root
-T set-option -g @popup_open "$(date +%s)"; T set-option -g @popup_title popup_quickopen
-eq "E: ⌘P open → the panel's keys" " ↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  ⌃T 置顶  > 命令  esc 关" "$(hint)"
-eq "E: …the panel's own last line says the same" "$(hint | sed 's/^ //')" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t quickopen_keys)"
-T set-option -g @popup_title popup_keys
-eq "E: another popup → esc" " esc 关" "$(hint)"
-T set-option -g @popup_open 0
-T set-option -p -t "$PANE" @stage_ask 1
-eq "E: a question's pane → ↵ / esc" " ↵ 确定  esc 取消" "$(hint)"
-T set-option -pu -t "$PANE" @stage_ask
-# a tap on the list, and the lit row's detail, change nothing (issue #2365)
-T set-option -w -t "$PANE" @fleet_on_list 1
-T set-option -w -t "$PANE" @fleet_hint_name 'issue-1909 · 一个很长很长的名字, 带逗号'
-eq "E: a tap on the list / a lit row → the same keys" " ⌘P 会话与动作  ⌘N 新会话  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
-T set-option -uw -t "$PANE" @fleet_on_list
-T set-option -uw -t "$PANE" @fleet_hint_name
-T set-option -w -t "$PANE" @fleet_view portal
-eq "E: the writing area in view → its keys" " ↵ 发出  ⇧↵ 换行  Tab 下一项  esc 回去" "$(hint)"
-T set-option -w -t "$PANE" @fleet_orch 1
-eq "E: …an older list's @fleet_orch changes nothing (issue #3119: no session is special)" " ↵ 发出  ⇧↵ 换行  Tab 下一项  esc 回去" "$(hint)"
-T set-option -uw -t "$PANE" @fleet_view
-eq "E: …and in a session, ⌘N is 新会话 (issue #3119)" " ⌘P 会话与动作  ⌘N 新会话  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
-T set-option -g @fleet_compose 1
-eq "E: …新任务 while FLEET_COMPOSE=1 brings the writing area back (issue #2616)" " ⌘P 会话与动作  ⌘N 新任务  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
-T set-option -gu @fleet_compose
-T set-option -uw -t "$PANE" @fleet_orch
-sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$sl" in "B   ⌘P 会话与动作  ⌘N 新会话"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
-T set-option -g @fleet_layout solo
-eq "E: the one-session view's bar is the same three things" "B   ⌘P 会话与动作  ⌘N 新会话  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" \
-  "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
-T set-option -gu @fleet_layout
-# The refresh slot (issue #2228): ⟳ lights in a two-cell slot the bar always
-# keeps, so the keys start on the same column lit or not.
-T set-option -w -t "$PANE" @fleet_refreshing 1
-lit=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$lit" in "B⟳  ⌘P 会话与动作  ⌘N 新会话"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: a waiting list lights ⟳ in the slot" "$lit" ;; esac
-col() { python3 -c 'import sys; print(sys.argv[1].index("⌘P"))' "$1"; }
-eq "E: the keys start on the same column, lit or not" "$(col "$sl")" "$(col "$lit")"
-T set-option -uw -t "$PANE" @fleet_refreshing
-eq "E: …and the slot goes back to two blanks" "$sl" "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
-T resize-window -t "=$L:" -x 90 2>/dev/null; "$REAL_TMUX" -L "${L}o" resize-window -t =o -x 90 2>/dev/null; sleep 0.2
-eq "E: narrower than 100 columns → the badge alone" "B" "$(T display-message -p -c "$CL" '#{E:status-left}')"
-"$REAL_TMUX" -L "${L}o" kill-server 2>/dev/null
-# the right end draws nothing; its job runs `part=quiet` for the notification (issue #2365)
-grep -q '^set -g status-right "#(bash __BIN__/tmux-status.sh part=quiet ' "$CONF" || fail "E: status-right is not the quiet job"
-CHECKS=$((CHECKS+1))
-# a tap on a range is that key; 「! n 等你」 (an older bar's) jumps to the one waiting — the old ⌘J's body, inline (issue #2362)
-grep -q "bind -n MouseDown1Status if -F '#{m:key-\*,#{mouse_status_range}}' { run-shell -C \"send-keys -K -c '#{client_name}' '#{s/^key-//:mouse_status_range}'\" }" "$CONF" \
-  && grep -q "#{==:#{mouse_status_range},needs}' { if -F '#{@fleet_single}' { run-shell -b \"python3 __BIN__/fleet-quickopen.py do needs >/dev/null 2>&1 || :\" } { if -F '#{window_zoomed_flag}' { resize-pane -Z } ; if -F -t '{top-left}' '#{==:#{@sidebar},1}' { send-keys -t '{top-left}' F10 } } }" "$CONF" \
-  || fail "E: the bar's taps are not the keys"
-CHECKS=$((CHECKS+1))
+eq "C: fleet_alerts_notify (the bar's road) is retired — nothing" "0" \
+   "$(TMUX="$SOCK,0,0" bash -c '. "$1/usage-lib.sh"; . "$1/fleet-alerts.sh"; fleet_alerts_notify; echo $?' _ "$BIN")"
 
 printf 'needs-notify selftest: PASS (%s checks)\n' "$CHECKS"

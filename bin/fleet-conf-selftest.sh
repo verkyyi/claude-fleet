@@ -54,7 +54,10 @@
 #   K. retired keys — (issue #3120) a line still setting FLEET_AUTOFILL /
 #                     _MAX_PER_TICK / _NODE in fleet.conf, a fleet conf or an
 #                     overlay is commented out (`# retired #3120: …`), the rest
-#                     kept; a second migrate writes nothing
+#                     kept; a second migrate writes nothing. (issue #3008) the old
+#                     client's FLEET_CLIENT / FLEET_COMPOSE / FLEET_SIDEBAR_FOLD in
+#                     [client] become `# retired #3008: …`; FLEET_CLIENT_LAYOUT
+#                     (a newcomer's mark, still read) stays
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
@@ -533,7 +536,7 @@ printf 'FLEET_ISSUE_BRIDGE=1\n  export FLEET_AUTOFILL_MAX_PER_TICK=3\n' > "$CD/f
 printf 'FLEET_REPO="o/a"\nFLEET_AUTOFILL="1"\n' > "$CD/fleets/fleet/repos/o-a.conf"
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "K: migrate exits 0" "$rc" 0
-has "K: says what it commented out" "$out" "retired autofill keys commented out"
+has "K: says what it commented out" "$out" "retired keys commented out"
 active() { grep -hE '^[[:space:]]*(export[[:space:]]+)?FLEET_AUTOFILL' "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf" | wc -l | tr -d ' '; }
 is "K: no active autofill line is left" "$(active)" 0
 is "K: each is kept as a comment" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf" | grep -c '^# retired #3120: ')" 4
@@ -543,7 +546,17 @@ has "K: …and an overlay" "$(cat "$CD/fleets/fleet/repos/o-a.conf")" 'FLEET_REP
 snap=$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf")
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
 is "K: a second migrate changes nothing" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf")" "$snap"
-hasnt "K: …and says nothing about it" "$out" "retired autofill keys"
+hasnt "K: …and says nothing about it" "$out" "retired keys"
+# the old client's settings (issue #3008): its [client] lines, each kept as a
+# comment; a key that only starts the same (FLEET_KEY_PANEL) remains usable
+mkbox k2
+printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=0\n# ---- [client] ----\nif [ "${FLEET_SHELL:-0}" = 1 ]; then\nexport FLEET_CLIENT=shell\nFLEET_COMPOSE=1\nFLEET_SIDEBAR_FOLD=off\nexport FLEET_CLIENT_LAYOUT=solo\nFLEET_KEY_PANEL=cmd+p\nfi  # ---- [client] end ----\n' > "$CD/fleet.conf"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
+is "K: (#3008) migrate exits 0" "$rc" 0
+is "K: (#3008) the old client's four lines are comments" "$(grep -c '^# retired #3008: ' "$CD/fleet.conf")" 4
+is "K: (#3008) …and none is active" "$(grep -cE '^[[:space:]]*(export[[:space:]]+)?(FLEET_CLIENT|FLEET_COMPOSE|FLEET_SIDEBAR_FOLD)=' "$CD/fleet.conf")" 0
+has "K: (#3008) layout is retired" "$(cat "$CD/fleet.conf")" "# retired #3008: export FLEET_CLIENT_LAYOUT=solo"
+has "K: (#3008) …and the panel key" "$(cat "$CD/fleet.conf")" "FLEET_KEY_PANEL=cmd+p"
 
 fi
 

@@ -19,7 +19,9 @@
 #                --hand seconds (10), then the drill confirm code approves it
 #                (POST /fleet/login/approve, bin/fleet-drill.sh approve)
 #   t_cert       the certificate is in ~/.ssh
-#   t_machine    the first HOME session is placed (conf dir's home-session.first)
+#   t_machine    the first HOME session is placed — the thin client's `first`
+#                line with rc 0 in ~/.cache/claude-fleet/thin.log (issue #3054;
+#                conf dir's home-session.first was the old client's, #3008)
 #   t_ready      the agent's input line (❯ / ›) is on the screen
 #   t_key        one typed letter stays on that line — Claude's TUI drops what
 #                arrives while it mounts, so a letter that vanished is typed
@@ -221,7 +223,7 @@ EOF
   TMUX='' "$TMUXB" -S "$sock" -f /dev/null new-session -d -s drill -x 160 -y 48 \
     env -i HOME="$sb/home" PATH="$pth" TERM=xterm-256color LANG=zh_CN.UTF-8 LC_CTYPE=zh_CN.UTF-8 \
       SHELL=/bin/zsh USER="$(id -un)" LOGNAME="$(id -un)" TMPDIR="$sb/tmp" TMUX_TMPDIR="$sb/t" \
-      FLEET_CLIENT=shell FLEET_LOGIN_BROWSER=1 FLEET_DEVICE_NAME="newcomer-$n-$$" FLEET_NODE_JOIN_ARGS='--service detached' \
+      FLEET_LOGIN_BROWSER=1 FLEET_DEVICE_NAME="newcomer-$n-$$" FLEET_NODE_JOIN_ARGS='--service detached' \
       PS1='newcomer% ' "$PSHELL" -f \
     || { R_why='the drill terminal did not start'; cleanup_run "$sb"; return 1; }
   sleep 0.5
@@ -232,7 +234,7 @@ EOF
   last_p='' last_change=$t0 maxgap=0 first='' opened='' code='' key_at='' hand_at='' tries=0
   deadline=$(( $(date +%s) + STEP_SECS * 3 ))
   local shot=0 cert="$sb/home/.ssh/fleet-cert-cert.pub" conf="$sb/home/.config/claude-fleet" el
-  local hfl="$sb/home/.cache/claude-fleet/shell/home-first.log"
+  local tlog="$sb/home/.cache/claude-fleet/thin.log"
   while :; do
     p=$(dt capture-pane -p -t drill 2>/dev/null)
     el=$(( $(nowms) - t0 ))
@@ -293,7 +295,8 @@ EOF
       R_steps=$((R_steps + 1)); hand_at=clicked
     fi
     [ -z "$R_cert" ] && [ -s "$cert" ] && R_cert=$el
-    [ -z "$R_machine" ] && [ -e "$conf/home-session.first" ] && R_machine=$el
+    [ -z "$R_machine" ] && { [ -e "$conf/home-session.first" ] \
+      || awk -F '\t' '$2 == "first" && $8 == "0" { f = 1 } END { exit !f }' "$tlog" 2>/dev/null; } && R_machine=$el
     # the agent's input line: after the session is placed, a line led by ❯ / ›
     if [ -n "$R_machine" ] && [ -z "$R_key" ]; then
       if printf '%s\n' "$p" | grep -Eq '^[ │|]*[❯›>]( |$)'; then
@@ -310,9 +313,10 @@ EOF
     fi
     [ -n "$R_key" ] && break
     if [ "$(date +%s)" -ge "$deadline" ]; then R_why='deadline'; break; fi
-    # the first session's ask was refused (fleet-shell.sh home-session): nothing more will come
-    if [ -z "$R_machine" ] && grep -Eq '开不了会话|could not open a session' "$hfl" 2>/dev/null; then
-      R_why="first session refused: $(grep -E '开不了会话|could not open a session' "$hfl" | tail -n 1 | sed 's/^fleet: //' | scrub | cut -c1-160)"
+    # the first session's ask was refused (the thin client's `first` line, rc 1):
+    # nothing more will come
+    if [ -z "$R_machine" ] && awk -F '\t' '$2 == "first" && $8 == "1" { f = 1 } END { exit !f }' "$tlog" 2>/dev/null; then
+      R_why="first session refused: $(awk -F '\t' '$2 == "first" && $8 == "1" { w = $9 } END { print w }' "$tlog" | scrub | cut -c1-160)"
       break
     fi
     # the installer or the client gave up: nothing more will come
@@ -330,16 +334,17 @@ EOF
     princ=$(ssh-keygen -L -f "$cert" 2>/dev/null | awk '/Principals:/{f=1;next} f&&/:/{f=0} f{print $1}' | tr '\n' ' ')
     case " $princ" in *" $login "*) P5=PASS ;; *) P5="FAIL($princ)" ;; esac
   fi
-  if [ -e "$conf/home-session.first" ]; then
-    local hl
-    hl=$(grep -E '^REMOTE ' "$hfl" 2>/dev/null | tail -n 1)
-    case "$hl" in REMOTE\ *\ done\ *) P6=PASS ;; *) P6='FAIL(no REMOTE … done)' ;; esac
+  # ⑥ placed for the person: the thin client's `first` line names the machine
+  local hl
+  hl=$(awk -F '\t' '$2 == "first" && $8 == "0" { l = $9 } END { print l }' "$tlog" 2>/dev/null)
+  if [ -n "$R_machine" ]; then
+    case "$hl" in REMOTE\ *\ done\ *|RESUME\ *|LOCAL\ *) P6=PASS ;; *) P6='FAIL(no REMOTE … done)' ;; esac
   fi
   [ -z "$R_key" ] && [ "$P8" = PASS ] && P8='FAIL(no key)'
   [ -n "$R_key" ] || [ -n "$R_why" ] || R_why='no first key'
   # the last screen, and what the first session's ask said, for the reading
   dt capture-pane -p -t drill 2>/dev/null | scrub > "$OUT/screens/run$n-last.txt"
-  scrub < "$hfl" > "$OUT/run$n-home-first.log" 2>/dev/null
+  scrub < "$tlog" > "$OUT/run$n-thin.log" 2>/dev/null
   teardown_person "$sb" "$approve" "$inv_id"
   cleanup_run "$sb"
 }

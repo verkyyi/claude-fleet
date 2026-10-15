@@ -26,18 +26,14 @@
 #          connection certificate (fleet-client-lease.py where)
 #   local  no hub (no URL, or a hub without the lease, or one out of reach): a
 #          thin client's 看台 here with a client attached (issue #3005, EPIC #2999
-#          C8 — fleet_thin_lease.py where: the device its row says, via thin);
-#          else (the old client, until C11) the
-#          fleet-shell client attached on THIS machine — its saved where
-#          (<cache>/tmp/client.where.json, written by fleet-shell.sh when a
-#          client becomes the one in use), else the first attached client's
-#          device + tmux client_termname
+#          C8 — fleet_thin_lease.py where: the device its row says, via thin;
+#          the old client's own local source went with it, issue #3008)
 # `hub` says which: up (the hub answered) · nohub (no hub here, or one without the
 # lease) · down (a hub is set but could not be asked: a timeout, DNS, a 5xx) ·
 # refused (the hub answered 401: it does not accept this machine's credential —
 # an orphaned key id, an expired certificate; issue #2112) — the status bar's
-# 「⌂ … · 入口连不上」 / 「入口不认这台电脑 · 请重新扫码」 (fleet-client-badge.sh,
-# issue #1779) reads it here. A refused hub falls back to local like a down one.
+# 「⌂ … · 入口连不上」 / 「入口不认这台电脑 · 请重新扫码」 (issue #1779) read it
+# here. A refused hub falls back to local like a down one.
 # `hub_why` (refused only) is the hub's own words for the 401; `node_token`
 # ("refused: <words>") says the node token was refused and the certificate
 # answered instead (issue #2665) — both also land in the doctor's `hubauth` row.
@@ -53,8 +49,8 @@
 # (a device at the far end of an ssh: give it a link to tap) · iterm2.
 #
 # Exit: 0 a client named · 3 nobody is connected · 1 could not tell.
-# Seams (tests): FLEET_CLIENT_WHERE_CMD (the hub read), FLEET_SHELL_SESSION,
-# FLEET_SHELL_CACHE.
+# Seams (tests): FLEET_CLIENT_WHERE_CMD (the hub read),
+# FLEET_CLIENT_WHERE_THIN_CMD (the 看台's read).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
@@ -120,29 +116,12 @@ if [ "$hrc" != 0 ]; then
   [ "$hrc" = nohub ] && hrc=0
 fi
 
-SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
-case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
-CL_DIR="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/tmp"
-LOCAL_UP=0 CLIENTS=''
-if tmux -L "$SESS" has-session -t "=$SESS" 2>/dev/null; then
-  LOCAL_UP=1
-  CLIENTS=$(tmux -L "$SESS" list-clients -t "=$SESS" -F '#{client_name}	#{client_termname}' 2>/dev/null)
-fi
-
-HUBREAD=$HUBREAD HRC=$hrc THINW=$THINW LOCAL_UP=$LOCAL_UP CLIENTS=$CLIENTS CL_DIR=$CL_DIR JSON=$json \
+HUBREAD=$HUBREAD HRC=$hrc THINW=$THINW JSON=$json \
 exec python3 - <<'PY'
-import datetime, json, os, sys
+import json, os, sys
 
 CAPS = {"open_url": "打开网页", "show_file": "收文件", "notify": "系统通知", "link": "给链接", "iterm2": "iTerm2"}
 KEYS = ("device", "os", "terminal", "caps", "since", "via", "host")
-
-
-def key(s):
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in s)
-
-
-def iso(t):
-    return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 HUB = "up"
@@ -190,30 +169,7 @@ def from_local():
         t = None
     if isinstance(t, dict) and t.get("device"):
         return "active", t                    # a thin client's 看台 here (#3005)
-    if os.environ.get("LOCAL_UP") != "1":
-        return "none", {}
-    cl = os.environ["CL_DIR"]
-    clients = [l.split("\t") for l in (os.environ.get("CLIENTS") or "").splitlines() if l.strip()]
-    if not clients:
-        return "none", {}
-    p = os.path.join(cl, "client.where.json")
-    try:
-        with open(p) as f:
-            w = json.load(f)
-        if isinstance(w, dict) and w.get("device"):
-            w.setdefault("since", iso(os.path.getmtime(p)))
-            return "active", w
-    except (OSError, ValueError):
-        pass
-    # a client from before #1716 kept no where: its device, tmux's terminal word
-    name, term = (clients[0] + [""])[:2]
-    dev = ""
-    try:
-        with open(os.path.join(cl, "client.dev", key(name))) as f:
-            dev = f.read().strip()
-    except OSError:
-        pass
-    return "active", {"device": dev or "未知设备", "terminal": term}
+    return "none", {}
 
 
 src = "hub"

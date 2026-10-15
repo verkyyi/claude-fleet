@@ -8,18 +8,15 @@
 #
 #   A  rich_color / sel_attr over TERM × COLORTERM (8 / 256 colours, none /
 #      truecolor / 24bit);
-#   B  draw_cmds (⌘P's `>` list) for real, under curses on a pty, per terminal:
-#      the selected line carries `›`; low depth draws it in reverse (SGR 7), a
-#      truecolour 256 terminal keeps the coloured ground and no reverse;
-#  B2  nothing on the selected line is dimmed (the whole row must read, not
-#      only its mark);
 #   C  every popup that draws a selection goes through the helper — no bare
-#      `color_pair(…) if sel` ground left in quickopen / quick-dispatch / compose / ask.
+#      `color_pair(…) if sel` ground left in quickopen / quick-dispatch / compose.
+# (B, the old client's ⌘P list drawn for real, went with that list — issue #3008;
+# the 看台's own list is fleet_view.py's.)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo 'selftest SKIP: python3 missing'; exit 0; }
 python3 - "$BIN" <<'PY'
-import importlib.util, os, pty, re, sys
+import importlib.util, re, sys
 from pathlib import Path
 
 BIN = Path(sys.argv[1])
@@ -46,90 +43,11 @@ check(qo.sel_attr(2, 256, {}) == curses.A_REVERSE | curses.A_BOLD, "A sel_attr: 
 check(qo.sel_attr(2, 8, {"COLORTERM": "truecolor"}) & curses.A_REVERSE, "A sel_attr: 8 colours reverse even with COLORTERM")
 
 
-# B — drawn for real
-def draw(term, colorterm):
-    pid, fd = pty.fork()
-    if pid == 0:
-        env = dict(os.environ, TERM=term)
-        env.pop("COLORTERM", None)
-        if colorterm:
-            env["COLORTERM"] = colorterm
-        os.environ.clear()
-        os.environ.update(env)
-        try:
-            def run(screen):
-                curses.use_default_colors()
-                curses.init_pair(2, -1, curses.COLOR_BLUE)
-                h, w = screen.getmaxyx()
-                items = [("a", "alpha", "first"), ("b", "beta", "second"), ("c", "gamma", "third")]
-                qo.draw_cmds(screen, ">", "", items, 1, w, h, {})
-                screen.refresh()
-            import locale
-            for loc in ("en_US.UTF-8", "C.UTF-8"):   # macOS has the first, a CI box the second
-                try:
-                    locale.setlocale(locale.LC_ALL, loc)
-                    break
-                except locale.Error:
-                    pass
-            curses.wrapper(run)
-        finally:
-            os._exit(0)
-    out = b""
-    while True:
-        try:
-            chunk = os.read(fd, 65536)
-        except OSError:
-            break
-        if not chunk:
-            break
-        out += chunk
-    os.waitpid(pid, 0)
-    return out
-
-
-for term, ct, low in (("xterm", "", True), ("xterm", "truecolor", True), ("xterm-256color", "", True),
-                      ("xterm-256color", "truecolor", False), ("screen-256color", "", True)):
-    raw = draw(term, ct)
-    text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[=>]", b"", raw).decode("utf-8", "replace")
-    tag = "B TERM=%s COLORTERM=%s" % (term, ct or "-")
-    check("› beta" in text and "› alpha" not in text, tag + ": `›` marks the selected line only")
-    at = raw.find("beta".encode())
-    rev = re.search(rb"\x1b\[(?:[0-9;]*;)?7(?:;[0-9;]*)?m", raw[:at]) is not None
-    if low:
-        check(rev, tag + ": selected line drawn in reverse video")
-    else:
-        check(not rev, tag + ": truecolour keeps the colour ground (no reverse)")
-        check(re.search(rb"\x1b\[(?:44|48;5;4)m", raw) is not None, tag + ": the blue ground is drawn")
-
-# B2 — nothing on the selected line is dimmed (every addstr onto its row, a
-#      greyed command's too): a recording screen, off a truecolour terminal
-class Rec:
-    def __init__(self):
-        self.calls = []
-
-    def addstr(self, y, x, text, attr=0):
-        self.calls.append((y, text, attr))
-
-
-rec = Rec()
-qo.draw_cmds(rec, ">", "", [("a", "alpha", "first"), ("b", "-beta", "second"), ("c", "gamma", "third")],
-             1, 60, 10, {})
-on_row = [c for c in rec.calls if c[0] == 4]
-check(on_row and all(not (attr & curses.A_DIM) for _, _, attr in on_row),
-      "B2 draw_cmds: nothing on the selected line is dimmed %r" % [(t, attr) for _, t, attr in on_row if attr & curses.A_DIM])
-check(any(attr & curses.A_DIM for y, _, attr in rec.calls if y == 3),
-      "B2 draw_cmds: an unselected line keeps its dim hint (the check can see A_DIM)")
-
 # C — no popup paints a selection ground past the helper
 bare = re.compile(r"color_pair\((?:2|3|PAIR_ON)\)[^\n]*\bif (?:sel|on|n == menu_at|focus == kind)\b")
 for name in ("fleet-quickopen.py", "fleet-quick-dispatch.py", "fleet-compose.py"):
     hits = [ln for ln in (BIN / name).read_text().splitlines() if bare.search(ln)]
     check(not hits, "C %s: selection ground via sel_attr %s" % (name, hits[:1] or ""))
-check("sel_attr(3)" in (BIN / "fleet-ask.py").read_text(), "C fleet-ask.py: the chosen answer via sel_attr")
-side = (BIN / "fleet-sidebar.py").read_text()
-check("rich_color(curses.COLORS)" in side and "color_pair(PAIR_SEL if raised" not in side,
-      "C fleet-sidebar.py: the raised row's PAL_SEL ground only where rich_color")
-
 print("selftest %s (%d failed)" % ("FAIL" if fails else "PASS", len(fails)))
 sys.exit(1 if fails else 0)
 PY

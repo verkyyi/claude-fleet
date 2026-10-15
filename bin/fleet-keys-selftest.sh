@@ -3,18 +3,16 @@
 #
 # fleet-keys.sh is a CURATED source of truth; this test keeps it honest by
 # cross-checking it against the binds actually shipped, so the sheet can't go
-# stale silently:
+# stale silently. (The old client's own legs — its conf's prefix keys and F9 (1,
+# 2), the task list's key table and its row menu (7), its server's keys and bar
+# (8's client half), the conf's ⌘ codes (10's conf half) and the keys of a local
+# Claude through its three servers (12) — went with that client, issue #3008.)
 #
-#   1. Every `prefix <k>` row in the sheet has a matching `bind <k> ...` line in
-#      conf/tmux-shell.conf — the CLIENT's, the only place a person's key is bound
-#      since issue #1714 — (and F9 has a `bind -n F9`).
-#   2. Every prefix `bind`/`bind -n` in the conf (minus the mouse status bind) is
-#      documented in the sheet — no missing entries.
-#   3. The `?` popup bind exists in the conf, and the dash (`?`) + backlog (`?`)
-#      each open fleet-keys.sh — scoped to their own panel (issue #265).
-#   4. The sheet renders non-empty in --plain mode and lists all four groups.
+#   3. The dash (`?`) + backlog (`?`) each open fleet-keys.sh — scoped to their
+#      own panel (issue #265).
+#   4. The sheet renders non-empty in --plain mode and lists its three groups.
 #   5. Context scoping (issue #265): `--context dash`/`--context backlog` show
-#      that panel + the global `tmux prefix` group, and drop the OTHER panels.
+#      that panel and drop the OTHER panels.
 #   6. The dash's keys are a THREE-way lockstep (issue #556): every action in
 #      bin/dash-keymap.sh's table is bound as `--bind "$DASH_KEY_<ACTION>:"` in
 #      tmux-dashboard.sh (and nothing is bound by a literal ctrl chord — tmux
@@ -24,15 +22,13 @@
 #      drift (issue #449, which re-wired ⌃e rename and is asserted by name
 #      below). Pinned to the stock C-b prefix so it is deterministic anywhere;
 #      one extra render under a C-s prefix checks the sheet shows the remap.
+#      #558: the panel tables, the source binds, the help and fzf's argv agree.
 #
-#  10. The switch keys (issue #1903): dash-keymap.sh --panel switch ⇄ the conf's
-#      user-keys + User<code> binds + prefix keys ⇄ the sheet ⇄ the iTerm2 profile.
-#
-#  12. The keys of a local Claude (issue #2760, EPIC #2756 C4): docs/dev/CLIENT.md's
-#      table «和本地 Claude 的键» ⇄ the three confs (conf/tmux-shell.conf,
-#      conf/tmux-shell-stage.conf, conf/tmux-attention.conf) ⇄ fleet-shell.sh's
-#      prefix ⇄ fleet-iterm-profile.py — every key typed through three real tmux
-#      servers arrives as the same key; FLEET_KEYS_PARITY=0 is as before.
+#  10. The switch keys (issue #1903): dash-keymap.sh --panel switch — the 看台's
+#      table — its rows and codes, and the iTerm2 profile fleet-iterm-profile.py
+#      writes for it (⌘P by default, FLEET_KEY_PANEL, FLEET_KEYS_EXTRA).
+#  11. No page of keys (issue #2362): no --page, the client ships no fleet-keys.sh,
+#      the sheet names no ⌘J / ⌘/.
 #
 #   9. The recovery page's keys (bin/fleet-session-page.py, issue #1862): ↵ / r / q
 #      always, and p (reopen without the personal layer) only when the login has
@@ -44,11 +40,8 @@
 #      and prefix — its only keys of its own live in the 看台's tables (issue
 #      #3000: fleet-view = root copied + by default ONE action, the panel —
 #      User927 (⌘P) and the phone keys ⌃空格 · F12 · ⌃] p (issue #3185); a
-#      FLEET_KEYS_EXTRA adds its codes, FLEET_KEY_PHONE narrows the phone's) — and one
-#      that sources the client's conf has every sheet key — on an isolated socket.
-#      Its bar says ⌘N 新会话 (issue #3119), ⌘N 新任务 only with @fleet_compose
-#      (issue #2616); ⌘N, prefix c and the bar's cell are one road (fleet-shell.sh
-#      portal), solo ⌃\ still the local shell (issue #2619).
+#      FLEET_KEYS_EXTRA adds its codes, FLEET_KEY_PHONE narrows the phone's) — on
+#      an isolated socket.
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network.
 set -uo pipefail
@@ -62,13 +55,12 @@ export FLEET_UI_LANG=en
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 KEYS="$BIN/fleet-keys.sh"
-CONF="$ROOT/conf/tmux-shell.conf"
 NODE="$ROOT/conf/tmux-attention.conf"
 DASH="$BIN/tmux-dashboard.sh"
 ISSUES="$BIN/tmux-issues.sh"
 KEYMAP="$BIN/dash-keymap.sh"
 
-for f in "$KEYS" "$CONF" "$NODE" "$DASH" "$ISSUES" "$KEYMAP"; do
+for f in "$KEYS" "$NODE" "$DASH" "$ISSUES" "$KEYMAP"; do
   [ -f "$f" ] || { printf 'selftest: missing %s\n' "$f" >&2; exit 2; }
 done
 
@@ -83,59 +75,19 @@ export FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2=''
 SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh --plain exited non-zero"
 [ -n "$SHEET" ] || fail "sheet rendered empty"
 
-# --- 4. all four group headers present ----------------------------------------
-for g in "tmux prefix" "task sidebar" "dashboard" "backlog" "config modal"; do
+# --- 4. the three group headers present ---------------------------------------
+for g in "dashboard" "backlog" "config modal"; do
   grep -qi "^$g " <<< "$SHEET" || fail "sheet missing group: $g"
 done
-
-# Keys after "prefix " in each sheet row (a, j, G, b, A, c, r, ?). Set as text,
-# one key per line — compared with grep -Fxq so metachars like ? stay literal.
-sheet_prefix_keys="$(printf '%s\n' "$SHEET" \
-  | sed -nE 's/^  prefix ([^ ]|Space) .*/\1/p' | sort -u)"   # one char, or a named key (Space, #902)
-[ -n "$sheet_prefix_keys" ] || fail "no 'prefix X' rows parsed from the sheet"
-# Prefix binds shipped in the conf: `bind <key> ...` or `bind-key <key> ...`,
-# excluding root-table `bind -n ...` ($2 == "-n"). F9/mouse are surfaced as the
-# F9 / "● N" rows and checked separately, so they must not be `bind <key>` here.
-# Also EXCLUDE the "restore-a-tmux-default" binds (issue #289): `bind n
-# next-window` and `bind r refresh-client` exist only so a live server reverts
-# cleanly when the fleet stops overriding those keys (a bare unbind would leave
-# them dead) — they are not fleet shortcuts, so the cheatsheet deliberately omits
-# them and this guard must not demand a sheet row for them.
-# Explicit -T bindings belong to an inner key table (sidebar navigation), not
-# the prefix table; the sidebar selftest exercises that table through a PTY.
-# A key the conf quotes (`bind '\' …`, issue #2566) is compared bare.
-conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $2!="-T" && $3!="next-window" && $3!="refresh-client") { k=$2; if (k ~ /^'"'"'.+'"'"'$/) k=substr(k, 2, length(k)-2); print k } }' "$CONF" | sort -u)"
-[ -n "$conf_prefix_keys" ] || fail "no prefix binds parsed from the conf"
-
-# --- 1. every 'prefix X' row in the sheet is bound in the conf -----------------
-while IFS= read -r k; do
-  [ -n "$k" ] || continue
-  grep -Fxq "$k" <<< "$conf_prefix_keys" \
-    || fail "sheet lists 'prefix $k' but conf has no matching bind"
-done <<EOF
-$sheet_prefix_keys
-EOF
-
-# F9 (root-table) is documented in the sheet and must exist as `bind -n F9`.
-grep -q 'F9' <<< "$SHEET" || fail "sheet missing the F9 row"
-grep -Eq '^bind[[:space:]]+-n[[:space:]]+F9([[:space:]]|$)' "$CONF" \
-  || fail "sheet lists F9 but conf has no 'bind -n F9'"
-
-# --- 2. every prefix bind in the conf is documented in the sheet --------------
-while IFS= read -r k; do
-  [ -n "$k" ] || continue
-  grep -Fxq "$k" <<< "$sheet_prefix_keys" \
-    || fail "conf binds 'prefix $k' but the sheet does not document it"
-done <<EOF
-$conf_prefix_keys
-EOF
+for g in "tmux prefix" "task sidebar" "row menu" "switch sessions"; do
+  grep -qi "^$g " <<< "$SHEET" && fail "sheet still lists the old client's group: $g"
+done
 
 # --- 3. the popup wiring is present -------------------------------------------
 # The client opens no key sheet any more (issue #2362, leg 11); the panels' `?`
 # still open it through the one door, dash-popup.sh (issue #1535).
 # The in-panel opens are scoped to their own panel (issue #265): the dash `?`
-# passes `--context dash`, the backlog `⌃k` passes `--context backlog` — while the
-# global `prefix ?` (checked above) stays the full sheet.
+# passes `--context dash`, the backlog `⌃k` passes `--context backlog`.
 grep -Eq -- '--bind "\?:.*fleet-keys.sh --context dash' "$DASH" \
   || fail "dashboard '?' does not open fleet-keys.sh scoped '--context dash'"
 # `?` opens the cheatsheet two ways depending on mode (#123, renamed ⌃k→? in
@@ -149,24 +101,21 @@ grep -Eq -- 'keys\).*fleet-keys\.sh.*--context backlog' "$ISSUES" \
   || fail "backlog '?' keys-sentinel dispatch does not open '--context backlog'"
 
 # --- 5. context scoping drops the OTHER panels (issue #265) --------------------
-# `--context dash` ⇒ tmux prefix + dashboard only; backlog/config gone.
+# `--context dash` ⇒ dashboard only; backlog/config gone.
 DSHEET="$(NO_COLOR=1 bash "$KEYS" --plain --context dash)" \
   || fail "fleet-keys.sh --context dash exited non-zero"
-grep -qi '^tmux prefix ' <<< "$DSHEET"  || fail "--context dash dropped the global 'tmux prefix' group"
 grep -qi '^dashboard ' <<< "$DSHEET"    || fail "--context dash missing its own 'dashboard' group"
 grep -qi '^backlog ' <<< "$DSHEET"      && fail "--context dash should NOT list the 'backlog' group"
 grep -qi '^config modal ' <<< "$DSHEET" && fail "--context dash should NOT list the 'config modal' group"
-# `--context backlog` ⇒ tmux prefix + backlog only; dashboard/config gone.
+# `--context backlog` ⇒ backlog only; dashboard/config gone.
 BSHEET="$(NO_COLOR=1 bash "$KEYS" --plain --context backlog)" \
   || fail "fleet-keys.sh --context backlog exited non-zero"
-grep -qi '^tmux prefix ' <<< "$BSHEET"  || fail "--context backlog dropped the global 'tmux prefix' group"
 grep -qi '^backlog ' <<< "$BSHEET"      || fail "--context backlog missing its own 'backlog' group"
 grep -qi '^dashboard ' <<< "$BSHEET"    && fail "--context backlog should NOT list the 'dashboard' group"
 grep -qi '^config modal ' <<< "$BSHEET" && fail "--context backlog should NOT list the 'config modal' group"
 
 # --- 6. dashboard ⌃-keys ⇄ the dash's fzf --binds ⇄ the keymap table ----------
-# Section 1/2 guard the `prefix` binds; the DASHBOARD group had no such guard, so
-# a ⌃-key could be bound with no sheet row (undiscoverable) or listed with no bind
+# The DASHBOARD group had no guard of its own, so a ⌃-key could be bound with no sheet row (undiscoverable) or listed with no bind
 # (a lie — exactly what ⌃e was between #289 and #449). Since #556 the dash binds
 # no literal chord: each key is `$DASH_KEY_<ACTION>` from dash-keymap.sh's table
 # and the sheet renders the same resolution via `$(dg <action>)`. Cross-check all
@@ -251,60 +200,6 @@ grep -q '^  ⌃v .*flip this fleet' <<< "$dash_block" \
 grep -q '^  ⌃a ' <<< "$dash_block" \
   && fail "dashboard sheet lists ⌃a — that is a common tmux prefix (#556)"
 
-# --- 7. the task list takes NO keys (issue #1950, EPIC #1949 C1) ---------------
-# It shows and taps (#896's input line, its key table and its ⌃ actions went):
-# no `fleet-sidebar` key table in the client conf and nothing there or in the row
-# menu switches a client into one, no `sidebar` panel in the keymap, and the view
-# reads no key but its wakes (F10 F11 F12), a resize and the mouse — its actions
-# are verbs parked in @sidebar_ask (fleet-sidebar.py `act`).
-SIDEBAR_PY="$BIN/fleet-sidebar.py"
-grep -Eq '^bind -T fleet-sidebar ' "$CONF" \
-  && fail "7: the client conf binds a fleet-sidebar key table again — the list takes no keys (#1950)"
-grep -n -- '-T fleet-sidebar' "$CONF" "$BIN/fleet-sidebar-menu.sh" "$SIDEBAR_PY" | grep -v ':[0-9]*:[[:space:]]*#' | grep -q . \
-  && fail "7: something still switches a client into the list's key table: $(grep -n -- '-T fleet-sidebar' "$CONF" "$BIN/fleet-sidebar-menu.sh" "$SIDEBAR_PY" | head -3)"
-bash "$KEYMAP" --panel sidebar list >/dev/null 2>&1 \
-  && fail "7: dash-keymap.sh still has a sidebar panel — the list has no keys to map"
-grep -nE '\bkey (==|in) \(?([0-9]|curses\.KEY_(UP|DOWN|LEFT|RIGHT|HOME|END|ENTER|BTAB|BACKSPACE))' "$SIDEBAR_PY" | grep -q . \
-  && fail "7: fleet-sidebar.py reads a key again: $(grep -nE '\bkey (==|in) \(?([0-9]|curses\.KEY_(UP|DOWN|LEFT|RIGHT|HOME|END|ENTER))' "$SIDEBAR_PY" | head -3)"
-for k in F10 F11 F12 RESIZE MOUSE; do
-  grep -q "key == curses.KEY_$k" "$SIDEBAR_PY" || fail "7: fleet-sidebar.py no longer wakes on KEY_$k"
-done
-# The list's short sheet (issue #948, cut to one screen by #963) is its taps.
-SSHEET="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
-[ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 10 ] \
-  || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 10)"
-printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏' || fail "the sidebar sheet lacks its 任务栏 title"
-for k in "点一行" "再点一次 / 右键" "点 ▸ ▾"; do
-  grep -qF "  $k " <<< "$SSHEET" || fail "the sidebar sheet does not list '$k'"
-done
-grep -qE '⌃|↑|prefix E|打字' <<< "$SSHEET" && fail "the sidebar sheet still lists a key: $SSHEET"
-grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
-  && fail "the sidebar sheet shows a full-sheet group"
-menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
-[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9ogemqc ] \
-  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o g e m q c (i 详情列 left with #2305; b u j — 进编排会话 · 进管家会话 · 管家页 — left with #3119): $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
-while IFS='	' read -r mk _; do
-  [ -n "$mk" ] || continue
-  grep -Eq "^  $mk +" <<< "$SSHEET" && fail "the sidebar sheet lists the row menu letter '$mk'"
-done <<EOF
-$menu_keys
-EOF
-FULL_SHEET="$(NO_COLOR=1 bash "$KEYS" --plain)"
-grep -q '^task sidebar ' <<< "$FULL_SHEET" || fail "the full sheet lost the task sidebar group"
-menu_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
-[ -n "$menu_block" ] || fail "the full sheet lost the row menu group"
-while IFS='	' read -r mk _; do
-  [ -n "$mk" ] || continue
-  grep -q "^  $mk  " <<< "$menu_block" || fail "the full sheet's row menu lacks '$mk'"
-done <<EOF
-$menu_keys
-EOF
-grep -Eq '^ *add "[^"]*" [a-z] ' "$BIN/fleet-sidebar-menu.sh" \
-  && fail "fleet-sidebar-menu.sh hardcodes a menu letter — read it from MENU_KEYS (mk)"
-DSHEET="$(NO_COLOR=1 bash "$KEYS" --context dash --plain)"
-grep -Eq '^(row menu|task sidebar) ' <<< "$DSHEET" \
-  && fail "the dash sheet shows a sidebar group"
-
 # #558: panel tables, source bindings, rendered help and actual fzf argv agree.
 # Only test subprocesses run: fake tmux/gh cannot contact a fleet or GitHub, and
 # fake fzf records argv instead of accepting actions. The windowed backlog loops
@@ -387,18 +282,15 @@ with tempfile.TemporaryDirectory(prefix='panel-keymap-') as tmp:
 print('panel keys: table/binds/help lockstep; popup/windowed fzf argv, headers, prefix2 and unreachable cases passed')
 PYTEST
 
-# --- 8. the node binds none of a person's keys; the client binds them all ------
-# (issue #1714, EPIC #1710 C4). Three throwaway servers on sockets of our own
-# (never the fleet's): stock tmux, one that sourced the node conf, one that
-# sourced the client's conf as fleet-shell.sh renders it. HOME is a scratch dir
-# so the node conf's one-shot reap never reaches a live install.
+# --- 8. the node binds none of a person's keys ----------------------------------
+# (issue #1714, EPIC #1710 C4). Two throwaway servers on sockets of our own
+# (never the fleet's): stock tmux and one that sourced the node conf. HOME is a
+# scratch dir so the node conf's one-shot reap never reaches a live install.
 if command -v tmux >/dev/null 2>&1; then
   KW=$(mktemp -d "${TMPDIR:-/tmp}/fkeys.XXXXXX") || fail "8: mktemp"
   ktm() { local s="$1"; shift; HOME="$KW" tmux -S "$KW/$s" -f /dev/null "$@"; }
-  for s in stock node shell; do ktm "$s" new-session -d -s k -x 120 -y 30 || fail "8: tmux $s server did not start"; done
-  sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$CONF" > "$KW/shell.conf"
+  for s in stock node; do ktm "$s" new-session -d -s k -x 120 -y 30 || fail "8: tmux $s server did not start"; done
   ktm node source-file "$NODE" 2>"$KW/node.err" || fail "8: the node conf failed to source: $(cat "$KW/node.err")"
-  ktm shell source-file "$KW/shell.conf" 2>"$KW/shell.err" || fail "8: the client conf failed to source: $(cat "$KW/shell.err")"
   ktm stock list-keys > "$KW/stock.keys"; ktm node list-keys > "$KW/node.keys"
   # Exactly tmux's stock keys — except the human layer (conf/tmux-node-human.conf,
   # issue #1840), which may only TAKE AWAY the stock deletes and swap the pane's
@@ -412,7 +304,7 @@ if command -v tmux >/dev/null 2>&1; then
   # keys of its own: compared apart, below — root and prefix stay tmux's.
   hk() { awk -v hk="$HUMAN_KEYS" '$3 == "fleet-view" || $3 == "fleet-view-pfx" { next } /kill-(pane|window|session|server)|respawn-(pane|window)|rename-session/ { next } { k = $3 ":" $4; gsub(/\\/, "", k); if (index(hk, " " k " ") == 0) { $1 = $1; print } }' "$1"; }
   ndiff=$(diff <(hk "$KW/stock.keys") <(hk "$KW/node.keys"))
-  [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (beyond the human layer it must list exactly tmux's stock keys):
+  [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; fail "8: the node binds keys of its own (beyond the human layer it must list exactly tmux's stock keys):
 $ndiff"; }
   # fleet-view = the node's root, copied (the 看台's mouse: tmux does not fall back
   # to root for a key a session's key-table lacks), + the 看台's keys — by default
@@ -458,7 +350,7 @@ $ndiff"; }
     | grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session' && fail "8: a 看台 key deletes, respawns or renames"
   awk '$3 == "root" || $3 == "prefix"' "$KW/node.keys" | grep -q 'fleet-quickopen' && fail "8: a 看台 key leaked into root / prefix"
   if awk '$3 != "fleet-view"' "$KW/node.keys" | grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session'; then
-    ktm stock kill-server; ktm node kill-server; ktm shell kill-server
+    ktm stock kill-server; ktm node kill-server
     fail "8: a node key still deletes, respawns or renames: $(awk '$3 != "fleet-view"' "$KW/node.keys" | grep -E 'kill-|respawn-|rename-session' | awk '{print $3, $4}' | tr '\n' ' ')"
   fi
   for k in x '&' '$' '<' '>'; do
@@ -470,66 +362,13 @@ $ndiff"; }
     && fail "8: the node still has a fleet-sidebar key table"
   ktm node show-options -g status-right | grep -q '#(' && fail "8: the node's status line still runs a job"
   ktm node show-hooks -g | grep -Eq '\[(71|73)\]' && fail "8: the node still carries the list's [71] / hub-visit [73] hooks"
-  # the client: every sheet key is bound, and to something that is not tmux's stock
-  while IFS= read -r k; do
-    [ -n "$k" ] || continue
-    # the whole table, filtered: `list-keys -T <table> <key>` prints nothing on tmux 3.7
-    # (escapes dropped on both sides: list-keys prints `prefix \` as `\\`, and an
-    # `awk -v` would eat a lone `\` — issue #2566)
-    sk=$(ktm stock list-keys -T prefix 2>/dev/null | K=$k awk '{ kk = $4; gsub(/\\/, "", kk); k = ENVIRON["K"]; gsub(/\\/, "", k) } kk == k')
-    ck=$(ktm shell list-keys -T prefix 2>/dev/null | K=$k awk '{ kk = $4; gsub(/\\/, "", kk); k = ENVIRON["K"]; gsub(/\\/, "", k) } kk == k')
-    [ -n "$ck" ] || fail "8: the client does not bind 'prefix $k'"
-    [ "$ck" != "$sk" ] || fail "8: the client's 'prefix $k' is still tmux's stock bind"
-  done <<EOF
-$sheet_prefix_keys
-EOF
-  ktm shell list-keys -T root | awk '$4 == "F9"' | grep -q 'resize-pane' || fail "8: the client does not bind F9"
-  ktm shell list-keys -T fleet-sidebar 2>/dev/null | grep -q . && fail "8: the client still has a fleet-sidebar key table — the list takes no keys (#1950)"
-  # ⌘N on the bar (issue #3119): 「⌘N 新会话」 — it opens a new session; no word
-  # of an orchestrator anywhere on it — and 「⌘N 新任务」 only while
-  # FLEET_COMPOSE=1 brings the writing area back (@fleet_compose, fleet-shell.sh
-  # stamp_ver); prefix c's hint the same.
-  bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$bar" in *"⌘N 新会话"*) ;; *) fail "8: the bar does not say ⌘N 新会话: $bar" ;; esac
-  case "$bar" in *"编排"*) fail "8: the bar still names the orchestrator: $bar" ;; esac
-  case "$(ktm shell display-message -p '#{E:@fleet_hint_prefix}' 2>/dev/null | sed 's/#\[[^]]*\]//g')" in
-    *"c 新会话"*) ;; *) fail "8: prefix c's hint does not say 新会话" ;; esac
-  ktm shell set-option -g @fleet_compose 1
-  bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$bar" in *"⌘N 新任务"*) ;; *) fail "8: with FLEET_COMPOSE=1 the bar does not say ⌘N 新任务: $bar" ;; esac
-  # No session is special (issue #3119): @fleet_orch_busy, which an older list
-  # may still hold, puts nothing on the bar.
-  ktm shell set-option -g @fleet_orch_busy '编排在忙 · 你说的会排到它这一步做完'
-  bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$bar" in *"编排在忙"*) fail "8: the bar says @fleet_orch_busy: $bar" ;; esac
-  # User928's meaning (issue #3119): ⌘N, prefix c and the bar's 「⌘N 新会话」 cell
-  # (a tap on an iPad: range=user|key-User928) all run ONE road — fleet-shell.sh
-  # portal, which opens a new session unless FLEET_COMPOSE=1 — and the
-  # one-session layout's ⌃\ (and prefix \) is the session's shell, prefix !
-  # this computer's (#2744).
-  nk=$(ktm shell list-keys -T root 2>/dev/null | awk '$4 == "User928"')
-  case "$nk" in *"fleet-shell.sh portal "*) ;; *) fail "8: ⌘N (User928) does not run fleet-shell.sh portal: $nk" ;; esac
-  ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "c"' | sed 's/^.* c  *//')
-  [ -n "$ck" ] && [ "$ck" = "$(printf '%s\n' "$nk" | sed 's/^.* User928  *//')" ] || fail "8: prefix c is not ⌘N's road: [$ck] vs [$nk]"
-  case "$(ktm shell show-options -gv @fleet_hint_session 2>/dev/null)" in
-    *'#[range=user|key-User928]'*'⌘N'*'新会话'*) ;; *) fail "8: the bar's ⌘N cell is not a User928 range reading 新会话" ;; esac
-  ktm shell list-keys -T root 2>/dev/null | awk '$4 == "C-\\\\"' | grep -q '@fleet_layout},solo}.*@solo_shell.*fleet-remote-view.sh shell-open ' \
-    || fail "8: solo ⌃\\ is no longer the session's shell (shell-open, #2744): $(ktm shell list-keys -T root | awk '$4 == "C-\\\\"')"
-  ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "\\\\"' | grep -q '@fleet_layout},solo}.*fleet-remote-view.sh shell-open ' \
-    || fail "8: solo prefix \\ is not ⌃\\'s road: $(ktm shell list-keys -T prefix | awk '$4 == "\\\\"')"
-  ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "!"' | grep -q '@fleet_layout},solo}.*fleet-remote-view.sh shell-open --local' \
-    || fail "8: solo prefix ! is not this computer's shell (#2744): $(ktm shell list-keys -T prefix | awk '$4 == "!"')"
-  ktm stock kill-server; ktm node kill-server; ktm shell kill-server
+  ktm stock kill-server; ktm node kill-server
   rm -rf "$KW"
 fi
 
-# --- 10. the switch keys: table ⇄ conf ⇄ sheet ⇄ iTerm2 profile (issue #1903) --
-# `dash-keymap.sh --panel switch` is the one table. Every row: the conf catches its
-# private code (`user-keys[<code>] "\e[<code>~"` + `bind -n User<code>`) and binds
-# its prefix key (F9: a root key) to the SAME body — prefix h alone adds a branch
-# for no list on screen; the sheet's 切会话 group lists the prefix key with the ⌘
-# glyph; the profile fleet-iterm-profile.py writes sends exactly `ESC [<code>~` for
-# the ⌘ chord. On the client server of leg 8's kind the codes are live.
+# --- 10. the switch keys: the 看台's table ⇄ the iTerm2 profile (issue #1903) ---
+# `dash-keymap.sh --panel switch` is the one table: fleet_view.py binds the 看台's
+# keys off it, fleet-iterm-profile.py writes the ⌘ chords that send its codes.
 sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
 # `new` (⌘N / prefix c, issue #1953 → #3119): a new session — private code 928.
 # `fold` (⌘. / prefix ., issue #2167): the session in view's sub-tasks — 929.
@@ -545,75 +384,26 @@ sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --p
 [ "$(bash "$KEYMAP" --panel switch full | awk '{ print $1, $2, $3, $4, $5 }')" = "$sw_table" ] || fail "10: full's first five columns are not list"
 printf '%s\n' "$sw_table" | awk '$1 == "dispatch" && $2 == "⌘T" && $3 == "0x74-0x100000" && $4 == 932 && $5 == "t"' | grep -q . \
   || fail "10: dispatch is not ⌘T · 0x74-0x100000 · code 932 · prefix t"
-# ⌘T / prefix t went into ⌘P (issue #3328, compat-1v): ⌘P's popup + 「⌘T 已并进 ⌘P」, no 派单 cell
-for k in '-n User932' t; do
-  grep -E "^bind $k " "$CONF" | grep -q 'fleet-quickopen.py --session.*' || fail "10: $k does not open ⌘P's panel (issue #3328)"
-  grep -E "^bind $k " "$CONF" | grep -q 'view_forward_fmt ⌘T' || fail "10: $k does not say 「⌘T 已并进 ⌘P」"
-  grep -E "^bind $k " "$CONF" | grep -q 'fleet-quick-dispatch' && fail "10: $k still opens the 派一件事 popup"
-done
-grep -F '@fleet_hint_session ' "$CONF" | grep -q 'User932\|⌘T' && fail "10: the bar still has a ⌘T cell (gone with issue #3328)"
 printf '%s\n' "$sw_table" | awk '$4 == 924 || $4 == 926 || $2 == "⌘J" || $2 == "⌘/"' | grep -q . \
   && fail "10: a retired code / chord is back in the switch table (924 ⌘J, 926 ⌘/ — issue #2362)"
 printf '%s\n' "$sw_table" | awk '$1 == "quit" && $2 == "⌘Q" && $3 == "0x71-0x100000" && $4 == 931 && $5 == "Q"' | grep -q . \
   || fail "10: quit is not ⌘Q · 0x71-0x100000 · code 931 · prefix Q"
-grep -E '^bind -n User931 ' "$CONF" | grep -q 'fleet-shell.sh quit' || fail "10: ⌘Q does not quit the client (fleet-shell.sh quit)"
-grep -F '@fleet_hint_session ' "$CONF" | grep -q 'key-User931]' || fail "10: the bar's ⌘Q is not the quit key (User931)"
 printf '%s\n' "$sw_table" | awk '$4 == 930 || $2 == "⌘K"' | grep -q . \
   && fail "10: ⌘K / code 930 is back in the switch table (retired with issue #3185)"
 printf '%s\n' "$sw_table" | awk '$1 == "new" && $2 == "⌘N" && $4 == 928 && $5 == "c"' | grep -q . \
   || fail "10: new is not ⌘N · code 928 · prefix c"
 printf '%s\n' "$sw_table" | awk '$1 == "fold" && $2 == "⌘." && $3 == "0x2e-0x100000" && $4 == 929 && $5 == "."' | grep -q . \
   || fail "10: fold is not ⌘. · 0x2e-0x100000 · code 929 · prefix ."
-sw_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^switch sessions /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
-[ -n "$sw_block" ] || fail "10: the full sheet has no 'switch sessions' group"
-body_of() {   # the body of the conf's bind for key $2 in table $1 (root / prefix)
-  awk -v t="$1" -v k="$2" '
-    t == "root"   && $1 == "bind" && $2 == "-n" && $3 == k { sub(/^bind -n [^ ]+ /, ""); print; exit }
-    t == "prefix" && $1 == "bind" && $2 == k             { sub(/^bind [^ ]+ /, ""); print; exit }' "$CONF"
-}
-SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "10: mktemp"
-# --all: the old client's profile, every row at its own chord (fleet-shell.sh)
-FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" write --all \
-  || fail "10: fleet-iterm-profile.py write --all exited non-zero"
-[ -f "$SW_PROF/fleet.json" ] || fail "10: fleet-iterm-profile.py wrote no fleet.json"
-while read -r sa sg sk sc sp; do
+while read -r sa _ sk _ _; do
   [ -n "$sa" ] || continue
-  grep -Fxq "set -s user-keys[$sc] \"\\e[$sc~\"" "$CONF" || fail "10: $sa: the conf does not catch its code ($sc) as user-keys[$sc]"
-  ub=$(body_of root "User$sc"); [ -n "$ub" ] || fail "10: $sa: the conf has no 'bind -n User$sc'"
-  case "$sp" in F[0-9]*) pb=$(body_of root "$sp") ;; *) pb=$(body_of prefix "$sp") ;; esac
-  [ -n "$pb" ] || fail "10: $sa: its prefix key '$sp' is not bound in the conf"
-  if [ "$sa" = back ]; then
-    # ⌘['s body less its last two closers (the one-pane branch's else, #1904, and
-    # the bind's own): prefix h carries on from there with its no-list else
-    case "$pb" in "${ub% \} \}}"*) ;; *) fail "10: back: prefix h does not run ⌘['s body first: $pb" ;; esac
-  else
-    [ "$ub" = "$pb" ] || fail "10: $sa: ⌘ (User$sc) and '$sp' run different bodies:
-  $ub
-  $pb"
-  fi
-  case "$sp" in F[0-9]*) row="  $sp" ;; *) row="  prefix $sp" ;; esac
-  grep -F "$row " <<< "$sw_block" | grep -qF " $sg " || fail "10: $sa: the sheet has no '$row … $sg' row"
   case "$sk" in 0x[0-9a-f]*-0x[0-9a-f]*) ;; *) fail "10: $sa: '$sk' is not an iTerm2 key spec" ;; esac
   [ $(( $(printf '%d' "${sk#*-}") & 0x100000 )) -ne 0 ] || fail "10: $sa: '$sk' carries no ⌘"
-  python3 - "$SW_PROF/fleet.json" "$sk" "$sc" <<'PY' || fail "10: $sa: the profile does not send ESC [$sc~ for $sk"
-import json, sys
-p = json.load(open(sys.argv[1]))["Profiles"][0]
-assert p["Name"] == "fleet" and p["Guid"]
-m = p["Keyboard Map"][sys.argv[2]]
-assert m == {"Action": 10, "Text": "[%s~" % sys.argv[3]}, m
-PY
 done <<EOF
 $sw_table
 EOF
-# the table's 10 + ⇧↵ → 0x0a (the writing area's newline, issue #1953); no ⌘J / ⌘/
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 11 ] \
-  || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
-python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
-  || fail "10: the profile does not send 0x0a for ⇧↵"
-python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert "0x6a-0x100000" not in m and "0x2f-0x100000" not in m, m' "$SW_PROF/fleet.json" \
-  || fail "10: the profile still maps ⌘J or ⌘/ (issue #2362)"
-# the new client's profile (issue #3185, EPIC #3178 C7): ONE ⌘ chord, ⌘P, + ⇧↵ —
-# and one version long (issue #3328, compat-1v) the ⌘ keys that went, at their old
+SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "10: mktemp"
+# the client's profile (issue #3185, EPIC #3178 C7): ONE ⌘ chord, ⌘P, + ⇧↵ — and
+# one version long (issue #3328, compat-1v) the ⌘ keys that went, at their old
 # codes (the 看台 forwards them to the panel); FLEET_KEY_PANEL=off none;
 # FLEET_KEYS_EXTRA adds exactly what it names (a forward of the same chord goes)
 sw_map() { FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' FLEET_CONF_DIR="$SW_PROF/conf" "$@" python3 "$BIN/fleet-iterm-profile.py" json \
@@ -629,366 +419,20 @@ FWD_A="0xf700-0x300000=[921~ 0xf701-0x300000=[920~"
 mkdir -p "$SW_PROF/conf"
 printf '[ "${FLEET_SHELL:-0}" = 1 ] && FLEET_KEYS_EXTRA="new=cmd+n"\n' > "$SW_PROF/conf/fleet.conf"
 [ "$(sw_map env -u FLEET_KEYS_EXTRA)" = "$FWD 0x70-0x100000=[927~ $FWD_T 0xd-0x20000=0x0a $FWD_A" ] || fail "10: FLEET_KEYS_EXTRA in fleet.conf [client] is not read: $(sw_map env -u FLEET_KEYS_EXTRA)"
+python3 -c 'import json,sys; m=json.load(sys.stdin)["Profiles"][0]["Keyboard Map"]; assert "0x6a-0x100000" not in m and "0x2f-0x100000" not in m, m' \
+  < <(FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" json) \
+  || fail "10: the profile maps ⌘J or ⌘/ (issue #2362)"
+FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" write
 FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_KEYS=0 python3 "$BIN/fleet-iterm-profile.py" write
 [ -f "$SW_PROF/fleet.json" ] && fail "10: FLEET_ITERM_KEYS=0 left the profile in place"
 rm -rf "$SW_PROF"
-if command -v tmux >/dev/null 2>&1; then
-  KW=$(mktemp -d "${TMPDIR:-/tmp}/fkeys.XXXXXX") || fail "10: mktemp"
-  sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$CONF" > "$KW/shell.conf"
-  HOME="$KW" tmux -S "$KW/s" -f /dev/null new-session -d -s k -x 120 -y 30 || fail "10: tmux did not start"
-  HOME="$KW" tmux -S "$KW/s" source-file "$KW/shell.conf" || fail "10: the client conf failed to source"
-  uk=$(HOME="$KW" tmux -S "$KW/s" show-options -s user-keys); rk=$(HOME="$KW" tmux -S "$KW/s" list-keys -T root)
-  HOME="$KW" tmux -S "$KW/s" kill-server; rm -rf "$KW"
-  while read -r sa _ _ sc _; do
-    [ -n "$sa" ] || continue
-    grep -Fq "user-keys[$sc] \\033[$sc~" <<< "$uk" || fail "10: $sa: user-keys[$sc] is not live on the client server: $uk"
-    awk -v k="User$sc" '$4 == k' <<< "$rk" | grep -q . || fail "10: $sa: User$sc is not bound on the client server"
-  done <<EOF
-$sw_table
-EOF
-  # the retired codes (issue #2362): still caught — an older profile sends them,
-  # and an unknown code would reach the session as raw bytes — and bound to nothing
-  for sc in 924 926 930; do
-    grep -Fq "user-keys[$sc] \\033[$sc~" <<< "$uk" || fail "10: the retired code $sc is not caught any more: $uk"
-    awk -v k="User$sc" '$4 == k' <<< "$rk" | grep -q . && fail "10: the retired code $sc is still bound: $(awk -v k="User$sc" '$4 == k' <<< "$rk")"
-  done
-fi
 
 # --- 11. no page of keys, no ⌘J (issue #2362) ---------------------------------
-# The client opens no key page and has no key for one: ⌘/ and prefix ? went (the
-# stage's `keys` window, fleet-keys.sh --page), and with them ⌘J and prefix k —
-# the bar's 「! N 等你」 is the way to the one waiting. Nothing on the client's
-# bar names them, the sheet lists neither prefix key, and a reload unbinds them.
 grep -q -- '--page' "$KEYS" && fail "11: fleet-keys.sh still has its --page"
-grep -Eq '^bind (\?|k) |^bind -n User92[46] ' "$CONF" && fail "11: the client conf still binds prefix ? / k or ⌘/ / ⌘J: $(grep -E '^bind (\?|k) |^bind -n User92[46] ' "$CONF")"
-for u in 'unbind ?' 'unbind k' 'unbind -n User924' 'unbind -n User926'; do
-  grep -qxF "$u" "$CONF" || fail "11: the client conf does not '$u' (a running server keeps a key the conf just leaves out)"
-done
-grep -E '^set -g @fleet_hint' "$CONF" | grep -Eq '⌘J|⌘/|User92[46]| k#\{E:@fleet_hint_k0\} 等你的|\?#\{E:@fleet_hint_k0\} 按键' \
-  && fail "11: the bar still names ⌘J / ⌘/ / prefix k / prefix ?"
-grep -q '等你 ⌘J' "$BIN/tmux-status.sh" && fail "11: the bar's 「! N 等你」 still says ⌘J"
-grep "#{==:#{mouse_status_range},needs}" "$CONF" | grep -q 'F10' || fail "11: a tap on 「! N 等你」 no longer goes to the one waiting"
 SH="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --plain)"
 grep -Eq '^  prefix (k|\?) ' <<< "$SH" && fail "11: the sheet still lists prefix k / prefix ?: $(grep -E '^  prefix (k|\?) ' <<< "$SH")"
 grep -Eq '⌘J|⌘/' <<< "$SH" && fail "11: the sheet still names ⌘J / ⌘/"
-grep -q '^keys) exit 0 ;;$' "$BIN/fleet-shell.sh" || fail "11: fleet-shell.sh keys is not the do-nothing stub (an old bind would read 'keys' as a machine)"
-grep -q 'fleet-keys.sh' "$BIN/fleet-shell.sh" && fail "11: fleet-shell.sh still runs fleet-keys.sh"
 grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifest" && fail "11: the client still ships fleet-keys.sh"
-# ⌘P draws opaque (issue #2362): no DECSLRM margins on the client's server
-grep -qxF 'set -s terminal-overrides[90] "*:Cmg@:Clmg@"' "$CONF" || fail "11: the client conf does not keep the terminal's left/right margins off"
-
-# --- 12. the keys of a local Claude, the same through three servers (issue #2760) --
-# docs/dev/CLIENT.md «和本地 Claude 的键» is the table (EPIC #2756 C4). Lint: the three
-# confs ask for extended keys (the client's two under __PARITY__), the prefix is ⌃]
-# with the iTerm2-only ⌃B road, the iTerm2 profile's left ⌥ is Esc+ — each gone
-# under FLEET_KEYS_PARITY=0. Then for real, on isolated sockets with the three
-# real confs (hooks stripped, HOME a scratch dir): an outer terminal (a pty that
-# answers tmux's queries as iTerm2 does) types every key of the table into the
-# client, and the pane of the machine's session — a recorder asking for keys the
-# way Claude Code does (modifyOtherKeys 2, kitty flags, bracketed paste) — must
-# receive the SAME key, its modifiers decoded whichever encoding tmux chose;
-# 「有意不同」 rows hold what the table says; another terminal keeps ⌃B as the
-# prefix; and with parity off ⇧↵ arrives as ↵ and ⌃B is the prefix, as before.
-grep -qF 'PARITY=1; [ "${FLEET_KEYS_PARITY:-1}" = 0 ] && PARITY=0' "$BIN/fleet-shell.sh" \
-  || fail "12: fleet-shell.sh does not read FLEET_KEYS_PARITY"
-grep -qF 'PREFIX="${FLEET_SHELL_PREFIX:-C-]}"' "$BIN/fleet-shell.sh" || fail "12: the client's prefix is not ⌃] by default"
-grep -qF 's|__PARITY__|$PARITY|g' "$BIN/fleet-shell.sh" || fail "12: fleet-shell.sh does not fill __PARITY__"
-for c in "$CONF" "$ROOT/conf/tmux-shell-stage.conf" "$NODE"; do
-  grep -Eq '^set -sq? extended-keys on$' "$c" || fail "12: $(basename "$c") does not turn extended keys on"
-  grep -Fq "terminal-features[95] 'tmux*:extkeys'" "$c" || fail "12: $(basename "$c") does not give a nested tmux extkeys"
-done
-grep -A1 -F '%if "#{==:__PREFIX__,C-]}"' "$CONF" | grep -qF "bind -n C-b if -F '#{m:*iTerm2*,#{client_termtype}}' { send-keys C-b } { switch-client -T prefix }" \
-  || fail "12: the client conf has no iTerm2-only ⌃B under the ⌃] prefix"
-grep -qF "bind -n C-b if -F '#{m:*iTerm2*,#{client_termtype}}'" "$BIN/fleet-shell.sh" || fail "12: the one-session view has no iTerm2-only ⌃B"
-KPP=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "12: mktemp"
-FLEET_ITERM_DIR="$KPP" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" json \
-  | python3 -c 'import json,sys; p=json.load(sys.stdin)["Profiles"][0]; assert p.get("Option Key Sends") == 2, p' \
-  || fail "12: the iTerm2 profile's left ⌥ is not Esc+"
-FLEET_KEYS_PARITY=0 FLEET_ITERM_DIR="$KPP" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" json \
-  | python3 -c 'import json,sys; p=json.load(sys.stdin)["Profiles"][0]; assert "Option Key Sends" not in p, p' \
-  || fail "12: FLEET_KEYS_PARITY=0 still sets the profile's left ⌥"
-rm -rf "$KPP"
-tmv=$(tmux -V 2>/dev/null | sed -n 's/^tmux \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')
-if [ -n "$tmv" ] && [ "${tmv% *}" -ge 3 ] && { [ "${tmv% *}" -gt 3 ] || [ "${tmv#* }" -ge 5 ]; }; then
-  # sockets under a SHORT dir: a long $TMPDIR overflows AF_UNIX's 104 bytes
-  KP=$(mktemp -d /tmp/fkp.XXXXXX) || fail "12: mktemp"
-  mkdir -p "$KP/conf"
-  cat > "$KP/rec.py" <<'PY'
-import os, sys, tty
-tty.setraw(0)
-os.write(1, b"\x1b[>4;2m\x1b[>5u\x1b[?2004h")   # what Claude Code asks for
-os.write(1, b"READY\r\n")
-with open(sys.argv[1], "ab", buffering=0) as f:
-    while True:
-        d = os.read(0, 1024)
-        if not d:
-            break
-        f.write(d.hex().encode() + b"\n")
-PY
-  cat > "$KP/parity.py" <<'PY'
-"""leg 12 driver: the keys of a local Claude through shell → stage → node.
-
-    parity.py <tmux> <work> <table.md> <mode>
-
-<work>/conf holds the three rendered confs (hooks stripped); mode `on` checks
-every table row, `off` checks the degenerate (FLEET_KEYS_PARITY=0). Prints one
-line per check (`ok …` / `FAIL …`), exit 1 on any FAIL.
-"""
-import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
-
-TMUX, WORK, TABLE, MODE = sys.argv[1:5]
-CONF = WORK + "/conf"
-FAILS = []
-
-
-def say(ok, msg):
-    print(("ok   " if ok else "FAIL ") + msg)
-    if not ok:
-        FAILS.append(msg)
-
-
-def T(sock, *a):
-    return subprocess.run([TMUX, "-S", WORK + "/" + sock, *a], capture_output=True, text=True,
-                          env=dict(os.environ, HOME=WORK)).stdout
-
-
-# --- the key a byte string means: (key, modifiers) per press -------------------
-SHIFT, ALT, CTRL = 1, 2, 4
-ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
-
-
-def keys(b):
-    out, i = [], 0
-    while i < len(b):
-        if b.startswith(b"\x1b[200~", i):
-            j = b.find(b"\x1b[201~", i)
-            j = len(b) if j < 0 else j
-            out.append(("paste", b[i + 6:j].replace(b"\r\n", b"\r").replace(b"\n", b"\r")))
-            i = j + 6
-            continue
-        m = re.compile(rb"\x1b\[(\d+);(\d+)u").match(b, i)
-        if m:
-            out.append((int(m.group(1)), int(m.group(2)) - 1)); i = m.end(); continue
-        m = re.compile(rb"\x1b\[27;(\d+);(\d+)~").match(b, i)
-        if m:
-            out.append((int(m.group(2)), int(m.group(1)) - 1)); i = m.end(); continue
-        m = re.compile(rb"\x1b\[(\d+)u").match(b, i)
-        if m:
-            out.append((int(m.group(1)), 0)); i = m.end(); continue
-        m = re.compile(rb"\x1b\[(?:1;(\d+))?([ABCD])").match(b, i)
-        if m:
-            out.append((ARROWS[m.group(2).decode()], int(m.group(1) or 1) - 1)); i = m.end(); continue
-        if b.startswith(b"\x1b[Z", i):
-            out.append((9, SHIFT)); i += 3; continue
-        if b[i] == 0x1b and i + 1 < len(b):
-            # ESC + a key = that key with ⌥ (ESC ESC = ⌥Esc)
-            sub = keys(b[i + 1:])
-            k, mods = sub[0]
-            rest = keys_len(b[i + 1:])
-            out.append((k, mods | ALT)); i += 1 + rest; continue
-        c = b[i]
-        if c in (0x09, 0x0d, 0x1b, 0x7f):
-            out.append((c, 0))
-        elif c == 0:
-            out.append((0x20, CTRL))
-        elif c < 0x1b:
-            out.append((c + 0x60, CTRL))
-        elif c < 0x20:
-            out.append((c + 0x40, CTRL))
-        else:
-            out.append((c, 0))
-        i += 1
-    return out
-
-
-def keys_len(b):
-    """bytes the FIRST key of b takes"""
-    for pat in (rb"\x1b\[\d+;\d+u", rb"\x1b\[27;\d+;\d+~", rb"\x1b\[\d+u", rb"\x1b\[(?:1;\d+)?[ABCD]", rb"\x1b\[Z"):
-        m = re.compile(pat).match(b)
-        if m:
-            return m.end()
-    return 1
-
-
-# --- the three servers + the outer terminal ------------------------------------
-def start():
-    for s in ("s", "st", "n"):
-        T(s, "kill-server")
-    env = dict(os.environ, HOME=WORK)
-    tm = [TMUX]
-    subprocess.run(tm + ["-S", WORK + "/n", "-f", CONF + "/tmux-attention.conf", "new-session", "-d", "-s", "node",
-                         "-x", "96", "-y", "24", "python3 %s/rec.py %s/rec.out" % (WORK, WORK)], env=env)
-    subprocess.run(tm + ["-S", WORK + "/st", "-f", CONF + "/tmux-shell-stage.conf", "new-session", "-d", "-s", "stage",
-                         "-x", "98", "-y", "26", "TMUX= exec %s -S %s/n attach -t node" % (TMUX, WORK)], env=env)
-    subprocess.run(tm + ["-S", WORK + "/s", "-f", CONF + "/tmux-shell.conf", "new-session", "-d", "-s", "shell",
-                         "-x", "100", "-y", "28", "TMUX= exec %s -S %s/st attach -t stage" % (TMUX, WORK)], env=env)
-    for s in ("s", "st", "n"):
-        T(s, "set", "-g", "status", "off")
-    # the view session a client looks through has its prefix off for good
-    # (fleet-remote-view.sh): only the client's prefix acts
-    T("n", "set", "-t", "node", "prefix", "None")
-    T("n", "set", "-t", "node", "prefix2", "None")
-
-
-class Term:
-    """an outer terminal (a pty) attached to the shell's server; `termtype`
-    answers tmux's XTVERSION query the way that terminal does (None: no answer)"""
-
-    def __init__(self, termtype):
-        self.termtype = termtype
-        self.pid, self.fd = pty.fork()
-        if self.pid == 0:
-            os.environ["TERM"] = "xterm-256color"
-            os.environ["HOME"] = WORK
-            os.environ.pop("TMUX", None)
-            os.execvp(TMUX, [TMUX, "-S", WORK + "/s", "attach", "-t", "shell"])
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-        self.seen = b""
-
-    def pump(self, secs):
-        end = time.time() + secs
-        while time.time() < end:
-            r, _, _ = select.select([self.fd], [], [], 0.03)
-            if not r:
-                continue
-            try:
-                d = os.read(self.fd, 65536)
-            except OSError:
-                return
-            self.seen += d
-            # answer what a terminal answers — tmux holds a lone ESC while a
-            # query of its own is still unanswered (it could start the reply)
-            for q, a in ((rb"\x1b\[>0?q", b"\x1bP>|" + self.termtype.encode() + b"\x1b\\"),
-                         (rb"\x1b\[>0?c", b"\x1b[>0;95;0c"), (rb"\x1b\[0?c", b"\x1b[?62;22c"),
-                         (rb"\x1b\[\?996n", b"\x1b[?997;1n"),
-                         (rb"\x1b\]10;\?", b"\x1b]10;rgb:c0c0/caca/f5f5\x1b\\"),
-                         (rb"\x1b\]11;\?", b"\x1b]11;rgb:1a1a/1b1b/2626\x1b\\")):
-                if re.search(q, d):
-                    os.write(self.fd, a)
-
-    def ready(self):
-        for _ in range(150):
-            self.pump(0.1)
-            if T("st", "list-clients").strip() and T("n", "list-clients").strip() \
-               and "READY" in T("n", "capture-pane", "-p", "-t", "node"):
-                break
-        self.pump(0.8)
-
-    def press(self, spec, expect=True):
-        """spec: hex, `+` = a second press once the first has arrived → what the
-        node's pane got. A lone ESC can take a while through three servers (each
-        waits out escape-time, longer while a query of its own is open), so each
-        press waits for its bytes — up to 4 s — rather than a fixed beat."""
-        rec = WORK + "/rec.out"
-        open(rec, "w").close()
-        for part in spec.split("+"):
-            have = os.path.getsize(rec)
-            os.write(self.fd, bytes.fromhex(part))
-            end = time.time() + (4 if expect else 1)
-            while time.time() < end:
-                self.pump(0.02)
-                if expect and os.path.getsize(rec) > have:
-                    break
-        self.pump(0.3)
-        with open(rec) as f:
-            return bytes.fromhex("".join(f.read().split()))
-
-    def close(self):
-        try:
-            os.kill(self.pid, 9)
-            os.waitpid(self.pid, 0)
-        except OSError:
-            pass
-
-
-def rows():
-    """the table in docs/dev/CLIENT.md «和本地 Claude 的键»: (key, fleet, [encodings])"""
-    text = open(TABLE, encoding="utf-8").read()
-    sec = text.split("## 和本地 Claude 的键", 1)[1].split("\n## ", 1)[0]
-    out = []
-    for line in sec.splitlines():
-        if not line.startswith("| ") or line.startswith("| 键") or line.startswith("|---"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) != 5:
-            continue
-        out.append((cells[0], cells[2], re.findall(r"`([0-9a-f+]+)`", cells[4])))
-    return out
-
-
-def show(b):
-    return b.hex() or "(nothing)"
-
-
-def main():
-    table = rows()
-    start()
-    if MODE == "on":
-        say(len(table) == 19, "the table has the 19 keys of the prototype (%d)" % len(table))
-        say(all(f in ("一样", "有意不同") for _, f, _ in table),
-            "every row is 一样 or 有意不同 — 不通 0: %s" % [k for k, f, _ in table if f not in ("一样", "有意不同")])
-        term = Term("iTerm2 3.6.6")
-        term.ready()
-        say(bool(re.search(rb"\x1b\[>4;[12]m", term.seen)), "the shell asks the terminal for extended keys")
-        for key, fleet, encs in table:
-            for enc in encs:
-                got = term.press(enc)
-                want = keys(bytes.fromhex(enc.replace("+", "")))
-                say(keys(got) == want, "%s %s → the session got %s %s" % (key, enc, show(got), keys(got)))
-        # ⌃] is the prefix: prefix ⌃] sends ⌃] on, prefix ⌃B sends ⌃B on
-        got = term.press("1d+1d")
-        say(keys(got) == [(0x5d, CTRL)], "prefix ⌃] ⌃] → one ⌃] to the session: %s" % show(got))
-        term.close()
-        # any other terminal (no XTVERSION iTerm2): ⌃B is still the prefix
-        term = Term("Blink 17.4")
-        term.ready()
-        got = term.press("02", expect=False)
-        say(got == b"", "Blink & co: ⌃B is the prefix, the session gets nothing: %s" % show(got))
-        got = term.press("02")   # the second ⌃B of prefix ⌃B
-        say(keys(got) == [(0x62, CTRL)], "Blink & co: prefix ⌃B → one ⌃B to the session: %s" % show(got))
-        term.close()
-        # 有意不同: the one-session view's ⌃D / ⌃\ (the rows above: any other layout passes them on)
-        lk = T("s", "list-keys", "-T", "root")
-        cd = [l for l in lk.splitlines() if re.search(r"\sC-d\s", l)]
-        say(bool(cd) and "solo" in cd[0] and "detach-client" in cd[0], "⌃D in the one-session view is 放到后台")
-        cb = [l for l in lk.splitlines() if len(l.split()) > 3 and l.split()[3] == "C-\\\\"]
-        say(bool(cb) and "solo" in cb[0] and "shell-open" in cb[0], "⌃\\ in the one-session view is the session's shell")
-    else:
-        term = Term("iTerm2 3.6.6")
-        term.ready()
-        say(not re.search(rb"\x1b\[>4;[12]m", term.seen), "off: the shell asks the terminal for no extended keys")
-        got = term.press("1b5b31333b3275")
-        say(got == b"\r", "off: ⇧↵ reaches the session as ↵, as before #2760: %s" % show(got))
-        got = term.press("02", expect=False)
-        say(got == b"", "off: ⌃B is the prefix even in iTerm2, as before: %s" % show(got))
-        term.press("02")
-        term.close()
-    for s in ("s", "st", "n"):
-        T(s, "kill-server")
-    sys.exit(1 if FAILS else 0)
-
-
-main()
-PY
-  kp_render() {  # <parity> <prefix> — the confs as fleet-shell.sh fills them, hooks stripped
-    local f
-    for f in "$ROOT"/conf/*.conf; do
-      sed -e "s#__BIN__#$BIN#g" -e "s#__PREFIX__#$2#g" -e "s#__PARITY__#$1#g" -e 's#__STAGE__#kst#g' \
-          -e 's#__SESS__#ks#g' -e 's#__PASTE__#0#g' -e '/^set-hook -g /d' -e '/^run-shell /d' "$f" > "$KP/conf/${f##*/}"
-    done
-  }
-  kp_render 1 'C-]'
-  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/dev/CLIENT.md" on 2>&1); kp_rc=$?
-  printf '%s\n' "$kp_out" | sed 's/^/  12 /'
-  [ "$kp_rc" = 0 ] || { rm -rf "$KP"; fail "12: a key of the table does not reach the session as it would locally (above)"; }
-  kp_render 0 C-b
-  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/dev/CLIENT.md" off 2>&1); kp_rc=$?
-  printf '%s\n' "$kp_out" | sed 's/^/  12 /'
-  [ "$kp_rc" = 0 ] || { rm -rf "$KP"; fail "12: FLEET_KEYS_PARITY=0 is not as before (above)"; }
-  rm -rf "$KP"
-else
-  printf '  12 SKIP the three-server run: tmux ≥ 3.5 needed (have: %s)\n' "$(tmux -V 2>/dev/null || echo none)"
-fi
 
 # 9 — the recovery page's keys (issue #1862)
 page_out=$(python3 - "$BIN" <<'PY'
@@ -1013,6 +457,5 @@ PY
 )
 [ "$page_out" = ok ] || fail "9: the recovery page's keys: $page_out"
 
-printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys, %s dashboard ⌃-keys checked)\n' \
-  "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)" \
+printf 'selftest OK: cheatsheet matches shipped binds (%s dashboard ⌃-keys checked)\n' \
   "$(printf '%s\n' "$sheet_dash_keys" | grep -c .)"

@@ -378,11 +378,6 @@ FLEET_CTX_WINDOW=200000
 # @label=Desk repo @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_DESK_REPO="verkyyi/claude-fleet"
 
-# ⌘N on the client (its [client] section — issue #2616): 0 (default) = a new
-# session (issue #3119); 1 = the writing area on the right as before (multi-line,
-# attachments). Read at each ⌘N; the bar's word at the shell's start.
-# @label=⌘N opens the writing area @group=status @tier=internal @scope=global @edit=bool
-#FLEET_COMPOSE=0
 # Keys (issue #3185, EPIC #3178 C7): a new install takes ONE key — the panel.
 # The CLIENT's two ([client] section): FLEET_KEY_PANEL is the panel's chord (cmd+p;
 # another, e.g. cmd+' · off = none); FLEET_KEYS_EXTRA brings back any other, one
@@ -1536,12 +1531,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Degenerate-output ⟲ mark @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DEGENERATE_MARK_SECS=1800
 
-# Show a compact live hub list on the left of worker/scratch windows. prefix+e
-# toggles and saves this preference for the fleet; prefix+E browses by keyboard.
-# Automatically hidden below sidebar width + 81 columns, reserving 80 for work.
-# Only the visible window owns a view; background windows do not repaint it.
-# @label=Worker task sidebar @group=status @tier=common @scope=fleet @edit=bool
-#FLEET_SIDEBAR=1
 
 # Language for tmux UI labels and fleet-facing toasts. `auto` follows this
 # login's locale (zh* => Chinese, en* => English; C/unset keeps existing Chinese);
@@ -1549,38 +1538,15 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Tmux UI language @group=status @tier=common @scope=fleet @edit=enum @options=auto,en,zh
 #FLEET_UI_LANG=auto
 
-# Sidebar width in terminal cells (clamped to 24–60) — the FLOOR since issue
-# #1328: the sidebar widens itself to fit its longest row, up to
-# FLEET_SIDEBAR_WIDTH_MAX, never past a quarter of the window nor into the
-# worker's 80 columns. Drag it by hand and it keeps your width from then on
-# (the session's @sidebar_width_manual; unset it to go back to auto). Either
-# width is HELD (issue #1521): a window that takes a narrower client's size
-# scales every pane, and the sidebar snaps back rather than staying scaled.
-# Narrow screens hide the sidebar without changing the saved on/off preference.
-# @label=Task sidebar width @group=status @tier=advanced @scope=fleet @edit=int @unit=columns
-#FLEET_SIDEBAR_WIDTH=30
 
-# The widest the sidebar grows on its own to fit a long name (issue #1328).
-# Set it to FLEET_SIDEBAR_WIDTH to turn the auto-width off.
-# @label=Task sidebar max auto width @group=status @tier=internal @scope=global @edit=int @unit=columns
-#FLEET_SIDEBAR_WIDTH_MAX=44
-
-# What the task list shows by default (issue #2675): `batch` — each batch one
-# row with its sessions folded under it (a session waiting on you gives the
-# batch a `!`, never a red row of its own), each repo's sessions with no batch
-# one 「单独的活 · N」 row, folded until you open it; 停放 / 待你动手 rows when the
-# steward reports them. `off` — every session its own row, as before.
-# @label=Task list folds into batches @group=status @tier=internal @scope=global @edit=str
-#FLEET_SIDEBAR_FOLD=batch
-
-# The client's notification when a session needs you (issues #1951, #2759):
-# 在问你 (a question, an approval, a sign-in, the orchestrator's decision
-# sheet) and 卡住 with a sound, 做完 without; the title says who, the body what it
-# asks, a click goes there. Once per entry — the same question every beat is one
-# notification, asked again after an answer is a new one; one batch's 做完
-# within 10 minutes is one. Decided on the client's refresh loop, so it comes
-# with the client in the background too; logs/notify.ndjson has one line per
-# event. 0 = no notification (the bar's 「! n 等你」 stays).
+# The notification when a session needs you (issues #1951, #2759, #3005):
+# 在问你 (a question, an approval, a sign-in) and 卡住 with a sound, 做完
+# without; the title says who, the body what it asks, focusing the terminal goes
+# there. Once per entry — the same question every beat is one notification,
+# asked again after an answer is a new one; one batch's 做完 within 10 minutes
+# is one. Decided on the home machine's refresh loop and told to the terminal of
+# the thin client holding your lease (OSC 9); logs/notify.ndjson has one line per
+# event. 0 = no notification.
 # @label=Notify when a session needs you @group=status @tier=internal @scope=global @edit=bool
 #FLEET_NOTIFY=1
 
@@ -1589,9 +1555,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_NOTIFY_DONE=1
 
 # Quiet hours, local time (issue #2759): notifications still reach the
-# Notification Centre, with no sound and nothing to the phone. `off` = never.
-# The phone (a Bark push, 在问你 and 卡住 only) is FLEET_NOTIFY_BARK_URL
-# (`https://api.day.app/<key>`) — put it in secrets.env, never here.
+# Notification Centre, with no sound. `off` = never.
 # @label=Quiet hours @group=status @tier=internal @scope=global @edit=str
 #FLEET_NOTIFY_QUIET=23:00-08:00
 
@@ -1624,51 +1588,19 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Closing a task lands on the next task @group=status @tier=common @scope=fleet @edit=bool
 #FLEET_CLOSE_LANDS_NEXT=1
 
-# ⌂ / F9 land on the task bar first (issue #899): in a task that shows the task
-# bar, the first press gives the bar the keyboard (like prefix E) and stays in the
-# task; a second press goes on to the hub. In a task with NO task bar on screen
-# (narrow client, or prefix e turned it off) the first press opens the task picker
-# popup instead (issue #902), where F9 / [⌂ hub] goes on to the hub. A zoomed task
-# still goes straight home. 0 = both always go straight to the hub.
-# @label=⌂/F9 go to the task bar first @group=status @tier=common @scope=fleet @edit=bool
-#FLEET_HOME_SIDEBAR_FIRST=1
 
 # The full-screen list window (issue #1533). 0 (default): there is none — the
 # task list on the left is the only list; ⌂ / F9 / prefix g all land on it, focused
 # (shown and switched on if needed; F9 a third time hides it), and a fleet's
 # resting window is `home`, a plain shell the list draws beside.
-# FLEET_HOME_SIDEBAR_FIRST does nothing then. 1 = the old `plan` hub window
+# 1 = the old `plan` hub window
 # running the dash, and the old ⌂ / F9 / prefix g — kept one batch as the way
 # back; the next batch deletes it.
 # @label=Full-screen list window (old hub) @group=status @tier=internal @scope=fleet @edit=bool
 #FLEET_DASH_WINDOW=0
 
-# The status bar draws the current window's account only once its quota reaches
-# this % on max(5h, week) (issue #1616: the bar draws only what wants your hand —
-# below the line the account takes no room). Only the window(s) past the line are
-# drawn, coloured by FLEET_ACCOUNT_WARN_PCT / FLEET_ACCOUNT_CEILING. GLOBAL, like
-# the container below: the status bar reads the global env only.
-# @label=Status-bar quota line (%) @group=status @tier=internal @scope=global @edit=int
-#FLEET_STATUS_QUOTA_PCT=80
 
-# Optional: a docker container name to show as ○ in the status bar right side
-# while it is down (nothing while it runs, issue #1616).
-# GLOBAL: the status bar (bin/tmux-status.sh) reads this from the global env only
-# — a per-fleet override would be a silent no-op — so it is machine-wide (like the
-# FLEET_DISK_* thresholds the same status bar renders).
-# @label=Status-bar container @group=status @tier=advanced @scope=global @edit=str
-#FLEET_STATUS_CONTAINER="claude-dev"
 
-# How long the status bar's container reading (`docker ps`) is shared between
-# attached clients, in seconds (issue #890). tmux renders the bar once per
-# status-interval PER CLIENT, so two terminals used to measure twice for the same
-# machine-wide answer; now the first renderer measures and publishes
-# ${TMPDIR}/fleet-status.cache, and the rest read it (load / memory / disk left
-# the bar in issue #1616: fleet-alerts.sh measures them). Default 5 = status-interval.
-# 0 = no sharing (every client measures, the pre-#890 behaviour). GLOBAL, like the
-# container above.
-# @label=Status-bar stats sharing (s) @group=status @tier=internal @scope=global @edit=int
-#FLEET_STATUS_CACHE_SECS=5
 
 # Subscription-limit severity in the usage + account modal (prefix u; issue
 # #239). The official weekly/N-hour limit % (scraped into the ratelimit cache

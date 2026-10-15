@@ -11,9 +11,6 @@
 #                  fields 17-18 (question · its words); `kind=auth` stamps the
 #                  `auth` subtype; a working row has no fields 17-18 (byte for
 #                  byte as before)
-#   B. the view — fleet-sidebar.py draws the kind's word and the first 60
-#                  characters on the row (the pane's width is still the name's,
-#                  row_need), the whole question first on the bar (detail_line)
 #   C. the hub cache — fleet-hub-sessions.sh --refresh writes fields 27-28 of a
 #                  needs row: the agent's own status_kind / status_msg first,
 #                  else its needs subtype + detail; a row not in needs, none;
@@ -89,33 +86,6 @@ PY
 else
   echo 'ask-words selftest: tmux absent — leg A skipped'
 fi
-
-# ============================================================================
-# B. the view — fleet-sidebar.py's row and bar
-# ============================================================================
-out=$(python3 - "$BIN" "$Q" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1] + "/fleet-sidebar.py")
-sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
-q = sys.argv[2]
-long = "Bash(rm -rf build && make -j8 all && make install PREFIX=/opt/x) — 允许吗？"
-row = ["@1", "needs", "!", "asking", " ", "", "0", "在问你", "", "#21", "—", "·", "", "", "", "", "question", q]
-assert sb.ask_label(row, "asking") == "asking  问题：" + q, sb.ask_label(row, "asking")
-perm = row[:16] + ["permission", long]
-assert sb.ask_label(perm, "x") == "x  权限：" + long[:60] + "…", sb.ask_label(perm, "x")
-assert sb.detail_line(perm).startswith("在问你（权限）：" + long + " · "), sb.detail_line(perm)
-# the pane's width is the name's: the words never widen the list
-assert sb.row_need(perm) == sb.row_need(perm[:16] + ["", ""]), (sb.row_need(perm),)
-# not asking (or a row from before): exactly as before
-done = ["@2", "done", "✓", "done-row", " ", "", "0", "", "", "#22", "—", "·", "", "", "", ""]
-assert sb.ask_label(done, "done-row") == "done-row" and sb.ask_label(row[:16] + ["", ""], "a") == "a"
-assert sb.detail_line(done) == "done-row · #22", sb.detail_line(done)
-stale = ["@3", "working"] + row[2:]
-assert sb.ask_label(stale, "w") == "w" and not sb.detail_line(stale).startswith("在问你")
-print("ok")
-PY
-)
-eq "B: the row shows the kind + the first 60 characters, the bar all of it" "ok" "$out"
 
 # ============================================================================
 # C. the hub cache — fields 27-28 (26 is #2505's test mark), then the remote row's 17-18

@@ -51,6 +51,7 @@ for parent in bin_dir.glob('*-selftest.sh'):
         assert f'SELFTEST_PART={number} exec bash ' in text, wrapper
         assert f'/{parent.name}" "$@"' in text, wrapper
         assert os.access(wrapper, os.X_OK), wrapper
-assert parents >= 9, parents
+# The ninth original parent (sidebar) retired with the old client in #4423.
+assert parents >= 8, parents
 print(f'PASS section selection and complete entry points ({parents} parents)')
 PY

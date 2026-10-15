@@ -25,7 +25,7 @@ never changed or removed.**
 
 The directory is `FLEET_CLIENT_LOG_DIR`, else the shell's cache
 (`FLEET_SHELL_CACHE`, else `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/shell`,
-`bin/fleet-shell.sh`'s `CACHE`) + `/logs`, created 0700; each file 0600.
+the historical client cache) + `/logs`, created 0700; each file 0600.
 
 A file that has reached `FLEET_CLIENT_LOG_MAX` bytes (512 KiB) is renamed to
 `<name>.1` before the next line — one old copy, the older one gone. So a log
@@ -115,17 +115,6 @@ fields, only ever added at the end:
 | `quit` / `end` | ⌘Q or a detach / a signal | `rc` |
 | `run` | `fleet-thin.py --run`: one command on the home over a one-shot ssh — `fleet ls / open / close / answer`, `fleet claude` with no client tmux (issue #3004) | `home` · `route`; reason = the command's first word |
 
-### old-client.log — `fleet --old` (#3007)
-
-`${XDG_CACHE_HOME:-~/.cache}/claude-fleet/old-client.log`: one line each time the
-old client is asked for by `fleet --old` since plain `fleet` became the thin loop
-(EPIC #2999 C10) — `time(UTC)  login  local|ssh  args`. C11 reads it before the
-old client goes.
-
-`connect.log` keeps the `home` / `pick` lines of each `--argv` run; the ssh
-itself is the thin client's child, so it has no `ssh-start` / `ssh-end` there —
-its end is the `connect` line here.
-
 ### place.log — `bin/fleet-client-place.sh`
 
 | event | `issue-N` · `scratch` · `home` · `new` · `restore:<key>` |
@@ -136,25 +125,12 @@ its end is the `connect` line here.
 | result | the answer's first word and the exit: `REMOTE 0` · `REFUSED 4` · `DECLINED 5` · `error 1` · `NOHUB 1` … |
 | reason | `repo=<repo>` · the answer after its tab (the hub's `No machine can take…` with each machine's reason, as it said it) · everything said on stderr (machines that declined, why this computer was not chosen) |
 
-### keeper.log — the keeper in `bin/fleet-shell.sh`
-
-| event | result | reason |
-|---|---|---|
-| `start` | `pid N` | `session <name>` |
-| `renew` · `input` | the hub's lease state (`active`, `taken_over`, …) · `fail` | `by <device>` + the hub's words · the lease command's last stderr line |
-| `take` | `ok` · `fail` | the device |
-| `stop` | `pid N` | `the client's tmux server is gone` |
-
-A renewal is written only when its outcome differs from the last one written —
-a steady lease every 15 s writes nothing. A keeper killed by a signal writes no
-`stop`; the next `start` says it was replaced.
-
 ### login.log — `bin/fleet-login.py`
 
 | event | when | result | reason |
 |---|---|---|---|
 | `scan` | `fleet login` (the browser / QR) | `ok` · `fail <exit>` | `valid_before …` or why it stopped · `tls: python <path> · CA 来源：…` |
-| `renew` | every renewal by the device key (the keeper's, `fleet`'s) | `ok` · `scan` (must scan again) · `fail` | the last two things it said · `tls: …` |
+| `renew` | every renewal by the device key (`fleet` or ssh use) | `ok` · `scan` (must scan again) · `fail` | the last two things it said · `tls: …` |
 
 The `tls:` part is `fleet_tls.describe()` (#2878): which python, which CA
 sources it verifies the hub with.

@@ -12,19 +12,15 @@
 #      OSC; the relay splices the copies right after the agent's own OSC on every
 #      split of the stream; depth 0 changes no byte; replay_payload() rebuilds the
 #      report from @agent_status (msg kept, clear when there is none)
-#   B  the chain: terminal ← shell ← stage ← node (the fleet shell's way in), each
-#      server given the allow-passthrough its conf sets; the agent under
-#      `relay --replay 3` asks for permission → the terminal receives the bare
-#      OSC 7501, kind and words intact
-#   C  why: the same chain with the shell at allow-passthrough off (before this
-#      issue) → nothing reaches the terminal
+#   (B/C — the old client's shell ← stage ← node chain — went with that client,
+#   issue #3008; F is the thin client's chain.)
 #   D  replay: a terminal attached to a node with the [75] hooks from the conf —
 #      attach hears its window's report, a switch to a window with no agent hears
 #      clear, a switch back hears the report again; no @agent_replay ⇒ no write
 #   F  thin (issue #3005): a thin client's terminal ← the home node (a session
 #      there), and ← the home node ← another node (C4): with `relay --replay 3`
 #      the terminal receives exactly one bare OSC 7501 at either depth
-#   E  lint: the three confs set allow-passthrough on; the node conf carries the
+#   E  lint: the node conf sets allow-passthrough on and carries the
 #      [75] hooks; fleet-claude.sh passes --replay FLEET_STATUS_REPLAY_DEPTH
 # Prints what the terminal received — the issue's 上线证据 for the branch.
 # tmux / python3 absent → SKIP (exit 0). REPLAY_KEEP=1 keeps the work dir.
@@ -101,12 +97,9 @@ PYEOF
 
 # ── E. lint ─────────────────────────────────────────────────────────────────
 passval() { awk '$1=="set" && $2=="-g" && $3=="allow-passthrough" {v=$4} END {print v}' "$1"; }
-SHELL_V=$(passval "$REPO/conf/tmux-shell.conf")
-STAGE_V=$(passval "$REPO/conf/tmux-shell-stage.conf")
 NODE_V=$(passval "$REPO/conf/tmux-attention.conf")
-for pair in "tmux-shell.conf:$SHELL_V" "tmux-shell-stage.conf:$STAGE_V" "tmux-attention.conf:$NODE_V"; do
-  [ "${pair#*:}" = on ] && ok "E conf/${pair%%:*}: allow-passthrough on" || bad "E conf/${pair%%:*}: allow-passthrough '${pair#*:}', want on"
-done
+[ "$NODE_V" = on ] && ok "E conf/tmux-attention.conf: allow-passthrough on" \
+  || bad "E conf/tmux-attention.conf: allow-passthrough '$NODE_V', want on"
 HOOKS=$(grep -E '^set-hook -g (session-window-changed|client-session-changed|client-attached)\[75\] .*fleet-status-7501\.py replay' "$REPO/conf/tmux-attention.conf")
 [ "$(printf '%s\n' "$HOOKS" | grep -c .)" = 2 ] && ok "E node conf: the two [75] replay hooks (window and session changed)" || bad "E node conf [75] hooks: $HOOKS"
 grep -q 'relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --' "$BIN/fleet-claude.sh" \
@@ -178,37 +171,6 @@ os.write(1, ("\x1b]7501;state=blocked:app=claude-code:kind=permission:msg=" + w 
 time.sleep(600)
 PY
 WANT="state=blocked:app=claude-code:kind=permission:msg=$(printf 'Bash: git push origin issue-2539' | base64)"
-
-# ── B/C. the chain ──────────────────────────────────────────────────────────
-chain() {  # <shell's allow-passthrough> → the terminal's JSON
-  local s conf="$WORK/base.conf"
-  for s in shell stage node; do "$TMUX_BIN" -S "$WORK/$s" kill-server 2>/dev/null; done
-  rm -f "$WORK/go"
-  printf 'set -g default-terminal "tmux-256color"\nset -g status off\nset -g escape-time 0\n' > "$conf"
-  "$TMUX_BIN" -S "$WORK/node" -f "$conf" new-session -d -s node -x 96 -y 24 \
-    "python3 '$PY' relay --replay 3 -- python3 '$WORK/agent.py' '$WORK/go'"
-  "$TMUX_BIN" -S "$WORK/node" set -g allow-passthrough "$NODE_V"
-  "$TMUX_BIN" -S "$WORK/stage" -f "$conf" new-session -d -s stage -x 98 -y 26 \
-    "TMUX= exec $TMUX_BIN -S $WORK/node attach -t node"
-  "$TMUX_BIN" -S "$WORK/stage" set -g allow-passthrough "$STAGE_V"
-  "$TMUX_BIN" -S "$WORK/shell" -f "$conf" new-session -d -s shell -x 100 -y 28 \
-    "TMUX= exec $TMUX_BIN -S $WORK/stage attach -t stage"
-  "$TMUX_BIN" -S "$WORK/shell" set -g allow-passthrough "$1"
-  python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" shell shell \
-    "{\"chain\":[\"shell\",\"stage\",\"node\"],\"steps\":[[\"ask\",[[\"touch\",\"$WORK/go\"]]]]}"
-}
-J=$(chain "$SHELL_V")
-printf 'B shell=%s stage=%s node=%s → terminal received: %s\n' "$SHELL_V" "$STAGE_V" "$NODE_V" "$J"
-got=$(field "$J" '"|".join(d["ask"])')
-[ "$got" = "$WANT" ] && ok "B three tmux deep: the terminal receives the bare OSC 7501, words intact" \
-  || bad "B terminal got '$got', want '$WANT'"
-msg=$(field "$J" '__import__("base64").b64decode(d["ask"][0].split("msg=")[1]).decode() if d["ask"] else ""')
-[ "$msg" = "Bash: git push origin issue-2539" ] && ok "B decoded: '$msg'" || bad "B decoded '$msg'"
-
-J=$(chain off)
-printf 'C shell=off (before #2539) → terminal received: %s\n' "$J"
-[ "$(field "$J" 'len(d["ask"])')" = 0 ] && ok "C shell at allow-passthrough off: nothing reaches the terminal (the gap)" \
-  || bad "C shell off still passed it — the chain test is not measuring the shell's setting: $J"
 
 # ── F. the thin path (issue #3005, EPIC #2999 C8) ────────────────────────────
 # A thin client's terminal is the HOME machine's client: a session there is one

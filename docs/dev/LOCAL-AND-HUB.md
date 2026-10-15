@@ -88,19 +88,12 @@ curl -fsSL <入口>/install | sh
 
 ### 不接入口时 `fleet` 打开什么
 
-- **`fleet` 打开的还是同一个客户端**：没有入口地址时 `fleet connect --pick` 答「本机」
-  （reason `local`，`fleet connect --print` 打印 `local <机器>`），右窗格直接嵌套接入
-  这台机器的 fleet（不 ssh），左边列表是这台机器自己的会话——客户端的取数循环改问本机
-  `fleet-remote-view.sh sessions`（`FLEET_HUB_SESSIONS_LOCAL=1`，`via=node`，不会因为
-  「入口沉默」变灰），`FLEET_SIDEBAR_SOURCE=local`。开会话、切会话、跨 Agent 迁移
-  都是这台机器上那套工具，和一机一 fleet 时一样。
-- **什么时候是这个模式**：`FLEET_HUB_URL` / `CCQUOTA_HUB_URL`（环境、`fleet.conf`、
-  `shell.conf`）和 `hub.json` 的 `url` 都没有。以后接入口，写上地址（入口的
-  `curl -fsSL <入口>/install | sh` 会写）就回到入口来源，**有入口时客户端逐字节照旧**。
-- 守护：`bin/fleet-shell-selftest.sh` K 腿（隔离 socket、无入口地址、`CCQUOTA_*` 全清：
-  客户端起来、列表是本机 fleet 的全部会话、点一行右窗格切过去；写上地址就是入口环境）、
-  `bin/fleet-install-selftest.sh` G 腿（不接入口在临时 HOME 装好、不写入口地址）、
-  `bin/fleet-connect-selftest.sh` 第 7 段。
+- **`fleet` 打开的还是同一个客户端**：没有入口时，薄客户端在本机打开看台，
+  由本机的 `fleet_view.py` 读会话列表；不启动旧侧栏或第二层 tmux。
+- **什么时候是这个模式**：环境、`fleet.conf` 和 `hub.json` 都没有入口地址。
+  以后写上地址就能使用入口列出的机器。
+- 守护：`fleet-thin-selftest.sh`、`fleet-install-selftest.sh` 和
+  `fleet-connect-selftest.sh` 的本机路径。
 
 ## 开关在哪一级
 
@@ -132,7 +125,7 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
 | **派单**（开 issue 会话） | GitHub 认领就是锁；开在这台机器 | 先拿入口租约（一个 issue 只在一台机器上开），再按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪；入口不通 → 开在这里 | `dash-issue-session.sh` → `fleet_hub_lease` / `fleet_hub_place`（`fleet_hub_on <sess>`） |
 | **临时会话** | 开在这台机器 | 同派单：按 `--node` ▸ `FLEET_SPAWN_NODE` ▸ `auto` 问入口开在哪（#1541）——**不拿租约**（临时会话没有 issue），入口按 `<repo> scratch <fleet UUID>` 挑机器，`scratch-N` 的号由开出来的那台机器分配；入口不通 → 开在这里。带 `--prompt` 的和无仓库的临时会话只开在本机（点名别的机器会被拒绝）。侧边栏「新建到 mac-a…」弹窗里按 ⌃s 就是在 mac-a 开一个临时会话 | `dash-raw-session.sh` → `fleet_hub_place … scratch`；对端 `fleet-control-read.sh start … scratch` |
 | **订阅** | 这个登录 `accounts/` 里的账号（`local` 类） | 同左，另加入口池里的 `hub:<label>` 账号（`pool` 类，入口发短期凭据）。按会话选「只用本地 / 只用池 / 都行」：`dash-issue-session.sh --account local\|pool\|any`（#1540）——盖在窗口 `@account_class` 上，`fleet-claude.sh` 据此只在那一类里挑；派到别的机器时 `ccquota place --account` 带过去，那台机器照样只在那一类里挑；`pool` 但本登录没有池账号 → 拒绝启动，不会悄悄落到本地订阅 | `fleet-account.sh`（`FLEET_ACCOUNT_CLASS` 过滤 `acct_labels`） |
-| **列表来源** | 这台机器的 tmux 窗口 | `FLEET_SIDEBAR_SOURCE=local`：本机窗口 + 入口缓存里你在别的机器上的会话；`=hub`：整张表来自入口的 `fleet_sessions`（本机置顶的和无仓库的窗口照留——入口不认识它们，#1643），状态条换成机器 / 额度 / 入口的版式 | `tmux-dashboard-rows.sh`、`tmux-status.sh`（读 `$FLEET_C` 缓存，渲染路径不联网） |
+| **列表来源** | 本机窗口 | 家机器上的当前看台读取本机窗口和入口的会话缓存 | `tmux-dashboard-rows.sh`、`fleet_view.py` |
 | **取数** | 无 | 采集器在**至少一个** fleet 联机时跑 `hubsess` 阶段；`fleet-hub-sessions.sh` 只给联机的 fleet 写 `remote_<sess>` | `tmux-dash-collect.sh`（`fleet_hub_any`） |
 | **回报 / 消息** | 只到本机窗口 | 本机找不到的 worker_id 走入口 outbox（`fleet_hub_put`）送到它所在的机器 | `fleet-report-parent.sh`、`fleet-peer-send.sh` |
 | **凭据** | `gh auth`、账号 token（0600）；不碰入口 | 另加：节点 token 在 `node.env`，只在跑 `ccquota lease/place/move` 的子 shell 里读，从不进窗格环境（#1491）；看列表用你的连接证书 `~/.ssh/fleet-cert`，没有就用查看 token | `_fleet_hub_env`、`fleet-hub-sessions.sh` |

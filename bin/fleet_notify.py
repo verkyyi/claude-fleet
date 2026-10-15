@@ -2,12 +2,10 @@
 """fleet_notify.py — a session needs you: THIS computer says so (issue #2759,
 EPIC #2756 C3).
 
-The ONE place that decides a notification. The client's refresh loop
-(fleet-hub-sessions.sh --loop, client mode) calls `beat()` on every round that
-brought rows, with the rows it just wrote — so it runs whether a terminal is
-attached to the client or not (the old road, fleet_alerts_notify on the bar's
-status-right job, ran only while a client drew that bar: a client in the
-background, or `fleet claude`'s own view, never notified — #1951's 0%).
+The ONE place that decides a notification. A thin client's HOME machine
+(issue #3005, EPIC #2999 C8) calls `beat()` in its refresh loop
+(fleet-hub-sessions.sh --loop, node mode) on every round that brought rows,
+over every row of its caches — so it runs whether a terminal is attached or not.
 
 What counts, per row (a session on any machine — no session is special: the
 orchestrator's decision-sheet count left with the resident seat, issue #3118):
@@ -25,17 +23,14 @@ Notification Centre. FLEET_NOTIFY=0: nothing at all, as before #1951's road;
 FLEET_NOTIFY_DONE=0: no 做完. A client in standby (another device holds the
 person's lease, issue #1715) asks the hub nothing, so it never gets here.
 
-On a thin client's HOME machine (issue #3005, EPIC #2999 C8) the same rule runs
-in the node's loop (fleet-hub-sessions.sh, node mode) over every row of its
-caches, with fleet_thin_lease.py notify as the sender: OSC 9 to the terminal of
-the 看台 holding the person's lease, and nothing at all when no 看台 here holds
-it — another home, or the old client, is the one that tells them.
+The sender is fleet_thin_lease.py notify: OSC 9 to the terminal of the 看台
+holding the person's lease, and nothing at all when no 看台 here holds it —
+another home is the one that tells them. (The old client's own sender,
+fleet-client-actions.py notify — terminal-notifier, a Bark push — went with
+that client, issue #3008.)
 
 Every event is one line of logs/notify.ndjson (ts · key · state · sent | skip),
-written by the sender (fleet-client-actions.py notify --log-*) once it knows
-what happened — the metric's source. The phone's address
-(FLEET_NOTIFY_BARK_URL) is read from secrets.env alone, by the sender, and is
-never written anywhere.
+written by the sender once it knows what happened — the metric's source.
 
   python3 fleet_notify.py quiet [HH:MM]   exit 0 inside quiet hours (tests)
 """
@@ -150,12 +145,11 @@ TITLE = {("ask", "perm"): "notify_perm", ("ask", "auth"): "notify_auth",
 
 
 def send(ev, session, sender=None):
-    """Hand one event to fleet-client-actions.py notify (or `sender`, an argv
-    prefix — the home machine's fleet_thin_lease.py notify), detached: the loop
-    never waits on a notifier."""
+    """Hand one event to `sender` (an argv prefix; fleet_thin_lease.py notify when
+    none is given), detached: the loop never waits on a notifier."""
     cmd = os.environ.get("FLEET_NOTIFY_SEND_CMD")
     base = cmd.split() if cmd else (list(sender) if sender else
-                                    [sys.executable, os.path.join(HERE, "fleet-client-actions.py")])
+                                    [sys.executable, os.path.join(HERE, "fleet_thin_lease.py")])
     argv = base + [
         "notify", "--title", ev["title"], "--body", ev["body"], "--jump", ev["jump"], "--session", session,
         "--group", ev["group"], "--log-key", ev["key"], "--log-state", ev["kind"]]

@@ -10,18 +10,16 @@
 #      refused:no-fleet with no session to resolve; exit 0 only on added.
 #   B. degenerate first: adding through the popup path writes ONLY the overlay — the
 #      fleet conf is byte-identical before and after, and a one-repo fleet lists the
-#      key and the menu item (they are how the second repo gets in).
+#      key (it is how the second repo gets in).
 #   C. the wiring, three ways (#556): `repo-add` is in dash-keymap.sh's dash table on
 #      ctrl-z (⌥z under a C-z prefix), tmux-dashboard.sh binds $DASH_KEY_REPO_ADD to
 #      an execute() of dash-popup.sh → dash-repo-add.sh, the dash sheet has its ⌃z
-#      row; the sidebar's row menu carries a `g` item on the same popup + script
-#      (EPIC #894 convention 1), and its `?` rows list the letter.
+#      row. (The old client's row-menu `g` item went with it, issue #3008.)
 #   E. what a person reads (issue #3375): --shape takes owner/name, https / ssh /
 #      git@ links (with a /tree/… or ?tab= tail); --explain gives every result token
 #      a sentence in zh and en, never the token itself, and failed:clone says
-#      网络不通 / 找不到 / 没登录 off the clone's own output (end to end too); ⌘P's
-#      「添加仓库…」 line opens this popup; the skill and the default CLAUDE/AGENTS
-#      block send Claude down the same road.
+#      网络不通 / 找不到 / 没登录 off the clone's own output (end to end too); the
+#      skill and the default CLAUDE/AGENTS block send Claude down the same road.
 #   D. the interactive form, on a real PTY: esc cancels (`cancelled`, exit 130, no
 #      fleet-repo.sh run); a typed owner/name + ↵ adds it, the verdict screen holds
 #      until ↵, stdout is the token alone. Needs fzf + python3; SKIPped without.
@@ -126,19 +124,18 @@ run --session "$S" --bogus; eq "A: an unknown flag → usage" "$RC" 2
 
 # --- B. degenerate first: the fleet conf is never touched; the entries exist anyway ----
 eq "B: the fleet conf is byte-identical after three adds" "$(cat "$FLEET_CONF_DIR/fleets/$S/conf")" "$conf_before"
-# a fresh one-repo fleet (no repos/ dir) still lists the key and the menu item —
-# neither depends on how many repos the fleet hosts, which is the whole point
+# a fresh one-repo fleet (no repos/ dir) still lists the key — it does not
+# depend on how many repos the fleet hosts, which is the whole point
 S1=one; mkdir -p "$FLEET_CONF_DIR/fleets/$S1"; cp "$FLEET_CONF_DIR/fleets/$S/conf" "$FLEET_CONF_DIR/fleets/$S1/conf"
 eq "B: the one-repo fixture hosts one repo" "$(fleet_repos "$S1" | grep -c .)" 1
 eq "B: a one-repo fleet's dash keymap has repo-add on ctrl-z" \
    "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$BIN/dash-keymap.sh" key repo-add)" "ctrl-z"
-has "B: a one-repo fleet's row menu lists the item" "$(bash "$BIN/fleet-sidebar-menu.sh" --keys | cut -f1 | tr '\n' ' ')" " g "
 mkrepo "$HOME/projects/two" o/two
 OUT=$(bash "$ADD" --session "$S1" o/two 2>/dev/null); eq "B: the first add on a one-repo fleet" "$OUT" "added:o-two"
 eq "B: … and it is a two-repo fleet now" "$(fleet_repos "$S1" | tr '\n' ' ')" "o/a o/two "
 
-# --- C. the wiring: keymap ⇄ dash bind ⇄ sheet ⇄ sidebar menu --------------------------
-KM="$BIN/dash-keymap.sh"; DASH="$BIN/tmux-dashboard.sh"; KEYS="$BIN/fleet-keys.sh"; MENU="$BIN/fleet-sidebar-menu.sh"
+# --- C. the wiring: keymap ⇄ dash bind ⇄ sheet ------------------------------------------
+KM="$BIN/dash-keymap.sh"; DASH="$BIN/tmux-dashboard.sh"; KEYS="$BIN/fleet-keys.sh"
 eq "C: repo-add resolves to ⌃z under C-b" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$KM" glyph repo-add)" "⌃z"
 eq "C: … and dodges a C-z prefix to alt-z" "$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' bash "$KM" key repo-add)" "alt-z"
 has "C: env spells the action REPO_ADD" "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$KM" env)" "DASH_KEY_REPO_ADD='ctrl-z'"
@@ -151,19 +148,7 @@ printf '%s\n' "$SHEET" | grep -q '^  ⌃z .*add a repo to this fleet' || fail "C
 printf '%s\n' "$SHEET" | grep '^  ⌃z ' | grep -q 'fleet-repo.sh add' || fail "C: the ⌃z row does not name the shell form"
 RSHEET=$(FLEET_TMUX_PREFIX=C-z FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain --context dash)
 printf '%s\n' "$RSHEET" | grep -q '^  ⌥z .*⌃z is your tmux prefix C-z' || fail "C: under a C-z prefix the sheet must list ⌥z and say why"
-eq "C: the row menu's letter for repo is g" "$(printf '%s\n' "$(bash "$MENU" --keys)" | awk -F '\t' '$1=="g"{print $2}' | grep -c 'add a repo')" 1
-grep -Eq 'adda "\$\(t menu_repo\)" "\$\(mk repo\)" "\$\(ask repo\)"' "$MENU" \
-  || fail "C: fleet-sidebar-menu.sh has no menu_repo item asking on the sidebar line (ask repo) via \$(mk repo) (#1620)"
-grep -q '"--session", session, text\], env, repo_added)' "$BIN/fleet-sidebar.py" \
-  || fail "C: the sidebar's repo question does not hand the typed owner/name to dash-repo-add.sh --session (#1620)"
-# the label lives in THE table since #1535 (fleet-ui-lang.sh), both UI languages
-[ "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t menu_repo)" = '＋ 仓库…' ] && [ "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t menu_repo)" = 'Add repo…' ] \
-  || fail "C: the repo item must be named in both UI languages (＋ 仓库… / Add repo…, #1188)"
 grep -qE 'dash-repo-add\.sh' "$BIN/../README.md" || fail "C: README does not mention the popup"
-FULL=$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' NO_COLOR=1 bash "$KEYS" --plain)
-printf '%s\n' "$FULL" | awk '/^row menu /{f=1;next} f && NF && /^[^ ]/{f=0} f' | grep -q '^  g  .*add a repo' \
-  || fail "C: the full sheet's row menu group lacks the g row"
-
 # --- D. the interactive form on a PTY: esc cancels; typed + ↵ adds; the verdict holds ---
 if command -v fzf >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
   mkrepo "$HOME/projects/pty" o/pty
@@ -282,18 +267,6 @@ OUT=$(FLEET_UI_LANG=zh bash "$ADD" --session "$S" o/net 2>"$WORK/err"); RC=$?
 eq "E: offline clone → failed:clone" "$OUT:$RC" "failed:clone:1"
 has "E: … and the person reads 网络不通" "$(tail -n 1 "$WORK/err")" "拉不到 GitHub，网络不通"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
-# ⌘P (fleet-quickopen.py): the 添加仓库… line, and ↵ on it opens this popup with the fleet
-QO="$BIN/fleet-quickopen.py"
-printf '%s\n' "$(python3 "$QO" panel-cmds 2>/dev/null)" | grep -q "^repo-add	添加仓库…	!repo-add$" \
-  || fail "E: ⌘P's panel lines have no 「添加仓库…」 → !repo-add"
-[ "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t panel_repo_add)" = 'Add a repo…' ] || fail "E: panel_repo_add has no English"
-grep -q '"bash", str(BIN / "dash-repo-add.sh")\]) + (\["--session", session\]' "$QO" \
-  || fail "E: switch_act repo-add does not open dash-repo-add.sh --session <fleet> in a popup"
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/switch.args"\n' "$WORK" > "$WORK/bin/switch-seam"; chmod +x "$WORK/bin/switch-seam"
-FLEET_SWITCH_REPO_ADD_CMD="$WORK/bin/switch-seam" python3 "$QO" switch-run repo-add "$S" >/dev/null 2>&1 \
-  || fail "E: switch-run repo-add refused"
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/switch.args" ] && break; sleep 0.2; done
-eq "E: … with the fleet named" "$(cat "$WORK/switch.args" 2>/dev/null)" "--session $S"
 # the Claude road (skills/fleet-add-repo) names this same script, never a bare clone
 SK="$BIN/../skills/fleet-add-repo/SKILL.md"
 grep -q 'dash-repo-add.sh' "$SK" 2>/dev/null || fail "E: skills/fleet-add-repo does not send Claude through dash-repo-add.sh"

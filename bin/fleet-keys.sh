@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-keys.sh — the fleet keymap cheatsheet (issue #110). One curated source
 # of truth for EVERY fleet shortcut, grouped by context:
-#   tmux prefix binds · task sidebar · dashboard fzf · backlog fzf · config modal fzf.
+#   dashboard fzf · backlog fzf · config modal fzf.
 #
 # Opened by a `?` bind inside the dash/backlog (a popup that closes on q/esc),
 # and read whole by /fleet-onboard. The client opens no key page (issue #2362:
@@ -10,24 +10,22 @@
 #
 # Context scoping (issue #265): no context shows the WHOLE sheet, but
 # when opened from INSIDE a panel it shows only the shortcuts that apply there —
-# that panel's own binds plus the global `tmux prefix` binds (which fire from any
-# pane, the dash included), not the other panels' inner binds. Pass the panel via
-# `--context dash|backlog` (default `all` = every group). `--context sidebar`
-# (issue #948, cut to one screen by #963) is the task list's own short sheet —
-# since issue #1950 the list takes no keys, so it is its four taps. The `.` row
-# menu's letters stay in the full sheet.
+# that panel's own binds, not the other panels' inner binds. Pass the panel via
+# `--context dash|backlog` (default `all` = every group). The old client's groups —
+# its `tmux prefix` binds, its switch keys, the task list's taps and its row
+# menu's letters (`--context sidebar`) — went with that client (issue #3008: a
+# node binds tmux's stock keys only); the 看台's keys are dash-keymap.sh's switch
+# table, read by fleet_view.py.
 #
 # Usage:
 #   fleet-keys.sh                    # full sheet, wait for q/esc (popup mode)
-#   fleet-keys.sh --context dash     # dashboard-scoped sheet (+ tmux prefix)
-#   fleet-keys.sh --context backlog  # backlog-scoped sheet (+ tmux prefix)
-#   fleet-keys.sh --context sidebar  # the task list's short sheet (its taps)
+#   fleet-keys.sh --context dash     # dashboard-scoped sheet
+#   fleet-keys.sh --context backlog  # backlog-scoped sheet
 #   fleet-keys.sh --plain            # print once and exit (no wait) — pipes/tests
 #                                    #   also implied when stdout is not a tty
 #
 # Drift guard: bin/fleet-keys-selftest.sh cross-checks the keys listed here
-# against the binds actually shipped in conf/tmux-shell.conf + the dash/
-# backlog fzf --binds, so this sheet can't silently go stale.
+# against the dash / backlog fzf --binds, so this sheet can't silently go stale.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -52,7 +50,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 # Unknown context ⇒ fall back to the full sheet (never render nothing).
-case "$CONTEXT" in all|dash|backlog|sidebar) ;; *) CONTEXT="all" ;; esac
+case "$CONTEXT" in all|dash|backlog) ;; *) CONTEXT="all" ;; esac
 # Non-interactive stdout (pipe/redirect/test) ⇒ print-and-exit, never block.
 [ -t 1 ] || PLAIN=1
 
@@ -96,105 +94,28 @@ key() {
   printf '  %s%s%s%s%s\n' "$YEL" "$k" "$R" "$pad" "$desc"
 }
 
-# want <group> — is this group in scope for the current $CONTEXT? The global
-# `tmux prefix` binds fire from any pane, so they show in every scope; the
-# per-panel groups (dashboard/backlog/config modal) show only in the full sheet
-# or when that panel is the active context.
+# want <group> — is this group in scope for the current $CONTEXT? The per-panel
+# groups (dashboard/backlog/config modal) show only in the full sheet or when that
+# panel is the active context.
 want() {
   case "$CONTEXT" in
     all)     return 0 ;;
-    dash)    case "$1" in prefix|dashboard) return 0 ;; *) return 1 ;; esac ;;
-    backlog) case "$1" in prefix|backlog)   return 0 ;; *) return 1 ;; esac ;;
-    sidebar) return 1 ;;   # its own compact sheet: print_sidebar_sheet
+    dash)    case "$1" in dashboard) return 0 ;; *) return 1 ;; esac ;;
+    backlog) case "$1" in backlog)   return 0 ;; *) return 1 ;; esac ;;
     *)       return 0 ;;
   esac
-}
-
-# The task list's short sheet (issue #963): one short line each, so it fits a
-# popup that cannot scroll. Since issue #1950 the list takes no keys — the
-# lines are its taps, the same four the full sheet's group lists.
-# `skey <key> <desc>`: the key column is 14 CELLS. ${#k} counts a CJK character
-# once though it takes two, so wide() counts those: their UTF-8 lead bytes
-# (U+3000–U+9FFF: E3–E9, the full-width forms: EF). The arrows and ⌃ ⌥ ⌂ glyphs
-# lead with E2 and stay one cell.
-wide() { printf '%s' "$1" | LC_ALL=C tr -cd '\343-\351\357' | wc -c | tr -d ' '; }
-skey() {
-  local k="$1" pad n
-  n=$((16 - ${#k} - $(wide "$k"))); [ "$n" -lt 1 ] && n=1
-  printf -v pad '%*s' "$n" ''
-  printf '  %s%s%s%s%s\n' "$YEL" "$k" "$R" "$pad" "$2"
-}
-print_sidebar_sheet() {
-  printf '%s%s %s %s  %s%s%s\n\n' "$B" "$CYAN" "$(fleet_ui_t keys_sidebar_title)" "$R" "$DIM" "$(fleet_ui_t keys_close)" "$R"
-  skey "$(fleet_ui_t keys_sidebar_m1k)" "$(fleet_ui_t keys_sidebar_m1)"
-  skey "$(fleet_ui_t keys_sidebar_m2k)" "$(fleet_ui_t keys_sidebar_m2)"
-  skey "$(fleet_ui_t keys_sidebar_m3k)" "$(fleet_ui_t keys_sidebar_m3)"
-  skey "$(fleet_ui_t keys_sidebar_12k)" "$(fleet_ui_t keys_sidebar_12)"
-  skey "$(fleet_ui_t keys_sidebar_m4k)" "$(fleet_ui_t keys_sidebar_m4)"
 }
 
 # THE sheet — one structure, every string from fleet-ui-lang.sh (issue #1535:
 # the zh copy of this whole function folded into the one table, row for row).
 print_sheet() {
   local sub
-  if [ "$CONTEXT" = sidebar ]; then print_sidebar_sheet; return; fi
   case "$CONTEXT" in
     dash)    sub=$(fleet_ui_t keys_sub_dash) ;;
     backlog) sub=$(fleet_ui_t keys_sub_backlog) ;;
     *)       sub=$(fleet_ui_t keys_sub_all_fmt "${DASH_KEYMAP_PREFIX:-C-b}") ;;
   esac
   printf '%s%s %s %s  %s%s%s\n' "$B" "$CYAN" "$(fleet_ui_t keys_title)" "$R" "$DIM" "$sub" "$R"
-
-  if want prefix; then
-  group "$(fleet_ui_t keys_g_prefix)" "$(fleet_ui_t keys_g_prefix_sub)"
-  key "prefix q" "$(fleet_ui_t keys_prefix_05)"
-  key "prefix z" "$(fleet_ui_t keys_prefix_09)"
-  key "prefix [" "$(fleet_ui_t keys_prefix_10)"
-  key "prefix \\" "$(fleet_ui_t keys_prefix_solo_shell)"
-  key "prefix !" "$(fleet_ui_t keys_prefix_solo_local)"
-  key "F9" "$(fleet_ui_t keys_prefix_14)"
-  key "fleet guide" "$(fleet_ui_t keys_prefix_15)"
-  fi
-
-  if want switch; then
-  # one row per `dash-keymap.sh --panel switch` action (issue #1903): the prefix
-  # key (F9 has none), then its ⌘ chord in iTerm2 — read from the table, so a row
-  # can never name a key the conf does not catch (fleet-keys-selftest.sh leg 10)
-  group "$(fleet_ui_t keys_g_switch)" "$(fleet_ui_t keys_g_switch_sub)"
-  local sa sg sp
-  while read -r sa sg _ _ sp; do
-    [ -n "$sa" ] || continue
-    case "$sp" in F[0-9]*) ;; *) sp="prefix $sp" ;; esac
-    key "$sp" "$sg  $(fleet_ui_t "keys_switch_$sa")"
-  done <<EOF
-$(bash "$BIN/dash-keymap.sh" --panel switch list 2>/dev/null)
-EOF
-  # the one-pane layout's keys (issue #1904): a phone / a narrow window, where the
-  # Termius extra-key row carries them; anywhere else they go to the session
-  key "F1" "$(fleet_ui_t keys_single_f1)"
-  key "F2 F3" "$(fleet_ui_t keys_single_f23)"
-  key "F4" "$(fleet_ui_t keys_single_f4)"
-  fi
-
-  if want sidebar; then
-  # the task list takes no keys (issue #1950): its group is its taps
-  group "$(fleet_ui_t keys_g_sidebar)" "$(fleet_ui_t keys_g_sidebar_sub)"
-  key "$(fleet_ui_t keys_sidebar_m1k)" "$(fleet_ui_t keys_sidebar_m1)"
-  key "$(fleet_ui_t keys_sidebar_m2k)" "$(fleet_ui_t keys_sidebar_m2)"
-  key "$(fleet_ui_t keys_sidebar_m3k)" "$(fleet_ui_t keys_sidebar_m3)"
-  key "$(fleet_ui_t keys_sidebar_12k)" "$(fleet_ui_t keys_sidebar_12)"
-  key "$(fleet_ui_t keys_sidebar_m4k)" "$(fleet_ui_t keys_sidebar_m4)"
-  fi
-
-  if want menu; then
-  group "$(fleet_ui_t keys_g_menu)" "$(fleet_ui_t keys_g_menu_sub)"
-  local mk what
-  while IFS='	' read -r mk what; do
-    [ -n "$mk" ] && key "$mk" "$what"
-  done <<EOF
-$(bash "$BIN/fleet-sidebar-menu.sh" --keys 2>/dev/null)
-EOF
-  fi
 
   if want dashboard; then
   group "$(fleet_ui_t keys_g_dashboard)" "$(fleet_ui_t keys_g_dashboard_sub)"

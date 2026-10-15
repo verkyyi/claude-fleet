@@ -748,27 +748,39 @@ EOF
   return 0
 }
 
-# ---- retired keys are commented out (issue #3120) --------------------------------
-# The autofill dispatcher is gone (EPIC #3111 C9), and with it FLEET_AUTOFILL,
-# FLEET_AUTOFILL_MAX_PER_TICK and FLEET_AUTOFILL_NODE. A line still setting one — in
-# fleet.conf, a fleet conf or a repo overlay — reads nothing now, so it is kept as
-# a comment saying so (`# retired #3120: <the line>`), never deleted. Idempotent:
-# no active line, nothing written.
-RETIRED_KEYS='FLEET_AUTOFILL|FLEET_AUTOFILL_MAX_PER_TICK|FLEET_AUTOFILL_NODE'
+# ---- retired keys are commented out (issues #3120, #3008) -----------------------
+# A key nothing reads any more — in fleet.conf, a fleet conf or a repo overlay —
+# is kept as a comment saying so (`# retired #<issue>: <the line>`), never
+# deleted, so the person sees what it did and that it is gone:
+#   #3120  the autofill dispatcher (EPIC #3111 C9): FLEET_AUTOFILL,
+#          FLEET_AUTOFILL_MAX_PER_TICK, FLEET_AUTOFILL_NODE
+#   #3008  the old two-pane client: FLEET_CLIENT (`shell` chose it, `thin` the one
+#          left — `fleet` IS the client now, bin/fleet only says so), FLEET_COMPOSE
+#          (its ⌘N writing area), FLEET_SIDEBAR_WIDTH_MAX and FLEET_SIDEBAR_FOLD
+#          (its task list)
+# Idempotent: no active line, nothing written.
+RETIRED_SETS='3120:FLEET_AUTOFILL|FLEET_AUTOFILL_MAX_PER_TICK|FLEET_AUTOFILL_NODE
+3008:FLEET_HOME_SIDEBAR_FIRST|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_STATUS_CACHE_SECS|FLEET_STATUS_CONTAINER|FLEET_STATUS_QUOTA_PCT|FLEET_CLIENT_LAYOUT|FLEET_CLIENT|FLEET_COMPOSE|FLEET_SIDEBAR_WIDTH_MAX|FLEET_SIDEBAR_FOLD'
 migrate_retired() {
-  local DRY="$1" QUIET="$2" f done_='' re
-  re="^[[:space:]]*(export[[:space:]]+)?($RETIRED_KEYS)[[:space:]]*="
-  for f in "$MC" "$CD"/fleets/*/conf "$CD"/fleets/*/repos/*.conf "$CD"/*.conf; do
-    [ -f "$f" ] && grep -Eq "$re" "$f" || continue
-    if [ "$DRY" = 1 ]; then
-      printf 'fleet-conf: would comment out the retired autofill keys in %s\n' "${f#$CD/}"; continue
-    fi
-    awk -v re="$re" '$0 ~ re { print "# retired #3120: " $0; next } { print }' "$f" > "$f.tmp.$$" \
-      && cat "$f.tmp.$$" > "$f" && rm -f "$f.tmp.$$" \
-      || { rm -f "$f.tmp.$$"; die "cannot rewrite $f"; }
-    done_="$done_ ${f#$CD/}"
-  done
-  [ -n "$done_" ] && [ "$QUIET" = 0 ] && echo "fleet-conf: retired autofill keys commented out in:$done_"
+  local DRY="$1" QUIET="$2" f done_='' re set_ iss keys
+  while IFS= read -r set_; do
+    [ -n "$set_" ] || continue
+    iss=${set_%%:*}; keys=${set_#*:}
+    re="^[[:space:]]*(export[[:space:]]+)?($keys)[[:space:]]*="
+    for f in "$MC" "$CD"/fleets/*/conf "$CD"/fleets/*/repos/*.conf "$CD"/*.conf; do
+      [ -f "$f" ] && grep -Eq "$re" "$f" || continue
+      if [ "$DRY" = 1 ]; then
+        printf 'fleet-conf: would comment out the keys retired in #%s in %s\n' "$iss" "${f#$CD/}"; continue
+      fi
+      awk -v re="$re" -v tag="# retired #$iss: " '$0 ~ re { print tag $0; next } { print }' "$f" > "$f.tmp.$$" \
+        && cat "$f.tmp.$$" > "$f" && rm -f "$f.tmp.$$" \
+        || { rm -f "$f.tmp.$$"; die "cannot rewrite $f"; }
+      done_="$done_ ${f#$CD/}(#$iss)"
+    done
+  done <<EOF
+$RETIRED_SETS
+EOF
+  [ -n "$done_" ] && [ "$QUIET" = 0 ] && echo "fleet-conf: retired keys commented out in:$done_"
   return 0
 }
 

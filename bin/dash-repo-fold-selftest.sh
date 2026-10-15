@@ -25,9 +25,7 @@
 #      quiet layer folds, the loud one never does — the parent fold's rule), and
 #      the sidebar keeps its current window.
 #   E. NO-OPS — a bare `hdr` with no target, `hdr:`, a repo the fleet does not
-#      host: nothing printed, no tmux mutation, no option. fleet-sidebar.py's
-#      folds() offers a `hdr:<target>` heading and never a bare `hdr`; acts()
-#      still hands no other action a heading.
+#      host: nothing printed, no tmux mutation, no option.
 #   F. DEGENERATE — a one-repo fleet: `←` on a heading writes nothing, and even
 #      with @repo_fold set by hand both frames are byte-identical to the same
 #      fleet without it.
@@ -195,15 +193,6 @@ noop "an unhosted repo"         collapse hdr:o/elsewhere
 noop "the ? heading (no target)" collapse hdr '' ''
 noop "→ on an open group"       expand hdr '' o/claude-fleet
 noop "a bogus verb"             toggle hdr:o/tokenledger
-# the sidebar's helpers
-sel=$(python3 -c '
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(repr([m.folds(k) for k in ("hdr:o/tokenledger", "hdr:none", "hdr", "", "@7")]),
-      repr([m.acts(k) for k in ("hdr:o/tokenledger", "hdr:none", "hdr", "@7")]))' "$BIN/fleet-sidebar.py")
-eq    "E: folds() offers a targeted heading and a row, never a bare hdr; acts() still no heading" "$sel" \
-      "['hdr:o/tokenledger', 'hdr:none', '', '', '@7'] ['', '', '', '@7']"
 # the hub hands the 4th field to both arrow binds
 eq    "E: the hub's ←/→ binds pass {4}" "$(grep -c 'dash-fold-toggle.sh \(collapse\|expand\) {1} {q} {4}' "$BIN/tmux-dashboard.sh")" "2"
 

@@ -3,7 +3,7 @@
 # the UI (issue #1103, EPIC #1096 C7).
 #
 # Two entries, one script (EPIC #894 convention 1): the hub dash's ⌃z (`repo-add`
-# in bin/dash-keymap.sh) and the task sidebar's row menu `g` (fleet-sidebar-menu.sh)
+# in bin/dash-keymap.sh) and the task sidebar's row menu `g` (fleet_view.py ACTIONS)
 # both run it inside bin/dash-popup.sh. It asks ONE thing — the repo as owner/name
 # (a GitHub URL or git@ form is normalised) — checks the shape, and hands it to
 # `fleet-repo.sh add --session <sess> <owner/name>`: fleet_repo_register (issue

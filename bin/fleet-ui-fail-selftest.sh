@@ -23,9 +23,6 @@
 # dash-raw-session-selftest.sh, dash-reap-selftest.sh,
 # dash-issue-new-spawn-selftest.sh. tmux or python3 absent → A/B SKIP.
 set -uo pipefail
-# The list is drawn on a fleet socket here: on a real node it is the client's
-# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
-export FLEET_SIDEBAR_NODE=1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
 LANGSH="$BIN/fleet-ui-lang.sh"
@@ -63,7 +60,7 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 # --- D. lint ---------------------------------------------------------------------
-SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh dash-issue-new.sh dash-new-session.sh fleet-sidebar.sh"
+SCRIPTS="dash-issue-session.sh dash-raw-session.sh dash-reap.sh dash-issue-new.sh dash-new-session.sh"
 hits=''
 for f in $SCRIPTS; do
   h=$(grep -nE 'display-message[^|]*(✓|spawned|reaped|closed scratch|filed|checking #|spawning #)' "$BIN/$f" \

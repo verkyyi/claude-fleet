@@ -30,8 +30,8 @@
 #   D  rows       — tmux-dashboard-rows.sh: field 13 `broken` on the listed window,
 #                   `stale` on the others; the hub list draws 会坏·需重开 on it and
 #                   配置旧 on the stale one; no broken file ⇒ byte for byte as before
-#   E  sidebar    — fleet-sidebar.py: cfg_tag broken ⇒ 会坏·需重开 (narrow 坏), red
-#                   pair; cfg_part / row_need; a remote row's cfg=broken is accepted
+#   E  inventory  — a remote row's cfg=broken is accepted by the inventory reader;
+#                   the word 会坏·需重开 in English
 #   F  reopen     — fleet-cfg-restart.sh --counts `<stale> <renew> <broken>`; a
 #                   broken, done, idle session is reopened like a stale one
 #                   (fleet_cfg_restart_why rc 0); a looping one never
@@ -43,7 +43,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 SUT="$BIN/fleet-oldcfg-check.sh"
-for f in fleet-oldcfg-check.sh fleet-oldcfg-replay.py fleet-agent-team.py fleet-lib.sh tmux-dashboard-rows.sh fleet-sidebar.py fleet-cfg-restart.sh fleet-ui-lang.sh; do
+for f in fleet-oldcfg-check.sh fleet-oldcfg-replay.py fleet-agent-team.py fleet-lib.sh tmux-dashboard-rows.sh fleet-cfg-restart.sh fleet-ui-lang.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-oldcfg-check selftest: python3 absent — SKIP'; exit 0; }
@@ -244,31 +244,8 @@ eq "D: …the whole sidebar frame equal to the one with an empty list" "$(: > "$
 rm -f "$BROKEN"
 
 # ============================================================================
-# E. the sidebar view (fleet-sidebar.py)
+# E. the inventory and the word (the old client's sidebar view went with it, #3008)
 # ============================================================================
-out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
-  python3 - "$BIN/fleet-sidebar.py" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-w = m.width_of
-assert m.cfg_tag("broken") == "会坏·需重开", m.cfg_tag("broken")
-assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
-assert m.PAIRS[m.PAIR_BROKEN] == ("PAL_RED", None), m.PAIRS[m.PAIR_BROKEN]
-assert m.PAIRS[m.PAIR_BROKEN + m.SEL_GLYPH] == ("PAL_RED", "PAL_SEL")
-assert len(m.PAIRS) == len(set(m.PAIRS)), "a pair number collides"
-# issue #2305: a broken row's state glyph is its own (`✗`, painted red) — the
-# word is the bar's; stale / ok rows keep the producer's glyph
-row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
-assert m.row_glyph(row + ["broken"]) == ("✗", "broken"), m.row_glyph(row + ["broken"])
-assert m.row_glyph(row + ["stale"]) == ("✓", "") and m.row_glyph(row + ["ok"]) == ("✓", "")
-assert m.row_glyph(["@1", "needs", "?"] + row[3:] + ["broken"]) == ("?", ""), "a question keeps its red ?"
-assert m.row_glyph(row[:8] + ["mac-a!"] + row[9:] + ["broken"])[1] == "lost", "a lost machine wins"
-assert m.detail_line(row + ["broken"]) == "worker-one · mac-a · 会坏·需重开", m.detail_line(row + ["broken"])
-assert m.row_need(row + ["broken"]) == m.row_need(row) and w("✗") == w("✓")
-print("E-ok")
-PY
-) || fail "E: sidebar assertions" "$out"
-eq "E: fleet-sidebar.py draws 会坏·需重开 red for a broken row" "E-ok" "$out"
 eq "E: the English word" "breaks·reopen" "$(FLEET_UI_LANG=en bash -c '. "$1/fleet-ui-lang.sh"; fleet_ui_t sidebar_cfg_broken' _ "$BIN")"
 out=$(python3 - "$BIN" <<'PY'
 import sys

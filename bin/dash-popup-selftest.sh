@@ -276,7 +276,7 @@ untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 
   | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -Ev 'Path\(.*"dash-popup\.sh"\)' | grep -v -- '--title')
 [ -z "$untitled" ] || fail "one frame: a popup without --title:
 $untitled"
-for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar.py; do
+for f in tmux-dashboard.sh tmux-issues.sh; do
   grep -q 'dash-popup' "$BIN/$f" || fail "one door: $f opens no popup through dash-popup.sh"
 done
 echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh, titled"
@@ -284,8 +284,10 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # --- 6d. ONLY THE POPUPS THAT NEED A SCREEN (issue #1620, EPIC #1615 C5) -------
 # The 「保留的弹窗个数」 reading: the distinct --title a popup is opened with,
 # anywhere in bin/ and conf/ — the retired full-screen hub (tmux-dashboard.sh,
-# FLEET_DASH_WINDOW=1 only) aside. What fits one line asks on the sidebar's input
-# line (fleet-sidebar.py `Ask`); what duplicated the sidebar is gone. Two stay
+# FLEET_DASH_WINDOW=1 only) aside. Since the old client went (issue #3008, with
+# its quick open, dispatch, rescan, route and repo_add popups — the 看台 draws its
+# own, fleet_view.py), one is left: the backlog's keys sheet. The history: what fit one line asked on the sidebar's input
+# line (fleet_view.py `Ask`); what duplicated the sidebar is gone. Two stay
 # since issue #1714 took the node's keys (prefix b / u / c / ! and the alert-count
 # taps were the only doors of backlog / usage / config / alerts): keys — the
 # client's prefix ? — and the task picker, until its chain was deleted (#3732). The
@@ -305,17 +307,15 @@ kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$R
 kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '/tmux-dashboard\.sh$' \
   | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-[ "$kept_hub" = 'popup_dispatch popup_keys popup_quickopen popup_repo_add popup_rescan popup_route' ] \
-  || fail "kept popups: want dispatch keys quickopen repo_add rescan route (6), got: $kept_hub (all, the hub too: $kept)"
-# the one-field popups that moved onto the sidebar's line open no popup at all
-for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
+[ "$kept_hub" = 'popup_keys' ] \
+  || fail "kept popups: want keys (1), got: $kept_hub (all, the hub too: $kept)"
+# the one-field popups that moved onto a line open no popup at all
+for f in fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
          dash-migrate.sh open-url.sh dash-repo-add.sh fleet-row-remote.sh; do
   grep -Ev '^[[:space:]]*#' "$BIN/$f" | grep -q 'dash-popup\.sh\|fleet_popup ' \
     && fail "kept popups: $f still opens a popup"
 done
-grep -E 'dash-popup\.sh.*popup_(new_task|restore)' "$BIN/fleet-sidebar.py" \
-  && fail "kept popups: the sidebar's ⌃n / ⌃o / landed restore still open a popup"
-echo "ok: four popups kept (the client's keys sheet, quick open, the login rescan, the narrow task picker); one-field ones ask on the sidebar line"
+echo "ok: one popup kept outside the hub (the backlog's keys sheet); one-field ones ask on a line"
 
 # --- 7. STATIC GUARD: the binds route through the helper ---------------------
 [ -f "$DASH" ] || fail "static guard: $DASH not found"

@@ -9,8 +9,6 @@
 #                  fingerprint / no expected file ⇒ no field 13 (byte for byte as
 #                  before); a Codex row compares against the codex line; another
 #                  machine's row takes its cache verdict (field 16)
-#   B. sidebar   — fleet-sidebar.py: 配置旧 left of the @ mark, narrow 旧, cfg_part,
-#                  row_need; ok / unknown ⇒ the row is exactly as before
 #   C. judge     — fleet_cfg_restart_why on an isolated tmux socket: only a stale,
 #                  `done`, idle ≥ FLEET_CFG_RESTART_IDLE session qualifies — a
 #                  Codex one alike (issue #1896); working / needs / looping /
@@ -109,28 +107,6 @@ eq "A: a remote row takes its machine's verdict — stale" "stale" "$(f13 "$s" R
 eq "A: …ok" "ok" "$(f13 "$s" RO)"
 eq "A: …an older cache (no field 16): unknown" "-" "$(f13 "$s" RN)"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
-
-# ============================================================================
-# B. sidebar — 配置旧 in the bar, never on the row (issue #2305)
-# ============================================================================
-out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
-  python3 - "$BIN/fleet-sidebar.py" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-assert m.ROW_FIELDS == 19   # 14: title (#1921), 15: reap (#1902), 16: backfill (#2235), 17-18: ask (#2538), 19: ctx (#2717, #2963)
-row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
-assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
-assert m.detail_line(row + ["stale"]) == "worker-one · mac-a · 配置旧", m.detail_line(row + ["stale"])
-assert m.detail_line(row + ["ok"]) == m.detail_line(row) == "worker-one · mac-a", m.detail_line(row + ["ok"])
-local = row[:8] + [""] + row[9:]
-assert m.detail_line(local + ["stale"]) == "worker-one · 配置旧"   # a local row: no @ mark, still 配置旧
-assert m.row_glyph(row + ["stale"]) == ("✓", ""), "stale is not urgent: the row keeps its glyph"
-assert m.row_need(row + ["stale"]) == m.row_need(row), "the row asks no cells for 配置旧"
-assert m.row_fields("a\x1fb")[12] == ""
-print("ok")
-PY
-)
-eq "B: sidebar layout" "ok" "$out"
 
 # ============================================================================
 # C. judge — fleet_cfg_restart_why on an isolated socket

@@ -1231,7 +1231,7 @@ def check_direct(script, tool, masked_cmd, cwd):
 # --- a session's client is the test identity (issue #1931, EPIC #1906 C12) ------
 #
 # A session that starts a REAL client — `fleet` / `fleet <machine>` / `fleet shell`
-# / fleet-shell.sh, here or through `ssh <host> …` — as the person takes the
+# / fleet-thin.py, here or through `ssh <host> …` — as the person takes the
 # person's one client lease: on 2026-10-06 a drill (#1901) did exactly that from mac-a
 # and the operator's MacBook dropped to its standby screen again and again. Inside
 # a session the client asks as the test identity by default (fleet-client-lease.py),
@@ -1254,6 +1254,8 @@ def _client_start(toks, i):
     rest = toks[i + 1:]
     if word == "fleet-shell.sh":
         return "--test-identity" not in rest and not (rest and rest[0] in _SHELL_NOT_CLIENT)
+    if word == "fleet-thin.py":
+        return not (rest and rest[0] in ("-h", "--help"))
     # `fleet claude|codex` (issue #2264) starts the client too, before its attach;
     # with --here it is `fleet run`, this computer's own session — no client
     if word == "fleet-home-session.sh":
@@ -1264,6 +1266,8 @@ def _client_start(toks, i):
         return False
     sub = rest[0] if rest else ""
     if sub in ("", "shell"):
+        return True
+    if sub in ("--thin", "--old"):
         return True
     if sub in ("claude", "codex"):
         return "--here" not in rest[1:]
