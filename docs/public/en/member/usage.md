@@ -141,9 +141,9 @@ The actions you can set (this table is generated too):
 | `prev` | the previous session | `⌘↑` | `⌃] b` |
 | `back` | back through the sessions you were on (no task list: the machine before) | `⌘[` | `⌃] h` |
 | `fwd` | forward again | `⌘]` | `⌃] l` |
-| `new` | new session: a no-repo session on your home machine, the cursor in its input; with FLEET_COMPOSE=1 the writing area on the right | `⌘N` | `⌃] c` |
+| `new` | new session: a no-repo session on your home machine, the cursor in its input | `⌘N` | `⌃] c` |
 | `dispatch` | dispatch: a title + a repo (the last one used) + optionally Codex, ↵ files it and starts its worker; from any window, no model on the way | `⌘T` | `⌃] t` |
-| `quit` | quit fleet: every process of the client on this computer goes (the list, the hub loop, the connections); the sessions keep running on their machines; fleet comes back | `⌘Q` | `⌃] q` |
+| `quit` | quit this client connection; sessions keep running on their machines; fleet opens it again | `⌘Q` | `⌃] q` |
 <!-- /docs-gen:keys-extra -->
 
 Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys never reach fleet; open the panel with `⌃] p` or `⌃Space`.

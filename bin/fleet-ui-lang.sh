@@ -1846,8 +1846,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;
     en:keys_switch_switcher)   printf %s 'switch session: every session, most recent first, searchable; at the bottom + New session and Open the multi-session view (Hide the list in it)' ;;
-    zh:keys_switch_quit)       printf %s '退出 fleet：关掉这台电脑上客户端的全部进程（侧栏、hub 循环、连接），远端会话照常在机器上跑；fleet 重新进入' ;;
-    en:keys_switch_quit)       printf %s 'quit fleet: every process of the client on this computer goes (the list, the hub loop, the connections); the sessions keep running on their machines; fleet comes back' ;;
+    zh:keys_switch_quit)       printf %s '退出当前客户端连接，会话照常在机器上运行；fleet 重新进入' ;;
+    en:keys_switch_quit)       printf %s 'quit this client connection; sessions keep running on their machines; fleet opens it again' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
