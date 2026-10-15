@@ -431,9 +431,6 @@ type Server struct {
 	// entryReachAt is machine → the time of its last entry reach check
 	// (claude-fleet#3072).
 	entryReachAt sync.Map
-	// jumpSeen is machine → jumpSeen: a door that said it lets fleet-jump
-	// through, or a pod whose sshd takes its person's keys (claude-fleet#4193).
-	jumpSeen sync.Map
 	// entryReachSeen is machine → entryReachSeen: its last report, checked
 	// or not — the keys page's 「正在打开」 (claude-fleet#3199).
 	entryReachSeen sync.Map

@@ -1411,7 +1411,7 @@ except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
   # Stuck past FLEET_DEBUG_STALL_SECS (60) with no session lasting (issue #2894):
   # the reconnect page says 「按 d 让远端看一眼」 and d sends fleet-debug report
   # from here — only on this page, never a key of the node's or the client's.
-  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0; stuck_since=''
+  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0; stuck_since=''; refused_warm=''
   while :; do
     mine || { rv_switch_log stray-end "$node" run 0 "pid $$"; exit 0; }
     pin=''
@@ -1479,7 +1479,7 @@ EOF_PEER
     export FLEET_CONNECT_LOGIN="$login"
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_login "$login" 2>/dev/null
     wsock=$(rv_warm_sock "$node" "$login")
-    if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ] && rv_warm_ok "$wsock" "$login"; then
+    if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ] && [ "$wsock" != "$refused_warm" ] && rv_warm_ok "$wsock" "$login"; then
       # A warm master still coming up (its `<sock>.pending` pid alive — the shell
       # and the first click start in the same second) is waited for, up to
       # FLEET_REMOTE_WARM_WAIT (5) s, instead of opening a private master beside
@@ -1544,6 +1544,9 @@ EOF_PEER
     att=$!
     wait "$att"; rc=$?
     att=''
+    if [ "$rc" = 255 ] && [ "$use" != "$ctl" ]; then
+      refused_warm=$use
+    fi
     # The line is gone (issue #1876): `open` now reconnects instead of selecting
     # over it, and the far end's tmux never got to turn its mouse reporting (and
     # bracketed paste) off in this pane — the outer tmux would keep handing it

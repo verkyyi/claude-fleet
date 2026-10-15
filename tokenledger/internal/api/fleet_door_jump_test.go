@@ -44,7 +44,7 @@ func TestDoorJumpRouteOnlyWhenBothSaidSo(t *testing.T) {
 	word("fleet-door", "jump=1&ns=Bad_NS", true, now)
 	word("u-alice1", "jump=1", false, now)
 	same("a door namespace that is not a name")
-	h.srv.jumpSeen.Delete("u-alice1")
+	word("u-alice1", "jump=1", false, now.Add(-jumpFresh-time.Second))
 	word("fleet-door", "jump=1&ns=fleet-workers", true, now)
 	same("the door alone")
 	word("u-alice1", "", false, now)

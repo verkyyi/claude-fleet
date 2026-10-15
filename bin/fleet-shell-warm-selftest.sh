@@ -94,6 +94,13 @@ case "\$op" in
   ?*)    exit 0 ;;
 esac
 printf 'RUN %s\n' "\$all" >> "$WORK/ssh.log"
+if [ -f "$WORK/refuse-warm" ]; then
+  case "\$ctl:\$all" in
+    */warm/*.sock:*' attach --shell '*)
+      printf '%s\n' 'mux_client_request_session: session request failed: Session open refused by peer' >&2
+      exit 255 ;;
+  esac
+fi
 case "\$all" in *" watch "*) sleep 30 ;; esac
 exit 0
 EOF
@@ -210,6 +217,27 @@ for o in ServerAliveInterval=2 ServerAliveCountMax=3 'IPQoS=lowdelay throughput'
   has "D: cold master carries $o" "$fc" "-o $o"
 done
 hasnt 'D: the old 5 s keepalive is gone' "$fc" 'ServerAliveInterval=5'
+
+: > "$WORK/refuse-warm"
+: > "$WORK/ssh.log"; : > "$WORK/fc.log"
+FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb \
+  bash "$SB/fleet-remote-view.sh" run --shell mac-b "$WID" >"$WORK/refuse.out" 2>&1 & refused_pid=$!
+attempt=0
+while [ "$attempt" -lt 10 ]; do
+  kill -0 "$refused_pid" 2>/dev/null || break
+  sleep 1
+  attempt=$((attempt + 1))
+done
+if kill -0 "$refused_pid" 2>/dev/null; then
+  fail 'D: a refused warm session kept retrying the same master'
+  kill "$refused_pid" 2>/dev/null
+fi
+wait "$refused_pid"; refused_rc=$?
+eq 'D: refused warm session reconnects successfully' 0 "$refused_rc"
+has 'D: refused warm session uses fleet connect' "$(cat "$WORK/fc.log")" '--enter mac-b'
+hasnt 'D: refused warm master is not closed for other panes' "$(cat "$WORK/ssh.log")" "EXIT $WD/mac-b.sock"
+[ -S "$WD/mac-b.sock" ] || fail 'D: refused warm master was removed'
+rm -f "$WORK/refuse-warm"
 
 # ================================================================================
 # L. login (issue #2987) — the sessions on mac-b are in the fleet of login `carol`
