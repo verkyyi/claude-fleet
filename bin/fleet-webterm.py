@@ -324,8 +324,8 @@ def close_view(lease):
     """
     sock, gid = lease.get("socket"), lease.get("view")
     if sock and gid and lease.get("conn") and server_pid(sock) == lease.get("server_pid"):
-        rc, name = tm(sock, "display-message", "-p", "-t", gid, "#{session_name}")
-        if rc == 0 and name == lease.get("session"):
+        rc, rows = tm(sock, "list-sessions", "-F", "#{session_id}|#{session_name}")
+        if rc == 0 and gid + "|" + lease.get("session", "") in rows.splitlines():
             return tm(sock, "kill-session", "-t", gid)[0] == 0
     return True
 
@@ -423,12 +423,18 @@ def connect(args, conn, target, generation):
         # release the lease iff we still own the very same epoch.
         closed = not lease or close_view(lease)
         if child and child.poll() is None:
-            child.terminate()
             try:
+                # Closing the view makes tmux return. Let the native attach's
+                # EXIT trap finish its row/peer cleanup before sending TERM;
+                # a signal DURING that trap can interrupt the cleanup itself.
                 child.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+                child.terminate()
+                try:
+                    child.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
         if closed and lease and "epoch" in lease:
             with Lock("control/.lock"):
                 current = read_json(path) or {}

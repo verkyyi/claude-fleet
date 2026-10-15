@@ -1796,7 +1796,7 @@ def open_shell(qo, vid, client="", target=None, meta=None):
     # Web PTYs share the persistent personal home shell (C4), not a shell
     # whose lifetime is a disposable view. The second press returns to the
     # selected worker; direct native clients keep their existing shell road.
-    _, home = tm("show-options", "-qv", "-t", "=" + g, "@view_web_home")
+    _, home = tm("display-message", "-p", "-t", "=" + g + ":", "#{@view_web_home}")
     if home:
         _, current = tm("display-message", "-p", "-t", "=" + g + ":", "#{window_id}")
         if current == home:

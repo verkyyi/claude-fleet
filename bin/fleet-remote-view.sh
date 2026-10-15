@@ -970,6 +970,7 @@ rv_attach_thin() {
     # Arm cleanup before dressing the view: interruption during setup must not
     # strand an unattached grouped session either.
     T set-option -t "$gid" @view_thin "$view" 2>/dev/null
+    # shellcheck disable=SC2064 # capture locals now; the EXIT runs after this function returns
     trap "rv_browser_cleanup $(printf '%q ' "$sock" "$gid" "$f" "$$" "$view" "$s")" EXIT
     trap 'exit 129' HUP
     trap 'exit 143' TERM

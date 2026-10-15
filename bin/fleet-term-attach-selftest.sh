@@ -97,6 +97,7 @@ waitfor() { local i=0; while [ $i -lt "$2" ]; do eval "$1" && return 0; sleep 0.
 
 # Feed the SAME bytes as the browser through the actual PTY, never call a menu
 # action directly. The row producer is a fixture; popup, keys and go are real.
+# shellcheck disable=SC2034 # v and before are read by waitfor's eval in this scope
 native() {
   local c="$1" v="=$RS@view-wt-$1" before
   before=$(grep -ao 'Browser worker' "$WORK/$c.out" | wc -l | tr -d ' ')
@@ -202,7 +203,10 @@ waitfor '! tt has-session -t "=$RS@view-wt-web-d2" 2>/dev/null' 150 || bad "D re
 [ "$(tt display-message -p -t "$H" '#{pane_pid}')" = "$HPID" ] && ok "D persistent shell pid unchanged" || bad "D shell was replaced"
 [ "$(tt list-windows -t "=$RS" | wc -l | tr -d ' ')" = "$NWIN" ] && ok "D no extra shell or agent" || bad "D extra window"
 [ ! -s "$WORK/first" ] && ok "D never auto-started AI" || bad "D automatic session start"
-[ "$(find "$FLEET_CONF_DIR/remote-views" -name 'wt-web-*' | wc -l | tr -d ' ')" = 0 ] && ok "D no connection rows or spools left" || bad "D connection registry leaked"
+[ "$(find "$FLEET_CONF_DIR/remote-views" -name 'wt-web-*' | wc -l | tr -d ' ')" = 0 ] && ok "D no connection rows or spools left" || {
+  bad "D connection registry leaked"
+  find "$FLEET_CONF_DIR/remote-views" -name 'wt-web-*' -print
+}
 # A changed generation is not first use: never remake the shell automatically.
 tt respawn-pane -k -t "$H"
 run web-ended personal; wait "$P" 2>/dev/null
