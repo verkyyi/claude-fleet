@@ -673,7 +673,6 @@ if [ "$PLACING" = 1 ]; then
         [ -n "$_after" ] || exit "$RC_INFRA"
         exit "$RC_CAP" ;;
       *)
-        python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit "$RC_INFRA"
         if [ "$NODE" != auto ]; then
           refuse "#$num 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
           [ "$place_rc" = 4 ] && exit "$RC_CAP"; exit "$RC_INFRA"
@@ -684,6 +683,7 @@ if [ "$PLACING" = 1 ]; then
         if [ "$_pv" = 'REFUSED AT_CAPACITY' ] && [ -n "$CAP_HELD" ]; then
           refuse "#$num 都满了 — 没有机器有空位: ${_why#all-full: }"; exit "$RC_CAP"
         fi
+        python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit "$RC_INFRA"
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
     unset _pw _u _pv _why _wait _pre_asg _after _a _am _aop _ax

@@ -586,11 +586,11 @@ if [ "$PLACING" = 1 ]; then
     0:LOCAL\ *)
       printf 'dash-raw-session: scratch 开在本机 %s — %s\n' "${_pv#LOCAL }" "$_why" >&2 ;;
     *)
-      python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit 1
       if [ "$NODE" != auto ]; then
         refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
         [ "$place_rc" = 4 ] && exit 2; exit 1
       fi
+      python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit 1
       [ "$place_rc" = 4 ] && printf 'dash-raw-session: 没有机器能接这个 scratch (%s) — 开在本机\n' "$_why" >&2 ;;
   esac
   unset _pw _u _pv _why _prepo
