@@ -871,6 +871,21 @@ rv_thin_dress() {
     "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' notify-jump '#{socket_path}' '#{client_session}' >/dev/null 2>&1 || :\" }" 2>/dev/null
   return 0
 }
+# Values are arguments captured by the EXIT trap: rv_attach_thin's locals are
+# already out of scope when the dispatcher exits after a normal detach.
+rv_browser_cleanup() {
+  local bsock="$1" bgid="$2" bf="$3" bpid="$4" bv="$5" bs="$6" bw bp br
+  [ "$(cut -f5 "$bf" 2>/dev/null)" != "$bpid" ] || rm -rf "$bf" "$bf.d"
+  [ "$(tmux -L "$bsock" show-options -qv -t "$bgid" @view_thin 2>/dev/null)" != "$bv" ] \
+    || tmux -L "$bsock" kill-session -t "$bgid" 2>/dev/null
+  # Only peer panels made by this connection, never another view or a worker.
+  tmux -L "$bsock" list-windows -t "=$bs" -F '#{window_id}|#{@peer_view}|#{@fleet_role}' 2>/dev/null \
+    | while IFS='|' read -r bw bp br; do
+        [ "$bp:$br" != "$bv:panel" ] || tmux -L "$bsock" kill-window -t "$bw" 2>/dev/null
+      done
+  return 0
+}
+
 rv_attach_thin() {
   local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp last lastgone
   local browser='' bhome=''
@@ -982,7 +997,7 @@ rv_attach_thin() {
     T set-option -t "$gid" key-table fleet-view
     # A browser attachment is disposable. The captured session id and row pid
     # belong to THIS attach; neither cleanup can hit a replacement connection.
-    trap '[ "$(cut -f5 "$f" 2>/dev/null)" != "$$" ] || rm -rf "$f" "$f.d"; T kill-session -t "$gid" 2>/dev/null || :' EXIT
+    trap "rv_browser_cleanup $(printf '%q ' "$sock" "$gid" "$f" "$$" "$view" "$s")" EXIT
   fi
   # the language this connection's client brought (issue #3326): per 看台, never the
   # server's environment (started before, `update-environment` has no LANG) —
