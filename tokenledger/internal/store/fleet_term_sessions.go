@@ -66,6 +66,12 @@ func (s *Store) RecordTermClose(id, outcome string, up, down int64, at time.Time
 	return err
 }
 
+// RecordTermMode commits the selected path without putting payload in the audit.
+func (s *Store) RecordTermMode(id, mode string) error {
+	_, err := s.write.Exec(`UPDATE fleet_term_sessions SET mode = ? WHERE id = ?`, mode, id)
+	return err
+}
+
 // FleetTermSessions lists terminals, newest first; person "" is everyone's.
 func (s *Store) FleetTermSessions(person string, limit int) ([]FleetTermSession, error) {
 	if limit <= 0 {

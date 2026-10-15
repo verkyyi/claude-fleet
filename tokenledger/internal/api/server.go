@@ -684,6 +684,7 @@ func (s *Server) routes() *routeMux {
 		// The browser terminal (claude-fleet#3838): a signed-in person's own,
 		// on their home login.
 		mux.Handle(TermConnectPath, s.viewerOnly(http.HandlerFunc(s.handleTermConnect)))
+		mux.Handle(AttachmentPath, s.viewerOnly(http.HandlerFunc(s.handleAttachment)))
 		mux.Handle(TermHomePath, s.viewerOnly(http.HandlerFunc(s.handleTermHome)))
 		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
 		mux.HandleFunc(TryStartPath, s.handleTryStart)
@@ -858,6 +859,7 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.ChatRelayDataPath, s.handleChatRelayData)
 		// …and of a terminal (claude-fleet#3838), the same way.
 		mux.HandleFunc(control.TermDataPath, s.handleTermRelayData)
+		mux.HandleFunc(control.AttachmentDataPath, s.handleTermRelayData)
 		// The route list `fleet connect` measures (claude-fleet#1414): it
 		// admits a certificate by a signed timestamp, so it authenticates
 		// itself, outside the viewer gate.

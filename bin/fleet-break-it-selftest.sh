@@ -7825,7 +7825,7 @@ drill_term_other_person() {
   [ "$out" = 3 ] || { WHY="TermOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
   grep -q 'viewAsAsked(r) != ""' "$ROOT/tokenledger/internal/api/term_relay.go" 2>/dev/null \
     || { WHY="termPerson does not refuse a view-as"; return 1; }
-  term_go 'TestTermRelayOtherPersonNeverReachesIt TestTermRelayBadGrantNeverOpensATerminal TestTermRelayReachesOwnWorker TestTermGrant' \
+  term_go 'TestTermRelayOtherPersonNeverReachesIt TestTermRelayBadGrantNeverOpensATerminal TestTermRelayReachesOwnWorker TestTermGrant TestAttachmentGrant TestAttachmentRejectsBeforeTarget TestAttachmentGrantReplayAndWrongService' \
     './internal/api ./internal/control' \
     '别人 / 管理员本人 / 以他视角 / 运营门 / 别的 Origin / 两个或没有选择器 / 路径当目标 / 不存在的 worker → 拒，命令 0 次启动；签错 / 过期 / 给别的转发 / 别的登录 / 对话的声明 / 命令当目标 / 重放 → 节点断开，不开终端；本人能开（对照）' \
     || return 1
@@ -7841,8 +7841,8 @@ drill_term_relay_orphan() {
   t0=$(now)
   grep -q 'defer s.termRelays.closeNode(nc)' "$ROOT/tokenledger/internal/api/nodes.go" 2>/dev/null \
     || { WHY="a dropped control link does not end its terminals (no termRelays.closeNode)"; return 1; }
-  term_go 'TestTermRelayOrphanReleasesEverything TestTermRelayAgentLinkDrop TestTermRelayDoesNotInterruptChat TestTermPtyRunsTheOneCommand TestTermControlFrames' \
-    './internal/api ./internal/agent ./internal/control' \
+  term_go 'TestTermRelayOrphanReleasesEverything TestTermRelayAgentLinkDrop TestTermRelayDoesNotInterruptChat TestTermPtyRunsTheOneCommand TestTermControlFrames TestAttachmentLogoutRevokesDirect TestAttachmentLeaseAndEpoch TestAttachmentReplacementFence TestAttachmentRelayAndLateSelection TestAttachmentBackpressureAndEarlyData TestAttachmentSDPLimits' \
+    './internal/api ./internal/agent ./internal/control ./internal/attachment' \
     '半开 / 畸形帧 / 超大帧 / 撤销登录 / 接到一半走了 / 控制链路断：30 秒内伪终端和命令进程归零、转发表空；终端饱和、关、发垃圾都不打断同登录的对话，反之亦然' \
     || return 1
   SECS=$(since "$t0")

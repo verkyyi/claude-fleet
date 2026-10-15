@@ -1,0 +1,63 @@
+//go:build browseracceptance
+
+package api
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+)
+
+func TestAttachmentChromium(t *testing.T) {
+	for _, scenario := range []string{"direct-and-late-fallback", "udp-denied"} {
+		t.Run(scenario, func(t *testing.T) {
+			r := newTermRig(t, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			args := []string{"browser.mjs"}
+			if scenario == "udp-denied" {
+				args = append(args, "--deny-udp")
+			}
+			cmd := exec.CommandContext(ctx, "node", args...)
+			cmd.Dir = filepath.Join("..", "..", "..", "extras", "browser-transport")
+			cmd.Env = append(os.Environ(), "FLEET_TEST_ORIGIN="+r.origin, "FLEET_TEST_COOKIE="+r.alice.Name+"="+r.alice.Value, "FLEET_TEST_WORKER="+r.wid)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("Chromium: %v\n%s", err, out)
+			}
+			t.Log(string(out))
+			waitFor(t, 30*time.Second, "browser attachment resources released", func() bool { return r.procs() == 0 && r.h.srv.termRelays.open() == 0 })
+			rows, err := r.h.srv.Store.FleetTermSessions(pAlice, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var direct, relay []store.FleetTermSession
+			for _, row := range rows {
+				switch row.Mode {
+				case "direct":
+					direct = append(direct, row)
+				case "relay":
+					relay = append(relay, row)
+				default:
+					t.Fatalf("unfinished attachment: %+v", row)
+				}
+			}
+			if len(relay) != 1 || relay[0].BytesUp == 0 || relay[0].BytesDown == 0 {
+				t.Fatalf("fallback payload counters %+v", rows)
+			}
+			if scenario == "direct-and-late-fallback" {
+				if len(direct) != 1 || direct[0].BytesUp != 0 || direct[0].BytesDown != 0 {
+					t.Fatalf("direct payload traversed hub: %+v", rows)
+				}
+			} else if len(direct) != 0 {
+				t.Fatal("UDP denial produced a direct attachment")
+			}
+			t.Logf("%s: hub payload counters=%+v; remaining target processes=0, relay entries=0; model launches=0 (isolated shell only)", scenario, rows)
+		})
+	}
+}

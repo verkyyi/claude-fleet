@@ -606,6 +606,8 @@ func Compatible(proto int) bool {
 
 // Hello is the payload of TypeHello.
 type Hello struct {
+	// AttachmentGeneration names this login agent's current control lifetime.
+	AttachmentGeneration string `json:"attachment_generation,omitempty"`
 	// HeartbeatMS is how often (ms) this node sends a heartbeat. The hub
 	// judges a node lost after three of them go missing, so the threshold
 	// follows the node's own cadence instead of a constant both sides must

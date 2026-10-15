@@ -1,0 +1,13 @@
+{
+  "name": "fleet-browser-transport",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM --skipLibCheck attachment.ts"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.56.1",
+    "typescript": "5.9.3"
+  }
+}
