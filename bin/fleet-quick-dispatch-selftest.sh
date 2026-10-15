@@ -5,16 +5,12 @@
 #      line — title, repo, agent codex only when asked, `via: dispatch`
 #   B. the repo a ↵ goes to untouched: the last one used (compose-state.json,
 #      shared with the writing area) while the hub still names it, else the first
-#   C. no list on screen: --send runs from here (FLEET_DISPATCH_SEND_CMD), and
-#      the last repo is remembered
-#   D. a list on screen (an isolated tmux server): the payload waits in
-#      compose-send.json and the list gets `compose` on its @sidebar_do — the
-#      writing area's own road, nothing else
+#   C. --send runs from here (FLEET_DISPATCH_SEND_CMD), and the last repo is
+#      remembered (D — the old client's list taking the payload — went with that
+#      client, issue #3008)
 #   E. fleet-compose.py --send says the issue a `new` filed (`filed: #N` on
-#      stderr) so the list can say 「已建 #N 并开工」; stdout stays the place's line
-#   F. no key of its own since issue #3328: ⌘T / prefix t open ⌘P instead (one
-#      version, saying so — conf/tmux-shell.conf), the bar has no ⌘T cell, and
-#      ⌘P's first line 「⚡ 派一件事…」 (fleet-quickopen.py) is the way in
+#      stderr); stdout stays the place's line
+#   F. the key: the switch table's ⌘T row (the 看台's, conf/tmux-view.conf)
 #   G. a 看台's ⌘T (issue #3097), as its key runs it — under run-shell: $TMUX set,
 #      no $TMUX_PANE — for BOTH agents: the send goes out with that agent
 #      (fleet-compose.py --send → fleet-client-place.sh, faked), fleet-compose
@@ -82,18 +78,6 @@ out=$(FLEET_DISPATCH_SEND_CMD="$WORK/nope.sh" D send --title '看日志' --repo 
 has 'C: a refusal says why' "$out" '没有机器有空'
 CHECKS=$((CHECKS + 1)); [ -f "$WORK/state/compose-failed.json" ] || fail "C: a refused payload was not kept (compose-failed.json)"
 
-# --- D. a list on screen: the writing area's own road -------------------------------
-if [ -n "$REAL_TMUX" ]; then
-  "$REAL_TMUX" -f /dev/null new-session -d -s c -x 120 -y 30 || fail "D: tmux did not start"
-  lp=$("$REAL_TMUX" display-message -p -t c '#{pane_id}')
-  "$REAL_TMUX" set-option -p -t "$lp" @sidebar 1
-  out=$(D send --title '派一件事' --repo acme/app) || fail "D: send to the list exited non-zero" "$out"
-  has 'D: 「已发出：…」' "$out" '派一件事'
-  eq 'D: the list got `compose` on its queue' 'compose ' "$("$REAL_TMUX" show-options -pqv -t "$lp" @sidebar_do)"
-  eq 'D: the payload waits in compose-send.json' 'dispatch' "$(J via < "$WORK/state/compose-send.json")"
-  eq 'D: …for the repo picked' 'acme/app' "$(J repo < "$WORK/state/compose-send.json")"
-fi
-
 # --- E. --send says the number filed ------------------------------------------------
 QB="$WORK/q-bin"; mkdir -p "$QB"
 for f in "$BIN"/*; do ln -sf "$f" "$QB/"; done
@@ -123,9 +107,6 @@ case "$(cat "$Q_ARGS")" in *--task*) fail "E: the writing area (not ⌘P) asked 
 CHECKS=$((CHECKS + 1))
 has 'E: stderr says the issue filed' "$(cat "$WORK/e.err")" 'filed: #42'
 eq 'E: stdout stays the place'"'"'s one line' 'REMOTE mac-b start done U/f42' "$(tr -d '\t' < "$WORK/e.out")"
-# the list's word for it (fleet-sidebar.py compose_told)
-has 'E: the list says 「已建 #N 并开工」 for a ⌘T send' "$(sed -n '/^def compose_told/,/^def placed/p' "$BIN/fleet-sidebar.py")" 'sidebar_dispatch_done_fmt'
-eq 'E: the words' '已建 #42 并开工' "$(sh "$BIN/fleet-ui-lang.sh" t sidebar_dispatch_done_fmt 42)"
 
 # --- G. a 看台's ⌘T under run-shell, both agents (issue #3097) ------------------------
 GB="$WORK/g-bin"; mkdir -p "$GB"
@@ -166,20 +147,7 @@ has 'G: a failure is said, with its reason' "$out" 'no Codex login'
 has 'G: …and logged' "$(grep dispatch_failed "$WORK/compose.ndjson")" 'no Codex login'
 eq 'G: …and the 看台 stays where it is' '' "$(cat "$WORK/go.log")"
 
-# --- F. the key, the bar, ⌘P ---------------------------------------------------------
-CONF="$ROOT/conf/tmux-shell.conf"
+# --- F. the key ------------------------------------------------------------------------
 eq 'F: the switch table row' 'dispatch ⌘T 0x74-0x100000 932 t' "$(bash "$BIN/dash-keymap.sh" --panel switch list | awk '$1 == "dispatch"')"
-has 'F: ⌘T opens ⌘P through the popup door (#3328)' "$(grep -E '^bind -n User932 ' "$CONF")" 'fleet-quickopen.py --session'
-case "$(grep -E '^bind -n User932 |^bind t ' "$CONF")" in *fleet-quick-dispatch*) fail "F: ⌘T / prefix t still open the 派一件事 popup" ;; esac
-eq 'F: prefix t is the same body' "$(grep -E '^bind -n User932 ' "$CONF" | sed 's/^bind -n User932 //')" "$(grep -E '^bind t ' "$CONF" | sed 's/^bind t //')"
-case "$(grep -F '@fleet_hint_session ' "$CONF")" in *派单*) fail "F: the bar still says ⌘T 派单" ;; esac
-first=$(python3 - "$BIN" <<'PY'
-import importlib.util, os, sys
-spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
-q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
-print(q.top_lines("", "multi")[0][1][0])
-PY
-)
-eq 'F: ⌘P'"'"'s first line is 派一件事' 'dispatch' "$first"
 
 printf 'fleet-quick-dispatch-selftest: %d checks passed\n' "$CHECKS"

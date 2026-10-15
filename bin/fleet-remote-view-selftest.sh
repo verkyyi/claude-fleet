@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-remote-view-selftest.sh — the proxy window onto another machine's session
-# (issue #1424, EPIC #1419 C5): bin/fleet-remote-view.sh, the sidebar/dash Enter
-# on a `wid:` row (dash-enter.sh, fleet-sidebar.py), fleet-open.sh's proxy relay,
+# (issue #1424, EPIC #1419 C5): bin/fleet-remote-view.sh, the dash Enter on a
+# `wid:` row (dash-enter.sh), fleet-open.sh's proxy relay,
 # and the local rails that must skip a proxy window.
 #
 # Two ISOLATED tmux servers stand in for the two machines: LOCAL (`-L rvL<pid>`,
@@ -12,11 +12,9 @@
 #   A. degenerate  — CCQUOTA_FLEET off: `open` creates nothing
 #   B. open        — a proxy window `@remote=mac-a:<wid>`, titled `<name> · @mac-a` (#1780; no ⇄, #1621), selected;
 #                    a second row of the same machine RETARGETS it (still one)
-#   H. local view  — (#1475) the local sidebar's `jump` on a remote row lands in
-#                    the proxy window WITH the view: the list on the left, the other
-#                    machine's pane on the right; `sync` keeps it there (a proxy
-#                    window is a task window); `jump` on a local row takes it back;
-#                    `prefix h` (`back`) returns to the last local window
+#   H. back        — `prefix h` (`back`) from the proxy window returns to the
+#                    last local window (the old client's list riding along went
+#                    with it, issue #3008)
 #   C. attach      — the proxy is a client of a VIEW SESSION of its own, grouped
 #                    onto the remote fleet session (`<fleet>@view-<id>`, #1489) and
 #                    on the worker's window; the fleet session's current window
@@ -28,19 +26,11 @@
 #                    `view` row; the fleet's own global client-attached hook fires
 #   D. fleet-open  — from the remote session, the request reaches the proxy side
 #                    (unconfirmed: the proxy has no receipt), not an escape on the remote's terminal
-#   N. no list     — (#1713) a node fleet session draws no list: fleet-sidebar.sh
-#                    sync there, a client on it, adds no sidebar pane and reaps the
-#                    one an older version drew; the drawer's selftest seam
-#                    (FLEET_SIDEBAR_NODE=1) does draw one — the positive control
 #   G. shared      — a client attaching AT the remote end changes nothing: no pane
 #                    on the node is added, removed or moved
 #   I. shells      — (#1485/#1713) shells, a plain hand-run attach, a shell beside
 #                    it, each leaving: the registry follows every one (a shell row,
 #                    no spool without a view id) and the node's panes never change
-#   R. readopt     — (#2987) the proxy's control socket gone, the line up: `open`
-#                    selects over the warm master instead of respawning, adopts it,
-#                    logs `switch … readopt`; `health` WARNs on the gone socket and
-#                    on a warm master logged in as another login
 #   K. one title   — (#1549) a window a shell/view looks at loses its own header
 #                    ONE WAY — off at the attach, still off after every client
 #                    has gone — so the proxy pane shows no second header and no
@@ -56,11 +46,8 @@
 #                    panes as they were
 #   F. skipped     — a proxy window is no dash row, no session in either cap
 #                    tally, no fleet-restore row, no sleep candidate
-#   S. ⌃\ shell   — (#2744) the session's shell: one window a session, on its
-#                    machine (ssh → shell-here), in its @worktree, gone with it
 #   L. no ⇄ (lint) — (#1621) a proxy window is known by `@remote`, never by its
 #                    name: no code line in bin/ (fleet-remote-view.sh,
-#                    fleet-shell.sh, fleet-sidebar.py, tmux-status.sh,
 #                    tmux-dashboard-rows.sh, …) or conf/ draws or matches a ⇄ —
 #                    only fleet-ui-lang.sh's toggle words (`claude ⇄ codex`) keep one
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
@@ -162,13 +149,10 @@ tr_ set-window-option -t "$RW8" @issue 8
 # to find it in a capture); worker 8 sets its OWN value (#1549).
 tr_ set-option -g pane-border-status top \; set-option -g pane-border-format 'RBORDER #{window_name}'
 tr_ set-window-option -t "$RW8" pane-border-status bottom
-# What an OLDER version left on a node (#1475/#1485, retired in #1713): its own
-# sidebar view in the worker's window, the session hidden (status + prefix off,
-# the originals saved), the solo marker, a window's saved header, the server's
-# [77] hooks and a session-level hook array. The first attach undoes the rule's
-# leftovers; the node's next sync reaps the view (N).
-RVP=$(tr_ split-window -d -h -b -f -l 30 -P -F '#{pane_id}' -t "$RW" 'while :; do sleep 300; done')
-tr_ set-option -p -t "$RVP" @sidebar 1
+# What an OLDER version left on a node (#1475/#1485, retired in #1713): the
+# session hidden (status + prefix off, the originals saved), the solo marker, a
+# window's saved header, the server's [77] hooks and a session-level hook array.
+# The first attach undoes the rule's leftovers.
 tr_ set-option -t "=$RS:" prefix C-a
 tr_ set-option -t "=$RS:" @remote_view_saved 'status=- prefix=C-a prefix2=- ' \; \
   set-option -t "=$RS:" status off \; set-option -t "=$RS:" prefix None \; set-option -t "=$RS:" prefix2 None \; \
@@ -217,51 +201,13 @@ eq "B: and selected" "$PW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
 # ============================================================================
 # H. the local view rides along (#1475): a proxy window is a task window
 # ============================================================================
-# fleet-sidebar.py as the view's own entry points, on the LOCAL server (the shim).
-sb() { FLEET_SESSION=$LS python3 - "$BIN/fleet-sidebar.py" "$@" <<'PYR'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
-fn = sys.argv[2]
-if fn == "jump":
-    sb.jump(sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
-elif fn == "sync":
-    sb.sync(sys.argv[3], "1", 30, sys.argv[4])
-elif fn == "version":
-    print(sb.VIEW_STAMP)
-PYR
-}
-VV=$(sb version)
 tl select-window -t "$LW"
-LWP=$(tl display-message -p -t "$LW" '#{pane_id}')
-# A view pane in the local task window, as sync would have made it.
-VP=$(tl split-window -d -h -b -f -l 30 -P -F '#{pane_id}' -t "$LWP" 'while :; do sleep 300; done')
-tl set-option -p -t "$VP" @sidebar 1 \; set-option -p -t "$VP" @sidebar_version "$VV" \; set-option -w -t "$LW" @sidebar_worker "$LWP"
-views_in() { tl list-panes -t "$1" -F '#{pane_id} #{@sidebar}' | awk '$2 == 1 { print $1 }' | tr '\n' ' '; }
-# `sync` draws a view only for an ATTACHED session (the operator's screen): a
-# client on the local session, from a pane of the other server.
-AW=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n viewer "env -u TMUX $REAL_TMUX -L $LL attach -t '=$LS'")
-lattached() { [ "$(tl display-message -p -t "=$LS:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
-waitfor 10 lattached || fail "H: no client attached to the local session"
-sb jump "$LS" "wid:$WID" "$VP" "$WORK/sb.lock"
-eq "H: jump on a remote row lands in the proxy window" "$PW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
-eq "H: …with the view: the list is in the proxy window" "$VP " "$(views_in "$PW")"
-eq "H: …and nowhere else" "" "$(views_in "$LW")"
-eq "H: …on the left" "0" "$(tl display-message -p -t "$VP" '#{pane_left}')"
-PP=$(tl list-panes -t "$PW" -F '#{pane_id} #{pane_active} #{@sidebar}' | awk '$2 == 1 && $3 != 1 { print $1 }')
-[ -n "$PP" ] || fail "H: the proxy pane is not the active pane of its window" "$(tl list-panes -t "$PW" -F '#{pane_id} #{pane_active} #{@sidebar}')"
-sb sync "$LS" "$WORK/sb.lock"
-eq "H: sync with the proxy window current keeps the view there (a task window)" "$VP " "$(views_in "$PW")"
-eq "H: …one view in the whole session" "1" "$(tl list-panes -s -t "$LS" -F '#{@sidebar}' | grep -c '^1$')"
-sb jump "$LS" "$LW" "$VP" "$WORK/sb.lock"
-eq "H: jump on a local row goes back, view and all" "$LW $VP " "$(tl display-message -p -t "=$LS:" '#{window_id}') $(views_in "$LW")"
-eq "H: …the proxy window keeps no view" "" "$(views_in "$PW")"
 tl select-window -t "$PW"
 FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" back "$LS" >/dev/null 2>&1
 eq "H: prefix h (back) from the proxy window selects the last local window" "$LW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
 FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" back "$LS" >/dev/null 2>&1
 eq "H: …and is a no-op anywhere else" "$LW" "$(tl display-message -p -t "=$LS:" '#{window_id}')"
 tl select-window -t "$PW"
-tr_ kill-window -t "$AW"
 
 # ============================================================================
 # C. attach
@@ -315,50 +261,6 @@ eq "B: …over the proxy's own connection — no reconnect: the same view sessio
 eq "B: the proxy window knows its view id, the one select targets (#1489)" "${VS#"$RS@view-"}" "$(tl show-options -wqv -t "$PW" @remote_view)"
 
 # ============================================================================
-# R. (#2987) the proxy's control socket gone while its line lives: `open`
-#    re-adopts the warm master for the select — no respawn, the window rides it
-#    from then on, the switch logged — and `health` (fleet doctor's `stage` row)
-#    flags the gone socket and a warm master of another login
-# ============================================================================
-waitfor 5 attached
-RCTL=$(tl show-options -wqv -t "$PW" @remote_ctl)
-RCHAN=$(tl show-options -wqv -t "$PW" @remote_chan)
-RPID=$(tl display-message -p -t "$PW" '#{pane_pid}')
-tl set-window-option -t "$PW" @remote_chan "$WORK/nochan"   # no serve channel: the one-shot path
-rm -f "$RCTL"
-out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
-eq "R: health WARNs (exit 1) on the gone control socket" 1 "$rc"
-has "R: …naming it" "$out" "mac-a 的控制连接 ${RCTL##*/} 不在了"
-mkdir -p "$TMPDIR/warm"
-python3 -c 'import socket, sys
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$TMPDIR/warm/mac-a.sock"
-: > "$WORK/ssh.log"
-FLEET_SHELL=1 FLEET_CLIENT_LOG_DIR="$WORK/clog" FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID" >/dev/null 2>&1
-eq "R: no respawn — the same run loop in the pane" "$RPID" "$(tl display-message -p -t "$PW" '#{pane_pid}')"
-has "R: the select went over the warm master" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '$WID'"
-on7() { [ "$(vcur "$VS")" = "$RW" ]; }
-waitfor 5 on7 || fail "R: the re-adopted select never showed worker 7" "$(vcur "$VS")"
-eq "R: the window adopted the warm master" "$TMPDIR/warm/mac-a.sock" "$(tl show-options -wqv -t "$PW" @remote_ctl)"
-has "R: the switch is logged as readopt" "$(cat "$WORK/clog/connect.log" 2>/dev/null)" "switch	mac-a	readopt	"
-out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
-eq "R: health PASSes once re-adopted" "0" "$rc"
-has "R: …one proxy window" "$out" "PASS	1 个代理窗口"
-tl set-window-option -t "$PW" @remote_login carol
-printf '{"machine": "mac-a", "kind": "direct", "name": "public", "login": "dave"}\n' > "$TMPDIR/warm/mac-a.sock.route"
-out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
-eq "R: health WARNs on a warm master of another login" 1 "$rc"
-has "R: …naming both logins" "$out" "mac-a 的预热连接登的是 dave，看的会话在 carol"
-python3 -c 'import socket, sys
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$TMPDIR/warm/mac-a@carol.sock"
-out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
-eq "R: …and passes once that login has its own (mac-a@carol.sock)" "0" "$rc"
-rm -f "$TMPDIR/warm/mac-a.sock" "$TMPDIR/warm/mac-a.sock.route" "$TMPDIR/warm/mac-a@carol.sock"
-tl set-window-option -u -t "$PW" @remote_login
-tl set-window-option -t "$PW" @remote_chan "$RCHAN"
-FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID2" >/dev/null 2>&1   # back on worker 8 (D needs it)
-waitfor 5 on8
-
-# ============================================================================
 # D. fleet-open from the remote session goes back through the proxy
 # ============================================================================
 waitfor 5 attached
@@ -386,7 +288,7 @@ sl=$(FLEET_SLEEP=observe python3 "$BIN/fleet-sleep.py" scan --session "$LL" --dr
 hasnt "F: the sleeper reports nothing about the proxy" "$sl" "\"$PW\""
 
 # ============================================================================
-# N. a node fleet session draws no list (#1713) — G's plain client on it
+# G's plain client on the node
 # ============================================================================
 # The panes of every remote window — which window, where it starts, a list or not:
 # no client change may add, remove or move one. (Not sizes: tmux sizes a window
@@ -397,19 +299,7 @@ HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n helper "env -u TMUX $RE
 two() { [ "$(gatt)" = 2 ]; }
 waitfor 10 two || fail "G: the second client never attached"
 tr_ select-window -t "=$RS:$RW"   # a task window, on the plain client's screen
-nsync() { TMUX="$RSOCK,0,0" bash "$BIN/fleet-sidebar.sh" sync "=$RS:" >/dev/null 2>&1; }
-nsync
-eq "N: sync on the node, a client on it — no sidebar pane; the one an older version drew is reaped" "" "$(rviews)"
-FLEET_SIDEBAR_NODE=1 nsync
-drawn() { [ -n "$(rviews)" ]; }
-waitfor 5 drawn || fail "N: the selftest seam did not draw the list (the positive control: the gate is what keeps it off)" "$(tr_ list-panes -t "$RW" -F '#{pane_id} #{pane_width} #{@sidebar}')"
-nsync
-eq "N: …and the node's next sync takes it away again" "" "$(rviews)"
-NW=$(tr_ new-window -P -F '#{window_id}' -t "$RS:" -n worker10 'while :; do sleep 300; done')
-tr_ set-window-option -t "$NW" @issue 10
-nsync
-eq "N: a window the node opens has no sidebar pane" "1 " "$(tr_ list-panes -t "$NW" -F '#{pane_id}' | grep -c .) $(rviews)"
-tr_ kill-window -t "$NW"; tr_ select-window -t "=$RS:plan"
+tr_ select-window -t "=$RS:plan"
 L0=$(layout)
 
 # ============================================================================
@@ -537,64 +427,6 @@ eq "E: no [77] hook" "0" "$(tr_ show-hooks -g | grep -c '\[77\]')"
 eq "E: the legacy hooks never fired once the attach lifted them" "" "$(cat "$WORK/hook77" 2>/dev/null)"
 eq "E: no session-level hook array left behind (it would shadow the fleet's [71]–[73] for good)" "" "$(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 eq "E: the fleet's own hook is still in place" "1" "$(tr_ show-hooks -g | grep -c '^client-attached\[71\]')"
-
-# ================================================================================
-# S. ⌃\ — the session's own shell (#2744): `shell-open` on the client's window
-#    opens ONE window per session, marked `@solo_shell <node>:<wid>`, titled
-#    「shell · <name> @<node>」, whose program reaches the session's machine and
-#    runs a login shell there, where its agent is (the agent pane's directory —
-#    issue #3183 — that gone, its `@worktree`), the fleet's bin/ on its PATH,
-#    no worker credential; again → the same window; the session's window gone →
-#    the shell HUPped and its window closed; no session → this computer's, $HOME.
-mkdir -p "$WORK/wt8/src"
-tr_ set-window-option -t "$RW8" @worktree "$WORK/wt8"
-# its agent cd'd into src/ — the shell goes there, not to the worktree's top
-tr_ respawn-pane -k -t "$RW8" -c "$WORK/wt8/src" 'while :; do sleep 300; done'
-cat > "$WORK/fakesh" <<'EOF'
-#!/bin/bash
-{ printf 'pwd=%s\n' "$(pwd -P)"; printf 'path=%s\n' "${PATH%%:*}"
-  printf 'cred=%s\n' "${FLEET_WORKER_CRED:-}"; printf 'win=%s\n' "${FLEET_SESSION_SHELL_WIN:-}"
-  printf 'args=%s\n' "$*"; } > "$FAKESH_OUT"
-trap 'echo hup >> "$FAKESH_OUT"; exit 0' HUP
-while :; do sleep 0.2; done
-EOF
-chmod +x "$WORK/fakesh"
-tl set-environment -g FLEET_SESSION_SHELL_CMD "$WORK/fakesh" \; set-environment -g FAKESH_OUT "$WORK/fakesh.out" \; \
-  set-environment -g FLEET_SESSION_SHELL_WATCH 1 \; set-environment -g FLEET_WORKER_CRED leak
-SW=$(tl new-window -P -F '#{window_id}' -t "$LS:" -n solo 'while :; do sleep 300; done')
-tl set-window-option -t "$SW" @remote "mac-a:$WID2"
-tl select-window -t "$SW"
-bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
-shwins() { tl list-windows -t "=$LS" -F '#{window_id}|#{@solo_shell}|#{window_name}' | awk -F'|' '$2 != ""'; }
-eq "S: one shell window for the session, its own title" "shell · 另一个 @mac-a" "$(shwins | grep -F "|mac-a:$WID2|" | cut -d'|' -f3)"
-SH=$(shwins | grep -F "|mac-a:$WID2|" | cut -d'|' -f1)
-fakesh_up() { grep -q '^args=' "$WORK/fakesh.out" 2>/dev/null; }
-waitfor 10 fakesh_up || fail "S: no login shell started on the session's machine" "$(tail -n 2 "$WORK/ssh.log"; tl capture-pane -p -t "$SH" | grep -v '^$')"
-eq "S: the shell sits where the session's agent is" "pwd=$(cd "$WORK/wt8/src" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
-eq "S: …a login shell, the session shell's codex/claude then the fleet's bin/ first on its PATH (#3463)" "args=-l path=$BIN/session-shell" "$(grep '^args=' "$WORK/fakesh.out") $(grep '^path=' "$WORK/fakesh.out")"
-eq "S: …told which window its session is (#3463)" "win=$(tr_ display-message -p -t "$RW8" '#{window_id}')" "$(grep '^win=' "$WORK/fakesh.out")"
-eq "S: …and no worker credential in its environment" "cred=" "$(grep '^cred=' "$WORK/fakesh.out")"
-has "S: it went over ssh as shell-here <wid>" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh shell-here '$WID2'"
-tl select-window -t "$SW"
-bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
-eq "S: again — the same window, selected, never a second" "1 $SH" \
-  "$(shwins | grep -cF "|mac-a:$WID2|") $(tl display-message -p -t "=$LS:" '#{window_id}')"
-# the agent's directory gone: the next shell is in the session's @worktree
-tl kill-window -t "$SH"; rm -f "$WORK/fakesh.out"; rmdir "$WORK/wt8/src"
-tl select-window -t "$SW"
-bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
-waitfor 10 fakesh_up || fail "S: no second shell once the agent's directory went" "$(shwins)"
-eq "S: …the agent's directory gone, the shell sits in its @worktree" "pwd=$(cd "$WORK/wt8" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
-SH=$(shwins | grep -F "|mac-a:$WID2|" | cut -d'|' -f1)
-tr_ kill-window -t "$RW8"
-shgone() { [ -z "$(shwins | grep -F "|mac-a:$WID2|")" ]; }
-waitfor 10 shgone || fail "S: the session went, its shell window stayed" "$(shwins)"
-has "S: …the shell was hung up" "$(cat "$WORK/fakesh.out")" "hup"
-tl set-window-option -u -t "$SW" @remote
-tl select-window -t "$SW"
-bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
-eq "S: no session there — this computer's shell, @solo_shell local" "local|本机shell" \
-  "$(shwins | grep -F '|local|' | cut -d'|' -f2,3)"
 
 # ================================================================================
 # L. no ⇄ (#1621): the machine's name alone marks a proxy window and a via row;
