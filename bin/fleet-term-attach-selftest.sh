@@ -81,7 +81,7 @@ while time.time() < deadline and not stop:
     if done:
         break
     status = None
-if stop:
+if stop or time.time() >= deadline:
     os.close(fd)           # the hang-up: the terminal's only end goes away
     try:
         os.killpg(pid, signal.SIGHUP)
@@ -111,7 +111,7 @@ native() {
   waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$H" ]' 50 \
     && ok "$c shell is persistent home" || bad "$c shell did not select home"
   printf 'echo WEB_SHELL_%s\r' "$c" >> "$WORK/$c.in"
-  waitfor 'tt capture-pane -p -t "$H" | grep -q "WEB_SHELL_$c"' 50 \
+  waitfor 'tt capture-pane -p -t "$H" | grep -q "^WEB_SHELL_$c"' 50 \
     && ok "$c real shell accepts input" || bad "$c shell input lost"
   printf '\034' >> "$WORK/$c.in"
   waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$W" ]' 50 \

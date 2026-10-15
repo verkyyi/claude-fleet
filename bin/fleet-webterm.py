@@ -292,10 +292,13 @@ def cmd_attach(args):
     worker = opt(args, "--worker")
     device = opt(args, "--device", B64) or ""
     lang = opt(args, "--lang", LANG)
+    generation = opt(args, "--generation", re.compile(r"[0-9]+"))
     st = read_json(os.path.join(state_dir(), "terminal.json"))
     state, sess, sock, win, _ = reading(st)
     if state != "live":
         out(view(st, state), RC[state])
+    if generation is not None and str(st.get("generation")) != generation:
+        out(view(st, "ended"), 5)
     want = None
     if "--shell" not in args:
         want = worker or st.get("last_worker")
@@ -366,6 +369,8 @@ def connect(args, conn, target, generation):
         sys.stdout.write(r.stdout)
         sys.exit(r.returncode)
     st = json.loads(r.stdout)
+    if generation is not None and str(st.get("generation")) != generation:
+        out(view(st, "ended"), 5)
     sess, sock = fleet()
     if tm(sock, "has-session", "-t", "=%s@view-wt-%s" % (sess, conn))[0] == 0:
         out({"state": "taken"}, 5)
@@ -377,11 +382,14 @@ def connect(args, conn, target, generation):
     try:
         # Serialize claim AND view creation with take. An epoch cannot be
         # handed over while an old attachment is still about to appear.
-        with Lock("control/.lock"):
+        with Lock("control/.lock"), Lock(".lock"):
+            current = read_json(os.path.join(state_dir(), "terminal.json"))
+            if not current or current.get("generation") != st["generation"] or reading(current)[0] != "live":
+                out(view(current, "ended"), 5)
             lease, rc = control_claim(path, target, conn, "claim")
             if rc:
                 out(lease, rc)
-            argv = [sys.executable, __file__, "attach", "--conn", conn]
+            argv = [sys.executable, __file__, "attach", "--conn", conn, "--generation", str(st["generation"])]
             if worker:
                 argv += ["--worker", worker]
             child = subprocess.Popen(argv)
