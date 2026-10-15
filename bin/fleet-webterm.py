@@ -323,10 +323,11 @@ def close_view(lease):
     No worker/home window is killed, and no newer view is looked up by name.
     """
     sock, gid = lease.get("socket"), lease.get("view")
-    if sock and gid and server_pid(sock) == lease.get("server_pid"):
-        rc, conn = tm(sock, "show-options", "-qv", "-t", gid, "@view_thin")
-        if rc == 0 and conn == "wt-" + lease["conn"]:
-            tm(sock, "kill-session", "-t", gid)
+    if sock and gid and lease.get("conn") and server_pid(sock) == lease.get("server_pid"):
+        rc, name = tm(sock, "display-message", "-p", "-t", gid, "#{session_name}")
+        if rc == 0 and name == lease.get("session"):
+            return tm(sock, "kill-session", "-t", gid)[0] == 0
+    return True
 
 
 def cmd_connect(args):
@@ -399,7 +400,7 @@ def connect(args, conn, target, generation):
             while child.poll() is None and not stopped[0] and time.monotonic() < deadline:
                 rc, gid = tm(sock, "display-message", "-p", "-t", "=" + g + ":", "#{session_id}")
                 if rc == 0 and gid.startswith("$"):
-                    lease.update(socket=sock, view=gid, server_pid=server_pid(sock), generation=st["generation"])
+                    lease.update(socket=sock, view=gid, session=g, server_pid=server_pid(sock), generation=st["generation"])
                     write_json(path, lease)
                     if tm(sock, "list-clients", "-t", "=" + g, "-F", "#{client_pid}")[1]:
                         attached = True
@@ -420,8 +421,7 @@ def connect(args, conn, target, generation):
     finally:
         # A stale connection only disposes its captured view and subprocess;
         # release the lease iff we still own the very same epoch.
-        if lease and "view" in lease:
-            close_view(lease)
+        closed = not lease or close_view(lease)
         if child and child.poll() is None:
             child.terminate()
             try:
@@ -429,7 +429,7 @@ def connect(args, conn, target, generation):
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
-        if lease and "epoch" in lease:
+        if closed and lease and "epoch" in lease:
             with Lock("control/.lock"):
                 current = read_json(path) or {}
                 if (current.get("conn"), current.get("epoch")) == (conn, lease["epoch"]):
@@ -502,7 +502,8 @@ def control_claim(path, target, conn, op):
     if op == "claim" and fresh and L["conn"] != conn:
         return {"state": "paused", "target": target, "epoch": L["epoch"]}, 4
     if L.get("conn") != conn or op == "take":
-        close_view(L)  # fence old PTY before another epoch may attach
+        if not close_view(L):  # fence old PTY before another epoch may attach
+            return {"state": "error", "error": "old controller could not be closed"}, 1
         L = {"target": target, "epoch": int(L["epoch"]) + 1}
     L.update(conn=conn, ts=time.time(), state="controller")
     write_json(path, L)
@@ -527,7 +528,8 @@ def cmd_control(args):
         if not mine or epoch is None or int(epoch) != L["epoch"]:
             out({"state": "stale", "target": target, "epoch": L["epoch"]}, 1)
         if op == "release":
-            close_view(L)
+            if not close_view(L):
+                out({"state": "error", "error": "controller could not be closed"}, 1)
             L.update(conn=None, ts=0)
             write_json(path, L)
             out({"state": "released", "target": target, "epoch": L["epoch"]})

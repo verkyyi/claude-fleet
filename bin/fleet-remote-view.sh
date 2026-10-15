@@ -966,6 +966,14 @@ rv_attach_thin() {
       || { note "attach --thin: no 看台 session for $view"; return 1; }
     [ -n "$w" ] || w=$(rv_thin_window "$s" "$cur")
   fi
+  if [ -n "$browser" ]; then
+    # Arm cleanup before dressing the view: interruption during setup must not
+    # strand an unattached grouped session either.
+    T set-option -t "$gid" @view_thin "$view" 2>/dev/null
+    trap "rv_browser_cleanup $(printf '%q ' "$sock" "$gid" "$f" "$$" "$view" "$s")" EXIT
+    trap 'exit 129' HUP
+    trap 'exit 143' TERM
+  fi
   # Nowhere named: a resumed 看台 still kept stays where it was; anything else lands home.
   # Home is the orchestrator: here, or — no such window here — wherever it runs,
   # through ⌘N's own road below (issue #3007: a home that is not the holder put the
@@ -997,7 +1005,6 @@ rv_attach_thin() {
     T set-option -t "$gid" key-table fleet-view
     # A browser attachment is disposable. The captured session id and row pid
     # belong to THIS attach; neither cleanup can hit a replacement connection.
-    trap "rv_browser_cleanup $(printf '%q ' "$sock" "$gid" "$f" "$$" "$view" "$s")" EXIT
   fi
   # the language this connection's client brought (issue #3326): per 看台, never the
   # server's environment (started before, `update-environment` has no LANG) —
