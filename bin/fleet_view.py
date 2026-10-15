@@ -2320,7 +2320,7 @@ ACTIONS = [
     # fleet-transfer.sh, run on that machine, its --dry-run's refusal said here
     {"id": "agent", "label": lambda r: say("view_act_agent_fmt", other_agent(r)),
      "when": lambda r: live(r) or far_live(r),
-     "local": lambda r, a, f: sh("fleet-transfer.sh", "--session", f, "--window", r["target"], "--to",
+     "local": lambda r, a, f: sh("fleet-transfer.sh", "--from-panel", "--session", f, "--window", r["target"], "--to",
                                  other_agent(r).lower()),
      "far": far("agent"), "ask": None, "slow": True},
     {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("gone"),

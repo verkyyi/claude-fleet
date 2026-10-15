@@ -22,8 +22,9 @@ def fields(cron):
 def next_fire(job, after):
     parts, (minute, hour, dom, month, dow) = fields(job['cron'])
     zone = ZoneInfo(job['timezone'])
-    # Native jobs expire within seven days. Bound scans even for impossible dates.
-    end = min(job['expires_at'], after + 8 * 86400)
+    # Recurring native jobs expire; one-shots may have only a firing date.
+    horizon = after + (8 if job.get('recurring', True) else 366) * 86400
+    end = min(job['expires_at'], horizon) if job['expires_at'] is not None else horizon
     tick = (int(after) // 60 + 1) * 60
     while tick < end:
         dt = datetime.datetime.fromtimestamp(tick, zone)
@@ -45,9 +46,15 @@ def plan(value, now=None):
         if not isinstance(raw, dict):
             raise ValueError('cron job must be an object')
         job = {k: raw.get(k) for k in ('id','prompt','cron','timezone','expires_at','stop_when')}
-        for k in ('id','prompt','cron','timezone','stop_when'):
+        for k in ('id','prompt','cron','timezone'):
             if not isinstance(job[k], str) or not job[k].strip():
                 raise ValueError('cron job requires explicit ' + k)
+        # Empty means explicitly no additional stop condition; missing is unknown.
+        if not isinstance(job['stop_when'], str):
+            raise ValueError('cron job requires explicit stop_when (empty for none)')
+        job['recurring'] = raw.get('recurring', True)
+        if type(job['recurring']) is not bool:
+            raise ValueError('cron recurring must be a boolean')
         if job['id'] in ids or len(job['prompt'].encode()) > 65536:
             raise ValueError('duplicate cron identity or oversized prompt')
         ids.add(job['id'])
@@ -57,14 +64,18 @@ def plan(value, now=None):
         except (ZoneInfoNotFoundError, ValueError) as error:
             raise ValueError('unknown cron timezone') from error
         expiry = job['expires_at']
-        if type(expiry) not in (int,float) or not math.isfinite(expiry) or expiry > now+8*86400:
-            raise ValueError('cron expiry must be explicit and within eight days')
+        if 'expires_at' not in raw or (expiry is None and job['recurring']):
+            raise ValueError('cron expiry must be explicit (null only for one-shot)')
+        if expiry is not None and (type(expiry) not in (int,float) or not math.isfinite(expiry)
+                                  or expiry > now+(8 if job['recurring'] else 366)*86400):
+            raise ValueError('cron expiry exceeds the bounded native lifetime')
         due = raw.get('next_run_at', next_fire(job, now))
-        if due is not None and (type(due) not in (int,float) or not math.isfinite(due) or due >= expiry):
+        if due is not None and (type(due) not in (int,float) or not math.isfinite(due)
+                                or (expiry is not None and due >= expiry)):
             raise ValueError('invalid cron next_run_at')
         if due is not None and next_fire(job, due-60) != due:
             raise ValueError('cron next_run_at must preserve its wall-clock phase')
-        job['next_run_at'] = due if expiry > now else None
+        job['next_run_at'] = due if expiry is None or expiry > now else None
         result.append(job)
     plan = {'jobs':result}
     refresh(plan)
@@ -78,11 +89,11 @@ def refresh(schedule):
 
 def pending(schedule, now):
     return [j for j in schedule['jobs'] if j['next_run_at'] is not None
-            and j['next_run_at'] <= now < j['expires_at']]
+            and j['next_run_at'] <= now and (j['expires_at'] is None or now < j['expires_at'])]
 
 
 def advance(schedule, now):
     for job in schedule['jobs']:
         if job['next_run_at'] is not None and job['next_run_at'] <= now:
-            job['next_run_at'] = next_fire(job, now)
+            job['next_run_at'] = next_fire(job, now) if job.get('recurring', True) else None
     refresh(schedule)

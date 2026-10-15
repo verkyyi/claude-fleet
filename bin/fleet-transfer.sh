@@ -62,13 +62,13 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$BIN/.fleet-transfer.py"
 
 die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
-  if [ "${DRY:-0}" != 1 ] && [ "${PREPARE:-0}" != 1 ] && [ -n "${WIN:-}" ]; then
+  if [ "${NOREPO:-0}" = 1 ] && [ "${DRY:-0}" != 1 ] && [ "${PREPARE:-0}" != 1 ] && [ -n "${WIN:-}" ]; then
     TM set-option -w -t "$WIN" @transfer_note "未切换完成：$*" 2>/dev/null || :
   fi
   exit 1; }
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
-TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID=''
+TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id)
@@ -85,6 +85,7 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --from-panel) FROM_PANEL=1; shift ;;
     --prepare-only) PREPARE=1; shift ;;
     --after-turn) AFTER=1; shift ;;
     --inspect) INSPECT=1; DRY=1; shift ;;
@@ -402,15 +403,36 @@ target_support() {
 }
 INPUT_VIEW=''
 if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then
-  target_auth || refuse_target
+  if ! target_auth; then
+    [ "$DRY" != 1 ] || die "target-auth: $TARGET_AUTH_WHY"
+    refuse_target
+  fi
   [ "$TO" != codex ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
 fi
-if [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
+if [ "$NOREPO" = 1 ]; then
   if [ "$SOURCE_AGENT" = claude ] && [ -z "$LOOP" ] && [ -n "$(opt '#{@loop}')" ]; then
     _plan="$FLEET_CONF_DIR/transfer-plans/$(opt '#{@fleet_id}').json"
     [ ! -s "$_plan" ] || LOOP=$_plan
   fi
-  INPUT_VIEW=$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT") || exit 1
+fi
+if [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
+  _ready_rc=0
+  INPUT_VIEW=$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT") || _ready_rc=$?
+  if [ "$_ready_rc" != 0 ]; then
+    if [ "$_ready_rc" = 4 ] && [ "$FROM_PANEL" = 1 ] && [ "$SOURCE_AGENT" = claude ]; then
+      target_support
+      source_ready || die 'source is not safely idle; finish its turn before requesting preparation'
+      [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || exit 1
+      if [ "$DRY" = 1 ]; then
+        printf 'preparation-needed: request current CronList and handoff from the source; no exit until verified.\n'
+        exit 0
+      fi
+      python3 "$BIN/.fleet-transfer-norepo.py" request "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$TO" || exit 1
+      TM set-option -w -t "$WIN" @transfer_note '正在准备定时任务交接；源仍运行' || :
+      exit 0
+    fi
+    exit 1
+  fi
 fi
 if [ "$NOREPO" = 1 ] && [ "$TO" = codex ]; then
   python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || exit 1
@@ -447,6 +469,8 @@ if [ "$PREPARE" != 1 ]; then
 fi
 
 if [ "$AFTER" = 1 ]; then
+  [ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" || exit 1
+  [ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" schedule-readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT" || exit 1
   grep -q '@agent_transfer_ready' "$BIN/set-claude-state.sh" || die 'Stop-hook transfer support is missing'
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
@@ -520,9 +544,10 @@ else
 fi
 source_ready || die 'source started another turn while preparing the transfer'
 if [ "$NOREPO" = 1 ]; then
+  python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" || die 'panel preparation is no longer valid'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT")" = "$INPUT_VIEW" ] || die 'source scheduler or unsent input changed'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$(opt '#{pane_current_path}')")" = "$IDENTITY" ] || die 'managed HOME identity changed'
-  [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || die 'target HOME trust changed'
+  [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" --apply || die 'target HOME trust changed'
 fi
 # The last read before /exit (issue #1667): a login that went bad while the
 # package was written still finds the source running.
@@ -612,7 +637,7 @@ ROLLBACK_KEYS=(@cc_agent @handoff_manifest @source_agent @source_session_id @sou
 ROLLBACK_VALS=()
 for key in "${ROLLBACK_KEYS[@]}"; do ROLLBACK_VALS+=("$(opt "#{$key}")"); done
 rollback() {
-  local why=$1 st note cmd back='' got rest i
+  local why=$1 st note cmd back='' got rest i _recovery=''
   # The target's last screen + exit status, before the respawn wipes them; it is
   # private to the package (0600) and never copied into a note or an alert.
   TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
@@ -650,7 +675,9 @@ rollback() {
         got=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" 2>/dev/null) \
           && IFS=$'\t' read -r back rest <<< "$got" && [ "$(printf '%s' "$rest" | cut -f1)" = "$SID" ] && break
       else
-        back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ] && break
+        if back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ]; then
+          if [ -z "$_recovery" ] || python3 "$HELPER" target-ready "$_recovery" "$SOCK" "$PANE" >/dev/null 2>&1; then break; fi
+        fi
       fi
       back=''
       [ "$(opt '#{pane_dead}')" != 1 ] || break
@@ -720,6 +747,7 @@ done
 TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
+[ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" complete-request "$SOCK" "$PANE" || :
 # A switch that landed some other way ends a retry still waiting on this window.
 _fid=$(TM show-options -wqv -t "$WIN" @fleet_id 2>/dev/null)
 [ -z "$_fid" ] || python3 "$HELPER" retry-supersede "$SESS" "$_fid" 2>/dev/null || :

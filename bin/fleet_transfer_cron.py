@@ -2,9 +2,11 @@
 import datetime
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import time
+import fleet_iso
 
 from fleet_loop_mark import claude_tool_results, parse, prune
 from fleet_cron import plan, next_fire
@@ -20,8 +22,22 @@ def rows(response):
     if isinstance(response, str):
         try:
             response = json.loads(response)
-        except ValueError as error:
-            raise ValueError('CronList did not provide a structured current task list') from error
+        except ValueError:
+            # Native CronList is a text preview on some versions. It confirms
+            # membership/recurrence, not the full truncated prompt or durability.
+            parsed = []
+            for line in response.strip().splitlines():
+                match = re.fullmatch(r'([\w-]+) — (.+?) \((recurring|one-shot)\)( \[session-only\])?: (.+)', line)
+                if not match:
+                    raise ValueError('unrecognized CronList text; need exact task evidence')
+                ident, cadence, kind, session_only, preview = match.groups()
+                row = dict(id=ident, recurring=kind=='recurring', prompt_preview=preview)
+                if len(cadence.split()) == 5: row['cron'] = cadence
+                if session_only: row['durable'] = False
+                parsed.append(row)
+            if not parsed:
+                raise ValueError('empty CronList text is not proof of no tasks')
+            return parsed
     if isinstance(response, dict):
         response = response.get('jobs', response.get('tasks'))
     if not isinstance(response, list) or any(not isinstance(j, dict) for j in response):
@@ -35,7 +51,7 @@ def live_list(transcript, pid, now):
     changed = False
     for name, inp, response, use_ts, result_ts in claude_tool_results(
             Path(transcript).read_text().splitlines(), ('CronList','CronCreate','CronDelete','ScheduleWakeup'), strict=True):
-        at = datetime.datetime.fromisoformat(result_ts.replace('Z','+00:00')).timestamp() if result_ts else 0
+        at = fleet_iso.parse(result_ts).timestamp() if result_ts else 0
         if at < start:
             continue  # A previous native process's timers are not this process's.
         if name == 'CronList':
@@ -52,7 +68,7 @@ def has_native_activity(transcript, pid):
     start = process_start(pid)
     for _, _, _, use_ts, result_ts in claude_tool_results(
             Path(transcript).read_text().splitlines(), ('CronList','CronCreate','CronDelete','ScheduleWakeup'), strict=True):
-        at = datetime.datetime.fromisoformat(result_ts.replace('Z','+00:00')).timestamp() if result_ts else None
+        at = fleet_iso.parse(result_ts).timestamp() if result_ts else None
         if at is None or at >= start:
             return True
     return False
@@ -74,19 +90,27 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
         raise ValueError('native scheduler mark is unknown, mixed, or disagrees with CronList')
     for job in schedule['jobs']:
         original = by_id[job['id']]
-        if (original.get('prompt') != job['prompt'] or original.get('cron') != job['cron']
-                or original.get('recurring') is not True):
-            raise ValueError('cron prompt/cadence/recurrence differs from the live task')
+        evidence = proof.get('job_evidence', {}).get(job['id'], {})
+        if (type(original.get('recurring')) is not bool
+                or original['recurring'] != job['recurring']):
+            raise ValueError('cron recurrence differs from the live task')
+        # A durable native job may survive /exit and fire a second time. Until
+        # its native owner can be transferred, never copy it into Fleet's timer.
+        durable = original.get('durable', evidence.get('durable', {}).get('value'))
+        if durable is not False or ('durable' not in original and not evidence.get('durable', {}).get('source')):
+            raise ValueError('cron must be proven session-only; durable or unknown native ownership cannot be copied')
         # Missing native timezone/expiry requires the source's explicit evidence,
         # never an interval or the marker's grace-extended expiry as a guess.
-        evidence = proof.get('job_evidence', {}).get(job['id'], {})
-        for key in ('timezone', 'expires_at', 'stop_when'):
-            if original.get(key) is not None:
+        for key in ('prompt', 'cron', 'timezone', 'expires_at', 'stop_when'):
+            if key in original:
                 if original[key] != job[key]:
                     raise ValueError('cron ' + key + ' differs from native evidence')
             elif evidence.get(key, {}).get('value') != job[key] or not evidence.get(key, {}).get('source'):
                 raise ValueError('source evidence is required for cron ' + key)
-        if job['next_run_at'] is None or job['expires_at'] <= now:
+        preview = original.get('prompt_preview')
+        if preview and not job['prompt'].startswith(preview.removesuffix('…').removesuffix('...')):
+            raise ValueError('full cron prompt disagrees with the current preview')
+        if job['next_run_at'] is None or (job['expires_at'] is not None and job['expires_at'] <= now):
             raise ValueError('cron task is no longer active')
         if job['next_run_at'] != next_fire(job, now):
             raise ValueError('cron plan no longer names the next native calendar round')

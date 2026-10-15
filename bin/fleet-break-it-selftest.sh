@@ -7295,6 +7295,14 @@ drill_ticket_hub_down() {
 # refuses a recycled window, the agent it already runs and a mid-turn source
 # with one line, dispatching nothing; a settled one is dispatched exactly once,
 # detached on the fleet's own server, to the same fleet-transfer.sh.
+drill_codex_home_trust() {
+  CAP=15
+  local started; started=$(now)
+  python3 "$BIN/fleet-codex-home-trust-selftest.py" >"$WORK/codex-home-trust.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/codex-home-trust.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='HOME trust fill-only, durable through symlink; explicit choices and opt-out preserved'
+}
+
 drill_transfer_norepo() {
   CAP=60
   local started; started=$(now)
@@ -7354,7 +7362,7 @@ print(" ".join(a["id"] for a, _ in fv.menu_of(r)))' "$BIN" 2>&1)
   [ "$rc" = 0 ] && [ "$out" = 'dispatched → codex' ] || { WHY="a settled source answered rc=$rc [$out]"; return 1; }
   for i in $(seq 1 50); do [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && break; sleep 0.1; done
   SECS=$(since "$t0")
-  [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && grep -qx -- "--session fa --window $win --to codex" "$d/calls" \
+  [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && grep -qx -- "--session fa --window $win --to codex --from-panel" "$d/calls" \
     || { WHY="the transfer was not dispatched exactly once: $(cat "$d/calls")"; return 1; }
   WHAT="别的机器上的会话也能换 Codex：菜单有这一项；那台机器上回合中 / 窗口换人 / 已是该 agent 一行拒绝、什么都不派，空闲的派一次 fleet-transfer.sh"
 }

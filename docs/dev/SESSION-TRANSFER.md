@@ -118,10 +118,13 @@ and the source's agent definition, preserving its tool grant and role skill.
 The exact source process, native session and transcript are required. Before
 exiting it, transfer checks the source input and preserves an exportable unsent
 draft as **unsent**, never as an instruction. Unknown/multiline input refuses.
-The Codex HOME trust entry must already be explicitly trusted in the effective
-config (including a proxy-home symlink). This read does not grant trust; the
-common launcher's HOME pre-trust work is tracked separately in #3029. Explicit
-`untrusted` and pre-trust opt-out are never overwritten by transfer.
+Transfer and the common Codex launcher share HOME trust handling (#3029). A
+dry-run reads the effective TOML config, including single-quoted entries and a
+proxy home's symlink. An absent entry is ready only on a currently trusted node
+with pre-trust enabled and a writable durable config destination. The actual
+cutover fills the entry before source exit; a normal no-repo launch in physical
+HOME does the same. It preserves symlinks, permissions and unrelated settings.
+Explicit `untrusted` and `FLEET_PRETRUST=0` never grant a missing HOME entry.
 
 Both dry-run and cutover refuse a busy source, pending handoff, missing target
 launcher/hooks, invalid target auth, unknown scheduling or unreadable input.
@@ -132,6 +135,15 @@ rollback must not replace it with a second writer.
 
 ### Native cron handover
 
+The panel asks the source to prepare through the normal peer bridge when native
+scheduling needs verification. The source remains running while it reads its
+current tasks, exports the verified plan, writes private handoff notes and arms
+the switch as its final tool call. The request pins pid, native sid, lifelong fid
+and target, with a five-minute deadline checked at arm and before source exit.
+Repeated clicks do not duplicate an outstanding request; after an acknowledged
+request expires, a new click can request preparation again. An uncertain bridge
+delivery stays pending for inspection and is not automatically resent.
+
 The old interval import does not establish that a native cron is still active.
 For a no-repo Claude source with native scheduling, first have **that source**
 call `CronList`. It must be from the current process, less than five minutes old,
@@ -140,13 +152,21 @@ Historical creates, stale markers and
 ambiguous lists refuse before the source exits.
 
 The source writes a private JSON plan with `jobs`, one object per current id:
-`id`, exact `prompt`, five-field `cron`, IANA `timezone`, Unix `expires_at` and
-explicit `stop_when`. Every current native job must be present and recurring.
+`id`, exact `prompt`, five-field `cron`, boolean `recurring`, IANA `timezone`,
+Unix `expires_at` and explicit `stop_when` (an empty string means no additional
+termination condition). Every current native job must be present, including
+one-shot jobs; deleted jobs must be absent. A one-shot with no separate expiry
+uses explicit `expires_at: null` and ends after its first accepted delivery.
 The plan also contains `native_source: {"confirmed": true, "job_evidence": …}`.
-When the native list omits timezone, expiry or termination, `job_evidence` must
+When the native list omits or truncates prompt, cron, timezone, expiry or termination, `job_evidence` must
 record each missing field as `{ "value": <exact value>, "source": <verified evidence> }`
 under that job id. An unknown value is a blocker, never an invitation to infer it
 from a fifteen-minute frequency or the marker's grace-extended expiry.
+The text form of CronList proves current membership and recurrence, while its
+truncated prompt needs a separately verified complete record. Every job must be
+proven `durable: false`, either by the native record's session-only marker or by
+explicit evidence. Durable or unknown ownership refuses: a task surviving source
+exit must not also be recreated in Fleet's scheduler.
 
 From the owning Claude session, export the plan without stopping any task:
 
@@ -166,7 +186,8 @@ may be confirmed; other background work or a different dialog refuses.
 
 Fleet retains each job's prompt, wall-clock phase, timezone, expiry and stop
 condition. Due jobs use the same native conversation writer. An accepted wakeup
-advances only its due jobs; a delivery whose result is uncertain is paused and
+advances only its due jobs and retires a one-shot after its first accepted
+delivery; a delivery whose result is uncertain is paused and
 never resent automatically. The owner ends one responsibility with
 `fleet-loop.py stop --job <id>`; `defer` refuses multi-cron plans. Expiry stops
 each job independently. On a failed target that has exited, rollback resumes the

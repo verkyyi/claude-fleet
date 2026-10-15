@@ -66,7 +66,9 @@ def wakeup_prompt(schedule, now):
     if 'jobs' not in schedule:
         return schedule['prompt']
     return '\n\n'.join('Cron job '+j['id']+' ('+j['cron']+'; '+j['timezone']+')\n'+j['prompt']+
-                        '\nStop condition: '+j['stop_when'] for j in fleet_cron.pending(schedule, now))
+                        '\nSchedule: '+('recurring' if j.get('recurring', True) else 'once')+
+                        '\nStop condition: '+(j['stop_when'] or 'none beyond expiry')
+                        for j in fleet_cron.pending(schedule, now))
 
 
 def tm(r, *args):
@@ -331,7 +333,7 @@ def dispatch(path, now=None):
                 return
             if 'jobs' in r['schedule']:
                 for job in r['schedule']['jobs']:
-                    if job['expires_at'] <= now: job['next_run_at'] = None
+                    if job['expires_at'] is not None and job['expires_at'] <= now: job['next_run_at'] = None
                 fleet_cron.refresh(r['schedule'])
                 if r['schedule']['next_run_at'] is None:
                     r.update(status='complete', detail='Every cron job expired or stopped')
