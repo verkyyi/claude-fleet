@@ -224,7 +224,7 @@ leg_J() {   # the read-only diagnosis: the denier with its readings, the opener,
   cp "$R/home/.config/claude-fleet/global/admit-cpu.window" "$WORK/window.before"
   # credential-shaped things the pod's words might carry — none may land
   printf 'FLEET_HUB_TOKEN=tokxxxxxxxxxxxx Cookie: sid=cookiexxxxxxxx sk-ant-api03-SECRETSECRET fd_approvecode99\n' > "$R/home/.config/claude-fleet/global/onboard.open.log"
-  FLEET_ADMIT_CPU_READING='59 1.51 1.00 51' FLEET_MEM_PROBE_CMD='echo 1 80 0 0' FLEET_USER_POD='' \
+  FLEET_ADMIT=1 FLEET_ADMIT_CPU_READING='59 1.51 1.00 51' FLEET_MEM_PROBE_CMD='echo 1 80 0 0' FLEET_USER_POD='' \
     CNP_SCENARIO=refused probe_run
   eq "J: refused → 不通" 1 "$PRC"
   eq "J: reason admit_refused" admit_refused "$(rj 'r["reason_code"]')"
