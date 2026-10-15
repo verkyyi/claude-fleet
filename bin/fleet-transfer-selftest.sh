@@ -237,16 +237,37 @@ PYDURABLE
     printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
     # No native marker or transcript entry: externally-created project tasks
     # must not disappear from the guard merely because this process never listed them.
-    for mode in --dry-run --prepare-only --from-panel --after-turn; do
+    for mode in --dry-run --prepare-only --after-turn; do
       transfer "$mode" --handoff "$WORK/durable-notes.md" && fail 'durable source without an execution owner must refuse'
       printf '%s' "$OUT" | grep -q 'durable.*execution owner' || fail 'durable refusal must explain missing execution owner'
       kill -0 "$PID" || fail 'durable refusal exited the source'
       [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable refusal replaced source identity'
       cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable refusal changed native tasks'
       [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable refusal wrote a handoff'
-      [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'durable refusal requested futile preparation'
+      [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'non-panel refusal must not enqueue preparation'
       ok
     done
+    # A panel click still asks the exact source for current native evidence.
+    # Preparation is not authorization to withdraw tasks or exit the source.
+    cat > "$IBIN/fleet-peer-send.sh" <<'PYPREP'
+#!/bin/sh
+cat >> "$TRANSFER_TEST_ROOT/preparation-messages"
+printf '\nREQUEST\n' >> "$TRANSFER_TEST_ROOT/preparation-messages"
+PYPREP
+    transfer --from-panel --dry-run || fail 'durable panel must explain preparation'
+    case "$OUT" in *preparation-needed:*) ;; *) fail 'missing durable preparation status' ;; esac
+    [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'panel dry-run wrote preparation'
+    transfer --from-panel || fail 'durable panel must request source CronList'
+    transfer --from-panel || fail 'durable panel preparation must deduplicate'
+    [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 1 ] || fail 'durable preparation sent twice'
+    grep -q 'Call native CronList now' "$WORK/preparation-messages" || fail 'panel did not ask for current CronList'
+    grep -q 'handoff notes' "$WORK/preparation-messages" || fail 'panel did not ask for handoff notes'
+    transfer --after-turn --handoff "$WORK/durable-notes.md" && fail 'preparation cannot bypass durable ownership refusal'
+    kill -0 "$PID" || fail 'durable preparation exited source'
+    [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable preparation changed native identity'
+    cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable preparation changed tasks'
+    [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable preparation created a transfer packet'
+    ok
     printf 'fleet-transfer durable refusal selftest: PASS (%s checks)\n' "$checks"
     exit 0
   fi

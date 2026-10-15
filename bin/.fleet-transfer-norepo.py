@@ -95,11 +95,12 @@ def request_preparation(session, pane, transcript, pid, sid, target):
         prompt=("[Fleet panel transfer request] The operator selected a switch to "+target+
                 ". Source scheduling must be verified before any exit. Read the request at "+str(path)+
                 "; if expired, cancelled by later user instructions, or its pid/session/fleet identity does not match, do not switch. "
-                "Call native CronList now. Keep every native task running. Verify each current job's id, full untruncated prompt, cron, recurrence, durable/session-only ownership, IANA timezone, expiry and stop condition using its current tool result and this session's evidence; never guess missing values. If any task is durable, stop preparation and explain that no successor execution owner has been proven. Keep the source and all tasks running; do not arm, delete a native record or create a second timer. "
+                "Call native CronList now. Keep every native task running. Verify each current job's id, full untruncated prompt, cron, recurrence, durable/session-only ownership, IANA timezone, expiry and stop condition using its current tool result and this session's evidence; never guess missing values. "
+                "Write private handoff notes covering this current task inventory, role, task record, parent/children, latest user requests, pending decisions, current work and next action. "
+                "If any task is durable, include its verified ownership and any missing evidence in those notes, then explain that successor execution ownership is not yet proven. Stop here after the notes; do not proceed with the export/arm instructions below. Keep the source and all tasks running; do not arm, delete a native record or create a second timer, and do not ask the operator to find or export JSON. "
                 "For session-only tasks, write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable (boolean), timezone, expires_at and stop_when wherever absent or truncated in CronList. Include all current jobs. "
                 "Export it using python3 "+str(Path(__file__).with_name('fleet-loop.py'))+
                 " export-cron --session "+session+" --jobs-file <private-plan>. "
-                "Write private handoff notes covering role, task record, parent/children, latest user requests, pending decisions, current work and next action. "
                 "As the final tool call, use the Fleet transfer tool action arm, to "+target+", handoff <absolute-notes-path>, then end the turn. "
                 "The common controller finds the verified plan and waits for Stop. Do not stop/recreate Cron tasks yourself. "
                 "If any scheduling fact is unknown, explain what is missing and keep the source active; never manufacture an attestation. "
@@ -115,11 +116,6 @@ def request_preparation(session, pane, transcript, pid, sid, target):
 
 
 def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
-    if agent == 'claude':
-        from fleet_transfer_cron import check_durable_store
-        # This is a hard refusal, not a request for more metadata. Reading a
-        # fresh CronList cannot create the missing successor execution owner.
-        check_durable_store()
     values = identity(session, pane)
     verified = None
     def opt(key):
@@ -130,7 +126,11 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
     active = reader['prune'](reader['parse'](mark), int(time.time()))
     try:
         if agent == 'claude':
-            from fleet_transfer_cron import validate as validate_cron, has_native_activity, live_list
+            from fleet_transfer_cron import validate as validate_cron, has_native_activity, live_list, check_durable_store
+            # The panel may request read-only source preparation even when a
+            # durable record blocks cutover. Neither preparation nor a fresh
+            # CronList supplies the still-missing successor execution fence.
+            check_durable_store()
             native = has_native_activity(transcript, pid)
             if native and not active['ids'] and not active['next'] and not loop:
                 if live_list(transcript, pid, time.time()):

@@ -168,9 +168,13 @@ truncated prompt needs a separately verified complete record. Every job's
 **A durable task blocks the switch:** its native table surviving is not proof
 that an execution owner survives. Transfer checks HOME's
 `~/.claude/scheduled_tasks.json` even without a native marker or transcript entry
-(another session can create a project task), and refuses before exit, arming or
-panel preparation. Unknown table/project formats also refuse. The source and
-native records remain unchanged; no duplicate Fleet timer is created.
+(another session can create a project task), and refuses before exit or arming.
+The panel still asks the exact source to read CronList and prepare the current
+task inventory and handoff notes. If a durable task is present, the source
+records its ownership and explains the missing successor guarantee, then stops
+before export/arm. This requires no operator JSON export or retry. Unknown
+table/project formats also block cutover. The source and native records remain
+unchanged; no duplicate Fleet timer is created.
 
 This is the safety fallback, not completion of #4258's actual mixed-task goal.
 That goal still requires a verified single-owner migration: stage and read back
@@ -181,7 +185,8 @@ cannot rule out a task already claimed by another Claude session. No such
 protocol is implemented here. Do not report a source containing a durable task
 as ready or delete its task to bypass the refusal.
 
-From the owning Claude session, export the plan without stopping any task:
+For verified session-only tasks, the panel instructs the owning Claude session
+to run this exporter itself without stopping any task (not an operator step):
 
 ```sh
 python3 ~/.claude/fleet/bin/fleet-loop.py export-cron \
