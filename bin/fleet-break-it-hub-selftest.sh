@@ -422,7 +422,7 @@ drill_node_tmux_restart() {
 # the home the person views — comes back after a tmux restart all the same.
 drill_empty_fleet_not_restored() {
   CAP=60; local t0 out
-  sed -n '/^auto_restore()/,/^}/p' "$BIN/fleet-restore.sh" | grep -q "grep -q '^WIN'" \
+  sed -n '/^auto_restore()/,/^}/p' "$BIN/fleet-restore.sh" | grep -qF "grep -q '^WIN' \"\$mf\" || continue" \
     && { WHY="fleet-restore.sh --auto still skips a map with no WIN row"; return 1; }
   t0=$(now)
   out=$(FSS_ONLY=H bash "$BIN/fleet-sessions-snapshot-selftest.sh" 2>&1) \
