@@ -7831,6 +7831,14 @@ drill_chat_direct_admission() {
   SECS=$(since "$t0")
 }
 
+drill_term_controller_ready() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestTermPtyAdmissionBeforeReady' './internal/agent' \
+    '控制权准入前不发 ready；拒绝的第二标签页不能输入' || return 1
+  SECS=$(since "$t0")
+}
+
 # term-other-person (issue #3838, EPIC #3836 C1): a browser terminal reaches only
 # the signed-in person's own home login — never another person, an admin as
 # themselves or through a view, the operator's door, another origin; and the node

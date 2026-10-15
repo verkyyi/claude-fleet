@@ -4,12 +4,28 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+// A started attach process is not an admitted controller. A refused second
+// tab must never briefly enable input before offering Use here.
+func TestTermPtyAdmissionBeforeReady(t *testing.T) {
+	old := termAttachArgv
+	t.Cleanup(func() { termAttachArgv = old })
+	termAttachArgv = func(_, _, _ string) []string {
+		return []string{"/bin/sh", "-c", "exit 4"}
+	}
+	var out bytes.Buffer
+	RunTermPty([]string{"--view", "web-refused", "--target", "personal"}, bytes.NewReader(nil), &out)
+	if bytes.Contains(out.Bytes(), []byte{termPtyReady}) {
+		t.Fatal("controller was ready before admission: a refused helper enabled input")
+	}
+}
 
 // RunTermPty on a real pseudo-terminal (claude-fleet#3838): the one command runs
 // on it, keystrokes and resizes arrive by frame, the output comes back raw, and
