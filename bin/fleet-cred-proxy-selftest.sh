@@ -11,6 +11,8 @@
 #   C  relay   — probe unreachable: Claude + Codex via the relay with X-Fleet-Relay
 #   D  central — the hub says untrusted: Claude + Codex with the hub credential and
 #                the credential files unreadable; no hub credential → 403
+#   D2 central — trusted, but a person's pod (node.env CCQUOTA_FLEET_CREDS=0 +
+#                FLEET_CRED_CENTRAL_URL): central all the same (issue #4290)
 #   E  a region 403 on direct moves the SAME request to relay (route_switch logged)
 #   F  three sessions at once never cross accounts; rebind / revoke
 #   G  rails: ctl.sock 0600, 127.0.0.1 only, no token in the log
@@ -325,6 +327,25 @@ if check D central claude "$jc" a1 && check D central codex "$jx" a1 && check D 
 fi
 mv "$FLEET_CONF_DIR/accounts.away" "$FLEET_CONF_DIR/accounts"; mv "$SB/codex-homes.away" "$SB/codex-homes"
 chmod 600 "$FLEET_CONF_DIR/accounts/a1.hub/.credentials.json" "$SB/codex-homes/a1/auth.json"
+
+# ── D2: a person's pod the hub calls trusted (issue #4290) ────────────────────
+# node.env CCQUOTA_FLEET_CREDS=0 + FLEET_CRED_CENTRAL_URL: nothing is leased in, so
+# a trusted word must still send it central (before: direct, 403 nocred per turn)
+echo trusted > "$SB/trust"
+probe unsupported_region
+cp "$FLEET_CONF_DIR/node.env" "$SB/node.env.d2"
+printf 'CCQUOTA_FLEET_CREDS=0\n' >> "$FLEET_CONF_DIR/node.env"
+r=$(CP route --refresh --provider codex); case "$r" in central*) ;; *) fail "D2 route codex (trusted pod): $r" ;; esac
+r=$(CP route --provider claude); case "$r" in central*) ;; *) fail "D2 route claude (trusted pod): $r" ;; esac
+TE=$(CP mint --account a1 --sid se)
+printf 'fcp-h1.hubsigned.se\n' | CP attach --sid se >/dev/null || fail "D2 attach"
+mv "$SB/codex-homes" "$SB/codex-homes.away"
+jx=$(R /codex/responses "$TE")
+check D2 central codex "$jx" a1 && pass "D2 trusted pod with nothing leased in (CCQUOTA_FLEET_CREDS=0) → central, no credential file read"
+mv "$SB/codex-homes.away" "$SB/codex-homes"
+cp "$SB/node.env.d2" "$FLEET_CONF_DIR/node.env"
+probe reachable
+r=$(CP route --provider codex); case "$r" in central*) fail "D2 a leasing login went central: $r" ;; esac
 
 # ── E: a region refusal switches the same session's route ───────────────────
 echo absent > "$SB/trust"      # a hub with no trust record = trusted (the degenerate)

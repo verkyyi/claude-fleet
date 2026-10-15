@@ -37,6 +37,9 @@
 #                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
 #   cred-central-failover-pin  bin/fleet-claude.sh / bin/fleet-codex.sh (a person's pod routes
 #                              central: no planner, no pin) — session-cred-selftest.sh leg J (#3554)
+#   cred-central-trusted-pod   bin/fleet-cred-proxy.py (Router.leases_nothing: a pod with
+#                              nothing leased in routes central even when the hub says
+#                              trusted) — fleet-cred-proxy-selftest.sh leg D2 (#4290)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -649,6 +652,25 @@ drill_cred_second_proxy() {
   [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: INFO — per-login proxies' \
     || { WHY="a per-login machine (no shared proxy, unmanaged) is not INFO (rc $rc): $out"; return 1; }
   WHAT="共享代理之外机器上还跑着登录自己的代理：credproxy 行 FAIL 并点名（pid · 登录）；只剩共享代理转 OK；工作区里的测试副本不算；没有共享代理的单登录机器只是 INFO"
+}
+
+# ---- cred-central-trusted-pod (#4290): a person's pod (node.env
+# CCQUOTA_FLEET_CREDS=0, FLEET_CRED_CENTRAL_URL) whose principal the hub's credsep
+# gate does not hold (not a role=user person — the China drill login) got the
+# hub's plain «trusted»; the proxy's router then took direct, no relay was
+# configured, and the pod holds no credential file: every Codex turn ended
+# «403 cred-proxy: no upstream credential for account default». The China
+# real-user probe sat at codex:entry for 300 s. Leg D2 drives the real proxy with
+# the hub saying trusted and the pod's node.env.
+drill_cred_central_trusted_pod() {
+  CAP=180; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-cred-proxy-selftest.sh" 2>&1)
+  printf '%s\n' "$out" | grep -q '^PASS D2 trusted pod with nothing leased in' \
+    && ! printf '%s\n' "$out" | grep -q '^FAIL D2' \
+    || { WHY="fleet-cred-proxy-selftest leg D2: $(printf '%s\n' "$out" | grep -m 3 -E 'D2' | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="个人 pod（不租凭据、指名中心代理）被入口判可信：代理仍走 central、不读凭据文件；租凭据的登录照旧不走 central"
 }
 
 cred_run_drills "$0"
