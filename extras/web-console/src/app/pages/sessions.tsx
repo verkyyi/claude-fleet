@@ -5,7 +5,7 @@
 // (EPIC #3923 拍板 13). Stock shadcn/ui only.
 import { useEffect, useMemo, useState, type FC } from "react";
 import { Link } from "react-router";
-import { Layers, Loader, RotateCcw, Trash2 } from "lucide-react";
+import { Layers, Loader, RotateCcw, Trash2, TerminalSquare } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -20,6 +20,7 @@ import { lang, tr } from "@/shared/i18n";
 import { sessionWrite, useSessions, type Group, type SessionRow } from "@/shared/sessions";
 import { usePage } from "../Shell";
 import { Empty, Failed, Loading, PageHeader } from "../parts";
+import { terminalLink } from "@/shared/terminal";
 
 type Filter = "all" | Group;
 
@@ -66,7 +67,7 @@ const StateBadge: FC<{ state: string }> = ({ state }) => {
 };
 
 const SessionCard: FC<{ r: SessionRow; onOpen: () => void }> = ({ r, onOpen }) => (
-  <Card role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+  <Card role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(); } }}
     data-session={r.key} data-group={r.group}
     className={cn("hover:border-clay-line cursor-pointer gap-0 py-4 transition-colors", r.group === "ask" && "border-clay-line")}>
     <CardContent className="space-y-1.5 px-4">
@@ -76,6 +77,9 @@ const SessionCard: FC<{ r: SessionRow; onOpen: () => void }> = ({ r, onOpen }) =
       </div>
       {r.ask?.msg ? <p className="text-foreground line-clamp-3 text-sm break-words">{tr(`「${r.ask.msg}」`, `“${r.ask.msg}”`)}</p> : null}
       <p className="text-muted-foreground truncate text-[13px]">{metaLine(r)}</p>
+      {r.group !== "ended" ? <Button asChild size="sm" variant="outline" onClick={(e) => e.stopPropagation()}>
+        <Link to={terminalLink(r.id)}><TerminalSquare />{tr("终端", "Terminal")}</Link>
+      </Button> : null}
     </CardContent>
   </Card>
 );
@@ -167,6 +171,7 @@ export default function SessionsPage() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-5 md:px-6 md:py-8">
       <PageHeader title={tr("我的会话", "My sessions")} sub={tr("每件事一个会话，关掉页面也照常跑", "One session per job — they keep running when you close the page")} />
+      <Button asChild variant="outline" className="self-start"><Link to="/terminal"><TerminalSquare />{tr("我的终端", "My Terminal")}</Link></Button>
       <Tabs value={f} onValueChange={(v) => setFilter(v as Filter)}>
         <TabsList className="w-full sm:w-auto">
           {tabs.map(([v, label, n]) => (
@@ -220,6 +225,7 @@ export default function SessionsPage() {
                 )}
               </div>
               <SheetFooter className="flex-row gap-2">
+                {open.group !== "ended" ? <Button asChild className="flex-1"><Link to={terminalLink(open.id)}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
                 {open.group === "ended" ? (
                   <Button className="flex-1" disabled={busy} onClick={() => act(open, "worker_resume")}>
                     <RotateCcw />{tr("接回", "Resume")}

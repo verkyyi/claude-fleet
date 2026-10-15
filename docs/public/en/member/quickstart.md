@@ -38,6 +38,21 @@ A sign-in lasts 12 hours, after which this computer renews it by itself; when it
 
 Closing the terminal window does not stop your sessions; type `fleet` in a terminal next time and everything is where you left it.
 
+## Open a terminal in a desktop browser
+
+Sign in to the portal, open Sessions, and choose **Terminal** on a running session
+to open that session directly. **My Terminal** in the sidebar and Sessions header
+opens your personal terminal. Ended sessions keep their **Resume** action.
+The page is `/app/terminal`; old `/term?worker=…` links redirect here and keep the target.
+
+On nodes supporting browser terminals, **Fleet menu** or **Ctrl+] then p** opens
+the native panel. **Open shell** switches to the shell; click again to return.
+**Cmd/Ctrl+P** still prints, and **Cmd/Ctrl+W** still closes the browser tab.
+The connection shows **Direct** or **Via hub**. Input is never replayed after a
+disconnect; inspect an interrupted paste before typing it again.
+Pages sent by a session appear as clickable links. Port forwarding, file transfer
+and local sign-in callbacks require a local terminal.
+
 ## Next
 
 - Everyday use and checking your own quota: [Everyday use](usage.md)

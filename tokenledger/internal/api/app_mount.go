@@ -44,7 +44,7 @@ var appPagePaths = map[string]bool{
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 	// the new console's own pages, with no old page behind them (EPIC #3923)
-	mePagePath: true, devicesPagePath: true, settingsPagePath: true,
+	mePagePath: true, devicesPagePath: true, settingsPagePath: true, "/terminal": true,
 }
 
 // appPagePrefixes are the console's pages that carry one name under them
@@ -139,6 +139,8 @@ var consolePages = []consolePage{
 	{old: "/chat", new: AppPrefix, side: sideMe, owner: "C16"},
 	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3"},
 	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
+	{old: "/term", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},
+	{old: AppPrefix + "/terminal", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},
 	// 任务 and 我的单子 are one page (C5): the tickets a tab of it
 	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
 	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5"},
