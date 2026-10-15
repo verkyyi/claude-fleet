@@ -76,13 +76,13 @@ def live_list(transcript, pid, now):
         if at < start:
             continue  # A previous native process's timers are not this process's.
         if name == 'CronList':
-            latest = (rows(response), at)
+            latest = (response, at)
             changed = False
         else:
             changed = True
     if latest is None or changed or not 0 <= now-latest[1] <= 300:
         raise ValueError('fresh CronList from this exact live source is required (no later scheduler mutation)')
-    return latest[0]
+    return rows(latest[0])
 
 
 def has_native_activity(transcript, pid):

@@ -74,6 +74,7 @@ class NativeCronTests(unittest.TestCase):
             raw=dict(jobs=jobs,native_source=dict(pid=42,session_id=SID,fleet_id='fid',confirmed=True))
             mark='kind=cron id=a@%d,b@%d' % (now+4000,now+4000)
             with patch.object(native,'process_start',return_value=now-60):
+                write(result('CronList',{},'older display format',now-30)+records)
                 self.assertEqual(len(native.validate(raw,path,42,SID,'fid',mark,now)['jobs']),2)
                 wrong=json.loads(json.dumps(raw)); wrong['jobs'][1]['recurring']=True
                 with self.assertRaises(ValueError): native.validate(wrong,path,42,SID,'fid',mark,now)
