@@ -179,7 +179,7 @@ def main():
                     state.write_text("")
                     until(lambda: "PANEL-" not in capture() and "New session" in capture())
                     tm(outer, "send-keys", "-t", "out:0", "Tab")
-                    until(lambda: "Tab / S-Tab" in capture())
+                    until(lambda: "Tab/S-Tab" in capture())
                     frame()
                     check(proc.poll() is None, "%d menu / empty list / new-task cells remain open" % width)
                     state.write_text(title)

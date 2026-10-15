@@ -661,8 +661,8 @@ fleet_ui_t() {
     # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
     zh:view_count_fmt) printf '会话 %s' "${1:-}" ;;
     en:view_count_fmt) printf 'Sessions %s' "${1:-}" ;;
-    zh:view_overlay_keys) printf 'Tab / ⇧Tab 控件  F6 列表  esc 返回' ;;
-    en:view_overlay_keys) printf 'Tab / S-Tab controls  F6 list  esc back' ;;
+    zh:view_overlay_keys) printf 'Tab/⇧Tab 控件  F6 列表  esc 返回' ;;
+    en:view_overlay_keys) printf 'Tab/S-Tab  F6 list  esc back' ;;
     zh:view_list_focus_keys) printf '↑↓ 选  Tab 重定位  F6 浮层  esc 返回' ;;
     en:view_list_focus_keys) printf '↑↓ pick  Tab retarget  F6 overlay  esc back' ;;
     zh:view_narrow) printf '窄屏：建议 ≥48 列；Tab/F6/esc 可用' ;;
