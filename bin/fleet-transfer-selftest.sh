@@ -246,7 +246,7 @@ PYNO
   TM set-option -w -t "$WIN" @claude_state working
   transfer --dry-run && fail 'busy dry-run must refuse'
   ok; kill -0 "$PID" || fail 'busy refusal killed source'
-  TM set-option -w -t "$WIN" @claude_state done
+  TM set-option -w -t "$WIN" @claude_state 'done'
   TM set-option -w -t "$WIN" @fleet_role panel
   transfer --prepare-only && fail 'renamed panel must refuse'
   ok
