@@ -2,548 +2,88 @@
 
 <!-- fleet skill · owner: worker -->
 
-The one skill a freshly-spawned worker runs. It formalizes the whole worker
-lifecycle that the seed prompt used to spell out across three skills: **claim**
-the bound issue, **load your charter**, **ground** yourself in the issue + code,
-then implement under a **standing contract** that ends by **opening a PR, landing
-it yourself once the gate is green, and reporting the outcome back to whoever
-spawned you** — and signals a blocker loudly rather than stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee
-at claim time; issue comments as you go) — and, for adjacent work it spots, MAY
-file a *new* tracked issue through the one filer channel (never spawning a
-session for it: a worker files, its parent spawns — issue #2960) — then, at ship, pushes your branch, opens a PR, and merges it when the checks
-go green. It never touches the base checkout.
-
-**You are a full agent, not a deckhand** (issue #441). The rails below are safety
-rails — the read-only base checkout, the one filer channel, bridge-only messaging,
-branch protection — and they are absolute. Everything *else* is your call: how to
-implement it, when it's done, whether a follow-up is worth a worker now, and when
-to land. Nothing in this fleet is waiting to approve your work.
-
-**Every fleet step is a tool call** (issue #1811). The session has the fleet's
-tool service mounted as `fleet` — Claude shows its tools as `mcp__fleet__<name>`,
-a Codex session reaches the same tools on its `fleet` server (docs/dev/FLEET-MCP.md is
-the one spec). Each tool checks its arguments and runs the fleet script behind it
-unchanged — exit code, stdout and stderr come back as they came — so the caps,
-guards and dedup are exactly what they were. Where this skill says "call
-`mcp__fleet__report`", call the tool; never type the script. (No `fleet` tool in
-this session at all? See §排障 at the end.)
-
-**Argument** (`$ARGUMENTS`): none — the seed is a bare `/fleet-claim`, so the
-issue is self-discovered from the window's `@issue` binding (fallback: the
-`issue-<N>` worktree name), never an argument.
+Claim the bound issue, load its charter, implement, open and merge your PR, report to your parent, then stop; a real blocker ends with ask + report instead.
+You decide implementation, scope and when to land within these rails; no further approval is needed.
+Every fleet step uses its `mcp__fleet__<name>` tool (Codex: the same tool on its `fleet` server), never the backing script; only a missing server permits the fallback in §排障.
+Argument (`$ARGUMENTS`): none; resolve the issue from `@issue`, falling back to the `issue-<N>` worktree, never guess.
+Background and incident references are in [WORKER.md](../docs/dev/WORKER.md); read it only when needed.
 
 ## 0. Resolve fleet + guard seat + read the issue — ONE call (run FIRST)
 
-Everything the preamble used to take four steps and ~13 turns to assemble comes
-out of a single call (issue #458): **`mcp__fleet__brief`** (no arguments). One
-`gh` round-trip, one atomic block — so no piece of it can be half-run, and "env
-vars don't persist between Bash calls" stops mattering.
-
-It prints, in order: the **fleet** (session / repo / base branch / read-only base
-checkout / merge method / seat), the **issue** it resolved from your window's
-`@issue` binding — falling back to the `issue-<N>` worktree in cwd for a window
-that lost the binding — with its title, state, labels, **assignees**, body and
-every comment; the **claim** verdict; your **charter layers**; and this fleet's
-**implementation directive**. It also prints an **`origin:`** line — who spawned
-you (issue #574). When it names a window key rather than `none`, a live session is
-waiting on this issue's outcome, and reporting back to it is the last step of the
-ship sequence below.
-
-Act on the exit code it returns — these are the rails, one code each, each printed on stderr:
-
-- **0** — worker seat, fleet resolved, issue read. Everything you need is in the
-  brief; go.
-- **2 `ABORT`** — not inside a fleet. Say so in one line and stop. Never guess a repo.
-- **3 `REFUSE`** — wrong seat: `/fleet-claim` is worker-only and you're in the hub
-  pane or a stray shell. Refuse in one line and stop.
-- **4 `FAIL`** — no issue bound (no `@issue`, and cwd isn't an `issue-<N>`
-  worktree). Say so in one line and stop. Never guess a number.
-- **5** — the fleet + charter half printed, but the issue read failed (gh missing /
-  auth / no such issue, or the hub not reachable for a hub ticket). Fix or report that; never implement off a half-read issue.
-
-Two lines in the brief want something from you:
-
-- **`claim:`** — the claim goes through the ticket door, `fleet-ticket.sh claim`
-  (issue #3598): a repo whose tickets live on the hub takes the hub's atomic claim
-  (a second session gets exit 3), a GitHub repo's claim is still the assignee
-  (issue #283). The spawn already pre-claimed the issue for you, so this normally
-  reads `HELD` ⇒ **do nothing, never re-claim**. On the rare `UNCLAIMED`, run the
-  exact command the brief prints (`fleet-ticket.sh claim …` for a hub ticket,
-  `gh issue edit … --add-assignee @me` for a GitHub one).
-- **the charter layers** — the built-in contract (step 2 below) is the base; the
-  gated repo charter (`$FLEET_MAIN/.fleet/worker.md`, printed only when the fleet
-  sets `FLEET_REPO_CHARTER=1` — it's an injection surface, so it's fail-closed)
-  and the operator's always-trusted fleet overlay
-  (`~/.config/claude-fleet/fleets/<session>/worker.md`) print **low→high
-  precedence**: a later layer wins where it conflicts with an earlier one. Fold
-  whatever printed into how you work. Nothing printed = the built-in contract,
-  which is the historic default.
-
-Everything below operates on the repo the brief resolved — this fleet only.
+- Call **`mcp__fleet__brief`** with no arguments FIRST: it returns fleet/repo/base/merge method/seat, issue and comments, claim, charter layers, directive and `origin:`.
+- Exit **0**: proceed; **2 ABORT**: not in a fleet, say so and stop; **3 REFUSE**: wrong seat, say so and stop; **4 FAIL**: no issue, say so and stop; **5**: issue read failed, fix or report it, never implement from a partial brief.
+- `claim: HELD`: do nothing, never re-claim; `UNCLAIMED`: run exactly the claim command printed by the brief (`fleet-ticket.sh claim …` or `gh issue edit … --add-assignee @me`).
+- Charter precedence is built-in §2 → gated repo `$FLEET_MAIN/.fleet/worker.md` (`FLEET_REPO_CHARTER=1`) → operator `~/.config/claude-fleet/fleets/<session>/worker.md`; later layers win; nothing printed means built-in only.
+- Use only the repo resolved by the brief, follow its implementation directive, and retain `origin:` for the unconditional final report.
 
 ## 1. Ground yourself, then implement
 
-Read what you need — the full issue thread the brief printed (design comments
-included) and the code the change touches — then implement. You decide the
-approach; the rails and the finish line are below. The brief's **implementation
-directive** section is the operator's per-fleet HOW-to guidance (issue #234;
-default *"Implement and verify per the repo conventions"*) — fold it in.
+- Read the full issue thread, its design/parent charter and the affected code; choose the implementation under §2.
 
 ### Ground cheaply — keep the broad sweep out of the main context
 
-Grounding is the most expensive phase of a worker session by an order of
-magnitude: across the 10 real worker sessions on this repo it cost a median 53k
-output tokens against the preamble's 4.9k, and the first file write landed with
-91k of context already loaded (issue #460). That is context spent before any
-work exists, so the window fills sooner and `/fleet-handoff` fires earlier — and
-a handoff is itself expensive, since the fresh session re-grounds from a doc.
-
-Three habits buy most of it back:
-
-- **Delegate the broad sweep — to a READ-ONLY subagent.** "Which files touch
-  X, and where" is a fan-out search — hand it to the `Explore` subagent and you
-  get back the conclusion instead of every file it read on the way. Keep the
-  main window for the code you are actually changing. `Explore`, `Plan` and
-  `claude-code-guide` are the only subagent types a fleet pane can start:
-  `hooks/agent-guard.py` blocks `general-purpose`, `claude`, `fork`, an
-  unnamed type and any `isolation: worktree` (issue #811). A writing subagent
-  runs outside every fleet rail — invisible to the dash, no state, killed
-  mid-edit when the quota migration moves the *window*, several writing one
-  worktree, no one-worker-one-PR, no history row, no handoff — so work that
-  writes code is a WORKER's, and a worker is never yours to start (issue #2960):
-  fix it in place or file it — the three moves below. Waiting on an issue someone
-  else's worker holds? In a session with the dispatch group (the fleet-orchestrate
-  plugin's server `fleet-orch`, issue #3113), `mcp__fleet-orch__await` (`issue: N`)
-  blocks until it lands, blocks or is reaped, then prints the verdict + PR +
-  summary (issue #812); `TIMEOUT` (exit 3) means still running — call it again.
-  From your pane it only waits: with no live worker it answers `NO-WORKER`, it
-  never spawns one. Without the group, read that issue with `mcp__fleet__gh`
-  (`kind: issue`) — and if it blocks your done condition, that is the blocked
-  outcome below, naming the issue.
-- **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
-  symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
-  `cat -n` — read the function, not the file that contains it.
-- **Ground from the diff, not the tree.** For a fix that builds on prior work,
-  `git log -p --follow <file>` (or `git log -S '<symbol>'`) is usually smaller
-  and far more informative than reading every caller.
-- **Read issue / PR state through `mcp__fleet__gh`, not bare `gh`** (issue #1263).
-  The daemons already poll every repo — open issues every ~90s, every PR's state
-  + CI every ~15s — and 18-30 workers re-fetching the same facts on the one shared
-  GraphQL budget is how a rate limit stops everyone at once.
-  `mcp__fleet__gh` (`kind`: `issue` · `pr` · `checks`, `number`, `fields`
-  `f,g`, `max_age` S) answers from that local copy when it holds every field you
-  asked for and is fresh enough (default 120s issue / 30s PR), else calls `gh`
-  once, and under a GraphQL limit answers over REST. Same field names as
-  `gh --json`, plus `_source` (`cache|gh|rest`) and `_age`. It is a default, not
-  a ban: bare `gh` still works — reach for it (or `max_age: 0`) when you need a
-  field the cache can't hold right this second. The merge gate stays
-  `mcp__fleet__pr_verdict`.
-
-Judgment, not a mandate: **you are a full agent, not a deckhand** (issue #441) —
-what to read is your call, and *under*-grounding ships the wrong change, which
-costs more than any dump. This steers HOW you load context, not how much you are
-allowed to know.
+- Delegate broad read-only searches to `Explore` / `Plan` / `claude-code-guide` where available; no writing subagent or `isolation: worktree` (`hooks/agent-guard.py`); implementation belongs to this worker.
+- Read targeted symbol ranges and `git log -p --follow` / `git log -S`, not whole files for narrow questions; enough grounding matters more than brevity.
+- Read issues/PRs/checks through `mcp__fleet__gh` (`kind: issue|pr|checks`, `number`, `fields`, `max_age`); use `max_age: 0` or bare `gh` only for data the cache cannot supply; the merge gate is always `mcp__fleet__pr_verdict`.
+- Waiting on another worker: `mcp__fleet-orch__await` (`issue: N`) if the dispatch group is mounted; `TIMEOUT` (3) means call again, `NO-WORKER` means it cannot spawn for you; otherwise read with `mcp__fleet__gh`, and report blocked if this prevents completion.
 
 ### Before you touch code: the 「改动前」 capture
 
-Read the issue body's **`上线证据:`** line — `mcp__fleet__evidence` (`action: line`)
-prints it (`/fleet-epic-plan` writes one per EPIC member, issue #809: which URL to
-screenshot, which command's output, which pane to capture). It names what the
-EPIC report will show side by side as 改动前 / 改动后 / 已上线 — so take the
-**before** now, along that line, while the change does not exist yet; a "before"
-taken later is fiction (issue #810):
-
-`mcp__fleet__evidence` with `action: before`, `note: '一句话：这是什么'` and exactly
-one of `file` (a path) · `text` (a command's output) · `pane` (a TUI's tmux target).
-
-No such line (exit 1)? Your judgment — at minimum one after-image or one output
-of the changed thing at ship time (step 4 below). It lands in
-`$FLEET_CONF_DIR/fleets/<sess>/epic/<E>/evidence/<M>/` when the issue has an EPIC
-parent (GitHub's link, resolved for you), else `…/fleets/<sess>/evidence/<M>/`,
-named `<stage>-<UTC>-<name>`, and is never committed to the repo. A playwright-MCP
-screenshot lands under the worktree (`.playwright-mcp/`): pass `mv: true` so the ship
-step's `git status --porcelain` stays empty.
+- Call `mcp__fleet__evidence` (`action: line`) to read `上线证据:`; capture what it names BEFORE editing via `action: before`, `note` and exactly one of `file`, `text` or `pane`.
+- No line (exit 1): use judgment, but capture at least one after-image or changed-command output at ship time; never reconstruct a before later.
+- Use `mv: true` for `.playwright-mcp/` captures so the worktree stays clean; evidence stays outside git and belongs to the issue/EPIC.
 
 ## 2. The standing contract (built-in charter — the base layer)
 
-Implement under these invariants (a charter layer from the brief may extend or
-override them):
+- **Work only in this worktree.** Never edit/commit the base checkout; the base guard in `hooks/base-readonly-guard.py` enforces it.
+- Comment via `mcp__fleet__comment` (`issue`, `body`), omitting `repo` to use this window's repo; default `mode: note` is RECORD-ONLY, not delivered to a worker.
+- To reach a peer use `mcp__fleet-orch__send` (`to: issue:<N>`, `text`) where mounted, or `mcp__fleet__comment` (`mode: to-worker`); read the delivery receipt/stderr, never assume a posted comment arrived.
+- Never address a peer by `<sess>:<idx>` or drive its pane with `tmux send-keys` (`hooks/bash-guard.py`); `FLEET_ALLOW_SENDKEYS=1` is for fleet plumbing only; isolated test sockets may be driven freely.
+- Close a no-PR/research issue with `mcp__fleet__comment` (`close: true`), never bare `gh issue close --comment`.
+- **Spot something else? Three moves — and spawning is none of them**: workers cannot spawn or use `bind` (`fleet_spawn_refused` / `bin/fleet-bind.sh`); one worktree, one issue, one PR.
+- **Fix in place** only if ALL hold: blocks your done condition; same repo and deploy path (ships in this PR); small/local, roughly tens of lines with a test; no open issue/live owner; no shared API, protocol, schema, release/deploy or credential contract; name it in one PR-body line.
+- **File and ask the parent** if it blocks you but fails any condition: `mcp__fleet__file_issue` (`parent: <your issue>`, no `spawn`), then `mcp__fleet__ask` + `mcp__fleet__report` (`state: blocked`) naming it.
+- **File bare** if it does not block you: `mcp__fleet__file_issue` (`title`, optional `body`, no `spawn`); related work gets `parent: N`, unrelated work omits `parent`; no outcome report for an unrelated filing.
+- **Hand off before you run out of context.** Use `/fleet-context` or `mcp__fleet__context`: `WATCH` means finish this thread then `/fleet-handoff`, `HANDOFF` means hand off now; don't start another broad sweep.
 
-- **Work only in this worktree.** You are in the `issue-<N>` git worktree off
-  `$FLEET_BASE_BRANCH`; never commit to or edit the base checkout (it's
-  hook-enforced read-only). Converse with the operator/collaborators by
-  **commenting on the bound issue** with `mcp__fleet__comment` (`issue`, `body`)
-  so it carries the no-relay marker + worker footer. Leave `repo` off: the
-  tool posts on your WINDOW's repo (`@repo`) — the brief's `repo=` — and in a
-  fleet hosting several repos naming one by hand used to land on the fleet's
-  FIRST repo (issue #1461). ⚠️ **`mode: note` is the DEFAULT and it is
-  RECORD-ONLY — a plain comment posts something the target worker will NEVER
-  see, while returning a URL and exit 0.** To actually reach another worker,
-  pick a channel: **`mcp__fleet-orch__send`** (`to: issue:<N>`, `text`) for a pure
-  instruction — direct to that worker's session, immediate, a delivery receipt;
-  always by issue, never a `<sess>:<idx>` window number, which drifts when any
-  window closes (issue #1046); it is the dispatch group's, so only a session with
-  the fleet-orchestrate plugin has it (issue #3113) — or `mcp__fleet__comment`
-  with `mode: to-worker`, every session's, when the instruction also belongs in
-  the issue record. Since #489 the comment
-  prints which of the two happened on stderr, and warns when you post
-  record-only to an issue that has a live worker — read that line instead of
-  assuming delivery. NEVER drive
-  another agent's pane with `tmux send-keys` — it's racy (bracketed-paste swallows
-  the Enter) and is hook-blocked (#437). The bridge relays your comment as the
-  target's next clean turn; `FLEET_ALLOW_SENDKEYS=1` is the sanctioned override,
-  for fleet plumbing only. An **isolated** test socket (`tmux -S /tmp/x.sock`, or
-  `-L <label>` owning no fleet conf) is not a pane and is not guarded — drive it
-  freely when testing tmux tooling. A stray `gh issue comment` is rewritten onto
-  the same wrapper by the guard (#528), but the tool is the way. Closing the
-  issue with a final comment (a research/no-PR task) goes through the same tool —
-  `mcp__fleet__comment` with `close: true` — never a bare
-  `gh issue close --comment`: that posts an UNMARKED comment the bridge relays
-  straight back into your own pane as a turn (issue #486).
-- **Spot something else? Three moves — and spawning is none of them** (issue
-  #2960). One level of delegation: the orchestrator, the steward and an EPIC
-  driver spawn sessions; a worker fixes in place or files. (Ten workers once
-  spawned their own: the batch driver could not count the grandchildren, and
-  their reports went to parents already parked or reaped.) `spawn` from your
-  pane is refused — the filer exits 6 with nothing filed, the `spawn` tool
-  refuses, `await` will not start one.
+**Done = ship it AND land it.** Run these steps in order:
 
-  | Move | When | How |
-  |---|---|---|
-  | **Fix in place** | ALL hold: it blocks YOUR done condition · same repo and same deploy path (ships in this PR — no hub deploy, stable move or human step) · small and local (reads as part of the job, roughly tens of lines with a test) · nobody else owns it (no open issue, no live worker) · touches no shared contract (hub API, client/node protocol, DB schema, release/deploy path, credentials) | fix it here; ONE line in the PR body names the in-passing fix |
-  | **File and ask the parent** | it blocks you but fails any of the above | `mcp__fleet__file_issue` with `parent: <your issue>`, no `spawn`; then the blocked outcome (`mcp__fleet__ask` + `mcp__fleet__report` `state: blocked`, below) naming the new issue — a driver spawns it as a batch member, for a plain task the orchestrator decides |
-  | **File bare** | it does not block you | `mcp__fleet__file_issue`, no `spawn`, no report |
+1. **Verify** per the repo's `CLAUDE.md` / `README` / workflows; when PR CI runs the suite, CI is the verdict: don't run the suite locally; only reproduce a specific CI failure locally (`bin/run-selftests.sh <name>` here, never full gate or `--changed`).
+   - If brief says `land: fleet` (`FLEET_LAND=fleet`), commit everything, call `mcp__fleet__pr_verdict` then `mcp__fleet__pr_merge` with no `pr`; it rebases/checks/fast-forwards the base; skip steps 2–3, report `merged` without `pr`; `FAILING`: fix/commit/retry, `CONFLICT`: rebase on `origin/<base>`, `BEHIND`/`PENDING`: call `pr_merge` again.
+2. **Push**: commit all work, require empty `git status --porcelain`, then `git push -u origin issue-<N>`.
+3. **Open (or update) the PR**: `gh pr create --repo <brief repo> --base <brief base> --fill` (or `gh pr edit`); body must contain `Closes #<issue>`, a short summary and verification; apply the draft-only rule below when present.
+4. **Capture the 「改动后」 evidence** while the PR is open and before landing: `mcp__fleet__evidence` (`action: after`, `note`, exactly one of `file|text|pane`, `mv: true` for Playwright files), using the same subject as before; then `mcp__fleet__evidence` (`action: post`) to record all paths/notes once.
+5. **Land it once the gate is green.** Read `mcp__fleet__pr_verdict` (`pr`) and branch on its verdict:
+   - **READY** (exit 0): ONE `mcp__fleet__pr_merge` (`pr`) rechecks, merges with this fleet's method and deletes the remote branch only after success; require confirmed **MERGED** (exit 0); it falls back to REST under GraphQL limits, so don't wait for quota reset.
+   - Never chain `push --delete` after merging; on failure fix/push/read the gate/retry, never delete an unmerged branch.
+   - **PENDING**: call `mcp__fleet__pr_verdict` (`pr`, `wait: true`) instead of polling; **TIMEOUT** (exit 3) is undetermined, re-wait or report a genuinely stuck gate as blocked.
+   - **BEHIND**: `gh pr update-branch <PR> --repo <brief repo>`, then re-read the verdict.
+   - **FAILING / CONFLICT**: once notify the parent with `mcp__fleet__report` (`state: failed`, `pr`, `summary: 'RED: CI failure or merge conflict; fixing it'`), then fix/push/re-read; never merge red, use `--admin`, or force-push the base.
+   - **Base branch itself red** (same failing check on base head, diff did not touch its subject): do not fix here; call `mcp__fleet__file_issue` (`breakage: true`, no `spawn`); exit 0 filed, exit 5 deduplicated, both return the ONE issue to wait for, never file another.
+   - Wait for that breakage with `mcp__fleet-orch__await` if mounted, else `mcp__fleet__gh` (`kind: issue`) between `mcp__fleet__pr_verdict` (`wait: true`) reads; then re-read your gate; only `breakage: true` selects breakage deduplication.
+   - **BLOCKED**: required review/branch protection is a real blocker; use the blocked outcome below and stop, never bypass it.
+6. **Report to whoever spawned you** immediately after confirmed merge: always call `mcp__fleet__report` (`state: merged`, `pr`, `summary: 'one or two lines: change and parent-relevant notes'`), even if `origin: none` or the parent has closed; auto-merge armed is not MERGED.
+   - `reported` (0) means delivered; no parent is silent success; `orphaned` (0) becomes a reminder; `queued` (3) will deliver later, don't resend; `undelivered` (1) means nothing arrived or waits, say so in the final line; another-machine parent uses the same tool.
+7. **Then stop.** Cleanup owns the worktree/window/local branch; do not start new work here; file follow-ups separately and never make your merge live yourself.
 
-  Worked examples: the drill's generated password lacked a digit (#2950) — in
-  place; the hub answered «no login there» (#2941) — file and ask the parent; the
-  base branch is red — a breakage (the red-base paragraph in step 5 below).
-
-  Every filing goes through the ONE filer channel (issue #332), so a follow-up
-  lands on the backlog instead of scope-creeping this PR — and the base checkout
-  stays untouched: `mcp__fleet__file_issue` (`title`, `body`?).
-  **Related to your current issue N → add `parent: N`** — it files a GitHub
-  *sub-issue* linked under N; **unrelated → file top-level** (omit `parent`).
-  A sub-issue is an ordinary issue — its own number, `@issue`, and `issue-<num>`
-  worktree/branch — plus GitHub's parent pointer, so the claim / worktree /
-  ledger flow is unchanged.
-  **`bind` is the SCRATCH escalation** (issue #520), and it is not for you: a
-  worker is already bound, so `bind` refuses here. It belongs to a scratch
-  session (dash ⌃s) that has talked its way to a clear requirement — filing with
-  `bind: true` makes *that* session the new issue's worker in place, rather than
-  spawning one that must re-ground from zero.
-  Outside the in-place row: **don't chase it in THIS worktree** — one worktree,
-  one issue, one PR.
-- **Hand off before you run out of context.** When the window fills, run
-  `/fleet-handoff` — it writes a durable handoff and cycles the pane. You can't
-  see your own context meter (Claude Code shows it to the human, not the model),
-  so when you're unsure whether there's room for one more expensive sweep, **ask**
-  — `/fleet-context`, or its one-call read `mcp__fleet__context` (issue #464). It prints a verdict on the
-  same bands the auto-handoff nudge uses: `WATCH` means finish this thread and
-  hand off rather than starting a broad sweep, `HANDOFF` means do it now.
-- **Done = ship it AND land it.** You own the change end to end — nobody is
-  queued up to merge it for you (issue #441). When the change is complete:
-  1. **Verify** per *this* repo's own conventions (its tests/linters/CI —
-     discover them from its `CLAUDE.md` / `README` / `.github/workflows`; don't
-     hardcode one project's commands). Don't ship red. **When the repo's CI
-     runs its test suite on the PR, CI is the verdict — don't run the suite on
-     this machine** (issue #1374): it is shared by dozens of sessions, and a
-     full local run here took 21 minutes for 159 of 270 tests. Push, open the
-     PR, and read the gate (step 5). Run a test locally only to REPRODUCE a CI
-     failure, and then only that one test (claude-fleet:
-     `bin/run-selftests.sh <name>` — never the full gate, never `--changed`;
-     CI already runs the related tests — ubuntu on the PR, macOS on master after the merge, #2286).
-     **A repo the fleet lands itself** — the brief's `land:` line says `fleet`
-     (`FLEET_LAND=fleet`: no GitHub, or its owner chose no pull requests; issue
-     #3602) — has no PR: commit everything, then `mcp__fleet__pr_verdict` and
-     `mcp__fleet__pr_merge` with no `pr` (your branch). The merge rebases onto
-     the base's newest commit, runs the repo's registered check here and
-     fast-forwards the base — the same words: `FAILING` prints the check's last
-     lines (fix, commit, merge again), `CONFLICT` = rebase on `origin/<base>` by
-     hand, `BEHIND` / `PENDING` = call `pr_merge` again. Skip steps 2–3; report
-     `merged` with no `pr`.
-  2. **Push** the clean worktree: `git status --porcelain` empty (commit
-     anything left), then `git push -u origin issue-<N>`.
-  3. **Open (or update) the PR** with a body containing `Closes #<issue>` plus a
-     short summary + how you verified:
-     `gh pr create --repo <the brief's repo> --base <its base> --fill` (or
-     `gh pr edit … --body …` if one exists).
-  4. **Capture the 「改动后」 evidence** (issue #810) — PR open, nothing landed
-     yet, the same URL / command / pane as your before-capture (the issue's
-     `上线证据:` line, or your own judgment: at least one image or output of the
-     changed thing), then leave the record on your issue:
-
-     - `mcp__fleet__evidence` with `action: after`, `note: '一句话：改了什么、看哪里'`
-       and one of `file` · `text` · `pane` (`mv: true` for a .playwright-mcp/ shot);
-     - then `mcp__fleet__evidence` with `action: post` — ONE record-only comment:
-       every path + its note.
-
-     The EPIC report collects exactly these files and writes **无证据** for a
-     member that has none — it never re-shoots and never invents, so this is the
-     only moment the "after" can be taken honestly. `gh` cannot attach an image to
-     a comment: the comment carries the paths, the files stay on this machine.
-  5. **Land it once the gate is green.** READ the gate, never eyeball it — one
-     command folds state + mergeability + every check into one verdict
-     (exit 0 ⇔ `READY`): **`mcp__fleet__pr_verdict`** (`pr`).
-
-     - **`READY`** → merge it — ONE call that re-reads the gate, merges with
-       this fleet's method (`FLEET_MERGE_METHOD`, default `squash`) and the
-       remote branch deleted, then **confirms**: **`mcp__fleet__pr_merge`**
-       (`pr`) → `MERGED`, exit 0.
-
-       It runs `gh pr merge <PR> --<method> --delete-branch`, and when GitHub's
-       **GraphQL** budget is spent (`API rate limit already exceeded`; REST still
-       answers) it does the same merge over REST — `PUT pulls/<PR>/merge`, pinned
-       to the head sha, branch deleted only after GitHub says merged (issue
-       #1042). **Never park a green PR waiting for the rate-limit reset.** It
-       refuses anything that isn't `READY` (prints the verdict, exit 1), so it
-       can't merge red. The remote branch goes; your local branch + worktree are
-       the cleanup daemon's to reap — which is why the confirming read, not gh's
-       exit code, is what decides `MERGED`.
-
-       ⚠️ **ONE call. Never chain a separate `push --delete` after the merge**
-       (issue #544). The branch delete is conditional on the merge succeeding;
-       a hand-written `gh pr merge … | tail && git push origin --delete <branch>`
-       is not — and a pipeline's exit code is `tail`'s, not the merge's. #534's
-       worker ran exactly that, the squash lost a conflict race, the `&&` fired
-       anyway, and deleting the head branch made GitHub auto-CLOSE the PR. The
-       worker then spent four minutes resolving the conflict by hand and was
-       SIGKILLed mid-edit by the reaper. **A failed merge must not delete the
-       branch.** If the merge fails: fix it, push, re-read the verdict, merge
-       again — the branch stays until a merge actually lands.
-     - **`PENDING`** → CI is still running. **Don't re-read in a loop** — block
-       on it (issue #950): `mcp__fleet__pr_verdict` with `wait: true`. One call,
-       zero turns spent in between; the token it returns is the verdict — branch
-       on it with this same list. It
-       fails fast (the first red check is `FAILING`), waits out a check set that
-       hasn't registered yet or was reset by a push, and paces its polls to the
-       account's shared GraphQL budget. `TIMEOUT` (exit 3) is *undetermined*,
-       never red: its stderr note carries the `mergeStateStatus` — re-run the
-       wait, or treat a PR that never resolves as blocked below.
-     - **`BEHIND`** → `gh pr update-branch <PR> --repo <the brief's repo>`, then re-read.
-     - **`FAILING` / `CONFLICT`** → yours to fix: fix, push, re-read. Never merge
-       red, never `--admin`, never force-push the base. Notify the spawning session
-       once of the red gate before fixing it: `mcp__fleet__report` with
-       `state: failed`, `pr`, `summary: 'RED: CI failure or merge conflict; fixing it'`.
-
-       **Unless the red is the base branch's own** (issue #2078): the same check
-       is red on `master`'s head and your diff never touched what it names. That
-       is one breakage for the whole fleet, and on 2026-10-07 three workers filed
-       three issues and three fixes for one duplicate route inside 16 seconds.
-       Don't fix it in this worktree and don't file it by hand — file it ONCE
-       through `mcp__fleet__file_issue` with `breakage: true` and **no `spawn`**
-       (issue #2960): the filer fingerprints the breakage (the commit it started
-       at · the first failed check · its first error line) and dedups on it —
-       exit 0 = you were first, and the issue is queued for the STEWARD, which
-       spawns its one fixer within the minute (its parent, not you);
-       **exit 5 = someone already filed it**: the URL printed is that
-       issue, a 「同一故障，来自 …」 comment was left on it for you, nothing was
-       filed. Either way the next step is the same: **wait for that issue** —
-       `mcp__fleet-orch__await` with its number where the dispatch group is
-       mounted, else `mcp__fleet__gh` (`kind: issue`) on it between
-       `mcp__fleet__pr_verdict` `wait: true` reads — then re-read your own verdict. Never
-       a second issue, never a second fixer. The flag is the only road (issue
-       #4271): a filing without `breakage: true` is an ordinary issue whatever
-       its text says about red.
-     - **`BLOCKED`** → branch protection (a required review) refuses the merge.
-       That is a real gate, not a hedge — you can't and shouldn't force it: say so
-       on the issue (blocked, below) and stop.
-  6. **Report to whoever spawned you** (issue #574) — one call, right after the
-     merge is confirmed and before you stop: **`mcp__fleet__report`** with
-     `state: merged`, `pr`, `summary: 'one or two lines: what changed, anything
-     the parent must know'`.
-
-     It reads the `origin:` line the brief printed (your window's `@origin`) and
-     pushes a fixed 4-line report to that session over the peer channel.
-     `state: merged` is checked against the PR's real `.merged` first (issue
-     #1247): report only after the confirming verdict reads `MERGED` — an armed
-     auto-merge is not a landing, and the script re-files it as a silent WAITING
-     (with a `NOT reporting MERGED` note on stderr) rather than send it. **A
-     hub-spawned worker needs no special case**: with no parent it exits 0
-     silently, and with a parent that has already been closed it exits 0 with
-     `orphaned → …` — the report becomes the person's reminder (issue #3117) — so
-     this is one unconditional call on every ship path, never a decision. It
-     cannot fail your merge.
-     `queued → …` (exit 3, issue #1647) means the parent cannot take it right
-     now — its machine is offline, it is asleep at a full fleet, its Claude is
-     down — and the report waits for it and is delivered when it can be: nothing
-     to do, don't resend. Only `reported → …` (exit 0) means it arrived.
-     `undelivered → …` (exit 1, issue #3439) means nothing reached the parent and
-     nothing waits for it — the person has it as a reminder; say so in your last
-     line rather than assume it arrived. A parent on ANOTHER machine (the brief's
-     `origin: … on another machine`) is reached through the hub the same way:
-     `report`, and `send` with `to: parent`.
-  7. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
-     and records the resume ledger after the merged grace (default 10 minutes)
-     and liveness checks; the dash marks pending cleanup with `rNm`.
-     Don't start new work in a
-     landed worktree; a follow-up gets its own issue (filed, never spawned —
-     the three moves above). And don't make your merge *live*: no
-     `/fleet-sync-install` from a worker — next bullet.
-- **A draft-only ticket stops at the draft** (issue #3715). When the brief prints
-  a `draft-only` section with `draft: WAITING`, the finish line moves: steps 1–4
-  as above, but open the PR with `gh pr create --draft`, put the brief's
-  `pr body must carry` lines into the body verbatim (next to `Closes #<issue>`),
-  then **`mcp__fleet__report`** with `state: waiting`, `pr`, `summary` (the PR
-  link and one line on what it does) — and stop. Never `gh pr ready`, never
-  `pr_merge`: it answers `DRAFT-ONLY` until someone runs
-  `fleet-draft.sh approve <issue>`. The approval arrives as your next turn
-  (「批准（草稿单）…」): then step 5 as usual — `pr_verdict` `wait: true`,
-  `pr_merge`, `report merged`. A rejection (「拒绝（草稿单）…」) closed the PR:
-  note it and stop. Your window is not reaped while the draft is open
-  (`@reap_policy merged`).
-- **Merged is not live, and making it live is not yours** (issue #953). Never run
-  `/fleet-sync-install` — nor `bin/fleet-install-apply.sh` or
-  `fleet-sync-logins.sh` by hand — from a worker: not after your own merge, not to
-  «see it live», not for evidence. The live install (`~/.claude/fleet`) is the
-  floor every other session on this login stands on; during EPIC #883 a worker
-  synced right after its merge and swapped the scripts and a daemon under the rest
-  of the batch. This binds doubly when your issue is an EPIC member
-  (`<!-- fleet:epic-member -->` in its body): the run loop syncs **once, at its
-  closing tick**, and the install-sync daemon follows `stable` when the operator
-  moves it — one whole-version link switch, never your job to stage. When the `上线证据:` line asks for something
-  only the live install shows (a daemon's log, a doctor row, an installed
-  command), your `after` is the **branch's** — run the script from this
-  worktree's `bin/`, grep the file here — and its note says
-  「已上线证据待 hub 批末同步后取」: the 已上线 column is `/fleet-epic-report`'s
-  to take after the batch-end sync, never yours to stage.
-- **Host for the operator with doc-preview, never an Artifact.** A report, plan,
-  design doc, dashboard or mockup the operator should open in a browser goes
-  through the fleet's doc-preview skill —
-  `~/.claude/skills/doc-preview/share.sh <file.md|file.html>`, then relay the
-  `READY` tailnet URL (any device, no login, every session's shares in one list).
-  Artifact pages are scoped to the claude.ai account that published them, and the
-  fleet rotates accounts under sessions, so the operator cannot know which login
-  would show yours; the Artifact tool's publish is hook-blocked in fleet sessions
-  (issue #526). Reading or commenting on an artifact someone shared with you is
-  fine.
-- **Show the operator a file on THEIR terminal, never `open` it here** (issue
-  #1367). The operator reads this machine over SSH from iTerm2; `open <file>`
-  pops it up on a screen nobody is looking at. An image, PDF, QR code or
-  screenshot they should see goes through `mcp__fleet__show` (`file`) — it lands
-  in their `~/Downloads` once they accept iTerm2's download prompt (`inline: true`
-  draws it in the terminal and holds the screen until they press a key). `SENT …` (exit 0) = offered to
-  their terminal; `PATH …`
-  (exit 2) = no iTerm2 attached or over the cap — tell them the path instead.
-  A document to READ (Markdown/HTML) still goes through doc-preview (above).
-- **Open a page in the operator's browser with `fleet-open`, never `open`**
-  (issue #1379). A PR, a report, a doc-preview page or a dev server running here
-  (`:5173/`, `http://localhost:3000`) goes through `mcp__fleet__open`
-  (`target`: a URL, `:port[/path]` or a file) — it rides
-  their SSH connection to their iTerm2, and a page on this machine is
-  port-forwarded, not exposed. `share.sh --open <file>` hosts a doc and opens it
-  in one step. It prints `sent:iterm2` / `sent:tunnel` / `fallback:copied`; see
-  the `fleet-open` skill for what each means.
-- **A temp server binds 127.0.0.1 and dies with your work** (issue #1154).
-  `python3 -m http.server`, `vite`, `next dev`, a mock API — all bind `*` by
-  default, which serves their cwd to the whole LAN, and a backgrounded one
-  outlives your window as a `PPID=1` orphan (a 2026-09-24 audit found one serving
-  the entire scratchpad root for two days). Bind loopback
-  (`python3 -m http.server --bind 127.0.0.1`, `vite --host 127.0.0.1`,
-  `next dev -H 127.0.0.1`), stop it when you're done, and when the operator needs
-  to see it, host through doc-preview (above) — never widen the bind. Orphans are
-  reaped at teardown and by the diskguard tick; `fleet-doctor` WARNs on any
-  fleet process still listening on the LAN.
-- **Blocked = say why, never stall silently.** Blocked means *actually* stuck —
-  a required review you can't grant, credentials you don't have, a decision only
-  the operator can make — not "I'd like a second opinion". One call does both
-  halves: **`mcp__fleet__ask`** (`question: '<why>'`; `kind: permission` for an
-  authorization you need) posts the `⛔ blocked: <why>` comment on the issue and
-  sets the window red so it's visible on the dash — `needs/blocked` (red `!` on
-  the dash, `被卡住` beside it): tool hooks, Stop, the classifier and an idle
-  transcript preserve it. A new `UserPromptSubmit` clears it so you can resume.
-  If that input does not resolve the blocker (for example, a `[child-report]`),
-  call `mcp__fleet__ask` again with what is still open before stopping. Then
-  stop — don't spin.
-  **Every question carries its own answer** (issue #2669, docs/dev/DECISIONS.md):
-  give `suggest` (what you would decide, and why — the batch's charter usually
-  already says), and `default` / `due` when they differ from «the suggestion,
-  4 hours». Past the deadline the steward answers you WITH it — the answer
-  arrives as your next turn — and records 「默认拍板」 on the batch parent, which
-  the person can overturn. A question about a fleet rule (`CLAUDE.md`,
-  BREAK-IT), money or publishing is never defaulted: say `class: never:rule` /
-  `never:money` / `never:publish` (a keyword catches it anyway).
-  **A decision the person tells you in this pane goes on the issue** (EPIC #2668
-  共同约定 5): `mcp__fleet__comment`, first line `决定（直达）：<what>` — the steward
-  reads the issue, not your conversation.
-  This is visibility, not permission-seeking: everything you *can* unblock
-  yourself, you should. Blocked is an OUTCOME too, so report it the same way a
-  merge is reported: `mcp__fleet__report` with `state: blocked`,
-  `summary: '<why>'` — and `pr` when a PR exists.
-  — a session that spawned you and is waiting on the result should not learn it
-  by watching the dash go red.
-- **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** You
-  spawn no one now (issue #2960), but a worker started for you before that rule —
-  or one `await` adopted — pushes its outcome to you when it lands, blocks, or is
-  reaped. It is four lines and it ends `no reply needed` — that is literal.
-  **Do not reply to it, do not open its PR, do not adopt its follow-up work.**
-  Note it, and go straight back to your own issue. **Want to check it? ONE read,
-  not an investigation:** `mcp__fleet__status` (its children section; the
-  dispatch group's `mcp__fleet-orch__children` where mounted) answers "did it
-  really land / stop / block, and how are the rest doing" from the ledger plus
-  each child's live state and the dash's PR cache — no `gh pr list`, no
-  `capture-pane` per child, no re-verifying a report by hand (issue #940; that
-  per-report verification averaged 3.3 extra tool calls a report). The report is
-  context, not a task: replying costs you a turn you are not being asked for, and taking over
-  the child's work is how one worker ends up holding two issues and neither
-  worktree matches. If it says `BLOCKED` and the blocker is genuinely yours to
-  clear, clear it — in your own worktree, or by filing an issue — but that is the
-  exception, not the default reading.
+- **A draft-only ticket stops at the draft.** If brief says `draft: WAITING`, run steps 1–4 with `gh pr create --draft`, copy its `pr body must carry` lines verbatim beside `Closes #<issue>`, call `mcp__fleet__report` (`state: waiting`, `pr`, summary with link), then stop; never `gh pr ready` or `pr_merge` before approval (`DRAFT-ONLY` gate).
+- Draft approval arrives as 「批准（草稿单）…」 after `fleet-draft.sh approve <issue>`: resume step 5 (`pr_verdict` with `wait: true`, `pr_merge`, `report merged`); rejection 「拒绝（草稿单）…」 closes the PR, note it and stop.
+- **Merged is not live, and making it live is not yours.** Never `/fleet-sync-install`, `bin/fleet-install-apply.sh` or `fleet-sync-logins.sh` against the live install; take branch evidence from this worktree and note 「已上线证据待 hub 批末同步后取」; EPIC closing sync and stable-following install are the driver's/operator's responsibility.
+- **Host for the operator with doc-preview, never an Artifact.** Use `~/.claude/skills/doc-preview/share.sh <file.md|file.html>` and relay/open its READY URL per that skill; Artifact publishing is blocked by `hooks/artifact-guard.py`, reading/commenting on existing artifacts is fine.
+- **Show the operator a file on THEIR terminal, never `open` it here**: `mcp__fleet__show` (`file`, optionally `inline: true`); `SENT` (0) means offered, `PATH` (2) means give the path; Markdown/HTML to read uses doc-preview.
+- **Open a page in the operator's browser with `fleet-open`, never `open`**: `mcp__fleet__open` (`target: URL|:port[/path]|file`); `share.sh --open` combines hosting/opening; interpret `sent:iterm2`, `sent:tunnel`, `fallback:copied` per that skill.
+- **A temp server binds 127.0.0.1 and dies with your work**: e.g. `python3 -m http.server --bind 127.0.0.1`, `vite --host 127.0.0.1`, `next dev -H 127.0.0.1`; stop it afterward, never widen its bind to share.
+- **Blocked = say why, never stall silently.** Unblock yourself when possible; otherwise `mcp__fleet__ask` (`question`, `kind: permission` only for needed authorization, `suggest` with reason, `default`/`due` if different from suggestion/4h), then `mcp__fleet__report` (`state: blocked`, `summary`, `pr` if one exists), then stop.
+- Questions about rules/money/publishing never default: set `class: never:rule|never:money|never:publish`; a new turn clears blocked state, so ask again before stopping if its input did not resolve the blocker.
+- Record a direct operator decision with `mcp__fleet__comment`, first line `决定（直达）：<what>`.
+- **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** Note it and return to your issue; no reply, opening its PR or adopting its follow-up; if needed read `mcp__fleet__status` or `mcp__fleet-orch__children` ONCE; only clear a blocker that is actually yours, in your worktree or by filing.
 
 ## 3. Report + proceed
 
-One line: the issue number + title, whether you just claimed it or it was
-already claimed, and which charter layers loaded (built-in only / + overlay / +
-repo). Then start implementing — the rest of the lifecycle (ship + land, or
-blocked) is the contract in step 2, run it when the work is done. Don't ask
-whether to proceed; the claim IS the go-ahead.
-
----
-
-Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
-sessions, or ledgers. The base checkout is read-only (hook-enforced): a worker
-edits inside its `issue-<N>` worktree and lands its own PR; the operator files and
-triages from the hub, and is a collaborator here — not a gate you wait on.
-
-**Never run destructive tmux on the live server.** Your fleet runs its own tmux
-server on its own named socket (`tmux -L <session>`, issue #159), so a stray
-`tmux kill-server` (or a `kill-session`/`kill-window` aimed at a sibling window)
-takes down every window in THIS fleet at once — every worker beside you, mid-turn
-(issue #158). If you're developing or testing tmux tooling, run
-it on an **isolated socket** — `tmux -L scratch …`, or the `-S <sock>` PATH-shim
-pattern the selftests use (`bin/dash-marker-selftest.sh`). A `tmux()` guard in
-`shell/cw.zsh` refuses the common accidental forms from a worker shell (it's an
-accident rail, not a security boundary); set `FLEET_ALLOW_TMUX_DESTROY=1` for the
-rare legitimate destroy on the live server.
+Say one line: issue number/title, newly claimed or already held, charter layers (built-in / + repo / + overlay); then implement and finish with §2's merged or blocked outcome, without asking whether to proceed.
+Operate only on this fleet's repo, sessions and ledgers.
+Never run destructive tmux on the live fleet socket; use an isolated `tmux -L scratch` / `-S <sock>` for tests (`shell/cw.zsh` guard; `FLEET_ALLOW_TMUX_DESTROY=1` only for a legitimate live-server exception).
 
 ## 排障 — scripts, for when a tool is not enough
 
-Everything above is a tool call. The scripts below have no tool, because a
-worker's day does not include them — they are for a deliberate experiment or a
-diagnosis — and this section is the one place a worker skill spells a path.
-
-**No `fleet` tool in the session at all** (`FLEET_MCP=0`, a session started
-before the tool service, a Codex build without MCP): every tool above names its
-script in its description, and docs/dev/FLEET-MCP.md lists each tool's exact argv —
-run that, unchanged, from `~/.claude/fleet/bin/`. Say in your report that the
-tools were missing; it is a setup gap, not a way of working.
-
-**Putting the machine under load? Use `bin/fleet-loadgen.sh`, never your own
-`trap`.** Load experiments are legitimate — verifying an assertion on a busy box
-is real work. Hand-rolled ones are how the machine dies: on 2026-09-15 a worker's
-`(while :; do :; done) & … trap 'kill $BURN' EXIT` leaked 8 spinners that ran
-**3h20m at ~70% CPU each** as `PPID=1` orphans, took the box to load 108 until
-`ps` itself timed out, wedged both daemons and poisoned another issue's evidence
-(issue #697). The trap never fired — a trap lives in the parent, and the parent
-died. Every worker sharing the machine paid for it.
-
-    ~/.claude/fleet/bin/fleet-loadgen.sh 4 120 -- <your experiment>   # load only while it runs
-    ~/.claude/fleet/bin/fleet-loadgen.sh --status / --stop            # a detached batch
-
-Each burner carries its own kernel deadline, so SIGKILLing the parent or closing
-your pane cannot leak one, and the caps refuse an absurd `n`/duration. It also
-refuses (exit 3) while the box is already above 1 load/core and clamps to half
-the cores (issue #922) — that is the fleet daemons' headroom, not an obstacle;
-keep the run short, or `--force` only for a deliberate saturation run. If you
-suspect something already leaked — yours or anyone's —
-`~/.claude/fleet/bin/fleet-diskguard.sh --orphans` lists the `PPID=1` runaways
-the worktree- and pane-keyed reapers structurally cannot see.
+See [WORKER.md · 排障](../docs/dev/WORKER.md#排障--scripts-for-when-a-tool-is-not-enough) for a missing fleet server or load experiments; use `bin/fleet-loadgen.sh`, never a hand-written load loop/trap.
