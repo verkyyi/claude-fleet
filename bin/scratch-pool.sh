@@ -100,7 +100,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-CMD="${1:-}"; SESS=''; DELAY=0; REPO_ARG=''; AGENT_ARG=''; TICK=0; SOON=0; NEWCLAIM=0
+CMD="${1:-}"; SESS=''; DELAY=0; REPO_ARG=''; AGENT_ARG=''; TICK=0; SOON=0; NEWCLAIM=0; REFILL=0; REFILL_PASS=0
 [ -n "$CMD" ] || { echo "usage: scratch-pool.sh {ensure|claim|reap|status} [<session>] [--delay] [--repo <owner/name|->] [--agent <a>]" >&2; exit 2; }
 shift
 case "$CMD" in --status|--ensure|--claim|--reap) CMD=${CMD#--} ;; esac
@@ -110,6 +110,8 @@ while [ "$#" -gt 0 ]; do
     --delay)   DELAY=1 ;;
     --tick)    TICK=1 ;;
     --soon)    SOON=1 ;;
+    --refill)  REFILL=1 ;;
+    --refill-pass) REFILL_PASS=1; TICK=1 ;;
     --repo)    REPO_ARG="${2:-}"; [ "$#" -gt 1 ] && shift ;;
     --repo=*)  REPO_ARG="${1#--repo=}" ;;
     --agent)   AGENT_ARG="${2:-}"; [ "$#" -gt 1 ] && shift ;;
@@ -117,6 +119,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+[ "$DELAY" = 1 ] || [ "$SOON" = 1 ] || [ "$REFILL" = 1 ] && { REFILL=1; TICK=1; }
 case "$AGENT_ARG" in '') ;; claude|codex) NEWCLAIM=1 ;; *) echo "scratch-pool: --agent is claude or codex" >&2; exit 2 ;; esac
 
 # No <session>: the caller's fleet — the one it was spawned for, else the session
@@ -199,12 +202,13 @@ EOF
         TM kill-window -t "$_w" 2>/dev/null
       done
       # The cgroup CPU reading grow_hold judges by (issue #3542), sampled once here.
-      if [ "$CMD" != reap ] && [ -z "${FLEET_POOL_CPU_READING:-}" ]; then
+      if [ "$CMD" != reap ] && [ "$REFILL" = 0 ] && [ -z "${FLEET_POOL_CPU_READING:-}" ]; then
         FLEET_POOL_CPU_READING=$(_fleet_cgroup_cpu "${FLEET_POOL_CPU_SAMPLE_SECS:-1}")
         export FLEET_POOL_CPU_READING="${FLEET_POOL_CPU_READING:--}"
       fi
       _pass=''
       [ "$TICK" = 1 ] && _pass="$_pass --tick"
+      [ "$REFILL" = 1 ] && _pass="$_pass --refill"
       [ -n "$AGENT_ARG" ] && _pass="$_pass --agent $AGENT_ARG"
       # HOME first (issue #3999): its slot is the one ⌘N / ⚡ claim, and a repo
       # slot's pass reaches the network (fetch, worktree) — a remote that does not
@@ -477,11 +481,11 @@ spawn_one() {
   acct=$(acct_now) || return 1
   if [ "$REPO" = - ]; then
     wt=$HOME; wname=warm-home                 # HOME: the agent runs in $HOME, no worktree
-    fleet_session_cap_ok "$SESS" >/dev/null || return 1
+    fleet_session_cap_ok "$SESS" >/dev/null || return 3
   else
     [ -n "$MAIN" ] || return 1
     [ -d "$MAIN/.git" ] || return 1
-    fleet_session_cap_ok "$SESS" >/dev/null || return 1
+    fleet_session_cap_ok "$SESS" >/dev/null || return 3
     alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || { fleet_admit_release; return 1; }
     slug=${alloc%%	*}; wt=${alloc#*	}; wname="warm-${slug#scratch-}"
   fi
@@ -705,21 +709,9 @@ cmd_reap() {
 }
 
 cmd_ensure() {
-  local have n wid hold
+  local have n wid hold result
   [ "$WANT" -gt 0 ] || { cmd_reap; return 0; }
-  # --delay: wait before rebuilding. Warming is a full cold claude boot, and the
-  # caller is the ⌃s spawn — firing it at the instant the operator starts typing
-  # into the window they just claimed is the one moment that contention is felt
-  # (measured: first-keystroke echo went from sub-second to tens of seconds).
-  # The sleep lives HERE, behind the pool-enabled gate, and not in the caller's
-  # run-shell string: with the pool off this must cost nothing, and the spawner's
-  # selftest executes run-shell synchronously — a sleep there added 45s to EVERY
-  # spawn case and blew the CI job's 10-minute budget.
-  [ "$DELAY" = 1 ] && sleep "${FLEET_POOL_REFILL_DELAY:-45}"
-  # --soon: a claim's own refill (#2233) — a few seconds, so the slot is back
-  # well inside the 30 s the batch promises, yet not on the claimer's first keys.
-  [ "$SOON" = 1 ] && sleep "${FLEET_POOL_CLAIM_REFILL_DELAY:-5}"
-  pool_lock || return 0
+  pool_lock || return 3
   acct_memo
   cmd_reap
   # Count what is ready; an entry over the slot's size goes (a lowered
@@ -735,8 +727,53 @@ cmd_ensure() {
   done
   n=$(( WANT - have ))
   [ "$n" -gt 0 ] || return 0
-  hold=$(grow_hold) && return 0               # a busy machine: only shrink (#2233)
-  while [ "$n" -gt 0 ]; do spawn_one || break; n=$((n - 1)); done
+  hold=$(grow_hold) && return 3
+  while [ "$n" -gt 0 ]; do
+    spawn_one; result=$?
+    [ "$result" = 3 ] && return 3
+    [ "$result" = 0 ] || break
+    n=$((n - 1))
+  done
+  return 0
+}
+
+refill_slot() {
+  local attempt=0 retry_delay="${FLEET_POOL_REFILL_RETRY_DELAY:-15}" result
+  local slot=home holder
+  [ "$WANT" -gt 0 ] || { cmd_reap; return 0; }
+  [ "$REPO" = - ] || slot=$(fleet_slug "$REPO")
+  REFILL_LOCKD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$(fleet_slug "$SESS")/pool/$slot-$AGENT.refill.lock"
+  holder=$(cat "$REFILL_LOCKD/pid" 2>/dev/null)
+  case "$holder" in ''|*[!0-9]*) ;; *) kill -0 "$holder" 2>/dev/null && return 0 ;; esac
+  fleet_wid_lock "$REFILL_LOCKD" || return 0
+  trap 'fleet_wid_unlock "$REFILL_LOCKD"' EXIT
+  # --delay: wait before rebuilding. Warming is a full cold claude boot, and the
+  # caller is the ⌃s spawn — firing it at the instant the operator starts typing
+  # into the window they just claimed is the one moment that contention is felt
+  # (measured: first-keystroke echo went from sub-second to tens of seconds).
+  # The sleep lives HERE, behind the pool-enabled gate, and not in the caller's
+  # run-shell string: with the pool off this must cost nothing, and the spawner's
+  # selftest executes run-shell synchronously — a sleep there added 45s to EVERY
+  # spawn case and blew the CI job's 10-minute budget.
+  [ "$DELAY" = 1 ] && sleep "${FLEET_POOL_REFILL_DELAY:-45}"
+  # --soon: a claim's own refill (#2233) — a few seconds, so the slot is back
+  # well inside the 30 s the batch promises, yet not on the claimer's first keys.
+  [ "$SOON" = 1 ] && sleep "${FLEET_POOL_CLAIM_REFILL_DELAY:-5}"
+  case "$retry_delay" in ''|*[!0-9]*) retry_delay=15 ;; esac
+  [ "$retry_delay" -le 60 ] || retry_delay=60
+  while :; do
+    if [ -n "$AGENT_ARG" ]; then
+      bash "$0" ensure "$SESS" --repo "$REPO" --agent "$AGENT_ARG" --refill-pass
+    else
+      bash "$0" ensure "$SESS" --repo "$REPO" --refill-pass
+    fi
+    result=$?
+    attempt=$((attempt + 1))
+    [ "$result" = 3 ] && [ "$attempt" -lt 4 ] || return 0
+    sleep "$retry_delay"
+    retry_delay=$((retry_delay * 2))
+    [ "$retry_delay" -le 60 ] || retry_delay=60
+  done
 }
 
 # -------------------------------------------------------------------- claim ----
@@ -793,7 +830,12 @@ cmd_status() {
 }
 
 case "$CMD" in
-  ensure) cmd_ensure ;;
+  ensure)
+    if [ "$REFILL" = 1 ]; then refill_slot
+    else
+      cmd_ensure; result=$?
+      [ "$REFILL_PASS" = 1 ] && exit "$result"
+    fi ;;
   claim)  cmd_claim || empty ;;
   reap)   cmd_reap ;;
   status) cmd_status ;;

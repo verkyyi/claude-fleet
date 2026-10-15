@@ -163,6 +163,16 @@ request. Trust dialogs, stale owners and shell remnants cannot become ready.
 Claims check provider, account home, window size and age; an unavailable warm
 entry falls back to the normal cold launch.
 
+Scheduled refills (`ensure --soon` / `--delay`) coalesce per fleet/repository/agent
+and retry a resource hold at most three times, after 15, 30 and 60 seconds.
+Each pass reloads configuration and credentials and samples CPU afresh; explicit
+CPU probe overrides remain authoritative. The refill worker releases the slot's
+mutation lock between passes, so ordinary maintenance can fill it sooner. This
+is a bounded worker, not a new periodic daemon. Disabled pools do not wait or
+retry. Authentication, admission, readiness and full MCP defaults are unchanged.
+This shared mechanism applies to Claude and Codex; it does not guarantee a
+sub-second cold start or a five-second model response.
+
 ## Account homes and quota recovery
 
 Register separately logged-in homes; Fleet stores their paths, never copies or
