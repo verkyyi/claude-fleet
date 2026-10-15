@@ -14,5 +14,7 @@ spec:
             # any public host on 443: a report's sources are not known ahead
             - name: FLEET_EGRESS_ALLOW
               value: "*"
+            - name: FLEET_EGRESS_PORTS
+              value: "443"
             - name: FLEET_EGRESS_VIA
               value: ""

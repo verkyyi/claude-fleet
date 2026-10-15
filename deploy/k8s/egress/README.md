@@ -10,15 +10,17 @@
 |---|---|
 | 来源 | `FLEET_EGRESS_SOURCES`——集群的 pod 网段；别人连上即断、不答一个字。flannel 不执行 NetworkPolicy，这一道才是真墙 |
 | 方法 | 只 `CONNECT`（不做明文转发，不解密） |
-| 端口 | `FLEET_EGRESS_PORTS`，默认只 443 |
-| 主机 | `FLEET_EGRESS_ALLOW`：`name` 精确、`.name` 含子域；默认 Anthropic / OpenAI / GitHub / npm / PyPI / Go 的域名 |
-| 地址 | 直连时每个解析结果都得是公网地址（防 DNS 重绑到集群、元数据、VPC） |
-| 上游 | `FLEET_EGRESS_VIA`：某些主机经上级代理——GitHub 经新加坡 `extras/gh-relay`（它只认集群出口 /32） |
+| 端口 | `FLEET_EGRESS_PORTS`，默认 `*` 任何端口（#4311：集群 API 6443 也得出得去）；运行出口设 443 |
+| 主机 | `FLEET_EGRESS_ALLOW`：默认 `*` 任何主机（#4311）；`name` 精确、`.name` 含子域，一份 overlay 想收窄时用 |
+| 地址 | 直连时**每个**解析结果都得是公网地址——VPC、元数据 `100.100.100.200`、回环、私网段、pod / Service 网段一律 403 `blocked_address`（也防 DNS 重绑）。主机、端口都放开以后，这一道就是墙 |
+| 上游 | `FLEET_EGRESS_VIA`：某些主机经上级代理——LLM 端点、GitHub 经美国出口 |
+| 必经上游 | `FLEET_EGRESS_REQUIRE_VIA`：这些主机（LLM 端点）**只**走上级，上级不通就 502，绝不国内直连；没给它配上级的策略启动即拒 |
 
 每个请求一行 JSON（`src` 是 pod 地址：按 pod 记流量），不记内容。订阅流量**不走这里**：
 会话的 API 请求到 `fleet-credproxy`，由它经新加坡中转出门。
 
-`python3 -I deploy/k8s/egress/base/fleet-egress.py --selftest` 离线自检。
+`python3 -I deploy/k8s/egress/base/fleet-egress.py --selftest` 离线自检；`--selftest private` / `--selftest require-via`
+是 BREAK-IT `egress-private-via-proxy` / `egress-required-via-direct` 两条。
 
 ## 上线 · 升级
 
@@ -32,7 +34,9 @@
 ```sh
 # 在用户 pod 里，以任何登录
 curl -sS -o /dev/null -w '%{http_code}\n' https://github.com/                 # 200（经出口，再经 gh-relay）
-curl -sS -o /dev/null -w '%{http_code}\n' https://example.com/                # 000（出口 403 host_not_allowed）
+curl -sS -o /dev/null -w '%{http_code}\n' https://example.com/                # 200（任何公网主机）
+curl -sS -m5 -k https://47.107.64.148:6443/version                             # 401/403 来自集群 API（6443 也放）
+curl -sS -m5 http://100.100.100.200/ -x "$HTTPS_PROXY" -p                       # 失败（出口 403 blocked_address）
 curl -sS --noproxy '*' -m3 https://registry.npmjs.org/                        # 拒绝（守卫，--egress-closed）
 kubectl -n fleet-workers logs deploy/fleet-egress | tail                      # 每请求一行
 ```

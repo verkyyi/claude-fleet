@@ -6777,6 +6777,32 @@ drill_cred_in_user_pod() {
   WHAT="render --cred-central / --egress-proxy / --egress-closed：每个登录 CCQUOTA_FLEET_CREDS=0、走 fleet-credproxy；启动时盘上的 token、Codex auth、池子删光（节点令牌、relay 通行证留着）；守卫最后一句 REJECT；出口只放白名单主机、只认 pod 网段"
 }
 
+# ---- egress-private-via-proxy (#4311): with every public host and port open, the
+# egress's address check is the wall — a name resolving to metadata, the VPC, a
+# private range or loopback (even one answer of several) gets 403, never a tunnel.
+drill_egress_private_via_proxy() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 -I "$ROOT/deploy/k8s/egress/base/fleet-egress.py" --selftest private >"$WORK/egress-private.out" 2>&1; then
+    WHY="fleet-egress opens a tunnel to a private / metadata address: $(tail -n 3 "$WORK/egress-private.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="fleet-egress.py 主机、端口都放开后，解析到元数据 / VPC / 私网 / 回环（含一个答案混私网的重绑）仍 403 blocked_address，任何端口"
+}
+
+# ---- egress-required-via-direct (#4311): a FLEET_EGRESS_REQUIRE_VIA host (the LLM
+# endpoints) leaves only through its parent; an uncovered one refuses the start,
+# a refusing parent is a 502 and the direct resolver is never asked.
+drill_egress_required_via_direct() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 -I "$ROOT/deploy/k8s/egress/base/fleet-egress.py" --selftest require-via >"$WORK/egress-reqvia.out" 2>&1; then
+    WHY="a REQUIRE_VIA host leaves directly, or an uncovered policy starts: $(tail -n 3 "$WORK/egress-reqvia.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="REQUIRE_VIA 的域名没有上级映射启动即拒；上级拒绝就 502、从不直连解析，443 和别的端口一样"
+}
+
 # ---- linux-create-relay-403 (#3213): the hub's create op opens a login whose
 # account is still `creating`; the relay pass is refused (403) and must not undo it.
 drill_linux_create_relay_403() {

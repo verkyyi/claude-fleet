@@ -1,5 +1,5 @@
 # The cluster's one way out for user pods — 统一出口 (claude-fleet#3547, EPIC
-# #3500 C2): fleet-egress.py, a CONNECT proxy with a host allow-list, as its own
+# #3500 C2): fleet-egress.py, a CONNECT proxy to public addresses only, as its own
 # Deployment. Environment-free; ../fleet-workers adds the namespace, the image
 # and the Singapore parent for GitHub.
 #
