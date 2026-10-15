@@ -12,25 +12,29 @@ from fleet_loop_mark import claude_tool_results, parse, prune
 from fleet_cron import plan, next_fire, refresh
 
 
-def durable_record(proof, job):
-    """Retain the native HOME task table; reading it never transfers ownership."""
-    path = Path(proof.get('durable_store', ''))
-    expected = Path.home()/'.claude/scheduled_tasks.json'
-    if not path.is_absolute() or path.resolve() != expected.resolve():
-        raise ValueError('durable task needs the exact native HOME scheduled_tasks.json')
-    data = json.loads(path.read_text())
+def refuse_durable():
+    raise ValueError('native durable task has no proven successor execution owner; '
+                     'switch refused, source and native tasks stay running')
+
+
+def check_durable_store():
+    """Persistence is not execution. Check even without a process-local marker:
+    another session may have created this project's task. Never mutate the table
+    or infer that an overdue task has already fired."""
+    home = Path.home().resolve()
+    try:
+        data = json.loads((home/'.claude/scheduled_tasks.json').read_text())
+    except FileNotFoundError:
+        return
     entries = data.get('tasks', data.get('jobs')) if isinstance(data, dict) else data
     if not isinstance(entries, list):
-        raise ValueError('unknown native durable task table')
-    matches = [entry for entry in entries if isinstance(entry, dict) and entry.get('id') == job['id']]
-    if len(matches) != 1:
-        raise ValueError('durable task is missing or ambiguous in its native table')
-    record = matches[0]
-    if (record.get('prompt') != job['prompt'] or record.get('cron') != job['cron']
-            or record.get('recurring', False) != job['recurring']
-            or record.get('createdInProject') != str(Path.home().resolve())):
-        raise ValueError('durable task content or project differs from the native table')
-    return dict(store=str(path.resolve()), record=record, owner='native-claude-project')
+        raise ValueError('unknown native durable task table; execution owner cannot be verified')
+    for record in entries:
+        project = record.get('createdInProject') if isinstance(record, dict) else None
+        if not isinstance(project, str) or not Path(project).is_absolute():
+            raise ValueError('unknown native durable task project; execution owner cannot be verified')
+        if Path(project).resolve() == home:
+            refuse_durable()
 
 
 def process_start(pid):
@@ -96,6 +100,7 @@ def has_native_activity(transcript, pid):
 
 
 def validate(raw, transcript, pid, sid, fid, mark, now=None):
+    check_durable_store()
     now = time.time() if now is None else now
     proof = raw.get('native_source', {})
     if (proof.get('pid') != int(pid) or proof.get('session_id') != sid or proof.get('fleet_id') != fid
@@ -106,15 +111,14 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
     by_id = {str(j.get('id')):j for j in native}
     if len(by_id) != len(native) or set(by_id) != {j['id'] for j in schedule['jobs']}:
         raise ValueError('cron plan does not match the current native task identities')
-    retained, moved = [], []
+    moved = []
     for job in schedule['jobs']:
         original = by_id[job['id']]
         evidence = proof.get('job_evidence', {}).get(job['id'], {})
         if (type(original.get('recurring')) is not bool
                 or original['recurring'] != job['recurring']):
             raise ValueError('cron recurrence differs from the live task')
-        # Durable jobs keep their native project owner. Copy their provenance
-        # into the handoff, never their timer into the Fleet scheduler.
+        # A durable record alone cannot prove execution after the source exits.
         durable = original.get('durable', evidence.get('durable', {}).get('value'))
         if type(durable) is not bool or ('durable' not in original and not evidence.get('durable', {}).get('source')):
             raise ValueError('cron native durability must be proven before handover')
@@ -130,8 +134,7 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
         if preview and not job['prompt'].startswith(preview.removesuffix('…').removesuffix('...')):
             raise ValueError('full cron prompt disagrees with the current preview')
         if durable:
-            retained.append(durable_record(proof, job))
-            continue
+            refuse_durable()
         moved.append(job)
         if job['next_run_at'] is None or (job['expires_at'] is not None and job['expires_at'] <= now):
             raise ValueError('cron task is no longer active')
@@ -143,7 +146,7 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
     marked = {j for j, _ in marker['ids']}
     if marker['next'] or not {j['id'] for j in moved} <= marked <= set(by_id):
         raise ValueError('native scheduler mark is unknown, mixed, or disagrees with CronList')
-    schedule.update(jobs=moved, native_durable=retained)
+    schedule.update(jobs=moved)
     refresh(schedule)
     return schedule
 

@@ -95,8 +95,8 @@ def request_preparation(session, pane, transcript, pid, sid, target):
         prompt=("[Fleet panel transfer request] The operator selected a switch to "+target+
                 ". Source scheduling must be verified before any exit. Read the request at "+str(path)+
                 "; if expired, cancelled by later user instructions, or its pid/session/fleet identity does not match, do not switch. "
-                "Call native CronList now. Keep every native task running. Verify each current job's id, full untruncated prompt, cron, recurrence, durable/session-only ownership, IANA timezone, expiry and stop condition using its current tool result and this session's evidence; never guess missing values. Durable jobs stay in the native HOME scheduled_tasks.json table: verify its exact record and supply native_source.durable_store, never delete it or create a second timer. "
-                "Write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable (boolean), timezone, expires_at and stop_when wherever absent or truncated in CronList. Include all current jobs: Fleet separates native durable records from session-only jobs itself. "
+                "Call native CronList now. Keep every native task running. Verify each current job's id, full untruncated prompt, cron, recurrence, durable/session-only ownership, IANA timezone, expiry and stop condition using its current tool result and this session's evidence; never guess missing values. If any task is durable, stop preparation and explain that no successor execution owner has been proven. Keep the source and all tasks running; do not arm, delete a native record or create a second timer. "
+                "For session-only tasks, write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable (boolean), timezone, expires_at and stop_when wherever absent or truncated in CronList. Include all current jobs. "
                 "Export it using python3 "+str(Path(__file__).with_name('fleet-loop.py'))+
                 " export-cron --session "+session+" --jobs-file <private-plan>. "
                 "Write private handoff notes covering role, task record, parent/children, latest user requests, pending decisions, current work and next action. "
@@ -115,6 +115,11 @@ def request_preparation(session, pane, transcript, pid, sid, target):
 
 
 def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
+    if agent == 'claude':
+        from fleet_transfer_cron import check_durable_store
+        # This is a hard refusal, not a request for more metadata. Reading a
+        # fresh CronList cannot create the missing successor execution owner.
+        check_durable_store()
     values = identity(session, pane)
     verified = None
     def opt(key):

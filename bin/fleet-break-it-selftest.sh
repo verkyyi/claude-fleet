@@ -7311,6 +7311,14 @@ drill_transfer_norepo() {
   SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive'
 }
 
+drill_transfer_durable_owner() {
+  CAP=20
+  local started; started=$(now)
+  bash "$BIN/fleet-transfer-selftest.sh" --norepo-durable >"$WORK/transfer-durable.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-durable.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='durable reminder has no proven successor: all entry points refuse before source exit or task mutation'
+}
+
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)

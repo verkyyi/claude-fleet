@@ -212,13 +212,44 @@ wait_request() {
 }
 
 # #4258: the same real isolated socket/process fixture, with a physical HOME.
-if [ "${1:-}" = --norepo ] || [ "${1:-}" = --norepo-cron ]; then
+if [ "${1:-}" = --norepo ] || [ "${1:-}" = --norepo-cron ] || [ "${1:-}" = --norepo-durable ]; then
   unset CODEX_HOME
   export HOME="$WORK/home"
   mkdir -p "$HOME/.codex"
   TM set-environment -g HOME "$HOME"
   TM set-environment -t "$LBL" HOME "$HOME"
   printf '[projects."%s"]\ntrust_level = "trusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  if [ "${1:-}" = --norepo-durable ]; then
+    spawn 96 norepo norepo
+    for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+    TM set-option -w -t "$WIN" @norepo 1
+    TM set-option -w -t "$WIN" @fleet_role worker
+    TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111196
+    mkdir -p "$HOME/.claude"
+    python3 - "$HOME" <<'PYDURABLE'
+import json,sys
+from pathlib import Path
+home=Path(sys.argv[1]); record=dict(id='durable-reminder',cron='13 9 21 10 *',
+    prompt='must still be delivered',createdInProject=str(home))
+(home/'.claude/scheduled_tasks.json').write_text(json.dumps(dict(tasks=[record])))
+PYDURABLE
+    cp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json"
+    printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
+    # No native marker or transcript entry: externally-created project tasks
+    # must not disappear from the guard merely because this process never listed them.
+    for mode in --dry-run --prepare-only --from-panel --after-turn; do
+      transfer "$mode" --handoff "$WORK/durable-notes.md" && fail 'durable source without an execution owner must refuse'
+      printf '%s' "$OUT" | grep -q 'durable.*execution owner' || fail 'durable refusal must explain missing execution owner'
+      kill -0 "$PID" || fail 'durable refusal exited the source'
+      [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable refusal replaced source identity'
+      cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable refusal changed native tasks'
+      [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable refusal wrote a handoff'
+      [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'durable refusal requested futile preparation'
+      ok
+    done
+    printf 'fleet-transfer durable refusal selftest: PASS (%s checks)\n' "$checks"
+    exit 0
+  fi
   if [ "${1:-}" != --norepo-cron ]; then
   spawn 91 norepo norepo
   TM set-option -wu -t "$WIN" @raw
@@ -355,8 +386,7 @@ PYBACK
     TM set-option -w -t "$WIN" @cc_agent claude
     TM set-option -w -t "$WIN" @fleet_id "11111111-1111-4111-8111-1111111111$n"
     python3 - "$WORK/native-plan.json" "$TRANSCRIPT" "$PID" "$SID" "$(field fleet_id)" <<'PYNATIVE'
-import datetime,json,sys,time,os
-from pathlib import Path
+import datetime,json,sys,time
 p,transcript,pid,sid,fid=sys.argv[1:]; now=time.time()
 jobs=[]
 for ident,offset,recurring in [('once',180,False),('patrol',360,True)]:
@@ -364,12 +394,6 @@ for ident,offset,recurring in [('once',180,False),('patrol',360,True)]:
     jobs.append(dict(id=ident,prompt='exact '+ident+' instruction',cron=str(dt.minute)+' * * * *',
                      recurring=recurring,durable=False,timezone='UTC',expires_at=now+7200,stop_when=''))
 raw=dict(jobs=jobs,native_source=dict(pid=int(pid),session_id=sid,fleet_id=fid,confirmed=True))
-home=Path(os.environ['HOME']).resolve(); store=home/'.claude/scheduled_tasks.json'
-store.parent.mkdir(exist_ok=True)
-record=dict(id='durable-reminder',cron='13 9 21 10 *',prompt='native reminder only',createdInProject=str(home))
-store.write_text(json.dumps(dict(tasks=[record])))
-jobs.append(dict(record,recurring=False,durable=True,timezone='America/Los_Angeles',expires_at=None,stop_when=''))
-raw['native_source']['durable_store']=str(store)
 open(p,'w').write(json.dumps(raw))
 ts=datetime.datetime.now(datetime.timezone.utc).isoformat()
 with open(transcript,'a') as f:
@@ -398,10 +422,6 @@ for _ in range(40):
     time.sleep(.1)
 r=json.loads(path.read_text()); assert r['status']=='active',r
 assert [(j['id'],j['prompt'],j['recurring'],j['stop_when']) for j in r['schedule']['jobs']]==[('once','exact once instruction',False,''),('patrol','exact patrol instruction',True,'')]
-manifest=json.loads(Path(r['manifest']).read_text())
-kept=manifest['native_durable']; assert len(kept)==1 and kept[0]['record']['id']=='durable-reminder'
-assert json.loads(Path(kept[0]['store']).read_text())==dict(tasks=[kept[0]['record']])
-assert 'native Claude project scheduler' in Path(r['manifest']).with_name('pickup.md').read_text()
 if n=='95':
     assert r['agent']=='claude' and r['thread_id']==sid
     assert json.loads((path.parents[2]/'state.json').read_text())['state']=='rolled_back'

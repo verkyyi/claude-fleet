@@ -122,7 +122,6 @@ def package(a):
     if a.handoff and not notes.strip():
         raise ValueError("--handoff must name a non-empty UTF-8 file")
     loop = None
-    retained_native = []
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
         raw = json.loads(Path(a.loop).read_text(encoding='utf-8'))
@@ -130,12 +129,10 @@ def package(a):
             verified = json.loads(a.input_view or '{}').get('native_plan')
             if not isinstance(verified, dict):
                 raise ValueError('native cron packet needs the controller-verified ownership plan')
-            retained_native = verified['native_durable']
             loop = validate(verified) if verified['jobs'] else None
         else:
             loop = validate(raw)
     elif a.previous:
-        retained_native = json.loads(Path(a.previous).read_text()).get('native_durable', [])
         prior = Path(a.previous).parent / 'loop' / 'state.json'
         if prior.exists():
             state = json.loads(prior.read_text())
@@ -261,9 +258,6 @@ def package(a):
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
         if a.loop:
             manifest['native_cron'] = json.loads(Path(a.loop).read_text()).get('native_source')
-    if retained_native:
-        manifest['native_durable'] = retained_native
-        write_json(bundle / 'native-durable.json', retained_native)
     draft_file = a.draft_file
     if a.input_view:
         view = json.loads(a.input_view)
@@ -359,15 +353,6 @@ def package(a):
         pickup += loop_note
         with (bundle / 'handoff.md').open('a', encoding='utf-8') as out:
             out.write(loop_note)
-    if retained_native:
-        native_note = ('\n## Native durable tasks retained\n\nRead `%s` for the verified task records and native store paths. '
-                       'These tasks remain owned by the native Claude project scheduler, not this Fleet timer or Codex conversation. '
-                       'The original table is unchanged. Do not recreate, delete or execute them as part of pickup. '
-                       'Their execution requires a Claude session in that project; persistence alone does not promise a wakeup from Codex. '
-                       'Recheck the native table before reporting their later status; this file is a handoff snapshot.\n') % (bundle/'native-durable.json')
-        pickup += native_note
-        with (bundle/'handoff.md').open('a', encoding='utf-8') as out:
-            out.write(native_note)
     (bundle / "pickup.md").write_text(pickup, encoding="utf-8")
     # Paths are shell-quoted, never inserted as JSON/shell source interchangeably.
     # Recovery is an explicit controller action, including for a dead pane. The

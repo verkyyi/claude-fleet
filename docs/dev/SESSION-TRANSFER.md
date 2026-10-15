@@ -164,14 +164,22 @@ under that job id. An unknown value is a blocker, never an invitation to infer i
 from a fifteen-minute frequency or the marker's grace-extended expiry.
 The text form of CronList proves current membership and recurrence, while its
 truncated prompt needs a separately verified complete record. Every job's
-`durable` flag must be proven. Session-only jobs move to Fleet's scheduler;
-durable jobs remain in the native HOME `~/.claude/scheduled_tasks.json` table.
-For durable jobs, `native_source.durable_store` names that exact file; transfer
-reads its full record and verifies id, prompt, cron, recurrence and project.
-It copies the provenance into `native-durable.json`, never a second timer, and
-rechecks the record before source exit. Unknown ownership or a changed/missing
-record refuses. The handoff explains that native durable execution still needs
-a Claude session in the project; retaining the record does not make Codex fire it.
+`durable` flag must be proven. Session-only jobs move to Fleet's scheduler.
+**A durable task blocks the switch:** its native table surviving is not proof
+that an execution owner survives. Transfer checks HOME's
+`~/.claude/scheduled_tasks.json` even without a native marker or transcript entry
+(another session can create a project task), and refuses before exit, arming or
+panel preparation. Unknown table/project formats also refuse. The source and
+native records remain unchanged; no duplicate Fleet timer is created.
+
+This is the safety fallback, not completion of #4258's actual mixed-task goal.
+That goal still requires a verified single-owner migration: stage and read back
+an inactive Fleet task, confirm native relinquishment, then activate one owner,
+with rollback and crash recovery at every boundary. A native runtime fence or
+equivalent execution acknowledgment is required; deleting a JSON record alone
+cannot rule out a task already claimed by another Claude session. No such
+protocol is implemented here. Do not report a source containing a durable task
+as ready or delete its task to bypass the refusal.
 
 From the owning Claude session, export the plan without stopping any task:
 

@@ -57,6 +57,33 @@ class CronTests(unittest.TestCase):
 
 
 class NativeCronTests(unittest.TestCase):
+    def setUp(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        env = patch.dict(os.environ, HOME=str(Path(home.name).resolve()))
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_native_store_requires_an_execution_owner(self):
+        import fleet_transfer_cron as native
+        home = Path.home()
+        store = home/'.claude/scheduled_tasks.json'
+        store.parent.mkdir()
+        native.check_durable_store()  # absent table
+        for value in ([], dict(tasks=[]), dict(jobs=[]),
+                      [dict(createdInProject=str(home/'other-project'))]):
+            store.write_text(json.dumps(value))
+            native.check_durable_store()
+        for value in ([dict(id='a',createdInProject=str(home))],
+                      dict(tasks=[dict(id='a',createdInProject=str(home))]),
+                      [dict(id='unknown-project')], dict(unrecognized=[]), None):
+            before=json.dumps(value); store.write_text(before)
+            with self.assertRaisesRegex(ValueError, 'execution owner'):
+                native.check_durable_store()
+            self.assertEqual(store.read_text(),before)
+        store.write_text('{')
+        with self.assertRaises(ValueError): native.check_durable_store()
+
     def test_exact_live_snapshot_and_refusals(self):
         import fleet_transfer_cron as native
         now=1792022400
@@ -94,8 +121,8 @@ class NativeCronTests(unittest.TestCase):
                 proven['native_source']['job_evidence']['b']['durable']=dict(value=True,source='persistent task')
                 with self.assertRaises(ValueError): native.validate(proven,path,42,SID,'fid',mark,now)
                 write(records)
-                # A project-scoped durable one-shot survives source exit. Keep
-                # its exact native record and never give Fleet a second timer.
+                # A persisted task is not a proven execution owner. Even an
+                # exact record must refuse without changing it or the source.
                 home=(Path(d)/'home').resolve(); (home/'.claude').mkdir(parents=True)
                 store=home/'.claude/scheduled_tasks.json'
                 durable=dict(id='b',cron=jobs[1]['cron'],prompt=jobs[1]['prompt'],createdInProject=str(home))
@@ -104,12 +131,14 @@ class NativeCronTests(unittest.TestCase):
                 kept['native_source']['durable_store']=str(store)
                 write(result('CronList',{},kept['jobs']))
                 with patch.dict(os.environ,HOME=str(home)):
-                    out=native.validate(kept,path,42,SID,'fid','kind=cron id=a@%d' % (now+4000),now)
-                    self.assertEqual([j['id'] for j in out['jobs']],['a'])
-                    self.assertEqual(out['native_durable'][0]['record'],durable)
+                    with self.assertRaisesRegex(ValueError,'execution owner'):
+                        native.validate(kept,path,42,SID,'fid','kind=cron id=a@%d' % (now+4000),now)
                     self.assertEqual(json.loads(store.read_text()),[durable])
                     store.write_text('[]')
-                    with self.assertRaises(ValueError): native.validate(kept,path,42,SID,'fid',mark,now)
+                    # A current CronList reporting durable also refuses even if
+                    # its table disappeared; no missing-file bypass.
+                    with self.assertRaisesRegex(ValueError,'execution owner'):
+                        native.validate(kept,path,42,SID,'fid',mark,now)
                 write(records)
                 with self.assertRaises(ValueError): native.validate(raw,path,43,SID,'fid',mark,now)
                 with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'other',mark,now)
