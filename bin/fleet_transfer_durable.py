@@ -157,18 +157,39 @@ def table(store):
     return {t['id']: t for t in tasks(read(store))}
 
 
-def local_zone():
-    """The IANA zone native cron uses (the process's local time)."""
-    tz = os.environ.get('TZ', '').lstrip(':')
-    if tz and '/' in tz:
-        return tz
+def _zone_key(name):
+    """An IANA key ZoneInfo accepts, or None: `/UTC`, `…/zoneinfo//UTC` and
+    `:/etc/localtime` all occur (issue #4309) — ZoneInfo refuses an absolute key."""
+    from zoneinfo import ZoneInfo
+    name = (name or '').lstrip(':')
+    if '/zoneinfo/' in name:
+        name = name.split('/zoneinfo/', 1)[1]
+    name = name.lstrip('/')
+    if not name:
+        return None
     try:
-        target = os.readlink('/etc/localtime')
+        ZoneInfo(name)
+    except Exception:  # ValueError, ZoneInfoNotFoundError, a bad path
+        return None
+    return name
+
+
+def local_zone(tz=None, localtime='/etc/localtime'):
+    """The IANA zone native cron uses (the process's local time)."""
+    tz = os.environ.get('TZ', '') if tz is None else tz
+    if tz.lstrip(':').startswith('/'):
+        try:
+            tz = os.path.realpath(tz.lstrip(':'))
+        except OSError:
+            pass
+    key = _zone_key(tz) if '/' in tz else None
+    if key:
+        return key
+    try:
+        target = os.readlink(localtime)
     except OSError:
         target = ''
-    if '/zoneinfo/' in target:
-        return target.split('/zoneinfo/', 1)[1]
-    return 'UTC'
+    return _zone_key(target) or 'UTC'
 
 
 def transcript_version(transcript):
