@@ -2449,6 +2449,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ADMIT_CPU_SAMPLE_SECS=0.5    # how long the cgroup's cpu.stat is sampled
 # @label=Admission container CPU window @group=disk @tier=internal @scope=global @edit=int @unit=s
 #FLEET_ADMIT_CPU_WINDOW_SECS=60     # judge the cgroup over about this many seconds; 0 = the instant sample
+# On a person's own pod (FLEET_USER_POD=1, issue #4290) a busy CPU reading is
+# advice: it admits and notes the admission in global/admit-advice.log — only
+# that person's sessions are there to slow down, and a 1-core pod freshly rolled
+# to a new image read busy for minutes and refused their own new session. Memory
+# still holds there.
+# @label=Admission CPU on a person's pod @group=disk @tier=internal @scope=global @edit=str
+#FLEET_ADMIT_POD_CPU=advice         # advice | hold (the CPU reading holds as on a shared machine)
 # Since issue #1831 admission is the ONLY gate by default, so it answers "room for
 # one more?" in MB: one session's cost (the median RSS of the live agents × a
 # growth factor, never under a floor) must fit above the kept-back floor
