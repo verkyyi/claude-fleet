@@ -1,39 +1,15 @@
 #!/usr/bin/env python3
-"""fleet-topbar.py — the session's top line in the client (issue #1904, EPIC #1906
-C11): the line above the right pane, which the shell's STAGE server draws
-(conf/tmux-shell-stage.conf's status-left). It says THIS session only, in the
-⌘P panel's own glyphs (issue #3194, EPIC #3178): going round the sessions, and
-what the others are doing, is the panel's.
+"""fleet-topbar.py — a session's top line, drawn ON the machine as a thin client's
+看台's status line (issue #2763, EPIC #2999 C1; fleet-remote-view.sh attach
+--thin). It says THIS session only, in the ⌘P panel's own glyphs (issue #3194,
+EPIC #3178): going round the sessions, and what the others are doing, is the
+panel's. (It began as the old client's stage line, issue #1904 — that client and
+its record, switch-bar.json, went with issue #3008.)
 
-    fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [rv=<auto|manual> <route>]
-                           [rp=<pinned route>] [rt=<reconnects>] [wn=<window name>] [gen=…]
-        the line, as tmux format: glyph (word ·) #N title (· repo) …… PR · context (· 今天 N) (· machine) (· ⌘P)
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
-        the same line drawn ON the machine, as a thin client's 看台's status line
-        (issue #2763, EPIC #2999 C1; fleet-remote-view.sh attach --thin) — see
-        render_node below
-    fleet-topbar.py click <range> <shell session>
-        a tap on one of its parts (the stage's MouseDown1Status bind):
-        title — the full-screen switcher (fleet-quickopen.py --full);
-        key — the issue, pr — the PR, opened on the person's computer
-        (fleet-open.sh); machine — what is known about that machine, as a note
-    fleet-topbar.py fit <cols> <record.json>   the plain text of the line (selftest)
-    fleet-topbar.py goodbye [node=<machine>]
-        the two lines the one-session view (issue #2265) leaves in the terminal
-        when its attach returns (fleet-shell.sh attach_client): 「会话在后台继续
-        （<machine>）· 下次输入 fleet 回来」 — or, when the list detached it because
-        the session ENDED (fleet-sidebar.py solo_ended's file, taken here), 「会话
-        已结束 · fleet 可以恢复」
-
-What it says comes from ONE record, `switch-bar.json` in the client's switch
-state dir (fleet-quickopen.py state_dir), written by the task list
-(fleet-sidebar.py bar_record) off the very rows it paints — so the line and the
-list never disagree — and only on change, when it also bumps the stage's
-`@fleet_bar_gen`, which status-left names: tmux runs the line again at once.
-The stage adds what only it knows: `@remote_down` (this machine's connection to
-that one dropped), `@remote_route` (on the hub relay), `@remote_via`
-(claude-fleet#2886: the route and who chose it), `@remote_pin` + `@remote_tries`
-(a pinned route reconnecting: 第 N 次).
+        the line, as tmux format — see render_node below
+    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=]
+        the plain text of layout() for a record (selftest)
 
 Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
 and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
@@ -59,14 +35,13 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 
 sys.path.insert(0, str(BIN))
-import fleet_ticket_url as FTU  # noqa: E402 — where a ticket reads (#3596)
 import fleet_view as FV   # noqa: E402 — the ⌘P panel: its glyph table is the one table (#3194)
 
 # a state the panel's sym_of reads as idle but this line calls working (the design:
 # 在干活 含循环中、准备中、唤醒中)
 WORKING = ("preparing", "waking")
 
-# colours: the stage's own (conf/tmux-shell-stage.conf); the glyphs' are the
+# colours: the 看台 line's own (the old client's stage palette); the glyphs' are the
 # panel's 16-colour palette numbers (FV.GLYPH_COLORS), as tmux colourN
 FG, DIM, HL, OK, WARN, BAD = "#a9b1d6", "#565f89", "#7aa2f7", "#9ece6a", "#e0af68", "#f7768e"
 BG_ASK, BG_DOWN = "#f7768e", "#3b4261"
@@ -77,18 +52,9 @@ BG_ASK, BG_DOWN = "#f7768e", "#3b4261"
 MID, WIDE = 80, 140
 
 
-def state_dir():
-    """The client's switch state dir — fleet-quickopen.py's, the one definition."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("fleet_quickopen", str(BIN / "fleet-quickopen.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.state_dir()
-
-
-def read_record(path=None):
+def read_record(path):
     try:
-        rec = json.loads((path or state_dir() / "switch-bar.json").read_text())
+        rec = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
     return rec if isinstance(rec, dict) else None
@@ -134,7 +100,7 @@ def state_word(rec, sym):
 
 
 # @remote_via's route word for the hub relay: fleet-connect.py route_label's, a value
-# the stage carries (`auto 中转`), matched here — never drawn
+# the 看台's registry row carries (`auto 中转`), matched here — never drawn
 RELAY_WORD = "\u4e2d\u8f6c"
 
 
@@ -266,24 +232,10 @@ def tmux_text(text):
 def render(args):
     kv = dict(a.split("=", 1) for a in args if "=" in a)
     cols = int(kv["cw"]) if kv.get("cw", "").isdigit() else 80
-    if "--node" in args:
-        return render_node(kv, cols)
-    path = state_dir() / "switch-bar.json"
-    rec = read_record(path)
-    if rec is None:
-        # no session row in view — a machine's bare shell, the writing area (the
-        # list wrote `null`): the window's name; a tap on it opens the switcher
-        # (going round the sessions is the panel's, #3194). No record at
-        # all (issue #2739) is said, not drawn as a bare shell: the list never
-        # wrote one, and logs/topbar.log says why when a write failed.
-        missing = "" if path.is_file() else "#[fg=%s]  %s" % (WARN, tmux_text(say("topbar_no_record")))
-        print("#[fg=%s,bold]#[range=user|title] %s#[norange]#[nobold]%s#[default]"
-              % (HL, tmux_text(kv.get("wn", "")), missing))
-        return 0
-    parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""), None,
-                       kv.get("rv", ""), kv.get("rp", ""), kv.get("rt", ""))
-    print(paint(parts, bg))
-    return 0
+    if "--node" not in args:
+        print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+        return 2
+    return render_node(kv, cols)
 
 
 def paint(parts, bg):
@@ -583,80 +535,12 @@ def own_window(win, line, guard=''):
     return "#{?%s,%s,%s}" % (condition, branch_text(line), quick_fmt())
 
 
-# --- a tap on the line -------------------------------------------------------------
-
-def shell_tmux(sess, *args):
-    return subprocess.run(["tmux", "-L", sess, *args], capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL).stdout.strip()
-
-
-def shell_env(sess):
-    """The environment a script needs to act on the shell's server as if run
-    there: TMUX pointing at it (bare `tmux` in dash-popup.sh / fleet-open.sh)."""
-    line = shell_tmux(sess, "display-message", "-p", "#{socket_path},#{pid},0")
-    env = dict(os.environ)
-    env.pop("TMUX_PANE", None)
-    if line:
-        env["TMUX"] = line
-    return env
-
-
-def shell_client(sess):
-    best = ("", -1)
-    for line in shell_tmux(sess, "list-clients", "-F", "#{client_activity} #{client_name}").splitlines():
-        act, _, name = line.partition(" ")
-        if act.isdigit() and int(act) > best[1]:
-            best = (name, int(act))
-    return best[0]
-
-
-def note(sess, client, text):
-    shell_tmux(sess, "display-message", *(["-c", client] if client else []), text)
-
-
-def switcher_cmd(sess, client):
-    """The full-screen switcher on the shell's client (F1's body, a tap on the title)."""
-    return ["bash", str(BIN / "dash-popup.sh"), "--title", "popup_quickopen", "--client", client,
-            "--no-inline", "-w", "100%", "-h", "100%", "--", "python3",
-            str(BIN / "fleet-quickopen.py"), "--full", "--session", sess]
-
-
-def click(what, sess):
-    rec = read_record() or {}
-    client = shell_client(sess)
-    if what == "title":
-        subprocess.run(switcher_cmd(sess, client), env=shell_env(sess), stdin=subprocess.DEVNULL,
-                       capture_output=True)
-        return 0
-    if what in ("key", "pr"):
-        num = re.search(r"[0-9]+", rec.get(what) or "")
-        slug = rec.get("slug") or ""
-        if not (num and "/" in slug):
-            note(sess, client, "%s · %s" % (rec.get("key") or rec.get("title") or "", rec.get(what) or "—"))
-            return 0
-        url = (FTU.ticket_url(slug, num.group(0)) if what == "key"
-               else "https://github.com/%s/pull/%s" % (slug, num.group(0)))
-        if not url:
-            note(sess, client, "%s · %s" % (rec.get("key") or rec.get("title") or "", rec.get(what) or "—"))
-            return 0
-        subprocess.run(["bash", str(BIN / "fleet-open.sh"), url], env=shell_env(sess),
-                       stdin=subprocess.DEVNULL, capture_output=True)
-        return 0
-    if what == "machine":
-        mach = "@" + (rec.get("node") or "?")
-        word = "offline" if rec.get("lost") else "online"
-        if rec.get("direct"):
-            word += " · " + say("topbar_direct_quiet")
-        note(sess, client, "%s · %s · %s" % (mach, word, rec.get("title") or ""))
-    return 0
-
-
 _WORDS = {}
 
 
 def say(key, *args):
     """A string off fleet-ui-lang.sh, the one table — read once per process
-    (`dump`, as fleet_view.py and fleet-sidebar.py do); a key it lacks prints itself.
+    (`dump`, as fleet_view.py does); a key it lacks prints itself.
     The dump is a shell run (~70 ms, seconds on a busy box) a 看台's line paid on
     every render — each 2 s and each window switch (issue #3532): kept per
     FV.words_key(), as the panel's own (#3514)."""
@@ -668,7 +552,7 @@ def say(key, *args):
             raw = []
         if len(raw) < 2:
             try:
-                out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "topbar_", "sidebar_portal", "solo_"],
+                out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "topbar_", "sidebar_portal"],
                                      capture_output=True, text=True, stdin=subprocess.DEVNULL,
                                      timeout=5).stdout
             except (OSError, subprocess.TimeoutExpired):
@@ -685,43 +569,9 @@ def say(key, *args):
         return text
 
 
-ENDED_FRESH = 600   # a solo-ended file older than this was never taken: a detach since is a plain one
-
-
-def goodbye(args=()):
-    """The one-session view's last words (issue #2265): the session in view is on
-    its machine still (`node=`, the server's @fleet_view_node, else the record's)
-    — or it ended, and fleet-sidebar.py left its file (`solo-ended`, the machine
-    in it), taken once here."""
-    ended = state_dir() / "solo-ended"
-    node, gone = "", False
-    try:
-        if time.time() - ended.stat().st_mtime < ENDED_FRESH:
-            node, gone = ended.read_text().strip(), True
-        ended.unlink()
-    except OSError:
-        pass
-    if not node:
-        node = dict(a.split("=", 1) for a in args if "=" in a).get("node", "").strip()
-    if not node:
-        node = ((read_record() or {}).get("node") or "").strip()
-    node = node or "fleet"
-    if gone:
-        print(say("solo_ended_fmt", node))
-        print(say("solo_resume"))
-    else:
-        print(say("solo_left_fmt", node))
-        print(say("solo_back"))
-    return 0
-
-
 def main(argv):
-    if argv[:1] == ["goodbye"]:
-        return goodbye(argv[1:])
     if argv[:1] == ["render"]:
         return render(argv[1:])
-    if argv[:1] == ["click"] and len(argv) >= 3:
-        return click(argv[1], argv[2])
     if argv[:1] == ["fit"] and len(argv) >= 3:
         rec = read_record(Path(argv[2])) or {}
         kv = dict(a.split("=", 1) for a in argv[3:] if "=" in a)

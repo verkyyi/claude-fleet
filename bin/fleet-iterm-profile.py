@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """fleet-iterm-profile.py — the iTerm2 Dynamic Profile `fleet` (issue #1903,
 EPIC #1906 C10): the profile the client's window runs in on a Mac, whose ⌘ chords
-send the private codes the 看台 (conf/tmux-view.conf) and the old client
-(conf/tmux-shell.conf) catch.
+send the private codes the 看台 (conf/tmux-view.conf) catches.
 
-    fleet-iterm-profile.py write [--all]   write / refresh it (nothing when it is current)
+    fleet-iterm-profile.py write           write / refresh it (nothing when it is current)
     fleet-iterm-profile.py remove          delete it
     fleet-iterm-profile.py status          `installed` · `absent` · `no-iterm` (exit 0 / 1 / 2)
-    fleet-iterm-profile.py json [--all]    the profile it would write, on stdout
+    fleet-iterm-profile.py json            the profile it would write, on stdout
 
 Which ⌘ chords (issue #3185, EPIC #3178 C7): ONE by default — FLEET_KEY_PANEL
 (⌘P, the panel; `off` none) — plus every ⌘ chord the person names in
@@ -15,8 +14,9 @@ FLEET_KEYS_EXTRA (`next=cmd+down …`), both fleet.conf [client] (bin/fleet_keys
 reads them). Every other ⌘ key is the parent's — except, for ONE version (issue
 #3328, compat-1v), the ⌘ keys that went: ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K still send their
 old code, which the 看台 turns into the panel + a one-time 「已并进 ⌘P」
-(fleet_keys.FORWARD); the next batch gives them back to iTerm2. `--all` (the old client, `fleet --old`) writes every row of the table at its
-own chord, as before.
+(fleet_keys.FORWARD); the next batch gives them back to iTerm2. (The old
+client's `--all` — every row of the table at its own chord — went with that
+client, issue #3008.)
 
 It is ONE file, ~/Library/Application Support/iTerm2/DynamicProfiles/fleet.json
 (FLEET_ITERM_DIR overrides the directory — the selftests' seam). iTerm2 loads it
@@ -32,8 +32,8 @@ parent's). One more, not a table row
 area's line break, and the one Claude Code and Codex already read as one; a bare
 ↵ stays the carriage return that sends.
 
-bin/fleet-thin.py writes it at each start, bin/fleet-shell.sh (`--all`) at each
-of its starts and reloads (so the install line and every update leave it current) and switches the window into it only around its
+bin/fleet-thin.py writes it at each start (so the install line and every update
+leave it current) and switches the window into it only around its
 own attach — `ESC ] 1337 ; SetProfile=fleet` before, the profile it came from
 after — so outside the client iTerm2 behaves as it always did. Nothing happens
 off a Mac, or on a Mac with no iTerm2 (no ~/Library/Application Support/iTerm2):
@@ -110,15 +110,12 @@ def table():
     return rows
 
 
-def rows(all_rows=False):
+def rows():
     """[(iTerm2 key, code)] — the ⌘ chords this profile turns into codes. A new
     client (issue #3185, EPIC #3178 C7): the panel, FLEET_KEY_PANEL (⌘P unless the
     person moved it, none for `off`), plus each ⌘ chord of FLEET_KEYS_EXTRA — every
-    other ⌘ key stays the parent's, i.e. iTerm2's own. `all_rows` (the old client,
-    fleet-shell.sh): every row of the table at its own chord, as before."""
+    other ⌘ key stays the parent's, i.e. iTerm2's own."""
     t = table()
-    if all_rows:
-        return [(r["key"], r["code"]) for r in t]
     sys.path.insert(0, str(BIN))
     import fleet_keys
     codes = {r["action"]: r["code"] for r in t}
@@ -161,7 +158,7 @@ def parent_name(existing):
     return existing.get("Dynamic Profile Parent Name", "")
 
 
-def build(existing=None, all_rows=False):
+def build(existing=None):
     existing = existing or {}
     parent = parent_name(existing)
     profiles, default_guid = prefs()
@@ -175,7 +172,7 @@ def build(existing=None, all_rows=False):
                     continue  # a value JSON cannot hold (plist data): left to the parent
                 base[key] = val
             break
-    for key, code in rows(all_rows):
+    for key, code in rows():
         base[key] = {"Action": ACTION_ESCAPE, "Text": "[%s~" % code}
     base.update(TEXT_KEYS)
     profile = {"Name": NAME, "Guid": GUID, "Keyboard Map": base,
@@ -251,7 +248,7 @@ def current():
         return None
 
 
-def write(all_rows=False):
+def write():
     if os.environ.get("FLEET_ITERM_KEYS") == "0":
         return remove()
     if not has_iterm():
@@ -259,7 +256,7 @@ def write(all_rows=False):
     clipboard()
     old = current()
     old_profile = (old or {}).get("Profiles", [{}])[0] if old else {}
-    text = json.dumps(build(old_profile, all_rows), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    text = json.dumps(build(old_profile), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
     path = profile_path()
     try:
         if path.read_text() == text:
@@ -294,18 +291,17 @@ def status():
 
 def main(argv):
     cmd = argv[0] if argv else "status"
-    all_rows = "--all" in argv[1:]
     if cmd == "write":
-        return write(all_rows)
+        return write()
     if cmd == "remove":
         return remove()
     if cmd == "status":
         return status()
     if cmd == "json":
-        print(json.dumps(build((current() or {}).get("Profiles", [{}])[0], all_rows), indent=2,
+        print(json.dumps(build((current() or {}).get("Profiles", [{}])[0]), indent=2,
                          ensure_ascii=False, sort_keys=True))
         return 0
-    print("usage: fleet-iterm-profile.py write [--all]|remove|status|json [--all]", file=sys.stderr)
+    print("usage: fleet-iterm-profile.py write|remove|status|json", file=sys.stderr)
     return 2
 
 

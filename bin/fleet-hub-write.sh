@@ -37,7 +37,7 @@
 # WHO WRITES — the first that exists:
 #   1. FLEET_HUB_WRITE_CMD   a seam for tests: `bash -c "$FLEET_HUB_WRITE_CMD" fleet-hub-write
 #                            <tool> <json>` prints the operation record itself.
-#   1b. on a NODE (not the shell, FLEET_SHELL=1), this login's node token (issue
+#   1b. on a NODE, this login's node token (issue
 #                            #3106) — node.env's, else the credential proxy's broker
 #                            pair on a separated login (fleet_node_pair): POST
 #                            /v1/fleet/write {tool, args_json} with the bearer on
@@ -141,7 +141,7 @@ token_source() {
 # node_door → rc 0 when this login would write by its node token (no network:
 # the broker pair is minted only by node_pair, at send time).
 node_door() {
-  [ "${FLEET_SHELL:-}" != 1 ] && [ "${FLEET_HUB_WRITE_NODE_TOKEN:-1}" != 0 ] || return 1
+  [ "${FLEET_HUB_WRITE_NODE_TOKEN:-1}" != 0 ] || return 1
   local f="$_fcd/node.env"
   if [ -r "$f" ]; then grep -q '^CCQUOTA_TOKEN=.' "$f" 2>/dev/null; return; fi
   [ -f "$_fcd/credsep.json" ]
@@ -199,12 +199,6 @@ if [ "$TOOL" = operation_get ]; then
   case "$ARGS" in \{*) ;; *) ARGS=$(printf '{"operation_id":"%s"}' "$ARGS") ;; esac
 else
   case "$WRITE_TOOLS" in *" $TOOL "*) ;; *) note "'$TOOL' is not a hub write tool (see docs/dev/FLEET-HUB.md «Tools»)"; exit 2 ;; esac
-fi
-# A client in standby sends nothing (issue #1715; #1932): its lease is no longer
-# held (asked to leave past the limit, or disconnected) — Enter takes one first.
-if [ "${FLEET_SHELL:-}" = 1 ] && [ -f "${TMPDIR:-/tmp}/client.standby" ]; then
-  note "客户端在待机：这台已被请下线或断开，按回车重新连上后再操作 — nothing was sent"
-  exit 1
 fi
 command -v python3 >/dev/null 2>&1 || { note "needs python3"; exit 1; }
 

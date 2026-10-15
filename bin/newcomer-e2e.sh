@@ -22,22 +22,14 @@
 #                within seconds, the drill code confirms it, the certificate
 #                (0600, the drill's login as its principal), ~/.ssh/fleet-ssh-config
 #                and ONE Include block in ~/.ssh/config land
-#   4. fleet   — `fleet` with that certificate only: the hub picks the node,
-#                ssh is asked for it as the newcomer's login with the
-#                certificate (a PATH `ssh` stand-in: a fake node has no sshd);
-#                a second `fleet` asks for no scan; under the renew threshold
-#                it renews with the device key, no scan (the 12-hour roll)
-#   4b. home   — `fleet` ON the machine the hub picks, with no fleet of this
-#                login there (issue #2219): the right pane is the home page,
-#                never 「正在连接 <本机>」 / 「没有活着的 fleet 会话」
-#   4c. clock  — bin/fleet-onboard-clock.sh against this hub (issue #2267): the
-#                whole road timed in a sandbox — the /i/<invite> line, the
-#                browser page, the first HOME session on the node (its submit
-#                answered by the fake node, its agent a stand-in that drops
-#                keys while it mounts), the first key kept; all eight pits
-#   5. opening — the same person with no login yet and fleet.auto_assign on
-#                (a newcomer's first look, #2069): the right pane says
-#                正在为你开机器, never 入口没有在线的机器 (issue #2220)
+#   4. fleet   — `fleet` (the thin client, fleet-thin.py — the only one since
+#                issue #3008) with that certificate only: fleet-connect.py
+#                --argv asks the hub, which picks the node, and ssh is asked for
+#                its 看台 as the newcomer's login with the certificate (a PATH
+#                `ssh` stand-in: a fake node has no sshd); a second `fleet` asks
+#                for no scan; under the renew threshold it renews with the
+#                device key, no scan (the 12-hour roll)
+#   (the old client's home-page, clock and opening steps went with it, #3008)
 #   6. leave   — the person deleted (DELETE /v1/self, the drill's own
 #                teardown): `fleet login renew` says scan again (exit 3), and
 #                the list no longer carries them after `fleet users remove`
@@ -54,9 +46,6 @@
 # NEWCOMER_E2E_HOLD=<secs> (on red, keep everything up that long). Exit 0 = every step green; 1 = a step failed
 # (its name and the logs are printed); 2 = usage.
 set -uo pipefail
-# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
-# OLD client's road, kept until C11 deletes it — so it asks for it by name
-export FLEET_CLIENT=shell
 
 CCQ=''
 while [ $# -gt 0 ]; do
@@ -77,12 +66,10 @@ KEEP=0
 if [ -n "${NEWCOMER_E2E_WORK:-}" ]; then WORK=$NEWCOMER_E2E_WORK; KEEP=1; mkdir -p "$WORK" || exit 2
 else WORK=$(mktemp -d "${TMPDIR:-/tmp}/ncE2E.XXXXXX") || exit 2; fi
 WORK=$(cd "$WORK" && pwd -P)
-SESS="nce2e$$"
 VT="nce2e-viewer-$$-$RANDOM"        # the ADMIN's token — never in the newcomer's env
-REAL_TMUX=tmux
 START=$(date +%s)
 DEADLINE=${NEWCOMER_E2E_DEADLINE:-300}
-HUB_PID='' AGENT_PID='' GH_PID='' LOGIN_PID='' UPD_PID='' SC=''
+HUB_PID='' AGENT_PID='' GH_PID='' LOGIN_PID='' UPD_PID=''
 APPROVE=''                          # the drill's approve code (a credential: never printed)
 NEWBIE=octo-newbie                  # the GitHub name the admin adds
 NEWBIE_ID=424242
@@ -93,16 +80,9 @@ ok() { printf '   ✓ %s\n' "$1"; }
 scrub() { sed -E 's/fd_[a-z2-7]{20,}/fd_…/g; s/"(token|approve_code|certificate)":"[^"]*"/"\1":"…"/g'; }
 logs() {
   local f
-  for f in hub.log gh.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log clock.log; do
+  for f in hub.log gh.log agent.log install.log login.out fleet.err fleet2.err fleet3.err ssh.log thin.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f" | scrub
-  done
-  local s w
-  for s in "$SESS" "$SESS-stage"; do
-    for w in $("$REAL_TMUX" -L "$s" list-panes -a -F '#{pane_id}' 2>/dev/null); do
-      printf -- '--- pane %s on -L %s\n' "$w" "$s"
-      "$REAL_TMUX" -L "$s" capture-pane -p -t "$w" 2>/dev/null | grep -v '^$' | tail -n 15 | scrub
-    done
   done
 }
 die() {
@@ -123,19 +103,12 @@ waitfor() {
   done
   return 1
 }
-ts() { "$REAL_TMUX" -L "$SESS" "$@"; }
 cleanup() {
-  ts kill-server 2>/dev/null
-  "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-  pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
-  [ -n "$SC" ] && pkill -f "$SC/bin/" 2>/dev/null
   [ -n "$LOGIN_PID" ] && kill "$LOGIN_PID" 2>/dev/null
   [ -n "$AGENT_PID" ] && kill "$AGENT_PID" 2>/dev/null
   [ -n "$HUB_PID" ] && kill "$HUB_PID" 2>/dev/null
   [ -n "$GH_PID" ] && kill "$GH_PID" 2>/dev/null
   [ -n "$UPD_PID" ] && kill "$UPD_PID" 2>/dev/null
-  [ -f "$WORK/master.pid" ] && kill "$(cat "$WORK/master.pid")" 2>/dev/null
-  [ -n "$SC" ] && rm -rf "$SC"
   [ "$KEEP" = 1 ] || rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -293,15 +266,13 @@ FLEET="$CH/.local/bin/fleet"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 grep -qs '\.local/bin' "$CH/.zshrc" || die 'the install did not put ~/.local/bin on the PATH of a new zsh' "$(cat "$CH/.zshrc" 2>&1)"
 [ -n "$(ls -A "$CH/.ssh")" ] && die 'the install wrote into ~/.ssh before any login' "$(ls -la "$CH/.ssh")"
-REAL_TMUX=$(PATH="$CH/.local/bin:$CH/.local/share/claude-fleet-vendor/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed, fleet.conf names $HUB, ~/.ssh untouched"
 
 # The newcomer's environment: nothing of the admin's — no token, no viewer token.
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
-SC=$(mktemp -d /tmp/nce2e-c.XXXXXX) || die 'no short cache dir'
 nenv() {
   env -i PATH="$SHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/zsh TERM=xterm-256color LANG=zh_CN.UTF-8 \
-    PYTHONUNBUFFERED=1 FLEET_CLIENT=shell "$@"
+    PYTHONUNBUFFERED=1 "$@"
 }
 
 # =============================================================================
@@ -330,204 +301,43 @@ ok "certificate for [$princ] in ~/.ssh (0600), one Include, $(grep -c '^Host ' "
 
 # =============================================================================
 step 'fleet: the certificate alone opens the client on the node as drillnew'
-# ssh is the stand-in (a fake node has no sshd): everything up to the ssh argv is real.
+# ssh is the stand-in (a fake node has no sshd): everything up to the ssh argv is
+# real — fleet-connect.py --argv asks the hub with the certificate. It records the
+# command and ends like a detach (exit 0), so the client ends too.
 cat > "$SHIM/ssh" <<EOF
 #!/bin/bash
 for a in "\$@"; do case "\$a" in -G|-V|-Q) exec /usr/bin/ssh "\$@" ;; esac; done
 printf '%s\n' "\$*" >> "$WORK/ssh.log"
-op=''; ctl=''
-while [ \$# -gt 0 ]; do
-  case "\$1" in
-    -O) op=\$2; shift 2 ;;
-    -S) ctl=\$2; shift 2 ;;
-    -o) case "\$2" in ControlPath=*) ctl=\${2#ControlPath=} ;; esac; shift 2 ;;
-    -[bcDEeFIiJLlmpQRWw]) shift 2 ;;
-    -*) shift ;;
-    *) break ;;
-  esac
-done
-if [ -n "\$op" ]; then [ "\$op" = check ] && [ -S "\$ctl" ]; exit \$?; fi
-case "\$*" in
-  *"fleet-remote-view.sh attach --shell "*)
-    # the node's home page; once the node holds a HOME session (the clock
-    # step), it is that session's agent — the stand-in for the client's switch
-    # onto it over the serve channel, which fleet-remote-view's own selftests pin
-    [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
-    printf 'drill@node %% '
-    while [ ! -f "$WORK/node/state/home-op.json" ]; do sleep 0.2; done
-    exec python3 "$WORK/agent.py" ;;
-  *"fleet-remote-view.sh attach "*)
-    # the clock step (issue #2267): the session is an agent — its input line
-    # drawn after a mount, what arrives while it mounts dropped, as Claude's is
-    [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
-    exec python3 "$WORK/agent.py" ;;
-  *" attach "*|*attach*)
-    [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
-    echo \$! > "$WORK/master.pid"; wait ;;
-  *" watch "*) sleep 600 ;;
-esac
 exit 0
 EOF
 chmod +x "$SHIM/ssh"
 # The agent reports this computer's own hostname as the node's, so the client
 # must not take itself for that machine (it would run the node's side here).
 printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"; chmod +x "$SHIM/hostname"
-fenv() {
-  nenv FLEET_CLIENT=shell FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
-    FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
-}
+fenv() { nenv FLEET_THIN_NO_TTY_OK=1 FLEET_THIN_LOG="$WORK/thin.log" FLEET_ITERM_KEYS=0 "$@"; }
 before=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
-out=$(fenv "$FLEET" 2>"$WORK/fleet.err" </dev/null); rc=$?
+fenv "$FLEET" >"$WORK/fleet.out" 2>"$WORK/fleet.err" </dev/null; rc=$?
 [ "$rc" = 0 ] || die "fleet exited $rc" "$(tail -n 8 "$WORK/fleet.err")"
-[ "$out" = "$SESS" ] || die 'fleet did not print its session' "$out · $(tail -n 5 "$WORK/fleet.err")"
 grep -Eq '[A-Z]{4}-[A-Z]{4}' "$WORK/fleet.err" && die 'fleet asked for a scan with a fresh certificate' "$(cat "$WORK/fleet.err")"
-ts has-session -t "=$SESS" 2>/dev/null || die 'the client tmux server is not up'
-mkfifo "$WORK/client.fifo"
-"$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" <"$WORK/client.fifo" >/dev/null 2>&1 &
-exec 7>"$WORK/client.fifo"
-P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
-tp() { "$REAL_TMUX" -L "$P" "$@"; }
-w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
-remote=$(tp show-options -wqv -t "$w1" @remote)
-case "$remote" in "$NODE":*) ;; *) die "the right pane is not the node $NODE" "@remote=$remote · $(cat "$WORK/fleet.err")" ;; esac
-waitfor 20 grep -q -- '-l drillnew' "$WORK/ssh.log" || die 'ssh was never asked for the node as drillnew' "$(cat "$WORK/ssh.log" 2>/dev/null)"
+grep -q 'fleet-remote-view.sh attach --thin' "$WORK/ssh.log" || die 'the client never asked the node for its 看台' "$(cat "$WORK/ssh.log" 2>/dev/null)"
+grep -q -- '-l drillnew' "$WORK/ssh.log" || die 'ssh was never asked for the node as drillnew' "$(cat "$WORK/ssh.log" 2>/dev/null)"
 grep -q -- "CertificateFile=$CERT" "$WORK/ssh.log" || die 'ssh was not handed the certificate' "$(cat "$WORK/ssh.log")"
-ok "client up, right pane @remote=$remote, ssh as drillnew with the certificate"
+ok "the thin client asked $NODE for its 看台, as drillnew with the certificate"
 
 # =============================================================================
 step 'again: a second fleet asks for no scan; under the threshold it renews by key'
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-exec 7>&-
-out=$(fenv "$FLEET" 2>"$WORK/fleet2.err" </dev/null); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$SESS" ] || die "the second fleet exited $rc" "$(tail -n 8 "$WORK/fleet2.err")"
+fenv "$FLEET" >/dev/null 2>"$WORK/fleet2.err" </dev/null; rc=$?
+[ "$rc" = 0 ] || die "the second fleet exited $rc" "$(tail -n 8 "$WORK/fleet2.err")"
 grep -Eq '[A-Z]{4}-[A-Z]{4}' "$WORK/fleet2.err" && die 'the second fleet asked for a scan' "$(cat "$WORK/fleet2.err")"
 [ "$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')" = "$before" ] || die 'the second fleet replaced a fresh certificate'
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
 # 12 hours on: a certificate under FLEET_RENEW_BELOW_SECS renews with the device key
-out=$(fenv FLEET_RENEW_BELOW_SECS=99999999 "$FLEET" 2>"$WORK/fleet3.err" </dev/null); rc=$?
+fenv FLEET_RENEW_BELOW_SECS=99999999 "$FLEET" >/dev/null 2>"$WORK/fleet3.err" </dev/null; rc=$?
 [ "$rc" = 0 ] || die "fleet under the renew threshold exited $rc" "$(tail -n 8 "$WORK/fleet3.err")"
 grep -Eq '[A-Z]{4}-[A-Z]{4}' "$WORK/fleet3.err" && die 'renewal asked for a scan' "$(cat "$WORK/fleet3.err")"
 after=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
 [ "$after" != "$before" ] || die 'the certificate was not renewed under the threshold' "$(cat "$WORK/fleet3.err")"
 [ "$(grep -c '>>> fleet login' "$CH/.ssh/config")" = 1 ] || die 'renewal added a second Include' "$(cat "$CH/.ssh/config")"
 ok "no scan the second time; renewed by key (serial $before → $after)"
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-
-# =============================================================================
-step 'home: on the very machine the hub picks, with no fleet of theirs there'
-# The C8 drill (issue #2219): the newcomer's 「只看、只派」 client ran ON the
-# machine the hub knows them by. This login has no fleet here, so the right pane
-# is the home page — never 「正在连接 <本机>」 then 「没有活着的 fleet 会话」.
-# the last step's shell fully gone first: its right pane (`viewer`) starts the
-# stage again when the stage goes before it, and a stage left behind is reused
-pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-stage_gone() { ! "$REAL_TMUX" -L "$SESS-stage" has-session 2>/dev/null; }
-waitfor 5 stage_gone || die 'the last step left its stage running'
-printf '#!/bin/sh\necho %s\n' "$NODE" > "$SHIM/hostname"
-out=$(fenv "$FLEET" 2>"$WORK/fleet4.err" </dev/null); rc=$?
-printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"
-[ "$rc" = 0 ] && [ "$out" = "$SESS" ] || die "fleet on the picked machine exited $rc" "$(tail -n 8 "$WORK/fleet4.err")"
-P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
-w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
-remote=$(tp show-options -wqv -t "$w1" @remote)
-[ "$remote" = '-:' ] || die "the right pane connects to this computer ($NODE) with no fleet here" "@remote=$remote"
-homepg() { tp capture-pane -p -t "$w1" 2>/dev/null | grep -q '没有你的 fleet 会话'; }
-waitfor 10 homepg || die 'the right pane is not the home page' "$(tp capture-pane -p -t "$w1" 2>/dev/null | grep -v '^$'
-  tp list-windows -t "=$P" -F '#{window_id} @remote=#{@remote} #{pane_start_command}' 2>/dev/null)"
-pg=$(tp capture-pane -p -t "$w1" 2>/dev/null)
-case "$pg" in *正在连接*|*没有活着的*) die 'the right pane still tries this computer' "$pg" ;; esac
-ok "@remote=-: · the home page, no 正在连接 $NODE, no 没有活着的 fleet 会话"
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-
-# =============================================================================
-step 'clock: the 60-second drill against this hub (fleet-onboard-clock.sh, issue #2267)'
-# The whole road timed in one sandbox: the pasted /i/<invite> line, the browser
-# page (a stand-in opener + the drill code after the hand), the first HOME
-# session placed on the node, its input line, the first key it keeps. The fake
-# agent (agent.py, run by the ssh stand-in on an attach) drops what arrives
-# while it mounts, as Claude does. Gated on the eight pits and the first key
-# (--gate pits): the seconds and the words on screen are a real hub's to judge
-# (a runner is no newcomer's computer) — printed here, not held.
-cat > "$WORK/agent.py" <<'EOF2'
-import os, select, sys, termios, time, tty
-fd = 0
-time.sleep(1.0)                     # mounting: whatever arrives now is lost
-try: tty.setraw(fd)
-except termios.error: pass
-while select.select([fd], [], [], 0)[0]: os.read(fd, 1024)
-buf = ""
-def draw():
-    sys.stdout.write("\033[2J\033[H╭─ claude ─╮\r\n❯ " + buf); sys.stdout.flush()
-draw()
-while True:
-    r = os.read(fd, 64)
-    if not r: break
-    for ch in r.decode("utf-8", "replace"):
-        if ch in ("\x7f", "\b"): buf = buf[:-1]
-        elif ch in ("\x03", "\x04"): sys.exit(0)
-        elif ch >= " ": buf += ch
-    draw()
-EOF2
-D=$(aenv bash "$BIN/fleet-drill.sh" invite --host "$NODE" --login drillclk --ttl 30m --json 2>"$WORK/drill.err") \
-  || die 'fleet drill invite (the clock person) failed' "$(cat "$WORK/drill.err")"
-CAPPROVE=$(printf '%s' "$D" | jget approve_code 2>/dev/null)
-# The hub places a HOME session only on a fleet the person's own login runs
-# (fleetScope), and the fake node's fleet runs as THIS login (an agent reports
-# its own user): the drill person's login on the node becomes it.
-OSU=$(id -un)
-python3 -c 'import sqlite3, sys
-c = sqlite3.connect(sys.argv[1], timeout=10)
-n = c.execute("UPDATE fleet_accounts SET login = ? WHERE principal_id = ?", (sys.argv[3], sys.argv[2])).rowcount
-n *= c.execute("UPDATE fleet_principals SET login = ? WHERE principal_id = ?", (sys.argv[3], sys.argv[2])).rowcount
-c.commit()
-sys.exit(0 if n else 1)' "$WORK/hub.db" "$(printf '%s' "$D" | jget person_id)" "$OSU" || die "the clock person's login row was not on the hub's db"
-CINV=$(api -X POST -H 'Content-Type: application/json' -d '{}' "$HUB/v1/fleet/invites" | jget code 2>/dev/null)
-[ -n "$CAPPROVE" ] && [ -n "$CINV" ] || die 'no approve code / invite for the clock'
-# the earlier steps' clients stop here: a session is the clock's own
-pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-KEEPARG=''; [ "$KEEP" = 1 ] && KEEPARG=--keep
-# the drill's own terminal needs a tmux: the one the install line brought (a runner may have none)
-PATH="$(dirname "$REAL_TMUX"):$PATH" FLEET_DRILL_INVITE="$CAPPROVE" FLEET_DRILL_INSTALL_INVITE="$CINV" FLEET_CLOCK_SSH_SHIM="$SHIM" \
-  bash "$BIN/fleet-onboard-clock.sh" --hub "$HUB" --login "$OSU" --hand 1 --gate pits \
-    --out "$WORK/clock" ${KEEPARG:+"$KEEPARG"} >"$WORK/clock.log" 2>&1 \
-  || die 'the clock: a pit failed or no first key' "$(cat "$WORK/clock.log"; grep -v '^ *$' "$WORK"/clock/screens/run1-last.txt 2>/dev/null | tail -n 15
-       echo '--- home-first.log'; cat "$WORK"/clock/run1-home-first.log 2>/dev/null)"
-sed -n '/^| 粘贴/p' "$WORK/clock/report.md"
-ok "the 60-second drill: first key at $(sed -n 's/^| 粘贴[^|]*| \([^|]*\) |.*/\1/p' "$WORK/clock/report.md"), no pit"
-
-# =============================================================================
-step 'opening: no login yet — the right pane says 正在为你开机器, never 没有在线的机器'
-# A newcomer has no login anywhere until fleet.auto_assign opens one (#2069). A
-# drill person is minted WITH its own login (CreateDrill's adopt row), so the
-# row is taken off the hub's db here: from now on it is a person the hub has
-# nothing for. The fake node is no admin node, so the create the hub queues
-# stays pending — 「opening」 for as long as this step looks (issue #2220: the
-# client's right pane said 「入口没有在线的机器」 all the same).
-api -X PUT -H 'Content-Type: application/json' -d "{\"key\":\"fleet.auto_assign\",\"value\":\"$NODE\"}" \
-    "$HUB/v1/fleet/settings" >"$WORK/aa.out" 2>&1 || die 'the operator could not set fleet.auto_assign' "$(cat "$WORK/aa.out")"
-python3 -c 'import sqlite3, sys
-c = sqlite3.connect(sys.argv[1], timeout=10)
-n = c.execute("DELETE FROM fleet_accounts WHERE principal_id = ?", (sys.argv[2],)).rowcount
-c.commit()
-sys.exit(0 if n else 1)' "$WORK/hub.db" "$DPID" || die "the drill person's login row was not on the hub's db"
-out=$(fenv "$FLEET" 2>"$WORK/fleet4.err" </dev/null); rc=$?
-[ "$rc" = 0 ] && [ "$out" = "$SESS" ] || die "fleet with no login yet exited $rc" "$(tail -n 8 "$WORK/fleet4.err")"
-mkfifo "$WORK/client4.fifo"
-"$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" <"$WORK/client4.fifo" >/dev/null 2>&1 &
-exec 7>"$WORK/client4.fifo"
-P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
-right() { "$REAL_TMUX" -L "$P" capture-pane -p -t "=$P:" 2>/dev/null; }
-opening() { right | grep -q '正在为你开机器'; }
-waitfor 30 opening || die 'the right pane never said 正在为你开机器 for a person whose login is being opened' \
-  "$(right | sed '/^ *$/d' | head -n 8) · $(grep -a '#account' "$SC"/*/global/hub_repos "$SC"/tmp/.claude-dash/global/hub_repos 2>/dev/null | tr '\037' ' ')"
-right | grep -q '没有在线的机器' && die 'the right pane says 没有在线的机器 beside 正在为你开机器' "$(right | sed '/^ *$/d' | head -n 8)"
-ok "right pane: $(right | grep -o '正在为你开机器[^。]*' | head -n 1)"
-ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-exec 7>&-
-api -X PUT -H 'Content-Type: application/json' -d '{"key":"fleet.auto_assign","value":"none"}' \
-    "$HUB/v1/fleet/settings" >"$WORK/aa.out" 2>&1 || die 'fleet.auto_assign could not be set back to none' "$(cat "$WORK/aa.out")"
 
 # =============================================================================
 step 'leave: the person removed — renew says scan again, the list forgets them'

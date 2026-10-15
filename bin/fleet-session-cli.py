@@ -51,16 +51,13 @@ the candidates on stderr and exit 4, never the first of them.
 were (fleet-open.sh / fleet-show.sh): an argument that is a URL, a `:port` or an
 existing file goes there, unchanged.
 
-The rows are the client's own — `tmux-dashboard-rows.sh --rows`, every
-folded row too (fleet-quickopen.py `full_rows`), run with the client server's
-environment, so the client must be running (it keeps running after ⌃D / prefix
-d). Started outside it (no FLEET_SHELL), this re-runs itself through
-`fleet-shell.sh cli`, which imports that environment. Every write is a hub write
-by the session's worker_id (fleet-hub-write.sh, the one write client): this
+The rows are a fleet machine's own — `tmux-dashboard-rows.sh --rows`, every
+folded row too (fleet-quickopen.py `full_rows`). Every write is a hub write by
+the session's worker_id (fleet-hub-write.sh, the one write client): this
 computer never acts on a window it does not have.
 
-WITH NO CLIENT TMUX (issue #3004, EPIC #2999 C7 — the thin client, `fleet
---thin`, has none): the same verbs run ON THE HOME MACHINE — `fleet-thin.py
+THE CLIENT HAS NO TMUX (issue #3004, EPIC #2999 C7 — the thin client): the same
+verbs run ON THE HOME MACHINE — `fleet-thin.py
 --run -- python3 <bin>/fleet-session-cli.py --home <verb> …`, one ssh over the
 line a connection takes. `--home` (also what a person on a fleet machine gets
 when no client runs there) reads this machine's fleet: its session (the first
@@ -70,9 +67,8 @@ fresh login whose hub loop never ran) or older than FLEET_HUB_SESSIONS_STALE is
 refreshed once first (issue #3478: the machine the hub picked to enter is not
 always where the sessions are), and a silent hub is said. `open` there switches the
 newest thin 看台 with a client attached (fleet_view.go — the one switch road).
-The road, in order: FLEET_SHELL=1 → here as before; the old client running (and
-FLEET_CLIENT is not `thin`) → through it, byte for byte; a fleet live on this
-machine → --home here; else → the home over --run.
+The road, in order: a fleet live on this machine → --home here; else → the home
+over --run (the old client's own road went with it, issue #3008).
 
 Exit: 0 done · 1 the action failed, or no client running · 2 usage · 3 no such
 session · 4 more than one session matches.
@@ -138,7 +134,7 @@ def rows():
     if HOME[0]:
         hub_freshen()
     got = qo.full_rows(os.environ.get("FLEET_SESSION", ""), timeout=15)
-    return own_ids(own_node(got if got is not None else qo.read_rows()))
+    return own_ids(own_node(got or []))
 
 
 def hub_ok_age():
@@ -658,11 +654,8 @@ def cmd_open(args):
     qo = lib("fleet_quickopen", "fleet-quickopen.py")
     if HOME[0]:
         return home_open(qo, row)
-    if not qo.hand(qo.list_pane(), "jump=" + row["key"]):
-        say("客户端的列表不在屏幕上，切不过去（先敲 fleet 打开客户端）")
-        return 1
-    print("→ %s" % row["name"])
-    return 0
+    say("这里没有客户端，切不过去（先敲 fleet 打开客户端）")
+    return 1
 
 
 def cmd_rename(args):
@@ -853,23 +846,11 @@ def fleet_here():
     return sh_lib("fleet_sockets 2>/dev/null")
 
 
-def client_running():
-    if os.environ.get("FLEET_CLIENT") == "thin" or not (BIN / "fleet-shell.sh").exists():
-        return False
-    try:
-        return subprocess.run(["bash", str(BIN / "fleet-shell.sh"), "running"], stdin=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
 def road():
-    """client (the old one's environment) · here (--home on this machine) · home (over --run)."""
+    """here (--home on this machine) · home (over --run)."""
     seam = os.environ.get("FLEET_SESSION_CLI_ROAD")
-    if seam in ("client", "here", "home"):
+    if seam in ("here", "home"):
         return seam
-    if client_running():
-        return "client"
     return "here" if fleet_here() else "home"
 
 
@@ -1075,18 +1056,14 @@ def main(argv):
     old = passthrough(verb, args)
     if old:
         os.execv(str(BIN / old), [str(BIN / old)] + args)
-    # outside the client's environment: through fleet-shell.sh, which imports it
-    # and runs this again (FLEET_SHELL=1 then) — the seam reads a file instead
-    # (`ls --services` reads a cache file, never the client: no re-run)
+    # the seam reads a file instead (`ls --services` reads a cache file: no road)
     if home:
         if not home_setup(asked=True):
             return 1
-    elif os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS") \
+    elif not os.environ.get("FLEET_SESSION_CLI_ROWS") \
             and not (verb == "ls" and "--services" in args) and verb not in ("service", "task"):
-        # the old client, byte for byte; else this machine's fleet; else the home (#3004)
+        # this machine's fleet; else the home (#3004)
         how = road()
-        if how == "client":
-            os.execv("/bin/bash", ["bash", str(BIN / "fleet-shell.sh"), "cli", verb] + args)
         if how == "home":
             return over_home(verb, args)
         if not home_setup():

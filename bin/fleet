@@ -3,26 +3,19 @@
 # person types on their own computer (claude-fleet#1413, #1470).
 #
 #   fleet                       sign in if needed (QR once; the device renews
-#                               after that), let the hub pick your machine and
-#                               open the CLIENT (#1484): the hub's list on the
-#                               left, its bar at the bottom, that machine's
-#                               session on the right
-#   fleet mac-a                    the same, onto a machine you name
-#   fleet --thin [<session>]    the THIN client (#3003, EPIC #2999): one small
-#                               loop and one ssh to your home machine — no tmux
-#                               here. Plain `fleet` IS it since the drill
-#                               (#3007, C10); FLEET_CLIENT=shell keeps the old
-#                               client for plain `fleet`
-#   fleet --old                 the OLD client, once (#3007): the way back while
-#                               it is still here — every use is one line in
-#                               ~/.cache/claude-fleet/old-client.log
-#   fleet shell [mac-a]            the client, by its script's name (fleet-shell.sh)
-#   fleet quit                  退出 fleet (#2349): the client's every process on
-#                               this computer goes — the list, the hub loop, the
-#                               connections, its lease; the sessions keep running
-#                               on their machines. (prefix d / closing the window
-#                               only puts it in the background.)
-#   fleet status                whether the client runs here (in the background)
+#                               after that) and open the CLIENT (#3003, EPIC
+#                               #2999): one small loop and one ssh to your home
+#                               machine, which draws the list, the bar and the
+#                               session (fleet-thin.py — no tmux here); ⌘Q or
+#                               closing the terminal ends it
+#   fleet --thin [<session>]    the same, opening on that session first
+#   fleet mac-a                 the same, with mac-a as your home machine
+#   fleet quit                  what the OLD client (deleted in #3008) may still
+#                               run in the background here goes — its servers,
+#                               loops and lease (fleet-client-retire.sh); the
+#                               sessions keep running on their machines
+#   fleet status                whether anything of fleet runs here in the
+#                               background, then who is signed in and where
 #   fleet login                 scan for a 12-hour connection certificate
 #   fleet login renew           renew it with this device's key, no scan
 #                               — the login also registers this computer as an
@@ -51,7 +44,7 @@
 #   fleet role set|unset|rule-set|rule-unset|undo …
 #                               change your own layer on the hub, one item at a
 #                               time: 改前 → 改后 first, --yes writes (#2785)
-#   fleet --test-identity [mac-a]  the client as the TEST identity (#1931): its
+#   fleet --test-identity …     the client as the TEST identity (#1931): its
 #                               own lease beside yours — takes nothing over,
 #                               never where you are; the default inside a
 #                               session (FLEET_CLIENT_IDENTITY=test)
@@ -119,20 +112,20 @@
 #                               for, add or revoke a key, move your home
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
-# into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
-# `fleet` says how to get it and exits non-zero, and a client that cannot start
-# says why and exits non-zero. A MANAGED machine (/var/db/fleet-node/machine.env,
-# issue #2702) is no one's resident client — nothing opens at an ssh login — but
-# a `fleet` typed there opens the client ON THE MACHINE for this ssh alone (issue
-# #2720): see node_hosted below.
+# into a machine's own list. It needs a terminal; without one `fleet` says so
+# and exits non-zero. The old two-pane client (fleet-shell.sh, `fleet --old`,
+# FLEET_CLIENT=shell) is gone (issue #3008): every road here opens fleet-thin.py.
+# A MANAGED machine (/var/db/fleet-node/machine.env, issue #2702) is no one's
+# resident client — nothing opens at an ssh login — but a `fleet` typed there
+# opens the client ON THE MACHINE for this ssh alone (issues #2720, #3006): see
+# node_hosted below.
 #
 # Each command is its own script beside this one, `fleet-<command>.py` or
 # `fleet-<command>.sh`, so adding one is adding a file, not editing here. A
 # first word that is not a command is a machine name.
 here=$(cd "$(dirname "$0")" && pwd -P)
 # tmux's static build the install line put here when this computer had no
-# tmux (#2260) comes first, for `fleet` and everything it runs — one tmux for
-# the client's server, whatever else is installed later
+# tmux (#2260) comes first, for `fleet` and everything it runs
 _fv="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin"
 if [ -x "$_fv/tmux" ]; then case ":$PATH:" in *":$_fv:"*) ;; *) PATH="$_fv:$PATH"; export PATH ;; esac; fi
 unset _fv
@@ -146,25 +139,19 @@ unset _fp
 # phone's Termius, someone else's computer, an ssh-only place) may still TYPE
 # `fleet` there (issue #2720): the client on the machine — the SAME code as on a
 # device, taken from the machine's runtime (`current/`: no mirror copied under
-# ~/.cache, no update path of its own, no LaunchAgent), its cache a temp dir,
-# alive for this ssh only: `fleet quit`, a detach or the ssh going takes every
-# process with it (fleet-shell.sh, FLEET_NODE_HOSTED=1). Its where says
-# via=node-hosted (show / open hand a path or a link). Set for every command
-# here, so `fleet quit` / `fleet status` find it. A session's test of the client
-# (FLEET_CLIENT_IDENTITY=test) and FLEET_NODE_CLIENT=1 (the operator's hatch — a
-# client from before #2702 still running here) keep the device client's road.
-# Its tmux servers are `-L fleet-node-client[-stage]` (issue #2904), never the
-# resident client's `fleet-shell`: one of those left behind on this login was
-# taken over, and its stale screen read as this client's.
-SHELL_BIN=$here
+# ~/.cache, no update path of its own, no LaunchAgent), its logs in a temp dir,
+# `fleet-thin.py --local`: this machine is home, no hub asked, no ssh back to
+# itself (issue #3006). Its where says via=node-hosted (show / open hand a path or
+# a link). A session's test of the client (FLEET_CLIENT_IDENTITY=test) and
+# FLEET_NODE_CLIENT=1 (the operator's hatch) keep the device client's road.
+THIN_BIN=$here
 if [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] \
    && [ "${FLEET_CLIENT_IDENTITY:-}" != test ] && [ "${FLEET_NODE_CLIENT:-0}" != 1 ]; then
   FLEET_NODE_HOSTED=1
   FLEET_SHELL_CACHE=${FLEET_NODE_HOSTED_CACHE:-${TMPDIR:-/tmp}/fleet-node-client-$(id -u)}
-  FLEET_SHELL_SESSION=${FLEET_NODE_HOSTED_SESSION:-fleet-node-client}
-  export FLEET_NODE_HOSTED FLEET_SHELL_CACHE FLEET_SHELL_SESSION
+  export FLEET_NODE_HOSTED FLEET_SHELL_CACHE
   _rt=${FLEET_NODE_RUNTIME:-/Library/Application Support/claude-fleet/current}
-  [ -f "$_rt/bin/fleet-shell.sh" ] && SHELL_BIN=$(cd "$_rt/bin" && pwd)
+  [ -f "$_rt/bin/fleet-thin.py" ] && THIN_BIN=$(cd "$_rt/bin" && pwd)
   unset _rt
 fi
 # managed — the one line a client opened on a managed machine says first
@@ -183,82 +170,27 @@ managed() {
   fi
   # a resident client from before #2702 still here: how to clear it
   _sc="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell"
-  if [ -d "$_sc" ] || tmux -L fleet-shell has-session -t =fleet-shell 2>/dev/null; then
+  if [ -d "$_sc/bin" ] || tmux -L fleet-shell has-session -t =fleet-shell 2>/dev/null; then
     echo "fleet · 这台上还留着旧的常驻客户端（${_sc}）：不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
   fi
   unset _me _sc _hub
 }
-# client — the client, or one line on why it cannot open here and a non-zero exit
+# client [fleet-thin.py's args] — the client (fleet-thin.py, issue #3003), which
+# reconnects, re-homes and picks up a new version by itself — the same update
+# check first, once — or one line on why it cannot open here and a non-zero exit
 client() {
   managed
+  # FLEET_CLIENT=shell chose the old client (issue #3007); it is gone, so it is
+  # said, never obeyed — fleet-conf.sh migrate comments the line out (#3008)
+  [ "${FLEET_CLIENT:-}" = shell ] && echo 'fleet · FLEET_CLIENT=shell 选的旧客户端已删除（#3008）；打开的是客户端。' >&2
+  if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+    exec python3 "$THIN_BIN/fleet-thin.py" --local "$@"
+  fi
   # keep up with the hub (issue #1722): an installed client asks it, at most
   # hourly, for a newer client and the team's defaults; 3 = files switched,
   # so the new `fleet` opens instead (once — FLEET_CLIENT_UPDATED). The client
   # on a managed machine moves with the machine's runtime instead (#2720)
-  if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ "${FLEET_NODE_HOSTED:-0}" != 1 ] && [ -x "$here/fleet-client-update.sh" ]; then
-    "$here/fleet-client-update.sh" start
-    if [ $? -eq 3 ]; then
-      FLEET_CLIENT_UPDATED=1; export FLEET_CLIENT_UPDATED
-      exec "$here/fleet" "$@"
-    fi
-  fi
-  if ! command -v tmux >/dev/null 2>&1; then
-    echo 'fleet · 客户端要 tmux：macOS `brew install tmux`，Debian/Ubuntu `sudo apt install tmux`（安装行 curl -fsSL <入口>/install | sh 会顺手装上），装好再敲 fleet。' >&2
-    exit 1
-  fi
-  v=$(tmux -V 2>/dev/null); v=${v#tmux }; maj=${v%%.*}; min=${v#*.}; min=${min%%[!0-9]*}
-  case $maj in ''|*[!0-9]*) maj=0 ;; esac
-  case $min in ''|*[!0-9]*) min=0 ;; esac
-  if [ "$maj" -lt 3 ] || { [ "$maj" -eq 3 ] && [ "$min" -lt 2 ]; }; then
-    echo "fleet · 客户端要 tmux ≥ 3.2，这里是 ${v:-?}：macOS \`brew upgrade tmux\`，Debian/Ubuntu 装新版 tmux 后再敲 fleet。" >&2
-    exit 1
-  fi
-  # a tmux client needs a terminal (the selftest seam FLEET_SHELL_NO_ATTACH=1
-  # starts the server without attaching, so it needs none)
-  if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
-    echo 'fleet · 客户端要在终端里运行（这里是管道或脚本）；调试选路用 fleet connect <机器> --print。' >&2
-    exit 2
-  fi
-  exec "$SHELL_BIN/fleet-shell.sh" "$@"
-}
-# a session's test or drill connects as the test identity (#1931): the flag
-# travels as FLEET_CLIENT_IDENTITY, which fleet-client-lease.py reads
-if [ "${1-}" = --test-identity ]; then
-  FLEET_CLIENT_IDENTITY=test; export FLEET_CLIENT_IDENTITY
-  shift
-fi
-# the thin client (issue #3003): fleet-thin.py, which reconnects, re-homes and
-# picks up a new version by itself — the same update check first, once.
-# Over ssh (issue #3006, EPIC #2999 C9) plain `fleet` IS the thin loop: a phone's
-# Termius / an iPad's Blink ssh-ing into a MacBook or a machine runs the same one
-# road as the Mac — on a managed machine with `--local` (home is this machine: no
-# hub asked, no ssh back to itself), elsewhere the hub's pick, which answers
-# `local` too when it is this machine and login. FLEET_CLIENT=shell keeps the old
-# client there (until the old client goes, C11).
-# Since the drill (issue #3007, EPIC #2999 C10) plain `fleet` is the thin loop
-# everywhere, not only over ssh; `fleet --old` is the way back, one line in
-# old-client.log each time (C11 reads it before it deletes the old client).
-if [ "${1-}" = --old ]; then
-  shift
-  _ol="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet"
-  mkdir -p "$_ol" 2>/dev/null \
-    && printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(id -un)" "${SSH_CONNECTION:+ssh}${SSH_CONNECTION:-local}" "$*" \
-         >> "$_ol/old-client.log" 2>/dev/null
-  unset _ol
-  FLEET_CLIENT=shell; export FLEET_CLIENT
-  client "$@"
-fi
-if [ $# -eq 0 ] && [ -z "${FLEET_CLIENT:-}" ]; then
-  FLEET_CLIENT=thin
-fi
-if [ "${1-}" = --thin ] || { [ $# -eq 0 ] && [ "${FLEET_CLIENT:-}" = thin ]; }; then
-  [ "${1-}" = --thin ] && shift
-  managed
-  if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
-    _tb=$SHELL_BIN; [ -f "$_tb/fleet-thin.py" ] || _tb=$here
-    exec python3 "$_tb/fleet-thin.py" --local "$@"
-  fi
-  if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ "${FLEET_NODE_HOSTED:-0}" != 1 ] && [ -x "$here/fleet-client-update.sh" ]; then
+  if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ -x "$here/fleet-client-update.sh" ]; then
     "$here/fleet-client-update.sh" start
     if [ $? -eq 3 ]; then
       FLEET_CLIENT_UPDATED=1; export FLEET_CLIENT_UPDATED
@@ -266,14 +198,28 @@ if [ "${1-}" = --thin ] || { [ $# -eq 0 ] && [ "${FLEET_CLIENT:-}" = thin ]; }; 
     fi
   fi
   exec python3 "$here/fleet-thin.py" "$@"
+}
+# a session's test or drill connects as the test identity (#1931): the flag
+# travels as FLEET_CLIENT_IDENTITY, which fleet-client-lease.py reads
+if [ "${1-}" = --test-identity ]; then
+  FLEET_CLIENT_IDENTITY=test; export FLEET_CLIENT_IDENTITY
+  shift
 fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,116p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n "2,$(awk '/^here=/ { print NR - 1; exit }' "$0")p" "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
+  --thin)
+    shift
+    client "$@" ;;
+  # the old client's way back (issue #3007) went with it (#3008): said once, then the client
+  --old)
+    shift
+    echo 'fleet · 旧客户端已删除（#3008），fleet --old 不再有；打开的是客户端。' >&2
+    client "$@" ;;
   -*)
     echo "fleet · 不认识的选项 ${cmd}；选路调试用 fleet connect $* （fleet --help）" >&2
     exit 2 ;;
@@ -301,13 +247,6 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     if [ "$(bash "$here/fleet-conf.sh" host 2>/dev/null)" = 1 ]; then w='基础 · 承载'; else w='基础 · 承载 未开（fleet host on）'; fi
     printf '  PASS  能力     %s\n' "$w"
   fi
-  # notify (issue #2759): a click lands on the session only through
-  # terminal-notifier — said, never installed for you; never a non-zero exit
-  if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -f "$here/fleet-ui-lang.sh" ]; then
-    if [ "${FLEET_NOTIFY:-1}" = 0 ]; then printf '  PASS  %-8s %s\n' notify "$(sh "$here/fleet-ui-lang.sh" t notify_doctor_off)"
-    elif command -v terminal-notifier >/dev/null 2>&1; then printf '  PASS  %-8s %s\n' notify "$(sh "$here/fleet-ui-lang.sh" t notify_doctor_tn)"
-    else printf '  WARN  %-8s %s\n' notify "$(sh "$here/fleet-ui-lang.sh" t notify_doctor_no_tn)"; fi
-  fi
   # cert (issue #2457): the certificate's principals, validity, and whether the hub accepts it
   if [ -f "$here/fleet-connect.py" ] && r=$(python3 "$here/fleet-connect.py" --cert-check 2>/dev/null) && [ -n "$r" ]; then
     tab=$(printf '\t')
@@ -320,13 +259,11 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" tls "${r#*"$tab"}"
     case $r in FAIL*) rc=1 ;; esac
   fi
-  # stage (issue #2987): the client's proxy windows — a control socket gone, a warm
-  # master of another login, a stray `run` loop: what makes a switch a reconnect
-  if [ -f "$here/fleet-remote-view.sh" ] && command -v tmux >/dev/null 2>&1 \
-     && r=$(bash "$here/fleet-remote-view.sh" stage-health 2>/dev/null; :) && [ -n "$r" ]; then
-    tab=$(printf '\t')
-    printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" stage "${r#*"$tab"}"
-    case $r in PASS*) ;; *) rc=1 ;; esac
+  # old client (issue #3008): what the deleted two-pane client may still run in the
+  # background here — `fleet quit` stops it
+  if [ -f "$here/fleet-client-retire.sh" ] && bash "$here/fleet-client-retire.sh" running 2>/dev/null; then
+    printf '  WARN  %-8s %s\n' old "$(sh "$here/fleet-ui-lang.sh" t retire_left)"
+    rc=1
   fi
   if [ -f "$here/fleet-agent-bundle.py" ]; then
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
@@ -367,18 +304,24 @@ case $cmd in
       fi ;;
     esac
     exec "$here/fleet-home-session.sh" "$@" ;;
+  # the old client's own word (fleet-shell.sh, gone with #3008): the client
   shell)
-    managed
     shift
-    exec "$SHELL_BIN/fleet-shell.sh" "$@" ;;
-  # 退出 fleet / is it running (issue #2349): the client's own script, its modes
+    client ${1:+--home "$1"} ;;
+  # what the old client left running in the background (issue #3008); the
+  # client itself lives in its terminal — ⌘Q or closing it ends it
   quit)
     shift
-    exec bash "$SHELL_BIN/fleet-shell.sh" quit "$@" ;;
+    exec bash "$here/fleet-client-retire.sh" stop "$@" ;;
   status)
-    # whether the client runs, then who is signed in and where (issue #2577)
-    bash "$SHELL_BIN/fleet-shell.sh" running --say; rc=$?
-    bash "$here/fleet-client-badge.sh" --who
+    # anything of fleet in the background, then who is signed in and where (#2577)
+    if bash "$here/fleet-client-retire.sh" running; then
+      rc=0; sh "$here/fleet-ui-lang.sh" t retire_left
+    else
+      rc=1; sh "$here/fleet-ui-lang.sh" t retire_none
+    fi
+    echo
+    bash "$here/fleet-client-who.sh"
     exit $rc ;;
   # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
@@ -403,9 +346,9 @@ for ext in py sh; do
     exec "$here/fleet-$cmd.$ext" "$@"
   fi
 done
-# a word that is no command = a machine → the client, always
+# a word that is no command = a machine → the client, with it as home, always
 if [ $# -gt 1 ]; then
   echo "fleet · fleet $1 只开客户端；选路调试用 fleet connect $* （fleet --help）" >&2
   exit 2
 fi
-client "$1"
+client --home "$1"

@@ -15,24 +15,20 @@
 # It is a TASK WINDOW of this machine (issue #1475): the local sidebar treats a
 # window with `@remote` like an issue worker's, so the list stays on the left and
 # the other machine's pane is on the right — never the whole window gone remote,
-# never two lists. `prefix h` / `prefix q` (conf/tmux-shell.conf: last-window)
-# return to the machine you were on; ↑↓ in the list do too. `back` is kept for a
-# direct attach; the node binds no key to it since issue #1714.
+# never two lists. `back` is kept for a direct attach; the node binds no key to
+# it since issue #1714.
 #
 #   open <worker_id>        (dash Enter, in a fleet pane) — open the proxy window
 #                           for the row's machine, or retarget + select the one
-#                           already open: ONE proxy window per machine (in the
-#                           shell, on its STAGE server, FLEET_SHELL_STAGE —
-#                           issue #1759), because
+#                           already open: ONE proxy window per machine, because
 #                           it is a client of that machine's one fleet session
 #                           (one fleet per login). `--node <m> [--name <n>]`
 #                           (issue #2236): the machine + name of a session just
 #                           opened, which the sidebar's cache does not carry yet.
-#   run [--shell] <node> <worker_id>  the proxy pane's program: connect, reconnect,
-#                           report (`--shell` is passed through to `attach`). A
-#                           <worker_id> of `-` is the machine itself: its fleet
-#                           session as it stands, no window selected (the shell's
-#                           first window, issue #1484). The pane's window carries
+#   run <node> <worker_id>  the proxy pane's program: connect, reconnect, report.
+#                           A <worker_id> of `-` is the machine itself: its fleet
+#                           session as it stands, no window selected (issue
+#                           #1484). The pane's window carries
 #                           `@remote_ctl` — the ssh ControlPath of its connection —
 #                           so `open` can retarget it without reconnecting.
 #   attach [--shell] <worker_id> [<view>]   (runs ON <node>, over ssh — or on the
@@ -40,7 +36,9 @@
 #                           the worker's window and attach to its fleet session
 #                           (`-`: attach the login's fleet session, select nothing).
 #                           `--shell` registers this client as a SHELL client
-#                           (C5's `fleet` shell, issue #1485); a <view> id
+#                           (the old client's, issue #1485 — kept one version
+#                           for an old client still out there, compat-1v:
+#                           下一批删, issue #3008); a <view> id
 #                           registers it as a proxy VIEW with a fleet-open spool.
 #                           A registered client attaches to a VIEW SESSION of its
 #                           own (issue #1489, below), a plain one to the fleet's.
@@ -75,9 +73,9 @@
 #                           attach reaps first.
 #   sessions                (runs ON <node>, over the same ssh connection; issue
 #                           #1488) — this machine's sessions in the hub's own
-#                           fleet_sessions shape, one JSON object on stdout, so a
-#                           shell whose hub is silent can take this machine's rows
-#                           over the connection it already holds. The rows are the
+#                           fleet_sessions shape, one JSON object on stdout — what
+#                           the old client asked over its connection while the hub
+#                           was silent (compat-1v: 下一批删, issue #3008). The rows are the
 #                           control adapter's inventory keyed by the hub's own rule
 #                           (fleet_hub_common.worker_key) — never a second generator.
 #   reconcile <sess>        (ON <node>) — retired with the rule (issue #1713):
@@ -105,8 +103,8 @@
 #
 # Nesting — NO rule (issue #1713, EPIC #1710 C3; #1485's rule retired): the
 # node never makes way for a viewer, because it has nothing of its own to hide.
-# The list is drawn only on the CLIENT's server (fleet-sidebar.sh, FLEET_SHELL=1);
-# a node fleet session draws none, so a viewer arriving or leaving changes no
+# The list is drawn by the client (fleet_view.py in a thin client's 看台); a node
+# fleet session draws none, so a viewer arriving or leaving changes no
 # pane on the node. A shell/view client attaches to its own VIEW SESSION (below)
 # with that session's status line and prefix off for good. The one thing a
 # window carries for everyone is its top header (pane-border-status, a WINDOW
@@ -133,12 +131,6 @@
 # Rails: off unless CCQUOTA_FLEET=1 (EPIC #1419 rule 1); proxy windows are skipped
 # by every reaper, the sleeper and the migrator (rule 5) — see `fleet_is_remote_window`.
 #
-# THE SHELL (issue #1484, EPIC #1479 C5): bin/fleet-shell.sh runs this very
-# machinery on a person's own computer — its tmux server holds one proxy window
-# per machine and nothing else. It sets FLEET_SHELL=1 in that server's environment,
-# and that is the only difference `open` sees: the pane it starts runs `run --shell`,
-# so the far end registers a SHELL client (#1485) on a view session of its own.
-#
 # Knobs (env, fleet.conf or the fleet's conf):
 #   FLEET_REMOTE_SSH         `mac-a=m4-lan mac-b=mac-c` — ssh host per machine label
 #                            (default: the label itself, as ~/.ssh/config names it)
@@ -147,22 +139,7 @@
 #   FLEET_REMOTE_VIA_HUB     1 (default) = after a failed direct attempt, try the
 #                            hub relay (`fleet connect --proxy`, #1413) when one is
 #                            configured; 0 = direct only
-#   FLEET_CONNECT_UPGRADE_SECS  15 — on the hub relay in the shell, how often one
-#                            direct handshake is tried (`fleet connect
-#                            --probe-direct`); one answers → the pane switches to
-#                            it once no key has been pressed for
-#                            FLEET_REMOTE_IDLE_SECS (2). The window carries
-#                            `@remote_route relay` while on the relay (the bar's
-#                            「· 中转」, issue #1628)
-#   FLEET_ROUTE_FAIL_HINT    5 — on a PINNED route (`fleet route`, claude-fleet#2886),
-#                            failures in a row before the page suggests going back
-#                            to auto (it never switches by itself). The window
-#                            carries `@remote_pin` <route> + `@remote_tries` <N>
-#                            while pinned, and `@remote_via` `<auto|manual> <route>`
-#                            once connected — the top bar's connection part
-#   FLEET_ROUTE_GET_CMD      (selftests) the pin lookup, given the node + host
 #   FLEET_REMOTE_SSH_CMD     (selftests) the ssh program
-#   FLEET_CONNECT_PROBE_CMD  (selftests) the direct probe, given the host
 #   FLEET_REMOTE_OPENER      (selftests) what re-issues a request (fleet-open.sh)
 #
 # Machine to machine (issue #1626): with plain ssh on a hub node, every connect
@@ -374,28 +351,10 @@ MASTERO=(-o ExitOnForwardFailure=no)
 #   "Stale control socket, unlinking"): the master runs on, nobody can reach it,
 #   and every switch after it fell to a full reconnect.
 
-# rv_warm_sock <node> [<login>] — the shell's warm master for that machine as that
-# login (issue #2987: `fleet-shell.sh warm` keeps `<node>@<login>.sock` per login
-# its sessions are in); a login with none of its own (an older warm loop, or no
-# login known) gets `<node>.sock`, which the caller rides only when its route file
-# says the same login.
-rv_warm_sock() {
-  local d="${TMPDIR:-/tmp}/warm"
-  if [ -n "${2:-}" ] && { [ -S "$d/$1@$2.sock" ] || [ -e "$d/$1@$2.sock.pending" ]; }; then
-    printf '%s' "$d/$1@$2.sock"
-  else
-    printf '%s' "$d/$1.sock"
-  fi
-}
-# rv_warm_ok <sock> <login> — that warm master may carry a session of <login>
-rv_warm_ok() {
-  [ -z "${2:-}" ] && return 0
-  case "${1##*/}" in *@"$2".sock) return 0 ;; esac
-  [ "$(rv_route_login "$1.route")" = "$2" ]
-}
 # rv_switch_log <event> <node> <how> <ms> [<why>] — one line per switch in the
-# client's connect log (issue #2987): how it went (chan · select · readopt ·
-# respawn · new) and how long `open` took, so a slow switch is visible.
+# client's connect log (issue #2987): how it went (chan · select · respawn ·
+# new) and how long `open` took, so a slow switch is visible — the old client's
+# (FLEET_SHELL=1); a node's dash writes none.
 rv_switch_log() {
   [ "${FLEET_SHELL:-0}" = 1 ] && [ -f "$BIN/fleet_clientlog.py" ] || return 0
   python3 "$BIN/fleet_clientlog.py" write connect "$1" "$2" "$3" "$4" ok "${5:-}" >/dev/null 2>&1 || :
@@ -1091,46 +1050,6 @@ rv_attach_thin() {
 
 case "$mode" in
 # ---------------------------------------------------------------------------------
-# stage-health [<client session>] [<client tmp>] — the client's proxy windows, as `fleet
-# doctor`'s `stage` row reads them (issue #2987). One line, `PASS|WARN<TAB><words>`,
-# exit 1 on WARN. It flags what made every switch a full reconnect on the
-# operator's MacBook: a window whose `@remote_ctl` socket is gone while its line is
-# up, a warm master logged in as another login than the sessions it should carry,
-# and a `run` loop no proxy pane runs (a stray: more than one per window).
-stage-health)
-  hs="${1:-${FLEET_SHELL_SESSION:-fleet-shell}}"
-  htmp="${2:-${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/tmp}"
-  hwd="$htmp/warm"
-  hbad='' hn=0 hpanes=' ' US='|'   # not a tab (`read` collapses empty tab fields), not a control byte (tmux escapes one in a format)
-  hsay() { case "$hbad" in *"$1"*) ;; *) hbad="$hbad${hbad:+ · }$1" ;; esac; }
-  hrows=$( { tmux -L "$hs-stage" list-windows -t "=$hs-stage" -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null
-             tmux -L "$hs" list-windows -t "=$hs" -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null; } )
-  while IFS="$US" read -r _ hrem hlg hctl hdown hpid; do
-    case "$hrem" in -:*|'') continue ;; *:?*) ;; *) continue ;; esac
-    hnode=${hrem%%:*}
-    hn=$((hn + 1)); hpanes="$hpanes$hpid "
-    if [ -n "$hctl" ] && [ -z "$hdown" ] && [ ! -S "$hctl" ]; then
-      hsay "${hnode} 的控制连接 ${hctl##*/} 不在了（每次切换都重连）"
-    fi
-    if [ -n "$hlg" ] && [ ! -S "$hwd/$hnode@$hlg.sock" ] && [ -S "$hwd/$hnode.sock" ]; then
-      hwl=$(rv_route_login "$hwd/$hnode.sock.route")
-      [ -n "$hwl" ] && [ "$hwl" != "$hlg" ] && hsay "${hnode} 的预热连接登的是 ${hwl}，看的会话在 ${hlg}"
-    fi
-  done <<EOF_HROWS
-$hrows
-EOF_HROWS
-  # stray loops: a client's `run --shell` whose parent is not a run (its own
-  # subshells keep its command line) and that no proxy pane runs
-  hstray=$(ps -ax -o pid= -o ppid= -o command= 2>/dev/null | awk -v panes="$hpanes" '
-    $0 ~ /fleet-remote-view\.sh run --shell / { run[$1] = 1; pp[$1] = $2 }
-    END { n = 0; for (p in run) if (!(pp[p] in run) && index(panes, " " p " ") == 0) n++; print n }')
-  [ "${hstray:-0}" -gt 0 ] && hsay "${hstray} 个 run 循环不属于任何代理窗口（多余的会自己退）"
-  if [ -n "$hbad" ]; then printf 'WARN\t%s\n' "$hbad"; exit 1; fi
-  [ "$hn" -gt 0 ] || exit 0   # no client, or nothing open: no row
-  printf 'PASS\t%s 个代理窗口 · 控制连接都在 · 预热连接登录对得上 · 每窗一个 run\n' "$hn"
-  exit 0
-  ;;
-# ---------------------------------------------------------------------------------
 open)
   wid="${1#wid:}"
   sess="${FLEET_SESSION:-$(fleet_current_session)}"
@@ -1161,18 +1080,10 @@ open)
   # is this computer. No machine PREFIX on the name (#1475's `mac-a <name>`), no ⇄
   # (#1621): a proxy window is known by `@remote`, never by its name.
   title="${name:-${wid#*/}} · @$(rv_machine_word "$node")"
-  shellopt=''; [ "${FLEET_SHELL:-0}" = 1 ] && shellopt=' --shell'   # the shell's panes (#1484)
-  cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run$shellopt $(sq "$node") $(sq "$wid")"
-  # The shell's STAGE (issue #1759): there the proxy windows live on a server of
-  # their own (FLEET_SHELL_STAGE, conf/tmux-shell-stage.conf) that the shell's one
-  # window shows in its right pane — every window op below happens THERE, so a
-  # switch repaints the right pane and nothing else. No stage (a fleet, or a
-  # shell started before it): this server, as before.
+  cmd="exec bash $(sq "$BIN/fleet-remote-view.sh") run $(sq "$node") $(sq "$wid")"
+  # every window op on this server (the old client's STAGE server, issue #1759,
+  # went with that client — #3008)
   OT() { tmux "$@"; }; osess=$sess
-  if [ "${FLEET_SHELL:-0}" = 1 ] && [ -n "${FLEET_SHELL_STAGE:-}" ] \
-     && tmux -L "$FLEET_SHELL_STAGE" has-session -t "=$FLEET_SHELL_STAGE" 2>/dev/null; then
-    OT() { tmux -L "$FLEET_SHELL_STAGE" "$@"; }; osess=$FLEET_SHELL_STAGE
-  fi
   # one proxy window per (machine, LOGIN) — issue #2430: a row of the person's
   # other login on that machine is another connection, never a retarget over
   # this one (whose far end cannot see that login's fleet). `run` stamps the
@@ -1211,15 +1122,6 @@ open)
         how=chan
       elif [ -z "$down" ] && [ "$crc" != 2 ] && [ -n "$ctl" ] && [ -S "$ctl" ] && rv_sel "$ctl"; then
         how=select
-      elif [ -z "$down" ] && [ "$crc" != 2 ] && [ -n "$ctl" ] && [ ! -S "$ctl" ] \
-         && wsk=$(rv_warm_sock "$node" "$olog") && [ "$wsk" != "$ctl" ] && [ -S "$wsk" ] \
-         && rv_warm_ok "$wsk" "$olog" && rv_sel "$wsk"; then
-        # Its control socket is gone while the line lives (issue #2987): the far
-        # end's view session is the same whichever master carries the `select`, so
-        # the warm one does it — and the window adopts it for the next switch,
-        # instead of a full reconnect on every switch from now on.
-        how=readopt; why="$ctl gone → $wsk"
-        OT set-window-option -t "$w" @remote_ctl "$wsk" 2>/dev/null
       else
         how=respawn
         if [ -n "$down" ]; then why=down
@@ -1247,9 +1149,8 @@ open)
 
 # ---------------------------------------------------------------------------------
 run)
-  shellopt=''; [ "${1:-}" = --shell ] && { shellopt=' --shell'; shift; }
   node="${1:-}"; wid="${2:-}"
-  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: run [--shell] <node> <worker_id>'; exit 2; }
+  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: run <node> <worker_id>'; exit 2; }
   _s=$(fleet_current_session); [ -n "$_s" ] && fleet_load_conf "$_s" 2>/dev/null
   host=$(ssh_host "$node")
   rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
@@ -1314,8 +1215,7 @@ run)
     # view session (a session on the warm master outlives our own `-O exit`)
     [ -n "$att" ] && { pkill -P "$att" 2>/dev/null; kill "$att" 2>/dev/null; att=''; }
     $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1   # our own master only — never the warm one (#1631)
-    rm -f "$ctl" "$ctl.route" "$ctl.upgrade" "$ctl.ssherr" "$ctl.nopaste"
-    [ "$use" = "$ctl" ] || rm -f "$use.upgrade"
+    rm -f "$ctl" "$ctl.route" "$ctl.ssherr"
   }
   # pane_gone — before a reconnect: this loop's pane (or its whole tmux server)
   # is no more (issue #1704). A closed pane or a kill-server HUPs the loop, and
@@ -1425,82 +1325,27 @@ except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
     else tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_via 2>/dev/null; fi
     return 0
   }
-  # keys_idle <secs> — no key on any client of this tmux for that long
-  keys_idle() {
-    local last
-    [ -n "${TMUX:-}" ] || return 0
-    last=$(tmux list-clients -F '#{client_activity}' 2>/dev/null | sort -n | tail -n 1)
-    case "$last" in ''|*[!0-9]*) return 0 ;; esac
-    [ $(( $(date +%s) - last )) -ge "$1" ]
-  }
-  probe_direct() {
-    if [ -n "${FLEET_CONNECT_PROBE_CMD:-}" ]; then $FLEET_CONNECT_PROBE_CMD "$host"
-    else python3 "$BIN/fleet-connect.py" --probe-direct "$host"; fi
-  }
-  # The upgrader (issue #1628): once the master is up, mark its line; on the hub
-  # relay (the shell, where `fleet connect` picks the line), one direct handshake
-  # every FLEET_CONNECT_UPGRADE_SECS (15) — when one answers, wait for the keys to
-  # rest FLEET_REMOTE_IDLE_SECS (2), flag the switch and close the master: the loop
-  # reconnects at once and re-measures, so the pane is back on the direct line in
-  # about a second. A failed probe costs ~0.1–0.2 s and nothing else.
+  # The upgrader (issue #1628): once the master is up, mark its line. (On the
+  # old client's hub relay it also tried a direct line every
+  # FLEET_CONNECT_UPGRADE_SECS — that client went with #3008.)
   upgrader() {
-    local every="${FLEET_CONNECT_UPGRADE_SECS:-15}" idle="${FLEET_REMOTE_IDLE_SECS:-2}" _ up='' kind via
+    local _ up='' kind via
     for _ in $(seq 1 50); do
       $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
       sleep 0.2
     done
     [ -n "$up" ] || return 0
     kind=$(route_kind); via=$(route_via); mark_route "$kind" "$via"
-    # a pinned line (claude-fleet#2886) is never left for a faster one
-    case "$via" in manual\ *) return 0 ;; esac
-    [ "$kind" = relay ] && [ -n "$shellopt" ] || return 0
-    while sleep "$every"; do
-      $SSH -S "$use" -O check "$host" >/dev/null 2>&1 || return 0
-      probe_direct >/dev/null 2>&1 || continue
-      until keys_idle "$idle"; do
-        sleep 0.5
-        $SSH -S "$use" -O check "$host" >/dev/null 2>&1 || return 0
-      done
-      : > "$use.upgrade"
-      $SSH -S "$use" -O exit "$host" >/dev/null 2>&1
-      return 0
-    done
+    return 0
   }
-  # In the shell (`--shell`) `fleet connect` picks the line on every connect; a
-  # RECONNECT tries the remembered one first (FLEET_CONNECT_RETEST=last,
-  # claude-fleet#2886) and re-measures them all only when it does not answer, or
-  # after the upgrader found a direct line (=1, issue #1628). A PINNED machine
-  # (`fleet route`, #2886) takes its one route every time: the page and the bar
-  # say 「钉住：<route>（手动）· 第 N 次重连」, and after FLEET_ROUTE_FAIL_HINT (5)
-  # failures in a row the page suggests auto — it never switches by itself.
-  # A fleet's own proxy alternates direct / hub below.
+  # A fleet's own proxy alternates direct / hub below (the old client's
+  # `fleet connect` route picking and pinned routes went with it, #3008).
   # Stuck past FLEET_DEBUG_STALL_SECS (60) with no session lasting (issue #2894):
   # the reconnect page says 「按 d 让远端看一眼」 and d sends fleet-debug report
   # from here — only on this page, never a key of the node's or the client's.
-  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0; stuck_since=''; refused_warm=''
+  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0
   while :; do
     mine || { rv_switch_log stray-end "$node" run 0 "pid $$"; exit 0; }
-    pin=''
-    if [ -n "$shellopt" ]; then
-      if [ -n "${FLEET_ROUTE_GET_CMD:-}" ]; then pin=$($FLEET_ROUTE_GET_CMD "$node" "$host" 2>/dev/null)
-      elif [ -f "$BIN/fleet-route.py" ] && [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/routes" ]; then
-        # no routes file = nothing pinned: no python started (fleet-connect.py's config_dir)
-        pin=$(python3 "$BIN/fleet-route.py" --get "$node" "$host" 2>/dev/null)
-      fi
-    fi
-    if [ -n "${TMUX:-}" ]; then
-      if [ -n "$pin" ]; then
-        tmux set-window-option -t "${TMUX_PANE:-}" @remote_pin "$pin" \; set-window-option -t "${TMUX_PANE:-}" @remote_tries "$tries" 2>/dev/null
-      else
-        tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_pin \; set-window-option -u -t "${TMUX_PANE:-}" @remote_tries 2>/dev/null
-      fi
-    fi
-    pinsay=''
-    if [ -n "$pin" ]; then
-      case "$pin" in relay) pinsay='中转' ;; tailscale|tailnet) pinsay='Tailscale' ;; direct) pinsay='直连' ;; *) pinsay=$pin ;; esac
-      pinsay=" · 钉住：${pinsay}（手动）"
-      [ "$tries" -gt 0 ] && pinsay="${pinsay}· 第 ${tries} 次重连"
-    fi
     # Machine to machine (issue #1626): a plain-ssh view from a hub node asks the
     # hub for a five-minute certificate to THIS machine first. rc 3 = no hub here
     # (or it predates #1626): plain ssh, as before; rc 1 = the hub said no or is
@@ -1522,11 +1367,6 @@ EOF_PEER
            sleep "$delay"; continue ;;
       esac
     fi
-    # The shell's warm master (issue #1631): `fleet-shell.sh warm` keeps one
-    # connection per machine you have sessions on; when it answers, this round is
-    # a SESSION on it — no handshake, no `fleet connect`, no certificate — and the
-    # window's `@remote_ctl` names it, so `open` retargets over it too. Its line,
-    # keepalive and life are the warm loop's; a drop here just comes back round.
     use="$ctl"
     pane_gone && exit 0   # the cleanup trap runs on the way out (issue #1704)
     # The row picked last (issue #1876): `open` writes it on this window, so a
@@ -1538,51 +1378,31 @@ EOF_PEER
     # The login that holds this worker's fleet (issue #2430): one person may have
     # two logins on the machine, and the far end finds a worker only in its own
     # login's fleets. Named → every connection this round is made as it (`-l`,
-    # and FLEET_CONNECT_LOGIN for `fleet connect`), and a warm master logged in
-    # as anyone else is not ridden. Unnamed → the default login, as before.
+    # and FLEET_CONNECT_LOGIN for `fleet connect`). Unnamed → the default login,
+    # as before.
     login=$(fleet_fleet_login "$wid" 2>/dev/null) || login=''
     lopt=(); [ -n "$login" ] && lopt=(-l "$login")
     export FLEET_CONNECT_LOGIN="$login"
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_login "$login" 2>/dev/null
-    wsock=$(rv_warm_sock "$node" "$login")
-    if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ] && [ "$wsock" != "$refused_warm" ] && rv_warm_ok "$wsock" "$login"; then
-      # A warm master still coming up (its `<sock>.pending` pid alive — the shell
-      # and the first click start in the same second) is waited for, up to
-      # FLEET_REMOTE_WARM_WAIT (5) s, instead of opening a private master beside
-      # it (issue #1704); a round that does go private says so in warm.log.
-      wdeadline=$(( $(date +%s) + ${FLEET_REMOTE_WARM_WAIT:-5} ))
-      while :; do
-        [ -S "$wsock" ] && $SSH -S "$wsock" -O check "$host" >/dev/null 2>&1 && { use="$wsock"; break; }
-        wp=''; { read -r wp < "$wsock.pending"; } 2>/dev/null
-        case "$wp" in ''|*[!0-9]*) break ;; esac
-        kill -0 "$wp" 2>/dev/null && [ "$(date +%s)" -lt "$wdeadline" ] || break
-        sleep 0.2
-      done
-      [ "$use" = "$ctl" ] && [ -d "${wsock%/*}" ] \
-        && printf '%s private %s (run %s: warm not up)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$node${login:+@$login}" $$ \
-             >> "${wsock%/*}/warm.log" 2>/dev/null
-    fi
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
     if [ "$use" != "$ctl" ]; then
-      printf '\033[2J\033[H→ 正在连接 %s (%s · 已连%s) …\n' "$node" "$host" "$pinsay"
+      printf '\033[2J\033[H→ 正在连接 %s (%s · 已连) …\n' "$node" "$host"
       opts=(-tt "${MUXO[@]}" -S "$use" ${lopt[@]+"${lopt[@]}"})
     else
-      printf '\033[2J\033[H→ 正在连接 %s (%s%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
-        "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')" "$pinsay"
+      printf '\033[2J\033[H→ 正在连接 %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
+        "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
       # keepalive 2 s × 3: a dead line is seen in ≤ 6 s (issue #1631, was 5 × 3);
       # no compression (a LAN / tailnet only pays its latency), low-delay QoS
       opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
             -o "IPQoS=lowdelay throughput" -o Compression=no
             -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no ${peer[@]+"${peer[@]}"} ${lopt[@]+"${lopt[@]}"})
       [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
-      rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
+      rm -f "$ctl" "$ctl.route"
     fi
-    rm -f "$use.upgrade"
     sidecar & side=$!
     upgrader & upg=$!
     chan & chn=$!
     started=$(date +%s)
-    [ -n "$stuck_since" ] || stuck_since=$started
     # In the BACKGROUND, then `wait` (issue #1704): bash runs a trap only once the
     # foreground command returns, and an attach never returns — a TERM waited
     # forever. `wait` returns on a trapped signal; `0<&0` keeps the pane's tty as
@@ -1593,26 +1413,12 @@ EOF_PEER
     # ssh -tt takes the tty raw for the session and gives back this state.
     [ -t 0 ] && stty -echo 2>/dev/null
     [ -n "${TMUX:-}" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_down 2>/dev/null
-    # A file dropped in the shell (issue #2757): the ssh runs behind
-    # fleet-client-upload.py's filter, which sends a bracketed paste of this
-    # computer's file paths to the session's machine first and hands on the paths
-    # there; every other byte passes untouched. A filter that broke once
-    # (`$ctl.nopaste`) leaves this connection's later rounds on the bare ssh;
-    # FLEET_CLIENT_PASTE=0 never starts it.
-    pastewrap=()
-    if [ -n "$shellopt" ] && [ "${FLEET_CLIENT_PASTE:-1}" != 0 ] && [ ! -e "$ctl.nopaste" ] \
-       && [ -f "$BIN/fleet-client-upload.py" ]; then
-      pastewrap=(python3 "$BIN/fleet-client-upload.py" filter --node "$node" --wid "$wid" --ctl "$use" --mark "$ctl.nopaste" --)
-    fi
     FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
-      ${pastewrap[@]+"${pastewrap[@]}"} $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")" \
+      $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach $(sq "$wid") $(sq "$view")" \
       0<&0 2>"$ctl.ssherr" &
     att=$!
     wait "$att"; rc=$?
     att=''
-    if [ "$rc" = 255 ] && [ "$use" != "$ctl" ]; then
-      refused_warm=$use
-    fi
     # The line is gone (issue #1876): `open` now reconnects instead of selecting
     # over it, and the far end's tmux never got to turn its mouse reporting (and
     # bracketed paste) off in this pane — the outer tmux would keep handing it
@@ -1627,13 +1433,6 @@ EOF_PEER
     # long one wrapping into it would split the line a person reads
     mark_route ''
     retest=last
-    if [ -f "$use.upgrade" ]; then
-      rm -f "$use.upgrade"
-      retest=1
-      # the upgrader closed the relay: a direct line answered — over to it now
-      printf '\n%s 的直连通了，切回直连 …\n' "$node"
-      delay=1; continue
-    fi
     case "$rc" in
       0) exit 0 ;;                                   # the remote client ended on purpose
       3) # Not live there right now (issue #2484): a machine whose tmux restarted or
@@ -1655,45 +1454,15 @@ EOF_PEER
     # A drop after a good session reconnects at once; a failing route backs off and,
     # when the hub relay is configured, alternates with it.
     tries=$(( tries + 1 ))
-    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1; tries=1; fails=0; stuck_since=''
+    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1; tries=1; fails=0
     else
       fails=$(( fails + 1 ))
-      [ -z "$shellopt" ] && hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
+      hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
       [ "$delay" -lt 10 ] && delay=$(( delay * 2 ))
     fi
     [ -n "$why" ] && printf '\n原因：%s' "$why"
-    if [ -n "$pin" ] && [ "$fails" -ge "${FLEET_ROUTE_FAIL_HINT:-5}" ]; then
-      printf '\n钉住的线路已连续 %s 次连不上 · 要不要改回自动？fleet route %s auto（或 ⌘P 连接路线…）' "$fails" "$node"
-    fi
-    if [ -n "$shellopt" ]; then
-      # The client's right pane (issue #1785): a dropped line is never the end of
-      # it — Enter reconnects now, and ⌃c, which closed the window (and with the
-      # stage's last one, the right pane), does nothing while it waits.
-      printf '\n与 %s 的连接断了（exit %s）· %ss 后重连 · 回车立即重连\n' "$node" "$rc" "$delay"
-      stall=''
-      if [ -n "$stuck_since" ] && [ -t 0 ] && [ -f "$BIN/fleet-debug-prompt.sh" ] \
-         && sh "$BIN/fleet-debug-prompt.sh" can; then
-        stall=$(( $(date +%s) - stuck_since ))
-        [ "$stall" -ge "${FLEET_DEBUG_STALL_SECS:-60}" ] || stall=''
-      fi
-      [ -z "$stall" ] || printf '%s\n' "$(sh "$BIN/fleet-ui-lang.sh" t debug_stall_key_fmt "$stall")"
-      trap '' INT
-      if [ -t 0 ] && [ -n "$stall" ]; then
-        k=''; read -r -s -n 1 -t "$delay" k 2>/dev/null || :
-        case "$k" in
-          d|D)
-            stty echo 2>/dev/null
-            sh "$BIN/fleet-debug-prompt.sh" stall "正在连接 $node 卡住 ${stall}s · exit $rc${why:+ · $why}"
-            printf '\n%s\n' "$(sh "$BIN/fleet-ui-lang.sh" t debug_stall_done)"
-            read -r -s -n 1 _ 2>/dev/null || :
-            stty -echo 2>/dev/null ;;
-        esac
-      elif [ -t 0 ]; then read -r -s -t "$delay" _ 2>/dev/null || :; else sleep "$delay"; fi
-      trap 'cleanup; exit 0' INT
-    else
-      printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"
-      sleep "$delay"
-    fi
+    printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"
+    sleep "$delay"
   done
   ;;
 
@@ -1888,27 +1657,11 @@ watch)
   ;;
 
 # ---------------------------------------------------------------------------------
-# ⌃\ — THIS SESSION's shell (issue #2744; #2566 had it this computer's): a login
-# shell of the machine the session runs on, as its login, in its working
-# directory — the worker's `@worktree`, else its pane's directory (an
-# orchestrator's $HOME, a no-repo session's own), so its branch, its tests and
-# its logs are one key away; the next ⌃\ is back on the session.
+# THIS SESSION's shell (issue #2744): a login shell of the machine the session
+# runs on, as its login, in its working directory — the worker's `@worktree`,
+# else its pane's directory. The 看台's ⌃\ (fleet_view.py) opens it; the old
+# client's own `shell-open` / `shell` went with that client (#3008).
 #
-#   shell-open <client session>   (a key on the client's server: the one-session
-#                           view, or the client's solo layout) — the session is
-#                           the current window's `@remote`, else the stage's
-#                           current window's. Its shell window (`@solo_shell` =
-#                           `<node>:<worker id>`, titled 「shell · <name> @<node>」)
-#                           is selected when one is open — one a session, never
-#                           two — else opened. No session there (a machine row,
-#                           nothing open): this computer's shell in $HOME, as
-#                           `prefix !` always is (`shell-open --local`, one too).
-#   shell <node> <worker id>  that window's program: the warm master when it
-#                           answers, else a master of its own through the same ssh
-#                           program the proxy uses (in the client, `fleet-shell.sh
-#                           ssh`: `fleet connect`, or right here when the machine
-#                           is this computer) — then `shell-here` on the far end.
-#                           A failed connection says why and waits for a key.
 #   shell-here <worker id>  (ON <node>) — cd to where its agent is (the agent
 #                           pane's directory, else @worktree, else $HOME) and exec
 #                           the login's shell (`-l`) with the fleet's bin/ on its
@@ -1916,96 +1669,6 @@ watch)
 #                           watcher HUPs it when the session's window goes (a
 #                           reaped session takes its shell along). Exit 3 when the
 #                           session is not live here.
-shell-open)
-  if [ "${1:-}" = --local ]; then
-    w=$(tmux list-windows -F '#{window_id} #{@solo_shell}' 2>/dev/null | awk '$2 == "local" { print $1; exit }')
-    [ -n "$w" ] && { tmux select-window -t "$w"; exit 0; }
-    # its PATH set by its own command: a new window's environment takes the
-    # client's PATH over an `-e PATH=`
-    lsh=$(tmux show-options -gv default-shell 2>/dev/null); [ -x "$lsh" ] || lsh=${SHELL:-/bin/sh}
-    tmux new-window -n 本机shell -c "$HOME" \
-      "exec env PATH=$(sq "$HOME/.local/bin:$BIN:$PATH") $(sq "$lsh") -l" \; \
-      set-window-option @solo_shell local 2>/dev/null
-    exit 0
-  fi
-  csess="${1:-}"
-  r=$(tmux display-message -p '#{@remote}' 2>/dev/null)
-  sname=''
-  if [ -z "$r" ] && [ -n "$csess" ]; then
-    r=$(tmux -L "$csess-stage" display-message -p -t "=$csess-stage:" '#{@remote}' 2>/dev/null)
-    sname=$(tmux -L "$csess-stage" display-message -p -t "=$csess-stage:" '#{window_name}' 2>/dev/null)
-  fi
-  snode=${r%%:*}; swid=${r#*:}
-  case "$snode" in ''|*[!A-Za-z0-9._-]*) exec bash "$BIN/fleet-remote-view.sh" shell-open --local ;; esac
-  case "$swid" in ''|-|*[!A-Za-z0-9._/@:-]*) exec bash "$BIN/fleet-remote-view.sh" shell-open --local ;; esac
-  # its own shell already open: there
-  w=$(tmux list-windows -F '#{window_id} #{@solo_shell}' 2>/dev/null \
-        | awk -v r="$r" '$2 == r { print $1; exit }')
-  [ -n "$w" ] && { tmux select-window -t "$w"; exit 0; }
-  # its name: the list's row (field 8), else the stage window's, else the id's tail
-  rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$csess"
-  n=$(LC_ALL=C awk -F $'\037' -v k="wid:$swid" '$1 == k { print $8; exit }' "$rf" 2>/dev/null)
-  [ -n "$n" ] || n=${sname% · @*}
-  [ -n "$n" ] && [ "$n" != "$snode" ] || n=${swid##*/}
-  n=$(printf '%s' "$n" | tr -d '\000-\037#"' | cut -c1-40)
-  tmux new-window -n "shell · $n @$snode" -c "$HOME" -e "PATH=$HOME/.local/bin:$BIN:$PATH" \
-    "exec bash $(sq "$BIN/fleet-remote-view.sh") shell $(sq "$snode") $(sq "$swid")" \; \
-    set-window-option @solo_shell "$r" \; set-window-option automatic-rename off \; \
-    set-window-option allow-rename off 2>/dev/null
-  exit 0
-  ;;
-shell)
-  node="${1:-}"; wid="${2:-}"
-  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: shell <node> <worker_id>'; exit 2; }
-  host=$(ssh_host "$node")
-  rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
-  SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"
-  ctl="${TMPDIR:-/tmp}/frs.$$.$RANDOM"
-  login=$(fleet_fleet_login "$wid" 2>/dev/null) || login=''
-  lopt=(); [ -n "$login" ] && lopt=(-l "$login")
-  export FLEET_CONNECT_LOGIN="$login"
-  wsock=$(rv_warm_sock "$node" "$login")
-  if [ "${FLEET_SHELL_WARM:-1}" != 0 ] && [ -S "$wsock" ] && rv_warm_ok "$wsock" "$login" \
-     && $SSH -S "$wsock" -O check "$host" >/dev/null 2>&1; then
-    opts=(-tt "${MUXO[@]}" -S "$wsock" ${lopt[@]+"${lopt[@]}"})
-  else
-    # as `run`: a plain-ssh view from a hub node rides a five-minute certificate
-    # (issue #1626); rc 3 = no hub here, plain ssh; anything else = say why
-    peer=()
-    if [ -z "${FLEET_REMOTE_SSH_CMD:-}" ] && [ -f "$BIN/fleet-peer-cert.sh" ]; then
-      peerout=$(bash "$BIN/fleet-peer-cert.sh" "$(hub_node "$node")" view 2>"$ctl.err"); prc=$?
-      peerwhy=$(tail -n 1 "$ctl.err" 2>/dev/null); rm -f "$ctl.err"
-      case "$prc" in
-        0) while IFS= read -r o; do [ -n "$o" ] && peer+=("$o"); done <<EOF_PEER
-$peerout
-EOF_PEER
-           ;;
-        3) ;;
-        *) printf '→ %s 的 shell 开不了：%s\n按任意键关闭。\n' "$node" "${peerwhy#fleet-peer-cert: }"
-           read -r -n 1 -s _; exit 0 ;;
-      esac
-    fi
-    opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
-          -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no
-          ${peer[@]+"${peer[@]}"} ${lopt[@]+"${lopt[@]}"})
-    trap '$SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1; rm -f "$ctl" "$ctl.ssherr"' EXIT
-  fi
-  printf '→ 正在打开 %s 上的 shell …\n' "$node"
-  : > "$ctl.ssherr"
-  # a far end older than shell-here (or with no fleet there) still answers: its
-  # login shell in $HOME — either way one exec, so leaving it leaves the window
-  $SSH ${opts[@]+"${opts[@]}"} "$host" \
-    "if grep -qs '^shell-here)' $rbin/fleet-remote-view.sh; then exec bash $rbin/fleet-remote-view.sh shell-here $(sq "$wid"); fi; exec \"\${SHELL:-/bin/sh}\" -l" \
-    2>"$ctl.ssherr"
-  rc=$?
-  case "$rc" in
-    3)   printf '\n%s 已不在 %s 上（结束或搬走了）。按任意键关闭。\n' "${wid#*/}" "$node"; read -r -n 1 -s _ ;;
-    255) why=$(rv_ssh_why "$ctl.ssherr" | cut -c1-120)
-         printf '\n连不上 %s%s。按任意键关闭。\n' "$node" "${why:+：$why}"; read -r -n 1 -s _ ;;
-  esac
-  rm -f "$ctl.ssherr"
-  exit 0
-  ;;
 shell-here)
   wid="${1:-}"; dir=''; w=''; sock=''
   if [ -n "$wid" ] && [ "$wid" != - ]; then

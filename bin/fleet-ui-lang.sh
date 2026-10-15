@@ -1166,16 +1166,12 @@ fleet_ui_t() {
     en:solo_view_ended_fmt)     printf 'The session has ended (%s).' "${1:-}" ;;
     # 退出 fleet (issue #2349): `fleet quit`, ⌘Q, ⌘K's / the menu's last line — the
     # client's processes here go, the sessions on the machines do not
-    zh:quit_done_fmt)           printf 'fleet 已退出；会话仍在 %s 上运行，`fleet` 重新进入。' "${1:-}" ;;
-    en:quit_done_fmt)           printf 'fleet has quit; the sessions keep running on %s — `fleet` to come back.' "${1:-}" ;;
-    zh:quit_done)               printf 'fleet 已退出；`fleet` 重新进入。' ;;
-    en:quit_done)               printf 'fleet has quit; `fleet` to come back.' ;;
-    zh:quit_none)               printf 'fleet 客户端没在运行。' ;;
-    en:quit_none)               printf 'The fleet client is not running.' ;;
-    zh:client_bg)               printf '客户端在后台运行（`fleet quit` 退出）。' ;;
-    en:client_bg)               printf 'The client is running in the background (`fleet quit` quits it).' ;;
-    zh:client_off)              printf '客户端没在运行（`fleet` 进入）。' ;;
-    en:client_off)              printf 'The client is not running (`fleet` opens it).' ;;
+    zh:retire_done)             printf '旧客户端（#3008 已删除）在这台电脑上留下的进程已停下；`fleet` 打开客户端。' ;;
+    en:retire_done)             printf 'What the old client (deleted in #3008) left running on this computer has stopped; `fleet` opens the client.' ;;
+    zh:retire_none)             printf 'fleet 没有在后台运行：客户端只在打开它的终端里，⌘Q 或关掉终端就退出。' ;;
+    en:retire_none)             printf 'Nothing of fleet runs in the background: the client lives in the terminal that opened it — ⌘Q or close that terminal.' ;;
+    zh:retire_left)             printf '旧客户端（#3008 已删除）还在这台电脑后台运行：`fleet quit` 停掉它。' ;;
+    en:retire_left)             printf 'The old client (deleted in #3008) still runs in the background here: `fleet quit` stops it.' ;;
     # the writing area itself (issue #1953, bin/fleet-compose.py)
     zh:compose_title)           printf '新任务' ;;
     en:compose_title)           printf 'New task' ;;

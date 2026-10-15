@@ -1,9 +1,8 @@
 #!/bin/bash
 # client-log-selftest.sh — the client's own record (issue #2896, EPIC #2889 C7;
 # docs/dev/CLIENT-LOGS.md): bin/fleet_clientlog.py and its sh twin fleet_clientlog
-# (bin/fleet-client-lib.sh), and the four writers — bin/fleet-connect.py
-# (relay + ssh), bin/fleet-client-place.sh, the keeper in bin/fleet-shell.sh,
-# bin/fleet-login.py — against a sandbox HOME and a fake hub on 127.0.0.1.
+# (bin/fleet-client-lib.sh), and the writers — bin/fleet-connect.py (relay +
+# ssh), bin/fleet-client-place.sh, bin/fleet-login.py — against a sandbox HOME and a fake hub on 127.0.0.1.
 #
 # Legs:
 #   A  conf/secret-shapes.list keeps to the rules both readers share (no
@@ -20,7 +19,6 @@
 #   G  place: the hub's REFUSED with every machine's reason → place.log, and
 #      the no-hub, no-fleet answer → place.log (the sh writer)
 #   H  login: a renew with no device key → login.log `renew scan` + tls sources
-#   I  the keeper's output goes to keeper.out, its renewals to keeper.log
 #   J  FLEET_CLIENT_LOG=0 writes nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -278,15 +276,6 @@ ll=$(tail -n 1 "$LOGS/login.log" 2>/dev/null)
 case "$ll" in *$'\t'renew$'\t''https://hub.invalid'$'\t'-$'\t'*$'\t'scan$'\t''no device key yet'*'tls: '*) r=1 ;; *) r='' ;; esac
 [ "$rc" = 0 ] && [ -n "$r" ] && ok "H a renew with no device key → login.log renew · scan · its words · tls sources" \
   || bad "H login.log: rc=$rc [$ll]"
-
-# ── I — the keeper ────────────────────────────────────────────────────────────
-n=$(grep -c '>>"$(keeper_out)" 2>&1' "$BIN/fleet-shell.sh")
-grep -q 'keeper "$SESS" </dev/null >/dev/null' "$BIN/fleet-shell.sh" && bad "I a keeper still starts into /dev/null" \
-  || { [ "$n" -ge 3 ] && ok "I every keeper start writes to keeper.out ($n places)" || bad "I keeper_out used $n times"; }
-for w in 'klog start' 'kseen "$what" "$L_STATE"' 'kseen "$what" fail' 'klog stop'; do
-  grep -qF "$w" "$BIN/fleet-shell.sh" || bad "I keeper.log writer missing: $w"
-done
-ok "I keeper.log: start · each changed renewal outcome · stop"
 
 # ── J — off ───────────────────────────────────────────────────────────────────
 rm -rf "$LOGS"
