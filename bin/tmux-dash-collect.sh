@@ -1320,7 +1320,16 @@ ph_snapshot() {
 # this tick is 60s, so the phase only makes sure a short-lived refresh loop is
 # running (one at a time, ~70s each): no daemon of its own, never on a render path,
 # and in the PHASE_LIST only when CCQUOTA_FLEET=1 for some fleet (fleet_hub_any).
-ph_hubsess() { bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || true; }
+# Not on a login nobody uses (issue #4261): no session awake or asleep (the row
+# this tick just published) and no client on any of its fleets — nothing here
+# reads the other machines' rows, and on a shared machine every spare login ran
+# the loop for nobody. A 看台 that opens later starts it itself (fleet_view.py
+# hub_fresh), and so does the first tick that sees a session or a client.
+# FLEET_HUBSESS_IDLE_SKIP=0 keeps it running regardless (fleet_login_unused).
+ph_hubsess() {
+  fleet_login_unused $SOCKETS && return 0
+  bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || true
+}
 
 # --- a thin client's 看台, kept past its client (issue #2763) -----------------------
 # rv_prune takes a row + 看台 session FLEET_VIEW_KEEP_SECS after its client left.

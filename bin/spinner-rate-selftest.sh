@@ -18,6 +18,9 @@
 #   HB       the heartbeat keeps the bare epoch as its FIRST token (#677's readers)
 #            and appends `tmux_calls_per_s=<n.n>` (read by fleet-doctor, #889)
 #   FILES    a frame writes no file and runs no here-document (issue #3522)
+#   UNWATCHED with no client attached (issue #4261) a working window keeps a glyph
+#            but it does not move, and the daemon stays at the IDLE rate — the
+#            legs above run with a real client attached (a pty, never the live server)
 #
 # The latency bounds carry slack over the design numbers (1s re-read, 0.25s tick)
 # because a loaded CI runner stretches every sleep; the RATE bounds are what #887
@@ -37,9 +40,10 @@ command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed 
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/spinrate.XXXXXX")
 LBL="spinrate$$"
-SPIN_PID=''
+SPIN_PID='' CLIENT_PID=''
 cleanup() {
   [ -n "$SPIN_PID" ] && kill "$SPIN_PID" 2>/dev/null
+  [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" 2>/dev/null
   "$REAL_TMUX" -L "$LBL" kill-server 2>/dev/null   # our own isolated socket
   rm -rf "$WORK"
 }
@@ -70,6 +74,24 @@ tl new-window -d -t "$LBL" -n w2 'sleep 900'
 tl new-window -d -t "$LBL" -n w3 'sleep 900'
 for w in w1 w2 w3; do tl set-window-option -t "$LBL:$w" @claude_state 'done'; done
 SOCKP=$(tl display-message -p '#{socket_path}')
+# A real client on our socket (issue #4261: the spinner animates only what somebody
+# looks at): an attach on a pty, drained, so tmux marks the socket u+x.
+python3 -c '
+import os, sys
+pid, fd = os.forkpty()
+if pid == 0:
+    os.environ["TERM"] = "xterm"
+    os.execv(sys.argv[1], [sys.argv[1], "-L", sys.argv[2], "attach", "-t", sys.argv[2]])
+while True:
+    try:
+        if not os.read(fd, 65536):
+            break
+    except OSError:
+        break
+' "$REAL_TMUX" "$LBL" </dev/null >/dev/null 2>&1 &
+CLIENT_PID=$!
+_t=0; while [ ! -x "$SOCKP" ] && [ "$_t" -lt 50 ]; do sleep 0.1; _t=$((_t + 1)); done
+[ -x "$SOCKP" ] || { echo "selftest: the client never attached (socket not u+x)"; exit 2; }
 
 PATH="$WORK/shim:$PATH" TMPDIR="$WORK/tmp" SPIN_INTERVAL=0.12 SPIN_HB_SECS=3 \
   sh "$WORK/bin/tmux-spinner.sh" >/dev/null 2>&1 &
@@ -170,6 +192,28 @@ while [ -e "$SOCKP.dirty" ] && [ $(( $(now_ms) - _t0 )) -lt 1000 ]; do sleep 0.0
 if [ ! -e "$SOCKP.dirty" ]; then ok "MARKER: the spinner consumed <socket>.dirty"
 else fail "MARKER: <socket>.dirty is still there — the quiet-fleet path never read it"; fi
 tl set-window-option -t "$LBL:w2" @claude_state 'done'
+
+# --- UNWATCHED (issue #4261) -------------------------------------------------------
+kill "$CLIENT_PID" 2>/dev/null; wait "$CLIENT_PID" 2>/dev/null; CLIENT_PID=''
+_t=0; while [ -x "$SOCKP" ] && [ "$_t" -lt 50 ]; do sleep 0.1; _t=$((_t + 1)); done
+sleep 1.5
+r=$(rate 5)
+if le "$r" 1.3; then ok "UNWATCHED: no client, nothing animating → $r tmux calls/s"
+else fail "UNWATCHED: no client, nothing animating → $r tmux calls/s, want ≤ ~1" "$(tail -8 "$CALLS")"; fi
+tl set-window-option -t "$LBL:w1" @claude_state working
+w=$(wait_spin w1 spin 3000)
+if [ "$w" != timeout ]; then ok "UNWATCHED: working → its glyph is written (${w}ms)"
+else fail "UNWATCHED: working → no spinner glyph within 3s"; fi
+g1=$(spin_of w1); sleep 0.6; g2=$(spin_of w1)
+if [ "$g1" = "$g2" ]; then ok "UNWATCHED: the glyph does not move for nobody ('$g1')"
+else fail "UNWATCHED: the glyph still animates with no client ('$g1' → '$g2')"; fi
+r=$(rate 4)
+if le "$r" 1.5; then ok "UNWATCHED: one working window, no client → $r tmux calls/s (no frames)"
+else fail "UNWATCHED: one working window, no client → $r tmux calls/s, want the idle rate" "$(sort "$CALLS" | uniq -c | sort -rn | head -5)"; fi
+tl set-window-option -t "$LBL:w1" @claude_state 'done'
+w=$(wait_spin w1 'done' 3000)
+if [ "$w" != timeout ] && [ "$w" -le 1600 ]; then ok "UNWATCHED: done → ✓ after ${w}ms"
+else fail "UNWATCHED: done → ✓ after ${w}ms, want ≤ ~1 re-read"; fi
 
 # --- HB ------------------------------------------------------------------------
 sleep 3.5

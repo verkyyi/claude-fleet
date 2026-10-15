@@ -209,6 +209,15 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 G="$FLEET_C/global"
 EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=10 ;; esac
 WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
+# A NODE's round while nobody is attached to any of its fleets (issue #4261): what
+# it writes is for the dash rows, the 看台's notifications and a parked policy mark —
+# the first two reach only somebody attached, the last tolerates half a minute. So
+# such a round comes every IDLE_EVERY (30 s), not EVERY: each login on a shared
+# machine ran this loop every 10 s for nobody (~200 processes a round). The wait is
+# napped WATCHED_EVERY at a time and ends the moment a client attaches (socket u+x,
+# no fork). An explicit FLEET_HUB_SESSIONS_EVERY is kept as the idle pace too.
+IDLE_EVERY="${FLEET_HUB_SESSIONS_IDLE_EVERY:-${FLEET_HUB_SESSIONS_EVERY:+$EVERY}}"
+case "$IDLE_EVERY" in ''|*[!0-9]*|0) IDLE_EVERY=30 ;; esac
 ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 # …and what MAPPED that cache (issue #2397): the ETag vouches for the hub's answer,
 # not for the rows this code kept of it. Its second line is this stamp — the code
@@ -222,6 +231,7 @@ LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]
 LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_WAIT=25 ;; esac
 [ "$LP_WAIT" -le 25 ] || LP_WAIT=25
 WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop only
+NAP_SOCKS='' # this login's fleet sockets, as watched() last listed them (issue #4261)
 LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 SCOPED=0     # 1 = this round's answer came over YOUR certificate (issue #2388)
@@ -1281,8 +1291,10 @@ watched() {
   # the client in the background, `fleet claude`'s own view — so it keeps the
   # watched pace (the long poll) while FLEET_NOTIFY is on.
   [ -n "$CLIENT" ] && [ "${FLEET_NOTIFY:-1}" != 0 ] && return 0
+  NAP_SOCKS=''   # the sockets idle_nap watches (issue #4261)
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
+    NAP_SOCKS="$NAP_SOCKS $sess"
     [ -n "$(tmux -L "$sess" list-clients 2>/dev/null)" ] && return 0
   done <<EOF
 $(local_fleets)
@@ -1631,6 +1643,8 @@ loop() {
     if watched; then
       every=$WATCHED_EVERY
       [ "${FLEET_HUB_SESSIONS_LONGPOLL:-1}" = 0 ] || WAIT=$LP_WAIT
+    elif [ -z "$CLIENT" ]; then
+      every=$IDLE_EVERY
     fi
     t0=$(date +%s); LP_SENT=0; LAST_FETCH=1
     # A client in standby (issue #1715: another client holds the person's
@@ -1654,9 +1668,26 @@ loop() {
     case "$want" in ''|*[!0-9]*) want=0 ;; esac
     [ $(( want + LOOP_SECS )) -gt "$end" ] && end=$(( want + LOOP_SECS ))
     [ $(( $(date +%s) + every )) -le "$end" ] || break
-    [ "$every" = 0 ] || sleep "$every"
+    if [ "$every" -gt "$EVERY" ]; then
+      idle_nap "$every"
+    elif [ "$every" != 0 ]; then
+      sleep "$every"
+    fi
   done
   read -r p < "$PIDF" 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
+  return 0
+}
+
+# idle_nap <secs> — an unwatched node round's wait (issue #4261): WATCHED_EVERY at a
+# time, ended as soon as one of this login's fleet sockets has a client — tmux keeps
+# a socket u+x while one is attached, so the test is a builtin, no fork.
+idle_nap() {
+  local left="$1" d s
+  d="${TMUX_TMPDIR:-/tmp}/tmux-${UID:-$(id -u)}"
+  while [ "$left" -gt 0 ]; do
+    sleep "$WATCHED_EVERY"; left=$(( left - WATCHED_EVERY ))
+    for s in $NAP_SOCKS; do [ -x "$d/$s" ] && return 0; done
+  done
   return 0
 }
 
