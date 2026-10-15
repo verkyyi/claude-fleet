@@ -22,6 +22,7 @@
 #
 # Exit 0 = pass; non-zero = fail.
 set -uo pipefail
+export FLEET_SKIP_GLOBAL_CONF=1 FLEET_CODEX_READY_CHECK=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SPAWN="$BIN/dash-issue-session.sh"
@@ -79,6 +80,22 @@ FLEET_CONF_DIR="$WORK/sep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_cr
 FLEET_CONF_DIR="$WORK/notsep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
   && fail "C a credsep.json that says separated: false changes nothing"
 ok "C fleet_codex_ready reads the LOGIN column; a separated login is ready"
+
+mkdir -p "$WORK/central"
+printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/central/node.env"
+FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready || fail "C a central-only login needs no local Codex credential"
+FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=0 FLEET_CRED_CENTRAL_URL=https://proxy.example \
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C a disabled proxy cannot supply central credentials"
+FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL='' \
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C central credentials need a configured endpoint"
+printf 'CCQUOTA_FLEET_CREDS=1\n' > "$WORK/central/node.env"
+FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C a locally leased login still needs its local credential"
+rm "$WORK/central/node.env"
+FLEET_CONF_DIR="$WORK/central" FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL=https://proxy.example \
+  FLEET_CODEX_READY_CMD=false fleet_codex_ready && fail "C no node configuration is not central-only"
+ok "C central-only readiness keeps the local credential checks on other logins"
 
 # ===== D: the spawn routes by label =========================================
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
@@ -191,6 +208,27 @@ cat > "$SB/dash-issue-session.sh" <<FAKE
 printf '%s\n' "\$*" > "$WORK/spawn-args"
 FAKE
 chmod +x "$SB/dash-issue-session.sh"
+rm "$SB/fleet-diskguard.sh"
+printf '#!/bin/bash\nexit 0\n' > "$SB/fleet-diskguard.sh"
+printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/central/node.env"
+run_new() {
+  mkdir -p "$WORK/central/fleets/testsess"
+  printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH=master\n' "$WORK/main" > "$WORK/central/fleets/testsess/conf"
+  : > "$WORK/spawn-args"; : > "$WORK/gh.log"
+  PATH="$WORK/fakebin:$PATH" GH_LOG="$WORK/gh.log" FLEET_CONF_DIR="$WORK/central" TMUX='' TMUX_PANE='' \
+  FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_START_WARM=0 \
+  FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL="$1" FLEET_CODEX_READY_CMD=false \
+    bash "$SB/fleet-control-read.sh" start testsess new codex acme/widgets '' '' 'Central Codex task' \
+    <<< 'Reply OK' > "$WORK/new.out" 2> "$WORK/new.err"
+}
+run_new https://proxy.example; rc=$?
+[ "$rc" = 0 ] && grep -q -- '--agent codex' "$WORK/spawn-args" \
+  || fail "E central-only new task reaches the Codex spawner" "$(cat "$WORK/new.err")"
+grep -q 'issue create' "$WORK/gh.log" || fail "E central-only new task files its issue"
+run_new ''; rc=$?
+[ "$rc" = 4 ] && [ ! -s "$WORK/spawn-args" ] && [ ! -s "$WORK/gh.log" ] \
+  || fail "E missing central endpoint refuses before filing or spawning" "$(cat "$WORK/new.err")"
+ok "E new-task adapter accepts central-only credentials and refuses missing credentials before filing"
 file_it() {
   : > "$WORK/spawn-args"; : > "$WORK/gh.log"
   PATH="$WORK/fakebin:$PATH" GH_LOG="$WORK/gh.log" FLEET_CONF_DIR="$WORK/conf" TMUX='' TMUX_PANE='' \

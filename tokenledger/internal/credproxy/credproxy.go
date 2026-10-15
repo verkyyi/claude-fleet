@@ -122,11 +122,15 @@ type HubResolver struct {
 // Resolve posts {cred, provider} to the hub. A transport error or a 5xx is
 // ErrHubUnavailable; any other non-200 is a configuration error.
 func (h *HubResolver) Resolve(ctx context.Context, pass, provider string) (Resolution, error) {
+	return h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: provider})
+}
+
+func (h *HubResolver) resolveRequest(ctx context.Context, request ResolveRequest) (Resolution, error) {
 	c := h.Client
 	if c == nil {
 		c = &http.Client{Timeout: 5 * time.Second}
 	}
-	body, _ := json.Marshal(map[string]string{"cred": pass, "provider": provider})
+	body, _ := json.Marshal(request)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.URL, "/")+ResolvePath, bytes.NewReader(body))
 	if err != nil {
 		return Resolution{}, err
@@ -576,7 +580,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	resp, err := send(res)
-	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+	if err == nil && resp.StatusCode == http.StatusUnauthorized && provider == Codex {
+		resp = p.refreshRejected(r.Context(), resp, pass, provider, &res, send)
+	} else if err == nil && resp.StatusCode == http.StatusTooManyRequests {
 		resp = p.rebind(r.Context(), resp, pass, provider, &res, &a, send)
 	}
 	if err != nil {

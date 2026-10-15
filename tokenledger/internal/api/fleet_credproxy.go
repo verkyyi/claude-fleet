@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credproxy"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -92,13 +93,14 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		sessionCredRefuse(w, http.StatusUnauthorized, "unauthenticated", "the credential proxy's token is required")
 		return
 	}
-	var req struct {
-		Cred     string `json:"cred"`
-		Provider string `json:"provider"`
-	}
+	var req credproxy.ResolveRequest
 	if err := readOptionalJSON(r, &req); err != nil || req.Cred == "" || !hasString(sessionCredProviders, req.Provider) {
 		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument",
 			"body must be {\"cred\": \"fcp-h1.…|fcp-h2.…\", \"provider\": \"claude|codex\"}")
+		return
+	}
+	if req.Rejected != nil && (req.Provider != credvault.Codex || !req.Rejected.Valid()) {
+		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid upstream access rejection")
 		return
 	}
 	if len(s.SessionCredKey) == 0 {
@@ -138,6 +140,12 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out.Owner, out.Account, out.BindRev = b.Owner, b.Account, b.Rev
+	if req.Rejected != nil && req.Rejected.Owner == b.Owner && req.Rejected.Account == b.Account {
+		if _, err := s.Vault.RejectUpstream(b.Owner, req.Provider, b.Account, req.Rejected.Fingerprint, req.Rejected.Code, "central-proxy"); err != nil {
+			httpError(w, http.StatusInternalServerError, "could not record upstream credential rejection")
+			return
+		}
+	}
 	acc, identity, err := s.leaseIdentified(r.Context(), b.Owner, req.Provider, b.Account)
 	if err != nil {
 		if errors.Is(err, credvault.ErrLocked) {
