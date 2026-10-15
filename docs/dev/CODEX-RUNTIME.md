@@ -115,6 +115,32 @@ does not copy credentials or silently substitute another account.
 
 ## Startup and warm scratch panes
 
+The terminal panel's new-task row opens a scratch with the typed text as an
+**unsent draft**. It does not file an issue, invoke `fleet-claim`, or press Enter.
+Repository drafts retain hub placement and a dedicated `draft` field preserves
+the text independently of the shorter window label. The client uses the `draft`
+placement action so an older hub refuses instead of silently losing the text;
+an older node rejects the unsupported field. Upgrade hub and nodes before clients.
+Explicit issue creation, automation, and `--prompt` starts keep their seeded
+behavior. Drafts and submitted seeds cannot be combined.
+
+Panel opens try the matching warm slot even when an agent is selected explicitly.
+The panel forwards its resolved agent even when it matches the default, avoiding
+a second selection lookup after Enter. Node-side policy checks still apply.
+Claims still check repository, provider, account home, size and age; a missing
+entry falls back to cold startup. This changes reuse, not pool capacity.
+
+Measure panel acceptance to **draft ready**, then deliberate Enter to first token
+and complete reply separately. Human editing time is not runtime latency. A
+window appearing is not agent readiness, and draft-only opening is not a completed
+model response. Cold and warm samples, model, effort, MCP configuration and
+concurrent workload must accompany any five-second claim.
+
+Credential-free session homes keep `app-server-control` private, just like
+temporary runtime state. Linking that directory from the real account home makes
+native Codex refuse startup; renewing a mirror replaces only that legacy symlink,
+never the real account's directory or another session's sockets.
+
 `FLEET_MCP_CONFIG` also applies to Codex. `none` disables configured MCP servers,
 apps/connectors and automatic skill-driven MCP installation. A shared
 `mcpServers` JSON allowlist translates stdio/HTTP definitions, including headers.

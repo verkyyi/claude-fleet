@@ -221,6 +221,8 @@ check "C: after revoke the credential is refused" "HTTP 401" "$(send_b)"
 check "C: the session record is gone" no "$([ -e "$FLEET_CONF_DIR/cred-proxy/sessions/sB" ] && echo yes || echo no)"
 
 # ── D: Codex ─────────────────────────────────────────────────────────────────
+mkdir -p "$HOME/.codex-accounts/cx1/app-server-control"
+printf 'original\n' > "$HOME/.codex-accounts/cx1/app-server-control/sentinel"
 run_codex d FLEET_CRED_SID=sD CODEX_HOME="$HOME/.codex-accounts/cx1"
 OUT="$SB/out/d"
 check "D: launch rc" 0 "$(cat "$OUT/rc")"
@@ -229,6 +231,13 @@ check "D: CODEX_HOME is the session's own" "$FLEET_CONF_DIR/cred-proxy/codex-hom
 check "D: no auth.json in it" no "$([ -e "$CH/auth.json" ] && echo yes || echo no)"
 check "D: threads stay the account home's" "$(cd "$HOME/.codex-accounts/cx1/sessions" && pwd -P)" "$(cd "$CH/sessions" && pwd -P)"
 check "D: .fleet-real-home names it" "$(cd "$HOME/.codex-accounts/cx1" && pwd -P)" "$(cat "$CH/.fleet-real-home")"
+check "D: app-server-control is a private directory, not a symlink" yes "$([ -d "$CH/app-server-control" ] && [ ! -L "$CH/app-server-control" ] && echo yes || echo no)"
+check "D: real home runtime files are not shared" no "$([ -e "$CH/app-server-control/sentinel" ] && echo yes || echo no)"
+rmdir "$CH/app-server-control"
+ln -s "$HOME/.codex-accounts/cx1/app-server-control" "$CH/app-server-control"
+bash "$BIN/fleet-session-cred.sh" codex-home --sid sD --real "$HOME/.codex-accounts/cx1" >/dev/null
+check "D: a legacy runtime symlink is replaced" yes "$([ -d "$CH/app-server-control" ] && [ ! -L "$CH/app-server-control" ] && echo yes || echo no)"
+check "D: legacy repair leaves the real runtime intact" original "$(cat "$HOME/.codex-accounts/cx1/app-server-control/sentinel")"
 check "D: model_provider=fleet" 1 "$(grep -c '^model_provider="fleet"$' "$OUT/argv" | tr -d ' ')"
 check "D: the provider is the loopback proxy by env_key" 1 "$(grep -c "base_url=\"http://127.0.0.1:$PORT/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\"" "$OUT/argv" | tr -d ' ')"
 for k in features.plugins=false features.apps=false analytics.enabled=false; do

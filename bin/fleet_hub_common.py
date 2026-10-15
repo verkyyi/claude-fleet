@@ -545,13 +545,17 @@ TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
+        fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
                             "account_class", "reap", "attachments", "test", "debug", "task"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
         # (tokenledger/internal/api/fleet_write.go), letter for letter.
         kind = params.get("kind", "issue")
+        if "draft" in params:
+            if kind != "scratch" or any(key in params for key in ("body", "task", "attachments", "debug")):
+                raise Fault("INVALID_ARGUMENT", "draft belongs to a plain scratch without body, task, debug or attachments")
+            check_text(params["draft"], "draft")
         if kind != "new" and "title" in params:
             raise Fault("INVALID_ARGUMENT", "title belongs to a new-issue start (kind=new)")
         if kind not in ("new", "scratch") and "body" in params:

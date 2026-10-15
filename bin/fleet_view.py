@@ -1633,15 +1633,15 @@ def do(qo, verb, vid, client="", target=None, new=None):
 
 # --- ⌘N ⌘Q ⌃\ (issue #3004, EPIC #2999 C7) ----------------------------------------------
 
-def go_new(qo, vid, client="", repo="", agent="", prompt=""):
+def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
     (dash-raw-session.sh --no-repo, the hub's own origin; the warm pool's HOME
     entry when one is ready, issue #3311), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names an
     orchestrator. rc as go(); 3 when none opened (one line on the client).
     ⌘P's ⚡ row (issue #3327) names its cells: `repo` (--repo, else --no-repo),
-    `agent` (--agent, only when not the fleet's default) and `prompt` (the typed
-    words with no repo: the session's first turn)."""
+    `agent` (--agent, the panel's resolved selection) and `draft` (the typed
+    words, left unsubmitted). Explicit `prompt` callers retain seeded starts."""
     fleet = view_fleet(vid)
     if not fleet:
         return 2
@@ -1650,15 +1650,14 @@ def go_new(qo, vid, client="", repo="", agent="", prompt=""):
     # the HOME slot of the warm pool first (issue #3311): a claimed window is an agent
     # already at its prompt (~0.3 s, against 5-20 s cold on a busy machine); exit 3 =
     # none ready ⇒ the cold open, as a hub start does (fleet-control-read.sh).
-    # FLEET_START_WARM=0 = cold only. A ⚡ open that names a repo, an agent or words
-    # (issue #3327) is no HOME slot's: cold, with them.
     if not agent:
         agent, why = new_agent(fleet, vid)
         if why:
             toast(client, say("view_new_agent_fmt", why, agent.capitalize()))
     named = ["--repo", repo] if repo else ["--no-repo"]
     named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
-    warm = os.environ.get("FLEET_START_WARM", "1") != "0" and named == ["--no-repo"]
+    named += ["--draft", draft] if draft else []
+    warm = os.environ.get("FLEET_START_WARM", "1") != "0" and not prompt
     tries = [["--warm-only"], []] if warm else [[]]
     rc, w, why = 1, "", ""
     secs = fenv("FLEET_VIEW_NEW_SECS", 60)
@@ -2813,21 +2812,21 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
 
 
 def bolt_argv(qo, vid, client, st, query):
-    """What ↵ on the ⚡ row runs: (argv, title, where). Words and a repo: ⌘T's send
-    (fleet-quick-dispatch.py send --toast — it opens the session, moves the 看台
-    and says how it ended); otherwise a session on this machine (`do new`: ⌘N's
-    dash-raw-session.sh, the repo or none, the words as its first turn). The agent
-    rides only when it is not the fleet's default."""
+    """Open a scratch and leave the typed words as an unsubmitted draft.
+
+    Repo drafts keep hub placement; otherwise use the local new-session path.
+    Neither route files an issue, invokes fleet-claim, or submits a model turn.
+    """
     repo, agent = bolt_repo(st, query), bolt_agent(st)
-    extra = ["--agent", agent] if agent != bolt_dflt(st) else []
+    extra = ["--agent", agent]
     cl = ["--client", client] if client else []
     title = query.strip()
     if title and repo:
         argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send",
-                "--title", title, "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid), "--toast"] + extra + cl
+                "--title", title, "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid), "--toast", "--draft"] + extra + cl
     else:
         argv = [sys.executable, qo.__file__, "do", "new", "--view", vid] + cl + (["--repo", repo] if repo else []) \
-            + extra + (["--prompt", title] if title else [])
+            + extra + (["--draft", title] if title else [])
     return argv, title, " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
 
 
@@ -3404,7 +3403,7 @@ def main(argv, qo):
     client = opt(argv, "--client")
     if argv[:1] == ["do"] and len(argv) >= 2:
         return do(qo, argv[1], vid, client, opt(argv, "--target"),
-                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt")})
+                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt", "draft")})
     if argv[:1] == ["view-peers"]:
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")

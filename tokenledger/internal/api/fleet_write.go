@@ -406,7 +406,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -417,6 +417,17 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		var kind string
 		if kind, err = argString(args, "kind"); err != nil {
 			break
+		}
+		if value, ok := args["draft"]; ok {
+			if kind != "scratch" || args["body"] != nil || args["task"] != nil || args["attachments"] != nil || args["debug"] != nil {
+				err = fault("INVALID_ARGUMENT", "draft belongs to a plain scratch without body, task, debug or attachments")
+				break
+			}
+			var draft string
+			if draft, err = checkText(value, "draft"); err != nil {
+				break
+			}
+			w.params["draft"] = draft
 		}
 		switch kind {
 		case "", "issue":

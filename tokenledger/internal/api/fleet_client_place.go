@@ -77,6 +77,7 @@ type clientPlaceRequest struct {
 	Node   string `json:"node"`
 	Title  string `json:"title"`
 	Body   string `json:"body"` // kind=new: the issue's body (claude-fleet#1953); kind=scratch: its seed (#1956)
+	Draft  string `json:"draft"`
 	NoRepo bool   `json:"no_repo"`
 	// Home / New: a HOME session (`fleet claude`, claude-fleet#2564) — a
 	// no-repo scratch that first goes back to the person's current one
@@ -257,6 +258,12 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 		wait = min(max(time.Duration(*req.Wait)*time.Second, 0), clientPlaceWaitMax)
 	}
 	switch req.Action {
+	case "draft":
+		if req.Kind != "scratch" || req.Draft == "" {
+			httpError(w, http.StatusBadRequest, "action=draft requires a scratch and nonempty draft")
+			return
+		}
+		s.clientPlace(w, r, p, key, env.Lease, req, wait, now)
 	case "status":
 		s.clientPlaceStatus(w, r, p, req.OperationID, wait)
 	case "", "place":
@@ -264,7 +271,7 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 	case "task_issue":
 		s.clientTaskIssue(w, r, p, req)
 	default:
-		httpError(w, http.StatusBadRequest, "action must be place, status or task_issue")
+		httpError(w, http.StatusBadRequest, "action must be place, draft, status or task_issue")
 	}
 }
 
@@ -358,6 +365,17 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	var pl Placement
 	var target store.FleetRow
 	what := ""
+	if req.Draft != "" {
+		if req.Kind != "scratch" || req.Body != "" || req.Task || req.Home || len(req.Attachments) != 0 {
+			httpError(w, http.StatusBadRequest, "draft belongs to a plain scratch without body, task or attachments")
+			return
+		}
+		if _, err := checkText(req.Draft, "draft"); err != nil {
+			httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+			return
+		}
+		args["draft"] = req.Draft
+	}
 
 	switch req.Kind {
 	case "issue", "":

@@ -112,8 +112,11 @@ class Control:
             env["FLEET_TIMING_READY_SECS"] = os.environ["FLEET_TIMING_READY_SECS"]
         return env
 
-    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None):
+    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False):
         env = self.environment()
+        env.pop("FLEET_CONTROL_DRAFT", None)
+        if draft:
+            env["FLEET_CONTROL_DRAFT"] = "1"
         if op_id:
             # The operation a start belongs to (issue #2235): its detached
             # paperwork (fleet-start-backfill.sh) stamps t_filed / t_bound on it.
@@ -936,6 +939,8 @@ class Control:
                 # issue #2393: the files the writing area sent are on THIS machine
                 # now (the agent downloaded them) — the text names them here.
                 body = self.attached_body(params)
+                if "draft" in params:
+                    body = params["draft"]
                 if scratch:
                     # issue #1541: a raw scratch session the hub placed here — the
                     # adapter's start with `scratch` for the issue, the account class
@@ -958,7 +963,7 @@ class Control:
                                                      params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
-                                                     timeout=180, task=params.get("task"))
+                                                     timeout=180, task=params.get("task"), draft="draft" in params)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` for the issue and the title (validated above) where

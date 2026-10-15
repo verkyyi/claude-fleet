@@ -115,6 +115,8 @@ class H(BaseHTTPRequestHandler):
             return self.answer(200, {"line": "FILED acme/web#3312\tT218", "exit": 0, "state": "done", "task": "T218",
                                      "filed": "acme/web#3312"})
         kind, issue = p.get("kind"), p.get("issue")
+        if p.get("action") == "draft" and p.get("name") == "old-hub":
+            return self.answer(400, {"error": "action must be place, status or task_issue"})
         if p.get("task"):   # leg T: the hub wrote the record first (issue #3325)
             return self.answer(200, {"line": "REMOTE mac-a op30 done %s/scratch-9\tchose mac-a" % UUID, "exit": 0, "state": "done",
                                      "worker_id": "%s/scratch-9" % UUID, "machine": "mac-a", "task": "T218"})
@@ -263,6 +265,21 @@ has "A: restore payload kind" "$(lastreq)" '"kind": "restore"'
 eq "A: restore login remembered (the hub's login)" "$UUID	bob" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # --- B. refusals keep their codes -----------------------------------------------------
+printf '完整文字 #42 %s' "$(printf 'literal %.0s' {1..40})" > "$WORK/draft.txt"
+run "$P" verkyyi/claude-fleet scratch --name short --draft-file "$WORK/draft.txt"
+eq "draft: placement succeeds" 0 "$RC"
+has "draft: old hubs must reject the new action" "$(lastreq)" '"action": "draft"'
+python3 - "$WORK/log" "$WORK/draft.txt" <<'PY' || fail "draft text was truncated or became a submitted seed"
+import json, pathlib, sys
+request = json.loads(pathlib.Path(sys.argv[1]).read_text().splitlines()[-1])
+assert request['draft'] == pathlib.Path(sys.argv[2]).read_text()
+assert not any(field in request for field in ('body', 'task', 'attachments'))
+PY
+run "$P" verkyyi/claude-fleet scratch --name old-hub --draft-file "$WORK/draft.txt"
+eq "draft: old hub refusal is not silently downgraded" 1 "$RC"
+run "$P" verkyyi/claude-fleet scratch --draft-file "$WORK/draft.txt" --body-file "$WORK/draft.txt"
+eq "draft: ambiguous seed rejected before placement" 2 "$RC"
+
 run "$P" verkyyi/claude-fleet issue-9
 eq "B: held exit" 3 "$RC"; eq "B: held line" "HELD mac-a	#9 is leased to mac-a" "$OUT"
 run "$P" verkyyi/claude-fleet 11

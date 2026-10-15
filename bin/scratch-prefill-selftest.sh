@@ -77,6 +77,14 @@ calls, rc = drive(text, lambda t: frame(screen='❯ \n' if t < 9 else '❯ \nfoo
 assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 13, calls
 print('ok cold: prompt age and screen stability both gate delivery')
 
+calls, rc = drive(text, lambda t: frame('› \n', command='codex', cx=0 if t < 1 else 2))
+assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 11, calls
+calls, rc = drive(text, lambda t: frame('› \n', command='codex', cy=1 if t < 1 else 0))
+assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 11, calls
+calls, rc = drive(text, lambda t: frame('› existing draft\n', command='codex', cx=0))
+assert not pastes(calls)
+print('ok cold cursor paint: wait for the empty prompt cursor, but never overwrite real text')
+
 calls, rc = drive(text, lambda t: frame('› \x1b[2mAsk Codex\x1b[22m\n', command='codex'), warm=True)
 assert rc == 0 and len(pastes(calls)) == 1
 calls, rc = drive(text, lambda t: frame('❯\u00a0\x1b[38;2;2;90;0m\x1b[2m建议\x1b[0m\n', command='2.1.274'), warm=True)
@@ -84,6 +92,24 @@ assert rc == 0 and len(pastes(calls)) == 1
 calls, rc = drive(text, lambda t: frame('›\n', command='codex'), warm=True)
 assert rc == 0 and len(pastes(calls)) == 1
 print('ok Claude/Codex: both prompt glyphs, versioned process and styled ghosts')
+
+with patch.object(mod, 'codex_owns_input', return_value=True):
+    calls, rc = drive(text, lambda t: frame('› \n', command='zsh'), warm=True)
+assert rc == 0 and len(pastes(calls)) == 1
+for identity, processes, expected in (
+    ('codex|20|10', '10 1 zsh\n20 10 fleet-codex.sh\n30 20 codex\n', True),
+    ('codex|20|10', '10 1 zsh\n20 1 fleet-codex.sh\n30 20 codex\n', False),
+    ('codex|20|10', '10 1 zsh\n20 10 fleet-codex.sh\n30 20 bash\n', False),
+    ('codex|20|10', '10 1 zsh\n30 10 codex\n', False),
+    ('claude|20|10', '10 1 zsh\n20 10 codex\n', False),
+):
+    with patch.object(mod.subprocess, 'check_output', return_value=processes.encode()):
+        assert mod.codex_owns_input(lambda *args: identity.encode(), '%42') is expected
+print('ok shell-named Codex: live pane ancestry required; stale or foreign launchers refused')
+with patch.object(mod.subprocess, 'check_output', side_effect=[
+        b'10 1 zsh\n20 10 fleet-codex.sh\n30 20 codex\n', b'codex app-server --listen unix:///tmp/example\n']):
+    assert not mod.codex_owns_input(lambda *args: b'codex|20|10', '%42')
+print('ok backend alone: an app-server without its TUI cannot receive a draft')
 
 for screen in ('❯\u00a0Try "write a test for conf/fleet.conf.reference"\n', '› Ask Codex to do anything\n'):
     calls, rc = drive(text, lambda t: frame(screen), warm=True)

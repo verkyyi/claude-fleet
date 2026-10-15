@@ -61,8 +61,6 @@ def input_status(screen, cx, cy):
         if prompt:
             # capture-pane strips trailing ASCII spaces from a blank input.
             start = len(prompt.group(1)) + 1
-            if cy != y or cx != start:
-                return "busy"
             if has_input(lines[y], start):
                 # NO_COLOR removes Claude's dim style as well as its colors.
                 # Recognize only the standard startup placeholders, and only
@@ -74,8 +72,48 @@ def input_status(screen, cx, cy):
                          or (glyph == "›" and placeholder == "Ask Codex to do anything"))
                 if SGR.search(lines[y]) or not ghost:
                     return "busy"
+            if cy != y or cx < start:
+                return "waiting"
+            if cx != start:
+                return "busy"
             return "empty"
     return "waiting"
+
+
+def codex_owns_input(tm, pane):
+    """A shell-named pane is safe only while its recorded launcher owns Codex."""
+    identity = tm("display-message", "-p", "-t", pane,
+                  "#{@cc_agent}|#{@cc_launcher_pid}|#{pane_pid}").decode().strip().split("|")
+    if len(identity) != 3 or identity[0] != "codex" or not all(value.isdigit() for value in identity[1:]):
+        return False
+    launcher, pane_pid = map(int, identity[1:])
+    processes = {}
+    output = subprocess.check_output(["ps", "-axo", "pid=,ppid=,comm="], timeout=3).decode()
+    for line in output.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            processes[int(fields[0])] = (int(fields[1]), Path(fields[2]).name)
+
+    def descendants(root):
+        pending, seen = [root], set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            pending.extend(pid for pid, (parent, _) in processes.items() if parent == current and pid != current)
+        return seen
+
+    if launcher not in processes or launcher not in descendants(pane_pid):
+        return False
+    for pid in descendants(launcher):
+        name = processes.get(pid, (0, ""))[1]
+        if name != "codex" and not name.startswith("codex-"):
+            continue
+        arguments = subprocess.check_output(["ps", "-p", str(pid), "-o", "args="], timeout=3).decode()
+        if arguments.strip() and not re.search(r"(?:^|\s)app-server(?:\s|$)", arguments):
+            return True
+    return False
 
 
 def prefill(socket, pane, draft, warm):
@@ -110,7 +148,9 @@ def prefill(socket, pane, draft, warm):
         # Native Claude releases may report their version as the process name;
         # npm installs run as node. In particular, never paste into a shell left
         # behind by a failed/exited agent, even if its old prompt is still visible.
-        if command not in ("claude", "codex", "node") and not re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command):
+        if (command not in ("claude", "codex", "node")
+                and not re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command)
+                and not codex_owns_input(tm, pane)):
             appeared = unchanged = previous = None
             time.sleep(POLL)
             continue
@@ -123,7 +163,7 @@ def prefill(socket, pane, draft, warm):
         if status == "empty":
             if appeared is None:
                 appeared = now
-            if screen != previous:
+            if unchanged is None or screen != previous:
                 unchanged = now
             if warm or (now - appeared >= SETTLE and now - unchanged >= STABLE):
                 buf = "scratch-draft-" + str(os.getpid())

@@ -559,6 +559,8 @@ case "$mode" in
       # stdin (issue #1956): the writing area's text, the seed the session
       # starts working on (--prompt-file: arbitrary text never meets a shell).
       sname="${8:-}"; seedf=''
+      seedflag=--prompt-file
+      [ "${FLEET_CONTROL_DRAFT:-}" = 1 ] && seedflag=--draft-file
       if [ ! -t 0 ]; then
         seedf=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || exit 1
         cat > "$seedf"
@@ -592,7 +594,7 @@ case "$mode" in
           wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
         fi
         if [ "$wok" = 1 ]; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${wseed:+"--prompt-file=$wseed"})
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${wseed:+"$seedflag=$wseed"})
           wrc=$?; [ -z "$wseed" ] || rm -f "$wseed"
           if [ "$wrc" != 3 ]; then
             [ -z "$seedf" ] || rm -f "$seedf"
@@ -601,7 +603,7 @@ case "$mode" in
           fi
         fi
       fi
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--as fleet-debugger --desk} ${taskarg:+--task "$taskarg"} ${seedf:+"--prompt-file=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--as fleet-debugger --desk} ${taskarg:+--task "$taskarg"} ${seedf:+"$seedflag=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then
