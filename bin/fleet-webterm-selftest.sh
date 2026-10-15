@@ -124,7 +124,7 @@ for i in $(seq 1 20); do
 done
 eq "C: every cycle clean" 0 "$bad"
 eq "C: no view session left" 0 "$(tn list-sessions -F '#{session_name}' | grep -c '@view-wt-')"
-eq "C: no registry row left" 0 "$(ls "$FLEET_CONF_DIR/remote-views" | grep -c '^wt-')"
+eq "C: no registry row left" 0 "$(find "$FLEET_CONF_DIR/remote-views" -name 'wt-*' | wc -l | tr -d ' ')"
 eq "C: the long command kept its pid" "$SP" "$(spid)"
 eq "C: one personal pane still" 1 "$(tn list-panes -s -t "=$RS" -F '#{@webterm_id}' | grep -c .)"
 eq "C: the same terminal" "$ID" "$(WT status | jf id)"
@@ -160,7 +160,7 @@ C check --conn b --epoch 2 >/dev/null; eq "E: new controller survives it" 0 "$?"
 o=$(C resize --conn b --epoch 2 --cols 99999 --rows 1)
 eq "E: cols clamped" 500 "$(printf '%s' "$o" | jf cols)"; eq "E: rows clamped" 5 "$(printf '%s' "$o" | jf rows)"
 C claim --conn a >/dev/null; eq "E: a fresh lease holds" 4 "$?"
-f=$(ls "$FLEET_CONF_DIR/webterm/control/"*.json | head -n 1)
+f=$(find "$FLEET_CONF_DIR/webterm/control" -name '*.json' | head -n 1)
 python3 - "$f" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); d["ts"] = 0; json.dump(d, open(sys.argv[1], "w"))
