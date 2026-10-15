@@ -137,7 +137,13 @@ if [ "$intmux" = 1 ]; then
       done
     }
     trap ctrl_z TSTP
-    while kill -0 "$WRAP" 2>/dev/null; do sleep 5 & wait $!; done
+    # A trapped TSTP ends the `wait` at once whatever the sleep, so the sleep only
+    # paces noticing a wrapper that died without its EXIT trap: a minute, not 5 s —
+    # two forks a minute a session, not 24 (issue #4261). The EXIT trap's TERM takes
+    # the pending sleep with it, never an orphan left counting down.
+    _zs=''
+    trap '[ -n "$_zs" ] && kill "$_zs" 2>/dev/null; exit 0' TERM
+    while kill -0 "$WRAP" 2>/dev/null; do sleep 60 & _zs=$!; wait "$_zs"; done
   ) </dev/null >/dev/null 2>&1 &
   NOSTOP=$!
   # Out of the job table: bash 3.2 prints a killed job's "Terminated ( … )"

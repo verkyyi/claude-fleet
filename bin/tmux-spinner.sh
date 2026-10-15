@@ -222,6 +222,18 @@ socc=0
 DEAD_EVERY=3   # refreshes between re-probes of a dead label (issue #887, _sock_live)
 deadc=0
 SOCKETS=''
+# --- who is looking (issue #4261) ---------------------------------------------
+# A frame moves a glyph only somebody attached can see. A socket with no client
+# (a spare login, a node nobody's 看台 is on) is read like a quiet one — its glyph
+# written, re-read every IDLE_READ_SECS or on the marker — never 8 frames a second;
+# and with no client on ANY socket the loop ticks UNWATCHED_TICK_SECS, not
+# IDLE_TICK_SECS: the tick is the hook→screen ceiling, and there is no screen. On a
+# shared node that was ~8 logins × a `sleep` + a `tmux` per frame for nobody. tmux
+# itself keeps the answer on its socket file — u+x while a client is attached
+# (server_update_socket) — so it is a builtin test every frame, no fork.
+# FLEET_SPINNER_WATCH=0 animates every socket, as before.
+SPIN_WATCH="${FLEET_SPINNER_WATCH:-1}"
+watched() { [ "$SPIN_WATCH" = 0 ] || [ -x "$TSOCKDIR/$1" ]; }
 
 # --- stuck-working demotion (issue #101) ------------------------------------
 # A window pinned at @claude_state=working whose Stop hook was missed (crash /
@@ -767,11 +779,15 @@ fi
 # tick just slept, and every counter advances by it.
 IDLE_READ_SECS=1
 IDLE_TICK_SECS=0.25
+UNWATCHED_TICK_SECS=1   # the tick while no client is attached anywhere (issue #4261)
 IDLE_EVERY=$(awk -v c="$IDLE_READ_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 TICK_STEP=$(awk -v c="$IDLE_TICK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 # A tick shorter than a frame is not a backoff — never tick faster than the frame.
 [ "$TICK_STEP" -ge 1 ] || TICK_STEP=1
 TICK_SLEEP=$(awk -v s="$TICK_STEP" -v i="$INTERVAL" 'BEGIN{print s*i}')
+UTICK_STEP=$(awk -v c="$UNWATCHED_TICK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
+[ "$UTICK_STEP" -ge "$TICK_STEP" ] || UTICK_STEP=$TICK_STEP
+UTICK_SLEEP=$(awk -v s="$UTICK_STEP" -v i="$INTERVAL" 'BEGIN{print s*i}')
 step=1
 
 # DIRTY MARKER (issue #887): `<socket path>.dirty`, i.e. `$TSOCKDIR/<label>.dirty`
@@ -793,6 +809,7 @@ step=1
 # table, kept in this shell — issue #3522: it used to be a file rewritten every
 # frame) — so a cached frame forks nothing and writes nothing.
 ANIM_SOCKS=''    # sockets whose last read showed an animated window  → stuck_check
+FRAME_SOCKS=''   # …of those, the ones a client is attached to → the frame cadence (issue #4261)
 NEEDS_SOCKS=''   # sockets whose last read showed a `needs` window    → needs_check
 # The frame's three reads spell _lw_fmt's prefix out in front of it rather than
 # `$(_lw_fmt "$WFMT")`: a command substitution is a fork, 8 frames a second per
@@ -825,7 +842,7 @@ while :; do
   # false alarm exactly when the operator is least able to check (issue #677).
   # This branch already sleeps 2s, so an unthrottled stamp here costs one fork/2s.
   # Past the idle grace the sleep is a NAP (issue #1077, idle_nap above).
-  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; NEEDS_SOCKS=''; step=1; continue; fi
+  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; FRAME_SOCKS=''; NEEDS_SOCKS=''; step=1; continue; fi
   IDLE_T0=''   # a live fleet ends the idle spell
 
   hbc=$((hbc + step))
@@ -886,10 +903,11 @@ while :; do
   NEW='|'
   NEW_NEEDS='|'
   AGG=''   # "sess sock count" per live fleet this frame → cross-fleet pass (issues #236, #368)
-  anim_socks='' needs_socks=''
+  anim_socks='' needs_socks='' frame_socks='' looked=0
   n=0
   for sock in $SOCKETS; do
     n=$((n + 1))
+    watched "$sock" && looked=1
     eval "c_sock=\${C_SOCK_$n-} c_age=\${C_AGE_$n:-0} c_anim=\${C_ANIM_$n:-0}"
 
     # --- does this socket need tmux this frame? (issue #887) --------------------
@@ -1070,6 +1088,11 @@ while :; do
 
     NEW="$NEW$tok_s"; NEW_NEEDS="$NEW_NEEDS$ntok_s"; AGG="$AGG$agg_s"
     [ "$anim" = 1 ] && anim_socks="$anim_socks $sock"
+    # Frames only where somebody looks (issue #4261): an animated socket nobody is
+    # attached to keeps its glyph and is re-read as a quiet one (C_ANIM 0); the
+    # stuck / degenerate sweeps still see it animated (anim_socks).
+    watched "$sock" || anim=0
+    [ "$anim" = 1 ] && frame_socks="$frame_socks $sock"
     [ "$needy" = 1 ] && needs_socks="$needs_socks $sock"
     # A live server always has a window, so an EMPTY table is one that went away
     # mid-frame: forget the slot (it re-reads quiet-style) and re-probe the list.
@@ -1083,6 +1106,7 @@ while :; do
   LAST="$NEW"
   LAST_NEEDS="$NEW_NEEDS"
   ANIM_SOCKS="$anim_socks"
+  FRAME_SOCKS="$frame_socks"
   NEEDS_SOCKS="$needs_socks"
 
   # --- cross-fleet needs → @attn_other_windows (issues #236, #368) ------------
@@ -1141,10 +1165,13 @@ while :; do
   # Frame or tick (issue #887): while anything animates, advance the glyph and
   # sleep one frame; with nothing animating anywhere, the glyph has nothing to
   # draw, so sleep a whole tick and let every throttle count it as TICK_STEP frames.
-  if [ -n "$ANIM_SOCKS" ]; then
+  if [ -n "$FRAME_SOCKS" ]; then
     i=$((i + 1)); [ "$i" -gt "$NFRAMES" ] && i=1
     step=1
     sleep "$INTERVAL"
+  elif [ "$looked" = 0 ]; then
+    step=$UTICK_STEP
+    sleep "$UTICK_SLEEP"
   else
     step=$TICK_STEP
     sleep "$TICK_SLEEP"

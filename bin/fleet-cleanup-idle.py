@@ -86,7 +86,14 @@ class Cleaner:
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted")
-        return {n: option(self.tm, window, n) for n in names}
+        # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
+        # window, every window, every tick — ~600 a minute on a busy login. A
+        # value carrying the separator (never seen) falls back to a call per name.
+        out = self.tm("display-message", "-p", "-t", window, "\x1f".join("#{" + n + "}" for n in names))
+        vals = out.split("\x1f")
+        if len(vals) != len(names):
+            return {n: option(self.tm, window, n) for n in names}
+        return {n: v.strip() for n, v in zip(names, vals)}
 
     def ticket(self, snap):
         """The ticket a session is bound to: its @issue, else — for a batch

@@ -6251,11 +6251,19 @@ _fleet_identity_write() {
 # resolver asks for it FIRST, falling back to the key only when it has none.
 # Its worker_id is `<fleet UUID>/<fleet_id>`; the old `<fleet UUID>/<key>` stays a
 # readable alias for one version (EPIC #1645 rule 2): _fleet_wid_split takes both.
+# shellcheck disable=SC2034  # the one spelling of the shape: fleet_is_fid globs it, a caller may grep -E it
 FLEET_FID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
-# fleet_is_fid <s> — a canonical (lowercase, hyphenated) UUID?
+# fleet_is_fid <s> — a canonical (lowercase, hyphenated) UUID? A `case`, never a
+# `printf | grep` (issue #4261): the restore snapshot asks it of every retired mark
+# — ~4,000 on a busy login — and the pipe's two forks each made that one collector
+# minute 55 s and ~8,000 processes. The pattern is FLEET_FID_RE spelled as a glob;
+# the class lists its digits, as a bash range follows the locale's collation (A-F too).
 fleet_is_fid() {
-  [ -n "${1:-}" ] && printf '%s' "$1" | grep -Eqx "$FLEET_FID_RE"
+  case "${1:-}" in
+    [0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef]-[0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef]-[0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef]-[0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef]-[0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef]) return 0 ;;
+  esac
+  return 1
 }
 
 # fleet_fid_mint → a fresh @fleet_id (uuid4), rc 1 when nothing on PATH can mint.
@@ -9428,6 +9436,25 @@ fleet_machine_sessions_publish() {
   if printf '%s %s%s\n' "$n" "$(date +%s)" "${z:+ $z}" > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
      && mv -f "$tmp" "$f" 2>/dev/null; then return 0; fi
   rm -f "$tmp" 2>/dev/null; return 1
+}
+# fleet_login_unused [<socket label>...] — rc 0 when nobody uses THIS login right
+# now (issue #4261): its published row (fleet_machine_sessions_publish, at most
+# 300 s old) says 0 sessions awake and 0 asleep, and none of the given fleet
+# sockets has a client attached (tmux keeps a socket u+x while one is — a builtin
+# test, no fork). A row it cannot read, or a stale one, is "in use": never a reason
+# to stop something. FLEET_HUBSESS_IDLE_SKIP=0 ⇒ always in use.
+fleet_login_unused() {
+  local f n ts z s d
+  [ "${FLEET_HUBSESS_IDLE_SKIP:-1}" != 0 ] || return 1
+  f="$(fleet_machine_sessions_dir)/$(fleet_machine_login)"
+  { read -r n ts z < "$f"; } 2>/dev/null || return 1
+  [ "$n" = 0 ] || return 1
+  [ -z "${z:-}" ] || [ "$z" = 0 ] || return 1
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $(date +%s) - ts )) -le 300 ] || return 1
+  d="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+  for s in "$@"; do [ -x "$d/$s" ] && return 1; done
+  return 0
 }
 # fleet_machine_sessions_owned <dir> — the login files in <dir> their login owns,
 # one path a line: a regular file named after the account that owns it (or after
