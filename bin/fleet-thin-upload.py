@@ -324,6 +324,13 @@ def supervise():
                 except (OSError, subprocess.TimeoutExpired):
                     pass
                 finally:
+                    if status.poll() is None:
+                        # Let the receiver unwind any target/peer subprocess
+                        # groups it owns before the final hard deadline.
+                        try: os.killpg(status.pid, signal.SIGTERM)
+                        except ProcessLookupError: pass
+                        try: status.wait(timeout=.2)
+                        except subprocess.TimeoutExpired: pass
                     try: os.killpg(status.pid, signal.SIGKILL)
                     except ProcessLookupError: pass
                     status.wait()

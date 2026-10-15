@@ -17,7 +17,7 @@ if sys.argv[1] == 'status':
     log = Path.home() / 'progress.ndjson'
     def record(event):
         with log.open('a') as f: f.write(json.dumps(event) + '\n')
-    record({'phase': 'preparing'})
+    record({'phase': 'preparing', 'pid': os.getpid()})
     terminal = False
     for line in sys.stdin.buffer:
         event = json.loads(line); record(event)
@@ -28,7 +28,7 @@ elif sys.argv[1] == 'target':
     time.sleep(float(os.environ.get('FLEET_UPLOAD_FIXTURE_PROBE_DELAY', '0')))
     print(json.dumps(identity))
 else:
-    root = Path.home() / '.cache/claude-fleet/inbox' / h['cur'][2].split('/')[-1]
+    root = Path(os.environ.get('FLEET_UPLOAD_FIXTURE_HOME', str(Path.home()))) / '.cache/claude-fleet/inbox' / h['cur'][2].split('/')[-1]
     root.mkdir(parents=True, exist_ok=True)
     (root.parent / '.target').write_text(json.dumps(h['cur']))
     Path(os.environ.get('FLEET_UPLOAD_FIXTURE_MARKER', str(root.parent / '.started'))).write_text(str(os.getpid()))

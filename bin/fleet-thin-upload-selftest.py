@@ -148,6 +148,7 @@ class Transactions(unittest.TestCase):
         return self.mod.START + (' '.join(shlex.quote(p) for p in paths) + ' ').encode() + self.mod.END
 
     def test_files_insert_once_and_paused_enter_is_discarded(self):
+        os.environ['FLEET_UPLOAD_FIXTURE_HOME'] = str(self.root / "remote home's")
         data = self.drop('中文 file.txt', "quote'file.png")
         self.assertEqual(self.tx.feed(data + b'caption\r'), b'')
         out = self.settle()
@@ -279,6 +280,10 @@ class Transactions(unittest.TestCase):
                     import json
                     events = [json.loads(s) for s in (self.root / 'progress.ndjson').read_text().splitlines()]
                     self.assertEqual(events[-1]['phase'], 'cancelled')
+                    for event in events:
+                        if 'pid' in event:
+                            live = subprocess.run(['ps', '-o', 'stat=', '-p', str(event['pid'])], capture_output=True).stdout.strip()
+                            self.assertTrue(not live or live.startswith(b'Z'), 'status child orphaned')
 
     def test_hash_timeout_and_shutdown_race(self):
         # Instrument the expensive hash call in a private worker copy. The pump
