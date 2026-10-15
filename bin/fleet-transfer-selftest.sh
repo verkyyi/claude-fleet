@@ -125,7 +125,7 @@ if [ "$1" = --agent ] && [ "$2" = claude ]; then
   sid=target-claude
   [ "${3:-}" != --resume ] || sid=$4
   [ ! -f "$TRANSFER_TEST_ROOT/fail-source" ] || [ "${3:-}" != --resume ] || exit 38
-  if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
+  if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ]; then
     exec python3 "$TRANSFER_TEST_ROOT/install/bin/fleet-loop.py" bridge -- "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" norepo
   fi
   exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" normal
@@ -135,7 +135,7 @@ fi
 # issue #1669: the target's credential dies as it starts (a login prompt)
 if [ -f "$TRANSFER_TEST_ROOT/auth-dies" ]; then printf 'reauth_required\n' > "$TRANSFER_TEST_ROOT/login-state"; exit 37; fi
 if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
-if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ]; then
   export LOOP_TEST_ROOT="$HOME" LOOP_TEST_SCRIPT="$TRANSFER_TEST_ROOT/install/bin/fleet-loop.py"
   exec python3 "$LOOP_TEST_SCRIPT" bridge -- pickup
 fi
