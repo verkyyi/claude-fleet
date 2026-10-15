@@ -123,6 +123,9 @@ func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
 			if d["resolved_agent"] != "codex" || d["task"] == "" || d["generation"] != float64(1) {
 				t.Fatalf("identity lost: %v", d)
 			}
+			if st, rec := nodeTaskCall(t, h, tok, "GET", NodeTasksPath+"/"+d["task"].(string), nil); st != 200 || rec["resolved_agent"] != "codex" {
+				t.Fatalf("dispatch owner differs from task-record owner: %d %v", st, rec)
+			}
 			if local {
 				if first.count()+target.count() != 0 {
 					t.Fatal("local placement sent work")

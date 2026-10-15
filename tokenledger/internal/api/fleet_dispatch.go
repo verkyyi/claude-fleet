@@ -84,12 +84,16 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		return err
 	}
 	var t store.FleetTask
+	owner := p.TaskOwner
+	if owner == "" {
+		owner = p.Actor
+	}
 	if d.Task != "" {
 		if supplied := asString(w.params["task"]); supplied != "" && supplied != d.Task {
 			return fault("INVALID_ARGUMENT", "task differs from accepted dispatch")
 		}
 		t, err = s.Store.FleetTask(store.ParseTaskRef(d.Task))
-		if err != nil || t.Owner != p.Actor || t.Repo != w.repo || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
+		if err != nil || t.Owner != owner || t.Repo != w.repo || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
 			t.RequestedAgent != d.RequestedAgent || t.ResolvedAgent != d.ResolvedAgent || t.AttemptID != d.AttemptID {
 			return fault("INVALID_STATE", "accepted dispatch task owner, generation or provider does not match")
 		}
@@ -129,12 +133,15 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 			title = asString(w.params["name"])
 		}
 		if title == "" {
+			title = clipText(asString(w.params["body"]), 240)
+		}
+		if title == "" {
 			title = fmt.Sprintf("%s dispatch", d.ResolvedAgent)
 		}
-		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: p.Actor, Title: title, Repo: w.repo,
+		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo,
 			AuthorityVersion: 1, Agent: d.ResolvedAgent, RequestedAgent: d.RequestedAgent,
 			ResolvedAgent: d.ResolvedAgent, ParentSession: asString(w.params["origin_wid"]), RequestPayload: dispatchPayload(w)},
-			"dispatch:"+p.Actor+":"+d.RequestID, time.Now())
+			"dispatch:"+owner+":"+d.RequestID, time.Now())
 		if err != nil {
 			return fault("IDEMPOTENCY_CONFLICT", "dispatch conflicts with its accepted request")
 		}

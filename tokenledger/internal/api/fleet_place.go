@@ -220,6 +220,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	p.TaskOwner = s.nodeTaskOwner(ep)
 	now := time.Now()
 	w.Header().Set("Cache-Control", "no-store")
 
