@@ -115,3 +115,60 @@ stderr 是检查诊断与负向回归结果，不属于指标行。两条安装�
 自测由 `run-selftests.sh` 自动发现；脚本列出安装器、默认文件、合并程序、钩子表、
 Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自测选择。
 四项 0 只证明上表口径，不声称所有待定项已收尾，也不证明在线版本已同步。
+
+## 程序文件归属
+
+补充程序层的共用组件；这里的类别沿用上文产品边界，不改变默认安装或授权删除。
+
+| 组件 | 类别 | 理由 |
+|---|---|---|
+| 终端看台与薄客户端 | 核心 | #3008 合并后的会话访问、列表和交互入口；按设备可选的 iTerm2 集成仍归上表。 |
+| 配置与插件装配 | 核心 | 读取配置、装配代理和可选插件的共用机制；不代表被装配的插件本身必选。 |
+| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话。 |
+
+下面是盘点工具读取的归属规则，按顺序首个匹配；名称前缀必须唯一对应上方组件表。
+模式相对于 `bin/`，以空格分开，支持 shell 风格通配符。不得用 `*` 总兜底把新文件
+隐去：有引用但没有归属的程序会报「未归类」并退出 1；没有引用者列待复核候选。
+自测先继承被测程序归属，跨组件自测归「构建与验证」，不独立制造产品类别。
+调用口径、候选理由与生成方法见 [程序文件盘点](BIN-INVENTORY.md)。
+
+<!-- bin-inventory:rules -->
+| 组件名前缀 | bin/ 文件模式 | 说明 |
+|---|---|---|
+| 更新说明 | `fleet-whats-new*` | 按需读更新说明 |
+| 操作者设备位置 | `fleet-where-hook* fleet-client-where* fleet-client-lease* fleet-client-who*` | 当前设备及租约 |
+| 压缩后任务恢复 | `refocus-hook*` | 压缩恢复 |
+| 登录说明规则块 | `fleet-agent-defaults*` | 已退出默认，保留显式清理 |
+| 会话状态钩子 | `set-claude-state*` | 状态写入 |
+| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet-compat* fleet_compat* fleet-worker-records*` | 状态、历史与恢复 |
+| 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
+| 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
+| 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard* newcomer-*` | 新人入口与验收 |
+| 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
+| 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* dash-repo-add*` | 仓库注册与选择 |
+| 编排特殊实现 | `fleet-orchestrator* fleet-role* fleet-manual-sub*` | 角色与编排状态，下一批处理 |
+| 管家特殊实现 | `fleet-steward* fleet_steward* fleet_decision*` | 巡查及决定单，下一批处理 |
+| EPIC 批次 | `fleet-epic* epic-page* fleet-batch-green*` | 批次工作流 |
+| 反馈 | `fleet-feedback*` | 反馈插件 |
+| 浏览器 | `fleet-browser*` | 浏览器插件 |
+| 操作者终端集成 | `fleet-iterm* fleet-tcc*` | 设备集成 |
+| 凭据代理 | `fleet-cred-proxy* fleet-proxy-quota*` | 订阅代理 |
+| 额度观察 | `fleet-quota* usage-*` | 额度与用量 |
+| 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-deps-* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install*` | 安装、版本与包 |
+| 宿主清理与保护 | `fleet-cleanup* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-crash-harvest* fleet-park* fleet_park*` | 资源、退出与停放 |
+| 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠与唤醒 |
+| 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect* fleet-report-stats*` | 收集与账本 |
+| GitHub 工作流 | `fleet-issue-bridge* fleet-issue-cache* fleet-gh* fleet_gh* fleet-webhook* tmux-pr-refresh* fleet-labels*` | GitHub 缓存与桥 |
+| 终端状态与节点连接 | `tmux-spinner* fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接 |
+| Hub（ | `fleet-hub* fleet_hub* fleet-login* fleet-logout* fleet-relogin* fleet-users* fleet-tenant* fleet-admin* fleet_admin* hub-session* fleet-route* fleet-connect* fleet-task-record* fleet_cluster_ticket*` | Hub、账号接入及任务记录 |
+| Web 接入 | `fleet-webchat* fleet-webterm* web-console* site-*` | 网页与站点 |
+| 承载节点 | `fleet-node* fleet_node* fleet-spot* fleet-provisioner* fleet-host* fleet-machine* fleet-svc* fleet-service* fleet-services* fleet-job* fleet_job* fleet-daemon* fleet-launchd* fleet-cn-probe*` | 节点与宿主服务 |
+| 接入中继 | `fleet-relay* fleet-peer-cert* fleet-peer-trust* fleet-trust* fleet_ed25519* fleet_tls*` | 中继与节点信任 |
+| 配置与插件装配 | `fleet-conf* fleet_config* fleet-config* fleet-settings* fleet-hook* fleet-agent-bundle* fleet-agent-team* fleet-agent-def* fleet_agent_allow* fleet-plugins* fleet-codex-plugins* fleet-cfg-restart* mcp-fetch* mcp-github*` | 配置与插件注册 |
+| 账号与代理启动 | `fleet-account* .fleet-account* .fleet-failover* fleet-codex* fleet_codex* fleet-claude* fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据 |
+| Fleet MCP（ | `fleet-mcp* fleet-peer-mcp* fleet-phone-mcp* fleet-doctor* fleet-control* fleet_control*` | 工具读写与诊断 |
+| 执行会话与跨会话协作 MCP | `fleet-answer* fleet-await* fleet-children* fleet-comment* fleet-issue-file* fleet-evidence* fleet-pr-* fleet-report-parent* fleet-peer-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet-bind* fleet-draft* fleet-ticket* fleet_ticket* fleet-task* fleet_followup* fleet-wait-reeval* fleet-land* fleet-rules* fleet_rules* fleet-gate-check* fleet-workflow-perms*` | 任务与协作、PR 和合并 |
+| 执行会话（ | `fleet-claim-brief* fleet-worker-start-hook* fleet-worktree* fleet-session-wrap* fleet-session-command* fleet-session-shell-agent* fleet-run* dash-issue-session* dash-raw-session* scratch-pool* scratch-prefill* fleet-home-session* fleet-home-template* fleet-lib.sh fleet_iso.py session-shell/* fleet-degenerate*` | 执行会话与共用运行库 |
+| 终端看台与薄客户端 | `fleet fleet-entry* fleet-up* fleet-down* fleet-attach* fleet-term* fleet-thin* fleet_thin* fleet-client* fleet_clientlog* fleet-session-cli* fleet-session-page* fleet-view* fleet_view* fleet-remote-view* fleet-topbar* fleet-list* fleet-keys* fleet_keys* fleet-door* fleet-input* fleet-compose* fleet-quick* fleet-ui-* fleet-palette* fleet-panel* fleet_panel* fleet-pane* fleet-popup* fleet-pending-tool* fleet-human-menu* fleet-window-carry* fleet-alerts* fleet_notify* fleet_needs_detail* fleet_sidefx* dash-* tmux-* .tmux-* reapply-tmux*` | 看台、交互与窗口 |
+| 构建与验证 | `*-selftest* selftest-* run-selftests* ci-* client-e2e* codex-matrix* docs-* fleet-bin-inventory* fleet-break-it* break-it-durations.txt fleet-ci-* fleet-debug* fleet-drill* fleet-shard* fleet-train* fleet-nightly* fleet-macos-watch* fleet-oldcfg* fleet-claim-grounding* no-direct-gh.baseline oss-scan*` | 盘点、构建、回归与发布检查 |
+<!-- /bin-inventory:rules -->
