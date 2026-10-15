@@ -49,6 +49,10 @@
 #                           issue #2763, EPIC #2999 C1) — the client's 看台: a view
 #                           session that wears the top line itself and outlives its
 #                           client for FLEET_VIEW_KEEP_SECS; see rv_attach_thin.
+#   attach --thin --browser --home <window id> --view wt-<conn> …   (issue #4373)
+#                           a browser's personal terminal (fleet-webterm.py attach):
+#                           no `.last`, no ⌘N road, no orchestrator — the session
+#                           named, else the owned home pane's window.
 #   attach --thin --view <id>-via-<home> …   (ON another machine, from a home
 #                           machine's peer window — EPIC #2999 C4) — the same 看台,
 #                           bare: no top line, no key table (the home draws both).
@@ -863,9 +867,15 @@ rv_thin_dress() {
 }
 rv_attach_thin() {
   local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp last lastgone
+  local browser='' bhome=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
+      # a browser's personal terminal (issue #4373, fleet-webterm.py attach): never
+      # the last-session / ⌘N fallback — nothing named or not live lands on the
+      # owned home pane's window, and no session is ever started for it
+      --browser) browser=1; shift ;;
+      --home) bhome="${2:-}"; shift 2 ;;
       --want) want="${2:-}"; shift 2 ;;
       --resume) resume=1; shift ;;
       --device) device="${2:-}"; shift 2 ;;
@@ -881,6 +891,8 @@ rv_attach_thin() {
   case "$route$token" in *[!A-Za-z0-9._:-]*) note "attach --thin: bad --route / --token"; return 2 ;; esac
   case "$device" in *[!A-Za-z0-9+/=_-]*) note "attach --thin: --device is not base64"; return 2 ;; esac
   case "$lang" in *[!A-Za-z0-9._@-]*) note "attach --thin: --lang is not a locale name — recorded as none"; lang='' ;; esac
+  case "$bhome" in ''|@[0-9]*) ;; *) note "attach --thin: --home is not a window id"; return 2 ;; esac
+  [ -z "$bhome" ] || [ -n "$browser" ] || { note "attach --thin: --home is for --browser"; return 2; }
   s=$(fleet_sockets | head -n 1)
   [ -n "$s" ] || { note "no fleet session is live on $(hostname -s)"; return 3; }
   sock=$(fleet_socket "$s")
@@ -905,7 +917,7 @@ rv_attach_thin() {
       case "$want" in */*) wfar=${want#wid:} ;; esac
       note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere${wfar:+, then there}"
     fi
-  elif [ -z "$resume" ] && last=$(head -n 1 "$VIEWS/.last" 2>/dev/null) && [ -n "$last" ]; then
+  elif [ -z "$resume" ] && [ -z "$browser" ] && last=$(head -n 1 "$VIEWS/.last" 2>/dev/null) && [ -n "$last" ]; then
     # a plain `fleet` (issue #4000): the session this person looked at last
     w=$(rv_thin_window "$s" "$last")
     if [ -z "$w" ]; then
@@ -937,7 +949,12 @@ rv_attach_thin() {
   # through ⌘N's own road below (issue #3007: a home that is not the holder put the
   # person on a bare `home` shell, on the MacBook and on the phone alike)
   orchfar=''
-  if [ -n "$lastgone" ]; then
+  if [ -n "$browser" ]; then
+    # the browser lands where it asked, else on its own home pane — never the
+    # orchestrator, never a new session (issue #4373)
+    [ -n "$w" ] || { [ -n "$bhome" ] && T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null | grep -qxF "$bhome" && w=$bhome; }
+    [ -n "$w" ] || w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null)
+  elif [ -n "$lastgone" ]; then
     # the last one is gone: a new session, never the orchestrator in its place
     w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null); orchfar=1
   elif [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; then
