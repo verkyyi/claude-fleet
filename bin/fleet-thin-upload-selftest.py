@@ -230,10 +230,21 @@ class Transactions(unittest.TestCase):
         # Startup may be slower on a shared Mac; still far below the stalled
         # 30-second target probe, which must never delay ordinary Ctrl+V.
         self.assertEqual(self.tx.feed(b'\x16') + self.settle(timeout=5), b'\x16')
-        self.assertFalse(self.notices)
+        self.assertTrue(all('输入已暂停' in n for n in self.notices), self.notices)
         os.environ.pop('FLEET_UPLOAD_FIXTURE_PROBE_DELAY', None)
         large = self.mod.START + b'/' + b'x' * 60000 + self.mod.END
         self.assertEqual(self.tx.feed(large) + self.settle(), large)
+
+    def test_stalled_status_connection_explains_pause_and_cancels(self):
+        os.environ['FLEET_UPLOAD_FIXTURE_PROBE_DELAY'] = '30'
+        self.tx.feed(self.drop('status-stall.txt'))
+        end = time.monotonic() + 2
+        while not self.notices and time.monotonic() < end:
+            self.tx.poll(); time.sleep(.01)
+        self.assertTrue(any('输入已暂停' in n and 'Ctrl+C' in n for n in self.notices))
+        self.assertEqual(self.tx.feed(b'not queued\r\x03'), b'')
+        self.assertEqual(self.settle(timeout=2), b'')
+        self.assertEqual(self.tx.feed(b'fresh\r'), b'fresh\r')
 
     def test_failure_and_unknown_target_discard_enter(self):
         os.environ['FLEET_UPLOAD_FIXTURE_FAIL'] = '1'

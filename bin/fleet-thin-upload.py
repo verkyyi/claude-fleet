@@ -205,6 +205,12 @@ class Input:
                 pass
             except BrokenPipeError:
                 self.request = b''
+        if not self.notified and not self.cancelled and time.monotonic() - self.started > 1:
+            # The view may be unreachable before its status stream is ready.
+            # A local OSC notification keeps the pause visible even then; byte
+            # progress belongs solely to the view bar, never the agent PTY.
+            self.say('fleet · 输入已暂停，正在准备或上传附件；Ctrl+C 可取消')
+            self.notified = True
         try:
             data = self.job.stdout.read(RESULT_CAP + 1 - len(self.result))
             if data:
