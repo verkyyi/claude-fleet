@@ -261,7 +261,7 @@ def check_private():
     for a in ('127.0.0.1', '10.0.0.1', '172.20.3.4', '172.21.0.1', '192.168.1.1', '100.100.100.200',
               '100.64.0.1', '169.254.169.254', '0.0.0.0', '224.0.0.1', '::1', 'fd00::1', 'fe80::1'):
         assert not public(a), a
-    assert public('140.82.112.3') and public('47.107.64.148')
+    assert public('140.82.112.3') and public('8.8.8.8')
 
     async def run():
         answers = {'metadata.test': ['100.100.100.200'], 'vpc.test': ['172.20.3.4'],
@@ -361,8 +361,8 @@ def selftest():
             pass
     # the default (#4311): any host, any port — CONNECT only
     assert ports is None and allow == ('*',)
-    for host, port in (('api.anthropic.com', 443), ('47.107.64.148', 6443), ('example.com', 22),
-                       ('k8s-log-x.cn-shenzhen.log.aliyuncs.com', 443)):
+    for host, port in (('api.anthropic.com', 443), ('203.0.113.9', 6443), ('example.com', 22),
+                       ('logs.example.net', 443)):
         assert decide('CONNECT', host, port, allow, ports) is None, (host, port)
     assert decide('GET', 'github.com', 80, allow, ports) == 'method_not_allowed'
     for bad in (b'CONNECT a.com:0 HTTP/1.1\r\n\r\n', b'CONNECT a.com:65536 HTTP/1.1\r\n\r\n'):

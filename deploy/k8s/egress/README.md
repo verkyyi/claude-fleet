@@ -35,7 +35,7 @@
 # 在用户 pod 里，以任何登录
 curl -sS -o /dev/null -w '%{http_code}\n' https://github.com/                 # 200（经出口，再经 gh-relay）
 curl -sS -o /dev/null -w '%{http_code}\n' https://example.com/                # 200（任何公网主机）
-curl -sS -m5 -k https://47.107.64.148:6443/version                             # 401/403 来自集群 API（6443 也放）
+curl -sS -m5 -k https://<集群 API 公网地址>:6443/version                        # 401/403 来自集群 API（6443 也放）
 curl -sS -m5 http://100.100.100.200/ -x "$HTTPS_PROXY" -p                       # 失败（出口 403 blocked_address）
 curl -sS --noproxy '*' -m3 https://registry.npmjs.org/                        # 拒绝（守卫，--egress-closed）
 kubectl -n fleet-workers logs deploy/fleet-egress | tail                      # 每请求一行
