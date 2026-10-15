@@ -122,6 +122,7 @@ def package(a):
     if a.handoff and not notes.strip():
         raise ValueError("--handoff must name a non-empty UTF-8 file")
     loop = None
+    durable_ids = []
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
         raw = json.loads(Path(a.loop).read_text(encoding='utf-8'))
@@ -130,6 +131,7 @@ def package(a):
             if not isinstance(verified, dict):
                 raise ValueError('native cron packet needs the controller-verified ownership plan')
             loop = validate(verified) if verified['jobs'] else None
+            durable_ids = verified.get('durable_ids', [])
         else:
             loop = validate(raw)
     elif a.previous:
@@ -258,6 +260,11 @@ def package(a):
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
         if a.loop:
             manifest['native_cron'] = json.loads(Path(a.loop).read_text()).get('native_source')
+        if durable_ids:
+            # The single-owner journal (issue #4280): the loop delivers these
+            # only once fleet_transfer_durable.py says the handover is active.
+            manifest['durable_fid'] = json.loads(a.identity)['fleet_id']
+            manifest['durable_ids'] = durable_ids
     draft_file = a.draft_file
     if a.input_view:
         view = json.loads(a.input_view)
@@ -447,8 +454,11 @@ def loop_exit_confirmation(screen, bundle=None):
     if bundle:
         manifest = json.loads((bundle / 'manifest.json').read_text())
         if manifest.get('native_cron'):
-            jobs = json.loads(Path(manifest['loop_spec_path']).read_text())['jobs']
+            jobs = [j for j in json.loads(Path(manifest['loop_spec_path']).read_text())['jobs']
+                    if j['id'] not in manifest.get('durable_ids', [])]  # deleted natively already
             n = len(jobs)
+            if not n:
+                return False
             if len(lines) < n+6 or lines[-n-6:-n-4] != ['Background work is running', 'The following will stop when you exit:']:
                 return False
             tasks = lines[-n-4:-4]

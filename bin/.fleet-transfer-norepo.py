@@ -178,6 +178,7 @@ def request_preparation(session, pane, transcript, pid, sid, target):
                      transcript=transcript,created_at=time.time(),expires_at=time.time()+300,state='sending')
         preparation_save(path, request)
         reject = shlex.join(['python3', str(Path(__file__).absolute()), 'reject-request', session, pane, request['request_id']])
+        durable_tool = Path(__file__).with_name('fleet_transfer_durable.py')
         prompt=("[Fleet panel transfer request] The operator selected a switch to "+target+
                 ". Source scheduling must be verified before any exit. Read the request at "+str(path)+
                 "; this message belongs ONLY to request id "+request['request_id']+". If the file now has another id, do not use the newer id or arm from this old message. "
@@ -186,8 +187,11 @@ def request_preparation(session, pane, transcript, pid, sid, target):
                 "Start the handoff notes with this exact first line: Fleet-Preparation-Request: "+request['request_id']+"\n"
                 "If you refuse or cannot finish preparation, run "+reject+" to explicitly end ONLY this request; a later panel click may then try again. "
                 "Write private handoff notes covering this current task inventory, role, task record, parent/children, latest user requests, pending decisions, current work and next action. "
-                "If any task is durable, include its verified ownership and any missing evidence in those notes, then explain that successor execution ownership is not yet proven. Run the rejection command above, then stop here; do not proceed with the export/arm instructions below. Keep the source and all tasks running; do not arm, delete a native record or create a second timer, and do not ask the operator to find or export JSON. "
-                "For session-only tasks, write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable (boolean), timezone, expires_at and stop_when wherever absent or truncated in CronList. Include all current jobs. "
+                "A durable task (one in ~/.claude/scheduled_tasks.json) moves only on the single-owner road, in this order: include it in the plan below like the others (durable evidence true); the export stages Fleet's inert copy and reads it back; then run "+shlex.join(['python3', str(durable_tool), 'begin', values['fleet_id']])+
+                "; then call native CronDelete with each durable task's id; then call native CronList; then run "+shlex.join(['python3', str(durable_tool), 'confirm', values['fleet_id'], transcript])+
+                ". Arm only after confirm succeeds. If begin, CronDelete, CronList or confirm fails, do not arm: run "+shlex.join(['python3', str(durable_tool), 'abort', values['fleet_id']])+
+                "; if it prints a restore request, do exactly that (native CronCreate, then confirm-restored); then run the rejection command above. Never create a durable task's timer any other way. "
+                "Write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable (boolean), timezone, expires_at and stop_when wherever absent or truncated in CronList. Include all current jobs. "
                 "Export it using python3 "+str(Path(__file__).with_name('fleet-loop.py'))+
                 " export-cron --session "+session+" --jobs-file <private-plan>. "
                 "As the final tool call, use the Fleet transfer tool action arm, to "+target+", handoff <absolute-notes-path>, then end the turn. "
@@ -216,15 +220,14 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
     try:
         if agent == 'claude':
             from fleet_transfer_cron import validate as validate_cron, has_native_activity, live_list, check_durable_store
-            # The panel may request read-only source preparation even when a
-            # durable record blocks cutover. Neither preparation nor a fresh
-            # CronList supplies the still-missing successor execution fence.
-            check_durable_store()
+            # A durable record still in the table, or a journal the source has
+            # not confirmed, sends the panel to source preparation (#4280).
+            journal = check_durable_store(values['fleet_id'])
             native = has_native_activity(transcript, pid)
             if native and not active['ids'] and not active['next'] and not loop:
                 if live_list(transcript, pid, time.time()):
                     raise ValueError('live CronList disagrees with the absent/expired scheduler mark')
-            needs_plan = active['ids'] or active['next'] or (mark and 'kind=' not in mark)
+            needs_plan = active['ids'] or active['next'] or (mark and 'kind=' not in mark) or journal
             if needs_plan or (loop and 'jobs' in json.loads(Path(loop).read_text())):
                 if not loop:
                     raise ValueError('native scheduling is active or unknown: export current CronList and a verified multi-cron plan before switching')
