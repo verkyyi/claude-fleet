@@ -178,11 +178,13 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   reply.current = onReply;
   const turnId = useRef<string | null>(null);
   const streaming = useRef(false);
+  const transport = useRef(new AbortController());
   const follow = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     clearTimeout(follow.current);
-    const r = await chatFetch(`${API}/conversation`, { headers: H }).catch(() => null);
+    if (transport.current.signal.aborted) return;
+    const r = await chatFetch(`${API}/conversation`, { headers: H, signal: transport.current.signal }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     if (!r || !r.ok) {
       if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
@@ -212,10 +214,11 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   }, []);
 
   useEffect(() => {
+    transport.current = new AbortController();
     load();
     const vis = () => { if (!document.hidden && !streaming.current) load(); };
     document.addEventListener("visibilitychange", vis);
-    return () => document.removeEventListener("visibilitychange", vis);
+    return () => { transport.current.abort(); clearTimeout(follow.current); document.removeEventListener("visibilitychange", vis); };
   }, [load]);
 
   const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem("fwc-model", m); }, []);
@@ -231,7 +234,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     let lost = false;
     let replied = false;
     try {
-      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, body: JSON.stringify({ text, model }) });
+      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
@@ -275,7 +278,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   const onCancel = useCallback(async () => {
     if (!turnId.current) return;
     try {
-      const r = await chatFetch(`${API}/stop`, { method: "POST", headers: H, body: JSON.stringify({ turn: turnId.current }) });
+      const r = await chatFetch(`${API}/stop`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ turn: turnId.current }) });
       if (!r.ok) throw new Error("stop refused");
     } catch { await load(); setNotice("无法确认是否已停止，请查看对话后重试。"); }
   }, [load]);
@@ -298,7 +301,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
       payload = { allow: o.approved };
     }
     try {
-      const r = await chatFetch(`${API}/answer`, { method: "POST", headers: H, body: JSON.stringify({ rid: a.rid, ...payload }) });
+      const r = await chatFetch(`${API}/answer`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ rid: a.rid, ...payload }) });
       if (!r.ok) throw new Error("answer refused");
       setAnswered((m) => new Map(m).set(a.rid, { approved: a.kind === "question" ? true : o.approved, ...(answers ? { answers } : {}) }));
     } catch { await load(); setNotice("无法确认回答是否送达，请查看对话后重试。"); }
