@@ -9,8 +9,6 @@
 #
 #   • pane-active-border-style is the same as pane-border-style
 #   • pane-border-indicators is off (tmux's half-coloured split, 3.3+)
-#   • the task list's border draws nothing (issue #2167 took its TASKS label
-#     away), so nothing on it can depend on focus
 #
 # Then it sources each conf's border lines on a private tmux server (when tmux is
 # there) and checks the options as tmux reads them, so a quoting slip that the
@@ -40,8 +38,6 @@ for rel in $CONFS; do
   [ "$pa" = "$ps" ] || fail "$rel: pane-active-border-style [$pa] differs from pane-border-style [$ps]"
   [ "$(optval "$f" pane-border-indicators)" = off ] || fail "$rel: pane-border-indicators is not off"
   fmt="$(optval "$f" pane-border-format)"
-  # the @sidebar branch is empty (issue #2167): no label, no style, no focus test
-  case "$fmt" in *'#{?#{==:#{@sidebar},1},,'*) : ;; *) fail "$rel: the task list's border still draws something: [$fmt]" ;; esac
   case "$fmt" in *TASKS*) fail "$rel: pane-border-format still names TASKS" ;; esac
 
   REAL_TMUX="$(command -v tmux 2>/dev/null)"

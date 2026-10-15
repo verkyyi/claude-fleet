@@ -74,7 +74,7 @@
 #                 one request for the whole client (no file by file), every file
 #                 identical, the bundle's static tmux in
 #                 ~/.local/share/claude-fleet-vendor/bin, which fleet_find_tool
-#                 finds and `fleet` starts the shell with; FLEET_CLIENT_LAYOUT=solo
+#                 finds and `fleet` starts with; no retired layout is written
 #                 in fleet.conf's [client] and the invitation the line carried
 #                 kept 0600 (never printed); the time it took printed; a computer
 #                 with an earlier install → no solo; a bundle that does not match

@@ -247,7 +247,6 @@
 6.6 node-update-stale-fail
 1.1 nothing-starts-by-itself
 0.1 notify-leaks-secret
-0.9 notify-silent
 0.3 oldcfg-broken-unmarked
 0.3 oldcfg-deleted-hook
 2.9 open-via-home-lost
@@ -262,7 +261,6 @@
 0.0 panel-wrong-window
 6.9 park-lost-progress
 0.0 park-restored-by-restore
-0.8 paste-image-lost
 4.3 peer-window-left-behind
 3.6 peer-window-ssh-killed
 3.1 peerlink-cert-expiry

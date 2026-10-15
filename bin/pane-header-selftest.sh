@@ -15,7 +15,7 @@
 #   • the PR segment (#1954): `PR #N` + ✓ 检查通过 (green) / … 检查中 (amber) /
 #     ✗ <red checks> (red, cut at 24) off @pr_num/@pr_ci/@pr_fail; no @pr_num ⇒
 #     the header is byte for byte the old one
-#   • panels never show it: the hub / dash / sidebar panes, and a window NAMED
+#   • panels never show it: the hub / dash panes, and a window NAMED
 #     dash / plan / backlog
 #
 # Also guards `pane-border-status off` is the conf's global (issue #3192: the header
@@ -160,20 +160,11 @@ tmux set-window-option -t "$ww" @pr_num ''
 tmux set-window-option -u -t "$ww" @pr_num \; set-window-option -u -t "$ww" @pr_ci \; set-window-option -u -t "$ww" @pr_fail
 [ "$(render "$ww")" = " issue-267 #267 " ] || fail "no @pr_num must leave the header untouched — got [$(render "$ww")]"
 
-# panels never show it: the hub + dash panes (their window stamped), the sidebar,
+# panels never show it: the hub + dash panes (their window stamped),
 # and a window NAMED dash / plan / backlog
 tmux set-window-option -t "$hw" @ctx_pct 62 \; set-window-option -t "$hw" @model 'Opus 5.5' \; set-window-option -t "$hw" @effort high \; set-window-option -t "$hw" @pr_num '#1' \; set-window-option -t "$hw" @pr_ci '✓'
 case "$(render "$sp")" in *%*|*Opus*|*"PR #"*) fail "the hub pane must not show the segment — got [$(render "$sp")]" ;; esac
 [ -z "$(render "$dp" | tr -d '[:space:]')" ] || fail "the dash pane must stay empty with stamps — got [$(render "$dp")]"
-sw="$(tmux new-window -P -F '#{window_id}' -t s: -n sidebar)"
-sbp="$(tmux display-message -p -t "$sw" '#{pane_id}')"
-tmux set-option -p -t "$sbp" @sidebar 1
-tmux set-window-option -t "$sw" @ctx_pct 62 \; set-window-option -t "$sw" @model 'Opus 5.5'
-case "$(render "$sbp")" in
-  *%*|*Opus*) fail "the sidebar pane must not show the segment — got [$(render "$sbp")]" ;;
-esac
-# its border says nothing at all (issue #2167 took the TASKS label away)
-[ -z "$(render "$sbp" | tr -d '[:space:]')" ] || fail "the sidebar pane's border must be empty — got [$(render "$sbp")]"
 for nm in dash plan backlog; do
   pw="$(tmux new-window -P -F '#{window_id}' -t s: -n "$nm")"
   tmux set-window-option -t "$pw" @ctx_pct 62 \; set-window-option -t "$pw" @model 'Opus 5.5' \; set-window-option -t "$pw" @effort high \; set-window-option -t "$pw" @pr_num '#1' \; set-window-option -t "$pw" @pr_ci '✓'

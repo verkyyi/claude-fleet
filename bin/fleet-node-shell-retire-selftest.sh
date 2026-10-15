@@ -4,8 +4,7 @@
 #   A. bin/fleet on a managed machine (FLEET_NODE_STATE/machine.env): `fleet` and
 #      `fleet <machine>` say where the client runs and take the client's road
 #      (issue #2720 — stopping here at the terminal check, rc 2); `fleet claude` /
-#      `fleet codex` answer one line, exit 3; an old client cache left here adds
-#      the retire line; `--help` is untouched; the test identity and
+#      `fleet codex` answer one line, exit 3; `--help` is untouched; the test identity and
 #      FLEET_NODE_CLIENT=1 take the device client's road with no line; an
 #      unmanaged machine is byte for byte what it was (rc 2, the terminal line).
 #   B. fleet-node-shell-retire.sh --login <me> in a sandbox home: --dry-run
@@ -17,9 +16,7 @@
 #      with the client running: rc 3, nothing changed; once nothing runs: rc 0.
 #   C. another login without root → rc 2, nothing touched; no --login → rc 2.
 set -uo pipefail
-# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
-# OLD client's road, kept until C11 deletes it — so it asks for it by name
-export FLEET_CLIENT=shell
+unset FLEET_CLIENT
 here="$(cd "$(dirname "$0")" && pwd)"
 FLEET="$here/fleet"
 RETIRE="$here/fleet-node-shell-retire.sh"
@@ -60,11 +57,6 @@ for args in "claude" "codex hello"; do
   [ "$rc" = 3 ] && ok "fleet $args → exit 3" || bad "fleet $args → rc $rc: $out"
 done
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && ok "one line" || bad "lines: $out"
-mkdir -p "$T/home/.cache/claude-fleet/shell"
-fl "$T/managed"
-case "$out" in *"留着旧的常驻客户端（$T/home/.cache/claude-fleet/shell）："*"fleet-node-shell-retire.sh --login $ME"*) ok "an old client left here → the retire line" ;;
-  *) bad "leftover hint: $out" ;; esac
-rm -rf "$T/home/.cache"
 fl "$T/managed" --help
 [ "$rc" = 0 ] && ok "fleet --help untouched" || bad "--help rc $rc"
 FL_ENV="FLEET_CLIENT_IDENTITY=test" fl "$T/managed"
@@ -74,7 +66,7 @@ FL_ENV="FLEET_NODE_CLIENT=1" fl "$T/managed"
 [ "$rc" = 2 ] && case "$out" in *"客户端在 "*) false ;; *) true ;; esac \
   && ok "FLEET_NODE_CLIENT=1: the device client's road, no line" || bad "hatch rc $rc: $out"
 fl "$T/unmanaged"
-[ "$rc" = 2 ] && case "$out" in *"客户端要在终端里运行"*) true ;; *) false ;; esac \
+[ "$rc" = 2 ] && case "$out" in *"fleet --thin needs a terminal"*) true ;; *) false ;; esac \
   && ok "unmanaged machine: as before (rc 2, the terminal line)" || bad "unmanaged rc $rc: $out"
 
 # ---- B. the retire script ----------------------------------------------------
