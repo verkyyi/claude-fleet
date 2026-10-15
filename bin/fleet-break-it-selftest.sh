@@ -219,6 +219,8 @@ REAL_TMUX="$(command -v tmux 2>/dev/null)"
 # never the caller's pane: a drill's `run` loop would take a pane it does not own
 # for a replaced server's and end at once (#2987), and nothing here is that pane's
 unset TMUX TMUX_PANE
+# A worker launched by restore inherits these; each drill chooses its own mode.
+unset RESTORE_UNFINISHED RESTORE_KEEP_DONE RESTORE_ONLY_MAP
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/brk.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"

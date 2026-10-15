@@ -70,14 +70,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_PR_REFRESH_INTERVAL=15
 
 # ── status ──
-# Worker task sidebar
-#FLEET_SIDEBAR=1
 # Tmux UI language
 #FLEET_UI_LANG=auto
 # Closing a task lands on the next task
 #FLEET_CLOSE_LANDS_NEXT=1
-# ⌂/F9 go to the task bar first
-#FLEET_HOME_SIDEBAR_FIRST=1
 
 # ── notify ──
 # Notification command

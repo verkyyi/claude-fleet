@@ -134,9 +134,8 @@ eq 'scope FLEET_GH_TTL'              "$(fcfg_scope FLEET_GH_TTL)"              g
 eq 'scope FLEET_ISSUE_TTL'           "$(fcfg_scope FLEET_ISSUE_TTL)"           global
 eq 'scope FLEET_PR_REFRESH_INTERVAL' "$(fcfg_scope FLEET_PR_REFRESH_INTERVAL)" global
 # issue #237: the notifier (read only by the collector + diskguard daemons) and the
-# status-bar container (read only by tmux-status.sh, global env) are now global-only.
+# other daemon settings are global-only.
 eq 'scope FLEET_NOTIFY_CMD'          "$(fcfg_scope FLEET_NOTIFY_CMD)"          global
-eq 'scope FLEET_STATUS_CONTAINER'    "$(fcfg_scope FLEET_STATUS_CONTAINER)"    global
 
 # DRIFT GUARD (issue #237): fleet_load_conf strips exactly fleet-lib's
 # $_FLEET_GLOBAL_ONLY from the per-fleet overlay, so that list MUST equal the set of

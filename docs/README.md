@@ -31,6 +31,7 @@
 - [WORKER.md](dev/WORKER.md) — 执行会话说明书的规则背景与排障（开工只读 `/fleet-claim`）
 - [WORKER-SLEEP.md](dev/WORKER-SLEEP.md) — worker 休眠与唤醒
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
+- [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
 - [ISSUE-BRIDGE.md](dev/ISSUE-BRIDGE.md) · [WEBHOOK.md](dev/WEBHOOK.md) · [EMIT.md](dev/EMIT.md) — issue 事件、PR / CI 状态、会话事实外送
 
