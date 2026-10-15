@@ -736,6 +736,9 @@ func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
 	if err := h.srv.Store.AdoptAccount(dp, dpod, now); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.srv.Store.SetFleetSetting(trustKey(dpod), TrustTrusted, now); err != nil {
+		t.Fatal(err)
+	}
 	if got, _, _ := leased(t, h, enrollAs(t, h, "drillp-"+dpod, dpod, "drillp")); !eq(got, "claude/gmail", "codex/default") {
 		t.Fatalf("drill's pod: %v, want its creator alice's list", got)
 	}
