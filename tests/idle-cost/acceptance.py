@@ -68,7 +68,7 @@ try:
         # be removed exactly once (including ps visible in its own snapshot).
         return int(count.read_text()) + sampler[0].own
 
-    a = SimpleNamespace(exclude=[], configs=None, secs=6, interval=0.05,
+    a = SimpleNamespace(exclude=[], configs=None, secs=6, interval=0.2,
                         min_age=1, top=10, out=str(work / "scoped.json"))
     n0, t0 = int(count.read_text()), time.monotonic()
     with patch.object(m.Sampler, "sample", scoped_sample), patch.object(m, "fork_counter", counter):

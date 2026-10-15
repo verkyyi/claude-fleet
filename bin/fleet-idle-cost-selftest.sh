@@ -40,7 +40,8 @@ mkdir -p "$FLEET_MACHINE_SESSIONS_DIR"
 # The fixture owns one simulated login. Real neighbours on a shared Mac must
 # not leak into it; peer-state and missing-inventory cases are exercised below
 # and in acceptance.py. Other ps formats (the doctor / load harness) stay real.
-export IDLE_TEST_PS="$(command -v ps)" IDLE_TEST_UID="$(id -u)"
+IDLE_TEST_PS="$(command -v ps)"; IDLE_TEST_UID="$(id -u)"
+export IDLE_TEST_PS IDLE_TEST_UID
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/ps" <<'PS_SHIM'
 #!/bin/sh
@@ -71,7 +72,7 @@ SP=$(tmux -L "$SOCK" display-message -p -t "$W" '#{socket_path}')
 out=$(FLEET_IDLE_SELF_WIN="$W" FLEET_IDLE_SELF_SOCKET="$SP" idle); rc=$?
 [ "$rc" = 0 ] || fail "A2: the caller's own window is not someone working" "$out"
 has idle "$out" "A2: idle says so"
-tmux -L "$SOCK" set-option -w -t "$W" @claude_state done
+tmux -L "$SOCK" set-option -w -t "$W" @claude_state 'done'
 out=$(idle); rc=$?
 [ "$rc" = 0 ] || fail "A3: a done worker is idle" "$out"
 tmux -L "$SOCK" set-option -w -t "$W" @fleet_role panel
@@ -79,7 +80,7 @@ tmux -L "$SOCK" set-option -w -t "$W" @claude_state working
 out=$(idle); rc=$?
 [ "$rc" = 0 ] || fail "A4: only a worker window counts (a panel's state is not work)" "$out"
 tmux -L "$SOCK" set-option -w -t "$W" @fleet_role worker
-tmux -L "$SOCK" set-option -w -t "$W" @claude_state done
+tmux -L "$SOCK" set-option -w -t "$W" @claude_state 'done'
 sh -c "sleep 30; : $FLEET_CI_WORKER_PAT" & cip=$!; PIDS="$PIDS $cip"
 sleep 0.3
 out=$(idle); rc=$?
@@ -98,7 +99,7 @@ has "$(printf 'idle-cost\tbusy\tworking: 1')" "$out" "B1: one busy line with the
 out=$(bash "$BIN/fleet-idle-cost.sh" --secs 1 --json); rc=$?
 [ "$rc" = 3 ] || fail "B3: --json busy exits 3" "$out"
 has '"state": "busy"' "$out" "B3: the JSON says busy"
-tmux -L "$SOCK" set-option -w -t "$W" @claude_state done
+tmux -L "$SOCK" set-option -w -t "$W" @claude_state 'done'
 
 # --- C: bounded real spawner, isolated counter + attribution regression --------
 # The supported load harness owns the experiment; its command gives the fake
