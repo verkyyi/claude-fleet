@@ -82,34 +82,26 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 ~0.2 s for the row producer) and refresh it in the background after the switch.
 
 WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
-「合并后关」 / 「空闲 2 小时关」, and only on the lit row's line at the foot;
+「合并后关」 / 「空闲 2 小时关」, available in the row's actions;
 names are the issue's title as wide as the popup is (the producer's 12-cell name
 when there is none) with no `⇢cla` tag. A state is ONE glyph (#3179: ! needs ·
 x failed · » working · ✓ done · ∙ idle · ? lost, coloured unless NO_COLOR /
-FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii) — only the lit row writes its word
-beside it, and `?` on an empty query shows the legend. Machine, login and repo
+FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii). Selection keeps the same glyph;
+`?` on an empty query shows the legend. Machine, login and repo
 (only when 2+) are tags at the row's end, never a group. No session
 is special (issue #3119): the one holding the orchestrator or the steward is a row
 like any other — no session is behind 「新任务」 below. All of it through
 fleet-ui-lang.sh (`view_*`).
 
-COMMANDS (issue #3180, EPIC #3178 C2; ONE ENTRY, issue #3327 ④ — 方案 B): the
-search line is the panel's only input (「搜会话，或直接写一件新任务」). Under the
-sessions sits ONE ⚡ row, always: 「⚡ 新会话（空白）」 on no words, 「⚡ 新任务：<字>」
-on words, its cells under it — 仓库 ‹…› (不绑仓库 is one; no words: 不绑仓库, words:
-the last send's repo — ⌘T's `pick`) · Agent ‹…› (the fleet's default; one this
-machine lacks grey, with why — ⌘T's rule, fleet-quick-dispatch.py grid). Opened,
-the lit row is the session in view (⌘P ↵ = back to it; in a session's shell, that
-session), ↑ from the top goes round to ⚡; typed words light the first session
-they hit (title or issue number only — never a machine's name), none hit ⇒ ⚡ is
-lit. On ⚡ Tab walks 仓库 → Agent and ←→ changes the cell (a session row's Tab is
-its actions, 在它的目录开 shell among them). ↵ on ⚡ runs detached, the row its
-progress (esc closes the panel, the run still says how it ended): words + a repo ⇒
-⌘T's send (fleet-quick-dispatch.py send --toast); otherwise ⌘N's new session on
-this machine (`do new`: the repo or none, the words its first turn). Below it ⏻
-退出 fleet (quit_view, ⌘Q's). FLEET_PANEL_COMMANDS (the environment, else
-fleet.conf `[common]`) keeps `new quit landed` (the 刚落地 group first) and
-`none` (no ⚡, no ⏻); panel_rows() builds it, `view-panel` prints it.
+COMMANDS / OVERLAYS (issue #4416): the search line filters sessions. New task
+and session actions open local overlays anchored to their source row; the list
+keeps its full width and row geometry. Tab opens/explicitly retargets, F6 changes
+focus, Escape restores source selection/search/scroll. Composer Enter inserts a
+newline; only its explicit draft/blank buttons call bolt_argv (the existing
+unsubmitted-draft routes). Draft text, caret, repo and agent persist per view;
+confirmed draft opening or explicit clear consumes text, blank opening does not.
+The footer contains keys, an optional glyph legend and transient feedback.
+FLEET_PANEL_COMMANDS still controls new/quit/landed through panel_rows().
 
 LANGUAGE (issue #3329, EPIC #3178 D7, L1–L3): the 「◐ 语言 / Language」 row sits
 under ⚡, above ⏻, both scripts on it so a person who cannot read the one in use
@@ -854,7 +846,7 @@ def entries(vid, now=None, hub=True):
     kind  hdr (a group heading, `group`) · sess · ask (the question a needs row
           asks, the line under it) · sec (已结束, folds) — `sec` names the
           section a line sits in
-    text  the line's words · word (the state, written out on the lit row) · sym
+    text  the line's words · word (the state, available in actions) · sym
           (its glyph class) · group · ask · tags (lost / direct machine, ✗ broken
           configuration, ∅ no issue, k/N, repo when 2+) · right (the issue) · foot
           (the lit row's line; it says 「今天 N token」 when the hub recorded any —
@@ -879,6 +871,7 @@ def entries(vid, now=None, hub=True):
     groups = {g: [] for g in GROUPS}
     ended, repos, anc = [], [], {}
     section, repo = "", ""
+    seen = set()
     # the repo a row sits under, as the ask book's key (issue #4225): a heading's
     # owner/name; with no heading at all (a one-repo list) the fleet's one repo
     only = fleet_only_slug(fleet) if fleet else ""
@@ -907,6 +900,20 @@ def entries(vid, now=None, hub=True):
         key = f[0]
         local = not key.startswith("wid:")
         target = key if local else key[4:]
+        # Reuse the producer's eligible rows and this read's canonical mapping.
+        # Distinct @windows count separately even if a bad stamp shares a fid.
+        if not local and row.get("fuid") and target.startswith(row["fuid"] + "/"):
+            target, far = resolve(vid, target, row, fleet, wins)
+            if not target or far:
+                continue
+            local = True
+        if local and (not re.fullmatch(r"@[0-9]+", target) or
+                      wins.get(target, ("", "", 0))[1] in ("home", "panel")):
+            continue
+        identity = (local, target)
+        if identity in seen:
+            continue
+        seen.add(identity)
         mark = f[8]
         machine = mark.rstrip("!~") or here
         lost, direct = mark.endswith("!"), mark.endswith("~")
@@ -968,6 +975,7 @@ def entries(vid, now=None, hub=True):
         if grp == "wait":
             tags.append(say("view_stage_" + stage))
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
+             "open": target in wins if local else True,
              "state": state, "text": title or name, "name": name, "reap": f[14].strip(), "issue": issue, "depth": depth,
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
@@ -1056,6 +1064,20 @@ def entries(vid, now=None, hub=True):
             out.append({"kind": "cmd", "cmd": "history", "act": "history", "sec": "gone", "n": older, "row": {},
                         "text": say("view_cmd_older_fmt", older)})
     return out
+
+
+def session_count(items, query="", remote_unknown=False):
+    rows = {(bool(e.get("far")), e.get("target")): e for e in items
+            if e.get("kind") == "sess" and e.get("target") and not e.get("gone") and e.get("open", True)}
+    known = [e for e in rows.values() if not e.get("lost")]
+    unknown = remote_unknown or any(e.get("lost") for e in rows.values())
+    total = str(len(known)) + ("+?" if unknown else "")
+    if query.strip():
+        matched = str(sum(matches(e, query) for e in known))
+        if unknown:
+            matched += "+?"
+        total = matched + "/" + total
+    return say("view_count_fmt", total)
 
 
 def banner(items, now=None):
@@ -1217,7 +1239,7 @@ def legend():
 def paint(shown, at, width, cells, clip):
     """The list's lines as segments [(text, style)] — style a tuple of: bold ·
     lit · dim · c<N> (a 16-colour palette number). Kept off curses so the
-    selftest reads exactly what is drawn. Only the lit row writes its state."""
+    selftest reads exactly what is drawn. Selection changes style only; glyph/name columns are invariant."""
     gl, col = glyphs(), color_on()
     lines = []
     for i, e in enumerate(shown):
@@ -1230,7 +1252,7 @@ def paint(shown, at, width, cells, clip):
                            ("bold", "lit") if lit else ("bold",))])
             continue
         if e["kind"] == "cmd":
-            lines.append([(clip(("▶ " if lit else "  ") + e["text"], width), ("lit", "bold") if lit else ())])
+            lines.append([(clip("  " + e["text"], width), ("lit",) if lit else ())])
             continue
         if e["kind"] == "grid":
             # the ⚡ row's cells (issue #3327): the one Tab is on lit, the rest plain
@@ -1247,12 +1269,11 @@ def paint(shown, at, width, cells, clip):
         if e["kind"] == "ask":
             lines.append([(clip("    " + indent + e["text"], width), ("dim",))])
             continue
-        base = ("lit", "bold") if lit else (("dim",) if e.get("far") or e.get("sec") else ())
+        base = (("dim",) if e.get("far") or e.get("sec") else ()) + (("lit",) if lit else ())
         sym = e.get("sym") or "idle"
         # a lost row is grey end to end, its glyph too: what it says is no longer known
         gstyle = base + (("c%d" % GLYPH_COLORS[sym],) if col and not e.get("lost") else ())
-        head = ("▶ " if lit else "  ")
-        word = (" " + e["word"]) if lit and e.get("word") else ""
+        head, word = "  ", ""
         right = " ".join(list(e.get("tags") or ()) + [e.get("right") or (
             "#" + e["issue"].lstrip("#") if e.get("issue") else "")]).strip()
         used = cells(head) + 1 + cells(word) + 1
@@ -1262,6 +1283,9 @@ def paint(shown, at, width, cells, clip):
         if right:
             pad = max(1, width - used - cells(name) - cells(right))
             segs.append((" " * pad + right, base if lit else ("dim",)))
+        used = sum(cells(text) for text, _ in segs)
+        if used < width:
+            segs.append((" " * (width - used), base))
         lines.append(segs)
     return lines
 
@@ -1336,17 +1360,15 @@ def current(vid, fleet=None):
     return pc[4:] if pc.startswith("wid:") else (pc or w)
 
 
-def resolve(vid, target, row, fleet):
+def resolve(vid, target, row, fleet, inventory=None):
     """(window id in the fleet, far) for a target: a window here; a worker id of
     this fleet (its UUID = the registry's fuid=) by @fleet_id; anything else far."""
     if target.startswith("@"):
         return target, False
     uuid, _, fid = target.partition("/")
     if fid and uuid and uuid == row.get("fuid"):
-        for w, v in windows(fleet).items():
-            if v[0] == fid:
-                return w, False
-        return "", False
+        matches = [w for w, v in (windows(fleet) if inventory is None else inventory).items() if v[0] == fid]
+        return (matches[0] if len(matches) == 1 else ""), False
     return "", True
 
 
@@ -2649,7 +2671,7 @@ def pin_row(items, query, cur):
     q = query.strip().lower()
     if q and not all(w in (text + " pin top 置顶").lower() for w in q.split()):
         return None
-    return {"kind": "cmd", "cmd": "pin", "act": "pin", "row": e, "text": "📌 " + text,
+    return {"kind": "cmd", "cmd": "pin", "act": "pin", "row": e, "text": text,
             "foot": say("view_pin_foot_fmt", label_of(e))}
 
 
@@ -2754,7 +2776,9 @@ def bolt_usable(st):
 
 
 def bolt_agent(st):
-    a = st["agent"] or bolt_dflt(st)
+    if st["agent"] is not None:
+        return st["agent"]    # a saved explicit selection is never silently reassigned
+    a = bolt_dflt(st)
     use = bolt_usable(st)
     return a if a in use else use[0]
 
@@ -2790,11 +2814,10 @@ def bolt_cells(st, query):
 
 
 def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
-    """What the popup lists (issue #3327, 方案 B): the sessions (visible()), the
-    session in view's 置顶 line (`cur`, issue #3517), then
-    the ⚡ row — 「⚡ 新会话（空白）」 on no words, 「⚡ 新任务：<字>」 on words —
-    with its cells under it (仓库 · Agent), then ⏻ 退出. `busy` (a ↵ under way):
-    the ⚡ row is its progress. Typed words that hit no session say so as its foot."""
+    """The full-width list projection. Composer controls belong to the overlay,
+    never inserted rows; search words may seed an empty draft on explicit open.
+    `busy` is retained for the command-line projection; the popup keeps its list
+    geometry and shows progress in the feedback line (#4416)."""
     words = panel_commands() if cmds is None else cmds
     if "landed" in words:
         items = landed_first(items)
@@ -2808,15 +2831,11 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
         if busy:
             out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {}, "busy": True,
                         "text": say("view_task_starting_fmt", busy["title"]) if busy["title"] else say("view_task_opening")})
-            out.append({"kind": "grid", "cells": [], "note": "", "text": say("view_task_step_fmt", busy["where"])})
         else:
             hit = any(e["kind"] == "sess" for e in out)
             out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {},
                         "text": say("view_cmd_task_fmt", q) if q else say("view_cmd_blank"),
                         "foot": say("view_nomatch") if q and not hit else ""})
-            cells, note = bolt_cells(st, query)
-            out.append({"kind": "grid", "cells": cells, "note": note,
-                        "text": "  ·  ".join(t for t, _ in cells) + (("  " + note) if note else "")})
     lr = lang_row(query) if words else None
     if lr:
         out.append(lr)      # under ⚡, above ⏻ (issue #3329)
@@ -2949,10 +2968,25 @@ def _keys():
 
 
 def popup(screen, qo, vid, client, forward=""):
+    # Scope paste mode to this popup's terminal, including exceptions/close.
+    sys.stdout.write("\x1b[?2004h")
+    sys.stdout.flush()
+    try:
+        return _popup(screen, qo, vid, client, forward)
+    finally:
+        sys.stdout.write("\x1b[?2004l")
+        sys.stdout.flush()
+
+
+def _popup(screen, qo, vid, client, forward=""):
     # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
+    import fleet_panel as panel
+    inputs = panel.Input()
     curses.raw()
     curses.curs_set(0)
-    styles = {"bold": curses.A_BOLD, "lit": curses.A_REVERSE | curses.A_BOLD}
+    styles = {"bold": curses.A_BOLD, "lit": curses.A_REVERSE}
+    selected_pairs = {}
+    curses.mousemask(curses.ALL_MOUSE_EVENTS)
     try:
         curses.use_default_colors()
         grey = 8 if curses.COLORS > 8 else curses.COLOR_WHITE
@@ -2963,6 +2997,11 @@ def popup(screen, qo, vid, client, forward=""):
             curses.init_pair(4, curses.COLOR_RED, -1)
             styles["red"] = curses.color_pair(4) | curses.A_BOLD
             styles["dim"] = curses.color_pair(2)
+            # Keep foregrounds and state glyphs; selection changes background only.
+            for n, fg in [(-1, -1), (8, grey)] + [(n, n if n < curses.COLORS else n % 8) for n in GLYPH_COLORS.values()]:
+                pair = 32 + n + 1
+                curses.init_pair(pair, fg, curses.COLOR_BLUE)
+                selected_pairs[n] = curses.color_pair(pair)
             for n in sorted(set(GLYPH_COLORS.values())):
                 c = n if n < curses.COLORS else (curses.COLOR_WHITE if n == 8 else n % 8)
                 curses.init_pair(10 + n, c, -1)
@@ -2971,6 +3010,10 @@ def popup(screen, qo, vid, client, forward=""):
         pass
 
     def attr(style):
+        if "lit" in style and selected_pairs:
+            fg = next((int(k[1:]) for k in style if k.startswith("c") and k[1:].isdigit()),
+                      8 if "dim" in style else -1)
+            return selected_pairs.get(fg, selected_pairs[-1]) | (curses.A_BOLD if "bold" in style else 0)
         a = 0
         for k in style:
             a |= styles.get(k, 0)
@@ -3001,6 +3044,16 @@ def popup(screen, qo, vid, client, forward=""):
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
     bolt, busy, job = bolt_new(), None, []
+    draft_key = hashlib.sha256((fleet + ":" + vid).encode()).hexdigest()[:32]
+    draft = panel.Draft(conf_dir() / "panel-drafts" / (draft_key + ".json"))
+    bolt.update(repo=draft.repo, agent=draft.agent)
+    overlay, follow_list, ask_focus = None, True, 0
+    editor_follow = False
+
+    def save_draft():
+        nonlocal msg
+        if not draft.save(bolt):
+            msg = say("view_draft_save_failed")
 
     def grid_load():
         bolt["g"] = grid_read(vid)
@@ -3011,8 +3064,7 @@ def popup(screen, qo, vid, client, forward=""):
     def listing():
         return panel_rows(items, query, opened, cmds, bolt, busy, cur)
 
-    def key_of(e):
-        return (e.get("kind"), e.get("cmd") or e.get("target") or e.get("sec"))
+    key_of = panel.key_of
 
     def bolt_at():
         return next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), -1)
@@ -3030,21 +3082,69 @@ def popup(screen, qo, vid, client, forward=""):
     # only: a periodic last-row scroll otherwise repaints the frame at rest.
     heal = qo.Heal(periodic=False)
     fresh = Refresh(vid, first=0 if bg else None)
-    # Tab (issue #3181): `menu` = the row's actions, `choice` = an action's options,
-    # `ask` = the question on the bottom line. Esc steps back to the list.
+    # One anchored overlay: menu, choice, answer or multiline composer.
+    # Escape restores its source's search/selection/scroll snapshot.
     mode, mrow, mitems, mat, mtitle, pend, line = "", None, [], 0, "", None, Line()
     # another machine's action runs off the screen's thread (a hub write waits up
     # to its op's answer): its line lands here, then the list is read again
     landed = []
 
     def back():
-        nonlocal mode, mrow, mitems, mat, pend
-        mode, mrow, mitems, mat, pend = "", None, [], 0, None
+        nonlocal mode, mrow, mitems, mat, pend, overlay, query, opened, at, top, shown, follow_list
+        save_draft()
+        if overlay:
+            query, opened, _, _ = overlay.snapshot
+            shown = listing()
+            query, opened, at, top = overlay.restore(shown)
+        mode, mrow, mitems, mat, pend, overlay = "", None, [], 0, None, None
+        follow_list = False
+
+    def anchor(row):
+        nonlocal overlay, ask_focus
+        overlay = panel.Overlay(row, query, opened, at, top, off + at - top)
+        ask_focus = 0
+
+    def compose(row):
+        nonlocal mode, editor_follow
+        anchor(row)
+        if not draft.editor.text and query.strip():
+            draft.editor.insert(query)
+        # Resolve defaults once for this draft; later list/search changes cannot
+        # silently change its destination. Async grid loading is handled below.
+        if bolt["ready"] and bolt["repo"] is None:
+            bolt["repo"] = bolt_repo(bolt, draft.editor.text)
+        mode = "compose"
+        overlay.scroll = draft.scroll
+        overlay.follow = False
+        editor_follow = False
+        save_draft()
+
+    def valid_row(r):
+        # Frozen origin, fresh eligibility. Never use the currently selected row
+        # for an existing overlay; a vanished/replaced origin is a refusal.
+        if not r.get("target") or (r.get("gone") and r["target"].startswith("landed:")):
+            return r
+        if r.get("gone"):
+            return None
+        e = next((e for e in items if e.get("kind") == "sess" and e.get("target") == r["target"]
+                  and bool(e.get("far")) == bool(r.get("far")) and not e.get("gone")), None)
+        if e is None or e.get("lost"):
+            return None
+        now = act_row(fleet, e)
+        if now.get("gone") or (r.get("fid") and now.get("fid") != r["fid"]):
+            return None
+        return now
 
     def run(a, r, ans):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
         nonlocal items, shown, msg, mode, pend, line, msg_until
+        checked = valid_row(r)
+        if checked is None or (r.get("target") and not a.get("rowless") and
+                               not any(x[0]["id"] == a["id"] for x in menu_of(checked))):
+            msg = say("view_overlay_gone")
+            return False
+        r = checked
         if (r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell")) or a.get("thread"):
             def far_run():
                 landed.append(act_run(qo, vid, fleet, a, r, ans, client)[1])
@@ -3054,12 +3154,12 @@ def popup(screen, qo, vid, client, forward=""):
             return False
         rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
         msg_until = time.time() + 3 if a["id"] == "lang" and rc == 0 else 0
-        back()
         if rc == 4 and r.get("gone") and not ans:
             # a restore that asks first (#543): its question on the bottom line,
             # y reopen the PR · r restore anyway · any other key cancels
             mode, pend, line = "ask", (a, r, "", "key", said + " · " + say("view_ask_restore")), Line()
             return False
+        back()
         if went:
             return True     # the 看台 is on it now: the popup closes
         msg = said
@@ -3069,7 +3169,10 @@ def popup(screen, qo, vid, client, forward=""):
 
     def pick(a, r, value=None):
         """An action picked (or one of its options): ask what it needs, else do it."""
-        nonlocal mode, mitems, mat, mtitle, pend, line
+        nonlocal mode, mitems, mat, mtitle, pend, line, ask_focus
+        ask_focus = 0
+        if overlay:
+            overlay.scroll, overlay.follow = 0, True
         ask = act_ask(a, r)
         if value is not None:
             then = (a.get("then") or {}).get(value)
@@ -3105,8 +3208,12 @@ def popup(screen, qo, vid, client, forward=""):
         if job:
             # the ⚡ row's ↵ ended: opened ⇒ the 看台 is on it, the popup closes
             rc, said = job.pop(0)
+            sent = busy
             busy = None
             if rc == 0:
+                if sent and sent.get("draft"):
+                    draft.editor = panel.Editor()
+                save_draft()
                 return 0
             msg = said or say("view_new_failed")
             shown = listing()
@@ -3118,56 +3225,28 @@ def popup(screen, qo, vid, client, forward=""):
             shown = listing()
             at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
                       min(at, max(0, len(shown) - 1)))
+        if msg and not msg_until:
+            msg_until = time.time() + 3
         heal.tick(screen)
         height, width = screen.getmaxyx()
         screen.erase()
         ban = banner(items)
         off = 2 if ban else 1
         body = max(1, height - 2 - off)
-        if mode in ("menu", "choice"):
-            screen.addnstr(0, 0, qo.clip("› " + query, width - 1), width - 1)
-            screen.addnstr(1, 0, qo.clip("─ " + mtitle + " ", width - 1), width - 1, attr(("bold",)))
-            mtop = max(0, mat - (body - 2))
-            for y, (_, label, _) in enumerate(mitems[mtop:mtop + body - 1], 2):
-                lit = mtop + y - 2 == mat
-                screen.addnstr(y, 0, qo.clip(("▶ " if lit else "  ") + label, width - 1), width - 1,
-                               attr(("lit", "bold") if lit else ()))
-            screen.addnstr(height - 2, 0, qo.clip(msg, width - 1), width - 1)
-            screen.addnstr(height - 1, 0, qo.clip(say("view_act_keys"), width - 1), width - 1, attr(("dim",)))
-            screen.refresh()
-            screen.timeout(heal.timeout(False) or 1000)
-            try:
-                ch = screen.get_wch()
-            except curses.error:
-                continue
-            msg = ""
-            if ch == curses.KEY_RESIZE:
-                heal.resized(screen)
-            elif ch in ("\x1b", "\x03"):
-                back()
-            elif ch in (curses.KEY_UP, "\x10"):
-                mat = max(0, mat - 1)
-            elif ch in (curses.KEY_DOWN, "\x0e", "\t"):
-                mat = min(len(mitems) - 1, mat + 1)
-            elif ch in ("\n", "\r", curses.KEY_ENTER) and mitems:
-                v, _, a = mitems[mat]
-                done = pick(a, mrow) if mode == "menu" else pick(a, pend[1], v)
-                if done:
-                    return 0
-            continue
         sel = [i for i, e in enumerate(shown) if pickable(e)]
         if sel and at not in sel:
             at = min(sel, key=lambda i: abs(i - at))
-        if at < top:
-            top = at
-        if at >= top + body:
-            top = at - body + 1
-        # the lit row's question under it stays on screen
-        if at + 1 < len(shown) and shown[at + 1]["kind"] == "ask" and at + 1 >= top + body:
-            top += 1
-        screen.addnstr(0, 0, qo.clip("› " + query, width - 1), width - 1)
-        if not query and width > 4:
-            screen.addnstr(0, 2, qo.clip(say("view_search_ph"), width - 3), width - 3, attr(("dim",)))
+        top = panel.clamp_top(top, len(shown), body)
+        if follow_list:
+            top = panel.reveal(top, at, body)
+            if at + 1 < len(shown) and shown[at + 1]["kind"] == "ask" and at + 1 >= top + body:
+                top += 1
+        follow_list = False
+        remote_unknown = hub_stale() or (os.environ.get("CCQUOTA_FLEET") == "1" and hub_age() is None)
+        count = session_count(items, query, remote_unknown)
+        count_x = max(2, width - 2 - qo.cells(count))
+        panel.put(screen, 0, 0, "› " + (query or say("view_search_ph")), count_x - 1, qo.clip)
+        panel.put(screen, 0, count_x, count, width - count_x - 1, qo.clip, attr(("bold",)))
         if ban:
             try:
                 screen.addnstr(1, 0, qo.clip(ban, width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
@@ -3179,63 +3258,92 @@ def popup(screen, qo, vid, client, forward=""):
                 if x >= width - 1:
                     break
                 try:
-                    screen.addnstr(y, x, text, width - 1 - x, attr(style))
+                    panel.put(screen, y, x, text, width - 1 - x, qo.clip, attr(style))
                 except curses.error:
                     pass
                 x += qo.cells(text)
-        if mode == "ask":
-            # the question on the bottom line, the keyboard in it (fleet-ask.py's way)
-            screen.addnstr(height - 2, 0, qo.clip(pend[4] + line.text + ("" if pend[3] == "key" else "▏"), width - 1),
-                           width - 1, curses.color_pair(3) if color_on() else attr(("bold",)))
-            screen.addnstr(height - 1, 0, qo.clip(say("view_ask_keys"), width - 1), width - 1, attr(("dim",)))
-            screen.refresh()
-            screen.timeout(heal.timeout(False) or 1000)
-            try:
-                ch = screen.get_wch()
-            except curses.error:
-                continue
-            a, r, pre, kind, _ = pend
-            if ch == curses.KEY_RESIZE:
-                heal.resized(screen)
-            elif ch in ("\x1b", "\x03"):
-                back()
-            elif kind == "key":
-                if isinstance(ch, str) and ch in (a.get("keys") or ""):
-                    if a.get("yes") and ch not in "yY":
-                        back()      # n: nothing done
-                    elif run(a, r, ch):
-                        return 0
-                elif ch not in (curses.KEY_RESIZE,):
-                    back()          # any other key cancels a one-key question
-            elif ch in ("\n", "\r", curses.KEY_ENTER):
-                text = line.text.strip()
-                if not text:
-                    back()          # an empty answer cancels, as an empty name always has
-                elif run(a, r, pre + text):
-                    return 0
-            else:
-                line.key(ch)
-            continue
         lit_e = shown[at] if 0 <= at < len(shown) else {}
-        if lit_e.get("cmd") != "new":
-            bolt["focus"] = ""
-        foot = msg or (legend() if show_legend else lit_e.get("foot", ""))
-        screen.addnstr(height - 2, 0, qo.clip(foot, width - 1), width - 1, attr(("dim",)) if show_legend and not msg
-                       else (curses.color_pair(3) if color_on() else 0))
-        # the keys line says what ↵ does on the lit row (issue #3327)
-        if busy:
-            keys = say("view_keys_sending")
-        elif lit_e.get("cmd") == "new":
-            keys = say("view_keys_grid") if bolt["focus"] else say("view_keys_task" if query.strip() else "view_keys_blank")
-        elif query.strip() and lit_e.get("kind") == "sess":
-            keys = say("view_keys_match_fmt", label_of(lit_e), query.strip())
+        foot = (say("view_task_starting_fmt", busy["title"]) if busy else msg) or (legend() if show_legend else "")
+        if width < 48:
+            foot = say("view_narrow")
+        panel.put(screen, height - 2, 0, foot, width - 1, qo.clip, attr(("dim",)))
+        keys = say("view_keys_sending") if busy else say("view_keys_short")
+        if overlay:
+            keys = say("view_overlay_keys") if overlay.focus else say("view_list_focus_keys")
+        panel.put(screen, height - 1, 0, keys, width - 1, qo.clip, attr(("dim",)))
+        hits, controls = {}, {}
+        editor_width, editor_height = 20, 1
+        if overlay:
+            source = next((i for i, e in enumerate(shown) if key_of(e) == overlay.origin), None)
+            sy = off + source - top if source is not None else overlay.y
+            # Selection and refresh do not retarget the overlay. Its anchor is
+            # always its source row, or its last position if that row disappeared.
+            box = panel.anchor_box(width, off, body, sy, 4 + qo.cells(overlay.title),
+                                   12 if mode == "compose" else len(mitems) + 2 if mode in ("menu", "choice") else 10)
+            overlay.box = box
+            inner_w = max(2, box.w - 2)
+            lines, selected = [], None
+            title = mtitle if mode in ("menu", "choice") else overlay.title
+            cursor = None
+            if mode in ("menu", "choice"):
+                lines = [(label, ("lit",) if i == mat and overlay.focus else ()) for i, (_, label, _) in enumerate(mitems)]
+                selected = mat
+            elif mode == "ask":
+                prompt = panel.Editor(pend[4])
+                for a0, b0 in prompt.rows(inner_w, qo.cells):
+                    lines.append((prompt.text[a0:b0], ()))
+                controls[len(lines)] = 0
+                lines.append((line.text + "▏", ("lit",) if ask_focus == 0 and overlay.focus else ()))
+                for n, label in ((1, say("view_confirm")), (2, say("view_cancel"))):
+                    controls[len(lines)] = n
+                    lines.append((label, ("lit",) if ask_focus == n and overlay.focus else ()))
+                selected = next(i for i, n in controls.items() if n == ask_focus)
+            elif mode == "compose":
+                if bolt["ready"] and bolt["repo"] is None:
+                    bolt["repo"] = bolt_repo(bolt, draft.editor.text)
+                if bolt["ready"] and bolt["agent"] is None:
+                    bolt["agent"] = bolt_agent(bolt)
+                title = say("view_composer")
+                editor_width = inner_w - 1
+                editor_height = max(1, min(4, box.h - 7))
+                ed = draft.editor
+                erows = ed.rows(editor_width, qo.cells)
+                cy, cx = ed.cursor(erows, qo.cells)
+                ed.top = panel.clamp_top(ed.top, len(erows), editor_height)
+                if editor_follow:
+                    ed.top = panel.reveal(ed.top, cy, editor_height)
+                editor_follow = False
+                for i in range(editor_height):
+                    n = ed.top + i
+                    text = ed.text[slice(*erows[n])] if n < len(erows) else ""
+                    controls[len(lines)] = 0
+                    lines.append((text or (say("view_draft_ph") if not ed.text and i == 0 else ""), ()))
+                cells, note = bolt_cells(bolt, ed.text)
+                for n, label in enumerate([cells[0][0], cells[1][0], say("view_draft_open"),
+                                           say("view_blank_open"), say("view_draft_clear"), say("view_cancel")], 1):
+                    controls[len(lines)] = n
+                    lines.append((label, ("lit",) if draft.control == n and overlay.focus else ()))
+                selected = (max(0, min(editor_height - 1, cy - ed.top)) if draft.control == 0 else
+                            next(i for i, n in controls.items() if n == draft.control))
+                if note:
+                    lines.append((note, ("dim",)))
+                if draft.control == 0 and overlay.focus and ed.top <= cy < ed.top + editor_height:
+                    cursor = cy - ed.top, cx
+            overlay.scroll, hits = panel.draw_box(screen, box, title, lines, selected, overlay.scroll,
+                                                 overlay.follow, qo, attr)
+            overlay.follow = False
+            if mode == "compose":
+                draft.scroll = overlay.scroll
+            if cursor and overlay.scroll <= cursor[0] < overlay.scroll + max(1, box.h - 2):
+                try:
+                    curses.curs_set(1)
+                    screen.move(box.y + 1 + cursor[0] - overlay.scroll, box.x + 1 + cursor[1])
+                except curses.error:
+                    pass
+            else:
+                curses.curs_set(0)
         else:
-            keys = say("view_keys")
-        if qo.cells(keys) > width - 1:
-            # a phone (≤ 60 columns): the short line, ↑ 到 ⚡ kept on it
-            keys = say("view_keys_task_short") if lit_e.get("cmd") == "new" and not busy and not bolt["focus"] \
-                else keys if busy or bolt["focus"] else say("view_keys_short")
-        screen.addnstr(height - 1, 0, qo.clip(keys, width - 1), width - 1, attr(("dim",)))
+            curses.curs_set(0)
         screen.refresh()
         if not clock.written:
             clock.mark("frame")
@@ -3243,36 +3351,186 @@ def popup(screen, qo, vid, client, forward=""):
         screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
                            max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
         try:
-            ch = screen.get_wch()
+            ch = inputs.read(screen)
         except curses.error:
             continue
-        msg = ""
-        if ch in ("\x1b",) or ch == "\x03":
-            return 0     # a ↵ under way goes on: it says how it ended on the client
+        if ch is None:
+            continue
+        if isinstance(ch, tuple) and ch[0] == "paste":
+            if overlay and overlay.focus:
+                if mode == "compose" and draft.control == 0:
+                    text = ch[1].replace("\t", "    ")
+                    if not draft.editor.insert(text):
+                        msg = say("view_draft_limit")
+                    editor_follow, overlay.follow = True, True
+                    save_draft()
+                # Pasting onto a button never activates it.
+                continue
+            # Search paste is a single edit; no newline/Tab may run a command.
+            query += " ".join(ch[1].split())[:4000]
+            shown = listing()
+            at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
+                      next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), 0))
+            top, follow_list = 0, True
+            continue
+        msg, msg_until = "", 0
+        if ch in ("\x1b", "\x03"):
+            if overlay:
+                back()
+                continue
+            save_draft()
+            return 0
         if ch == curses.KEY_RESIZE:
             heal.resized(screen)
+            # Only clamp physical offsets in render; no reveal/reset on resize.
+            follow_list = False
+            if overlay:
+                overlay.follow = False
+            continue
+        if ch == curses.KEY_F6 and overlay:
+            overlay.focus = not overlay.focus
             continue
         if busy:
             continue
+        if ch == curses.KEY_MOUSE:
+            try:
+                _, mx, my, _, buttons = curses.getmouse()
+            except curses.error:
+                continue
+            wheel = -1 if buttons & getattr(curses, "BUTTON4_PRESSED", 0) else 1 if buttons & getattr(curses, "BUTTON5_PRESSED", 0) else 0
+            if overlay and overlay.box.contains(my, mx):
+                overlay.focus = True
+                if wheel:
+                    overlay.scroll += wheel
+                    continue
+                i = hits.get(my)
+                if i is None:
+                    continue
+                if mode in ("menu", "choice"):
+                    mat = i
+                elif mode == "compose":
+                    draft.control = controls.get(i, draft.control)
+                    if draft.control == 0:
+                        n = draft.editor.top + i
+                        rows = draft.editor.rows(editor_width, qo.cells)
+                        if n < len(rows):
+                            a0, b0 = rows[n]
+                            draft.editor.pos = a0
+                            while draft.editor.pos < b0 and qo.cells(draft.editor.text[a0:draft.editor.pos + 1]) <= mx - overlay.box.x - 1:
+                                draft.editor.pos += 1
+                        save_draft()
+                        continue
+                elif mode == "ask":
+                    ask_focus = controls.get(i, ask_focus)
+                ch = "\n" if buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED | curses.BUTTON1_DOUBLE_CLICKED) else None
+            elif off <= my < off + body:
+                if overlay:
+                    overlay.focus = False
+                if wheel:
+                    top = panel.clamp_top(top + wheel, len(shown), body)
+                    continue
+                i = top + my - off
+                if i < len(shown) and pickable(shown[i]):
+                    at = i
+                    follow_list = False
+                    # Single click selects; double click enters or opens composer.
+                    ch = "\n" if buttons & curses.BUTTON1_DOUBLE_CLICKED else None
+                else:
+                    continue
+            else:
+                continue
+        if overlay and overlay.focus:
+            if mode in ("menu", "choice"):
+                if ch in ("\t", curses.KEY_BTAB):
+                    mat = (mat + (1 if ch == "\t" else -1)) % max(1, len(mitems))
+                    overlay.follow = True
+                elif ch in (curses.KEY_UP, curses.KEY_DOWN, "\x10", "\x0e"):
+                    mat = max(0, min(len(mitems) - 1, mat + (-1 if ch in (curses.KEY_UP, "\x10") else 1)))
+                    overlay.follow = True
+                elif ch in ("\n", "\r", curses.KEY_ENTER) and mitems:
+                    v, _, a = mitems[mat]
+                    if pick(a, mrow) if mode == "menu" else pick(a, pend[1], v):
+                        save_draft()
+                        return 0
+                continue
+            if mode == "ask":
+                a, r, pre, kind, _ = pend
+                if ch in ("\t", curses.KEY_BTAB):
+                    ask_focus = (ask_focus + (1 if ch == "\t" else -1)) % 3
+                    overlay.follow = True
+                elif ch in ("\n", "\r", curses.KEY_ENTER) and ask_focus == 2:
+                    back()
+                elif kind == "key" and ask_focus == 0:
+                    if isinstance(ch, str) and ch in (a.get("keys") or ""):
+                        if a.get("yes") and ch not in "yY":
+                            back()
+                        elif run(a, r, ch):
+                            save_draft()
+                            return 0
+                elif ch in ("\n", "\r", curses.KEY_ENTER):
+                    text = ("y" if a.get("yes") else "") if kind == "key" else line.text.strip()
+                    if not text:
+                        back()
+                    elif run(a, r, pre + text):
+                        save_draft()
+                        return 0
+                elif ask_focus == 0:
+                    line.key(ch)
+                continue
+            if mode == "compose":
+                if ch in ("\t", curses.KEY_BTAB):
+                    draft.control = (draft.control + (1 if ch == "\t" else -1)) % 7
+                    overlay.follow = True
+                elif draft.control == 0:
+                    if not draft.editor.key(ch, editor_width, qo.cells):
+                        msg = say("view_draft_limit")
+                    editor_follow, overlay.follow = True, True
+                elif draft.control in (1, 2) and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, " ", "\n", "\r"):
+                    bolt["focus"] = "repo" if draft.control == 1 else "agent"
+                    bolt_step(bolt, draft.editor.text, -1 if ch == curses.KEY_LEFT else 1)
+                elif ch in (curses.KEY_UP, curses.KEY_DOWN):
+                    draft.control = max(0, min(6, draft.control + (-1 if ch == curses.KEY_UP else 1)))
+                    overlay.follow = True
+                elif ch in ("\n", "\r", curses.KEY_ENTER, " "):
+                    if draft.control == 6:
+                        back()
+                        continue
+                    if draft.control == 5:
+                        draft.editor = panel.Editor()
+                        draft.control, overlay.scroll = 0, 0
+                    elif draft.control in (3, 4):
+                        if not bolt["ready"]:
+                            msg = say("view_grid_loading")
+                            continue
+                        text = draft.editor.text if draft.control == 3 else ""
+                        if draft.control == 3 and not text.strip():
+                            msg = say("view_draft_empty")
+                            continue
+                        repo = bolt_repo(bolt, text)
+                        if repo and repo not in bolt["g"].get("repos", []):
+                            msg = say("view_draft_repo_gone")
+                            continue
+                        missing = bolt["g"].get("missing") or {}
+                        if bolt_agent(bolt) in missing:
+                            msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
+                            continue
+                        argv, title, where = bolt_argv(qo, vid, client, bolt, text)
+                        busy = {"title": title, "where": where, "draft": draft.control == 3}
+                        save_draft()
+                        bolt_run(argv, job)
+                save_draft()
+                continue
         sel = [i for i, e in enumerate(shown) if pickable(e)]
         if ch in (curses.KEY_UP, "\x10"):
             # from the top it goes round to ⚡ (issue #3327: ⌘P ↑ ↵ = a new session)
             up = [i for i in sel if i < at]
+            follow_list = True
             at = up[-1] if up else (bolt_at() if bolt_at() >= 0 else (sel[-1] if sel else at))
             continue
         if ch in (curses.KEY_DOWN, "\x0e"):
             down = [i for i in sel if i > at]
+            follow_list = True
             at = down[0] if down else (sel[0] if sel else at)
-            continue
-        if lit_e.get("cmd") == "new" and ch in ("\t", curses.KEY_BTAB):
-            # on ⚡, Tab walks its cells — 仓库 → Agent — not a session's actions
-            order = ["repo", "agent"] if ch == "\t" else ["agent", "repo"]
-            bolt["focus"] = order[1] if bolt["focus"] == order[0] else order[0]
-            shown = listing()
-            continue
-        if lit_e.get("cmd") == "new" and bolt["focus"] and ch in (curses.KEY_LEFT, curses.KEY_RIGHT):
-            bolt_step(bolt, query, -1 if ch == curses.KEY_LEFT else 1)
-            shown = listing()
             continue
         if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and 0 <= at < len(shown) and shown[at]["kind"] == "sec":
             # → opens a folding heading (已结束), ← shuts it — as ↵ toggles it
@@ -3281,13 +3539,18 @@ def popup(screen, qo, vid, client, forward=""):
             shown = listing()
             continue
         if ch == "\t":
+            if lit_e.get("cmd") == "new":
+                compose(lit_e)
+                continue
             if lit_e.get("cmd") == "lang":
                 # the language row's options (issue #3329): 中文 · English · 跟系统走
+                anchor(lit_e)
                 a = ACTION["lang"]
                 mitems = [(v, label, a) for v, label in a["choices"]({}, fleet)]
                 mode, mat, mtitle, pend = "choice", 0, a["label"]({}), (a, {})
                 continue
             if 0 <= at < len(shown) and shown[at]["kind"] == "sess":
+                anchor(lit_e)
                 mrow = act_row(fleet, shown[at])
                 mitems = [(a["id"], label, a) for a, label in menu_of(mrow)]
                 word = mrow.get("word") or ""
@@ -3307,22 +3570,20 @@ def popup(screen, qo, vid, client, forward=""):
                 # ⚡ (issue #3327): words ⇒ a task, none ⇒ a blank session — off the
                 # screen's thread, the row its progress until it opens
                 if e["act"] == "new":
-                    loader.join(12)     # the cells as read, never the placeholder's 不绑仓库
-                    argv, title, where = bolt_argv(qo, vid, client, bolt, query)
-                    busy, bolt["focus"] = {"title": title, "where": where}, ""
-                    bolt_run(argv, job)
-                    shown = listing()
+                    compose(e)
                     continue
                 if e["act"] == "lang":
                     run(ACTION["lang"], {}, "")     # flips it; the list redraws in it
                     continue
                 if e["act"] == "pin":
                     # the session in view (issue #3517): its own 置顶 item
+                    anchor(e)
                     if pick(ACTION["pin"], act_row(fleet, e["row"])):
                         return 0
                     continue
                 if e["act"] == "reapall":
                     # 已结束 · 还开着 (issue #3731): y/N first, then all of them
+                    anchor(e)
                     pick(ACTION["reapall"], e["row"])
                     continue
                 if e["act"] == "history":
@@ -3342,6 +3603,7 @@ def popup(screen, qo, vid, client, forward=""):
                 continue
             if e.get("gone"):
                 # a reaped session (issue #3286): ↵ is its one action, 恢复
+                anchor(e)
                 if pick(ACTION["resume"], act_row(fleet, e)):
                     return 0
                 continue
@@ -3350,6 +3612,7 @@ def popup(screen, qo, vid, client, forward=""):
                 continue
             rc = go(qo, vid, target, "popup", client, e)
             if rc == 0:
+                save_draft()
                 return 0
             msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
             continue
@@ -3358,6 +3621,7 @@ def popup(screen, qo, vid, client, forward=""):
             e = shown[at] if 0 <= at < len(shown) else {}
             if e.get("kind") != "sess" or not e.get("target") or e.get("gone"):
                 continue
+            anchor(e)
             if pick(ACTION["pin"], act_row(fleet, e)):
                 return 0
             continue
@@ -3369,6 +3633,7 @@ def popup(screen, qo, vid, client, forward=""):
                 continue
             rc = open_shell(qo, vid, client, e["target"], e)
             if rc == 0:
+                save_draft()
                 return 0
             msg = say("view_gone") if rc == 3 else say("view_shell_failed_fmt", e.get("machine") or "?")
             continue
@@ -3393,7 +3658,7 @@ def popup(screen, qo, vid, client, forward=""):
                             next((i for i, e in enumerate(shown) if pickable(e)), 0))))
         if not query:
             at = next((i for i, e in enumerate(shown) if e["kind"] == "sess" and e.get("target") in (lit, cur)), at)
-        top = 0
+        top, follow_list = 0, True
 
 
 # --- the entry --------------------------------------------------------------------------

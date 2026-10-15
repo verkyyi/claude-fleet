@@ -33,7 +33,7 @@ A sign-in lasts 12 hours, after which this computer renews it by itself; when it
 **⌘P** (iTerm2; in other terminals **⌃Space** or **F12**) opens the panel:
 
 - every session is here — pick a row to switch to it;
-- write a sentence on the top line and it becomes a new task for a new session;
+- select New task and press Enter to open its editor; choose “Open with draft (not sent)”, then review and send it from the new session;
 - when a session stops to ask you something, its row is marked; switch to it and answer.
 
 Closing the terminal window does not stop your sessions; type `fleet` in a terminal next time and everything is where you left it.
