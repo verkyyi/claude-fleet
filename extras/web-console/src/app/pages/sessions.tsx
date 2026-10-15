@@ -78,7 +78,7 @@ const SessionCard: FC<{ r: SessionRow; onOpen: () => void }> = ({ r, onOpen }) =
       {r.ask?.msg ? <p className="text-foreground line-clamp-3 text-sm break-words">{tr(`「${r.ask.msg}」`, `“${r.ask.msg}”`)}</p> : null}
       <p className="text-muted-foreground truncate text-[13px]">{metaLine(r)}</p>
       {r.group !== "ended" ? <Button asChild size="sm" variant="outline" onClick={(e) => e.stopPropagation()}>
-        <Link to={terminalLink(r.id)}><TerminalSquare />{tr("终端", "Terminal")}</Link>
+        <Link to={terminalLink(r.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link>
       </Button> : null}
     </CardContent>
   </Card>
@@ -225,7 +225,7 @@ export default function SessionsPage() {
                 )}
               </div>
               <SheetFooter className="flex-row gap-2">
-                {open.group !== "ended" ? <Button asChild className="flex-1"><Link to={terminalLink(open.id)}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
+                {open.group !== "ended" ? <Button asChild className="flex-1"><Link to={terminalLink(open.id)} state={{ title: open.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
                 {open.group === "ended" ? (
                   <Button className="flex-1" disabled={busy} onClick={() => act(open, "worker_resume")}>
                     <RotateCcw />{tr("接回", "Resume")}

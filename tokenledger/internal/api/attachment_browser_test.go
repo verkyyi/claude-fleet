@@ -68,6 +68,14 @@ func TestAttachmentChromium(t *testing.T) {
 // Actual Fleet/Safari/OS IME acceptance remains a separately recorded batch gate.
 func TestTerminalConsoleChromium(t *testing.T) {
 	r := newTermRig(t, true)
+	// Sessions scopes through active accounts; terminal admission uses EntryHome.
+	person, err := r.h.srv.Store.AdoptPrincipal(pAlice, r.login, "Terminal test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.h.srv.Store.AdoptAccount(person, r.host, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	r.h.srv.ConsoleFS = os.DirFS(filepath.Join("..", "..", "..", "extras", "web-console", "dist"))
 	agent.SetTermHelperForTest(func(view, target string) []string {
 		return []string{"/bin/sh", "-c", `stty raw -echo; exec python3 -c 'import os

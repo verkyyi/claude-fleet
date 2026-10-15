@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { Layers, List, TerminalSquare } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -42,6 +42,9 @@ export default function TerminalPage() {
   const [query] = useSearchParams();
   // An explicit empty/invalid worker remains explicit and is refused server-side.
   const worker = query.get("worker");
+  const location = useLocation();
+  const title = worker === null ? tr("我的终端", "My Terminal")
+    : typeof location.state?.title === "string" ? location.state.title : tr("会话终端", "Session terminal");
   const [attempt, retry] = useState(0);
   const [view, setView] = useState<View>({ state: "connecting" });
   const [offers, setOffers] = useState<BrowserOffer[]>([]);
@@ -57,7 +60,13 @@ export default function TerminalPage() {
     let client: ReturnType<typeof browserClient> | undefined;
     setView({ state: "connecting" }); setOffers([]);
     const disposeTerminal = () => {
-      ready = false; composing = false;
+      ready = false;
+      term?.blur();
+      // End only the abandoned composition, with input already fenced. xterm
+      // retains a caret-layout timer while composing even after dispose; its
+      // own end handler cancels it. Never reconstruct or forward this text.
+      if (composing) term?.textarea?.dispatchEvent(new CompositionEvent("compositionend"));
+      composing = false;
       // Remove xterm's textarea and its pending composition on disconnect. A
       // late compositionend belongs to that disposed terminal, never its successor.
       term?.dispose(); term = undefined; fit = undefined; host.replaceChildren();
@@ -106,7 +115,7 @@ export default function TerminalPage() {
       if (response.status === 401) { fail("login"); return; }
       const home = await response.json();
       if (!response.ok) { fail(home.code || "refused"); return; }
-      setView((v) => ({ ...v, destination: worker === null ? home.machine : worker }));
+      setView((v) => ({ ...v, destination: home.machine }));
       if (home.state !== "ok") { fail(home.state); return; }
       client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => fail("lease"));
       if (!await client.ready || dead) return;
@@ -138,7 +147,7 @@ export default function TerminalPage() {
   return <div className="flex h-full min-h-80 flex-col gap-3 p-4 md:p-6">
     <header className="flex flex-wrap items-center gap-2">
       <h1 className="min-w-0 flex-1 truncate font-display text-lg" title={view.destination}>
-        {worker === null ? tr("我的终端", "My Terminal") : tr("会话终端", "Session terminal")}
+        {title}
         <span className="text-muted-foreground ms-2 font-sans text-xs">{view.destination}</span>
       </h1>
       <span role="status" className="text-muted-foreground text-xs">{status}</span>
