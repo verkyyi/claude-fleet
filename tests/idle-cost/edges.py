@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -21,8 +22,10 @@ FORMAT = ("#{socket_path}|#{window_id}|=#{@fleet_role}|#{@claude_state}|"
 
 
 def run(argv, env):
-    return subprocess.check_output(argv, env=env, text=True, stderr=subprocess.PIPE,
-                                   timeout=15).strip()
+    result = subprocess.run(argv, env=env, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=15)
+    assert result.returncode == 0, (argv, result.returncode, result.stderr)
+    return result.stdout.strip()
 
 
 def tm(env, label, *args):
@@ -114,7 +117,18 @@ def exercise(root):
         print("PASS worker created and reaped between probes", flush=True)
 
         g = guard()
+        old_pid = int(tm(env, labels[0], "display-message", "-p", "#{pid}"))
         tm(env, labels[0], "kill-server")
+        # kill-server acknowledges before the server exits on Linux. The old
+        # socket file can remain after exit, so wait on its process, not the path.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                os.kill(old_pid, 0)
+            except ProcessLookupError:
+                break
+            assert time.monotonic() < deadline, "old test server did not exit"
+            time.sleep(0.01)
         tm(env, labels[0], "-f", "/dev/null", "new-session", "-d", "-s", labels[0],
            "-n", "home", "sleep 120")
         replacement = worker(env, labels[0])
