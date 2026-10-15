@@ -66,6 +66,9 @@ const (
 	trialWaitBusy  = "busy"  // no machine admits a new one, or none is ready
 	trialWaitLoad  = "load"  // the machine is above its load line
 	trialWaitQuota = "quota" // the pool is below its floor
+	// trialWaitNoSpare: machines are fit, but none holds a ready spare
+	// (claude-fleet#4259) — raised as trial_no_spare.
+	trialWaitNoSpare = "no_spare"
 	// trialWaitNoSub (fleet_trial_cred.go): fleet.trial.cred_allow is []
 )
 

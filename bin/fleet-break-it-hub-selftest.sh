@@ -199,6 +199,9 @@
 #   trial-no-subscription                           tokenledger/internal/api fleet_trial_cred.go (trialUserAllow in
 #                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
 #                                                   convertTrial writes the member's own list); go test
+#   trial-host-no-spare                             tokenledger/internal/api fleet_accounts.go (trialMachine: only
+#                                                   machines with a ready spare) + fleet_try.go (no_spare,
+#                                                   trial_no_spare); go test, when a toolchain is here
 #   drill-trial-escape                              tokenledger/internal/api fleet_drill_trial.go (an admin's ft_ code,
 #                                                   spent once, into trialSignIn; SweepDrillTrials) + internal/store
 #                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
@@ -2886,6 +2889,26 @@ drill_trial_idle_while_opening() {
   c11_go_tests fleet_try_slot_test.go TestTrialIdleNotWhileOpening TestTrialSlotReleasesOnTime || return 1
   WHAT='开位期间不计 idle；开好后 240 秒没输入才放；300 秒没开好放回重排、不扣用时、不算试过、告警 trial_open_slow（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='开位 241 s 不放不提示；开好后 239 s 不放、241 s 放（idle）；没开好 301 s 放回重排、用时 0、原位排队、告警点名 mac-d、再领不是 tried；那台有位开好即清告警（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-host-no-spare (#4259): least-busy ranks room before a ready spare,
+# so a trial picked a machine with room and no spare (its failed one stopping the
+# refill) over one with a busy CPU and two ready, and waited «busy» for good. Now a
+# trial's candidates are the machines holding a ready spare; none ⇒ no_spare
+# and trial_no_spare.
+drill_trial_host_no_spare() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'if spareOnly && !c.spare {' "$tl/api/fleet_accounts.go" 2>/dev/null \
+    || { WHY="a trial's machine pick no longer skips machines without a ready spare (fleet_accounts.go pickMachine)"; return 1; }
+  grep -q 's.trialMachine(now, s.drillComputer(pid)...)' "$tl/api/fleet_try.go" 2>/dev/null \
+    || { WHY="the trial claim no longer picks through trialMachine (fleet_try.go)"; return 1; }
+  grep -q 'AlertTrialNoSpare = "trial_no_spare"' "$tl/store/fleet_alerts.go" 2>/dev/null \
+    || { WHY="no trial_no_spare alert kind (store/fleet_alerts.go)"; return 1; }
+  c11_go_tests fleet_try_spare_test.go TestTrialPicksAMachineWithASpare || return 1
+  WHAT='试用只在有就绪备用的机器里挑；都没有 ⇒ reason=no_spare + 告警 trial_no_spare（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='A 有余量 0 备用、B 过 CPU 线 1 备用 ⇒ 领到 B；再来一人 ⇒ waiting no_spare、审计 trial.queued reason=no_spare、告警 trial_no_spare（go test）'
   SECS=$(since "$t0")
 }
 
