@@ -95,7 +95,8 @@ class Control:
         # arguments or a calling worker's inherited Fleet overrides.
         # TMUX_TMPDIR is where tmux's own sockets live (issue #2970): the adapter
         # must find the same servers this process does; unset, byte for byte.
-        allowed = ("HOME", "PATH", "TMPDIR", "TMUX_TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SSH_AUTH_SOCK")
+        allowed = ("HOME", "PATH", "TMPDIR", "TMUX_TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SSH_AUTH_SOCK",
+                   "FLEET_USER_POD")
         env = {key: os.environ[key] for key in allowed if key in os.environ}
         # PATH is inherited but never trusted to be whole (issue #1460): a launchd
         # job — ccquota's agent reading fleet_status for its heartbeat — runs us

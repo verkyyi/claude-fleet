@@ -82,6 +82,8 @@ python3 bin/fleet-cn-probe-recover.py "$FLEET_CONF_DIR/global/cn-probe" stop --w
 
 POD 重建验收还要保留客户端已有的自动 / 固定线路缓存，先直接重连，不能先 `--retest` 或删 known_hosts 掩盖旧密钥问题。连接器对 POD 从已鉴权的 hub 路由刷新主机身份；已有 home 响应直接复用，不再请求一次。身份变化后不走旧缓存捷径。hub 不可用时只保留原有信任，未知密钥仍由 SSH 拒绝，不能关闭主机校验。
 
+控制器的异步启动链路也要保留 `FLEET_USER_POD`：`fleet_control.Control.environment()` 同时用于 detached executor 和 adapter，只修 SSH 环境还不够。回归要在模拟高 CPU 下走真实控制器的异步 scratch 启动，确认个人 POD 放行、共享机器拒绝、显式 CPU hold 与严重内存压力仍拒绝；不能靠恰好低负载的一次实测认定已修复。其他准入覆盖参数和凭据仍不从调用者环境透传。
+
 ## 手动
 
 ```sh

@@ -1123,6 +1123,35 @@ class HubTests(HubFixture):
                           return_value=(0, b'{"sessions":2,"max_sessions":0,"admit":"no","room":"x"}\n', b"")):
             self.assertEqual(self.node.controller.capacity(), {"sessions": 2, "max_sessions": 0})
 
+    def test_personal_pod_identity_survives_detached_start_and_admission(self):
+        conf = self.node.root / "fleet.conf"
+        spawn = self.node.bin / "dash-raw-session.sh"
+        original = spawn.read_text()
+        gate = ('source "$(dirname "$0")/fleet-lib.sh"\n'
+                'fleet_load_conf demo\n'
+                'if ! why=$(fleet_machine_admit); then printf "dash-raw-session: %s\\n" "$why" >&2; exit 2; fi\n')
+        spawn.write_text(original.replace('#!/bin/bash\n', '#!/bin/bash\n' + gate, 1))
+        stubs = ("FLEET_MEM_TOTAL_MB=16000\nFLEET_MEM_PS_CMD='true'\n"
+                 "FLEET_ADMIT_CPU_READING='99 1.9 2 60'\n")
+        cases = (("pod", "1", "advice", "1 80 0 0", True),
+                 ("shared", "", "advice", "1 80 0 0", False),
+                 ("explicit-hold", "1", "hold", "1 80 0 0", False),
+                 ("memory", "1", "advice", "4 5 97 0", False))
+        for name, pod, policy, memory, admitted in cases:
+            with self.subTest(name=name), patch.dict(os.environ, FLEET_USER_POD=pod, FLEET_ADMIT="0",
+                                                    FLEET_ADMIT_POD_CPU="advice", CCQUOTA_TOKEN="not-for-child"):
+                conf.write_text(stubs + "FLEET_ADMIT_POD_CPU=" + policy + "\nFLEET_MEM_PROBE_CMD='echo " + memory + "'\n")
+                child_env = self.node.controller.environment()
+                self.assertEqual(child_env.get("FLEET_USER_POD", ""), pod)
+                for stripped in ("FLEET_ADMIT", "FLEET_ADMIT_POD_CPU", "CCQUOTA_TOKEN"):
+                    self.assertNotIn(stripped, child_env)
+                started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="pod-admit-" + name,
+                                                         params={"kind": "scratch", "name": name}))
+                operation = self.node.wait(started["operation_id"])
+                self.assertEqual(operation["status"], "succeeded" if admitted else "failed", operation)
+                if not admitted:
+                    self.assertEqual(operation["result"]["error"]["code"], "AT_CAPACITY", operation)
+
     def test_permissions_revocation_expiry_and_no_cross_fleet_routing(self):
         reader = self.hub.grant("reader", [self.fleet], ["fleet:read"])
         before = len(self.rpc_calls)
