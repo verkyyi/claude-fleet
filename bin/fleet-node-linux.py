@@ -1456,6 +1456,7 @@ def user_pod_sshd_text(runtime='/var/db/fleet-node/runtime'):
         'PermitUserEnvironment no',
         'ExposeAuthInfo yes',
         'AcceptEnv LANG LC_* FLEET_DOOR_FP FLEET_DOOR_SRC FLEET_DOOR_NAME',
+        'SetEnv FLEET_USER_POD=1',
         'DisableForwarding yes',
         'PermitTunnel no',
         'ForceCommand /bin/bash ' + runtime + '/current/bin/fleet-entry.sh',

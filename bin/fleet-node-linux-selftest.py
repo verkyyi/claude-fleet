@@ -699,6 +699,7 @@ class LinuxNode(unittest.TestCase):
             sshd = Path(out, 'sshd_config').read_text()
             for want in ('Port 2222', 'UsePAM no', 'PermitRootLogin no', 'AllowUsers fleetu7',
                          'HostKey /run/sshd-key/host', 'AuthorizedKeysFile none',
+                         'SetEnv FLEET_USER_POD=1',
                          'ForceCommand /bin/bash /var/db/fleet-node/runtime/current/bin/fleet-entry.sh'):
                 self.assertIn(want + '\n', sshd)
             self.assertNotIn('Include', sshd)
