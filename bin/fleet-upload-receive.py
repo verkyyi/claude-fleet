@@ -227,7 +227,8 @@ def main(action, up, args):
                     result = commit(up, h, f)
                 else:
                     with tempfile.TemporaryFile() as wire:
-                        wire.write(json.dumps(h).encode() + b'\n'); f.seek(0)
+                        stage = {k: h[k] for k in ('cur', 'identity', 'name', 'size', 'sha256')}
+                        wire.write(json.dumps(stage).encode() + b'\n'); f.seek(0)
                         for b in iter(lambda: f.read(1 << 20), b''): wire.write(b)
                         wire.seek(0)
                         result = json.loads(run(peer(up, m, l, ['python3', '.claude/fleet/bin/fleet-client-upload.py', 'recv-stage']), source=wire))

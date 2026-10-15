@@ -213,7 +213,10 @@ class Input:
         try:
             result = json.loads(self.result)
             if not result.get('ok'):
-                raise ValueError(result.get('error') or '附件失败')
+                why = result.get('error') or '附件失败或超时，未插入'
+                self.buf = b''
+                self.say('fleet · ' + why + '；等待的输入已丢弃，请重新输入')
+                return b''
             out = unpacked(result['data'])
         except (ValueError, KeyError, TypeError):
             self.buf = b''
@@ -287,15 +290,18 @@ def command(req, words):
                     '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2'] + [a[h], remote]
 
 
-def bounded_run(cmd, source):
-    """Bound replies independently of the job deadline. Descendants inherit the
-    worker's group; its supervisor owns cancellation, timeout and parent death."""
-    p = subprocess.Popen(cmd, stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def bounded_run(cmd, header, src=None):
+    """Bound both directions; connection tokens travel only through pipes.
+    Descendants inherit the worker group owned by the supervisor."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    source = open(src, 'rb') if src else None
     out, err = bytearray(), bytearray()
     streams = {p.stdout: out, p.stderr: err}
+    pending, sending = header, True
+    os.set_blocking(p.stdin.fileno(), False)
     try:
-        while streams:
-            ready, _, _ = select.select(list(streams), [], [], .1)
+        while streams or sending:
+            ready, writable, _ = select.select(list(streams), [p.stdin] if sending else [], [], .1)
             for stream in ready:
                 data = os.read(stream.fileno(), 8192)
                 if not data:
@@ -304,26 +310,33 @@ def bounded_run(cmd, source):
                     streams[stream].extend(data)
                     if len(out) + len(err) > CAP:
                         raise ValueError('附件服务返回超过限额')
-        rc = p.wait()
-        if rc:
+            if writable:
+                if not pending:
+                    pending = source.read(CAP) if source else b''
+                if not pending:
+                    p.stdin.close()
+                    sending = False
+                else:
+                    try:
+                        n = os.write(p.stdin.fileno(), pending)
+                        pending = pending[n:]
+                    except BlockingIOError:
+                        pass
+        if p.wait():
             raise ValueError('附件服务未确认提交')
         return bytes(out)
     finally:
         if p.poll() is None:
             p.kill()
         p.wait()
-        p.stdout.close(); p.stderr.close()
+        p.stdin.close(); p.stdout.close(); p.stderr.close()
+        if source: source.close()
 
 
 def remote_json(req, action, header, src=None):
     rbin = req.get('rbin') or '.claude/fleet/bin'
-    with tempfile.TemporaryFile() as f:
-        f.write(json.dumps(header).encode() + b'\n')
-        if src:
-            with open(src, 'rb') as s:
-                for b in iter(lambda: s.read(1 << 20), b''): f.write(b)
-        f.seek(0)
-        return json.loads(bounded_run(command(req, ['python3', rbin + '/fleet-client-upload.py', action]), f))
+    return json.loads(bounded_run(command(req, ['python3', rbin + '/fleet-client-upload.py', action]),
+                                  json.dumps(header).encode() + b'\n', src))
 
 
 def work(req):
@@ -403,6 +416,10 @@ if __name__ == '__main__':
         try:
             data = work(json.loads(sys.stdin.buffer.readline(RESULT_CAP)))
             result = {'ok': True, 'data': packed(data)}
-        except Exception:
-            result = {'ok': False}  # no user input, paths or credentials in logs
+        except Exception as error:
+            # Only our fixed ValueError messages are safe to display. OS and
+            # decoder exceptions can contain a filename or received input.
+            result = {'ok': False}
+            if type(error) is ValueError:
+                result['error'] = str(error)[:120]
         sys.stdout.write(json.dumps(result))
