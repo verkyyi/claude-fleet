@@ -71,7 +71,10 @@ def fixture(directory):
         def wait_ms(self):
             return 60
     v.Refresh = Fresh
-    curses.wrapper(v.popup, q, "test", "")
+    def launch(screen):
+        (root / "mouse-prefix").write_bytes(curses.tigetstr("kmous") or b"")
+        return v.popup(screen, q, "test", "")
+    curses.wrapper(launch)
     print("POPUP-CLOSED", flush=True)
 
 
@@ -270,6 +273,31 @@ class NativeTests(unittest.TestCase):
         self.wait("来源已失效")
         self.assertEqual(len(self.actions()), count)
         self.evidence.append("PASS F6 changes selection without retarget; Tab explicitly retargets; vanished source refuses without action")
+
+    def test_mouse_prefix_and_overlay_button_keep_origin(self):
+        self.keys("Tab")
+        self.wait("回收…")
+        # SGR mouse at the unoccluded first eight columns: select @2 without
+        # retargeting the open @1 menu, then click its Pin button exactly once.
+        def click(x, y):
+            # Match the application's terminfo, as tmux translates a real
+            # client's mouse. macOS ncurses can still request X10, not SGR.
+            if (self.root / "mouse-prefix").read_bytes() == b"\x1b[M":
+                event = "\x1b[M" + chr(32) + chr(x + 32) + chr(y + 32)
+                event += "\x1b[M" + chr(35) + chr(x + 32) + chr(y + 32)
+            else:
+                event = "\x1b[<0;%d;%dM\x1b[<0;%d;%dm" % (x, y, x, y)
+            self.literal(event)
+        click(4, 4)
+        time.sleep(.25)
+        lines = self.screen().splitlines()
+        self.assertTrue(any("│置顶" in line for line in lines), "\n".join(lines))
+        y = next(i for i, line in enumerate(lines) if "│置顶" in line)
+        x = q.cells(lines[y].split("│置顶")[0]) + 2
+        click(x, y + 1)
+        self.wait("ACTION OK")
+        self.assertEqual(self.actions(), [{"action": "pin", "target": "@1", "answer": ""}])
+        self.evidence.append("PASS exposed prefix accepts mouse selection; local overlay button executes once on its frozen source")
 
     def test_saved_agent_unavailable_refuses_instead_of_switching(self):
         self.literal("task")
