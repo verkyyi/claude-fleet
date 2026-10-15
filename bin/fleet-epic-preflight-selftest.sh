@@ -4,7 +4,8 @@
 #
 # No network, no real repo, and NO tmux server: `gh` is faked, and so are the two
 # scripts the preflight shells out to (fleet-labels-seed.sh, fleet-account.sh), so
-# a `--fix` run here can never reach a real `gh label create`. The preflight runs
+# C3 uses the real seeder with a fake gh label store; no run reaches GitHub.
+# The preflight runs
 # from a temp bin/ beside a copy of the real fleet-lib.sh, with no ../fleet.conf —
 # every input arrives as an env var. That is strictly more isolated than a scratch
 # socket: there is no server for a stray call to land on at all.
@@ -210,6 +211,33 @@ SEED_MARKER='' GH_LABELS='bug' clean_env run_pf --fix
 [ "$RC" -eq 3 ] || fail "C2 labels still missing after --fix must be BLOCKED (exit 3, got $RC)" "$OUT"
 printf '%s' "$OUT" | grep -qE 'FAIL .*labels' || fail "C2 the labels row must FAIL" "$OUT"
 ok "C2 a --fix that leaves the labels missing escalates to BLOCKED (never a silent pass)"
+
+# C3: exercise --fix with the REAL seeder in a fresh HOME (#4326). The fake gh
+# keeps a sandbox repo's labels on disk, so the re-read sees only actual creates.
+cp "$WORK/fakebin/gh" "$WORK/fakebin/gh-preflight"
+cp "$WORK/bin/fleet-labels-seed.sh" "$WORK/bin/seed-fake"
+cp "$BIN/fleet-labels-seed.sh" "$WORK/bin/fleet-labels-seed.sh"
+cat > "$WORK/fakebin/gh" <<'GHREAL-SEED'
+#!/bin/bash
+case "$1 $2" in
+  "label create") printf '%s\n' "$3" >> "$LABEL_DB"; exit 0 ;;
+  "label list") cat "$LABEL_DB"; exit 0 ;;
+esac
+exec "$(dirname "$0")/gh-preflight" "$@"
+GHREAL-SEED
+mkdir -p "$WORK/home/.config/claude-fleet"
+: > "$WORK/labels"
+HOME="$WORK/home" FLEET_CONF_DIR="$WORK/home/.config/claude-fleet" \
+  LABEL_DB="$WORK/labels" clean_env run_pf --fix
+[ "$RC" -eq 0 ] || fail "C3 real seeder must make a fresh repo READY" "$OUT
+$(cat "$WORK/err")"
+for retired in autoland autofill; do
+  grep -Fxq "$retired" "$WORK/labels" && fail "C3 --fix must not create $retired" "$(cat "$WORK/labels")"
+done
+grep -Fxq epic "$WORK/labels" && grep -Fxq blocked "$WORK/labels" \
+  || fail "C3 --fix must create active EPIC labels" "$(cat "$WORK/labels")"
+ok "C3 fresh-HOME preflight --fix with real seeder creates no retired labels"
+mv "$WORK/bin/seed-fake" "$WORK/bin/fleet-labels-seed.sh"
 
 # restore the plain fake gh for the remaining cases
 cat > "$WORK/fakebin/gh" <<'GHFAKE3'
