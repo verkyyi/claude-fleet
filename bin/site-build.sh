@@ -11,7 +11,8 @@
 #
 # One template, one string table per language, nothing typed twice:
 #
-#   site/template.html            the page: {{key}} slots, <!--timed-->…<!--/timed-->
+#   site/template.html            the page: {{key}} slots, <!--timed-->…<!--/timed-->,
+#                                 <!--trial-->…<!--/trial--> (the trial variant only)
 #   site/strings.{zh,en}.json     every word on the page, per language (C15's llms.txt
 #                                 reads the same tables)
 #   docs/public/<lang>/faq.md     the questions marked `<!-- faq: site -->`, through
@@ -35,6 +36,12 @@
 #   <out>/logo.svg  favicon.ico  apple-touch-icon.png  icon-{192,512}.png
 #   <out>/og/cover-{zh,en}.png  <out>/fonts/*.woff2     served under /site/
 #   <out>/build.json              what the build decided: timed or not, and why
+#   <out>/apply/index.html  <out>/apply/en/index.html  <out>/apply/llms*.txt
+#                                 the same with no trial (issue #4269): served in
+#                                 their place while the hub's fleet.trial is off —
+#                                 every 「立即体验」 is 「申请使用」 → /apply, no
+#                                 seconds, no <!--trial--> block, and each
+#                                 <key>_apply string in place of <key>
 #
 # And the files for search engines and AI assistants (issue #3585, C15), served
 # at the root (/robots.txt …, site_serve.go):
@@ -219,14 +226,27 @@ for l, _ in LANGS:
             fail('strings.%s.json %s: no double quotes (it goes into attributes)' % (l, k))
 
 TIMED_KEYS = ('description', 'og_description', 'try', 'sub', 'steps_h', 'end_h')
+# The apply-only variant (issue #4269): these words say <key>_apply instead.
+APPLY_KEYS = ('description', 'og_description', 'try', 'sub', 'fine', 's1', 'end_h', 'offer',
+              'price_trial', 'price_trial_p', 'price_trial_d', 'llms_summary')
+for _k in APPLY_KEYS:
+    if _k + '_apply' not in keys:
+        fail('strings.zh.json: no %s_apply (the page with the trial off says it)' % _k)
 
-def render(lang, S, items):
+def render(lang, S, items, variant='trial'):
+    """One page. variant 'apply' is the page with fleet.trial off (issue #4269):
+    no trial anywhere, so no drill seconds either — they time the trial."""
     v = dict(S)
+    if variant == 'apply':
+        base = re.sub(r'<!--trial-->.*?<!--/trial-->\n?', '', tmpl, flags=re.S)
+    else:
+        base = re.sub(r'<!--/?trial-->\n?', '', tmpl)
+    timed = drill if variant == 'trial' else None
     v['lang_key'] = lang
     v['cur_zh'] = ' aria-current="page"' if lang == 'zh' else ''
     v['cur_en'] = ' aria-current="page"' if lang == 'en' else ''
     allowed = set()
-    if drill:
+    if timed:
         tt = time_text(S)
         allowed.add(tt)
         for k in TIMED_KEYS:
@@ -245,7 +265,7 @@ def render(lang, S, items):
             v['tick%d' % i] = str(scale * i // 4)
         allowed.update(('0s', '%ds' % scale))
         v['drill_src'] = S['drill_src'].replace('{runs}', str(drill['runs'])).replace('{date}', drill['date'])
-        page = tmpl.replace('<!--timed-->\n', '').replace('<!--/timed-->\n', '')
+        page = base.replace('<!--timed-->\n', '').replace('<!--/timed-->\n', '')
         if drill['screens']:
             page = re.sub(r'<!--shot:([a-z]+)-->.*?<!--/shot-->', lambda m: '\x00SHOT:%s\x00' % m.group(1),
                           page, flags=re.S)
@@ -254,7 +274,12 @@ def render(lang, S, items):
             v[k] = S[k + '_untimed']
         for k in ('login', 'machine', 'first'):
             v['t_' + k] = ''
-        page = re.sub(r'<!--timed-->\n.*?<!--/timed-->\n', '', tmpl, flags=re.S)
+        page = re.sub(r'<!--timed-->\n.*?<!--/timed-->\n', '', base, flags=re.S)
+    v['try_href'] = '/app/try'
+    if variant == 'apply':
+        for k in APPLY_KEYS:
+            v[k] = S[k + '_apply']
+        v['try_href'] = '/apply'
 
     v['faq_items'] = '\n'.join(
         '  <details><summary>%s<i aria-hidden="true">+</i></summary><p>%s</p></details>'
@@ -272,8 +297,8 @@ def render(lang, S, items):
          'description': v['description'], 'url': url, 'inLanguage': S['lang'],
          'image': origin + S['og_image'], 'license': 'https://opensource.org/licenses/MIT',
          'isAccessibleForFree': True, 'publisher': {'@id': origin + '/#org'},
-         'offers': {'@type': 'Offer', 'price': '0', 'priceCurrency': 'CNY', 'description': S['offer']},
-         'potentialAction': {'@type': 'UseAction', 'target': origin + '/app/try'}},
+         'offers': {'@type': 'Offer', 'price': '0', 'priceCurrency': 'CNY', 'description': v['offer']},
+         'potentialAction': {'@type': 'UseAction', 'target': origin + v['try_href']}},
         {'@type': 'FAQPage', '@id': url + '#faq', 'inLanguage': S['lang'],
          'mainEntity': [{'@type': 'Question', 'name': i['q'],
                          'acceptedAnswer': {'@type': 'Answer', 'text': i['a']}} for i in items]},
@@ -291,7 +316,7 @@ def render(lang, S, items):
     if '{time}' in page or '{n}' in page:
         fail('%s: an unfilled {time} / {n} is left on the page' % lang)
     page = re.sub(r'<!--/?shot(:[a-z]+)?-->', '', page)
-    if drill and drill['screens']:
+    if timed and drill['screens']:
         page = re.sub('\x00SHOT:([a-z]+)\x00', lambda m: '<pre class="term-shot">%s</pre>'
                       % html.escape(drill['screens'][m.group(1)], quote=False), page)
     return page, allowed
@@ -319,12 +344,18 @@ def check_seconds(lang, page, allowed):
              % (lang, t[max(0, m.start() - 20):m.end() + 10].strip()))
 
 # --- build -------------------------------------------------------------------
-pages = {}
+pages, apply_pages = {}, {}
 for lang, sub_dir in LANGS:
     items = faq(lang)
     page, allowed = render(lang, tables[lang], items)
     check_seconds(lang, page, allowed)
     pages[lang] = (sub_dir, page)
+    page, allowed = render(lang, tables[lang], items, 'apply')
+    check_seconds(lang, page, allowed)
+    for bad in ('/app/try', '<!--trial', '<!--/trial'):
+        if bad in page:
+            fail('%s: the page with the trial off still carries %s' % (lang, bad))
+    apply_pages[lang] = (os.path.join('apply', sub_dir), page)
 
 if errs:
     for e in errs:
@@ -362,7 +393,7 @@ def font_range(page):
 def page_chars():
     spans = font_range(pages['en'][1])
     chars = set(range(0x20, 0x7f))   # all of printable ASCII, used or not
-    for _, page in pages.values():
+    for _, page in list(pages.values()) + list(apply_pages.values()):
         chars |= {ord(c) for c in html.unescape(page)
                   if ord(c) >= 0x20 and any(a <= ord(c) <= b for a, b in spans)}
     return chars
@@ -409,7 +440,7 @@ if os.path.isdir(OUT):
     shutil.rmtree(OUT)
 os.makedirs(OUT)
 open(os.path.join(OUT, '.gitkeep'), 'w').close()
-for lang, (sub_dir, page) in pages.items():
+for lang, (sub_dir, page) in list(pages.items()) + list(apply_pages.items()):
     d = os.path.join(OUT, sub_dir)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, 'index.html'), 'w', encoding='utf-8') as fh:
@@ -433,7 +464,7 @@ for lang in tables:
         errs.append('share card %s is missing (bin/site-images.sh makes it)' % tables[lang]['og_image'])
 
 # The FAQ on each page is the docs' list, word for word (C12's check).
-for lang, (sub_dir, _) in pages.items():
+for lang, (sub_dir, _) in list(pages.items()) + list(apply_pages.items()):
     p = subprocess.run([sys.executable, os.path.join(REPO, 'bin', 'docs-faq.py'), 'check-html',
                         os.path.join(OUT, sub_dir, 'index.html'), '--lang', lang, '--src', DOCS],
                        capture_output=True, text=True)
@@ -605,6 +636,16 @@ def crawl_files():
         if '{time}' in body or '{n}' in body:
             errs.append('%s: an unfilled {time} / {n}' % name)
         with open(os.path.join(OUT, name), 'w', encoding='utf-8') as fh:
+            fh.write(body)
+    # the llms files with the trial off (issue #4269): the same, each summary
+    # and the front page's line in their apply words
+    os.makedirs(os.path.join(OUT, 'apply'), exist_ok=True)
+    for name in ('llms.txt', 'llms-zh.txt', 'llms-full.txt'):
+        body = files[name]
+        for S in tables.values():
+            body = body.replace(S['llms_summary'], S['llms_summary_apply'])
+            body = body.replace(S['description_untimed'], S['description_apply'])
+        with open(os.path.join(OUT, 'apply', name), 'w', encoding='utf-8') as fh:
             fh.write(body)
 
 crawl_files()

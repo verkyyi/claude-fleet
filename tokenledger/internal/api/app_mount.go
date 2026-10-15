@@ -544,11 +544,10 @@ func (s *Server) serveAppPage(w http.ResponseWriter, r *http.Request, next http.
 		inner = "/"
 	}
 	if inner == "/try" {
-		// The site's 「试用」 button with fleet.trial off: it opens the
-		// console, whose gate asks a stranger to sign in
-		// (claude-fleet#3584). On, appMount serves the try page
-		// (claude-fleet#3590).
-		http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
+		// A trial link with fleet.trial off: 试用暂未开放, apply
+		// (claude-fleet#4269; it used to open the console). On, appMount
+		// serves the try page (claude-fleet#3590).
+		s.serveTryClosed(w, r)
 		return
 	}
 	if !isAppPage(inner) {

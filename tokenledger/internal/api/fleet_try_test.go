@@ -46,16 +46,23 @@ func tryDo(t *testing.T, h *harness, method, path, pid string, body any) (int, h
 	return resp.StatusCode, resp.Header, out
 }
 
-func TestTryOffIsTheOldRedirect(t *testing.T) {
+// With the trial off an old trial link is 试用暂未开放 + the way to apply
+// (claude-fleet#4269), never an error, and the trial's doors stay shut.
+func TestTryOffSaysApply(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	resp, err := noFollow.Get(h.http.URL + TryPagePath + "?from=site")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != AppPrefix+"?from=site" {
-		t.Fatalf("GET /app/try with the trial off = %d → %q; want the old 302 → /app?from=site", resp.StatusCode, resp.Header.Get("Location"))
+	for _, lang := range []string{"zh", "en"} {
+		resp, err := noFollow.Get(h.http.URL + TryPagePath + "?from=site&lang=" + lang)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		want := map[string]string{"zh": "试用暂未开放", "en": "The trial isn&#39;t open"}[lang]
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), want) ||
+			!strings.Contains(string(b), `href="`+ApplyPath+`"`) || strings.Contains(string(b), tryScriptPath) {
+			t.Fatalf("GET /app/try?lang=%s with the trial off = %d; want 200, %q and an apply button:\n%s", lang, resp.StatusCode, want, b)
+		}
 	}
 	for _, p := range []string{TryStartPath, TryClaimPath, TryTimingPath} {
 		pid := "gh:7001"
@@ -734,5 +741,22 @@ func TestTrialFailedTurnKeepsTheLine(t *testing.T) {
 	turn(ndjson(`{"t":"text","d":"half"}`, `{"t":"error","msg":"boom"}`))
 	if n := msgs(); n != 2 {
 		t.Fatalf("msgs after a half-replied turn = %d; want 2", n)
+	}
+}
+
+// The sign-in pages offer the trial only while it is on (claude-fleet#4269).
+func TestSigninLeadTrialOnlyWhenOn(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	for _, c := range []struct {
+		on        string
+		want, not string
+	}{{"off", "登录后当场申请", "先试用"}, {"on", "登录后可以先试用、当场申请", "登录后当场申请"}} {
+		setHubSetting(t, h.srv, TrialKey, c.on)
+		rec := httptest.NewRecorder()
+		h.srv.renderSigninWays(rec, httptest.NewRequest(http.MethodGet, "/app/signin?lang=zh", nil), "zh-CN", "")
+		if b := rec.Body.String(); !strings.Contains(b, c.want) || strings.Contains(b, c.not) {
+			t.Errorf("fleet.trial %s: sign-in lead lacks %q or says %q", c.on, c.want, c.not)
+		}
 	}
 }

@@ -32,6 +32,9 @@
 #      zh/en pairs as xhtml:link; llms.txt / llms-zh.txt are llmstxt.org-shaped
 #      (H1 · > summary · ## lists of [links](…)), every link answered; llms-full
 #      carries every doc's title; a doc added to docs/public/ is in all of them
+#   T  fleet.trial off (issue #4269): the apply/ pages and llms files offer no
+#      trial — every CTA 申请使用 → /apply, no drill seconds — and the trial pages
+#      keep theirs
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$ROOT/bin/site-build.sh"
@@ -145,6 +148,55 @@ if out="$("$BUILD" --out "$T/d" --drill "$T/fast.json" --now "$NOW" 2>&1)"; then
   done
   [ -z "$miss" ] && ok "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"
 else bad "D build failed: $out"; fi
+
+# T — fleet.trial off (issue #4269): apply/index.html + apply/en/index.html, served
+#     in place of the pages while the trial is off, carry no trial at all — no
+#     /app/try, no 立即体验 / 试用 / Try it / trial / 15 分钟 in what a reader or
+#     a crawler is told, no drill seconds (they time the trial), every CTA and
+#     the JSON-LD's UseAction → /apply — while the trial pages keep theirs; the
+#     apply/ llms files say no trial in their summaries
+python3 - "$T/d" <<'PY' || fail=1
+import html, json, os, re, sys
+OUT = sys.argv[1]
+bad = []
+def told(p):
+    ld = ''.join(re.findall(r'<script type="application/ld\+json">(.*?)</script>', p, flags=re.S))
+    metas = ' '.join(re.findall(r'<meta [^>]*content="([^"]*)"', p))
+    title = ''.join(re.findall(r'<title>(.*?)</title>', p, flags=re.S))
+    body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', p, flags=re.S)
+    return html.unescape(' '.join([title, metas, ld, re.sub(r'<[^>]+>', ' ', body)]))
+TRIAL = re.compile(r'立即体验|试用|先试|Try it|\btrial\b|15\s*(分钟|minutes)|\d+\s*(秒|seconds?\b)|\b\d\d:\d\d\b', re.I)
+for rel, applyw in (('index.html', '申请使用'), ('en/index.html', 'Apply for access')):
+    f = os.path.join(OUT, 'apply', rel)
+    if not os.path.isfile(f):
+        bad.append('T apply/%s not built' % rel); continue
+    p = open(f, encoding='utf-8').read()
+    t = told(p)
+    for m in TRIAL.finditer(t):
+        bad.append('T apply/%s says "%s"' % (rel, t[max(0, m.start() - 15):m.end() + 5].strip()))
+    if '/app/try' in p or '<!--trial' in p or '<!--/trial' in p:
+        bad.append('T apply/%s still links /app/try or keeps a trial marker' % rel)
+    if p.count('href="/apply"') < 3 or applyw not in t:
+        bad.append('T apply/%s: the nav, hero and end CTAs are not %s → /apply' % (rel, applyw))
+    ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', p, flags=re.S).group(1))
+    app = [g for g in ld['@graph'] if g['@type'] == 'SoftwareApplication'][0]
+    if app['potentialAction']['target'] != '__ORIGIN__/apply':
+        bad.append('T apply/%s: UseAction → %s' % (rel, app['potentialAction']['target']))
+    if '/app/try' not in open(os.path.join(OUT, rel), encoding='utf-8').read():
+        bad.append('T %s (the trial page) lost its 立即体验 → /app/try' % rel)
+for name in ('llms.txt', 'llms-zh.txt', 'llms-full.txt'):
+    f = os.path.join(OUT, 'apply', name)
+    if not os.path.isfile(f):
+        bad.append('T apply/%s not built' % name); continue
+    head = '\n'.join(l for l in open(f, encoding='utf-8') if l.startswith('> ') or 'ClaudeFleet' in l[:40])
+    if re.search(r'试 ?15|15 minutes|试用', head):
+        bad.append('T apply/%s: its summary still offers the trial' % name)
+for x in bad:
+    print('FAIL ' + x)
+if not bad:
+    print('ok   T trial off: apply/ pages and llms files offer only 申请使用 → /apply, no seconds; the trial pages keep theirs')
+sys.exit(1 if bad else 0)
+PY
 
 # S — the hero speaks of a service (#3940): no GitHub / 开源 / open source / MIT in
 #     the header, the first section or the meta description; the footer keeps

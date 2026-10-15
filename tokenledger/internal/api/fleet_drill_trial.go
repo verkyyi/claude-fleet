@@ -211,6 +211,12 @@ func (s *Server) mintDrillTrial(w http.ResponseWriter, r *http.Request, req dril
 // handleDrillTrialRedeem serves GET /auth/drill/trial?code=ft_…: the code,
 // once, signs its drill trier in as a trial person — trialSignIn, asked.
 func (s *Server) handleDrillTrialRedeem(w http.ResponseWriter, r *http.Request) {
+	if !s.trialOn() && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		// a redeem link out there with the trial off: 试用暂未开放
+		// (claude-fleet#4269), never a bare 404
+		s.serveTryClosed(w, r)
+		return
+	}
 	if !s.trialOn() || s.Store == nil {
 		http.NotFound(w, r)
 		return

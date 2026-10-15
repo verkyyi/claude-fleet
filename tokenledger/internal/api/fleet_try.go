@@ -41,8 +41,9 @@ import (
 //     reclaim), their login goes back through the operator's remove — a
 //     recycling machine washes it into a spare (claude-fleet#3504).
 //
-// fleet.trial is off by default: /app/try opens the console as before
-// (TestTryOffIsTheOldRedirect), the three routes 404, nothing is recorded.
+// fleet.trial is off by default: /app/try says 试用暂未开放 and offers to
+// apply (TestTryOffSaysApply, claude-fleet#4269), the three routes 404,
+// nothing is recorded.
 
 const (
 	// TrialKey turns the trial road on.
