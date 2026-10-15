@@ -242,6 +242,48 @@ EOF3
 [ "$(sed -n 6p <<<"$out")" = "1 True False 2001:db8::5 入口直连 entry-2" ] && ok "entry-2 (an address the hub reached, IPv6): the entry class, the device key, no certificate" \
   || bad "entry-2: got $(sed -n 6p <<<"$out")"
 
+# ── a pod behind the door, through its jump account (claude-fleet#4193) ─────
+out=$(python3 -I - "$BIN/fleet-connect.py" "$WORK/jump" <<'EOF4'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec)
+os.environ["HOME"] = sys.argv[2]; os.environ["FLEET_KNOWN_HOSTS"] = sys.argv[2] + "/kh"
+spec.loader.exec_module(fc)
+os.makedirs(sys.argv[2] + "/.ssh", exist_ok=True)
+for f in ("fleet-cert", "fleet-cert-cert.pub"):
+    open(os.path.join(sys.argv[2], ".ssh", f), "w").close()
+door, pod = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDOOR", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPOD"
+jr = {"name": "entry", "host": "203.0.113.10", "port": 22022, "jump": "fleet-jump",
+      "target": "u-aaaa1.fleet-workers.svc.cluster.local", "target_port": 22, "target_host_keys": [pod]}
+m = {"hostname": "u-aaaa1", "host_keys": [door], "routes": [jr]}
+r = fc.pinned_row(fc.route_rows(m, ""), "entry")
+c = fc.ssh_command(m, r, "alice", "", known_hosts=fc.write_known_hosts(m))
+pc = next(x for x in c if x.startswith("ProxyCommand="))
+# 1 the pod is the last argument, checked under its own alias; the door is the ProxyCommand's
+print(c[-1], "HostKeyAlias=fleet-u-aaaa1-pod" in c, "-W %h:%p -l fleet-jump -p" not in pc,
+      pc.endswith("-p 22022 -W %h:%p -l fleet-jump 203.0.113.10"), "HostKeyAlias=fleet-u-aaaa1 " in pc)
+# 2 fleet-known-hosts: the door's key for the door, the pod's for the pod
+print("|".join(sorted(open(sys.argv[2] + "/kh").read().splitlines())).replace(door, "D").replace(pod, "P"))
+# 3 a jump with no pod key, or a target outside the cluster ⇒ the old road, byte for byte
+old = fc.ssh_command(m, dict(r, jump="", target="", target_host_keys=[]), "alice", "")
+for bad in (dict(jr, target_host_keys=[]), dict(jr, target="evil.example.com"), dict(jr, jump="x y")):
+    mb = dict(m, routes=[bad])
+    rb = fc.pinned_row(fc.route_rows(mb, ""), "entry")
+    print(fc.ssh_command(mb, rb, "alice", "") == old, end=" ")
+print()
+# 4 the cache keeps the jump (a remembered route reconnects the same way)
+print(sorted(k for k in fc.route_rec(r) if k.startswith(("jump", "target"))))
+EOF4
+)
+[ "$(sed -n 1p <<<"$out")" = "u-aaaa1.fleet-workers.svc.cluster.local True True True True" ] \
+  && ok "jump (#4193): ssh to the pod's own sshd, ProxyCommand ssh -W through fleet-jump at the door, each hop its own host key alias" \
+  || bad "jump argv: got $(sed -n 1p <<<"$out")"
+[ "$(sed -n 2p <<<"$out")" = "fleet-u-aaaa1 D|fleet-u-aaaa1-pod P" ] && ok "jump: the door's key under fleet-<pod>, the pod's own under fleet-<pod>-pod (never TOFU)" \
+  || bad "jump known hosts: got $(sed -n 2p <<<"$out")"
+[ "$(sed -n 3p <<<"$out")" = "True True True " ] && ok "jump: no pod key / a target outside the cluster / a bad account ⇒ the door's per-login road, as before" \
+  || bad "jump fallback: got [$(sed -n 3p <<<"$out")]"
+[ "$(sed -n 4p <<<"$out")" = "['jump', 'target', 'target_host_keys', 'target_port']" ] && ok "jump: a remembered route keeps it" \
+  || bad "jump cache: got $(sed -n 4p <<<"$out")"
+
 # ── the fake hub + fake sshd ────────────────────────────────────────────────
 # $WORK/state (JSON, re-read on every request): tailnet_up, relay_ok, down.
 cat > "$WORK/hub.py" <<'EOF'

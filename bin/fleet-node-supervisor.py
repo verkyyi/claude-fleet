@@ -5294,6 +5294,9 @@ class EntryPaths(object):
         self.rev_ca = os.path.join(self.dir, "revocations-ca.pub")
         # the door (#3549): its key to the pods, root:fleet-door 0640
         self.door_key = os.path.join(self.dir, "door_key")
+        # the door's jump account (#4193): each routed login's keys, 0644 — what
+        # bin/fleet-door-keys.py reads as `nobody`
+        self.jump = os.path.join(self.dir, "jump-keys")
 
 
 def entry_settings(paths):
@@ -5377,6 +5380,119 @@ def door_route_rows(lst):
                 and re.match(r"^[A-Za-z0-9._-]{1,64}$", pl):
             out[login] = (svc, pl)
     return dict((l, v) for l, v in out.items() if seen.get(l) == 1)
+
+
+# The door's jump account (claude-fleet#4193, design #4181 A2): ONE fixed account
+# baked into the door image (never a useradd here), no shell, no session; a key
+# of a person whose home is a pod may open one tunnel — to that person's own
+# pod, port 22 — and nothing else (bin/fleet-door-keys.py writes the line). The
+# login itself is the pod's sshd's, with the person's own key. Beside the old
+# per-login road until that one is removed.
+DOOR_JUMP_USER = "fleet-jump"
+
+
+def door_jump_user():
+    """The jump account's name when this door has it, else "". The drill's seam
+    (FLEET_NODE_TEST only) names a login of its own."""
+    if env("FLEET_NODE_TEST", "") == "1" and env("FLEET_DOOR_JUMP_USER", ""):
+        return env("FLEET_DOOR_JUMP_USER", "")
+    try:
+        pw = pwd.getpwnam(DOOR_JUMP_USER)
+    except KeyError:
+        return ""
+    # a locked account (`!`) is refused by a `UsePAM no` sshd even with its key
+    # (door-account-locked, #4161): the image leaves `*`
+    return DOOR_JUMP_USER if pw.pw_uid != 0 and door_shadow(DOOR_JUMP_USER) in ("*", None) else ""
+
+
+def door_jump(paths):
+    """(user, python, script) when this door can let jumps through, else None:
+    the account, and the runtime's bin/fleet-door-keys.py."""
+    user = door_jump_user()
+    script = os.path.join(paths.runtime, "bin", "fleet-door-keys.py")
+    if not user or not os.path.isfile(script):
+        return None
+    py = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else (sys.executable or "python3")
+    return user, py, script
+
+
+def door_jump_rows(lst, rows):
+    """{login: (service, keys-file text, person, [fp…])} of every routed login
+    with a key — whether or not it has a door account (the jump needs none)."""
+    out = {}
+    for login, (svc, _pl) in sorted(rows.items()):
+        if login in ("root", DOOR_NOBODY):
+            continue
+        ent = lst["logins"].get(login) if isinstance(lst["logins"].get(login), dict) else {}
+        lines, fps = [], []
+        for k in ent.get("keys") or []:
+            line = entry_key_line(k)
+            if line is not None and line not in lines:
+                lines.append(line)
+                fps.append(str(k.get("fp")))
+        if lines:
+            out[login] = (svc, "".join(lines), str(ent.get("person") or ""), fps)
+    return out
+
+
+def door_jump_files(ep, want):
+    """The jump keys files: exactly <want> ({login: text}), each 0644 (root's
+    on the door). Returns the b64s of keys no longer there (to be cut)."""
+    _entry_root_dir(ep.jump, 0o755)
+    removed = set()
+    try:
+        present = [n for n in os.listdir(ep.jump) if not n.startswith(".")]
+    except OSError:
+        present = []
+    for n in present:
+        p = os.path.join(ep.jump, n)
+        old = _entry_read(p)
+        if n not in want:
+            removed |= _entry_b64s(old)
+            try:
+                os.remove(p) if not os.path.isdir(p) or os.path.islink(p) else shutil.rmtree(p)
+            except OSError:
+                pass
+        else:
+            removed |= _entry_b64s(old) - _entry_b64s(want[n])
+    for login, text in sorted(want.items()):
+        p = os.path.join(ep.jump, login)
+        try:
+            st = os.lstat(p)
+        except OSError:
+            st = None
+        if st is None or os.path.islink(p) or _entry_read(p) != text or st.st_mode & 0o7777 != 0o644 \
+                or (os.geteuid() == 0 and (st.st_uid != 0 or st.st_gid != 0)):
+            if st is not None and (os.path.islink(p) or os.path.isdir(p)):
+                shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+            _entry_put(p, text, 0o644)
+    return removed
+
+
+def door_jump_config(ep, jump):
+    """The jump account's Match block — the config's last lines."""
+    import shlex
+    user, py, script = jump
+    # the drill's seam (FLEET_NODE_TEST only): the "pods" are local sshds
+    targets = env("FLEET_DOOR_TEST_TARGETS", "") if env("FLEET_NODE_TEST", "") == "1" else ""
+    cmd = [py, "-I", script, ep.book, ep.jump, door_namespace(), user] + (["--targets", targets] if targets else [])
+    return [
+        # the jump account (#4193): a tunnel to the person's own pod, nothing else
+        "Match User %s" % user,
+        "AuthorizedKeysFile none",
+        "AuthorizedKeysCommand %s %%u %%t %%k" % " ".join(shlex.quote(a) for a in cmd),
+        # nobody on the door (root's sshd); a drill's non-root sshd cannot change user
+        "AuthorizedKeysCommandUser %s" % ("nobody" if os.geteuid() == 0 else pwd.getpwuid(os.geteuid()).pw_name),
+        "DisableForwarding no",
+        "AllowTcpForwarding local",
+        "AllowStreamLocalForwarding no",
+        "AllowAgentForwarding no",
+        "X11Forwarding no",
+        "PermitListen none",
+        "PermitTTY no",
+        "PermitTunnel no",
+        "ForceCommand /usr/bin/false",
+    ]
 
 
 def door_account(login):
@@ -5597,6 +5713,7 @@ def entry_config(ep, port, allow, paths=None):
         # say where to go lets nobody in (no ForceCommand ⇒ no config at all)
         if not disp:
             return None
+        jump = door_jump(paths)
         return "".join(l + "\n" for l in [
             "# claude-fleet door (issue #3549) — written by fleet-node-supervisor.py; every",
             "# change passes `sshd -t` first. Each login goes to its own pod and nowhere else.",
@@ -5636,7 +5753,7 @@ def entry_config(ep, port, allow, paths=None):
             "ForceCommand /bin/bash %s" % shlex.quote(disp),
             "SetEnv FLEET_ENTRY_BOOK=%s FLEET_DOOR_KEY=%s FLEET_DOOR_NAMESPACE=%s%s"
             % (ep.book, ep.door_key, door_namespace(), (" " + more) if more else ""),
-        ])
+        ] + (door_jump_config(ep, jump) if jump and jump[0] in allow else []))
     if disp:
         # the book (0644) names each key the hub registered — the 看台's device; the
         # drill's seam (FLEET_NODE_TEST only) adds its 看台 stand-in and conf dir.
@@ -6014,6 +6131,15 @@ def _entry_converge(paths, ep, port, lst, force):
                 os.remove(p)
             _entry_put(p, text, 0o644)
     allow = sorted(want)
+    jump = door_jump(paths) if door else None
+    if door:
+        # the jump account (#4193): every routed login's keys, account or none
+        jrows = door_jump_rows(lst, rows)
+        removed |= door_jump_files(ep, dict((l, v[1]) for l, v in jrows.items()))
+        book["jump"] = dict((l, {"service": v[0], "person": v[2], "fps": v[3]}) for l, v in jrows.items())
+        book["jump_user"] = jump[0] if jump else ""
+        if jump and jrows and jump[0] not in allow:
+            allow = sorted(allow + [jump[0]])
     # the config: none (no listener) when no login has its home here — except at
     # the door (issue #3554): its probe is tcp on the port, and its table is empty
     # until the first person's home is a pod, so it listens letting nobody in
@@ -6245,6 +6371,9 @@ def entry_pull(paths, version=None):
         from urllib.request import Request, urlopen
         try:
             path = "/v1/node/entry-routes" if door_on(paths) else "/v1/node/entry-keys"
+            if door_on(paths) and door_jump(paths) and "Match User " in (_entry_read(ep.cfg) or ""):
+                # the jump account is on (#4193): the hub may send people through it
+                path += "?jump=1&ns=" + door_namespace()
             req = Request(hub + path, headers={"Authorization": "Bearer " + token,
                                                                  "Accept": "application/json"})
             with urlopen(req, timeout=env_num("FLEET_ENTRY_PULL_SECS", 10)) as r:
@@ -6292,10 +6421,21 @@ def entry_audit_lines(text, book, host, base, at):
                 continue
             login, ip = m.group(1), m.group(2)
             fp = m.group(3) if pat.groups >= 3 else ""
-            out.append({"id": "%d" % here, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)),
-                        "kind": "enter", "person": str((logins.get(login) or {}).get("person") or ""),
-                        "login": login[:64], "fp": fp[:120], "machine": host, "source_ip": ip[:64],
-                        "result": result})
+            line = {"id": "%d" % here, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)),
+                    "kind": "enter", "person": str((logins.get(login) or {}).get("person") or ""),
+                    "login": login[:64], "fp": fp[:120], "machine": host, "source_ip": ip[:64],
+                    "result": result}
+            if login and login == (book or {}).get("jump_user"):
+                # the door's jump account (#4193): whose key it was, which pod it may reach
+                who = next((l for l, e in sorted(((book or {}).get("jump") or {}).items())
+                            if fp and fp in (e.get("fps") or [])), "")
+                line["kind"] = "jump"
+                if who:
+                    j = book["jump"][who]
+                    line.update(login=who[:64], person=str(j.get("person") or ""), target=str(j.get("service") or ""))
+                    if result == "ok":
+                        line["result"] = "ok → %s" % line["target"]
+            out.append(line)
             break
     return out
 

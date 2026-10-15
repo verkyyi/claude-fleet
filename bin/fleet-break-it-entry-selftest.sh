@@ -985,7 +985,7 @@ PY
     kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
   }
   # the bug: the pod's sshd before #4149 (the CA trusted nowhere) — a relayed certificate is refused
-  podcfg "$d/old" && sed -i.bak '/^Match LocalAddress/,$d' "$d/old"
+  podcfg "$d/old" && sed -i.bak 's/^TrustedUserCAKeys .*/TrustedUserCAKeys none/' "$d/old"
   out1=$(login "$d/old" "$d/user")
   case $out1 in *LANDED*) WHY="a certificate landed on the pod's old sshd — the drill tests nothing: [$out1]"; return 1 ;; esac
   podcfg "$d/new"
@@ -993,12 +993,183 @@ PY
   case $out2 in *LANDED*) ;; *) WHY="a hub-CA certificate on 127.0.0.1 was refused: [$out2] $(tail -3 "$d/sshd.log")"; return 1 ;; esac
   out3=$(login "$d/new" "$d/plain")
   case $out3 in *LANDED*) WHY="a plain key with no certificate landed on the pod: [$out3]"; return 1 ;; esac
-  # the pod's own address (the door's way in) never trusts the CA
+  # one rule on every address (#4193): the pod's own address (the jump's) takes the CA too
   "$SSHD_BIN" -T -f "$d/new" -C "user=$ME,host=x,addr=10.0.0.9,laddr=10.0.0.5,lport=$port" 2>/dev/null \
-    | grep -qx 'trustedusercakeys none' \
-    || { WHY="the pod's own address trusts the hub's CA"; return 1; }
+    | grep -qx "trustedusercakeys $d/ca.pub" \
+    || { WHY="the pod's own address does not take the hub's CA"; return 1; }
   SECS=$(since "$t0")
-  WHAT="pod 的 sshd：旧配置不认证书（中转永远进不去）；新配置 127.0.0.1 上认入口 CA 的证书、不认无证书的钥匙，pod 自己的地址（门走的）不认 CA"
+  WHAT="pod 的 sshd：旧配置不认证书（中转永远进不去）；新配置认入口 CA 的证书、不认无证书也不在名单的钥匙，回环和 pod 自己的地址同一条规则（#4193）"
+}
+
+# ── the door's jump account (issue #4193, design #4181 A2) ──────────────────
+# jrig: the door with its jump account (this login — a non-root sshd lets only
+# itself in), alice=k1 → u-aaaa1 and bob=k2 → u-bbbb2, two stand-in pods that
+# take their person's OWN key (the new pod rule) and say which pod they are
+jpod() {  # jpod <u-nonce> <key> → $PODPORT
+  local pod="$1" d="$E/$1"
+  mkdir -p "$d"; ssh-keygen -q -t ed25519 -N '' -f "$d/hk"
+  cp "$E/$2.pub" "$d/keys"; chmod 644 "$d/keys"
+  PODPORT="$(free_port)"
+  {
+    printf 'Port %s\nListenAddress 127.0.0.1\nHostKey %s/hk\nPidFile %s/pid\nAuthorizedKeysFile %s/keys\n' \
+      "$PODPORT" "$d" "$d" "$d"
+    printf 'UsePAM no\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n'
+    printf 'ForceCommand echo pod=%s\n' "$pod"
+  } > "$d/cfg"
+  "$SSHD_BIN" -D -e -f "$d/cfg" 2>>"$d/log" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 10 python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "$PODPORT" \
+    || { WHY="the stand-in pod $pod never listened: $(tail -2 "$d/log")"; return 1; }
+}
+jrig() {  # jrig <name>
+  erig "$1"
+  mkdir -p "$E/rt/bin" "$E/door"
+  ln -s "$BIN/fleet-door.sh" "$E/rt/bin/fleet-door.sh"; ln -s "$BIN/fleet-door-keys.py" "$E/rt/bin/fleet-door-keys.py"
+  ssh-keygen -q -t ed25519 -N '' -f "$E/door/host_ed25519_key"
+  ssh-keygen -q -t ed25519 -N '' -C fleet-door -f "$E/door/id_ed25519"
+  jpod u-aaaa1 k1 || return 1; JPA=$PODPORT
+  jpod u-bbbb2 k2 || return 1; JPB=$PODPORT
+  export FLEET_DOOR=1 FLEET_DOOR_SECRET="$E/door" FLEET_DOOR_JUMP_USER="$ME" \
+    FLEET_DOOR_TEST_TARGETS="u-aaaa1=127.0.0.1:$JPA,u-bbbb2=127.0.0.1:$JPB" \
+    FLEET_ENTRY_TEST_SETENV="FLEET_NODE_TEST=1 FLEET_DOOR_TEST_TARGETS=u-aaaa1=127.0.0.1:$JPA,u-bbbb2=127.0.0.1:$JPB"
+  eapply "$(dlist 1 "alice=k1@u-aaaa1" "bob=k2@u-bbbb2")" || { WHY="door apply failed: $(tail -2 "$E/apply.out")"; return 1; }
+  grep -q "^Match User $ME\$" "$E/db/entry/sshd_config" && grep -q '^AuthorizedKeysCommand .*fleet-door-keys.py' "$E/db/entry/sshd_config" \
+    || { WHY="the door's config has no jump block: $(tail -3 "$E/apply.out") $(tail -15 "$E/db/entry/sshd_config" 2>/dev/null)"; return 1; }
+  eup
+  until_ok 10 listening || { WHY="the door's sshd never listened: $(tail -3 "$E/log/entry.log" 2>/dev/null)"; return 1; }
+}
+jdown() { ddown; unset FLEET_DOOR_JUMP_USER FLEET_DOOR_TEST_TARGETS; }
+# jssh <key> <pod port> [cmd] → stdout; ssh's stderr in $E/ssh.err — the client's own
+# road: ProxyCommand `ssh -W` through the jump account, the key on both hops
+jssh() {
+  local k="$1" pp="$2"; shift 2
+  local o="-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR"
+  # shellcheck disable=SC2086  # $o is its own words
+  ssh $o -i "$E/$k" -p "$pp" -o "ProxyCommand=ssh $o -i $E/$k -p $EPORT -W %h:%p $ME@127.0.0.1" \
+    "$ME@127.0.0.1" "${1:-hostname}" </dev/null 2>"$E/ssh.err"
+}
+# jtry <key> [ssh args…] → stdout; straight at the door as the jump account
+jtry() {
+  local k="$1"; shift
+  ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR -o ExitOnForwardFailure=yes \
+    -i "$E/$k" -p "$EPORT" "$@" </dev/null 2>"$E/ssh.err"
+}
+jrecord() {  # jrecord <login> <pod>: the door's record has a jump line for it
+  python3 -c '
+import json, sys
+rows = []
+for l in open(sys.argv[1]):
+    try:
+        rows.append(json.loads(l))
+    except ValueError:
+        pass
+sys.exit(0 if any(r.get("kind") == "jump" and r.get("login") == sys.argv[2] and r.get("target") == sys.argv[3]
+                  and r.get("fp") for r in rows) else 1)' "$E/log/entry.ndjson" "$1" "$2" 2>/dev/null
+}
+
+drill_door_jump_other_pod() {
+  CAP=30   # two stand-in pods, the door, four tunnels
+  local t0 out; t0=$(now)
+  jrig jump-other-pod || { jdown; return 1; }
+  # 1. alice's key through the jump ⇒ her own pod, logged in with her own key
+  out=$(jssh k1 "$JPA")
+  [ "$out" = "pod=u-aaaa1" ] || { WHY="1: alice to her pod: [$out] $(cat "$E/ssh.err")"; jdown; return 1; }
+  # 2. alice's key asking for bob's pod ⇒ the door refuses the tunnel
+  out=$(jssh k1 "$JPB") && { WHY="2: alice's key reached bob's pod: [$out]"; jdown; return 1; }
+  case "$out" in *pod=*) WHY="2: a pod answered [$out]"; jdown; return 1 ;; esac
+  grep -qiE 'prohibited|denied|refused|forwarding failed' "$E/ssh.err" || { WHY="2: not the door's refusal: $(cat "$E/ssh.err")"; jdown; return 1; }
+  # 3. a tunnel anywhere else (the door's own port) ⇒ refused
+  out=$(jtry k1 -W "127.0.0.1:$EPORT" "$ME@127.0.0.1") && { WHY="3: a tunnel to the door's own port: [$out]"; jdown; return 1; }
+  # 4. bob ⇒ bob's pod; the record names whose key went where
+  out=$(jssh k2 "$JPB")
+  [ "$out" = "pod=u-bbbb2" ] || { WHY="4: bob to his pod: [$out] $(cat "$E/ssh.err")"; jdown; return 1; }
+  until_ok 10 jrecord bob u-bbbb2 || { WHY="4: the door's record: $(tail -3 "$E/log/entry.ndjson" 2>/dev/null)"; jdown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { jdown; return 1; }
+  jdown
+  WHAT="门的跳转账号：alice 的钥匙只能开到 u-aaaa1:22 的隧道（经 ProxyCommand ssh -W 用她自己的钥匙登进她的 pod），要 bob 的 pod / 门自己的端口被门拒；bob 到 u-bbbb2；门的记录写 指纹 → 谁 → 哪个 pod"
+}
+
+drill_door_jump_shell() {
+  CAP=25   # the door, four asks
+  local t0 out; t0=$(now)
+  jrig jump-shell || { jdown; return 1; }
+  # a session, a terminal, a command, a remote forward — none of them gets anything
+  out=$(jtry k1 "$ME@127.0.0.1") && { WHY="a session ran: [$out]"; jdown; return 1; }
+  [ -z "$out" ] || { WHY="a session answered: [$out]"; jdown; return 1; }
+  out=$(jtry k1 -tt "$ME@127.0.0.1") && { WHY="a terminal ran: [$out]"; jdown; return 1; }
+  case "$out" in *[a-z]*pod*|*Last*) WHY="a terminal answered: [$out]"; jdown; return 1 ;; esac
+  out=$(jtry k1 "$ME@127.0.0.1" hostname) && { WHY="a command ran: [$out]"; jdown; return 1; }
+  [ -z "$out" ] || { WHY="a command answered: [$out]"; jdown; return 1; }
+  out=$(jtry k1 -N -R 0:127.0.0.1:22 "$ME@127.0.0.1") && { WHY="a remote forward held: [$out]"; jdown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { jdown; return 1; }
+  jdown
+  WHAT="门的跳转账号：要会话 / 要终端 / 跑命令 / 反向转发 一律没有输出、非零退出（ForceCommand /usr/bin/false + restrict）"
+}
+
+drill_door_jump_unlisted() {
+  CAP=25   # the door, an unlisted key, a removed key
+  local t0 out n; t0=$(now)
+  jrig jump-unlisted || { jdown; return 1; }
+  # a key the book does not list ⇒ 0 Accepted for it
+  out=$(jssh k3 "$JPA") && { WHY="an unlisted key went through: [$out]"; jdown; return 1; }
+  n=$(grep -c "Accepted publickey for $ME .*$(ssh-keygen -l -f "$E/k3.pub" | awk '{ print $2 }')" "$E/log/entry.log" 2>/dev/null)
+  [ "${n:-0}" = 0 ] || { WHY="the unlisted key was accepted $n time(s)"; jdown; return 1; }
+  # alice's key leaves the list ⇒ her jump is gone at the next pass
+  eapply "$(dlist 2 "bob=k2@u-bbbb2")" || { WHY="apply v2: $(tail -2 "$E/apply.out")"; jdown; return 1; }
+  out=$(jssh k1 "$JPA") && { WHY="a key gone from the list still jumps: [$out]"; jdown; return 1; }
+  [ ! -e "$E/db/entry/jump-keys/alice" ] || { WHY="alice's jump keys file stayed"; jdown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { jdown; return 1; }
+  jdown
+  WHAT="门的跳转账号：书里没有的钥匙 0 次放行；钥匙从入口的名单上撤下，下一轮门上的跳转钥匙文件就没了、再也开不了隧道"
+}
+
+drill_pod_foreign_key() {
+  CAP=25   # one sshd, six logins
+  local t0 d port sp k out bad=""; t0=$(now); d="$EB/podforeign"; rm -rf "$d"; mkdir -p "$d"; chmod 755 "$d"
+  port=$(free_port)
+  ssh-keygen -q -t ed25519 -N '' -f "$d/host"; ssh-keygen -q -t ed25519 -N '' -f "$d/ca"
+  for k in mine other door certme certother; do ssh-keygen -q -t ed25519 -N '' -f "$d/$k"; done
+  ssh-keygen -q -s "$d/ca" -I drill -n "$ME" -V +5m "$d/certme.pub"
+  ssh-keygen -q -s "$d/ca" -I drill -n someoneelse -V +5m "$d/certother.pub"
+  cp "$d/mine.pub" "$d/authorized_keys"; chmod 644 "$d"/*.pub "$d/authorized_keys"
+  python3 -I -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("lin", sys.argv[1])
+lin = importlib.util.module_from_spec(spec); spec.loader.exec_module(lin)
+d, me, port = sys.argv[2:5]
+t = lin.pod_sshd_text(me, "/rt")
+for a, b in (("/run/sshd-key/host", d + "/host"), ("Port %d" % lin.POD_SSHD_PORT, "Port " + port),
+             ("PidFile none", "PidFile none\nStrictModes no\nListenAddress 127.0.0.1"),
+             (lin.DOOR_PUB, d + "/door.pub"), (lin.POD_KEYS, d + "/authorized_keys"),
+             ("/bin/bash /rt/current/bin/fleet-entry.sh", "/bin/echo LANDED"), (lin.POD_USER_CA, d + "/ca.pub"),
+             # a non-root sshd cannot become nobody to run the keys command
+             ("AuthorizedKeysCommandUser nobody", "AuthorizedKeysCommandUser " + me)):
+    t = t.replace(a, b)
+open(d + "/cfg", "w").write(t.replace("Subsystem sftp /usr/lib/openssh/sftp-server\n", ""))' \
+    "$BIN/fleet-node-linux.py" "$d" "$ME" "$port"
+  "$SSHD_BIN" -D -e -f "$d/cfg" >"$d/sshd.log" 2>&1 & sp=$!
+  printf '%s\n' "$sp" >> "$WORK/cred-pids"
+  until_ok 5 python3 -c 'import socket,sys; socket.create_connection(("127.0.0.1",int(sys.argv[1])),1)' "$port" 2>/dev/null
+  plog() {  # plog <key> [login] → its last line
+    ssh -F /dev/null -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o IdentitiesOnly=yes -o IdentityAgent=none -o LogLevel=ERROR -o ConnectTimeout=5 -i "$d/$1" "${2:-$ME}@127.0.0.1" \
+        2>&1 </dev/null | tail -1
+  }
+  for k in mine certme door; do
+    out=$(plog "$k"); case $out in *LANDED*) ;; *) bad="$bad $k refused [$out]" ;; esac
+  done
+  for k in other certother; do
+    out=$(plog "$k"); case $out in *LANDED*) bad="$bad $k LANDED" ;; esac
+  done
+  out=$(plog mine root); case $out in *LANDED*) bad="$bad root LANDED" ;; esac
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+  [ -z "$bad" ] || { WHY="the pod's sshd:$bad — $(tail -3 "$d/sshd.log")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="pod 的 sshd（#4193 一条规则）：本人钥匙、本人主体名的入口证书、过渡期门的钥匙能进；别人的钥匙、别人主体名的证书、本人钥匙换 root 一律进不来"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

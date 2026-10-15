@@ -700,10 +700,12 @@ class LinuxNode(unittest.TestCase):
                          'ForceCommand /bin/bash /var/db/fleet-node/runtime/current/bin/fleet-entry.sh'):
                 self.assertIn(want + '\n', sshd)
             self.assertNotIn('Include', sshd)
-            # the relay (claude-fleet#4149): the hub's user CA on loopback alone, the file's last block
-            self.assertTrue(sshd.endswith('Match LocalAddress 127.0.0.1,::1\n'
-                                          'TrustedUserCAKeys /var/db/fleet-node/ssh/fleet_user_ca.pub\n'))
-            self.assertIn('TrustedUserCAKeys none\nPermitUserRC', sshd)
+            # one rule on every address (claude-fleet#4193): the person's keys + the door's
+            # through a command that never fails, the hub's user CA — no Match block
+            self.assertIn('AuthorizedKeysCommand /bin/sh -c "/bin/cat /run/fleet-door/door.pub '
+                          '/var/db/fleet-node/ssh/authorized_keys 2>/dev/null; exit 0"\n', sshd)
+            self.assertIn('TrustedUserCAKeys /var/db/fleet-node/ssh/fleet_user_ca.pub\nPermitUserRC', sshd)
+            self.assertNotIn('Match', sshd)
             for login, uid in (('root', '10002'), ('sshd', '10002'), ('fleetu7', '0'), ('fleetu7', '100'),
                                ('fleetu7', '65534'), ('Fleet', '10002')):
                 with patch.dict(os.environ, dict(pod, FLEET_POD_LOGIN=login, FLEET_POD_UID=uid)):
@@ -1699,6 +1701,63 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
                 patch.object(s, 'pid_alive', return_value=True), patch.object(s, 'pid_cmd', return_value='same'):
             obj.adopt()
         self.assertEqual(obj.adopted, {})
+
+
+class PodKeysPull(unittest.TestCase):
+    """claude-fleet#4193: a person's pod pulls its login's keys for its own sshd
+    (the door's jump needs no key of the door's), says ?jump=1, dials the
+    in-cluster hub when it has one, and keeps the last file when the hub fails."""
+
+    def test_pull(self):
+        import base64
+        lin = module('fleet-node-linux')
+        s = module('fleet-node-supervisor')
+        b64 = base64.b64encode(b'\x00\x00\x00\x0bssh-ed25519' + b'\x00' * 36).decode()
+        key = {'fp': 'SHA256:abc', 'type': 'ssh-ed25519', 'b64': b64, 'name': 'phone'}
+        other = dict(key, fp='SHA256:zzz')
+        lst = {'version': 3, 'logins': {'alice': {'keys': [key, {'type': 'ssh-dss', 'b64': 'x'}]},
+                                        'alice.web': {'keys': [key]}, 'bob': {'keys': [other]}}}
+        seen = []
+
+        class R(object):
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return self.body
+
+        def fake(req, timeout=0):
+            seen.append((req.full_url, req.headers.get('Authorization')))
+            if isinstance(lst, Exception):
+                raise lst
+            return R(json.dumps(lst).encode())
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, 'machine.env').write_text('CCQUOTA_HUB_URL=https://hub.example/\nCCQUOTA_TOKEN=tok123\n')
+            k = lin.PodKeys(s, 'alice', d)
+            with patch.object(lin.urllib.request, 'urlopen', fake), \
+                    patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': 'http://hub.fleet.svc.cluster.local:8080'}):
+                k.pull()
+            self.assertEqual(seen, [('http://hub.fleet.svc.cluster.local:8080/v1/node/entry-keys?jump=1', 'Bearer tok123')])
+            path = Path(d, 'ssh', 'authorized_keys')
+            self.assertEqual(path.read_text(), 'ssh-ed25519 %s fleet:SHA256:abc\n' % b64)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            # the hub away: the last file stands
+            lst = OSError('down')
+            with patch.object(lin.urllib.request, 'urlopen', fake), patch.dict(os.environ, {'FLEET_HUB_INTERNAL_URL': ''}):
+                k.pull_quiet()
+            self.assertEqual(seen[-1][0], 'https://hub.example/v1/node/entry-keys?jump=1')
+            self.assertIn('fleet:SHA256:abc', path.read_text())
+            # a key gone from the list is gone from the file
+            lst = {'version': 4, 'logins': {'alice': {'keys': []}}}
+            with patch.object(lin.urllib.request, 'urlopen', fake):
+                k.pull()
+            self.assertEqual(path.read_text(), '')
 
 
 class StaleLane(unittest.TestCase):

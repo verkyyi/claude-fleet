@@ -136,6 +136,7 @@ func (s *Server) handleNodeEntryRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	// its pull is the one beat every door has: keep its reach fresh (#4149)
 	s.doorReachKeep(host, time.Now())
+	s.noteJump(r, host, true, time.Now())
 	out, err := s.entryRouteList()
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

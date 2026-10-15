@@ -113,12 +113,13 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 	if err != nil || len(addrs) == 0 {
 		return m
 	}
+	var own []string
 	if pod && door != m.Hostname {
 		// the door ends the ssh itself (fleet-door.sh): the key a person's
 		// ssh meets under fleet-<pod> is the door's, never the pod's own —
 		// whatever that pod's image carried (#4127). None known ⇒ none
 		// listed: ssh asks once rather than refuse on a wrong one.
-		own := m.HostKeys
+		own = m.HostKeys
 		m.HostKeys = nil
 		if k, err := s.Store.EntryHostKey(door); err == nil && k != "" {
 			m.HostKeys = control.HostKeys([]string{k})
@@ -140,6 +141,10 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 		routes = append(routes, FleetRoute{Name: name, Host: host, Port: a.Port})
 	}
 	m.Routes = routes
+	if pod && door != m.Hostname {
+		// the door's jump account to the pod's own sshd (claude-fleet#4193)
+		m.Routes = s.withJump(m.Routes, m.Hostname, door, own, now)
+	}
 	return m
 }
 

@@ -90,6 +90,15 @@ type FleetRoute struct {
 	// Prefix: a "lan" route's network prefix length, as the node reported
 	// it (claude-fleet#3074) — passed on, never checked against anything.
 	Prefix int `json:"prefix,omitempty"`
+	// Jump: a person's pod behind the door, reached through the door's one
+	// jump account (claude-fleet#4193): Host:Port is the door, Jump its
+	// account, Target:TargetPort the pod's sshd inside the cluster, and
+	// TargetHostKeys the pod's own host keys. A client that knows none of
+	// this keeps the route as it always was (the door's per-login account).
+	Jump           string   `json:"jump,omitempty"`
+	Target         string   `json:"target,omitempty"`
+	TargetPort     int      `json:"target_port,omitempty"`
+	TargetHostKeys []string `json:"target_host_keys,omitempty"`
 }
 
 func (m FleetMachine) alias() string {
