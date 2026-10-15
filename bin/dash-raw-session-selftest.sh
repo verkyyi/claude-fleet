@@ -60,6 +60,7 @@ PREFILL_LOG="$WORK/prefill"
 
 ln -s "$RAW" "$WORK/bin/dash-raw-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$BIN/fleet_dispatch.py" "$WORK/bin/fleet_dispatch.py"
 ln -s "$BIN/fleet-ui-lang.sh" "$WORK/bin/fleet-ui-lang.sh"   # fleet_ui_fail (issue #1618)
 # Record the async prefill handoff; scratch-prefill-selftest.sh tests delivery.
 cat > "$WORK/bin/scratch-prefill.py" <<'PY'
@@ -356,7 +357,7 @@ WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt $'audit the dash binds for "$
 grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N --prompt must still land a scratch-N window" "$(cat "$NEWWIN_LOG")"
 grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"      || fail "N a seeded scratch is still @raw=1" "$(cat "$OPTS_LOG")"
 grep -q '@issue' "$OPTS_LOG"               && fail "N a seeded scratch must NOT get an @issue" "$(cat "$OPTS_LOG")"
-grep -qF -- "fleet-session-wrap.sh' \"\$(cat '" "$NEWWIN_LOG" || fail "N the seed must ride in a task file read at launch (\"\$(cat <tf>)\")" "$(cat "$NEWWIN_LOG")"
+grep -qF -- "fleet-session-wrap.sh' --agent claude \"\$(cat '" "$NEWWIN_LOG" || fail "N the seed must ride in a task file read at launch (\"\$(cat <tf>)\")" "$(cat "$NEWWIN_LOG")"
 grep -qF -- 'injection' "$NEWWIN_LOG"      && fail "N the prompt text must NEVER be interpolated into the new-window command" "$(cat "$NEWWIN_LOG")"
 tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
 [ -n "$tf" ] && [ -f "$tf" ]               || fail "N the task file task_scratch-1.txt must exist" "$(cat "$NEWWIN_LOG")"

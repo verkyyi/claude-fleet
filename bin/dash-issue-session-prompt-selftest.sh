@@ -166,11 +166,10 @@ ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 # #3122) only when that file is there — none in this sandbox, so none here. A per-spawn `--agent codex` reaches bin/fleet-claude.sh as its own flag INSIDE
 # the new-window command (the launcher consumes it and execs fleet-codex.sh); the
 # seed file stays the bare `/fleet-claim` (fleet-codex.sh expands it). A default
-# spawn carries no --agent — byte-for-byte the historic command. An unknown token
-# is dropped, not embedded.
+# spawn freezes its default provider. An unknown token is refused before work.
 : > "$WORK/newwin"; run_spawn 234 --agent codex
 [ "$(seed)" = "/fleet-claim" ] || fail "D a Codex seed stays the bare /fleet-claim" "$(seed)"
-grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
+sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" \
   || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234
 grep -q -- '--agent claude' "$WORK/newwin" || fail "D a default spawn freezes Claude" "$(cat "$WORK/newwin")"
@@ -197,7 +196,7 @@ mkdir -p "$WORK/projects/$(printf '%s' "$WT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed"
 [ "$(seed)" = "[fleet park] read the handoff" ] || fail "R the seed file must be the first turn" "$(seed)"
 grep -qF -- '@seed_words' "$WORK/newwin" && fail "R a parked return is no words seed: no @seed_words" "$(cat "$WORK/newwin")"
-grep -qF -- "fleet-session-wrap.sh' --resume $SID \"\$(cat '" "$WORK/newwin" \
+sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.sh' --agent claude --resume $SID \"\$(cat '" \
   || fail "R --resume <sid> must sit between the launcher and the seed" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed" --agent codex
