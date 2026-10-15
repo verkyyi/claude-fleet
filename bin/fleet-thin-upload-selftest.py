@@ -145,7 +145,8 @@ class Transactions(unittest.TestCase):
             self.assertEqual(tx.feed(data[:cut]) + tx.feed(data[cut:]), data)
             tx.close()
         os.environ['FLEET_CLIENT_CLIP_CMD'] = '/usr/bin/false'
-        self.assertEqual(self.tx.feed(b'\x16after\r') + self.settle(), b'\x16after\r')
+        os.environ['FLEET_UPLOAD_FIXTURE_PROBE_DELAY'] = '30'
+        self.assertEqual(self.tx.feed(b'\x16after\r') + self.settle(timeout=2), b'\x16after\r')
         self.assertFalse(self.notices)
 
     def test_failure_and_unknown_target_discard_enter(self):
@@ -236,10 +237,10 @@ class Transactions(unittest.TestCase):
         clip.write_text('import os,time,json,sys,pathlib\npathlib.Path(%r).write_text(json.dumps([os.getpid(),sys.argv[1]]))\ntime.sleep(30)\n' % str(marker))
         env = dict(os.environ, FLEET_CLIENT_CLIP_CMD='%s %s' % (sys.executable, clip))
         code = """import importlib.util,json,sys,time
-+s=importlib.util.spec_from_file_location('uploads',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-+t=m.Input(lambda:json.loads(sys.argv[2]),lambda _:None);t.feed(b'\\x16')
-+while True: t.poll();time.sleep(.01)
-+""".replace('\n+', '\n')
+s=importlib.util.spec_from_file_location('uploads',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+t=m.Input(lambda:json.loads(sys.argv[2]),lambda _:None);t.feed(b'\\x16')
+while True: t.poll();time.sleep(.01)
+"""
         p = subprocess.Popen([sys.executable, '-c', code, str(BIN / 'fleet-thin-upload.py'), json.dumps(self.req)], env=env)
         try:
             end = time.monotonic() + 5

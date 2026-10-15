@@ -32,7 +32,7 @@ def load(name):
     return mod
 
 
-def run(cmd, data=None, source=None):
+def run(cmd, data=None, source=None, limit=65536):
     p = subprocess.Popen(cmd, stdin=source if source else subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                          start_new_session=True)
@@ -47,7 +47,7 @@ def run(cmd, data=None, source=None):
             b = os.read(p.stdout.fileno(), 8192)
             if not b: break
             out.extend(b)
-            if len(out) > 65536: raise ValueError('reply over limit')
+            if len(out) > limit: raise ValueError('reply over limit')
         else:
             raise ValueError('target timed out')
         if p.wait(timeout=1): raise ValueError('target unavailable')
@@ -70,7 +70,17 @@ tmux -L "$s" display-message -p -t "$w" "$3"
     snap = run(['bash', '-c', script, 'upload-target', str(BIN), wid, FMT])
     if len(snap.split('|')) != 10 or snap.endswith('|1'):
         raise ValueError('target not live')
-    return snap
+    # A wrapper can resume the same conversation in the same pane. Its direct
+    # child changes even when pane_pid and the conversation id do not. Include
+    # start times too, so PID reuse cannot accept an old completion.
+    pid = snap.split('|')[4]
+    processes = run(['ps', '-axo', 'pid=,ppid=,lstart='], limit=1 << 20)
+    children = []
+    for line in processes.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[1] == pid:
+            children.append(parts[0] + ':' + parts[2])
+    return snap + '|' + ','.join(sorted(children))
 
 
 def peer(up, machine, login, words):

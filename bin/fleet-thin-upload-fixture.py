@@ -12,6 +12,7 @@ h = json.loads(sys.stdin.buffer.readline(16385))
 assert h.get('token') and h.get('generation') and 'evil' not in h['cur']
 identity = {'home': 'fixture', 'destination': 'fixture'}
 if sys.argv[1] == 'target':
+    time.sleep(float(os.environ.get('FLEET_UPLOAD_FIXTURE_PROBE_DELAY', '0')))
     print(json.dumps(identity))
 else:
     root = Path.home() / '.cache/claude-fleet/inbox' / h['cur'][2].split('/')[-1]

@@ -3,7 +3,8 @@
 
 The PTY owner only frames bytes. One short-lived supervisor owns one worker
 process group, a private temporary directory and a parent-liveness pipe. Capture,
-stat, hashing and SSH happen there. No threads, daemon, retry or terminal writes.
+stat, hashing and SSH happen there. One bounded probe thread lives only inside
+the worker; there is no daemon, retry or terminal write.
 64 KiB input / 16 files / 100 MiB total / 120 s per transaction. Failure discards
 all queued input (including Enter); Ctrl+C also forwards one interrupt. Results
 are accepted only on the original connection/selection generation.
@@ -20,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 BIN = Path(__file__).resolve().parent
@@ -92,9 +94,14 @@ class Input:
         self.result = b''
         self.cancelled = self.notified = False
         self.started = time.monotonic()
-        self.job = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--supervise'],
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            self.job = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--supervise'],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            self.buf = b''
+            self.say('fleet · 附件处理未能启动；等待的输入已丢弃，请重新输入')
+            return
         self.request = json.dumps(req).encode() + b'\n'
         os.set_blocking(self.job.stdin.fileno(), False)
         os.set_blocking(self.job.stdout.fileno(), False)
@@ -150,8 +157,16 @@ class Input:
             if len(self.buf) > 1 and START.startswith(self.buf):
                 self.since = time.monotonic()
                 break
-            out.append(self.buf[0])
-            self.buf = self.buf[1:]
+            stops = [i for i in (self.buf.find(START), self.buf.find(b'\x16')) if i >= 0]
+            n = min(stops) if stops else len(self.buf)
+            if not stops:
+                for k in range(min(len(START) - 1, len(self.buf)), 1, -1):
+                    if START.startswith(self.buf[-k:]):
+                        n -= k
+                        self.since = time.monotonic()
+                        break
+            out.extend(self.buf[:n])
+            self.buf = self.buf[n:]
         if self.job and len(self.buf) > CAP:
             self.cancel('附件等待输入超过 64 KiB，已取消')
         if self.job and b'\x03' in self.buf:
@@ -314,6 +329,22 @@ def remote_json(req, action, header, src=None):
 def work(req):
     up = load('fleet-client-upload.py')
     original = unpacked(req['data'])
+    # Bind before capture/stat/hash can block. Probe failures still permit a
+    # no-image Ctrl+V or ordinary text to pass through unchanged.
+    target = identity = probe_thread = None
+    if req.get('cur') and req.get('generation') and req.get('base'):
+        target = {k: req[k] for k in ('view', 'token', 'cur', 'generation')}
+        def probe():
+            nonlocal identity
+            try:
+                identity = remote_json(req, 'target', target)
+                target['identity'] = identity
+            except Exception:
+                pass
+        # A no-image Ctrl+V must not wait for the network. The worker exits as
+        # soon as capture says none; its supervisor reaps any unfinished probe.
+        probe_thread = threading.Thread(target=probe, daemon=True)
+        probe_thread.start()
     import resource
     _, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
     resource.setrlimit(resource.RLIMIT_FSIZE, (up.FILE_MAX + CAP, hard))
@@ -332,11 +363,10 @@ def work(req):
         tail = text[len(text.rstrip()):]
     if len(toks) > MAX_FILES:
         raise ValueError('附件超过 16 个')
-    if not req.get('cur') or not req.get('generation') or not req.get('base'):
+    if probe_thread:
+        probe_thread.join()
+    if identity is None:
         raise ValueError('无法确认附件目标，请重连后再试')
-    target = {k: req[k] for k in ('view', 'token', 'cur', 'generation')}
-    identity = remote_json(req, 'target', target)
-    target['identity'] = identity
     got, total = [], 0
     # Snapshot each file while hashing: a changed source cannot silently become
     # another file between inspection and transmission; never open FIFOs/devices.
