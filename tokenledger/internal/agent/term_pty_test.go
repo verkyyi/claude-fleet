@@ -38,38 +38,29 @@ func TestTermPtyRunsTheOneCommand(t *testing.T) {
 	if gotView != "web-1" || gotTarget != "worker:fid-1" {
 		t.Fatalf("the command got %q %q", gotView, gotTarget)
 	}
+	// One reader for the whole test: the terminal's output, byte by byte.
+	bytesCh := make(chan byte, 1<<16)
+	go func() {
+		defer close(bytesCh)
+		for {
+			b, err := br.ReadByte()
+			if err != nil {
+				return
+			}
+			bytesCh <- b
+		}
+	}()
+	var seen strings.Builder
 	want := func(s string) {
 		t.Helper()
-		var seen strings.Builder
 		dl := time.After(5 * time.Second)
-		ch := make(chan byte, 4096)
-		go func() {
-			for {
-				b, err := br.ReadByte()
-				if err != nil {
-					close(ch)
-					return
-				}
-				ch <- b
-				if strings.Contains(seen.String()+string(b), s) {
-					close(ch)
-					return
-				}
-			}
-		}()
-		for {
+		for !strings.Contains(seen.String(), s) {
 			select {
-			case b, ok := <-ch:
+			case b, ok := <-bytesCh:
 				if !ok {
-					if !strings.Contains(seen.String(), s) {
-						t.Fatalf("output %q never said %q", seen.String(), s)
-					}
-					return
+					t.Fatalf("output %q ended before %q", seen.String(), s)
 				}
 				seen.WriteByte(b)
-				if strings.Contains(seen.String(), s) {
-					return
-				}
 			case <-dl:
 				t.Fatalf("output %q never said %q", seen.String(), s)
 			}
@@ -85,7 +76,10 @@ func TestTermPtyRunsTheOneCommand(t *testing.T) {
 		t.Fatal("the command is not running")
 	}
 	inW.Close()
-	go io.Copy(io.Discard, br)
+	go func() {
+		for range bytesCh {
+		}
+	}()
 	select {
 	case <-done:
 	case <-time.After(termPtyHangup + 3*time.Second):
