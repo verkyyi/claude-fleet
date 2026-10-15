@@ -288,11 +288,13 @@ eq "C: no title key keeps the row's 16 fields" "16|" "$(crow issue-23)"
 eq "C: a measured session's row carries fields 21-25" "25|81|ok|1800000000|gpt-6-astra|high" \
    "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-26" '$1 == w { print NF "|" $21 "|" $22 "|" $23 "|" $24 "|" $25 }')"
 eq "C: nulls for every bus key keep the row's 16 fields" "16|" "$(crow issue-27)"
-# who waits on you and what they ask (issue #1951): needs_<sess> beside the cache
-eq "C: needs_<sess> lists the needs / failed sessions with their question" \
-   "$F/issue-24${US}#24${US}ask${US}mac-a${US}演练放在 mac-b 还是只在 mac-a？
-$F/scratch-5${US}scratch-5${US}perm${US}mac-a${US}Bash: git push
-$F/issue-25${US}#25${US}failed${US}mac-a${US}" "$(cat "$G/needs_$S" 2>/dev/null)"
+# Questions travel in the shared rows (fields 27-28); the old client's separate
+# needs_<sess> cache retired with its layout (#3008).
+eq "C: shared rows keep questions, permissions and failed state" \
+   "wid:$F/issue-24|needs|ask|question|演练放在 mac-b 还是只在 mac-a？
+wid:$F/scratch-5|needs|perm|permission|Bash: git push
+wid:$F/issue-25|failed|||" \
+   "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$6 == "needs" || $6 == "failed" { print $1 "|" $6 "|" $10 "|" $27 "|" $28 }')"
 
 # ============================================================================
 # D. sidebar — field 14

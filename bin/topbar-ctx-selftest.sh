@@ -41,8 +41,6 @@ eq()    { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3'
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 # fld <rows> <label> <k>: field k of the row labelled <label>, `-` when it has fewer
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
-# row <rows> <label>: the whole row, as the sidebar splits it
-row() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$4 == n'; }
 
 # ============================================================================
 # A. a local window's stamps → field 19
@@ -60,7 +58,6 @@ SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | 
 eq "A: a measured window's field 19" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)" "$SIDE"
 eq "A: …fields 13-18 empty before it" "|||||" "$(printf '%s\n' "$SIDE" | LC_ALL=C awk -F"$US" '$4 == "measured" { print $13 "|" $14 "|" $15 "|" $16 "|" $17 "|" $18 }')"
 eq "A: no @ctx_pct ⇒ no field 19 (byte for byte as before)" "-" "$(fld "$SIDE" bare 19)"
-LOCAL_ROW=$(row "$SIDE" measured); BARE_ROW=$(row "$SIDE" bare)
 
 # ============================================================================
 # B. a remote row: the hub cache's 21-25 → field 19, the same five `fleet ls` reads
@@ -90,7 +87,6 @@ printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 SIDE2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip)
 eq "B: the remote row's field 19 is the cache's five" "23|watch|$TS|Fable 5.1|high" "$(fld "$SIDE2" RM 19)" "$SIDE2"
 eq "B: a remote row the node measured nothing for has none" "-" "$(fld "$SIDE2" RN 19)"
-REMOTE_ROW=$(row "$SIDE2" RM); REMOTE_BARE=$(row "$SIDE2" RN)
 LS=$(FLEET_SESSION=$S python3 - "$BIN" "wid:$F/issue-41" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("cli", sys.argv[1] + "/fleet-session-cli.py")

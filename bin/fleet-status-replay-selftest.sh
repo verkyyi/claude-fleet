@@ -98,9 +98,8 @@ PYEOF
 # ── E. lint ─────────────────────────────────────────────────────────────────
 passval() { awk '$1=="set" && $2=="-g" && $3=="allow-passthrough" {v=$4} END {print v}' "$1"; }
 NODE_V=$(passval "$REPO/conf/tmux-attention.conf")
-for pair in "tmux-attention.conf:$NODE_V"; do
-  [ "${pair#*:}" = on ] && ok "E conf/${pair%%:*}: allow-passthrough on" || bad "E conf/${pair%%:*}: allow-passthrough '${pair#*:}', want on"
-done
+[ "$NODE_V" = on ] && ok "E conf/tmux-attention.conf: allow-passthrough on" \
+  || bad "E conf/tmux-attention.conf: allow-passthrough '$NODE_V', want on"
 HOOKS=$(grep -E '^set-hook -g (session-window-changed|client-session-changed|client-attached)\[75\] .*fleet-status-7501\.py replay' "$REPO/conf/tmux-attention.conf")
 [ "$(printf '%s\n' "$HOOKS" | grep -c .)" = 2 ] && ok "E node conf: the two [75] replay hooks (window and session changed)" || bad "E node conf [75] hooks: $HOOKS"
 grep -q 'relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --' "$BIN/fleet-claude.sh" \

@@ -192,7 +192,6 @@ WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop on
 NAP_SOCKS='' # this login's fleet sockets, as watched() last listed them (issue #4261)
 LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
-SCOPED=0     # 1 = this round's answer came over YOUR certificate (issue #2388)
 NSCOPED=0    # 1 = …over this login's node token: cut to its person's logins (issue #3001)
 PIDF="$G/hubsess.pid"
 # Every --ensure stamps its epoch here, and a running loop keeps going until
@@ -417,7 +416,7 @@ fetch() {
     done < "$lf"
   fi
   # the long poll (issue #1526): only with a validator to hold against
-  q=''; LP_SENT=0; SCOPED=0; NSCOPED=0
+  q=''; LP_SENT=0; NSCOPED=0
   if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
   if [ -n "$NTOK" ]; then
     AUTH_TOK=$NTOK
@@ -438,7 +437,7 @@ fetch() {
       fetch_cert "$url" "$out" "$etag"; rc=$?
       # A certificate is always a person, never the operator: the hub has already
       # cut the answer to the (machine, login) pairs of their accounts (FleetScope)
-      [ "$rc" = 4 ] || { SCOPED=1; return "$rc"; }
+      [ "$rc" = 4 ] || return "$rc"
       if [ -n "$PRINCIPAL_SAID" ]; then printf 'fleet-hub-sessions: trying the viewer token\n' >&2
       else printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2; fi
       # the token's answer is another identity's: no validator, its own stamp

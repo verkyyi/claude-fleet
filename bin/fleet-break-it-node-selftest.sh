@@ -1705,7 +1705,7 @@ PY
       "python3 $d/rec.py $d/rec.out"
     HOME="$d" "$REAL_TMUX" -S "$d/n" set -t node prefix None
     got=$(python3 "$d/term.py" "$REAL_TMUX" "$d" 2>/dev/null)
-    for s in n; do "$REAL_TMUX" -S "$d/$s" kill-server 2>/dev/null; done
+    "$REAL_TMUX" -S "$d/n" kill-server 2>/dev/null
     if [ "$got" != 1b5b31333b3275 ]; then
       rm -rf "$d"; WHY="⇧↵ reached the session as [$got] — not ⇧↵ (1b5b31333b3275; 0d = ↵, it sends)"; return 1
     fi

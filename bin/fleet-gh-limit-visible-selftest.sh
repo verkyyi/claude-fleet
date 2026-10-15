@@ -59,6 +59,8 @@ case "$row" in "  PASS  github   not rate-limited · last hour: 1 limited · 1 s
   *) fail "D1 clear → PASS with the last-hour tally (the 2h-old line excluded)" "$row" ;; esac
 ok "D1 clear → PASS github, last-hour tally only"
 
+reset=$((now + 1200))
+hhmm=$(fleet_gh_hhmm "$reset")
 mark graphql "$reset" pr-merge
 row=$(doc)
 case "$row" in "  WARN  github   graphql limited until $hhmm (seen by pr-merge) — "*"not a permission problem"*) ;;
@@ -71,5 +73,5 @@ case "$row" in "  WARN  github   graphql limited (injected: FLEET_GH_FAKE_LIMIT)
   *) fail "D3 an injected limit → WARN github" "$row" ;; esac
 ok "D3 FLEET_GH_FAKE_LIMIT=graphql → WARN github"
 
-printf '\nselftest OK: %s checks (gh limit visible: reader · status bar · doctor)\n' "$pass"
+printf '\nselftest OK: %s checks (gh limit visible: reader · doctor)\n' "$pass"
 exit 0

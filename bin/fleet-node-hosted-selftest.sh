@@ -25,7 +25,6 @@
 # Drives: bin/fleet, bin/fleet-client-lease.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$BIN/.." && pwd)"
 REAL_TMUX=''
 _ifs=$IFS; IFS=:
 for d in $PATH; do

@@ -19,7 +19,6 @@
 #      AND logged (`dispatch_failed` in logs/compose.ndjson, with the reason)
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$BIN/.."
 CHECKS=0
 fail() { printf 'FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" >&2; exit 1; }
 eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 (want '$2')" "$3"; }

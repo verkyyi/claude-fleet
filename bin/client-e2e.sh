@@ -193,7 +193,7 @@ FLEET="$CH/.local/bin/fleet"
 [ -x "$FLEET" ] || die 'no fleet in ~/.local/bin after the install' "$(ls -la "$CH/.local/bin" 2>&1)"
 IH="$CH/.claude/fleet"   # the one fleet directory (#1804)
 [ -f "$IH/bin/fleet-thin.py" ] && [ -x "$IH/bin/fleet-connect.py" ] || die 'the client files are not in ~/.claude/fleet' "$(find "$IH" -maxdepth 2 2>&1 | head -20)"
-[ ! -e "$IH/bin/fleet-shell.sh" ] || die 'the install line still ships the old client (#3008)' "$(ls "$IH/bin" | grep -i shell)"
+[ ! -e "$IH/bin/fleet-shell.sh" ] || die 'the install line still ships the old client (#3008)' "$IH/bin/fleet-shell.sh"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 ok "fleet installed ($(find "$IH" -type f | wc -l | tr -d ' ') files), fleet.conf names $HUB"
 

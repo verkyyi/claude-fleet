@@ -44,7 +44,6 @@ cleanup() {
 }
 [ -n "${KEEP:-}" ] || trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
-US=$'\x1f'
 NOW=$(date +%s)
 
 sh_shim() { printf '#!/bin/sh\n%s\n' "$2" > "$WORK/bin/$1"; chmod +x "$WORK/bin/$1"; }
