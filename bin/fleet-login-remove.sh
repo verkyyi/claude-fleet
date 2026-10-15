@@ -265,6 +265,25 @@ for x in "$NODE_STATE" "$NODE_STATE/logins" "$NODE_STATE/logins/$LOGIN" "$SVC_DI
   [ -e "$x" ] || break          # its parent was searchable: really absent
   [ -r "$x" ] && [ -x "$x" ] || { svc_root=1; break; }
 done
+# The entries the daemon made ITSELF on demand for this login (`service ensure`:
+# a person's web chat, issue #4273) are not a person's work to move: they are
+# unregistered first — `service drop-fleet`, which takes only an entry byte for
+# byte what the daemon built — and never hold a wash or a removal. Anything else
+# still refuses below. An older daemon without the subcommand drops nothing.
+SVC_OWN=''
+if [ -f "$NODE_SUP" ]; then
+  if [ "$APPLY" = 1 ]; then
+    show sudo /usr/bin/python3 -I "$NODE_SUP" service drop-fleet --login "$LOGIN"
+    SVC_OWN=$(sudo /usr/bin/python3 -I "$NODE_SUP" service drop-fleet --login "$LOGIN") ||
+      printf '%s: WARN the machine daemon did not drop its own entries for %s\n' "$PROG" "$LOGIN" >&2
+  elif [ "$svc_root" = 0 ]; then
+    SVC_OWN=$(/usr/bin/python3 -I "$NODE_SUP" service drop-fleet --login "$LOGIN" --dry-run 2>/dev/null)
+  else
+    SVC_OWN=$(sudo -n /usr/bin/python3 -I "$NODE_SUP" service drop-fleet --login "$LOGIN" --dry-run 2>/dev/null)
+  fi
+  [ -z "$SVC_OWN" ] || printf '%s\n' "$SVC_OWN" | sed 's/^/  /'
+fi
+SVC_OWN=$(printf '%s\n' "$SVC_OWN" | sed -n -e 's|^dropped [^/]*/\([^ ]*\) .*|\1|p' -e 's|^would drop [^/]*/\([^ ]*\) .*|\1|p')
 SVC_NAMES='' svc_ok=1
 if [ "$svc_root" = 0 ]; then
   SVC_NAMES=$(sh -c "$SVC_LS" _ "$SVC_DIR" 2>/dev/null) || svc_ok=0
@@ -277,7 +296,7 @@ if [ "$svc_ok" = 0 ]; then
   [ "$APPLY" = 1 ] && die "cannot read $LOGIN's service register ($SVC_DIR); nothing changed"
   printf '%s: WARN cannot read %s without a sudo password — --apply checks it before anything changes\n' "$PROG" "$SVC_DIR" >&2
 fi
-SVC_LEFT=$(printf '%s\n' "$SVC_NAMES" | sed -n 's/\.json$//p')
+SVC_LEFT=$(printf '%s\n' "$SVC_NAMES" | sed -n 's/\.json$//p' | grep -vxF -e "${SVC_OWN:-.}" 2>/dev/null)
 if [ -n "$SVC_LEFT" ]; then
   printf '%s: refusing: %s still has %s registered service(s) on this machine: %s\n' "$PROG" "$LOGIN" \
     "$(printf '%s\n' "$SVC_LEFT" | grep -c .)" "$(printf '%s\n' "$SVC_LEFT" | tr '\n' ' ' | sed 's/ $//')" >&2

@@ -694,6 +694,51 @@ FLEET_NODE_TEST=1 run alice --recycle-stop --quick --delete-home --apply
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "quick forget: exit $RC"; }
 has "$FLEET_TEST_LOG" 'FLEET_NODE_RELEASE_WAIT=0 FLEET_NODE_FORGET_KILL_WAIT=0.5' 'quick: the forget still waits for the daemon tick'
 grep -q '"alice"' "$WORK/node/accounts.json" && fail 'quick: alice not forgotten'
+
+# A trial login whose web chat the daemon registered on demand (`service ensure
+# --name webchat`, issue #4273): the wash (--recycle-stop --quick) and a plain
+# removal drop that entry themselves — only one byte for byte what the daemon
+# built — and go ahead; a person's own entry (another name, or a webchat entry
+# they changed) still refuses, exit 6, nothing run.
+svc_webchat() { # <exec[0]> — alice's webchat entry as `service ensure` writes it
+  H="$WORK/homes/alice"
+  mkdir -p "$WORK/node/logins/alice/services"; chmod 700 "$WORK/node/logins/alice"
+  printf '{"name": "webchat", "login": "alice", "kind": "service", "exec": ["%s", "serve"], "schedule": null, "retries": null, "env": {}, "env_keys": [], "creds": [], "paths": ["%s/.config/claude-fleet/webchat"], "state": "enabled", "added": 1, "changed": 1}\n' \
+    "$1" "$H" > "$WORK/node/logins/alice/services/webchat.json"
+}
+printf '{"alice": {"uid": 602, "gid": 20, "home": "%s"}}\n' "$WORK/homes/alice" > "$WORK/passwd.json"
+export FLEET_NODE_PASSWD="$WORK/passwd.json"
+for mode in wash remove; do
+  reset_fixture; cs_fixture own
+  printf '{"alice": {"managed": true, "since": 1}}\n' > "$WORK/node/accounts.json"; : > "$WORK/node/logins/alice.env"
+  svc_webchat "$WORK/homes/alice/.claude/fleet/bin/fleet-webchat.sh"
+  FLEET_NODE_TEST=1 run alice
+  [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "$mode: dry run with only the daemon's webchat exited $RC"; }
+  has "$WORK/out" 'would drop alice/webchat' "$mode: the dry run does not say the daemon's webchat goes"
+  [ -f "$WORK/node/logins/alice/services/webchat.json" ] || fail "$mode: the dry run dropped the entry"
+  : > "$FLEET_TEST_LOG"
+  if [ "$mode" = wash ]; then FLEET_NODE_TEST=1 run alice --recycle-stop --quick --keep-home --apply
+  else FLEET_NODE_TEST=1 run alice --delete-home --apply; fi
+  [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "$mode: a login with only the daemon's webchat exited $RC (want 0)"; }
+  not_has "$WORK/out" 'still has 1 registered service' "$mode: the daemon's own webchat still refused"
+  [ ! -e "$WORK/node/logins/alice/services/webchat.json" ] || fail "$mode: the webchat entry was left registered"
+  has "$WORK/out" 'dropped alice/webchat' "$mode: the drop is not said"
+  has "$FLEET_TEST_LOG" 'service drop-fleet --login alice' "$mode: drop-fleet did not run"
+  grep -q '"alice"' "$WORK/node/accounts.json" && fail "$mode: alice not forgotten"
+done
+# a webchat entry that is not what the daemon wrote (a person's exec), and a
+# person's own service beside it: both still refuse, nothing dropped, nothing run
+reset_fixture; cs_fixture own
+svc_webchat "$WORK/homes/alice/bin/my-chat.sh"
+printf '{}\n' > "$WORK/node/logins/alice/services/daily-report.json"
+: > "$FLEET_TEST_LOG"
+FLEET_NODE_TEST=1 run alice --recycle-stop --quick --keep-home --apply
+[ "$RC" = 6 ] || { cat "$WORK/out" >&2; fail "a person's webchat entry: exit $RC, not 6"; }
+has "$WORK/out" 'alice still has 2 registered service(s) on this machine: daily-report webchat' "a person's entries are not both refused"
+[ -f "$WORK/node/logins/alice/services/webchat.json" ] || fail "a person's webchat entry was dropped"
+not_has "$FLEET_TEST_LOG" 'sysadminctl' 'a refused wash ran a delete'
+[ -f "$FLEET_TEST_LIVE" ] || fail 'a refused wash stopped the fleet'
+unset FLEET_NODE_PASSWD
 rm -rf "${WORK:?}/rt" "${WORK:?}/node"
 
 # The local ssh road (issue #2994). A stub stands in for fleet-login-remove-ssh.sh:

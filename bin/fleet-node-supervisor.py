@@ -4907,6 +4907,8 @@ def account_forget(paths, login, force=False):
         print("fleet-node-supervisor: account forget stops %s's tasks — run it as root (sudo)" % login,
               file=sys.stderr)
         return 1
+    if not force:
+        service_drop_fleet(paths, login)    # its own on-demand entries never hold a login (#4273)
     if not force and service_refuse_left(paths, login, "account forget %s" % login):
         return SVC_LEFT_RC
     a = accounts_read(paths)
@@ -7522,6 +7524,7 @@ SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N
                  "       fleet-node-supervisor.py service schedule --login L --name N (--at HH:MM | --cron '…') [--tz Z]\n"
                  "       fleet-node-supervisor.py service move --login L --name N --to L2\n"
                  "       fleet-node-supervisor.py service ensure --login L --name webchat [--wait TRIES]\n"
+                 "       fleet-node-supervisor.py service drop-fleet --login L [--dry-run]   (its on-demand entries only)\n"
                  "       fleet-node-supervisor.py service cred set|rm --login L --name C   (the value on stdin)\n"
                  "       fleet-node-supervisor.py service ls [--login L] [--kind service|task] [--json]\n"
                  "       fleet-node-supervisor.py service logs --login L --name N [-n LINES]")
@@ -7536,7 +7539,7 @@ def _svc_args(rest):
         if a == "--":
             ex = rest[i + 1:]
             break
-        if a in ("--json",):
+        if a in ("--json", "--dry-run"):
             opts.setdefault(a, []).append("1")
             i += 1
             continue
@@ -7656,6 +7659,17 @@ def service_cli(paths, rest):
             print("fleet-node-supervisor: --wait takes 0..10 tries", file=sys.stderr)
             return 2
         return service_ensure(paths, login, name, tries)
+    if sub == "drop-fleet":
+        # a login on its way out (fleet-login-remove.sh, issue #4273): only the
+        # entries the daemon built itself; --dry-run only reads
+        if not login or not LOGIN_RE.match(login):
+            print(SERVICE_USAGE, file=sys.stderr)
+            return 2
+        dry = "--dry-run" in opts
+        if not dry and not _svc_root("drop-fleet"):
+            return 1
+        service_drop_fleet(paths, login, dry)
+        return 0
     if sub == "move":
         if not login or not name or not one("--to"):
             print(SERVICE_USAGE, file=sys.stderr)
@@ -7890,6 +7904,49 @@ def service_names(paths, login):
     """The names a login's register holds (valid or not)."""
     return sorted(os.path.basename(f)[:-len(".json")]
                   for f in glob.glob(os.path.join(service_dir(paths, login), "*.json")))
+
+
+def service_fleet_made(svc, login, name, home):
+    """True when the entry is one the daemon built ITSELF for this login (issue
+    #4273): an on-demand name, and byte for byte what `service ensure` writes from
+    SVC_ON_DEMAND and the login's home — no env, no credential, no other path. A
+    person's own entry under the same name is not this, and still refuses."""
+    tpl = SVC_ON_DEMAND.get(name)
+    if not tpl or not isinstance(svc, dict) or not home:
+        return False
+    fill = lambda x: x.replace("{home}", home)
+    return (svc.get("name") == name and svc.get("login") == login
+            and svc.get("kind", "service") == "service"
+            and list(svc.get("exec") or []) == [fill(x) for x in tpl["exec"]]
+            and list(svc.get("paths") or []) == [fill(x) for x in tpl["paths"]]
+            and not svc.get("env") and not svc.get("env_keys") and not svc.get("creds")
+            and not svc.get("schedule"))
+
+
+def service_drop_fleet(paths, login, dry=False):
+    """Unregister the entries the daemon made on demand for a login on its way out
+    (a wash or a removal, issue #4273) — the rest stay and still refuse. The daemon
+    stops a dropped one on its next pass. Returns the names (dropped or, dry, that
+    would be)."""
+    ident = account_ident(login)
+    if ident is None:
+        return []
+    out = []
+    for name in service_names(paths, login):
+        f = os.path.join(service_dir(paths, login), name + ".json")
+        if not service_fleet_made(read_json(f, None), login, name, ident[2]):
+            continue
+        if not dry:
+            try:
+                os.remove(f)
+            except OSError as e:
+                print("fleet-node-supervisor: cannot drop %s/%s: %s" % (login, name, e), file=sys.stderr)
+                continue
+        out.append(name)
+        print("%s %s/%s — the daemon made it on demand (%s)"
+              % ("would drop" if dry else "dropped", login, name, "left for --apply" if dry else
+                 "it stops on the next pass"))
+    return out
 
 
 def service_refuse_left(paths, login, what):
