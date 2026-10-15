@@ -391,6 +391,7 @@ codex_step() {
   st=$(printf '%s\n' "$out" | grep '^CODEX ' | tail -n 1)
   scr=$(printf '%s\n' "$out" | sed -n 's/^SCREEN //p' | grep -v "$w" | tail -n 3 | tr '\n' ' ' | shown)
   printf '%s\n' "$out" | grep '^LEFT ' | while read -r _ k why; do say "INFO codex:$r could not close the session $k it opened: ${why:-no reason given}"; done
+  # shellcheck disable=SC2046 # the LEFT keys, one word each
   stop_left "codex:$r" $(printf '%s\n' "$out" | sed -n 's/^LEFT \([^ ]*\).*/\1/p')
   # shellcheck disable=SC2086 # the CODEX line's words, split on purpose
   set -- $st
