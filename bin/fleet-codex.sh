@@ -79,10 +79,10 @@
 # session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-claim-brief.sh` ends every worker's preamble with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated.
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
 # worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
-# transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Calendar cron is not converted.
+# transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Managed HOME transfers can preserve verified session-only calendar jobs, including one-shots.
 # optional plugins (fleet-orchestrate · fleet-steward · fleet-epic) | ✅ `/plugin` | ⚠️ partial | Codex has no plugin system. `bin/fleet-codex-plugins.py sync` follows what the Claude side installed and enabled before every launch: skills linked as `$CODEX_HOME/skills/fleet-plugin-*`, plugin commands as adapter skills, the `.mcp.json` servers as one marked block in `config.toml`, hooks merged by `fleet-hooks-emit.sh --plugin-dir`. Not carried — Codex has no such mechanism: mod interface modules (decision-sheet panel, /qd; Codex gets the `[decision]` text), PreCompact, an agent file's `tools` limits, `/plugin` itself (issue #3123).
 # fleet command seed (`/fleet-claim`) | native | native | Claude Code expands `/fleet-claim`; Codex invokes the installed `$fleet-claim` skill from `$CODEX_HOME/skills/fleet-claim/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion.
-# per-repo trust prompt | pre-granted | one manual Yes | `bin/fleet-trust.sh` pre-answers Claude's dialog. Codex persists trust in `~/.codex/config.toml` and no flag or `-c` override satisfies it, so the base checkout needs one manual Yes; the launcher pre-reads it and turns the pane red rather than letting the first spawn stall silently.
+# directory trust prompt | pre-granted | trusted-node pre-grant | `bin/fleet-trust.sh` fills missing trust for the fleet checkout and a managed no-repo launch in physical HOME on a trusted node. Codex entries persist through proxy config symlinks; explicit untrusted and pre-trust opt-out remain unchanged. Transfer checks readiness before source exit.
 # red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive.
 # `AskUserQuestion` + the dash’s answer key | ✅ | ✅ | Codex has native request_user_input. The dashboard replies to the replayed server request, including choices and free text; exact launcher/thread/request fingerprints prevent stale answers. Esc sends nothing; native resolution confirms completion.
 # permission prompts readable + refusable from the dash | ✅ | ✅ | Native command/file/additional-permission and MCP requests are readable. fleet-permission.sh --deny sends only the native refusal, requires the displayed request token and the existing opt-in. Default bypass posture normally suppresses command/file prompts; no approval is automated.
@@ -366,10 +366,18 @@ if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/f
 _trust_root=''
 [ -n "${FLEET_MAIN:-}" ] && _trust_root=$(cd "$FLEET_MAIN" 2>/dev/null && pwd -P)
 _codex_conf="${CODEX_HOME:-$HOME/.codex}/config.toml"
+_trust_home=0
+if [ -n "${TMUX_PANE:-}" ] && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@norepo}' 2>/dev/null)" = 1 ] \
+   && [ "$(pwd -P)" = "$(cd "$HOME" && pwd -P)" ]; then
+  _trust_root=$(pwd -P); _trust_home=1
+fi
 # A TRUSTED NODE answers it (issue #2401, the Codex half of #2282's wide form): the
 # same `fleet-trust.sh node` word, then `codex-grant` writes that one table — fill
 # only, so a login's own "untrusted" stands and the warning below still fires.
-if [ -n "$_trust_root" ] && [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ] \
+if [ "$_trust_home" = 1 ] && [ -f "$BIN/fleet-trust.sh" ]; then
+  sh "$BIN/fleet-trust.sh" codex-grant --home >/dev/null 2>&1 || :
+fi
+if [ "$_trust_home" != 1 ] && [ -n "$_trust_root" ] && [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ] \
    && sh "$BIN/fleet-trust.sh" node >/dev/null 2>&1 \
    && _granted=$(sh "$BIN/fleet-trust.sh" codex-grant --main "$_trust_root" 2>/dev/null) \
    && [ -n "$_granted" ]; then
@@ -377,19 +385,19 @@ if [ -n "$_trust_root" ] && [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-
 fi
 unset _granted
 if [ -n "$_trust_root" ] && [ -r "$_codex_conf" ] \
-   && ! awk -v h="[projects.\"$_trust_root\"]" '
-        $0 == h { t = 1; next }
-        /^[[:space:]]*\[/ { t = 0 }
-        t && /^[[:space:]]*trust_level[[:space:]]*=[[:space:]]*"trusted"/ { f = 1 }
-        END { exit(f ? 0 : 1) }' "$_codex_conf"; then
-  printf '\nfleet-codex: the base checkout %s is not trusted in %s — Codex will ask\n' "$_trust_root" "$_codex_conf" >&2
+   && ! python3 "$BIN/fleet_codex_trust.py" check "$_trust_root" >/dev/null 2>&1; then
+  printf '\nfleet-codex: the directory %s is not trusted in %s — Codex will ask\n' "$_trust_root" "$_codex_conf" >&2
   printf 'fleet-codex: "Do you trust the contents of this directory?" below. Answer 1 (Yes) ONCE: Codex\n' >&2
-  printf 'fleet-codex: persists it for the repo, and every issue-<N>/scratch-<N> worktree inherits it.\n\n' >&2
+  if [ "$_trust_home" = 1 ]; then
+    printf 'fleet-codex: persists that choice for this login HOME.\n\n' >&2
+  else
+    printf 'fleet-codex: persists it for the repo, and every issue-<N>/scratch-<N> worktree inherits it.\n\n' >&2
+  fi
   # </dev/null: the stamper's `needs` path reads a hook payload off a non-tty
   # stdin; give it EOF so it can never sit on an inherited descriptor.
   [ -n "${TMUX_PANE:-}" ] && sh "$BIN/set-claude-state.sh" needs </dev/null >/dev/null 2>&1
 fi
-unset _trust_root _codex_conf
+unset _trust_root _codex_conf _trust_home
 
 # check_for_update_on_startup=false (issue #2401): a fresh $CODEX_HOME opens on an
 # "Update available! … 1. Update now 2. Skip" picker before anything else, and a

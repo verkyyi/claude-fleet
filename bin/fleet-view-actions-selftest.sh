@@ -186,7 +186,7 @@ one stop "fleet-worker-stop.sh|fl|fid:f1" "$W1" stop
 one wake "fleet-sleep.sh|wake|fl|$W5|--over-cap" "$W5" wake
 one awake "fleet-sleep.sh|keep-awake|fl|$W1" "$W1" awake
 one sub "dash-migrate.sh|$W1|to|acct2" "$W1" sub --text acct2
-one agent "fleet-transfer.sh|--session|fl|--window|$W1|--to|codex" "$W1" agent
+one agent "fleet-transfer.sh|--from-panel|--session|fl|--window|$W1|--to|codex" "$W1" agent
 one rename "dash-rename.sh|--wid|$W1|新名字" "$W1" rename --text '新名字'
 [ "$(ti display-message -p -t "$W1" '#{window_name}')" = '新名字' ] || fail "C: rename did not rename the window"
 reset

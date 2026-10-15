@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -80,7 +81,7 @@ def arm(a):
     if not 1 <= timeout <= 240 or not 0 <= defer <= 240:
         raise ValueError("wait bounds: idle 1..240 seconds, typing deferral 0..240 seconds")
     root = (Path(a.conf_dir) / "handoffs").resolve()
-    if any(root == Path(p).resolve() or Path(p).resolve() in root.parents for p in (a.worktree, a.main)):
+    if a.norepo != '1' and any(root == Path(p).resolve() or Path(p).resolve() in root.parents for p in (a.worktree, a.main)):
         raise ValueError("handoff storage must be outside the repository and worktree")
     r = vars(a).copy()
     r.update(deadline=time.time() + timeout, defer=defer)
@@ -88,6 +89,10 @@ def arm(a):
     lock.mkdir()  # Atomic double-arm refusal; a killed worker's lock needs inspection.
     request = None
     try:
+        if a.norepo == '1':
+            reader = runpy.run_path(str(Path(__file__).with_name('.fleet-transfer-norepo.py')))
+            reader['preparation_check'](a.session, a.pane, a.pid, a.sid, a.to,
+                                        a.preparation_id, a.notes)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         request = Path(tempfile.mkdtemp(prefix=a.session + "-pending-", dir=root))
         (lock / "request").write_text(str(request))
@@ -139,8 +144,14 @@ def wait(request):
             if option(r, "@agent_transfer_request") != str(request):
                 raise ValueError("transfer request was replaced or cancelled")
             if (option(r, "window_id") != r["window"] or option(r, "pane_dead") == "1"
-                    or Path(option(r, "@worktree")).resolve() != Path(r["worktree"])):
+                    or Path(option(r, "pane_current_path" if r.get("norepo") == "1" else "@worktree")).resolve() != Path(r["worktree"])):
                 raise ValueError("source pane or worktree changed")
+            if r.get('norepo') == '1':
+                reader = runpy.run_path(str(Path(__file__).with_name('.fleet-transfer-norepo.py')))
+                if reader['identity'](r['session'], r['pane']) != json.loads(r['identity']):
+                    raise ValueError('managed HOME identity or role changed after arming')
+                reader['preparation_check'](r['session'], r['pane'], r['pid'], r['sid'], r['to'],
+                                            r.get('preparation_id', ''), str(request/'notes.md'))
             os.kill(r["pid"], 0)
             if r.get('source_agent', 'claude') == 'codex':
                 if not same_codex_source(r):
@@ -175,6 +186,8 @@ def wait(request):
                 cmd.extend([flag, str(request / filename)])
         if r.get('codex_home'):
             cmd.extend(['--codex-home', r['codex_home']])
+        if r.get('preparation_id'):
+            cmd.extend(['--preparation-id', r['preparation_id']])
         env = dict(os.environ)
         env.pop("TMUX_PANE", None)
         env.pop("TMUX", None)  # All calls use the explicit fleet socket.
@@ -195,6 +208,13 @@ def wait(request):
             pass
         return 1
     finally:
+        if not succeeded and r.get('preparation_id'):
+            try:
+                subprocess.run(['python3', str(Path(__file__).with_name('.fleet-transfer-norepo.py')),
+                                'abort-request', r['session'], r['pane'], r['preparation_id']],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40)
+            except (OSError, subprocess.SubprocessError):
+                pass  # An uncertain result stays blocked, but release our waiter.
         release(r, request, retry_source=not succeeded)
 
 
@@ -209,6 +229,9 @@ def main():
     a.add_argument("--pid", type=int, required=True)
     a.add_argument("--idle-wait", type=int, required=True)
     a.add_argument("--defer", type=int, required=True)
+    a.add_argument('--norepo', default='')
+    a.add_argument('--identity', default='')
+    a.add_argument('--preparation-id', default='')
     a.add_argument("--loop", default='')
     a.add_argument('--to', choices=('claude', 'codex'), default='codex')
     a.add_argument('--target-file', default=''); a.add_argument('--draft-file', default='')

@@ -61,13 +61,17 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/usage-lib.sh"          # fleet_limit_banner — the wall this cutover leaves behind (#870)
 HELPER="$BIN/.fleet-transfer.py"
 
-die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2; exit 1; }
+die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
+  if [ "${NOREPO:-0}" = 1 ] && [ "${DRY:-0}" != 1 ] && [ "${PREPARE:-0}" != 1 ] && [ -n "${WIN:-}" ]; then
+    TM set-option -w -t "$WIN" @transfer_note "未切换完成：$*" 2>/dev/null || :
+  fi
+  exit 1; }
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
-TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID=''
+TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
@@ -78,9 +82,11 @@ while [ "$#" -gt 0 ]; do
         --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
         --retry) RETRY=$2 ;; --expected-session-id) EXPECT_SID=$2 ;;
+        --preparation-id) PREPARATION_ID=$2 ;;
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --from-panel) FROM_PANEL=1; shift ;;
     --prepare-only) PREPARE=1; shift ;;
     --after-turn) AFTER=1; shift ;;
     --inspect) INSPECT=1; DRY=1; shift ;;
@@ -103,13 +109,14 @@ done
 # TARGET_AUTH_WAIT the login a retry waits on (`<agent>/<profile>`, `<agent>/*`
 # for a pool with none usable — issue #1669). Defined before anything else runs:
 # `--retry` asks it before any window is resolved.
-TARGET_AUTH='' TARGET_AUTH_WHY='' TARGET_AUTH_WAIT=''
+TARGET_AUTH='' TARGET_AUTH_WHY='' TARGET_AUTH_WAIT='' TARGET_AUTH_HOME=''
 _json_field() { printf '%s\n' "$1" | sed -n "s/.*\"$2\": *\"\([^\"]*\)\".*/\1/p" | sed -n '1p'; }
 target_auth() {
   local out rc=0 verdict reason pin
-  TARGET_AUTH='' TARGET_AUTH_WHY='' TARGET_AUTH_WAIT=''
+  TARGET_AUTH='' TARGET_AUTH_WHY='' TARGET_AUTH_WAIT='' TARGET_AUTH_HOME=''
   if [ -n "$TARGET_FILE" ]; then
     pin=$(cat "$TARGET_FILE" 2>/dev/null)
+    TARGET_AUTH_HOME=$(_json_field "$pin" home)
     TARGET_AUTH_WAIT="$TO/$(_json_field "$pin" profile)"; [ "$TARGET_AUTH_WAIT" != "$TO/" ] || TARGET_AUTH_WAIT="$TO/$(_json_field "$pin" label)"
     out=$(bash "$BIN/fleet-account.sh" check-target "$TARGET_FILE" 2>&1 >/dev/null) || rc=$?
     if [ "$rc" = 0 ]; then TARGET_AUTH="ok · pinned $(_json_field "$(cat "$TARGET_FILE" 2>/dev/null)" key)"; return 0; fi
@@ -118,6 +125,7 @@ target_auth() {
     return 1
   fi
   out=$(bash "$BIN/fleet-account.sh" target-auth --agent "$TO" ${CODEX_TARGET_HOME:+--home "$CODEX_TARGET_HOME"} 2>&1) || rc=$?
+  TARGET_AUTH_HOME=$(_json_field "$out" home)
   verdict=$(_json_field "$out" verdict); reason=$(_json_field "$out" reason)
   TARGET_AUTH_WAIT="$TO/$(_json_field "$out" profile)"; [ "$TARGET_AUTH_WAIT" != "$TO/" ] || TARGET_AUTH_WAIT="$TO/$(_json_field "$out" label)"
   case "$verdict" in
@@ -220,10 +228,18 @@ PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
 # no-repo guide included — read as another session's, so failover marked them
 # all unsupported and none could leave a walled account (issue #2102).
 [ "$(opt "$FLEET_SESSION_FMT")" = "$SESS" ] || die 'window belongs to a different session'
-case "$(opt '#{window_name}')" in dash|plan|backlog|home) die 'panel windows cannot be transferred' ;; esac
+case "$(fleet_win_role "$WIN" "$SOCK")" in panel|home) die 'panel windows cannot be transferred' ;; esac
 [ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
 SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}
 case "$SOURCE_AGENT" in claude|codex) ;; *) die 'unsupported source agent' ;; esac
+NOREPO=$(opt '#{@norepo}'); IDENTITY=''; LEASE_KEY=''
+if [ "$NOREPO" = 1 ]; then
+  WT=$(opt '#{pane_current_path}')
+  IDENTITY=$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$WT") || exit 1
+  WT=$(cd "$WT" && pwd -P) || die 'cannot resolve HOME'
+  MAIN='' FLEET_REPO='' ISSUE=''
+  LEASE_KEY="$FLEET_CONF_DIR/session-transitions/$(opt '#{@fleet_id}')"
+else
 ISSUE=$(opt '#{@issue}'); RAW=$(opt '#{@raw}')
 case "$ISSUE" in ''|*[!0-9]*) [ "$RAW" = 1 ] || die 'window is neither an issue worker nor a scratch session' ;; esac
 WT=$(opt '#{@worktree}')
@@ -245,16 +261,19 @@ MAIN=$(cd "${FLEET_MAIN:-/nonexistent}" && pwd -P) || die 'fleet base checkout n
 [ "$WT" != "$MAIN" ] && [ -f "$WT/.git" ] || die 'source must own a linked worktree, never the base checkout'
 [ "$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null)" = "$WT" ] || die 'invalid worktree'
 git -C "$MAIN" worktree list --porcelain | grep -Fx "worktree $WT" >/dev/null || die 'worktree is not registered to this fleet'
+fi
+LEASE_KEY=${LEASE_KEY:-$WT}
+scope_flags=(); [ "$NOREPO" != 1 ] || scope_flags+=(--exact)
 CODEX_SOURCE_HOME=''; REGISTRY=''
 if [ "$SOURCE_AGENT" = codex ]; then
-  RESOLVED=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT") || exit 1
+  RESOLVED=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" ${scope_flags[@]+"${scope_flags[@]}"}) || exit 1
   IFS=$'\t' read -r PID SID CODEX_SOURCE_HOME TRANSCRIPT <<< "$RESOLVED"
 else
 PID=$(fleet_pane_claude_pid "$PANE" "$SOCK") || die 'no live Claude process in the source pane'
 REGISTRY=$(fleet_cc_session_json "$PID")
 [ -n "$REGISTRY" ] || die 'source process has no session registry; refusing to guess its transcript'
 PROJECTS="${FLEET_CC_PROJECTS_DIR:-${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}}"
-RESOLVED=$(python3 "$HELPER" resolve --registry "$REGISTRY" --projects "$PROJECTS" --worktree "$WT") || exit 1
+RESOLVED=$(python3 "$HELPER" resolve --registry "$REGISTRY" --projects "$PROJECTS" --worktree "$WT" ${scope_flags[@]+"${scope_flags[@]}"}) || exit 1
 SID=${RESOLVED%%$'\n'*}; TRANSCRIPT=${RESOLVED#*$'\n'}
 fi
 [ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
@@ -366,7 +385,62 @@ PY
 fi
 printf 'fleet-transfer: %s/%s · %s → %s\nsource session: %s\nsource transcript: %s\nworktree: %s\n' \
   "$SESS" "${HANDLE:-$WIN}" "$SOURCE_AGENT" "$TO" "$SID" "$TRANSCRIPT" "$WT"
+LAUNCH="$BIN/fleet-session-wrap.sh"
+target_support() {
+  command -v "$TO" >/dev/null 2>&1 || die "$TO is not on PATH"
+  [ -x "$LAUNCH" ] && [ -x "$BIN/fleet-codex.sh" ] || die 'fleet Codex launcher is missing'
+  [ "$SOURCE_AGENT" = codex ] || [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'a Claude auto-handoff is pending; finish it first'
+  PENDING=$(opt '#{@agent_transfer_request}')
+  if [ -n "$REQUEST" ]; then
+    [ -n "$EXPECT" ] && [ "$PENDING" = "$REQUEST" ] \
+      && [ "$(opt '#{@agent_transfer_ready}')" = "$REQUEST" ] || die 'the armed transfer no longer owns this pane'
+  else
+    [ -z "$PENDING" ] || die "an after-turn transfer is pending: $PENDING"
+  fi
+  # This install must include the exit-hook exemption before it can cut over.
+  grep -q '@agent_transfer_until' "$BIN/session-end-hook.sh" || die 'SessionEnd transfer support is missing'
+  HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
+  case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
+}
+INPUT_VIEW=''
+if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then
+  if ! target_auth; then
+    [ "$DRY" != 1 ] || die "target-auth: $TARGET_AUTH_WHY"
+    refuse_target
+  fi
+  [ "$TO" != codex ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
+fi
+if [ "$NOREPO" = 1 ]; then
+  if [ "$SOURCE_AGENT" = claude ] && [ -z "$LOOP" ] && [ -n "$(opt '#{@loop}')" ]; then
+    _plan="$FLEET_CONF_DIR/transfer-plans/$(opt '#{@fleet_id}').json"
+    [ ! -s "$_plan" ] || LOOP=$_plan
+  fi
+fi
+if [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
+  _ready_rc=0
+  INPUT_VIEW=$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT") || _ready_rc=$?
+  if [ "$_ready_rc" != 0 ]; then
+    if [ "$_ready_rc" = 4 ] && [ "$FROM_PANEL" = 1 ] && [ "$SOURCE_AGENT" = claude ]; then
+      target_support
+      source_ready || die 'source is not safely idle; finish its turn before requesting preparation'
+      [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || exit 1
+      if [ "$DRY" = 1 ]; then
+        printf 'preparation-needed: request current CronList and handoff from the source; no exit until verified.\n'
+        exit 0
+      fi
+      python3 "$BIN/.fleet-transfer-norepo.py" request "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$TO" || exit 1
+      TM set-option -w -t "$WIN" @transfer_note '正在准备定时任务交接；源仍运行' || :
+      exit 0
+    fi
+    exit 1
+  fi
+fi
+if [ "$NOREPO" = 1 ] && [ "$TO" = codex ]; then
+  python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" || exit 1
+fi
 if [ "$DRY" = 1 ]; then
+  target_support
+  source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
   # The target's login, first (issue #1667): a dry-run that says «would switch»
   # onto an account that cannot log in is the plan that lost the 10-05 session.
   if target_auth; then printf 'target auth: %s\n' "$TARGET_AUTH"
@@ -375,7 +449,6 @@ if [ "$DRY" = 1 ]; then
     die "target-auth: $TARGET_AUTH_WHY — a cutover would not switch; log in to the target first"
   fi
   printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
-  [ "$STATE" = "done" ] || [ "$STATE" = looping ] || printf 'cutover would refuse until the source reaches done.\n'
   exit 0
 fi
 
@@ -392,36 +465,28 @@ if [ "$PREPARE" != 1 ]; then
     [ "${TMUX_PANE:-}" != "$PANE" ] || [ "${CALLER_TMUX%%,*}" != "$(opt '#{socket_path}')" ] \
       || die 'run cutover from another pane/terminal; use --after-turn inside the source'
   fi
-  command -v "$TO" >/dev/null 2>&1 || die "$TO is not on PATH"
-  [ -x "$LAUNCH" ] && [ -x "$BIN/fleet-codex.sh" ] || die 'fleet Codex launcher is missing'
-  [ "$SOURCE_AGENT" = codex ] || [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'a Claude auto-handoff is pending; finish it first'
-  PENDING=$(opt '#{@agent_transfer_request}')
-  if [ -n "$REQUEST" ]; then
-    [ -n "$EXPECT" ] && [ "$PENDING" = "$REQUEST" ] \
-      && [ "$(opt '#{@agent_transfer_ready}')" = "$REQUEST" ] || die 'the armed transfer no longer owns this pane'
-  else
-    [ -z "$PENDING" ] || die "an after-turn transfer is pending: $PENDING"
-  fi
-  # This install must include the exit-hook exemption before it can cut over.
-  grep -q '@agent_transfer_until' "$BIN/session-end-hook.sh" || die 'SessionEnd transfer support is missing'
-  HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
-  case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
-  TM set-option -w -t "$WIN" @worktree "$WT" || die 'cannot record verified worktree'
+  target_support
+  [ "$NOREPO" = 1 ] || TM set-option -w -t "$WIN" @worktree "$WT" || die 'cannot record verified worktree'
 fi
 
 if [ "$AFTER" = 1 ]; then
+  if [ "$NOREPO" = 1 ]; then
+    PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES") || exit 1
+  fi
+  [ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" schedule-readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT" || exit 1
   grep -q '@agent_transfer_ready' "$BIN/set-claude-state.sh" || die 'Stop-hook transfer support is missing'
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
     --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" --source-agent "$SOURCE_AGENT" \
     --to "$TO" --target-file "$TARGET_FILE" --draft-file "$DRAFT" \
-    --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" \
-    --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$WT").transfer-lock" \
+    --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" --norepo "$NOREPO" --identity "$IDENTITY" --preparation-id "$PREPARATION_ID" \
+    --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$LEASE_KEY").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
 
 [ -z "$QUOTA_REQUEST" ] || [ ! -s "$QUOTA_REQUEST/unsent-draft.txt" ] || DRAFT="$QUOTA_REQUEST/unsent-draft.txt"
-package_flags=(); [ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
+package_flags=(--identity "$IDENTITY" --lease-key "$LEASE_KEY" --input-view "$INPUT_VIEW"); [ "$NOREPO" != 1 ] || package_flags+=(--norepo)
+[ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
 
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
@@ -434,7 +499,7 @@ printf 'handoff package: %s\n' "$BUNDLE"
 
 # One transfer per worktree. mkdir is atomic; a killed controller leaves a lock
 # for explicit inspection, rather than allowing a second controller to guess.
-LOCK="$(fleet_rotate_lease_file "$WT").transfer-lock"
+LOCK="$(fleet_rotate_lease_file "$LEASE_KEY").transfer-lock"
 if [ -n "$REQUEST" ]; then
   [ "$(cat "$LOCK/request" 2>/dev/null)" = "$REQUEST" ] || die 'the after-turn worker no longer owns the worktree lock'
 else
@@ -445,6 +510,11 @@ EXIT_SENT=0 LEASE=0 SUCCESS=0 ROLLED=0
 REMAIN=$(opt '#{remain-on-exit}')
 cleanup() {
   local rc=$?
+  if [ "$SUCCESS" != 1 ] && [ -n "$PREPARATION_ID" ] && fleet_pid_alive "$PID"; then
+    # An exact still-live source can end this failed attempt. A stale result
+    # must never mark a newer panel request rejected.
+    python3 "$BIN/.fleet-transfer-norepo.py" abort-request "$SOCK" "$PANE" "$PREPARATION_ID" >/dev/null 2>&1 || :
+  fi
   if [ "$ROLLED" = 1 ]; then
     printf 'fleet-transfer: %s did not start; the source %s session %s was resumed in place. Handoff kept for a retry: %s\n' \
       "$TO" "$SOURCE_AGENT" "$SID" "$BUNDLE" >&2
@@ -456,7 +526,7 @@ cleanup() {
   TM set-option -wu -t "$WIN" @agent_transfer_until 2>/dev/null || :
   # After /exit, keep the bounded lease on failure: a shell/dead pane and the
   # recovery packet remain available while the operator inspects the failure.
-  if [ "$LEASE" = 1 ] && { [ "$SUCCESS" = 1 ] || [ "$ROLLED" = 1 ] || [ "$EXIT_SENT" = 0 ] || fleet_pid_alive "$PID"; }; then fleet_rotate_lease_drop "$WT"; fi
+  if [ "$LEASE" = 1 ] && { [ "$SUCCESS" = 1 ] || [ "$ROLLED" = 1 ] || [ "$EXIT_SENT" = 0 ] || fleet_pid_alive "$PID"; }; then fleet_rotate_lease_drop "$LEASE_KEY"; fi
   if [ "$EXIT_SENT" = 0 ] || [ "$SUCCESS" = 1 ] || [ "$ROLLED" = 1 ] || fleet_pid_alive "$PID"; then
     TM set-option -p -t "$PANE" remain-on-exit "${REMAIN:-off}" 2>/dev/null || :
   fi
@@ -466,21 +536,27 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
-fleet_rotate_lease_held "$WT" >/dev/null && die 'worktree already has a migration lease'
-fleet_rotate_lease_take "$WT" "transfer $SESS/$WIN $SOURCE_AGENT to $TO" 900 || die 'cannot protect worktree from cleanup'
+fleet_rotate_lease_held "$LEASE_KEY" >/dev/null && die 'worktree already has a migration lease'
+fleet_rotate_lease_take "$LEASE_KEY" "transfer $SESS/$WIN $SOURCE_AGENT to $TO" 900 || die 'cannot protect worktree from cleanup'
 LEASE=1
 TM set-option -w -t "$WIN" @agent_transfer_until "$(( $(date +%s) + 120 ))" || die 'cannot mark transfer'
 TM set-option -p -t "$PANE" remain-on-exit on || die 'cannot retain source pane on exit'
 # Recheck identity and evidence AFTER exporting and acquiring the lease. A /clear,
 # new turn, or another process must not inherit an earlier session's handoff.
 if [ "$SOURCE_AGENT" = codex ]; then
-  [ "$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT")" = "$RESOLVED" ] \
+  [ "$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" ${scope_flags[@]+"${scope_flags[@]}"})" = "$RESOLVED" ] \
     || die 'Codex source changed while preparing the transfer'
 else
   [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
     && [ "$(opt '#{@handoff_armed}')" != 1 ] || die 'source changed while preparing the transfer'
 fi
 source_ready || die 'source started another turn while preparing the transfer'
+if [ "$NOREPO" = 1 ]; then
+  PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES") || die 'panel preparation is no longer valid'
+  [ "$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT")" = "$INPUT_VIEW" ] || die 'source scheduler or unsent input changed'
+  [ "$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$(opt '#{pane_current_path}')")" = "$IDENTITY" ] || die 'managed HOME identity changed'
+  [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" --apply || die 'target HOME trust changed'
+fi
 # The last read before /exit (issue #1667): a login that went bad while the
 # package was written still finds the source running.
 target_auth || refuse_target
@@ -501,6 +577,9 @@ EXIT_WAIT="${FLEET_TRANSFER_EXIT_WAIT:-30}"; BOOT_WAIT="${FLEET_TRANSFER_BOOT_WA
 case "$EXIT_WAIT:$BOOT_WAIT" in *[!0-9:]*|:*|*:) die 'transfer timeouts must be positive integer seconds' ;; esac
 [ "$EXIT_WAIT" -gt 0 ] && [ "$BOOT_WAIT" -gt 0 ] && [ "$EXIT_WAIT" -le 60 ] && [ "$BOOT_WAIT" -le 30 ] \
   || die 'transfer timeout bounds: exit 1..60 seconds, boot 1..30 seconds'
+if [ "$NOREPO" = 1 ]; then
+  PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES" --commit) || die 'panel preparation was superseded before exit'
+fi
 EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK Escape || die 'cannot address source prompt'
@@ -521,7 +600,7 @@ for ((i=0; i<EXIT_WAIT; i++)); do
   # that one timer, so stop it at the source before starting the replacement.
   # Only the exact selected one-timer dialog may get ONE additional Enter.
   if [ -n "$LOOP" ] && [ "$EXIT_CONFIRMED" = 0 ] \
-    && TM capture-pane -p -t "$PANE" | python3 "$HELPER" loop-exit-confirmation; then
+    && TM capture-pane -p -t "$PANE" | python3 "$HELPER" loop-exit-confirmation --bundle "$BUNDLE"; then
     [ "$(fleet_pane_claude_pid "$PANE" "$SOCK")" = "$PID" ] \
       && [ "$(fleet_cc_session_id "$PID")" = "$SID" ] \
       || die 'source changed at the loop exit confirmation'
@@ -569,7 +648,7 @@ ROLLBACK_KEYS=(@cc_agent @handoff_manifest @source_agent @source_session_id @sou
 ROLLBACK_VALS=()
 for key in "${ROLLBACK_KEYS[@]}"; do ROLLBACK_VALS+=("$(opt "#{$key}")"); done
 rollback() {
-  local why=$1 st note cmd back='' got rest i
+  local why=$1 st note cmd back='' got rest i _recovery=''
   # The target's last screen + exit status, before the respawn wipes them; it is
   # private to the package (0600) and never copied into a note or an alert.
   TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
@@ -582,6 +661,9 @@ rollback() {
     why="$TO exited at startup (status ${st:-?})"
   fi
   python3 "$HELPER" state "$BUNDLE" target_failed "$why" >/dev/null 2>&1 || :
+  if [ "$NOREPO" = 1 ] && [ "$(opt '#{pane_dead}')" != 1 ]; then
+    python3 "$HELPER" process shell "$(opt '#{pane_pid}')" || die 'target still has a live process; refusing a second writer during rollback'
+  fi
   for i in "${!ROLLBACK_KEYS[@]}"; do
     if [ -n "${ROLLBACK_VALS[$i]}" ]; then TM set-option -w -t "$WIN" "${ROLLBACK_KEYS[$i]}" "${ROLLBACK_VALS[$i]}" 2>/dev/null || :
     else TM set-option -wu -t "$WIN" "${ROLLBACK_KEYS[$i]}" 2>/dev/null || :; fi
@@ -590,13 +672,23 @@ rollback() {
   # The note is printed into the pane above the resumed source, so the pane
   # itself says what happened even with no bar in view.
   printf -v cmd 'printf "%%s\\n" %q; exec bash %q --run-source' "▲ $note" "$BUNDLE/resume-source.sh"
+  if [ "$NOREPO" = 1 ] && [ -n "$LOOP" ]; then
+    _recovery=$(python3 "$HELPER" rollback-cron "$BUNDLE") || die 'cannot prepare cron rollback; source remains stopped'
+    if [ -n "$_recovery" ]; then
+      TM set-option -wu -t "$WIN" @loop 2>/dev/null || :
+      TM set-option -w -t "$WIN" @handoff_manifest "$_recovery/manifest.json" || die 'cannot bind cron rollback'
+      printf -v cmd 'exec bash %q' "$_recovery/launch.sh"
+    fi
+  fi
   if TM respawn-pane -k -t "$PANE" -c "$WT" "$cmd"; then
     for ((i=0; i<BOOT_WAIT; i++)); do
       if [ "$SOURCE_AGENT" = codex ]; then
         got=$(python3 "$HELPER" source-codex --pane "$PANE" --socket "$SOCK" --worktree "$WT" 2>/dev/null) \
           && IFS=$'\t' read -r back rest <<< "$got" && [ "$(printf '%s' "$rest" | cut -f1)" = "$SID" ] && break
       else
-        back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ] && break
+        if back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ]; then
+          if [ -z "$_recovery" ] || python3 "$HELPER" target-ready "$_recovery" "$SOCK" "$PANE" >/dev/null 2>&1; then break; fi
+        fi
       fi
       back=''
       [ "$(opt '#{pane_dead}')" != 1 ] || break
@@ -634,6 +726,7 @@ python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the tar
 for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
+if [ "$NOREPO" = 1 ] && [ -n "$LOOP" ]; then TM set-option -wu -t "$WIN" @loop 2>/dev/null || :; fi
 TM set-option -w -t "$WIN" @cc_agent "$TO" || die 'cannot stamp target agent'
 TM set-option -w -t "$WIN" @handoff_manifest "$BUNDLE/manifest.json" || die 'cannot stamp provenance'
 TM set-option -w -t "$WIN" @source_agent "$SOURCE_AGENT" || die 'cannot stamp source agent'
@@ -653,7 +746,7 @@ python3 "$HELPER" state "$BUNDLE" starting || die 'cannot record target launch'
 TM respawn-pane -k -t "$PANE" -c "$WT" "$CMD" || rollback "could not launch $TO in the retained pane"
 CPID=''
 for ((i=0; i<BOOT_WAIT; i++)); do
-  if [ -n "$TARGET_FILE" ] || [ "$TO" = claude ]; then
+  if [ "$NOREPO" = 1 ] || [ -n "$TARGET_FILE" ] || [ "$TO" = claude ]; then
     CPID=$(python3 "$HELPER" target-ready "$BUNDLE" "$SOCK" "$PANE" 2>/dev/null) && [ -n "$CPID" ] && break
   else
     CPID=$(python3 "$HELPER" process codex "$(opt '#{pane_pid}')" 2>/dev/null) && [ -n "$CPID" ] && break
@@ -665,6 +758,7 @@ done
 TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
+[ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" complete-request "$SOCK" "$PANE" "$PREPARATION_ID" || :
 # A switch that landed some other way ends a retry still waiting on this window.
 _fid=$(TM show-options -wqv -t "$WIN" @fleet_id 2>/dev/null)
 [ -z "$_fid" ] || python3 "$HELPER" retry-supersede "$SESS" "$_fid" 2>/dev/null || :

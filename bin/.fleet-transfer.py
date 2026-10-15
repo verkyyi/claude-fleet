@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import runpy
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -44,7 +45,7 @@ def transition_lock(worktree):
             owner.unlink(); path.rmdir()
 
 
-def resolve(registry, projects, worktree):
+def resolve(registry, projects, worktree, exact=False):
     record = json.loads(Path(registry).read_text(encoding="utf-8"))
     sid = record.get("sessionId", "")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
@@ -52,6 +53,8 @@ def resolve(registry, projects, worktree):
     cwd = record.get("cwd", "")
     if not cwd or os.path.commonpath([Path(cwd).resolve(), worktree]) != worktree:
         raise ValueError("the registered Claude cwd does not belong to this worktree")
+    if exact and str(Path(cwd).resolve()) != worktree:
+        raise ValueError('no-repo source registry must name the exact HOME')
     matches = list(Path(projects).expanduser().glob("*/" + sid + ".jsonl"))
     if len(matches) != 1:
         raise ValueError("expected exactly one transcript for registered session " + sid)
@@ -79,6 +82,8 @@ def codex_source(a):
     cwd = data.get('cwd', '')
     if not cwd or os.path.commonpath([str(Path(cwd).resolve()), a.worktree]) != a.worktree:
         raise ValueError('Codex identity belongs to another worktree')
+    if getattr(a, 'exact', False) and str(Path(cwd).resolve()) != a.worktree:
+        raise ValueError('no-repo Codex source must name the exact HOME')
     path, _ = adapter['rollout'](data)
     if not path or not Path(data['home']).is_dir():
         raise ValueError('exact Codex rollout or account home is unavailable')
@@ -110,7 +115,7 @@ def text_blocks(content):
 def package(a):
     worktree = str(Path(a.worktree).resolve())
     outroot = Path(a.output).expanduser().resolve()
-    for checkout in (worktree, str(Path(a.main).resolve())):
+    for checkout in (() if a.norepo else (worktree, str(Path(a.main).resolve()))):
         if os.path.commonpath([str(outroot), checkout]) == checkout:
             raise ValueError("handoff storage must be outside the repository and worktree")
     notes = Path(a.handoff).read_text(encoding="utf-8") if a.handoff else ""
@@ -119,7 +124,14 @@ def package(a):
     loop = None
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
-        loop = validate(json.loads(Path(a.loop).read_text(encoding='utf-8')))
+        raw = json.loads(Path(a.loop).read_text(encoding='utf-8'))
+        if a.norepo and raw.get('native_source'):
+            verified = json.loads(a.input_view or '{}').get('native_plan')
+            if not isinstance(verified, dict):
+                raise ValueError('native cron packet needs the controller-verified ownership plan')
+            loop = validate(verified) if verified['jobs'] else None
+        else:
+            loop = validate(raw)
     elif a.previous:
         prior = Path(a.previous).parent / 'loop' / 'state.json'
         if prior.exists():
@@ -136,10 +148,10 @@ def package(a):
                 raise ValueError('resolve the pending/paused loop before cycling its session')
     # A registered worktree may legitimately be detached after a review/merge.
     # Preserve that state, rather than creating or checking out a branch.
-    branch = run("git", "-C", worktree, "branch", "--show-current") or None
-    head = run("git", "-C", worktree, "rev-parse", "HEAD")
+    branch = None if a.norepo else run("git", "-C", worktree, "branch", "--show-current") or None
+    head = None if a.norepo else run("git", "-C", worktree, "rev-parse", "HEAD")
     # No git add/commit/stash/reset: the next agent gets the actual index and files.
-    git_state = {
+    git_state = {} if a.norepo else {
         "git-status.txt": run("git", "-C", worktree, "status", "--porcelain=v1", "--untracked-files=all"),
         "staged.patch": run("git", "-C", worktree, "diff", "--no-ext-diff", "--binary", "--cached"),
         "unstaged.patch": run("git", "-C", worktree, "diff", "--no-ext-diff", "--binary"),
@@ -209,7 +221,7 @@ def package(a):
     if not captured or not messages:
         raise ValueError("the registered transcript contains no complete conversation records")
     created = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    lock_key = re.sub(rb"[^A-Za-z0-9._-]", b"_", worktree.encode("utf-8")).decode("ascii")
+    lock_key = re.sub(rb"[^A-Za-z0-9._-]", b"_", (a.lease_key or worktree).encode("utf-8")).decode("ascii")
     transfer_lock = outroot.parent / "rotating" / (lock_key + ".transfer-lock")
     manifest = {
         "schema_version": 1,
@@ -229,7 +241,7 @@ def package(a):
         "native_resume": a.native_resume,
         "fleet": {"session": a.session, "window_id": a.window, "pane_id": a.pane,
                   "handle": a.handle, "issue": a.issue, "origin": a.origin},
-        "workspace": {"path": worktree, "branch": branch, "head": head, "repo": a.repo},
+        "workspace": {"kind": "norepo" if a.norepo else "worktree", "path": worktree, "branch": branch, "head": head, "repo": a.repo},
         "handoff_path": str(bundle / "handoff.md"),
         "history_path": str(bundle / "history.md"),
         "previous_handoff": a.previous or None,
@@ -237,10 +249,21 @@ def package(a):
         "source_resume_argv": ([a.launcher, "--agent", "codex", "--codex-home", a.codex_home, "resume", a.sid]
                                if a.source_agent == "codex" else [a.launcher, "--agent", "claude", "--resume", a.sid]),
     }
+    if a.norepo:
+        manifest['fleet']['identity'] = json.loads(a.identity)
+        if manifest['fleet']['identity'].get('agent_def'):
+            manifest['source_resume_argv'][1:1] = ['--as', manifest['fleet']['identity']['agent_def']]
     if loop:
         write_json(bundle / 'loop-spec.json', loop)
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
+        if a.loop:
+            manifest['native_cron'] = json.loads(Path(a.loop).read_text()).get('native_source')
     draft_file = a.draft_file
+    if a.input_view:
+        view = json.loads(a.input_view)
+        if view['state'] == 'draft':
+            (bundle / 'unsent-draft.txt').write_text(view['text'], encoding='utf-8')
+            draft_file = str(bundle / 'unsent-draft.txt')
     if not draft_file and a.previous:
         prior_draft = json.loads(Path(a.previous).read_text()).get('draft', {})
         if prior_draft.get('state') == 'unsent':
@@ -280,6 +303,14 @@ def package(a):
         "The source agent's running tools, subagents, permissions and MCP connections "
         "are not transferred; check what is still running before replacing any of them.\n"
     )
+    if a.norepo:
+        body = body.replace('Verify the current branch, git status, relevant files and running jobs.',
+                            'Verify the preserved role, task record, pending user requests and running jobs.')
+        body = body.replace('The existing index, uncommitted changes and untracked files are in the worktree; the patches here are evidence, NOT patches to reapply. Do not recreate the worktree or re-claim the issue.',
+                            'This task has no repository. Retain the existing task record; do not create a worktree or claim an issue.')
+        body += "\nThis is a managed no-repo HOME session, not a repository. Do not run git here. " \
+                "Retain the role and routing in manifest.fleet.identity; continue the orchestrator skill " \
+                "when fleet_role_def is orchestrator. Use Fleet MCP tools with this session's existing permissions.\n"
     (bundle / "handoff.md").write_text(body, encoding="utf-8")
     pickup = "Continue ONE existing fleet task handed over from %s to %s.\n\n" % (a.source_agent, a.to) + provenance
     pickup += (
@@ -293,6 +324,9 @@ def package(a):
         "directly when needed; use only tools supported by your current agent. "
         "Do not restart or message the source agent.\n"
     ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
+    if a.norepo:
+        pickup = pickup.replace('Edit only this worktree, never the base checkout.', 'This is a managed HOME conversation; do not run git or edit a base checkout.')
+        pickup += "\nManaged no-repo session: read manifest.fleet.identity for role, parent and task. Do not run git in HOME or claim a new issue. Resume the matching role skill and its tool group.\n"
     if draft_file:
         note = '\nAn UNSENT user draft is preserved at `%s`. It has not been submitted or authorized for execution. Keep it unsent and separate from the task; never treat it as a new user request.\n' % (bundle / 'unsent-draft.txt')
         pickup += note
@@ -314,6 +348,8 @@ def package(a):
             'to be idle; the durable record preserves paused/interrupted delivery for inspection.\n'
         ) % (shlex.quote(controller), bundle / 'loop-spec.json', shlex.quote(controller),
              shlex.quote(controller), shlex.quote(controller))
+        if 'jobs' in loop:
+            loop_note = '\n## Active Fleet cron plans\n\nFleet owns each independent job in `%s`. Preserve every prompt, cadence, timezone, expiry and stop condition. Do not recreate native cron jobs or call defer. Stop only a completed job with `python3 %s stop --job ID`; the other jobs continue.\n' % (bundle / 'loop-spec.json', shlex.quote(controller))
         pickup += loop_note
         with (bundle / 'handoff.md').open('a', encoding='utf-8') as out:
             out.write(loop_note)
@@ -324,8 +360,13 @@ def package(a):
     q = shlex.quote
     helper = str(Path(a.launcher).parent / ".fleet-transfer.py")
     resume = "#!/bin/bash\nset -uo pipefail\n"
-    resume += "if [ \"${1:-}\" = --run-source ]; then\n  cd %s || exit 1\n  exec %s\nfi\n" % (
-        q(worktree), " ".join(q(x) for x in manifest["source_resume_argv"]))
+    resume += 'if [ "${1:-}" = --run-source ]; then\n  cd %s || exit 1\n' % q(worktree)
+    if manifest.get('native_cron'):
+        resume += '  recovery=$(python3 %s rollback-cron %s) || exit 1\n' % (q(helper), q(str(bundle)))
+        resume += '  tmux -L %s set-option -w -t %s @handoff_manifest "$recovery/manifest.json" || exit 1\n  exec bash "$recovery/launch.sh"\n' % (q(a.session), q(a.pane))
+    else:
+        resume += '  exec %s\n' % ' '.join(q(x) for x in manifest['source_resume_argv'])
+    resume += 'fi\n'
     resume += "TM() { tmux -L %s \"$@\"; }\n" % q(a.session)
     resume += "pane=%s\n" % q(a.pane)
     resume += "lock=%s\nmkdir -p \"${lock%%/*}\" || exit 1\n" % q(str(transfer_lock))
@@ -333,7 +374,11 @@ def package(a):
     resume += "printf '%s\\n' \"$$\" > \"$lock/pid\"\ntrap 'rm -f \"$lock/pid\"; rmdir \"$lock\" 2>/dev/null || :' EXIT\n"
     resume += "trap 'exit 130' INT TERM HUP\n"
     resume += "[ \"$(TM display-message -p -t \"$pane\" '#{window_id}')\" = %s ] && " % q(a.window)
-    resume += "[ \"$(cd \"$(TM display-message -p -t \"$pane\" '#{@worktree}')\" && pwd -P)\" = %s ] || exit 1\n" % q(worktree)
+    binding = "#{pane_current_path}" if a.norepo else "#{@worktree}"
+    resume += "[ \"$(cd \"$(TM display-message -p -t \"$pane\" '%s')\" && pwd -P)\" = %s ] || exit 1\n" % (binding, q(worktree))
+    if a.norepo:
+        reader = str(Path(a.launcher).parent / '.fleet-transfer-norepo.py')
+        resume += '[ "$(python3 %s identity %s "$pane" %s)" = %s ] || exit 1\n' % (q(reader), q(a.session), q(worktree), q(a.identity))
     resume += "if [ \"$(TM display-message -p -t \"$pane\" '#{pane_dead}')\" != 1 ]; then\n"
     resume += "  python3 %s process shell \"$(TM display-message -p -t \"$pane\" '#{pane_pid}')\" || {\n" % q(helper)
     resume += "    echo 'Source recovery refused: pane still has an agent/tool; run from another terminal after stopping it.' >&2; exit 1; }\nfi\n"
@@ -392,13 +437,25 @@ def process_check(mode, pid):
     return 1
 
 
-def loop_exit_confirmation(screen):
+def loop_exit_confirmation(screen, bundle=None):
     """Recognize only Claude's selected exit choice for ONE self-paced timer.
 
     Other background jobs, multiple timers, a different selection, truncated
     dialogs and ordinary transcript text must never receive a blind Enter.
     """
     lines = [line.strip() for line in screen.splitlines() if line.strip()]
+    if bundle:
+        manifest = json.loads((bundle / 'manifest.json').read_text())
+        if manifest.get('native_cron'):
+            jobs = json.loads(Path(manifest['loop_spec_path']).read_text())['jobs']
+            n = len(jobs)
+            if len(lines) < n+6 or lines[-n-6:-n-4] != ['Background work is running', 'The following will stop when you exit:']:
+                return False
+            tasks = lines[-n-4:-4]
+            if lines[-4:] != ['❯ 1. Exit and stop tasks', '2. Move to background and exit', '3. Stay', 'Enter to confirm · Esc to cancel']:
+                return False
+            return (all(re.match(r'(?:scheduled|cron) task · ', line) for line in tasks)
+                    and all(sum(job['cron'] in line or job['prompt'] in line for line in tasks) == 1 for job in jobs))
     return (len(lines) >= 7
             and lines[-7:-5] == ['Background work is running', 'The following will stop when you exit:']
             and re.fullmatch(r'scheduled task · Runs once in .+ · /loop(?: .*)?', lines[-5]) is not None
@@ -414,6 +471,9 @@ def launcher(bundle, launch):
     if m.get('loop_spec_path'):
         env.update(FLEET_LOOP_SPEC=m['loop_spec_path'], FLEET_LOOP_AGENT=target['agent'])
     argv = [launch, '--agent', target['agent']]
+    agent_def = m['fleet'].get('identity', {}).get('agent_def')
+    if agent_def:
+        argv += ['--as', agent_def]
     if target.get('account'):
         env['FLEET_ACCOUNT_TARGET'] = json.dumps(target)
     if target['agent'] == 'codex':
@@ -437,6 +497,28 @@ def launcher(bundle, launch):
     (bundle / 'launch.sh').write_text(body)
 
 
+def rollback_cron(bundle):
+    m = json.loads((bundle / 'manifest.json').read_text())
+    if not m.get('native_cron'):
+        return
+    recovery = bundle / 'rollback'
+    recovery.mkdir(mode=0o700)  # One recovery, never a second timer controller.
+    schedule = json.loads(Path(m['loop_spec_path']).read_text())
+    state = bundle / 'loop/state.json'
+    if state.exists():
+        record = json.loads(state.read_text())
+        if record['status'] in ('paused','delivering'):
+            raise ValueError('cron delivery was ambiguous; refusing automatic replay on rollback')
+        schedule = record['schedule']
+    write_json(recovery / 'loop-spec.json', schedule)
+    shutil.copyfile(bundle / 'pickup.md', recovery / 'pickup.md')
+    m.update(target={'agent':m['source']['agent']}, native_resume=True,
+             loop_spec_path=str(recovery / 'loop-spec.json'))
+    write_json(recovery / 'manifest.json', m)
+    launcher(recovery, m['source_resume_argv'][0])
+    print(recovery)
+
+
 def target_ready(bundle, socket_label, pane):
     """A native root identity, never just an app-server/child PID, is readiness."""
     manifest = bundle / 'manifest.json'
@@ -446,13 +528,30 @@ def target_ready(bundle, socket_label, pane):
         return run('tmux', '-L', socket_label, 'display-message', '-p', '-t', pane, fmt)
     if opt('#{@cc_agent}') != t['agent'] or opt('#{@handoff_manifest}') != str(manifest):
         raise ValueError('target pane no longer belongs to this handoff')
+    if m['workspace'].get('kind') == 'norepo':
+        reader = runpy.run_path(str(Path(__file__).with_name('.fleet-transfer-norepo.py')))
+        if reader['identity'](socket_label, pane) != m['fleet']['identity']:
+            raise ValueError('target changed lifelong identity, role or task routing')
     if t['agent'] == 'codex':
         adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
         identity = adapter['identity'](pane, socket_label)
         if not identity or Path(identity.get('cwd', '')).resolve() != Path(m['workspace']['path']):
             raise ValueError('target Codex root session is not bound')
         os.kill(int(identity['owner']), 0)
-        if t.get('home') and Path(identity['home']).resolve() != Path(t['home']).resolve():
+        if m['workspace'].get('kind') == 'norepo':
+            root = int(opt('#{pane_pid}'))
+            current, seen, processes = int(identity['owner']), set(), process_rows()
+            while current != root:
+                if current in seen or current not in processes:
+                    raise ValueError('target native owner is not in the retained pane')
+                seen.add(current)
+                current = processes[current][0]
+        expected_home = t.get('home') or t.get('codex_home')
+        actual_home = Path(identity['home']).resolve()
+        marker = actual_home / '.fleet-real-home'
+        if marker.is_file():
+            actual_home = Path(marker.read_text().strip()).resolve()
+        if expected_home and actual_home != Path(expected_home).resolve():
             raise ValueError('target Codex home differs from the selected subscription')
         if t.get('account') and identity.get('subscription', {}).get('account') != t['account']:
             raise ValueError('target Codex subscription is not bound')
@@ -651,12 +750,18 @@ def main():
     r = sub.add_parser("resolve")
     for name in ("registry", "projects", "worktree"):
         r.add_argument("--" + name, required=True)
+    r.add_argument("--exact", action="store_true")
     c = sub.add_parser('source-codex')
+    c.add_argument("--exact", action="store_true")
     for name in ('pane', 'socket', 'worktree'):
         c.add_argument('--' + name, required=True)
     p = sub.add_parser("package")
     for name in ("output", "main", "worktree", "sid", "transcript", "registry", "session", "window", "pane", "launcher"):
         p.add_argument("--" + name, required=True)
+    p.add_argument('--norepo', action='store_true')
+    p.add_argument('--identity', default='')
+    p.add_argument('--lease-key', default='')
+    p.add_argument('--input-view', default='')
     p.add_argument("--pid", type=int, required=True)
     p.add_argument("--source-agent", choices=("claude", "codex"), default="claude")
     p.add_argument('--to', choices=('claude', 'codex'), default='codex')
@@ -674,7 +779,8 @@ def main():
     c = sub.add_parser("process")
     c.add_argument("mode", choices=("shell", "codex", "claude"))
     c.add_argument("pid", type=int)
-    sub.add_parser("loop-exit-confirmation")
+    c = sub.add_parser("loop-exit-confirmation"); c.add_argument("--bundle", type=Path)
+    c = sub.add_parser("rollback-cron"); c.add_argument("bundle", type=Path)
     c = sub.add_parser('launcher'); c.add_argument('bundle', type=Path); c.add_argument('launch')
     c = sub.add_parser('target-ready'); c.add_argument('bundle', type=Path); c.add_argument('socket'); c.add_argument('pane')
     a = parser.parse_args()
@@ -691,7 +797,7 @@ def main():
     elif a.command == 'retry-supersede':
         retry_supersede(a.session, a.fid)
     elif a.command == "resolve":
-        resolve(a.registry, a.projects, a.worktree)
+        resolve(a.registry, a.projects, a.worktree, a.exact)
     elif a.command == "source-codex":
         codex_source(a)
     elif a.command == "package":
@@ -699,7 +805,9 @@ def main():
     elif a.command == "process":
         return process_check(a.mode, a.pid)
     elif a.command == "loop-exit-confirmation":
-        return 0 if loop_exit_confirmation(sys.stdin.read()) else 1
+        return 0 if loop_exit_confirmation(sys.stdin.read(), a.bundle) else 1
+    elif a.command == "rollback-cron":
+        rollback_cron(a.bundle)
     elif a.command == 'launcher':
         launcher(a.bundle, a.launch)
     elif a.command == 'target-ready':

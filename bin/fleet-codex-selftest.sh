@@ -57,7 +57,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/f1" "$WORK/conf/fleets/f2" "$WORK/wt/repo-issue-42"
 # fleet-hooks-emit.sh materialises the codex hook table from hooks/*.json
 # (issue #611) — without it the launcher wires no hooks at all.
-for s in fleet-claude.sh fleet-codex.sh fleet-lib.sh set-claude-state.sh fleet-hooks-emit.sh; do ln -s "$BIN/$s" "$WORK/bin/$s"; done
+for s in fleet_codex_trust.py fleet-agent-defaults.py fleet-claude.sh fleet-codex.sh fleet-lib.sh set-claude-state.sh fleet-hooks-emit.sh; do ln -s "$BIN/$s" "$WORK/bin/$s"; done
 ln -s "$ROOT/commands" "$WORK/commands"
 ln -s "$ROOT/conf"     "$WORK/conf-real"
 ln -s "$ROOT/hooks"    "$WORK/hooks"
@@ -106,6 +106,7 @@ EOS
 SESS_FILE="$WORK/sess"; printf 'f1' > "$SESS_FILE"
 cat > "$WORK/fakebin/tmux" <<EOS
 #!/bin/sh
+case "\$*" in *'#{@norepo}'*) printf '%s' "\${TEST_NOREPO:-}"; exit 0 ;; esac
 case "\$1" in display-message) cat "$SESS_FILE" ;; set-option|set-window-option) printf '%s\n' "\$*" >> "$WORK/tmuxlog" ;; *) : ;; esac
 exit 0
 EOS
@@ -136,7 +137,7 @@ run() {   # run the launcher from the fake worktree with a fresh env; args pass 
   ( unset FLEET_AGENT FLEET_MODEL FLEET_SUBAGENT_MODEL FLEET_MCP_CONFIG CLAUDE_CODE_SUBAGENT_MODEL \
           FLEET_MODEL_FALLBACK FLEET_CODEX_MODEL FLEET_MAIN
     export FLEET_MAIN="$FAKE_MAIN"
-    cd "$WORK/wt/repo-issue-42" && bash "$IBIN/fleet-claude.sh" "$@" ) >"$WORK/out" 2>"$WORK/err"
+    cd "${TEST_CWD:-$WORK/wt/repo-issue-42}" && bash "$IBIN/fleet-claude.sh" "$@" ) >"$WORK/out" 2>"$WORK/err"
   echo $? > "$WORK/rc"
 }
 ran()   { cat "$WORK/ran" 2>/dev/null; }
@@ -422,6 +423,37 @@ grep -q "not trusted" "$WORK/err" || fail "H2 the login's own untrusted base mus
 rm -f "$FLEET_CONF_DIR/cred-proxy/trust.json"
 printf '%s\n' "$before" > "$CODEX_HOME/config.toml"
 ok "H2 trusted node → codex-grant answers Codex's trust question (fill only; the login's untrusted stands)"
+
+# H3: the common launcher, including a second ephemeral proxy home, grants only
+# the managed physical HOME. All node/trust choices remain fill-only.
+(
+  export HOME="$WORK/login" TEST_NOREPO=1 TEST_CWD="$WORK/login"
+  mkdir -p "$HOME/.codex" "$WORK/proxy-one" "$WORK/proxy-two"
+  export CODEX_HOME="$WORK/proxy-one"
+  ln -s "$HOME/.codex/config.toml" "$CODEX_HOME/config.toml"
+  ln -s "$HOME/.codex/config.toml" "$WORK/proxy-two/config.toml"
+  printf '{"trust":"trusted","ts":%s}\n' "$(date +%s)" > "$FLEET_CONF_DIR/cred-proxy/trust.json"
+  run --agent codex
+  [ "$(ran)" = codex ] && [ -L "$CODEX_HOME/config.toml" ] || fail 'H3 launcher/proxy link'
+  sh "$IBIN/fleet-trust.sh" codex-check "$HOME" >/dev/null || fail 'H3 HOME not trusted'
+  cp "$HOME/.codex/config.toml" "$WORK/home-trust-before"
+  export CODEX_HOME="$WORK/proxy-two"
+  run --agent codex
+  cmp -s "$HOME/.codex/config.toml" "$WORK/home-trust-before" || fail 'H3 subsequent proxy rewrote trust'
+  printf 'model = "keep"\n' > "$HOME/.codex/config.toml"
+  export TEST_CWD="$WORK/wt/repo-issue-42"
+  run --agent codex
+  sh "$IBIN/fleet-trust.sh" codex-check "$HOME" >/dev/null && fail 'H3 arbitrary cwd granted HOME'
+  export TEST_CWD="$HOME" FLEET_PRETRUST=0
+  run --agent codex
+  sh "$IBIN/fleet-trust.sh" codex-check "$HOME" >/dev/null && fail 'H3 opt-out granted HOME'
+  export FLEET_PRETRUST=1
+  printf '[projects."%s"]\ntrust_level = "untrusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  run --agent codex
+  [ "$(sh "$IBIN/fleet-trust.sh" codex-check "$HOME")" = untrusted ] || fail 'H3 explicit untrusted overwritten'
+) || exit 1
+rm -f "$FLEET_CONF_DIR/cred-proxy/trust.json"
+ok "H3 managed HOME trust persists across proxy homes; arbitrary cwd, opt-out and explicit untrusted preserved"
 
 # ============================================================================
 # I. the fleet tool service (issue #1807): Codex mounts the same `fleet` server

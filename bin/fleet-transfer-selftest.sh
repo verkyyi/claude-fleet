@@ -15,7 +15,7 @@ export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 unset FLEET_FAILOVER FLEET_CODEX_HOME FLEET_CODEX_ACCOUNTS FLEET_ACCOUNT_LABEL FLEET_ACCOUNTS_DIR
 LBL="transfer-selftest-$$-$RANDOM"
 TM() { tmux -L "$LBL" "$@"; }
-cleanup() { TM kill-server 2>/dev/null || :; rm -rf "$WORK"; }
+cleanup() { TM kill-server 2>/dev/null || :; sleep 0.2; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 checks=0
@@ -24,8 +24,9 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
+cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set
 # one sees `target auth: unknown` and runs exactly as before.
@@ -78,10 +79,19 @@ my ($sid, $mode) = @ARGV;
 alarm 120;
 open(my $r, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/$$.json") or die;
 print $r encode_json({sessionId=>$sid, cwd=>getcwd(), peerToken=>'never-copy-the-registry-secret'}); close $r;
-$| = 1; print "Claude ready $sid\n";
+$| = 1; print "Claude ready $sid\n"; print "❯ " if $mode eq 'norepo';
 while (my $line = <STDIN>) {
     next unless $line =~ m{/exit};
     next if $mode eq 'stuck';
+    if (-e "$ENV{TRANSFER_TEST_ROOT}/native-plan.json") {
+        open(my $p, '<', "$ENV{TRANSFER_TEST_ROOT}/native-plan.json") or die;
+        local $/; my $plan=decode_json(<$p>); close $p;
+        print "Background work is running\nThe following will stop when you exit:\n";
+        for my $job (@{$plan->{jobs}}) { print "scheduled task · $job->{cron}\n" unless $job->{durable}; }
+        print "❯ 1. Exit and stop tasks\n2. Move to background and exit\n3. Stay\nEnter to confirm · Esc to cancel\n";
+        local $/="\n"; my $confirm=<STDIN>;
+        next unless defined($confirm) && $confirm =~ /^\s*$/;
+    }
     if ($mode eq 'loop-dialog') {
         print "Background work is running\nThe following will stop when you exit:\n\n";
         print "scheduled task · Runs once in 5m · /loop continue task\n\n";
@@ -115,6 +125,9 @@ if [ "$1" = --agent ] && [ "$2" = claude ]; then
   sid=target-claude
   [ "${3:-}" != --resume ] || sid=$4
   [ ! -f "$TRANSFER_TEST_ROOT/fail-source" ] || [ "${3:-}" != --resume ] || exit 38
+  if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ]; then
+    exec python3 "$TRANSFER_TEST_ROOT/install/bin/fleet-loop.py" bridge -- "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" norepo
+  fi
   exec "$TRANSFER_TEST_ROOT/fakebin/claude" "$TRANSFER_TEST_ROOT/claude.pl" "$sid" normal
 fi
 [ "$1" = --agent ] && [ "$2" = codex ] || exit 90
@@ -122,6 +135,10 @@ fi
 # issue #1669: the target's credential dies as it starts (a login prompt)
 if [ -f "$TRANSFER_TEST_ROOT/auth-dies" ]; then printf 'reauth_required\n' > "$TRANSFER_TEST_ROOT/login-state"; exit 37; fi
 if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ]; then
+  export LOOP_TEST_ROOT="$HOME" LOOP_TEST_SCRIPT="$TRANSFER_TEST_ROOT/install/bin/fleet-loop.py"
+  exec python3 "$LOOP_TEST_SCRIPT" bridge -- pickup
+fi
 exec "$TRANSFER_TEST_ROOT/fakebin/codex" "$TRANSFER_TEST_ROOT/codex.pl" "$@"
 SH
 printf '#!/bin/sh\nexit 0\n' > "$IBIN/fleet-codex.sh"
@@ -141,7 +158,11 @@ spawn() { # n, issue|raw, normal|stuck|tool|loop-dialog
   local n=$1 kind=$2 mode=$3 branch cmd
   case "$kind" in issue) branch="issue-$n" ;; *) branch="scratch-$n" ;; esac
   WT="$WORK/wt '$n percent%"
-  git -C "$MAIN" worktree add -qb "$branch" "$WT" || fail 'worktree'
+  if [ "$kind" = norepo ]; then
+    WT="$HOME"
+  else
+    git -C "$MAIN" worktree add -qb "$branch" "$WT" || fail 'worktree'
+  fi
   SID="source-$n"
   TRANSCRIPT="$WORK/projects/actual/$SID.jsonl"
   python3 - "$SID" "$TRANSCRIPT" <<'PY'
@@ -189,6 +210,306 @@ wait_request() {
   OUT=$(cat "$REQUEST/state.json" "$REQUEST/wait.log")
   fail "after-turn request did not finish as $expected"
 }
+
+# #4258: the same real isolated socket/process fixture, with a physical HOME.
+if [ "${1:-}" = --norepo ] || [ "${1:-}" = --norepo-cron ] || [ "${1:-}" = --norepo-durable ]; then
+  unset CODEX_HOME
+  export HOME="$WORK/home"
+  mkdir -p "$HOME/.codex"
+  TM set-environment -g HOME "$HOME"
+  TM set-environment -t "$LBL" HOME "$HOME"
+  printf '[projects."%s"]\ntrust_level = "trusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  if [ "${1:-}" = --norepo-durable ]; then
+    spawn 96 norepo norepo
+    for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+    TM set-option -w -t "$WIN" @norepo 1
+    TM set-option -w -t "$WIN" @fleet_role worker
+    TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111196
+    mkdir -p "$HOME/.claude"
+    python3 - "$HOME" <<'PYDURABLE'
+import json,sys
+from pathlib import Path
+home=Path(sys.argv[1]); record=dict(id='durable-reminder',cron='13 9 21 10 *',
+    prompt='must still be delivered',createdInProject=str(home))
+(home/'.claude/scheduled_tasks.json').write_text(json.dumps(dict(tasks=[record])))
+PYDURABLE
+    cp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json"
+    printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
+    # No native marker or transcript entry: externally-created project tasks
+    # must not disappear from the guard merely because this process never listed them.
+    for mode in --dry-run --prepare-only --after-turn; do
+      transfer "$mode" --handoff "$WORK/durable-notes.md" && fail 'durable source without an execution owner must refuse'
+      printf '%s' "$OUT" | grep -q 'durable.*execution owner' || fail 'durable refusal must explain missing execution owner'
+      kill -0 "$PID" || fail 'durable refusal exited the source'
+      [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable refusal replaced source identity'
+      cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable refusal changed native tasks'
+      [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable refusal wrote a handoff'
+      [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'non-panel refusal must not enqueue preparation'
+      ok
+    done
+    # A panel click still asks the exact source for current native evidence.
+    # Preparation is not authorization to withdraw tasks or exit the source.
+    cat > "$IBIN/fleet-peer-send.sh" <<'PYPREP'
+#!/bin/sh
+cat >> "$TRANSFER_TEST_ROOT/preparation-messages"
+printf '\nREQUEST\n' >> "$TRANSFER_TEST_ROOT/preparation-messages"
+PYPREP
+    transfer --from-panel --dry-run || fail 'durable panel must explain preparation'
+    case "$OUT" in *preparation-needed:*) ;; *) fail 'missing durable preparation status' ;; esac
+    [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'panel dry-run wrote preparation'
+    transfer --from-panel || fail 'durable panel must request source CronList'
+    transfer --from-panel || fail 'durable panel preparation must deduplicate'
+    [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 1 ] || fail 'durable preparation sent twice'
+    grep -q 'Call native CronList now' "$WORK/preparation-messages" || fail 'panel did not ask for current CronList'
+    grep -q 'handoff notes' "$WORK/preparation-messages" || fail 'panel did not ask for handoff notes'
+    transfer --after-turn --handoff "$WORK/durable-notes.md" && fail 'preparation cannot bypass durable ownership refusal'
+    kill -0 "$PID" || fail 'durable preparation exited source'
+    [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable preparation changed native identity'
+    cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable preparation changed tasks'
+    [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable preparation created a transfer packet'
+    ok
+    printf 'fleet-transfer durable refusal selftest: PASS (%s checks)\n' "$checks"
+    exit 0
+  fi
+  if [ "${1:-}" != --norepo-cron ]; then
+  spawn 91 norepo norepo
+  TM set-option -wu -t "$WIN" @raw
+  TM set-option -wu -t "$WIN" @worktree
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_role_def orchestrator
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111191
+  TM set-option -w -t "$WIN" @agent_spawn 1
+  TM set-option -w -t "$WIN" @task T91
+  transfer --prepare-only || fail 'managed no-repo orchestrator must prepare'
+  BUNDLE=$(packet)
+  python3 - "$BUNDLE" "$SID" "$HOME" <<'PYNO' || fail 'no-repo packet provenance'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); m=json.loads((p/'manifest.json').read_text())
+assert m['source']['session_id']==sys.argv[2]
+assert m['workspace']==dict(kind='norepo',path=sys.argv[3],branch=None,head=None,repo='')
+assert m['fleet']['identity']['fleet_id']=='11111111-1111-4111-8111-111111111191'
+assert m['fleet']['identity']['fleet_role_def']=='orchestrator'
+assert m['fleet']['identity']['task']=='T91'
+assert not (p/'git-status.txt').exists()
+PYNO
+  ok; kill -0 "$PID" || fail 'prepare killed source'
+  [ -z "$(field worktree)" ] && [ -z "$(field raw)" ] || fail 'no-repo must not manufacture worktree/raw'
+  TM set-option -w -t "$WIN" @claude_state working
+  transfer --dry-run && fail 'busy dry-run must refuse'
+  ok; kill -0 "$PID" || fail 'busy refusal killed source'
+  TM set-option -w -t "$WIN" @claude_state 'done'
+  TM set-option -w -t "$WIN" @fleet_role panel
+  transfer --prepare-only && fail 'renamed panel must refuse'
+  ok
+  # Legacy unstamped panels must take the unified role reader's fallback,
+  # rather than merely failing a later HOME identity check by coincidence.
+  OLD_NAME=$(TM display-message -p -t "$WIN" '#{window_name}')
+  TM set-option -wu -t "$WIN" @fleet_role
+  for old_panel in home dash; do
+    TM rename-window -t "$WIN" "$old_panel"
+    transfer --prepare-only && fail 'legacy unstamped panel must refuse'
+    printf '%s' "$OUT" | grep -q 'panel windows cannot be transferred' || fail 'legacy panel did not use role fallback'
+  done
+  TM rename-window -t "$WIN" "$OLD_NAME"
+  ok
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -wu -t "$WIN" @fleet_id
+  transfer --prepare-only && fail 'unstamped HOME session must refuse'
+  ok
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111191
+  TM set-option -w -t "$WIN" @loop 'kind=cron id=a@9999999999 cron=a@*/15_*_*_*_*'
+  transfer --dry-run && fail 'unknown native schedule must refuse'
+  ok; kill -0 "$PID" || fail 'schedule refusal killed source'
+  # Panel preparation uses the normal peer bridge and leaves the process alive.
+  cat > "$IBIN/fleet-peer-send.sh" <<'PYPREP'
+#!/bin/sh
+cat >> "$TRANSFER_TEST_ROOT/preparation-messages"
+printf '\nREQUEST\n' >> "$TRANSFER_TEST_ROOT/preparation-messages"
+PYPREP
+  transfer --from-panel --dry-run || fail 'panel must offer preparation'
+  case "$OUT" in *preparation-needed:*) ;; *) fail 'missing preparation status' ;; esac
+  [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'dry-run created a request'
+  transfer --from-panel || fail 'panel preparation request'
+  transfer --from-panel || fail 'panel preparation dedup'
+  [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 1 ] || fail 'preparation sent twice'
+  kill -0 "$PID" || fail 'preparation exited the source'
+  PREP="$FLEET_CONF_DIR/transfer-preparation/$(field fleet_id).json"
+  FIRST_PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$PREP")
+  printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$FIRST_PREP" > "$WORK/panel-notes.md"
+  python3 - "$PREP" <<'PYEXPIRE'
+import json,sys
+p=sys.argv[1]; r=json.load(open(p)); r['expires_at']=0
+open(p,'w').write(json.dumps(r))
+PYEXPIRE
+  transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'expired panel request armed'
+  printf '%s' "$OUT" | grep -q 'panel preparation expired or changed identity/target' || fail 'expiry check did not run'
+  [ -z "$(field agent_transfer_request)" ] || fail 'expired request changed arm state'
+  transfer --from-panel || fail 'explicit panel retry after expired acknowledged request'
+  [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 2 ] || fail 'panel retry not delivered once'
+  SECOND_PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$PREP")
+  [ "$FIRST_PREP" != "$SECOND_PREP" ] || fail 'retry reused preparation id'
+  transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'old notes armed under new preparation'
+  printf '%s' "$OUT" | grep -q 'request id missing or superseded' || fail 'stale note generation was not checked'
+  [ -z "$(field agent_transfer_request)" ] || fail 'old generation left a waiter'
+  printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$SECOND_PREP" > "$WORK/panel-notes.md"
+  TM set-option -wu -t "$WIN" @loop
+  FLEET_TRANSFER_IDLE_WAIT=8 transfer --after-turn --handoff "$WORK/panel-notes.md" || fail 'current generation failed to arm'
+  PENDING_PREP=$(field agent_transfer_request)
+  python3 - "$PENDING_PREP/request.json" "$SECOND_PREP" <<'PYGEN' || fail 'waiter lost preparation generation'
+import json,sys
+assert json.load(open(sys.argv[1]))['preparation_id']==sys.argv[2]
+PYGEN
+  python3 "$IBIN/.fleet-transfer-norepo.py" reject-request "$LBL" "$PANE" "$SECOND_PREP" || fail 'source explicit rejection'
+  for _ in {1..30}; do [ -z "$(field agent_transfer_request)" ] && break; sleep 0.1; done
+  [ -z "$(field agent_transfer_request)" ] || fail 'rejected generation waiter did not release'
+  kill -0 "$PID" || fail 'rejected generation exited source'
+  TM set-option -w -t "$WIN" @loop 'kind=cron id=a@9999999999 cron=a@*/15_*_*_*_*'
+  transfer --from-panel || fail 'explicit retry after source rejection'
+  [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 3 ] || fail 'source rejection retry was not sent'
+  python3 "$IBIN/.fleet-transfer-norepo.py" reject-request "$LBL" "$PANE" "$SECOND_PREP" 2>/dev/null && fail 'old rejection ended new preparation'
+  python3 - "$PREP" <<'PYMISMATCH'
+import json,sys
+p=sys.argv[1]; r=json.load(open(p)); r['session_id']='wrong-source'
+open(p,'w').write(json.dumps(r))
+PYMISMATCH
+  transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'wrong source identity armed'
+  printf '%s' "$OUT" | grep -q 'panel preparation expired or changed identity/target' || fail 'identity check did not run'
+  kill -0 "$PID" || fail 'rejected request exited source'
+  transfer --from-panel || fail 'prepare current source after old identity record'
+  FINAL_PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$PREP")
+  printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$FINAL_PREP" > "$WORK/panel-notes.md"
+  ok
+  TM set-option -wu -t "$WIN" @loop
+  printf '[projects."%s"]\ntrust_level = "untrusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  transfer --dry-run && fail 'explicit untrusted HOME must refuse'
+  ok; kill -0 "$PID" || fail 'trust refusal killed source'
+  printf '[projects."%s"]\ntrust_level = "trusted"\n' "$HOME" > "$HOME/.codex/config.toml"
+  cat > "$WORK/codex.pl" <<'PLNATIVE'
+use JSON::PP; use Cwd;
+alarm 60;
+my $record = encode_json({owner=>"$$", session_id=>'22222222-2222-4222-8222-222222222222',
+                         home=>"$ENV{HOME}/.codex", cwd=>getcwd()});
+system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@cc_launcher_pid',"$$");
+system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@codex_identity',$record);
+$|=1; print "Codex native ready\n";
+while (<STDIN>) { }
+PLNATIVE
+  transfer --handoff "$WORK/panel-notes.md" || fail 'managed no-repo native cutover'
+  python3 - "$PREP" "$FINAL_PREP" <<'PYCOMPLETE' || fail 'cutover did not complete exact preparation'
+import json,sys
+r=json.load(open(sys.argv[1])); assert r['request_id']==sys.argv[2] and r['state']=='completed',r
+PYCOMPLETE
+  ok
+  kill -0 "$PID" 2>/dev/null && fail 'source must exit before target starts'
+  [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111191 ] && [ "$(field fleet_role_def)" = orchestrator ] \
+    && [ "$(field origin)" = scratch-99 ] && [ "$(field task)" = T91 ] && [ "$(field agent_spawn)" = 1 ] || fail 'cutover lost identity/role/routing'
+  [ -z "$(field worktree)" ] && [ -z "$(field raw)" ] || fail 'cutover invented a repository binding'
+  ok
+  # Failed target must restore the exact source once, with no second writer.
+  spawn 92 norepo norepo
+  for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111192
+  touch "$WORK/fail-target"
+  transfer && fail 'failed target cannot report success'
+  BUNDLE=$(packet)
+  python3 - "$BUNDLE/state.json" <<'PYBACK' || fail 'source must roll back'
+import json,sys
+assert json.load(open(sys.argv[1]))['state']=='rolled_back'
+PYBACK
+  BACK=$(fleet_pane_claude_pid "$PANE" "$LBL")
+  [ "$(fleet_cc_session_id "$BACK")" = "$SID" ] || fail 'rollback lost source native identity'
+  [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111192 ] || fail 'rollback changed lifelong identity'
+  ok
+  rm "$WORK/fail-target"
+  # A target which is alive but never binds must never be killed/replaced with a second writer.
+  spawn 93 norepo norepo
+  for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111193
+  printf 'alarm 60; $|=1; print "unbound target\\n"; while (<STDIN>) {}\n' > "$WORK/codex.pl"
+  transfer && fail 'unbound live process cannot report takeover'
+  printf '%s' "$OUT" | grep -q 'refusing a second writer' || fail 'must explicitly refuse unsafe rollback'
+  [ "$(field cc_agent)" = codex ] || fail 'live target cannot be relabelled as a resumed source'
+  fleet_pane_claude_pid "$PANE" "$LBL" >/dev/null 2>&1 && fail 'unsafe rollback launched a second writer'
+  ok
+  fi
+  # Full mixed native Cron handover through a real private RPC server/TUI,
+  # then failed-target rollback through the real Claude scheduler supervisor.
+  rm "$FB/codex"
+  cp "$BIN/fleet-loop-fake-codex.py" "$FB/codex"; chmod +x "$FB/codex"
+  for n in 94 95; do
+    spawn "$n" norepo norepo
+    for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+    TM set-option -w -t "$WIN" @norepo 1
+    TM set-option -w -t "$WIN" @fleet_role worker
+    TM set-option -w -t "$WIN" @cc_agent claude
+    TM set-option -w -t "$WIN" @fleet_id "11111111-1111-4111-8111-1111111111$n"
+    python3 - "$WORK/native-plan.json" "$TRANSCRIPT" "$PID" "$SID" "$(field fleet_id)" <<'PYNATIVE'
+import datetime,json,sys,time
+p,transcript,pid,sid,fid=sys.argv[1:]; now=time.time()
+jobs=[]
+for ident,offset,recurring in [('once',180,False),('patrol',360,True)]:
+    dt=datetime.datetime.fromtimestamp(now+offset,datetime.timezone.utc)
+    jobs.append(dict(id=ident,prompt='exact '+ident+' instruction',cron=str(dt.minute)+' * * * *',
+                     recurring=recurring,durable=False,timezone='UTC',expires_at=now+7200,stop_when=''))
+raw=dict(jobs=jobs,native_source=dict(pid=int(pid),session_id=sid,fleet_id=fid,confirmed=True))
+open(p,'w').write(json.dumps(raw))
+ts=datetime.datetime.now(datetime.timezone.utc).isoformat()
+with open(transcript,'a') as f:
+    f.write(json.dumps(dict(timestamp=ts,message=dict(content=[dict(type='tool_use',id='list',name='CronList',input={})])))+'\n')
+    f.write(json.dumps(dict(timestamp=ts,toolUseResult=jobs,message=dict(content=[dict(type='tool_result',tool_use_id='list')])))+'\n')
+PYNATIVE
+    TM set-option -w -t "$WIN" @loop "kind=cron id=once@$(( $(date +%s)+7200 )),patrol@$(( $(date +%s)+7200 ))"
+    if [ "$n" = 95 ]; then touch "$WORK/fail-target"; fi
+    if transfer --loop "$WORK/native-plan.json"; then
+      [ "$n" = 94 ] || fail 'failed cron target reported success'
+    else
+      if [ "$n" != 95 ]; then
+        cat "$(packet)/pane-target-failed.txt" >&2
+        fail 'mixed native cron cutover failed'
+      fi
+    fi
+    BUNDLE=$(packet)
+    record="$BUNDLE/loop/state.json"
+    if [ "$n" = 95 ]; then record="$BUNDLE/rollback/loop/state.json"; fi
+    python3 - "$record" "$n" "$SID" "$IBIN" <<'PYCRONCHECK' || fail 'mixed cron ownership/delivery/rollback'
+import json,sys,runpy,time
+from pathlib import Path
+path=Path(sys.argv[1]); n=sys.argv[2]; sid=sys.argv[3]; sys.path.insert(0,sys.argv[4])
+for _ in range(40):
+    if path.exists() and json.loads(path.read_text()).get('status')=='active': break
+    time.sleep(.1)
+r=json.loads(path.read_text()); assert r['status']=='active',r
+assert [(j['id'],j['prompt'],j['recurring'],j['stop_when']) for j in r['schedule']['jobs']]==[('once','exact once instruction',False,''),('patrol','exact patrol instruction',True,'')]
+if n=='95':
+    assert r['agent']=='claude' and r['thread_id']==sid
+    assert json.loads((path.parents[2]/'state.json').read_text())['state']=='rolled_back'
+else:
+    assert r['thread_id']=='12345678-1234-1234-1234-123456789abc'
+    loop=runpy.run_path(str(Path(sys.argv[4])/'fleet-loop.py'))
+    due=r['schedule']['jobs'][0]['next_run_at']
+    loop['dispatch'](path,now=due)
+    loop['dispatch'](path,now=due+1)
+    r=json.loads(path.read_text())
+    if r['deliveries']!=1:
+        print(loop['tm'](r,'display-message','-p','-t',r['fleet']['pane_id'],'state=#{@claude_state}|life=#{@worker_lifecycle}|request=#{@agent_transfer_request}|quota=#{@quota_failover}|until=#{@agent_transfer_until}|armed=#{@handoff_armed}'))
+        print(runpy.run_path(str(Path(sys.argv[4])/'fleet-input.py'))['snapshot'](r['fleet']['session'],r['fleet']['pane_id'],agent='codex'))
+    assert r['deliveries']==1,r
+    assert r['schedule']['jobs'][0]['next_run_at'] is None
+    assert r['schedule']['jobs'][1]['next_run_at'] is not None
+PYCRONCHECK
+    kill -0 "$PID" 2>/dev/null && fail 'native source stayed alive alongside scheduler'
+    [ -z "$(field loop)" ] || fail 'native marker survived handover'
+    rm "$WORK/native-plan.json"
+    ok
+  done
+  printf 'fleet-transfer norepo selftest: PASS (%s checks)\n' "$checks"
+  exit 0
+fi
 
 spawn 41 issue normal
 TM set-option -wu -t "$WIN" @worktree

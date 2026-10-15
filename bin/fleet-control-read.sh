@@ -919,7 +919,7 @@ case "$mode" in
     cur=$(tmux -L "$sock" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null); cur=${cur:-claude}
     [ "$cur" != "$to" ] || { printf 'transfer: the session already runs %s\n' "$to" >&2; exit 1; }
     unset TMUX TMUX_PANE
-    plan=$(bash "$BIN/fleet-transfer.sh" --session "$sess" --window "$win" --to "$to" --dry-run 2>&1); prc=$?
+    plan=$(bash "$BIN/fleet-transfer.sh" --session "$sess" --window "$win" --to "$to" --from-panel --dry-run 2>&1); prc=$?
     if [ "$prc" != 0 ]; then
       why=$(printf '%s\n' "$plan" | sed -n 's/^fleet-transfer: //p' | tail -1)
       printf 'transfer: %s\n' "${why:-$(printf '%s\n' "$plan" | tail -1)}" >&2; exit 1
@@ -928,8 +928,9 @@ case "$mode" in
       printf 'transfer: the session is mid-turn; switch it once its turn is over\n' >&2; exit 1 ;;
     esac
     mkdir -p "$FLEET_CONF_DIR/logs" 2>/dev/null
-    fleet_bg -L "$sock" "FLEET_CONF_DIR=$(printf '%q' "$FLEET_CONF_DIR") bash $(printf '%q' "$BIN/fleet-transfer.sh") --session $sess --window $win --to $to >>$(printf '%q' "$FLEET_CONF_DIR/logs/transfer-remote.log") 2>&1"
-    printf 'dispatched → %s\n' "$to"
+    fleet_bg -L "$sock" "FLEET_CONF_DIR=$(printf '%q' "$FLEET_CONF_DIR") bash $(printf '%q' "$BIN/fleet-transfer.sh") --session $sess --window $win --to $to --from-panel >>$(printf '%q' "$FLEET_CONF_DIR/logs/transfer-remote.log") 2>&1"
+    case "$plan" in *preparation-needed:*) printf 'preparing → %s（源仍运行）\n' "$to" ;;
+      *) printf 'dispatched → %s\n' "$to" ;; esac
     ;;
   # --- reappol <sess> <window_id> <fleet_id> <policy> (issue #2368) -----------
   # The hub's worker_reap_policy: a sidebar on another machine's 「改回收方式…」 on

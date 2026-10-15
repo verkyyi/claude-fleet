@@ -25,6 +25,7 @@ import sys
 import time
 import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_cron
 import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 
 
@@ -35,9 +36,11 @@ def save(path, value):
     temp.replace(path)
 
 
-def spec(value):
+def spec(value, now=None):
     if not isinstance(value, dict):
         raise ValueError('loop spec must be a JSON object')
+    if 'jobs' in value:
+        return fleet_cron.plan(value, now)
     prompt = value.get('prompt')
     seconds = value.get('interval_seconds')
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 65536:
@@ -50,6 +53,22 @@ def spec(value):
     # A missing per-turn rearm retains the last chosen cadence. Never replay
     # missed intervals: a late wakeup is one turn, not a catch-up burst.
     return {'prompt': prompt, 'interval_seconds': seconds, 'next_run_at': due}
+
+
+def advance(schedule, now):
+    if 'jobs' in schedule:
+        fleet_cron.advance(schedule, now)
+    else:
+        schedule['next_run_at'] = now + schedule['interval_seconds']
+
+
+def wakeup_prompt(schedule, now):
+    if 'jobs' not in schedule:
+        return schedule['prompt']
+    return '\n\n'.join('Cron job '+j['id']+' ('+j['cron']+'; '+j['timezone']+')\n'+j['prompt']+
+                        '\nSchedule: '+('recurring' if j.get('recurring', True) else 'once')+
+                        '\nStop condition: '+(j['stop_when'] or 'none beyond expiry')
+                        for j in fleet_cron.pending(schedule, now))
 
 
 def tm(r, *args):
@@ -67,7 +86,8 @@ def current(r):
                      r['manifest'], r['worktree']])
     # group-or-name (issues #1489, #2102): a bare session_name names a Fleet
     # Shell view session while one is attached, and every loop read as moved.
-    got = pane(r, '#{?#{session_group},#{session_group},#{session_name}}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|#{@worktree}')
+    binding = '#{pane_current_path}' if r.get('workspace_kind') == 'norepo' else '#{@worktree}'
+    got = pane(r, '#{?#{session_group},#{session_group},#{session_name}}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|' + binding)
     if got != want or pane(r, '#{pane_dead}') == '1':
         raise ValueError('pane, agent, worktree or handoff identity changed')
     if r.get('thread_id'):
@@ -132,7 +152,7 @@ def sleep_snapshot(source):
             raise ValueError('Fleet loop belongs to another native session')
         current(r)
         schedule = spec(r['schedule'])
-        if r['status'] == 'active' and schedule['next_run_at'] <= time.time() + 60:
+        if r['status'] == 'active' and (schedule['next_run_at'] is None or schedule['next_run_at'] <= time.time() + 60):
             raise ValueError('Fleet loop is due within the next scan interval')
         return dict(path=str(path), record=r)
 
@@ -253,6 +273,8 @@ def command(a):
             if r.get('agent') != 'claude':
                 tm(r, 'set-option', '-w', '-t', r['fleet']['window_id'], '@codex_thread_id', sid)
         elif a.command == 'defer':
+            if 'jobs' in r['schedule']:
+                raise ValueError('cron jobs retain their own cadence; use stop --job ID for an individual termination')
             if r.get('agent') == 'claude' and r['status'] == 'delivering':
                 acknowledge_claude(r)
             if r['status'] != 'active':
@@ -263,6 +285,17 @@ def command(a):
                 update['prompt'] = Path(a.prompt_file).read_text()
             r['schedule'] = spec(update)
         elif a.command == 'stop':
+            if getattr(a, 'job', None):
+                jobs = r['schedule'].get('jobs', [])
+                selected = [j for j in jobs if j['id'] == a.job]
+                if len(selected) != 1:
+                    raise ValueError('no such cron job')
+                selected[0]['next_run_at'] = None
+                fleet_cron.refresh(r['schedule'])
+                if r['schedule']['next_run_at'] is None:
+                    r['status'] = 'complete'
+                save(path, r)
+                return
             r['status'] = 'stopped'
             r.pop('sleep_record', None)
             r['detail'] = 'Stopped by owner thread'
@@ -298,6 +331,14 @@ def dispatch(path, now=None):
                     r.update(status='paused',detail='Claude inbox write has no transcript acknowledgement; not resending')
                 save(path,r)
                 return
+            if 'jobs' in r['schedule']:
+                for job in r['schedule']['jobs']:
+                    if job['expires_at'] is not None and job['expires_at'] <= now: job['next_run_at'] = None
+                fleet_cron.refresh(r['schedule'])
+                if r['schedule']['next_run_at'] is None:
+                    r.update(status='complete', detail='Every cron job expired or stopped')
+                    save(path, r)
+                    return
             if r['status'] != 'active' or now < r['schedule']['next_run_at']:
                 return
             try:
@@ -334,7 +375,7 @@ def dispatch(path, now=None):
                     r['status'] = 'delivering'
                     r['detail'] = 'Delivery in progress; ambiguous failures require inspection'
                     save(path, r)
-                    prompt = (r['schedule']['prompt'] + '\n\n[Fleet loop wakeup ' + r['id'] + ']\n'
+                    prompt = (wakeup_prompt(r['schedule'], now) + '\n\n[Fleet loop wakeup ' + r['id'] + ']\n'
                               'Continue in the existing conversation language. At the end of this iteration, '
                               'use fleet-loop.py defer --seconds N to choose the next delay (optionally '
                               '--prompt-file FILE for updated context), or fleet-loop.py stop if complete, '
@@ -343,13 +384,15 @@ def dispatch(path, now=None):
                               str(Path(__file__).absolute()) + '. Do not recreate a Claude /loop. '
                               'Do not repeat completed work or override pending approvals. Without a change, '
                               'Fleet retains the last interval; missed intervals are never replayed.')
+                    if 'jobs' in r['schedule']:
+                        prompt = wakeup_prompt(r['schedule'], now) + '\n\nFleet owns these independent cron schedules. Preserve their cadence, timezone and expiry. Do not rearm or recreate them. Stop only a completed job with fleet-loop.py stop --job ID; do not stop other monitoring. Continue in the existing conversation language.'
                     result = rpc.call('turn/start', {'threadId': r['thread_id'],
                                                     'input': [{'type': 'text', 'text': prompt}]})
                     r['last_turn_id'] = result['turn']['id']
                 r['status'] = 'active'
                 r['last_delivered_at'] = now
                 r['deliveries'] += 1
-                r['schedule']['next_run_at'] = now + r['schedule']['interval_seconds']
+                advance(r['schedule'], now)
                 r['detail'] = 'Wakeup accepted by the bound Codex thread'
             except (OSError, ValueError, KeyError, TypeError, EOFError, RuntimeError, subprocess.SubprocessError) as error:
                 r['status'] = 'paused'
@@ -371,7 +414,7 @@ def recover(session):
     rows = adapter['tmux'](['list-windows','-t',session,'-F',
         '#{window_id}|#{pane_id}|#{pane_pid}|#{pane_current_path}|#{@cc_agent}|#{@handoff_manifest}|#{@reported}'],session)
     windows = [line.split('|',6) for line in rows.splitlines()]
-    for path in root.glob('*/loop/state.json'):
+    for path in list(root.glob('*/loop/state.json')) + list(root.glob('*/rollback/loop/state.json')):
         try:
             with locked(path,nonblocking=True) as r:
                 if r.get('status') not in ('active', 'waiting-quota') or r['fleet']['session'] != session or not r.get('thread_id'):
@@ -445,7 +488,7 @@ def acknowledge_claude(r):
                     and r['delivery_id'] in json.dumps(row.get('message',{}),ensure_ascii=False)):
                 r.update(status='active',last_turn_id=row.get('uuid'),last_delivered_at=r['delivery_started_at'],
                          deliveries=r.get('deliveries',0)+1,detail='Claude inbox message acknowledged in its exact transcript')
-                r['schedule']['next_run_at']=r['delivery_started_at']+r['schedule']['interval_seconds']
+                advance(r['schedule'], r['delivery_started_at'])
                 return True
     return False
 
@@ -457,10 +500,12 @@ def deliver_claude(path,r,now):
              detail='Claude inbox delivery awaiting transcript acknowledgement')
     save(path,r)  # Persist before the frame write; a timeout is never a retry.
     script=str(Path(__file__).absolute())
-    prompt=(r['schedule']['prompt']+'\n\n['+r['delivery_id']+']\nContinue in the conversation language. '
+    prompt=(wakeup_prompt(r['schedule'], now)+'\n\n['+r['delivery_id']+']\nContinue in the conversation language. '
             'At the end use python3 '+script+' defer --seconds N, or stop when the task is complete/cancelled '
             'or all remaining work needs a human decision. Fleet owns this timer; do not create another /loop. '
             'Do not submit saved drafts, repeat completed actions or override pending approvals.')
+    if 'jobs' in r['schedule']:
+        prompt = wakeup_prompt(r['schedule'], now) + '\n\n['+r['delivery_id']+']\nFleet owns these cron jobs. Do not recreate timers or defer their cadence. Stop a completed job with fleet-loop.py stop --job ID; keep other monitoring active.'
     subprocess.run(['bash',str(Path(__file__).with_name('fleet-peer-send.sh')),'-L',r['fleet']['session'],
                     r['fleet']['pane_id'],'-'],input=prompt,text=True,stdout=subprocess.DEVNULL,
                    stderr=subprocess.PIPE,timeout=10,check=True)
@@ -533,7 +578,7 @@ def bridge(args):
     agent = os.environ.get('FLEET_LOOP_AGENT',m.get('target',{}).get('agent','codex'))
     r = {'schema_version': 1, 'id': ident, 'status': 'unbound', 'manifest': str(manifest),
          'fleet': m['fleet'], 'source': m['source'], 'worktree': m['workspace']['path'],
-         'agent': agent, 'schedule': schedule, 'socket': '', 'thread_id': None,
+         'agent': agent, 'workspace_kind': m['workspace'].get('kind', 'worktree'), 'schedule': schedule, 'socket': '', 'thread_id': None,
          'deliveries': raw.get('deliveries',0), 'last_delivered_at':raw.get('last_delivered_at'),
          'controller_pid': os.getpid()}
     r['pane_pid'] = int(pane(r, '#{pane_pid}'))
@@ -601,17 +646,25 @@ def main():
         return bridge(sys.argv[3:])
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
-    for name in ('bind', 'status', 'stop'):
+    for name in ('bind', 'status'):
         sub.add_parser(name)
+    c = sub.add_parser('stop'); c.add_argument('--job')
     c = sub.add_parser('recover'); c.add_argument('--session',required=True)
     d = sub.add_parser('defer')
     d.add_argument('--seconds', type=int, required=True)
     d.add_argument('--prompt-file')
+    c = sub.add_parser('export-cron')
+    c.add_argument('--jobs-file', required=True)
+    c.add_argument('--session', required=True)
+    c.add_argument('--pane', default=os.environ.get('TMUX_PANE', ''))
     c = sub.add_parser('from-claude')
     c.add_argument('--transcript', required=True)
     c.add_argument('--output', required=True)
     a = p.parse_args()
-    if a.command == 'from-claude':
+    if a.command == 'export-cron':
+        from fleet_transfer_cron import export
+        export(a.jobs_file, a.session, a.pane)
+    elif a.command == 'from-claude':
         from_claude(a)
     elif a.command == 'recover':
         recover(a.session)

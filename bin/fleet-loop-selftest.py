@@ -17,6 +17,140 @@ loader.loader.exec_module(loop)
 SID = '12345678-1234-1234-1234-123456789abc'
 
 
+class CronTests(unittest.TestCase):
+    def test_recurring_and_once_without_extra_stop_condition(self):
+        start = 1792004400  # 2026-10-14 19:00 UTC
+        jobs = [dict(id='patrol', prompt='keep checking', cron='7,22,37,52 * * * *',
+                     timezone='America/Los_Angeles', expires_at=start+7*86400, stop_when='', recurring=True),
+                dict(id='acceptance', prompt='read acceptance metrics', cron='13 9 21 10 *',
+                     timezone='America/Los_Angeles', expires_at=start+7*86400, stop_when='', recurring=False)]
+        s = loop.spec(dict(jobs=jobs), now=start)
+        once = s['jobs'][1]['next_run_at']
+        self.assertEqual(once, 1792599180)  # Oct 21 09:13 PDT
+        loop.advance(s, once)
+        self.assertIsNone(s['jobs'][1]['next_run_at'])
+        self.assertGreater(s['jobs'][0]['next_run_at'], once)
+        # A handoff or recovery must preserve a consumed one-shot, not rearm it.
+        restored = loop.spec(s, now=once+1)
+        self.assertIsNone(restored['jobs'][1]['next_run_at'])
+        loop.advance(restored, start+7*86400)
+        self.assertIsNone(restored['next_run_at'])
+
+    def test_two_schedules_keep_phase_and_expiry(self):
+        start = 1792022400  # UTC midnight, minute 0
+        jobs = [dict(id='a', prompt='first patrol', cron='*/15 * * * *', timezone='UTC',
+                     expires_at=start+3600, stop_when='batch completes'),
+                dict(id='b', prompt='second patrol', cron='7,22,37,52 * * * *', timezone='UTC',
+                     expires_at=start+3600, stop_when='operator cancels')]
+        s = loop.spec(dict(jobs=jobs), now=start)
+        self.assertEqual([j['next_run_at'] for j in s['jobs']], [start+900,start+420])
+        self.assertEqual(s['next_run_at'],start+420)
+        loop.advance(s, start+420)
+        self.assertEqual([j['next_run_at'] for j in s['jobs']], [start+900,start+1320])
+        self.assertEqual([j['prompt'] for j in s['jobs']], ['first patrol','second patrol'])
+        loop.advance(s, start+3601)
+        self.assertIsNone(s['next_run_at'])
+
+    def test_ambiguous_specs_refuse(self):
+        for value in [dict(jobs=[]), dict(jobs=[dict(id='x',prompt='p',cron='* * * * *')])]:
+            with self.assertRaises(ValueError): loop.spec(value)
+
+
+class NativeCronTests(unittest.TestCase):
+    def setUp(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        env = patch.dict(os.environ, HOME=str(Path(home.name).resolve()))
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_native_store_requires_an_execution_owner(self):
+        import fleet_transfer_cron as native
+        home = Path.home()
+        store = home/'.claude/scheduled_tasks.json'
+        store.parent.mkdir()
+        native.check_durable_store()  # absent table
+        for value in ([], dict(tasks=[]), dict(jobs=[]),
+                      [dict(createdInProject=str(home/'other-project'))]):
+            store.write_text(json.dumps(value))
+            native.check_durable_store()
+        for value in ([dict(id='a',createdInProject=str(home))],
+                      dict(tasks=[dict(id='a',createdInProject=str(home))]),
+                      [dict(id='unknown-project')], dict(unrecognized=[]), None):
+            before=json.dumps(value); store.write_text(before)
+            with self.assertRaisesRegex(ValueError, 'execution owner'):
+                native.check_durable_store()
+            self.assertEqual(store.read_text(),before)
+        store.write_text('{')
+        with self.assertRaises(ValueError): native.check_durable_store()
+
+    def test_exact_live_snapshot_and_refusals(self):
+        import fleet_transfer_cron as native
+        now=1792022400
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'source.jsonl'
+            jobs=[dict(id='a',prompt='one',cron='*/15 * * * *',timezone='UTC',expires_at=now+3600,stop_when='done',recurring=True,durable=False),
+                  dict(id='b',prompt='two',cron='7,22,37,52 * * * *',timezone='UTC',expires_at=None,stop_when='',recurring=False,durable=False)]
+            def result(name, inp, response, stamp=now):
+                ts=__import__('datetime').datetime.fromtimestamp(stamp,__import__('datetime').timezone.utc).isoformat()
+                return [dict(timestamp=ts,message=dict(content=[dict(type='tool_use',name=name,id=name,input=inp)])),
+                        dict(timestamp=ts,toolUseResult=response,message=dict(content=[dict(type='tool_result',tool_use_id=name)]))]
+            records=result('CronList',{},jobs)
+            def write(rs): path.write_text(''.join(json.dumps(r)+'\n' for r in rs))
+            write(records)
+            raw=dict(jobs=jobs,native_source=dict(pid=42,session_id=SID,fleet_id='fid',confirmed=True))
+            mark='kind=cron id=a@%d,b@%d' % (now+4000,now+4000)
+            with patch.object(native,'process_start',return_value=now-60):
+                write(result('CronList',{},'older display format',now-30)+records)
+                self.assertEqual(len(native.validate(raw,path,42,SID,'fid',mark,now)['jobs']),2)
+                wrong=json.loads(json.dumps(raw)); wrong['jobs'][1]['recurring']=True
+                with self.assertRaises(ValueError): native.validate(wrong,path,42,SID,'fid',mark,now)
+                wrong=json.loads(json.dumps(raw)); wrong['jobs'].pop()
+                with self.assertRaises(ValueError): native.validate(wrong,path,42,SID,'fid',mark,now)
+                # Native text previews prove current membership, never the full
+                # prompt or unknown persistence. Preserve the null one-shot expiry.
+                text='a — */15 * * * * (recurring) [session-only]: o…\nb — 7,22,37,52 * * * * (one-shot): t…'
+                write(result('CronList',{},text))
+                proven=json.loads(json.dumps(raw))
+                proven['native_source']['job_evidence']={j['id']:{k:dict(value=j[k],source='verified source task record')
+                    for k in ('prompt','timezone','expires_at','stop_when','durable')} for j in jobs}
+                out=native.validate(proven,path,42,SID,'fid',mark,now)
+                self.assertIsNone(out['jobs'][1]['expires_at'])
+                proven['native_source']['job_evidence']['b'].pop('durable')
+                with self.assertRaises(ValueError): native.validate(proven,path,42,SID,'fid',mark,now)
+                proven['native_source']['job_evidence']['b']['durable']=dict(value=True,source='persistent task')
+                with self.assertRaises(ValueError): native.validate(proven,path,42,SID,'fid',mark,now)
+                write(records)
+                # A persisted task is not a proven execution owner. Even an
+                # exact record must refuse without changing it or the source.
+                home=(Path(d)/'home').resolve(); (home/'.claude').mkdir(parents=True)
+                store=home/'.claude/scheduled_tasks.json'
+                durable=dict(id='b',cron=jobs[1]['cron'],prompt=jobs[1]['prompt'],createdInProject=str(home))
+                store.write_text(json.dumps([durable]))
+                kept=json.loads(json.dumps(raw)); kept['jobs'][1]['durable']=True
+                kept['native_source']['durable_store']=str(store)
+                write(result('CronList',{},kept['jobs']))
+                with patch.dict(os.environ,HOME=str(home)):
+                    with self.assertRaisesRegex(ValueError,'execution owner'):
+                        native.validate(kept,path,42,SID,'fid','kind=cron id=a@%d' % (now+4000),now)
+                    self.assertEqual(json.loads(store.read_text()),[durable])
+                    store.write_text('[]')
+                    # A current CronList reporting durable also refuses even if
+                    # its table disappeared; no missing-file bypass.
+                    with self.assertRaisesRegex(ValueError,'execution owner'):
+                        native.validate(kept,path,42,SID,'fid',mark,now)
+                write(records)
+                with self.assertRaises(ValueError): native.validate(raw,path,43,SID,'fid',mark,now)
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'other',mark,now)
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid','',now)
+                write(records+result('CronDelete',{'id':'b'},{}))
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
+                write(result('CronList',{},jobs,now-120))
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
+                write(result('CronList',{},jobs,now-400))
+                with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid',mark,now)
+
+
 class LoopTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fleet-loop-test-')
@@ -63,6 +197,38 @@ class LoopTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
 
     def read(self): return json.loads(self.path.read_text())
+
+    def test_two_cron_jobs_deliver_independently_once_and_preserve_expiry(self):
+        now = 1792022400
+        jobs = [dict(id='a',prompt='patrol one',cron='*/15 * * * *',timezone='UTC',expires_at=now+3600,stop_when='done'),
+                dict(id='b',prompt='patrol two',cron='7,22,37,52 * * * *',timezone='UTC',expires_at=None,stop_when='',recurring=False,durable=False)]
+        self.r['schedule'] = loop.spec(dict(jobs=jobs), now=now)
+        loop.save(self.path, self.r)
+        loop.dispatch(self.path, now=now+420)
+        self.assertEqual(len(self.messages),1)
+        self.assertIn('patrol two',self.messages[0]['input'][0]['text'])
+        self.assertNotIn('patrol one',self.messages[0]['input'][0]['text'])
+        loop.dispatch(self.path, now=now+421)
+        self.assertEqual(len(self.messages),1)
+        loop.dispatch(self.path, now=now+900)
+        self.assertEqual(len(self.messages),2)
+        self.assertIn('patrol one',self.messages[1]['input'][0]['text'])
+        self.assertEqual([j['next_run_at'] for j in self.read()['schedule']['jobs']], [now+1800,None])
+        loop.dispatch(self.path, now=now+1320)
+        self.assertEqual(len(self.messages),2)  # one-shot never runs a second time
+        loop.dispatch(self.path, now=now+3601)
+        self.assertEqual(len(self.messages),2)
+        self.assertEqual(self.read()['status'],'complete')
+
+    def test_ambiguous_multi_cron_delivery_is_never_resent(self):
+        now=1792022400
+        self.r['schedule']=loop.spec(dict(jobs=[dict(id='a',prompt='patrol',cron='* * * * *',timezone='UTC',expires_at=now+3600,stop_when='done')]),now=now)
+        loop.save(self.path,self.r)
+        self.fail_send=True
+        loop.dispatch(self.path,now=now+60)
+        loop.dispatch(self.path,now=now+120)
+        self.assertEqual(len(self.messages),1)
+        self.assertEqual(self.read()['status'],'paused')
 
     def test_exact_thread_delivery_and_no_catchup_burst(self):
         loop.dispatch(self.path, now=10000)
@@ -309,55 +475,7 @@ class BridgeTest(unittest.TestCase):
             manifest.write_text(json.dumps(data))
             schedule.write_text(json.dumps({'prompt': '检查 CI', 'interval_seconds': 3600, 'next_run_at': 0}))
             codex = fake / 'codex'
-            codex.write_text('''#!/usr/bin/env python3
-import base64,hashlib,json,os,pathlib,socket,struct,subprocess,sys,threading,time
-root=pathlib.Path(os.environ['LOOP_TEST_ROOT']);args=sys.argv[1:]
-if 'app-server' in args:
- assert os.environ['FLEET_CODEX_REMOTE']==args[args.index('--listen')+1]
- (root/'server-argv.json').write_text(json.dumps(args));(root/'server-pid').write_text(str(os.getpid()))
- sock=socket.socket(socket.AF_UNIX);sock.bind(args[args.index('--listen')+1].removeprefix('unix://'));sock.listen()
- def connection(c):
-  def take(n):
-   b=b''
-   while len(b)<n:
-    x=c.recv(n-len(b))
-    if not x:raise EOFError()
-    b+=x
-   return b
-  try:
-   header=b''
-   while not header.endswith(b'\\r\\n\\r\\n'):header+=take(1)
-   key=next(x.split(b':',1)[1].strip() for x in header.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:'))
-   accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
-   c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
-   while True:
-    a,b=take(2);n=b&127
-    assert b&128
-    if n==126:n=struct.unpack('!H',take(2))[0]
-    elif n==127:n=struct.unpack('!Q',take(8))[0]
-    mask=take(4);body=take(n);q=json.loads(bytes(v^mask[i%4] for i,v in enumerate(body)))
-    method=q['method']
-    if 'id' not in q:continue
-    if method=='initialize':result={}
-    elif method=='thread/read':result={'thread':{'id':'12345678-1234-1234-1234-123456789abc','cwd':str(root),'status':{'type':'idle'}}}
-    elif method=='turn/start':
-     (root/'delivered.json').write_text(json.dumps(q['params']));result={'turn':{'id':'native-turn'}}
-    else:raise RuntimeError(method)
-    payload=json.dumps({'id':q['id'],'result':result}).encode();n=len(payload)
-    c.sendall(bytes([129,n]) + payload if n<126 else bytes([129,126])+struct.pack('!H',n)+payload)
-  except (EOFError,ConnectionError):pass
-  finally:c.close()
- while True:
-  c,_=sock.accept();threading.Thread(target=connection,args=(c,),daemon=True).start()
-else:
- assert args[:1]==['--remote']
- assert args[1]==os.environ['FLEET_CODEX_REMOTE']
- os.environ['CODEX_THREAD_ID']='12345678-1234-1234-1234-123456789abc'
- subprocess.run([sys.executable,os.environ['LOOP_TEST_SCRIPT'],'bind'],check=True)
- end=time.monotonic()+10
- while not (root/'delivered.json').exists() and time.monotonic()<end:time.sleep(.1)
- assert (root/'delivered.json').exists()
-''')
+            __import__('shutil').copyfile(Path(__file__).with_name('fleet-loop-fake-codex.py'), codex)
             tmux = fake / 'tmux'
             tmux.write_text('''#!/usr/bin/env python3
 import json,os,sys
