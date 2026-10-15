@@ -687,6 +687,8 @@ fleet_ui_t() {
     en:view_draft_limit) printf 'Draft limit: 4000 characters; not submitted' ;;
     zh:view_draft_save_failed) printf '草稿未能保存到磁盘' ;;
     en:view_draft_save_failed) printf 'Could not save draft to disk' ;;
+    zh:view_draft_agent_gone) printf '所选 Agent 已不可用；请重新选择' ;;
+    en:view_draft_agent_gone) printf 'Selected agent unavailable; choose again' ;;
     zh:view_draft_repo_gone) printf '所选仓库已不可用；请重新选择' ;;
     en:view_draft_repo_gone) printf 'Selected repository unavailable; choose again' ;;
     zh:view_draft_empty) printf '请先写任务，或选择开空白会话' ;;

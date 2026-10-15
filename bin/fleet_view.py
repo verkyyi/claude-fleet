@@ -2762,7 +2762,9 @@ def bolt_usable(st):
 
 
 def bolt_agent(st):
-    a = st["agent"] or bolt_dflt(st)
+    if st["agent"] is not None:
+        return st["agent"]    # a saved explicit selection is never silently reassigned
+    a = bolt_dflt(st)
     use = bolt_usable(st)
     return a if a in use else use[0]
 
@@ -3285,6 +3287,8 @@ def _popup(screen, qo, vid, client, forward=""):
             elif mode == "compose":
                 if bolt["ready"] and bolt["repo"] is None:
                     bolt["repo"] = bolt_repo(bolt, draft.editor.text)
+                if bolt["ready"] and bolt["agent"] is None:
+                    bolt["agent"] = bolt_agent(bolt)
                 title = say("view_composer")
                 editor_width = inner_w - 1
                 editor_height = max(1, min(4, box.h - 7))
@@ -3491,6 +3495,10 @@ def _popup(screen, qo, vid, client, forward=""):
                         repo = bolt_repo(bolt, text)
                         if repo and repo not in bolt["g"].get("repos", []):
                             msg = say("view_draft_repo_gone")
+                            continue
+                        missing = bolt["g"].get("missing") or {}
+                        if bolt_agent(bolt) in missing:
+                            msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
                             continue
                         argv, title, where = bolt_argv(qo, vid, client, bolt, text)
                         busy = {"title": title, "where": where, "draft": draft.control == 3}

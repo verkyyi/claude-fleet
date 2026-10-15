@@ -46,7 +46,8 @@ def fixture(directory):
     v.tm = lambda *a, **k: (0, "")
     v.banner = lambda *a: ""
     v.hub_stale = lambda *a: False
-    v.grid_read = lambda *a: dict(repos=["acme/web", "acme/app"], last="acme/web", agent="codex", missing={}, blocked=[])
+    v.grid_read = lambda *a: dict(repos=["acme/web", "acme/app"], last="acme/web", agent="codex",
+                                missing={"codex": "Codex unavailable"} if (root / "nomodel").exists() else {}, blocked=[])
     v.facts = lambda f, e: dict(pin=False, life="", keep=False, agent="codex", fid=e["target"], pr="", needs="ask", pane="%1")
 
     def log(payload):
@@ -269,6 +270,21 @@ class NativeTests(unittest.TestCase):
         self.wait("来源已失效")
         self.assertEqual(len(self.actions()), count)
         self.evidence.append("PASS F6 changes selection without retarget; Tab explicitly retargets; vanished source refuses without action")
+
+    def test_saved_agent_unavailable_refuses_instead_of_switching(self):
+        self.literal("task")
+        self.keys("Enter")
+        self.wait("Agent ‹Codex›")
+        self.keys("Escape", "Escape")
+        self.wait("POPUP-CLOSED")
+        (self.root / "nomodel").touch()
+        self.start()
+        self.keys("Up", "Enter")
+        self.wait("Agent ‹Codex›")
+        self.keys("Tab", "Tab", "Tab", "Enter")
+        self.wait("Codex unavailable")
+        self.assertEqual(self.actions(), [])
+        self.assertEqual(self.draft()["agent"], "codex")
 
     def test_paste_never_activates_controls(self):
         self.keys("Up", "Enter")
