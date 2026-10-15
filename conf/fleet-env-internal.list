@@ -546,6 +546,7 @@ FLEET_PULLBACK_RETIRED_DIR         seam: where fleet_win_retire marks the fleet'
 FLEET_PICK_MODEL                   handoff: the model an account pick is evaluated for
 FLEET_PLUGIN_NAME                  knob: the Claude plugin namespace fleet commands resolve under
 FLEET_POOL_CLAIM_REFILL_DELAY      knob: seconds a node claim (`claim --agent`) waits before refilling its slot (scratch-pool.sh, 5, #2233)
+FLEET_POOL_REFILL_RETRY_DELAY      knob: initial backoff for guarded scheduled pool retries (15 seconds, doubled to at most 60; at most four passes, scratch-pool.sh)
 FLEET_POOL_DISK_PROBE_CMD          seam: prints a fake free-GB reading for the pool's grow gate (scratch-pool.sh, #2233)
 FLEET_POOL_LOAD_PER_CORE           knob: load per core above which a warm-pool slot only shrinks (scratch-pool.sh, 1, #2233)
 FLEET_POOL_LOCK_WAIT               knob: seconds a non-tick ensure waits for a slot another ensure is warming (scratch-pool.sh, 300, #2233)
