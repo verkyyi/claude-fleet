@@ -9,8 +9,8 @@
 #                  a row with none (absent, 0, not a number) is byte for byte as
 #                  before
 #   B. the sidebar — tmux-dashboard-rows.sh --sidebar carries it as field 19's
-#                  sixth part (`left|band|ts|model|effort|tokens`), only when any;
-#                  fleet-sidebar.py's ctx_of reads it as tokens_today
+#                  sixth part (`left|band|ts|model|effort|tokens`), only when any
+#                  (the old client's sidebar that read it went with it, #3008)
 #   C. the top line and ⌘P — fleet-topbar.py says 「今天 123 万」 / 「1.2M today」
 #                  on every width, nothing without it; fleet_view.tokens_short is
 #                  the hub page's fmtCompact
@@ -95,20 +95,6 @@ if [ -n "$REAL_TMUX" ]; then
 else
   echo 'session-tokens selftest: tmux absent — leg B skipped'
 fi
-out=$(python3 - "$BIN" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1] + "/fleet-sidebar.py")
-sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
-assert sb.ctx_of("|||||1234567") == {"tokens_today": 1234567}, sb.ctx_of("|||||1234567")
-assert sb.ctx_of("40|ok|1800000000|Opus 5.5|high|555")["tokens_today"] == 555
-assert "tokens_today" not in sb.ctx_of("40|ok|1800000000|Opus 5.5|high")
-assert "tokens_today" not in sb.ctx_of("40|ok|1800000000|Opus 5.5|high|0")
-assert sb.ctx_of("") == {}
-print("ok")
-PY
-)
-eq "B: ctx_of reads tokens_today, none from a five-part or 0 field" "ok" "$out"
-
 # ============================================================================
 # C. the top line and ⌘P
 # ============================================================================
@@ -140,5 +126,5 @@ eq "C: tokens_short prints as the hub page's fmtCompact" "ok" "$out"
 eq "C: the ⌘P row's phrase (zh)" "今天 1.23 万 token" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t view_today_fmt '1.23 万')"
 eq "C: the ⌘P row's phrase (en)" "1.2M tokens today" "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t view_today_fmt 1.2M)"
 
-printf 'selftest PASS: session-tokens — 每个会话今天用了多少 on the hub cache, the sidebar, the top line and ⌘P (%s checks, #3377)\n' "$CHECKS"
+printf 'selftest PASS: session-tokens — 每个会话今天用了多少 on the hub cache, the rows, the top line and ⌘P (%s checks, #3377)\n' "$CHECKS"
 exit 0

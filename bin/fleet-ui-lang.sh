@@ -1840,8 +1840,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_switch_zoom)       printf %s 'zoom the session on the right; again to restore' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
-    zh:keys_switch_new)        printf %s '新会话：在家里的机器开一个不绑仓库的会话，光标就在它的输入框；FLEET_COMPOSE=1 时是右边的写作区' ;;
-    en:keys_switch_new)        printf %s 'new session: a no-repo session on your home machine, the cursor in its input; with FLEET_COMPOSE=1 the writing area on the right' ;;
+    zh:keys_switch_new)        printf %s '新会话：在家里的机器开一个不绑仓库的会话，光标就在它的输入框' ;;
+    en:keys_switch_new)        printf %s 'new session: a no-repo session on your home machine, the cursor in its input' ;;
     zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;

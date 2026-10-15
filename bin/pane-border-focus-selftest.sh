@@ -3,9 +3,9 @@
 #
 # Focus is the cursor on the input line (#1756), so the split between the task
 # list and the worker, and the top border line, keep ONE colour whichever pane
-# holds the keys. For every conf that draws pane borders — the client's
-# conf/tmux-shell.conf, the node's conf/tmux-attention.conf, and the hub's
-# fleetclient mirror of the client conf — this asserts:
+# holds the keys. For every conf that draws pane borders — the node's
+# conf/tmux-attention.conf (the old client's went with it, issue #3008) — this
+# asserts:
 #
 #   • pane-active-border-style is the same as pane-border-style
 #   • pane-border-indicators is off (tmux's half-coloured split, 3.3+)
@@ -22,7 +22,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
-CONFS="conf/tmux-shell.conf conf/tmux-attention.conf"
+CONFS="conf/tmux-attention.conf"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # the value of `set -g <opt> <value>` (outer quotes stripped); last one wins, as in tmux
