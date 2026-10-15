@@ -550,6 +550,8 @@ class Control:
         if action == "worker_transfer":
             # By identity or key alike, as a switch (issue #4184).
             return self.execute_transfer(fleet, key, params["to"])
+        if action == "worker_reap":
+            return self.execute_reap(fleet, key)
         if action == "worker_message" and actor == FEEDBACK_ACTOR and params["text"].startswith(FEEDBACK_PREFIX):
             return self.execute_feedback(fleet, key, params["worker_id"], params["text"])
         if is_identity(key):
@@ -561,8 +563,6 @@ class Control:
             key = matches[0]["key"]
         if action == "worker_answer":
             return self.execute_answer(fleet, key, params["answer"], actor)
-        if action == "worker_reap":
-            return self.execute_reap(fleet, key)
         if action == "worker_message":
             if not key.rsplit(":", 1)[-1].startswith("issue-"):
                 raise Unattempted("INVALID_ARGUMENT", "A scratch session has no issue channel to message")
@@ -816,7 +816,8 @@ class Control:
         the machine that asked (dash-reap.sh's hub branch, fleet_hub_reap)
         answers with exactly what a reap there would have."""
         matches, _ = self.target(fleet, key, "worker_reap")
-        code, output, err = self.adapter("reap", fleet["name"], key, timeout=300)
+        target = "fid:" + key if is_identity(key) else key
+        code, output, err = self.adapter("reap", fleet["name"], target, timeout=300)
         tokens = [l for l in output.decode("utf-8", "replace").splitlines()
                   if re.match(r"(reaped|skip|refused|failed|dispatched):", l)]
         token = tokens[-1].strip() if tokens else ""

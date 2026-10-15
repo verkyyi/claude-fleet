@@ -84,6 +84,8 @@ POD 重建验收还要保留客户端已有的自动 / 固定线路缓存，先�
 
 控制器的异步启动链路也要保留 `FLEET_USER_POD`：`fleet_control.Control.environment()` 同时用于 detached executor 和 adapter，只修 SSH 环境还不够。回归要在模拟高 CPU 下走真实控制器的异步 scratch 启动，确认个人 POD 放行、共享机器拒绝、显式 CPU hold 与严重内存压力仍拒绝；不能靠恰好低负载的一次实测认定已修复。其他准入覆盖参数和凭据仍不从调用者环境透传。
 
+无仓库会话的回收也属于验收：必须由客户端 `fleet close <wid> --yes` 正常完成，不能把 `fleet-worker-stop.sh fid:` 兜底成功当作客户端回收已通过。控制器应保留会话的唯一身份，不能把它改成空的工作树 key 后匹配所有无仓库会话；相同身份确实出现在两个窗口时仍应拒绝操作。
+
 ## 手动
 
 ```sh
