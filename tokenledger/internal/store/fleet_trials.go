@@ -592,3 +592,26 @@ func (s *Store) HandOffWash(pid, host string, at time.Time) (bool, error) {
 	}
 	return true, tx.Commit()
 }
+
+// ReclaimedTrialsHolding are the ended (reclaimed) trials that still hold a
+// managed login in a state the operator's remove takes — active, failed or
+// unknown (claude-fleet#4262): what the patrol washes after the fact.
+func (s *Store) ReclaimedTrialsHolding() ([]string, error) {
+	rows, err := s.write.Query(`SELECT DISTINCT t.principal FROM fleet_trials t
+		JOIN fleet_accounts a ON a.principal_id = t.principal
+		WHERE t.state = ? AND a.op <> ? AND a.state IN (?, ?, ?) ORDER BY t.principal`,
+		TrialReclaimed, AccountOpLogin, AccountActive, AccountFailed, AccountUnknown)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

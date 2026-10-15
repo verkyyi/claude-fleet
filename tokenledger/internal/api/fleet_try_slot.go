@@ -112,6 +112,9 @@ var (
 	trialSeedGiveUp = 60 * time.Second
 	// trialPurgeEvery is how often the expired conversations are deleted.
 	trialPurgeEvery = time.Hour
+	// trialRegiveEvery: how often one ended trial's leftover login is sent
+	// back again (claude-fleet#4262).
+	trialRegiveEvery = 10 * time.Minute
 )
 
 func (s *Server) trialHiddenSecs() int {
@@ -135,6 +138,10 @@ type trialSlotState struct {
 	inflight map[string]bool
 	sweeping bool
 	purgedAt time.Time
+	// regiven: when an ended trial's leftover login was last sent back
+	// (SweepTrialStragglers), so a remove that keeps failing is retried
+	// every trialRegiveEvery, not every patrol.
+	regiven map[string]time.Time
 }
 
 func (t *trialSlotState) begin(pid string) bool {
@@ -417,6 +424,9 @@ func (s *Server) SweepTrialSlots(now time.Time) {
 		}
 	}
 	s.SweepTrials(now)
+	if s.SweepTrialStragglers(now) {
+		s.dispatchAccounts()
+	}
 	placed, err := s.Store.PlacedTrials()
 	if err != nil {
 		log.Printf("fleet: trial patrol: %v", err)
@@ -704,4 +714,18 @@ func (s *Server) handleTryPause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a)
+}
+
+// regive says pid's leftover login may be sent back at now, and marks it.
+func (t *trialSlotState) regive(pid string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.regiven == nil {
+		t.regiven = map[string]time.Time{}
+	}
+	if at, ok := t.regiven[pid]; ok && now.Sub(at) < trialRegiveEvery {
+		return false
+	}
+	t.regiven[pid] = now
+	return true
 }

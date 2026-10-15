@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -248,26 +249,9 @@ func (tw *turnWatch) Close() error {
 // endTrial gives t's logins back and ends it for reason; false when a
 // remove failed (tried again next sweep). sent says a remove went out.
 func (s *Server) endTrial(t store.Trial, reason string, now time.Time) (ok, sent bool) {
-	as, err := s.Store.FleetAccounts(t.Principal)
-	if err != nil {
-		log.Printf("fleet: trial end: accounts of %s: %v", t.Principal, err)
-		return false, false
-	}
 	// The conversation goes apart first, sealed to the person (#4060).
 	convo := s.trialKeepConvo(t.Principal, now)
-	ok = true
-	for _, a := range as {
-		if a.State != store.AccountActive || !a.Managed() {
-			continue
-		}
-		if err := s.changeAccount(FleetAccountRequest{Action: "remove", PrincipalID: t.Principal, Hostname: a.Hostname}, trialInviter); err != nil {
-			log.Printf("fleet: trial end: remove %s on %s: %v", t.Principal, a.Hostname, err)
-			ok = false
-			continue
-		}
-		sent = true
-		s.trialGiveBack(t.Principal, a, now)
-	}
+	logins, ok, sent := s.trialGiveBackAll(t.Principal, now)
 	if !ok {
 		return false, sent
 	}
@@ -282,9 +266,97 @@ func (s *Server) endTrial(t store.Trial, reason string, now time.Time) (ok, sent
 		return false, sent
 	}
 	_ = s.Store.HubAudit(trialInviter, "trial.release", t.Principal, "ok",
-		"reason="+reason+" "+convo+" · "+trialEndNote[reason], now)
-	log.Printf("fleet: trial of %s released (%s, %s)", t.Principal, reason, convo)
+		"reason="+reason+" "+convo+" "+logins+" · "+trialEndNote[reason], now)
+	log.Printf("fleet: trial of %s released (%s, %s, %s)", t.Principal, reason, convo, logins)
 	return true, sent
+}
+
+// trialWashable says a's login goes back when its trial ends: every managed
+// row the operator's remove takes — a failed or unknown one too
+// (claude-fleet#4262: a seat whose last op had failed was skipped, the trial
+// released anyway, and the login was never washed — the machine's spares ran
+// out). A row with an op in flight, or already going, is not touched.
+func trialWashable(a store.FleetAccount) bool {
+	if !a.Managed() {
+		return false
+	}
+	switch a.State {
+	case store.AccountActive, store.AccountFailed, store.AccountUnknown:
+		return true
+	}
+	return false
+}
+
+// trialGiveBackAll sends every washable login pid holds back through the
+// operator's remove (a recycling machine's wash), each handed to a spare
+// holder of its own. logins is the audit's record of what each one did —
+// logins=<login>@<machine>:<state before>→<state now>, or logins=none.
+func (s *Server) trialGiveBackAll(pid string, now time.Time) (logins string, ok, sent bool) {
+	as, err := s.Store.FleetAccounts(pid)
+	if err != nil {
+		log.Printf("fleet: trial end: accounts of %s: %v", pid, err)
+		return "", false, false
+	}
+	ok = true
+	var parts []string
+	for _, a := range as {
+		if !trialWashable(a) {
+			continue
+		}
+		if err := s.changeAccount(FleetAccountRequest{Action: "remove", PrincipalID: pid, Hostname: a.Hostname}, trialInviter); err != nil {
+			log.Printf("fleet: trial end: remove %s on %s: %v", pid, a.Hostname, err)
+			parts = append(parts, a.Login+"@"+a.Hostname+":"+a.State+"→kept(remove failed)")
+			ok = false
+			continue
+		}
+		sent = true
+		to := store.AccountRemovePending
+		if after, err := s.Store.FleetAccounts(pid); err == nil {
+			for _, b := range after {
+				if strings.EqualFold(b.Hostname, a.Hostname) {
+					to = b.State
+				}
+			}
+		}
+		s.trialGiveBack(pid, a, now)
+		parts = append(parts, a.Login+"@"+a.Hostname+":"+a.State+"→"+to)
+	}
+	if len(parts) == 0 {
+		return "logins=none", ok, sent
+	}
+	return "logins=" + strings.Join(parts, ","), ok, sent
+}
+
+// SweepTrialStragglers washes what an ended trial still holds: a reclaimed
+// trial with a login left on it (claude-fleet#4262 — given back before the
+// failed row was washable, or a remove that went out and was answered
+// failed) has it washed now, with one trial.regive audit row. A converted
+// trial keeps its login (it is theirs); a placed one is the patrol's.
+func (s *Server) SweepTrialStragglers(now time.Time) (sent bool) {
+	ended, err := s.Store.ReclaimedTrialsHolding()
+	if err != nil {
+		log.Printf("fleet: trial stragglers: %v", err)
+		return false
+	}
+	for _, pid := range ended {
+		if !s.trialSlotSt.regive(pid, now) || !s.trialSlotSt.begin(pid) {
+			continue
+		}
+		logins, ok, did := s.trialGiveBackAll(pid, now)
+		s.trialSlotSt.end(pid)
+		sent = sent || did
+		if logins == "logins=none" {
+			continue
+		}
+		result := "ok"
+		if !ok {
+			result = "failed"
+		}
+		_ = s.Store.HubAudit(trialInviter, "trial.regive", pid, result,
+			logins+" · 试用已结束，留下的登录补洗 · an ended trial's login washed", now)
+		log.Printf("fleet: ended trial of %s still held a login: %s", pid, logins)
+	}
+	return sent
 }
 
 // SweepTrials gives back every spent trial's login: fleet.trial.max_secs of
