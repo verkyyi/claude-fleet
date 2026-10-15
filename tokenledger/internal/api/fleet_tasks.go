@@ -149,7 +149,7 @@ func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) 
 		}
 		// A warm start's issue is filed after it opened (claude-fleet#2234):
 		// the session's key says it once it is bound.
-		if t.Repo != "" && t.Issue == "" {
+		if t.AuthorityVersion == 0 && t.Repo != "" && t.Issue == "" {
 			key, _ := w["key"].(string)
 			if m := taskIssueKeyRE.FindStringSubmatch(key); m != nil {
 				if rec, err := s.Store.UpdateFleetTask(t.ID, store.FleetTaskUpdate{SessionKey: key,
@@ -173,6 +173,15 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, FleetTasksPath), "/")
 	if rest != "" {
 		ref, what, _ := strings.Cut(rest, "/")
+		if what == "" && r.Method == http.MethodGet {
+			t, err := s.ownTask(p, ref)
+			if err != nil {
+				httpError(w, http.StatusNotFound, "no such task of yours")
+				return
+			}
+			writeJSON(w, http.StatusOK, taskView{FleetTask: t, Live: s.taskLive(&t, map[string][]map[string]any{})})
+			return
+		}
 		if what != "issue" || r.Method != http.MethodPost {
 			httpError(w, http.StatusNotFound, "POST "+FleetTasksPath+"/<T>/issue")
 			return
@@ -262,6 +271,9 @@ func (s *Server) ownTask(p fleetPrincipal, ref string) (store.FleetTask, error) 
 // the task's session's own fleet first, so it can bind it there — and hung on
 // the record. A record that already has one answers it unchanged.
 func (s *Server) taskFileIssue(ctx context.Context, p fleetPrincipal, t store.FleetTask, repo string, now time.Time) (store.FleetTask, error) {
+	if t.AuthorityVersion != 0 {
+		return store.FleetTask{}, fault("CONFLICT", "authoritative tasks require a fenced ticket link")
+	}
 	if t.Issue != "" {
 		return t, nil
 	}

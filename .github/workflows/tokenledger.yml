@@ -170,8 +170,10 @@ jobs:
           set -o pipefail
           go test -count=1 -v -run '^TestMoveDatabaseSpeed$' -timeout 15m ./internal/store/ 2>&1 | tee /tmp/move-speed.log | grep -E 'usage_events|indexes|moved|source:|--- |^(ok|FAIL)'
           { echo '### db migrate timing (1M rows)'; echo; echo '```'; grep -E 'usage_events|indexes|moved|source:' /tmp/move-speed.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Keep successful fixture output too: task-contract evidence must name
+      # the tested generation/provider/result, not reconstruct a JSON example.
       - name: upload Postgres test log
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pg-log-${{ matrix.part }}
