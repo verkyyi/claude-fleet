@@ -325,18 +325,25 @@ PY
 
 # ---- H: the old home's archive is off the clock ----
 fixture
+# The tar is held until the run is back (a gate file, not a clock: a slow
+# macOS runner took 3s for the run alone — issue #4275). A run that waited for
+# the archive comes back only after the hold's own 30s bound, tar done.
 REAL_TAR=$(command -v tar)
+rm -f "$W/tar-go"
 cat > "$W/shim/tar" <<EOF
 #!/bin/sh
-sleep 3; exec "$REAL_TAR" "\$@"
+n=0; while [ ! -e "$W/tar-go" ] && [ "\$n" -lt 300 ]; do sleep 0.1; n=\$((n + 1)); done
+exec "$REAL_TAR" "\$@"
 EOF
 chmod +x "$W/shim/tar"
 t0=$(date +%s)
 FLEET_LOGIN_RESET_ASIDE='' run "$L" --apply
 t1=$(date +%s)
 [ "$(last2)" = 'reset: clean|credsep: separated' ] && ok 'H clean' || { tail -8 "$W/out"; fail "H: $(last2)"; }
-[ $((t1 - t0)) -lt 3 ] && ok "H the run did not wait for the archive ($((t1 - t0))s)" || fail "H the run waited for the archive ($((t1 - t0))s)"
-n=0; while [ "$n" -lt 60 ] && [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ]; do sleep 0.2; n=$((n + 1)); done
+[ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -z "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
+  && ok "H the run did not wait for the archive ($((t1 - t0))s, tar still held)" || fail "H the run waited for the archive ($((t1 - t0))s)"
+touch "$W/tar-go"
+n=0; while [ "$n" -lt 150 ] && [ -n "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ]; do sleep 0.2; n=$((n + 1)); done
 rm -f "$W/shim/tar"
 [ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && [ -n "$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null)" ] \
   && ok 'H the detached job archived and deleted the old home' || fail 'H the detached job did not finish'
