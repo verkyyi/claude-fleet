@@ -57,6 +57,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 4
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -186,6 +188,18 @@ raw()    { bash "$BIN/dash-raw-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"; }
 inpane() { local w="$1"; shift; TMUX="$SOCK,1,0" TMUX_PANE="$(opt "$w" pane_id)" "$@"; }
 strip()  { sed $'s/\x1b\\[[0-9;]*m//g'; }
 
+collect() {
+  FLEET_ACCOUNTS_DIR="$WORK/accounts" FLEET_NOTIFY_CMD="" GH_TTL=0 \
+    bash "$BIN/tmux-dash-collect.sh" >"$WORK/collect.out" 2>&1
+  bash "$BIN/tmux-pr-refresh.sh" >"$WORK/refresh.out" 2>&1
+}
+
+backlog() { FLEET_SESSION="$1" bash "$BIN/tmux-issues-rows.sh" all 2>/dev/null; }
+f14() { tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }' | tr '\n' ' '; }
+
+cmt() { local w="$1"; shift; inpane "$w" env -u FLEET_REPO FLEET_GH_WRITE_GAP=0 bash "$BIN/fleet-comment.sh" "$@" --note --body hi 2>"$WORK/cmt.err"; }
+
+if selftest_section 1; then
 # ==== setup: the second repo, with no gate ==========================================
 wake_file="$( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_state_dir "$BIN/.." )/wake"
 rm -f "$wake_file"; t0=$(date +%s)
@@ -222,6 +236,14 @@ hub_cwd() { HUB_SESSION="$1" HUB_PRINT_CMD=cwd bash "$BIN/hub-session.sh" 2>/dev
 [ "$(hub_cwd "$D")" = "$HOME" ] && ok "(z) a one-repo fleet's hub opens in \$HOME too — one road (#1941)" \
   || fail "(z) one-repo hub cwd [$(hub_cwd "$D")]"
 
+fi
+
+# Later sections need the same two-repo fixture, without repeating add/doctor.
+if [ "$SELFTEST_SECTION" = 2 ] || [ "$SELFTEST_SECTION" = 3 ]; then
+  mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
+  printf 'FLEET_REPO="o/beta"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$MB" > "$FLEET_CONF_DIR/fleets/$S/repos/o-beta.conf"
+fi
+if selftest_section 1 2 3; then
 # ==== spawn: #12 in both repos, a scratch in both, a no-repo session ================
 spawn 12 "$S" --repo o/alpha || fail "spawn A#12: $(cat "$WORK/err")"
 spawn 12 "$S" --repo o/beta  || fail "spawn B#12: $(cat "$WORK/err")"
@@ -233,8 +255,11 @@ raw --no-repo "$S"      || fail "no-repo: $(cat "$WORK/err")";   wN=$(newest "$S
 nsid=$(opt "$wN" @norepo_sid)
 for w in "$wA" "$wB" "$sA" "$sB" "$wN"; do wait_rec "$w" || { fail "spawn: $w never reached claude"; (cd "$(opt "$w" @worktree)" && inpane "$w" bash -x "$BIN/fleet-claude.sh" hi 2>&1 | tail -40) >&2; tmux display-message -p -t "$w" "#{pane_start_command}" >&2; exit 1; }; done
 
-# ==== (f) worktree-name clash =========================================================
 tA=$(opt "$wA" @worktree); tB=$(opt "$wB" @worktree)
+fi
+
+if selftest_section 1; then
+# ==== (f) worktree-name clash =========================================================
 [ "$tA" != "$tB" ] && ok "(f) A#12 and B#12 get distinct worktrees" || leak f "A#12 and B#12 share a worktree: $tA"
 registered "$MA" "$tA" && ok "(f) A#12's worktree registered to A" || leak f "A#12's worktree $tA not registered to A"
 registered "$MB" "$tB" && ok "(f) B#12's worktree registered to B" || leak f "B#12's worktree $tB not registered to B"
@@ -272,7 +297,6 @@ chk d "B's scratch key resolves to B's scratch" "$(fleet_win_for_key "$kS" "$S")
 # The pane's env carries no FLEET_REPO (the claim brief resolves it from @repo, never
 # exports it), so `--repo "$FLEET_REPO"` is `--repo ""`; fleet.conf's FLEET_REPO is the
 # fleet's FIRST repo, and falling back to it posted B's #12 onto A's #12.
-cmt() { local w="$1"; shift; inpane "$w" env -u FLEET_REPO FLEET_GH_WRITE_GAP=0 bash "$BIN/fleet-comment.sh" "$@" --note --body hi 2>"$WORK/cmt.err"; }
 chk c "B#12's bare comment lands on B" "$(cmt "$wB" 12)" "https://github.com/o/beta/issues/12#issuecomment-1"
 chk c "B#12's --repo \"\" comment lands on B" "$(cmt "$wB" 12 --repo '')" "https://github.com/o/beta/issues/12#issuecomment-1"
 chk c "A#12's bare comment lands on A" "$(cmt "$wA" 12)" "https://github.com/o/alpha/issues/12#issuecomment-1"
@@ -312,16 +336,14 @@ want=$(python3 -c 'import json,sys,uuid; print(uuid.uuid5(uuid.UUID(sys.argv[1])
 chk z "the one-repo fleet's UUID is unchanged" "$(fleet_uuid "$D") o/solo" "$want o/solo"
 chk z "…and equals its inventory fleet_id" "$invD" "$want o/solo"
 
+fi
+
+if selftest_section 2; then
 # ==== (a) PR/CI by branch name ==========================================================
 # The prmaps pr-refresh writes, one per repo: A's #12 merged, B's #12 open.
 git -C "$tA" rev-parse HEAD > "$GH_SHA_A"
 # One tick of each real daemon: the collector (sessmap, every window's git_<key>,
 # every hosted repo's issues cache) and pr-refresh (every hosted repo's prmap).
-collect() {
-  FLEET_ACCOUNTS_DIR="$WORK/accounts" FLEET_NOTIFY_CMD="" GH_TTL=0 \
-    bash "$BIN/tmux-dash-collect.sh" >"$WORK/collect.out" 2>&1
-  bash "$BIN/tmux-pr-refresh.sh" >"$WORK/refresh.out" 2>&1
-}
 collect
 dash() { FLEET_SESSION="$S" FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | tail -n +2 | strip; }
 # A row is found by its window id (field 2), never its name: since #1023 names carry
@@ -339,8 +361,6 @@ rN=$(row_of "$wN")
 hasnt a "the no-repo row shows no PR"  "$rN" "#"
 
 # ==== (h) collector/backlog/hub: `all`, the only view (#1034) ==========================
-backlog() { FLEET_SESSION="$1" bash "$BIN/tmux-issues-rows.sh" all 2>/dev/null; }
-f14() { tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }' | tr '\n' ' '; }
 chk h "backlog under all: both repos, bound #12s hidden" "$(backlog "$S" | f14)" "30|o/alpha 31|o/beta "
 has h "dash under all: A's scratch listed" "$(row_of "$sA")" "$(opt "$sA" window_name)"
 has h "dash under all: B's scratch listed" "$(row_of "$sB")" "$(opt "$sB" window_name)"
@@ -377,6 +397,14 @@ hasnt e "no pass reaped under B's MAIN" "$log" "PR #201"
 # (c) the backlog's bound map and the ledger: A#12 is free again, B#12 still bound.
 chk c "backlog after the merge: A#12 back, B#12 still bound" "$(backlog "$S" | f14)" "12|o/alpha 30|o/alpha 31|o/beta "
 
+fi
+
+if [ "$SELFTEST_SECTION" = 3 ]; then
+  # Cleanup is asserted by part 2; restore starts after A's window was reaped.
+  tmux kill-window -t "$wA"
+  collect
+fi
+if selftest_section 3; then
 # ==== (i) restore round-trip =============================================================
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 MAP="$FLEET_CONF_DIR/fleets/$S/restore.map"
@@ -434,6 +462,9 @@ ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sy
 print(f["fleet_id"] == str(uuid.uuid5(uuid.UUID(ctl.machine_id), c.canonical([f["name"], f["repo"], f["checkout"]]))))' "$FLEET_CONF_DIR" "$S") 2>&1)
 chk p "the 2-repo fleet's UUID still hashes its own repo only" "$fidS" True
 
+fi
+
+if selftest_section 4; then
 # ==== (n) adding a repo changes nothing for the sessions already there (issue #1943) ======
 # A fleet of ONE repo is not a mode: it is fleet_repos counting 1. So a second repo
 # arriving — or leaving again — must not move a single thing a session there is known
@@ -486,8 +517,10 @@ out=$(bash "$BIN/fleet-repo.sh" remove --session "$N" o/two 2>&1) || fail "(n) r
 settle; again=$(nsnap | nnorm)
 chk n "removing it again changes nothing either" "$again" "$before"
 
+fi
+
 # ==== the readout ===========================================================================
 n=0; for c in $LEAKS; do [ "$c" = z ] || [ "$c" = p ] || [ "$c" = n ] || n=$((n+1)); done   # z, p, n: not one of the nine
-printf 'leaks: %s/9 known ways work leaks across repos%s\n' "$n" "${LEAKS:+ (classes:$LEAKS)}"
+printf 'leaks: %s/9 known ways work leaks across repos (selected section)%s\n' "$n" "${LEAKS:+ (classes:$LEAKS)}"
 [ "$FAILS" = 0 ] && { printf 'PASS multirepo-e2e-selftest\n'; exit 0; }
 printf '%s failure(s)\n' "$FAILS" >&2; exit 1

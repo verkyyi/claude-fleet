@@ -48,6 +48,8 @@
 #      «no question, no row» — drill 30 read that as words sent to the old session
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 2
 DRILL="$BIN/fleet-onboard-drill.sh"
 FAILS=0
 ok() { printf 'ok   %s\n' "$1"; }
@@ -203,6 +205,7 @@ drill() {
     FLEET_DRILL_OPENED_SECS=10 "$@"
 }
 
+if selftest_section 1; then
 # --- A: the session on THIS machine, restarted here ---------------------------
 NH="$T/homes/odnode$ID"; node "$NH"
 start_client "$NH" "$THIS"
@@ -315,6 +318,9 @@ else bad "D: exit $rc: $(printf '%s' "$out" | head -n 3)"; fi
 out=$(drill bash "$DRILL" --login drill-x1 --home mac-b 2>&1); rc=$?
 [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q 'mints a drill person' && ok 'D: --home with no --invite needs a drill<x> login' || bad "D: login: exit $rc: $out"
 
+fi
+
+if selftest_section 2; then
 # --- E/F: the thin client's road, the real fleet-thin.py key path ---------------
 # The home: an isolated server (-S) with the fleet `fl`, the 看台 key tables of
 # conf/tmux-view.conf and the panel's environment; its first session 我的会话.
@@ -480,6 +486,8 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
 else
   bad "E: the real thin client did not come up in the drill pane: $(TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill 2>/dev/null | sed '/^ *$/d' | tail -n 5 | tr '\n' '|')"
   thin_down
+fi
+
 fi
 
 # --- G: the judge on canned screens ----------------------------------------------

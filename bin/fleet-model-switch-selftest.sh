@@ -36,6 +36,8 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 3
 SCRIPT="$BIN/fleet-model-switch.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
@@ -291,9 +293,11 @@ spawn_worker() {
 }
 
 tmux -L "$LBL" new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
-spawn_worker walled    Fable "Fable 5.1"; W_OK="$WID"
+initial_model="Opus 5"
+selftest_section 1 && initial_model="Fable 5.1"
+spawn_worker walled    Fable "$initial_model"; W_OK="$WID"
 spawn_worker busy      Fable "Fable 5.1"; W_BUSY="$WID"
-spawn_worker stuck     Fable "Fable 5.1"; W_STUCK="$WID"
+spawn_worker stuck     Fable "$initial_model"; W_STUCK="$WID"
 spawn_worker recovered Fable "Opus 5";    W_DONE="$WID"
 : "$W_DONE"
 NOWS=$(date +%s)
@@ -314,6 +318,7 @@ sleep 1
 
 RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1; }
 
+if selftest_section 1; then
 # --- --dry-run touches nothing ------------------------------------------------
 out=$(RUN --capped --model opus --dry-run)
 ok; has 'would:' "$out" || fail "--dry-run should print a plan" "$out"
@@ -370,6 +375,12 @@ ok; has 'tok-walled' "$inbox" || fail "the auth frame should carry the session's
 ok; has '/model' "$(cat "$WORK/typed.walled")" || fail "sanity: keystrokes are recorded"
 ok; grep -q 'cross-session-message' "$WORK/typed.walled" && fail "the NUDGE must never be typed into the pane"
 
+fi
+
+if [ "$SELFTEST_SECTION" = 2 ]; then
+  "$BIN/fleet-account.sh" model-limited acctA fable 'reached your Fable limit' >/dev/null 2>&1
+fi
+if selftest_section 2; then
 # --- a cap the LEDGER knows but the scrollback has lost ----------------------
 # The banner is ephemeral: it scrolls past $SCROLL, and a session that was merely
 # IDLE when the cap landed never printed one at all. The (account, model) ledger
@@ -493,6 +504,9 @@ RUN --capped --model opus --dry-run >/dev/null
 [ ! -f "$TRACEF" ] || fail "the breadcrumb must be opt-in (no FLEET_MODEL_SWITCH_TRACE, no file)"
 ok
 
+fi
+
+if selftest_section 3; then
 # A cap recorded during this sweep must invalidate an earlier cached miss. Put a
 # banner-less window before AND after the window that discovers the cap, with an
 # empty ledger. Only the earlier one waits for the next sweep; the later one must
@@ -578,6 +592,8 @@ tmux -L "$LBL" set-window-option -t "$W_STALE" @mod_alive "$(( $(date +%s) - 600
 sleep 1
 RUN --model opus "$W_STALE" >/dev/null
 ok; has '/model opus' "$(cat "$WORK/typed.stalemod")" || fail "a stale mod beat must fall back to typing /model" "$(cat "$WORK/typed.stalemod")"
+
+fi
 
 # --- panels and the hub are never touched ------------------------------------
 eq "the dash panel was never typed into" "" "$(cat "$WORK/typed.dash" 2>/dev/null)"

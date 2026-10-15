@@ -29,6 +29,8 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 3
 SCRIPT="$BIN/fleet-migrate.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
@@ -237,6 +239,7 @@ TM set-window-option -t "$w1" @epic 'acme/repo#7'
 sleep 1.5
 diag() { printf 'windows: %s\nlaunched: %s\ntyped: %s\n' "$(TM list-windows -t "$SESS" -F '#{window_id}:#{window_name}' | tr '\n' ' ')" "$(cat "$WORK/launched" 2>/dev/null)" "$(cat "$WORK/typed" 2>/dev/null)"; }
 
+if selftest_section 1; then
 # --- whoami: token truth (A) beats a wrong stamp, and heals it
 TM set-window-option -t "$w1" @cc_account acctB
 ok; [ "$(bash "$SCRIPT" whoami --session "$SESS" "$w1")" = acctA ] || fail "whoami must read the token (acctA) not the stamp (acctB)"
@@ -491,6 +494,9 @@ ok; [ "$(sed -n '1p' "$WORK/manual-env")" = acctA ] || fail 'launcher must be pi
 ok; sed -n '2p' "$WORK/manual-env" | grep -q '"agent":"claude","label":"acctA"' || fail 'launcher must receive the Claude target binding'
 ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail 'manual move must leave global active account unchanged'
 
+fi
+
+if selftest_section 2; then
 # ============================================================================
 # 3. the caller's OWN window (issue #1474)
 # ============================================================================
@@ -619,6 +625,9 @@ rp=$(bash "$BIN/fleet-report-parent.sh" -L "$LBL" --win "$kid" --state blocked -
 ok; printf '%s' "$rp" | grep -q "would send to scratch-7 ($nw9," \
   || fail "a child's report must address the RESUMED parent window $nw9: $rp"
 
+fi
+
+if selftest_section 3; then
 # --- a Loop between rounds rides the move (issue #2189): its ScheduleWakeup lived
 # in the process the /exit ends; the transcript says what it had pending, and the
 # resume's first turn is `/loop <that input>` — the person's text whole, a quote
@@ -733,6 +742,8 @@ PY
 )
 ok; printf '%s\n' "$vout" | grep -qF "$NM" && ! printf '%s\n' "$vout" | grep -q "^ended	$NM" \
   || fail "#3444: ⌘P (fleet_view.entries) must list it outside 已结束: $vout"
+
+fi
 
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"

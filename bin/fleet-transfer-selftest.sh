@@ -3,6 +3,8 @@
 # fake Claude/Codex processes. No model requests, GitHub calls or live hooks.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 5
 for dep in tmux python3 perl git; do
   command -v "$dep" >/dev/null 2>&1 || { printf 'fleet-transfer selftest: SKIP (%s missing)\n' "$dep"; exit 0; }
 done
@@ -727,6 +729,9 @@ PYCRONCHECK
   exit 0
 fi
 
+printf '# 人工交接\n下一步：验证 file 的改动。\n' > "$WORK/notes.md"
+
+if selftest_section 1; then
 spawn 41 issue normal
 TM set-option -wu -t "$WIN" @worktree
 printf 'staged\n' > "$WT/file"; git -C "$WT" add file
@@ -738,7 +743,6 @@ transfer --dry-run || fail 'dry-run'
 ok; [ ! -e "$FLEET_CONF_DIR/handoffs" ] && [ ! -e "$FLEET_CONF_DIR/rotating" ] || fail 'dry-run must not write packages or leases'
 ok; kill -0 "$PID" && [ "$(field cc_agent)" = '' ] || fail 'dry-run changed the source'
 ok; [ -z "$(field worktree)" ] || fail 'dry-run must not stamp a missing worktree'
-printf '# 人工交接\n下一步：验证 file 的改动。\n' > "$WORK/notes.md"
 transfer --prepare-only --handoff "$WORK/notes.md" || fail 'prepare-only'
 BUNDLE=$(packet)
 ok; kill -0 "$PID" || fail 'prepare-only stopped Claude'
@@ -837,6 +841,9 @@ assert not confirm(screen.replace('Enter to confirm · Esc to cancel', ''))
 PY
 ok
 
+fi
+
+if selftest_section 2; then
 # issue #1668: a target that exits at startup is ROLLED BACK in the same pane —
 # the source resumed under the SAME session id within the boot wait, stamps put
 # back, state.json rolled_back, @transfer_note + the pane itself say
@@ -915,6 +922,10 @@ spawn 45 issue tool
 transfer && fail 'live tool after source exit must refuse respawn'; ok
 ok; [ "$(TM display-message -p -t "$PANE" '#{pane_current_command}')" = sleep ] || fail 'leftover tool must not be killed'
 
+fi
+
+if selftest_section 3; then
+mkdir -p "$FLEET_CONF_DIR/handoffs"
 # issue #1667: the TARGET's login is read before the source is asked anything.
 # With the one Codex profile reauth_required, --dry-run and the cutover refuse
 # (exit 1, `target-auth: …`), the source keeps running untouched, no package is
@@ -1012,6 +1023,9 @@ transfer --prepare-only || fail 'prepare snapshot must tolerate a partial last r
 transfer && fail 'cutover with a changing/partial transcript must refuse'; ok
 ok; kill -0 "$PID" || fail 'snapshot verification failure must leave source alive'
 
+fi
+
+if selftest_section 4; then
 # The skill's real shape: arm from INSIDE the source turn, then Stop releases a
 # detached worker. A stale done stamp cannot replace that signal, and the final
 # source message must be in the actual snapshot delivered to Codex.
@@ -1086,6 +1100,9 @@ TM set-option -w -t "$WIN" @claude_state "done"
 wait_request failed; ok
 ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] || fail 'old Stop must not release a request after new activity'
 
+fi
+
+if selftest_section 5; then
 # Codex source fixture: the launcher owns the pane and exits through the real
 # --codex-exit cleanup path. The transfer lease must retain that same window.
 cat > "$WORK/codex-source.pl" <<'PL'
@@ -1261,5 +1278,7 @@ assert pathlib.Path(m['draft']['path']).read_text()=='1、做。2、'
 assert '1、做。2、' not in (p/'pickup.md').read_text()
 PYNATIVE
 ok
+
+fi
 
 printf 'fleet-transfer selftest: OK (%s checks)\n' "$checks"

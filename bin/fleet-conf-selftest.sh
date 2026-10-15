@@ -57,6 +57,8 @@
 #                     kept; a second migrate writes nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 4
 for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -97,23 +99,6 @@ cap_line() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:spac
 # the doctor's rows that describe what this computer is — ONE (issue #1806)
 what_rows() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -cE '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+(client|role|node|能力)([[:space:]]|$)'; }
 
-# ---------------------------------------------------------------------------- A
-mkbox a
-out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
-is "A: migrate on an empty login exits 0" "$rc" 0
-[ -e "$CD/fleet.conf" ] && bad "A: no file may be written for a login that is neither" || ok
-is "A: role none" "$(run bash "$INS/bin/fleet-conf.sh" role)" none
-is "A: host 0" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
-is "A: doctor 能力: the base only" "$(cap_line | sed -E 's/^[[:space:]]+//')" "PASS  能力     基础 · 承载 未开（fleet host on）"
-is "A: one row says what this computer is" "$(what_rows)" 1
-# the machine conf is never a legacy flat fleet named `fleet`
-printf 'FLEET_ROLE="node"\n' > "$CD/fleet.conf"
-lst=$(run bash -c '. "$0/fleet-lib.sh"; fleet_each_conf; printf "conf=%s\n" "$(fleet_conf_file fleet)"' "$INS/bin")
-hasnt "A: fleet_each_conf skips \$FLEET_CONF_DIR/fleet.conf" "$lst" "$CD/fleet.conf	"
-hasnt "A: fleet_conf_file fleet never answers the machine conf" "$lst" "conf=$CD/fleet.conf"
-rm -f "$CD/fleet.conf"
-
-# ---------------------------------------------------------------------------- B
 node_fixture() {
   cat > "$INS/fleet.conf" <<'EOF'
 # ~/.claude/fleet/fleet.conf on mac-a
@@ -140,6 +125,30 @@ FLEET_ISSUE_BRIDGE="0"
 EOF
   printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
 }
+
+client_fixture() {
+  printf '{"url": "https://hub.example", "token": "wc-tok"}\n' > "$CD/hub.json"; chmod 600 "$CD/hub.json"
+  printf 'FLEET_SHELL_WIDTH=34\nFLEET_UI_LANG=zh\n' > "$CD/shell.conf"
+}
+
+if selftest_section 1; then
+# ---------------------------------------------------------------------------- A
+mkbox a
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
+is "A: migrate on an empty login exits 0" "$rc" 0
+[ -e "$CD/fleet.conf" ] && bad "A: no file may be written for a login that is neither" || ok
+is "A: role none" "$(run bash "$INS/bin/fleet-conf.sh" role)" none
+is "A: host 0" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
+is "A: doctor 能力: the base only" "$(cap_line | sed -E 's/^[[:space:]]+//')" "PASS  能力     基础 · 承载 未开（fleet host on）"
+is "A: one row says what this computer is" "$(what_rows)" 1
+# the machine conf is never a legacy flat fleet named `fleet`
+printf 'FLEET_ROLE="node"\n' > "$CD/fleet.conf"
+lst=$(run bash -c '. "$0/fleet-lib.sh"; fleet_each_conf; printf "conf=%s\n" "$(fleet_conf_file fleet)"' "$INS/bin")
+hasnt "A: fleet_each_conf skips \$FLEET_CONF_DIR/fleet.conf" "$lst" "$CD/fleet.conf	"
+hasnt "A: fleet_conf_file fleet never answers the machine conf" "$lst" "conf=$CD/fleet.conf"
+rm -f "$CD/fleet.conf"
+
+# ---------------------------------------------------------------------------- B
 mkbox b; node_fixture
 before=$(view)
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
@@ -179,10 +188,6 @@ has "B: …and the one file" "$l" "配置只有一份"
 is "B: one row says what this computer is" "$(what_rows)" 1
 
 # ---------------------------------------------------------------------------- C
-client_fixture() {
-  printf '{"url": "https://hub.example", "token": "wc-tok"}\n' > "$CD/hub.json"; chmod 600 "$CD/hub.json"
-  printf 'FLEET_SHELL_WIDTH=34\nFLEET_UI_LANG=zh\n' > "$CD/shell.conf"
-}
 mkbox c; rm -rf "$INS/conf"; client_fixture
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "C: migrate exits 0" "$rc" 0
@@ -208,6 +213,9 @@ has "C: the shell sees [client]" "$sv" "FLEET_SHELL_WIDTH=34"
 is "C: host" "$(run bash "$INS/bin/fleet-conf.sh" host)" 0
 has "C: doctor 能力: 承载 未开" "$(cap_line)" "基础 · 承载 未开（fleet host on）"
 
+fi
+
+if selftest_section 2; then
 # ---------------------------------------------------------------------------- D
 mkbox d; node_fixture; client_fixture
 printf 'FLEET_INSTALL_SYNC=0\n' > "$CD/fleet.settings"
@@ -291,6 +299,9 @@ has "G client: FLEET_HOST=0" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
 is "G client: role still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client
 sh -n "$CD/fleet.conf" && ok || bad "G: the rewritten file parses"
 
+fi
+
+if selftest_section 3; then
 # ---- H. keys kept, FLEET_HOST corrected once (issue #1887) ------------------------
 hrun() { run TMUX_TMPDIR="$WORK/htt" FLEET_LAUNCHD_AGENTS_DIR="$H/LA" FLEET_INSTALL_DAEMON_DIR="$H/LD" "$@"; }
 mkbox h1; mkdir -p "$CD/fleets/fleet" "$WORK/htt"
@@ -454,6 +465,9 @@ printf 'FLEET_REPO="bbb/new"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$H/p
 lib_i 'fleet_repo_order_put fleet bbb/new'
 is "I: a repo recorded later lists after the others" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "aaa/first zzz/last bbb/new "
 
+fi
+
+if selftest_section 4; then
 # ---------------------------------------------------------------------------- J
 # under a UTF-8 locale: a `$var，` there reads the full-width comma as part of the
 # name (unbound under set -u) — LANG=C hides it
@@ -529,6 +543,8 @@ snap=$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
 is "K: a second migrate changes nothing" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf")" "$snap"
 hasnt "K: …and says nothing about it" "$out" "retired autofill keys"
+
+fi
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]
