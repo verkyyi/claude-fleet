@@ -7858,7 +7858,7 @@ drill_term_relay_orphan() {
 }
 
 # term-view-kills-session (issue #3838): the browser terminal's tmux view is a
-# grouped `<fleet>@view-web-<id>` that goes with its terminal — never the fleet
+# native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
 drill_term_view_kills_session() {
@@ -7867,7 +7867,7 @@ drill_term_view_kills_session() {
   if ! command -v tmux >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 tmux"; return 0; fi
   out=$(bash "$BIN/fleet-term-attach-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="fleet-term-attach-selftest is red: $(printf '%s' "$out" | grep FAIL | head -4 | tr '\n' ' ')"; return 1; }
-  WHAT='真伪终端接上分组视图、挂断：30 秒内视图没了，fleet 会话、窗口数、worker 进程号不变，没新起会话；未知 worker / 路径目标 / 被占视图都拒且不留视图'
+  WHAT='两种入口的真 PTY 打开原生菜单、选会话、切持久壳并返回；挂断 30 秒内本连接 view/registry 清零，home/worker pid 不变；重复连接、占用控制权和未知目标先拒，take 先收旧视图，旧 cleanup 不释放新 epoch'
   SECS=$(since "$t0")
 }
 

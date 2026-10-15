@@ -1793,6 +1793,17 @@ def open_shell(qo, vid, client="", target=None, meta=None):
     if not fleet:
         return 2
     g = "%s@view-%s" % (fleet, vid)
+    # Web PTYs share the persistent personal home shell (C4), not a shell
+    # whose lifetime is a disposable view. The second press returns to the
+    # selected worker; direct native clients keep their existing shell road.
+    _, home = tm("display-message", "-p", "-t", "=" + g + ":", "#{@view_web_home}")
+    if home:
+        _, current = tm("display-message", "-p", "-t", "=" + g + ":", "#{window_id}")
+        if current == home:
+            code, _ = tm("last-window", "-t", "=" + g)
+        else:
+            code, _ = tm("select-window", "-t", "=%s:%s" % (g, home))
+        return 0 if code == 0 else 3
     here, me = here_label(row), getpass.getuser()
     if target:
         t = target[4:] if target.startswith("wid:") else target
@@ -2077,6 +2088,9 @@ def key_lines(me, extra=None):
         bind_chord(chord, action)
     for action, chord in fleet_keys.pairs(fleet_keys.phone_extra(), known):
         bind_chord(chord, action)
+    shell_key = ("fleet-view", "C-\\")
+    fallback = binds.get(shell_key, "send-keys 'C-\\'")
+    binds[shell_key] = "if-shell -F '#{@view_web_home}' { %s } { %s }" % (cmd_of("shell"), fallback)
     _OURS[0] = {tk for tk in binds if tk[0] == "fleet-view"}
     for (table, key), c in binds.items():
         lines.append("bind-key -T %s %s %s" % (table, tkey(key), c))
