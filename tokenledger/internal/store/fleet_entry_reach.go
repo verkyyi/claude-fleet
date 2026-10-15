@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS fleet_entry_hostkey (
   host_key TEXT NOT NULL,
   seen_at  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS fleet_entry_jump (
+  machine TEXT PRIMARY KEY,
+  namespace TEXT NOT NULL,
+  seen_at TEXT NOT NULL
+);
 `
 
 // EntryReach is one address of a machine the hub tried.

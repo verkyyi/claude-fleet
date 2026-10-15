@@ -851,6 +851,9 @@ func (s *Server) entryMachineOf(w http.ResponseWriter, r *http.Request) string {
 	if c := s.nodes.get(ep.ID); c != nil && c.machineLink {
 		machine = true
 	}
+	if peer, ok := s.peerOf(r.Context(), ep.ID); ok && peer.HasCap(control.CapMachine) {
+		machine = true
+	}
 	if !machine {
 		httpError(w, http.StatusForbidden, "only the machine's node program (ccquota agent --machine) reads the door's list")
 		return ""

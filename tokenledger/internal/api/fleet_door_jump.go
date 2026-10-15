@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -53,16 +54,19 @@ func (s *Server) noteJump(r *http.Request, host string, door bool, now time.Time
 		}
 		w.ns = ns
 	}
-	s.jumpSeen.Store(strings.ToLower(host), w)
+	if err := s.Store.SetEntryJump(host, w.ns, w.at); err != nil {
+		log.Printf("fleet: record jump readiness for %s: %v", host, err)
+	}
 }
 
 func (s *Server) jumpWordOf(host string, now time.Time) (jumpWord, bool) {
-	v, ok := s.jumpSeen.Load(strings.ToLower(host))
-	if !ok {
+	namespace, at, err := s.Store.EntryJump(host)
+	if err != nil {
+		log.Printf("fleet: read jump readiness for %s: %v", host, err)
 		return jumpWord{}, false
 	}
-	w := v.(jumpWord)
-	return w, now.Sub(w.at) < jumpFresh
+	word := jumpWord{at: at, ns: namespace}
+	return word, !at.IsZero() && now.Sub(at) < jumpFresh
 }
 
 // jumpTarget is the pod's sshd inside the cluster when the door and the pod
