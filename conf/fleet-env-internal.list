@@ -984,6 +984,7 @@ FLEET_POOL_FETCH_FRESH_MIN         knob: internal pacing, minutes a base-sync FE
 FLEET_POOL_FETCH_SECS              knob: seconds the warm pool / a scratch allocation gives `git fetch origin <base>` before killing it and using the local base (fleet_fetch_bounded, default 20, 0 = no bound, #3999)
 FLEET_POOL_CPU_READING             env handoff: the cgroup CPU reading scratch-pool.sh's fan-out samples once and hands each slot's pass (`-` = no limit; also a test seam, #3542)
 FLEET_ADMIT_CPU_READING            test seam: replaces the cgroup CPU reading fleet_machine_admit samples (`-` = no limit, #3308)
+FLEET_ADMIT_CPU_WINDOW_FILE        path: where the admission gate keeps its cgroup cpu.stat notes (default global/admit-cpu.window, #4287)
 FLEET_CPU_BUSY_PROBE_CMD           test seam: replaces the CPU-busy share fleet_machine_admit judges before load (empty output = no reading, #4077)
 FLEET_MAX_CPU_BUSY                 machine.env handoff: the node agent's CPU-busy ceiling (#2882), the admission gate's default for FLEET_ADMIT_CPU_BUSY (#4077)
 FLEET_POOL_CPU_SAMPLE_SECS         knob: internal pacing, seconds the pool's grow gate samples the cgroup over (default 1, #3542)
