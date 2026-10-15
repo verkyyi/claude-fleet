@@ -347,7 +347,8 @@ type Agent struct {
 	// credReported: access fingerprints whose upstream refusal a lease has
 	// already carried to the hub (claude-fleet#2007), so a waiting lease loop
 	// renews early once per refusal, not every poll. The lease loop's own.
-	credReported map[string]bool
+	credReported              map[string]bool
+	credRejectionsUnavailable bool
 	// credSummary is the last lease's account count line, logged only when it
 	// changes (claude-fleet#3440: a 200 lease with no account said nothing).
 	credSummary string

@@ -8551,6 +8551,10 @@ fleet_epic_agent() {
 # `ccquota codex list` says no_credentials there for a login that runs Codex fine.
 fleet_codex_ready() {
   local rows
+  if [ "${FLEET_CRED_PROXY:-0}" = 1 ] && [ -n "${FLEET_CRED_CENTRAL_URL:-}" ] \
+     && [ "$(_fleet_node_env_val CCQUOTA_FLEET_CREDS 2>/dev/null)" = 0 ]; then
+    return 0
+  fi
   if [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
      && grep -q '"separated": *true' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" 2>/dev/null; then
     return 0
