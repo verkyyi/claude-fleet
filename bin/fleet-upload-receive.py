@@ -6,6 +6,7 @@ still own an attached view; the existing identity resolver pins its destination.
 Only staged files are removed on failure. Completed uploads are never rolled back.
 """
 import fcntl
+import base64
 import hashlib
 import importlib.util
 import json
@@ -155,7 +156,7 @@ def receive(up, h, dest):
     name = up.safe(h.get('name') or 'file')
     if not isinstance(size, int) or not 0 <= size <= up.bound(name) or not re.fullmatch('[0-9a-f]{64}', sha):
         raise ValueError('invalid file bounds')
-    digest, count = hashlib.sha256(), 0
+    digest, count, last = hashlib.sha256(), 0, 0.0
     while True:
         if not select.select([0], [], [], 10)[0]:
             raise ValueError('upload stalled')
@@ -164,9 +165,112 @@ def receive(up, h, dest):
         count += len(b)
         if count > size: raise ValueError('upload too large')
         dest.write(b); digest.update(b)
+        now = time.monotonic()
+        if h.get('progress') and (now - last >= .2 or count == size):
+            print(json.dumps({'received': count}), flush=True)
+            last = now
     if count != size or digest.hexdigest() != sha:
         raise ValueError('incomplete upload')
     dest.flush()
+    if h.get('progress') and size == 0:
+        print(json.dumps({'received': 0}), flush=True)
+
+
+def status(up, h):
+    """One bounded stream owns only this attached view's upload option.
+
+    The connection token is read from stdin and never stored in tmux. Generation,
+    operation order and a per-view lock reject stale writers/restoration. A
+    separate option leaves language flashes and the normal renderer untouched.
+    """
+    ident = target(up, h)
+    op = h.get('operation')
+    if type(op) is not int or not 0 < op < 1 << 64:
+        raise ValueError('invalid operation')
+    leases = load('fleet_thin_lease')
+    row = leases.rows()[h['view']]
+    sess, view = row['sess'], '=%s@view-%s:' % (row['sess'], h['view'])
+    key = '%s-%s' % (h['generation'], op)
+    state = dict(phase='preparing', name='', index=0, count=0, done=0, total=0,
+                 generation=h['generation'], operation=op, window=ident['home'].split('|')[0], id=key)
+    lockpath = Path(leases.views_dir()) / '.upload-status.lock'
+
+    def publish(first=False, terminal=False):
+        current = leases.rows().get(h['view'], {})
+        if current.get('token') != h['token'] or current.get('upload_gen') != h['generation']:
+            raise ValueError('status target changed')
+        entry = leases.load_book().get('views', {}).get(h['view'], {})
+        if entry.get('taken') or entry.get('state') in ('taken', 'revoked'):
+            raise ValueError('status ownership changed')
+        leases._CLIENTS.clear()
+        if not leases.attached(current):
+            raise ValueError('status disconnected')
+        with open(lockpath, 'a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            previous = leases.tmux(sess, 'show-option', '-qv', '-t', view, '@view_upload').strip()
+            try: previous = json.loads(base64.b64decode(previous))
+            except (ValueError, TypeError): previous = {}
+            if first:
+                if previous.get('generation') == h['generation'] and previous.get('operation', 0) >= op:
+                    raise ValueError('old status operation')
+            elif previous.get('id') != key:
+                raise ValueError('status superseded')
+            state['until'] = time.time() + (1.5 if terminal else 4)
+            if state['phase'] == 'clear': state['until'] = 0
+            encoded = base64.b64encode(json.dumps(state).encode()).decode()
+            # cur does not take our lock. Check its generation inside tmux's
+            # command queue, atomically with the write, so a delayed first
+            # publish cannot overwrite a newer selection's attachment.
+            guard = '#{==:#{@view_upload_gen},%s}' % h['generation']
+            if not first:
+                guard = '#{&&:%s,#{==:#{@view_upload_id},%s}}' % (guard, key)
+            commands = [
+                ['set-option', '-t', view, '@view_upload', encoded],
+                ['set-option', '-t', view, '@view_upload_id', key],
+                ['refresh-client', '-S', '-t', row['tty']],
+                ['display-message', '-p', 'owned'],
+            ]
+            command = ' ; '.join(' '.join(shlex.quote(a) for a in part) for part in commands)
+            if leases.tmux(sess, 'if-shell', '-F', '-t', view, guard, command).strip() != 'owned':
+                raise ValueError('status selection changed')
+
+    publish(first=True)
+    print(json.dumps({'identity': ident}), flush=True)
+    buf, last, terminal = b'', time.monotonic(), False
+    try:
+        while True:
+            ready = select.select([0], [], [], .2)[0]
+            if ready:
+                data = os.read(0, 4096)
+                if not data: break
+                buf += data
+                if len(buf) > 8192: raise ValueError('status over limit')
+                while b'\n' in buf:
+                    line, _, buf = buf.partition(b'\n')
+                    event = json.loads(line)
+                    phase = event.get('phase')
+                    if phase not in ('preparing', 'uploading', 'confirming', 'uploaded', 'failed', 'cancelled', 'clear'):
+                        raise ValueError('invalid status')
+                    for k in ('index', 'count', 'done', 'total'):
+                        v = event.get(k, state[k])
+                        if type(v) is not int or not 0 <= v <= (16 if k in ('index', 'count') else LIMIT):
+                            raise ValueError('invalid status bounds')
+                        state[k] = v
+                    if state['done'] > state['total'] or state['index'] > state['count']:
+                        raise ValueError('invalid status totals')
+                    state.update(phase=phase, name=''.join(c for c in str(event.get('name', state['name'])) if c.isprintable())[:160])
+                    terminal = phase in ('uploaded', 'failed', 'cancelled', 'clear')
+                now = time.monotonic()
+                if terminal or now - last >= .2:
+                    publish(terminal=terminal); last = now
+                if terminal: return
+            elif time.monotonic() - last >= 1:
+                publish(); last = time.monotonic()
+    finally:
+        if not terminal:
+            state['phase'] = 'cancelled'
+            try: publish(terminal=True)
+            except (ValueError, OSError): pass
 
 
 def commit(up, h, source):
@@ -216,6 +320,8 @@ def main(action, up, args):
         if action == 'identity':
             print(identity(args[0])); return 0
         h = header()
+        if action == 'status':
+            status(up, h); return 0
         if action == 'target':
             result = target(up, h)
         else:

@@ -242,6 +242,9 @@ EOF
   _snap=$(tmux -S "$3" display-message -p -t "=$4:" '#{window_id}|#{@fleet_id}|#{@peer_cur}|#{pane_id}|#{pane_pid}|#{@cc_launcher_pid}|#{@cc_session_id}|#{@codex_session_id}|#{pane_current_command}|#{pane_dead}' 2>/dev/null)
   rv_row_set "$_f" upload_target "$_snap" || exit 0
   rv_row_set "$_f" upload_gen "$_g" || exit 0
+  # Invalidate a cached upload line before this selection's first redraw.
+  tmux -S "$3" set-option -t "=$4:" @view_upload_id '' \; \
+    set-option -t "=$4:" @view_upload_gen "$_g" 2>/dev/null
   printf '\033]7502;cur;token=%s;m=%s;l=%s;w=%s;g=%s\007' "$_t" "$(_ok "$_m")" "$(_ok "$_l")" "$(_ok "$_c")" "$_g" 2>/dev/null > "$_y"
   exit 0
 fi
@@ -852,7 +855,7 @@ rv_thin_dress() {
   bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
   bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
   # this connection's language and its one-time line (issue #3329): what attach set
-  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until})"
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until} up=#{q:@view_upload})"
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \

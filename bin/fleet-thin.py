@@ -894,8 +894,8 @@ class Thin:
                         continue   # the line still down: a mouse report / a key goes nowhere (⌃C still stops the ssh)
                     if pending and b"\x03" in data:
                         pending.clear()
-                        if uploads:
-                            uploads.cancel("附件已取消")
+                        # Input.feed consumes it if an upload owns the key.
+                        # Never turn a cancelled upload into a remote interrupt.
                         data = b"\x03"
                     enqueue(uploads.feed(data) if uploads else data)
                 if uploads:
