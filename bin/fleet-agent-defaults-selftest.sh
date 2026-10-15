@@ -206,6 +206,7 @@ done
 ok '4 idempotent: second apply writes nothing, no backup'
 
 # --- 5. legacy blocks are preserved; strip is an explicit, doc-only operation ---------
+install_skills "$WORK/c3"
 for f in claude/CLAUDE.md codex/AGENTS.md; do
   printf 'Personal before.\r\n<!-- fleet:agent-defaults begin -->\r\nOLD HEADING\r\n<!-- fleet:agent-defaults end -->\r\nPersonal after.\r\n' > "$WORK/c3/$f"
   cp "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before"
