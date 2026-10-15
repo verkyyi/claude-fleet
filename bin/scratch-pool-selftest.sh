@@ -580,5 +580,106 @@ t0=$(date +%s); out=$(aa_tick); dt=$(( $(date +%s) - t0 ))
 printf '%s\n' "$out" | grep -q "^scratch-pool: o/a: fetch origin master gave no answer in 2s" || fail "AA the timed-out fetch says one line" "$out"
 ok "AA remote that never answers: HOME first, every fetch bounded, the tick ends (${dt}s)"
 
+REFILL_BIN="$WORK/refill-bin"; mkdir -p "$REFILL_BIN"
+for source in "$BIN"/*; do ln -s "$source" "$REFILL_BIN/${source##*/}"; done
+rm "$REFILL_BIN/fleet-lib.sh"
+cp "$LIB" "$REFILL_BIN/fleet-lib.sh"
+cat >> "$REFILL_BIN/fleet-lib.sh" <<'REFILL_READER'
+
+_fleet_cgroup_cpu() {
+  printf 'sample\n' >> "$REFILL_PROBE_LOG"
+  if [ -f "$REFILL_HOLD" ] || [ "$(wc -l < "$REFILL_PROBE_LOG" | tr -d ' ')" = 1 ]; then
+    printf '35 0.10 2.00\n'
+  else
+    printf '0 0.10 2.00\n'
+  fi
+}
+REFILL_READER
+export REFILL_PROBE_LOG="$WORK/refill-probes" REFILL_HOLD="$WORK/refill-hold"
+refill_reset() {
+  reset_state; mkfleet
+  printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
+  : > "$REFILL_PROBE_LOG"; rm -f "$REFILL_HOLD"
+}
+refill_run() {
+  FLEET_POOL_REFILL_DELAY=0 FLEET_POOL_CLAIM_REFILL_DELAY=0 FLEET_POOL_REFILL_RETRY_DELAY=0 \
+    FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$REFILL_BIN/scratch-pool.sh" ensure tf "$@"
+}
+refill_reset
+refill_run --delay >/dev/null 2>&1
+[ "$(wc -l < "$REFILL_PROBE_LOG" | tr -d ' ')" = 2 ] || fail 'AB delayed fan-out must resample after a CPU hold'
+[ "$(grep -c 'new-session -d -s tf-pool' "$STATE/log")" = 1 ] || fail 'AB recovery must attempt one refill'
+ok 'AB delayed refill recovers from transient CPU throttling using a fresh sample'
+
+refill_reset; touch "$REFILL_HOLD"
+refill_run --repo - --soon >/dev/null 2>&1
+[ "$(wc -l < "$REFILL_PROBE_LOG" | tr -d ' ')" = 4 ] || fail 'AC a sustained hold must stop after four samples'
+! grep -q 'new-session\|new-window' "$STATE/log" || fail 'AC retry must never bypass a sustained CPU hold'
+[ ! -d "$FLEET_CONF_DIR/fleets/tf/pool/home-claude.lock" ] || fail 'AC exhausted refill must release its lock'
+[ ! -d "$FLEET_CONF_DIR/fleets/tf/pool/home-claude.refill.lock" ] || fail 'AC exhausted refill must release its scheduler lock'
+ok 'AC sustained CPU hold stays closed and retry count is bounded'
+
+refill_reset
+refill_run --repo - --tick >/dev/null 2>&1
+[ "$(wc -l < "$REFILL_PROBE_LOG" | tr -d ' ')" = 1 ] || fail 'AD an ordinary tick must remain one pass'
+! grep -q 'new-session\|new-window' "$STATE/log" || fail 'AD one-shot tick must honor its CPU hold'
+refill_reset
+FLEET_POOL_CPU_READING='35 0.10 2.00' refill_run --repo - --soon >/dev/null 2>&1
+[ ! -s "$REFILL_PROBE_LOG" ] || fail 'AD explicit CPU reading must not be overridden'
+! grep -q 'new-session\|new-window' "$STATE/log" || fail 'AD explicit CPU hold must remain closed'
+ok 'AD ordinary ticks remain one-shot and explicit CPU readings remain authoritative'
+
+refill_reset; touch "$REFILL_HOLD"
+FLEET_POOL_CLAIM_REFILL_DELAY=0 FLEET_POOL_REFILL_RETRY_DELAY=1 \
+  bash "$REFILL_BIN/scratch-pool.sh" ensure tf --repo - --soon >"$WORK/refill-worker.log" 2>&1 &
+refill_pid=$!
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$REFILL_PROBE_LOG" ] && break
+  sleep 0.1
+done
+refill_run --repo - --soon >/dev/null 2>&1
+wait "$refill_pid" || fail 'AE owning refill failed' "$(cat "$WORK/refill-worker.log")"
+[ "$(wc -l < "$REFILL_PROBE_LOG" | tr -d ' ')" = 4 ] || fail 'AE overlapping refills must share the owning retry worker'
+ok 'AE overlapping scheduled refills coalesce at the slot lock'
+
+refill_reset
+printf 'FLEET_SCRATCH_POOL=0\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
+refill_run --delay >/dev/null 2>&1
+[ ! -s "$REFILL_PROBE_LOG" ] || fail 'AF disabled pools must not sample or retry'
+! grep -q 'new-session\|new-window' "$STATE/log" || fail 'AF disabled pools must stay disabled'
+ok 'AF disabled pools do not retry or warm'
+
+refill_reset; touch "$REFILL_HOLD"
+FLEET_POOL_CLAIM_REFILL_DELAY=0 FLEET_POOL_REFILL_RETRY_DELAY=1 \
+  bash "$REFILL_BIN/scratch-pool.sh" ensure tf --repo - --soon >"$WORK/refill-worker.log" 2>&1 &
+refill_pid=$!
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$REFILL_PROBE_LOG" ] && break
+  sleep 0.1
+done
+printf 'FLEET_SCRATCH_POOL=0\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
+wait "$refill_pid" || fail 'AG pending refill failed after pool was disabled' "$(cat "$WORK/refill-worker.log")"
+[ "$(wc -l < "$REFILL_PROBE_LOG" | tr -d ' ')" = 1 ] || fail 'AG retry must reload the disabled pool configuration'
+! grep -q 'new-session\|new-window' "$STATE/log" || fail 'AG disabled-during-backoff pool must not warm'
+ok 'AG a pending refill reloads configuration and stops when its pool is disabled'
+
+cat >> "$REFILL_BIN/fleet-lib.sh" <<'REFILL_ADMISSION'
+
+fleet_session_cap_ok() {
+  printf 'admit\n' >> "$REFILL_ADMISSION_LOG"
+  [ ! -f "$REFILL_HOLD" ] && [ "$(wc -l < "$REFILL_ADMISSION_LOG" | tr -d ' ')" -gt 1 ]
+}
+REFILL_ADMISSION
+export REFILL_ADMISSION_LOG="$WORK/refill-admission"
+refill_reset; : > "$REFILL_ADMISSION_LOG"
+FLEET_POOL_CPU_READING='0 0.10 2.00' refill_run --repo - --soon >/dev/null 2>&1
+[ "$(wc -l < "$REFILL_ADMISSION_LOG" | tr -d ' ')" = 2 ] || fail 'AH admission must be checked again after a transient refusal'
+[ "$(grep -c 'new-session -d -s tf-pool' "$STATE/log")" = 1 ] || fail 'AH only the admitted retry may attempt a spawn'
+refill_reset; : > "$REFILL_ADMISSION_LOG"; touch "$REFILL_HOLD"
+FLEET_POOL_CPU_READING='0 0.10 2.00' refill_run --repo - --soon >/dev/null 2>&1
+[ "$(wc -l < "$REFILL_ADMISSION_LOG" | tr -d ' ')" = 4 ] || fail 'AH repeated admission refusals must exhaust the bounded retries'
+! grep -q 'new-session\|new-window' "$STATE/log" || fail 'AH retries must never bypass admission'
+ok 'AH transient admission refusals recover and sustained refusals never spawn'
+
 printf '\n%s tests passed\n' "$pass"
 exit 0
