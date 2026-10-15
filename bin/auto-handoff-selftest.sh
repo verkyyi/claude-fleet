@@ -174,8 +174,9 @@ latched && fail "Codex telemetry must not arm the Claude handoff latch"
 
 # A native measurement emits a Codex handoff command through the same threshold.
 cat > "$WORK/inst/bin/fleet-codex-session.py" <<'PYCODEX'
-import json, os
-print(json.dumps({'pct': int(os.environ['FAKE_CTX'])}))
+import os, sys
+assert '--pct' in sys.argv and '--json' not in sys.argv
+print(int(os.environ['FAKE_CTX']))
 PYCODEX
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
 nudged "$out" && latched || fail 'Codex context must arm its native cycle'
@@ -183,6 +184,10 @@ case "$out" in *'fleet-transfer.sh'*'--after-turn'*) ;; *) fail 'Codex cycle com
 case "$out" in *'/fleet-handoff'*) fail 'Codex must never invoke the Claude slash cycle';; esac
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex FAKE_ARMED=1 run_state 'done')"
 nudged "$out" && fail 'Codex native cycle must debounce'
+out="$(GPCT=60 FAKE_CTX=59 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && fail 'Codex below the configured threshold must not hand off'
+out="$(GPCT=60 FAKE_CTX=-1 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && fail 'Unknown Codex context must not hand off'
 
 # ---- UNSET ≠ OFF: no conf layer sets it → the repo default 80 (issue #1571) ----
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"

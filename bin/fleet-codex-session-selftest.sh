@@ -44,6 +44,26 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(got['output_tokens'], 40000)
         self.assertEqual(got['transcript'], str(self.path))
 
+    def test_percent_only_avoids_policy_and_armed_reads(self):
+        import contextlib, io, types
+        from unittest.mock import patch
+        args = types.SimpleNamespace(pane='%1', socket='', session='', pct=True, json=False, quiet=False)
+        for expected in (40, 95, -1):
+            output = io.StringIO()
+            with patch.object(cx, 'identity', return_value=self.data), \
+                 patch.object(cx, 'telemetry', return_value={'pct': expected}), \
+                 patch.object(cx, 'tmux', side_effect=AssertionError('unexpected policy read')), \
+                 patch.object(cx.subprocess, 'run', side_effect=AssertionError('unexpected subprocess')), \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(cx.context(args), 0 if expected >= 0 else 1)
+            self.assertEqual(output.getvalue(), str(expected) + '\n')
+
+    def test_percent_cli_keeps_exact_native_telemetry(self):
+        result = subprocess.run([sys.executable, str(BIN / 'fleet-codex-session.py'), 'context',
+                                 '--session', SID, '--home', str(self.home), '--pane', '', '--pct'],
+                                capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout), (0, '40\n'))
+
     def test_effort_turn_context_then_config(self):
         # issue #2431: the turn's effort, else collaboration_mode, else config.toml
         self.assertEqual(cx.telemetry(self.data)['effort'], '')

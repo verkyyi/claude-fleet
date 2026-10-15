@@ -240,9 +240,13 @@ def send(data, view="", client=""):
         win = next((l.split(" ", 1)[1].strip() for l in (out.stderr or "").splitlines() if l.startswith("window: @")), "")
         if view and win:
             go = os.environ.get("FLEET_DISPATCH_GO_CMD")
-            subprocess.run((go.split() if go else ["bash", str(BIN / "fleet-view-go.sh")])
-                           + [view, win, "--how", "dispatch"] + (["--client", client] if client else []),
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            arguments = [view, win, "--how", "dispatch"] + (["--client", client] if client else [])
+            if go:
+                subprocess.run(go.split() + arguments, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                import fleet_view
+                fleet_view.main(["go"] + arguments, quick)
         return True, tr("compose_result_fmt", compose.place_why(out.stdout or out.stderr))
     compose.keep_failed(path)
     why = compose.place_why((out.stdout or "") + "\n" + (out.stderr or ""))

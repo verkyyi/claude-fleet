@@ -30,6 +30,30 @@ dispatch = module("fleet-quick-dispatch")
 
 
 class PanelDraftTests(unittest.TestCase):
+    def test_dispatch_reuses_canonical_focus_with_receipt_and_client(self):
+        for focus_status in (0, 2, 3, 4):
+            with self.subTest(focus_status=focus_status), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {"FLEET_DISPATCH_GO_CMD": "", "FLEET_DISPATCH_SEND_CMD": ""}), \
+                    patch.object(dispatch.compose, "send_path", return_value=Path(directory) / "send.json"), \
+                    patch.object(dispatch.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=0, stdout="opened", stderr="window: @42\n")) as run, \
+                    patch.object(fleet_view, "main", return_value=focus_status) as focus:
+                self.assertTrue(dispatch.send({"title": "draft"}, "test-view", "test-client")[0])
+            self.assertEqual(run.call_count, 1)
+            focus.assert_called_once_with(
+                ["go", "test-view", "@42", "--how", "dispatch", "--client", "test-client"], dispatch.quick)
+
+    def test_dispatch_does_not_focus_without_a_successful_window_receipt(self):
+        for status, receipt in ((0, ""), (0, "window: worker42\n"), (1, "window: @42\n")):
+            with self.subTest(status=status, receipt=receipt), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(dispatch.compose, "send_path", return_value=Path(directory) / "send.json"), \
+                    patch.object(dispatch.compose, "keep_failed"), patch.object(dispatch, "failed"), \
+                    patch.object(dispatch.subprocess, "run", return_value=SimpleNamespace(
+                        returncode=status, stdout="result", stderr=receipt)), \
+                    patch.object(fleet_view, "main") as focus:
+                self.assertEqual(dispatch.send({"title": "draft"}, "test-view")[0], status == 0)
+            focus.assert_not_called()
+
     def test_explicit_codex_draft_tries_warm_then_cold(self):
         responses = [SimpleNamespace(returncode=3, stdout="", stderr=""),
                      SimpleNamespace(returncode=0, stdout="@42\n", stderr="")]

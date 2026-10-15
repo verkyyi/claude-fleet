@@ -654,8 +654,7 @@ if [ "$sem" = "done" ]; then
     if [ "$_agent" = codex ]; then
       # Stop hooks may run concurrently: read current telemetry directly rather
       # than depending on the identity hook having refreshed @ctx_pct already.
-      _ctx=$(python3 "$_bin/fleet-codex-session.py" context --pane "$TMUX_PANE" --json 2>/dev/null \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["pct"])' 2>/dev/null)
+      _ctx=$(python3 "$_bin/fleet-codex-session.py" context --pane "$TMUX_PANE" --pct 2>/dev/null)
     fi
     case "$_ctx" in ''|*[!0-9]*) _ctx=-1 ;; esac
     if [ "$_armed" != "1" ] && [ "$handoff_prev" != "needs" ] \
