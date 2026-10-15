@@ -633,7 +633,7 @@ refill_reset; touch "$REFILL_HOLD"
 FLEET_POOL_CLAIM_REFILL_DELAY=0 FLEET_POOL_REFILL_RETRY_DELAY=1 \
   bash "$REFILL_BIN/scratch-pool.sh" ensure tf --repo - --soon >"$WORK/refill-worker.log" 2>&1 &
 refill_pid=$!
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
   [ -s "$REFILL_PROBE_LOG" ] && break
   sleep 0.1
 done
@@ -653,7 +653,7 @@ refill_reset; touch "$REFILL_HOLD"
 FLEET_POOL_CLAIM_REFILL_DELAY=0 FLEET_POOL_REFILL_RETRY_DELAY=1 \
   bash "$REFILL_BIN/scratch-pool.sh" ensure tf --repo - --soon >"$WORK/refill-worker.log" 2>&1 &
 refill_pid=$!
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
   [ -s "$REFILL_PROBE_LOG" ] && break
   sleep 0.1
 done
