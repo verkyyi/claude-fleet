@@ -297,8 +297,8 @@ func (s *StableSource) File(ctx context.Context, sha, path string) ([]byte, erro
 	} else if whole {
 		return nil, errStableNotFound
 	}
-	if s.loadLocal(sha) {
-		if b, ok, _ := s.cached(key, sha); ok {
+	if b, ok, loaded := s.loadLocal(sha, path); loaded {
+		if ok {
 			return b, nil
 		}
 		return nil, errStableNotFound
@@ -306,8 +306,8 @@ func (s *StableSource) File(ctx context.Context, sha, path string) ([]byte, erro
 	if s.Offline {
 		return nil, errStableNotFound
 	}
-	if s.loadTarball(ctx, sha) {
-		if b, ok, _ := s.cached(key, sha); ok {
+	if b, ok, loaded := s.loadTarball(ctx, sha, path); loaded {
+		if ok {
 			return b, nil
 		}
 		return nil, errStableNotFound
@@ -351,57 +351,84 @@ func (s *StableSource) cached(key, sha string) ([]byte, bool, bool) {
 
 // storeLocked keeps b at key; a cache past its cap starts over (s.mu held).
 func (s *StableSource) storeLocked(key string, b []byte) {
-	if s.files == nil || s.size+len(b) > stableCacheMax {
+	if len(b) > stableCacheMax {
+		return
+	}
+	if s.files == nil || s.size-len(s.files[key])+len(b) > stableCacheMax {
 		s.files, s.size, s.whole = map[string][]byte{}, 0, map[string]bool{}
 	}
+	s.size -= len(s.files[key])
 	s.files[key] = b
 	s.size += len(b)
 }
 
-// loadLocal fills the cache with every client path of a release the store
-// was handed (claude-fleet#2772); true when sha is loaded whole.
-func (s *StableSource) loadLocal(sha string) bool {
-	if s.Local == nil || !s.Local.PublishedSeen(sha) {
-		return false
+func (s *StableSource) storeTreeLocked(sha string, files map[string][]byte) {
+	total, replaced := 0, 0
+	for path, body := range files {
+		total += len(body)
+		replaced += len(s.files[sha+"/"+path])
 	}
-	s.tarLock.Lock()
-	defer s.tarLock.Unlock()
-	if _, _, whole := s.cached("", sha); whole {
-		return true
+	if total > stableCacheMax {
+		return
 	}
-	files, err := s.Local.PublishedTree(sha)
-	if err != nil {
-		log.Printf("fleet: stable %s from the release store: %v", sha[:7], err)
-		return false
+	if s.files == nil || s.size-replaced+total > stableCacheMax {
+		s.files, s.size, s.whole = map[string][]byte{}, 0, map[string]bool{}
+		replaced = 0
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for p, b := range files {
-		if stablePathOK(p) {
-			s.storeLocked(sha+"/"+p, b)
-		}
+	for path, body := range files {
+		s.files[sha+"/"+path] = body
 	}
+	s.size += total - replaced
 	if s.whole == nil {
 		s.whole = map[string]bool{}
 	}
 	s.whole[sha] = true
-	return true
 }
 
-// loadTarball fills the cache with every client path of sha from codeload's
-// tarball, once; true when sha is loaded whole. A failure is remembered for one
-// TTL (the caller falls back to the raw host meanwhile).
-func (s *StableSource) loadTarball(ctx context.Context, sha string) bool {
+// loadLocal reads a published release and caches it when it fits, returning
+// the requested file, whether it exists, and whether the release was loaded.
+func (s *StableSource) loadLocal(sha, path string) ([]byte, bool, bool) {
+	if s.Local == nil || !s.Local.PublishedSeen(sha) {
+		return nil, false, false
+	}
+	s.tarLock.Lock()
+	defer s.tarLock.Unlock()
+	if body, found, whole := s.cached(sha+"/"+path, sha); whole {
+		return body, found, true
+	}
+	files, err := s.Local.PublishedTree(sha)
+	if err != nil {
+		log.Printf("fleet: stable %s from the release store: %v", sha[:7], err)
+		return nil, false, false
+	}
+	clientFiles := make(map[string][]byte)
+	for name, body := range files {
+		if stablePathOK(name) {
+			clientFiles[name] = body
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.storeTreeLocked(sha, clientFiles)
+	body, found := clientFiles[path]
+	return body, found, true
+}
+
+// loadTarball reads a release and caches it when it fits, returning the file,
+// whether it exists, and whether the release was loaded. A failure is remembered
+// for one TTL (the caller falls back to the raw host meanwhile).
+func (s *StableSource) loadTarball(ctx context.Context, sha, path string) ([]byte, bool, bool) {
 	s.tarLock.Lock()
 	defer s.tarLock.Unlock()
 	s.mu.Lock()
 	whole, failed := s.whole[sha], s.tarFail[sha]
+	body, found := s.files[sha+"/"+path]
 	s.mu.Unlock()
 	if whole {
-		return true
+		return body, found, true
 	}
 	if !failed.IsZero() && time.Since(failed) < s.ttl() {
-		return false
+		return nil, false, false
 	}
 	files, err := s.fetchTarball(ctx, sha)
 	s.mu.Lock()
@@ -412,17 +439,12 @@ func (s *StableSource) loadTarball(ctx context.Context, sha string) bool {
 		}
 		s.tarFail[sha] = time.Now()
 		log.Printf("fleet: stable %s tarball: %v (falling back to the raw host)", sha[:7], err)
-		return false
+		return nil, false, false
 	}
-	for p, b := range files {
-		s.storeLocked(sha+"/"+p, b)
-	}
-	if s.whole == nil {
-		s.whole = map[string]bool{}
-	}
-	s.whole[sha] = true
+	s.storeTreeLocked(sha, files)
 	delete(s.tarFail, sha)
-	return true
+	body, found = files[path]
+	return body, found, true
 }
 
 // fetchTarball is every client path (stablePathOK) of sha's tarball.
