@@ -22,6 +22,8 @@
 #             approve code (`fleet drill approve`, the code in the environment, never
 #             printed), then waits ≤ FLEET_CN_PROBE_ENSURE_WAIT s (300) for the hub to
 #             list the pod again
+#   allow     (with FLEET_CN_PROBE_CRED_ALLOW, issue #4290) a drill person made
+#             again gets its own subscription allowlist — those IDs — at once
 #   pod       the test pod's Deployment runs stable's node image: the `node image`
 #             commit status the release train's node-image job leaves on the commit
 #             it built (its description `<repo>@sha256:…`) — different ⇒ `kubectl set
@@ -51,6 +53,7 @@ MANIFEST=${FLEET_CN_PROBE_POD_MANIFEST:-}
 WAIT=${FLEET_CN_PROBE_ENSURE_WAIT:-300}
 GH=${FLEET_CN_PROBE_GH:-gh}
 DRILL=${FLEET_CN_PROBE_DRILL_CMD:-bash $BIN/fleet-drill.sh}
+POLICY=${FLEET_CN_PROBE_POLICY_CMD:-bash $BIN/fleet-cred-policy.sh}
 
 sub=${1:-}; shift 2>/dev/null
 case "$sub" in ensure|status) ;; -h|--help|'') sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
@@ -107,6 +110,24 @@ listed() {   # → 0 when the hub lists the machine for the login
   LISTED_WHY=$(printf '%s\n' "$out" | grep -v '^Could not chdir' | tail -n 2 | tr '\t\n' '  ')
   return 1
 }
+# allow_part <drill person id> — the new drill person's subscription allowlist
+# (issue #4290): in strict mode a person with no list uses nothing, and every
+# Codex turn on the pod was 403. The hub gives a drill its creator's list and the
+# pod its owner's; FLEET_CN_PROBE_CRED_ALLOW (subscription IDs, space-separated)
+# writes the drill's own list on top, through fleet-cred-policy.sh with the
+# operator token (CCQUOTA_VIEWER_TOKEN, else ~/.ccquota/viewer-token — read
+# into the one call's environment, never an argv). Unset ⇒ the hub's rule alone.
+allow_part() {
+  local pid=$1 tok=${CCQUOTA_VIEWER_TOKEN:-} out
+  [ -n "${FLEET_CN_PROBE_CRED_ALLOW:-}" ] || return 0
+  [ -n "$pid" ] || { bad "allow fail the invite named no person"; return; }
+  [ -n "$tok" ] || { [ -r "$HOME/.ccquota/viewer-token" ] && read -r tok < "$HOME/.ccquota/viewer-token"; } || tok=''
+  [ -n "$tok" ] || { bad "allow fail no operator token for $pid's allowlist"; return; }
+  # shellcheck disable=SC2086 # the IDs are a space-separated list
+  out=$(CCQUOTA_VIEWER_TOKEN=$tok $POLICY set --force user "$pid" $FLEET_CN_PROBE_CRED_ALLOW 2>&1) \
+    || { bad "allow fail fleet-cred-policy set user $pid: $(printf '%s' "$out" | tail -n 1)"; return; }
+  say "allow made $pid may use FLEET_CN_PROBE_CRED_ALLOW"
+}
 identity_part() {
   local inv code ucode out i
   LISTED_WHY=''
@@ -118,6 +139,9 @@ identity_part() {
 try: print(json.load(sys.stdin).get("approve_code",""))
 except Exception: pass' 2>/dev/null)
   case "$code" in fd_*) ;; *) bad "identity fail the invite answered no approve code"; return ;; esac
+  allow_part "$(printf '%s' "$inv" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("person_id",""))
+except Exception: pass' 2>/dev/null)"
   # `fleet login` on the client, in the background there; its 验证码 read back,
   # confirmed here as the drill person, then the login is waited for
   out=$(printf '%s\n' 'rm -f /tmp/cnprobe-login.out; (setsid fleet login </dev/null >/tmp/cnprobe-login.out 2>&1 &); for i in $(seq 1 40); do c=$(grep -Eo "[A-Z]{4}-[A-Z]{4}" /tmp/cnprobe-login.out | head -n 1); [ -n "$c" ] && { echo "CODE $c"; break; }; sleep 0.5; done' | as_login)

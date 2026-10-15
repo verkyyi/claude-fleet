@@ -290,6 +290,9 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 	if err := s.drillUserAllow(settings, &pol); err != nil {
 		return credPolicy{}, err
 	}
+	if err := s.userPodNodeAllow(settings, &pol); err != nil {
+		return credPolicy{}, err
+	}
 	s.trialUserAllow(settings, &pol) // a trial person: fleet.trial.cred_allow (#4260)
 	return pol, nil
 }
@@ -318,6 +321,58 @@ func (s *Server) drillUserAllow(settings map[string]string, p *credPolicy) error
 		p.User = credAllow{Set: true, All: true}
 	case c != "" && !s.Store.IsDrill(c):
 		p.User = credAllowOf(settings, credUserKey(c))
+	}
+	return nil
+}
+
+// userPodNodeAllow gives a person's own pod (u-<nonce>, claude-fleet#4290) with
+// no machine list of its own its OWNER's person allowance: the hub makes and
+// rebuilds such a pod for one person, so no operator lists it ahead of time,
+// and in strict mode «no list» denied every subscription — every Codex turn on
+// a fresh pod was 403 until someone listed the machine by hand. The owner is the
+// person the pod is recorded for (fleet_cluster_pods), else the login the hub
+// opened there; the one asking wins when it is one of them. A drill owner reads
+// its creator's list (drillUserAllow). The person half still applies, and a list
+// written for the pod itself wins.
+func (s *Server) userPodNodeAllow(settings map[string]string, p *credPolicy) error {
+	if p.Machine == "" || !p.Node.Set || p.Node.All || !isUserPodName(p.Machine) {
+		return nil
+	}
+	if _, own := settings[credNodeKey(p.Machine)]; own {
+		return nil
+	}
+	var owners []string
+	if cp, err := s.Store.ClusterPodOf(p.Machine); err == nil && cp.Held() && cp.PrincipalID != "" {
+		owners = append(owners, cp.PrincipalID)
+	} else if err != nil && !errors.Is(err, store.ErrNoClusterPod) {
+		return err
+	}
+	accts, err := s.Store.ActiveAccountsOn(p.Machine)
+	if err != nil {
+		return err
+	}
+	for _, a := range accts {
+		owners = append(owners, a.PrincipalID)
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	owner := owners[0]
+	for _, o := range owners {
+		if p.Principal != "" && strings.EqualFold(o, p.Principal) {
+			owner = o
+			break
+		}
+	}
+	if isSvcPrincipal(owner) {
+		return nil
+	}
+	op := credPolicy{Principal: owner, User: credUserAllowOf(settings, owner)}
+	if err := s.drillUserAllow(settings, &op); err != nil {
+		return err
+	}
+	if op.User.Set {
+		p.Node = op.User
 	}
 	return nil
 }
