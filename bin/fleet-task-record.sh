@@ -184,7 +184,6 @@ JSON
     is_tref "$t" || die 1 "the hub's answer names no accepted record"
     dispatch=$(python3 - "$dispatch" "$accepted" <<'JSON'
 import json,sys
-from pathlib import Path
 d,t=map(json.loads,sys.argv[1:])
 if t.get("authority_version") != 1 or t.get("requested_agent") != d["requested_agent"] or t.get("resolved_agent") != d["resolved_agent"]:
     sys.exit("hub did not accept the requested provider contract")

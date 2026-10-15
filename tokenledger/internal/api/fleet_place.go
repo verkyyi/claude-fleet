@@ -265,7 +265,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		if req.Reap != "" {
 			input["reap"] = req.Reap
 		}
-		if req.AccountClass != "" {
+		if accountClassBinds(req.AccountClass) {
 			input["account_class"] = req.AccountClass
 		}
 		accepted, _, e := parseWrite("worker_start", input)
@@ -325,6 +325,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	declined := map[string]string{}
 	attempts := []placeAttempt{}
 	withAttempts := func(m map[string]any) map[string]any {
+		if req.Dispatch != nil {
+			m["dispatch"] = req.Dispatch
+		}
 		if len(attempts) > 0 {
 			m["attempts"] = attempts
 		}

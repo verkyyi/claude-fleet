@@ -252,7 +252,7 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 			Machine: shortNode(ep.Hostname), Login: ep.OSUser}
 		if in.AuthorityVersion != 0 {
 			t = store.FleetTask{Owner: owner, Title: title, Via: in.Via, Repo: in.Repo,
-				AuthorityVersion: in.AuthorityVersion, RequestedAgent: in.RequestedAgent, ResolvedAgent: in.ResolvedAgent,
+				Agent: in.ResolvedAgent, AuthorityVersion: in.AuthorityVersion, RequestedAgent: in.RequestedAgent, ResolvedAgent: in.ResolvedAgent,
 				TicketRef: in.TicketRef, ParentTask: in.ParentTask, ParentSession: in.ParentSession, RequestPayload: string(in.RequestPayload)}
 		}
 		rec, err := s.Store.CreateFleetTask(t, "node:"+owner+":"+in.Token, now)
