@@ -208,15 +208,38 @@ printf '%s\n' "\$*" >> "$WORK/ssh.log"
 exit 0
 EOF
 chmod +x "$SHIM/ssh"
+cat > "$WORK/ptyrun.py" <<'EOPTY'
+import os, select, sys
+# run argv[1:] on a pseudo-terminal of its own (the thin client wants one), its
+# output on stdout once it ends, its exit code ours
+pid, fd = os.forkpty()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out = b""
+while True:
+    r, _, _ = select.select([fd], [], [], 60)
+    if not r:
+        break
+    try:
+        d = os.read(fd, 65536)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+_, st = os.waitpid(pid, 0)
+sys.stdout.buffer.write(out)
+sys.exit(os.waitstatus_to_exitcode(st) if hasattr(os, "waitstatus_to_exitcode") else (st >> 8))
+EOPTY
 # the home's pick (fleet-connect.py --argv needs a person's certificate): the node
 cat > "$SHIM/argv.sh" <<EOF
 #!/bin/sh
-printf '{"argv": ["$SHIM/ssh", "%s"], "host": "%s", "route": "lan"}\n' "$NODE" "$NODE"
+printf '{"argv": ["$SHIM/ssh", "%s"], "host": 1, "route": {"name": "lan"}}\n' "$NODE"
 EOF
 out=$(cd "$CH" && env -i PATH="$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
-        FLEET_THIN_NO_TTY_OK=1 FLEET_THIN_ARGV_CMD="sh $SHIM/argv.sh" FLEET_THIN_LOG="$WORK/thin.log" \
+        FLEET_THIN_ARGV_CMD="sh $SHIM/argv.sh" FLEET_THIN_LOG="$WORK/thin.log" \
         FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_ITERM_KEYS=0 \
-        "$FLEET" </dev/null 2>"$WORK/fleet.err"); rc=$?
+        python3 "$WORK/ptyrun.py" "$FLEET" </dev/null 2>"$WORK/fleet.err"); rc=$?
 [ "$rc" = 0 ] || die "fleet exited $rc" "$(tail -n 5 "$WORK/fleet.err") $out"
 grep -q 'fleet-remote-view.sh attach --thin' "$WORK/ssh.log" || die 'the client never asked its home for a 看台' "$(cat "$WORK/ssh.log" 2>/dev/null)"
 for w in --view --device --token; do

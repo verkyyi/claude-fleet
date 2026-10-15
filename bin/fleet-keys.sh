@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-keys.sh — the fleet keymap cheatsheet (issue #110). One curated source
 # of truth for EVERY fleet shortcut, grouped by context:
-#   tmux prefix binds · dashboard fzf · backlog fzf · config modal fzf.
+#   dashboard fzf · backlog fzf · config modal fzf.
 #
 # Opened by a `?` bind inside the dash/backlog (a popup that closes on q/esc),
 # and read whole by /fleet-onboard. The client opens no key page (issue #2362:
@@ -10,17 +10,17 @@
 #
 # Context scoping (issue #265): no context shows the WHOLE sheet, but
 # when opened from INSIDE a panel it shows only the shortcuts that apply there —
-# that panel's own binds plus the global `tmux prefix` binds (which fire from any
-# pane, the dash included), not the other panels' inner binds. Pass the panel via
+# that panel's own binds, not the other panels' inner binds. Pass the panel via
 # `--context dash|backlog` (default `all` = every group). The old client's groups —
-# its switch keys, the task list's taps and its row menu's letters (`--context
-# sidebar`) — went with that client (issue #3008); the 看台's keys are
-# dash-keymap.sh's switch table, read by fleet_view.py.
+# its `tmux prefix` binds, its switch keys, the task list's taps and its row
+# menu's letters (`--context sidebar`) — went with that client (issue #3008: a
+# node binds tmux's stock keys only); the 看台's keys are dash-keymap.sh's switch
+# table, read by fleet_view.py.
 #
 # Usage:
 #   fleet-keys.sh                    # full sheet, wait for q/esc (popup mode)
-#   fleet-keys.sh --context dash     # dashboard-scoped sheet (+ tmux prefix)
-#   fleet-keys.sh --context backlog  # backlog-scoped sheet (+ tmux prefix)
+#   fleet-keys.sh --context dash     # dashboard-scoped sheet
+#   fleet-keys.sh --context backlog  # backlog-scoped sheet
 #   fleet-keys.sh --plain            # print once and exit (no wait) — pipes/tests
 #                                    #   also implied when stdout is not a tty
 #
@@ -94,15 +94,14 @@ key() {
   printf '  %s%s%s%s%s\n' "$YEL" "$k" "$R" "$pad" "$desc"
 }
 
-# want <group> — is this group in scope for the current $CONTEXT? The global
-# `tmux prefix` binds fire from any pane, so they show in every scope; the
-# per-panel groups (dashboard/backlog/config modal) show only in the full sheet
-# or when that panel is the active context.
+# want <group> — is this group in scope for the current $CONTEXT? The per-panel
+# groups (dashboard/backlog/config modal) show only in the full sheet or when that
+# panel is the active context.
 want() {
   case "$CONTEXT" in
     all)     return 0 ;;
-    dash)    case "$1" in prefix|dashboard) return 0 ;; *) return 1 ;; esac ;;
-    backlog) case "$1" in prefix|backlog)   return 0 ;; *) return 1 ;; esac ;;
+    dash)    case "$1" in dashboard) return 0 ;; *) return 1 ;; esac ;;
+    backlog) case "$1" in backlog)   return 0 ;; *) return 1 ;; esac ;;
     *)       return 0 ;;
   esac
 }
@@ -117,14 +116,6 @@ print_sheet() {
     *)       sub=$(fleet_ui_t keys_sub_all_fmt "${DASH_KEYMAP_PREFIX:-C-b}") ;;
   esac
   printf '%s%s %s %s  %s%s%s\n' "$B" "$CYAN" "$(fleet_ui_t keys_title)" "$R" "$DIM" "$sub" "$R"
-
-  if want prefix; then
-  group "$(fleet_ui_t keys_g_prefix)" "$(fleet_ui_t keys_g_prefix_sub)"
-  key "prefix q" "$(fleet_ui_t keys_prefix_05)"
-  key "prefix z" "$(fleet_ui_t keys_prefix_09)"
-  key "prefix [" "$(fleet_ui_t keys_prefix_10)"
-  key "fleet guide" "$(fleet_ui_t keys_prefix_15)"
-  fi
 
   if want dashboard; then
   group "$(fleet_ui_t keys_g_dashboard)" "$(fleet_ui_t keys_g_dashboard_sub)"

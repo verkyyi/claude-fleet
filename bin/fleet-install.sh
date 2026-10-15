@@ -47,8 +47,8 @@
 #      (#1722, with a hub). Run again on a client it installed (one with a
 #      .client-version), the new client goes BESIDE the one in use, whole, into
 #      <home>.versions/<version>/ and <home> — a link — is switched in one
-#      rename(2), the version before kept as .prev; with the client running it
-#      is only staged, and the client's keeper switches it once you are idle
+#      rename(2), the version before kept as .prev; with an old client (#3008)
+#      still running it is only staged, and the next `fleet` switches it
 #      (#1900). Already a full install here (a git checkout, or one
 #      with bin/fleet-up.sh) → not one file is downloaded or removed: that
 #      install follows stable by itself. A ~/.local/bin/fleet of two lines runs
@@ -339,8 +339,10 @@ stale_in() {
 mark_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
 # vkey <version> — a version as a directory name (fleet-client-update.sh's)
 vkey() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80; }
-# client_running — the client's tmux server is up (fleet-client-update.sh's
-# shell_live): its files are in use, so they are staged, not switched
+# client_running — the OLD client's tmux server is up (issue #3008: that client is
+# gone, but one started before the update may still run from these files): they
+# are staged, not switched, and the next `fleet` switches (fleet-client-update.sh
+# start). The thin client runs no server: it switches at once.
 client_running() {
   _s="${FLEET_SHELL_SESSION:-fleet-shell}"
   case "$_s" in ''|*[!A-Za-z0-9._-]*) _s=fleet-shell ;; esac
@@ -416,7 +418,7 @@ install_versioned() {
   mv "$STG" "$VERS/$_key"; STG=''
   if client_running; then
     printf '%s\n' "$_key" > "$VERS/.next.tmp" && mv -f "$VERS/.next.tmp" "$VERS/.next"
-    say "fleet: 客户端正在运行 — 新版装在 ${VERS}/${_key}，等你空闲时原地换上（正在用的一个字节不动）"
+    say "fleet: 旧客户端还在运行 — 新版装在 ${VERS}/${_key}，下次打开 fleet 时换上（正在用的一个字节不动）"
   else
     _old=$_cur
     if [ -z "$_old" ]; then
@@ -535,9 +537,9 @@ PYV
     # switched in one rename(2) (fleet-versions-lib.sh, the switch the updater
     # and a 承载 machine's install-sync use). The one in use is never written:
     # a run that fails half way leaves it as it was, and the version before
-    # stays as .prev. A client that is RUNNING is not switched under itself —
-    # the new one is staged (.next) and its keeper takes it in place once you
-    # are idle (fleet-client-update.sh tick), as it takes one it fetched.
+    # stays as .prev. An old client that is RUNNING is not switched under itself
+    # — the new one is staged (.next) and the next `fleet` switches to it
+    # (fleet-client-update.sh start), as it does one it fetched.
     install_versioned
   else
     install_in_place
@@ -580,8 +582,7 @@ fi
 # python.org / Homebrew / pyenv python3 first on PATH reads none, and with no
 # (or an old) certifi `fleet login` died CERTIFICATE_VERIFY_FAILED on a hub curl
 # had just reached. So Apple's is recorded ($CONF/python) and linked as
-# $CONF/pybin/python3, which `fleet` puts first on PATH — the launcher, the
-# keeper and every `#!/usr/bin/env python3` under it then run on it. Only when
+# $CONF/pybin/python3, which `fleet` puts first on PATH — the launcher and every `#!/usr/bin/env python3` under it then run on it. Only when
 # the developer tools are there (else /usr/bin/python3 is a stub that pops an
 # install dialog). bin/fleet_tls.py covers any python anyway (its own CA union).
 if [ "$(uname -s)" = Darwin ] && [ "${FLEET_INSTALL_PYTHON:-/usr/bin/python3}" != none ]; then

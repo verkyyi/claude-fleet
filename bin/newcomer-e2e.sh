@@ -314,9 +314,33 @@ chmod +x "$SHIM/ssh"
 # The agent reports this computer's own hostname as the node's, so the client
 # must not take itself for that machine (it would run the node's side here).
 printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"; chmod +x "$SHIM/hostname"
-fenv() { nenv FLEET_THIN_NO_TTY_OK=1 FLEET_THIN_LOG="$WORK/thin.log" FLEET_ITERM_KEYS=0 "$@"; }
+cat > "$WORK/ptyrun.py" <<'EOPTY'
+import os, select, sys
+# run argv[1:] on a pseudo-terminal of its own (the thin client wants one), its
+# output on stdout once it ends, its exit code ours
+pid, fd = os.forkpty()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out = b""
+while True:
+    r, _, _ = select.select([fd], [], [], 60)
+    if not r:
+        break
+    try:
+        d = os.read(fd, 65536)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+_, st = os.waitpid(pid, 0)
+sys.stdout.buffer.write(out)
+sys.exit(os.waitstatus_to_exitcode(st) if hasattr(os, "waitstatus_to_exitcode") else (st >> 8))
+EOPTY
+# the thin client wants a terminal: each `fleet` runs on a pty of its own
+fenv() { nenv FLEET_THIN_LOG="$WORK/thin.log" FLEET_ITERM_KEYS=0 python3 "$WORK/ptyrun.py" "$@"; }
 before=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
-fenv "$FLEET" >"$WORK/fleet.out" 2>"$WORK/fleet.err" </dev/null; rc=$?
+fenv "$FLEET" >"$WORK/fleet.err" 2>&1 </dev/null; rc=$?
 [ "$rc" = 0 ] || die "fleet exited $rc" "$(tail -n 8 "$WORK/fleet.err")"
 grep -Eq '[A-Z]{4}-[A-Z]{4}' "$WORK/fleet.err" && die 'fleet asked for a scan with a fresh certificate' "$(cat "$WORK/fleet.err")"
 grep -q 'fleet-remote-view.sh attach --thin' "$WORK/ssh.log" || die 'the client never asked the node for its 看台' "$(cat "$WORK/ssh.log" 2>/dev/null)"
@@ -326,12 +350,12 @@ ok "the thin client asked $NODE for its 看台, as drillnew with the certificate
 
 # =============================================================================
 step 'again: a second fleet asks for no scan; under the threshold it renews by key'
-fenv "$FLEET" >/dev/null 2>"$WORK/fleet2.err" </dev/null; rc=$?
+fenv "$FLEET" >"$WORK/fleet2.err" 2>&1 </dev/null; rc=$?
 [ "$rc" = 0 ] || die "the second fleet exited $rc" "$(tail -n 8 "$WORK/fleet2.err")"
 grep -Eq '[A-Z]{4}-[A-Z]{4}' "$WORK/fleet2.err" && die 'the second fleet asked for a scan' "$(cat "$WORK/fleet2.err")"
 [ "$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')" = "$before" ] || die 'the second fleet replaced a fresh certificate'
 # 12 hours on: a certificate under FLEET_RENEW_BELOW_SECS renews with the device key
-fenv FLEET_RENEW_BELOW_SECS=99999999 "$FLEET" >/dev/null 2>"$WORK/fleet3.err" </dev/null; rc=$?
+fenv env FLEET_RENEW_BELOW_SECS=99999999 "$FLEET" >"$WORK/fleet3.err" 2>&1 </dev/null; rc=$?
 [ "$rc" = 0 ] || die "fleet under the renew threshold exited $rc" "$(tail -n 8 "$WORK/fleet3.err")"
 grep -Eq '[A-Z]{4}-[A-Z]{4}' "$WORK/fleet3.err" && die 'renewal asked for a scan' "$(cat "$WORK/fleet3.err")"
 after=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
