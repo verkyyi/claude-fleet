@@ -293,8 +293,33 @@ def cmd_attach(args):
     os.execvpe(argv[0], argv, env)
 
 
+def attach_pids(conn):
+    """This login's attach processes for that connection (the attach and the
+    subshells it backgrounds carry its argv) — never anyone else's."""
+    want = "fleet-remote-view.sh attach --thin --browser --view wt-%s " % conn
+    r = subprocess.run(["ps", "-ax", "-o", "pid=", "-o", "uid=", "-o", "command="],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+    pids = []
+    for line in r.stdout.splitlines():
+        f = line.split(None, 2)
+        if len(f) == 3 and f[1] == str(os.getuid()) and want in f[2] + " " and int(f[0]) != os.getpid():
+            pids.append(int(f[0]))
+    return pids
+
+
 def cmd_release(args):
     conn = opt(args, "--conn", CONN, need=True)
+    for sig in (15, 9):
+        pids = attach_pids(conn)
+        for p in pids:
+            try:
+                os.kill(p, sig)
+            except OSError:
+                pass
+        for _ in range(10):
+            if not attach_pids(conn):
+                break
+            time.sleep(0.1)
     sess, sock = fleet()
     gone = False
     if sess:
