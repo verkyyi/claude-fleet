@@ -161,7 +161,7 @@ func (s *Store) LeaseForWorker(workerID string, at time.Time) (repo string, issu
 	if workerID == "" {
 		return "", 0, false, nil
 	}
-	rows, err := s.read.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE worker_id = ?`, workerID)
+	rows, err := s.read.Query(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE worker_id = ?`, workerID)
 	if err != nil {
 		return "", 0, false, err
 	}

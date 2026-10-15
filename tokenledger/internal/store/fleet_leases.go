@@ -61,6 +61,11 @@ type Lease struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 	Seen       bool      `json:"seen"`
 	Forced     bool      `json:"forced"`
+	// A task lease is pinned until a fenced terminal/transfer transaction.
+	// Expiry and heartbeat absence never prove its execution has stopped.
+	TaskID       int64  `json:"task_id,omitempty"`
+	Generation   int64  `json:"generation,omitempty"`
+	AccountOwner string `json:"account_owner,omitempty"`
 }
 
 // LeaseClaim is one node's request for (Repo, Issue).
@@ -87,18 +92,25 @@ func (s *Store) ensureFleetLeases() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetLeasesSchema)); err != nil {
 		return fmt.Errorf("create fleet_leases table: %w", err)
 	}
-	return nil
+	for _, col := range []string{"task_id", "generation"} {
+		if err := s.addColumn("fleet_leases", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	return s.addColumn("fleet_leases", "account_owner", "TEXT NOT NULL DEFAULT ''")
 }
 
 const leaseCols = `repo, issue, worker_id, fleet_id, endpoint_id, hostname, os_user,
 	acquired_at, renewed_at, expires_at, seen, forced`
+
+const leaseReadCols = leaseCols + `, task_id, generation, account_owner`
 
 func scanLease(sc interface{ Scan(...any) error }) (Lease, error) {
 	var l Lease
 	var acq, ren, exp string
 	var seen, forced int
 	if err := sc.Scan(&l.Repo, &l.Issue, &l.WorkerID, &l.FleetID, &l.EndpointID, &l.Hostname, &l.OSUser,
-		&acq, &ren, &exp, &seen, &forced); err != nil {
+		&acq, &ren, &exp, &seen, &forced, &l.TaskID, &l.Generation, &l.AccountOwner); err != nil {
 		return Lease{}, err
 	}
 	l.AcquiredAt, _ = time.Parse(rfc, acq)
@@ -127,7 +139,7 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 	l := Lease{Repo: c.Repo, Issue: c.Issue, WorkerID: c.WorkerID, FleetID: c.FleetID, EndpointID: c.EndpointID,
 		Hostname: c.Hostname, OSUser: c.OSUser, AcquiredAt: at.UTC(), RenewedAt: at.UTC(),
 		ExpiresAt: at.Add(grace).UTC()}
-	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), c.Repo, c.Issue))
+	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), c.Repo, c.Issue))
 	if errors.Is(err, sql.ErrNoRows) {
 		// Free: one statement takes it. Losing it here means another hub's
 		// claim inserted the row since the read (Postgres; SQLite's claim
@@ -141,10 +153,13 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 		if n, _ := res.RowsAffected(); n == 1 {
 			return true, l, nil, tx.Commit()
 		}
-		cur, err = scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), c.Repo, c.Issue))
+		cur, err = scanLease(tx.QueryRow(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), c.Repo, c.Issue))
 	}
 	if err != nil {
 		return false, Lease{}, nil, err
+	}
+	if cur.TaskID != 0 {
+		return false, cur, nil, nil
 	}
 	live := cur.ExpiresAt.After(at)
 	// The same fleet asking is the same worker: within one fleet (repo,
@@ -196,7 +211,7 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 // ReleaseLease drops (repo, issue) if workerID holds it. released false means
 // it was not held by that worker (free already, or someone else's).
 func (s *Store) ReleaseLease(repo string, issue int, workerID string) (released bool, err error) {
-	res, err := s.write.Exec(`DELETE FROM fleet_leases WHERE repo = ? AND issue = ? AND worker_id = ?`,
+	res, err := s.write.Exec(`DELETE FROM fleet_leases WHERE repo = ? AND issue = ? AND worker_id = ? AND task_id = 0`,
 		NormRepo(repo), issue, workerID)
 	if err != nil {
 		return false, err
@@ -229,7 +244,7 @@ func (s *Store) RenewLeases(endpointID string, readFleets map[string]bool, sessi
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return 0, 0, err
 	}
-	rows, err := tx.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE endpoint_id = ?`+s.d.forUpdate(), endpointID)
+	rows, err := tx.Query(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE endpoint_id = ?`+s.d.forUpdate(), endpointID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -254,7 +269,7 @@ func (s *Store) RenewLeases(endpointID string, readFleets map[string]bool, sessi
 		found := false
 		for _, ss := range sessions {
 			if ss.WorkerID == l.WorkerID ||
-				(ss.FleetID == l.FleetID && ss.Issue == l.Issue && NormRepo(ss.Repo) == l.Repo) {
+				(l.TaskID == 0 && ss.FleetID == l.FleetID && ss.Issue == l.Issue && NormRepo(ss.Repo) == l.Repo) {
 				found = true
 				break
 			}
@@ -266,8 +281,8 @@ func (s *Store) RenewLeases(endpointID string, readFleets map[string]bool, sessi
 				return 0, 0, err
 			}
 			renewed++
-		case l.Seen:
-			if _, err := tx.Exec(`DELETE FROM fleet_leases WHERE repo = ? AND issue = ? AND worker_id = ?`,
+		case l.Seen && l.TaskID == 0:
+			if _, err := tx.Exec(`DELETE FROM fleet_leases WHERE repo = ? AND issue = ? AND worker_id = ? AND task_id = 0`,
 				l.Repo, l.Issue, l.WorkerID); err != nil {
 				return 0, 0, err
 			}
@@ -277,12 +292,13 @@ func (s *Store) RenewLeases(endpointID string, readFleets map[string]bool, sessi
 	return renewed, released, tx.Commit()
 }
 
-// Leases lists every lease still live at at, by repo then issue. Expired rows
-// are left in the table (the next Acquire overwrites them) but never listed.
+// Leases lists live legacy leases and pinned task leases, by repo then issue.
+// An expired task lease remains held; expiry is an observation, not a release.
+// Expired legacy rows are left for the next Acquire and are not listed.
 func (s *Store) Leases(at time.Time) ([]Lease, error) {
 	// Filtered here, not in SQL: RFC3339Nano drops trailing zeros, so the
 	// stored text does not sort as time.
-	rows, err := s.read.Query(`SELECT ` + leaseCols + ` FROM fleet_leases ORDER BY repo, issue`)
+	rows, err := s.read.Query(`SELECT ` + leaseReadCols + ` FROM fleet_leases ORDER BY repo, issue`)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +309,7 @@ func (s *Store) Leases(at time.Time) ([]Lease, error) {
 		if err != nil {
 			return nil, err
 		}
-		if l.ExpiresAt.After(at) {
+		if l.TaskID != 0 || l.ExpiresAt.After(at) {
 			out = append(out, l)
 		}
 	}
@@ -316,14 +332,14 @@ func (s *Store) HandOverLease(repo string, issue int, from string, to LeaseClaim
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return false, err
 	}
-	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), repo, issue))
+	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), repo, issue))
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if cur.WorkerID != from || !cur.ExpiresAt.After(at) {
+	if cur.TaskID != 0 || cur.WorkerID != from || !cur.ExpiresAt.After(at) {
 		return false, nil
 	}
 	ts := at.UTC().Format(rfc)

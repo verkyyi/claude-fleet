@@ -18,7 +18,8 @@ import (
 //
 // The row holds who asked, from where, where it landed and what hangs on it;
 // how the session is doing right now (the agent's own state, its context left)
-// is read live off the inventory by worker_id, never copied here.
+// is read live off the inventory by worker_id for legacy records. Version 1
+// records own their lifecycle explicitly (fleet_task_lifecycle.go).
 //
 // Created only with the fleet module on (EnsureNodes), like every fleet table.
 const fleetTasksSchema = `
@@ -81,10 +82,30 @@ type FleetTask struct {
 	Parked      string `json:"parked"`
 	// Rule is the dispatch rule a coordinator's record was given under
 	// (claude-fleet#3330): `n=<N> v=<version>`, the issue body's marker's words.
-	Rule      string    `json:"rule,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	token     string
+	Rule string `json:"rule,omitempty"`
+	// AuthorityVersion 0 keeps the legacy placement record. Version 1 owns
+	// its lifecycle; inventory is only an observation, never an outcome.
+	AuthorityVersion  int    `json:"authority_version,omitempty"`
+	Generation        int64  `json:"generation,omitempty"`
+	ExecutionOwner    string `json:"execution_owner,omitempty"`
+	ExecutionEndpoint string `json:"execution_endpoint,omitempty"`
+	RequestedAgent    string `json:"requested_agent,omitempty"`
+	ResolvedAgent     string `json:"resolved_agent,omitempty"`
+	ActualAgent       string `json:"actual_agent,omitempty"`
+	ParentTask        string `json:"parent_task,omitempty"`
+	ParentSession     string `json:"parent_session,omitempty"`
+	TicketRef         string `json:"ticket_ref,omitempty"`
+	LeaseRef          string `json:"lease_ref,omitempty"`
+	Outcome           string `json:"outcome,omitempty"`
+	Evidence          string `json:"evidence,omitempty"`
+	Observation       string `json:"observation,omitempty"`
+	// RequestPayload is the accepted dispatch input (JSON). It is immutable;
+	// subsequent generations retain their inputs in the operation journal.
+	RequestPayload  string `json:"request_payload,omitempty"`
+	acceptedRequest string
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	token           string
 }
 
 // TaskRef is a record's number as people write it: T218.
@@ -105,20 +126,42 @@ func (s *Store) ensureFleetTasks() error {
 		return fmt.Errorf("create fleet_tasks table: %w", err)
 	}
 	// claude-fleet#3330: the rule a coordinator dispatched it under.
-	return s.addColumn("fleet_tasks", "rule", "TEXT NOT NULL DEFAULT ''")
+	if err := s.addColumn("fleet_tasks", "rule", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	for _, col := range []string{"execution_owner", "execution_endpoint", "requested_agent", "resolved_agent", "actual_agent",
+		"parent_task", "parent_session", "ticket_ref", "lease_ref", "outcome", "evidence", "observation", "request_payload", "accepted_request"} {
+		if err := s.addColumn("fleet_tasks", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	for _, col := range []string{"authority_version", "generation"} {
+		if err := s.addColumn("fleet_tasks", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machine, login, worker_id,
-	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at`
+	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at,
+	authority_version, generation, execution_owner, execution_endpoint, requested_agent, resolved_agent, actual_agent,
+	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request`
 
 // CreateFleetTask writes a new record and returns it with its number. token is
 // the caller's one-time key (the place's idempotency key): writing the same
 // token twice returns the first record, never a second one.
 func (s *Store) CreateFleetTask(t FleetTask, token string, now time.Time) (FleetTask, error) {
+	if t.AuthorityVersion != 0 {
+		return s.acceptFleetTask(t, token, now)
+	}
 	if token == "" || t.Owner == "" || t.Title == "" {
 		return FleetTask{}, errors.New("a task needs a token, an owner and a title")
 	}
 	if old, err := s.fleetTaskBy(`token = ?`, token); err == nil {
+		if old.AuthorityVersion != 0 {
+			return FleetTask{}, ErrTaskFence
+		}
 		return old, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return FleetTask{}, err
@@ -135,7 +178,11 @@ func (s *Store) CreateFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		t.OperationID, state, t.Note, t.Issue, t.PR, t.Asked, t.Parked, t.Rule, ts, ts); err != nil {
 		return FleetTask{}, err
 	}
-	return s.fleetTaskBy(`token = ?`, token)
+	rec, err := s.fleetTaskBy(`token = ?`, token)
+	if err == nil && rec.AuthorityVersion != 0 {
+		return FleetTask{}, ErrTaskFence
+	}
+	return rec, err
 }
 
 // FleetTaskUpdate is what a start's answer (or a later step) adds to a record;
@@ -151,6 +198,13 @@ var taskClearable = map[string]bool{"asked": true, "parked": true, "note": true}
 
 // UpdateFleetTask fills the record's non-empty fields from u and returns it.
 func (s *Store) UpdateFleetTask(id int64, u FleetTaskUpdate, now time.Time) (FleetTask, error) {
+	old, err := s.FleetTask(id)
+	if err != nil {
+		return FleetTask{}, err
+	}
+	if old.AuthorityVersion != 0 {
+		return FleetTask{}, ErrTaskFence
+	}
 	sets, args := []string{}, []any{}
 	for _, f := range []struct {
 		col, v string
@@ -169,7 +223,7 @@ func (s *Store) UpdateFleetTask(id int64, u FleetTaskUpdate, now time.Time) (Fle
 	}
 	if len(sets) > 0 {
 		sets, args = append(sets, "updated_at = ?"), append(args, now.UTC().Format(rfc))
-		res, err := s.write.Exec(`UPDATE fleet_tasks SET `+strings.Join(sets, ", ")+` WHERE id = ?`, append(args, id)...)
+		res, err := s.write.Exec(`UPDATE fleet_tasks SET `+strings.Join(sets, ", ")+` WHERE id = ? AND authority_version = 0`, append(args, id)...)
 		if err != nil {
 			return FleetTask{}, err
 		}
@@ -231,7 +285,10 @@ func scanFleetTasks(rows *sql.Rows) ([]FleetTask, error) {
 		var created, updated string
 		if err := rows.Scan(&t.ID, &t.token, &t.Owner, &t.Title, &t.Via, &t.Device, &t.Repo, &t.Agent, &t.Machine,
 			&t.Login, &t.WorkerID, &t.SessionKey, &t.OperationID, &t.State, &t.Note, &t.Issue, &t.PR, &t.Asked,
-			&t.Parked, &t.Rule, &created, &updated); err != nil {
+			&t.Parked, &t.Rule, &created, &updated,
+			&t.AuthorityVersion, &t.Generation, &t.ExecutionOwner, &t.ExecutionEndpoint, &t.RequestedAgent, &t.ResolvedAgent,
+			&t.ActualAgent, &t.ParentTask, &t.ParentSession, &t.TicketRef, &t.LeaseRef, &t.Outcome, &t.Evidence,
+			&t.Observation, &t.RequestPayload, &t.acceptedRequest); err != nil {
 			return nil, err
 		}
 		t.Ref = TaskRef(t.ID)

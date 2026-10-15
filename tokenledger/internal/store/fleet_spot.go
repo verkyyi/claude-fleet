@@ -280,10 +280,11 @@ func (s *Store) DeleteNode(endpointID string) error {
 	return err
 }
 
-// ReleaseLeasesOfEndpoint lets every lease an endpoint holds go, at once, and
+// ReleaseLeasesOfEndpoint lets every legacy lease an endpoint holds go, at once, and
 // returns them. For a node the hub KNOWS is gone (a released SPOT box): the
 // 30-minute lost TTL exists for a machine that may come back, and this one
-// will not. Only released — nothing is re-dispatched, as for any lost node.
+// will not. Task leases still require their fenced terminal result. Only
+// released — nothing is re-dispatched, as for any lost node.
 func (s *Store) ReleaseLeasesOfEndpoint(endpointID string) ([]Lease, error) {
 	tx, err := s.write.Begin()
 	if err != nil {
@@ -293,7 +294,7 @@ func (s *Store) ReleaseLeasesOfEndpoint(endpointID string) ([]Lease, error) {
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE endpoint_id = ?`+s.d.forUpdate(), endpointID)
+	rows, err := tx.Query(`SELECT `+leaseReadCols+` FROM fleet_leases WHERE endpoint_id = ? AND task_id = 0`+s.d.forUpdate(), endpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +311,7 @@ func (s *Store) ReleaseLeasesOfEndpoint(endpointID string) ([]Lease, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(`DELETE FROM fleet_leases WHERE endpoint_id = ?`, endpointID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM fleet_leases WHERE endpoint_id = ? AND task_id = 0`, endpointID); err != nil {
 		return nil, err
 	}
 	return held, tx.Commit()
