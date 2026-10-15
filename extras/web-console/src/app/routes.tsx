@@ -5,7 +5,7 @@
 // the hub's consolePages, app_mount.go).
 import { createElement, lazy, type ComponentType } from "react";
 import { Navigate } from "react-router";
-import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Settings, CircleUserRound, type LucideIcon } from "lucide-react";
+import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Settings, CircleUserRound, TerminalSquare, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage from "./pages/chat";
@@ -24,6 +24,7 @@ export type PageDef = {
 export const PAGES: PageDef[] = [
   { id: "chat", path: "/", label: tr("对话", "Chat"), icon: MessageCircle, tab: true, side: true, page: ChatPage },
   { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, tab: true, side: true, page: lazy(() => import("./pages/sessions")) },
+  { id: "terminal", path: "/terminal", label: tr("我的终端", "My Terminal"), icon: TerminalSquare, side: true, page: lazy(() => import("./pages/terminal")) },
   { id: "tasks", path: "/tasks", label: tr("任务", "Tasks"), icon: ListChecks, tab: true, side: true, page: lazy(() => import("./pages/tasks")) },
   // one ticket, under 任务 (C5); /tasks/tickets/ alone is the tickets tab
   { id: "ticket", path: "/tasks/tickets/:owner/:name/:n", label: tr("单子", "Ticket"), icon: ListChecks, page: lazy(() => import("./pages/ticket")) },

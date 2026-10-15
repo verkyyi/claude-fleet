@@ -15,6 +15,13 @@
 useDefault = true
 
 [[allowlists]]
+description = "#3839 xterm 5.5.0 module export assignment, confirmed byte-for-byte in node_modules/@xterm/xterm/lib/xterm.js; no credential"
+condition = "AND"
+targetRules = ["generic-api-key"]
+commits = ["00b01bf6c3e9da5d0620f944eb31027e61ae6e4f"]
+paths = ['''^extras/web-console/dist/app/assets/terminal-Bk7csEnt\.js$''']
+
+[[allowlists]]
 description = "#1 github-pat · bin/client-log-selftest.sh:51 @ 02e5f79e — 测试假数据：脱敏测试的输入（AKIA+字母表 / AbCdEf 重复）"
 condition = "AND"
 targetRules = ["github-pat"]

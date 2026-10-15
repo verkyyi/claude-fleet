@@ -134,6 +134,7 @@ var routeAccess = map[string]string{
 	control.ChatRelayDataPath: accessSelf, control.TermDataPath: accessSelf,
 	// The browser terminal (claude-fleet#3838): each person their own.
 	TermConnectPath: accessUser, TermHomePath: accessUser,
+	TermClientPath: accessUser, TermClientPath + "/actions": accessUser,
 	// The web chat (claude-fleet#3645): each person their own conversation.
 	ChatPathPrefix: accessUser,
 	// The 60-second trial (claude-fleet#3590): the start mints a trial
