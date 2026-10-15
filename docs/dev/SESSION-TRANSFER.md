@@ -140,9 +140,21 @@ scheduling needs verification. The source remains running while it reads its
 current tasks, exports the verified plan, writes private handoff notes and arms
 the switch as its final tool call. The request pins pid, native sid, lifelong fid
 and target, with a five-minute deadline checked at arm and before source exit.
-Repeated clicks do not duplicate an outstanding request; after an acknowledged
-request expires, a new click can request preparation again. An uncertain bridge
-delivery stays pending for inspection and is not automatically resent.
+Each request also carries a fresh UUID, embedded literally in its source message
+and in the first line of the handoff notes (`Fleet-Preparation-Request: <UUID>`).
+The source uses the existing transfer tool with those notes; no new MCP argument
+is required in an already-running session. Arm, the detached waiter and the
+last check before exit require that same UUID, never the latest request file's
+identity alone. Old notes, waiters, rejections and completion receipts cannot
+authorize or modify a newer generation.
+
+Repeated clicks deduplicate a valid, confirmed request. After it expires, or
+after the source explicitly rejects it using the exact command supplied in the
+request message, a new explicit click creates a fresh generation. A send with
+unknown delivery remains blocked even after expiry; it is never blindly resent.
+The final exit check atomically commits the generation, preventing replacement
+during cutover. A failed attempt with the exact source still alive records its
+rejection; an unresolved cutover requires recovery rather than a second writer.
 
 The old interval import does not establish that a native cron is still active.
 For a no-repo Claude source with native scheduling, first have **that source**

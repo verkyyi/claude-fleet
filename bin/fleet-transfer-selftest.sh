@@ -335,7 +335,8 @@ PYPREP
   [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 1 ] || fail 'preparation sent twice'
   kill -0 "$PID" || fail 'preparation exited the source'
   PREP="$FLEET_CONF_DIR/transfer-preparation/$(field fleet_id).json"
-  printf 'Verified source notes for panel preparation checks.\n' > "$WORK/panel-notes.md"
+  FIRST_PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$PREP")
+  printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$FIRST_PREP" > "$WORK/panel-notes.md"
   python3 - "$PREP" <<'PYEXPIRE'
 import json,sys
 p=sys.argv[1]; r=json.load(open(p)); r['expires_at']=0
@@ -346,6 +347,27 @@ PYEXPIRE
   [ -z "$(field agent_transfer_request)" ] || fail 'expired request changed arm state'
   transfer --from-panel || fail 'explicit panel retry after expired acknowledged request'
   [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 2 ] || fail 'panel retry not delivered once'
+  SECOND_PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$PREP")
+  [ "$FIRST_PREP" != "$SECOND_PREP" ] || fail 'retry reused preparation id'
+  transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'old notes armed under new preparation'
+  printf '%s' "$OUT" | grep -q 'request id missing or superseded' || fail 'stale note generation was not checked'
+  [ -z "$(field agent_transfer_request)" ] || fail 'old generation left a waiter'
+  printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$SECOND_PREP" > "$WORK/panel-notes.md"
+  TM set-option -wu -t "$WIN" @loop
+  FLEET_TRANSFER_IDLE_WAIT=8 transfer --after-turn --handoff "$WORK/panel-notes.md" || fail 'current generation failed to arm'
+  PENDING_PREP=$(field agent_transfer_request)
+  python3 - "$PENDING_PREP/request.json" "$SECOND_PREP" <<'PYGEN' || fail 'waiter lost preparation generation'
+import json,sys
+assert json.load(open(sys.argv[1]))['preparation_id']==sys.argv[2]
+PYGEN
+  python3 "$IBIN/.fleet-transfer-norepo.py" reject-request "$LBL" "$PANE" "$SECOND_PREP" || fail 'source explicit rejection'
+  for _ in {1..30}; do [ -z "$(field agent_transfer_request)" ] && break; sleep 0.1; done
+  [ -z "$(field agent_transfer_request)" ] || fail 'rejected generation waiter did not release'
+  kill -0 "$PID" || fail 'rejected generation exited source'
+  TM set-option -w -t "$WIN" @loop 'kind=cron id=a@9999999999 cron=a@*/15_*_*_*_*'
+  transfer --from-panel || fail 'explicit retry after source rejection'
+  [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 3 ] || fail 'source rejection retry was not sent'
+  python3 "$IBIN/.fleet-transfer-norepo.py" reject-request "$LBL" "$PANE" "$SECOND_PREP" 2>/dev/null && fail 'old rejection ended new preparation'
   python3 - "$PREP" <<'PYMISMATCH'
 import json,sys
 p=sys.argv[1]; r=json.load(open(p)); r['session_id']='wrong-source'
@@ -354,7 +376,9 @@ PYMISMATCH
   transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'wrong source identity armed'
   printf '%s' "$OUT" | grep -q 'panel preparation expired or changed identity/target' || fail 'identity check did not run'
   kill -0 "$PID" || fail 'rejected request exited source'
-  rm "$PREP"
+  transfer --from-panel || fail 'prepare current source after old identity record'
+  FINAL_PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$PREP")
+  printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$FINAL_PREP" > "$WORK/panel-notes.md"
   ok
   TM set-option -wu -t "$WIN" @loop
   printf '[projects."%s"]\ntrust_level = "untrusted"\n' "$HOME" > "$HOME/.codex/config.toml"
@@ -371,7 +395,11 @@ system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@codex_identity',$record);
 $|=1; print "Codex native ready\n";
 while (<STDIN>) { }
 PLNATIVE
-  transfer || fail 'managed no-repo native cutover'
+  transfer --handoff "$WORK/panel-notes.md" || fail 'managed no-repo native cutover'
+  python3 - "$PREP" "$FINAL_PREP" <<'PYCOMPLETE' || fail 'cutover did not complete exact preparation'
+import json,sys
+r=json.load(open(sys.argv[1])); assert r['request_id']==sys.argv[2] and r['state']=='completed',r
+PYCOMPLETE
   ok
   kill -0 "$PID" 2>/dev/null && fail 'source must exit before target starts'
   [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111191 ] && [ "$(field fleet_role_def)" = orchestrator ] \

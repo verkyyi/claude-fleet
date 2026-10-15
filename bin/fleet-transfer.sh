@@ -68,10 +68,10 @@ die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
   exit 1; }
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
-TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0
+TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
@@ -82,6 +82,7 @@ while [ "$#" -gt 0 ]; do
         --codex-home) CODEX_TARGET_HOME=$2 ;;
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
         --retry) RETRY=$2 ;; --expected-session-id) EXPECT_SID=$2 ;;
+        --preparation-id) PREPARATION_ID=$2 ;;
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -469,14 +470,16 @@ if [ "$PREPARE" != 1 ]; then
 fi
 
 if [ "$AFTER" = 1 ]; then
-  [ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" || exit 1
+  if [ "$NOREPO" = 1 ]; then
+    PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES") || exit 1
+  fi
   [ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" schedule-readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT" || exit 1
   grep -q '@agent_transfer_ready' "$BIN/set-claude-state.sh" || die 'Stop-hook transfer support is missing'
   exec python3 "$BIN/.fleet-transfer-wait.py" arm --session "$SESS" --window "$WIN" \
     --pane "$PANE" --pid "$PID" --sid "$SID" --worktree "$WT" --main "$MAIN" \
     --registry "$REGISTRY" --transcript "$TRANSCRIPT" --notes "$NOTES" --source-agent "$SOURCE_AGENT" \
     --to "$TO" --target-file "$TARGET_FILE" --draft-file "$DRAFT" \
-    --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" --norepo "$NOREPO" --identity "$IDENTITY" \
+    --loop "$LOOP" --codex-home "$CODEX_TARGET_HOME" --norepo "$NOREPO" --identity "$IDENTITY" --preparation-id "$PREPARATION_ID" \
     --conf-dir "$FLEET_CONF_DIR" --lock "$(fleet_rotate_lease_file "$LEASE_KEY").transfer-lock" \
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
@@ -507,6 +510,11 @@ EXIT_SENT=0 LEASE=0 SUCCESS=0 ROLLED=0
 REMAIN=$(opt '#{remain-on-exit}')
 cleanup() {
   local rc=$?
+  if [ "$SUCCESS" != 1 ] && [ -n "$PREPARATION_ID" ] && fleet_pid_alive "$PID"; then
+    # An exact still-live source can end this failed attempt. A stale result
+    # must never mark a newer panel request rejected.
+    python3 "$BIN/.fleet-transfer-norepo.py" abort-request "$SOCK" "$PANE" "$PREPARATION_ID" >/dev/null 2>&1 || :
+  fi
   if [ "$ROLLED" = 1 ]; then
     printf 'fleet-transfer: %s did not start; the source %s session %s was resumed in place. Handoff kept for a retry: %s\n' \
       "$TO" "$SOURCE_AGENT" "$SID" "$BUNDLE" >&2
@@ -544,7 +552,7 @@ else
 fi
 source_ready || die 'source started another turn while preparing the transfer'
 if [ "$NOREPO" = 1 ]; then
-  python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" || die 'panel preparation is no longer valid'
+  PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES") || die 'panel preparation is no longer valid'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT")" = "$INPUT_VIEW" ] || die 'source scheduler or unsent input changed'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$(opt '#{pane_current_path}')")" = "$IDENTITY" ] || die 'managed HOME identity changed'
   [ "$TO" != codex ] || python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" --apply || die 'target HOME trust changed'
@@ -569,6 +577,9 @@ EXIT_WAIT="${FLEET_TRANSFER_EXIT_WAIT:-30}"; BOOT_WAIT="${FLEET_TRANSFER_BOOT_WA
 case "$EXIT_WAIT:$BOOT_WAIT" in *[!0-9:]*|:*|*:) die 'transfer timeouts must be positive integer seconds' ;; esac
 [ "$EXIT_WAIT" -gt 0 ] && [ "$BOOT_WAIT" -gt 0 ] && [ "$EXIT_WAIT" -le 60 ] && [ "$BOOT_WAIT" -le 30 ] \
   || die 'transfer timeout bounds: exit 1..60 seconds, boot 1..30 seconds'
+if [ "$NOREPO" = 1 ]; then
+  PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES" --commit) || die 'panel preparation was superseded before exit'
+fi
 EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK Escape || die 'cannot address source prompt'
@@ -747,7 +758,7 @@ done
 TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
-[ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" complete-request "$SOCK" "$PANE" || :
+[ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" complete-request "$SOCK" "$PANE" "$PREPARATION_ID" || :
 # A switch that landed some other way ends a retry still waiting on this window.
 _fid=$(TM show-options -wqv -t "$WIN" @fleet_id 2>/dev/null)
 [ -z "$_fid" ] || python3 "$HELPER" retry-supersede "$SESS" "$_fid" 2>/dev/null || :

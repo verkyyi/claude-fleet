@@ -7311,6 +7311,14 @@ drill_transfer_norepo() {
   SECS=$(since "$started"); WHAT='managed HOME provenance; panel and busy refusals leave source alive'
 }
 
+drill_transfer_preparation_retry() {
+  CAP=20
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-preparation-selftest.py" >"$WORK/transfer-preparation-retry.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-preparation-retry.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='explicit retry creates a generation; uncertain sends deduplicate and stale arms/results refuse'
+}
+
 drill_transfer_durable_owner() {
   CAP=20
   local started; started=$(now)
