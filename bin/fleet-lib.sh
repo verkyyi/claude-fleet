@@ -9315,6 +9315,14 @@ EOF
   fi
   printf '%s\n' "$v_room"
 }
+# _fleet_admit_cpu_advice_note <why> — a person's pod admitted over a CPU reading
+# that holds elsewhere (issue #4290): one line in the same log.
+_fleet_admit_cpu_advice_note() {
+  local f="$FLEET_C/global/admit-advice.log"
+  mkdir -p "${f%/*}" 2>/dev/null || return 0
+  printf '%s %s — admitted on a person'"'"'s own pod (advice)\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$1" >> "$f" 2>/dev/null
+  return 0
+}
 # _fleet_admit_advice_note <headroom line> — the advice admission, written down:
 # one line in global/admit-advice.log (the last 200 kept) for the doctor's row.
 # Written by fleet_session_cap_ok (a real admission), never by a read.
@@ -9449,6 +9457,7 @@ EOF
   # for byte. FLEET_ADMIT_LOAD_PER_CORE=0 turns the CPU reading off either way.
   local cg cthr cused clim cwin over tmax="${FLEET_ADMIT_CPU_THROTTLE:-25}" smax="${FLEET_ADMIT_CPU_SHARE:-0.9}"
   local busy='' bmax="${FLEET_ADMIT_CPU_BUSY:-${FLEET_MAX_CPU_BUSY:-0.8}}" lhard="${FLEET_ADMIT_LOAD_HARD_PER_CORE:-5}"
+  local cpu_tag='' cpu_why=''
   bmax=$(printf '%s' "$bmax" | tr -d '%'); case "$bmax" in ''|*[!0-9.]*) bmax=0.8 ;; esac
   bmax=$(awk -v m="$bmax" 'BEGIN{ if (m > 1) m = m / 100; if (m > 1) m = 1; print m + 0 }')
   case "$lhard" in ''|*[!0-9.]*) lhard=5 ;; esac
@@ -9463,10 +9472,9 @@ EOF
     case "$cthr" in ''|*[!0-9]*) cthr=0 ;; esac
     if [ "$cthr" -ge "$tmax" ] \
        || awk -v u="${cused:-0}" -v l="${clim:-0}" -v m="$smax" 'BEGIN{ exit !(l > 0 && u / l > m) }'; then
-      if [ "$short" = 1 ]; then printf '暂停开新：负载过高'; return 1; fi
-      printf 'container cpu busy — 暂停开新：负载过高 (%s of %s cores used, %s%% throttled%s; over FLEET_ADMIT_CPU_SHARE=%s or FLEET_ADMIT_CPU_THROTTLE=%s%%): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
-        "$cused" "$clim" "$cthr" "$over" "$smax" "$tmax"
-      return 1
+      cpu_tag='暂停开新：负载过高'
+      cpu_why=$(printf 'container cpu busy — 暂停开新：负载过高 (%s of %s cores used, %s%% throttled%s; over FLEET_ADMIT_CPU_SHARE=%s or FLEET_ADMIT_CPU_THROTTLE=%s%%)' \
+        "$cused" "$clim" "$cthr" "$over" "$smax" "$tmax")
     fi
     per=''
   else
@@ -9480,22 +9488,37 @@ EOF
   # load/core against FLEET_ADMIT_LOAD_PER_CORE, byte for byte the old rule.
   if [ -n "$busy" ]; then
     if awk -v b="$busy" -v m="$bmax" 'BEGIN{ exit !(m > 0 && b > m) }'; then
-      if [ "$short" = 1 ]; then printf '暂停开新：负载过高（CPU %s）' "$(_fleet_pct "$busy")"; return 1; fi
-      printf 'machine cpu busy — 暂停开新：负载过高 (CPU busy %s over FLEET_ADMIT_CPU_BUSY=%s; load %s/core): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
-        "$(_fleet_pct "$busy")" "$bmax" "${per:-?}"
-      return 1
-    fi
-    if [ -n "$per" ] && awk -v p="$per" -v m="$lhard" 'BEGIN{ exit !(m > 0 && p > m) }'; then
-      if [ "$short" = 1 ]; then printf '暂停开新：负载过高（负载 %s/核）' "$per"; return 1; fi
-      printf 'machine load extreme — 暂停开新：负载过高 (load %s/core over the hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE=%s, CPU busy %s): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
-        "$per" "$lhard" "$(_fleet_pct "$busy")"
-      return 1
+      cpu_tag=$(printf '暂停开新：负载过高（CPU %s）' "$(_fleet_pct "$busy")")
+      cpu_why=$(printf 'machine cpu busy — 暂停开新：负载过高 (CPU busy %s over FLEET_ADMIT_CPU_BUSY=%s; load %s/core)' \
+        "$(_fleet_pct "$busy")" "$bmax" "${per:-?}")
+    elif [ -n "$per" ] && awk -v p="$per" -v m="$lhard" 'BEGIN{ exit !(m > 0 && p > m) }'; then
+      cpu_tag=$(printf '暂停开新：负载过高（负载 %s/核）' "$per")
+      cpu_why=$(printf 'machine load extreme — 暂停开新：负载过高 (load %s/core over the hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE=%s, CPU busy %s)' \
+        "$per" "$lhard" "$(_fleet_pct "$busy")")
     fi
   elif [ -n "$per" ] && awk -v p="$per" -v m="$lmax" 'BEGIN{ exit !(m > 0 && p > m) }'; then
-    if [ "$short" = 1 ]; then printf '暂停开新：负载过高（负载 %s/核）' "$per"; return 1; fi
-    printf 'machine load high — 暂停开新：负载过高 (%s/core, over FLEET_ADMIT_LOAD_PER_CORE=%s; no CPU-busy reading): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
-      "$per" "$lmax"
-    return 1
+    cpu_tag=$(printf '暂停开新：负载过高（负载 %s/核）' "$per")
+    cpu_why=$(printf 'machine load high — 暂停开新：负载过高 (%s/core, over FLEET_ADMIT_LOAD_PER_CORE=%s; no CPU-busy reading)' \
+      "$per" "$lmax")
+  fi
+  # A person's own pod (FLEET_USER_POD=1, issue #4290) has one person's sessions
+  # on it and nobody else's to protect: a busy CPU only slows that person down,
+  # while a hold turns their own request away. Its fleet container runs at a
+  # 1-core limit and rolls to a new image on every release, so the first minutes
+  # after a roll (the image applied, the guide, each Claude's MCP servers) read
+  # 1.51 of 1.00 cores / 59 % throttled and refused the guide and every new
+  # session the hub placed there. There the CPU reading is advice — it admits and
+  # the admission notes it (global/admit-advice.log); memory still holds (that
+  # one ends in an OOM kill). FLEET_ADMIT_POD_CPU=hold restores the hold.
+  _fleet_admit_cpu_advised=''
+  if [ -n "$cpu_why" ]; then
+    if [ "${FLEET_USER_POD:-}" = 1 ] && [ "${FLEET_ADMIT_POD_CPU:-advice}" != hold ]; then
+      _fleet_admit_cpu_advised=$cpu_why
+    else
+      if [ "$short" = 1 ]; then printf '%s' "$cpu_tag"; return 1; fi
+      printf '%s: new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' "$cpu_why"
+      return 1
+    fi
   fi
   # a waived guide or an advised room is no recovery: the hold (and its
   # hysteresis) stays for the strict reading
@@ -9688,10 +9711,11 @@ fleet_session_cap_ok() {
     [ "$i" -ge 50 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
     sleep 0.2 2>/dev/null || sleep 1
   done
-  _fleet_admit_advised=''
+  _fleet_admit_advised='' _fleet_admit_cpu_advised=''
   fleet_machine_admit; rc=$?
   [ "$rc" = 0 ] && fleet_admit_reserve "$sess"
   [ "$rc" = 0 ] && [ -n "${_fleet_admit_advised:-}" ] && _fleet_admit_advice_note "$_fleet_admit_advised"
+  [ "$rc" = 0 ] && [ -n "${_fleet_admit_cpu_advised:-}" ] && _fleet_admit_cpu_advice_note "$_fleet_admit_cpu_advised"
   rmdir "$lk" 2>/dev/null
   return "$rc"
 }

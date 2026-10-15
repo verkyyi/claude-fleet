@@ -108,6 +108,7 @@
 #   linux-admit-host-load                           fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu
 #                                                   (fleet-lib.sh) on a sandbox cgroup + machine reading
 #   linux-admit-burst                               fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu_window
+#   linux-admit-pod-start                           fleet_machine_admit / fleet_session_cap_ok / _fleet_admit_cpu_advice_note
 #                                                   (fleet-lib.sh) on a sandbox cgroup whose counters move
 #   mac-admit-load-not-busy                         fleet_machine_admit / _fleet_cpu_busy (fleet-lib.sh),
 #                                                   fleet-machine-tasks.py probe (cpu_busy), fleet-control-read.sh capacity
@@ -1620,6 +1621,39 @@ drill_linux_admit_burst() {
   case "$out" in *'0.9'?' of 1.00 cores used'*'over the last 6'?'s'*'|rc=1') ;; *) WHY="a minute at 0.95 of 1 core must hold, naming the window: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="1 核 pod，最近一分钟均 0.2 核 / 限流 5%，采样那半秒满核被限流：放行；旧的 0.5 秒采样（WINDOW_SECS=0）照旧拦；还没有记录时照采样拦并留下记录；一分钟真用 0.95 核时拦，写明「over the last 60s」"
+}
+
+# linux-admit-pod-start (issue #4290): a person's pod (FLEET_USER_POD=1) runs its
+# fleet container at a 1-core limit and rolls to a new image on every release; in
+# the minutes after a roll the gate read 1.51 of 1.00 cores / 59 % throttled over
+# the minute and refused the person's own new session (and the guide). For real,
+# through fleet_session_cap_ok on a sandbox cgroup reading: on a shared machine
+# that reading holds; on a person's pod it admits and the admission notes it in
+# admit-advice.log; the capacity beat says admit:true there; memory pressure still
+# holds on the pod; FLEET_ADMIT_POD_CPU=hold restores the hold.
+drill_linux_admit_pod_start() {
+  CAP=20; local t0 d="$WORK/laps" out lg
+  t0=$(now)
+  rm -rf "$d"; mkdir -p "$d/conf/global" "$d/tmp"
+  run() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MACHINE_TASKS=off \
+            FLEET_MEM_TOTAL_MB=16384 FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 102400 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD='echo 1 66 0 0' FLEET_ADMIT_CPU_READING='59 1.51 1.00 51' "$@"; }
+  cap() { run "$@" bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok laps >/dev/null 2>&1; echo \"rc=\$?\"; fleet_machine_admit; echo \"|rc=\$?\"" 2>&1; }
+  out=$(cap)
+  case "$out" in *'rc=1'*'1.51 of 1.00 cores used'*'over the last 51s'*'|rc=1') ;; *) WHY="on a shared machine 1.51 of 1 core must still hold: $out"; return 1 ;; esac
+  out=$(cap FLEET_USER_POD=1)
+  case "$out" in 'rc=0'*'|rc=0') ;; *) WHY="a person's own pod was refused their own session over its CPU: $out"; return 1 ;; esac
+  lg=$(find "$d/tmp" -name admit-advice.log 2>/dev/null | head -1)
+  grep -q "1.51 of 1.00 cores used.*person's own pod (advice)" "${lg:-/nonexistent}" 2>/dev/null \
+    || { WHY="the pod's admission over a busy CPU left no line in admit-advice.log: ${lg:-none} $(cat "${lg:-/nonexistent}" 2>&1)"; return 1; }
+  out=$(run FLEET_USER_POD=1 bash "$BIN/fleet-control-read.sh" capacity 2>&1)
+  case "$out" in *'"admit":true'*) ;; *) WHY="the pod's heartbeat must say admit:true over a busy CPU: $out"; return 1 ;; esac
+  out=$(cap FLEET_USER_POD=1 FLEET_MEM_PROBE_CMD='echo 4 5 0 0')
+  case "$out" in *'rc=1'*'内存紧张'*'|rc=1') ;; *) WHY="memory pressure must still hold on a person's pod: $out"; return 1 ;; esac
+  out=$(cap FLEET_USER_POD=1 FLEET_ADMIT_POD_CPU=hold)
+  case "$out" in *'rc=1'*'container cpu busy'*'|rc=1') ;; *) WHY="FLEET_ADMIT_POD_CPU=hold must restore the hold: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="1 核 pod 一分钟读 1.51 核 / 限流 59%：共享机器照拦；个人 pod 放行并在 admit-advice.log 记一行，心跳 admit:true；个人 pod 内存紧张照拦；FLEET_ADMIT_POD_CPU=hold 回到拦"
 }
 
 # mac-admit-load-not-busy (issue #4077): macOS counts waiting processes in its
