@@ -331,9 +331,13 @@ def run():
     usage, res = usage_of(cp.stdout, time.time() - t0)
     sys.stderr.write((cp.stderr or '')[-2000:])
     if cp.returncode != 0 or res.get('is_error'):
-        say('claude ended %d (%s)' % (cp.returncode, res.get('subtype', '')))
+        # `-p --output-format json` puts an API refusal (the credential proxy's
+        # «no subscription account …») in the result, not on stderr (#4086 R3)
+        said = ' '.join(str(res.get('result') or '').split())[:180]
+        err = ' '.join((cp.stderr or '').split())[-80:]
+        say('claude ended %d (%s): %s' % (cp.returncode, res.get('subtype', ''), said or err))
         hand_in(INFRA, usage=usage, detail='claude ended %d (%s): %s' % (
-            cp.returncode, res.get('subtype', ''), ' '.join((cp.stderr or '').split())[-200:]))
+            cp.returncode, res.get('subtype', ''), ' · '.join(x for x in (said, err) if x)))
         return INFRA
     report, meta = check_outputs(p['out'])
     if report is None:
