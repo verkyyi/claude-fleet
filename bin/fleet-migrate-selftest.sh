@@ -30,7 +30,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
-selftest_sections 3
+selftest_sections 4
 SCRIPT="$BIN/fleet-migrate.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
@@ -251,6 +251,8 @@ EOS
 chmod +x "$FB/manual-quota"
 export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
 
+SP=$(TM display-message -p '#{socket_path}')
+
 if selftest_section 1; then
 # --- whoami: token truth (A) beats a wrong stamp, and heals it
 TM set-window-option -t "$w1" @cc_account acctB
@@ -272,7 +274,7 @@ ok; grep -q 'no window to report on' "$WORK/w.err" || fail "whoami must say WHY 
 ok; ! grep -qi 'unbound variable' "$WORK/w.err" || fail "whoami walked an empty array again (#703): $(cat "$WORK/w.err")"
 
 # Inside a pane of THIS fleet ⇒ that pane's own window, in the same bare-label form.
-SP=$(TM display-message -p '#{socket_path}'); P1=$(TM display-message -p -t "$w1" '#{pane_id}')
+P1=$(TM display-message -p -t "$w1" '#{pane_id}')
 ok; [ "$(env TMUX="$SP,0,0" TMUX_PANE="$P1" bash "$SCRIPT" whoami 2>/dev/null)" = acctA ] \
   || fail "bare whoami inside a pane must report THAT window's account"
 
@@ -386,6 +388,19 @@ ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be '
 out=$(bash "$SCRIPT" --session "$SESS" --idle 2>&1)
 ok; printf '%s' "$out" | grep -q 'nothing to move' || fail "--idle after the move must find nothing (all working or on B): $out"
 
+fi
+
+if [ "$SELFTEST_SECTION" = 4 ]; then
+  # The first section already checks A -> B and the no-hook exit. Start here
+  # with that resulting process layout, without repeating those migrations.
+  TM respawn-pane -k -t "$w1" "$FB/runner-hook-b sid-1111"
+  TM set-window-option -t "$w1" @cc_account acctB
+  TM respawn-pane -k -t "$w3" "$FB/fakeshell"
+  nw1=$w1
+  unset FLEET_MANUAL_ACCOUNT_BIN
+  sleep 1.5
+fi
+if selftest_section 4; then
 # --- --stuck + --force-bg (issue #873). A walled worker whose failover request is
 # stuck — here on a background command — is the dash key's target. Rig: w5 on A
 # (benched; B active) with a live `sleep 97` child, marked @quota_stuck=1; w2 is

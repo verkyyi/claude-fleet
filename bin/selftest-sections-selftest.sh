@@ -29,7 +29,7 @@ assert run().stdout == '1\n'
 parts = [run(str(n)) for n in range(1, 4)]
 assert all(p.returncode == 0 for p in parts)
 assert ''.join(p.stdout for p in parts) == run('all').stdout == '1\n2\n3\n'
-for invalid in ('0', '4', '-1', '2/3', 'garbage'):
+for invalid in ('0', '01', '4', '-1', '2/3', 'garbage'):
     result = run(invalid)
     assert result.returncode == 2 and not result.stdout, (invalid, result)
 

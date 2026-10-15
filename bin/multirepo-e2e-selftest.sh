@@ -58,7 +58,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
-selftest_sections 4
+selftest_sections 6
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -239,11 +239,11 @@ hub_cwd() { HUB_SESSION="$1" HUB_PRINT_CMD=cwd bash "$BIN/hub-session.sh" 2>/dev
 fi
 
 # Later sections need the same two-repo fixture, without repeating add/doctor.
-if [ "$SELFTEST_SECTION" = 2 ] || [ "$SELFTEST_SECTION" = 3 ]; then
+if [ "$SELFTEST_SECTION" != all ] && ! selftest_section 1 4; then
   mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos"
   printf 'FLEET_REPO="o/beta"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$MB" > "$FLEET_CONF_DIR/fleets/$S/repos/o-beta.conf"
 fi
-if selftest_section 1 2 3; then
+if selftest_section 2 3 5; then
 # ==== spawn: #12 in both repos, a scratch in both, a no-repo session ================
 spawn 12 "$S" --repo o/alpha || fail "spawn A#12: $(cat "$WORK/err")"
 spawn 12 "$S" --repo o/beta  || fail "spawn B#12: $(cat "$WORK/err")"
@@ -258,7 +258,7 @@ for w in "$wA" "$wB" "$sA" "$sB" "$wN"; do wait_rec "$w" || { fail "spawn: $w ne
 tA=$(opt "$wA" @worktree); tB=$(opt "$wB" @worktree)
 fi
 
-if selftest_section 1; then
+if selftest_section 5; then
 # ==== (f) worktree-name clash =========================================================
 [ "$tA" != "$tB" ] && ok "(f) A#12 and B#12 get distinct worktrees" || leak f "A#12 and B#12 share a worktree: $tA"
 registered "$MA" "$tA" && ok "(f) A#12's worktree registered to A" || leak f "A#12's worktree $tA not registered to A"
@@ -306,6 +306,15 @@ out=$(cmt "$wN" 12); rc=$?
   && ok "(c) a no-repo pane's bare comment refuses and asks for --repo" \
   || leak c "a no-repo pane's bare comment [$rc] [$out] $(cat "$WORK/cmt.err")"
 
+fi
+
+if [ "$SELFTEST_SECTION" = 6 ]; then
+  spawn 12 "$S" --repo o/alpha || fail "identity fixture A: $(cat "$WORK/err")"
+  spawn 12 "$S" --repo o/beta || fail "identity fixture B: $(cat "$WORK/err")"
+  wA=$(win_of "$S" o/alpha 12); wB=$(win_of "$S" o/beta 12)
+  wait_rec "$wA" && wait_rec "$wB" || fail 'identity fixture: launcher'
+fi
+if selftest_section 6; then
 # ==== (id) fleet identity: the pane's repo never enters the fleet UUID (#1498) ===========
 # The UUID the hub registered is what fleet_control.py's inventory minted, under its
 # scrubbed environment. From B's worker pane — B's overlay on via @repo, and B's

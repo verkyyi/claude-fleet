@@ -6,7 +6,7 @@ selftest_sections() {
   SELFTEST_SECTION=${SELFTEST_PART:-1}
   case "$SELFTEST_SECTION" in
     all) ;;
-    ''|*[!0-9]*) echo 'selftest: SELFTEST_PART must be all or a section number' >&2; exit 2 ;;
+    ''|0*|*[!0-9]*) echo 'selftest: SELFTEST_PART must be all or a section number' >&2; exit 2 ;;
     *) [ "$SELFTEST_SECTION" -ge 1 ] && [ "$SELFTEST_SECTION" -le "$1" ] || {
          echo "selftest: SELFTEST_PART must be in 1..$1" >&2; exit 2;
        } ;;
