@@ -920,6 +920,7 @@ rv_attach_thin() {
   if [ -n "$want" ]; then
     w=$(rv_thin_window "$s" "$want")
     if [ -z "$w" ]; then
+      [ -z "$browser" ] || { note "browser: requested session ended"; return 4; }
       case "$want" in */*) wfar=${want#wid:} ;; esac
       note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere${wfar:+, then there}"
     fi
@@ -972,6 +973,17 @@ rv_attach_thin() {
   fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
+  if [ -n "$browser" ]; then
+    # The personal shell is persistent; browser navigation never creates a
+    # per-view shell. Load native keys even on a minimally initialized fleet.
+    T set-option -t "$gid" @view_web_home "$bhome" 2>/dev/null
+    sp=$(T display-message -p -t "$gid:" '#{socket_path}')
+    TMUX="$sp,0,0" python3 "$BIN/fleet-quickopen.py" view-keys
+    T set-option -t "$gid" key-table fleet-view
+    # A browser attachment is disposable. The captured session id and row pid
+    # belong to THIS attach; neither cleanup can hit a replacement connection.
+    trap '[ "$(cut -f5 "$f" 2>/dev/null)" != "$$" ] || rm -rf "$f" "$f.d"; T kill-session -t "$gid" 2>/dev/null || :' EXIT
+  fi
   # the language this connection's client brought (issue #3326): per 看台, never the
   # server's environment (started before, `update-environment` has no LANG) —
   # empty = it said none. Issue #3329: the 看台 draws in it — FLEET_VIEW_LANG in its
@@ -998,7 +1010,7 @@ rv_attach_thin() {
   esac
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm
-  case "$view" in *-via-*) ;; *)
+  case "$browser:$view" in 1:*|*:*-via-*) ;; *)
     ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
   esac
   # the one message after issue #3328 took the keys away: 快捷键只剩 ⌘P, once per
@@ -1040,7 +1052,12 @@ rv_attach_thin() {
       done </dev/null >/dev/null 2>&1 & ) ;;
   esac
   trap 'rc=129' HUP
-  T attach-session -t "$gid"; rc=$?
+  [ -z "$browser" ] || trap 'exit 143' TERM
+  if [ -n "$browser" ]; then
+    T attach-session -t "$gid" \; set-option -t "$gid" destroy-unattached on; rc=$?
+  else
+    T attach-session -t "$gid"; rc=$?
+  fi
   # The 看台 stays: its row says since when nobody looks (only while it is ours).
   [ "$(cut -f5 "$f" 2>/dev/null)" = "$$" ] && rv_row_set "$f" left "$(date +%s)"
   return "$rc"

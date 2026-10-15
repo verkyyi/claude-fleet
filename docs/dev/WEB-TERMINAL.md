@@ -12,7 +12,7 @@
 入口 ──term_open {relay_id, secret, login}──▶ 家登录的节点（只发给报了 CapTerm 的）
 节点 ──wss /v1/node/term?id=…──▶ 入口
 入口 ──第一帧 {"grant": "ftg1.…"}──▶ 节点：验过才开终端
-节点 ──以该登录（prepCmd）──▶ ccquota term-pty ──▶ 伪终端 ──▶ bin/fleet-term-attach.sh ──▶ tmux 分组视图
+节点 ──以该登录（prepCmd）──▶ ccquota term-pty ──▶ 伪终端 ──▶ bin/fleet-term-attach.sh ──▶ fleet-webterm.py connect ──▶ 原生 Fleet 看台
 ```
 
 - **选择器只有两种**：`target=personal` 或 `worker=<fleet UUID>/<fleet_id>`，二选一。worker 必须出现在家登录上
@@ -26,8 +26,28 @@
 - **伪终端是登录自己的**：`term-pty` 以登录身份（`prepCmd`，托管机经 root core 的 exec-as）自己开 PTY，
   stdio 上和节点讲一个小帧协议（`'d'` 字节、`'r'` 尺寸），输出原样回来。stdin 一断就挂断进程组（SIGHUP，3 秒后
   SIGKILL）。环境里给 `TERM=xterm-256color` 和 UTF-8 locale（中文输入、宽字符）。
-- **视图**：`<fleet>@view-web-<转发 id 前 8 位>`，分组会话（同 看台），接上后才设 `destroy-unattached on`，
-  退出 / 挂断时按 session id 只 kill 它自己。不起会话、不起 agent、不起编排。
+- **视图**：`<fleet>@view-wt-web-<连接 id>`，经现有 `attach --thin --browser` 加载原生菜单与键表，
+  连接前先取得控制权；接上后设 `destroy-unattached on`，退出按捕获的 session id 清自己的 view/registry。
+  personal 首次使用可创建无 repo 的 fleet/home，但不启动 agent 或编排；之后复用同一个 home pane。
+  `Ctrl+\` 和菜单的切壳动作去这个持久 shell，再按返回原会话；worker 消失拒绝，不回落到别的窗口。
+- **locale**：节点读取 `locale -a`，按 `LC_ALL` / `LC_CTYPE` / `LANG` 顺序选已安装的 UTF-8 locale，
+  再回退到实际存在的 `C.UTF-8` / `en_US.UTF-8` 或其他 UTF-8 locale。三项统一设置，避免 `LC_ALL=C`
+  盖过 UTF-8 LANG；没有可用 UTF-8 时拒绝开 PTY，不假定 macOS 有 `C.UTF-8`。
+
+### C3 接线边界（#4407）
+
+`fleet-webterm.py connect --conn C --target T [--generation N]` 是节点固定脚本的唯一入口。
+T 沿用授权的 `personal` 或 `worker:<fleet_id>`；C 是本条连接 id。helper 先 ensure（已有终端结束时
+绝不隐式 renew）、检查可选 generation，再在 control 锁内 claim 和建立 view。存活连接续租；
+`control take --target T --conn C` 先关闭旧 epoch 的真实 view，再允许新连接 attach；旧 cleanup
+只能清自己的 session id，不能释放新 epoch。`status` 的 id/generation 是持久个人 pane 的身份，
+不同于 hub hello 的节点链路代，也不同于 C5 的 direct/relay 路径 epoch。
+
+C3 仍需把这些状态/控制映射到已授权的 wire hello、Use here 和恢复流程，传回期望 generation，
+并协调原生菜单切换目标后的租约（personal 切到 worker 与直接 worker 入口目前是不同初始租约）。
+逐帧输入/resize 与逻辑目标 epoch 的原子校验、页面重连和无重放由 C3 接续；本接线不声称完成这些验收。
+原生交互由 `fleet-term-attach-selftest.sh` 的隔离真实 PTY 验证，真实 Chromium 页面和 Safari/OS IME
+仍须在部署后另验。
 
 ## 帧
 
