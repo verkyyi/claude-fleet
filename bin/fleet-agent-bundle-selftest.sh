@@ -139,7 +139,7 @@ doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_NOTIFY=0 FLEET_STABLE_API="file://
 H=$(fresh c)
 mkdir -p "$H/.config/claude-fleet"
 echo '["playwright", "codex.skills", "claude.doc"]' > "$H/.config/claude-fleet/agent-overrides.json"
-echo '["effortLevel"]' > "$H/.claude/settings.fleet-override.json"
+echo '["precomputeCompactionEnabled"]' > "$H/.claude/settings.fleet-override.json"
 echo '{"numStartups": 1, "mcpServers": {"github": {"type": "stdio", "command": "my-github"}}}' > "$H/.claude.json"
 out=$(install "$H"); rc=$?
 chk=$("$PY" - "$H" <<'PY'
@@ -147,11 +147,11 @@ import json, os, sys
 h = sys.argv[1]
 c = json.load(open(os.path.join(h, ".claude.json")))
 s = json.load(open(os.path.join(h, ".claude/settings.json")))
-print(sorted(c["mcpServers"]), c["mcpServers"]["github"]["command"], "effortLevel" in s, "outputStyle" in s)
+print(sorted(c["mcpServers"]), c["mcpServers"]["github"]["command"], "precomputeCompactionEnabled" in s, "agentPushNotifEnabled" in s)
 PY
 )
 [ "$rc" = 0 ] && [ "$chk" = "['context7', 'fetch', 'github'] my-github False True" ] \
-  && ok "C overrides kept: no playwright, own github untouched, no effortLevel (outputStyle filled)" || bad "C rc=$rc chk=$chk out=$out"
+  && ok "C overrides kept: no playwright, own github untouched, no precomputeCompactionEnabled (agentPushNotifEnabled filled)" || bad "C rc=$rc chk=$chk out=$out"
 [ ! -e "$H/.codex/skills" ] && ok "C codex.skills overridden → no Codex skills written" || bad "C codex skills: $(ls "$H/.codex/skills")"
 grep -q 'fleet:agent-defaults' "$H/.claude/CLAUDE.md" 2>/dev/null && bad "C claude.doc overridden but CLAUDE.md got the block" || ok "C claude.doc overridden → no CLAUDE.md block"
 doc=$(env -i PATH="$SYS_PATH" HOME="$H" "$H/.local/bin/fleet" doctor 2>&1)

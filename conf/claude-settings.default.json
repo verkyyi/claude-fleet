@@ -4,10 +4,6 @@
       "defaultMode": "bypassPermissions"
     },
     "skipDangerousModePermissionPrompt": true,
-    "effortLevel": "xhigh",
-    "outputStyle": "Concise",
-    "theme": "auto",
-    "tui": "fullscreen",
     "precomputeCompactionEnabled": false,
     "agentPushNotifEnabled": true
   },

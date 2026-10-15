@@ -37,9 +37,9 @@ the arguments and the path spelling (~ vs $HOME vs absolute) are NOT identity.
          default Claude configuration for every login on a managed machine:
          its "settings" section fills ~/.claude/settings.json (today
          permissions.defaultMode=bypassPermissions, skipDangerousModePermissionPrompt,
-         effortLevel, outputStyle, theme, tui, precomputeCompactionEnabled,
-         agentPushNotifEnabled — never model or enabledPlugins, those stay the
-         login's), its "globalConfig" section fills Claude Code's GLOBAL config
+         precomputeCompactionEnabled, agentPushNotifEnabled — never model,
+         enabledPlugins, effortLevel, outputStyle, theme or tui: the model and
+         the interface stay Claude Code's own (issue #4323)), its "globalConfig" section fills Claude Code's GLOBAL config
          ~/.claude.json ($CLAUDE_CONFIG_DIR/.claude.json when set) — today
          leftArrowOpensAgents=false, the only place that key is read (in
          settings.json it does nothing, measured on 2.1.289), and the first-run

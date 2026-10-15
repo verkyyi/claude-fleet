@@ -163,13 +163,13 @@ fpc=$(stamp @agent_cfg)
 argv=$(launch new fleet-claude.sh -- '/fleet-claim')
 case "$argv" in *'[--settings='*|*'[--mcp-config='*) fail "C: a login with everything still got a handed file" "$argv" ;; esac
 [ "$(stamp @agent_cfg)" = "$fpc" ] || fail "C: filled-by-launch vs filled-by-sync fingerprint differ" "$fpc vs $(stamp @agent_cfg)"
-# a project key: drop theme from the login, set it in the project → not filled
+# a project key: drop agentPushNotifEnabled from the login, set it in the project → not filled
 python3 - "$WORK/home/.claude/settings.json" <<'PY'
-import json, sys; p = sys.argv[1]; d = json.load(open(p)); d.pop("theme"); json.dump(d, open(p, "w"))
+import json, sys; p = sys.argv[1]; d = json.load(open(p)); d.pop("agentPushNotifEnabled"); json.dump(d, open(p, "w"))
 PY
 argv=$(launch new fleet-claude.sh -- '/fleet-claim'); sf=$(flagfile "$argv" settings)
-grep -q '"theme"' "$sf" 2>/dev/null || fail "C: a key the login lacks was not filled" "$argv"
-mkdir -p "$WORK/proj/.claude"; printf '{"theme":"dark"}\n' > "$WORK/proj/.claude/settings.json"
+grep -q '"agentPushNotifEnabled"' "$sf" 2>/dev/null || fail "C: a key the login lacks was not filled" "$argv"
+mkdir -p "$WORK/proj/.claude"; printf '{"agentPushNotifEnabled":false}\n' > "$WORK/proj/.claude/settings.json"
 argv=$(launch new fleet-claude.sh -- '/fleet-claim')
 case "$argv" in *'[--settings='*) fail "C: --settings filled a key the project sets" "$argv" ;; esac
 rm -rf "$WORK/proj/.claude"
