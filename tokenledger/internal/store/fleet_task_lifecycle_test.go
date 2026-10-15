@@ -114,7 +114,7 @@ func TestTaskAuthorityLifecycle(t *testing.T) {
 		t.Fatal("generic operation writer changed task history")
 	}
 	again := acceptedTask(t, s, "one", "")
-	if again.State != original.State || again.Generation != 1 || again.OperationID != original.OperationID {
+	if again.State != original.State || again.Generation != 1 || again.AttemptID != original.AttemptID {
 		t.Fatalf("accepted replay lost original result: %+v", again)
 	}
 	input := FleetTask{Owner: "alice", Title: "changed", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex"}
@@ -281,6 +281,11 @@ func TestTaskAuthorityTicketScopeAndMigration(t *testing.T) {
 		if rec.LeaseRef != ticket {
 			t.Fatalf("lost backend/repo: %+v", rec)
 		}
+	}
+	// A legacy claimant uses the same pair for hub tickets too. A separate
+	// hub lease namespace would allow a second execution through that road.
+	if ok, _, _, err := s.AcquireLease(LeaseClaim{Repo: "hub/repo", Issue: 7, WorkerID: "legacy/worker", Force: true}, time.Minute, now.Add(time.Hour)); err != nil || ok {
+		t.Fatalf("legacy bypassed hub task lease: %v %v", ok, err)
 	}
 	// A legacy held item must drain explicitly, even after TTL.
 	c := LeaseClaim{Repo: "org/held", Issue: 7, WorkerID: "legacy/worker", FleetID: "legacy"}

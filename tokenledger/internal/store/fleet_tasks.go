@@ -86,6 +86,7 @@ type FleetTask struct {
 	// AuthorityVersion 0 keeps the legacy placement record. Version 1 owns
 	// its lifecycle; inventory is only an observation, never an outcome.
 	AuthorityVersion  int    `json:"authority_version,omitempty"`
+	AttemptID         string `json:"attempt_id,omitempty"`
 	Generation        int64  `json:"generation,omitempty"`
 	ExecutionOwner    string `json:"execution_owner,omitempty"`
 	ExecutionEndpoint string `json:"execution_endpoint,omitempty"`
@@ -129,7 +130,7 @@ func (s *Store) ensureFleetTasks() error {
 	if err := s.addColumn("fleet_tasks", "rule", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	for _, col := range []string{"execution_owner", "execution_endpoint", "requested_agent", "resolved_agent", "actual_agent",
+	for _, col := range []string{"attempt_id", "execution_owner", "execution_endpoint", "requested_agent", "resolved_agent", "actual_agent",
 		"parent_task", "parent_session", "ticket_ref", "lease_ref", "outcome", "evidence", "observation", "request_payload", "accepted_request"} {
 		if err := s.addColumn("fleet_tasks", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
@@ -145,7 +146,7 @@ func (s *Store) ensureFleetTasks() error {
 
 const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machine, login, worker_id,
 	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at,
-	authority_version, generation, execution_owner, execution_endpoint, requested_agent, resolved_agent, actual_agent,
+	authority_version, generation, attempt_id, execution_owner, execution_endpoint, requested_agent, resolved_agent, actual_agent,
 	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request`
 
 // CreateFleetTask writes a new record and returns it with its number. token is
@@ -286,7 +287,7 @@ func scanFleetTasks(rows *sql.Rows) ([]FleetTask, error) {
 		if err := rows.Scan(&t.ID, &t.token, &t.Owner, &t.Title, &t.Via, &t.Device, &t.Repo, &t.Agent, &t.Machine,
 			&t.Login, &t.WorkerID, &t.SessionKey, &t.OperationID, &t.State, &t.Note, &t.Issue, &t.PR, &t.Asked,
 			&t.Parked, &t.Rule, &created, &updated,
-			&t.AuthorityVersion, &t.Generation, &t.ExecutionOwner, &t.ExecutionEndpoint, &t.RequestedAgent, &t.ResolvedAgent,
+			&t.AuthorityVersion, &t.Generation, &t.AttemptID, &t.ExecutionOwner, &t.ExecutionEndpoint, &t.RequestedAgent, &t.ResolvedAgent,
 			&t.ActualAgent, &t.ParentTask, &t.ParentSession, &t.TicketRef, &t.LeaseRef, &t.Outcome, &t.Evidence,
 			&t.Observation, &t.RequestPayload, &t.acceptedRequest); err != nil {
 			return nil, err

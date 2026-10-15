@@ -35,8 +35,10 @@ func taskTerminal(state string) bool {
 }
 
 // taskTicket parses a fully qualified backlog reference; never a bare number.
-// GitHub retains the existing lease key, so a legacy claimant cannot bypass it.
-// Hub tickets have a separate namespace even when their local numbers match.
+// Both backends retain the existing lease key so legacy claimants cannot
+// bypass a task. The full backend reference stays on the task; a collision
+// with a registered local ticket is refused, never reinterpreted. Explicit
+// repo migration must allocate distinct local ticket numbers (C5).
 func taskTicket(ref string) (repo string, number int64, err error) {
 	backend, rest, ok := strings.Cut(ref, ":")
 	r, n, has := strings.Cut(rest, "#")
@@ -45,9 +47,7 @@ func taskTicket(ref string) (repo string, number int64, err error) {
 		return "", 0, ErrTaskInvalid
 	}
 	r = NormRepo(r)
-	if backend == TicketHub {
-		r = "hub:" + r
-	}
+
 	return r, num, nil
 }
 
@@ -91,6 +91,9 @@ func taskAcceptedInput(t *FleetTask) (string, error) {
 		t.RequestPayload = "{}"
 	}
 	var payload any
+	if !json.Valid([]byte(t.RequestPayload)) {
+		return "", ErrTaskInvalid
+	}
 	decoder := json.NewDecoder(strings.NewReader(t.RequestPayload))
 	decoder.UseNumber()
 	if decoder.Decode(&payload) != nil {
@@ -143,7 +146,7 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		r, n, _ := taskTicket(t.TicketRef)
 		var ticketOwner, ticketBackend string
 		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ?`, strings.TrimPrefix(r, "hub:"), n).Scan(&ticketOwner, &ticketBackend)
-		if err == nil && ((ticketBackend == backend && ticketOwner != t.Owner) || (backend == TicketHub && ticketBackend != backend)) {
+		if err == nil && (ticketOwner != t.Owner || ticketBackend != backend) {
 			return FleetTask{}, ErrTaskFence
 		}
 		if errors.Is(err, sql.ErrNoRows) && backend == TicketHub {
@@ -200,7 +203,7 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		rec.ID = id
 		return rec, tx.Commit()
 	}
-	rec.OperationID = taskAttemptID(id, 1)
+	rec.AttemptID = taskAttemptID(id, 1)
 	if err = s.saveTaskTx(tx, rec, now); err != nil {
 		return FleetTask{}, err
 	}
@@ -374,10 +377,11 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 			return FleetTask{}, err
 		}
 		t.Generation++
+		t.UpdatedAt = now.UTC()
 		t.State, t.RequestedAgent, t.ResolvedAgent = TaskAccepted, m.RequestedAgent, m.ResolvedAgent
 		t.ExecutionOwner, t.ExecutionEndpoint, t.WorkerID, t.ActualAgent, t.LeaseRef = "", "", "", "", ""
 		t.Outcome, t.Evidence, t.Observation, t.SessionKey = "", "", "", ""
-		t.OperationID = taskAttemptID(t.ID, t.Generation)
+		t.AttemptID = taskAttemptID(t.ID, t.Generation)
 		if err = taskAttemptTx(tx, t, now); err != nil {
 			return FleetTask{}, err
 		}
@@ -450,9 +454,9 @@ func releaseTaskLeaseTx(tx *sql.Tx, t FleetTask) error {
 func (s *Store) saveTaskTx(tx *sql.Tx, t FleetTask, now time.Time) error {
 	_, err := tx.Exec(`UPDATE fleet_tasks SET state = ?, generation = ?, execution_owner = ?, execution_endpoint = ?,
   worker_id = ?, requested_agent = ?, resolved_agent = ?, actual_agent = ?, lease_ref = ?, outcome = ?, evidence = ?, observation = ?,
-  operation_id = ?, session_key = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
+  attempt_id = ?, session_key = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
 		t.State, t.Generation, t.ExecutionOwner, t.ExecutionEndpoint, t.WorkerID, t.RequestedAgent, t.ResolvedAgent, t.ActualAgent,
-		t.LeaseRef, t.Outcome, t.Evidence, t.Observation, t.OperationID, t.SessionKey, now.UTC().Format(rfc), t.ID, t.Owner)
+		t.LeaseRef, t.Outcome, t.Evidence, t.Observation, t.AttemptID, t.SessionKey, now.UTC().Format(rfc), t.ID, t.Owner)
 	return err
 }
 
@@ -464,7 +468,7 @@ func taskAttemptTx(tx *sql.Tx, t FleetTask, now time.Time) error {
 	ts := now.UTC().Format(rfc)
 	_, err = tx.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
   VALUES (?, '', 'task_attempt', ?, ?, ?, 'recorded', ?, ?, ?, ?)`,
-		t.OperationID, string(b), t.Owner, t.OperationID, ts, ts, string(b), t.ExecutionOwner)
+		t.AttemptID, string(b), t.Owner, t.AttemptID, ts, ts, string(b), t.ExecutionOwner)
 	return err
 }
 func taskAttemptResultTx(tx *sql.Tx, t FleetTask, now time.Time) error {
@@ -473,6 +477,6 @@ func taskAttemptResultTx(tx *sql.Tx, t FleetTask, now time.Time) error {
 		return err
 	}
 	_, err = tx.Exec(`UPDATE fleet_operations SET result = ?, updated = ?, worker_id = ? WHERE id = ? AND action = 'task_attempt'`,
-		string(b), now.UTC().Format(rfc), t.ExecutionOwner, t.OperationID)
+		string(b), now.UTC().Format(rfc), t.ExecutionOwner, t.AttemptID)
 	return err
 }
