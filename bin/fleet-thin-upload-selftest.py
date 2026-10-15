@@ -238,9 +238,13 @@ class Transactions(unittest.TestCase):
     def test_stalled_status_connection_explains_pause_and_cancels(self):
         os.environ['FLEET_UPLOAD_FIXTURE_PROBE_DELAY'] = '30'
         self.tx.feed(self.drop('status-stall.txt'))
-        end = time.monotonic() + 2
-        while not self.notices and time.monotonic() < end:
+        # Establish the deliberately stalled stream before cancelling it. A
+        # local pause notice can precede process startup on a loaded machine.
+        marker = self.root / 'status-started'
+        end = time.monotonic() + 5
+        while (not marker.exists() or not self.notices) and time.monotonic() < end:
             self.tx.poll(); time.sleep(.01)
+        self.assertTrue(marker.exists(), 'status stream never established')
         self.assertTrue(any('输入已暂停' in n and 'Ctrl+C' in n for n in self.notices))
         self.assertEqual(self.tx.feed(b'not queued\r\x03'), b'')
         self.assertEqual(self.settle(timeout=2), b'')
@@ -554,6 +558,13 @@ class LiveTarget(unittest.TestCase):
                 active = status_start(3)
                 status_finish(active, 'cancelled')
                 self.assertEqual(state()['phase'], 'cancelled')
+                # Registry validation can race cur. The tmux-side generation
+                # must reject the old publisher without changing the new slot.
+                kept = state()['id']
+                tm('set-option', '-t', '=' + sess + '@view-test:', '@view_upload_gen', 'replacement')
+                self.assertEqual(call('status', dict(h, operation=4)).returncode, 1)
+                self.assertEqual(state()['id'], kept)
+                tm('set-option', '-t', '=' + sess + '@view-test:', '@view_upload_gen', h['generation'])
                 old_gen = status_start(4)
                 tm('set-option', '-w', '-t', sess + ':', '@cc_launcher_pid', '999')
                 self.assertEqual(call('target', h).returncode, 1, 'replacement accepted')

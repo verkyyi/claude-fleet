@@ -218,9 +218,21 @@ def status(up, h):
             state['until'] = time.time() + (1.5 if terminal else 4)
             if state['phase'] == 'clear': state['until'] = 0
             encoded = base64.b64encode(json.dumps(state).encode()).decode()
-            leases.tmux(sess, 'set-option', '-t', view, '@view_upload', encoded,
-                        ';', 'set-option', '-t', view, '@view_upload_id', key,
-                        ';', 'refresh-client', '-S', '-t', row['tty'])
+            # cur does not take our lock. Check its generation inside tmux's
+            # command queue, atomically with the write, so a delayed first
+            # publish cannot overwrite a newer selection's attachment.
+            guard = '#{==:#{@view_upload_gen},%s}' % h['generation']
+            if not first:
+                guard = '#{&&:%s,#{==:#{@view_upload_id},%s}}' % (guard, key)
+            commands = [
+                ['set-option', '-t', view, '@view_upload', encoded],
+                ['set-option', '-t', view, '@view_upload_id', key],
+                ['refresh-client', '-S', '-t', row['tty']],
+                ['display-message', '-p', 'owned'],
+            ]
+            command = ' ; '.join(' '.join(shlex.quote(a) for a in part) for part in commands)
+            if leases.tmux(sess, 'if-shell', '-F', '-t', view, guard, command).strip() != 'owned':
+                raise ValueError('status selection changed')
 
     publish(first=True)
     print(json.dumps({'identity': ident}), flush=True)
