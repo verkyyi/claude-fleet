@@ -4,6 +4,7 @@
 // (`vite build --mode site`). Everything here reads the entry the person is
 // already signed in to — same origin, their own ccq_sess cookie, nothing else.
 import { useEffect, useState } from "react";
+import { fetchChat } from "../../../browser-transport/chat";
 
 export const SITE = import.meta.env.MODE === "site";
 export const API = SITE ? "/v1/chat" : "/api";
@@ -69,4 +70,10 @@ export function whenLocal(iso: string | undefined, now = new Date()): string {
   if (days === 1) return `明天 ${hm}`;
   if (days > 1 && days < 7) return `周${"日一二三四五六"[t.getDay()]} ${hm}`;
   return `${t.getMonth() + 1}月${t.getDate()}日 ${hm}`;
+}
+
+// Capability selection happens before any request is submitted. Old nodes and
+// the standalone /api build retain their existing HTTP wire protocol.
+export function chatFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetchChat(url, init, SITE);
 }

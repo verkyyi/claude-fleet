@@ -10,11 +10,13 @@ on:
     paths:
       - 'extras/web-chat/ui/**'
       - 'extras/fleet-theme/**'
+      - 'extras/browser-transport/**'
       - '.github/workflows/web-chat-ui.yml'
   pull_request:
     paths:
       - 'extras/web-chat/ui/**'
       - 'extras/fleet-theme/**'
+      - 'extras/browser-transport/**'
       - '.github/workflows/web-chat-ui.yml'
 
 concurrency:

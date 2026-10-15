@@ -328,7 +328,8 @@ type Agent struct {
 	// (claude-fleet#2797), by the hub's op_id.
 	svcLogs svcLogFollows
 	// chatRelays counts the chat relays open on this login (claude-fleet#3644).
-	chatRelays chatSlots
+	chatRelays     chatSlots
+	chatDirectRate chatRate
 	// termRelays counts the terminals open on this login, termSpent the relay
 	// ids a grant was already used for (claude-fleet#3838).
 	termRelays  relaySlots

@@ -51,6 +51,7 @@ type ChatHome struct {
 	Machine string `json:"machine"`
 	Login   string `json:"login"`
 	State   string `json:"state"`
+	Direct  bool   `json:"direct,omitempty"`
 }
 
 // handleChatHome answers the person's home and whether a turn could reach it
@@ -88,12 +89,14 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if out.State == "ok" {
-		if _, _, err := s.chatRelayNode(home.Machine, home.Login); err != nil {
+		if _, nc, err := s.chatRelayNode(home.Machine, home.Login); err != nil {
 			out.State = "offline"
 			var re *sshRelayError
 			if errors.As(err, &re) && re.code == "NO_CHAT" {
 				out.State = "old_agent"
 			}
+		} else {
+			out.Direct = nc.canChatAttachment && nc.attachmentGeneration != ""
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -210,6 +213,10 @@ func (s *Server) chatPerson(r *http.Request) (person string, status int, code, m
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	name := strings.TrimPrefix(r.URL.Path, ChatPathPrefix)
+	if name == "connect" {
+		s.handleChatAttachment(w, r)
+		return
+	}
 	if name == chatHomeRoute {
 		s.handleChatHome(w, r)
 		return
