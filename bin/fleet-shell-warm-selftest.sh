@@ -222,9 +222,11 @@ hasnt 'D: the old 5 s keepalive is gone' "$fc" 'ServerAliveInterval=5'
 : > "$WORK/ssh.log"; : > "$WORK/fc.log"
 FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb \
   bash "$SB/fleet-remote-view.sh" run --shell mac-b "$WID" >"$WORK/refuse.out" 2>&1 & refused_pid=$!
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+attempt=0
+while [ "$attempt" -lt 10 ]; do
   kill -0 "$refused_pid" 2>/dev/null || break
   sleep 1
+  attempt=$((attempt + 1))
 done
 if kill -0 "$refused_pid" 2>/dev/null; then
   fail 'D: a refused warm session kept retrying the same master'
