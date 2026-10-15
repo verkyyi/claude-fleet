@@ -281,6 +281,17 @@ PYNO
   TM set-option -w -t "$WIN" @fleet_role panel
   transfer --prepare-only && fail 'renamed panel must refuse'
   ok
+  # Legacy unstamped panels must take the unified role reader's fallback,
+  # rather than merely failing a later HOME identity check by coincidence.
+  OLD_NAME=$(TM display-message -p -t "$WIN" '#{window_name}')
+  TM set-option -wu -t "$WIN" @fleet_role
+  for old_panel in home dash; do
+    TM rename-window -t "$WIN" "$old_panel"
+    transfer --prepare-only && fail 'legacy unstamped panel must refuse'
+    printf '%s' "$OUT" | grep -q 'panel windows cannot be transferred' || fail 'legacy panel did not use role fallback'
+  done
+  TM rename-window -t "$WIN" "$OLD_NAME"
+  ok
   TM set-option -w -t "$WIN" @fleet_role worker
   TM set-option -wu -t "$WIN" @fleet_id
   transfer --prepare-only && fail 'unstamped HOME session must refuse'
@@ -303,12 +314,14 @@ PYPREP
   [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 1 ] || fail 'preparation sent twice'
   kill -0 "$PID" || fail 'preparation exited the source'
   PREP="$FLEET_CONF_DIR/transfer-preparation/$(field fleet_id).json"
+  printf 'Verified source notes for panel preparation checks.\n' > "$WORK/panel-notes.md"
   python3 - "$PREP" <<'PYEXPIRE'
 import json,sys
 p=sys.argv[1]; r=json.load(open(p)); r['expires_at']=0
 open(p,'w').write(json.dumps(r))
 PYEXPIRE
-  transfer --after-turn && fail 'expired panel request armed'
+  transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'expired panel request armed'
+  printf '%s' "$OUT" | grep -q 'panel preparation expired or changed identity/target' || fail 'expiry check did not run'
   [ -z "$(field agent_transfer_request)" ] || fail 'expired request changed arm state'
   transfer --from-panel || fail 'explicit panel retry after expired acknowledged request'
   [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 2 ] || fail 'panel retry not delivered once'
@@ -317,7 +330,8 @@ import json,sys
 p=sys.argv[1]; r=json.load(open(p)); r['session_id']='wrong-source'
 open(p,'w').write(json.dumps(r))
 PYMISMATCH
-  transfer --after-turn && fail 'wrong source identity armed'
+  transfer --after-turn --handoff "$WORK/panel-notes.md" && fail 'wrong source identity armed'
+  printf '%s' "$OUT" | grep -q 'panel preparation expired or changed identity/target' || fail 'identity check did not run'
   kill -0 "$PID" || fail 'rejected request exited source'
   rm "$PREP"
   ok
