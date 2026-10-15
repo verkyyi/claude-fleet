@@ -37,7 +37,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
-selftest_sections 3
+selftest_sections 4
 SCRIPT="$BIN/fleet-model-switch.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
@@ -559,6 +559,9 @@ else
   printf 'fleet-model-switch selftest: jq absent — the statusLine (@model) leg skipped\n'
 fi
 
+fi
+
+if selftest_section 4; then
 # --- with the fleet mod alive, /model goes through its inbox (issue #1337) -----
 # A fresh @mod_alive and a stand-in mod that claims the posted file (the same
 # atomic mv the real one runs) and answers done: the pane is never typed into.

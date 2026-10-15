@@ -90,7 +90,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
-selftest_sections 6
+selftest_sections 7
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
 HUB_PID=""
 cleanup() {
@@ -327,13 +327,13 @@ echo "$out" | grep -q 'fleet connect' && bad "E no tmux: it went to connect: $ou
 
 fi
 
-if [ "$SELFTEST_SECTION" = 2 ]; then
+if [ "$SELFTEST_SECTION" = 2 ] || [ "$SELFTEST_SECTION" = 7 ]; then
   # F originally follows E's clean reinstall. Prepare that installed client
   # before using F's deliberately restricted tool PATH for dependency checks.
   sh < "$WORK/install.sh" > "$WORK/f-install.out" 2>&1 \
     || bad "F fixture install: $(cat "$WORK/f-install.out")"
 fi
-if selftest_section 2; then
+if selftest_section 2 7; then
 # ── F — the tmux step ───────────────────────────────────────────────────────
 fnbody() { awk '/^fc_tmux_ok\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
 lib_fn=$(fnbody "$BIN/fleet-client-lib.sh")
@@ -362,6 +362,7 @@ frun() {  # <extra PATH dirs> <env…> — one install with the tmux step on; ou
   rm -rf "$F/brewbin" "$F/sys"; : > "$F/brew.log"; : > "$F/apt.log"
   out=$(env PATH="$dirs:$F/sys:$FARM" FLEET_INSTALL_NO_DEPS= FC_BREW_DIRS= "$@" sh < "$WORK/install.sh" 2>&1); rc=$?
 }
+if selftest_section 2; then
 frun "$F/brew" FC_OS=darwin
 [ "$rc" = 0 ] && [ "$(grep -c '^install tmux$' "$F/brew.log")" = 1 ] && echo "$out" | grep -q '^tmux: ok 3.5a' \
   && ok "F macOS + brew, no tmux → brew install tmux once, then ok" || bad "F brew: rc=$rc log=$(cat "$F/brew.log") out=$out"
@@ -377,6 +378,8 @@ mktmux "$F/t31" 3.1
 frun "$F/t31:$F/brew" FC_OS=darwin
 [ "$rc" = 0 ] && [ "$(grep -c '^install tmux$' "$F/brew.log")" = 1 ] && echo "$out" | grep -q '3.1 低于 3.2' \
   && ok "F tmux 3.1 counts as none → brew install tmux" || bad "F tmux 3.1: rc=$rc log=$(cat "$F/brew.log") out=$out"
+fi
+if selftest_section 7; then
 frun "$F/apt" FC_OS=linux FLEET_INSTALL_SUDO="$F/sudo/sudo -n"
 [ "$rc" = 0 ] && [ "$(grep -c 'install -y -qq tmux' "$F/apt.log")" = 1 ] && echo "$out" | grep -q '^tmux: ok 3.4' \
   && ok "F Linux + apt-get + passwordless sudo → apt-get install tmux once, then ok" || bad "F apt: rc=$rc log=$(cat "$F/apt.log") out=$out"
@@ -393,6 +396,7 @@ out=$(env PATH="$F/brew:$FARM" FC_OS=darwin FC_BREW_DIRS= sh -s -- --no-deps < "
 [ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: skipped (--no-deps)' \
   && ok "F sh -s -- --no-deps → skipped" || bad "F --no-deps: rc=$rc out=$out"
 
+fi
 fi
 
 if selftest_section 3; then

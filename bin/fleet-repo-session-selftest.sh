@@ -49,6 +49,10 @@ printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
 # The agent: records its argv and what its OWN window said at launch, then idles.
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/bash
+# Launcher plugin discovery is a CLI read, not one of the recorded sessions.
+case "\${1:-} \${2:-} \${3:-}" in
+  'plugin list --json'|'plugin marketplace list') printf '[]\n'; exit 0 ;;
+esac
 w=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
 printf '%s\n' "\$*" > "$WORK/rec/\$w.args"
 tmux display-message -p -t "\$TMUX_PANE" '#{@repo}|#{@norepo}|#{@worktree}' > "$WORK/rec/\$w.seen"
