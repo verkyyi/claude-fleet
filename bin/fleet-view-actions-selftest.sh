@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-view-actions-selftest.sh — Tab on a row of the 看台's list (issue #3181,
 # EPIC #3178 C3): bin/fleet_view.py's ACTIONS, the old sidebar row menu's actions
-# item for item, each running the SAME script fleet-sidebar-menu.sh ran.
+# item for item, each running the shared session action script.
 #
 # Isolated sockets only: an INNER server is the home machine (a fleet `fl` + its
 # 看台 `fl@view-v1`, as fleet-view-selftest.sh builds them), the rows come through
@@ -11,8 +11,7 @@
 #
 #   A  the table: every letter of the sidebar menu (fleet-ui-lang.sh menu_keys) is
 #      an action here (SIDEBAR_ACTIONS) or a row-less one handed to C2 / C7
-#      (ROWLESS) — one missing is red; every action fleet-sidebar-menu.sh builds
-#      a row item for (`mk <action>`) is in the table
+#      (ROWLESS) — one missing is red; each action declares its required fields
 #   B  view-menu: a done row here gets its actions (no 回答 / 唤醒 / 继续), an
 #      asking row 回答, a sleeping one 唤醒, an ended exited one 恢复, another
 #      machine's row its hub writes (no 置顶 / PR / 唤醒 there)
@@ -119,13 +118,12 @@ qo() { python3 "$BIN/fleet-quickopen.py" "$@"; }
 # --- A: the table against the sidebar menu ---------------------------------------------
 letters=$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t menu_keys | awk -F '\t' '{ print $1 }')
 [ -n "$letters" ] || fail "A: no menu_keys"
-built=$(grep -o 'mk [a-z]*' "$BIN/fleet-sidebar-menu.sh" | awk '{ print $2 }' | sort -u)
-PYCHK=$(python3 - "$BIN" "$letters" "$built" <<'EOF'
+PYCHK=$(python3 - "$BIN" "$letters" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fleet_view", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
 bad = []
-for a in sys.argv[2].split() + sys.argv[3].split():
+for a in sys.argv[2].split():
     if a in fv.ROWLESS:
         continue
     if a not in fv.SIDEBAR_ACTIONS:

@@ -29,7 +29,6 @@
 0.2 brew-keg-700
 0.0 browser-import-access-crossed
 0.0 burst-lands-on-one
-3.0 cert-expiry-keeper
 0.6 cert-expiry-no-client
 0.3 cfg-reopen-loop
 1.0 chat-budget-bypass
@@ -41,18 +40,10 @@
 0.9 chat-socket-other-login
 1.7 ci-runner-hogs
 1.0 ci-runner-pr-code
-1.6 client-files-swapped
-2.0 client-hot-reload
-19.3 client-kill-keys
-0.7 client-kill-server
 0.4 client-other-login-empty-list
-19.2 client-pane-killed
-2.8 client-sidebar-stale-after-update
-1.7 client-unversioned-drift
 0.8 client-update-silent-fail
 0.7 client-verify-no-ccquota
 0.1 cluster-reading-wrong-pod
-3.6 cmdn-waits-orch
 8.8 cn-probe-coarse-verdict
 0.6 cn-probe-env-masked
 11.2 cn-probe-sessions-left
@@ -164,11 +155,9 @@
 5.4 hub-read-refused-silent
 0.6 hub-refused-cert
 11.3 hub-release-downtime
-3.3 hub-restart-where
 0.3 hub-shape-extra-volume
 0.0 hub-stream-silent
 0.2 hub-time-py39
-0.9 hub-unreachable
 2.0 hubsess-daemon-nohup
 1.0 human-step-reopen
 3.3 idle-timeout-starves-merged
@@ -229,7 +218,6 @@
 0.1 migrate-loses-policy
 1.2 mirror-private-unlisted
 0.6 multirepo-bridge-second-repo
-0.0 nested-drop
 0.3 new-login-first-run-dialog
 0.4 new-login-unseparated
 0.2 newcomer-login-hosts-repo
@@ -260,7 +248,6 @@
 1.1 nothing-starts-by-itself
 0.1 notify-leaks-secret
 0.9 notify-silent
-21.6 offline-list-moves
 0.3 oldcfg-broken-unmarked
 0.3 oldcfg-deleted-hook
 2.9 open-via-home-lost
@@ -312,15 +299,12 @@
 1.0 probe-ignores-relay
 0.7 probe-stale-after-release
 2.9 provisioner-off-template
-0.3 proxy-orphan
 0.9 q-releases-claim
 0.2 quarantine-expired
 0.2 quarantine-one-red
 0.1 quarantine-pr-skips
 0.3 quarantine-touched
 0.9 quota-refused-blind
-1.3 reconnect-mouse
-0.7 reconnect-stale-view
 0.1 recycle-old-cert
 26.9 recycle-rejoins
 19.9 relay-revocations-hub-down
@@ -360,7 +344,6 @@
 1.8 seat-repin
 0.1 seat-root-leftovers
 0.6 seated-forget-core-job
-8.0 second-client
 0.4 selection-miss-silent
 0.1 selftest-tmux-leak
 0.9 service-failed-unseen
@@ -377,7 +360,6 @@
 0.3 shared-dir-foreign-write
 0.8 shell-kill-fleet
 6.7 shift-enter-sends
-0.0 sidebar-ctrl-c
 0.0 site-console-indexed
 0.0 spare-login-empty
 3.7 spare-not-tenant
@@ -393,9 +375,7 @@
 0.1 spotlight-on
 0.2 stable-macos-ahead
 0.2 stable-push-no-workflows
-2.2 stage-orphan-run
 0.0 stale-admin-opens-login
-0.7 static-forward
 0.4 status-agent-not-up
 0.2 status-migrated-looping
 0.3 status-perm-overwritten
@@ -459,7 +439,6 @@
 0.0 trial-wash-webchat-registered
 0.0 trust-name-borrowed
 0.0 two-hubs-double-refresh
-0.8 two-logins-one-machine
 0.1 usage-unattributed
 1.2 user-pod-image-stale
 0.2 user-pod-login-reissued
