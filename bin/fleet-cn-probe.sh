@@ -76,7 +76,9 @@
 # prompt's own echo is never read as an answer or an error.
 #
 # What it leaves on the pod: one closed ticket and its task record per run; the
-# Codex sessions it opened are closed. The client keeps its own connect cache
+# Codex sessions it opened are closed — by the client's `fleet close`, else on the
+# pod by their lifelong id (fleet-worker-stop.sh fid:); one that still stands is
+# kept in <runs>/.left-sessions and stopped first by the next run (issue #4304). The client keeps its own connect cache
 # (that is the person's state). No credential is printed or passed in an argv.
 set -uo pipefail
 
@@ -389,6 +391,8 @@ codex_step() {
   st=$(printf '%s\n' "$out" | grep '^CODEX ' | tail -n 1)
   scr=$(printf '%s\n' "$out" | sed -n 's/^SCREEN //p' | grep -v "$w" | tail -n 3 | tr '\n' ' ' | shown)
   printf '%s\n' "$out" | grep '^LEFT ' | while read -r _ k why; do say "INFO codex:$r could not close the session $k it opened: ${why:-no reason given}"; done
+  # shellcheck disable=SC2046 # the LEFT keys, one word each
+  stop_left "codex:$r" $(printf '%s\n' "$out" | sed -n 's/^LEFT \([^ ]*\).*/\1/p')
   # shellcheck disable=SC2086 # the CODEX line's words, split on purpose
   set -- $st
   term=$(printf '%s\n' "$out" | sed -n 's/^TERM //p' | head -n 1)
@@ -417,6 +421,63 @@ codex_step() {
 }
 
 # task_script <repo> — on the pod, through `fleet connect`: a task record with
+# stop_script <fleet_id…> — on the pod, through `fleet connect`: each session the
+# probe opened, stopped by its lifelong id (fleet-worker-stop.sh fid:, the same
+# graceful /exit the hub's worker_stop runs) — the road when the client's
+# `fleet close` could not (issue #4304: eight of them piled up on the test pod,
+# and its CPU gate then refused the next run's session)
+stop_script() {
+  printf 'M=%s TMO=%s FIDS="%s"\n' "$MACHINE" "$TMO" "$*"
+  cat <<'EOS'
+p=$(mktemp)
+cat > "$p" <<'POD'
+B=$HOME/.claude/fleet/bin
+s=$(ls "$HOME/.config/claude-fleet/fleets" 2>/dev/null | head -n 1)
+for f in $FIDS; do
+  if [ -n "$s" ] && ${FLEET_CN_PROBE_POD_STOP:-bash $B/fleet-worker-stop.sh} "$s" "fid:$f" >/dev/null 2>&1; then echo "STOPPED $f"; else echo "STILL $f"; fi
+done
+POD
+timeout "$TMO" fleet connect "$M" -- "FIDS='$FIDS' bash -l" < "$p" 2>&1
+rm -f "$p"
+EOS
+}
+# the probe's own leftovers: `<key> <first seen>` a line, beside the run dirs
+LEFTF=$(dirname "$RUN_DIR")/.left-sessions
+# stop_left <layer> <key…> — stop each on the pod; what still stands is kept in
+# $LEFTF for the next run (a key is the client's `wid:<fleet>/<fleet_id>`)
+stop_left() {
+  local layer=$1 k f fids='' out still=''
+  shift
+  [ "$#" -gt 0 ] || return 0
+  for k in "$@"; do f=${k##*/}; case "$f" in ''|*[!A-Za-z0-9_.:-]*) continue ;; esac; fids="$fids $f"; done
+  [ -n "$fids" ] || return 0
+  out=$(stop_script $fids | on_client_s)
+  for k in "$@"; do
+    f=${k##*/}
+    if printf '%s\n' "$out" | grep -qx "STOPPED $f"; then
+      say "INFO $layer stopped the session $k it opened on the pod (fleet-worker-stop.sh fid:)"
+      [ ! -f "$LEFTF" ] || { grep -v "^$k " "$LEFTF" > "$LEFTF.tmp"; mv "$LEFTF.tmp" "$LEFTF"; }
+    else
+      still="$still $k"
+      grep -q "^$k " "$LEFTF" 2>/dev/null || printf '%s %s\n' "$k" "$(date +%s)" >> "$LEFTF"
+    fi
+  done
+  [ -z "$still" ] || say "INFO $layer left on the pod (retried next run):$still"
+}
+# left_sweep — an earlier run's leftovers, once a run; a key two days old is dropped
+left_sweep() {
+  local k t keys='' now
+  [ -s "$LEFTF" ] || return 0
+  now=$(date +%s)
+  while read -r k t; do
+    case "$t" in ''|*[!0-9]*) continue ;; esac
+    [ $((now - t)) -lt 172800 ] && keys="$keys $k"
+  done < "$LEFTF"
+  awk -v n="$now" '$2 ~ /^[0-9]+$/ && n - $2 < 172800' "$LEFTF" > "$LEFTF.tmp"; mv "$LEFTF.tmp" "$LEFTF"
+  # shellcheck disable=SC2086 # the keys, one word each
+  [ -z "$keys" ] || stop_left sweep $keys
+}
+
 # its ticket filed on a hosted repo, then the ticket closed (not_planned)
 task_script() {
   printf 'M=%s REPO=%s TMO=%s\n' "$MACHINE" "$1" "$TMO"
@@ -464,6 +525,9 @@ task_step() {
   esac
 }
 
+# the sessions an earlier run could not close (its own, by key): stopped first, so
+# they never pile up on the pod and hold its CPU against this run's sessions
+layer_on codex && left_sweep
 for r in $ROUTES; do
   case "$r" in *[!A-Za-z0-9_.:-]*) continue ;; esac
   layer_on view && view_step "$r"

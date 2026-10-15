@@ -22,6 +22,29 @@
 
 `bin/fleet-cn-probe-watch.sh` 挂在 diskguard 守护的每拍上（`cn_probe_watch`），只在有客户端钥匙（`FLEET_CN_PROBE_KEY`）的那台机器、那个登录上跑：绿了每 6 小时一次（`FLEET_CN_PROBE_SECS`），红了每小时一次（`FLEET_CN_PROBE_RED_SECS`）。`FLEET_CN_PROBE=0` 关掉。
 
+每一次走路——diskguard 的拍子、手动 `--now`、恢复验证，绿的也算——都在 `$FLEET_CONF_DIR/global/cn-probe/history.ndjson` 记一行（`ev: run`：`mode` · `run_id` · stable · 结论 · 类别 · `reason_code` · 起止 · result 路径）；一拍没走，理由也记（`ev: skip`：节流到几点、锁被哪个 pid 占着、时钟落后于上次的 stamp），同一个理由只记一次；锁里写着持有者的 pid，持有者已经不在就当场接管（`ev: lock_reclaimed`），活着的照旧一小时为限。diskguard 的 `diskguard/cn-probe.log` 只是它那一拍的输出（#4304）。
+
+## 修复上线后的恢复验证（#4304）
+
+修复真正部署、就绪之后（不是合并的时候），由编排开一轮有界的恢复验证：
+
+```sh
+bin/fleet-cn-probe-watch.sh --repo <owner/name> --recover --expect stable=<sha> [--expect image=sha256:…] --why '<修的是什么>'
+python3 bin/fleet-cn-probe-recover.py "$FLEET_CONF_DIR/global/cn-probe" status   # 这一轮到哪了
+python3 bin/fleet-cn-probe-recover.py "$FLEET_CONF_DIR/global/cn-probe" stop --why '<为什么>'
+```
+
+`--recover` 开一轮（同一个期望重复开是同一轮，什么都不新起）并当场走一次；之后每一拍问这一轮该不该走——该走的那拍不管节流，仍在同一把锁下、一次一轮。账本 `bin/fleet-cn-probe-recover.py`（`global/cn-probe/recover.json`）：
+
+- **间隔**：默认一次接一次连着跑（上一次结束后的下一拍就开始，不按整点），串行不重叠；`FLEET_CN_RECOVER_EVERY`（0 s，起点到起点）可拉开。
+- **算一次通过**：#4303 的 `result.json` 说 pass、类别 none；每条路由的 connect / view / codex 都走过且过（`FLEET_CN_RECOVER_STAGES`，默认 `entry relay view:entry view:relay codex:entry codex:relay`）；诊断读全了部署向量——hub、hub 发的客户端、客户端、节点运行时、镜像 digest、pod UID，没有 `unknown`；每个 `--expect`（`stable=` `hub=` `client=` `runtime=` `image=` `pod=` 或完整键名）都在读数里；时间合理（结束不早于开始、在这一轮和这次登记之内、时钟没有倒退）；且这次是本轮登记过的。
+- **归零**：红、env、probe、半截、版本读不到或不符、时钟倒退、超时、巡检死掉（`abandoned`）都清零；换了向量的通过从 1 重数。同一个 run_id 只判一次，巡检崩了重来不会重复计。
+- **结束**：同一向量上连续 `FLEET_CN_RECOVER_NEED`（3）次 ⇒ `done`；跑满 `FLEET_CN_RECOVER_MAX_RUNS`（6）次或 `FLEET_CN_RECOVER_MAX_SECS`（5400 s）⇒ `exhausted`，写明差几次。两种都写证据 `global/cn-probe/recover/<round>.json`（0600：每一次的 run_id、结论、原因、向量、result 路径；done 时列出那 3 次独立完整的运行），巡检回到原来的节流。
+
+探针每轮自己开的 Codex 会话一律收掉：客户端的 `fleet close` 收不掉，就当轮经 `fleet connect` 在 pod 上按会话的 fleet id 优雅停掉（`fleet-worker-stop.sh fid:`）；还收不掉的记在 `runs/.left-sessions`，下一轮开自己的会话之前先收（#4304：一晚积了 8 个，pod 的 CPU 门于是拒了下一轮）。
+
+它只给编排核对稳定窗口用：不动 stable、不合 PR、不改发布门、不开单；每次只关自己开的测试会话（探针本来如此）。
+
 每次先 `bin/fleet-cn-probe-env.sh ensure` 把测试路面扶正：
 
 - **测试 pod 跟 stable 的节点镜像**：列车 `node image` 作业在它构建的提交上留一条提交状态 `node image`（描述 `<repo>@sha256:…`）；pod 的镜像不同就 `kubectl set image` 滚到它。pod 不在了，用 `FLEET_CN_PROBE_POD_MANIFEST`（当初 `render.py --user-pod` 渲出来的清单，只留在这台机器上）重建。

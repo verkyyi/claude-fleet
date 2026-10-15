@@ -126,6 +126,10 @@
 #   cn-probe-coarse-verdict                         bin/fleet-cn-probe.sh stages + bin/fleet-cn-probe-result.py (one result)
 #                                                   + bin/fleet-cn-probe-diag.sh (read-only, redacted)
 #   cn-probe-env-masked                             bin/fleet-cn-probe-watch.sh (a failed ensure is the run's env verdict)
+#   cn-probe-silent-stall                           bin/fleet-cn-probe-watch.sh (history.ndjson: every walk, each distinct skip;
+#                                                   a dead holder's lock taken over)
+#   cn-recover-miscount                             bin/fleet-cn-probe-recover.py (the bounded recovery round)
+#   cn-probe-sessions-left                          bin/fleet-cn-probe.sh (stop_left / left_sweep: the pod's stop by fleet id)
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
 #                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
 #                                                   (staleLoginTokenWhy), internal/agent lane_state.go,
@@ -5793,6 +5797,12 @@ drill_cn_probe_coarse_verdict() {
   WHAT="诊断写明真实拒绝者与读数（1.51 of 1.00 cores, 59% throttled）、开号器为何关（运行时组可写）、身份过期判 env；0600、无凭据；文本与退出码出自 result.json，阶段带起止 / 耗时 / reason_code / 证据"
 }
 drill_cn_probe_env_masked() { cnprobe_leg I 60 "ensure 失败 ⇒ 本轮 env · ensure:identity，不跑探针、不开会话，原话留证，单标题「国内探针环境无效」"; }
+# ---- cn-probe-silent-stall / cn-recover-miscount (#4304): the patrol left no
+# trace of a manual run or of why a tick did not walk, and a fix waited the
+# throttle (6 h after a green) before anyone could count three greens.
+drill_cn_probe_silent_stall() { cnprobe_leg M 60 "手动 --now 的绿也进 history.ndjson；节流 / 锁占用按理由只记一次；主人已死的锁当场接管并记下；--recover 之后每个 tick 是一轮恢复验证，3 次通过即止，回到节流"; }
+drill_cn_probe_sessions_left() { cnprobe_leg N 120 "客户端 fleet close 失败 ⇒ pod 上按 fleet id 停掉（fleet-worker-stop.sh fid:）；两条路都不行 ⇒ 记进 .left-sessions，下一轮先收"; }
+drill_cn_recover_miscount() { cnprobe_leg L 60 "重复触发只一轮；崩掉的一轮 abandoned 不计；红 / env / 半截 / 版本读不到或不符 / 时钟倒退都不计；换向量从 1 重数；3 次独立完整通过才 done；6 轮 / 时限到即 exhausted"; }
 
 # ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
 # read the load, under one observed_at, and the hub folded a machine's load from
