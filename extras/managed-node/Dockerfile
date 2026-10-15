@@ -68,6 +68,13 @@ RUN [ -z "$DEBIAN_MIRROR" ] || sed -i "s#http://deb.debian.org/debian#$DEBIAN_MI
     && { [ -z "$DEBIAN_MIRROR" ] || sed -i "s#$DEBIAN_MIRROR#http://deb.debian.org/debian#g" /etc/apt/sources.list.d/debian.sources; } \
     && groupadd --gid 499 fleetcred \
     && useradd --uid 499 --gid 499 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin fleetcred \
+    # the door's one jump account (claude-fleet#4193): no shell, no session, a tunnel
+    # to its key owner's own pod only (bin/fleet-door-keys.py). `*`, never `!` —
+    # the door's `UsePAM no` sshd refuses a locked account even with its key (#4161)
+    && groupadd --gid 498 fleet-jump \
+    && useradd --uid 498 --gid 498 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin \
+       --password '*' fleet-jump \
+    && [ "$(getent shadow fleet-jump | cut -d: -f2)" = '*' ] \
     && ssh-keygen -q -t ed25519 -N '' -f /tmp/hk \
     && mkdir -p /run/sshd && /usr/sbin/sshd -T -f /dev/null -o HostKey=/tmp/hk \
        | grep -Ei '^persourcepenalties ' | grep -Eqv ' no$' \

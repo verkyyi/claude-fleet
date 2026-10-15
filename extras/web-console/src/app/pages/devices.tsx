@@ -63,7 +63,7 @@ type Connect = {
 type EntryKey = { id: string; fp: string; type: string; name: string; created: string; last_used?: string; revoked_at?: string };
 type Door = {
   domain?: string; address?: string; port: number; login?: string; home_name?: string; home_why?: string;
-  home_down?: string; state: string; why?: string; qr?: string[];
+  home_down?: string; state: string; why?: string; qr?: string[]; jump?: string;
 };
 type HomeChoice = { machine: string; login: string; online: boolean; name?: string };
 type Entry = {
@@ -357,6 +357,15 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
             {d.qr ? <p className="text-muted-foreground pt-2 text-[13px]">{tr("用手机相机扫左边的码，在 App 里打开就填好这三项。", "Scan the code with your phone's camera to open these three in the app.")}</p> : null}
           </div>
         </div>
+        {d.jump ? (
+          <div className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground text-[13px]">{tr("经门跳转（App 里的 Jump host，或电脑上直接 ssh）：", "Through the door's jump (an app's Jump host, or plain ssh):")}</span>
+            <div className="flex min-h-11 items-center gap-2 rounded-lg border px-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{d.jump}</span>
+              <CopyButton text={d.jump} />
+            </div>
+          </div>
+        ) : null}
         {!d.domain ? <Note tone="warn">{tr("这个入口还没设地址用的域名（设置 fleet.entry_domain）：请管理员配好。", "This hub has no address domain yet (the fleet.entry_domain setting); ask an admin.")}</Note> : null}
         <DoorState d={d} />
         <p className="text-muted-foreground text-[13px]">

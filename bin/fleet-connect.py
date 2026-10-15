@@ -958,6 +958,31 @@ def rank_routes(rows):
     return sorted(rows, key=key)
 
 
+JUMP_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+JUMP_TARGET_RE = re.compile(r"^u-[a-z0-9]{4,20}\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.svc\.cluster\.local$")
+
+
+def jump_of(r):
+    """A route's jump (claude-fleet#4193, design #4181 A2): a person's pod behind
+    the door, reached through the door's one jump account — the route's
+    host:port is the door, `target` the pod's own sshd inside the cluster, and
+    `target_host_keys` the pod's own host keys as the hub lists them (the
+    machine's, copied onto the row by route_rows). {} unless
+    every part is well-formed and a key is listed (never TOFU): the route is
+    then the door's per-login road, as before."""
+    if not isinstance(r, dict) or not r.get("jump"):
+        return {}
+    keys = [k for k in (r.get("target_host_keys") or []) if isinstance(k, str) and HOST_KEY_RE.match(k)]
+    user, tgt = str(r.get("jump") or ""), str(r.get("target") or "")
+    try:
+        port = int(r.get("target_port") or 22)
+    except (TypeError, ValueError):
+        return {}
+    if not JUMP_USER_RE.match(user) or not JUMP_TARGET_RE.match(tgt) or not 0 < port < 65536 or not keys:
+        return {}
+    return {"jump": user, "target": tgt, "target_port": port, "target_host_keys": keys}
+
+
 def route_rows(machine, hub):
     rows = []
     for i, r in enumerate(machine.get("routes") or []):
@@ -965,6 +990,9 @@ def route_rows(machine, hub):
                "order": i, "ms": [], "errors": []}
         if r.get("prefix"):
             row["prefix"] = int(r["prefix"])
+        j = jump_of(dict(r, target_host_keys=machine.get("target_host_keys")))
+        if j:
+            row.update(j)
         row["skip"] = route_skip(row)
         rows.append(row)
     if hub:
@@ -1163,10 +1191,15 @@ def write_known_hosts(machine):
     the hub does not list is still refused (ssh's own "host key has changed").
     The file is the hub's: this machine's lines are replaced, the others kept.
     False when the hub listed no keys — ssh then checks as it always did."""
-    keys = host_keys(machine)
+    return write_host_keys("fleet-" + (machine.get("alias") or machine.get("hostname")), host_keys(machine))
+
+
+def write_host_keys(alias, keys):
+    """<keys> as ~/.ssh/fleet-known-hosts' lines for <alias> — that alias's
+    lines replaced, the others kept. False when there are none."""
+    keys = [k for k in keys or [] if isinstance(k, str) and HOST_KEY_RE.match(k)]
     if not keys:
         return False
-    alias = "fleet-" + (machine.get("alias") or machine.get("hostname"))
     path = known_hosts_path()
     try:
         with open(path) as f:
@@ -1211,6 +1244,30 @@ def ssh_command(machine, route, login, hub, ssh_opts=(), known_hosts=False):
     vlog = ssh_verbose_log()
     if vlog:
         cmd += ["-v", "-E", vlog]
+    j = jump_of(route) if route["kind"] != "relay" else {}
+    palias = "fleet-%s-pod" % alias
+    if j and write_host_keys(palias, j["target_host_keys"]):
+        # through the door's jump account to the pod's own sshd (claude-fleet#4193):
+        # the outer hop is the door (its key under fleet-<alias>, as the door's
+        # route always had), the inner the pod — its own keys under
+        # fleet-<alias>-pod, written just now from the route; the device key on
+        # both. Keys not written ⇒ the door's per-login road below, as before.
+        mine = os.environ.get("FLEET_KNOWN_HOSTS") or "~/.ssh/fleet-known-hosts"
+        cmd[2] = "HostKeyAlias=" + palias
+        if not known_hosts:
+            cmd += ["-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine]
+        inner = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=15",
+                 "-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine, "-o", "BatchMode=yes"]
+        if os.path.exists(key):
+            inner += ["-i", key, "-o", "IdentitiesOnly=yes"]
+        if route["port"] and route["port"] != 22:
+            inner += ["-p", str(route["port"])]
+        inner += ["-W", "%h:%p", "-l", j["jump"], route["host"]]
+        cmd += ["-o", "ProxyCommand=" + " ".join(shlex.quote(a) for a in inner)]
+        if j["target_port"] != 22:
+            cmd += ["-p", str(j["target_port"])]
+        cmd.append(j["target"])
+        return cmd
     if route["kind"] == "relay":
         me = os.path.abspath(__file__)
         pc = "%s %s --proxy %s --hub %s" % (shlex.quote(sys.executable or "python3"), shlex.quote(me),
@@ -1238,7 +1295,9 @@ def ssh_verbose_log():
         return ""
 
 
-ROUTE_KEYS = ("name", "kind", "host", "port", "prefix")
+# jump · target · target_port · target_host_keys: a pod behind the door, through its
+# jump account (claude-fleet#4193, jump_of)
+ROUTE_KEYS = ("name", "kind", "host", "port", "prefix", "jump", "target", "target_port", "target_host_keys")
 
 
 def route_rec(r):

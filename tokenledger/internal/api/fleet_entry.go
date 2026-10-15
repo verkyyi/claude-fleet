@@ -876,6 +876,10 @@ func (s *Server) handleNodeEntryKeys(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		return
 	}
+	if isUserPodName(host) {
+		// a pod whose sshd takes the keys it pulls (claude-fleet#4193)
+		s.noteJump(r, host, false, time.Now())
+	}
 	out, err := s.entryNodeList(host)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

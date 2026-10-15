@@ -44,6 +44,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1306,6 +1307,9 @@ POD_SSHD_PORT = 2222
 # the hub's ssh user CA in a person's pod (claude-fleet#4149): written by the
 # pod's install as its login on the node disk the sshd container mounts read-only
 POD_USER_CA = '/var/db/fleet-node/ssh/fleet_user_ca.pub'
+# the person's own keys in their pod (claude-fleet#4193): pulled by the pod's
+# resident loop (PodKeys) off the hub's entry list, on the same disk
+POD_KEYS = '/var/db/fleet-node/ssh/authorized_keys'
 
 
 def pod_own():
@@ -1361,15 +1365,24 @@ def pod_privileges():
 
 def pod_sshd_text(login, runtime='/var/db/fleet-node/runtime'):
     """The pod's whole sshd config (the sshd container runs `-f` it, nothing
-    else is read): the cluster door's key alone, for the one login, then
-    bin/fleet-entry.sh — user_pod_sshd_text's rules on a port that needs no
-    NET_BIND_SERVICE, a host key made at each start, no PAM."""
-    rules = [l for l in user_pod_sshd_text(runtime).splitlines() if not l.startswith('#')]
-    # the relay (claude-fleet#4149): the pod's agent splices a relayed login onto
-    # 127.0.0.1 here, and that one — never the door's, which comes in on the
-    # pod's address — may also show a certificate of the hub's user CA (the pod
-    # install writes it). The Match block is last: it ends the file.
-    relay = ['Match LocalAddress 127.0.0.1,::1', 'TrustedUserCAKeys ' + POD_USER_CA]
+    else is read): for the one login, then bin/fleet-entry.sh —
+    user_pod_sshd_text's rules on a port that needs no NET_BIND_SERVICE, a host
+    key made at each start, no PAM. Who it takes (claude-fleet#4193, design
+    #4181 A2), one rule on every address: the person's own keys (POD_KEYS, the
+    hub's entry list for this pod), a certificate of the hub's user CA naming
+    the login (the relay's, #4149, and a jump's), and — until the door's old
+    road is gone — the door's key. The keys come through one command that never
+    fails: a list not pulled yet leaves the door's key alone, as before."""
+    keys = ('AuthorizedKeysCommand /bin/sh -c "/bin/cat %s %s 2>/dev/null; exit 0"' % (DOOR_PUB, POD_KEYS))
+    rules = []
+    for l in user_pod_sshd_text(runtime).splitlines():
+        if l.startswith('#'):
+            continue
+        if l.startswith('AuthorizedKeysCommand '):
+            l = keys
+        elif l == 'TrustedUserCAKeys none':
+            l = 'TrustedUserCAKeys ' + POD_USER_CA
+        rules.append(l)
     return ''.join(l + '\n' for l in [
         '# claude-fleet: a person\'s pod (issue #3757) - written by fleet-node-linux.py pod-etc',
         'Port %d' % POD_SSHD_PORT,
@@ -1383,7 +1396,7 @@ def pod_sshd_text(login, runtime='/var/db/fleet-node/runtime'):
         'PrintMotd no',
         'PrintLastLog no',
         'Subsystem sftp /usr/lib/openssh/sftp-server',
-    ] + rules + relay)
+    ] + rules)
 
 
 def pod_etc(a):
@@ -1500,6 +1513,83 @@ class DoorReach(object):
         if self.proc is not None and self.proc.poll() is None:
             self.proc.kill()
             self.proc.wait()
+
+
+class PodKeys(object):
+    """The person's own keys in their pod (claude-fleet#4193, design #4181 A2):
+    the pod's sshd takes them on every address (pod_sshd_text), so the door
+    needs no key of its own to let them in — it only lets the person's
+    connection through to this pod (its jump account). The resident loop pulls
+    the hub's entry list for this machine (GET /v1/node/entry-keys, the pod's
+    own token — the same list a home's entry port takes) off its beat, one at a
+    time: at the start, then every FLEET_POD_KEYS_EVERY seconds (60; 0 = off),
+    and writes the login's keys to POD_KEYS (a key gone from the list is gone
+    from the file at the next pull). ?jump=1 tells the hub this pod's sshd takes
+    them; the hub offers the jump only while it hears that. The hub away, the
+    last file stands."""
+
+    def __init__(self, s, login, state, clock=time.monotonic):
+        self.s, self.login, self.clock = s, login, clock
+        self.state = Path(state)
+        self.path = self.state / 'ssh' / 'authorized_keys'
+        self.every = int(os.environ.get('FLEET_POD_KEYS_EVERY', '60') or 0)
+        self.next = clock()
+        self.thread = None
+
+    def tick(self):
+        if self.every <= 0 or (self.thread is not None and self.thread.is_alive()):
+            return
+        if self.clock() < self.next:
+            return
+        self.next = self.clock() + self.every
+        self.thread = threading.Thread(target=self.pull_quiet, daemon=True)
+        self.thread.start()
+
+    def pull_quiet(self):
+        try:
+            self.pull()
+        except Exception as e:  # urllib raises many kinds; the last file stands
+            print('pod keys: %s - the last list stands' % (getattr(e, 'code', None) or getattr(e, 'reason', None) or e),
+                  file=sys.stderr)
+
+    def text(self, lst):
+        """The login's keys of a hub list, one keys-file line each — its second
+        pod's name <login>.<repo> (#3562) is the same person's."""
+        out = []
+        for name, ent in sorted(((lst or {}).get('logins') or {}).items()):
+            if name != self.login and not name.startswith(self.login + '.'):
+                continue
+            for k in (ent or {}).get('keys') or []:
+                line = self.s.entry_key_line(k)
+                if line is not None and line not in out:
+                    out.append(line)
+        return ''.join(out)
+
+    def pull(self):
+        me = env_read(self.state / 'machine.env')
+        hub, tok = me.get('CCQUOTA_HUB_URL', '').strip().rstrip('/'), me.get('CCQUOTA_TOKEN', '').strip()
+        if not hub or not tok:
+            return None
+        # a pod reaches the hub at its in-cluster Service when it has one (#4175)
+        dial = os.environ.get('FLEET_HUB_INTERNAL_URL', '').strip().rstrip('/') or hub
+        req = urllib.request.Request(dial + '/v1/node/entry-keys?jump=1',
+                                     headers={'Authorization': 'Bearer ' + tok, 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            lst = json.loads(r.read().decode('utf-8'))
+        if not isinstance(lst, dict) or not isinstance(lst.get('logins'), dict):
+            raise ValueError('the list is not {version, logins:{...}}')
+        text = self.text(lst)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if self.path.read_text() == text:
+                return text
+        except OSError:
+            pass
+        tmp = self.path.with_name('.authorized_keys.%d' % os.getpid())
+        tmp.write_text(text)
+        tmp.chmod(0o644)
+        os.replace(tmp, self.path)
+        return text
 
 
 def door_foreground(a):
@@ -1620,8 +1710,13 @@ def resident(s, logins, primary=''):
                 # One person's broken home never keeps the others' sessions down.
                 print('bootstrap %s failed (%s); the other logins go on' % (login, e), file=sys.stderr)
         ready.write_text(os.environ['FLEET_NODE_BOOT_ID'])
+        # a person's pod: its login's keys for the pod's sshd (#4193)
+        keys = PodKeys(s, os.environ['FLEET_POD_LOGIN'], os.environ.get('FLEET_NODE_STATE', '/var/db/fleet-node')) \
+            if pod_own() else None
         while not stopping:
             loop.beat()
+            if keys is not None:
+                keys.tick()
             rc = loop.tend()
             if rc is not None:
                 break

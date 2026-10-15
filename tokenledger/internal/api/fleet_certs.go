@@ -78,6 +78,10 @@ type FleetMachine struct {
 	// ~/.ssh/fleet-known-hosts under fleet-<alias>, so the first connection
 	// asks no yes/no question and a key not listed is still refused.
 	HostKeys []string `json:"host_keys,omitempty"`
+	// TargetHostKeys: a pod behind the door whose entry routes carry a Jump
+	// (claude-fleet#4193) — the pod's own sshd host keys, checked on the
+	// inner hop (fleet-<alias>-pod); HostKeys stays the door's.
+	TargetHostKeys []string `json:"target_host_keys,omitempty"`
 }
 
 // FleetRoute is one way in: LAN, tailnet, public port. The first route is the
@@ -90,6 +94,14 @@ type FleetRoute struct {
 	// Prefix: a "lan" route's network prefix length, as the node reported
 	// it (claude-fleet#3074) — passed on, never checked against anything.
 	Prefix int `json:"prefix,omitempty"`
+	// Jump: a person's pod behind the door, reached through the door's one
+	// jump account (claude-fleet#4193): Host:Port is the door, Jump its
+	// account, Target:TargetPort the pod's sshd inside the cluster (its host
+	// keys are the machine's TargetHostKeys). A client that knows none of
+	// this keeps the route as it always was (the door's per-login account).
+	Jump       string `json:"jump,omitempty"`
+	Target     string `json:"target,omitempty"`
+	TargetPort int    `json:"target_port,omitempty"`
 }
 
 func (m FleetMachine) alias() string {

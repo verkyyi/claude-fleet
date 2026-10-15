@@ -4,7 +4,7 @@
 #
 #   bin/fleet-cn-probe.sh [--client user@host] [--key FILE] [--known-hosts FILE]
 #                         [--as LOGIN] [--machine NAME] [--routes "entry relay …"]
-#                         [--layers "connect view codex task"] [--repo owner/name]
+#                         [--layers "connect view codex task"] [--repo owner/name] [--jump]
 #
 # Segment checks (the door port answers, the hub carries the fix) once said
 # "fixed" three times while a person in China still could not get in, and nine
@@ -35,6 +35,11 @@
 #            --repo <hosted repo>` — a hub task record T<n> AND its ticket filed
 #            (file_issue's road, no spawn); the ticket is closed again
 #            (not_planned) so the probe leaves no open work behind
+#
+#   jump     after the entry route went through: was it the door's jump account
+#            (claude-fleet#4193 — `fleet connect --route entry --print` names
+#            `-l fleet-jump` in its ProxyCommand) or the old per-login road?
+#            INFO by default; --jump (FLEET_CN_PROBE_JUMP=1) makes the old road a FAIL
 #
 # door     (only when the door refuses the key, and this computer has kubectl)
 #          the door's allow list, read — is the login on it?
@@ -89,6 +94,7 @@ REPO=${FLEET_CN_PROBE_REPO:-}
 STAY=${FLEET_CN_PROBE_STAY:-30}
 VIEW_UP=${FLEET_CN_PROBE_VIEW_UP:-30}
 ANSWER=${FLEET_CN_PROBE_ANSWER:-300}
+JUMP=${FLEET_CN_PROBE_JUMP:-0}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -100,6 +106,7 @@ while [ $# -gt 0 ]; do
     --routes) ROUTES=${2:-}; shift 2 ;;
     --layers) LAYERS=${2:-}; shift 2 ;;
     --repo) REPO=${2:-}; shift 2 ;;
+    --jump) JUMP=1; shift ;;
     -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *) echo "fleet-cn-probe: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -243,6 +250,18 @@ door_why() {
   esac
 }
 
+# jump_check: which road the entry route took (claude-fleet#4193)
+jump_check() {
+  local pargv
+  pargv=$(on_client "timeout $TMO fleet connect $MACHINE --route entry --print 2>/dev/null")
+  unpin
+  case "$pargv" in
+    *'-W %h:%p'*'-l fleet-jump'*) pass jump "entry went through the door's jump account to the pod's own sshd"; OKS="${OKS}（跳转）" ;;
+    *) if [ "$JUMP" = 1 ]; then fail jump "entry still took the door's per-login road: ${pargv:-no argv}"
+       else say "INFO jump entry took the door's per-login road (the hub offers no jump here yet)"; fi ;;
+  esac
+}
+
 # every route, forced
 for r in $ROUTES; do
   case "$r" in *[!A-Za-z0-9_.:-]*) continue ;; esac
@@ -251,6 +270,7 @@ for r in $ROUTES; do
   hk=$(hostkey "$out")
   if printf '%s\n' "$out" | grep -q "^$MACHINE" && printf '%s\n' "$out" | grep -q '^rc=0$' && [ -z "$hk" ]; then
     pass "$r" "ran hostname on $(printf '%s\n' "$out" | grep "^$MACHINE" | head -1)"; OKS="${OKS}；$r 通"
+    [ "$r" = entry ] && jump_check
   else
     rc_why=route_failed
     [ -z "$hk" ] || rc_why=host_key

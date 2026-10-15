@@ -131,6 +131,9 @@ type EntryDoor struct {
 	// QR: the ssh:// address as rows of '#' (dark) and '.', no quiet zone; none
 	// until there is an address and a home.
 	QR []string `json:"qr,omitempty"`
+	// Jump: for a home that is a pod behind the door, the one line a phone's
+	// Jump host or a bare ssh copies (claude-fleet#4193); "" otherwise.
+	Jump string `json:"jump,omitempty"`
 }
 
 // entryDoorOf is v's door, as fillEntryBook lays it out.
@@ -144,6 +147,10 @@ func (s *Server) entryDoorOf(v EntryView, now time.Time) EntryDoor {
 		d.Login, d.HomeName = page.Home.Login, page.Home.Display
 		if d.Address != "" {
 			d.QR = qrMatrix(entrySSHURL(d.Login, d.Address, d.Port))
+		}
+		if d.Address != "" && s.podBehindDoor(page.Home.Machine) {
+			d.Jump = entryJumpLine(d.Address, d.Port, d.Login,
+				s.jumpTarget(page.Home.Machine, s.entryAddrMachine(page.Home.Machine, now), now))
 		}
 	}
 	return d

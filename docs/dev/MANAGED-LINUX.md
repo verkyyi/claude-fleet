@@ -732,6 +732,36 @@ and every arrival is `bin/fleet-entry.sh` — no command on a terminal is the �
 as on a home's entry port. The network rules let only the door reach a pod's 22
 (`deploy/k8s/fleet-workers/networkpolicy.yaml`: `user-in`, `door-in`, `door-out`).
 
+**The jump road** (issue #4193, design #4181 A2) — beside the above until the old
+road is removed. The door image carries ONE fixed account, `fleet-jump` (uid 498,
+`*`, `/usr/sbin/nologin`; never a useradd at run time), and its sshd ends with a
+`Match User fleet-jump` block: no session (`ForceCommand /usr/bin/false`,
+`PermitTTY no`), local forwarding only, and `AuthorizedKeysCommand
+bin/fleet-door-keys.py` (as `nobody`) answering each key in the door's book with
+`restrict,port-forwarding,permitopen="u-<nonce>.<ns>.svc.cluster.local:22"` — a
+tunnel to its owner's own pod and nowhere else. The keys it reads are
+`entry/jump-keys/<login>` (0644, every routed login's, account or none) and
+`state.json`'s `jump` section; the arrival is logged as kind `jump` with the
+person's login and the pod. The login itself happens once, on the pod's sshd,
+with the person's own key: `fleet-node-linux.py`'s `PodKeys` pulls
+`/v1/node/entry-keys?jump=1` with the pod's own token every minute (the in-cluster
+hub when `FLEET_HUB_INTERNAL_URL` is set) into `ssh/authorized_keys` on the node
+disk, and `pod_sshd_text` takes on every address that file, a certificate of the
+hub's user CA naming the login, and — until the old road goes — the door's key.
+
+The hub offers it only while both said so lately (`jumpFresh`, 10 min): the door's
+pull carries `?jump=1&ns=<ns>` once its jump block is in its config, the pod's
+pull carries `?jump=1`. Then a pod's `entry` routes carry `jump` · `target` ·
+`target_port`, and the machine `target_host_keys` (the pod's own host keys, from its heartbeat),
+and `fleet connect` runs `ssh -o ProxyCommand='ssh -W %h:%p -l fleet-jump <door>'
+<login>@<target>` — the door's key under `fleet-<pod>`, the pod's under
+`fleet-<pod>-pod`, never TOFU. An older client ignores the fields and takes the
+per-login road. The console's 设备 shows the copyable line for a phone's Jump host
+or a bare ssh (`EntryDoor.jump`): `ssh -J fleet-jump@<name>.<zone>:22022
+<login>@u-<nonce>.<ns>.svc.cluster.local`. `bin/fleet-cn-probe.sh --jump` fails
+when the entry route still took the old road. BREAK-IT `door-jump-other-pod` ·
+`door-jump-shell` · `door-jump-unlisted` · `pod-foreign-key`.
+
 DNS: a person whose home is a pod gets the door's address — the hub's entry-dns
 loop points `<name>.cf` at the first door the outside can reach (`entry reach`,
 as any home). Every arrival is the door sshd's own log line, sent to the hub as the
