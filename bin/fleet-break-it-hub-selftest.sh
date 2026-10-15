@@ -107,6 +107,8 @@
 #                                                   (fleet-lib.sh), dash-raw-session.sh (the hub's worker_start)
 #   linux-admit-host-load                           fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu
 #                                                   (fleet-lib.sh) on a sandbox cgroup + machine reading
+#   linux-admit-burst                               fleet_machine_admit / _fleet_admit_cpu / _fleet_cgroup_cpu_window
+#                                                   (fleet-lib.sh) on a sandbox cgroup whose counters move
 #   mac-admit-load-not-busy                         fleet_machine_admit / _fleet_cpu_busy (fleet-lib.sh),
 #                                                   fleet-machine-tasks.py probe (cpu_busy), fleet-control-read.sh capacity
 #   pod-disk-node-tmp                               fleet_disk_target (fleet-lib.sh), fleet-diskguard.sh --free /
@@ -1569,6 +1571,55 @@ drill_linux_admit_host_load() {
   [ "$out" = '|rc=0' ] || { WHY="FLEET_ADMIT_LOAD_PER_CORE=0 must turn the cgroup reading off too: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT="宿主 6.29/core（ACK 节点）、pod cpu.max 2 核：没有 cgroup 照旧拦；pod 闲时放行；pod 用 1.95/2 核或被限流 40% 时按容器自己的数拦；FLEET_ADMIT_LOAD_PER_CORE=0 一并关掉"
+}
+
+# linux-admit-burst (issue #4287): the gate read a 1-core pod's cgroup over 0.5 s,
+# and on the domestic path's test pod (2026-10-15) that swung 0 → 50 % throttled
+# within seconds while the pod averaged 0.25 cores — the probe's view step had
+# just started two Claude sessions, so its `fleet codex --new` was refused
+# 负载过高. For real: a sandbox cgroup (cpu.max 1 core) whose cpu.stat a writer
+# moves at a full, throttled core while the gate samples, over a minute that
+# averaged 0.2 cores / 5 % throttled: with the minute's note the gate admits; the
+# old instant sample (FLEET_ADMIT_CPU_WINDOW_SECS=0) holds on the burst; with no
+# note yet it samples (holds) and leaves one; a minute that really averaged 0.95
+# cores holds, naming the window.
+drill_linux_admit_burst() {
+  CAP=20; local t0 d="$WORK/lab" out n wp
+  t0=$(now)
+  rm -rf "$d"; mkdir -p "$d/conf/global" "$d/tmp" "$d/cg"
+  printf '100000 100000\n' > "$d/cg/cpu.max"
+  n=$(date +%s)
+  printf '%s 1000000000 10000 1000\n' "$((n - 60))" > "$d/conf/global/admit-cpu.window"
+  # 0.2 cores and 5 % throttled since the note, then a full throttled core from now on
+  ( u=1012000000 p=10600 t=1030
+    while :; do
+      printf 'usage_usec %s\nnr_periods %s\nnr_throttled %s\n' "$u" "$p" "$t" > "$d/cg/cpu.stat.w"
+      mv -f "$d/cg/cpu.stat.w" "$d/cg/cpu.stat"
+      u=$((u + 100000)); p=$((p + 1)); t=$((t + 1)); sleep 0.1
+    done ) &
+  wp=$!
+  sleep 0.3
+  adm() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MACHINE_TASKS=off \
+            FLEET_MEM_TOTAL_MB=16384 FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 102400 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD='echo 1 66 0 0' FLEET_CPU_STAT_FILE="$d/cg/cpu.stat" FLEET_CPU_MAX_FILE="$d/cg/cpu.max" \
+            FLEET_ADMIT_CPU_SAMPLE_SECS=0.5 "$@" \
+            bash -c "source '$BIN/fleet-lib.sh'; fleet_machine_admit; echo \"|rc=\$?\"" 2>&1; }
+  out=$(adm)
+  [ "$out" = '|rc=0' ] || { kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null; WHY="a pod that averaged 0.2 cores over the minute was held by its last half second: $out"; return 1; }
+  out=$(adm FLEET_ADMIT_CPU_WINDOW_SECS=0)
+  case "$out" in *'container cpu busy'*'|rc=1') ;; *) kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null; WHY="the old 0.5 s sample should still see the burst (FLEET_ADMIT_CPU_WINDOW_SECS=0): $out"; return 1 ;; esac
+  rm -f "$d/conf/global/admit-cpu.window"
+  out=$(adm)
+  kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+  case "$out" in *'container cpu busy'*'|rc=1') ;; *) WHY="with no note yet the gate must sample and hold on a busy core: $out"; return 1 ;; esac
+  [ -s "$d/conf/global/admit-cpu.window" ] || { WHY="the first reading left no note for the next one"; return 1; }
+  n=$(date +%s)
+  printf 'usage_usec 1057000000\nnr_periods 10600\nnr_throttled 1300\n' > "$d/cg/cpu.stat"
+  printf '%s 1000000000 10000 1000\n' "$((n - 60))" > "$d/conf/global/admit-cpu.window"
+  out=$(adm)
+  case "$out" in *'0.9'?' of 1.00 cores used'*'over the last 6'?'s'*'|rc=1') ;; *) WHY="a minute at 0.95 of 1 core must hold, naming the window: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="1 核 pod，最近一分钟均 0.2 核 / 限流 5%，采样那半秒满核被限流：放行；旧的 0.5 秒采样（WINDOW_SECS=0）照旧拦；还没有记录时照采样拦并留下记录；一分钟真用 0.95 核时拦，写明「over the last 60s」"
 }
 
 # mac-admit-load-not-busy (issue #4077): macOS counts waiting processes in its

@@ -5746,7 +5746,55 @@ _fleet_admit_cpu() {
     return 0
   fi
   [ -n "${FLEET_LOAD_PROBE_CMD:-}" ] && return 0
-  _fleet_cgroup_cpu "${FLEET_ADMIT_CPU_SAMPLE_SECS:-0.5}"
+  _fleet_cgroup_cpu_window || _fleet_cgroup_cpu "${FLEET_ADMIT_CPU_SAMPLE_SECS:-0.5}"
+}
+
+# _fleet_cgroup_cpu_window → the admission gate's cgroup reading over about the
+# last FLEET_ADMIT_CPU_WINDOW_SECS (60), as "<throttled %> <cores used> <cores
+# limit> <secs>"; rc 1 = no window yet (the caller samples instead). A 0.5 s
+# sample on a 1-core pod swung 0 → 50 % throttled within seconds while the pod
+# averaged 0.25 cores — one Claude starting held every new session until the next
+# beat (issue #4287: the domestic path's `fleet codex --new` refused 负载过高
+# right after its own view step opened two sessions). cpu.stat's counters are
+# cumulative, so each call notes them in FLEET_ADMIT_CPU_WINDOW_FILE (one line
+# per ≥ win/6 s, kept 2 × win) and judges against the youngest note at least win
+# old, else the oldest at least win/4 old — like load average and `ps %cpu`, a
+# minute, not an instant. Cores used is over wall time; throttled is the share of
+# the periods that ran. A note above today's counters (the pod restarted) is
+# dropped. FLEET_ADMIT_CPU_WINDOW_SECS=0 = the old 0.5 s sample.
+_fleet_cgroup_cpu_window() {
+  local st="${FLEET_CPU_STAT_FILE:-/sys/fs/cgroup/cpu.stat}" mx="${FLEET_CPU_MAX_FILE:-/sys/fs/cgroup/cpu.max}"
+  local win="${FLEET_ADMIT_CPU_WINDOW_SECS:-60}" f q p now cur out
+  case "$win" in ''|*[!0-9]*) win=60 ;; esac
+  [ "$win" -gt 0 ] || return 1
+  [ -r "$st" ] && [ -r "$mx" ] || return 1
+  read -r q p < "$mx" 2>/dev/null || return 1
+  case "$q$p" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$p" -gt 0 ] && [ "$q" -gt 0 ] || return 1
+  cur=$(awk '/^(usage_usec|nr_periods|nr_throttled) /{ v[$1] = $2 }
+    END { if (("usage_usec" in v) && ("nr_periods" in v) && ("nr_throttled" in v)) print v["usage_usec"], v["nr_periods"], v["nr_throttled"] }' "$st" 2>/dev/null)
+  [ -n "$cur" ] || return 1
+  now="${EPOCHSECONDS:-}"; [ -n "$now" ] || now=$(date +%s)
+  f="${FLEET_ADMIT_CPU_WINDOW_FILE:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/admit-cpu.window}"
+  mkdir -p "${f%/*}" 2>/dev/null || return 1
+  out=$({ cat "$f" 2>/dev/null; } | awk -v now="$now" -v win="$win" -v cur="$cur" -v q="$q" -v p="$p" -v tmp="$f.$$" '
+    BEGIN { split(cur, c, " ") }
+    NF == 4 && $1 ~ /^[0-9]+$/ && $1 <= now && now - $1 <= 2 * win && $2 <= c[1] && $3 <= c[2] && $4 <= c[3] {
+      n++; e[n] = $1; u[n] = $2; pd[n] = $3; t[n] = $4; if ($1 > last) last = $1 }
+    END {
+      b = 0
+      for (i = 1; i <= n; i++) if (now - e[i] >= win && (b == 0 || e[i] > e[b])) b = i
+      if (b == 0) for (i = 1; i <= n; i++) if (now - e[i] >= win / 4 && (b == 0 || e[i] < e[b])) b = i
+      for (i = 1; i <= n; i++) print e[i], u[i], pd[i], t[i] > tmp
+      if (n == 0 || now - last >= win / 6) print now, c[1], c[2], c[3] > tmp
+      close(tmp)
+      if (b == 0) exit
+      s = now - e[b]; dp = c[2] - pd[b]; dt = c[3] - t[b]; du = c[1] - u[b]
+      printf "%d %.2f %.2f %d\n", (dp > 0 ? 100 * dt / dp : 0), (s > 0 ? du / (s * 1000000) : 0), q / p, s }')
+  [ -f "$f.$$" ] && mv -f "$f.$$" "$f" 2>/dev/null
+  rm -f "$f.$$" 2>/dev/null
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
 }
 
 # path-or-branch → the /fleet-history ledger KEY for a SCRATCH (@raw) session, or
@@ -9399,7 +9447,7 @@ EOF
   # FLEET_ADMIT_CPU_THROTTLE % of the periods, or more than FLEET_ADMIT_CPU_SHARE of
   # its limit used — and the load rule is skipped. No limit ⇒ the load rule, byte
   # for byte. FLEET_ADMIT_LOAD_PER_CORE=0 turns the CPU reading off either way.
-  local cg cthr cused clim tmax="${FLEET_ADMIT_CPU_THROTTLE:-25}" smax="${FLEET_ADMIT_CPU_SHARE:-0.9}"
+  local cg cthr cused clim cwin over tmax="${FLEET_ADMIT_CPU_THROTTLE:-25}" smax="${FLEET_ADMIT_CPU_SHARE:-0.9}"
   local busy='' bmax="${FLEET_ADMIT_CPU_BUSY:-${FLEET_MAX_CPU_BUSY:-0.8}}" lhard="${FLEET_ADMIT_LOAD_HARD_PER_CORE:-5}"
   bmax=$(printf '%s' "$bmax" | tr -d '%'); case "$bmax" in ''|*[!0-9.]*) bmax=0.8 ;; esac
   bmax=$(awk -v m="$bmax" 'BEGIN{ if (m > 1) m = m / 100; if (m > 1) m = 1; print m + 0 }')
@@ -9408,15 +9456,16 @@ EOF
   case "$smax" in ''|*[!0-9.]*) smax=0.9 ;; esac
   cg=''; awk -v m="$lmax" 'BEGIN{ exit !(m > 0) }' && cg=$(_fleet_admit_cpu)
   if [ -n "$cg" ]; then
-    read -r cthr cused clim <<EOF
+    read -r cthr cused clim cwin <<EOF
 $cg
 EOF
+    case "$cwin" in ''|*[!0-9]*) over='' ;; *) over=" over the last ${cwin}s" ;; esac
     case "$cthr" in ''|*[!0-9]*) cthr=0 ;; esac
     if [ "$cthr" -ge "$tmax" ] \
        || awk -v u="${cused:-0}" -v l="${clim:-0}" -v m="$smax" 'BEGIN{ exit !(l > 0 && u / l > m) }'; then
       if [ "$short" = 1 ]; then printf '暂停开新：负载过高'; return 1; fi
-      printf 'container cpu busy — 暂停开新：负载过高 (%s of %s cores used, %s%% throttled; over FLEET_ADMIT_CPU_SHARE=%s or FLEET_ADMIT_CPU_THROTTLE=%s%%): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
-        "$cused" "$clim" "$cthr" "$smax" "$tmax"
+      printf 'container cpu busy — 暂停开新：负载过高 (%s of %s cores used, %s%% throttled%s; over FLEET_ADMIT_CPU_SHARE=%s or FLEET_ADMIT_CPU_THROTTLE=%s%%): new sessions are held until it drops; running ones are untouched — retry later, or FLEET_ADMIT=0 to override' \
+        "$cused" "$clim" "$cthr" "$over" "$smax" "$tmax"
       return 1
     fi
     per=''
