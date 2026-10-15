@@ -1,23 +1,22 @@
 #!/bin/bash
-# fleet-palette-selftest.sh — pins issue #1534 (EPIC #1529 E5): the status bar,
-# the dash rows and the sidebar draw their colours from ONE table,
-# conf/fleet-palette.conf, and nothing else.
+# fleet-palette-selftest.sh — pins issue #1534 (EPIC #1529 E5): the status bar
+# and the dash rows draw their colours from ONE table, conf/fleet-palette.conf,
+# and nothing else (the old client's bar and sidebar went with it, issue #3008).
 #
-#   A  no colour of their own: no `#rrggbb` in conf/tmux-bar.conf's settings, in
-#      bin/tmux-status.sh, in fleet_alerts_bar (bin/fleet-alerts.sh) or in
-#      bin/fleet-sidebar.py; no truecolour literal (`38;2;r;g;b`) in
-#      bin/tmux-dashboard-rows.sh — the metric 「配色 4 处 → 1 处」, as a grep
-#   B  the readers agree: bin/fleet-palette.sh and fleet-sidebar.py's palette()
-#      read the same ten names and values; fleet_palette_rgb / _expand
+#   A  no colour of their own: no `#rrggbb` in conf/tmux-bar.conf's settings or
+#      in fleet_alerts_bar (bin/fleet-alerts.sh); no truecolour literal
+#      (`38;2;r;g;b`) in bin/tmux-dashboard-rows.sh — as a grep
+#   B  the reader: bin/fleet-palette.sh reads the ten names and values;
+#      fleet_palette_rgb / _expand
 #   C  tmux reads it: the two `source-file -F` lines of conf/tmux-attention.conf,
 #      on an ISOLATED server, leave every `$PAL_*` expanded in the bar's formats,
 #      status-interval 2, and no PAL_* in the environment a pane would inherit
 #   D  one edit recolours every surface: a root whose palette says otherwise →
-#      tmux-status.sh, the rows' escapes and the sidebar's colour numbers follow;
-#      a root with no palette at all → an uncoloured bar, never a crash
+#      the rows' escapes follow; a root with no palette at all → uncoloured rows,
+#      never a crash
 #
-# Drives bin/tmux-status.sh, bin/tmux-dashboard-rows.sh, bin/fleet-sidebar.py,
-# bin/fleet-alerts.sh and bin/fleet-palette.sh against conf/fleet-palette.conf,
+# Drives bin/tmux-dashboard-rows.sh, bin/fleet-alerts.sh and bin/fleet-palette.sh
+# against conf/fleet-palette.conf,
 # conf/tmux-bar.conf and conf/tmux-attention.conf.
 # shellcheck disable=SC2154  # _fpr / _fpe: fleet-palette.sh's results
 set -uo pipefail
@@ -46,11 +45,8 @@ PAL="$ROOT/conf/fleet-palette.conf"
 # ---- A: no colour of their own
 hexes() { grep -nE '#[0-9a-fA-F]{6}\b' "$@" | grep -vE '^[0-9]+:[[:space:]]*#( |$|!)'; }   # code lines only
 eq "A: conf/tmux-bar.conf spells no hex" "" "$(hexes "$ROOT/conf/tmux-bar.conf")"
-eq "A: tmux-status.sh spells no hex" "" "$(hexes "$BIN/tmux-status.sh")"
-eq "A: fleet-sidebar.py spells no hex" "" "$(hexes "$BIN/fleet-sidebar.py")"
 eq "A: fleet_alerts_bar spells no hex" "" "$(sed -n '/^fleet_alerts_bar()/,/^}/p' "$BIN/fleet-alerts.sh" | grep -E '#[0-9a-fA-F]{6}')"
 eq "A: tmux-dashboard-rows.sh spells no truecolour literal" "" "$(grep -nE '38;2;[0-9]' "$BIN/tmux-dashboard-rows.sh")"
-grep -q 'init_pair([0-9], curses.COLOR_' "$BIN/fleet-sidebar.py" && fail "A: the sidebar still pairs a basic colour directly"; ok
 eq "A: tmux-attention.conf no longer sets the bar itself" "" "$(grep -nE '^set -g (status-(left|right|style)|message-style) ' "$ROOT/conf/tmux-attention.conf")"
 
 # ---- B: the readers agree
@@ -62,15 +58,6 @@ for k in $names; do
   case "${!k:-}" in '#'[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) fail "B: $k is not a #rrggbb" "${!k:-}" ;; esac
   sh_table="$sh_table$k=${!k} "
 done; ok
-py_table=$(python3 - "$BIN/fleet-sidebar.py" "$names" <<'EOF'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
-mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-t = mod.palette()
-print("".join(f"{k}={t.get(k, '')} " for k in sys.argv[2].split()), end="")
-EOF
-)
-eq "B: fleet-sidebar.py's palette() reads what the shell reads" "$sh_table" "$py_table"
 eq "B: the Tokyo Night values of before (a first version moves no pixel)" \
    'PAL_BG=#1a1b26 PAL_FG=#a9b1d6 PAL_DIM=#565f89 PAL_BLUE=#7aa2f7 PAL_GREEN=#9ece6a PAL_YELLOW=#e0af68 PAL_RED=#f7768e PAL_CYAN=#7dcfff PAL_MAGENTA=#bb9af7 PAL_SEL=#414868 ' "$sh_table"
 fleet_palette_rgb '#565f89'; eq "B: rgb of #565f89" '86;95;137' "$_fpr"
@@ -99,7 +86,6 @@ source-file -F '#{d:current_file}/tmux-bar.conf'" "$(cat "$WORK/conf/main.conf")
   eq "C: status-interval 60 — nothing on it changes (issue #1714)" 60 "$(tm show-options -gv status-interval)"
   hasnt "C: no PAL_* in the environment a pane inherits (%hidden)" 'PAL_' "$(tm show-environment -g)"
   eq "C: status-right is empty on a node — no job (issue #1714)" '' "$(tm show-options -gv status-right)"
-  has "C: the client's status-right passes its width" 'cw=#{client_width}' "$(grep '^set -g status-right ' "$ROOT/conf/tmux-shell.conf")"
   tm kill-server 2>/dev/null
 else
   printf 'fleet-palette-selftest: no tmux — leg C skipped\n' >&2
@@ -113,39 +99,10 @@ mkroot() {   # mkroot <dir> [palette-text] — bin/ = links to every script, con
 }
 mkroot "$WORK/alt" "$(sed -e "s/'#7aa2f7'/'#123456'/" -e "s/'#565f89'/'#010203'/" -e "s/'#7dcfff'/'#00ff00'/" "$PAL")"
 mkroot "$WORK/none"
-mkdir -p "$WORK/tmp"
-# The bar draws only what wants a hand (issue #1616): an account past the line
-# (the label blue, `5h` dim) and the alert counts (an alarm, red) are what is
-# on it here — the alerts file planted, fresh for FLEET_ALERTS_TTL=3600.
-mkdir -p "$WORK/tmp/.claude-dash/global"
-printf '{"id":"a1","severity":"alarm","subject":"s","condition":"c","value":"v","since":1,"action":"disk","healed_at":0,"target":"","detail":"d"}\n' > "$WORK/tmp/.claude-dash/global/alerts.ndjson"
-date +%s > "$WORK/tmp/.claude-dash/global/alerts.ndjson.ts"
-st() { FLEET_ALERTS_TTL=3600 FLEET_STATUS_CACHE_SECS=0 TMPDIR="$WORK/tmp/" FLEET_CONF_DIR="$WORK/cd" FLEET_ACCOUNTS_DIR="$WORK/acc" \
-       CCQUOTA_HUB_URL=http://127.0.0.1:9 CCQUOTA_FLEET='' bash "$1/bin/tmux-status.sh" acct=icloud rl5=90 rl7=1 2>/dev/null; }
-out=$(st "$WORK/alt")
-has "D: the bar's account label is the edited blue" '#[fg=#123456]icloud' "$out"
-has "D: the window names are the edited dim" '#[fg=#010203]5h' "$out"
-has "D: the alert counts too" '#[range=user|alarm]#[fg=#f7768e,bold]✖ 1' "$out"
-hasnt "D: the old blue is gone" '#7aa2f7' "$out"
-out=$(st "$WORK/none")
-has "D: no palette → the bar still renders" 'icloud 5h 90% ' "$out"
-hasnt "D: no palette → no colour of its own" '#[fg=' "$out"
 rows=$(sed -n "/^E=\$'/,/^GYU=/p" "$BIN/tmux-dashboard-rows.sh")
 [ -n "$rows" ] || fail "D: could not find the rows producer's colour block"
 gy=$( unset $names; BIN="$WORK/alt/bin"; eval "$rows"; printf '%q|%q|%q' "$GY" "$GYU" "$CY" )
 eq "D: the rows' escapes follow the palette" "$(printf '%q|%q|%q' $'\033[38;2;1;2;3m' $'\033[4;38;2;1;2;3m' $'\033[38;2;0;255;0m')" "$gy"
 gy=$( unset $names; BIN="$WORK/none/bin"; eval "$rows"; printf '%s|%s' "$GY" "$CY" )
 eq "D: no palette → the rows draw uncoloured" "|" "$gy"
-cols=$(python3 - "$BIN/fleet-sidebar.py" "$WORK/alt/conf/fleet-palette.conf" <<'EOF'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
-mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-alt = mod.palette_colors(mod.palette(sys.argv[2]), 256)
-base = mod.palette_colors(mod.palette(), 256)
-low = mod.palette_colors(mod.palette(), 8)
-print(alt["PAL_CYAN"], base["PAL_CYAN"], base["PAL_RED"], low["PAL_CYAN"] == mod.curses.COLOR_CYAN)
-EOF
-)
-eq "D: the sidebar's colours follow the palette (#00ff00 → 46; #7dcfff → 117, #f7768e → 210); < 256 colours → the basic ones" "46 117 210 True" "$cols"
-
-printf 'fleet-palette-selftest: OK (%d checks) — one colour table for the bar, the rows and the sidebar (issue #1534)\n' "$CHECKS"
+printf 'fleet-palette-selftest: OK (%d checks) — one colour table for the bar and the rows (issue #1534)\n' "$CHECKS"

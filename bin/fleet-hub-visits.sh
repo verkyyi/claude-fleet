@@ -86,7 +86,7 @@ if [ "${1:-}" = record ]; then
   T() { if [ -n "$sock" ]; then tmux -S "$sock" "$@"; else tmux "$@"; fi; }
   # CLOSE LANDS NEXT (issue #900): a close just dropped the client on the hub.
   # Move it on to the closed task's neighbour in the task list instead — the
-  # candidates fleet-sidebar.py published while that task was on screen
+  # candidates fleet_view.py published while that task was on screen
   # (`@sidebar_next`, for the window named by `@sidebar_next_of`): the first one
   # still alive, not asleep (landing shows a sleeper's page, not the task, and
   # under FLEET_SLEEP_WAKE=dwell would wake it — issues #822/#1050) and

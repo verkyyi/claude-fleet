@@ -13,7 +13,7 @@
 #       loaded palette knows replaced by its value — what tmux does to a line of
 #       conf/tmux-bar.conf, for a reader that takes a format out of that file.
 #
-# Builtins only — tmux-status.sh and the dash rows render this every tick (#888).
+# Builtins only — fleet-topbar.py and the dash rows render this every tick (#888).
 # shellcheck disable=SC2034  # _fpr / _fpe are the results, read by the sourcing script
 case "${BASH_SOURCE[0]}" in */*) _FP_BIN="${BASH_SOURCE[0]%/*}" ;; *) _FP_BIN=. ;; esac
 

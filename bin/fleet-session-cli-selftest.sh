@@ -21,13 +21,13 @@
 #                            E3 door 3 — only a `fleet login` certificate: a fake
 #                            hub on 127.0.0.1 gets a worker_reap whose signature
 #                            checks (issue #2506)
-#   F  open                  `jump=<key>` on the client list's queue (an isolated
-#                            server, TMUX naming it) — the list's own jump
+#   F  open                  with no home to go through (the old client's list
+#                            that took a jump went with it, issue #3008) → exit 1
+#                            with why; --home's is M
 #   G  the old roads         `fleet open <url|:port|file>` / `fleet show <file>`
 #                            still pick fleet-open.sh / fleet-show.sh
-#   H  bin/fleet → fleet-shell.sh cli   with no FLEET_SHELL the verb re-runs inside
-#                            the client server's environment (an isolated `-L`
-#                            server); no client → exit 1 with why
+#   H  bin/fleet ls          with no fleet here, the home over fleet-thin.py --run;
+#                            none reachable → exit 1 with why
 #   I  a batch (issue #2544)  an EPIC driver's row `<简称>·批次` with its badge:
 #                            ls grows a 进度 column (core merged / core) only when
 #                            some row has a count; show names its 总单 URL — a
@@ -283,17 +283,9 @@ PY2
 fi
 
 # --- F. open --------------------------------------------------------------------------
-if command -v tmux >/dev/null 2>&1; then
-  tmux -S "$W/s" -f /dev/null new-session -d -s c -x 100 -y 20 'cat' && tmux -S "$W/s" split-window -d -t c: 'cat'
-  LIST=$(tmux -S "$W/s" list-panes -t c: -F '#{pane_id}' | head -1)
-  tmux -S "$W/s" set-option -p -t "$LIST" @sidebar 1
-  pid=$(tmux -S "$W/s" display-message -p '#{pid}')
-  out=$(TMUX="$W/s,$pid,0" cli open '#13'); rc=$?
-  eq "F open exits 0" 0 "$rc"
-  eq "F open → jump=<key> on the list's queue" "jump=wid:F/issue-13" "$(tmux -S "$W/s" show-options -pqv -t "$LIST" @sidebar_do | tr -d ' ')"
-  tmux -S "$W/s" set-option -p -t "$LIST" @sidebar 0
-  TMUX="$W/s,$pid,0" cli open '#13' >/dev/null 2>&1; eq "F no list on screen → exit 1" 1 "$?"
-fi
+err=$(cli open '#13' 2>&1 >/dev/null); rc=$?
+eq "F open with no home → exit 1" 1 "$rc"
+has "F …and why" "这里没有客户端" "$err"
 
 # --- G. the old roads ----------------------------------------------------------------
 : > "$W/afile"
@@ -308,23 +300,10 @@ PY
 )"
 
 # --- H. through bin/fleet and the client server's environment ---------------------------
-err=$(FLEET_SESSION_CLI_ROAD=client FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" ls 2>&1 >/dev/null); rc=$?
-eq "H no client running → exit 1" 1 "$rc"
-has "H …and why" "客户端没在运行" "$err"
-# no client, no fleet here (issue #3004): the home over fleet-thin.py --run — none reachable says so
+# no fleet here (issue #3004): the home over fleet-thin.py --run — none reachable says so
 err=$(FLEET_SESSION_CLI_ROAD=home FLEET_THIN_ARGV_CMD=false FLEET_THIN_LOG="$W/thin.log" bash "$BIN/fleet" ls 2>&1 >/dev/null); rc=$?
 eq "H no client, no home reachable → exit 1" 1 "$rc"
 has "H …and why" "连不上家机器" "$err"
-if command -v tmux >/dev/null 2>&1; then
-  tmux -L "$L" -f /dev/null new-session -d -s "$L" 'cat'
-  tmux -L "$L" set-environment -g FLEET_SESSION_CLI_ROWS "$W/rows.tsv"
-  out=$(FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" ls 2>&1); rc=$?
-  eq "H bin/fleet ls → fleet-shell.sh cli → the rows, exit 0" 0 "$rc"
-  has "H …read in the server's environment" "随便聊聊" "$out"
-  has "H …with its state" "空闲" "$out"
-  FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" show 登录页 >/dev/null 2>&1
-  eq "H …and its exit code (ambiguous → 4)" 4 "$?"
-fi
 
 # --- I. a batch driver (issue #2544) ---------------------------------------------------
 {

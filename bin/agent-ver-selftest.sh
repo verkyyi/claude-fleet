@@ -20,10 +20,9 @@
 #                  fleet_cfg_restart_why reopens a renew one like a stale one
 #   D. rows      — tmux-dashboard-rows.sh: field 13 `renew` and 待换新 on the hub
 #                  list off `@agent_cfg/@agent_ver`; a remote row's `renew` verdict
-#   E. sidebar   — fleet-sidebar.py draws 待换新 (narrow 换) where 配置旧 goes
 #   F. inventory — fleet_hub_common.inventory_row keeps cfg=renew
 # Drives fleet-agent-team.py, fleet-lib.sh, fleet-cfg-restart.sh,
-# tmux-dashboard-rows.sh, fleet-sidebar.py, fleet_hub_common.py.
+# tmux-dashboard-rows.sh, fleet_hub_common.py.
 # Exit 0 = pass.
 set -uo pipefail
 
@@ -181,24 +180,6 @@ printf '%s\n' "$NOW" > "$G/hub_ok"
 } > "$G/remote_$S"
 eq "D: a remote row takes its machine's verdict — renew" renew "$(f13 "$(side)" RR)"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
-
-# ============================================================================
-# E. sidebar — 待换新 where 配置旧 goes: the bar (issue #2305)
-# ============================================================================
-out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="mac-c=mac-b mac-d=mac-a" \
-  python3 - "$BIN/fleet-sidebar.py" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "mac-a", "", "", ""]
-assert m.cfg_tag("renew") == "待换新", m.cfg_tag("renew")
-assert m.detail_line(row + ["renew"]) == "worker-one · mac-a · 待换新", m.detail_line(row + ["renew"])
-assert m.detail_line(row[:8] + [""] + row[9:] + ["renew"]) == "worker-one · 待换新"
-assert m.detail_line(row + ["stale"]).endswith("· 配置旧")
-assert m.row_glyph(row + ["renew"]) == ("✓", "") and m.row_need(row + ["renew"]) == m.row_need(row)
-print("ok")
-PY
-)
-eq "E: sidebar layout" "ok" "$out"
 
 # ============================================================================
 # F. inventory — cfg=renew survives the adapter

@@ -64,7 +64,7 @@
 #                                        webhook event stamps (issue #1272, below)
 
 FLEET_GH_LIMITED_RC=75
-# A caller that already knows its bin/ (tmux-status.sh, every 5s) presets it: no fork.
+# A caller that already knows its bin/ (fleet-topbar.py, every 5s) presets it: no fork.
 _FLEET_GH_LIB_DIR="${_FLEET_GH_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)}"
 
 fleet_gh_state_dir() {

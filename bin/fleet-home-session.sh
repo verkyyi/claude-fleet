@@ -6,26 +6,18 @@
 #   fleet claude|codex --here [args…]
 #
 # Without --here: a HOME session — no repo, in your home directory on a fleet
-# machine, with that agent (EPIC #2259 共同约定 2) — and the client attached onto
-# it. The LAST one, when you never /exit-ed it (issue #2564, EPIC #2563 C1): the
-# hub answers `RESUME` and this goes back to it — 「回到你上一次的会话」, from any
-# of your computers; ⌃D, a closed terminal or a dropped network leave it running
-# and current. `--new` opens another all the same (it is the current one then);
-# words after the options go to a new session only, never into the resumed one. Words after the options are its first turn, submitted as it starts. Three
-# steps, every one an existing road:
-#   1. the client up WITHOUT attaching (fleet-shell.sh, FLEET_SHELL_NO_ATTACH):
-#      its lease is what signs the ask; FLEET_SHELL_NO_FIRST, so a newcomer's
-#      automatic first session does not open a second one beside this
-#   2. `fleet-shell.sh home-session` — fleet-client-place.sh `- home`: the hub
-#      places it (the node takes one from its pool, #2233, or opens one cold);
-#      `--no-stage`, so the client's own view stays where it is
-#   3. ITS OWN VIEW (issue #2349, `fleet-shell.sh solo`): that one session, the
-#      whole terminal, no list — whatever layout the client keeps, which is
-#      neither read nor written. The agent's /exit (the session ending) or ⌃D
-#      ends the view and the terminal is back at its prompt, with one line on
-#      where the session is; a client this command had to start goes again with
-#      it (`fleet-shell.sh quit`), so nothing of fleet stays behind. A LOCAL
-#      placement (no hub) attaches the client, as before.
+# machine, with that agent (EPIC #2259 共同约定 2) — and the thin client onto it.
+# The LAST one, when you never /exit-ed it (issue #2564, EPIC #2563 C1): the hub
+# answers `RESUME` and this goes back to it — 「回到你上一次的会话」, from any of
+# your computers; ⌃D, a closed terminal or a dropped network leave it running and
+# current. `--new` opens another all the same (it is the current one then); words
+# after the options go to a new session only, never into the resumed one — they
+# are its first turn, submitted as it starts. Two steps, each an existing road
+# (issue #3004, EPIC #2999 C7; the old client's own road went with it, #3008):
+#   1. the HOME machine opens it: fleet-client-place.sh `- home` run there over
+#      `fleet-thin.py --run` — with no lease of its own it opens through that
+#      machine's adapter, or answers RESUME for your current one
+#   2. `fleet --thin <its window | worker id>`: the 看台 lands on it
 # A placement that fails says why (the hub's line) and exits with its code;
 # nothing is attached.
 #
@@ -42,14 +34,11 @@
 #   fleet claude again  back to the same one  a new one
 #   on the list       yes                     no
 #
-# Exit: the view's · the attach's · fleet-client-place.sh's code when nothing was placed ·
-# fleet-run.sh's with --here · 2 usage. FLEET_SHELL_NO_ATTACH=1 (the selftests)
-# stops after step 2 with its code, the placement's line on stdout; as the TEST
-# identity (`fleet --test-identity claude`) the session it opened is closed at
-# once (fleet-shell.sh home-session, issue #2505) — a check leaves none behind.
+# Exit: the thin client's · fleet-client-place.sh's code when nothing was placed ·
+# fleet-run.sh's with --here · 2 usage. FLEET_HOME_THIN_CMD (the selftests)
+# replaces step 2 and gets the window / worker id as its argument.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-SH="${FLEET_HOME_SHELL:-$BIN/fleet-shell.sh}"   # the selftests' seam
 # a failed step goes to fleet-debug-prompt.sh (issue #2894): the third in half an
 # hour asks whether the hub should take a look; a placement emptied the book
 debug_after() {
@@ -94,108 +83,31 @@ text="${words[*]-}"
 # one this would go back to
 [ -z "$text" ] || fresh=1
 
-# A tmux client needs a terminal (bin/fleet's own rule); the seam starts nothing to attach.
-if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+# The thin client needs a terminal (bin/fleet's own rule); the seam attaches nothing.
+if [ -z "${FLEET_HOME_THIN_CMD:-}" ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
   printf 'fleet %s: 要在终端里运行（这里是管道或脚本）\n' "$agent" >&2
   exit 2
 fi
 
-# THE THIN CLIENT (issue #3004, EPIC #2999 C7; FLEET_CLIENT=thin): no client here
-# to sign an ask — the HOME machine opens it (fleet-client-place.sh `- home` run
-# there over fleet-thin.py --run: with no lease of its own it opens through that
-# machine's adapter, or answers RESUME for your current one), then the thin
-# client onto it — the 看台 lands there (a window id here, a worker id another
-# machine's). FLEET_HOME_THIN_CMD (tests) replaces that last step.
-if [ "${FLEET_CLIENT:-}" = thin ] && [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ]; then
-  rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
-  # the first sentence rides as an argument and becomes the body file there
-  hline=$(python3 "$BIN/fleet-thin.py" --run -- sh -c \
-    'f=; if [ -n "$1" ]; then f=$(mktemp "${TMPDIR:-/tmp}/fleet-home-body.XXXXXX") && printf %s "$1" > "$f"; fi; shift
-     bash "$@" ${f:+--body-file "$f"}; rc=$?; [ -z "$f" ] || rm -f "$f"; exit $rc' \
-    fleet-home "$text" "$rbin/fleet-client-place.sh" - home --agent "$agent" ${node:+--node "$node"} ${fresh:+--new} \
-    | tail -n 1); rc=$?
-  debug_after place "$rc"
-  [ "$rc" = 0 ] || { [ -z "$hline" ] || printf '%s\n' "${hline#*$'\t'}" >&2; exit "$rc"; }
-  head=${hline%%$'\t'*}; why=''; case "$hline" in *$'\t'*) why=${hline#*$'\t'} ;; esac
-  case "$head" in
-    RESUME\ *) want=$(printf '%s' "$head" | awk '{ print $3 }') ;;
-    REMOTE\ *) want=$(printf '%s' "$head" | awk '{ print $5 }') ;;
-    # this machine's own adapter: dash-raw-session.sh --print's receipt, its window first
-    LOCAL\ *)  want=$(printf '%s' "$why" | awk '{ print ($1 == "warm" ? $2 : $1) }') ;;
-    *) want='' ;;
-  esac
-  case "$want" in @[0-9]*|*/*) ;; *) want='' ;; esac
-  [ -n "${FLEET_HOME_THIN_CMD:-}" ] && exec sh -c "$FLEET_HOME_THIN_CMD" fleet-home ${want:+"$want"}
-  exec bash "$BIN/fleet" --thin ${want:+"$want"}
-fi
-
-# whether the client was already running (issue #2349): one this command starts
-# for its ask goes again with the view — `fleet claude` leaves nothing behind
-was_up=1
-if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ]; then
-  bash "$SH" running >/dev/null 2>&1 || was_up=''
-fi
-
-# 1. the client, up and holding its lease — not attached yet. A client already
-#    running (a person's own multi-session client, issue #2349) is left exactly
-#    as it is: no re-attach pass, which would apply its layout again, select a
-#    machine on its stage, take the lease for THIS terminal and say where it is
-#    in use — it holds its lease already, and that lease signs the ask.
-if [ -z "$was_up" ] || [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ]; then
-  FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 bash "$SH" ${node:+"$node"} >/dev/null || { rc=$?; debug_after connect "$rc"; exit "$rc"; }
-fi
-
-# 2. the session — the client's own stage left where it is when this command
-#    shows it in its own view (--no-stage, step 3)
-bodyf=''
-if [ -n "$text" ]; then
-  bodyf=$(mktemp "${TMPDIR:-/tmp}/fleet-home-body.XXXXXX") || exit 1
-  printf '%s' "$text" > "$bodyf"
-fi
-nostage=''; [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] || nostage=--no-stage
-# what the hub said of it (fleet-client-place.sh FLEET_PLACE_RESULT): a RESUME's
-# other devices that have it open (issue #2564)
-resf=$(mktemp "${TMPDIR:-/tmp}/fleet-home-result.XXXXXX" 2>/dev/null) || resf=''
-hline=$(FLEET_PLACE_RESULT="$resf" bash "$SH" home-session "$agent" ${node:+--node "$node"} ${bodyf:+--body-file "$bodyf"} ${fresh:+--new} $nostage | tail -n 1); rc=$?   # pipefail: the ask's code
-[ -z "$bodyf" ] || rm -f "$bodyf"
-also=''
-if [ -n "$resf" ]; then
-  also=$(python3 -c 'import json, sys
-try: d = json.load(open(sys.argv[1]))
-except Exception: d = {}
-print("、".join(x.replace("#", "").replace("\x27", "").replace("\"", "") for x in d.get("also_open") or [] if isinstance(x, str)))' "$resf" 2>/dev/null)
-  rm -f "$resf"
-fi
+# 1. the HOME machine opens it — a window id there, a worker id another machine's
+rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
+# the first sentence rides as an argument and becomes the body file there
+hline=$(python3 "$BIN/fleet-thin.py" --run -- sh -c \
+  'f=; if [ -n "$1" ]; then f=$(mktemp "${TMPDIR:-/tmp}/fleet-home-body.XXXXXX") && printf %s "$1" > "$f"; fi; shift
+   bash "$@" ${f:+--body-file "$f"}; rc=$?; [ -z "$f" ] || rm -f "$f"; exit $rc' \
+  fleet-home "$text" "$rbin/fleet-client-place.sh" - home --agent "$agent" ${node:+--node "$node"} ${fresh:+--new} \
+  | tail -n 1); rc=$?
 debug_after place "$rc"
-[ "$rc" = 0 ] || exit "$rc"
-# the seam's answer is the placement's line (issue #2505: `REMOTE … done` is what
-# a check of the hub reads)
-[ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$hline"; exit 0; }
-
-# 3. onto it, in a view of its own (issue #2349): one session, no list, whatever
-#    layout the client keeps — `REMOTE <machine> <op> done <worker id>`. Its /exit
-#    or ⌃D returns to the prompt; a client this command started goes with it.
-#    No hub (a LOCAL row, this computer's own fleet): the client, as before.
-#    A RESUME (`RESUME <machine> <worker id>`, issue #2564) is the same view onto
-#    the current one; another device that has it open is said on the view's bar.
-case "$hline" in
-  REMOTE\ *|RESUME\ *)
-    hm=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $2 }')
-    case "$hline" in
-      RESUME\ *) hw=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $3 }') ;;
-      *)         hw=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $5 }') ;;
-    esac
-    snote=''
-    if [ -n "$also" ]; then
-      snote=$(sh "$BIN/fleet-ui-lang.sh" t home_also_open_fmt "$also" 2>/dev/null)
-      [ -z "$snote" ] || printf '%s\n' "$snote" >&2
-    fi
-    case "$hw" in
-      */*)
-        FLEET_SOLO_NOTE="$snote" bash "$SH" solo "$hm" "$hw"; rc=$?
-        # a client someone attached meanwhile (`fleet` in another terminal) stays
-        [ -n "$was_up" ] || bash "$SH" quit --quiet --if-unattached
-        exit "$rc" ;;
-    esac ;;
+[ "$rc" = 0 ] || { [ -z "$hline" ] || printf '%s\n' "${hline#*$'\t'}" >&2; exit "$rc"; }
+head=${hline%%$'\t'*}; why=''; case "$hline" in *$'\t'*) why=${hline#*$'\t'} ;; esac
+case "$head" in
+  RESUME\ *) want=$(printf '%s' "$head" | awk '{ print $3 }') ;;
+  REMOTE\ *) want=$(printf '%s' "$head" | awk '{ print $5 }') ;;
+  # this machine's own adapter: dash-raw-session.sh --print's receipt, its window first
+  LOCAL\ *)  want=$(printf '%s' "$why" | awk '{ print ($1 == "warm" ? $2 : $1) }') ;;
+  *) want='' ;;
 esac
-FLEET_SHELL_NO_FIRST=1 exec bash "$SH" ${node:+"$node"}
+case "$want" in @[0-9]*|*/*) ;; *) want='' ;; esac
+# 2. the thin client onto it
+[ -n "${FLEET_HOME_THIN_CMD:-}" ] && exec sh -c "$FLEET_HOME_THIN_CMD" fleet-home ${want:+"$want"}
+exec bash "$BIN/fleet" --thin ${want:+"$want"}

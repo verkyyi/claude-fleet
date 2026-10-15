@@ -1,8 +1,10 @@
 # The client — keys for switching sessions
 
-`fleet` on your own computer is the **client** (`bin/fleet-thin.py`; the old one,
-`fleet --old`: a task list on the left, the session you picked on the right,
-`bin/fleet-shell.sh`, `conf/tmux-shell.conf`).
+`fleet` on your own computer is the **client** (`bin/fleet-thin.py`):
+one foreground Python loop and one connection to your home machine. The home
+machine draws the panel, top bar and session. The old two-pane client was
+removed in #3008; `--old` and `FLEET_CLIENT=shell` explain the retirement and
+open the same current client. Configuration migration comments out old switches.
 This page is the contract for moving between sessions from the keyboard
 (issue #1903, EPIC #1906 C10) — from anywhere, without first putting the
 keyboard on the list.
@@ -52,14 +54,10 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
   `ctrl+space` from `FLEET_KEY_PHONE`.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
   ⌃] p (or ⌃空格 / F12).
-- The old client (`fleet --old`) keeps every key below; its profile is written
-  with all of them (`fleet-iterm-profile.py write --all`). It is the way back,
-  and goes with #3008.
 
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
-The old client's task list (`fleet --old`'s sidebar) goes with #3008 only when
-every row below is ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」
+The old client was removed in #3008 after every row below was ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」
 (17 rows covering the sidebar's 24 jobs — the 11 menu items share row 7), no more,
 no fewer; a job found later gets a row here and a member issue. Evidence lives
 under `$FLEET_CONF_DIR/fleets/fleet/epic/3178/evidence/3186/` (`fleet-evidence.sh`,
@@ -103,91 +101,6 @@ never committed) — `panel` · `menus` · `rows` are the mac-c 看台's own
 
 全部 ✅ 后在 #3008 留「侧栏下线清单已全绿，可删」。
 
-## The keys (the old client, `fleet --old`)
-
-| Action | iTerm2 on a Mac | Any other terminal | |
-|---|---|---|---|
-| next / previous session, the right pane follows at once | ⌘↓ ⌘↑ | prefix n / p | no wrap at either end |
-| back / forward through the sessions you were on | ⌘[ ⌘] | prefix h / l | a closed session is stepped over |
-| zoom the right pane | ⌘↩ | F9 | again to restore |
-| sessions and actions (issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
-| 派一件事 went into ⌘P (issue #3328): one version long the old keys open ⌘P and say so | ⌘T → ⌘P | prefix t → ⌘P | its first line 「⚡ 派一件事…」 |
-| a new session: no repo, on your home machine, the cursor in its input (issue #3119) | ⌘N | prefix c | `FLEET_COMPOSE=1`: the writing area on the right, below |
-| open / shut the sub-tasks of the session in view (issue #2167) | ⌘. | prefix . | on a sub-task: shuts its parent |
-| quit fleet: the client's processes here go, the sessions run on (issue #2349) | ⌘Q | prefix Q | below |
-
-This table is the one list of the client's keys: the client opens no key page
-and has no key for one (issue #2362 took ⌘/ and prefix ? away, and with them ⌘J
-and prefix k). **The session waiting on you** is a tap on the bar's red
-「! N 等你」 — it unzooms, puts the list on that row and the right pane on it.
-
-**⌘P — sessions and actions** (issue #2365: 「一切优化为 CLI」 — the way in is the
-keyboard, not the right-click menu, which stays but is advertised nowhere) lists
-every session — one folded under its parent too — each with `#单号 · 机器 · 状态 ·
-PR · 回收方式`. On the lit row: **⌃R** 改名 · **⌃X** 回收 · **⌃A** 回答 (on a row
-that is not asking: onto the first one that is) · **⌃E** 改回收方式 · **⌃O** 打开
-PR (a row on another machine: its PR's page, else its issue's). Each key runs
-THAT row's own menu item, never a second copy. A query starting `>` lists the
-panel's commands first — 退出 fleet · 新会话 claude / codex · 切到多 / 单会话视图 ·
-改名当前会话 — then the row menu's. The panel's last line says its keys. An empty
-query lists the sessions waiting on you first, then the most recent and the one
-in view last, so ⌘P ↵ is «the one I was just on». A query keeps the rows it matches: a substring of the name first
-(earlier is better, a word start best), then a substring of the machine, state
-or repo (`mac-a`, `needs`), then the letters in order (`crr` → 「Codex: reap
-rules」); ties go to the more recent. ⌘P + two letters + ↵ reaches any session
-in four keys.
-
-From a zoomed session, ⌘↓ ⌘↑ ⌘[ ⌘] unzoom first (⌘P keeps the zoom while you
-pick). With no task list on screen they do nothing — prefix h is then still
-«the machine before», as prefix q.
-
-**派一件事** (issue #2753; issue #3328): ⌘P's first line 「⚡ 派一件事…」 — from any
-window (a worker's, the orchestrator's, Claude or Codex, a bare shell, a session on
-another machine) — opens a small popup (`bin/fleet-quick-dispatch.py`): a title, the
-repo (the one your last task went to; ←→ when there are several) and 「交给 Codex」
-(⌃X). ↵ writes the writing area's own payload and hands the list `compose`, exactly
-as the writing area's ↵ does — no model and no orchestrator queue on the way — so
-the list draws 「开工中…」, switches to the new session's row when it shows, and says
-「已建 #N 并开工」. Its old keys open ⌘P for one version (compat-1v). ⌘P's top group
-— 派一件事 · + 新会话 · the layout flip · 退出 fleet — needs no `>`; an empty ⌘P
-still lights the session before, so ↵ there is «the one before» as it was.
-
-**A new session** (issue #3119): ⌘N — or prefix c — opens a new session on your
-home machine, in your home directory with no repo, and puts you in its input
-(`fleet-shell.sh portal` → `home-session claude --new`; in a 看台
-`fleet_view.go_new` → `dash-raw-session.sh --no-repo`). No session is special: the
-list has no 「新任务」 row, and a session that took on the orchestrator or the
-steward is a row like any other — the one treatment a row gets is the pin you
-gave it (⌘P / its menu), which only orders the list and keeps nothing from being
-reaped (a session you want kept says 「一直留着」 — `@reap_policy keep`).
-
-**The writing area** (issue #1953, only with the client's `FLEET_COMPOSE=1`): ⌘N
-turns the right pane into it (`bin/fleet-compose.py`, the stage's `@fleet_role
-portal` window, made once). Write as many lines as you
-like (⇧↵ — the `fleet` profile sends it as 0x0a — ⌃j or ⌥↵ start a new one);
-drop a file on the window and its path is an attachment. Under the box sit three
-options, already picked, so ↵ needs none of them (issue #2231; Tab walks to them,
-↵ or space opens one): **仓库** — the repo of the session you were on, else the
-one your last task went to; or 「无仓库 · HOME」, a session in your home directory
-with no issue — **节点** — the machine the hub would pick (fewest running);
-维护中 / 失联 machines are greyed — and **Agent** — this fleet's default
-(`FLEET_AGENT`). A change is for this send only: the next ⌘N shows the defaults
-again. ↵ sends: the first line is the issue's title, the whole text its body (a
-HOME session starts on the whole text). The list draws 「开工中…」 on top at
-once. When that machine has a session already open and idle for this repo
-(or HOME) and agent — the warm pool, `scratch-pool.sh` — it takes that one and
-submits your text into it as its first turn (plus one line: the issue and branch
-follow), and answers in about a second (issue #2234); the issue is then filed and
-the session bound to it in the background (`fleet-start-backfill.sh`, issue
-#2235): the same window becomes `issue-N` in place, and the agent hears its issue
-and branch on its next turn, never in the middle of one. A filing that fails
-three times leaves the session working and its row marked 「单子没建上」 (a red
-`∅`). With none
-ready it files the issue (`fleet-issue-file.sh`) and opens its worker as before.
-The right pane switches to it when its row appears — no token spent on the way. esc goes back to the session before; the draft is kept on disk
-(`~/.local/state/claude-fleet/compose-draft`) until it is sent. The orchestrating
-session is reached from its own row, not from the writing area.
-
 ## How a ⌘ chord reaches the client
 
 A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
@@ -204,7 +117,7 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
 written before the update still sends them, and the conf catches both and does
 nothing with them until the next start rewrites the profile without them.
 
-No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-shell.conf` catches
+No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-view.conf` catches
 each as `user-keys[<code>]` → `User<code>`, bound to the same body as the prefix
 key. The one table is `bin/dash-keymap.sh --panel switch list` (action · ⌘ glyph
 · iTerm2 key · code · prefix key); the conf, the full sheet and the profile are
@@ -218,8 +131,7 @@ attach, the profile it came from after the detach), so outside the client
 iTerm2 behaves as it always did.
 
 - **Written** at every start of the client (`fleet-thin.py`: the panel + your
-  extras) and every start and reload of the old one (`fleet-shell.sh iterm_keys`,
-  `--all`) —
+  extras) —
   so the install line and every update leave it current. Nothing is written off
   a Mac, or on a Mac with no iTerm2.
 - **Removed** with `python3 ~/.claude/fleet/bin/fleet-iterm-profile.py remove`;
@@ -231,16 +143,8 @@ iTerm2 behaves as it always did.
 
 ## Popups draw opaque
 
-The client's tmux server keeps the terminal's left/right margins (DECSLRM) off
-(`terminal-overrides[90] "*:Cmg@:Clmg@"`, issue #2362). tmux turns them on for
-iTerm2 by itself and then scrolls or clears every rectangle narrower than the
-screen — the session pane beside the list, the inside of ⌘P's popup — with a
-margin scroll; the popup's content travelled that way too, and any slip in the
-terminal's margin handling left the session's text inside the list and the
-popup's borders gone. With the margins off tmux redraws those rows cell by cell
-around the popup. The popups' own frame has a background of its own (the
-palette's `PAL_BG`, `fleet_popup_draw`), so no cell inside is the terminal's
-default.
+The home machine draws the panel with its own background and a complete frame
+(`fleet_view.py`, `fleet-quickopen.py`'s `Heal`). The client runs no local tmux.
 
 ## 复制 — a copy made in a session lands on your device (issues #1766, #2758)
 
@@ -248,14 +152,9 @@ Text you select in a session, and text the session copies for you (Claude Code's
 own copy), goes into the clipboard of the device you are typing on — not the
 machine the session runs on.
 
-- **How it travels.** The copy is made by the tmux nearest the text (the
-  machine's fleet session, `conf/tmux-attention.conf`; or the client's own when
-  you are in its copy-mode), which writes it as OSC 52 to its terminal. Each tmux
-  further out — the stage (`conf/tmux-shell-stage.conf`), the client
-  (`conf/tmux-shell.conf`) — says `set-clipboard on`, so it passes it on, and
-  gives every terminal `Ms` (`terminal-overrides[92]`), so it sends one even to a
-  terminal tmux has no clipboard row for. A program's own OSC 52, raw or wrapped
-  as tmux passthrough, takes the same road.
+- **How it travels.** The node's tmux (`conf/tmux-attention.conf`) writes
+  OSC 52. The home machine's view and the thin loop pass it to your terminal;
+  the node enables `set-clipboard on` and passthrough.
 - **Drag to select.** Press, drag, release: the release copies (tmux's
   `MouseDragEnd1Pane` → `copy-pipe-and-cancel`). Double-click copies a word. In
   copy-mode (prefix `[`), `y` and `↵` copy and close it. A session that takes the
@@ -279,7 +178,8 @@ machine the session runs on.
 | Termius (phone) | no OSC 52 — long-press to select with Termius itself | no |
 | macOS Terminal | no OSC 52 — ⌥-drag to select with Terminal itself | no |
 
-`bin/clipboard-osc52-selftest.sh` runs the three servers on isolated sockets: a
+`bin/fleet-thin-notify-selftest.sh` checks the current connection; historical
+clipboard coverage also verified: a
 copy-mode copy, a real mouse drag typed into the outer terminal, a program's own
 OSC 52 (raw and passthrough) and an outer terminal with no `Ms` of its own all
 arrive as OSC 52; the iTerm2 permission's once-only rule; the doctor row.
@@ -290,36 +190,15 @@ A key you press in a session does what it does in Claude Code run straight in
 your terminal (EPIC #2756's yardstick: the same Claude Code version in iTerm2 on
 your Mac). The few that do something else on purpose say so below.
 
-- **Extended keys.** Each tmux on the way — the client (`conf/tmux-shell.conf`),
-  the stage (`conf/tmux-shell-stage.conf`), the machine's fleet session
-  (`conf/tmux-attention.conf`) — says `extended-keys on`,
-  `extended-keys-format csi-u` and `terminal-features … extkeys`: it asks the
-  terminal for keys WITH their modifiers and hands them on, in the CSI u form a
-  local Claude reads, to the pane that asks (Claude Code does; a shell and the
-  list do not, and get the old bytes). Before, ⇧↵ arrived as a bare ↵ and sent
-  half a sentence.
-- **⌃B and the prefix.** The client's prefix is **⌃]**. ⌃B — a local Claude's
-  「放到后台」 — goes on to the session when you type it in **iTerm2** (tmux's
-  `client_termtype`: there every switch has its ⌘ chord); from any other terminal
-  (an iPad's Blink, a phone) ⌃B is still the prefix, as it always was, and ⌃]
-  works there too. `prefix ⌃B` / `prefix ⌃]` send that key itself. Wherever this
-  page says `prefix`, that is ⌃] in iTerm2.
-- **⌥← ⌥→.** The client's iTerm2 profile (`fleet-iterm-profile.py`) makes the
-  LEFT ⌥ send Esc+, so ⌥← ⌥→ (and ⌥b ⌥f) move by word as in a local Claude; the
-  right ⌥ is the profile's own (typing special characters).
-- **Off.** `FLEET_KEYS_PARITY=0` (fleet.conf `[client]`) is everything as before
-  #2760: no extended keys on the client's servers, the prefix ⌃B, the left ⌥ the
-  parent profile's. A `FLEET_SHELL_PREFIX` of your own wins either way (and then
-  ⌃B is plain tmux again). A server already running takes the change at
-  `fleet quit` + `fleet`; extended keys are asked of a terminal when it attaches.
-
-The table is the contract: `bin/fleet-keys-selftest.sh` leg 12 reads it — every
-row whose bytes column has a value is typed into an outer terminal (a pty) in
-front of three tmux servers on isolated sockets with the three real confs, and
-the session's pane must receive the SAME key (its modifiers decoded, whichever
-encoding tmux chose); 「有意不同」 rows are checked for what this table says they
-do. A `+` in the bytes is a second press a moment later; `·` separates encodings
-of one key (a terminal's legacy bytes, CSI u, xterm's modifyOtherKeys).
+- **Extended keys.** The node enables `extended-keys on` and CSI u encoding;
+  Shift+Enter reaches a pane that requests extended keys. The thin loop forwards
+  these bytes through its pty. `shift-enter-sends` exercises the node on an
+  isolated socket.
+- **⌥← ⌥→.** The iTerm2 profile makes left Option send Esc+, so word movement
+  works like a local Claude session. `FLEET_KEYS_PARITY=0` keeps the parent
+  profile's Option behavior.
+- **Portable keys.** The view's keys are in `conf/tmux-view.conf`; a direct
+  attach keeps the node's normal tmux keys.
 
 | 键 | 本地 Claude | fleet | 说明 | 终端送的字节 |
 |---|---|---|---|---|
@@ -334,33 +213,22 @@ of one key (a terminal's legacy bytes, CSI u, xterm's modifyOtherKeys).
 | ↑ ↓ | 上一句 / 下一句 | 一样 | | `1b5b41` · `1b5b42` |
 | ⌥← ⌥→ | 按词移动光标 | 一样 | 左 ⌥ 当 Esc+（fleet 的 iTerm2 配置） | `1b1b5b44` · `1b1b5b43` · `1b62` · `1b66` · `1b5b313b3344` · `1b5b313b3343` |
 | ⇥ | 补全路径 / 命令 | 一样 | | `09` |
-| ⌃B | 把正在跑的命令放到后台 | 一样 | iTerm2 里前缀是 ⌃]，⌃B 原样给会话；别的终端 ⌃B 仍是前缀 | `02` |
-| ⌃V | 贴图 | 一样 | 客户端先把图送到会话那台机器（#2757，`fleet-client-upload-selftest.sh`） | |
+| ⌃B | 把正在跑的命令放到后台 | 一样 | 看台的前缀是 ⌃]，⌃B 原样给会话 | `02` |
+| ⌃V | 贴图 | 一样 | 客户端先把图送到会话那台机器（#2757，`fleet-thin-upload-selftest.sh`） | |
 | ⌘V 多行 | 粘贴多行文字 | 一样 | 括号粘贴原样到会话 | `1b5b3230307e6f6e650d74776f1b5b3230317e` |
 | 拖文件 | 得到文件路径 | 一样 | 客户端先把文件送过去（#2757） | |
 | 选中 / ⌘C | 复制到本机 | 一样 | 见上一节「复制」（#2758，`clipboard-osc52-selftest.sh`） | |
-| ⌃D | 空输入时退出 | 有意不同 | 单会话视图（`fleet claude`）里是「放到后台」，会话照跑；别的布局原样给会话 | `04` |
-| ⌃\ | （本地没有用途） | 有意不同 | 单会话视图里切到会话所在机器的 shell（#2744）；别的布局原样给会话 | `1c` |
+| ⌃D | 空输入时退出 | 有意不同 | 原样给会话；离开客户端用面板的「退出 fleet」 | `04` |
+| ⌃\ | （本地没有用途） | 有意不同 | 面板中打开会话 shell；可在 FLEET_KEYS_EXTRA 配置快捷键 | `1c` |
 | ⌘K | iTerm2 清屏 | 一样 | #3185 起还给 iTerm2（默认只绑 ⌘P） | |
 
 ## Where the state lives
 
-Per client computer, under `$XDG_STATE_HOME/claude-fleet`
-(`~/.local/state/claude-fleet`; `FLEET_SWITCH_STATE` overrides):
-
-- `switch-history.json` — the history ⌘[ ⌘] walk (`stack` + `at`, as a
-  browser's back/forward) and the recency ⌘P sorts by (`mru`). Written by the
-  task list on every change of the session in view, however it changed.
-- `switch-rows.tsv` — the rows the list last painted, so ⌘P draws at once; it
-  reads every session (the list's producer with `FLEET_ROWS_UNFOLD=1`) a moment
-  later.
-
-The keys never switch anything themselves: next / prev / back / fwd and ⌘P's
-pick are queued on the list pane's `@sidebar_do` and the list is woken with F12
-— so a switch is always the list's own `jump()`, the one place that knows a
-proxy window onto another machine from a local one, and two quick presses are
-two steps. `bin/fleet-switch-selftest.sh` sends every code to a real list on a
-private tmux socket.
+The home keeps each view's registration under `$FLEET_CONF_DIR/remote-views/`.
+`fleet_view.py` owns its history and panel state. Every switch uses
+`fleet-view-go.sh`, preserving the view's current session identity across reconnects.
+The local client keeps reconnect/version logs and its saved home connection;
+there is no sidebar state, local stage server or warm connection pool.
 
 ## On a phone — the same road as the Mac (issues #3006, #1904)
 
@@ -451,204 +319,21 @@ The old client's phone layout (one pane, `‹ i/n ›` taps, F1–F4 on Termius'
 extra-key row, issue #1904) lives on under `FLEET_CLIENT=shell` until the old
 client goes.
 
-## The old client — its bar, commands and layout
-
-**The bar** (issue #2365) holds three things: who is signed in (the GitHub login
-off `fleet login`'s certificate — orange, with why, when the hub cannot be asked
-or refuses this computer), the ⟳ slot, and the keys of WHERE THE KEYBOARD IS — in
-a session `⌘P 会话与动作 · ⌘N 新会话 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
-area its keys, in ⌘P the panel's, with the prefix pressed the prefix keys. It is
-the same whichever list row is lit. No quota, no 「N 等你」 (the list's red `!` and
-⌘P's order say who waits), no machine or issue of the row in view (⌘P and
-`fleet show` do).
-
-**The commands** (issue #2365): whatever the menu and ⌘P do, a command does —
-`fleet ls [--json]` (名称 · 单号 · 机器 · Agent · 剩余 · 模型 · Effort · 状态 · PR · 回收方式 — 剩余 coloured like the session's own header, 「(N 分钟前)」 past 5 minutes, — from a node too old to report it, issue #2431), `fleet show <会话>`,
-`fleet open <会话>` (the client onto it), `fleet rename <会话> <新名>`,
-`fleet close <会话> [--yes]`, `fleet reap <会话> <方式>` (merged[:<dur>] ·
-done[:<dur>] · loop-end · at:<time> · keep), `fleet answer [<会话>] [<回答>]`. A
-session is a name or part of one, `#单号`, or its key; ONE resolver, and two
-matches are listed with exit 4 — never a guess (3 = none). They read the
-client's own rows and write through the hub by the session's worker_id
-(`bin/fleet-session-cli.py`, run inside the client server's environment by
-`fleet-shell.sh cli`), so the client must be running — after ⌃D it still is.
-`fleet open <url|:port|file>` and `fleet show <file>` are what they were.
-
-**The layout**: `FLEET_CLIENT_LAYOUT=auto` (default — one pane when the list does
-not fit beside 80 columns, i.e. under `FLEET_SHELL_WIDTH` + 81 columns, where
-the list used to be taken away with nothing in its place) · `single` (always) ·
-`split` (never — the old rule, byte for byte) · `multi` (auto's rule, the name
-the switcher writes) · `solo` (below).
-
-**The one-session view, `solo`** (issue #2265, EPIC #2259 C6) — what a fresh
-install writes: the whole screen is the session. No list (it still runs, zoomed
-away behind the session, so the switch keys work), no border, no top line, and
-the bar is the same three things as any layout's (below), with `⌃D 放到后台`
-where ⌘↑↓ would be. **Leaving is
-putting it in the background**: ⌃D (caught by the client; the agent never sees
-it — its own `/exit` still ends it), `prefix d` or closing the terminal only
-detach, and the terminal says 「会话在后台继续（mac-b）。下次输入 fleet 回来。」
-(`fleet-topbar.py goodbye`, run by `fleet-shell.sh` once the attach returns).
-The session runs on under its `@reap_policy`. When the agent ends itself
-(`/exit`), the list sees the row in view go `exited` and detaches the client:
-「会话已结束（mac-b）。fleet 可以恢复。」 — the next `fleet` is back on that session's
-recovery page (↵ resumes it). `fleet` with the client still running re-attaches
-to what it showed; with nothing running it opens the row it showed last (the
-switch history's head) once the list has read it, or a new HOME Claude session
-when that row is gone (`solo_resume`). The layout lives in the server's
-`@fleet_layout` (bar, ⌃D, list); `fleet-shell.sh layout <value>` switches it
-live — remembering it in `fleet.conf` is the caller's. Every other layout's
-screen is byte for byte what it was: `bin/fleet-client-solo-selftest.sh`.
-
-**⌃\ — the session's shell, and back** (issue #2744; #2566 had it this
-computer's). In both one-session views (this layout and `fleet claude`'s own,
-below) ⌃\ opens a second window — a login shell of the machine the SESSION runs
-on, as its login, in its working directory (the worker's `@worktree`, else its
-pane's directory: an orchestrator's `$HOME`, a no-repo session's own), the
-fleet's `bin/` first on its PATH, no worker credential in its environment — and
-the next ⌃\ is back on the session, the same pane, its connection never dropped;
-then the two in turn. `bin/fleet-remote-view.sh shell-open` finds the session
-(the window's `@remote`, else the stage's current one) and opens its window,
-titled 「shell · <name> @<machine>」 and marked `@solo_shell <machine>:<worker id>`
-— one a session: ⌃\ on that session again selects it. Its program (`shell`)
-rides the shell's warm master when it answers, else a connection of its own
-through the proxy's own ssh (`fleet connect`; a session on THIS computer runs
-right here), and runs `shell-here` on the far end, which watches the session's
-window: a reaped session closes its shell. A far end older than `shell-here`
-gives its login shell in `$HOME`. `prefix \` is the same for a keyboard with no
-⌃\ (an iPad's Blink); `prefix !` is THIS computer's shell in `$HOME` (`@solo_shell
-local`, also one). The bar's keys read `⌃\ 回到会话` in a shell and `⌃\ 会话 shell`
-on the session, and neither the list nor the window list ever shows a shell. The
-shell's `exit` closes it (the next ⌃\ opens a new one); ⌃D from it puts the view
-in the background as from the session. In every other layout ⌃\ goes to the
-pane. `fleet-client-solo-selftest.sh` B and D5, `fleet-remote-view-selftest.sh` S
-pin it.
-
-**The top line says this session only, in the ⌘P panel's glyphs** (issue #3194,
-EPIC #3178) — the stage's own status line (`conf/tmux-shell-stage.conf` →
-`bin/fleet-topbar.py`; a 看台 draws the same with `render --node`): glyph · state
-word · #N · title …… PR · context. The six glyphs and their colours are
-`bin/fleet_view.py`'s one table — **!** waiting on you · **x** failed / exited ·
-**»** working · **✓** done · **∙** idle · **?** lost / on the relay (ASCII with
-`FLEET_GLYPHS=ascii`, uncoloured with `NO_COLOR`). Three widths: a phone (~45
-columns) has the glyph, #N, the clipped title and 「62%」; from 80 the state's word,
-「PR #N」 and 「62% Opus 5.5 high」; from 140 the repo after the title, the PR's
-checks (✓ / … / ✗), 「剩余 62% · Opus 5.5 · high」 and 「⌘P」. The whole line is red
-while the session waits on you — a question or an OK, its own words in the
-title's place — and grey with ? while its machine is out of reach (「mac-a 连不上」)
-or on the hub relay (「mac-a 经中转」), the only time the machine is named. Going
-round the sessions, and what the others are doing, is the panel's (⌘P ↑↓ ↵).
-
-It reads ONE record, `switch-bar.json` beside the switch history, which the list
-writes off the very rows it paints (`fleet-sidebar.py bar_record`) — so the line
-and the list never disagree — and bumps the stage's `@fleet_bar_gen`, which the
-line's command names: tmux draws it again at once. The title is the issue's
-own title (the list's 14th field, carried from the session's machine — #1921),
-else the row's name. A session in view that is no row — one the batch view
-folded away — gets its record off the refresh loop's cache instead
-(`cache_record`, issue #2739); the record lives in `~/.local/state/claude-fleet`,
-or `~/.cache/claude-fleet/state` when that cannot be written, a failed write is a
-line in `logs/topbar.log`, and a line with no record at all says 「顶行无记录」
-rather than pass for a bare shell. Once the client has shown a session (its switch
-history), the first screen of a plain `fleet` is the last one you looked at, else
-a new session (⌘N's road, issue #3119) — not the hub's pick's own window, which stays for `fleet <machine>`,
-this computer's fleet, and a newcomer's first start (no history: their home page); a bare machine
-window an older start left on the stage is cleared at the next start.
-The thin client (`fleet-thin.py`, plain
-`fleet` since #3007) keeps the same rule on the HOME side (issue #4000): the
-home's `cur` hook writes the session in view to `remote-views/.last` (one line,
-per login — a worker id, never a bare window id), which outlives every 看台, so a
-new run from any device lands there (`attach --thin` with no `--want` / `--resume`);
-on another machine it goes there through the 看台's switch road; gone (not here,
-not live on the hub) ⇒ a new session; no `.last` yet ⇒ the orchestrator's window,
-else a new one. `fleet <session>` still goes where it says; `bin/fleet-remote-view-thin-selftest.sh` H pins it.
-`bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
-the line through the nested client, and the widths.
-
 ## A new session in one command — `fleet claude` / `fleet codex` (issue #2264)
 
-`fleet claude [--node mac-a] [a first sentence…]` (or `fleet codex …`) opens a
-**HOME session** — no repo, in your home directory on a fleet machine, with that
-agent — and shows it, like running `claude` locally; the words are its first
-turn. It is the one HOME-session primitive (EPIC #2259 共同约定 2):
-`bin/fleet-home-session.sh` starts the client without attaching (its lease signs
-the ask), then `fleet-shell.sh home-session --no-stage` asks
-`fleet-client-place.sh - home` — the hub's scratch + `no_repo`, which the node
-takes from its warm pool (#2233) or opens cold. A placement that fails prints
-the hub's reason and attaches nothing.
-
-**It opens in a view of its own** (issue #2349, `fleet-shell.sh solo <machine>
-<worker id>`): the whole terminal is that one session, no list, no top line, one
-bottom line 「⌃\ 会话 shell · ⌃D 放到后台 · /exit 结束会话」 with the machine on the right —
-whatever layout the client keeps, which `fleet claude` neither reads nor writes.
-It is not the client's stage but a tmux server of its own (`-L
-<session>-solo-<pid>`, the stage's conf with this bar over it) holding one proxy
-pinned to that session, so the client's own view — open in another terminal or
-not — never moves with it. A watcher reads the row off the client's list cache
-for as long as the view lives: the session going `exited` (the agent's `/exit`)
-ends the view, and the terminal is back at its prompt with 「会话已结束（mac-b）。」.
-⌃D, `prefix d` or closing the terminal only put it in the background:
-「会话在后台继续（mac-b）。`fleet` 可以找回。」 — the session runs on, `fleet` lists
-it. Either way the view's server goes with the attach, and a client `fleet
-claude` had to start for its ask is quit again (`fleet quit`, below), so nothing
-of fleet stays behind. No hub (a LOCAL placement): the client attaches, as
-before. `--here` is unchanged.
-
-**A regular client already running is never touched** (the issue's hard rule):
-`fleet claude` gives it no re-attach pass (which would apply its layout again,
-select a machine on its stage, take the lease for this terminal and say where it
-is in use) — its lease, held already, signs the ask; the view's server is built
-from ONE conf at its start, so the client's top line never runs there; the
-view's end, ⌃D or a closed terminal only close the view. Only `fleet quit`
-quits the regular client, and `fleet claude`'s own trailing quit (when it had to
-start one) is `--if-unattached`: a client someone attached meanwhile stays.
-`bin/fleet-client-solo-selftest.sh` D4 pins it with a client attached beside.
-
-A newcomer gets one without asking: a client whose `fleet.conf [client]` says
-`FLEET_CLIENT_LAYOUT=solo` (what a fresh install writes) opens ONE HOME Claude
-session on its first start, with the line 「这里和本地运行 claude 一样；要在某个
-仓库里做，直接告诉我仓库名」 — `home-session.first` in the conf dir records it
-(any HOME session writes it). An existing install never sees it.
-
-`--here` is this computer instead — exactly `fleet run` below, which stays as
-the 旧写法:
-
-|                    | `fleet claude`            | `fleet claude --here` (= `fleet run claude`) |
-|--------------------|---------------------------|-----------------------------------------------|
-| runs on            | a fleet machine           | this computer                                 |
-| sees the files of  | that machine (`$HOME`)    | this computer (the current directory)         |
-| after you quit     | keeps running (reaped by its policy) | ends with the agent                |
-| its `/exit`        | back at your prompt       | back at your prompt                           |
-| from another device| can be picked up          | no                                            |
-| on the session list| yes                       | no                                            |
-
-`bin/fleet-home-session-selftest.sh` pins the dispatch, `--here` ≡ `fleet run`,
-a real `fleet codex "hi"` on a fake node (codex · `@norepo` · `$HOME` · "hi"
-submitted), and the first-session rule.
-`bin/fleet-client-solo-selftest.sh` D pins the view for real (one line, `/exit`
-→ the prompt, ⌃D → the background, the client's layout untouched);
-`bin/fleet-quit-selftest.sh` E the client quit after it only when `fleet claude`
-started it.
+`fleet claude [--node mac-a] [a first sentence…]` (or `fleet codex …`)
+opens a HOME session on a fleet machine, then attaches the current client to it.
+`fleet-home-session.sh` asks through `fleet-client-place.sh`; failures print the
+hub's reason. The session runs in your home directory with no repo. `--here`
+runs the agent on this computer through its credential proxy.
 
 ## 放到后台 and 退出 fleet — two different things (issue #2349)
 
-- **放到后台** — `prefix d`, closing the terminal window, ⌃D in a one-session
-  view: the screen goes, the client and the sessions keep running, the next
-  `fleet` is back at once.
-- **退出 fleet** — `fleet quit`, ⌘Q (prefix Q without iTerm2; `dash-keymap.sh
-  --panel switch`'s `quit` row), the last line of ⌘K and of the row menu: every
-  process of the client on this computer goes — the keeper (the lease given
-  back at once, so the next client anywhere takes nothing over), the hub loop,
-  the actions loop, the warm loop and its ssh masters, the shell's server with
-  the list and the bar, the stage with its connections. **The sessions on the
-  machines keep running** — a closed proxy only drops its connection — so there
-  is no question first, and the terminal says 「fleet 已退出；会话仍在 mac-b/mac-a 上运行，
-  `fleet` 重新进入。」. From inside the client (a key, a menu) it goes on in the
-  background, since what runs it is about to go.
-- `fleet status` says which: 「客户端在后台运行（`fleet quit` 退出）。」 or
-  「客户端没在运行（`fleet` 进入）。」
-
-`bin/fleet-quit-selftest.sh` pins all of it on private sockets.
+Closing the terminal or choosing 「退出 fleet」 in the panel ends the local
+connection; sessions keep running on their machines. The next `fleet` can
+return to them. There is no resident client process to keep in the background.
+`fleet quit` cleans up an old resident client left by an earlier version;
+`fleet status` reports any such leftovers and the current identity.
 
 ## A session on this computer — `fleet run` (issue #2136)
 

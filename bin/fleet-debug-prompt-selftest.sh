@@ -3,8 +3,9 @@
 # #2889 C5): after the third failure in half an hour the client asks whether the
 # hub should take a look.
 #
-#   A  a fake hub refuses the placement (fleet-home-session.sh, its shell seam)
-#      three times → only the third asks; y runs `fleet-debug report --note
+#   A  the home machine refuses the placement (fleet-home-session.sh over the
+#      thin client's one-shot ssh — FLEET_THIN_ARGV_CMD, a fake ssh) three times
+#      → only the third asks; y runs `fleet-debug report --note
 #      <the last failure>` and passes its words on; the book is emptied
 #   B  no terminal → never asked (the book still counts)
 #   C  n → says how to run it later; asked again only 24 hours on
@@ -15,16 +16,12 @@
 #      login's exit code kept; FLEET_DEBUG_PROMPT=0 → nothing recorded
 #   F  fleet-connect.py: a person's connect that cannot reach the hub is
 #      written down (the reason with it); `--print` / `--pick` never are
-#   G  the right pane's reconnect page (fleet-remote-view.sh run --shell, on an
-#      isolated tmux socket) stuck past FLEET_DEBUG_STALL_SECS says 「按 d 让远端
-#      看一眼」; d runs the report from there
+# (G, the old client's reconnect page with its 「按 d」, went with it — #3008.)
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/fdprompt.XXXXXX")" || exit 2
 T="$(cd "$T" && pwd -P)"
-SOCK="$T/tmux.sock"
-REAL_TMUX=''
-trap '[ -n "$REAL_TMUX" ] && "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null; rm -rf "$T"' EXIT
+trap 'rm -rf "$T"' EXIT
 fails=0
 ok()  { printf 'ok    %s\n' "$*"; }
 bad() { printf 'FAIL  %s\n' "$*"; fails=$((fails + 1)); }
@@ -56,19 +53,20 @@ book() { cat "$FLEET_SHELL_CACHE/debug-fails" 2>/dev/null; }
 nbook() { book | awk 'END { print NR }'; }
 
 # --- A: the placement refused three times, through fleet-home-session.sh -----
-cat > "$T/fake-shell.sh" <<'EOF'
+# the home's one-shot ssh: the place there refuses the session (exit 4)
+cat > "$T/hssh.sh" <<'EOF'
 #!/bin/bash
-# fleet-shell.sh's seam: the client starts; the hub refuses the session
-case "${1:-}" in
-  home-session) echo 'fleet claude: 没有机器能开 — mac-c: load 1.22/core > 0.8' >&2; exit 4 ;;
-esac
-exit 0
+printf 'REFUSED -\tfleet claude: 没有机器能开 — mac-c: load 1.22/core > 0.8\n'
+exit 4
 EOF
-chmod +x "$T/fake-shell.sh"
+cat > "$T/argv.sh" <<EOF
+#!/bin/sh
+printf '{"argv": ["bash", "$T/hssh.sh", "home"], "host": 2, "route": "lan"}\\n'
+EOF
 fresh A
 home() {   # one `fleet claude`, answered with $1
-  printf '%s\n' "$1" | FLEET_HOME_SHELL="$T/fake-shell.sh" FLEET_SHELL_NO_ATTACH=1 FLEET_DEBUG_PROMPT_TTY=1 \
-    bash "$BIN/fleet-home-session.sh" claude 2>&1
+  printf '%s\n' "$1" | FLEET_THIN_ARGV_CMD="sh $T/argv.sh" FLEET_THIN_LOG="$T/thin.log" FLEET_HOME_THIN_CMD=true \
+    FLEET_DEBUG_PROMPT_TTY=1 bash "$BIN/fleet-home-session.sh" claude 2>&1
 }
 o1=$(home y); rc1=$?
 o2=$(home y)
@@ -158,47 +156,6 @@ python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 --print mac-b < /dev/nu
 python3 "$BIN/fleet-connect.py" --hub http://127.0.0.1:9 --pick < /dev/null > /dev/null 2>&1
 eq 'F: --print / --pick are never written down' 1 "$(nbook)"
 unset FLEET_CLIENT_LOG_DIR
-
-# --- G: the reconnect page's 「按 d」 ---------------------------------------------------
-IFS=: read -r -a pdirs <<< "$PATH"
-for d in ${pdirs[@]+"${pdirs[@]}"}; do
-  case $d in *tmux-shim*) continue ;; esac
-  [ -x "$d/tmux" ] && { REAL_TMUX="$d/tmux"; break; }
-done
-if [ -z "$REAL_TMUX" ]; then
-  echo 'skip  G: no tmux'
-else
-  fresh G
-  mkdir -p "$T/rv/tmp/warm"
-  cat > "$T/rv/ssh" <<'EOF'
-#!/bin/bash
-for a in "$@"; do [ "$a" = -O ] && exit 1; done
-echo 'ssh: connect to host mac-b port 22: Connection refused' >&2
-exit 255
-EOF
-  chmod +x "$T/rv/ssh"
-  wid=00000000-0000-0000-0000-000000000000/issue-1
-  "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s rv -x 120 -y 20 \
-    "env HOME=$HOME TMPDIR=$T/rv/tmp FLEET_CONF_DIR=$FLEET_CONF_DIR FLEET_SHELL_CACHE=$FLEET_SHELL_CACHE \
-       FLEET_REMOTE_SSH_CMD=$T/rv/ssh FLEET_REMOTE_VIA_HUB=0 FLEET_SHELL_WARM=0 FLEET_UI_LANG=zh \
-       FLEET_DEBUG_STALL_SECS=2 FLEET_DEBUG_CMD=$T/fake-debug \
-       bash $BIN/fleet-remote-view.sh run --shell mac-b $wid; sleep 30"
-  seen=''
-  for _ in $(seq 1 80); do
-    "$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null | grep -q '按 d 让远端看一眼' && { seen=1; break; }
-    sleep 0.1
-  done
-  [ -n "$seen" ] && ok 'G: stuck past the bound, the page says 按 d 让远端看一眼' \
-    || bad "G: no 按 d on the page: $("$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null | grep . | tr '\n' '|')"
-  "$REAL_TMUX" -S "$SOCK" send-keys -t '=rv:' d
-  for _ in $(seq 1 50); do [ -s "$T/debug.calls" ] && break; sleep 0.1; done
-  has 'G: d runs the report from the page' "$(cat "$T/debug.calls" 2>/dev/null)" 'report --note 正在连接 mac-b 卡住'
-  for _ in $(seq 1 30); do
-    "$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null | grep -q 'hub.example/s/abc123' && break; sleep 0.1
-  done
-  has 'G: its link is on the page' "$("$REAL_TMUX" -S "$SOCK" capture-pane -p -t '=rv:' 2>/dev/null)" 'https://hub.example/s/abc123'
-  "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null
-fi
 
 echo
 [ "$fails" -eq 0 ] && { echo "fleet-debug-prompt-selftest: PASS"; exit 0; }

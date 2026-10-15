@@ -24,28 +24,22 @@
 #   3. install — `curl -fsSL <hub>/install | sh` into a temp HOME (deps step on:
 #                it is part of the line), `fleet` lands in ~/.local/bin, every
 #                file is the hub's copy
-#   4. open    — that `fleet`, headless (FLEET_SHELL_NO_ATTACH=1, its own tmux
-#                socket), with the operator's viewer token as its identity: the
-#                hub picks the node, the right pane is that machine
-#   5. list    — the client's own loop writes the node's sessions; the list
-#                (tmux-dashboard-rows.sh --sidebar, what the left pane draws)
-#                shows both rows
-#   6. switch  — `open` on the worker row: the right pane now points at it
-#                (@remote=<node>:<worker_id>)
+#   4. open    — that `fleet`: the thin client (fleet-thin.py — the only client
+#                since issue #3008), which asks its home for a 看台 over one ssh:
+#                `fleet-remote-view.sh attach --thin --view … --device … --token …`
 #
-# The only stand-in is ssh to the node (a fake node has no sshd): a shim that
-# holds the control socket the client expects and records the remote command —
-# the one thing CI cannot reach. Every temp server binds 127.0.0.1, and the
-# whole run is bounded (CLIENT_E2E_DEADLINE, default 240s).
+# Two stand-ins, the ones CI cannot reach: the home's pick (FLEET_THIN_ARGV_CMD in
+# place of fleet-connect.py --argv, which needs a person's certificate) and ssh to
+# it (a fake node has no sshd) — a shim that records the remote command and ends
+# it like a detach. (The old client's list and switch steps went with it; the
+# home's list is the node's own, fleet-view-*-selftest.sh.) Every temp server
+# binds 127.0.0.1, and the whole run is bounded (CLIENT_E2E_DEADLINE, default 240s).
 #
 # Env: CLIENT_E2E_WORK (keep the work dir there instead of a temp one, not
 # removed) · CLIENT_E2E_NO_DEPS=1 (pass --no-deps to the install line; CI keeps
 # the deps step on). Exit 0 = every step green; 1 = a step failed (its name and
 # the logs are printed); 2 = usage.
 set -uo pipefail
-# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
-# OLD client's road, kept until C11 deletes it — so it asks for it by name
-export FLEET_CLIENT=shell
 
 CCQ=''
 while [ $# -gt 0 ]; do
@@ -65,19 +59,17 @@ KEEP=0
 if [ -n "${CLIENT_E2E_WORK:-}" ]; then WORK=$CLIENT_E2E_WORK; KEEP=1; mkdir -p "$WORK" || exit 2
 else WORK=$(mktemp -d "${TMPDIR:-/tmp}/cfe2e.XXXXXX") || exit 2; fi
 WORK=$(cd "$WORK" && pwd -P)
-SESS="cfe2e$$"                      # the client's session = its own tmux socket
 VT="e2e-viewer-$$-$RANDOM"          # the operator's viewer token, this run only
-REAL_TMUX=tmux                      # resolved after the install (its tmux step)
 START=$(date +%s)
 DEADLINE=${CLIENT_E2E_DEADLINE:-240}
-HUB_PID='' AGENT_PID='' SC=''
+HUB_PID='' AGENT_PID=''
 
 STEP=''
 step() { STEP=$1; printf '\n== %s · %ss\n' "$1" "$(( $(date +%s) - START ))"; }
 ok() { printf '   ✓ %s\n' "$1"; }
 logs() {
   local f
-  for f in hub.log agent.log install.log fleet.err ssh.log; do
+  for f in hub.log agent.log install.log fleet.err ssh.log thin.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f"
   done
@@ -99,17 +91,9 @@ waitfor() {
   done
   return 1
 }
-ts() { "$REAL_TMUX" -L "$SESS" "$@"; }
 cleanup() {
-  ts kill-server 2>/dev/null
-  "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
-  pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
-  # the client's own loops (keeper, hub-sessions) run from its cache's bin/
-  [ -n "$SC" ] && pkill -f "$SC/bin/" 2>/dev/null
   [ -n "$AGENT_PID" ] && kill "$AGENT_PID" 2>/dev/null
   [ -n "$HUB_PID" ] && kill "$HUB_PID" 2>/dev/null
-  [ -f "$WORK/master.pid" ] && kill "$(cat "$WORK/master.pid")" 2>/dev/null
-  [ -n "$SC" ] && rm -rf "$SC"
   [ "$KEEP" = 1 ] || rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -208,106 +192,60 @@ deps=''; [ "${CLIENT_E2E_NO_DEPS:-0}" = 1 ] && deps='-s -- --no-deps'
 FLEET="$CH/.local/bin/fleet"
 [ -x "$FLEET" ] || die 'no fleet in ~/.local/bin after the install' "$(ls -la "$CH/.local/bin" 2>&1)"
 IH="$CH/.claude/fleet"   # the one fleet directory (#1804)
-[ -x "$IH/bin/fleet-shell.sh" ] && [ -f "$IH/conf/tmux-shell.conf" ] || die 'the client files are not in ~/.claude/fleet' "$(find "$IH" -maxdepth 2 2>&1 | head -20)"
+[ -f "$IH/bin/fleet-thin.py" ] && [ -x "$IH/bin/fleet-connect.py" ] || die 'the client files are not in ~/.claude/fleet' "$(find "$IH" -maxdepth 2 2>&1 | head -20)"
+[ ! -e "$IH/bin/fleet-shell.sh" ] || die 'the install line still ships the old client (#3008)' "$IH/bin/fleet-shell.sh"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
-# tmux is the install line's to provide (its deps step) — from here on it must be there
-REAL_TMUX=$(PATH="$CH/.local/bin:$CH/.local/share/claude-fleet-vendor/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed ($(find "$IH" -type f | wc -l | tr -d ' ') files), fleet.conf names $HUB"
 
 # =============================================================================
-step 'open: the installed fleet, headless, on its own tmux socket'
-# ssh to the node is the one stand-in (a fake node has no sshd): a master holds
-# the control socket the client checks, select/watch answer like the far end.
+step 'open: the installed fleet is the thin client, and asks its home for a 看台'
+# ssh to the home is the stand-in (a fake node has no sshd): it records the remote
+# command and ends like a detach (exit 0), so the client ends too
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
 cat > "$SHIM/ssh" <<EOF
-#!/bin/bash
-op=''; ctl=''
-while [ \$# -gt 0 ]; do
-  case "\$1" in
-    -O) op=\$2; shift 2 ;;
-    -S) ctl=\$2; shift 2 ;;
-    -o) case "\$2" in ControlPath=*) ctl=\${2#ControlPath=} ;; esac; shift 2 ;;
-    -[bcDEeFIiJLlmpQRWw]) shift 2 ;;
-    -*) shift ;;
-    *) break ;;
-  esac
-done
-if [ -n "\$op" ]; then [ "\$op" = check ] && [ -S "\$ctl" ]; exit \$?; fi
-host=\$1; shift
-printf '%s\t%s\n' "\$host" "\$*" >> "$WORK/ssh.log"
-case "\$*" in
-  *" attach "*)
-    [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
-    echo \$! > "$WORK/master.pid"; wait ;;
-  *" watch "*) sleep 600 ;;
-esac
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/ssh.log"
 exit 0
 EOF
 chmod +x "$SHIM/ssh"
-# A unix socket path must fit in 104 bytes: the client's cache (its control
-# sockets) goes under a short dir, not the work dir.
-SC=$(mktemp -d /tmp/cfe2e-c.XXXXXX) || die 'no short cache dir'
-# The agent reports this computer's own hostname as the node's: the client must
-# not take itself for that machine (with no fleet of this login here it would
-# show the home page instead of connecting — issue #2219). Its own dir, not
-# $SHIM: an `ssh` on the PATH would answer fleet-connect's `ssh -G` too.
-HSHIM="$WORK/hshim"; mkdir -p "$HSHIM"
-printf '#!/bin/sh\necho client-laptop\n' > "$HSHIM/hostname"; chmod +x "$HSHIM/hostname"
-# the vendor dir first, as `fleet` puts it (#2260): a script the test calls
-# directly runs without `fleet` in front, on a runner that may have no tmux (#3018)
-cenv() {
-  env -i PATH="$HSHIM:$CH/.local/share/claude-fleet-vendor/bin:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
-    FLEET_CLIENT=shell FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
-    FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_REMOTE_SSH_CMD="$SHIM/ssh" \
-    FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
-}
-out=$(cenv "$FLEET" 2>"$WORK/fleet.err"); rc=$?
-[ "$rc" = 0 ] || die "fleet exited $rc" "$(tail -n 5 "$WORK/fleet.err")"
-[ "$out" = "$SESS" ] || die 'fleet did not print its session' "$out"
-ts has-session -t "=$SESS" 2>/dev/null || die 'the client tmux server is not up'
-# a client attached (the list is drawn for an attached session): control mode,
-# its stdin a fifo held open until the end
-mkfifo "$WORK/client.fifo"
-"$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" <"$WORK/client.fifo" >/dev/null 2>&1 &
-exec 7>"$WORK/client.fifo"
-# The proxy windows: on the client's STAGE server (`<session>-stage`, issue
-# #1759), or — a client installed before it — on its own server.
-P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
-tp() { "$REAL_TMUX" -L "$P" "$@"; }
-STG=''; [ "$P" = "$SESS" ] || STG=$P
-w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
-remote=$(tp show-options -wqv -t "$w1" @remote)
-[ "$remote" = "$NODE:" ] || die "the right pane is not the node ($NODE:)" "@remote=$remote · $(tp list-windows -t "=$P" -F '#{window_name}' | tr '\n' ' ')"
-waitfor 15 grep -q "attach --shell" "$WORK/ssh.log" || die 'the client never asked the node for attach --shell' "$(cat "$WORK/ssh.log" 2>/dev/null)"
-ok "client up on -L $SESS: window $(tp display-message -p -t "$w1" '#{window_name}') on -L $P (@remote=$remote)"
+cat > "$WORK/ptyrun.py" <<'EOPTY'
+import os, select, sys
+# run argv[1:] on a pseudo-terminal of its own (the thin client wants one), its
+# output on stdout once it ends, its exit code ours
+pid, fd = os.forkpty()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out = b""
+while True:
+    r, _, _ = select.select([fd], [], [], 60)
+    if not r:
+        break
+    try:
+        d = os.read(fd, 65536)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+_, st = os.waitpid(pid, 0)
+sys.stdout.buffer.write(out)
+sys.exit(os.waitstatus_to_exitcode(st) if hasattr(os, "waitstatus_to_exitcode") else (st >> 8))
+EOPTY
+# the home's pick (fleet-connect.py --argv needs a person's certificate): the node
+cat > "$SHIM/argv.sh" <<EOF
+#!/bin/sh
+printf '{"argv": ["$SHIM/ssh", "%s"], "host": 1, "route": {"name": "lan"}}\n' "$NODE"
+EOF
+out=$(cd "$CH" && env -i PATH="$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
+        FLEET_NODE_STATE="$WORK/no-node" FLEET_THIN_ARGV_CMD="sh $SHIM/argv.sh" FLEET_THIN_LOG="$WORK/thin.log" \
+        FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_ITERM_KEYS=0 \
+        python3 "$WORK/ptyrun.py" "$FLEET" </dev/null 2>"$WORK/fleet.err"); rc=$?
+[ "$rc" = 0 ] || die "fleet exited $rc" "$(tail -n 5 "$WORK/fleet.err") $out"
+grep -q 'fleet-remote-view.sh attach --thin' "$WORK/ssh.log" || die 'the client never asked its home for a 看台' "$(cat "$WORK/ssh.log" 2>/dev/null)"
+for w in --view --device --token; do
+  grep -q -- "$w" "$WORK/ssh.log" || die "the 看台's attach carries no $w" "$(cat "$WORK/ssh.log")"
+done
+grep -q "$NODE" "$WORK/ssh.log" || die "the ssh did not go to the home ($NODE)" "$(cat "$WORK/ssh.log")"
+ok "fleet → fleet-thin.py → ssh $NODE … attach --thin ($(wc -l < "$WORK/ssh.log" | tr -d ' ') connection)"
 
-# =============================================================================
-step 'list: the client lists the node'"'"'s sessions'
-G="$SC/tmp/.claude-dash/global"
-waitfor 30 test -s "$G/remote_$SESS" || die 'the client loop wrote no session cache' "$(ls -la "$G" 2>&1)"
-waitfor 15 grep -q "$FID/issue-7" "$G/remote_$SESS" || die 'the session cache has no issue-7' "$(tr '\037' '|' <"$G/remote_$SESS")"
-sock=$(ts display-message -p '#{socket_path}')
-rows() {
-  ( cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$w1" \
-      FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$SC/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
-      bash "$SC/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
-}
-r=$(rows)
-case "$r" in *issue-7*) ;; *) die 'the list has no issue-7 row' "$r" ;; esac
-case "$r" in *scratch-3*) ;; *) die 'the list has no scratch-3 row' "$r" ;; esac
-case "$r" in *"$NODE!"*) die 'the list marks the node lost while the hub answers' "$r" ;; esac
-ok 'the list shows issue-7 and scratch-3 on the node'
-
-# =============================================================================
-step 'switch: open the issue-7 row, the right pane points at it'
-waitfor 10 test -S "$(tp show-options -wqv -t "$w1" @remote_ctl)" || die 'no live @remote_ctl on the node window' "$(tp show-options -wqv -t "$w1" @remote_ctl)"
-got=$(cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 ${STG:+FLEET_SHELL_STAGE="$STG"} FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$SC/tmp" \
-        FLEET_CONF_DIR="$CH/.config/claude-fleet" bash -x "$SC/bin/fleet-remote-view.sh" open "wid:$FID/issue-7" 2>"$WORK/open.trace"); orc=$?
-remote=$(tp show-options -wqv -t "$w1" @remote)
-[ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" \
-  "open (exit $orc) → $got · @remote=$remote · windows: $(tp list-windows -t "=$P" -F '#{window_id} #{@remote} [#{@remote_login}]' | tr '\n' ' ')
-$(tail -n 40 "$WORK/open.trace")"
-grep -q "select '$FID/issue-7'" "$WORK/ssh.log" || die 'the node was not asked to select issue-7' "$(cat "$WORK/ssh.log")"
-ok "@remote=$remote, window $(tp display-message -p -t "$w1" '#{window_name}')"
-
-printf '\nclient-e2e: GREEN — installed from %s/install, listed and switched in %ss\n' "$HUB" "$(( $(date +%s) - START ))"
+printf '\nclient-e2e: GREEN — installed from %s/install and opened the client in %ss\n' "$HUB" "$(( $(date +%s) - START ))"

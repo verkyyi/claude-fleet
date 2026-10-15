@@ -195,7 +195,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    remap, personal binds) are intentionally NOT shipped. **No key is bound on a
    node** (issue #1714, EPIC #1710 C4): the node's fleet session carries the
    execution sessions only, and every key, popup and the status bar a person uses
-   are the CLIENT's (`fleet`, `conf/tmux-shell.conf`). The node conf's only binds
+   are the CLIENT's (`fleet`, `conf/tmux-view.conf`). The node conf's only binds
    are its "stock restores" — tmux's own defaults for the keys an older version
    overrode (`prefix z [ Space E c ! ? n r`, the mouse clicks), so a conf reload on
    a live server converges on stock tmux — and its status line is one static hint
@@ -641,24 +641,12 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    one version it says so and runs `bin/fleet`. It replaces any hand-written
    per-account `~/.config/claude-fleet/intro.sh` — delete that copy.
 
-   **The `fleet` client is the only way in** (issue #1628). From a computer of
-   your own run `fleet` (`curl -fsSL <hub>/install | sh` installs it, tmux
-   included): the hub's list, its bar and the machine's sessions in one tmux of
-   your own. That line is THE install line (issue #1804): it asks whether this
-   computer only looks and dispatches (the default) or also hosts sessions
-   (承载), and whether it joins the hub; everything lands in `~/.claude/fleet`.
-   **No hub** (one computer, only the tools — issue #1712): the same file from
-   GitHub's `stable`, answer 「2 不接」 — no hub address is written, and `fleet`
-   then opens the same client reading this machine — see
-   [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md#一条安装命令issue-1804). There is no fallback to ssh-ing into a machine and using its own
-   list: with no tmux (or one older than 3.2) `fleet` says how to install it and
-   exits non-zero; a client that cannot start says why and exits non-zero. An
-   iPad / iPhone ssh's into any machine with the fleet installed and runs the
-   same `fleet` there — the client then runs on that machine (its own
-   `-L fleet-shell` server, not that machine's fleet session) and its bar says
-   `客户端在 mac-b 上运行` — which is exactly what the SSH login above opens (issue
-   #1711): there is one way in. A direct `tmux attach` to a machine's fleet
-   session is not blocked, but it is not a way in to document or rely on.
+   **The `fleet` client** uses one foreground Python loop and a connection
+   to the home machine; it needs no local tmux. The install line puts the signed
+   client version in `~/.claude/fleet` and asks whether this computer also hosts
+   sessions. Without a hub, it opens a local view instead. On a phone, ssh into
+   a managed machine and type `fleet`: the same client runs there for that ssh
+   connection. See [CLIENT.md](CLIENT.md) and [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md).
 
    **Machine-local banner lines** (issue #1255) go in `intro.d` hooks, never in
    the repo: every executable in `/usr/local/etc/claude-fleet/intro.d/*` (all

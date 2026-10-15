@@ -177,7 +177,7 @@ cfg_t() {
 
 cfg_is_essential() {
   case "$1" in
-    FLEET_UI_LANG|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_CLOSE_LANDS_NEXT|FLEET_HOME_SIDEBAR_FIRST|\
+    FLEET_UI_LANG|FLEET_CLOSE_LANDS_NEXT|\
     FLEET_AGENT|FLEET_MODEL|FLEET_CODEX_MODEL|FLEET_WORKER_PROMPT|FLEET_SCRATCH_POOL|\
     FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING|\
     FLEET_ISSUE_BRIDGE|FLEET_CLEANUP|FLEET_SLEEP|FLEET_NOTIFY_CMD)
@@ -189,14 +189,14 @@ cfg_is_essential() {
 cfg_essential_group() {
   if _fcfg_ui_is_zh; then
     case "$1" in
-      FLEET_UI_LANG|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_CLOSE_LANDS_NEXT|FLEET_HOME_SIDEBAR_FIRST) printf '界面' ;;
+      FLEET_UI_LANG|FLEET_CLOSE_LANDS_NEXT) printf '界面' ;;
       FLEET_AGENT|FLEET_MODEL|FLEET_CODEX_MODEL|FLEET_WORKER_PROMPT|FLEET_SCRATCH_POOL) printf '启动' ;;
       FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING) printf '容量' ;;
       *) printf '自动化' ;;
     esac
   else
     case "$1" in
-      FLEET_UI_LANG|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_CLOSE_LANDS_NEXT|FLEET_HOME_SIDEBAR_FIRST) printf 'Interface' ;;
+      FLEET_UI_LANG|FLEET_CLOSE_LANDS_NEXT) printf 'Interface' ;;
       FLEET_AGENT|FLEET_MODEL|FLEET_CODEX_MODEL|FLEET_WORKER_PROMPT|FLEET_SCRATCH_POOL) printf 'Launch' ;;
       FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING) printf 'Capacity' ;;
       *) printf 'Automation' ;;
@@ -207,10 +207,7 @@ cfg_essential_group() {
 cfg_essential_order() {
   case "$1" in
     FLEET_UI_LANG) printf '010' ;;
-    FLEET_SIDEBAR) printf '011' ;;
-    FLEET_SIDEBAR_WIDTH) printf '012' ;;
     FLEET_CLOSE_LANDS_NEXT) printf '013' ;;
-    FLEET_HOME_SIDEBAR_FIRST) printf '014' ;;
     FLEET_AGENT) printf '020' ;;
     FLEET_MODEL) printf '021' ;;
     FLEET_SUBAGENT_MODEL) printf '022' ;;
@@ -243,20 +240,8 @@ cfg_desc() {
 控制 tmux 内所有 fleet UI 文案的语言。`zh` 强制中文，`en` 强制英文，`auto` 跟随当前登录环境；在 C/未设置 locale 下保持中文。
 EOF
         ;;
-      FLEET_SIDEBAR) cat <<'EOF'
-控制 worker 窗口左侧任务栏是否启用。开启后可以用任务栏切换任务、输入新会话名、打开行菜单和快捷键。
-EOF
-        ;;
-      FLEET_SIDEBAR_WIDTH) cat <<'EOF'
-左侧任务栏宽度，单位是列。屏幕太窄时任务栏会自动隐藏；增大宽度可以显示更完整的中文任务名。
-EOF
-        ;;
       FLEET_CLOSE_LANDS_NEXT) cat <<'EOF'
 关闭当前任务窗口后，优先落到相邻任务，而不是回 hub。适合连续处理多个 worker 的工作流。
-EOF
-        ;;
-      FLEET_HOME_SIDEBAR_FIRST) cat <<'EOF'
-按 ⌂/F9 时先聚焦任务栏，再按一次回 hub。关闭后，⌂/F9 会更直接地回 hub。
 EOF
         ;;
       FLEET_AGENT) cat <<'EOF'

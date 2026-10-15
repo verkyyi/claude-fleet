@@ -15,14 +15,11 @@
 # and two tests hold the copies to the originals: TestFleetClientMatchesBin (Go)
 # and bin/fleet-install-selftest.sh leg A (shell).
 #
-# What is on it: `fleet` and the two it dispatches to (#1470), plus the SHELL
-# (#1484) — bin/fleet-shell.sh and everything it runs on the person's own
-# computer, the set verified by running bin/fleet-shell-selftest.sh from a root
-# holding only these files (101 checks). fleet-lib.sh ships whole: the row
-# producer and the hub loop source it unconditionally, and a second lib for the
-# shell would be a second code path in the render loop (EPIC #1479 「两套行生成
-# 器漂移」). What a fleet NODE needs — spawning, reaping, the daemons, gh — stays
-# out: the shell's rows are all remote, their actions all hub writes.
+# What is on it: `fleet` and what it dispatches to (#1470) — the thin client
+# (bin/fleet-thin.py, #3003; the old two-pane client and its files went with
+# issue #3008) and what it runs on the person's own computer. fleet-lib.sh ships
+# whole: the scripts here source it unconditionally. What a fleet NODE needs —
+# spawning, reaping, the daemons, gh — stays out.
 # bin/fleet-client-lib.sh rides along for the installer itself (#1629): its
 # tmux step sources the lib's fc_tmux_ok / fc_pkg_install once downloaded.
 # bin/fleet-node.sh + bin/fleet-node-join.sh are `fleet node join` (#1627): the
@@ -112,7 +109,10 @@ bin/fleet-client-update.sh
 # line's — a rerun of the line installs beside the client in use, never over it
 bin/fleet-versions-lib.sh
 bin/fleet-update.sh
-bin/fleet-shell.sh
+# what the old client may still run in the background here, stopped
+# (`fleet quit`, issue #3008), and `fleet status`'s who line
+bin/fleet-client-retire.sh
+bin/fleet-client-who.sh
 bin/fleet-client-lease.py
 # open it on the device in your hands (#1717): the executor and what it drives
 bin/fleet-client-actions.py
@@ -127,7 +127,6 @@ bin/fleet-thin-upload.py
 bin/fleet_open_fwd.py
 bin/fleet_notify.py
 bin/fleet-client-escape.sh
-bin/fleet-client-badge.sh
 bin/fleet-client-where.sh
 # open a session on a machine from the client (#1777): the hub places it
 bin/fleet-client-place.sh
@@ -150,17 +149,10 @@ bin/fleet-hub-write.sh
 bin/fleet-hub-url.sh
 bin/fleet_iso.py
 bin/fleet-drill.sh
-bin/fleet-sidebar.sh
-bin/fleet-sidebar.py
-bin/fleet-ask.py
 bin/fleet_reap_policy.py
 bin/fleet-reap-policy.sh
-bin/fleet-sidebar-menu.sh
-bin/fleet-client-menu.sh
 bin/fleet-row-remote.sh
-bin/fleet-sidebar-remote.sh
 bin/tmux-dashboard-rows.sh
-bin/tmux-status.sh
 bin/fleet-lib.sh
 bin/fleet-conf.sh
 bin/fleet-lang.sh
@@ -174,8 +166,8 @@ bin/dash-keymap.sh
 bin/dash-popup.sh
 bin/fleet-popup-lib.sh
 bin/dash-fold-toggle.sh
-# switching sessions from the keyboard (#1903): ⌘P's popup + the switch history,
-# and the iTerm2 profile whose ⌘ chords send the switch codes
+# the 看台's switcher door and its shared helpers (#1903, #3000), and the iTerm2
+# profile whose ⌘ chords send the switch codes
 bin/fleet-quickopen.py
 bin/fleet-topbar.py
 # the top line's six glyphs + their colours are the ⌘P panel's one table (#3194)
@@ -185,14 +177,12 @@ bin/fleet_ticket_url.py
 bin/fleet-iterm-profile.py
 # …and which ⌘ chords it writes: the panel + the person's extras (#3185)
 bin/fleet_keys.py
-# ⌘N's writing area (#1953): the stage's portal pane and its one way out
+# a new task's payload and its one way out (#1953)
 bin/fleet-compose.py
 # …and how long each of its sends took, per segment (#2238)
 bin/fleet-compose-latency.sh
-# ⌘T 派一件事 (#2753): the one-line popup, the writing area's payload and road
+# 派一件事 (#2753): the payload's road
 bin/fleet-quick-dispatch.py
-conf/tmux-shell.conf
-conf/tmux-shell-stage.conf
 conf/fleet-palette.conf
 conf/vendor-tmux.lock
 conf/secret-shapes.list

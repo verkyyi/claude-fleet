@@ -2,21 +2,17 @@
 # fleet-client-update.sh — the client keeps up with its hub by itself
 # (claude-fleet#1722, EPIC #1718 C4).
 #
-#   fleet-client-update.sh start    what `fleet` runs before it opens the client
+#   fleet-client-update.sh start    what `fleet` (and fleet-thin.py between two
+#                                   connections) runs before it opens the client
 #   fleet-client-update.sh stage    fetch the hub's client into a version dir (background)
-#   fleet-client-update.sh tick <sess>   the running client's keeper, every
-#                                   FLEET_CLIENT_LEASE_EVERY: check (hourly), stage,
-#                                   and apply a staged client once you are idle
-#   fleet-client-update.sh apply <sess>  switch the RUNNING client to the staged one now
+#   fleet-client-update.sh tick     `fleet update`'s beat: check (hourly) and stage
 #   fleet-client-update.sh doctor [--root <home>]   the doctor's `client` row:
 #                                   `PASS|WARN|INFO<TAB><text>` on stdout
-#   fleet-client-update.sh digest [--root <home>]   the client's files by content
-#                                   (@client_digest, issue #2145)
-#   fleet-client-update.sh follow [<sess>] [--from <old version dir>]   the
-#                                   install was switched under the running client:
-#                                   reload it in place now (install-sync, #2737)
-#   fleet-client-update.sh running [--root <home>]   exit 1 + why when the running
-#                                   client is not the install's code (the doctor)
+#   fleet-client-update.sh follow | running   no-ops (compat-1v: 下一批删) — they
+#                                   reloaded the OLD client's running servers
+#                                   (issues #2145, #2737); that client went with
+#                                   #3008, and an install-sync of the version
+#                                   before still calls `follow`
 #
 # An installed client (the one line, `curl <hub>/install | sh`) lives in one
 # directory, ~/.claude/fleet (#1804; ~/.local/share/claude-fleet before) — the
@@ -34,26 +30,10 @@
 # <home>.versions/.next names the staged one, .prev the one before the last
 # switch (kept, with the current one; older ones are pruned). Roll back by hand:
 # `ln -sfn <home>.versions/<prev> <home>`. A home that is still a plain dir is
-# adopted as soon as nothing runs from it — `start` with no client running, a
-# `tick` once idle — together with a pre-#1781 <home>.prev (issue #1829).
+# adopted by the next `start` or `tick`, together with a pre-#1781 <home>.prev
+# (issue #1829).
 # A hand edit in <home> is gone at the next switch, by design: a lasting local
 # patch belongs in ~/.ssh/config or fleet.conf, never in the client's files.
-#
-# DRIFT (issue #1829): the running servers carry the version they were loaded
-# from (@client_version, stamped by fleet-shell.sh). Files that moved under a
-# running client without a reload — a pre-#1781 `start` swapped the whole home
-# while the shell ran, or a pre-#1900 install line wrote it in place — leave old proxy
-# loops beside new code opening connections of its own (the second connection
-# of #1775). `tick` (once idle) and `start` (before it attaches) see the stamp
-# differ from .client-version and run `fleet-shell.sh reload --all`: every proxy
-# pane respawned, every loop and the keeper restarted, update.state `done`, and
-# every attached client told 「fleet 客户端已更新到 <version>（入口 <commit>）」.
-# A home with NO .client-version (issue #2145 — installed before the mark, or it
-# was lost) is told by CONTENT instead: the server carries @client_digest (the
-# files `client_digest` names, stamped beside @client_version), and `start` /
-# `tick` reload it the same way when that differs from the files on disk — the
-# ⌂ badge says 「✓ 已重新载入新文件」. Nothing else touches such a home: no
-# check, no stage, no switch; `doctor` WARNs that it follows no update.
 #
 # `start`, at most once per FLEET_CLIENT_CHECK_SECS (3600; the stamp is in
 # ~/.cache/claude-fleet/client/), asks the hub two things, each with a short
@@ -61,43 +41,18 @@
 #
 #   GET /version  client_version / client_compat / min_client_compat:
 #     same version          → nothing
-#     behind, compat ok     → `stage` in the background; the running client
-#                             takes it in place once you are idle (`tick`), or
-#                             the NEXT start switches to it and the client's bar
-#                             says 已更新到 <commit> for an hour
+#     behind, compat ok     → `stage` in the background; the NEXT start switches
+#                             to it — the thin client's own between two
+#                             connections, which then execs the new version
 #     compat below the min  → stage + switch NOW, before opening: 已更新到 …;
 #                             a failure says why in one line and opens as is
 #   GET /v1/fleet/client-settings  the team's client defaults → written to
 #     ~/.config/claude-fleet/hub-defaults.conf, which every reader sources
-#     FIRST (fleet-shell.sh, fleet-lib.sh): hub-defaults < fleet.conf < … — so a
+#     FIRST (fleet-lib.sh): hub-defaults < fleet.conf < … — so a
 #     key this computer set always wins, and a line here only fills a gap. Each
 #     line is `[ -n "${KEY+x}" ] || KEY='value'`: an exported value wins too.
 #     Keys and values are re-checked here (the hub's whitelist is the rule);
 #     anything secret-shaped or unquotable is dropped. Never written by hand.
-#
-# IN USE (issue #1781): the client's keeper runs `tick` while its server lives.
-# Once a staged client is there and nobody has pressed a key for
-# FLEET_CLIENT_IDLE_SECS (30 — every client of the shell's server, tmux's
-# #{client_activity}), `apply`:
-#   1. migrations — each bin/client-migrations/*.sh the NEW client has and the
-#      old one does not, in name order, run as `bash <m> <from> <to>` with
-#      FLEET_SHELL_SESSION set. Idempotent; they touch only the client's own two
-#      tmux servers. Exit 0 = done · 3 = this change needs a restart (nothing is
-#      switched: the bar says 新版已就绪 · 下次打开生效, and the next `fleet` that
-#      finds the server with no client attached closes it and opens the new one)
-#      · anything else = failed (rolled back, below). A migration ships by
-#      adding its path to the fleetclient manifest.
-#   2. the link is switched, then the NEW client's `fleet-shell.sh reload`
-#      rewrites the mirror and both confs and sources them into the RUNNING
-#      servers (fleet-shell + its stage — same pids), redraws the list where its
-#      code moved (VIEW_STAMP, issue #2345), and respawns a proxy pane only when
-#      fleet-remote-view.sh itself changed (the right pane's session is kept).
-#   3. any failure: the link back, the confs as they were sourced again, and
-#      one line on why. The tmux server itself is never replaced.
-# What happened is ~/.cache/claude-fleet/shell/update.state —
-# {phase: applying|done|later|failed, from, to, commit, why, at} — which the
-# client's ⌂ badge (fleet-client-badge.sh) shows: ✓ 已更新到 … / the failure for
-# FLEET_CLIENT_UPDATE_SHOW seconds (60), 新版已就绪 · 下次打开生效 until then.
 #
 # STABLE (issue #1805, EPIC #1813 C3): the version every computer follows is
 # refs/tags/stable — the same one a 承载 machine's install-sync follows — so
@@ -108,26 +63,27 @@
 # #2773); a hub that predates it names its image's digest, as before. No hub
 # (不接 — .client-version with an empty hub=): GitHub's API names stable
 # (FLEET_STABLE_API) and `stage` runs stable's own installer from the raw host
-# AT that commit (FLEET_STABLE_RAW). Same staging, same idle switch, same
-# rollback either way. A home with no .client-version is still never touched.
+# AT that commit (FLEET_STABLE_RAW). Same staging, same switch, same
+# rollback either way. A home with no .client-version is never touched.
+# What happened last is ~/.cache/claude-fleet/shell/update.state ({phase, from,
+# to, commit, why, at} — the doctor's row reads it).
 #
 # FLEET_CLIENT_AUTO_UPDATE=0 (fleet.conf, or a team default) turns the version
 # half off; the settings half still runs.
 #
 # Exit (start): 0 open as is · 3 the files were switched — run `fleet` again.
-# Exit (tick / apply): 0 nothing to do · 4 applied · 3 later · 1 failed.
+# Exit (tick): 0.
 # Env: FLEET_CLIENT_ROOT (the home; default this script's ../, or the home a
 # <home>.versions/<v>/ belongs to) · FLEET_CLIENT_CHECK_SECS ·
 # FLEET_CLIENT_TIMEOUT (seconds per request, 3) · FLEET_CLIENT_STATE (the stamp
-# / log / note dir) · FLEET_CLIENT_IDLE_SECS · FLEET_CLIENT_UPDATE_STATE (the
-# state file).
+# / log / note dir) · FLEET_CLIENT_UPDATE_STATE (the state file).
 set -uo pipefail
 
 # The client protocol level this client speaks — fleetclient.Compat in the hub
 # (TestClientCompatPromise reads this line). Used when .client-version has none.
 FLEET_CLIENT_COMPAT=1
 
-SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # run through the shell's mirror: the real file
+SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # run through a link: the real file
 BIN="$(cd "$(dirname "$SELF")" && pwd -P)"
 ROOT="${FLEET_CLIENT_ROOT:-$(cd "$BIN/.." && pwd -P)}"
 # run from inside a version dir (bin/fleet resolves its own path physically):
@@ -152,8 +108,8 @@ note() { printf 'fleet: %s\n' "$*" >&2; }
 # mark_get <file> <key> — one `key=value` line of a .client-version
 mark_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
 
-# load_conf — the client's settings, in the shell's order (fleet-shell.sh):
-# the team's defaults, then shell.conf, then fleet.conf's [common] + [client]
+# load_conf — the client's settings, in the client's order: the team's
+# defaults, then shell.conf, then fleet.conf's [common] + [client]
 load_conf() {
   local _fsv
   # shellcheck source=/dev/null
@@ -277,13 +233,8 @@ next_key() {
   { read -r k < "$VERS/.next"; } 2>/dev/null
   [ -n "$k" ] && [ -f "$VERS/$k/.staged" ] && [ -f "$VERS/$k/bin/fleet" ] && printf '%s' "$k"
 }
-# shell_sess — the client's tmux session (= its server's socket label)
-shell_sess() {
-  local s="${FLEET_SHELL_SESSION:-fleet-shell}"
-  case "$s" in ''|*[!A-Za-z0-9._-]*) s=fleet-shell ;; esac
-  printf '%s' "$s"
-}
-# shell_cache — fleet-shell.sh's CACHE
+# shell_cache — the client's cache dir (the old client's name for it; its logs and
+# update.state stay there)
 shell_cache() { printf '%s' "${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"; }
 # ustate — where update.state lives
 ustate() { printf '%s' "${FLEET_CLIENT_UPDATE_STATE:-$(shell_cache)/update.state}"; }
@@ -464,163 +415,6 @@ switch() {
   printf '%s' "${c:-新版}"
 }
 
-# shell_live <sess> — the client's server is running
-shell_live() { tmux -L "$1" has-session -t "=$1" 2>/dev/null; }
-# idle_secs <sess> — seconds since any client of it last pressed a key (no
-# client attached: a large number)
-idle_secs() {
-  local last now
-  last=$(tmux -L "$1" list-clients -F '#{client_activity}' 2>/dev/null | sort -n | tail -n 1)
-  now=$(date +%s)
-  case "$last" in ''|*[!0-9]*) echo 999999 ;; *) echo $(( now - last )) ;; esac
-}
-
-# announce <sess> — every client attached to the shell is told, for 10 s, which
-# client it now runs (issue #1829: an update that left no trace read as "it
-# just hung"); the ⌂ badge keeps ✓ 已更新到 … for FLEET_CLIENT_UPDATE_SHOW, the
-# doctor's `client` row the last one for good.
-announce() {
-  local s="$1" v c m
-  v=$(mark_get "$ROOT/.client-version" version); c=$(mark_get "$ROOT/.client-version" commit)
-  m="fleet 客户端已更新到 ${v:-新版}${c:+（入口 ${c}）}"
-  [ -f "$ROOT/.client-version" ] || m="fleet 客户端已重新载入新文件"   # #2145
-  tmux -L "$s" list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r cl; do
-    tmux -L "$s" display-message -c "$cl" -d 10000 "$m" 2>/dev/null
-  done
-  return 0
-}
-# own_shell — the shell's mirror (fleet-shell.sh's CACHE/bin) runs from THIS
-# home: its links point into <home> (following its link, #2692) or into one of
-# <home>.versions/ (pinned by an older start). A client of another home — an
-# installed client beside a checkout — is not this home's to reload.
-own_shell() {
-  local t d vp
-  t=$(readlink "$(shell_cache)/bin/fleet-shell.sh" 2>/dev/null) || return 1
-  d=$(cd "$(dirname "$t")/.." 2>/dev/null && pwd -P) || return 1
-  [ "$d" = "$(cd "$ROOT" 2>/dev/null && pwd -P)" ] && return 0
-  vp=$(cd "$VERS" 2>/dev/null && pwd -P) || return 1
-  case "$d" in "$vp"/*) return 0 ;; esac
-  return 1
-}
-# restart_needed — this release's client cannot be loaded into a running one
-# (issue #2737): release.json says `"client_reload": "restart"` (a tmux.conf that
-# needs a newer tmux, a protocol the old servers do not speak). Set in the
-# release that needs it and dropped in the next one; absent = hot (the default).
-restart_needed() {
-  python3 -c 'import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(1)
-sys.exit(0 if isinstance(d, dict) and d.get("client_reload") == "restart" else 1)' "$ROOT/release.json" 2>/dev/null
-}
-# reload_lock / reload_unlock — one `follow` of the running client at a time,
-# and the keeper's drift tick stands aside while one runs (follow_running):
-# install-sync's switch and the tick can see the same files within a second.
-# The holder's pid is in the lock: a holder that is gone, or a lock older than
-# 120 s, is taken over.
-reload_lock() {
-  local l="$STATE/reload.lock" t p=''
-  mkdir -p "$STATE" 2>/dev/null
-  if ! mkdir "$l" 2>/dev/null; then
-    { read -r p < "$l/pid"; } 2>/dev/null
-    t=$(stat -f %m "$l" 2>/dev/null || stat -c %Y "$l" 2>/dev/null)
-    case "$t" in ''|*[!0-9]*) t=0 ;; esac
-    case "$p" in
-      ''|*[!0-9]*) [ $(( $(date +%s) - t )) -ge 120 ] || return 1 ;;
-      *) kill -0 "$p" 2>/dev/null && [ $(( $(date +%s) - t )) -lt 120 ] && return 1 ;;
-    esac
-    rm -rf "$l"; mkdir "$l" 2>/dev/null || return 1
-  fi
-  printf '%s\n' $$ > "$l/pid"
-  return 0
-}
-reload_unlock() { rm -rf "$STATE/reload.lock"; }
-follow_running() {
-  local p=''
-  { read -r p < "$STATE/reload.lock/pid"; } 2>/dev/null
-  case "$p" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$p" 2>/dev/null
-}
-# tell <sess> <text> — every client attached to the shell, for 10 s
-tell() {
-  tmux -L "$1" list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r cl; do
-    tmux -L "$1" display-message -c "$cl" -d 10000 "$2" 2>/dev/null
-  done
-  return 0
-}
-# running_ver <sess> — the client version the RUNNING servers were loaded from:
-# fleet-shell.sh stamps it on its server (@client_version) at start and on every
-# reload (issue #1829). Empty: a server started before the stamp existed.
-running_ver() { tmux -L "$1" show-options -gqv @client_version 2>/dev/null; }
-# client_digest <home> — the client by CONTENT (issue #2145): what a server
-# loads at start / reload and keeps until the next — the two conf templates, the
-# script that writes them and runs the loops, and (issue #2737) the code the
-# long-lived list and loops load into themselves: fleet-sidebar.py's VIEW_CODE,
-# the actions loop and its lease. The ONE list: fleet-shell.sh stamps it as
-# @client_digest through `fleet-client-update.sh digest`. Empty when the home
-# has no client conf. A file missing on one side reads as nothing — the same on
-# both sides of a compare.
-CLIENT_CODE="bin/fleet-shell.sh bin/fleet-sidebar.sh bin/fleet-sidebar.py bin/fleet_reap_policy.py
-bin/fleet-quickopen.py bin/fleet-compose.py bin/fleet-ui-lang.sh bin/fleet-client-actions.py
-bin/fleet-client-lease.py"
-client_digest() {
-  local f
-  [ -f "$1/conf/tmux-shell.conf" ] || return 0
-  { cat "$1/conf/tmux-shell.conf" "$1/conf/tmux-shell-stage.conf"
-    for f in $CLIENT_CODE; do [ -f "$1/$f" ] && cat "$1/$f"; done
-  } 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'
-}
-# running_digest <sess> — the digest the RUNNING server was loaded from
-running_digest() { tmux -L "$1" show-options -gqv @client_digest 2>/dev/null; }
-# disk_ver / run_ver <sess> — what drift compares: the .client-version's version
-# with @client_version where the mark is (byte for byte #1829), the files'
-# content with @client_digest where it is not (#2145)
-disk_ver() {
-  if [ -f "$ROOT/.client-version" ]; then mark_get "$ROOT/.client-version" version
-  else client_digest "$ROOT"; fi
-}
-run_ver() {
-  if [ -f "$ROOT/.client-version" ]; then running_ver "$1"; else running_digest "$1"; fi
-}
-# drifted <sess> — the client is running, and its files are not the ones it
-# loaded: swapped under it by a client that could not reload it (a pre-#1781
-# `start` moved the whole home aside while the shell ran), or written in place
-# by the install line. Its proxies then run the old code beside new code that
-# opens connections of its own — the second connection of #1775.
-drifted() {
-  local v
-  shell_live "$1" || return 1                         # nothing running: nothing read
-  v=$(disk_ver)
-  [ -n "$v" ] && [ "$(run_ver "$1")" != "$v" ]
-}
-# reconcile <sess> [--in-keeper] — the files on disk into the running servers,
-# with EVERY proxy pane respawned and every loop restarted (`reload --all`):
-# nothing the old code opened is kept beside what the new code opens. The
-# keeper's own tick passes --in-keeper (it restarts itself, exit 4). Exit 4
-# reloaded · 1 failed (said in update.state; not retried for the same pair).
-reconcile() {
-  local s="$1" from to why phase='done'
-  from=$(vkey "$(run_ver "$s")"); [ -n "$from" ] || from='?'
-  to=$(vkey "$(disk_ver)")
-  [ -f "$ROOT/.client-version" ] || phase=reloaded     # no version to name (#2145)
-  case "$(state_get phase)" in
-    failed|pending) [ "$(state_get from)" = "$from" ] && [ "$(state_get to)" = "$to" ] && return 1 ;;
-  esac
-  follow_running && return 0                           # install-sync's follow has it (#2737)
-  ulog "reconcile $from → $to ($s): the files moved under the running client"
-  if ! FLEET_SHELL_SESSION="$s" bash "$ROOT/bin/fleet-shell.sh" reload "$s" --all ${2:+"$2"} >>"$STATE/update.log" 2>&1; then
-    why="新版文件没能载入正在运行的客户端（重开 fleet 可恢复）"
-    ulog "$why"
-    set_state failed "$from" "$to" "$why"
-    return 1
-  fi
-  set_state "$phase" "$from" "$to"
-  ulog "reconciled $to"
-  announce "$s"
-  return 4
-}
-
 # check — the hourly ask: the team's defaults, then the version. Exit 0
 # nothing to do · 10 behind, compatible · 11 below the hub's minimum (HV,
 # HCOMMIT, HMIN, LC set for the caller).
@@ -677,170 +471,28 @@ stage_bg() {
   ( nohup bash "$SELF" stage "${HV:-}" </dev/null >"$STATE/stage.log" 2>&1 & )
 }
 
-# unversioned <sess> [--in-keeper] — a home with no .client-version (issue
-# #2145): only the drift check, by content — the files on disk into the running
-# client. Exit 4 reloaded · 0 nothing to do · 1 failed.
-unversioned() {
-  drifted "$1" || return 0                            # in step: nothing written
-  mkdir -p "$STATE" 2>/dev/null || return 0
-  if restart_needed; then                             # (#2737) not loadable in place
-    later_restart "$1"
-    return 3
-  fi
-  reconcile "$@"
-}
-# later_restart <sess> — a release that says `client_reload: restart` under a
-# running client: nothing reloaded; update.state `later` (the badge: 新版已就绪 ·
-# 下次打开生效), each client told once.
-later_restart() {
-  local fr to
-  fr=$(vkey "$(run_ver "$1")"); [ -n "$fr" ] || fr='?'
-  to=$(vkey "$(disk_ver)")
-  [ "$(state_get phase)" = later ] && [ "$(state_get to)" = "$to" ] && return 0
-  set_state later "$fr" "$to" "release.json: client_reload restart"
-  ulog "later $fr → $to ($1): this release needs the client reopened (client_reload: restart)"
-  tell "$1" "fleet 新版要重开客户端才生效：fleet quit 后再 fleet"
-}
-
-# follow [<sess>] [--from <old version dir>] — the install under the running
-# client was just switched (fleet-install-sync.sh, issue #2737): the new files
-# into the running servers NOW, the same servers, windows and views. The new
-# client's own `reload --from <old>`: the mirror onto the link, both confs
-# written and sourced, the list drawn again where its code moved, the loops and
-# the keeper restarted where their code moved, a proxy pane respawned only when
-# fleet-remote-view.sh itself changed — a stage window or the session in view is
-# never touched. A failure goes BACK: the old version's own `reload` pins the
-# mirror onto its version dir and sources its confs — nothing half-new keeps
-# running — and update.state `pending` puts 「待换新（原因）」 on the bar until
-# the next switch or start. `client_reload: restart` in the new release.json:
-# nothing reloaded, `later`. A home with a .client-version follows its own
-# update (`tick` / `apply`); a client of another home is left alone.
-# Exit 4 reloaded · 0 nothing to do · 3 later · 1 failed (back on the old).
-cmd_follow() {
-  local s='' from='' fr to why log
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --from) from="${2:-}"; shift 2 2>/dev/null || shift $# ;;
-      *) s=$1; shift ;;
-    esac
-  done
-  load_conf
-  [ -n "$s" ] || s=$(shell_sess)
-  [ -f "$ROOT/.client-version" ] && return 0
-  shell_live "$s" || return 0
-  own_shell || return 0
-  mkdir -p "$STATE" 2>/dev/null || return 0
-  log="$STATE/update.log"
-  if restart_needed; then
-    later_restart "$s"
-    return 3
-  fi
-  fr=$(vkey "$(run_ver "$s")"); [ -n "$fr" ] || fr='?'
-  to=$(vkey "$(disk_ver)")
-  reload_lock || { ulog "follow ($s): a reload is already running"; return 0; }
-  ulog "follow $fr → $to ($s): the install was switched${from:+ from $from}"
-  if FLEET_SHELL_SESSION="$s" bash "$ROOT/bin/fleet-shell.sh" reload "$s" ${from:+--from "$from"} >>"$log" 2>&1; then
-    reload_unlock
-    set_state reloaded "$fr" "$to"
-    ulog "followed $to"
-    tell "$s" "fleet 客户端已原地换新（不用重开）"
-    return 4
-  fi
-  # the bar's words (「待换新（…）」): short
-  if [ -n "$from" ] && [ -f "$from/bin/fleet-shell.sh" ] \
-     && FLEET_SHELL_SESSION="$s" bash "$from/bin/fleet-shell.sh" reload "$s" >>"$log" 2>&1; then
-    why="载入失败，已退回旧版"
-  else
-    why="载入失败，退回也失败：重开 fleet"
-  fi
-  reload_unlock
-  # the stamps the servers carry now (the old reload re-stamped them): the
-  # reconcile guard reads this pair, so a tick does not retry the same switch
-  fr=$(vkey "$(run_ver "$s")"); [ -n "$fr" ] || fr='?'
-  set_state pending "$fr" "$to" "$why"
-  ulog "follow failed: $why"
-  tell "$s" "fleet 客户端待换新（${why}）"
-  return 1
-}
-
-# running [--root <home>] — what the doctor's `fleet` row asks of a checkout
-# (issue #2737): a shell of this home is running, and the code it loaded is not
-# the install's (its @client_digest ≠ the files'). Exit 1 + one line why;
-# 0 = in step, or no client of this home running.
-cmd_running() {
-  local s why
-  while [ $# -gt 0 ]; do
-    case "$1" in --root) ROOT="$2"; VERS="$2.versions"; shift 2 ;; *) shift ;; esac
-  done
-  load_conf
-  s=$(shell_sess)
-  shell_live "$s" && own_shell || return 0
-  [ "$(running_digest "$s")" = "$(client_digest "$ROOT")" ] && return 0
-  why=''
-  [ "$(state_get phase)" = pending ] && why="：$(state_get why)"
-  [ "$(state_get phase)" = later ] && why="：这一版要重开客户端（fleet quit 后再 fleet）"
-  printf '客户端进程跑的不是安装的版本（%s）%s\n' "$s" "${why:-：空闲时自动换新，现在就要 fleet-shell.sh reload $s}"
-  return 1
-}
-
 cmd_start() {
-  local mark="$ROOT/.client-version" new sess rc
-  if [ ! -f "$mark" ]; then                           # not an installed client: no update,
-    load_conf                                         # only what runs ≡ what is on disk
-    sess=$(shell_sess)
-    unversioned "$sess"; rc=$?
-    [ "$rc" -eq 4 ] && note "客户端已重新载入新文件（正在运行的连接已换成磁盘上的）"
-    # a release that cannot be loaded in place (#2737): a server nobody is
-    # attached to is closed, and this start opens the new client
-    if [ "$rc" -eq 3 ] && [ -z "$(tmux -L "$sess" list-clients -F x 2>/dev/null)" ]; then
-      tmux -L "$sess" kill-server 2>/dev/null
-      tmux -L "$sess-stage" kill-server 2>/dev/null
-      set_state reloaded "$(state_get from)" "$(state_get to)"
-      note "客户端按新版重开"
-    fi
-    return 0
-  fi
+  local mark="$ROOT/.client-version" new rc
+  [ -f "$mark" ] || return 0                          # not an installed client: no update
   load_conf
   HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
-  sess=$(shell_sess)
-  # 0. files that moved under the running client (issue #1829): into it now,
-  #    before this start attaches to it; a home without version dirs gets them
-  #    while nothing runs from it
-  if drifted "$sess"; then
-    reconcile "$sess"
-    [ $? -eq 4 ] && note "客户端已更新到 $(mark_get "$ROOT/.client-version" commit)（正在运行的连接已换成新版的）"
-  fi
-  shell_live "$sess" || adopt
-  # 1. a client staged earlier: switch to it now — unless the client is
-  #    running, whose keeper takes it in place (issue #1781). One a migration
-  #    said needs a restart (later): a server nobody is attached to is closed,
-  #    and this start opens the new client.
+  adopt
+  # 1. a client staged earlier: switch to it now (the version dirs keep the one
+  #    in use, so a client still running from it is not written under)
   legacy_next
   if [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] && [ -n "$(next_key)" ]; then
-    if shell_live "$sess" && [ "$(state_get phase)" = later ] \
-       && [ -z "$(tmux -L "$sess" list-clients -F x 2>/dev/null)" ]; then
-      tmux -L "$sess" kill-server 2>/dev/null
-      tmux -L "$sess-stage" kill-server 2>/dev/null
+    if new=$(switch); then
+      note "已更新到 ${new}（上次启动时在后台取好，这次生效）"
+      return 3
     fi
-    if ! shell_live "$sess"; then
-      if new=$(switch); then
-        note "已更新到 ${new}（上次启动时在后台取好，这次生效）"
-        return 3
-      fi
-      note "切换到新版客户端失败，照常打开（旧版在 ${ROOT}）"
-    fi
+    note "切换到新版客户端失败，照常打开（旧版在 ${ROOT}）"
   fi
   # 2. at most once per FLEET_CLIENT_CHECK_SECS
   check; rc=$?
   case "$rc" in
     11)
       note "这个客户端（协议 ${LC}）入口已不再支持（最低 ${HMIN}），先更新…"
-      if shell_live "$sess"; then
-        stage_bg
-        note "客户端正在运行：新版取好后，等你空闲时原地换上"
-        return 0
-      fi
       if stage && new=$(switch); then
         note "已更新到 $new"
         return 3
@@ -849,152 +501,40 @@ cmd_start() {
       return 0 ;;
     10)
       local from='入口'; [ -n "$HUB" ] || from='stable'
-      if shell_live "$sess"; then
-        note "${from}有新版（${HCOMMIT:-$HV}），后台取，等你空闲时原地换上"
-      else
-        note "${from}有新版（${HCOMMIT:-$HV}），后台取，下次启动生效"
-      fi
+      note "${from}有新版（${HCOMMIT:-$HV}），后台取，下次启动生效"
       stage_bg
       return 0 ;;
   esac
   return 0
 }
 
-# resource <sess> <saved-dir> — the confs as they were, back in place and read
-# again by both servers; the list redrawn (its code may have moved back)
-resource() {
-  local s="$1" d="$2" c
-  c=$(shell_cache)
-  [ -f "$d/tmux.conf" ] && cp -p "$d/tmux.conf" "$c/tmux.conf"
-  [ -f "$d/tmux-stage.conf" ] && cp -p "$d/tmux-stage.conf" "$c/tmux-stage.conf"
-  [ -f "$c/tmux.conf" ] && tmux -L "$s" source-file "$c/tmux.conf" >/dev/null 2>&1
-  [ -f "$c/tmux-stage.conf" ] && tmux -L "$s-stage" has-session 2>/dev/null \
-    && tmux -L "$s-stage" source-file "$c/tmux-stage.conf" >/dev/null 2>&1
-  tmux -L "$s" run-shell -b -t "=$s:" "bash '$c/bin/fleet-sidebar.sh' sync '#{session_id}' >/dev/null 2>&1 || :" 2>/dev/null
+# tick — `fleet update`'s beat (fleet-update.sh): the hourly check, and what is
+# newer staged in the background; the next start switches to it
+cmd_tick() {
+  [ -f "$ROOT/.client-version" ] || return 0
+  load_conf
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
+  adopt
+  check 2>/dev/null
+  case "$?" in 10|11) [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] && stage_bg ;; esac
   return 0
 }
 
-# apply <sess> — the staged client into the RUNNING one (IN USE above).
-# Exit 0 nothing staged · 4 applied · 3 later · 1 failed (rolled back).
-apply() {
-  local s="$1" to from fromv tov old_root old saved m b rc why c
-  legacy_next
-  to=$(next_key)
-  [ -n "$to" ] || return 0
-  old=$(cur_key)
-  if [ "$to" = "$old" ]; then rm -f "$VERS/.next"; return 0; fi
-  old_root=$(cd "$ROOT" && pwd -P) || return 1
-  fromv=$(mark_get "$ROOT/.client-version" version); from=$(vkey "$fromv")
-  tov=$(mark_get "$VERS/$to/.client-version" version)
-  set_state applying "$from" "$to"
-  ulog "apply $from → $to ($s)"
-  # the confs as the servers read them now: what a rollback sources again
-  c=$(shell_cache); saved="$STATE/conf.saved"
-  rm -rf "$saved"; mkdir -p "$saved"
-  for m in "$c/tmux.conf" "$c/tmux-stage.conf"; do [ -f "$m" ] && cp -p "$m" "$saved/"; done
-  # 1. the migrations the new client brings (the old one had none of them)
-  for m in "$VERS/$to/bin/client-migrations/"*.sh; do
-    [ -f "$m" ] || continue
-    b=${m##*/}
-    [ -f "$old_root/bin/client-migrations/$b" ] && continue
-    FLEET_SHELL_SESSION="$s" bash "$m" "$fromv" "$tov" >>"$STATE/update.log" 2>&1
-    rc=$?
-    case "$rc" in
-      0) ulog "migration $b: done" ;;
-      3) ulog "migration $b: needs a restart"
-         set_state later "$from" "$to" "$b"
-         return 3 ;;
-      *) why="迁移 $b 失败（exit ${rc}），已退回旧版"
-         ulog "$why"
-         resource "$s" "$saved"
-         set_state failed "$from" "$to" "$why"
-         return 1 ;;
-    esac
-  done
-  # 2. the link, then the NEW client reloads itself into the running servers
-  ADOPTED=''
-  if ! point "$to"; then
-    set_state failed "$from" "$to" "切不过去（${ROOT}）"
-    return 1
-  fi
-  # a plain-dir home was just adopted: the old client now lives in its version dir
-  [ -n "$ADOPTED" ] && old_root=$(cd "$VERS/$ADOPTED" && pwd -P)
-  [ -n "$old" ] || old=$ADOPTED
-  if ! FLEET_SHELL_SESSION="$s" bash "$ROOT/bin/fleet-shell.sh" reload "$s" --from "$old_root" >>"$STATE/update.log" 2>&1; then
-    why="新版载入失败，已退回旧版"
-    ulog "$why"
-    point "$old" || ulog "rollback: the link could not be put back ($old)"
-    resource "$s" "$saved"
-    set_state failed "$from" "$to" "$why"
-    return 1
-  fi
-  printf '%s\n' "$old" > "$VERS/.prev"
-  rm -f "$VERS/.next"
-  prune
-  set_state "done" "$from" "$to"
-  ulog "applied $to"
-  announce "$s"
-  return 4
-}
-
-# tick <sess> — the keeper's beat: the hourly check (stage what is newer, in
-# the background), then apply a staged client once nobody is typing
-cmd_tick() {
-  local s="$1" k idle rc
-  if [ ! -f "$ROOT/.client-version" ]; then           # no update here (#2145): the drift, once idle
-    load_conf
-    drifted "$s" || return 0
-    [ "$(idle_secs "$s")" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] || return 0
-    unversioned "$s" --in-keeper
-    return $?
-  fi
-  load_conf
-  mkdir -p "$STATE" 2>/dev/null || return 0
-  # files that moved under this running client (issue #1829) — hub or no hub,
-  # auto-update or not: what runs must be what is on disk. Once idle.
-  if drifted "$s"; then
-    [ "$(idle_secs "$s")" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] || return 0
-    reconcile "$s" --in-keeper
-    return $?
-  fi
-  [ "$(idle_secs "$s")" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] && adopt
-  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
-  check 2>/dev/null; rc=$?
-  [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] || return 0
-  case "$rc" in 10|11) stage_bg ;; esac
-  legacy_next
-  k=$(next_key)
-  [ -n "$k" ] || return 0
-  # a migration said restart, or this version failed once: wait — never retry
-  # it every tick; a newer staged version is tried afresh
-  case "$(state_get phase)" in
-    later)  [ "$(state_get to)" = "$k" ] && return 3 ;;
-    failed) [ "$(state_get to)" = "$k" ] && return 1 ;;
-  esac
-  idle=$(idle_secs "$s")
-  [ "$idle" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] || return 0
-  apply "$s"
-}
-
 cmd_doctor() {
-  local mark lv lc commit hv hmin tv maj min cert lvl=PASS parts='' f up uph uto uat uwhy
+  local mark lv lc commit hv hmin cert lvl=PASS parts='' f up uph uto uat uwhy
   while [ $# -gt 0 ]; do
     case "$1" in --root) ROOT="$2"; shift 2 ;; *) shift ;; esac
   done
   mark="$ROOT/.client-version"
   if [ ! -f "$mark" ]; then
     # a client is here, it just cannot say which (issue #2145): it follows no
-    # update, and what runs may not be what is on disk — say both. A checkout
-    # (承载) is install-sync's, not the line's: as before.
-    if [ -f "$ROOT/conf/tmux-shell.conf" ] && [ ! -e "$ROOT/.git" ]; then
+    # update. A checkout (承载) is install-sync's, not the line's: as before.
+    if [ -f "$ROOT/bin/fleet-thin.py" ] && [ ! -e "$ROOT/.git" ]; then
       load_conf; HUB=$(hub_url)
       f=" stable "; [ -n "$HUB" ] && f=入口
-      parts="没有 .client-version（${ROOT}）：不跟${f}自动更新 · 修法：重跑安装行 curl -fsSL ${HUB:-<入口>}/install | sh"
-      f=$(shell_sess)
-      if shell_live "$f" && [ "$(running_digest "$f")" != "$(client_digest "$ROOT")" ]; then
-        parts="$parts · 正在运行的客户端不是磁盘上的文件（空闲时自动重新载入；现在就要：fleet-shell.sh reload $f --all）"
-      fi
-      printf 'WARN\t%s\n' "$parts"
+      printf 'WARN\t没有 .client-version（%s）：不跟%s自动更新 · 修法：重跑安装行 curl -fsSL %s/install | sh\n' \
+        "$ROOT" "$f" "${HUB:-<入口>}"
       return 0
     fi
     printf 'INFO\t这台电脑没有安装行装的客户端（%s）\n' "$ROOT"
@@ -1011,7 +551,7 @@ cmd_doctor() {
     elif [ "$hv" = "$lv" ]; then
       parts="$parts · 入口 不接 · 跟 stable 同版"
     else
-      parts="$parts · 入口 不接 · stable 有新版 $(short "$hv")（取好后空闲时原地换上）"; [ "$lvl" = PASS ] && lvl=INFO
+      parts="$parts · 入口 不接 · stable 有新版 $(short "$hv")（取好后下次启动生效）"; [ "$lvl" = PASS ] && lvl=INFO
     fi
   else
     f=$(mktemp "${TMPDIR:-/tmp}/fleet-client-doctor.XXXXXX")
@@ -1028,24 +568,12 @@ EOF
       elif [ "$lc" -lt "$hmin" ]; then
         parts="$parts · 入口 $HUB 要求更新（$(short "$hv")）"; lvl=WARN
       else
-        parts="$parts · 入口 $HUB 有新版 $(short "$hv")（取好后空闲时原地换上）"; [ "$lvl" = PASS ] && lvl=INFO
+        parts="$parts · 入口 $HUB 有新版 $(short "$hv")（取好后下次启动生效）"; [ "$lvl" = PASS ] && lvl=INFO
       fi
     else
       parts="$parts · 入口 $HUB 不可达"; lvl=WARN
     fi
     rm -f "$f"
-  fi
-  if command -v tmux >/dev/null 2>&1; then
-    tv=$(tmux -V 2>/dev/null); tv=${tv#tmux }; maj=${tv%%.*}; min=${tv#*.}; min=${min%%[!0-9]*}
-    case $maj in ''|*[!0-9]*) maj=0 ;; esac
-    case $min in ''|*[!0-9]*) min=0 ;; esac
-    if [ "$maj" -lt 3 ] || { [ "$maj" -eq 3 ] && [ "$min" -lt 2 ]; }; then
-      parts="$parts · tmux ${tv}（要 ≥ 3.2）"; lvl=WARN
-    else
-      parts="$parts · tmux $tv"
-    fi
-  else
-    parts="$parts · tmux 没有"; lvl=WARN
   fi
   # the last update (issue #1829): when, to what — or why it did not
   f=$(ustate)
@@ -1062,10 +590,7 @@ $up
 EOF
     case "${uph:-}" in
       done)   parts="$parts · 上次更新 ${uat} → ${uto}" ;;
-      reloaded) parts="$parts · 上次重新载入新文件 ${uat}" ;;
       failed) parts="$parts · 上次更新没成功（${uat}）：${uwhy}"; lvl=WARN ;;
-      later)  parts="$parts · 新版 ${uto} 下次打开生效" ;;
-      pending) parts="$parts · 待换新（${uwhy}）"; lvl=WARN ;;
     esac
   fi
   cert=''
@@ -1082,11 +607,8 @@ EOF
 case "${1:-}" in
   start)  shift; HUB=''; cmd_start "$@"; exit $? ;;
   stage)  shift; load_conf; HUB=$(hub_url); stage "${1:-}"; exit $? ;;
-  tick)   shift; HUB=''; cmd_tick "${1:-fleet-shell}"; exit $? ;;
-  apply)  shift; load_conf; HUB=$(hub_url); mkdir -p "$STATE" 2>/dev/null; apply "${1:-$(shell_sess)}"; exit $? ;;
+  tick)   shift; HUB=''; cmd_tick; exit $? ;;
   doctor) shift; HUB=''; cmd_doctor "$@"; exit 0 ;;
-  digest) shift; [ "${1:-}" = --root ] && ROOT="${2:-$ROOT}"; client_digest "$ROOT"; exit 0 ;;
-  follow) shift; HUB=''; cmd_follow "$@"; exit $? ;;
-  running) shift; HUB=''; cmd_running "$@"; exit $? ;;
-  *) sed -n '4,18p' "$SELF" | sed 's/^# //' >&2; exit 2 ;;
+  follow|running) exit 0 ;;   # compat-1v: 下一批删 (the old client's reload, #3008)
+  *) sed -n '4,17p' "$SELF" | sed 's/^# //' >&2; exit 2 ;;
 esac

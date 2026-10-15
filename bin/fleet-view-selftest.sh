@@ -28,8 +28,6 @@
 #      peer-wait; a second go reuses it; another login here gets its own window
 #   E  ⌘↓ / ⌘↑ walk the list's order, ⌘[ / ⌘] the history; a session that is
 #      not a 看台 keeps root (its key-table untouched)
-#   F  the old client's quickopen is untouched by --view (do <verb> alone still
-#      hands the verb to the list)
 #   I  issue #3179 (EPIC #3178 C1): the list grouped by what you should do — 置顶 ·
 #      等你 · 在干活 · 刚落地 · 其他 · 已结束; one one-cell glyph a row (! x » ✓ ∙ ?,
 #      ASCII under FLEET_GLYPHS=ascii, no colour under NO_COLOR), the state word
@@ -692,7 +690,4 @@ grep -qF '[ "${FLEET_HISTORY_EPOCH:-0}" = 1 ] && lbuf+="${US}${ep:-}"' "$BIN/fle
 grep -qF 'FLEET_HISTORY_EPOCH="1"' "$BIN/fleet_view.py" || fail "K: the 已回收 read does not ask for the close time"
 pass "K  已结束 · 还开着 (回收这 N 个 → fleet-view-reap-all.sh) above 已关闭 (last 48 h, 更早的 N 个 → /fleet-history), folded (#3731)"
 
-# --- F: the old client's road ----------------------------------------------------------------
-grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"
-pass "F  the old client's quickopen keeps its own road"
 echo "fleet-view-selftest: all passed"

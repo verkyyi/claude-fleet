@@ -57,13 +57,11 @@
 #       ($FLEET_POPUP=1) (--border=none) — the popup's border is the frame, and
 #       <label> is left in $FZF_FRAME_LABEL for the caller's header; in a pane of
 #       its own the fzf keeps its rounded border with <label> on it.
-#   fleet_menu_style              → FMENU_STYLE=(-b rounded -S … -H …): the same
-#       frame for a `display-menu` (the sidebar's row menu).
 #
 # What fzf supports is probed once and remembered in $FLEET_FZF_FOOTER (1/0),
 # which a popup also inherits; the probe is cached on disk against the fzf
 # binary's own mtime (`-nt`, no fork), so an open costs no extra fzf run.
-# shellcheck disable=SC2034  # FPOP_* FZF_HINT FZF_CLICK FZF_FRAME* FMENU_STYLE are results
+# shellcheck disable=SC2034  # FPOP_* FZF_HINT FZF_CLICK FZF_FRAME* are results
 case "${BASH_SOURCE[0]}" in */*) _FPOP_BIN="${BASH_SOURCE[0]%/*}" ;; *) _FPOP_BIN=. ;; esac
 . "$_FPOP_BIN/fleet-palette.sh"
 
@@ -179,12 +177,6 @@ fleet_fzf_frame() {
     [ -z "${1:-}" ] || FZF_FRAME+=(--border-label="$1" --border-label-pos=3)
   fi
   return 0
-}
-
-fleet_menu_style() {
-  FMENU_STYLE=(-b rounded)
-  fleet_palette_load || return 0
-  FMENU_STYLE+=(-S "fg=$PAL_DIM" -s "fg=$PAL_FG" -H "bg=$PAL_SEL,fg=$PAL_FG")
 }
 
 fleet_popup_draw() {

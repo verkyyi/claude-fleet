@@ -54,7 +54,7 @@
 # restamps it even when the hub is unreachable (empty rows still refresh the
 # stamp). Once it is older than FLEET_ACCOUNT_QUOTA_STALE (default 600s = 10×
 # the TTL) while the pool + hub are configured, the watch is BLIND: the status
-# bar shows `✖ quota · stale · 47m` (bin/tmux-status.sh via usage-lib.sh),
+# bar shows `✖ quota · stale · 47m` (bin/fleet-topbar.py via usage-lib.sh),
 # fleet-doctor FAILs, and the next tick that does run notifies once that it was
 # blind for that long. `--status` prints the same verdict for scripts.
 #

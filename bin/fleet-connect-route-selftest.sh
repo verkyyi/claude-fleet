@@ -550,7 +550,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   r_before=$(hits routes_hits)
   out=$("$BIN/fleet-connect.py" --enter --print -v 2>"$WORK/err9"); rc=$?
   if [ "$rc" = 0 ] && [ "$(hits renew_hits)" = 1 ] && [ "$(hits home_hits)" = 1 ] && [ "$(hits routes_hits)" = "$r_before" ] \
-     && grep -q '证书已续期' "$WORK/err9" && grep -q '入口选了 mac-a（上次用的机器在线）' "$WORK/err9" \
+     && grep -q '证书已续期' "$WORK/err9" && grep -q '连到 mac-a（上次用的机器在线）' "$WORK/err9" \
      && [[ "$out" == *"HostKeyAlias=fleet-mac-a"* ]] && [ "$(cat "$WORK/home_last")" = mac-a ] \
      && ssh-keygen -L -f "$HOME/.ssh/fleet-cert-cert.pub" | grep -q 'Serial: 7'; then
     ok "fleet: renewed the 1h certificate (serial 7), entered the hub's pick mac-a, no second route fetch, hint last=mac-a"

@@ -1,14 +1,13 @@
 #!/bin/bash
 # fleet-gh-limit-visible-selftest.sh — a GitHub rate limit is SEEN where the
-# operator looks (issue #989, EPIC #1262 C2): the status bar says
-# `⚠ GitHub 受限至 HH:MM`, fleet-doctor's `github` row WARNs, and both only READ
-# the shared gh-limit marker (bin/fleet-gh-lib.sh) — they never probe GitHub.
+# operator looks (issue #989, EPIC #1262 C2): fleet-doctor's `github` row WARNs,
+# and only READS the shared gh-limit marker (bin/fleet-gh-lib.sh) — it never
+# probes GitHub. (The old client's status bar said it too; it went with that
+# client, issue #3008.)
 # (The preflight half — a limit is a WARN, never BLOCKED — is case M of
 # fleet-epic-preflight-selftest.sh.)
 #
 #   R. fleet_gh_limit_rows / _until: live marker, expired marker, injected limit
-#   S. tmux-status.sh: no segment when clear — the render is otherwise identical;
-#      the segment with HH:MM for a real marker, bare for FLEET_GH_FAKE_LIMIT
 #   D. fleet-doctor.sh `github`: PASS clear, WARN limited, last-hour log tally
 #
 # No network and no live marker: gh is a shim that fails the test if called,
@@ -49,37 +48,6 @@ rm -f "$FLEET_STATE_DIR"/gh-limit.*
 [ -e "$FLEET_STATE_DIR/gh-limit.graphql" ] && fail "R4 an injected limit never writes the marker"
 ok "R the reader: live rows, expired dropped, until = last reset, injection = fake"
 
-# ============================ S: status bar ==================================
-# The alerts file is planted empty (fresh for FLEET_ALERTS_TTL=3600): the bar
-# draws only what wants a hand (issue #1616), so with no alert the clear render
-# is EMPTY and the limited one is the segment alone.
-TMPD="$WORK/tmp"; mkdir -p "$TMPD/.claude-dash/global"
-: > "$TMPD/.claude-dash/global/alerts.ndjson"; printf '%s\n' "$now" > "$TMPD/.claude-dash/global/alerts.ndjson.ts"
-render() {
-  TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
-    FLEET_STATUS_CACHE_SECS=3600 FLEET_ALERTS_TTL=3600 bash "$BIN/tmux-status.sh" "$@" 2>&1
-}
-clear_out=$(render) || fail "S tmux-status.sh exited non-zero" "$clear_out"
-[ -z "$clear_out" ] || fail "S1 nothing limited (and no alert) → an empty bar" "$clear_out"
-ok "S1 nothing limited → no GitHub segment"
-
-reset=$((now + 1200)); mark graphql "$reset"; hhmm=$(fleet_gh_hhmm "$reset")
-lim_out=$(render)
-seg="#[fg=#e0af68]⚠ GitHub 受限至 $hhmm"
-case "$lim_out" in *"$seg"*) ;; *) fail "S2 a live marker shows ⚠ GitHub 受限至 $hhmm" "$lim_out" ;; esac
-# Everything else on the bar is untouched: the segment is the whole bar.
-[ "$lim_out" = " $seg " ] || fail "S3 the segment is the ONLY difference from the clear render" "clear: $clear_out
-limited: $lim_out"
-narrow=$(render cw=54)
-[ "$narrow" = " #[fg=#e0af68]⚠ GitHub 受限 " ] || fail "S3 a narrow client (cw=54) gets the bare ⚠ GitHub 受限 (issue #1616)" "$narrow"
-ok "S2/S3 a live marker adds exactly \`⚠ GitHub 受限至 $hhmm\` and nothing else"
-
-rm -f "$FLEET_STATE_DIR"/gh-limit.*
-fake_out=$(FLEET_GH_FAKE_LIMIT=graphql render)
-case "$fake_out" in *"⚠ GitHub 受限 "*) ;; *) fail "S4 an injected limit shows ⚠ GitHub 受限 (no reset to print)" "$fake_out" ;; esac
-[ -e "$WORK/gh.called" ] && fail "S the status bar must never call gh" "$(cat "$WORK/gh.called")"
-ok "S4 FLEET_GH_FAKE_LIMIT=graphql shows the bare ⚠ GitHub 受限; gh never called"
-
 # ============================ D: doctor `github` row ==========================
 doc() { bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^  (PASS|WARN|FAIL)  github '; }
 old=$(date -u -r $((now - 7200)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$((now - 7200))" +%Y-%m-%dT%H:%M:%SZ)
@@ -91,6 +59,8 @@ case "$row" in "  PASS  github   not rate-limited · last hour: 1 limited · 1 s
   *) fail "D1 clear → PASS with the last-hour tally (the 2h-old line excluded)" "$row" ;; esac
 ok "D1 clear → PASS github, last-hour tally only"
 
+reset=$((now + 1200))
+hhmm=$(fleet_gh_hhmm "$reset")
 mark graphql "$reset" pr-merge
 row=$(doc)
 case "$row" in "  WARN  github   graphql limited until $hhmm (seen by pr-merge) — "*"not a permission problem"*) ;;
@@ -103,5 +73,5 @@ case "$row" in "  WARN  github   graphql limited (injected: FLEET_GH_FAKE_LIMIT)
   *) fail "D3 an injected limit → WARN github" "$row" ;; esac
 ok "D3 FLEET_GH_FAKE_LIMIT=graphql → WARN github"
 
-printf '\nselftest OK: %s checks (gh limit visible: reader · status bar · doctor)\n' "$pass"
+printf '\nselftest OK: %s checks (gh limit visible: reader · doctor)\n' "$pass"
 exit 0

@@ -1,8 +1,8 @@
 #!/bin/bash
 # fleet-client-update-selftest.sh — the client keeps up with its hub by itself
 # (issue #1722): bin/fleet-client-update.sh (start / stage / doctor) and the
-# pieces that read what it writes (bin/fleet, fleet-shell.sh's and fleet-lib.sh's
-# hub-defaults.conf, tmux-status.sh's note), against a fake hub reached over
+# pieces that read what it writes (bin/fleet, fleet-lib.sh's hub-defaults.conf),
+# against a fake hub reached over
 # file:// — /version, /v1/fleet/client-settings and /install are files — so no
 # port is bound. HOME is a sandbox.
 #
@@ -18,11 +18,7 @@
 #                  <home>.versions/<v> (.next names it); the next start switches
 #                  (exit 3, 「已更新到 <commit>」): <home> becomes a link to it, the
 #                  old plain-dir home adopted as <home>.versions/<old> (.prev) —
-#                  at the first start that finds nothing running (#1829),
-#                  the bar's note written; tmux-status.sh shows it on a client
-#                  (FLEET_SHELL=1), not elsewhere; a running client's server
-#                  (issue #1781) is left to take it in place — the start does not
-#                  switch under it
+#                  at the first start (#1829), the note written
 #   D. below min   → staged + switched before opening: exit 3, 已更新到 …
 #   E. fails       below min and the installer fails → exit 0, one 更新失败
 #                  line, the home untouched
@@ -30,10 +26,10 @@
 #                  hourly throttle: a second start inside it asks nothing
 #   G. off         FLEET_CLIENT_AUTO_UPDATE=0 → no stage; the defaults still land
 #   H. doctor      `doctor` prints one PASS/WARN/INFO row naming 版本 · 入口 ·
-#                  tmux · 证书; `fleet doctor` on a client-only home prints it as
+#                  证书 (the thin client needs no tmux here, issue #3008); `fleet doctor` on a client-only home prints it as
 #                  the `fleet` row (the `client` row before #1806); no installed client → INFO
 #   I. bin/fleet   a staged client is switched by `fleet` itself, which then runs
-#                  the NEW bin/fleet (once — FLEET_CLIENT_UPDATED); staged at the
+#                  the NEW bin/fleet's client (once — FLEET_CLIENT_UPDATED); staged at the
 #                  old <home>.next, it is taken over as a version first
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -46,6 +42,7 @@ bad() { echo "FAIL $*"; fail=1; }
 export HOME="$WORK/home"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share"
 export FLEET_SHELL_SESSION="fcu$$"   # never the operator's running client
+export FLEET_NODE_STATE="$WORK/no-node"   # a device, even when this runs on a managed machine
 unset FLEET_SHELL_CACHE FLEET_CLIENT_UPDATE_STATE
 unset FLEET_CONF_DIR FLEET_HUB_URL CCQUOTA_HUB_URL FLEET_CLIENT_ROOT FLEET_CLIENT_STATE FLEET_CLIENT_UPDATED FLEET_CLIENT_AUTO_UPDATE FLEET_CLIENT_CHECK_SECS FLEET_UI_LANG FLEET_SHELL_PREFIX FLEET_SHELL
 CONF="$XDG_CONFIG_HOME/claude-fleet"
@@ -144,24 +141,12 @@ grep -q OLD "$ROOT/bin/fleet" && ok "C this start still runs the old client" || 
 # nothing running: the plain-dir home is adopted at once (issue #1829), not on its first switch
 [ -L "$ROOT" ] && [ "$(cd "$ROOT" && pwd -P)" = "$(cd "$V/v1" && pwd -P)" ] \
   && ok "C the plain-dir home adopted as <home>.versions/v1 + the link" || bad "C not adopted: $(ls -la "$XDG_DATA_HOME") $(ls -a "$V")"
-# a running client (its server up): the start leaves the switch to it
-if command -v tmux >/dev/null 2>&1; then
-  tmux -L "$FLEET_SHELL_SESSION" new-session -d -s "$FLEET_SHELL_SESSION" 'sleep 60' 2>/dev/null
-  start; rc=$?
-  [ "$rc" = 0 ] && [ "$(cd "$ROOT" && pwd -P)" = "$(cd "$V/v1" && pwd -P)" ] && grep -q OLD "$ROOT/bin/fleet" \
-    && ok "C a running client's server: the start does not switch under it" || bad "C running: rc=$rc err=$(cat "$WORK/err")"
-  tmux -L "$FLEET_SHELL_SESSION" kill-server 2>/dev/null
-fi
 start; rc=$?
 if [ "$rc" = 3 ] && grep -q '已更新到 beef002' "$WORK/err" && grep -q NEW "$ROOT/bin/fleet" && [ -L "$ROOT" ] \
    && [ "$(cd "$ROOT" && pwd -P)" = "$(cd "$V/v2" && pwd -P)" ] && grep -q OLD "$V/v1/bin/fleet" && [ "$(cat "$V/.prev")" = v1 ] && [ ! -e "$V/.next" ]; then
   ok "C next start: switched (exit 3, 已更新到 beef002): <home> → versions/v2, the old home adopted as versions/v1 (.prev)"
 else bad "C switch: rc=$rc err=$(cat "$WORK/err") root=$(cat "$ROOT/bin/fleet") link=$(readlink "$ROOT") vers=$(ls -a "$V")"; fi
-grep -q '已更新到 beef002' "$STATE/note" 2>/dev/null && ok "C the bar's note is written" || bad "C note: $(cat "$STATE/note" 2>&1)"
-bar=$(FLEET_SHELL=1 FLEET_STATUS_NOCOLOR=1 bash "$BIN/tmux-status.sh" sess=fleet-shell 2>/dev/null)
-nobar=$(FLEET_SHELL=0 bash "$BIN/tmux-status.sh" sess=x 2>/dev/null)
-case "$bar" in *已更新到\ beef002*) ok "C the client's bar says 已更新到 beef002" ;; *) bad "C bar: [$bar]" ;; esac
-case "$nobar" in *已更新到*) bad "C a non-client bar shows the note: [$nobar]" ;; *) ok "C a node's bar does not" ;; esac
+grep -q '已更新到 beef002' "$STATE/note" 2>/dev/null && ok "C the note is written" || bad "C note: $(cat "$STATE/note" 2>&1)"
 
 # --- D. below the min: update before opening --------------------------------
 install_client v1 1; hub v3 3 2 beef003
@@ -201,7 +186,7 @@ FLEET_CLIENT_AUTO_UPDATE=0 start; rc=$?
 install_client v1; hub v1 1 1
 row=$(bash "$ROOT/bin/fleet-client-update.sh" doctor)
 case "$row" in
-  PASS*|WARN*|INFO*) case "$row" in *版本\ v1*入口*同版*tmux*证书*) ok "H doctor row: ${row#*	}" ;; *) bad "H doctor fields: $row" ;; esac ;;
+  PASS*|WARN*|INFO*) case "$row" in *版本\ v1*入口*同版*证书*) ok "H doctor row: ${row#*	}" ;; *) bad "H doctor fields: $row" ;; esac ;;
   *) bad "H doctor level: $row" ;; esac
 hub v2 1 1
 row=$(bash "$ROOT/bin/fleet-client-update.sh" doctor)
@@ -219,7 +204,7 @@ install_client v1; cp "$BIN/fleet" "$ROOT/bin/fleet"; hub v2 1 1
 mkdir -p "$ROOT.next/bin"; cp "$HUBD/new/"* "$ROOT.next/bin/"; chmod +x "$ROOT.next/bin/"*
 printf 'version=v2\ncompat=1\ncommit=beef002\n' > "$ROOT.next/.client-version"; : > "$ROOT.next/.staged"
 out=$(sh "$ROOT/bin/fleet" mac-a 2>&1)
-case "$out" in *已更新到\ beef002*"NEW mac-a"*) ok "I \`fleet mac-a\`: switched, then the NEW fleet ran with the same args" ;;
+case "$out" in *已更新到\ beef002*"NEW --thin --home mac-a"*) ok "I \`fleet mac-a\`: switched, then the NEW fleet opened the same client" ;;
   *) bad "I bin/fleet: $out" ;; esac
 
 if [ "$fail" = 0 ]; then echo "PASS fleet-client-update-selftest"; else echo "FAIL fleet-client-update-selftest"; fi

@@ -18,8 +18,9 @@
 #   基础 (the part everyone has — an install-line client, ~/.claude/fleet with
 #        a .client-version): fleet-client-update.sh. The hub only REPORTS
 #        stable (its /version, and stable's files through it, reachable where
-#        GitHub is not); with no hub it asks GitHub. Staged in the background, switched in place
-#        once nobody is typing (the previous batch's 「空闲时原地换」).
+#        GitHub is not); with no hub it asks GitHub. Staged in the background,
+#        switched at the client's next start (the thin client's own, between
+#        two connections — issue #3008 took the old client's in-place reload).
 #   承载 (a full install — a checkout of stable): fleet-install-sync.sh, the
 #        install-sync daemon's tick. Each version checked out beside the last
 #        and switched in one link move, busy sessions or not (issue #1894);
@@ -27,7 +28,7 @@
 #
 # `tick` is the dispatch: a full install → fleet-install-sync.sh with the rest
 # of the arguments (the daemon's beat; --dry-run / --status pass through); an
-# installed client → fleet-client-update.sh tick (the client keeper's beat);
+# installed client → fleet-client-update.sh tick (check and stage);
 # neither (a copy nobody installed) → nothing, exit 0.
 #
 # Exit: status 0 · stable 0 / 1 · tick: the layer's own exit code.
@@ -125,7 +126,7 @@ cmd_status() {
       elif [ "$st" = "$v" ]; then printf '跟 stable 同版'
       else printf 'stable %.7s 待换上' "$st"; fi
       if [ -n "$(hub_url)" ]; then printf ' · 经入口取'; else printf ' · 从 GitHub 取'; fi
-      printf ' · 空闲时原地换上\n' ;;
+      printf ' · 下次打开时换上\n' ;;
     *)
       printf '这里没有装 fleet（%s）\n' "$ROOT" ;;
   esac
@@ -136,7 +137,7 @@ cmd_tick() {
   for a in "$@"; do [ "$prev" = --root ] && r=$a; prev=$a; done
   case "$(layer "$r")" in
     full)   exec bash "$BIN/fleet-install-sync.sh" "$@" ;;
-    client) FLEET_CLIENT_ROOT="$r" exec bash "$BIN/fleet-client-update.sh" tick "${FLEET_SHELL_SESSION:-fleet-shell}" ;;
+    client) FLEET_CLIENT_ROOT="$r" exec bash "$BIN/fleet-client-update.sh" tick ;;
   esac
   return 0
 }
