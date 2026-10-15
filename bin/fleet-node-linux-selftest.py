@@ -749,6 +749,58 @@ class LinuxNode(unittest.TestCase):
             with patch.object(lin.sys, 'platform', 'linux'), patch.object(lin.os, 'geteuid', return_value=0):
                 self.assertTrue(lin.own_seat())           # a shared node: root, as before
 
+    def test_pod_login_reissued(self):
+        """#4301: the hub asks a person's pod for its one login again (the
+        endpoint retired — an expired drill, an `accounts forget`). The disk
+        still declares it under the old op: the create claims it — the new op
+        written, home and data kept, the retired token dropped for the new join
+        code — never 「already exists」 rc 3, which left the pod failed."""
+        lin = module('fleet-node-linux')
+        uid = os.geteuid()
+        with tempfile.TemporaryDirectory() as d:
+            d = os.path.realpath(d)  # private_write walks with O_NOFOLLOW (macOS /var)
+            state, users = Path(d, 'state'), Path(d, 'home')
+            state.mkdir()
+            (state / 'machine.env').write_text('CCQUOTA_HUB_URL=https://hub.example.com\n')
+            home = users / 'drillcn'
+            (home / '.config/claude-fleet').mkdir(parents=True)
+            (home / 'keep.txt').write_text('data\n')
+            os.chmod(home, 0o700)
+            (home / '.config/claude-fleet/node.env').write_text(
+                'CCQUOTA_HUB_URL=https://hub.example.com\nCCQUOTA_TOKEN=old-retired\n')
+            tdir = state / 'linux-tenants'
+            tdir.mkdir(mode=0o700)
+            (tdir / 'drillcn.json').write_text(json.dumps(
+                {'login': 'drillcn', 'uid': uid, 'gid': uid, 'home': str(home), 'op': 'aaaa', 'since': 1}))
+            sup = Mock()
+            sup.Paths.return_value = _ns(state=str(state), users=str(users))
+            sup.account_adopt.return_value = 0
+            seen = []
+
+            def hub(_h, path, token=None, body=None):
+                seen.append((path, token, (body or {}).get('code')))
+                return {'token': 'new-tok'}
+            pw = _ns(pw_dir=str(home))
+            jf = Path(d, 'join')
+            jf.write_text('fj_' + 'a' * 26 + '\n')
+            env = {'FLEET_NODE_PROFILE': 'user-pod', 'FLEET_POD_LOGIN': 'drillcn', 'FLEET_LOGIN_OP_ID': 'bbbb'}
+            with patch.dict(os.environ, env), patch.object(lin, 'load', return_value=sup), \
+                    patch.object(lin, 'pod_self', return_value=('drillcn', uid, pw)), \
+                    patch.object(lin, 'central_url', return_value='http://central'), \
+                    patch.object(lin, 'hub_internal_url', return_value=''), \
+                    patch.object(lin, 'pod_privileges', return_value=[]), \
+                    patch.object(lin, 'machine_hub', return_value='https://hub.example.com'), \
+                    patch.object(lin, 'as_tenant'), patch.object(lin, 'request', side_effect=hub), \
+                    patch.object(lin, 'check_home', return_value=True), \
+                    redirect_stderr(io.StringIO()), patch('sys.stdout', new=io.StringIO()):
+                self.assertEqual(lin.pod_login_open(_ns(name='drillcn', full_name='', join_file=str(jf),
+                                                        hub='', start=False)), 0)
+            self.assertEqual(json.loads((tdir / 'drillcn.json').read_text())['op'], 'bbbb')
+            self.assertEqual(seen, [('/v1/node/join', None, 'fj_' + 'a' * 26)])
+            self.assertIn('CCQUOTA_TOKEN=new-tok', (home / '.config/claude-fleet/node.env').read_text())
+            self.assertEqual((home / 'keep.txt').read_text(), 'data\n')
+            sup.account_adopt.assert_called_once()
+
     def test_ops_template(self):
         """#3734 (EPIC #3500 C1's cloud half): the cluster's ONE fleet-ops — one
         replica, Recreate, its hostname the cluster's name, the read-only

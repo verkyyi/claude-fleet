@@ -734,12 +734,20 @@ def pod_login_open(a):
     home = Path(paths.users) / login
     if p.pw_dir != str(home):
         raise ValueError('passwd puts %s\'s home at %s, not %s' % (login, p.pw_dir, home))
+    reissued = False
     with tenants_lock(paths):
         t = tenants(paths).get(login)
-        if t is not None and op and t.get('op') != op:
-            raise Refuse('login %s already exists on this pod (not made by this op)' % login, rc=3)
         if t is not None and t['uid'] != uid:
             raise ValueError('the disk declares %s as uid %d, the pod as %d' % (login, t['uid'], uid))
+        if t is not None and op and t.get('op') != op:
+            # The pod's one login, asked for again (#4301): the hub retired its
+            # endpoint (an expired drill, an `accounts forget`) and sends a new
+            # create. Nobody else's name is ever opened here (want above) and the
+            # uid is the pod's, so it is this person's login: claimed, home and
+            # data kept — never 「already exists」, which left the pod failed.
+            t = dict(t, op=op)
+            private_write(tenant_path(paths, login), json.dumps(t, sort_keys=True) + '\n', *me)
+            reissued = True
         if t is None:
             t = {'login': login, 'uid': uid, 'gid': uid, 'home': str(home), 'since': int(time.time())}
             if op:
@@ -752,6 +760,9 @@ def pod_login_open(a):
     as_tenant(s, login, ['python3', '-c', POD_CONF, central_url(), hub_internal_url()])
     token_path = conf / 'node.env'
     ne = env_read(token_path)
+    if reissued and code:
+        # …and its old token is the retired endpoint's: enroll again on the new code
+        ne = {}
     if ne.get('CCQUOTA_TOKEN'):
         if ne.get('CCQUOTA_HUB_URL') != hub:
             raise ValueError('persisted login belongs to a different hub')

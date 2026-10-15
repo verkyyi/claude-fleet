@@ -1229,4 +1229,62 @@ PY2
   WHAT="旧镜像上建的个人 pod 在模板换新镜像后原地不动（修复到不了）；roll-user-pod 一个 PATCH 把四个容器换到新镜像、别的一样不改（与新镜像现渲染的一字不差）；再滚一次什么都不发；滚别人的 Deployment / 不存在的 pod / 按标签的镜像都拒、一个请求都没发；一个 pod 两种镜像，执行器和准入策略都拦；${gohalf}"
 }
 
+# user-pod-opener-group-write (#4301): a person's pod runs as its login with
+# fsGroup = its group (OnRootMismatch). Once anything changes the disk's top — a
+# helper pod mounting the PVC by hand — the kubelet's next pass adds g+w to every
+# file, the runtime's fleet-node-linux.py among them; ccquota's machineScript took
+# only a script no group may write, so the opener read "" and a pod with no login
+# sat at «no logins to serve», off the roster, never sent the create that would
+# have given it one. The template half: the pod still carries that fsGroup (the
+# condition is real); the program half: the opener is taken when the group is the
+# program's own, never for root or another group, and a refusal says why.
+drill_user_pod_opener_group_write() {
+  CAP=30
+  local t0 out rc gohalf
+  t0=$(now)
+  out=$(python3 "$RENDER" --image "x@sha256:$D64" --hub https://hub.example.com --storage-class csi \
+    --user-pod u-grpw01 --login grpw --uid 10003 \
+    --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local 2>&1) \
+    || { WHY="rendering a user pod failed: $(printf '%s' "$out" | head -c 200)"; return 1; }
+  printf '%s' "$out" | grep -q '"fsGroup": 10003' \
+    && printf '%s' "$out" | grep -q '"fsGroupChangePolicy": "OnRootMismatch"' \
+    || { WHY="the user pod no longer carries fsGroup=<uid> OnRootMismatch — re-check this row"; return 1; }
+  grep -q 'scriptBeside(filepath.Dir(exe), name, os.Geteuid(), os.Getegid())' "$ROOT/tokenledger/cmd/ccquota/agent_machine.go" \
+    && grep -q 'FLEET_NODE_ACCOUNT_OPS=1 but no opener' "$ROOT/tokenledger/cmd/ccquota/agent_machine.go" \
+    || { WHY="machineScript no longer judges the program's own group, or the opener's refusal is silent again"; return 1; }
+  gohalf="程序一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestScriptBesideGroupWrite"
+  grep -q '^func TestScriptBesideGroupWrite(' "$ROOT/tokenledger/cmd/ccquota/agent_machine_script_test.go" 2>/dev/null \
+    || { WHY="the program half's test TestScriptBesideGroupWrite is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestScriptBesideGroupWrite$' ./cmd/ccquota 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the program half's Go test did not run"; return 1 ;;
+      0:*) gohalf="程序一半：go test 自己组可写照收、root / 别人的组 / 人人可写都拒、拒必说原因 通过" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the program half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="个人 pod 仍是 fsGroup=<uid> + OnRootMismatch（kubelet 会给整盘加 g+w）；开号脚本组可写而组是程序自己的照收，root、别人的组、人人可写都拒，拒时说原因；${gohalf}"
+}
+
+# user-pod-login-reissued (#4301): the hub retires a person's pod login's
+# endpoint (an expired drill, an `accounts forget`) and sends a new create for
+# the same login. The disk still declares it under the old op, and `login open`
+# answered 「already exists on this pod」 rc 3 — the account row failed, the pod
+# had no login and no way to get one. Now the create claims it: the new op
+# written, home and data kept, the retired token dropped for the new join code.
+drill_user_pod_login_reissued() {
+  CAP=30
+  local t0 out
+  t0=$(now)
+  out=$(python3 -I "$BIN/fleet-node-linux-selftest.py" -k test_pod_login_reissued 2>&1) \
+    || { WHY="the reissued create is refused again: $(printf '%s' "$out" | grep -E 'Refuse|Error|assert' | head -3 | tr '\n' ' ')"; return 1; }
+  printf '%s' "$out" | grep -q 'Ran 1 test' || { WHY="the reissue test did not run: $(printf '%s' "$out" | tail -3)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="个人 pod 唯一的登录被入口重新要一次：盘上的旧声明照认（改写 op）、家目录和数据不动、退役的 token 换成新 join 码入网、交给守护——不再「already exists」rc 3"
+}
+
 cred_run_drills "$0"
