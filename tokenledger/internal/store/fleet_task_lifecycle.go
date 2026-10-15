@@ -401,8 +401,12 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	}
 	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	ts := now.UTC().Format(rfc)
+	eventWorker := m.WorkerID
+	if eventWorker == "" {
+		eventWorker = m.ExpectedWorker
+	}
 	_, err = tx.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
-  VALUES (?, ?, 'task_event', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, eventID, m.FleetID, string(raw), owner, idem, ts, ts, string(resultJSON), m.WorkerID)
+  VALUES (?, ?, 'task_event', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, eventID, m.FleetID, string(raw), owner, idem, ts, ts, string(resultJSON), eventWorker)
 	if err != nil {
 		return FleetTask{}, err
 	}

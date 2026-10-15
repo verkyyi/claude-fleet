@@ -89,6 +89,10 @@ func TestTaskAuthorityLifecycle(t *testing.T) {
 	if _, err = s.MutateFleetTask(rec.ID, rec.Owner, changed, time.Now()); !errors.Is(err, ErrTaskConflict) {
 		t.Fatalf("terminal changed: %v", err)
 	}
+	event, err := s.FleetOperationByIdem(rec.Owner, "task-event:"+rec.Ref+":complete")
+	if err != nil || event.WorkerID != rec.ExecutionOwner {
+		t.Fatalf("terminal event lost worker attribution: %+v %v", event, err)
+	}
 	b, _ := json.Marshal(rec)
 	t.Logf("fixture after: %s", b)
 	rec = mutateTask(t, s, rec, TaskMutation{Key: "retry", Kind: "retry", RequestedAgent: "claude", ResolvedAgent: "claude", Evidence: "explicit retry"})

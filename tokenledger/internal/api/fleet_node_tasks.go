@@ -145,9 +145,7 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 				if f, err := s.Store.Fleet(fid); err != nil || f.EndpointID != ep.ID {
 					return "worker_id names a fleet this node does not report"
 				}
-				if worker == m.WorkerID {
-					m.FleetID = fid
-				}
+				m.FleetID = fid
 			}
 			m.EndpointID = ep.ID
 		}
