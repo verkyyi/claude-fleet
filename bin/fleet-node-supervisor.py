@@ -4745,18 +4745,26 @@ def _undo(paths, index, moved):
 
 
 def _zombies(pids):
-    """Which of pids are exited and only waiting to be reaped (stat Z): the
-    daemon reaps its own children on its tick, so a killed run reads alive for
-    up to that long (issue #4044: 2–3 s of every recycle's forget). One ps."""
+    """Which of pids have ended: exited and only waiting to be reaped (stat Z) —
+    the daemon reaps its own children on its tick, so a killed run reads alive
+    for up to that long (issue #4044: 2–3 s of every recycle's forget) — or
+    reaped between the caller's liveness read and this ps (issue #4278: ps then
+    lists none and exits 1, and the old answer «no zombies» kept a gone pid
+    running). A pid ps does not list ends only if kill(0) now says so too, so an
+    EPERM or a ps that cannot run still reads alive. One ps."""
     if not pids or os.environ.get("FLEET_NODE_PS_CMD"):
         return set()
     try:
         out = subprocess.check_output(["ps", "-o", "pid=,stat=", "-p", ",".join(str(p) for p in pids)],
                                       stderr=subprocess.DEVNULL, universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        out = e.output or ""
     except Exception:
         return set()
-    return set(int(f[0]) for f in (l.split() for l in out.splitlines())
-               if len(f) == 2 and f[0].isdigit() and f[1].startswith("Z"))
+    rows = [f for f in (l.split() for l in out.splitlines()) if len(f) == 2 and f[0].isdigit()]
+    listed = set(int(f[0]) for f in rows)
+    return (set(int(f[0]) for f in rows if f[1].startswith("Z"))
+            | set(p for p in pids if p not in listed and not pid_alive(p)))
 
 
 def _core_jobs(login):

@@ -3158,6 +3158,35 @@ class Z_ForgetZombie(unittest.TestCase):
             p.kill()
             p.wait()
 
+    def test_reaped_between_reads_is_not_running(self):
+        """#4278: the run is reaped between _account_pids' kill(0) and the ps —
+        ps lists nothing and exits 1; the gone pid must not stay «running»."""
+        p = subprocess.Popen(["sleep", "30"])
+        p.kill()
+        p.wait()                                     # reaped: the pid is gone
+        real = fns.pid_alive
+        calls = []
+
+        def alive(pid):                              # the first read predates the reap
+            calls.append(pid)
+            return True if len(calls) == 1 else real(pid)
+        st = {"tasks": {"bob/job": {"pid": p.pid}}}
+        with mock.patch.object(fns, "read_json", return_value=st), mock.patch.object(fns, "pid_alive", alive):
+            paths = mock.Mock(state_file="/nonexistent")
+            self.assertEqual(fns._account_pids(paths, "bob"), [])
+        self.assertEqual(len(calls), 2, "the unlisted pid is re-asked of kill(0)")
+
+    def test_unlisted_but_alive_stays_running(self):
+        """An unlisted pid kill(0) still answers for (EPERM, a ps that lists
+        nothing) is never taken for ended — only a re-read that says gone is."""
+        err = subprocess.CalledProcessError(1, ["ps"], output="")
+        with mock.patch.object(fns.subprocess, "check_output", side_effect=err), \
+                mock.patch.object(fns, "pid_alive", return_value=True):
+            self.assertEqual(fns._zombies([4242]), set())
+        with mock.patch.object(fns.subprocess, "check_output", side_effect=OSError("no ps")), \
+                mock.patch.object(fns, "pid_alive", return_value=False):
+            self.assertEqual(fns._zombies([4242]), set(), "a ps that cannot run decides nothing")
+
 
 class X_DoorStrictModes(unittest.TestCase):
     """door-strictmodes (#4161): the door's state dir is an emptyDir, which
