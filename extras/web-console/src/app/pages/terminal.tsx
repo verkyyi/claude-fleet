@@ -8,11 +8,13 @@ import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
 import { browserClient, type BrowserOffer } from "@/shared/terminal-client";
-import { connectTerminal, FLEET_MENU, FLEET_SHELL, terminalKey } from "@/shared/terminal";
+import { connectTerminal, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey } from "@/shared/terminal";
 import { usePage } from "../Shell";
 
-type View = { state: "connecting" | "ready" | "closed"; mode?: "direct" | "relay"; error?: string; destination?: string };
+type View = TerminalState & { destination?: string };
 const errors: Record<string, [string, string]> = {
+  open_elsewhere: ["此终端正在另一处使用。点击「在这里使用」接管。", "This terminal is open elsewhere. Choose Use here to take control."],
+  revoked: ["登录已失效，请重新登录。", "Your session was revoked. Sign in again."],
   login: ["登录已过期，请重新登录。", "Your login expired. Sign in again."],
   no_home: ["先在设备页设置你的机器。", "Choose your home in Devices first."],
   unsupported: ["这台机器尚不支持网页终端，请更新节点。", "This node does not support browser terminals yet. Update the node."],
@@ -49,6 +51,7 @@ export default function TerminalPage() {
   const [view, setView] = useState<View>({ state: "connecting" });
   const [offers, setOffers] = useState<BrowserOffer[]>([]);
   const container = useRef<HTMLDivElement>(null);
+  const take = useRef<() => void>(() => {});
   const send = useRef<(text: string) => void>(() => {});
 
   useEffect(() => {
@@ -110,30 +113,36 @@ export default function TerminalPage() {
     const theme = new MutationObserver(() => { if (term) term.options.theme = terminalTheme(host); });
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const start = async () => {
+      void (async () => {
       const response = await fetch("/v1/term/home", { signal: abort.signal, credentials: "same-origin", headers: { Accept: "application/json" } });
       if (dead) return;
       if (response.status === 401) { fail("login"); return; }
       const home = await response.json();
       if (!response.ok) { fail(home.code || "refused"); return; }
       setView((v) => ({ ...v, destination: home.machine }));
-      if (home.state !== "ok") { fail(home.state); return; }
-      client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => fail("lease"));
-      if (!await client.ready || dead) return;
+      if (["unsupported", "no_home"].includes(home.state)) fail(home.state);
+      })().catch(() => {});
       connection = connectTerminal(worker, {
         signal: abort.signal,
         onState(state) {
           if (dead || ended) return;
-          if (state.state !== "ready") disposeTerminal();
-          setView((v) => ({ ...v, state: state.state, mode: state.mode, error: state.error }));
-          if (state.state === "closed") { client?.close(); setOffers([]); return; }
+          if (state.state !== "ready") {
+            ready = false;
+            if (term) { term.options.disableStdin = true; term.blur(); }
+            composing = false;
+            if (term?.textarea) term.textarea.value = "";
+          }
+          setView((v) => ({ ...v, ...state }));
+          if (!["connecting", "reconnecting", "ready"].includes(state.state)) { client?.close(); client = undefined; setOffers([]); return; }
           if (state.state === "ready") {
-            ready = true;
-            if (!term) createTerminal();
+            disposeTerminal(); ready = true; createTerminal();
+            if (!client) client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => { client = undefined; if (!dead) setOffers([]); });
           }
         },
         onBytes(bytes) { term?.write(bytes); },
         onExit() { fail("ended"); },
       });
+      take.current = () => connection?.takeControl();
     };
     void start().catch(() => { if (!dead) fail("connection_failed"); });
     return () => {
@@ -142,7 +151,7 @@ export default function TerminalPage() {
     };
   }, [worker, attempt]);
 
-  const status = view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state === "closed" ? tr("已断开", "Disconnected")
+  const status = view.state === "reconnecting" ? tr("正在重新连接…", "Reconnecting…") : view.state === "open-elsewhere" ? tr("正在另一处使用", "Open elsewhere") : view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state !== "ready" ? tr("已断开", "Disconnected")
     : view.mode === "direct" ? tr("直连", "Direct") : tr("经入口连接", "Via hub");
   return <div className="flex h-full min-h-80 flex-col gap-3 p-4 md:p-6">
     <header className="flex flex-wrap items-center gap-2">
@@ -155,9 +164,9 @@ export default function TerminalPage() {
       <Button size="sm" variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_SHELL)} title={tr("再次点击返回会话", "Click again to return to the session")}><TerminalSquare />{tr("打开 Shell", "Open shell")}</Button>
       <Button asChild size="sm" variant="ghost"><Link to="/sessions"><Layers />{tr("会话", "Sessions")}</Link></Button>
     </header>
-    {view.state === "closed" ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
+    {!["connecting", "reconnecting", "ready"].includes(view.state) ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
       <p>{tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
-      {view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
+      {view.state === "open-elsewhere" ? <Button size="sm" onClick={() => take.current()}>{tr("在这里使用", "Use here")}</Button> : view.state === "unauthorized" || view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
         : view.error === "no_home" ? <Button asChild size="sm"><Link to="/devices?tab=home">{tr("设备", "Devices")}</Link></Button>
           : !["ended", "interrupted"].includes(view.error || "") ? <Button size="sm" onClick={() => retry((n) => n + 1)}>{tr("重新连接", "Reconnect")}</Button> : null}
     </div> : null}

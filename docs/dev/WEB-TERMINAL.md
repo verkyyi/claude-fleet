@@ -43,11 +43,18 @@ T 沿用授权的 `personal` 或 `worker:<fleet_id>`；C 是本条连接 id。he
 只能清自己的 session id，不能释放新 epoch。`status` 的 id/generation 是持久个人 pane 的身份，
 不同于 hub hello 的节点链路代，也不同于 C5 的 direct/relay 路径 epoch。
 
-C3 仍需把这些状态/控制映射到已授权的 wire hello、Use here 和恢复流程，传回期望 generation，
-并协调原生菜单切换目标后的租约（personal 切到 worker 与直接 worker 入口目前是不同初始租约）。
-逐帧输入/resize 与逻辑目标 epoch 的原子校验、页面重连和无重放由 C3 接续；本接线不声称完成这些验收。
-原生交互由 `fleet-term-attach-selftest.sh` 的隔离真实 PTY 验证，真实 Chromium 页面和 Safari/OS IME
-仍须在部署后另验。
+C3（#3841）把持久身份作为 `term_resume`、明确接管作为 `take=1` 放进节点签名授权。
+helper 经独立 fd 3 通道报告 `term/gen/epoch` 后，节点才允许发送 `ready`；终端输出不能伪造准入。
+节点路径 generation 仍按控制链路换代；页面恢复重新认证节点路径，并用持久 terminal generation
+拒绝已结束/重建的目标。浏览器只在主动点击 Use here 时接管，不重放输入和 resize。
+
+Go 的实际 PTY 写入与 resize 和 Python helper 的 take/cleanup 共用 control flock；检查和操作
+在同一临界区。原生菜单和切壳经 helper 的 `switch` 在该锁内取得目标租约并切窗，personal 选中
+worker 后与直接 worker 入口占用同一资源。旧连接只能释放其捕获的 epoch/session id。
+
+`TestTerminalRecoveryChromium` 在隔离 HOME、tmux socket、身份和真实页面上记录重连与接管 trace，
+与既有 TerminalConsole / Attachment / ChatAttachment Chromium 一起由 browser-attachment 门运行。
+Safari、真实 OS IME、Mac/ACK 网络及部署验证仍须单独记录，不从 CI 或合并推断通过。
 
 ## 帧
 

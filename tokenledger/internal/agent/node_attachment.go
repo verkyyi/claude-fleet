@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,8 +132,17 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	}
 	var h termHelper
 	if service == "term" {
-		h, err = startTermHelper(ctx, "web-"+g.Conn, g.Target, 0, 0)
+		hctx := context.WithValue(ctx, termRequestKey{}, termRequest{Resume: g.TermResume, Take: g.TermTake})
+		h, err = startTermHelper(hctx, "web-"+g.Conn, g.Target, 0, 0)
 		if err != nil {
+			code := "ended"
+			for _, known := range []string{"open_elsewhere", "interrupted", "ended"} {
+				if strings.Contains(err.Error(), known) {
+					code = known
+					break
+				}
+			}
+			_ = writeAttachmentSignal(ctx, ws, control.AttachmentSignal{T: "error", Error: code})
 			return
 		}
 		defer h.Close()

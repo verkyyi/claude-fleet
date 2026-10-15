@@ -1520,6 +1520,15 @@ def go_far(vid, fleet, g, target, meta, client):
     return "peer-wait", 3, m, l, extra
 
 
+def webterm_switch(vid, window):
+    if not vid.startswith("wt-"):
+        return None
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "fleet-webterm.py"),
+                        "switch", "--conn", vid[3:], "--window", window],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode
+
+
 def go(qo, vid, target, how="go", client="", meta=None, record=True):
     """Switch the 看台 to `target`. rc 0 switched · 3 another machine / login whose
     link is not up yet (C4: its window shown, waiting to land there) · 4 gone ·
@@ -1537,14 +1546,21 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         cached = order_load(vid)
         meta = (cached[1].get(target) if cached else None) or meta
     extra = {}
-    if far:
+    if far and vid.startswith("wt-"):
+        method, rc = "unsupported", 3
+        toast(client, "Open this session from Sessions in the browser")
+    elif far:
         method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client)
         meta = dict(meta, machine=fm or meta.get("machine") or "", login=fl or meta.get("login") or "")
     elif not w:
         method, rc = "gone", 4
         toast(client, say("view_gone"))
     else:
-        code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+        code = webterm_switch(vid, w)
+        if code is None:
+            code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+        if code:
+            toast(client, "Open elsewhere — use that terminal page to take control")
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)
     ms = round((time.monotonic() - t0) * 1000, 1)
     rec = {"ts": round(time.time(), 3), "view": vid, "from": before, "to": target,
@@ -1800,9 +1816,12 @@ def open_shell(qo, vid, client="", target=None, meta=None):
     if home:
         _, current = tm("display-message", "-p", "-t", "=" + g + ":", "#{window_id}")
         if current == home:
-            code, _ = tm("last-window", "-t", "=" + g)
+            _, dest = tm("display-message", "-p", "-t", "=" + g + ":{last}", "#{window_id}")
         else:
-            code, _ = tm("select-window", "-t", "=%s:%s" % (g, home))
+            dest = home
+        code = webterm_switch(vid, dest)
+        if code is None:
+            code, _ = tm("select-window", "-t", "=%s:%s" % (g, dest))
         return 0 if code == 0 else 3
     here, me = here_label(row), getpass.getuser()
     if target:

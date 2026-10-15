@@ -31,6 +31,9 @@ func TestTermPtyAdmissionBeforeReady(t *testing.T) {
 // on it, keystrokes and resizes arrive by frame, the output comes back raw, and
 // stdin's end hangs the terminal up — nothing of its process group is left.
 func TestTermPtyRunsTheOneCommand(t *testing.T) {
+	oldAdmission := readTermAdmission
+	readTermAdmission = func(io.Reader) (termController, error) { return termController{}, nil }
+	t.Cleanup(func() { readTermAdmission = oldAdmission })
 	tok := "termpty-" + time.Now().Format("150405.000000")
 	old := termAttachArgv
 	defer func() { termAttachArgv = old }()
