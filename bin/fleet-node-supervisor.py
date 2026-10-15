@@ -523,6 +523,98 @@ def pid_cmd(pid):
         return ""
 
 
+def stop_processes(targets, grace=5.0, reap=None):
+    """Stop (pid, owns_group) targets together, including descendants after the
+    leader exits (#3135). Only a group we created or verified as pid == pgid is
+    passed here; never signal an inherited process group. The deadline is shared
+    by the batch, so many strays cannot wedge the supervisor's stop."""
+    targets = [(int(pid), group) for pid, group in targets if int(pid) > 1 and int(pid) != os.getpid()]
+
+    def send(pid, group, sig):
+        try:
+            (os.killpg if group else os.kill)(pid, sig)
+            return True
+        except OSError as e:
+            return e.errno == errno.EPERM
+
+    for pid, group in targets:
+        send(pid, group, signal.SIGTERM)
+    end = time.monotonic() + grace
+    pending = targets
+    while time.monotonic() < end:
+        if reap:
+            reap()  # our exited children must not keep their groups as zombies
+        pending = [(pid, group) for pid, group in pending if send(pid, group, 0)]
+        if not pending:
+            break
+        time.sleep(0.05)
+    for pid, group in pending:
+        # Always address the original group, even if its leader has been reaped.
+        send(pid, group, signal.SIGKILL)
+
+
+def child_group(pid):
+    try:
+        return os.getpgid(pid) == pid
+    except OSError:
+        return False
+
+
+def pid_parent(pid):
+    try:
+        return int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(pid)],
+                                           stderr=subprocess.DEVNULL, timeout=10).strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def script_process_is(script, args, cmd):
+    """A script actually executing, not mentioned in another job's arguments.
+    Compare the known path as text: ps does not quote spaces in macOS's
+    Application Support. Only a direct script or a plain interpreter may precede
+    it, never another script or shell -c payload."""
+    tail = " ".join([script] + list(args))
+    if cmd == tail:
+        return True
+    if not cmd.endswith(" " + tail):
+        return False
+    prefix = cmd[:-len(tail)].strip()
+    return bool(re.fullmatch(r"(?:[^\s]+/)?(?:ba|da|z)?sh|"
+                             r"(?:[^\s]+/)?(?:python[0-9.]*|Python)(?: -(?:I|u|B|E|s|S|O|OO))*", prefix))
+
+
+def shared_proxy_pid(ent):
+    """The shared launcher's exec'd role-account process, by its public pid
+    record AND exact installed script/tenant paths/uid. Root uses this both at
+    daemon recovery and through the core's named machine job; the seat never
+    needs access to the credential store (#3135)."""
+    argv = ent.get("cmd") or []
+    if ent.get("name") != "cred-proxy-shared" or not argv or argv[-1] != "shared":
+        return None
+    launcher = script_of(argv)
+    if os.path.basename(launcher) != "fleet-credsep-launch.py":
+        return None
+    base = env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+    record = os.path.join(base, ".shared.json")
+    if not trusted(record):
+        return None
+    rec = read_json(record, {})
+    if not isinstance(rec, dict):
+        return None
+    try:
+        uid = pwd.getpwnam(rec.get("user") or "_fleetcred").pw_uid
+        run = os.path.join(env("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred"), ".shared", "pid")
+        with os.fdopen(open_ro(run)) as f:
+            pid = int(f.read(64).strip())
+    except (OSError, ValueError, KeyError):
+        return None
+    proxy = os.path.join(os.path.dirname(launcher), "fleet-cred-proxy.py")
+    args = ["serve", "--shared", os.path.join(base, ".shared", "tenants.json")]
+    if pid > 1 and pid != os.getpid() and pid_uid(pid) == uid and script_process_is(proxy, args, pid_cmd(pid)):
+        return pid
+    return None
+
+
 def requirement_met(r):
     """One requirement: a path that exists, a pattern (`*`) that matches something,
     {"line": <file>, "is": "<KEY>=<value>"} — the file holds that very line (one
@@ -1465,17 +1557,21 @@ def account_proc_is(ent, cmd):
     """Does a `ps` command line read as this account unit's own process? The
     state records the wrapper's line (`/bin/sh -c ACCOUNT_SH …`), but ACCOUNT_SH
     execs the unit's argv and a launcher may exec an interpreter in turn
-    (fleet-peerlink.sh → python3 fleet-peerlink.py run), so a live unit reads as:
-    under the login's home · names the unit's script stem · ends in the unit's
-    last word (issue #3671). Never a match without a script."""
+    (fleet-peerlink.sh → python3 fleet-peerlink.py run). Match the executing
+    script under this login's home and its arguments, never a stem mentioned
+    inside some other job's command line (#3135)."""
     argv = (ent.get("cmd") or [])[6:]
     script = ent.get("script") or ""
     w = (cmd or "").split()
     if not argv or not script or not w or not ent.get("home"):
         return False
-    stem = os.path.splitext(os.path.basename(script))[0]
-    return (ent["home"].rstrip("/") + "/" in cmd and stem in cmd
-            and os.path.basename(w[-1]) == os.path.basename(argv[-1]))
+    if not script.startswith(ent["home"].rstrip("/") + "/") or script not in argv:
+        return False
+    args = argv[argv.index(script) + 1:]
+    scripts = [script]
+    if script.endswith("fleet-peerlink.sh"):
+        scripts.append(script[:-3] + ".py")  # the table's launcher execs Python
+    return any(script_process_is(s, args, cmd) for s in scripts)
 
 
 def shared_proxy_run(home):
@@ -2314,8 +2410,16 @@ class Supervisor(object):
             self.state["children"] = {}
             return
         for c in self.all_children():
-            cs = self.state["children"].get(c["name"]) or {}
+            cs = self.state["children"].setdefault(c["name"], {})
             pid = cs.get("pid")
+            if not self.seated and self.child_status(c) == "supervised":
+                shared = shared_proxy_pid(c)
+                if shared and shared != pid and pid_parent(shared) == 1:
+                    # No trustworthy reload signature for this unrecorded holder:
+                    # adopt it now, then the normal reload stops it before start.
+                    pid = shared
+                    cs.update(pid=pid, cmd=pid_cmd(pid), reload_sig=None)
+                    self.dirty = True
             if pid and pid_alive(pid) and cs.get("cmd") and self.is_ours(c, pid, cs["cmd"]):
                 if self.seated and self.seat_runs(c) and SEAT_AGENT_FLAG not in cs["cmd"].split():
                     # the root copy (#3669): the core's job, or the old daemon's — it
@@ -2358,9 +2462,28 @@ class Supervisor(object):
         again, so before issue #3671 every restart started a second copy beside
         the first."""
         live = pid_cmd(pid)
+        cc = self.core_cmd(c)
+        if cc and pid_uid(pid) == os.geteuid():
+            # macOS's /usr/bin/python3 launcher execs the framework Python too.
+            # The core stand-in is OUR uid, not the account job's uid; losing it
+            # on restart makes every new caller answer "running" and exit.
+            script = script_of(cc)
+            if script_process_is(script, cc[cc.index(script) + 1:], live):
+                return True
+        if c.get("unit"):
+            return pid_uid(pid) == c["uid"] and (live == cmd or account_proc_is(c, live))
+        if c.get("name") == "cred-proxy-shared":
+            if shared_proxy_pid(c) == pid:
+                return True
+            # Before exec it is our launcher; afterwards only the role-account
+            # identity above may match, even if an old cmd string is identical.
+            argv = c.get("cmd") or []
+            script = script_of(argv) if argv else ""
+            return bool(script and pid_uid(pid) == os.geteuid() and
+                        script_process_is(script, argv[argv.index(script) + 1:], live))
         if live == cmd:
             return True
-        return bool(c.get("unit") and pid_uid(pid) == c["uid"] and account_proc_is(c, live))
+        return False
 
     def sweep_strays(self):
         """An account unit's copy no daemon tends any more (issue #3671): a run
@@ -2386,7 +2509,7 @@ class Supervisor(object):
         except Exception:
             return
         held = set(p.pid for p in self.procs.values()) | set(self.adopted.values())
-        asked = {}
+        asked, victims = {}, []
         for line in out.splitlines():
             w = line.split(None, 3)
             if len(w) < 4 or not (w[0].isdigit() and w[1] == "1" and w[2].isdigit()):
@@ -2399,16 +2522,13 @@ class Supervisor(object):
                     if self.seated:
                         asked.setdefault(c["name"], c)
                         break
-                    for kill in (os.killpg, os.kill):
-                        try:
-                            if kill is os.killpg and os.getpgid(pid) != pid:
-                                continue
-                            kill(pid, signal.SIGTERM)
-                            break
-                        except OSError:
-                            pass
-                    self.log("child %s: stray copy pid %d (no daemon tends it) — stopped" % (c["name"], pid))
+                    # Recheck the uid and executing script before signalling a
+                    # pid read from the snapshot; active jobs never enter here.
+                    if pid_parent(pid) == 1 and pid_uid(pid) == uid and account_proc_is(c, pid_cmd(pid)):
+                        victims.append((pid, child_group(pid)))
+                        self.log("child %s: stray copy pid %d — TERM, then bounded group cleanup" % (c["name"], pid))
                     break
+        stop_processes(victims)
         for name, c in sorted(asked.items()):
             # stop-as stops the core's own copy too: a supervised one starts again
             r = core_ask("stop-as", {"login": c["account"], "job": c["job"]}, 60)
@@ -2551,34 +2671,12 @@ class Supervisor(object):
             self.seat_stop(name, pid)
             pid = None
         if pid:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except OSError:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
+            stop_processes([(pid, p is not None or child_group(pid))], reap=p.poll if p else None)
             if p is not None:
                 try:
-                    p.wait(timeout=5)
-                except Exception:
-                    try:
-                        os.killpg(pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-            else:
-                # an adopted pid is not ours to wait() on: poll it out, so a
-                # reload's start never runs beside the old one (#3136)
-                end = time.time() + 5
-                while pid_alive(pid) and time.time() < end:
-                    time.sleep(0.05)
-                if pid_alive(pid):
-                    for kill in (os.killpg, os.kill):
-                        try:
-                            kill(pid, signal.SIGKILL)
-                            break
-                        except OSError:
-                            pass
+                    p.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
         cs = self.state["children"].get(name)
         if cs is not None:
             cs.update(pid=None, status="stopped")
@@ -2610,23 +2708,13 @@ class Supervisor(object):
             self.procs.clear()
             self.adopted.clear()
             return
-        pids = [p.pid for p in self.procs.values()] + list(self.adopted.values())
-        for pid in pids:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-        deadline = now() + 5
-        while now() < deadline and any(pid_alive(x) for x in pids):
-            for p in self.procs.values():
-                p.poll()
-            time.sleep(0.1)
-        for pid in pids:
-            if pid_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
+        targets = [(p.pid, True) for p in self.procs.values()]
+        for name, pid in self.adopted.items():
+            if self.seated and not own_pid(pid):
+                self.seat_stop(name, pid)
+            else:
+                targets.append((pid, child_group(pid)))
+        stop_processes(targets, reap=lambda: [p.poll() for p in self.procs.values()])
         for c in self.procs.values():
             try:
                 c.wait(timeout=1)
@@ -3307,13 +3395,13 @@ class Supervisor(object):
             self.at("restart-request")
             if self.restart_requested():
                 break
-            self.at("children")
-            self.tend_children()
             self.at("strays")
             try:
                 self.sweep_strays()
             except Exception as e:  # a sweep must never take the daemon down
                 self.log("strays: %s" % e)
+            self.at("children")
+            self.tend_children()
             self.at("tasks")
             self.tend_tasks(t)
             self.at("agent-tasks")
