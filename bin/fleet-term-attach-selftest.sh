@@ -37,9 +37,10 @@ NWIN=$(tt list-windows -t "=$RS" | wc -l | tr -d ' ')
 
 # run <view> <target> — the attach on a real pty, in the background; its pid in P.
 run() {
-  python3 - "$BIN/fleet-term-attach.sh" "$1" "$2" "$WORK/$1.rc" >/dev/null 2>&1 <<'PY' &
+  python3 - "$BIN/fleet-term-attach.sh" "$1" "$2" "$WORK/$1.rc" "$WORK/$1.out" >/dev/null 2>&1 <<'PY' &
 import os, pty, sys, time, select, signal
-script, view, target, rcf = sys.argv[1:5]
+script, view, target, rcf, outf = sys.argv[1:6]
+out = open(outf, "wb")
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp("bash", ["bash", script, "--view", view, "--target", target])
@@ -51,8 +52,10 @@ while time.time() < deadline and not stop:
     r, _, _ = select.select([fd], [], [], 0.2)
     if r:
         try:
-            if not os.read(fd, 4096):
+            b = os.read(fd, 4096)
+            if not b:
                 break
+            out.write(b); out.flush()
         except OSError:
             break
     if os.waitpid(pid, os.WNOHANG)[0]:
@@ -80,7 +83,7 @@ if waitfor 'tt has-session -t "=$RS@view-web-a1" 2>/dev/null && [ -n "$(tt list-
   [ "$(tt show-options -v -t "$G" destroy-unattached 2>/dev/null)" = on ] \
     && ok "A destroy-unattached is on once attached" || bad "A destroy-unattached is not on"
 else
-  bad "A no attached view appeared"
+  bad "A no attached view appeared: $(tr -d '\033' < "$WORK/web-a1.out" 2>/dev/null | tr '\r\n' '  ' | cut -c1-300) rc=$(cat "$WORK/web-a1.rc" 2>/dev/null) tmux=$(tmux -V)"
 fi
 t0=$(date +%s)
 kill -USR1 "$P" 2>/dev/null
