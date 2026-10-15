@@ -377,7 +377,7 @@ PY
   contains "L: run budget → exhausted" "$o" "exhausted"; contains "L: …says why" "$o" "budget: 6 runs"
   o=$(rec due); eq "L: an exhausted round is not due" 1 "$?"
   ev=$(ls "$d/sd/recover/"*.json | head -n 1); [ -f "$ev" ] || fail "L: no evidence for the exhausted round"
-  eq "L: evidence 0600" 600 "$(stat -f %Lp "$ev" 2>/dev/null || stat -c %a "$ev")"
+  eq "L: evidence 0600" 600 "$(python3 -c 'import os,sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$ev")"
   # a fresh round: three passes on one vector, 10 min apart → done, three distinct runs
   o=$(rec start --expect stable=fb6c00f --every 600); contains "L: a new round after the end" "$o" "started"
   walk 11 pass none ok
