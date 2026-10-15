@@ -315,9 +315,13 @@ case "$cmd" in
     for e in "$real"/* "$real"/.[!.]*; do
       [ -e "$e" ] || [ -L "$e" ] || continue
       n="${e##*/}"
-      case "$n" in auth.json|tmp|.fleet-real-home|.revoked) continue ;; esac   # tmp: the session's own (its daemon's socket)
+      case "$n" in auth.json|tmp|app-server-control|.fleet-real-home|.revoked) continue ;; esac
       [ -e "$d/$n" ] || [ -L "$d/$n" ] || ln -s "$e" "$d/$n"
     done
+    if [ -L "$d/app-server-control" ]; then
+      rm "$d/app-server-control" || exit 1
+    fi
+    mkdir -p "$d/app-server-control" && chmod 700 "$d/app-server-control" || exit 1
     printf '%s\n' "$real" > "$d/.fleet-real-home"
     # a week-dead session's dir goes (links only: rm never follows them)
     find "$STATE/codex-homes" -mindepth 2 -maxdepth 2 -name .revoked -mtime +7 2>/dev/null \

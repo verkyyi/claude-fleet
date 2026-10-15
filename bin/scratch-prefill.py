@@ -78,6 +78,42 @@ def input_status(screen, cx, cy):
     return "waiting"
 
 
+def codex_owns_input(tm, pane):
+    """A shell-named pane is safe only while its recorded launcher owns Codex."""
+    identity = tm("display-message", "-p", "-t", pane,
+                  "#{@cc_agent}|#{@cc_launcher_pid}|#{pane_pid}").decode().strip().split("|")
+    if len(identity) != 3 or identity[0] != "codex" or not all(value.isdigit() for value in identity[1:]):
+        return False
+    launcher, pane_pid = map(int, identity[1:])
+    processes = {}
+    output = subprocess.check_output(["ps", "-axo", "pid=,ppid=,comm="], timeout=3).decode()
+    for line in output.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            processes[int(fields[0])] = (int(fields[1]), Path(fields[2]).name)
+
+    def descendants(root):
+        pending, seen = [root], set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            pending.extend(pid for pid, (parent, _) in processes.items() if parent == current and pid != current)
+        return seen
+
+    if launcher not in processes or launcher not in descendants(pane_pid):
+        return False
+    for pid in descendants(launcher):
+        name = processes.get(pid, (0, ""))[1]
+        if name != "codex" and not name.startswith("codex-"):
+            continue
+        arguments = subprocess.check_output(["ps", "-p", str(pid), "-o", "args="], timeout=3).decode()
+        if arguments.strip() and not re.search(r"(?:^|\s)app-server(?:\s|$)", arguments):
+            return True
+    return False
+
+
 def prefill(socket, pane, draft, warm):
     prefix = ["tmux", "-L", socket]
 
@@ -110,7 +146,9 @@ def prefill(socket, pane, draft, warm):
         # Native Claude releases may report their version as the process name;
         # npm installs run as node. In particular, never paste into a shell left
         # behind by a failed/exited agent, even if its old prompt is still visible.
-        if command not in ("claude", "codex", "node") and not re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command):
+        if (command not in ("claude", "codex", "node")
+                and not re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command)
+                and not codex_owns_input(tm, pane)):
             appeared = unchanged = previous = None
             time.sleep(POLL)
             continue

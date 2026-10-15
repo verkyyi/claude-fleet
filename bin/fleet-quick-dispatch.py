@@ -427,6 +427,12 @@ def main(argv):
     if argv[:1] in (["payload"], ["send"]):
         agent = o["--agent"] if o["--agent"] in AGENTS else None
         data = payload(o["--title"], o["--repo"] or repo_default(), bool(o.get("--codex")), agent)
+        if data and o.get("--draft"):
+            draft = compose.clean(o["--title"])
+            if len(draft) > compose.MAX_BODY:
+                print("fleet: draft exceeds 4000 characters", file=sys.stderr)
+                return 2
+            data.update(draft=draft, body="", attachments=[], issue=False)
         if not data:
             print(tr("compose_empty"), file=sys.stderr)
             return 2

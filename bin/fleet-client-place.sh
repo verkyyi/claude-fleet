@@ -117,7 +117,7 @@ usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
-NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; ATTACH=(); NEW=''; TASK=''; VIA=''
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; DRAFTF=''; ATTACH=(); NEW=''; TASK=''; VIA=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
@@ -128,6 +128,7 @@ while [ $# -gt 0 ]; do
     # question's answer; canonical here, held to its shape by the hub too
     --reap)  [ $# -ge 2 ] || usage; REAP=$2; shift 2 ;;
     --body-file) [ $# -ge 2 ] || usage; BODYF=$2; shift 2 ;;
+    --draft-file) [ $# -ge 2 ] || usage; DRAFTF=$2; shift 2 ;;
     --attach) [ $# -ge 2 ] || usage; ATTACH+=("$2"); shift 2 ;;
     --new)   NEW=1; shift ;;
     --task)  TASK=1; shift ;;
@@ -167,18 +168,28 @@ fi
 [ "$REPO" != - ] || [ "$KIND" = scratch ] || [ "$KIND" = task_issue ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --body-file is for new or scratch\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
+if [ -n "$DRAFTF" ]; then
+  { [ "$KIND" = scratch ] && [ -z "$BODYF$TASK$HOME_ASK" ] && [ "${#ATTACH[@]}" -eq 0 ] && [ -r "$DRAFTF" ]; } \
+    || { printf 'fleet-client-place: draft needs a readable file and a plain scratch without body, task or attachments\n' >&2; exit 2; }
+fi
 [ "${#ATTACH[@]}" -eq 0 ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --attach is for new or scratch\n' >&2; exit 2; }
 
 # --- the hub ----------------------------------------------------------------------
 # ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$TASKREF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$TASKREF" "$DRAFTF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
 import base64, hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
 
-here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, taskref = sys.argv[1:18]
-files = sys.argv[18:]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, taskref, draftf = sys.argv[1:19]
+files = sys.argv[19:]
 body = ""
+draft = ""
+if draftf:
+    with open(draftf, encoding="utf-8") as f:
+        draft = f.read()
+    if not draft.strip() or len(draft) > 4000:
+        sys.exit("fleet-client-place: draft must be 1-4000 characters")
 if bodyf:
     with open(bodyf, encoding="utf-8") as f:
         body = f.read()
@@ -308,9 +319,11 @@ if home:
     req["home"] = True      # issue #2564: back to the current one, unless --new
     if new:
         req["new"] = True
-for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body)):
+for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body), ("draft", draft)):
     if v:
         req[k] = v
+if draft:
+    req["action"] = "draft"
 if attach:
     req["attachments"] = [{k: a[k] for k in ("name", "from", "sha256", "data")} for a in attach]
 if task:
@@ -574,8 +587,8 @@ TAIL=(); [ -n "$REAP" ] && TAIL=("$REAP")
 [ "${FLEET_CLIENT_IDENTITY:-}" = test ] && TAIL=("$REAP" test)
 case "$KIND" in
   issue)   out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" "$ISSUE" "$AGENT" "$REPO" '' '' ${REAP:+'' "$REAP"} 2>"$ef"); src=$? ;;
-  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${TAIL[@]+"${TAIL[@]}"} \
-                   < "${BODYF:-/dev/null}" 2>"$ef"); src=$? ;;
+  scratch) out=$(FLEET_CONTROL_DRAFT="${DRAFTF:+1}" bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${TAIL[@]+"${TAIL[@]}"} \
+                   < "${DRAFTF:-${BODYF:-/dev/null}}" 2>"$ef"); src=$? ;;
   restore) out=$(bash "$BIN/fleet-control-read.sh" resume "$SESS" "$KEY" 2>"$ef"); src=$? ;;
   new)     out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" new "$AGENT" "$REPO" '' '' "$TITLE" ${REAP:+"$REAP"} \
                    < "${BODYF:-/dev/null}" 2>"$ef"); src=$? ;;

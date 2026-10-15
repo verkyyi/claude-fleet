@@ -564,6 +564,29 @@ func TestFleetWriteReapPolicy(t *testing.T) {
 
 // test on worker_start (claude-fleet#2505): a scratch the test identity
 // placed reaches the node as test=true; only `true`, only on a scratch.
+func TestFleetWriteDraft(t *testing.T) {
+	harness, _, node, _, target := twoNodes(t)
+	postFleet(t, harness, "worker_start", map[string]any{"kind": "scratch", "no_repo": true,
+		"draft": "literal #42", "fleet_id": target.FleetID, "idempotency_key": "draft-ok"}, 200)
+	if params := node.writes[0]["params"].(map[string]any); params["draft"] != "literal #42" || params["body"] != nil {
+		t.Fatalf("params = %v", params)
+	}
+	for index, invalid := range []map[string]any{
+		{"kind": "new", "title": "task", "draft": "text"},
+		{"kind": "scratch", "draft": "text", "body": ""},
+		{"kind": "scratch", "draft": "text", "task": "T1"},
+		{"kind": "scratch", "draft": "text", "attachments": []any{}},
+		{"kind": "scratch", "draft": ""},
+		{"kind": "scratch", "draft": 42},
+	} {
+		invalid["fleet_id"], invalid["idempotency_key"] = target.FleetID, "draft-bad-"+strconv.Itoa(index)
+		postFleet(t, harness, "worker_start", invalid, 400)
+	}
+	if node.count() != 1 {
+		t.Fatalf("refused drafts reached node: %d", node.count())
+	}
+}
+
 func TestFleetWriteTestScratch(t *testing.T) {
 	h, _, macC, _, f4 := twoNodes(t)
 	postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "no_repo": true, "test": true, "fleet_id": f4.FleetID, "idempotency_key": "ts-1"}, 200)

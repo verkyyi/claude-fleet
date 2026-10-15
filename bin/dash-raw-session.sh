@@ -127,7 +127,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -143,6 +143,9 @@ while [ "$#" -gt 0 ]; do
     --name-file=*) f="${1#--name-file=}"; NAME="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
     --prompt)      PROMPT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --prompt=*)    PROMPT="${1#--prompt=}"; shift ;;
+    --draft)       DRAFT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --draft=*)     DRAFT="${1#--draft=}"; shift ;;
+    --draft-file=*) f="${1#--draft-file=}"; DRAFT="$(cat "$f")" || exit 1; rm -f "$f"; shift ;;
     # --prompt-file=<f>: same staging as --name-file — the seed is arbitrary user
     # text and is NEVER interpolated into the run-shell string.
     --prompt-file=*) f="${1#--prompt-file=}"; PROMPT="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
@@ -233,6 +236,10 @@ while [ "$#" -gt 0 ]; do
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
+if [ -n "$DRAFT" ] && [ -n "$PROMPT$SEED_FILE$RESUME_SID$TASK_REF$AS_ARG$ROLE" ]; then
+  printf 'dash-raw-session: draft cannot be combined with a seed, resume, task or agent role\n' >&2
+  exit 2
+fi
 case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; esac ;; *) TASK_REF='' ;; esac
 [ -n "$TASK_REF" ] && [ -z "$DESK_ARG" ] && DESK_ARG=off
@@ -447,7 +454,7 @@ BASE="${FLEET_BASE_BRANCH:-master}"
 # the user pressed Esc. Outcomes are reported via `tmux display-message`, so the
 # job has nothing to say on stdout; the redirect keeps it that way for good.
 if [ "$BG" = 1 ]; then
-  nfarg=""; pfarg=""
+  nfarg=""; pfarg=""; dfarg=""
   if [ -n "$NAME" ]; then
     nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { refuse "raw: cannot stage the scratch name"; exit 1; }
     printf '%s' "$NAME" > "$nf"
@@ -457,6 +464,11 @@ if [ "$BG" = 1 ]; then
     pf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { refuse "raw: cannot stage the scratch prompt"; exit 1; }
     printf '%s' "$PROMPT" > "$pf"
     pfarg=" --prompt-file='$pf'"
+  fi
+  if [ -n "$DRAFT" ]; then
+    df=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { refuse "raw: cannot stage the scratch draft"; exit 1; }
+    printf '%s' "$DRAFT" > "$df"
+    dfarg=" --draft-file='$df'"
   fi
   # The RESOLVED repo rides along (issue #789), so the bg pass cannot re-resolve
   # the highlighted row the operator moved off in between.
@@ -479,8 +491,8 @@ if [ "$BG" = 1 ]; then
     '') ;; on) owarg="$owarg --desk" ;; off) owarg="$owarg --no-desk" ;;
     *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
   esac
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
-    || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+    || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
 fi
@@ -505,8 +517,8 @@ fi
 # launch argument, here only) — named elsewhere they are refused, under `auto`
 # they open here. Hub module off: nothing runs unless --node names another machine.
 if [ "$PLACING" = 1 ]; then
-  if [ "$NOREPO" = 1 ] || [ -n "$PROMPT" ]; then
-    _why='a no-repo scratch'; [ -n "$PROMPT" ] && _why='a seeded scratch (--prompt)'
+  if [ "$NOREPO" = 1 ] || [ -n "$PROMPT$DRAFT" ]; then
+    _why='a no-repo scratch'; [ -n "$PROMPT$DRAFT" ] && _why='a scratch with input text'
     if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
     PLACING=0
   elif [ "${CCQUOTA_FLEET:-0}" != 1 ]; then
@@ -919,10 +931,11 @@ fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 # helper waits for the agent's input to settle, then pastes WITHOUT Enter. Pin a
 # pane id now so a later split/focus change cannot redirect the draft elsewhere.
 # Explicit --prompt keeps its existing seeded behavior and takes precedence.
-if [ -n "${NAME//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
+INPUT_DRAFT=${DRAFT:-$NAME}
+if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   df=$(mktemp "${TMPDIR:-/tmp}/scratch-draft.XXXXXX")
   pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)
-  if [ -n "$df" ] && [ -n "$pane" ] && printf '%s' "$NAME" > "$df"; then
+  if [ -n "$df" ] && [ -n "$pane" ] && printf '%s' "$INPUT_DRAFT" > "$df"; then
     TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' '$warm' >/dev/null 2>&1 || { rm -f '$df'; tmux -L '$SOCK' display-message 'raw: could not prefill the scratch name' 2>/dev/null; }" 2>/dev/null \
       || { rm -f "$df"; FLEET_UI_SOCK=$SOCK fleet_ui_fail 'raw: could not prefill the scratch name'; }
   else

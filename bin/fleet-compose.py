@@ -386,8 +386,13 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     compose_log("sent", id=cid, how=send_how(data, "none" if norepo else ""), repo="" if norepo else repo, at=at,
                 t_enter=t_enter)
     args = ["bash", str(BIN / "fleet-client-place.sh"), "-" if norepo else repo]
-    text = data.get("body") or ""
-    if not norepo and data.get("issue", True):
+    draft = data.get("draft")
+    if draft is not None and (not isinstance(draft, str) or not draft.strip() or len(draft) > MAX_BODY
+                              or data.get("body") or data.get("attachments")):
+        print("fleet-compose: draft must be 1-4000 characters without a submitted body or attachments", file=sys.stderr)
+        return 2
+    text = draft if draft is not None else data.get("body") or ""
+    if draft is None and not norepo and data.get("issue", True):
         args += ["new", "--title", title]
     else:
         # HOME (issue #1956): a session of no repo — never an issue, which
@@ -403,7 +408,7 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
         fd, bodyf = tempfile.mkstemp(prefix="fleet-compose-body.", dir=str(Path(path).parent))
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             out.write(text)
-        args += ["--body-file", bodyf]
+        args += ["--draft-file" if draft is not None else "--body-file", bodyf]
     # The files themselves go with it (issue #2393): the session may run on
     # another machine, where the paths in the text do not exist.
     for f in data.get("attachments") or []:
@@ -414,7 +419,7 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
         args += ["--agent", agent]
     if reap:
         args += ["--reap", reap]
-    if data.get("via") == "dispatch" and (norepo or data.get("issue", True)):
+    if draft is None and data.get("via") == "dispatch" and (norepo or data.get("issue", True)):
         # ⌘P's words (issue #3325): a person's task — the hub writes its record
         # T<n> first; a repo's is still a new issue, one with no repo the record
         # alone. No hub (or an older one) opens it as before.

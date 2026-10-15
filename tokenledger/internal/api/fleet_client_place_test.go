@@ -165,6 +165,36 @@ func TestClientPlaceNewFilesOnTheMachine(t *testing.T) {
 // and no repo is placed among every fleet of the person (mac-d busy → mac-c) and
 // reaches the node as no_repo with its seed body — never a repo; no_repo
 // beside a repo, or on anything but a scratch, is refused before a send.
+func TestClientPlaceDraft(t *testing.T) {
+	harness, _, node, _, target := twoNodes(t)
+	lease, key := clientLeaseFor(t, harness)
+	node.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
+		"workers": []map[string]any{{"window_id": "@6", "worker_id": target.FleetID + "/@6"}}}))
+	draft := strings.Repeat("完整文字 #42 ", 40)
+	status, result := clientPlace(t, harness, lease, key, map[string]any{
+		"action": "draft", "repo": writeRepo, "kind": "scratch", "name": "short label", "draft": draft, "idempotency_key": "panel-draft"})
+	if status != 200 || result.Exit != 0 || result.State != "done" {
+		t.Fatalf("place = %d %+v", status, result)
+	}
+	params := node.writes[0]["params"].(map[string]any)
+	if params["kind"] != "scratch" || params["draft"] != draft || params["body"] != nil || params["task"] != nil {
+		t.Fatalf("draft became a submitted task: %v", params)
+	}
+	for _, invalid := range []map[string]any{
+		{"repo": writeRepo, "kind": "new", "title": "task", "draft": "text"},
+		{"repo": writeRepo, "kind": "scratch", "draft": "text", "body": "seed"},
+		{"no_repo": true, "kind": "scratch", "draft": "text", "task": true, "title": "task"},
+		{"repo": writeRepo, "kind": "scratch", "draft": strings.Repeat("x", 4001)},
+	} {
+		if status, _ := clientPlace(t, harness, lease, key, invalid); status != 400 {
+			t.Fatalf("invalid draft returned %d", status)
+		}
+	}
+	if node.count() != 1 {
+		t.Fatalf("refused drafts reached node: %d", node.count())
+	}
+}
+
 func TestClientPlaceNoRepoScratch(t *testing.T) {
 	h, macD, macC, _, f4 := twoNodes(t)
 	lease, key := clientLeaseFor(t, h)

@@ -189,7 +189,10 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
 fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/scratch.calls"
 repo=''; agent=claude; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; [ "$prev" = --agent ] && agent=$a; prev=$a
-  case "$a" in --prompt-file=*) cat "${a#--prompt-file=}" > "$FLEET_CONF_DIR/scratch.seed" ;; esac; done
+  case "$a" in
+    --prompt-file=*) cat "${a#--prompt-file=}" > "$FLEET_CONF_DIR/scratch.seed" ;;
+    --draft-file=*) cat "${a#--draft-file=}" > "$FLEET_CONF_DIR/scratch.draft" ;;
+  esac; done
 printf '@13\\t\\t1\\t/fixture/project-scratch-3\\tdone\\t%s\\ta2\\t\\t%s\\n' "$agent" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 printf '@13\\tscratch-3\\t/fixture/project-scratch-3\\n'
 ''')
@@ -1417,6 +1420,18 @@ class HubTests(HubFixture):
         self.assertEqual((down["status"], err["code"], err["exit"]), ("failed", "UNAVAILABLE", 8))
         self.assertEqual(err["stderr1"], "start: fleet demo has no running tmux server — nothing opened")
         self.assertEqual(len((self.node.conf / "scratch.calls").read_text().splitlines()), 1)
+
+    def test_start_scratch_with_unsent_draft(self):
+        draft = "检查 #42 完整文字 " * 40
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="draft-1",
+                                                 params=dict(kind="scratch", no_repo=True, name="short label", draft=draft)))
+        operation = self.node.wait(started["operation_id"])
+        self.assertEqual((operation["status"], operation["result"]["window"]), ("succeeded", "@13"))
+        arguments = (self.node.conf / "scratch.calls").read_text()
+        self.assertIn("--draft-file=", arguments)
+        self.assertNotIn("--prompt-file", arguments)
+        self.assertEqual((self.node.conf / "scratch.draft").read_text(), draft)
+        self.assertFalse((self.node.conf / "scratch.seed").exists())
 
     def test_start_no_repo_scratch_with_seed(self):
         # issue #1956: the writing area's 「不关联仓库」 — no_repo is a scratch of
