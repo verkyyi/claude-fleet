@@ -55,7 +55,7 @@ try:
                 seen.add(pid)
                 pid = self.ppid[pid]
             return False
-        keep = {pid for pid in self.ppid if belongs(pid)}
+        keep = {pid for pid in self.ppid if belongs(pid)} | (set(self.ppid) & self.own_pids)
         self.ppid = {pid: pp for pid, pp in self.ppid.items() if pid in keep}
         self.first &= keep
         return alive & keep
@@ -82,11 +82,9 @@ finally:
     p.terminate()
     p.wait(timeout=5)
 
-# A ps child seen in the snapshot must not be removed twice from the rate.
+# The real ps children above remain visible too: C fails if own forks are
+# subtracted twice, once by the counter and again by the exclusion tree.
 s = m.Sampler([])
-s.own_pids.add(99)
-s.ppid = {99: os.getpid(), 77: p.pid}
-assert s.excluded(99)
 
 # The exact same window id on another socket cannot be the caller.
 a = SimpleNamespace(configs="", conf_dir="", self_socket="/mine", self_window="@1",
@@ -101,3 +99,32 @@ g.previous = {("/other", "@1"): ("done", "1", "")}
 with patch.object(g, "local", return_value={("/other", "@1"): ("done", "2", "")}):
     assert "busy interval" in g.check(set())
 print("PASS caller socket identity and between-probe activity")
+
+# A peer can work and stop wholly between collector snapshots. Its event marker
+# invalidates the old snapshot immediately, and a new quiet snapshot cannot
+# erase that activity from an already-running measurement.
+shared = work / "peer-sessions"
+shared.mkdir()
+marker = shared / ".idle-peer"
+marker.touch(mode=0o644)
+a.sessions_dir = str(shared)
+g = m.IdleGuard(a, s)
+os.environ["FLEET_MACHINE_SESSIONS_OWNER_CHECK"] = "0"
+def publish_peer():
+    r = {"ts": time.time(), "working": 0, "unknown": False, "changed": 0,
+         "activity": marker.stat().st_mtime_ns}
+    (shared / "peer").write_text("1 %d 0\nidle-v1 %s\n" % (time.time(), json.dumps(r)))
+publish_peer()
+assert g.peers(set()) == ""
+time.sleep(0.02)
+e = dict(os.environ, HOME=str(work / "peer"), FLEET_MACHINE_SESSIONS_DIR=str(shared))
+subprocess.run(["sh", "-c", '. "$1/fleet-idle-activity.sh"; fleet_idle_activity',
+                "_", sys.argv[2]], env=e, check=True)
+assert "activity since" in g.peers(set())
+publish_peer()
+assert "busy interval" in g.peers(set())
+# A fresh measurement after that work ended may accept the refreshed snapshot.
+assert m.IdleGuard(a, s).peers(set()) == ""
+marker.unlink()
+assert "unknown" in m.IdleGuard(a, s).peers(set())
+print("PASS cross-login activity between publications, missing marker refuses")

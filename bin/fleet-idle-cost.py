@@ -166,6 +166,7 @@ class IdleGuard:
     def __init__(self, a, sampler):
         self.a, self.s = a, sampler
         self.previous = None
+        self.peer_activity = {}
         self.started = time.time()
 
     def local(self):
@@ -194,7 +195,7 @@ class IdleGuard:
                 prefix, sep, body = line.partition(" ")
                 if re.match(r"^@\d+:\$\d+:", prefix):
                     wid, _, session = prefix.split(":", 2)
-                    if "@view-" in session or wid in seen:
+                    if "@view-" in session or session.endswith("-pool") or wid in seen:
                         continue
                     seen.add(wid)
                     line = body
@@ -211,10 +212,22 @@ class IdleGuard:
         return rows
 
     def snapshot(self):
+        marker = os.path.join(self.a.sessions_dir, ".idle-" + self.a.login)
+        try:
+            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.fchmod(fd, 0o644)
+            os.close(fd)
+        except FileExistsError:
+            pass
+        st = os.lstat(marker)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            raise RuntimeError("activity marker has wrong owner or type")
+        activity = st.st_mtime_ns
         rows = self.local()
         return {"ts": time.time(), "working": sum(v[0] == "working" for v in rows.values()),
                 "unknown": any(not v[0] or v[2] in {"preparing", "waking"} for v in rows.values()),
-                "changed": max([float(v[1] or 0) for v in rows.values()] or [0])}
+                "changed": max([float(v[1] or 0) for v in rows.values()] or [0]),
+                "activity": activity}
 
     def peers(self, foreign):
         d = self.a.sessions_dir
@@ -258,6 +271,14 @@ class IdleGuard:
                         raise ValueError("invalid working count")
                     if r["working"]:
                         return "working: %s session(s) in login %s" % (r["working"], name)
+                    mark = os.lstat(os.path.join(d, ".idle-" + name))
+                    if not stat.S_ISREG(mark.st_mode) or mark.st_uid != st.st_uid:
+                        raise ValueError("activity marker has wrong owner or type")
+                    if mark.st_mtime_ns != r["activity"]:
+                        raise ValueError("activity since the last working-state snapshot")
+                    old = self.peer_activity.setdefault(name, mark.st_mtime_ns)
+                    if old != mark.st_mtime_ns:
+                        return "busy interval: activity in login " + name
                     if self.previous is not None and r["changed"] >= self.started:
                         return "busy interval: state changed in login " + name
                 covered.add(st.st_uid)

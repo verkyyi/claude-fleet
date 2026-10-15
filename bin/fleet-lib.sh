@@ -141,6 +141,8 @@ fi
 # Kept past the source for fleet_identity_triplet, which re-reads the global conf
 # from a clean slate (issue #1498).
 _FLEET_LIB_DIR="$_flib_here"
+# shellcheck source=/dev/null
+[ ! -f "$_FLEET_LIB_DIR/fleet-idle-activity.sh" ] || . "$_FLEET_LIB_DIR/fleet-idle-activity.sh"
 unset _flib_here
 # The release lanes' one reader, fleet_stable_ref_for (issue #3868), lives in the
 # versions lib — POSIX, sourced by the client and the installer too.
@@ -6657,6 +6659,7 @@ EOF
 # fork: `: >` truncates an already-empty file and still moves its mtime (APFS,
 # ext4 — the agent's test pins it).
 fleet_hub_nudge() {
+  command -v fleet_idle_activity >/dev/null 2>&1 && fleet_idle_activity
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 0
   [ -d "$FLEET_CONF_DIR/global" ] || mkdir -p "$FLEET_CONF_DIR/global" 2>/dev/null || return 0
   : > "$FLEET_CONF_DIR/global/hub-nudge" 2>/dev/null

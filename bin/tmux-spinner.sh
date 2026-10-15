@@ -76,6 +76,12 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # caller below writes only on a CHANGE, so no re-stamp ever nudges. Off unless
 # CCQUOTA_FLEET=1: nothing is written.
 _hub_nudge() {
+  _idle_lib="${0%/*}/fleet-idle-activity.sh"
+  if [ -f "$_idle_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_idle_lib"
+    fleet_idle_activity
+  fi
   [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 0
   : > "$FLEET_CONF_DIR/global/hub-nudge" 2>/dev/null
   return 0

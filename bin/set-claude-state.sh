@@ -429,6 +429,14 @@ fi
 # nothing — it preserves the existing @claude_state and its timestamp so the
 # classifier (or the worker's own declaration) stays authoritative.
 if [ "$sem" != "leave" ] && [ -z "$held" ]; then
+  # Every writer using this hook participates, including old hook tables. The
+  # marker only changes when a shared idle observer has provisioned it.
+  _idle_lib="${0%/*}/fleet-idle-activity.sh"
+  if [ -f "$_idle_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_idle_lib"
+    fleet_idle_activity
+  fi
   # What the window said BEFORE this write — only with the cross-machine hub on
   # (issue #1481, below): the nudge is for a CHANGE, and a per-tool `working`
   # re-stamp is not one. Off, no extra fork.
@@ -463,6 +471,7 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   fi
   # last-activity stamp (drives the dashboard's "Nm ago" column).
   tmux set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
+  command -v fleet_idle_activity >/dev/null 2>&1 && fleet_idle_activity
   # Wake the spinner (issue #887). It re-reads a QUIET fleet's windows only ~1/s;
   # this marker — `<socket path>.dirty`, beside tmux's own socket, the one path the
   # daemon and this pane are guaranteed to agree on — gets the change drawn on its
