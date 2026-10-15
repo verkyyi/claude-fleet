@@ -245,6 +245,28 @@ type upstreamRejection struct {
 // home the hub does not manage, or one whose refusal was of an earlier token,
 // is not listed.
 func (a *Agent) upstreamRejections() []upstreamRejection {
+	if a.cfg.FleetCredStore != "" {
+		as := ""
+		if a.cfg.RunAs != nil {
+			as = a.cfg.RunAs.Login
+		}
+		raw, err := credStoreAsk(a.cfg.FleetCredStore, as, map[string]any{"op": "upstream-rejections"})
+		var result struct {
+			Rejected []upstreamRejection `json:"rejected"`
+		}
+		if err == nil {
+			err = json.Unmarshal(raw, &result)
+		}
+		if err != nil {
+			if !a.credRejectionsUnavailable {
+				log.Printf("credentials: cannot read upstream rejections from the separated proxy; check proxy availability and version")
+			}
+			a.credRejectionsUnavailable = true
+			return nil
+		}
+		a.credRejectionsUnavailable = false
+		return result.Rejected
+	}
 	homes := map[string]string{"default": a.codexHomeFor("default")}
 	if ents, err := os.ReadDir(filepath.Dir(a.codexHomeFor("x"))); err == nil {
 		for _, e := range ents {

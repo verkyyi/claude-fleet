@@ -1939,6 +1939,33 @@ def codex_tokens(path):
     return t["access_token"], t.get("account_id"), fp
 
 
+def codex_rejections(cfg):
+    rejected = []
+    labels = set(tenant_labels(cfg, "codex"))
+    if os.path.isfile(cfg.codex_auth):
+        labels.add("default")
+    with POOL_LOCK:
+        for label in sorted(labels):
+            path = pool_entry(cfg, "codex", label) or codex_auth_path(cfg, label)
+            try:
+                bundle = read_json(path, {})
+                if bundle.get("tokens", {}).get("refresh_token") != "hub-managed":
+                    continue
+                access, _, fingerprint = codex_tokens(path)
+                verdict = read_json(os.path.join(os.path.dirname(path), ".ccquota-upstream.json"), {})
+                if verdict.get("credential_version") != fingerprint or verdict.get("state") != "rejected":
+                    continue
+                code = verdict.get("error")
+                if code not in ACCESS_REJECT and code != "401":
+                    continue
+                rejected.append(dict(provider="codex", account=label,
+                                     fingerprint=hashlib.sha256(access.encode()).hexdigest(),
+                                     error=code))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+    return rejected
+
+
 def codex_target_auth(t, label):
     """Metadata-only preflight for a transfer, scoped by ctl_tenant's peer uid.
 
@@ -2040,6 +2067,10 @@ def ctl_handle(req, t):
     op = req.get("op")
     if op == "target-auth":
         return codex_target_auth(t, req.get("account") or "")
+    if op == "upstream-rejections":
+        if not cfg.store:
+            return {"ok": False, "err": "upstream-rejections: not separated"}
+        return {"ok": True, "rejected": codex_rejections(cfg)}
     if op == "route":
         if req.get("refresh"):
             t.router.refresh(t.log)

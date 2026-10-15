@@ -38,6 +38,11 @@ func fakeCredStore(t *testing.T, refuse string) (string, chan map[string]string)
 			line, _ := bufio.NewReader(c).ReadBytes('\n')
 			var req map[string]string
 			_ = json.Unmarshal(line, &req)
+			if req["op"] == "upstream-rejections" {
+				c.Write([]byte(`{"ok":true,"rejected":[]}` + "\n"))
+				c.Close()
+				continue
+			}
 			got <- req
 			if refuse != "" {
 				c.Write([]byte(`{"ok":false,"err":"` + refuse + `"}` + "\n"))
