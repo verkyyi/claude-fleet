@@ -389,7 +389,7 @@ LOGIN="$WORK/login"; mkdir -p "$LOGIN/.claude" "$LOGIN/.codex"
 printf '{}\n' > "$LOGIN/.claude.json"
 printf 'cli_auth_credentials_store = "file"\n' > "$LOGIN/.codex/config.toml"
 : > "$LOGIN/.claude/CLAUDE.md"; : > "$LOGIN/.codex/AGENTS.md"
-HOME="$LOGIN" CLAUDE_CONFIG_DIR= CODEX_HOME="$LOGIN/.codex" FLEET_CODEX_HOME= FLEET_CONF_DIR="$LOGIN/.config/claude-fleet" \
+HOME="$LOGIN" CLAUDE_CONFIG_DIR='' CODEX_HOME="$LOGIN/.codex" FLEET_CODEX_HOME='' FLEET_CONF_DIR="$LOGIN/.config/claude-fleet" \
   python3 "$SCRIPT" apply --root "$SR" > "$WORK/o14" || fail 'sandbox HOME default apply failed'
 [ "$(grep -c 'claude-fleet' "$LOGIN/.claude/CLAUDE.md")" = 0 ] && [ "$(grep -c 'claude-fleet' "$LOGIN/.codex/AGENTS.md")" = 0 ] \
   || fail 'sandbox HOME instruction files gained fleet rules'
