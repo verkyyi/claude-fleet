@@ -1640,7 +1640,7 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     pane is the agent's input. No session is special, so nothing here names an
     orchestrator. rc as go(); 3 when none opened (one line on the client).
     ⌘P's ⚡ row (issue #3327) names its cells: `repo` (--repo, else --no-repo),
-    `agent` (--agent, only when not the fleet's default) and `draft` (the typed
+    `agent` (--agent, the panel's resolved selection) and `draft` (the typed
     words, left unsubmitted). Explicit `prompt` callers retain seeded starts."""
     fleet = view_fleet(vid)
     if not fleet:
@@ -2818,7 +2818,7 @@ def bolt_argv(qo, vid, client, st, query):
     Neither route files an issue, invokes fleet-claim, or submits a model turn.
     """
     repo, agent = bolt_repo(st, query), bolt_agent(st)
-    extra = ["--agent", agent] if agent != bolt_dflt(st) else []
+    extra = ["--agent", agent]
     cl = ["--client", client] if client else []
     title = query.strip()
     if title and repo:

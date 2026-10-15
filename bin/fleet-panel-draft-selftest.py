@@ -36,6 +36,7 @@ class PanelDraftTests(unittest.TestCase):
         with patch.dict(os.environ, {"FLEET_START_WARM": "1"}), \
                 patch.object(fleet_view, "view_fleet", return_value="test-fleet"), \
                 patch.object(fleet_view.fleet_timing, "Clock"), \
+                patch.object(fleet_view, "new_agent", side_effect=AssertionError("agent already selected")), \
                 patch.object(fleet_view.subprocess, "run", side_effect=responses) as run, \
                 patch.object(fleet_view, "go", return_value=0):
             self.assertEqual(fleet_view.go_new(None, "test-view", agent="codex", draft="literal #42"), 0)
@@ -56,8 +57,21 @@ class PanelDraftTests(unittest.TestCase):
                     patch.object(fleet_view, "bolt_dflt", return_value="codex"):
                 argv, title, where = fleet_view.bolt_argv(quick, "v1", "", {}, "检查 #42")
             self.assertIn("--draft", argv)
+            self.assertEqual(argv[argv.index("--agent") + 1], "codex")
             self.assertNotIn("--prompt", argv)
             self.assertEqual(title, "检查 #42")
+
+    def test_panel_preserves_resolved_agent_for_blank_and_typed_tasks(self):
+        quick = SimpleNamespace(__file__="quickopen.py")
+        for agent in fleet_view.AGENTS:
+            for repo in ("acme/web", ""):
+                for query in ("", "literal draft"):
+                    with self.subTest(agent=agent, repo=repo, query=query), \
+                            patch.object(fleet_view, "bolt_repo", return_value=repo), \
+                            patch.object(fleet_view, "bolt_agent", return_value=agent), \
+                            patch.object(fleet_view, "bolt_dflt", return_value=agent):
+                        argv, _, _ = fleet_view.bolt_argv(quick, "v1", "", {}, query)
+                    self.assertEqual(argv[argv.index("--agent") + 1], agent)
 
     def test_dispatch_preserves_long_literal_draft(self):
         draft = '检查 #42 "$(not-a-command)" ' + "完整文字" * 100

@@ -452,7 +452,7 @@ grep -q 'Tab 下一格  ←→ 换' "$W/panel-grid.txt" || fail "P: the keys lin
 [ -n "${FLEET_VIEW_PANEL_EVIDENCE:-}" ] && cp "$W/panel-grid.txt" "$FLEET_VIEW_PANEL_EVIDENCE.grid"
 to send-keys -t o:view Enter
 waitfor 20 test -s "$W/sent.json" || fail "P: ↵ on ⚡ with a hit sent nothing: $(to capture-pane -p -t o:view | grep -v '^$')"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="Gamma" and d["repo"]=="acme/app" and not d.get("agent") and d["draft"]=="Gamma" and not d["body"], d' "$W/sent.json" \
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="Gamma" and d["repo"]=="acme/app" and d["agent"]=="claude" and d["draft"]=="Gamma" and not d["body"], d' "$W/sent.json" \
   || fail "P: the picked repo's send: $(cat "$W/sent.json")"
 waitfor 12 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || fail "P: the panel stayed after the send"
 # 6 no words: ↑ goes round to ⚡ 新会话（空白）, ↵ = ⌘N's no-repo session, the 看台 on it
@@ -467,7 +467,7 @@ to capture-pane -p -t o:view | grep -q '▶ ⚡ 新会话（空白）' || fail "
 to capture-pane -p -t o:view | grep -q '↵ 在本机开空白会话' || fail "P: the keys line on blank ⚡: $(to capture-pane -p -t o:view | tail -1)"
 to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new3" || fail "P: blank ⚡ opened no session: $(to capture-pane -p -t o:view | grep -v '^$')"
-[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] || fail "P: blank ⚡ is not ⌘N's: $(sed -n 3p "$W/new.argv")"
+[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --agent claude --no-desk --print fl" ] || fail "P: blank ⚡ lost its selected agent: $(sed -n 3p "$W/new.argv")"
 N3=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new3" { print $1 }')
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N3' ]" || fail "P: the 看台 is not on new3 ($(cur))"
 # the blank ⚡'s panel may still be closing after the go: a ⌘P now reaches IT, its
@@ -481,7 +481,7 @@ to send-keys -t o:view Tab; sleep 0.2; to send-keys -t o:view Left; sleep 0.3   
 waitfor 8 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '仓库 ‹不绑仓库›'" || fail "P: ← from the last repo is not 不绑仓库: $(to capture-pane -p -t o:view | grep -v '^$')"
 to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || fail "P: words with no repo opened no session"
-[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --draft 看看日志 --no-desk --print fl" ] || fail "P: words with no repo: $(sed -n 4p "$W/new.argv")"
+[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --agent claude --draft 看看日志 --no-desk --print fl" ] || fail "P: words with no repo: $(sed -n 4p "$W/new.argv")"
 # ⏻ 退出 fleet = ⌘Q
 to pipe-pane -o -t o:view "cat > '$W/client-p.bytes'"; sleep 0.3
 to send-keys -t o:view -H 1b 5b 39 32 37 7e

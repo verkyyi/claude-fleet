@@ -125,6 +125,8 @@ Explicit issue creation, automation, and `--prompt` starts keep their seeded
 behavior. Drafts and submitted seeds cannot be combined.
 
 Panel opens try the matching warm slot even when an agent is selected explicitly.
+The panel forwards its resolved agent even when it matches the default, avoiding
+a second selection lookup after Enter. Node-side policy checks still apply.
 Claims still check repository, provider, account home, size and age; a missing
 entry falls back to cold startup. This changes reuse, not pool capacity.
 
