@@ -185,7 +185,9 @@ class IdleGuard:
             except RuntimeError:
                 # A configured but stopped fleet has no socket. A server that
                 # exists but cannot answer is unknown, not an empty scan.
-                if not os.path.exists(path):
+                try:
+                    os.stat(path)
+                except FileNotFoundError:
                     continue
                 raise
             # fleet_lw_fmt / fleet_lw_filter, kept in sync with fleet-lib.sh:
@@ -306,7 +308,7 @@ class IdleGuard:
                 continue
             if pat and pat in cmd:
                 return "ci: 1 job(s) running"
-            if self.s.uid[p] != os.getuid() and re.search(r"(?:^|/|\s)(?:tmux|claude|codex)(?:\s|$)", cmd):
+            if self.s.uid[p] != os.getuid() and re.search(r"(?:^|/|\s)(?:tmux|claude|codex)(?::|\s|$)", cmd):
                 foreign.add(self.s.uid[p])
         reason = self.peers(foreign)
         self.previous = rows
@@ -395,7 +397,7 @@ def cmd_sample(a):
         if owner is None:
             key = (0, "(祖先已退出) " + who(s.cmd.get(top, "")))
         elif owner == 1:
-            key = (1, "launchd ← " + who(s.cmd.get(top, "")))
+            key = (1, who(s.cmd.get(1, "init")) + " ← " + who(s.cmd.get(top, "")))
         else:
             key = (owner, who(s.cmd.get(owner, "")))
         owners[key] = owners.get(key, 0) + 1

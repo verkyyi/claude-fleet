@@ -37,6 +37,19 @@ export FLEET_CONF_DIR="$WORK/conf"
 export FLEET_MACHINE_SESSIONS_DIR="$WORK/sessions"
 export FLEET_MACHINE_SESSIONS_OWNER_CHECK=0
 mkdir -p "$FLEET_MACHINE_SESSIONS_DIR"
+# The fixture owns one simulated login. Real neighbours on a shared Mac must
+# not leak into it; peer-state and missing-inventory cases are exercised below
+# and in acceptance.py. Other ps formats (the doctor / load harness) stay real.
+export IDLE_TEST_PS="$(command -v ps)" IDLE_TEST_UID="$(id -u)"
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/ps" <<'PS_SHIM'
+#!/bin/sh
+if [ "$*" = '-axo pid=,ppid=,uid=,etime=,time=,command=' ]; then
+  "$IDLE_TEST_PS" "$@" | awk -v uid="$IDLE_TEST_UID" '$3 == uid'
+else exec "$IDLE_TEST_PS" "$@"; fi
+PS_SHIM
+chmod +x "$WORK/bin/ps"
+export PATH="$WORK/bin:$PATH"
 export FLEET_CI_WORKER_PAT="idlecost-ci-$$-marker"
 mkdir -p "$FLEET_CONF_DIR/fleets/$SOCK"
 printf 'FLEET_SESSION=%s\n' "$SOCK" > "$FLEET_CONF_DIR/fleets/$SOCK/conf"

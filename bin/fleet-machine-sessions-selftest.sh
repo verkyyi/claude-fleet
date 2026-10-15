@@ -89,7 +89,12 @@ case "$ats" in ''|*[!0-9]*) fail "A the file's second field is an epoch (got '$a
 [ "$(cat "$SH/bob")" != "" ] && read -r bn _ < "$SH/bob"; [ "$bn" = 2 ] || fail "A bob's count (got '$bn')"
 perm=$(stat -c %a "$SH" 2>/dev/null || stat -f %Mp%Lp "$SH" 2>/dev/null)
 [ "$perm" = 1777 ] || fail "A the shared dir must be 1777 like the heavy queue (got $perm)"
-for t in "$SH"/.*; do case "${t##*/}" in .|..) ;; *) [ -e "$t" ] && fail "A a publish must leave no temp file behind" "$t" ;; esac; done
+for t in "$SH"/.*; do
+  case "${t##*/}" in
+    .|..|.idle-alice|.idle-bob|.idle-carol) ;; # persistent activity markers, not temp files
+    *) [ -e "$t" ] && fail "A a publish must leave no temp file behind" "$t" ;;
+  esac
+done
 lib alice 0 'fleet_machine_sessions_publish 7' && read -r an ats az < "$SH/alice"; [ "$an" = 7 ] || fail "A an explicit count wins (got '$an')"
 [ -z "$az" ] || fail "A an explicit count knows no sleepers: no third field (got '$az')"
 # issue #4231: asleep workers ride the third field — the daemon runs a login's
@@ -180,6 +185,7 @@ perm=$(stat -c %a "$SH/$me" 2>/dev/null || stat -f %Lp "$SH/$me" 2>/dev/null)
 [ "$perm" = 644 ] || fail "G a login's file must be 0644, not writable by others (got $perm)"
 grep -q 'mktemp "\$d/' "$BIN/fleet-lib.sh" || fail "G publish must write through a mktemp, never a predictable .<login>.\$\$ temp"
 printf '50 %s\n' "$(date +%s)" > "$SH/mallory"          # owned by $me, named mallory: a squat
+: > "$SH/.idle-mallory"
 ln -s "$SH/$me" "$SH/eve"                              # a symlink posing as a login
 r=$(OWNER_CHECK=1 lib "$me" 2 fleet_machine_sessions_summary)
 [ "$r" = "$(printf '2\t%s 2' "$me")" ] || fail "G a planted or symlinked login file must count nothing (got '$r')"
@@ -189,6 +195,8 @@ printf '%s\n' "$out" | grep -q "sessions across logins: 2 across 1 login(s): $me
 python3 "$BIN/fleet-shared-dirs.py" --root "$G/shared" --slots 1 >/dev/null || fail "G fleet-shared-dirs.py failed"
 [ -e "$SH/mallory" ] || [ -L "$SH/eve" ] && fail "G fleet-shared-dirs.py must sweep the planted files"
 [ -f "$SH/$me" ] || fail "G fleet-shared-dirs.py must keep the login's own file"
+[ -f "$SH/.idle-$me" ] || fail "G fleet-shared-dirs.py must keep the login's activity marker"
+[ ! -e "$SH/.idle-mallory" ] || fail "G fleet-shared-dirs.py must sweep a planted activity marker"
 if [ "$(id -u)" != 0 ] && sudo -n -u nobody true 2>/dev/null; then
   chmod 755 "$WORK" "$G" "$G/shared"
   if sudo -n -u nobody test -r "$SH/$me"; then

@@ -57,6 +57,9 @@ try:
             return False
         keep = {pid for pid in self.ppid if belongs(pid)} | (set(self.ppid) & self.own_pids)
         self.ppid = {pid: pp for pid, pp in self.ppid.items() if pid in keep}
+        # The fake is a child of this test orchestrator, which also embeds the
+        # sampler. At the selected tree's boundary it has no measuring parent.
+        self.ppid[p.pid] = 0
         self.first &= keep
         return alive & keep
 
@@ -99,6 +102,12 @@ g.previous = {("/other", "@1"): ("done", "1", "")}
 with patch.object(g, "local", return_value={("/other", "@1"): ("done", "2", "")}):
     assert "busy interval" in g.check(set())
 print("PASS caller socket identity and between-probe activity")
+
+s.uid[777777] = os.getuid() + 1
+s.cmd[777777] = "tmux: server"
+with patch.object(g, "local", return_value={}):
+    g.previous = None
+    assert "no fresh inventory" in g.check({777777})
 
 # A peer can work and stop wholly between collector snapshots. Its event marker
 # invalidates the old snapshot immediately, and a new quiet snapshot cannot
