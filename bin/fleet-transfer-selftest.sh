@@ -303,6 +303,21 @@ PYNATIVE
       [ "$(jstate)" = withdrawn ] || fail 'confirmed receipts must withdraw the journal'
     }
 
+    # the zone native cron uses is always a key ZoneInfo accepts (issue #4309):
+    # a runner's `…/zoneinfo//UTC` link and an absolute TZ once gave `/UTC`.
+    ok; OUT=$(python3 - "$IBIN" "$WORK" <<'PYZONE'
+import os,sys; sys.path.insert(0,sys.argv[1]); import fleet_transfer_durable as D
+w=sys.argv[2]; dbl=os.path.join(w,'lt-dbl'); rel=os.path.join(w,'lt-rel')
+for p,t in ((dbl,'/usr/share/zoneinfo//UTC'),(rel,'../usr/share/zoneinfo/Asia/Shanghai')):
+    if os.path.lexists(p): os.unlink(p)
+    os.symlink(t,p)
+got=[D.local_zone('',dbl),D.local_zone('/UTC',rel),D.local_zone(':/UTC',rel),D.local_zone('',rel),
+     D.local_zone('No/Such',dbl),D.local_zone('',os.path.join(w,'none'))]
+print(' '.join(got))
+PYZONE
+)
+    [ "$OUT" = 'UTC UTC UTC Asia/Shanghai UTC UTC' ] || fail "local_zone must give a ZoneInfo key: $OUT"
+
     # 0) road 2 — the source cannot run its own CronDelete (quota, stuck): this
     #    controller takes its durable task, ONLY inside the isolation boundary.
     printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
