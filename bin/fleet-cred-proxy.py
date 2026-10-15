@@ -970,6 +970,17 @@ class Router:
             return "none"
         return str(d.get("anthropic" if provider == "claude" else "openai", "none")) or "none"
 
+    def leases_nothing(self):
+        """A person's pod (render.py --cred-central): nothing is ever leased into
+        it (node.env CCQUOTA_FLEET_CREDS=0) and a central proxy is named — the
+        rule fleet-node-probe.sh and the launchers' _fc_sep / _fx_sep already
+        read (#4185, #3554). Its login holds no credential file, so a trusted
+        word from the hub must not send it direct (issue #4290: a principal the
+        credsep gate does not hold went direct and every turn was 403 nocred)."""
+        if not getattr(self.cfg, "central_set", False):
+            return False
+        return node_env(getattr(self.cfg, "node_env", None)).get("CCQUOTA_FLEET_CREDS") == "0"
+
     def candidates(self, provider, has_hub_cred):
         """-> ([route, …] best first, reason)."""
         with self.lock:
@@ -977,6 +988,9 @@ class Router:
         relay = bool(self.cfg.relay_url and relay_pass(self.cfg))
         if trust != "trusted":
             return ["central"], "%s (%s) → central, no credential file is read" % (trust, twhy)
+        if self.leases_nothing():
+            return ["central"], "trusted + nothing leased in (node.env CCQUOTA_FLEET_CREDS=0, " \
+                "FLEET_CRED_CENTRAL_URL set) → central, no credential file is read"
         p = self.probe(provider)
         if relay and self.probe_route() == "relay":
             # the probe judged this login by the relay (issue #3364): this
@@ -2525,6 +2539,7 @@ def tenant_cfg(base, spec):
     c.relay_url = (st.get("FLEET_CRED_RELAY_URL") or "").rstrip("/")
     c.relay_token = st.get("FLEET_CRED_RELAY_TOKEN") or ""
     ne = node_env(c.node_env)
+    c.central_set = bool(st.get("FLEET_CRED_CENTRAL_URL"))
     c.central_url = (st.get("FLEET_CRED_CENTRAL_URL") or ne.get("CCQUOTA_HUB_URL")
                      or st.get("FLEET_HUB_URL") or "").rstrip("/")
     c.legacy_port = int(spec.get("legacy_port") or 0)
@@ -2690,6 +2705,7 @@ def serve(a):
         cfg.node_env = env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))
         cfg.probe_path = env("FLEET_CRED_PROBE", os.path.join(conf_dir(), "node-probe.json"))
         ne = node_env(cfg.node_env)
+        cfg.central_set = bool(env("FLEET_CRED_CENTRAL_URL"))
         cfg.central_url = env("FLEET_CRED_CENTRAL_URL", ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
         cfg.accounts = env("FLEET_CRED_ACCOUNTS", os.path.join(conf_dir(), "accounts"))
         cfg.codex_auth = env("FLEET_CRED_CODEX_AUTH", os.path.expanduser("~/.codex/auth.json"))
