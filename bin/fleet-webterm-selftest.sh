@@ -107,6 +107,9 @@ browser() {  # <conn> <args…> — a browser PTY running the attach
   tt new-window -d -t "=$TL:" -n "b-$c" -e "FLEET_VIEW_FIRST_CMD=echo >> $WORK/first.log" \
     "env -u TMUX FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' python3 '$BIN/fleet-webterm.py' attach --conn $c $*; sleep 300"
 }
+# no attach for that connection left — a function, not `sh -c`: pgrep -f would
+# match the sh holding its own pattern (Linux's dash keeps it as the parent)
+noattach() { ! pgrep -f "fleet-remote-view.sh attach --thin --browser --view wt-$1 " >/dev/null; }
 attached() { tn list-clients -t "=$RS@view-wt-$1" -F x 2>/dev/null | grep -q x; }
 vcur() { tn display-message -p -t "=$RS@view-wt-$1:" '#{window_id}' 2>/dev/null; }
 bad=0
@@ -116,7 +119,7 @@ for i in $(seq 1 20); do
   [ "$(vcur "$c")" = "$HW" ] || { bad=$((bad + 1)); fail "C: cycle $i not on the home window" "$(vcur "$c")"; }
   tt kill-window -t "=$TL:b-$c"          # the browser goes: its PTY closes
   WT release --conn "$c" >/dev/null
-  waitfor 5 sh -c "! pgrep -f 'fleet-remote-view.sh attach --thin --browser --view wt-$c ' >/dev/null" \
+  waitfor 5 noattach "$c" \
     || { bad=$((bad + 1)); fail "C: cycle $i left its attach running"; }
 done
 eq "C: every cycle clean" 0 "$bad"
