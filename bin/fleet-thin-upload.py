@@ -204,6 +204,11 @@ class Input:
             self.cancel('附件返回超过限额')
         if self.job.poll() is None:
             return b''
+        # The final write can race the nonblocking read above. Once the process
+        # exited, drain the remaining bounded bytes before decoding its result.
+        tail = self.job.stdout.read(RESULT_CAP + 1 - len(self.result))
+        if tail:
+            self.result += tail
         self.job.stdin.close()
         self.job.stdout.close()
         self.job = None

@@ -805,6 +805,16 @@ class Thin:
                 "rbin": os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin",
             }, self.say)
         self.attachments = uploads
+        pending = bytearray()  # bounded PTY backpressure, never a blocking write
+        os.set_blocking(master, False)
+        def enqueue(data):
+            if len(pending) + len(data) > 128 << 10:
+                pending.clear()
+                if uploads:
+                    uploads.cancel("终端输入积压，附件已取消")
+                self.say("fleet · 终端输入积压；未送达的输入已丢弃，请重新输入")
+            else:
+                pending.extend(data)
         first_byte = first_view = None
         out_wait = 0.0
         st = None
@@ -822,7 +832,7 @@ class Thin:
                     break
                 tmo = 0.02 if (out_wait or (uploads and uploads.busy)) else 0.5
                 try:
-                    r, _, _ = select.select([0, master], [], [], tmo)
+                    r, _, _ = select.select([0, master], [master] if pending else [], [], tmo)
                 except InterruptedError:
                     continue
                 now = time.time()
@@ -845,6 +855,9 @@ class Thin:
                     out_wait = (out_wait or now) if waiting else 0.0
                     for kind, kv in events:
                         if kind == "cur":
+                            if pending:
+                                pending.clear()
+                                self.say("fleet · 会话目标已改变；未送达的输入已丢弃")
                             self.cur = (kv.get("m", ""), kv.get("l", ""), kv.get("w", ""))
                             self.cur_generation = kv.get("g", "")
                             self.selection += 1
@@ -860,6 +873,7 @@ class Thin:
                                      ms(t0, now), "", "")
                         elif kind == "quit":
                             self.quit = True
+                            pending.clear()
                             if uploads:
                                 uploads.cancel("连接结束，附件已取消")
                         elif kind == "open":
@@ -878,17 +892,25 @@ class Thin:
                         self.hangup(signal.SIGHUP, None)
                     if reconnect and first_byte is None and b"\x03" not in data:
                         continue   # the line still down: a mouse report / a key goes nowhere (⌃C still stops the ssh)
-                    out = uploads.feed(data) if uploads else data
-                    try:
-                        writeall(master, out)
-                    except OSError:
-                        pass
+                    if pending and b"\x03" in data:
+                        pending.clear()
+                        if uploads:
+                            uploads.cancel("附件已取消")
+                        data = b"\x03"
+                    enqueue(uploads.feed(data) if uploads else data)
                 if uploads:
                     # Output/control events and Ctrl+C win a completion race.
+                    enqueue(uploads.poll())
+                if pending:
                     try:
-                        writeall(master, uploads.poll())
+                        n = os.write(master, pending[:4096])
+                        del pending[:n]
+                    except BlockingIOError:
+                        pass
                     except OSError:
-                        uploads.cancel("连接结束，附件已取消")
+                        pending.clear()
+                        if uploads:
+                            uploads.cancel("连接结束，附件已取消")
         finally:
             if uploads:
                 uploads.close()

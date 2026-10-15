@@ -148,6 +148,9 @@ class Transactions(unittest.TestCase):
         os.environ['FLEET_UPLOAD_FIXTURE_PROBE_DELAY'] = '30'
         self.assertEqual(self.tx.feed(b'\x16after\r') + self.settle(timeout=2), b'\x16after\r')
         self.assertFalse(self.notices)
+        os.environ.pop('FLEET_UPLOAD_FIXTURE_PROBE_DELAY', None)
+        large = self.mod.START + b'/' + b'x' * 60000 + self.mod.END
+        self.assertEqual(self.tx.feed(large) + self.settle(), large)
 
     def test_failure_and_unknown_target_discard_enter(self):
         os.environ['FLEET_UPLOAD_FIXTURE_FAIL'] = '1'
