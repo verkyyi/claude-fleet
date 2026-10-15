@@ -20,9 +20,7 @@
 #                 a writer with no tmux keeps the previous needs rows; each
 #                 row's `detail` is the question's own words
 #                 (@claude_needs_detail, issue #1951) — Claude's and Codex's
-#                 alike; on the CLIENT (FLEET_SHELL=1) the rows come from the
-#                 hub cache's needs_<sess> (fleet-hub-sessions.sh), never from
-#                 the client's own windows
+#                 alike
 #   8. degenerate — nothing configured: no rows, an empty bar
 #  13. machine  — 负载 per core ≥ 0.8 / 内存 ≥ 85 % → `▲ machine · load high` /
 #                 `memory high` (issue #1616: they left the bar); under the bands
@@ -219,22 +217,6 @@ case "$nd" in *'"target":"s1:@2","detail":"Bash: git push"'*) ok ;; *) fail "7: 
 case "$nd" in *'"target":"s1:@3","detail":""'*) ok ;; *) fail "7: no question → an empty detail (never the window name)" "$nd" ;; esac
 fa write                                                      # no $TMUX: the quota watch's view
 eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 5" "$(fa counts)"
-# The client (issue #1951): its own server holds no session — the rows are the
-# hub cache's needs_<sess>, every machine's, whatever its own windows say.
-rm -f "$G"/alerts.*
-US7=$(printf '\037')
-printf 'F/issue-1909%s#1909%sask%smac-b%s演练放在 mac-b 还是只在 mac-a？\nF/scratch-3%sscratch-3%sperm%smac-a%sBash: rm -rf build\nF/issue-1909%s#1909%sask%smac-b%sdup\n' \
-  "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" > "$G/needs_s1"
-FLEET_SHELL=1 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
-eq "7: the client counts the hub's needs, not its own windows (one row per worker)" "0 0 2" "$(fa counts)"
-nd=$(cat "$G/alerts.ndjson")
-case "$nd" in *'"id":"needs-wid-F'*'issue-1909","severity":"needs","subject":"#1909","condition":"question","value":"mac-b"'*'"action":"jump"'*'"target":"wid:F/issue-1909","detail":"演练放在 mac-b 还是只在 mac-a？"'*) ok ;; *) fail "7: a client needs row: subject, machine, jump by worker id, the question" "$nd" ;; esac
-case "$nd" in *'"subject":"scratch-3","condition":"permission"'*'"detail":"Bash: rm -rf build"'*) ok ;; *) fail "7: the client's permission row" "$nd" ;; esac
-: > "$G/needs_s1"
-FLEET_SHELL=1 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
-eq "7: answered on the node → gone from the client" "0 0 0" "$(fa counts)"
-rm -f "$G/needs_s1"
-
 # ------------------------------------------------------------- 8. degenerate ----
 rm -f "$G"/*
 fa write
@@ -403,7 +385,6 @@ eq "9: the old wording is gone from bin/" "" "$hits"
 # keys (issue #1714, EPIC #1710 C4): the node conf binds neither.
 grep -q 'fleet-alerts.sh popup' "$BIN/../conf/tmux-attention.conf" && fail "9: the node conf still opens the alerts popup (#1714)"; ok
 grep -q 'mouse_status_range' "$BIN/../conf/tmux-attention.conf" && fail "9: the node conf still binds a status click (#1714)"; ok
-grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
 # ---------------------------------------------------------------- 14. reauth ----
 rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/calls14"

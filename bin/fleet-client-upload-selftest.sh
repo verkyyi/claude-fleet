@@ -1,8 +1,7 @@
 #!/bin/bash
 # fleet-client-upload-selftest.sh — a picture pasted, a file dropped: the session
 # on another machine reads it (issue #2757, EPIC #2756 C1). Drives
-# bin/fleet-client-upload.py (put · paste · filter · sweep), the ⌃V bind in
-# conf/tmux-shell.conf and fleet-shell.sh's paste_sed, all against a fake ssh
+# bin/fleet-client-upload.py (put · paste · filter · sweep), all against a fake ssh
 # whose remote commands run in a sandbox HOME (the node), on isolated tmux
 # sockets — never a live fleet.
 #
@@ -18,8 +17,8 @@
 #      a session on this computer → ⌃V on to the pane as it is
 #   D  sweep: a gone session's inbox goes, a live one stays, a key-named one and
 #      `machine` wait out the days, a file past them goes
-#   E  the conf: ⌃V bound behind @fleet_paste; paste_sed fills 1 on a Mac only,
-#      0 off / elsewhere / on a managed machine
+# (E, the old client's ⌃V bind and paste_sed, went with that client — issue #3008;
+# the thin client's own drop and ⌃V are covered by fleet-thin's selftests)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 UP="$BIN/fleet-client-upload.py"
@@ -210,21 +209,6 @@ HOME="$W/home" FLEET_INBOX_LIVE_CMD="$W/live" python3 "$UP" sweep >/dev/null
 printf '#!/bin/sh\nexit 1\n' > "$W/live"
 HOME="$W/home" FLEET_INBOX_LIVE_CMD="$W/live" python3 "$UP" sweep >/dev/null
 [ -f "$I2/$FID/f" ] && ok "D no read of the live windows removes no session's inbox" || fail "D an unknown read removed a live inbox"
-
-# ---------------------------------------------------------------- E conf
-CONF="$BIN/../conf/tmux-shell.conf"
-grep -q '^set -g @fleet_paste __PASTE__$' "$CONF" && grep -q "^bind -n C-v if -F '#{&&:#{==:#{@fleet_paste},1}," "$CONF" \
-  && grep -q 'fleet-client-upload.py paste' "$CONF" && ok "E ⌃V is bound behind @fleet_paste" || fail "E the conf's ⌃V bind"
-ps_() { bash -c 'eval "$(sed -n "/^paste_sed()/,/^}/p" "$1")"; paste_sed' - "$BIN/fleet-shell.sh"; }
-[ "$(FLEET_CLIENT_PASTE_OS=Darwin ps_)" = 's|__PASTE__|1|g' ] \
-  && [ "$(FLEET_CLIENT_PASTE_OS=Darwin FLEET_CLIENT_PASTE=0 ps_)" = 's|__PASTE__|0|g' ] \
-  && [ "$(FLEET_CLIENT_PASTE_OS=Linux ps_)" = 's|__PASTE__|0|g' ] \
-  && [ "$(FLEET_CLIENT_PASTE_OS=Darwin FLEET_NODE_HOSTED=1 ps_)" = 's|__PASTE__|0|g' ] \
-  && ok "E @fleet_paste is 1 on a Mac's own client only" || fail "E paste_sed"
-grep -q 'FLEET_CLIENT_PASTE; do' "$BIN/fleet-shell.sh" && ok "E FLEET_CLIENT_PASTE reaches the shell's servers" \
-  || fail "E FLEET_CLIENT_PASTE is not passed to the shell's environment"
-grep -q 'fleet-client-upload.py" filter' "$BIN/fleet-remote-view.sh" && ok "E the proxy's ssh runs behind the filter" \
-  || fail "E fleet-remote-view.sh does not wrap its ssh"
 
 if [ "$FAILS" -gt 0 ]; then
   printf 'fleet-client-upload selftest: %d FAILED\n' "$FAILS" >&2

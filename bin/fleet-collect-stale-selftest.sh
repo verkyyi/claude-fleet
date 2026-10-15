@@ -1,7 +1,8 @@
 #!/bin/bash
 # fleet-collect-stale-selftest.sh — the dash's collector-liveness alarm and its
 # rate-limited self-heal (issue #636). Drives the REAL usage-lib.sh helpers,
-# bin/fleet-collect-kick.sh and bin/tmux-status.sh against a fake `launchctl` on
+# bin/fleet-collect-kick.sh and bin/fleet-alerts.sh (the alerts producer: its
+# `refresh --kick`, what the old client's bar ran — issue #3008) against a fake `launchctl` on
 # PATH — no launchd, no tmux server, no network.
 #
 # Since issue #639 the kick itself lives in bin/fleet-daemon-watch.sh, which does
@@ -51,7 +52,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-FILES='fleet-collect-kick.sh fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh fleet-alerts.sh'
+FILES='fleet-collect-kick.sh fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh fleet-alerts.sh fleet-palette.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -139,8 +140,10 @@ kick()   { bash "$WORK/bin/fleet-collect-kick.sh" "$@" 2>>"$WORK/kick.err"; }
 # render (re)writes, so each helper renders, then prints the bar AND the rows.
 # FLEET_ALERTS_TTL=0: every render rewrites (the steps below move state faster
 # than the 5s status-interval the TTL is sized for).
-bar()      { local b; b=$(FLEET_ALERTS_TTL=0 FLEET_COLLECT_KICK=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null); printf '%s\n' "$b"; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; }
-bar_live() { local b; b=$(FLEET_ALERTS_TTL=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null); printf '%s\n' "$b"; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; }
+bar()      { FLEET_CONF_DIR="$WORK/noconf" FLEET_ALERTS_TTL=0 FLEET_COLLECT_KICK=0 bash "$WORK/bin/fleet-alerts.sh" refresh --kick >/dev/null 2>&1
+             bash "$WORK/bin/fleet-alerts.sh" bar 2>/dev/null; echo; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; }
+bar_live() { FLEET_CONF_DIR="$WORK/noconf" FLEET_ALERTS_TTL=0 bash "$WORK/bin/fleet-alerts.sh" refresh --kick >/dev/null 2>&1
+             bash "$WORK/bin/fleet-alerts.sh" bar 2>/dev/null; echo; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; }
 wait_kicks() {  # $1 = expected count; the bar's kick is a detached fork
   local i=0
   while [ "$(kicks)" -lt "$1" ] && [ "$i" -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
@@ -246,8 +249,7 @@ grep -q 'fleet-collect-kick.sh' "$BIN/fleet-quotawatch.sh" \
 # The bar's kick moved into the one alerts producer (issue #1238); the bar still
 # asks for it (`--kick`) on every refresh.
 grep -q 'fleet_collect_kick_due' "$BIN/fleet-alerts.sh" \
-  && grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" \
-  || fail "11: the status bar no longer self-heals"; ok
+  || fail "11: the alerts producer no longer self-heals"; ok
 
 # ------------------------------------------------------------- 12. relative ----
 # 12b (below) also covers the in-flight guard end-to-end: it is the STATUS BAR

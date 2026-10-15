@@ -20,8 +20,6 @@
 #      done row with a child keeps its place (its subtree is never split).
 #   D. NOTHING ENDED — no heading at all; @repo_fold untouched.
 #   E. fleet ls — hides the 已结束 rows; --all lists them.
-#   F. THE SIDEBAR — fleet-sidebar.py taps `hdr:ended` as a fold stop only
-#      (select, never a new session) and names no repo for it.
 #   G. KEPT IS ALIVE (issue #3444) — a done no-issue row whose person chose a
 #      reap policy other than the idle reaper's (`keep`, `at:…`) stays on the
 #      list; `done:2h` / no policy still ends; `exited` ends whatever its policy.
@@ -152,16 +150,6 @@ PY
 )
 eq    "E: rows_text marks the 已结束 rows, names no repo for them" "$(printf '%s' "$out" | tr '\n' ';')" \
       "live o/claude-fleet -;donehome - 1"
-
-# --- F. the sidebar's handling of the heading -------------------------------------
-out=$(python3 - "$BIN" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1] + "/fleet-sidebar.py")
-sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
-print(sb.tap("hdr:ended", "hdr:ended"), repr(sb.target_name("hdr:ended")), sb.folds("hdr:ended"))
-PY
-)
-eq    "F: a tap on 已结束 only selects it, names no repo, folds" "$out" "select '' hdr:ended"
 
 # --- G. kept is alive (issue #3444) ----------------------------------------------
 for w in $(tmux list-windows -t alpha -F '#{window_id}'); do

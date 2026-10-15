@@ -13,10 +13,8 @@
 #      every row sits under its OWN repo's heading and carries NO per-row repo
 #      tag (issue #995: the heading names it); two hosted repos sharing a bare
 #      name fall back to owner/name for those two only.
-#   B. SIDEBAR — the same groups in the --sidebar frame, its headings bare
-#      (`tokenledger (2)`, no `── `, like the hub list: issue #998), and fleet-sidebar.py's
-#      selectable() lets the cursor rest only on a heading with a spawn target
-#      (issue #997: `hdr:<repo>` / `hdr:none`), and acts() hands no action one.
+#   B. ROWS — the same groups in the --rows frame, its headings bare
+#      (`tokenledger (2)`, no `── `, like the hub list: issue #998).
 #   C. INERT — every dash bind target (enter, ⌃x reap, ⌃p PR, ⌃o restore, fold
 #      ←/→, pin, rename, answer, migrate) is a no-op on a heading row's `hdr` keys:
 #      no window selected, set, renamed, killed or restored, and no status nag.
@@ -169,16 +167,6 @@ s=$(side)
 eq    "B: sidebar groups the same way" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
       "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 no repo (1) 我的会话 "
 eq    "B: sidebar headings carry five fields" "$(printf '%s\n' "$s" | grep '^hdr|' | awk -F'|' '{ print NF }' | sort -u)" "5"
-sel=$(printf '%s\n' "$s" | python3 -c '
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-rows = [l.split("|", 4) for l in sys.stdin.read().split("\n") if len(l.split("|", 4)) == 5]
-keys = [k if k.startswith("hdr") else "w" for k in m.selectable(rows)]
-print(len(rows), len(m.sessions(rows)), " ".join(keys), [m.acts(k) for k in keys if k != "w"])' "$BIN/fleet-sidebar.py")
-eq    "B: the cursor stops on each spawn-target heading (#997), acts on none" "$sel" \
-      "7 4 hdr:o/claude-fleet w w hdr:o/tokenledger w hdr:none w ['', '', '']"
-
 # --- C. every bind target is inert on a heading ---------------------------------
 mut='select-window|set-window-option|set-option|set -w|rename-window|kill-|new-window|respawn|swap-|move-|join-pane|display-message [^-]|display-message -[^p]'
 inert() {   # $1 = label, rest = the command → $out; asserts no tmux mutation, no nag
@@ -244,14 +232,6 @@ has   "E: …under the column header" "$(FLEET_SESSION=alpha bash "$ROWS" | head
 s=$(side)
 eq    "E: sidebar, no sessions" "$(printf '%s\n' "$s" | awk -F'|' '{ print $1 ":" $4 }' | tr '\n' '/')" \
       "hdr:No sessions — ⌘N new session/hdr:claude-fleet (0)/hdr:tokenledger (0)/"
-sel=$(printf '%s\n' "$s" | python3 -c '
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-rows = [l.split("|", 4) for l in sys.stdin.read().split("\n") if len(l.split("|", 4)) == 5]
-print(len(rows), " ".join(m.selectable(rows)), len(m.sessions(rows)))' "$BIN/fleet-sidebar.py")
-eq    "E: an empty sidebar offers only its repo headings (never the hint)" "$sel" \
-      "3 hdr:o/claude-fleet hdr:o/tokenledger 0"
 printf 'o/tokenledger\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 eq    "E: a stale current-repo file keeps every heading (#1034)" "$(rows)" "$r"
 rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
