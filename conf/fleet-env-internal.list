@@ -323,6 +323,7 @@ FLEET_DEPS_NOW                     seam: a fixed clock for the deps retry backof
 FLEET_DEPS_TOOL_DIRS               seam: extra node/tool dirs the deps linker searches (fleet-deps-link.sh)
 FLEET_DISKGUARD_SOURCE             seam: source fleet-diskguard.sh as a library without running it
 FLEET_DISK_COOLDOWN                knob: internal pacing/limit, safe in-code default (fleet-diskguard.sh)
+FLEET_DISK_HOME_FLOOR_GB           knob: the disk floor (GB) a fleet with no session passes when restore brings its home back — ENOSPC, not load (fleet-restore.sh, 1; issue #4266)
 FLEET_DISK_TARGET                  path: the volume diskguard measures (default $TMPDIR, else $HOME)
 FLEET_DISPATCH_LEASE_DIR           path: state/log location override (fleet-issue-bridge.sh, fleet-ledger-watch.sh — the lease dir the retired dispatcher named, #3120)
 FLEET_EMIT_DIR                     path: state/log location override (fleet-emit.sh)

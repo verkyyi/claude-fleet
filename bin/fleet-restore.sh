@@ -87,6 +87,19 @@ restore_map_file() {
   local new="$FLEET_CONF_DIR/fleets/$1/restore.map" old="$RDIR/$1.map"
   if [ -f "$new" ]; then printf '%s' "$new"; else printf '%s' "$old"; fi
 }
+# home_floor_gb — the disk floor a fleet with no session passes on its way back
+# (issue #4266). A home is a tmux server and one shell: it adds no load, so the
+# load floor (FLEET_DISK_FLOOR_GB, 12) does not apply — a pod roll on a shared node
+# dips below it for minutes, and the person's view stayed dark all that time. Only
+# an ENOSPC-near volume holds it (FLEET_DISK_HOME_FLOOR_GB, 1), never above the
+# load floor.
+home_floor_gb() {
+  local h="${FLEET_DISK_HOME_FLOOR_GB:-1}" f="${FLEET_DISK_FLOOR_GB:-12}"
+  case "$h" in ''|*[!0-9]*) h=1 ;; esac
+  case "$f" in ''|*[!0-9]*) f=12 ;; esac
+  [ "$h" -gt "$f" ] && h=$f
+  printf '%s' "$h"
+}
 # emit "<sess>\t<mapfile>" for every mapped fleet, new layout preferred, each once.
 each_restore_map() {
   local d mf sess
@@ -642,7 +655,11 @@ restore() {
         local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
         [ -n "$repo" ] || args=(--no-repo)     # a fleet with no repo (#1937)
         args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
-        env -u TMUX bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
+        # A map with no WIN row brings back the home alone (issue #4266): it adds
+        # no load, so it passes the ENOSPC floor, not the load floor.
+        local floor="${FLEET_DISK_FLOOR_GB:-}"
+        grep -q '^WIN' "$mf" || floor=$(home_floor_gb)
+        env -u TMUX ${floor:+FLEET_DISK_FLOOR_GB="$floor"} bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
           || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }
       fi
     fi
@@ -1132,7 +1149,7 @@ fresh_window() {
 auto_restore() {
   [ "${FLEET_AUTO_RESTORE:-1}" = 0 ] && return 0
   [ -f "$RDIR/autorestore.off" ] && return 0
-  local down='' _s mf s age now maxage="${FLEET_AUTO_RESTORE_MAX_AGE:-86400}"
+  local down='' _s mf s age now maxage="${FLEET_AUTO_RESTORE_MAX_AGE:-86400}" wins=0
   case "$maxage" in ''|*[!0-9]*) maxage=86400 ;; esac
   now=$(date +%s)
   while IFS=$'\t' read -r _s mf; do
@@ -1154,6 +1171,7 @@ auto_restore() {
     # run none) otherwise drew no view after every kill-server or pod roll.
     tmux -L "$(fleet_socket "$s")" has-session -t "$s" 2>/dev/null && continue
     down="$down $s"
+    grep -q '^WIN' "$mf" && wins=1
   done < <(each_restore_map)
   # A live fleet that lost a session window to a kill (issue #1840) is work too.
   [ -n "$down" ] || pullback_pending || return 0
@@ -1161,7 +1179,11 @@ auto_restore() {
   # The machine-busy hold is the CALLER's (fleet-diskguard.sh restore_watch asks
   # the spawn admission gate before it runs this): a restore re-houses sessions
   # that were running, so this script itself never passes that gate (#1090 E).
-  if [ -x "$BIN/fleet-diskguard.sh" ] && ! bash "$BIN/fleet-diskguard.sh" --gate 2>/dev/null; then
+  # Only homes to bring back (no WIN row anywhere, no killed window): the ENOSPC
+  # floor, not the load floor (issue #4266, home_floor_gb).
+  local gate=()
+  if [ "$wins" = 0 ] && [ -n "$down" ] && ! pullback_pending; then gate=("$(home_floor_gb)"); fi
+  if [ -x "$BIN/fleet-diskguard.sh" ] && ! bash "$BIN/fleet-diskguard.sh" --gate ${gate[@]+"${gate[@]}"} 2>/dev/null; then
     log "auto: ${down:+fleet down ($down)}${down:-a killed session window} — held: disk below floor"; return 0
   fi
   local lk="$RDIR/.auto.lock"

@@ -20,6 +20,10 @@
 #      save keeps its map copy, kill-server → restore brings its home back; a
 #      fleet-down one stays down. FSS_ONLY=H runs only this leg (BREAK-IT
 #      empty-fleet-not-restored)
+#   H2 below the load floor (FLEET_DISK_FLOOR_GB) but above the ENOSPC one
+#      (FLEET_DISK_HOME_FLOOR_GB) an empty fleet's home still comes back — restore
+#      and --auto alike; a fleet with sessions is still held (issue #4266, BREAK-IT
+#      empty-fleet-disk-floor; FSS_ONLY=H runs it with H)
 #   F  no snapshot → exit 3
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -54,9 +58,19 @@ for f in "$BIN"/* "$BIN"/.*.py; do [ -e "$f" ] && ln -s "$f" "$WORK/inst/bin/${f
 rm -f "$WORK/inst/bin/fleet-up.sh"
 cat > "$WORK/inst/bin/fleet-up.sh" <<EOF
 #!/bin/bash
+bash "$WORK/inst/bin/fleet-diskguard.sh" --gate || exit 1   # the real fleet-up's gate
 tmux new-session -d -s oc -n home -c "$WORK/main" 'exec sleep 600'
 EOF
-chmod +x "$WORK/inst/bin/fleet-up.sh"
+# the gate, free GB read from a file (none = room): the real --gate's compare
+rm -f "$WORK/inst/bin/fleet-diskguard.sh"
+cat > "$WORK/inst/bin/fleet-diskguard.sh" <<EOF
+#!/bin/bash
+[ "\$1" = --gate ] || exit 0
+[ -f "$WORK/free" ] || exit 0
+[ "\$(cat "$WORK/free")" -lt "\${2:-\${FLEET_DISK_FLOOR_GB:-12}}" ] && { echo "LOW DISK" >&2; exit 3; }
+exit 0
+EOF
+chmod +x "$WORK/inst/bin/fleet-up.sh" "$WORK/inst/bin/fleet-diskguard.sh"
 printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=main\n' "$WORK/main" > "$WORK/conf/oc.conf"
 
 nt() { "$REAL_TMUX" -S "$SOCK" "$@"; }
@@ -81,9 +95,39 @@ nt kill-server
 : > "$WORK/conf/fleets/oc/restore.down"
 ss restore >/dev/null
 nt has-session -t oc 2>/dev/null && fail "H: a fleet-down empty fleet was brought back"
-rm -f "$WORK/conf/fleets/oc/restore.down" "$WORK/conf/global/sessions.snapshot" "$WORK/conf/global/sessions.snapshot.d/oc.map"
+rm -f "$WORK/conf/fleets/oc/restore.down"
+
+# ---- H2. below the load floor, an empty fleet's home still comes back (#4266) ---
+# A pod roll on a shared node dips free space under FLEET_DISK_FLOOR_GB (12) for
+# minutes; a home adds no load, so only the ENOSPC floor (FLEET_DISK_HOME_FLOOR_GB,
+# 1) holds it — on the boot restore and on the diskguard tick's --auto alike.
+echo 5 > "$WORK/free"
+out=$(ss restore); rc=$?
+[ "$rc" = 0 ] || fail "H2: restore at 5 GB free exit $rc ($out)"
+until_ok 10 nt has-session -t oc 2>/dev/null \
+  || fail "H2: at 5 GB free (load floor 12) an empty fleet's home stayed down ($(tail -3 "$WORK/conf/restore/restore.log" 2>/dev/null))"
+nt kill-server
+echo 0 > "$WORK/free"
+ss restore >/dev/null
+nt has-session -t oc 2>/dev/null && fail "H2: at 0 GB free (below the home floor) the home was brought up"
+cp "$WORK/conf/global/sessions.snapshot.d/oc.map" "$WORK/conf/fleets/oc/restore.map"
+echo 5 > "$WORK/free"
+auto() {
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+    SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_PULLBACK=0 bash "$WORK/inst/bin/fleet-restore.sh" --auto
+}
+auto >/dev/null 2>&1
+until_ok 10 nt has-session -t oc 2>/dev/null \
+  || fail "H2: --auto at 5 GB free held an empty fleet below the load floor ($(tail -3 "$WORK/conf/restore/restore.log" 2>/dev/null))"
+nt kill-server
+printf 'WIN\tw1\t%s\t-\t7\tworking\n' "$WORK/main" >> "$WORK/conf/fleets/oc/restore.map"
+auto >/dev/null 2>&1
+sleep 1
+nt has-session -t oc 2>/dev/null && fail "H2: --auto at 5 GB free brought back a fleet WITH sessions (the load floor holds it)"
+rm -f "$WORK/free" "$WORK/conf/fleets/oc/restore.map"
+rm -f "$WORK/conf/global/sessions.snapshot" "$WORK/conf/global/sessions.snapshot.d/oc.map"
 if [ "${FSS_ONLY:-}" = H ]; then
-  echo "selftest PASS: fleet-sessions-snapshot H — an empty fleet comes back up after kill-server; a fleet-down one stays down"; exit 0
+  echo "selftest PASS: fleet-sessions-snapshot H — an empty fleet comes back up after kill-server, below the load floor too; a fleet-down one stays down"; exit 0
 fi
 
 # a live fleet: home + four sessions mid-work, one finished
